@@ -1,0 +1,100 @@
+# 存档模块待修正：缺「本体 = 项目 analytics.duckdb 持久表」这一档
+
+> 结论先说：**现在存档模块的三档（`file` / `analysis` / `table_ref`）都不覆盖「本体是项目
+> `analytics.duckdb` 里的一张持久表」**，所以「临时表 / 临时结果集升级成资产」这个动作
+> 在登记层无处落。引擎侧搬表的能力是齐的，缺的是存档侧的本体类型与登记字段。
+
+本文只列**事实与改动点**，不做实现；所有代码位置均为 2026-11-16 实测行号。
+
+---
+
+## 一、现状事实（代码为准）
+
+### 1. 本体种类只有三种
+
+- `crates/analytics_resource/src/model/kind.rs:40-48`：`ArchiveKind = File | Analysis | TableRef`。
+- `kind.rs:68-74` 落库字符串：`"file"` / `"analysis"` / `"table_ref"`。
+- `kind.rs:80-86` `from_db_str`：**未知值回退 `File`**（刻意如此：新增种类时旧版本读新行不整表失败）。
+- `kind.rs:93-98` `strength`：`File | Analysis => Strong`，`TableRef => Weak`；注释 `kind.rs:90-92` 明确写过「`Analysis` 与 `File` 同级（都是内容冻结的受管文件）」，且**定义从不执行、数据也不会重建**。
+
+### 2. `analysis` 档的本体是「数据文件」，不是分析库表
+
+- `kind.rs:44-45` 原文：分析表「本体同样是**受管文件快照**，额外登记定义 / 列结构指纹；定义不执行、不重建数据」。
+- `crates/analytics_resource/src/resource_host/mod.rs:159-164` `archive_kind_for`：扩展名能被 `engine::duckdb::file_reader_function` 认出（CSV / Parquet / Excel / JSON）→ 判 `Analysis`，否则 `File`。**判定依据是文件扩展名**，与「本体在哪」无关。
+
+### 3. 登记表里没有「表名」这一概念位
+
+- `crates/analytics_resource/src/store/rows.rs:7-45` `AnalyticsResource` 相关列：`kind`、`file_rel_path`（本体在 `resources/` 下的相对路径）、`source_table`（`schema.table` 字符串，引用型用）、`version`、`config`(JSON)、`row_count` / `column_count` / `file_size`。
+- 没有一列专门表示「本体是项目分析库里哪张表」。
+
+### 4. 取数分派：两种本体都在按「文件」读
+
+- `crates/analytics_resource/src/resource_host/detail_actions.rs`：
+  - 打开（双击）分支：`Analysis` 走 `SampleSource::duckdb_file(&path, …)`（按文件路径读）。
+  - 查看统计分支：`File` 走 `duckdb_file(path)`；`TableRef` 走 `insight_sample_sql(conn_id, parts)`；`Analysis` 同 `File`（2026-11-16 已把原先那句「本体是 analytics.duckdb、随后续批次接」的错注释改为事实）。
+
+### 5. 引擎侧搬表能力已齐（不用新写）
+
+- `crates/engine/src/duckdb/temp_table/promote.rs:136-140` `persistent_table_name(desc)` → `res_<描述>_<YYYYMMDDHHMMSS>`，**每落一次一张新表**（天然一版一表）。
+- 同文件 `:142-150` 注释给出硬约束：`tmp_q_` 在进程内存单例，项目 `analytics.duckdb` 运行期被按次开关握着，**两边不能同时 ATTACH**（实测见 `crates/engine/tests/analysis_db_exclusive_probe.rs`），所以只能**搬运**，跨实例用 Parquet 中转（类型不丢，不装箱）。
+- `write_table_across_connections`（源表 → 目标表，返回行数）、`promote_with_conn` + `PromoteMode` 均已存在。
+
+### 6. 结论（缺口一句话）
+
+> 「本体是 `analytics.duckdb` 里的持久表」这类资产**没有类型位**，因此
+> 「临时表 / 临时结果集 → 升级成资产」在存档侧只能被迫退化成 `file`（导出文件）或
+> `table_ref`（只记指向），两者都与目标口径不符。
+
+---
+
+## 二、目标口径（用户已拍板，2026-11-16）
+
+1. **只有临时表与临时结果集可以升级成资产**；升级入口在**数据导航栏 / 草稿箱**等既有入口，**不在「数据对象」面板**，也不在结果集分析对话框。
+2. **资产对象只能是数据对象**；连接、账号这类信息不能成为资产。
+3. 升级 = 把数据写成**项目 `analytics.duckdb` 里的持久表**（不是导出成文件再当资产）。
+4. 资产**只读**、**名字不带前缀**、**有版本**；要用旧版本数据**在资产管理处回退**；参与分析**只取最新版本**。
+5. 分析 / 联邦**不许丢数据**；**只有洞察**可采样（`LIMIT 500` → `tmp_i_`）。
+6. 顺带：`res_` 前缀只是分析库内部标识（结果集落库），不是资产命名。
+
+---
+
+## 三、改动清单（存档模块内）
+
+| # | 改点 | 位置 | 要点 |
+|---|---|---|---|
+| A | 新增本体类型 | `model/kind.rs` | 建议 `ArchiveKind::AnalyticsTable`，落库字符串 `analytics_table`；`from_db_str` 里显式匹配，未知仍回退 `File`；`strength` 归 `Strong`（本体冻结在本项目内）。 |
+| B | 旧档改名，避免撞名 | `detail_view/mod.rs:57`、`present/*`、`model/mod.rs:25,52` | 现有 `Analysis` 对外标签是「分析表」；新档若叫「分析库表」会混淆。建议 `Analysis` 改称「数据文件」，新档称「分析库表」。**不改历史数据的含义**。 |
+| C | 登记「表名」 | `store/rows.rs` + `store/resource/*` | 三选一：① 复用 `source_table` 存裸表名（语义漂移，`TableRef` 已用它存 `schema.table`，不建议）；② 写进 `config` JSON（如 `{"analytics_table":"res_…"}`，不动 schema，但需读写约定与校验）；③ 新增一列（要迁移 020/023 之后一版）。**建议 ②**，代价最小、可回退。 |
+| D | 版本与回退 | 复用 `persistent_table_name` | 一版一张表（`res_<name>_<stamp>`）；资产行 `version = N` 对应某张表；「回退」= 把「当前版本」指向另一张**已存在的**表，**不删数据**。 |
+| E | 升级动作 | `resource_host/*` + 引擎 `promote_with_conn` | `tmp_q_` / `tmp_i_` 或源连接里的表 → 项目 `analytics.duckdb` 新表；返回新表名 → 登记成新档。命名走引擎，不在 UI 拼表名。 |
+| F | 取数分派 | `resource_host/detail_actions.rs` | 新档走 `insight::SampleSource::on_duckdb(SELECT * FROM "<表名>")`（与洞察「分析表」入口同口径）；`File` / `Analysis` 保持 `duckdb_file`；`TableRef` 不变。 |
+| G | 归档判定不再按扩展名一刀切 | `resource_host/mod.rs:159-164` | 现在按扩展名把「能读的数据文件」判成 `Analysis`；新档加入后，判定要改成「本体来源」：来自临时表/分析库表 → 新档；来自文件路径 → `File` / `Analysis`。 |
+| H | 联动处（改 A 必同步） | 见下 | 少改一处就会出现「筛不出来 / 数不对 / 标签空白」。 |
+
+H 的具体清单（都在 `crates/analytics_resource/src`）：
+
+- `filter/*`（按种类筛选与计数）
+- `present/snapshot.rs:47`（`ArchiveKind::Analysis => counts.analysis += 1` 这类分支）
+- `present/format.rs:84`、`present/detail.rs:36,99`（尾部与详情按种类取字段）
+- `detail_view/mod.rs:57`（`kind_label`）、`detail_view/rows.rs:129`（状态 × 种类 的说明文案）
+- `model/mod.rs:25,52`（种类全集与 strength 断言）
+- `service/mod.rs:237`（种类 → 字符串映射）
+- `dnd.rs` / `policy` 一带若按种类分支，也要过一遍
+
+## 四、验收清单（可直接核对）
+
+1. 对 `tmp_q_订单` 升级后：项目 `analytics.duckdb` 里多一张 `res_订单_<时间戳>` 表；资产行 `kind = analytics_table`、`version = 1`、本体记的是**表名**；展示名**不含前缀**。
+2. 在洞察里对这条资产取数成功（走 `on_duckdb`，不按文件路径）。
+3. 再升级一次 → `version = 2`、分析库里多一张新表；回退到 v1 后仍能取到 v1 的数据（两张表都在，没被覆盖或删除）。
+4. 连接、账号不会出现在资产列表（资产对象只能是数据对象）。
+5. 资产不可编辑、不可在分析侧删除；删除只走资产模块回收站。
+6. 旧 `analysis` 行（数据文件型）行为不变：仍按文件读、标签改为「数据文件」但语义不动。
+7. 结果集分析 / 联邦无行数上限；洞察有采样行数文案。
+
+## 五、已知约束与坑（别踩）
+
+- **不能 ATTACH**：临时表在进程内存单例、项目分析库被按次开关，两边同时开会撞「另一个程序正在使用此文件」（实测 `analysis_db_exclusive_probe`）；只能搬，中转用 Parquet。
+- **`from_db_str` 未知值回退 `File`**：如果新档字符串写错（例如写成 `analytics-table`），旧行会静默变成文件型——上线前用一条真库行核对。
+- **`strength` 只有两档**：新档归 `Strong` 即可，不要再造中档（`kind.rs:90-92` 已经因为「承诺做不到的事」撤过一次中档）。
+- **`res_` 前缀是引擎内部标识**：不要拿它当展示名，也不要在资产侧再拼一次前缀。
+- **旧的 `analysis` 行不能改语义**：改语义等于让历史数据换含义，只能新增档。

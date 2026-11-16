@@ -64,8 +64,8 @@
 1. **全局表读取通道**（唯一未闭合的技术缺口，本轮已实测，**不是补一处 attach 就通吃**）：
    - 枚举侧早已成品：`analytics_resource/src/global/{mod.rs:34 GlobalInstanceStore, list.rs:9 list_global_resources}`，生产用点在 `jobs/refresh.rs:258-267`。
    - 执行侧**三条面都没有**全局 attach：① 进程级内存单例（`execution_service.rs:60/113` → `duckdb_service.rs:14` → `DuckDBManager::get_or_create_in_memory()`，二次分析 / 结果集 / 导出都在此）；② 联邦会话（`session.rs:381 attach_source` 是「挂载唯一实现」，`registry.rs:274-290 attach_sql()` 对 L1 源一律 `(READ_ONLY)`，全局库作为本地 duckdb 文件接进来**几乎零新增代码**，但只覆盖会话内）；③ 项目分析库（`project_db.rs:405-418` 只读口，另有 3 处直接 `Connection::open` 旁路：`project/src/store.rs:838`、`workbench/services/overview.rs:110`、`mock_generator.rs:68`）。
-   - **洞察结构上取不到全局表**：取样按 `conn_id` 下推（`insight/jobs/table.rs:312-320` → `schema_report_view(conn_id, …)`；`insight_engine_internal/profile.rs:12` 原话「源库表先取样再探查……这里既没有也不需要源库连接信息」）。全局表没有 conn_id → 形态 I 不可达。
-   - 结论：至少需 A（内存单例）+ B（联邦会话）两条；洞察仍需改形态 II 或造伪 conn_id。
+   - **洞察取全局表已另有通道（2026-11-16 更正，原结论作废）**：`insight/src/model/target.rs:60 SampleSource::on_global(table, label)` 走 `conn_id: None + global: true`，SQL 拼成 `SELECT * FROM rds_global."<表>"`——取样时另开一条**短命只读会话**挂全局分析库（别名 `rds_global`），取完搬进进程单例的 `tmp_i_`。端到端测试 `crates/insight/tests/global_table_sample.rs` 已通过。所以「全局表没有 conn_id ⇒ 洞察取不到」不再成立；剩下的只是**会话内多源联邦里要不要也挂一份全局库**（`session.rs` 的 `attach_source`）。
+   - 结论（更正后）：A（内存单例）/ C（项目分析库旁路）仍需按各自场景决定；B（联邦会话）与洞察**都不再是硬缺口**。
 2. **资产库剩余两段的取舍（待用户拍板）**：拆 `SourceKind::AnalysisGlobal` 按入口裁剪（`PickerConfig.kinds` 本就支持）/ 先做 A+B 再画段 / 冻结全局段。**本项目归档文件段同理**：`Picked` 只有 `Db/Draft/Analysis/External` 四变体，三个消费方只认这四个，新增目标类型＝能选不能执行。
 3. **键盘语义已由源码定案（不必再人工试 Esc/↓）**，只剩三件真要手测的：
    - 键位派发顺序实测：**key binding 先于 `on_key_down` 派发**（`gpui-pre-0.3.11/src/window.rs:6412-6427` 先跑 `match_result.bindings`，被接住即 `return`；`finish_dispatch_key_event`（`:6484`）里的 `dispatch_key_down_up_event` 才跑监听）。单行 Input 绑了 `escape/up/down/left/right/pageup/pagedown/tab`（`vendor/gpui-base/src/input/base/state.rs:265-301`），但**单行模式不处理 ↑↓/Esc，会 propagate**（本仓 `quick_open/palette/render.rs:171-172` 的注释即此口径，那里正是把 `MoveUp/MoveDown/Escape` 挂在浮层根上接住）。
@@ -124,3 +124,335 @@
 2. `git log --oneline main..HEAD` + Read `source_picker/{mod,dialog,render}.rs` 拿到当前真实签名。
 3. 读 `prototypes/entry/README.md`（分类映射 + 未画清单）与 `06-object-tree.html` §02 复用清单 + §07 落地切片 + §09 全局实例。
 4. 复查执行侧证据（§4 第 1 条的行号）后再谈全局段。
+
+## 8. 公共内核（分支 `feat/federation-kernel`，隔离 worktree）
+
+> 2026-11-15。**物理隔离**：worktree `D:\RdataStation\RDS\wt-kernel`、分支 `feat/federation-kernel`（基点 `b145f1d7`）、`CARGO_TARGET_DIR=D:\RdataStation\RDS\target-kernel`、数据根 `D:\RdataStation\RDS\home-kernel`（与 `main` 不争 target / 数据文件）。
+
+### 8.1 已落地（新增不接线，main 无消费方受影响）
+
+| commit | 内容 | 验证 |
+| --- | --- | --- |
+| `dc342fd6` | 设计文档 `federation-kernel-design.md`（三段 + 7 刀） | —— |
+| `d98ef2c4` / `9395a679` | 刀 1 `analysis/channel.rs`：`AnalysisChannel{Source, Accelerated, Federated{owner}}` + `ConnRef{Live, Historical}` + `from_toggle` | 27→34 项 |
+| `80f37c86` / `9395a679` | 刀 2 `analysis/mount.rs`：`MountSpec` / `SessionPlan` / `plan_for`（Source 禁挂、Accelerated 恰 1 源且拒 `DuckDbTable`、Federated 去重 + primary 校验） | 同上 |
+| `d5021b49` | 刀 3 `analysis/kernel.rs`：`PreparedMounts` + `SessionHandle{None, Accelerated, Federated}` + `open` | `--lib` 267 全绿 |
+| `b141c607` | 三档**真跑**用例 `tests/analysis_kernel_probe.rs`（真 DuckDB 文件，含跨源 join） | 3 passed |
+
+### 8.2 口径更正（本轮实测，覆盖旧说法）
+
+1. **执行通道是三档**：源库直连（驱动执行、不挂源）/ 本地加速（`accel::ensure_session`，**单源**只读挂载，L2 驱动在此注册会话级 Secret）/ 联邦（`federation::ensure_session`，多源）。早先「Local」把前两档混成一个，已改。
+2. **conn_id 要分两种**：归档资源表**有** `source_connection_id`（`analytics_resource/src/model/kind.rs:136-139`，`Option<String>`，取自草稿 `file_meta.last_connection_id`），但它是**归档当时**的历史 id、可能悬空；洞察取样（`resource_host/detail_actions.rs:84-96`、`insight/jobs/table.rs:312-320`）要的是**当前可连**的 conn。实测：`home-kernel/data/system/global.db` 的 `analytics_resources` **0 行**；`A1\.RSmeta\project.db` 唯一 1 行且该字段 `NULL`。
+3. **全局连接是存在的**：`global.db` 的 `global_connections` **1 行**（`G_conn_SQLite_Example`，driver=sqlite）；项目库 `connections` **14 行**，其中 4 条 `GP_` 前缀共享连接（duckdb / mysql / pg / sqlite）。→ 解析 `ConnRef::Live` 必须对**合并后的清单**（`global_connections` + 项目 `connections`）做，只查一处会把共享连接误判为不可执行。
+4. **三套单例 / 会话库不可合并**：进程级内存单例（`execution_service.rs:60/113 → duckdb_service.rs:14`）、accel 会话（按源 id）、federation 会话（按 owner + `manager.rs:18 GLOBAL_DUCKDB`）。合并会踩「取消洞察误伤编辑器」。
+5. **`engine --lib` 基线**：本轮实测 **267**（旧文档里的 428 是更早、且统计口径不同的数字，别拿它当 lib 基线）。
+
+### 8.3 环境坑（隔离 worktree 专属，已解）
+
+- `.cargo/config.toml` 用 `force=true` 把 `TEMP/TMP/TMPDIR` 钉在 `.rds/tmp`（相对路径）。新 worktree 没有 `.rds` → `link.exe` 报 `LNK1104`。**解**：建 `wt-kernel\.rds\tmp`。
+- `third_party/duckdb/1.5.6`（`duckdb.dll` 36.7 MB + `.lib` 2 MB + 头文件）未入库，worktree 缺失 → `build.rs` 找不到库。**解**：从主仓库 robocopy 进去（保持自包含）。
+- 首次全量编译 **8 分 13 秒**（独立 target）。
+
+### 8.4 剩余刀与阻点
+
+- 刀 4-1（`56482c22`）：`MountSpec::SqlConnection` 带可选 `alias`（`sql_connection_as`）；`SessionPlan` 带 `notes`（`with_notes`）；`PreparedMounts` 改为**携带挂载键**（联邦 `Vec<(MountSpec, FederatedSource)>`、加速 `(MountSpec, AccelSource)`）；`open` 逐条比对挂载键并校验别名一致。验证 `analysis::` 49 + probe 3。
+- 刀 4-2（`2361c064`）：编辑器 `federated_session` 改走 `plan_for + open`（新纯函数 `session_plan_for`），保留宿主的别名生成与 notes 文案。验证 `cargo check -p rds-editor --lib` 通过、`cargo test -p rds-editor --lib` **786 passed / 0 failed**。
+- 刀 5（洞察）：受「开关显示条件」未决干扰；`SampleSource` 仍是 conn_id 下推形态，切内核前要先定「洞察拿 plan 还是拿 sample spec」。
+- 刀 6（结果集二次分析）：默认档按建议取 `Accelerated`（结果集建表本来就在 DuckDB 里），**待你最终点头**。
+- 刀 7（全局表）：A+B / 拆 `AnalysisGlobal` / 冻结 未决。
+
+### 8.5 编译崩溃坑（2026-11-15 新踩）
+
+`cargo check -p rds-editor --lib -j 2` 在编译 `toml` / `windows` 时崩溃：
+`rustc exited with code 0xc0000409 (STATUS_STACK_BUFFER_OVERRUN)`——正是 `.cargo/config.toml` 里
+`RUST_MIN_STACK` 要防的那类，且 `-j 2` 并发下仍会复现。**可用口径**：
+
+```powershell
+$env:CARGO_TARGET_DIR="D:\RdataStation\RDS\target-kernel"
+$env:RUST_MIN_STACK="268435456"   # 显式给，不依赖 config 是否生效
+cargo check -p rds-editor --lib -j 1
+```
+
+`-j 1` + 显式 `RUST_MIN_STACK` 一次通过（6 分 14 秒）。
+
+### 8.6 结果集二次分析：入口链路已通，持久化被实测改路线
+
+**已落地（三刀）**
+
+| commit | 内容 |
+| --- | --- |
+| `d6ee516c` | `engine/src/duckdb/temp_table/promote.rs`：`write_temp_table_to_file_db(db_path, source, target, PromoteMode{Create,Replace})`（ATTACH → CTAS → DETACH），`temp_table::promote` 2 passed |
+| `e7568ffb` | `result_panel/src/grid/menu.rs`：`ContextAction::AnalyzeResultSet` + `ContextTarget.analyze` + delegate `on_analyze_result_set`（`analyze_result_set_available` = 钩子在 + 有行，**不要求绑定连接**），`rds-result-panel` 260 passed |
+| `6c556eff` | 编辑器 `analyze_result_set`（当前结果 → `ResultService::create_duckdb_temp_table` 物化成登记版 `tmp_q_`，网格字符串行经 `cell_json` 桥接）→ `EditorHost::open_insight_result_set` → workbench `result_set_actions::analyze_table`；`rds-editor` 786、`rds-workbench` 140、`insight_editor_entry` 2 passed |
+
+链式再分析的实现依据：`tmp_q_` 与洞察取样的 `tmp_i_` 同在**进程内存单例**，同连接可见，
+所以「分析结果集 → 产出结果集 → 再分析」只需一句 `SELECT * FROM 表`，不需要搬行数据。
+
+**定性陷阱（实测，务必区分）**：`ContextTarget.insight`（洞察此列）要求结果**绑定连接**
+（取样要回源库）；`ContextTarget.analyze`（分析此结果集）**不要求**——物化成 `tmp_q_` 是纯
+本地动作。两者混用会让本地拼出来的结果永远拿不到整表入口。
+
+**持久化（刀 6-②）被真跑改路线**（`ff998df6`，`crates/engine/tests/analysis_db_exclusive_probe.rs`）：
+
+```text
+ATTACH 失败：挂载目标库失败: IO Error: Cannot open file "...\.RSmeta\analytics.duckdb":
+  另一个程序正在使用此文件，进程无法访问。
+  File is already open in ...analysis_db_exclusive_probe.exe (PID 24516)
+经项目连接写表：成功
+```
+
+- 项目写模式打开后，`ProjectDuckdbConnection` 持有一条长连接（`project_db.rs:276-278` 原文：Windows 上
+  DuckDB 对同一文件仅允许一个连接句柄）；
+- 于是**任何「第二连接 + ATTACH」都写不进项目分析库**——`promote` 原语只适用于「自己拥有的独立文件库」；
+- 唯一可行：经 `ProjectDatabaseManager::duckdb_conn()` 那条既有写连接写，即数据要从内存单例
+  **跨库搬运**（`tmp_q_` 读行 → 项目连接写入），不是 ATTACH 复制。
+- 注意「既有写连接」在运行期是**按次开关**（`open_project_store`），所以 ② 的正确形态是：
+  **一次项目库会话内完成「读单例行 → 建表 → 写行」**，而不是先 ATTACH 再指望锁一直可拿。
+
+**关于 mock 落库（`workbench/src/services/mock_generator.rs`）的正确结论**（`crates/workbench/tests/mock_persist_exclusive.rs` 实测）：
+
+```text
+第二连接打开分析库：失败 → IO Error: Cannot open file "...\rds_mock_persist_open_*.RSmeta\analytics.duckdb":
+  另一个程序正在使用此文件，进程无法访问。File is already open in ...(PID 26152)
+```
+
+即 `open_analysis_db` 那一步在「有 manager 活着」时必失败。**但运行期并不是长期持有**：
+全仓 `ProjectDatabaseManager` 的使用都是**按次开关**（`connection_dialog/src/services/data_source_service.rs`
+的 `open_project_store` 每次调用开一个，用完即释放；insight 的 store 同样按次开），
+workbench 里没有任何字段长期持有 project manager。所以：
+
+- mock 落库 / 追加**在常态下可以成功**（我先前「必然失败」的推断过强，此处更正）；
+- 失败条件是**并发窗口**：正好有一次项目库操作（连接保存 / 洞察索引 / 资产操作）持着连接时，
+  `open_analysis_db` 会撞锁报「另一个程序正在使用此文件」；
+- 因此它属于**需要收敛的脆弱点**（应改为「复用当次已打开的 manager 连接」或加一次可读重试），
+  不是「已经坏了」。验证前不要改它的实现。
+
+### 8.7 结果集持久化：全链路已通（`2e5bb575` + `c2084233`）
+
+**两条刀**
+
+| commit | 内容 |
+| --- | --- |
+| `2e5bb575` | engine `promote::persistent_table_name(desc)` → `res_<描述>_<yyyymmddHHMMSS>`；`temp_table::sanitize_description` 改 `pub(crate)` 共用；用例钉住「不落在 `tmp_q_`/`tmp_i_`/`tmp_m_`/`tmp_p_` 任一临时族下」（否则 TTL 30 分钟会把它当临时表清掉），`temp_table::promote` 4 passed |
+| `c2084233` | 菜单项「持久化为项目表（N 行）」→ 编辑器 `persist_result_set` → `EditorHost::persist_result_set` → workbench `result_set_actions::persist_to_project` → `services/persist_jobs`（worker + 单槽 + `WorkbenchView` 0.5s 泵回状态栏）；真库用例 1 passed |
+
+**为什么是「一个物化 + 两个去处」**：`analyze_result_set` 与 `persist_result_set` 共用
+`materialize_active_result_set("分析"/"持久化")`——同一份结果先物化成登记版 `tmp_q_`，
+要么交给洞察取样（临时、随 TTL 走），要么搬进项目分析库（持久）。抽成一处是为了让「空结果 /
+无行 / 物化失败」三条失败口径只有一份。
+
+**搬运原语**：`write_table_across_connections(source, dest, source_table, target_table, Create)`
+（源 `COPY … TO parquet` → 目标 `CREATE TABLE … AS SELECT * FROM read_parquet`）。
+不用 ATTACH 的理由见 §8.6 实测；用 Parquet 而非 CSV 是为了 DECIMAL / 日期 / 带引号文本原样过一遍
+（`tmp_q_probe` 的 `DECIMAL(10,4)` 落库后类型仍是 DECIMAL，已断言）。
+
+**锁顺序（写死一处）**：先锁内存单例（源），再锁项目写连接（目标）。反过来的实现若在别处
+出现，就会与这里凑成死锁；`persist_jobs` 注释里写明了「只此一处同时持两把锁」。
+
+**新实测硬约束**：`persist_result_table` 内部自建 tokio runtime 并 `block_on`，
+**不得在 async 上下文调用**——首次把用例写成 `#[tokio::test]` 直接 panic
+`Cannot start a runtime from within a runtime`；口径是 worker 线程（普通 std 线程）+ 用例 `#[test]`。
+`mock_generator` 那条链（`open_analysis_db` 新开连接）也有同类顺序问题，但它是**按次开关**下的
+并发窗口，见 §8.6 更正后的结论，未改其实现。
+
+**并发窗口的处理**：项目库打开撞锁做 `150ms × 3` 重试（`open_project_manager`），
+仍失败才把「项目分析库正被别的操作占用」交给用户；撞名则提示换描述或删旧表——
+不静默 `Replace`（覆盖别人的持久表不该是顺手的默认）。
+
+**尚未做（需拍板）**：持久表的**资源归档**入口（用户口径「后续可能会进去」）；
+持久表列表（当前只在状态栏告知表名，没有可视化列表）。
+
+### 8.8 刀 5 后半的两块拼图（`33486848` + `ab514126`）
+
+| commit | 内容 |
+| --- | --- |
+| `33486848` | `analysis::channel::classify_conn(historical_id, live_ids)`：`None`/空白 = 归档行没记来源（不编 id）；在**合并清单**里 = `Live`；记过但不在 = `Historical`。`live_ids` 必须是 `global_connections` + 项目 `connections` 的合并结果（用例钉住 `G_conn_SQLite_Example` / `GP_real_pg_20260912` 都判 `Live`），`analysis::channel` 10 passed |
+| `ab514126` | `materialize::move_sample_to_process_db(handle, session_table, desc)`：会话侧 `COPY … TO parquet` → 单例侧 `create_analysis_temp_table_as(read_parquet)`，落地即登记版 `tmp_i_`；中转文件用完即删；已在单例的表再搬给可读错误。`analysis_kernel_probe` 6 passed |
+
+**为什么这两块是「刀 5 后半」的前置**：
+
+- 联邦取样要先知道「源能不能执行」——归档记录里的连接 id 是**历史值**，只有对合并清单解析成
+  `Live` 才能去建会话（否则就是「点一下没反应 / 报连接不存在」）；
+- 加速 / 联邦档的样本落在**会话**里，洞察下游（EDA / 图表 / 导出）读的是**进程单例**，
+  必须有一个「按需把结果搬过去并登记」的原语，否则「在加速档取样」下游看不见。
+
+**还差的最后一段（需口径确认）**：洞察侧「多源取样」的模型与 SQL 语义——现有
+`SampleSource` 只装一个 `conn_id` + 一条 SQL，联邦档要 ≥2 源。可选方向：
+(a) 每源各取一份样本、各出一张 `tmp_i_`（不做 join）；(b) 一条 SQL 对多源 join；
+(c) 确认框里让用户写跨源 SQL。三条的取样代价与确认窗口文案完全不同，
+**没有拍板前不动 `SampleSource`**（改了会把现有单源路径一起拖下水）。
+
+### 8.9 刀 7 · 全局分析库作为会话源（方案 B）
+
+**先落一条容易搞错的库口径（用户更正 + 实测头字节，2026-11-15）**：
+
+> 「全局和项目是一致的——分析库都是 duckdb，其他的都是 sqlite。」
+
+| 库 | 路径 | 格式（实测） | 装什么 |
+| --- | --- | --- | --- |
+| 全局分析库 | `<RDS_HOME>/data/system/analytics.duckdb` | DuckDB（头 `94 2d 89 5a 81 6e 8f 0f`，798720B） | 可分析的全局表 |
+| 全局元数据库 | `<RDS_HOME>/data/system/global.db` | SQLite（头 `SQLite format 3`，65810432B） | 连接（`global_connections`）/ 资源归档（`analytics_resources`）/ 规则信任 |
+| 项目分析库 | `<项目>/.RSmeta/analytics.duckdb` | DuckDB | 项目持久表（`res_*`） |
+| 项目元数据库 | `<项目>/.RSmeta/project.db` | SQLite | 连接（`connections`）/ 资源归档 |
+
+首版实现把「全局表」按 `global.db` + sqlite 挂——**这是错的**：
+`open_mounted` 返回 Ok 但随后查询报 `schema/表不存在`，因为挂上的是元数据库。
+现在 `analysis::global::open_global_session` 一律走 `analytics.duckdb` + `duckdb` 驱动；
+`global_db_path()` 保留但标 `#[deprecated]`（只为旧调用点迁移，新代码不用）。
+
+**方案 B 的落点**（`5e8d9b79` + 本节更正）：
+
+- `analysis/global.rs`：`GLOBAL_ALIAS="rds_global"`、`global_analysis_db_path()`、
+  `open_mounted(owner, path, alias, db_type)`（不存在 / 撞锁都给可读原因）、
+  `ensure_alias_attached(session, alias, db_type)`（联邦会话既有约定是「挂不上不阻断」，
+  所以 `open` 成功 ≠ 别名真存在：开完必须核 `duckdb_databases()`，失败时把
+  `MountState::Failed` 的**原话**带出来）、`open_global_session(owner)`；
+- `crates/engine/tests/analysis_global_probe.rs` 4 passed：临时 DuckDB 只读挂载可查 /
+  写被拒 / **真全局分析库**（`RDS_HOME` 直拼路径，因测试运行器把系统目录指到临时根）
+  只读挂载成功 / 路径落点指向 `analytics.duckdb` 而非 `global.db`；
+- 洞察侧：`SampleSource` 增 `global` 标记 + `on_global(table, label)`（SQL 固定拼
+  `SELECT * FROM rds_global."<表>"`），`sample_source_to_analysis_table` 开头走
+  「短命会话 → `materialize_sample` → `move_sample_to_process_db`」，对外仍返回
+  单例上**登记版** `tmp_i_`，下游（EDA / 图表 / 导出）读法与其它来源完全一致；
+- `crates/insight/tests/global_table_sample.rs` 2 passed：自建全局分析库（落点取
+  `get_system_dir()`，即测试根，走生产路径）→ 3 行表取样 → 单例里 `tmp_i_` 3 行；
+  另一条钉住「元数据库不能被当成分析库挂」（SQLite 文件用 duckdb 驱动必失败且要说清哪步）。
+
+**为什么不是方案 A（单例 ATTACH 全局分析库）**：那台库有自己的写入方（全局持久表落库），
+Windows 上 DuckDB 一个文件只允许一个连接句柄（`store/src/persistence/project_db.rs:276-278`），
+单例长命持有就会让写入方撞「另一个程序正在使用此文件」——该失败模式已在
+`analysis_db_exclusive_probe` 真跑过。用户已按此论证选定 B。
+
+**B2（本轮已做）**：来源选择器新增第六档 `SourceKind::AnalysisGlobal`（文案「全局分析表」），
+并入文件根，树上与「资产库 · 本项目」**并列两段**（不混排，用户要一眼看出动的是哪一份）；
+表清单来自 `analysis::global::global_tables(owner)`（与取样**同一个**短命会话口径，不会
+「列表有、点下去查不到」）；选中 → `Picked::AnalysisGlobal`（按钮文案 `全局 · <表>`）→
+洞察出口 `SampleSource::on_global`。空态单独提示「全局分析库为空或暂时不可用（它由系统库
+维护；被占用时也会读不到）」，不被项目段的空态掩盖。验证：`analysis_global_probe` 5 passed
+（新增 `global_tables_lists_the_tables_of_the_analysis_db`）、`rds-workbench --lib` 142 passed、
+`rds-engine --lib` 294、`rds-insight --lib` 263。
+
+**仍未做**：持久表的可视化列表与资源归档入口；洞察「多源开关」的 UI（模型与取样原语均已就位，
+见 §8.10）。
+
+### 8.10 联邦档取样原语（宿主给挂载材料，内核开会话）
+
+`insight::service::persistence::sample_federated_sources(owner, entries, config)`：
+一条联邦会话里逐源取样，每源各出一张**登记版** `tmp_i_`。
+
+分工边界沿用引擎既有铁律（`federation/registry.rs:8`：引擎不读连接库、不解密口令）：
+
+- **宿主**给 `FederatedSampleEntry { mount, source, sql, label }`（`source` 是组装好的
+  `FederatedSource`，`sql` 按**别名**限定 `<别名>.<schema>.<表>`）；
+- **本原语**负责：开会话前的拦截（空清单 / 重复来源 / 别名撞名——撞别名两条源会挂成同一个
+  catalog，SQL 里写哪个名字不可判定）、`plan_for(Federated{owner}) + kernel::open`、
+逐源 `materialize_sample`（会话内 `memory.tmp_i_*` 不登记）→ `move_sample_to_process_db`
+（搬进单例登记版），下游读法不变。
+
+「每源各取一份」的口径不变：联邦会话在这里的价值是**同一批源一次挂上**，不是替用户写 join
+（取样是取数据、关联是分析）。
+
+通用入口 `sample_set_to_analysis_tables` 遇 `Federated` 档改为**指向本原语**（原文
+「请走 sample_federated_sources」），不再说「尚未接入」——它无法自行建会话（没有凭据），
+但也不该假装降级。
+
+验证：`crates/insight/tests/federated_sample.rs` 2 passed——两台本地 DuckDB 文件当两个源，
+同会话挂上 → 销售 3 行 / 库存 2 行各自落成不同 `tmp_i_`，单例行数与源一致；别名撞名在开
+会话前被拒。`rds-insight --lib` 263 passed。
+
+### 8.11 洞察产物的「再分析」入口 + 资产库两段混排修正
+
+**新增档 `SourceKind::InsightSample`（文案「洞察产物」）**：列进程单例里的 `tmp_i_` 表
+（`engine::analysis::result_set::list_insight_samples`），并入 DuckDB 根，与「结果集」
+分成两段：
+
+- 结果集 `tmp_q_` = 「我刚跑出来的」；洞察产物 `tmp_i_` = 「我已经取过样的」——
+  同名需求下用户在树里选的语义不同，混排会让人选错；
+- 选中 → `Picked::InsightSample` → 洞察出口 `SampleSource::on_duckdb(SELECT * FROM "<表>")`。
+
+意义：**样本表不是终点**。洞察取样（含联邦档搬进单例的那些）产出 `tmp_i_`，现在能直接从
+「新建洞察 → 洞察产物」再取一份继续分析，闭环不再依赖外部入口。
+
+**顺带修的既有缺陷**：`collect_analysis_tables`（「资产库 · 本项目」）在**没打开项目**时会
+退回读全局分析库（`or_else(global_analysis_db_path)`）——B2 加了独立的「资产库 · 全局」段后，
+这条退避会让同一张全局表在两段各出现一次，正好违反「两段并列不混排」。现在无项目即空，
+全局那份只由全局段负责；同时把「读某台分析库的表名」抽成 `analysis_tables_of(path)`
+（纯路径函数），单测钉住两点：只读打开**不会**把不存在的库创建出来、表名按序返回。
+
+验证：`rds-engine --lib` 的 `analysis::result_set` 5 passed（新增
+`insight_samples_and_result_sets_are_two_separate_lists`：两个列表互不串，且样本列表全是
+`tmp_i_` 前缀）；`rds-workbench --lib` **144 passed**（新增 `analysis_tables_are_read_only_and_never_create_the_db`、
+`insight_sample_kind_has_its_own_label`）。
+
+**仍未做**：多源 UI（选择器多选 + 一次取样多表的展示面）——原语已就位（§8.10），
+缺的是「一次选多个来源、结果怎么呈现」的产品口径；持久表的可视化列表与资源归档入口。
+
+### 8.12 多源取样 UI：选择器多选 + 一个面板的来源标签页
+
+**展示口径（用户拍板方案 2）**：多源 = **一个洞察面板 + 来源标签页**，不是 N 个面板。
+
+**选择器多选（内核能力）**：`PickerConfig.multi`。为假时点一次整体替换（老单选行为不变）；
+为真时点同一行 = 取消，点别的行 = 再加一个。选中真值改成 `Vec<(NodeId, Picked)>`——
+存行 id 是因为树自身只有单选态，渲染要靠它标出「已选」（`render_rows` 多了 `checked` 参数）；
+确认按钮在多选下报「N 个来源」，不再只显示第一个名字。
+
+**面板多源（`InsightTarget::SourceTables { sources, active, table_name }`）**：
+
+- `temp_table()` 恒为空串，各来源样本表由接缝回填 `PanelData::source_samples`（**按来源下标对齐**）；
+  `sample_table()` 多源分支按 `active` 取那一格——共用单槽会在切页时把 A 的表覆盖成 B 的；
+- `target_key` 把整组来源算一个身份（切页不算换目标，否则每切一次就往「已洞察表」集合里插一条）；
+- 标题 = 当前来源名，副标题 = `i/N 来源 · 表名`，标题下方一排 `TabBar::segmented` 来源标签页。
+
+**取样节奏（一次全取，方案 A）**：多源请求到达时，N 个来源在**同一个后台任务**里依次
+采样、各落各的槽位，全部就位才切到「算画像」；加载说明直接写 `正在取样 N 个来源（i/N）`。
+选它而不是逐页惰性：多源的用途是「同一套指标横向看几个来源」，一次看齐比一页页变出来
+更不容易误读；代价是首屏要等 N 份取样，进度文字已把 N 写清。单个来源失败**不拖死整组**：
+失败的那页记文案（汇总进 `set_error`），其余照常回填，当前页成功后照常出画像。
+
+标签页切换（`select_source(i)`）：该页已有样本表 → 直接按 `Table{temp_table}` 重算画像
+（省掉一遍源库查询 + CTAS，不重取样）。
+
+**入口**：洞察对话框多选 → `Picked` 逐个转 `SampleSource` → 按 `SampleSource` 整条去重
+（同一张表被点两次、或项目资产库与洞察产物指到同一张时合成一个）→ 1 个走单源
+`open_insight_source_table`，≥2 个走 `open_insight_source_tables`（`InsightTarget::source_tables`
+少于两源直接返回 `None`，入口在这里退回单源——一个标签页是噪音）。
+
+验证：`rds-insight --lib` **266 passed**（新增：多源目标须两源 / 样本表按下标取不串页 /
+切页时已取过样的一页不重新取样）；`rds-workbench --lib` **145 passed**（新增：单选替换 vs
+多选加减 + 「N 个来源」文案）；`insight_editor_entry` 2、`federated_sample` 2 仍绿。
+
+**仍未做**：多源下的「每源各取一份」目前是**逐页惰性取样**（不是一次全取）；持久表的
+可视化列表与资源归档入口。
+
+**缺口清单（2026-11-15 复核，逐条有据）**：
+
+1. **联邦会话取样原语没有产品入口**：`sample_federated_sources` 全仓只有
+   `crates/insight/tests/federated_sample.rs` 调用（grep 实测）。多源 UI 的「一次全取」是
+   **同一个后台任务里逐个来源采样**（`profile.rs` 的 `SourceTables` 分支），不是「一个联邦
+   会话挂全部源」——洞察多源不做跨源 join，共用会话只省一次建会话、却要一次挂 N 个连接，
+   锁与失败的耦合面更大。联邦会话能力（跨源同会话查询）仍只在原语层可用。
+2. **结果集不会自己产生**：`tmp_q_` 只在用户点「分析此结果集 / 持久化为项目表」时物化
+   （`editor/src/view/host/results/sort.rs:67`），普通查询结果只在内存里。所以选择器
+   「结果集」段在没人点过这两个动作前是空的——这是设计如此，不是缺陷；但「结果集都能
+   在洞察里再分析」目前只能从**结果面板菜单**进，洞察对话框主动裁剪掉了结果集档
+   （`INSIGHT_KINDS` 不含 `ResultSet`）。
+3. **持久表只有状态栏回显**：落库成功后告知表名，没有列表页/管理入口，「进资源归档」
+   没有入口设计。**已部分补上（2026-11-15）**：选择器「资产库 · 本项目」段把 `res_` 前缀
+   的表单独折成「持久表（结果集落库）」子段（`rows::split_persistent_tables` +
+   `persistent_table_rows`），显示名去掉前缀并把时间戳格式化成
+   `描述 · 2026-11-15 10:30:00`（身份仍是库里原名，`NodeId` 不动），新的在前。
+   仍缺：删除 / 重命名 / 「进资源归档」的写入口。**删除的原语已就位（2026-11-15）**：
+   `engine::analysis::persistent::{list_persistent_tables, drop_persistent_table}`——
+   只碰 `res_` 前缀（守卫在开库之前）、库/表不存在按「没有」处理（幂等）、
+   **真删不是回收站**（要可撤销得先登记进资产库走它的 trash，那是另一层语义）。
+   缺的只是**按钮放哪**：选择器行内动作 / 结果面板菜单 / 资产库面板，三处的交互与
+   失败面不同，尚未定。
+4. **多源标签页的点击路径没有 headless 用例**：`select_source` 是直接调用测的
+   （`switching_source_tabs_reuses_the_sample_it_already_has`），`TabBar::on_click` 那条
+   回调没被测试覆盖。
+5. **多源确认窗口只问一份的口径**：探查配置只在第一份上问用户，后续标签页沿用
+   `last_probe_config`；用户无法为不同来源设不同采样规则（当前刻意如此，若产品要改需重设计）。
+
+
+
+

@@ -65,6 +65,8 @@ pub fn to_global_rows(
                 updated_epoch: resource.updated_at.timestamp(),
                 archived_epoch: resource.archived_at.map(|when| when.timestamp()),
                 size_bytes: resource.file_size.map(i64::from),
+                // 全局行的本体在全局 `resources/` 下：路径原样带出，分析侧按全局根拼接
+                payload_rel_path: resource.file_rel_path.clone(),
             }
         })
         .collect()

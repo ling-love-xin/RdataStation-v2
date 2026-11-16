@@ -111,7 +111,7 @@ fn query_tables(
 }
 
 /// 草稿箱里 duckdb 支持格式的文件（相对路径 + 绝对路径，按相对路径排序）。
-pub(super) fn collect_drafts(shared: &Shared) -> Vec<(String, PathBuf)> {
+pub(crate) fn collect_drafts(shared: &Shared) -> Vec<(String, PathBuf)> {
     let project_borrow = shared.project.borrow();
     let Some(project) = project_borrow.as_ref() else {
         return Vec::new();
@@ -154,7 +154,11 @@ fn collect_flattened(
     }
 }
 
-/// 资产库内部表清单（`{项目}/.RSmeta/analytics.duckdb`，无项目读全局分析库）。
+/// 「资产库 · 本项目」的内部表清单（`{项目}/.RSmeta/analytics.duckdb`）。
+///
+/// **无项目时返回空**，不再退回全局分析库：全局那份由独立的「资产库 · 全局」段
+/// （`SourceKind::AnalysisGlobal`）负责。退回会让同一张全局表在两个段里各出现一次，
+/// 用户无法判断自己选的是哪一份（两段并列的前提就是**不混排**）。
 ///
 /// 查法与 `mock_generator::analysis_tables` 一致（`information_schema` + 过滤 `main` schema），
 /// 但**连接必须只读**（`ProjectDatabaseManager::open_read_only` 同款策略）：
@@ -163,19 +167,20 @@ fn collect_flattened(
 /// - 反过来说，用可写模式打开一个**尚不存在**的分析库会把它**创建出来**（DuckDB 建库语义）：
 ///   打开一次来源选择器就在项目里平白多一个空的 `analytics.duckdb`，那是副作用，不是查询。
 pub(super) fn collect_analysis_tables(project: Option<&project::ui::OpenProject>) -> Vec<String> {
-    let path = project
-        .map(|p| p.root.clone())
-        .map(|root| {
-            engine::persistence::project_db::ProjectDatabaseManager::analysis_db_path(&root)
-        })
-        .or_else(|| Some(connection_dialog::services::workspace_loader::global_analysis_db_path()));
-    let Some(path) = path else {
+    let Some(root) = project.map(|p| p.root.clone()) else {
         return Vec::new();
     };
+    analysis_tables_of(&engine::persistence::project_db::ProjectDatabaseManager::analysis_db_path(&root))
+}
+
+/// 从一台分析库（DuckDB 文件）里读 `main` schema 的表名（只读，失败一律空）。
+///
+/// 抽成纯路径函数，便于用「造一台库」的方式钉住行为（不依赖打开项目的重对象）。
+pub(crate) fn analysis_tables_of(path: &std::path::Path) -> Vec<String> {
     let Ok(config) = duckdb::Config::default().access_mode(duckdb::AccessMode::ReadOnly) else {
         return Vec::new();
     };
-    let Ok(conn) = duckdb::Connection::open_with_flags(&path, config) else {
+    let Ok(conn) = duckdb::Connection::open_with_flags(path, config) else {
         return Vec::new();
     };
     let mut stmt = match conn.prepare(
@@ -254,4 +259,35 @@ pub(super) fn load_db_layer(
 
     state.borrow_mut().db_cache.put(id.clone(), rows);
     window.refresh();
+}
+
+#[cfg(test)]
+mod tests {
+    // 刻意不用 `use super::*`：会把 gpui 的 `test` 属性宏带进作用域。
+    use super::analysis_tables_of;
+
+    /// 分析库里的表名要读得到；库不存在时**空**而不是「顺手建一个」——
+    /// 只读打开对不存在的文件是 Err，这条同时钉住「picker 不产生副作用」。
+    #[test]
+    fn analysis_tables_are_read_only_and_never_create_the_db() {
+        let dir = std::env::temp_dir().join(format!("rds-picker-an-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("建临时目录");
+        let path = dir.join("analytics.duckdb");
+        let _ = std::fs::remove_file(&path);
+        let conn = duckdb::Connection::open(&path).expect("造分析库");
+        conn.execute_batch("create table res_结果集_探查(id integer);")
+            .expect("写持久表");
+        drop(conn);
+
+        assert_eq!(
+            analysis_tables_of(&path),
+            vec!["res_结果集_探查".to_string()]
+        );
+
+        let missing = dir.join("nope.duckdb");
+        assert!(analysis_tables_of(&missing).is_empty(), "不存在的库不给表");
+        assert!(!missing.exists(), "只读打开不该把库创建出来");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

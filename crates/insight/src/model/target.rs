@@ -22,6 +22,12 @@ pub struct SampleSource {
     pub sql: String,
     /// 人类可读的来源描述（面板副标题 / 快照来源）：如「analytics.orders」
     pub label: String,
+    /// 这条来源是不是**全局库里的表**（刀 7 · B）。
+    ///
+    /// 全局库（`<RDS_HOME>/data/system/global.db`）是 **SQLite** 文件、有自己的写入方，
+    /// 所以不能 ATTACH 进进程单例。取样时另开一条**短命会话**只读挂它（别名 `rds_global`），
+    /// 取完把结果搬进单例（`tmp_i_`，建完即登记）——`sql` 里写 `rds_global.<表>`。
+    pub global: bool,
 }
 
 impl SampleSource {
@@ -35,6 +41,7 @@ impl SampleSource {
             conn_id: Some(conn_id.into()),
             sql: sql.into(),
             label: label.into(),
+            global: false,
         }
     }
 
@@ -44,6 +51,20 @@ impl SampleSource {
             conn_id: None,
             sql: sql.into(),
             label: label.into(),
+            global: false,
+        }
+    }
+
+    /// **全局库**里的表（刀 7 · B）：`table` 是裸表名，SQL 由这里拼成
+    /// `SELECT * FROM rds_global.<表>`（别名是内核固定常量，入口不该自己起名）。
+    pub fn on_global(table: impl Into<String>, label: impl Into<String>) -> Self {
+        let table = table.into();
+        let quoted = table.replace('"', "\"\"");
+        Self {
+            conn_id: None,
+            sql: format!("SELECT * FROM rds_global.\"{quoted}\""),
+            label: label.into(),
+            global: true,
         }
     }
 
@@ -67,8 +88,7 @@ impl SampleSource {
         Ok(Self::on_duckdb(
             format!("SELECT * FROM {reader}('{escaped}')"),
             label,
-        ))
-    }
+        ))    }
 
     /// 来源描述（面板副标题与快照 `entity_source` 用它）。
     pub fn label(&self) -> &str {
@@ -78,6 +98,55 @@ impl SampleSource {
     /// 样本要跑在哪条连接上；`None` = DuckDB 内存库。
     pub fn conn_id(&self) -> Option<&str> {
         self.conn_id.as_deref()
+    }
+}
+
+/// 一次洞察分析要看的**一组来源**（联邦 / 多源取样的落点）。
+///
+/// 为什么另起一个类型而不把 `Vec` 塞进 `SampleSource`：单源是绝大多数入口的现状
+/// （导航树点一张表），把「一个源」和「一组源」混成一个类型会让每个入口都去判断
+/// 「我这是不是只有一个」，而它们根本不该关心这件事。
+///
+/// **本段的取样语义（口径已定）**：多源 = **每源各取一份样本**，各出一张 `tmp_i_` 表，
+/// 不做跨源 join——取样是**取数据**，关联是**分析**。联邦会话真正被用来做 join 的情形
+/// 留给「按 SQL 分析」那条链，不在这里。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SampleSet {
+    /// 会话 owner（联邦档按它取会话；空 owner 一律不建会话，见
+    /// `engine::analysis::channel::AnalysisChannel::from_toggle`）
+    pub owner: String,
+    /// 来源清单（至少 1 个；空清单 = 调用方的错，服务层会拒）
+    pub sources: Vec<SampleSource>,
+    /// 用户是否打开了「联邦 / 多源」开关
+    ///
+    /// 注意它**不是**「一定要建联邦会话」：口径是「开关 + ≥2 源 + 有 owner」才升级
+    /// （`from_toggle` 只升不降）；否则仍按单源走，行为与今天完全一致。
+    pub federated_toggle: bool,
+}
+
+impl SampleSet {
+    pub fn new(owner: impl Into<String>, sources: Vec<SampleSource>) -> Self {
+        Self {
+            owner: owner.into(),
+            sources,
+            federated_toggle: false,
+        }
+    }
+
+    /// 打开 / 关闭多源开关（链式，便于入口一行写完）
+    pub fn with_federated(mut self, on: bool) -> Self {
+        self.federated_toggle = on;
+        self
+    }
+
+    /// 这次分析该走哪个执行通道（通道判定只此一处，避免各入口各判一次）
+    pub fn channel(&self) -> engine::analysis::channel::AnalysisChannel {
+        engine::analysis::channel::AnalysisChannel::from_toggle(
+            engine::analysis::channel::AnalysisChannel::ProcessDuckDb,
+            self.federated_toggle,
+            self.sources.len(),
+            &self.owner,
+        )
     }
 }
 
@@ -110,6 +179,18 @@ pub enum InsightTarget {
         source: SampleSource,
         table_name: String,
     },
+    /// 多源表探查：**一个面板 + 来源标签页**（多源取样的展示面）。
+    ///
+    /// 与 `SourceTable` 的区别只在「还有别的来源」：`active` 是当前标签页下标，
+    /// 其余解析（取样、画像、下钻）与单源表目标完全同路——切标签页 = 换 `active`。
+    /// 各来源的样本表由接缝侧回填进 `PanelData::source_samples`（按同一顺序对齐），
+    /// 所以本变体自己不装临时表名。
+    SourceTables {
+        sources: Vec<SampleSource>,
+        /// 当前标签页（始终 `< sources.len()`；构造时由 `new` 夹住）
+        active: usize,
+        table_name: String,
+    },
     /// 多列分析
     MultiColumn {
         temp_table: String,
@@ -125,11 +206,55 @@ pub enum InsightTarget {
 }
 
 impl InsightTarget {
+    /// 多源目标（≥2 个来源才值得开标签页；1 个来源的调用方应直接用 `SourceTable`）。
+    ///
+    /// 少于 2 个来源时返回 `None`：让入口立刻看出「这不该走多源路径」，
+    /// 而不是在面板上画一排只有一个的标签。
+    pub fn source_tables(
+        sources: Vec<SampleSource>,
+        table_name: impl Into<String>,
+    ) -> Option<Self> {
+        if sources.len() < 2 {
+            return None;
+        }
+        Some(Self::SourceTables {
+            sources,
+            active: 0,
+            table_name: table_name.into(),
+        })
+    }
+
+    /// 切到第 `index` 个来源（越界返回 `None`；非多源目标也返回 `None`）。
+    pub fn with_active_source(&self, index: usize) -> Option<Self> {
+        match self {
+            InsightTarget::SourceTables {
+                sources, table_name, ..
+            } if index < sources.len() => Some(InsightTarget::SourceTables {
+                sources: sources.clone(),
+                active: index,
+                table_name: table_name.clone(),
+            }),
+            _ => None,
+        }
+    }
+
+    /// 多源目标：全部来源 + 当前下标。
+    pub fn multi_sources(&self) -> Option<(&[SampleSource], usize)> {
+        match self {
+            InsightTarget::SourceTables {
+                sources, active, ..
+            } => Some((sources.as_slice(), *active)),
+            _ => None,
+        }
+    }
+
     /// 该目标默认落到哪个 Tab（入口点击后直接切过去）
     pub fn default_tab(&self) -> PanelTab {
         match self {
             InsightTarget::Column { .. } | InsightTarget::SourceColumn { .. } => PanelTab::Column,
-            InsightTarget::Table { .. } | InsightTarget::SourceTable { .. } => PanelTab::Table,
+            InsightTarget::Table { .. }
+            | InsightTarget::SourceTable { .. }
+            | InsightTarget::SourceTables { .. } => PanelTab::Table,
             InsightTarget::MultiColumn { .. } => PanelTab::MultiColumn,
             InsightTarget::Schema { .. } => PanelTab::Schema,
         }
@@ -143,6 +268,11 @@ impl InsightTarget {
             }
             InsightTarget::Table { table_name, .. }
             | InsightTarget::SourceTable { table_name, .. } => table_name.clone(),
+            // 多源：标题给「当前这一份」的来源名，第几份由 detail 报
+            InsightTarget::SourceTables { sources, active, .. } => sources
+                .get(*active)
+                .map(|s| s.label().to_string())
+                .unwrap_or_default(),
             InsightTarget::MultiColumn { columns, .. } => format!("{} 列", columns.len()),
             InsightTarget::Schema { schema, .. } => {
                 schema.clone().unwrap_or_else(|| "全部结构".into())
@@ -172,6 +302,16 @@ impl InsightTarget {
                 }
             }
             InsightTarget::SourceTable { source, .. } => Some(format!("来源 {}", source.label())),
+            // 多源：第几份 / 共几份 + 当前来源的表名（标签页本身只显示来源名）
+            InsightTarget::SourceTables {
+                sources,
+                active,
+                table_name,
+            } => Some(format!(
+                "{}/{} 来源 · {table_name}",
+                active + 1,
+                sources.len()
+            )),
             InsightTarget::MultiColumn { temp_table, .. } => Some(temp_table.clone()),
             InsightTarget::Schema { conn_id, .. } => Some(conn_id.clone()),
         }
@@ -189,6 +329,8 @@ impl InsightTarget {
             | InsightTarget::MultiColumn { temp_table, .. } => temp_table,
             InsightTarget::SourceColumn { .. }
             | InsightTarget::SourceTable { .. }
+            // 多源一样的道理：样本表由接缝按来源下标回填，不装在目标里
+            | InsightTarget::SourceTables { .. }
             | InsightTarget::Schema { .. } => "",
         }
     }
@@ -198,6 +340,7 @@ impl InsightTarget {
         match self {
             InsightTarget::SourceColumn { source, .. }
             | InsightTarget::SourceTable { source, .. } => Some(source),
+            InsightTarget::SourceTables { sources, active, .. } => sources.get(*active),
             _ => None,
         }
     }
@@ -206,7 +349,8 @@ impl InsightTarget {
     pub fn table_name(&self) -> String {
         match self {
             InsightTarget::Table { table_name, .. }
-            | InsightTarget::SourceTable { table_name, .. } => table_name.clone(),
+            | InsightTarget::SourceTable { table_name, .. }
+            | InsightTarget::SourceTables { table_name, .. } => table_name.clone(),
             _ => self.temp_table().to_string(),
         }
     }

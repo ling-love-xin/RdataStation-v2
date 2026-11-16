@@ -103,6 +103,7 @@ mod dialogs;
 mod encoding;
 mod exec;
 mod export_pq;
+mod federated_confirm;
 mod format;
 mod general_win;
 mod legacy;

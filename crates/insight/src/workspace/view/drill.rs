@@ -19,6 +19,7 @@ use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::description_list::DescriptionList;
 use gpui_kit::component::progress::ProgressCircle;
 use gpui_kit::component::tag::Tag;
+use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{Icon, IconName, Sizable as _, Size, Theme};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -83,11 +84,13 @@ impl InsightView {
         }
 
         let mut out: Vec<AnyElement> = vec![
-            self.render_dz_title(target, theme, inline_icon)
+            self.render_dz_title(entity, target, theme, inline_icon)
                 .into_any_element(),
         ];
         match target {
-            InsightTarget::Table { .. } | InsightTarget::SourceTable { .. } => {
+            InsightTarget::Table { .. }
+            | InsightTarget::SourceTable { .. }
+            | InsightTarget::SourceTables { .. } => {
                 if let Some(profile) = self.data.as_table() {
                     let sample_label = self.sample_amount_label();
                     out.push(
@@ -137,7 +140,13 @@ impl InsightView {
     ///
     /// 目标名与口径常显——「这数是什么口径」的歧义在右栏同样要消除
     /// （口径徽标与中间工作页 scope 切换同一语义）。
-    fn render_dz_title(&self, target: &InsightTarget, theme: &Theme, _inline_icon: Pixels) -> Div {
+    fn render_dz_title(
+        &self,
+        entity: &Entity<Self>,
+        target: &InsightTarget,
+        theme: &Theme,
+        _inline_icon: Pixels,
+    ) -> Div {
         let colors = theme.colors;
         div()
             .v_flex()
@@ -175,6 +184,23 @@ impl InsightView {
             )
             .when_some(target.detail(), |this, detail| {
                 this.child(muted_line(&detail, theme))
+            })
+            // 多源：标题下面挂一排来源标签页（切页 = 换当前分析的表，不重新建面板）
+            .when_some(target.multi_sources(), |this, (sources, active)| {
+                let tabs = sources
+                    .iter()
+                    .map(|s| Tab::new().label(SharedString::from(s.label())));
+                let entity = entity.clone();
+                this.child(
+                    TabBar::new(ElementId::Name(SharedString::from("insight-source-tabs")))
+                        .segmented()
+                        .children(tabs)
+                        .selected_index(active)
+                        .on_click(move |index, _window, app| {
+                            let index = *index;
+                            entity.update(app, |view, cx| view.select_source(index, cx));
+                        }),
+                )
             })
     }
 

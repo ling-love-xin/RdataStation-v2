@@ -281,6 +281,17 @@ pub struct Shared {
     pub prev_right_sidebar_width: Rc<Cell<f32>>,
     pub selected: Rc<Cell<Option<usize>>>,
     pub connections: Rc<RefCell<Vec<ConnectionItem>>>,
+    /// 数据对象清单缓存（右侧「数据对象」面板与右侧栏共用一次取数结果）。
+    ///
+    /// 由事件路径刷新（面板打开 / 用户点刷新），渲染只读——`collect` 里有读盘与
+    /// 查库，放进 render 就会每帧 I/O（gpui-kit-dev 明令禁止）。
+    pub data_objects: Rc<RefCell<Vec<crate::components::data_objects::Object>>>,
+    /// 资产行（面板刷新时一并取：`Objects` 里只有名字与版本，「分析已选」还要本体路径）
+    pub data_object_assets: Rc<RefCell<Vec<crate::components::data_objects::AssetRow>>>,
+    /// 数据对象工作集：已挑进本次分析的对象的身份（`Object::key`）。
+    ///
+    /// 存 key 而不是行号：清单会随刷新重排，行号一做增删就错位（同 `ElementId` 业务键的道理）。
+    pub data_object_picked: Rc<RefCell<Vec<String>>>,
     pub notice: Rc<RefCell<Option<String>>>,
     /// 导航元数据缓存失效戳：宿主 / 项目宿主 / Mock 宿主只递增（`invalidate_nav_cache`），
     /// 缓存数据本身由 `EditorPanel` 自持——外部不再直接读写别家的缓存。
@@ -430,6 +441,9 @@ impl Shared {
                 Some(0)
             })),
             connections: Rc::new(RefCell::new(connections)),
+            data_objects: Rc::new(RefCell::new(Vec::new())),
+            data_object_assets: Rc::new(RefCell::new(Vec::new())),
+            data_object_picked: Rc::new(RefCell::new(Vec::new())),
             notice: Rc::new(RefCell::new(notice)),
             nav_cache_epoch: Rc::new(Cell::new(0)),
             nav_panel: Rc::new(RefCell::new(None)),
@@ -870,6 +884,29 @@ impl Shared {
             source,
             table_name: table_name.clone(),
         };
+        self.set_right_insight_target(&target, cx);
+        self.queue_workspace_insight(target, cx);
+    }
+
+    /// 多源入口（洞察对话框多选）：一个面板 + 来源标签页。
+    ///
+    /// 少于 2 个来源直接退回单源入口——标签页只有一份时只是噪音，行为也和单源一模一样。
+    /// `table_name` 只用于展示（各来源的实际表名在标签页上由 `SampleSource::label` 给出）。
+    pub fn open_insight_source_tables(
+        &self,
+        sources: Vec<insight::SampleSource>,
+        table_name: impl Into<String>,
+        cx: &mut App,
+    ) {
+        let table_name = table_name.into();
+        if let Some(first) = sources.first().cloned().filter(|_| sources.len() == 1) {
+            self.open_insight_source_table(first, table_name, cx);
+            return;
+        }
+        let Some(target) = InsightTarget::source_tables(sources, table_name) else {
+            return;
+        };
+        self.open_right_panel(RightPanel::Insight, cx);
         self.set_right_insight_target(&target, cx);
         self.queue_workspace_insight(target, cx);
     }

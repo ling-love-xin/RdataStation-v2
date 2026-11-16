@@ -71,11 +71,13 @@ impl AnalysisRequest {
     }
 }
 
-/// 桥接行数的上限（超过就截断，并在结果里如实说明）
+/// 桥接行数口径：**全量，不设上限**（保留此常量只为给调用方一个明确的「无上限」标记）。
 ///
-/// 为什么是这个量级：分析要把行**逐行**写进 DuckDB（参数化 INSERT），20 万行会让“点一下
-/// 分析”变成一次可感知的等待；20000 行在毫秒级，且覆盖绝大多数“看一眼统计”的场景。
-pub const ANALYSIS_MAX_ROWS: usize = 20_000;
+/// 早期这里有一道上限（20,000 行，超过就截断并在结果里说明「另有 N 行未参与」）。
+/// 2026-11-16 的裁决：**只有洞察允许采样**（洞察本就是「看一眼分布」，采样是它的语义）；
+/// **分析与联邦都不许丢数据**——分析是「对这份结果做统计」，少几万行就不再是同一份结果；
+/// 联邦是「跨源 join」，截断会直接让结果错。逐行写 DuckDB 的代价要由实现承担
+/// （必要时后台物化 + 进度），不能拿性能换正确性。
 
 /// 菜单里逐列分组最多摆几列（再多菜单就没法用了；不等于不能分析其他列——自己写 SQL）
 pub const ANALYSIS_MAX_COLUMN_ITEMS: usize = 8;
@@ -152,11 +154,13 @@ pub fn menu_items(entry: &ResultEntry) -> Vec<AnalysisItem> {
     items
 }
 
-/// 结果集 → 分析请求（**纯函数**：桥接当前已抓到的行，超出上限就截断并计数）
+/// 结果集 → 分析请求（**纯函数**：桥接当前已抓到的**全部**行）
 ///
 /// `fact` / `pref` 由宿主事件路径取当前槽位事实档快照与设置偏好传入（纯函数不读 `cx`、
 /// 不碰 store）；无事实档时执行器回退显示矩阵猜型降级档。`source_set` 是原槽位下标，
 /// 供物化回执回挂定位。
+///
+/// 不截断：分析与联邦都不允许数据丢失（口径见文件头「采样只属于洞察」）。
 pub fn request_for(
     entry: &ResultEntry,
     sql: String,
@@ -164,17 +168,11 @@ pub fn request_for(
     pref: StoragePref,
     source_set: usize,
 ) -> AnalysisRequest {
-    let total = entry.rows.len();
-    let rows: Vec<Vec<String>> = if total > ANALYSIS_MAX_ROWS {
-        entry.rows[..ANALYSIS_MAX_ROWS].to_vec()
-    } else {
-        entry.rows.clone()
-    };
     AnalysisRequest {
         sql,
         columns: entry.columns.clone(),
-        rows,
-        dropped_rows: total.saturating_sub(ANALYSIS_MAX_ROWS),
+        rows: entry.rows.clone(),
+        dropped_rows: 0,
         fact,
         pref,
         source_set,
@@ -294,10 +292,9 @@ mod tests {
             small.notice()
         );
 
-        // 超过上限：截到上限并如实计数
-        let rows: Vec<Vec<String>> = (0..(super::ANALYSIS_MAX_ROWS + 5))
-            .map(|i| vec![i.to_string()])
-            .collect();
+        // 大结果集：**全量桥接**，不截断、不丢行（分析与联邦不允许数据丢失）
+        let rows: Vec<Vec<String>> = (0..120_000).map(|i| vec![i.to_string()]).collect();
+        let total = rows.len();
         let big = ResultEntry::success(
             DocumentId::new("doc"),
             "select * from big".to_string(),
@@ -306,19 +303,19 @@ mod tests {
             vec!["id".to_string()],
             rows,
         );
-        let capped = request_for(
+        let whole = request_for(
             &big,
             "SELECT count(*) FROM {table}".to_string(),
             None,
             StoragePref::Auto,
             0,
         );
-        assert_eq!(capped.bridged_rows(), super::ANALYSIS_MAX_ROWS);
-        assert_eq!(capped.dropped_rows, 5);
+        assert_eq!(whole.bridged_rows(), total, "一行都不能少");
+        assert_eq!(whole.dropped_rows, 0, "不截断就没有「未参与」的行");
         assert!(
-            capped.notice().contains("5 行超出上限未参与"),
-            "{}",
-            capped.notice()
+            !whole.notice().contains("超出上限"),
+            "既然不截，就不该再提上限：{}",
+            whole.notice()
         );
     }
 
@@ -364,12 +361,13 @@ mod tests {
         assert!(is_runnable(CUSTOM_DEFAULT_SQL));
         assert!(!is_runnable("   \n\t "), "空白不值得提交");
 
-        // 说明里的数字来自桥接口径（截与不截两种说法）
+        // 说明里的数字来自桥接口径（截与不截两种说法；不截是现在的常态）
         let plain = custom_hint(1200, 0);
         assert!(plain.contains("1200 行"), "{plain}");
         assert!(plain.contains("{table}"), "要告诉用户占位符怎么说：{plain}");
         assert!(!plain.contains("超出上限"), "没截就别提截断：{plain}");
-        let capped = custom_hint(super::ANALYSIS_MAX_ROWS, 7);
+        // 旧口径文案仍在（`dropped_rows` 恒 0 后走不到，留着防外部拼装调用）
+        let capped = custom_hint(1200, 7);
         assert!(capped.contains("7 行超出上限"), "{capped}");
     }
 }

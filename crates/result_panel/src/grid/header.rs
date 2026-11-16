@@ -246,6 +246,9 @@ pub(crate) fn render_th(
         frozen: delegate.is_frozen(column),
         hidden_columns: delegate.hidden.len(),
         insight: delegate.insight_available(),
+        // 列头菜单只做列级动作：整表「分析此结果集」不在这一组（见 `column_menu_items`）
+        analyze: false,
+        persist: false,
         table: delegate.result_table.clone(),
         column_filter_active: delegate.has_column_filter(column),
         column_values: delegate.column_distinct_values(column),

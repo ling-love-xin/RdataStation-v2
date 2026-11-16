@@ -27,6 +27,7 @@ fn tag_targets_follow_the_selection_like_delete_and_move() {
         updated_epoch: 0,
         archived_epoch: None,
         size_bytes: None,
+        payload_rel_path: None,
     };
     // 单选：只给这一行（详情面板那一元入口也走同一口径）。
     let rows = [
@@ -187,6 +188,7 @@ fn enter_on_a_group_header_folds_that_group() {
             updated_epoch: 0,
             archived_epoch: None,
             size_bytes: None,
+            payload_rel_path: None,
         }),
     ];
     assert_eq!(

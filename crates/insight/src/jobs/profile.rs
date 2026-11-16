@@ -27,6 +27,13 @@ pub enum ProfileRequest {
         /// 探查配置（确认窗口产物）：数据量形态 / 采样方式 / 过滤 / 种子
         config: crate::model::ProbeConfig,
     },
+    /// 多源目标：**只给当前标签页那一份取样**（切页 = 再发一次，命中缓存则不重取）
+    SourceTables {
+        sources: Vec<crate::model::SampleSource>,
+        active: usize,
+        table_name: String,
+        config: crate::model::ProbeConfig,
+    },
 }
 
 impl ProfileRequest {
@@ -35,6 +42,7 @@ impl ProfileRequest {
         match self {
             ProfileRequest::SourceColumn { source, .. }
             | ProfileRequest::SourceTable { source, .. } => Some(source),
+            ProfileRequest::SourceTables { sources, active, .. } => sources.get(*active),
             _ => None,
         }
     }
@@ -43,7 +51,16 @@ impl ProfileRequest {
     pub fn config(&self) -> Option<&crate::model::ProbeConfig> {
         match self {
             ProfileRequest::SourceColumn { config, .. }
-            | ProfileRequest::SourceTable { config, .. } => Some(config),
+            | ProfileRequest::SourceTable { config, .. }
+            | ProfileRequest::SourceTables { config, .. } => Some(config),
+            _ => None,
+        }
+    }
+
+    /// 多源请求的当前下标（取样回填要知道落到哪个槽位）。
+    pub fn active_index(&self) -> Option<usize> {
+        match self {
+            ProfileRequest::SourceTables { active, .. } => Some(*active),
             _ => None,
         }
     }
@@ -94,6 +111,17 @@ impl ProfileRequest {
                 table_name: table_name.clone(),
                 config,
             }),
+            // 多源：一次只取当前标签页那一份（切页再发一次；已取样过的页由面板先短路）
+            InsightTarget::SourceTables {
+                sources,
+                active,
+                table_name,
+            } => Some(Self::SourceTables {
+                sources: sources.clone(),
+                active: *active,
+                table_name: table_name.clone(),
+                config,
+            }),
             InsightTarget::MultiColumn { .. } | InsightTarget::Schema { .. } => None,
         }
     }
@@ -116,7 +144,132 @@ pub fn request_profile(
     // 且 CTAS 在库内完成、拿不到真百分比）——所以分阶段给文字说明 + 不确定进度条，
     // 而不是让用户对着干骨架以为卡住了。
     if let Some(source) = request.source() {
+        // 多源 = **一次全取**（方案 A）：N 个来源在同一个后台任务里依次采样、各落各的
+        // 槽位，全部就位后才算「打开完成」。
+        //
+        // 不逐页惰性取的理由：多源洞察的用途是「同一套指标横向看几个来源」，
+        // 一次看齐比一页页变出来更不容易误读（逐页取还会让切页凭空多等一次源库往返）。
+        // 代价是首屏要等 N 份取样，加载说明里直接把 N 写出来。
+        if let ProfileRequest::SourceTables {
+            sources,
+            active,
+            table_name,
+            config,
+        } = &request
+        {
+            if sources.len() > 1 {
+                let sources = sources.clone();
+                let active = *active;
+                let table_name = table_name.clone();
+                let config = config.clone();
+                let total = sources.len();
+                let root_owned = project_root.clone();
+                let _ = weak.update(cx, |panel, cx| {
+                    panel.set_loading_note(
+                        Some(format!(
+                            "正在取样 {total} 个来源（{}/{total}）…",
+                            active + 1
+                        )
+                        .into()),
+                        cx,
+                    );
+                });
+                cx.spawn(async move |cx| {
+                    // 逐个取样：单个来源失败不拖死整组，失败的那页记文案，其余照常回填
+                    let mut sampled: Vec<Option<String>> = Vec::with_capacity(total);
+                    let mut failures: Vec<(String, String)> = Vec::new();
+                    let mut batch = Vec::with_capacity(total);
+                    for one in sources {
+                        batch.push(one);
+                    }
+                    for (index, one) in batch.into_iter().enumerate() {
+                        let label = one.label.clone();
+                        let one_cfg = config.clone();
+                        let outcome = cx
+                            .background_executor()
+                            .spawn(async move {
+                                crate::service::block_on(
+                                    crate::service::persistence::sample_source_to_analysis_table(
+                                        &one, &one_cfg,
+                                    ),
+                                )
+                            })
+                            .await;
+                        match outcome {
+                            Ok(table) => sampled.push(Some(table)),
+                            Err(err) => {
+                                failures
+                                    .push((label, InsightService::describe_error(&err).message));
+                                sampled.push(None);
+                            }
+                        }
+                        let done = index + 1;
+                        let _ = weak.update(cx, |panel, cx| {
+                            if done < total {
+                                panel.set_loading_note(
+                                    Some(
+                                        format!("正在取样 {total} 个来源（{done}/{total}）…")
+                                            .into(),
+                                    ),
+                                    cx,
+                                );
+                            } else {
+                                panel.set_loading_note(Some("正在计算画像…".into()), cx);
+                            }
+                        });
+                    }
+                    // 先把所有成功的样本表落进各自槽位（切页即可见），再算当前页的画像
+                    let mut active_table = None;
+                    for (index, table) in sampled.into_iter().enumerate() {
+                        let Some(table) = table else { continue };
+                        if index == active {
+                            active_table = Some(table);
+                        } else {
+                            let _ = weak.update(cx, |panel, cx| {
+                                panel.set_source_sample_at(index, table.clone(), cx)
+                            });
+                        }
+                    }
+                    if !failures.is_empty() {
+                        let text = failures
+                            .iter()
+                            .map(|(label, msg)| format!("{label}：{msg}"))
+                            .collect::<Vec<_>>()
+                            .join("；");
+                        let _ = weak.update(cx, |panel, cx| {
+                            panel.set_error(text, true, cx);
+                        });
+                    }
+                    let Some(table) = active_table else { return };
+                    let _ = weak.update(cx, |panel, cx| {
+                        panel.set_source_sample_at(active, table.clone(), cx)
+                    });
+                    let profile_task = cx.background_executor().spawn(async move {
+                        let root = root_owned.as_deref();
+                        InsightService::profile_table_view(root, &table, &table_name)
+                            .map(|view| ProfileOutcome::SourceTable { temp_table: table, view })
+                    });
+                    let result = profile_task.await;
+                    let _ = weak.update(cx, |panel, cx| match result {
+                        Ok(ProfileOutcome::SourceTable { temp_table, view }) => {
+                            panel.set_source_sample_at(active, temp_table, cx);
+                            panel.set_table_profile(view, cx);
+                        }
+                        Err(err) => {
+                            let info = InsightService::describe_error(&err);
+                            panel.set_error(info.message, info.retryable, cx);
+                        }
+                        _ => {}
+                    });
+                })
+                .detach();
+                return;
+            }
+        }
+
         let source = source.clone();
+        // 多源：样本表要落到「按来源下标对齐」的槽位（切标签页不串表）
+        let slot = request.active_index();
         // 探查配置先取出（`request` 还要留给画像阶段用，不能 move 进取样闭包）
         let config = request
             .config()
@@ -162,6 +315,11 @@ pub fn request_profile(
                         InsightService::profile_table_view(root, &temp_table, &table_name)
                             .map(|view| ProfileOutcome::SourceTable { temp_table, view })
                     }
+                    // 多源：与单源表目标完全同一段（区别只在回填的槽位）
+                    ProfileRequest::SourceTables { table_name, .. } => {
+                        InsightService::profile_table_view(root, &temp_table, &table_name)
+                            .map(|view| ProfileOutcome::SourceTable { temp_table, view })
+                    }
                     _ => unreachable!(),
                 }
             });
@@ -172,7 +330,11 @@ pub fn request_profile(
                     panel.set_profile(view, cx);
                 }
                 Ok(ProfileOutcome::SourceTable { temp_table, view }) => {
-                    panel.set_source_sample(temp_table, cx);
+                    match slot {
+                        // 多源：只填当前槽位，其余来源各自的样本表原样留着
+                        Some(index) => panel.set_source_sample_at(index, temp_table, cx),
+                        None => panel.set_source_sample(temp_table, cx),
+                    }
                     panel.set_table_profile(view, cx);
                 }
                 Err(err) => {
@@ -198,7 +360,9 @@ pub fn request_profile(
                 table_name,
             } => InsightService::profile_table_view(root, &temp_table, &table_name)
                 .map(ProfileOutcome::Table),
-            ProfileRequest::SourceColumn { .. } | ProfileRequest::SourceTable { .. } => {
+            ProfileRequest::SourceColumn { .. }
+            | ProfileRequest::SourceTable { .. }
+            | ProfileRequest::SourceTables { .. } => {
                 unreachable!("源目标已在上方两段式分支处理")
             }
         }

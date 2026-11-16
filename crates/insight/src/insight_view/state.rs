@@ -345,7 +345,9 @@ impl InsightView {
         };
         if !matches!(
             target,
-            InsightTarget::SourceTable { .. } | InsightTarget::SourceColumn { .. }
+            InsightTarget::SourceTable { .. }
+                | InsightTarget::SourceColumn { .. }
+                | InsightTarget::SourceTables { .. }
         ) {
             return;
         }
@@ -367,7 +369,9 @@ impl InsightView {
         };
         if !matches!(
             target,
-            InsightTarget::SourceTable { .. } | InsightTarget::SourceColumn { .. }
+            InsightTarget::SourceTable { .. }
+                | InsightTarget::SourceColumn { .. }
+                | InsightTarget::SourceTables { .. }
         ) {
             return;
         }
@@ -469,6 +473,80 @@ impl InsightView {
     pub fn set_source_sample(&mut self, temp_table: impl Into<String>, cx: &mut Context<Self>) {
         self.data.source_sample = Some(temp_table.into());
         cx.notify();
+    }
+
+    /// 多源：把某一份来源的样本表落到**它自己的槽位**（下标与 `sources` 对齐）。
+    ///
+    /// 为什么不复用 `set_source_sample`：切标签页时若共用一个字段，前一份的表名会被
+    /// 后一份覆盖，切回去就变成「拿 B 的表看 A 的画像」。
+    pub fn set_source_sample_at(
+        &mut self,
+        index: usize,
+        temp_table: impl Into<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let table = temp_table.into();
+        if self.data.source_samples.len() <= index {
+            self.data.source_samples.resize(index + 1, String::new());
+        }
+        self.data.source_samples[index] = table;
+        cx.notify();
+    }
+
+    /// 多源：切到第 `index` 个来源标签页。
+    ///
+    /// 已取过样的来源**不重新取样**：直接按那张表重算画像（省掉一遍源库查询 + CTAS）；
+    /// 没取过的才发源请求（接缝在那一条上取样并回填自己的槽位）。
+    pub fn select_source(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(target) = self.target.clone() else {
+            return;
+        };
+        let Some(next) = target.with_active_source(index) else {
+            return;
+        };
+        if next == target {
+            return;
+        }
+        self.target = Some(next.clone());
+        let table = self.data.sample_table(&next).map(str::to_string);
+        // 取样口径沿用本会话确认过的配置：多源确认时只在第一份上问过用户，
+        // 后续标签页用同一口径取样，避免「同一个洞察里两份样本规则不同」。
+        let config = self.last_probe_config.clone();
+        match table {
+            Some(temp_table) => {
+                self.loading_note = Some("正在计算画像…".into());
+                cx.emit(InsightEvent::ProfileRequested {
+                    target: InsightTarget::Table {
+                        temp_table,
+                        table_name: next.table_name(),
+                    },
+                    config,
+                });
+            }
+            None => {
+                self.loading_note =
+                    Some("正在取样并建分析临时表（大表可能需要一些时间）…".into());
+                cx.emit(InsightEvent::ProfileRequested {
+                    target: next,
+                    config,
+                });
+            }
+        }
+        cx.notify();
+    }
+
+    /// 多源目标的当前下标（非多源为 `None`）。
+    pub fn active_source(&self) -> Option<usize> {
+        self.target.as_ref().and_then(|t| t.multi_sources()).map(|(_, i)| i)
+    }
+
+    /// 多源目标的来源清单（非多源为空）。
+    pub fn sources(&self) -> &[crate::model::SampleSource] {
+        self.target
+            .as_ref()
+            .and_then(|t| t.multi_sources())
+            .map(|(s, _)| s)
+            .unwrap_or(&[])
     }
 
     /// 更新加载期的阶段说明（jobs 分阶段调用：取样中 → 画像中）。
@@ -902,7 +980,9 @@ impl InsightView {
         // 源表也能评：用的是取样出来的那张临时表
         if !matches!(
             target,
-            InsightTarget::Table { .. } | InsightTarget::SourceTable { .. }
+            InsightTarget::Table { .. }
+                | InsightTarget::SourceTable { .. }
+                | InsightTarget::SourceTables { .. }
         ) {
             return;
         }
@@ -1003,10 +1083,12 @@ impl InsightView {
             },
             PanelTab::Table => match &target {
                 // 已经有源目标 → 原样再发（取样在接缝里做）
-                InsightTarget::SourceTable { .. } => Some(InsightEvent::ProfileRequested {
-                    target,
-                    config: None,
-                }),
+                InsightTarget::SourceTable { .. } | InsightTarget::SourceTables { .. } => {
+                    Some(InsightEvent::ProfileRequested {
+                        target,
+                        config: None,
+                    })
+                }
                 // 源列目标看整表：同一个来源，换成表目标（取样口径一致）
                 InsightTarget::SourceColumn { source, .. } => {
                     Some(InsightEvent::ProfileRequested {

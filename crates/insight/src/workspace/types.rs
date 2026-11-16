@@ -42,6 +42,18 @@ impl OpenedTarget {
                 };
                 (kind, source.label().to_string(), None)
             }
+            // 多源目标：集合条目按**当前标签页**那一份呈现（用户看到的就是这一份）
+            InsightTarget::SourceTables { sources, active, .. } => {
+                let Some(source) = sources.get(*active) else {
+                    return None;
+                };
+                let kind = if source.conn_id().is_some() {
+                    InsightSetKind::SourceTable
+                } else {
+                    InsightSetKind::File
+                };
+                (kind, source.label().to_string(), None)
+            }
             InsightTarget::Table { temp_table, .. } => (
                 InsightSetKind::ResultSet,
                 temp_table.clone(),

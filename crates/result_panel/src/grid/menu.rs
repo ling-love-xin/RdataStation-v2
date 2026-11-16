@@ -42,6 +42,12 @@ pub enum ContextAction {
     SortDown { column: String, descending: bool },
     /// 【M8】洞察这一列（列名；宿主据此取样 → 列画像）
     InsightColumn { column: String },
+    /// 【结果集二次分析】整份结果集进洞察（右侧面板）：宿主先物化成 `tmp_q_` 再取样。
+    /// 与 `InsightColumn` 的区别是**范围**：那个只看一列，这个看整张表。
+    AnalyzeResultSet,
+    /// 【结果集持久化】把整份结果落成**项目分析库的正式表**（`res_<描述>_<时间戳>`）。
+    /// 与 `AnalyzeResultSet` 同一份输入（已物化的临时表），差别是去向：临时 → 持久。
+    PersistResultSet,
     /// 【筛选】此列按给定值过滤（**本地列级筛选**，不动源库——与「按值筛选」的
     /// 全局词不同：它限定在这一个数据列上）
     FilterColumnValue { column: usize, value: String },
@@ -86,6 +92,13 @@ pub struct ContextTarget {
     pub hidden_columns: usize,
     /// 【M8】这份结果能不能洞察（宿主接了端口 + 这份结果可取样）
     pub insight: bool,
+    /// 【结果集二次分析】这份结果能不能整表进洞察（宿主接了钩子 + 有行）
+    ///
+    /// 与 `insight` 分开：`insight` 是「能取一列的样本」（还要求绑定连接），
+    /// 这个是「能把整份结果物化成临时表再分析」——不绑定连接的本地结果同样可以。
+    pub analyze: bool,
+    /// 【结果集持久化】这份结果能不能落成项目表（宿主接了钩子 + 有行 + 已打开项目）
+    pub persist: bool,
     /// 【A9】这份结果的来源表名（面板从结果 SQL 猜好传来；`None` = 猜不到
     /// →「复制整行为 INSERT」不摆——宁可没有也不给一条插错表的语句）
     pub table: Option<String>,
@@ -248,6 +261,22 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
                 column: column_name.to_string(),
             },
             separator_before: true,
+        });
+    }
+    // 【结果集二次分析】整表入口：与「洞察此列」同组（都是进洞察），范围是整份结果
+    if target.analyze {
+        items.push(ContextMenuItem {
+            label: format!("分析此结果集（{} 行 · 洞察）", target.rows),
+            action: ContextAction::AnalyzeResultSet,
+            separator_before: !target.insight,
+        });
+    }
+    // 【结果集持久化】同一份结果的另一个去向（临时 → 持久），紧跟「分析」
+    if target.persist {
+        items.push(ContextMenuItem {
+            label: format!("持久化为项目表（{} 行）", target.rows),
+            action: ContextAction::PersistResultSet,
+            separator_before: false,
         });
     }
     items
@@ -468,6 +497,10 @@ pub(crate) fn context_menu(
         frozen: delegate.is_frozen(column),
         hidden_columns: delegate.hidden.len(),
         insight: insight_available,
+        // 【结果集二次分析】整表入口独立判定（钩子在 + 有行；不要求绑定连接）
+        analyze: delegate.analyze_result_set_available(),
+        // 【结果集持久化】同理，另要求宿主接了持久化出口（未打开项目时宿主不接）
+        persist: delegate.persist_result_set_available(),
         // 【A9】表名给菜单（猜不到 = None → 不摆 INSERT 项）
         table: delegate.result_table.clone(),
         // 右键菜单不摆列级筛选段（右键的「按值筛选」是全局词）：两字段留空
@@ -587,6 +620,24 @@ pub(crate) fn context_menu(
                         }
                     },
                 ));
+            }
+            ContextAction::AnalyzeResultSet => {
+                // 同「洞察此列」：没接钩子（宿主没接二次分析出口）就不摆这一项
+                if let Some(hook) = delegate.on_analyze_result_set.clone() {
+                    menu = menu.item(
+                        PopupMenuItem::new(item.label)
+                            .on_click(move |_, _window, app| hook(app)),
+                    );
+                }
+            }
+            ContextAction::PersistResultSet => {
+                // 同上：宿主没接持久化出口（未打开项目等情况）就不摆这一项
+                if let Some(hook) = delegate.on_persist_result_set.clone() {
+                    menu = menu.item(
+                        PopupMenuItem::new(item.label)
+                            .on_click(move |_, _window, app| hook(app)),
+                    );
+                }
             }
             ContextAction::InsightColumn { column } => {
                 // 同「按值筛选」：没接钩子（宿主没接洞察端口）就不摆这一项

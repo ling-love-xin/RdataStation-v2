@@ -6,6 +6,7 @@
 use gpui_kit::EventEmitter;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel};
@@ -226,6 +227,75 @@ impl RightSidebarPanel {
         let _ = cx;
         div().v_flex().size_full().min_h_0().child(panel)
     }
+
+    /// 数据对象（右侧栏形态）：只读 `Shared::data_objects` 缓存。
+    ///
+    /// 取数在右 dock 面板构造时做（事件路径）；这里若再调 `collect` 就是每帧 I/O，
+    /// 所以两处共用一份缓存，形态不同、口径同一份。
+    fn render_data_objects(&mut self, cx: &mut Context<Self>) -> Div {
+        let objects = self.shared.data_objects.borrow().clone();
+        let fg = cx.theme().colors.foreground;
+        let muted = cx.theme().colors.muted_foreground;
+        let danger = cx.theme().colors.danger;
+        let border = cx.theme().colors.border;
+
+        let mut list = div().v_flex().flex_1().min_h_0().overflow_y_scrollbar();
+        for object in &objects {
+            let state_color = if object.can_analyze() { muted } else { danger };
+            list = list.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .py_2()
+                    .border_b_1()
+                    .border_color(border)
+                    .opacity(if object.can_analyze() { 1.0 } else { 0.55 })
+                    .child(
+                        div()
+                            .text_sm()
+                            .flex_1()
+                            .min_w_0()
+                            .text_color(fg)
+                            .child(object.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .flex_none()
+                            .text_color(muted)
+                            .child(object.channel.label()),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .flex_none()
+                            .text_color(state_color)
+                            .child(object.state.label()),
+                    ),
+            );
+        }
+        if objects.is_empty() {
+            list = list.child(div().px_3().py_6().text_sm().text_color(muted).child(
+                "还没有可用的数据对象：先连一个数据源，或跑一次查询。",
+            ));
+        }
+        div()
+            .v_flex()
+            .size_full()
+            .min_h_0()
+            .pt_2()
+            .child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .text_sm()
+                    .text_color(fg)
+                    .child("数据对象"),
+            )
+            .child(list)
+    }
 }
 
 impl EventEmitter<BasePanelEvent> for RightSidebarPanel {}
@@ -247,6 +317,7 @@ impl Render for RightSidebarPanel {
             RightPanel::Mock => self.render_mock_panel(cx),
             RightPanel::History => self.render_history_panel(cx),
             RightPanel::Archive => self.render_archive_detail(cx),
+            RightPanel::DataObjects => self.render_data_objects(cx),
         };
         div()
             .id("right-sidebar-panel")

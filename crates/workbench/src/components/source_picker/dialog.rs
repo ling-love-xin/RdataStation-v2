@@ -27,9 +27,12 @@ use crate::panels::Shared;
 use super::db::{db_rows, ConnBrief};
 use super::group::{grouped, SourceGroup};
 use super::load::{collect_analysis_tables, collect_drafts, load_db_layer};
-use super::node::{ArchiveScope, NodeId, NodeKind, Row};
+use super::node::{ArchiveScope, NodeId, NodeKind, Row, TempScope};
 use super::render::{needs_virtual_list, render_rows, row_element, virtual_viewport_rem, RowAction};
-use super::rows::{analysis_table_rows, draft_rows, external_row, group_id_row};
+use super::rows::{
+    analysis_table_rows, draft_rows, external_row, group_id_row, insight_sample_rows,
+    persistent_table_rows, result_set_rows, split_persistent_tables,
+};
 use super::state::TreeState;
 use super::{ConfirmStrategy, Picked, PickerConfig, PickerState, SourceKind, TableCandidate};
 
@@ -69,19 +72,48 @@ fn db_group_rows(s: &PickerState) -> Vec<Row> {
     db_rows(&briefs, &s.db_cache)
 }
 
-/// DuckDB 根的子树：目前只有「结果集」这一叶，且未实装——显式置灰而不是假装可选。
+/// DuckDB 根的子树：结果集临时表（`tmp_q_`）+ 洞察产物（`tmp_i_`）。
+///
+/// 列表来自 `engine::analysis::result_set::{list_result_sets, list_insight_samples}`
+/// （按前缀查库，权威是库里实际表）；为空时给**明确说不可用**的提示行，而不是
+/// 画一个点不动的假节点。两段分开展示：用户在树里选的语义不同（结果集是「我刚跑出来的」，
+/// 洞察产物是「我已经取过样的」）。
 fn duckdb_group_rows(s: &PickerState) -> Vec<Row> {
-    if !s.kinds.contains(&SourceKind::ResultSet) {
-        return Vec::new();
+    let mut out = Vec::new();
+
+    if s.kinds.contains(&SourceKind::ResultSet) {
+        if s.result_sets.is_empty() {
+            out.push(
+                Row::new(
+                    NodeId::Path("duckdb:result-set-empty".to_string()),
+                    1,
+                    NodeKind::File,
+                    "暂无结果集（先跑一次查询）",
+                )
+                .disabled(),
+            );
+        } else {
+            out.extend(result_set_rows(1, &s.result_sets));
+        }
     }
-    vec![Row::new(
-        NodeId::Path("duckdb:result-set".to_string()),
-        1,
-        NodeKind::File,
-        "结果集临时表",
-    )
-    .with_meta("未实装")
-    .disabled()]
+
+    if s.kinds.contains(&SourceKind::InsightSample) {
+        let mut folder = Row::new(
+            NodeId::Path("duckdb:insight-sample-folder".to_string()),
+            1,
+            NodeKind::Folder,
+            "洞察产物",
+        );
+        folder = if s.insight_samples.is_empty() {
+            folder.with_meta("暂无（可先做一次洞察）")
+        } else {
+            folder.with_meta(format!("{} 张样本表", s.insight_samples.len()))
+        };
+        out.push(folder);
+        out.extend(insight_sample_rows(2, &s.insight_samples));
+    }
+
+    out
 }
 
 /// 文件根的子树：草稿箱 / 资产库（本项目段）/ 外部文件。
@@ -113,10 +145,43 @@ fn file_group_rows(s: &PickerState) -> Vec<Row> {
             NodeKind::Folder,
             "资产库 · 本项目",
         ));
+        // 项目分析库里有两类表：项目自建的分析表，与「结果集落库」出来的持久表。
+        // 持久表一多（名字还都带时间戳）就会把真正的分析表挤到下面去，所以单列一段。
+        let (plain, persisted) = split_persistent_tables(&s.analysis_tables);
+        out.extend(analysis_table_rows(2, &plain, ArchiveScope::Project));
+        if !persisted.is_empty() {
+            out.push(
+                Row::new(
+                    NodeId::Path("file:archive-project-persistent".to_string()),
+                    2,
+                    NodeKind::Folder,
+                    "持久表（结果集落库）",
+                )
+                .with_meta(format!("{} 张", persisted.len())),
+            );
+            out.extend(persistent_table_rows(3, &persisted, ArchiveScope::Project));
+        }
+    }
+
+    // 全局分析表：与「本项目」并列成第二段，不混排——用户必须一眼看出自己动的是
+    // 跨项目共用的那一份（`{system}/analytics.duckdb`，只读；取样另开短命会话）。
+    if s.kinds.contains(&SourceKind::AnalysisGlobal) {
+        let mut folder = Row::new(
+            NodeId::Path("file:archive-global".to_string()),
+            1,
+            NodeKind::Folder,
+            "资产库 · 全局",
+        );
+        if s.global_tables.is_empty() {
+            folder = folder.with_meta("只读 · 暂无全局表");
+        } else {
+            folder = folder.with_meta(format!("只读 · {} 张表", s.global_tables.len()));
+        }
+        out.push(folder);
         out.extend(analysis_table_rows(
             2,
-            &s.analysis_tables,
-            ArchiveScope::Project,
+            &s.global_tables,
+            ArchiveScope::Global,
         ));
     }
 
@@ -130,8 +195,11 @@ fn file_group_rows(s: &PickerState) -> Vec<Row> {
             )
             .with_meta("CSV / Parquet / Excel / JSON"),
         );
-        if let Some(Picked::External(path)) = &s.picked {
-            out.push(external_row(2, path));
+        // 多选下把已选的外部文件逐个列出来（否则用户加完看不到自己加了几个）
+        for (_, picked) in &s.picked {
+            if let Picked::External(path) = picked {
+                out.push(external_row(2, path));
+            }
         }
     }
 
@@ -171,6 +239,7 @@ fn render_body(
     cx: &mut Context<PickerShell>,
 ) -> AnyElement {
     let tree = state.borrow().tree.clone();
+    let checked_rows: Rc<Vec<NodeId>> = Rc::new(state.borrow().picked_ids());
 
     let on_toggle: RowAction = {
         let state = state.clone();
@@ -197,21 +266,38 @@ fn render_body(
                     table,
                 } => {
                     let mut s = state.borrow_mut();
-                    s.picked = Some(Picked::Db(
+                    let picked = Picked::Db(
                         conn.clone(),
                         TableCandidate {
                             name: table.clone(),
                             catalog: catalog.clone(),
                             schema: schema.clone(),
                         },
-                    ));
-                    s.tree.select(Some(id.clone()));
+                    );
+                    s.toggle(id.clone(), picked);
                     s.note = None;
                 }
-                NodeId::AnalysisTable { table, .. } => {
+                NodeId::AnalysisTable { scope, table } => {
                     let mut s = state.borrow_mut();
-                    s.picked = Some(Picked::Analysis(table.clone()));
-                    s.tree.select(Some(id.clone()));
+                    let picked = match scope {
+                        ArchiveScope::Project => Picked::Analysis(table.clone()),
+                        ArchiveScope::Global => Picked::AnalysisGlobal(table.clone()),
+                    };
+                    s.toggle(id.clone(), picked);
+                    s.note = None;
+                }
+                // 结果集临时表：只有本机单例里的能做二次分析（会话态的表随会话消失）
+                NodeId::Temp {
+                    scope: TempScope::Local,
+                    table,
+                } => {
+                    let mut s = state.borrow_mut();
+                    s.toggle(id.clone(), Picked::ResultSet(table.clone()));
+                    s.note = None;
+                }
+                NodeId::InsightSample(table) => {
+                    let mut s = state.borrow_mut();
+                    s.toggle(id.clone(), Picked::InsightSample(table.clone()));
                     s.note = None;
                 }
                 NodeId::Path(p) if p == PICK_EXTERNAL_KEY => {
@@ -228,7 +314,10 @@ fn render_body(
                     }
                     if let Some(path) = dialog.pick_file() {
                         let mut s = state.borrow_mut();
-                        s.picked = Some(Picked::External(path));
+                        // 外部文件是「一次引用一个」：系统文件对话框一次只回一个路径，
+                        // 所以多选下也按追加处理（每选一次加一个来源）
+                        let node = NodeId::Path(path.to_string_lossy().to_string());
+                        s.toggle(node, Picked::External(path));
                         s.note = None;
                     }
                 }
@@ -241,8 +330,7 @@ fn render_body(
                         .find(|(rel, _)| rel == p)
                         .map(|(rel, abs)| (rel.clone(), abs.clone()));
                     if let Some((rel, abs)) = hit {
-                        s.picked = Some(Picked::Draft(rel, abs));
-                        s.tree.select(Some(id.clone()));
+                        s.toggle(id.clone(), Picked::Draft(rel, abs));
                         s.note = None;
                     }
                 }
@@ -254,7 +342,7 @@ fn render_body(
 
     let visible_refs = tree.visible_rows(rows);
     if !needs_virtual_list(visible_refs.len()) {
-        return render_rows(rows, &tree, on_toggle, on_select, cx);
+        return render_rows(rows, &tree, &checked_rows, on_toggle, on_select, cx);
     }
 
     // 虚拟视口：`visible_rows` 给的是 `Vec<&Row>`（借用入参），而视口回调要求 `'static`，
@@ -263,7 +351,12 @@ fn render_body(
     let flags: Rc<Vec<(bool, bool)>> = Rc::new(
         visible_refs
             .iter()
-            .map(|row| (tree.is_expanded(&row.id), tree.selected() == Some(&row.id)))
+            .map(|row| {
+                (
+                    tree.is_expanded(&row.id),
+                    tree.selected() == Some(&row.id) || checked_rows.contains(&row.id),
+                )
+            })
             .collect(),
     );
     let visible: Rc<Vec<Row>> = Rc::new(visible_refs.into_iter().cloned().collect());
@@ -306,6 +399,7 @@ fn render_body(
 /// 最近使用区块：单独一条渲染（≤5 行，不会真的滚），行点击只改选中。
 fn recent_block(rows: Vec<Row>, state: &Rc<RefCell<PickerState>>, cx: &mut App) -> AnyElement {
     let tree = state.borrow().tree.clone();
+    let checked_rows: Rc<Vec<NodeId>> = Rc::new(state.borrow().picked_ids());
     let on_toggle: RowAction = Rc::new(|_, _| {});
     let on_select: RowAction = {
         let state = state.clone();
@@ -314,7 +408,7 @@ fn recent_block(rows: Vec<Row>, state: &Rc<RefCell<PickerState>>, cx: &mut App) 
             window.refresh();
         })
     };
-    render_rows(&rows, &tree, on_toggle, on_select, cx)
+    render_rows(&rows, &tree, &checked_rows, on_toggle, on_select, cx)
 }
 
 /// 对话框视图：持有树态、搜索框、焦点与订阅。
@@ -604,6 +698,25 @@ pub fn open_source_picker(
     let drafts = collect_drafts(shared);
     let project = shared.project.borrow().clone();
     let analysis = collect_analysis_tables(project.as_ref());
+    // ③-b 全局分析表：只在启用该叶子时去挂（短命会话只读挂
+    // `{system}/analytics.duckdb`；没初始化 / 撞锁都不该让整个对话框开不出来）
+    let global_tables = if config.kinds.contains(&SourceKind::AnalysisGlobal) {
+        engine::analysis::global::global_tables("C_source_picker").unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    // ⑤ 结果集：只有启用该叶子时才查库（它是进程单例里的 `tmp_q_` 表，查不到也不报错）
+    let result_sets = if config.kinds.contains(&SourceKind::ResultSet) {
+        engine::analysis::result_set::list_result_sets().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    // ⑥ 洞察产物（`tmp_i_`，同一台单例）：再分析入口的数据源
+    let insight_samples = if config.kinds.contains(&SourceKind::InsightSample) {
+        engine::analysis::result_set::list_insight_samples().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let mut note = None;
     if conns.is_empty() && config.kinds.contains(&SourceKind::Connected) {
         note = Some("没有已连接的数据库：先在「连接」里连一个数据源".to_string());
@@ -620,9 +733,30 @@ pub fn open_source_picker(
     if note.is_none() && config.kinds.contains(&SourceKind::Analysis) && analysis.is_empty() {
         note = Some("资产库为空或不可用（可先做一次分析）".to_string());
     }
+    // 全局段的空态单独说：它跟「项目里还没有分析」是两件事（一个不该被另一个掩盖）
+    if note.is_none() && config.kinds.contains(&SourceKind::AnalysisGlobal) && global_tables.is_empty()
+    {
+        note = Some(
+            "全局分析库为空或暂时不可用（它由系统库维护；被占用时也会读不到）".to_string(),
+        );
+    }
+    if note.is_none() && config.kinds.contains(&SourceKind::ResultSet) && result_sets.is_empty() {
+        note = Some("还没有结果集：先跑一次查询，结果集会作为临时表出现在这里".to_string());
+    }
+    if note.is_none() && config.kinds.contains(&SourceKind::InsightSample) && insight_samples.is_empty()
+    {
+        note = Some("还没有洞察产物：先做一次洞察取样，样本表会出现在这里".to_string());
+    }
 
     let state = Rc::new(RefCell::new(PickerState::new(
-        config.kinds, conns, drafts, analysis,
+        config.kinds,
+        config.multi,
+        conns,
+        drafts,
+        analysis,
+        global_tables,
+        result_sets,
+        insight_samples,
     )));
     state.borrow_mut().note = note;
     // 打开即展开首个根：否则首屏只有三行光秃秃的根，比老的扁平列表更「空」。

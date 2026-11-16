@@ -69,6 +69,9 @@ pub fn to_row(
         updated_epoch: resource.updated_at.timestamp(),
         archived_epoch: resource.archived_at.map(|when| when.timestamp()),
         size_bytes: resource.file_size.map(i64::from),
+        // 本体相对路径：数据对象面板靠它把资产交给 DuckDB 读（资产是受管文件快照）。
+        // `reference` 模式的本体仍在原处（`source_path`），`resources/` 下没有副本，这里就是 `None`。
+        payload_rel_path: resource.file_rel_path.clone(),
     }
 }
 /// 标签行模型 → chip（视图只认 id + 名字，不关心 color / scope）。

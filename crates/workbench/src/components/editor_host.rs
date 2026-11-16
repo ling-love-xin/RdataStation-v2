@@ -81,6 +81,40 @@ impl EditorHost for WorkbenchEditorHost {
     fn request_reveal(&self, object: engine::ObjectRef) {
         self.shared.request_reveal(object);
     }
+
+    fn open_insight_result_set(
+        &self,
+        request: editor::shared::AnalyzeResultSetRequest,
+        cx: &mut App,
+    ) {
+        // 表已由编辑器物化好（`tmp_q_`，同进程单例）：这里只把它当取样来源，
+        // 「SELECT * FROM 表」的拼法与转义在 result_set_actions 里只有一份
+        crate::components::result_set_actions::analyze_table(
+            &self.shared,
+            &request.table,
+            &request.label,
+            cx,
+        );
+        // 行数是编辑器侧的事实（物化后以表为准，这里只在状态栏留痕，供用户核对）
+        self.shared.say(
+            format!(
+                "已在洞察中分析 {}（{} 行，来源 {}）",
+                request.table, request.rows, request.label
+            ),
+            cx,
+        );
+    }
+
+    fn persist_result_set(&self, request: editor::shared::PersistResultSetRequest, cx: &mut App) {
+        // 表已由编辑器物化好（`tmp_q_`，同进程单例）：这里把它交给后台落库通道。
+        // 事件路径上只入队（写库在 worker 线程），结果由工作台泵取后经状态栏告知。
+        crate::components::result_set_actions::persist_to_project(
+            &self.shared,
+            &request.table,
+            &request.label,
+            cx,
+        );
+    }
 }
 
 /// 联邦源清单端口实现：直接读全局 `DataSourceService`（不持 `Shared`，

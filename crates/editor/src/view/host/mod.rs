@@ -104,6 +104,17 @@ pub(crate) struct PendingBind {
     title: Option<String>,
 }
 
+/// 【联邦确认】执行联邦前的挂起（目标 + 落点 + 标题原样存着，确认后才进提交链）
+///
+/// 与 [`PendingBind`] 分开存：两者的取消语义不同（参数表单取消 = 放弃这次跑，
+/// 联邦确认取消 = 连队列都没进），混在一个字段里会让「取消」分不清清哪个。
+#[derive(Clone)]
+pub(crate) struct PendingFederated {
+    pub(crate) target: ExecTarget,
+    pub(crate) placement: ResultPlacement,
+    pub(crate) title: Option<String>,
+}
+
 impl PendingBind {
     /// 用填好的值替换目标里的 `:name`。只对**用户写的 SQL** 变体
     /// （Selection / Statement / All / Batch）生效；内部生成的目标本就没有参数，原样。
@@ -310,6 +321,8 @@ pub struct EditorHostPanel {
     /// 【B16】参数绑定挂起：执行目标里含 `:name` 时记在这里，等参数表单填完
     /// 再替换执行（`None` = 没有在等表单）
     pub(crate) pending_bind: Option<PendingBind>,
+    /// 【联邦确认】执行联邦前的挂起：确认框弹出后目标存这里，点「执行」才真正入队
+    pub(crate) pending_federated: Option<PendingFederated>,
     /// 【B6】当前选中结果集定位到的出错处（诊断范围 + 状态栏里的位置文案读它）
     pub(crate) error_site: Option<diagnostics::ErrorSite>,
     /// 【2b】脚本执行输出卡片（通用模式回执写入；sync 时经 `ResultSyncInput` 透传面板——

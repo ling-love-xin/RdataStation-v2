@@ -83,6 +83,8 @@ pub struct WorkbenchView {
     right_mock_tab: Option<Entity<MockPanelTab>>,
     right_history_tab: Option<Entity<HistoryPanelTab>>,
     right_archive_tab: Option<Entity<ArchivePanel>>,
+    /// 数据对象面板（所有可参与分析的对象一处分览；洞察 / 分析 / 联邦共用）
+    right_data_objects_tab: Option<Entity<crate::panels::DataObjectsTab>>,
     /// Quick Open 浮层实体（首帧渲染时懒创建）；浮层自持输入 / 结果 / 键盘通道。
     /// ：宿主装配在 （兄弟模块，非本模块子级）。
     pub(crate) quick_open_palette: Option<Entity<QuickOpenPalette>>,
@@ -132,6 +134,8 @@ pub struct WorkbenchView {
     _editor_status_subs: Vec<Subscription>,
     /// 草稿执行回执 → 元数据回写泵（1 s 一拍；句柄必须被持有，drop 即停）。
     scratchpad_meta_pump: Option<Task<()>>,
+    /// 结果集落库回执泵（0.5 s 一拍；取走 worker 的落库结果并回状态栏。句柄必须被持有）。
+    persist_pump: Option<Task<()>>,
     /// 【#54 B】语义诊断目录快照注入泵（1 s 一拍；句柄必须被持有，drop 即停）。
     /// 复用 [`editor_completion`] 的 L1 目录：补全端口实例由本字段持有，
     /// 泵每拍读「活动文档绑定连接 → 推快照」（见 `services/editor_catalog.rs`）。

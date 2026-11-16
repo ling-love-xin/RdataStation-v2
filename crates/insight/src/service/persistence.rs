@@ -49,6 +49,24 @@ pub async fn sample_source_to_analysis_table(
     source: &SampleSource,
     config: &crate::model::ProbeConfig,
 ) -> Result<String, CoreError> {
+    // 全局库表（刀 7 · B）：全局库是 SQLite 文件、有自己的写入方，不能 ATTACH 进单例。
+    // 所以这条走「短命会话只读挂载 → 会话内取样 → 搬进单例登记版 tmp_i_」：
+    // 下游（EDA / 图表 / 导出）读的仍是进程单例，行为与其它来源一致。
+    if source.global {
+        let session = engine::analysis::global::open_global_session(&source.label)?;
+        let in_session = engine::analysis::materialize::materialize_sample(
+            &session,
+            &source.label,
+            &build_duckdb_sample_sql(source, config),
+        )?;
+        let landed = engine::analysis::materialize::move_sample_to_process_db(
+            &session,
+            &in_session,
+            &source.label,
+        )?;
+        // 会话内的那张随会话丢弃（move 已经把数据搬走）；登记表跟 TTL 走
+        return Ok(landed);
+    }
     match source.conn_id() {
         Some(conn_id) => {
             // 源库路径：Full / RowCount / WHERE 直接拼进发给源库的 SQL；
@@ -85,17 +103,179 @@ pub async fn sample_source_to_analysis_table(
             sample_from_connection(conn_id, &sql, &source.label).await
         }
         None => {
-            let duckdb = insight_engine::get_or_create_duckdb()?;
-            let conn = duckdb.lock().map_err(|e| {
-                CoreError::common(CommonError::General(format!("DuckDB lock error: {e}")))
-            })?;
-            engine::duckdb::analysis::create_analysis_temp_table_as(
-                &conn,
-                &build_duckdb_sample_sql(source, config),
+            // 走分析内核的「执行面 + 物化」：今天落 `ProcessDuckDb`（进程内存单例），
+            // 与手写 `get_or_create_duckdb()` 完全同一形态，但通道判定收进一处——
+            // 将来洞察开联邦取样时，只要这里换 `from_toggle` 的通道即可，
+            // 取数口径（ProbeConfig）与登记（`tmp_i_`）都不用动。
+            let plan = engine::analysis::mount::plan_for(
+                &engine::analysis::channel::AnalysisChannel::ProcessDuckDb,
+                &[],
+                None,
+                &source.label,
+            )?;
+            let handle = engine::analysis::kernel::open(
+                &plan,
+                &engine::analysis::kernel::PreparedMounts::none(),
+            )?;
+            engine::analysis::materialize::materialize_sample(
+                &handle,
                 "source_sample",
+                &build_duckdb_sample_sql(source, config),
             )
         }
     }
+}
+
+/// 一组来源的取样：**每源各取一份样本，各出一张表**（多源 / 联邦场景的落点）。
+///
+/// 口径（已定）：取样是「取数据」，关联是「分析」。所以这里**不做跨源 join**，
+/// 也不把多源塞进一条会话——每个源走它自己该走的那条路（源库连接 → 驱动取数；
+/// DuckDB 可读 → 进程内存单例），各自建出登记版 `tmp_i_` 表。
+///
+/// 返回值按**输入顺序**逐项对应：`(label, table)`。中途失败整体失败（前面已经建好的表
+/// 留给 TTL 去收——回滚多张已登记表会让错误路径更难懂，而 TTL 本来就是它们的归宿）。
+///
+/// 通道判定走 [`crate::model::SampleSet::channel`]（`from_toggle` 只升不降）：
+/// 开关关 / 单源 / 无 owner 三种情况都仍是今天的行为。
+pub async fn sample_set_to_analysis_tables(
+    set: &crate::model::SampleSet,
+    config: &crate::model::ProbeConfig,
+) -> Result<Vec<(String, String)>, CoreError> {
+    if set.sources.is_empty() {
+        return Err(CoreError::common(CommonError::General(
+            "这次分析没有来源：至少要有一个可取样来源".to_string(),
+        )));
+    }
+    // 通道现在判定。联邦档需要**宿主**把连接记录组装成 `FederatedSource`（凭据只在宿主
+    // 那一步出现，引擎不解密），所以这条通用入口无法自行建会话：明确指向
+    // [`sample_federated_sources`]，而不是悄悄退回逐源——用户打开了开关，就不该看到
+    // 他不知道的降级。
+    let channel = set.channel();
+    if matches!(channel, engine::analysis::channel::AnalysisChannel::Federated { .. }) {
+        return Err(CoreError::common(CommonError::General(format!(
+            "联邦档取样要先由宿主提供挂载清单（{} 个来源）：请走 sample_federated_sources；\
+             这条逐源入口只适用于源库 / 内存库档",
+            set.sources.len()
+        ))));
+    }
+    let mut landed = Vec::with_capacity(set.sources.len());
+    for source in &set.sources {
+        let table = sample_source_to_analysis_table(source, config).await?;
+        landed.push((source.label.clone(), table));
+    }
+    Ok(landed)
+}
+
+/// 联邦档取样的一条来源：宿主已组装的源 + 它在会话 SQL 里该用的名字。
+///
+/// 凭据与连接串只在这一层出现（引擎 `federation::registry` 的既有约定是**引擎不读连接库、
+/// 不解密口令**），所以「连接 → 源」这一步永远留在宿主；本模块只负责开会话、取样、搬运。
+pub struct FederatedSampleEntry {
+    /// 计划里的挂载键（连接源要带别名：别名就是挂上后的 catalog 名）
+    pub mount: engine::analysis::mount::MountSpec,
+    /// 宿主组装出来的源
+    pub source: engine::duckdb::federation::registry::FederatedSource,
+    /// 会话内取样 SQL：必须按**别名**限定（`<别名>.<schema>.<表>`）
+    pub sql: String,
+    /// 人类可读标签（面板副标题 / 返回顺序对应）
+    pub label: String,
+}
+
+/// 联邦档取样：一条会话里逐源取样，每源各出一张登记版 `tmp_i_`。
+///
+/// 为什么仍然「每源各取一份」而不是一条跨源 join：取样是取数据，关联是分析（用户口径）。
+/// 联邦会话在这里的价值是**少开 N 条源库连接、同一批源一次挂上**，而不是替用户写 join。
+///
+/// 与会话内取样（加速 / 联邦）的既有口径一致：会话里建 `memory.tmp_i_*`（不登记），
+/// 再 `move_sample_to_process_db` 搬进进程单例的登记版 `tmp_i_*`——下游（EDA / 图表 /
+/// 导出）读的始终是单例，不需要知道这次取样跑在哪个通道上。
+pub async fn sample_federated_sources(
+    owner: &str,
+    entries: Vec<FederatedSampleEntry>,
+    config: &crate::model::ProbeConfig,
+) -> Result<Vec<(String, String)>, CoreError> {
+    if entries.is_empty() {
+        return Err(CoreError::common(CommonError::General(
+            "联邦取样没有来源：至少要有一条可挂的来源".to_string(),
+        )));
+    }
+    // 同一个源挂两次 = 一次重复内省 + 一条多余只读副本；而两条源撞别名会让
+    // 「SQL 里写哪个名字」变得不可判定——两类都在开会话之前拦掉。
+    let mut seen_mounts: Vec<&engine::analysis::mount::MountSpec> = Vec::new();
+    let mut seen_aliases: Vec<&str> = Vec::new();
+    for entry in &entries {
+        if seen_mounts.contains(&&entry.mount) {
+            return Err(CoreError::common(CommonError::General(
+                "联邦取样里有重复来源：同一个库/连接只能挂一次".to_string(),
+            )));
+        }
+        seen_mounts.push(&entry.mount);
+        let alias = entry.source.alias.trim();
+        if alias.is_empty() {
+            return Err(CoreError::common(CommonError::General(
+                "联邦取样里的源缺别名：SQL 无法限定到哪个 catalog".to_string(),
+            )));
+        }
+        if seen_aliases.contains(&alias) {
+            return Err(CoreError::common(CommonError::General(format!(
+                "联邦取样里别名 {alias} 撞名：两条源挂上去会是同一个 catalog"
+            ))));
+        }
+        seen_aliases.push(alias);
+    }
+
+    let channel = engine::analysis::channel::AnalysisChannel::Federated {
+        owner: owner.to_string(),
+    };
+    let mounts: Vec<engine::analysis::mount::MountSpec> =
+        entries.iter().map(|e| e.mount.clone()).collect();
+    let plan = engine::analysis::mount::plan_for(&channel, &mounts, None, owner)
+        .map_err(|e| e)?;
+    if plan.mounts.len() != entries.len() {
+        return Err(CoreError::common(CommonError::General(format!(
+            "计划里的源被去重成 {} 个，宿主给了 {} 个",
+            plan.mounts.len(),
+            entries.len()
+        ))));
+    }
+    let prepared = engine::analysis::kernel::PreparedMounts::federated(
+        entries
+            .iter()
+            .map(|e| (e.mount.clone(), e.source.clone()))
+            .collect(),
+    );
+    let session = engine::analysis::kernel::open(&plan, &prepared)?;
+
+    let mut landed = Vec::with_capacity(entries.len());
+    for entry in &entries {
+        // 复用单源那套取数口径（限 / 过滤 / 列投影 / 采样都在这里，不另写一份）
+        let shape = SampleSource::on_duckdb(entry.sql.clone(), entry.label.clone());
+        let sql = build_duckdb_sample_sql(&shape, config);
+        let in_session = engine::analysis::materialize::materialize_sample(
+            &session,
+            &entry.label,
+            &sql,
+        )
+        .map_err(|e| {
+            CoreError::common(CommonError::General(format!(
+                "联邦会话里取样「{}」失败：{e}",
+                entry.label
+            )))
+        })?;
+        let table = engine::analysis::materialize::move_sample_to_process_db(
+            &session,
+            &in_session,
+            &entry.label,
+        )
+        .map_err(|e| {
+            CoreError::common(CommonError::General(format!(
+                "把「{}」搬进分析库失败：{e}",
+                entry.label
+            )))
+        })?;
+        landed.push((entry.label.clone(), table));
+    }
+    Ok(landed)
 }
 
 /// 构造发给**源库连接**的取样 SQL（LIMIT / WHERE / 列投影由源库执行）。
@@ -582,5 +762,89 @@ mod tests {
             sql.starts_with("SELECT \"id\" FROM (SELECT * FROM orders) AS rds_sample LIMIT 5"),
             "DuckDB LIMIT 路径应投影列：{sql}"
         );
+    }
+
+    /// 多源取样（口径 = 每源各取一份）：两个来源 → 两张**不同**的登记版 `tmp_i_` 表，
+    /// 顺序与标签严格对应输入。
+    #[tokio::test]
+    async fn a_sample_set_lands_one_registered_table_per_source() {
+        let set = crate::model::SampleSet::new(
+            "C_insight_multi",
+            vec![
+                SampleSource::on_duckdb("SELECT 1 AS a", "源一"),
+                SampleSource::on_duckdb("SELECT 2 AS b", "源二"),
+            ],
+        );
+        let landed = sample_set_to_analysis_tables(
+            &set,
+            &config(
+                ProbeAmount::RowCount(10),
+                ProbeColumns::All,
+                None,
+                None,
+            ),
+        )
+        .await
+        .expect("多源取样");
+
+        assert_eq!(landed.len(), 2, "每源一份，不做合并：{landed:?}");
+        assert_eq!(landed[0].0, "源一");
+        assert_eq!(landed[1].0, "源二");
+        assert!(landed[0].1.starts_with("tmp_i_"), "实际 {}", landed[0].1);
+        assert!(landed[1].1.starts_with("tmp_i_"), "实际 {}", landed[1].1);
+        assert_ne!(
+            landed[0].1, landed[1].1,
+            "两次取样必须各自建表（同描述也不撞名）"
+        );
+    }
+
+    /// 空来源清单是可读错误，不是「静默成功返回空」。
+    #[tokio::test]
+    async fn an_empty_sample_set_is_rejected() {
+        let set = crate::model::SampleSet::new("C_insight_multi", Vec::new());
+        let err = sample_set_to_analysis_tables(
+            &set,
+            &config(ProbeAmount::RowCount(1), ProbeColumns::All, None, None),
+        )
+        .await
+        .expect_err("空来源必须拒");
+        assert!(err.to_string().contains("至少要有一个"), "{err}");
+    }
+
+    /// 打开多源开关（≥2 源 + 有 owner）→ 通道会升级成 `Federated`；这条**逐源入口**
+    /// 必须明确指向 `sample_federated_sources`，不能让用户以为取样降级了。
+    #[tokio::test]
+    async fn federated_toggle_points_at_the_host_driven_path() {
+        let set = crate::model::SampleSet::new(
+            "C_insight_multi",
+            vec![
+                SampleSource::on_duckdb("SELECT 1 AS a", "源一"),
+                SampleSource::on_duckdb("SELECT 2 AS b", "源二"),
+            ],
+        )
+        .with_federated(true);
+        // 通道判定先钉住：这组输入确实会升级
+        assert!(matches!(
+            set.channel(),
+            engine::analysis::channel::AnalysisChannel::Federated { .. }
+        ));
+        let err = sample_set_to_analysis_tables(
+            &set,
+            &config(ProbeAmount::RowCount(1), ProbeColumns::All, None, None),
+        )
+        .await
+        .expect_err("逐源入口不处理联邦档");
+        assert!(err.to_string().contains("sample_federated_sources"), "{err}");
+
+        // 单源即便打开开关也不该升级（`from_toggle` 只升不降的既有口径）
+        let single = crate::model::SampleSet::new(
+            "C_insight_multi",
+            vec![SampleSource::on_duckdb("SELECT 1 AS a", "源一")],
+        )
+        .with_federated(true);
+        assert!(matches!(
+            single.channel(),
+            engine::analysis::channel::AnalysisChannel::ProcessDuckDb
+        ));
     }
 }

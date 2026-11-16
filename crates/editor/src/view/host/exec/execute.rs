@@ -133,6 +133,36 @@ impl EditorHostPanel {
             self.set_message(Some(reason), cx);
             return false;
         }
+        // 【联邦确认】联邦不许丢数据（2026-11-16 口径）：进队列**之前**先说清这次扫多少。
+        // 确认框只解释代价、不给「少取几行」的选项——收窄范围是用户改 SQL 的事。
+        if channel == crate::exec::channel::ExecChannel::Federated {
+            let ready = self
+                .sources_snapshot()
+                .map(|snapshot| snapshot.ready_count())
+                .unwrap_or(0);
+            let note = crate::support::sources::federated_confirm_note(ready, None);
+            self.pending_federated = Some(PendingFederated {
+                target,
+                placement,
+                title,
+            });
+            self.open_federated_confirm(note, cx);
+            return false;
+        }
+        // 预期回填条数 = 本次要跑的语句数（批量 > 1）：跑完这几条才算“不执行中”
+        self.submit_target(target, placement, title, cx)
+    }
+
+    /// 过完所有闸之后的真正提交（参数表单 / 联邦确认也复用这一段）
+    fn submit_target(
+        &mut self,
+        target: ExecTarget,
+        placement: ResultPlacement,
+        title: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let channel = self.channel();
+        let conn = self.bound_connection();
         // 【B16】参数绑定（DBeaver 式）：目标里有 `:name` → 挂起等表单，填完再替换执行。
         // 只扫**用户写的 SQL** 变体（`statements()` 为空的目标 = 内部生成，没有参数）。
         // 参数名按首次出现顺序去重（表单就按这个顺序摆）
@@ -214,5 +244,49 @@ impl EditorHostPanel {
                 false
             }
         }
+    }
+
+    /// 【联邦确认】弹「执行联邦查询？」（生产入口；headless 下 `self.window.update`
+    /// 与参数表单同款限制，留可读原因而不是 panic）
+    pub(crate) fn open_federated_confirm(&mut self, note: String, cx: &mut Context<Self>) {
+        let entity = cx.entity();
+        let result = self.window.update(cx, move |_panel, window, app| {
+            let run_entity = entity.clone();
+            let cancel_entity = entity.clone();
+            dialogs::open_federated_confirm(
+                window,
+                app,
+                note,
+                move |_window, cx| {
+                    run_entity.update(cx, |panel, cx| panel.finish_federated(cx));
+                },
+                move |cx| {
+                    cancel_entity.update(cx, |panel, cx| panel.cancel_federated(cx));
+                },
+            );
+        });
+        if let Err(error) = result {
+            self.set_message(Some(format!("联邦确认框弹不出：{error}")), cx);
+        }
+    }
+
+    /// 【联邦确认】点了「执行」：取出挂起的目标，重新进提交链（确认已过，不再弹）
+    pub(crate) fn finish_federated(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(pending) = self.pending_federated.take() else {
+            return false;
+        };
+        self.submit_target(pending.target, pending.placement, pending.title, cx)
+    }
+
+    /// 【联邦确认】取消：只清挂起，源与会话一律不动（Esc / 点遮罩同样靠这个收口）
+    pub(crate) fn cancel_federated(&mut self, cx: &mut Context<Self>) {
+        self.pending_federated = None;
+        cx.notify();
+    }
+
+    /// 【联邦确认】只读访问器：确认是否在挂起（测试断言用）
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn pending_federated_for_test(&self) -> bool {
+        self.pending_federated.is_some()
     }
 }

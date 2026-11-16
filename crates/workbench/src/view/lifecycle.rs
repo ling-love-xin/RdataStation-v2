@@ -81,6 +81,8 @@ impl WorkbenchView {
         crate::services::editor_sources::attach(&editor_service);
         // M8：把「洞察此列」端口接上（结果集列头右键 → 右 Dock 洞察面板；未接时不摆这一项）
         crate::services::editor_insight::attach(&editor_service, editor_host.clone());
+        // 【结果集二次分析】把「分析此结果集」端口接上（右键 → 物化 tmp_q_ → 洞察）
+        crate::services::editor_insight::attach_result_set(&editor_service, editor_host.clone());
         // 【B8 余项】把「打开历史面板」端口接上（工具栏「⟲ 历史」→ 右 Dock 历史面板）
         crate::services::editor_history::attach(&editor_service, editor_host.clone());
         // 项目锁：把项目态端口接上（项目只读时，写源库对象的语句在提交前就被拒）
@@ -140,6 +142,7 @@ impl WorkbenchView {
             right_mock_tab: None,
             right_history_tab: None,
             right_archive_tab: None,
+            right_data_objects_tab: None,
             quick_open_palette: None,
             quick_open_open_pending: false,
             quick_open_mode_pending: Mode::Default,
@@ -155,6 +158,7 @@ impl WorkbenchView {
             editor_hosts: Vec::new(),
             _editor_status_subs: Vec::new(),
             scratchpad_meta_pump: None,
+            persist_pump: None,
             catalog_pump: None,
             editor_completion,
             lsp,

@@ -152,6 +152,7 @@ mod tests {
             updated_epoch: 0,
             archived_epoch: None,
             size_bytes: None,
+            payload_rel_path: None,
         }
     }
 

@@ -618,9 +618,25 @@ pub fn refresh_all(owner: &str) -> Result<Vec<(String, Result<(), String>)>, Str
         .collect())
 }
 
+/// **列出当前进程所有存活会话**（owner + 快照），按 owner 排序。
+///
+/// 给「会话面板」用：面板不知道 owner 是谁也能把会话看全（`snapshot_for` 要先知道 owner，
+/// 而 owner 是宿主侧的文档/面板身份，UI 侧不该反过来猜它）。快照是**一次性拷贝**：
+/// 面板拿着它渲染，不持有会话句柄，也就挡不住会话被重建。
+pub fn owners() -> Vec<(String, SessionSnapshot)> {
+    let Ok(sessions) = SESSIONS.lock() else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, SessionSnapshot)> = sessions
+        .iter()
+        .map(|(owner, cached)| (owner.clone(), cached.session.snapshot()))
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
 /// 缓存命中：主人与指纹都对上才算
-fn cached_for(owner: &str, fingerprint: &str) -> Option<Arc<FederatedSession>> {
-    let sessions = SESSIONS.lock().ok()?;
+fn cached_for(owner: &str, fingerprint: &str) -> Option<Arc<FederatedSession>> {    let sessions = SESSIONS.lock().ok()?;
     let cached = sessions.get(owner)?;
     (cached.fingerprint == fingerprint).then(|| cached.session.clone())
 }

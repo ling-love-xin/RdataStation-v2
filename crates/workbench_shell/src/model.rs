@@ -41,6 +41,8 @@ pub enum RightPanel {
     History,
     /// 存档详情（M6：选中存档的归档凭证）
     Archive,
+    /// 数据对象（洞察 / 分析 / 联邦共用的公共选择器：所有可参与分析的对象一处分览）
+    DataObjects,
 }
 
 /// 边栏三模式。
@@ -98,11 +100,12 @@ impl LeftPanel {
 }
 
 impl RightPanel {
-    pub const ALL: [RightPanel; 4] = [
+    pub const ALL: [RightPanel; 5] = [
         RightPanel::Insight,
         RightPanel::Mock,
         RightPanel::History,
         RightPanel::Archive,
+        RightPanel::DataObjects,
     ];
 
     pub fn label(self) -> &'static str {
@@ -111,6 +114,7 @@ impl RightPanel {
             RightPanel::Mock => "Mock 生成",
             RightPanel::History => "历史",
             RightPanel::Archive => "存档详情",
+            RightPanel::DataObjects => "数据对象",
         }
     }
 
@@ -121,6 +125,7 @@ impl RightPanel {
             RightPanel::Mock => "icons/dice-5.svg",
             RightPanel::History => "icons/clock.svg",
             RightPanel::Archive => "icons/file-text.svg",
+            RightPanel::DataObjects => "icons/table.svg",
         };
         Icon::default().path(path)
     }
@@ -350,6 +355,7 @@ mod activity_icon_tests {
                 RightPanel::Mock => "icons/dice-5.svg",
                 RightPanel::History => "icons/clock.svg",
                 RightPanel::Archive => "icons/file-text.svg",
+                RightPanel::DataObjects => "icons/table.svg",
             };
             assert!(
                 gpui_kit::assets::AllAssets::get(path).is_some(),

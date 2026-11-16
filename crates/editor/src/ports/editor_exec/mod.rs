@@ -44,7 +44,7 @@ pub(crate) use shared::{
 
 mod accel_exec;
 mod conn;
-mod convert;
+pub(crate) mod convert;
 mod federation;
 mod history;
 mod runner;

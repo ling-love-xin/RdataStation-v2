@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>数据对象 · 洞察 / 分析 / 联邦共用的公共选择器</title>
+<style>
+  :root{
+    --bg:#141414;--chrome:#181818;--panel:#1E1E1E;--popover:#202020;
+    --border:#2A2A2A;--border-soft:#242424;--line:#333;
+    --text:#CFCFCF;--muted:#8A8A8A;--dim:#6E6E6E;--white:#F2F2F2;
+    --coral:#A84A38;--coral-soft:#3A2521;--coral-text:#E1A392;
+    --ok:#4A9B6B;--warn:#C9A23A;--bad:#D0534A;--info:#4A8BC9;
+    --mono:"Cascadia Mono","Consolas",monospace;
+    --sans:"Segoe UI","Microsoft YaHei UI",sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:var(--sans);font-size:13px;color:var(--text);background:var(--bg);padding:22px 24px 40px}
+  button{font-family:inherit;font-size:12px;color:var(--text);background:none;border:none;cursor:pointer}
+  button:focus-visible{outline:1px solid var(--coral-text);outline-offset:1px}
+  .head{display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+  .mark{width:24px;height:24px;border-radius:6px;background:var(--coral);display:flex;align-items:center;justify-content:center;flex:none}
+  h1{font-size:14px;color:var(--white);font-weight:600}
+  .tagline{font-size:11px;color:var(--dim)}
+  .lead{font-size:11.5px;color:var(--muted);line-height:1.7;max-width:1000px;margin-bottom:16px}
+  .lead b{color:var(--text);font-weight:600}
+
+  .stage{display:flex;gap:16px;align-items:flex-start}
+  .workarea{flex:1;min-width:0;max-width:900px;display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;box-shadow:0 16px 44px rgba(0,0,0,.45)}
+  /* 左：工作区骨架（只为说明面板落在哪，不画细节） */
+  .shell{flex:1;min-width:0;background:var(--chrome);display:flex;flex-direction:column}
+  .shell-top{height:38px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;padding:0 12px;font-size:11px;color:var(--dim)}
+  .dot{width:7px;height:7px;border-radius:50%;background:#3A3A3A}
+  .shell-body{flex:1;padding:14px;display:flex;flex-direction:column;gap:10px;min-height:380px}
+  .sql{font-family:var(--mono);font-size:11.5px;color:#B9B9B9;line-height:1.8;background:#1B1B1B;border:1px solid var(--border-soft);border-radius:5px;padding:10px 12px}
+  .sql .kw{color:var(--coral-text)}
+  .shell-foot{height:28px;border-top:1px solid var(--border);display:flex;align-items:center;padding:0 12px;font-size:10px;color:var(--dim);gap:10px}
+
+  /* 右：数据对象面板本体 */
+  .picker{width:392px;flex:none;background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column}
+  .ph{padding:10px 12px 8px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:8px;background:#1B1B1B}
+  .ph-row{display:flex;align-items:center;gap:8px}
+  .ph-row b{font-size:12px;color:var(--white);font-weight:600}
+  .ph-row .sp{flex:1}
+  .tool{font-size:11px;color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:2px 7px;background:#232323}
+  .search{display:flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:5px;background:#191919;padding:5px 8px;font-size:11.5px;color:var(--dim)}
+  .search .caret{width:1px;height:12px;background:var(--coral-text)}
+  .chips{display:flex;flex-wrap:wrap;gap:4px}
+  .chip{font-size:10.5px;color:var(--muted);border:1px solid var(--border);border-radius:999px;padding:2px 8px;background:#1E1E1E}
+  .chip.on{color:var(--coral-text);border-color:#5A322A;background:var(--coral-soft)}
+
+  .list{flex:1;overflow:auto;padding:4px 0}
+  .grp{padding:7px 12px 4px;display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--dim)}
+  .grp .caret{color:var(--dim);font-size:9px}
+  .grp .sp{flex:1}
+  .grp .cnt{font-family:var(--mono);font-size:10px;color:#5C5C5C}
+
+  .row{display:grid;grid-template-columns:14px 1fr auto;gap:8px;align-items:center;padding:6px 12px;border-bottom:1px solid var(--border-soft);cursor:pointer}
+  .row:hover{background:var(--popover)}
+  .row .ic{font-size:11px;color:var(--dim);text-align:center}
+  .row .nm{min-width:0;display:flex;flex-direction:column;gap:2px}
+  .row .nm b{font-size:12px;color:var(--text);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row .nm i{font-style:normal;font-size:10px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row.on{background:#241A17;box-shadow:inset 2px 0 0 var(--coral)}
+  .row.on .nm b{color:var(--white)}
+  .row .tail{display:flex;align-items:center;gap:6px;flex:none}
+  .pill{font-size:9.5px;padding:1px 5px;border-radius:3px;border:1px solid var(--border);color:var(--muted);background:#202020;white-space:nowrap}
+  .pill.coral{border-color:#5A322A;background:var(--coral-soft);color:var(--coral-text)}
+  .pill.warn{border-color:#3D3422;background:#201B12;color:var(--warn)}
+  .chan{font-family:var(--mono);font-size:9.5px;color:#7C7C7C;white-space:nowrap}
+  .chan.src{color:#8FA9C4}
+  .chan.proc{color:#A9A27C}
+  .chan.fed{color:var(--coral-text)}
+  .go{font-size:10.5px;color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 8px;background:#232323}
+  .go:hover{background:#2A2A2A}
+
+  .disabled{opacity:.5}
+  .dead .nm b{text-decoration:line-through;color:var(--dim)}
+  .dead .ic{color:var(--bad)}
+
+  .tray{border-top:1px solid var(--border);background:#1B1B1B;padding:8px 12px;display:flex;flex-direction:column;gap:7px}
+  .tray-h{display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--dim)}
+  .tray-h .sp{flex:1}
+  .chips-sel{display:flex;flex-wrap:wrap;gap:5px}
+  .sel{display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--text);border:1px solid #4A2F28;border-radius:4px;padding:2px 6px;background:#241A17}
+  .sel .x{color:var(--dim);cursor:pointer}
+  .sel .x:hover{color:var(--bad)}
+  .tray-f{display:flex;align-items:center;gap:8px}
+  .tray-f .sp{flex:1}
+  .btn-primary{font-size:11.5px;color:#F7EDE9;background:var(--coral);border:1px solid #8B3B2C;border-radius:5px;padding:5px 11px}
+  .btn-primary:hover{background:#B8543F}
+  .btn-note{font-size:10px;color:var(--dim)}
+
+  .sess{border-top:1px solid var(--border);padding:7px 12px;display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--muted);background:#191919}
+  .sess .ok{color:var(--ok)}
+  .sess .warn{color:var(--warn)}
+  .sess .sp{flex:1}
+  .sess .act{color:var(--dim);border-bottom:1px solid #333}
+
+  .aside{width:330px;flex:none;display:flex;flex-direction:column;gap:10px}
+  .card{background:var(--chrome);border:1px solid var(--border);border-radius:8px;padding:11px 13px}
+  .card h3{font-size:10px;color:var(--muted);font-weight:600;letter-spacing:.5px;margin-bottom:8px}
+  .card ul{list-style:none;display:flex;flex-direction:column;gap:6px}
+  .card li{font-size:11px;color:var(--dim);line-height:1.6;padding-left:11px;position:relative}
+  .card li::before{content:"";position:absolute;left:0;top:7px;width:4px;height:4px;background:#3A3A3A;border-radius:1px}
+  .card li b{color:var(--text);font-weight:500}
+  .card p{font-size:11px;color:var(--dim);line-height:1.65}
+  code{font-family:var(--mono);font-size:10.5px;color:#CBB27A}
+</style>
+</head>
+<body>
+
+<div class="head">
+  <div class="mark"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><circle cx="11" cy="6" r="2.4"/><circle cx="6" cy="17" r="2.4"/><circle cx="18" cy="17" r="2.4"/><path d="M10.4 8.2L7 14.6M12 8.2l3.6 6.4"/></svg></div>
+  <div><h1>数据对象 · 公共选择器</h1></div>
+  <span class="tagline">洞察 / 结果集二次分析 / 联邦共用同一份「可分析对象」清单</span>
+</div>
+<div class="lead">
+  这块面板不是「选一次就关掉的对话框」，而是<b>常驻在右侧的工作集</b>：搜索直接定位对象，行上标出它是哪一种<b>化身</b>（源表 / 持久表 / 临时结果集 / 洞察产物），选中即入底部工作集，一次分析 N 个来源。会话挂载状态压成底部一条——原型 05 的诊断页缩到这里，不再单独占一页。
+</div>
+
+<div class="stage">
+  <div class="workarea">
+    <!-- ===== 左：工作区骨架 ===== -->
+    <div class="shell">
+      <div class="shell-top"><span class="dot"></span><span>查询编辑器</span><span style="flex:1"></span><span>公共</span></div>
+      <div class="shell-body">
+        <div class="sql"><span class="kw">select</span> o.order_id, o.amount, c.region<br>
+<span class="kw">from</span> orders o <span class="kw">join</span> customers c <span class="kw">on</span> o.customer_id = c.id<br>
+<span class="kw">where</span> o.created_at &gt;= <span style="color:#C9A23A">'2026-10-01'</span>;</div>
+        <div style="font-size:11px;color:var(--dim);line-height:1.7">
+          结果 12,847 行 · 已物化为 <code>tmp_q_result_8f2a</code><br>
+          右侧「数据对象」已就绪：可直接点该行「分析」，无需再开对话框
+        </div>
+      </div>
+      <div class="shell-foot"><span>引擎 DuckDB 1.5.6</span><span>会话 <code>tmp_q_</code> 12 MB</span><span style="flex:1"></span><span>就绪</span></div>
+    </div>
+
+    <!-- ===== 右：数据对象面板 ===== -->
+    <div class="picker">
+      <div class="ph">
+        <div class="ph-row">
+          <b>数据对象</b>
+          <span class="sp"></span>
+          <span class="chan proc" style="font-size:10px">进程 DuckDB · 2.1 GB</span>
+          <button class="tool">刷新</button>
+        </div>
+        <div class="search"><span>⌕</span><span>输入表名 / 文件名，直接定位</span><span class="caret"></span></div>
+        <div class="chips">
+          <span class="chip on">全部</span>
+          <span class="chip">连接</span>
+          <span class="chip">文件</span>
+          <span class="chip">草稿</span>
+          <span class="chip">项目库</span>
+          <span class="chip">全局库</span>
+          <span class="chip">结果集</span>
+          <span class="chip">洞察产物</span>
+        </div>
+      </div>
+
+      <div class="list">
+        <!-- 分组：连接（默认只列连接，展开才拉表） -->
+        <div class="grp"><span class="caret">▾</span><span>连接</span><span class="sp"></span><span class="cnt">14</span></div>
+
+        <div class="row on">
+          <span class="ic">▤</span>
+          <div class="nm"><b>mysql_src</b><i>MySQL · analytics · GP_real_mysql_20260912</i></div>
+          <div class="tail"><span class="pill coral">源表</span><span class="chan src">→ 源库</span><button class="go">分析</button></div>
+        </div>
+        <div class="row">
+          <span class="ic">▤</span>
+          <div class="nm"><b>orders</b><i>orders · 1.2M 行估算</i></div>
+          <div class="tail"><span class="pill">源表</span><span class="chan src">→ 源库</span><button class="go">分析</button></div>
+        </div>
+        <div class="row">
+          <span class="ic">▤</span>
+          <div class="nm"><b>customers</b><i>customers · 88k 行估算</i></div>
+          <div class="tail"><span class="pill">源表</span><span class="chan fed">→ 联邦</span><button class="go">分析</button></div>
+        </div>
+        <div class="row">
+          <span class="ic">▤</span>
+          <div class="nm"><b>pg_src</b><i>PostgreSQL · warehouse · 未展开</i></div>
+          <div class="tail"><span class="pill coral">源表</span><span class="chan src">→ 源库</span><button class="go">展开</button></div>
+        </div>
+
+        <!-- 分组：项目分析库 -->
+        <div class="grp"><span class="caret">▾</span><span>项目分析库</span><span class="sp"></span><span class="cnt">3</span></div>
+        <div class="row">
+          <span class="ic">◆</span>
+          <div class="nm"><b>订单明细 · 2026-11-15 10:30</b><i>res_orders_20261115103000 · 项目 · DuckDB</i></div>
+          <div class="tail"><span class="pill coral">持久表</span><span class="chan proc">→ 本地分析库</span><button class="go">分析</button></div>
+        </div>
+        <div class="row">
+          <span class="ic">◆</span>
+          <div class="nm"><b>数据修复</b><i>项目自建分析表 · 与持久表分开</i></div>
+          <div class="tail"><span class="pill">分析表</span><span class="chan proc">→ 本地分析库</span><button class="go">分析</button></div>
+        </div>
+
+        <!-- 分组：资产（参与分析只取最新版本） -->
+        <div class="grp"><span class="caret">▾</span><span>资产</span><span class="sp"></span><span class="cnt">2</span></div>
+        <div class="row">
+          <span class="ic">◉</span>
+          <div class="nm"><b>月度经营快照</b><i>资产 · 最新 v3 · 只读 · 参与分析一律取最新版本</i></div>
+          <div class="tail"><span class="pill coral">资产 v3</span><span class="chan proc">→ 资产（只读）</span><button class="go">分析</button></div>
+        </div>
+        <div class="row">
+          <span class="ic">◉</span>
+          <div class="nm"><b>客户分群底表</b><i>资产 · 最新 v1 · 另有 2 个历史版本</i></div>
+          <div class="tail"><span class="pill">资产 v1</span><span class="chan proc">→ 资产（只读）</span><button class="go">分析</button></div>
+        </div>
+        <div style="padding:0 12px 8px 26px;font-size:10px;color:var(--dim);line-height:1.6">
+          要用历史版本的数据，只能先在<b style="color:var(--text)">资产管理里回退</b>——这里不给版本选择，避免「同一个分析里混了不同版本」。
+        </div>
+
+        <!-- 分组：结果集（临时） -->
+        <div class="grp"><span class="caret">▾</span><span>结果集</span><span class="sp"></span><span class="cnt">2</span></div>
+        <div class="row">
+          <span class="ic">▢</span>
+          <div class="nm"><b>tmp_q_result_8f2a</b><i>SELECT 结果 · 12,847 行 · 本会话可见</i></div>
+          <div class="tail"><span class="pill">临时结果集</span><span class="chan proc">→ 进程 DuckDB</span><button class="go">分析</button></div>
+        </div>
+        <div class="row dead">
+          <span class="ic">✕</span>
+          <div class="nm"><b>tmp_q_result_5c11</b><i>表已失效：会话重建后不存在</i></div>
+          <div class="tail"><span class="pill warn">已失效</span><button class="go disabled">重新物化</button></div>
+        </div>
+
+        <!-- 分组：洞察产物 -->
+        <div class="grp"><span class="caret">▾</span><span>洞察产物</span><span class="sp"></span><span class="cnt">1</span></div>
+        <div class="row">
+          <span class="ic">◈</span>
+          <div class="nm"><b>tmp_i_orders_3b71</b><i>洞察样本 · 已取样 20%</i></div>
+          <div class="tail"><span class="pill">洞察产物</span><span class="chan proc">→ 进程 DuckDB</span><button class="go">分析</button></div>
+        </div>
+      </div>
+
+      <!-- 工作集 -->
+      <div class="tray">
+        <div class="tray-h"><span>工作集 · 已选 3 个</span><span class="sp"></span><span style="color:var(--dim)">清除全部</span></div>
+        <div class="chips-sel">
+          <span class="sel">orders <span class="x">×</span></span>
+          <span class="sel">客户表 · PG <span class="x">×</span></span>
+          <span class="sel">订单明细 · 11-15 <span class="x">×</span></span>
+        </div>
+        <div class="tray-f">
+          <span class="btn-note">≥2 个来源 → 多源洞察（一个面板 + 来源标签页）</span>
+          <span class="sp"></span>
+          <button class="btn-primary">分析已选（3）</button>
+        </div>
+      </div>
+
+      <!-- 会话状态（05 压缩成一条） -->
+      <div class="sess">
+        <span class="ok">●</span>
+        <span>已挂 2/3 源</span>
+        <span class="warn">1 个未挂载</span>
+        <span class="sp"></span>
+        <span class="act">清理临时对象</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="aside">
+    <div class="card">
+      <h3>行上要说的三件事</h3>
+      <ul>
+        <li><b>化身</b>：源表 / 持久表 / 临时结果集 / 洞察产物。同一张 <code>订单</code> 在不同化身是<b>不同的行</b>——这是防「以为是源库全量、其实分析的是结果集」的关键。</li>
+        <li><b>通道</b>：<code>→ 源库</code> / <code>→ 进程 DuckDB</code> / <code>→ 本地分析库</code> / <code>→ 联邦</code>。文案来自内核 <code>channel_label()</code>，界面不自己推。</li>
+        <li><b>状态</b>：临时对象在面板打开时核对一次存在性，失效的置灰并说明「会话重建后不存在」，点不动就不该看起来能点。</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>与 02 对话框的关系</h3>
+      <p>不是替换关系。01/02 的对话框保留在「从编辑器、结果面板触发的一次性多选」；面板负责<b>常驻浏览与工作集</b>。两者共用同一套取数、行身份与分组，不另立口径。</p>
+    </div>
+
+    <div class="card">
+      <h3>数据对象 ↔ 资产</h3>
+      <ul>
+        <li><b>数据对象</b>：分析过程中用到的表——源库表（引用）、临时表（<code>tmp_q_</code>/<code>tmp_i_</code>）、项目分析库里的表、<b>资产</b>。</li>
+        <li><b>资产</b>也可以参与分析，但只读、且<b>一律取最新版本</b>；要用旧版本数据，先在资产管理里回退。</li>
+        <li>升级是单向的：临时表 / 临时结果集 → 升级成资产（起名、进版本、变只读、名字不带前缀）。<b>升级入口不在这里</b>，在数据导航栏 / 草稿箱；本面板只负责把资产<b>列出来并只读引用</b>。资产不回退成工作区里的表，连接这类信息也不会成为资产。</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

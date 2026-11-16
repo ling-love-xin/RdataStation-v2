@@ -194,9 +194,13 @@ pub fn row_element(
 ///
 /// `on_toggle`（可展开行的点击）与 `on_select`（目标行的点击）分开：前者改展开态、
 /// 后者改选中，副作用完全不同，混在一个回调里迟早出错。
+///
+/// `checked` 是多选下「已选但非最后点击」的那些行：树自身只有单选态，多选时
+/// 选中样式必须由它补齐，否则用户看不出自己加了几个来源。
 pub fn render_rows(
     rows: &[Row],
     tree: &TreeState,
+    checked: &[NodeId],
     on_toggle: RowAction,
     on_select: RowAction,
     cx: &mut App,
@@ -223,7 +227,7 @@ pub fn render_rows(
 
     for row in visible.iter() {
         let expanded = tree.is_expanded(&row.id);
-        let selected = tree.selected() == Some(&row.id);
+        let selected = tree.selected() == Some(&row.id) || checked.contains(&row.id);
         list = list.child(row_element(
             row, expanded, selected, &on_toggle, &on_select, cx,
         ));

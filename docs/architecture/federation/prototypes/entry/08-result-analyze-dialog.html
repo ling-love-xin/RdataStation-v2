@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>结果集分析 · 命名与临时 / 持久</title>
+<style>
+  :root{
+    --bg:#141414;--chrome:#181818;--panel:#1E1E1E;--popover:#202020;
+    --border:#2A2A2A;--border-soft:#242424;
+    --text:#CFCFCF;--muted:#8A8A8A;--dim:#6E6E6E;--white:#F2F2F2;
+    --coral:#A84A38;--coral-soft:#3A2521;--coral-text:#E1A392;
+    --ok:#4A9B6B;--warn:#C9A23A;--bad:#D0534A;
+    --mono:"Cascadia Mono","Consolas",monospace;
+    --sans:"Segoe UI","Microsoft YaHei UI",sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:var(--sans);font-size:13px;color:var(--text);background:var(--bg);padding:22px 24px 40px}
+  button{font-family:inherit;font-size:12px;color:var(--text);background:none;border:none;cursor:pointer}
+  .head{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+  .mark{width:24px;height:24px;border-radius:6px;background:var(--coral);display:flex;align-items:center;justify-content:center}
+  h1{font-size:14px;color:var(--white);font-weight:600}
+  .tagline{font-size:11px;color:var(--dim)}
+  .lead{font-size:11.5px;color:var(--muted);line-height:1.7;max-width:960px;margin-bottom:16px}
+  .lead b{color:var(--text)}
+  .stage{display:flex;gap:16px;align-items:flex-start}
+  .main{flex:1;max-width:720px;min-width:0}
+  .aside{width:330px;flex:none;display:flex;flex-direction:column;gap:10px}
+
+  /* 结果集工具栏（触发点） */
+  .toolbar{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--chrome);border:1px solid var(--border);border-radius:8px 8px 0 0;font-size:11px;color:var(--dim)}
+  .tb-btn{font-size:11px;color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 9px;background:#232323}
+  .tb-btn.hi{border-color:#5A322A;background:var(--coral-soft);color:var(--coral-text)}
+  .grid{border:1px solid var(--border);border-top:none;border-radius:0 0 8px 8px;overflow:hidden;background:var(--panel)}
+  .gh{display:grid;grid-template-columns:56px 1fr 88px 110px;gap:0;background:#1B1B1B;border-bottom:1px solid var(--border);font-size:10px;color:var(--dim)}
+  .gh span{padding:6px 8px;border-right:1px solid var(--border-soft)}
+  .gr{display:grid;grid-template-columns:56px 1fr 88px 110px;font-family:var(--mono);font-size:11px;color:#B9B9B9}
+  .gr span{padding:5px 8px;border-bottom:1px solid #1F1F1F;border-right:1px solid #1F1F1F;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  /* 对话框 */
+  .dialog{margin-top:14px;background:var(--panel);border:1px solid var(--border);border-radius:10px;box-shadow:0 18px 50px rgba(0,0,0,.5);overflow:hidden}
+  .dh{padding:12px 16px;border-bottom:1px solid var(--border);background:#1B1B1B;display:flex;align-items:center;gap:8px}
+  .dh b{font-size:13px;color:var(--white)}
+  .dh .sp{flex:1}
+  .dh .x{color:var(--dim);font-size:14px}
+  .db{padding:14px 16px;display:flex;flex-direction:column;gap:14px}
+  .field{display:flex;flex-direction:column;gap:6px}
+  .field label{font-size:10.5px;color:var(--dim)}
+  .inp{display:flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:5px;background:#191919;padding:6px 9px;font-family:var(--mono);font-size:12px;color:var(--white)}
+  .inp .caret{width:1px;height:13px;background:var(--coral-text)}
+  .hint{font-size:10px;color:var(--dim)}
+  .hint code{font-family:var(--mono);color:#CBB27A;font-size:10px}
+
+  .modes{display:flex;flex-direction:column;gap:8px}
+  .mode{display:grid;grid-template-columns:16px 1fr;gap:9px;align-items:start;border:1px solid var(--border);border-radius:6px;padding:9px 11px;background:#1A1A1A}
+  .mode.on{border-color:#5A322A;background:#231A17}
+  .radio{width:13px;height:13px;border-radius:50%;border:1px solid #4A4A4A;margin-top:2px}
+  .radio.on{border-color:var(--coral);background:radial-gradient(circle at center,var(--coral) 45%,transparent 47%)}
+  .mode b{font-size:12px;color:var(--white);font-weight:500}
+  .mode i{display:block;font-style:normal;font-size:10.5px;color:var(--dim);line-height:1.6;margin-top:3px}
+  .mode .tag{font-size:9.5px;border:1px solid var(--border);border-radius:3px;padding:1px 5px;color:var(--muted);margin-left:6px}
+
+  .facts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+  .f{border:1px solid var(--border-soft);border-radius:5px;padding:6px 8px;background:#181818}
+  .f .k{font-size:10px;color:var(--dim)}
+  .f .v{font-family:var(--mono);font-size:11.5px;color:var(--text);margin-top:2px}
+
+  .df{padding:11px 16px;border-top:1px solid var(--border);background:#1B1B1B;display:flex;align-items:center;gap:8px}
+  .df .sp{flex:1}
+  .df .note{font-size:10px;color:var(--dim)}
+  .btn{font-size:12px;border:1px solid var(--border);border-radius:6px;padding:5px 12px;background:#232323}
+  .btn-primary{font-size:12px;color:#F7EDE9;background:var(--coral);border:1px solid #8B3B2C;border-radius:6px;padding:5px 12px}
+
+  .card{background:var(--chrome);border:1px solid var(--border);border-radius:8px;padding:11px 13px}
+  .card h3{font-size:10px;color:var(--muted);font-weight:600;letter-spacing:.5px;margin-bottom:8px}
+  .card ul{list-style:none;display:flex;flex-direction:column;gap:7px}
+  .card li{font-size:11px;color:var(--dim);line-height:1.65;padding-left:11px;position:relative}
+  .card li::before{content:"";position:absolute;left:0;top:7px;width:4px;height:4px;background:#3A3A3A;border-radius:1px}
+  .card li b{color:var(--text);font-weight:500}
+  code{font-family:var(--mono);font-size:10.5px;color:#CBB27A}
+</style>
+</head>
+<body>
+
+<div class="head">
+  <div class="mark"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 9h16M9 9v10"/></svg></div>
+  <div><h1>结果集分析 · 命名与临时 / 持久</h1></div>
+  <span class="tagline">入口保留在结果集工具栏，对话框改成「先命名、再定去向」</span>
+</div>
+<div class="lead">
+  现状的问题是：点「分析」就直接开了洞察，用户既不知道会生成一张什么表，也不知道它是临时的还是持久的。改成<b>一次说清</b>：给这份结果起个名字（表名默认 <code>tmp_q_结果_n</code>），下面一个<b>持久表开关</code>——关（默认）＝本会话临时表，开＝写进项目分析库并且立刻出现在「数据对象 · 持久表」里。
+</div>
+
+<div class="stage">
+  <div class="main">
+    <!-- 结果集工具栏：入口还在原处 -->
+    <div class="toolbar">
+      <span>结果 3 · 12,847 行 · 3.4s</span>
+      <span style="flex:1"></span>
+      <button class="tb-btn">导出</button>
+      <button class="tb-btn">复制</button>
+      <button class="tb-btn hi">分析</button>
+    </div>
+    <div class="grid">
+      <div class="gh"><span>#</span><span>order_id</span><span>amount</span><span>region</span></div>
+      <div class="gr"><span>1</span><span>ORD-8821</span><span>1280.00</span><span>华东</span></div>
+      <div class="gr"><span>2</span><span>ORD-8822</span><span>96.50</span><span>华南</span></div>
+      <div class="gr"><span>3</span><span>ORD-8823</span><span>7420.00</span><span>华北</span></div>
+      <div class="gr"><span>4</span><span>ORD-8824</span><span>318.20</span><span>西南</span></div>
+    </div>
+
+    <!-- 对话框 -->
+    <div class="dialog">
+      <div class="dh"><b>分析这份结果集</b><span class="sp"></span><span class="x">×</span></div>
+      <div class="db">
+        <div class="field">
+          <label>对象名（数据对象里按这个名字出现）</label>
+          <div class="inp"><span>结果 3 · 订单明细</span><span class="caret"></span></div>
+          <span class="hint">临时表名会落成 <code>tmp_q_结果_3_订单明细_8f2a</code>；选了持久则落成 <code>res_结果_3_订单明细_20261115104200</code></span>
+        </div>
+
+        <div class="field">
+          <label>去向</label>
+          <div class="modes">
+            <div class="mode on">
+              <span class="radio on"></span>
+              <div><b>临时表<span class="tag">默认</span></b>
+                <i>只在本会话可见，随会话重建或进程退出消失。适合「先看一眼再决定要不要留」。</i></div>
+            </div>
+            <div class="mode">
+              <span class="radio"></span>
+              <div><b>持久表</b>
+                <i>写入项目分析库（<code>.RSmeta/analytics.duckdb</code>），保存后立刻出现在「数据对象 · 持久表」分组。可随时删除释放空间。</i></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="facts">
+          <div class="f"><div class="k">列</div><div class="v">14</div></div>
+          <div class="f"><div class="k">行</div><div class="v">12,847</div></div>
+          <div class="f"><div class="k">来源</div><div class="v">结果 3</div></div>
+        </div>
+      </div>
+      <div class="df">
+        <span class="note">持久化要跨连接搬数据，大表会慢一些；失败会留在提示里，不会静默丢掉。</span>
+        <span class="sp"></span>
+        <button class="btn">取消</button>
+        <button class="btn-primary">保存并分析</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="aside">
+    <div class="card">
+      <h3>从 03 保留的细节（别丢）</h3>
+      <ul>
+        <li>结果集工具栏的「分析」下拉仍有<b>自定义 SQL</b> 与 <code>{table}</code> 替换，本对话框只管「直接分析整份结果」这条。</li>
+        <li><b>不截断</b>：物化的是这份结果的全部行（早期的 20,000 行上限按新口径已去掉，代码同步改了）；对话框下方显示实际物化行数。</li>
+        <li>会话失效后，数据对象里这条标「已失效 · 可重新分析」，重新分析即换新 <code>tmp_q_</code>。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>三个去向，别混</h3>
+      <ul>
+        <li><b>临时表</b>（默认）：本会话的 <code>tmp_q_</code>，随会话重建消失——所以「数据对象」里会标失效。</li>
+        <li><b>持久表</b>：项目分析库里的表，长期可分析、也能删；名字带前缀只是分析库内部标识，不是资产命名。</li>
+        <li><b>升级为资产</b>：不在这里做，也不在数据对象面板做。只有<b>临时表与临时结果集</b>能升级，入口在数据导航栏 / 草稿箱；升级后起名（不带前缀）、进版本、变只读，之后可参与分析但只取最新版本。连接这类信息不能成为资产。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>为什么先命名</h3>
+      <p>名字是用户在数据对象里认路的唯一线索。自动名 <code>tmp_q_xxx</code> 能保证唯一，但认不出是哪一份；先给名字，临时表也带语义。</p>
+    </div>
+    <div class="card">
+      <h3>保留的入口</h3>
+      <p>仍然是工具栏上的「分析」，不起新按钮：用户的心智是「分析这份结果」，而不是「新建一个对象」。命名与去向都在这一个对话框里问完。</p>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

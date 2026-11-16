@@ -43,6 +43,11 @@ pub struct ArchiveRow {
     pub archived_epoch: Option<i64>,
     /// 本体字节数（`None` = 未知：分析表 / 引用型 / 没记体积的旧行）——「大小」排序用。
     pub size_bytes: Option<i64>,
+    /// 本体在 `resources/` 下的相对路径（`None` = 旧行没登记 / 引用型）。
+    ///
+    /// 行上不显示，但**参与分析**要用它定位本体：数据对象面板拿它拼绝对路径交给
+    /// DuckDB 读（资产是受管文件快照，不是某条连接的库表）。
+    pub payload_rel_path: Option<String>,
 }
 
 /// 分组字典项（分组折叠区与「移动到分组」菜单共用）。

@@ -147,6 +147,11 @@ impl WorkbenchView {
                         handles.push(panel_handle(tab.clone()));
                     }
                 }
+                RightPanel::DataObjects => {
+                    if let Some(tab) = &self.right_data_objects_tab {
+                        handles.push(panel_handle(tab.clone()));
+                    }
+                }
             }
         }
         drop(open);
@@ -158,6 +163,7 @@ impl WorkbenchView {
                 RightPanel::Mock => self.right_mock_tab.clone().map(panel_handle),
                 RightPanel::History => self.right_history_tab.clone().map(panel_handle),
                 RightPanel::Archive => self.right_archive_tab.clone().map(panel_handle),
+                RightPanel::DataObjects => self.right_data_objects_tab.clone().map(panel_handle),
             };
             if let Some(handle) = tab {
                 handles.push(handle);
@@ -187,6 +193,7 @@ impl WorkbenchView {
             RightPanel::Mock => self.right_mock_tab.clone().map(panel_handle),
             RightPanel::History => self.right_history_tab.clone().map(panel_handle),
             RightPanel::Archive => self.right_archive_tab.clone().map(panel_handle),
+            RightPanel::DataObjects => self.right_data_objects_tab.clone().map(panel_handle),
         };
         let active_id = active_tab.as_ref().map(|handle| handle.panel_id(cx));
         area.update(cx, |area, cx| {
@@ -346,6 +353,14 @@ impl WorkbenchView {
                 None => return,
             },
             RightPanel::Archive => match self.right_archive_tab.clone() {
+                Some(tab) => {
+                    let handle = panel_handle(tab);
+                    let id = handle.panel_id(cx);
+                    (handle, id)
+                }
+                None => return,
+            },
+            RightPanel::DataObjects => match self.right_data_objects_tab.clone() {
                 Some(tab) => {
                     let handle = panel_handle(tab);
                     let id = handle.panel_id(cx);
