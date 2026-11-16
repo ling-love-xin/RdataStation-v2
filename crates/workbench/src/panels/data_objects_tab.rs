@@ -107,11 +107,20 @@ impl DataObjectsTab {
                     .text_xs()
                     .text_color(colors.muted_foreground)
                     .child(format!("{} 个 · 已选 {}", objects.len(), picked.len())),
-            );
+            )
+            // 清单会变（连上/断开连接、临时表失效、资产改了版本），面板得有条自己重取的路
+            .child({
+                let entity = entity.clone();
+                Button::new("data-objects-refresh")
+                    .ghost()
+                    .label("刷新")
+                    .on_click(move |_, _, cx| {
+                        entity.update(cx, |tab, cx| tab.refresh(cx));
+                    })
+            });
         let header = if picked.is_empty() {
             header
-        } else {
-            let shared = self.shared.clone();
+        } else {            let shared = self.shared.clone();
             let entity_for_clear = entity.clone();
             let shared_for_run = self.shared.clone();
             let entity_for_run = entity.clone();
@@ -307,6 +316,9 @@ impl BasePanel for DataObjectsTab {
             let shared = self.shared.clone();
             shared.active_right.set(RightPanel::DataObjects);
             shared.notify_host(cx);
+            // 切到本面板时重取一次：进入面板 = 用户要看「现在有什么」，
+            // 停在构造时那份快照会给出过期结论（资产段尤其明显）。
+            self.refresh(cx);
         }
     }
 }
