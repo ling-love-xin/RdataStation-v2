@@ -41,6 +41,8 @@ pub struct PersistRequest {
 pub enum PersistOutcome {
     Done { table: String, rows: u64, label: String },
     Failed { label: String, reason: String },
+    /// 刚物化出临时表（不写库）：让 UI 刷新一次清单并留一句痕
+    Materialized { table: String, rows: u64, label: String },
 }
 
 struct Shared {
@@ -106,6 +108,13 @@ pub fn submit(request: PersistRequest) -> Result<(), String> {
         .tx
         .send(request)
         .map_err(|e| format!("落库任务入队失败: {e}"))
+}
+
+/// 记一条「已物化（未落库）」回执：不进 worker 队列，直接写结果槽（泵下一拍取走）。
+pub fn note_materialized(table: String, rows: u64, label: String) {
+    if let Ok(mut slot) = shared().outcome.lock() {
+        *slot = Some(PersistOutcome::Materialized { table, rows, label });
+    }
 }
 
 /// UI 泵取结果（取走即清空）

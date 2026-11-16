@@ -1540,6 +1540,13 @@ mod tests {
             _cx: &mut App,
         ) {
         }
+    fn note_result_set_materialized(
+        &self,
+        _notice: crate::shared::MaterializedResultSetNotice,
+        _cx: &mut App,
+    ) {
+    }
+
         fn request_reveal(&self, _object: engine::ObjectRef) {}
 
     }

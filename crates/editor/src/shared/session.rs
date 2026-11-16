@@ -107,6 +107,16 @@ impl EditorShared {
         self.persist_result_set.borrow().clone()
     }
 
+    /// 【结果集去向回执】注入「已物化」通知端口（**宿主调用一次**：workbench 刷新数据对象面板）
+    pub fn attach_materialized_result_set(&self, port: MaterializedResultSetPort) {
+        *self.materialized_result_set.borrow_mut() = Some(port);
+    }
+
+    /// 【结果集去向回执】「已物化」通知端口（未注入时面板只发消息，不刷新清单）
+    pub fn materialized_result_set_port(&self) -> Option<MaterializedResultSetPort> {
+        self.materialized_result_set.borrow().clone()
+    }
+
     /// 【B8 余项】注入「打开历史面板」端口（由宿主在装配期调用一次）
     pub fn attach_open_history(&self, port: OpenHistoryPort) {
         *self.open_history.borrow_mut() = Some(port);

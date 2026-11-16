@@ -39,6 +39,16 @@ impl WorkbenchView {
                                     tab.update(cx, |tab, cx| tab.refresh(cx));
                                 }
                             }
+                            PersistOutcome::Materialized { table, rows, label } => {
+                                this.shared.say(
+                                    format!("已物化「{label}」为 {table}（{rows} 行），已进入数据对象"),
+                                    cx,
+                                );
+                                // 与落库同一条理由：清单缓存不会自己变，不重取就看不见新行
+                                if let Some(tab) = this.right_data_objects_tab.clone() {
+                                    tab.update(cx, |tab, cx| tab.refresh(cx));
+                                }
+                            }
                             PersistOutcome::Failed { label, reason } => this
                                 .shared
                                 .say_error(format!("「{label}」持久化失败：{reason}"), cx),

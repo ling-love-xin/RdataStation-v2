@@ -105,6 +105,19 @@ impl EditorHost for WorkbenchEditorHost {
         );
     }
 
+    fn note_result_set_materialized(
+        &self,
+        notice: editor::shared::MaterializedResultSetNotice,
+        _cx: &mut App,
+    ) {
+        // 只是回执：状态栏与面板刷新由工作台泵统一做（`view/workspace.rs::ensure_persist_pump`）
+        crate::services::persist_jobs::note_materialized(
+            notice.table,
+            notice.rows as u64,
+            notice.label,
+        );
+    }
+
     fn persist_result_set(&self, request: editor::shared::PersistResultSetRequest, cx: &mut App) {
         // 表已由编辑器物化好（`tmp_q_`，同进程单例）：这里把它交给后台落库通道。
         // 事件路径上只入队（写库在 worker 线程），结果由工作台泵取后经状态栏告知。

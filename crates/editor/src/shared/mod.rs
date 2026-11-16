@@ -95,6 +95,22 @@ pub struct PersistResultSetRequest {
 /// 【结果集持久化】「持久化为项目表」端口（由宿主注入：workbench 接后台落库通道）
 pub type PersistResultSetPort = Rc<dyn Fn(PersistResultSetRequest, &mut gpui_kit::App)>;
 
+/// 【结果集去向回执】刚物化出一张临时表（宿主拿它刷新数据对象面板 + 状态栏留痕）。
+///
+/// 为什么单独一个通知而不复用 [`PersistResultSetRequest`]：那条是「写盘」的意图，
+/// 这条是「已经建好表、请你刷新清单」的回执——写盘成功与否由落库泵另说。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MaterializedResultSetNotice {
+    /// 物化出来的临时表名（`tmp_q_…`）
+    pub table: String,
+    /// 用户起的名字（面板里按它认这份结果）
+    pub label: String,
+    pub rows: usize,
+}
+
+pub type MaterializedResultSetPort =
+    Rc<dyn Fn(MaterializedResultSetNotice, &mut gpui_kit::App)>;
+
 /// 【B8 余项】「打开历史面板」端口（由宿主注入：workbench 接到右 Dock 历史面板）。
 ///
 /// 工具栏「⟲ 历史」按钮点击后经它通知宿主——编辑器不依赖工作台的 Dock。
@@ -176,6 +192,8 @@ pub struct EditorShared {
     pub(crate) analyze_result_set: Rc<RefCell<Option<AnalyzeResultSetPort>>>,
     /// 【结果集持久化】「持久化为项目表」端口：宿主注入后才有（未接时右键不摆这一项）
     pub(crate) persist_result_set: Rc<RefCell<Option<PersistResultSetPort>>>,
+    /// 【结果集去向回执】临时表物化通知：宿主注入后才有（未接时只发面板消息）
+    pub(crate) materialized_result_set: Rc<RefCell<Option<MaterializedResultSetPort>>>,
     /// 【B8 余项】「打开历史面板」端口：宿主注入后才有（未接时工具栏「历史」按钮置灰并给原因）
     pub(crate) open_history: Rc<RefCell<Option<OpenHistoryPort>>>,
     /// 连接列表 / 建连端口：宿主注入后才有（B1；无宿主 = 选择器说“未接入”）
@@ -261,6 +279,7 @@ impl Clone for EditorShared {
             insight_column: self.insight_column.clone(),
             analyze_result_set: self.analyze_result_set.clone(),
             persist_result_set: self.persist_result_set.clone(),
+            materialized_result_set: self.materialized_result_set.clone(),
             open_history: self.open_history.clone(),
             connections: self.connections.clone(),
             schemas: self.schemas.clone(),
@@ -314,6 +333,7 @@ impl EditorShared {
             insight_column: Rc::new(RefCell::new(None)),
             analyze_result_set: Rc::new(RefCell::new(None)),
             persist_result_set: Rc::new(RefCell::new(None)),
+            materialized_result_set: Rc::new(RefCell::new(None)),
             open_history: Rc::new(RefCell::new(None)),
             connections: Rc::new(RefCell::new(None)),
             schemas: Rc::new(RefCell::new(None)),

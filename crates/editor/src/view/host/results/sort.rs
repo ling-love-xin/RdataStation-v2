@@ -148,12 +148,23 @@ impl EditorHostPanel {
         };
         match destination {
             ResultSetDestination::Temporary => {
-                self.set_message(
-                    Some(format!(
-                        "已物化为 {table}（{rows} 行）；在数据对象面板刷新后可见"
-                    )),
-                    cx,
-                );
+                // 不写盘：表已经在进程单例里，宿主要做的只是把数据对象面板的缓存重取一次
+                match self.shared.materialized_result_set_port() {
+                    Some(port) => port(
+                        crate::shared::MaterializedResultSetNotice {
+                            table,
+                            label: name,
+                            rows,
+                        },
+                        cx,
+                    ),
+                    None => self.set_message(
+                        Some(format!(
+                            "已物化为 {table}（{rows} 行）；在数据对象面板刷新后可见"
+                        )),
+                        cx,
+                    ),
+                }
             }
             ResultSetDestination::Persistent => {
                 let Some(port) = self.shared.persist_result_set_port() else {

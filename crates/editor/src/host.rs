@@ -96,6 +96,9 @@ pub trait EditorHost: 'static {
     /// `tmp_q_` 临时表），差别只在去处：那边是洞察取样（临时），这边是项目库正式表（持久）。
     fn persist_result_set(&self, request: PersistResultSetRequest, cx: &mut App);
 
+    /// 【结果集去向回执】临时表刚物化好：宿主据此刷新数据对象面板（不写盘）。
+    fn note_result_set_materialized(&self, notice: crate::shared::MaterializedResultSetNotice, cx: &mut App);
+
     /// 导航树定位对象（`rds://navigator/<限定表名>` 跳转定义；复用 Quick Open `⌥↵`
     /// 同款 `request_reveal` 机制，宿主侧只入队，导航面板下一帧消费）。
     fn request_reveal(&self, object: engine::ObjectRef);
