@@ -247,6 +247,8 @@ impl ResourcesPanel {
             .flex_none()
             .h(rems(ui::TOOLBAR_HEIGHT))
             .h_flex()
+            // 工具条 32px、里面的控件 26px：不居中就是顶着上沿，下边空 6px
+            .items_center()
             .gap_1()
             .px_1()
             .border_b(ui::HAIRLINE)
