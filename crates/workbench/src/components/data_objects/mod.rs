@@ -433,6 +433,21 @@ pub fn picked_limit_note(count: usize) -> Option<String> {
     })
 }
 
+/// 字节数转人读串：面板头部显示 DuckDB 内存占用用，一位小数够说明量级。
+pub fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    match unit {
+        0 => format!("{bytes} B"),
+        _ => format!("{value:.1} {}", UNITS[unit]),
+    }
+}
+
 /// 会话行上能做的动作（后端已齐，`engine::duckdb::federation::session`）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionAction {
@@ -930,5 +945,18 @@ mod tests {
         assert!(sources.is_empty(), "{sources:?}");
         assert_eq!(skipped.len(), 1);
         assert!(skipped[0].contains("资产"), "{skipped:?}");
+    }
+}
+
+#[cfg(test)]
+mod memory_format_tests {
+    use super::format_bytes;
+
+    #[test]
+    fn formats_bytes_by_magnitude() {
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(512), "512 B");
+        assert_eq!(format_bytes(1536), "1.5 KB");
+        assert_eq!(format_bytes(2 * 1024 * 1024 * 1024), "2.0 GB");
     }
 }

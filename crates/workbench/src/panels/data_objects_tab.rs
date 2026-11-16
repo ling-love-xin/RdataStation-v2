@@ -39,16 +39,22 @@ pub struct DataObjectsTab {
     expanded_session: Option<String>,
     /// 分组筛选（原型 07 的 6 个 chips）：`None` = 全部
     filter: Option<Group>,
+    /// 上次刷新时的进程内存读数（字节, 临时表数）；`None` = 读不到
+    memory: Option<(u64, usize)>,
+    /// 上次刷新时的会话挂载统计（已挂, 总数）；总数 0 = 这个文档没开会话
+    session: Option<(usize, usize)>,
 }
 
 impl DataObjectsTab {
     pub fn new(shared: Shared, cx: &mut Context<Self>) -> Self {
-        let tab = Self {
+        let mut tab = Self {
             shared,
             focus_handle: cx.focus_handle(),
             note: None,
             expanded_session: None,
             filter: None,
+            memory: None,
+            session: None,
         };
         tab.refresh(cx);
         tab
@@ -88,8 +94,20 @@ impl DataObjectsTab {
     /// 资产那段不走库查询：资产面板实体已经把存活行载在内存里（`view_rows`），
     /// 这里只做形状翻译。面板还没载过（弱句柄取不到 / 行还空）时资产段就是空——
     /// 显示「资产面板载过之后可见」，而不是自己开一次连接去查（那是两套真相）。
-    pub fn refresh(&self, cx: &mut Context<Self>) {
+    pub fn refresh(&mut self, cx: &mut Context<Self>) {
         let mut collected = data_objects::collect(&self.shared);
+        // 内存读数与会话统计都在这里取：render 每帧跑，不能在里面查库。
+        // `None` 不算失败——上限没设、pragma 不支持都是正常形态，界面显示「—」。
+        self.memory = engine::duckdb::DuckDBManager::memory_stats()
+            .ok()
+            .and_then(|stats| stats.database_bytes.map(|bytes| (bytes, stats.table_count)));
+        let mounted = collected
+            .session_sources
+            .iter()
+            // `failed` 是失败原话：`None` = 挂上了
+            .filter(|source| source.failed.is_none())
+            .count();
+        self.session = Some((mounted, collected.session_sources.len()));
         collected.assets = self.assets_from_panel(cx);
         // 资产行单独存一份：`Object` 只带名字与版本，构造来源还要本体路径
         *self.shared.data_object_assets.borrow_mut() = collected.assets.clone();
@@ -158,6 +176,15 @@ impl DataObjectsTab {
             .cloned()
             .collect();
         let picked = self.shared.data_object_picked.borrow().clone();
+        // 头部只说清“这是哪一档引擎、现在占多少”：读数在刷新时取一次，取不到就显示「—」
+        let memory_label = match self.memory {
+            Some((bytes, tables)) => format!(
+                "进程 DuckDB · {} · {} 张临时表",
+                data_objects::format_bytes(bytes),
+                tables
+            ),
+            None => "进程 DuckDB · —".to_string(),
+        };
         let colors = cx.theme().colors;
         let entity = cx.entity();
 
@@ -181,6 +208,12 @@ impl DataObjectsTab {
                     .text_xs()
                     .text_color(colors.muted_foreground)
                     .child(format!("{} 个 · 已选 {}", total, picked.len())),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(colors.muted_foreground)
+                    .child(memory_label),
             )
             // 清单会变（连上/断开连接、临时表失效、资产改了版本），面板得有条自己重取的路
             .child({
@@ -335,6 +368,30 @@ impl DataObjectsTab {
                         })
                 }),
         );
+
+        // 底部会话条（原型 07 的 sess）：这个文档挂了几源、有几源没挂上
+        let sess_row = match self.session {
+            Some((mounted, total)) if total > 0 => {
+                let unmounted = total.saturating_sub(mounted);
+                Some(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_2()
+                        .px_3()
+                        .py_2()
+                        .border_t_1()
+                        .border_color(colors.border)
+                        .text_xs()
+                        .text_color(colors.muted_foreground)
+                        .child(format!("已挂 {mounted}/{total} 源"))
+                        .when(unmounted > 0, |el| {
+                            el.child(format!("· {unmounted} 个未挂载"))
+                        }),
+                )
+            }
+            _ => None,
+        };
 
         let mut list = div()
             .v_flex()
@@ -580,6 +637,7 @@ impl DataObjectsTab {
             .child(chips)
             .child(list)
             .when(!picked.is_empty(), |el| el.child(tray))
+            .when_some(sess_row, |el, row| el.child(row))
             .when_some(self.note.clone(), |el, note| {
                 el.child(
                     div()
