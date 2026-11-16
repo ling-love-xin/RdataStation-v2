@@ -168,10 +168,21 @@ pub fn menu_entries(snapshot: Option<&SourcesSnapshot>) -> Vec<SourceMenuEntry> 
 /// 「源清单 ▾」按钮上的那行小字（有会话时缀上源数与主源；没有会话就不缀）
 pub fn button_label(snapshot: Option<&SourcesSnapshot>) -> String {
     match snapshot {
-        Some(snapshot) => match snapshot.primary.as_deref() {
-            Some(primary) => format!("源清单：{} 源 · 主源 {primary} ▾", snapshot.sources.len()),
-            None => format!("源清单：{} 源 ▾", snapshot.sources.len()),
-        },
+        // 未挂载的源要写在按钮上：进了联邦却少一个源，是执行结果不对的常见原因，
+        // 而它原来只藏在浮层的某一行里。
+        Some(snapshot) => {
+            let total = snapshot.sources.len();
+            let unmounted = total.saturating_sub(snapshot.ready_count());
+            let head = if unmounted > 0 {
+                format!("源清单：{total} 源 · {unmounted} 未挂载")
+            } else {
+                format!("源清单：{total} 源")
+            };
+            match snapshot.primary.as_deref() {
+                Some(primary) => format!("{head} · 主源 {primary} ▾"),
+                None => format!("{head} ▾"),
+            }
+        }
         None => "源清单 ▾".to_string(),
     }
 }
