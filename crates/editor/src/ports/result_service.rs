@@ -106,6 +106,17 @@ impl ResultService {
         engine::services::duckdb_service::DuckDbService::create_duckdb_temp_table(columns, rows)
     }
 
+    /// 带描述物化（用户起的名字进表名）；表名里非 ASCII 会被折成下划线。
+    pub fn create_duckdb_temp_table_named(
+        columns: &[String],
+        rows: &[Vec<serde_json::Value>],
+        description: &str,
+    ) -> Result<String, CoreError> {
+        engine::services::duckdb_service::DuckDbService::create_duckdb_temp_table_named(
+            columns, rows, description,
+        )
+    }
+
     pub fn export_result(
         temp_table: &str,
         file_path: &str,

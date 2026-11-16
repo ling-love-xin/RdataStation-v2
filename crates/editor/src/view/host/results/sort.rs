@@ -68,7 +68,7 @@ impl EditorHostPanel {
         let Some(port) = self.shared.analyze_result_set_port() else {
             return;
         };
-        let Some((table, label, rows)) = self.materialize_active_result_set("分析", cx) else {
+        let Some((table, label, rows)) = self.materialize_active_result_set("分析", None, cx) else {
             return;
         };
         self.set_message(
@@ -90,7 +90,7 @@ impl EditorHostPanel {
         let Some(port) = self.shared.persist_result_set_port() else {
             return;
         };
-        let Some((table, label, rows)) = self.materialize_active_result_set("持久化", cx) else {
+        let Some((table, label, rows)) = self.materialize_active_result_set("持久化", None, cx) else {
             return;
         };
         self.set_message(
@@ -110,6 +110,8 @@ impl EditorHostPanel {
     fn materialize_active_result_set(
         &mut self,
         purpose: &str,
+        // 用户起的名字进表名（`None` = 沿用历史口径 `result`）；临时表名只留 ASCII
+        description: Option<&str>,
         cx: &mut Context<Self>,
     ) -> Option<(String, String, usize)> {
         let Some(entry) = self
@@ -135,9 +137,10 @@ impl EditorHostPanel {
             .map(|row| row.iter().map(|cell| cell_json(cell)).collect())
             .collect();
         let rows = entry.rows.len();
-        match crate::ports::result_service::ResultService::create_duckdb_temp_table(
+        match crate::ports::result_service::ResultService::create_duckdb_temp_table_named(
             &entry.columns,
             &json_rows,
+            description.unwrap_or("result"),
         ) {
             Ok(table) => Some((table, label, rows)),
             Err(error) => {

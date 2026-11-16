@@ -37,11 +37,24 @@ impl DuckDbService {
         columns: &[String],
         rows: &[Vec<serde_json::Value>],
     ) -> Result<String, CoreError> {
+        Self::create_duckdb_temp_table_named(columns, rows, "result")
+    }
+
+    /// 带**描述**的版本：描述会进表名（`tmp_q_<描述>_<时间戳>_<随机>`）。
+    ///
+    /// 用户给结果集起名后再物化就走这里——名字要能在面板里认出来。注意临时表名的
+    /// 尺子只留 ASCII（[`crate::duckdb::generate_unique_name`] 的既有口径），中文会被
+    /// 折成下划线：界面必须展示**实际生成的表名**，不要拿用户输入直接当表名显示。
+    pub fn create_duckdb_temp_table_named(
+        columns: &[String],
+        rows: &[Vec<serde_json::Value>],
+        description: &str,
+    ) -> Result<String, CoreError> {
         let duckdb = Self::get_or_create_duckdb()?;
         let mut conn = duckdb.lock().map_err(|e| {
             CoreError::common(CommonError::General(format!("DuckDB lock error: {}", e)))
         })?;
-        Self::create_temp_table_internal(&mut conn, columns, rows)
+        Self::create_temp_table_internal(&mut conn, columns, rows, description)
     }
 
     /// 建一张**查询结果**临时表（表名带 `tmp_q_` 前缀、建完即登记）并回填数据。
@@ -57,9 +70,12 @@ impl DuckDbService {
         conn: &mut duckdb::Connection,
         columns: &[String],
         rows: &[Vec<serde_json::Value>],
+        description: &str,
     ) -> Result<String, CoreError> {
-        let table_name =
-            crate::duckdb::generate_unique_name(crate::duckdb::TempTableSource::Query, "result");
+        let table_name = crate::duckdb::generate_unique_name(
+            crate::duckdb::TempTableSource::Query,
+            description,
+        );
         let col_defs: Vec<String> = columns
             .iter()
             .enumerate()
@@ -735,7 +751,7 @@ mod tests {
         let columns = vec!["id".to_string(), "name".to_string()];
         let rows = vec![vec![json!(1), json!("甲")], vec![json!(2), json!("乙")]];
 
-        let row_table = DuckDbService::create_temp_table_internal(&mut conn, &columns, &rows)
+        let row_table = DuckDbService::create_temp_table_internal(&mut conn, &columns, &rows, "result")
             .expect("逐行建表");
         let arrow_batch = {
             use arrow::array::{Int64Array, LargeStringArray};

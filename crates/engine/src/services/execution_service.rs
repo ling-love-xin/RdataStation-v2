@@ -71,7 +71,7 @@ pub fn execute_duckdb_analysis(
 
     let actual_table = if temp_table.is_empty() {
         if let (Some(cols), Some(rws)) = (columns, rows) {
-            duckdb_service::DuckDbService::create_temp_table_internal(&mut conn, &cols, &rws)?
+            duckdb_service::DuckDbService::create_temp_table_internal(&mut conn, &cols, &rws, "result")?
         } else {
             return Err(CoreError::common(CommonError::General(
                 "No temp table or data provided".to_string(),
@@ -213,7 +213,7 @@ pub fn export_rows_via_duckdb(
     }
 
     let table =
-        duckdb_service::DuckDbService::create_temp_table_internal(&mut conn, columns, rows)?;
+        duckdb_service::DuckDbService::create_temp_table_internal(&mut conn, columns, rows, "result")?;
     let outcome = copy_table_to_file(&conn, &table, path, format);
     // 表是纯中间产物：成败都要收（收不掉只记日志，不盖主流程的错）
     if let Err(error) =
