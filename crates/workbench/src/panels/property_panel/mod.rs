@@ -25,6 +25,7 @@ use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme, Sizable as _, Size, Theme};
 use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::component::empty::{Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle};
 use gpui_kit::*;
 
 use super::Shared;

@@ -8,15 +8,24 @@ impl PropertyHostPanel {
     /// （`docs/architecture/property/property-module-spec.md` §8）。
     pub(crate) fn render_property_panel(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let Some(target) = self.property_target.borrow().clone() else {
-            let muted = cx.theme().colors.muted_foreground;
+            // 空态用组件给：这里说的不是“无数据”，而是“下一步该双击哪个东西”
             return div()
                 .v_flex()
                 .size_full()
+                .min_h_0()
                 .items_center()
                 .justify_center()
-                .text_xs()
-                .text_color(muted)
-                .child("未选择对象：双击导航树中的连接 / 数据库 / 表等对象查看属性");
+                .p_3()
+                .child(
+                    Empty::new().header(
+                        EmptyHeader::new()
+                            .media(EmptyMedia::new())
+                            .title(EmptyTitle::new().child("还没有选中的对象"))
+                            .description(EmptyDescription::new().child(
+                                "双击导航树里的连接 / 数据库 / 表，属性会开在中央标签页。",
+                            )),
+                    ),
+                );
         };
 
         let muted = cx.theme().colors.muted_foreground;
@@ -185,7 +194,7 @@ impl PropertyHostPanel {
                 )
                 .child(
                     Button::new("property-revert")
-                        .label("Revert")
+                        .label("还原")
                         .with_size(Size::Small)
                         .on_click(move |_, _, cx| {
                             entity.update(cx, |panel, cx| panel.revert_dirty(cx));
@@ -193,7 +202,7 @@ impl PropertyHostPanel {
                 )
                 .child(
                     Button::new("property-apply")
-                        .label("Apply")
+                        .label("应用")
                         .primary()
                         .with_size(Size::Small)
                         .on_click(move |_, _, cx| {
