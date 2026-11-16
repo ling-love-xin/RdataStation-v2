@@ -271,6 +271,7 @@ fn detail_for(row: &ArchiveRow) -> ArchiveDetail {
         source_path: None,
         scope: RowScope::Project,
         size_label: "1.2 KB".to_string(),
+        created_label: "2026-09-10 08:00".to_string(),
         modified_label: "2026-09-17 08:00".to_string(),
         archived_label: "2026-09-17 08:00".to_string(),
         promoted_from: None,

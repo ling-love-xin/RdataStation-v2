@@ -18,6 +18,7 @@ fn detail(status: ArchiveStatus, kind: ArchiveKind) -> ArchiveDetail {
         source_path: None,
         scope: RowScope::Project,
         size_label: "1.2 KB".to_string(),
+        created_label: "3 天前".to_string(),
         modified_label: "3 天前".to_string(),
         archived_label: "3 天前".to_string(),
         promoted_from: Some("scratchpad/dau.sql".to_string()),

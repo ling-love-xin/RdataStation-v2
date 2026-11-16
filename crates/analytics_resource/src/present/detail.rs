@@ -55,6 +55,7 @@ pub fn to_detail(
         source_path: resource.source_path.clone(),
         scope: RowScope::from_db_str(&resource.scope),
         size_label,
+        created_label: format_timestamp(resource.created_at),
         modified_label: format_timestamp(resource.updated_at),
         archived_label: resource
             .archived_at

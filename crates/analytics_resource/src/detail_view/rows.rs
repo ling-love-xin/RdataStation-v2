@@ -49,6 +49,11 @@ pub fn detail_rows(detail: &ArchiveDetail) -> Vec<(String, Vec<(&'static str, St
     if !detail.size_label.is_empty() {
         basic.push(("大小", detail.size_label.clone()));
     }
+    // 「创建」与「修改」两行都摆：前者是资产诞生时间（只有第一版写），后者随每次升版变。
+    // 缺了创建时间，用户分不清“这资产是新加的”还是“老资产刚换了内容”。
+    if !detail.created_label.is_empty() {
+        basic.push(("创建时间", detail.created_label.clone()));
+    }
     if !detail.modified_label.is_empty() {
         basic.push(("修改时间", detail.modified_label.clone()));
     }

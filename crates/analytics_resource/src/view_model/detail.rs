@@ -22,6 +22,12 @@ pub struct ArchiveDetail {
     pub scope: RowScope,
     /// 大小（文件型）或规模（分析表型，如 "12,480 行 × 18 列"）；旧行可能为空。
     pub size_label: String,
+    /// 资产进入本库的时间（`created_at`，只在第一版写过一次）。
+    ///
+    /// 与 [`modified_label`](Self::modified_label) 不是一回事：那是**当前这一版**写入的时间，
+    /// 每升一版都会变；这个回答“这东西什么时候开始存在”，与草稿箱文件属性里的「创建时间」同义。
+    pub created_label: String,
+    /// 当前版本写入时间（`updated_at`）。
     pub modified_label: String,
     pub archived_label: String,
     /// 来源草稿相对路径（归档凭证的"出处"）。

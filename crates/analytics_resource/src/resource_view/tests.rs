@@ -359,6 +359,7 @@ fn detail(kind: ArchiveKind, status: ArchiveStatus, payload: Option<&str>) -> Ar
         source_path: None,
         scope: RowScope::Project,
         size_label: String::new(),
+        created_label: String::new(),
         modified_label: String::new(),
         archived_label: String::new(),
         promoted_from: None,
