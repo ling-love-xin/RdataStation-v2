@@ -237,3 +237,15 @@ cargo test -p rds-editor --lib -- --test-threads=1   # 基线 776 passed / 3 fai
 - `crates/workbench/src/components/project_host.rs:189-208`「结果集链路没接 UI（建表方零调用者）」——B15 已接（`editor/src/ports/editor_exec/runner.rs:492`）；
 - `insight/src/model/target.rs:41`「已 ATTACH 进来的库表」——无实现支撑，改由联邦取样兑现；
 - `mod.rs:52` 仍导出 `FederationManager`（legacy），Phase 0 确认零调用后摘除。
+
+## 11. 入口口径定稿（2026-11-16）
+
+1. **本质**：联邦 / 二次分析 / 洞察都是「DuckDB 已加载对象」的**下游动作**，不是数据管理。对象只包括连接、持久表、临时表、外部文件；资产 / 项目 / 全局是业务标签，不是第四类数据。
+2. **二次分析**：结果集工具栏「分析」→ 08 对话框（名字 + 去向）→ 进数据对象；**不自动开洞察**。落点：`crates/editor/src/view/dialogs/result_analyze.rs::open_result_analyze`、`crates/editor/src/view/host/results/sort.rs::finish_result_analyze`。
+3. **去向只有两条**：临时（`tmp_q_…`，会话内，只能留在本项目）与持久（`res_<名字>_<时间戳>`，本项目分析库，可回溯版本）。
+   **全局不在这里选**：只有资产归档处「升级到全局…」一条路（`crates/analytics_resource/src/resource_host/detail_actions.rs::request_promote_to_global`）。数据对象面板因此只保留「存为表」这一条升级路径（刀 12 撤掉了面板里的全局升级按钮）。
+4. **命名**：用户输入的名字进表名。临时名的尺子只留 ASCII（`crates/engine/src/duckdb/temp_table/temp_table.rs::sanitize_description`），中文折成下划线——**对话框必须把这条说白**，并展示实际生成的表名；持久名保留中文（`sanitize_persistent_description`）。
+5. **面板只显示最新版本**：一个对象一行，版本号是行尾 pill（`ArchiveRow::version`），历史版本只在资产库详情看（`history_label`）。面板不做版本展开、不做版本下拉。
+6. **洞察单入口**：数据导航栏 / 草稿箱 / 分析存档 / 数据对象，四处**任选其一**进入；多源在洞察面板内用「+」追加，弹窗与数据对象面板的「加源」同一套（`01-source-picker.html`）。洞察产物（`tmp_i_`）不进数据对象面板，要留就走「保留到项目库」。
+7. **面板分组按 DuckDB 容器**：本项目分析库 / 全局分析库 / 已挂载的源 / 外部文件 / 临时表；资产、项目、全局等业务标签降为行尾 pill（P2 落地时改行模型，原型 07 同步）。
+8. **两处动作语义**：连接行「加载」、表 / 视图行「选用」；洞察弹窗里的连接行只展开不可勾（P7）。
