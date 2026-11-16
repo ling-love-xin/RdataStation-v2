@@ -26,6 +26,9 @@ pub struct ArchiveDetail {
     pub archived_label: String,
     /// 来源草稿相对路径（归档凭证的"出处"）。
     pub promoted_from: Option<String>,
+    /// 跨项目链路的**直接上游**（`origin_kind` + `origin_ref` 拼好的一句话）。
+    /// 空串 = 不画那一行（没有上游 / 老行 / ref 被写坏都归到这一档）。
+    pub origin_label: String,
     pub source_connection_id: Option<String>,
     pub source_table: Option<String>,
     /// 内容指纹（完整值；展示时截断）。

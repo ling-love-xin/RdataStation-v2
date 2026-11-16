@@ -51,6 +51,14 @@ pub struct PromoteRequest {
     pub content_hash: String,
     /// 本体大小（字节）。
     pub file_size: Option<i64>,
+    /// 来源：项目侧那条存档的 id（**A 的 id**）。
+    ///
+    /// 跨项目只允许「项目 A → 全局 → 项目 B」，所以全局行要能回指被搬走的那条 A 存档。
+    /// 早期调用点可以给 `None`（那时没有这两项），全局行照旧不记来源。
+    pub source_resource_id: Option<String>,
+    /// 来源：A 的版本号。**各层版本各自编号**——A 的 v5 升级成全局的 v1，
+    /// 这里记的是被搬走的那一版 A，不是全局的版本号。
+    pub source_version: Option<i32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

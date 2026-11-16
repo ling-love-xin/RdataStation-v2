@@ -227,6 +227,9 @@ pub(super) fn request_promote_to_global(host: &ResourceHost, detail: &ArchiveDet
                 rel_path: Some(rel.to_string()),
                 content_hash: detail.content_hash.clone().unwrap_or_default(),
                 file_size: None,
+                // 来源链只记直接上游：全局行靠这两项回指「A 的哪一条、哪一版」。
+                source_resource_id: Some(detail.id.clone()),
+                source_version: Some(detail.version),
             },
             false,
         );

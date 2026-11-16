@@ -60,6 +60,11 @@ pub fn detail_rows(detail: &ArchiveDetail) -> Vec<(String, Vec<(&'static str, St
         let from = PromotedFrom::parse(from);
         source.push((from.label(), from.value().to_string()));
     }
+    // 跨项目搬运的直接上游（A 的 v5 / 全局的 v1）：只指一跳，整条链逐层往上找，
+    // 不冗余记录——用户口径是「各层各自编号，但要有线索可寻」。
+    if !detail.origin_label.is_empty() {
+        source.push(("上游", detail.origin_label.clone()));
+    }
     if let Some(conn) = detail.source_connection_id.as_deref() {
         source.push(("来源连接", conn.to_string()));
     }

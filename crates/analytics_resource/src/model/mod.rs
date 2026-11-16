@@ -2,6 +2,7 @@
 
 mod affordance;
 mod kind;
+mod origin;
 mod promoted_from;
 mod semantics;
 mod timeline;
@@ -9,6 +10,7 @@ mod types;
 
 pub use affordance::*;
 pub use kind::*;
+pub use origin::*;
 pub use promoted_from::*;
 pub use semantics::*;
 pub use timeline::*;

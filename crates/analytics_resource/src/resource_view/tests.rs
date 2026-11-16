@@ -366,6 +366,7 @@ fn detail(kind: ArchiveKind, status: ArchiveStatus, payload: Option<&str>) -> Ar
         payload_rel_path: payload.map(str::to_string),
         analytics_table: None,
         has_definition: false,
+        origin_label: String::new(),
         history_label: String::new(),
         recent_versions: Vec::new(),
         groups: Vec::new(),

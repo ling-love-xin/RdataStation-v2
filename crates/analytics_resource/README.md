@@ -48,6 +48,14 @@
 | 要素 | 列 / 位置 | 回答的问题 |
 | --- | --- | --- |
 | 来源 | `promoted_from` / `source_connection_id` / `source_table` | 这结论是用什么数据得出的 |
+| 上游 | `origin_kind` / `origin_ref` | 这一版是从哪一条上游搬来的（**只记一跳**） |
+
+> **来源链 2026-11-16（`origin_kind` + `origin_ref`）**：跨项目只允许「项目 A → 全局 → 项目 B」。
+> 各层**版本各自编号**（A 的 v5 → 全局 v1 → B 的 v1），每一行只记**直接上游**那一跳：
+> 全局行 `project` + `{"resource_id","version"}`，项目行（分发落盘）`global` + `{"instance","version"}`。
+> 拼整条链是读取侧的事（[`model::origin`](src/model/origin.rs) 拼成一句「项目存档 arp_1 的 v5」，
+> 详情「来源」区多一行「上游」）；不在行里冗余整条链——冗余会随上游新增版本而过期。
+> `origin_ref` 解析失败 / 缺 id 一律降级为不画那一行，不硬报错。
 
 > **`promoted_from` 一字段两义（2026-11-07 记录）**：草稿归档写来源草稿的相对路径（`scratchpad/<rel>`），
 > 升级到全局 / 分发落项目写 `global:<全局实例 id>`。读取面按前缀分开解释

@@ -61,6 +61,8 @@ impl GlobalInstanceStore {
 
         let id = format!("arp_{}", uuid::Uuid::new_v4().simple());
         let now = Utc::now().to_rfc3339();
+        // 来源链（全局 → B）：只记直接上游那一跳，B 自己的版本是 `next_version`。
+        let origin_ref = crate::model::global_ref(global_id, global_version);
         conn.execute(
             r#"
             INSERT INTO analytics_resources (
@@ -69,12 +71,12 @@ impl GlobalInstanceStore {
                 created_at, updated_at, created_by, deleted_at,
                 kind, content_hash, file_rel_path, readonly, promoted_from,
                 source_connection_id, source_table, definition_sql, archived_at,
-                payload_mode, source_path
+                payload_mode, source_path, origin_kind, origin_ref
             ) VALUES (
                 ?1, 'analysis', ?2, NULL, 'null', 'project', ?3, ?4, NULL,
                 ?5, NULL, NULL, NULL, ?6, ?6, NULL, NULL,
                 'analysis', ?7, NULL, 1, ?8, NULL, ?2, ?9, ?6,
-                'copy', NULL
+                'copy', NULL, 'global', ?10
             )
             "#,
             rusqlite::params![
@@ -87,6 +89,7 @@ impl GlobalInstanceStore {
                 content_hash,
                 format!("{GLOBAL_PREFIX}{global_id}"),
                 definition_sql,
+                &origin_ref,
             ],
         )
         .map_err(sqlite_err("insert_project_table"))?;
@@ -143,6 +146,8 @@ impl GlobalInstanceStore {
 
         let id = format!("arp_{}", uuid::Uuid::new_v4().simple());
         let now = Utc::now().to_rfc3339();
+        // 来源链（全局 → B）：只记直接上游那一跳，B 自己的版本是 `next_version`。
+        let origin_ref = crate::model::global_ref(global_id, global_version);
         conn.execute(
             r#"
             INSERT INTO analytics_resources (
@@ -151,12 +156,12 @@ impl GlobalInstanceStore {
                 created_at, updated_at, created_by, deleted_at,
                 kind, content_hash, file_rel_path, readonly, promoted_from,
                 source_connection_id, source_table, definition_sql, archived_at,
-                payload_mode, source_path
+                payload_mode, source_path, origin_kind, origin_ref
             ) VALUES (
                 ?1, 'file', ?2, NULL, 'null', 'project', NULL, NULL, ?3,
                 ?4, NULL, NULL, NULL, ?5, ?5, NULL, NULL,
                 'file', ?6, ?7, 1, ?8, NULL, NULL, NULL, ?5,
-                'copy', NULL
+                'copy', NULL, 'global', ?9
             )
             "#,
             rusqlite::params![
@@ -168,6 +173,7 @@ impl GlobalInstanceStore {
                 content_hash,
                 rel_path,
                 format!("{GLOBAL_PREFIX}{global_id}"),
+                &origin_ref,
             ],
         )
         .map_err(sqlite_err("insert_project_file"))?;
@@ -237,6 +243,16 @@ impl GlobalInstanceStore {
                 )),
             };
 
+            // 来源链（A → 全局）：只记直接上游那一跳。`source_resource_id` 为空时
+            // 两列都写 NULL —— 没有来源就不编一个。
+            let origin_ref = req
+                .source_resource_id
+                .as_deref()
+                .map(|id| crate::model::project_ref(id, req.source_version));
+            let origin_kind = origin_ref
+                .as_ref()
+                .map(|_| crate::model::ORIGIN_KIND_PROJECT);
+
             conn.execute(
                 r#"
                 INSERT INTO analytics_resources (
@@ -245,12 +261,12 @@ impl GlobalInstanceStore {
                     created_at, updated_at, created_by, deleted_at,
                     kind, content_hash, file_rel_path, readonly, promoted_from,
                     source_connection_id, source_table, definition_sql, archived_at,
-                    payload_mode, source_path
+                    payload_mode, source_path, origin_kind, origin_ref
                 ) VALUES (
                     ?1, ?2, ?3, NULL, 'null', 'global', ?4, ?5, ?6,
                     ?7, NULL, NULL, NULL, ?8, ?8, NULL, NULL,
                     'analysis', ?9, ?10, 1, NULL, NULL, NULL, ?11, ?8,
-                    'copy', ?12
+                    'copy', ?12, ?13, ?14
                 )
                 "#,
                 rusqlite::params![
@@ -266,6 +282,8 @@ impl GlobalInstanceStore {
                     req.rel_path,
                     definition_sql,
                     req.source_abs_path.to_string_lossy().replace('\\', "/"),
+                    origin_kind,
+                    origin_ref,
                 ],
             )
             .map_err(sqlite_err("insert_global"))?;

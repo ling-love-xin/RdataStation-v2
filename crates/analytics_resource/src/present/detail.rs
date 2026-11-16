@@ -61,6 +61,10 @@ pub fn to_detail(
             .map(format_timestamp)
             .unwrap_or_default(),
         promoted_from: resource.promoted_from.clone(),
+        origin_label: crate::model::describe(
+            resource.origin_kind.as_deref(),
+            resource.origin_ref.as_deref(),
+        ),
         source_connection_id: resource.source_connection_id.clone(),
         source_table: resource.source_table.clone(),
         content_hash: resource.content_hash.clone(),

@@ -27,6 +27,7 @@ fn detail(status: ArchiveStatus, kind: ArchiveKind) -> ArchiveDetail {
         payload_rel_path: Some("dau.sql".to_string()),
         analytics_table: None,
         has_definition: false,
+        origin_label: String::new(),
         history_label: "1 个历史版本".to_string(),
         recent_versions: Vec::new(),
         groups: Vec::new(),
@@ -197,4 +198,33 @@ fn move_label_counts_only_when_more_than_one() {
     assert_eq!(move_label(1), "移动…");
     // 数量要上按钮：详情面板只显示焦点行，不标条数会让人以为只动这一条。
     assert_eq!(move_label(3), "移动 3 条…");
+}
+
+/// 「上游」只在上游已知时出现一行。
+///
+/// 老行（没有 `origin_kind` / `origin_ref`）、草稿箱归档（来源写在 `promoted_from`）、
+/// ref 被写坏——三种都退到「不画那一行」，而不是画一行空的或一串原始 JSON。
+#[test]
+fn origin_row_appears_only_when_the_upstream_is_known() {
+    let mut known = detail(ArchiveStatus::Normal, ArchiveKind::File);
+    known.scope = RowScope::Global;
+    known.origin_label = "项目存档 arp_1 的 v5".to_string();
+    let rows = detail_rows(&known);
+    let section = rows.iter().find(|(title, _)| title == "来源").expect("来源区");
+    assert!(
+        section
+            .1
+            .iter()
+            .any(|(label, value)| *label == "上游" && value == "项目存档 arp_1 的 v5"),
+        "上游已知时画一行"
+    );
+
+    let mut bare = detail(ArchiveStatus::Normal, ArchiveKind::File);
+    bare.origin_label = String::new();
+    let rows = detail_rows(&bare);
+    let section = rows.iter().find(|(title, _)| title == "来源").expect("来源区");
+    assert!(
+        !section.1.iter().any(|(label, _)| *label == "上游"),
+        "上游未知时不画"
+    );
 }

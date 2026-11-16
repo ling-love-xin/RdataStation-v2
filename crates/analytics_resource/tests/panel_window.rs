@@ -279,6 +279,7 @@ fn detail_for(row: &ArchiveRow) -> ArchiveDetail {
         payload_rel_path: Some(format!("{}.sql", row.id)),
         analytics_table: None,
         has_definition: false,
+        origin_label: String::new(),
         history_label: String::new(),
         tags: Vec::new(),
         group: None,

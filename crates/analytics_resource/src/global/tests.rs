@@ -80,6 +80,9 @@ fn promote_req(name: &str, path: &Path, kind: PromoteKind) -> PromoteRequest {
         },
         content_hash: format!("hash_{}", Uuid::new_v4().simple()),
         file_size: Some(123),
+        // 默认不记来源（这条 helper 只造请求）；要验链的用例自己填。
+        source_resource_id: None,
+        source_version: None,
     }
 }
 
@@ -649,6 +652,68 @@ async fn g012_distribute_leaves_a_receipt_on_the_global_side() {
             .expect("empty receipts")
             .is_empty(),
         "零行是「没人用过」这个事实，不是错误"
+    );
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+/// 来源链（A → 全局 → B）只记**直接上游**那一跳。
+///
+/// 各层版本各自编号：A 的 v5 升级成全局 v1，再下发成 B 的 v1。三行各记自己的
+/// 版本号，每行只回指上一跳的 id + 版本——顺着走两跳就能从 B 找回 A 的那一版，
+/// 而不用在每一行里冗余整条链（冗余会随上游新增版本而过期）。
+#[tokio::test]
+async fn g013_origin_chain_points_at_the_immediate_upstream() {
+    let env = create_test_env().await;
+    let csv = write_csv(&env.dir);
+    let mut req = promote_req("chain_orders", &csv, PromoteKind::DataFile);
+    req.source_resource_id = Some("arp_origin_probe".to_string());
+    req.source_version = Some(5);
+    let outcome = env.store.promote(&req).await.expect("promote");
+    assert_eq!(outcome.version, 1, "全局侧从自己的 v1 开始编号");
+
+    // 全局行回指 A 的那一版。
+    let (kind, reference): (String, String) = env
+        .store
+        .with_sqlite(|conn| {
+            conn.query_row(
+                "SELECT origin_kind, origin_ref FROM analytics_resources \
+                 WHERE name = 'chain_orders' AND scope = 'global' AND deleted_at IS NULL",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(sqlite_err("read_global_origin"))
+        })
+        .expect("read global origin");
+    assert_eq!(kind, crate::model::ORIGIN_KIND_PROJECT);
+    assert_eq!(
+        crate::model::describe(Some(&kind), Some(&reference)),
+        "项目存档 arp_origin_probe 的 v5"
+    );
+
+    // 全局 v1 → B：B 行记全局那一跳，版本同样从 v1 起（不继承 A 的 v5）。
+    let project_conn = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
+    let dist = env
+        .store
+        .distribute(&project_conn, &env.project_root, "chain_orders", None)
+        .await
+        .expect("distribute");
+    assert_eq!(dist.version, 1, "B 侧从自己的 v1 开始编号");
+    let pool = &env.project_pool;
+    let conn = pool.acquire().await.expect("acquire");
+    let conn = conn.inner().expect("inner");
+    let (kind, reference): (String, String) = conn
+        .query_row(
+            "SELECT origin_kind, origin_ref FROM analytics_resources \
+             WHERE name = 'chain_orders' AND deleted_at IS NULL",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read project origin");
+    assert_eq!(kind, crate::model::ORIGIN_KIND_GLOBAL);
+    assert_eq!(
+        crate::model::describe(Some(&kind), Some(&reference)),
+        format!("全局实例 {} 的 v1", outcome.resource_id)
     );
 
     let _ = fs::remove_dir_all(&env.dir);
