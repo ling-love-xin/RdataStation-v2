@@ -358,6 +358,10 @@ impl EditorHostPanel {
         if !changed {
             return; // 本来就在这档：不啥都留痕（切了才留）
         }
+        if channel == ExecChannel::Federated {
+            // 宿主据此展开数据对象面板（联邦的源在那份清单里）
+            cx.emit(crate::view::host::EditorHostEvent::FederatedChannelActivated);
+        }
         let mut message = format!("执行位置已切到{}", channel.label());
         if channel.runs_locally() {
             message.push_str("（源库以只读方式挂载；作用源库的写语句会被拒）");

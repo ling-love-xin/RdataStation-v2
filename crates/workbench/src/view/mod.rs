@@ -85,6 +85,8 @@ pub struct WorkbenchView {
     right_archive_tab: Option<Entity<ArchivePanel>>,
     /// 数据对象面板（所有可参与分析的对象一处分览；洞察 / 分析 / 联邦共用）
     right_data_objects_tab: Option<Entity<crate::panels::DataObjectsTab>>,
+    /// 首次切到联邦时是否已自动展开过数据对象面板（只展开一次，之后归用户管）
+    federated_entry_expanded: bool,
     /// Quick Open 浮层实体（首帧渲染时懒创建）；浮层自持输入 / 结果 / 键盘通道。
     /// ：宿主装配在 （兄弟模块，非本模块子级）。
     pub(crate) quick_open_palette: Option<Entity<QuickOpenPalette>>,

@@ -227,6 +227,11 @@ pub enum EditorHostEvent {
     StatusChanged,
     /// 执行失败（原因文本）——宿主据此弹全局错误通知。
     ExecutionFailed(String),
+    /// 执行通道切到了联邦：宿主据此把数据对象面板展开一次。
+    ///
+    /// 联邦的源就挂在那一份清单里（与二次分析共用同一份面板），切了通道却看不见
+    /// 可用的源，等于让人自己去找。只在第一次切时自动展开，之后由用户自己开合。
+    FederatedChannelActivated,
 }
 
 impl EventEmitter<EditorHostEvent> for EditorHostPanel {}

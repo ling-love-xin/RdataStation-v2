@@ -143,6 +143,7 @@ impl WorkbenchView {
             right_history_tab: None,
             right_archive_tab: None,
             right_data_objects_tab: None,
+            federated_entry_expanded: false,
             quick_open_palette: None,
             quick_open_open_pending: false,
             quick_open_mode_pending: Mode::Default,
@@ -467,9 +468,21 @@ impl WorkbenchView {
         let _status_sub = cx.subscribe_in(
             &panel,
             window,
-            |_this, _panel, event: &editor::view::host::EditorHostEvent, _window, cx| {
+            |this, _panel, event: &editor::view::host::EditorHostEvent, _window, cx| {
                 match event {
                     editor::view::host::EditorHostEvent::StatusChanged => {
+                        cx.notify();
+                    }
+                    editor::view::host::EditorHostEvent::FederatedChannelActivated => {
+                        // 首切联邦：把共用那份数据对象面板展开一次，让「有哪些源可用」
+                        // 直接出现在右边；用户关掉之后不再抢回来。
+                        if !this.federated_entry_expanded {
+                            this.federated_entry_expanded = true;
+                            this.shared.open_right_panel(
+                                crate::view::RightPanel::DataObjects,
+                                cx,
+                            );
+                        }
                         cx.notify();
                     }
                     editor::view::host::EditorHostEvent::ExecutionFailed(reason) => {
