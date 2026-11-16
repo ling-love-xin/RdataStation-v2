@@ -260,7 +260,7 @@ impl DataObjectsTab {
                 None
             };
             // 会话行多一个动作菜单：重挂 / 设主源 / 关会话（后端已有，界面不发明）
-            let session_button = if object.group == Group::Session {
+            let session_button = if object.group == Group::MountedSources {
                 let actions = data_objects::session_actions(&object.key, &object.state);
                 if actions.is_empty() {
                     None

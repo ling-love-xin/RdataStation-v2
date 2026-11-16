@@ -117,52 +117,43 @@ impl State {
     }
 }
 
-/// 分组：面板里的段落顺序（越靠上越「正在用」）。
+/// 分组**按 DuckDB 容器**排（2026-11-16 定稿）：面板回答的是「哪些对象已经在
+/// 可以分析的位置上」，不是「业务上算什么」。资产 / 项目 / 全局 / 结果集这些
+/// 业务身份降为行内标签，不再各占一段——同一个容器里的表回答同一件事。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Group {
-    /// 联邦会话里已挂上的源
-    Session,
-    /// 项目分析库里本次落库留下的持久表（`res_`）
-    Persistent,
-    /// 项目分析库里其它表
-    ProjectTables,
-    /// 资产（只读，最新版本）
-    Assets,
-    /// 全局分析表（跨项目）
-    GlobalTables,
-    /// 结果集（`tmp_q_`）
-    ResultSets,
-    /// 洞察产物（`tmp_i_`）
-    InsightProducts,
-    /// 草稿箱与外部文件
-    Files,
+    /// 联邦会话里已挂上的源（ATTACH 进来的库）
+    MountedSources,
+    /// 本项目分析库（`<项目>/.RSmeta/analytics.duckdb`）：落库的 `res_`、项目自建表、
+    /// 落在项目库里的资产，都是这一个 duckdb 文件里的对象
+    ProjectLibrary,
+    /// 全局分析库（`<RDS_HOME>/data/system/analytics.duckdb`）
+    GlobalLibrary,
+    /// 外部文件（草稿箱 / 导入的文件；能加载进 DuckDB 的才在这里）
+    ExternalFiles,
+    /// 临时表（进程内存单例里的 `tmp_q_`）
+    TemporaryTables,
 }
 
 impl Group {
     pub fn title(self) -> &'static str {
         match self {
-            Self::Session => "本次会话",
-            Self::Persistent => "持久表（结果集落库）",
-            Self::ProjectTables => "项目分析库",
-            Self::Assets => "资产（最新版本）",
-            Self::GlobalTables => "全局分析表",
-            Self::ResultSets => "结果集",
-            Self::InsightProducts => "洞察产物",
-            Self::Files => "文件",
+            Self::MountedSources => "已挂载的源",
+            Self::ProjectLibrary => "本项目分析库",
+            Self::GlobalLibrary => "全局分析库",
+            Self::ExternalFiles => "外部文件",
+            Self::TemporaryTables => "临时表",
         }
     }
 
     /// 段落顺序由枚举自身给出（`Ord` 派生自上到下），避免视图里再排一次。
     pub fn order(self) -> u8 {
         match self {
-            Self::Session => 0,
-            Self::Persistent => 1,
-            Self::ProjectTables => 2,
-            Self::Assets => 3,
-            Self::GlobalTables => 4,
-            Self::ResultSets => 5,
-            Self::InsightProducts => 6,
-            Self::Files => 7,
+            Self::MountedSources => 0,
+            Self::ProjectLibrary => 1,
+            Self::GlobalLibrary => 2,
+            Self::ExternalFiles => 3,
+            Self::TemporaryTables => 4,
         }
     }
 }
@@ -179,6 +170,9 @@ pub struct Object {
     pub life: Life,
     pub state: State,
     pub group: Group,
+    /// 业务身份（「资产」「项目自建」「全局」「结果集」「草稿」）：只作行内标签，
+    /// 不参与分组——分组按 DuckDB 容器（见 [`Group`]）。
+    pub pill: &'static str,
     /// 资产的最新版本（其它类型为 None）
     pub version: Option<u32>,
 }
@@ -274,7 +268,8 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
                 Some(reason) => State::Failed(reason.clone()),
                 None => State::Ready,
             },
-            group: Group::Session,
+            group: Group::MountedSources,
+            pill: "源",
             version: None,
         });
     }
@@ -291,7 +286,8 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             channel: Channel::Local,
             life: Life::Project,
             state: State::Ready,
-            group: Group::Persistent,
+            group: Group::ProjectLibrary,
+            pill: "结果集落库",
             version: None,
         });
     }
@@ -303,7 +299,8 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             channel: Channel::Local,
             life: Life::Project,
             state: State::Ready,
-            group: Group::ProjectTables,
+            group: Group::ProjectLibrary,
+            pill: "项目自建",
             version: None,
         });
     }
@@ -320,7 +317,8 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             channel: Channel::Asset,
             life: Life::Managed,
             state: State::Ready,
-            group: Group::Assets,
+            group: Group::ProjectLibrary,
+            pill: "资产",
             version: Some(asset.version),
         });
     }
@@ -333,7 +331,8 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             channel: Channel::Local,
             life: Life::Project,
             state: State::Ready,
-            group: Group::GlobalTables,
+            group: Group::GlobalLibrary,
+            pill: "全局",
             version: None,
         });
     }
@@ -346,23 +345,14 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             channel: Channel::Process,
             life: Life::Session,
             state: State::Ready,
-            group: Group::ResultSets,
+            group: Group::TemporaryTables,
+            pill: "结果集",
             version: None,
         });
     }
 
-    for name in &collected.insight_samples {
-        out.push(Object {
-            key: format!("insight:{name}"),
-            name: name.clone(),
-            note: "洞察产物 · 可再分析".to_string(),
-            channel: Channel::Process,
-            life: Life::Session,
-            state: State::Ready,
-            group: Group::InsightProducts,
-            version: None,
-        });
-    }
+    // 洞察产物（`tmp_i_`）**不进面板**：它是抽取的样，不是全量；生命周期属于洞察
+    // 会话。要留就由用户在洞察里「保留到项目库」，落成持久表后再从这里看。
 
     for (rel, abs) in &collected.drafts {
         out.push(Object {
@@ -372,7 +362,8 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             channel: Channel::File,
             life: Life::Project,
             state: State::Ready,
-            group: Group::Files,
+            group: Group::ExternalFiles,
+            pill: "草稿",
             version: None,
         });
     }
@@ -502,7 +493,7 @@ pub fn analysis_sources(
                     sources.push(source);
                 }
             }
-            None => skipped.push(format!("{}（{}）", object.name, object.group.title())),
+            None => skipped.push(format!("{}（{}）", object.name, object.pill)),
         }
     }
 
@@ -516,7 +507,8 @@ pub fn analysis_sources(
 /// 函数 / 只读受管），别把它们塞进这条通道——那会给「只读资产」写出一份副本，
 /// 用户再也分不清哪份是本体。
 pub fn can_persist(object: &Object) -> bool {
-    matches!(object.group, Group::ResultSets | Group::InsightProducts) && object.can_analyze()
+    // 临时表才谈得上「存为表」：项目库/全局库里的对象本来就已经持久了
+    object.group == Group::TemporaryTables && object.can_analyze()
 }
 
 /// 落库时给人看的名字：去掉临时前缀（`tmp_q_` / `tmp_i_`），别让表名里再出现一层 `tmp_`。
@@ -644,28 +636,39 @@ mod tests {
         let mut sorted = orders.clone();
         sorted.sort();
         assert_eq!(orders, sorted, "行必须按分组顺序连续排列");
-        assert_eq!(rows.first().map(|o| o.group), Some(Group::Session));
-        assert_eq!(rows.last().map(|o| o.group), Some(Group::Files));
+        assert_eq!(rows.first().map(|o| o.group), Some(Group::MountedSources));
+        // 临时表排最后：它寿命最短，也最该被处理掉
+        assert_eq!(rows.last().map(|o| o.group), Some(Group::TemporaryTables));
     }
 
     /// `res_` 表单独成段且换成可读名；项目自建表留在「项目分析库」段、名字原样。
     #[test]
     fn persistent_tables_are_split_from_project_owned_ones() {
         let rows = objects(&sample());
-        let persistent = rows.iter().find(|o| o.group == Group::Persistent).unwrap();
+        let persistent = rows
+            .iter()
+            .find(|o| o.key.starts_with("persistent:"))
+            .unwrap();
         assert_eq!(persistent.name, "订单明细 · 2026-11-15 10:30:00");
         // 身份仍是原名：面板上改了显示，删除 / 分析仍按原名定位
         assert_eq!(persistent.key, "persistent:res_订单明细_20261115103000");
 
-        let own = rows.iter().find(|o| o.group == Group::ProjectTables).unwrap();
+        // 分组已经不按「落库 / 自建」分（都在本项目分析库里），行内标签负责说清是哪一类
+        let own = rows
+            .iter()
+            .find(|o| o.key.starts_with("project:"))
+            .unwrap();
         assert_eq!(own.name, "数据修复");
+        assert_eq!(own.pill, "项目自建");
+        assert_eq!(persistent.pill, "结果集落库");
     }
 
     /// 资产行必须标出「最新版本」且只读，并且不给版本选择（模型层没有这个字段）。
     #[test]
     fn asset_rows_carry_latest_version_and_are_read_only() {
         let rows = objects(&sample());
-        let asset = rows.iter().find(|o| o.group == Group::Assets).unwrap();
+        let asset = rows.iter().find(|o| o.pill == "资产").unwrap();
+        assert_eq!(asset.group, Group::ProjectLibrary, "资产的本体在项目分析库里");
         assert_eq!(asset.version, Some(3));
         assert!(asset.note.contains("只读"));
         assert_eq!(asset.channel, Channel::Asset);
@@ -678,7 +681,7 @@ mod tests {
     #[test]
     fn session_objects_are_session_lived_and_stale_rows_are_not_analyzable() {
         let rows = objects(&sample());
-        let result = rows.iter().find(|o| o.group == Group::ResultSets).unwrap();
+        let result = rows.iter().find(|o| o.group == Group::TemporaryTables).unwrap();
         assert_eq!(result.life, Life::Session);
 
         let stale = Object {
@@ -697,7 +700,7 @@ mod tests {
             .iter()
             .find(|o| matches!(o.state, State::Failed(_)))
             .unwrap();
-        assert_eq!(failed.group, Group::Session);
+        assert_eq!(failed.group, Group::MountedSources);
         assert_eq!(failed.note, "扩展未安装");
         assert!(!failed.can_analyze());
     }
@@ -724,7 +727,7 @@ mod tests {
         ];
         let rows = objects(&c);
         let session_rows: Vec<&Object> =
-            rows.iter().filter(|o| o.group == Group::Session).collect();
+            rows.iter().filter(|o| o.group == Group::MountedSources).collect();
         assert_eq!(session_rows.len(), 2);
         assert_ne!(session_rows[0].key, session_rows[1].key);
         // 界面上仍显示同一个别名（用户认的是别名，不是 owner）
@@ -733,12 +736,6 @@ mod tests {
         assert!(session_rows[0].note.contains("主源"));
     }
 
-    /// 升级入口只对**有身份 + 表名已登记**的资产行开放。
-    ///
-    /// 临时表（`tmp_q_`）与项目自建表在项目库里没有存档身份：硬升上去，
-    /// 全局那一版回指不到上游，用户以后答不出「这张表是从哪来的」。
-    /// 临时表要升级，先「存为表」拿到身份（场景 3 的两段）。
-    #[test]
     /// 同一张表在两份分析库里时必须能区分（身份带前缀），否则工作集里会互相顶掉。
     #[test]
     fn identities_are_unique_across_sources() {
@@ -808,7 +805,7 @@ mod tests {
     fn only_session_tables_can_be_persisted_and_labels_drop_the_temp_prefix() {
         let rows = objects(&sample());
         for object in &rows {
-            let expected = matches!(object.group, Group::ResultSets | Group::InsightProducts);
+            let expected = object.group == Group::TemporaryTables;
             assert_eq!(
                 super::can_persist(object),
                 expected,
