@@ -18,7 +18,7 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelControl};
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::empty::{Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle};
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::tag::Tag;
 use gpui_kit::*;
 
@@ -32,6 +32,8 @@ pub struct DataObjectsTab {
     focus_handle: FocusHandle,
     /// 上一次会话动作的结果（失败原话）；`None` = 没动作过或已恢复
     note: Option<String>,
+    /// 哪一行的会话动作条展开着：一屏只开一个，跟原型一致
+    expanded_session: Option<String>,
 }
 
 impl DataObjectsTab {
@@ -40,6 +42,7 @@ impl DataObjectsTab {
             shared,
             focus_handle: cx.focus_handle(),
             note: None,
+            expanded_session: None,
         };
         tab.refresh(cx);
         tab
@@ -271,43 +274,39 @@ impl DataObjectsTab {
             } else {
                 None
             };
-            // 会话行多一个动作菜单：重挂 / 设主源 / 关会话（后端已有，界面不发明）
-            let session_button = if object.group == Group::MountedSources {
-                let actions = data_objects::session_actions(&object.key, &object.state);
-                if actions.is_empty() {
-                    None
-                } else {
-                    let menu_actions = actions.clone();
-                    let entity = entity.clone();
-                    Some(
-                        Button::new(SharedString::from(format!(
-                            "data-object-session-{}",
-                            object.key
-                        )))
-                        .ghost()
-                        .label("会话")
-                        .dropdown_menu(move |menu, _, _| {
-                            let mut menu = menu;
-                            for action in &menu_actions {
-                                let action = action.clone();
-                                let entity = entity.clone();
-                                menu = menu.item(
-                                    PopupMenuItem::new(action.label()).on_click(
-                                        move |_, _, cx| {
-                                            let action = action.clone();
-                                            entity.update(cx, |tab, cx| {
-                                                tab.run_session_action(action, cx)
-                                            });
-                                        },
-                                    ),
-                                );
-                            }
-                            menu
-                        }),
-                    )
-                }
+            // 会话行的动作（重挂 / 设主源 / 关会话）后端已有，界面不发明。
+            // 原型是点开该行下方直接出动作条：比下拉菜单少一次移动，也看得见都有什么。
+            let session_actions = if object.group == Group::MountedSources {
+                data_objects::session_actions(&object.key, &object.state)
             } else {
+                Vec::new()
+            };
+            let session_open = self.expanded_session.as_deref() == Some(object.key.as_str());
+            let session_button = if session_actions.is_empty() {
                 None
+            } else {
+                let key = object.key.clone();
+                let entity = entity.clone();
+                Some(
+                    Button::new(SharedString::from(format!(
+                        "data-object-session-{}",
+                        object.key
+                    )))
+                    .ghost()
+                    .label(if session_open { "收起" } else { "会话" })
+                    .on_click(move |_, _, cx| {
+                        let key = key.clone();
+                        entity.update(cx, |tab, cx| {
+                            tab.expanded_session =
+                                if tab.expanded_session.as_deref() == Some(key.as_str()) {
+                                    None
+                                } else {
+                                    Some(key)
+                                };
+                            cx.notify();
+                        });
+                    }),
+                )
             };
             // 资产行才给「升级到全局」：那一行已经有存档身份，升上去能回指上游。
             // 临时表 / 项目自建表先「存为表」——没有登记就没有身份，硬升会丢线索。
@@ -396,6 +395,38 @@ impl DataObjectsTab {
                     .children(persist_button)
                     .children(session_button),
             );
+            if session_open {
+                let mut bar = div()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .px_3()
+                    .pb_2()
+                    .border_b_1()
+                    .border_color(colors.border);
+                for action in &session_actions {
+                    let action = action.clone();
+                    let label = action.label();
+                    let entity = entity.clone();
+                    bar = bar.child(
+                        Button::new(SharedString::from(format!(
+                            "data-object-session-action-{}-{}",
+                            object.key, label
+                        )))
+                        .ghost()
+                        .label(label)
+                        .on_click(move |_, _, cx| {
+                            let action = action.clone();
+                            entity.update(cx, |tab, cx| {
+                                tab.expanded_session = None;
+                                tab.run_session_action(action, cx);
+                                cx.notify();
+                            });
+                        }),
+                    );
+                }
+                list = list.child(bar);
+            }
         }
 
         if objects.is_empty() {
