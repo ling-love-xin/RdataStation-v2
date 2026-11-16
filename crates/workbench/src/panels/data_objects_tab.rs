@@ -19,6 +19,7 @@ use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelControl
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::empty::{Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle};
 use gpui_kit::component::menu::PopupMenu;
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::Icon;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::tag::Tag;
@@ -134,14 +135,26 @@ impl DataObjectsTab {
         cx.notify();
     }
 
-    fn render_body(&self, cx: &Context<Self>) -> Div {
+    fn render_body(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let all = self.shared.data_objects.borrow().clone();
         let total = all.len();
+        // 搜索框：`InputState` 要窗口才能建，面板 `new` 没有窗口，所以按 key 在渲染时惰性建
+        // （同一 id 每次拿到的是同一个实体，输入内容不会因重渲染丢）
+        let search = window.use_keyed_state("data-objects-search", cx, |window, cx| {
+            InputState::new(window, cx).placeholder("输入表名 / 文件名，直接定位")
+        });
+        let query = search.read(cx).value().trim().to_lowercase();
+
         // 筛选只改“看得见哪些”，不动工作集：选了某个对象后换个段看，已选仍在
         let filter = self.filter;
         let objects: Vec<data_objects::Object> = all
             .into_iter()
-            .filter(|object| filter.is_none_or(|group| object.group == group))
+            .filter(|object| {
+                filter.is_none_or(|group| object.group == group)
+                    && (query.is_empty()
+                        || object.name.to_lowercase().contains(&query)
+                        || object.note.to_lowercase().contains(&query))
+            })
             .collect();
         let picked = self.shared.data_object_picked.borrow().clone();
         let colors = cx.theme().colors;
@@ -228,6 +241,8 @@ impl DataObjectsTab {
                         }),
                 )
         };
+
+        let search_row = div().px_3().pb_2().child(Input::new(&search).small());
 
         // 分组 chips：五段全展开太长，先收窄到一段再看（原型 07 的 6 个 chip）
         let mut chips = div()
@@ -507,6 +522,7 @@ impl DataObjectsTab {
             .min_h_0()
             .pt_2()
             .child(header)
+            .child(search_row)
             .child(chips)
             .child(list)
             .when_some(self.note.clone(), |el, note| {
@@ -546,8 +562,8 @@ impl Focusable for DataObjectsTab {
 }
 
 impl Render for DataObjectsTab {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.render_body(cx)
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.render_body(window, cx)
     }
 }
 
