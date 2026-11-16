@@ -239,6 +239,12 @@ impl DataObjectsTab {
             .collect();
         let picked = self.shared.data_object_picked.borrow().clone();
         // 头部只说清“这是哪一档引擎、现在占多少”：读数在刷新时取一次，取不到就显示「—」
+        // 总和“现在看得见几个”不是一回事：筛过之后得把两个数都说出来
+        let count_label = if objects.len() == total {
+            format!("{} 个 · 已选 {}", total, picked.len())
+        } else {
+            format!("{} 个（显示 {}）· 已选 {}", total, objects.len(), picked.len())
+        };
         let memory_label = match self.memory {
             Some((bytes, tables)) => format!(
                 "进程 DuckDB · {} · {} 张临时表",
@@ -269,7 +275,7 @@ impl DataObjectsTab {
                 div()
                     .text_xs()
                     .text_color(colors.muted_foreground)
-                    .child(format!("{} 个 · 已选 {}", total, picked.len())),
+                    .child(count_label),
             )
             .child(
                 div()
@@ -367,6 +373,7 @@ impl DataObjectsTab {
                         Button::new(SharedString::from(format!("data-object-remove-{key}")))
                             .ghost()
                             .label("×")
+                            .small()
                             .on_click(move |_, _, cx| {
                                 let key = key_for_remove.clone();
                                 entity_for_remove.update(cx, |tab, cx| {
