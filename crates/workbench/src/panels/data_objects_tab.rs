@@ -698,17 +698,22 @@ impl DataObjectsTab {
                                 div()
                                     .text_sm()
                                     .text_color(colors.foreground)
+                                    // 窄面板里名字一长就顶出去，行尾按钮会被挤掉
+                                    .overflow_hidden()
+                                    .text_ellipsis()
                                     .child(object.name.clone()),
                             )
                             .child(
                                 div()
                                     .text_xs()
                                     .text_color(colors.muted_foreground)
+                                    .overflow_hidden()
+                                    .text_ellipsis()
                                     .child(object.note.clone()),
                             ),
                     )
                     // 业务身份走标准 Tag：手写胶囊的圆角、内距、字号各写一遍就会漂
-                    .child(pill.child(object.pill.clone()))
+                    .child(pill.child(object.pill))
                     .child(
                         div()
                             .text_xs()
@@ -763,8 +768,9 @@ impl DataObjectsTab {
         }
 
         if objects.is_empty() {
-            // 空态走标准组件：图标 + 标题 + 说明 + 下一步，不再是一行灰字
-            list = list.child(
+            // 空态分两种：清单本来就空（该去建源），还是筛过之后空（该去改条件）。
+            // 两种空法给的下一步完全不同，混成一句会让人以为清单被清空了。
+            list = list.child(if total == 0 {
                 Empty::new().header(
                     EmptyHeader::new()
                         .media(EmptyMedia::new())
@@ -772,8 +778,17 @@ impl DataObjectsTab {
                         .description(EmptyDescription::new().child(
                             "先连一个数据源，或跑一次查询；能被 DuckDB 加载的文件也可以直接放进来。",
                         )),
-                ),
-            );
+                )
+            } else {
+                Empty::new().header(
+                    EmptyHeader::new()
+                        .media(EmptyMedia::new())
+                        .title(EmptyTitle::new().child("这个条件下没有对象"))
+                        .description(EmptyDescription::new().child(
+                            "换个名字，或点「全部」看完整清单。",
+                        )),
+                )
+            });
         }
 
         div()
