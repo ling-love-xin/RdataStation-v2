@@ -839,14 +839,32 @@ impl DataObjectsTab {
                         })
                 }))
             } else {
-                Empty::new().header(
-                    EmptyHeader::new()
-                        .media(EmptyMedia::new())
-                        .title(EmptyTitle::new().child("这个条件下没有对象"))
-                        .description(EmptyDescription::new().child(
-                            "换个名字，或点「全部」看完整清单。",
-                        )),
-                )
+                Empty::new()
+                    .header(
+                        EmptyHeader::new()
+                            .media(EmptyMedia::new())
+                            .title(EmptyTitle::new().child("这个条件下没有对象"))
+                            .description(EmptyDescription::new().child(
+                                "换个名字，或点「全部」看完整清单。",
+                            )),
+                    )
+                    // 说“点「全部」”，就给一个点了真能回全部的地方：条件有两处（段与搜索词）
+                    .content(EmptyContent::new().child({
+                        let entity = entity.clone();
+                        let search = search.clone();
+                        Button::new("data-objects-empty-reset")
+                            .ghost()
+                            .label("清条件看全部")
+                            .on_click(move |_, window, cx| {
+                                search.update(cx, |state, cx| {
+                                    state.set_value("", window, cx);
+                                });
+                                entity.update(cx, |tab, cx| {
+                                    tab.filter = None;
+                                    cx.notify();
+                                });
+                            })
+                    }))
             });
         }
 
