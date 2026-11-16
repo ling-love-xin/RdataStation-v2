@@ -116,7 +116,13 @@ pub fn menu_items(
         .into_iter()
         .map(|channel| {
             let (available, reason) = match channel {
-                ExecChannel::Source if !connected => (false, Some("连接未建立".to_string())),
+                // 源库档**永远可切**：切通道是「声明执行发往哪一档」，不是执行本身。
+                // 连接此刻没起来就置灰，会把用户锁死在联邦档里（联邦不要求应用先建连），
+                // 想切回源库只能关文档重开。所以这里只**提示**、不挡——真发错东西由执行器
+                // 报可读原因（那是执行的门控，不是切换的门控）。
+                ExecChannel::Source if !connected => {
+                    (true, Some("连接未建立，执行时会提示".to_string()))
+                }
                 ExecChannel::Source => (true, None),
                 other => {
                     let gate = availability.for_channel(other);
@@ -289,11 +295,14 @@ mod tests {
     }
 
     #[test]
-    fn the_source_channel_needs_a_live_connection() {
+    fn the_source_channel_stays_selectable_when_the_connection_is_down() {
         let availability = ChannelAvailabilitySet::blocked("尚未接入");
         let items = menu_items(ExecChannel::Accelerated, false, &availability);
-        assert_eq!(items[0].label, "源库（连接未建立）");
-        assert!(!items[0].available);
+        assert_eq!(items[0].label, "源库（连接未建立，执行时会提示）");
+        assert!(
+            items[0].available,
+            "连接没起来也要能切回源库：切换是声明，执行才是门控"
+        );
         assert!(
             items[1].current,
             "当前是加速档（就算它暂时不可用也如实标着）"

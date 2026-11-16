@@ -184,7 +184,8 @@ fn the_channel_menu_greys_out_with_reasons(cx: &mut TestAppContext) {
     assert!(!rows[2].1);
 }
 
-/// 未绑定连接 → 源库档仍可用（执行器会回退到当前活动连接）；绑了没连上的连接 → 置灰给原因
+/// 未绑定连接 → 源库档仍可用（执行器会回退到当前活动连接）；绑了没连上的连接 →
+/// **仍可切**，只在行尾提示（否则用户会被锁在联邦档里，见 `channel::menu_items`）
 #[gpui_kit::test]
 fn the_source_channel_follows_the_connection_state(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -195,7 +196,7 @@ fn the_source_channel_follows_the_connection_state(cx: &mut TestAppContext) {
     let rows = channel_menu_rows(&panel, cx);
     assert!(rows[0].1, "未绑定不算源库不可用：{}", rows[0].0);
 
-    // 绑了一个没有运行态的连接：源库档置灰 + 原因
+    // 绑了一个没有运行态的连接：源库档仍可切，只是行尾提示
     let (shared2, id2, _seen2, _seen_conn2) = shared_with_runner("select 1;", EditorMode::Sql);
     shared2.attach_connections(Rc::new(FakeConnections::new(vec![option(
         "P_down", "P", "down",
@@ -203,8 +204,11 @@ fn the_source_channel_follows_the_connection_state(cx: &mut TestAppContext) {
     shared2.update(|service| service.set_connection(&id2, Some("P_down".to_string())));
     let (panel2, cx) = open_panel(cx, &shared2, &id2);
     let rows = channel_menu_rows(&panel2, cx);
-    assert_eq!(rows[0].0, "源库（连接未建立）");
-    assert!(!rows[0].1, "连接没起来就不该说源库档能用");
+    assert_eq!(rows[0].0, "源库（连接未建立，执行时会提示）");
+    assert!(
+        rows[0].1,
+        "连接没起来也要能切回源库：切换不是执行，别把用户锁在联邦档"
+    );
 }
 
 /// 没接通道端口：后两档都不可用，原因如实说“尚未接入”（而不是看起来能选）
