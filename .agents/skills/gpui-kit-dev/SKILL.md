@@ -1,9 +1,9 @@
 ---
 name: gpui-kit-dev
-description: GPUI-kit 视图开发规范：依赖只向下、主题取色零裸色值、render 权威同步点、事件/Action 模式、布局与滚动陷阱、组件选型（禁止手搓）、动效（禁止手搓 request_animation_frame）、API 查证路径与常用组件 API、简体中文注释约定。API 细节以 0.7.1 实测为准；项目已升级 0.8.1（vendor 为 0.8.1，0.8.1 升级与差异见 `docs/architecture/ui/gpui-kit-0.8.0-upgrade-report.md` §9）。编写或修改任何 GPUI 视图、元素、组件代码时使用。
+description: GPUI-kit 视图开发规范：依赖只向下、主题取色零裸色值、render 权威同步点、事件/Action 模式、布局与滚动陷阱、组件选型（禁止手搓）、动效（禁止手搓 request_animation_frame）、API 查证路径与常用组件 API、简体中文注释约定。API 细节以 0.7.1 实测为准；当前 vendor 为 0.9.0（0.8.x 升级与差异见 `docs/architecture/ui/gpui-kit-0.8.0-upgrade-report.md` §9）。编写或修改任何 GPUI 视图、元素、组件代码时使用。
 ---
 
-# GPUI-kit 视图开发规范（API 以 0.7.1 实测；项目已升级 0.8.1）
+# GPUI-kit 视图开发规范（历史实测 0.7.1；当前 vendor 0.9.0）
 
 > **版本勘误（2026-11-16）**：本仓库 vendor 锁定的 **gpui-kit / gpui-base / gpui-component 均为 0.9.0**
 > （`Cargo.lock` 实测）。下文出现的 `0.7.1` / `0.8.1` 是当时逐项实测留下的记录，**不是当前版本**；
