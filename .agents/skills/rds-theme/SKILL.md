@@ -5,6 +5,13 @@ description: RdataStation 主题系统：明暗配色 token 对照、产品语�
 
 # RdataStation 主题系统
 
+> **版本勘误（2026-11-16）**：本仓库 vendor 锁定的 **gpui-kit / gpui-base / gpui-component 均为 0.9.0**
+> （`Cargo.lock` 实测）。下文出现的 `0.7.1` / `0.8.1` 是当时逐项实测留下的记录，**不是当前版本**；
+> 组件是否存在、签名与行为一律以 `vendor/` 下 0.9.0 源码为准，本 skill 与 vendor 冲突时改 skill。
+> 已知 0.9.0 口径差异：`component::IconName` 只是保留的旧子集，完整 Lucide 目录在 `gpui_kit::assets::IconName`
+> （`Icon::new` 两种都收，经 `impl<T: IconNamed> From<T> for Icon`）。
+
+
 设计文档：`docs/architecture/theme/theme-design.md`（设计意图）；**色值权威来源：`docs/architecture/theme/theme-tokens-complete.md`（140/140 全量色板，冲突以它为准）**；色卡预览：`docs/architecture/theme/theme-preview.html`。
 
 ## 布局灰度分层（核心骨架）

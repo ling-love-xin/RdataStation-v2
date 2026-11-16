@@ -5,6 +5,13 @@ description: GPUI-kit 视图开发规范：依赖只向下、主题取色零裸�
 
 # GPUI-kit 视图开发规范（API 以 0.7.1 实测；项目已升级 0.8.1）
 
+> **版本勘误（2026-11-16）**：本仓库 vendor 锁定的 **gpui-kit / gpui-base / gpui-component 均为 0.9.0**
+> （`Cargo.lock` 实测）。下文出现的 `0.7.1` / `0.8.1` 是当时逐项实测留下的记录，**不是当前版本**；
+> 组件是否存在、签名与行为一律以 `vendor/` 下 0.9.0 源码为准，本 skill 与 vendor 冲突时改 skill。
+> 已知 0.9.0 口径差异：`component::IconName` 只是保留的旧子集，完整 Lucide 目录在 `gpui_kit::assets::IconName`
+> （`Icon::new` 两种都收，经 `impl<T: IconNamed> From<T> for Icon`）。
+
+
 ## 依赖与导入
 
 - 视图层只依赖 gpui-kit：`gpui_kit::*`（聚合包）= gpui-pre；`gpui_kit::base` = gpui-base（dock/flex/styled）；`gpui_kit::component` = gpui-component（组件/主题/图标）；`gpui_kit::assets`

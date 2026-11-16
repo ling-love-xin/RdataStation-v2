@@ -5,6 +5,13 @@ description: RdataStation UI 尺寸与颜色约束：rem 尺寸常量（crates/w
 
 # RdataStation UI 规范
 
+> **版本勘误（2026-11-16）**：本仓库 vendor 锁定的 **gpui-kit / gpui-base / gpui-component 均为 0.9.0**
+> （`Cargo.lock` 实测）。下文出现的 `0.7.1` / `0.8.1` 是当时逐项实测留下的记录，**不是当前版本**；
+> 组件是否存在、签名与行为一律以 `vendor/` 下 0.9.0 源码为准，本 skill 与 vendor 冲突时改 skill。
+> 已知 0.9.0 口径差异：`component::IconName` 只是保留的旧子集，完整 Lucide 目录在 `gpui_kit::assets::IconName`
+> （`Icon::new` 两种都收，经 `impl<T: IconNamed> From<T> for Icon`）。
+
+
 **硬约束**：视图代码不得出现与布局结构相关的裸 `px(N.)`、裸 `font_size * N.`、裸 hex/rgb 颜色。
 
 三层约束，任何 UI 改动都落在其中一层：

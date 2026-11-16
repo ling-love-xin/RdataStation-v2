@@ -5,6 +5,13 @@ description: RdataStation v2 架构硬约束：crate 依赖方向、模块归属
 
 # RdataStation v2 架构约束
 
+> **版本勘误（2026-11-16）**：本仓库 vendor 锁定的 **gpui-kit / gpui-base / gpui-component 均为 0.9.0**
+> （`Cargo.lock` 实测）。下文出现的 `0.7.1` / `0.8.1` 是当时逐项实测留下的记录，**不是当前版本**；
+> 组件是否存在、签名与行为一律以 `vendor/` 下 0.9.0 源码为准，本 skill 与 vendor 冲突时改 skill。
+> 已知 0.9.0 口径差异：`component::IconName` 只是保留的旧子集，完整 Lucide 目录在 `gpui_kit::assets::IconName`
+> （`Icon::new` 两种都收，经 `impl<T: IconNamed> From<T> for Icon`）。
+
+
 修改 crate 结构或判断代码归属时，遵守以下硬约束。
 
 ## 三层架构
