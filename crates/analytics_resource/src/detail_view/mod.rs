@@ -11,6 +11,7 @@ pub(crate) use gpui_kit::component::button::{Button, ButtonVariant, ButtonVarian
 pub(crate) use gpui_kit::component::description_list::{DescriptionList, DescriptionText};
 pub(crate) use gpui_kit::component::hover_card::HoverCard;
 pub(crate) use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+pub(crate) use gpui_kit::component::scroll::ScrollableElement as _;
 pub(crate) use gpui_kit::component::tag::Tag;
 pub(crate) use gpui_kit::component::{ActiveTheme, Icon, Sizable as _, Size};
 pub(crate) use gpui_kit::*;
@@ -102,11 +103,14 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
     div()
         .v_flex()
         .w_full()
+        .flex_1()
         .min_h_0()
         .border_l(ui::HAIRLINE)
         .border_color(cx.theme().colors.border)
         .bg(cx.theme().colors.background)
-        .child(body)
+        // 详情会长：基本信息 + 指纹 + 组织 + 版本明细 + 标签 + 内容预览（20 行）+ 动作区 + 危险区。
+        // 以前这里没有滚动，超出的部分直接被裁在外面——看得见分区标题，够不着下面。
+        .child(body.flex_1().min_h_0().overflow_y_scrollbar())
 }
 
 #[cfg(test)]
