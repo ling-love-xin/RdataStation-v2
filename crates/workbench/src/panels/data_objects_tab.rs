@@ -192,56 +192,6 @@ impl DataObjectsTab {
                         entity.update(cx, |tab, cx| tab.refresh(cx));
                     })
             });
-        let header = if picked.is_empty() {
-            header
-        } else {            let shared = self.shared.clone();
-            let entity_for_clear = entity.clone();
-            let shared_for_run = self.shared.clone();
-            let entity_for_run = entity.clone();
-            header
-                .child(
-                    Button::new("data-objects-analyze")
-                        .label("洞察此对象")
-                        .on_click(move |_, _, cx| {
-                            // 副作用只在事件路径做：转换是纯函数，开洞察在宿主
-                            let objects = shared_for_run.data_objects.borrow().clone();
-                            let picked = shared_for_run.data_object_picked.borrow().clone();
-                            let assets = shared_for_run.data_object_assets.borrow().clone();
-                            // 资产本体在 `{项目}/resources/` 下：目录由项目根推，不写死路径
-                            let resources_dir = shared_for_run
-                                .project
-                                .borrow()
-                                .as_ref()
-                                .map(|p| p.root.join("resources"));
-                            let (sources, skipped) = data_objects::analysis_sources(
-                                &objects,
-                                &picked,
-                                &assets,
-                                resources_dir.as_deref(),
-                            );
-                            if sources.is_empty() {
-                                // 选的全是转不了的类型：别开一个空洞察面板
-                                return;
-                            }
-                            let label = match skipped.is_empty() {
-                                true => format!("{} 个来源", sources.len()),
-                                false => format!("{} 个来源（{} 未包含）", sources.len(), skipped.len()),
-                            };
-                            shared_for_run.open_insight_source_tables(sources, label, cx);
-                            entity_for_run.update(cx, |_, cx| cx.notify());
-                        }),
-                )
-                .child(
-                    Button::new("data-objects-clear")
-                        .ghost()
-                        .label("清空已选")
-                        .on_click(move |_, _, cx| {
-                            shared.data_object_picked.borrow_mut().clear();
-                            // 回调拿到的是 `&mut App`：通知要落到本面板实体上，不能裸调
-                            entity_for_clear.update(cx, |_, cx| cx.notify());
-                        }),
-                )
-        };
 
         let search_row = div().px_3().pb_2().child(Input::new(&search).small());
 
@@ -324,6 +274,67 @@ impl DataObjectsTab {
             );
         }
         tray = tray.child(selected_row);
+        // 原型 07 的 tray 尾巴：先说清多处来源怎么加，再把主按钮放这儿——
+        // 头部那排按钮是“对这面板做什么”，这里才是“拿这堆对象去做什么”
+        tray = tray.child(
+            div()
+                .text_xs()
+                .text_color(colors.muted_foreground)
+                .child("要多个来源，进洞察后用「+」再加"),
+        );
+        let shared_for_tray = self.shared.clone();
+        let entity_for_tray = entity.clone();
+        tray = tray.child(
+            div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    Button::new("data-objects-analyze")
+                        .label("洞察此对象")
+                        .on_click(move |_, _, cx| {
+                            // 副作用只在事件路径做：转换是纯函数，开洞察在宿主
+                            let objects = shared_for_tray.data_objects.borrow().clone();
+                            let picked = shared_for_tray.data_object_picked.borrow().clone();
+                            let assets = shared_for_tray.data_object_assets.borrow().clone();
+                            // 资产本体在 `{项目}/resources/` 下：目录由项目根推，不写死路径
+                            let resources_dir = shared_for_tray
+                                .project
+                                .borrow()
+                                .as_ref()
+                                .map(|p| p.root.join("resources"));
+                            let (sources, skipped) = data_objects::analysis_sources(
+                                &objects,
+                                &picked,
+                                &assets,
+                                resources_dir.as_deref(),
+                            );
+                            if sources.is_empty() {
+                                // 选的全是转不了的类型：别开一个空洞察面板
+                                return;
+                            }
+                            let label = match skipped.is_empty() {
+                                true => format!("{} 个来源", sources.len()),
+                                false => format!("{} 个来源（{} 未包含）", sources.len(), skipped.len()),
+                            };
+                            shared_for_tray.open_insight_source_tables(sources, label, cx);
+                            entity_for_tray.update(cx, |_, cx| cx.notify());
+                        }),
+                )
+                .child(div().flex_1())
+                .child({
+                    let shared = self.shared.clone();
+                    let entity = entity.clone();
+                    Button::new("data-objects-clear")
+                        .ghost()
+                        .label("清空")
+                        .on_click(move |_, _, cx| {
+                            shared.data_object_picked.borrow_mut().clear();
+                            // 回调拿到的是 `&mut App`：通知要落到本面板实体上，不能裸调
+                            entity.update(cx, |_, cx| cx.notify());
+                        })
+                }),
+        );
 
         let mut list = div()
             .v_flex()
@@ -332,9 +343,6 @@ impl DataObjectsTab {
             .overflow_y_scrollbar()
             .id("data-objects-list");
 
-        // 升级按钮要同时看两件事：这一行是不是资产（有存档身份）、表名登记了没有。
-        // 缺表名的老行不给按钮——给一个点了只弹错的按钮，比不给更糟。
-        let assets = self.shared.data_object_assets.borrow().clone();
         let mut last_group: Option<Group> = None;
         for object in &objects {
             if last_group != Some(object.group) {
