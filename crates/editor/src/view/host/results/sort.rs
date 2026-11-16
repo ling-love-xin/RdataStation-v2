@@ -69,29 +69,37 @@ impl EditorHostPanel {
         let Some(facts) = self.active_result_set_facts("分析", cx) else {
             return;
         };
-        let entity = cx.entity();
-        let result = self.window.update(cx, move |_panel, window, app| {
-            let run_entity = entity.clone();
-            let cancel_entity = entity.clone();
-            crate::view::dialogs::open_result_analyze(
-                window,
-                app,
-                facts,
-                move |name, destination, _window, cx| {
-                    _ = run_entity.update(cx, |panel, cx| {
-                        panel.finish_result_analyze(name, destination, cx)
-                    });
-                },
-                move |cx| {
-                    _ = cancel_entity.update(cx, |panel, cx| {
-                        panel.set_message(None, cx);
-                    });
-                },
-            );
+        let window = self.window;
+        let run_entity = cx.entity();
+        // **不能在这里 update window**：此刻正在 update 本实体，重入同一个更新栈会 panic
+        // （GUI 进程没有控制台，表现就是「点了没反应」）。`cx.defer` 推到本次更新结束后，
+        // 那时已经脱离栈，弹框与错误回写都安全。同款理由见 `view/host/notebook.rs:105`。
+        cx.defer(move |cx| {
+            let entity = run_entity.clone();
+            let cancel_entity = run_entity.clone();
+            let result = window.update(cx, move |_root, window, app| {
+                crate::view::dialogs::open_result_analyze(
+                    window,
+                    app,
+                    facts,
+                    move |name, destination, _window, cx| {
+                        _ = entity.update(cx, |panel, cx| {
+                            panel.finish_result_analyze(name, destination, cx)
+                        });
+                    },
+                    move |cx| {
+                        _ = cancel_entity.update(cx, |panel, cx| {
+                            panel.set_message(None, cx);
+                        });
+                    },
+                );
+            });
+            if let Err(error) = result {
+                _ = run_entity.update(cx, |panel, cx| {
+                    panel.set_message(Some(format!("分析框弹不出：{error}")), cx);
+                });
+            }
         });
-        if let Err(error) = result {
-            self.set_message(Some(format!("分析框弹不出：{error}")), cx);
-        }
     }
 
     /// 把当前结果集的事实（名字 / 行数 / 列数）取出来给对话框；空结果集写消息并返回 `None`
