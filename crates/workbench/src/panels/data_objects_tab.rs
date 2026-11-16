@@ -17,7 +17,9 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelControl};
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
-use gpui_kit::component::empty::{Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle};
+use gpui_kit::component::empty::{
+    Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle,
+};
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::WindowExt as _;
@@ -795,6 +797,17 @@ impl DataObjectsTab {
                             "先连一个数据源，或跑一次查询；能被 DuckDB 加载的文件也可以直接放进来。",
                         )),
                 )
+                // 空态给一条能直接走的路：说了“可以放文件”，就得有个按钮去放
+                .content(EmptyContent::new().child({
+                    let shared = self.shared.clone();
+                    Button::new("data-objects-empty-load")
+                        .label("加载文件到分析")
+                        .on_click(move |_, window, cx| {
+                            crate::components::data_objects_load::open_load_files_dialog(
+                                &shared, window, cx,
+                            );
+                        })
+                }))
             } else {
                 Empty::new().header(
                     EmptyHeader::new()
