@@ -131,6 +131,8 @@ impl ResourcesPanel {
         let instance_button = Button::new("archive-instance")
             .ghost()
             .small()
+            // 和搜索框同高：同一行里 24 与 26 的边框对不齐
+            .h(rems(ui::CONTROL_HEIGHT_SM))
             .label(format!("{} ▾", instance.label()))
             .debug_selector(|| "archive-instance".to_string())
             .dropdown_menu({
@@ -160,6 +162,8 @@ impl ResourcesPanel {
         let filter_button = Button::new("archive-filter")
             .ghost()
             .small()
+            // 和搜索框同高：同一行里 24 与 26 的边框对不齐
+            .h(rems(ui::CONTROL_HEIGHT_SM))
             .label(filter_label)
             .dropdown_menu({
                 let panel = panel.clone();
@@ -213,6 +217,8 @@ impl ResourcesPanel {
         let sort_button = Button::new("archive-sort")
             .ghost()
             .small()
+            // 和搜索框同高：同一行里 24 与 26 的边框对不齐
+            .h(rems(ui::CONTROL_HEIGHT_SM))
             .label(sort_label)
             .dropdown_menu({
                 let panel = panel.clone();
