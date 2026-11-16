@@ -351,6 +351,16 @@ impl DataObjectsTab {
                             )
                             .child(
                                 div()
+                                    .flex_none()
+                                    .rounded_full()
+                                    .px_1()
+                                    .bg(colors.list_hover)
+                                    .text_xs()
+                                    .text_color(colors.muted_foreground)
+                                    .child(object.pill),
+                            )
+                            .child(
+                                div()
                                     .text_xs()
                                     .text_color(colors.muted_foreground)
                                     .child(object.note.clone()),
