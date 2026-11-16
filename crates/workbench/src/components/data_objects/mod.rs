@@ -177,10 +177,35 @@ pub struct Object {
     pub version: Option<u32>,
 }
 
+impl Group {
+    /// 行首图标：**段决定形状**——扫一眼就知道这是源表、分析库表还是临时表，
+    /// 不用去读通道文案（原型 07 的 14px 图标列）
+    pub fn icon(self) -> gpui_kit::assets::IconName {
+        use gpui_kit::assets::IconName;
+        match self {
+            Self::MountedSources => IconName::Database,
+            Self::ProjectLibrary => IconName::Table,
+            Self::GlobalLibrary => IconName::Layers,
+            Self::ExternalFiles => IconName::FileSpreadsheet,
+            Self::TemporaryTables => IconName::Clock,
+        }
+    }
+}
+
 impl Object {
     /// 升序排序键：先分组、再名字（同名按身份兜底，保证稳定）。
     pub fn sort_key(&self) -> (u8, String, String) {
         (self.group.order(), self.name.clone(), self.key.clone())
+    }
+
+    /// 行首图标（失效行改警告形状：不靠删除线也能看出它不能点）
+    pub fn icon(&self) -> gpui_kit::assets::IconName {
+        use gpui_kit::assets::IconName;
+        if self.can_analyze() {
+            self.group.icon()
+        } else {
+            IconName::CircleAlert
+        }
     }
 
     /// 能不能直接「分析」——失效与失败的行不给动作，只给「为什么」。

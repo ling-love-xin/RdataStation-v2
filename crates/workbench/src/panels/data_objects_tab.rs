@@ -19,6 +19,8 @@ use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelControl
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::empty::{Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle};
 use gpui_kit::component::menu::PopupMenu;
+use gpui_kit::component::Icon;
+use gpui_kit::component::Sizable as _;
 use gpui_kit::component::tag::Tag;
 use gpui_kit::*;
 
@@ -351,6 +353,18 @@ impl DataObjectsTab {
                     .when(is_picked, |el| el.child(workbench_shell::tree::active_bar(colors.primary)))
                     // 失效行压暗：仍然看得见，但别让人以为能直接点
                     .opacity(if object.can_analyze() { 1.0 } else { 0.55 })
+                    // 五段图标各不同，靠它扫一眼分形状（原型 07 的图标列）
+                    .child(
+                        div().flex_none().child(
+                            Icon::new(object.icon())
+                                .xsmall()
+                                .text_color(if object.can_analyze() {
+                                    colors.muted_foreground
+                                } else {
+                                    colors.danger
+                                }),
+                        ),
+                    )
                     .child(
                         div()
                             .v_flex()
