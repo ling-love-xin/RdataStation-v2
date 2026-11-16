@@ -65,20 +65,110 @@ impl EditorHostPanel {
     /// 写路径）：建出来就是**登记在案的 `tmp_q_` 表**，受临时表 TTL 与上限管辖。
     /// 链式成立的前提：`tmp_q_` 与洞察取样的 `tmp_i_` 同在进程内存单例，同连接可见。
     pub(crate) fn analyze_result_set(&mut self, cx: &mut Context<Self>) {
-        let Some(port) = self.shared.analyze_result_set_port() else {
+        // 先判「有没有东西可分析」：空结果集不该先弹框再报错
+        let Some(facts) = self.active_result_set_facts("分析", cx) else {
             return;
         };
-        let Some((table, label, rows)) = self.materialize_active_result_set("分析", None, cx) else {
+        let entity = cx.entity();
+        let result = self.window.update(cx, move |_panel, window, app| {
+            let run_entity = entity.clone();
+            let cancel_entity = entity.clone();
+            crate::view::dialogs::open_result_analyze(
+                window,
+                app,
+                facts,
+                move |name, destination, _window, cx| {
+                    _ = run_entity.update(cx, |panel, cx| {
+                        panel.finish_result_analyze(name, destination, cx)
+                    });
+                },
+                move |cx| {
+                    _ = cancel_entity.update(cx, |panel, cx| {
+                        panel.set_message(None, cx);
+                    });
+                },
+            );
+        });
+        if let Err(error) = result {
+            self.set_message(Some(format!("分析框弹不出：{error}")), cx);
+        }
+    }
+
+    /// 把当前结果集的事实（名字 / 行数 / 列数）取出来给对话框；空结果集写消息并返回 `None`
+    fn active_result_set_facts(
+        &mut self,
+        purpose: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<crate::view::dialogs::ResultSetFacts> {
+        let Some(entry) = self
+            .shared
+            .results_active(&self.document)
+            .filter(ResultEntry::has_grid)
+        else {
+            self.set_message(
+                Some(format!("{purpose}：当前没有可{purpose}的结果集")),
+                cx,
+            );
+            return None;
+        };
+        if entry.rows.is_empty() {
+            self.set_message(Some(format!("{purpose}：这份结果集没有行")), cx);
+            return None;
+        }
+        let label = self.result_set_label();
+        let columns = entry.columns.len();
+        Some(crate::view::dialogs::ResultSetFacts {
+            label,
+            rows: entry.rows.len(),
+            columns,
+        })
+    }
+
+    /// 对话框提交：物化 + 按去向分派（临时 = 只入会话；持久 = 交给宿主播进项目库）
+    pub(crate) fn finish_result_analyze(
+        &mut self,
+        name: String,
+        destination: crate::view::dialogs::ResultSetDestination,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::view::dialogs::ResultSetDestination;
+
+        let Some((table, _label, rows)) =
+            self.materialize_active_result_set("分析", Some(&name), cx)
+        else {
             return;
         };
-        self.set_message(
-            Some(format!("已物化结果集为 {table}（{rows} 行），正在打开洞察…")),
-            cx,
-        );
-        port(
-            crate::shared::AnalyzeResultSetRequest { table, label, rows },
-            cx,
-        );
+        match destination {
+            ResultSetDestination::Temporary => {
+                self.set_message(
+                    Some(format!(
+                        "已物化为 {table}（{rows} 行）；在数据对象面板刷新后可见"
+                    )),
+                    cx,
+                );
+            }
+            ResultSetDestination::Persistent => {
+                let Some(port) = self.shared.persist_result_set_port() else {
+                    self.set_message(
+                        Some(format!("已物化为 {table}，但宿主没接落库出口（未打开项目？）")),
+                        cx,
+                    );
+                    return;
+                };
+                self.set_message(
+                    Some(format!("已物化为 {table}（{rows} 行），正在写入项目分析库…")),
+                    cx,
+                );
+                port(
+                    crate::shared::PersistResultSetRequest {
+                        table,
+                        label: name,
+                        rows,
+                    },
+                    cx,
+                );
+            }
+        }
     }
 
     /// 【结果集持久化】把当前结果集落成**项目分析库的正式表**。
