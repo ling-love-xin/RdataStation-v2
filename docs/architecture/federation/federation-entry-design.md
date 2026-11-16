@@ -259,4 +259,8 @@ cargo test -p rds-editor --lib -- --test-threads=1   # 基线 776 passed / 3 fai
 
 14. **「加源」的三条去向，待拍板（2026-11-16）**：picker 侧已通用——`open_source_picker(shared, PickerConfig{title,kinds,confirm_prefix,multi}, ConfirmStrategy, window, cx)`（`crates/workbench/src/components/source_picker/mod.rs:375-386`），`Picked` 七类（外部文件 / 草稿 / 资产 / 全局 / 结果集 / 洞察产物 / 库表），选中项用 `PickerState::picked_all()` 取（`insight_new_dialog.rs:56` 是现成写法）。真正要定的是**加载到哪**：(A) 加载进联邦会话——已落地 `session::add_file_view`（`a5201f8d`），切到联邦后 SQL 里能查该视图；但面板看的是 `GLOBAL_DUCKDB` 与扫盘结果，看不到这条，界面与事实会不一致；(B) 加载进进程单例 `GLOBAL_DUCKDB`——二次分析 / 洞察立刻能用（它们本来就在这个实例里），要给 engine 补一个“在单例上建视图”的入口，面板外部文件段再并入这一行；(C) 物化成临时表 `tmp_q_`——面板「临时表」段自动出现，最一致，代价是整表拷一份。
 
-B 已落地一半（2026-11-16）：engine `duckdb::file_view::load_file_global` 在单例上建 `f_<ascii>` 视图（`c6d3a0ce`），`Shared.loaded_files` 记（视图名, 原路径）并由 `collect` 并入面板「外部文件」段（`Collected.loaded_files`）。**还差 UI 入口**：面板工具栏「加源」按钮 → `source_picker`（`kinds:[External,Scratchpad]`，`multi:true`）→ 逐项 `load_file_global` → `window.close_dialog`。建议 B：视图不拷、与二次分析同一个实例；只有需要稳定快照（源文件会变）时才走 C。
+B 已落地一半（2026-11-16）：engine `duckdb::file_view::load_file_global` 在单例上建 `f_<ascii>` 视图（`c6d3a0ce`），`Shared.loaded_files` 记（视图名, 原路径）并由 `collect` 并入面板「外部文件」段（`Collected.loaded_files`）。**还差 UI 入口**：面板工具栏「加源」按钮 → `source_picker`（`kinds:[External,Scratchpad]`，`multi:true`）→ 逐项 `load_file_global` → `window.close_dialog`。
+
+文件这条已闭环（2026-11-16）：面板工具栏「加源」（`e2f10895`）→ `source_picker` → `load_file_global` → 缓存写回，面板即时多出「已加载」行。
+
+连接这条差最后一段：`FederatedSession::add_source` 已具备（`0c12383a`，会话开着也能追加源、重名先挡、失败留痕），但面板侧要构造 `FederatedSource{conn_id, alias, kind: AccelKind, connection_string, secret}`（`registry.rs:197`）——连接串得从 `DataSourceService` 取回再 `build_connection_url`；且会话 owner 是“文档绑定的连接”、面板是全局单例看不到，只能取 `session::owners()` 里最新那个，并在对话框顶部写明会挂到谁。建议 B：视图不拷、与二次分析同一个实例；只有需要稳定快照（源文件会变）时才走 C。
