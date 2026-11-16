@@ -81,7 +81,7 @@ pub fn open_tag_dialog(
                     .child("还没有任何标签——在下面输入一个名字即可新建"),
             );
         }
-        for (index, option) in options.iter().enumerate() {
+        for option in options.iter() {
             let checked = state.is_selected(&option.id);
             let partial = state.is_partial(&option.id);
             // 行点击与勾选框都走**三态**：部分 → 全有 → 无（多选下布尔翻转会误删，见 `promote_partial`）。
@@ -109,7 +109,6 @@ pub fn open_tag_dialog(
                     window.refresh();
                 }
             };
-            // 行尾的「⋯」：改名 / 删除（v1 缺的两项，入口就在它们的词典里）。
             // 行尾的「⋯」：改名 / 删除（实现见 `menu.rs`）。
             let menu = menu::tag_menu(
                 state.clone(),
@@ -191,7 +190,6 @@ pub fn open_tag_dialog(
                             .dropdown_menu(menu),
                     ),
             );
-            let _ = index;
         }
 
         let mut body = div()
@@ -267,7 +265,12 @@ pub fn open_tag_dialog(
             div()
                 .w_full()
                 .text_xs()
-                .text_color(theme.colors.muted_foreground)
+                // 有未提交的改动就用正文色：这行是“提交前唯一的账”，不该和说明文字一个灰
+                .text_color(if has_changes {
+                    theme.colors.foreground
+                } else {
+                    theme.colors.muted_foreground
+                })
                 .child(if has_changes {
                     format!("本次改动：加 {add_count} 个 · 去 {remove_count} 个")
                 } else {

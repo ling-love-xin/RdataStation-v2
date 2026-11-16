@@ -84,18 +84,13 @@ pub(super) fn tag_menu(
                         }
                     };
                     let mut menu = menu;
-                    if can_edit {
-                        menu = menu.item(
-                            PopupMenuItem::new("重命名…")
-                                .disabled(!can_edit)
-                                .on_click(rename_dispatch),
-                        );
-                        menu = menu.item(
-                            PopupMenuItem::new("删除")
-                                .disabled(!can_edit)
-                                .on_click(delete_dispatch),
-                        );
-                    }
+                    menu = menu.item(
+                        PopupMenuItem::new("重命名…").on_click(rename_dispatch),
+                    );
+                    // 删除是危险项：排在后面，点进去还有一次带危险按钮的确认
+                    menu = menu.item(
+                        PopupMenuItem::new("删除").on_click(delete_dispatch),
+                    );
                     menu
                 }
 }
