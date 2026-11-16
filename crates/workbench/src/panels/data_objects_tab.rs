@@ -17,6 +17,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelControl};
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
+use gpui_kit::component::empty::{Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::*;
 
@@ -400,13 +401,16 @@ impl DataObjectsTab {
         }
 
         if objects.is_empty() {
+            // 空态走标准组件：图标 + 标题 + 说明 + 下一步，不再是一行灰字
             list = list.child(
-                div()
-                    .px_3()
-                    .py_6()
-                    .text_sm()
-                    .text_color(colors.muted_foreground)
-                    .child("还没有可用的数据对象：先连一个数据源，或跑一次查询。"),
+                Empty::new().header(
+                    EmptyHeader::new()
+                        .media(EmptyMedia::new())
+                        .title(EmptyTitle::new().child("还没有可用的数据对象"))
+                        .description(EmptyDescription::new().child(
+                            "先连一个数据源，或跑一次查询；能被 DuckDB 加载的文件也可以直接放进来。",
+                        )),
+                ),
             );
         }
 
