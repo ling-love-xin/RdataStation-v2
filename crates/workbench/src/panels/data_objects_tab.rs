@@ -33,11 +33,34 @@ use crate::view::RightPanel;
 
 use super::Shared;
 
+/// 面板底部那一行提示：成功与失败不能一个颜色，否则失败的话会被当背景读过去
+#[derive(Clone)]
+struct PanelNote {
+    text: String,
+    is_error: bool,
+}
+
+impl PanelNote {
+    fn info(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            is_error: false,
+        }
+    }
+
+    fn error(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            is_error: true,
+        }
+    }
+}
+
 pub struct DataObjectsTab {
     shared: Shared,
     focus_handle: FocusHandle,
-    /// 上一次会话动作的结果（失败原话）；`None` = 没动作过或已恢复
-    note: Option<String>,
+    /// 上一次动作的结果；`None` = 没动作过或已恢复
+    note: Option<PanelNote>,
     /// 哪一行的会话动作条展开着：一屏只开一个，跟原型一致
     expanded_session: Option<String>,
     /// 分组筛选（原型 07 的 6 个 chips）：`None` = 全部
@@ -79,7 +102,7 @@ impl DataObjectsTab {
             .map(|object| object.name.clone())
             .collect();
         if names.is_empty() {
-            self.note = Some("清单里没有临时对象".to_string());
+            self.note = Some(PanelNote::info("清单里没有临时对象"));
             cx.notify();
             return;
         }
@@ -107,9 +130,13 @@ impl DataObjectsTab {
             }
         }
         self.note = Some(if failed.is_empty() {
-            format!("已清理 {dropped} 个临时对象")
+            PanelNote::info(format!("已清理 {dropped} 个临时对象"))
         } else {
-            format!("清理 {dropped} 个，{} 个没清掉：{}", failed.len(), failed.join("；"))
+            PanelNote::error(format!(
+                "清理 {dropped} 个，{} 个没清掉：{}",
+                failed.len(),
+                failed.join("；")
+            ))
         });
         self.refresh(cx);
     }
@@ -146,8 +173,8 @@ impl DataObjectsTab {
             }
         };
         self.note = Some(match outcome {
-            Ok(()) => "已更新会话，清单已刷新".to_string(),
-            Err(reason) => format!("操作失败：{reason}"),
+            Ok(()) => PanelNote::info("已更新会话，清单已刷新"),
+            Err(reason) => PanelNote::error(format!("操作失败：{reason}")),
         });
         // 动作改了会话表清单：重取一次，别让行上的表数停在旧值
         self.refresh(cx);
@@ -425,10 +452,9 @@ impl DataObjectsTab {
                                 // 选的全是转不了的类型：别开一个空洞察面板，
                                 // 但也不能一声不响——点了没反应是最难查的那种
                                 entity_for_tray.update(cx, |tab, cx| {
-                                    tab.note = Some(
-                                        "选中的对象都转不进洞察：只有可分析的库表 / 文件进得去"
-                                            .to_string(),
-                                    );
+                                    tab.note = Some(PanelNote::error(
+                                        "选中的对象都转不进洞察：只有可分析的库表 / 文件进得去",
+                                    ));
                                     cx.notify();
                                 });
                                 return;
@@ -736,6 +762,9 @@ impl DataObjectsTab {
                         div()
                             .text_xs()
                             .flex_none()
+                            // 固定一档最小宽：`→ 联邦` 与 `→ 进程 DuckDB` 差太多，
+                            // 不钉住的话每行的按钮位置都在跳
+                            .min_w_16()
                             .text_color(colors.muted_foreground)
                             .child(format!("→ {}", object.channel.label())),
                     )
@@ -743,6 +772,7 @@ impl DataObjectsTab {
                         div()
                             .text_xs()
                             .flex_none()
+                            .min_w_10()
                             .text_color(state_color)
                             .child(object.state.label()),
                     )
@@ -840,8 +870,12 @@ impl DataObjectsTab {
                         .border_t_1()
                         .border_color(colors.border)
                         .text_xs()
-                        .text_color(colors.muted_foreground)
-                        .child(note),
+                        .text_color(if note.is_error {
+                            colors.danger
+                        } else {
+                            colors.muted_foreground
+                        })
+                        .child(note.text),
                 )
             })
             // 工作集软上限：只提示代价，不拦（拦下来等于替用户决定要不要等）
