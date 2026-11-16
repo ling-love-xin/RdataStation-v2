@@ -145,10 +145,11 @@ pub fn generate_unique_name(source: TempTableSource, description: &str) -> Strin
     format!("{prefix}{desc}_{stamp}_{}", &uniq[..8])
 }
 
-/// 描述里只留字母 / 数字 / 下划线（表名要内联进 SQL，虽有引号也不值得冒险）。
+/// 描述里只留 **ASCII** 字母 / 数字 / 下划线：这是**临时表名**的尺子。
 ///
-/// 跨模块共用：持久表的命名（`promote::persistent_table_name`）也走同一把尺子——
-/// 两处各写一份清洗规则，迟早会出现「临时表能落、持久表落不了」的同名不同判。
+/// 临时表名会以**裸名**内联进 SQL（`SELECT * FROM tmp_q_…` 这类写法在引擎里不止一处），
+/// 所以宁可窄：非 ASCII 一律换成下划线。持久表名不走这把尺子，见
+/// [`sanitize_persistent_description`]。
 pub(crate) fn sanitize_description(description: &str) -> String {
     let cleaned: String = description
         .chars()
@@ -160,6 +161,38 @@ pub(crate) fn sanitize_description(description: &str) -> String {
             }
         })
         .collect();
+    let trimmed = cleaned.trim_matches('_').to_string();
+    if trimmed.is_empty() {
+        "tmp".to_string()
+    } else {
+        trimmed
+    }
+}
+
+/// **持久表名**（`res_<描述>_<时间戳>`）的尺子：保留 Unicode 字母与数字。
+///
+/// 为什么与 [`sanitize_description`] 分开：
+/// - 临时表名要内联进 SQL（裸名），只能留 ASCII；
+/// - 持久表名的读 / 写 / 分发全路径都过 `quote_ident`（双引号包裹），中文合法；
+/// - 而且持久表名是**给人认的**：`persistent_table_label` 按 `res_<描述>_<时间戳>`
+///   反向解析成「订单明细 · 2026-11-15 10:30:00」。描述若被抹成 `tmp`，每张落库的表
+///   都叫 `res_tmp_…`，用户认不出哪张是哪份结果（实现与那份注释的规格不符，2026-11-16 修）。
+///
+/// 规则：字母数字下划线保留，连续的其它字符折叠成一个 `_`，首尾不留 `_`；全空兜底 `tmp`。
+pub(crate) fn sanitize_persistent_description(description: &str) -> String {
+    let mut cleaned = String::with_capacity(description.len());
+    let mut pending_sep = false;
+    for c in description.chars() {
+        if c.is_alphanumeric() || c == '_' {
+            if pending_sep && !cleaned.is_empty() {
+                cleaned.push('_');
+            }
+            pending_sep = false;
+            cleaned.push(c);
+        } else {
+            pending_sep = true;
+        }
+    }
     let trimmed = cleaned.trim_matches('_').to_string();
     if trimmed.is_empty() {
         "tmp".to_string()

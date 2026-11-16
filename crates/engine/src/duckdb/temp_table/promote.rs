@@ -134,7 +134,8 @@ pub const PERSIST_PREFIX: &str = "res_";
 /// - 同一秒建两张同描述的表会撞名：这时的正确行为是**报错让用户改名**（`PromoteMode::Create`），
 ///   而不是悄悄生成第二张长得很像的表。
 pub fn persistent_table_name(description: &str) -> String {
-    let desc = super::temp_table::sanitize_description(description);
+    // 持久表名保留中文（临时表那份 ASCII 尺子在这里不适用，见 `sanitize_persistent_description`）
+    let desc = super::temp_table::sanitize_persistent_description(description);
     let stamp = chrono::Local::now().format("%Y%m%d%H%M%S");
     format!("{PERSIST_PREFIX}{desc}_{stamp}")
 }
@@ -215,10 +216,17 @@ mod tests {
     fn persistent_names_never_look_like_temp_tables() {
         let name = persistent_table_name("结果 2 / 订单明细");
         assert!(name.starts_with("res_"), "{name}");
+        // 中文必须留在名字里：持久表名是给人认的，`persistent_table_label` 靠它反向解析
+        // （抹成 `res_tmp_…` 的话，一屏几十张表全叫同一个名字）
+        assert!(name.contains("订单明细"), "{name}");
+        assert!(name.contains("结果_2"), "空白与标点折叠成下划线：{name}");
         assert!(
-            name.chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_'),
+            name.chars().all(|c| c.is_alphanumeric() || c == '_'),
             "只剩字母数字下划线：{name}"
+        );
+        assert!(
+            !name.contains("  ") && !name.contains("//"),
+            "不得留下原始空白与标点：{name}"
         );
         for temp_prefix in ["tmp_q_", "tmp_i_", "tmp_m_", "tmp_p_"] {
             assert!(
