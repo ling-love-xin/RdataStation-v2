@@ -28,12 +28,17 @@ impl WorkbenchView {
                         };
                         use crate::services::persist_jobs::PersistOutcome;
                         match outcome {
-                            PersistOutcome::Done { table, rows, label } => this.shared.say(
-                                format!(
-                                    "已把「{label}」（{rows} 行）持久化为项目表 {table}"
-                                ),
-                                cx,
-                            ),
+                            PersistOutcome::Done { table, rows, label } => {
+                                this.shared.say(
+                                    format!("已把「{label}」（{rows} 行）持久化为项目表 {table}"),
+                                    cx,
+                                );
+                                // 落库改了项目分析库的表清单：数据对象面板的那份缓存不会自己变，
+                                // 不重取的话「存为表」之后清单里看不见新表。
+                                if let Some(tab) = this.right_data_objects_tab.clone() {
+                                    tab.update(cx, |tab, cx| tab.refresh(cx));
+                                }
+                            }
                             PersistOutcome::Failed { label, reason } => this
                                 .shared
                                 .say_error(format!("「{label}」持久化失败：{reason}"), cx),

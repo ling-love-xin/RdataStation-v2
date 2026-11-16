@@ -3,8 +3,9 @@
 //! 取数在**事件路径**（构造 / 刷新）跑一次并写进 `Shared::data_objects`，渲染只读缓存——
 //! `collect` 内含读盘与查库，放进 render 就是每帧 I/O（gpui-kit-dev 禁止）。
 //!
-//! 本轮只做「看得见 + 分组 + 通道 / 状态」（原型 07 的骨架），行内「分析」与工作集
-//! 留到下一步；先把清单与分组口径钉住，避免一次改太多分不清是哪层出的问题。
+//! 行上三类动作各管一段：勾选进工作集（`toggle_picked`）、会话行菜单（重挂 / 设主源 /
+//! 关会话）、结果集与洞察产物的「存为表」（进项目分析库的持久表，写库在 worker 线程）。
+//! 落库那条是「临时结果集 → 持久表」的唯一入口：面板里只有这两组是已经存在的表。
 
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -286,6 +287,30 @@ impl DataObjectsTab {
             } else {
                 None
             };
+            // 结果集 / 洞察产物已经在进程单例里：落库就是整表搬一份。
+            // 写库走 worker 线程（`services::persist_jobs`），这里只入队，回执由工作台泵到状态栏。
+            let persist_button = if data_objects::can_persist(object) {
+                let shared = self.shared.clone();
+                let entity = entity.clone();
+                let table = object.name.clone();
+                let label = data_objects::persist_label(&table);
+                Some(
+                    Button::new(SharedString::from(format!(
+                        "data-object-persist-{}",
+                        object.key
+                    )))
+                    .ghost()
+                    .label("存为表")
+                    .on_click(move |_, _, cx| {
+                        crate::components::result_set_actions::persist_to_project(
+                            &shared, &table, &label, cx,
+                        );
+                        entity.update(cx, |_, cx| cx.notify());
+                    }),
+                )
+            } else {
+                None
+            };
             list = list.child(
                 div()
                     .h_flex()
@@ -334,6 +359,7 @@ impl DataObjectsTab {
                             .child(object.state.label()),
                     )
                     .children(pick_button)
+                    .children(persist_button)
                     .children(session_button),
             );
         }

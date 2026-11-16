@@ -505,6 +505,25 @@ pub fn analysis_sources(
     (sources, skipped)
 }
 
+/// 这一行能不能「存到项目分析库」。
+///
+/// 只有**进程单例里已经是表**的两组可以：结果集（`tmp_q_`）与洞察产物（`tmp_i_`）。
+/// 落库就是整表搬一份，不需要重建；源库表 / 文件 / 资产各有各的路（连接下推 / reader
+/// 函数 / 只读受管），别把它们塞进这条通道——那会给「只读资产」写出一份副本，
+/// 用户再也分不清哪份是本体。
+pub fn can_persist(object: &Object) -> bool {
+    matches!(object.group, Group::ResultSets | Group::InsightProducts) && object.can_analyze()
+}
+
+/// 落库时给人看的名字：去掉临时前缀（`tmp_q_` / `tmp_i_`），别让表名里再出现一层 `tmp_`。
+pub fn persist_label(table: &str) -> String {
+    table
+        .strip_prefix("tmp_q_")
+        .or_else(|| table.strip_prefix("tmp_i_"))
+        .unwrap_or(table)
+        .to_string()
+}
+
 /// 现取一次（面板打开 / 刷新时调）。
 ///
 /// 资产清单暂由调用方填：它要过资产模块的登记层（本项目 `analytics_resources`），
@@ -764,6 +783,24 @@ mod tests {
             None,
         );
         assert_eq!(dup.0.len(), 1, "{:?}", dup.0);
+    }
+
+    /// 只有「进程单例里已经是表」的两组能走落库通道；给人看的名字要去掉临时前缀。
+    #[test]
+    fn only_session_tables_can_be_persisted_and_labels_drop_the_temp_prefix() {
+        let rows = objects(&sample());
+        for object in &rows {
+            let expected = matches!(object.group, Group::ResultSets | Group::InsightProducts);
+            assert_eq!(
+                super::can_persist(object),
+                expected,
+                "{} 该不该能落库判错了",
+                object.key
+            );
+        }
+        assert_eq!(super::persist_label("tmp_q_结果_3"), "结果_3");
+        assert_eq!(super::persist_label("tmp_i_orders_sample"), "orders_sample");
+        assert_eq!(super::persist_label("orders"), "orders");
     }
 
     /// 软上限：8 个不提示，第 9 个才提示；提示里不出现「不能」。
