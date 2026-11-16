@@ -43,6 +43,8 @@ pub struct DataObjectsTab {
     memory: Option<(u64, usize)>,
     /// 上次刷新时的会话挂载统计（已挂, 总数）；总数 0 = 这个文档没开会话
     session: Option<(usize, usize)>,
+    /// 收起的段：段头照画（带计数），行不画——空段也得让人知道它空着
+    collapsed: Vec<Group>,
 }
 
 impl DataObjectsTab {
@@ -55,9 +57,20 @@ impl DataObjectsTab {
             filter: None,
             memory: None,
             session: None,
+            collapsed: Vec::new(),
         };
         tab.refresh(cx);
         tab
+    }
+
+    /// 收起 / 展开一段（段头 caret 回调）
+    fn toggle_group(&mut self, group: Group, cx: &mut Context<Self>) {
+        if let Some(index) = self.collapsed.iter().position(|item| item == &group) {
+            self.collapsed.remove(index);
+        } else {
+            self.collapsed.push(group);
+        }
+        cx.notify();
     }
 
     /// 执行一个会话动作（重挂 / 设主源 / 关闭会话），结果写进面板底部一行。
@@ -414,6 +427,9 @@ impl DataObjectsTab {
                 last_group = Some(object.group);
                 // 段头带计数：这一段里几行，扫一眼就知道要不要往下翻
                 let group_count = objects.iter().filter(|o| o.group == object.group).count();
+                let group = object.group.clone();
+                let expanded = !self.collapsed.contains(&group);
+                let entity_for_group = entity.clone();
                 list = list.child(
                     div()
                         .h_flex()
@@ -424,10 +440,32 @@ impl DataObjectsTab {
                         .pb_1()
                         .text_xs()
                         .text_color(colors.muted_foreground)
+                        .child(
+                            Button::new(SharedString::from(format!(
+                                "data-objects-group-{}",
+                                group.title()
+                            )))
+                            .ghost()
+                            .icon(if expanded {
+                                gpui_kit::assets::IconName::ChevronDown
+                            } else {
+                                gpui_kit::assets::IconName::ChevronRight
+                            })
+                            .on_click(move |_, _, cx| {
+                                let group = group.clone();
+                                entity_for_group.update(cx, |tab, cx| {
+                                    tab.toggle_group(group, cx);
+                                });
+                            }),
+                        )
                         .child(object.group.title())
                         .child(div().flex_1())
                         .child(div().text_xs().child(group_count.to_string())),
                 );
+            }
+            // 收起只是不画行：段头和计数留着，折叠起来也知道里面有几行
+            if self.collapsed.contains(&object.group) {
+                continue;
             }
             // 不能分析的行还是得被看见（常常只是缺扩展），给个 warn 标而不是直接藏起来
             let pill = if object.can_analyze() {
