@@ -692,6 +692,7 @@ impl DataObjectsTab {
                 None
             } else {
                 let shared = self.shared.clone();
+                let entity = entity.clone();
                 Some(
                     Button::new(SharedString::from(format!(
                         "data-object-install-{}",
@@ -700,7 +701,13 @@ impl DataObjectsTab {
                     .ghost()
                     .label("装扩展")
                     .on_click(move |_, window, cx| {
-                        shared.show_plugin_manager(window, cx);
+                        if !shared.show_plugin_manager(window, cx) {
+                            entity.update(cx, |tab, cx| {
+                                tab.note =
+                                    Some(PanelNote::error("插件管理面板没挂上，这里装不了扩展"));
+                                cx.notify();
+                            });
+                        }
                     }),
                 )
             };

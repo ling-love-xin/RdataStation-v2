@@ -700,10 +700,14 @@ impl Shared {
     ///
     /// 与 `show_properties` 同口径：面板实体由宿主持有，面板被 tab ✕ 关闭后
     /// 仍可经同一回调重新挂回中央 Dock。
-    pub fn show_plugin_manager(&self, window: &mut Window, cx: &mut App) {
-        if let Some(open) = self.open_plugin_manager.borrow().clone() {
-            open(window, cx);
-        }
+    pub fn show_plugin_manager(&self, window: &mut Window, cx: &mut App) -> bool {
+        // 没有回调时返回 false：调用方得知道“这一下其实什么也没发生”，
+        // 点了没反应是最难查的那种问题
+        let Some(open) = self.open_plugin_manager.borrow().clone() else {
+            return false;
+        };
+        open(window, cx);
+        true
     }
 
     /// 当前选中连接（克隆，避免长时间持有 RefCell 借用）。
