@@ -7,7 +7,7 @@ impl GlobalInstanceStore {
     ///
     /// 语义（§13.6）：跨项目唯一法定路径 = 项目 → 全局 → 项目，项目 ↔ 项目禁止直传。
     /// 形态判定：全局行 `file_rel_path` 非空 → 脚本内容表，分发**重建为文件**
-    /// （`resources/<rel_path>`，File 档）；否则 → 建项目分析表（Analysis 档）。
+    /// （`resources/<rel_path>`，File 档）；否则 → 建项目表（`AnalyticsTable` 档）。
     ///
     /// 连接纪律：项目 DuckDB 是单写者，本方法在调用方（后台 job 工作线程）已打开
     /// 项目写连接的前提下执行——打开动作由调用方负责（`ProjectDatabaseManager::open`），
@@ -108,7 +108,7 @@ impl GlobalInstanceStore {
                 .map_err(InstanceOpError::Core)?;
             outcome
         } else {
-            // 分析表 / 数据文件映射表 → 建项目表（Analysis 档）。
+            // 分析表 / 数据文件映射表 → 建项目表（`AnalyticsTable` 档）。
             // 数据搬运路径：全局连接 `COPY ... TO parquet` → 项目连接
             // `CREATE TABLE AS SELECT read_parquet(...)`。
             // 为什么不用 ATTACH：Windows 单句柄限制下，项目连接 ATTACH 全局 DuckDB

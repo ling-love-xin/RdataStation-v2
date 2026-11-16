@@ -71,12 +71,13 @@ impl GlobalInstanceStore {
                 created_at, updated_at, created_by, deleted_at,
                 kind, content_hash, file_rel_path, readonly, promoted_from,
                 source_connection_id, source_table, definition_sql, archived_at,
-                payload_mode, source_path, origin_kind, origin_ref
+                payload_mode, source_path, origin_kind, origin_ref, analytics_table,
+                structured
             ) VALUES (
                 ?1, 'analysis', ?2, NULL, 'null', 'project', ?3, ?4, NULL,
                 ?5, NULL, NULL, NULL, ?6, ?6, NULL, NULL,
                 'analysis', ?7, NULL, 1, ?8, NULL, ?2, ?9, ?6,
-                'copy', NULL, 'global', ?10
+                'copy', NULL, 'global', ?10, ?2, 1
             )
             "#,
             rusqlite::params![
@@ -94,9 +95,15 @@ impl GlobalInstanceStore {
         )
         .map_err(sqlite_err("insert_project_table"))?;
 
+        // 本体表名跟着登记行一起写（`analytics_table = ?2`）：不写的话这一行会被
+        // `ArchiveKind::resolve` 读成「归档文件」，B 端双击打不开、查看统计也没入口——
+        // 而本体明明就在项目分析库里。`?2` 就是刚建出来的那张表（改名分发时是避让后的名字）。
+        //
         // 项目版本快照（版本 = 接续项目内同名链；快照记全局来源，回推"这次分发的是哪一版全局"）。
         let snapshot = serde_json::json!({
             "kind": "analysis",
+            "analytics_table": name,
+            "structured": 1,
             "distributed_from": format!("{GLOBAL_PREFIX}{global_id}"),
             "global_version": global_version,
             "content_hash": content_hash,

@@ -259,18 +259,28 @@ async fn g004_distribute_table_to_project() {
     let pool = &env.project_pool;
     let conn = pool.acquire().await.expect("acquire");
     let conn = conn.inner().expect("inner");
-    let (scope, promoted_from): (String, String) = conn
-            .query_row(
-                "SELECT scope, promoted_from FROM analytics_resources WHERE name = 'shared_orders' AND deleted_at IS NULL",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .expect("query project row");
+    let (scope, promoted_from, analytics_table, structured): (
+        String,
+        String,
+        Option<String>,
+        Option<i32>,
+    ) = conn
+        .query_row(
+            "SELECT scope, promoted_from, analytics_table, structured FROM analytics_resources \
+             WHERE name = 'shared_orders' AND deleted_at IS NULL",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("query project row");
     assert_eq!(scope, "project");
     assert!(
         promoted_from.starts_with(crate::model::GLOBAL_PREFIX),
         "项目行记全局来源"
     );
+    // B 端的本体是项目分析库里的那张表，表名必须登记：
+    // 否则这一行会被读成「归档文件」，双击与查看统计都找不到本体。
+    assert_eq!(analytics_table.as_deref(), Some("shared_orders"));
+    assert_eq!(structured, Some(1), "分发出来的表能参与分析");
 
     let _ = fs::remove_dir_all(&env.dir);
 }
