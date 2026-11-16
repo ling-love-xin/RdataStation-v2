@@ -213,7 +213,7 @@
   </div>
   <div class="pg" style="border-color:#4A2F28;background:#201A18">
     <div class="pt"><span class="no">08</span><b>结果集分析对话框</b><span class="sp"></span><span class="tag coral">新增</span></div>
-    <p>先命名、再选「临时 / 留在分析库」；升级为资产是之后在 07 行上做的另一个动作。</p>
+    <p>先命名、再选「临时 / 留在分析库」；<b>升级为资产不在这里</b>——只有临时表与临时结果集能升级，入口在数据导航栏 / 草稿箱。</p>
     <a class="lnk" href="./08-result-analyze-dialog.html">打开 08</a>
   </div>
   <div class="pg" style="border-color:#4A2F28;background:#201A18">
@@ -237,8 +237,8 @@
   </div></div>
   <div class="ask"><span class="no">C</span><div>
     <b>工作集有没有上限？</b>
-    <p>多源洞察一次挂 N 个源，N 越大首次取样越慢（是一次全取）。原型没设上限。</p>
-    <div class="rec">我的建议：软上限 8，超过时在「分析已选」旁提示代价，不硬拦。</div>
+    <p>多源洞察一次挂 N 个源，N 越大首次取样越慢（是一次全取）。</p>
+    <div class="rec">已定（2026-11-16）：<b>软上限 8</b>。超过只在面板底部提示代价，<b>不硬拦</b>——代码与外框一致。</div>
   </div></div>
   <div class="ask"><span class="no">D</span><div>
     <b>哪些对象允许「清理」？</b>
@@ -246,9 +246,9 @@
     <div class="rec">我的建议：保持这条边界，别在分析侧给资产删除入口。</div>
   </div></div>
   <div class="ask"><span class="no">E</span><div>
-    <b>「升级为资产」放在哪？</b>
-    <p>候选：① 07 行内动作；② 资产管理面板的新建入口；③ 两处都有，行内是快捷方式。</p>
-    <div class="rec">我的建议：两处都有，但只保留一份实现（行内只是带着对象跳过去）。</div>
+    <b>「升级为资产」放在哪、谁能升级？</b>
+    <p>已定（2026-11-16）：<b>只有临时表与临时结果集可以升级成资产</b>；入口不在数据对象面板，而在<b>数据导航栏 / 草稿箱</b>等原有入口。<b>资产对象只能是数据对象</b>——连接、账号这类信息不能成为资产。</p>
+    <div class="rec">所以 07 面板的职责只是「把资产列出来、只读引用」，不给升级按钮；08 对话框也不承担升级（它是「命名 + 临时 / 留分析库」）。</div>
   </div></div>
 </div>
 
