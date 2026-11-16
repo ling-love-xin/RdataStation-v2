@@ -10,7 +10,7 @@ use super::*;
 
 use super::primitives::scratchpad_absolute_time;
 use content_search::view::{SearchHit, SearchView};
-use gpui_kit::component::description_list::DescriptionList;
+use gpui_kit::component::description_list::{DescriptionList, DescriptionText};
 use gpui_kit::component::Size;
 
 /// 冲突 Diff 面板的载荷（草稿箱经宿主端口投给中央编辑区）。
@@ -216,6 +216,21 @@ pub fn render_scratchpad_file_info_pane(view: &ScratchpadFileInfoView) -> Div {
         .with_size(Size::Small)
         .label_width(rems(4.5));
     for (label, value) in rows {
+        // 路径是这里最长的值，`DescriptionList` 的值区只 `overflow_hidden`（没有省略号），
+        // 直接塞会被硬裁成一句看不到结尾的路径；包一层给省略号，至少看得出“还有”。
+        if label == "路径" {
+            list = list.item(
+                label,
+                DescriptionText::AnyElement(
+                    div()
+                        .text_ellipsis()
+                        .child(value.clone())
+                        .into_any_element(),
+                ),
+                1,
+            );
+            continue;
+        }
         list = list.item(label, value, 1);
     }
     div().v_flex().w_full().child(list)
