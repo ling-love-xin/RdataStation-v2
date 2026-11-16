@@ -228,6 +228,14 @@ impl DataObjectsTab {
 
         let search_row = div().px_3().pb_2().child(Input::new(&search).small());
 
+        // 两条口径先写清楚：省得每行都要解释“为什么只有一版”“洞察产物在哪”
+        let hint = div()
+            .text_xs()
+            .text_color(colors.muted_foreground)
+            .px_3()
+            .pb_2()
+            .child("每组只显示最新版本；洞察产物 tmp_i_ 不进本清单");
+
         // 分组 chips：五段全展开太长，先收窄到一段再看（原型 07 的 6 个 chip）
         let mut chips = div()
             .h_flex()
@@ -421,6 +429,13 @@ impl DataObjectsTab {
                         .child(div().text_xs().child(group_count.to_string())),
                 );
             }
+            // 不能分析的行还是得被看见（常常只是缺扩展），给个 warn 标而不是直接藏起来
+            let pill = if object.can_analyze() {
+                Tag::secondary().rounded_full().flex_none()
+            } else {
+                Tag::warning().rounded_full().flex_none()
+            };
+
             // 「怎么读」「还在不在」是选源时仅有的两个判断依据，放同一行右侧
             let state_color = if object.can_analyze() {
                 colors.muted_foreground
@@ -549,10 +564,7 @@ impl DataObjectsTab {
                             )
                             // 业务身份走标准 Tag：手写胶囊的圆角、内距、字号各写一遍就会漂
                             .child(
-                                Tag::secondary()
-                                    .rounded_full()
-                                    .flex_none()
-                                    .child(object.pill),
+                                pill.child(object.pill.clone()),
                             )
                             .child(
                                 div()
@@ -635,6 +647,7 @@ impl DataObjectsTab {
             .child(header)
             .child(search_row)
             .child(chips)
+            .child(hint)
             .child(list)
             .when(!picked.is_empty(), |el| el.child(tray))
             .when_some(sess_row, |el, row| el.child(row))
