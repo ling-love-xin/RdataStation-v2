@@ -420,7 +420,15 @@ impl DataObjectsTab {
                                 resources_dir.as_deref(),
                             );
                             if sources.is_empty() {
-                                // 选的全是转不了的类型：别开一个空洞察面板
+                                // 选的全是转不了的类型：别开一个空洞察面板，
+                                // 但也不能一声不响——点了没反应是最难查的那种
+                                entity_for_tray.update(cx, |tab, cx| {
+                                    tab.note = Some(
+                                        "选中的对象都转不进洞察：只有可分析的库表 / 文件进得去"
+                                            .to_string(),
+                                    );
+                                    cx.notify();
+                                });
                                 return;
                             }
                             let label = match skipped.is_empty() {
@@ -581,6 +589,7 @@ impl DataObjectsTab {
                         object.key
                     )))
                     .ghost()
+                    .toggled(is_picked)
                     .label(if is_picked { "已选" } else { "选用" })
                     .on_click(move |_, _, cx| {
                         let key = key.clone();
