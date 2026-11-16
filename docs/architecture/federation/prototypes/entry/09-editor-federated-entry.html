@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>编辑器联邦档 · 选中即展开数据对象并可加源</title>
+<title>编辑器联邦档 · 选中即展开数据对象</title>
 <style>
   :root{
     --bg:#141414;--chrome:#181818;--panel:#1E1E1E;--popover:#202020;
@@ -98,10 +98,12 @@
 <div class="head">
   <div class="mark"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><path d="M4 6h16M4 12h10M4 18h6"/><circle cx="18" cy="16" r="3"/></svg></div>
   <div><h1>编辑器 · 联邦档与数据对象联动</h1></div>
-  <span class="tagline">选中「联邦」→ 右侧数据对象自动展开，可直接加源</span>
+  <span class="tagline">选中「联邦」→ 右侧数据对象自动展开；源自动全量，可重挂、可设主源</span>
 </div>
 <div class="lead">
-  通道切换本身就是「我要用哪些源来算」的声明。所以选到<b>联邦</b>时右侧自动展开数据对象（不是弹窗），工具栏多出<b>加源</b>，加源复用 01 的连接树与多选。反过来，切回「源库 / 本地加速」时面板<b>不收起</b>——用户可能还想拿它选分析对象，只是面板顶部会说明「当前通道只用一个源」。
+  选到<b>联邦</b>时右侧自动展开数据对象（不是弹窗），工具栏给出「N 源 · M 未挂载」，浮层里是重挂与设主源。
+    注意<b>源不是在这里逐个挑的</b>：联邦会话把「所有连接记录」加「开着 <code>use_duckdb_fed</code> 的运行态连接」一起挂进来（全量自动）。
+    反过来，切回「源库 / 本地加速」时面板<b>不收起</b>——用户可能还想拿它选分析对象，只是面板顶部会说明「当前通道只用一个源」。
 </div>
 
 <div class="lead" style="border-left:3px solid #7A9A6B">
@@ -110,10 +112,10 @@
   首次切到联邦时右侧<b>共用那份数据对象面板</b>自动展开一次（之后归用户开合，不再抢屏）；
   面板的源就落在「已挂载的源」段；结果集右键「分析这份结果集…」→ 08 命名与去向对话框。
   源清单按钮上现在直接写「N 源 · M 未挂载」，浮层里有「重新挂载全部源」「设为主源」「重新挂载某个源」。
-  <b>未实现</b>：只有「加源」——往会话里<b>新增</b>一个源。engine 侧没有“新增源”的 API，会话是按源指纹
-  建的（`ensure_session` 指纹一变就整会话重建，会话内临时表随之失效），所以加源不是加一行，是重建会话：
-  要新开一条宿主端口（编辑器请求 → 宿主把 01 的 source_picker 调起来多选 → 回传源清单 → 编辑器重建）。
-  这条端口不该塞进 `SourcesPort`（它是纯内存读），要照 `editor_insight` 那套新挂一个 attach。
+  <b>没有「加源」这一项</b>（2026-11-16 修正）：联邦的源是<b>自动全量</b>的——`federated_plan` 把所有连接记录
+  与开着 <code>use_duckdb_fed</code> 的运行态连接一起挂进会话，用户并没有“挑哪几个源”这一步。所以本页这个
+  <b>加源按钮/弹层是设计提案</b>，现口径下既没有对等实现、也不需要（若将来要“只让部分源参与”，engine 的
+  `ensure_session` 得改成按传入清单建会话，界面还要二次确认“会话内临时表失效”）。真正有的动作是重挂与设主源。
 </div>
 
 <div class="stage">
@@ -123,8 +125,8 @@
       <div class="seg"><span>源库</span><span>本地加速</span><span class="on">联邦</span></div>
       <span class="badge">1 个源未挂载</span>
       <span class="sp"></span>
-      <button class="tbtn hi">加源</button>
-      <button class="tbtn">重挂</button>
+      <button class="tbtn hi">重新挂载全部源</button>
+      <button class="tbtn">设为主源 ▾</button>
     </div>
 
     <div class="body">
@@ -179,7 +181,7 @@
             <div class="tail"><span class="pill">临时结果集</span><button class="go">加入</button></div>
           </div>
 
-          <!-- 加源弹层：复用 01 -->
+          <!-- 设计提案（未实现）：现口径下联邦源自动全量，没有「加源」；留这张图只为说明“若要按需选源”该长什么样 -->
           <div class="popover">
             <div class="pop-h">加源 <code>复用 01 连接树 · 多选</code></div>
             <div class="pop-b">
@@ -204,7 +206,7 @@
       <div style="background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:9px 10px;font-size:11px;line-height:1.7">
         将跨 <b>2 个源</b>全部扫描：库方预估约 <b>120,000</b> 行（估算，实际可能更多）。<br>
         全量参与，<b>不截断、不采样</b>——慢就慢在等待上，别错在结果上。<br>
-        想更快：在 SQL 里加过滤或收窄源清单。
+        想更快：在 SQL 里加过滤，或给表名加库前缀限定到某一个源。
         <div style="display:flex;gap:8px;margin-top:9px">
           <span style="padding:3px 10px;border-radius:5px;background:var(--coral);color:#1b1210;font-weight:600">执行</span>
           <span style="padding:3px 10px;border-radius:5px;border:1px solid var(--border);color:var(--dim)">回编辑器改 SQL</span>
@@ -233,8 +235,8 @@
       </ul>
     </div>
     <div class="card">
-      <h3>加源为什么复用 01</h3>
-      <p>「有哪些连接、哪些表能挂」这件事只有一个出处（<code>source_picker</code> 的取数）。工具栏的「加源」只是把同一个树以弹层形式调起来，不另写一份清单。</p>
+      <h3>源清单从哪来</h3>
+      <p>两处来源合起来就是全部候选：连接记录（宿主解密口令后给连接串）＋ 已建立且开着 <code>use_duckdb_fed</code> 的运行态连接。哪条挂不上（驱动不支持、扩展缺失）会如实记一句，不静默丢源。</p>
     </div>
     <div class="card">
       <h3>失败原因与动作</h3>
