@@ -212,7 +212,7 @@ fn append_kids(id: &NodeId, cache: &DbCache, out: &mut Vec<Row>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::source_picker::MAX_DEPTH;
+    use crate::components::source_picker::PICKER_MAX_DEPTH;
 
     fn brief<'a>(id: &'a str, name: &'a str) -> ConnBrief<'a> {
         ConnBrief {
@@ -335,7 +335,7 @@ mod tests {
         let rows = db_rows(&[brief("c1", "本地 PG")], &cache);
         let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
         assert_eq!(labels, vec!["本地 PG", "sales", "sales · orders"]);
-        assert!(rows.iter().all(|r| r.depth <= MAX_DEPTH));
+        assert!(rows.iter().all(|r| r.depth <= PICKER_MAX_DEPTH));
     }
 
     #[test]

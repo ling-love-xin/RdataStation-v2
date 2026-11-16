@@ -58,7 +58,7 @@ mod state;
 pub use db::{catalog_level, db_rows, schema_rows, table_rows, CatalogLevel, ConnBrief, DbCache};
 pub use dialog::open_source_picker;
 pub use group::{group_of, grouped, SourceGroup};
-pub use node::{ArchiveScope, NodeId, NodeKind, Row, TempScope, MAX_DEPTH};
+pub use node::{ArchiveScope, NodeId, NodeKind, Row, TempScope, PICKER_MAX_DEPTH};
 pub use render::{render_rows, RowAction};
 pub use rows::{
     analysis_table_rows, draft_rows, external_row, insight_sample_rows, is_persistent_table,

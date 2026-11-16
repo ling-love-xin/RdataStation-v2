@@ -17,7 +17,7 @@
 use std::path::{Path, PathBuf};
 
 use super::group::{grouped, SourceGroup};
-use super::node::{ArchiveScope, NodeId, NodeKind, Row, TempScope, MAX_DEPTH};
+use super::node::{ArchiveScope, NodeId, NodeKind, Row, TempScope, PICKER_MAX_DEPTH};
 use super::SourceKind;
 
 /// 三个根的组行（depth 0）。顺序与 `grouped` 一致，空组不出现。
@@ -53,7 +53,7 @@ fn group_id(group: SourceGroup) -> NodeId {
 ///
 /// 入参就是 `collect_drafts()` 的产物（相对路径 → 绝对路径，已按格式过滤并递归拍平）。
 pub fn draft_rows(file_depth: u8, drafts: &[(String, PathBuf)]) -> Vec<Row> {
-    debug_assert!(file_depth <= MAX_DEPTH, "文件层已在深度上限之上");
+    debug_assert!(file_depth <= PICKER_MAX_DEPTH, "文件层已在深度上限之上");
     let mut tree: Vec<BuildNode> = Vec::new();
     for (rel, _abs) in drafts {
         let segs = normalize_segments(rel);
@@ -70,7 +70,7 @@ pub fn draft_rows(file_depth: u8, drafts: &[(String, PathBuf)]) -> Vec<Row> {
 ///
 /// `depth` 由调用方给：本项目段与全局段并列，深度相同、`scope` 不同。
 pub fn analysis_table_rows(depth: u8, tables: &[String], scope: ArchiveScope) -> Vec<Row> {
-    debug_assert!(depth <= MAX_DEPTH);
+    debug_assert!(depth <= PICKER_MAX_DEPTH);
     let mut rows: Vec<Row> = tables
         .iter()
         .map(|t| {
@@ -118,7 +118,7 @@ pub fn persistent_table_label(name: &str) -> String {
 
 /// 持久表行：身份是库里的原名，显示名走 [`persistent_table_label`]。
 pub fn persistent_table_rows(depth: u8, tables: &[String], scope: ArchiveScope) -> Vec<Row> {
-    debug_assert!(depth <= MAX_DEPTH);
+    debug_assert!(depth <= PICKER_MAX_DEPTH);
     let mut rows: Vec<Row> = tables
         .iter()
         .map(|t| {
@@ -167,7 +167,7 @@ pub fn split_persistent_tables(tables: &[String]) -> (Vec<String>, Vec<String>) 
 /// 身份用 `NodeId::Temp { scope: Local }`：结果集建在本地单例，本机任何入口都能引用；
 /// 用 `Path` 会与草稿相对路径撞身份（同名时选中态串行）。
 pub fn result_set_rows(depth: u8, tables: &[String]) -> Vec<Row> {
-    debug_assert!(depth <= MAX_DEPTH);
+    debug_assert!(depth <= PICKER_MAX_DEPTH);
     let mut rows: Vec<Row> = tables
         .iter()
         .map(|t| {
@@ -197,7 +197,7 @@ pub fn result_set_rows(depth: u8, tables: &[String]) -> Vec<Row> {
 /// 与结果集分两段而不是混排：`tmp_q_` 是「查询跑出来的」，`tmp_i_` 是「洞察取出来的」，
 /// 用户在树里选的语义不同（前者二次分析自己的结果、后者复查/深挖已有样本）。
 pub fn insight_sample_rows(depth: u8, tables: &[String]) -> Vec<Row> {
-    debug_assert!(depth <= MAX_DEPTH);
+    debug_assert!(depth <= PICKER_MAX_DEPTH);
     let mut rows: Vec<Row> = tables
         .iter()
         .map(|t| {
@@ -221,7 +221,7 @@ pub fn insight_sample_rows(depth: u8, tables: &[String]) -> Vec<Row> {
 
 /// 「外部文件 · 已引用」的单行（一次性引用，文件可能已被移走）。
 pub fn external_row(depth: u8, path: &Path) -> Row {
-    debug_assert!(depth <= MAX_DEPTH);
+    debug_assert!(depth <= PICKER_MAX_DEPTH);
     let label = path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -309,7 +309,7 @@ fn emit(list: &[BuildNode], depth: u8, rel_prefix: &str, rows: &mut Vec<Row>) {
                 // 叶子：走原始相对路径作为身份
                 rows.push(file_row(original.clone(), &node.name, depth, rel_prefix));
             }
-            None if depth >= MAX_DEPTH => {
+            None if depth >= PICKER_MAX_DEPTH => {
                 // 已到深度上限：这一层目录不再成行，其下文件压成一行
                 for (original, label) in folded_files(node, &rel) {
                     rows.push(file_row(original, &label, depth, &rel));
@@ -334,7 +334,7 @@ fn emit(list: &[BuildNode], depth: u8, rel_prefix: &str, rows: &mut Vec<Row>) {
 }
 
 fn file_row(original: String, label: &str, depth: u8, breadcrumb_from: &str) -> Row {
-    debug_assert!(depth <= MAX_DEPTH);
+    debug_assert!(depth <= PICKER_MAX_DEPTH);
     let mut row = Row::new(NodeId::Path(original), depth, NodeKind::File, label.to_string());
     let crumb = breadcrumb(breadcrumb_from);
     if !crumb.is_empty() {
@@ -478,13 +478,13 @@ mod tests {
         let rows = draft_rows(2, &[draft("数据\\sub\\a.parquet")]);
         let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
         assert_eq!(labels, vec!["数据", "a.parquet"]);
-        assert_eq!(rows[1].depth, MAX_DEPTH, "文件压在深度上限那一层");
+        assert_eq!(rows[1].depth, PICKER_MAX_DEPTH, "文件压在深度上限那一层");
         assert_eq!(
             rows[1].breadcrumb.as_deref(),
             Some("数据 / sub"),
             "被折叠的层要在面包屑里交代清楚"
         );
-        assert!(rows.iter().all(|r| r.depth <= MAX_DEPTH), "不得突破深度上限");
+        assert!(rows.iter().all(|r| r.depth <= PICKER_MAX_DEPTH), "不得突破深度上限");
     }
 
     #[test]

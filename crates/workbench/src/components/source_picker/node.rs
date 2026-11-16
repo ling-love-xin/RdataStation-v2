@@ -10,7 +10,7 @@
 //! 比 §07 那五个字段多出的两项（`id`、`breadcrumb`）就是上面两条规范的要求，不是自由发挥。
 
 /// 树的深度上限：3（§01）。列不做节点（否则到 5 层，弹层宽度不够）。
-pub const MAX_DEPTH: u8 = 3;
+pub const PICKER_MAX_DEPTH: u8 = 3;
 
 /// 节点身份：业务键，随行携带，用于 ElementId 与选中态。
 ///
@@ -146,7 +146,7 @@ pub struct Row {
 
 impl Row {
     pub fn new(id: NodeId, depth: u8, kind: NodeKind, label: impl Into<String>) -> Self {
-        debug_assert!(depth <= MAX_DEPTH, "树深度上限是 {MAX_DEPTH}，实际 {depth}");
+        debug_assert!(depth <= PICKER_MAX_DEPTH, "树深度上限是 {PICKER_MAX_DEPTH}，实际 {depth}");
         Self {
             id,
             depth,
