@@ -148,13 +148,14 @@ impl DataObjectsTab {
         // 筛选只改“看得见哪些”，不动工作集：选了某个对象后换个段看，已选仍在
         let filter = self.filter;
         let objects: Vec<data_objects::Object> = all
-            .into_iter()
+            .iter()
             .filter(|object| {
                 filter.is_none_or(|group| object.group == group)
                     && (query.is_empty()
                         || object.name.to_lowercase().contains(&query)
                         || object.note.to_lowercase().contains(&query))
             })
+            .cloned()
             .collect();
         let picked = self.shared.data_object_picked.borrow().clone();
         let colors = cx.theme().colors;
@@ -278,6 +279,51 @@ impl DataObjectsTab {
                     }),
             );
         }
+
+        // 当前对象（原型 07 的 tray）：只显示“已选 N 个”看不出是哪 N 个，
+        // 所以把名字列出来，每项带个移除
+        let mut tray = div()
+            .v_flex()
+            .gap_1()
+            .px_3()
+            .py_2()
+            .border_t_1()
+            .border_color(colors.border);
+        tray = tray.child(
+            div()
+                .text_xs()
+                .text_color(colors.muted_foreground)
+                .child(format!("当前对象 · {} 个", picked.len())),
+        );
+        let mut selected_row = div().h_flex().items_center().flex_wrap().gap_1();
+        for key in picked.iter() {
+            let name = all
+                .iter()
+                .find(|object| &object.key == key)
+                .map(|object| object.name.clone())
+                .unwrap_or_else(|| key.clone());
+            let key_for_remove = key.clone();
+            let entity_for_remove = entity.clone();
+            selected_row = selected_row.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .child(Tag::secondary().rounded_full().child(name))
+                    .child(
+                        Button::new(SharedString::from(format!("data-object-remove-{key}")))
+                            .ghost()
+                            .label("×")
+                            .on_click(move |_, _, cx| {
+                                let key = key_for_remove.clone();
+                                entity_for_remove.update(cx, |tab, cx| {
+                                    tab.toggle_picked(&key, cx);
+                                });
+                            }),
+                    ),
+            );
+        }
+        tray = tray.child(selected_row);
 
         let mut list = div()
             .v_flex()
@@ -525,6 +571,7 @@ impl DataObjectsTab {
             .child(search_row)
             .child(chips)
             .child(list)
+            .when(!picked.is_empty(), |el| el.child(tray))
             .when_some(self.note.clone(), |el, note| {
                 el.child(
                     div()
