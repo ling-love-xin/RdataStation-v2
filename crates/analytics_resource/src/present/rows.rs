@@ -18,6 +18,11 @@ pub struct SnapshotInputs<'a> {
     pub history_counts: &'a VersionCounts,
     /// 每行最近的 N 条历史版本（详情「版本」区的明细；与 `history_counts` 同批取数）。
     pub recent_versions: &'a RecentVersions,
+    /// 每行**还有内容副本**的版本号（`None` = 没问到 / 无副本）。
+    ///
+    /// 裁剪只删副本、不删版本行，所以详情要能说清“这一版还能不能还原”。
+    /// 由宿主在刷新时问一次 `.RSmeta`（每资源一次目录列举，规模是面板行数）。
+    pub version_copies: &'a std::collections::HashMap<String, Vec<i32>>,
     pub tags: &'a ResourceTags,
     pub tag_dictionary: Vec<TagOption>,
     pub folders: &'a FolderMemberships,

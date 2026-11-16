@@ -19,6 +19,8 @@ pub struct DetailExtras {
     pub preview: Preview,
     /// 全局行的使用面摘要（项目行与没人用过的全局行给空串 → 详情不画那一行）。
     pub dispatch_label: String,
+    /// 该行**还有内容副本**的版本号（详情版本区据此标注“副本已裁剪”）。
+    pub version_copies: Vec<i32>,
 }
 /// 单行 → 详情快照（详情面板只读，格式化在这里做完）。
 ///
@@ -41,6 +43,8 @@ pub fn to_detail(
         }
         ArchiveKind::TableRef => String::new(),
     };
+    // 先算（`extras` 的其余字段随后要按值取走）。
+    let recent_version_lines = detail_version_lines(recent_versions, &extras.version_copies);
     ArchiveDetail {
         assertion: None,
         lifecycle: Default::default(),
@@ -78,7 +82,7 @@ pub fn to_detail(
         } else {
             String::new()
         },
-        recent_versions: detail_version_lines(recent_versions),
+        recent_versions: recent_version_lines,
         groups: extras.groups,
         // 名字与 id 一起给：字典里认不出的 id 两个都给「无」，不出现“名字空、id 有”的错位。
         group_id: if extras.group.is_some() {
@@ -100,7 +104,10 @@ pub fn to_detail(
 ///
 /// 体积口径与行/详情一致：文件型给体积、分析表型给规模、引用型不给（不假装有值）。
 /// 快照解析不出来**不补造**——时间来自版本行本身（可信），体积留空。
-fn detail_version_lines(versions: &[crate::store::rows::ResourceVersion]) -> Vec<DetailVersionLine> {
+fn detail_version_lines(
+    versions: &[crate::store::rows::ResourceVersion],
+    copies: &[i32],
+) -> Vec<DetailVersionLine> {
     versions
         .iter()
         .take(DETAIL_RECENT_VERSIONS)
@@ -120,6 +127,7 @@ fn detail_version_lines(versions: &[crate::store::rows::ResourceVersion]) -> Vec
                 version: version.version,
                 time_label: format_timestamp(version.created_at),
                 size_label,
+                has_copy: copies.contains(&version.version),
             }
         })
         .collect()

@@ -121,6 +121,11 @@ pub struct DetailVersionLine {
     pub time_label: String,
     /// 体积（分析表型给规模，快照里没有时为空串）。
     pub size_label: String,
+    /// 这一版还有没有内容副本（`.RSmeta/resources/versions/<id>/<v>/`）。
+    ///
+    /// 裁剪**只删副本、不删版本行**，所以“有这一版”和“能还原它”是两件事：
+    /// 缺副本时渲染层要明说，否则用户点「还原」只会得到一句失败。
+    pub has_copy: bool,
 }
 
 /// 详情「组织」区「移动…」菜单里的一项分组。

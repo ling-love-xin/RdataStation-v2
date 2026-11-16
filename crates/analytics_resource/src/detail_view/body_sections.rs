@@ -111,11 +111,15 @@ pub(super) fn render_body_sections(
             let mut lines = div().v_flex().w_full().gap_1();
             for line in &detail.recent_versions {
                 let label = format!("v{}", line.version);
-                let meta = if line.size_label.is_empty() {
+                let mut meta = if line.size_label.is_empty() {
                     line.time_label.clone()
                 } else {
                     format!("{} · {}", line.time_label, line.size_label)
                 };
+                // 副本被裁剪过：版本行还在，但“还原它”做不到。明说比让用户点一下失败强。
+                if !line.has_copy {
+                    meta.push_str(" · 副本已裁剪");
+                }
                 lines = lines.child(
                     div()
                         .h_flex()
