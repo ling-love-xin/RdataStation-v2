@@ -64,8 +64,8 @@
 1. **全局表读取通道**（唯一未闭合的技术缺口，本轮已实测，**不是补一处 attach 就通吃**）：
    - 枚举侧早已成品：`analytics_resource/src/global/{mod.rs:34 GlobalInstanceStore, list.rs:9 list_global_resources}`，生产用点在 `jobs/refresh.rs:258-267`。
    - 执行侧**三条面都没有**全局 attach：① 进程级内存单例（`execution_service.rs:60/113` → `duckdb_service.rs:14` → `DuckDBManager::get_or_create_in_memory()`，二次分析 / 结果集 / 导出都在此）；② 联邦会话（`session.rs:381 attach_source` 是「挂载唯一实现」，`registry.rs:274-290 attach_sql()` 对 L1 源一律 `(READ_ONLY)`，全局库作为本地 duckdb 文件接进来**几乎零新增代码**，但只覆盖会话内）；③ 项目分析库（`project_db.rs:405-418` 只读口，另有 3 处直接 `Connection::open` 旁路：`project/src/store.rs:838`、`workbench/services/overview.rs:110`、`mock_generator.rs:68`）。
-   - **洞察结构上取不到全局表**：取样按 `conn_id` 下推（`insight/jobs/table.rs:312-320` → `schema_report_view(conn_id, …)`；`insight_engine_internal/profile.rs:12` 原话「源库表先取样再探查……这里既没有也不需要源库连接信息」）。全局表没有 conn_id → 形态 I 不可达。
-   - 结论：至少需 A（内存单例）+ B（联邦会话）两条；洞察仍需改形态 II 或造伪 conn_id。
+   - **洞察取全局表已另有通道（2026-11-16 更正，原结论作废）**：`insight/src/model/target.rs:60 SampleSource::on_global(table, label)` 走 `conn_id: None + global: true`，SQL 拼成 `SELECT * FROM rds_global."<表>"`——取样时另开一条**短命只读会话**挂全局分析库（别名 `rds_global`），取完搬进进程单例的 `tmp_i_`。端到端测试 `crates/insight/tests/global_table_sample.rs` 已通过。所以「全局表没有 conn_id ⇒ 洞察取不到」不再成立；剩下的只是**会话内多源联邦里要不要也挂一份全局库**（`session.rs` 的 `attach_source`）。
+   - 结论（更正后）：A（内存单例）/ C（项目分析库旁路）仍需按各自场景决定；B（联邦会话）与洞察**都不再是硬缺口**。
 2. **资产库剩余两段的取舍（待用户拍板）**：拆 `SourceKind::AnalysisGlobal` 按入口裁剪（`PickerConfig.kinds` 本就支持）/ 先做 A+B 再画段 / 冻结全局段。**本项目归档文件段同理**：`Picked` 只有 `Db/Draft/Analysis/External` 四变体，三个消费方只认这四个，新增目标类型＝能选不能执行。
 3. **键盘语义已由源码定案（不必再人工试 Esc/↓）**，只剩三件真要手测的：
    - 键位派发顺序实测：**key binding 先于 `on_key_down` 派发**（`gpui-pre-0.3.11/src/window.rs:6412-6427` 先跑 `match_result.bindings`，被接住即 `return`；`finish_dispatch_key_event`（`:6484`）里的 `dispatch_key_down_up_event` 才跑监听）。单行 Input 绑了 `escape/up/down/left/right/pageup/pagedown/tab`（`vendor/gpui-base/src/input/base/state.rs:265-301`），但**单行模式不处理 ↑↓/Esc，会 propagate**（本仓 `quick_open/palette/render.rs:171-172` 的注释即此口径，那里正是把 `MoveUp/MoveDown/Escape` 挂在浮层根上接住）。
