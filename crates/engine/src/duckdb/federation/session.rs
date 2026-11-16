@@ -250,6 +250,35 @@ impl FederatedSession {
             .map_err(|error| format!("加载文件失败：{error}"))
     }
 
+    /// 会话已经开着，再挂一个源（数据对象面板「加源」里选连接的出口）
+    ///
+    /// 与 [`Self::open`] 同一套挂载口径（`mount_one` + 重名拦截）。挂载失败**照样
+    /// 留一行**并带原因——界面要能说清“哪个源没挂上”，而不是悄悄吞掉。
+    pub fn add_source(&self, source: FederatedSource) -> Result<(), String> {
+        let already = self
+            .mounted
+            .lock()
+            .map(|store| store.iter().any(|seen| seen.alias() == source.alias))
+            .unwrap_or(false);
+        if already {
+            return Err(format!("源 {} 已经在会话里了", source.alias));
+        }
+
+        let conn = self.lock().map_err(|error| error.to_string())?;
+        let mounted = mount_one(&conn, &source);
+        let failure = match &mounted.state {
+            MountState::Failed(reason) => Some(reason.clone()),
+            _ => None,
+        };
+        if let Ok(mut store) = self.mounted.lock() {
+            store.push(mounted);
+        }
+        match failure {
+            Some(reason) => Err(reason),
+            None => Ok(()),
+        }
+    }
+
     /// 会话快照（**界面读这个**：纯内存，渲染路径可调）
     pub fn snapshot(&self) -> SessionSnapshot {
         SessionSnapshot {
@@ -709,6 +738,21 @@ mod tests {
     use super::{FederatedSession, file_view_sql, write_refusal};
     use crate::duckdb::federation::registry::{FederatedSource, MountState, MountedSource};
     use std::sync::Arc;
+
+    /// 会话开着也能再加源：面板「加源」就是这条路（不是重开会话，那会丢已挂的源）
+    #[test]
+    fn a_session_takes_one_more_source_after_it_is_open() {
+        let dir = workdir("add_source");
+        let first = file_source(&dir, "a.csv", "src_a", 2);
+        let second = file_source(&dir, "b.csv", "src_b", 3);
+        let session = FederatedSession::open(&[first], None).expect("开会话");
+        session.add_source(second).expect("追加源");
+        let snapshot = session.snapshot();
+        assert_eq!(snapshot.sources.len(), 2, "{snapshot:?}");
+        // 重名再挂要被挡下（与 open 同口径）
+        let again = file_source(&dir, "c.csv", "src_b", 1);
+        assert!(session.add_source(again).is_err(), "重名应被拒");
+    }
 
     #[test]
     fn a_csv_file_becomes_a_view_on_the_session() {
