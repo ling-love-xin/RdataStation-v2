@@ -46,6 +46,7 @@ mod bind;
 mod bookmarks;
 mod confirm;
 mod connection_picker;
+mod federated;
 mod schema_picker;
 mod value_preview;
 
@@ -57,6 +58,7 @@ pub use bind::*;
 pub use bookmarks::*;
 pub use confirm::*;
 pub use connection_picker::*;
+pub use federated::*;
 pub use schema_picker::*;
 pub use value_preview::*;
 

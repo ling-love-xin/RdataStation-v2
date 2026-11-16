@@ -619,6 +619,7 @@ impl EditorHostPanel {
             result_action_queue,
             compare_grid: Some(compare_grid),
             pending_bind: None,
+            pending_federated: None,
             error_site: None,
             script_card: None,
             error_site_key: None,
