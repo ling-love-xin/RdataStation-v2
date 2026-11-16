@@ -59,6 +59,7 @@
 | `project_ui` | editor / scratchpad | 项目管理 UI 状态 |
 | `layout_locked` / `prev_left_sidebar_width` / `prev_right_sidebar_width` | 设置页 → 宿主 | 布局锁定 + 边栏宽度同步（`settings` 写、宿主 render 读；M-layout，2026-10-28） |
 | `data_objects` / `data_object_assets` / `data_object_picked` | data_objects 面板 ↔ 宿主 | 数据对象清单缓存（面板刷新写、render 只读）+ 已选身份；宿主「分析已选」读后转 `SampleSource`（2026-11-16 补登记） |
+| `loaded_files` | data_objects 面板写 → 清单收集读 | 「加源 → 加载文件」落地后的登记（`f_<alias>` 别名与源路径），用来区分「已经进过分析的文件」与「项目里但没加载的文件」（2026-11-16 补登记） |
 
 共 18 个字段跨模块。它们**没有类型级保护**：任何模块都能写任何字段，改一处语义不会有编译错误，
 只能靠约定与 review。
