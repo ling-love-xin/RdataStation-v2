@@ -135,6 +135,7 @@ async fn g001_promote_data_file_and_register_global() {
         Some(table.as_str()),
         "登记行的表名要和建出来的那张表一致"
     );
+    assert_eq!(row.structured, Some(1), "数据文件升级出来的全局表能参与分析");
     assert!(
         row.definition_sql
             .as_deref()
@@ -216,6 +217,11 @@ async fn g003_promote_script_content_table() {
     let list = list_global_resources(&env.store).expect("list");
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].kind, "analysis");
+    assert_eq!(
+        list[0].structured,
+        Some(0),
+        "脚本没有列结构，不参与分析"
+    );
     assert!(
         list[0]
             .file_rel_path

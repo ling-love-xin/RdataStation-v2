@@ -7,6 +7,7 @@ async fn t001_create_and_get_resource() {
     let (store, dir) = create_test_store().await;
     let created = store
         .insert_archive(NewArchiveInput {
+                        structured: false,
             resource_type: "table".to_string(),
             name: "test_table".to_string(),
             alias: None,
@@ -50,6 +51,7 @@ async fn t011_version_history() {
     let (store, dir) = create_test_store().await;
     let created = store
         .insert_archive(NewArchiveInput {
+                        structured: false,
             resource_type: "table".to_string(),
             name: "versioned".to_string(),
             alias: None,
@@ -94,6 +96,7 @@ async fn t011b_recent_versions_take_top_n_per_resource() {
     let (store, dir) = create_test_store().await;
     let created = store
         .insert_archive(NewArchiveInput {
+                        structured: false,
             resource_type: "table".to_string(),
             name: "recent".to_string(),
             alias: None,
@@ -141,6 +144,7 @@ async fn t012_concurrent_create() {
     let (store, dir) = create_test_store().await;
 
     let make_input = |name: &str, hash: &str| NewArchiveInput {
+                structured: false,
         resource_type: "table".to_string(),
         name: name.to_string(),
         alias: None,
@@ -295,6 +299,7 @@ async fn t019_rename_changes_display_name_only() {
     // 归档时间这些“改名绝对不能碰”的字段。
     let created = store
         .insert_archive(NewArchiveInput {
+                        structured: false,
             resource_type: "file".to_string(),
             name: "dau.sql".to_string(),
             alias: Some("月报草稿".to_string()),
@@ -373,6 +378,7 @@ async fn t020_alias_is_display_only_and_empty_clears_it() {
     let (store, dir) = create_test_store().await;
     let created = store
         .insert_archive(NewArchiveInput {
+                        structured: false,
             resource_type: "file".to_string(),
             name: "dau.sql".to_string(),
             alias: None,

@@ -217,6 +217,12 @@ pub struct NewArchiveInput {
     /// 三个去处：行的体积尾巴、详情面板的大小、列表的「大小」排序——排序比的是这个原始值，
     /// 而不是格式化后的 `1.2 KB`（那会静默排错）。
     pub file_size: Option<i64>,
+    /// 本体**能否被 DuckDB 读成表**（`true` = 归档时真探到了结构）。
+    ///
+    /// 这是能力事实，不是档位：档位一律 `File`，这一列回答「这个文件能不能参与分析」。
+    /// 判据只有一处——归档作业探测成功（`request.analysis.is_some()`），
+    /// 探测失败降级成普通文件时它就是 `false`。升级到全局、后续联邦选源都读它。
+    pub structured: bool,
     /// 来源绑定（归档凭证的"出处"）。
     pub binding: ArchiveBinding,
     /// 作用域（派生只读量，当前只产 `project`；架构 §4.3）。

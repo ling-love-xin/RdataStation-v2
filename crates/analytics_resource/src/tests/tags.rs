@@ -26,6 +26,7 @@ async fn t009_tag_resource_bidirectional() {
     let (store, dir) = create_test_store().await;
     let resource = store
         .insert_archive(NewArchiveInput {
+                        structured: false,
             resource_type: "table".to_string(),
             name: "tagged".to_string(),
             alias: None,
@@ -79,6 +80,7 @@ async fn t017_tag_rename_and_delete_keep_names_and_links_clean() {
     let (store, dir) = create_test_store().await;
     let resource = store
         .insert_archive(NewArchiveInput {
+                        structured: false,
             resource_type: "table".to_string(),
             name: "tagged".to_string(),
             alias: None,

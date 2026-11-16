@@ -304,3 +304,47 @@ async fn t168_reference_archive_does_not_rearchive_from_draft() {
 
     let _ = fs::remove_dir_all(&dir).await;
 }
+
+/// 「能不能进分析库」必须落成**事实**，不能靠扩展名现推：
+/// 真探到结构的 csv 记 `structured = 1`，普通文件与探测失败降级的都记 `0`。
+/// 联邦选源与升级入口都读这一列，靠扩展名现推会在改了后缀之后说反话。
+#[tokio::test]
+async fn t169_structured_flag_follows_the_probe() {
+    let (service, dir) = env().await;
+    fs::create_dir_all(dir.join("draft")).await.expect("draft dir");
+
+    // ① 真探到结构的数据文件。
+    let csv = dir.join("draft/orders.csv");
+    fs::write(&csv, b"id,amount\n1,10\n2,20\n").await.expect("csv");
+    let mut job = archive_job(&dir, csv, "data/orders.csv");
+    job.analysis_probe = true;
+    let (id, _, _, _) = archived(run_archive_with_service(&job, &service).await);
+    let row = service.store().get_resource_by_id(&id).await.expect("row");
+    assert_eq!(row.structured, Some(1), "探到结构才算结构化");
+
+    // ② 从一开始就不探测的普通文件（这里是 markdown）。
+    let note = dir.join("draft/note.md");
+    fs::write(&note, "# 标题\n".as_bytes()).await.expect("md");
+    let mut job = archive_job(&dir, note, "data/note.md");
+    job.analysis_probe = false;
+    let (id, _, _, _) = archived(run_archive_with_service(&job, &service).await);
+    let row = service.store().get_resource_by_id(&id).await.expect("row");
+    assert_eq!(row.structured, Some(0), "普通文件不参与分析");
+
+    // ③ 扩展名认得、内容读不出来（这里是个假的 .xlsx）：归档照旧成功，只是降级成文件型。
+    //    这一格最容易被写错——「当初决定探测」不等于「真的探到了结构」。
+    let fake = dir.join("draft/fake.xlsx");
+    fs::write(&fake, b"not a zip").await.expect("fake xlsx");
+    let mut job = archive_job(&dir, fake, "data/fake.xlsx");
+    job.analysis_probe = true;
+    let (id, _, _, _) = archived(run_archive_with_service(&job, &service).await);
+    let row = service.store().get_resource_by_id(&id).await.expect("row");
+    assert_eq!(
+        row.structured,
+        Some(0),
+        "探测失败降级成文件型，不能谎称能参与分析"
+    );
+    assert!(row.definition_sql.is_none(), "降级后不该留重建定义");
+
+    let _ = fs::remove_dir_all(&dir).await;
+}

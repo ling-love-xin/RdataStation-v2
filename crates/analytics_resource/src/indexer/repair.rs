@@ -34,6 +34,7 @@ impl<'a> IndexRepair<'a> {
         self.store
             .insert_archive_with_event(
                 NewArchiveInput {
+                                structured: false,
                 resource_type: kind.as_db_str().to_string(),
                 name: display_name,
                 alias: None,

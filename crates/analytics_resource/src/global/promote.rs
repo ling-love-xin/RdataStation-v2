@@ -110,21 +110,28 @@ impl GlobalInstanceStore {
                     "INSERT INTO {} (\"filename\", \"content\", \"content_hash\") VALUES (?1, ?2, ?3);",
                     quote_ident(&table)
                 );
-                self.with_duckdb(|conn| {
-                    conn.execute_batch(&create_sql)
-                        .map_err(|e| duckdb_err("create_content_table", &e.to_string()))?;
-                    conn.execute(
-                        &insert_sql,
-                        duckdb::params![
-                            req.rel_path.as_deref().unwrap_or(""),
-                            content,
-                            req.content_hash
-                        ],
-                    )
-                    .map_err(|e| duckdb_err("insert_content", &e.to_string()))?;
-                    Ok(())
-                })
-                .await?;
+                let write_result = self
+                    .with_duckdb(|conn| {
+                        conn.execute_batch(&create_sql)
+                            .map_err(|e| duckdb_err("create_content_table", &e.to_string()))?;
+                        conn.execute(
+                            &insert_sql,
+                            duckdb::params![
+                                req.rel_path.as_deref().unwrap_or(""),
+                                content,
+                                req.content_hash
+                            ],
+                        )
+                        .map_err(|e| duckdb_err("insert_content", &e.to_string()))?;
+                        Ok(())
+                    })
+                    .await;
+                // 半成品表要收掉：`CREATE` 成了、`INSERT` 败了会留一张**空内容表**，
+                // 下次分发读到「应只有一行、实际 0 行」才暴露，排查成本很高。
+                if write_result.is_err() {
+                    let _ = self.drop_global_table(&table).await;
+                }
+                write_result?;
                 (Some(1_i32), Some(3_i32))
             }
         };

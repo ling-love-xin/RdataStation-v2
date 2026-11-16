@@ -24,8 +24,8 @@ impl AnalyticsResourceStore {
                 created_at, updated_at,
                 kind, content_hash, file_rel_path, readonly,
                 promoted_from, source_connection_id, source_table, definition_sql, archived_at,
-                payload_mode, source_path
-            ) VALUES (?, ?, ?, ?, '{}', ?, ?, ?, ?, 1, NULL, NULL, NULL, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+                payload_mode, source_path, structured
+            ) VALUES (?, ?, ?, ?, '{}', ?, ?, ?, ?, 1, NULL, NULL, NULL, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
                 rusqlite::params![
                     id,
@@ -50,6 +50,7 @@ impl AnalyticsResourceStore {
                     now,
                     input.payload_mode.as_db_str(),
                     &input.source_path,
+                    i32::from(input.structured),
                 ],
             )
             .map_err(|e| persistence_err("insert", e))?;

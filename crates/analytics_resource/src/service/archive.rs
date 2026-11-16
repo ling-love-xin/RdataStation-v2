@@ -102,6 +102,9 @@ impl ArchiveService {
             // reference 与登记键同源（两列恒等，避免再出现两种写法）；copy 为 None。
             source_path: (mode == PayloadMode::Reference).then(|| registered_rel.clone()),
             file_size,
+            // 「能不能进分析库」只有一处判据：归档作业真的探到了结构。
+            // 探测失败会降级成普通文件（`analysis = None`），这里自然落 `false`。
+            structured: req.analysis.is_some(),
             binding: req.binding.clone(),
             // 作用域为派生只读量：数据住项目库 → project（架构 §4.3）。
             scope: "project".to_string(),

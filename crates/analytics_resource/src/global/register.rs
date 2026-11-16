@@ -225,6 +225,8 @@ impl GlobalInstanceStore {
         self.with_sqlite(|conn| {
             let id = format!("arg_{}", uuid::Uuid::new_v4().simple());
             let now = Utc::now().to_rfc3339();
+            // 全局表由「能读成表的数据文件」建出来，就是结构化；脚本内容表不是。
+            let structured = i32::from(matches!(req.kind, PromoteKind::DataFile));
             // 重建定义指向**实际表名**（G2 起表名带时间戳，不再是资产名）。
             let definition_sql = match req.kind {
                 PromoteKind::DataFile => file_read_expr(&req.source_abs_path)
@@ -260,12 +262,13 @@ impl GlobalInstanceStore {
                     created_at, updated_at, created_by, deleted_at,
                     kind, content_hash, file_rel_path, readonly, promoted_from,
                     source_connection_id, source_table, definition_sql, archived_at,
-                    payload_mode, source_path, origin_kind, origin_ref, analytics_table
+                    payload_mode, source_path, origin_kind, origin_ref, analytics_table,
+                    structured
                 ) VALUES (
                     ?1, ?2, ?3, NULL, 'null', 'global', ?4, ?5, ?6,
                     ?7, NULL, NULL, NULL, ?8, ?8, NULL, NULL,
                     'analysis', ?9, ?10, 1, NULL, NULL, NULL, ?11, ?8,
-                    'copy', ?12, ?13, ?14, ?15
+                    'copy', ?12, ?13, ?14, ?15, ?16
                 )
                 "#,
                 rusqlite::params![
@@ -284,6 +287,7 @@ impl GlobalInstanceStore {
                     origin_kind,
                     origin_ref,
                     table,
+                    structured,
                 ],
             )
             .map_err(sqlite_err("insert_global"))?;

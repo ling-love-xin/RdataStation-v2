@@ -94,10 +94,8 @@ impl GlobalInstanceStore {
     /// 调用方要为「删的是哪一版」负责：正常路径不该拿它做版本裁剪，
     /// 那是 `KeepVersions` 的事；这里只服务明确的删除与被注入的失败场景。
     ///
-    /// 目前**没有**删除全局资产的入口（只能升级与分发），生产代码里暂无调用点——
-    /// 留着它是给将来的「删除全局资产」与 `KeepVersions` 表型裁剪用，
-    /// 眼下只有测试的失败注入会走到这里。
-    #[allow(dead_code)]
+    /// 目前有两类调用点：脚本内容表写到一半失败时的半成品清理（`promote`），
+    /// 以及将来「删除全局资产」与 `KeepVersions` 表型裁剪的入口。
     pub(super) async fn drop_global_table(&self, name: &str) -> Result<(), CoreError> {
         self.with_duckdb(|conn| {
             conn.execute_batch(&format!("DROP TABLE IF EXISTS {};", quote_ident(name)))

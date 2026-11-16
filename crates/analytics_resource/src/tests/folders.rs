@@ -27,6 +27,7 @@ async fn t007_folder_resource_link() {
     let (store, dir) = create_test_store().await;
     let resource = store
         .insert_archive(NewArchiveInput {
+                        structured: false,
             resource_type: "table".to_string(),
             name: "linked".to_string(),
             alias: None,
@@ -82,6 +83,7 @@ async fn t018_single_level_folders_move_and_clear_links() {
     let (store, dir) = create_test_store().await;
     let resource = store
         .insert_archive(NewArchiveInput {
+                        structured: false,
             resource_type: "table".to_string(),
             name: "grouped".to_string(),
             alias: None,
