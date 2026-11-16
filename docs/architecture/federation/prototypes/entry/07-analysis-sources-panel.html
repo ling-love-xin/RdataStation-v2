@@ -157,13 +157,14 @@
       </div>
 
       <div class="list">
-        <!-- ① 已挂载的源：ATTACH 进来的库。连接行给「加载」，表 / 视图行给「选用」 -->
+        <!-- ① 已挂载的源：ATTACH 进来的库。行上只有一个动作「选用」——
+             连接本身不是可分析对象，所以连接行不设动作（P7 口径，2026-11-16 删掉「加载」） -->
         <div class="grp"><span class="caret">▾</span><span>已挂载的源</span><span class="sp"></span><span class="cnt">14</span></div>
 
         <div class="row on">
           <span class="ic">▤</span>
           <div class="nm"><b>mysql_src</b><i>MySQL · analytics · GP_real_mysql_20260912 · 已 ATTACH</i></div>
-          <div class="tail"><span class="pill coral">源</span><span class="chan src">→ 源库</span><button class="go">加载</button></div>
+          <div class="tail"><span class="pill coral">源</span><span class="chan src">→ 源库</span></div>
         </div>
         <div class="row">
           <span class="ic">▤</span>
@@ -174,11 +175,6 @@
           <span class="ic">▤</span>
           <div class="nm"><b>customers</b><i>customers · 88k 行估算</i></div>
           <div class="tail"><span class="pill">源</span><span class="chan fed">→ 联邦</span><button class="go">选用</button></div>
-        </div>
-        <div class="row">
-          <span class="ic">▤</span>
-          <div class="nm"><b>pg_src</b><i>PostgreSQL · warehouse · 未挂载</i></div>
-          <div class="tail"><span class="pill coral">源</span><span class="chan src">→ 源库</span><button class="go">加载</button></div>
         </div>
 
         <!-- ② 本项目分析库：落库的 res_ / 项目自建 / 项目库里的资产，都是这一个 duckdb 文件 -->
