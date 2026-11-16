@@ -226,14 +226,21 @@ impl DataObjectsTab {
         for object in &objects {
             if last_group != Some(object.group) {
                 last_group = Some(object.group);
+                // 段头带计数：这一段里几行，扫一眼就知道要不要往下翻
+                let group_count = objects.iter().filter(|o| o.group == object.group).count();
                 list = list.child(
                     div()
+                        .h_flex()
+                        .items_center()
+                        .gap_2()
                         .px_3()
                         .pt_3()
                         .pb_1()
                         .text_xs()
                         .text_color(colors.muted_foreground)
-                        .child(object.group.title()),
+                        .child(object.group.title())
+                        .child(div().flex_1())
+                        .child(div().text_xs().child(group_count.to_string())),
                 );
             }
             // 「怎么读」「还在不在」是选源时仅有的两个判断依据，放同一行右侧
@@ -328,11 +335,14 @@ impl DataObjectsTab {
             };
             list = list.child(
                 div()
+                    // 每一行都要能被 hover 与键盘看清：hover 需要命中的 id，不是样式
+                    .id(SharedString::from(format!("data-object-row-{}", object.key)))
                     .h_flex()
                     .items_center()
                     .gap_3()
                     .px_3()
                     .py_2()
+                    .hover(|s| s.bg(colors.list_hover))
                     .border_b_1()
                     .border_color(colors.border)
                     // 已选的行给一道左侧色条：一屏几十行时靠它扫得到
