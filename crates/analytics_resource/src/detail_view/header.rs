@@ -24,6 +24,8 @@ pub(super) fn render_header(
             .h_flex()
             .w_full()
             .min_w_0()
+            // 图标 14px、版本与徽标 12px、名称是按钮：高度各不相同，靠 items_center 对齐
+            .items_center()
             .gap_2()
             // kind 图标（形状区分，一律 muted）：与列表行同一套，只在行内存在一个色块
             // 的前提下才允许——这里那个色块是强度徽标。
