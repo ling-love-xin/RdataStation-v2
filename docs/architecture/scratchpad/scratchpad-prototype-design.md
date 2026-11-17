@@ -185,7 +185,7 @@ v1 的草稿箱是项目下的隐藏子目录 `{project}/.scratchpad/`。v2 定�
 | **引用** | 选文件或目录 → 自定义别名 → **只记路径**；可改名 / 打开 / 移除；失效项置灰 + 「（丢失）」+ `⟲` **重新引用**（只改路径） | `add` / `rename` / `remove` / `update_external_reference_path`、`external_reference_status` |
 | 打开所在位置 | 系统文件管理器定位（草稿项与引用项均可） | `open_in_system_explorer` |
 | 用系统应用打开 | 调系统默认程序打开（`ShellExecuteW`；2026-10-10 语义澄清后保留） | 宿主命令 |
-| **属性** | 右键「属性…」→ **gpui-kit Dialog**（6 行键值：类型 / 路径 / 大小 / 修改时间 / 创建时间 / 数据库连接，信息量小不用右侧 panel；遮罩点击 / Esc 关闭） | `fs::metadata` + `Shared::scratchpad_file_info` |
+| **属性** | 右键「属性…」→ **gpui-kit Dialog**（键值区走 `description_list::DescriptionList`：类型 / 路径（省略号 + 悬停看全）/ 大小 / 修改时间 / 创建时间 / 数据库连接 / **标签**（有条目才出）；信息量小不用右侧 panel；遮罩点击 / Esc 关闭） | `fs::metadata` + `entry_tags` + `Shared::scratchpad_file_info` |
 | 多选 | Ctrl 点选 / Shift 范围 / Ctrl+A 全选 | 前端 |
 
 > 导入与引用的区别见 §2.2（复制 vs 链接）。

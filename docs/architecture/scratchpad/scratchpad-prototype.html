@@ -700,13 +700,19 @@ button{font-family:inherit;cursor:pointer;}
     <div class="dlg">
       <div class="dlg-title">属性 · 临时订单分析.sql</div>
       <div class="dlg-row"><span class="k">类型</span><span class="v">SQL 文件</span></div>
-      <div class="dlg-row"><span class="k">路径</span><span class="v">scratchpad\临时订单分析.sql</span></div>
+      <div class="dlg-row"><span class="k">路径</span><span class="v" title="scratchpad\reports\临时订单分析.sql">scratchpad\reports\临时订单分…</span></div>
       <div class="dlg-row"><span class="k">大小</span><span class="v">1.2 MB</span></div>
       <div class="dlg-row"><span class="k">修改时间</span><span class="v">2026-10-10 13:40</span></div>
       <div class="dlg-row"><span class="k">创建时间</span><span class="v">2026-10-08 09:12</span></div>
       <div class="dlg-row"><span class="k">数据库连接</span><span class="v">—（预留，分析文件类型落地后回填）</span></div>
+      <div class="dlg-row"><span class="k">标签</span><span class="v">渠道 · 月报</span></div>
     </div>
-    <div class="hint" style="margin-top:12px">遮罩点击 / Esc 关闭；信息量小，不用右侧 panel。SQL 文件后续要能看出绑定了哪个连接。</div>
+    <div class="hint" style="margin-top:12px">
+      遮罩点击 / Esc 关闭；信息量小，不用右侧 panel。SQL 文件后续要能看出绑定了哪个连接。<br>
+      键值区统一走 gpui-kit <code>description_list::DescriptionList</code>（<code>columns(1)</code> + <code>bordered(false)</code> + Small + 标签宽 4.5rem）——与资产详情的键值同一套语言，不再手搓两列 div。<br>
+      <b>路径</b>行：值区只给省略号，完整路径<b>悬停</b>看（<code>HoverCard</code>，300ms），不折行也不撑破对话框。<br>
+      <b>标签</b>行只在有条目时出现（标签是索引：存项目库 <code>scratchpad_tags</code>，不写 sidecar）；没打标签就不画这行，不摆「（无）」。
+    </div>
   </div>
 </div>
 
