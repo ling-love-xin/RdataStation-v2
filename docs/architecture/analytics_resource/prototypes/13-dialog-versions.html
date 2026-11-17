@@ -17,7 +17,7 @@
   </div>
   <p class="p-spec">
     宽 <code>48rem</code>（768px）· 标题「<b>版本历史 · 名字</b>」，<b>内容末尾</b>再一行「<b>当前版本 v3</b>」（不挨着标题）· 六列<b>按实现的顺序</b>：版本 / 时间 / 大小 / 指纹 / 变化 / 副本。
-    列表上方一行「共 N 个版本」（忙态提示也在这行右侧）；<b>动作栏只在选中某一行后渲染</b>，未选中时整块不出现（不是摆一排灰按钮）。footer 只有一个「关闭」。
+    列表上方一行「共 N 个版本」（忙态提示也在这行右侧）+ 一条<b>横排版本轨道</b>（版本即节点，从左到右 v1 → 最新；点节点 = 选中那一版，与点表格行同一个选中；超过 12 版时尾部写「更早 N 版见下表」）。<b>动作栏只在选中某一行后渲染</b>，未选中时整块不出现（不是摆一排灰按钮）。footer 只有一个「关闭」。
     只追加不覆盖：还原 = 用旧内容生成<b>新版本</b>；最多列 50 个并明说剩余。
   </p>
   <nav class="pnav"><a href="index.html">索引</a><a href="12-dialog-checkout.html">← 上一块：取回对话框</a><a href="14-dialog-diff.html">下一块：版本对比 →</a></nav>
@@ -32,6 +32,13 @@
         <div class="dlg-head">版本历史 · dau_report.sql<button class="x">✕</button></div>
         <div class="dlg-body">
           <div style="font-size:10.5px;color:var(--muted);margin-bottom:6px">共 3 个版本</div>
+          <div class="vrail">
+            <div class="vrail-n"><span class="vrail-d"></span>v1</div>
+            <span class="vrail-sep"></span>
+            <div class="vrail-n"><span class="vrail-d"></span>v2</div>
+            <span class="vrail-sep"></span>
+            <div class="vrail-n cur"><span class="vrail-d"></span>v3</div>
+          </div>
 
           <table class="dt">
             <thead><tr>
@@ -85,6 +92,13 @@
         <div class="dlg-head">版本历史 · dau_report.sql<button class="x">✕</button></div>
         <div class="dlg-body">
           <div style="font-size:10.5px;color:var(--muted);margin-bottom:6px">共 3 个版本</div>
+          <div class="vrail">
+            <div class="vrail-n"><span class="vrail-d"></span>v1</div>
+            <span class="vrail-sep"></span>
+            <div class="vrail-n"><span class="vrail-d"></span>v2</div>
+            <span class="vrail-sep"></span>
+            <div class="vrail-n cur"><span class="vrail-d"></span>v3</div>
+          </div>
 
           <table class="dt">
             <thead><tr>
@@ -144,6 +158,13 @@
         <div class="dlg-head">版本历史 · dau_report.sql<button class="x">✕</button></div>
         <div class="dlg-body">
           <div style="font-size:10.5px;color:var(--muted);margin-bottom:6px">共 3 个版本</div>
+          <div class="vrail">
+            <div class="vrail-n sel"><span class="vrail-d"></span>v1</div>
+            <span class="vrail-sep"></span>
+            <div class="vrail-n"><span class="vrail-d"></span>v2</div>
+            <span class="vrail-sep"></span>
+            <div class="vrail-n cur"><span class="vrail-d"></span>v3</div>
+          </div>
 
           <table class="dt">
             <thead><tr>

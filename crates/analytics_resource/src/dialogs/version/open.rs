@@ -1,7 +1,7 @@
 //! 版本对话框：打开入口与行/动作条的装配。
 
 use super::*;
-use super::render::{action_bar, header_line, timeline_section, version_line};
+use super::render::{action_bar, header_line, timeline_section, version_line, version_rail};
 
 /// 打开版本历史对话框（宿主入口）。
 ///
@@ -101,13 +101,20 @@ pub fn open_version_dialog_with(
                                 .child(note),
                         )
                     }),
-            )
-            .child(
-                // 行多时滚动（带滚动的区域返回的不是 `Div`）。
-                list.max_h(rems(ui::VERSION_LIST_MAX_HEIGHT))
-                    .overflow_y_scrollbar()
-                    .into_any_element(),
             );
+
+        // 版本轨道（横排，进度条式）：宽容器里先把“有哪几版、我在第几版”摆出来，
+        // 点节点与点表格行是同一个选中状态；表格仍是逐列明细。
+        if !rows.is_empty() {
+            body = body.child(version_rail(theme, &rows, selected, state.clone()));
+        }
+
+        body = body.child(
+            // 行多时滚动（带滚动的区域返回的不是 `Div`）。
+            list.max_h(rems(ui::VERSION_LIST_MAX_HEIGHT))
+                .overflow_y_scrollbar()
+                .into_any_element(),
+        );
 
         // 履历放在版本表与动作栏之间：先看内容怎么变，再看经历过什么，最后才是动作。
         if !timeline.is_empty() {

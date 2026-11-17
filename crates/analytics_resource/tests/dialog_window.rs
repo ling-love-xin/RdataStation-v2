@@ -431,6 +431,12 @@ fn version_dialog_lists_rows_and_shows_actions_after_selection(cx: &mut TestAppC
         cx.debug_bounds("version-row-3").is_some() && cx.debug_bounds("version-row-1").is_some(),
         "当前版本与历史行都要在（行数少的存档就是两行）"
     );
+    // 横排版本轨道：版本即节点，与表格行共用一份选中（宽容器才横排）。
+    assert!(
+        cx.debug_bounds("version-rail-v3").is_some()
+            && cx.debug_bounds("version-rail-v1").is_some(),
+        "轨道节点要与版本行一一对应"
+    );
     assert!(
         cx.debug_bounds("version-restore").is_none(),
         "没选中就不摆动作栏（768px 里每行三个按钮装不下）"

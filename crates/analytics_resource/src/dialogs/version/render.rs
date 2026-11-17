@@ -1,6 +1,9 @@
-//! 版本对话框的渲染件：表头、版本行、动作条。
+//! 版本对话框的渲染件：版本轨道、表头、版本行、动作条。
 
 use super::*;
+
+/// 横排轨道最多摆多少个节点（再多就糊成一团，尾部提示“更早 N 版见下表”）。
+const RAIL_MAX_NODES: usize = 12;
 
 /// 表头（列名与下面各行的列宽一一对应）。
 pub(super) fn header_line(theme: &Theme) -> Div {
@@ -148,6 +151,99 @@ pub(super) fn version_line(
                         }),
                 ),
         )
+}
+
+/// 版本轨道（**横排**，像进度条）：版本即节点，从左到右 v1 → 最新。
+///
+/// 为什么这里横排：对话框 48rem 宽，横向才排得下“一串版本”；侧边详情只有 320px，
+/// 那边走竖排轨道（`detail_view::render_version_timeline`）。两处语义完全一致：
+/// **点节点 = 选中那一版**，且都落在同一份选中状态上（这里是
+/// `VersionDialogState::selected`，所以点轨道与点表格行等价）。
+///
+/// 只放最近 `RAIL_MAX_NODES` 个（版本行永久保留，攒到几十上百个时轨道会先糊成一团）；
+/// 截断时在轨道尾部明说“更早 N 版见下表”，不静默吞。
+pub(super) fn version_rail(
+    theme: &Theme,
+    rows: &[VersionRow],
+    selected: Option<i32>,
+    state: VersionDialogState,
+) -> Div {
+    let colors = theme.colors;
+    // 行是降序（当前在前）；轨道按时间从左往右读，所以取最新的一批再倒过来。
+    let shown: Vec<VersionRow> = rows
+        .iter()
+        .take(RAIL_MAX_NODES)
+        .rev()
+        .cloned()
+        .collect();
+    let hidden = rows.len().saturating_sub(shown.len());
+    let mut rail = div().h_flex().w_full().items_center().gap_1();
+    for (index, row) in shown.iter().enumerate() {
+        if index > 0 {
+            // 节点之间的那段“轨道”：一根 1px 线，读起来才像进度条。
+            rail = rail.child(
+                div()
+                    .flex_none()
+                    .w(rems(0.75))
+                    .h(ui::HAIRLINE)
+                    .bg(colors.border),
+            );
+        }
+        let version = row.version;
+        let is_selected = selected == Some(version);
+        let is_current = row.is_current;
+        let dot = if is_current || is_selected {
+            colors.primary
+        } else {
+            colors.muted_foreground
+        };
+        let label_color = if is_selected {
+            colors.primary
+        } else {
+            colors.muted_foreground
+        };
+        let toggle = {
+            let state = state.clone();
+            move |_: &ClickEvent, _window: &mut Window, _cx: &mut App| {
+                state.set_selected(Some(version));
+            }
+        };
+        rail = rail.child(
+            Button::new(SharedString::from(format!("version-rail-v{version}")))
+                .ghost()
+                .h(rems(ui::ROW_HEIGHT))
+                .px_1()
+                .debug_selector(move || format!("version-rail-v{version}"))
+                .when(is_selected, |button| button.bg(colors.list_active))
+                .on_click(toggle)
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_1()
+                        .text_xs()
+                        .child(
+                            div()
+                                .flex_none()
+                                .w(rems(0.375))
+                                .h(rems(0.375))
+                                .rounded_full()
+                                .bg(dot),
+                        )
+                        .child(div().text_color(label_color).child(format!("v{version}"))),
+                ),
+        );
+    }
+    if hidden > 0 {
+        rail = rail.child(
+            div()
+                .flex_none()
+                .text_xs()
+                .text_color(colors.muted_foreground)
+                .child(format!("更早 {hidden} 版见下表")),
+        );
+    }
+    rail
 }
 
 /// 动作栏：选中一行后才出现（原型 §4.3 的取舍：表格装不下每行三个按钮）。

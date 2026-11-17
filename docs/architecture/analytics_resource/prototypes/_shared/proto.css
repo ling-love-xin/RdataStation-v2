@@ -230,6 +230,15 @@ svg.ico-sm{width:12px;height:12px;flex:none;fill:none;stroke:currentColor;stroke
 .tl-card-h{display:flex;align-items:center;gap:6px;font-size:10.5px;font-weight:600;margin-bottom:3px;}
 .tl-card-h .tl-card-k{font-weight:400;color:var(--muted);}
 .tl-card-f{margin-top:5px;font-size:10px;color:var(--muted);}
+/* ── 版本轨道（横排，进度条式：版本即节点，点节点 = 点表格行，同一个选中） ── */
+.vrail{display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin:0 0 8px;}
+.vrail-n{display:flex;align-items:center;gap:4px;height:24px;padding:0 6px;border-radius:6px;font-size:10.5px;color:var(--muted);cursor:pointer;}
+.vrail-n:hover{background:var(--hover);}
+.vrail-n.sel{background:var(--hover);color:var(--primary);}
+.vrail-d{flex:none;width:4px;height:4px;border-radius:50%;background:var(--muted);}
+.vrail-n.cur .vrail-d,.vrail-n.sel .vrail-d{background:var(--primary);}
+.vrail-sep{flex:none;width:12px;height:1px;background:var(--border);}
+.vrail-more{font-size:10px;color:var(--muted);}
 .dlink{display:inline-block;margin-top:5px;color:var(--primary);font-size:10.5px;font-weight:600;cursor:pointer;}
 .dlink:hover{text-decoration:underline;}
 .prev{margin-top:5px;border:1px solid var(--border);border-radius:7px;overflow:hidden;}
