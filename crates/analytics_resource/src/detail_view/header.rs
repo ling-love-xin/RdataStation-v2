@@ -47,7 +47,16 @@ pub(super) fn render_header(
                     .child(name_link(detail, actions, foreground)),
             )
             .child(
+                // 版本徽标（原型 `.dver`）：带一圈描边的 pill，与右侧的强度徽标一样“挂”在
+                // 名字后面；裸一行 `v3` 会和文件名混成一句，看不出它是元信息。
                 div()
+                    .flex_none()
+                    .h_flex()
+                    .h(rems(ui::ARCHIVE_BADGE_HEIGHT))
+                    .px_1()
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(colors.border)
                     .text_xs()
                     .text_color(muted)
                     .child(format!("v{}", detail.version)),

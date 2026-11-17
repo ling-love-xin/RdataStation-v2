@@ -188,23 +188,54 @@ pub fn render_preview_section(detail: &ArchiveDetail, cx: &App) -> Div {
 
     let lines = detail.preview.lines();
     if !lines.is_empty() {
+        // 框内先摆一条标题条（原型 `.prev-h`：「前 20 行 · 不可编辑」+ 锁图标）：
+        // 这段是**只读的摘录**，不是编辑器——不标一句，用户会以为能在这里改。
         let mut block = div()
             .id("archive-detail-preview")
             .debug_selector(|| "archive-detail-preview".to_string())
             .v_flex()
             .w_full()
             .min_w_0()
-            .gap_0p5()
-            .p_2()
             .rounded_sm()
             .border_1()
             .border_color(border)
+            .overflow_hidden()
+            .child(
+                div()
+                    .h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap_1()
+                    .h(rems(ui::DETAIL_SECTION_HEAD_HEIGHT))
+                    .px_2()
+                    .bg(cx.theme().colors.sidebar)
+                    .border_b(ui::HAIRLINE)
+                    .border_color(border)
+                    .child(
+                        Icon::new(IconName::Lock)
+                            .flex_none()
+                            .size_3()
+                            .text_color(muted),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(format!("前 {} 行 · 不可编辑", lines.len())),
+                    ),
+            );
+        let mut mono = div()
+            .v_flex()
+            .w_full()
+            .min_w_0()
+            .gap_0p5()
+            .p_2()
             .font_family(mono_family)
             .text_size(mono_size)
             .text_color(foreground);
         for line in lines {
             // 一行一条：长行省略号而不是折行（折行会让“前 20 行”变成“前 20 行的一部分”）。
-            block = block.child(
+            mono = mono.child(
                 div()
                     .w_full()
                     .min_w_0()
@@ -213,6 +244,7 @@ pub fn render_preview_section(detail: &ArchiveDetail, cx: &App) -> Div {
                     .child(line.clone()),
             );
         }
+        block = block.child(mono);
         section = section.child(block);
     }
     if let Some(note) = detail.preview.note() {

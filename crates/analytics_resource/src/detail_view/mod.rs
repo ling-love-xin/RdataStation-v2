@@ -6,6 +6,7 @@
 //! 本批做**只读信息区**（头部 / 基本信息 / 来源 / 版本 / 标签与分组）+ **动作区**（打开（只读）/ 取回（检出）…）
 //! + **危险区**（移入回收站）。动作按钮一律经宿主端口（`DetailActions`），crate 不认识服务层。
 
+pub(crate) use gpui_kit::assets::IconName;
 pub(crate) use gpui_kit::base::{Disableable as _, StyledExt};
 pub(crate) use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 pub(crate) use gpui_kit::component::description_list::{DescriptionList, DescriptionText};
