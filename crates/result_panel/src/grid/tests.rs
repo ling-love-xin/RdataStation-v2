@@ -3323,6 +3323,9 @@ fn comment_header_row_gets_room_for_two_lines(cx: &mut gpui_kit::TestAppContext)
 /// 几何口径：`grid()` 两列都是未知类型（无 badge、无排序箭头、无筛选 ▽），默认列宽
 /// 128 扣掉组件左右 padding 8、再扣掉组件 `render_th` 自带的排序图标槽（实测 16）→
 /// 列名应拿到 **104**。菜单若回到流内（旧实现）只剩 80，断言 >= 96 足以区分两代实现。
+///
+/// 2026-11-18：表头补了 1px 列边界线（画在格的左边界，占掉 1px 内容宽）→ 实测 95，
+/// 阈值下调到 **92**：仍远高于「菜单在流内」的 80，区分力不变。
 #[gpui_kit::test]
 fn header_column_menu_floats_and_leaves_the_name_its_full_width(
     cx: &mut gpui_kit::TestAppContext,
@@ -3345,7 +3348,7 @@ fn header_column_menu_floats_and_leaves_the_name_its_full_width(
         .expect("表头主行应有 debug 几何");
 
     assert!(
-        name.size.width >= gpui_kit::px(96.),
+        name.size.width >= gpui_kit::px(92.),
         "列名没拿到整列宽（列头菜单又回到流内占位了？）：name={:?} main={:?}",
         name.size.width,
         main.size.width
@@ -3366,6 +3369,9 @@ fn header_column_menu_floats_and_leaves_the_name_its_full_width(
 ///
 /// 断言用**列宽常量**当基准：改前组件那层左右各 4px 内距会把单元格挤窄 8px（行号槽
 /// 48 → 40、数据列 128 → 120）。谁把左右内距又填回列定义里，这里立刻掉下来。
+///
+/// 表头走同一条几何（2026-11-18 补）：表头的列边界线画在左边界（右端被排序图标槽
+/// 占 20px），所以断言收窄为「行号列表头撑满列宽」+「数据列表头从行号槽右缘开始」。
 #[gpui_kit::test]
 fn cells_stretch_to_the_column_boundary_for_grid_lines(cx: &mut gpui_kit::TestAppContext) {
     use gpui_kit::px;
@@ -3398,6 +3404,27 @@ fn cells_stretch_to_the_column_boundary_for_grid_lines(cx: &mut gpui_kit::TestAp
         cell.size.width >= crate::ui::RESULT_COLUMN_WIDTH - px(4.),
         "数据格没撑满列宽（竖分隔线会画在列内侧 6px 处）：cell={:?}",
         cell.size.width
+    );
+
+    // 表头：列边界线画在表头格的**左**边界（右端被排序图标槽占 20px，
+    // `state.rs:1910`），所以这里钉的是「数据列表头从行号槽右缘开始」——
+    // 它一偏，表头竖线就与数据区的竖线错位。
+    let th0 = vcx
+        .debug_bounds("editor-result-th-0")
+        .expect("行号列表头应有 debug 几何");
+    let th1 = vcx
+        .debug_bounds("editor-result-th-1")
+        .expect("数据列表头应有 debug 几何");
+    assert!(
+        th0.size.width >= crate::ui::RESULT_ROW_NUMBER_WIDTH - px(4.),
+        "行号列表头没撑满列宽（表头竖线会落到列内侧）：th0={:?}",
+        th0.size.width
+    );
+    assert!(
+        th1.left() - th0.left() >= crate::ui::RESULT_ROW_NUMBER_WIDTH - px(1.),
+        "数据列表头没从行号槽右缘开始（表头竖线与数据区竖线错位）：th0={:?} th1={:?}",
+        th0,
+        th1
     );
 }
 

@@ -2836,6 +2836,62 @@ DBeaver 清空后回空态；本仓没有「无分组键」态（`group_columns`
 - `cargo test -p rds-result-panel --lib` = 见 §2.41 真值（`grid/tests.rs` 新增 1 例）。
 - `cargo test -p rds-ui-guard`（不带 `--lib`）= 4 passed（基线已同步上调并写明理由）。
 
+### 8.52 表格打磨第二批：表头列边界线（并修正 §8.51 的竖线基准）
+
+#### 8.52.1 DBeaver 事实（`GridColumnRenderer.paint`）
+
+| 事实 | 出处 |
+| --- | --- |
+| 每个列头**逐列画两条线**：右边界竖线 + 底边横线（`drawLine(x+w-1, y, x+w-1, y+h-1)`、`drawLine(x, y+h-1, x+w-1, y+h-1)`） | `GridColumnRenderer.java:105-108` |
+| 获焦列（`element == grid.getFocusColumn()`）改画**四条边**的框，色 `COLOR_WIDGET_NORMAL_SHADOW` | `:96-104` |
+| 只读列额外在底部之上再画一条线（`getHeaderReadOnlyColor`） | `:110-115` |
+| 线色 = `labelProvider.getHeaderBorder(element)`，与表头底边同色（不是数据区 `lines` 色） | `:106` |
+
+底边本仓早就有：组件给表头行 `border_b_1().border_color(cx.theme().border)`
+（`table/state.rs:2114-2115`）。缺的只有**竖直的那条**。
+
+#### 8.52.2 本仓落法与 §8.51 的两处修正
+
+| 项 | 落点 |
+| --- | --- |
+| 表头列边界线 | `grid/header.rs::render_th` 两支（早退支 + 带列头菜单的主支）都加 `.border_l(ui::HAIRLINE)`，色 `theme.colors.border`（先取到局部 `header_sep`，避免与后面的 `cx` 可变借用打架） |
+| 跳过首列 | 两处都包 `.when(col_ix > 0, …)`：首列的左边界就是表格左边缘，不画（DBeaver `LightGrid.java:2426-2437` 同样跳过首个边界） |
+| **修正 1：竖线改画左边** | §8.51 用的是 `.border_r`（画在格盒子右边界）。但表头格内容区右端被组件 `render_sort_icon` 占掉 20px（`state.rs:1910` 把图标当 `justify_between` 的第二个 child；图标 + 2px 内距），实测 128px 列的表头格只有 **108px** 宽 ⇒ 右边界线会落在列内侧 20px。改成左边后与列左边界重合，且表头 / 数据区用的是同一个基准 |
+| **修正 2：行号槽不画线** | §8.51 里行号槽画右边界线。改左边界后，行号槽自身不再画线——它与首个数据列之间那条由数据格的 `border_l` 画（每处边界仍只有一条 1px 线） |
+
+**为什么不是给表头右端「补 20px」**：那 20px 是组件排序图标槽（`SortAscending` /
+`ChevronsUpDown`），不是我们画的；要在它上面补一个绝对定位的线，就得把一个真实的
+布局尺寸（图标宽 + 内距）写死进我们的代码，属于对 vendor 内部几何的猜测。画左边不需要
+任何偏移量。
+
+#### 8.52.3 测试口径调整
+
+- `cells_stretch_to_the_column_boundary_for_grid_lines` 追加表头断言：
+  行号列表头宽 ≥ `RESULT_ROW_NUMBER_WIDTH - 4px`；数据列表头的 `left()` 比行号列表头
+  右移 ≥ `RESULT_ROW_NUMBER_WIDTH - 1px`（= 表头竖线与数据区竖线同一条 x）。
+  **不能用表头格的宽度当基准**（它是 108 而不是 128，见修正 1）。
+- `header_column_menu_floats_and_leaves_the_name_its_full_width`：列名实测 104 → **95**
+  ——新增的 1px 左边界线画在格内部，占掉 1px 内容宽。阈值 96 → **92**（「菜单回到流内」
+  时只有 80，区分力不变），并在注释里写明这一档 1px 的来由。
+
+#### 8.52.4 未做与未决
+
+- **获焦列四边框**（DBeaver `:96-104`）未做：要画得知道「当前焦点列」，而
+  `TableState::selected_cell()` 在 `TableDelegate::render_th` 里读不到——该回调执行时
+  `TableState` 实体正被 `&mut` 借用（`cx.entity().read(cx)` 会撞「正在更新」）。
+  可行路径是先在 delegate 侧缓存焦点列（由面板 `observe` 表格选择变化写入），属于接线活。
+- **只读列标记**（`:110-115`）未做：本仓只有表级 `editable`，没有列级只读信息。
+- **表头底边线色**：组件固定 `theme.border`，与本次竖线同源，未另行覆盖。
+- 真窗口目视（表头线与数据线是否严丝合缝、深色主题下 1px 线是否可辨）仍挂账。
+
+#### 8.52.5 验证
+
+- `cargo check -p rds-result-panel -p rds-editor` = 0 error / 0 warning。
+- `cargo test -p rds-result-panel --lib` = **261 passed / 0 failed**（本批不新增用例，
+  复用 §8.51 的几何用例追加两条表头断言）。
+- `cargo test -p rds-ui-guard`（不带 `--lib`）= **4 passed**（首轮因注释里写了 `p(px(2.))`
+  被 `no_new_hardcoded_color_or_pixel` 误计，改成「图标 + 2px 内距」后归零；未动基线）。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

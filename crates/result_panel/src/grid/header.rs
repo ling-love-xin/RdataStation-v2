@@ -105,6 +105,10 @@ pub(crate) fn render_th(
         delegate.data_column(col_ix - 1)
     };
     let muted = cx.theme().colors.muted_foreground;
+    // 表头列分隔线色：与表头底边线同源（`state.rs:2114-2115` 用 `theme.border`），
+    // 对应 DBeaver 的 `getHeaderBorder(element)`（同一色画列右边界与底边，
+    // `GridColumnRenderer.java:106-108`）。先取出来：后面构造列头菜单要用 `cx` 的可变借用。
+    let header_sep = cx.theme().colors.border;
 
     // 【A3】类型族 badge：浅底 + 彩色符号（123/Aa/◷/✓/01）。
     // 位置在列名前；类型族未知不画 badge。浅底 = 族色 18% 透明度，文字 = 族色。
@@ -230,6 +234,14 @@ pub(crate) fn render_th(
             // 左右内距 6px：与单元格同一个口径（DBeaver `GridColumnRenderer.LEFT/RIGHT_MARGIN = 6`），
             // 列名与下面格子的文字才落在同一条竖线上
             .px(rems(0.375))
+            // 列边界线画在**左**边：表头格的盒子右端被组件排序图标槽占去 20px
+            // （`state.rs:1910` 的 `render_sort_icon`，图标 + 2px 内距），右边界线会
+            // 落在列内侧；左边与列左边界重合（列级内距已置零，`table_impl::cell_paddings`）。
+            // 首列（行号槽 / 转置首列）的左边界就是表格左边缘，不画（DBeaver 同口径，
+            // `LightGrid.java:2426-2437` 跳过首个边界）。色与表头底边线同源（`theme.border`）。
+            .when(col_ix > 0, |this| {
+                this.border_l(ui::HAIRLINE).border_color(header_sep)
+            })
             .debug_selector(move || format!("editor-result-th-{col_ix}"))
             .child(main_row)
             .when_some(comment_line, |head, line| head.child(line))
@@ -460,6 +472,11 @@ pub(crate) fn render_th(
         // 左右内距 6px：与单元格同口径（DBeaver `GridColumnRenderer.LEFT/RIGHT_MARGIN = 6`），
         // 表头文字与格子文字左边缘对齐；组件层内距已置零（`table_impl::cell_paddings`）
         .px(rems(0.375))
+        // 列边界线：同 early-return 分支（画左边、跳过首列），数据区的竖分隔线
+        // 因此从表头一直贯到末行
+        .when(col_ix > 0, |this| {
+            this.border_l(ui::HAIRLINE).border_color(header_sep)
+        })
         // 与early-return 分支同一个探针选择器：数据列（带列名 / 带列头菜单）也要能被用例
         // 读到整格几何——接列头菜单时这里漏挂过，`editor/src/view/tests/results_a.rs`
         // 的「表头右端真点击」随即取不到坐标（`editor-result-th-1` 恒为 None）。

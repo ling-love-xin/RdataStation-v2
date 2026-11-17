@@ -250,11 +250,9 @@ pub(crate) fn render_td(
             .truncate()
             .text_xs()
             .text_color(muted)
-            // 【网格线】列分隔：DBeaver `LightGrid` 的 `linesVisible` 默认开（`:295`），
-            // 逐列在列边界画 1px 线（`:2425-2439`）。画在自己盒子的右边界上——本格
-            // 撑满整列宽度，所以这条线就落在列边界（行号槽与数据列同一口径）。
-            .border_r(crate::ui::HAIRLINE)
-            .border_color(theme.table_row_border)
+            // 行号槽是最左一列，它的左边界就是网格左边缘：网格线不画在这里
+            // （DBeaver 的竖线只画在列与列之间，`LightGrid.java:2426-2437` 跳过首个边界）。
+            // 它与数据列之间的那条线由右侧数据格的 `border_l` 画。
             .when_some(local_bg, |cell, bg| cell.bg(bg))
             .when(is_deleted, |cell| cell.line_through())
             // 用例按它量行高（`.id()` 不登记坐标）：这是「表格密度」那条口径的回归哨兵
@@ -301,8 +299,11 @@ pub(crate) fn render_td(
         .px(rems(0.375))
         .truncate()
         .text_xs()
-        // 【网格线】列分隔（口径同行号槽：DBeaver `linesVisible` 默认开，逐列边界画 1px）
-        .border_r(crate::ui::HAIRLINE)
+        // 【网格线】列分隔：DBeaver `LightGrid` 的 `linesVisible` 默认开（`:295`），逐列在
+        // 列边界画 1px 线（`:2425-2439`）。画在自己盒子的**左**边界上：本格撑满整列宽，
+        // 所以这条线就落在列边界；表头用同一个基准（表头格的右端被排序图标槽占着，
+        // 右边界线会落在列内侧 20px，见 `header.rs::render_th`）
+        .border_l(crate::ui::HAIRLINE)
         .border_color(theme.table_row_border)
         // 被删行灰字（与 NULL 同走 muted；NULL 斜体口径不变）；其余按类型样式角色染色
         .text_color(if is_null || is_deleted {
