@@ -3359,6 +3359,48 @@ fn header_column_menu_floats_and_leaves_the_name_its_full_width(
     );
 }
 
+/// 【网格线 2026-11-17】列内距改由**单元格自己**画 6px、组件层置零（
+/// `grid/table_impl.rs::cell_paddings`）：单元格因此撑满整列宽，那条 1px 竖分隔线才落在
+/// 列边界上（DBeaver `LightGrid` 的 `linesVisible` 默认开、逐列画线，`LightGrid.java:295`
+/// 与 `:2425-2439`）。
+///
+/// 断言用**列宽常量**当基准：改前组件那层左右各 4px 内距会把单元格挤窄 8px（行号槽
+/// 48 → 40、数据列 128 → 120）。谁把左右内距又填回列定义里，这里立刻掉下来。
+#[gpui_kit::test]
+fn cells_stretch_to_the_column_boundary_for_grid_lines(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::px;
+
+    cx.update(gpui_kit::init);
+    let (_, vcx) = cx.add_window_view(|window, cx| HeaderHarness {
+        state: cx.new(|cx| gpui_kit::component::table::TableState::new(grid(), window, cx)),
+    });
+    for _ in 0..2 {
+        vcx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+    }
+
+    let rowno = vcx
+        .debug_bounds("editor-result-rowno-0")
+        .expect("行号格应有 debug 几何");
+    let cell = vcx
+        .debug_bounds("editor-result-cell-0-1")
+        .expect("数据格应有 debug 几何");
+
+    // 行号槽：列宽 48px 扣掉组件 8px 只剩 40（旧行为），撑满时是 48
+    assert!(
+        rowno.size.width >= crate::ui::RESULT_ROW_NUMBER_WIDTH - px(1.),
+        "行号格没撑满列宽（组件那层内距又回来了？）：rowno={:?}",
+        rowno.size.width
+    );
+    // 数据列同理：128 vs 120（留 4px 容差给分数像素对齐）
+    assert!(
+        cell.size.width >= crate::ui::RESULT_COLUMN_WIDTH - px(4.),
+        "数据格没撑满列宽（竖分隔线会画在列内侧 6px 处）：cell={:?}",
+        cell.size.width
+    );
+}
+
 /// 只为把工具栏真正渲染进窗口的探针视图（几何必须来自真实布局）
 struct ToolbarHarness;
 

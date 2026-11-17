@@ -27,13 +27,13 @@ use crate::ui::{
 pub(crate) const FIT_SAMPLE_ROWS: usize = 200;
 
 // 三档几何进 `crate::ui`（结构尺寸单一来源，本文件不留裸 px）：
-// `CELL_H_PADDING` = 单元格自身左右内边距（`render_td` 的 `px_2`，合计 16px）；
+// `CELL_H_PADDING` = 单元格自身左右内边距（`render_td` 的 `px(rems(0.375))`，合计 12px）；
 // `HEADER_GAP` = 表头 `main_row` 的 `gap_1`（badge / 列名 / 排序箭头 / 筛选 ▽ 之间，4px）；
 // `BADGE_H_PADDING` = 类型 badge 的 `px_1` 左右合计（8px）。
 //
-// 为什么都要算：组件还会按 `RESULT_TABLE_SIZE`（= XSmall 档，左右各 4px）再加 8px，
-// 两层合起来才是肉眼看到的余量——少算一层，文字正好压在余量里被省略号吃掉，
-// 双击就成了“点了个寂寞”。
+// 2026-11-17 起组件层的内距是 **0**：列定义统一走 `<table_impl>::cell_paddings()`
+// （左右置零，让竖分隔线落在列边界，见该函数注释）。所以 `fit_col` 加的 padding
+// 与渲染出来的内距是同一份（左右各 6px），不再有两层叠加要算。
 
 /// 双击列头分隔线：这一列按内容该多宽（`None` = 这一列不自适应）
 pub(crate) fn fit_column(

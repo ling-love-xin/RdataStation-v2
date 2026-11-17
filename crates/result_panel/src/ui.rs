@@ -167,19 +167,28 @@ pub const RESULT_TABLE_SIZE: ComponentSize = ComponentSize::XSmall;
 /// 56px 可用宽（64 − 8 组件 padding）里的一大半，列名只剩 **5px**——拖到最窄的列
 /// 完全读不出列名，连省略号都摆不下。最小宽的职责是**兜住不可用态**、不是保证可读：
 /// 80px 下留 21px（约 3 个西文字符 + 省略号），看全名靠悬停 tooltip。
+/// （2026-11-17 内距从「组件 8 + 自身 16」收紧成「自身 12、组件 0」，80px 的可用宽
+/// 由 56 变成 68；最小宽维持 80 不动——它是下限兜底，不因余量变宽就回头下调。）
 pub const RESULT_COLUMN_MIN_WIDTH: Pixels = px(80.);
 
-/// 列宽自适应（`grid/fit.rs`）：单元格自身左右内边距合计（`render_td` 的 `px_2`）。
+/// 列宽自适应（`grid/fit.rs`）：单元格自身左右内边距合计（`render_td` 的 `px(rems(0.375))`）。
 ///
-/// 组件还会按 [`RESULT_TABLE_SIZE`]（XSmall 档，左右各 4px）再加 8px——两层合起来才是
-/// 肉眼看到的余量。下面三档原先散在 `fit.rs` 里，按「结构尺寸进常量表」收上来。
-pub const RESULT_FIT_CELL_PADDING: Pixels = px(16.);
+/// 2026-11-17 16 → 12：内距按 DBeaver `GridCellRenderer.LEFT/RIGHT_MARGIN = 6` 收紧，
+/// 且列的组件层内距已置零（`grid/table_impl.rs::cell_paddings`）——原先「组件再加 8px」
+/// 那一层没有了，所以这里就是肉眼看到的全部余量（`fit_col` 与渲染同一份 padding）。
+pub const RESULT_FIT_CELL_PADDING: Pixels = px(12.);
 
 /// 列宽自适应：表头 `main_row` 的 `gap_1`（badge / 列名 / 排序箭头 / 筛选 ▽ 之间）
 pub const RESULT_FIT_HEADER_GAP: Pixels = px(4.);
 
 /// 列宽自适应：类型 badge 的 `px_1` 左右合计
 pub const RESULT_FIT_BADGE_PADDING: Pixels = px(8.);
+
+/// 单元格上下内距（列级 padding 的上下两份，见 `grid/table_impl.rs::cell_paddings`）。
+///
+/// 取 2px = 组件 XSmall 档 `table_cell_padding()` 的原值（`sizing.rs:71-76`）：左右由
+/// 单元格自己画 6px（DBeaver 口径）、上下沿用组件这一档，垂直位置与改造前一致。
+pub const RESULT_CELL_VERTICAL_PADDING: Pixels = px(2.);
 
 /// 结果网格单元格 / 表头悬停全文的最大宽度（24rem = 384px）。
 ///

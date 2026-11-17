@@ -243,11 +243,18 @@ pub(crate) fn render_td(
         let is_deleted = delegate.is_deleted_row(row_ix);
         let local_bg = is_local.then(|| product_tokens::get(cx).result_local_row_background(theme));
         return div()
-            .px_2()
+            // 内距 6px（DBeaver `GridCellRenderer.LEFT/RIGHT_MARGIN = 6`）；
+            // 列的组件层内距已置零（`table_impl::cell_paddings`），这里才是唯一一层
+            .px(rems(0.375))
             .h_full()
             .truncate()
             .text_xs()
             .text_color(muted)
+            // 【网格线】列分隔：DBeaver `LightGrid` 的 `linesVisible` 默认开（`:295`），
+            // 逐列在列边界画 1px 线（`:2425-2439`）。画在自己盒子的右边界上——本格
+            // 撑满整列宽度，所以这条线就落在列边界（行号槽与数据列同一口径）。
+            .border_r(crate::ui::HAIRLINE)
+            .border_color(theme.table_row_border)
             .when_some(local_bg, |cell, bg| cell.bg(bg))
             .when(is_deleted, |cell| cell.line_through())
             // 用例按它量行高（`.id()` 不登记坐标）：这是「表格密度」那条口径的回归哨兵
@@ -291,9 +298,12 @@ pub(crate) fn render_td(
             "editor-result-cell",
             row_ix * (delegate.columns.len() + 1) + col_ix,
         ))
-        .px_2()
+        .px(rems(0.375))
         .truncate()
         .text_xs()
+        // 【网格线】列分隔（口径同行号槽：DBeaver `linesVisible` 默认开，逐列边界画 1px）
+        .border_r(crate::ui::HAIRLINE)
+        .border_color(theme.table_row_border)
         // 被删行灰字（与 NULL 同走 muted；NULL 斜体口径不变）；其余按类型样式角色染色
         .text_color(if is_null || is_deleted {
             muted

@@ -19,6 +19,24 @@ use crate::store::ColumnKind;
 use crate::ui;
 use workbench_shell::product_tokens;
 
+/// 单元格内距（对齐 DBeaver `GridCellRenderer.LEFT_MARGIN / RIGHT_MARGIN = 6`）。
+///
+/// **左右置零**，由单元格自己画（`grid/cell.rs` 的 `.px(rems(0.375))`）：这样那条 1px
+/// 竖分隔线正好落在列边界上。若左右内距留在组件层，单元格的右边线会画在离边界 6px 的
+/// 位置——列与列之间就没有分界线了（DBeaver `LightGrid.linesVisible = true` 是逐列画线，
+/// `LightGrid.java:2425-2439`）。上下仍留 2px：与组件 XSmall 档原值一致，垂直位置不变。
+///
+/// `fit_col` 也读这份 padding（`table/state.rs:1299-1303`），所以列宽自适应的
+/// 「内容宽 + 内距」与本文件渲染完全同一口径。
+fn cell_paddings() -> Edges<Pixels> {
+    Edges {
+        top: ui::RESULT_CELL_VERTICAL_PADDING,
+        bottom: ui::RESULT_CELL_VERTICAL_PADDING,
+        left: Pixels::ZERO,
+        right: Pixels::ZERO,
+    }
+}
+
 /// 列类型 → 默认列宽（用户没拖过、也没双击自适应过的列用哪一档）
 ///
 /// 口径：按 [`ColumnKind`]（归一化语义类型）而不是驱动原始类型名——MySQL 报 `int`、
@@ -261,10 +279,12 @@ impl TableDelegate for ResultGridDelegate {
                 1 => Column::new("transpose-field", "字段")
                     .width(ui::RESULT_COLUMN_WIDTH)
                     .min_width(ui::RESULT_COLUMN_MIN_WIDTH)
+                    .paddings(cell_paddings())
                     .resizable(true),
                 _ => Column::new("transpose-value", "值")
                     .width(ui::RESULT_COLUMN_WIDTH)
                     .min_width(ui::RESULT_COLUMN_MIN_WIDTH)
+                    .paddings(cell_paddings())
                     .resizable(true),
             };
         }
@@ -273,6 +293,7 @@ impl TableDelegate for ResultGridDelegate {
             return Column::new("row-no", "#")
                 .width(ui::RESULT_ROW_NUMBER_WIDTH)
                 .min_width(ui::RESULT_ROW_NUMBER_WIDTH)
+                .paddings(cell_paddings())
                 .fixed_left()
                 .resizable(false)
                 .movable(false)
@@ -295,6 +316,7 @@ impl TableDelegate for ResultGridDelegate {
         Column::new(format!("col-{index}"), name)
             .width(width)
             .min_width(ui::RESULT_COLUMN_MIN_WIDTH)
+            .paddings(cell_paddings())
             // 【B15】可本地排序：组件库点列头时会在 Default → Descending → Ascending 里循环，
             // 并回调 `perform_sort`（排序状态存在它那边，这里只把当前态回去，refresh 后指示器不丢）
             .sort(self.sort_mark(index))

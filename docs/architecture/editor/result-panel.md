@@ -2768,6 +2768,74 @@ DBeaver 清空后回空态；本仓没有「无分组键」态（`group_columns`
 - `cargo test -p rds-ui-guard`（不带 `--lib`）= **4 passed**（`sidebars.rs` 裸 `px(` 计数未增）。
 - 未做：真窗口目视（右栏 320px 窄栏下 28px 工具条是否挤、批量动作三按钮是否溢出）。
 
+### 8.51 表格打磨第一批：列竖分隔线 + 单元格 6px 内距
+
+**指令**：用户「我们需要继续打磨表格了」，在我给出的清单里选了先做「①选中色 + ②网格线」
+（同一条绘制路径）。查证后 ① 被 vendor 挡住（见 8.51.4），本轮只落 ② 以及与之强耦合的
+内距口径。
+
+#### 8.51.1 DBeaver 侧事实（逐行核对 `dbeaver-ref`）
+
+| 事实 | 出处 |
+| --- | --- |
+| 网格线**默认开**：`private boolean linesVisible = true;`，`setLinesVisible(...)` 可关 | `...\lightgrid\LightGrid.java:295`、`:1568-1570` |
+| 画线在**所有单元格之后**统一画一遍（注释原文「Do not paint lines to grid cell to optimize performance」）：水平线每行一条 `y += itemHeight + 1; drawLine(startX + 1, y, startX + width, y)`；垂直线沿每个列边界 `x += column.getWidth(); drawLine(x, startY + 1, x, startY + height)` | `LightGrid.java:2400-2440`（水平 `:2418-2423`、垂直 `:2425-2439`） |
+| 起点：表头可见时竖线从 `headerHeight - 1` 开始（**表头内部不画竖线**）、且 `x < 左固定区右边界` 的列跳过；冻结列另外用 `getLineSelectedColor()` 画 2px 分隔 | `:2413-2416`、`:2426-2437`、`:2442-2447` |
+| 行距 = `itemHeight + 1`（那 1px 就是线），`itemHeight = fontMetrics.getHeight() + 3` | `:2397`、`:1871`、`:1065` |
+| 线色 `lineColor = JFaceColors.getErrorBackground(display)`、选中线 `getErrorBorder(display)` | `:446-447`、`:1083-1089` |
+| 单元格文字内距：`LEFT_MARGIN = 6`、`RIGHT_MARGIN = 6`、`TOP_MARGIN = 0`、`TEXT_TOP_MARGIN = 1`；左对齐起点 `x = LEFT_MARGIN`，右对齐起点 `bounds.x + bounds.width - (textSize.x + RIGHT_MARGIN)` | `...\lightgrid\GridCellRenderer.java:43-50`、`:158`、`:213`、`:250` |
+| 表头文字内距同为 6px（`GridColumnRenderer.LEFT_MARGIN / RIGHT_MARGIN = 6`，另有 `TOP_MARGIN = 4`、`BOTTOM_MARGIN = 6`） | `...\lightgrid\GridColumnRenderer.java:36-41`、`:117-120` |
+
+结论：DBeaver 的表格既有**行线**也有**列线**，且单元格/表头文字左右内距都是 **6px**。
+
+#### 8.51.2 本仓落法
+
+| 项 | 落点 |
+| --- | --- |
+| 列竖分隔线 | `grid/cell.rs::render_td` 两支（行号槽 + 数据格）都加 `.border_r(ui::HAIRLINE).border_color(theme.table_row_border)`；颜色与行线同一个主题槽（`TableState::render_table_row` 的行线就是 `table_row_border`），零裸色值 |
+| 行线 | 组件本来就有：`vendor/gpui-component/src/table/state.rs:2274-2276` 给每行 `border_b_1().border_color(table_row_border)`，本轮不动 |
+| 单元格内距 12px → 6px | `render_td` 的 `.px_2()`（8px）改成 `.px(rems(0.375))`（6px）；表头 `render_th` 两支补 `.px(rems(0.375))`（此前表头**没有**内距，列名与格内文字差一截） |
+| 组件层内距置零 | `grid/table_impl.rs::cell_paddings()` 返回 `Edges { top/bottom: ui::RESULT_CELL_VERTICAL_PADDING(2px), left/right: Pixels::ZERO }`，四个列构造点（转置 字段 / 转置 值 / 行号槽 / 数据列）统一 `.paddings(cell_paddings())` |
+| 列宽自适应同口径 | `ui::RESULT_FIT_CELL_PADDING` 16 → **12**（左右各 6）。组件 `fit_col` 加的是**列自己的 padding**（`table/state.rs:1299-1303`），置零后它加 0，delegate 的 12 就是屏幕上那 12 |
+
+**为什么要同时改列 padding（关键机制）**：单元格元素是「组件列容器（带 padding）」的子元素。
+若左右内距留在组件层，单元格盒子两边各被缩进 4px（叠上自身 8px 共 12px），那条
+`border_r` 就画在**离列边界 6px** 的位置——看起来像格子里的竖线，不是列分隔线。
+把左右置零、由单元格自己画内距后，单元格盒子撑满整列宽，`border_r` 正好落在列边界，
+竖线才成立。这条几何由新增用例
+`cells_stretch_to_the_column_boundary_for_grid_lines` 钉住（改前行号槽 40px / 数据列 120px，
+改后 48 / 128）。
+
+#### 8.51.3 守卫基线
+
+`crates/ui_guard/tests/workspace_ui_contract.rs` 的 `result_panel/src/ui.rs` 裸 `px(` 计数
+16→17→**18**：新增 `RESULT_CELL_VERTICAL_PADDING = px(2.)`（沿用组件 XSmall 档
+`table_cell_padding()` 的上下原值，垂直位置不变）。已在 BASELINE 处写明理由，符合
+「新增豁免必须同步上调并写理由」的口径。
+
+#### 8.51.4 偏离与未决
+
+- **线色偏离**：DBeaver 用 `JFaceColors.getErrorBackground(display)`（随系统主题的浅底），
+  本仓取 `theme.table_row_border`——与行线同源，明暗主题都成立；若按名照抄会得到一个
+  本仓主题里不存在的颜色。
+- **① 选中色未落（被 vendor 锁死）**：`vendor/gpui-component/src/theme/schema.rs:1036-1067`
+  的 `clamp_alpha(raw, color, background, max)` 把 `table_active` 的 alpha 上限压到 **0.2**
+  （`list_active` 0.2 / `selection` 0.3），选中格的底色是 vendor 自己在内容**之上**叠
+  `div().absolute().inset_0().bg(cx.theme().tokens.table_active)`（`table/state.rs:2327-2334`、
+  `:2436-2446`）——**传不透明色也会被压到 20%**。DBeaver 的选中是实心浅蓝，本仓只能做到
+  「近似 tint」；要真对齐必须改 vendor 一行上限（会让全应用 `table_active` 变实心），
+  待用户拍板。
+- **未目视**：竖线在 26px 行高 + 12px 字的密度下是否"过密"、线色在深色主题下的对比度、
+  6px 内距对长中文列可读性的影响——真窗口目视已挂账（用户要求不得擅自截图/启动验证）。
+- **行高仍 26px**：DBeaver `itemHeight = fontMetrics.getHeight() + 3`（≈19px）、行距 +1；
+  本仓是组件 XSmall 档 26px。改行高会牵动可视行数、分页取数、几何用例，单列一项待拍板。
+
+#### 8.51.5 验证
+
+- `cargo check -p rds-result-panel -p rds-editor` = 0 error / 0 warning。
+- `cargo test -p rds-result-panel --lib` = 见 §2.41 真值（`grid/tests.rs` 新增 1 例）。
+- `cargo test -p rds-ui-guard`（不带 `--lib`）= 4 passed（基线已同步上调并写明理由）。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

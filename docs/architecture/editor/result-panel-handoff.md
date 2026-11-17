@@ -41,7 +41,7 @@
 
 ```powershell
 $env:RUST_MIN_STACK='268435456'; cd D:\RdataStation\RDS\RdataStation-v2
-cargo test -p rds-result-panel --lib    # 基线：260 passed / 0 failed（含 rendered_ui_elements_survive 防回退）
+cargo test -p rds-result-panel --lib    # 基线：261 passed / 0 failed（含 rendered_ui_elements_survive 防回退）
 cargo test -p rds-settings --lib        # 基线：35 passed / 0 failed
 cargo test -p rds-ui-guard              # 基线：4 passed / 0 failed（含 no_new_hardcoded_color_or_pixel）
 cargo test -p rds-workbench-shell --lib # 基线：14 passed / 0 failed
@@ -552,6 +552,10 @@ ui-guard **4 passed**、workbench-shell **14 passed**。
 **仍未接**：`header.selected.background`（`state.rs:1606` `render_col_wrap`）与 `lines.normal`/`lines.selected`
 （每格网格线，单元格包装层）——组件内部绘制，`TableDelegate` 无槽，要接必须改 vendor。
 
+> **2026-11-17 修正**：`lines.normal`（列竖分隔线）**不需要改 vendor**——把列的左右内距置零
+> （`grid/table_impl.rs::cell_paddings`）、由单元格自己画 6px 内距后，单元格盒子撑满整列宽，
+> 在它身上加 `.border_r(ui::HAIRLINE)` 就正好落在列边界。已落地，见 §2.41 / `result-panel.md §8.51`。
+
 ### 2.29 2026-11-08（深色 resultset 配色其实有整套 DBeaver 覆盖 + 两处修正）
 
 **推翻旧结论**：此前一直按「DBeaver 深色 css 未覆盖 resultset 色，dark 一套只能推导」处理。实读发现
@@ -878,6 +882,28 @@ R3 / R4 / R5。
 **验证**：`cargo check -p rds-result-panel -p rds-editor` 0 error / 0 warning；panel **260 passed**
 （`right_panel_pages_share_the_toolbar_shape` 扩成七步）/ guard **4**。
 
+### 2.41 表格打磨第一批：列竖分隔线 + 单元格 6px 内距
+
+全文见 `result-panel.md §8.51`，接手要点：
+
+- **DBeaver 有竖线且默认开**：`LightGrid.java:295` `linesVisible = true`，画线在所有单元格之后
+  统一画（`:2400-2440`：水平每行一条、垂直沿每个列边界一条；表头内部不画，`startY = headerHeight - 1`）。
+  单元格/表头文字左右内距都是 **6px**（`GridCellRenderer.java:43-48`、`GridColumnRenderer.java:36-41`）。
+- **落点**：`grid/cell.rs::render_td` 两支加 `.border_r(ui::HAIRLINE).border_color(theme.table_row_border)`；
+  内距 `.px_2()`(8) → `.px(rems(0.375))`(6)；`grid/header.rs::render_th` 两支补 `.px(rems(0.375))`
+  （此前表头没有内距，列名与格内文字差一截）；行线组件自带（`table/state.rs:2274-2276`），不动。
+- **关键机制**：左右内距必须**从组件层挪到单元格自己身上**（`grid/table_impl.rs::cell_paddings` 置零），
+  否则单元格盒子两边各缩进 4px，`border_r` 会画在离列边界 6px 的位置（像格内竖线而不是列分隔）。
+  改后单元格撑满整列宽，竖线正好落在边界；`fit_col` 读同一份列 padding，自适应宽度自动同口径。
+- **守卫**：`ui.rs` 新增 `RESULT_CELL_VERTICAL_PADDING = px(2.)`（沿用组件 XSmall 档上下原值），
+  BASELINE 17 → 18 并写了理由。
+- **仍待拍板**：① 选中色被 vendor `clamp_alpha` 封顶 0.2（`theme/schema.rs:1036-1067`），实心浅蓝只能
+  改 vendor 或接受近似；行高仍 26px（DBeaver ≈19px + 1px 线）；真窗口目视未做。
+
+**验证**：`cargo check -p rds-result-panel -p rds-editor` 0 error / 0 warning；panel **261 passed**
+（+1 `cells_stretch_to_the_column_boundary_for_grid_lines`：行号槽 ≥48-1、数据列 ≥128-4，改前
+40 / 120 必挂）/ guard **4**（基线已同步上调）。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）
@@ -894,7 +920,7 @@ R3 / R4 / R5。
 
 ## 4. 接手指引（新会话建议顺序）
 
-1. 先重跑 §1.3 四条验证命令，确认基线（尤其 **260 passed / 0 failed**）落地。
+1. 先重跑 §1.3 四条验证命令，确认基线（尤其 **261 passed / 0 failed**）落地。
 2. 处理 §2.1 提交待办：先 `git status` / `git diff` 摘本线 hunk，与并行线协调后统一提交类型样式渲染消费（settings 三文件 + grid.rs + host.rs + workbench view.rs）。
 3. 知悉 §2.2 外线阻塞（settings 契约测试）与 §1.3 契约测试既有失败，不替并行线补。
 4. 按 §2.4 优先级推进功能遗留（P0（注释与文档漂移）/ P1（分页·行号跳转·列宽落盘）/ P2（hex 翻页·图片预览·列浏览器多选）已交付；剩余见 §2.4 表，开工前先按模块惯例说理解、列方案）。
@@ -903,9 +929,9 @@ R3 / R4 / R5。
 ## 5. 常用锚点（行号随近期提交微移，以现场 grep 为准）
 
 - `panel/`：`mod.rs`（门面 + pub 面 re-export：`GridPayload` / `ExportCtx` / `ResultSyncInput` / `ResultPanel` / `AnalysisItem`）；`render.rs` 主 `render` 组装；`sidebars.rs` `render_vertical_bar`（左缘竖条：网格/文本/记录/上一行/下一行）/ `render_right_edge_bar`（右缘竖条，页签图标区）/ `render_right_sidebar`（横 tab 只显激活页签）/ `render_browser_tab` / `render_filter_expand_bar`（展开条：左=展开右=运行无边框）+ `sidebar_width_anim` / `next_right_edge_state` / `clamp_right_sidebar_width` / `clamp_right_sidebar_height` 纯函数 + **R5** `SidebarResizeDrag` / `render_right_sidebar_resize`（`resize_handle` 独立手柄，id `editor-result-right-sidebar-resize`，横排 Horizontal / 竖排 Vertical）；`tabs.rs` `render_value_tab`（值页工具条右段 = 位置标记 + 复制 + **保存值** `editor-result-value-save`）/ `render_stats_tab` / `render_group_tab` / `render_reference_tab`（backlog 空态）/ `render_exec_sql_tab` + **保存值** `value_payload(kind, value, row, col)`（纯函数，形态→字节+默认名）/ `ResultPanel::selected_value_payload` + `kv_row` / `fmt_stat` / `right_tab_from_index` + `panel_toolbar`（28px 页内工具条公用件，**`pub(crate)`**）/ **§2.40** `empty_page`（「工具条 + 空态正文」整页骨架）；`dialog.rs` `render_sql_dialog`（SQL 预览弹窗浮层）；`events.rs` `toggle_value_sidebar`（三态）/ `resize_right_sidebar`（拖拽改宽度 / 竖排改高度）/ **R5** `toggle_vertical_layout`（方向切换，清拖拽标记）/ `end_right_sidebar_resize` / `set_right_sidebar_width_px`/ `toggle_transpose` / `open_sql_dialog` / `close_sql_dialog`（事件路径，需 window）+ 分组页 `toggle_group_column` / `set_group_sort` / `set_group_duplicates_only` / **§2.39** `clear_group_columns` + `reorder_by` 纯函数；`lifecycle.rs` `new` / `sync`（投影同步）；`tests.rs` 尾部 `rendered_ui_elements_survive`（渲染断言防回退，见 §2.10）。
-- `ui.rs`：`RESULT_VERTICAL_BAR_WIDTH`（2.25）/ `RESULT_SIDEBAR_RIGHT_WIDTH`（20.0）+ **R5** `RESULT_SIDEBAR_RIGHT_MIN_WIDTH`（12.0 = 192px）/ `RESULT_SIDEBAR_RIGHT_MAX_WIDTH`（40.0 = 640px，均 f32，避裸 `px(`）/ **R5 方向切换** `RESULT_SIDEBAR_RIGHT_HEIGHT`（15.0 = 240px）/ `RESULT_SIDEBAR_RIGHT_MIN_HEIGHT`（8.0 = 128px）/ `RESULT_SIDEBAR_RIGHT_MAX_HEIGHT`（32.0 = 512px）/ `RESULT_STATUS_BAR_HEIGHT`（1.5）/ `RESULT_TOOLBAR_HEIGHT`（**1.875 = 30px，比标签条 2.0 矮一档**，对齐 DBeaver `3+2+20+2+3`）/ `RESULT_PANEL_TOOLBAR_HEIGHT`（**1.75 = 28px，右栏页内工具条，必须等于 vendor `toolbar.rs:242-259` XSmall 档的 `min_h_7`**）/ `RESULT_TOOLBAR_PADDING`（`px(3.)`，水平内距，对齐 DBeaver `marginWidth = 3`）。
+- `ui.rs`：`RESULT_VERTICAL_BAR_WIDTH`（2.25）/ `RESULT_SIDEBAR_RIGHT_WIDTH`（20.0）+ **R5** `RESULT_SIDEBAR_RIGHT_MIN_WIDTH`（12.0 = 192px）/ `RESULT_SIDEBAR_RIGHT_MAX_WIDTH`（40.0 = 640px，均 f32，避裸 `px(`）/ **R5 方向切换** `RESULT_SIDEBAR_RIGHT_HEIGHT`（15.0 = 240px）/ `RESULT_SIDEBAR_RIGHT_MIN_HEIGHT`（8.0 = 128px）/ `RESULT_SIDEBAR_RIGHT_MAX_HEIGHT`（32.0 = 512px）/ `RESULT_STATUS_BAR_HEIGHT`（1.5）/ `RESULT_TOOLBAR_HEIGHT`（**1.875 = 30px，比标签条 2.0 矮一档**，对齐 DBeaver `3+2+20+2+3`）/ `RESULT_PANEL_TOOLBAR_HEIGHT`（**1.75 = 28px，右栏页内工具条，必须等于 vendor `toolbar.rs:242-259` XSmall 档的 `min_h_7`**）/ `RESULT_TOOLBAR_PADDING`（`px(3.)`，水平内距，对齐 DBeaver `marginWidth = 3`）/ **§2.41** `RESULT_FIT_CELL_PADDING`（12px，单元格左右内距合计 6+6）/ `RESULT_CELL_VERTICAL_PADDING`（`px(2.)`，列级 padding 的上下两份，沿用组件 XSmall 档原值）。
 - `ports.rs`：`ResultRequest` 全集（含 #7 / §2.9 新增变体 `RunFilterAsQuery` / `ToggleFilterExpand` / `OpenSqlDialog` / `CloseSqlDialog`；`ToggleSqlPreview` 已删）+ **§2.37** `SaveValue` 变体 / `ValuePayload { bytes, default_name }` + **§2.38/§2.39** 分组变体 `ToggleGroupColumn` / `SetGroupSort` / `SetGroupDuplicatesOnly` / `ClearGroupColumns` + `ResultActionQueue`（`request` / `set_panel` / `push` / `drain`）。
-- `grid/`：`delegate.rs` `ResultGridDelegate`（TableDelegate 主体实现 + 钩子类型 + RESULT_GRID_CONTEXT 等常量）；`cell.rs` `render_td` / `header.rs` `render_th` / `menu.rs` `context_menu`（trait 方法不可分块 → 顶层自由函数 + `table_impl.rs` 薄转发）；`status.rs` `render_status_row`（三项新签名）/ `ResultToolbar` / `ResultStatus` / `ResultControls` / `ResultPane`；`text.rs` `format_cell_text` / `column_values`（按视图行序取列，跳过本地行与被删行）/ **§2.38** `column_group_keys`（原生数值分组键，回退口径必须与 `column_values` 一致）/ `group_by_for` / `group_by_columns_for`（多列逐列取原生键）/ `view_rows.rs` `text_presentation` 指纹缓存 / `stats.rs` 列统计 + `group_by_values` / `group_by_tuples` / `number_group_key` / `edit.rs` 行编辑 / `tests.rs`（全量测试迁入）。
+- `grid/`：`delegate.rs` `ResultGridDelegate`（TableDelegate 主体实现 + 钩子类型 + RESULT_GRID_CONTEXT 等常量）；`cell.rs` `render_td`（**§2.41** 单元格自带 6px 内距 + `.border_r(HAIRLINE)` 画列分隔线）/ `header.rs` `render_th`（**§2.41** 同 6px 内距，列名与格内文字左边缘对齐）/ `table_impl.rs` `cell_paddings`（列级 padding：上下 2px、左右 0，是竖线能落在列边界的前提）/ `menu.rs` `context_menu`（trait 方法不可分块 → 顶层自由函数 + `table_impl.rs` 薄转发）；`status.rs` `render_status_row`（三项新签名）/ `ResultToolbar` / `ResultStatus` / `ResultControls` / `ResultPane`；`text.rs` `format_cell_text` / `column_values`（按视图行序取列，跳过本地行与被删行）/ **§2.38** `column_group_keys`（原生数值分组键，回退口径必须与 `column_values` 一致）/ `group_by_for` / `group_by_columns_for`（多列逐列取原生键）/ `view_rows.rs` `text_presentation` 指纹缓存 / `stats.rs` 列统计 + `group_by_values` / `group_by_tuples` / `number_group_key` / `edit.rs` 行编辑 / `tests.rs`（全量测试迁入）。
 - `store/`：`store.rs` `ResultStore`（按文档分槽，多结果集 sets(document) + TabBar 标签；事实档 A2 未接线）+ `entry.rs` / `fact.rs`。
 - `export/`：`mod.rs` 门面 + `formats.rs` / `encode.rs` / `table_name.rs`（editor 侧 `pub use result_panel::export::*` 通配，全 pub 面保持）。
 

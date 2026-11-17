@@ -227,6 +227,9 @@ pub(crate) fn render_th(
             .size_full()
             .min_w_0()
             .justify_center()
+            // 左右内距 6px：与单元格同一个口径（DBeaver `GridColumnRenderer.LEFT/RIGHT_MARGIN = 6`），
+            // 列名与下面格子的文字才落在同一条竖线上
+            .px(rems(0.375))
             .debug_selector(move || format!("editor-result-th-{col_ix}"))
             .child(main_row)
             .when_some(comment_line, |head, line| head.child(line))
@@ -454,6 +457,9 @@ pub(crate) fn render_th(
         .size_full()
         .min_w_0()
         .justify_center()
+        // 左右内距 6px：与单元格同口径（DBeaver `GridColumnRenderer.LEFT/RIGHT_MARGIN = 6`），
+        // 表头文字与格子文字左边缘对齐；组件层内距已置零（`table_impl::cell_paddings`）
+        .px(rems(0.375))
         // 与early-return 分支同一个探针选择器：数据列（带列名 / 带列头菜单）也要能被用例
         // 读到整格几何——接列头菜单时这里漏挂过，`editor/src/view/tests/results_a.rs`
         // 的「表头右端真点击」随即取不到坐标（`editor-result-th-1` 恒为 None）。

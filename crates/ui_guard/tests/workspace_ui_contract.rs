@@ -46,7 +46,10 @@ const BASELINE: &[(&str, usize, usize)] = &[
     // 2026-11-08 16 → 17：新增 `RESULT_TOOLBAR_PADDING = px(3.)`，对齐 DBeaver
     // `ResultSetFilterPanel` 的 `GridLayout.marginWidth = 3`（`ResultSetFilterPanel.java:165`）。
     // 3px 是 DBeaver 原值，不能拿 `px_1`(4px) 凑档位。
-    ("crates/result_panel/src/ui.rs", 0, 17),
+    // 2026-11-17 17 → 18：新增 `RESULT_CELL_VERTICAL_PADDING = px(2.)`（单元格上下内距，
+    // 沿用组件 XSmall 档 `table_cell_padding()` 的上下原值；左右 6px 由单元格自己画，
+    // 让竖分隔线落在列边界，见 `grid/table_impl.rs::cell_paddings`）。
+    ("crates/result_panel/src/ui.rs", 0, 18),
     ("crates/settings/src/skeleton.rs", 0, 1),
     ("crates/workbench/src/components/dialog_helpers.rs", 0, 1),
     (
