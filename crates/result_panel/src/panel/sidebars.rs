@@ -352,10 +352,10 @@ impl ResultPanel {
 
         // 标题行：【P2-3】多选非空时右侧摆批量动作（隐藏所选 / 显示所选 / 清空选择）。
         // 计数与按钮都随 `multi_selected` 现算；按钮走队列回宿主分派（render 是纯读路径）。
+        // 无选中时**不生成**动作元素：页内工具条右段（`Toolbar`）即使空容器也会占 gap，
+        // 标题应单独占满整行。
         let selected_count = self.multi_selected.len();
-        let batch_actions: AnyElement = if selected_count == 0 {
-            div().into_any_element()
-        } else {
+        let batch_actions: Option<AnyElement> = (selected_count > 0).then(|| {
             let selected: Vec<usize> = self.multi_selected.clone();
             let hide_queue = self.queue.clone();
             let hide_cols = selected.clone();
@@ -413,35 +413,25 @@ impl ResultPanel {
                         }),
                 )
                 .into_any_element()
-        };
+        });
 
-        // 页签内容区：宽度 / 边框 / 背景由右栏外壳统一控制，这里只排上下三段
+        // 页签内容区：宽度 / 边框 / 背景由右栏外壳统一控制，这里只排上下四段
+        // 【2026-11-17 对齐】页内工具条与值 / 计算 / 分组 / 执行SQL 四页同形
+        // （`panel_toolbar`：28px + 底边一条 HAIRLINE，标题在左、动作在右）。
+        // 此前这一页手写了一条 24px 无分隔线的标题行，与其它页差 4px 且少了分隔线——
+        // 切页时正文起点会跳。
         div()
             .flex_1()
             .min_w_0()
-            .h_full()
             .v_flex()
             .min_h_0()
             .debug_selector(|| "editor-result-browser-tab".to_string())
-            .child(
-                div()
-                    .px_2()
-                    .py_1()
-                    // 固定 `h` 只够容一行小字号文本；选中列后右侧出现 small 档按钮
-                    // （vendor `button.rs` 实测 `Size::Small => h_6` = 24px），连同上下
-                    // `py_1` 会超出 1.5rem 的行高把按钮压掉几个像素，故按内容撑高
-                    .min_h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
-                    .h_flex()
-                    .items_center()
-                    .gap_2()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(SharedString::from(format!(
-                        "列浏览器 · {} 列",
-                        columns.len()
-                    )))
-                    .child(batch_actions),
-            )
+            .child(self.panel_toolbar(
+                "editor-result-browser-toolbar",
+                SharedString::from(format!("列浏览器 · {} 列", columns.len())),
+                batch_actions.into_iter().collect(),
+                cx,
+            ))
             .child(table_head)
             .child(list_body)
             .child(
@@ -531,6 +521,13 @@ impl ResultPanel {
         let vertical = self.vertical_layout;
         let mut wrapper = div()
             .flex_none()
+            // 【2026-11-17 右栏对齐】外壳必须是 flex 列：页签条固定 24px，页内容吃满剩余高。
+            // 此前这里是块级 `div()`，各页自己的 `flex_1()` 全部失效——内容高度由内容撑：
+            // 长列表不产生滚动（外层 `overflow_hidden` 直接把底部裁掉）、空态不垂直居中、
+            // 切页时内容起点在「24 / 28 / 0」三种头高之间跳（列浏览器用临时 24px 标题行、
+            // 值/计算/分组/执行SQL 用 28px 页内工具条、引用页没有头）。改成列后，
+            // 六页统一为「24px 页签条 + 28px 页内工具条 + 剩余内容」，切页不再跳动。
+            .v_flex()
             .overflow_hidden()
             .bg(theme.colors.sidebar)
             .debug_selector(|| "editor-result-value-sidebar".to_string());
@@ -550,12 +547,17 @@ impl ResultPanel {
                     .gap_1()
                     .px_2()
                     .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
-                    .flex_1()
+                    // 页签条固定高：`flex_1` 在这里会让它吃掉剩余高度（列布局下才生效，
+                    // 块布局时无限高的假象让它一直"没出问题"）
+                    .flex_none()
                     .min_w_0()
                     .child(div().flex_1().min_w_0().child(tab_bar))
                     .children(close),
             )
-            .child(content)
+            .child(
+                // 页内容吃满剩余高：各页自己再排「28px 工具条 + flex_1 正文」
+                div().flex_1().min_h_0().v_flex().child(content),
+            )
             // 【R5 可拖分栏】手柄贴分栏边缘（inside Leading）：横排是左边缘、竖排是顶边；
             // vendor 的 band 是绝对定位的细条，不占内容流；尺寸改动由拖拽请求回面板状态。
             .child(self.render_right_sidebar_resize())

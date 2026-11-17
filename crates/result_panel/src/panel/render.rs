@@ -223,6 +223,35 @@ impl ResultPanel {
         // （`CompositeBorderPainter.java:34-39`），SWT 的 composite 本身也没有圆角。
         // 此前挂 `rounded(theme.radius)` 会把四角磨圆，框形与 DBeaver 不一致。
         let theme = cx.theme();
+        // 【DBeaver 对齐 2026-11-17】筛选框第 1 格 = 对象图标 +「显示 SQL」固定文案。
+        //
+        // DBeaver 的 `filterComposite` 是 5 列 GridLayout（`ResultSetFilterPanel.java:174`），
+        // 第 1 列 `ActiveObjectPanel`（`:184`）画的不是 SQL 原文：`getActiveSourceQuery(true)`
+        // 在「数据容器是表且当前没有筛选条件」时返回固定文案
+        // `sql_editor_resultset_filter_panel_show_sql_label`（`:577-578`，
+        // zh 资源 `ResultSetMessages_zh.properties:746` = 「显示 SQL」），
+        // 绘制时先画对象图标再画这段文字（`ActiveObjectPanel.paint:1043-1049`），
+        // 文本宽度按 `maxTextLength = compactMode ? 16 : 24` 个字符封顶（`:996`）。
+        // 完整 SQL 只在点击后的弹层里出现（`ActiveObjectPanel` 双击开 popup，`:924`）。
+        //
+        // 本仓此前把「SQL: 前 60 字符」摆成工具栏最左的独立按钮，长度随 SQL 变化，
+        // 会把筛选输入压窄；改成固定文案后宽度恒定（与 DBeaver 一致），
+        // 原文只走 `editor-result-sql-dialog`。点击仍用单击（用户口径：点击就弹窗）。
+        let sql_chip: Option<AnyElement> = toolbar.sql.is_some().then(|| {
+            let queue = self.queue.clone();
+            Button::new("editor-result-sql-preview")
+                .ghost()
+                // 20px 档：与筛选框内其它子控件同高（框内高 20、外圈 24，见下方注释）
+                .xsmall()
+                .debug_selector(|| "editor-result-sql-preview".to_string())
+                .icon(IconName::Table2)
+                .label("显示 SQL")
+                .tooltip("点击查看完整 SQL（弹出窗口）")
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::OpenSqlDialog, app);
+                })
+                .into_any_element()
+        });
         let filter = div()
             .h_flex()
             .items_center()
@@ -241,6 +270,8 @@ impl ResultPanel {
             // 再补 1px 内距才等价于它的 2px，总量 24px 才对得上。
             .p(ui::HAIRLINE)
             .debug_selector(|| "editor-result-filter".to_string())
+            // 第 1 列：对象图标 +「显示 SQL」（`ActiveObjectPanel`，见上文注释）
+            .children(sql_chip)
             // 第 2 列：展开切换，放在文本列**左侧**。DBeaver 的 `FilterExpandPanel` 正是
             // `GridLayout(5)` 的第 2 列（`ResultSetFilterPanel.java:186`），`GridData` 为
             // `HORIZONTAL_ALIGN_BEGINNING | FILL_VERTICAL` + `widthHint = 图标宽 + 4`
@@ -790,30 +821,9 @@ impl ResultPanel {
             refresh,
             ..Default::default()
         };
-        // 【2026-10-28 微调】SQL 预览：工具栏最左侧可点击元素（Button 自带 hover 高亮 +
-        // 手型，提示可点击）。点击**弹出窗口**显示完整原始 SQL（kit Dialog + 只读
-        // Textarea）；hover 仍给全文 tooltip。
-        let sql_preview = toolbar.sql.clone().map(|sql| {
-            let preview: SharedString = if sql.len() > 60 {
-                format!("{}…", &sql[..60]).into()
-            } else {
-                sql.as_str().into()
-            };
-            let queue = self.queue.clone();
-            Button::new("editor-result-sql-preview")
-                .ghost()
-                .small()
-                .debug_selector(|| "editor-result-sql-preview".to_string())
-                .label(SharedString::from(format!("SQL: {}", preview)))
-                .tooltip("点击查看完整 SQL（弹出窗口）")
-                .on_click(move |_, _window, app| {
-                    queue.request(ResultRequest::OpenSqlDialog, app);
-                })
-                .into_any_element()
-        });
         // 工具栏：右栏开关已移状态栏右端，这里不再摆（None）；导出/刷新已移状态栏
+        // SQL 入口已并入筛选框第 1 格（「显示 SQL」，见上方 `sql_chip`），工具栏左段不再单摆
         let toolbar_el = result_grid::render_toolbar(
-            sql_preview,
             filter,
             Some(pushdown),
             Some(comments),

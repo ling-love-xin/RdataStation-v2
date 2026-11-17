@@ -93,7 +93,8 @@ impl ResultPanel {
         let theme = cx.theme();
         let muted = theme.colors.muted_foreground;
         let Some((row, col)) = self.selection_pos else {
-            return self.sidebar_empty("未选中单元格", cx);
+            // 空态也保留页内工具条（六页同形，见 `empty_page`）
+            return self.empty_page("editor-result-value-toolbar", "值", "未选中单元格", cx);
         };
         let grid = self.grid.read(cx);
         let delegate = grid.delegate();
@@ -427,7 +428,13 @@ impl ResultPanel {
         let grid = self.grid.read(cx);
         let delegate = grid.delegate();
         let Some(data_col) = self.inspect_column(delegate) else {
-            return self.sidebar_empty("选中一个数据列查看统计", cx);
+            // 空态也保留页内工具条（六页同形，见 `empty_page`）
+            return self.empty_page(
+                "editor-result-stats-toolbar",
+                "计算",
+                "选中一个数据列查看统计",
+                cx,
+            );
         };
         let name = delegate
             .columns()
@@ -508,7 +515,7 @@ impl ResultPanel {
     /// 左标题 / 右动作组、底边一条 `HAIRLINE` 分隔线。
     /// **动作只给本仓已有能力**——不造没有底层实现的按钮：DBeaver 的引用页
     /// `contributeActions` 是空实现（`ReferencesPanel.java:156-158`），该页保持空态。
-    fn panel_toolbar(
+    pub(crate) fn panel_toolbar(
         &self,
         debug_id: &'static str,
         title: SharedString,
@@ -687,11 +694,13 @@ impl ResultPanel {
         let delegate = grid.delegate();
 
         // 【R3】分组键列：显式选择的列集合优先（顺序即拼接顺序）；集合空 = 退回当前选中列
+        //
+        // 【2026-11-17 对齐】没有分组键时不再整页早退回空态——页内工具条（尤其分组列
+        // 下拉）必须常驻，否则这一页在「还没选列」时连选列的入口都没有了。
+        // 空态只替换正文，与 DBeaver 的 `GroupingPanel` 常驻工具条同一口径
+        // （`GroupingPanel.fillToolBar:164-176`）。
         let cols: Vec<usize> = if self.group_columns.is_empty() {
-            match self.inspect_column(delegate) {
-                Some(column) => vec![column],
-                None => return self.sidebar_empty("选中一个数据列查看分组", cx),
-            }
+            self.inspect_column(delegate).into_iter().collect()
         } else {
             self.group_columns
                 .iter()
@@ -699,10 +708,11 @@ impl ResultPanel {
                 .filter(|column| *column < delegate.columns().len())
                 .collect()
         };
-        if cols.is_empty() {
-            return self.sidebar_empty("选中一个数据列查看分组", cx);
-        }
-        let mut groups = delegate.group_by_columns_for(&cols);
+        let mut groups = if cols.is_empty() {
+            Vec::new()
+        } else {
+            delegate.group_by_columns_for(&cols)
+        };
         arrange_groups(&mut groups, self.group_sort, self.group_duplicates_only);
         let names: Vec<String> = cols
             .iter()
@@ -714,7 +724,11 @@ impl ResultPanel {
                     .unwrap_or_else(|| "列".to_string())
             })
             .collect();
-        let title = format!("按 {} 分组 · {} 组", names.join(" + "), groups.len());
+        let title = if cols.is_empty() {
+            "分组".to_string()
+        } else {
+            format!("按 {} 分组 · {} 组", names.join(" + "), groups.len())
+        };
 
         // 动作一：分组列下拉（勾选式多选；隐藏列不进分组键）
         let all_names = delegate.columns().to_vec();
@@ -825,9 +839,21 @@ impl ResultPanel {
                     .into_any_element()
             })
             .collect();
+        // 正文：有分组键时是分组行清单，否则是「还没选列」空态（工具条常驻，见上）
+        let body: AnyElement = if cols.is_empty() {
+            self.sidebar_empty("选中一个数据列查看分组", cx)
+        } else {
+            div()
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scrollbar()
+                .children(rows_el)
+                .into_any_element()
+        };
         div()
             .flex_1()
             .min_h_0()
+            .v_flex()
             .debug_selector(|| "editor-result-group-tab".to_string())
             .child(self.panel_toolbar(
                 "editor-result-group-toolbar",
@@ -835,30 +861,41 @@ impl ResultPanel {
                 vec![columns_menu, sort_button, duplicates_button, clear_button],
                 cx,
             ))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scrollbar()
-                    .children(rows_el),
-            )
+            .child(body)
             .into_any_element()
     }
 
     /// 【引用】外键引用查看页签（对齐 DBeaver 引用页签；backlog 空态）
+    ///
+    /// 【2026-11-17 对齐】此前这一页只有一个空态、没有页内工具条，切到引用页时
+    /// 正文直接顶到页签条下方，与其它五页的「28px 工具条 + 正文」不同形。
+    /// DBeaver 每个面板都带一条自己的 `ToolBarManager`（`ResultSetViewer.java:1337-1374`），
+    /// 只是 `ReferencesPanel.contributeActions` 为空实现（`ReferencesPanel.java:156-158`），
+    /// 所以这里保留工具条（标题「引用」）+ 空态正文，动作留空。
     pub(crate) fn render_reference_tab(&self, cx: &App) -> AnyElement {
-        self.sidebar_empty("选中一个列查看外键引用", cx)
+        div()
+            .flex_1()
+            .min_h_0()
+            .v_flex()
+            .debug_selector(|| "editor-result-reference-tab".to_string())
+            .child(self.panel_toolbar(
+                "editor-result-reference-toolbar",
+                SharedString::from("引用"),
+                Vec::new(),
+                cx,
+            ))
+            .child(self.sidebar_empty("选中一个列查看外键引用", cx))
+            .into_any_element()
     }
 
     /// 【1.2】「执行SQL」页签：筛选框运行后生成的 wrapped SQL 原文（只读 + 复制）。
+    ///
+    /// 【2026-11-17 对齐】空态也保留页内工具条（此前空态直接返回居中文字，
+    /// 切页时正文起点比其它页高 28px），只是没有可复制的文本时不摆复制钮。
     pub(crate) fn render_exec_sql_tab(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
-        let Some(sql) = self.exec_sql.clone() else {
-            return self
-                .sidebar_empty("在工具栏筛选框输入词并点 ▶ 运行，生成 SQL 会显示在这里", cx);
-        };
         // 【R1】页内工具条：左「生成的 SQL」、右复制（原先是在 `p_2` 里自绘的一行标题）
-        let copy = {
+        let copy: Option<AnyElement> = self.exec_sql.as_ref().map(|_| {
             let copy_queue = self.queue.clone();
             Button::new("editor-result-exec-sql-copy")
                 .ghost()
@@ -871,31 +908,61 @@ impl ResultPanel {
                     copy_queue.request(ResultRequest::CopyExecSql, app);
                 })
                 .into_any_element()
+        });
+        let body: AnyElement = match self.exec_sql.clone() {
+            Some(sql) => div()
+                .flex_1()
+                .min_h_0()
+                .m_2()
+                .overflow_y_scrollbar()
+                .bg(theme.colors.background)
+                .rounded_md()
+                .p_2()
+                .text_xs()
+                .text_color(theme.colors.foreground)
+                .child(SharedString::from(sql))
+                .into_any_element(),
+            None => {
+                self.sidebar_empty("在工具栏筛选框输入词并点 ▶ 运行，生成 SQL 会显示在这里", cx)
+            }
         };
         div()
+            .flex_1()
+            .min_h_0()
             .v_flex()
-            .w_full()
-            .h_full()
             .debug_selector(|| "editor-result-exec-sql-tab".to_string())
             .child(self.panel_toolbar(
                 "editor-result-exec-sql-toolbar",
                 SharedString::from("生成的 SQL"),
-                vec![copy],
+                copy.into_iter().collect(),
                 cx,
             ))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .m_2()
-                    .overflow_y_scrollbar()
-                    .bg(theme.colors.background)
-                    .rounded_md()
-                    .p_2()
-                    .text_xs()
-                    .text_color(theme.colors.foreground)
-                    .child(SharedString::from(sql)),
-            )
+            .child(body)
+            .into_any_element()
+    }
+
+    /// 【侧栏】「28px 页内工具条 + 空态正文」的整页骨架。
+    ///
+    /// 右栏六页统一形态：页签条 24px + 页内工具条 28px + 正文吃满剩余高。
+    /// 空态也保留工具条——否则切页时正文起点会比其它页高 28px（2026-11-17 对齐）。
+    fn empty_page(
+        &self,
+        toolbar_id: &'static str,
+        title: &str,
+        body: &str,
+        cx: &App,
+    ) -> AnyElement {
+        div()
+            .flex_1()
+            .min_h_0()
+            .v_flex()
+            .child(self.panel_toolbar(
+                toolbar_id,
+                SharedString::from(title),
+                Vec::new(),
+                cx,
+            ))
+            .child(self.sidebar_empty(body, cx))
             .into_any_element()
     }
 

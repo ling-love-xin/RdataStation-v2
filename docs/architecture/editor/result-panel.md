@@ -2681,6 +2681,93 @@ DBeaver 清空后回空态；本仓没有「无分组键」态（`group_columns`
 | 每组展开看行 | DBeaver 的分组结果是另一条 `GROUP BY` 查询的结果集（§8.48.1），不是原结果集的行树 | **不是对齐项**，DBeaver 本身也没有「组内明细」 |
 | 分组列顺序可调 | 唯一入口是分组结果网格的列头拖放（§8.49.1） | 本仓 `DataTable` 无列头拖放入口，需自建 DnD 层；成本 / 收益不划算，**登记不做** |
 
+### 8.50 工具栏 SQL 入口改「显示 SQL」+ 右栏六页竖向节奏对齐
+
+用户口径（2026-11-17 原话）：「工具栏的 sql 区域减少或者设置成 显示SQL 点击都弹窗显示完整sql，
+正常情况下显示 '显示SQL'」+「右侧栏是不是没有对齐呀」+「工具栏等是否还需要优化」。
+
+#### 8.50.1 DBeaver 侧事实（逐行核对）
+
+**SQL 入口的真实形态**：DBeaver 的「显示 SQL」不是一个独立控件，而是筛选条第 1 格里的
+一段固定文案。
+
+- 资源：`ResultSetMessages_zh.properties:746`
+  `sql_editor_resultset_filter_panel_show_sql_label = 显示 SQL`。
+- 取值：`ResultSetFilterPanel.getActiveSourceQuery(boolean forUI)`（`:573-585`）——
+  当数据容器是表实体且当前没有筛选条件时，`forUI = true` 直接返回这段文案（`:577-578`），
+  否则返回查询原文或容器名。
+- 落点：`filterComposite` 是 `GridLayout(compactMode ? 4 : 5, false)`（`:171-182`，
+  `marginHeight/marginWidth = 2`、`horizontalSpacing = verticalSpacing = 0`、
+  `GridData(FILL_HORIZONTAL)`），第 1 列就是 `ActiveObjectPanel`（`:184`），
+  第 2 列 `FilterExpandPanel`（`:186`），第 3 列筛选文本框，第 4 列 `ExecutePanel`（`:209`），
+  第 5 列 `HistoryPanel`（`:214`）。
+- 绘制：`ActiveObjectPanel`（内部类 `:911-1052`）先画对象图标再画文字——
+  `getActiveObjectImage()`（`:551-571`：表实体→`DBIcon.TREE_TABLE`，其它→`DBIcon.SQL_TEXT`），
+  绘制在 `paint`（`:1043-1049`）里「图标 x = 2 + 文字」；文字宽度受
+  `maxTextLength = compactMode ? 16 : 24`（`:996`）封顶，
+  `updateActiveQueryDisplayText`（`:496-501`）把 displayName 截到 200 字符。
+  **标签宽度恒定，不随 SQL 变长**。
+- 交互：`ActiveObjectPanel` 注册 `DoubleClickMouseAdapter`（`:924`）→ 弹 SQL 浮窗（`popup` Shell）。
+
+**参考**：完整原文只在弹层里出现；工具栏本身不为 SQL 预留长度。
+
+**右栏页内工具条**：DBeaver 每个结果面板自带一条
+`ToolBarManager(SWT.HORIZONTAL | SWT.RIGHT | SWT.FLAT)`（`ResultSetViewer.java:1337-1374`），
+动作由各面板 `contributeActions` 贡献；引用页的 `ReferencesPanel.contributeActions`
+是空实现（`:156-158`），但**工具条本身仍存在**。分组页的工具条见
+`GroupingPanel.fillToolBar:164-176`（§8.49.1 已核对）。
+
+**右栏外壳**：`ResultSetViewer.java:321-341` 左右两条 `VerticalFolder`
+（`VerticalFolder.java:42-53`：`GridLayout(1,true)`、`marginWidth = 2`、spacing 0）；
+面板内容在下方 `viewerSash`（`:346-351`）的 `panelFolder`（`CTabFolder(FLAT|TOP)`，`:358-418`，
+`marginW/H = 0`）+ 每个面板自己的工具条。
+
+#### 8.50.2 本仓落法
+
+| 改动 | 落点 |
+| --- | --- |
+| SQL 入口 = 筛选框第 1 格的「显示 SQL」 | `panel/render.rs` 新增 `sql_chip`（`Button::new("editor-result-sql-preview")` + `IconName::Table2` + `.label("显示 SQL")` + `.xsmall()`），插在筛选复合体 `.debug_selector("editor-result-filter")` 之后、展开钮之前；点击发 `ResultRequest::OpenSqlDialog`（弹窗沿用既有 `editor-result-sql-dialog`） |
+| 工具栏左段只剩筛选复合体 | `grid/status.rs::render_toolbar` 删掉 `sql_preview` 形参与其 `.children(...)`；`grid/tests.rs` 的探针调用同步减一个 `None` |
+| 右栏外壳由块级改 flex 列 | `panel/sidebars.rs::render_right_sidebar`：`div()` → `.v_flex()`；页签条行 `.flex_1()`（误用）→ `.flex_none()`；页内容包一层 `div().flex_1().min_h_0().v_flex()` |
+| 列浏览器页头统一 | `render_browser_tab` 撤掉手写的 24px 无分隔线标题行（`min_h(1.5rem) + px_2 py_1`），改用 `panel_toolbar("editor-result-browser-toolbar", "列浏览器 · N 列", 批量动作)`；无选中列时**不生成**批量动作元素（空 `Toolbar` 仍占 gap）；外层 `.h_full()` → `.flex_1()` |
+| 引用页补工具条 | `render_reference_tab`：`panel_toolbar("editor-result-reference-toolbar", "引用", 空)` + `sidebar_empty`；新增 `editor-result-reference-tab` 选择器 |
+| 执行SQL页空态保留工具条 | `render_exec_sql_tab` 空态不再整页早退：工具条常驻、复制钮按 `exec_sql` 有无生成；外层 `.h_full()` → `.flex_1().min_h_0()` |
+| 分组页空态保留工具条 | `render_group_tab`：无分组键不再整页早退（否则这一页连「分组列」下拉入口都没有了）；外壳补 `.v_flex()`（此前是块级 `div()`，`flex_1` 失效）；正文按 `cols.is_empty()` 二选一 |
+| 值 / 计算空态保留工具条 | 新增 `panel_tabs::empty_page(toolbar_id, title, body, cx)`（「28px 工具条 + 空态正文」整页骨架），值页 / 计算页空态各用一次 |
+| 公用件可见性 | `panel_toolbar` 由私有 `fn` 改 `pub(crate)`（`sidebars.rs` 要跨模块调） |
+
+#### 8.50.3 关键机制：`div()` 默认不是 flex
+
+右栏此前出现「长内容不滚动、空态不居中、切页正文起点在 24/28/0 三种头高之间跳」的共同根因是
+外壳为块级 `div()`（gpui 里裸 `div()` 是 block 流，`flex_1` / `justify_center` 均无效）：
+页内容高度由内容撑开，超出侧栏后被外层 `overflow_hidden` 裁掉。改成 `.v_flex()` 后
+`flex_1` 才成立，六页统一为「24px 页签条 + 28px 页内工具条 + 剩余正文」。
+（`vendor/gpui-base/src/styled.rs:105-107`：`h_flex()` = `flex().flex_row().items_center()`，
+`v_flex()` 才是列；裸 `div()` 两者都不是。）
+
+#### 8.50.4 偏离与未决
+
+- **点击口径**：DBeaver 是**双击**标签开浮窗（`:924`），本仓按用户口径用单击。
+- **图标**：DBeaver 按容器类型换表图标 / SQL 图标（`:551-571`），本仓固定 `Table2`（结果集恒为查询结果，暂不分类）。
+- **页内工具条高度**：本仓 28px（对齐 vendor `Toolbar` XSmall `min_h_7`），DBeaver 的
+  `ToolBarManager` 实测约 26px，两者差 2px，取舍见 §8.46（按 kit 组件档位走）。
+- **右缘竖条宽**：本仓 `RESULT_VERTICAL_BAR_WIDTH = 2.25rem = 36px`；DBeaver
+  `VerticalFolder(marginWidth = 2)` + `VerticalButton(BASE_MARGIN 2,2,2,2)`（`VerticalButton.java:44-45`）
+  ≈ 24px。是否收窄**待拍板**（影响右栏三态观感与页签图标命中带宽）。
+- 「执行SQL」页与「显示 SQL」弹窗信息重叠（都展示原文），是否保留该页**未决**。
+- P2 三项（筛选历史下拉 `HistoryPanel`、筛选设置对话框、查找替换浮层）仍未开工。
+
+#### 8.50.5 验证
+
+- `cargo check -p rds-result-panel -p rds-editor` = 0 error / 0 warning。
+- `cargo test -p rds-result-panel --lib` = **260 passed / 0 failed**；
+  `right_panel_pages_share_the_toolbar_shape` 扩为七步（列浏览器工具条存在且高 28px →
+  值详情三按钮 → 分组四动作 → 执行SQL 两件 → 引用页工具条高 28px →
+  值/计算空态仍带工具条 → 分组空态仍有 `editor-result-group-columns` →
+  设 `result_sql` 后 `editor-result-sql-preview` 可见）。
+- `cargo test -p rds-ui-guard`（不带 `--lib`）= **4 passed**（`sidebars.rs` 裸 `px(` 计数未增）。
+- 未做：真窗口目视（右栏 320px 窄栏下 28px 工具条是否挤、批量动作三按钮是否溢出）。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

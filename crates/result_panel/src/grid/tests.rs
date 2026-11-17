@@ -3369,7 +3369,7 @@ impl gpui_kit::Render for ToolbarHarness {
         cx: &mut gpui_kit::Context<Self>,
     ) -> impl gpui_kit::IntoElement {
         // 走生产路径：左右两段都留空，量的就是容器自己写死的高与底色
-        render_toolbar(None, None, None, None, None, None, None, None, cx)
+        render_toolbar(None, None, None, None, None, None, None, cx)
     }
 }
 

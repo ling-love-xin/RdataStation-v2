@@ -844,6 +844,26 @@ fn right_panel_pages_share_the_toolbar_shape(cx: &mut gpui_kit::TestAppContext) 
         });
         by_id || cx.debug_bounds(id).is_some()
     };
+    // 页内工具条统一高度 28px（`ui::RESULT_PANEL_TOOLBAR_HEIGHT`）
+    let toolbar_height = |id: &'static str, cx: &mut gpui_kit::VisualTestContext| -> f32 {
+        f32::from(
+            cx.debug_bounds(id)
+                .expect("页内工具条应带 debug_selector 才量得到")
+                .size
+                .height,
+        )
+    };
+
+    // 0) 列浏览器（默认页）：此前手写过 24px 无分隔线的标题行，与其它页差 4px
+    assert!(
+        visible("editor-result-browser-toolbar", cx),
+        "列浏览器页应有页内工具条（editor-result-browser-toolbar）"
+    );
+    let browser_toolbar_h = toolbar_height("editor-result-browser-toolbar", cx);
+    assert!(
+        (browser_toolbar_h - 28.0).abs() < 0.5,
+        "列浏览器工具条应与其它页同高 28px，实际 {browser_toolbar_h}px"
+    );
 
     // 1) 值详情：工具条 + 复制当前值 + 保存值（保存值对齐 DBeaver「保存至文件…」）
     cx.update(|_, app| {
@@ -900,6 +920,65 @@ fn right_panel_pages_share_the_toolbar_shape(cx: &mut gpui_kit::TestAppContext) 
     ] {
         assert!(visible(id, cx), "执行SQL页元素 {id} 应渲染可见");
     }
+
+    // 4) 引用：此前整页只有空态、没有工具条 → 切到本页正文会顶到页签条下方
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.set_right_tab(RightTab::Reference, cx))
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        visible("editor-result-reference-toolbar", cx),
+        "引用页应有页内工具条（editor-result-reference-toolbar）"
+    );
+    let reference_toolbar_h = toolbar_height("editor-result-reference-toolbar", cx);
+    assert!(
+        (reference_toolbar_h - 28.0).abs() < 0.5,
+        "引用页工具条应与其它页同高 28px，实际 {reference_toolbar_h}px"
+    );
+
+    // 5) 空态也保留工具条：六页同形（此前空态直接返回居中文字，比其它页高 28px）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.selection_pos = None;
+            p.selected_col = None;
+            p.set_right_tab(RightTab::Value, cx);
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        visible("editor-result-value-toolbar", cx),
+        "值详情空态（未选中单元格）也应保留工具条"
+    );
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.set_right_tab(RightTab::Stats, cx))
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        visible("editor-result-stats-toolbar", cx),
+        "计算页空态（未选中列）也应保留工具条"
+    );
+
+    // 6) 分组页空态：工具条常驻（分组列下拉是唯一的选列入口，不能随空态消失）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.set_right_tab(RightTab::Group, cx))
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        visible("editor-result-group-columns", cx),
+        "分组页无分组键时仍应有分组列下拉"
+    );
+
+    // 7) 工具栏 SQL 入口：有 SQL 时第一格是固定文案「显示 SQL」（不再摊开 SQL 原文）
+    cx.update(|_, app| {
+        panel.update(app, |p, _| {
+            p.result_sql = Some("select id, amount from t where amount > 100".to_string())
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        visible("editor-result-sql-preview", cx),
+        "有 SQL 时筛选框第 1 格应渲染「显示 SQL」入口"
+    );
 }
 
 /// 【P2-3】多选集合推进：Ctrl 点击增删、普通点击单选替换、结果升序去重

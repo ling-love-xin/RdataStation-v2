@@ -254,7 +254,8 @@ pub struct ResultPane {
 /// 2026-10-28 重构（组件统一化 §3）：
 /// - 右段纯按钮序列 → `toolbar::Toolbar` 组件（统一容器 + a11y；按钮已是标准 Button /
 ///   DropdownButton，经 `.contents()` 挂入，保留各自 ghost/small 外观）
-/// - 左段 = SQL 预览 + 本地筛选（非按钮内容，Toolbar child 只收 Sizable，走外层 content）
+/// - 左段 = 本地筛选（复合体：第 1 格「显示 SQL」+ 展开 + 输入 + 运行 + 清除，
+///   由面板自己拼好；工具栏只当容器）
 /// - 【1.3 对齐】下发源库 / 注释两个开关也收进右段 Toolbar（统一容器管高度与
 ///   基线，避免开关默认档与按钮小号高度不一致导致的错位）；DBeaver 对齐后两者
 ///   已改成图标 toggle（按钮本体在 `panel/render.rs` 构造，这里只负责容器分组）
@@ -262,7 +263,6 @@ pub struct ResultPane {
 ///   `render_status_row` 的 `memory` / `affected_rows` 参数）——用户口径：执行信息归结果集状态栏
 /// - 导出 / 刷新同样移入状态栏（左动作组系统段），工具栏不再摆
 pub fn render_toolbar(
-    sql_preview: Option<AnyElement>,
     filter: Option<AnyElement>,
     pushdown: Option<AnyElement>,
     comments: Option<AnyElement>,
@@ -317,10 +317,8 @@ pub fn render_toolbar(
                 // 会收缩到内容宽，里面那个 `flex_1` 的筛选框也就撑不开（flex_basis 无处分配）。
                 .flex_1()
                 .min_w_0()
-                // 【1.1】工具栏最左侧 SQL 预览：面板构造的可点击元素（Button 自带 hover
-                // 高亮 + 手型提示可点击；点击展开完整 SQL 条，见 panel.rs render）
-                .children(sql_preview)
-                // 执行信息（segments：行数/耗时/失败/血缘/连接…）已移状态栏（用户口径）
+                // 【1.1】工具栏最左侧是筛选复合体（第 1 格即「显示 SQL」，见
+                // `panel/render.rs` 的 `sql_chip`）
                 .children(filter),
         )
         .child(
