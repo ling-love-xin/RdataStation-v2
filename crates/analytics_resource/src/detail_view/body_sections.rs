@@ -95,34 +95,46 @@ pub(super) fn render_body_sections(
                     .into_any_element();
                 kv_list = kv_list.item(label, DescriptionText::AnyElement(value_el), 1);
             } else if label == PAYLOAD_PATH_LABEL {
-                // 相对项目根的路径：要拿它去文件管理器里找本体，所以给复制。
+                // 相对项目根的路径：要拿它去文件管理器里找本体，所以给复制；
+                // 顺手给「显示」——用户看着这个路径的下一步就是去文件夹里翻它。
                 let path = value.clone();
-                let value_el = div()
-                    .h_flex()
-                    .items_center()
-                    .gap_1()
-                    .min_w_0()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_xs()
-                            .text_ellipsis()
-                            .text_color(foreground)
-                            .child(value),
-                    )
-                    .child(
-                        Button::new("archive-detail-copy-payload-path")
+                let mut row = div().h_flex().items_center().gap_1().min_w_0().child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_xs()
+                        .text_ellipsis()
+                        .text_color(foreground)
+                        .child(value),
+                );
+                row = row.child(
+                    Button::new("archive-detail-copy-payload-path")
+                        .ghost()
+                        .xsmall()
+                        .label("复制")
+                        .text_color(muted)
+                        .tooltip("复制相对项目根的路径")
+                        .on_click(move |_, _window, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(path.clone()))
+                        }),
+                );
+                // 本体缺失时没有可显示的文件（`request_reveal` 会去找路径，必然落空）。
+                if let Some(actions) = actions.filter(|_| detail.status != ArchiveStatus::Missing) {
+                    let host = actions.host.clone();
+                    let detail = detail.clone();
+                    row = row.child(
+                        Button::new("archive-detail-reveal-payload")
                             .ghost()
                             .xsmall()
-                            .label("复制")
+                            .label("显示")
                             .text_color(muted)
-                            .tooltip("复制相对项目根的路径")
-                            .on_click(move |_, _window, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(path.clone()))
+                            .tooltip("在系统文件管理器里定位本体")
+                            .on_click(move |_, window, cx| {
+                                host.request_reveal(&detail, window, cx)
                             }),
-                    )
-                    .into_any_element();
+                    );
+                }
+                let value_el = row.into_any_element();
                 kv_list = kv_list.item(label, DescriptionText::AnyElement(value_el), 1);
             } else if label == "源路径" {
                 // 源绝对路径常被 DescriptionList 裁切（无省略号），HoverCard 悬停显示完整路径（P3）。
