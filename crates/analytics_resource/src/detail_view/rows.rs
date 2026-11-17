@@ -66,7 +66,7 @@ pub fn detail_rows(detail: &ArchiveDetail) -> Vec<(String, Vec<(&'static str, St
     if !detail.dispatch_label.is_empty() {
         basic.push(("使用", detail.dispatch_label.clone()));
     }
-    sections.push(("基本信息".to_string(), basic));
+    sections.push((BASIC_SECTION_TITLE.to_string(), basic));
 
     // 2) 来源（归档凭证的"出处"：回答这结论是用什么数据得出的）
     let mut source = Vec::new();

@@ -17,6 +17,7 @@ pub(super) fn render_body_sections(
         let is_version_section = title == VERSION_SECTION_TITLE;
         let is_org_section = title == ORG_SECTION_TITLE;
         let is_source_section = title == SOURCE_SECTION_TITLE;
+        let is_basic_section = title == BASIC_SECTION_TITLE;
         // kv 行 → gpui-kit `description_list::DescriptionList`（规格 §7.2 UI 统一）：
         // label 对齐由组件管；指纹复制按钮经 `DescriptionText::AnyElement` 承载。
         let mut kv_list = DescriptionList::new()
@@ -165,18 +166,23 @@ pub(super) fn render_body_sections(
                 kv_list = kv_list.item(label, value, 1);
             }
         }
-        let mut section = div()
-            .v_flex()
+        let mut title_row = div()
+            .h_flex()
             .w_full()
-            .gap_1()
-            .child(
-                div()
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(muted)
-                    .child(title),
-            )
-            .child(kv_list);
+            .items_center()
+            .h(rems(ui::DETAIL_SECTION_HEAD_HEIGHT))
+            .border_b(ui::HAIRLINE)
+            .border_color(colors.border)
+            .text_xs()
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(muted)
+            .child(title);
+        // 「基本信息」整块只读（改内容只能走「取回」）：标题右侧标一句，
+        // 免得用户对着这些行找编辑入口（原型 `.sect-h .lock`）。
+        if is_basic_section {
+            title_row = title_row.child(div().text_xs().text_color(colors.warning).child("只读"));
+        }
+        let mut section = div().v_flex().w_full().gap_1().child(title_row).child(kv_list);
         // 版本区的「最近 3 条」明细（原型 §3.1）：每行 版本号 + 时间 · 体积。
         // 只列历史版本（当前版本已在「基本信息」的「版本」行），无明细时这一块不出现。
         // 时间/体积都是宿主格式化好的字，这里只排版；不塞按钮（点开进对话框看全）。

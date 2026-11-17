@@ -86,6 +86,12 @@ pub(crate) fn render_tag_section(detail: &ArchiveDetail, actions: Option<&Detail
         .gap_1()
         .child(
             div()
+                .h_flex()
+                .w_full()
+                .items_center()
+                .h(rems(ui::DETAIL_SECTION_HEAD_HEIGHT))
+                .border_b(ui::HAIRLINE)
+                .border_color(cx.theme().colors.border)
                 .text_xs()
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(muted)
@@ -168,6 +174,12 @@ pub fn render_preview_section(detail: &ArchiveDetail, cx: &App) -> Div {
 
     let mut section = div().v_flex().w_full().gap_1().child(
         div()
+            .h_flex()
+            .w_full()
+            .items_center()
+            .h(rems(ui::DETAIL_SECTION_HEAD_HEIGHT))
+            .border_b(ui::HAIRLINE)
+            .border_color(border)
             .text_xs()
             .font_weight(FontWeight::MEDIUM)
             .text_color(muted)

@@ -43,6 +43,9 @@ pub const PAYLOAD_PATH_LABEL: &str = "本体路径";
 /// 「版本」分区的标题（渲染层靠它认出“这个分区要多一个『查看全部…』入口”）。
 pub const VERSION_SECTION_TITLE: &str = "版本";
 
+/// 「基本信息」分区的标题（渲染层靠它认出“这一区是只读的，标题右侧标『只读』”）。
+pub const BASIC_SECTION_TITLE: &str = "基本信息";
+
 /// 「来源」分区的标题（渲染层靠它认出“这一区后面接『重建定义』块”）。
 pub const SOURCE_SECTION_TITLE: &str = "来源";
 

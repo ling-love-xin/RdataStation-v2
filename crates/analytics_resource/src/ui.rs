@@ -32,6 +32,11 @@ pub const DETAIL_LABEL_WIDTH: f32 = 5.5;
 /// 与版本对话框的 `VERSION_COL_VERSION`（3.5rem）不同：那边是七列表格，这团只是
 /// 280px 面板里的三行摘要，版本号只到两三位，留宽会把时间挤到省略号。
 pub const DETAIL_VERSION_LABEL_WIDTH: f32 = 2.5;
+/// 详情分区标题行高（1.375rem = 22px，与 `ROW_HEIGHT_COMPACT` 同档）。
+///
+/// 分区标题下挂一条 hairline 分隔（原型 `.sect-h`）：一屏里有五六个分区，
+/// 只靠字号区分不够——分隔线把"哪个标题管到哪一行"划清楚。
+pub const DETAIL_SECTION_HEAD_HEIGHT: f32 = 1.375;
 /// 工具栏行高（2.0rem = 32px；原型 §2.2）。
 pub const TOOLBAR_HEIGHT: f32 = 2.0;
 /// 归档确认对话框宽（34.0rem = 544px；原型 §7.1——表单型六字段）。
