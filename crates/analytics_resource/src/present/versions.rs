@@ -79,8 +79,27 @@ pub fn build_version_rows(
 ///
 /// 两侧都有值才比（快照里缺字段就不编）；两样都比不出来时给空串。
 fn version_delta(previous_version: i32, previous: &Candidate, current: &Candidate) -> String {
+    version_delta_label(
+        previous_version,
+        previous.size,
+        previous.hash.as_deref(),
+        current.size,
+        current.hash.as_deref(),
+    )
+}
+
+/// 差异文案的实参版：版本对话框的表格行与**详情时间线的节点**共用这一份。
+///
+/// 两处各写一份，文案迟早漂（一处说“大小+1.2 KB”、另一处忘了比指纹）。
+pub(crate) fn version_delta_label(
+    previous_version: i32,
+    previous_size: Option<i32>,
+    previous_hash: Option<&str>,
+    size: Option<i32>,
+    hash: Option<&str>,
+) -> String {
     let mut parts: Vec<String> = Vec::new();
-    if let (Some(now), Some(before)) = (current.size, previous.size) {
+    if let (Some(now), Some(before)) = (size, previous_size) {
         let delta = now - before;
         parts.push(match delta {
             0 => "大小不变".to_string(),
@@ -88,7 +107,7 @@ fn version_delta(previous_version: i32, previous: &Candidate, current: &Candidat
             delta => format!("大小-{}", format_size(Some(-delta))),
         });
     }
-    if let (Some(now), Some(before)) = (current.hash.as_deref(), previous.hash.as_deref()) {
+    if let (Some(now), Some(before)) = (hash, previous_hash) {
         parts.push(
             if now == before {
                 "指纹相同"

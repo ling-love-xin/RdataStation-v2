@@ -23,7 +23,7 @@ use rds_analytics_resource::commands::{
     SelectAllRows,
 };
 use rds_analytics_resource::detail_view::{
-    ArchiveDetail, ArchiveTagChip, DetailActions, render_detail,
+    ArchiveDetail, ArchiveTagChip, DetailActions, DetailVersionLine, render_detail,
 };
 use rds_analytics_resource::dnd::GroupDrop;
 use rds_analytics_resource::filter::{SortField, SortOrder};
@@ -287,7 +287,7 @@ fn detail_for(row: &ArchiveRow) -> ArchiveDetail {
         tags: Vec::new(),
         group: None,
         // 版本明细 / 分组选择：窗口用例只关心“摆得出来”，给空集合（无历史、未分组）。
-        recent_versions: Vec::new(),
+        version_timeline: Vec::new(),
         groups: Vec::new(),
         group_id: None,
         // 预览：窗口用例只关心“能不能摆”，给一段两行的文本就好。
@@ -1713,6 +1713,68 @@ fn detail_preview_block_renders_text_or_says_why_not(cx: &mut TestAppContext) {
         "仅元信息时不该摆空块"
     );
     drop(meta_only);
+}
+
+/// 详情版本区是**时间线**：当前版本节点在最前，历史节点按版本号往下排；
+/// 每个节点都是一个可点入口（`Popover` 的 trigger）。
+#[gpui_kit::test]
+fn detail_version_timeline_puts_current_first(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let host = Rc::new(RecordingHost::default());
+    let (view, cx) = cx.add_window_view({
+        let host = host.clone();
+        let mut detail = detail_for(&row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 3));
+        detail.version_timeline = vec![
+            DetailVersionLine {
+                version: 3,
+                time_label: "2026-09-15 09:12".to_string(),
+                size_label: "1.2 KB".to_string(),
+                is_current: true,
+                hash_short: "9f3a2c7b1e04".to_string(),
+                delta_label: "较 v2 大小+120 B · 指纹已变".to_string(),
+                has_copy: true,
+            },
+            DetailVersionLine {
+                version: 2,
+                time_label: "2026-09-14 18:03".to_string(),
+                size_label: "1.1 KB".to_string(),
+                is_current: false,
+                hash_short: "2c8e10d4aa91".to_string(),
+                delta_label: String::new(),
+                has_copy: true,
+            },
+            DetailVersionLine {
+                version: 1,
+                time_label: "2026-09-12 10:24".to_string(),
+                size_label: "980 B".to_string(),
+                is_current: false,
+                hash_short: "77aa0f12bc33".to_string(),
+                delta_label: String::new(),
+                // 副本被保留策略裁掉：行内要标「副本已裁剪」，节点本身也点得开（只看不改）。
+                has_copy: false,
+            },
+        ];
+        move |_window, _cx| DetailHarness {
+            detail: detail.clone(),
+            actions: Some(DetailActions {
+                host: host.clone(),
+                read_only: false,
+                selected_ids: Vec::new(),
+            }),
+        }
+    });
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+
+    let current = cx.debug_bounds("archive-timeline-v3").expect("当前版本节点");
+    let middle = cx.debug_bounds("archive-timeline-v2").expect("v2 节点");
+    let oldest = cx.debug_bounds("archive-timeline-v1").expect("v1 节点");
+    assert!(
+        current.top() < middle.top() && middle.top() < oldest.top(),
+        "时间线自上而下：当前 → v2 → v1"
+    );
+    drop(view);
 }
 
 /// 详情头部可编辑（原型 §3.1）：名字与别名都是可点入口；只读项目 / 本体缺失时不摆。

@@ -12,6 +12,7 @@ pub(crate) use gpui_kit::component::button::{Button, ButtonVariant, ButtonVarian
 pub(crate) use gpui_kit::component::description_list::{DescriptionList, DescriptionText};
 pub(crate) use gpui_kit::component::hover_card::HoverCard;
 pub(crate) use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+pub(crate) use gpui_kit::component::popover::Popover;
 pub(crate) use gpui_kit::component::scroll::ScrollableElement as _;
 pub(crate) use gpui_kit::component::tag::Tag;
 pub(crate) use gpui_kit::component::{ActiveTheme, Icon, Sizable as _, Size};

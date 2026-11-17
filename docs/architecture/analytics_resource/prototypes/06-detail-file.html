@@ -16,7 +16,7 @@
     <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
   </div>
   <p class="p-spec">
-    宽 <code>320px</code>（<code>RIGHT_DOCK_WIDTH</code> = 20rem）· 分节：头部（kind 图标 + 显示名 + 版本徽标 + 别名）/ 基本信息（种类 / 版本 / 实例 / 只读 / 归档方式 / 本体路径 / 分析库表 / 大小 / 创建时间 / 修改时间 / 归档时间 / 使用）/ 来源 / 业务口径（选填，没填整区不摆）/ 版本（最近 3 条明细 + 副本状态 + 查看全部…）/ <b>组织</b>（分组 + 「移动…」）/ <b>标签</b> / 内容预览 / 动作区 / 危险区。
+    宽 <code>320px</code>（<code>RIGHT_DOCK_WIDTH</code> = 20rem）· 分节：头部（kind 图标 + 显示名 + 版本徽标 + 别名）/ 基本信息（种类 / 版本 / 实例 / 只读 / 归档方式 / 本体路径 / 分析库表 / 大小 / 创建时间 / 修改时间 / 归档时间 / 使用）/ 来源 / 业务口径（选填，没填整区不摆）/ <b>版本时间线</b>（当前版本在最前，其后最近几条历史；点节点看那一版的信息）/ <b>组织</b>（分组 + 「移动…」）/ <b>标签</b> / 内容预览 / 动作区 / 危险区。
     只读信息区不可编辑；写类动作全在面板里：头部改名与别名、组织「移动…」、标签「＋ 标签」、动作区「取回（检出）…」、危险区「移入回收站」——只读项目下这些入口不摆或置灰。要改内容必须走「取回」→ 草稿工作副本 → 再归档生成新版本。
   </p>
   <nav class="pnav"><a href="index.html">索引</a><a href="05-status-row.html">← 上一块：状态行</a><a href="07-detail-ref.html">下一块：引用型详情 →</a></nav>
@@ -62,8 +62,29 @@
             <div class="sect">
               <div class="sect-h">版本</div>
               <div class="kv"><span class="k">历史</span><span class="v">2 个历史版本（1 份可还原）</span></div>
-              <div class="vrow"><span>v2</span><span class="dt">2026-09-14 18:03 · 1.1 KB</span></div>
-              <div class="vrow"><span>v1</span><span class="dt">2026-09-12 10:24 · 980 B · 副本已裁剪</span></div>
+              <div class="tl">
+                <div class="tl-n cur">
+                  <span class="tl-d"></span><span class="tl-v">v3</span>
+                  <span class="tl-m">2026-09-15 09:12 · 1.2 KB</span><span class="tl-tag">当前</span>
+                </div>
+                <div class="tl-n">
+                  <span class="tl-d"></span><span class="tl-v">v2</span>
+                  <span class="tl-m">2026-09-14 18:03 · 1.1 KB</span>
+                </div>
+                <div class="tl-n">
+                  <span class="tl-d"></span><span class="tl-v">v1</span>
+                  <span class="tl-m">2026-09-12 10:24 · 980 B · 副本已裁剪</span>
+                </div>
+              </div>
+              <div class="tl-pop">
+                <div class="tl-pop-h">v2 <span class="tl-pop-k">历史版本</span></div>
+                <div class="kv"><span class="k">时间</span><span class="v">2026-09-14 18:03</span></div>
+                <div class="kv"><span class="k">大小</span><span class="v">1.1 KB</span></div>
+                <div class="kv"><span class="k">内容指纹</span><span class="v mono">7c1d90ab3e55</span></div>
+                <div class="kv"><span class="k">变更</span><span class="v">较 v1 大小+120 B · 指纹已变</span></div>
+                <div class="kv"><span class="k">内容副本</span><span class="v">在位，可还原</span></div>
+                <div class="tl-pop-f">要还原或对比，用下面的「查看全部…」</div>
+              </div>
               <span class="dlink">查看全部…</span>
             </div>
 
@@ -215,6 +236,12 @@ GROUP BY channel</div>
             <div class="sect">
               <div class="sect-h">版本</div>
               <div class="kv"><span class="k">历史</span><span class="v">只有当前版本</span></div>
+              <div class="tl">
+                <div class="tl-n cur">
+                  <span class="tl-d"></span><span class="tl-v">v1</span>
+                  <span class="tl-m">2026-09-15 09:12 · 12,480 行 × 18 列</span><span class="tl-tag">当前</span>
+                </div>
+              </div>
               <span class="dlink">查看全部…</span>
             </div>
           </div>
@@ -224,6 +251,7 @@ GROUP BY channel</div>
     <p class="hang">
       表型没有<b>本体路径</b>：它的真身就是分析库里那张 <code>res_&lt;描述&gt;_&lt;时间戳&gt;</code> 表（G2 一版一张），路径那行改成<b>分析库表</b>并给复制——表名是拿去拼 SQL 的。
       <br>「大小」给的是<b>规模</b>（<code>12,480 行 × 18 列</code>）而不是字节；「内容指纹」是<b>结构指纹</b>（定义 + 列结构，行数变化不算，见 <code>analysis.rs</code> 裁决 R4），所以复制按钮的说明与普通文件不同。
+      <br>版本区是<b>时间线</b>：当前版本在最前（圆点用主色、带「当前」），下面是最近几条历史；<b>点任一节点</b>就地弹出这一版的信息（时间 / 大小 / 内容指纹 / 较上一版的变更 / 副本状态）——只看不改，要还原或对比走「查看全部…」。副本被裁过的节点在行内就标「副本已裁剪」，别让人以为点得开。
       <br>版本区<b>恒出现</b>：没有历史时写「只有当前版本」——「没有历史」本身就是一条信息。
       <br>表型资产的「来源」区下面接一块<b>重建定义</b>（等宽 SQL + 复制）：配方只<b>登记留痕</b>，不执行、也不据此重建或校验；面板里限高约 10rem，要看全就走复制。
     </p>
@@ -231,7 +259,7 @@ GROUP BY channel</div>
 
   <div class="canvas pad">
     <p class="hang" style="margin:0 0 6px">
-      本块样式：<code>.detailcol</code> / <code>.dstate</code> / <code>.dhead</code> / <code>.dsub</code> / <code>.sect</code> / <code>.kv</code> / <code>.locknote</code> / <code>.vrow</code> / <code>.tags</code> / <code>.tagc</code> / <code>.prev</code> / <code>.danger-zone</code> / <code>.btn-s</code> + <code>.btn-xs</code> / <code>.btn-d</code> / <code>.ctx</code> + <code>.mi</code> + <code>.mi.dim</code> + <code>.mi.cap</code> + <code>.sep</code>。
+      本块样式：<code>.detailcol</code> / <code>.dstate</code> / <code>.dhead</code> / <code>.dsub</code> / <code>.sect</code> / <code>.kv</code> / <code>.locknote</code> / <code>.tl</code> + <code>.tl-n</code> + <code>.tl-pop</code> / <code>.tags</code> / <code>.tagc</code> / <code>.prev</code> / <code>.danger-zone</code> / <code>.btn-s</code> + <code>.btn-xs</code> / <code>.btn-d</code> / <code>.ctx</code> + <code>.mi</code> + <code>.mi.dim</code> + <code>.mi.cap</code> + <code>.sep</code>。
     </p>
     <p class="hang" style="margin:0">
       <b>宽度口径</b>：实现落在<b>右 Dock 的「存档详情」档位</b>（<code>RightPanel::Archive</code>），宽度按 <code>RIGHT_DOCK_WIDTH</code>（<code>20.0rem</code> = 320px，<code>workbench_shell/src/ui.rs:68</code>；契约值见 <code>workbench/tests/ui_contract.rs:71</code>），与本页一致——不是另开一块 320px 的属性面板。<code>h_resizable</code> 宽度记忆还没接。

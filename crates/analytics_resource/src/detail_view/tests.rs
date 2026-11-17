@@ -31,7 +31,7 @@ fn detail(status: ArchiveStatus, kind: ArchiveKind) -> ArchiveDetail {
         definition_sql: None,
         origin_label: String::new(),
         history_label: "1 个历史版本".to_string(),
-        recent_versions: Vec::new(),
+        version_timeline: Vec::new(),
         groups: Vec::new(),
         group_id: None,
         tags: Vec::new(),

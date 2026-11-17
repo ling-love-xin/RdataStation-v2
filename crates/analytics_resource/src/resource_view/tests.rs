@@ -372,7 +372,7 @@ fn detail(kind: ArchiveKind, status: ArchiveStatus, payload: Option<&str>) -> Ar
         definition_sql: None,
         origin_label: String::new(),
         history_label: String::new(),
-        recent_versions: Vec::new(),
+        version_timeline: Vec::new(),
         groups: Vec::new(),
         group_id: None,
         tags: Vec::new(),

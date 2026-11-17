@@ -59,11 +59,12 @@ pub struct ArchiveDetail {
     pub definition_sql: Option<String>,
     /// 版本历史摘要，如 "3 个历史版本 · 最近副本完整"。
     pub history_label: String,
-    /// 版本区「最近 3 条」明细（数量上限由装配层定，不在这里裁）。
+    /// 版本**时间线**的节点（当前版本在最前，其后是历史版本；数量上限由装配层定）。
     ///
-    /// 只有**历史**版本（当前版本在资源行上、不重复列一行）；空 = 没有明细可列，
-    /// 渲染层据此不画那几行（只留 `history_label` 那一行与「查看全部…」）。
-    pub recent_versions: Vec<DetailVersionLine>,
+    /// 每个节点可点开看它自己的信息（时间 / 体积 / 指纹 / 变更 / 副本状态）：
+    /// 详情面板里能"停在某一版上"看，比只有一行摘要有用。
+    /// 空 = 连当前版本都没有（不该发生；渲染层据此不画），正常至少有一个节点。
+    pub version_timeline: Vec<DetailVersionLine>,
     /// 可选分组（详情里的「移动…」选择项；全局行走空，没有项目分组归属）。
     pub groups: Vec<DetailGroupOption>,
     /// 当前分组 id（「移动…」菜单据此置灰当前项；`None` = 未分组）。
@@ -126,6 +127,12 @@ pub struct DetailVersionLine {
     pub time_label: String,
     /// 体积（分析表型给规模，快照里没有时为空串）。
     pub size_label: String,
+    /// 是不是当前版本（时间线最上面那个节点，带「当前」标）。
+    pub is_current: bool,
+    /// 内容指纹前 12 位（快照解析不出来时给 `—`，不伪造）。
+    pub hash_short: String,
+    /// 相对上一版的差异文案（`较 v2 大小+1.2 KB · 指纹已变`；最旧一版为空）。
+    pub delta_label: String,
     /// 这一版还有没有内容副本（`.RSmeta/resources/versions/<id>/<v>/`）。
     ///
     /// 裁剪**只删副本、不删版本行**，所以“有这一版”和“能还原它”是两件事：

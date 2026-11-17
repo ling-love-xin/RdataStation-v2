@@ -191,48 +191,11 @@ pub(super) fn render_body_sections(
             title_row = title_row.child(div().text_xs().text_color(colors.warning).child("只读"));
         }
         let mut section = div().v_flex().w_full().gap_1().child(title_row).child(kv_list);
-        // 版本区的「最近 3 条」明细（原型 §3.1）：每行 版本号 + 时间 · 体积。
-        // 只列历史版本（当前版本已在「基本信息」的「版本」行），无明细时这一块不出现。
-        // 时间/体积都是宿主格式化好的字，这里只排版；不塞按钮（点开进对话框看全）。
-        if is_version_section && !detail.recent_versions.is_empty() {
-            let mut lines = div().v_flex().w_full().gap_1();
-            for line in &detail.recent_versions {
-                let label = format!("v{}", line.version);
-                let mut meta = if line.size_label.is_empty() {
-                    line.time_label.clone()
-                } else {
-                    format!("{} · {}", line.time_label, line.size_label)
-                };
-                // 副本被裁剪过：版本行还在，但“还原它”做不到。明说比让用户点一下失败强。
-                if !line.has_copy {
-                    meta.push_str(" · 副本已裁剪");
-                }
-                lines = lines.child(
-                    div()
-                        .h_flex()
-                        .w_full()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .w(rems(ui::DETAIL_VERSION_LABEL_WIDTH))
-                                .flex_none()
-                                .text_xs()
-                                .text_color(foreground)
-                                .child(label),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_xs()
-                                .text_ellipsis()
-                                .text_color(muted)
-                                .child(meta),
-                        ),
-                );
-            }
-            section = section.child(lines);
+        // 版本区的**时间线**（原型 §3.1 的「历史」那几行细化成节点）：当前版本在最前，
+        // 其后是最近几条历史版。点某个节点 → 浮层看那一版的时间 / 大小 / 指纹 / 变更 / 副本。
+        // 时间、大小、指纹、差异都是宿主格式化好的字，这里只排版，不在渲染期算。
+        if is_version_section && !detail.version_timeline.is_empty() {
+            section = section.child(render_version_timeline(detail, cx));
         }
         // 来源区下面接「重建定义」：表型资产的配方（只登记、不执行）。
         // 与内容预览同一处理：多行等宽块，硬塞进键值两列会把每行都多拉一列标签。
@@ -283,6 +246,165 @@ pub(super) fn render_body_sections(
     // 二进制 / 大文件给一句说明。预览**只读**：这里没有任何编辑入口（原型 §1 原则 3）。
     out.push(render_preview_section(detail, cx));
     out
+}
+
+/// 版本时间线：左侧一条竖线 + 每隔一版一个圆点，节点本身可点。
+///
+/// 为什么用 `Popover` 承载“节点信息”：它是**点击触发**的浮层，开关状态在组件自己身上
+/// （渲染函数仍是纯读，不需要面板再存一个“当前看哪一版”的状态）；点第二次自动收起，
+/// 点浮层外收起。版本对话框仍是完整的动作面（还原 / 对比 / 删副本），这里**只读**。
+fn render_version_timeline(detail: &ArchiveDetail, cx: &App) -> Div {
+    let colors = cx.theme().colors;
+    let mut rail = div()
+        .v_flex()
+        .w_full()
+        .gap_1()
+        .pl_2()
+        .border_l(ui::HAIRLINE)
+        .border_color(colors.border);
+    for line in &detail.version_timeline {
+        rail = rail.child(render_timeline_node(line, cx));
+    }
+    rail
+}
+
+/// 时间线上的一个节点：圆点 + `vN` + 时间 · 大小（当前版本另标「当前」）。
+fn render_timeline_node(line: &DetailVersionLine, cx: &App) -> AnyElement {
+    let colors = cx.theme().colors;
+    // 当前版本的点用主色（一屏只此一处高亮），历史版本的点用弱化色。
+    let dot_color = if line.is_current {
+        colors.primary
+    } else {
+        colors.muted_foreground
+    };
+    // 副本被裁过：版本行还在，但“还原它”做不到。明说比让用户点一下失败强。
+    let meta = match (line.size_label.is_empty(), line.has_copy) {
+        (true, true) => line.time_label.clone(),
+        (true, false) => format!("{} · 副本已裁剪", line.time_label),
+        (false, true) => format!("{} · {}", line.time_label, line.size_label),
+        (false, false) => format!("{} · {} · 副本已裁剪", line.time_label, line.size_label),
+    };
+    let row = div()
+        .h_flex()
+        .w_full()
+        .items_center()
+        .gap_2()
+        .child(
+            div()
+                .flex_none()
+                .w(rems(0.5))
+                .h(rems(0.5))
+                .rounded_full()
+                .bg(dot_color),
+        )
+        .child(
+            div()
+                .flex_none()
+                .w(rems(ui::DETAIL_VERSION_LABEL_WIDTH))
+                .text_xs()
+                .text_color(colors.foreground)
+                .child(format!("v{}", line.version)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_xs()
+                .text_ellipsis()
+                .text_color(colors.muted_foreground)
+                .child(meta),
+        );
+    let row = if line.is_current {
+        row.child(
+            div()
+                .flex_none()
+                .text_xs()
+                .text_color(colors.primary)
+                .child("当前"),
+        )
+    } else {
+        row
+    };
+    // 节点本身用 `Button`（不是自绘可点 div）：`Popover` 的 trigger 要求 `Selectable`，
+    // 顺带拿到 hover / 键盘焦点 / a11y，一行点击区与面板其它行同高。
+    let id = SharedString::from(format!("archive-timeline-v{}", line.version));
+    let version = line.version;
+    let trigger = Button::new(id.clone())
+        .ghost()
+        .w_full()
+        .h(rems(ui::ROW_HEIGHT))
+        .px_1()
+        .justify_start()
+        .debug_selector(move || format!("archive-timeline-v{version}"))
+        .child(row);
+    // 浮层内容按节点复制一份（`content` 闭包要求 'static）：节点只有几个短字段，便宜。
+    let node = line.clone();
+    Popover::new(id)
+        .trigger(trigger)
+        .content(move |_, _, cx| render_timeline_card(&node, cx))
+        .into_any_element()
+}
+
+/// 节点浮层的内容：这一版的时间 / 大小 / 指纹 / 相对上一版的变更 / 副本状态。
+///
+/// 只摆**这一版自己的**信息（每一版的完整列清单与数据导航的属性重复，不做）；
+/// 动作不在这里重复——要还原或对比，走下面那颗「查看全部…」。
+fn render_timeline_card(line: &DetailVersionLine, cx: &App) -> Div {
+    let colors = cx.theme().colors;
+    let mut list = DescriptionList::new()
+        .columns(1)
+        .bordered(false)
+        .with_size(Size::Small)
+        .label_width(rems(3.5));
+    list = list.item("时间", line.time_label.clone(), 1);
+    if !line.size_label.is_empty() {
+        list = list.item("大小", line.size_label.clone(), 1);
+    }
+    list = list.item("内容指纹", line.hash_short.clone(), 1);
+    if !line.delta_label.is_empty() {
+        list = list.item("变更", line.delta_label.clone(), 1);
+    }
+    list = list.item(
+        "内容副本",
+        if line.has_copy {
+            "在位，可还原"
+        } else {
+            "已裁剪，只剩登记"
+        },
+        1,
+    );
+    let mut card = div()
+        .v_flex()
+        .gap_1()
+        .min_w(rems(12.))
+        .child(
+            div()
+                .h_flex()
+                .items_center()
+                .gap_1()
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(colors.foreground)
+                .child(format!("v{}", line.version))
+                .child(if line.is_current {
+                    div().text_color(colors.primary).child("当前版本")
+                } else {
+                    div().text_color(colors.muted_foreground).child("历史版本")
+                }),
+        )
+        .child(list);
+    // 末尾一句实话：能做什么、不能做什么。副本没了就别让人以为点得开。
+    card = card.child(
+        div()
+            .text_xs()
+            .text_color(colors.muted_foreground)
+            .child(if line.has_copy {
+                "要还原或对比，用下面的「查看全部…」"
+            } else {
+                "内容副本已被保留策略裁掉，只能看登记信息"
+            }),
+    );
+    card
 }
 
 /// 「重建定义」等宽块（表型资产的配方）。

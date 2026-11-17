@@ -374,6 +374,8 @@ fn detail_carries_recent_version_lines_capped_at_three() {
     let mut analysis = row_model("ar_analysis", "analytics_table", None);
     analysis.row_count = Some(12480);
     analysis.column_count = Some(18);
+    // 真实数据里当前版本是最大版本号：时间线按版本号降序，当前节点自然在最前。
+    analysis.version = 5;
     let resources = vec![analysis.clone()];
 
     let mut counts = VersionCounts::new();
@@ -417,19 +419,100 @@ fn detail_carries_recent_version_lines_capped_at_three() {
 
     let detail = snapshot.details.get("ar_analysis").expect("分析表详情");
     assert_eq!(detail.history_label, "5 个历史版本", "总数不受明细条数影响");
-    let lines = &detail.recent_versions;
-    assert_eq!(lines.len(), 3, "最多列 3 条");
+    let lines = &detail.version_timeline;
+    assert_eq!(lines.len(), 4, "当前版本 + 最多 3 条历史（装配层自己也裁一次）");
+    assert!(
+        lines[0].is_current,
+        "时间线第一个节点必须是当前版本（点它看的就是现在这一版）"
+    );
     assert_eq!(
         lines.iter().map(|line| line.version).collect::<Vec<_>>(),
-        vec![4, 3, 2],
-        "保持取数侧给的降序"
+        vec![5, 4, 3, 2],
+        "严格降序：当前版本在最前，其后是历史"
+    );
+    assert!(
+        lines.iter().skip(1).all(|line| !line.is_current),
+        "历史节点不带当前标记"
     );
     assert_eq!(lines[0].size_label, "12,480 行 × 18 列", "分析表给规模");
     assert_eq!(
-        lines[0].time_label,
+        lines[1].time_label,
         format_timestamp(now - Duration::days(4)),
         "时间用绝对时间（与版本对话框同格式）"
     );
+    assert!(lines[0].has_copy, "本体在位 = 当前版本可还原");
+}
+
+/// 时间线节点的两样“这一版自己的”信息：指纹前 12 位、相对上一版的变更。
+///
+/// 变更只在**相邻两版**都有同一字段时才比得出（快照缺字段就不编）。
+#[test]
+fn version_timeline_carries_hash_and_delta_per_node() {
+    let now = Utc::now();
+    let mut first = row_model("ar_hash", "analysis", Some(1024));
+    first.content_hash = Some("aaaaaaaaaaaaaaaa1111".to_string());
+    let mut second = first.clone();
+    second.file_size = Some(2048);
+    second.content_hash = Some("bbbbbbbbbbbbbbbb2222".to_string());
+    let mut current = second.clone();
+    current.version = 3;
+    current.file_size = Some(3072);
+    current.content_hash = Some("cccccccccccccccc3333".to_string());
+    let resources = vec![current.clone()];
+
+    let mut counts = VersionCounts::new();
+    counts.insert("ar_hash".to_string(), 2);
+    let mut recent = RecentVersions::new();
+    recent.insert(
+        "ar_hash".to_string(),
+        vec![
+            ResourceVersion {
+                id: "arv_2".to_string(),
+                resource_id: "ar_hash".to_string(),
+                version: 2,
+                snapshot: serde_json::to_value(&second).expect("snapshot json"),
+                created_at: now - Duration::days(1),
+            },
+            ResourceVersion {
+                id: "arv_1".to_string(),
+                resource_id: "ar_hash".to_string(),
+                version: 1,
+                snapshot: serde_json::to_value(&first).expect("snapshot json"),
+                created_at: now - Duration::days(2),
+            },
+        ],
+    );
+
+    let snapshot = build_snapshot(SnapshotInputs {
+        assertions: Default::default(),
+        lifecycles: Default::default(),
+        resources: &resources,
+        global_rows: Vec::new(),
+        global_resources: Vec::new(),
+        statuses: &ArchiveStatuses::new(),
+        history_counts: &counts,
+        recent_versions: &recent,
+        version_copies: &Default::default(),
+        tags: empty_tags(),
+        tag_dictionary: Vec::new(),
+        folders: empty_folders(),
+        group_dictionary: Vec::new(),
+        previews: empty_previews(),
+        dispatch_usage: &Default::default(),
+        read_only: false,
+        now,
+    });
+
+    let detail = snapshot.details.get("ar_hash").expect("详情");
+    let lines = &detail.version_timeline;
+    assert_eq!(lines.len(), 3, "v3（当前）+ v2 + v1");
+    assert_eq!(lines[0].hash_short, "cccccccccccc", "指纹给前 12 位");
+    assert_eq!(
+        lines[0].delta_label, "较 v2 大小+1.0 KB · 指纹已变",
+        "与下一节点比：大小 +1 KB、指纹变了"
+    );
+    assert_eq!(lines[1].delta_label, "较 v1 大小+1.0 KB · 指纹已变");
+    assert_eq!(lines[2].delta_label, "", "最旧一版没有上一版可比");
 }
 
 /// 标签进快照：行带 **id + 名字**（筛选比 id、搜索比名字，一份数据两处用）、

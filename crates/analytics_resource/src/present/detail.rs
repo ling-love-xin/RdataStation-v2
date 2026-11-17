@@ -46,7 +46,12 @@ pub fn to_detail(
         ArchiveKind::TableRef => String::new(),
     };
     // 先算（`extras` 的其余字段随后要按值取走）。
-    let recent_version_lines = detail_version_lines(recent_versions, extras.version_copies.as_deref());
+    let version_timeline = detail_version_timeline(
+        resource,
+        status,
+        recent_versions,
+        extras.version_copies.as_deref(),
+    );
     let version_copies = extras.version_copies;
     ArchiveDetail {
         assertion: None,
@@ -103,7 +108,7 @@ pub fn to_detail(
         } else {
             String::new()
         },
-        recent_versions: recent_version_lines,
+        version_timeline,
         groups: extras.groups,
         // 名字与 id 一起给：字典里认不出的 id 两个都给「无」，不出现“名字空、id 有”的错位。
         group_id: if extras.group.is_some() {
@@ -121,37 +126,102 @@ pub fn to_detail(
     }
 }
 
-/// 最近几条历史版本 → 详情「版本」区的摘要行（最多 [`DETAIL_RECENT_VERSIONS`] 条）。
+/// 版本**时间线**的节点：当前版本在最前，其后是最近几条历史版本。
 ///
-/// 体积口径与行/详情一致：文件型给体积、分析表型给规模、引用型不给（不假装有值）。
-/// 快照解析不出来**不补造**——时间来自版本行本身（可信），体积留空。
-fn detail_version_lines(
+/// 为什么当前版本也进时间线：详情里点节点看“那一版是什么样”，最常想看的正是现在这一版
+/// （它的体积 / 指纹 / 本体还在不在）；只列历史会逼用户去别处找当前版本的信息。
+/// 节点数上限 = 当前 1 + 历史 [`DETAIL_RECENT_VERSIONS`] 条，再多就去版本对话框看。
+///
+/// 体积口径与行/详情一致：文件型给体积、分析表型给规模、快照解析不出来**不补造**
+/// （时间来自版本行本身，可信；体积留空）。
+fn detail_version_timeline(
+    resource: &AnalyticsResource,
+    status: ArchiveStatus,
     versions: &[crate::store::rows::ResourceVersion],
     copies: Option<&[i32]>,
 ) -> Vec<DetailVersionLine> {
-    versions
+    // 先按时间线顺序摆好节点（当前 + 历史），再逐条与“下一节点”（版本号 -1）比差异。
+    let mut nodes: Vec<TimelineNode> = Vec::with_capacity(versions.len() + 1);
+    nodes.push(TimelineNode {
+        version: resource.version,
+        time_label: format_timestamp(resource.archived_at.unwrap_or(resource.updated_at)),
+        // 当前节点按种类给量：表给规模、文件给体积（快照里只记了体积的历史版同理）。
+        size_label: timeline_size_label(
+            resource.row_count,
+            resource.column_count,
+            resource.file_size,
+        ),
+        file_size: resource.file_size,
+        hash: resource.content_hash.clone(),
+        is_current: true,
+        // 当前版本的“副本”就是本体：本体缺位时这一版也还原不了（`resources/` 下没有它）。
+        has_copy: status != ArchiveStatus::Missing,
+    });
+    for version in versions.iter().take(DETAIL_RECENT_VERSIONS) {
+        let snapshot = serde_json::from_value::<AnalyticsResource>(version.snapshot.clone()).ok();
+        nodes.push(TimelineNode {
+            version: version.version,
+            time_label: format_timestamp(version.created_at),
+            size_label: snapshot.as_ref().map_or_else(String::new, |record| {
+                timeline_size_label(record.row_count, record.column_count, record.file_size)
+            }),
+            file_size: snapshot.as_ref().and_then(|record| record.file_size),
+            hash: snapshot.as_ref().and_then(|record| record.content_hash.clone()),
+            is_current: false,
+            // 没问到副本清单时按“还在”呈现（`None` = 不知道，不是“没有”）：
+            // 误报“副本已裁剪”比漏报更糟——用户会以为能还原的版本不能还原。
+            has_copy: copies.map_or(true, |copies| copies.contains(&version.version)),
+        });
+    }
+    // 版本表按新在前给，但别依赖它：时间线必须严格降序（差异文案是“较 vN-1”）。
+    nodes.sort_unstable_by(|a, b| b.version.cmp(&a.version));
+
+    nodes
         .iter()
-        .take(DETAIL_RECENT_VERSIONS)
-        .map(|version| {
-            let snapshot =
-                serde_json::from_value::<AnalyticsResource>(version.snapshot.clone()).ok();
-            // 历史版本按**快照里有什么**给标签：记了行数 / 列数就给规模，只记了体积就给
-            // 体积。不按种类分——种类收成两档后，同一档里这两种情况都存在。
-            let size_label = match snapshot.as_ref() {
-                Some(record) if record.row_count.is_some() || record.column_count.is_some() => {
-                    format_scale(record.row_count, record.column_count)
-                }
-                Some(record) => format_size(record.file_size),
-                None => String::new(),
-            };
-            DetailVersionLine {
-                version: version.version,
-                time_label: format_timestamp(version.created_at),
-                size_label,
-                // 没问到副本清单时按“还在”呈现（`None` = 不知道，不是“没有”）：
-                // 误报“副本已裁剪”比漏报更糟——用户会以为能还原的版本不能还原。
-                has_copy: copies.map_or(true, |copies| copies.contains(&version.version)),
-            }
+        .enumerate()
+        .map(|(index, node)| DetailVersionLine {
+            version: node.version,
+            time_label: node.time_label.clone(),
+            size_label: node.size_label.clone(),
+            is_current: node.is_current,
+            hash_short: crate::detail_view::short_hash(node.hash.as_deref()),
+            delta_label: nodes
+                .get(index + 1)
+                .filter(|previous| previous.version == node.version - 1)
+                .map(|previous| {
+                    super::versions::version_delta_label(
+                        previous.version,
+                        previous.file_size,
+                        previous.hash.as_deref(),
+                        node.file_size,
+                        node.hash.as_deref(),
+                    )
+                })
+                .unwrap_or_default(),
+            has_copy: node.has_copy,
         })
         .collect()
+}
+
+/// 时间线节点的取数中间态（`DetailVersionLine` 的输入）。
+struct TimelineNode {
+    version: i32,
+    time_label: String,
+    size_label: String,
+    /// 只用于算「大小±」的差值（表型没有这个值，差值就不比）。
+    file_size: Option<i32>,
+    hash: Option<String>,
+    is_current: bool,
+    has_copy: bool,
+}
+
+/// 一条版本节点的“量”：记了行列就给规模（表型），否则给体积（文件型）。
+///
+/// 与列表行 / 详情头部同一口径，避免同一版在三处显示成三种样子。
+fn timeline_size_label(rows: Option<i32>, columns: Option<i32>, file_size: Option<i32>) -> String {
+    if rows.is_some() || columns.is_some() {
+        format_scale(rows, columns)
+    } else {
+        format_size(file_size)
+    }
 }
