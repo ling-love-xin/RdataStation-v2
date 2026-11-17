@@ -16,7 +16,7 @@
     <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
   </div>
   <p class="p-spec">
-    宽 <code>320px</code>（<code>RIGHT_DOCK_WIDTH</code> = 20rem）· 分节：头部（kind 图标 + 显示名 + 版本徽标 + 别名）/ 基本信息（含实例徽标）/ 来源 / 版本（含最近 3 条明细 + 查看全部…）/ <b>组织</b>（分组 + 「移动…」）/ <b>标签</b> / 动作区 / 危险区。
+    宽 <code>320px</code>（<code>RIGHT_DOCK_WIDTH</code> = 20rem）· 分节：头部（kind 图标 + 显示名 + 版本徽标 + 别名）/ 基本信息（种类 / 版本 / 实例 / 只读 / 归档方式 / 本体路径 / 分析库表 / 大小 / 创建时间 / 修改时间 / 归档时间 / 使用）/ 来源 / 业务口径（选填，没填整区不摆）/ 版本（最近 3 条明细 + 副本状态 + 查看全部…）/ <b>组织</b>（分组 + 「移动…」）/ <b>标签</b> / 内容预览 / 动作区 / 危险区。
     只读信息区不可编辑；写类动作全在面板里：头部改名与别名、组织「移动…」、标签「＋ 标签」、动作区「取回（检出）…」、危险区「移入回收站」——只读项目下这些入口不摆或置灰。要改内容必须走「取回」→ 草稿工作副本 → 再归档生成新版本。
   </p>
   <nav class="pnav"><a href="index.html">索引</a><a href="05-status-row.html">← 上一块：状态行</a><a href="07-detail-ref.html">下一块：引用型详情 →</a></nav>
@@ -25,7 +25,7 @@
 <main class="stage">
 
   <section class="variant">
-    <div class="variant-h"><span class="no">A</span>完整分节<span class="desc">dau_report.sql · v3 · 已归档（强）· 顺序按实现：基本 / 来源 / 版本 / 组织 / 标签 / 内容预览 + 动作区</span></div>
+    <div class="variant-h"><span class="no">A</span>完整分节<span class="desc">dau_report.sql · v3 · 已归档（强）· 顺序按实现：基本 / 来源 / 业务口径（选填）/ 版本 / 组织 / 标签 / 内容预览 + 动作区</span></div>
     <div class="canvas pad">
       <div class="detailcol">
         <div class="dstate proto-on" style="flex:none">
@@ -39,13 +39,16 @@
           <div class="dbody" style="overflow:visible">
             <div class="sect">
               <div class="sect-h">基本信息<span class="lock">只读</span></div>
-              <div class="kv"><span class="k">实例</span><span class="v"><span class="scope-badge">项目</span></span></div>
+              <div class="kv"><span class="k">种类</span><span class="v">文件</span></div>
               <div class="kv"><span class="k">版本</span><span class="v">v3</span></div>
+              <div class="kv"><span class="k">实例</span><span class="v"><span class="scope-badge">当前项目</span></span></div>
+              <div class="kv"><span class="k">只读</span><span class="v">归档后不可写，需取回编辑</span></div>
+              <div class="kv"><span class="k">归档方式</span><span class="v">复制存档（本体在 resources/ 下，只读）</span></div>
+              <div class="kv blk"><span class="k">本体路径</span><span class="v mono">resources/reports/dau_report.sql<span class="cp">复制</span></span></div>
               <div class="kv"><span class="k">大小</span><span class="v">1.2 KB</span></div>
+              <div class="kv"><span class="k">创建时间</span><span class="v">2026-09-12 10:24</span></div>
               <div class="kv"><span class="k">修改时间</span><span class="v">2026-09-12 10:24</span></div>
               <div class="kv"><span class="k">归档时间</span><span class="v">2026-09-15 09:12</span></div>
-              <div class="kv blk"><span class="k">物理路径</span><span class="v mono">resources/reports/dau_report.sql</span></div>
-              <div class="locknote"><svg class="ico-sm"><use href="#i-lock" xlink:href="#i-lock"/></svg><span>归档后不可写，需取回编辑</span></div>
             </div>
 
             <div class="sect">
@@ -59,8 +62,8 @@
             <div class="sect">
               <div class="sect-h">版本</div>
               <div class="kv"><span class="k">历史</span><span class="v">2 个历史版本</span></div>
-              <div class="vrow"><span>v2</span><span class="dt">3 天前 · 1.1 KB</span></div>
-              <div class="vrow"><span>v1</span><span class="dt">1 周前 · 980 B</span></div>
+              <div class="vrow"><span>v2</span><span class="dt">2026-09-14 18:03 · 1.1 KB</span></div>
+              <div class="vrow"><span>v1</span><span class="dt">2026-09-12 10:24 · 980 B · 副本已裁剪</span></div>
               <span class="dlink">查看全部…</span>
             </div>
 
@@ -167,14 +170,65 @@ GROUP BY channel...</div>
     </div>
   </section>
 
+  <section class="variant">
+    <div class="variant-h"><span class="no">D</span>表型资产（分析库表）<span class="desc">真身是分析库里的一张表：没有「本体路径」，多一行「分析库表」（带复制）</span></div>
+    <div class="canvas pad">
+      <div class="detailcol">
+        <div class="dstate proto-on" style="flex:none">
+          <div class="dhead">
+            <svg class="ico-sm ic"><use href="#i-grid" xlink:href="#i-grid"/></svg>
+            <span class="dnm">orders_by_channel</span>
+            <span class="dver">v1</span>
+            <button class="x" title="重命名显示名（F2，不改物理路径）"><svg class="ico-sm"><use href="#i-edit" xlink:href="#i-edit"/></svg></button>
+          </div>
+          <div class="dsub">别名 — · kind 分析库表（复现强度 强）</div>
+          <div class="dbody" style="overflow:visible">
+            <div class="sect">
+              <div class="sect-h">基本信息</div>
+              <div class="kv"><span class="k">种类</span><span class="v">分析库表</span></div>
+              <div class="kv"><span class="k">版本</span><span class="v">v1</span></div>
+              <div class="kv"><span class="k">实例</span><span class="v"><span class="scope-badge">当前项目</span></span></div>
+              <div class="kv"><span class="k">只读</span><span class="v">可写（非文件型本体不带只读属性）</span></div>
+              <div class="kv"><span class="k">归档方式</span><span class="v">复制存档（本体在 resources/ 下，只读）</span></div>
+              <div class="kv blk"><span class="k">分析库表</span><span class="v mono">res_orders_by_channel_20260915_0912<span class="cp">复制</span></span></div>
+              <div class="kv"><span class="k">大小</span><span class="v">12,480 行 × 18 列</span></div>
+              <div class="kv"><span class="k">创建时间</span><span class="v">2026-09-15 09:12</span></div>
+              <div class="kv"><span class="k">修改时间</span><span class="v">2026-09-15 09:12</span></div>
+              <div class="kv"><span class="k">归档时间</span><span class="v">2026-09-15 09:12</span></div>
+            </div>
+
+            <div class="sect">
+              <div class="sect-h">来源</div>
+              <div class="kv"><span class="k">来源连接</span><span class="v"><span class="dlink" style="margin:0">本地 MySQL · analytics</span></span></div>
+              <div class="kv"><span class="k">来源表</span><span class="v mono">warehouse.orders</span></div>
+              <div class="kv blk"><span class="k">内容指纹</span><span class="v mono">8c41de02a7f5<span class="cp">复制</span></span></div>
+            </div>
+
+            <div class="sect">
+              <div class="sect-h">版本</div>
+              <div class="kv"><span class="k">历史</span><span class="v">只有当前版本</span></div>
+              <span class="dlink">查看全部…</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="hang">
+      表型没有<b>本体路径</b>：它的真身就是分析库里那张 <code>res_&lt;描述&gt;_&lt;时间戳&gt;</code> 表（G2 一版一张），路径那行改成<b>分析库表</b>并给复制——表名是拿去拼 SQL 的。
+      <br>「大小」给的是<b>规模</b>（<code>12,480 行 × 18 列</code>）而不是字节；「内容指纹」是<b>结构指纹</b>（定义 + 列结构，行数变化不算，见 <code>analysis.rs</code> 裁决 R4），所以复制按钮的说明与普通文件不同。
+      <br>版本区<b>恒出现</b>：没有历史时写「只有当前版本」——「没有历史」本身就是一条信息。
+    </p>
+  </section>
+
   <div class="canvas pad">
     <p class="hang" style="margin:0 0 6px">
       本块样式：<code>.detailcol</code> / <code>.dstate</code> / <code>.dhead</code> / <code>.dsub</code> / <code>.sect</code> / <code>.kv</code> / <code>.locknote</code> / <code>.vrow</code> / <code>.tags</code> / <code>.tagc</code> / <code>.prev</code> / <code>.danger-zone</code> / <code>.btn-s</code> + <code>.btn-xs</code> / <code>.btn-d</code> / <code>.ctx</code> + <code>.mi</code> + <code>.mi.dim</code> + <code>.mi.cap</code> + <code>.sep</code>。
     </p>
     <p class="hang" style="margin:0">
       <b>宽度口径</b>：实现落在<b>右 Dock 的「存档详情」档位</b>（<code>RightPanel::Archive</code>），宽度按 <code>RIGHT_DOCK_WIDTH</code>（<code>20.0rem</code> = 320px，<code>workbench_shell/src/ui.rs:68</code>；契约值见 <code>workbench/tests/ui_contract.rs:71</code>），与本页一致——不是另开一块 320px 的属性面板。<code>h_resizable</code> 宽度记忆还没接。
-      版本区的「最近 3 条」明细已做：只列<b>历史</b>版本（当前版本在基本信息「版本」行），每行 版本号 + 时间 · 体积，下面接「查看全部…」。
-      落地代码：<code>crates/analytics_resource/src/detail_view/{mod,header,rows,body_sections,actions,tag_preview}.rs</code>（组织区 <code>render_move_to_group</code> / <code>move_ids</code> / <code>move_label</code> 在 <code>body_sections.rs</code> 尾部）+ <code>present/{detail,snapshot}.rs</code>。
+      版本区的「最近 3 条」明细已做：只列<b>历史</b>版本（当前版本在基本信息「版本」行），每行 版本号 + <b>绝对时间</b> · 体积（详情是查凭证的地方，相对时间不够用），缺内容副本的那一版后面追加「副本已裁剪」（保留策略只裁副本、不删版本行），下面接「查看全部…」。
+      落地代码：<code>crates/analytics_resource/src/detail_view/{mod,header,rows,body_sections,actions,tag_preview}.rs</code>（组织区 <code>render_move_to_group</code> / <code>move_ids</code> / <code>move_label</code> 在 <code>body_sections.rs</code> 尾部）+ <code>present/{detail,rows,snapshot}.rs</code> + <code>jobs/refresh.rs</code>（副本清单在这里问一次 <code>.RSmeta</code>）。
+      三处「复制」：<b>内容指纹</b>（复制完整值，展示前 12 位）、<b>分析库表</b>（表名拿去拼 SQL）、<b>本体路径</b>（相对项目根，拿去文件管理器找本体）。
     </p>
   </div>
 
