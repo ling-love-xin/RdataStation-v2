@@ -754,3 +754,67 @@ fn detail_carries_definition_only_when_it_has_content() {
     let blank = snapshot.details.get("ar_blank").expect("文件详情");
     assert_eq!(blank.definition_sql, None, "文件型没有重建定义");
 }
+
+/// 「N 个历史版本」后面括不括「M 份可还原」，取决于**副本清单到底问没问到**。
+#[test]
+fn history_label_reports_restorable_copies_only_when_known() {
+    let mut resource = row_model("ar_1", "file", Some(1024));
+    resource.version = 4; // 当前 v4；历史 v3 / v2 / v1
+    let resources = vec![resource];
+    let mut counts = VersionCounts::new();
+    counts.insert("ar_1".to_string(), 3);
+
+    // ① 问到了：只有 v2、v1 还留着副本（v3 被裁；v4 是本体，不算历史）。
+    let mut copies = std::collections::HashMap::new();
+    copies.insert("ar_1".to_string(), vec![4, 2, 1]);
+    let snapshot = build_snapshot(SnapshotInputs {
+        assertions: Default::default(),
+        lifecycles: Default::default(),
+        resources: &resources,
+        global_rows: Vec::new(),
+        global_resources: Vec::new(),
+        statuses: &ArchiveStatuses::new(),
+        history_counts: &counts,
+        recent_versions: empty_versions(),
+        version_copies: &copies,
+        tags: empty_tags(),
+        tag_dictionary: Vec::new(),
+        folders: empty_folders(),
+        group_dictionary: Vec::new(),
+        previews: empty_previews(),
+        dispatch_usage: &Default::default(),
+        read_only: false,
+        now: Utc::now(),
+    });
+    let detail = snapshot.details.get("ar_1").expect("详情");
+    assert_eq!(
+        detail.history_label, "3 个历史版本（2 份可还原）",
+        "当前版本不算历史，被裁的那一版要扣掉"
+    );
+
+    // ② 没问到（空映射 → `None`）：不括括号，也不把每一版都说成已裁剪。
+    let snapshot = build_snapshot(SnapshotInputs {
+        assertions: Default::default(),
+        lifecycles: Default::default(),
+        resources: &resources,
+        global_rows: Vec::new(),
+        global_resources: Vec::new(),
+        statuses: &ArchiveStatuses::new(),
+        history_counts: &counts,
+        recent_versions: empty_versions(),
+        version_copies: &Default::default(),
+        tags: empty_tags(),
+        tag_dictionary: Vec::new(),
+        folders: empty_folders(),
+        group_dictionary: Vec::new(),
+        previews: empty_previews(),
+        dispatch_usage: &Default::default(),
+        read_only: false,
+        now: Utc::now(),
+    });
+    let detail = snapshot.details.get("ar_1").expect("详情");
+    assert_eq!(
+        detail.history_label, "3 个历史版本",
+        "不知道就别报数（0 份可还原是另一回事）"
+    );
+}

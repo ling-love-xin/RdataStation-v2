@@ -19,8 +19,10 @@ pub struct DetailExtras {
     pub preview: Preview,
     /// 全局行的使用面摘要（项目行与没人用过的全局行给空串 → 详情不画那一行）。
     pub dispatch_label: String,
-    /// 该行**还有内容副本**的版本号（详情版本区据此标注“副本已裁剪”）。
-    pub version_copies: Vec<i32>,
+    /// 该行**还有内容副本**的版本号；`None` = 没问到（不是“一份都没有”）。
+    ///
+    /// 两者要分开：没问到不能对用户说“只有 0 份可还原”，也不能把每一版都标成“副本已裁剪”。
+    pub version_copies: Option<Vec<i32>>,
 }
 /// 单行 → 详情快照（详情面板只读，格式化在这里做完）。
 ///
@@ -44,7 +46,8 @@ pub fn to_detail(
         ArchiveKind::TableRef => String::new(),
     };
     // 先算（`extras` 的其余字段随后要按值取走）。
-    let recent_version_lines = detail_version_lines(recent_versions, &extras.version_copies);
+    let recent_version_lines = detail_version_lines(recent_versions, extras.version_copies.as_deref());
+    let version_copies = extras.version_copies;
     ArchiveDetail {
         assertion: None,
         lifecycle: Default::default(),
@@ -84,7 +87,19 @@ pub fn to_detail(
             .map(str::to_string),
         // 没有历史版本时给空串：`detail_rows` 据此跳过"版本"分区（不产生空行）。
         history_label: if history_count > 0 {
-            format!("{history_count} 个历史版本")
+            // 有多少历史版**还能还原**（副本还在）：裁剪只删副本不删版本行，
+            // 只报"N 个历史版本"会让用户以为每一版都点得开。
+            // 只数**当前版本之前**的副本（当前版本那不是"历史"，它的本体就在 `resources/` 下）；
+            // 没问到副本清单（`None`）时不加括号——不能把"不知道"说成"0 份可还原"。
+            let restorable = version_copies
+                .as_deref()
+                .map(|copies| copies.iter().filter(|v| **v < resource.version).count() as i64);
+            match restorable {
+                Some(restorable) if restorable < history_count => {
+                    format!("{history_count} 个历史版本（{restorable} 份可还原）")
+                }
+                _ => format!("{history_count} 个历史版本"),
+            }
         } else {
             String::new()
         },
@@ -112,7 +127,7 @@ pub fn to_detail(
 /// 快照解析不出来**不补造**——时间来自版本行本身（可信），体积留空。
 fn detail_version_lines(
     versions: &[crate::store::rows::ResourceVersion],
-    copies: &[i32],
+    copies: Option<&[i32]>,
 ) -> Vec<DetailVersionLine> {
     versions
         .iter()
@@ -133,7 +148,9 @@ fn detail_version_lines(
                 version: version.version,
                 time_label: format_timestamp(version.created_at),
                 size_label,
-                has_copy: copies.contains(&version.version),
+                // 没问到副本清单时按“还在”呈现（`None` = 不知道，不是“没有”）：
+                // 误报“副本已裁剪”比漏报更糟——用户会以为能还原的版本不能还原。
+                has_copy: copies.map_or(true, |copies| copies.contains(&version.version)),
             }
         })
         .collect()
