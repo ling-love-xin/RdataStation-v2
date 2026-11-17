@@ -25,7 +25,8 @@ git tag v0.1.0 && git push origin v0.1.0
 
 Release 正文取 `docs/release/notes/<标签名>.md`（手写，口径见 `docs/release/README.md`）；
 文件不存在才回落 GitHub 自动生成（单人直推没有 PR，自动生成只有一条 compare 链接）。
-`RDS-beta-*` 标签发出来的 Release 标 **prerelease**，不抢 Latest。
+`RDS-beta-*` 标签发出来的 Release **不标 prerelease**：beta 线所有版本都是 beta，按标签再标一层
+只会让 Latest 停在更早的那一版；等出现去掉 beta 的正式版本时，再按标签判定 prerelease。
 
 | 平台 | runner / target | 产物 | 归档内容 |
 | --- | --- | --- | --- |

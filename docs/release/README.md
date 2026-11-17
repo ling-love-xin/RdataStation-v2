@@ -60,7 +60,7 @@ pwsh tools/release-notes.ps1 -From RDS-beta-0.2.7 -Head HEAD
 | --- | --- |
 | `preflight` job | 校验「标签 ↔ `Cargo.toml` 版本」一致（不一致直接红），并跑 `rds-ui-guard` |
 | `build` job | 找不到 notes 文件时 warning + 回落自动生成；找到就用 `body_path` 上传 |
-| `RDS-beta-*` 标签 | Release 标成 **prerelease**，不抢 Latest |
+| `RDS-beta-*` 标签 | Release **不标 prerelease**（beta 线所有版本都是 beta，再标一层只会让 Latest 停在更早那版）；等出现去掉 beta 的正式版本再启用按标签判定 |
 | Release 正文 | 手写优先；末尾保留 `**完整对比**` 链接，方便想看 diff 的人 |
 
 历史版本的说明是**补写**的（0.2.8 及更早的 Release 正文只有 compare 链接），补写时把文件放进

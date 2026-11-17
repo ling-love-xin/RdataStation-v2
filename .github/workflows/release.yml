@@ -215,7 +215,9 @@ jobs:
           retention-days: 14
 
       # 矩阵各跑各的、各自上传：action 第一次跑建 Release，其余追加 Assets。
-      # 正文优先用手写的 notes 文件；beta 标签标成 prerelease，免得抢走 Latest。
+      # 正文优先用手写的 notes 文件。
+      # `prerelease` 一律 false：beta 线所有版本都是 beta，按标签再标一层 prerelease 只会让
+      # Latest 停在更早的那一版；等出现去掉 beta 的正式版本时再启用按标签判定。
       - name: 上传到 Release Assets
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
@@ -223,7 +225,7 @@ jobs:
           name: ${{ github.ref_name }}
           body_path: ${{ steps.notes.outputs.path }}
           generate_release_notes: ${{ steps.notes.outputs.has != 'true' }}
-          prerelease: ${{ startsWith(github.ref_name, 'RDS-beta-') }}
+          prerelease: false
           files: |
             dist/*.zip
             dist/*.sha256
