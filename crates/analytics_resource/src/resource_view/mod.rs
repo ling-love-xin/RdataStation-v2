@@ -214,6 +214,15 @@ pub trait ResourcesHost: 'static {
     /// reference 失效后「接受当前内容」：以当前源绝对路径为基准再归档，指纹 / 版本落库
     /// （走 `archive_into_existing` 的 reference 分支），成功后清失效槽位并刷新快照。
     fn accept_reference_current(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App);
+
+    /// 连接 id → 展示名（详情「来源连接」那一行用）。
+    ///
+    /// 索引里只存了 `conn_…` 这样的 id，直接摆给用户等于一串乱码。只解名字：
+    /// 按 id 跳导航定位是数据导航面板的事，这里不重复做（避免两处面板功能重叠）。
+    /// `None` = 连接已被删 / 这个名字不认识（渲染侧原样回落 id，不假装有名字）。
+    fn connection_label(&self, _connection_id: &str) -> Option<String> {
+        None
+    }
 }
 
 /// 面板头「⋯」菜单的动作（原型 §2.1 四项；顺序即菜单顺序）。

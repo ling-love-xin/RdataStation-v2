@@ -196,6 +196,19 @@ impl ResourceHostBackend for WorkbenchResourceBackend {
     fn pick_path(&self) -> Option<PathBuf> {
         crate::services::editor_files::pick_open_path()
     }
+
+    /// 详情「来源连接」只摆名字（索引里存的是 `conn_…` 的 id）。
+    ///
+    /// 名字取自导航同一份内存连接表（`shared.connections`）——不查库、不开连接。
+    /// 连接被删 / 换了 id 时返回 `None`，渲染侧回落成 id，不假装有名字。
+    fn connection_label(&self, connection_id: &str) -> Option<String> {
+        self.shared
+            .connections
+            .borrow()
+            .iter()
+            .find(|conn| conn.id == connection_id)
+            .map(|conn| conn.name.clone())
+    }
 }
 
 /// 组装资产库面板宿主（面板实体创建时调用一次）。

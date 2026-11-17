@@ -138,6 +138,14 @@ pub(super) fn render_body_sections(
                 }
                 let value_el = row.into_any_element();
                 kv_list = kv_list.item(label, DescriptionText::AnyElement(value_el), 1);
+            } else if label == SOURCE_CONNECTION_LABEL {
+                // 索引里存的是 `conn_…` 的 id，直接摆出去是一串乱码：按 id 换名字。
+                // 只换名字、不给入口——按 id 跳导航定位属数据导航面板的活，不在这里重复。
+                // 连接已删 / 名字查不到时原样回落 id（比留空有用：至少还能按 id 找回来）。
+                let display = actions
+                    .and_then(|actions| actions.host.connection_label(&value))
+                    .unwrap_or(value);
+                kv_list = kv_list.item(label, display, 1);
             } else if label == "源路径" {
                 // 源绝对路径常被 DescriptionList 裁切（无省略号），HoverCard 悬停显示完整路径（P3）。
                 // gpui-kit 无通用 `.tooltip` 扩展（`ManagedTooltipExt` 是 crate 私有），走公共 `HoverCard`

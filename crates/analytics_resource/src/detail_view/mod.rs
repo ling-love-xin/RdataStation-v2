@@ -41,6 +41,11 @@ pub const ANALYTICS_TABLE_LABEL: &str = "分析库表";
 /// 「本体路径」那一行的标签文案（相对项目根，形如 `resources/reports/dau.csv`）。
 pub const PAYLOAD_PATH_LABEL: &str = "本体路径";
 
+/// 「来源连接」那一行的标签文案。
+///
+/// 索引里存的是连接 id（`conn_…`），渲染层靠这个标签认出"这一行要把 id 换成名字"。
+pub const SOURCE_CONNECTION_LABEL: &str = "来源连接";
+
 /// 「版本」分区的标题（渲染层靠它认出“这个分区要多一个『查看全部…』入口”）。
 pub const VERSION_SECTION_TITLE: &str = "版本";
 

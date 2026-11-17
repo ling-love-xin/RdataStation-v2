@@ -82,7 +82,7 @@ pub fn detail_rows(detail: &ArchiveDetail) -> Vec<(String, Vec<(&'static str, St
         source.push(("上游", detail.origin_label.clone()));
     }
     if let Some(conn) = detail.source_connection_id.as_deref() {
-        source.push(("来源连接", conn.to_string()));
+        source.push((SOURCE_CONNECTION_LABEL, conn.to_string()));
     }
     if let Some(table) = detail.source_table.as_deref() {
         source.push(("来源表", table.to_string()));

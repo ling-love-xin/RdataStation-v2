@@ -104,6 +104,12 @@ pub trait ResourceHostBackend: 'static {
     fn set_default_group(&self, root: &str, folder_id: Option<&str>, cx: &mut App);
     /// 系统文件对话框（编辑器侧 `pick_open_path`；取消返回 `None`，不是错误）。
     fn pick_path(&self) -> Option<PathBuf>;
+    /// 连接 id → 展示名（详情「来源连接」那一行用；宿主持有连接列表，按 id 查一次名字）。
+    ///
+    /// 默认 `None`：测试替身与不接连接列表的场景不必实现，渲染侧会回落成 id。
+    fn connection_label(&self, _connection_id: &str) -> Option<String> {
+        None
+    }
 }
 
 /// 状态栏提示（自由函数版：对话框回调里没有 `self`）。
@@ -243,6 +249,9 @@ impl ResourcesHost for ResourceHost {
     }
     fn accept_reference_current(&self, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
         detail_actions::accept_reference_current(self, detail, _window, cx);
+    }
+    fn connection_label(&self, connection_id: &str) -> Option<String> {
+        self.backend.connection_label(connection_id)
     }
     fn request_version_history(&self, resource_id: &str, _window: &mut Window, cx: &mut App) {
         detail_actions::request_version_history(self, resource_id, _window, cx);
