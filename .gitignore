@@ -65,5 +65,9 @@ docs/**/_backup/
 docs/**/_shots/
 docs/**/*autofix-backup-*.html
 
+# Python 字节码 / 缓存（tools 下的驱动脚本会生成，属派生产物）
+__pycache__/
+*.pyc
+
 # Zed IDE 计划文件（本机资产，不入库）
 /.zcode/
