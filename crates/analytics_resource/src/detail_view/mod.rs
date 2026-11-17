@@ -106,8 +106,22 @@ pub use self::tag_preview::render_preview_section;
 pub(crate) use self::tag_preview::{alias_line, name_link, render_tag_section};
 
 pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx: &App) -> Div {
-    let mut body = div().v_flex().w_full().gap_2().p_2();
-    body = body.child(header::render_header(detail, actions.as_ref(), cx));
+    // 标题条与下面那一行（别名 / 缺失）**不进滚动区**：详情能滚很长，滚到一半看不见
+    // 名字与版本，用户就得回列表重新确认“我在看哪一条”（原型 `.dhead` 是固定条）。
+    let colors = cx.theme().colors;
+    let mut frame = div()
+        .v_flex()
+        .w_full()
+        .flex_1()
+        .min_h_0()
+        .border_l(ui::HAIRLINE)
+        .border_color(colors.border)
+        .bg(colors.background)
+        .child(header::render_head_bar(detail, actions.as_ref(), cx));
+    if let Some(subline) = header::render_head_subline(detail, actions.as_ref(), cx) {
+        frame = frame.child(subline);
+    }
+    let mut body = div().v_flex().w_full().gap_2().px_2().pt_2().pb_4();
     for element in banners::render_banners(detail, actions.as_ref(), cx) {
         body = body.child(element);
     }
@@ -118,17 +132,9 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
         body = body.child(element);
     }
 
-    div()
-        .v_flex()
-        .w_full()
-        .flex_1()
-        .min_h_0()
-        .border_l(ui::HAIRLINE)
-        .border_color(cx.theme().colors.border)
-        .bg(cx.theme().colors.background)
-        // 详情会长：基本信息 + 指纹 + 组织 + 版本明细 + 标签 + 内容预览（20 行）+ 动作区 + 危险区。
-        // 以前这里没有滚动，超出的部分直接被裁在外面——看得见分区标题，够不着下面。
-        .child(body.flex_1().min_h_0().overflow_y_scrollbar())
+    // 详情会长：基本信息 + 来源 + 版本明细 + 标签 + 内容预览（20 行）+ 动作区 + 危险区。
+    // 滚动归这一层（`Scrollable` 挂在拥有整块内容的元素上，内距在它内部）。
+    frame.child(body.flex_1().min_h_0().overflow_y_scrollbar())
 }
 
 #[cfg(test)]
