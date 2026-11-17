@@ -1,7 +1,9 @@
 //! 数据库类型 × 驱动实现的两层选择测试（M3 C10）。
 //!
 //! 覆盖「左侧选类型 / 右侧选驱动实现（短名去噪）」链路：
-//! - 侧栏选类型 → 驱动下拉选项切到该类型启用驱动并默认选中第一个，值为实现短名（如 `sqlx`）；
+//! - 侧栏选类型 → 驱动下拉选项切到该类型启用驱动并默认选中第一个，值为「实现短名 · 归属」
+//!   （如 `sqlx · 内置`：标签带归属是为了同族多实现时分得清插件版与内核自带版，见
+//!   `connection_dialog/helpers/mod.rs::driver_menu_label`）；
 //! - 编辑回读 / 草稿恢复：按驱动 id 在当前类型下定位，选中短名（跨类型同名短名不歧义）；
 //! - 表单快照携带 `type_id` / `driver_id`（条目类型徽标与恢复精确定位）。
 //!
@@ -148,7 +150,7 @@ fn selecting_type_scopes_driver_options_to_short_names(cx: &mut TestAppContext) 
     // 初始：未选类型 → 驱动下拉无选中值。
     assert!(cx.update(|_, cx| dialog.driver.read(cx).selected_value().is_none()));
 
-    // 侧栏选 MySQL：默认选中该类型第一个启用驱动，值为实现短名（去噪）。
+    // 侧栏选 MySQL：默认选中该类型第一个启用驱动，值为「短名 · 归属」标签（去噪）。
     cx.update(|window, cx| dialog.select_type("mysql", window, cx));
     let sel = cx.update(|_, cx| {
         dialog
@@ -159,7 +161,10 @@ fn selecting_type_scopes_driver_options_to_short_names(cx: &mut TestAppContext) 
             .unwrap_or_default()
             .to_string()
     });
-    assert_eq!(sel, "sqlx", "驱动下拉应显示实现短名而非 MySQL (sqlx)");
+    assert_eq!(
+        sel, "sqlx · 内置",
+        "驱动下拉显示「实现短名 · 归属」，而不是 MySQL (sqlx)"
+    );
     assert_eq!(
         cx.update(|_, _cx| dialog.selected_type.borrow().clone()),
         "mysql"
@@ -179,7 +184,7 @@ fn selecting_type_scopes_driver_options_to_short_names(cx: &mut TestAppContext) 
             .unwrap_or_default()
             .to_string()
     });
-    assert_eq!(sel, "Official", "按驱动 id 定位后应显示对应实现短名");
+    assert_eq!(sel, "Official · 内置", "按驱动 id 定位后应显示对应实现的标签");
 
     // 跨类型同名短名（sqlx）不歧义：类型作用域优先。
     cx.update(|window, cx| {
@@ -199,7 +204,7 @@ fn selecting_type_scopes_driver_options_to_short_names(cx: &mut TestAppContext) 
             .unwrap_or_default()
             .to_string()
     });
-    assert_eq!(sel, "sqlx");
+    assert_eq!(sel, "sqlx · 内置");
 
     cx.update(|_, cx| harness.update(cx, |_, cx| cx.notify()));
 }
@@ -504,7 +509,7 @@ fn file_type_general_tab_renders_and_switches_back(cx: &mut TestAppContext) {
             .unwrap_or_default()
             .to_string()
     });
-    assert_eq!(sel, "rusqlite");
+    assert_eq!(sel, "rusqlite · 内置");
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
     // 切回网络型：占位、卡片与 Tab 条随之重建（渲染不得 panic，且回归到 URI 行）。
@@ -518,7 +523,7 @@ fn file_type_general_tab_renders_and_switches_back(cx: &mut TestAppContext) {
             .unwrap_or_default()
             .to_string()
     });
-    assert_eq!(sel, "sqlx");
+    assert_eq!(sel, "sqlx · 内置");
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
     // 单列分组大纲：折叠态默认展开；切换折叠后重渲染（含文件型 / 网络型两种分组集合）。
@@ -555,7 +560,7 @@ fn draft_snapshot_carries_type_and_driver_id(cx: &mut TestAppContext) {
     assert_eq!(first.name, "快照连接");
     assert_eq!(first.type_id, "mysql");
     assert_eq!(first.driver_id, "mysql");
-    assert_eq!(first.driver_name, "sqlx");
+    assert_eq!(first.driver_name, "sqlx · 内置");
 
     // 切到另一类型 + 驱动：新条目快照独立记录。
     cx.update(|window, cx| dialog.select_type("postgresql", window, cx));
