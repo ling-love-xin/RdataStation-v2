@@ -16,7 +16,7 @@
     <button class="theme-toggle" data-theme-toggle><span>切换暗色</span></button>
   </div>
   <p class="p-spec">
-    宽 <code>320px</code>（<code>RIGHT_DOCK_WIDTH</code> = 20rem）· 分节：头部（kind 图标 + 显示名 + 版本徽标 + 别名）/ 基本信息（种类 / 版本 / 实例 / 只读 / 归档方式 / 本体路径 / 分析库表 / 大小 / 创建时间 / 修改时间 / 归档时间 / 使用）/ 来源 / 业务口径（选填，没填整区不摆）/ <b>版本时间线</b>（当前版本在最前，其后最近几条历史；点节点看那一版的信息）/ <b>组织</b>（分组 + 「移动…」）/ <b>标签</b> / 内容预览 / 动作区 / 危险区。
+    宽 <code>320px</code>（<code>RIGHT_DOCK_WIDTH</code> = 20rem）· 分节：头部（kind 图标 + 显示名 + 版本徽标 + 别名）/ 基本信息（种类 / 版本 / 实例 / 只读 / 归档方式 / 本体路径 / 分析库表 / 大小 / 创建时间 / 修改时间 / 归档时间 / 使用）/ 来源 / 业务口径（选填，没填整区不摆）/ <b>版本时间线</b>（竖排轨道，当前版本在最前，其后最近几条历史；<b>点节点即选中这一版</b>，选中那一版的信息卡就地摆在轨道下方）/ <b>组织</b>（分组 + 「移动…」）/ <b>标签</b> / 内容预览 / 动作区 / 危险区。
     只读信息区不可编辑；写类动作全在面板里：头部改名与别名、组织「移动…」、标签「＋ 标签」、动作区「取回（检出）…」、危险区「移入回收站」——只读项目下这些入口不摆或置灰。要改内容必须走「取回」→ 草稿工作副本 → 再归档生成新版本。
   </p>
   <nav class="pnav"><a href="index.html">索引</a><a href="05-status-row.html">← 上一块：状态行</a><a href="07-detail-ref.html">下一块：引用型详情 →</a></nav>
@@ -67,23 +67,23 @@
                   <span class="tl-d"></span><span class="tl-v">v3</span>
                   <span class="tl-m">2026-09-15 09:12 · 1.2 KB</span><span class="tl-tag">当前</span>
                 </div>
-                <div class="tl-n">
+                <div class="tl-n sel">
                   <span class="tl-d"></span><span class="tl-v">v2</span>
-                  <span class="tl-m">2026-09-14 18:03 · 1.1 KB</span>
+                  <span class="tl-m">2026-09-14 18:03 · 1.1 KB</span><span class="tl-tag">在看</span>
                 </div>
                 <div class="tl-n">
                   <span class="tl-d"></span><span class="tl-v">v1</span>
                   <span class="tl-m">2026-09-12 10:24 · 980 B · 副本已裁剪</span>
                 </div>
               </div>
-              <div class="tl-pop">
-                <div class="tl-pop-h">v2 <span class="tl-pop-k">历史版本</span></div>
+              <div class="tl-card">
+                <div class="tl-card-h">v2 <span class="tl-card-k">历史版本</span></div>
                 <div class="kv"><span class="k">时间</span><span class="v">2026-09-14 18:03</span></div>
                 <div class="kv"><span class="k">大小</span><span class="v">1.1 KB</span></div>
                 <div class="kv"><span class="k">内容指纹</span><span class="v mono">7c1d90ab3e55</span></div>
                 <div class="kv"><span class="k">变更</span><span class="v">较 v1 大小+120 B · 指纹已变</span></div>
                 <div class="kv"><span class="k">内容副本</span><span class="v">在位，可还原</span></div>
-                <div class="tl-pop-f">要还原或对比，用下面的「查看全部…」</div>
+                <div class="tl-card-f">要还原或对比，用下面的「查看全部…」</div>
               </div>
               <span class="dlink">查看全部…</span>
             </div>
@@ -259,7 +259,7 @@ GROUP BY channel</div>
 
   <div class="canvas pad">
     <p class="hang" style="margin:0 0 6px">
-      本块样式：<code>.detailcol</code> / <code>.dstate</code> / <code>.dhead</code> / <code>.dsub</code> / <code>.sect</code> / <code>.kv</code> / <code>.locknote</code> / <code>.tl</code> + <code>.tl-n</code> + <code>.tl-pop</code> / <code>.tags</code> / <code>.tagc</code> / <code>.prev</code> / <code>.danger-zone</code> / <code>.btn-s</code> + <code>.btn-xs</code> / <code>.btn-d</code> / <code>.ctx</code> + <code>.mi</code> + <code>.mi.dim</code> + <code>.mi.cap</code> + <code>.sep</code>。
+      本块样式：<code>.detailcol</code> / <code>.dstate</code> / <code>.dhead</code> / <code>.dsub</code> / <code>.sect</code> / <code>.kv</code> / <code>.locknote</code> / <code>.tl</code> + <code>.tl-n</code> + <code>.tl-n.sel</code> + <code>.tl-card</code> / <code>.tags</code> / <code>.tagc</code> / <code>.prev</code> / <code>.danger-zone</code> / <code>.btn-s</code> + <code>.btn-xs</code> / <code>.btn-d</code> / <code>.ctx</code> + <code>.mi</code> + <code>.mi.dim</code> + <code>.mi.cap</code> + <code>.sep</code>。
     </p>
     <p class="hang" style="margin:0">
       <b>宽度口径</b>：实现落在<b>右 Dock 的「存档详情」档位</b>（<code>RightPanel::Archive</code>），宽度按 <code>RIGHT_DOCK_WIDTH</code>（<code>20.0rem</code> = 320px，<code>workbench_shell/src/ui.rs:68</code>；契约值见 <code>workbench/tests/ui_contract.rs:71</code>），与本页一致——不是另开一块 320px 的属性面板。<code>h_resizable</code> 宽度记忆还没接。

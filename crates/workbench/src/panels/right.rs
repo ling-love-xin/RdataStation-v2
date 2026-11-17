@@ -191,9 +191,16 @@ impl RightSidebarPanel {
                     read_only,
                     selected_ids,
                 };
+                // 版本时间线选中态与归档 tab 同一套（状态在 `Shared`，重绘通知本面板）。
+                let selection = crate::components::resource_host::version_selection(
+                    &self.shared,
+                    &detail.id,
+                    cx.entity(),
+                );
                 div().v_flex().size_full().min_h_0().child(render_detail(
                     &detail,
                     Some(actions),
+                    &selection,
                     cx,
                 ))
             }

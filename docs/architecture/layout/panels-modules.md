@@ -60,8 +60,9 @@
 | `layout_locked` / `prev_left_sidebar_width` / `prev_right_sidebar_width` | 设置页 → 宿主 | 布局锁定 + 边栏宽度同步（`settings` 写、宿主 render 读；M-layout，2026-10-28） |
 | `data_objects` / `data_object_assets` / `data_object_picked` | data_objects 面板 ↔ 宿主 | 数据对象清单缓存（面板刷新写、render 只读）+ 已选身份；宿主「分析已选」读后转 `SampleSource`（2026-11-16 补登记） |
 | `loaded_files` | data_objects 面板写 → 清单收集读 | 「加源 → 加载文件」落地后的登记（`f_<alias>` 别名与源路径），用来区分「已经进过分析的文件」与「项目里但没加载的文件」（2026-11-16 补登记） |
+| `detail_version` | 右栏 / 归档 tab 写（本面板内）→ 同面板 render 读 | 详情「版本时间线」选中的那一版（资产 id + 版本号；按 id 配对，换资产自动失效）。**不进快照**：选中是窗口级 UI 状态，进快照会让点一下节点就重建整份快照（2026-11-17 补登记） |
 
-共 18 个字段跨模块。它们**没有类型级保护**：任何模块都能写任何字段，改一处语义不会有编译错误，
+共 19 个字段跨模块。它们**没有类型级保护**：任何模块都能写任何字段，改一处语义不会有编译错误，
 只能靠约定与 review。
 
 > 另一类不在此列的字段是**宿主 ↔ 特性 crate 视图的实体弱句柄**（`mock_panel` / `mock_details` / `insight_panel` / `resources_panel` / `property_panel` / `plugin_manager`）：

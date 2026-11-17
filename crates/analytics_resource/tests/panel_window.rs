@@ -23,7 +23,8 @@ use rds_analytics_resource::commands::{
     SelectAllRows,
 };
 use rds_analytics_resource::detail_view::{
-    ArchiveDetail, ArchiveTagChip, DetailActions, DetailVersionLine, render_detail,
+    ArchiveDetail, ArchiveTagChip, DetailActions, DetailVersionLine, VersionSelection,
+    render_detail,
 };
 use rds_analytics_resource::dnd::GroupDrop;
 use rds_analytics_resource::filter::{SortField, SortOrder};
@@ -1654,7 +1655,12 @@ impl Render for DetailHarness {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
-            .child(render_detail(&self.detail, self.actions.clone(), cx))
+            .child(render_detail(
+                &self.detail,
+                self.actions.clone(),
+                &VersionSelection::default(),
+                cx,
+            ))
     }
 }
 
@@ -1716,7 +1722,7 @@ fn detail_preview_block_renders_text_or_says_why_not(cx: &mut TestAppContext) {
 }
 
 /// 详情版本区是**时间线**：当前版本节点在最前，历史节点按版本号往下排；
-/// 每个节点都是一个可点入口（`Popover` 的 trigger）。
+/// 每个节点都是一个可点入口（点它 = 选中这一版，信息卡就地显示在轨道下方）。
 #[gpui_kit::test]
 fn detail_version_timeline_puts_current_first(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -1775,6 +1781,101 @@ fn detail_version_timeline_puts_current_first(cx: &mut TestAppContext) {
         "时间线自上而下：当前 → v2 → v1"
     );
     drop(view);
+}
+
+/// 选中态驱动信息卡：没选（`None`）兜底当前版本；选了历史版本就把卡挪到那一版。
+///
+/// 选中本身由宿主持有（`Shared.detail_version` → `VersionSelection`），这里只钉
+/// “渲染按选中走”这一条：卡跟着选中的版本号换，且**同时只有一张**。
+#[gpui_kit::test]
+fn detail_version_card_follows_the_selected_version(cx: &mut TestAppContext) {
+    /// 只带选中态的壳（动作区不需要，纯看版本区）。
+    struct SelectedHarness {
+        detail: ArchiveDetail,
+        selected: Option<i32>,
+    }
+
+    impl Render for SelectedHarness {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(render_detail(
+                &self.detail,
+                None,
+                &VersionSelection {
+                    selected: self.selected,
+                    on_select: None,
+                },
+                cx,
+            ))
+        }
+    }
+
+    cx.update(gpui_kit::init);
+    let detail = {
+        let mut detail = detail_for(&row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 3));
+        detail.version_timeline = vec![
+            DetailVersionLine {
+                version: 3,
+                time_label: "2026-09-15 09:12".to_string(),
+                size_label: "1.2 KB".to_string(),
+                is_current: true,
+                hash_short: "9f3a2c7b1e04".to_string(),
+                delta_label: "较 v2 大小+120 B · 指纹已变".to_string(),
+                has_copy: true,
+            },
+            DetailVersionLine {
+                version: 1,
+                time_label: "2026-09-12 10:24".to_string(),
+                size_label: "980 B".to_string(),
+                is_current: false,
+                hash_short: "77aa0f12bc33".to_string(),
+                delta_label: String::new(),
+                has_copy: false,
+            },
+        ];
+        detail
+    };
+
+    // 没选中：兜底当前版本（v3），卡只有一张。
+    let (unselected, cx) = cx.add_window_view({
+        let detail = detail.clone();
+        move |_window, _cx| SelectedHarness {
+            detail: detail.clone(),
+            selected: None,
+        }
+    });
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    assert!(
+        cx.debug_bounds("archive-timeline-card-v3").is_some(),
+        "没选中时应显示当前版本的信息卡"
+    );
+    assert!(
+        cx.debug_bounds("archive-timeline-card-v1").is_none(),
+        "没选中时不该同时摆历史版本的卡"
+    );
+    drop(unselected);
+
+    // 选中 v1：卡换到 v1（副本已裁剪那一版也照样能看登记信息）。
+    let (picked, cx) = cx.add_window_view({
+        let detail = detail.clone();
+        move |_window, _cx| SelectedHarness {
+            detail: detail.clone(),
+            selected: Some(1),
+        }
+    });
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    assert!(
+        cx.debug_bounds("archive-timeline-card-v1").is_some(),
+        "选中 v1 后信息卡应落在 v1"
+    );
+    assert!(
+        cx.debug_bounds("archive-timeline-card-v3").is_none(),
+        "选中 v1 后不该再摆 v3 的卡"
+    );
+    drop(picked);
 }
 
 /// 详情头部可编辑（原型 §3.1）：名字与别名都是可点入口；只读项目 / 本体缺失时不摆。

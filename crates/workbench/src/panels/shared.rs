@@ -318,6 +318,12 @@ pub struct Shared {
     ///
     /// 信息就几行，不走中央编辑区面板，挂宿主 overlay 弹窗（用户点名 2026-10-10）。
     pub scratchpad_file_info: Rc<RefCell<Option<ScratchpadFileInfoView>>>,
+    /// M6：详情「版本时间线」里选中的那一版（资产 id, 版本号）。
+    ///
+    /// 这是**窗口级 UI 状态**：详情是只读快照，选中“我在看哪一版”不该进快照（那会让
+    /// 每次点节点都重建整份快照）。按资产 id 配对：换了选中资产，旧选中自动失效
+    /// （渲染侧发现 id 对不上就当没选，兜底当前版本）。
+    pub detail_version: Rc<RefCell<Option<(String, i32)>>>,
     /// M5：请求在中央编辑器中打开某个文件（草稿箱双击 / Enter 置位，宿主 render 消费）。
     ///
     /// 只传**绝对路径 + 只读维度**：编辑器无根、也不认识 `resources/` 的归属，
@@ -457,6 +463,7 @@ impl Shared {
             project: Rc::new(RefCell::new(None)),
             scratchpad_bridge: Rc::new(RefCell::new(None)),
             scratchpad_file_info: Rc::new(RefCell::new(None)),
+            detail_version: Rc::new(RefCell::new(None)),
             open_file_request: Rc::new(RefCell::new(None)),
             reveal_request: Rc::new(RefCell::new(None)),
             query_request: Rc::new(RefCell::new(None)),

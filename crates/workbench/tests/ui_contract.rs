@@ -1477,6 +1477,7 @@ fn shared_fields_are_whitelisted() {
         "data_object_assets",
         "data_object_picked",
         "data_objects",
+        "detail_version",
         "driver_catalog",
         "editor_bridge",
         "host_redraw",

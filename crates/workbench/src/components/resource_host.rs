@@ -10,11 +10,12 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use analytics_resource::detail_view::VersionSelection;
 use analytics_resource::dialogs::pick::DraftCandidate;
 use analytics_resource::model::KeepVersions;
 use analytics_resource::resource_host::ResourceHostBackend;
 use analytics_resource::resource_view::{GroupOption, ResourcesHost};
-use gpui_kit::App;
+use gpui_kit::{App, Entity, Render};
 use insight::SampleSource;
 
 use crate::panels::Shared;
@@ -217,4 +218,34 @@ pub fn build_host(shared: &Shared) -> Rc<dyn ResourcesHost> {
         shared: shared.clone(),
     });
     analytics_resource::resource_host::new_host(backend)
+}
+
+/// 详情「版本时间线」的选中态接线（侧边面板形态）。
+///
+/// 两件事：
+/// - **状态存哪**：存 `Shared.detail_version`（窗口级 UI 状态，不进快照——否则点一下
+///   节点就要重建整份快照）。按资产 id 配对，换资产自动失效。
+/// - **谁来重绘**：`panel` 必须是**渲染详情的那张面板**（详情不在 `Shared` 的子树里，
+///   通知 Shared 没人听）。所以这个助手要泛型到面板实体，右栏与归档 tab 共用一份。
+pub fn version_selection<T: Render + 'static>(
+    shared: &Shared,
+    detail_id: &str,
+    panel: Entity<T>,
+) -> VersionSelection {
+    // 只认同一个资产的选中；换了资产就当没选（渲染侧兜底当前版本）。
+    let selected = shared
+        .detail_version
+        .borrow()
+        .as_ref()
+        .filter(|(id, _)| id == detail_id)
+        .map(|(_, version)| *version);
+    let shared = shared.clone();
+    let id = detail_id.to_string();
+    VersionSelection {
+        selected,
+        on_select: Some(Rc::new(move |version, _window, cx| {
+            *shared.detail_version.borrow_mut() = Some((id.clone(), version));
+            panel.update(cx, |_, cx| cx.notify());
+        })),
+    }
 }

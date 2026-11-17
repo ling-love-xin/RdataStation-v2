@@ -5,6 +5,7 @@ use super::*;
 pub(super) fn render_body_sections(
     detail: &ArchiveDetail,
     actions: Option<&DetailActions>,
+    selection: &VersionSelection,
     cx: &App,
 ) -> Vec<Div> {
     let colors = cx.theme().colors;
@@ -195,7 +196,7 @@ pub(super) fn render_body_sections(
         // 其后是最近几条历史版。点某个节点 → 浮层看那一版的时间 / 大小 / 指纹 / 变更 / 副本。
         // 时间、大小、指纹、差异都是宿主格式化好的字，这里只排版，不在渲染期算。
         if is_version_section && !detail.version_timeline.is_empty() {
-            section = section.child(render_version_timeline(detail, cx));
+            section = section.child(render_version_timeline(detail, selection, cx));
         }
         // 来源区下面接「重建定义」：表型资产的配方（只登记、不执行）。
         // 与内容预览同一处理：多行等宽块，硬塞进键值两列会把每行都多拉一列标签。
@@ -248,13 +249,24 @@ pub(super) fn render_body_sections(
     out
 }
 
-/// 版本时间线：左侧一条竖线 + 每隔一版一个圆点，节点本身可点。
+/// 版本时间线（**侧边面板形态**）：竖排轨道，选中一版就在轨道下方看这一版的信息。
 ///
-/// 为什么用 `Popover` 承载“节点信息”：它是**点击触发**的浮层，开关状态在组件自己身上
-/// （渲染函数仍是纯读，不需要面板再存一个“当前看哪一版”的状态）；点第二次自动收起，
-/// 点浮层外收起。版本对话框仍是完整的动作面（还原 / 对比 / 删副本），这里**只读**。
-fn render_version_timeline(detail: &ArchiveDetail, cx: &App) -> Div {
+/// 为什么竖排：详情是 280px 宽的侧栏，横向排不下「版本号 + 时间 + 大小」；竖排还更像
+/// 一根可以“停在某一版上”的刻度轨。宽容器（版本历史对话框 48rem）另走横排形态。
+///
+/// 选中态**不在渲染层**：`selection` 由宿主给（谁渲染详情谁持有），点击回调也只回宿主；
+/// 本函数是纯读——`selected = None` 时兜底第一个节点（当前版本），不会出现“选中为空”。
+fn render_version_timeline(
+    detail: &ArchiveDetail,
+    selection: &VersionSelection,
+    cx: &App,
+) -> Div {
     let colors = cx.theme().colors;
+    // 兜底：没选中就看当前版本（时间线第一个节点），逻辑上它一定在。
+    let selected = selection
+        .selected
+        .unwrap_or_else(|| detail.version_timeline[0].version);
+    let mut out = div().v_flex().w_full().gap_1();
     let mut rail = div()
         .v_flex()
         .w_full()
@@ -263,16 +275,39 @@ fn render_version_timeline(detail: &ArchiveDetail, cx: &App) -> Div {
         .border_l(ui::HAIRLINE)
         .border_color(colors.border);
     for line in &detail.version_timeline {
-        rail = rail.child(render_timeline_node(line, cx));
+        rail = rail.child(render_timeline_node(
+            line,
+            line.version == selected,
+            selection,
+            cx,
+        ));
     }
-    rail
+    out = out.child(rail);
+    // 选中那一版的信息卡**就地**摆在轨道下面（不是浮层）：侧栏里浮层会和内容抢地方，
+    // 就地一块还能顺着面板一起滚。
+    if let Some(node) = detail
+        .version_timeline
+        .iter()
+        .find(|line| line.version == selected)
+    {
+        out = out.child(render_timeline_card(node, cx));
+    }
+    out
 }
 
 /// 时间线上的一个节点：圆点 + `vN` + 时间 · 大小（当前版本另标「当前」）。
-fn render_timeline_node(line: &DetailVersionLine, cx: &App) -> AnyElement {
+///
+/// 节点用 `Button`（不自绘可点 div）：hover / 键盘焦点 / a11y 都是组件带的；
+/// 点它 = 选中这一版（回调回宿主），不是开浮层。
+fn render_timeline_node(
+    line: &DetailVersionLine,
+    selected: bool,
+    selection: &VersionSelection,
+    cx: &App,
+) -> AnyElement {
     let colors = cx.theme().colors;
-    // 当前版本的点用主色（一屏只此一处高亮），历史版本的点用弱化色。
-    let dot_color = if line.is_current {
+    // 点用主色：当前版本与“正在看的那一版”都算“眼前这一版”，其余弱化。
+    let dot_color = if line.is_current || selected {
         colors.primary
     } else {
         colors.muted_foreground
@@ -302,7 +337,13 @@ fn render_timeline_node(line: &DetailVersionLine, cx: &App) -> AnyElement {
                 .flex_none()
                 .w(rems(ui::DETAIL_VERSION_LABEL_WIDTH))
                 .text_xs()
-                .text_color(colors.foreground)
+                // 选中那一版把版本号染成主色：侧栏里没有多余位置摆“已选中”徽标，
+                // 颜色 + 下面那张信息卡就是选中标记。
+                .text_color(if selected {
+                    colors.primary
+                } else {
+                    colors.foreground
+                })
                 .child(format!("v{}", line.version)),
         )
         .child(
@@ -325,31 +366,31 @@ fn render_timeline_node(line: &DetailVersionLine, cx: &App) -> AnyElement {
     } else {
         row
     };
-    // 节点本身用 `Button`（不是自绘可点 div）：`Popover` 的 trigger 要求 `Selectable`，
-    // 顺带拿到 hover / 键盘焦点 / a11y，一行点击区与面板其它行同高。
-    let id = SharedString::from(format!("archive-timeline-v{}", line.version));
+    // 点节点 = 选中这一版（宿主写选中态并重绘）。没接回调（单测纯渲染）时节点只展示。
     let version = line.version;
-    let trigger = Button::new(id.clone())
-        .ghost()
-        .w_full()
-        .h(rems(ui::ROW_HEIGHT))
-        .px_1()
-        .justify_start()
-        .debug_selector(move || format!("archive-timeline-v{version}"))
-        .child(row);
-    // 浮层内容按节点复制一份（`content` 闭包要求 'static）：节点只有几个短字段，便宜。
-    let node = line.clone();
-    Popover::new(id)
-        .trigger(trigger)
-        .content(move |_, _, cx| render_timeline_card(&node, cx))
-        .into_any_element()
+    let mut button = Button::new(SharedString::from(format!(
+        "archive-timeline-v{}",
+        line.version
+    )))
+    .ghost()
+    .w_full()
+    .h(rems(ui::ROW_HEIGHT))
+    .px_1()
+    .justify_start()
+    .debug_selector(move || format!("archive-timeline-v{version}"))
+    .child(row);
+    if let Some(on_select) = selection.on_select.clone() {
+        let version = line.version;
+        button = button.on_click(move |_, window, cx| on_select(version, window, cx));
+    }
+    button.into_any_element()
 }
 
-/// 节点浮层的内容：这一版的时间 / 大小 / 指纹 / 相对上一版的变更 / 副本状态。
+/// 选中那一版的信息卡：时间 / 大小 / 指纹 / 相对上一版的变更 / 副本状态。
 ///
 /// 只摆**这一版自己的**信息（每一版的完整列清单与数据导航的属性重复，不做）；
 /// 动作不在这里重复——要还原或对比，走下面那颗「查看全部…」。
-fn render_timeline_card(line: &DetailVersionLine, cx: &App) -> Div {
+fn render_timeline_card(line: &DetailVersionLine, cx: &App) -> AnyElement {
     let colors = cx.theme().colors;
     let mut list = DescriptionList::new()
         .columns(1)
@@ -373,10 +414,19 @@ fn render_timeline_card(line: &DetailVersionLine, cx: &App) -> Div {
         },
         1,
     );
+    let version = line.version;
     let mut card = div()
+        .id(("archive-timeline-card", version as usize))
+        .debug_selector(move || format!("archive-timeline-card-v{version}"))
         .v_flex()
+        .w_full()
+        .min_w_0()
         .gap_1()
-        .min_w(rems(12.))
+        .p_2()
+        .rounded_sm()
+        .border_1()
+        .border_color(colors.border)
+        .bg(colors.sidebar)
         .child(
             div()
                 .h_flex()
@@ -404,7 +454,7 @@ fn render_timeline_card(line: &DetailVersionLine, cx: &App) -> Div {
                 "内容副本已被保留策略裁掉，只能看登记信息"
             }),
     );
-    card
+    card.into_any_element()
 }
 
 /// 「重建定义」等宽块（表型资产的配方）。

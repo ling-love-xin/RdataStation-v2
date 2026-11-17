@@ -12,7 +12,6 @@ pub(crate) use gpui_kit::component::button::{Button, ButtonVariant, ButtonVarian
 pub(crate) use gpui_kit::component::description_list::{DescriptionList, DescriptionText};
 pub(crate) use gpui_kit::component::hover_card::HoverCard;
 pub(crate) use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
-pub(crate) use gpui_kit::component::popover::Popover;
 pub(crate) use gpui_kit::component::scroll::ScrollableElement as _;
 pub(crate) use gpui_kit::component::tag::Tag;
 pub(crate) use gpui_kit::component::{ActiveTheme, Icon, Sizable as _, Size};
@@ -111,7 +110,31 @@ pub use self::rows::{alert_line, detail_rows};
 pub use self::tag_preview::render_preview_section;
 pub(crate) use self::tag_preview::{alias_line, name_link, render_tag_section};
 
-pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx: &App) -> Div {
+/// 版本时间线的**选中态**（侧边面板里“我在看哪一版”）。
+///
+/// 为什么选中态由宿主持有、只把两个薄口子传进来：
+/// - 点击要改状态、还要让**渲染详情的那张面板**重绘；渲染函数自己没有实体句柄，
+///   自己造一个 state 实体则谁都不通知（详情不是那个实体的子树）。
+/// - 面板在哪一侧由 workbench 决定（右栏 / 归档 tab），选中就存在那一层，换资产时按
+///   `resource_id` 自动失效；`analytics_resource` 仍不认识宿主。
+///
+/// `selected = None` 时渲染层兜底到**当前版本**（第一个节点）：一进来先看到“现在这一版”，
+/// 再点历史节点才切过去——不存在“什么都没选、下面空一块”的空档。
+#[derive(Clone, Default)]
+pub struct VersionSelection {
+    /// 当前选中的版本号。
+    pub selected: Option<i32>,
+    /// 点节点时调用（宿主写自己的选中态并通知重绘）；`None` = 纯只读渲染（单测里
+    /// 节点只展示、不响应点击）。
+    pub on_select: Option<std::rc::Rc<dyn Fn(i32, &mut Window, &mut App)>>,
+}
+
+pub fn render_detail(
+    detail: &ArchiveDetail,
+    actions: Option<DetailActions>,
+    selection: &VersionSelection,
+    cx: &App,
+) -> Div {
     // 标题条与下面那一行（别名 / 缺失）**不进滚动区**：详情能滚很长，滚到一半看不见
     // 名字与版本，用户就得回列表重新确认“我在看哪一条”（原型 `.dhead` 是固定条）。
     let colors = cx.theme().colors;
@@ -131,7 +154,7 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
     for element in banners::render_banners(detail, actions.as_ref(), cx) {
         body = body.child(element);
     }
-    for element in body_sections::render_body_sections(detail, actions.as_ref(), cx) {
+    for element in body_sections::render_body_sections(detail, actions.as_ref(), selection, cx) {
         body = body.child(element);
     }
     for element in actions::render_actions(detail, actions.as_ref(), cx) {

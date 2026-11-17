@@ -16,6 +16,7 @@ use gpui_kit::*;
 use crate::view::RightPanel;
 
 use analytics_resource::detail_view::{DetailActions, render_detail};
+use crate::components::resource_host::version_selection;
 use editor::view::history::HistoryView;
 use insight::InsightView;
 use mock::mock_view::MockPanel;
@@ -365,12 +366,15 @@ impl ArchivePanel {
                     read_only,
                     selected_ids,
                 };
+                // 版本时间线的选中态：状态存 `Shared`，重绘通知这张面板（详情不在 Shared 子树）。
+                let selection =
+                    version_selection(&self.shared, &detail.id, cx.entity());
                 div()
                     .v_flex()
                     .size_full()
                     .min_h_0()
                     .pt_2()
-                    .child(render_detail(&detail, Some(actions), cx))
+                    .child(render_detail(&detail, Some(actions), &selection, cx))
             }
             None => {
                 let muted = cx.theme().colors.muted_foreground;

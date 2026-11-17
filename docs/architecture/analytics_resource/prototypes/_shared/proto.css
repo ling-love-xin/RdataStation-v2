@@ -214,19 +214,22 @@ svg.ico-sm{width:12px;height:12px;flex:none;fill:none;stroke:currentColor;stroke
 .vrow .dt{color:var(--muted);font-family:Consolas,monospace;font-size:10px;}
 .vrow .cur{margin-left:auto;color:var(--primary);font-size:9px;border:1px solid var(--active-border);border-radius:4px;padding:0 4px;}
 
-/* ── 版本时间线（左侧竖线 + 圆点，节点可点开浮层） ── */
+/* ── 版本时间线（左侧竖线 + 圆点；点节点选中，信息卡就地摆在轨道下方） ── */
 .tl{margin-top:4px;padding-left:8px;border-left:1px solid var(--border);display:flex;flex-direction:column;gap:4px;}
 .tl-n{display:flex;align-items:center;gap:6px;height:24px;padding:0 4px;border-radius:4px;font-size:10.5px;color:var(--fg);cursor:pointer;}
 .tl-n:hover{background:var(--hover);}
+.tl-n.sel{background:var(--hover);}
+.tl-n.sel .tl-v{color:var(--primary);}
 .tl-d{flex:none;width:6px;height:6px;border-radius:50%;background:var(--muted);}
-.tl-n.cur .tl-d{background:var(--primary);}
+.tl-n.cur .tl-d,.tl-n.sel .tl-d{background:var(--primary);}
 .tl-v{flex:none;width:28px;color:var(--fg);}
 .tl-m{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-family:Consolas,monospace;font-size:10px;}
 .tl-tag{flex:none;color:var(--primary);font-size:10px;}
-.tl-pop{margin-top:6px;padding:8px;border:1px solid var(--border);border-radius:7px;background:var(--popover);box-shadow:0 6px 18px rgba(0,0,0,.28);}
-.tl-pop-h{display:flex;align-items:center;gap:6px;font-size:10.5px;font-weight:600;margin-bottom:3px;}
-.tl-pop-h .tl-pop-k{font-weight:400;color:var(--muted);}
-.tl-pop-f{margin-top:5px;font-size:10px;color:var(--muted);}
+/* 选中那一版的信息卡：就地（不是浮层），跟着面板一起滚 */
+.tl-card{margin-top:4px;padding:8px;border:1px solid var(--border);border-radius:7px;background:var(--sidebar);}
+.tl-card-h{display:flex;align-items:center;gap:6px;font-size:10.5px;font-weight:600;margin-bottom:3px;}
+.tl-card-h .tl-card-k{font-weight:400;color:var(--muted);}
+.tl-card-f{margin-top:5px;font-size:10px;color:var(--muted);}
 .dlink{display:inline-block;margin-top:5px;color:var(--primary);font-size:10.5px;font-weight:600;cursor:pointer;}
 .dlink:hover{text-decoration:underline;}
 .prev{margin-top:5px;border:1px solid var(--border);border-radius:7px;overflow:hidden;}
