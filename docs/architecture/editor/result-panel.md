@@ -2864,6 +2864,11 @@ DBeaver 清空后回空态；本仓没有「无分组键」态（`group_columns`
 布局尺寸（图标宽 + 内距）写死进我们的代码，属于对 vendor 内部几何的猜测。画左边不需要
 任何偏移量。
 
+> 2026-11-18 修正：这 20px 的**构成**已经查清了（`render_sort_icon` 的 `size_3()` 12px +
+> `p(2px)` 内距 = 16px，加 `pr(offset_pr)` = 4px，共 20px，实测 128 列的表头格恰好
+> 108px）。所以它不再是「猜内部几何」，而是一个可以从源码逐项加出来的常量
+> `ui::RESULT_FIT_HEADER_CHROME`，**只用在列宽自适应**（§8.53）；画线仍走左边界。
+
 #### 8.52.3 测试口径调整
 
 - `cells_stretch_to_the_column_boundary_for_grid_lines` 追加表头断言：
@@ -2891,6 +2896,69 @@ DBeaver 清空后回空态；本仓没有「无分组键」态（`group_columns`
   复用 §8.51 的几何用例追加两条表头断言）。
 - `cargo test -p rds-ui-guard`（不带 `--lib`）= **4 passed**（首轮因注释里写了 `p(px(2.))`
   被 `no_new_hardcoded_color_or_pixel` 误计，改成「图标 + 2px 内距」后归零；未动基线）。
+
+### 8.53 表格打磨第三批：排序指示去重（交给组件图标槽）+ 自适应宽度补 20px
+
+#### 8.53.1 取证：表头右端 20px 到底是什么
+
+| 事实 | 出处 |
+| --- | --- |
+| `render_sort_icon` 返回一个 **20px 宽的可点控件**：图标 `size_3()`(12) + `p(px(2.))` 内距，`role = Button`、`aria_label = Table.SortBy`，带 hover / active 底色 | vendor `table/state.rs:1828-1872` |
+| 图标按 `col_group.column.sort` 取 `SortAscending` / `SortDescending` / `ChevronsUpDown`；`Default` 档套 `opacity(0.5)` | `:1843-1846`、`:1867-1869` |
+| 点击图标 → `perform_sort`；它**要求** `column.sort` 是 `Some`，否则直接 return；成功后把当前列置新值、其它列回 `Default`，再回调 delegate | `:1863-1865`、`:1358-1388` |
+| 本仓早已接线：`table_impl.rs` 的 `column()` 对数据列 `.sort(self.sort_mark(index))`（`sort_mark` 恒返回 `ColumnSort`，从不给 `None`），delegate 的 `perform_sort` 把值转成 `apply_sort` + `cx.notify()` | `grid/table_impl.rs:208-230`、`:322`；`grid/view_rows.rs:505-511` |
+| `render_th` 把我们的元素当 `h_flex().size_full().justify_between()` 的第一个 child，第二 child 就是该图标，内层再 `.pr(offset_pr)`（= 4 - 0 = 4px） | `:1878-1911`、`:1904-1909` |
+
+DBeaver 侧：排序**只用图像**（`IMAGE_DESC` / `IMAGE_ASC` 三角，`ARROW_MARGIN = 6` 贴列头
+右端），筛选用 `IMAGE_FILTER = DBeaverIcons.getImage(UIIcon.DROP_DOWN)`
+（`GridColumnRenderer.java:40-53`），从不画文字箭头。
+
+⇒ 我们在同一位置另画了一套 `↑` / `↓` 文字：**重复指示器**，而且是**不可点的假控件**
+（眼睛看到能点，鼠标点不到）。本批删掉。
+
+#### 8.53.2 落法
+
+| 项 | 落点 |
+| --- | --- |
+| 删自绘排序箭头 | `grid/header.rs`：删 `sort_indicator` 计算与主行的 `.when_some(sort_indicator, …)` 子元素。排序指示只剩组件那一个（唯一、可点、状态由 `.sort()` 回灌） |
+| 筛选指示换图标 | 同文件：`▽` 文字 → `Icon::new(IconName::Funnel).size_3().flex_none().text_color(muted)`。`size_3()` = 12px，与组件排序图标同尺寸，视觉同一档 |
+| 自适应宽度 | `grid/fit.rs`：删掉 `↑`/`↓` 的测量（字形已不存在）；筛选改按 `ui::RESULT_FIT_HEADER_ICON`（12px 常量，图标量不出字形推进宽）；表头合计再加 `ui::RESULT_FIT_HEADER_CHROME`（20px，**仅数据列**——转置列与行号槽没有 `.sort(...)`，组件不留那个槽） |
+| 常量入表 | `ui.rs` 新增 `RESULT_FIT_HEADER_ICON = px(12.)` 与 `RESULT_FIT_HEADER_CHROME = px(20.)`，注释写清 20px 的逐项构成 |
+
+**这条同时是一个真 bug 修复**：`fit_col` 加给我们的是 `col.paddings`（`cell_paddings` =
+左右 0），最终的列宽就是 `fit_column` 的回值。漏算这 20px ⇒ 双击自适应算出的列宽比
+「列名完整显示」少 20px，列名照样被省略号吃掉（§8.52 修正 1 实测 128 列表头格只有 108，
+差的正是这 20px）。
+
+#### 8.53.3 测试
+
+- 新增 `grid/tests.rs::autofit_reserves_the_component_sort_icon_slot`：未知类型列（无
+  badge、无列筛选）、列名远长于单元格内容 ⇒ 断言
+  `fit_column == measure(列名) + RESULT_FIT_HEADER_CHROME`，并先断言结果 > 80px
+  （证明表头块宽确实压过单元格块宽，等式前提成立）。为此把 `fit::measure` 提升为
+  `pub(crate)`，用例按**同一口径**（同字体 / 同字号 / 同换行处理）量列名。
+  漏算 20px 时该断言直接失败（差值恰好是常量本身），不是「大概变宽了」的弱断言。
+- 既有用例不受影响：`fit_column_follows_content_and_caps_the_sample` 的
+  `narrow_w >= px(16.)`、`capped < px(100.)` 全是相对口径，加 20px 后仍成立。
+
+#### 8.53.4 偏离与未决
+
+- **未排序列会显示 50% 透明度的双箭头**（组件的 `ChevronsUpDown`），而 DBeaver 未排序列
+  什么都不画。想「什么都不画」只有让 `.sort(None)`，但 `perform_sort` 在
+  `column.sort == None` 时直接 return ⇒ 表头点击排序整条失效。二者只能取一，本批选
+  「可点」，即保留组件的淡双箭头作为可点提示。要彻底贴合 DBeaver 必须改 vendor
+  （让 `perform_sort` 接受 `None` 并自行补 `Default`），登记未做。
+- 筛选图标形状与 DBeaver 的 `DROP_DOWN` 不同：DBeaver 那个是**下拉入口**的指示（它的
+  列筛选是下拉面板），我们的筛选入口在列头菜单，指示的是「此列已筛选」这个状态，漏斗
+  比空心三角更准确。这是有意偏离，不是漏做。
+- 真窗口目视仍挂账（未排序列的淡双箭头是否过显、12px 漏斗在 22px 表头里是否看得清）。
+
+#### 8.53.5 验证
+
+- `cargo check -p rds-result-panel -p rds-editor` = 0 error / 0 warning。
+- `cargo test -p rds-result-panel --lib` = **262 passed / 0 failed**（261 + 本批新增 1）。
+- `cargo test -p rds-ui-guard`（不带 `--lib`）= **4 passed**（基线 18 → **20**，本批
+  `ui.rs` 新增两个 `px(…)` 常量；新增常量是「尺寸单一来源」的推荐写法，不是违规）。
 
 ## 8. 协作纪律
 

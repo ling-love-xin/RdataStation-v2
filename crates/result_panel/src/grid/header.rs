@@ -1,8 +1,11 @@
 //! 表头渲染域（`grid/` 第八块）：`TableDelegate::render_th`（截断 + 悬停全文 +
-//! 类型小标签 + 排序箭头 / 列头菜单）+ 表头 tooltip 分块文案。
+//! 类型小标签 + 筛选图标 + 列头菜单）+ 表头 tooltip 分块文案。
+//! 注：排序三角由组件自己的图标槽画（`table/state.rs` 的 `render_sort_icon`），本文件不再自绘。
 
+use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Icon;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{ButtonVariants as _, DropdownButton};
 use gpui_kit::component::menu::PopupMenuItem;
@@ -140,14 +143,15 @@ pub(crate) fn render_th(
             .child(SharedString::from(sym))
     });
 
-    // 【B1】列名主行：badge + 列名(flex_1) + 筛选▽ + 排序↑/↓
-    let sort_indicator = delegate.sort_state().and_then(|(sort_col, descending)| {
-        if sort_col == column {
-            Some(if descending { "↓" } else { "↑" })
-        } else {
-            None
-        }
-    });
+    // 【B1】列名主行：类型 badge + 列名(flex_1) + 筛选图标
+    //
+    // 排序指示不再自绘（2026-11-18）：组件在每个可排序列的右端留了 20px 图标槽
+    // （`state.rs:1849-1871` 的 `render_sort_icon`：`SortAscending` / `SortDescending` /
+    // 未排时 `ChevronsUpDown`），图标本身就是**可点的排序控件**（`:1863-1865` 调
+    // `perform_sort` → 我们的 delegate `perform_sort` → `apply_sort`），状态由
+    // `table_impl::column()` 的 `.sort(self.sort_mark(index))` 回灌。原先另画的一套
+    // `↑/↓` 文字是重复指示器，而且是不可点的假控件，本批删掉。
+    //
     // 【列头菜单 2026-11-08】悬停表头才出现的组 key：菜单默认**不占列宽**（绝对定位
     // 浮在列名右端，`invisible`），只有整格 hover 才显形。列头菜单恒吃 24px 会把窄列的
     // 列名挤到读不出（布尔列 96px 时只剩 37px），而它其实一直是"想起来了才点"的控件。
@@ -177,20 +181,16 @@ pub(crate) fn render_th(
                 .debug_selector(move || format!("editor-result-th-name-{col_ix}"))
                 .child(SharedString::from(name.clone())),
         )
-        .when_some(sort_indicator, |row, arrow| {
-            row.child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(SharedString::from(arrow)),
-            )
-        })
         .when(delegate.has_column_filter(column), |row| {
             row.child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(SharedString::from("▽")),
+                // 筛选指示用图标而不是 `▽` 字符：与组件排序图标同尺寸（`size_3` = 12px），
+                // 语义上比一个三角字符明确。DBeaver 这里画的是 `IMAGE_FILTER`
+                // （`GridColumnRenderer.java:46`，`UIIcon.DROP_DOWN`）——它是下拉入口的
+                // 指示；我们的筛选入口是列头菜单，「此列已筛选」用漏斗更准确。
+                Icon::new(IconName::Funnel)
+                    .size_3()
+                    .flex_none()
+                    .text_color(muted),
             )
         });
 

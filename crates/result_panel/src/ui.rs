@@ -178,8 +178,24 @@ pub const RESULT_COLUMN_MIN_WIDTH: Pixels = px(80.);
 /// 那一层没有了，所以这里就是肉眼看到的全部余量（`fit_col` 与渲染同一份 padding）。
 pub const RESULT_FIT_CELL_PADDING: Pixels = px(12.);
 
-/// 列宽自适应：表头 `main_row` 的 `gap_1`（badge / 列名 / 排序箭头 / 筛选 ▽ 之间）
+/// 列宽自适应：表头 `main_row` 的 `gap_1`（badge / 列名 / 筛选图标之间）
 pub const RESULT_FIT_HEADER_GAP: Pixels = px(4.);
+
+/// 列宽自适应：表头里我们自己画的图标宽（筛选漏斗，`Icon::size_3()` = 12px）
+///
+/// 图标量不出字形推进宽，只能按尺寸档记一个常量；与 `header.rs` 的 `.size_3()` 同源，
+/// 改图标尺寸时两处一起改。
+pub const RESULT_FIT_HEADER_ICON: Pixels = px(12.);
+
+/// 列宽自适应：组件在表头格右端占掉的固定宽（排序图标槽 16 + 右侧偏移 4 = 20px）
+///
+/// 来源（vendor 0.9.0 `table/state.rs`）：`render_th` 的内层 `h_flex` 含
+/// ① `render_sort_icon`（泛型图标 `size_3()` 12px + 内距 2px 合计 16px，`:1849-1871`）、
+/// ② `.pr(offset_pr)`，其中 `offset_pr = table_cell_padding().right - paddings.right`
+/// = 4 - 0 = 4px（`:1904-1909`）。实测 128px 列的表头格内容区只有 108px，正是这 20px。
+///
+/// 不把这 20px 算进自适应，双击算出的列宽就会差 20px——列名照样被省略号吃掉。
+pub const RESULT_FIT_HEADER_CHROME: Pixels = px(20.);
 
 /// 列宽自适应：类型 badge 的 `px_1` 左右合计
 pub const RESULT_FIT_BADGE_PADDING: Pixels = px(8.);

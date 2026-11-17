@@ -2990,6 +2990,54 @@ fn fit_column_follows_content_and_caps_the_sample(cx: &mut gpui_kit::TestAppCont
     );
 }
 
+/// 【排序图标槽】自适应宽度必须给组件的排序图标槽留出 20px
+///
+/// 组件在可排序列的表头右端放一个 20px 的图标槽（12px 图标 + 2px 内距 + 4px 右侧偏移，
+/// 见 `ui::RESULT_FIT_HEADER_CHROME`）。列名足够长时表头块宽压过单元格块宽，量出的宽度
+/// 就该**恰好等于「列名 + 20」**——漏算这 20px，双击自适应出来的列宽会把列名挤成省略号
+/// （128px 列的表头格实测只有 108px，差的正是这 20px）。
+#[gpui_kit::test]
+fn autofit_reserves_the_component_sort_icon_slot(cx: &mut gpui_kit::TestAppContext) {
+    use crate::ui::RESULT_FIT_HEADER_CHROME;
+    use gpui_kit::px;
+
+    cx.update(gpui_kit::init);
+    let (_, mut vcx) = cx.add_window_view(|_window, _cx| BlankView);
+
+    // 未知类型（没有 badge）、没有列筛选：表头块 = 列名 + 排序槽，没有 gap 参与
+    let long_name = "order_identifier_column";
+    let mut grid = ResultGridDelegate::empty("尚未执行");
+    grid.set_data(
+        vec![long_name.to_string(), "b".to_string()],
+        vec![vec!["1".to_string(), "w".to_string()]],
+    );
+    let fitted = vcx.update(|window, cx| crate::grid::fit::fit_column(&grid, 1, window, cx));
+    let fitted = fitted.expect("数据列应自适应");
+
+    // 同一套测宽口径量列名本身（同字体、同字号、同换行处理）
+    let name_w = vcx.update(|window, _cx| {
+        let style = window.text_style();
+        crate::grid::fit::measure(
+            window,
+            long_name,
+            &style.font(),
+            style.color,
+            window.rem_size() * 0.75,
+        )
+    });
+
+    // 前提：列名长到表头压过单元格（否则这条等式不成立）
+    assert!(
+        fitted > px(80.),
+        "列名这么长时表头应主导宽度：{fitted:?}"
+    );
+    assert_eq!(
+        fitted,
+        name_w + RESULT_FIT_HEADER_CHROME,
+        "自适应宽 = 列名 + 排序图标槽（{name_w:?} + {RESULT_FIT_HEADER_CHROME:?}）"
+    );
+}
+
 /// 【类型默认列宽】没拖过、也没双击自适应过的列按**列类型**给初值；拖过的一律按用户宽度
 /// （类型档不覆盖用户选择）；未知类型仍是 128（守住「类型缺失时一个像素都不变」）
 #[gpui_kit::test]

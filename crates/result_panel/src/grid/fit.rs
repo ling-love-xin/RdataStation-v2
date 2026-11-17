@@ -18,7 +18,8 @@ use super::delegate::{CELL_DISPLAY_LIMIT, ResultGridDelegate};
 use crate::store::ColumnKind;
 use crate::ui::{
     RESULT_FIT_BADGE_PADDING as BADGE_H_PADDING, RESULT_FIT_CELL_PADDING as CELL_H_PADDING,
-    RESULT_FIT_HEADER_GAP as HEADER_GAP,
+    RESULT_FIT_HEADER_CHROME as HEADER_CHROME, RESULT_FIT_HEADER_GAP as HEADER_GAP,
+    RESULT_FIT_HEADER_ICON as HEADER_ICON,
 };
 
 /// 采样行数上限（对齐 dbdelve `FITTED_ROWS = 200` / cellar 前 200 行 / tusk 首行 cap）：
@@ -28,8 +29,9 @@ pub(crate) const FIT_SAMPLE_ROWS: usize = 200;
 
 // 三档几何进 `crate::ui`（结构尺寸单一来源，本文件不留裸 px）：
 // `CELL_H_PADDING` = 单元格自身左右内边距（`render_td` 的 `px(rems(0.375))`，合计 12px）；
-// `HEADER_GAP` = 表头 `main_row` 的 `gap_1`（badge / 列名 / 排序箭头 / 筛选 ▽ 之间，4px）；
-// `BADGE_H_PADDING` = 类型 badge 的 `px_1` 左右合计（8px）。
+// `HEADER_GAP` = 表头 `main_row` 的 `gap_1`（badge / 列名 / 筛选图标之间，4px）；
+// `BADGE_H_PADDING` = 类型 badge 的 `px_1` 左右合计（8px）；
+// `HEADER_ICON` / `HEADER_CHROME` = 表头右侧两处图标占位（见下）。
 //
 // 2026-11-17 起组件层的内距是 **0**：列定义统一走 `<table_impl>::cell_paddings()`
 // （左右置零，让竖分隔线落在列边界，见该函数注释）。所以 `fit_col` 加的 padding
@@ -77,11 +79,15 @@ pub(crate) fn fit_column(
     Some(header.max(cells))
 }
 
-/// 表头块宽：badge + 列名 + 排序箭头 + 筛选 ▽ + 列头菜单，加上它们之间的 `gap_1`
+/// 表头块宽：badge + 列名 + 筛选图标 + 组件排序图标槽，加上它们之间的 `gap_1`
 ///
-/// 与 [`crate::grid::header::render_th`] 同一份构成。列头菜单**不计宽**：2026-11-08 起它
-/// 由主行流内的 `flex_none` 子元素改成**绝对定位**（贴右端、悬停表头才显形），既不占列宽
-/// 也不参与这里的算术。算进去会让双击自适应多出 24px 的空白。
+/// 与 [`crate::grid::header::render_th`] 同一份构成。排序**不再**由我们自绘（`↑`/`↓` 已删），
+/// 那一格是组件自己的 20px 图标槽（12px 图标 + 4px 内距 + 4px 右侧偏移，见
+/// `ui::RESULT_FIT_HEADER_CHROME`），对每一列恒定占位，所以按常量计一次。
+///
+/// 列头菜单**不计宽**：2026-11-08 起它由主行流内的 `flex_none` 子元素改成**绝对定位**
+/// （贴右端、悬停表头才显形），既不占列宽也不参与这里的算术。算进去会让双击自适应多出
+/// 24px 的空白。
 fn header_width(
     delegate: &ResultGridDelegate,
     col_ix: usize,
@@ -101,7 +107,8 @@ fn header_width(
             .cloned()
             .unwrap_or_default()
     };
-    // 【筛选】排序箭头 / 筛选 ▽ 都按数据列查（行号槽与转置视图没有）
+    // 【筛选】筛选图标按数据列查（行号槽与转置视图没有）；转置列没有 `.sort(...)`，
+    // 组件也就不留排序槽，所以那一档的 `HEADER_CHROME` 不能算。
     let column = if delegate.transposed {
         usize::MAX
     } else {
@@ -113,19 +120,19 @@ fn header_width(
         widths.push(BADGE_H_PADDING + measure(window, sym, font, color, badge_font_size));
     }
     widths.push(measure(window, &name, font, color, font_size));
-    if let Some((sort_col, descending)) = delegate.sort_state() {
-        if sort_col == column {
-            let arrow = if descending { "↓" } else { "↑" };
-            widths.push(measure(window, arrow, font, color, font_size));
-        }
-    }
     if delegate.has_column_filter(column) {
-        widths.push(measure(window, "▽", font, color, font_size));
+        widths.push(HEADER_ICON);
     }
     // 列头菜单（`DropdownButton`）**不计**：2026-11-08 起它改成绝对定位贴右端、悬停表头
     // 才显形，不再占列宽。之前它并进主行流内吃过 24px，测宽跟着加，窄列的列名就被挤没了。
     let gaps = HEADER_GAP * widths.len().saturating_sub(1) as f32;
-    widths.into_iter().fold(Pixels::ZERO, |sum, width| sum + width) + gaps
+    let content = widths.into_iter().fold(Pixels::ZERO, |sum, width| sum + width) + gaps;
+    // 排序图标槽：只有数据列有（转置列 / 行号槽没有 `.sort(...)`，组件不画那个槽）
+    if delegate.transposed {
+        content
+    } else {
+        content + HEADER_CHROME
+    }
 }
 
 /// 单元格块宽：前 [`FIT_SAMPLE_ROWS`] 个视图行里最宽的**展示串**，加单元格内边距
@@ -172,7 +179,16 @@ fn cells_width(
 /// 单行文本的渲染宽度（字形推进宽，`ShapedLine::width`）
 ///
 /// `shape_line` 遇到换行符会 panic：单行单元格里换行被当空白，测宽等价替换成空格。
-fn measure(window: &Window, text: &str, font: &Font, color: Hsla, font_size: Pixels) -> Pixels {
+///
+/// `pub(crate)` 而不是私有：用例要按**同一口径**量列名本身，才能钉住
+/// 「自适应宽 = 列名 + 排序图标槽」这条等式（`tests.rs::autofit_reserves_the_component_sort_icon_slot`）。
+pub(crate) fn measure(
+    window: &Window,
+    text: &str,
+    font: &Font,
+    color: Hsla,
+    font_size: Pixels,
+) -> Pixels {
     if text.is_empty() {
         return Pixels::ZERO;
     }

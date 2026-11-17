@@ -49,7 +49,11 @@ const BASELINE: &[(&str, usize, usize)] = &[
     // 2026-11-17 17 → 18：新增 `RESULT_CELL_VERTICAL_PADDING = px(2.)`（单元格上下内距，
     // 沿用组件 XSmall 档 `table_cell_padding()` 的上下原值；左右 6px 由单元格自己画，
     // 让竖分隔线落在列边界，见 `grid/table_impl.rs::cell_paddings`）。
-    ("crates/result_panel/src/ui.rs", 0, 18),
+    // 2026-11-18 18 → 20：新增 `RESULT_FIT_HEADER_ICON = px(12.)`（表头筛选漏斗图标宽，
+    // 图标量不出字形推进宽，只能按 `Icon::size_3()` 的尺寸档记常量）与
+    // `RESULT_FIT_HEADER_CHROME = px(20.)`（组件排序图标槽 16 + 右侧偏移 4：自适应宽度
+    // 原来漏算这 20px，双击算出的列宽会把列名挤成省略号）。
+    ("crates/result_panel/src/ui.rs", 0, 20),
     ("crates/settings/src/skeleton.rs", 0, 1),
     ("crates/workbench/src/components/dialog_helpers.rs", 0, 1),
     (
