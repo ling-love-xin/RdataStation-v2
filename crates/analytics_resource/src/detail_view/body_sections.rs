@@ -64,6 +64,66 @@ pub(super) fn render_body_sections(
                     )
                     .into_any_element();
                 kv_list = kv_list.item(label, DescriptionText::AnyElement(value_el), 1);
+            } else if label == ANALYTICS_TABLE_LABEL {
+                // 表名是拿去拼 SQL 的：只给看不给抄，用户就得回列表点一次复制。
+                let table = detail.analytics_table.clone().unwrap_or_default();
+                let value_el = div()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_xs()
+                            .text_ellipsis()
+                            .text_color(foreground)
+                            .child(value),
+                    )
+                    .child(
+                        Button::new("archive-detail-copy-table")
+                            .ghost()
+                            .xsmall()
+                            .label("复制")
+                            .text_color(muted)
+                            .tooltip("复制表名（拿去写 SQL 时不用回列表）")
+                            .on_click(move |_, _window, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(table.clone()))
+                            }),
+                    )
+                    .into_any_element();
+                kv_list = kv_list.item(label, DescriptionText::AnyElement(value_el), 1);
+            } else if label == PAYLOAD_PATH_LABEL {
+                // 相对项目根的路径：要拿它去文件管理器里找本体，所以给复制。
+                let path = value.clone();
+                let value_el = div()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_xs()
+                            .text_ellipsis()
+                            .text_color(foreground)
+                            .child(value),
+                    )
+                    .child(
+                        Button::new("archive-detail-copy-payload-path")
+                            .ghost()
+                            .xsmall()
+                            .label("复制")
+                            .text_color(muted)
+                            .tooltip("复制相对项目根的路径")
+                            .on_click(move |_, _window, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(path.clone()))
+                            }),
+                    )
+                    .into_any_element();
+                kv_list = kv_list.item(label, DescriptionText::AnyElement(value_el), 1);
             } else if label == "源路径" {
                 // 源绝对路径常被 DescriptionList 裁切（无省略号），HoverCard 悬停显示完整路径（P3）。
                 // gpui-kit 无通用 `.tooltip` 扩展（`ManagedTooltipExt` 是 crate 私有），走公共 `HoverCard`

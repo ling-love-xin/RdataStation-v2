@@ -32,6 +32,14 @@ pub const HASH_PREVIEW_LEN: usize = 12;
 /// 两处共用同一个常量，改文案不会把复制入口改丢。
 pub const HASH_LABEL: &str = "内容指纹";
 
+/// 「分析库表」那一行的标签文案（表型资产的真身表名）。
+///
+/// 渲染层靠它认出“这一行要带复制按钮”：表名是拿来拼 SQL 的，不能只让用户看。
+pub const ANALYTICS_TABLE_LABEL: &str = "分析库表";
+
+/// 「本体路径」那一行的标签文案（相对项目根，形如 `resources/reports/dau.csv`）。
+pub const PAYLOAD_PATH_LABEL: &str = "本体路径";
+
 /// 「版本」分区的标题（渲染层靠它认出“这个分区要多一个『查看全部…』入口”）。
 pub const VERSION_SECTION_TITLE: &str = "版本";
 

@@ -37,14 +37,15 @@ pub fn detail_rows(detail: &ArchiveDetail) -> Vec<(String, Vec<(&'static str, St
         ),
     ];
     // 本体在哪：copy 模式的本体在存档目录下，reference 模式没有这一项（它在源位置，由
-    // 「来源」区的「源路径」回答）。原先刻意不摆，结果是“这东西到底在哪”只能靠猜。
+    // 「来源」区的「源路径」回答）。相对路径是相对 `resources/` 的，直接摆一个 `reports/x.csv`
+    // 看不出从哪算起，所以拼上 `resources/` 让它对**项目根**成立。
     if let Some(path) = detail.payload_rel_path.as_deref() {
-        basic.push(("本体路径", path.to_string()));
+        basic.push((PAYLOAD_PATH_LABEL, format!("{}/{path}", crate::payload::RESOURCES_DIR_NAME)));
     }
     // 表型资产的真身在分析库里的表名：不摆它，详情里就只写着一句“分析库表”，
-    // 想拿这个表名去写 SQL 只能回列表复制。
+    // 想拿这个表名去写 SQL 只能回列表复制（行尾有复制按钮）。
     if let Some(table) = detail.analytics_table.as_deref() {
-        basic.push(("分析库表", table.to_string()));
+        basic.push((ANALYTICS_TABLE_LABEL, table.to_string()));
     }
     if !detail.size_label.is_empty() {
         basic.push(("大小", detail.size_label.clone()));
