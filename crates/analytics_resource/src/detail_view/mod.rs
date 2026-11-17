@@ -43,6 +43,12 @@ pub const PAYLOAD_PATH_LABEL: &str = "本体路径";
 /// 「版本」分区的标题（渲染层靠它认出“这个分区要多一个『查看全部…』入口”）。
 pub const VERSION_SECTION_TITLE: &str = "版本";
 
+/// 「来源」分区的标题（渲染层靠它认出“这一区后面接『重建定义』块”）。
+pub const SOURCE_SECTION_TITLE: &str = "来源";
+
+/// 「重建定义」分区的标题（表型资产的配方；只登记、不执行）。
+pub const DEFINITION_SECTION_TITLE: &str = "重建定义";
+
 /// 「组织」分区的标题（渲染层靠它认出“这个分区下面挂『移动…』分组入口”）。
 pub const ORG_SECTION_TITLE: &str = "组织";
 

@@ -28,6 +28,7 @@ fn detail(status: ArchiveStatus, kind: ArchiveKind) -> ArchiveDetail {
         payload_rel_path: Some("dau.sql".to_string()),
         analytics_table: None,
         has_definition: false,
+        definition_sql: None,
         origin_label: String::new(),
         history_label: "1 个历史版本".to_string(),
         recent_versions: Vec::new(),

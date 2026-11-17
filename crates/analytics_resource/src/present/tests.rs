@@ -714,3 +714,43 @@ fn version_rows_tolerate_unreadable_snapshots() {
         "两侧都没值就不给差异（宁可不比也不编）"
     );
 }
+
+/// 「重建定义」只在**真有内容**时进详情：空白串不能变成一块空的等宽框。
+#[test]
+fn detail_carries_definition_only_when_it_has_content() {
+    let mut table = row_model("ar_tbl", "analytics_table", None);
+    table.definition_sql = Some("  select channel from orders  \n".to_string());
+    let blank = row_model("ar_blank", "file", Some(10));
+    let resources = vec![table, blank];
+
+    let snapshot = build_snapshot(SnapshotInputs {
+        assertions: Default::default(),
+        lifecycles: Default::default(),
+        resources: &resources,
+        global_rows: Vec::new(),
+        global_resources: Vec::new(),
+        statuses: &ArchiveStatuses::new(),
+        history_counts: &VersionCounts::new(),
+        recent_versions: empty_versions(),
+        version_copies: &Default::default(),
+        tags: empty_tags(),
+        tag_dictionary: Vec::new(),
+        folders: empty_folders(),
+        group_dictionary: Vec::new(),
+        previews: empty_previews(),
+        dispatch_usage: &Default::default(),
+        read_only: false,
+        now: Utc::now(),
+    });
+
+    let table = snapshot.details.get("ar_tbl").expect("表型详情");
+    assert_eq!(
+        table.definition_sql.as_deref(),
+        Some("select channel from orders"),
+        "首尾空白要修掉（摆出来的是给人看的 SQL）"
+    );
+    assert!(table.has_definition, "有定义 = 带结构指纹");
+
+    let blank = snapshot.details.get("ar_blank").expect("文件详情");
+    assert_eq!(blank.definition_sql, None, "文件型没有重建定义");
+}

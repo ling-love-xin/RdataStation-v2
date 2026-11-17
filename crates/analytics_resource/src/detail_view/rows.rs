@@ -92,7 +92,7 @@ pub fn detail_rows(detail: &ArchiveDetail) -> Vec<(String, Vec<(&'static str, St
         source.push(("源路径", src.to_string()));
     }
     source.push((HASH_LABEL, short_hash(detail.content_hash.as_deref())));
-    sections.push(("来源".to_string(), source));
+    sections.push((SOURCE_SECTION_TITLE.to_string(), source));
 
     // 2.5) 业务口径（选填）：回答「这个数是什么意思」。没填就整区不摆——
     // 一排「（无）」除了占地方没有信息量（与 `detail_rows` 的空值纪律一致）。

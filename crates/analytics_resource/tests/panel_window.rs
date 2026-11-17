@@ -281,6 +281,7 @@ fn detail_for(row: &ArchiveRow) -> ArchiveDetail {
         content_hash: Some("0123456789abcdef0123".to_string()),
         payload_rel_path: Some(format!("{}.sql", row.id)),
         has_definition: false,
+        definition_sql: None,
         origin_label: String::new(),
         history_label: String::new(),
         tags: Vec::new(),

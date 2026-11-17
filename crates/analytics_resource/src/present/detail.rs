@@ -76,6 +76,12 @@ pub fn to_detail(
         payload_rel_path: resource.file_rel_path.clone(),
         analytics_table: resource.analytics_table.clone(),
         has_definition: resource.definition_sql.is_some(),
+        definition_sql: resource
+            .definition_sql
+            .as_deref()
+            .map(str::trim)
+            .filter(|sql| !sql.is_empty())
+            .map(str::to_string),
         // 没有历史版本时给空串：`detail_rows` 据此跳过"版本"分区（不产生空行）。
         history_label: if history_count > 0 {
             format!("{history_count} 个历史版本")

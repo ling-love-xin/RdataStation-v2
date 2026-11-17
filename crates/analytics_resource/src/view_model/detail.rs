@@ -52,6 +52,11 @@ pub struct ArchiveDetail {
     /// 是否带**结构指纹**（`definition_sql` 非空）：指纹口径与普通文件不同（定义 + 列结构，
     /// 行数不算）。提示文案与指纹 tooltip 都按它分派——种类收成两档后，这件事不再由 `kind` 表达。
     pub has_definition: bool,
+    /// 重建定义（配方）：`analysis` 型“这份东西怎么算出来的”，文件型为 `None`。
+    ///
+    /// **只登记、不执行**（见 `analysis::FINGERPRINT_HINT`）：摆出来是为了让人看懂
+    /// 这一版的口径，不是让程序据此重建——文案不能说成“重新计算”。
+    pub definition_sql: Option<String>,
     /// 版本历史摘要，如 "3 个历史版本 · 最近副本完整"。
     pub history_label: String,
     /// 版本区「最近 3 条」明细（数量上限由装配层定，不在这里裁）。

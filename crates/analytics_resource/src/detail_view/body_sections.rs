@@ -16,6 +16,7 @@ pub(super) fn render_body_sections(
         // 「这个分区要多一个入口吗」得在 `title` 被 move 进子元素之前定下。
         let is_version_section = title == VERSION_SECTION_TITLE;
         let is_org_section = title == ORG_SECTION_TITLE;
+        let is_source_section = title == SOURCE_SECTION_TITLE;
         // kv 行 → gpui-kit `description_list::DescriptionList`（规格 §7.2 UI 统一）：
         // label 对齐由组件管；指纹复制按钮经 `DescriptionText::AnyElement` 承载。
         let mut kv_list = DescriptionList::new()
@@ -219,6 +220,13 @@ pub(super) fn render_body_sections(
             }
             section = section.child(lines);
         }
+        // 来源区下面接「重建定义」：表型资产的配方（只登记、不执行）。
+        // 与内容预览同一处理：多行等宽块，硬塞进键值两列会把每行都多拉一列标签。
+        if is_source_section {
+            if let Some(sql) = detail.definition_sql.as_deref() {
+                section = section.child(render_definition_block(sql, cx));
+            }
+        }
         // 版本分区多一个入口（原型 §3.1 的「查看全部…」）：打开版本历史对话框。
         // 只读项目下也可用——历史读取与还原是两件事，后者在对话框里自己管。
         // 全局行没有本地版本历史（本体在全局实例），入口不摆（§13.4 动作收敛）。
@@ -261,6 +269,78 @@ pub(super) fn render_body_sections(
     // 二进制 / 大文件给一句说明。预览**只读**：这里没有任何编辑入口（原型 §1 原则 3）。
     out.push(render_preview_section(detail, cx));
     out
+}
+
+/// 「重建定义」等宽块（表型资产的配方）。
+///
+/// **只登记、不执行**（`analysis::FINGERPRINT_HINT` 同一口径）：定义进指纹是为了让人看懂
+/// 这一版的口径，不是让程序据此重算——所以底部明写“不执行”，免得用户以为点一下就能复原。
+fn render_definition_block(sql: &str, cx: &App) -> Div {
+    let colors = cx.theme().colors;
+    let (muted, foreground, border) = (colors.muted_foreground, colors.foreground, colors.border);
+    let mono_family = cx.theme().mono_font_family.clone();
+    let mono_size = cx.theme().mono_font_size;
+    let comment = "只登记留痕：定义不执行，也不会据此重建或校验数据".to_string();
+    let copy_text = sql.to_string();
+    let mut block = div()
+        .id("archive-detail-definition")
+        .debug_selector(|| "archive-detail-definition".to_string())
+        .v_flex()
+        .w_full()
+        .min_w_0()
+        .gap_0p5()
+        .p_2()
+        // 定义可能很长：给个上限，超出部分裁掉（要看全的点「复制」或走版本对比）。
+        .max_h(rems(10.))
+        .overflow_hidden()
+        .rounded_sm()
+        .border_1()
+        .border_color(border)
+        .font_family(mono_family)
+        .text_size(mono_size)
+        .text_color(foreground);
+    for line in sql.lines() {
+        block = block.child(
+            div()
+                .w_full()
+                .min_w_0()
+                .overflow_hidden()
+                .text_ellipsis()
+                .child(line.to_string()),
+        );
+    }
+    div()
+        .v_flex()
+        .w_full()
+        .gap_1()
+        .child(
+            div()
+                .h_flex()
+                .w_full()
+                .items_center()
+                .gap_1()
+                .child(
+                    div()
+                        .flex_1()
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(muted)
+                        .child(DEFINITION_SECTION_TITLE),
+                )
+                .child(
+                    Button::new("archive-detail-copy-definition")
+                        .ghost()
+                        .xsmall()
+                        .label("复制")
+                        .text_color(muted)
+                        .tooltip("复制完整定义（面板里只摆得下前几行）")
+                        .on_click(move |_, _window, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()))
+                        }),
+                ),
+        )
+        .child(block)
+        .child(div().text_xs().text_color(muted).child(comment))
 }
 
 /// 组织区的「移动…」：一个按钮 + 下拉菜单（未分组 / 各分组 / 新建分组…）。
