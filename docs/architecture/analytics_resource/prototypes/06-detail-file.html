@@ -44,7 +44,7 @@
               <div class="kv"><span class="k">实例</span><span class="v"><span class="scope-badge">当前项目</span></span></div>
               <div class="kv"><span class="k">只读</span><span class="v">归档后不可写，需取回编辑</span></div>
               <div class="kv"><span class="k">归档方式</span><span class="v">复制存档（本体在 resources/ 下，只读）</span></div>
-              <div class="kv blk"><span class="k">本体路径</span><span class="v mono">resources/reports/dau_report.sql<span class="cp">复制</span></span></div>
+              <div class="kv blk"><span class="k">本体路径</span><span class="v mono">resources/reports/dau_report.sql<span class="cp">复制</span><span class="cp">显示</span></span></div>
               <div class="kv"><span class="k">大小</span><span class="v">1.2 KB</span></div>
               <div class="kv"><span class="k">创建时间</span><span class="v">2026-09-12 10:24</span></div>
               <div class="kv"><span class="k">修改时间</span><span class="v">2026-09-12 10:24</span></div>
@@ -61,7 +61,7 @@
 
             <div class="sect">
               <div class="sect-h">版本</div>
-              <div class="kv"><span class="k">历史</span><span class="v">2 个历史版本</span></div>
+              <div class="kv"><span class="k">历史</span><span class="v">2 个历史版本（1 份可还原）</span></div>
               <div class="vrow"><span>v2</span><span class="dt">2026-09-14 18:03 · 1.1 KB</span></div>
               <div class="vrow"><span>v1</span><span class="dt">2026-09-12 10:24 · 980 B · 副本已裁剪</span></div>
               <span class="dlink">查看全部…</span>
@@ -202,6 +202,14 @@ GROUP BY channel...</div>
               <div class="kv"><span class="k">来源连接</span><span class="v"><span class="dlink" style="margin:0">本地 MySQL · analytics</span></span></div>
               <div class="kv"><span class="k">来源表</span><span class="v mono">warehouse.orders</span></div>
               <div class="kv blk"><span class="k">内容指纹</span><span class="v mono">8c41de02a7f5<span class="cp">复制</span></span></div>
+              <div style="display:flex;align-items:center;gap:6px;margin-top:4px"><span style="flex:1;color:var(--muted);font-size:11px;font-weight:600">重建定义</span><span style="color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:0 4px;font-size:9px">复制</span></div>
+              <div class="prev-b" style="max-height:120px">SELECT channel,
+  count(*) AS orders,
+  sum(amount) AS gmv
+FROM warehouse.orders
+WHERE created_at &gt;= date '2026-09-01'
+GROUP BY channel</div>
+              <div class="locknote"><svg class="ico-sm"><use href="#i-info" xlink:href="#i-info"/></svg><span>只登记留痕：定义不执行，也不会据此重建或校验数据</span></div>
             </div>
 
             <div class="sect">
@@ -217,6 +225,7 @@ GROUP BY channel...</div>
       表型没有<b>本体路径</b>：它的真身就是分析库里那张 <code>res_&lt;描述&gt;_&lt;时间戳&gt;</code> 表（G2 一版一张），路径那行改成<b>分析库表</b>并给复制——表名是拿去拼 SQL 的。
       <br>「大小」给的是<b>规模</b>（<code>12,480 行 × 18 列</code>）而不是字节；「内容指纹」是<b>结构指纹</b>（定义 + 列结构，行数变化不算，见 <code>analysis.rs</code> 裁决 R4），所以复制按钮的说明与普通文件不同。
       <br>版本区<b>恒出现</b>：没有历史时写「只有当前版本」——「没有历史」本身就是一条信息。
+      <br>表型资产的「来源」区下面接一块<b>重建定义</b>（等宽 SQL + 复制）：配方只<b>登记留痕</b>，不执行、也不据此重建或校验；面板里限高约 10rem，要看全就走复制。
     </p>
   </section>
 
