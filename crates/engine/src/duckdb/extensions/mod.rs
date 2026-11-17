@@ -33,10 +33,13 @@ use duckdb::Connection;
 use sha2::{Digest, Sha256};
 
 mod inventory;
+#[macro_use]
 mod reconcile;
+mod verify;
 
 pub use inventory::{ExtensionDrift, ExtensionEntry, ExtensionInventory, inventory};
 pub use reconcile::{ReconcileAction, ReconcileOutcome, apply as reconcile_extension};
+pub use verify::{VerifyOutcome, VerifyVerdict, verify};
 
 /// 「我需要某个能力」——调用点只需要说这个，不用记扩展叫什么
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
