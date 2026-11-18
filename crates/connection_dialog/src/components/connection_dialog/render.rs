@@ -2067,11 +2067,13 @@ impl<H: 'static> ConnectionDialogState<H> {
                 }
             let project_ui = wrap;
             // 作用域：三态分段（gpui-component `TabBar::segmented`，决策 #84）——
-            // 短标签只用于显示，写库仍用全称标签（`SCOPE_SEG_LABELS` 的第二列）。
+            // 短标签只用于显示（可 i18n），写库仍用全称标签（`scope_seg_labels()` 的第二列，
+            // 那是 `parse` 认的值，**不能**跟着语言变）。
             let scope_seg = {
                 // 规则 1（决策 #110）：默认值已由 `scope_sel`（`scope_label_or_default`）统一给出；
                 // 这里不再单独回退，避免“显示走一条、落库走另一条”。
-                let selected = SCOPE_SEG_LABELS
+                let seg_labels = scope_seg_labels();
+                let selected = seg_labels
                     .iter()
                     .position(|(_, full)| *full == scope_sel.as_str())
                     .unwrap_or(0);
@@ -2081,12 +2083,12 @@ impl<H: 'static> ConnectionDialogState<H> {
                     .with_size(Size::Small)
                     .flex_shrink_0()
                     .selected_index(selected)
-                    .children(SCOPE_SEG_LABELS.iter().map(|(short, _)| Tab::new().label(*short)))
+                    .children(seg_labels.into_iter().map(|(short, _)| Tab::new().label(short)))
                     .on_click({
                         let scope = scope.clone();
                         let entity = entity.clone();
                         move |ix, window, app| {
-                            if let Some((_, full)) = SCOPE_SEG_LABELS.get(*ix) {
+                            if let Some((_, full)) = scope_seg_labels().get(*ix) {
                                 set_select_value(&scope, full, window, app);
                                 entity.update(app, |_, cx| cx.notify());
                             }

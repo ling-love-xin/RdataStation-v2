@@ -48,6 +48,7 @@ use engine::persistence::driver_store::{DataSourceType, Driver};
 use engine::persistence::env_store::Environment;
 use engine::persistence::id_prefix;
 use engine::persistence::network_store::NetworkConfig;
+use shared::i18n::tr;
 
 use crate::commands::{DraftNext, DraftPrev, SaveConnection, TestConnection};
 use crate::host::ConnectionDialogHost;
@@ -96,11 +97,17 @@ const SSL_MODES: [&str; 5] = ["disable", "prefer", "require", "verify-ca", "veri
 /// 作用域选项（与 ConnectionScope 对齐；GP_ 快照引用共享）。
 const SCOPE_LABELS: [&str; 3] = ["仅全局", "仅项目", "全局+项目"];
 /// 作用域分段按钮显示文本（短版，节省 Header 宽度）→ 写库用上的全称标签。
-const SCOPE_SEG_LABELS: [(&str, &str); 3] = [
-    ("全局", SCOPE_LABELS[0]),
-    ("项目", SCOPE_LABELS[1]),
-    ("全局+项目", SCOPE_LABELS[2]),
-];
+///
+/// **显示**可跟着语言走（`tr("全局")` / `tr("项目")` / `tr("全局+项目")`），
+/// **第二列**是 `scope_from_label` 认的语义值，与 `SCOPE_LABELS` 同源、不翻译——
+/// 一旦把它 i18n 掉，`仅项目` 就解析不出来了（解析依赖字面值）。
+fn scope_seg_labels() -> [(&'static str, &'static str); 3] {
+    [
+        (tr("全局"), SCOPE_LABELS[0]),
+        (tr("项目"), SCOPE_LABELS[1]),
+        (tr("全局+项目"), SCOPE_LABELS[2]),
+    ]
+}
 /// 能力矩阵为空时的提示（驱动未声明任何能力）。
 const CAP_EMPTY_HINT: &str = "该驱动未声明任何能力（drivers.capabilities 为空）";
 /// 凭据字段键（**掩码显示**）：与 `helpers::{auth_field_specs, network_field_specs}`

@@ -14,8 +14,8 @@
 use super::*;
 use shared::i18n::tr;
 
-use gpui_kit::component::IndexPath;
 use gpui_kit::component::list::{ListDelegate, ListItem, ListState};
+use gpui_kit::component::IndexPath;
 
 /// 类型分类（顺序即侧栏显示顺序；与 `data_source_types.category` 对齐）。
 pub(crate) const TYPE_CATEGORIES: [(&str, &str); 4] = [
@@ -205,9 +205,11 @@ impl<H: 'static> ListDelegate for TypeTreeDelegate<H> {
                 ),
         );
         if !has_driver {
-            // 无可用驱动：置灰 + 行尾「暂无驱动」（点击不切换由 `select_type` 守卫）；
-            // `disabled(true)` 同时让组件不把它当作可选中行。
-            row = row.disabled(true).suffix(|_, cx| {
+            // 无可用驱动：置灰 + 行尾「暂无驱动」。
+            // **不再 `disabled(true)`**：灰行曾经点不动、也进不了键盘序列——对用户就是死路。
+            // 现在它可以被选中/确认，`confirm` 会把「去哪装驱动」接上（插件管理页），
+            // 宿主没挂上回调时退回 `select_type` 的守卫文案（同样说清原因）。
+            row = row.suffix(|_, cx| {
                 div()
                     .text_xs()
                     .text_color(cx.theme().colors.muted_foreground)
@@ -254,6 +256,15 @@ impl<H: 'static> ListDelegate for TypeTreeDelegate<H> {
         let Some(type_id) = self.type_id_at(ix) else {
             return;
         };
+        // 无可用驱动：确认 = 「去哪装」而不是「选不了」。先试着打开插件管理页；
+        // 宿主没挂回调时退回 `select_type` 的守卫（结果行给原因，不静默）。
+        if !type_has_driver(&self.drivers, &type_id) {
+            if self.shared.show_plugin_manager(window, cx) {
+                let _ = self.entity.update(cx, |_, cx| cx.notify());
+                self.shared.dialog_redraw(cx);
+                return;
+            }
+        }
         // 与点击路径同一个入口：`select_type` 自带「无可用驱动不切换 + 结果行给原因」的守卫。
         self.dialog.select_type(&type_id, window, cx);
         let _ = self.entity.update(cx, |_, cx| cx.notify());
