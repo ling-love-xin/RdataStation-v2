@@ -4939,6 +4939,21 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
 
 **仍存差异**：DBeaver 多页签可并存、可逐页关闭；本仓单页，只能「收起整块 / 切到某页」。
 
+### 8.96 右缘竖条按钮提示补回面板描述（2026-11-18）
+
+**取证**：`ResultSetViewer.java:1055-1080` 里竖条每颗按钮
+`setToolTipText(panel.getLabel())`，若拿得到命令描述则拼成
+`label + " (" + toolTip + ")"`（`ActionUtils.findCommandDescription(CMD_TOGGLE_PANEL, …)`）。
+也就是竖条提示 = **页名 + 命令/面板描述**，只有页名是此前登记的偏差。
+
+**落点**：纯函数 `panel::events::edge_tab_tooltip(tab, collapses)`——
+正常态 `页名（面板描述）`（描述复用页签条那份 `right_tab_description`，单一来源），
+该页正在显示时改报「收起结果面板（本页正在显示）」（此时点它是收起，见 §8.95）。
+
+**验证**：`panel::tests::edge_bar_tooltip_carries_label_and_description`（六页都含页名 +
+非空描述，收起态不再堆描述）；`cargo test -p rds-result-panel --lib` = **329 passed**；
+`cargo check -p rds-editor` = Finished；`cargo test -p rds-ui-guard` = 4 passed。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
