@@ -1611,6 +1611,25 @@ fn set_segment_rows_initial_puts_the_value_in_the_box(cx: &mut gpui_kit::TestApp
     assert_eq!(text, "500", "注入后输入框应显示持久化值而非留空");
 }
 
+/// 【R7 计算页右键菜单】「复制全部」文本按 DBeaver `CopyAllAction` 的非分组口径：
+/// 逐行 `函数=值`、`\n` 分隔；空集合 = 空串（调用点凭空串跳过写剪贴板）。
+#[test]
+fn stats_copy_all_text_joins_function_equals_value() {
+    use crate::panel::tabs::stats_copy_all_text;
+    use crate::ports::StatsItem;
+
+    let entries = vec![
+        (StatsItem::Count, "12".to_string()),
+        (StatsItem::Min, "3.5".to_string()),
+    ];
+    assert_eq!(stats_copy_all_text(&entries), "非空=12\n最小值=3.5");
+
+    let single = vec![(StatsItem::Count, "0".to_string())];
+    assert_eq!(stats_copy_all_text(&single), "非空=0");
+
+    assert_eq!(stats_copy_all_text(&[]), "");
+}
+
 #[test]
 fn hex_page_clamps_to_the_last_page() {
     use crate::panel::tabs::hex_page_clamp;

@@ -5,7 +5,7 @@ use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::list::ListItem;
-use gpui_kit::component::menu::PopupMenuItem;
+use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::table::TableDelegate;
 use gpui_kit::component::toolbar::Toolbar;
@@ -40,6 +40,19 @@ pub(crate) fn can_remove_group_column(group_columns: &[usize], selected: Option<
         Some(selected) => group_columns.len() > 1 && group_columns.contains(&selected),
         None => false,
     }
+}
+
+/// 【计算页】「复制全部」文本（纯函数）。
+///
+/// 对齐 DBeaver `AggregateColumnsPanel.CopyAllAction`（`:471-495`）的**非分组口径**：
+/// 逐行 `函数=值`、`\n` 分隔（分组口径是树缩进，本仓没有分组聚合，见 §8.87）。
+/// 空集合返回空串——调用点按 DBeaver 同款「空文本不写剪贴板」处理。
+pub(crate) fn stats_copy_all_text(entries: &[(StatsItem, String)]) -> String {
+    entries
+        .iter()
+        .map(|(item, value)| format!("{}={}", item.label(), value))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// 【保存值】按值形态给出待落盘的字节与默认文件名（纯函数；测试直接钉它）。
@@ -456,13 +469,20 @@ impl ResultPanel {
         // 字符串口径才需要整列取值（数值口径走事实档列式原生聚合，不物化矩阵）
         let text_extremes = matches!(self.stats_mode, StatsMode::Text)
             .then(|| text_minmax(&delegate.column_values(data_col)));
-        let rows: Vec<AnyElement> = self
+        // 【函数=值】启用项 + 当前值先算成一对表：行渲染与「复制全部」共用同一份快照
+        // （复制全部必须拷「此刻看到的这些」，不能在菜单回调里再算一遍）
+        let entries: Vec<(StatsItem, String)> = self
             .stats_items
             .iter()
             .map(|item| {
                 let value = stat_value(*item, &stats, text_extremes.as_ref(), self.stats_mode);
-                self.stat_row(*item, &value, cx)
+                (*item, value)
             })
+            .collect();
+        let copy_all = stats_copy_all_text(&entries);
+        let rows: Vec<AnyElement> = entries
+            .iter()
+            .map(|(item, value)| self.stat_row(*item, value, copy_all.clone(), cx))
             .collect();
         // 全停用时的空态提示（不引 `when`：本 crate 的 styled 扩展没带这个便捷方法）
         let empty_hint = rows.is_empty().then(|| {
@@ -754,13 +774,27 @@ impl ResultPanel {
         )
     }
 
-    /// 【R2】计算页一行：函数名（左）+ 值（右）+ 行尾停用钮（替代 DBeaver 的「−」）
-    fn stat_row(&self, item: StatsItem, value: &str, cx: &App) -> AnyElement {
+    /// 【R2】计算页一行：函数名（左）+ 值（右）+ 行尾停用钮（替代 DBeaver 的「−」）。
+    ///
+    /// 【R7 对齐右键菜单】行上挂 `AggregateColumnsPanel` 的右键菜单（`:106-116`）：
+    /// 复制值 / 复制全部 / 分隔 / 与工具条同款动作（本仓只摆「恢复默认统计项」，
+    /// 添加在工具条 ＋ 里、分组聚合不适用，见 §8.87）。
+    fn stat_row(
+        &self,
+        item: StatsItem,
+        value: &str,
+        copy_all: String,
+        cx: &App,
+    ) -> AnyElement {
         let muted = cx.theme().colors.muted_foreground;
         let queue = self.queue.clone();
         let row_id = format!("editor-result-stat-row-{:?}", item);
         let remove_id = format!("editor-result-stat-remove-{:?}", item);
+        // 菜单里的两份文本在渲染期定稿：复制值 = 本行值，复制全部 = 上面的整表快照
+        let copy_value = value.to_string();
+        let reset_queue = self.queue.clone();
         div()
+            .id(("editor-result-stat-menu", item as usize))
             .h_flex()
             .items_center()
             .gap_1()
@@ -768,6 +802,35 @@ impl ResultPanel {
             .h_5()
             .text_xs()
             .debug_selector(move || row_id.clone())
+            .context_menu(move |mut menu: PopupMenu, _window, _cx| {
+                // 空文本不写剪贴板（DBeaver `CopyAction` 靠 SWT 自己早退，本仓显式判空）
+                let one = copy_value.clone();
+                menu = menu.item(PopupMenuItem::new("复制值").on_click(
+                    move |_, _window, app| {
+                        if one.is_empty() {
+                            return;
+                        }
+                        app.write_to_clipboard(ClipboardItem::new_string(one.clone()));
+                    },
+                ));
+                let all = copy_all.clone();
+                menu = menu.item(PopupMenuItem::new("复制全部").on_click(
+                    move |_, _window, app| {
+                        if all.is_empty() {
+                            return;
+                        }
+                        app.write_to_clipboard(ClipboardItem::new_string(all.clone()));
+                    },
+                ));
+                let reset_queue = reset_queue.clone();
+                menu.separator().item(
+                    PopupMenuItem::new("恢复默认统计项（六项全开）").on_click(
+                        move |_, _window, app| {
+                            reset_queue.request(ResultRequest::ResetStatsItems, app);
+                        },
+                    ),
+                )
+            })
             .child(
                 div()
                     .w(rems(ui::RESULT_SIDEBAR_KV_LABEL_WIDTH))
