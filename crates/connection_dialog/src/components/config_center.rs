@@ -115,6 +115,52 @@ impl ConfigCenterPage {
         nav
     }
 
+    /// 域头统计条（原型三格）：条目数 / 被引用 / 未被引用。
+    ///
+    /// 只统计**当前域**已拉到的列表——另外两域没查库，所以不冒充「全量数字」。
+    fn stats(&self, theme: &Theme) -> Div {
+        let (total, referenced) = {
+            let m = self.mgr.borrow();
+            (m.items.len(), m.items.iter().filter(|it| it.refs > 0).count())
+        };
+        let cell = |id: &'static str, label: &'static str, value: usize, hued: Hsla| {
+            div()
+                .id(id)
+                .test_support()
+                .flex_1()
+                .v_flex()
+                .gap_0p5()
+                .rounded_md()
+                .border_1()
+                .border_color(theme.colors.border)
+                .px_3()
+                .py_2()
+                .child(div().text_lg().text_color(hued).child(value.to_string()))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.colors.muted_foreground)
+                        .child(tr(label)),
+                )
+        };
+        div()
+            .h_flex()
+            .gap_2()
+            .child(cell("cc-stat-total", "条目", total, theme.colors.foreground))
+            .child(cell(
+                "cc-stat-referenced",
+                "被连接引用",
+                referenced,
+                theme.colors.success,
+            ))
+            .child(cell(
+                "cc-stat-unreferenced",
+                "尚未被引用",
+                total.saturating_sub(referenced),
+                theme.colors.muted_foreground,
+            ))
+    }
+
     /// 右栏（面包屑 + 域头 + 三域共用面板体）。
     pub fn render(
         &self,
@@ -144,6 +190,7 @@ impl ConfigCenterPage {
                     .border_color(theme.colors.border)
                     .child(table),
             );
+        let stats = self.stats(&theme);
         let body = manager_panel_ui(kind, &self.mgr, notify, window, cx);
 
         div()
@@ -158,6 +205,7 @@ impl ConfigCenterPage {
                     .gap_3()
                     .p_4()
                     .child(crumb)
+                    .child(stats)
                     .child(body),
             )
             .into_any_element()

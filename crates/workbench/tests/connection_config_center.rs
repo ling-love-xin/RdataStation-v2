@@ -87,6 +87,10 @@ fn page_is_created_lazily_then_switches_domain(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(visible(cx, "cc-nav-0"), "认证域导航项应渲染");
     assert!(visible(cx, "cc-nav-1"), "三域导航常驻，网络项应同时可见");
+    // 域头统计条（三格）：条目 / 被引用 / 未被引用。
+    assert!(visible(cx, "cc-stat-total"), "统计：条目格应渲染");
+    assert!(visible(cx, "cc-stat-referenced"), "统计：被引用格应渲染");
+    assert!(visible(cx, "cc-stat-unreferenced"), "统计：未引用格应渲染");
 
     cx.update(|window, cx| {
         harness.update(cx, |h, cx| {
