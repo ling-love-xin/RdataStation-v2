@@ -622,244 +622,28 @@ impl<H: 'static> ConnectionDialogState<H> {
             );
             let tab_content = match tab_ix_now {
                 1 => network_tab_ui(&network_ref, &mgr, &entity, &shared, theme, cx),
-                4 => {
-                    // ===== 高级：环境 + 策略覆盖 + DuckDB 加速 =====
-                    let is_network_db = {
-                        let db = driver.read(cx).selected_value().cloned().unwrap_or_default();
-                        db != "sqlite" && db != "duckdb" && !db.is_empty()
-                    };
-                    let env_summary = {
-                        let sel = env.read(cx).selected_value().cloned();
-                        if let Some(n) = sel {
-                            let list = env_list.borrow();
-                            list.iter().find(|e| e.name == n.as_str())
-                                .map(|e| format!("{} · 策略生效中", e.name))
-                                .unwrap_or_else(|| format!("{n} · 策略生效中"))
-                        } else {
-                            "未选择环境（使用连接默认策略）".to_string()
-                        }
-                    };
-
-                    let mut content = div().w_full().v_flex().gap(rems(GAP_MD));
-                    // 驱动属性放在最前：它直接决定连接能不能通，不该埋在页尾让人翻滚动条。
-                    content = content.child(
-                        div()
-                            .id("conn-sec-driver-props")
-                            .test_support()
-                            .text_sm()
-                            .font_weight(FontWeight::BOLD)
-                            .child(tr("驱动属性")),
-                    );
-                    content = content.child(driver_props_panel);
-                    // 分组① 环境（引用 + 管理入口 + 策略生效摘要）
-                    content = content.child(make_section(
-                        "env",
-                        lucide("icons/sliders-horizontal.svg"),
-                        theme.colors.primary,
-                        tr("环境"),
-                        div()
-                            .w_full()
-                            .v_flex()
-                            .gap(rems(GAP_SM))
-                            .child(form_row(
-                                theme,
-                                tr("环境"),
-                                div()
-                                    .h_flex()
-                                    .items_center()
-                                    .gap(rems(GAP_SM))
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w(rems(0.))
-                                            .child(Select::new(&env).placeholder(tr("选择环境…"))),
-                                    )
-                                    .child(
-                                        Button::new("mgr-env")
-                                            .secondary()
-                                            .label(tr("管理环境"))
-                                            .on_click({
-                                                let mgr = mgr.clone();
-                                                let entity = entity.clone();
-                                                let shared = shared.clone();
-                                                move |_, window, app| {
-                                                    open_manager(2, &mgr, entity.clone(), shared.clone(), window, app);
-                                                }
-                                            }),
-                                    ),
-                            ))
-                            .child(hint_line(theme, &env_summary)),
-                    ));
-                    // 安全策略覆盖：清单来自 `environment_policies`（当前选中环境），覆盖键存策略类型。
-                    let sec_rows = {
-                        let keys_outer = sec_overrides.clone();
-                        let policies = env_policies.borrow().clone();
-                        let keys = keys_outer.borrow().clone();
-                        let mut rows = div().v_flex().gap_1();
-                        for (p_type, label, summary) in policies.iter() {
-                            let on = keys.iter().any(|k| k == p_type);
-                            let p_type_click = p_type.clone();
-                            let state_click = state.clone();
-                            let entity = entity.clone();
-                            rows = rows.child(
-                                div().h_flex().items_center().gap_2()
-                                    .child(
-                                        // 策略覆盖开关：gpui-component `Switch`（决策 #84）。
-                                        // 旧自绘版本尺寸与其他开关不一致，且未接 `form_disabled`。
-                                        Switch::new(ElementId::Name(SharedString::from(format!(
-                                            "policy-{p_type}"
-                                        ))))
-                                        // 默认尺寸（36×20）与原型 HTML 的开关一致
-                                        .checked(on)
-                                        .disabled(form_disabled)
-                                        .on_click({
-                                            let state_click = state_click.clone();
-                                            let p_type_click = p_type_click.clone();
-                                            let entity = entity.clone();
-                                            move |want, _window, app| {
-                                                state_click
-                                                    .set_policy_override(&p_type_click, *want);
-                                                entity.update(app, |_, cx| cx.notify());
-                                            }
-                                        }),
-                                    )
-                                    .child(div().text_xs().child(label.clone()))
-                                    .child(
-                                        div().text_xs().text_color(theme.colors.muted_foreground)
-                                            .child(format!("（{summary}）")),
-                                    )
-                                    .child(
-                                        if on {
-                                            div().text_xs().text_color(theme.colors.info).child(tr("已覆盖"))
-                                        } else {
-                                            div().text_xs().text_color(theme.colors.muted_foreground).child(tr("默认"))
-                                        },
-                                    ),
-                            );
-                        }
-                        if policies.is_empty() {
-                            rows = rows.child(
-                                div().text_xs().text_color(theme.colors.muted_foreground)
-                                    .child(tr("无可覆盖策略：请先在上方选择环境（策略清单来自 environment_policies）")),
-                            );
-                        }
-                        rows
-                    };
-                    content = content.child(make_section(
-                        "policy",
-                        lucide("icons/shield.svg"),
-                        theme.colors.info,
-                        tr("安全策略（覆盖环境默认）"),
-                        div().w_full().v_flex().gap(rems(GAP_SM)).child(sec_rows),
-                    ));
-                    // 分组③ DuckDB 直连（**所有类型都摆**）：网络库用于本地加速 + 跨源，
-                    // 文件库（sqlite / duckdb）不需要加速，但可以作**联邦源**参与跨源查询。
-                    {
-                        // DuckDB 加速开关：gpui-component `Switch`（决策 #84；默认尺寸 36×20，与原型 HTML 一致）。
-                        let toggle = Switch::new("duckdb-fed")
-                            .checked(duckdb_fed.get())
-                            .disabled(form_disabled)
-                            .on_click({
-                                let duckdb_fed = duckdb_fed.clone();
-                                let entity = entity.clone();
-                                move |want, _window, app| {
-                                    duckdb_fed.set(*want);
-                                    entity.update(app, |_, cx| cx.notify());
-                                }
-                            });
-                        let mut accel_body = div()
-                            .w_full()
-                            .v_flex()
-                            .gap(rems(GAP_SM))
-                            .child(hint_line(
-                                theme,
-                                if is_network_db {
-                                    "开启后：分析引擎可只读挂载本连接 —— 本地加速与跨源（联邦）查询都用它；凭据只在内存里传递（不写进 URL 与日志）"
-                                } else {
-                                    "开启后：本文件库可作为**联邦源**参与跨源查询（本地文件不需要本地加速）；凭据只在内存里传递"
-                                },
-                            ))
-                            .child(form_row(
-                                theme,
-                                tr("启用"),
-                                div()
-                                    .h_flex()
-                                    .items_center()
-                                    .gap(rems(GAP_SM))
-                                    .child(toggle)
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme.colors.muted_foreground)
-                                            .child(if duckdb_fed.get() { "已开启" } else { "已关闭" }),
-                                    ),
-                            ));
-                        if duckdb_fed.get() {
-                            if is_network_db {
-                                accel_body = accel_body
-                                    .child(form_row(theme, "缓存路径", Input::new(&cache_path)));
-                            }
-                            accel_body = accel_body.child(hint_line(
-                                theme,
-                                "已开启：本连接会出现在联邦源清单里（跨源查询写 别名.schema.表；文件库写 别名.schema.表 同样适用）；缓存上限 / 自动刷新 / 压缩由分析引擎默认策略管理",
-                            ));
-                        } else {
-                            accel_body = accel_body.child(hint_line(
-                                theme,
-                                "关闭：本地加速与联邦查询都不用本连接",
-                            ));
-                        }
-                        content = content.child(make_section(
-                            "accel",
-                            lucide("icons/database-zap.svg"),
-                            theme.colors.warning,
-                            "DuckDB 直连（本地加速 / 用作联邦源）",
-                            accel_body,
-                        ));
-                    }
-                    // 分组④ 导航（P1，2026-10-25）：连接级导航偏好——「显示系统对象」，
-                    // 默认关 = 现状（导航树隐藏系统 catalog / schema），对齐 DBeaver `showSystemObjects`。
-                    {
-                        let nav_toggle = Switch::new("nav-show-system")
-                            .checked(show_system_objects.get())
-                            .disabled(form_disabled)
-                            .on_click({
-                                let show_system_objects = show_system_objects.clone();
-                                let entity = entity.clone();
-                                move |want, _window, app| {
-                                    show_system_objects.set(*want);
-                                    entity.update(app, |_, cx| cx.notify());
-                                }
-                            });
-                        let nav_body = div()
-                            .w_full()
-                            .v_flex()
-                            .gap(rems(GAP_SM))
-                            .child(hint_line(
-                                theme,
-                                "开启后：导航树显示系统 catalog / schema（如 information_schema、pg_catalog）；默认隐藏",
-                            ))
-                            .child(form_row(theme, tr("显示系统对象"), nav_toggle));
-                        content = content.child(make_section(
-                            "nav",
-                            lucide("icons/database.svg"),
-                            theme.colors.info,
-                            tr("导航"),
-                            nav_body,
-                        ));
-                    }
-                    // 收敛（#110）：能力清单是**只读**展示，放页尾；驱动属性已在页首。
-                    content = content.child(
-                        div()
-                            .id("conn-sec-capability")
-                            .test_support()
-                            .text_sm()
-                            .font_weight(FontWeight::BOLD)
-                            .child(tr("能力（只读）")),
-                    );
-                    content = content.child(capability_panel);
-                    content
-                }
+                4 => advanced_tab_ui(
+                    AdvancedTab {
+                        driver: &driver,
+                        env: &env,
+                        env_list: &env_list,
+                        env_policies: &env_policies,
+                        overrides: &sec_overrides,
+                        mgr: &mgr,
+                        duckdb_fed: &duckdb_fed,
+                        show_system_objects: &show_system_objects,
+                        cache_path: &cache_path,
+                        state: &state,
+                        entity: &entity,
+                        shared: &shared,
+                        form_disabled,
+                        driver_props_panel,
+                        capability_panel,
+                        theme,
+                        make_section: &make_section,
+                    },
+                    cx,
+                ),
                 _ => {
                     // ===== 常规：单列分组大纲（按驱动动态渲染）=====
                     let driver_value = driver_now.clone();
@@ -3290,5 +3074,334 @@ fn network_tab_ui<H: 'static>(
                     .child(div().text_xs().text_color(theme.colors.info).child(" TLS")),
             ),
     );
+    content
+}
+
+/// 高级页所需输入。
+///
+/// 这页依赖最多：环境下拉与目录（算策略摘要）、策略清单与覆盖键、管理器、
+/// 两个开关（DuckDB 直连 / 显示系统对象）、缓存路径输入、状态与实体、宿主，
+/// 加上**两块预先建好的面板**与共用的分组构造器 `make_section`。
+struct AdvancedTab<'a, H: 'static> {
+    /// 驱动下拉（判断「是不是网络库」，决定加速说明与缓存路径行）。
+    driver: &'a Entity<SelectState<SearchableVec<SharedString>>>,
+    /// 环境下拉。
+    env: &'a Entity<SelectState<SearchableVec<SharedString>>>,
+    /// 环境目录（算「X · 策略生效中」摘要）。
+    env_list: &'a Rc<RefCell<Vec<Environment>>>,
+    /// 当前环境的策略清单（覆盖开关按它生成）。
+    env_policies: &'a Rc<RefCell<Vec<(String, String, String)>>>,
+    /// 已勾选的覆盖键（存策略类型）。
+    overrides: &'a Rc<RefCell<Vec<String>>>,
+    /// 管理器（「管理环境」入口）。
+    mgr: &'a Rc<RefCell<ManagerWorkspace>>,
+    /// DuckDB 直连开关。
+    duckdb_fed: &'a Rc<Cell<bool>>,
+    /// 导航「显示系统对象」开关。
+    show_system_objects: &'a Rc<Cell<bool>>,
+    /// 缓存路径输入（只在网络库 + 开启加速时出现）。
+    cache_path: &'a Entity<InputState>,
+    /// 对话框状态（`set_policy_override`）。
+    state: &'a Rc<ConnectionDialogState<H>>,
+    /// 要 notify 的实体。
+    entity: &'a Entity<H>,
+    /// 宿主（打开管理器页后要重绘）。
+    shared: &'a Rc<dyn ConnectionDialogHost>,
+    /// 未选驱动：整页控件置灰。
+    form_disabled: bool,
+    /// 驱动属性面板（页首，已由调用方建好）。
+    driver_props_panel: Div,
+    /// 能力矩阵（页尾，只读）。
+    capability_panel: Div,
+    /// 取色。
+    theme: &'a Theme,
+    /// 共用的分组大纲构造器（折叠状态由它读写 `collapsed_sections`）。
+    make_section: &'a dyn Fn(&'static str, Icon, Hsla, &str, Div) -> Div,
+}
+
+/// 高级页：驱动属性（页首）→ 环境 → 安全策略覆盖 → DuckDB 直连 → 导航 → 能力（页尾）。
+///
+/// 驱动属性刻意放页首：它直接决定连接能不能通，不该埋在页尾让人翻滚动条；
+/// 能力清单是只读展示，放页尾——普通用户不必先读懂能力矩阵才敢保存。
+///
+/// `cx` 只用于读两个下拉的当前值（驱动 / 环境），不做任何写回。
+fn advanced_tab_ui<H: 'static>(p: AdvancedTab<'_, H>, cx: &App) -> Div {
+    let AdvancedTab {
+        driver,
+        env,
+        env_list,
+        env_policies,
+        overrides,
+        mgr,
+        duckdb_fed,
+        show_system_objects,
+        cache_path,
+        state,
+        entity,
+        shared,
+        form_disabled,
+        driver_props_panel,
+        capability_panel,
+        theme,
+        make_section,
+    } = p;
+    let mgr = Rc::clone(mgr);
+    let duckdb_fed = Rc::clone(duckdb_fed);
+    let show_system_objects = Rc::clone(show_system_objects);
+    let overrides_click = Rc::clone(overrides);
+    let state_click = Rc::clone(state);
+    let shared_click = Rc::clone(shared);
+    let entity_click = entity.clone();
+
+    // ===== 高级：环境 + 策略覆盖 + DuckDB 加速 =====
+    let is_network_db = {
+        let db = driver
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .unwrap_or_default();
+        db != "sqlite" && db != "duckdb" && !db.is_empty()
+    };
+    let env_summary = {
+        let sel = env.read(cx).selected_value().cloned();
+        if let Some(n) = sel {
+            let list = env_list.borrow();
+            list.iter()
+                .find(|e| e.name == n.as_str())
+                .map(|e| format!("{} · 策略生效中", e.name))
+                .unwrap_or_else(|| format!("{n} · 策略生效中"))
+        } else {
+            "未选择环境（使用连接默认策略）".to_string()
+        }
+    };
+
+    let mut content = div().w_full().v_flex().gap(rems(GAP_MD));
+    // 驱动属性放在最前：它直接决定连接能不能通，不该埋在页尾让人翻滚动条。
+    content = content.child(
+        div()
+            .id("conn-sec-driver-props")
+            .test_support()
+            .text_sm()
+            .font_weight(FontWeight::BOLD)
+            .child(tr("驱动属性")),
+    );
+    content = content.child(driver_props_panel);
+    // 分组① 环境（引用 + 管理入口 + 策略生效摘要）
+    content = content.child(make_section(
+        "env",
+        lucide("icons/sliders-horizontal.svg"),
+        theme.colors.primary,
+        tr("环境"),
+        div()
+            .w_full()
+            .v_flex()
+            .gap(rems(GAP_SM))
+            .child(form_row(
+                theme,
+                tr("环境"),
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap(rems(GAP_SM))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(rems(0.))
+                            .child(Select::new(env).placeholder(tr("选择环境…"))),
+                    )
+                    .child(
+                        Button::new("mgr-env")
+                            .secondary()
+                            .label(tr("管理环境"))
+                            .on_click(move |_, window, app| {
+                                open_manager(
+                                    2,
+                                    &mgr,
+                                    entity_click.clone(),
+                                    shared_click.clone(),
+                                    window,
+                                    app,
+                                );
+                            }),
+                    ),
+            ))
+            .child(hint_line(theme, &env_summary)),
+    ));
+    // 安全策略覆盖：清单来自 `environment_policies`（当前选中环境），覆盖键存策略类型。
+    let sec_rows = {
+        let keys_outer = overrides_click.clone();
+        let policies = env_policies.borrow().clone();
+        let keys = keys_outer.borrow().clone();
+        let mut rows = div().v_flex().gap_1();
+        for (p_type, label, summary) in policies.iter() {
+            let on = keys.iter().any(|k| k == p_type);
+            let p_type_click = p_type.clone();
+            let state_click = state_click.clone();
+            let entity = entity.clone();
+            rows = rows.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        // 策略覆盖开关：gpui-component `Switch`（决策 #84）。
+                        // 旧自绘版本尺寸与其他开关不一致，且未接 `form_disabled`。
+                        Switch::new(ElementId::Name(SharedString::from(format!(
+                            "policy-{p_type}"
+                        ))))
+                        // 默认尺寸（36×20）与原型 HTML 的开关一致
+                        .checked(on)
+                        .disabled(form_disabled)
+                        .on_click({
+                            let state_click = state_click.clone();
+                            let p_type_click = p_type_click.clone();
+                            let entity = entity.clone();
+                            move |want, _window, app| {
+                                state_click.set_policy_override(&p_type_click, *want);
+                                entity.update(app, |_, cx| cx.notify());
+                            }
+                        }),
+                    )
+                    .child(div().text_xs().child(label.clone()))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .child(format!("（{summary}）")),
+                    )
+                    .child(if on {
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.info)
+                            .child(tr("已覆盖"))
+                    } else {
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .child(tr("默认"))
+                    }),
+            );
+        }
+        if policies.is_empty() {
+            rows = rows.child(
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.muted_foreground)
+                    .child(tr(
+                        "无可覆盖策略：请先在上方选择环境（策略清单来自 environment_policies）",
+                    )),
+            );
+        }
+        rows
+    };
+    content = content.child(make_section(
+        "policy",
+        lucide("icons/shield.svg"),
+        theme.colors.info,
+        tr("安全策略（覆盖环境默认）"),
+        div().w_full().v_flex().gap(rems(GAP_SM)).child(sec_rows),
+    ));
+    // 分组③ DuckDB 直连（**所有类型都摆**）：网络库用于本地加速 + 跨源，
+    // 文件库（sqlite / duckdb）不需要加速，但可以作**联邦源**参与跨源查询。
+    {
+        // DuckDB 加速开关：gpui-component `Switch`（决策 #84；默认尺寸 36×20，与原型 HTML 一致）。
+        let toggle = Switch::new("duckdb-fed")
+            .checked(duckdb_fed.get())
+            .disabled(form_disabled)
+            .on_click({
+                let duckdb_fed = duckdb_fed.clone();
+                let entity = entity.clone();
+                move |want, _window, app| {
+                    duckdb_fed.set(*want);
+                    entity.update(app, |_, cx| cx.notify());
+                }
+            });
+        let mut accel_body = div()
+            .w_full()
+            .v_flex()
+            .gap(rems(GAP_SM))
+            .child(hint_line(
+                theme,
+                if is_network_db {
+                    "开启后：分析引擎可只读挂载本连接 —— 本地加速与跨源（联邦）查询都用它；凭据只在内存里传递（不写进 URL 与日志）"
+                } else {
+                    "开启后：本文件库可作为**联邦源**参与跨源查询（本地文件不需要本地加速）；凭据只在内存里传递"
+                },
+            ))
+            .child(form_row(
+                theme,
+                tr("启用"),
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap(rems(GAP_SM))
+                    .child(toggle)
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .child(if duckdb_fed.get() { "已开启" } else { "已关闭" }),
+                    ),
+            ));
+        if duckdb_fed.get() {
+            if is_network_db {
+                accel_body = accel_body.child(form_row(theme, "缓存路径", Input::new(cache_path)));
+            }
+            accel_body = accel_body.child(hint_line(
+                theme,
+                "已开启：本连接会出现在联邦源清单里（跨源查询写 别名.schema.表；文件库写 别名.schema.表 同样适用）；缓存上限 / 自动刷新 / 压缩由分析引擎默认策略管理",
+            ));
+        } else {
+            accel_body = accel_body.child(hint_line(theme, "关闭：本地加速与联邦查询都不用本连接"));
+        }
+        content = content.child(make_section(
+            "accel",
+            lucide("icons/database-zap.svg"),
+            theme.colors.warning,
+            "DuckDB 直连（本地加速 / 用作联邦源）",
+            accel_body,
+        ));
+    }
+    // 分组④ 导航（P1，2026-10-25）：连接级导航偏好——「显示系统对象」，
+    // 默认关 = 现状（导航树隐藏系统 catalog / schema），对齐 DBeaver `showSystemObjects`。
+    {
+        let nav_toggle = Switch::new("nav-show-system")
+            .checked(show_system_objects.get())
+            .disabled(form_disabled)
+            .on_click({
+                let show_system_objects = show_system_objects.clone();
+                let entity = entity.clone();
+                move |want, _window, app| {
+                    show_system_objects.set(*want);
+                    entity.update(app, |_, cx| cx.notify());
+                }
+            });
+        let nav_body = div()
+            .w_full()
+            .v_flex()
+            .gap(rems(GAP_SM))
+            .child(hint_line(
+                theme,
+                "开启后：导航树显示系统 catalog / schema（如 information_schema、pg_catalog）；默认隐藏",
+            ))
+            .child(form_row(theme, tr("显示系统对象"), nav_toggle));
+        content = content.child(make_section(
+            "nav",
+            lucide("icons/database.svg"),
+            theme.colors.info,
+            tr("导航"),
+            nav_body,
+        ));
+    }
+    // 收敛（#110）：能力清单是**只读**展示，放页尾；驱动属性已在页首。
+    content = content.child(
+        div()
+            .id("conn-sec-capability")
+            .test_support()
+            .text_sm()
+            .font_weight(FontWeight::BOLD)
+            .child(tr("能力（只读）")),
+    );
+    content = content.child(capability_panel);
     content
 }
