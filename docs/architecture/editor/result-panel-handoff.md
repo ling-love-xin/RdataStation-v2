@@ -1493,6 +1493,20 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；无 focus-lost 回填
   （`InputState` 没有失焦钩子），只做「有效提交即规范化」。
 
+### 2.75 计算页右键菜单的接手要点（2026-11-18）
+
+- 菜单内容写死在一处：`panel::tabs::stat_row` 的 `.context_menu(...)`；文本由
+  `stats_copy_all_text(entries)`（纯函数）与行自己的值在**渲染期**算好再进闭包。
+  改复制口径先改纯函数 + 它的用例，不要改菜单回调。
+- 菜单文案对齐 DBeaver `CopyAllAction` 的非分组口径（`函数=值`、`\n`）；分组口径在
+  本仓不适用（没有分组聚合，`GroupByColumnsAction` 见 §8.40.4 第 2 条）。
+- 行容器必须带**业务键 id**（`("editor-result-stat-menu", item)`）：`context_menu` 的状态
+  按元素 id 记账，六行共用一个 id 会串菜单。同理列浏览器行用的是
+  `("editor-result-col-browser-menu", data_col)`。
+- 空文本不写剪贴板（DBeaver 靠 SWT 早退；本仓显式 `if text.is_empty() { return; }`），
+  新增复制入口时照抄这个判空。
+- 门禁基线：result_panel **320 passed** / editor check Finished / guard 4 passed。
+
 ### 2.74 段大小持久化的接手要点（2026-11-18）
 
 - 值链路一条线：状态行段框（`InputState`）→ `parse_segment_rows`（`>0` 才算有效）→

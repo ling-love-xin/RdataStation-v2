@@ -2077,8 +2077,10 @@ SUM/AVG 对字符串累计不成立）。
    只有 `selection_pos: Option<(usize, usize)>` 单格 + `selected_col` 单列（`multi_selected`
    是列浏览器清单的多选，不是网格选区），派生不出「选中的若干单元格」。要做需先给
    `DataTable` 引入单元格选区，属独立工程；且本仓已有独立「分组」页签，重复实现会两处打架。
-3. **不做右键 Copy / CopyAll**：本仓统计页尚无右键菜单基建，且工具栏已有全局复制；
-   登记为后续增强（`AggregateColumnsPanel.java:471-496` 的 `func=value` 文案可直接照搬）。
+3. ~~**不做右键 Copy / CopyAll**~~：本仓统计页尚无右键菜单基建，且工具栏已有全局复制；
+   ~~登记为后续增强~~
+   → **已由 §8.87 补齐**（`复制值` / `复制全部` / 分隔 / 恢复默认统计项，
+   `func=value` 文案即 `AggregateColumnsPanel.java:471-496` 的口径）。
 
 #### 8.40.5 新增测试（5 条）
 
@@ -4605,6 +4607,43 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
   `panel::tests::set_segment_rows_initial_puts_the_value_in_the_box`
   （注入 500 → `segment_rows() == 500` 且输入框文本为 `"500"`）。
 - `cargo check -p rds-editor` = Finished；`cargo test -p rds-ui-guard` = 4 passed。
+
+### 8.87 计算页右键菜单（对齐 DBeaver `AggregateColumnsPanel` 表格菜单，2026-11-18）
+
+**取证**（`AggregateColumnsPanel.java`）：
+- `createContents:106-116`：`Tree` 上挂 `MenuManager`，`setRemoveAllWhenShown(true)`，
+  监听器每次重装「`CopyAction` → `CopyAllAction` → `Separator` → `fillToolBar(manager)`」。
+- `CopyAction:451-469`：拷选中行的值（函数行取第 2 列、分组行取第 1 列），`\n` 拼接后
+  写剪贴板。
+- `CopyAllAction:471-495`：非分组口径逐行 `函数=值`（`\n`）；分组口径是树缩进 +
+  每个子函数一行（`\t`）。
+- `fillToolBar:322-331` 的动作在菜单里同样出现（Add / Remove / Reset / GroupBy / ValueType）。
+
+**本仓落点**：
+- 纯函数 `panel::tabs::stats_copy_all_text(entries: &[(StatsItem, String)]) -> String`：
+  逐行 `函数=值`、`\n` 分隔，空集合 = 空串。
+- `stat_row` 挂 `.context_menu(...)`：`复制值` / `复制全部` / 分隔 /
+  `恢复默认统计项（六项全开）`；行容器补 `.id(("editor-result-stat-menu", item))`
+  ——`context_menu` 的状态按元素 id 记账，六行共用同一 id 会串菜单
+  （与 `column_browser` 的「按业务键取 id」同一教训）。
+- 两份文本在**渲染期定稿**：`render_stats_tab` 先把启用项与当前值算成
+  `Vec<(StatsItem, String)>`，行渲染与「复制全部」共用同一快照——菜单回调里再算一遍
+  会拿到「点开菜单那一刻」的另一份数据，与用户看到的对不上。
+- 空文本不写剪贴板（DBeaver 靠 SWT 的 `text.isEmpty()` 退出；本仓显式判空，
+  与列浏览器「复制列名」同口径）。
+
+**有意省略**：
+- 菜单里的「添加函数」不做：工具条 ＋ 是 `DropdownButton`（二级菜单），
+  塞进 popup 里再套一层没有收益；入口本来就常驻。
+- `GroupByColumnsAction` 不适用（本仓网格只有单格选择，`selection_pos: Option<(usize, usize)>`，
+  见 §8.40.4 第 2 条）；
+  `ValueTypeToggle` 只在工具条摆（菜单里再加一遍会让两处状态文案分叉）。
+
+**验证**：
+- `panel::tests::stats_copy_all_text_joins_function_equals_value`（两项 / 单项 / 空集合）。
+- `cargo test -p rds-result-panel --lib` = **320 passed**；`cargo check -p rds-editor`
+  = Finished；`cargo test -p rds-ui-guard` = 4 passed。
+
 
 
 
