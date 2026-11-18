@@ -1360,6 +1360,23 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   的 `column_order` 再 `apply_column_order`）；重置不跨页清 where/order 草稿。
 - **验证**：panel 283 / editor results 45 / guard 4 / check 0-0。提交 `c70a88be`。
 
+### 2.63 状态栏命令项按「工具条配置」显隐 + 配置菜单（2026-11-18）
+
+全文见 `result-panel.md §8.74`。接手要点：
+
+- 可见性口径在 `ports::StatusCommand`：`ALL`（16 项，顺序 = DBeaver 底部工具条）+
+  `default_visible()` + `menu_label()`；菜单内容用 `grid::status_config_items(hidden)`
+  纯函数钉，不要把文案散回渲染里。
+- `render_status_row` 现在要两个新入参（`hidden_commands` / `config_menu`），
+  新增调用方漏传会编译失败而不是静默丢功能。左动作组的槽位是「按命令判断再 push」，
+  加新命令时记得同时改 `StatusCommand::ALL` 与三个分段的组装点。
+- 默认隐藏只有 Undo / Redo；**`FetchPage` 有意常显**（本仓窗口化取数的唯一入口），
+  别再照 DBeaver 的 `fetch.page defaultVisibility=false` 改。
+- 状态是纯 UI 态（`hidden_status_commands`），不落盘；要持久化就接 `SavedSession`
+  （与列宽/列序同一条通道）。
+- 未做的一半：DBeaver `ConfigAction` 的「结果集首选项页」（齿轮 → 偏好页）本仓还没有。
+- **验证**：panel 285 / editor results 45 / guard 4 / check 0-0。提交 `e1b797db`。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）

@@ -3990,6 +3990,47 @@ WHERE <条件>` + `ORDER BY` 外提 + `dropped_limit` 回报），只差条件�
 **仍缺**（记在 §2.62 一并）：DBeaver 的列序是「约束的 visualPosition」，本仓列序仍在
 `display_order`（列名序）+ `SavedSession` 落盘；多选批量移动（DBeaver 支持多选）本仓
 只做当前选中列；重置不跨页清 where/order 草稿。
+### 8.74 状态栏命令项按 DBeaver「工具条配置」显隐 + 配置菜单（2026-11-18）
+
+**取证**：
+- `plugin.xml` 的 `org.jkiss.dbeaver.toolBarConfiguration` / `resultsetViewer.bottom`
+  （`:1381-1397`）逐命令给 `defaultVisibility`：`org.eclipse.ui.edit.undo`、
+  `edit.redo`、`core.resultset.fetch.page` 三项 **false**，其余（applyChanges /
+  rejectChanges / row.edit / row.add / row.copy / row.delete / row.first / previous /
+  next / last / fetch.all / export）**true**。
+- 同一份 `plugin.xml` 的 `org.eclipse.ui.menus`（`.rds/tmp/db-status-toolbar.txt` 全文）
+  里，每条 `command` 都包在
+  `<test property="org.jkiss.dbeaver.ui.toolbar.configuration.visible" …>` 里——可见性
+  是**工具条配置**的结果，`false` 只是默认值，用户右键工具条 → Configure 可改。
+- `ResultSetViewer.ConfigAction`（`:5402-5418`，CONFIGURATION 图标）打开结果集首选项页，
+  是「配置」的另一半（本仓这半还没做，记在 open items）。
+
+**本仓落点**（对齐「能被开关的可见性」，而不是直接把钮删掉）：
+- `ports::StatusCommand` 16 项（顺序 = DBeaver 底部工具条顺序）+ `default_visible()`
+  + `menu_label()`；`grid::status::status_config_items(hidden)` 是纯函数（顺序 / 文案 /
+  勾选态），渲染只按它挂事件（菜单内容不可读，用纯函数钉）。
+- `render_status_row` 增两个入参：`hidden_commands: &BTreeSet<StatusCommand>`、
+  `config_menu: Option<AnyElement>`。左动作组三段的每个槽位都改成「按命令查显隐再决定
+  是否 push」；段间发丝分隔线只在**两侧都还有内容**时画（DBeaver 用 `visibleWhen` 做
+  同一件事，全隐一段时不该留孤线）。
+- 状态行最末端（右栏开关之后）挂 `Settings2` 图标 ▾（`DropdownButton` + 逐项
+  `PopupMenuItem::new(label).checked(..)`），点击推
+  `ResultRequest::SetStatusCommandVisible { command, visible }`；面板持有
+  `hidden_status_commands: BTreeSet<StatusCommand>`（纯 UI 态、不落盘），
+  默认集合 = `default_visible()` 为 false 的两项。
+
+**有意偏离（必须记住）**：DBeaver 把 `fetch.page` 也默认隐藏，但它有自动取数、且能随时
+把命令勾回来；本仓「取下一段」是窗口化取数的**唯一可见入口**（无第二处按钮、无快捷键），
+默认隐藏等于读者拿不到后面的行 → `FetchPage::default_visible()` 返回 `true`，即常显
+（仍可在配置菜单里手动隐藏）。这条是本批唯一的口径差异，别再当 bug 改回去。
+
+**验证**：`grid::tests::status_config_items_follow_dbeaver_toolbar_order_and_defaults`
+（默认两项、顺序 = `StatusCommand::ALL`、勾选态 = `defaultVisibility`、勾回撤销只改该项）；
+`panel::tests::status_commands_follow_dbeaver_default_visibility_and_can_be_restored`
+（默认隐藏集合两项；状态行里 `editor-result-undo` / `-redo` 不渲染、`editor-result-page-first`
+在；`editor-result-status-config` 在；勾回撤销后 `editor-result-undo` 出现且集合剩一项；
+反向隐藏 First 后 `editor-result-page-first` 消失）。门禁：panel **285 passed**、
+editor results 45、ui-guard 4、check 0-0。提交 `e1b797db`。
 
 
 ## 8. 协作纪律
