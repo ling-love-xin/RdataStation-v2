@@ -1783,241 +1783,20 @@ impl<H: 'static> ConnectionDialogState<H> {
             // 这里只负责把它放进固定高度的容器（高度恒定的锚点仍在下面的 `conn-staging-scroll`）。
             // 无驱动类型的就地出口：灰字「暂无驱动」只说明事实，这里补一个按钮直达插件管理
             // （没有它，目录里没驱动的那几族对用户就是死路——只能自己猜去哪个页面装）。
-            let driverless_count = types_snapshot
-                .iter()
-                .filter(|t| t.enabled && !type_has_driver(&drivers_snapshot, &t.id))
-                .count();
-            let install_hint = div()
-                .id("conn-driver-install")
-                .test_support()
-                .h_flex()
-                .items_center()
-                .justify_between()
-                .gap_2()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.colors.muted_foreground)
-                        .child(format!("{driverless_count} 个类型暂无驱动")),
-                )
-                .child(
-                    div().id("install-drivers").test_support().child(
-                        Button::new("install-drivers-btn")
-                            .ghost()
-                            .label(tr("安装驱动"))
-                            .tooltip("打开插件管理页：安装并启用驱动插件后，这些类型即可选用")
-                            .on_click({
-                                let shared = shared.clone();
-                                let result = result.clone();
-                                let entity = entity.clone();
-                                move |_, window, app| {
-                                    if shared.show_plugin_manager(window, app) {
-                                        return;
-                                    }
-                                    // 宿主没挂上回调时别让按钮“点了没反应”。
-                                    set_result(
-                                        &result,
-                                        ResultLevel::Warning,
-                                        tr("插件管理页没挂上，暂时无法从这里安装驱动"),
-                                    );
-                                    entity.update(app, |_, cx| cx.notify());
-                                }
-                            }),
-                    ),
-                );
-            let side_panel = div()
-                .id("conn-side-panel")
-                // 测试快照：矩阵测试断言侧栏与内容区「同底」（两列等高才谈得上“布局恒定”）。
-                .test_support()
-                .w(rems(crate::ui::DIALOG_SIDEBAR_WIDTH))
-                // 与右列同高：行高由外层两列行给定（`helpers::dialog_row_height`），两列各自填满。
-                // 侧栏不自己定高——否则类型树条目数会反过来决定对话框高度；
-                // `min_h_0` 让内容超出时走内部滚动，而不是把侧栏撞得比行高还高。
-                .h_full()
-                .min_h_0()
-                .flex_shrink_0()
-                .v_flex()
-                .gap_3()
-                .pr_3()
-                .border_r_1()
-                .border_color(theme.colors.border)
-                .child(
-                    Input::new(&driver_filter).prefix(
-                        lucide("icons/search.svg")
-                            .size(rems(crate::ui::ICON_SIZE_SM))
-                            .text_color(theme.colors.muted_foreground),
-                    ),
-                )
-                .when(driverless_count > 0, |d| d.child(install_hint))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .v_flex()
-                        .gap_1()
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(theme.colors.muted_foreground)
-                                .child(tr("数据库类型")),
-                        )
-                        // 类型列表占满侧栏剩余高度：`List` 自带虚拟滚动与空态（不再外套滚动容器）。
-                        .child(
-                            div()
-                                .id("conn-type-list")
-                                // kit 观测：类型列表容器（与列表行同一批 id，供窗口用例/调试定位）。
-                                .test_support()
-                                .flex_1()
-                                .min_h_0()
-                                .w_full()
-                                .when_some(type_list, |d, list| {
-                                    d.child(List::new(&list).flex_1().min_h_0())
-                                }),
-                        ),
-                )
-                .child(
-                    div()
-                        .v_flex()
-                        .gap_1()
-                        .child(
-                            div()
-                                .h_flex()
-                                .items_center()
-                                .justify_between()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(theme.colors.muted_foreground)
-                                        .child(tr("暂存列表")),
-                                )
-                                .child(
-                                    div()
-                                        .h_flex()
-                                        .items_center()
-                                        .gap_1()
-                                        .child(
-                                            // 「导出模板」（#5）：未保存且非空的草稿 → 模板 JSON → 剪贴板；
-                                            // 结果行提示条数。密码不入模板（见 `templates_export` 的过滤规则）。
-                                            Button::new("staging-export")
-                                                .ghost()
-                                                .label(tr("导出"))
-                                                .with_size(Size::XSmall)
-                                                .tooltip("导出未保存草稿为模板 JSON（写入剪贴板）")
-                                                .on_click({
-                                                    let state = state.clone();
-                                                    let entity = entity.clone();
-                                                    move |_, _, app| {
-                                                        let count = state.templates_export_count();
-                                                        let json = state.templates_export();
-                                                        app.write_to_clipboard(
-                                                            gpui_kit::ClipboardItem::new_string(
-                                                                json,
-                                                            ),
-                                                        );
-                                                        let level = if count > 0 {
-                                                            ResultLevel::Success
-                                                        } else {
-                                                            ResultLevel::Info
-                                                        };
-                                                        set_result(
-                                                            &state.result,
-                                                            level,
-                                                            if count > 0 {
-                                                                format!(
-                                                                    "已导出 {count} 条草稿为模板（剪贴板）"
-                                                                )
-                                                            } else {
-                                                                "暂存区没有未保存的草稿可导出"
-                                                                    .to_string()
-                                                            },
-                                                        );
-                                                        let _ =
-                                                            entity.update(app, |_, cx| cx.notify());
-                                                    }
-                                                }),
-                                        )
-                                        .child(
-                                            // 「导入模板」（#5）：读剪贴板 JSON → 校验 → 追加为草稿并选中；
-                                            // 密码留空（模板不含凭据），导入后提示补填。
-                                            Button::new("staging-import")
-                                                .ghost()
-                                                .label(tr("导入"))
-                                                .with_size(Size::XSmall)
-                                                .tooltip("从剪贴板导入模板 JSON（追加为草稿，密码请补填）")
-                                                .on_click({
-                                                    let state = state.clone();
-                                                    let entity = entity.clone();
-                                                    move |_, window, app| {
-                                                        let text = app
-                                                            .read_from_clipboard()
-                                                            .and_then(|item| {
-                                                                item.text().map(|s| s.to_string())
-                                                            })
-                                                            .unwrap_or_default();
-                                                        match state
-                                                            .templates_import(&text, window, app)
-                                                        {
-                                                            Ok(count) => set_result(
-                                                                &state.result,
-                                                                ResultLevel::Success,
-                                                                format!(
-                                                                    "已导入 {count} 条草稿（密码请补填）"
-                                                                ),
-                                                            ),
-                                                            Err(e) => set_result(
-                                                                &state.result,
-                                                                ResultLevel::Error,
-                                                                format!("导入失败：{e}"),
-                                                            ),
-                                                        }
-                                                        let _ =
-                                                            entity.update(app, |_, cx| cx.notify());
-                                                    }
-                                                }),
-                                        )
-                                        .child(
-                                            // 「添加草稿」：真按钮（hover / 焦点 / 键盘激活 / tooltip），
-                                            // 不再是一个可点的文本 div。
-                                            Button::new("staging-add")
-                                                .ghost()
-                                                .icon(IconName::Plus)
-                                                .label(tr("添加"))
-                                                .with_size(Size::XSmall)
-                                                .tooltip("新增一条空草稿（连续配置多个连接）")
-                                                .on_click({
-                                                    let state = state.clone();
-                                                    let shared = shared.clone();
-                                                    let entity = entity.clone();
-                                                    move |_, window, app| {
-                                                        state.staging_add(window, app);
-                                                        shared.dialog_redraw(app);
-                                                        let _ = entity.update(app, |_, cx| cx.notify());
-                                                    }
-                                                }),
-                                        )
-                                )
-                        )
-                        // 暂存区固定高度 + 内部滚动：条目再多也只在区域内滚动，不拉长对话框。
-                                // 三向显式约束（height / min / max）而不是只给 `h()`：flex 子项的
-                                // 自动最小尺寸（`min-height:auto`）会按内容撑开，只有显式 min/max 能夹住。
-                                .child(
-                                    div()
-                                        .id("conn-staging-scroll")
-                                        // 测试快照：矩阵测试断言「条目再多高度也不增长」（固定高度 + 内部滚动）。
-                                        .test_support()
-                                        .w_full()
-                                        .h(rems(STAGING_H))
-                                        .min_h(rems(STAGING_H))
-                                        .max_h(rems(STAGING_H))
-                                        .overflow_hidden()
-                                        .when_some(draft_list_now, |d, list| {
-                                            d.child(List::new(&list))
-                                        }),
-                                ),
-                        )
-                ;
+            // 侧栏（类型搜索 → 数据库类型列表 → 暂存列表）。整块已抽成 `side_panel_ui`，
+            // 参数见 `SidePanel`：目录快照、两个列表句柄、过滤框、状态、宿主、结果行、主题。
+            let side_panel = side_panel_ui(SidePanel {
+                types: &types_snapshot,
+                drivers: &drivers_snapshot,
+                type_list: type_list.as_ref(),
+                draft_list: draft_list_now.as_ref(),
+                filter: &driver_filter,
+                state: &state,
+                shared: &shared,
+                result: &result,
+                entity: &entity,
+                theme,
+            });
 
             // ---- Header（对齐原型 §2）：名称 + 驱动类型 + 作用域 / 备注 / URI / 提示行 ----
             // 项目栏：固定位置（备注行右侧）；作用域为「仅全局」时不参与落库 → 置灰不可编辑，
@@ -3079,4 +2858,288 @@ fn result_row_ui<H: 'static>(
         );
     }
     col.into_any_element()
+}
+
+/// 侧栏渲染所需的十样输入。
+///
+/// 抽自 `render` 巨型闭包的第二块。写成参数结构体而非十个位置参数：侧栏依赖的东西多且
+/// 语义各异（目录快照 / 两个列表句柄 / 过滤框 / 状态 / 宿主 / 结果行 / 实体 / 主题），
+/// 位置参数读起来分不清谁是谁，也过不了 clippy 的 `too_many_arguments`。
+struct SidePanel<'a, H: 'static> {
+    /// 类型目录快照（当前帧的 `types` 克隆；「有几个类型没驱动」由它算）。
+    types: &'a [DataSourceType],
+    /// 驱动目录快照（判断某类型有没有可用驱动）。
+    drivers: &'a [Driver],
+    /// 类型列表句柄（尚未建好时为 `None`，此时侧栏只出标题）。
+    type_list: Option<&'a Entity<ListState<TypeTreeDelegate<H>>>>,
+    /// 暂存列表句柄（同款可空）。
+    draft_list: Option<&'a Entity<ListState<DraftListDelegate<H>>>>,
+    /// 类型搜索框（`Input` 组件自己持有焦点与光标，渲染只借用句柄）。
+    filter: &'a Entity<InputState>,
+    /// 对话框状态（导出 / 导入 / 添加草稿这些动作都在它身上）。
+    state: &'a Rc<ConnectionDialogState<H>>,
+    /// 宿主回调（「安装驱动」要跳插件管理页）。
+    shared: &'a Rc<dyn ConnectionDialogHost>,
+    /// 结果行（安装 / 导出 / 导入的反馈落在这里）。
+    result: &'a Rc<RefCell<Option<ResultLine>>>,
+    /// 要 notify 的实体（结果行换文案后重绘）。
+    entity: &'a Entity<H>,
+    /// 取色。
+    theme: &'a Theme,
+}
+
+/// 左侧栏：类型搜索 → 数据库类型列表 → 暂存列表。
+///
+/// 顺序即优先级（新建第一步是选类型，所以类型目录占上半区并 `flex_1` 吃剩余高度；
+/// 暂存列表是回访产物，固定高度沉在底部），几何由 `connection_render_matrix` 与
+/// `type_list_sits_above_staging_list` 钉住。
+///
+/// 注意列表的**状态同步不在这里**：它在 `render` 闭包更早的「侧栏类型列表同步」块，
+/// 那里能在 `cx.theme()` 之前拿可变借用。本函数只负责摆布局与接动作。
+fn side_panel_ui<H: 'static>(p: SidePanel<'_, H>) -> impl IntoElement {
+    let SidePanel {
+        types,
+        drivers,
+        type_list,
+        draft_list,
+        filter,
+        state,
+        shared,
+        result,
+        entity,
+        theme,
+    } = p;
+    // 闭包要 move 走这些 Rc / 实体，先在各分支里 clone（`&Rc` 直接 clone 只会得到引用）。
+    let state = Rc::clone(state);
+    let shared = Rc::clone(shared);
+    let result = Rc::clone(result);
+    let entity = entity.clone();
+
+    // 无驱动类型的就地出口：灰字「暂无驱动」只说明事实，这里补一个按钮直达插件管理
+    // （没有它，目录里没驱动的那几族对用户就是死路——只能自己猜去哪个页面装）。
+    let driverless_count = types
+        .iter()
+        .filter(|t| t.enabled && !type_has_driver(drivers, &t.id))
+        .count();
+    let install_hint = div()
+        .id("conn-driver-install")
+        .test_support()
+        .h_flex()
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.colors.muted_foreground)
+                .child(format!("{driverless_count} 个类型暂无驱动")),
+        )
+        .child(
+            div().id("install-drivers").test_support().child(
+                Button::new("install-drivers-btn")
+                    .ghost()
+                    .label(tr("安装驱动"))
+                    .tooltip("打开插件管理页：安装并启用驱动插件后，这些类型即可选用")
+                    .on_click({
+                        let shared = shared.clone();
+                        let result = result.clone();
+                        let entity = entity.clone();
+                        move |_, window, app| {
+                            if shared.show_plugin_manager(window, app) {
+                                return;
+                            }
+                            // 宿主没挂上回调时别让按钮“点了没反应”。
+                            set_result(
+                                &result,
+                                ResultLevel::Warning,
+                                tr("插件管理页没挂上，暂时无法从这里安装驱动"),
+                            );
+                            entity.update(app, |_, cx| cx.notify());
+                        }
+                    }),
+            ),
+        );
+    div()
+        .id("conn-side-panel")
+        // 测试快照：矩阵测试断言侧栏与内容区「同底」（两列等高才谈得上“布局恒定”）。
+        .test_support()
+        .w(rems(crate::ui::DIALOG_SIDEBAR_WIDTH))
+        // 与右列同高：行高由外层两列行给定（`helpers::dialog_row_height`），两列各自填满。
+        // 侧栏不自己定高——否则类型树条目数会反过来决定对话框高度；
+        // `min_h_0` 让内容超出时走内部滚动，而不是把侧栏撞得比行高还高。
+        .h_full()
+        .min_h_0()
+        .flex_shrink_0()
+        .v_flex()
+        .gap_3()
+        .pr_3()
+        .border_r_1()
+        .border_color(theme.colors.border)
+        .child(
+            Input::new(filter).prefix(
+                lucide("icons/search.svg")
+                    .size(rems(crate::ui::ICON_SIZE_SM))
+                    .text_color(theme.colors.muted_foreground),
+            ),
+        )
+        .when(driverless_count > 0, |d| d.child(install_hint))
+        .child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .v_flex()
+                .gap_1()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(theme.colors.muted_foreground)
+                        .child(tr("数据库类型")),
+                )
+                // 类型列表占满侧栏剩余高度：`List` 自带虚拟滚动与空态（不再外套滚动容器）。
+                .child(
+                    div()
+                        .id("conn-type-list")
+                        // kit 观测：类型列表容器（与列表行同一批 id，供窗口用例/调试定位）。
+                        .test_support()
+                        .flex_1()
+                        .min_h_0()
+                        .w_full()
+                        .when_some(type_list, |d, list| {
+                            d.child(List::new(list).flex_1().min_h_0())
+                        }),
+                ),
+        )
+        .child(
+            div()
+                .v_flex()
+                .gap_1()
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(theme.colors.muted_foreground)
+                                .child(tr("暂存列表")),
+                        )
+                        .child(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_1()
+                                .child(
+                                    // 「导出模板」（#5）：未保存且非空的草稿 → 模板 JSON → 剪贴板；
+                                    // 结果行提示条数。密码不入模板（见 `templates_export` 的过滤规则）。
+                                    Button::new("staging-export")
+                                        .ghost()
+                                        .label(tr("导出"))
+                                        .with_size(Size::XSmall)
+                                        .tooltip("导出未保存草稿为模板 JSON（写入剪贴板）")
+                                        .on_click({
+                                            let state = state.clone();
+                                            let entity = entity.clone();
+                                            move |_, _, app| {
+                                                let count = state.templates_export_count();
+                                                let json = state.templates_export();
+                                                app.write_to_clipboard(
+                                                    gpui_kit::ClipboardItem::new_string(json),
+                                                );
+                                                let level = if count > 0 {
+                                                    ResultLevel::Success
+                                                } else {
+                                                    ResultLevel::Info
+                                                };
+                                                set_result(
+                                                    &state.result,
+                                                    level,
+                                                    if count > 0 {
+                                                        format!(
+                                                            "已导出 {count} 条草稿为模板（剪贴板）"
+                                                        )
+                                                    } else {
+                                                        "暂存区没有未保存的草稿可导出".to_string()
+                                                    },
+                                                );
+                                                let _ = entity.update(app, |_, cx| cx.notify());
+                                            }
+                                        }),
+                                )
+                                .child(
+                                    // 「导入模板」（#5）：读剪贴板 JSON → 校验 → 追加为草稿并选中；
+                                    // 密码留空（模板不含凭据），导入后提示补填。
+                                    Button::new("staging-import")
+                                        .ghost()
+                                        .label(tr("导入"))
+                                        .with_size(Size::XSmall)
+                                        .tooltip("从剪贴板导入模板 JSON（追加为草稿，密码请补填）")
+                                        .on_click({
+                                            let state = state.clone();
+                                            let entity = entity.clone();
+                                            move |_, window, app| {
+                                                let text = app
+                                                    .read_from_clipboard()
+                                                    .and_then(|item| {
+                                                        item.text().map(|s| s.to_string())
+                                                    })
+                                                    .unwrap_or_default();
+                                                match state.templates_import(&text, window, app) {
+                                                    Ok(count) => set_result(
+                                                        &state.result,
+                                                        ResultLevel::Success,
+                                                        format!(
+                                                            "已导入 {count} 条草稿（密码请补填）"
+                                                        ),
+                                                    ),
+                                                    Err(e) => set_result(
+                                                        &state.result,
+                                                        ResultLevel::Error,
+                                                        format!("导入失败：{e}"),
+                                                    ),
+                                                }
+                                                let _ = entity.update(app, |_, cx| cx.notify());
+                                            }
+                                        }),
+                                )
+                                .child(
+                                    // 「添加草稿」：真按钮（hover / 焦点 / 键盘激活 / tooltip），
+                                    // 不再是一个可点的文本 div。
+                                    Button::new("staging-add")
+                                        .ghost()
+                                        .icon(IconName::Plus)
+                                        .label(tr("添加"))
+                                        .with_size(Size::XSmall)
+                                        .tooltip("新增一条空草稿（连续配置多个连接）")
+                                        .on_click({
+                                            let state = state.clone();
+                                            let shared = shared.clone();
+                                            let entity = entity.clone();
+                                            move |_, window, app| {
+                                                state.staging_add(window, app);
+                                                shared.dialog_redraw(app);
+                                                let _ = entity.update(app, |_, cx| cx.notify());
+                                            }
+                                        }),
+                                ),
+                        ),
+                )
+                // 暂存区固定高度 + 内部滚动：条目再多也只在区域内滚动，不拉长对话框。
+                // 三向显式约束（height / min / max）而不是只给 `h()`：flex 子项的
+                // 自动最小尺寸（`min-height:auto`）会按内容撑开，只有显式 min/max 能夹住。
+                .child(
+                    div()
+                        .id("conn-staging-scroll")
+                        // 测试快照：矩阵测试断言「条目再多高度也不增长」（固定高度 + 内部滚动）。
+                        .test_support()
+                        .w_full()
+                        .h(rems(STAGING_H))
+                        .min_h(rems(STAGING_H))
+                        .max_h(rems(STAGING_H))
+                        .overflow_hidden()
+                        .when_some(draft_list, |d, list| d.child(List::new(list))),
+                ),
+        )
 }
