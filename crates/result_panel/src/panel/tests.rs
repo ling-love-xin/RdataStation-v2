@@ -1497,6 +1497,37 @@ fn maximize_panel_hides_the_grid_and_keeps_the_sidebar(cx: &mut gpui_kit::TestAp
     );
 }
 
+/// 【右缘竖条】提示文案 = 页名 + 面板描述（对齐 `ResultSetViewer.java:1055-1080`
+/// 的 `label + " (" + toolTip + ")"`）；该页正在显示时改报「点它会收起」。
+#[test]
+fn edge_bar_tooltip_carries_label_and_description() {
+    use super::events::{edge_tab_tooltip, right_tab_description, right_tab_label};
+    use crate::ports::RightTab;
+
+    for tab in super::events::right_tabs() {
+        let tip = edge_tab_tooltip(tab, false);
+        assert!(tip.contains(right_tab_label(tab)), "{} 的提示应含页名", tip);
+        assert!(
+            tip.contains(right_tab_description(tab)),
+            "{} 的提示应含描述",
+            tip
+        );
+        assert!(
+            !right_tab_description(tab).is_empty(),
+            "{} 的描述不应为空",
+            right_tab_label(tab)
+        );
+    }
+
+    // 正在显示的页：提示改说「收起」，不再堆描述
+    let collapse_tip = edge_tab_tooltip(RightTab::Value, true);
+    assert!(collapse_tip.contains("收起"));
+    assert!(
+        !collapse_tip.contains(right_tab_description(RightTab::Value)),
+        "收起提示不必再塞面板描述"
+    );
+}
+
 /// 【右缘竖条 / 视图菜单】点某一页的开关语义（纯函数）：对齐 DBeaver
 /// `ResultSetHandlerTogglePanel.toggleResultsPanel:64-69` + `showResultsPanel:71-81`
 /// （`isVisible = isPanelsVisible() && isPanelVisible(id)`，真则 `closePanel`）。

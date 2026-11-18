@@ -23,8 +23,8 @@ use gpui_kit::*;
 
 use super::data::ResultPanel;
 use super::events::{
-    right_tab_click_collapses, right_tab_description, right_tab_from_index, right_tab_icon,
-    right_tab_index, right_tab_label, right_tabs,
+    edge_tab_tooltip, right_tab_click_collapses, right_tab_description, right_tab_from_index,
+    right_tab_icon, right_tab_index, right_tab_label, right_tabs,
 };
 use super::tabs::kv_row;
 use crate::ports::{Presentation, ResultRequest, RightTab};
@@ -767,11 +767,7 @@ impl ResultPanel {
                     .debug_selector(|| format!("editor-result-edge-{:?}", tab))
                     .toggled(active == tab)
                     .icon(right_tab_icon(tab))
-                    .tooltip(if collapses {
-                        "收起结果面板（本页正在显示）"
-                    } else {
-                        right_tab_label(tab)
-                    })
+                    .tooltip(edge_tab_tooltip(tab, collapses))
                     .on_click(move |_, _window, app| {
                         queue.request(target.clone(), app);
                     })

@@ -1886,6 +1886,22 @@ pub(crate) fn right_tab_description(tab: RightTab) -> &'static str {
     }
 }
 
+/// 【右缘竖条】某一页图标的提示文案。
+///
+/// 对齐 `ResultSetViewer.java:1055-1080`：竖条按钮 `setToolTipText(panel.getLabel())`，
+/// 取得到命令描述时拼成 `label + " (" + toolTip + ")"`——即**页名 + 命令/面板描述**，
+/// 而不是只有页名。本仓页签条已经用描述（`right_tab_description`），竖条这里同样拼起来。
+///
+/// 例外：该页**正在显示**时提示改成「收起结果面板」——因为此时点它是收起（见
+/// `right_tab_click_collapses` / `toggle_right_tab`），提示要说清点了会发生什么。
+pub(crate) fn edge_tab_tooltip(tab: RightTab, collapses: bool) -> String {
+    if collapses {
+        "收起结果面板（本页正在显示）".to_string()
+    } else {
+        format!("{}（{}）", right_tab_label(tab), right_tab_description(tab))
+    }
+}
+
 /// 「视图菜单」条目文案（动态条目按当前状态报动作，而不是报状态：
 /// 菜单项是「点了会做什么」——对齐 DBeaver `CMD_TOGGLE_PANELS` / `CMD_TOGGLE_LAYOUT` 的命令标签）
 pub(crate) fn panel_view_item_label(
