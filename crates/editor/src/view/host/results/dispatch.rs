@@ -390,6 +390,10 @@ impl EditorHostPanel {
                         .update(cx, |p, cx| p.begin_references_load(cx));
                 }
             }
+            // 【值详情页】在外部程序中打开当前值（临时文件 + 系统默认程序）
+            ResultRequest::OpenValueExternally => {
+                self.open_selected_value_externally(cx);
+            }
             // 【引用页】宿主侧取外键（面板只交 schema / 表 / 可见列）
             ResultRequest::LoadReferences {
                 schema,

@@ -1924,6 +1924,34 @@ fn value_save_is_gated_by_null_and_row_number_slot() {
     assert!(!value_can_save_to_file(0, Some("3")));
 }
 
+/// 【值页工具条】「在外部程序中打开」入口常驻（对齐 `ContentValueManager` 的
+/// 「Open in external editor」，与保存至文件同一处贡献）。零内容时不生效由
+/// `value_can_save_to_file` 同口径置灰覆盖。
+#[gpui_kit::test]
+fn value_toolbar_offers_open_in_external_app(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    // 出厂默认页是列浏览器；本用例要验值页工具条（空态是另一条渲染分支，没有这几颗动作）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.selection_pos = Some((0, 1));
+            p.set_right_tab(RightTab::Value, cx);
+        })
+    });
+
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-value-open-external").is_some(),
+        "值页工具条应有「在外部程序中打开」"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-value-save").is_some(),
+        "同一行里保存至文件应仍在"
+    );
+}
+
 /// 【值页动作可用性】选中 NULL 格时 `selected_value_payload` 给 `None`
 /// （宿主据此提示「没有内容」，不会写一个内容为 `NULL` 的文件）。
 #[gpui_kit::test]

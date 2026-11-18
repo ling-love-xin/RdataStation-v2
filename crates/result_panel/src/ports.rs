@@ -175,6 +175,10 @@ pub enum ResultRequest {
     /// 字节与默认文件名由面板算好（[`ResultPanel::selected_value_payload`]），
     /// 宿主只负责选路径 + 写盘。
     SaveValue,
+    /// 【值详情页】在系统默认程序里打开当前格的值（对齐 DBeaver
+    /// `ContentValueManager.contributeContentActions` 的「Open in external editor」`：`:
+    /// 100-140`）：面板交字节与建议文件名，宿主落到临时文件后唤起外部程序。
+    OpenValueExternally,
     /// 刷新（重跑当前结果 SQL）
     Refresh,
     /// 取下一段

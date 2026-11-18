@@ -209,6 +209,27 @@ impl ResultPanel {
                 })
                 .into_any_element()
         };
+        // 【在外部程序中打开】对齐 DBeaver `ContentValueManager` 的
+        // 「Open in external editor」（`:100-140`，与「保存至文件」同一处无条件贡献）：
+        // 落一份临时文件后交系统默认程序打开。零内容格与保存钮同口径置灰。
+        let open_external = {
+            let queue = self.queue.clone();
+            Button::new("editor-result-value-open-external")
+                .ghost()
+                .xsmall()
+                .debug_selector(|| "editor-result-value-open-external".to_string())
+                .icon(IconName::ExternalLink)
+                .disabled(!savable)
+                .tooltip(if savable {
+                    "用系统默认程序打开当前值（先落一份临时文件）"
+                } else {
+                    "该格没有内容可打开（NULL / 行号槽）"
+                })
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::OpenValueExternally, app);
+                })
+                .into_any_element()
+        };
         div()
             .flex_1()
             .min_h_0()
@@ -217,7 +238,9 @@ impl ResultPanel {
             .child(self.panel_toolbar(
                 "editor-result-value-toolbar",
                 SharedString::from(title),
-                vec![marker, copy, save],
+                // 顺序照 `ValueViewerPanel.fillToolBar:409-428`：内容类动作（保存至文件 /
+                // 在外部程序打开）在前，写回类 SaveValueAction 在后（本仓无写回）。
+                vec![marker, copy, save, open_external],
                 cx,
             ))
             .child({
