@@ -1,7 +1,7 @@
 # 数据源连接模块 · 设计架构与数据流（M3）
 
-> 状态：Phase A/B + Phase C（C1–C3、C5–C18）已实现；C4（模板导入导出）**能力就绪、UI 入口暂缓** ；已知缺口见 §14 · 2026-09-12
-> 版本声明（2026-10-02，2026-10-11 更新）：本文历史决策中的「gpui-kit 0.6 / 0.6.1」均为**当时锁定版本**的陈述；组件库现已升级 **0.7.1**（差异见 `docs/architecture/ui/gpui-kit-0.7-migration.md`）。历史能力判断（如 #11 的 pinned header 需核实滚动容器、#B 的拖拽支持）如需引用，请先对照 0.7.1 源码复核。
+> 状态：Phase A/B + Phase C（C1–C3、C5–C18）已实现；C4（模板导入导出）能力与 UI 入口**均已就绪**（2026-11-18 入口实装，见 dev-plan C4/C12）；Tab 已于 2026-11-18 收敛为三页（常规 / 网络 / 高级；文件型两页）；已知缺口见 §14
+> 版本声明（2026-10-02，2026-10-11 / 2026-11-18 更新）：本文历史决策中的「gpui-kit 0.6 / 0.6.1 / 0.7.x」均为**当时锁定版本**的陈述；组件库现已升级 **0.9.0**（gpui-pre `=0.3.11` + gpui-fast `0.1.13`，vendor `gpui-component` 同源；迁移差异见 `docs/architecture/ui/gpui-kit-0.8.0-upgrade-report.md` 与 0.9.0 升级分支记录）。历史能力判断如需引用，请先对照 0.9.0 源码复核。
 > 关联：`connection-prototype-design.md`（原型设计，含 §2.2 暂存列表规格）、`connection-dialog-prototype.html`（交互稿）、`connection-dev-plan.md`（开发方案与逐轮记录）、`../../theme/ui-constraints.md`（尺寸与控件约束）
 > 读者：参与本模块维护 / 扩展的开发者；也用于排查「入口没反应」「保存后列表没刷新」这类跨层问题
 
@@ -25,23 +25,31 @@
 ```mermaid
 flowchart TB
     APP["app（App Shell）"]
-    WB["workbench（视图 + 服务编排）"]
-    CONN["connection（传输层：URL / 协议链 / 连接器 / Secret）"]
-    ENG["engine（驱动 / 持久化 / 缓存 / 迁移）"]
+    WB["workbench（视图 + 宿主桥）"]
+    CD["connection_dialog（对话框组件 + 连接服务层编排）"]
+    CONN["connection（传输层：URL / 协议链 / 隧道 / Secret）"]
+    ENG["engine（缓存 / DuckDB 文件库 / SQL 与执行侧）"]
+    DRV["driver（驱动声明 / 能力字典 / 工厂与路由）"]
+    STORE["store（持久化 / 迁移 / 全局·项目库）"]
     SHARED["shared（错误 / 加密 / 基础类型）"]
     OTHERS["project / database / insight / mock / settings / scratchpad"]
 
     APP --> WB
     APP --> OTHERS
-    WB --> CONN
+    WB --> CD
     WB --> ENG
-    WB --> OTHERS
+    CD --> CONN
+    CD --> ENG
+    CD --> SHARED
     ENG --> CONN
+    ENG --> DRV
+    ENG --> STORE
     ENG --> SHARED
+    DRV --> STORE
     CONN --> SHARED
 ```
 
-> 规则：**Feature crates → engine, shared, gpui-kit**；`connection` 只允许依赖 `shared`。
+> 规则：**Feature crates → shared, gpui-kit**；连接对话框与服务层在独立 crate `rds-connection-dialog`（workbench 只挂宿主桥）；`connection` 只允许依赖 `shared`；持久化只经 `store`，驱动声明只经 `driver`（2026-11-18 从 engine 拆出，engine 侧保留 re-export 兼容）。
 > 因此「连接服务」拆成了两半：不依赖 engine 的传输/协议层下沉 `connection`；依赖 engine（持久化、驱动路由）的编排层留在 `workbench`。这就是 C3 分批收敛的由来。
 
 ### 2.2 文件落点
@@ -51,21 +59,25 @@ flowchart TB
 | 视图 | `crates/connection_dialog/src/components/connection_dialog/` | 对话框（三页 Tab / Header / 侧栏暂存列表 / 三管理器覆盖层）——按职责拆分： |
 | 视图 | ├ `mod.rs` | 模块声明与 re-export、常量、`ConnectionDialogState` 字段、输入控件工厂 |
 | 视图 | ├ `state.rs` | 构造 / 元数据刷新 / 编辑回读 / `ClonedDialogState`（保存按钮的轻量视图） |
-| 视图 | ├ `staging.rs` | `ConnectionDraft`、暂存状态机、持久化映射（`draft_to_row` / `row_to_draft`）、来源短码 |
-| 视图 | ├ `render.rs` | `open()`：对话框元素树（Header / Tab / 侧栏 / footer / 快捷键 handler） |
+| 视图 | ├ `staging.rs` | `ConnectionDraft`、暂存状态机、持久化映射（`draft_to_row` / `row_to_draft`）、来源短码、模板导入导出 |
+| 视图 | ├ `render.rs` | `open()`：闭包只做同步 / 快照 / 装配；逐块函数 `result_row_ui` / `side_panel_ui` / `capability_panel_ui` / `driver_props_panel_ui` / `footer_ui` / `network_tab_ui` / `advanced_tab_ui` / `general_tab_ui`（Header 组装仍在内，待抽） |
 | 视图 | ├ `managers.rs` | 三管理器覆盖层（认证 / 网络 / 环境）CRUD |
-| 视图 | └ `helpers.rs` | 图标、Select 赋值、原型卡片/只读行、URL 重拼、作用域标签、尺寸常量（`GAP_*` / `LABEL_W` / `BADGE_*` / `PROJECT_W` / `DRIVER_W` / `TAB_BODY_H` / `STAGING_H` / `ROW_H`） |
-| 视图 | └ `project_picker.rs` | 项目下拉项 `ProjectItem`（项目名 + 路径双列、搜索、末项「＋ 新增项目」） |
+| 视图 | ├ `type_tree.rs` / `draft_list.rs` | 左侧类型目录 / 暂存列表两处列表 UI（含同步指纹） |
+| 视图 | ├ `project_picker.rs` | 项目下拉项 `ProjectItem`（项目名 + 路径双列、搜索、末项「＋ 新增项目」） |
+| 视图 | ├ `host.rs` / `commands.rs` | `ConnectionDialogHost` trait（宿主桥：重绘 / 当前项目 / 请求新建·打开项目 / `show_plugin_manager` / 应用保存结果）与快捷键 Action |
+| 视图 | └ `helpers/`（目录） | `mod`（尺寸 / 作用域 / Tab 定义 / `dialog_width` / `driver_kind_label`）、`capability`（能力行与字典）、`fields`（`DriverDerived`）、`files`（新建库文件）、`summary`、`tests` |
 | 视图 | `crates/workbench/src/panels/`（`EditorPanel` / `Shared`） | 入口（`request_new_connection` / `request_edit_connection`）、项目下拉订阅（`ensure_dialog_subscription`）、宿主重绘桥、面板级共享状态（含 `project_new_request`） |
 | 视图 | `crates/workbench/src/view/`（`WorkbenchView`） | 宿主渲染（`view/render.rs`）与编辑面板观察（`view/workspace.rs::cx.observe(editor)`）；对话框层由 `Root` 自动挂载 |
-| 服务 | `crates/workbench/src/services/data_source_service.rs` | CRUD / 测试连接 / 同名检查 / 作用域路由 / 摘要解析（`parse_url_host_port_db`） |
-| 服务 | `crates/workbench/src/services/workspace_loader.rs` | 列表可见性合并（全局 + 项目侧）、运行态 `connected` 填充、删除路由 |
-| 服务 | `crates/workbench/src/services/connection_service.rs` | 会话生命周期（connect / close / 列表 / 元数据路径）、隧道登记与回收 |
-| 服务 | `crates/workbench/src/services/secret_integration.rs` | DuckDB Secret 注册 / 注销（按 `use_duckdb_fed` 门控） |
-| 传输 | `crates/connection/src/{url,url_params,chain,config,connector,factory,stream,known_hosts,secret,model}.rs` | URL 组装与脱敏、参数注入、协议链执行 + `TunnelRegistry`、连接器与流、Secret 语句 |
-| 持久 | `crates/engine/src/persistence/{global_db,project_db,connection_store,project_connection_store,connection_org_store,connection_draft_store,driver_store,auth_store,network_store,env_store}.rs` | 全局库 / 项目库 / 最近连接 / 组织元数据 / **暂存草稿** / 驱动与类型目录 / 三类引用配置 |
-| 持久 | `crates/engine/migrations/{global,project_meta}/*.sql` | 表结构演进（暂存草稿 = `global/020_add_connection_drafts.sql`） |
-| 持久 | `crates/engine/src/migration/*` | 全局系统库初始化（`initialize_global_system` / `install_global_db_manager`）、DuckDB 迁移执行器 |
+| 服务 | `crates/connection_dialog/src/services/data_source_service.rs` | CRUD / 测试连接 / 同名检查 / 作用域路由 / 摘要解析（`parse_url_host_port_db`） |
+| 服务 | `crates/connection_dialog/src/services/workspace_loader.rs` | 列表可见性合并（全局 + 项目侧）、运行态 `connected` 填充、删除路由 |
+| 服务 | `crates/connection_dialog/src/services/connection_service.rs`（+ `network.rs` / `runtime.rs`） | 会话生命周期（connect / close / 列表 / 元数据路径）、隧道登记与回收 |
+| 服务 | `crates/connection_dialog/src/services/secret_integration.rs` | DuckDB Secret 注册 / 注销（按 `use_duckdb_fed` 门控） |
+| 服务 | `crates/connection_dialog/src/services/rt.rs` | 全模块共用惰性 tokio `Runtime`（`OnceLock<Option<Runtime>>`） |
+| 传输 | `crates/connection/src/{url,url_params,chain,config,factory,stream,known_hosts,secret,model}.rs` + `connector/`（`mod` / `proxy` / `ssh` / `tls`） | URL 组装与脱敏、参数注入、协议链执行 + `TunnelRegistry`、连接器与流（隧道 `ssh.rs` / 代理 `proxy.rs` / TLS `tls.rs`） |
+| 持久 | `crates/store/src/persistence/{global_db,project_db,connection_store,project_connection_store,connection_org_store,connection_draft_store,driver_store,auth_store,network_store,env_store}.rs` | 全局库 / 项目库 / 最近连接 / 组织元数据 / **暂存草稿** / 驱动与类型目录 / 三类引用配置 |
+| 持久 | `crates/store/migrations/{global,project_meta}/*.sql` | 表结构演进（暂存草稿 = `global/020_add_connection_drafts.sql`） |
+| 持久 | `crates/store/src/migration/*` + `crates/engine/src/migration/*` | 全局系统库初始化（`initialize_global_system` / `install_global_db_manager`）、DuckDB 迁移执行器 |
+| 声明 | `crates/driver/src/{declaration,registry/descriptors,capability,property_spec}.rs` | 驱动声明（代码权威 + 启动 upsert）、能力字典、属性规格 |
 
 ---
 
@@ -382,9 +394,11 @@ flowchart LR
 
 ## 6. 关键设计决策与取舍
 
+> 阅读须知：本表按编号累积，**记录的是当时取舍**。随后续轮次已反转口径的条目会在单元格内标注“YYYY-MM-DD 反转/已接上”；未标注的仍为现行口径。本轮（2026-11-18）已就地标注：#1（编排迁移）、#24（模板入口实装）、#47/#58（地址权威反转）。
+
 | # | 决策 | 理由 / 代价 |
 | --- | --- | --- |
-| 1 | 传输/协议层下沉 `connection`，编排层留 `workbench` | 依赖方向硬约束；代价是「连接服务」被拆两处，需按职责定位 |
+| 1 | 传输/协议层下沉 `connection`，编排层留 `workbench`（**2026-11-18：编排已迁至 `crates/connection_dialog`，workbench 只挂宿主桥**） | 依赖方向硬约束；代价是「连接服务」被拆两处，需按职责定位 |
 | 2 | `db_type` / `driver_id` 存**驱动 id** | 与引擎 `DriverRegistry` key 对齐；驱动目录可扩展（多实现同库） |
 | 3 | 对话框状态用 `Rc<ConnectionDialogState>` | 侧栏 / 管理器的回调需要克隆状态句柄调用方法；代价是 `EditorPanel` 字段非 `Entity`（不参与 gpui 观察，靠 `host_redraw` + `observe` 显式驱动） |
 | 4 | 打开 / 关闭显式通知宿主重绘 | 绕开「Root 的 notify 到不了子视图」；代价是每个新入口都要记得调用（已有 4 类测试兜底） |
@@ -396,7 +410,7 @@ flowchart LR
 | 10 | 测试/编译固定 `-j 2` | 并发链接重型 crate 会耗尽内存（DuckDB 已改动态链接）（rustc 崩溃 + 宿主卡顿，见 `.cargo/config.toml`） |
 | 11 | 暂存条目直显来源短码（`P/G/GP`）与脏标记（`●`） | 连续编辑时快速辨识作用域与未写回修改；不引入自绘 tooltip（gpui-kit 0.6 需 TooltipOverlay 集成，收益不值） |
 | 12 | 快捷键用 Action + `key_context("connection-dialog")` | 对话框层不在 workbench 元素子树内，需独立 context；焦点在输入框时靠 `Enter` action 冒泡兜底 |
-| 13 | 对话框拆为 `connection_dialog/{mod,state,staging,render,managers,helpers}.rs`（后续新增 `project_picker.rs`，共 7 个） | 单文件降至 176 行（入口）；子模块 `use super::*` 共享导入，公开路径不变；同步删除废弃的 `collect`/`hops_valid` 副本 |
+| 13 | 对话框拆为 `connection_dialog/{mod,state,staging,render,managers,helpers}.rs`（后续新增 `project_picker.rs`，共 7 个） | 单文件降至 176 行（入口）；子模块 `use super::*` 共享导入，公开路径不变；同步删除废弃的 `collect`/`hops_valid` 副本。**2026-11-18 现状**：已扩到 `{mod,state,staging,render,managers,project_picker,type_tree,draft_list}.rs` + `helpers/{mod,capability,fields,files,summary,tests}.rs`（`helpers` 由单文件变目录）+ 顶层 `host.rs` / `commands.rs` / `services/`（含 `rt.rs` 共用运行时）；文件落点以 `lib.rs` 的模块声明为准 |
 | 14 | 草稿存储双入口：生产需全局单例，测试 `set_db_path_override` | 未初始化全局系统的进程（测试 / 降级启动）拒绝写库，避免误写用户真实 `global.db` |
 | 15 | 类型在左侧选、驱动只显示实现短名 | 消除重复噪音（每个驱动项不再携带类型名）；代价是驱动短名依赖 `name` 括号约定，靠 `driver_short_name` 纯函数 + 单测兜底（无括号时原值不丢信息） |
 | 16 | 暂存条目类型徽标用类型 `icon`（emoji） | 与左侧类型树同一套视觉语言，零图标资产成本；无类型/旧草稿时回退状态点，Header 同步提示（“请先在左侧选择数据库类型”） |
@@ -407,7 +421,7 @@ flowchart LR
 | 21 | 侧栏两区（暂存 / 类型树）与 Tab 内容均**固定高度 + 内部滚动** | 条目 / 类型 / 内容再多也不拉长对话框（布局恒定优先）；代价是空间利用率略低 |
 | 22 | 项目栏放**备注行右侧固定位置**，`仅全局` 时置灰不可编辑 | 作用域与项目语义相邻（备注行空间充裕）；三态切换不引起布局移动 |
 | 23 | Header 定宽元素：名称 10.5rem / 驱动 11rem / 作用域分段短标签 | 切换类型时后续元素位置不移动；类型名过长用 `text_ellipsis`（固定布局优先于完整展示） |
-| 24 | 模板导入导出**能力先就绪、UI 入口暂缓** | 避免当前阶段界面变动；方法 `pub` + 测试覆盖，后期只需接两个按钮 |
+| 24 | 模板导入导出**能力先就绪、UI 入口暂缓** | 避免当前阶段界面变动；方法 `pub` + 测试覆盖，后期只需接两个按钮。**2026-11-18 已接上**：暂存列表标题行 `导出` / `导入`（锚点 `staging-export` / `staging-import`），本决策的“暂缓”已解除 |
 | 25 | Header 收敛为 **3 行 + 统一标签列（2.75rem）**，行序按用户建议布局 | 降低信息密度与视觉噪音：① 类型徽标（仅图标）· 名称（弹性）· 作用域分段；② 备注（弹性）· 项目（定宽 17rem）；③ 驱动（定宽 11rem）· URI（弹性）；类型徽标常驻行首，未辨识时显示 `?` |
 | 26 | 项目栏为**单下拉**（项目名 + 路径左右结构），**无编辑 / 列表模式切换**（路径输入仍是单一数据源） | 真机反馈：两态切换与 ✎/列表按钮徒增噪音；单下拉即可含尽“选项目”语义；选中项由 render 写回路径输入，保存与作用域预检统一读路径 |
 | 27 | UI 尺寸**常量化 + 规范文档**（间距五档 / 字体三档 / 图标三档 / 区域固定尺寸） | 之前只有颜色有硬约束，尺寸靠口头约定 → 反复微调；现由 `theme/ui-constraints.md` + `helpers.rs` 常量约束，新代码一律引用 |
@@ -441,7 +455,7 @@ flowchart LR
 | 55 | **分组 = 整幅面板 + 标题栏底部分隔线**；**只读值回到“数据框”**（白底 + `input` 边框）；表单行标签列 `4.25rem` + 间距 `0.375rem`（`hint_line` 同步缩进对齐） | 真机反馈第三轮：① “连接设置 / 认证信息等区域分辨不清”→ 大纲分组需要容量（面板浅底 `group_box` + 分隔线）；② “连接设置没有数据框”→ #52 把只读值改成纯文本过度收敛了（现在是**白底数据框放在浅底面板上**，两个需求同时满足）；③ “标签和输入框距离太远” → 标签列 92px → **68px**、间距 12px → **6px**（仍是定宽列，保证控件左边缘对齐） |
 | 56 | **未选类型 / 驱动：表单正常渲染但整体禁用**（`Input/Select/Checkbox/Button` 统一 `.disabled(true)`，SSL 组也以禁用形态出现） | 真机要求：“未选择数据库类型时输入框都要显示，只是置灰不可输入”；不这样做会出现“能打字但存不了”的无效输入 |
 | 57 | **文件选择分两个系统对话框**：`打开文件…` = `prompt_for_paths`（Windows 带 `FOS_FILEMUSTEXIST`，只能选已存在文件）；`新建文件…` = **`prompt_for_new_path`**（真正的保存对话框，可输入新文件名；不存在则 `File::create`，已存在则直接引用且**不清空**）；取消 / 失败 / 无响应均写入结果行 | 旧实现用打开对话框当“新建”用 → 用户输入新文件名被 Windows 拒掉，表现为“新建功能没实现”；且三种结局都被静默吞掉，看着像按钮没反应 |
-| 58 | **连接设置字段可编辑 + 字段 ⇄ URI 双向同步**（网络型）：主机 / 端口 / 数据库为 `Input`，与 Header URI 双向同步（任一侧改动同步另一侧）；字段→URI 用 `connection::url_params::rewrite_url_authority`（scheme 无关，保留凭据 / 查询串；端口空→驱动默认端口；数据库空→去路径；主机空→不重建）；同步状态存 `fields_synced_for: (驱动 id, URI)`，渲染层每帧只执行一个方向（避免循环） | 真机反馈“连接设置无法输入”：上一版把三字段做成**只读摘要**（“编辑在 Header URI”）与用户预期不符——工业级连接管理器（DataGrip / TablePlus）都允许直接改主机/端口/库，URI 与字段互为体现。新增 `rewrite_url_authority` 是因为既有 `rewrite_url_host_port` 只认 mysql/postgres 两个协议且强制重写端口 |
+| 58 | **连接设置字段可编辑 + 字段 ⇄ URI 双向同步**（网络型）：主机 / 端口 / 数据库为 `Input`，与 Header URI 双向同步（任一侧改动同步另一侧）；字段→URI 用 `connection::url_params::rewrite_url_authority`（scheme 无关，保留凭据 / 查询串；端口空→驱动默认端口；数据库空→去路径；主机空→不重建）；同步状态存 `fields_synced_for: (驱动 id, URI)`，渲染层每帧只执行一个方向（避免循环） | 真机反馈“连接设置无法输入”：上一版把三字段做成**只读摘要**（“编辑在 Header URI”）与用户预期不符——工业级连接管理器（DataGrip / TablePlus）都允许直接改主机/端口/库，URI 与字段互为体现。新增 `rewrite_url_authority` 是因为既有 `rewrite_url_host_port` 只认 mysql/postgres 两个协议且强制重写端口。**2026-11-18 反转**：改为三字段唯一权威、Header URI 只读派生（`Input` 恒 `disabled`），粘贴整串走「常规 → 连接设置」的「从剪贴板导入 URI」，保存直接读字段；决策 #58 的两向同步与“以 URI 为权威”作废 |
 | 59 | **结构尺寸统一登记到 `crates/workbench_shell/src/ui.rs`**（`DIALOG_*` 一组），对话框不再自带一套尺寸常量；间距改用工作台统一 `GAP_SM/MD/LG`（`GAP_SM` 由 0.375rem 对齐为全局的 0.25rem），圆角用 `theme.radius` | 用户侧新增全局 UI 规范（`rds-ui-spec` skill + `ui-design-spec.md` + `ui_contract` 契约测试）要求“结构尺寸先进 `ui.rs` 登记、局部间距用 Tailwind 尺度、视图不得写裸尺寸”——对话框不能继续做一个尺寸孤岛 |
 | 60 | **启动时注册内置驱动**：`engine::migration::initialize_global_system()` 首行调 `AutoDriverRegistrar::auto_register()`（幂等：`HashMap::insert`） | 🔴 真机「测试连接」报 `CONN_DRIVER_NOT_FOUND: Driver 'sqlite' not found in registry`——全仓搜下来 **只有测试里调过注册**，应用启动路径根本没注册过 `DriverRegistry`；这不只影响测试连接，**导航树连接、重连也都会失败**（同一个注册表） |
 | 61 | **文件型工厂改从 `to_url()` 取地址**：`SqliteDriverFactory` / `DuckDbDriverFactory` 先 `config.to_url()`（尊重 `url_override`：服务层 / 对话框传的就是它），再去 `sqlite://` 前缀与查询串；回退顺序 `url_override → database → file_path` | 网络型工厂一直用 `config.to_url()`，只有文件型工厂直接读 `config.database` → 服务层传了 `url_override` 也会报「Database path is required for SQLite」（修完 #60 后用户下一次点击就会撞上）；查询串（driver_properties 追加）不能拼进文件名 |
@@ -584,7 +598,7 @@ flowchart LR
 | 15 | 文档体系补全：用户指南（含 USIT 清单）+ 数据字典 / 降级矩阵 / 性能可观测安全 / 成熟度评估 | `connection-user-guide.md`、本文 §10–§13 |
 | 16 | **C4 模板导入导出**（剪贴板 JSON，无密码；导出仅未保存非空草稿；导入校验 kind/version） | `staging.rs::templates_{export,import}` + `render.rs` 标题行按钮 + `tests/connection_template.rs` |
 | 17 | **UI 缺陷修复**（真机反馈）：分段控件自绘 / 驱动选中校正 / 类型回推仅补空 / 备注宽度 / 来源提示 | `render.rs`、`state.rs`、`staging.rs` |
-| 18 | **布局再收敛**：暂存区 7.5rem 固定 + 滚动；类型树占满剩余 + 滚动；项目栏移至备注行（仅全局灰显）；类型徽标定宽省略；模板 UI 入口撤下 | `render.rs`（决策 #21–#24） |
+| 18 | **布局再收敛**：暂存区 7.5rem 固定 + 滚动；类型树占满剩余 + 滚动；项目栏移至备注行（仅全局灰显）；类型徽标定宽省略；模板 UI 入口撤下（**2026-11-18 已恢复**） | `render.rs`（决策 #21–#24） |
 | 19 | **Header 再设计**：3 行（类型徽标 + 名称 + 作用域 / 备注 + 项目 / 驱动 + URI），统一标签列 2.75rem；类型徽标定宽 6rem、未辨识时提示；作用域分段短标签 | `render.rs`、`helpers.rs`（`header_label`）（决策 #25） |
 | 20 | **项目栏单下拉 + 新增项目入口**：项目名（左）+ 路径（右、头部省略）左右结构，末项 `＋ 新增项目`；`handle_project_confirm` 为确认落点（可测）；项目会话变更每帧检测并自动跟随；宿主消费 `project_new_request` 开「新建项目」（有脏草稿先走未保存确认） | `project_picker.rs`（新增）、`state.rs`、`render.rs`、`panels/`、`view.rs`；测试 `tests/connection_project_picker.rs` 4 项（决策 #26 / #28 / #29） |
 | 21 | **项目侧连接编辑回读**：`DataSourceService::get_with_project`（P_/GP_ 路由到项目库）+ `map_project_connection_to_data_source`；`load_for_edit` 带项目根（`open` 取会话快照 / `apply_draft` 取条目路径），分组回显同源 | `services/data_source_service.rs`、`connection_dialog/{state,staging,render}.rs`；测试 `tests/data_source_lifecycle.rs`（新增 1 项 + GP 用例补断言） |
@@ -631,7 +645,7 @@ flowchart LR
 
 | # | 项 | 价值 | 前置 |
 | --- | --- | --- | --- |
-| A | C4 模板导入导出（无密码） | 团队间共享连接配置；与草稿快照结构天然同源 | 按用户决策暂缓（本轮不做） |
+| A | C4 模板导入导出（无密码） | 团队间共享连接配置；与草稿快照结构天然同源 | ~~按用户决策暂缓~~（**2026-11-18 已实装**：暂存列表标题行 `导出 / 导入`，剪贴板 JSON） |
 | B | 暂存条目拖拽排序 / 「测试全部」 | 批量配置的可用性 | gpui-kit 0.6 无开箱拖拽，可用上下移替代 |
 | C | 自绘 tooltip（暂存条目短码释义） | 减少认知成本 | 需接入 gpui-base `TooltipOverlay` |
 | D | 分组 / 标签管理与视图（新建分组、按标签检索） | 组织能力的消费侧 | 导航模块（database-nav） |
@@ -646,27 +660,31 @@ flowchart LR
 
 | 设计决策 | 代码 |
 | --- | --- |
-| 对话框（三页 Tab / Header / 侧栏 / 暂存列表 / 管理器） | `crates/connection_dialog/src/components/connection_dialog/{render,managers,helpers}.rs` |
-| 草稿快照与暂存方法 | `connection_dialog/staging.rs`（`ConnectionDraft` + `staging_*`） |
-| 快捷键 Action | `crates/workbench/src/commands.rs` + `crates/app/src/main.rs` |
+| 对话框（三页 Tab / Header / 侧栏 / 暂存列表 / 管理器） | `crates/connection_dialog/src/components/connection_dialog/{render,managers,type_tree,draft_list,project_picker}.rs` + `helpers/` |
+| 草稿快照与暂存方法 | `crates/connection_dialog/src/components/connection_dialog/staging.rs`（`ConnectionDraft` + `staging_*` + `templates_*`） |
+| 快捷键 Action | `crates/connection_dialog/src/commands.rs`（定义）+ `crates/workbench/src/commands.rs` / `crates/app/src/main.rs`（绑定） |
 | 入口与宿主重绘桥 | `crates/workbench/src/panels/`（`EditorPanel::{request_new_connection, request_edit_connection}`、`Shared::{host_redraw, notify_host}`） |
+| 对话框宿主桥（trait） | `crates/connection_dialog/src/host.rs::ConnectionDialogHost`（`dialog_redraw` / `current_project` / `request_new_project` / `request_open_project` / `show_plugin_manager` / `apply_saved_connections`） |
 | 对话框宿主渲染与通知级联 | `crates/workbench/src/view/render.rs`（宿主 `render`）+ `view/workspace.rs`（`cx.observe(editor)`） |
-| 连接 CRUD / 测试 / 作用域路由 | `crates/workbench/src/services/data_source_service.rs` |
-| 列表可见性与运行态 | `crates/workbench/src/services/workspace_loader.rs` |
-| 会话与隧道登记 | `crates/workbench/src/services/connection_service.rs` + `crates/connection/src/chain.rs` |
-| 驱动 / 类型目录与三类引用 | `crates/engine/src/persistence/{driver_store,auth_store,network_store,env_store}.rs` |
-| 组织元数据（标签 / 分组） | `crates/engine/src/persistence/connection_org_store.rs` |
-| 暂存草稿持久化 | `crates/engine/src/persistence/connection_draft_store.rs` + `crates/engine/migrations/global/020_add_connection_drafts.sql` |
-| Secret 加速 | `crates/workbench/src/services/secret_integration.rs` + `crates/connection/src/secret.rs` |
+| 连接 CRUD / 测试 / 作用域路由 | `crates/connection_dialog/src/services/data_source_service.rs` |
+| 列表可见性与运行态 | `crates/connection_dialog/src/services/workspace_loader.rs` |
+| 会话与隧道登记 | `crates/connection_dialog/src/services/connection_service.rs`（+ `network.rs` / `runtime.rs`）+ `crates/connection/src/chain.rs` |
+| 驱动 / 类型目录与三类引用 | `crates/store/src/persistence/{driver_store,auth_store,network_store,env_store}.rs` |
+| 驱动声明 / 能力字典 / 属性规格 | `crates/driver/src/{declaration,registry/descriptors,capability,property_spec}.rs` |
+| 组织元数据（标签 / 分组） | `crates/store/src/persistence/connection_org_store.rs` |
+| 暂存草稿持久化 | `crates/store/src/persistence/connection_draft_store.rs` + `crates/store/migrations/global/020_add_connection_drafts.sql` |
+| Secret 加速 | `crates/connection_dialog/src/services/secret_integration.rs` + `crates/connection/src/secret.rs` |
 | 暂存行为测试 | `crates/workbench/tests/connection_staging.rs`、`connection_drafts_persist.rs`、`connection_multi_save.rs` |
-| 类型 × 驱动与去噪 | `connection_dialog/{helpers,state}.rs`（`driver_short_name` / `find_driver_by_value` / `select_type`）、`tests/connection_type_driver.rs` |
-| 标签 / 分组入口 | `connection_dialog/{render,staging,state}.rs`（组织卡片 + 草稿字段）、`services/data_source_service.rs`（`list_groups` / `groups_of` / `set_connection_groups`）、`engine/connection_org_store.rs`（`set_connection_groups`） |
+| 类型 × 驱动与去噪 | `connection_dialog/{helpers,state,type_tree}.rs`（`driver_short_name` / `find_driver_by_value` / `select_type` / `type_has_driver`）、`tests/connection_type_driver.rs` |
+| 标签 / 分组入口 | `connection_dialog/{general_tab_ui,staging,state}.rs`（组织卡片 + 草稿字段）、`services/data_source_service.rs`（`list_groups` / `groups_of` / `set_connection_groups`）、`crates/store/.../connection_org_store.rs`（`set_connection_groups`） |
 | Layout 稳定与性能标记 | `render.rs`（两列行高 `DIALOG_BODY_HEIGHT` + 侧栏 / Tab 内容区三向夹住；`meta_refreshed` 字段）；尺寸常量登记在 `crates/workbench_shell/src/ui.rs` |
 | 编辑回读的驱动定位（目录时序） | `connection_dialog/state.rs`（`pending_driver_value` + `replay_pending_driver_locator`）、`render.rs`（`refresh_meta` 之后重放） |
 | 渲染状态矩阵 / 编辑回填测试 | `crates/workbench/tests/connection_render_matrix.rs`、`connection_edit_backfill.rs` |
 | 项目栏下拉与新增项目入口 | `connection_dialog/project_picker.rs`（`ProjectItem`）、`state.rs::handle_project_confirm`、`render.rs::subscribe_project_confirm`、`panels/editor.rs::ensure_dialog_subscription`、`view/render.rs`（消费 `project_new_request`） |
 | 项目侧连接解析（编辑回读 / 导航连接） | `services/data_source_service.rs::get_with_project`、`connection_dialog/state.rs::load_for_edit`、`services/nav_runtime.rs::load_entry(_with)` |
 | 用户使用指南 | `docs/architecture/connection/connection-user-guide.md` |
+
+> **路径口径**：本表为 2026-11-18 复核后的现行位置。历史决策 / 记录段落里的 `crates/engine/src/persistence/*`、`engine::driver::*`、`crates/workbench/src/services/{data_source,connection}_service.rs` 均已迁走（映射见 `README.md` §3「路径口径」），不再逐条改写。
 
 ---
 
@@ -768,7 +786,7 @@ flowchart LR
 | 草稿 | `connection_drafts` **无密码列**；恢复后密码框为空 |
 | DuckDB Secret | `PERSISTENT` + `SET secret_directory` 指向应用目录（不写用户主目录） |
 | URL 展示 | 列表 / 日志脱敏（`mask_password_in_url`） |
-| 模板导入导出（C4） | **能力已实现**（`ConnectionTemplate` + `templates_{export,import}`，剪贴板 JSON，不含凭据；2 项测试）；**UI 入口按决策暂缓**，入口接上后无需改存储 |
+| 模板导入导出（C4） | **能力与入口均已实现**（`ConnectionTemplate` + `templates_{export,import}`，剪贴板 JSON，不含凭据；`connection_template.rs` 2 项测试）；UI 在暂存列表标题行（`staging-export` / `staging-import`） |
 
 ---
 
@@ -818,6 +836,7 @@ flowchart LR
 > **UI 组件化轮（2026-09-20）**：两批把对话框里剩下的自绘可点元素换成语义组件——第一批（决策 #104 / #107）侧栏两处列表 → `list::{List, ListItem}` + 委托（并顺手修掉“删草稿的点击冒泡到行确认”）、`✕` / `+ 添加` → `Button::ghost()`、密码框 → `masked(true)`；第二批（决策 #108）分组标题行 → `Button::ghost()` + `Collapsible`（`motion_id` 的 spring 揭示动效，收益：悬停 / 键盘 / a11y / 收起时内容保持挂载）。三处兼修的真缺陷：右列越出行高 168px（#101）、测试/保存阻塞 UI 线程（#102）、矮窗口 footer 出屏（#105）。**测试基建同轮升级（决策 #109）**：窗口断言改用 kit 观测（`.id()` + `.test_support()` → `window.find(...)` 的 `visible()` / `bounds()`），`debug_selector` 在本模块只留两处（`conn-tab-body` 被 `Scrollable` 换掉 id、`dialog-layer` 是上游锚点）。剩余自绘可点元素仅在 `panels/`（另有会话负责）。
 > **#19/#21/#10 收敛轮（2026-10-03）**：#19 三个观察项全部收敛（索引表落盘 + `busy_timeout` + legacy copy，engine 526 lib 全绿）；#21 关闭清理（`ProjectUiHost::on_closed` + workbench 注入，project 43 全绿）；#10 原型 HTML 同步（作用域默认项目 + 问号徽标、保存=暂存 / 保存并关闭=批量写入、DuckDB Secret 门控、known_hosts TOFU、决策同步戳）。**§14 剩余**：#22 / #23（M4 侧）、#35（settings crate）、#36（详情入口噪音，待 USIT）、#9 残留（`WorkbenchView` 可测试化）、#11（页面美化，待用户指定区域）、#16（文档瘦身，方案已出待确认）。
 > **MVP 设计审查轮（2026-10-03，不排期）**：对「新增数据源类型（http / nosql / mssql）动态渲染五 Tab」做设计核实——**结论：五 Tab 渲染零类型写死，全部由 `DriverDescriptor` 声明派生**（常规 = fields[] + SSL 卡；网络 = `is_file` 门控；能力 = capabilities 只读；驱动属性 = properties 透传；高级 = 环境 + 策略 + 加速），新增类型 UI 零改动；**真实成本在四道闸**（驱动声明 ✅ 就绪 / 驱动注册 ⚠️ WASM 插件发现器空实现 → 仅 6 内置工厂 / 连接器实现 ⚠️ 每类型一套 / 认证字典 ⚠️ `AUTH_TYPES` 6 类无 bearer / api_key）。**观察项登记 #41（不排期）**。
+> **注（2026-11-18，本模块打磨第 3 刀）**：上一段的「五 Tab」为当时版面；现行为三页（常规 / 网络 / 高级；文件型两页），能力与驱动属性并入高级页、驱动属性置页首。派生机制结论不变——三页内容同样全部来自 `DriverDescriptor` 声明。
 
 **已关闭（驱动类型审计轮，2026-09-19：SSL 卡片生效 · Official 驱动连接串 · Secret 族归一）**
 
@@ -890,7 +909,7 @@ flowchart LR
 
 | # | 关闭方式 | 验证 |
 | --- | --- | --- |
-| 1（🔴） | **无驱动类型不可选**：类型树对无可用驱动的类型置灰并右标「暂无驱动」，`select_type` 拒绝切换并在结果行给出原因（内置 6 个实现 / 4 种数据库，其余类型待驱动插件） | `connection_type_driver.rs::type_without_enabled_driver_is_refused` + `helpers.rs::type_has_driver_requires_enabled_driver` |
+| 1（🔴） | **无驱动类型不可选**：类型树对无可用驱动的类型置灰并右标「暂无驱动」，`select_type` 拒绝切换并在结果行给出原因（内置 6 个实现 / 4 种数据库，其余类型待驱动插件）**——注（2026-11-18）：行为升级为「确认即打开插件管理」（行可点，只是不切类型）；宿主未挂 `show_plugin_manager` 时仍回退结果行说明** | `connection_type_driver.rs::type_without_enabled_driver_is_refused` + `helpers.rs::type_has_driver_requires_enabled_driver`；入口侧另有 `connection_dialog_ui` 两条窗口用例锁「行可点」与「点击打开插件管理」 |
 | 2（🟡） | **类型目录按 `enabled` 过滤**：`driver_store::get_data_source_types` 加 `WHERE enabled = 1`（与其文档语义一致） | 全工作区测试（engine 228 / workbench 81）无回归 |
 | 3（🟡） | **项目下拉补「打开现有目录…」**：动作项顺序 = 「打开现有目录…」→ 末项「＋ 新增项目」（保持末项约定）；宿主置位 `project_open_request` → `project::ui::open_folder_dialog` | `connection_project_picker.rs`（5 项，含 `confirm_open_folder_requests_folder_dialog`） |
 | 5（🟡） | **GP_ 快照同步**：新增 `DataSourceService::sync_snapshot_from_global(snapshot_id, project_path)`（配置 + 凭据密文一并复制；保留 ID / 创建时间 / 分组）+ 对话框 footer「从全局定义同步」（仅编辑 GP_ 时显示） | `data_source_lifecycle.rs::snapshot_sync_pulls_latest_global_definition`（含错误路径：非快照 ID / 缺项目路径 / 全局定义已删） |
@@ -947,7 +966,7 @@ flowchart LR
 
 | # | 级别 | 问题 | 影响 | 建议 |
 | --- | --- | --- | --- | --- |
-| 1 | 🔴 | ~~驱动目录只内置 4 种库的实现~~（**已关闭**：无驱动类型置灰不可选 + 结果行说明；驱动插件机制仍待平台排期。**注**：实际种子为 6 个实现 / 4 种数据库——MySQL·PostgreSQL 各有 sqlx 与 Official 两个实现） | 选中不可用类型会被拒绝；用户能在类型树直接看到「暂无驱动」 | 中期：接驱动安装（plugin）机制 |
+| 1 | 🔴 | ~~驱动目录只内置 4 种库的实现~~（**已关闭**：无驱动类型置灰不可选 + 结果行说明；驱动插件机制仍待平台排期。**注**：实际种子为 6 个实现 / 4 种数据库——MySQL·PostgreSQL 各有 sqlx 与 Official 两个实现。**2026-11-18 更新**：行已可确认并就近打开插件管理，另加侧栏常驻「N 个类型暂无驱动 · 安装驱动」入口） | 选中不可用类型会被拒绝（不会切换类型）；用户能在类型树直接看到「暂无驱动」，并可一键去装驱动 | 中期：驱动插件机制本身仍待平台排期 |
 | 2 | 🟡 | ~~类型树不按 `enabled` 过滤~~（**已关闭**） | — | — |
 | 3 | 🟡 | ~~项目下拉无「打开现有目录」~~（**已关闭**） | — | — |
 | 4 | 🟡→✅ | ~~「＋ 新增项目」/「打开现有目录…」在编辑区**有脏草稿**时走「先关闭当前项目 → 回选择器」~~（**已关闭**：`PendingAction::{CreateProject,OpenFolder}`，确认后直接打开目标对话框，见决策 #90） | — | — |
@@ -987,7 +1006,7 @@ flowchart LR
 | 38 | 🟢 | **DuckDB Secret 注册门控（已实现 2026-10-03，决策 #114）**：门控 = **加速开 + 有对应 DuckDB 扩展**（`engine::duckdb::accel::AccelKind::has_federable_extension`：mysql / postgres / sqlite / oracle 有 scanner 扩展；**duckdb 文件源无扩展 → 默认不注册**），项目 / 全局同规则；注册目标按作用域 = **全局或项目分析库**（`analysis_db_for_scope`：G_ → 全局分析库，P_ / GP_ 项目侧 → `{项目}/.RSmeta/analytics.duckdb`，与指纹域隔离同源）；项目侧保存 / 更新 / 删除补齐注册与移除；**断开（`close_connection`）回收** | ① 未开加速的连接也会在分析库留下 Secret 残渣（凭据面扩大）；② P_/GP_ 项目侧完全不注册 / 不清理（行为不一致）；③ 反复连不同库累积 Secret 记录；**④ SecretManager 打开分析库文件撞 Windows 文件锁**（`File is already open`，与 Global/ProjectDatabaseManager 持有句柄冲突——项目侧注册全挂、全局生产同样会挂） | **已实现**：`ensure_secret_registered_gated`（统一入口）+ `analysis_db_for_scope` + `has_federable_extension`（唯一来源 engine）；**SecretManager::open_with_dir 改用内存连接 + 显式 `secret_directory`**（DuckDB PERSISTENT Secret 实际落盘在 secret 目录、与主库文件无关，内存载体不碰文件句柄——全局 / 项目均不再撞锁）；测试：engine `has_federable_extension` 1 + secret_integration 2（扩展门控 / 作用域路由）+ 集成 2（duckdb 文件源不注册 / 项目侧注册到项目分析库并删除移除）；engine 521 / workbench lib 131 / data_source_lifecycle 30 / connection 96+6 全绿 |
 | 39 | 🟢 | **新建默认作用域 / 地址 / 问号徽标（决策 #110，2026-10-02 用户规则 1，已实现）**：新建草稿默认「仅项目」+ 地址取当前会话项目根；作用域三态旁加 `?` 徽标（`Tooltip` 说明落库语义） | 现状：新建时作用域渲染回退 `SCOPE_LABELS[0]`（仅全局），与"项目内数据源"心智不符；三态无解释入口 | **已实现（2026-10-02 提交）**：渲染回退改用 `helpers::default_new_scope()`（= `SCOPE_LABELS[1]`「仅项目」，单一来源）；`state.rs::select_type` 文件型（sqlite/duckdb）+ 地址空 + 项目根非空 → 地址预填项目根（网络型不预填、已填值不覆盖）；`render.rs` Header 作用域分段旁加 `?` 徽标（`gpui_kit::assets::IconName::BadgeQuestionMark` + `Button::ghost().tooltip`）。测试：`helpers` 单测 `default_new_scope_is_project_only`；集成 `connection_rule12::select_type_prefills_project_root_for_file_db_only`（3 断言：预填 / 不覆盖 / 网络型不预填 / 无根不预填） |
 | 40 | 🟢 | **保存 = 追加暂存条目（决策 #111，2026-10-02 用户规则 2，已实现）**：新建模式下「保存」（Ctrl+Enter）把当前表单**追加为新暂存条目**并自动新建空草稿；编辑模式行为不变 | 现状：保存只写回当前草稿（连续录入多条需先点 `+ 添加`） | **已实现（2026-10-02 提交）**：`render.rs::do_stage` 新建分支 = `capture_draft`（固化表单）→ 空草稿拦截（`is_empty_draft` 全空不追加，提示"内容为空，未暂存"）→ `staging_add`（追加空草稿并选中，复用既有方法）→ 提示"已暂存「{label}」并新建空草稿"；编辑模式行为不变。测试：`connection_rule12::save_flow_captures_then_appends_blank_draft`（快照写回 / 追加 / 光标指向新草稿 / 新草稿空 / 表单清空） |
-| 41 | 🟢 | **MVP 设计审查结论（2026-10-03，不排期，决策 #117）**：新增类型动态渲染机制成立——五 Tab 内容全部由 `DriverDescriptor` 声明派生（`registry/descriptors.rs` builder：category / target_database / default_port / url_template / require_file / fields / capabilities / supported_auth_types / driver_properties），UI 层零类型写死；**新类型真实成本在四道闸**：① 驱动声明 ✅（builder 完备，`mysql_driver()` 为模板）；② 驱动注册 ⚠️（`BuiltinDriverDiscovery::builtin_factories()` = 6 工厂，`WasmDriverDiscovery::load_drivers` 空实现 → mssql / mongo / redis「暂无驱动」置灰）；③ 连接器实现 ⚠️（`DriverFactory::create` + connection crate URL / probe / SSL / SSH 适配，每类型一套）；④ 认证字典 ⚠️（`AUTH_TYPES` 6 类无 bearer / api_key → HTTP 类需扩字典）。**张力点**：认证方法双源字典未对齐（驱动侧 `supported_auth_types` vs 档案侧 `AUTH_TYPES`，ssl 只在驱动侧）；能力 tab 12 键标签表是第二份字典（capability.rs 自认）；加速卡「所有类型都摆」与 #38 注册门控并存（sqlite 有 scanner 可注册、duckdb 文件源无扩展不注册，UI 文案已区分「本地加速 / 联邦源」）；环境 = 全局库 + 项目库双域同构。**缺口（观察项）**：「引用方列表」UI（#33 残留）；认证字典未覆盖 http / nosql；加速 + 认证档案引用同开的集成验证未做；网络档案类型对 http 语义需重新定义 | 机制成立、MVP 边界 = 4 类型全链路；扩展待驱动插件机制（M9） | **不排期**（观察项，详见 spec §8.1） |
+| 41 | 🟢 | **MVP 设计审查结论（2026-10-03，不排期，决策 #117）**：新增类型动态渲染机制成立——~~五 Tab~~ **三页 Tab**（2026-11-18 收敛）内容全部由 `DriverDescriptor` 声明派生（`registry/descriptors.rs` builder：category / target_database / default_port / url_template / require_file / fields / capabilities / supported_auth_types / driver_properties），UI 层零类型写死；**新类型真实成本在四道闸**：① 驱动声明 ✅（builder 完备，`mysql_driver()` 为模板）；② 驱动注册 ⚠️（`BuiltinDriverDiscovery::builtin_factories()` = 6 工厂，`WasmDriverDiscovery::load_drivers` 空实现 → mssql / mongo / redis「暂无驱动」置灰）；③ 连接器实现 ⚠️（`DriverFactory::create` + connection crate URL / probe / SSL / SSH 适配，每类型一套）；④ 认证字典 ⚠️（`AUTH_TYPES` 6 类无 bearer / api_key → HTTP 类需扩字典）。**张力点**：认证方法双源字典未对齐（驱动侧 `supported_auth_types` vs 档案侧 `AUTH_TYPES`，ssl 只在驱动侧）；能力 tab ~~12 键标签表是第二份字典~~（**2026-11-18 更正：硬编码标签表已于 2026-09-19 删除，改由 `engine::driver::capability` 唯一字典驱动，见决策 #100；本条不再成立**）；加速卡「所有类型都摆」与 #38 注册门控并存（sqlite 有 scanner 可注册、duckdb 文件源无扩展不注册，UI 文案已区分「本地加速 / 联邦源」）；环境 = 全局库 + 项目库双域同构。**缺口（观察项）**：「引用方列表」UI（#33 残留）；认证字典未覆盖 http / nosql；加速 + 认证档案引用同开的集成验证未做；网络档案类型对 http 语义需重新定义 | 机制成立、MVP 边界 = 4 类型全链路；扩展待驱动插件机制（M9） | **不排期**（观察项，详见 spec §8.1） |
 
 ---
 
@@ -1030,8 +1049,8 @@ flowchart LR
 | 地址标签与输入占位 | 标签固定（文件型 = 地址 / 网络型 = URI，按用户要求不被 schema 覆盖）；网络型占位取 `drivers.url_template` + `default_port`（文件型走类型文案字典）；文件型地址行**占位**优先取 `config_schema` 的 `type=file` 字段 `placeholder` | ✅ |
 | 结果行提示（保存 / 测试 / 同步） | 服务层真实返回（`DataSourceService::{save,update,test}` 等）；UI 只做**级别归类与展示**（`ResultLine`），短消息原样一行，长消息 / 多行折叠为「详情」，**正文与复制内容都是服务层原文**（不截断、不改写、不补全） | ✅（#28：此前只有成败布尔 + 单行文本） |
 | 测试连接结果（版本 / 延迟 / 范围说明） | 真实探测（`DataSourceService::test`）：认证档案凭据**从库读取并解密**后注入、网络档案**真实建隧道**、驱动属性 / 高级选项来自连接字段与库；范围说明（「已应用认证档案凭据 / 已建立网络档案隧道 / 档案缺失」）由服务层返回，UI 只拼接展示 | ✅（A1：此前档案被静默忽略） |
-| 模板导入导出（能力就绪） | 草稿快照（库 + 会话状态），不含密码 | ✅（UI 入口待接） |
-| 驱动安装 `/install` | 占位错误（“待后续版本”） | ⚠️ 诚实地报不可用，**不造假数据** |
+| 模板导入导出（已实装） | 草稿快照（库 + 会话状态），不含密码 | ✅（入口在暂存列表标题行） |
+| 驱动安装 `/install` | 占位错误（“待后续版本”；`driver_service::install_driver` 仍返回该提示） | ⚠️ 诚实地报不可用，**不造假数据**；对话框内已能一键跳到插件管理（安装本体待平台） |
 
 ### 15.4 脏数据防护（写入侧守卫）
 

@@ -45,7 +45,7 @@
 
 | 项     | 内容                                                                                                                                                                          |
 | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 桌面框架  | gpui 2.x（自定义 Window/Dialog 宿主）；组件库 gpui-kit 0.7.1（TabBar/Switch/Input/Button/List）                                                                                            |
+| 桌面框架  | gpui 2.x（自定义 Window/Dialog 宿主）；组件库 **gpui-kit 0.9.0**（`gpui-fast` 渲染内核；TabBar/Switch/Input/Button/List/Collapsible） |
 | 服务层   | `DataSourceService`（workbench）+ `connection` crate（传输 / 协议链 / URL）+ `engine` crate（持久化 / 驱动 / 缓存）                                                                           |
 | 数据库引擎 | SQLite（`rusqlite`，全局 / 项目元数据）、DuckDB 1.5.6（分析引擎 + 联邦 Secret，`DUCKDB_LIB_DIR=third_party/duckdb/1.5.6`）、mysql/postgres 客户端库                                                  |
 | 凭据加密  | AES-256-GCM，`AES:` 前缀幂等（读路径解密 / 列表脱敏 / 存量迁移）                                                                                                                                |
@@ -55,7 +55,7 @@
 
 ## 3. 代码地图
 
-### 3.1 `crates/connection_dialog/src/components/connection_dialog/`（对话框主体，8 文件）
+### 3.1 `crates/connection_dialog/src/components/connection_dialog/`（对话框主体：8 个 rs 文件 + `helpers/` 目录）
 
 
 
@@ -64,44 +64,47 @@
 | `mod.rs`            | 对话框入口：`ConnectionDialog` 组件、`open_connection_dialog` 宿主 API、`saved_result`/`conn_display_name`（`#[allow(dead_code)]` 保留给 helpers 单测）                                                                                            |
 | `state.rs`          | `ConnectionDialogState`：全部表单字段（gpui `Rc<Entity>` 模型）、三页 Tab 状态、`collect()`（表单→`DataSourceSaveInput`）、`draft_to_save_input()`（草稿→`DataSourceSaveInput`）、`cloned_state`/`ClonedDialogState`（批量提交快照）、`#[cfg(test)]` 3 项单测           |
 | `staging.rs`        | `ConnectionDraft` 草稿模型、`capture_draft`/`apply_draft`（表单↔草稿）、`staging_persist`/`staging_restore`/`staging_flush`（持久化）、`staging_clear`/`remove_drafts_at`（保存并退出的清空 / 部分失败）、`draft_dirty`（脏标记）、`templates_export/import`（模板，UI 暂缓） |
-| `render.rs`         | 全部渲染 + 交互：Header / 三页 Tab / 暂存列表 / 类型树 /footer 按钮；`do_stage`（保存 = 追加暂存条目 + 自动新建空草稿，规则 2 已实现 2026-10-02）、`do_batch_commit`（保存并退出 = 批量提交）、`do_test`（测试连接）、`set_result`/`set_result_ok`（结果行分级）、`BatchOutcome`（\~2000-2272 行）                                          |
-| `helpers.rs`        | `dialog_row_height`、`save_blocker`（缺项拦截）、`section_header`（w\_full 左对齐）、`strip_file_db_noise`、`create_new_db_file`（文件型按驱动分派初始化）                                                                                                  |
+| `render.rs`         | 渲染编排：`window.open_dialog` 闭包只留「同步状态 → 取快照 → 组装两列」；各块为独立函数（`result_row_ui` / `side_panel_ui`(`SidePanel`) / `capability_panel_ui` / `driver_props_panel_ui` / `footer_ui`(`Footer`) / `network_tab_ui` / `advanced_tab_ui`(`AdvancedTab`) / `general_tab_ui`(`GeneralTab`)，后三者按参数结构体收依赖）；动作闭包 `do_stage`（保存 = 追加暂存条目 + 自动新建空草稿，规则 2 已实现 2026-10-02）、`do_batch_commit`（保存并退出 = 批量提交）、`do_test`（测试连接）、`set_result`/`set_result_ok`（结果行分级）、`BatchOutcome`；Header 组装仍在闭包内（待抽） |
+| `helpers/`（目录） | `mod`（`dialog_row_height` / `save_blocker` / `section_header` / `dialog_tab_defs` / `scope_seg_labels` 等）、`capability`（能力键 → 标签与验收态，消费 `engine::driver::capability` 字典）、`fields`（`DriverDerived` 驱动派生字段 / 认证方法）、`files`（`strip_file_db_noise` / `create_new_db_file`）、`summary`、`tests`（内嵌单测） |
 | `draft_list.rs`     | 暂存列表 UI：行渲染、脏标记 `●`、**同步指纹**（行数 + 光标 + 每条 saved\_id / 名称 + 光标位实时表单值，解决 "填名称列表不更新"）                                                                                                                                              |
 | `type_tree.rs`      | 左侧类型目录 UI + 同步指纹（目录 / 过滤词 / 选中项）                                                                                                                                                                                                |
 | `project_picker.rs` | 项目下拉（仅项目 / 全局 + 项目作用域）                                                                                                                                                                                                          |
 
-### 3.2 `crates/connection/`（传输层 crate，11 模块）
+### 3.2 `crates/connection/`（传输层 crate，10 个模块）
 
 
 
 | 模块               | 职责                                                                  |
 | ---------------- | ------------------------------------------------------------------- |
 | `chain.rs`       | 协议链（SSH 隧道 → 直连）执行与生命周期，隧道建完即用即关                                    |
-| `connector.rs`   | `establish_http_proxy`（状态行解析判定 200，不做子串 contains）、`wrap_tls_stream` |
+| `connector/`（目录） | `mod.rs`：`Connector` trait / `Connection` / `DirectConnector` / `TunnelGuard`；`ssh.rs`：`establish_ssh_tunnel`（russh 本地端口转发）+ `SshTunnelConnector`（**废弃占位**，`connect(Ssh)` 返回 `NotSupported`，防静默直连）+ Agent 接入；`proxy.rs`：`establish_http_proxy`（状态行解析判定 200，不做子串 contains）/ `establish_socks_proxy`；`tls.rs`：`SslConnector` / `wrap_tls_stream` |
+| `factory.rs`     | 按配置选连接器（内置注册 Direct / Ssl / SshTunnel / HttpProxy / Socks） |
 | `url.rs`         | URL 解析族（模板 / 占位 / 规范化）                                              |
 | `url_params.rs`  | URL 参数注入 / 改写（驱动属性、连接参数）                                            |
 | `model.rs`       | 连接结果模型（`{success, message, latency_ms, version}`）                   |
 | `config.rs`      | 连接配置（probe / 真实共用 `build_probe_config`）                             |
-| `factory.rs`     | 按驱动构造连接对象                                                           |
 | `stream.rs`      | 底层流（`ConnectionStream::Tls` 等；Tls 变体无单测覆盖，靠 workbench 真实拨号）         |
 | `known_hosts.rs` | SSH known\_hosts：查询侧大小写归一化（`normalize_host` 写读一致）                   |
 | `secret.rs`      | 凭据加解密（AES-256-GCM）                                                  |
 | `lib.rs`         | crate 导出与公共 API                                                     |
 
-### 3.3 `crates/engine/`（持久化 / 驱动 / 缓存）
+### 3.3 `crates/driver/`（声明）+ `crates/store/`（持久化）+ `crates/engine/`（缓存 / 文件库）
 
-
+> **2026-11-18 路径口径**：驱动声明与能力字典已独立成 `rds-driver`（`crates/driver`）；持久化层整体搬到 `rds-store`（`crates/store`），迁移脚本也在 `crates/store/migrations/`；`crates/engine` 保留缓存、DuckDB 文件库、分析 / SQL / 服务等执行侧能力。下文及历史记录里出现的 `engine::driver::*` / `engine::persistence::*` 均按此映射阅读。
 
 | 文件                                      | 职责                                                                                                                           |
 | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `persistence/id_prefix.rs`              | ID 前缀生成与判定（§4.2）                                                                                                             |
-| `persistence/connection_draft_store.rs` | `connection_drafts` 表读写（`list`/`replace_all`，无密码列）                                                                           |
-| `persistence/metadata_cache_pool.rs`    | 元数据缓存池（mmap 读路径修复：`query_row` 不 panic）                                                                                       |
-| `cache/metadata_cache.rs`               | `MetadataCacheKey`（conn\_id 为键：Catalogs/Schemas/Tables/Columns/Views/Procedures/Functions/Sequences/Triggers）+ LRU           |
-| `driver/declaration.rs`                 | **驱动声明落库：代码是权威，**`drivers`**&#x20;表是读模型**；启动幂等 upsert（`upsert_all`）；`enabled` 归用户、`download_*` 归外部驱动                         |
-| `driver/registry/descriptors.rs`        | `DriverDescriptor`：6 个内置驱动声明 + `capability_keys`/`fields`/`extra_options`                                                    |
-| `duckdb/mod.rs` + `file_probe.rs`       | DuckDB 文件初始化（**按驱动分派：**`initialize_duckdb_file`**&#x20;空文件→真库初始化**，修复 "新建报 not a valid DuckDB database file"）、结构指纹（定义 + 列结构） |
-| `migrations/global/`                    | 020 `connection_drafts`、021 草稿加 `type_id`+`driver_id`、022 草稿加 tags/groups、023 草稿加 auth\_method                               |
+| `driver/src/declaration.rs`             | **驱动声明落库：代码是权威，**`drivers`**&#x20;表是读模型**；启动幂等 upsert（`upsert_all`）；`enabled` 归用户、`download_*` 归外部驱动                         |
+| `driver/src/registry/descriptors.rs`    | `DriverDescriptor`：6 个内置驱动声明 + `capability_keys`/`fields`/`extra_options`                                                    |
+| `driver/src/capability.rs`              | **能力键唯一字典**（键 → 中文标签 + 可选运行时位 + `Stage` 验收状态；对话框内不再有第二份标签表）                                                               |
+| `driver/src/property_spec.rs`           | 驱动属性规格（每驱动认哪些键、未知键的命运），属性页「去向」标注的数据源                                                                                     |
+| `store/src/persistence/id_prefix.rs`              | ID 前缀生成与判定（§4.2）                                                                                                             |
+| `store/src/persistence/connection_draft_store.rs` | `connection_drafts` 表读写（`list`/`replace_all`，无密码列）                                                                           |
+| `store/src/persistence/{auth,network,env,connection_org,driver}_store.rs` | 认证档案 / 网络档案 / 环境策略 / 组织（分组·标签）/ 驱动目录的库读写                                                                 |
+| `store/src/persistence/metadata_cache_pool.rs`    | 元数据缓存池（mmap 读路径修复：`query_row` 不 panic）                                                                                       |
+| `engine/src/cache/metadata_cache.rs`               | `MetadataCacheKey`（conn\_id 为键：Catalogs/Schemas/Tables/Columns/Views/Procedures/Functions/Sequences/Triggers）+ LRU           |
+| `engine/src/duckdb/mod.rs` + `file_probe.rs`       | DuckDB 文件初始化（**按驱动分派：**`initialize_duckdb_file`**&#x20;空文件→真库初始化**，修复 "新建报 not a valid DuckDB database file"）、结构指纹（定义 + 列结构） |
+| `store/migrations/global/`                    | 020 `connection_drafts`、021 草稿加 `type_id`+`driver_id`、022 草稿加 tags/groups、023 草稿加 auth\_method                               |
 
 ## 4. 核心概念模型
 
@@ -180,7 +183,7 @@
 
 ## 5. 数据模型
 
-### 5.1 `ConnectionDraft`（草稿快照，`staging.rs:78`）
+### 5.1 `ConnectionDraft`（草稿快照，`staging.rs:79`）
 
 
 
@@ -217,7 +220,7 @@ pub struct ConnectionDraft {
 
 * `draft_to_row`/`row_to_draft`：UI 条目 ↔ 持久化行（**不写密码**；`hops_json` 列保留但固定写空数组 —— 内联协议链已撤下 #25；`pass` 回读恒为空）。
 
-### 5.2 保存输入口径（`draft_to_save_input`，`state.rs:1188`）
+### 5.2 保存输入口径（`draft_to_save_input`，`state.rs:1423`）
 
 与 `collect()`（表单→输入）同一校验与组装规则，但**字段全来自草稿快照**：
 
@@ -264,7 +267,7 @@ pub struct ConnectionDraft {
 | 「保存并退出」（footer，原名「保存并关闭」）                           | `do_batch_commit` | 批量提交 + 清空 + 关闭     |
 | 「测试连接」（Ctrl+T）                                      | `do_test`         | 独立会话真实预演（不落库、不注册池） |
 
-### 6.2 `do_stage`（保存 = 暂存，`render.rs:2010`）
+### 6.2 `do_stage`（保存 = 暂存，`render.rs:1100`；闭包内行号随拆分漂移，按符号名检索为准）
 
 
 
@@ -276,7 +279,7 @@ pub struct ConnectionDraft {
 
 4. `notify_host` 刷新宿主层。
 
-### 6.3 `do_batch_commit`（保存并退出，`render.rs:2051`）
+### 6.3 `do_batch_commit`（保存并退出，`render.rs:1164`；同上，按符号名检索）
 
 
 
@@ -375,14 +378,14 @@ pub struct ConnectionDraft {
 
 * `capabilities` = 显式声明 + 网络布尔位派生；`config_schema` = 界面实际读的键（key/label/type/required/default/placeholder/options）。
 
-* 类型目录按 `enabled` 过滤；无可用驱动的类型置灰「暂无驱动」。
+* 类型目录按 `enabled` 过滤；无可用驱动的类型置灰「暂无驱动」，且**行可确认**——确认不切换类型，改开插件管理（宿主未挂 `show_plugin_manager` 时退为结果行说明原因，见 2026-11-18 打磨 ⑥⑩）。
 
 * 文件型驱动：地址输入在「常规 → 连接设置」卡片（`打开文件… / 新建文件…`），Header 只显示路径；网络型地址在 Header 输入框（占位取 `url_template`）。
 
 ### 8.1 新增类型动态渲染机制（MVP 设计审查，2026-10-03，不排期）
 
 * **结论**：Tab 页内容**全部由 `DriverDescriptor` 声明派生**（2026-11-18 起收敛为三页）（`registry/descriptors.rs` builder），UI 层零类型写死——新增类型注册驱动后 UI 无需改动。
-* **Tab 派生映射**（`render.rs` 实证）：常规 = `fields[]` 表单 + SSL 卡（`supported_auth_types` 含 `ssl` 才显示）、文件型整卡变形（只剩「连接设置 + 组织」）；网络 = `is_file` 门控（文件型隐藏，网络型显示档案引用 + 拓扑预览）；能力 = `capabilities` 只读（12 键标签表）；驱动属性 = `driver_properties` key-value 透传；高级 = 环境（策略套）+ 单连接覆盖 + DuckDB 加速（网络库 = 本地加速 + 跨源、文件库 = 仅联邦源，render.rs:960 注释）。
+* **Tab 派生映射**（2026-11-18 收敛为三页；`render.rs` 实证，逐页见 `general_tab_ui` / `network_tab_ui` / `advanced_tab_ui`）：常规 = `fields[]` 表单 + SSL 卡（`supported_auth_types` 含 `ssl` 才显示）、文件型整卡变形（只剩「连接设置 + 组织」）；网络 = `is_file` 门控（文件型隐藏整页，网络型显示档案引用 + 数据路径预览）；高级 = **驱动属性（页首，`driver_properties` key-value 透传）+ 能力（只读，`capabilities` 矩阵）+ 环境（策略套） + 单连接覆盖 + DuckDB 加速**（网络库 = 本地加速 + 跨源、文件库 = 仅联邦源）。原「能力 / 驱动属性」两页已不再独立存在。
 * **新类型四道闸**（真正成本所在，非 UI）：
 
 | 闸 | 内容 | 状态 |
@@ -392,12 +395,14 @@ pub struct ConnectionDraft {
 | 3 连接器实现 | `DriverFactory::create` + connection crate URL / probe / SSL / SSH 适配 | ⚠️ 每类型一套（tiberius / mongo / redis / http 客户端） |
 | 4 认证字典 | `AUTH_TYPES`（connection_dialog/mod.rs:60）6 类：password / ldap / pg_class / kerberos / ssh_key / proxy_pwd | ⚠️ 无 bearer / api_key → http 类需扩字典 |
 
-* **张力点**：① 认证方法双源字典未完全对齐——驱动侧 `supported_auth_types`（password / ssl / kerberos…）vs 档案侧 `AUTH_TYPES` 6 类，`ssl` 只在驱动侧，原型 tag 仅用 password / ssh_key / proxy_pwd；② 能力 tab 只读 + 12 键标签表是第二份字典（capability.rs 注释自认），与 M4 导航能力未联动；③ 加速卡「所有类型都摆」（render.rs:960）与 #38 注册门控并存——sqlite 有 scanner 扩展可注册、duckdb 文件源无扩展不注册，UI 文案已区分「本地加速 / 联邦源」；④ 环境 = 全局库 + 项目库双域同构（project_db 有 `list_project_environments`）。
+* **张力点**（2026-11-18 复核，能力字典相关两条已收敛）：① 认证方法双源字典未完全对齐——驱动侧 `supported_auth_types`（password / ssl / kerberos…）vs 档案侧 `AUTH_TYPES` 6 类，`ssl` 只在驱动侧，原型 tag 仅用 password / ssh_key / proxy_pwd；② ~~能力 tab 12 键标签表是第二份字典~~ **已修**（2026-09-19 收敛，决策 #100）：对话框内的硬编码标签表已删除，能力清单改由 `engine::driver::capability` 唯一字典驱动（键 → 中文标签 + 运行时位 + 验收状态，`Stage::NotBuilt` 标注未实现键）；仅剩「与 M4 导航能力未联动」这条待办；③ 加速卡「所有类型都摆」与 #38 注册门控并存——sqlite 有 scanner 扩展可注册、duckdb 文件源无扩展不注册，UI 文案已区分「本地加速 / 联邦源」；④ 环境 = 全局库 + 项目库双域同构（project_db 有 `list_project_environments`）。
 * **MVP 边界**：4 类型（mysql / postgres / sqlite / duckdb）全链路 = MVP；新增类型是「声明 + 驱动实现 + 认证字典」的扩展问题，非 UI 改造问题。**不排期**（观察项，见架构 §14 #41；决策 #117）。
 
 ## 9. 测试体系
 
-### 9.1 基线（2026-10-02 实证）
+### 9.1 基线（2026-10-02 实证；现行口径见 `README.md` §5——本轮已改为 `rds-connection-dialog --lib` 78 + 六套窗口用例）
+
+> 下表为 2026-10-02 的快照，用例数已随 2026-11 打磨增长（`connection_type_driver` → 9、`connection_render_matrix` → 12、`connection_dialog_ui` → 4），命令里的 `rds-workbench --lib connection_dialog` 亦已随组件下沉改为 `-p rds-connection-dialog`。表体保留作对照，不作现行基线。
 
 
 
@@ -479,7 +484,7 @@ pub struct ConnectionDraft {
 | #114 | **Secret 注册门控 + 内存连接载体**（2026-10-03）：门控 = 加速开 + 有对应 DuckDB 扩展（duckdb 文件源无扩展 → 默认不注册），项目 / 全局同规则；目标 = 全局或项目分析库；断开回收；`SecretManager` 改内存连接 + secret 目录（避开分析库文件锁） |
 | #115 | **SSH Host Key TOFU + 严格校验开关**（2026-10-03）：三态校验（Matched / Unknown / Mismatched）+ 策略（Tofu 默认首连自动落盘 / Strict 未知拒绝 / AllowUnknown 放行不落盘）；Mismatched 恒拒绝；弹窗确认（UI 桥）留后续轮 |
 | #116 | **启动即加载 + 关闭清理**（2026-10-03，#21 关闭）：`ProjectUiHost::on_closed`（`do_close` 末尾触发）+ workbench `build_host` 注入 `refresh_after_open`（root=None → 只剩全局 G_）；启动加载已在 `view.rs:91` P0 修复 |
-| #117 | **MVP 设计审查（2026-10-03，不排期）**：五 Tab 动态渲染机制成立（UI 零类型写死，全部由 `DriverDescriptor` 声明派生）；新增类型真实成本在四道闸——驱动注册（WASM 插件空实现）/ 连接器实现 / 认证字典（`AUTH_TYPES` 无 bearer / api_key）；详见 §8.1 / 架构 §14 #41 |
+| #117 | **MVP 设计审查（2026-10-03，不排期）**：动态渲染机制成立（UI 零类型写死，全部由 `DriverDescriptor` 声明派生）——当时为五 Tab，**2026-11-18 已收敛为三页**（常规 / 网络 / 高级；文件型两页，能力与驱动属性并入高级页），机制结论不变；新增类型真实成本在四道闸——驱动注册（WASM 插件空实现）/ 连接器实现 / 认证字典（`AUTH_TYPES` 无 bearer / api_key）；详见 §8.1 / 架构 §14 #41 |
 
 ## 12. 已知问题与待办（权威：架构 §14）
 
@@ -487,7 +492,7 @@ pub struct ConnectionDraft {
 
 * 页面美化（2026-10-02 用户反馈：常规 Tab 卡片标题已左对齐；整体美化待用户指定区域后继续）。
 
-* 模板导入导出能力就绪、UI 入口暂缓（C4/C12）。
+* 模板导入导出能力与 UI 入口均已就绪（C4/C12；入口在暂存列表标题行 `staging-export` / `staging-import`）。
 
 * dev-plan / README 文档瘦身整理方案已出（2026-10-02），待用户确认后执行。
 
