@@ -2,7 +2,8 @@
 //!
 //! 目标是覆盖“状态 × 渲染”的组合面，防止某一状态下的渲染分支无人触碰：
 //! - 未选类型的空态引导条 → 填名称后消失 → 清空后复现（判据是表单内容，不是一次性标记）；
-//! - 5 个 Tab（常规 / 网络 / 能力 / 驱动属性 / 高级）在**全局库未初始化**时全部可渲染；
+//! - 3 个 Tab（常规 / 网络 / 高级；文件型两页）在**全局库未初始化**时全部可渲染，
+//!   旧索引 2（能力）/ 3（驱动属性）归一到「高级」而不是打到空白页；
 //! - 作用域三态（仅全局 / 仅项目 / 全局+项目）切换后渲染；
 //! - 结果行四个级别（Info / Success / Warning / Error）各渲染一帧；
 //! - 暂存区固定高度：草稿累加到 13 条时区域高度**不得增长**（用户实测过“拉长页面”）。
@@ -153,7 +154,7 @@ fn dialog_state_matrix_renders_on_degraded_path(cx: &mut TestAppContext) {
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(visible(cx, "conn-general-guide"), "清空后引导条应复现");
 
-    // 4) 五个 Tab 逐一渲染（类型 / 驱动 / 引用目录均为空的降级分支），
+    // 4) 收敛后三页 + 旧索引（2 能力 / 3 驱动属性）逐一渲染（类型 / 驱动 / 引用目录均为空的降级分支），
     //    并断言**行高锁定**：切 Tab 不得改变对话框高度（布局不跳动）。
     //    量的是两列行（`conn-body-row`）而不是内容区：内容区是滚动容器，它的
     //    快照落在滚动**内容**上（内容多高它多高，可大于视口——正常行为）。
@@ -497,6 +498,38 @@ fn draft_list_is_keyboard_navigable(cx: &mut TestAppContext) {
         1,
         "↓ 应切回下一条草稿"
     );
+}
+
+/// 收敛（#110）：能力矩阵 / 驱动属性并入「高级」页尾，**不是删掉**。
+///
+/// 三页之外的两页在 `active_tab` 里仍是合法数字（旧草稿存的就是 2 / 3）：
+/// 渲染入口把它们归一到「高级」，所以选旧索引不该得到一张空白页。
+#[gpui_kit::test]
+fn advanced_tab_absorbs_capability_and_driver_props(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (harness, cx) = open_harness(cx);
+    open_new(&harness, cx);
+    let dialog = cx.update(|_, cx| harness.read(cx).dialog(cx));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 1) 「高级」页里两块都在（标题可见 = 面板被挂上了）。
+    dialog.active_tab.set(4);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        visible(cx, "conn-sec-capability"),
+        "「高级」页应包含能力面板标题（收敛不是删掉）"
+    );
+    // 驱动属性在能力面板之后，落在滚动区视口之下：`visible()` 为假是正常的，
+    // 判据只能是“在元素树里”（取不到快照会 panic）。
+    let _props_heading = snap(cx, "conn-sec-driver-props");
+    // 2) 旧索引 2 / 3 落到同一页（不是空白页）：能力标题仍在元素树里。
+    //    这里用 `snap`（在树里）而不是 `visible`——标题在高级页下半区，可能被滚动视口裁掉。
+    for legacy in [2usize, 3] {
+        dialog.active_tab.set(legacy);
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let _cap = snap(cx, "conn-sec-capability");
+        let _env = snap(cx, "conn-sec-env");
+    }
 }
 
 /// 侧栏信息架构：**类型目录在上、暂存列表在下**。

@@ -193,25 +193,43 @@ pub(crate) fn tags_from_json(json: Option<&str>) -> String {
 
 /// Tab 定义（显示名, **内部 Tab 索引**）。
 ///
-/// 文件型驱动（SQLite / DuckDB）按原型隐藏「网络」Tab——内部索引保持不变，
-/// 所以 `active_tab` 与内容分支（0 常规 / 1 网络 / 2 能力 / 3 驱动属性 / 4 高级）不受影响。
+/// 内部索引保持不变（0 常规 / 1 网络 / 4 高级），收敛只发生在**呈现层**：
+/// - 「能力」(2) 与「驱动属性」(3) 是工程概念，并入「高级」页尾（见 `render` 的高级分支）；
+/// - 文件型驱动（SQLite / DuckDB）按原型隐藏「网络」。
+///
+/// 于是网络型三页、文件型两页；旧草稿里的索引 2 / 3 由 [`normalize_tab_index`]
+/// 归一到 4，不会打到一个空白页上。
 pub(crate) fn dialog_tab_defs(is_file_db: bool) -> Vec<(&'static str, usize)> {
     if is_file_db {
-        vec![("常规", 0), ("能力", 2), ("驱动属性", 3), ("高级", 4)]
+        vec![("常规", 0), ("高级", 4)]
     } else {
-        vec![
-            ("常规", 0),
-            ("网络", 1),
-            ("能力", 2),
-            ("驱动属性", 3),
-            ("高级", 4),
-        ]
+        vec![("常规", 0), ("网络", 1), ("高级", 4)]
     }
 }
 
 /// 内部 Tab 索引 → TabBar 的**可见下标**（隐藏「网络」后两者不相等，决策 #85）。
+///
+/// 已收敛的 2 / 3 先归一到「高级」，再查可见下标——否则旧草稿会落到第 0 页。
 pub(crate) fn visible_tab_index(defs: &[(&'static str, usize)], active: usize) -> usize {
-    defs.iter().position(|(_, ix)| *ix == active).unwrap_or(0)
+    let target = match active {
+        2 | 3 => 4,
+        ix => ix,
+    };
+    defs.iter().position(|(_, ix)| *ix == target).unwrap_or(0)
+}
+
+/// 内部 Tab 索引规范化（渲染入口与草稿恢复都先过这一道，避免旧索引打到空白页）。
+///
+/// - 2（能力）/ 3（驱动属性）→ 4（高级）：内容已并入高级页尾；
+/// - 文件型的 1（网络）→ 0（常规）：那一页根本不存在；
+/// - 越界 → 4，夹在最后一个真实页上。
+pub(crate) fn normalize_tab_index(active: usize, is_file_db: bool) -> usize {
+    match active {
+        1 if is_file_db => 0,
+        2 | 3 => 4,
+        ix if ix <= 4 => ix,
+        _ => 4,
+    }
 }
 
 // ===== 数据库类型 / 驱动展示（Header 去噪 + 条目类型徽标）=====

@@ -509,7 +509,10 @@ impl<H: 'static> ConnectionDialogState<H> {
         );
         set_select_value(&self.env, d.env.as_deref().unwrap_or(""), window, cx);
         self.duckdb_fed.set(d.duckdb_fed);
-        self.active_tab.set(d.active_tab);
+        // 旧草稿可能停在已收敛的 2（能力）/ 3（驱动属性）上：恢复时归一到「高级」（#110）。
+        // 文件型的「网络」由渲染入口按类型再归一（那里才有 `is_file_db`）。
+        self.active_tab
+            .set(normalize_tab_index(d.active_tab, false));
         *self.props.borrow_mut() = d.props;
         *self.policy_override_keys.borrow_mut() = d.sec_overrides;
         set_select_value(&self.auth_method, d.auth_method.as_str(), window, cx);

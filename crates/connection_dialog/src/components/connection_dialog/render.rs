@@ -540,10 +540,11 @@ impl<H: 'static> ConnectionDialogState<H> {
             let theme = cx.theme();
 
             // ---- Tab 条（gpui-component `TabBar::underline`，决策 #84）----
-            // 文件型驱动（SQLite/DuckDB）按原型隐藏「网络」Tab（无协议链 / SSL 语义）：
-            // 这里做「可见下标 ⇄ 内部 Tab 索引」映射，`active_tab` 仍是内部 0–4（内容分支不变）。
+            // 呈现在收敛后的三页（无网络型 → 两页）：常规 / 网络 / 高级（#110）。
+            // 「可见下标 ⇄ 内部索引」仍需映射：文件型藏起「网络」；2 / 3 已并入 4。
             let tab_defs: Vec<(&'static str, usize)> = dialog_tab_defs(is_file_db);
-            let tab_selected = visible_tab_index(&tab_defs, active_tab.get());
+            let tab_ix_now = normalize_tab_index(active_tab.get(), is_file_db);
+            let tab_selected = visible_tab_index(&tab_defs, tab_ix_now);
             let tab_bar = div()
                 .border_b_1()
                 .border_color(theme.colors.border)
@@ -597,101 +598,9 @@ impl<H: 'static> ConnectionDialogState<H> {
             };
 
             // ---- 各 Tab 内容 ----
-            let tab_content = match active_tab.get() {
-                1 => {
-                    // ===== 网络：引用「网络配置」档案（内联链已撤下，见架构 §14 #25）=====
-                    let network_ref_selected = network_ref.read(cx).selected_value().cloned();
-                    let is_ref = network_ref_selected.is_some();
-                    // 内联协议链已撤下（#25）：多跳改由「网络配置」档案承担（类型 `chain` 的 JSON 数组，
-                    // 连接时经 `parse_network_config_json` 解析为 `ConnectionMethod::Chain` 并逐跳执行）。
-                    // 此处只保留：引用下拉 + 管理入口 + 诚实提示 + 数据路径预览。
-                    let ref_label = network_ref_selected
-                        .as_ref()
-                        .map(|v| v.to_string())
-                        .unwrap_or_else(|| "直连（未引用档案）".to_string());
-                    let mut content = div().v_flex().gap_3();
-                    content = content.child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .gap_2()
-                            .child(div().text_sm().font_weight(FontWeight::BOLD).child(tr("网络配置")))
-                            .child(
-                                div().text_xs().text_color(theme.colors.muted_foreground)
-                                    .child(tr("引用网络档案：")),
-                            )
-                            .child(Select::new(&network_ref).placeholder(tr("（不引用：直连）")))
-                            .child(
-                                Button::new("mgr-network")
-                                    .ghost()
-                                    .label(tr("管理"))
-                                    .on_click({
-                                        let mgr = mgr.clone();
-                                        let entity = entity.clone();
-                                        let shared = shared.clone();
-                                        move |_, window, app| {
-                                            open_manager(1, &mgr, entity.clone(), shared.clone(), window, app);
-                                        }
-                                    }),
-                            ),
-                    );
-                    if is_ref {
-                        content = content.child(
-                            div().text_xs().text_color(theme.colors.info)
-                                .child("已引用网络档案 · 连接时生效（改档案一处全量生效）"),
-                        );
-                    } else {
-                        content = content.child(hint_line(
-                            theme,
-                            "未引用档案时直连；SSH 跳板 / 代理 / 多跳（chain）请在「管理」里建档案后在此引用。",
-                        ));
-                    }
-                    // 数据路径预览（TLS 徽标；SSL 细节在常规 → 连接安全）。
-                    content = content.child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .gap_2()
-                            .flex_wrap()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .rounded_md()
-                                    .border_1()
-                                    .border_color(theme.colors.border)
-                                    .px_2()
-                                    .py_1()
-                                    .child(tr("本机客户端")),
-                            )
-                            .child(div().text_xs().text_color(theme.colors.muted_foreground).child("→"))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .rounded_md()
-                                    .border_1()
-                                    .border_color(theme.colors.border)
-                                    .px_2()
-                                    .py_1()
-                                    .child(ref_label),
-                            )
-                            .child(div().text_xs().text_color(theme.colors.muted_foreground).child("→"))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .rounded_md()
-                                    .border_1()
-                                    .border_color(theme.colors.border)
-                                    .px_2()
-                                    .py_1()
-                                    .child(tr("目标数据库"))
-                                    .child(
-                                        div().text_xs().text_color(theme.colors.info).child(" TLS"),
-                                    ),
-                            ),
-                    );
-                    content
-                }
-                2 => {
+            // 能力面板：原本是独立 Tab「能力」（只读矩阵）。
+            // 收敛后挂在「高级」页尾——普通用户不必先读懂能力清单才敢保存连接。
+            let capability_panel = {
                     // ===== 能力：只读矩阵（清单与命中来自 `drivers.capabilities`；
                     // 标签 / 运行时位 / 真机验收状态来自引擎的能力字典，UI 不再另存字典）=====
                     let caps = derived.capabilities.clone();
@@ -758,8 +667,9 @@ impl<H: 'static> ConnectionDialogState<H> {
                         );
                     }
                     capability_tab
-                }
-                3 => {
+            };
+            // 驱动属性面板（同上）：key-value 动态增删 + 每行「去向」标注。
+            let driver_props_panel = {
                     // ===== 驱动属性：key-value 动态增删 =====
                     // 每行下方标注**去向**（判决来自 `engine::driver::property_spec`）：
                     // 会下发 / 当前实现会忽略 / 当前实现会报错 / 当前实现不下发。
@@ -893,6 +803,100 @@ impl<H: 'static> ConnectionDialogState<H> {
                         tab = tab.child(div().text_xs().text_color(theme.colors.muted_foreground).child(hint));
                     }
                     tab
+            };
+            let tab_content = match tab_ix_now {
+                1 => {
+                    // ===== 网络：引用「网络配置」档案（内联链已撤下，见架构 §14 #25）=====
+                    let network_ref_selected = network_ref.read(cx).selected_value().cloned();
+                    let is_ref = network_ref_selected.is_some();
+                    // 内联协议链已撤下（#25）：多跳改由「网络配置」档案承担（类型 `chain` 的 JSON 数组，
+                    // 连接时经 `parse_network_config_json` 解析为 `ConnectionMethod::Chain` 并逐跳执行）。
+                    // 此处只保留：引用下拉 + 管理入口 + 诚实提示 + 数据路径预览。
+                    let ref_label = network_ref_selected
+                        .as_ref()
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "直连（未引用档案）".to_string());
+                    let mut content = div().v_flex().gap_3();
+                    content = content.child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_2()
+                            .child(div().text_sm().font_weight(FontWeight::BOLD).child(tr("网络配置")))
+                            .child(
+                                div().text_xs().text_color(theme.colors.muted_foreground)
+                                    .child(tr("引用网络档案：")),
+                            )
+                            .child(Select::new(&network_ref).placeholder(tr("（不引用：直连）")))
+                            .child(
+                                Button::new("mgr-network")
+                                    .ghost()
+                                    .label(tr("管理"))
+                                    .on_click({
+                                        let mgr = mgr.clone();
+                                        let entity = entity.clone();
+                                        let shared = shared.clone();
+                                        move |_, window, app| {
+                                            open_manager(1, &mgr, entity.clone(), shared.clone(), window, app);
+                                        }
+                                    }),
+                            ),
+                    );
+                    if is_ref {
+                        content = content.child(
+                            div().text_xs().text_color(theme.colors.info)
+                                .child("已引用网络档案 · 连接时生效（改档案一处全量生效）"),
+                        );
+                    } else {
+                        content = content.child(hint_line(
+                            theme,
+                            "未引用档案时直连；SSH 跳板 / 代理 / 多跳（chain）请在「管理」里建档案后在此引用。",
+                        ));
+                    }
+                    // 数据路径预览（TLS 徽标；SSL 细节在常规 → 连接安全）。
+                    content = content.child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_2()
+                            .flex_wrap()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(theme.colors.border)
+                                    .px_2()
+                                    .py_1()
+                                    .child(tr("本机客户端")),
+                            )
+                            .child(div().text_xs().text_color(theme.colors.muted_foreground).child("→"))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(theme.colors.border)
+                                    .px_2()
+                                    .py_1()
+                                    .child(ref_label),
+                            )
+                            .child(div().text_xs().text_color(theme.colors.muted_foreground).child("→"))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(theme.colors.border)
+                                    .px_2()
+                                    .py_1()
+                                    .child(tr("目标数据库"))
+                                    .child(
+                                        div().text_xs().text_color(theme.colors.info).child(" TLS"),
+                                    ),
+                            ),
+                    );
+                    content
                 }
                 4 => {
                     // ===== 高级：环境 + 策略覆盖 + DuckDB 加速 =====
@@ -1110,6 +1114,25 @@ impl<H: 'static> ConnectionDialogState<H> {
                             nav_body,
                         ));
                     }
+                    // 收敛（#110）：能力 / 驱动属性并入「高级」页尾，不再各占一个 Tab。
+                    content = content.child(
+                        div()
+                            .id("conn-sec-capability")
+                            .test_support()
+                            .text_sm()
+                            .font_weight(FontWeight::BOLD)
+                            .child(tr("能力（只读）")),
+                    );
+                    content = content.child(capability_panel);
+                    content = content.child(
+                        div()
+                            .id("conn-sec-driver-props")
+                            .test_support()
+                            .text_sm()
+                            .font_weight(FontWeight::BOLD)
+                            .child(tr("驱动属性")),
+                    );
+                    content = content.child(driver_props_panel);
                     content
                 }
                 _ => {
