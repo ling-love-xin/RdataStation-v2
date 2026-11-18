@@ -179,6 +179,11 @@ impl EditorHostPanel {
                 // 【R5 比例持久化】右栏宽度初值（px）：必须与上面两项一起**先拷贝**，
                 // 最后一行再读 `settings` 会把借用拉到块末，与下面的 `&mut cx` 冲突（E0502）。
                 let sidebar_width = settings.result_panel.sidebar_width;
+                // 【工具栏配置】状态栏命令显隐（DBeaver 工具条配置的等价物）：偏好里存的是
+                // 逗号分隔 id，这里解析成命令集合；未知 id 被 `parse_hidden_list` 丢掉。
+                let hidden_status_commands = result_panel::ports::StatusCommand::parse_hidden_list(
+                    &settings.result_panel.hidden_status_commands,
+                );
                 if on {
                     panel.set_show_column_comments(true, cx);
                 }
@@ -187,6 +192,8 @@ impl EditorHostPanel {
                 panel.set_type_style(type_style, cx);
                 // 用户上次拖到的右栏宽度在此复用（面板内按 ui 上下限夹取）
                 panel.set_right_sidebar_width_px(sidebar_width as f32, cx);
+                // 状态栏命令显隐：用户上次在 ▾ 菜单里勾掉的那几项
+                panel.set_hidden_status_commands(hidden_status_commands, cx);
             }
             panel
         });

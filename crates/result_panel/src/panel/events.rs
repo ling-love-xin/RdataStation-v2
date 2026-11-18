@@ -994,6 +994,23 @@ impl ResultPanel {
         &self.hidden_status_commands
     }
 
+    /// 【工具栏配置落盘回读】整批替换隐藏集合（宿主在面板创建时按全局偏好注入）。
+    ///
+    /// 与 [`Self::set_status_command_visible`] 的分工：那条是「用户点了某一项」的
+    /// 增量语义（也负责重绘），这条是「从偏好文件恢复」的整批语义；值相同时直接返回
+    /// （避免每份结果集创建都白 notify 一次）。
+    pub fn set_hidden_status_commands(
+        &mut self,
+        hidden: std::collections::BTreeSet<crate::ports::StatusCommand>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.hidden_status_commands == hidden {
+            return;
+        }
+        self.hidden_status_commands = hidden;
+        cx.notify();
+    }
+
     /// 【列序落盘】把 delegate 的显示序取回面板快照；变了就推 `ColumnOrderChanged`
     /// （与拖拽 `MoveColumn` 同一条通道，宿主据此落库）
     fn snapshot_column_order(&mut self, cx: &mut Context<Self>) {

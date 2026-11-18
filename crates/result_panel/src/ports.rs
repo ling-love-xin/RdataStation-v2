@@ -572,6 +572,54 @@ impl StatusCommand {
             StatusCommand::Refresh => "刷新",
         }
     }
+
+    /// 落盘用的稳定 id（kebab，**不得改**：settings 文件里存的就是它）。
+    ///
+    /// 对齐 DBeaver 的命令 id（`org.eclipse.ui.edit.undo` / `core.resultset.fetch.page`…），
+    /// 本仓用短 id 写进 `result_panel.hidden_status_commands`；
+    /// `id()` 与 [`Self::from_id`] 必须成对，改一边就是破坏既有设置文件。
+    pub fn id(self) -> &'static str {
+        match self {
+            StatusCommand::Commit => "commit",
+            StatusCommand::Reject => "reject",
+            StatusCommand::Undo => "undo",
+            StatusCommand::Redo => "redo",
+            StatusCommand::EditRow => "edit-row",
+            StatusCommand::InsertRow => "insert-row",
+            StatusCommand::DuplicateRow => "duplicate-row",
+            StatusCommand::DeleteRow => "delete-row",
+            StatusCommand::First => "first",
+            StatusCommand::Prev => "prev",
+            StatusCommand::Next => "next",
+            StatusCommand::Last => "last",
+            StatusCommand::FetchPage => "fetch-page",
+            StatusCommand::FetchAll => "fetch-all",
+            StatusCommand::Export => "export",
+            StatusCommand::Refresh => "refresh",
+        }
+    }
+
+    /// 从落盘 id 反查命令（未知 id → `None`，由调用方忽略而不是猜一个近似项）
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|command| command.id() == id)
+    }
+
+    /// 解析落盘文本（逗号分隔的 id）成隐藏集合：空白项与未知 id 一律忽略。
+    pub fn parse_hidden_list(text: &str) -> std::collections::BTreeSet<Self> {
+        text.split(',')
+            .filter_map(|token| Self::from_id(token.trim()))
+            .collect()
+    }
+
+    /// 隐藏集合 → 落盘文本（按 [`Self::ALL`] 顺序输出，保证同一集合序列化稳定）
+    pub fn hidden_list_text(hidden: &std::collections::BTreeSet<Self>) -> String {
+        Self::ALL
+            .into_iter()
+            .filter(|command| hidden.contains(command))
+            .map(|command| command.id())
+            .collect::<Vec<_>>()
+            .join(",")
+    }
 }
 
 /// 【筛选设置 · 列约束】列序移动的四个方向（DBeaver 工具条四颗移动钮）

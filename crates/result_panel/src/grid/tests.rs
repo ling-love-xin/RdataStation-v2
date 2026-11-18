@@ -3824,3 +3824,56 @@ fn status_config_items_follow_dbeaver_toolbar_order_and_defaults() {
         "重做仍保持未勾选"
     );
 }
+
+/// 【工具栏配置落盘】命令 id 与落盘文本的往返口径（settings 里存的就是这些 id）：
+/// id 全局唯一、`from_id` 与 `id` 互逆、解析忽略空白项与未知 id、序列化按 `ALL` 顺序稳定。
+/// 出厂文本 `undo,redo` 必须解析出「撤销 + 重做」两项（与 `plugin.xml:1381-1397`
+/// 的 `defaultVisibility=false` 同集合）。
+#[test]
+fn status_command_ids_round_trip_and_parse_the_persisted_list() {
+    use crate::ports::StatusCommand;
+    use std::collections::BTreeSet;
+
+    // id 唯一且非空；from_id 与 id 互逆
+    let mut ids = BTreeSet::new();
+    for command in StatusCommand::ALL {
+        let id = command.id();
+        assert!(!id.is_empty(), "{command:?} 的 id 不能为空");
+        assert!(ids.insert(id), "id 重复：{id}");
+        assert_eq!(StatusCommand::from_id(id), Some(command), "{id} 应能反查回 {command:?}");
+    }
+    assert_eq!(StatusCommand::from_id("no-such-command"), None);
+
+    // 解析：容忍空格 / 空项 / 未知 id，大小写按落盘口径（小写）
+    let parsed = StatusCommand::parse_hidden_list(" undo , , redo ,no-such-command");
+    let expected: BTreeSet<StatusCommand> =
+        [StatusCommand::Undo, StatusCommand::Redo].into_iter().collect();
+    assert_eq!(parsed, expected, "未知 id 与空项应被忽略");
+    assert_eq!(
+        StatusCommand::parse_hidden_list("undo,redo"),
+        [StatusCommand::Undo, StatusCommand::Redo].into_iter().collect(),
+        "出厂文本 `undo,redo` = 撤销 + 重做"
+    );
+    assert!(StatusCommand::parse_hidden_list("").is_empty());
+
+    // 序列化：顺序跟 ALL（与用户勾选顺序无关），空集合 → 空串
+    let mut reversed: BTreeSet<StatusCommand> =
+        [StatusCommand::Refresh, StatusCommand::Undo, StatusCommand::Commit]
+            .into_iter()
+            .collect();
+    assert_eq!(
+        StatusCommand::hidden_list_text(&reversed),
+        "commit,undo,refresh",
+        "按 ALL 顺序输出，保证同一集合序列化稳定"
+    );
+    reversed.clear();
+    assert_eq!(StatusCommand::hidden_list_text(&reversed), "");
+
+    // 往返：序列化 → 解析必须回到同一集合
+    let mut sample = expected.clone();
+    sample.insert(StatusCommand::Export);
+    assert_eq!(
+        StatusCommand::parse_hidden_list(&StatusCommand::hidden_list_text(&sample)),
+        sample
+    );
+}

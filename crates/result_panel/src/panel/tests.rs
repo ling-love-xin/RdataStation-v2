@@ -955,6 +955,59 @@ fn status_commands_follow_dbeaver_default_visibility_and_can_be_restored(
     );
 }
 
+/// 【工具栏配置落盘回读】宿主按全局偏好（`result_panel.hidden_status_commands`）
+/// 在创建面板时整批注入隐藏集合：面板必须以注入值为**唯一**权威（整批替换，不与
+/// 出厂默认合并），否则用户在 ▾ 菜单里勾回来的项会在下次启动时被默认集合吃掉。
+#[gpui_kit::test]
+fn injected_hidden_status_commands_replace_the_default_set(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{ElementId, SharedString};
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.status = Some(crate::grid::status::ResultStatus {
+                total_rows: 2,
+                ..Default::default()
+            });
+            // 偏好文件里写的是「undo,first」：撤销（出厂就隐藏）+ 首页（出厂显示，用户手动勾掉）
+            p.set_hidden_status_commands(
+                crate::ports::StatusCommand::parse_hidden_list("undo,first"),
+                cx,
+            );
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let hidden = panel.read_with(cx, |p, _| p.hidden_status_commands().clone());
+    assert_eq!(
+        hidden.len(),
+        2,
+        "整批替换：出厂默认里的「重做」应回到显示，只剩注入的两项：{hidden:?}"
+    );
+    assert!(hidden.contains(&crate::ports::StatusCommand::Undo));
+    assert!(hidden.contains(&crate::ports::StatusCommand::First));
+    assert!(!hidden.contains(&crate::ports::StatusCommand::Redo));
+
+    let visible = |id: &'static str, cx: &mut gpui_kit::VisualTestContext| -> bool {
+        let by_id = cx.update(|window, _| {
+            window
+                .try_find(ElementId::Name(SharedString::from(id.to_string())))
+                .is_some_and(|snap| snap.visible())
+        });
+        by_id || cx.debug_bounds(id).is_some()
+    };
+    assert!(
+        !visible("editor-result-page-first", cx),
+        "注入里含首页 → 首页钮不该摆出来"
+    );
+    assert!(
+        visible("editor-result-redo", cx),
+        "注入里没有重做 → 重做钮应出现（不被出厂默认吃掉）"
+    );
+}
+
 /// 【结果集设置】状态行最右端的齿轮（对齐 DBeaver 状态栏 `ConfigAction`，
 /// `ResultSetViewer.java:5402-5418`）：有状态行时必摆，点它只推
 /// `OpenResultPanelSettings`（面板不认识 settings crate，由宿主派发打开设置的动作）。

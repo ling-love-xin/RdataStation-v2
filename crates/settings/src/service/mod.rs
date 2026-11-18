@@ -179,6 +179,10 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::ResultPanelSidebarWidth => {
             SettingValue::Number(settings.result_panel.sidebar_width as f64)
         }
+        // 【工具条配置】隐藏命令 id 列表（逗号分隔自由文本）
+        Slot::ResultPanelHiddenStatusCommands => {
+            SettingValue::Text(settings.result_panel.hidden_status_commands.clone())
+        }
         // 【类型样式】13 项枚举：落盘值 → 设置页显示
         Slot::ResultPanelNumberFormat => {
             SettingValue::Text(settings.result_panel.number_format.as_str().to_string())
@@ -387,6 +391,7 @@ impl SettingsService {
             | Slot::ResultPanelLoopSelection
             | Slot::ResultPanelSelectOnModifierClick
             | Slot::ResultPanelSidebarWidth
+            | Slot::ResultPanelHiddenStatusCommands
             | Slot::ResultPanelPersistColumnWidths
             | Slot::ResultPanelNumberFormat
             | Slot::ResultPanelNullPlaceholder

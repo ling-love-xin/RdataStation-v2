@@ -176,6 +176,33 @@ pub fn entries() -> Vec<SettingSpec> {
             disabled: false,
         },
         SettingSpec {
+            // 【DBeaver 工具条配置】状态栏命令的显隐：DBeaver 每条结果集底部命令都挂
+            // `toolbar.configuration.visible` 的 `visibleWhen`（`plugin.xml:1381-1397`），
+            // 隐藏的命令随时能勾回来。本仓的写入口 = 状态行末端 ▾ 菜单（点一次落一次盘），
+            // 这里只是「同一份状态的可见/可手改处」（自由文本，未知 id 面板侧忽略）。
+            key: "result_panel.hidden_status_commands",
+            section: "result_panel",
+            section_label: "结果集面板",
+            group: "interaction",
+            group_label: Some("选择与操作"),
+            label: "状态栏隐藏的命令",
+            hint: "结果集状态行动作条上不显示的命令 id，逗号分隔（出厂 `undo,redo`）。\
+                 id 见：commit / reject / undo / redo / edit-row / insert-row / duplicate-row / \
+                 delete-row / first / prev / next / last / fetch-page / fetch-all / export / refresh。\
+                 面板状态行末端的 ▾ 菜单改的是同一份状态（点一次就落盘一次）；未知 id 被忽略。\
+                 注意 `fetch-page`（取下一段）是窗口化取数的唯一入口，隐藏后拿不到后续行",
+            hint_inline: true,
+            kind: SettingKind::Text,
+            presets: &[],
+            default_json: "\"undo,redo\"",
+            effect: SettingEffect::NextUse,
+            entry: SettingEntry::Page,
+            consumer: "crates/editor/src/view/host/construct.rs（面板创建时读本项注入隐藏集合）\
+                      / crates/editor/src/view/host/results/dispatch.rs::SetStatusCommandVisible（菜单切换后写回）",
+            composite: false,
+            disabled: false,
+        },
+        SettingSpec {
             // 【R5 对齐 DBeaver `viewerSash.setWeights`】右栏（页签侧栏）宽度：
             // DBeaver 的 `panelRatio` 按展示类型存千分比、跨结果集共用（`ResultSetViewer.java:1021-1033`
             // / `:1250-1268`）；本仓右栏是行内固定宽元素，改存 px（差异与理由见 model 注释）。

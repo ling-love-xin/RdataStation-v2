@@ -37,7 +37,17 @@ pub struct ResultPanel {
     /// - 作用域与 DBeaver 一致：**全局一份**（跨结果集 / 跨文档共用），不随会话快照落库。
     #[serde(default = "default_result_sidebar_width")]
     pub sidebar_width: i64,
-    /// 【类型样式】数字显示格式（默认原始值；只影响渲染显示，复制 / 导出仍用原始值）。
+    /// 【DBeaver 对齐】状态栏被隐藏的命令 id（逗号分隔，如 `undo,redo`）。
+    ///
+    /// 对应 DBeaver 的「工具条配置」：`plugin.xml` 里每条结果集底部命令都挂了
+    /// `org.jkiss.dbeaver.ui.toolbar.configuration.visible` 的 `visibleWhen`
+    /// （`:1381-1397` 的 `defaultVisibility` 只是默认值），隐藏的命令随时能勾回来。
+    /// 面板状态行末端的 ▾ 菜单写这里（点一次就落盘一次）；设置页也允许手填，
+    /// 未知 id 在面板侧被忽略（id 与命令的对应见 `result_panel::ports::StatusCommand::id`）。
+    /// 作用域是**全局一份**（跨结果集 / 跨文档共用），不随会话快照落库。
+    #[serde(default = "default_hidden_status_commands")]
+    pub hidden_status_commands: String,
+    /// 【类型样式】数字显示格式（默认原始值；只影响渲染显示，复制／导出仍用原始值）。
     #[serde(default)]
     pub number_format: workbench_shell::result_style::NumberFormatPref,
     /// 【类型样式】NULL 显示占位（默认 `NULL` 原文；判定仍按原文）。
@@ -103,6 +113,7 @@ impl Default for ResultPanel {
             persist_column_widths: true,
             // 右栏宽度出厂值 = `result_panel::ui::RESULT_SIDEBAR_RIGHT_WIDTH`（20rem @16px）
             sidebar_width: default_result_sidebar_width(),
+            hidden_status_commands: default_hidden_status_commands(),
             // 类型样式默认全继承 / 原始值（与渲染现状逐项一致）
             number_format: workbench_shell::result_style::NumberFormatPref::Raw,
             null_placeholder: workbench_shell::result_style::NullPlaceholderPref::Null,
@@ -223,4 +234,10 @@ fn default_result_fact_storage() -> FactStoragePref {
 /// 20rem 在基准字号 16px 下的像素值；常量在那一侧单处定义，此处只写数值并保持一致）。
 fn default_result_sidebar_width() -> i64 {
     320
+}
+
+/// 状态栏隐藏命令的出厂值：撤销 / 重做（DBeaver `plugin.xml:1381-1397` 里仅这两项
+/// `defaultVisibility="false"` 且本仓不构成「唯一入口」；`fetch.page` 有意保持显示）。
+fn default_hidden_status_commands() -> String {
+    "undo,redo".to_string()
 }

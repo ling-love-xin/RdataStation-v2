@@ -347,6 +347,20 @@ pub(crate) fn apply_slot(
             }
             persist(&cx.global::<Settings>().clone());
         }
+        Slot::ResultPanelHiddenStatusCommands => {
+            // 【工具条配置】自由文本：只做空白折叠 / 去重空项 / 小写，**不校验 id**——
+            // id ↔ 命令的对应表在 `result_panel::ports::StatusCommand`，settings 层不依赖它
+            // （依赖只向下）；未知 id 由面板侧在读的时候忽略。
+            let Some(text) = value.as_text() else {
+                return false;
+            };
+            let normalized = normalize_command_list(text);
+            {
+                let settings = cx.global_mut::<Settings>();
+                settings.result_panel.hidden_status_commands = normalized;
+            }
+            persist(&cx.global::<Settings>().clone());
+        }
         _ => return false,
     }
     true
@@ -369,4 +383,31 @@ impl crate::service::SettingsService {
         persist(&cx.global::<Settings>().clone());
         cx.refresh_windows();
     }
+
+    /// 【工具条配置】写状态栏隐藏的命令 id 列表（面板末端 ▾ 菜单点一次就落一次盘）。
+    ///
+    /// 与现值相同则不写盘；面板自己已经重绘，这里不 `refresh_windows`。
+    pub fn set_result_panel_hidden_status_commands(list: &str, cx: &mut App) {
+        let normalized = normalize_command_list(list);
+        if cx.global::<Settings>().result_panel.hidden_status_commands == normalized {
+            return;
+        }
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.result_panel.hidden_status_commands = normalized;
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+}
+
+/// 逗号分隔列表的规范化：去空白、丢空项、统一小写（`undo, Redo` → `undo,redo`）。
+///
+/// 不校验 id：id 与命令的对应表在面板 crate，settings 层不依赖它（依赖只向下）。
+fn normalize_command_list(text: &str) -> String {
+    text.split(',')
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>()
+        .join(",")
 }

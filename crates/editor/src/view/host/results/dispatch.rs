@@ -192,10 +192,20 @@ impl EditorHostPanel {
             ResultRequest::SortColumnsByName => self
                 .result_panel
                 .update(cx, |p, cx| p.sort_columns_by_name(cx)),
-            // 【工具栏配置】状态栏命令项显隐（纯 UI 态，不落盘）
-            ResultRequest::SetStatusCommandVisible { command, visible } => self
-                .result_panel
-                .update(cx, |p, cx| p.set_status_command_visible(command, visible, cx)),
+            // 【工具栏配置】状态栏命令项显隐：先改面板（即时重绘），再把**面板的权威集合**
+            // 序列化回全局偏好 `result_panel.hidden_status_commands`（DBeaver 的工具条配置
+            // 是 workbench 级全局状态，本仓用 settings 存同一份语义）。
+            ResultRequest::SetStatusCommandVisible { command, visible } => {
+                self.result_panel
+                    .update(cx, |p, cx| p.set_status_command_visible(command, visible, cx));
+                let hidden = self
+                    .result_panel
+                    .read(cx)
+                    .hidden_status_commands()
+                    .clone();
+                let text = result_panel::ports::StatusCommand::hidden_list_text(&hidden);
+                settings::SettingsService::set_result_panel_hidden_status_commands(&text, cx);
+            }
             // 【结果集设置】状态行齿轮：派发「打开设置并定位到结果集节」的动作
             // （对齐 DBeaver `ConfigAction` → `PrefPageResultSetMain.PAGE_ID`）。
             // 设置窗口归 workbench 所有，面板这一层只发动作（与菜单栏 / 快捷键同机制）；
