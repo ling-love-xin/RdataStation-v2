@@ -61,10 +61,11 @@ flowchart TB
 | 视图 | ├ `state.rs` | 构造 / 元数据刷新 / 编辑回读 / `ClonedDialogState`（保存按钮的轻量视图） |
 | 视图 | ├ `staging.rs` | `ConnectionDraft`、暂存状态机、持久化映射（`draft_to_row` / `row_to_draft`）、来源短码、模板导入导出 |
 | 视图 | ├ `render.rs` | `open()`：闭包只做同步 / 快照 / 装配；逐块函数 `result_row_ui` / `side_panel_ui` / `header_ui`(`Header`) / `capability_panel_ui` / `driver_props_panel_ui` / `footer_ui` / `network_tab_ui` / `advanced_tab_ui` / `general_tab_ui`（头部已抽，闭包只剩装配） |
-| 视图 | ├ `managers.rs` | 三管理器覆盖层（认证 / 网络 / 环境）CRUD |
+| 视图 | ├ `managers.rs` | 三域列表 + 表单的**唯一实现**（`ManagerWorkspace` / `manager_panel_ui` / `prepare_manager_domain` / `upsert_manager_item` / `delete_manager_item` / 环境策略 CRUD）；旧内层对话框只是它的一层壳 |
+| 视图 | ├ `../config_center.rs` | 配置中心页（左三域导航 + 右面包屑 + `manager_panel_ui`），`ConfigCenterPage::new/switch/render` |
 | 视图 | ├ `type_tree.rs` / `draft_list.rs` | 左侧类型目录 / 暂存列表两处列表 UI（含同步指纹） |
 | 视图 | ├ `project_picker.rs` | 项目下拉项 `ProjectItem`（项目名 + 路径双列、搜索、末项「＋ 新增项目」） |
-| 视图 | ├ `host.rs` / `commands.rs` | `ConnectionDialogHost` trait（宿主桥：重绘 / 当前项目 / 请求新建·打开项目 / `show_plugin_manager` / 应用保存结果）与快捷键 Action |
+| 视图 | ├ `host.rs` / `commands.rs` | `ConnectionDialogHost` trait（宿主桥：重绘 / 当前项目 / 请求新建·打开项目 / `show_plugin_manager` / `show_config_center` / 应用保存结果）与快捷键 Action |
 | 视图 | └ `helpers/`（目录） | `mod`（尺寸 / 作用域 / Tab 定义 / `dialog_width` / `driver_kind_label`）、`capability`（能力行与字典）、`fields`（`DriverDerived`）、`files`（新建库文件）、`summary`、`tests` |
 | 视图 | `crates/workbench/src/panels/`（`EditorPanel` / `Shared`） | 入口（`request_new_connection` / `request_edit_connection`）、项目下拉订阅（`ensure_dialog_subscription`）、宿主重绘桥、面板级共享状态（含 `project_new_request`） |
 | 视图 | `crates/workbench/src/view/`（`WorkbenchView`） | 宿主渲染（`view/render.rs`）与编辑面板观察（`view/workspace.rs::cx.observe(editor)`）；对话框层由 `Root` 自动挂载 |
@@ -515,6 +516,7 @@ flowchart LR
 | 115 | **SSH Host Key TOFU + 严格校验开关（2026-10-03，§14 #37 实现）**：三态校验（`HostKeyOutcome`：Matched / Unknown / Mismatched）+ 策略 `HostKeyCheck`（`SshConfig.host_key_check`，默认 **Tofu**）——Matched 放行；**Mismatched 恒拒绝**（MITM）；Unknown + Tofu → 首连自动信任并 `append` 落盘 `~/.ssh/known_hosts`（幂等；非 22 端口 `[host]:port`；无文件路径仅内存）后放行；Unknown + Strict → 拒绝；Unknown + AllowUnknown → 放行不落盘（内网退路）。**弹窗确认（建议②完整形态）留后续**：连接链路无 gpui Window 上下文（`nav_runtime` 纯 tokio 桥），首连弹指纹确认需连接编排引入 UI 桥，单列一轮 | 用户批准"建议②首连弹指纹确认 + 写入 known_hosts + ③严格校验开关作内网退路"。① 本轮以自动 TOFU 落盘落地：二次连接同指纹 Matched、异指纹 Mismatched——MITM 防护闭环达成，且无 UI 桥的复杂度；② 严格模式覆盖公网 / 高安全场景；③ AllowUnknown 保留历史内网行为；④ `check_server_key` 为 async 回调，后续加 confirmer channel（UI 桥）即可升级为"弹窗确认" |
 | 116 | **切类型 / 切驱动后强制重跑 URI → 字段同步 + 端口回落驱动默认值（2026-11-12）**：`select_type` 与 `set_driver_by_value` 末尾清 `fields_synced_for`；`render` 的 URI → 字段方向在 URL 未带端口时用 `current_driver.default_port` 填端口 | 插件接入验收截图里 Oracle 表单显示端口 `3306`：`fields_synced_for` 的键是 `(驱动 id, URI)`，从 MySQL 草稿切到 Oracle 时若两者都没变（URL 仍空），同步被判定「已同步」而跳过，字段沿用上一种库的 3306。清标记后重解析，端口回落到清单 `default_port`（Oracle 1521 / SQL Server 1433）；URL 真带端口时仍以 URL 为准 |
 | 117 | **切类型 / 载入草稿时校验 URI scheme，不一致就清地址与凭据（2026-11-12）**：新增纯函数 `state::url_matches_driver_template`（比较 URI scheme 与驱动 `url_template`，`postgres`/`postgresql`、`mssql`/`sqlserver` 视为同族，无模板 / 非 `scheme://` 形态不判）；`select_type` 仅在同类型切换时调用 `reset_stale_endpoint`，`apply_draft` 对带 `type_id` 的草稿也调用一次，并同步清掉暂存快照里的 `url` / `user` / `pass`。不一致时清空 URI、用户名、密码并让 `render` 重新派生字段，结果行提示「地址与凭据已按新驱动重置」 | 用户截图：左栏选 Oracle、驱动显示 `Oracle Database`，但 URI 仍是 `mysql://root@192.168.3.138:3306/mysql`、端口 3306、库名 mysql——切类型只换了驱动与认证方法，旧库的协议 / 端口 / 库名原样保留，保存后就是「Oracle 驱动连 MySQL 地址」。清理放在切类型与载入草稿两处：前者防新错，后者修已落进暂存的旧草稿；只清表单不清快照会在关闭对话框时把旧地址又写回 `connection_drafts`。同一类型内换驱动（如 mysql → mysql_native）不动地址 |
+| 118 | **三个管理器升格为「配置中心页」（2026-11-18）**：`ManagerKind` 枚举（Auth / Network / Env，替代裸 `usize`）→ `ConnectionDialogHost::show_config_center(kind, window, cx)` → `Shared::open_config_center` 回调 → `WorkbenchView` 挂中央 Dock 单实例 `ConfigCenterPanel`（已在树中只聚焦，关 tab 可重挂），页面本体 `ConfigCenterPage` 首次打开才建（启动不付查库）；列表与表单**不新写一份**，抽 `managers::manager_panel_ui` + `prepare_manager_domain` 给对话框与页共用 | 现状是三管理器各走 `window.open_dialog` 再套一层：一个 590 行闭包里按 `kind` 分派二十多处，形态上「管理」像弹窗而不是"配置在哪管"。页化后：① 三域并排可切，用户在哪个域都看得到另外两域的存在与计数；② 域状态（列表 / 类型下拉 / 编辑中条目）只在一个实体里，切 tab 不丢；③ 两处渲染同一份 `manager_panel_ui`，避免"页里改好了、弹窗里还是旧样子"。**保留旧壳作兜底**：宿主没挂页（单测 / 无 Dock）时回落旧内层对话框，行为兼容；三域形态收口后再删 |
 
 ---
 

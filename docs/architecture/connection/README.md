@@ -60,6 +60,7 @@
 - **做**：数据源连接的**新增 / 编辑 / 删除 / 测试**、作用域路由、凭据与档案引用、DuckDB Secret 加速、运行时连接与隧道、暂存草稿、连接的组织元数据（标签 / 分组勾选）。
 - **不做**：数据源**导航树 / 分组管理 / 标签检索视图**（属 database-nav，见 `../database/database-nav-dev-plan.md`）；驱动**安装 / 插件**本体（平台；对话框只做「一键跳到插件管理」的入口）。
 - 模板**导入导出**已实装（暂存列表标题行 `导出 / 导入`，剪贴板 JSON、不含密码）。
+- **配置中心页（2026-11-18）**：认证 / 网络 / 环境三域已从「对话框内再开一层」升格为中央 Dock 单实例页（左域导航 + 右面包屑 + 内容）。列表与表单仍复用 `managers::manager_panel_ui` 同一份实现（页面不是对话框的克隆）；三处「管理」优先走 `show_config_center`，宿主没挂页时回落旧内层对话框，旧壳待三域形态收口后再删。
 
 ## 3. 代码地图（要改什么去哪）
 
@@ -68,14 +69,15 @@
 | 对话框 UI / 布局 / 交互 | `crates/connection_dialog/src/components/connection_dialog/render.rs`（逐块函数：`result_row_ui` / `side_panel_ui` / `header_ui` / `capability_panel_ui` / `driver_props_panel_ui` / `footer_ui` / `network_tab_ui` / `advanced_tab_ui` / `general_tab_ui`）+ `helpers/` 纯函数 + `crates/workbench_shell/src/ui.rs` 尺寸常量 |
 | 暂存列表 / 草稿快照 | `crates/connection_dialog/src/components/connection_dialog/staging.rs`（`ConnectionDraft` + `staging_*`）+ `draft_list.rs` |
 | 类型树 / 项目下拉 | `connection_dialog/type_tree.rs`、`connection_dialog/project_picker.rs`（+ `Shared::{project_new_request, project_open_request}` → `take_project_action_request`） |
-| 三个管理器覆盖层 | `connection_dialog/managers.rs` |
+| 三个配置域（认证 / 网络 / 环境）的列表 + 表单 | `connection_dialog/managers.rs`（`manager_panel_ui` / `prepare_manager_domain` 为唯一实现，对话框与页共用） |
+| 配置中心页（三域左导航 + 右内容） | `crates/connection_dialog/src/components/config_center.rs`（页面本体）+ `crates/workbench/src/panels/config_center.rs`（中央 Dock 单实例页）+ `ConnectionDialogHost::show_config_center` |
 | 落库 / 回读 / 测试连接 / 作用域路由 | `crates/connection_dialog/src/services/data_source_service.rs` |
 | 连接组装与隧道 | `crates/connection_dialog/src/services/connection_service.rs`（+ `connection_service/{network,runtime}.rs`）+ `crates/connection/src/{url,url_params,chain,secret}.rs` |
 | 共用 tokio 运行时 | `crates/connection_dialog/src/services/rt.rs`（`OnceLock<Option<Runtime>>` + `runtime()`） |
 | **网络配置（SSH / 代理 / SOCKS / SSL）**：模型 | `crates/connection/src/config.rs`（`SshConfig` / `SshAuth` / `ProxyConfig` / `SslConfig` / `ChainHop` / `ConnectionMethod`）+ `model.rs` |
 | **网络配置**：真实拨号与隧道 | `crates/connection/src/connector/`（`ssh.rs`：`establish_ssh_tunnel` 基于 **russh** 本地端口转发 + `SshTunnelConnector`〔废弃占位，防静默直连〕；`proxy.rs`：HTTP / SOCKS 代理；`tls.rs`：`SslConnector` / `wrap_tls_stream`；`mod.rs`：`Connector` trait / `Connection` / `DirectConnector` / `TunnelGuard`）+ `factory.rs`（按配置选连接器）+ `stream.rs`（隧道流）、`known_hosts.rs`（主机指纹校验）、`chain.rs`（`apply_network_method` 单跳 + `process_chain` 多跳 + `TunnelRegistry` 守卫表） |
 | **网络配置**：落库 | `crates/store/src/persistence/network_store.rs`（结构化字段组装 / 回填 + 凭据 AES 加密 / 脱敏 / 存量迁移） |
-| **网络配置**：UI 入口 | 「网络」页（引用下拉 + 「管理网络配置」）→ `connection_dialog/managers.rs`（类型 + 字段表单）+ `helpers::{network_field_specs, network_config_values}`（按类型展开字段）；**内联协议链编辑器已撤下**（决策 #72，多跳走 `chain` 档案） |
+| **网络配置**：UI 入口 | 「网络」页（引用下拉 + 「管理」）→ **优先打开配置中心页的网络代理域**（`show_config_center`）；宿主未挂页时回落 `connection_dialog/managers.rs` 的内层对话框。表单按类型展开字段（`helpers::{network_field_specs, network_config_values}`）；**内联协议链编辑器已撤下**（决策 #72，多跳走 `chain` 档案） |
 | 表结构与迁移 | `crates/store/src/persistence/*`（`network_store` / `auth_store` / `driver_store` / `connection_org_store` / `metadata_identity`）+ `crates/store/migrations/{global,project_meta}/*` |
 | ID 规则与作用域判定 | `crates/store/src/persistence/id_prefix.rs` |
 

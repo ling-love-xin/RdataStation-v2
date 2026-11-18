@@ -69,6 +69,8 @@
 | `draft_list.rs`     | 暂存列表 UI：行渲染、脏标记 `●`、**同步指纹**（行数 + 光标 + 每条 saved\_id / 名称 + 光标位实时表单值，解决 "填名称列表不更新"）                                                                                                                                              |
 | `type_tree.rs`      | 左侧类型目录 UI + 同步指纹（目录 / 过滤词 / 选中项）                                                                                                                                                                                                |
 | `project_picker.rs` | 项目下拉（仅项目 / 全局 + 项目作用域）                                                                                                                                                                                                          |
+| `managers.rs`（本目录） | 三域列表 + 表单的唯一实现：`ManagerWorkspace` / `ManagerKind` 分派 / `manager_panel_ui`（对话框与页共用）/ `prepare_manager_domain`（切域重置 + 拉列表 + 类型下拉）/ `upsert_manager_item` / `delete_manager_item` / 环境策略 CRUD |
+| `../config_center.rs` | 配置中心页（左三域导航 + 右面包屑 + `manager_panel_ui`）：`ConfigCenterPage::{new, switch, render, kind, set_project_root}`；工作台侧 `panels/config_center.rs` 只做 Dock 契约 |
 
 ### 3.2 `crates/connection/`（传输层 crate，10 个模块）
 
