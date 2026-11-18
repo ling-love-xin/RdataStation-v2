@@ -1490,8 +1490,20 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   内部元素的 id 进不了渲染观测。
 - 测试壳默认不注入 `status`，状态行整块不渲染（`show_status` 口径）：断言状态行元素前
   先 `p.status = Some(ResultStatus { .. })`。
-- 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；无 focus-lost 回填
-  （`InputState` 没有失焦钩子），只做「有效提交即规范化」。
+- 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
+  `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
+
+### 2.80 段大小输入框失焦回填的接手要点（2026-11-18）
+
+- 回填判定是纯函数 `panel::events::segment_rows_blur_display(text, current)`：
+  文本（去首尾空白）≠ 当前生效值就返回该生效值，否则 `None`（不改写）；
+  改口径只改这一处，订阅里只负责 `set_value`。
+- **`InputEvent::Blur` 是 vendor 0.9.0 就有的**（`gpui_base/.../input/base/state.rs:137-147`，
+  `Change` / `PressEnter` / `Focus` / `Blur` / `GutterMarkerClick`）——
+  以后要"失焦提交"这类交互别再写"没有失焦钩子"。
+- 但 headless 测试**派发不了它**（`window.focus()` 只改窗口焦点跟踪，不派发元素级事件；
+  同款注记见 `crates/editor/src/view/tests/analysis.rs:476-483`），
+  所以这类逻辑一律抽纯函数钉测，真窗口行为靠目视。
 
 ### 2.79 计算页默认集 / Reset 的接手要点（2026-11-18）
 

@@ -4546,7 +4546,8 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
   非数字 / 0 / 负数 / 小数 → `None`（不写、不动状态），口径照 DBeaver 只在 `>0` 时写。
 - 状态行中段新增「段」+ 输入框（`editor-result-segment-size`，`RESULT_SEGMENT_BOX_WIDTH = 4rem`），
   注入口径与行数框一致（面板注入 `InputState`，`None` 时不摆）；有效输入就地规范化
-  （`007` → `7`，≈ DBeaver 失焦回填）+ 入队 `ResultRequest::SetSegmentRows`。
+  （`007` → `7`，≈ DBeaver 失焦回填）+ 入队 `ResultRequest::SetSegmentRows`；
+  **失焦回填**见 §8.92。
 - 宿主分发：`panel.set_segment_rows`（`max(MIN)` 夹取、同值不重入）。
 - **真正的消费者**：`fetch_more` 的 `ExecTarget::Segment { limit }` 改为读面板当前值
   （过去是编辑器侧固定常量 `execution::SEGMENT_ROWS`），即「段大小」改完立刻作用于
@@ -4557,9 +4558,8 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
   连接的所有结果集都生效；本仓先落在**面板视图态**（同一会话内所有「取下一段」用它），
   **跨会话不持久化**——接 `SettingsService` 需要新增 `result_panel.segment_rows` 偏好项
   + 设置页条目 + 宿主构造期注入，属下一批（未落地，别当成已完成）。
-- DBeaver 的 focus-lost 回填做成了「有效提交即规范化」：用户敲无效文本（如 `abc`）后
-  失焦，框里会保留这段无效文本（不自动打回原值）。这是 `InputState` 没有失焦钩子的
-  直接后果，属交互细化，留目视阶段。
+- ~~DBeaver 的 focus-lost 回填~~（**已补齐，见 §8.92**：`InputEvent::Blur` 在 vendor 0.9.0
+  的 `InputEvent` 里存在，此前"`InputState` 没有失焦钩子"的结论是错的）。
 - 行数框的注释仍写着「行号跳转是 backlog」，实际 `GoRow` 已接线（本批顺手未改注释文案，
   下一批清理）。
 
@@ -4799,10 +4799,35 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
 - `cargo test -p rds-settings --lib` = **37 passed**；`cargo test -p rds-result-panel --lib`
   = **324 passed**；`cargo check -p rds-editor` = Finished；`cargo test -p rds-ui-guard` = 4 passed。
 
+### 8.92 段大小输入框的失焦回填（补 §8.85 缺口，对齐 `resultSetSize.focusLost`，2026-11-18）
 
+**取证**（`ResultSetViewer.java:2126-2153`，`resultSetSize` 是 SWT `Text`，两条监听器）：
+- `modifyListener:2138-2152`：`toInt(text)` → `fetchSize > 0` 才进容器偏好分支，
+  `> 0 && < MIN_SEGMENT_SIZE` 抬到下限（`MIN_SEGMENT_SIZE = 1`）。
+- `focusLost:2129-2137`：`String realValue = String.valueOf(getSegmentMaxRows())`，
+  **`if (!realValue.equals(resultSetSize.getText())) resultSetSize.setText(realValue)`**
+  ——失焦时把框里的文本强制改回当前生效值。
 
+**本仓此前的缺口**：只做了第一段（有效输入即规范化），**没有第二段**：敲 `0` / `abc` / 空串
+又不回车，状态行会一直留着一段不生效的文本，用户看不出"你的输入被忽略了"。
+（此前文档写的「`InputState` 没有失焦钩子」是**错的**：vendor 0.9.0 的
+`gpui_base::input::base::state::InputEvent` 带 `Blur` 变体，见 `state.rs:137-147`。）
 
+**落点**：
+- 纯函数 `panel::events::segment_rows_blur_display(text, current) -> Option<String>`：
+  去首尾空白后 ≠ 生效值 → `Some(生效值)`；相等 → `None`（不改写、不打回光标）。
+- `panel::lifecycle` 的段输入订阅新增 `InputEvent::Blur` 分支（排在 `Change` 判断之前）：
+  读文本 → 按上式 `set_value(生效值)`。`set_value` 内部 `emit_events = false`，
+  回填不会自触发 `Change`。
 
+**测试限制（已知、别当成漏测）**：headless 里 `window.focus(...)` 只改窗口焦点跟踪，
+**不派发元素级焦点事件**，`InputEvent::Blur` 不 emit（同款注记见
+`crates/editor/src/view/tests/analysis.rs:476-483`）；所以回填判定钉在纯函数
+`segment_rows_blur_restores_the_effective_value`（`abc` / `0` / 空 / 负数 / 未提交的合法值
+→ 回填；已是生效值、带首尾空白 → 不动），真窗口失焦行为留目视阶段确认。
+
+**验证**：`cargo test -p rds-result-panel --lib` = **325 passed**；`cargo check -p rds-editor`
+= Finished；`cargo test -p rds-ui-guard` = 4 passed。
 
 ## 8. 协作纪律
 
