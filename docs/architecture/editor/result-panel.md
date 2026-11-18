@@ -4290,6 +4290,57 @@ editor results 45、ui-guard 4、check 0-0。提交 `e1b797db`。
   跨会话恢复；本仓面板状态只在本次面板生命周期内有效（换结果集即回落第一条）。
 
 
+### 8.80 「查看引用行」：按当前行值另开一份结果集（方案 B′，2026-11-18）
+
+**取证**（`ReferencesResultsContainer.java`）：
+- `refreshKeyValues`（`:382-432`）：键选好后按父结果集的**选中行集合**取数，
+  `dataViewer.navigateReference` / `navigateAssociation` 生成查询后执行；选中行为空则清空该区域。
+  也就是说「查什么」由**当前行的外键值**决定，不是整表扫。
+- 本仓不嵌第二份 `ResultSetViewer`（会把「一份结果集 = 一份 store / exec 上下文」的假设打破），
+  按 `result-panel-references-plan.md` §5 的 `B′`：生成查询 → 编辑器**另开一份结果集**。
+
+**本仓落点**：
+- `references.rs` 新增纯函数：
+  - `ReferenceValue { column, value, data_type }`（值是驱动原始文本，不是渲染后的 `—`）；
+  - `sql_literal(value, data_type)`：三档 —— NULL（空串 / `NULL`）→ `NULL`；
+    数值列 + 值确实是数字 → 裸拼（数值列被包成字符串时 PostgreSQL / SQL Server 会直接报
+    `operator does not exist: integer = text`）；数值列上不是数字的值 → 加引号（不静默产出坏 SQL）；
+    其余（布尔 / 日期 / 文本）一律加引号，单引号按标准**双写**（`O'Brien` → `O''Brien`）。
+  - `reference_rows_sql(key, values)`：`SELECT * FROM 目标表 WHERE 目标列 = 值 [AND …]`，
+    空值改 `IS NULL`（`= NULL` 永远不成立）；目标表为空、目标列没报 / 数量对不上、
+    值数量与参与列不符 → `None`（不拼半条条件）。
+- 面板 `ResultPanel::reference_rows_sql(cx)`：选中键 + 当前行 → 逐列取值。
+  **参与列被隐藏也算拿不到**（DBeaver 只按可见属性收集），列号走
+  `display_order()` 的显示位次 + 1（首列是行号槽），隐藏列自然不在显示序里。
+- 页面：键下拉右侧加「查看引用行」钮（`IconName::Rows3`、id `editor-result-reference-rows`），
+  四缺一（无键 / 无选中行 / 列被隐藏 / 该格无值）就置灰。
+- 端口 `ResultRequest::OpenReferenceRows { sql }` → editor 分派
+  `execute(ExecTarget::Statement(sql), ResultPlacement::NewSet)`：
+  **原结果保持选中、引用行落在旁边新标签**（`ResultPlacement::NewSet` 的既有语义，
+  `ResultEntry` 注释里的「别动我正在看的东西，新的那份放旁边」）。
+
+**验证**：
+- `references::tests`（+2 例）：`sql_literals_are_typed_and_escaped`（NULL 三态 / 数值裸拼 /
+  数值列上非数字退回引号 / 布尔与日期加引号 / 单引号双写 / 裸拼去空白）；
+  `reference_rows_sql_covers_the_three_shapes`（单列 / 复合两列 / `IS NULL` /
+  缺目标列、值数量不符、空表名三种拒绝）。
+- `panel::tests::reference_rows_use_the_selected_row_values`：无选中行 → `None`；
+  选中第一行 → `SELECT * FROM customers WHERE id = 1`（数值列裸拼）；入队一条
+  `OpenReferenceRows` 且载荷同一条 SQL；切到引用页后按钮真的在元素树里。
+- 门禁：check（editor / workbench）**Finished 0 warning**；result_panel **309**、
+  editor results 45、ui-guard 4。
+
+**已知缺口 / 有意偏离**：
+- 只按**单个选中行**取（DBeaver 支持多行选中后批量 `IN`）；本仓网格的多行选择目前只用于
+  列多选 / 复制，未接到这一支。
+- 目标表不带 schema 前缀（`ConstraintDetail.referenced_table` 是驱动原话，通常同 schema）：
+  跨 schema 的外键在目标表另属一个 schema 时会查错库，需按驱动元数据补全，未做。
+- 值取自结果集文本（不是按列类型反序列化）：二进制 / 时间带时区的值会按字面量传下去，
+  与 DBeaver 的 `ColumnType` 绑定不同。
+- 不做「执行前预览」：DBeaver 也是选中即查；本仓的差别是新结果集**换了标签**，用户能看见 SQL
+  （标签悬停即原始 SQL）。
+
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

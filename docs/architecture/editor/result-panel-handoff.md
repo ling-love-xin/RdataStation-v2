@@ -1476,6 +1476,22 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   别先怀疑约束过滤。
 
 
+### 2.69 「查看引用行」的接手要点（B′ 已接，多行与跨 schema 未接，2026-11-18）
+
+- 查询由**面板**算（`ResultPanel::reference_rows_sql` → `references::reference_rows_sql`），
+  宿主只管执行：`ResultRequest::OpenReferenceRows { sql }` →
+  `execute(ExecTarget::Statement(sql), ResultPlacement::NewSet)`。要在面板里加新的取值来源，
+  改的是面板那一步；宿主那一步不需要理解外键。
+- 字面量规则集中在 `references::sql_literal`：**数值列裸拼、其它加引号、NULL 走 `IS NULL`**。
+  改这条规则会让「引用的值查不出来 / 查出错」直接可见，务必同步它的用例。
+- 「参与列被隐藏」= 拿不到值（DBeaver 只按可见属性收集）。列号必须用
+  `display_order()` 的显示位次 + 1，别用数据列下标——隐藏 / 拖列之后两者不一致。
+- 落在**新标签**（`NewSet`）而不是替换：这是 `B′` 与 DBeaver「面板内嵌视图」的核心差异，
+  别改成 `Replace`（那会把用户正在看的结果冲掉）。
+- 未做：多行选中（DBeaver 会拼 `IN`）、跨 schema 目标表（`referenced_table` 只有驱动原话的表名）、
+  按列类型反序列化值（现在是结果集文本直出）。
+
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。
