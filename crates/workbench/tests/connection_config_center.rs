@@ -14,7 +14,7 @@ use gpui_kit::component::Root;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     AppContext as _, Context, ElementId, Entity, IntoElement, Render, SharedString,
-    TestAppContext, VisualTestContext, Window,
+    TestAppContext, VisualTestContext, Window, point,
 };
 
 use connection_dialog::ManagerKind;
@@ -106,4 +106,65 @@ fn page_is_created_lazily_then_switches_domain(cx: &mut TestAppContext) {
         });
     });
     assert_eq!(current_kind(&panel, cx), Some(ManagerKind::Auth));
+}
+
+/// 形态（配置中心页原型）：进域先看列表，点「新建」才进表单，「返回列表」回得去。
+///
+/// 钉住两件事：默认态是列表（此前列表与表单同屏，条目一多表单被顶出可视区）；
+/// 两态互斥（表单开着时列表的「新建」不该还挂在那儿）。
+#[gpui_kit::test]
+fn manager_panel_is_list_first_then_toggles_form(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (harness, cx) = open_harness(cx);
+
+    cx.update(|window, cx| {
+        harness.update(cx, |h, cx| {
+            h.panel
+                .update(cx, |panel, cx| panel.show_domain(ManagerKind::Auth, None, window, cx));
+        });
+    });
+    cx.run_until_parked();
+
+    assert!(visible(cx, "mgr-new"), "列表态应看到「新建」");
+    assert!(!visible(cx, "mgr-back"), "列表态不该有返回栏");
+
+    // 点「新建」→ 表单态。
+    let new_btn = cx.update(|window, _| {
+        window.find(ElementId::Name(SharedString::from("mgr-new")))
+    });
+    let center = point(
+        new_btn.bounds().size.width / 2.,
+        new_btn.bounds().size.height / 2.,
+    );
+    cx.update(|window, cx| {
+        window.click_at(
+            ElementId::Name(SharedString::from("mgr-new")),
+            center,
+            cx,
+        )
+    });
+    cx.run_until_parked();
+
+    assert!(visible(cx, "mgr-back"), "表单态应出现「‹ 返回列表」");
+    assert!(!visible(cx, "mgr-new"), "表单态不该还挂着「新建」");
+
+    // 点「返回列表」→ 回到列表态。
+    let back_btn = cx.update(|window, _| {
+        window.find(ElementId::Name(SharedString::from("mgr-back")))
+    });
+    let center = point(
+        back_btn.bounds().size.width / 2.,
+        back_btn.bounds().size.height / 2.,
+    );
+    cx.update(|window, cx| {
+        window.click_at(
+            ElementId::Name(SharedString::from("mgr-back")),
+            center,
+            cx,
+        )
+    });
+    cx.run_until_parked();
+
+    assert!(visible(cx, "mgr-new"), "返回列表后「新建」应回来");
+    assert!(!visible(cx, "mgr-back"), "返回列表后表单应关掉");
 }

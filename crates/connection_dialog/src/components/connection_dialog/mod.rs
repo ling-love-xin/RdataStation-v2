@@ -335,6 +335,11 @@ pub struct ManagerWorkspace {
     pub(crate) net_specs: Rc<RefCell<Vec<NetFieldSpec>>>,
     /// 编辑中的条目名（Some = 更新既有条目，None = 新建）。
     pub editing: Option<String>,
+    /// 列表 ⇄ 表单两态（false = 看列表，true = 表单已开）。
+    ///
+    /// 对话框里一屏高度有限：列表与表单同屏时，条目一多表单就被推到折叠线以下。
+    /// 两态后「编辑 / 新建」先切到表单、`← 返回列表` 切回，与配置中心页原型一致。
+    pub form_open: bool,
     pub msg: Option<String>,
     // ---- 环境策略（`Env` 域展开面板）----
     /// 当前展开策略管理的环境名（None = 收起）。
@@ -397,6 +402,7 @@ pub(crate) fn manager_workspace(window: &mut Window, cx: &mut App) -> ManagerWor
         net_specs_for: Rc::new(RefCell::new(String::new())),
         net_specs: Rc::new(RefCell::new(Vec::new())),
         editing: None,
+        form_open: false,
         msg: None,
         policy_env: None,
         policy_type,

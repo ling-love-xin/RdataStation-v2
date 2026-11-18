@@ -6,6 +6,15 @@ use shared::i18n::tr;
 /// 结构尺寸最终应迁移到 `ui.rs` 登记（与对话框的 `DIALOG_*` 同路）。
 const NET_LABEL_W: f32 = 7.;
 
+/// 域的中文名（列表标题 / 面包屑共用一处，避免两处各写一份）。
+fn manager_kind_label(kind: ManagerKind) -> String {
+    match kind {
+        ManagerKind::Auth => tr("认证档案").to_string(),
+        ManagerKind::Network => tr("网络代理").to_string(),
+        ManagerKind::Env => tr("环境策略").to_string(),
+    }
+}
+
 /// 取字段输入实体（键不存在 → None）。
 fn net_input_entity(mgr: &ManagerWorkspace, key: &str) -> Option<Entity<InputState>> {
     mgr.net_inputs
@@ -92,6 +101,8 @@ pub(crate) fn prepare_manager_domain(
         let mut m = mgr.borrow_mut();
         m.kind = kind;
         m.editing = None;
+        // 切域一律回到列表态：上一个域停在「编辑某条」时，切过来不该直接看到半张表单。
+        m.form_open = false;
         m.msg = None;
         m.items.clear();
         m.project_root = project_root;
@@ -589,9 +600,44 @@ pub(crate) fn manager_panel_ui(
         }
         let theme = cx.theme();
         let m = mgr.borrow();
+        let form_open = m.form_open;
 
-        // 列表行。
+        // 列表行（表单打开时这段仍需构建判据，但容器里不挂——见函数末尾的组装）。
         let mut rows = div().v_flex().gap_1();
+        if !form_open {
+            let mgr_new = mgr.clone();
+            let notify_new = notify.clone();
+            rows = rows.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .pb_1()
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_sm()
+                            .font_weight(FontWeight::BOLD)
+                            .child(format!("{}（{} 条）", manager_kind_label(kind), m.items.len())),
+                    )
+                    .child(
+                        Button::new("mgr-new")
+                            .primary()
+                            .label(tr("新建"))
+                            .on_click(move |_, window, app| {
+                                let mut m = mgr_new.borrow_mut();
+                                m.form_open = true;
+                                m.editing = None;
+                                m.msg = None;
+                                m.new_name.update(app, |s, cx| s.set_value("", window, cx));
+                                m.new_data.update(app, |s, cx| s.set_value("", window, cx));
+                                clear_net_values(&m, window, app);
+                                drop(m);
+                                notify_new(app);
+                            }),
+                    ),
+            );
+        }
         if m.items.is_empty() {
             rows = rows.child(
                 div().text_xs().text_color(theme.colors.muted_foreground).child(tr("暂无配置，点击下方「新建」")),
@@ -633,6 +679,8 @@ pub(crate) fn manager_panel_ui(
                                 m.policy_env = Some(item.name.clone());
                                 m.policy_editing = None;
                                 m.policy_enabled.set(true);
+                                // 策略面板挂在列表态：先把表单收起来，避免两态互相压。
+                                m.form_open = false;
                                 drop(m);
                                 refresh_policy_items(&item.name, &mgr, app);
                                 let mut m = mgr.borrow_mut();
@@ -655,6 +703,7 @@ pub(crate) fn manager_panel_ui(
                                     let item_name = item.name.clone();
                                     let mut m = mgr.borrow_mut();
                                     m.editing = Some(item_name.clone());
+                                    m.form_open = true;
                                     m.msg = Some(format!("编辑中：{item_name}（保存后更新既有条目）"));
                                     m.new_name.update(app, |s, cx| s.set_value(item_name.clone(), window, cx));
                                     // 认证与网络：回填真实字段（此前只回填名称 →
@@ -797,10 +846,35 @@ pub(crate) fn manager_panel_ui(
                 .border_color(theme.colors.border)
                 .px_3()
                 .py_2()
-                .child(
-                    div().text_sm().font_weight(FontWeight::BOLD)
-                        .child(if editing.is_some() { tr("编辑配置") } else { tr("新建配置") }),
-                )
+                .child({
+                    let mgr_back = mgr.clone();
+                    let notify_back = notify.clone();
+                    let title = match &editing {
+                        Some(name) => format!("{} / 编辑：{}", manager_kind_label(kind), name),
+                        None => format!("{} / 新建", manager_kind_label(kind)),
+                    };
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            Button::new("mgr-back")
+                                .secondary()
+                                .label(tr("‹ 返回列表"))
+                                .on_click(move |_, window, app| {
+                                    let mut m = mgr_back.borrow_mut();
+                                    m.form_open = false;
+                                    m.editing = None;
+                                    m.msg = None;
+                                    m.new_name.update(app, |s, cx| s.set_value("", window, cx));
+                                    m.new_data.update(app, |s, cx| s.set_value("", window, cx));
+                                    clear_net_values(&m, window, app);
+                                    drop(m);
+                                    notify_back(app);
+                                }),
+                        )
+                        .child(div().text_sm().font_weight(FontWeight::BOLD).child(title))
+                })
                 .child(
                     div().h_flex().items_center().gap_2()
                         .child(div().text_xs().child(tr("名称")))
@@ -862,6 +936,7 @@ pub(crate) fn manager_panel_ui(
                                         m.msg = Some(outcome.clone());
                                         if outcome.starts_with("已保存") || outcome.starts_with("保存成功") {
                                             m.editing = None;
+                                            m.form_open = false;
                                             m.new_name.update(app, |s, cx| s.set_value("", window, cx));
                                             m.new_data.update(app, |s, cx| s.set_value("", window, cx));
                                             clear_net_values(&m, window, app);
@@ -881,6 +956,7 @@ pub(crate) fn manager_panel_ui(
                                     move |_, window, app| {
                                         let mut m = mgr.borrow_mut();
                                         m.editing = None;
+                                        m.form_open = false;
                                         m.msg = None;
                                         m.new_name.update(app, |s, cx| s.set_value("", window, cx));
                                         m.new_data.update(app, |s, cx| s.set_value("", window, cx));
@@ -1042,12 +1118,18 @@ pub(crate) fn manager_panel_ui(
             }
         };
 
-    div()
-        .v_flex()
-        .gap_3()
-        .child(rows)
-        .child(policy_panel)
-        .child(mgr_form)
+    // 两态互斥组装：列表态 = 列表 +（环境）策略面板 + 结果行；表单态 = 编辑栏 + 表单 + 结果行。
+    let list_msg = mgr.borrow().msg.clone();
+    let mut panel = div().v_flex().gap_3();
+    if form_open {
+        panel = panel.child(mgr_form);
+    } else {
+        panel = panel.child(rows).child(policy_panel);
+        if let Some(msg) = list_msg {
+            panel = panel.child(div().text_xs().text_color(theme.colors.info).child(msg));
+        }
+    }
+    panel
         .child(
             div().text_xs().text_color(theme.colors.muted_foreground)
                 .child(match kind {
