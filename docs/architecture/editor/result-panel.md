@@ -3437,8 +3437,8 @@ panicked at panel/tests.rs:1091:
 重置 transformers / 重置 pins / 全部重置（`:1525-1545`）。
 
 本仓此前是「有词才出现」，按钮随打字在行尾左右跳一格。改为**常在**、`disabled(空词)`。
-箭头菜单里的几项本仓已有等价入口（列浏览器「显示全部」、右键「重置排序」等），
-本轮不合并成菜单——收窄在册（见 §8.63）。
+箭头菜单（DBeaver 侧那 6 项）按「能力没有就不摆」只合并了本仓真有落点的两条，
+见 §8.64。
 
 #### 8.62.3 测试
 
@@ -3528,9 +3528,33 @@ DBeaver 的这对按钮是 `SWT.DROP_DOWN`：**主体点击走一格**，右侧 
 | `panel::tests::history_buttons_sit_in_the_filter_row_and_gate_on_position` | 渲染与菜单：空历史时两主体钮**在位且禁用**、两方向菜单都空；灌两条后后退钮可用、前进钮仍禁用（末位）；后退菜单 = `[(0, "select 1")]`（近的在前）、前进菜单空；`history_hint` = 目标 SQL；`state_label` 折叠空白 + 50 字符截断补 `…` |
 
 - `cargo check -p rds-result-panel -p rds-editor` = 0 error / 0 warning。
-- `cargo test -p rds-result-panel --lib` = **275 passed / 0 failed**（273 + 本批 2）。
+- `cargo test -p rds-result-panel --lib` = **276 passed / 0 failed**（273 + §8.63 两条 + §8.64 一条）。
 - `cargo test -p rds-editor --lib results` = **45 passed / 0 failed**。
 - `cargo test -p rds-ui-guard`（不带 `--lib`）= 4 passed。
+
+### 8.64 筛选条 ✕ 的箭头菜单（EraseItemListener 的本仓子集，2026-11-18）
+
+DBeaver 的 `filtersClearButton` 是 `SWT.DROP_DOWN`：本体 `clearDataFilter(true)`
+（`ResultSetFilterPanel.java:1550`），右侧箭头弹 `EraseItemListener` 菜单
+（`ResultSetViewer.java:1525-1545`），条目为：清筛选设置 / 显示隐藏列 / 重置颜色 /
+重置 transformers / 重置 pins / 全部重置。
+
+本仓按既有口径「**能力没有就不摆**」只合并真有落点的两条，其余一律不摆（不摆假项、
+不摆点了没反应的项）：
+
+| 条目 | 本仓落点 | 出现条件 |
+| --- | --- | --- |
+| 清除筛选词 | `ResultRequest::ClearFilter`（与 ✕ 本体同一条通道） | 有筛选词 |
+| 显示全部列 | 新增 `ResultRequest::ShowAllColumns` → 宿主 `delegate.show_all_columns()` + 网格 refresh + `snapshot_column_layout`（与列头 / 右键「显示全部列」同一能力、同一落盘路径） | 有隐藏列（`column_hidden` 非空） |
+
+- 条目清单抽成纯函数 `erase_menu_labels(filter_text, hidden_columns)`
+  （`panel/events.rs`）：`PopupMenu` 内部不可读，菜单长什么样只能靠纯函数钉。
+- 形态：`DropdownButton` 分裂按钮，左半是原来那颗 `editor-result-filter-clear`
+  （ghost xsmall、`✕`、`disabled(空词)`），右半是 caret；`menu_accessibility_label("清除选项")`。
+- 两条都不可用时箭头**仍常在**（宽度不跳），菜单里摆一条禁用说明「暂无可清除项」——
+  DBeaver 那边同类情况是条目置灰，而不是整项消失。
+- 测试：`panel::tests::erase_menu_lists_only_the_entries_this_repo_can_honour`（空词+无隐藏
+  → 空；有词 → 一条；有隐藏 → 一条；两者 → 两条且清除在前）。
 
 
 ## 8. 协作纪律

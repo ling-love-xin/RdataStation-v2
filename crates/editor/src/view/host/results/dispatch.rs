@@ -251,6 +251,19 @@ impl EditorHostPanel {
                     .update(cx, |panel, cx| panel.snapshot_column_layout(cx));
                 self.result_panel.update(cx, |_, cx| cx.notify());
             }
+            // 【筛选条 ✕ 箭头菜单】「显示全部列」（对齐 DBeaver `EraseItemListener`
+            // `ResultSetViewer.java:1525-1545` 里「显示隐藏列」那一项）：委托放回全部列，
+            // 再按 `ToggleColumnVisibility` 同一条路子刷新网格 + 快照落盘
+            ResultRequest::ShowAllColumns => {
+                let grid = self.grid.clone();
+                grid.update(cx, |table, cx| {
+                    table.delegate_mut().show_all_columns();
+                    table.refresh(cx);
+                });
+                self.result_panel
+                    .update(cx, |panel, cx| panel.snapshot_column_layout(cx));
+                self.result_panel.update(cx, |_, cx| cx.notify());
+            }
             // 【呈现】显示方式（网格 / 文本）：纯面板状态，宿主只转发
             ResultRequest::SetPresentation(presentation) => {
                 self.result_panel

@@ -1151,6 +1151,24 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   `history_buttons_sit_in_the_filter_row_and_gate_on_position`（在位数 + 启用态 + tooltip 口径）。
 - **验证**：panel **273 → 275 passed** / editor `--lib results` 45 / guard 4 / check 0-0。
 
+### 2.53 筛选条 ✕ 的箭头菜单（2026-11-18）
+
+全文见 `result-panel.md §8.64`。接手要点：
+
+- DBeaver `filtersClearButton` 是 `SWT.DROP_DOWN`：本体 `clearDataFilter(true)`
+  （`ResultSetFilterPanel.java:1550`），箭头弹 `EraseItemListener`（`ResultSetViewer.java:1525-1545`：
+  清筛选设置 / 显示隐藏列 / 重置颜色 / transformers / pins / 全部重置）。
+- 本仓按「能力没有就不摆」只合并两条：**清除筛选词**（有词才出现）与**显示全部列**
+  （有隐藏列才出现，走新增的 `ResultRequest::ShowAllColumns` → `delegate.show_all_columns()`
+  + 网格 refresh + `snapshot_column_layout`）。
+- 条目清单是纯函数 `erase_menu_labels(filter_text, hidden_columns)`（`panel/events.rs`）——
+  `PopupMenu` 内部不可读，菜单形态只能靠纯函数钉。
+- 形态：`DropdownButton` 分裂按钮（左半仍是 `editor-result-filter-clear`、`✕`、空词禁用；
+  右半 caret，`menu_accessibility_label("清除选项")`）；两条都不可用时箭头仍在、菜单摆一条
+  禁用说明「暂无可清除项」，宽度不跳。
+- 用例：`erase_menu_lists_only_the_entries_this_repo_can_honour`。
+- **验证**：panel **276 passed** / editor `--lib results` 45 / guard 4 / check 0-0。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）

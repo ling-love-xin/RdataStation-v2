@@ -1126,6 +1126,24 @@ impl ResultPanel {
     }
 }
 
+/// 【筛选条 ✕ 箭头菜单】条目清单（纯函数，测试直接覆盖；`PopupMenu` 内部不可读）。
+///
+/// 对齐 DBeaver `EraseItemListener`（`ResultSetViewer.java:1525-1545`）：那边是
+/// 清筛选设置 / 显示隐藏列 / 重置颜色 / 重置 transformers / 重置 pins / 全部重置。
+/// 本仓口径「能力没有就不摆」：只留**真有落点**的两条——
+/// - `清除筛选词`（有词才可点，等价筛选行的 ✕ 本体）
+/// - `显示全部列`（有隐藏列才摆，与列头 / 右键菜单同口径）
+pub(crate) fn erase_menu_labels(filter_text: &str, hidden_columns: usize) -> Vec<&'static str> {
+    let mut labels = Vec::new();
+    if !filter_text.trim().is_empty() {
+        labels.push("清除筛选词");
+    }
+    if hidden_columns > 0 {
+        labels.push("显示全部列");
+    }
+    labels
+}
+
 /// 【状态历史】状态的一行描述（对齐 DBeaver `describeState`，`ResultSetViewer.java:5457-5473`）：
 /// 空白折叠成单空格（多行 SQL 在 tooltip 里不能换行），**超过 50 字符截断补 `…`**
 /// （DBeaver 的阈值也是 50 字符，`...` 是 ASCII 三点——本仓用中文省略号跟界面文案一致）。

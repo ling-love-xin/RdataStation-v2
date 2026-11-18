@@ -53,6 +53,9 @@ pub enum ResultRequest {
     TransposeNext,
     /// 工具栏筛选框「✕」清除（清空输入框 + 立即应用空词；`window` 由宿主分派时提供）
     ClearFilter,
+    /// 【筛选条 ✕ 箭头菜单】显示全部列（对齐 DBeaver erase 箭头里的
+    /// 「显示隐藏列」，`ResultSetViewer.java:1525-1545`）
+    ShowAllColumns,
     /// 【筛选历史】从筛选条右侧的历史下拉里选了一条：回填输入框 + 立即应用。
     ///
     /// 对齐 DBeaver 的 `HistoryPanel`（`ResultSetFilterPanel.java:214`，点击弹历史表，

@@ -16,7 +16,7 @@ use gpui_kit::*;
 use ::shared::CurrentTier;
 
 use super::data::ResultPanel;
-use super::events::state_label;
+use super::events::{erase_menu_labels, state_label};
 use crate::error_card::{self};
 use crate::export;
 use crate::grid::{self as result_grid, ResultToolbar};
@@ -355,19 +355,51 @@ impl ResultPanel {
             // （`filtersClearButton` 建出来就 `setEnabled(false)`，`:319-327`；有筛选后才
             // 由 `enablePanelControls` 打开，`:449-454`）。此前是「有词才出现」，位置会
             // 随打字左右跳一格，而 DBeaver 那一列是固定的。
+            //
+            // 形态：DBeaver 那颗是 `SWT.DROP_DOWN`——本体清筛选词，右侧箭头弹
+            // `EraseItemListener` 菜单（`ResultSetViewer.java:1525-1545`：清筛选设置 /
+            // 显示隐藏列 / 重置颜色 / transformers / pins / 全部重置）。本仓按「能力没有
+            // 就不摆」只留两条真有落点的：清除筛选词、显示全部列（见 `erase_menu_labels`）；
+            // 条目为空时摆一条禁用说明，保持箭头常在、宽度不跳。
             .when(!self.filter_expanded, |row| {
-                let queue = self.queue.clone();
+                let clear_queue = self.queue.clone();
                 let can_clear = !self.filter_text.trim().is_empty();
+                let clear = Button::new("editor-result-filter-clear")
+                    .ghost()
+                    .xsmall()
+                    .debug_selector(|| "editor-result-filter-clear".to_string())
+                    .disabled(!can_clear)
+                    .label("✕")
+                    .tooltip("清除筛选词")
+                    .on_click(move |_, _window, app| {
+                        clear_queue.request(ResultRequest::ClearFilter, app);
+                    });
+                let labels = erase_menu_labels(&self.filter_text, self.column_hidden.len());
+                let menu_queue = self.queue.clone();
                 row.child(
-                    Button::new("editor-result-filter-clear")
-                        .ghost()
-                        .xsmall()
-                        .debug_selector(|| "editor-result-filter-clear".to_string())
-                        .disabled(!can_clear)
-                        .label("✕")
-                        .tooltip("清除筛选词")
-                        .on_click(move |_, _window, app| {
-                            queue.request(ResultRequest::ClearFilter, app);
+                    DropdownButton::new("editor-result-filter-erase")
+                        .button(clear)
+                        .menu_accessibility_label("清除选项")
+                        .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
+                            let mut menu = menu;
+                            if labels.is_empty() {
+                                return menu.item(PopupMenuItem::new("暂无可清除项").disabled(true));
+                            }
+                            for label in labels.iter() {
+                                let label = *label;
+                                let queue = menu_queue.clone();
+                                menu = menu.item(PopupMenuItem::new(label).on_click(
+                                    move |_, _window, app| {
+                                        // 条目与请求一一对应（清单由 `erase_menu_labels` 定）
+                                        let request = match label {
+                                            "清除筛选词" => ResultRequest::ClearFilter,
+                                            _ => ResultRequest::ShowAllColumns,
+                                        };
+                                        queue.request(request, app);
+                                    },
+                                ));
+                            }
+                            menu
                         }),
                 )
             })

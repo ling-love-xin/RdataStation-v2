@@ -1404,6 +1404,47 @@ fn filter_clear_button_is_always_there_and_gated_by_the_filter_text(
     );
 }
 
+/// 【2026-11-18 工具栏结构对齐】筛选条 ✕ 的箭头菜单条目（纯函数）：
+/// DBeaver 的 `EraseItemListener` 菜单是清筛选设置 / 显示隐藏列 / 重置颜色 /
+/// transformers / pins / 全部重置（`ResultSetViewer.java:1525-1545`）。
+/// 本仓「能力没有就不摆」只留真有落点的两条，且都按条件出现：
+/// 有筛选词才有「清除筛选词」，有隐藏列才有「显示全部列」。
+#[gpui_kit::test]
+fn erase_menu_lists_only_the_entries_this_repo_can_honour(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+
+    // 空词 + 无隐藏列：菜单里什么都没有（渲染侧摆一条禁用说明）
+    assert!(
+        super::events::erase_menu_labels("", 0).is_empty(),
+        "没有可清除项时清单应为空"
+    );
+    assert!(
+        super::events::erase_menu_labels("   ", 0).is_empty(),
+        "空白筛选词不算有词"
+    );
+
+    // 有词：清除筛选词
+    assert_eq!(
+        super::events::erase_menu_labels("abc", 0),
+        vec!["清除筛选词"],
+        "有筛选词时应有清除项"
+    );
+
+    // 有隐藏列：显示全部列（与列头菜单同口径，不看筛选词）
+    assert_eq!(
+        super::events::erase_menu_labels("", 2),
+        vec!["显示全部列"],
+        "有隐藏列时应能一键放回"
+    );
+
+    // 两者都有：两条都在，顺序固定（清除在前）
+    assert_eq!(
+        super::events::erase_menu_labels("abc", 1),
+        vec!["清除筛选词", "显示全部列"],
+        "两条都有时顺序固定"
+    );
+}
+
 /// 【2026-11-18 工具栏结构对齐】筛选条「状态历史」的**状态机**（纯逻辑，不起窗口）：
 /// 对齐 DBeaver `setNewState`（`ResultSetViewer.java:2419-2442`）+ `navigateHistory`
 /// （`:4050-4063`）+ 启用态（`:456-475`）：
