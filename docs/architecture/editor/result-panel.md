@@ -5241,6 +5241,44 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
 `cargo test -p rds-result-panel --lib` = **336 passed**；
 `cargo test -p rds-editor --lib` = **793 passed**；`cargo test -p rds-ui-guard` = 4 passed。
 
+### 9.03 「筛选运行 → 重查并替换」的端到端用例与说明落点（2026-11-19）
+
+**为什么补**：这条链路此前只有 `engine::sql::rewrite_with_where` 的**纯函数**用例
+（拼装形状对不对），宿主侧整条链——空词拦截 → 改写 → `set_exec_sql` → 递交执行器 →
+结果**原地替换** → 「已去掉 LIMIT」的提示——一条断言都没有。
+
+**新用例**：`view::tests::results_b::run_filter_as_query_rewraps_and_replaces_the_result`
+（用 `shared_with_runner` 的 `ScriptRunner` 记下发 SQL）。五条断言：
+1. 空筛选词只回提示（含「先填一个筛选词」），**不递交执行器**（`seen` 长度不变）；
+2. 确实递了一条，且含 `rds_filtered`（包层别名）；
+3. 筛选词**原样**进 WHERE（`n > 1`），不是「关键词 → 每列 LIKE」那一版；
+4. 下发的 SQL 里**没有** `limit`（大小写无关比较）；
+5. 回执提示含「已去掉原查询的」，且 `result_tabs` 仍是 **1 份**（`Replace`，不是 `NewSet`）。
+
+**顺带修掉的真实缺陷：说明被清两次，从来没露过面。**
+- `execute` 起步会 `set_message(None)`（`view/host/exec/execute.rs:229`，清上一轮旧提示）；
+- 回执时 `sync_result_view` 之后，泵又按成败重写一次状态栏（`pump.rs` 的
+  `segment_failure` / `fresh_notice` 区）。
+
+于是 `run_filter_as_query` / `run_custom_filter` 里**递交前**摆的那句
+「已去掉原查询的条件 LIMIT 10（按条件重查要能查到全部行）」两处都被擦掉，
+用户界面上永远看不到（DBeaver 那句是结果集级说明，得跟着这一轮结果挂着）。
+
+**修法（新增一个「待落说明」字段）**：
+- `EditorHostPanel` 加 `pending_result_notice: Option<String>`；
+- 两个重查入口只把说明**记进去**（不再 `set_message`），紧接着 `execute`；
+  `execute` 同步就被拒（`message.is_some()`）时把该字段清掉——错误提示已摆上，
+  说明作废，免得搭下一次执行的便车；
+- 泵在 `sync_result_view` 之后、执行器自带说明之前补上：`take()` 后要求
+  `fresh_notice.is_none() && message.is_none()`。优先级 = 取段失败 > 执行器说明
+  > 本说明（错误比说明重要）。
+
+**验证**：`cargo test -p rds-editor --lib -- --test-threads=4` = **794 passed**
+（1 ignored，含新用例 1 条）；`cargo test -p rds-result-panel --lib` = **336 passed**；
+`cargo test -p rds-ui-guard` = 4 passed。
+注：默认线程数并行跑全量时，`ports::editor_completion` 三条「后台线程 3s 内」用例
+会偶发超时（机器满负载起不来线程；单跑与 `--test-threads=4` 均全绿），不是回归。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

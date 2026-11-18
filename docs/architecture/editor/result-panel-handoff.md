@@ -1493,6 +1493,25 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 2.91 「筛选运行」链路与状态栏说明的接手要点（2026-11-19）
+
+- 链路：面板 `ResultRequest::RunFilterAsQuery` → `dispatch` → 宿主
+  `view/host/results/filter.rs::run_filter_as_query` → `engine::sql::rewrite_with_where`
+  → `panel.set_exec_sql(...)` → `execute(Statement, Replace)`。端到端用例
+  `view/tests/results_b.rs::run_filter_as_query_rewraps_and_replaces_the_result`
+  （五条断言：空词不递交 / 含 `rds_filtered` / 条件原样进 WHERE / 无 `limit` /
+  提示含「已去掉原查询的」且仍是一份结果）。改链路先看它。
+- **状态栏说明不要在递交前 `set_message`**：`execute` 起步清一次消息，回执时
+  `sync_result_view` 之后泵又重写一次，递交前摆的说明两处都会被擦掉。
+  「已去掉原查询的 LIMIT」走 `EditorHostPanel::pending_result_notice`，由泵在
+  同步结果区之后补上。新增重查入口（如自定义 ORDER BY 的别的形态）照这个走。
+- 优先级：`segment_failure`（取段失败）> 执行器 `fresh_notice` > `pending_result_notice`；
+  只要 `self.message.is_some()` 就不覆盖（错误比说明重要）。`execute` 同步被拒时
+  要把 `pending_result_notice` 清空，否则它会搭下一次执行的便车。
+- 测试口径：`cargo test -p rds-editor --lib` 用**默认线程数**跑全量时，
+  `ports::editor_completion` 三条「后台线程 3s 内」用例会偶发超时（满负载起不线程），
+  加 `-- --test-threads=4` 全绿，单跑也全绿——别当回归修。
+
 ### 2.90 分析结果与「计算行数」的边界（2026-11-19）
 
 - 判据只有一处：`panel::events::count_rows_available(has_data, is_analysis)`。要加别的
