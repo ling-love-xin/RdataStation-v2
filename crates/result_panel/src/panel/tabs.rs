@@ -56,6 +56,65 @@ pub(crate) fn stats_copy_all_text(entries: &[(StatsItem, String)]) -> String {
         .join("\n")
 }
 
+/// 【计算页】右键菜单条目（`PopupMenu` 内部不可读，所以清单抽成纯函数 + 单测）。
+///
+/// 对齐 `AggregateColumnsPanel` 的右键菜单（`:106-116`）：
+/// `CopyAction` → `CopyAllAction` → `Separator` → `fillToolBar` 那一组。
+/// `fillToolBar:322-331` 的顺序是 Add / Remove / Reset / SEP / GroupBy / ValueType，
+/// 本仓差异（都属能力缺口，不是漏做）：Remove 换成了行尾 ×（本仓无树行选中模型，
+/// §8.83）、GroupBy 不做（本仓无组内聚合列，§8.87）。
+pub(crate) enum StatMenuEntry {
+    CopyValue,
+    CopyAll,
+    Separator,
+    /// 「添加」= 只列**尚未启用**的函数（`AddFunctionAction.createMenuManager:372-386`）
+    AddMissing(StatsItem),
+    Reset,
+    /// 口径切换：菜单项报的是**点它会切到哪一档**（与工具条按钮报当前档相反）
+    ToggleMode(StatsMode),
+}
+
+/// 右键菜单条目清单（顺序照 `menuMgr.addMenuListener` + `fillToolBar`）。
+///
+/// 缺项为空时不出「添加」那一段（DBeaver 此时菜单为空、点了没反应）；为了让分隔线
+/// 不留悬空的两条，缺项为空就整段跳过（不渲染 Separator）。
+pub(crate) fn stat_menu_entries(enabled: &[StatsItem], mode: StatsMode) -> Vec<StatMenuEntry> {
+    let mut entries = vec![
+        StatMenuEntry::CopyValue,
+        StatMenuEntry::CopyAll,
+        StatMenuEntry::Separator,
+    ];
+    let missing: Vec<StatMenuEntry> = StatsItem::ALL
+        .into_iter()
+        .filter(|item| !enabled.contains(item))
+        .map(StatMenuEntry::AddMissing)
+        .collect();
+    if !missing.is_empty() {
+        entries.extend(missing);
+        entries.push(StatMenuEntry::Separator);
+    }
+    entries.push(StatMenuEntry::Reset);
+    entries.push(StatMenuEntry::Separator);
+    entries.push(StatMenuEntry::ToggleMode(match mode {
+        StatsMode::Numeric => StatsMode::Text,
+        StatsMode::Text => StatsMode::Numeric,
+    }));
+    entries
+}
+
+/// 菜单条目文案（纯函数，测试直接钉它）：口径项报「切到哪一档」，其余与工具条同款。
+pub(crate) fn stat_menu_label(entry: &StatMenuEntry) -> String {
+    match entry {
+        StatMenuEntry::CopyValue => "复制值".to_string(),
+        StatMenuEntry::CopyAll => "复制全部".to_string(),
+        StatMenuEntry::Separator => String::new(),
+        StatMenuEntry::AddMissing(item) => format!("添加「{}」", item.label()),
+        StatMenuEntry::Reset => "恢复默认统计项（默认只有「非空」）".to_string(),
+        StatMenuEntry::ToggleMode(StatsMode::Text) => "改为按字符串聚合".to_string(),
+        StatMenuEntry::ToggleMode(StatsMode::Numeric) => "改为按数值聚合".to_string(),
+    }
+}
+
 /// 【保存值】按值形态给出待落盘的字节与默认文件名（纯函数；测试直接钉它）。
 ///
 /// 三条口径（与值查看器同源，宿主不必再判一次值形态）：
@@ -834,6 +893,9 @@ impl ResultPanel {
         // 菜单里的两份文本在渲染期定稿：复制值 = 本行值，复制全部 = 上面的整表快照
         let copy_value = value.to_string();
         let reset_queue = self.queue.clone();
+        let menu_queue = self.queue.clone();
+        // 菜单条目按「此刻启用的集合 + 当前口径」定稿（与 `stat_menu_entries` 纯函数同一口径）
+        let menu_entries = stat_menu_entries(&self.stats_items, self.stats_mode);
         div()
             .id(("editor-result-stat-menu", item as usize))
             .h_flex()
@@ -844,33 +906,57 @@ impl ResultPanel {
             .text_xs()
             .debug_selector(move || row_id.clone())
             .context_menu(move |mut menu: PopupMenu, _window, _cx| {
-                // 空文本不写剪贴板（DBeaver `CopyAction` 靠 SWT 自己早退，本仓显式判空）
-                let one = copy_value.clone();
-                menu = menu.item(PopupMenuItem::new("复制值").on_click(
-                    move |_, _window, app| {
-                        if one.is_empty() {
-                            return;
+                for entry in menu_entries.iter() {
+                    if matches!(entry, StatMenuEntry::Separator) {
+                        menu = menu.separator();
+                        continue;
+                    }
+                    // 空文本不写剪贴板（DBeaver `CopyAction` 靠 SWT 自己早退，本仓显式判空）
+                    let label = stat_menu_label(entry);
+                    let item = PopupMenuItem::new(label);
+                    menu = menu.item(match entry {
+                        StatMenuEntry::CopyValue => {
+                            let one = copy_value.clone();
+                            item.on_click(move |_, _window, app| {
+                                if one.is_empty() {
+                                    return;
+                                }
+                                app.write_to_clipboard(ClipboardItem::new_string(one.clone()));
+                            })
                         }
-                        app.write_to_clipboard(ClipboardItem::new_string(one.clone()));
-                    },
-                ));
-                let all = copy_all.clone();
-                menu = menu.item(PopupMenuItem::new("复制全部").on_click(
-                    move |_, _window, app| {
-                        if all.is_empty() {
-                            return;
+                        StatMenuEntry::CopyAll => {
+                            let all = copy_all.clone();
+                            item.on_click(move |_, _window, app| {
+                                if all.is_empty() {
+                                    return;
+                                }
+                                app.write_to_clipboard(ClipboardItem::new_string(all.clone()));
+                            })
                         }
-                        app.write_to_clipboard(ClipboardItem::new_string(all.clone()));
-                    },
-                ));
-                let reset_queue = reset_queue.clone();
-                menu.separator().item(
-                    PopupMenuItem::new("恢复默认统计项（默认只有「非空」）").on_click(
-                        move |_, _window, app| {
-                            reset_queue.request(ResultRequest::ResetStatsItems, app);
-                        },
-                    ),
-                )
+                        StatMenuEntry::AddMissing(target) => {
+                            let queue = menu_queue.clone();
+                            let target = *target;
+                            item.on_click(move |_, _window, app| {
+                                queue.request(ResultRequest::AddStatsItem(target), app);
+                            })
+                        }
+                        StatMenuEntry::Reset => {
+                            let queue = reset_queue.clone();
+                            item.on_click(move |_, _window, app| {
+                                queue.request(ResultRequest::ResetStatsItems, app);
+                            })
+                        }
+                        StatMenuEntry::ToggleMode(target) => {
+                            let queue = menu_queue.clone();
+                            let target = *target;
+                            item.on_click(move |_, _window, app| {
+                                queue.request(ResultRequest::SetStatsMode(target), app);
+                            })
+                        }
+                        StatMenuEntry::Separator => item,
+                    });
+                }
+                menu
             })
             .child(
                 div()

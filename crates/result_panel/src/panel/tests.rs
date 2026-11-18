@@ -346,6 +346,54 @@ fn right_tab_index_maps_to_the_six_panel_tabs() {
     }
 }
 
+/// 【计算页右键菜单】条目清单 = 复制值 / 复制全部 / 分隔 / 缺项逐个「添加」/ 分隔 /
+/// 恢复默认 / 分隔 / 口径切换；缺项为空时整段跳过（DBeaver 此时菜单为空、点了没反应）。
+#[test]
+fn stat_context_menu_mirrors_the_toolbar_actions() {
+    use crate::panel::tabs::{StatMenuEntry, stat_menu_entries, stat_menu_label};
+
+    // 只启用「非空」→ 五个缺项逐个列出来
+    let entries = stat_menu_entries(&[StatsItem::Count], StatsMode::Numeric);
+    let labels: Vec<String> = entries.iter().map(stat_menu_label).collect();
+    assert_eq!(labels[0], "复制值");
+    assert_eq!(labels[1], "复制全部");
+    assert!(matches!(entries[2], StatMenuEntry::Separator));
+    let adds = entries
+        .iter()
+        .filter(|entry| matches!(entry, StatMenuEntry::AddMissing(_)))
+        .count();
+    assert_eq!(adds, 5, "六项里已启用一项 → 五个可添加");
+    // 末尾是口径切换，且报「切到哪一档」（当前数值 → 报字符串）
+    assert!(matches!(
+        entries.last(),
+        Some(StatMenuEntry::ToggleMode(StatsMode::Text))
+    ));
+    assert_eq!(
+        stat_menu_label(entries.last().unwrap()),
+        "改为按字符串聚合"
+    );
+    // 恢复默认仍在（DBeaver ResetFunctionsAction）
+    assert!(entries.iter().any(|entry| matches!(entry, StatMenuEntry::Reset)));
+
+    // 六项全启用 → 没有「添加」段，也就没有那条悬空分隔线
+    let entries = stat_menu_entries(&StatsItem::ALL, StatsMode::Text);
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| matches!(entry, StatMenuEntry::AddMissing(_))),
+        "全启用时不应再列添加项"
+    );
+    let separators = entries
+        .iter()
+        .filter(|entry| matches!(entry, StatMenuEntry::Separator))
+        .count();
+    assert_eq!(separators, 2, "复制段后一条、恢复默认后一条");
+    assert_eq!(
+        stat_menu_label(entries.last().unwrap()),
+        "改为按数值聚合"
+    );
+}
+
 /// 【R2 计算页】单项取值：口径决定 Min/Max 的比较方式，Avg/Sum 只在数值口径出值，
 /// 计数类不受口径影响（对齐 DBeaver `aggregateAsStrings`）
 #[test]
