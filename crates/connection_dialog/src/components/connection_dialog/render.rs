@@ -644,613 +644,44 @@ impl<H: 'static> ConnectionDialogState<H> {
                     },
                     cx,
                 ),
-                _ => {
-                    // ===== 常规：单列分组大纲（按驱动动态渲染）=====
-                    let driver_value = driver_now.clone();
-                    let auth_ref_selected = auth_ref.read(cx).selected_value().cloned();
-                    let is_auth_ref = auth_ref_selected.is_some();
-
-                    // 顶部信息条（info-banner）：类型 + 驱动实现（短名）。
-                    let type_label = type_badge_now
-                        .as_ref()
-                        .map(|(_, n)| n.clone())
-                        .unwrap_or_default();
-                    let info_text = if type_badge_now.is_none() {
-                        "未选择数据库类型 · 请在左侧选择类型后选择驱动实现".to_string()
-                    } else if driver_value.is_empty() {
-                        format!("{type_label} · 未选择驱动实现（右侧下拉）")
-                    } else if is_file_db {
-                        format!("{type_label} · {driver_value} · 文件型数据库 · 无网络与 SSL 配置")
-                    } else {
-                        // 支持的方法取自驱动声明（不写死 password / ssh_key）。
-                        let methods = derived.auth_types.clone();
-                        let methods_text = if methods.is_empty() {
-                            tr("驱动未声明认证方法").to_string()
-                        } else {
-                            format!("支持 {} 认证", methods.join(" / "))
-                        };
-                        format!(
-                            "{type_label} · {driver_value} · {} · {methods_text}",
-                            driver_kind_label(
-                                current_driver
-                                    .as_ref()
-                                    .map(|d| d.driver_kind.as_str())
-                                    .unwrap_or("")
-                            )
-                        )
-                    };
-                    let info_banner = div()
-                        .w_full()
-                        .h_flex()
-                        .items_center()
-                        .gap_2()
-                        .rounded(theme.radius_lg)
-                        .border_1()
-                        .border_color(theme.colors.info.opacity(0.28))
-                        .bg(theme.colors.info.opacity(0.08))
-                        .px_3()
-                        .py_2()
-                        .text_xs()
-                        .text_color(theme.colors.info)
-                        .child(
-                            Icon::new(IconName::Info)
-                                .size(rems(crate::ui::ICON_SIZE_SM))
-                                .text_color(theme.colors.info),
-                        )
-                        .child(info_text);
-
-                    // 驱动声明的连接字段（`drivers.config_schema`）已在入口计算（`form_fields`）。
-                    // 地址行标签固定为「地址 / URI」（用户明确要求），字段标签不覆盖它。
-                    let addr_label = address_label(is_file_db);
-
-                    // 未选类型 / 驱动：表单整体置灰不可输入（控件仍在，只改可用性）。
-                    // 分组① 连接设置（**按驱动动态渲染**）：
-                    // 文件型：地址输入 + 系统文件选择 / 新建（地址框唯一，Header 不再重复）；
-                    // 网络型：主机 / 端口 / 数据库为解析摘要（纯文本行，编辑在 Header URI）。
-                    let settings_body = if is_file_db {
-                        div()
-                            .w_full()
-                            .v_flex()
-                            .gap(rems(GAP_SM))
-                            .child(form_row(
-                                theme,
-                                addr_label,
-                                div()
-                                    .h_flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(div().flex_1().min_w(rems(0.)).child(
-                                        Input::new(&url).disabled(form_disabled),
-                                    ))
-                                    .child(
-                                        Button::new("pick-db-file")
-                                            .secondary()
-                                            .label(tr("打开文件…"))
-                                            .disabled(form_disabled)
-                                            .on_click({
-                                                let state = state.clone();
-                                                let entity = entity.clone();
-                                                move |_, window, app| {
-                                                    state.pick_db_file(false, entity.clone(), window, app);
-                                                }
-                                            }),
-                                    )
-                                    .child(
-                                        Button::new("new-db-file")
-                                            .secondary()
-                                            .label(tr("新建文件…"))
-                                            .disabled(form_disabled)
-                                            .on_click({
-                                                let state = state.clone();
-                                                let entity = entity.clone();
-                                                move |_, window, app| {
-                                                    state.pick_db_file(true, entity.clone(), window, app);
-                                                }
-                                            }),
-                                    ),
-                            ))
-                            .child(hint_line(
-                                theme,
-                                "本地文件路径；「新建文件…」创建库文件（DuckDB 立即初始化可用；SQLite 首次连接自动初始化结构）",
-                            ))
-                    } else {
-                        // 网络型：主机 / 端口 / 数据库 = **可编辑字段，也是地址的唯一来源**；
-                        // Header 的 URI 由这三项派生（只读）。粘贴整条连接串走「从剪贴板导入」。
-                        let mut body = div().w_full().v_flex().gap(rems(GAP_SM));
-                        for (key, fallback, input) in [
-                            ("host", "主机", host_input.clone()),
-                            ("port", "端口", port_input.clone()),
-                            ("database", "数据库", db_input.clone()),
-                        ] {
-                            let spec = field_spec(&form_fields, key);
-                            if !form_fields.is_empty() && spec.is_none() {
-                                continue;
-                            }
-                            let label = spec
-                                .map(|f| f.label.clone())
-                                .unwrap_or_else(|| fallback.to_string());
-                            body = body.child(form_row(
-                                theme,
-                                &label,
-                                Input::new(&input).disabled(form_disabled),
-                            ));
-                        }
-                        if form_fields.is_empty() && !form_disabled {
-                            body = body.child(hint_line(theme, "驱动未声明连接字段：按内置字段展示"));
-                        }
-                        body = body.child(
-                            div()
-                                .h_flex()
-                                .items_center()
-                                .gap_2()
-                                .child(
-                                    Button::new("import-uri")
-                                        .ghost()
-                                        .label(tr("从剪贴板导入 URI"))
-                                        .disabled(form_disabled)
-                                        .tooltip("把剪贴板里的整条连接串解析成主机 / 端口 / 数据库")
-                                        .on_click({
-                                            let entity = entity.clone();
-                                            let host_input = host_input.clone();
-                                            let port_input = port_input.clone();
-                                            let db_input = db_input.clone();
-                                            let result = result.clone();
-                                            let driver_id_now = current_driver
-                                                .as_ref()
-                                                .map(|d| d.id.clone())
-                                                .unwrap_or_default();
-                                            move |_, window, app| {
-                                                let text = app
-                                                    .read_from_clipboard()
-                                                    .and_then(|item| {
-                                                        item.text().map(|s| s.to_string())
-                                                    })
-                                                    .unwrap_or_default();
-                                                let text = text.trim().to_string();
-                                                if text.is_empty() {
-                                                    set_result(
-                                                        &result,
-                                                        ResultLevel::Warning,
-                                                        tr("剪贴板里没有文本可导入"),
-                                                    );
-                                                    let _ = entity
-                                                        .update(app, |_, cx| cx.notify());
-                                                    return;
-                                                }
-                                                let (h, p, d) =
-                                                    crate::services::data_source_service::parse_url_host_port_db(
-                                                        &driver_id_now,
-                                                        &text,
-                                                    );
-                                                if h.is_none() && d.is_none() {
-                                                    set_result(
-                                                        &result,
-                                                        ResultLevel::Error,
-                                                        "未能从剪贴板文本解析出地址（需要完整连接串，如 mysql://user@host:3306/db）",
-                                                    );
-                                                    let _ = entity
-                                                        .update(app, |_, cx| cx.notify());
-                                                    return;
-                                                }
-                                                set_input_value(
-                                                    &host_input,
-                                                    h.unwrap_or_default(),
-                                                    window,
-                                                    app,
-                                                );
-                                                set_input_value(
-                                                    &port_input,
-                                                    p.map(|v| v.to_string())
-                                                        .unwrap_or_default(),
-                                                    window,
-                                                    app,
-                                                );
-                                                set_input_value(
-                                                    &db_input,
-                                                    d.unwrap_or_default(),
-                                                    window,
-                                                    app,
-                                                );
-                                                set_result_ok(
-                                                    &result,
-                                                    true,
-                                                    tr("已从剪贴板导入地址（URI 将随之重建）"),
-                                                );
-                                                let _ = entity.update(app, |_, cx| cx.notify());
-                                            }
-                                        }),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(theme.colors.muted_foreground)
-                                        .child(tr("字段是地址的唯一来源；上方 URI 由字段自动生成（只读）")),
-                                ),
-                        );
-                        body
-                    };
-
-                    // 卡片 2：数据库认证（引用已保存配置 + 管理入口）。
-                    // 认证方法下拉：选项来自当前驱动的 supported_auth_types；
-                    // 引用认证配置时以配置声明的类型为准（只读展示）。
-                    let auth_method_now = auth_method
-                        .read(cx)
-                        .selected_value()
-                        .cloned()
-                        .unwrap_or_default()
-                        .to_string();
-                    let driver_has_auth_types = !derived.auth_types.is_empty();
-                    let auth_method_row = {
-                        let mut row = div()
-                            .h_flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .w(rems(crate::ui::DIALOG_LABEL_COLUMN_WIDTH))
-                                    .flex_shrink_0()
-                                    .text_xs()
-                                    .text_color(theme.colors.muted_foreground)
-                                    .child(tr("认证方法")),
-                            );
-                        let cell = if is_auth_ref {
-                            // 引用档案：方法由档案声明，不可在此改。
-                            Select::new(&auth_method)
-                                .placeholder(tr("由认证档案声明"))
-                                .disabled(true)
-                                .into_any_element()
-                        } else if current_driver.is_none() || !driver_has_auth_types {
-                            Select::new(&auth_method)
-                                .placeholder(tr("驱动未声明认证方法"))
-                                .disabled(true)
-                                .into_any_element()
-                        } else {
-                            Select::new(&auth_method)
-                                .placeholder(tr("选择认证方法…"))
-                                .into_any_element()
-                        };
-                        row = row.child(div().flex_1().min_w(rems(0.)).child(cell));
-                        row
-                    };
-                    let auth_body = div()
-                        .v_flex()
-                        .gap_1()
-                        .child(auth_method_row)
-                        .child(
-                            div()
-                                .h_flex()
-                                .items_center()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .w(rems(crate::ui::DIALOG_LABEL_COLUMN_WIDTH))
-                                        .flex_shrink_0()
-                                        .text_xs()
-                                        .text_color(theme.colors.muted_foreground)
-                                        .child(tr("引用配置")),
-                                )
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w(rems(0.))
-                                        .child(
-                                            Select::new(&auth_ref)
-                                                .placeholder(tr("引用已保存配置…"))
-                                                .disabled(form_disabled),
-                                        ),
-                                )
-                                .child(
-                                    Button::new("mgr-auth")
-                                        .ghost()
-                                        .label(tr("管理"))
-                                        .on_click({
-                                            let mgr = mgr.clone();
-                                            let entity = entity.clone();
-                                            let shared = shared.clone();
-                                            move |_, window, app| {
-                                                open_manager(0, &mgr, entity.clone(), shared.clone(), window, app);
-                                            }
-                                        }),
-                                ),
-                        )
-                        .child(if is_auth_ref {
-                            reuse_note(
-                                theme,
-                                &format!(
-                                    "已引用认证档案 · 认证方法 {} · 用户名/密码只读（修改档案一处全量生效）",
-                                    if auth_method_now.is_empty() {
-                                        tr("（未声明）").to_string()
-                                    } else {
-                                        auth_method_now.clone()
-                                    }
-                                ),
-                            )
-                        } else {
-                            div()
-                                .w_full()
-                                .v_flex()
-                                .gap(rems(GAP_SM))
-                                .child(form_row(
-                                    theme,
-                                    field_spec(&form_fields, "username")
-                                        .map(|f| f.label.as_str())
-                                        .unwrap_or("用户名"),
-                                    Input::new(&user).disabled(form_disabled),
-                                ))
-                                .child(form_row(
-                                    theme,
-                                    field_spec(&form_fields, "password")
-                                        .map(|f| f.label.as_str())
-                                        .unwrap_or("密码"),
-                                    // 凭据：默认掩码（眼睛按钮可临时查看）；
-                                    // 掩码只影响显示，`value()` 仍是真实文本（保存/测试拿到的是明文）。
-                                    Input::new(&pass).mask_toggle().disabled(form_disabled),
-                                ))
-                        })
-                        // 「保存凭据」开关（P0-4，2026-10-24，对齐 DBeaver `setSavePassword(true)`）：
-                        // 关 = 密码不落库（仅本次会话可用）；引用档案时密文在档案里，开关置灰。
-                        .child(form_row(
-                            theme,
-                            tr("保存凭据"),
-                            Switch::new("save-credentials")
-                                .checked(save_credentials.get())
-                                .disabled(form_disabled || is_auth_ref)
-                                .on_click({
-                                    let save_credentials = save_credentials.clone();
-                                    let entity = entity.clone();
-                                    move |want, _window, app| {
-                                        save_credentials.set(*want);
-                                        entity.update(app, |_, cx| cx.notify());
-                                    }
-                                }),
-                        ));
-
-                    // 卡片 3：连接安全（SSL/TLS）——**按驱动声明显示**（supported_auth_types 含 ssl）。
-                    let driver_declares_ssl = derived.auth_types.iter().any(|m| m == "ssl");
-                    let ssl_selected = ssl_mode
-                        .read(cx)
-                        .selected_value()
-                        .cloned()
-                        .unwrap_or_default()
-                        .to_string();
-                    let ssl_body = div()
-                        .w_full()
-                        .v_flex()
-                        .gap(rems(GAP_SM))
-                        .child(form_row(
-                            theme,
-                            tr("模式"),
-                            Select::new(&ssl_mode)
-                                .placeholder(tr("选择 SSL 模式…"))
-                                .disabled(form_disabled),
-                        ))
-                        .child(if ssl_selected == "disable" {
-                            div()
-                                .text_xs()
-                                .text_color(theme.colors.muted_foreground)
-                                .child(tr("未启用 TLS（disable / prefer / require / verify-ca / verify-full）"))
-                        } else {
-                            div()
-                                .w_full()
-                                .v_flex()
-                                .gap(rems(GAP_SM))
-                                .child(form_row(
-                                    theme,
-                                    tr("CA 证书"),
-                                    Input::new(&ssl_ca).disabled(form_disabled),
-                                ))
-                                .child(form_row(
-                                    theme,
-                                    tr("客户端证书"),
-                                    Input::new(&ssl_cert).disabled(form_disabled),
-                                ))
-                                .child(form_row(
-                                    theme,
-                                    tr("私钥"),
-                                    Input::new(&ssl_key).disabled(form_disabled),
-                                ))
-                        });
-
-                    // 卡片 4：组织（标签 + 项目分组勾选；分组为项目级能力）。
-                    let mut org_body = div()
-                        .w_full()
-                        .v_flex()
-                        .gap(rems(GAP_SM))
-                        .child(form_row(
-                            theme,
-                            tr("标签"),
-                            Input::new(&tags_input).disabled(form_disabled),
-                        ))
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.colors.muted_foreground)
-                                .child(tr("多个标签用逗号分隔（导航检索用）")),
-                        );
-                    {
-                        let checks = group_checks.borrow().clone();
-                        if project_session.is_none() {
-                            org_body = org_body.child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.colors.muted_foreground)
-                                    .child(tr("分组：打开项目后可用（分组为项目级）")),
-                            );
-                        } else if checks.is_empty() {
-                            org_body = org_body.child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.colors.muted_foreground)
-                                    .child(tr("分组：本项目暂无分组")),
-                            );
-                        } else {
-                            let mut list = div().v_flex().gap_0p5();
-                            for (gid, gname, checked) in checks.iter() {
-                                list = list.child(
-                                    Checkbox::new(SharedString::from(format!("grp-{gid}")))
-                                        .label(gname.clone())
-                                        .checked(*checked)
-                                        .disabled(form_disabled)
-                                        .on_click({
-                                            let state = state.clone();
-                                            let entity = entity.clone();
-                                            let gid = gid.clone();
-                                            move |now, _, app| {
-                                                if let Some((_, _, c)) = state
-                                                    .group_checks
-                                                    .borrow_mut()
-                                                    .iter_mut()
-                                                    .find(|(id, _, _)| *id == gid)
-                                                {
-                                                    *c = *now;
-                                                }
-                                                entity.update(app, |_, cx| cx.notify());
-                                            }
-                                        }),
-                                );
-                            }
-                            org_body = org_body.child(
-                                div()
-                                    .v_flex()
-                                    .gap_0p5()
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme.colors.muted_foreground)
-                                            .child(tr("分组")),
-                                    )
-                                    .child(list),
-                            );
-                        }
-                    }
-
-                    // 「＋ 新建分组」输入行（#7）：分组为项目级能力，未打开项目不提供入口。
-                    // 点击展开输入行（纯 UI 态 `group_new_open`），名称非空才创建（`submit_group_new`，
-                    // 与服务层 `create_group` 闭环——建完导航栏立即可见）。
-                    if project_session.is_some() {
-                        let mut group_new = div()
-                            .v_flex()
-                            .gap_0p5()
-                            .child(
-                                Button::new(SharedString::from("conn-group-new-toggle"))
-                                    .ghost()
-                                    .icon(IconName::Plus)
-                                    .label(tr("新建分组"))
-                                    .with_size(Size::XSmall)
-                                    .on_click({
-                                        let state = state.clone();
-                                        let entity = entity.clone();
-                                        move |_, _, app| {
-                                            state
-                                                .group_new_open
-                                                .set(!state.group_new_open.get());
-                                            entity.update(app, |_, cx| cx.notify());
-                                        }
-                                    }),
-                            );
-                        if group_new_open.get() {
-                            group_new = group_new.child(
-                                div()
-                                    .h_flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .child(Input::new(&group_new_name).disabled(form_disabled))
-                                    .child(
-                                        Button::new(SharedString::from("conn-group-new-submit"))
-                                            .label(tr("创建"))
-                                            .with_size(Size::Small)
-                                            .disabled(form_disabled)
-                                            .on_click({
-                                                let state = state.clone();
-                                                move |_, window, app| {
-                                                    state.submit_group_new(window, app);
-                                                }
-                                            }),
-                                    ),
-                            );
-                        }
-                        org_body = org_body.child(group_new);
-                    }
-
-                    // 首次使用引导（#29）：仅在“未选类型 + 名称/地址都还空”时出现，选完类型即自动消失
-                    // （不占老手版面）；文案只陈述可执行动作与快捷键，不引外链。
-                    let onboarding = {
-                        let untouched = name.read(cx).value().trim().is_empty()
-                            && url.read(cx).value().trim().is_empty();
-                        if type_badge_now.is_none() && untouched {
-                            Some(
-                                div()
-                                    .id("conn-general-guide")
-                                    // kit 观测：窗口用例按 id 取快照（可见性 + 几何；取代 `debug_selector`）。
-                                    .test_support()
-                                    .w_full()
-                                    .v_flex()
-                                    .gap(rems(GAP_SM))
-                                    .rounded(theme.radius_lg)
-                                    .border_1()
-                                    .border_color(theme.colors.primary.opacity(0.28))
-                                    .bg(theme.colors.primary.opacity(0.06))
-                                    .px_3()
-                                    .py_2()
-                                    .text_xs()
-                                    .text_color(theme.colors.foreground)
-                                    .child(
-                                        "第一次配置数据源？① 左侧选数据库类型 → ② 选驱动实现 → ③ 填连接信息（文件型用「打开文件…」/「新建文件…」）→ ④ Ctrl+T 测试 → ⑤ Ctrl+Enter 保存",
-                                    )
-                                    .child(
-                                        div().text_color(theme.colors.muted_foreground).child(
-                                            "未保存的填写会留在左侧「草稿」区（关闭对话框不丢）；已保存的连接从数据源导航栏进入编辑。",
-                                        ),
-                                    ),
-                            )
-                        } else {
-                            None
-                        }
-                    };
-
-                    // 常规 Tab：**单列分组大纲**（info-banner 常驻 + 分组；分组可折叠，集合随驱动类型）。
-                    // 卡片式并排已弃用：窄宽下会换行、卡高不齐、白底白框的输入框几乎看不见。
-                    let mut outline = div()
-                        .w_full()
-                        .v_flex()
-                        .gap(rems(GAP_MD))
-                        .when_some(onboarding, |d, o| d.child(o))
-                        .child(info_banner);
-                    outline = outline.child(make_section(
-                        "conn",
-                        lucide("icons/database.svg"),
-                        theme.colors.primary,
-                        tr("连接设置"),
-                        settings_body,
-                    ));
-                    // 认证 / SSL 仅网络型有意义：文件型只有「连接设置 + 组织」；
-                    // SSL 分组另按驱动声明（supported_auth_types 含 ssl）显示。
-                    if !is_file_db {
-                        outline = outline.child(make_section(
-                            "auth",
-                            lucide("icons/lock.svg"),
-                            theme.colors.primary,
-                            tr("数据库认证"),
-                            auth_body,
-                        ));
-                        if driver_declares_ssl || form_disabled {
-                            outline = outline.child(make_section(
-                                "ssl",
-                                lucide("icons/shield-check.svg"),
-                                theme.colors.info,
-                                tr("连接安全（SSL/TLS）"),
-                                ssl_body,
-                            ));
-                        }
-                    }
-                    outline.child(make_section(
-                        "org",
-                        lucide("icons/tag.svg"),
-                        theme.colors.success,
-                        tr("组织（标签 / 分组）"),
-                        org_body,
-                    ))
-                }
+                _ => general_tab_ui(
+                    GeneralTab {
+                        driver_value: driver_now.clone(),
+                        auth_ref: &auth_ref,
+                        auth_method: &auth_method,
+                        ssl_mode: &ssl_mode,
+                        ssl_ca: &ssl_ca,
+                        ssl_cert: &ssl_cert,
+                        ssl_key: &ssl_key,
+                        user: &user,
+                        name: &name,
+                        pass: &pass,
+                        url: &url,
+                        host_input: &host_input,
+                        port_input: &port_input,
+                        db_input: &db_input,
+                        tags_input: &tags_input,
+                        group_new_name: &group_new_name,
+                        derived: &derived,
+                        current_driver: current_driver.as_ref(),
+                        type_badge: type_badge_now.clone(),
+                        is_file_db,
+                        form_disabled,
+                        form_fields: &form_fields,
+                        state: &state,
+                        entity: &entity,
+                        shared: &shared,
+                        mgr: &mgr,
+                        result: &result,
+                        save_credentials: &save_credentials,
+                        group_checks: &group_checks,
+                        group_new_open: &group_new_open,
+                        has_project: project_session.is_some(),
+                        theme,
+                        make_section: &make_section,
+                    },
+                    cx,
+                ),
             };
 
             // Tab 内容区**填满右列剩余高度**（行高由外层两列行给定）+ 垂直滚动：切 Tab 不改变
@@ -3404,4 +2835,693 @@ fn advanced_tab_ui<H: 'static>(p: AdvancedTab<'_, H>, cx: &App) -> Div {
     );
     content = content.child(capability_panel);
     content
+}
+
+/// 常规页所需输入（本模块里依赖最多的一页）。
+///
+/// 传闻里的“一个大函数”就是它：连接设置（按驱动动态渲染）→ 数据库认证 → 连接安全
+/// → 组织（标签 / 分组）。它同时吃 14 个 `Entity`（输入框与下拉）、四份目录/派生数据、
+/// 六个动作端点（状态 / 实体 / 宿主 / 管理器 / 结果行 / 三个 Rc 开关），
+/// 再加共用的分组构造器 `make_section`。
+struct GeneralTab<'a, H: 'static> {
+    /// 当前驱动 id（信息条要显示短名；空 = 未选驱动）。
+    driver_value: String,
+    /// 认证档案引用下拉。
+    auth_ref: &'a Entity<SelectState<SearchableVec<SharedString>>>,
+    auth_method: &'a Entity<SelectState<SearchableVec<SharedString>>>,
+    /// SSL 模式下拉。
+    ssl_mode: &'a Entity<SelectState<SearchableVec<SharedString>>>,
+    /// CA 证书路径。
+    ssl_ca: &'a Entity<InputState>,
+    /// 客户端证书路径。
+    ssl_cert: &'a Entity<InputState>,
+    /// 私钥路径。
+    ssl_key: &'a Entity<InputState>,
+    /// 用户名。
+    user: &'a Entity<InputState>,
+    /// 名称（首次使用引导用它判断「填写过没有」；Header 才是它的编辑位）。
+    name: &'a Entity<InputState>,
+    /// 密码（掩码显示，`value()` 仍是明文）。
+    pass: &'a Entity<InputState>,
+    /// 地址（文件型 = 库文件路径；网络型 = 派生展示的 URI）。
+    url: &'a Entity<InputState>,
+    /// 主机（地址唯一来源之一）。
+    host_input: &'a Entity<InputState>,
+    /// 端口（地址唯一来源之一）。
+    port_input: &'a Entity<InputState>,
+    /// 数据库名（地址唯一来源之一）。
+    db_input: &'a Entity<InputState>,
+    /// 标签输入。
+    tags_input: &'a Entity<InputState>,
+    /// 「新建分组」名称输入。
+    group_new_name: &'a Entity<InputState>,
+    /// 驱动派生数据（表单字段标签 / 认证方法声明）。
+    derived: &'a DriverDerived,
+    /// 当前驱动（取 `driver_kind`）。
+    current_driver: Option<&'a Driver>,
+    /// 类型徽标（图标 + 名称）；`None` = 未选类型。
+    type_badge: Option<(String, String)>,
+    /// 文件型：只有「连接设置 + 组织」，没有网络 / SSL。
+    is_file_db: bool,
+    /// 未选驱动：表单整体置灰。
+    form_disabled: bool,
+    /// 驱动声明的连接字段（决定主机 / 端口 / 数据库三行的存在与标签）。
+    form_fields: &'a [FormField],
+    /// 对话框状态（选文件 / 分组勾选 / 新建分组都在它身上）。
+    state: &'a Rc<ConnectionDialogState<H>>,
+    /// 要 notify 的实体。
+    entity: &'a Entity<H>,
+    /// 宿主（管理器页要重绘）。
+    shared: &'a Rc<dyn ConnectionDialogHost>,
+    /// 管理器工作区（认证页入口 `open_manager(0, …)`）。
+    mgr: &'a Rc<RefCell<ManagerWorkspace>>,
+    /// 结果行（导入 URI / 建分组的反馈）。
+    result: &'a Rc<RefCell<Option<ResultLine>>>,
+    /// 「保存凭据」开关。
+    save_credentials: &'a Rc<Cell<bool>>,
+    /// 项目分组勾选态（`(id, 名称, 是否勾选)`）。
+    group_checks: &'a Rc<RefCell<Vec<(String, String, bool)>>>,
+    /// 「新建分组」输入行是否展开（纯 UI 态）。
+    group_new_open: &'a Rc<Cell<bool>>,
+    /// 是否已打开项目（分组是项目级能力，未打开时只给一句说明）。
+    has_project: bool,
+    /// 取色。
+    theme: &'a Theme,
+    /// 共用的分组大纲构造器。
+    make_section: &'a dyn Fn(&'static str, Icon, Hsla, &str, Div) -> Div,
+}
+
+/// 常规页：单列分组大纲（顶部信息条常驻 + 四个分组，分组可折叠）。
+///
+/// 卡片式并排已弃用：窄宽下会换行、卡高不齐、白底白框的输入框几乎看不见。
+/// 分组集合随驱动类型而变：文件型只有「连接设置 + 组织」；
+/// SSL 分组还要驱动声明里含 `ssl` 才出现。
+///
+/// `cx` 用于读下拉与输入框当前值（认证方法 / SSL 模式 / 名称 / 地址），不做写回。
+fn general_tab_ui<H: 'static>(p: GeneralTab<'_, H>, cx: &App) -> Div {
+    let GeneralTab {
+        driver_value,
+        auth_ref,
+        auth_method,
+        ssl_mode,
+        ssl_ca,
+        ssl_cert,
+        ssl_key,
+        user,
+        name,
+        pass,
+        url,
+        host_input,
+        port_input,
+        db_input,
+        tags_input,
+        group_new_name,
+        derived,
+        current_driver,
+        type_badge,
+        is_file_db,
+        form_disabled,
+        form_fields,
+        state,
+        entity,
+        shared,
+        mgr,
+        result,
+        save_credentials,
+        group_checks,
+        group_new_open,
+        has_project,
+        theme,
+        make_section,
+    } = p;
+    let state = Rc::clone(state);
+    let shared = Rc::clone(shared);
+    let mgr = Rc::clone(mgr);
+    let result = Rc::clone(result);
+    let save_credentials = Rc::clone(save_credentials);
+    let group_checks = Rc::clone(group_checks);
+    let group_new_open = Rc::clone(group_new_open);
+    let entity = entity.clone();
+
+    let auth_ref_selected = auth_ref.read(cx).selected_value().cloned();
+    let is_auth_ref = auth_ref_selected.is_some();
+
+    // 顶部信息条（info-banner）：类型 + 驱动实现（短名）。
+    let type_label = type_badge
+        .as_ref()
+        .map(|(_, n)| n.clone())
+        .unwrap_or_default();
+    let info_text = if type_badge.is_none() {
+        "未选择数据库类型 · 请在左侧选择类型后选择驱动实现".to_string()
+    } else if driver_value.is_empty() {
+        format!("{type_label} · 未选择驱动实现（右侧下拉）")
+    } else if is_file_db {
+        format!("{type_label} · {driver_value} · 文件型数据库 · 无网络与 SSL 配置")
+    } else {
+        // 支持的方法取自驱动声明（不写死 password / ssh_key）。
+        let methods = derived.auth_types.clone();
+        let methods_text = if methods.is_empty() {
+            tr("驱动未声明认证方法").to_string()
+        } else {
+            format!("支持 {} 认证", methods.join(" / "))
+        };
+        format!(
+            "{type_label} · {driver_value} · {} · {methods_text}",
+            driver_kind_label(current_driver.map(|d| d.driver_kind.as_str()).unwrap_or(""))
+        )
+    };
+    let info_banner = div()
+        .w_full()
+        .h_flex()
+        .items_center()
+        .gap_2()
+        .rounded(theme.radius_lg)
+        .border_1()
+        .border_color(theme.colors.info.opacity(0.28))
+        .bg(theme.colors.info.opacity(0.08))
+        .px_3()
+        .py_2()
+        .text_xs()
+        .text_color(theme.colors.info)
+        .child(
+            Icon::new(IconName::Info)
+                .size(rems(crate::ui::ICON_SIZE_SM))
+                .text_color(theme.colors.info),
+        )
+        .child(info_text);
+
+    // 驱动声明的连接字段（`drivers.config_schema`）已在入口计算（`form_fields`）。
+    // 地址行标签固定为「地址 / URI」（用户明确要求），字段标签不覆盖它。
+    let addr_label = address_label(is_file_db);
+
+    // 未选类型 / 驱动：表单整体置灰不可输入（控件仍在，只改可用性）。
+    // 分组① 连接设置（**按驱动动态渲染**）：
+    // 文件型：地址输入 + 系统文件选择 / 新建（地址框唯一，Header 不再重复）；
+    // 网络型：主机 / 端口 / 数据库为**可编辑字段，也是地址的唯一来源**；Header 的 URI 由这三项派生（只读）。
+    let settings_body = if is_file_db {
+        div()
+            .w_full()
+            .v_flex()
+            .gap(rems(GAP_SM))
+            .child(form_row(
+                theme,
+                addr_label,
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(rems(0.))
+                            .child(Input::new(url).disabled(form_disabled)),
+                    )
+                    .child(
+                        Button::new("pick-db-file")
+                            .secondary()
+                            .label(tr("打开文件…"))
+                            .disabled(form_disabled)
+                            .on_click({
+                                let state = state.clone();
+                                let entity = entity.clone();
+                                move |_, window, app| {
+                                    state.pick_db_file(false, entity.clone(), window, app);
+                                }
+                            }),
+                    )
+                    .child(
+                        Button::new("new-db-file")
+                            .secondary()
+                            .label(tr("新建文件…"))
+                            .disabled(form_disabled)
+                            .on_click({
+                                let state = state.clone();
+                                let entity = entity.clone();
+                                move |_, window, app| {
+                                    state.pick_db_file(true, entity.clone(), window, app);
+                                }
+                            }),
+                    ),
+            ))
+            .child(hint_line(
+                theme,
+                "本地文件路径；「新建文件…」创建库文件（DuckDB 立即初始化可用；SQLite 首次连接自动初始化结构）",
+            ))
+    } else {
+        let mut body = div().w_full().v_flex().gap(rems(GAP_SM));
+        for (key, fallback, input) in [
+            ("host", "主机", host_input.clone()),
+            ("port", "端口", port_input.clone()),
+            ("database", "数据库", db_input.clone()),
+        ] {
+            let spec = field_spec(form_fields, key);
+            if !form_fields.is_empty() && spec.is_none() {
+                continue;
+            }
+            let label = spec
+                .map(|f| f.label.clone())
+                .unwrap_or_else(|| fallback.to_string());
+            body = body.child(form_row(
+                theme,
+                &label,
+                Input::new(&input).disabled(form_disabled),
+            ));
+        }
+        if form_fields.is_empty() && !form_disabled {
+            body = body.child(hint_line(theme, "驱动未声明连接字段：按内置字段展示"));
+        }
+        body = body.child(
+            div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    Button::new("import-uri")
+                        .ghost()
+                        .label(tr("从剪贴板导入 URI"))
+                        .disabled(form_disabled)
+                        .tooltip("把剪贴板里的整条连接串解析成主机 / 端口 / 数据库")
+                        .on_click({
+                            let entity = entity.clone();
+                            let host_input = host_input.clone();
+                            let port_input = port_input.clone();
+                            let db_input = db_input.clone();
+                            let result = result.clone();
+                            let driver_id_now =
+                                current_driver.map(|d| d.id.clone()).unwrap_or_default();
+                            move |_, window, app| {
+                                let text = app
+                                    .read_from_clipboard()
+                                    .and_then(|item| item.text().map(|s| s.to_string()))
+                                    .unwrap_or_default();
+                                let text = text.trim().to_string();
+                                if text.is_empty() {
+                                    set_result(
+                                        &result,
+                                        ResultLevel::Warning,
+                                        tr("剪贴板里没有文本可导入"),
+                                    );
+                                    let _ = entity.update(app, |_, cx| cx.notify());
+                                    return;
+                                }
+                                let (h, p, d) = crate::services::data_source_service::parse_url_host_port_db(
+                                    &driver_id_now,
+                                    &text,
+                                );
+                                if h.is_none() && d.is_none() {
+                                    set_result(
+                                        &result,
+                                        ResultLevel::Error,
+                                        "未能从剪贴板文本解析出地址（需要完整连接串，如 mysql://user@host:3306/db）",
+                                    );
+                                    let _ = entity.update(app, |_, cx| cx.notify());
+                                    return;
+                                }
+                                set_input_value(&host_input, h.unwrap_or_default(), window, app);
+                                set_input_value(
+                                    &port_input,
+                                    p.map(|v| v.to_string()).unwrap_or_default(),
+                                    window,
+                                    app,
+                                );
+                                set_input_value(&db_input, d.unwrap_or_default(), window, app);
+                                set_result_ok(&result, true, tr("已从剪贴板导入地址（URI 将随之重建）"));
+                                let _ = entity.update(app, |_, cx| cx.notify());
+                            }
+                        }),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.colors.muted_foreground)
+                        .child(tr("字段是地址的唯一来源；上方 URI 由字段自动生成（只读）")),
+                ),
+        );
+        body
+    };
+
+    // 卡片 2：数据库认证（引用已保存配置 + 管理入口）。
+    // 认证方法下拉：选项来自当前驱动的 supported_auth_types；
+    // 引用认证配置时以配置声明的类型为准（只读展示）。
+    let auth_method_now = auth_method
+        .read(cx)
+        .selected_value()
+        .cloned()
+        .unwrap_or_default()
+        .to_string();
+    let driver_has_auth_types = !derived.auth_types.is_empty();
+    let auth_method_row = {
+        let mut row = div().h_flex().items_center().gap_2().child(
+            div()
+                .w(rems(crate::ui::DIALOG_LABEL_COLUMN_WIDTH))
+                .flex_shrink_0()
+                .text_xs()
+                .text_color(theme.colors.muted_foreground)
+                .child(tr("认证方法")),
+        );
+        let cell = if is_auth_ref {
+            // 引用档案：方法由档案声明，不可在此改。
+            Select::new(auth_method)
+                .placeholder(tr("由认证档案声明"))
+                .disabled(true)
+                .into_any_element()
+        } else if current_driver.is_none() || !driver_has_auth_types {
+            Select::new(auth_method)
+                .placeholder(tr("驱动未声明认证方法"))
+                .disabled(true)
+                .into_any_element()
+        } else {
+            Select::new(auth_method)
+                .placeholder(tr("选择认证方法…"))
+                .into_any_element()
+        };
+        row = row.child(div().flex_1().min_w(rems(0.)).child(cell));
+        row
+    };
+    let auth_body = div()
+        .v_flex()
+        .gap_1()
+        .child(auth_method_row)
+        .child(
+            div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .w(rems(crate::ui::DIALOG_LABEL_COLUMN_WIDTH))
+                        .flex_shrink_0()
+                        .text_xs()
+                        .text_color(theme.colors.muted_foreground)
+                        .child(tr("引用配置")),
+                )
+                .child(
+                    div().flex_1().min_w(rems(0.)).child(
+                        Select::new(auth_ref)
+                            .placeholder(tr("引用已保存配置…"))
+                            .disabled(form_disabled),
+                    ),
+                )
+                .child(Button::new("mgr-auth").ghost().label(tr("管理")).on_click({
+                    let mgr = mgr.clone();
+                    let entity = entity.clone();
+                    let shared = shared.clone();
+                    move |_, window, app| {
+                        open_manager(0, &mgr, entity.clone(), shared.clone(), window, app);
+                    }
+                })),
+        )
+        .child(if is_auth_ref {
+            reuse_note(
+                theme,
+                &format!(
+                    "已引用认证档案 · 认证方法 {} · 用户名/密码只读（修改档案一处全量生效）",
+                    if auth_method_now.is_empty() {
+                        tr("（未声明）").to_string()
+                    } else {
+                        auth_method_now.clone()
+                    }
+                ),
+            )
+        } else {
+            div()
+                .w_full()
+                .v_flex()
+                .gap(rems(GAP_SM))
+                .child(form_row(
+                    theme,
+                    field_spec(form_fields, "username")
+                        .map(|f| f.label.as_str())
+                        .unwrap_or("用户名"),
+                    Input::new(user).disabled(form_disabled),
+                ))
+                .child(form_row(
+                    theme,
+                    field_spec(form_fields, "password")
+                        .map(|f| f.label.as_str())
+                        .unwrap_or("密码"),
+                    // 凭据：默认掩码（眼睛按钮可临时查看）；
+                    // 掩码只影响显示，`value()` 仍是真实文本（保存/测试拿到的是明文）。
+                    Input::new(pass).mask_toggle().disabled(form_disabled),
+                ))
+        })
+        // 「保存凭据」开关（P0-4，2026-10-24，对齐 DBeaver `setSavePassword(true)`）：
+        // 关 = 密码不落库（仅本次会话可用）；引用档案时密文在档案里，开关置灰。
+        .child(form_row(
+            theme,
+            tr("保存凭据"),
+            Switch::new("save-credentials")
+                .checked(save_credentials.get())
+                .disabled(form_disabled || is_auth_ref)
+                .on_click({
+                    let save_credentials = save_credentials.clone();
+                    let entity = entity.clone();
+                    move |want, _window, app| {
+                        save_credentials.set(*want);
+                        entity.update(app, |_, cx| cx.notify());
+                    }
+                }),
+        ));
+
+    // 卡片 3：连接安全（SSL/TLS）——**按驱动声明显示**（supported_auth_types 含 ssl）。
+    let driver_declares_ssl = derived.auth_types.iter().any(|m| m == "ssl");
+    let ssl_selected = ssl_mode
+        .read(cx)
+        .selected_value()
+        .cloned()
+        .unwrap_or_default()
+        .to_string();
+    let ssl_body = div()
+        .w_full()
+        .v_flex()
+        .gap(rems(GAP_SM))
+        .child(form_row(
+            theme,
+            tr("模式"),
+            Select::new(ssl_mode)
+                .placeholder(tr("选择 SSL 模式…"))
+                .disabled(form_disabled),
+        ))
+        .child(if ssl_selected == "disable" {
+            div()
+                .text_xs()
+                .text_color(theme.colors.muted_foreground)
+                .child(tr(
+                    "未启用 TLS（disable / prefer / require / verify-ca / verify-full）",
+                ))
+        } else {
+            div()
+                .w_full()
+                .v_flex()
+                .gap(rems(GAP_SM))
+                .child(form_row(
+                    theme,
+                    tr("CA 证书"),
+                    Input::new(ssl_ca).disabled(form_disabled),
+                ))
+                .child(form_row(
+                    theme,
+                    tr("客户端证书"),
+                    Input::new(ssl_cert).disabled(form_disabled),
+                ))
+                .child(form_row(
+                    theme,
+                    tr("私钥"),
+                    Input::new(ssl_key).disabled(form_disabled),
+                ))
+        });
+
+    // 卡片 4：组织（标签 + 项目分组勾选；分组为项目级能力）。
+    let mut org_body = div()
+        .w_full()
+        .v_flex()
+        .gap(rems(GAP_SM))
+        .child(form_row(
+            theme,
+            tr("标签"),
+            Input::new(tags_input).disabled(form_disabled),
+        ))
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.colors.muted_foreground)
+                .child(tr("多个标签用逗号分隔（导航检索用）")),
+        );
+    {
+        let checks = group_checks.borrow().clone();
+        if !has_project {
+            org_body = org_body.child(
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.muted_foreground)
+                    .child(tr("分组：打开项目后可用（分组为项目级）")),
+            );
+        } else if checks.is_empty() {
+            org_body = org_body.child(
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.muted_foreground)
+                    .child(tr("分组：本项目暂无分组")),
+            );
+        } else {
+            let mut list = div().v_flex().gap_0p5();
+            for (gid, gname, checked) in checks.iter() {
+                list = list.child(
+                    Checkbox::new(SharedString::from(format!("grp-{gid}")))
+                        .label(gname.clone())
+                        .checked(*checked)
+                        .disabled(form_disabled)
+                        .on_click({
+                            let state = state.clone();
+                            let entity = entity.clone();
+                            let gid = gid.clone();
+                            move |now, _, app| {
+                                if let Some((_, _, c)) = state
+                                    .group_checks
+                                    .borrow_mut()
+                                    .iter_mut()
+                                    .find(|(id, _, _)| *id == gid)
+                                {
+                                    *c = *now;
+                                }
+                                entity.update(app, |_, cx| cx.notify());
+                            }
+                        }),
+                );
+            }
+            org_body = org_body.child(
+                div()
+                    .v_flex()
+                    .gap_0p5()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .child(tr("分组")),
+                    )
+                    .child(list),
+            );
+        }
+    }
+
+    // 「＋ 新建分组」输入行（#7）：分组为项目级能力，未打开项目不提供入口。
+    // 点击展开输入行（纯 UI 态 `group_new_open`），名称非空才创建（`submit_group_new`，
+    // 与服务层 `create_group` 闭环——建完导航栏立即可见）。
+    if has_project {
+        let mut group_new = div().v_flex().gap_0p5().child(
+            Button::new(SharedString::from("conn-group-new-toggle"))
+                .ghost()
+                .icon(IconName::Plus)
+                .label(tr("新建分组"))
+                .with_size(Size::XSmall)
+                .on_click({
+                    let state = state.clone();
+                    let entity = entity.clone();
+                    move |_, _, app| {
+                        state.group_new_open.set(!state.group_new_open.get());
+                        entity.update(app, |_, cx| cx.notify());
+                    }
+                }),
+        );
+        if group_new_open.get() {
+            group_new = group_new.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .child(Input::new(group_new_name).disabled(form_disabled))
+                    .child(
+                        Button::new(SharedString::from("conn-group-new-submit"))
+                            .label(tr("创建"))
+                            .with_size(Size::Small)
+                            .disabled(form_disabled)
+                            .on_click({
+                                let state = state.clone();
+                                move |_, window, app| {
+                                    state.submit_group_new(window, app);
+                                }
+                            }),
+                    ),
+            );
+        }
+        org_body = org_body.child(group_new);
+    }
+
+    // 首次使用引导（#29）：仅在“未选类型 + 名称/地址都还空”时出现，选完类型即自动消失
+    // （不占老手版面）；文案只陈述可执行动作与快捷键，不引外链。
+    let onboarding = {
+        let untouched =
+            name.read(cx).value().trim().is_empty() && url.read(cx).value().trim().is_empty();
+        if type_badge.is_none() && untouched {
+            Some(
+                div()
+                    .id("conn-general-guide")
+                    // kit 观测：窗口用例按 id 取快照（可见性 + 几何；取代 `debug_selector`）。
+                    .test_support()
+                    .w_full()
+                    .v_flex()
+                    .gap(rems(GAP_SM))
+                    .rounded(theme.radius_lg)
+                    .border_1()
+                    .border_color(theme.colors.primary.opacity(0.28))
+                    .bg(theme.colors.primary.opacity(0.06))
+                    .px_3()
+                    .py_2()
+                    .text_xs()
+                    .text_color(theme.colors.foreground)
+                    .child(
+                        "第一次配置数据源？① 左侧选数据库类型 → ② 选驱动实现 → ③ 填连接信息（文件型用「打开文件…」/「新建文件…」）→ ④ Ctrl+T 测试 → ⑤ Ctrl+Enter 保存",
+                    )
+                    .child(
+                        div().text_color(theme.colors.muted_foreground).child(
+                            "未保存的填写会留在左侧「草稿」区（关闭对话框不丢）；已保存的连接从数据源导航栏进入编辑。",
+                        ),
+                    ),
+            )
+        } else {
+            None
+        }
+    };
+
+    // 常规 Tab：**单列分组大纲**（info-banner 常驻 + 分组；分组可折叠，集合随驱动类型）。
+    let mut outline = div()
+        .w_full()
+        .v_flex()
+        .gap(rems(GAP_MD))
+        .when_some(onboarding, |d, o| d.child(o))
+        .child(info_banner);
+    outline = outline.child(make_section(
+        "conn",
+        lucide("icons/database.svg"),
+        theme.colors.primary,
+        tr("连接设置"),
+        settings_body,
+    ));
+    // 认证 / SSL 仅网络型有意义：文件型只有「连接设置 + 组织」；
+    // SSL 分组另按驱动声明（supported_auth_types 含 ssl）显示。
+    if !is_file_db {
+        outline = outline.child(make_section(
+            "auth",
+            lucide("icons/lock.svg"),
+            theme.colors.primary,
+            tr("数据库认证"),
+            auth_body,
+        ));
+        if driver_declares_ssl || form_disabled {
+            outline = outline.child(make_section(
+                "ssl",
+                lucide("icons/shield-check.svg"),
+                theme.colors.info,
+                tr("连接安全（SSL/TLS）"),
+                ssl_body,
+            ));
+        }
+    }
+    outline.child(make_section(
+        "org",
+        lucide("icons/tag.svg"),
+        theme.colors.success,
+        tr("组织（标签 / 分组）"),
+        org_body,
+    ))
 }
