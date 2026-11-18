@@ -133,6 +133,19 @@ pub(crate) fn dialog_row_height(viewport_h_rem: f32) -> Rems {
     rems(crate::ui::DIALOG_BODY_HEIGHT.min(budget).max(16.))
 }
 
+/// 对话框左右留给遮罩的余量（rem）：窗口比设计宽度窄时，先把这圈余量让出去。
+const DIALOG_SIDE_MARGIN: f32 = 2.;
+
+/// 对话框宽度（**rem 值**）：设计基准 [`crate::ui::DIALOG_EDIT_WIDTH`] 与窗口可用宽度取小。
+///
+/// 与 [`dialog_row_height`] 同一个理由：设计宽度 61.25rem 是按 980px 定的，
+/// 小屏（或高缩放）上窗口逻辑宽度可能只有 700px——固定宽度会让对话框左右溢出、
+/// 「保存并退出」被推到屏幕外。下限 32rem：再窄也只是内容区内挤，不压成一条缝。
+pub(crate) fn dialog_width(viewport_w_rem: f32) -> Rems {
+    let budget = viewport_w_rem - DIALOG_SIDE_MARGIN;
+    rems(crate::ui::DIALOG_EDIT_WIDTH.min(budget).max(32.))
+}
+
 // ===== 最小可保存集（缺口提示）=====
 
 /// 还差什么才能测试 / 保存：按顺序给出**第一个**缺口，全齐则 `None`。

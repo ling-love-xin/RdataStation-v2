@@ -3,7 +3,7 @@ use super::{
     address_field, address_label, address_placeholder, app_level_capabilities, auth_config_values,
     auth_field_specs, build_auth_config_json, build_network_config_json, capability_rows,
     conn_display_name, create_new_db_file, default_new_scope, dialog_row_height, dialog_tab_defs,
-    driver_auth_types, driver_capabilities, driver_form_fields, driver_kind_label,
+    dialog_width, driver_auth_types, driver_capabilities, driver_form_fields, driver_kind_label,
     driver_menu_label, driver_short_name, driver_source_text, driver_sources_from_rows,
     enabled_drivers_of_type, field_spec, find_driver_by_value, first_selectable_type,
     is_secret_field, network_config_values, network_field_specs, new_db_file_suggested_name,
@@ -463,6 +463,18 @@ fn saved_result_keeps_connection_id_out_of_the_summary() {
         .summary
         .contains("未命名连接"));
     assert_eq!(conn_display_name(" x "), "x");
+}
+
+#[test]
+fn dialog_width_is_clamped_to_the_window() {
+    // 宽窗口：按设计基准（61.25rem），不跟着窗口无限变宽。
+    assert_eq!(dialog_width(200.0).0, crate::ui::DIALOG_EDIT_WIDTH);
+    // 窄窗口：留出左右遮罩余量（窗口 40rem → 38rem），否则保存按钮会被推到屏幕外。
+    let narrow = dialog_width(40.0).0;
+    assert_eq!(narrow, 38.0);
+    assert!(narrow < crate::ui::DIALOG_EDIT_WIDTH);
+    // 极窄：保持 32rem 下限（内容区内挤，不压成一条缝）。
+    assert_eq!(dialog_width(30.0).0, 32.0);
 }
 
 #[test]

@@ -2928,10 +2928,14 @@ impl<H: 'static> ConnectionDialogState<H> {
             let viewport_rem =
                 f32::from(window.viewport_size().height) / f32::from(window.rem_size());
             let row_h = dialog_row_height(viewport_rem);
+            // 宽度同样夹：61.25rem 是按 980px 定的设计基准，窄窗口上会左右溢出。
+            let viewport_w_rem =
+                f32::from(window.viewport_size().width) / f32::from(window.rem_size());
+            let dialog_w = dialog_width(viewport_w_rem);
 
             dialog
                 .title(if editing_id.borrow().is_some() { tr("编辑数据源连接") } else { tr("新建数据源连接") })
-                .w(cx.theme().font_size * crate::ui::DIALOG_EDIT_WIDTH)
+                .w(cx.theme().font_size * dialog_w.0)
                 .overlay(true)
                 .overlay_closable(true)
                 .keyboard(true)
