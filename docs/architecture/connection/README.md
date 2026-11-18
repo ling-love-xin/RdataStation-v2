@@ -65,7 +65,7 @@
 
 | 想改 | 去哪 |
 | --- | --- |
-| 对话框 UI / 布局 / 交互 | `crates/connection_dialog/src/components/connection_dialog/render.rs`（逐块函数：`result_row_ui` / `side_panel_ui` / `capability_panel_ui` / `driver_props_panel_ui` / `footer_ui` / `network_tab_ui` / `advanced_tab_ui` / `general_tab_ui`）+ `helpers/` 纯函数 + `crates/workbench_shell/src/ui.rs` 尺寸常量 |
+| 对话框 UI / 布局 / 交互 | `crates/connection_dialog/src/components/connection_dialog/render.rs`（逐块函数：`result_row_ui` / `side_panel_ui` / `header_ui` / `capability_panel_ui` / `driver_props_panel_ui` / `footer_ui` / `network_tab_ui` / `advanced_tab_ui` / `general_tab_ui`）+ `helpers/` 纯函数 + `crates/workbench_shell/src/ui.rs` 尺寸常量 |
 | 暂存列表 / 草稿快照 | `crates/connection_dialog/src/components/connection_dialog/staging.rs`（`ConnectionDraft` + `staging_*`）+ `draft_list.rs` |
 | 类型树 / 项目下拉 | `connection_dialog/type_tree.rs`、`connection_dialog/project_picker.rs`（+ `Shared::{project_new_request, project_open_request}` → `take_project_action_request`） |
 | 三个管理器覆盖层 | `connection_dialog/managers.rs` |

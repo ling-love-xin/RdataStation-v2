@@ -734,109 +734,13 @@ impl<H: 'static> ConnectionDialogState<H> {
             });
 
             // ---- Header（对齐原型 §2）：名称 + 驱动类型 + 作用域 / 备注 / URI / 提示行 ----
-            // 项目栏：固定位置（备注行右侧）；作用域为「仅全局」时不参与落库 → 置灰不可编辑，
-            // 保证三态切换时布局不跳动。
-            // 项目栏（固定位置与宽度 17rem）：不参与项目作用域时置灰禁用；
-            // 参与时为一个下拉框（项目名 + 路径左右结构；末项「＋ 新增项目」）。
-            // 作用域「仅项目」（默认）却没有项目根：落库目标不存在，先说清楚要选项目。
+            // 整块已抽成 `header_ui`（参数见 `Header`）：三行布局、项目栏、作用域分段、类型徽标都在里面。
+            // 这里只留「最小可保存集」判据需要的两个前置事实：
+            // 作用域「仅项目」（默认）却没有项目根 → 落库目标不存在，保存前要说清楚。
             let needs_project = matches!(scope_from_label(&scope_sel), ConnectionScope::Project);
             let has_project = !project_path.read(cx).value().trim().is_empty();
-            let mut wrap = div()
-                .h_flex()
-                .flex_shrink_0()
-                .items_center()
-                .gap(rems(GAP_MD))
-                .w(rems(PROJECT_W))
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .text_xs()
-                        // 被拦过一次后，缺项目的标签与其它缺口一样染 danger 色。
-                        .text_color(if blocked_hint.get() && needs_project && !has_project {
-                            theme.colors.danger
-                        } else {
-                            theme.colors.muted_foreground
-                        })
-                        .child(tr("项目")),
-                );
-                if !includes_project {
-                    // 仅全局：项目不参与落库，仍以禁用下拉占位（保持控件形态与行高一致）。
-                    wrap = wrap.child(
-                        div()
-                            .flex_1()
-                            .min_w(rems(0.))
-                            .child(
-                                Select::new(&project_sel)
-                                    .placeholder(tr("仅全局不需要"))
-                                    .disabled(true),
-                            ),
-                    );
-                } else {
-                    wrap = wrap.child(
-                        div()
-                            .flex_1()
-                            .min_w(rems(0.))
-                            .child(Select::new(&project_sel).placeholder(tr("选择项目…"))),
-                    );
-                }
-            let project_ui = wrap;
-            // 作用域：三态分段（gpui-component `TabBar::segmented`，决策 #84）——
-            // 短标签只用于显示（可 i18n），写库仍用全称标签（`scope_seg_labels()` 的第二列，
-            // 那是 `parse` 认的值，**不能**跟着语言变）。
-            let scope_seg = {
-                // 规则 1（决策 #110）：默认值已由 `scope_sel`（`scope_label_or_default`）统一给出；
-                // 这里不再单独回退，避免“显示走一条、落库走另一条”。
-                let seg_labels = scope_seg_labels();
-                let selected = seg_labels
-                    .iter()
-                    .position(|(_, full)| *full == scope_sel.as_str())
-                    .unwrap_or(0);
-                TabBar::new("scope-seg")
-                    .segmented()
-                    // Small（24px 高）与原型 HTML 的分段控件等高；XSmall 在 28px 的 Header 行里显得偏小。
-                    .with_size(Size::Small)
-                    .flex_shrink_0()
-                    .selected_index(selected)
-                    .children(seg_labels.into_iter().map(|(short, _)| Tab::new().label(short)))
-                    .on_click({
-                        let scope = scope.clone();
-                        let entity = entity.clone();
-                        move |ix, window, app| {
-                            if let Some((_, full)) = scope_seg_labels().get(*ix) {
-                                set_select_value(&scope, full, window, app);
-                                entity.update(app, |_, cx| cx.notify());
-                            }
-                        }
-                    })
-            };
-            // 类型徽标（仅图标，定宽 1.75rem：类型名长短不移动后续元素；未辨识时显示 ?）。
-            let type_badge_ui = {
-                let mut badge = div()
-                    .flex_shrink_0()
-                    .h_flex()
-                    .items_center()
-                    .justify_center()
-                    .w(rems(BADGE_W))
-                    .h(rems(BADGE_H))
-                    .rounded(rems(GAP_SM))
-                    .border_1()
-                    .text_xs();
-                match &type_badge_now {
-                    Some((icon, _name)) => {
-                        badge = badge
-                            .border_color(theme.colors.border)
-                            .text_color(theme.colors.muted_foreground)
-                            .child(icon.clone());
-                    }
-                    None => {
-                        badge = badge
-                            .border_color(theme.colors.warning)
-                            .text_color(theme.colors.warning)
-                            .child("?");
-                    }
-                }
-                badge
-            };
+            // 作用域分段 / 项目栏 / 类型徽标 / 三行布局都在 `header_ui` 里（见文件尾 `Header`）。
+
             // ---- 最小可保存集（B2）：缺口提示 ----
             // 判据与 `ClonedDialogState::collect` 完全一致（类型/驱动 → 项目 → 名称 → 地址）：
             // 点击时按**当前缺口**给理由（不再是笼统的「请填写名称、驱动与连接 URL」），
@@ -858,109 +762,33 @@ impl<H: 'static> ConnectionDialogState<H> {
             let missing_url = hint_on && url_now.trim().is_empty();
             let missing_driver = hint_on && driver_is_empty;
 
-            // Header（3 行，按建议布局）：
-            // ① 类型徽标 + 名称 + 作用域分段；② 备注 + 项目；③ 驱动 + URI。
-            let header_ui = div()
-                .v_flex()
-                .gap(rems(GAP_MD))
-                .pb(rems(GAP_MD))
-                .border_b_1()
-                .border_color(theme.colors.border)
-                .child(
-                    div()
-                        .h_flex()
-                        .items_center()
-                        .gap(rems(GAP_LG))
-                        .min_w(rems(0.))
-                        .child(type_badge_ui)
-                        .child(header_label_state(theme, tr("名称"), missing_name))
-                        .child(Input::new(&name).flex_1())
-                        .child(scope_seg)
-                        // 规则 1（决策 #110）：作用域三态旁 `?` 徽标，悬停提示三态落库语义。
-                        .child(
-                            Button::new("scope-help")
-                                .ghost()
-                                .icon(gpui_kit::assets::IconName::BadgeQuestionMark)
-                                .tooltip(
-                                    "仅全局：写入 global.db，所有项目可见（ID G_…）；\
-                                     仅项目：写入当前项目 .RSmeta/project.db（ID P_…）；\
-                                     全局+项目：全局定义 + 项目快照引用（ID GP_…）",
-                                ),
-                        ),
-                )
-                .child(
-                    div()
-                        .h_flex()
-                        .items_center()
-                        .gap(rems(GAP_LG))
-                        .min_w(rems(0.))
-                        .child(header_label(theme, tr("备注")))
-                        .child(Input::new(&remark).flex_1())
-                        .child(project_ui),
-                )
-                .child(
-                    div()
-                        .h_flex()
-                        .items_center()
-                        .gap(rems(GAP_LG))
-                        .min_w(rems(0.))
-                        .child(header_label_state(theme, tr("驱动类型"), missing_driver))
-                        .child(
-                            div()
-                                .w(rems(DRIVER_W))
-                                .flex_shrink_0()
-                                .child(if type_badge_now.is_some() {
-                                    if type_has_driver(&drivers_snapshot, &selected_type_id) {
-                                        Select::new(&driver)
-                                            .placeholder(tr("选择驱动实现…"))
-                                            .into_any_element()
-                                    } else {
-                                        // 类型已选但无可用驱动（旧草稿 / 目录缺驱动）：只读占位。
-                                        Select::new(&driver)
-                                            .placeholder(tr("该类型暂无可用驱动"))
-                                            .disabled(true)
-                                            .into_any_element()
-                                    }
-                                } else {
-                                    // 未选类型：仍以禁用下拉占位（保持控件形态与行高一致）。
-                                    Select::new(&driver)
-                                        .placeholder(tr("先选类型"))
-                                        .disabled(true)
-                                        .into_any_element()
-                                }),
-                        )
-                        .child(header_label_state(
-                            theme,
-                            address_label(is_file_db),
-                            missing_url,
-                        ))
-                        .child(if is_file_db {
-                            // 文件型：地址在「常规 → 连接设置」编辑（那里带「打开文件 / 新建文件」），
-                            // Header 只显示当前路径（截断）或引导文案，避免两个地址输入框。
-                            let path_now = url.read(cx).value().to_string();
-                            let text = if path_now.trim().is_empty() {
-                                tr("在「常规 → 连接设置」选择或新建数据库文件").to_string()
-                            } else {
-                                path_now
-                            };
-                            div()
-                                .flex_1()
-                                .min_w(rems(0.))
-                                .overflow_hidden()
-                                .text_xs()
-                                .text_ellipsis()
-                                .text_color(theme.colors.muted_foreground)
-                                .child(text)
-                                .into_any_element()
-                        } else {
-                            // 网络型 URI 是**派生展示**：由「常规 → 连接设置」的三项字段自动生成，
-                            // 因此只读（`disabled` 恒真，不只是未选驱动时）。粘贴导入见那里的按钮。
-                            Input::new(&url)
-                                .disabled(true)
-                                .flex_1()
-                                .into_any_element()
-                        }),
-                );
+            // Header（3 行，按建议布局）：整块由 `header_ui` 组装（见文件尾 `Header`）。
+            // ① 类型徽标 + 名称 + 作用域分段；② 备注 + 项目；③ 驱动 + 地址 / URI。
+            let header_ui = header_ui(
+                Header {
+                    type_badge: type_badge_now.clone(),
+                    name: &name,
+                    driver: &driver,
+                    scope: &scope,
+                    scope_value: &scope_sel,
+                    remark: &remark,
+                    url: &url,
+                    project_sel: &project_sel,
+                    drivers: &drivers_snapshot,
+                    selected_type_id: &selected_type_id,
+                    is_file_db,
+                    includes_project,
+                    needs_project,
+                    has_project,
+                    blocked_hint: &blocked_hint,
+                    missing_name,
+                    missing_url,
+                    missing_driver,
+                    entity: &entity,
+                    theme,
+                },
+                cx,
+            );
 
             // 结果行（#28：分级 + 详情）：级别决定图标与配色；摘要过长或带详情时提供「详情 / 复制」。
             //
@@ -3525,3 +3353,291 @@ fn general_tab_ui<H: 'static>(p: GeneralTab<'_, H>, cx: &App) -> Div {
         org_body,
     ))
 }
+
+struct Header<'a, H: 'static> {
+    /// 类型徽标（图标 + 名称）；`None` = 未选类型（徽标显示 `?`）。
+    type_badge: Option<(String, String)>,
+    /// 名称（唯一编辑位就在 Header 内）。
+    name: &'a Entity<InputState>,
+    /// 驱动下拉（类型已选时才可选实现）。
+    driver: &'a Entity<SelectState<SearchableVec<SharedString>>>,
+    /// 作用域下拉（三态分段的 selected_index 按它的当前值算）。
+    scope: &'a Entity<SelectState<SearchableVec<SharedString>>>,
+    /// 作用域当前值（已过 `scope_label_or_default`，显示与落库共用）。
+    scope_value: &'a str,
+    /// 备注。
+    remark: &'a Entity<InputState>,
+    /// 地址（文件型 = 库文件路径；网络型 = 派生展示的 URI）。
+    url: &'a Entity<InputState>,
+    /// 项目下拉（项目名 + 路径；末项「＋ 新增项目」）。
+    project_sel: &'a Entity<SelectState<SearchableVec<ProjectItem>>>,
+    /// 驱动目录快照（判该类型有没有可用驱动）。
+    drivers: &'a [Driver],
+    /// 当前类型 id（按它查驱动）。
+    selected_type_id: &'a str,
+    /// 文件型：地址在「常规 → 连接设置」编辑，Header 只显示路径。
+    is_file_db: bool,
+    /// 作用域是否含项目（「仅全局」时项目栏禁用占位）。
+    includes_project: bool,
+    /// 作用域为「仅项目」但项目根为空（保存会被拦，标签先染 danger）。
+    needs_project: bool,
+    /// 项目根是否已填（由调用方用 `project_path` 判，Header 只用于染色）。
+    has_project: bool,
+    /// 被拦过一次的标记（决定缺口标签是否染 danger 色）。
+    blocked_hint: &'a Rc<Cell<bool>>,
+    /// 名称缺口的标签染色。
+    missing_name: bool,
+    /// 地址缺口的标签染色。
+    missing_url: bool,
+    /// 驱动缺口的标签染色。
+    missing_driver: bool,
+    /// 要 notify 的实体（作用域分段点击后刷新）。
+    entity: &'a Entity<H>,
+    /// 取色。
+    theme: &'a Theme,
+}
+
+/// Header：三行固定布局，不随任何 Tab 切换而变化。
+///
+/// ① 类型徽标 · 名称 · 作用域分段（+ `?` 语义提示）；② 备注 · 项目下拉；
+/// ③ 驱动下拉 · 地址（网络型为**只读派生** URI，文件型为路径文本）。
+///
+/// 这里只负责版面与控件形态：地址解析 / 写回分别由 `state` 的字段同步与
+/// 「常规 → 连接设置」的导入按钮负责；作用域点击只写 `scope` 的选择值。
+fn header_ui<H: 'static>(p: Header<'_, H>, cx: &App) -> Div {
+    let Header {
+        type_badge,
+        name,
+        driver,
+        scope,
+        scope_value,
+        remark,
+        url,
+        project_sel,
+        drivers,
+        selected_type_id,
+        is_file_db,
+        includes_project,
+        needs_project,
+        has_project,
+        blocked_hint,
+        missing_name,
+        missing_url,
+        missing_driver,
+        entity,
+        theme,
+    } = p;
+    let entity = entity.clone();
+    let scope = scope.clone();
+
+    // 项目栏：固定位置（备注行右侧）与定宽 `PROJECT_W`；「仅全局」不参与落库 → 禁用占位，
+    // 保证三态切换时布局不跳动。缺项目被拦过一次后，标签与其它缺口一样染 danger 色。
+    let project_ui = {
+        let mut wrap = div()
+            .h_flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(rems(GAP_MD))
+            .w(rems(PROJECT_W))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_xs()
+                    .text_color(
+                        if blocked_hint.get() && needs_project && !has_project {
+                            theme.colors.danger
+                        } else {
+                            theme.colors.muted_foreground
+                        },
+                    )
+                    .child(tr("项目")),
+            );
+        if includes_project {
+            wrap = wrap.child(
+                div()
+                    .flex_1()
+                    .min_w(rems(0.))
+                    .child(Select::new(project_sel).placeholder(tr("选择项目…"))),
+            );
+        } else {
+            // 仅全局：项目不参与落库，仍以禁用下拉占位（保持控件形态与行高一致）。
+            wrap = wrap.child(
+                div()
+                    .flex_1()
+                    .min_w(rems(0.))
+                    .child(
+                        Select::new(project_sel)
+                            .placeholder(tr("仅全局不需要"))
+                            .disabled(true),
+                    ),
+            );
+        }
+        wrap
+    };
+
+    // 作用域：三态分段（`TabBar::segmented`，决策 #84）——短标签只用于显示（可 i18n），
+    // 写库仍用全称标签（`scope_seg_labels()` 的第二列，`parse` 认的值，不能跟语言变）。
+    // 默认值已由 `scope_value`（`scope_label_or_default`）统一给出，不再单独回退。
+    let scope_seg = {
+        let seg_labels = scope_seg_labels();
+        let selected = seg_labels
+            .iter()
+            .position(|(_, full)| *full == scope_value)
+            .unwrap_or(0);
+        TabBar::new("scope-seg")
+            .segmented()
+            // Small（24px 高）与原型 HTML 的分段控件等高；XSmall 在 28px 的 Header 行里显得偏小。
+            .with_size(Size::Small)
+            .flex_shrink_0()
+            .selected_index(selected)
+            .children(
+                seg_labels
+                    .into_iter()
+                    .map(|(short, _)| Tab::new().label(short)),
+            )
+            .on_click({
+                let scope = scope.clone();
+                let entity = entity.clone();
+                move |ix, window, app| {
+                    if let Some((_, full)) = scope_seg_labels().get(*ix) {
+                        set_select_value(&scope, full, window, app);
+                        entity.update(app, |_, cx| cx.notify());
+                    }
+                }
+            })
+    };
+
+    // 类型徽标（仅图标，定宽 `BADGE_W`：类型名长短不移动后续元素；未辨识时显示 `?`）。
+    let type_badge_ui = {
+        let mut badge = div()
+            .flex_shrink_0()
+            .h_flex()
+            .items_center()
+            .justify_center()
+            .w(rems(BADGE_W))
+            .h(rems(BADGE_H))
+            .rounded(rems(GAP_SM))
+            .border_1()
+            .text_xs();
+        match &type_badge {
+            Some((icon, _name)) => {
+                badge = badge
+                    .border_color(theme.colors.border)
+                    .text_color(theme.colors.muted_foreground)
+                    .child(icon.clone());
+            }
+            None => {
+                badge = badge
+                    .border_color(theme.colors.warning)
+                    .text_color(theme.colors.warning)
+                    .child("?");
+            }
+        }
+        badge
+    };
+
+    // 驱动下拉：三种形态——可选实现 / 类型无可用驱动（只读占位）/ 未选类型（禁用占位）。
+    // 三态都保持控件形态与行高一致；「去插件管理装驱动」的入口在侧栏，不重复放这里。
+    let driver_ui = {
+        let has_type = type_badge.is_some();
+        let select = if has_type {
+            if type_has_driver(drivers, selected_type_id) {
+                Select::new(driver).placeholder(tr("选择驱动实现…"))
+            } else {
+                // 类型已选但无可用驱动（旧草稿 / 目录缺驱动）：只读占位。
+                Select::new(driver)
+                    .placeholder(tr("该类型暂无可用驱动"))
+                    .disabled(true)
+            }
+        } else {
+            // 未选类型：仍以禁用下拉占位（保持控件形态与行高一致）。
+            Select::new(driver)
+                .placeholder(tr("先选类型"))
+                .disabled(true)
+        };
+        div()
+            .w(rems(DRIVER_W))
+            .flex_shrink_0()
+            .child(select)
+    };
+
+    // 地址列：文件型只显示路径（编辑在「常规 → 连接设置」，避免两个地址输入框）；
+    // 网络型 URI 是**派生展示**，恒 `disabled`——粘贴导入走「常规 → 连接设置」的按钮。
+    let address_ui = if is_file_db {
+        let path_now = url.read(cx).value().to_string();
+        let text = if path_now.trim().is_empty() {
+            tr("在「常规 → 连接设置」选择或新建数据库文件").to_string()
+        } else {
+            path_now
+        };
+        div()
+            .flex_1()
+            .min_w(rems(0.))
+            .overflow_hidden()
+            .text_xs()
+            .text_ellipsis()
+            .text_color(theme.colors.muted_foreground)
+            .child(text)
+            .into_any_element()
+    } else {
+        Input::new(url)
+            .disabled(true)
+            .flex_1()
+            .into_any_element()
+    };
+
+    div()
+        .v_flex()
+        .gap(rems(GAP_MD))
+        .pb(rems(GAP_MD))
+        .border_b_1()
+        .border_color(theme.colors.border)
+        .child(
+            div()
+                .h_flex()
+                .items_center()
+                .gap(rems(GAP_LG))
+                .min_w(rems(0.))
+                .child(type_badge_ui)
+                .child(header_label_state(theme, tr("名称"), missing_name))
+                .child(Input::new(name).flex_1())
+                .child(scope_seg)
+                // 规则 1（决策 #110）：作用域三态旁 `?` 徽标，悬停提示三态落库语义。
+                .child(
+                    Button::new("scope-help")
+                        .ghost()
+                        .icon(gpui_kit::assets::IconName::BadgeQuestionMark)
+                        .tooltip(
+                            "仅全局：写入 global.db，所有项目可见（ID G_…）；\
+                             仅项目：写入当前项目 .RSmeta/project.db（ID P_…）；\
+                             全局+项目：全局定义 + 项目快照引用（ID GP_…）",
+                        ),
+                ),
+        )
+        .child(
+            div()
+                .h_flex()
+                .items_center()
+                .gap(rems(GAP_LG))
+                .min_w(rems(0.))
+                .child(header_label(theme, tr("备注")))
+                .child(Input::new(remark).flex_1())
+                .child(project_ui),
+        )
+        .child(
+            div()
+                .h_flex()
+                .items_center()
+                .gap(rems(GAP_LG))
+                .min_w(rems(0.))
+                .child(header_label_state(theme, tr("驱动类型"), missing_driver))
+                .child(driver_ui)
+                .child(header_label_state(
+                    theme,
+                    address_label(is_file_db),
+                    missing_url,
+                ))
+                .child(address_ui),
+        )
+}
+
