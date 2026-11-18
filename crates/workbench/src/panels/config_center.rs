@@ -55,6 +55,11 @@ impl ConfigCenterPanel {
         }
         cx.notify();
     }
+
+    /// 当前域（`None` = 页面还没建）。测试与宿主据此判断落点。
+    pub fn current_kind(&self) -> Option<ManagerKind> {
+        self.page.as_ref().map(|page| page.kind())
+    }
 }
 
 impl EventEmitter<BasePanelEvent> for ConfigCenterPanel {}
