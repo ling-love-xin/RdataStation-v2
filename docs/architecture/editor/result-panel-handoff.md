@@ -1188,6 +1188,27 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   `result_can_copy = false`，要先置真再出帧，否则 `try_find` 一定取不到。
 - **验证**：panel **277 passed** / editor `--lib results` 45 / guard 4 / check 0-0。
 
+### 2.55 底部动作条按 editCmds / navCmds 归位（2026-11-18）
+
+全文见 `result-panel.md §8.66`，原文取证在 `.rds/tmp/db-status-toolbar.txt`
+（DBeaver `plugins/org.jkiss.dbeaver.ui.editors.data/plugin.xml` 1407-1522）。接手要点：
+
+- DBeaver 底部动作条是**三个**状态子贡献点装出来的，不能凭截图排：
+  `editCmds` = applyChanges(pulldown) → rejectChanges → undo → redo ‖分隔‖ row.edit →
+  row.add → row.copy → row.delete；`navCmds` = row.first → previous → **next** → last →
+  fetch.page → fetch.all；`exportCmd` = 分隔 → export(pulldown)。
+- 本仓改了三处：① 写操作段改成 `[提交·回滚·撤销·重做] ‖分隔‖ [修改·新增·复制·删除]`；
+  ② 翻页段改成 `[首页·上页·下页·末页]` 后再接取下一段 / 取全部（`last` 不再被挤到取数钮之后）；
+  ③ **补上「下页」钮**——`PageTarget::Next` 端口与宿主 `go_page` 早就实现了，只是面板从没注入
+  按钮（这是本轮最实质的缺口）。
+- 占位清单变 13 项，分界 `FIRST_PAGER_ACTION = 8` / `FIRST_SYSTEM_ACTION = 12`；改顺序时
+  必须同步改 `grid::tests::status_action_placeholders_follow_dbeaver_group_order`。
+- 仍在册（非本轮改动）：行导航语义本仓是「移一屏」（DBeaver 是「移一行」），取数是窗口化
+  `FetchMore`（DBeaver 是 `fetch.page` 显式取页）。
+- 新增用例 `status_row_pager_follows_dbeaver_nav_order`：按真实像素横坐标钉四颗钮的左右顺序
+  （顺带示范：`ElementSnapshot::bounds()` 能取绝对位置，`total_rows > 0` 才有四颗钮）。
+- **验证**：panel **278 passed** / editor `--lib results` 45 / guard 4 / check 0-0。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）

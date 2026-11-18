@@ -1666,3 +1666,49 @@ fn history_buttons_sit_in_the_filter_row_and_gate_on_position(cx: &mut gpui_kit:
     );
 }
 
+/// 【状态栏翻页对齐】DBeaver 底部动作条 `toolbar:…resultset.status.navCmds`
+/// （`plugin.xml:1470-1512`）的行导航是四颗：`row.first` → `row.previous` → `row.next` →
+/// `row.last`，其后才是 `fetch.page` / `fetch.all`。本仓此前只有三颗（缺 `row.next`，
+/// 且「末页」被摆到取数钮之后），本批补齐并归位。
+///
+/// 断言用**真实像素横坐标**（`ElementSnapshot::bounds()`）：顺序是布局事实，
+/// 只看「在不在」抓不到被摆错位；而且「末页在取下一段 / 取全部之前」这条
+/// 只有量 x 才守得住。
+#[gpui_kit::test]
+fn status_row_pager_follows_dbeaver_nav_order(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{ElementId, SharedString};
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    // 有行才注入四颗分页钮（`has_rows = status.total_rows > 0`）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.status = Some(crate::grid::status::ResultStatus {
+                total_rows: 2,
+                ..Default::default()
+            });
+            cx.notify();
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let left_of = |cx: &mut gpui_kit::VisualTestContext, id: &str| -> f32 {
+        let name = SharedString::from(id.to_string());
+        let snap = cx
+            .update(|window, _| window.try_find(ElementId::Name(name)))
+            .unwrap_or_else(|| panic!("状态栏应有 {id}"));
+        f32::from(snap.bounds().origin.x)
+    };
+
+    let first = left_of(cx, "editor-result-page-first");
+    let prev = left_of(cx, "editor-result-page-prev");
+    let next = left_of(cx, "editor-result-page-next");
+    let last = left_of(cx, "editor-result-page-last");
+    assert!(
+        first < prev && prev < next && next < last,
+        "分页四钮应按 首页→上页→下页→末页 从左到右排（实际 {first}/{prev}/{next}/{last}）"
+    );
+}
+
+

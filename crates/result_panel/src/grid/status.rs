@@ -158,34 +158,43 @@ pub fn window_fetch_active(status: &ResultStatus) -> bool {
 
 /// 底部动作状态行的**占位动作钮**（写操作段仍未接线，翻页段已由面板注入真钮）。
 ///
-/// 顺序对齐 DBeaver 底部动作条，三段：
-/// - 写操作段（0..7）：保存 · 取消 · 修改 · 新增行 · 复制行 · 删除行 · 撤销 · 重做；
-/// - 翻页段（8..10）：首页 · 上页 · 末页——**已接线**（面板注入 `first_page` /
-///   `prev_page` / `last_page`，纯视图滚动）；「下页」是现有取下一段真钮
-///   （`ResultControls.more`），不进占位清单；
-/// - 系统段（11..）：导出 · 刷新。
+/// 顺序对齐 DBeaver 底部动作条（`plugin.xml` 的三个 status 子贡献点
+/// `editCmds` / `navCmds` / `exportCmd`，1380-1522），三段：
+/// - 写操作段（`0..FIRST_PAGER_ACTION`）：**提交** · **回滚** · 撤销 · 重做 ‖ 修改 · 新增行 ·
+///   复制行 · 删除行（DBeaver 这里有个 `rowCmds.separator` 竖分隔：前四颗是变更集动作、
+///   后四颗是行级动作）；
+/// - 翻页段（`FIRST_PAGER_ACTION..FIRST_SYSTEM_ACTION`）：首页 · 上页 · 下页 · 末页
+///   ——**四颗都已接线**（面板注入 `first_page` / `prev_page` / `next_page` / `last_page`，
+///   纯视图滚动）；其后才是取下一段（`controls.more`，DBeaver `fetch.page`）与取全部
+///   （`controls.fetch_all`，DBeaver `fetch.all`），与 DBeaver 同序（都不进占位清单）；
+/// - 系统段（`FIRST_SYSTEM_ACTION..`）：导出。
 ///
 /// 未注入时（无结果集）回退到这里，按钮一律 `disabled(true)` 占位。
 pub fn status_action_placeholders() -> Vec<(IconName, &'static str)> {
     vec![
-        (IconName::Save, "保存（待行级模型落地）"),
-        (IconName::X, "取消（回滚待提交变更）"),
+        // 写操作 · 变更集
+        (IconName::Save, "提交（待行级模型落地）"),
+        (IconName::X, "回滚待提交变更"),
+        (IconName::Undo2, "撤销"),
+        (IconName::Redo2, "重做"),
+        // 写操作 · 行级
         (IconName::Pencil, "修改选中格（双击单元格进入编辑）"),
         (IconName::Plus, "新增行（暂未支持下发）"),
         (IconName::CopyPlus, "复制行（暂未支持下发）"),
         (IconName::Trash, "删除行（暂未支持下发）"),
-        (IconName::Undo2, "撤销"),
-        (IconName::Redo2, "重做"),
+        // 翻页
         (IconName::SkipBack, "首页（滚到第 1 行）"),
         (IconName::ChevronLeft, "上一页（上移一屏）"),
+        (IconName::ChevronRight, "下一页（下移一屏）"),
         (IconName::SkipForward, "末页（滚到已抓到的最后一行）"),
+        // 系统
         (IconName::Download, "导出"),
     ]
 }
 /// 占位动作钮分组下标的分界（写操作段 `0..FIRST_PAGER_ACTION`；翻页段 `FIRST_PAGER_ACTION..FIRST_SYSTEM_ACTION`；
 /// 系统段 `FIRST_SYSTEM_ACTION..`）。render 层据此在段间插发丝分隔线。
 pub(crate) const FIRST_PAGER_ACTION: usize = 8;
-pub(crate) const FIRST_SYSTEM_ACTION: usize = 11;
+pub(crate) const FIRST_SYSTEM_ACTION: usize = 12;
 
 /// 结果工具栏右段的动作控件（由面板构造：它知道点击该干什么）
 ///
@@ -217,6 +226,8 @@ pub struct ResultControls {
     pub first_page: Option<AnyElement>,
     /// 【分页】上一页（以可见首行为基准上移一屏；同上）
     pub prev_page: Option<AnyElement>,
+    /// 【分页】下一页（以可见首行为基准下移一屏；到底且还有下一段时顺带取数；同上）
+    pub next_page: Option<AnyElement>,
     /// 【分页】末页（滚到已抓到的最后一行；同上）
     pub last_page: Option<AnyElement>,
     /// 【#28-B3】新增行（面板注入；只读结果集不注入 → 回退禁用占位钮）
@@ -610,42 +621,49 @@ pub fn render_status_row(
             .into_any_element()
     };
     let separator = || div().w_px().h_3().flex_none().bg(border).into_any_element();
-    // 写操作段：保存 · 取消 · 编辑 · 新增行 · 复制行 · 删除行 · 撤销 · 重做。
-    // 保存 / 取消复用工具栏的提交 / 回滚对（状态栏不重复挂载），槽位保留禁用占位；
-    // 编辑 / 新增 / 复制 / 删除 / 撤销 / 重做由面板注入真钮，未注入（只读结果集等）回退占位。
-    let write_ops = vec![
-        placeholder_btn(placeholders[0]),
-        placeholder_btn(placeholders[1]),
-        placeholder_btn(placeholders[2]), // 编辑（Pencil，禁用占位）
-        controls
-            .insert_row
-            .unwrap_or_else(|| placeholder_btn(placeholders[3])),
-        controls
-            .duplicate_row
-            .unwrap_or_else(|| placeholder_btn(placeholders[4])),
-        controls
-            .delete_row
-            .unwrap_or_else(|| placeholder_btn(placeholders[5])),
+    // 写操作段（对齐 DBeaver `toolbar:…status.editCmds`，plugin.xml:1407-1466）：
+    // 前半 = 变更集动作「提交 · 回滚 · 撤销 · 重做」，后半（越过 `rowCmds.separator`）
+    // = 行级动作「修改 · 新增行 · 复制行 · 删除行」。保存 / 回滚复用工具栏的提交 / 回滚对
+    // （状态栏只摆占位，不重复挂载），行级动作与撤销重做由面板注入真钮，未注入回退占位。
+    let write_change = vec![
+        placeholder_btn(placeholders[0]), // 提交
+        placeholder_btn(placeholders[1]), // 回滚
         controls
             .undo
-            .unwrap_or_else(|| placeholder_btn(placeholders[6])),
+            .unwrap_or_else(|| placeholder_btn(placeholders[2])),
         controls
             .redo
+            .unwrap_or_else(|| placeholder_btn(placeholders[3])),
+    ];
+    let write_row = vec![
+        placeholder_btn(placeholders[4]), // 修改（Pencil，禁用占位）
+        controls
+            .insert_row
+            .unwrap_or_else(|| placeholder_btn(placeholders[5])),
+        controls
+            .duplicate_row
+            .unwrap_or_else(|| placeholder_btn(placeholders[6])),
+        controls
+            .delete_row
             .unwrap_or_else(|| placeholder_btn(placeholders[7])),
     ];
-    // 翻页段：首页 · 上页（面板注入真钮 = 纯视图滚动；未注入回退禁用占位）
-    // 下页 = 现有取下一段真钮；末页 = 滚到已抓到的最后一行
-    let pager_before = [
+    // 翻页段（对齐 `toolbar:…status.navCmds`，plugin.xml:1470-1512）：首页 · 上页 · **下页** ·
+    // 末页，其后才是取下一段（`more` ≈ `fetch.page`）与取全部（`fetch_all` ≈ `fetch.all`）——
+    // 四颗行导航都在面板注入（纯视图滚动），未注入回退禁用占位。
+    let pager_ops = vec![
         controls
             .first_page
             .unwrap_or_else(|| placeholder_btn(placeholders[FIRST_PAGER_ACTION])),
         controls
             .prev_page
             .unwrap_or_else(|| placeholder_btn(placeholders[FIRST_PAGER_ACTION + 1])),
+        controls
+            .next_page
+            .unwrap_or_else(|| placeholder_btn(placeholders[FIRST_PAGER_ACTION + 2])),
+        controls
+            .last_page
+            .unwrap_or_else(|| placeholder_btn(placeholders[FIRST_PAGER_ACTION + 3])),
     ];
-    let last_pager = controls
-        .last_page
-        .unwrap_or_else(|| placeholder_btn(placeholders[FIRST_SYSTEM_ACTION - 1]));
     // 系统段：导出 · 刷新（2026-10-28 从工具栏移入状态栏；面板注入真钮，
     // 未注入（无导出上下文 / 不可刷新）回退禁用占位——占位仍占位，布局不跳）
     let refresh_placeholder = (IconName::RotateCw, "刷新（重跑当前 SQL）");
@@ -676,14 +694,16 @@ pub fn render_status_row(
                 .items_center()
                 .gap_1()
                 .flex_none()
-                .children(write_ops)
+                .children(write_change)
+                // DBeaver `rowCmds.separator`：变更集动作与行级动作之间的竖分隔（plugin.xml:1434）
                 .child(separator())
-                .children(pager_before)
-                // 【B5b】下页 = 取下一段真钮（只在还有下一段时由面板注入）
+                .children(write_row)
+                .child(separator())
+                .children(pager_ops)
+                // 【B5b】取下一段（≈ DBeaver `fetch.page`，只在还有下一段时由面板注入）
                 .children(controls.more)
-                // 【DBeaver 对齐】取全部行（一次性抓全量）
+                // 【DBeaver 对齐】取全部行（≈ `fetch.all`，一次性抓全量）
                 .children(controls.fetch_all)
-                .child(last_pager)
                 .child(separator())
                 .children(system_ops),
         )

@@ -480,6 +480,10 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
 
 **翻页导航口径（已拍板）**：取数是窗口化模型（`FetchMore` 取下一段，无页号概念），首页 / 上页 / 末页置灰占位，下页 = 现有 `FetchMore`；不实现段导航（需要 engine 支持 offset 重查，超出本线范围）。
 
+> 上表与本节是 #26 时期的口径，**已被 §8.66 取代**：翻页段补上了真正的「下页」
+> （`PageTarget::Next`，纯视图滚动），四颗行导航都在，位置也按 DBeaver `navCmds` 归位到
+> `fetch.page` / `fetch.all` 之前；写操作段的内部顺序同样按 `editCmds` 更正。
+
 **④ 本地行级动作（新增 / 复制 / 删除 + 行级撤销重做）——方案 A 已拍板，叠加层模型归 #28**
 
 2026-10-24 用户拍板：#26 先落地底部三段式**视图骨架**（③ 已完成）；叠加层模型与动作接线归下一轮任务 #28：
@@ -3590,6 +3594,43 @@ DBeaver 右缘竖条（`panelSwitchFolder`，`VerticalFolder(SWT.RIGHT)`）的**
 
 **验证**：`cargo check -p rds-result-panel -p rds-editor` 0/0；
 `cargo test -p rds-result-panel --lib` = **277 passed**；
+`cargo test -p rds-editor --lib results` = 45 passed；`cargo test -p rds-ui-guard` = 4 passed。
+
+### 8.66 底部动作条按 `editCmds` / `navCmds` 归位（补 `row.next`，2026-11-18）
+
+DBeaver 结果集底部动作条（`ResultSetViewer` 的 `statusBar`）由**三个**状态子贡献点装配，
+`plugin.xml:1407-1522` 原文见 `.rds/tmp/db-status-toolbar.txt`：
+
+| 贡献点 | 顺序（含分隔） |
+| --- | --- |
+| `toolbar:…resultset.status.editCmds` | `applyChanges`（`style="pulldown"` + `FORCE_TEXT`）→ `rejectChanges`（`FORCE_TEXT`）→ `undo` → `redo` ‖ **`rowCmds.separator`（竖直分隔）** ‖ `row.edit` → `row.add` → `row.copy` → `row.delete` |
+| `toolbar:…resultset.status.navCmds` | `row.first` → `row.previous` → `row.next` → `row.last` → `fetch.page` → `fetch.all`（组前有分隔，组内无） |
+| `toolbar:…resultset.status.exportCmd` | 分隔 → `export`（`pulldown`，带 `exportWithParameter=true`） |
+
+本仓此前的三处结构差（①②③ 是顺序 / 缺失，都不是配色或密度）：
+
+| # | 旧状 | 现口径 |
+| --- | --- | --- |
+| ① | 写操作段是「保存 · 取消 · 修改 · 新增行 · 复制行 · 删除行 · 撤销 · 重做」，即行级动作排在撤销 / 重做**之前**，且变更集动作与行级动作之间没有分隔 | 改为 `[提交 · 回滚 · 撤销 · 重做] ‖分隔‖ [修改 · 新增行 · 复制行 · 删除行]`，与 `editCmds` 一一对应 |
+| ② | 翻页段是「首页 · 上页 · 取下一段 · 取全部 · 末页」——`last` 被摆到取数钮**之后** | 改为 `[首页 · 上页 · 下页 · 末页]` 紧接 `取下一段（≈fetch.page）` → `取全部（≈fetch.all）`，与 `navCmds` 同序 |
+| ③ | **没有「下页」这颗钮**：`PageTarget::Next` 端口早就存在（`ports.rs`，语义「以当前可见首行为基准下移一屏；到底且还有下一段时顺带取数」），宿主 `go_page` 也已实现，但面板从未注入按钮 | 面板在 `has_rows` 时注入 `editor-result-page-next`（`ChevronRight`，tooltip 写清「到底且还有下一段时顺带取数」）；`ResultControls` 增 `next_page` 槽，未注入时回退 `status_action_placeholders` 里的禁用占位 |
+
+- 占位清单随之改为 13 项（写 8 + 翻页 4 + 系统 1），分组分界 `FIRST_PAGER_ACTION = 8` /
+  `FIRST_SYSTEM_ACTION = 12`；tooltip 也按 DBeaver 语义改成「提交 / 回滚待提交变更」。
+- **两处行导航语义仍是本仓口径**（在册，非本轮改动）：DBeaver 的 `row.previous` / `row.next`
+  是「上下移一行」，本仓是「上下移一屏」（`PageTarget::Prev/Next` 的既有定义，纯视图滚动，
+  0 重查）；DBeaver 的 `fetch.page` 是显式取下一页数据，本仓以「取下一段」真钮（`controls.more`）
+  承担，只在 `has_more` 时出现。
+
+**用例**
+- `grid::tests::status_action_placeholders_follow_dbeaver_group_order`（改写）：13 项、写操作
+  两截顺序、翻页四颗含 `ChevronRight`、系统段只有导出。
+- `panel::tests::status_row_pager_follows_dbeaver_nav_order`（新增）：注入 `total_rows = 2`
+  后按**真实像素横坐标**断言 `page-first < page-prev < page-next < page-last`
+  ——顺序是布局事实，只断言「在不在」守不住摆错位。
+
+**验证**：`cargo check -p rds-result-panel -p rds-editor` 0 error / 0 warning；
+`cargo test -p rds-result-panel --lib` = **278 passed**；
 `cargo test -p rds-editor --lib results` = 45 passed；`cargo test -p rds-ui-guard` = 4 passed。
 
 

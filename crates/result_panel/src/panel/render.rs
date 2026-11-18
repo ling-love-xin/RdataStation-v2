@@ -701,10 +701,11 @@ impl ResultPanel {
                     .into_any_element()
             });
 
-        // 【分页】状态栏翻页三钮（首页 / 上页 / 末页）：**纯视图滚动**——不重查源库，
+        // 【分页】状态栏翻页四钮（首页 / 上页 / 下页 / 末页）：**纯视图滚动**——不重查源库，
         // 因此不需要精确总数（「末页」= 已抓到的最后一行，语义是"到底了"而不是
-        // "库里的第 N 页"）。下页由现有「获取数据」真钮（`more`）承担：它只在还有下一段
-        // 时出现，语义正好衔接。0 行结果集不注入，回退禁用占位。
+        // "库里的第 N 页"）。四钮与 DBeaver `row.first/previous/next/last` 一一对应，
+        // 位置在取下一段（`more` ≈ `fetch.page`）与取全部（`fetch_all` ≈ `fetch.all`）之前
+        // （`plugin.xml` 的 `navCmds` 组，1470-1512）。0 行结果集不注入，回退禁用占位。
         let page_btn = |id: &'static str,
                         icon: IconName,
                         tooltip: &'static str,
@@ -725,7 +726,7 @@ impl ResultPanel {
             .status
             .as_ref()
             .is_some_and(|status| status.total_rows > 0);
-        let (first_page, prev_page, last_page) = if has_rows {
+        let (first_page, prev_page, next_page, last_page) = if has_rows {
             (
                 Some(page_btn(
                     "editor-result-page-first",
@@ -740,6 +741,12 @@ impl ResultPanel {
                     PageTarget::Prev,
                 )),
                 Some(page_btn(
+                    "editor-result-page-next",
+                    IconName::ChevronRight,
+                    "下一页（下移一屏；到底且还有下一段时顺带取数）",
+                    PageTarget::Next,
+                )),
+                Some(page_btn(
                     "editor-result-page-last",
                     IconName::SkipForward,
                     "末页（滚到已抓到的最后一行）",
@@ -747,7 +754,7 @@ impl ResultPanel {
                 )),
             )
         } else {
-            (None, None, None)
+            (None, None, None, None)
         };
 
         // 【#28-B3】状态栏行级动作钮：新增 / 复制 / 删除一行。只读结果集（`!editable`）
@@ -939,6 +946,7 @@ impl ResultPanel {
             fetch_all,
             first_page,
             prev_page,
+            next_page,
             last_page,
             insert_row,
             duplicate_row,
@@ -963,6 +971,7 @@ impl ResultPanel {
             fetch_all,
             first_page,
             prev_page,
+            next_page,
             last_page,
             insert_row,
             duplicate_row,
@@ -978,6 +987,7 @@ impl ResultPanel {
             fetch_all,
             first_page,
             prev_page,
+            next_page,
             last_page,
             insert_row,
             duplicate_row,

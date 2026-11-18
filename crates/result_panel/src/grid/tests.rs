@@ -1410,36 +1410,46 @@ fn status_fetch_and_truncation_hints_follow_state_combination() {
 }
 
 /// 【#26】底部动作状态行占位钮清单：顺序对齐 DBeaver 三段（写操作 ‖ 翻页 ‖ 系统），
-/// 「下页」是现有取下一段真钮，不进占位清单；本轮全部 disabled，接线归下一轮行级模型
+/// 写操作段内部按 `editCmds` 再分两截（变更集动作 ‖ 行级动作，`plugin.xml:1407-1466`），
+/// 翻页段四颗行导航（首页 · 上页 · 下页 · 末页）与 `navCmds` 同序（`plugin.xml:1470-1512`）；
+/// 取下一段 / 取全部（`fetch.page` / `fetch.all`）是面板注入的真钮，不进占位清单
 #[test]
 fn status_action_placeholders_follow_dbeaver_group_order() {
     let slots = status_action_placeholders();
     assert_eq!(
         slots.len(),
-        12,
-        "占位钮共 12 个（下页真钮另由 controls.more 注入）"
+        13,
+        "占位钮共 13 个（取下一段 / 取全部真钮另由 controls.more / fetch_all 注入）"
     );
 
-    // 写操作段：保存 · 取消 · 编辑 · 新增行 · 复制行 · 删除行 · 撤销 · 重做
-    let write: Vec<IconName> = slots[0..FIRST_PAGER_ACTION]
-        .iter()
-        .map(|(icon, _)| *icon)
-        .collect();
+    // 写操作段 · 变更集动作：提交 · 回滚 · 撤销 · 重做
+    let write_change: Vec<IconName> = slots[0..4].iter().map(|(icon, _)| *icon).collect();
     assert_eq!(
-        write,
+        write_change,
         vec![
             IconName::Save,
             IconName::X,
-            IconName::Pencil,
-            IconName::Plus,
-            IconName::CopyPlus,
-            IconName::Trash,
             IconName::Undo2,
             IconName::Redo2,
         ]
     );
+    // 写操作段 · 行级动作：修改 · 新增行 · 复制行 · 删除行（DBeaver 在这两截之间有
+    // `rowCmds.separator`，本仓同样插竖分隔）
+    let write_row: Vec<IconName> = slots[4..FIRST_PAGER_ACTION]
+        .iter()
+        .map(|(icon, _)| *icon)
+        .collect();
+    assert_eq!(
+        write_row,
+        vec![
+            IconName::Pencil,
+            IconName::Plus,
+            IconName::CopyPlus,
+            IconName::Trash,
+        ]
+    );
 
-    // 翻页段：首页 · 上页 · 末页（下页 = 取下一段真钮，占位清单里没有 ChevronRight）
+    // 翻页段：首页 · 上页 · 下页 · 末页（下页本轮补上，此前只有取下一段真钮）
     let pager: Vec<IconName> = slots[FIRST_PAGER_ACTION..FIRST_SYSTEM_ACTION]
         .iter()
         .map(|(icon, _)| *icon)
@@ -1449,13 +1459,9 @@ fn status_action_placeholders_follow_dbeaver_group_order() {
         vec![
             IconName::SkipBack,
             IconName::ChevronLeft,
+            IconName::ChevronRight,
             IconName::SkipForward
         ]
-    );
-    assert!(
-        !slots
-            .iter()
-            .any(|(icon, _)| *icon == IconName::ChevronRight)
     );
 
     // 系统段：导出（设置按钮已移除，DBeaver 状态栏没有设置按钮）
