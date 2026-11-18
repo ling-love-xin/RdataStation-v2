@@ -1211,6 +1211,29 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 
 ---
 
+### 2.56 右栏每页工具条右端的「视图菜单」（2026-11-18）
+
+全文见 `result-panel.md §8.67`，原文取证在 `.rds/tmp/db-panelsmenu.txt`
+（`fillPanelsMenu` + `addDefaultPanelActions` + 三处调用点）。接手要点：
+
+- DBeaver 每个面板的工具条是**两层**：左 `actionToolBar`（面板 `contributeActions`）+
+  右 `panelToolBar`（`addDefaultPanelActions` 只填**一颗**「视图菜单」按钮，
+  `ResultSetViewer.java:1590-1614`），点开是 `fillPanelsMenu()`（`:1559-1588`）。
+- 菜单顺序：各面板 CHECK 项 → 分隔 → 最大化 → 激活面板 →（有 `FEATURE_PANELS` 时）
+  分隔 → 面板总开关 → 布局方向。本仓前两项**没有端口**，按「能力没有就不摆」不列。
+- 落地插入点是六页共用的 `panel_toolbar`（`panel/tabs.rs`，含 `empty_page` 空态页），
+  改一处六页全生效；按钮 id `<页工具条 id>-view-menu`、分裂壳 `<…>-view-menu-anchor`。
+- 清单 / 文案都是纯函数：`panel_view_menu_items()`（9 项）+
+  `panel_view_item_label(item, panels_visible, vertical_layout)`（开关项报「点了会做什么」）。
+  `PopupMenu` 内部不可读，形态断言一律钉在这两个纯函数上。
+- 顺带收口：页签的图标 / 文案从两处（`render_right_sidebar` 的 `active_tab`、
+  `render_right_edge_bar` 的六元组）收成 `events::right_tab_icon` / `right_tab_label`
+  单一来源，视图菜单复用同一份。
+- 新增用例 `right_panel_view_menu_lists_pages_then_the_two_toggles`（顺序 / 文案 / 六页挂载）。
+- **验证**：panel **279 passed** / editor `--lib results` 45 / guard 4 / check 0-0。
+
+---
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。

@@ -16,15 +16,14 @@ use gpui_kit::*;
 // 【B5】事实帧只读句柄随网格投影进 delegate（列式统计 / 原生数值排序交互派生时读取）
 
 use super::data::ResultPanel;
+use super::events::{panel_view_item_label, panel_view_menu_items, PanelViewItem};
 use crate::grid::cell::{
     HEX_DUMP_BYTES_PER_LINE, ViewerMode, classify_value, hex_lines, hex_to_bytes,
 };
 use crate::grid::stats::{ColumnStats, fmt_grouped, text_minmax};
 use crate::ports::{
-    GroupSort, ResultActionQueue, ResultRequest, StatsItem, StatsMode, ValuePayload,
+    GroupSort, ResultActionQueue, ResultRequest, RightTab, StatsItem, StatsMode, ValuePayload,
 };
-#[cfg(test)]
-use crate::ports::RightTab;
 use crate::store::ColumnKind;
 use crate::ui;
 
@@ -549,6 +548,90 @@ impl ResultPanel {
                     .p_0()
                     .contents(actions),
             )
+            .child(self.panel_view_menu(debug_id, cx))
+            .into_any_element()
+    }
+
+    /// 【右栏视图菜单】每页条右端那颗「视图菜单」（对齐 DBeaver `addDefaultPanelActions`，
+    /// `ResultSetViewer.java:1590-1614`：那边 `addPanel` 给**每个面板**的面板工具条右端都挂
+    /// 一颗 `IMG_LCL_VIEW_MENU` 按钮，点开是 `fillPanelsMenu()`（`:1559-1588`）的菜单）。
+    ///
+    /// 菜单 = 六页勾选项（`STYLE_CHECK`，当前页为勾选态）→ 分隔 → 面板总开关 → 布局方向；
+    /// 条目清单与文案分别由纯函数 `panel_view_menu_items` / `panel_view_item_label` 定
+    /// （`PopupMenu` 内部不可读，测试钉在纯函数上）。DBeaver 菜单里还有
+    /// `CMD_TOGGLE_MAXIMIZE`（面板最大化）与 `CMD_ACTIVATE_PANELS`（把焦点交给面板），
+    /// 本仓两者都还没有落地端口，按「能力没有就不摆」不列。
+    fn panel_view_menu(&self, debug_id: &'static str, cx: &App) -> AnyElement {
+        let _ = cx;
+        let queue = self.queue.clone();
+        let current: RightTab = self.right_tab;
+        let panels_visible = self.panels_visible();
+        let vertical_layout = self.vertical_layout;
+        let items = panel_view_menu_items();
+        let menu_id = format!("{debug_id}-view-menu");
+        let button = Button::new(menu_id.clone())
+            .ghost()
+            .xsmall()
+            .icon(IconName::Menu)
+            .tooltip("视图菜单（切换面板 / 显示与布局）")
+            .debug_selector(move || menu_id.clone());
+        DropdownButton::new(format!("{debug_id}-view-menu-anchor"))
+            .button(button)
+            .menu_accessibility_label("视图菜单")
+            .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
+                let mut menu = menu;
+                for item in items.iter().copied() {
+                    match item {
+                        PanelViewItem::Separator => {
+                            menu = menu.item(PopupMenuItem::separator());
+                        }
+                        PanelViewItem::Page(tab) => {
+                            let queue = queue.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(panel_view_item_label(
+                                    item,
+                                    panels_visible,
+                                    vertical_layout,
+                                ))
+                                .checked(tab == current)
+                                .on_click(move |_, _window, app| {
+                                    queue.request(ResultRequest::SetRightTab(tab), app);
+                                }),
+                            );
+                        }
+                        PanelViewItem::PanelsToggle => {
+                            // 菜单项报「点了会做什么」：当前可见 → 收起，反之 → 展开
+                            let target = !panels_visible;
+                            let queue = queue.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(panel_view_item_label(
+                                    item,
+                                    panels_visible,
+                                    vertical_layout,
+                                ))
+                                .checked(panels_visible)
+                                .on_click(move |_, _window, app| {
+                                    queue.request(ResultRequest::SetPanelsVisible(target), app);
+                                }),
+                            );
+                        }
+                        PanelViewItem::LayoutToggle => {
+                            let queue = queue.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(panel_view_item_label(
+                                    item,
+                                    panels_visible,
+                                    vertical_layout,
+                                ))
+                                .on_click(move |_, _window, app| {
+                                    queue.request(ResultRequest::ToggleVerticalLayout, app);
+                                }),
+                            );
+                        }
+                    }
+                }
+                menu
+            })
             .into_any_element()
     }
 

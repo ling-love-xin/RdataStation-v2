@@ -1666,7 +1666,103 @@ fn history_buttons_sit_in_the_filter_row_and_gate_on_position(cx: &mut gpui_kit:
     );
 }
 
-/// 【状态栏翻页对齐】DBeaver 底部动作条 `toolbar:…resultset.status.navCmds`
+/// 【2026-11-18 侧栏结构对齐】右栏每页工具条右端的**视图菜单**（▾）：
+/// DBeaver 在 `addPanel` 里给**每个面板**的工具条右端都挂一颗 `IMG_LCL_VIEW_MENU`
+/// 按钮（`addDefaultPanelActions`，`ResultSetViewer.java:1590-1614`），点开是
+/// `fillPanelsMenu()`（`:1559-1588`）生成的菜单：全部面板的 CHECK 项 → 分隔 →
+/// `CMD_TOGGLE_MAXIMIZE` → `CMD_ACTIVATE_PANELS` → 分隔 → `CMD_TOGGLE_PANELS` →
+/// `CMD_TOGGLE_LAYOUT`。本仓最大化 / 激活面板两项还没有落地端口（按「能力没有就不摆」
+/// 不列），其余每一项都有真请求落点。
+///
+/// 这里钉三件事：① 菜单条目顺序（纯函数）；② 条目文案随状态报「点了会做什么」；
+/// ③ 六页的页内工具条都真的挂上了这颗按钮（`PopupMenu` 内部不可读，形态断言走纯函数）。
+#[gpui_kit::test]
+fn right_panel_view_menu_lists_pages_then_the_two_toggles(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{ElementId, SharedString};
+
+    cx.update(gpui_kit::init);
+
+    // ① 条目顺序：六页 → 分隔 → 面板总开关 → 布局方向
+    let items = super::events::panel_view_menu_items();
+    let pages: Vec<RightTab> = items
+        .iter()
+        .filter_map(|item| match item {
+            super::events::PanelViewItem::Page(tab) => Some(*tab),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        pages,
+        vec![
+            RightTab::Browser,
+            RightTab::Value,
+            RightTab::Stats,
+            RightTab::Group,
+            RightTab::Reference,
+            RightTab::ExecSql,
+        ],
+        "面板勾选项的顺序应与竖条 / 页签同一份（列浏览器在前）"
+    );
+    assert_eq!(items.len(), 9, "六页 + 分隔 + 面板开关 + 布局方向");
+    assert_eq!(items[6], super::events::PanelViewItem::Separator);
+    assert_eq!(items[7], super::events::PanelViewItem::PanelsToggle);
+    assert_eq!(items[8], super::events::PanelViewItem::LayoutToggle);
+    // 没有最大化 / 激活面板：本仓没有端口，不摆点了没反应的条目
+    assert!(
+        items
+            .iter()
+            .all(|item| matches!(item, super::events::PanelViewItem::Page(_))
+                || matches!(
+                    item,
+                    super::events::PanelViewItem::Separator
+                        | super::events::PanelViewItem::PanelsToggle
+                        | super::events::PanelViewItem::LayoutToggle
+                )),
+        "菜单里只应有四种条目"
+    );
+
+    // ② 文案：页用页面名，两个开关报「点了会做什么」
+    let label = super::events::panel_view_item_label;
+    let page = super::events::PanelViewItem::Page(RightTab::Stats);
+    assert_eq!(label(page, true, false), "计算");
+    let panels = super::events::PanelViewItem::PanelsToggle;
+    assert_eq!(
+        label(panels, true, false),
+        "收起结果面板",
+        "面板可见时报「收起」"
+    );
+    assert_eq!(
+        label(panels, false, false),
+        "展开结果面板",
+        "面板收起时报「展开」"
+    );
+    let layout = super::events::PanelViewItem::LayoutToggle;
+    assert_eq!(label(layout, true, false), "切换为竖排布局（上下分栏）");
+    assert_eq!(label(layout, true, true), "切换为横排布局（左右分栏）");
+    assert_eq!(label(super::events::PanelViewItem::Separator, true, false), "");
+
+    // ③ 六页的页内工具条都挂上了视图菜单（id = `<页工具条 id>-view-menu`）
+    let (panel, cx) = panel_harness(cx);
+    for (tab, toolbar_id) in [
+        (RightTab::Browser, "editor-result-browser-toolbar"),
+        (RightTab::Value, "editor-result-value-toolbar"),
+        (RightTab::Stats, "editor-result-stats-toolbar"),
+        (RightTab::Group, "editor-result-group-toolbar"),
+        (RightTab::Reference, "editor-result-reference-toolbar"),
+        (RightTab::ExecSql, "editor-result-exec-sql-toolbar"),
+    ] {
+        cx.update(|_, app| panel.update(app, |p, cx| p.set_right_tab(tab, cx)));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let menu_id = SharedString::from(format!("{toolbar_id}-view-menu"));
+        let found = cx.update(|window, _| window.try_find(ElementId::Name(menu_id)));
+        assert!(
+            found.is_some(),
+            "{toolbar_id} 右端应有视图菜单按钮（{toolbar_id}-view-menu）"
+        );
+    }
+}
+
 /// （`plugin.xml:1470-1512`）的行导航是四颗：`row.first` → `row.previous` → `row.next` →
 /// `row.last`，其后才是 `fetch.page` / `fetch.all`。本仓此前只有三颗（缺 `row.next`，
 /// 且「末页」被摆到取数钮之后），本批补齐并归位。

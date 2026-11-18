@@ -3634,6 +3634,54 @@ DBeaver 结果集底部动作条（`ResultSetViewer` 的 `statusBar`）由**三�
 `cargo test -p rds-editor --lib results` = 45 passed；`cargo test -p rds-ui-guard` = 4 passed。
 
 
+### 8.67 右栏每页工具条右端的「视图菜单」（2026-11-18）
+
+DBeaver 的右栏面板不是「只有页签」：`ResultSetViewer.addPanel()`（`:1330-1386`）给每个面板
+装了两层：`trControl`（横排）= 左 `panelInfo.actionToolBar`（各面板 `contributeActions`）+
+右 `panelToolBar`，后者只由 `addDefaultPanelActions()`（`:1590-1614`）填——**就一颗**按钮：
+「视图菜单」（`ResultSetMessages.result_set_view_menu_text` + `IMG_LCL_VIEW_MENU`），
+点击用 `fillPanelsMenu()`（`:1559-1588`）组菜单逐面板的勾选项。
+
+`fillPanelsMenu()` 的条目顺序（原文见 `.rds/tmp/db-panelsmenu.txt`）：
+
+| # | 条目 | 命令 / 形态 |
+| --- | --- | --- |
+| ① | 每个可用面板一条 | `ResultSetHandlerTogglePanel.CMD_TOGGLE_PANEL` 的 `CommandContributionItem`，`style = STYLE_CHECK`，参数 `PARAM_PANEL_ID = panel.getId()` |
+| ② | 分隔 | `Separator` |
+| ③ | （`CMD_TOGGLE_LAYOUT` 在此被注释掉，不显示） | — |
+| ④ | 面板最大化 | `IResultSetCommands.CMD_TOGGLE_MAXIMIZE` |
+| ⑤ | 激活面板 | `CMD_ACTIVATE_PANELS` |
+| ⑥ | 分隔 + 面板总开关 + 布局方向 | 仅当 `FEATURE_PANELS`：`CMD_TOGGLE_PANELS`、`CMD_TOGGLE_LAYOUT` |
+
+本仓落法与口径：
+
+- 插入点是**页内共享工具条** `panel_toolbar`（`panel/tabs.rs`）——六页（含空态页，
+  `empty_page`）都走它，与 DBeaver「每个面板都有一颗」同构；按钮 id
+  `<页工具条 id>-view-menu`，分裂壳 `<…>-view-menu-anchor`，图标 `IconName::Menu`，
+  tooltip「视图菜单（切换面板 / 显示与布局）」。
+- 条目清单抽纯函数 `panel_view_menu_items()`（`events.rs`）：**六页 → 分隔 → 面板总开关 →
+  布局方向**，共 9 项。页项带 `checked(tab == 当前页)`（对应 DBeaver 的 `STYLE_CHECK`），
+  点击发 `SetRightTab`；面板总开关发 `SetPanelsVisible(!当前)`；布局方向发
+  `ToggleVerticalLayout`。
+- **不摆的两项**：`CMD_TOGGLE_MAXIMIZE`（面板最大化）与 `CMD_ACTIVATE_PANELS`（把焦点交给
+  面板）本仓都还没有落地端口，按「能力没有就不摆」不列，不造点了没反应的条目（在册 backlog）。
+- 条目文案走 `panel_view_item_label(item, panels_visible, vertical_layout)`：两个开关项报
+  **「点了会做什么」**（可见时报「收起结果面板」，否则「展开结果面板」；横排时报「切换为竖排
+  布局（上下分栏）」，反之亦然），与 DBeaver 的命令标签口径一致。
+- 顺带把页签的**图标 / 文案映射收成单一来源** `right_tab_icon` / `right_tab_label`
+  （此前 `render_right_sidebar` 的 `active_tab` match 与 `render_right_edge_bar` 的六元组
+  各写一份，视图菜单又要第三份）：现在页签条、右缘竖条、视图菜单三处共用一份。
+
+**用例** `panel::tests::right_panel_view_menu_lists_pages_then_the_two_toggles`：
+① 条目顺序（六页按竖条同序、共 9 项、后三项是分隔 / 面板开关 / 布局方向，且没有最大化 /
+激活面板）；② 文案随状态切换；③ 六页逐页 `set_right_tab` + 出帧后
+`<页工具条 id>-view-menu` 都能 `try_find` 到。
+
+**验证**：`cargo check -p rds-result-panel -p rds-editor` 0 error / 0 warning；
+`cargo test -p rds-result-panel --lib` = **279 passed**；
+`cargo test -p rds-editor --lib results` = 45 passed；`cargo test -p rds-ui-guard` = 4 passed。
+
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

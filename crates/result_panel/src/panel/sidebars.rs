@@ -22,6 +22,7 @@ use gpui_kit::*;
 // 【B5】事实帧只读句柄随网格投影进 delegate（列式统计 / 原生数值排序交互派生时读取）
 
 use super::data::ResultPanel;
+use super::events::{right_tab_icon, right_tab_label};
 use super::tabs::kv_row;
 use crate::ports::{Presentation, ResultRequest, RightTab};
 use crate::ui;
@@ -470,14 +471,7 @@ impl ResultPanel {
         // 【2026-10-28 微调】横 tab 栏**只显示当前点击的页签**（其他页签不显示）：
         // 页签切换靠右缘竖条图标（render_right_edge_bar），横条只当「当前页签标题 +
         // 关闭钮」使用（DBeaver 侧栏收起后只留边缘图标，展开时标题区极简）。
-        let active_tab = match self.right_tab {
-            RightTab::Browser => (IconName::Table2, "列浏览器"),
-            RightTab::Value => (IconName::Eye, "值详情"),
-            RightTab::Stats => (IconName::Sigma, "计算"),
-            RightTab::Group => (IconName::Funnel, "分组"),
-            RightTab::Reference => (IconName::Link, "引用"),
-            RightTab::ExecSql => (IconName::Braces, "执行SQL"),
-        };
+        let active_tab = (right_tab_icon(self.right_tab), right_tab_label(self.right_tab));
         let children: Vec<Tab> = std::iter::once(active_tab)
             .map(|(icon, label)| Tab::new().icon(icon).label(SharedString::from(label)))
             .collect();
@@ -652,14 +646,15 @@ impl ResultPanel {
     ///   `edge_bar_visible` 决定（窄展开 = 只显本竖条；宽展开 = 竖条 + 右栏内容）。
     pub(crate) fn render_right_edge_bar(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
-        // 页签快捷图标：与右栏页签同一组图标（见 render_right_sidebar）
+        // 页签快捷图标：与右栏页签同一组图标 / 文案（单一定义在 `events::right_tab_icon` /
+        // `right_tab_label`，页签条、竖条、视图菜单共用一份）
         let tabs = [
-            (RightTab::Browser, IconName::Table2, "列浏览器"),
-            (RightTab::Value, IconName::Eye, "值详情"),
-            (RightTab::Stats, IconName::Sigma, "计算"),
-            (RightTab::Group, IconName::Funnel, "分组"),
-            (RightTab::Reference, IconName::Link, "引用"),
-            (RightTab::ExecSql, IconName::Braces, "执行SQL"),
+            RightTab::Browser,
+            RightTab::Value,
+            RightTab::Stats,
+            RightTab::Group,
+            RightTab::Reference,
+            RightTab::ExecSql,
         ];
         let queue = self.queue.clone();
         let layout_queue = self.queue.clone();
@@ -703,15 +698,15 @@ impl ResultPanel {
                         master_queue.request(ResultRequest::SetPanelsVisible(!panels_visible), app);
                     }),
             )
-            .children(tabs.into_iter().map(|(tab, icon, label)| {
+            .children(tabs.into_iter().map(|tab| {
                 let queue = queue.clone();
                 Button::new(format!("editor-result-edge-{:?}", tab))
                     .ghost()
                     .small()
                     .debug_selector(|| format!("editor-result-edge-{:?}", tab))
                     .toggled(active == tab)
-                    .icon(icon)
-                    .tooltip(label)
+                    .icon(right_tab_icon(tab))
+                    .tooltip(right_tab_label(tab))
                     .on_click(move |_, _window, app| {
                         queue.request(ResultRequest::SetRightTab(tab), app);
                     })

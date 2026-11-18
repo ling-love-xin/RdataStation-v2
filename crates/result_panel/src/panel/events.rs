@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use gpui_kit::assets::IconName;
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::input::{InputState, TextareaState};
 use gpui_kit::component::table::{TableDelegate as _, TableState};
@@ -1152,6 +1153,97 @@ impl ResultPanel {
     /// 列浏览器清单当前选中列（数据列序；`None` = 未选中，渲染兜底第一可见列）
     pub fn selected_col(&self) -> Option<usize> {
         self.selected_col
+    }
+}
+
+/// 【右栏页内「视图菜单」】条目种类（纯函数给清单，测试直接覆盖；`PopupMenu` 内部不可读）。
+///
+/// 对齐 DBeaver：**每一页**的面板工具条右端都挂一颗「视图菜单」（`addDefaultPanelActions`，
+/// `ResultSetViewer.java:1590-1614`，图标 `IMG_LCL_VIEW_MENU`），菜单内容由 `fillPanelsMenu()`
+/// 生成（`:1559-1588`）：全部面板的 CHECK 条目 → 分隔 → `CMD_TOGGLE_MAXIMIZE` →
+/// `CMD_ACTIVATE_PANELS` → 分隔 → `CMD_TOGGLE_PANELS`（面板总开关）→ `CMD_TOGGLE_LAYOUT`。
+///
+/// 本仓口径「能力没有就不摆」：`MAXIMIZE`（面板最大化）与 `ACTIVATE_PANELS`（把焦点交给面板）
+/// 还没有落地端口，故不列（不造点了没反应的条目）；其余四项都有真端口。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PanelViewItem {
+    /// 一页（勾选态 = 当前页；点击切到该页）
+    Page(RightTab),
+    /// 分隔线（DBeaver 在两段之间插 `Separator`）
+    Separator,
+    /// 面板总开关（≈ `CMD_TOGGLE_PANELS`）
+    PanelsToggle,
+    /// 布局方向（横排 / 竖排，≈ `CMD_TOGGLE_LAYOUT`）
+    LayoutToggle,
+}
+
+/// 「视图菜单」条目清单（顺序照 `fillPanelsMenu`）：六页 → 分隔 → 面板总开关 → 布局方向
+pub(crate) fn panel_view_menu_items() -> Vec<PanelViewItem> {
+    let mut items: Vec<PanelViewItem> = [
+        RightTab::Browser,
+        RightTab::Value,
+        RightTab::Stats,
+        RightTab::Group,
+        RightTab::Reference,
+        RightTab::ExecSql,
+    ]
+    .into_iter()
+    .map(PanelViewItem::Page)
+    .collect();
+    items.push(PanelViewItem::Separator);
+    items.push(PanelViewItem::PanelsToggle);
+    items.push(PanelViewItem::LayoutToggle);
+    items
+}
+
+/// 右栏页签的标题文案（页签条、视图菜单、竖条 tooltip 共用一份，避免三处各写一遍）
+pub(crate) fn right_tab_label(tab: RightTab) -> &'static str {
+    match tab {
+        RightTab::Browser => "列浏览器",
+        RightTab::Value => "值详情",
+        RightTab::Stats => "计算",
+        RightTab::Group => "分组",
+        RightTab::Reference => "引用",
+        RightTab::ExecSql => "执行SQL",
+    }
+}
+
+/// 右栏页签的图标（与 `right_tab_label` 同源；竖条 / 页签条 / 视图菜单共用）
+pub(crate) fn right_tab_icon(tab: RightTab) -> IconName {
+    match tab {
+        RightTab::Browser => IconName::Table2,
+        RightTab::Value => IconName::Eye,
+        RightTab::Stats => IconName::Sigma,
+        RightTab::Group => IconName::Funnel,
+        RightTab::Reference => IconName::Link,
+        RightTab::ExecSql => IconName::Braces,
+    }
+}
+
+/// 「视图菜单」条目文案（动态条目按当前状态报动作，而不是报状态：
+/// 菜单项是「点了会做什么」——对齐 DBeaver `CMD_TOGGLE_PANELS` / `CMD_TOGGLE_LAYOUT` 的命令标签）
+pub(crate) fn panel_view_item_label(
+    item: PanelViewItem,
+    panels_visible: bool,
+    vertical_layout: bool,
+) -> String {
+    match item {
+        PanelViewItem::Page(tab) => right_tab_label(tab).to_string(),
+        PanelViewItem::Separator => String::new(),
+        PanelViewItem::PanelsToggle => {
+            if panels_visible {
+                "收起结果面板".to_string()
+            } else {
+                "展开结果面板".to_string()
+            }
+        }
+        PanelViewItem::LayoutToggle => {
+            if vertical_layout {
+                "切换为横排布局（左右分栏）".to_string()
+            } else {
+                "切换为竖排布局（上下分栏）".to_string()
+            }
+        }
     }
 }
 
