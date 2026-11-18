@@ -1493,11 +1493,28 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 2.89 「计算行数」的接手要点（2026-11-19）
+
+- 链路三段：`ResultControls.count_rows`（槽位）→ `ResultRequest::CountRows` →
+  宿主 `view/host/results/count.rs::count_result_rows`。改文案 / 图标改
+  `panel/render.rs` 里那颗 `Button`；改取数口径改 `count_result_rows`。
+- **拼 SQL 只在一处**：`count::rows_count_sql(sql, pushdown)`。下发筛选时必须把
+  `WHERE` 带进内层（否则报的是全表行数），排序下发不拼 `ORDER BY`。要支持别的形态
+  （例如 `Segment` 取段后的部分行）也在这里加分支，别在宿主里拼字符串。
+- **不开新结果集**：`ExecTarget` 没有 Count 变体、`ResultPlacement::{Replace, NewSet}`
+  都会污染标签，所以走 `SqlService::execute` 直调（`record_history: false` /
+  `use_cache: false` / `use_transaction: false`），回主线程只
+  `panel.set_row_count_notice(text)`。不要在 `dispatch.rs` 里改成 `execute(...)`。
+- `count_from_rows` 认 `shared::Value::{Int, Float, Text}`（`Null` / `Bool` / `Bytes` 一律
+  `None`）——驱动给什么形态都不该 panic，认不出就报「计数查询没有返回数字」。
+- **两个未决口径**：① `ResultEntry` 没 schema 字段，计数按连接默认 schema 跑；
+  ② 本地分析结果（`analysis = true`）不该重算，当前未拦（点了会失败并报错文案）。
+
 ### 2.88 状态栏 / 左缘竖条的接手要点（2026-11-19）
 
 - 状态栏十段对照见 `result-panel.md` §9.00。三处**已登记的差异**（别当遗漏）：
-  「计算行数」动作本仓没有（行数框是**行号跳转**，不是算总行数，算总数需要
-  `SELECT count(*) FROM (<原 SQL>)` 一条新链路）；选区统计标签**有意不摆**
+  「计算行数」动作~~本仓没有（行数框是**行号跳转**）~~**已由 §2.89 补齐**（行数框仍是
+  **行号跳转**，不是算总行数——两者现在是并排的两颗控件）；选区统计标签**有意不摆**
   （用户 2026-10-28 口径只留内存 / 耗时 / 条数）；自动刷新无机制。
 - 段大小框的行为契约集中在三个纯函数：`panel::events::parse_segment_rows`
   （只认 `>0`）、`segment_rows_blur_display`（失焦回填）、设置侧

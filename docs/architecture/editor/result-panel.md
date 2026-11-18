@@ -5163,6 +5163,62 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
 `cargo test -p rds-result-panel --lib` = **334 passed**；`cargo check -p rds-editor` = Finished；
 `cargo test -p rds-ui-guard` = 4 passed。
 
+### 9.01 状态栏「计算行数」落地（2026-11-19）
+
+上一节表格里「行数框 vs `rowCountLabel`」那一行是**差异**，本节把它补上：状态行中段
+（`段大小框` → `行数框` 之后）常驻一颗「计算行数」钮，点它对**当前结果的原 SQL** 跑一条
+`count(*)`，算回来的数字**就地**顶掉「计算行数」四个字（再点一次 = 重算）。
+
+**DBeaver 口径（`ResultSetViewer.createStatusBar0:2155-2180`）**：
+- `ActiveStatusMessage` + `UIIcon.COMPILE`，文案 `controls_resultset_viewer_calculate_row_count`；
+- `isActionEnabled = hasData()` —— 没有数据就置灰；
+- 点击 `readRowCount(monitor)` **异步**取数，结果按 `ROW_COUNT_FORMAT` 显示在**同一个标签**上；
+- 关键语义：**算的是源库总行数，不是已抓到的行数**；也**不新增结果标签页**。
+
+**本仓落点（5 处）**：
+1. `ports.rs`：`ResultRequest::CountRows`（面板只发请求，取数与拼 SQL 归宿主）；
+2. `grid/status.rs`：`ResultControls.count_rows: Option<AnyElement>`，摆在
+   `render_status_row` 的「中段·行数框」之后（DBeaver 里它紧跟 `resultSetSize`）；
+3. `panel/render.rs`：构造 `editor-result-count-rows`（`Button::ghost().small()`），
+   `disabled(!self.status.is_some())` = `hasData()` 的等价物；`row_count_note` 为空时
+   图标 `IconName::Calculator` + tooltip「计算行数」，有数字时改用 `.label(数字)`；
+4. `panel/events.rs`：`set_row_count_notice(text, cx)`——宿主算完回填；
+   `panel/data.rs` 新增 `row_count_note`，`lifecycle.rs` 在**换新结果**时清空
+   （旧数字对新结果无意义）；
+5. `view/host/results/count.rs`（新文件）：`count_result_rows` +
+   纯函数 `rows_count_sql` / `count_from_rows` / `thousands`。`dispatch.rs` 加分支。
+
+**拼 SQL 口径**（`rows_count_sql`，与 `execution_service::re_execute_with_filter:19-26` 同形）：
+- 原 SQL `trim` + 去尾分号，包成 `SELECT count(*) FROM (<base>) AS _rds_count`；
+- 结果集带**下发筛选**（`Pushdown::Filtered`）时把 `WHERE <filter>` 带进内层
+  ——否则用户看着筛后的行数，报的却是全表行数；
+- 排序下发（`SortedDown`）的 `ORDER BY` 对计数无意义，不拼。
+
+**为什么直调 `SqlService` 而不是走编辑执行链**：`ExecTarget` 没有 Count 变体，
+而仅有的两个落点 `ResultPlacement::{Replace, NewSet}` 都会污染结果标签
+（Replace 换掉用户当前结果，NewSet 多开一页）——DBeaver 这边只写状态标签。
+故按引用页同一纪律（`host/results/references.rs:44-70`）在
+`cx.background_executor()` 里 spawn 一次 `SqlService::execute`，
+`record_history: false` / `use_cache: false` / `use_transaction: false`，
+取数期间先写「正在计算总行数…」，回来后 `set_row_count_notice`。
+
+**已登记的取舍**：
+- `ResultEntry` 没有 schema 字段 → 计数查询按**连接默认 schema** 跑；原 SQL 若依赖别的
+  schema（显式写了库名 / 会话 search_path 被改过）可能算错口径，tooltip 已写明是
+  「对原 SQL 跑 count(*)」；
+- 本地分析结果（`ResultEntry.analysis = true`，临时表早已不在）重跑原 SQL 没有意义——
+  本批**未拦**，点了会按普通查询失败并显示「计算总行数失败：…」，登记为后续项；
+- 行数框仍是**行号跳转**（本仓既有能力），「计算行数」并列在它右侧，两者不是同一个控件
+  （DBeaver 只有后者）。
+
+**验证**：`panel::tests::status_bar_offers_a_count_rows_action`（状态行摆出该钮；
+回填数字后仍是同一颗钮 = 不新开结果集）；`view::host::results::count::tests` 三条
+（`count_sql_wraps_the_original_query` 含筛选 / 空 SQL / 排序不拼 ORDER BY、
+`count_reads_numbers_from_the_first_cell`、`thousands_groups_digits`）；
+`cargo test -p rds-result-panel --lib` = **335 passed**；
+`cargo test -p rds-editor --lib` = **793 passed**（1 ignored，+3 条新用例）；
+`cargo test -p rds-ui-guard` = 4 passed。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
