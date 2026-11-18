@@ -2341,89 +2341,16 @@ impl<H: 'static> ConnectionDialogState<H> {
             // 在途（busy）期间：测试与保存按钮置灰 + loading（防重复触发 / 并发写库），
             // 「取消」始终可点（用户随时能离开；在途任务回来后自己收尾）。
             let busy_now = busy.get();
-            let footer_ui = div()
-                .h_flex()
-                .justify_between()
-                .items_center()
-                .gap_2()
-                .child(
-                    div()
-                        .h_flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            Button::new("test-connection")
-                                .secondary()
-                                .label(tr("测试连接"))
-                                .loading(busy_now == BusyOp::Test)
-                                .disabled(busy_now != BusyOp::None)
-                                .tooltip_with_action(
-                                    tr("测试连接（不改动已保存的配置）"),
-                                    &TestConnection,
-                                    Some("connection-dialog"),
-                                )
-                                .on_click({
-                                    let do_test = do_test.clone();
-                                    move |_, window, app| {
-                                        do_test(window, app);
-                                    }
-                                }),
-                        )
-                        .when_some(sync_from_global, |d, b| d.child(b)),
-                )
-                .child(
-                    div()
-                        .h_flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            Button::new("cancel-connection")
-                                .label(tr("取消"))
-                                .tooltip(tr("关闭对话框（Esc）：草稿会保留"))
-                                .on_click({
-                                    let shared = shared.clone();
-                                    let state = state.clone();
-                                    move |_, window, app| {
-                                        // 关闭前写回当前草稿（暂存列表不丢失，原型设计 §2.2 规则 5）
-                                        state.staging_flush(app);
-                                        window.close_dialog(app);
-                                        // 宿主重绘：层才会从元素树移除（Root 的 notify 到不了子视图）
-                                        shared.dialog_redraw(app);
-                                    }
-                                }),
-                        )
-                        .child(
-                            Button::new("save-connection")
-                                .primary()
-                                .icon(lucide("icons/save.svg"))
-                                .label(tr("保存"))
-                                .loading(busy_now == BusyOp::Save)
-                                .disabled(busy_now != BusyOp::None)
-                                .tooltip_with_action(
-                                    tr("保存（仅暂存草稿箱，不写入数据库；保存并退出时统一提交）"),
-                                    &SaveConnection,
-                                    Some("connection-dialog"),
-                                )
-                                .on_click({
-                                    let do_stage = do_stage.clone();
-                                    move |_, window, app| {
-                                        do_stage(window, app);
-                                    }
-                                }),
-                        )
-                        .child(
-                            Button::new("save-close-connection")
-                                .label(tr("保存并退出"))
-                                .disabled(busy_now != BusyOp::None)
-                                .tooltip(tr("批量提交暂存栏全部条目到数据库并清空草稿箱，然后关闭"))
-                                .on_click({
-                                    let do_batch_commit = do_batch_commit.clone();
-                                    move |_, window, app| {
-                                        do_batch_commit(window, app);
-                                    }
-                                }),
-                        ),
-                );
+            // 底部动作条（测试 / 取消 / 保存 / 保存并退出）。整块已抽成 `footer_ui`。
+            let footer_ui = footer_ui(Footer {
+                busy: busy_now,
+                do_test: &do_test,
+                do_stage: &do_stage,
+                do_batch_commit: &do_batch_commit,
+                sync_from_global,
+                state: &state,
+                shared: &shared,
+            });
 
             // 两列行的实际行高：设计基准 32.5rem，但先按**窗口可用高度**夹住——矮窗口
             // （小屏 + 高缩放）上否则会把 footer 顶出屏幕（Dialog 的纵向位置是 viewport/10）。
@@ -3203,4 +3130,130 @@ fn driver_props_panel_ui<H: 'static>(
         );
     }
     tab
+}
+
+/// 底部动作条所需输入。
+///
+/// 三个动作回调都是 `Rc<dyn Fn>`（按钮与快捷键共用同一份闭包），这里只借用、不持有；
+/// `sync_from_global` 是「项目库里有同 id 连接」时的「从全局同步」按钮，没有就是 `None`。
+struct Footer<'a, H: 'static> {
+    /// 在途操作：按钮的 loading / 置灰判据。
+    busy: BusyOp,
+    /// 测试连接。
+    do_test: &'a Rc<dyn Fn(&mut Window, &mut App)>,
+    /// 保存（仅暂存草稿箱）。
+    do_stage: &'a Rc<dyn Fn(&mut Window, &mut App)>,
+    /// 保存并退出（批量提交暂存栏）。
+    do_batch_commit: &'a Rc<dyn Fn(&mut Window, &mut App)>,
+    /// 「从全局同步」按钮（编辑项目作用域连接时才出现）。
+    sync_from_global: Option<Button>,
+    /// 取消时要写回草稿。
+    state: &'a Rc<ConnectionDialogState<H>>,
+    /// 取消后要请宿主重绘（层才会从元素树移除）。
+    shared: &'a Rc<dyn ConnectionDialogHost>,
+}
+
+/// 底部动作条：测试连接 ·（从全局同步）· 取消 / 保存 / 保存并退出。
+///
+/// 动作本身不在这里实现——`do_test` / `do_stage` / `do_batch_commit` 由调用方构建并传入，
+/// 本函数只负责按钮语义（loading / disabled / tooltip + 快捷键提示）与排列。
+fn footer_ui<H: 'static>(p: Footer<'_, H>) -> Div {
+    let Footer {
+        busy,
+        do_test,
+        do_stage,
+        do_batch_commit,
+        sync_from_global,
+        state,
+        shared,
+    } = p;
+    let do_test = Rc::clone(do_test);
+    let do_stage = Rc::clone(do_stage);
+    let do_batch_commit = Rc::clone(do_batch_commit);
+    let state = Rc::clone(state);
+    let shared = Rc::clone(shared);
+
+    div()
+        .h_flex()
+        .justify_between()
+        .items_center()
+        .gap_2()
+        .child(
+            div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    Button::new("test-connection")
+                        .secondary()
+                        .label(tr("测试连接"))
+                        .loading(busy == BusyOp::Test)
+                        .disabled(busy != BusyOp::None)
+                        .tooltip_with_action(
+                            tr("测试连接（不改动已保存的配置）"),
+                            &TestConnection,
+                            Some("connection-dialog"),
+                        )
+                        .on_click({
+                            let do_test = do_test.clone();
+                            move |_, window, app| {
+                                do_test(window, app);
+                            }
+                        }),
+                )
+                .when_some(sync_from_global, |d, b| d.child(b)),
+        )
+        .child(
+            div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    Button::new("cancel-connection")
+                        .label(tr("取消"))
+                        .tooltip(tr("关闭对话框（Esc）：草稿会保留"))
+                        .on_click({
+                            let shared = shared.clone();
+                            let state = state.clone();
+                            move |_, window, app| {
+                                // 关闭前写回当前草稿（暂存列表不丢失，原型设计 §2.2 规则 5）
+                                state.staging_flush(app);
+                                window.close_dialog(app);
+                                // 宿主重绘：层才会从元素树移除（Root 的 notify 到不了子视图）
+                                shared.dialog_redraw(app);
+                            }
+                        }),
+                )
+                .child(
+                    Button::new("save-connection")
+                        .primary()
+                        .icon(lucide("icons/save.svg"))
+                        .label(tr("保存"))
+                        .loading(busy == BusyOp::Save)
+                        .disabled(busy != BusyOp::None)
+                        .tooltip_with_action(
+                            tr("保存（仅暂存草稿箱，不写入数据库；保存并退出时统一提交）"),
+                            &SaveConnection,
+                            Some("connection-dialog"),
+                        )
+                        .on_click({
+                            let do_stage = do_stage.clone();
+                            move |_, window, app| {
+                                do_stage(window, app);
+                            }
+                        }),
+                )
+                .child(
+                    Button::new("save-close-connection")
+                        .label(tr("保存并退出"))
+                        .disabled(busy != BusyOp::None)
+                        .tooltip(tr("批量提交暂存栏全部条目到数据库并清空草稿箱，然后关闭"))
+                        .on_click({
+                            let do_batch_commit = do_batch_commit.clone();
+                            move |_, window, app| {
+                                do_batch_commit(window, app);
+                            }
+                        }),
+                ),
+        )
 }
