@@ -52,7 +52,7 @@ fn clear_net_values(mgr: &ManagerWorkspace, window: &mut Window, cx: &mut App) {
 ///
 /// 走服务层专用接口：列表接口在服务层已脱敏（`config` 置空）。
 fn load_network_config_by_name(name: &str, cx: &mut App) -> Option<(String, String)> {
-    let rt = tokio::runtime::Runtime::new().ok()?;
+    let rt = crate::services::rt::runtime()?;
     let service = DataSourceService::global().ok()?;
     let _ = cx;
     rt.block_on(service.network_config_detail_by_name(name))
@@ -64,7 +64,7 @@ fn load_network_config_by_name(name: &str, cx: &mut App) -> Option<(String, Stri
 ///
 /// 走服务层专用接口：列表接口出于脱敏不返回 `auth_data` 明文。
 fn load_auth_config_by_name(name: &str, cx: &mut App) -> Option<(String, String)> {
-    let rt = tokio::runtime::Runtime::new().ok()?;
+    let rt = crate::services::rt::runtime()?;
     let service = DataSourceService::global().ok()?;
     let _ = cx;
     rt.block_on(service.auth_config_detail_by_name(name))
@@ -668,9 +668,8 @@ pub(crate) fn refresh_manager_items(
     mgr: &Rc<RefCell<ManagerWorkspace>>,
     cx: &mut App,
 ) {
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(_) => return,
+    let Some(rt) = crate::services::rt::runtime() else {
+        return;
     };
     let service = match DataSourceService::global() {
         Ok(s) => s,
@@ -731,9 +730,8 @@ pub(crate) fn upsert_manager_item(
     data: &str,
     editing: Option<&str>,
 ) -> String {
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => return format!("运行时错误: {e}"),
+    let Some(rt) = crate::services::rt::runtime() else {
+        return crate::services::rt::RT_UNAVAILABLE.to_string();
     };
     let service = match DataSourceService::global() {
         Ok(s) => s,
@@ -846,9 +844,8 @@ pub(crate) fn upsert_manager_item(
 /// 原型 §3.6：「被引用的配置不可删除」——守卫在服务层（`ensure_no_references`），
 /// 范围与列表计数一致（全局库 + 当前项目）。
 pub(crate) fn delete_manager_item(kind: usize, name: &str, project_root: Option<&str>) -> String {
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => return format!("运行时错误: {e}"),
+    let Some(rt) = crate::services::rt::runtime() else {
+        return crate::services::rt::RT_UNAVAILABLE.to_string();
     };
     let service = match DataSourceService::global() {
         Ok(s) => s,
@@ -911,9 +908,8 @@ pub(crate) fn refresh_policy_items(
     mgr: &Rc<RefCell<ManagerWorkspace>>,
     cx: &mut App,
 ) {
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(_) => return,
+    let Some(rt) = crate::services::rt::runtime() else {
+        return;
     };
     let db = engine::migration::global_init::get_global_db_manager();
     let Some(db) = db else { return };
@@ -950,9 +946,8 @@ pub(crate) fn upsert_policy_item(
     enabled: bool,
     editing: Option<&str>,
 ) -> String {
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => return format!("运行时错误: {e}"),
+    let Some(rt) = crate::services::rt::runtime() else {
+        return crate::services::rt::RT_UNAVAILABLE.to_string();
     };
     let db = engine::migration::global_init::get_global_db_manager();
     let Some(db) = db else {
@@ -1011,9 +1006,8 @@ pub(crate) fn upsert_policy_item(
 
 /// 删除环境策略。
 pub(crate) fn delete_policy_item(id: &str) -> String {
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => return format!("运行时错误: {e}"),
+    let Some(rt) = crate::services::rt::runtime() else {
+        return crate::services::rt::RT_UNAVAILABLE.to_string();
     };
     let db = engine::migration::global_init::get_global_db_manager();
     let Some(db) = db else {
