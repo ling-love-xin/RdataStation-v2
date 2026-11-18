@@ -4049,6 +4049,48 @@ editor results 45、ui-guard 4、check 0-0。提交 `e1b797db`。
 **验证**：`panel::tests` 的历史用例把旧的 `hint == "select 1"` 改成
 `"select 1 (后退历史)"`，并补一条正向断言（在末位时 `history_hint(1) == "已经在最新的状态"`）。
 门禁：panel **285 passed**、editor results 45、ui-guard 4、check 0-0。提交 `a5bede1e`。
+### 8.76 状态行齿轮 → 打开设置并定位到「结果集」节（2026-11-18）
+
+§8.74 里登记过「DBeaver `ConfigAction` 的另一半还没做」，本批把它补上。
+
+**取证**：
+- `ResultSetViewer.createStatusBar`（`:2113-2122`）：状态栏最后一条 `ToolBarManager`
+  只放一个 `ToolbarSeparatorContribution(true)` + `ConfigAction`，也就是说齿轮是
+  状态栏**最右端**那颗独立按钮（不在工具条配置里）。
+- `ConfigAction`（`:5402-5418`）：文案 `ResultSetMessages.controls_resultset_viewer_action_options`、
+  图标 `UIIcon.CONFIGURATION`；点击执行
+  `UIUtils.showPreferencesFor(control.getShell(), viewer, PrefPageResultSetMain.PAGE_ID)`
+  —— 打开首选项对话框并**直接定位到结果集页**（不是首页）。
+
+**本仓落点**（关键约束：`result_panel` 不认识 `settings` crate，依赖只向下）：
+- `ports::ResultRequest::OpenResultPanelSettings`：面板只推请求。
+- `grid::status::render_status_row` 新增 `settings_button: Option<AnyElement>` 槽位，
+  挂在状态行最右端（在工具条配置 ▾ 之后），与 DBeaver 的「最后一个 config 工具条」同位置。
+- `panel::render` 构造 `Button::new("editor-result-status-preferences")`
+  （`IconName::Settings` / tooltip「结果集设置」/ ghost + small），点击推请求。
+- editor `dispatch_result_request`：经面板持有的窗口句柄
+  `window.dispatch_action(Box::new(settings::commands::OpenResultPanelSettings), app)`
+  —— 与菜单栏 / 快捷键同一机制，动作沿元素树冒泡到 workbench 根
+  （headless / 窗口已关时静默跳过）。
+- `settings::commands` 新增动作 `OpenResultPanelSettings`（文档注释写明它对应 DBeaver 的
+  `ConfigAction`）；`SettingsPage::new_at(window, host, Option<&'static str>, cx)`
+  （`new` 保留为 `new_at(None)`）；`skeleton::build(host, notify, initial_section)`
+  用 `page_index_for(section)` 折算 `SelectIndex { page_ix }`，未知 id / `None` 落回首页。
+- workbench：`open_settings_at(section, window, cx)`（`open_settings` = `at(None)`，行为不变：
+  窗口已存在时不抢焦点），新增 `OpenResultPanelSettings` 的 `on_action` →
+  `open_settings_at(Some("result_panel"), …)`。
+
+**验证**：
+- `settings::skeleton::tests::page_index_lands_on_the_requested_section`：页序号必须等于
+  `registry::sections()` 里该节的真实位置（防硬编码 0 导致落首页），`None` / 未知 id → 0。
+- `panel::tests::status_settings_gear_opens_the_result_panel_preferences`：有状态行时齿轮
+  必摆（`debug_bounds` 量到），点它入队 `OpenResultPanelSettings`。
+- 门禁：check（settings / result_panel / editor / workbench）0 error / 0 warning；
+  settings **37 passed**、panel **286 passed**、editor results 45、ui-guard 4。提交 `c398032f`。
+
+**已知限制**：设置窗口已开着时，齿轮**不会**把它切到结果集页（`open_settings_at` 的
+「已开则直接返回」保持原语义）；DBeaver 的 `showPreferencesFor` 遇到已开的对话框会
+重新选页。要改需要 workbench 侧对已开窗口再发一次「选页」信号（未做）。
 
 
 ## 8. 协作纪律

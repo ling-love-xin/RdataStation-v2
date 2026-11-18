@@ -1389,6 +1389,24 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   行位置、视图态（筛选词 / 转置 / 列布局）也还不入历史。
 - **验证**：panel 285 / editor results 45 / guard 4 / check 0-0。提交 `a5bede1e`。
 
+### 2.65 状态行齿轮 → 设置页结果集节（2026-11-18）
+
+全文见 `result-panel.md §8.76`。接手要点：
+
+- 链路：状态行最右端 `editor-result-status-preferences`（`IconName::Settings`）→
+  `ResultRequest::OpenResultPanelSettings` → editor `dispatch` 用窗口句柄
+  `window.dispatch_action(settings::commands::OpenResultPanelSettings)` → workbench
+  `on_action` → `open_settings_at(Some("result_panel"))` → `SettingsPage::new_at`
+  → `skeleton::build(..., initial_section)` → `page_index_for` 折算 `page_ix`。
+- 契约红线：`result_panel` **不得**直接依赖 `settings` crate；要加「从面板打开某页」的能力，
+  一律走「面板推请求 + 宿主派发动作」这条通道。
+- `render_status_row` 现在多了 `settings_button` 一个入参（新调用方漏传会编译失败）。
+- 设置窗口已开着时齿轮不切页（保持 `open_settings` 的「已开则返回」语义）；要对齐 DBeaver
+  的 `showPreferencesFor` 得给已开窗口发「选页」信号（未做）。
+- **并行线注意**：本批提交时工作树曾被切到 `refactor/header-extract`（并行线分支），
+  提交落在该分支后已用 `git branch -f main <sha>` 快进归到 `main`；两分支当时 tip 一致。
+- **验证**：settings 37 / panel 286 / editor results 45 / guard 4 / check 0-0。提交 `c398032f`。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）
