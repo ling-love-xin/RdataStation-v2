@@ -1493,6 +1493,24 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 2.82 面板最大化 / 总开关的接手要点（2026-11-18）
+
+- **硬不变量：`panel_maximized ⇒ show_value_sidebar`**。守它的只有三处入口：
+  `set_panels_visible(false)` 复位最大化、`toggle_value_sidebar` 走到收起态复位最大化、
+  `toggle_panel_maximize` 进入最大化前先展开面板。新增别的「收起面板」路径时，
+  必须同样复位，否则 `render_right_sidebar` 会按 `show_value_sidebar` 判可见，
+  网格已不渲染、右栏也不渲染 = 整块区域空白。
+- 别再给 `render_right_sidebar` 加 `|| maximized` 兜底：那会把「状态矛盾」掩盖成
+  「看起来还行」，而真正的错（竖条已消失、无从再展开）还在。
+- DBeaver 依据：`togglePanelsMaximize`（`ResultSetViewer.java:1551-1557`）只 hide/show
+  presentation；`showPanels(false)`（`:1487`）就是 `setMaximizedControl(children[0])`，
+  两者共用同一份 sash 可见性。最大化**不落盘**（不走 `savePresentationSettings`），
+  本仓 `panel_maximized` 同样不在 settings 里。
+- **测试口径坑**：右栏外壳容器始终挂载（收起时宽度补间到 0），
+  `debug_bounds("editor-result-value-sidebar")` 在收起态**仍为 `Some`**，
+  不能用它断言「未渲染」；面板可见性用 `panels_visible()` / `show_value_sidebar`，
+  渲染断言留给网格（`editor-result-main-grid` 才是真按条件挂载的）。
+
 ### 2.81 分组页的接手要点（2026-11-18）
 
 - **工具条顺序别打乱**：排序 → 仅重复 → 分隔 → 列（勾选下拉）→ 移除 → 分隔 → 清除，

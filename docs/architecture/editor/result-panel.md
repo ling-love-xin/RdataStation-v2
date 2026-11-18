@@ -4871,6 +4871,42 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
 `arrange_groups_sorts_and_filters` 覆盖行为；`cargo test -p rds-result-panel --lib`
 = **325 passed**；`cargo check -p rds-editor` = Finished；`cargo test -p rds-ui-guard` = 4 passed。
 
+### 8.94 面板最大化与面板总开关的互斥（不变量：最大化 ⇒ 面板展开）（2026-11-18）
+
+**取证（DBeaver 里两者是同一份 sash 可见性）**：
+- `togglePanelsMaximize`（`ResultSetViewer.java:1551-1557`）= `if (!isUpHidden()) hideUp(); else showUp();`
+  —— 只收起 / 还原 **presentation（`children[0]` = 网格）**，不落盘（不走 `savePresentationSettings`）。
+- `isPanelsVisible()`（`:1473-1476`）= `viewerSash.getMaximizedControl() == null`；
+  `showPanels(false)`（`:1478-1518`）在 `:1487` 就是 `setMaximizedControl(viewerSash.getChildren()[0])`。
+  → 「关面板」与「最大化」操作的是**同一个 sash 的最大化控制权**，两者不可能同时成立。
+- `fillPanelsMenu`（`:1559-1588`）里 `CMD_TOGGLE_MAXIMIZE` 只有菜单一条入口，
+  且全仓无默认快捷键（`IResultSetCommands.java:27` 的命令 id 无 keyBinding）→ 不加快捷键不构成偏离。
+
+**本仓此前的问题**：`set_panels_visible(false)` 只清 `edge_bar_visible` / `show_value_sidebar`，
+不清 `panel_maximized`；而 `render_right_sidebar` 的挂载条件是 `show_value_sidebar || maximized`。
+于是「关掉面板」之后右栏仍被最大化强行挂满整块，同时右缘竖条已消失 —— 既没有可点的入口
+重新展开，也与总开关的 checked 态（`panels_visible()`）自相矛盾。
+
+**修法（单一真值 + 入口守不变量）**：
+1. `set_panels_visible(false)` 一并 `panel_maximized = false`（对齐 `showPanels(false)` 的语义）。
+2. `toggle_value_sidebar`（状态栏右端三态开关）走到「收起」态时同样复位最大化。
+3. `toggle_panel_maximize` 进入最大化时，若面板当前是关的则先展开
+   （`show_value_sidebar = true` + `edge_bar_visible = true` + epoch++）——面板关着就没有
+   可最大化的东西，否则网格收起 + 面板不显示 = 整块区域空白。
+4. `render_right_sidebar` 的 `show` 收成 `self.show_value_sidebar`（去掉 `|| maximized`），
+   不变量由上面三个入口守住；`maximized` 只用于布局（满宽满高、不挂拖拽手柄）。
+
+**验证**：`panel::tests::maximize_yields_to_the_panels_master_switch` 覆盖三条路径
+（面板关着→最大化必展开；最大化→关面板必退出最大化且网格回满；最大化→三态开关收起必复位），
+断言 `panels_visible()` / `panel_maximized` 与网格、右栏的实际渲染。
+`cargo test -p rds-result-panel --lib` = **326 passed**；`cargo check -p rds-editor` = Finished；
+`cargo test -p rds-ui-guard` = 4 passed。
+
+**测试口径注记**：右栏外壳容器**始终挂载**（收起时宽度补间到 0 不占空间，见
+`render_right_sidebar` 注释），所以「收起态 `debug_bounds("editor-result-value-sidebar")`
+为 `None`」这类断言**不成立**——本用例改用 `panels_visible()` / `show_value_sidebar` 判可见性，
+渲染断言只用于网格（网格是真按条件挂载的）。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
