@@ -61,6 +61,12 @@ pub enum ContextAction {
     DuplicateRow(usize),
     /// 【#28-B3】删除该行（视图行号；底层行打删除标记，本地行移出叠加层）
     DeleteRow(usize),
+    /// 【列浏览器】复制选中列的**列名**（对齐 DBeaver 元数据面板清单右键
+    /// `meta_data_panel_action_copy_column_text`：多选时逐行拼、换行分隔）。
+    ///
+    /// 不带载荷：选哪些列是清单自己的多选集合（委托 `selected_set`），
+    /// 由清单在点击时展开成列名——菜单纯函数不该知道界面状态。
+    CopyColumnNames,
 }
 /// 右键菜单里的一项
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -396,6 +402,14 @@ pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
 pub fn column_browser_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
     let column_name = target.column_name.as_str();
     let mut items = vec![
+        // 【DBeaver 对齐】清单右键第一项就是「复制列名」（`MetaDataPanel.fillCustomActions`
+        // 的 `meta_data_panel_action_copy_column_text`，文案 "Copy Column Names"）；
+        // 多选时按选中集合逐行拼、换行分隔，本仓同口径。
+        ContextMenuItem {
+            label: "复制列名".to_string(),
+            action: ContextAction::CopyColumnNames,
+            separator_before: false,
+        },
         ContextMenuItem {
             label: format!("复制此列（{} 个取值）", target.rows),
             action: ContextAction::CopyColumn(target.column),
@@ -735,6 +749,8 @@ pub(crate) fn context_menu(
             }
             // 列级筛选只属于列头菜单（右键的「按值筛选」是全局词）：右键收到即忽略
             ContextAction::FilterColumnValue { .. } | ContextAction::ClearColumnFilter { .. } => {}
+            // 「复制列名」只属于列浏览器清单（它要多选集合，网格右键没有这个概念）
+            ContextAction::CopyColumnNames => {}
         }
     }
     menu

@@ -227,6 +227,12 @@ impl ListDelegate for ColumnBrowserDelegate {
         let menu_items = result_grid::column_browser_menu_items(&target);
         let copy_text = delegate.column_text(data_col);
         let stats_payload = delegate.column_stats_payload(data_col);
+        // 【复制列名】要拷哪些列：右键这一列在**多选集合**里 → 拷整个集合（升序），
+        // 否则只拷这一列（对齐 DBeaver：拷的是清单当前的结构化选中项，多选才有多行）
+        let copy_names = {
+            let columns = delegate.columns();
+            column_names_to_copy(columns, &self.selected_set, data_col)
+        };
 
         // 双击判定：ListItem 无 on_double_click，单击（click_count == 1）留给 List
         // 内部 confirm（SelectColumn），双击在第二次点击时入队 LocateColumn
@@ -269,6 +275,19 @@ impl ListDelegate for ColumnBrowserDelegate {
             .context_menu(move |mut menu: PopupMenu, _window, _cx| {
                 for item in menu_items.clone() {
                     match item.action {
+                        result_grid::ContextAction::CopyColumnNames => {
+                            // 文本在渲染期算好（多选集合 / 列名都只有此刻拿得到）
+                            let text = copy_names.clone();
+                            menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                                move |_, _window, app| {
+                                    // 空文本不写剪贴板（DBeaver 同口径：`text.isEmpty()` 直接返回）
+                                    if text.is_empty() {
+                                        return;
+                                    }
+                                    app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                                },
+                            ));
+                        }
                         result_grid::ContextAction::CopyColumn(_) => {
                             let text = copy_text.clone();
                             menu = menu.item(PopupMenuItem::new(item.label).on_click(
@@ -429,6 +448,28 @@ pub(crate) fn next_multi_selection(
         next.sort_unstable();
         next.dedup();
         next
+    }
+}
+
+/// 【复制列名】要写进剪贴板的文本（纯函数；对齐 DBeaver
+/// `meta_data_panel_action_copy_column_text`：选中几行就拷几行，换行分隔）。
+///
+/// 取法：右键那一列在**多选集合**里 → 拷整个集合（按数据列序）；否则只拷它自己。
+/// 集合里的下标越界一律跳过（搜索词把行过滤掉后旧下标可能失效）。
+pub(crate) fn column_names_to_copy(
+    columns: &[String],
+    selected: &[usize],
+    clicked: usize,
+) -> String {
+    if selected.contains(&clicked) {
+        selected
+            .iter()
+            .filter_map(|column| columns.get(*column))
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        columns.get(clicked).cloned().unwrap_or_default()
     }
 }
 

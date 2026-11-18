@@ -1511,18 +1511,31 @@ fn column_menu_is_the_column_level_subset() {
     assert!(!labels.iter().any(|l| l.contains("查看完整值")));
     assert!(!labels.iter().any(|l| l.contains("按值筛选")));
     assert!(!labels.iter().any(|l| l.contains("复制整行")));
+    // 「复制列名」只属于列浏览器清单（网格右键没有多选集合这个概念）
+    assert!(!labels.contains(&"复制列名"));
     // 没隐藏列就不摆「显示全部列」
     assert!(!labels.contains(&"显示全部列"));
 }
 
 /// 列浏览器清单菜单 = 列头菜单的本地动作子集：复制 / 冻结 / 隐藏 / 列统计；
 /// 排序下发 / 值筛选 / 洞察 / 查看完整值 / 复制整行不进清单入口（前者依赖宿主
-/// 钩子，后者属于格 / 行交互，见拍板口径）。
+/// 钩子，后者属于格 / 行交互，见拍板口径）。**「复制列名」只在清单入口**——
+/// 它拷的是清单的多选集合，网格右键没有这个概念。
 #[test]
 fn column_browser_menu_is_local_column_subset() {
     let target = target("x", "id", 1);
     let items = column_browser_menu_items(&target);
     let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+    // 【DBeaver 对齐】`meta_data_panel_action_copy_column_text` = "Copy Column Names"
+    assert_eq!(
+        items[0].label, "复制列名",
+        "清单右键第一项是「复制列名」（DBeaver fillCustomActions 的形状）"
+    );
+    assert_eq!(
+        items[0].action,
+        ContextAction::CopyColumnNames,
+        "这一项的动作是纯 Clipboard 语义，不依赖宿主钩子"
+    );
     assert!(labels.contains(&"复制此列（2 个取值）"));
     assert!(labels.contains(&"冻结「id」"));
     assert!(labels.contains(&"隐藏「id」"));

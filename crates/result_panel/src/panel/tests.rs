@@ -1311,6 +1311,48 @@ fn multi_selection_toggles_with_ctrl_and_replaces_without() {
     assert_eq!(next_multi_selection(&[0, 2], 2, true), vec![0]);
 }
 
+/// 【复制列名】剪贴板文本：多选集合逐行拼（换行分隔）、单列只拷自己、越界跳过。
+///
+/// 对齐 DBeaver `MetaDataPanel.fillCustomActions` 的 `meta_data_panel_action_copy_column_text`
+/// （选中几行就拷几行，`"\n"` 分隔，空文本直接返回不写剪贴板）。
+#[test]
+fn copy_column_names_joins_the_selection_with_newlines() {
+    use crate::column_browser::column_names_to_copy;
+
+    let columns = vec![
+        "id".to_string(),
+        "name".to_string(),
+        "amount".to_string(),
+    ];
+
+    // 单选：右键那一列不在集合里（或集合是空）→ 只拷它自己
+    assert_eq!(column_names_to_copy(&columns, &[], 1), "name");
+    assert_eq!(column_names_to_copy(&columns, &[0], 2), "amount");
+
+    // 多选且右键的那一列在集合里 → 整个集合按数据列序（换行分隔）
+    assert_eq!(
+        column_names_to_copy(&columns, &[0, 2], 2),
+        "id\namount",
+        "选中两列时一次带走两行"
+    );
+
+    // 越界下标跳过（搜索过滤后旧下标可能失效）：集合里只剩有效的那几个
+    assert_eq!(
+        column_names_to_copy(&columns, &[0, 9], 9),
+        "id",
+        "9 在集合里但列已不存在 → 跳过它，只留有效列"
+    );
+    assert_eq!(
+        column_names_to_copy(&columns, &[87, 99], 99),
+        "",
+        "集合全越界 = 空文本（调用方据此不写剪贴板）"
+    );
+    // 右键那一列越界且不在集合里 → 同样空文本
+    assert_eq!(column_names_to_copy(&columns, &[0], 9), "");
+    // 列名清单本身为空（无列的结果集）→ 空文本，不 panic
+    assert_eq!(column_names_to_copy(&[], &[0, 1], 0), "");
+}
+
 #[test]
 fn hex_page_clamps_to_the_last_page() {
     use crate::panel::tabs::hex_page_clamp;
