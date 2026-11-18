@@ -922,6 +922,65 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【筛选设置 · 列约束】工具条「移顶 / 上移 / 下移 / 移底」（DBeaver `moveSelectedItems`，
+    /// `FilterSettingsDialog.java:278-293`：作用在**选中项**上）。
+    ///
+    /// 本仓的「选中项」= 网格当前选中格所在列（`selected_col`，数据列序）；没有选中格
+    /// 或该列被隐藏时不动作（与 DBeaver 按钮默认 `setEnabled(false)` 同口径）。
+    /// `target = Some(0)` 移顶、`Some(last)` 移底、`None` 按 `step` 上移 / 下移一列。
+    pub fn move_selected_column(&mut self, direction: crate::ports::ColumnMove, cx: &mut Context<Self>) {
+        let Some(data) = self.selected_col else {
+            return;
+        };
+        let grid = self.grid.clone();
+        let moved = grid.update(cx, |state, cx| {
+            use crate::ports::ColumnMove;
+            let delegate = state.delegate_mut();
+            let visible = delegate.visible_column_count();
+            let Some(view) = delegate.view_column(data) else {
+                return false;
+            };
+            let target = match direction {
+                ColumnMove::Top => 0,
+                ColumnMove::Up => view.saturating_sub(1),
+                ColumnMove::Down => view + 1,
+                ColumnMove::Bottom => visible.saturating_sub(1),
+            };
+            if target == view || visible == 0 {
+                return false;
+            }
+            delegate.move_display_column(data, target);
+            state.refresh(cx);
+            true
+        });
+        if moved {
+            self.snapshot_column_order(cx);
+            cx.notify();
+        }
+    }
+
+    /// 【筛选设置 · 列约束】工具条「排序」（列名 A→Z；DBeaver `ALPHA_SORTER`，
+    /// `FilterSettingsDialog.java:295-302`）
+    pub fn sort_columns_by_name(&mut self, cx: &mut Context<Self>) {
+        let grid = self.grid.clone();
+        grid.update(cx, |state, cx| {
+            state.delegate_mut().sort_display_order_by_name();
+            state.refresh(cx);
+        });
+        self.snapshot_column_order(cx);
+        cx.notify();
+    }
+
+    /// 【列序落盘】把 delegate 的显示序取回面板快照；变了就推 `ColumnOrderChanged`
+    /// （与拖拽 `MoveColumn` 同一条通道，宿主据此落库）
+    fn snapshot_column_order(&mut self, cx: &mut Context<Self>) {
+        let order = self.grid.read(cx).delegate().display_order();
+        if order != self.column_order {
+            self.column_order = order.clone();
+            self.queue.push(ResultRequest::ColumnOrderChanged { order });
+        }
+    }
+
     /// 【列布局落盘】把 delegate 的隐藏 / 冻结集合取回面板快照；有变化就推一条
     /// 「该存了」（宿主在同一次事件里 `save_session_now`）。
     ///

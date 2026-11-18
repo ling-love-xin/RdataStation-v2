@@ -126,6 +126,14 @@ pub struct ResultGridDelegate {
     /// 时调的 hook（`TableDelegate::move_column` 默认空），这里重排本数组即可；
     /// 组件自身的 `col_groups` 已让渲染立即按新序走，delegate 不需要改渲染。
     pub(crate) display_order: Vec<String>,
+    /// 【列序】`display_order` 折算成**数据列下标**的缓存（视图列序的权威）。
+    ///
+    /// `data_column` / `view_column` 都读它，所以它必须与实际列序同源：任何改动
+    /// `display_order`（`set_data` / 拖拽 `move_column` / 程序化移动 / 按列名排序 /
+    /// 重置）之后都要 [`ResultGridDelegate::rebuild_column_order`]。
+    /// 缓存是为了让 `data_column` 在逐格渲染里保持 O(n)（每格现算 `display_order`
+    /// 的列名匹配会是 O(n²)）。
+    pub(crate) order_cache: Vec<usize>,
     pub(crate) rows: Vec<Vec<String>>,
     /// **每列的类型**（与 `columns` 同序；空 = 这份结果没带类型）
     ///
@@ -323,6 +331,8 @@ impl ResultGridDelegate {
         // 【结果集 #296】新结果 = 新一批列：显示序重置为数据序（恢复重排在面板层做——
         // set_data 前按持久化列名序重排 columns，这里以重排后的为准）
         self.display_order = self.columns.clone();
+        // 【列序】显示序换了名字集合 → 折算缓存必须重建（`data_column` 读它）
+        self.rebuild_column_order();
         self.empty_text = "查询返回 0 行".to_string();
         // 换了一份结果，旧的排序与筛选不该跟过来（列都可能不是同一批）
         self.sort = None;

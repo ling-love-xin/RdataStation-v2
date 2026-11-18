@@ -116,6 +116,13 @@ pub enum ResultRequest {
     /// 【筛选设置 · 列约束】工具条「重置」（`dialog_toolbar_reset`，`:318-325`）：
     /// 本仓只重置列布局（显示全部 + 取消全部冻结）
     ColumnsResetLayout,
+    /// 【筛选设置 · 列约束】工具条移动四钮：作用在当前选中列
+    /// （DBeaver `moveSelectedItems(false,false)` / `(false,true)` / `(true,true)` /
+    /// `(true,false)`，`FilterSettingsDialog.java:278-293`）
+    MoveSelectedColumn(ColumnMove),
+    /// 【筛选设置 · 列约束】工具条「排序」：列名 A→Z 重排
+    /// （DBeaver `ALPHA_SORTER`，`FilterSettingsDialog.java:295-302`）
+    SortColumnsByName,
     /// 【筛选设置】应用：`where` 回填筛选框并生效，`order` 是自定义排序文本
     /// （空 = 不自定义，沿用原查询的 ORDER BY）。宿主按两者重查替换当前结果集
     /// （对齐 DBeaver `FilterSettingsDialog` 的 Custom 页签：
@@ -459,6 +466,19 @@ pub struct ColumnConstraint {
     pub criteria: Option<String>,
     /// 该列当前的本地排序（`Some(true)` = 降序、`Some(false)` = 升序、`None` = 未排序）
     pub sort: Option<bool>,
+}
+
+/// 【筛选设置 · 列约束】列序移动的四个方向（DBeaver 工具条四颗移动钮）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnMove {
+    /// 移顶（`ARROW_TOP`）
+    Top,
+    /// 上移一列（`ARROW_UP`）
+    Up,
+    /// 下移一列（`ARROW_DOWN`）
+    Down,
+    /// 移底（`ARROW_BOTTOM`）
+    Bottom,
 }
 
 /// 结果动作队列（`Rc<RefCell<Vec<_>>>` 共享句柄）

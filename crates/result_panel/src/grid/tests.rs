@@ -1995,6 +1995,92 @@ fn integer_cell_values_get_thousands_separators_others_stay_raw() {
 
 /// 【P2-1】隐藏列：视图列序跳过隐藏列，数据 / 类型 / 冻结仍按数据列走；
 /// 复制整行不再带隐藏列；换结果清空隐藏清单
+/// 【列序】显示序是视图列序的**权威**：程序化移动 / 按列名排序 / 重置都要
+/// 同时改写 `display_order` 与折算缓存，隐藏列仍照旧被跳过。
+///
+/// 回应对齐 DBeaver `FilterSettingsDialog` 工具条的移动四钮 + `SORT`
+/// （`FilterSettingsDialog.java:278-302`）——那边改的是约束的 `visualPosition`。
+#[test]
+fn display_order_drives_the_view_column_mapping() {
+    let mut grid = ResultGridDelegate::default();
+    grid.set_data(
+        vec![
+            "id".to_string(),
+            "name".to_string(),
+            "amount".to_string(),
+        ],
+        vec![vec![
+            "1".to_string(),
+            "alice".to_string(),
+            "12".to_string(),
+        ]],
+    );
+
+    // 默认：显示序 = 数据序
+    assert_eq!(grid.data_column(2), 2, "默认可见列 2 = 数据列 2");
+    assert_eq!(grid.view_column(0), Some(0));
+
+    // 把数据列 2（amount）移到最前：视图 0 号位应指向它
+    grid.move_display_column(2, 0);
+    assert_eq!(
+        grid.display_order(),
+        vec!["amount".to_string(), "id".to_string(), "name".to_string()]
+    );
+    assert_eq!(grid.data_column(0), 2, "移顶后席位 0 = amount（数据列 2）");
+    assert_eq!(grid.data_column(1), 0, "席位 1 = id");
+    assert_eq!(grid.view_column(2), Some(0), "amount 的可见席位是 0");
+
+    // 上移一列（amount 已在首位 → 无变化，调用方按 enabled 挡住）
+    grid.move_display_column(2, 0);
+    assert_eq!(grid.data_column(0), 2, "已在首位，目标相同即不动");
+
+    // 下移一列：amount 回到席位 1
+    grid.move_display_column(2, 1);
+    assert_eq!(grid.data_column(0), 0, "席位 0 回到 id");
+    assert_eq!(grid.data_column(1), 2, "席位 1 = amount");
+
+    // 移底：amount 到末位
+    grid.move_display_column(2, 2);
+    assert_eq!(
+        grid.display_order(),
+        vec!["id".to_string(), "name".to_string(), "amount".to_string()],
+        "移底 = 回到数据序（本份结果只有三列）"
+    );
+
+    // 隐藏中间列后：移动仍按**可见席位**算，隐藏列不参与也不丢
+    grid.hide_column(1);
+    grid.move_display_column(2, 0);
+    assert_eq!(grid.data_column(0), 2, "隐藏 name 后 amount 仍是席位 0");
+    assert_eq!(grid.view_column(1), None, "隐藏列没有可见席位");
+    assert_eq!(
+        grid.display_order().len(),
+        3,
+        "display_order 含全部列（隐藏列不从这里删）"
+    );
+
+    // 按列名排序（A→Z）：amount / id / name
+    grid.sort_display_order_by_name();
+    assert_eq!(
+        grid.display_order(),
+        vec!["amount".to_string(), "id".to_string(), "name".to_string()],
+        "按列名 A→Z 重排"
+    );
+    assert_eq!(grid.data_column(0), 2, "排序后席位 0 = amount");
+    assert_eq!(grid.data_column(1), 0, "隐藏 name 后席位 1 = id");
+
+    // 重置列布局：列序回数据序 + 显示全部 + 取消冻结
+    grid.toggle_freeze(0);
+    grid.reset_column_layout();
+    assert_eq!(
+        grid.display_order(),
+        vec!["id".to_string(), "name".to_string(), "amount".to_string()],
+        "重置后列序回数据序"
+    );
+    assert!(grid.frozen_column_snapshot().is_empty(), "冻结被清空");
+    assert_eq!(grid.data_column(0), 0, "席位 0 回到 id");
+    assert_eq!(grid.data_column(2), 2, "末位回到 amount");
+}
+
 #[test]
 fn hidden_columns_are_skipped_in_view_but_kept_in_data() {
     let mut grid = ResultGridDelegate::default();

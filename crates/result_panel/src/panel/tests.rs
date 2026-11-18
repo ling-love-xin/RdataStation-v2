@@ -1994,6 +1994,60 @@ fn filter_settings_columns_tab_projects_the_grid_column_state(cx: &mut gpui_kit:
         rows.iter().all(|row| row.visible),
         "全部显示后每列都可见：{rows:?}"
     );
+
+    // 工具条移动四钮 / 排序：作用在**当前选中列**（harness 默认选中数据列 1 = amount）
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.move_selected_column(crate::ports::ColumnMove::Top, cx)
+        })
+    });
+    let order = panel.read_with(cx, |p, app| p.grid.read(app).delegate().display_order());
+    assert_eq!(
+        order,
+        vec!["amount".to_string(), "id".to_string()],
+        "移顶后显示序应把 amount 挪到最前"
+    );
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.column_order()),
+        order,
+        "列序快照要跟着移动走（宿主据此落库）"
+    );
+
+    // 已在首位再「移顶」= 不动（与 DBeaver 按钮置灰同口径，但函数本身也要幂等）
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.move_selected_column(crate::ports::ColumnMove::Top, cx)
+        })
+    });
+    let order = panel.read_with(cx, |p, app| p.grid.read(app).delegate().display_order());
+    assert_eq!(order, vec!["amount".to_string(), "id".to_string()], "重复移顶不该乱序");
+
+    // 移底：回到数据序
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.move_selected_column(crate::ports::ColumnMove::Bottom, cx)
+        })
+    });
+    let order = panel.read_with(cx, |p, app| p.grid.read(app).delegate().display_order());
+    assert_eq!(order, vec!["id".to_string(), "amount".to_string()], "移底后回数据序");
+
+    // 按列名排序：amount / id
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| p.sort_columns_by_name(cx))
+    });
+    let order = panel.read_with(cx, |p, app| p.grid.read(app).delegate().display_order());
+    assert_eq!(
+        order,
+        vec!["amount".to_string(), "id".to_string()],
+        "按列名 A→Z 重排"
+    );
+
+    // 重置：列序回数据序
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| p.reset_column_layout(cx))
+    });
+    let order = panel.read_with(cx, |p, app| p.grid.read(app).delegate().display_order());
+    assert_eq!(order, vec!["id".to_string(), "amount".to_string()], "重置后回数据序");
 }
 
 /// 【筛选设置】浮层开关 + 应用入队（对齐 DBeaver `filtersCustomButton` →

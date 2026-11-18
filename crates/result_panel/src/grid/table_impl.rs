@@ -210,6 +210,10 @@ impl TableDelegate for ResultGridDelegate {
         }
         let moved = self.display_order.remove(from);
         self.display_order.insert(to, moved);
+        // 【列序】拖拽改了显示序 → 折算缓存跟上（否则下一次 `refresh` 重建
+        // `col_groups` 时会退回隐藏列序，把用户刚拖出来的顺序抹掉、且表头与
+        // 单元格错位——这是本批修掉的既有隐患）
+        self.rebuild_column_order();
     }
 
     /// 【B15】列头点击排序：组件库已在它那边循环 `Default → Descending → Ascending`，

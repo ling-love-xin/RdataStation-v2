@@ -55,17 +55,71 @@ impl ResultGridDelegate {
         self.hidden.retain(|c| *c != column);
     }
 
+    /// 【列序】程序化移动一列（对齐 DBeaver `FilterSettingsDialog` 工具条的
+    /// 移顶 / 上移 / 下移 / 移底，`:278-293` → `moveSelectedItems` / `moveColumns`）。
+    ///
+    /// `data` 是数据列下标，`target_view` 是目标**可见列位**（含隐藏列过滤后）；
+    /// 越界自动夹取。写的是 `display_order`（列名序，持久化同源）。
+    /// 调用方改完要 `TableState::refresh`（组件的 `col_groups` 在 refresh 里按新序重建）。
+    pub fn move_display_column(&mut self, data: usize, target_view: usize) {
+        let Some(name_from) = self.columns.get(data).cloned() else {
+            return;
+        };
+        if self.is_hidden_column(data) {
+            return; // 隐藏列不参与视觉列序移动
+        }
+        let Some(from) = self.view_column(data) else {
+            return;
+        };
+        let to = target_view.min(self.visible_column_count().saturating_sub(1));
+        if from == to {
+            return;
+        }
+        // 先从 display_order 摘掉该列名，再算「当前第 `to` 个可见列」的位置插进去
+        //（目标在末尾 = 追加到队尾，与 DBeaver 的「移底」同口径）
+        self.display_order.retain(|name| name != &name_from);
+        let insert_at = self
+            .display_order
+            .iter()
+            .enumerate()
+            .filter(|(_, name)| {
+                self.columns
+                    .iter()
+                    .position(|c| c == *name)
+                    .is_some_and(|index| !self.is_hidden_column(index))
+            })
+            .nth(to)
+            .map(|(position, _)| position)
+            .unwrap_or(self.display_order.len());
+        self.display_order.insert(insert_at, name_from);
+        self.rebuild_column_order();
+    }
+
+    /// 【列序】按列名算法序重排（对齐 DBeaver 工具条 `SORT` 的 `ALPHA_SORTER`，
+    /// `FilterSettingsDialog.java:295-302`）。`zh-CN` 排序口径与 `String::cmp` 一致。
+    pub fn sort_display_order_by_name(&mut self) {
+        self.display_order.sort();
+        self.rebuild_column_order();
+    }
+
+    /// 【列序】恢复数据序（重置列序；`display_order` 回到本份结果的列顺序）
+    pub fn reset_display_order(&mut self) {
+        self.display_order = self.columns.clone();
+        self.rebuild_column_order();
+    }
+
     /// 显示全部列（清空隐藏清单）
     pub fn show_all_columns(&mut self) {
         self.hidden.clear();
     }
 
-    /// 【筛选设置】重置列布局：显示全部 + 取消全部冻结（对齐 DBeaver
-    /// `FilterSettingsDialog` 工具条「重置」的列布局那一支，`dataFilter.reset()` 的本地等价）。
-    /// 列序与列宽不动（它们各有持久化通道）。
+    /// 【筛选设置】重置列布局：显示全部 + 取消全部冻结 + 列序回数据序（对齐 DBeaver
+    /// `FilterSettingsDialog` 工具条「重置」`dataFilter.reset()` 的本地等价，
+    /// `FilterSettingsDialog.java:318-325`）。列宽不动（它有独立持久化通道）。
     pub fn reset_column_layout(&mut self) {
         self.hidden.clear();
         self.frozen.clear();
+        self.reset_display_order();
     }
 
     /// 批量显隐（**数据列序**；列浏览器多选批量动作）。逐列复用单列接口——
@@ -181,23 +235,47 @@ impl ResultGridDelegate {
         }
     }
 
-    /// 可见数据列序 → 数据列序（跳过隐藏列）。
+    /// 列序缓存重建：把 `display_order`（列名序）折算成数据列下标序。
+    ///
+    /// `display_order` 里出现但本份结果没有的列名（上一份结果残留）跳过；
+    /// 本份结果里没进 `display_order` 的列（新出现的列）按数据序补在末尾——
+    /// 与 [`crate::panel::events::reorder_by`] 的「不猜」口径一致。
+    pub(crate) fn rebuild_column_order(&mut self) {
+        let mut cache: Vec<usize> = Vec::with_capacity(self.columns.len());
+        let mut used = vec![false; self.columns.len()];
+        for name in &self.display_order {
+            if let Some(index) = self.columns.iter().position(|c| c == name) {
+                if !used[index] {
+                    used[index] = true;
+                    cache.push(index);
+                }
+            }
+        }
+        for (index, taken) in used.iter().enumerate() {
+            if !taken {
+                cache.push(index);
+            }
+        }
+        self.order_cache = cache;
+    }
+
+    /// 可见数据列序 → 数据列序（跳过隐藏列，**按列序缓存**走）。
     ///
     /// 组件给的下标是「用户看着的那一列」（不含 `#` 行号槽），而数据、类型、注释、
-    /// 冻结都按**数据列**存——中间隔着隐藏列，换算必须过这里。面板列浏览器联动
-    /// （网格选中格 → 清单选中列）同样走它。
+    /// 冻结都按**数据列**存——中间隔着隐藏列与用户拖出来的列序，换算必须过这里。
+    /// 面板列浏览器联动（网格选中格 → 清单选中列）同样走它。
     pub fn data_column(&self, view_col: usize) -> usize {
-        let mut data = 0;
-        let mut visible = 0;
-        loop {
-            if !self.is_hidden_column(data) {
-                if visible == view_col {
-                    return data;
-                }
-                visible += 1;
-            }
-            data += 1;
-        }
+        self.data_column_checked(view_col).unwrap_or(0)
+    }
+
+    /// 同 [`Self::data_column`]，但越界返回 `None`（表头类型标签这类要区分
+    /// 「第 0 列」与「根本没有这一列」的路径走这里）
+    pub fn data_column_checked(&self, view_col: usize) -> Option<usize> {
+        self.order_cache
+            .iter()
+            .copied()
+            .filter(|data| !self.is_hidden_column(*data))
+            .nth(view_col)
     }
 
     /// 数据列序 → 可见数据列序（该列被隐藏 = `None`；清单双击定位网格用）
@@ -205,7 +283,12 @@ impl ResultGridDelegate {
         if self.is_hidden_column(data_col) {
             return None;
         }
-        Some((0..data_col).filter(|d| !self.is_hidden_column(*d)).count())
+        self.order_cache
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, data)| !self.is_hidden_column(*data))
+            .position(|(_, data)| data == data_col)
     }
 
     /// 【B15】冻结 / 取消冻结（切换；返回切换后的状态）
@@ -651,8 +734,8 @@ impl ResultGridDelegate {
         if Self::is_row_number(col_ix) {
             return ColumnKind::Unknown;
         }
-        self.column_types
-            .get(self.data_column(col_ix - 1))
+        self.data_column_checked(col_ix - 1)
+            .and_then(|data| self.column_types.get(data))
             .and_then(Option::as_ref)
             .map_or(ColumnKind::Unknown, |column| column.kind)
     }
@@ -666,8 +749,8 @@ impl ResultGridDelegate {
         if Self::is_row_number(col_ix) {
             return None;
         }
-        self.column_types
-            .get(self.data_column(col_ix - 1))
+        self.data_column_checked(col_ix - 1)
+            .and_then(|data| self.column_types.get(data))
             .and_then(Option::as_ref)
             .map(|column| column.name.as_str())
     }

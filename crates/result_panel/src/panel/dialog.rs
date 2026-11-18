@@ -7,6 +7,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputState, Textarea};
 use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::separator::Separator;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::toolbar::Toolbar;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
@@ -331,14 +332,85 @@ impl ResultPanel {
         let layout_queue = self.queue.clone();
         let rows = self.column_constraint_rows(cx);
 
-        // 页内工具条：三颗按钮（全部显示 / 全部不显示 / 重置），都直改 delegate 后走落盘通道
+        // 页内工具条：三颗（全部显示 / 全部不显示 / 重置）+ 四颗移动钮 + 排序，
+        // 顺序与 DBeaver `FilterSettingsDialog.java:276-325` 一致。
+        // 移动四钮作用在**当前选中列**（选中列不存在 / 已是首列或末列时置灰）。
         let show_all_queue = self.queue.clone();
         let hide_all_queue = self.queue.clone();
         let reset_queue = self.queue.clone();
+        let move_state = self.selected_col.and_then(|data| {
+            let delegate = self.grid.read(cx).delegate();
+            delegate.view_column(data).map(|view| {
+                let last = delegate.visible_column_count().saturating_sub(1);
+                (view, last)
+            })
+        });
+        let sort_queue = self.queue.clone();
+        let move_button = |id: &'static str,
+                           label: &'static str,
+                           icon: IconName,
+                           direction: crate::ports::ColumnMove,
+                           enabled: bool| {
+            let queue = self.queue.clone();
+            Button::new(id)
+                .ghost()
+                .xsmall()
+                .icon(icon)
+                .tooltip(label.to_string())
+                .disabled(!enabled)
+                .debug_selector(move || id.to_string())
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::MoveSelectedColumn(direction), app);
+                })
+        };
         let toolbar = Toolbar::new("editor-result-filter-settings-columns-toolbar")
             .xsmall()
             .p_0()
             .contents([
+                move_button(
+                    "editor-result-filter-settings-move-top",
+                    "移到最前",
+                    IconName::ArrowUpToLine,
+                    crate::ports::ColumnMove::Top,
+                    move_state.is_some_and(|(view, _)| view > 0),
+                )
+                .into_any_element(),
+                move_button(
+                    "editor-result-filter-settings-move-up",
+                    "上移一列",
+                    IconName::ArrowUp,
+                    crate::ports::ColumnMove::Up,
+                    move_state.is_some_and(|(view, _)| view > 0),
+                )
+                .into_any_element(),
+                move_button(
+                    "editor-result-filter-settings-move-down",
+                    "下移一列",
+                    IconName::ArrowDown,
+                    crate::ports::ColumnMove::Down,
+                    move_state.is_some_and(|(view, last)| view < last),
+                )
+                .into_any_element(),
+                move_button(
+                    "editor-result-filter-settings-move-bottom",
+                    "移到最后",
+                    IconName::ArrowDownToLine,
+                    crate::ports::ColumnMove::Bottom,
+                    move_state.is_some_and(|(view, last)| view < last),
+                )
+                .into_any_element(),
+                Separator::vertical().into_any_element(),
+                Button::new("editor-result-filter-settings-sort-name")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::ArrowUpAZ)
+                    .tooltip("按列名排序（A→Z）".to_string())
+                    .debug_selector(|| "editor-result-filter-settings-sort-name".to_string())
+                    .on_click(move |_, _window, app| {
+                        sort_queue.request(ResultRequest::SortColumnsByName, app);
+                    })
+                    .into_any_element(),
+                Separator::vertical().into_any_element(),
                 Button::new("editor-result-filter-settings-show-all")
                     .ghost()
                     .xsmall()
@@ -363,7 +435,7 @@ impl ResultPanel {
                     .ghost()
                     .xsmall()
                     .icon(IconName::RotateCcw)
-                    .tooltip("重置列布局（显示全部 + 取消全部冻结）".to_string())
+                    .tooltip("重置列布局（列序 + 显示全部 + 取消全部冻结）".to_string())
                     .debug_selector(|| "editor-result-filter-settings-reset".to_string())
                     .on_click(move |_, _window, app| {
                         reset_queue.request(ResultRequest::ColumnsResetLayout, app);

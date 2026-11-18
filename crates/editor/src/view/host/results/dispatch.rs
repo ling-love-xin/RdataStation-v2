@@ -185,6 +185,13 @@ impl EditorHostPanel {
             ResultRequest::ColumnsResetLayout => self
                 .result_panel
                 .update(cx, |p, cx| p.reset_column_layout(cx)),
+            // 【筛选设置 · 列约束】列序移动四钮 + 列名排序（都作用在面板的选中列 / 全表列序）
+            ResultRequest::MoveSelectedColumn(direction) => self
+                .result_panel
+                .update(cx, |p, cx| p.move_selected_column(direction, cx)),
+            ResultRequest::SortColumnsByName => self
+                .result_panel
+                .update(cx, |p, cx| p.sort_columns_by_name(cx)),
             // 【1.2】复制「执行SQL」页签里的 wrapped SQL
             ResultRequest::CopyExecSql => {
                 let sql = self
