@@ -163,6 +163,28 @@ mod tests {
         );
     }
 
+    /// 新增数据源模块的标签必须有英文译文：`tr` 未登记时**静默回退中文原文**，
+    /// 所以「英文界面里夹中文」不会报错、只会被看见——这条用例把它钉住。
+    #[test]
+    fn connection_dialog_labels_are_localized() {
+        let _guard = LOCALE_TEST_LOCK.lock().unwrap();
+        set_locale(Locale::En);
+        for key in [
+            "常规",
+            "网络",
+            "高级",
+            "全局",
+            "安装驱动",
+            "能力（只读）",
+            "驱动属性",
+            "从剪贴板导入 URI",
+            "请先选择项目（作用域为「仅项目」）",
+        ] {
+            assert_ne!(tr(key), key, "英文模式下「{key}」回退成了中文原文");
+        }
+        set_locale(Locale::Zh);
+    }
+
     /// 目录化资源在 En 模式下被 `tr()` 实际使用（防静态表时代遗留）。
     #[test]
     fn tr_uses_directory_resources() {

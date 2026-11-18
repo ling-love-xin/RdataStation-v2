@@ -263,9 +263,9 @@ pub(crate) fn tags_from_json(json: Option<&str>) -> String {
 /// 归一到 4，不会打到一个空白页上。
 pub(crate) fn dialog_tab_defs(is_file_db: bool) -> Vec<(&'static str, usize)> {
     if is_file_db {
-        vec![("常规", 0), ("高级", 4)]
+        vec![(tr("常规"), 0), (tr("高级"), 4)]
     } else {
-        vec![("常规", 0), ("网络", 1), ("高级", 4)]
+        vec![(tr("常规"), 0), (tr("网络"), 1), (tr("高级"), 4)]
     }
 }
 
