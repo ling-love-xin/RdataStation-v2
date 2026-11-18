@@ -1886,6 +1886,32 @@ pub(crate) fn right_tab_description(tab: RightTab) -> &'static str {
     }
 }
 
+/// 【左缘竖条】视图方式按钮的提示文案（纯函数）。
+///
+/// 对齐 `ResultSetViewer.updatePresentationInToolbar`（`:948-952`）：那里的每个
+/// `VerticalButton` 是 `setText(pd.getLabel())` + `setToolTipText(pd.getDescription())`
+/// ——**按钮上写名字、提示里写描述**。本仓按钮只有图标，所以提示承担两件事：
+/// 「这是哪一档」+「这一档怎么用」，即 `标签（描述）`（与右缘竖条 `edge_tab_tooltip`
+/// 同一形态）。
+pub(crate) fn presentation_tooltip(presentation: Presentation) -> String {
+    match presentation {
+        Presentation::Grid => "网格视图（表头冻结，可排序 / 筛选 / 分栏）".to_string(),
+        Presentation::Text => "文本视图（等宽文本呈现，便于整表复制或对照原样）".to_string(),
+    }
+}
+
+/// 【左缘竖条】记录视图按钮（CHECK 语义，沉在竖条底部）的提示文案。
+///
+/// DBeaver 那颗是 `recordModeButton` + `ToggleModeAction`（`:964-965`），点一下在
+/// 「网格」与「记录」之间切；本仓是转置开关，提示要直接说清会看到什么。
+pub(crate) fn record_view_tooltip(active: bool) -> String {
+    if active {
+        "记录视图（本行已转置）：点一下回到网格".to_string()
+    } else {
+        "记录视图：当前行转置成 # / 字段 / 值 三列竖排".to_string()
+    }
+}
+
 /// 【右缘竖条】某一页图标的提示文案。
 ///
 /// 对齐 `ResultSetViewer.java:1055-1080`：竖条按钮 `setToolTipText(panel.getLabel())`，

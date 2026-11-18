@@ -346,6 +346,31 @@ fn right_tab_index_maps_to_the_six_panel_tabs() {
     }
 }
 
+/// 【左缘竖条】视图按钮提示 = 「名字（描述）」，两条互不相同；记录视图的提示随开关
+/// 状态说明会看到什么（对齐 `updatePresentationInToolbar:948-952` 的
+/// `setText(label)` + `setToolTipText(description)`）。
+#[test]
+fn presentation_tooltips_carry_a_description() {
+    use crate::panel::events::{presentation_tooltip, record_view_tooltip};
+    use crate::ports::Presentation;
+
+    let grid = presentation_tooltip(Presentation::Grid);
+    let text = presentation_tooltip(Presentation::Text);
+    for tip in [&grid, &text] {
+        assert!(tip.contains('（') && tip.contains('）'), "缺描述：{tip}");
+    }
+    assert!(grid.starts_with("网格视图"), "{grid}");
+    assert!(text.starts_with("文本视图"), "{text}");
+    assert_ne!(grid, text);
+
+    // 记录视图：未激活时报「会看到什么」，已激活时报「怎么回去」
+    let off = record_view_tooltip(false);
+    let on = record_view_tooltip(true);
+    assert!(off.contains("转置"), "{off}");
+    assert!(on.contains("网格"), "{on}");
+    assert_ne!(off, on);
+}
+
 /// 【计算页右键菜单】条目清单 = 复制值 / 复制全部 / 分隔 / 缺项逐个「添加」/ 分隔 /
 /// 恢复默认 / 分隔 / 口径切换；缺项为空时整段跳过（DBeaver 此时菜单为空、点了没反应）。
 #[test]

@@ -23,8 +23,9 @@ use gpui_kit::*;
 
 use super::data::ResultPanel;
 use super::events::{
-    edge_tab_tooltip, right_tab_click_collapses, right_tab_description, right_tab_from_index,
-    right_tab_icon, right_tab_index, right_tab_label, right_tabs,
+    edge_tab_tooltip, presentation_tooltip, record_view_tooltip, right_tab_click_collapses,
+    right_tab_description, right_tab_from_index, right_tab_icon, right_tab_index, right_tab_label,
+    right_tabs,
 };
 use super::tabs::kv_row;
 use crate::ports::{Presentation, ResultRequest, RightTab};
@@ -110,7 +111,7 @@ impl ResultPanel {
             .icon(IconName::Table2)
             .debug_selector(|| "editor-result-bar-grid".to_string())
             .toggled(!self.transposed && !is_text)
-            .tooltip("网格视图")
+            .tooltip(presentation_tooltip(Presentation::Grid))
             .on_click(move |_, _window, app| {
                 queue.request(ResultRequest::SetPresentation(Presentation::Grid), app);
             });
@@ -121,7 +122,7 @@ impl ResultPanel {
             .icon(IconName::FileText)
             .debug_selector(|| "editor-result-bar-text".to_string())
             .toggled(is_text)
-            .tooltip("文本视图")
+            .tooltip(presentation_tooltip(Presentation::Text))
             .on_click(move |_, _window, app| {
                 queue.request(ResultRequest::SetPresentation(Presentation::Text), app);
             });
@@ -136,7 +137,7 @@ impl ResultPanel {
             .debug_selector(|| "editor-result-bar-record".to_string())
             .disabled(is_text)
             .toggled(self.transposed)
-            .tooltip("记录视图（单行转置）")
+            .tooltip(record_view_tooltip(self.transposed))
             .on_click(move |_, _window, app| {
                 queue.request(ResultRequest::ToggleTranspose, app);
             });
