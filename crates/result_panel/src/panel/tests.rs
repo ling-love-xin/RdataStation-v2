@@ -1517,8 +1517,9 @@ fn remove_group_column_guards_the_last_key() {
 }
 
 /// 【R3 分组页】工具条形状：分组列下拉 / 排序口径 / 仅重复 / 移除分组列 / 清空分组
-/// 五个入口都在（对齐 `GroupingPanel.fillToolBar:164-176` 的动作集；排序口径的
-/// 语义差异见 §8.83）。移除钮的可用性由纯函数钉，这里只验它真的画出来。
+/// 五个入口都在，且顺序与分隔照 `GroupingPanel.fillToolBar:164-176`
+/// （`Sort` → `Dups` → 分隔 → `EditColumns`（本仓=勾选下拉） → `DeleteColumn` → 分隔 → `Clear`）；
+/// 排序口径的语义差异见 §8.83。移除钮的可用性由纯函数钉，这里只验它真的画出来。
 #[gpui_kit::test]
 fn group_toolbar_offers_the_remove_column_action(cx: &mut gpui_kit::TestAppContext) {
     use gpui_kit::test::TestWindowExt as _;

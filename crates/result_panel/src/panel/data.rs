@@ -274,6 +274,10 @@ pub struct ResultPanel {
     pub(crate) stats_mode: StatsMode,
     /// 【R3 分组页】额外分组列集合（数据列序；空 = 只用当前选中列）。
     /// 点选加入 / 再点移除（顺序即分组键的拼接顺序，用户可感知地决定「按 A 再按 B」）。
+    /// **只活在本视图态、跨会话不记**：DBeaver 侧 `GroupingPanel.loadSettings/saveSettings`
+    /// （`:114-120`）是空实现（`saveSettings` 全仓无调用点），分组键不进面板设置——
+    /// 那边真正落地的是「生成一条 GROUP BY 查询交给数据源执行」（`GroupingResultsContainer
+    /// .rebuildGrouping:211-247`），所以键跟着查询/编辑器走而不是偏好。见 §8.93。
     pub(crate) group_columns: Vec<usize>,
     /// 【R3 分组页】分组结果排序口径
     pub(crate) group_sort: GroupSort,

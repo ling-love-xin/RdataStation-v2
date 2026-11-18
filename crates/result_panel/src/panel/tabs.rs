@@ -7,6 +7,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::list::ListItem;
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::separator::Separator;
 use gpui_kit::component::table::TableDelegate;
 use gpui_kit::component::toolbar::Toolbar;
 use gpui_kit::component::tree::tree;
@@ -1072,11 +1073,18 @@ impl ResultPanel {
             .child(self.panel_toolbar(
                 "editor-result-group-toolbar",
                 SharedString::from(title),
+                // 顺序与分隔照 `GroupingPanel.fillToolBar:164-176`：
+                // `DefaultSorting` → `DuplicatesOnly` → SEP → `EditColumns` → `DeleteColumn`
+                // → SEP → `ClearGrouping` → SEP → 扩展动作（本仓无扩展点，不摆）。
+                // 「编辑列」在那边是 `GroupingConfigDialog`（多列编辑表格），本仓用勾选式下拉
+                // 承载同一件事（列清单 + 勾选状态，能力等价、形态更轻）。
                 vec![
-                    columns_menu,
                     sort_button,
                     duplicates_button,
+                    Separator::vertical().into_any_element(),
+                    columns_menu,
                     remove_button,
+                    Separator::vertical().into_any_element(),
                     clear_button,
                 ],
                 cx,
