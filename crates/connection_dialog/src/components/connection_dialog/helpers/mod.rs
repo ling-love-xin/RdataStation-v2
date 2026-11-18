@@ -324,6 +324,21 @@ pub(crate) fn driver_menu_label(driver: &Driver) -> String {
 /// 必须是同一个词，否则「插件声明的驱动」与「下拉里的驱动」还是对不上号。
 pub(crate) use shared::utils::string::plugin_short_code;
 
+/// 驱动实现类型的说法（信息条用）：**按 `drivers.driver_kind` 说话，不一律叫「原生连接」**。
+///
+/// 为什么不能硬编码：`sidecar` 驱动是插件进程、`native` 是内核内置客户端库，
+/// 两者排障路径完全不同（前者看插件日志、后者看连接参数）。信息条说错，
+/// 用户会往错的方向查。
+pub(crate) fn driver_kind_label(kind: &str) -> &'static str {
+    match kind.trim() {
+        "native" => tr("原生连接"),
+        "sidecar" => tr("插件驱动"),
+        "file" => tr("文件型"),
+        "" => tr("未声明实现类型"),
+        _ => tr("其它实现"),
+    }
+}
+
 /// 解析驱动声明的属性默认值（`drivers.driver_properties`：SQL 对象 → **按键排序**的键值列表）。
 ///
 /// 空 / 非法 JSON / 空键 → 空列表（**不造默认值**）：属性页的默认值必须来自驱动声明

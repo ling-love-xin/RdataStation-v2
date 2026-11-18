@@ -3,15 +3,15 @@ use super::{
     address_field, address_label, address_placeholder, app_level_capabilities, auth_config_values,
     auth_field_specs, build_auth_config_json, build_network_config_json, capability_rows,
     conn_display_name, create_new_db_file, default_new_scope, dialog_row_height, dialog_tab_defs,
-    driver_auth_types, driver_capabilities, driver_form_fields, driver_menu_label,
-    driver_short_name, driver_source_text, driver_sources_from_rows, enabled_drivers_of_type,
-    field_spec, find_driver_by_value, first_selectable_type, is_secret_field,
-    network_config_values, network_field_specs, new_db_file_suggested_name, normalize_tab_index,
-    plugin_short_code, policy_summary, policy_type_from_label, policy_type_label, property_note,
-    result_needs_detail, save_blocker, saved_result, scope_from_label, staging_display_type_id,
-    strip_file_db_noise, tags_from_json, tags_to_json, tr, type_badge, type_has_driver,
-    type_matches_filter, url_from_fields, url_template_example, visible_tab_index, DriverDerived,
-    DriverSource,
+    driver_auth_types, driver_capabilities, driver_form_fields, driver_kind_label,
+    driver_menu_label, driver_short_name, driver_source_text, driver_sources_from_rows,
+    enabled_drivers_of_type, field_spec, find_driver_by_value, first_selectable_type,
+    is_secret_field, network_config_values, network_field_specs, new_db_file_suggested_name,
+    normalize_tab_index, plugin_short_code, policy_summary, policy_type_from_label,
+    policy_type_label, property_note, result_needs_detail, save_blocker, saved_result,
+    scope_from_label, staging_display_type_id, strip_file_db_noise, tags_from_json, tags_to_json,
+    tr, type_badge, type_has_driver, type_matches_filter, url_from_fields, url_template_example,
+    visible_tab_index, DriverDerived, DriverSource,
 };
 use connection::model::ConnectionScope;
 use connection::model::DataSourceSaveInput;
@@ -463,6 +463,18 @@ fn saved_result_keeps_connection_id_out_of_the_summary() {
         .summary
         .contains("未命名连接"));
     assert_eq!(conn_display_name(" x "), "x");
+}
+
+#[test]
+fn driver_kind_label_speaks_by_implementation_kind() {
+    // 信息条不能一律写「原生连接」：sidecar 是插件进程，排障路径完全不同。
+    assert_eq!(driver_kind_label("native"), tr("原生连接"));
+    assert_eq!(driver_kind_label("sidecar"), tr("插件驱动"));
+    assert_eq!(driver_kind_label("file"), tr("文件型"));
+    // 空 / 未知值都不许编造，也不能沿用「原生」。
+    assert_eq!(driver_kind_label(""), tr("未声明实现类型"));
+    assert_eq!(driver_kind_label("  "), tr("未声明实现类型"));
+    assert_eq!(driver_kind_label("odbc"), tr("其它实现"));
 }
 
 #[test]

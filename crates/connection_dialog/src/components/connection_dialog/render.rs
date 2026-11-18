@@ -1165,7 +1165,15 @@ impl<H: 'static> ConnectionDialogState<H> {
                         } else {
                             format!("支持 {} 认证", methods.join(" / "))
                         };
-                        format!("{type_label} · {driver_value} · 原生连接 · {methods_text}")
+                        format!(
+                            "{type_label} · {driver_value} · {} · {methods_text}",
+                            driver_kind_label(
+                                current_driver
+                                    .as_ref()
+                                    .map(|d| d.driver_kind.as_str())
+                                    .unwrap_or("")
+                            )
+                        )
                     };
                     let info_banner = div()
                         .w_full()
