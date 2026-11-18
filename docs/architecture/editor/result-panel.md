@@ -5207,7 +5207,7 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
   schema（显式写了库名 / 会话 search_path 被改过）可能算错口径，tooltip 已写明是
   「对原 SQL 跑 count(*)」；
 - 本地分析结果（`ResultEntry.analysis = true`，临时表早已不在）重跑原 SQL 没有意义——
-  本批**未拦**，点了会按普通查询失败并显示「计算总行数失败：…」，登记为后续项；
+  已在 §9.02 两处（面板置灰 + 宿主兜底）拦住；
 - 行数框仍是**行号跳转**（本仓既有能力），「计算行数」并列在它右侧，两者不是同一个控件
   （DBeaver 只有后者）。
 
@@ -5218,6 +5218,28 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
 `cargo test -p rds-result-panel --lib` = **335 passed**；
 `cargo test -p rds-editor --lib` = **793 passed**（1 ignored，+3 条新用例）；
 `cargo test -p rds-ui-guard` = 4 passed。
+
+### 9.02 「计算行数」对分析结果的拦截（2026-11-19）
+
+**为什么必须拦**：本地分析结果（`ExecuteTarget::Analysis` / `ResultEntry.analysis = true`）
+是**当时那份已抓行**在 DuckDB 里算出来的，临时表在结果标签被替换后就不存在了；它的
+`entry.sql` 是**分析 SQL**（`{table}` 占位已被替换成那张临时表名），重跑必然报
+「table not found」。DBeaver 没有这一档（它的分析走别的容器），所以这条属于
+**本仓能力超集带来的新约束**，不是照抄。
+
+**两处同口径**（缺一条都会漏）：
+1. **面板侧**（`panel/render.rs`）：`events::count_rows_available(has_data, is_analysis)`
+   = `has_data && !is_analysis` 决定 `disabled`；`events::count_rows_tooltip(is_analysis, computed)`
+   决定提示——分析结果那句是「分析结果是当时那份已抓行算出来的，没有可重算的源查询——
+   总行数就是这里的行数」（**把「行数就在状态栏」这件事说给用户**，而不是只说"不行"）。
+2. **宿主侧**（`view/host/results/count.rs`）：拼 SQL **之前**先判 `entry.analysis`，
+   直接 `set_message` 返回。理由：面板置灰只挡新点击，队列里可能还有在途的
+   `CountRows`（例如结果刚被分析结果替换、请求已入队）。
+
+**验证**：`panel::tests::count_rows_action_is_gated_by_data_and_analysis_tier`
+（三态可点性 + 三条提示互不相同且分析态文案含原因）；
+`cargo test -p rds-result-panel --lib` = **336 passed**；
+`cargo test -p rds-editor --lib` = **793 passed**；`cargo test -p rds-ui-guard` = 4 passed。
 
 ## 8. 协作纪律
 

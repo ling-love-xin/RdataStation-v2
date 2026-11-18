@@ -1493,6 +1493,15 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 2.90 分析结果与「计算行数」的边界（2026-11-19）
+
+- 判据只有一处：`panel::events::count_rows_available(has_data, is_analysis)`。要加别的
+  置灰条件（例如「无绑定连接」）也加在这里，别在 `render` 里另写一串 `&&`。
+- **面板置灰 ≠ 拦住**：队列里的在途 `CountRows` 照样会到宿主，所以
+  `count_result_rows` 里必须再判一次 `entry.analysis`（两处都改才算改完）。
+- 文案走 `count_rows_tooltip(is_analysis, computed)`：分析态讲**原因 + 行数在哪**
+  （「总行数就是这里的行数」），其余两态讲「算什么 / 重算」。不要在 render 里写字符串。
+
 ### 2.89 「计算行数」的接手要点（2026-11-19）
 
 - 链路三段：`ResultControls.count_rows`（槽位）→ `ResultRequest::CountRows` →
@@ -1508,7 +1517,8 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - `count_from_rows` 认 `shared::Value::{Int, Float, Text}`（`Null` / `Bool` / `Bytes` 一律
   `None`）——驱动给什么形态都不该 panic，认不出就报「计数查询没有返回数字」。
 - **两个未决口径**：① `ResultEntry` 没 schema 字段，计数按连接默认 schema 跑；
-  ② 本地分析结果（`analysis = true`）不该重算，当前未拦（点了会失败并报错文案）。
+  ② 本地分析结果（`analysis = true`）~~当前未拦~~**已在 §2.90 拦掉**（面板置灰 +
+  宿主兜底，缺一条都会漏）。
 
 ### 2.88 状态栏 / 左缘竖条的接手要点（2026-11-19）
 
