@@ -467,32 +467,49 @@ fn saved_result_keeps_connection_id_out_of_the_summary() {
 
 #[test]
 fn save_blocker_reports_the_first_missing_item() {
-    // 顺序就是填写顺序：类型 → 驱动 → 名称 → 地址（与 `collect` 的判据一致）。
+    // 顺序就是填写顺序：类型 → 驱动 → 项目（仅当作用域要求）→ 名称 → 地址（与 `collect` 的判据一致）。
     assert_eq!(
-        save_blocker(false, "", "", "", false),
+        save_blocker(false, "", "", "", false, false, false),
         Some(tr("请先在左侧选择数据库类型"))
     );
     assert_eq!(
-        save_blocker(true, "", "n", "u", false),
+        save_blocker(true, "", "n", "u", false, false, false),
         Some(tr("请选择驱动实现"))
     );
+    // 作用域默认是「仅项目」：没有项目就无处落库，必须先选项目（不能等到保存时才报错）。
     assert_eq!(
-        save_blocker(true, "sqlx", "", "u", false),
+        save_blocker(true, "sqlx", "n", "u", false, true, false),
+        Some(tr("请先选择项目（作用域为「仅项目」）"))
+    );
+    // 已选项目 / 作用域不要求项目 → 不拦。
+    assert_eq!(
+        save_blocker(true, "sqlx", "n", "u", false, true, true),
+        None
+    );
+    assert_eq!(
+        save_blocker(true, "sqlx", "n", "u", false, false, false),
+        None
+    );
+    assert_eq!(
+        save_blocker(true, "sqlx", "", "u", false, false, false),
         Some(tr("请填写连接名称"))
     );
     // 地址缺口按连接方式给不同的可执行动作（文件型要的是“选文件”，不是“填 URI”）。
     assert_eq!(
-        save_blocker(true, "sqlx", "n", "", false),
+        save_blocker(true, "sqlx", "n", "", false, false, false),
         Some(tr("请填写连接 URI"))
     );
     assert_eq!(
-        save_blocker(true, "sqlx", "n", "", true),
+        save_blocker(true, "sqlx", "n", "", true, false, false),
         Some(tr("请选择或新建数据库文件（常规 → 连接设置）"))
     );
     // 全齐 / 全空格（名称与地址都是 trim 后判空）→ 无缺口。
-    assert_eq!(save_blocker(true, "sqlx", "n", "u", false), None);
     assert_eq!(
-        save_blocker(true, "  ", "  ", "  ", false),
+        save_blocker(true, "sqlx", "n", "u", false, false, false),
+        None
+    );
+    assert_eq!(
+        save_blocker(true, "  ", "  ", "  ", false, false, false),
         Some(tr("请选择驱动实现"))
     );
 }

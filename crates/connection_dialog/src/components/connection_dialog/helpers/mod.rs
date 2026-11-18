@@ -146,11 +146,16 @@ pub(crate) fn save_blocker(
     name: &str,
     url: &str,
     is_file_db: bool,
+    // 作用域 =「仅项目」却没有项目：落库目标不存在，先拦在保存之前。
+    needs_project: bool,
+    has_project: bool,
 ) -> Option<&'static str> {
     if !has_type {
         Some(tr("请先在左侧选择数据库类型"))
     } else if driver_value.trim().is_empty() {
         Some(tr("请选择驱动实现"))
+    } else if needs_project && !has_project {
+        Some(tr("请先选择项目（作用域为「仅项目」）"))
     } else if name.trim().is_empty() {
         Some(tr("请填写连接名称"))
     } else if url.trim().is_empty() {

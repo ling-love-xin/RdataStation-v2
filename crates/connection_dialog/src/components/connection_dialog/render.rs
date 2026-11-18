@@ -1971,20 +1971,27 @@ impl<H: 'static> ConnectionDialogState<H> {
             // 保证三态切换时布局不跳动。
             // 项目栏（固定位置与宽度 17rem）：不参与项目作用域时置灰禁用；
             // 参与时为一个下拉框（项目名 + 路径左右结构；末项「＋ 新增项目」）。
-            let project_ui = {
-                let mut wrap = div()
-                    .h_flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap(rems(GAP_MD))
-                    .w(rems(PROJECT_W))
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .text_xs()
-                            .text_color(theme.colors.muted_foreground)
-                            .child(tr("项目")),
-                    );
+            // 作用域「仅项目」（默认）却没有项目根：落库目标不存在，先说清楚要选项目。
+            let needs_project = matches!(scope_from_label(&scope_sel), ConnectionScope::Project);
+            let has_project = !project_path.read(cx).value().trim().is_empty();
+            let mut wrap = div()
+                .h_flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(rems(GAP_MD))
+                .w(rems(PROJECT_W))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_xs()
+                        // 被拦过一次后，缺项目的标签与其它缺口一样染 danger 色。
+                        .text_color(if blocked_hint.get() && needs_project && !has_project {
+                            theme.colors.danger
+                        } else {
+                            theme.colors.muted_foreground
+                        })
+                        .child(tr("项目")),
+                );
                 if !includes_project {
                     // 仅全局：项目不参与落库，仍以禁用下拉占位（保持控件形态与行高一致）。
                     wrap = wrap.child(
@@ -2005,8 +2012,7 @@ impl<H: 'static> ConnectionDialogState<H> {
                             .child(Select::new(&project_sel).placeholder(tr("选择项目…"))),
                     );
                 }
-                wrap
-            };
+            let project_ui = wrap;
             // 作用域：三态分段（gpui-component `TabBar::segmented`，决策 #84）——
             // 短标签只用于显示，写库仍用全称标签（`SCOPE_SEG_LABELS` 的第二列）。
             let scope_seg = {
@@ -2063,7 +2069,7 @@ impl<H: 'static> ConnectionDialogState<H> {
                 badge
             };
             // ---- 最小可保存集（B2）：缺口提示 ----
-            // 判据与 `ClonedDialogState::collect` 完全一致（类型/驱动 → 名称 → 地址）：
+            // 判据与 `ClonedDialogState::collect` 完全一致（类型/驱动 → 项目 → 名称 → 地址）：
             // 点击时按**当前缺口**给理由（不再是笼统的「请填写名称、驱动与连接 URL」），
             // 被拦下一次后把缺口字段的标签染 danger 色（只换颜色，不动 Header 行高）。
             let name_now = name.read(cx).value().to_string();
@@ -2075,6 +2081,8 @@ impl<H: 'static> ConnectionDialogState<H> {
                 &name_now,
                 &url_now,
                 is_file_db,
+                needs_project,
+                has_project,
             );
             let hint_on = blocked_hint.get();
             let missing_name = hint_on && name_now.trim().is_empty();
