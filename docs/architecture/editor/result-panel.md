@@ -2101,6 +2101,7 @@ SUM/AVG 对字符串累计不成立）。
 
 - 值详情 / 分组 / 引用 / 执行SQL 四页的同构面板工具条（R1 剩余部分）
 - 统计项增删的**跨会话持久化**（DBeaver 写 `IDialogSettings`；本仓暂无对应偏好项）
+  → **已由 §8.89 补齐**（`result_panel.stats_items`，2026-11-18）
 - `AggregateColumnsPanel` 的 `packColumns` 等列宽自适应（本仓右栏是固定列宽）
 - R3（Grouping 配置化）/ R4（Metadata、References 实做）/ R5（布局方向切换 + 可拖分栏）
 
@@ -4681,6 +4682,53 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
 - `panel::tests::right_tab_descriptions_are_distinct_and_non_empty`（六页各非空、互不重复）。
 - `cargo test -p rds-result-panel --lib` = **321 passed**；`cargo check -p rds-editor`
   = Finished；`cargo test -p rds-ui-guard` = 4 passed。
+
+### 8.89 计算页启用统计项跨会话持久化（对齐 `AggregateColumnsPanel.saveSettings`，2026-11-18）
+
+**取证**：
+- `AggregateColumnsPanel.loadSettings()`（`:129-155`）从面板 `IDialogSettings` 里读
+  `functions`（函数名清单）与 `index`（顺序），逐个回 `FunctionsRegistry` 查函数对象；
+- `saveSettings()`（`:166-181`）把 `enabledFunctions` 的名称与下标回写；
+- 结果：**关掉结果集再打开，Calc 页还是上次那几个函数、还是那个顺序**。
+  `aggregateAsStrings`（数值 / 字符串口径）**不**进面板设置，故口径切换不落盘。
+
+**本仓落点**（与 §8.86 段大小同一套「设置项 + 面板注入 + 宿主回写」形态）：
+- `ports`：`StatsItem::id()` = `count / nulls / min / max / avg / sum`（长期契约用英文 id，
+  中文 `label()` 只做展示）；`StatsItem::parse(id)`；纯函数
+  `stats_items_from_ids`（顺序照抄、未知项与重复项丢弃）与 `stats_items_to_ids`。
+- settings 五处：`ResultPanel.stats_items: String`（`#[serde(default = "default_result_stats_items")]`
+  = `count,nulls,min,max,avg,sum`）+ Default + 末尾 default fn；`Slot::ResultPanelStatsItems`；
+  key 映射 `"result_panel.stats_items"`；`slot_kind` → `KindTag::Text`（**漏这处报 E0004**）；
+  `service/mod.rs` 读值分支 + 派发链；`service/result_panel.rs::apply_slot` 新臂
+  （`normalize_command_list` 只做空白折叠 / 丢空项 / 小写，**不校验 id**——
+  id ↔ 项对应表在 result_panel crate，依赖只向下）+ `set_result_panel_stats_items`。
+- 登记项 `result_panel.stats_items`：`group: "interaction"`（插在
+  `persist_column_widths` 与 `hidden_status_commands` 之间，保持分组连续）、
+  `SettingKind::Text`、`default_json: "\"count,nulls,min,max,avg,sum\""`、`Effect::NextUse`。
+- 面板：`set_stats_items_initial(ids, cx)`（构造期注入；空串 = 全停用，页内本就给
+  「没有启用任何统计项：点 ＋ 添加」提示）、`stats_items_ids() -> String`。
+- 宿主：`construct.rs` 在 `&mut cx` 之前先拷贝 `stats_items`（E0502 教训），
+  构造后 `set_stats_items_initial(&stats_items, cx)`；`dispatch.rs` 的
+  `AddStatsItem` / `RemoveStatsItem` / `ResetStatsItems` 生效后走
+  `persist_result_stats_items`（读面板当前 id 串 → `SettingsService`，同值不写盘由设置侧判定）。
+
+**语义边界**：
+- **空串是合法状态**（用户把六项全 × 掉），与「设置里没写过这一项」（serde 默认落六项全开）
+  区分开；设置页手填未知 id 在面板侧被丢弃，不会把页面搞坏。
+- 口径（`StatsMode`）不落盘：DBeaver 的 `aggregateAsStrings` 也不存面板设置。
+- 「Reset」在本仓语义仍是**六项全开**（DBeaver 是回到 registry 里 `isDefault()` 的子集）——
+  口径差异见 §8.87 的「有意省略」，本次不改变该决定。
+
+**验证**：
+- `ports::tests::stats_item_ids_round_trip_and_drop_unknown`（顺序保留 / 空白与重复丢弃 /
+  大小写不符按未知 id 丢弃 / 空串与全未知 = 全停用 / 每个 id 幂等解析）。
+- settings 侧由既有注册表用例兜底：`every_registered_key_has_a_matching_slot`
+  （槽位形态 ↔ 登记形态一致）、`every_model_leaf_is_registered`（新字段必须登记）、
+  `groups_are_contiguous_and_consistently_named`（`interaction` 分组连续）。
+- `cargo test -p rds-settings --lib` = **37 passed**；`cargo test -p rds-result-panel --lib`
+  = **322 passed**；`cargo check -p rds-editor` = Finished；`cargo test -p rds-ui-guard`
+  = 4 passed。
+
 
 
 

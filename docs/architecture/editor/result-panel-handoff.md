@@ -653,8 +653,8 @@ datetime #5CA259 / numeric #C0C0FF / string #D0D0D0）。全表见 `result-panel
 （最后一条是真渲染断言——工具条 28px、表头与行各 20px，且停用 Sum 后行消失、Reset 后回来））
 / guard **4** / shell **14** passed；`cargo check -p rds-editor` 通过。
 
-**仍未做**：值详情 / 分组 / 引用 / 执行SQL 四页工具条；统计项增删跨会话持久化；
-R3 / R4 / R5。
+**仍未做**：值详情 / 分组 / 引用 / 执行SQL 四页工具条（已由 §2.33 起逐页补齐）；
+统计项增删跨会话持久化（**已由 §2.77 补齐**）；R3 / R4 / R5。
 
 ### 2.32 2026-11-09（右栏 R1 收口：四页页内工具条统一）
 
@@ -1492,6 +1492,19 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   先 `p.status = Some(ResultStatus { .. })`。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；无 focus-lost 回填
   （`InputState` 没有失焦钩子），只做「有效提交即规范化」。
+
+### 2.77 计算页启用统计项持久化的接手要点（2026-11-18）
+
+- 落盘形态 = `result_panel.stats_items`（逗号分隔的稳定 id：`count,nulls,min,max,avg,sum`，
+  顺序即行序）。**英文 id 是契约**，中文 `StatsItem::label()` 只做展示——改文案不动 id。
+- 解析口径在 `ports::stats_items_from_ids`：顺序照抄、未知项与重复项丢弃；
+  **空串 = 全停用**（合法状态，页内给「点 ＋ 添加」提示），模型默认值才是六项全开。
+- 写入口三条（计算页 ＋ / 行尾 × / Reset）都汇总到
+  `EditorView::persist_result_stats_items`；**口径切换（StatsMode）不落盘**
+  ——DBeaver 的 `aggregateAsStrings` 也不进面板设置。
+- 新增统计项时同步：`StatsItem::ALL`、`id()` / `parse()`、`label()`、
+  `supports_text_mode()`、`default_result_stats_items()` 的默认串、登记项 `presets`/`hint` 的
+  id 清单——漏一处就会出现「页内能勾、重启后丢」。
 
 ### 2.76 右栏页签提示的接手要点（2026-11-18）
 
