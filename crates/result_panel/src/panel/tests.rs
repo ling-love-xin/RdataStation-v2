@@ -520,6 +520,28 @@ fn rendered_ui_elements_survive(cx: &mut gpui_kit::TestAppContext) {
         "筛选区外框应为 24px（Input.xsmall 20 + 边框 1 与内距 1 各两道，对齐 DBeaver 的 2+20+2），实际 {filter_height}px"
     );
 
+    // 1.6) 【筛选历史】历史下拉的**渲染接线**：空历史不摆入口，提交一条后出现
+    //      （状态侧两条用例在 `commit_on_enter_records_filter_history` /
+    //      `filter_history_dedupes_caps_and_replays`；这里只钉「真的画出来」）
+    assert!(
+        !visible("editor-result-filter-history", cx),
+        "空历史不该摆历史下拉入口（能力没有就不摆）"
+    );
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.filter_text = "1".to_string();
+            p.note_filter_commit();
+            // 手动改了面板状态要自己 notify：宿主壳只在实体变脏时重渲染，
+            // 不 notify 的话 `window.draw` 会复用上一帧的树（探针会读到旧帧）
+            cx.notify();
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        visible("editor-result-filter-history", cx),
+        "有历史后应出现历史下拉按钮"
+    );
+
     // 2) 展开筛选条：两列按钮（左=收起 / 右=运行）+ 多行输入框随条出现
     cx.update(|_, app| panel.update(app, |p, cx| p.toggle_filter_expand(cx)));
     cx.update(|window, cx| window.draw(cx).clear(cx));

@@ -3329,11 +3329,17 @@ panicked at panel/tests.rs:1091:
 | --- | --- |
 | `panel::tests::commit_on_enter_records_filter_history` | 真敲键 `"1"` → 防抖未到点时 `view_total == 2` 且历史为空（打字不算提交）→ `simulate_keystrokes("enter")` → `view_total == 1`（立即生效，不等 300ms）且历史 `== ["1"]` |
 | `panel::tests::filter_history_dedupes_caps_and_replays` | 灌 10 条 → 长度 == `FILTER_HISTORY_LIMIT`、首位是重复提交的那条、被挤掉的那条不在 → `apply_filter_from_history("k2")` → `filter_text`/输入框值都变成 `k2`、`view_total == 0`（证明确实应用到网格） |
+| `panel::tests::rendered_ui_elements_survive`（步骤 1.6，追加） | **渲染接线**：空历史不摆入口 → 提交一条后 `editor-result-filter-history` 真的出现在元素树里 |
+
+**测试坑（本批实测）**：在用例里直接改面板字段（`p.filter_text = …`）后，必须自己
+`cx.notify()` 再 `window.draw(cx).clear(cx)`——宿主壳（`PanelHost`）只在实体变脏时重渲染，
+不 notify 的话 `draw` 复用上一帧的树，`try_find` / `debug_bounds` 读到的是**旧帧**（曾据此
+误判「按钮没渲染」；同一帧里 `editor-result-filter-run` 有、`clear`/`history` 没有就是这个症状）。
 
 #### 8.60.5 验证
 
 - `cargo check -p rds-result-panel` = 0 error / 0 warning；`cargo check -p rds-editor` = 0 error / 0 warning。
-- `cargo test -p rds-result-panel --lib` = **269 passed / 0 failed**（267 + 本批新增 2）。
+- `cargo test -p rds-result-panel --lib` = **269 passed / 0 failed**（267 + 本批新增 2；渲染接线断言并入既有用例）。
 - `cargo test -p rds-editor --lib results` = **45 passed / 0 failed**（分派臂改动后的回归）。
 - `cargo test -p rds-ui-guard`（不带 `--lib`）= 4 passed。
 
