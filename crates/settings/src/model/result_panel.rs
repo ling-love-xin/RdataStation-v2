@@ -266,8 +266,12 @@ fn default_hidden_status_commands() -> String {
     "undo,redo".to_string()
 }
 
-/// 计算页出厂启用集：六项全开（顺序 = 原「计算」页六行顺序；DBeaver 出厂也把注册表里
-/// 非 `isDefault()` 之外的全部函数打开）。
+/// 计算页出厂启用集：只有 `count`（= 「非空」）。
+///
+/// 对齐 DBeaver：九个聚合函数里仅 `count` / `countDistinct` 标了 `default="true"`
+/// （`plugin.xml:89-99`），`loadDefaultFunctions()` 只收 `isDefault()` 的项；本仓没有
+/// `countDistinct`（去重计数），故默认集只剩「非空」（六项全开不再是默认，
+/// 见 `docs/architecture/editor/result-panel.md` §8.91）。
 fn default_result_stats_items() -> String {
-    "count,nulls,min,max,avg,sum".to_string()
+    "count".to_string()
 }

@@ -513,12 +513,15 @@ impl ResultPanel {
         }
     }
 
-    /// 【R2 计算页】恢复默认函数集（六项全开；对齐「Reset」）
+    /// 【R2 计算页】恢复默认函数集（对齐 DBeaver `ResetFunctionsAction`
+    /// `:438-449`：`enabledFunctions.clear()` + `loadDefaultFunctions()` →
+    /// 只留 `isDefault()` 打标的项，本仓 = 「非空」，见 `StatsItem::DEFAULT_SET`）
     pub fn reset_stats_items(&mut self, cx: &mut Context<Self>) {
-        if self.stats_items == StatsItem::ALL.to_vec() {
+        let defaults = StatsItem::DEFAULT_SET.to_vec();
+        if self.stats_items == defaults {
             return;
         }
-        self.stats_items = StatsItem::ALL.to_vec();
+        self.stats_items = defaults;
         cx.notify();
     }
 

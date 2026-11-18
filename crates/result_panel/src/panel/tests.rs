@@ -389,12 +389,18 @@ fn stat_value_respects_mode_and_missing_samples() {
     );
 }
 
-/// 【R2 计算页】默认函数集 = 六项全集、展示顺序固定；口径默认数值且可来回切
+/// 【R2 计算页】可选全集 = 六项、展示顺序固定；**默认集**对齐 DBeaver `isDefault()` 打标
+/// （本仓映射只有「非空」）；口径默认数值且可来回切
 #[test]
-fn stats_defaults_are_full_set_in_display_order() {
+fn stats_defaults_are_the_dbeaver_default_set_in_display_order() {
     assert_eq!(StatsItem::ALL.len(), 6);
     assert_eq!(StatsItem::ALL[0], StatsItem::Count);
     assert_eq!(StatsItem::ALL[5], StatsItem::Sum);
+    // 默认集 = 只有 count（DBeaver 里 countDistinct 也标了 default，但本仓没有这一项）
+    assert_eq!(StatsItem::DEFAULT_SET, [StatsItem::Count]);
+    assert!(StatsItem::Count.is_default());
+    assert!(!StatsItem::Nulls.is_default());
+    assert!(!StatsItem::Sum.is_default());
     // 只有 Min/Max 支持字符串口径（SUM/AVG 对字符串累计不成立）
     assert!(StatsItem::Min.supports_text_mode());
     assert!(!StatsItem::Sum.supports_text_mode());
@@ -601,7 +607,10 @@ fn rendered_ui_elements_survive(cx: &mut gpui_kit::TestAppContext) {
 }
 
 /// 【R2】计算页真渲染（不只跑纯函数）：面板工具条三件 / 两列表头 / 六行统计（含行尾 ×）
-/// 都要真画出来；行高 20px、工具条 28px；停用一项后该行消失、Reset 后回来（行为闭环）。
+/// 都要真画出来；行高 20px、工具条 28px。
+///
+/// 六行是**手动置全**的（出厂默认只有「非空」，对齐 DBeaver 的 `isDefault()` 集合，
+/// 见 §8.91）；同时钉住 Reset 的新语义：回到默认集，而不是六项全开。
 ///
 /// 谁把工具条拿掉、把 `stats_items` 写死回六行、或让 `Text` 口径把 Avg/Sum 也算出值，
 /// 此用例即红。
@@ -647,6 +656,8 @@ fn stats_tab_renders_toolbar_header_and_rows(cx: &mut gpui_kit::TestAppContext) 
             p.set_grids(grid, None, window, cx);
             // 列浏览器清单选中第 2 列（amount）→ 计算页作用列
             p.selected_col = Some(1);
+            // 本用例要验「六行都画得出来」，出厂默认只有一项 → 先置全六项
+            p.stats_items = crate::ports::StatsItem::ALL.to_vec();
             p.set_right_tab(RightTab::Stats, cx);
         });
         *slot_in.borrow_mut() = Some(panel.clone());
@@ -717,22 +728,34 @@ fn stats_tab_renders_toolbar_header_and_rows(cx: &mut gpui_kit::TestAppContext) 
         "统计行应 20px，实际 {row_h}px"
     );
 
-    // 3) 行为闭环：停用 Sum → 该行消失；Reset → 回来
+    // 3) 行为闭环：停用 Min → 该行消失；Reset → 回到**默认集**（只剩「非空」），
+    //    被停用的 Min 与其余非默认项都不回来（对齐 DBeaver `ResetFunctionsAction`
+    //    = `loadDefaultFunctions()` 只收 `isDefault()`）
     cx.update(|_, app| {
         panel.update(app, |p, cx| {
-            p.remove_stats_item(StatsItem::Sum, cx);
+            p.remove_stats_item(StatsItem::Min, cx);
         })
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(
-        !visible("editor-result-stat-row-Sum", cx),
-        "停用 Sum 后该行应消失"
+        !visible("editor-result-stat-row-Min", cx),
+        "停用 Min 后该行应消失"
     );
     cx.update(|_, app| panel.update(app, |p, cx| p.reset_stats_items(cx)));
     cx.update(|window, cx| window.draw(cx).clear(cx));
+    let after_reset = panel.read_with(cx, |p, _app| p.stats_items.clone());
+    assert_eq!(
+        after_reset,
+        crate::ports::StatsItem::DEFAULT_SET.to_vec(),
+        "Reset 应回到默认集（只有「非空」），不是六项全开"
+    );
     assert!(
-        visible("editor-result-stat-row-Sum", cx),
-        "Reset 后 Sum 行应回来"
+        visible("editor-result-stat-row-Count", cx),
+        "Reset 后默认项「非空」行应在"
+    );
+    assert!(
+        !visible("editor-result-stat-row-Sum", cx) && !visible("editor-result-stat-row-Min", cx),
+        "Reset 后非默认项（Sum / Min）不应自动回来"
     );
 }
 

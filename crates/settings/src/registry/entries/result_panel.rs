@@ -214,13 +214,14 @@ pub fn entries() -> Vec<SettingSpec> {
             group: "interaction",
             group_label: Some("选择与操作"),
             label: "计算页启用统计项",
-            hint: "计算页启用的统计项 id，逗号分隔（出厂六项全开：count,nulls,min,max,avg,sum）。\
+            hint: "计算页启用的统计项 id，逗号分隔（出厂仅 `count`，即「非空」——\
+                 对齐 DBeaver 只把 `isDefault()` 打标的函数当默认；本仓无 countDistinct）。\
                  面板计算页的 ＋ 添加 / 行尾 × 停用 / Reset 恢复改的是同一份状态；\
                  空串表示六项全停用（页内显示「点 ＋ 添加」提示），未知 id 被忽略",
             hint_inline: true,
             kind: SettingKind::Text,
             presets: &[],
-            default_json: "\"count,nulls,min,max,avg,sum\"",
+            default_json: "\"count\"",
             effect: SettingEffect::NextUse,
             entry: SettingEntry::Page,
             consumer: "crates/editor/src/view/host/construct.rs（面板创建时注入启用集）\

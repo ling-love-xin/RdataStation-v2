@@ -400,6 +400,22 @@ impl StatsItem {
         Self::Sum,
     ];
 
+    /// 【默认函数集】出厂 / Reset 之后启用的项（对齐 DBeaver `FunctionDescriptor.isDefault()`
+    /// 打标的集合，`plugin.xml:89-99`）。
+    ///
+    /// 取证：DBeaver 九个聚合函数里只有 `count` 与 `countDistinct` 写了 `default="true"`，
+    /// `countNulls` 显式 `default="false"`，其余（sum/avg/min/max/median/mode）没写属性
+    /// （缺省即 false）；`loadDefaultFunctions()`（`AggregateColumnsPanel:157-164`）只收
+    /// `isDefault()` 的项、再按 label 排序。本仓六项里对应 `count` 的是「非空」，
+    /// **没有 `countDistinct`（去重计数）这一项**——按「能力没有就不摆」只保留「非空」，
+    /// 该差异登记在 `docs/architecture/editor/result-panel.md` §8.91。
+    pub const DEFAULT_SET: [StatsItem; 1] = [Self::Count];
+
+    /// 这一项是否属于默认集（等价于 DBeaver 描述符上的 `isDefault` 标记）
+    pub fn is_default(self) -> bool {
+        Self::DEFAULT_SET.contains(&self)
+    }
+
     /// 展示名（语义对标 DBeaver 的 COUNT / SUM / AVG / MIN / MAX 函数标签）
     pub fn label(self) -> &'static str {
         match self {
@@ -461,7 +477,7 @@ pub fn stats_items_from_ids(text: &str) -> Vec<StatsItem> {
 /// 【计算页持久化】启用集合 → 落盘 id 列表（逗号分隔，顺序保留）。
 ///
 /// 全停用时给空串——这是**合法状态**（用户在页内把六项全 × 掉了），
-/// 与「设置里没写过这一项」用默认值区分开（模型默认值 = 六项全开）。
+/// 与「设置里没写过这一项」用默认值区分开（模型默认值 = [`StatsItem::DEFAULT_SET`]）。
 pub fn stats_items_to_ids(items: &[StatsItem]) -> String {
     items
         .iter()

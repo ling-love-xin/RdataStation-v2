@@ -750,7 +750,7 @@ impl ResultPanel {
                 .xsmall()
                 .debug_selector(|| "editor-result-stat-reset".to_string())
                 .icon(IconName::RotateCcw)
-                .tooltip("恢复默认统计项（六项全开）")
+                .tooltip("恢复默认统计项（对齐 DBeaver 默认集：只有「非空」）")
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::ResetStatsItems, app);
                 })
@@ -838,7 +838,7 @@ impl ResultPanel {
                 ));
                 let reset_queue = reset_queue.clone();
                 menu.separator().item(
-                    PopupMenuItem::new("恢复默认统计项（六项全开）").on_click(
+                    PopupMenuItem::new("恢复默认统计项（默认只有「非空」）").on_click(
                         move |_, _window, app| {
                             reset_queue.request(ResultRequest::ResetStatsItems, app);
                         },
