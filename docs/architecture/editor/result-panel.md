@@ -4213,6 +4213,83 @@ editor results 45、ui-guard 4、check 0-0。提交 `e1b797db`。
   选中列联动、隐藏列置灰斜体已具备；**树形嵌套列**与**右键「复制列名」**仍未做。
 
 
+### 8.79 「引用」页接上外键清单（对齐 DBeaver References 面板的键列表，2026-11-18）
+
+**取证**（`plugins\org.jkiss.dbeaver.ui.editors.data\src\org\jkiss\dbeaver\ui\controls\resultset\panel\references\`）：
+- `ReferencesPanel.java`：`contributeActions` **空实现**（`:156-158`）⇒ 该页没有页内动作；
+  正文只有一个占位容器，内容在 `ReferencesResultsContainer`（`:62-113`）；
+  `activatePanel` → `refresh(false)`（`:133-136`）⇒ **每次切到该页都重读**。
+- `ReferencesResultsContainer.java`：顶部一行 = 只读下拉 `CSmartCombo<ReferenceKey>`
+  （首项 `null`，文案 `ResultSetMessages.refs_no_refs_text`，`:97-121`）+「打开目标对象」
+  （`refs_open_target`，`:124-140`）+ 下方**嵌套一份 `ResultSetViewer`** 显示引用行（`:143-149`）。
+- 键清单 `refreshReferenceKeyList`（`:219-357`）：可见属性所属实体 → 出向 FK
+  （`DBVUtils.getAllAssociations`）与入向引用（`getAllReferences`）；
+  **出向的收键条件是该 FK 的全部列都在可见属性里**（`:298`）；读失败**静默**
+  （`:347-350`，注释「References or FKs may be unsupported by current database」）。
+- 键文案（`:512-528`）= `目标表 (约束名)`，跨数据源再追加 `[连接名]`；
+  活动键持久化在虚拟实体属性 `ref-panel-associations`（`:106-120`）。
+
+**本仓落点（本轮 = 方案 C：清单 + 打开目标对象，不做引用行）**：
+- 新模块 `crates/result_panel/src/references.rs`（纯函数 + 状态，无 UI 依赖）：
+  - `ReferenceKey{table, constraint, columns, target_columns}`；
+  - `keys_from_constraints(&[ConstraintDetail], visible)`：三条过滤（是外键 /
+    驱动报了目标表 / **全部本表列都在可见列里**），列名按忽略大小写比对
+    （约束来自驱动、可见列来自结果集，大小写不保证一致）；结果按
+    目标表 → 约束名 → 本表列 排序（DBeaver 按遍历序不排序，这里排序是为了渲染稳定）；
+  - `key_label` = `目标表 (约束名)`（没约束名时只留目标表，同 `RefKeyLabelProvider`）；
+  - `mapping_text` = `本表列 → 目标表.目标列`（驱动没报目标列时只到表名，**不编列名**）；
+  - `ReferencesState::{NotLoaded, Loading, Loaded, Failed}` + `NO_REFERENCES = "无引用"`
+    （照 DBeaver 的空项文案）。
+- 取数走宿主（`result_panel` 不认识 engine / database，连接身份只在宿主手里）：
+  `ResultRequest::LoadReferences { schema, table, visible_columns }` →
+  `crates/editor/src/view/host/results/references.rs::load_references` →
+  `database::metadata_service::MetadataService::list_constraints`
+  （与 ER 视图同一套服务，**不直连库、不碰凭据**）在 `cx.background_spawn` +
+  `background_executor().spawn` 的后台任务里跑，**UI 线程不 await**。
+  失败分两类：宿主自身原因（未绑定连接）→ `Failed` 显示原因；驱动不支持 / 查询报错 →
+  按 DBeaver 口径静默成 `Loaded([])`（只记 `debug` 日志）。
+- 来源表身份 `ResultPanel::reference_source(cx)`：所有已注解列指向**同一张**来源表才认
+  （多表 join / 计算列 → `None`，直接落「无引用」）；`schema` 取限定名前半段；
+  可见列 = delegate 列 **减去** 面板隐藏列，并且只留来自该来源表的列。
+- 触发点：editor 的 `ResultRequest::SetRightTab(Reference)` 分派里追加
+  `begin_references_load`（面板置 `Loading` + 入队取数）——对应 DBeaver
+  「激活即刷新」，不做「读过了就不再读」的缓存。
+- 页面（`panel/tabs.rs::render_reference_tab`）四态：未读 / 读取中 / 失败原因 / 「无引用」/
+  有键时 = 只读键下拉（`DropdownButton` + 勾选式菜单，对齐 `SWT.READ_ONLY` 的 combo）
+  +「打开目标对象」（`IconName::Table`，无键时禁用）+ 选中键的列映射文本。
+- 「打开目标对象」：宿主注入端口 `EditorShared::attach_reveal_object`
+  （`RevealObjectPort = Rc<dyn Fn(engine::ObjectRef)>`，workbench 在装配期接到
+  `EditorHost::request_reveal`，与 Quick Open `⌥↵` / 跳转定义同一条通道；
+  未注入时按钮只发消息「宿主未接入导航定位」）。
+
+**验证**：
+- `references::tests`（7 例）：过滤三条件（非外键 / 无目标表 / 列不在可见列）；
+  大小写不一致仍收；渲染顺序稳定；空输入；`key_label` 两种形状；
+  `mapping_text` 两分支（有目标列 / 没目标列不编）；状态默认值 + 空文案。
+- `panel::tests`（3 例）：`references_state_selects_first_key_and_drops_a_stale_selection`
+  （回填默认第一条、长度不变保住用户选中、清单变空清掉）；
+  `reference_source_needs_one_source_table_and_drops_hidden_columns`；
+  `reference_tab_requests_metadata_and_renders_the_key_list`（切页签只入队一条
+  `LoadReferences` 且载荷正确；有键时下拉与「打开目标对象」都在元素树里）。
+- 门禁：check（result_panel / editor）0 error / 0 warning；result_panel **306**、
+  editor results 45、ui-guard 4。`rds-workbench` 仍被并行线阻断（`config_center.rs`
+  的 `Icon` / `IconName` 未导入、`workspace.rs` 的 `Shared::current_project` 缺失，
+  均与本批无关）；本批在 workbench 的装配期改动已复检到「不再报 lifecycle 处错误」。
+
+**已知缺口 / 有意偏离**：
+- **引用行数据**未做：DBeaver 在面板内嵌一整份 `ResultSetViewer` 跑
+  `navigateReference` / `navigateAssociation`；本仓按 `result-panel-references-plan.md`
+  的 `B′` 方案（生成外键条件 SQL → 编辑器新开一份结果集）留待下一步，
+  故本页目前只到「键 + 列映射」。
+- **入向引用**（其它表 → 本表）未做：要扫 schema 内其它表的约束（N 次往返），
+  与 DBeaver 的 `ARROW_LEFT_ALL` 那一类不对齐。
+- **catalog 传空串**：`list_constraints(conn_id, "", schema, table)` 依赖
+  `MetadataService::database_for` 的默认展开；多 catalog 驱动（PG 跨库）没有精确目录时
+  可能读不到——本仓结果集的列注解只带 `schema.表`，没有目录层。
+- **活动键不持久化**：DBeaver 把选中键写进虚拟实体属性 `ref-panel-associations`
+  跨会话恢复；本仓面板状态只在本次面板生命周期内有效（换结果集即回落第一条）。
+
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

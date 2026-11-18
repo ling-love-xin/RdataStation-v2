@@ -1456,6 +1456,26 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 
 ---
 
+### 2.68 「引用」页的接手要点（外键清单已接，引用行未接，2026-11-18）
+
+- 页面形状与 DBeaver 一致：**页内工具条没有动作**（`ReferencesPanel.contributeActions` 是空实现），
+  正文才是内容。别往该页工具条里加按钮——DBeaver 那边加不了。
+- 清单取数在宿主，不在面板：面板只交 `schema / table / visible_columns`
+  （`ResultRequest::LoadReferences`），宿主在后台任务里走
+  `MetadataService::list_constraints`。**不要在 render 里发起任何元数据查询**
+  （面板 render 是 `&App`，且 UI 线程不 await 元数据是硬约束）。
+- 收键规则是 DBeaver `:298` 那条「FK 的全部列 ⊆ 可见列」，实现放在纯函数
+  `references::keys_from_constraints`（列名忽略大小写）。改规则只改它 + 它的用例。
+- 「无引用」不是错误：驱动不支持外键 / 查询失败 → 静默成 `Loaded([])`（DBeaver 只 `log.debug`）；
+  只有**宿主自身原因**（未绑定连接）才落 `Failed` 并显示原因。
+- 下一步（引用行）按 `result-panel-references-plan.md` 的 `B′`：
+  用选中行值生成「外键条件 SQL」，交给编辑器**新开一份结果集**，
+  不要尝试在面板内嵌第二份 grid/store（那是 `B`，会打破「一份结果集 = 一份 store/exec 上下文」）。
+- 入向引用（子表 → 本表）没做：要扫 schema 内其它表的约束（N 次往返，ER 那边有 120 表上限可参考）。
+- `catalog` 目前传空串（结果集列注解只有 `schema.表`，没有目录层）；多 catalog 驱动读不到时先查这里，
+  别先怀疑约束过滤。
+
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。
