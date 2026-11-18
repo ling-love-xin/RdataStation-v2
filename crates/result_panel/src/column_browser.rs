@@ -85,7 +85,12 @@ impl ColumnBrowserDelegate {
     }
 
     /// 面板 `sync` 灌入列投影（每次换结果集 / 刷新都会重灌；`set_data` 后清
-    /// `last_selected`，避免旧结果集的列序号被 `confirm` 误用）
+    /// `last_selected`，避免旧结果集的列序号被 `confirm` 误用）。
+    ///
+    /// **投影没变就什么都不做**：对齐 DBeaver `MetaDataPanel.refresh:184-196`
+    /// （属性清单逐项相同就直接 `return`，注释原文 "No changes"）。本仓这条短路还有
+    /// 实际收益——`set_data` 会清掉 `last_selected` 与多选集合，而 `sync` 在「刷新到同一份
+    /// 结果」这种无实质变化时也会被调用，不短路会把用户的多选和 List 滚动位置一起打掉。
     pub fn set_data(
         &mut self,
         columns: Vec<String>,
@@ -93,6 +98,13 @@ impl ColumnBrowserDelegate {
         hidden_columns: Vec<bool>,
         comments: Vec<Option<String>>,
     ) {
+        let unchanged = self.columns == columns
+            && self.type_names == type_names
+            && self.hidden_columns == hidden_columns
+            && self.comments == comments;
+        if unchanged {
+            return;
+        }
         self.columns = columns;
         self.type_names = type_names;
         self.hidden_columns = hidden_columns;

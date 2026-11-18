@@ -1394,6 +1394,70 @@ fn browser_comment_skips_empty_and_blank() {
 
 /// 【列注释】渲染路径：有注释的列在列名下画出第二行，没有注释的列不画。
 /// 数据经 delegate 投影直灌（`sync` 的接线由 toolbar 既有用例覆盖，这里只验渲染）。
+/// 【列浏览器 · MetaDataPanel.refresh 短路】投影完全相同就什么都不做：
+/// 对齐 `MetaDataPanel.refresh:184-196`（属性清单逐项相同 → 直接 return，注释 "No changes"）。
+/// 本仓 `set_data` 会清 `last_selected` 与多选集合，若「刷新到同一份结果」也照清，
+/// 用户的多选会被无意义地打掉。
+#[gpui_kit::test]
+fn identical_column_projection_keeps_the_browser_selection(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    let cols = || vec!["id".to_string(), "amount".to_string()];
+    let types = || vec!["INTEGER".to_string(), "DECIMAL".to_string()];
+    let hidden = || vec![false, false];
+    let comments = || vec![Some("主键".to_string()), None];
+
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            let list = p.browser_list.clone();
+            list.update(cx, |list, cx| {
+                list.delegate_mut()
+                    .set_data(cols(), types(), hidden(), comments());
+                list.delegate_mut().set_selected_columns(vec![0, 1]);
+                assert_eq!(list.delegate().selected_columns(), &[0, 1]);
+                // 同一份投影再来一次 → 选集保留（不清空）
+                list.delegate_mut()
+                    .set_data(cols(), types(), hidden(), comments());
+                assert_eq!(
+                    list.delegate().selected_columns(),
+                    &[0, 1],
+                    "投影没变时不该把用户的多选打掉"
+                );
+                // 换成另一份投影（列数变了）→ 旧序号失效，选集清空
+                list.delegate_mut().set_data(
+                    vec!["id".to_string()],
+                    vec!["INTEGER".to_string()],
+                    vec![false],
+                    vec![None],
+                );
+                assert!(
+                    list.delegate().selected_columns().is_empty(),
+                    "换结果集后旧列序号必须失效"
+                );
+                cx.notify();
+            });
+        });
+    });
+}
+
+/// 【列浏览器 · 页内工具条】DBeaver `MetaDataPanel.contributeActions:204-215` 只贡献
+/// 一条「按结果集生成 DDL」（`generate.ddl.by.resultSet`，恒可用）；本仓列浏览器页
+/// 工具条常驻的第一颗动作就是它——这里钉住入口存在。
+#[gpui_kit::test]
+fn column_browser_toolbar_offers_generate_ddl(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-generate-ddl").is_some(),
+        "列浏览器页工具条应常驻「生成 DDL」入口"
+    );
+}
+
 #[gpui_kit::test]
 fn column_browser_draws_the_comment_line_below_the_name(cx: &mut gpui_kit::TestAppContext) {
     use gpui_kit::test::TestWindowExt as _;
