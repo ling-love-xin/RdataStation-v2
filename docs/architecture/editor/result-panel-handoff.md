@@ -1476,6 +1476,27 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   别先怀疑约束过滤。
 
 
+### 2.70 列浏览器「复制列名」与嵌套列 N/A 的接手要点（2026-11-18）
+
+- 「复制列名」= `ContextAction::CopyColumnNames`（**无载荷**）+ 清单侧纯函数
+  `column_browser::column_names_to_copy(columns, selected, clicked)`。选哪些列属于
+  清单的多选集合（`ColumnBrowserDelegate::selected_set`），菜单纯函数不该知道它——
+  别把列名塞进 `ContextAction`（那会让菜单项依赖界面状态，且 `ContextAction` 被
+  `grid/tests.rs` 按 eq 断言）。
+- 拷贝口径：右键列**在集合里**→ 按数据列序整集合逐行拼（`\n`）；否则只拷它自己。
+  越界下标静默跳过；结果空串**不写剪贴板**（对齐 DBeaver `MetaDataPanel` 的
+  `text.isEmpty()` 早退）。集合里的下标是**数据列下标**，不是显示位次。
+- 入口只有列浏览器清单。网格右键 / 列头菜单的 match 里它是忽略分支——网格右键没有
+  多选集合概念，硬塞会变成「拷哪几列说不清」。
+- **嵌套列不做**：DBeaver 清单是树（`getNestedBindings()` + `expandToLevel(2)`），
+  本仓 `ColumnAnnotation`（`workbench_shell/src/model.rs:327`）与驱动 `ColumnDetail`
+  （`shared/src/meta.rs:46`）都**没有 children 字段**。要做树得先改元数据模型（让驱动报
+  `STRUCT` 子字段），面板层补不出来——不要用「按名字前缀猜层级」之类的假实现。
+- 下一处可见缺口：清单行不显示**列注释**（DBeaver 的额外列 `Description`，
+  `addExtraColumns` `:292-302`）。注释其实已经在 `ColumnBrowserDelegate::comments`
+  里（现在只参与搜索匹配），要显示它只需在 `render_item` 行尾加一格 + 记一条 §8.x。
+- 门禁基线：result_panel **310 passed**（本批 +1 例）。
+
 ### 2.69 「查看引用行」的接手要点（B′ 已接，多行与跨 schema 未接，2026-11-18）
 
 - 查询由**面板**算（`ResultPanel::reference_rows_sql` → `references::reference_rows_sql`），

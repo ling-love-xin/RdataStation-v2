@@ -4340,6 +4340,71 @@ editor results 45、ui-guard 4、check 0-0。提交 `e1b797db`。
 - 不做「执行前预览」：DBeaver 也是选中即查；本仓的差别是新结果集**换了标签**，用户能看见 SQL
   （标签悬停即原始 SQL）。
 
+### 8.81 列浏览器清单「复制列名」+ 嵌套列判定（对齐 DBeaver MetaDataPanel，2026-11-18）
+
+**取证**（`plugins/org.jkiss.dbeaver.ui.editors.data/.../controls/resultset/panel/metadata/MetaDataPanel.java`，
+文案在同插件 `internal/ResultSetMessages.properties`）：
+
+- 清单右键 `fillCustomActions`（`:234-252`）：先 `UIWidgets.fillDefaultTreeContextMenu`，
+  再**只追加一项** `meta_data_panel_action_copy_column_text`（`:236`）；文案
+  `:457 = Copy Column Names`。
+- 该动作 `run()`：遍历 `getItemsViewer().getStructuredSelection().toArray()`，逐项若是
+  `DBDAttributeBinding` 就取 `getName()` 拼接，**项之间 `"\n"`**；`text.isEmpty()` 时
+  直接 `return`（不写剪贴板）；否则 `UIUtils.setClipboardContents(display, TextTransfer, text)`。
+- 即：拷的是**清单当前的结构化选中项**（多选才有多行），不是整表全部列。
+
+**本仓落点**：
+
+- `grid/menu.rs`：`ContextAction` 新增 `CopyColumnNames`（**无载荷**——选哪些列是清单自己的
+  多选集合，菜单纯函数不该知道界面状态）；`column_browser_menu_items` 首项摆「复制列名」
+  （`:396` 起），网格右键 / 列头菜单的消费 match 末尾补忽略分支（该动作只属于清单入口，
+  网格右键没有多选集合概念）。
+- `column_browser.rs`：纯函数 `column_names_to_copy(columns, selected, clicked)` —— 右键列
+  在选中集合里 → 按数据列序整集合逐行拼（`"\n"` 分隔）；否则只拷它自己。集合内越界下标
+  跳过（搜索词把行过滤掉后旧下标可能失效）；结果空串则点击直接 return，不写剪贴板
+  （对齐 DBeaver `text.isEmpty()` 早退）。`render_item` 渲染期算好文本（闭包活到比本帧长，
+  只有此刻拿得到多选集合与列名）。
+- 验证：`grid::tests::column_browser_menu_is_local_column_subset`（首项文案 + `ContextAction`、
+  列头菜单不含该项）、`panel::tests::copy_column_names_joins_the_selection_with_newlines`
+  （单选 / 多选 / 部分越界 / 全越界 / 空列清单五路）。门禁：result_panel **310**、
+  check（editor / workbench）Finished 0 warning、ui-guard 4。
+
+**嵌套列：本仓 N/A（不做，不造假）**
+
+DBeaver 的清单是**树**：`TreeContentProvider.getChildren` 返回
+`DBDAttributeBinding.getNestedBindings()`（`:221-230`），加载完成后
+`itemsViewer.expandToLevel(2)`（`:315`）；`getObjectFont`（`:284-289`）只对
+「无父且不可见」的顶层列用斜体，子节点永不斜体。
+
+本仓不可表达，理由是**数据结构本身没有层级**：
+
+- `crates/workbench_shell/src/model.rs:327` `ColumnAnnotation` 只有
+  `source_table / source_column / comment / data_type / nullable / default_value`，
+  没有 children 字段；
+- 驱动侧 `crates/shared/src/meta.rs:46` `ColumnDetail` 同样扁平（`name / data_type /
+  nullable / is_primary_key / is_foreign_key / references`）。
+
+要造树得先让驱动把 `STRUCT` / 嵌套对象的子字段报上来（JDBC `DatabaseMetaData` 不提供，
+DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于**元数据模型改造**，
+不是面板层能补的活。因此本仓清单恒为平表：一条列注解 = 一行，无展开箭头、无二级缩进。
+
+**同批取证到的其余差异（事实陈述，未在本批实现）**：
+
+- **额外列 `Description`**（`addExtraColumns` `:292-302`，值 = `entityAttribute.getDescription()`
+  即列注释）：本仓清单行只显示「列名 + 类型名 + 眼睛」，注释仅参与搜索匹配
+  （`filter_browser_columns` 的 `comments` 参数），不显示出来。
+- **选中双向同步**（`:104-134`）：清单选中 → `presentation.setCurrentAttribute`（且要求
+  `isAttributeVisible`）；presentation 选中 → 清单 `setSelection`，用 `updateSelection` 布尔防回环。
+  本仓已有 `SelectColumn` / `ColumnSelectionChanged` 双向通道 + 面板镜像，口径一致。
+- **过滤**（`refresh(force)` `:173-201`，忽略大小写包含匹配；ESC 清空 `:91-98`；
+  `curAttributes` 逐元素引用比较无变化直接 return）：本仓 `filter_browser_columns` 同口径
+  （额外把类型名与注释也纳入匹配），ESC 清空由 `List` 内置搜索框提供。
+- **「生成 DDL」**（`contributeActions` `:203-215` 贡献 `generate.ddl.by.resultSet`）：本仓
+  第 18 批已落地（§8.77 / §2.67），口径一致。
+
+**已知缺口**：清单不显示列注释（DBeaver 的第二列）；树形嵌套列 N/A（见上）；
+清单右键不提供「折叠 / 展开全部」（无树即无此动作）。
+
 
 ## 8. 协作纪律
 
