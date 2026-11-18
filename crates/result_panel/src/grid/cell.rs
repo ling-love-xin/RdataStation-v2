@@ -176,6 +176,27 @@ pub(crate) fn blob_summary(text: &str) -> Option<String> {
         None
     }
 }
+/// 行号槽这一格要不要铺表头底色（纯判据，便于单测）。
+///
+/// DBeaver 的行头格逐行取 `getHeaderBackground(element, selected)`
+/// （`GridRowRenderer.java:55-70`）：选中行取选中色、其余取表头色。本仓的整行选中色
+/// 已经铺在**行容器**上（`table_impl.rs::render_tr`，半透明 `table_active`），
+/// 所以选中行时行号格必须留空、让行容器的色透上来；再铺一层同色会叠成两倍透明度，
+/// 看上去那一小格比数据格深一档。本地新增 / 复制行有身份色，也不叠加表头色。
+pub(crate) fn row_number_paints_head(is_local: bool, selected: bool) -> bool {
+    !is_local && !selected
+}
+
+impl ResultGridDelegate {
+    /// 第 `row_ix` 个可见行的行号槽要不要铺表头底色（把行身份与整行选中读进纯判据）。
+    pub fn row_number_paints_head(&self, row_ix: usize) -> bool {
+        row_number_paints_head(
+            self.row_is_local(row_ix),
+            self.selected_view_row() == Some(row_ix),
+        )
+    }
+}
+
 /// 单元格渲染（2026-10-29 目录拆分：由 `TableDelegate::render_td` 薄转发至此，
 /// Rust trait impl 不可分块）
 pub(crate) fn render_td(
@@ -242,6 +263,13 @@ pub(crate) fn render_td(
         let is_local = delegate.row_is_local(row_ix);
         let is_deleted = delegate.is_deleted_row(row_ix);
         let local_bg = is_local.then(|| product_tokens::get(cx).result_local_row_background(theme));
+        // 【行号槽底色】DBeaver 的每个行头格都铺表头底色（`GridRowRenderer.java:55-70`
+        // 逐行 `getHeaderBackground(element, selected)`：选中→选中色，否则表头色），
+        // 于是行号列读起来是一条独立的浅色竖条。这里同口径，但**选中行不铺**：
+        // 整行底色（`render_tr` 的 `table_active`，半透明）已经在行容器上，行号格再铺
+        // 一层同色会叠成两倍透明度、比数据格深一档（判据见 `row_number_paints_head`）。
+        let paints_head = delegate.row_number_paints_head(row_ix);
+        let head_bg = theme.tokens.table_head;
         return div()
             // 内距 6px（DBeaver `GridCellRenderer.LEFT/RIGHT_MARGIN = 6`）；
             // 列的组件层内距已置零（`table_impl::cell_paddings`），这里才是唯一一层
@@ -254,6 +282,7 @@ pub(crate) fn render_td(
             // （DBeaver 的竖线只画在列与列之间，`LightGrid.java:2426-2437` 跳过首个边界）。
             // 它与数据列之间的那条线由右侧数据格的 `border_l` 画。
             .when_some(local_bg, |cell, bg| cell.bg(bg))
+            .when(paints_head, |cell| cell.bg(head_bg))
             .when(is_deleted, |cell| cell.line_through())
             // 用例按它量行高（`.id()` 不登记坐标）：这是「表格密度」那条口径的回归哨兵
             .debug_selector(move || format!("editor-result-rowno-{row_ix}"))

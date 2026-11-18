@@ -3349,6 +3349,35 @@ fn selected_row_paints_a_whole_row_band(cx: &mut gpui_kit::TestAppContext) {
     );
 }
 
+/// 【行号槽底色 2026-11-18】DBeaver 每个行头格都铺表头底色
+/// （`GridRowRenderer.java:55-70` 逐行 `getHeaderBackground(element, selected)`），
+/// 行号列因此读起来是一条独立的浅色竖条。本仓同口径，但「选中行不铺」——
+/// 整行选中色是半透明的、已经铺在行容器上，行号格再铺一层同色会叠成两倍透明度。
+///
+/// 判据抽成纯函数 + delegate 包装（组合由它们定，渲染只照着做），这里锁组合，
+/// 并且走 delegate 真状态（`set_selected_row` 之后同一行必须翻成「不铺」）。
+/// headless 读不到颜色，所以不锁色值——色走 `theme.tokens.table_head`（主题单一来源）。
+#[test]
+fn row_number_gutter_paints_the_header_background() {
+    // 纯判据：未选中铺表头色；选中行留空（让整行色透上来）；本地行保留身份色
+    assert!(crate::grid::cell::row_number_paints_head(false, false));
+    assert!(!crate::grid::cell::row_number_paints_head(false, true));
+    assert!(!crate::grid::cell::row_number_paints_head(true, false));
+
+    // delegate 包装：同一行被整行选中后，判据翻成「不铺」
+    let mut delegate = grid_with(&[&["1", "a"], &["2", "b"]]);
+    assert!(delegate.row_number_paints_head(0), "未选中时应铺表头底色");
+    delegate.set_selected_row(Some(0));
+    assert!(
+        !delegate.row_number_paints_head(0),
+        "整行选中后行号格必须留空（否则半透明选中色叠两层、比数据格深）"
+    );
+    assert!(
+        delegate.row_number_paints_head(1),
+        "没被选中的另一行照旧铺表头底色"
+    );
+}
+
 /// 【注释表头 2026-11-08】注释开关开启时表头是**两行**（列名主行 + 注释小字），
 /// 但表头带高一直跟着组件的行高档走（XSmall = 26px，扣 padding 只剩 22px 内容高）：
 /// 两行挤 22px 的结果是各被 `overflow_hidden` 裁掉一半，主行读不出字。

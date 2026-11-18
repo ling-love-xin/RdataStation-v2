@@ -41,7 +41,7 @@
 
 ```powershell
 $env:RUST_MIN_STACK='268435456'; cd D:\RdataStation\RDS\RdataStation-v2
-cargo test -p rds-result-panel --lib    # 基线：265 passed / 0 failed（含 rendered_ui_elements_survive 防回退）
+cargo test -p rds-result-panel --lib    # 基线：266 passed / 0 failed（含 rendered_ui_elements_survive 防回退）
 cargo test -p rds-settings --lib        # 基线：35 passed / 0 failed
 cargo test -p rds-ui-guard              # 基线：4 passed / 0 failed（含 no_new_hardcoded_color_or_pixel）
 cargo test -p rds-workbench-shell --lib # 基线：14 passed / 0 failed
@@ -1009,6 +1009,29 @@ panel **264 passed** / guard **4**（基线 20）/ editor 测试目标 `--no-run
 **验证**：`cargo check -p rds-result-panel` 0 error / 0 warning；
 panel **265 passed** / guard **4**。
 
+### 2.46 表格打磨第七批：`#` 行号槽铺表头底色（选中行留空）
+
+全文见 `result-panel.md §8.56`，接手要点：
+
+- **DBeaver 行头格有底色**：`GridRowRenderer.java:55-70` 每行 `getHeaderBackground(element, selected)`
+  （选中→选中色，否则表头色）⇒ 行号列是一条独立竖条。本仓行号槽是自绘单元格
+  （`cell.rs::render_td` 的 `is_row_number` 分支，组件行头已 `.row_header(false)`）。
+- **选中行必须留空**：整行选中色铺在行容器上且是**半透明** `table_active`
+  （`clamp_alpha` 封顶 0.2），行号格再铺一层会双层叠加、比数据格深一档。
+  口径：未选中 → `theme.tokens.table_head`；整行选中 → 不铺（让整行色透上来）；
+  本地行 → 保留身份色。
+- **判据抽纯函数**：`row_number_paints_head(is_local, selected)` + delegate 包装
+  `ResultGridDelegate::row_number_paints_head(row_ix)`，渲染只照着做；
+  用例 `row_number_gutter_paints_the_header_background` 锁组合 + delegate 真状态。
+- **踩过的坑**：`debug_selector` 在 gpui-fast 的 `div` 上是**单一槽位**（`div.rs:910` 覆盖前值），
+  行号格已挂着 `editor-result-rowno-{row_ix}`（表格密度口径），所以**不能再挂第二个哨兵**
+  ——色值这层 headless 不锁，靠主题单一来源。
+- **未做**：获焦行加粗（`GridRowRenderer:96` 的 `boldFont`）；深色 `table.head`(#394248)
+  当整列底色是否偏重视目视结果，要调就调主题 token。
+
+**验证**：`cargo check -p rds-result-panel` 0 error / 0 warning；
+panel **266 passed** / guard **4**。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）
@@ -1025,7 +1048,7 @@ panel **265 passed** / guard **4**。
 
 ## 4. 接手指引（新会话建议顺序）
 
-1. 先重跑 §1.3 四条验证命令，确认基线（尤其 **265 passed / 0 failed**）落地。
+1. 先重跑 §1.3 四条验证命令，确认基线（尤其 **266 passed / 0 failed**）落地。
 2. 处理 §2.1 提交待办：先 `git status` / `git diff` 摘本线 hunk，与并行线协调后统一提交类型样式渲染消费（settings 三文件 + grid.rs + host.rs + workbench view.rs）。
 3. 知悉 §2.2 外线阻塞（settings 契约测试）与 §1.3 契约测试既有失败，不替并行线补。
 4. 按 §2.4 优先级推进功能遗留（P0（注释与文档漂移）/ P1（分页·行号跳转·列宽落盘）/ P2（hex 翻页·图片预览·列浏览器多选）已交付；剩余见 §2.4 表，开工前先按模块惯例说理解、列方案）。

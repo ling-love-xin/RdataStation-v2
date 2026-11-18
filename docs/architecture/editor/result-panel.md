@@ -3116,6 +3116,66 @@ panicked at panel/tests.rs:1091:
   返回值、`lifecycle.rs` 的 `let _ = (from, to)` 消解未用参数），**没有第三处句柄丢弃**；
   两个真订阅（网格 / 筛选）现在都入库。
 
+### 8.56 表格打磨第七批：`#` 行号槽铺表头底色（选中行留空）
+
+#### 8.56.1 取证：DBeaver 的行头格是有底色的
+
+| 事实 | 出处 |
+| --- | --- |
+| 每个行头格逐行取底：`getHeaderBackground(element, selected)` —— 选中行取选中色，其余取表头色；并画右线 + 底线 | `GridRowRenderer.java:55-70` |
+| 行头文本取 `getHeaderForeground`；**获焦行**才换 `boldFont` | `:92`、`:96` |
+| 行头前后内距 L/R = 4 | `:38` |
+
+本仓的行号槽是**自有单元格**（`cell.rs::render_td` 的 `is_row_number` 分支，不是组件的
+`render_row_header`——`grid/status.rs` 已 `.row_header(false)`），所以底色要画在这里。
+
+#### 8.56.2 为什么不连选中行一起铺
+
+整行选中色（§8.54）铺在**行容器**上，而 `table_active` 是**半透明** token
+（theme json `#BC534033` / dark `#E8846F33`，且被 `clamp_alpha` 封顶 0.2）。
+行号格若再铺一层同色，两层 alpha 相乘 ⇒ 那一小格比数据格明显深一档，看着像一块
+「补丁」。所以口径定为：
+
+| 行状态 | 行号槽 |
+| --- | --- |
+| 未选中 | 铺 `theme.tokens.table_head`（对齐 DBeaver 的行头条） |
+| 整行选中 | **不铺**，让行容器的整行色直接透上来（与左侧数据格同一档） |
+| 本地新增 / 复制行 | 保留 `result_local_row_background` 身份色（不叠表头色） |
+
+#### 8.56.3 落法
+
+| 项 | 落点 |
+| --- | --- |
+| 纯判据 | `grid/cell.rs` 新增 `row_number_paints_head(is_local, selected) -> bool` |
+| delegate 包装 | 同文件 `impl ResultGridDelegate::row_number_paints_head(row_ix)`（把行身份与整行选中读成 bool），渲染只照着做 |
+| 渲染接线 | `render_td` 行号槽分支：`.when(paints_head, |cell| cell.bg(theme.tokens.table_head))`；本地行底色分支保持在前（身份色优先） |
+
+#### 8.56.4 测试与一处踩坑
+
+新增 `grid/tests.rs::row_number_gutter_paints_the_header_background`：
+三种组合的纯判据断言，**外加 delegate 真状态**（`set_selected_row(Some(0))` 后该行翻成
+「不铺」、另一行照旧铺），覆盖判据 + 读取两段。
+
+踩坑：最初想给行号格挂第二个 `debug_selector("editor-result-rowno-head")` 来断言接线，
+实测这条用例红——`debug_selector` 在 gpui-fast 的 `div` 上是**单一槽位**
+（`div.rs:910` `fn debug_selector(mut self, f)` 覆盖前值），而行号格原本已挂
+`editor-result-rowno-{row_ix}`（表格密度口径的回归哨兵，不能删）。所以「颜色有没有铺上」
+这一层 headless 不锁，只锁判据与状态；色值本身来自主题单一来源
+`theme.tokens.table_head`（零裸色值红线内）。
+
+#### 8.56.5 验证
+
+- `cargo check -p rds-result-panel` = 0 error / 0 warning。
+- `cargo test -p rds-result-panel --lib` = **266 passed / 0 failed**（265 + 本批新增 1）。
+- `cargo test -p rds-ui-guard`（不带 `--lib`）= **4 passed**（基线仍 20）。
+
+#### 8.56.6 未做 / 待目视
+
+- 获焦行加粗（`GridRowRenderer.java:96` 的 `boldFont`）未做：行号槽是自绘单元格，
+  加粗要选字重（`FontWeight`），且与「整行选中」是两套语义，先不动。
+- 深色主题下 `table.head`（`#394248`）当整列底色是否偏重，需真窗口目视；若嫌重，
+  改的是主题 token 而不是这里的分支。
+
 
 ## 8. 协作纪律
 
