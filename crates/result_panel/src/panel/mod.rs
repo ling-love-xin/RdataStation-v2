@@ -37,4 +37,4 @@ pub(crate) use sidebars::{
     sidebar_width_anim,
 };
 #[cfg(test)]
-pub(crate) use tabs::right_tab_from_index;
+pub(crate) use events::right_tab_from_index;

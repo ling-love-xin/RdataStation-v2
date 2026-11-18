@@ -1234,6 +1234,29 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 
 ---
 
+### 2.57 右栏页签条列出全部六页、点即切页（2026-11-18）
+
+全文见 `result-panel.md §8.68`。接手要点：
+
+- DBeaver 右栏是**一个** `CTabFolder panelFolder`（`ResultSetViewer.java:1430-1478`），
+  六页都是常驻页签（`addPanel` 里 `new CTabItem(panelFolder, SWT.CLOSE)`），点页签 =
+  `setActivePanel`。本仓 2026-10-28 曾刻意收窄成「只显示当前页、`on_click` 空实现」，
+  那等于摆了一颗死控件；本批改回六页常驻 + 点即入队 `SetRightTab`。
+- 选中态用 `right_tab_index(当前页)`（0..5 真跟随），溢出用 `TabBar::menu(true)`
+  （放不下时给一颗溢出菜单钮，避免被裁的页签只能靠滚轮找）。
+- **顺序单一来源**：`events::right_tabs()` + `right_tab_index` + `right_tab_from_index`
+  （越界兜底默认页）；`tabs.rs` 原 `#[cfg(test)]` 的 match 已删，视图菜单 / 右缘竖条 /
+  页签条读同一份。新增页或调序只改 `right_tabs()` 一处。
+- 页签行（24px `h_flex`）带 `debug_selector("editor-result-right-tabs")`：`TabBar`
+  组件自身没有可查 id，按这一行的真实像素做 `simulate_click` 才点得到页签。
+- **切页是宿主动作**：面板只 `queue.request`，断言要看**队列**（`panel.read(app).queue.drain()`）
+  而不是面板的 `right_tab`（宿主 `dispatch` 才会调 `set_right_tab`）。
+- **仍在册**：kit `TabBar` 无逐页关闭通道，故 DBeaver 的 `SWT.CLOSE` 由「行尾 × → 回默认页」
+  近似（× 只退页，不收起右栏）。
+- **验证**：panel **280 passed** / editor `--lib results` 45 / guard 4 / check 0-0。
+
+---
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。

@@ -22,7 +22,9 @@ use gpui_kit::*;
 // 【B5】事实帧只读句柄随网格投影进 delegate（列式统计 / 原生数值排序交互派生时读取）
 
 use super::data::ResultPanel;
-use super::events::{right_tab_icon, right_tab_label};
+use super::events::{
+    right_tab_from_index, right_tab_icon, right_tab_index, right_tab_label, right_tabs,
+};
 use super::tabs::kv_row;
 use crate::ports::{Presentation, ResultRequest, RightTab};
 use crate::ui;
@@ -468,20 +470,34 @@ impl ResultPanel {
     pub(crate) fn render_right_sidebar(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let show = self.show_value_sidebar;
-        // 【2026-10-28 微调】横 tab 栏**只显示当前点击的页签**（其他页签不显示）：
-        // 页签切换靠右缘竖条图标（render_right_edge_bar），横条只当「当前页签标题 +
-        // 关闭钮」使用（DBeaver 侧栏收起后只留边缘图标，展开时标题区极简）。
-        let active_tab = (right_tab_icon(self.right_tab), right_tab_label(self.right_tab));
-        let children: Vec<Tab> = std::iter::once(active_tab)
-            .map(|(icon, label)| Tab::new().icon(icon).label(SharedString::from(label)))
+        // 【2026-11-18 对齐 CTabFolder】横 tab 栏**列出全部六页**，点页签即切页：
+        // DBeaver 的右栏是**一个**页签夹 `CTabFolder panelFolder`（`ResultSetViewer.java:1430-1478`），
+        // 六页都作为页签常驻在其中（`addPanel` 里 `new CTabItem(panelFolder, SWT.CLOSE)`），
+        // 点页签走 `setActivePanel`；顺序即 `availablePanels` 的注册顺序。
+        // 此前这里是「只显示当前页签」的极简做法，横向条只当标题用、`on_click` 是空实现
+        // （点了没反应），与那边「页签可点」差着一条交互。顺序与索引映射取
+        // `events::right_tabs` 单一来源（视图菜单 / 右缘竖条共用同一份）。
+        let tabs = right_tabs();
+        let children: Vec<Tab> = tabs
+            .into_iter()
+            .map(|tab| {
+                Tab::new()
+                    .icon(right_tab_icon(tab))
+                    .label(SharedString::from(right_tab_label(tab)))
+            })
             .collect();
+        let tab_queue = self.queue.clone();
         let tab_bar = TabBar::new("editor-result-right-tabs")
             .segmented()
             .with_size(Size::Small)
-            .selected_index(0)
+            .selected_index(right_tab_index(self.right_tab))
             .children(children)
-            // 单 tab 只作标题展示；页签切换在右缘竖条（render_right_edge_bar）
-            .on_click(move |_index, _window, _app| {});
+            // 六页在窄右栏里可能放不下：`menu(true)` 在溢出时给一颗菜单钮（否则被裁掉的
+            // 页签没法点，只能横向滚轮——不显眼）
+            .menu(true)
+            .on_click(move |index, _window, app| {
+                tab_queue.request(ResultRequest::SetRightTab(right_tab_from_index(*index)), app);
+            });
         let content = match self.right_tab {
             RightTab::Browser => self.render_browser_tab(cx),
             RightTab::Value => self.render_value_tab(cx),
@@ -555,6 +571,9 @@ impl ResultPanel {
                     // 块布局时无限高的假象让它一直"没出问题"）
                     .flex_none()
                     .min_w_0()
+                    // 页签条的**外层行**才带调试选择器（`TabBar` 组件自身不挂 id；
+                    // 测试要按这一行的真实像素点坐标模拟点击）
+                    .debug_selector(|| "editor-result-right-tabs".to_string())
                     .child(div().flex_1().min_w_0().child(tab_bar))
                     .children(close),
             )

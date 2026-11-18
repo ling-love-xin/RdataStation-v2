@@ -1087,18 +1087,9 @@ pub(crate) fn arrange_groups(
 /// 【右栏】页签下标 → 枚举（TabBar 回调用；与 `RightTab` 定义顺序一致——
 /// Browser=0 / Value=1 / Stats=2 / Group=3 / Reference=4 / ExecSql=5，
 /// 对齐 DBeaver 右侧页签顺序）
-/// 【2026-10-28 微调】生产横 tab 栏只显激活页签后，索引映射仅供测试用
-#[cfg(test)]
-pub(crate) fn right_tab_from_index(index: usize) -> RightTab {
-    match index {
-        1 => RightTab::Value,
-        2 => RightTab::Stats,
-        3 => RightTab::Group,
-        4 => RightTab::Reference,
-        5 => RightTab::ExecSql,
-        _ => RightTab::Browser,
-    }
-}
+///
+/// 【2026-11-18】顺序与映射已收成单一来源 `events::right_tabs`（页签条 / 视图菜单 /
+/// 竖条共用），本文件不再各写一份 match。
 
 /// 【右栏】键值行（计算页 / 列浏览器明细共用）：左标签右值，值超长截断防挤
 pub(crate) fn kv_row(label: &str, value: &str, cx: &App) -> AnyElement {

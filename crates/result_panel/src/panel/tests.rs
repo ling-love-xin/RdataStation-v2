@@ -324,14 +324,26 @@ fn browser_filter_no_match_returns_empty() {
     assert!(filter_browser_columns(&n, &t, &c, "zzz").is_empty());
 }
 
-/// 页签下标 → 枚举：0=列浏览器（默认）/ 1=值详情 / 2=计算 / 3=分组，越界回落默认页
+/// 页签顺序 / 下标映射（`events::right_tabs` 单一来源）：
+/// 0=列浏览器（默认）/ 1=值详情 / 2=计算 / 3=分组 / 4=引用 / 5=执行SQL，越界回落默认页；
+/// 反查（枚举 → 下标）与之互逆，页签条 `selected_index` 与点击回调用的是同一份顺序。
 #[test]
-fn right_tab_index_maps_to_four_tabs() {
+fn right_tab_index_maps_to_the_six_panel_tabs() {
+    use super::events::{right_tab_index, right_tabs};
+
     assert_eq!(right_tab_from_index(0), RightTab::Browser);
     assert_eq!(right_tab_from_index(1), RightTab::Value);
     assert_eq!(right_tab_from_index(2), RightTab::Stats);
     assert_eq!(right_tab_from_index(3), RightTab::Group);
+    assert_eq!(right_tab_from_index(4), RightTab::Reference);
+    assert_eq!(right_tab_from_index(5), RightTab::ExecSql);
     assert_eq!(right_tab_from_index(99), RightTab::Browser);
+
+    // 互逆：每个页签既是自己的下标对应的枚举，下标也唯一
+    for (index, tab) in right_tabs().into_iter().enumerate() {
+        assert_eq!(right_tab_from_index(index), tab);
+        assert_eq!(right_tab_index(tab), index);
+    }
 }
 
 /// 【R2 计算页】单项取值：口径决定 Min/Max 的比较方式，Avg/Sum 只在数值口径出值，
@@ -1323,7 +1335,8 @@ fn left_bar_puts_presentation_group_on_top_and_record_mode_at_the_bottom(
     use gpui_kit::{ElementId, SharedString};
 
     cx.update(gpui_kit::init);
-    let (panel, cx) = panel_harness(cx);
+    // 这一条只看竖条内元素的相对高低，不用面板实体
+    let (_panel, cx) = panel_harness(cx);
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
     let top_of = |id: &str, cx: &mut gpui_kit::VisualTestContext| -> Option<f32> {
@@ -1763,6 +1776,47 @@ fn right_panel_view_menu_lists_pages_then_the_two_toggles(cx: &mut gpui_kit::Tes
     }
 }
 
+/// 【2026-11-18 侧栏结构对齐】右栏页签条**列出全部六页**且点页签即切页：
+/// DBeaver 的右栏是一个 `CTabFolder panelFolder`（`ResultSetViewer.java:1430-1478`），
+/// 六页都作为页签常驻其中（`addPanel` 里 `new CTabItem(panelFolder, SWT.CLOSE)`），
+/// 点页签走 `setActivePanel`。此前本仓横条只显示当前页、`on_click` 是空实现（点了没反应）。
+///
+/// 断言走**真实像素点击**：把当前页切到最后一个（执行SQL），再点页签行最左侧，
+/// 必须切回第一个（列浏览器）——既证明六个页签真的排在这一行里，也证明点击真接了线。
+#[gpui_kit::test]
+fn right_panel_tab_strip_lists_all_panels_and_click_switches(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 当前页 = 执行SQL（最后一个页签）
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_right_tab(RightTab::ExecSql, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(
+        cx.update(|_, app| panel.read(app).right_tab),
+        RightTab::ExecSql,
+        "先把当前页切到执行SQL"
+    );
+
+    let bar = cx
+        .debug_bounds("editor-result-right-tabs")
+        .expect("页签行应带调试选择器才量得到");
+    // 页签行最左一格一定是第一个页签（列浏览器）：点它应把「切到列浏览器」入队
+    // （切页是宿主动作：面板只 `queue.request`，由宿主 dispatch 调 `set_right_tab`，
+    // 所以这里断言队列，而不是面板状态）
+    let point = gpui_kit::point(bar.origin.x + px(24.), bar.origin.y + bar.size.height / 2.);
+    cx.simulate_click(point, gpui_kit::Modifiers::default());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let queued = cx.update(|_, app| panel.read(app).queue.drain());
+    assert!(
+        queued
+            .iter()
+            .any(|request| matches!(request, crate::ports::ResultRequest::SetRightTab(RightTab::Browser))),
+        "点第一个页签应入队「切到列浏览器」（点空白 / 死回调都会让队列为空）：{queued:?}，页签行 {bar:?}"
+    );
+}
+
+/// 【状态栏翻页对齐】DBeaver 底部动作条 `toolbar:…resultset.status.navCmds`
 /// （`plugin.xml:1470-1512`）的行导航是四颗：`row.first` → `row.previous` → `row.next` →
 /// `row.last`，其后才是 `fetch.page` / `fetch.all`。本仓此前只有三颗（缺 `row.next`，
 /// 且「末页」被摆到取数钮之后），本批补齐并归位。

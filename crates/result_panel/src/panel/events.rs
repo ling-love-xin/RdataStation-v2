@@ -1177,9 +1177,13 @@ pub(crate) enum PanelViewItem {
     LayoutToggle,
 }
 
-/// 「视图菜单」条目清单（顺序照 `fillPanelsMenu`）：六页 → 分隔 → 面板总开关 → 布局方向
-pub(crate) fn panel_view_menu_items() -> Vec<PanelViewItem> {
-    let mut items: Vec<PanelViewItem> = [
+/// 右栏六页的**规范顺序**（页签条的左右顺序 / 索引映射 / 视图菜单条目共用一份）。
+///
+/// 对齐 DBeaver 的 `CTabFolder panelFolder`（`ResultSetViewer.java:1430-1478`）：右栏是**一个**
+/// 页签夹，六页都作为页签常驻在里面（`addPanel` 里 `new CTabItem(panelFolder, SWT.CLOSE)`），
+/// 点页签即 `setActivePanel`；顺序就是 `availablePanels` 的注册顺序。
+pub(crate) fn right_tabs() -> [RightTab; 6] {
+    [
         RightTab::Browser,
         RightTab::Value,
         RightTab::Stats,
@@ -1187,9 +1191,27 @@ pub(crate) fn panel_view_menu_items() -> Vec<PanelViewItem> {
         RightTab::Reference,
         RightTab::ExecSql,
     ]
-    .into_iter()
-    .map(PanelViewItem::Page)
-    .collect();
+}
+
+/// 页签枚举 → 页签下标（`TabBar::selected_index` 用）
+pub(crate) fn right_tab_index(tab: RightTab) -> usize {
+    right_tabs()
+        .iter()
+        .position(|candidate| *candidate == tab)
+        .unwrap_or(0)
+}
+
+/// 页签下标 → 页签枚举（`TabBar::on_click` 回调用；越界兜底默认页）
+pub(crate) fn right_tab_from_index(index: usize) -> RightTab {
+    right_tabs().get(index).copied().unwrap_or(RightTab::Browser)
+}
+
+/// 「视图菜单」条目清单（顺序照 `fillPanelsMenu`）：六页 → 分隔 → 面板总开关 → 布局方向
+pub(crate) fn panel_view_menu_items() -> Vec<PanelViewItem> {
+    let mut items: Vec<PanelViewItem> = right_tabs()
+        .into_iter()
+        .map(PanelViewItem::Page)
+        .collect();
     items.push(PanelViewItem::Separator);
     items.push(PanelViewItem::PanelsToggle);
     items.push(PanelViewItem::LayoutToggle);

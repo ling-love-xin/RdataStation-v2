@@ -3682,6 +3682,47 @@ DBeaver 的右栏面板不是「只有页签」：`ResultSetViewer.addPanel()`�
 `cargo test -p rds-editor --lib results` = 45 passed；`cargo test -p rds-ui-guard` = 4 passed。
 
 
+### 8.68 右栏页签条列出全部六页、点即切页（2026-11-18）
+
+DBeaver 的右栏不是「一页换一页」，而是**一个**页签夹 `CTabFolder panelFolder`
+（`ResultSetViewer.java:1430-1478`）：`addPanel()` 给每一页 `new CTabItem(panelFolder, SWT.CLOSE)`
+（`:1330-1386`），六页都是常驻页签；点页签走 `setActivePanel()`，页签顺序 = `availablePanels`
+的注册顺序，右缘竖条的 CHECK 按钮与「视图菜单」的勾选项改的是同一份「哪一页是活动页」。
+
+本仓此前的做法是 **2026-10-28 的一次刻意收窄**：横向页签条只显示当前页（当标题用），
+切页全靠右缘竖条，`on_click` 写成空实现——于是页签条成了一颗**点了没反应**的控件，
+与 DBeaver「页签可点」差着一条真实交互。
+
+| 项 | 旧状 | 现口径 |
+| --- | --- | --- |
+| 页签数量 | 只渲染当前页 1 个 | 六页全渲染（`events::right_tabs()` 的规范顺序） |
+| 选中态 | `selected_index(0)` 常量 | `selected_index(right_tab_index(当前页))`（0..5 真实跟随） |
+| 点击 | `.on_click(\|_\| {})` 空实现 | `.on_click` → `ResultRequest::SetRightTab(right_tab_from_index(index))`（宿主 `dispatch` 调 `set_right_tab`） |
+| 溢出 | 不适用 | `.menu(true)`：页签放不下时给一颗溢出菜单钮（否则被裁掉的页签只能靠横向滚轮发现） |
+
+- 顺带把**顺序与索引映射收成单一来源**：新增 `events::right_tabs()`（六页规范顺序）、
+  `right_tab_index()`（枚举 → 下标）、`right_tab_from_index()`（下标 → 枚举，越界兜底默认页）；
+  原来 `tabs.rs` 里那份 `#[cfg(test)]` 的 match 删除，`panel_view_menu_items()` 也改为由
+  `right_tabs()` 生成。页签条 / 视图菜单 / 右缘竖条现在读同一份顺序。
+- 页签行（`h_flex` 24px）挂调试选择器 `editor-result-right-tabs`：`TabBar` 组件自身不暴露
+  可查 id（vendor 里 `tabs.group("tab-bar")` 无 id），测试要按这一行的真实像素点算点击坐标。
+- **仍在册的差异**：DBeaver 的页签是 `SWT.CLOSE`（每页可关闭 = 从面板夹里移除）；
+  kit `TabBar` 没有逐页签的关闭通道，本仓保留「页签行尾一颗 × → 退回默认页（列浏览器）」，
+  × 只退页、不收起右栏（右栏开合仍由竖条总开关 / 状态栏三态开关管）。
+
+**用例**
+- `panel::tests::right_tab_index_maps_to_the_six_panel_tabs`（改写原四页版）：六页映射 +
+  越界兜底 + `right_tabs()` 与两个映射函数**互逆**。
+- `panel::tests::right_panel_tab_strip_lists_all_panels_and_click_switches`（新增）：先把当前页
+  切到最后一个（执行SQL），再按页签行的真实像素 `simulate_click` 点第一格 → 断言
+  **队列里出现 `SetRightTab(Browser)`**（切页是宿主动作，面板只入队；点空白 / 死回调
+  都会让队列为空，这正是要守住的）。
+
+**验证**：`cargo check -p rds-result-panel -p rds-editor` 0 error / 0 warning；
+`cargo test -p rds-result-panel --lib` = **280 passed**；
+`cargo test -p rds-editor --lib results` = 45 passed；`cargo test -p rds-ui-guard` = 4 passed。
+
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
