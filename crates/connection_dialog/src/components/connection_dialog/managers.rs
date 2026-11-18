@@ -150,69 +150,6 @@ pub(crate) fn prepare_manager_domain(
     });
 }
 
-pub(crate) fn open_manager<H: 'static>(
-    kind: ManagerKind,
-    mgr: &Rc<RefCell<ManagerWorkspace>>,
-    entity: Entity<H>,
-    shared: Rc<dyn ConnectionDialogHost>,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let mgr = mgr.clone();
-    let shared_for_layer = shared.clone();
-    // 面板体只认「重绘宿主」回调：弹窗侧等价于 `entity.update(app, |_, cx| cx.notify())`。
-    let notify: Rc<dyn Fn(&mut App)> = {
-        let entity = entity.clone();
-        Rc::new(move |app: &mut App| {
-            entity.update(app, |_, cx| cx.notify());
-        })
-    };
-
-    // 当前项目根：引用计数与删除守卫需要它才能看到 P_/GP_ 连接（未打开项目时仅全局）。
-    let project_root = shared
-        .current_project()
-        .map(|p| p.root.to_string_lossy().to_string());
-    prepare_manager_domain(kind, &mgr, project_root, window, cx);
-
-    window.open_dialog(cx, move |dialog, window, cx| {
-        let title = match kind {
-            ManagerKind::Auth => tr("认证配置管理（AuthConfigManager）"),
-            ManagerKind::Network => tr("网络配置管理（NetworkConfigManager）"),
-            ManagerKind::Env => tr("环境管理（EnvironmentManager）"),
-        };
-        let body = manager_panel_ui(kind, &mgr, &notify, window, cx);
-        let shared_layer = shared_for_layer.clone();
-        dialog
-            .title(title)
-            .w(cx.theme().font_size * crate::ui::DIALOG_MANAGER_WIDTH)
-            .overlay(true)
-            .overlay_closable(true)
-            .keyboard(true)
-            .child(body)
-            .footer(
-                div().h_flex().justify_end().gap_2()
-                    .child(
-                        Button::new("mgr-close")
-                            .label(tr("关闭"))
-                            .on_click({
-                                let shared = shared_layer.clone();
-                                move |_, window, app| {
-                                    window.close_dialog(app);
-                                    // 宿主重绘：移除内层对话框
-                                    shared.dialog_redraw(app);
-                                }
-                            }),
-                    ),
-            )
-            .on_close({
-                let shared = shared_layer.clone();
-                move |_, _, app| shared.dialog_redraw(app)
-            })
-    });
-    // 宿主重绘：内层（管理器）对话框由宿主 render 渲染，打开后需重建元素树。
-    shared.dialog_redraw(cx);
-}
-
 /// 刷新管理器列表（block_on stores + 引用计数）。
 ///
 /// 引用范围：全局库全部连接 + 当前项目根（`mgr.project_root`；未打开项目时仅全局）。

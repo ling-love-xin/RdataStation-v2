@@ -60,7 +60,7 @@
 - **做**：数据源连接的**新增 / 编辑 / 删除 / 测试**、作用域路由、凭据与档案引用、DuckDB Secret 加速、运行时连接与隧道、暂存草稿、连接的组织元数据（标签 / 分组勾选）。
 - **不做**：数据源**导航树 / 分组管理 / 标签检索视图**（属 database-nav，见 `../database/database-nav-dev-plan.md`）；驱动**安装 / 插件**本体（平台；对话框只做「一键跳到插件管理」的入口）。
 - 模板**导入导出**已实装（暂存列表标题行 `导出 / 导入`，剪贴板 JSON、不含密码）。
-- **配置中心页（2026-11-18）**：认证 / 网络 / 环境三域已从「对话框内再开一层」升格为中央 Dock 单实例页（左域导航 + 右面包屑 + 内容）。列表与表单仍复用 `managers::manager_panel_ui` 同一份实现（页面不是对话框的克隆）；三处「管理」优先走 `show_config_center`，宿主没挂页时回落旧内层对话框，旧壳待三域形态收口后再删。
+- **配置中心页（2026-11-18）**：认证 / 网络 / 环境三域已从「对话框内再开一层」升格为中央 Dock 单实例页（左域导航 + 右面包屑 + 内容）。列表与表单仍复用 `managers::manager_panel_ui` 同一份实现（页面不是对话框的克隆）；三处「管理」直开该页，**旧内层对话框已删**（`open_manager` 与本模块的 `DIALOG_MANAGER_WIDTH` 一并退场）。
 - **域内两态**：进域先看列表（域名 + 条目数 + 名称搜索 + 「新建」），点「新建 / 编辑」进表单，`‹ 返回列表` 回去；列表态回显删除结果。**类型筛选暂未做**——列表接口只回名称与引用计数，要按类型筛得先让服务层回类型列。
 
 ## 3. 代码地图（要改什么去哪）
@@ -78,7 +78,7 @@
 | **网络配置（SSH / 代理 / SOCKS / SSL）**：模型 | `crates/connection/src/config.rs`（`SshConfig` / `SshAuth` / `ProxyConfig` / `SslConfig` / `ChainHop` / `ConnectionMethod`）+ `model.rs` |
 | **网络配置**：真实拨号与隧道 | `crates/connection/src/connector/`（`ssh.rs`：`establish_ssh_tunnel` 基于 **russh** 本地端口转发 + `SshTunnelConnector`〔废弃占位，防静默直连〕；`proxy.rs`：HTTP / SOCKS 代理；`tls.rs`：`SslConnector` / `wrap_tls_stream`；`mod.rs`：`Connector` trait / `Connection` / `DirectConnector` / `TunnelGuard`）+ `factory.rs`（按配置选连接器）+ `stream.rs`（隧道流）、`known_hosts.rs`（主机指纹校验）、`chain.rs`（`apply_network_method` 单跳 + `process_chain` 多跳 + `TunnelRegistry` 守卫表） |
 | **网络配置**：落库 | `crates/store/src/persistence/network_store.rs`（结构化字段组装 / 回填 + 凭据 AES 加密 / 脱敏 / 存量迁移） |
-| **网络配置**：UI 入口 | 「网络」页（引用下拉 + 「管理」）→ **优先打开配置中心页的网络代理域**（`show_config_center`）；宿主未挂页时回落 `connection_dialog/managers.rs` 的内层对话框。表单按类型展开字段（`helpers::{network_field_specs, network_config_values}`）；**内联协议链编辑器已撤下**（决策 #72，多跳走 `chain` 档案） |
+| **网络配置**：UI 入口 | 「网络」页（引用下拉 + 「管理」）→ 打开**配置中心页的网络代理域**（`show_config_center`）；表单按类型展开字段（`helpers::{network_field_specs, network_config_values}`）；**内联协议链编辑器已撤下**（决策 #72，多跳走 `chain` 档案） |
 | 表结构与迁移 | `crates/store/src/persistence/*`（`network_store` / `auth_store` / `driver_store` / `connection_org_store` / `metadata_identity`）+ `crates/store/migrations/{global,project_meta}/*` |
 | ID 规则与作用域判定 | `crates/store/src/persistence/id_prefix.rs` |
 
