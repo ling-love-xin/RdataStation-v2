@@ -3936,6 +3936,60 @@ WHERE <条件>` + `ORDER BY` 外提 + `dropped_limit` 回报），只差条件�
 ⑤ 全部显示后每列都可见。
 `cargo test -p rds-editor --lib results` = 45 passed；`cargo test -p rds-ui-guard` = 4 passed；
 `cargo check -p rds-result-panel -p rds-editor` = 0 error / 0 warning。
+### 8.73 列序成为视图列序的权威：程序化移动 / 按列名排序 / 重置回数据序（2026-11-18）
+
+**取证**（DBeaver `FilterSettingsDialog.java:276-325`，列集工具条）：
+- `:278-293` `moveSelectedItems(boolean moveToEnd, boolean down)` —— 四颗移动钮
+  （移顶 / 上移 / 下移 / 移底）作用于**当前选中项**，语义是「把选中项搬到目标席位」，
+  不是交换；四颗按钮初始 `setEnabled(false)`，没选中就不可点（`:276` 一带）。
+- `:295-302` `SORT` = `ALPHA_SORTER`：按列名算法序，逐条 `setVisualPosition(i)` 写席位。
+- `:318-325` 重置 = `dataFilter.reset()`：列可见 / 冻结 / 列序一起回默认（并清
+  where/order 草稿，那是 DBeaver 的跨页口径，本仓仍按 §8.72 记的差异走）。
+
+**本批最关键的既有隐患**（改之前 `display_order` 只是个「持久化快照」）：
+- 组件的 `data_column` 换算原本**完全不读** `display_order`，只按 `hidden` 顺序数。
+- 组件拖拽路径 `TableState::move_column`（`vendor/gpui-component/src/table/state.rs:1390-1407`）
+  先调 delegate 的 `move_column` 改 `display_order`，再自己 `col_groups.remove/insert`
+  并 `notify`——**不 refresh**。所以拖完当帧看着对，但只要之后发生一次 `refresh`
+  （`state.rs:442` → `:731 prepare_col_groups` 全量按 `delegate.column(i)` 重建），
+  视觉列序就退回「隐藏列序」，而表头 / 单元格仍按用户拖出来的位置取数 → 错位。
+
+**实现**：
+- `delegate.rs` 新增 `order_cache: Vec<usize>`（`display_order` 折算成数据列下标）。
+  `view_rows.rs` 新增 `rebuild_column_order()`：按 `display_order` 的列名匹配数据列，
+  匹配不到的（上一份结果残留名）跳过，本份结果没进 `display_order` 的列按数据序补末尾
+  （与 `reorder_by` 的「不猜」口径一致）。
+- `data_column` / `view_column` 改读缓存并跳过隐藏列；另加 `data_column_checked`
+  （越界 `None`），`column_kind` / `type_label` 走它，保住既有「越界不 panic」断言。
+- 缓存重建点：`set_data`、拖拽 `move_column`、`move_display_column`、
+  `sort_display_order_by_name`、`reset_display_order`。
+- 新增 `move_display_column(data, target_view)`（目标席位夹取到 `[0, 可见列-1]`，
+  同席位直接返回，隐藏列不参与移动但列名仍留在 `display_order` 里）、
+  `sort_display_order_by_name()`、`reset_display_order()`。
+  `reset_column_layout()` 现在 = 显示全部 + 取消全部冻结 + **列序回数据序**。
+- 面板：`move_selected_column(ColumnMove, cx)`（作用在 `selected_col`，无选中 / 隐藏 /
+  已在目标席位 → 直接返回；成功 `state.refresh(cx)` 让 `col_groups` 按新序重建）、
+  `sort_columns_by_name(cx)`；两者成功后走新的私有 `snapshot_column_order(cx)`，
+  与拖拽同一落盘通道（变了才推 `ColumnOrderChanged { order }`）。
+- 请求：`MoveSelectedColumn(ColumnMove)`（`ColumnMove { Top, Up, Down, Bottom }`）、
+  `SortColumnsByName`；宿主 `dispatch.rs` 两臂直接转发。
+- 浮层工具条改 9 元素（DBeaver 顺序）：移顶 `ArrowUpToLine` → 上移 `ArrowUp` →
+  下移 `ArrowDown` → 移底 `ArrowDownToLine` → 竖分隔 → 排序 `ArrowUpAZ` → 竖分隔 →
+  全部显示 `Eye` → 全部不显示 `EyeOff` → 重置 `RotateCcw`。四颗移动钮的 enabled 由
+  `selected_col` 的可见席位决定：`view > 0` 才能上移 / 移顶，`view < last` 才能下移 / 移底。
+
+**验证**：`cargo test -p rds-result-panel --lib` = **283 passed**；新用例
+`grid::tests::display_order_drives_the_view_column_mapping` 手算覆盖
+「默认序 → 移顶 → 重复移顶幂等 → 下移 → 移底 → 隐藏中间列后移动 → 按列名排序 →
+重置（含冻结清空）」，每一步都同时断言 `display_order()` 与 `data_column/view_column`
+映射；`panel::tests` 的列约束用例尾部追加五段（移顶 → 列序快照同步 → 幂等 → 移底 →
+排序 → 重置）。`cargo test -p rds-editor --lib results` = 45 passed；
+`cargo test -p rds-ui-guard` = 4 passed；`cargo check -p rds-result-panel -p rds-editor`
+= 0 error / 0 warning。提交 `c70a88be`。
+
+**仍缺**（记在 §2.62 一并）：DBeaver 的列序是「约束的 visualPosition」，本仓列序仍在
+`display_order`（列名序）+ `SavedSession` 落盘；多选批量移动（DBeaver 支持多选）本仓
+只做当前选中列；重置不跨页清 where/order 草稿。
 
 
 ## 8. 协作纪律

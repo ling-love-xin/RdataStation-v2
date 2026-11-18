@@ -1338,6 +1338,28 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   要接先拿到「程序化重排列序」的组件接口，否则按钮是假的。
 - **验证**：panel 282 / editor 45 / guard 4 / check 0-0。
 
+### 2.62 列序成为视图列序权威 + 列约束页移动四钮与排序（2026-11-18）
+
+全文见 `result-panel.md §8.73`。接手要点：
+
+- **列序链路**：`display_order`（列名序，持久化同源）→ `order_cache`（数据列下标，新增字段）
+  → `data_column` / `view_column`（跳过隐藏列，读缓存）。任何改 `display_order` 的地方
+  **必须**跟一次 `rebuild_column_order()`，漏了就退化成「视觉序与取数序不一致」。
+- **已修的既有隐患**：组件拖拽 `TableState::move_column` 改 `display_order` 后不 refresh；
+  一旦之后发生 `refresh`（`state.rs:442` → `:731` 按 `delegate.column(i)` 全量重建
+  `col_groups`），视觉列序会退回隐藏列序且表头 / 单元格错位。所以 `table_impl.rs::move_column`
+  末尾现在也重建缓存。
+- **程序化排列列序不需要碰 vendor**：改 delegate 的列序 + `TableState::refresh(cx)` 即可
+  （`prepare_col_groups` 每次按 `columns_count` / `column(i)` 重建）。这是 2.61 里写的
+  「未做」那条的解法。
+- **面板侧入口**：`move_selected_column(ColumnMove, cx)`（作用 `selected_col`，成功才
+  `snapshot_column_order` 推 `ColumnOrderChanged`）、`sort_columns_by_name(cx)`；请求
+  `MoveSelectedColumn(ColumnMove)` / `SortColumnsByName`。
+- **仍是已知差异**：移动只作用于当前选中列（DBeaver 支持多选批量）；重置会把列序
+  回**本份结果的列数据序**，不是用户上次持久化的列序（要那个得先取回 `SavedSession`
+  的 `column_order` 再 `apply_column_order`）；重置不跨页清 where/order 草稿。
+- **验证**：panel 283 / editor results 45 / guard 4 / check 0-0。提交 `c70a88be`。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）
