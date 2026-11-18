@@ -1493,6 +1493,22 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 2.87 计算页的接手要点（2026-11-19）
+
+- 工具条三颗：＋（缺项下拉）/ Reset / 口径 toggle，都在 `panel/tabs.rs::stats_toolbar`；
+  口径只有 `StatsMode::{Numeric, Text}` 两档，取值逻辑在纯函数
+  `panel::tabs::stat_value`（计数类不受口径影响、字符串档 Avg/Sum 不出值）。
+- **右键菜单不要再写死**：条目由 `stat_menu_entries(&stats_items, stats_mode)` 派生
+  （顺序 = 复制值 → 复制全部 → SEP → 缺项逐个「添加」→ SEP → 恢复默认 → SEP → 口径切换），
+  文案由 `stat_menu_label(entry)` 给（口径项报「切到哪一档」）。要加动作就进那两个函数，
+  渲染侧只按条目挂事件——`PopupMenu` 内部不可读，测试只能钉纯函数。
+- 持久化口径：`result_panel.stats_items` 存 id 列表（顺序即显示顺序），
+  `stats_items_from_ids` 丢掉未知 / 重复项；**空串 = 全停用**，是合法状态，不要在
+  载入时静默回落到默认集（DBeaver `loadSettings:152-154` 会回落，本仓有意不照抄）。
+- 两处**已登记的形态差异**：移除是行尾 ×（不是「选中行 + 工具条 Remove」，
+  本仓统计页没有树行选中模型）；口径按钮用文字标签（DBeaver 是勾选 + 类型图标）。
+- 两处**能力缺口**：组内聚合函数列、`countDistinct`（默认集因此只剩「非空」）。
+
 ### 2.86 值详情页的接手要点（2026-11-18）
 
 - 工具条四颗 = `[位置标记, 复制, 保存, 外部打开]`（顺序照 `ValueViewerPanel.fillToolBar`

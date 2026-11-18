@@ -5048,6 +5048,63 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
 `cargo test -p rds-editor --lib` = 790 passed（1 ignored）；`cargo check -p rds-editor` = Finished；
 `cargo test -p rds-ui-guard` = 4 passed。真窗口唤起未做目视（用户口径：目视统一处理）。
 
+### 8.99 计算页与 `AggregateColumnsPanel` 的逐项对照（2026-11-19）
+
+**取证（`panel/aggregate/AggregateColumnsPanel.java`，436 行）**：
+- 右键菜单（`createContents:106-116`）：`CopyAction` → `CopyAllAction` → `Separator` →
+  **`fillToolBar` 那一整组**（即右键菜单是「复制两份 + 工具条动作全量」）；`MenuManager`
+  `setRemoveAllWhenShown(true)`，每次弹出重算。
+- `isDirty()` 恒 `false`（`:125-127`）——计算页没有可保存的编辑态。
+- 设置读写：`loadSettings:129-155` 读 `PARAM_GROUP_BY_COLUMNS` / `PARAM_GROUP_AS_STRINGS` +
+  `functions/<funcId>{enabled,index}`，按 `index` 排序还原顺序，**全部未启用时回落默认集**
+  （`:152-154` `loadDefaultFunctions()`）；`saveSettings:166-181` 每次都把六（N）个函数的
+  `enabled` 与 `index` 写回（未启用写 `index=-1`）。
+- `refresh:199-214`：`removeAll` → `aggregateSelection` → `packColumns` → **`saveSettings()`**
+  （刷新即落盘）。
+- `fillToolBar:322-331` 顺序：`AddFunctionAction`（`MODE_FORCE_TEXT`，按钮恒带文字）→
+  `RemoveFunctionAction` → `ResetFunctionsAction` → `ToolbarSeparator` → `GroupByColumnsAction`
+  → `ValueTypeToggleAction`。
+- `AddFunctionAction:365-401`：菜单只列**尚未启用**的函数；缺项为空时 `run()` 什么都不弹
+  （`:389-392` 判 `isEmpty`）；`AddFunctionItemAction:403-416` 追加到末尾。
+- `RemoveFunctionAction:418-436`：`isEnabled()` = `aggregateTable.getSelectionCount() > 0`，
+  删除的是**选中行**（可多选）。
+- `ResetFunctionsAction:438-449`：`clear()` + `loadDefaultFunctions()`（默认集按 label 排序）。
+- `ValueTypeToggleAction:348-363`：勾选态表达**当前口径**，图标随档位切
+  （`aggregateAsStrings ? TYPE_STRING : TYPE_NUMBER`）。
+- `aggregateSelection:221-262`：`groupByColumns` 真 → 每个属性一个展开的 TreeItem（组内再列各函数）；
+  假 → 所有值并成一组，平铺 N 行。
+- `aggregateValues:264-315`：行序 = `enabledFunctions` 顺序；`funcCount[i] <= 0` **跳过不写值**
+  （该行存在但值列为空）；数值结果走 `DOUBLE_FORMAT` / `INTEGER_FORMAT`。
+- `CopyAction:451-469`：函数行拷**值列**，分组行拷**组名**；`CopyAllAction:471-496` 非分组
+  `函数=值` 逐行，分组模式 `组名` + `\n\t函数=值` 缩进。
+
+**本仓现状对照**：
+| 项 | DBeaver | 本仓 | 结论 |
+| --- | --- | --- | --- |
+| 工具条顺序 | Add / Remove / Reset / SEP / GroupBy / ValueType | ＋ / Reset / 口径 | 顺序等价；Remove 换行尾 ×（§8.83）、GroupBy 不做（§8.87） |
+| 添加菜单口径 | 只列未启用项 | 同（`missing` 过滤） | 已对齐 |
+| 添加全启用时 | 菜单为空、点了没反应 | 按钮直接禁用 + tooltip | 有意（避免假按钮） |
+| Remove 可用性 | 有选中行才可用（可多选删） | 行尾 × 恒可用（单行） | **形态差异**（本仓无树行选中模型） |
+| Reset | clear + 默认集 | 同（`DEFAULT_SET`） | 已对齐（§8.91） |
+| 口径 toggle | 勾选态 + 图标随档 | 文字标签 + `toggled` | 形态差异，留目视 |
+| **右键菜单** | 复制值 / 复制全部 / SEP / 工具条整组 | 复制值 / 复制全部 / 恢复默认 | **本批补齐** |
+| 无样本的行 | `funcCount<=0` → 值列空 | 显示 `—`（计数类显示 `0`） | **有意偏离**（`—` 比空白更可读） |
+| 设置持久化 | `functions/<id>{enabled,index}`，刷新即写 | `result_panel.stats_items`（id 列表，顺序照抄） | 等价 |
+| 空集回落默认 | 载入时全集为空 → 默认集 | 空串 = 全停用（合法态） | **有意偏离**（空表是用户主动选择，不静默改回） |
+| `isDirty` | 恒 false | 无编辑态 | 已对齐 |
+| 组内聚合 / 分组视图 | 有（TreeItem 嵌套） | 无 | **能力缺口**（需「生成 GROUP BY SQL → 执行」链路，独立课题） |
+
+**本批落点**：右键菜单从「三条写死」改成按清单装配。新增两组纯函数
+`panel::tabs::stat_menu_entries(enabled, mode)`（顺序照 `menuMgr.addMenuListener` +
+`fillToolBar`：复制值 → 复制全部 → SEP → 缺项逐个「添加」→ SEP → 恢复默认 → SEP → 口径切换；
+缺项为空时整段跳过，不留悬空分隔线）与 `stat_menu_label(entry)`（口径项报**点它会切到哪一档**，
+与工具条按钮报当前档互补）。渲染只按条目挂事件。
+
+**验证**：`panel::tests::stat_context_menu_mirrors_the_toolbar_actions`（顺序 / 五项缺项 /
+全启用时无添加段且只剩两条分隔 / 口径项文案随档位翻转）；
+`cargo test -p rds-result-panel --lib` = **333 passed**；`cargo check -p rds-editor` = Finished；
+`cargo test -p rds-ui-guard` = 4 passed。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
