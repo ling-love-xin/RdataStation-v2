@@ -1424,6 +1424,57 @@ fn column_browser_draws_the_comment_line_below_the_name(cx: &mut gpui_kit::TestA
     );
 }
 
+/// 【R3 分组页】「移除分组列」的可用性（纯函数）：对齐 DBeaver
+/// `GroupingColumnsContainer.canColumnBeRemoved`（`:92-94`）——选中列在分组键里、
+/// 且移除后仍至少剩一列才可用；删到零归「清空分组」管。
+#[test]
+fn remove_group_column_guards_the_last_key() {
+    use super::tabs::can_remove_group_column;
+
+    // 没有显式分组键（走选中列兜底）→ 没得删
+    assert!(!can_remove_group_column(&[], Some(0)));
+    // 只剩一列 → 不允许逐列删（哪怕选中的就是它）
+    assert!(!can_remove_group_column(&[0], Some(0)));
+    // 选中列在集合里且还有别的列 → 可删
+    assert!(can_remove_group_column(&[0, 2], Some(2)));
+    assert!(can_remove_group_column(&[0, 2], Some(0)));
+    // 选中列不在集合里 / 没有选中列 → 不适用
+    assert!(!can_remove_group_column(&[0, 2], Some(1)));
+    assert!(!can_remove_group_column(&[0, 2], None));
+}
+
+/// 【R3 分组页】工具条形状：分组列下拉 / 排序口径 / 仅重复 / 移除分组列 / 清空分组
+/// 五个入口都在（对齐 `GroupingPanel.fillToolBar:164-176` 的动作集；排序口径的
+/// 语义差异见 §8.83）。移除钮的可用性由纯函数钉，这里只验它真的画出来。
+#[gpui_kit::test]
+fn group_toolbar_offers_the_remove_column_action(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.toggle_group_column(0, cx);
+            p.toggle_group_column(2, cx);
+            p.set_right_tab(RightTab::Group, cx);
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let visible = |id: &'static str, cx: &mut gpui_kit::VisualTestContext| -> bool {
+        cx.debug_bounds(id).is_some()
+    };
+    for id in [
+        "editor-result-group-columns",
+        "editor-result-group-sort",
+        "editor-result-group-dup",
+        "editor-result-group-remove",
+        "editor-result-group-clear",
+    ] {
+        assert!(visible(id, cx), "分组页工具条缺少入口：{id}");
+    }
+}
+
 #[test]
 fn hex_page_clamps_to_the_last_page() {
     use crate::panel::tabs::hex_page_clamp;

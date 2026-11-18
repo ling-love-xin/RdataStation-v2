@@ -30,6 +30,18 @@ use crate::ui;
 /// 【P2-1】hex 转储每页行数（16 行 × 16 字节 = 256 字节 / 页）
 const HEX_LINES_PER_PAGE: usize = 16;
 
+/// 【R3 分组页】「移除分组列」是否可用（纯函数）。
+///
+/// 对齐 DBeaver `GroupingColumnsContainer.canColumnBeRemoved`（`:92-94`）：只有
+/// 「选中列在分组键里」且「移除后仍至少剩一列」时才可用——**删到零是「清空分组」
+/// 的职责**，逐列删除不许把分组键删空。没显式分组键（走选中列兜底）时也没得删。
+pub(crate) fn can_remove_group_column(group_columns: &[usize], selected: Option<usize>) -> bool {
+    match selected {
+        Some(selected) => group_columns.len() > 1 && group_columns.contains(&selected),
+        None => false,
+    }
+}
+
 /// 【保存值】按值形态给出待落盘的字节与默认文件名（纯函数；测试直接钉它）。
 ///
 /// 三条口径（与值查看器同源，宿主不必再判一次值形态）：
@@ -876,14 +888,37 @@ impl ResultPanel {
                 .debug_selector(|| "editor-result-group-dup".to_string())
                 .label("仅重复")
                 .toggled(duplicates_on)
-                .tooltip("只显示出现多于一次的分组".to_string())
+                // DBeaver `controls_resultset_grouping_show_duplicates_only`
+                // = "Show duplicates only (COUNT > 1)"
+                .tooltip("仅显示重复分组（COUNT > 1）".to_string())
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::SetGroupDuplicatesOnly(!duplicates_on), app);
                 })
                 .into_any_element()
         };
 
-        // 动作四：清空分组列（对齐 DBeaver `ClearGroupingAction`：图标动作，
+        // 动作四：移除分组列（对齐 DBeaver `DeleteColumnAction` +
+        // `controls_resultset_grouping_remove_column`：作用于**当前选中列**，
+        // 选中列不在分组键里 / 只剩一列时不可用）
+        let remove_button = {
+            let queue = self.queue.clone();
+            let enabled = can_remove_group_column(&self.group_columns, self.selected_col);
+            let column = self.selected_col.unwrap_or(0);
+            Button::new("editor-result-group-remove")
+                .ghost()
+                .xsmall()
+                .debug_selector(|| "editor-result-group-remove".to_string())
+                .icon(IconName::CircleMinus)
+                .disabled(!enabled)
+                .tooltip("移除分组列".to_string())
+                .on_click(move |_, _window, app| {
+                    // 复用勾选语义：已在集合里 → 移除（与下拉取消勾选同一路径）
+                    queue.request(ResultRequest::ToggleGroupColumn(column), app);
+                })
+                .into_any_element()
+        };
+
+        // 动作五：清空分组列（对齐 DBeaver `ClearGroupingAction`：图标动作，
         // 只在有显式分组列时可用；清空后回到「选中列兜底」）
         let clear_button = {
             let queue = self.queue.clone();
@@ -941,7 +976,13 @@ impl ResultPanel {
             .child(self.panel_toolbar(
                 "editor-result-group-toolbar",
                 SharedString::from(title),
-                vec![columns_menu, sort_button, duplicates_button, clear_button],
+                vec![
+                    columns_menu,
+                    sort_button,
+                    duplicates_button,
+                    remove_button,
+                    clear_button,
+                ],
                 cx,
             ))
             .child(body)
