@@ -3408,6 +3408,74 @@ panicked at panel/tests.rs:1091:
 - `cargo test -p rds-editor --lib results` = **45 passed / 0 failed**（新分派臂后的回归）。
 - `cargo test -p rds-ui-guard`（不带 `--lib`）= 4 passed。
 
+### 8.62 工具栏 / 侧栏结构对齐（2026-11-18）：记录模式沉底 + 清除钮常驻
+
+重心转到「工具栏 + 结果集左右侧栏」后的第一批：两处**结构 / 行为**对齐（不碰配色与密度，
+目视部分由用户统一处理）。
+
+#### 8.62.1 左缘竖条 = 两段式（展示组在上、记录模式沉底）
+
+取证（`ResultSetViewer.java`，`buildResultSetViewer`）：
+
+| 事实 | 出处 |
+| --- | --- |
+| 左缘是 `new VerticalFolder(mainPanel, SWT.LEFT)` + `FILL_VERTICAL` | `:321-322` |
+| 每个 presentation 一个 `VerticalButton(SWT.LEFT \| SWT.RADIO)`，`setData(pd)`、`setImage(icon)`、`setText(label)`、tooltip = description，选中者 `setSelection` | `:948-962` |
+| 弹簧 = `createEmptyLabel(presentationSwitchFolder, 1, 1)` + `FILL_VERTICAL` | `:963` |
+| **记录模式按钮在弹簧之后**：`recordModeButton = new VerticalButton(..., SWT.LEFT \| SWT.CHECK)` + `ToggleModeAction` | `:964-965` |
+
+本仓落法：`render_vertical_bar` 里把 `grid_btn` / `text_btn` 留在顶部（RADIO 语义由 `toggled`
+表达），中间插 `div().flex_1().min_h_0()` 当弹簧，`record_btn`（转置）沉到底部，记录视图的
+上一行 / 下一行导航紧跟其下（本仓独有的增强，DBeaver 左栏没有行导航）。同时给竖条补
+`pb_2()`，与顶部 `pt_2()` 对称，沉底按钮不贴边。
+
+#### 8.62.2 筛选清除钮 = 常驻 + 空词禁用
+
+取证（`ResultSetFilterPanel.java`）：`filtersClearButton` 建出来就 `setEnabled(false)`
+（`:319-327`），筛选生效后才由 `enablePanelControls` 打开（`:449-454`）；点击体 =
+`viewer.clearDataFilter(true)`（`:1550`），箭头菜单 = 清筛选设置 / 显示隐藏列 / 重置颜色 /
+重置 transformers / 重置 pins / 全部重置（`:1525-1545`）。
+
+本仓此前是「有词才出现」，按钮随打字在行尾左右跳一格。改为**常在**、`disabled(空词)`。
+箭头菜单里的几项本仓已有等价入口（列浏览器「显示全部」、右键「重置排序」等），
+本轮不合并成菜单——收窄在册（见 §8.63）。
+
+#### 8.62.3 测试
+
+| 用例 | 钉住什么 |
+| --- | --- |
+| `panel::tests::left_bar_puts_presentation_group_on_top_and_record_mode_at_the_bottom` | 量**真实像素**：网格在文本之上；记录按钮与文本按钮相距 > 60px（无弹簧时只差 20~24px）；未进记录视图时不摆行导航 |
+| `panel::tests::filter_clear_button_is_always_there_and_gated_by_the_filter_text` | 空词：按钮**在位**且 a11y `disabled = Some(true)`；有词：仍在原位、不再是禁用态（实测可用态不暴露 disabled 位，断言用 `assert_ne!(…, Some(true))`） |
+
+#### 8.62.4 验证
+
+- `cargo check -p rds-result-panel` = 0 error / 0 warning。
+- `cargo test -p rds-result-panel --lib` = **273 passed / 0 failed**（271 + 本批 2）。
+- `cargo test -p rds-ui-guard`（不带 `--lib`）= 4 passed。
+
+### 8.63 在册：筛选条「状态历史」后退 / 前进（尚未实现，需拍板口径）
+
+DBeaver 筛选条工具条上有一对浏览器式 **后退 / 前进** 按钮（`historyBackButton` /
+`historyForwardButton`，`SWT.DROP_DOWN`，`ResultSetFilterPanel.java:343-351`），
+本仓**完全没有这个能力**。取证如下，作为下一批的设计输入：
+
+| 事实 | 出处 |
+| --- | --- |
+| 历史项 = `HistoryStateItem(dataContainer, filter, rowNumber)` | `ResultSetViewer.java:5444-5455` |
+| 入栈口径 `setNewState(container, filter)`：**同一 (container, filter) 已存在 → 直接跳到那一条**（去重、不追加）；否则**截断当前位置之后的所有项**再追加，位置 = 末位 | `:2419-2442` |
+| 导航 = `navigateHistory(position)`：按该状态的容器 / 筛选 / 行号**重跑数据泵**（`runDataPump(...)`） | `:4050-4063` |
+| 启用态：后退仅当 `position > 0`；前进仅当 `position < size - 1` | `:456-475` |
+| tooltip = 目标状态 `describeState()` + 快捷键描述 | `:459-471` |
+| 箭头菜单 = 该方向所有可达状态，标签取 `describeState()`；点选 = `navigateHistory(该位置)` | `:1456-1481` |
+| `describeState()` = 容器名 + `[条件 SQL]`，超过 50 字符截断加 `...` | `:5457-5473` |
+
+**待拍板**：本仓「一份状态」到底由什么构成？候选口径：
+① 原 SQL + 下发筛选 SQL + 排序下发（= 需要真重查的那部分，与 DBeaver 对齐）；
+② 再加上本地视图筛选词与转置（那就不是「重查」而是「回放视图」）。
+两种都能实现，但 ① 必须先有「原 SQL / 下发筛选 / 排序」三者的统一快照通道，
+② 会把纯视图状态也写进历史（后退时可能既重查又改视图，语义偏厚）。
+建议先按 ① 做（与 DBeaver 同语义），② 作后续增强。
+
 
 ## 8. 协作纪律
 

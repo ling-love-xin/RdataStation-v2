@@ -1306,3 +1306,100 @@ fn find_bar_locates_matches_and_steps_through_them(cx: &mut gpui_kit::TestAppCon
     assert!(!closed.0, "关掉后 `find_open` 应为假");
     assert_eq!(closed.1, "zzz", "关闭时保留查找词，下次打开接着用");
 }
+
+/// 【2026-11-18 侧栏结构对齐】左缘竖条两段式：展示组（网格 / 文本）在上，
+/// **记录模式沉底**。对齐 DBeaver `VerticalFolder(SWT.LEFT)`：
+/// - 逐条摆 `VerticalButton(SWT.LEFT | SWT.RADIO)` 展示按钮（`ResultSetViewer.java:948-962`）
+/// - `createEmptyLabel(..., FILL_VERTICAL)` 弹簧（`:963`）
+/// - 记录模式按钮在弹簧之后（`:964-965`）
+///
+/// 这里量**真实像素**：只钉相对关系（网格在文本上面、记录远在文本之下），
+/// 不钉具体 y（竖条总高由面板高度决定，窗口尺寸一变就漂）。
+#[gpui_kit::test]
+fn left_bar_puts_presentation_group_on_top_and_record_mode_at_the_bottom(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{ElementId, SharedString};
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let top_of = |id: &str, cx: &mut gpui_kit::VisualTestContext| -> Option<f32> {
+        cx.update(|window, _| {
+            window
+                .try_find(ElementId::Name(SharedString::from(id.to_string()))
+                    as ElementId)
+                .map(|snap| f32::from(snap.bounds().top()))
+        })
+    };
+    let grid = top_of("editor-result-bar-grid", cx).expect("竖条网格按钮应已渲染");
+    let text = top_of("editor-result-bar-text", cx).expect("竖条文本按钮应已渲染");
+    let record = top_of("editor-result-bar-record", cx).expect("竖条记录按钮应已渲染");
+
+    assert!(
+        grid < text,
+        "展示组顺序：网格在上、文本在下（{grid} vs {text}）"
+    );
+    // 弹簧把记录模式推到底部：它与文本按钮之间至少隔开一整个按钮高（20px 档），
+    // 没弹簧时三个按钮是紧邻的（差 20~24px），有弹簧时差几百 px
+    assert!(
+        record - text > 60.0,
+        "记录模式应在弹簧之后沉底（文本 {text} → 记录 {record}，差 {}px）",
+        record - text
+    );
+    // 记录导航默认不摆（只有转置激活时才出现）
+    assert!(
+        top_of("editor-result-bar-record-prev", cx).is_none(),
+        "未进记录视图时不该摆行导航"
+    );
+}
+
+/// 【2026-11-18 工具栏结构对齐】筛选清除钮 = **常驻 + 空词禁用**：
+/// DBeaver 的 `filtersClearButton` 建出来就是禁用态（`ResultSetFilterPanel.java:319-327`），
+/// 有筛选后才由 `enablePanelControls` 打开（`:449-454`）。此前本仓是「有词才出现」，
+/// 位置随打字跳一格。此用例钉住「一直在、状态跟着词走」。
+#[gpui_kit::test]
+fn filter_clear_button_is_always_there_and_gated_by_the_filter_text(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{ElementId, SharedString};
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let clear_state = |cx: &mut gpui_kit::VisualTestContext| -> Option<Option<bool>> {
+        cx.update(|window, _| {
+            window
+                .try_find(ElementId::Name(SharedString::from(
+                    "editor-result-filter-clear".to_string(),
+                )))
+                .map(|snap| snap.disabled())
+        })
+    };
+
+    // 空词：按钮在，且处于禁用态
+    let empty = clear_state(cx).expect("清除钮应常驻（不再按词出现）");
+    assert_eq!(empty, Some(true), "空词时清除钮应禁用");
+
+    // 有词：同一个按钮转成可用
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.filter_text = "1".to_string();
+            // 手动改状态后要自己 notify：否则 `draw` 复用旧帧，读到旧树
+            cx.notify();
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let filled = clear_state(cx).expect("有词时清除钮仍应在原位");
+    // 实测口径：可用态**不暴露** a11y disabled 位（`None`），只有禁用时才写 `Some(true)`；
+    // 所以这里钉「不再是禁用」，而不是钉 `Some(false)`
+    assert_ne!(
+        filled,
+        Some(true),
+        "有词时清除钮不该再是禁用态（可用态不暴露 disabled 位）"
+    );
+}

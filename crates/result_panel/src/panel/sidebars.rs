@@ -183,13 +183,23 @@ impl ResultPanel {
             .bg(theme.colors.sidebar)
             .debug_selector(|| "editor-result-vertical-bar".to_string())
             .when(show, |el| {
+                // 【2026-11-18 结构对齐】DBeaver 的左缘竖条是 `VerticalFolder(SWT.LEFT)`：
+                // 先按 `availablePresentations` 逐个摆 **RADIO** 展示按钮（`:948-962`），
+                // 然后塞一个 1×1 `FILL_VERTICAL` 空标签当弹簧（`:963`），**记录模式按钮
+                // 沉在最底部**（`:964-965`）。此前本仓三个按钮挤在顶部，记录模式夹在中间，
+                // 与 DBeaver 的「展示组在上 / 模式开关在下」两段式不一致。
                 el.v_flex()
                     .items_center()
                     .gap_1()
                     .pt_2()
+                    .pb_2()
+                    // 展示组（RADIO 语义：网格 / 文本互斥，`toggled` 表达当前档）
                     .child(grid_btn)
                     .child(text_btn)
+                    // 弹簧：把记录模式推到竖条底部（DBeaver 那个空标签等价物）
+                    .child(div().flex_1().min_h_0())
                     .child(record_btn)
+                    // 记录视图的行导航跟着记录按钮走（DBeaver 无此物，本仓独有，故贴其下）
                     .children(record_nav)
             });
         EffectTransition::new(Duration::from_millis(160))

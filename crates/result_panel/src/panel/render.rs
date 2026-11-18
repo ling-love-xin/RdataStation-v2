@@ -350,22 +350,26 @@ impl ResultPanel {
                             }),
                     )
             })
-            .when(
-                !self.filter_text.trim().is_empty() && !self.filter_expanded,
-                |row| {
-                    let queue = self.queue.clone();
-                    row.child(
-                        Button::new("editor-result-filter-clear")
-                            .ghost()
-                            .xsmall()
-                            .debug_selector(|| "editor-result-filter-clear".to_string())
-                            .label("✕")
-                            .on_click(move |_, _window, app| {
-                                queue.request(ResultRequest::ClearFilter, app);
-                            }),
-                    )
-                },
-            )
+            // 【2026-11-18 结构对齐】清除钮改成 DBeaver 的口径：**常驻 + 空词禁用**
+            // （`filtersClearButton` 建出来就 `setEnabled(false)`，`:319-327`；有筛选后才
+            // 由 `enablePanelControls` 打开，`:449-454`）。此前是「有词才出现」，位置会
+            // 随打字左右跳一格，而 DBeaver 那一列是固定的。
+            .when(!self.filter_expanded, |row| {
+                let queue = self.queue.clone();
+                let can_clear = !self.filter_text.trim().is_empty();
+                row.child(
+                    Button::new("editor-result-filter-clear")
+                        .ghost()
+                        .xsmall()
+                        .debug_selector(|| "editor-result-filter-clear".to_string())
+                        .disabled(!can_clear)
+                        .label("✕")
+                        .tooltip("清除筛选词")
+                        .on_click(move |_, _window, app| {
+                            queue.request(ResultRequest::ClearFilter, app);
+                        }),
+                )
+            })
             // 【筛选历史】DBeaver 筛选条的第 5 列是 `HistoryPanel`（`ResultSetFilterPanel.java:214`）：
             // 一个下拉箭头，点开是历史筛选表 `createFilterHistoryPanel`（`:1207`），选中一条
             // 即回到那个口径。本仓用组件的 `DropdownMenu`（按钮 + 弹出菜单，自带锚点/外点关闭）。

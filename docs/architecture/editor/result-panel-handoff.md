@@ -1111,6 +1111,23 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 
 **验证**：panel **271 passed**（269 → 271）/ editor `--lib results` 45 / guard 4。
 
+### 2.51 工具栏 / 侧栏结构对齐第一批（2026-11-18）
+
+全文见 `result-panel.md §8.62`（已做）+ `§8.63`（待拍板）。接手要点：
+
+- **左缘竖条两段式**：展示组（网格 / 文本）在上、弹簧、**记录模式沉底**
+  （DBeaver `ResultSetViewer.java:948-965`：RADIO 展示按钮 → `createEmptyLabel(FILL_VERTICAL)`
+  → `recordModeButton`）。记录视图的行导航跟记录按钮走（本仓独有）。
+- **筛选清除钮常驻 + 空词禁用**（DBeaver `filtersClearButton` 建出来就 disabled，
+  `ResultSetFilterPanel.java:319-327`，生效后 `enablePanelControls` 打开，`:449-454`）。
+  箭头菜单（清设置 / 显示隐藏列 / 重置颜色 / transformers / pins / 全部重置）本轮未合并。
+- 用例：`left_bar_puts_presentation_group_on_top_and_record_mode_at_the_bottom`（量真实像素）、
+  `filter_clear_button_is_always_there_and_gated_by_the_filter_text`（a11y disabled 位口径：
+  **可用态不暴露** disabled，只有禁用时才是 `Some(true)`）。
+- **下一步候选（需拍板）**：筛选条「状态历史」后退 / 前进（`§8.63` 已写全套 DBeaver 取证与
+  两种口径）。另有两项结构差在册：右缘竖条顶部「面板总开关」（本仓在状态栏右端三态开关，
+  属有意偏离）、DBeaver 面板按钮是「独立 CHECK + 可增减页签」而本仓是固定页签。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）
