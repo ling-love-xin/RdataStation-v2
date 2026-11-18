@@ -4031,6 +4031,24 @@ WHERE <条件>` + `ORDER BY` 外提 + `dropped_limit` 回报），只差条件�
 在；`editor-result-status-config` 在；勾回撤销后 `editor-result-undo` 出现且集合剩一项；
 反向隐藏 First 后 `editor-result-page-first` 消失）。门禁：panel **285 passed**、
 editor results 45、ui-guard 4、check 0-0。提交 `e1b797db`。
+### 8.75 筛选历史 tooltip 补上命令描述（2026-11-18）
+
+**取证**：DBeaver `ResultSetFilterPanel.updateControls`（`ResultSetFilterPanel.java:456-475`）：
+- 后退钮可用时 `setToolTipText(stateHistory.get(pos-1).describeState() + " (" +
+  ActionUtils.findCommandDescription(IWorkbenchCommandConstants.NAVIGATE_BACKWARD_HISTORY,
+  site, true) + ")")`；前进钮对称（`NAVIGATE_FORWARD_HISTORY`）。
+- 禁用分支只 `setEnabled(false)`，**不刷新 tooltip**（保留上一次的文案）。
+- 也就是说 tooltip 是「要去的那条状态的描述 + 括号里的命令名」，光有描述读者分不清
+  这颗钮是「退到哪」还是「前进到哪」。
+
+**本仓落点**：`panel::events::history_hint(delta)` 在有目标时返回
+`format!("{} ({command})", state_label(&sql))`，`command` = 「后退历史」/「前进历史」
+（就是 DBeaver 那两条命令的中文描述）。空历史 / 已到头这两支仍给说明句（DBeaver 禁用态
+不刷新 tooltip，本仓多给一句没有副作用，且用例可断言）。
+
+**验证**：`panel::tests` 的历史用例把旧的 `hint == "select 1"` 改成
+`"select 1 (后退历史)"`，并补一条正向断言（在末位时 `history_hint(1) == "已经在最新的状态"`）。
+门禁：panel **285 passed**、editor results 45、ui-guard 4、check 0-0。提交 `a5bede1e`。
 
 
 ## 8. 协作纪律

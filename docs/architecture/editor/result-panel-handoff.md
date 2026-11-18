@@ -1377,6 +1377,18 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未做的一半：DBeaver `ConfigAction` 的「结果集首选项页」（齿轮 → 偏好页）本仓还没有。
 - **验证**：panel 285 / editor results 45 / guard 4 / check 0-0。提交 `e1b797db`。
 
+### 2.64 筛选历史 tooltip 补命令描述（2026-11-18）
+
+全文见 `result-panel.md §8.75`。接手要点：
+
+- tooltip 口径 = `state_label(目标状态 SQL) + " (" + 命令描述 + ")"`，命令描述是
+  「后退历史」/「前进历史」；改文案的地方只有 `panel::events::history_hint`。
+- 空历史 / 已到头仍走说明句；不要在渲染里再拼一次括号（会双份）。
+- 已知差异仍在：DBeaver 的 `describeState` 还带**容器名**（`ResultSetViewer.java:5457-5473`
+  = 容器名 + `" [" + 条件 + "]"`），本仓历史只存 SQL，没有容器名可拼；状态历史仍不还原
+  行位置、视图态（筛选词 / 转置 / 列布局）也还不入历史。
+- **验证**：panel 285 / editor results 45 / guard 4 / check 0-0。提交 `a5bede1e`。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）
