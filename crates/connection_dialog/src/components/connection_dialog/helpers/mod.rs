@@ -164,6 +164,50 @@ pub(crate) fn save_blocker(
     }
 }
 
+// ===== 地址口径（字段权威，URI 派生）=====
+
+/// 地址的唯一口径：**结构化字段（host / port / db）是权威，URI 是派生展示**。
+///
+/// 为什么收成一处：URI 与字段曾各是一份真相源，来回编辑互相覆盖——用户改完端口再改 URI，
+/// 谁最后落笔谁赢，落库值取决于手速。现在 UI 侧 URI 只读（由本函数每帧重建），
+/// 粘贴整条连接串走「从剪贴板导入」一次性把字段填出来。
+///
+/// 规则（`rebuild_url_from_fields`）：
+/// - 文件型 / 未选驱动：地址就是路径或用户原样输入，原样返回；
+/// - 主机为空 → 原样返回（不把半成品输入抹成非法 URL）；
+/// - URI 还是空的（新表单）→ 用驱动 `type_id` 补 scheme（`postgres://` 等），
+///   否则 `rewrite_url_authority` 认不出 scheme，字段填了地址栏也永远是空的；
+/// - 端口空 → 驱动声明的默认端口；数据库空 → 去掉路径段。
+pub(crate) fn url_from_fields(
+    driver: Option<&Driver>,
+    url: &str,
+    host: &str,
+    port: &str,
+    db: &str,
+) -> String {
+    let Some(d) = driver else {
+        return url.to_string();
+    };
+    if d.is_file || host.trim().is_empty() {
+        return url.to_string();
+    }
+    let seeded;
+    let base = if url.contains("://") {
+        url
+    } else {
+        seeded = format!("{}://", d.type_id);
+        seeded.as_str()
+    };
+    crate::services::data_source_service::rebuild_url_from_fields(
+        &d.id,
+        base,
+        host,
+        port,
+        db,
+        d.default_port,
+    )
+}
+
 // ===== 标签文本 ↔ JSON（UI 逗号分隔 ⇄ 落库 / 回读）=====
 
 /// 标签文本 → JSON 数组（支持中英文逗号；空列表返回 None，避免写入空串）。

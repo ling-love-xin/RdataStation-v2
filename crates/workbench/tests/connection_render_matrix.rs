@@ -532,6 +532,46 @@ fn advanced_tab_absorbs_capability_and_driver_props(cx: &mut TestAppContext) {
     }
 }
 
+/// 地址单一权威（#110）：**字段改了，URI 立刻重建**——新表单（URI 还是空的）也一样。
+///
+/// 「URI → 字段」的回读另有 `connection_fields_and_uri_stay_in_sync` 守；这里只盯新表单：
+/// 曾经只要 URI 为空、「已同步」标记就永远不置位，用户填完主机 / 端口 / 库，地址栏仍空着。
+#[gpui_kit::test]
+fn uri_is_derived_from_fields(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (harness, cx) = open_harness(cx);
+    open_new(&harness, cx);
+    let dialog = cx.update(|_, cx| harness.read(cx).dialog(cx));
+
+    // 注入一个网络型驱动并选中（否则表单整体置灰，地址不参与重建）。
+    cx.update(|_, _cx| {
+        let mut d = driver("postgres", "postgres", "PostgreSQL", true);
+        d.default_port = Some(5432);
+        *dialog.drivers.borrow_mut() = vec![d];
+        *dialog.types.borrow_mut() = vec![ds_type("postgres", "PostgreSQL", "🐘")];
+    });
+    cx.update(|window, cx| dialog.select_type("postgres", window, cx));
+
+    // 新表单：URI 为空，只填地址字段 → 一帧后 URI 就该出现。
+    cx.update(|window, cx| {
+        dialog
+            .host_input
+            .update(cx, |s, cx| s.set_value("db.example.com", window, cx));
+        dialog
+            .port_input
+            .update(cx, |s, cx| s.set_value("5433", window, cx));
+        dialog
+            .db_input
+            .update(cx, |s, cx| s.set_value("app", window, cx));
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let url = cx.update(|_, cx| dialog.url.read(cx).value().to_string());
+    assert_eq!(
+        url, "postgres://db.example.com:5433/app",
+        "字段是唯一权威：新表单填完字段，URI 必须由字段重建"
+    );
+}
+
 /// 侧栏信息架构：**类型目录在上、暂存列表在下**。
 ///
 /// 新建流程的第一个动作是选类型；暂存列表是回访产物（用户知道自己在攒草稿时才关心）。

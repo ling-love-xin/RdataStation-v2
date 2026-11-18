@@ -10,7 +10,8 @@ use super::{
     plugin_short_code, policy_summary, policy_type_from_label, policy_type_label, property_note,
     result_needs_detail, save_blocker, saved_result, scope_from_label, staging_display_type_id,
     strip_file_db_noise, tags_from_json, tags_to_json, tr, type_badge, type_has_driver,
-    type_matches_filter, url_template_example, visible_tab_index, DriverDerived, DriverSource,
+    type_matches_filter, url_from_fields, url_template_example, visible_tab_index, DriverDerived,
+    DriverSource,
 };
 use connection::model::ConnectionScope;
 use connection::model::DataSourceSaveInput;
@@ -504,6 +505,49 @@ fn secret_fields_are_the_credential_keys_only() {
     assert!(!is_secret_field("key_path"));
     assert!(!is_secret_field("host"));
     assert!(!is_secret_field(""));
+}
+
+#[test]
+fn url_from_fields_keeps_fields_as_single_authority() {
+    // 决策 #110：字段（host / port / db）是唯一真相源，URI 只是派生展示。
+    let mut mysql = driver("mysql", "mysql", "MySQL", true);
+    mysql.default_port = Some(3306);
+    let mut sqlite = driver("sqlite", "sqlite", "SQLite", true);
+    sqlite.is_file = true;
+
+    // ① 字段变了 → URI 跟着变，旧 URI 里的凭据 / 查询串保留
+    assert_eq!(
+        url_from_fields(
+            Some(&mysql),
+            "mysql://root:pw@old:3306/old?ssl=true",
+            "newhost",
+            "3307",
+            "newdb",
+        ),
+        "mysql://root:pw@newhost:3307/newdb?ssl=true"
+    );
+    // ② 字段与 URI 一致 → 原样（幂等；每帧重建才敢这么用）
+    assert_eq!(
+        url_from_fields(Some(&mysql), "mysql://h:3306/db", "h", "3306", "db"),
+        "mysql://h:3306/db"
+    );
+    // ③ 主机被清空 → 保留原 URI（不把半成品输入抹成非法 URL）
+    assert_eq!(
+        url_from_fields(Some(&mysql), "mysql://h:3306/db", "", "3306", "db"),
+        "mysql://h:3306/db"
+    );
+    // ④ 文件型 → 原样（路径不是可重建的 authority）
+    assert_eq!(
+        url_from_fields(Some(&sqlite), "C:/data/a.db", "h", "1", "x"),
+        "C:/data/a.db"
+    );
+    // ⑤ 新表单（URI 为空）：用驱动 type_id 补 scheme，否则地址栏填了字段也永远空着
+    assert_eq!(
+        url_from_fields(Some(&mysql), "", "h", "3307", "db"),
+        "mysql://h:3307/db"
+    );
+    // ⑥ 未选驱动 → 原样
+    assert_eq!(url_from_fields(None, "", "h", "1", "x"), "");
 }
 
 #[test]

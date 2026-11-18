@@ -190,7 +190,7 @@ impl<H: 'static> ConnectionDialogState<H> {
         // 分组新建输入行状态（`org_body` 卡片用；与「＋ 新建分组」输入行展开/提交联动）。
         let group_new_open = self.group_new_open.clone();
         let group_new_name = self.group_new_name.clone();
-        // 连接设置字段（主机 / 端口 / 数据库）与同步标记：与 Header URI 双向同步。
+        // 连接设置字段（主机 / 端口 / 数据库）：地址的唯一来源；Header URI 由它们派生。
         let host_input = self.host_input.clone();
         let port_input = self.port_input.clone();
         let db_input = self.db_input.clone();
@@ -485,10 +485,11 @@ impl<H: 'static> ConnectionDialogState<H> {
                 url.update(cx, |s, cx| s.set_placeholder(want_address_ph, window, cx));
             }
 
-            // ---- 连接设置字段 ⇄ Header URI 双向同步（render 为权威同步点）----
-            // 方向 A（URI → 字段）：URI 或驱动变化时反向填字段（编辑回读 / 手改 URI / 切类型）；
-            // 方向 B（字段 → URI）：字段被编辑时用 `rebuild_url_from_fields` 回写 URI（保留凭据 / 查询串）。
-            // 标记 `fields_synced_for` 记录上次同步的（驱动 id, URI）—— 避免两个方向互相覆盖。
+            // ---- 地址口径（决策 #110）：**字段是权威，URI 是派生展示** ----
+            // URI 输入框只读（网络型），每帧由 host / port / db 重建；这样不存在“两个真相源
+            // 互相覆盖”的手速问题。粘贴整条连接串走「从剪贴板导入」（常规 → 连接设置）。
+            // 只在“换驱动 / 首次进入 / 草稿恢复”时做一次反向回读（URI → 字段）：
+            // 用 `fields_synced_for` 记录上次同步的（驱动 id, URI），避免每帧把用户正在清的字段填回去。
             if !is_file_db {
                 let driver_id_fields = current_driver
                     .as_ref()
@@ -499,7 +500,7 @@ impl<H: 'static> ConnectionDialogState<H> {
                     fields_synced_for.borrow().as_ref(),
                     Some((d, u)) if d == &driver_id_fields && u == &url_now
                 );
-                if !already_synced {
+                if !already_synced && !url_now.trim().is_empty() {
                     let (h, p, d) = crate::services::data_source_service::parse_url_host_port_db(
                         &driver_id_fields,
                         &url_now,
@@ -520,20 +521,23 @@ impl<H: 'static> ConnectionDialogState<H> {
                         cx,
                     );
                     set_input_value(&db_input, d.unwrap_or_default(), window, cx);
+                    *fields_synced_for.borrow_mut() =
+                        Some((driver_id_fields.clone(), url_now.clone()));
+                }
+                // 无论刚才是否回读过，都再按字段重建一次 URI：新表单（URI 为空）也能在
+                // 第一次填字段后就出现地址，不必等下一帧；回读后的重建是幂等的。
+                let rebuilt = url_from_fields(
+                    current_driver.as_ref(),
+                    &url_now,
+                    &host_input.read(cx).value(),
+                    &port_input.read(cx).value(),
+                    &db_input.read(cx).value(),
+                );
+                if rebuilt != url_now {
+                    set_input_value(&url, rebuilt.clone(), window, cx);
+                    *fields_synced_for.borrow_mut() = Some((driver_id_fields, rebuilt));
+                } else if !already_synced {
                     *fields_synced_for.borrow_mut() = Some((driver_id_fields, url_now));
-                } else {
-                    let rebuilt = crate::services::data_source_service::rebuild_url_from_fields(
-                        &driver_id_fields,
-                        &url_now,
-                        &host_input.read(cx).value(),
-                        &port_input.read(cx).value(),
-                        &db_input.read(cx).value(),
-                        current_driver.as_ref().and_then(|d| d.default_port),
-                    );
-                    if rebuilt != url_now {
-                        set_input_value(&url, rebuilt.clone(), window, cx);
-                        *fields_synced_for.borrow_mut() = Some((driver_id_fields, rebuilt));
-                    }
                 }
             }
 
@@ -917,6 +921,16 @@ impl<H: 'static> ConnectionDialogState<H> {
                     };
 
                     let mut content = div().w_full().v_flex().gap(rems(GAP_MD));
+                    // 驱动属性放在最前：它直接决定连接能不能通，不该埋在页尾让人翻滚动条。
+                    content = content.child(
+                        div()
+                            .id("conn-sec-driver-props")
+                            .test_support()
+                            .text_sm()
+                            .font_weight(FontWeight::BOLD)
+                            .child(tr("驱动属性")),
+                    );
+                    content = content.child(driver_props_panel);
                     // 分组① 环境（引用 + 管理入口 + 策略生效摘要）
                     content = content.child(make_section(
                         "env",
@@ -1114,7 +1128,7 @@ impl<H: 'static> ConnectionDialogState<H> {
                             nav_body,
                         ));
                     }
-                    // 收敛（#110）：能力 / 驱动属性并入「高级」页尾，不再各占一个 Tab。
+                    // 收敛（#110）：能力清单是**只读**展示，放页尾；驱动属性已在页首。
                     content = content.child(
                         div()
                             .id("conn-sec-capability")
@@ -1124,15 +1138,6 @@ impl<H: 'static> ConnectionDialogState<H> {
                             .child(tr("能力（只读）")),
                     );
                     content = content.child(capability_panel);
-                    content = content.child(
-                        div()
-                            .id("conn-sec-driver-props")
-                            .test_support()
-                            .text_sm()
-                            .font_weight(FontWeight::BOLD)
-                            .child(tr("驱动属性")),
-                    );
-                    content = content.child(driver_props_panel);
                     content
                 }
                 _ => {
@@ -1237,8 +1242,8 @@ impl<H: 'static> ConnectionDialogState<H> {
                                 "本地文件路径；「新建文件…」创建库文件（DuckDB 立即初始化可用；SQLite 首次连接自动初始化结构）",
                             ))
                     } else {
-                        // 网络型：主机 / 端口 / 数据库 = **可编辑字段**（与 Header URI 双向同步；
-                        // 编辑字段会重建 URI（保留凭据与查询串），保存仍以 URI 为权威）。
+                        // 网络型：主机 / 端口 / 数据库 = **可编辑字段，也是地址的唯一来源**；
+                        // Header 的 URI 由这三项派生（只读）。粘贴整条连接串走「从剪贴板导入」。
                         let mut body = div().w_full().v_flex().gap(rems(GAP_SM));
                         for (key, fallback, input) in [
                             ("host", "主机", host_input.clone()),
@@ -1261,10 +1266,96 @@ impl<H: 'static> ConnectionDialogState<H> {
                         if form_fields.is_empty() && !form_disabled {
                             body = body.child(hint_line(theme, "驱动未声明连接字段：按内置字段展示"));
                         }
-                        body.child(hint_line(
-                            theme,
-                            "字段与上方 URI 双向同步（凭据与查询串保留）；保存以 URI 为准",
-                        ))
+                        body = body.child(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    Button::new("import-uri")
+                                        .ghost()
+                                        .label(tr("从剪贴板导入 URI"))
+                                        .disabled(form_disabled)
+                                        .tooltip("把剪贴板里的整条连接串解析成主机 / 端口 / 数据库")
+                                        .on_click({
+                                            let entity = entity.clone();
+                                            let host_input = host_input.clone();
+                                            let port_input = port_input.clone();
+                                            let db_input = db_input.clone();
+                                            let result = result.clone();
+                                            let driver_id_now = current_driver
+                                                .as_ref()
+                                                .map(|d| d.id.clone())
+                                                .unwrap_or_default();
+                                            move |_, window, app| {
+                                                let text = app
+                                                    .read_from_clipboard()
+                                                    .and_then(|item| {
+                                                        item.text().map(|s| s.to_string())
+                                                    })
+                                                    .unwrap_or_default();
+                                                let text = text.trim().to_string();
+                                                if text.is_empty() {
+                                                    set_result(
+                                                        &result,
+                                                        ResultLevel::Warning,
+                                                        tr("剪贴板里没有文本可导入"),
+                                                    );
+                                                    let _ = entity
+                                                        .update(app, |_, cx| cx.notify());
+                                                    return;
+                                                }
+                                                let (h, p, d) =
+                                                    crate::services::data_source_service::parse_url_host_port_db(
+                                                        &driver_id_now,
+                                                        &text,
+                                                    );
+                                                if h.is_none() && d.is_none() {
+                                                    set_result(
+                                                        &result,
+                                                        ResultLevel::Error,
+                                                        "未能从剪贴板文本解析出地址（需要完整连接串，如 mysql://user@host:3306/db）",
+                                                    );
+                                                    let _ = entity
+                                                        .update(app, |_, cx| cx.notify());
+                                                    return;
+                                                }
+                                                set_input_value(
+                                                    &host_input,
+                                                    h.unwrap_or_default(),
+                                                    window,
+                                                    app,
+                                                );
+                                                set_input_value(
+                                                    &port_input,
+                                                    p.map(|v| v.to_string())
+                                                        .unwrap_or_default(),
+                                                    window,
+                                                    app,
+                                                );
+                                                set_input_value(
+                                                    &db_input,
+                                                    d.unwrap_or_default(),
+                                                    window,
+                                                    app,
+                                                );
+                                                set_result_ok(
+                                                    &result,
+                                                    true,
+                                                    tr("已从剪贴板导入地址（URI 将随之重建）"),
+                                                );
+                                                let _ = entity.update(app, |_, cx| cx.notify());
+                                            }
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.colors.muted_foreground)
+                                        .child(tr("字段是地址的唯一来源；上方 URI 由字段自动生成（只读）")),
+                                ),
+                        );
+                        body
                     };
 
                     // 卡片 2：数据库认证（引用已保存配置 + 管理入口）。
@@ -2085,8 +2176,10 @@ impl<H: 'static> ConnectionDialogState<H> {
                                 .child(text)
                                 .into_any_element()
                         } else {
+                            // 网络型 URI 是**派生展示**：由「常规 → 连接设置」的三项字段自动生成，
+                            // 因此只读（`disabled` 恒真，不只是未选驱动时）。粘贴导入见那里的按钮。
                             Input::new(&url)
-                                .disabled(form_disabled)
+                                .disabled(true)
                                 .flex_1()
                                 .into_any_element()
                         }),
@@ -2218,6 +2311,10 @@ impl<H: 'static> ConnectionDialogState<H> {
                 let busy = busy.clone();
                 let blocked_hint = blocked_hint.clone();
                 let shared = shared.clone();
+                // 地址字段（唯一来源）：回调里 collect 需要它们；与 name/url 同样先 clone 再 move。
+                let host_for_collect = host_input.clone();
+                let port_for_collect = port_input.clone();
+                let db_for_collect = db_input.clone();
                 Rc::new(move |window, app| {
                     // 在途：忽略重复触发（按钮已置灰，快捷键也会走到这儿）。
                     if busy.get() != BusyOp::None {
@@ -2234,7 +2331,17 @@ impl<H: 'static> ConnectionDialogState<H> {
                         url = %url_now,
                         "【探针】连接对话框「测试连接」on_click 触发"
                     );
-                    let Some(input) = state.collect(&name, &driver, &url, &user, &pass, app) else {
+                    let Some(input) = state.collect(
+                        &name,
+                        &driver,
+                        &url,
+                        &host_for_collect,
+                        &port_for_collect,
+                        &db_for_collect,
+                        &user,
+                        &pass,
+                        app,
+                    ) else {
                         // 拦截文案按**当前缺口**给，并把缺口字段的标签标红（见 `blocker`）。
                         blocked_hint.set(true);
                         set_result_ok(
@@ -2390,6 +2497,9 @@ impl<H: 'static> ConnectionDialogState<H> {
                 let project_path = project_path.clone();
                 let busy = busy.clone();
                 let blocked_hint = blocked_hint.clone();
+                let host_for_collect = host_input.clone();
+                let port_for_collect = port_input.clone();
+                let db_for_collect = db_input.clone();
                 Rc::new(move |window, app| {
                     if busy.get() != BusyOp::None {
                         return;
@@ -2407,8 +2517,17 @@ impl<H: 'static> ConnectionDialogState<H> {
                     )> = Vec::new();
                     let editing = editing_id.borrow().clone();
                     if let Some(cid) = &editing {
-                        let Some(input) = state.collect(&name, &driver, &url, &user, &pass, app)
-                        else {
+                        let Some(input) = state.collect(
+                            &name,
+                            &driver,
+                            &url,
+                            &host_for_collect,
+                            &port_for_collect,
+                            &db_for_collect,
+                            &user,
+                            &pass,
+                            app,
+                        ) else {
                             blocked_hint.set(true);
                             set_result_ok(
                                 &result,
