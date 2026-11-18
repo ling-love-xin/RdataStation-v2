@@ -31,6 +31,14 @@
 //! ORDER BY <列> [DESC]`。**不 CAST**：让源库按它自己的列类型排（数字列自然按数值，比我们
 //! 猜类型靠谱）。原 ORDER BY 要去掉——用户点的那一列才是他要的顺序。
 //!
+//! ## 条件口径（`rewrite_with_where`）
+//!
+//! 「按条件重查」（筛选框的运行按钮）与「关键词下发」是**同一套拼装**，只有条件来源不同：
+//!
+//! - [`rewrite_with_where`]：条件文本原样进 `WHERE`（DBeaver 口径——它筛选条里的文本
+//!   就是一条 WHERE 条件，`ResultSetFilterPanel.setCustomDataFilter()` `:618-648`）；
+//! - [`rewrite_with_filter`]：关键词展开成「每列 `CAST(x AS TEXT) LIKE '%词%'`」。
+//!
 //! 顶层子句的定位走 sqlglot 的 **tokenizer**（与语法高亮同一个入口）：字符串字面量或注释里的
 //! `limit` / `order by` 不算子句——词法扫描最容易错的正是这件事。
 
@@ -45,9 +53,46 @@ pub struct Rewrite {
     pub dropped_limit: Option<String>,
 }
 
-/// 把「结果集的列 + 筛选词」拼成一条重查语句
+/// 把「结果集的原查询 + 用户给出的 WHERE 条件」拼成一条重查语句
+///
+/// 与 [`rewrite_with_filter`] **同形**（包一层 `rds_filtered`、去掉顶层 `LIMIT`、
+/// `ORDER BY` 提到外层），区别只在条件的来源：这里是**原样使用的 WHERE 条件文本**，
+/// 不是把关键词展开成「每列 LIKE」。
+///
+/// 为什么要有这一版（对齐 DBeaver）：DBeaver 筛选条里的文本就是**一条 WHERE 条件**——
+/// `setCustomDataFilter()` 把 `filtersText.getText()` 直接塞进
+/// `DBDDataFilter.setWhere(condition)`（`ResultSetFilterPanel.java:618-648`），
+/// 没有"关键词 → LIKE"这层翻译。本仓「运行」按钮走的是同一语义（重查替换当前结果集），
+/// 因此也应当用这一版拼装，而不是各写一份 `select * from (...) as _q where ...`。
+pub fn rewrite_with_where(original: &str, condition: &str) -> Result<Rewrite, String> {
+    let condition = condition.trim();
+    if original.trim().is_empty() {
+        return Err("没有可重查的查询".to_string());
+    }
+    if condition.is_empty() {
+        return Err("筛选条件为空，没什么可重查的".to_string());
+    }
+
+    let clauses = top_level_clauses(original);
+    let body_end = clauses.body_end(original.len());
+    let body = original[..body_end].trim_end();
+    let order_text = clauses.order_text(original);
+    let dropped_limit = clauses.limit_text(original);
+
+    let mut sql = format!("SELECT * FROM (\n{body}\n) AS rds_filtered\nWHERE {condition}");
+    if let Some(order) = order_text {
+        sql.push('\n');
+        sql.push_str(&order);
+    }
+
+    Ok(Rewrite { sql, dropped_limit })
+}
+
+/// 把「结果集的列 + 筛选词」拼成一条重查语句（关键词口径：每列 `LIKE '%词%'`）
 ///
 /// `cast_type` 是 CAST 的目标类型（通常 `TEXT`；MySQL 用 `CHAR`）。
+/// 拼装形状与 [`rewrite_with_where`] 一致（别名 / 去 LIMIT / ORDER BY 外提）；
+/// 真正的差别只在条件生成：这里把**关键词**展开成「每列 LIKE」，那边原样使用条件文本。
 pub fn rewrite_with_filter(
     original: &str,
     columns: &[String],
@@ -262,7 +307,7 @@ fn quote_ident(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{rewrite_with_filter, rewrite_with_order, top_level_clauses};
+    use super::{rewrite_with_filter, rewrite_with_order, rewrite_with_where, top_level_clauses};
 
     fn columns() -> Vec<String> {
         vec!["id".to_string(), "name".to_string()]
@@ -426,5 +471,55 @@ mod tests {
         assert!(rewrite_with_filter("", &columns(), "x", "TEXT").is_err());
         assert!(rewrite_with_filter("SELECT 1", &columns(), "   ", "TEXT").is_err());
         assert!(rewrite_with_filter("SELECT 1", &[], "x", "TEXT").is_err());
+    }
+
+    #[test]
+    fn a_where_condition_is_used_verbatim() {
+        // 「按条件重查」：条件原样进 WHERE，不做关键词展开（DBeaver 口径）
+        let rewritten = rewrite_with_where("SELECT * FROM orders", "price > 10 and name like 'A%'")
+            .expect("能改写");
+        assert_eq!(
+            rewritten.sql,
+            "SELECT * FROM (\nSELECT * FROM orders\n) AS rds_filtered\n\
+             WHERE price > 10 and name like 'A%'"
+        );
+        assert_eq!(rewritten.dropped_limit, None);
+    }
+
+    #[test]
+    fn where_rewrite_drops_limit_and_hoists_order_by() {
+        // 与关键词下发同形：LIMIT 要去掉（否则"筛选"只在被截断的行里找），ORDER BY 提到外层
+        let rewritten = rewrite_with_where(
+            "SELECT * FROM t ORDER BY created_at DESC LIMIT 10",
+            "id > 5",
+        )
+        .expect("能改写");
+        assert!(!rewritten.sql.contains("LIMIT"), "{}", rewritten.sql);
+        assert!(
+            rewritten.sql.ends_with("ORDER BY created_at DESC"),
+            "ORDER BY 要提到外层：{}",
+            rewritten.sql
+        );
+        assert_eq!(rewritten.dropped_limit.as_deref(), Some("LIMIT 10"));
+    }
+
+    #[test]
+    fn empty_where_condition_is_refused() {
+        assert!(rewrite_with_where("", "id > 1").is_err());
+        assert!(rewrite_with_where("SELECT 1", "   ").is_err());
+    }
+
+    #[test]
+    fn where_and_filter_paths_agree_on_the_wrapping_shape() {
+        // 两条路只差条件生成：别名 / 子查询 / 去 LIMIT 都要一致
+        let by_where =
+            rewrite_with_where("SELECT * FROM t LIMIT 3", "id = 1").expect("能改写");
+        let by_filter = rewrite_with_filter("SELECT * FROM t LIMIT 3", &columns(), "x", "TEXT")
+            .expect("能改写");
+        assert_eq!(by_where.dropped_limit, by_filter.dropped_limit);
+        assert!(by_where.sql.starts_with("SELECT * FROM (\nSELECT * FROM t\n) AS rds_filtered"));
+        assert!(by_filter.sql.starts_with("SELECT * FROM (\nSELECT * FROM t\n) AS rds_filtered"));
+        assert!(by_where.sql.contains("WHERE id = 1"), "{}", by_where.sql);
+        assert!(!by_filter.sql.contains("WHERE id = 1"), "{}", by_filter.sql);
     }
 }

@@ -3723,6 +3723,45 @@ DBeaver 的右栏不是「一页换一页」，而是**一个**页签夹 `CTabFo
 `cargo test -p rds-editor --lib results` = 45 passed；`cargo test -p rds-ui-guard` = 4 passed。
 
 
+### 8.69 筛选「运行」与「下发」收成同一套 wrapped SQL 形状（2026-11-18）
+
+同一份筛选文本在本仓有**两条重查链路**，此前各自拼 SQL，形状不一致：
+
+| 链路 | 入口 | 旧拼法 | 语义 |
+| --- | --- | --- | --- |
+| 运行（替换当前结果集） | 筛选框 ▶ / 展开条 ▶ | `select * from (原SQL) as _q where 词`（宿主内联 format） | WHERE **条件**原样 |
+| 下发源库（产生新结果集） | 状态栏「下发源库」开 | `engine::sql::rewrite_with_filter`（每列 `CAST(x AS TEXT) LIKE '%词%'`） | 关键词 → 全列 LIKE |
+
+旧拼法有三个具体问题：① 别名 `_q` 与下发路径的 `rds_filtered` 不同，日志/历史里同功能两种形状；
+② **不摘顶层 `LIMIT`**——原查询带 `LIMIT 20` 时，「筛选」只在被截断的 20 行里找；
+③ **`ORDER BY` 留在子查询里**，外层结果顺序不保证。
+
+对齐依据：DBeaver 筛选条里的文本就是**一条 WHERE 条件**——`setCustomDataFilter()`
+把 `filtersText.getText()` 直接塞进 `DBDDataFilter.setWhere(condition)`
+（`ResultSetFilterPanel.java:618-648`），没有「关键词 → LIKE」这层翻译。
+
+落法：`crates/sql/src/filter.rs` 新增 `rewrite_with_where(original, condition) -> Result<Rewrite, String>`，
+与 `rewrite_with_filter` **共用同一套拼装**（`SELECT * FROM (<去 LIMIT 的正文>) AS rds_filtered
+WHERE <条件>` + `ORDER BY` 外提 + `dropped_limit` 回报），只差条件生成：
+
+- 「运行」→ `engine::sql::rewrite_with_where(&entry.sql, &value)`，失败给原因、`dropped_limit`
+  有值时提示「已去掉原查询的 LIMIT…」（与下发同一口径）；
+- 右栏「执行SQL」页的 wrapped SQL 预览（`render_filter_expand_bar`）同步改用同一函数——
+  此前预览说的不是真正要跑的那句；
+- 「下发」保持 `rewrite_with_filter`（关键词口径不变，见 §8.56 的两档设计）。
+
+**仍在册的口径差异（不是漏做）**：筛选框的输入在两条链路上含义不同——「运行」按 WHERE 条件、
+「下发」按关键词（后者是本地「任意列包含」语义的服务端对应）。DBeaver 只有一个口径（条件）。
+要统一成条件口径需同时改下发链路与本地过滤语义，属口径拍板项，未动。
+
+**验证**：`cargo test -p rds-sql --lib filter` = 15 passed（新增 4 条：条件原样进 WHERE、
+去 LIMIT + ORDER BY 外提、空条件拒绝、两条路拼装形状一致）；
+`cargo check -p rds-sql -p rds-result-panel -p rds-editor` 0 error / 0 warning；
+`cargo test -p rds-result-panel --lib` = 280 passed；`cargo test -p rds-editor --lib results` = 45 passed；
+`cargo test -p rds-ui-guard` = 4 passed。`run_filter_as_query` 本身没有端到端用例
+（需要真执行器），其可验证内核就是上面这层改写函数。
+
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

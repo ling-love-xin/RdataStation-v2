@@ -1257,6 +1257,27 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 
 ---
 
+### 2.58 筛选「运行」与「下发」共用一套 wrapped SQL 形状（2026-11-18）
+
+全文见 `result-panel.md §8.69`。接手要点：
+
+- 两条重查链路（运行 = 替换、下发 = 新结果集）此前各拼各的 SQL：运行是宿主内联
+  `select * from (…) as _q where 词`，下发是 `engine::sql::rewrite_with_filter`。
+  别名不同、运行那条**不摘 LIMIT**、`ORDER BY` 留在子查询里。
+- 现统一在 `crates/sql/src/filter.rs`：新增 `rewrite_with_where(original, condition)`
+  与 `rewrite_with_filter` 共用拼装（`rds_filtered` 别名 / 摘顶层 LIMIT / `ORDER BY` 外提 /
+  `dropped_limit` 回报），只差条件生成。改这两条链路的 SQL 形状只改这一个文件。
+- 对齐依据：DBeaver 的筛选条文本就是一条 WHERE 条件（`ResultSetFilterPanel.setCustomDataFilter()`
+  `:618-648` 直接 `setWhere(text)`）。
+- 右栏「执行SQL」页的预览串也改走同一函数——预览必须等于真要跑的那句。
+- **未统一的口径**：运行按「条件」、下发按「关键词（全列 LIKE）」。统一需同时改下发链路与
+  本地过滤语义，属拍板项（已登记）。
+- 新导出符号 `rds_sql::rewrite_with_where`，`engine::sql`（`pub use rds_sql::*`）与
+  `engine` 根都随之可用；`result_panel` 已依赖 `engine`，直接调即可，不必自己拼串。
+- **验证**：sql 15 passed（filter 模块）/ panel 280 / editor 45 / guard 4 / check 0-0。
+
+---
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。

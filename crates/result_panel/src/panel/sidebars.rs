@@ -764,12 +764,17 @@ impl ResultPanel {
         let clear_queue = self.queue.clone();
         let collapse_queue = self.queue.clone();
         let collapse_queue2 = self.queue.clone();
-        // wrapped SQL 预览：词非空且有原 SQL 时拼 `select * from (原SQL) where 词`
+        // wrapped SQL 预览：词非空且有原 SQL 时，按**与执行同一份拼装**生成
+        // （`engine::sql::rewrite_with_where`：包 `rds_filtered` / 去顶层 LIMIT /
+        // ORDER BY 外提）。此前这里自己拼 `select * from (…) as _q where …`，
+        // 别名与 LIMIT 处理都和真正执行的那句不一致——预览说的不是要跑的那句。
         let preview =
             (!self.filter_text.trim().is_empty() && self.result_sql.is_some()).then(|| {
                 let sql = self.result_sql.clone().unwrap_or_default();
                 let word = self.filter_text.trim();
-                let wrapped = format!("select * from ({}) as _q where {}", sql, word);
+                let wrapped = engine::sql::rewrite_with_where(&sql, word)
+                    .map(|rewritten| rewritten.sql)
+                    .unwrap_or_else(|_| format!("select * from ({sql}) as rds_filtered where {word}"));
                 let preview_text: SharedString = if wrapped.len() > 80 {
                     format!("{}…", &wrapped[..80]).into()
                 } else {

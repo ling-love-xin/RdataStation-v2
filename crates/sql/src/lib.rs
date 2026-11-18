@@ -51,7 +51,7 @@ pub use bind::{param_names, substitute_params};
 pub use builder::QualifiedTable;
 pub use engine::{AlterOperation, ColumnDefInfo, DdlInfo, SqlDialect, SqlEngine, SqlStatementType};
 pub use explain::explain_sql;
-pub use filter::{Rewrite, rewrite_with_filter, rewrite_with_order};
+pub use filter::{Rewrite, rewrite_with_filter, rewrite_with_order, rewrite_with_where};
 pub use formatter::{FormatOptions, FormatReport, KeywordCase};
 pub use function_manual::{MANUAL, ManualCategory, ManualEntry, search_manual};
 pub use functions::{

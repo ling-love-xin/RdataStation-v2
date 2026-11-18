@@ -9,8 +9,17 @@ use crate::store::{ResultEntry, ResultPlacement};
 use crate::view::dialogs;
 
 impl EditorHostPanel {
-    /// 【1.2】筛选框运行：用 `select * from (原SQL) where 词` **替换**当前结果集重查
-    /// （用户口径：刷新结果集）。词取面板**实时**筛选词（运行按钮点击时面板已定稿）。
+    /// 【1.2】筛选框运行：用 `select * from (原SQL) as rds_filtered where 条件`
+    /// **替换**当前结果集重查（用户口径：刷新结果集）。
+    ///
+    /// 条件取面板**实时**筛选词（运行按钮点击时面板已定稿）。拼装走
+    /// [`engine::sql::rewrite_with_where`]：与「下发源库」的 [`engine::sql::rewrite_with_filter`]
+    /// 同一套形状（包一层 `rds_filtered` / 去掉顶层 `LIMIT` / `ORDER BY` 提到外层），
+    /// 只差条件生成——这里是**条件文本原样**（DBeaver 的筛选条就是一条 WHERE 条件，
+    /// `ResultSetFilterPanel.setCustomDataFilter()` `:618-648`）。
+    /// 此前这里自己拼了一份 `select * from (…) as _q where …`：别名不同、LIMIT 不摘、
+    /// ORDER BY 留在子查询里，同一功能两套形状。
+    ///
     /// 生成的 wrapped SQL 写入面板 `exec_sql`（右栏「执行SQL」页签展示）。
     pub(crate) fn run_filter_as_query(&mut self, cx: &mut Context<Self>) {
         let value = self.result_panel.read(cx).filter_text().trim().to_string();
@@ -26,7 +35,21 @@ impl EditorHostPanel {
             self.set_message(Some("没有可执行的结果集".to_string()), cx);
             return;
         };
-        let wrapped = format!("select * from ({}) as _q where {}", entry.sql, value);
+        let rewritten = match engine::sql::rewrite_with_where(&entry.sql, &value) {
+            Ok(rewritten) => rewritten,
+            Err(reason) => {
+                self.set_message(Some(reason), cx);
+                return;
+            }
+        };
+        // 去掉过 LIMIT 要说出来（与下发同一口径：不说的话用户会以为"怎么多了这么多行"）
+        if let Some(limit) = rewritten.dropped_limit.clone() {
+            self.set_message(
+                Some(format!("已去掉原查询的 {limit}（按条件重查要能查到全部行）")),
+                cx,
+            );
+        }
+        let wrapped = rewritten.sql;
         self.result_panel
             .update(cx, |p, cx| p.set_exec_sql(Some(wrapped.clone()), cx));
         self.execute(ExecTarget::Statement(wrapped), ResultPlacement::Replace, cx);
