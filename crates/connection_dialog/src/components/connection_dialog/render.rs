@@ -605,209 +605,21 @@ impl<H: 'static> ConnectionDialogState<H> {
             // 能力面板：原本是独立 Tab「能力」（只读矩阵）。
             // 收敛后挂在「高级」页尾——普通用户不必先读懂能力清单才敢保存连接。
             let capability_panel = {
-                    // ===== 能力：只读矩阵（清单与命中来自 `drivers.capabilities`；
-                    // 标签 / 运行时位 / 真机验收状态来自引擎的能力字典，UI 不再另存字典）=====
-                    let caps = derived.capabilities.clone();
-                    let declared_count = caps.len();
-                    let mut chips = div().h_flex().gap_2().flex_wrap();
-                    for row in capability_rows(&caps) {
-                        // 验收标记：已真机验收的项行尾加核对，未验收的如实标注（D10 口径）。
-                        // 仅对**该驱动已声明**的能力标注——未声明的项不值得验收。
-                        let acceptance = row
-                            .declared
-                            .then_some(row.acceptance)
-                            .filter(|a| a.verified);
-                        // 功能未实现的键：直接写在标签上（测试者不该去找一个不存在的入口），
-                        // 也不把它画成“支持”（颜色按未声明走）。
-                        let label = match (&acceptance, row.not_built) {
-                            (Some(_), _) => format!("{} ✓", row.label),
-                            (None, true) => format!("{}（功能未实现）", row.label),
-                            (None, false) => row.label.clone(),
-                        };
-                        chips = chips.child(
-                            div()
-                                .text_xs()
-                                .rounded_full()
-                                .border_1()
-                                .px_3()
-                                .py_1()
-                                .border_color(if row.declared { theme.colors.success } else { theme.colors.border })
-                                .text_color(if row.declared { theme.colors.success } else { theme.colors.muted_foreground })
-                                .child(label),
-                        );
-                    }
-                    let hint = match current_driver.as_ref() {
-                        None => "先在左侧选择数据库类型与驱动实现".to_string(),
-                        Some(d) if declared_count == 0 => {
-                            format!("{}：{CAP_EMPTY_HINT}", driver_short_name(&d.name))
-                        }
-                        Some(d) => format!(
-                            "{}：drivers.capabilities 声明 {declared_count} 项 · 只读展示 · ✓ = 已真机验收",
-                            driver_short_name(&d.name)
-                        ),
-                    };
-                    // 应用级功能单独一句：它们与驱动无关，混进矩阵会被读成“该驱动不支持”
-                    let app_level = app_level_capabilities();
-                    // 【D8d】来源 + 最近同步：取自 `driver_operations` 的 declare_sync 最新行，
-                    // 与驱动目录同批读进缓存（render 只读，不查库）。没有记录就如实写「尚未同步」。
-                    let source_text = current_driver
-                        .as_ref()
-                        .map(|driver| driver_source_text(state.driver_source(&driver.id).as_ref()));
-                    let mut capability_tab = div().v_flex().gap_2()
-                        .child(div().text_xs().text_color(theme.colors.muted_foreground).child(hint))
-                        .children(source_text.map(|text| {
-                            div()
-                                .text_xs()
-                                .text_color(theme.colors.muted_foreground)
-                                .child(text)
-                        }))
-                        .child(chips);
-                    if !app_level.is_empty() {
-                        capability_tab = capability_tab.child(
-                            div().text_xs().text_color(theme.colors.muted_foreground).child(format!(
-                                "另有应用级功能（与驱动无关，全部驱动可用）：{}",
-                                app_level.join(" · ")
-                            )),
-                        );
-                    }
-                    capability_tab
+                let source_text = current_driver
+                    .as_ref()
+                    .map(|d| driver_source_text(state.driver_source(&d.id).as_ref()));
+                capability_panel_ui(&derived, current_driver.as_ref(), source_text, theme)
             };
             // 驱动属性面板（同上）：key-value 动态增删 + 每行「去向」标注。
-            let driver_props_panel = {
-                    // ===== 驱动属性：key-value 动态增删 =====
-                    // 每行下方标注**去向**（判决来自 `engine::driver::property_spec`）：
-                    // 会下发 / 当前实现会忽略 / 当前实现会报错 / 当前实现不下发。
-                    // 为什么要有这行：同一个键在四个客户端库上有四种命运（能力矩阵 §2.1），
-                    // 不标注就只能等连接失败（或静默不生效）才知道。
-                    let props_driver = current_driver
-                        .as_ref()
-                        .map(|d| d.id.clone())
-                        .unwrap_or_default();
-                    let props_ui = {
-                        let props_outer = props.clone();
-                        let props_ref = props.borrow();
-                        let mut rows = div().v_flex().gap_2();
-                        for (i, (k, v)) in props_ref.iter().enumerate() {
-                            let idx = i;
-                            let k = k.clone();
-                            let v = v.clone();
-                            let props = props_outer.clone();
-                            let entity = entity.clone();
-                            let mut row = div().v_flex().gap_1().child(
-                                div().h_flex().items_center().gap_2()
-                                    .child(div().text_xs().child(k.clone()))
-                                    .child(div().text_xs().text_color(theme.colors.muted_foreground).child("="))
-                                    .child(div().text_xs().flex_1().child(v))
-                                    .child(
-                                        // 删除属性行：语义 `Button`（ghost + danger）——悬停 / 焦点 /
-                                        // 键盘 / a11y 都由组件给，不再手搓可点 div（2026-10-28 审计）。
-                                        Button::new(ElementId::Name(SharedString::from(format!("prop-del-{k}"))))
-                                            .ghost()
-                                            .with_size(Size::XSmall)
-                                            .text_color(theme.colors.danger)
-                                            .child(tr("删除"))
-                                            .on_click(move |_, _, app| {
-                                                props.borrow_mut().remove(idx);
-                                                entity.update(app, |_, cx| cx.notify());
-                                            }),
-                                    ),
-                            );
-                            if let Some((text, level)) = property_note(&props_driver, &k) {
-                                let color = match level {
-                                    PropertyNoteLevel::Info => theme.colors.muted_foreground,
-                                    PropertyNoteLevel::Warn => theme.colors.warning,
-                                    PropertyNoteLevel::Danger => theme.colors.danger,
-                                };
-                                let note_id = ElementId::Name(SharedString::from(format!(
-                                    "conn-prop-note-{k}"
-                                )));
-                                row = row.child(
-                                    div()
-                                        .id(note_id)
-                                        // kit 观测：窗口用例按 id 取快照（可见性 + 几何）。
-                                        .test_support()
-                                        .text_xs()
-                                        .text_color(color)
-                                        .child(text),
-                                );
-                            }
-                            rows = rows.child(row);
-                        }
-                        rows
-                    };
-                    let add_prop = div().h_flex().items_center().gap_2()
-                        .child(Input::new(&prop_key))
-                        .child(Input::new(&prop_val))
-                        .child(
-                            Button::new("add-prop")
-                                .secondary()
-                                .label(tr("添加"))
-                                .on_click({
-                                    let props = props.clone();
-                                    let entity = entity.clone();
-                                    let prop_key = prop_key.clone();
-                                    let prop_val = prop_val.clone();
-                                    let result = result.clone();
-                                    let prop_driver = props_driver.clone();
-                                    move |_, window, app| {
-                                        let k = prop_key.read(app).value().to_string();
-                                        let v = prop_val.read(app).value().to_string();
-                                        if k.trim().is_empty() {
-                                            set_result_ok(&result, false, tr("属性 key 不能为空"));
-                                            entity.update(app, |_, cx| cx.notify());
-                                            return;
-                                        }
-                                        let mut p = props.borrow_mut();
-                                        if let Some(e) = p.iter_mut().find(|(ek, _)| ek == &k) {
-                                            e.1 = v;
-                                        } else {
-                                            p.push((k.trim().to_string(), v));
-                                        }
-                                        drop(p);
-                                        prop_key.update(app, |s, cx| s.set_value("", window, cx));
-                                        prop_val.update(app, |s, cx| s.set_value("", window, cx));
-                                        // 立即把「去向」告诉用户（不等连接失败才发现）：
-                                        // 忽略 / 不下发 → 警告，会报错 → 错误；直接下发才报成功。
-                                        match property_note(&prop_driver, &k) {
-                                            Some((text, PropertyNoteLevel::Danger)) => {
-                                                set_result(&result, ResultLevel::Error, text)
-                                            }
-                                            Some((text, PropertyNoteLevel::Warn)) => {
-                                                set_result(&result, ResultLevel::Warning, text)
-                                            }
-                                            _ => set_result_ok(&result, true, tr("驱动属性已更新")),
-                                        }
-                                        entity.update(app, |_, cx| cx.notify());
-                                    }
-                                }),
-                        );
-                    // 常用键提示：来自驱动属性规格的**标签子集**（`property_spec::known_keys`），
-                    // 解释这个驱动能配什么；写「常用」而不是「可用」——完整清单比这长。
-                    let known = engine::driver::driver_property_keys(&props_driver);
-                    let known_hint = known.first().map(|_| {
-                        let list = known
-                            .iter()
-                            .take(8)
-                            .map(|k| format!("{}（{}）", k.key, k.label))
-                            .collect::<Vec<_>>()
-                            .join(" · ");
-                        format!("该驱动常用键：{list}")
-                    });
-                    let mut tab = div().v_flex().gap_2()
-                        .child(
-                            div().text_xs().text_color(theme.colors.muted_foreground)
-                                .child(
-                                    "driver_properties · key-value（随连接落库，覆盖驱动默认；\
-                                     默认值取驱动声明，每行下方标注会怎么下发）",
-                                ),
-                        )
-                        .child(props_ui)
-                        .child(add_prop);
-                    if let Some(hint) = known_hint {
-                        tab = tab.child(div().text_xs().text_color(theme.colors.muted_foreground).child(hint));
-                    }
-                    tab
-            };
+            let driver_props_panel = driver_props_panel_ui(
+                &props,
+                &prop_key,
+                &prop_val,
+                &result,
+                &entity,
+                current_driver.as_ref(),
+                theme,
+            );
             let tab_content = match tab_ix_now {
                 1 => {
                     // ===== 网络：引用「网络配置」档案（内联链已撤下，见架构 §14 #25）=====
@@ -3142,4 +2954,253 @@ fn side_panel_ui<H: 'static>(p: SidePanel<'_, H>) -> impl IntoElement {
                         .when_some(draft_list, |d, list| d.child(List::new(list))),
                 ),
         )
+}
+
+/// 能力矩阵（只读）：清单与命中来自 `drivers.capabilities`，标签 / 运行时位 / 真机验收
+/// 状态来自引擎的能力字典，UI 不另存字典。
+///
+/// `source_text` 由调用方算好（它要读 `driver_source`，属于状态而非纯展示）。
+fn capability_panel_ui(
+    derived: &DriverDerived,
+    current_driver: Option<&Driver>,
+    source_text: Option<String>,
+    theme: &Theme,
+) -> Div {
+    let caps = &derived.capabilities;
+    let declared_count = caps.len();
+    let mut chips = div().h_flex().gap_2().flex_wrap();
+    for row in capability_rows(caps) {
+        // 验收标记：已真机验收的项行尾加核对，未验收的如实标注（D10 口径）。
+        // 仅对**该驱动已声明**的能力标注——未声明的项不值得验收。
+        let acceptance = row
+            .declared
+            .then_some(row.acceptance)
+            .filter(|a| a.verified);
+        // 功能未实现的键：直接写在标签上（测试者不该去找一个不存在的入口），
+        // 也不把它画成“支持”（颜色按未声明走）。
+        let label = match (&acceptance, row.not_built) {
+            (Some(_), _) => format!("{} ✓", row.label),
+            (None, true) => format!("{}（功能未实现）", row.label),
+            (None, false) => row.label.clone(),
+        };
+        chips = chips.child(
+            div()
+                .text_xs()
+                .rounded_full()
+                .border_1()
+                .px_3()
+                .py_1()
+                .border_color(if row.declared {
+                    theme.colors.success
+                } else {
+                    theme.colors.border
+                })
+                .text_color(if row.declared {
+                    theme.colors.success
+                } else {
+                    theme.colors.muted_foreground
+                })
+                .child(label),
+        );
+    }
+    let hint = match current_driver {
+        None => "先在左侧选择数据库类型与驱动实现".to_string(),
+        Some(d) if declared_count == 0 => {
+            format!("{}：{CAP_EMPTY_HINT}", driver_short_name(&d.name))
+        }
+        Some(d) => format!(
+            "{}：drivers.capabilities 声明 {declared_count} 项 · 只读展示 · ✓ = 已真机验收",
+            driver_short_name(&d.name)
+        ),
+    };
+    // 应用级功能单独一句：它们与驱动无关，混进矩阵会被读成“该驱动不支持”
+    let app_level = app_level_capabilities();
+    let mut capability_tab = div()
+        .v_flex()
+        .gap_2()
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.colors.muted_foreground)
+                .child(hint),
+        )
+        .children(source_text.map(|text| {
+            div()
+                .text_xs()
+                .text_color(theme.colors.muted_foreground)
+                .child(text)
+        }))
+        .child(chips);
+    if !app_level.is_empty() {
+        capability_tab = capability_tab.child(
+            div()
+                .text_xs()
+                .text_color(theme.colors.muted_foreground)
+                .child(format!(
+                    "另有应用级功能（与驱动无关，全部驱动可用）：{}",
+                    app_level.join(" · ")
+                )),
+        );
+    }
+    capability_tab
+}
+
+/// 驱动属性面板：key-value 动态增删。
+///
+/// 每行下方标注**去向**（判决来自 `engine::driver::property_spec`）：
+/// 会下发 / 当前实现会忽略 / 当前实现会报错 / 当前实现不下发。
+/// 为什么要有这行：同一个键在四个客户端库上有四种命运（能力矩阵 §2.1），
+/// 不标注就只能等连接失败（或静默不生效）才知道。
+fn driver_props_panel_ui<H: 'static>(
+    props: &Rc<RefCell<Vec<(String, String)>>>,
+    prop_key: &Entity<InputState>,
+    prop_val: &Entity<InputState>,
+    result: &Rc<RefCell<Option<ResultLine>>>,
+    entity: &Entity<H>,
+    current_driver: Option<&Driver>,
+    theme: &Theme,
+) -> Div {
+    let props_driver = current_driver.map(|d| d.id.clone()).unwrap_or_default();
+    let props_ui = {
+        let props_outer = props.clone();
+        let props_ref = props.borrow();
+        let mut rows = div().v_flex().gap_2();
+        for (i, (k, v)) in props_ref.iter().enumerate() {
+            let idx = i;
+            let k = k.clone();
+            let v = v.clone();
+            let props = props_outer.clone();
+            let entity = entity.clone();
+            let mut row = div().v_flex().gap_1().child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().text_xs().child(k.clone()))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .child("="),
+                    )
+                    .child(div().text_xs().flex_1().child(v))
+                    .child(
+                        // 删除属性行：语义 `Button`（ghost + danger）——悬停 / 焦点 /
+                        // 键盘 / a11y 都由组件给，不再手搓可点 div（2026-10-28 审计）。
+                        Button::new(ElementId::Name(SharedString::from(format!("prop-del-{k}"))))
+                            .ghost()
+                            .with_size(Size::XSmall)
+                            .text_color(theme.colors.danger)
+                            .child(tr("删除"))
+                            .on_click(move |_, _, app| {
+                                props.borrow_mut().remove(idx);
+                                entity.update(app, |_, cx| cx.notify());
+                            }),
+                    ),
+            );
+            if let Some((text, level)) = property_note(&props_driver, &k) {
+                let color = match level {
+                    PropertyNoteLevel::Info => theme.colors.muted_foreground,
+                    PropertyNoteLevel::Warn => theme.colors.warning,
+                    PropertyNoteLevel::Danger => theme.colors.danger,
+                };
+                let note_id = ElementId::Name(SharedString::from(format!("conn-prop-note-{k}")));
+                row = row.child(
+                    div()
+                        .id(note_id)
+                        // kit 观测：窗口用例按 id 取快照（可见性 + 几何）。
+                        .test_support()
+                        .text_xs()
+                        .text_color(color)
+                        .child(text),
+                );
+            }
+            rows = rows.child(row);
+        }
+        rows
+    };
+    let add_prop = div()
+        .h_flex()
+        .items_center()
+        .gap_2()
+        .child(Input::new(prop_key))
+        .child(Input::new(prop_val))
+        .child(
+            Button::new("add-prop")
+                .secondary()
+                .label(tr("添加"))
+                .on_click({
+                    let props = props.clone();
+                    let entity = entity.clone();
+                    let prop_key = prop_key.clone();
+                    let prop_val = prop_val.clone();
+                    let result = result.clone();
+                    let prop_driver = props_driver.clone();
+                    move |_, window, app| {
+                        let k = prop_key.read(app).value().to_string();
+                        let v = prop_val.read(app).value().to_string();
+                        if k.trim().is_empty() {
+                            set_result_ok(&result, false, tr("属性 key 不能为空"));
+                            entity.update(app, |_, cx| cx.notify());
+                            return;
+                        }
+                        let mut p = props.borrow_mut();
+                        if let Some(e) = p.iter_mut().find(|(ek, _)| ek == &k) {
+                            e.1 = v;
+                        } else {
+                            p.push((k.trim().to_string(), v));
+                        }
+                        drop(p);
+                        prop_key.update(app, |s, cx| s.set_value("", window, cx));
+                        prop_val.update(app, |s, cx| s.set_value("", window, cx));
+                        // 立即把「去向」告诉用户（不等连接失败才发现）：
+                        // 忽略 / 不下发 → 警告，会报错 → 错误；直接下发才报成功。
+                        match property_note(&prop_driver, &k) {
+                            Some((text, PropertyNoteLevel::Danger)) => {
+                                set_result(&result, ResultLevel::Error, text)
+                            }
+                            Some((text, PropertyNoteLevel::Warn)) => {
+                                set_result(&result, ResultLevel::Warning, text)
+                            }
+                            _ => set_result_ok(&result, true, tr("驱动属性已更新")),
+                        }
+                        entity.update(app, |_, cx| cx.notify());
+                    }
+                }),
+        );
+    // 常用键提示：来自驱动属性规格的**标签子集**（`property_spec::known_keys`），
+    // 解释这个驱动能配什么；写「常用」而不是「可用」——完整清单比这长。
+    let known = engine::driver::driver_property_keys(&props_driver);
+    let known_hint = known.first().map(|_| {
+        let list = known
+            .iter()
+            .take(8)
+            .map(|k| format!("{}（{}）", k.key, k.label))
+            .collect::<Vec<_>>()
+            .join(" · ");
+        format!("该驱动常用键：{list}")
+    });
+    let mut tab = div()
+        .v_flex()
+        .gap_2()
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.colors.muted_foreground)
+                .child(
+                    "driver_properties · key-value（随连接落库，覆盖驱动默认；\
+                     默认值取驱动声明，每行下方标注会怎么下发）",
+                ),
+        )
+        .child(props_ui)
+        .child(add_prop);
+    if let Some(hint) = known_hint {
+        tab = tab.child(
+            div()
+                .text_xs()
+                .text_color(theme.colors.muted_foreground)
+                .child(hint),
+        );
+    }
+    tab
 }
