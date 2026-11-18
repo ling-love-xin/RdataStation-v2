@@ -316,7 +316,16 @@ impl<H: 'static> ConnectionDialogState<H> {
             };
 
         window.open_dialog(cx, move |dialog, window, cx| {
-            let scope_sel = scope.read(cx).selected_value().cloned().unwrap_or_default().to_string();
+            // 作用域：「空」不是「仅全局」，而是「没显式选过」→ 默认「仅项目」。
+            // 该回退必须与 `collect` / 草稿快照共用 `scope_label_or_default`，
+            // 否则会出现「分段高亮项目 + 项目栏禁用 + 落库仅全局」的三方矛盾。
+            let scope_raw = scope
+                .read(cx)
+                .selected_value()
+                .cloned()
+                .unwrap_or_default()
+                .to_string();
+            let scope_sel = scope_label_or_default(&scope_raw);
             let includes_project = scope_from_label(&scope_sel).includes_project();
             // 项目下拉 → 路径输入同步（render 为权威同步点，兜底）：选中普通项目时写回路径，
             // 保存与作用域预检统一读路径输入（单一数据源）；「＋ 新增项目」由确认订阅处理。
@@ -1883,15 +1892,11 @@ impl<H: 'static> ConnectionDialogState<H> {
             // 作用域：三态分段（gpui-component `TabBar::segmented`，决策 #84）——
             // 短标签只用于显示，写库仍用全称标签（`SCOPE_SEG_LABELS` 的第二列）。
             let scope_seg = {
-                // 规则 1（决策 #110）：新建默认作用域 =「仅项目」（未显式选择时的回退值）。
-                let scope_now = if scope_sel.is_empty() {
-                    helpers::default_new_scope()
-                } else {
-                    scope_sel.as_str()
-                };
+                // 规则 1（决策 #110）：默认值已由 `scope_sel`（`scope_label_or_default`）统一给出；
+                // 这里不再单独回退，避免“显示走一条、落库走另一条”。
                 let selected = SCOPE_SEG_LABELS
                     .iter()
-                    .position(|(_, full)| *full == scope_now)
+                    .position(|(_, full)| *full == scope_sel.as_str())
                     .unwrap_or(0);
                 TabBar::new("scope-seg")
                     .segmented()

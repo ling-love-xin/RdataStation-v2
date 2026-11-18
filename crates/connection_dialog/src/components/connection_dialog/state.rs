@@ -58,7 +58,7 @@ impl<H: 'static> ConnectionDialogState<H> {
             )
         });
 
-        Self {
+        let dialog = Self {
             name,
             url,
             user,
@@ -201,7 +201,13 @@ impl<H: 'static> ConnectionDialogState<H> {
             // 分组卡「＋ 新建分组」输入行（与 mod.rs 字段声明对应）。
             group_new_open: Rc::new(Cell::new(false)),
             group_new_name: cx.new(|cx| InputState::new(window, cx)),
-        }
+        };
+        // 规则 1（决策 #110）：默认「仅项目」必须**真的写进 Select**，不能只做渲染回退——
+        // 否则首开是「界面高亮项目、项目栏却禁用、落库走仅全局」的三方矛盾。
+        dialog.scope.update(cx, |s, cx| {
+            s.set_selected_value(&SharedString::from(helpers::default_new_scope()), window, cx)
+        });
+        dialog
     }
 
     /// 拉取元数据（认证/网络/环境列表 + Select 选项）；首次打开时调用。
@@ -1259,15 +1265,15 @@ impl ClonedDialogState {
                 Some(v.trim().to_string())
             }
         };
-        // 作用域（UI 标签 → ConnectionScope）。
-        let scope = scope_from_label(
-            self.scope
-                .read(cx)
-                .selected_value()
-                .cloned()
-                .unwrap_or_default()
-                .as_str(),
-        );
+        // 作用域（UI 标签 → ConnectionScope）。空值不是「全局」而是「没选过」→ 新建默认「仅项目」：
+        // 与渲染、草稿快照共用 `scope_label_or_default`，避免“界面显示项目、落库仅全局”。
+        let scope_label_raw = self
+            .scope
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .unwrap_or_default();
+        let scope = scope_from_label(&scope_label_or_default(&scope_label_raw));
         // 高级选项组装：ssl + policy_overrides 合并为一个 JSON。
         let mut adv = serde_json::Map::new();
         let ssl_mode = self
@@ -1486,7 +1492,7 @@ impl ClonedDialogState {
             url: d.url.trim().to_string(),
             username,
             password,
-            scope: scope_from_label(&d.scope),
+            scope: scope_from_label(&scope_label_or_default(&d.scope)),
             description: if d.remark.trim().is_empty() {
                 None
             } else {
@@ -1721,6 +1727,44 @@ mod tests {
             dialog.selected_type.clone(),
             dialog.tags_input.clone(),
         )
+    }
+
+    /// 规则 1（决策 #110）回归：新建对话框的作用域必须**真的**是「仅项目」，
+    /// 且空作用域草稿落库同为 `Project` —— 而不是“界面显示项目、collect 落成全局”。
+    ///
+    /// 这条缝以前没人守：`default_new_scope()` 只被渲染层用作**显示回退**，
+    /// `collect` / `draft_to_save_input` 直接按空串 → `Global`，于是首开
+    /// 「分段高亮项目 + 项目栏禁用（仅全局不需要）+ 实际落全局」三方矛盾。
+    #[gpui_kit::test]
+    fn new_dialog_defaults_to_project_scope_in_ui_and_save_input(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (_, cx) = cx.add_window_view(|_, _cx| Host);
+        let cx: &mut VisualTestContext = cx;
+        let cl = dialog(cx);
+
+        // 1) UI 侧：Select 里必须有值（不是靠渲染层回退），否则项目栏判成「仅全局」。
+        let ui_scope = cx.update(|_, cx| {
+            cl.scope.read(cx).selected_value().map(|v| v.to_string())
+        });
+        assert_eq!(
+            ui_scope.as_deref(),
+            Some("仅项目"),
+            "首开作用域应显式写入「仅项目」，而不是留空由渲染层回退"
+        );
+
+        // 2) 落库侧：空作用域草稿 → Project（与 UI 同口径）。
+        let draft = ConnectionDraft {
+            name: "首开默认".into(),
+            driver_id: "postgres".into(),
+            url: "postgres://db:5432/app".into(),
+            ..ConnectionDraft::empty()
+        };
+        let input = cl.draft_to_save_input(&draft).expect("应可提交");
+        assert_eq!(
+            input.scope,
+            ConnectionScope::Project,
+            "空作用域应按默认「仅项目」落库（P_ 前缀），不能落到全局"
+        );
     }
 
     /// 草稿快照 → 保存输入：网络型（postgres）全字段映射 + 作用域标签转换 + 引用名→ID。

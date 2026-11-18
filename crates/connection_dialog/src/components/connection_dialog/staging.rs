@@ -492,7 +492,8 @@ impl<H: 'static> ConnectionDialogState<H> {
                 }
             }
         }
-        set_select_value(&self.scope, &d.scope, window, cx);
+        // 空作用域（旧草稿 / 未选过）按新建默认「仅项目」回填，与 collect 同一口径。
+        set_select_value(&self.scope, &scope_label_or_default(&d.scope), window, cx);
         set_select_value(&self.ssl_mode, &d.ssl_mode, window, cx);
         set_select_value(
             &self.auth_ref,
