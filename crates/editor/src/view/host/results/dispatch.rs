@@ -377,6 +377,19 @@ impl EditorHostPanel {
                         .update(cx, |p, cx| p.begin_references_load(cx));
                 }
             }
+            // 【右栏】面板开关语义（右缘竖条图标 / 视图菜单面板项）：该页已显示就收起整块面板，
+            // 否则切到该页。对齐 DBeaver `ResultSetHandlerTogglePanel`（`CMD_TOGGLE_PANEL`）。
+            // 面板状态本身与 `SetRightTab` 同口径（纯面板状态，宿主只转发）；
+            // 只有「真的切到了引用页」才需要读外键，与 `SetRightTab` 分支同一条刷新路径。
+            ResultRequest::ToggleRightTab(tab) => {
+                let switched = self
+                    .result_panel
+                    .update(cx, |p, cx| p.toggle_right_tab(tab, cx));
+                if switched && tab == RightTab::Reference {
+                    self.result_panel
+                        .update(cx, |p, cx| p.begin_references_load(cx));
+                }
+            }
             // 【引用页】宿主侧取外键（面板只交 schema / 表 / 可见列）
             ResultRequest::LoadReferences {
                 schema,

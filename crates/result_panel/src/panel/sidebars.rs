@@ -23,8 +23,8 @@ use gpui_kit::*;
 
 use super::data::ResultPanel;
 use super::events::{
-    right_tab_description, right_tab_from_index, right_tab_icon, right_tab_index, right_tab_label,
-    right_tabs,
+    right_tab_click_collapses, right_tab_description, right_tab_from_index, right_tab_icon,
+    right_tab_index, right_tab_label, right_tabs,
 };
 use super::tabs::kv_row;
 use crate::ports::{Presentation, ResultRequest, RightTab};
@@ -755,15 +755,25 @@ impl ResultPanel {
             )
             .children(tabs.into_iter().map(|tab| {
                 let queue = queue.clone();
+                // 【面板开关语义】DBeaver 竖条上每页是一颗 CHECK：勾选 = 「面板可见且是这一页」，
+                // 再点已勾选的那颗 = 关掉该面板（`ResultSetHandlerTogglePanel:64-81`，
+                // `closePanel`）。本仓单页模型下等价于收起整块面板，请求同样走
+                // `ToggleRightTab`（与视图菜单里的面板项同一份语义）。
+                let collapses = right_tab_click_collapses(tab, active, panels_visible);
+                let target = ResultRequest::ToggleRightTab(tab);
                 Button::new(format!("editor-result-edge-{:?}", tab))
                     .ghost()
                     .small()
                     .debug_selector(|| format!("editor-result-edge-{:?}", tab))
                     .toggled(active == tab)
                     .icon(right_tab_icon(tab))
-                    .tooltip(right_tab_label(tab))
+                    .tooltip(if collapses {
+                        "收起结果面板（本页正在显示）"
+                    } else {
+                        right_tab_label(tab)
+                    })
                     .on_click(move |_, _window, app| {
-                        queue.request(ResultRequest::SetRightTab(tab), app);
+                        queue.request(target.clone(), app);
                     })
                     .into_any_element()
             }))

@@ -1497,6 +1497,59 @@ fn maximize_panel_hides_the_grid_and_keeps_the_sidebar(cx: &mut gpui_kit::TestAp
     );
 }
 
+/// 【右缘竖条 / 视图菜单】点某一页的开关语义（纯函数）：对齐 DBeaver
+/// `ResultSetHandlerTogglePanel.toggleResultsPanel:64-69` + `showResultsPanel:71-81`
+/// （`isVisible = isPanelsVisible() && isPanelVisible(id)`，真则 `closePanel`）。
+#[test]
+fn right_tab_click_closes_only_the_page_that_is_showing() {
+    use super::events::right_tab_click_collapses;
+    use crate::ports::RightTab;
+
+    // 面板可见 + 点的正是当前页 → 收起
+    assert!(right_tab_click_collapses(
+        RightTab::Value,
+        RightTab::Value,
+        true
+    ));
+    // 面板可见但点的是别的页 → 切页（不收起）
+    assert!(!right_tab_click_collapses(
+        RightTab::Stats,
+        RightTab::Value,
+        true
+    ));
+    // 面板不可见 → 任何点击都是「展开并切到该页」
+    assert!(!right_tab_click_collapses(
+        RightTab::Value,
+        RightTab::Value,
+        false
+    ));
+}
+
+/// 同上的状态机行为（窗口用例）：连点两次同一页 = 收起 → 再点又回到该页。
+#[gpui_kit::test]
+fn toggling_the_active_page_collapses_the_panel(cx: &mut gpui_kit::TestAppContext) {
+    use crate::ports::RightTab;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_right_tab(RightTab::Value, cx)));
+    assert!(cx.update(|_, app| panel.read(app).panels_visible()));
+
+    // 已显示 → 再点这一页 = 收起
+    let switched = cx.update(|_, app| panel.update(app, |p, cx| p.toggle_right_tab(RightTab::Value, cx)));
+    assert!(!switched, "点当前页不应算「切页」");
+    assert!(
+        !cx.update(|_, app| panel.read(app).panels_visible()),
+        "点当前页应收起面板"
+    );
+
+    // 收起后再点 → 展开并切到该页
+    let switched = cx.update(|_, app| panel.update(app, |p, cx| p.toggle_right_tab(RightTab::Value, cx)));
+    assert!(switched, "收起态点击应是切页/展开");
+    assert!(cx.update(|_, app| panel.read(app).panels_visible()));
+}
+
 /// 【R5 面板最大化】与「面板总开关」的互斥口径（不变量：最大化 ⇒ 面板展开）。
 ///
 /// 取证依据：DBeaver 里两者共用同一份 sash 可见性——`togglePanelsMaximize` 是

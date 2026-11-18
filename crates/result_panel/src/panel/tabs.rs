@@ -635,6 +635,9 @@ impl ResultPanel {
                         }
                         PanelViewItem::Page(tab) => {
                             let queue = queue.clone();
+                            // 【面板开关语义】菜单里的面板项与右缘竖条同口径：该页当前可见就收起，
+                            // 否则切到该页（`CMD_TOGGLE_PANEL`，见 `ResultRequest::ToggleRightTab`）
+                            let target = ResultRequest::ToggleRightTab(tab);
                             menu = menu.item(
                                 PopupMenuItem::new(panel_view_item_label(
                                     item,
@@ -644,7 +647,7 @@ impl ResultPanel {
                                 ))
                                 .checked(tab == current)
                                 .on_click(move |_, _window, app| {
-                                    queue.request(ResultRequest::SetRightTab(tab), app);
+                                    queue.request(target.clone(), app);
                                 }),
                             );
                         }
