@@ -9,7 +9,7 @@ use gpui_kit::*;
 
 // 【B5】事实帧只读句柄随网格投影进 delegate（列式统计 / 原生数值排序交互派生时读取）
 
-use super::data::ResultPanel;
+use super::data::{ResultPanel, FILTER_HISTORY_LIMIT};
 use super::sidebars::next_right_edge_state;
 use crate::error_card::ErrorCard;
 use crate::grid::cell::{
@@ -48,6 +48,73 @@ impl ResultPanel {
     /// 下发源库开着且词非空时，同一份词也**入队**一次（编辑器重查，落新结果集）
     pub fn apply_filter(&mut self, cx: &mut Context<Self>) {
         self.apply_filter_inner(cx, true);
+    }
+
+    /// 【筛选历史】把当前词记进历史（新的在前、去重、封顶 [`FILTER_HISTORY_LIMIT`]）。
+    ///
+    /// 只在**显式提交**时调（Enter / ▶ 执行 / 从历史里选一条再用）：DBeaver 的历史是
+    /// 用户「确认过的筛选」（`ResultSetFilterPanel.java:296` 的 Enter 与执行钮）；
+    /// 打字过程中的防抖状态入了历史只会变成一堆前缀。
+    pub fn note_filter_commit(&mut self) {
+        let text = self.filter_text.trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        // 已经在最前一条 ⇒ 不重复记（重复提交同一个词很常见：改了下再 Enter 回来）
+        if self.filter_history.first().map(|s| s.as_str()) == Some(text.as_str()) {
+            return;
+        }
+        self.filter_history.retain(|s| s != &text);
+        self.filter_history.insert(0, text);
+        self.filter_history.truncate(FILTER_HISTORY_LIMIT);
+    }
+
+    /// 【筛选历史】Enter 提交：立即应用（不等防抖），并记进历史。
+    ///
+    /// 对齐 DBeaver：Enter 触发 `setCustomDataFilter()`（`ResultSetFilterPanel.java:296`）。
+    /// 展开态（多行框）里 Enter 是换行、**不提交**（同 `:288-290` 判 `filterExpanded`）。
+    pub fn commit_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.filter_expanded {
+            return;
+        }
+        let input = self.filter_input.clone();
+        let text = input.read(cx).value().to_string();
+        if self.filter_text == text {
+            // 词没变但用户按了 Enter：仍算一次显式确认，历史照记、不重复刷网格
+            self.filter_version = self.filter_version.wrapping_add(1);
+            self.note_filter_commit();
+            cx.notify();
+            return;
+        }
+        self.filter_text = text;
+        // 在途防抖作废（版本号一变，到点的旧任务自己跳过）
+        self.filter_version = self.filter_version.wrapping_add(1);
+        self.note_filter_commit();
+        self.apply_filter(cx);
+        let _ = window;
+    }
+
+    /// 【筛选历史】从下拉里选一条：回填输入框 + 立即应用（不需要窗口也能定稿，
+    /// 输入框回填在有窗口时一并做）。
+    pub fn apply_filter_from_history(
+        &mut self,
+        value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.filter_text = value.to_string();
+        self.filter_version = self.filter_version.wrapping_add(1);
+        let input = self.filter_input.clone();
+        let text = value.to_string();
+        input.update(cx, |state, cx| state.set_value(text, window, cx));
+        // 选历史等于「再用一次这个口径」：把它提到最前
+        self.note_filter_commit();
+        self.apply_filter(cx);
+    }
+
+    /// 【筛选历史】只读快照（渲染下拉用）
+    pub fn filter_history(&self) -> &[String] {
+        &self.filter_history
     }
 
     /// 【B15】应用筛选的公共实现；`requeue=false` 时不触发「下发源库」重查入队

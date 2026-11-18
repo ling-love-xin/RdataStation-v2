@@ -43,6 +43,10 @@ use workbench_shell::model::ColumnAnnotation;
 /// 【类型样式】全局偏好聚合（shell 层：settings 持久化与渲染消费共用）。
 use workbench_shell::result_style::TypeStylePrefs;
 
+/// 【筛选历史】上限：DBeaver 那边是一张可滚动的历史表（`MAX_HISTORY_PANEL_HEIGHT` 封高），
+/// 本仓只保最近 8 条——筛选词通常很短，8 条已覆盖「回到上一个筛选口径」这类真实用法。
+pub(crate) const FILTER_HISTORY_LIMIT: usize = 8;
+
 /// 一次投影里交到网格的数据（列 / 行 / 类型 / 来源表 / 字段注释；`set_data` 之后
 /// 的类型与注释要紧接着设——`set_data` 会清空它们，见 [`crate::grid`] 实现）
 #[derive(Debug, Clone)]
@@ -283,6 +287,18 @@ pub struct ResultPanel {
     pub(crate) filter_version: u64,
     /// 在途防抖任务（持有以保活；换词即被取代）
     pub(crate) filter_debounce: RefCell<Option<Task<()>>>,
+    /// 【筛选历史】最近**提交**的筛选词（新的在前，去重、上限见
+    /// [`FILTER_HISTORY_LIMIT`]）。
+    ///
+    /// 对齐 DBeaver 筛选条右侧的 `HistoryPanel`（`ResultSetFilterPanel.java:214`，
+    /// 点击弹历史表 `createFilterHistoryPanel`；快捷键 ↓ 同样打开，`:278-282`）。
+    /// 只有**显式提交**才进历史（Enter 或 ▶ 执行），打字过程中的防抖状态不入——
+    /// 否则历史会被 `a` / `ab` / `abc` 这类前缀灌满。
+    ///
+    /// 口径差异：DBeaver 按 SQL 文本持久化到 filter manager（`loadFiltersHistory(query)`），
+    /// 本仓暂无那条持久化通道，故这里是**会话级内存**（面板存活期内有效），
+    /// 关闭编辑器即丢。
+    pub(crate) filter_history: Vec<String>,
     /// 【B14】下发源库开关（开着时应用筛选会重查源库——重查经队列交回编辑器）
     pub(crate) pushdown: bool,
     /// 【C1】正在重命名哪个结果集 tab（`None` = 不在重命名态）；会话级

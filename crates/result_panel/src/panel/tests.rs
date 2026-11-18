@@ -1100,3 +1100,112 @@ fn typing_into_the_filter_box_reaches_the_panel(cx: &mut gpui_kit::TestAppContex
     let rows = cx.update(|_window, app| grid.read(app).delegate().view_total());
     assert_eq!(rows, 1, "防抖到点后筛选应生效（`2 / NULL` 那行要被筛掉）");
 }
+
+/// 【筛选历史 2026-11-18】Enter 提交：立即应用 + 记进历史。
+///
+/// 对齐 DBeaver：Enter 触发 `setCustomDataFilter()`（`ResultSetFilterPanel.java:296`）；
+/// 历史条在 `:214` 的 `HistoryPanel`（点开是历史表 `createFilterHistoryPanel`）。
+/// 本仓这条的口径：
+/// 1. Enter **不等防抖**（立即生效）；
+/// 2. 只有显式提交入历史 —— 打字过程中的防抖状态不入（否则历史被 `a`/`ab`/`abc` 灌满）；
+/// 3. 同一个词重复提交不重复记（提到最前）。
+#[gpui_kit::test]
+fn commit_on_enter_records_filter_history(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let grid = cx.update(|_window, app| panel.read(app).grid().clone());
+
+    // 真敲键进筛选框（走订阅，不绕过 `on_filter_input`）
+    cx.update(|window, cx| {
+        let input = panel.read(cx).filter_input.clone();
+        input.update(cx, |state, cx| state.focus(window, cx));
+    });
+    cx.simulate_keystrokes("1");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 此时还没到防抖点：网格未筛、历史为空（打字不算提交）
+    let before = cx.update(|_window, app| {
+        (
+            grid.read(app).delegate().view_total(),
+            panel.read(app).filter_history().to_vec(),
+        )
+    });
+    assert_eq!(before.0, 2, "防抖未到点时不该已经筛掉行");
+    assert!(before.1.is_empty(), "打字过程中的状态不该进历史");
+
+    // Enter = 提交：立即应用 + 入历史
+    cx.simulate_keystrokes("enter");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let after = cx.update(|_window, app| {
+        (
+            grid.read(app).delegate().view_total(),
+            panel.read(app).filter_history().to_vec(),
+        )
+    });
+    assert_eq!(after.0, 1, "Enter 应立刻应用筛选（不等 300ms 防抖）");
+    assert_eq!(
+        after.1,
+        vec!["1".to_string()],
+        "Enter 提交的筛选词应记进历史（新的在前）"
+    );
+}
+
+/// 【筛选历史 2026-11-18】历史口径：去重置顶 + 封顶 [`FILTER_HISTORY_LIMIT`]，
+/// 以及「从历史里选一条」会回填输入框并立即应用。
+#[gpui_kit::test]
+fn filter_history_dedupes_caps_and_replays(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let grid = cx.update(|_window, app| panel.read(app).grid().clone());
+
+    // 灌 10 个词：历史只留最后 8 条（新的在前），且 `k1` 重复提交会被提回最前
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, _cx| {
+            for k in 0..10 {
+                panel.filter_text = format!("k{k}");
+                panel.note_filter_commit();
+            }
+            // 重复提交最老的那条：应提到最前而不是新增一条
+            panel.filter_text = "k2".to_string();
+            panel.note_filter_commit();
+        });
+    });
+    let history = cx.update(|_window, app| panel.read(app).filter_history().to_vec());
+    assert_eq!(
+        history.len(),
+        crate::panel::data::FILTER_HISTORY_LIMIT,
+        "历史应封顶在 FILTER_HISTORY_LIMIT 条"
+    );
+    assert_eq!(history[0], "k2", "重复提交的词应提到最前，而不是追加一条");
+    assert!(
+        !history.contains(&"k1".to_string()),
+        "被提上来那条之外的名次保持原序（k1 已在封顶时被挤掉）"
+    );
+
+    // 从历史里选一条：回填输入框 + 立即应用
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.apply_filter_from_history("k2", window, cx);
+        });
+    });
+    let replayed = cx.update(|_window, app| {
+        (
+            panel.read(app).filter_text.clone(),
+            panel
+                .read(app)
+                .filter_input
+                .read(app)
+                .value()
+                .to_string(),
+            grid.read(app).delegate().view_total(),
+        )
+    });
+    assert_eq!(replayed.0, "k2", "面板筛选词应切到选中的历史");
+    assert_eq!(replayed.1, "k2", "输入框应回填（所见即所得）");
+    assert_eq!(
+        replayed.2, 0,
+        "`k2` 不在两行数据里，应用后应筛成 0 行（证明真的下去了）"
+    );
+}

@@ -3278,6 +3278,67 @@ panicked at panel/tests.rs:1091:
 - `cargo test -p rds-result-panel --lib` = **267 passed / 0 failed**（266 + 本批新增 1）。
 - `cargo test -p rds-ui-guard`（不带 `--lib`）= 4 passed（基线 21 生效）。
 
+### 8.60 筛选历史下拉（`HistoryPanel` 对齐）
+
+#### 8.60.1 取证
+
+| 事实 | 出处 |
+| --- | --- |
+| 筛选条 5 列 GridLayout，第 5 列是 `HistoryPanel` | `ResultSetFilterPanel.java:214`、`:174/:192/:209` 为前四列 |
+| `HistoryPanel` 画一个向下的箭头，点击弹历史表 | 定义 `:1054`、`paintPanel` 箭头 `:1080-1091`、`showFilterHistoryPopup()` `:1093` |
+| 历史表逐条列出已用过的筛选词，选中即回填 | `createFilterHistoryPanel` `:1207`；弹窗宽 = `filtersText + historyPanel + executePanel` `:1146-1174`，高 `Math.min(MAX_HISTORY_PANEL_HEIGHT, …)` `:1159-1161` |
+| Enter 触发提交 `setCustomDataFilter()`（置 `e.doit = false`） | `:283-296` |
+| 展开态（`filterExpanded`）里 Enter 是换行，**不提交** | `:288-290` |
+| IME 组字中不提交 | `:291-293` |
+| **↓** 打开历史（`ARROW_DOWN → showFilterHistoryPopup()`） | `:278-282` |
+| 历史按 SQL 文本持久化（`loadFiltersHistory(query)`），`Manage Filters` 走 `ResultSetFilterDialog` | `:1121-1142` |
+
+#### 8.60.2 口径（含三处有意偏离）
+
+| 维度 | DBeaver | 本仓 | 理由 |
+| --- | --- | --- | --- |
+| 入口 | 箭头按钮 + **↓ 快捷键** | 箭头按钮（`Button` + `DropdownMenu`） | 快捷键要抢 Textarea 的方向键；本仓筛选框是多行 Textarea，↓ 在展开态是移动光标，抢键代价大于收益 |
+| 持久化 | 按 SQL 文本落 filter manager | **会话级内存**（`filter_history: Vec<String>`） | 本仓没有那条持久化通道；历史是「本次会话内回到上一个口径」的便利，不是档案 |
+| 上限 | 一张可滚动表，只封高度 | 最近 **8** 条（`FILTER_HISTORY_LIMIT`） | 下拉菜单不是滚动列表，长列表反而不好点 |
+
+其余照抄：
+
+- **只有显式提交入历史**——Enter 与 ▶ 执行（`RunFilterAsQuery`）。打字过程中的防抖状态
+  不入（否则历史被 `a` / `ab` / `abc` 这类前缀灌满）。
+- 同一个词重复提交 → **提到最前**，不追加一条。
+- 展开态下历史按钮不渲染、Enter 不提交（与 `:288-290` 一致）。
+- 从历史选一条 = 回填输入框 + 立即应用（**不等防抖**），并把它提到最前。
+
+#### 8.60.3 落点
+
+| 项 | 落点 |
+| --- | --- |
+| 状态 | `panel/data.rs` `filter_history: Vec<String>` + 模块常量 `FILTER_HISTORY_LIMIT = 8`（长注释写明 DBeaver 出处与「会话级内存」口径） |
+| 初始化 | `panel/lifecycle.rs` `Self{ … }` 里 `filter_history: Vec::new()` |
+| 记录 | `panel/events.rs` `note_filter_commit()`：trim → 空即返回 → 已在首位即返回 → `retain` 去重 → `insert(0)` → `truncate(limit)` |
+| Enter 提交 | `panel/events.rs` `commit_filter(window, cx)`：读输入框值；词变了就定稿 + bump `filter_version`（作废在途防抖）+ `apply_filter`；词没变也算一次确认（只记历史）；展开态直接返回 |
+| 重放 | `panel/events.rs` `apply_filter_from_history(value, window, cx)`：写 `filter_text` + bump 版本 + `InputState::set_value` 回填 + 记历史 + `apply_filter` |
+| 订阅 | `panel/lifecycle.rs` 筛选框订阅由「只判 `Change`」改成 `match`：`Change → on_filter_input`、`PressEnter { .. } → commit_filter` |
+| 渲染 | `panel/render.rs` 筛选行尾（`✕` 之后）`.when(!expanded && !history.is_empty())` 挂 `Button::new("editor-result-filter-history").ghost().xsmall().icon(IconName::ChevronDown).dropdown_menu_with_anchor(Anchor::BottomLeft, …)`；菜单项 `PopupMenuItem::new(label).on_click(→ queue.request(ResultRequest::ApplyFilter(text)))` |
+| 端口 | `ports.rs` `ResultRequest::ApplyFilter(String)`（回填要 `&mut Window`，走 `ClearFilter` 同一条窗口转手路径） |
+| 宿主 | `crates/editor/…/results/dispatch.rs`：`ApplyFilter` 分派臂 + `apply_filter_via_window`（`self.window.update` → 面板）；`RunFilterAsQuery` 臂先 `note_filter_commit()` 再重查 |
+
+#### 8.60.4 测试
+
+| 用例 | 钉住什么 |
+| --- | --- |
+| `panel::tests::commit_on_enter_records_filter_history` | 真敲键 `"1"` → 防抖未到点时 `view_total == 2` 且历史为空（打字不算提交）→ `simulate_keystrokes("enter")` → `view_total == 1`（立即生效，不等 300ms）且历史 `== ["1"]` |
+| `panel::tests::filter_history_dedupes_caps_and_replays` | 灌 10 条 → 长度 == `FILTER_HISTORY_LIMIT`、首位是重复提交的那条、被挤掉的那条不在 → `apply_filter_from_history("k2")` → `filter_text`/输入框值都变成 `k2`、`view_total == 0`（证明确实应用到网格） |
+
+#### 8.60.5 验证
+
+- `cargo check -p rds-result-panel` = 0 error / 0 warning；`cargo check -p rds-editor` = 0 error / 0 warning。
+- `cargo test -p rds-result-panel --lib` = **269 passed / 0 failed**（267 + 本批新增 2）。
+- `cargo test -p rds-editor --lib results` = **45 passed / 0 failed**（分派臂改动后的回归）。
+- `cargo test -p rds-ui-guard`（不带 `--lib`）= 4 passed。
+
+未做（P2 仍在册）：`Manage Filters` 设置对话框（`ResultSetFilterDialog`）、历史持久化（无通道）。
+
 
 ## 8. 协作纪律
 

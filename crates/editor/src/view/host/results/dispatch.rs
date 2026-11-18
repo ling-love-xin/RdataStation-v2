@@ -53,6 +53,7 @@ impl EditorHostPanel {
             ResultRequest::TransposePrev => self.transpose_step(-1, cx),
             ResultRequest::TransposeNext => self.transpose_step(1, cx),
             ResultRequest::ClearFilter => self.clear_filter_via_window(cx),
+            ResultRequest::ApplyFilter(value) => self.apply_filter_via_window(value, cx),
             ResultRequest::PushdownFilter { value } => {
                 // 值以队列快照为准（drain 时面板筛选词可能已被用户改掉）；
                 // 定稿后重查走 `pushdown_filter`（读面板的 filter_text = 刚定稿的值）。
@@ -100,7 +101,13 @@ impl EditorHostPanel {
             }
             // 【1.2】筛选框运行：wrapped SQL（select * from (原SQL) where 词）替换重查，
             // 生成 SQL 写入面板 exec_sql（右栏「执行SQL」页签）
-            ResultRequest::RunFilterAsQuery => self.run_filter_as_query(cx),
+            ResultRequest::RunFilterAsQuery => {
+                // 【筛选历史】▶ 执行也算一次显式提交（DBeaver 那边执行钮走同一条
+                // 定稿路径），先记历史再重查
+                self.result_panel
+                    .update(cx, |p, _cx| p.note_filter_commit());
+                self.run_filter_as_query(cx)
+            }
             // 【1.2】筛选框展开 / 收起（顶宽筛选条）
             ResultRequest::ToggleFilterExpand => self
                 .result_panel
@@ -370,6 +377,15 @@ impl EditorHostPanel {
         let panel = self.result_panel.clone();
         let _ = self.window.update(cx, |_panel, window, app| {
             panel.update(app, |p, cx| p.clear_filter(window, cx));
+        });
+    }
+
+    /// 【筛选历史】选中一条历史筛选词：回填输入框 + 立即应用（同
+    /// [`Self::clear_filter_via_window`] 的窗口转手口径）
+    pub(crate) fn apply_filter_via_window(&mut self, value: String, cx: &mut Context<Self>) {
+        let panel = self.result_panel.clone();
+        let _ = self.window.update(cx, move |_panel, window, app| {
+            panel.update(app, |p, cx| p.apply_filter_from_history(&value, window, cx));
         });
     }
 

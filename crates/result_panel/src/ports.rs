@@ -53,6 +53,12 @@ pub enum ResultRequest {
     TransposeNext,
     /// 工具栏筛选框「✕」清除（清空输入框 + 立即应用空词；`window` 由宿主分派时提供）
     ClearFilter,
+    /// 【筛选历史】从筛选条右侧的历史下拉里选了一条：回填输入框 + 立即应用。
+    ///
+    /// 对齐 DBeaver 的 `HistoryPanel`（`ResultSetFilterPanel.java:214`，点击弹历史表，
+    /// 选中一条即回到那个筛选口径）。回填输入框要 `&mut Window`，故照 `ClearFilter`
+    /// 的同一条路子：宿主用窗口句柄转手调面板。
+    ApplyFilter(String),
     /// 下发源库开关翻转后的重查（开着时应用筛选会重查数据库）
     PushdownFilter { value: String },
     /// 【1.2】筛选框运行按钮：用 `select * from (原SQL) where 词` **替换**当前结果集

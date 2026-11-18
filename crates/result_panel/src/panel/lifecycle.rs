@@ -48,11 +48,16 @@ impl ResultPanel {
         let _filter_sub = Some(cx.subscribe_in(
             &filter_input,
             window,
-            |this, state, event: &InputEvent, _window, cx| {
-                if matches!(event, InputEvent::Change) {
+            |this, state, event: &InputEvent, window, cx| match event {
+                InputEvent::Change => {
                     let text = state.read(cx).value().to_string();
                     this.on_filter_input(text, cx);
                 }
+                // 【筛选历史】Enter = 提交（DBeaver `setCustomDataFilter()`，
+                // `ResultSetFilterPanel.java:296`；展开态里 Enter 是换行，由
+                // `commit_filter` 自己判掉）
+                InputEvent::PressEnter { .. } => this.commit_filter(window, cx),
+                _ => {}
             },
         ));
 
@@ -196,6 +201,7 @@ impl ResultPanel {
             filter_text: String::new(),
             filter_version: 0,
             filter_debounce: RefCell::new(None),
+            filter_history: Vec::new(),
             pushdown: false,
             renaming: None,
             renaming_input: None,

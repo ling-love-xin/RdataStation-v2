@@ -1071,6 +1071,29 @@ panel **266 passed** / guard **4**。
 **验证**：`cargo check -p rds-result-panel` 0 error / 0 warning；
 panel **267 passed** / guard **4**（基线 21 生效）。
 
+### 2.49 筛选历史下拉（`HistoryPanel` 对齐）
+
+全文见 `result-panel.md §8.60`，接手要点：
+
+- DBeaver 筛选条第 5 列是 `HistoryPanel`（`ResultSetFilterPanel.java:214`）：箭头按钮，
+  点开是历史筛选表（`createFilterHistoryPanel` `:1207`），选中一条即回到那个口径。
+- **只有显式提交入历史**：Enter（`:283-296` `setCustomDataFilter()`）与 ▶ 执行
+  （`RunFilterAsQuery` 臂先 `note_filter_commit()` 再重查）。打字过程中的防抖状态不入，
+  否则历史被 `a`/`ab`/`abc` 灌满。重复提交同一个词 → 提到最前，不追加。
+- 三处**有意偏离**（文档已写明理由）：① ↓ 快捷键未接（Textarea 方向键冲突，改由按钮打开）；
+  ② 历史是**会话级内存**（本仓无 filter manager 持久化通道）；③ 上限 8 条（下拉菜单不是滚动表）。
+- 展开态（`filter_expanded`）下历史按钮不渲染、Enter 不提交——与 DBeaver `:288-290` 一致。
+- 接线：`filter_history` 字段（`panel/data.rs`）+ `note_filter_commit` / `commit_filter` /
+  `apply_filter_from_history`（`panel/events.rs`）+ 订阅 `match` 加 `PressEnter` 臂
+  （`panel/lifecycle.rs`）+ 渲染下拉（`panel/render.rs`）+ `ResultRequest::ApplyFilter(String)`
+  与宿主 `apply_filter_via_window`（`ports.rs` / `editor/…/results/dispatch.rs`）。
+- 测试：`commit_on_enter_records_filter_history`（真敲键 + Enter：立即生效且入历史）、
+  `filter_history_dedupes_caps_and_replays`（去重/封顶/重放回填）。
+
+**验证**：panel **269 passed**（267 → 269）/ editor `--lib results` **45 passed** / guard **4**。
+
+未做（P2 在册）：`Manage Filters` 设置对话框（`ResultSetFilterDialog`）、历史持久化（无通道）。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）

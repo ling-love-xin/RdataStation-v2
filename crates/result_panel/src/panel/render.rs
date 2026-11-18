@@ -7,7 +7,7 @@ use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::input::{Input, Textarea};
-use gpui_kit::component::menu::PopupMenuItem;
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::toolbar::ToolbarGroup;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -366,6 +366,36 @@ impl ResultPanel {
                     )
                 },
             )
+            // 【筛选历史】DBeaver 筛选条的第 5 列是 `HistoryPanel`（`ResultSetFilterPanel.java:214`）：
+            // 一个下拉箭头，点开是历史筛选表 `createFilterHistoryPanel`（`:1207`），选中一条
+            // 即回到那个口径。本仓用组件的 `DropdownMenu`（按钮 + 弹出菜单，自带锚点/外点关闭）。
+            // 空历史不摆入口（DBeaver 列常在，但点了只有一张空表；本仓口径是「能力没有就不摆」）。
+            .when(!self.filter_expanded && !self.filter_history.is_empty(), |row| {
+                let items: Vec<String> = self.filter_history.to_vec();
+                let queue = self.queue.clone();
+                row.child(
+                    Button::new("editor-result-filter-history")
+                        .ghost()
+                        .xsmall()
+                        .icon(IconName::ChevronDown)
+                        .debug_selector(|| "editor-result-filter-history".to_string())
+                        .tooltip("历史筛选（选中一条即回到那个口径）")
+                        .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
+                            let mut menu = menu;
+                            for text in items.iter() {
+                                let label = text.clone();
+                                let text = text.clone();
+                                let queue = queue.clone();
+                                menu = menu.item(PopupMenuItem::new(label).on_click(
+                                    move |_, _window, app| {
+                                        queue.request(ResultRequest::ApplyFilter(text.clone()), app);
+                                    },
+                                ));
+                            }
+                            menu
+                        }),
+                )
+            })
             .into_any_element();
 
         // 【B15】「下发源库」开关：开着时应用筛选会重查（拼 WHERE 到原查询）
