@@ -1493,6 +1493,24 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 2.86 值详情页的接手要点（2026-11-18）
+
+- 工具条四颗 = `[位置标记, 复制, 保存, 外部打开]`（顺序照 `ValueViewerPanel.fillToolBar`
+  的「内容类动作在前、写回类在后」）。两颗落盘动作的**可用性同源**：
+  `panel::tabs::value_can_save_to_file(col, raw)`——NULL / 缺列 / 行号槽都给不出口。
+- 「保存至文件」走 `ResultRequest::SaveValue` → 宿主 `save_selected_value`（**要路径**，
+  取消不算错误）；「在外部程序中打开」走 `ResultRequest::OpenValueExternally` →
+  `open_selected_value_externally`（**不要路径**，落 `%TEMP%/rds-value-preview/` 再唤起）。
+  两者共用面板算好的字节与建议名 `selected_value_payload`。
+- 文件名安全化只有一份：`export::external_file_name`（`/` `\`、Windows 非法字符、控制字符
+  → `_`，去前导点，只剩 `_` 回退 `value.bin`）。想改落盘目录只改
+  `open_selected_value_externally` 里的 `temp_dir().join(...)`。
+- 唤起平台分支在 `export::open_with_default_app`（Windows `cmd /C start ""` +
+  `CREATE_NO_WINDOW`；macOS `open`；Linux `xdg-open`）。**没有**用例覆盖真实唤起（headless
+  不能开外部程序），返回值只用来写 status message。
+- 值页仍是**只读预览**：`SaveValueAction`（写回结果集 + 「编辑后自动应用」勾选
+  `RS_EDIT_AUTO_UPDATE_VALUE`）不做；空态文案 DBeaver 是两行、本仓一行（属目视阶段）。
+
 ### 2.85 列浏览器页的接手要点（2026-11-18）
 
 - 投影灌入点是 `ColumnBrowserDelegate::set_data(columns, type_names, hidden, comments)`，

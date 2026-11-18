@@ -4999,6 +4999,55 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
 `cargo test -p rds-result-panel --lib` = **331 passed**；`cargo check -p rds-editor` = Finished；
 `cargo test -p rds-ui-guard` = 4 passed。
 
+### 8.98 值详情页补「在外部程序中打开」（对齐 `ContentValueManager`，2026-11-18）
+
+**取证（`panel/valueviewer/ValueViewerPanel.java` + `ui/data/managers/ContentValueManager.java`）**：
+- 值页工具条装配顺序（`fillToolBar:409-428`）：① `valueManager.contributeActions(...)`
+  （内容类动作，来自 `ContentValueManager.contributeContentActions:86-…`）→
+  ② `GroupMarker(GROUP_ACTIONS_ADDITIONAL)` → ③ 引用值编辑器的贡献项（仅 reference value 时）→
+  ④ `SaveValueAction`（**仅当 `valueEditor != null && !valueEditor.isReadOnly()`**）。
+- 内容类动作有**两颗**（`contributeContentActions:86-140`）：「保存至文件」**条件**贡献
+  （`if (!content.isNull())`，`:92-99`，图标 `UIIcon.SAVE_AS`）；「Open in external editor」
+  **无条件**贡献（`:100-140`，图标 `UIIcon.FILE`）——DBDContent 走 `openExternalFile` /
+  `getDBDContent`，非内容类把值按 `DBDDisplayFormat.EDIT` 取显示串、按
+  `getDefaultBinaryFileEncoding` 编码后 `openOctetStream(bytes)`（`:122-130`）；null 值时 run()
+  报 "Can not save null data value"（`:105-107`）。
+- 其余值页事实：`needsSeparator()` 恒 true（唯一覆写，`:170-173`）；空态 PaintListener 画**两行**
+  （`value_viewer_select_view_message` 与 `NLS.bind(value_viewer_hide_panel_message,
+  CMD_TOGGLE_PANELS 命令描述)`，y=0/30，`:89-106`），无编辑器时另画 "No editor for [type]"
+  （`:305-314`）；`deactivatePanel:146-153` 销毁 `viewPlaceholder`（省内存），
+  `activatePanel:141-144` 重新 `refreshValue(false)`；`isDirty()` =
+  `valueEditor != null && valueEditor.isDirty()`（`:136-139`）。
+
+**本批落点**：
+- `ports.rs` 新增 `ResultRequest::OpenValueExternally`（紧随 `SaveValue`）。
+- `panel/tabs.rs` 值页工具条补第四颗按钮 `editor-result-value-open-external`
+  （`IconName::ExternalLink`，与保存钮同一置灰口径 `value_can_save_to_file`，两态 tooltip）；
+  工具条顺序照 `fillToolBar` 的「内容类动作在前」= `[位置标记, 复制, 保存, 外部打开]`。
+- `crates/editor/src/view/host/results/export.rs`：`open_selected_value_externally`
+  （落 `std::env::temp_dir()/rds-value-preview/<安全文件名>` 后唤起系统默认程序；无内容格提示
+  「先选中一个有值的单元格再在外部程序打开…」）+ 模块级纯函数 `external_file_name`
+  （`/` `\` 及 Windows 非法字符 / 控制字符 → `_`，去前导点，只剩 `_` 也回退 `value.bin`）+
+  `open_with_default_app`（Windows `cmd /C start ""` + `CREATE_NO_WINDOW`；macOS `open`；
+  Linux `xdg-open`）。
+- `dispatch.rs` 新增分支（插在 `ToggleRightTab` 之后、`LoadReferences` 之前）。
+
+**与 DBeaver 的口径差异（有意）**：
+| 项 | DBeaver | 本仓 | 说明 |
+| --- | --- | --- | --- |
+| 「在外部程序打开」置灰 | 恒可用，null 值时点按报错 | 无内容格置灰 | 与保存钮同口径，避免「点了才报错」 |
+| 落盘位置 | 外部编辑器专用文件 / 系统临时流 | `%TEMP%/rds-value-preview/` | 会话级临时目录，不惊动用户 |
+| 「保存至文件」适用面 | 仅 LOB / 二进制内容 | 任何有值格 | 能力超集（已登记于 §8.90） |
+| SaveValueAction（写回 + 编辑后自动应用） | 有（`AS_DROP_DOWN_MENU` + `RS_EDIT_AUTO_UPDATE_VALUE`） | 不做 | 本仓值页是只读预览 |
+| 空态提示 | 两行（select a value view / hide panel 命令） | 一行 | 文案属目视阶段 |
+| `deactivatePanel` 销毁内容 | 销毁并释放编辑器 | 无（每帧重算、无缓存） | — |
+
+**验证**：`panel::tests::value_toolbar_offers_open_in_external_app`（值页非空态工具条里
+外部打开与保存钮同在）+ `crates/editor` 的 `external_file_name_is_path_safe`
+（目录穿越 / 非法字符 / 空名兜底）；`cargo test -p rds-result-panel --lib` = **332 passed**；
+`cargo test -p rds-editor --lib` = 790 passed（1 ignored）；`cargo check -p rds-editor` = Finished；
+`cargo test -p rds-ui-guard` = 4 passed。真窗口唤起未做目视（用户口径：目视统一处理）。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
