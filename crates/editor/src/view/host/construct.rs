@@ -612,6 +612,8 @@ impl EditorHostPanel {
             group: None,
             area: None,
             message: None,
+            // 重查类动作的「已去掉 LIMIT」说明：递交前记下，回执落定后由泵补到状态栏
+            pending_result_notice: None,
             edit_mode: EditMode::Row,
             closed: false,
             // #48 面板创建即取设置当前值（与内核默认一致；后续变化由 render 同步）

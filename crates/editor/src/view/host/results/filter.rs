@@ -42,17 +42,21 @@ impl EditorHostPanel {
                 return;
             }
         };
-        // 去掉过 LIMIT 要说出来（与下发同一口径：不说的话用户会以为"怎么多了这么多行"）
-        if let Some(limit) = rewritten.dropped_limit.clone() {
-            self.set_message(
-                Some(format!("已去掉原查询的 {limit}（按条件重查要能查到全部行）")),
-                cx,
-            );
-        }
+        // 去掉过 LIMIT 要说出来（与下发同一口径：不说的话用户会以为"怎么多了这么多行"）。
+        // 走 `pending_result_notice`：递交前直接 `set_message` 的话，`execute` 起步的清空
+        // 和回执时状态栏重写会各盖掉一次（见泵里的落点）。
+        self.pending_result_notice = rewritten
+            .dropped_limit
+            .clone()
+            .map(|limit| format!("已去掉原查询的 {limit}（按条件重查要能查到全部行）"));
         let wrapped = rewritten.sql;
         self.result_panel
             .update(cx, |p, cx| p.set_exec_sql(Some(wrapped.clone()), cx));
         self.execute(ExecTarget::Statement(wrapped), ResultPlacement::Replace, cx);
+        // 同步就被拒（错误提示已摆上）：说明作废，别让它搭下一次执行的便车
+        if self.message.is_some() {
+            self.pending_result_notice = None;
+        }
     }
 
     /// 【筛选设置】「应用」：WHERE + 自定义 ORDER BY 一起重查（替换当前结果集）。
@@ -96,16 +100,19 @@ impl EditorHostPanel {
                 return;
             }
         };
-        if let Some(limit) = rewritten.dropped_limit.clone() {
-            self.set_message(
-                Some(format!("已去掉原查询的 {limit}（按条件重查要能查到全部行）")),
-                cx,
-            );
-        }
+        // 与「运行」同一条落点：说明挂到 `pending_result_notice`，等回执落定后由泵补上
+        self.pending_result_notice = rewritten
+            .dropped_limit
+            .clone()
+            .map(|limit| format!("已去掉原查询的 {limit}（按条件重查要能查到全部行）"));
         let wrapped = rewritten.sql;
         self.result_panel
             .update(cx, |p, cx| p.set_exec_sql(Some(wrapped.clone()), cx));
         self.execute(ExecTarget::Statement(wrapped), ResultPlacement::Replace, cx);
+        // 同步就被拒（错误提示已摆上）：说明作废，别让它搭下一次执行的便车
+        if self.message.is_some() {
+            self.pending_result_notice = None;
+        }
     }
 
     /// 【B15】下发源库：把当前筛选词交给执行器拼 `WHERE` 重查（结果落**新结果集**）

@@ -17,8 +17,9 @@ use crate::shared::EditorShared;
 use super::MoreUnsupportedRunner;
 use super::dialogs::{FakeConnections, dialog_button_rendered, option};
 use super::{
-    grid_rows, open_panel, result_tabs, run_statement, shared_with_segment_runner,
-    shared_with_sized_runner, shared_with_toolbar_runner, wait_for_all_pending,
+    grid_rows, open_panel, result_tabs, run_statement, shared_with_runner,
+    shared_with_segment_runner, shared_with_sized_runner, shared_with_toolbar_runner,
+    wait_for_all_pending,
 };
 
 // ===== B15：本地筛选 / 排序 =====
@@ -176,6 +177,79 @@ fn export_sql_updates_uses_key_columns_from_the_table_port(cx: &mut TestAppConte
         .expect("导出回执");
     assert!(message.contains("SQL Updates"), "回执说清格式：{message}");
     std::fs::remove_file(&path).ok();
+}
+
+/// 【1.2 端到端】筛选框「运行」：按 WHERE 条件**重查并替换**当前结果集。
+///
+/// 此前这条路径只有 `engine::sql::rewrite_with_where` 的纯函数用例，宿主侧
+/// 「改写 → 递交执行器 → 落标签 → 去掉 LIMIT 的提示」整条链没有兜底。
+/// 这里钉四件事：空词不发起重查、改写形状（包 `rds_filtered` + 条件进 WHERE）、
+/// 去掉顶层 LIMIT 要在提示里说出来、落点是 **Replace**（结果仍是一份）。
+#[gpui_kit::test]
+fn run_filter_as_query_rewraps_and_replaces_the_result(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, seen, _connections) =
+        shared_with_runner("select n from t limit 10", EditorMode::Sql);
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(
+        cx,
+        &panel,
+        "select n from t limit 10",
+        execution::ResultPlacement::Replace,
+    );
+    assert_eq!(result_tabs(cx, &panel).len(), 1, "先有一份结果");
+
+    // 1) 空筛选词：只回提示，不递交执行器
+    let seen_before = seen.lock().expect("锁").len();
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.run_filter_as_query(cx)));
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("回执");
+    assert!(
+        message.contains("先填一个筛选词"),
+        "空条件应提示而不是重查：{message}"
+    );
+    assert_eq!(
+        seen.lock().expect("锁").len(),
+        seen_before,
+        "空条件不该递交执行器"
+    );
+
+    // 2) 有词：改写后递交，结果集**原地替换**
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.set_filter_for_test("n > 1", cx)));
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.run_filter_as_query(cx)));
+    wait_for_all_pending(cx, &panel);
+
+    let rewritten = seen
+        .lock()
+        .expect("锁")
+        .last()
+        .cloned()
+        .expect("运行后应有一条递交");
+    assert!(
+        rewritten.contains("rds_filtered"),
+        "改写真要包一层 rds_filtered：{rewritten}"
+    );
+    assert!(
+        rewritten.contains("n > 1"),
+        "筛选词要原样进 WHERE（不是「关键词 → 每列 LIKE」那一版）：{rewritten}"
+    );
+    assert!(
+        !rewritten.to_lowercase().contains("limit"),
+        "顶层 LIMIT 必须去掉，否则等于只筛被截断的那几行：{rewritten}"
+    );
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("回执");
+    assert!(
+        message.contains("已去掉原查询的"),
+        "去掉 LIMIT 要说出来（场景 34）：{message}"
+    );
+    assert_eq!(
+        result_tabs(cx, &panel).len(),
+        1,
+        "落点是 Replace：结果仍是一份，不是多开一页"
+    );
 }
 
 // ===== B14：下发源库 =====

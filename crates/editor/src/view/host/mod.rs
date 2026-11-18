@@ -312,6 +312,11 @@ pub struct EditorHostPanel {
     /// 为什么要队列：执行是**一条语句一个结论**地回到界面的（批量更是好几条），
     /// “这一份是执行计划”这种信息必须**按位**对上，不能拿一个布尔量糊过去。
     pub(crate) pending_labels: std::collections::VecDeque<Option<String>>,
+    /// 【结果集说明】重查类动作（筛选框「运行」/ 自定义条件）在递交前算出的说明
+    /// （目前只有“已去掉原查询的 LIMIT”）。为什么要挂在这里：`execute` 起步会
+    /// `set_message(None)`，结果回执时 `sync_result_view` 之后又按成败重写一遍状态栏，
+    /// 递交前摆的消息两处都会被清掉；说明得等这一轮回执落定后由泵补上。
+    pub(crate) pending_result_notice: Option<String>,
     /// 结果面板实体（Dock 化：面板归 workbench dock 渲染；编辑器只做两件事——
     /// 事件路径算 [`ResultSyncInput`] 投影 + `drain_result_actions` 分派面板动作）
     pub(crate) result_panel: Entity<ResultPanel>,
