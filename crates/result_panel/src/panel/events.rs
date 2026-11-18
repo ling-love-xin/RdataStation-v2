@@ -359,6 +359,16 @@ impl ResultPanel {
         }
     }
 
+    /// 【计算行数】回填宿主算回来的总行数文案（对齐 DBeaver `rowCountLabel`：
+    /// 数字**就地**显示在状态行那颗钮上，不开新结果集）。
+    pub fn set_row_count_notice(&mut self, note: String, cx: &mut Context<Self>) {
+        if self.row_count_note.as_deref() == Some(note.as_str()) {
+            return;
+        }
+        self.row_count_note = Some(note);
+        cx.notify();
+    }
+
     /// 【引用页】键下拉选中某一项（`None` = 清掉选中）
     pub fn set_active_reference(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
         if self.active_reference == index {

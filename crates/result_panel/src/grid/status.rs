@@ -241,6 +241,10 @@ pub struct ResultControls {
     pub undo: Option<AnyElement>,
     /// 【#28-B3】重做（组合语义与撤销对称）
     pub redo: Option<AnyElement>,
+    /// 【计算行数】状态行中段那颗动作钮（对齐 DBeaver `rowCountLabel:2155-2180`：
+    /// `ActiveStatusMessage` + `UIIcon.COMPILE`，点它异步 `readRowCount`，算完把数字
+    /// **就地显示在标签上**）。面板构造：点击 → 宿主跑 `count(*)`；`None` = 不摆
+    pub count_rows: Option<AnyElement>,
 }
 
 /// 结果区一次要画的东西（面板一次读齐；`render` 只负责画）
@@ -835,6 +839,9 @@ pub fn render_status_row(
                     d.child(SharedString::from(left))
                 }),
         )
+        // 中段·「计算行数」（对齐 DBeaver `resultSetSize` 之后那颗 `rowCountLabel`：
+        // 点一下对原 SQL 跑 `count(*)`，算完把总数就地显示在这颗钮上）
+        .children(controls.count_rows)
         // 右·元信息（【状态栏三项】只显示 内存 / 查询时间 / 查询条数，其它不显示；
         // 右段弹性收缩 + 每项 truncate：宽度不足时截断而非重叠/溢出）
         .child(

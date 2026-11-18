@@ -183,6 +183,10 @@ pub enum ResultRequest {
     Refresh,
     /// 取下一段
     FetchMore,
+    /// 【计算行数】状态行那颗 `rowCountLabel`（对齐 DBeaver `:2155-2180`）：
+    /// 面板只发请求，宿主对**当前结果的原 SQL**跑 `count(*)`（下发筛选时带 WHERE），
+    /// 算回来的数字经 `ResultPanel::set_row_count_notice` 就地显示，**不开新结果集**
+    CountRows,
     /// 取全部行（DBeaver 对齐：抓全量数据）
     FetchAll,
     /// 【分页】状态栏翻页（首页 / 上页 / 下页 / 末页）：**纯视图滚动**，不重查

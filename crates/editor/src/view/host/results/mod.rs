@@ -7,6 +7,7 @@
 
 mod analysis;
 mod copy;
+mod count;
 mod dispatch;
 mod errors;
 mod export;

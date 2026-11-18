@@ -281,6 +281,8 @@ impl ResultPanel {
             vertical_layout: false,
             // 【R5 面板最大化】默认不最大化（网格正常显示）
             panel_maximized: false,
+            // 【计算行数】还没算过总行数（钮显示图标 + 「计算行数」）
+            row_count_note: None,
             // 【R6 段大小】默认一段 1000 行（与编辑器 `execution::SEGMENT_ROWS` 同值，
             // 面板接管后编辑器按本值下发 limit）
             segment_rows: crate::ui::RESULT_SEGMENT_ROWS_DEFAULT,
@@ -466,6 +468,8 @@ impl ResultPanel {
         self.error_card = input.error_card;
         self.script_card = input.script_card;
         self.result_sql = input.sql;
+        // 【计算行数】旧数字只对旧结果有意义：换进来一份新结果就清掉
+        self.row_count_note = None;
         // 【状态历史】每份同步进来的结果 SQL 记一条状态（去重 / 截断前向由它自己管）
         self.note_state_sql();
         self.result_can_copy = input.can_copy;

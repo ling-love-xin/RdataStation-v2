@@ -214,6 +214,10 @@ pub struct ResultPanel {
     /// `CMD_TOGGLE_MAXIMIZE` → `togglePanelsMaximize` = `viewerSash.hideUp()`）。
     /// 与 `show_value_sidebar` 正交：开合态原样保留，还原后回到用户原本的开合。
     pub(crate) panel_maximized: bool,
+    /// 【计算行数】宿主算回的总行数文案（对齐 DBeaver `rowCountLabel`：数字**就地**
+    /// 显示在状态行那颗钮上，而不是弹一个新结果集）。`None` = 还没算过，钮显示图标 +
+    /// 「计算行数」；换新结果 / 换选中结果时清空（旧数字对新结果无意义）。
+    pub(crate) row_count_note: Option<String>,
     /// 【R6 段大小】「取下一段」一次取多少行（状态行输入框可改；默认
     /// `ui::RESULT_SEGMENT_ROWS_DEFAULT`）。只影响后续取段，不改已加载行；
     /// 对应 DBeaver `resultSetSize` → 数据源偏好 `RESULT_SET_MAX_ROWS`。

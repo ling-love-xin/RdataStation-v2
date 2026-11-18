@@ -953,6 +953,32 @@ impl ResultPanel {
                 .into_any_element()
         });
 
+        // 【计算行数】状态行中段那颗钮（DBeaver `rowCountLabel:2155-2180`：
+        // `ActiveStatusMessage` + `UIIcon.COMPILE`，`isActionEnabled = hasData()`
+        // ——没有网格就置灰）。算回来的数字**就地**顶掉「计算行数」四个字，
+        // 再点一次重算（DBeaver 点已算过的标签也是重算）。
+        let count_rows = {
+            let queue = self.queue.clone();
+            let has_data = self.status.is_some();
+            let note = self.row_count_note.clone();
+            let button = Button::new("editor-result-count-rows")
+                .ghost()
+                .small()
+                .debug_selector(|| "editor-result-count-rows".to_string())
+                .disabled(!has_data)
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::CountRows, app);
+                });
+            let button = match note {
+                Some(text) => button
+                    .label(text)
+                    .tooltip("总行数（对原 SQL 跑 count(*)）：点一下重新计算"),
+                None => button
+                    .icon(IconName::Calculator)
+                    .tooltip("计算行数（对原 SQL 跑 count(*)，不产生新结果集）"),
+            };
+            Some(button.into_any_element())
+        };
         let controls = result_grid::ResultControls {
             filter: Some(filter),
             value_sidebar: None,
@@ -973,6 +999,8 @@ impl ResultPanel {
             delete_row,
             undo: Some(undo),
             redo: Some(redo),
+            // 「计算行数」只由状态行消费（工具栏不放）；这里先挂上，随后解构进状态行
+            count_rows,
         };
         // 【DBeaver 对齐】工具栏横跨整个顶部（从主 pane 里抽出来）
         // 解构 controls，取出工具栏需要的字段；状态栏（面板级第四行）与主 pane
@@ -998,6 +1026,8 @@ impl ResultPanel {
             delete_row,
             undo,
             redo,
+            // 状态行要的那颗钮（弹到上面的 status_controls 里）
+            count_rows: count_rows_el,
         } = controls;
         // 【四行布局】状态栏动作控件 = 解构出的移动字段重组（more / fetch_all / 翻页 /
         // 行级 / 撤销重做 / 导出 / 刷新；`..Default` 兜底其余槽位）。导出 / 刷新 2026-10-28
@@ -1016,6 +1046,7 @@ impl ResultPanel {
             redo,
             export,
             refresh,
+            count_rows: count_rows_el,
             ..Default::default()
         };
         // 工具栏：右栏开关已移状态栏右端，这里不再摆（None）；导出/刷新已移状态栏

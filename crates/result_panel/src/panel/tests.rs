@@ -1532,6 +1532,42 @@ fn column_browser_toolbar_offers_generate_ddl(cx: &mut gpui_kit::TestAppContext)
 }
 
 #[gpui_kit::test]
+fn status_bar_offers_a_count_rows_action(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    // 状态行只在有 `status`（或执行信息）时才摆：测试壳默认没注入，这里补一条
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.status = Some(crate::grid::status::ResultStatus {
+                total_rows: 2,
+                ..Default::default()
+            });
+            cx.notify();
+        })
+    });
+
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-count-rows").is_some(),
+        "状态行应摆「计算行数」钮（对齐 DBeaver `rowCountLabel`）"
+    );
+
+    // 宿主算回来的数字**就地**变成钮的文案（不开新结果集、不增标签页）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.set_row_count_notice("总行数 1,234".to_string(), cx)
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-count-rows").is_some(),
+        "回填总行数后同一颗钮仍在"
+    );
+}
+
+#[gpui_kit::test]
 fn column_browser_draws_the_comment_line_below_the_name(cx: &mut gpui_kit::TestAppContext) {
     use gpui_kit::test::TestWindowExt as _;
 

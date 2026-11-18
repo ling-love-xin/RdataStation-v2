@@ -254,6 +254,8 @@ impl EditorHostPanel {
             // 字节与默认文件名由面板按值形态算好，这里只走「选路径 + 写盘」
             ResultRequest::SaveValue => self.save_selected_value(cx),
             ResultRequest::Refresh => self.refresh_active_result(cx),
+            // 【计算行数】状态行那颗钮：对原 SQL 跑 count(*)，数字就地回填到钮上
+            ResultRequest::CountRows => self.count_result_rows(cx),
             ResultRequest::FetchMore => self.fetch_more(cx),
             ResultRequest::FetchAll => {
                 // 【DBeaver 对齐】取全部行：循环 fetch_more 直到没有下一段
