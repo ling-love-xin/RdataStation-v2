@@ -216,12 +216,24 @@ impl<H: 'static> ConnectionDialogState<H> {
 
     /// 拉取元数据（认证/网络/环境列表 + Select 选项）；首次打开时调用。
     pub(crate) fn refresh_meta(&self, window: &mut Window, cx: &mut App) {
-        let rt = match tokio::runtime::Runtime::new() {
-            Ok(rt) => rt,
-            Err(_) => return,
+        let Some(rt) = crate::services::rt::runtime() else {
+            return;
         };
         if let Ok(service) = DataSourceService::global() {
-            if let Ok(list) = rt.block_on(service.list_auth_configs()) {
+            // 六条目录查询互不依赖（各自读自己的表，谁先谁后都一样），所以**一条 `block_on`
+            // 并发发出去**：首开前每帧都在 UI 线程上等这批结果，串行 6 次往返的代价是
+            // 六倍的「同步等异步」。结果仍逐项判 `Ok`——某个目录读失败不影响其它目录。
+            let (auth, network, envs, types, drivers, sources) = rt.block_on(async {
+                tokio::join!(
+                    service.list_auth_configs(),
+                    service.list_network_configs(),
+                    service.list_environments(),
+                    service.list_data_source_types(),
+                    service.list_drivers(),
+                    service.driver_sources(),
+                )
+            });
+            if let Ok(list) = auth {
                 let names: Vec<SharedString> = list
                     .iter()
                     .filter_map(|a| a.name.clone())
@@ -232,7 +244,7 @@ impl<H: 'static> ConnectionDialogState<H> {
                     s.set_items(SearchableVec::new(names), window, cx)
                 });
             }
-            if let Ok(list) = rt.block_on(service.list_network_configs()) {
+            if let Ok(list) = network {
                 let names: Vec<SharedString> = list
                     .iter()
                     .filter_map(|n| n.name.clone())
@@ -243,7 +255,7 @@ impl<H: 'static> ConnectionDialogState<H> {
                     s.set_items(SearchableVec::new(names), window, cx)
                 });
             }
-            if let Ok(list) = rt.block_on(service.list_environments()) {
+            if let Ok(list) = envs {
                 let names: Vec<SharedString> = list
                     .iter()
                     .map(|e| SharedString::from(e.name.clone()))
@@ -256,18 +268,19 @@ impl<H: 'static> ConnectionDialogState<H> {
             // 数据源类型目录（侧栏分类树）+ 驱动目录（Header「驱动」下拉）。
             // 语义：数据库类型（mysql/postgresql/…）= 侧栏；驱动实现（sqlx / Official /
             // rusqlite / duckdb-rs）= Header（仅当前类型下驱动，显示短名去噪）。
-            if let Ok(types) = rt.block_on(service.list_data_source_types()) {
+            if let Ok(types) = types {
                 *self.types.borrow_mut() = types;
             }
-            if let Ok(drivers) = rt.block_on(service.list_drivers()) {
+            if let Ok(drivers) = drivers {
                 *self.drivers.borrow_mut() = drivers;
                 self.refresh_driver_items(window, cx);
             }
             // 驱动来源 + 最近同步（D8d）：与驱动目录同批读，render 只读缓存。
-            // 读不到就留空表——能力 Tab 会显示「本次启动尚未同步」，不编来源。
-            if let Ok(rows) = rt.block_on(service.driver_sources()) {
+            // 读不到就留空表——能力页会显示「本次启动尚未同步」，不编来源。
+            if let Ok(rows) = sources {
                 *self.driver_sources.borrow_mut() = driver_sources_from_rows(&rows);
-            } // 项目分组目录（项目级：需要当前项目根；未打开项目为空列表）。
+            }
+            // 项目分组目录（项目级：需要当前项目根；未打开项目为空列表）。
             let root = self.project_path.read(cx).value().trim().to_string();
             let groups = service.list_groups(if root.is_empty() {
                 None
@@ -412,7 +425,7 @@ impl<H: 'static> ConnectionDialogState<H> {
         }
         let rows: Vec<(String, String, String)> = (|| {
             let service = DataSourceService::global().ok()?;
-            let rt = tokio::runtime::Runtime::new().ok()?;
+            let rt = crate::services::rt::runtime()?;
             let policies = rt
                 .block_on(service.list_environment_policies_by_name(&name))
                 .ok()?;
@@ -456,7 +469,7 @@ impl<H: 'static> ConnectionDialogState<H> {
         let work = cx.background_executor().spawn(async move {
             (|| {
                 let service = DataSourceService::global().ok()?;
-                let rt = tokio::runtime::Runtime::new().ok()?;
+                let rt = crate::services::rt::runtime()?;
                 let policies = rt
                     .block_on(service.list_environment_policies_by_name(&name))
                     .ok()?;
@@ -912,9 +925,8 @@ impl<H: 'static> ConnectionDialogState<H> {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let rt = match tokio::runtime::Runtime::new() {
-            Ok(rt) => rt,
-            Err(_) => return,
+        let Some(rt) = crate::services::rt::runtime() else {
+            return;
         };
         let Ok(service) = DataSourceService::global() else {
             return;
