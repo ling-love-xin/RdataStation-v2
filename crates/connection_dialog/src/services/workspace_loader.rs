@@ -47,9 +47,11 @@ pub fn load_persisted_connections() -> (Vec<ConnectionItem>, Option<String>) {
 
 /// 从指定目录加载持久化连接（目录可注入，便于测试与降级加载）。
 pub fn load_persisted_connections_from(dir: &Path) -> (Vec<ConnectionItem>, Option<String>) {
-    let runtime = match tokio::runtime::Runtime::new() {
-        Ok(r) => r,
-        Err(e) => return (Vec::new(), Some(format!("无法启动异步运行时: {e}"))),
+    let Some(runtime) = crate::services::rt::runtime() else {
+        return (
+            Vec::new(),
+            Some(crate::services::rt::RT_UNAVAILABLE.to_string()),
+        );
     };
 
     let sqlite = dir.join("global.db");
@@ -109,18 +111,21 @@ pub fn load_connections_for_scope(
 pub fn delete_connection(conn_id: &str, project_path: Option<&str>) -> Result<(), String> {
     let service = crate::services::data_source_service::DataSourceService::global()
         .map_err(|e| format!("服务未就绪: {e}"))?;
-    let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("无法启动异步运行时: {e}"))?;
+    let runtime = crate::services::rt::runtime()
+        .ok_or_else(|| crate::services::rt::RT_UNAVAILABLE.to_string())?;
     runtime
         .block_on(service.delete(conn_id, project_path))
         .map(|_| ())
         .map_err(|e| e.to_string())
 }
 
-/// 单例查询（同步入口，内部自建运行时）。
+/// 单例查询（同步入口，共用进程内运行时）。
 fn query_manager(manager: &GlobalDatabaseManager) -> (Vec<ConnectionItem>, Option<String>) {
-    let runtime = match tokio::runtime::Runtime::new() {
-        Ok(r) => r,
-        Err(e) => return (Vec::new(), Some(format!("无法启动异步运行时: {e}"))),
+    let Some(runtime) = crate::services::rt::runtime() else {
+        return (
+            Vec::new(),
+            Some(crate::services::rt::RT_UNAVAILABLE.to_string()),
+        );
     };
     match runtime.block_on(manager.get_global_connections(None, None)) {
         Ok(infos) => {
@@ -162,7 +167,8 @@ fn load_project_connections(root: &Path) -> Result<Vec<ConnectionItem>, String> 
             root.to_string_lossy()
         ));
     }
-    let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("无法启动异步运行时: {e}"))?;
+    let runtime = crate::services::rt::runtime()
+        .ok_or_else(|| crate::services::rt::RT_UNAVAILABLE.to_string())?;
     runtime.block_on(async {
         // 只读打开：连接列表刷新只需读 SQLite 的 connections 表，不需要 DuckDB 写连接。
         // 用 `open_read_only`（DuckDB 以 READ_ONLY 打开、不拿写锁）避免与项目主写连接
@@ -254,9 +260,9 @@ fn project_connection_to_item(c: ProjectConnection) -> ConnectionItem {
     }
 }
 
-/// 运行时已连接 ID 集合（一次性查询，避免逐条创建运行时）。
+/// 运行时已连接 ID 集合（一次查询，共用进程内运行时）。
 fn connected_ids() -> HashSet<String> {
-    let Ok(runtime) = tokio::runtime::Runtime::new() else {
+    let Some(runtime) = crate::services::rt::runtime() else {
         return HashSet::new();
     };
     runtime

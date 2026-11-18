@@ -6,5 +6,6 @@
 pub mod connection_service;
 pub mod data_source_service;
 pub mod driver_service;
+pub mod rt;
 pub mod secret_integration;
 pub mod workspace_loader;
