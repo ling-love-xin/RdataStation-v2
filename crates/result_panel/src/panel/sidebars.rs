@@ -663,7 +663,9 @@ impl ResultPanel {
         ];
         let queue = self.queue.clone();
         let layout_queue = self.queue.clone();
+        let master_queue = self.queue.clone();
         let active = self.right_tab;
+        let panels_visible = self.panels_visible();
         div()
             .h_full()
             .flex_none()
@@ -676,6 +678,31 @@ impl ResultPanel {
             .items_center()
             .gap_1()
             .pt_2()
+            // 【面板总开关】DBeaver 右缘竖条的**第一颗**就是总开关 `panelsButton`
+            // （`SWT.RIGHT | SWT.CHECK`，图标 `UIIcon.PANEL_CUSTOMIZE`，checkbox 态 =
+            // 面板可见；`ResultSetViewer.java:1038-1056`）：点它 `showPanels(!isPanelsVisible())`
+            // 整组面板一起收 / 一起放。本仓此前只有状态栏右端的三态开关，竖条顶部没有总开关，
+            // 属结构差异，这里补齐；状态栏那颗保留（两颗改的是同一份状态）。
+            .child(
+                Button::new("editor-result-edge-panels")
+                    .ghost()
+                    .small()
+                    .debug_selector(|| "editor-result-edge-panels".to_string())
+                    .toggled(panels_visible)
+                    .icon(if panels_visible {
+                        IconName::PanelRight
+                    } else {
+                        IconName::PanelRightClose
+                    })
+                    .tooltip(if panels_visible {
+                        "收起结果面板（列浏览器 / 值详情 / 计算 / 分组 / 引用 / 执行SQL）"
+                    } else {
+                        "展开结果面板"
+                    })
+                    .on_click(move |_, _window, app| {
+                        master_queue.request(ResultRequest::SetPanelsVisible(!panels_visible), app);
+                    }),
+            )
             .children(tabs.into_iter().map(|(tab, icon, label)| {
                 let queue = queue.clone();
                 Button::new(format!("editor-result-edge-{:?}", tab))

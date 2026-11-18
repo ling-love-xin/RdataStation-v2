@@ -450,6 +450,35 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【右缘竖条】面板总开关：对齐 DBeaver 右缘竖条顶部那颗 `panelsButton`
+    /// （`SWT.RIGHT | SWT.CHECK`，图标 `UIIcon.PANEL_CUSTOMIZE`，点击
+    /// `showPanels(!isPanelsVisible(), true, true)`，checked = 面板可见；`ResultSetViewer.java:1038-1056`）。
+    ///
+    /// 本仓「面板可见」= 竖条与右栏内容都显（`edge_bar_visible && show_value_sidebar`）；
+    /// 关 = 整条收起（与状态栏右端三态开关的收起态是同一定义）。重新打开走状态栏那个开关
+    /// ——DBeaver 那边关掉后竖条也消失，重新打开走菜单命令 `CMD_TOGGLE_PANELS`，同一处境。
+    pub fn set_panels_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
+        if visible {
+            if !self.panels_visible() {
+                self.edge_bar_visible = true;
+                self.show_value_sidebar = true;
+                self.right_sidebar_epoch = self.right_sidebar_epoch.wrapping_add(1);
+                self.right_sidebar_dragging = false;
+            }
+        } else {
+            self.edge_bar_visible = false;
+            self.show_value_sidebar = false;
+            self.right_sidebar_epoch = self.right_sidebar_epoch.wrapping_add(1);
+            self.right_sidebar_dragging = false;
+        }
+        cx.notify();
+    }
+
+    /// 【右缘竖条】面板当前是否可见（= 竖条 + 右栏内容都在；总开关的 checked 态）
+    pub fn panels_visible(&self) -> bool {
+        self.edge_bar_visible && self.show_value_sidebar
+    }
+
     /// 【侧栏】右侧开关：**三态循环**（比左侧多一个展开态；开关在状态栏右端）——
     /// 收起（竖条 + 右栏都不显示）→ 窄展开（只显右缘竖条图标条）→ 宽展开（竖条 + 右栏
     /// 内容）→ 收起。epoch 递增让宽度动画重播（首帧 epoch=0 免动画，见 `sidebar_width_anim`）

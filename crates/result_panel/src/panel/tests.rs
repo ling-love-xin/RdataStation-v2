@@ -1445,6 +1445,57 @@ fn erase_menu_lists_only_the_entries_this_repo_can_honour(cx: &mut gpui_kit::Tes
     );
 }
 
+/// 【2026-11-18 侧栏结构对齐】右缘竖条顶部的**面板总开关**：
+/// DBeaver 竖条第一颗就是总开关 `panelsButton`（CHECK，checked = 面板可见，
+/// 点击 `showPanels(!isPanelsVisible())`，`ResultSetViewer.java:1038-1056`）。本仓此前
+/// 只有状态栏右端的三态开关，竖条顶部缺这颗。这里钉住「按钮在竖条里 + 收 / 放两向都到位」。
+#[gpui_kit::test]
+fn right_edge_bar_carries_the_master_panels_toggle(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{ElementId, SharedString};
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    // 右缘竖条的挂载条件是 `edge_bar_visible && result_can_copy`（有网格结果才挂），
+    // 测试壳默认 can_copy = false，这里先打开再出帧
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.result_can_copy = true;
+            cx.notify();
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 默认（测试壳）面板可见 → 总开关在竖条里，且竖条本身也挂着
+    let master = cx.update(|window, _| {
+        window.try_find(ElementId::Name(SharedString::from(
+            "editor-result-edge-panels".to_string(),
+        )))
+    });
+    assert!(master.is_some(), "右缘竖条应摆面板总开关");
+    assert!(
+        cx.update(|_, app| panel.read(app).panels_visible()),
+        "默认面板应可见"
+    );
+
+    // 关：整条收起（与状态栏三态开关的收起态同一定义）
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_panels_visible(false, cx)));
+    assert!(
+        !cx.update(|_, app| panel.read(app).panels_visible()),
+        "关掉总开关后应视为不可见"
+    );
+
+    // 开回来：竖条 + 内容一起回来
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_panels_visible(true, cx)));
+    assert!(
+        cx.update(|_, app| panel.read(app).panels_visible()),
+        "再打开后应恢复可见"
+    );
+    // 幂等：已经可见时再「打开」不该改任何状态
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_panels_visible(true, cx)));
+    assert!(cx.update(|_, app| panel.read(app).panels_visible()));
+}
+
 /// 【2026-11-18 工具栏结构对齐】筛选条「状态历史」的**状态机**（纯逻辑，不起窗口）：
 /// 对齐 DBeaver `setNewState`（`ResultSetViewer.java:2419-2442`）+ `navigateHistory`
 /// （`:4050-4063`）+ 启用态（`:456-475`）：

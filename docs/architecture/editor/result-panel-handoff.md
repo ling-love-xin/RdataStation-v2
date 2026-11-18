@@ -1124,9 +1124,8 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 用例：`left_bar_puts_presentation_group_on_top_and_record_mode_at_the_bottom`（量真实像素）、
   `filter_clear_button_is_always_there_and_gated_by_the_filter_text`（a11y disabled 位口径：
   **可用态不暴露** disabled，只有禁用时才是 `Some(true)`）。
-- **下一步候选（需拍板）**：筛选条「状态历史」后退 / 前进（`§8.63` 已写全套 DBeaver 取证与
-  两种口径）。另有两项结构差在册：右缘竖条顶部「面板总开关」（本仓在状态栏右端三态开关，
-  属有意偏离）、DBeaver 面板按钮是「独立 CHECK + 可增减页签」而本仓是固定页签。
+- 后续已补齐：状态历史（§2.52）、✕ 箭头菜单（§2.53）、右缘竖条面板总开关（§2.54）。
+  仍在册：DBeaver 面板按钮是「独立 CHECK + 可增减页签」而本仓是固定页签。
 
 ### 2.52 筛选条「状态历史」后退 / 前进（2026-11-18 已实现主体）
 
@@ -1168,6 +1167,26 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   禁用说明「暂无可清除项」，宽度不跳。
 - 用例：`erase_menu_lists_only_the_entries_this_repo_can_honour`。
 - **验证**：panel **276 passed** / editor `--lib results` 45 / guard 4 / check 0-0。
+
+### 2.54 右缘竖条顶部的面板总开关（2026-11-18）
+
+全文见 `result-panel.md §8.65`。接手要点：
+
+- DBeaver 右缘竖条第一颗就是总开关 `panelsButton`（`SWT.RIGHT | SWT.CHECK`、图标
+  `UIIcon.PANEL_CUSTOMIZE`、tooltip `CMD_TOGGLE_PANELS`；点击 `showPanels(!isPanelsVisible(), true, true)`，
+  checked = 面板可见，`ResultSetViewer.java:1038-1056`）；再往下才是每个面板一颗 CHECK
+  （`verticalIndent = 2`），最后弹簧 + 底部布局开关。
+- 本仓补的就是那颗缺的总开关：`editor-result-edge-panels`（ghost small、图标随状态
+  `PanelRight` / `PanelRightClose`、`toggled(panels_visible)`、→ `ResultRequest::SetPanelsVisible(!visible)`）。
+- 定义：面板可见 = `edge_bar_visible && show_value_sidebar`（竖条 + 右栏内容都在）；关 =
+  整条收起（与状态栏右端三态开关的收起态同一定义）。关掉后竖条消失 → 重新打开走状态栏
+  那颗开关（DBeaver 那边关掉后也是走菜单命令 `CMD_TOGGLE_PANELS`）。
+- 状态栏三态开关**保留**（两颗改同一份状态，不是二选一）。
+- `set_panels_visible(true)` 幂等（已可见则不动状态、不动 epoch）。
+- 用例：`right_edge_bar_carries_the_master_panels_toggle`（在竖条里 + 收/放两向 + 幂等）。
+  测试坑：竖条挂载条件是 `edge_bar_visible && result_can_copy`，测试壳默认
+  `result_can_copy = false`，要先置真再出帧，否则 `try_find` 一定取不到。
+- **验证**：panel **277 passed** / editor `--lib results` 45 / guard 4 / check 0-0。
 
 ---
 

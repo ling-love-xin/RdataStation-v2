@@ -205,6 +205,10 @@ impl EditorHostPanel {
             ResultRequest::ToggleValueSidebar => self
                 .result_panel
                 .update(cx, |p, cx| p.toggle_value_sidebar(cx)),
+            // 【侧栏】右缘竖条顶部的面板总开关（DBeaver `panelsButton`）：纯面板视图态
+            ResultRequest::SetPanelsVisible(visible) => self
+                .result_panel
+                .update(cx, |p, cx| p.set_panels_visible(visible, cx)),
             // 【侧栏】状态栏左端开关：左侧栏（网格 / 文本 / 记录竖条）开合
             ResultRequest::ToggleLeftSidebar => self
                 .result_panel

@@ -72,8 +72,10 @@ pub enum ResultRequest {
     FindPrev,
     /// 【结果内查找】关闭查找栏（查找栏右端 ✕）
     CloseFind,
-    /// 【状态历史】浏览器式后退 / 前进：`delta = -1` 后退一格、`+1` 前进一格。
-    ///
+    /// 【右缘竖条】面板总开关（DBeaver 竖条顶部那颗 `panelsButton`，CHECK 态 =
+    /// 面板可见；`ResultSetViewer.java:1038-1056`）。关 = 整条收起。
+    SetPanelsVisible(bool),
+    /// 【状态历史】浏览器式后退 / 前进：`delta = -1` 后退一格、`+1` 前进一格。    ///
     /// 对齐 DBeaver 的一对 `historyBackButton` / `historyForwardButton`
     /// （`ResultSetFilterPanel.java:343-351`）：面板给目标状态（`history_target`），
     /// 宿主按该状态的 SQL **重跑数据泵**（`navigateHistory`，`ResultSetViewer.java:4050-4063`）。

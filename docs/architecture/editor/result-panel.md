@@ -3556,6 +3556,42 @@ DBeaver 的 `filtersClearButton` 是 `SWT.DROP_DOWN`：本体 `clearDataFilter(t
 - 测试：`panel::tests::erase_menu_lists_only_the_entries_this_repo_can_honour`（空词+无隐藏
   → 空；有词 → 一条；有隐藏 → 一条；两者 → 两条且清除在前）。
 
+### 8.65 右缘竖条顶部的面板总开关（2026-11-18）
+
+DBeaver 右缘竖条（`panelSwitchFolder`，`VerticalFolder(SWT.RIGHT)`）的**第一颗**按钮就是
+面板总开关，下面是逐面板按钮，再下面弹簧、最底部布局开关
+（`ResultSetViewer.java:1038-1090`）：
+
+| 事实 | 出处 |
+| --- | --- |
+| 总开关 `panelsButton`：`SWT.RIGHT \| SWT.CHECK`、`UIIcon.PANEL_CUSTOMIZE`、tooltip `CMD_TOGGLE_PANELS`、checked = `panelsVisible` | `:1038-1056` |
+| 点击体：`showPanels(!isPanelsVisible(), true, true)` + 回写 checked + `updatePanelsButtons()` | `:1041-1055` |
+| 每个面板一颗 `VerticalButton(SWT.RIGHT \| SWT.CHECK)`，`verticalIndent = 2`，checked = `panelsVisible && isPanelVisible(id)` | `:1058-1078` |
+| 弹簧 `createEmptyLabel(1,1)` + 底部 `CMD_TOGGLE_LAYOUT` | `:1080-1083` |
+
+本仓此前只有状态栏右端的三态开关（收起 / 窄展开 / 宽展开），竖条顶部**缺这颗总开关**，
+是结构差异。本批补齐：
+
+- 面板 `events.rs` 新增 `set_panels_visible(bool, cx)` 与访问器 `panels_visible()`。
+  定义：**面板可见 = `edge_bar_visible && show_value_sidebar`**（竖条 + 右栏内容都在）；
+  关 = 整条收起（与状态栏三态开关的收起态同一定义）。
+- `ports.rs` 新增 `ResultRequest::SetPanelsVisible(bool)`；宿主臂直接转发面板方法。
+- `render_right_edge_bar` 顶端插 `editor-result-edge-panels`（ghost small、图标随状态取
+  `PanelRight` / `PanelRightClose`、`toggled(panels_visible)`、tooltip 报「收起 / 展开结果面板」）。
+- **两颗开关并存**：状态栏那颗三态开关保留（DBeaver 的 `CMD_TOGGLE_PANELS` 同时也是菜单
+  命令，两边入口本就并存）；竖条关掉后整条消失，重新打开走状态栏那颗
+  ——DBeaver 关掉后竖条也消失，重新打开同样走菜单命令，处境一致。
+- `set_panels_visible(true)` 幂等：已可见则不重播补间（不动 `right_sidebar_epoch`）。
+
+**用例**：`panel::tests::right_edge_bar_carries_the_master_panels_toggle`
+（按钮在竖条里 → `set_panels_visible(false)` 后不可见 → `true` 恢复 → 再 true 幂等）。
+测试坑：竖条挂载条件是 `edge_bar_visible && result_can_copy`，`panel_harness` 默认
+`result_can_copy = false`，要先置真再出帧，否则 `try_find` 必然取不到。
+
+**验证**：`cargo check -p rds-result-panel -p rds-editor` 0/0；
+`cargo test -p rds-result-panel --lib` = **277 passed**；
+`cargo test -p rds-editor --lib results` = 45 passed；`cargo test -p rds-ui-guard` = 4 passed。
+
 
 ## 8. 协作纪律
 
