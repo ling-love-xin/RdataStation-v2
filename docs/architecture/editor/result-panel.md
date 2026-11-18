@@ -4477,6 +4477,44 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
 **已知缺口**：DBeaver 删除后重跑 `GROUP BY` 拿新结果；本仓是本地重算（无需 round-trip）。
 
 
+### 8.84 视图菜单补「面板最大化」（对齐 DBeaver `CMD_TOGGLE_MAXIMIZE`，2026-11-18）
+
+**取证**：
+- `ResultSetHandlerMain:173-175`：`CMD_TOGGLE_MAXIMIZE` → `rsv.togglePanelsMaximize()`。
+- `ResultSetViewer.togglePanelsMaximize()`（`:1551-1557`）= `viewerSash.hideUp()` /
+  `showUp()` 切换——即**收起结果网格那一半**，让面板独占整个结果集区域；它不看
+  `panelsVisible`（面板开合是另一条命令 `CMD_TOGGLE_PANELS`）。
+- 菜单段位（`fillPanelsMenu:1559-1588`）：六页 → 分隔 → `CMD_TOGGLE_MAXIMIZE` →
+  `CMD_ACTIVATE_PANELS` → 分隔 → `CMD_TOGGLE_PANELS` → `CMD_TOGGLE_LAYOUT`。
+
+**本仓落点**：
+- 端口 `ResultRequest::TogglePanelMaximize` → 面板事件 `toggle_panel_maximize`
+  （`panel_maximized` 纯视图态，不落盘）；编辑器侧在
+  `crates/editor/src/view/host/results/dispatch.rs` 分发到面板。
+- `render`：最大化时**网格整块不渲染**（`editor-result-main-grid` 不挂），右栏独占
+  `main_area`；右栏渲染强制挂载（`show = show_value_sidebar || panel_maximized`）、
+  满宽 / 满高、不挂拖拽手柄、不走宽度补间。开合态（`show_value_sidebar`）原值保留。
+- 视图菜单条目 `PanelViewItem::MaximizeToggle`：段位照原版（两条分隔线之间单独一段），
+  勾选态 = 当前是否最大化，文案报动作（「面板最大化（收起结果网格）」/「还原结果网格」）。
+- `panel_view_item_label` 增加 `panel_maximized` 入参（与 `panels_visible` / `vertical_layout`
+  同一形态：纯函数按状态算文案，测试直接钉）。
+
+**有意偏离 / 未列项**：
+- `CMD_ACTIVATE_PANELS`（把焦点交给面板）仍未落地端口，菜单里不摆（口径未变）。
+- DBeaver 最大化只动 sash 的上下半边，页签夹仍在原位；本仓右栏是唯一的面板容器，
+  因此「满宽 / 满高」等价表达（横排满宽、竖排满高）。
+
+**验证**：
+- `panel::tests::maximize_panel_hides_the_grid_and_keeps_the_sidebar`：基线网格在 →
+  最大化后 `editor-result-main-grid` 消失而右栏仍在 → 还原后网格回来且
+  `show_value_sidebar` 未被改动（三态闭环）。
+- `panel::tests::right_panel_view_menu_lists_pages_then_the_two_toggles` 更新为
+  11 条目（六页 + 分隔 + 最大化 + 分隔 + 面板开关 + 布局方向）与两条分隔线的索引，
+  并断言「未最大化 → 去最大化 / 已最大化 → 还原」两条文案。
+
+**已知缺口**：没有快捷键绑定（DBeaver 该命令带默认快捷键位，本仓 KeyBinding 表尚未登记）。
+
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

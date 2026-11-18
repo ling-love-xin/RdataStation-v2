@@ -1476,6 +1476,22 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   别先怀疑约束过滤。
 
 
+### 2.72 面板最大化的接手要点（2026-11-18）
+
+- 语义是「收起结果网格、面板独占整块区域」，**不是**「把右栏拖宽」：最大化是一个
+  `panel_maximized: bool` 纯视图态，`render` 里网格那块**条件不渲染**
+  （`editor-result-main-grid` 会从渲染观测里消失，测试就靠这个 id 断言）。
+- 与开合态正交：`show_value_sidebar` 保持原值，右栏渲染用
+  `show = show_value_sidebar || panel_maximized` 强制挂载；退出最大化后回到用户原本的开合。
+  别把「最大化」写成「顺便把面板打开」——那会改掉用户的开合偏好。
+- 最大化期间**不挂右栏拖拽手柄**、不走 `EffectTransition` 宽度补间（没有可拖的分栏，
+  补间也没有意义）；竖排时满高、横排时满宽。
+- 视图菜单段位照 `fillPanelsMenu:1559-1588`：六页 → 分隔 → 最大化 → 分隔 → 面板开关 →
+  布局方向（`CMD_ACTIVATE_PANELS` 仍无端口，不摆）。`panel_view_item_label` 现在收
+  `(item, panels_visible, vertical_layout, panel_maximized)` 四参——新增动态条目时按同一
+  形态加参数，不要另开一套函数。
+- 若要加快捷键：DBeaver 该命令带默认键位，本仓 `KeyBinding` 表还没登记，属未落地项。
+
 ### 2.71 分组页「移除分组列」的接手要点（2026-11-18）
 
 - 可用性判定集中在纯函数 `panel::tabs::can_remove_group_column(group_columns, selected)`：
