@@ -3453,11 +3453,13 @@ panicked at panel/tests.rs:1091:
 - `cargo test -p rds-result-panel --lib` = **273 passed / 0 failed**（271 + 本批 2）。
 - `cargo test -p rds-ui-guard`（不带 `--lib`）= 4 passed。
 
-### 8.63 在册：筛选条「状态历史」后退 / 前进（尚未实现，需拍板口径）
+### 8.63 筛选条「状态历史」后退 / 前进（2026-11-18 已实现主体）
 
 DBeaver 筛选条工具条上有一对浏览器式 **后退 / 前进** 按钮（`historyBackButton` /
 `historyForwardButton`，`SWT.DROP_DOWN`，`ResultSetFilterPanel.java:343-351`），
-本仓**完全没有这个能力**。取证如下，作为下一批的设计输入：
+本仓此前完全没有这个能力。
+
+#### 8.63.1 DBeaver 取证
 
 | 事实 | 出处 |
 | --- | --- |
@@ -3469,12 +3471,51 @@ DBeaver 筛选条工具条上有一对浏览器式 **后退 / 前进** 按钮（
 | 箭头菜单 = 该方向所有可达状态，标签取 `describeState()`；点选 = `navigateHistory(该位置)` | `:1456-1481` |
 | `describeState()` = 容器名 + `[条件 SQL]`，超过 50 字符截断加 `...` | `:5457-5473` |
 
-**待拍板**：本仓「一份状态」到底由什么构成？候选口径：
-① 原 SQL + 下发筛选 SQL + 排序下发（= 需要真重查的那部分，与 DBeaver 对齐）；
-② 再加上本地视图筛选词与转置（那就不是「重查」而是「回放视图」）。
-两种都能实现，但 ① 必须先有「原 SQL / 下发筛选 / 排序」三者的统一快照通道，
-② 会把纯视图状态也写进历史（后退时可能既重查又改视图，语义偏厚）。
-建议先按 ① 做（与 DBeaver 同语义），② 作后续增强。
+#### 8.63.2 本仓口径（①：一份状态 = 一份结果 SQL）
+
+本仓重查通道只有一条：`execute(ExecTarget::Statement(sql), ResultPlacement::Replace, cx)`
+（「筛选框运行」`run_filter_as_query` 就走它）。所以「需要重跑数据泵的状态」直接等价于
+**该结果集 SQL**，「原 SQL / 下发筛选 / 排序」三者的差异都体现为 SQL 文本差异，
+不需要额外的快照通道。落点：
+
+| 位置 | 内容 |
+| --- | --- |
+| `panel/data.rs` | `state_history: Vec<String>`（状态 SQL 栈）+ `history_pos: usize`（当前位置） |
+| `panel/lifecycle.rs::sync` | `self.result_sql = input.sql;` 之后调 `note_state_sql()`——每份同步进来的结果都记一条 |
+| `panel/events.rs::note_state_sql` | 去重（同一 SQL 只挪位置）、从中间走新路时 `truncate(pos + 1)` 作废前向、空 SQL / 无 SQL 不入栈 |
+| `panel/events.rs` | `history_can_back` / `history_can_forward`（启用态）、`history_target(delta) -> Option<(下标, SQL)>`、`set_history_pos`、`history_hint`（tooltip） |
+| `panel/events.rs::state_label` | `describeState` 等价：空白折叠成单空格 + 50 字符截断补 `…`（纯函数，可单测） |
+| `ports.rs` | `ResultRequest::NavigateHistory(i32)`（`-1` 后退 / `+1` 前进） |
+| `host/results/dispatch.rs` | 读 `history_target(delta)` → `set_history_pos(pos)` → `execute(Statement(sql), Replace)`（与「筛选框运行」同一条通道） |
+| `panel/render.rs` | 筛选行在「清除钮 / 历史筛选下拉」之后、「查找开关」之前插一对 ghost xsmall 图标钮（`IconName::ChevronLeft` / `ChevronRight`），`disabled(!can_back/forward)`，tooltip = `history_hint` |
+
+为什么位置不放在宿主：镜像是纯面板视图态（与右栏宽度、转置同类），面板 render 才能判断
+启用态；宿主只负责「执行」这件事。
+
+`sync` 会把重跑回来的同一 SQL 再记一次 —— `note_state_sql` 的去重正好把位置落回那一条，
+所以「后退 → 宿主重查 → sync」不会把历史搞乱（这是口径 ① 能成立的关键）。
+
+#### 8.63.3 收窄（在册）
+
+- **箭头下拉**（DBeaver 是 `SWT.DROP_DOWN` 分裂按钮：菜单里列出该方向全部可达状态，
+  `:1456-1481`）本批未做，只做主体点击走一格。要做需要 `menu::DropdownButton` 分裂按钮，
+  另开一批。
+- **状态粒度**只到 SQL：本地视图层的东西（筛选词、转置、列布局、行位置）不入历史。
+  DBeaver 的 `HistoryStateItem` 里含 `rowNumber`，本仓暂不还原行位置（回退后停在首行）。
+- `pushdown_filter`（下发源库）产生的是**新结果集**（`ResultPlacement::NewSet`），
+  它的状态记在新面板自己的历史里；原结果集那一份历史不受影响。
+
+#### 8.63.4 测试与验证
+
+| 用例 | 钉住什么 |
+| --- | --- |
+| `panel::tests::state_history_dedupes_steps_and_drops_the_forward_branch` | 纯状态机：空 SQL / 空白 SQL 不入栈；A→B→C 后位置在末位（能退不能进）；`history_target(-1)` 指向 B、末位无前向；落位 B 后两向都可走；从中间走新路 D → C 被截断；重复状态只挪位置不追加 |
+| `panel::tests::history_buttons_sit_in_the_filter_row_and_gate_on_position` | 渲染：空历史时两钮**在位且禁用**；灌两条后后退钮可用、前进钮仍禁用（末位）；`history_hint` = 目标 SQL；`state_label` 折叠空白 + 50 字符截断补 `…` |
+
+- `cargo check -p rds-result-panel -p rds-editor` = 0 error / 0 warning。
+- `cargo test -p rds-result-panel --lib` = **275 passed / 0 failed**（273 + 本批 2）。
+- `cargo test -p rds-editor --lib results` = **45 passed / 0 failed**。
+- `cargo test -p rds-ui-guard`（不带 `--lib`）= 4 passed。
 
 
 ## 8. 协作纪律

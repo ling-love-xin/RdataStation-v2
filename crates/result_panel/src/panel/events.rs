@@ -1012,6 +1012,89 @@ impl ResultPanel {
         &self.filter_text
     }
 
+    // ── 状态历史（对齐 DBeaver `HistoryStateItem` / `setNewState` / `navigateHistory`） ──
+
+    /// 【状态历史】记一条状态（`sync` 拿到新结果 SQL 时调用；也可测试直接调）。
+    ///
+    /// 对齐 DBeaver `setNewState`（`ResultSetViewer.java:2419-2442`）：
+    /// - 同一个 SQL 已经在历史里 → **把位置挪过去**（去重、不追加，`:2420-2426`）
+    /// - 否则先**截断当前位置之后的所有项**（浏览器式：从中间走了新路，前向历史作废，`:2432`），
+    ///   再追加到末尾，位置 = 末位
+    ///
+    /// 口径：一份状态 = 一份结果 SQL（本仓重查通道就是 `ExecTarget::Statement(sql)`）；
+    /// 空 SQL（写语句 / 无结论）不入历史。
+    pub(crate) fn note_state_sql(&mut self) {
+        let Some(raw) = self.result_sql.as_deref() else {
+            return;
+        };
+        let sql = raw.trim().to_string();
+        if sql.is_empty() {
+            return;
+        }
+        if let Some(index) = self.state_history.iter().position(|item| *item == sql) {
+            self.history_pos = index;
+            return;
+        }
+        // 首次入栈时历史为空：`truncate(0)` 无动作，等价于「直接追加」
+        let keep = if self.state_history.is_empty() {
+            0
+        } else {
+            self.history_pos + 1
+        };
+        self.state_history.truncate(keep);
+        self.state_history.push(sql);
+        self.history_pos = self.state_history.len().saturating_sub(1);
+    }
+
+    /// 【状态历史】能不能后退（DBeaver：`position > 0`，`ResultSetViewer.java:456-475`）
+    pub fn history_can_back(&self) -> bool {
+        !self.state_history.is_empty() && self.history_pos > 0
+    }
+
+    /// 【状态历史】能不能前进（DBeaver：`position < size - 1`）
+    pub fn history_can_forward(&self) -> bool {
+        self.history_pos + 1 < self.state_history.len()
+    }
+
+    /// 【状态历史】某一方向的目标状态：`delta = -1` 后退一格、`+1` 前进一格。
+    /// 返回 `(目标下标, 该状态 SQL)`；方向到头 / 空历史 = `None`。
+    /// 宿主拿到它之后自己重跑 SQL，再把位置交回 [`Self::set_history_pos`]。
+    pub fn history_target(&self, delta: i32) -> Option<(usize, String)> {
+        let pos = if delta < 0 {
+            self.history_pos.checked_sub(1)?
+        } else {
+            self.history_pos + 1
+        };
+        self.state_history.get(pos).cloned().map(|sql| (pos, sql))
+    }
+
+    /// 【状态历史】写下当前位置（宿主执行完目标状态后回调；纯面板视图态）
+    pub fn set_history_pos(&mut self, pos: usize, cx: &mut Context<Self>) {
+        self.history_pos = pos;
+        cx.notify();
+    }
+
+    /// 【状态历史】历史条数（测试断言）
+    pub fn history_len(&self) -> usize {
+        self.state_history.len()
+    }
+
+    /// 【状态历史】当前位置（测试断言）
+    pub fn history_pos(&self) -> usize {
+        self.history_pos
+    }
+
+    /// 【状态历史】某条状态的 tooltip 文案（按钮悬停提示 / 测试断言）：
+    /// 取该方向要去的状态，没有就到头或用「先有结果才能后退」这类说明
+    pub fn history_hint(&self, delta: i32) -> String {
+        match self.history_target(delta) {
+            Some((_, sql)) => state_label(&sql),
+            None if self.state_history.is_empty() => "还没有可回退的状态".to_string(),
+            None if delta < 0 => "已经在最早的状态".to_string(),
+            None => "已经在最新的状态".to_string(),
+        }
+    }
+
     /// 下发源库开关（测试断言）
     pub fn pushdown(&self) -> bool {
         self.pushdown
@@ -1021,6 +1104,20 @@ impl ResultPanel {
     pub fn selected_col(&self) -> Option<usize> {
         self.selected_col
     }
+}
+
+/// 【状态历史】状态的一行描述（对齐 DBeaver `describeState`，`ResultSetViewer.java:5457-5473`）：
+/// 空白折叠成单空格（多行 SQL 在 tooltip 里不能换行），**超过 50 字符截断补 `…`**
+/// （DBeaver 的阈值也是 50 字符，`...` 是 ASCII 三点——本仓用中文省略号跟界面文案一致）。
+pub(crate) fn state_label(sql: &str) -> String {
+    let flat = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+    const MAX: usize = 50;
+    if flat.chars().count() <= MAX {
+        return flat;
+    }
+    let mut out: String = flat.chars().take(MAX).collect();
+    out.push('…');
+    out
 }
 
 /// 【结果集 #296】按持久化列名序重排一份新结果的列与行（纯函数，测试直接覆盖）：

@@ -1403,3 +1403,147 @@ fn filter_clear_button_is_always_there_and_gated_by_the_filter_text(
         "有词时清除钮不该再是禁用态（可用态不暴露 disabled 位）"
     );
 }
+
+/// 【2026-11-18 工具栏结构对齐】筛选条「状态历史」的**状态机**（纯逻辑，不起窗口）：
+/// 对齐 DBeaver `setNewState`（`ResultSetViewer.java:2419-2442`）+ `navigateHistory`
+/// （`:4050-4063`）+ 启用态（`:456-475`）：
+/// - 同一个 SQL 重复进栈 → 只挪位置，不追加
+/// - 从中间走新路 → 前向历史作废（浏览器式）
+/// - 空 SQL / 无 SQL → 不入历史
+#[gpui_kit::test]
+fn state_history_dedupes_steps_and_drops_the_forward_branch(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    let note = |cx: &mut gpui_kit::VisualTestContext, sql: Option<&str>| {
+        let sql = sql.map(|s| s.to_string());
+        cx.update(|_, app| {
+            panel.update(app, |p, _| {
+                p.result_sql = sql.clone();
+                p.note_state_sql();
+            })
+        });
+    };
+
+    // 空 SQL（写语句 / 无结论）不该产生历史项
+    note(cx, None);
+    note(cx, Some("   "));
+    assert_eq!(cx.update(|_, app| panel.read(app).history_len()), 0);
+
+    // 三个状态依次进来：A → B → C，位置在 C（能后退、不能前进）
+    note(cx, Some("select 1"));
+    note(cx, Some("select 2"));
+    note(cx, Some("select 3"));
+    let (len, pos, can_back, can_forward) = cx.update(|_, app| {
+        let p = panel.read(app);
+        (p.history_len(), p.history_pos(), p.history_can_back(), p.history_can_forward())
+    });
+    assert_eq!((len, pos), (3, 2));
+    assert!(can_back && !can_forward, "在末位：该能后退不能前进");
+
+    // 后退一格 → 目标就是 B（宿主拿它重跑 SQL）
+    let back = cx.update(|_, app| panel.read(app).history_target(-1));
+    assert_eq!(
+        back,
+        Some((1, "select 2".to_string())),
+        "后退一格应指向中间那条状态"
+    );
+    // 前进一格 → 从末位出发没有前向
+    assert_eq!(cx.update(|_, app| panel.read(app).history_target(1)), None);
+
+    // 面板把位置交给宿主（宿主执行完回调），这里直接模拟落位到 B
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_history_pos(1, cx)));
+    let back = cx.update(|_, app| panel.read(app).history_target(-1));
+    let forward = cx.update(|_, app| panel.read(app).history_target(1));
+    assert_eq!(back, Some((0, "select 1".to_string())));
+    assert_eq!(forward, Some((2, "select 3".to_string())));
+
+    // 从中间（B）走一条新路 D：C 的前向历史作废，历史变 A / B / D
+    note(cx, Some("select 4"));
+    let (len, pos) = cx.update(|_, app| (panel.read(app).history_len(), panel.read(app).history_pos()));
+    assert_eq!((len, pos), (3, 2), "新状态应截断前向再追加");
+    assert_eq!(
+        cx.update(|_, app| panel.read(app).history_target(-1)),
+        Some((1, "select 2".to_string())),
+        "新路的上一格仍是 B"
+    );
+    assert_eq!(
+        cx.update(|_, app| panel.read(app).history_target(1)),
+        None,
+        "C 已被截断，不能前进"
+    );
+    // 回到 A（去重：不追加、只挪位置）
+    note(cx, Some("select 1"));
+    let (len, pos) = cx.update(|_, app| (panel.read(app).history_len(), panel.read(app).history_pos()));
+    assert_eq!((len, pos), (3, 0), "重复状态只挪位置，不追加");
+}
+
+/// 【2026-11-18 工具栏结构对齐】后退 / 前进两个按钮**在筛选行里常驻**、启用态跟位置走：
+/// DBeaver 的那一对按钮是常驻工具项，只有 `pos > 0` / `pos < size - 1` 才打开。
+/// 另外钉住 tooltip 口径（`describeState`，`ResultSetViewer.java:5457-5473`：折叠空白 +
+/// 50 字符截断）。
+#[gpui_kit::test]
+fn history_buttons_sit_in_the_filter_row_and_gate_on_position(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{ElementId, SharedString};
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let state = |cx: &mut gpui_kit::VisualTestContext, id: &str| -> Option<Option<bool>> {
+        let name = SharedString::from(id.to_string());
+        cx.update(|window, _| {
+            window
+                .try_find(ElementId::Name(name))
+                .map(|snap| snap.disabled())
+        })
+    };
+
+    // 空历史：两个按钮都在，都禁用
+    assert_eq!(
+        state(cx, "editor-result-history-back"),
+        Some(Some(true)),
+        "空历史时后退钮应在位且禁用"
+    );
+    assert_eq!(
+        state(cx, "editor-result-history-forward"),
+        Some(Some(true)),
+        "空历史时前进钮应在位且禁用"
+    );
+
+    // 灌两条状态 → 位置在末位：后退可用、前进仍禁用
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.result_sql = Some("select 1".to_string());
+            p.note_state_sql();
+            p.result_sql = Some("select 2".to_string());
+            p.note_state_sql();
+            cx.notify();
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_ne!(
+        state(cx, "editor-result-history-back"),
+        Some(Some(true)),
+        "有历史可退时后退钮不该再禁用"
+    );
+    assert_eq!(
+        state(cx, "editor-result-history-forward"),
+        Some(Some(true)),
+        "在末位时前进钮仍禁用"
+    );
+
+    // tooltip 口径：目标状态描述（折叠空白、超 50 字符截断）
+    let hint = cx.update(|_, app| panel.read(app).history_hint(-1));
+    assert_eq!(hint, "select 1", "tooltip 应是目标状态 SQL");
+    assert_eq!(
+        super::events::state_label("select\n  1\n   from t"),
+        "select 1 from t",
+        "空白应折叠成单空格"
+    );
+    let long = "x".repeat(80);
+    let label = super::events::state_label(&long);
+    assert_eq!(label.chars().count(), 51, "50 字符 + 省略号");
+    assert!(label.ends_with('…'));
+}

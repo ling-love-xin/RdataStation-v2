@@ -1128,6 +1128,29 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   两种口径）。另有两项结构差在册：右缘竖条顶部「面板总开关」（本仓在状态栏右端三态开关，
   属有意偏离）、DBeaver 面板按钮是「独立 CHECK + 可增减页签」而本仓是固定页签。
 
+### 2.52 筛选条「状态历史」后退 / 前进（2026-11-18 已实现主体）
+
+全文见 `result-panel.md §8.63`。接手要点：
+
+- **口径 ①（已拍板落地）**：一份状态 = **一份结果 SQL**。本仓重查只有
+  `execute(ExecTarget::Statement(sql), ResultPlacement::Replace)` 一条通道（「筛选框运行」
+  同款），所以不需要额外快照通道；「原 SQL / 下发筛选 / 排序」的差异都落在 SQL 文本上。
+- 面板持历史：`state_history: Vec<String>` + `history_pos: usize`；`sync` 里 `note_state_sql()`
+  入栈（去重 = 同一 SQL 只挪位置；从中间走新路的 `truncate(pos+1)` 作废前向；空 SQL 不入）。
+- 宿主只执行：`ResultRequest::NavigateHistory(±1)` → `history_target` → `set_history_pos`
+  → `execute(Statement(sql), Replace)`。执行完 `sync` 再记一次同款 SQL，去重把位置落回该条
+  —— 这是「后退 / 前进」不乱套的关键。
+- 按钮在筛选行「清除钮 / 历史筛选下拉」之后、「查找开关」之前，ghost xsmall
+  `ChevronLeft` / `ChevronRight`，`disabled(!can_back/forward)`，tooltip = `history_hint`
+  （`state_label` = 折叠空白 + 50 字符截断补 `…`，对齐 `describeState`）。
+- **收窄在册**：箭头下拉（DBeaver 是 `SWT.DROP_DOWN` 分裂按钮，菜单列出该方向全部可达状态，
+  `ResultSetViewer.java:1456-1481`）未做，需 `menu::DropdownButton`；不还原行位置
+  （DBeaver 的 `HistoryStateItem` 含 `rowNumber`，本仓回退后停首行）；视图态
+  （筛选词 / 转置 / 列布局）不入历史。
+- 用例：`state_history_dedupes_steps_and_drops_the_forward_branch`（纯状态机）、
+  `history_buttons_sit_in_the_filter_row_and_gate_on_position`（在位数 + 启用态 + tooltip 口径）。
+- **验证**：panel **273 → 275 passed** / editor `--lib results` 45 / guard 4 / check 0-0。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）

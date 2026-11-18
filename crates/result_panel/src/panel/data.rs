@@ -259,6 +259,13 @@ pub struct ResultPanel {
     pub(crate) compare_toolbar: Option<ResultToolbar>,
     pub(crate) compare_status: Option<ResultStatus>,
     pub(crate) result_sql: Option<String>,
+    /// 【状态历史】本面板见过的「结果状态」快照：每份被同步进来的结果 SQL 一条
+    /// （对齐 DBeaver `HistoryStateItem` 里的 `dataContainer` + `filter`，本仓口径 ①：
+    /// 一份状态 = 一份结果 SQL，因为重查通道就是 `ExecTarget::Statement(sql)`）。
+    /// 由 [`Self::note_state_sql`]（`sync` 拿到新结果时调用）维护。
+    pub(crate) state_history: Vec<String>,
+    /// 【状态历史】当前位置（`state_history` 下标）；空历史时为 0（无意义但省掉 `Option`）
+    pub(crate) history_pos: usize,
     /// 【1.2】筛选框运行生成的 wrapped SQL（`select * from (原SQL) where …`）；
     /// 执行完成后写入，右栏「执行SQL」页签展示（只读 + 复制）。空 = 页签空态。
     pub(crate) exec_sql: Option<String>,

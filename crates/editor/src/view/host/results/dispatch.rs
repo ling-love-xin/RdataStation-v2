@@ -62,6 +62,23 @@ impl EditorHostPanel {
                 .result_panel
                 .update(cx, |p, cx| p.find_step(false, cx)),
             ResultRequest::CloseFind => self.result_panel.update(cx, |p, cx| p.close_find(cx)),
+            // 【状态历史】浏览器式后退 / 前进（DBeaver `navigateHistory`，
+            // `ResultSetViewer.java:4050-4063`：按该状态**重跑数据泵**）。
+            // 面板只给「目标下标 + 该状态 SQL」，重查走与「筛选框运行」同一条通道
+            // （`ExecTarget::Statement` + `ResultPlacement::Replace`），执行完 `sync` 会把
+            // 同一份 SQL 再记一次历史——`note_state_sql` 的去重正好把位置落回那一条。
+            ResultRequest::NavigateHistory(delta) => {
+                let target = self.result_panel.read(cx).history_target(delta);
+                if let Some((pos, sql)) = target {
+                    self.result_panel
+                        .update(cx, |p, cx| p.set_history_pos(pos, cx));
+                    self.execute(
+                        crate::execution::ExecTarget::Statement(sql),
+                        crate::store::ResultPlacement::Replace,
+                        cx,
+                    );
+                }
+            }
             ResultRequest::PushdownFilter { value } => {
                 // 值以队列快照为准（drain 时面板筛选词可能已被用户改掉）；
                 // 定稿后重查走 `pushdown_filter`（读面板的 filter_text = 刚定稿的值）。

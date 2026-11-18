@@ -213,6 +213,8 @@ impl ResultPanel {
             compare_toolbar: None,
             compare_status: None,
             result_sql: None,
+            state_history: Vec::new(),
+            history_pos: 0,
             exec_sql: None,
             result_is_analysis: false,
             result_can_copy: false,
@@ -388,6 +390,8 @@ impl ResultPanel {
         self.error_card = input.error_card;
         self.script_card = input.script_card;
         self.result_sql = input.sql;
+        // 【状态历史】每份同步进来的结果 SQL 记一条状态（去重 / 截断前向由它自己管）
+        self.note_state_sql();
         self.result_can_copy = input.can_copy;
         self.result_is_analysis = input.is_analysis;
         self.export_ctx = input.export_ctx;

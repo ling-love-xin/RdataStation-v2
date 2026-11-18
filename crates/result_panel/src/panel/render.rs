@@ -400,6 +400,45 @@ impl ResultPanel {
                         }),
                 )
             })
+            // 【状态历史】后退 / 前进：对齐 DBeaver 的一对 `SWT.DROP_DOWN` 按钮
+            // `historyBackButton` / `historyForwardButton`（`ResultSetFilterPanel.java:343-351`）。
+            // 语义（`ResultSetViewer.java`）：历史项 = 一份「需要重查的状态」，后退 / 前进
+            // 都按目标状态**重跑数据泵**（`navigateHistory`，`:4050-4063`）；启用态
+            // 后退仅 `pos > 0`、前进仅 `pos < size - 1`（`:456-475`），tooltip = 目标状态描述。
+            // 本批先做**主体点击**（走一格 + tooltip 报目标），箭头下拉「列出该方向全部可达
+            // 状态」（`:1456-1481`）留作后续，在 `result-panel.md §8.63` 在册。
+            .when(!self.filter_expanded, |row| {
+                let queue = self.queue.clone();
+                let hint = self.history_hint(-1);
+                row.child(
+                    Button::new("editor-result-history-back")
+                        .ghost()
+                        .xsmall()
+                        .icon(IconName::ChevronLeft)
+                        .debug_selector(|| "editor-result-history-back".to_string())
+                        .disabled(!self.history_can_back())
+                        .tooltip(hint)
+                        .on_click(move |_, _window, app| {
+                            queue.request(ResultRequest::NavigateHistory(-1), app);
+                        }),
+                )
+            })
+            .when(!self.filter_expanded, |row| {
+                let queue = self.queue.clone();
+                let hint = self.history_hint(1);
+                row.child(
+                    Button::new("editor-result-history-forward")
+                        .ghost()
+                        .xsmall()
+                        .icon(IconName::ChevronRight)
+                        .debug_selector(|| "editor-result-history-forward".to_string())
+                        .disabled(!self.history_can_forward())
+                        .tooltip(hint)
+                        .on_click(move |_, _window, app| {
+                            queue.request(ResultRequest::NavigateHistory(1), app);
+                        }),
+                )
+            })
             // 【结果内查找】查找栏开关：DBeaver 筛选条工具条上的 `openFindReplaceButton`
             // 是 **SWT.CHECK**（`ResultSetFilterPanel.java:356`，图标 `UIIcon.FIND_REPLACE`，
             // 命令 `EDIT_FIND_AND_REPLACE`）：按下打开查找浮层、再按关闭（`:361-385`）。
