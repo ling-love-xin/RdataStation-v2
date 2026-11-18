@@ -900,6 +900,22 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【R6 段大小】宿主构造期注入持久化值：状态落位 + 输入框显示该值
+    /// （过去只有占位 `1000`，持久化成 `500` 时框里仍是空 → 看不到真值）。
+    pub fn set_segment_rows_initial(
+        &mut self,
+        rows: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let rows = rows.max(crate::ui::RESULT_SEGMENT_ROWS_MIN);
+        self.segment_rows = rows;
+        // `set_value` 内部临时 `emit_events = false`：不会把注入当成用户输入再入队一次
+        let input = self.segment_input.clone();
+        input.update(cx, |state, cx| state.set_value(rows.to_string(), window, cx));
+        cx.notify();
+    }
+
     /// 【R5 比例持久化】初值注入：面板构造后由宿主把全局偏好项（px）写进来。
     /// 复用 `clamp_right_sidebar_width`（`dx = 0` 时它就是"夹取当前值"），
     /// 保证与拖拽路径同一套上下限，不在这里再写一份常量比较。

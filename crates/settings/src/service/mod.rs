@@ -179,6 +179,10 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::ResultPanelSidebarWidth => {
             SettingValue::Number(settings.result_panel.sidebar_width as f64)
         }
+        // 【R6】一段行数（对齐 DBeaver `resultSetSize` / `RESULT_SET_MAX_ROWS`）
+        Slot::ResultPanelSegmentRows => {
+            SettingValue::Number(settings.result_panel.segment_rows as f64)
+        }
         // 【工具条配置】隐藏命令 id 列表（逗号分隔自由文本）
         Slot::ResultPanelHiddenStatusCommands => {
             SettingValue::Text(settings.result_panel.hidden_status_commands.clone())
@@ -391,6 +395,7 @@ impl SettingsService {
             | Slot::ResultPanelLoopSelection
             | Slot::ResultPanelSelectOnModifierClick
             | Slot::ResultPanelSidebarWidth
+            | Slot::ResultPanelSegmentRows
             | Slot::ResultPanelHiddenStatusCommands
             | Slot::ResultPanelPersistColumnWidths
             | Slot::ResultPanelNumberFormat

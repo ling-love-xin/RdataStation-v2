@@ -318,10 +318,14 @@ impl EditorHostPanel {
                 .result_panel
                 .update(cx, |p, cx| p.toggle_panel_maximize(cx)),
             // 【R6 段大小】状态行输入框提交的「一段」行数（对齐 DBeaver `resultSetSize`）：
-            // 只改面板视图态，下一次「取下一段」按它下发 limit（不重取已加载行）
-            ResultRequest::SetSegmentRows(rows) => self
-                .result_panel
-                .update(cx, |p, cx| p.set_segment_rows(rows, cx)),
+            // 面板视图态立即生效（下一次「取下一段」按它下发 limit，不重取已加载行），
+            // 同时写回全局偏好 `result_panel.segment_rows`，下次启动沿用。
+            ResultRequest::SetSegmentRows(rows) => {
+                self.result_panel
+                    .update(cx, |p, cx| p.set_segment_rows(rows, cx));
+                let effective = self.result_panel.read(cx).segment_rows();
+                settings::SettingsService::set_result_panel_segment_rows(effective, cx);
+            }
             // 【侧栏】清单行眼睛：切换该列隐藏 / 显示（网格是另一实体，
             // update 它安全；面板再 notify 重画列浏览器的隐藏标记）
             ResultRequest::ToggleColumnVisibility(column) => {

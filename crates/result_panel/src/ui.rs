@@ -96,8 +96,8 @@ pub const RESULT_TOOLBAR_PADDING: Pixels = px(3.);
 /// （Medium 12px vs Small 10px）三样都与编辑器同档，字号不变（两档都是 `text_sm` 14px）。
 pub const RESULT_TABS_HEIGHT: f32 = 2.0;
 
-/// 底部动作状态行**中段行数框**宽（4.5rem = 72px：只读显示「共 N[+] 行」，
-/// 行号跳转输入是 backlog；窄框对齐 DBeaver 状态行中段的小输入槽位）
+/// 底部动作状态行**中段行数框**宽（4.5rem = 72px：只读显示「共 N 行」，
+/// 窄框对齐 DBeaver 状态行中段的小输入槽位）
 pub const RESULT_ROW_COUNT_BOX_WIDTH: f32 = 4.5;
 
 /// 状态行「段大小」输入框宽（4rem = 64px；对齐 DBeaver `resultSetSize`
@@ -108,12 +108,13 @@ pub const RESULT_SEGMENT_BOX_WIDTH: f32 = 4.0;
 /// 【段大小】取数「一段」的默认行数（= 1000，与编辑器 `execution::SEGMENT_ROWS` 同值）。
 ///
 /// 面板持有该值：`结果集「取下一段」`按它下发 `limit`（过去是编辑器侧的固定常量）。
-/// DBeaver 对应项是数据源偏好 `RESULT_SET_MAX_ROWS`（连接级、改完写偏好并落盘），
-/// 本仓先落在面板视图态上（跨会话持久化属未落地缺口，见 result-panel.md §8.85）。
+/// DBeaver 对应项是数据源偏好 `RESULT_SET_MAX_ROWS`（连接级、改完写偏好并落盘）；
+/// 本仓存全局偏好 `result_panel.segment_rows`（构造期注入 + 提交后写回，见
+/// `docs/architecture/editor/result-panel.md` §8.85 / §8.86）。
 pub const RESULT_SEGMENT_ROWS_DEFAULT: usize = 1000;
 
 /// 【段大小】下限（DBeaver `ResultSetPreferences.MIN_SEGMENT_SIZE = 1`）：
-/// 输入 0 / 负数 / 非数字都不算有效值，保持原值（失焦回填当前值）。
+/// 输入 0 / 负数 / 非数字都不算有效值，保持原值（无失焦钩子，见 §8.85 缺口说明）。
 pub const RESULT_SEGMENT_ROWS_MIN: usize = 1;
 
 /// 筛选输入框宽（11.25rem = 180px；原型 §5.5 的 `⌕ 筛选`，够放下十来个字符的词）

@@ -79,6 +79,22 @@ pub(crate) fn apply_slot(
             }
             persist(&cx.global::<Settings>().clone());
         }
+        Slot::ResultPanelSegmentRows => {
+            // 【R6】一段行数：数值项，`< 1` 直接拒绝（对齐
+            // `ResultSetPreferences.MIN_SEGMENT_SIZE = 1`；面板侧输入框已按同口径过滤，
+            // 设置页手填一个 0 / 负数同样应当报错而不是静默变 1）。
+            let Some(n) = value.as_number() else {
+                return false;
+            };
+            if n < 1.0 || n > 100_000.0 {
+                return false;
+            }
+            {
+                let settings = cx.global_mut::<Settings>();
+                settings.result_panel.segment_rows = n as i64;
+            }
+            persist(&cx.global::<Settings>().clone());
+        }
         Slot::ResultPanelSidebarWidth => {
             // 【R5】右栏宽度：数值项，超出 192~640 直接拒绝（不静默夹取 ——
             // 手柄拖拽路径自己夹，设置页手填则按登记范围报错）。
@@ -382,6 +398,23 @@ impl crate::service::SettingsService {
         }
         persist(&cx.global::<Settings>().clone());
         cx.refresh_windows();
+    }
+
+    /// 【R6 段大小】写「取下一段」的行数（状态行段框提交后由宿主落盘）。
+    ///
+    /// 与 `set_result_panel_sidebar_width` 同一形态：夹到 `1..=100000`（下限对齐
+    /// `ResultSetPreferences.MIN_SEGMENT_SIZE`，上界防手填天文数字把一次取段拖垮），
+    /// 与现值相同不写盘。
+    pub fn set_result_panel_segment_rows(rows: usize, cx: &mut App) {
+        let rows = (rows as i64).clamp(1, 100_000);
+        if cx.global::<Settings>().result_panel.segment_rows == rows {
+            return;
+        }
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.result_panel.segment_rows = rows;
+        }
+        persist(&cx.global::<Settings>().clone());
     }
 
     /// 【工具条配置】写状态栏隐藏的命令 id 列表（面板末端 ▾ 菜单点一次就落一次盘）。

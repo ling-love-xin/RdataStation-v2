@@ -122,6 +122,36 @@ pub fn entries() -> Vec<SettingSpec> {
             disabled: false,
         },
         SettingSpec {
+            // 【R6 对齐 DBeaver `resultSetSize` / `ModelPreferences.RESULT_SET_MAX_ROWS`】
+            // 状态行段框改的是同一份值；只影响**之后**的分段取数（如「取下一段 / 滚动到底续取」）。
+            key: "result_panel.segment_rows",
+            section: "result_panel",
+            section_label: "结果集面板",
+            group: "data",
+            group_label: Some("数据与显示"),
+            label: "取段行数",
+            hint: "「取下一段 / 滚动到底续取」一次抓多少行（下限 1）。\
+                 状态栏中段的「段」输入框改的是同一份值；只影响之后的分段取数，\
+                 不动已加载行、不重查。DBeaver 对应项是连接级偏好 `RESULT_SET_MAX_ROWS`，\
+                 本仓存全局一份",
+            hint_inline: true,
+            kind: SettingKind::Number,
+            presets: &[
+                (200, "200 行"),
+                (500, "500 行"),
+                (1000, "1000 行（默认）"),
+                (2000, "2000 行"),
+            ],
+            default_json: "1000",
+            effect: SettingEffect::NextUse,
+            entry: SettingEntry::Page,
+            consumer: "crates/editor/src/view/host/construct.rs（面板创建时注入初值）\
+                      / crates/editor/src/view/host/results/dispatch.rs::SetSegmentRows（提交后写回）\
+                      / crates/editor/src/view/host/results/copy.rs::fetch_more（读面板当前值下发 limit）",
+            composite: false,
+            disabled: false,
+        },
+        SettingSpec {
             key: "result_panel.loop_selection",
             section: "result_panel",
             section_label: "结果集面板",

@@ -1593,6 +1593,24 @@ fn status_row_shows_the_segment_size_input(cx: &mut gpui_kit::TestAppContext) {
     );
 }
 
+/// 【R6 段大小·持久化闭环】构造期注入持久化值：状态落位，且输入框显示该值
+/// （只有占位 1000 时，用户在状态行上看不到「我上次设的是 500」）。
+#[gpui_kit::test]
+fn set_segment_rows_initial_puts_the_value_in_the_box(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|window, app| {
+        panel.update(app, |p, cx| p.set_segment_rows_initial(500, window, cx))
+    });
+
+    assert_eq!(cx.update(|_, app| panel.read(app).segment_rows()), 500);
+    let text = cx.update(|_, app| {
+        let input = panel.read(app).segment_input.clone();
+        input.read(app).value().to_string()
+    });
+    assert_eq!(text, "500", "注入后输入框应显示持久化值而非留空");
+}
+
 #[test]
 fn hex_page_clamps_to_the_last_page() {
     use crate::panel::tabs::hex_page_clamp;

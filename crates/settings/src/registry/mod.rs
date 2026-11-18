@@ -210,6 +210,8 @@ pub enum Slot {
     ResultPanelPersistColumnWidths,
     /// 【R5 对齐 DBeaver `setWeights`】结果集右栏（页签侧栏）宽度（px，192~640）。
     ResultPanelSidebarWidth,
+    /// 【R6 对齐 DBeaver `resultSetSize`】「取下一段」一次多少行（下限 1）。
+    ResultPanelSegmentRows,
     /// 【DBeaver 工具条配置】状态栏被隐藏的命令 id 列表（逗号分隔，自由文本）。
     ResultPanelHiddenStatusCommands,
     /// 【类型样式】数字显示格式（raw / grouped / fixed2 / scientific）。
@@ -325,6 +327,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "result_panel.select_on_modifier_click" => Slot::ResultPanelSelectOnModifierClick,
         "result_panel.persist_column_widths" => Slot::ResultPanelPersistColumnWidths,
         "result_panel.sidebar_width" => Slot::ResultPanelSidebarWidth,
+        "result_panel.segment_rows" => Slot::ResultPanelSegmentRows,
         "result_panel.hidden_status_commands" => Slot::ResultPanelHiddenStatusCommands,
         "result_panel.number_format" => Slot::ResultPanelNumberFormat,
         "result_panel.null_placeholder" => Slot::ResultPanelNullPlaceholder,
@@ -430,7 +433,7 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         | Slot::ResultPanelLoopSelection
         | Slot::ResultPanelSelectOnModifierClick
         | Slot::ResultPanelPersistColumnWidths => KindTag::Bool,
-        Slot::ResultPanelSidebarWidth => KindTag::Number,
+        Slot::ResultPanelSidebarWidth | Slot::ResultPanelSegmentRows => KindTag::Number,
         // 自由文本（逗号分隔的命令 id）：面板末端 ▾ 菜单与设置页都可写。
         Slot::ResultPanelHiddenStatusCommands => KindTag::Text,
         // 【类型样式】23 项全是枚举（设置页下拉）。

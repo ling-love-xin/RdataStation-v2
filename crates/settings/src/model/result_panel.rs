@@ -37,6 +37,14 @@ pub struct ResultPanel {
     /// - 作用域与 DBeaver 一致：**全局一份**（跨结果集 / 跨文档共用），不随会话快照落库。
     #[serde(default = "default_result_sidebar_width")]
     pub sidebar_width: i64,
+    /// 【R6 对齐 DBeaver `resultSetSize` / `RESULT_SET_MAX_ROWS`】「取下一段」一次多少行。
+    ///
+    /// 语义边界（`docs/architecture/editor/result-panel.md` §8.85）：只影响**之后**的分段取数
+    /// （`ExecTarget::Segment { limit }`），不改已加载行、不触发重查；下限 1（对齐
+    /// `ResultSetPreferences.MIN_SEGMENT_SIZE`）。DBeaver 把这份值存在**数据源容器**上
+    /// （连接级），本仓存**全局一份**（与右栏宽度同一作用域口径）。
+    #[serde(default = "default_result_segment_rows")]
+    pub segment_rows: i64,
     /// 【DBeaver 对齐】状态栏被隐藏的命令 id（逗号分隔，如 `undo,redo`）。
     ///
     /// 对应 DBeaver 的「工具条配置」：`plugin.xml` 里每条结果集底部命令都挂了
@@ -113,6 +121,7 @@ impl Default for ResultPanel {
             persist_column_widths: true,
             // 右栏宽度出厂值 = `result_panel::ui::RESULT_SIDEBAR_RIGHT_WIDTH`（20rem @16px）
             sidebar_width: default_result_sidebar_width(),
+            segment_rows: default_result_segment_rows(),
             hidden_status_commands: default_hidden_status_commands(),
             // 类型样式默认全继承 / 原始值（与渲染现状逐项一致）
             number_format: workbench_shell::result_style::NumberFormatPref::Raw,
@@ -234,6 +243,12 @@ fn default_result_fact_storage() -> FactStoragePref {
 /// 20rem 在基准字号 16px 下的像素值；常量在那一侧单处定义，此处只写数值并保持一致）。
 fn default_result_sidebar_width() -> i64 {
     320
+}
+
+/// 「一段」默认行数：1000（= `result_panel::ui::RESULT_SEGMENT_ROWS_DEFAULT` 与编辑器
+/// `execution::SEGMENT_ROWS` 同值；常量在那两处定义，此处只写数值并保持一致）。
+fn default_result_segment_rows() -> i64 {
+    1000
 }
 
 /// 状态栏隐藏命令的出厂值：撤销 / 重做（DBeaver `plugin.xml:1381-1397` 里仅这两项
