@@ -15,6 +15,15 @@ fn manager_kind_label(kind: ManagerKind) -> String {
     }
 }
 
+/// 列表搜索判据：空词恒真，否则按名称**不区分大小写**包含匹配。
+///
+/// 内部自己归一（调用方传原始词即可）：列表是过滤后的视图，判据写错会表现为
+/// 「搜了却没结果 / 搜了什么都在」，而这种错在窗口测试里很难一眼看出。
+fn item_matches_filter(name: &str, query: &str) -> bool {
+    let q = query.trim().to_lowercase();
+    q.is_empty() || name.to_lowercase().contains(&q)
+}
+
 /// 取字段输入实体（键不存在 → None）。
 fn net_input_entity(mgr: &ManagerWorkspace, key: &str) -> Option<Entity<InputState>> {
     mgr.net_inputs
@@ -98,6 +107,7 @@ pub(crate) fn prepare_manager_domain(
 ) {
     // 拉取列表（按 kind）。
     {
+        let filter = mgr.borrow().filter_text.clone();
         let mut m = mgr.borrow_mut();
         m.kind = kind;
         m.editing = None;
@@ -109,6 +119,9 @@ pub(crate) fn prepare_manager_domain(
         m.policy_env = None;
         m.policy_editing = None;
         m.policies.borrow_mut().clear();
+        drop(m);
+        // 搜索词跟着域走（切到网络域还留着认证域的关键词 = 看起来「一条都没有」）。
+        filter.update(cx, |s, cx| s.set_value("", window, cx));
     }
     refresh_manager_items(kind, mgr, cx);
 
@@ -601,12 +614,30 @@ pub(crate) fn manager_panel_ui(
         let theme = cx.theme();
         let m = mgr.borrow();
         let form_open = m.form_open;
+        // 搜索：只过滤显示（`items` / 引用计数 / 删除仍走全量）。
+        let raw_query = m.filter_text.read(cx).value().trim().to_string();
+        let visible_items: Vec<ManagerItem> = m
+            .items
+            .iter()
+            .filter(|it| item_matches_filter(&it.name, &raw_query))
+            .cloned()
+            .collect();
 
         // 列表行（表单打开时这段仍需构建判据，但容器里不挂——见函数末尾的组装）。
         let mut rows = div().v_flex().gap_1();
         if !form_open {
             let mgr_new = mgr.clone();
             let notify_new = notify.clone();
+            let count = if raw_query.is_empty() {
+                format!("{}（{} 条）", manager_kind_label(kind), m.items.len())
+            } else {
+                format!(
+                    "{}（{} / {} 条）",
+                    manager_kind_label(kind),
+                    visible_items.len(),
+                    m.items.len()
+                )
+            };
             rows = rows.child(
                 div()
                     .h_flex()
@@ -618,7 +649,11 @@ pub(crate) fn manager_panel_ui(
                             .flex_1()
                             .text_sm()
                             .font_weight(FontWeight::BOLD)
-                            .child(format!("{}（{} 条）", manager_kind_label(kind), m.items.len())),
+                            .child(count),
+                    )
+                    .child(
+                        Input::new(&m.filter_text)
+                            .w(cx.theme().font_size * crate::ui::DIALOG_NAME_INPUT_WIDTH),
                     )
                     .child(
                         Button::new("mgr-new")
@@ -638,12 +673,17 @@ pub(crate) fn manager_panel_ui(
                     ),
             );
         }
-        if m.items.is_empty() {
+        if visible_items.is_empty() {
+            let text = if raw_query.is_empty() {
+                tr("暂无配置，点右上「新建」").to_string()
+            } else {
+                format!("没搜到「{}」", raw_query)
+            };
             rows = rows.child(
-                div().text_xs().text_color(theme.colors.muted_foreground).child(tr("暂无配置，点击下方「新建」")),
+                div().text_xs().text_color(theme.colors.muted_foreground).child(text),
             );
         }
-        for (i, item) in m.items.iter().enumerate() {
+        for (i, item) in visible_items.into_iter().enumerate() {
             let item = item.clone();
             let idx = i;
             let mut row = div()
@@ -1139,4 +1179,29 @@ pub(crate) fn manager_panel_ui(
                 }),
         )
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::item_matches_filter;
+
+    #[test]
+    fn empty_query_matches_every_item() {
+        assert!(item_matches_filter("生产库认证", ""));
+        assert!(item_matches_filter("", ""));
+    }
+
+    #[test]
+    fn matching_is_case_insensitive_substring() {
+        assert!(item_matches_filter("Prod-Auth", "prod"));
+        assert!(item_matches_filter("prod-auth", "AUTH"));
+        // 中文按子串（不依赖分词）。
+        assert!(item_matches_filter("跳板机-ssh", "跳板"));
+    }
+
+    #[test]
+    fn non_matching_returns_false() {
+        assert!(!item_matches_filter("Prod-Auth", "test"));
+        assert!(!item_matches_filter("", "prod"));
+    }
 }

@@ -340,6 +340,8 @@ pub struct ManagerWorkspace {
     /// 对话框里一屏高度有限：列表与表单同屏时，条目一多表单就被推到折叠线以下。
     /// 两态后「编辑 / 新建」先切到表单、`← 返回列表` 切回，与配置中心页原型一致。
     pub form_open: bool,
+    /// 列表搜索词（按名称过滤；切域时清空）。只过滤显示，不动 `items`（被引用计数 / 删除仍是全量口径）。
+    pub filter_text: Entity<InputState>,
     pub msg: Option<String>,
     // ---- 环境策略（`Env` 域展开面板）----
     /// 当前展开策略管理的环境名（None = 收起）。
@@ -391,6 +393,11 @@ pub(crate) fn manager_workspace(window: &mut Window, cx: &mut App) -> ManagerWor
             cx,
         )
     });
+    let filter_text = cx.new(|cx| {
+        let mut state = InputState::new(window, cx);
+        state.set_placeholder(tr("搜索名称…"), window, cx);
+        state
+    });
     ManagerWorkspace {
         kind: ManagerKind::Auth,
         items: Vec::new(),
@@ -403,6 +410,7 @@ pub(crate) fn manager_workspace(window: &mut Window, cx: &mut App) -> ManagerWor
         net_specs: Rc::new(RefCell::new(Vec::new())),
         editing: None,
         form_open: false,
+        filter_text,
         msg: None,
         policy_env: None,
         policy_type,
