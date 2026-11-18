@@ -3762,6 +3762,63 @@ WHERE <条件>` + `ORDER BY` 外提 + `dropped_limit` 回报），只差条件�
 （需要真执行器），其可验证内核就是上面这层改写函数。
 
 
+### 8.70 工具栏补上「筛选设置」（DBeaver `filtersCustomButton`）+ 自定义 ORDER BY（2026-11-18）
+
+**缺口**：DBeaver 筛选条工具条（`ResultSetFilterPanel.java:315-385`）的完整顺序是
+`filtersClearButton`（`!compactMode`）→ **`filtersCustomButton`**（FILTER 图标、`SWT.DROP_DOWN`，
+`:330-338`，**恒建**）→ 历史后退 / 前进（`!compactMode`）→ 分隔线 → 查找。本仓前四项都已落地，
+唯独 `filtersCustomButton` 从未有过——那是这一行唯一真缺口。
+
+**它打开的是什么**：`CustomFilterListener` 开 `FilterSettingsDialog`，两个页签——
+「Columns」（列约束树：名称 / 原位置 / criteria / order 位 / 方向，带列可见勾选与上移下移置顶置底）
+与「Custom」（`createCustomFilters`，`:425-451`）里的两个自由文本 `whereText` / `orderText`，
+应用时 `setWhere(...)` / `setOrder(...)`（`:493-500`），并有一条警告文案
+「自定义排序会禁用列排序」（`controls_resultset_filter_warning_custom_order_disabled`，`:350`）。
+
+**本批落点（Custom 页签那一支）**：
+
+1. 引擎：`crates/sql/src/filter.rs` 新增 `rewrite_with_where_order(original, condition, order_by)`，
+   `rewrite_with_where` 改为转调它并传 `None`。语义：`order_by` 空 → 沿用原查询顶层 `ORDER BY`
+   （搬到外层）；给了文本 → **替换**它（不再叠一层，避免外层两句 ORDER BY）。`dropped_limit`
+   回报照旧。用例 +2（自定义排序替换原句 / 空白回落原句），`filter` 模块 15 → **17**。
+2. 面板状态：`filter_settings_open` / `filter_order_input`（`InputState`，唯一可编辑项）/
+   `filter_order`（已生效的自定义排序，打开浮层时回填）。
+3. 入口：筛选行 ✕ 之后那颗 FILTER 图标键（`editor-result-filter-settings`），点击入队
+   `OpenFilterSettings`（要 `&mut Window` 交焦点，走宿主窗口转手）。
+4. 浮层：`dialog.rs::render_filter_settings`——标题「筛选设置」+ ✕、WHERE **只读回显**、
+   自定义排序输入、页脚提示 + 取消 / 应用，Esc 关闭；`absolute` 遮罩，与 SQL 预览弹窗同范式
+   （render 期只有 `&App`，建不了窗口级 dialog）。
+5. 应用链路：应用钮入队 `CommitFilterSettings`（读输入框值要 `&mut Context`）→ 宿主调
+   `panel.apply_filter_settings()` → 入队 `ApplyFilterSettings { where_text, order_text }`
+   → 宿主 `run_custom_filter`：`rewrite_with_where_order` 拼
+   `select * from (原SQL) as rds_filtered where 条件 [order by 自定义]`，
+   写 `exec_sql` 后以 `ExecTarget::Statement` **替换**当前结果集重查。
+6. 尺寸：卡片宽走新常量 `ui::RESULT_FILTER_SETTINGS_WIDTH`（35rem）——裸 `px` 会被
+   `rds-ui-guard` 拦下（本轮实测确实拦了）。
+
+**与 DBeaver 的差异（在册，非漏做）**：
+
+- WHERE 一栏只读（筛选框本体才是唯一输入源；DBeaver 在对话框里可直接编 whereText）。
+  理由是「同一个 `InputState` 只渲染一处」的硬约束，避免两处同时可编辑。
+- 「Columns」页签（列约束树 + 列可见勾选 + 列顺序移动）未做。本仓对等能力已分散在列头菜单
+  （列级值筛选 / 清除）、列浏览器（隐藏列）、排序下发（单列），缺的是「集中管理界面」。
+- 自定义排序目前只作用于**本次重查**（不入状态历史、不落盘），与 DBeaver 的
+  `dataFilter.setOrder` 每次应用即生效同口径；是否入历史属待拍板项。
+
+**验证**：`cargo test -p rds-sql --lib filter` = 17 passed；
+`cargo test -p rds-result-panel --lib` = **281 passed**（新增
+`filter_settings_open_close_and_apply_carry_the_draft`：开关翻转 + 浮层真渲染 / 真消失 +
+应用请求带「筛选框文本 + 排序草稿」两段）；
+`cargo test -p rds-editor --lib results` = 45 passed；`cargo test -p rds-ui-guard` = 4 passed；
+`cargo check -p rds-sql -p rds-result-panel -p rds-editor` = 0 error / 0 warning。
+
+**过程中踩的环境坑（记下以免重犯）**：并行线编译时抢 `build` 目录锁 + 内存只剩 4GB 左右，
+`cargo test -p rds-editor --lib --no-run` 出现过 `E0463 can't find crate`、
+`invalid metadata files for crate similar`、`memory allocation of … failed` 三种假错——
+**都不是代码问题**：等并行线结束、`CARGO_BUILD_JOBS=2` 重跑即过。
+另：临时设 `CARGO_INCREMENTAL=0` 会让整条依赖链重编译，在低内存机器上必然 OOM，不要用。
+
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

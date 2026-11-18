@@ -292,6 +292,10 @@ pub const RESULT_SIDEBAR_RIGHT_MIN_HEIGHT: f32 = 8.0;
 /// 【R5 布局方向切换】竖排时右栏高度上限（32rem = 512px）：超过就压掉网格可见行数。
 pub const RESULT_SIDEBAR_RIGHT_MAX_HEIGHT: f32 = 32.0;
 
+/// 【筛选设置】浮层卡片宽度（35rem = 560px）：够放下 WHERE 摘要一行 + 排序输入框，
+/// 又窄于 SQL 预览弹窗（42.5rem）——两个浮层不是同一档，避免看起来像同一个框。
+pub const RESULT_FILTER_SETTINGS_WIDTH: f32 = 35.0;
+
 /// 右栏「计算 / 列浏览器明细」键值行的**标签列宽**（4.5rem = 72px）：
 /// 「最小值 / 来源表 / 默认值」这类最长约四个字，72px 放下不挤值列
 pub const RESULT_SIDEBAR_KV_LABEL_WIDTH: f32 = 4.5;

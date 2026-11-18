@@ -358,4 +358,13 @@ pub struct ResultPanel {
     /// 【B15】筛选框订阅句柄（`InputEvent::Change` → 防抖 → 应用筛选）。
     /// **必须持有**：早先写成 `let _ = filter_sub;` 当场丢弃，边打边筛从未生效。
     pub(crate) _filter_sub: Option<Subscription>,
+
+    // ── 【筛选设置】自定义条件 / 排序浮层（DBeaver `filtersCustomButton` → FilterSettingsDialog）
+    /// 浮层是否打开（`false` = 不渲染这层遮罩）
+    pub(crate) filter_settings_open: bool,
+    /// 自定义 `ORDER BY` 文本输入框（浮层内唯一可编辑项；WHERE 一栏走筛选框本体，
+    /// 不在这里再放第二个输入源——「同一个 `InputState` 只渲染一处」）
+    pub(crate) filter_order_input: Entity<InputState>,
+    /// 已生效的自定义排序文本（空 = 沿用原查询的 ORDER BY）；打开浮层时用它回填
+    pub(crate) filter_order: String,
 }

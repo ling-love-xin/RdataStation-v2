@@ -1861,4 +1861,66 @@ fn status_row_pager_follows_dbeaver_nav_order(cx: &mut gpui_kit::TestAppContext)
     );
 }
 
+/// 【筛选设置】浮层开关 + 应用入队（对齐 DBeaver `filtersCustomButton` →
+/// `FilterSettingsDialog` 的 Custom 页签：`whereText` / `orderText` → `setWhere` / `setOrder`）。
+///
+/// 面板只负责「读草稿 + 入队」，真正重查在宿主（`run_custom_filter` → 改写函数）；
+/// 这里钉的是**面板这一侧的两件事实**：① 开关状态真的切换、浮层真的渲染；
+/// ② 应用的请求带上「筛选框当前文本 + 排序草稿」两段，而不是只带其一。
+#[gpui_kit::test]
+fn filter_settings_open_close_and_apply_carry_the_draft(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 1) 打开：标志位变真，浮层卡片真的进元素树
+    cx.update(|window, app| {
+        panel.update(app, |p, cx| p.open_filter_settings(window, cx));
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-filter-settings-card").is_some(),
+        "打开后应渲染筛选设置浮层"
+    );
+    assert!(
+        panel.read_with(cx, |p, _| p.queue.is_empty()),
+        "打开浮层不该入任何请求（它只是 UI 状态）"
+    );
+
+    // 2) 关闭：标志位回落，浮层从元素树消失
+    cx.update(|_window, app| panel.update(app, |p, cx| p.close_filter_settings(cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-filter-settings-card").is_none(),
+        "关闭后浮层不该还挂着"
+    );
+
+    // 3) 应用：筛选文本进 where_text，排序草稿进 order_text，然后浮层自动关闭
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| p.on_filter_input("amount > 1".to_string(), cx))
+    });
+    cx.update(|window, app| {
+        let input = panel.read(app).filter_order_input.clone();
+        input.update(app, |state, cx| state.set_value("id DESC", window, cx));
+    });
+    cx.update(|_window, app| panel.update(app, |p, cx| p.apply_filter_settings(cx)));
+
+    let drained = cx.update(|_window, app| panel.read(app).queue.drain());
+    assert_eq!(drained.len(), 1, "应用只该入队一条请求");
+    match &drained[0] {
+        crate::ports::ResultRequest::ApplyFilterSettings {
+            where_text,
+            order_text,
+        } => {
+            assert_eq!(where_text, "amount > 1", "WHERE 取筛选框当前文本");
+            assert_eq!(order_text, "id DESC", "ORDER 取浮层里的排序草稿");
+        }
+        other => panic!("应用应入队 ApplyFilterSettings，实际 {other:?}"),
+    }
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-filter-settings-card").is_none(),
+        "应用之后浮层应关闭"
+    );
+}
+
 

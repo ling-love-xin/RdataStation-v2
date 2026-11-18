@@ -1278,6 +1278,29 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 
 ---
 
+### 2.59 工具栏补上「筛选设置」+ 自定义 ORDER BY（2026-11-18）
+
+全文见 `result-panel.md §8.70`。接手要点：
+
+- 筛选条工具条的最后一块缺口 `filtersCustomButton`（FILTER 图标、恒建，DBeaver
+  `ResultSetFilterPanel.java:330-338`）已补：`editor-result-filter-settings`，位置在 ✕ 之后、
+  筛选历史之前，点击入队 `OpenFilterSettings`。
+- 打开的是本面板内的浮层（`dialog.rs::render_filter_settings`，absolute 遮罩，与 SQL 预览
+  弹窗同范式）：**WHERE 只读回显** + **自定义 ORDER BY 输入** + 取消 / 应用。
+  WHERE 不在浮层里编辑——筛选框本体是唯一输入源（单输入源硬约束）。
+- 应用链路三段：`CommitFilterSettings`（读输入框要 `&mut Context`）→ 宿主调
+  `panel.apply_filter_settings()` → `ApplyFilterSettings { where_text, order_text }` →
+  宿主 `run_custom_filter`（`host/results/filter.rs`）。
+- 引擎侧新增 `rds_sql::rewrite_with_where_order(original, condition, order_by)`；
+  `rewrite_with_where` 是它传 `None` 的转调。**自定义排序是替换而非追加**（外层只允许一句 ORDER BY）。
+- 卡片宽度是 `ui::RESULT_FILTER_SETTINGS_WIDTH`——`result_panel/src/panel/dialog.rs` 的裸 `px`
+  计数已被 `rds-ui-guard` 钉住（baseline 3），再加一个就会红。
+- **仍在册**：DBeaver 的「Columns」页签（列约束树 + 列可见勾选 + 列顺序移动）未做；
+  WHERE 在对话框内可编辑 vs 本仓只读；自定义排序不入状态历史 / 不落盘。
+- **验证**：sql 17 / panel **281** / editor 45 / guard 4 / check 0-0。
+
+---
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。

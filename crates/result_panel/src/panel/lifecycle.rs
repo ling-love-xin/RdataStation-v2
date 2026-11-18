@@ -61,6 +61,13 @@ impl ResultPanel {
             },
         ));
 
+        // 【筛选设置】自定义排序输入（浮层内唯一的输入源；Enter = 直接应用）
+        let filter_order_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx);
+            state.set_placeholder("自定义排序（如 created_at DESC, id）", window, cx);
+            state
+        });
+
         // 【结果内查找】查找词输入框 + 订阅（Enter = 下一处，与 DBeaver 查找浮层一致：
         // `FindReplaceOverlay` 的文本框回车走 findNext）
         let find_input = cx.new(|cx| {
@@ -194,6 +201,10 @@ impl ResultPanel {
             find_query: String::new(),
             find_hits: 0,
             find_at: None,
+            // 【筛选设置】浮层默认关闭、排序草稿为空（空 = 沿用原查询 ORDER BY）
+            filter_settings_open: false,
+            filter_order_input,
+            filter_order: String::new(),
             presentation: Presentation::Grid,
             right_tab: RightTab::Browser,
             // 【R2 计算页】默认全集（与 DBeaver `loadDefaultFunctions` 同口径：默认函数全上）

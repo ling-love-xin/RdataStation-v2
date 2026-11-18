@@ -65,6 +65,24 @@ pub struct Rewrite {
 /// 没有"关键词 → LIKE"这层翻译。本仓「运行」按钮走的是同一语义（重查替换当前结果集），
 /// 因此也应当用这一版拼装，而不是各写一份 `select * from (...) as _q where ...`。
 pub fn rewrite_with_where(original: &str, condition: &str) -> Result<Rewrite, String> {
+    rewrite_with_where_order(original, condition, None)
+}
+
+/// 把「原查询 + WHERE 条件 + 可选自定义 ORDER BY」拼成一条重查语句
+///
+/// 与 [`rewrite_with_where`] 同形，多一个**自定义排序**：DBeaver 的筛选设置对话框
+/// （`FilterSettingsDialog.Custom` 页签）就是 `whereText` + `orderText` 两个自由文本框，
+/// 应用时 `setWhere` / `setOrder`（`FilterSettingsDialog.java:435/493-500`）。
+/// `order_by` 给 `None` 或空白 = 沿用原查询的顶层 `ORDER BY`（原样搬到外层）；
+/// 给了文本 = **替换**它——用户写的顺序才是他要的顺序，原 `ORDER BY` 不再叠一层。
+///
+/// `order_by` 文本按用户原文拼在后面（`ORDER BY <原文>`），本函数不解析它：
+/// 这是「自定义排序」入口，语法由用户负责（与 DBeaver 的 orderText 同一口径）。
+pub fn rewrite_with_where_order(
+    original: &str,
+    condition: &str,
+    order_by: Option<&str>,
+) -> Result<Rewrite, String> {
     let condition = condition.trim();
     if original.trim().is_empty() {
         return Err("没有可重查的查询".to_string());
@@ -72,11 +90,18 @@ pub fn rewrite_with_where(original: &str, condition: &str) -> Result<Rewrite, St
     if condition.is_empty() {
         return Err("筛选条件为空，没什么可重查的".to_string());
     }
+    let custom_order = order_by
+        .map(str::trim)
+        .filter(|order| !order.is_empty());
 
     let clauses = top_level_clauses(original);
     let body_end = clauses.body_end(original.len());
     let body = original[..body_end].trim_end();
-    let order_text = clauses.order_text(original);
+    // 自定义排序给了就不搬原 ORDER BY（否则外层会出现两句 ORDER BY）
+    let order_text = match custom_order {
+        Some(order) => Some(format!("ORDER BY {order}")),
+        None => clauses.order_text(original),
+    };
     let dropped_limit = clauses.limit_text(original);
 
     let mut sql = format!("SELECT * FROM (\n{body}\n) AS rds_filtered\nWHERE {condition}");
@@ -307,7 +332,10 @@ fn quote_ident(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{rewrite_with_filter, rewrite_with_order, rewrite_with_where, top_level_clauses};
+    use super::{
+        rewrite_with_filter, rewrite_with_order, rewrite_with_where, rewrite_with_where_order,
+        top_level_clauses,
+    };
 
     fn columns() -> Vec<String> {
         vec!["id".to_string(), "name".to_string()]
@@ -507,6 +535,43 @@ mod tests {
     fn empty_where_condition_is_refused() {
         assert!(rewrite_with_where("", "id > 1").is_err());
         assert!(rewrite_with_where("SELECT 1", "   ").is_err());
+    }
+
+    #[test]
+    fn a_custom_order_by_replaces_the_original_one() {
+        // 筛选设置里的「自定义排序」：用户写的顺序才是他要的顺序，原 ORDER BY 不叠一层
+        let rewritten = rewrite_with_where_order(
+            "SELECT * FROM t ORDER BY id LIMIT 5",
+            "price > 10",
+            Some("name DESC, id"),
+        )
+        .expect("能改写");
+        assert_eq!(
+            rewritten.sql,
+            "SELECT * FROM (\nSELECT * FROM t\n) AS rds_filtered\n\
+             WHERE price > 10\nORDER BY name DESC, id"
+        );
+        assert_eq!(
+            rewritten.sql.matches("ORDER BY").count(),
+            1,
+            "只能有一句 ORDER BY：{}",
+            rewritten.sql
+        );
+        assert_eq!(rewritten.dropped_limit.as_deref(), Some("LIMIT 5"));
+    }
+
+    #[test]
+    fn a_blank_custom_order_falls_back_to_the_original_order_by() {
+        for order in [None, Some(""), Some("   ")] {
+            let rewritten =
+                rewrite_with_where_order("SELECT * FROM t ORDER BY id", "id > 1", order)
+                    .expect("能改写");
+            assert!(
+                rewritten.sql.ends_with("ORDER BY id"),
+                "空白自定义排序要沿用原 ORDER BY：{}",
+                rewritten.sql
+            );
+        }
     }
 
     #[test]

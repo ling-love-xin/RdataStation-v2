@@ -439,6 +439,58 @@ impl ResultPanel {
         cx.notify();
     }
 
+    // ── 【筛选设置】自定义条件 / 排序浮层
+    //   对齐 DBeaver 筛选条右列第一颗 `filtersCustomButton`（FILTER 图标、`SWT.DROP_DOWN`，
+    //   `ResultSetFilterPanel.java:330-338`）：主点击开 `FilterSettingsDialog`，
+    //   其中 Custom 页签是 `whereText` + `orderText` 两个自由文本框，应用时
+    //   `setWhere` / `setOrder`（`FilterSettingsDialog.java:435/493-500`）。
+
+    /// 打开浮层：把**已生效**的自定义排序回填输入框（WHERE 一栏不在这里编辑——
+    /// 筛选框本体就是它的唯一输入源），并把焦点交给排序框。
+    pub fn open_filter_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let order = self.filter_order.clone();
+        let input = self.filter_order_input.clone();
+        input.update(cx, |state, cx| state.set_value(order, window, cx));
+        input.update(cx, |state, cx| state.focus(window, cx));
+        self.filter_settings_open = true;
+        cx.notify();
+    }
+
+    /// 关闭浮层：丢弃草稿（不改任何已生效状态；重新打开会按已生效值回填）
+    pub fn close_filter_settings(&mut self, cx: &mut Context<Self>) {
+        self.filter_settings_open = false;
+        cx.notify();
+    }
+
+    /// 应用：读出排序草稿 → 入队 [`ResultRequest::ApplyFilterSettings`]
+    /// （WHERE 取筛选框当前文本，重查由宿主完成——面板不持有执行能力）
+    pub fn apply_filter_settings(&mut self, cx: &mut Context<Self>) {
+        let order = self
+            .filter_order_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+        self.filter_order = order.clone();
+        self.filter_settings_open = false;
+        self.queue.request(
+            ResultRequest::ApplyFilterSettings {
+                where_text: self.filter_text.trim().to_string(),
+                order_text: order,
+            },
+            cx,
+        );
+    }
+
+    /// 【筛选设置】只读快照（渲染浮层用：开关 + 已生效排序 + 当前筛选文本）
+    pub fn filter_settings_state(&self) -> (bool, &str, &str) {
+        (
+            self.filter_settings_open,
+            self.filter_order.as_str(),
+            self.filter_text.trim(),
+        )
+    }
+
     /// 【1.2】筛选框运行后宿主写入 wrapped SQL（执行完成后），并切到「执行SQL」页签    /// （右栏收起时自动展开——用户要在右侧栏看到执行 SQL）
     pub fn set_exec_sql(&mut self, sql: Option<String>, cx: &mut Context<Self>) {
         self.exec_sql = sql;

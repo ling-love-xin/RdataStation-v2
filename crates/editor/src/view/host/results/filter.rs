@@ -55,6 +55,59 @@ impl EditorHostPanel {
         self.execute(ExecTarget::Statement(wrapped), ResultPlacement::Replace, cx);
     }
 
+    /// 【筛选设置】「应用」：WHERE + 自定义 ORDER BY 一起重查（替换当前结果集）。
+    ///
+    /// 对齐 DBeaver `FilterSettingsDialog` 的 Custom 页签（`createCustomFilters`，
+    /// `:425-451`）：两个自由文本，应用时 `setWhere(...)` / `setOrder(...)`（`:493-500`）。
+    /// 本仓把 `where_text` 同步回面板筛选框（它就是 WHERE 的权威展示），再用
+    /// [`engine::sql::rewrite_with_where_order`] 拼一句
+    /// `select * from (原SQL) as rds_filtered where 条件 [order by 自定义]` 重查。
+    ///
+    /// `order_text` 为空 = 不自定义，沿用原查询的 ORDER BY（与「运行」完全同路）。
+    pub(crate) fn run_custom_filter(
+        &mut self,
+        where_text: String,
+        order_text: String,
+        cx: &mut Context<Self>,
+    ) {
+        let where_text = where_text.trim().to_string();
+        if where_text.is_empty() {
+            self.set_message(Some("筛选条件为空，没什么可重查的".to_string()), cx);
+            return;
+        }
+        // WHERE 就是面板筛选框当前的文本（浮层里那一栏是只读回显），无需回写
+        let Some(entry) = self
+            .shared
+            .results_active(&self.document)
+            .filter(ResultEntry::has_grid)
+        else {
+            self.set_message(Some("没有可执行的结果集".to_string()), cx);
+            return;
+        };
+        let order = (!order_text.trim().is_empty()).then(|| order_text.trim().to_string());
+        let rewritten = match engine::sql::rewrite_with_where_order(
+            &entry.sql,
+            &where_text,
+            order.as_deref(),
+        ) {
+            Ok(rewritten) => rewritten,
+            Err(reason) => {
+                self.set_message(Some(reason), cx);
+                return;
+            }
+        };
+        if let Some(limit) = rewritten.dropped_limit.clone() {
+            self.set_message(
+                Some(format!("已去掉原查询的 {limit}（按条件重查要能查到全部行）")),
+                cx,
+            );
+        }
+        let wrapped = rewritten.sql;
+        self.result_panel
+            .update(cx, |p, cx| p.set_exec_sql(Some(wrapped.clone()), cx));
+        self.execute(ExecTarget::Statement(wrapped), ResultPlacement::Replace, cx);
+    }
+
     /// 【B15】下发源库：把当前筛选词交给执行器拼 `WHERE` 重查（结果落**新结果集**）
     pub(crate) fn pushdown_filter(&mut self, cx: &mut Context<Self>) {
         let Some(entry) = self

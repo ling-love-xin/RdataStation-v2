@@ -92,6 +92,21 @@ pub enum ResultRequest {
     RunFilterAsQuery,
     /// 【1.2】筛选框展开 / 收起（点击展开按钮后出现顶宽筛选条）
     ToggleFilterExpand,
+    /// 【筛选设置】打开浮层（DBeaver 筛选条右列第一颗 `filtersCustomButton`，
+    /// FILTER 图标、`SWT.DROP_DOWN`，`ResultSetFilterPanel.java:330-338` 主点击开
+    /// `FilterSettingsDialog`）。打开时要 `&mut Window` 把焦点交给排序输入框，
+    /// 故与其他"回填输入框"的动作同路：宿主用窗口句柄转手调面板。
+    OpenFilterSettings,
+    /// 【筛选设置】关闭浮层（取消 / Esc / ✕）：丢弃草稿，不改任何已生效的状态
+    CloseFilterSettings,
+    /// 【筛选设置】点「应用」：面板在读输入框值的路径上（要 `&mut Context`）转手，
+    /// 由宿主调 [`ResultPanel::apply_filter_settings`] 读出草稿并入队下面那条带参请求
+    CommitFilterSettings,
+    /// 【筛选设置】应用：`where` 回填筛选框并生效，`order` 是自定义排序文本
+    /// （空 = 不自定义，沿用原查询的 ORDER BY）。宿主按两者重查替换当前结果集
+    /// （对齐 DBeaver `FilterSettingsDialog` 的 Custom 页签：
+    /// `whereText` / `orderText` → `setWhere` / `setOrder`，`:435/493-500`）。
+    ApplyFilterSettings { where_text: String, order_text: String },
     /// 批量提交待提交变更
     CommitPending,
     /// 批量撤销待提交变更

@@ -403,6 +403,26 @@ impl ResultPanel {
                         }),
                 )
             })
+            // 【筛选设置】DBeaver 筛选条右列第一颗 `filtersCustomButton`
+            // （`ResultSetFilterPanel.java:330-338`：FILTER 图标、`SWT.DROP_DOWN`，**恒建**
+            // ——`compactMode` 下 clear / history 都不建，这一颗仍然在）。主点击开
+            // `FilterSettingsDialog`（列约束表 + 自定义 WHERE/ORDER 两页）。
+            //
+            // 本仓落点：打开「筛选设置」浮层（见 `dialog.rs::render_filter_settings`）。
+            // 与 DBeaver 的差异在册：浮层里 WHERE 一栏只读回显（筛选框本体才是它的输入源），
+            // 真正新增的能力是**自定义 ORDER BY**（本仓此前只有按列排序下发）。
+            .child({
+                let settings_queue = self.queue.clone();
+                Button::new("editor-result-filter-settings")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::Funnel)
+                    .debug_selector(|| "editor-result-filter-settings".to_string())
+                    .tooltip("筛选设置（自定义条件与排序）")
+                    .on_click(move |_, _window, app| {
+                        settings_queue.request(ResultRequest::OpenFilterSettings, app);
+                    })
+            })
             // 【筛选历史】DBeaver 筛选条的第 5 列是 `HistoryPanel`（`ResultSetFilterPanel.java:214`）：
             // 一个下拉箭头，点开是历史筛选表 `createFilterHistoryPanel`（`:1207`），选中一条
             // 即回到那个口径。本仓用组件的 `DropdownMenu`（按钮 + 弹出菜单，自带锚点/外点关闭）。
@@ -1303,6 +1323,11 @@ impl ResultPanel {
             // 【2026-10-28 微调】SQL 预览弹窗**最后挂**（绘制顺序在全部内容之上，
             // 浮层才能盖住工具栏 / 主体；遮罩 absolute inset_0 铺满面板根）
             .children(self.sql_dialog_open.then(|| self.render_sql_dialog(cx)))
+            // 【筛选设置】浮层同样最后挂（与 SQL 弹窗同层的模态遮罩）
+            .children(
+                self.filter_settings_open
+                    .then(|| self.render_filter_settings(cx)),
+            )
             .into_any_element()
     }
 

@@ -150,6 +150,27 @@ impl EditorHostPanel {
             ResultRequest::ToggleFilterExpand => self
                 .result_panel
                 .update(cx, |p, cx| p.toggle_filter_expand(cx)),
+            // 【筛选设置】打开浮层（要 &mut Window 回填 + 交焦点给排序输入框）
+            ResultRequest::OpenFilterSettings => {
+                let panel = self.result_panel.clone();
+                let _ = self.window.update(cx, |_panel, window, app| {
+                    panel.update(app, |p, cx| p.open_filter_settings(window, cx));
+                });
+            }
+            ResultRequest::CloseFilterSettings => {
+                self.result_panel
+                    .update(cx, |p, cx| p.close_filter_settings(cx));
+            }
+            // 「应用」按钮只入队无参请求：读输入框值要 &mut Context，由面板自己读
+            // 并入队带参的 `ApplyFilterSettings`
+            ResultRequest::CommitFilterSettings => {
+                self.result_panel
+                    .update(cx, |p, cx| p.apply_filter_settings(cx));
+            }
+            ResultRequest::ApplyFilterSettings {
+                where_text,
+                order_text,
+            } => self.run_custom_filter(where_text, order_text, cx),
             // 【1.2】复制「执行SQL」页签里的 wrapped SQL
             ResultRequest::CopyExecSql => {
                 let sql = self
