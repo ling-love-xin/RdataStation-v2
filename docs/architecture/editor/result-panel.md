@@ -4341,6 +4341,15 @@ editor results 45、ui-guard 4、check 0-0。提交 `e1b797db`。
   与 DBeaver 的 `ColumnType` 绑定不同。
 - 不做「执行前预览」：DBeaver 也是选中即查；本仓的差别是新结果集**换了标签**，用户能看见 SQL
   （标签悬停即原始 SQL）。
+- **不做 `confirmPanelsReset()`（DBeaver 「面板内容将被重置，是否继续」确认）—— 本仓没有会触发它的路径。**
+  取证：`confirmPanelsReset` 全仓只有一处调用（`ResultSetViewer.java:3962`），在
+  `navigateAssociation(...)` 里 `!newWindow && !confirmPanelsReset()` 时才拦；语义是
+  「**在同一窗口里**跳到关联表 → 原结果被替换 → 右栏面板（分组等）里的成果会跟着废掉」。
+  本仓把「查看引用行」做成 `ResultPlacement::NewSet`（原结果不动、新结果落旁边标签），
+  连「同窗口替换」都不存在，所以那层确认**不该加**——加了就是给一个永远走不到的分支做弹窗。
+  反过来说：哪天做了「同标签内替换结果」的导航，必须同时补这份确认
+  （判定口径 `IResultSetPanel.isDirty()`：`GroupingPanel` = 有分组键（`:104-107`）、
+  `AggregateColumnsPanel` 恒 `false`（`:125-127`））。
 
 ### 8.81 列浏览器清单「复制列名」+ 嵌套列判定（对齐 DBeaver MetaDataPanel，2026-11-18）
 
