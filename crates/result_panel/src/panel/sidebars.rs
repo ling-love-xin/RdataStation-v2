@@ -489,10 +489,13 @@ impl ResultPanel {
     /// 缓存聚合结果、或把聚合下推成服务端 GROUP BY 查询，属后续优化项（记在文档）。
     pub(crate) fn render_right_sidebar(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
-        // 【R5 面板最大化】最大化时右栏**必定挂载**（网格已收起，右栏就是整块区域），
-        // 与开合开关解耦：`show_value_sidebar` 原值保留，还原后回到用户原本的开合。
+        // 【R5 面板最大化】不变量：`panel_maximized ⇒ show_value_sidebar`
+        // （`toggle_panel_maximize` 进入最大化会先展开面板；收起面板 / 三态开关走到「收起」
+        // 都会复位最大化，见 `events::set_panels_visible` / `toggle_value_sidebar`）。
+        // 所以这里不需要再 `|| maximized` 兜底——单一真值，避免两处状态互相打掩护。
+        let show = self.show_value_sidebar;
+        // 布局层面仍要知道"是否最大化"（满宽满高、不挂拖拽手柄）
         let maximized = self.panel_maximized;
-        let show = self.show_value_sidebar || maximized;
         // 【2026-11-18 对齐 CTabFolder】横 tab 栏**列出全部六页**，点页签即切页：
         // DBeaver 的右栏是**一个**页签夹 `CTabFolder panelFolder`（`ResultSetViewer.java:1430-1478`），
         // 六页都作为页签常驻在其中（`addPanel` 里 `new CTabItem(panelFolder, SWT.CLOSE)`），

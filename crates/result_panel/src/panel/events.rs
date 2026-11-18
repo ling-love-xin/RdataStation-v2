@@ -825,6 +825,11 @@ impl ResultPanel {
     /// 本仓「面板可见」= 竖条与右栏内容都显（`edge_bar_visible && show_value_sidebar`）；
     /// 关 = 整条收起（与状态栏右端三态开关的收起态是同一定义）。重新打开走状态栏那个开关
     /// ——DBeaver 那边关掉后竖条也消失，重新打开走菜单命令 `CMD_TOGGLE_PANELS`，同一处境。
+    ///
+    /// **收起会吃掉最大化**：DBeaver 里面板可见性与最大化共用同一份 sash 可见性
+    /// （`showPanels(false)` 就是 `setMaximizedControl(children[0])`，`:1487`），
+    /// 关掉面板之后不可能还停在最大化。本仓同样复位 `panel_maximized`，
+    /// 否则「面板已关但右栏被最大化强行挂着」会出现状态自相矛盾（竖条也一起没了）。
     pub fn set_panels_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
         if visible {
             if !self.panels_visible() {
@@ -836,6 +841,7 @@ impl ResultPanel {
         } else {
             self.edge_bar_visible = false;
             self.show_value_sidebar = false;
+            self.panel_maximized = false;
             self.right_sidebar_epoch = self.right_sidebar_epoch.wrapping_add(1);
             self.right_sidebar_dragging = false;
         }
@@ -854,6 +860,10 @@ impl ResultPanel {
         let (edge, show) = next_right_edge_state(self.edge_bar_visible, self.show_value_sidebar);
         self.edge_bar_visible = edge;
         self.show_value_sidebar = show;
+        // 走到「收起」时最大化没有意义（不变量：最大化 ⇒ 面板展开），顺手复位
+        if !show {
+            self.panel_maximized = false;
+        }
         self.right_sidebar_epoch = self.right_sidebar_epoch.wrapping_add(1);
         // 【R5 可拖分栏】开合重新走 160ms 补间（拖拽期是直写，见 render_right_sidebar）
         self.right_sidebar_dragging = false;
@@ -901,11 +911,19 @@ impl ResultPanel {
     ///
     /// 语义是**独占整块结果集区域**，不是「把右栏拖宽」：最大化期间网格不渲染、
     /// 右栏满宽（横排满宽 / 竖排满高），拖拽手柄也不挂（没有可拖的分栏了）。
-    /// 面板总开关（`show_value_sidebar`）保持原值——还原后回到用户原本的开合态。
+    /// 面板总开关（`show_value_sidebar`）**保持原值不动**——还原后回到用户原本的开合态；
+    /// 唯一的例外是「面板当前是关的」时进入最大化：面板关着就没有可最大化的东西，
+    /// 这时先把面板展开（与 DBeaver 共用同一份 sash 可见性同一道理），再进入最大化。
     pub fn toggle_panel_maximize(&mut self, cx: &mut Context<Self>) {
         self.panel_maximized = !self.panel_maximized;
-        // 退出最大化时把拖拽标记一并清掉（最大化期间没有拖拽手柄可拖）
         if self.panel_maximized {
+            // 不变量：最大化 ⇒ 面板可见（否则网格已收起、面板又不显示，整块区域空白）
+            if !self.show_value_sidebar {
+                self.show_value_sidebar = true;
+                self.edge_bar_visible = true;
+                self.right_sidebar_epoch = self.right_sidebar_epoch.wrapping_add(1);
+            }
+            // 最大化期间没有拖拽手柄可拖
             self.right_sidebar_dragging = false;
         }
         cx.notify();

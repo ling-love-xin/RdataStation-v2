@@ -1497,6 +1497,74 @@ fn maximize_panel_hides_the_grid_and_keeps_the_sidebar(cx: &mut gpui_kit::TestAp
     );
 }
 
+/// 【R5 面板最大化】与「面板总开关」的互斥口径（不变量：最大化 ⇒ 面板展开）。
+///
+/// 取证依据：DBeaver 里两者共用同一份 sash 可见性——`togglePanelsMaximize` 是
+/// `viewerSash.hideUp()/showUp()`（`ResultSetViewer.java:1551-1557`），而
+/// `showPanels(false)` 就是 `viewerSash.setMaximizedControl(children[0])`（`:1487`），
+/// 也就是「关面板」之后不可能还停在最大化。本仓若不同步复位，会出现
+/// 「面板已关（竖条也没了）但右栏被最大化强行挂满整块」的自相矛盾。
+#[gpui_kit::test]
+fn maximize_yields_to_the_panels_master_switch(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 1) 面板关着时点最大化 → 先把面板展开，再进入最大化（否则整块区域空白）
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_panels_visible(false, cx)));
+    assert!(!cx.update(|_, app| panel.read(app).panels_visible()), "基线：面板已关");
+    cx.update(|_, app| panel.update(app, |p, cx| p.toggle_panel_maximize(cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.update(|_, app| panel.read(app).panels_visible()),
+        "进入最大化必须隐含展开面板"
+    );
+    assert!(
+        cx.update(|_, app| panel.read(app).panel_maximized),
+        "最大化标记应已置位"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-value-sidebar").is_some(),
+        "最大化时右栏必须在（否则网格收起后整块空白）"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-main-grid").is_none(),
+        "最大化时网格不渲染"
+    );
+
+    // 2) 最大化期间关面板 → 最大化被吃掉（不复位就会留下"面板关了但右栏还占满"）
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_panels_visible(false, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        !cx.update(|_, app| panel.read(app).panel_maximized),
+        "关面板必须一并退出最大化（DBeaver 里两者是同一份 sash 可见性）"
+    );
+    assert!(
+        !cx.update(|_, app| panel.read(app).panels_visible()),
+        "关面板后「面板可见」应为假"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-main-grid").is_some(),
+        "关面板后网格必须回到整块区域"
+    );
+
+    // 3) 最大化期间走状态栏三态开关到「收起」→ 同样复位最大化
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_panels_visible(true, cx)));
+    cx.update(|_, app| panel.update(app, |p, cx| p.toggle_panel_maximize(cx)));
+    assert!(cx.update(|_, app| panel.read(app).panel_maximized));
+    // 宽展开（edge+show）→ 收起（edge/show 都关）
+    cx.update(|_, app| panel.update(app, |p, cx| p.toggle_value_sidebar(cx)));
+    assert!(
+        !cx.update(|_, app| panel.read(app).show_value_sidebar),
+        "三态开关这一跳应到「收起」"
+    );
+    assert!(
+        !cx.update(|_, app| panel.read(app).panel_maximized),
+        "三态开关走到收起时必须一并退出最大化"
+    );
+}
+
 /// 【R3 分组页】「移除分组列」的可用性（纯函数）：对齐 DBeaver
 /// `GroupingColumnsContainer.canColumnBeRemoved`（`:92-94`）——选中列在分组键里、
 /// 且移除后仍至少剩一列才可用；删到零归「清空分组」管。
