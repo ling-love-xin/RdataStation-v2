@@ -165,6 +165,10 @@ impl ListDelegate for ColumnBrowserDelegate {
         let data_col = *self.matched().get(ix.row)?;
         let name = self.columns.get(data_col)?.clone();
         let type_name = self.type_names.get(data_col).cloned().unwrap_or_default();
+        // 【DBeaver 对齐】列注释（`MetaDataPanel.addExtraColumns` 的 `Description` 列，
+        // 值 = `entityAttribute.getDescription()`）。窄侧栏摆不下第三列，改成列名下的
+        // 第二行（同一份数据，换形态）。
+        let comment = browser_comment_text(self.comments.get(data_col).unwrap_or(&None));
         let hidden = self.hidden_columns.get(data_col).copied().unwrap_or(false);
         let theme = cx.theme();
         let muted = theme.muted_foreground;
@@ -259,8 +263,22 @@ impl ListDelegate for ColumnBrowserDelegate {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .text_ellipsis()
-                    .child(SharedString::from(name.clone())),
+                    .v_flex()
+                    .child(
+                        div()
+                            .min_w_0()
+                            .text_ellipsis()
+                            .child(SharedString::from(name.clone())),
+                    )
+                    // 注释第二行：只在有注释时出现（DBeaver 的 Description 列）
+                    .children(comment.map(|comment| {
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(muted)
+                            .debug_selector(|| "editor-result-col-browser-comment".to_string())
+                            .child(SharedString::from(comment))
+                    })),
             )
             .when(!type_name.is_empty(), |r| {
                 r.child(
@@ -449,6 +467,17 @@ pub(crate) fn next_multi_selection(
         next.dedup();
         next
     }
+}
+
+/// 【列注释】清单第二行要显示的注释文本（纯函数）：`None` / 纯空白 → 不显示；
+/// 有内容则去首尾空白后原样返回（对齐 DBeaver `addExtraColumns` 的 `Description` 列，
+/// 空注释不占第二行）。
+pub(crate) fn browser_comment_text(comment: &Option<String>) -> Option<String> {
+    comment
+        .as_ref()
+        .map(|comment| comment.trim())
+        .filter(|comment| !comment.is_empty())
+        .map(|comment| comment.to_string())
 }
 
 /// 【复制列名】要写进剪贴板的文本（纯函数；对齐 DBeaver

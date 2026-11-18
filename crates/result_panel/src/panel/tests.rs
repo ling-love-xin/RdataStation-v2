@@ -1353,6 +1353,77 @@ fn copy_column_names_joins_the_selection_with_newlines() {
     assert_eq!(column_names_to_copy(&[], &[0, 1], 0), "");
 }
 
+/// 【列注释】清单第二行的取值：`None` / 空串 / 纯空白都不占行（DBeaver 的
+/// `Description` 额外列对没有注释的列显示空白），有内容则去掉首尾空白后原样显示。
+#[test]
+fn browser_comment_skips_empty_and_blank() {
+    use crate::column_browser::browser_comment_text;
+
+    assert_eq!(browser_comment_text(&None), None);
+    assert_eq!(browser_comment_text(&Some(String::new())), None);
+    assert_eq!(browser_comment_text(&Some("   ".to_string())), None);
+    assert_eq!(
+        browser_comment_text(&Some("  用户登录名 ".to_string())),
+        Some("用户登录名".to_string()),
+        "注释去首尾空白后原样显示"
+    );
+}
+
+/// 【列注释】渲染路径：有注释的列在列名下画出第二行，没有注释的列不画。
+/// 数据经 delegate 投影直灌（`sync` 的接线由 toolbar 既有用例覆盖，这里只验渲染）。
+#[gpui_kit::test]
+fn column_browser_draws_the_comment_line_below_the_name(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    // 只有第一列（id）有注释，第二列（amount）没有 → 第二行应该只出现一次
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            let list = p.browser_list.clone();
+            list.update(cx, |list, cx| {
+                list.delegate_mut().set_data(
+                    vec!["id".to_string(), "amount".to_string()],
+                    vec!["INTEGER".to_string(), "DECIMAL".to_string()],
+                    vec![false, false],
+                    vec![Some("主键".to_string()), None],
+                );
+                cx.notify();
+            });
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let visible = |id: &'static str, cx: &mut gpui_kit::VisualTestContext| -> bool {
+        cx.debug_bounds(id).is_some()
+    };
+    assert!(
+        visible("editor-result-col-browser-comment", cx),
+        "有注释的列应在列名下画出注释行"
+    );
+
+    // 反证：全部列都没有注释时，第二行不出现（不许画一行空文本占高）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            let list = p.browser_list.clone();
+            list.update(cx, |list, cx| {
+                list.delegate_mut().set_data(
+                    vec!["id".to_string(), "amount".to_string()],
+                    vec!["INTEGER".to_string(), "DECIMAL".to_string()],
+                    vec![false, false],
+                    vec![None, None],
+                );
+                cx.notify();
+            });
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        !visible("editor-result-col-browser-comment", cx),
+        "没有注释的列不应占第二行"
+    );
+}
+
 #[test]
 fn hex_page_clamps_to_the_last_page() {
     use crate::panel::tabs::hex_page_clamp;
