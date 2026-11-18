@@ -2960,6 +2960,96 @@ DBeaver 侧：排序**只用图像**（`IMAGE_DESC` / `IMAGE_ASC` 三角，`ARRO
 - `cargo test -p rds-ui-guard`（不带 `--lib`）= **4 passed**（基线 18 → **20**，本批
   `ui.rs` 新增两个 `px(…)` 常量；新增常量是「尺寸单一来源」的推荐写法，不是违规）。
 
+### 8.54 表格打磨第五批：整行选中铺色 + 网格事件订阅重挂（并修「订阅从未生效」）
+
+#### 8.54.1 取证：DBeaver 的选中行是整行色，组件只画框
+
+| 事实 | 出处 |
+| --- | --- |
+| `LightGrid` 选中行是**整行底色**：`getRowRenderer` 逐格取 `getCellBackground(element, selected)`，行头格也用同一口径 | `GridRowRenderer.java:55-70`、`:44` |
+| vendor 的 `is_selected` 只喂两处：`need_render_border`（画 1px 行框，`:2255`）与 hover 抑制（`:2279-2285`），**不铺底色** | vendor `table/state.rs:2246-2285` |
+| 本仓关了组件的窄行头（`.row_header(false)`，`grid/status.rs:453`）⇒「点 `#` 槽第二下升级整行选中」是选整行的**唯一入口** | 同文件 + vendor 文档 `:247-263` |
+
+⇒ 选中行只有一圈 1px 边框、没有色块，26px 行高下几乎看不出来。本批补整行底色。
+
+#### 8.54.2 结构性发现：面板侧的表格事件订阅**从未生效**
+
+`lifecycle.rs::new` 里原本是：
+
+```rust
+let _grid_sub = cx.subscribe_in(&grid, window, |this, _table, event, window, cx| { …整套 match… });
+```
+
+`_grid_sub` 是**构造函数的局部变量**，`new` 返回即析构 ⇒ 订阅立刻解订；而且 `set_grids`
+（`self.grid = grid`，`:295`）换了网格也不重挂。后果是面板那一整套处理在新网格上
+**一次都没跑过**：
+
+- `SelectCell` / `DoubleClickedCell` → `set_selection_pos` + `rebuild_value_tree`；
+- `MoveColumn` → `push(ResultRequest::ColumnOrderChanged)`，**全仓只有这一处**，即
+  「拖拽列序跨会话落库」是死功能；
+- `ColumnWidthsChanged` → 面板侧取快照 + 推「该存了」（注释里写的「宿主那份订阅同样会记，
+  同值幂等」正是以为两条都在跑）；
+- `ClearSelection` / `SelectRow`。
+
+生产上之所以看起来还能用，是因为编辑器宿主对**自己注入的网格**另有一条订阅
+（`host/construct.rs`）覆盖了选格 / 双击 / 列宽 / 清除 / 整行选中的镜像；`MoveColumn`
+只在面板侧处理，所以那条确实一直没落库。
+
+实测证据（本批用例，先红后绿）：
+
+```
+左红：panel::tests::select_row_event_mirrors_into_the_delegate
+  assertion `left == right` failed: 面板订阅没把 `SelectRow` 镜像进 delegate
+    left: None          ← 面板处理没跑
+   right: Some(1)
+右绿：同一用例重挂订阅后通过
+```
+
+#### 8.54.3 落法
+
+| 项 | 落点 |
+| --- | --- |
+| delegate 记选中行 | `grid/delegate.rs` 新增 `selected_row: Option<usize>` + `set_selected_row` / `selected_view_row`；`set_data` 里清空（换结果不该留着旧行号） |
+| 整行铺色 | `grid/table_impl.rs::render_tr`：`selected_row == Some(row_ix)` 优先铺 `theme.tokens.table_active`（哨兵 `editor-result-row-selected`），否则奇数行斑马（`editor-result-row-odd`）——同一行只一档色 |
+| 事件体抽成方法 | `panel/lifecycle.rs` 新增 `handle_grid_event(&mut self, event, window, cx)`，`new` 与 `set_grids` 共用同一份处理 |
+| 句柄入库 | `panel/data.rs` 新增 `_grid_sub: Option<Subscription>`；`new` 里 `Some(cx.subscribe_in(…))` 进 `Self` |
+| 换网格重挂 | `set_grids` 增 `window: &mut Window` 形参，末尾重建订阅（旧句柄随赋值解订，不留两条）；3 处调用点补 `window`（`host/construct.rs:171` + `panel/tests.rs` 两处） |
+| 宿主镜像 | `host/construct.rs` 的 `SelectRow` 臂补 `delegate_mut().set_selected_row(Some(*row))`、`ClearSelection` 臂补 `None`（宿主这份才是生产渲染路径；面板那份修好后写同值，幂等） |
+
+选中色为什么是淡色：`theme/schema.rs:1036-1067` 的 `clamp_alpha` 把 `table_active` 的
+alpha 封顶 **0.2**，DBeaver 的整行选中是实心浅蓝。要实心必须改 vendor（全局影响所有表格），
+本批不动，见 §8.54.6。
+
+#### 8.54.4 测试
+
+- `grid/tests.rs::selected_row_paints_a_whole_row_band`：delegate 预置 `Some(1)` →
+  有 `row-selected` 哨兵、无 `row-odd` 哨兵；`set_data` 后 `selected_view_row()` 回 `None`。
+- `panel/tests.rs::select_row_event_mirrors_into_the_delegate`：走生产入口
+  `TableState::set_selected_row(1, cx)`（组件自己 emit `SelectRow`）→ 面板订阅 → delegate
+  镜像 `Some(1)` + `row-selected` 哨兵在册。**这条就是 §8.54.2 的回归用例**：
+  订阅不挂/挂错实体时 `left: None`。
+  两个坑写进了注释：① `panel.read(app).grid().update(app, …)` 会双重借 `app`（E0502），
+  先把 `Entity` clone 成本地句柄；② `debug_bounds` 的登记**跨帧累积**，本条先画过一帧
+  未选中画面，所以「斑马纹缺席」只能由 `grid` 那条用例断言。
+
+#### 8.54.5 验证
+
+- `cargo check -p rds-result-panel -p rds-editor` = 0 error / 0 warning（39.12s）。
+- `cargo test -p rds-result-panel --lib` = **264 passed / 0 failed**（263 + 本批新增 1）。
+- `cargo test -p rds-ui-guard`（不带 `--lib`）= **4 passed**（基线仍 20）。
+- `cargo test -p rds-editor --lib --no-run` = 通过（`set_grids` 形参变更的调用点全部编译）。
+
+#### 8.54.6 偏离与未决
+
+- 选中色只到 20% tint（`clamp_alpha` 封顶），未对齐 DBeaver 的实心浅蓝；走改 vendor 一行
+  是全局影响，等拍板。
+- `#` 槽仍不铺底色：DBeaver 行头每行铺 `HeaderBackground` + 右线 + 底线
+  （`GridRowRenderer:55-70`）。铺了会和整行选中色冲突（`table_active` 半透明，单层 bg
+  叠不出两层），需先定口径。
+- 获焦列四边框（`GridColumnRenderer:96-104`）仍未做（需 delegate 镜像焦点列 + 焦点色
+  token；`.border_1()` 会缩内容盒、vendor/base 无 outline 能力）。
+- 真窗口目视挂账：20% tint 在浅色 / 深色下是否看得出「整行被选中」。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

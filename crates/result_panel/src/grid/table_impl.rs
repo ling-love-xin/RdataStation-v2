@@ -65,13 +65,19 @@ pub(crate) fn default_column_width(kind: ColumnKind) -> Pixels {
     }
 }
 impl TableDelegate for ResultGridDelegate {
-    /// 行容器：只铺奇数行的斑马底色（本 crate 唯一一处 delegate 原生绘制）
+    /// 行容器：铺整行选中色 / 奇数行斑马底色（本 crate 唯一一处 delegate 原生绘制）
     ///
     /// 【结果集配色槽】DBeaver 的斑马纹是**结果集专属**主题色（`cell.odd.background`，
     /// 默认 235,245,255），而组件库的 `.stripe(true)` 铺在行层却取全局主题
     /// `tokens.table_even`（所有表格共用）。delegate 的样式会在组件链末尾经
     /// `refine_style` 重放（vendor `table/state.rs:2258` 取快照、`:2278` 重放），
     /// 所以这里铺的底色最终生效，且 hover 仍由组件的 `table_hover` 覆盖（符合预期）。
+    ///
+    /// 【选中行】组件**不给**选中行铺色（`table/state.rs:2249` 的 `is_selected` 只决定
+    /// 行底线与 hover 抑制），而 DBeaver 的选中行是整行色（`LightGrid` 逐格按
+    /// `getCellBackground(selected)` 取色），所以整行选中在这里铺：先判选中、再判斑马
+    /// （同一行只能是其中一个分支——选中色压掉斑马纹）。色槽与「选中单元格」同源
+    /// （`tokens.table_active`），两者不会各说各话。
     fn render_tr(
         &mut self,
         row_ix: usize,
@@ -80,7 +86,11 @@ impl TableDelegate for ResultGridDelegate {
     ) -> Stateful<Div> {
         let theme = cx.theme();
         let tr = div().id(("row", row_ix));
-        if row_ix % 2 == 1 {
+        if self.selected_row == Some(row_ix) {
+            tr.bg(theme.tokens.table_active)
+                // 回归哨兵：颜色在 headless 下读不到，用例只能坐实「选中行分支真的在跑」
+                .debug_selector(|| "editor-result-row-selected".to_string())
+        } else if row_ix % 2 == 1 {
             tr.bg(product_tokens::get(cx).result_odd_row_background(theme))
                 // 回归哨兵：颜色在 headless 下读不到，用例只能坐实「奇数行分支真的在跑」
                 //（否则这个槽就是空转——delegate 的 `render_tr` 没被调用时静默失效）

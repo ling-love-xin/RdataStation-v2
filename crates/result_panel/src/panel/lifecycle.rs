@@ -101,66 +101,17 @@ impl ResultPanel {
             .searchable(true)
         });
 
-        // 【DBeaver 对齐】订阅 table 事件：双击单元格编辑 / 列序拖拽 / 清除选择
-        let _grid_sub = cx.subscribe_in(
+        // 【网格事件订阅】构造时先挂在占位网格上（`set_grids` 换网格后由它重挂）。
+        // 句柄必须存进 `Self`：只在 `new` 里 `let _sub` 会在构造返回时解订，
+        // 整套事件处理（选格 / 编辑 / 列序 / 列宽 / 清除 / 整行选中）静默失效
+        // ——2026-11-18 由 `select_row_event_mirrors_into_the_delegate` 实测确认过。
+        let _grid_sub = Some(cx.subscribe_in(
             &grid,
             window,
             |this, _table, event: &TableEvent, window, cx| {
-                match event {
-                    // 单击选格：值详情跟随点选（此前只接双击——「点击文字半天才出来」
-                    // 的根因之一）+ 重建 JSON 展开树（选中值是 JSON/数组时）
-                    TableEvent::SelectCell(row_ix, col_ix) => {
-                        this.set_selection_pos(Some((*row_ix, *col_ix)), window, cx);
-                        this.rebuild_value_tree(window, cx);
-                        cx.notify();
-                    }
-                    // 双击单元格：进入编辑态（当前走行级叠加层）
-                    TableEvent::DoubleClickedCell(row_ix, col_ix) => {
-                        // 选中该单元格（delegate 坐标），让行级模型知道要编辑哪格
-                        this.selection_pos = Some((*row_ix, *col_ix));
-                        this.rebuild_value_tree(window, cx);
-                        cx.notify();
-                    }
-                    // 列序拖拽：记下新显示序（delegate 的 `display_order` 快照），
-                    // 并推 `ColumnOrderChanged` 让宿主落库（跨会话持久化）
-                    TableEvent::MoveColumn(from, to) => {
-                        let _ = (from, to);
-                        let order = this.grid.read(cx).delegate().display_order();
-                        if order != this.column_order {
-                            this.column_order = order;
-                            this.queue.push(ResultRequest::ColumnOrderChanged {
-                                order: this.column_order.clone(),
-                            });
-                        }
-                        cx.notify();
-                    }
-                    // 清除选择：清空选中格位置 + 清空 JSON 树
-                    TableEvent::ClearSelection => {
-                        this.selection_pos = None;
-                        this.selected_col = None;
-                        this.rebuild_value_tree(window, cx);
-                        cx.notify();
-                    }
-                    // 【P1-3】列宽拖拽结束：先把宽度记进 delegate（宿主那份订阅同样会记，
-                    // 同值幂等；这样不依赖两个订阅者的先后顺序），再取面板快照并推
-                    // 「该存了」——宿主从 `panel.column_widths()` 读值落会话
-                    TableEvent::ColumnWidthsChanged(widths) => {
-                        let widths = widths.clone();
-                        this.grid.update(cx, |state, _cx| {
-                            state.delegate_mut().set_column_widths(&widths)
-                        });
-                        let snapshot = this.grid.read(cx).delegate().column_width_snapshot();
-                        if snapshot != this.column_widths {
-                            this.column_widths = snapshot;
-                            this.queue.push(ResultRequest::ColumnWidthsChanged);
-                        }
-                    }
-                    // 其他事件忽略（SelectRow / SelectColumn / SelectCell 已由
-                    // delegate 内联处理或后续接线）
-                    _ => {}
-                }
+                this.handle_grid_event(event, window, cx);
             },
-        );
+        ));
 
         Self {
             grid,
@@ -204,6 +155,8 @@ impl ResultPanel {
             browser_list,
             row_count_input,
             _row_count_sub: Some(row_count_sub),
+            // 【网格事件订阅】构造期挂在占位网格上，`set_grids` 换网格后重挂
+            _grid_sub,
             presentation: Presentation::Grid,
             right_tab: RightTab::Browser,
             // 【R2 计算页】默认全集（与 DBeaver `loadDefaultFunctions` 同口径：默认函数全上）
@@ -247,11 +200,96 @@ impl ResultPanel {
         }
     }
 
+    /// 网格事件统一处理（构造时挂在占位网格；`set_grids` 换网格后重挂同一个处理）。
+    ///
+    /// 【DBeaver 对齐】双击单元格编辑 / 列序拖拽 / 清除选择 / 列宽拖拽 / 整行选中。
+    /// 组件的 emit 是**延迟**派发的（gpui-fast `Context::emit` 只把 `Effect::Emit`
+    /// 排进 `pending_effects`，`context.rs:738-753`），所以处理里再 `grid.update`
+    /// 不会撞「实体正被更新」。
+    fn handle_grid_event(
+        &mut self,
+        event: &TableEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            // 单击选格：值详情跟随点选（此前只接双击——「点击文字半天才出来」
+            // 的根因之一）+ 重建 JSON 展开树（选中值是 JSON/数组时）
+            TableEvent::SelectCell(row_ix, col_ix) => {
+                self.set_selection_pos(Some((*row_ix, *col_ix)), window, cx);
+                self.rebuild_value_tree(window, cx);
+                cx.notify();
+            }
+            // 双击单元格：进入编辑态（当前走行级叠加层）
+            TableEvent::DoubleClickedCell(row_ix, col_ix) => {
+                // 选中该单元格（delegate 坐标），让行级模型知道要编辑哪格
+                self.selection_pos = Some((*row_ix, *col_ix));
+                self.rebuild_value_tree(window, cx);
+                cx.notify();
+            }
+            // 列序拖拽：记下新显示序（delegate 的 `display_order` 快照），
+            // 并推 `ColumnOrderChanged` 让宿主落库（跨会话持久化）
+            TableEvent::MoveColumn(from, to) => {
+                let _ = (from, to);
+                let order = self.grid.read(cx).delegate().display_order();
+                if order != self.column_order {
+                    self.column_order = order;
+                    self.queue.push(ResultRequest::ColumnOrderChanged {
+                        order: self.column_order.clone(),
+                    });
+                }
+                cx.notify();
+            }
+            // 【选中行】整行选中：把组件报来的行号镜像进 delegate，`render_tr`
+            // 据此整行铺色（组件自己不给选中行画色，见 delegate 字段注释）。
+            // 编辑器宿主对它注入的网格另有一条自己的订阅（`host/construct.rs`
+            // 同款镜像），两处写同一个值、幂等。
+            TableEvent::SelectRow(row) => {
+                self.grid.update(cx, |state, cx| {
+                    state.delegate_mut().set_selected_row(Some(*row));
+                    cx.notify();
+                });
+            }
+            // 清除选择：清空选中格位置 + 清空 JSON 树 + 撤掉整行色
+            TableEvent::ClearSelection => {
+                self.selection_pos = None;
+                self.selected_col = None;
+                self.grid.update(cx, |state, cx| {
+                    state.delegate_mut().set_selected_row(None);
+                    cx.notify();
+                });
+                self.rebuild_value_tree(window, cx);
+                cx.notify();
+            }
+            // 【P1-3】列宽拖拽结束：先把宽度记进 delegate（宿主那份订阅同样会记，
+            // 同值幂等；这样不依赖两个订阅者的先后顺序），再取面板快照并推
+            // 「该存了」——宿主从 `panel.column_widths()` 读值落会话
+            TableEvent::ColumnWidthsChanged(widths) => {
+                let widths = widths.clone();
+                self.grid.update(cx, |state, _cx| {
+                    state.delegate_mut().set_column_widths(&widths)
+                });
+                let snapshot = self.grid.read(cx).delegate().column_width_snapshot();
+                if snapshot != self.column_widths {
+                    self.column_widths = snapshot;
+                    self.queue.push(ResultRequest::ColumnWidthsChanged);
+                }
+            }
+            // 其他事件忽略（SelectColumn 由组件内联处理，面板不跟）
+            _ => {}
+        }
+    }
+
     /// 编辑器把构造好的网格（含钩子）交进来
+    ///
+    /// 【订阅重挂】面板在 `new` 里订阅的是**构造期的占位网格**；换网格后旧订阅指向旧实体，
+    /// 不重挂的话这里列出的全部事件处理在新网格上都不触发（列序落库 / 列宽快照 / 整行选中
+    /// 都会静默失效）。所以换网格的同时把订阅换到新网格上——这也是本方法要 window 的原因。
     pub fn set_grids(
         &mut self,
         grid: Entity<TableState<ResultGridDelegate>>,
         compare_grid: Option<Entity<TableState<ResultGridDelegate>>>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.grid = grid;
@@ -266,6 +304,15 @@ impl ResultPanel {
         if let Some(compare) = self.compare_grid.clone() {
             compare.update(cx, |state, _cx| state.delegate_mut().set_action_queue(queue));
         }
+        // 【订阅重挂】把网格事件订阅换到新网格上（旧句柄随赋值解订，不留两条）
+        let grid = self.grid.clone();
+        self._grid_sub = Some(cx.subscribe_in(
+            &grid,
+            window,
+            |this, _table, event: &TableEvent, window, cx| {
+                this.handle_grid_event(event, window, cx);
+            },
+        ));
     }
 
     /// 对比栏投影（编辑器 `sync_compare_grid` 时调用；与主栏投影同口径，只读）

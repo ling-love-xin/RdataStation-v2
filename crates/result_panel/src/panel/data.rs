@@ -309,4 +309,7 @@ pub struct ResultPanel {
     /// 【P1-2】行号输入框的订阅句柄（仅持有——句柄丢了解订就跟着走；`set_value`
     /// 程序化回填不发事件，所以只有用户真敲键才会入队 `GoRow`）
     pub(crate) _row_count_sub: Option<Subscription>,
+    /// 【网格事件】表格事件订阅句柄（选格 / 双击编辑 / 列序 / 列宽 / 清除选择 / 整行选中）。
+    /// **必须持有**：句柄一丢就解订，`set_grids` 换网格时整体重挂（见 `set_grids` 注释）。
+    pub(crate) _grid_sub: Option<Subscription>,
 }

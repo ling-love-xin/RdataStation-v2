@@ -253,6 +253,17 @@ pub struct ResultGridDelegate {
     /// 回写（滚动 / 筛选 / 排序后都会变），供状态栏「上页 / 下页」算目标行。
     /// 面板不自己猜滚动位置——表格才是滚动位置的唯一真值。
     pub(crate) visible_top: usize,
+    /// 【选中行】组件报来的整行选中（`TableEvent::SelectRow`；**视图行序**）。
+    ///
+    /// 组件自己**不给**选中行铺色：`table/state.rs:2249` 拿到 `is_selected` 后只用来决定
+    /// 行底线要不要画、hover 要不要抑制，整行没有任何底色（选中行与未选中行长得一样）。
+    /// 于是「再点一下已选中的格子」升级成整行选中（`grid/status.rs` 关掉了组件窄行头，
+    /// 这是选整行的唯一入口）时，网格上看不出任何变化。
+    ///
+    /// DBeaver 的选中行是**整行色**（`LightGrid` 逐格按 `getCellBackground(selected)` 取色），
+    /// 所以这里镜像一个行号，由 `table_impl.rs` 的 `render_tr` 在行容器上铺一档与单元格
+    /// 选中同槽的底色（`tokens.table_active`）。
+    pub(crate) selected_row: Option<usize>,
 }
 impl ResultGridDelegate {
     /// 空网格：只带一句空态说明
@@ -261,6 +272,19 @@ impl ResultGridDelegate {
             empty_text: text.into(),
             ..Default::default()
         }
+    }
+
+    /// 【选中行】镜像组件报来的整行选中（`None` = 没有整行选中）。
+    ///
+    /// 面板在 `TableEvent::SelectRow` / `TableEvent::ClearSelection` 里调；`render_tr`
+    /// 读它铺整行底色（组件自己不给选中行画色，见字段注释）。
+    pub fn set_selected_row(&mut self, row: Option<usize>) {
+        self.selected_row = row;
+    }
+
+    /// 【选中行】当前镜像的整行选中（视图行序）；`render_tr` 与用例读它。
+    pub fn selected_view_row(&self) -> Option<usize> {
+        self.selected_row
     }
 
     /// 【结果集 #296】当前显示序（列名数组；数据序 = 没拖过）。面板在
@@ -312,6 +336,8 @@ impl ResultGridDelegate {
         self.transposed = false;
         self.transpose_row = RowRef::Data(0);
         self.context_cell = None;
+        // 【选中行】换了一份结果，旧的整行选中跟着作废（行号指向的是上一份的行）
+        self.selected_row = None;
         // 【T2a-3/4】数据被新结果顶掉：正在编辑的格子、标脏的集合都随旧数据作废
         self.editing = None;
         self.dirty.clear();

@@ -41,7 +41,7 @@
 
 ```powershell
 $env:RUST_MIN_STACK='268435456'; cd D:\RdataStation\RDS\RdataStation-v2
-cargo test -p rds-result-panel --lib    # 基线：262 passed / 0 failed（含 rendered_ui_elements_survive 防回退）
+cargo test -p rds-result-panel --lib    # 基线：264 passed / 0 failed（含 rendered_ui_elements_survive 防回退）
 cargo test -p rds-settings --lib        # 基线：35 passed / 0 failed
 cargo test -p rds-ui-guard              # 基线：4 passed / 0 failed（含 no_new_hardcoded_color_or_pixel）
 cargo test -p rds-workbench-shell --lib # 基线：14 passed / 0 failed
@@ -961,6 +961,33 @@ panel **261 passed**（不新增用例，复用 §2.41 的几何用例加两条�
 **验证**：`cargo check -p rds-result-panel -p rds-editor` 0 error / 0 warning；
 panel **262 passed** / guard **4**。
 
+### 2.44 表格打磨第五批：整行选中铺色 + 网格事件订阅重挂（修「订阅从未生效」）
+
+全文见 `result-panel.md §8.54`，接手要点：
+
+- **先读这条再动网格事件**：`lifecycle.rs::new` 原来把订阅句柄写成
+  `let _grid_sub = cx.subscribe_in(…)` —— **局部变量，`new` 返回即解订**，且 `set_grids`
+  换网格不重挂。所以面板那套处理（`SelectCell` / `DoubleClickedCell` / `MoveColumn` /
+  `ColumnWidthsChanged` / `ClearSelection` / `SelectRow`）**一次都没跑过**；
+  生产看着正常只是靠宿主 `host/construct.rs` 另一条订阅，而 `MoveColumn`
+  → `ColumnOrderChanged`（列序跨会话落库）**全仓只有面板这一处**，即那条一直是死功能。
+  现在：处理抽成 `handle_grid_event` 方法，句柄存 `Self::_grid_sub`，
+  `set_grids` 增 `window` 形参并在末尾重挂（旧句柄随赋值解订，不会留两条）。
+- **整行选中铺色**：组件只画 1px 行框（vendor `table/state.rs:2255`），不铺底色，
+  而 DBeaver 是整行色（`GridRowRenderer.java:55-70`）。`delegate.selected_row` +
+  `render_tr` 里 `selected → bg(table_active)`、否则奇数行斑马（哨兵
+  `editor-result-row-selected` / `editor-result-row-odd`），同一行只一档色；`set_data` 清空。
+- **回归用例**：`panel/tests.rs::select_row_event_mirrors_into_the_delegate` 就是订阅
+  那条的探针（订阅没挂时 `left: None`）。两个坑：`panel.read(app).grid().update(app,..)`
+  双重借 `app`（E0502，先 clone `Entity`）；`debug_bounds` **跨帧累积**，所以「斑马纹
+  缺席」只能在 `grid/tests.rs::selected_row_paints_a_whole_row_band` 里断言。
+- **未做**：选中色只到 20% tint（vendor `theme/schema.rs:1036-1067` 的 `clamp_alpha`
+  把 `table_active` 封顶 0.2），DBeaver 是实心浅蓝；要实心须改 vendor（全局影响所有表格），
+  等拍板。`#` 槽底色、获焦列四边框仍未做（理由见 §8.54.6）。
+
+**验证**：`cargo check -p rds-result-panel -p rds-editor` 0 error / 0 warning；
+panel **264 passed** / guard **4**（基线 20）/ editor 测试目标 `--no-run` 通过。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）
@@ -977,7 +1004,7 @@ panel **262 passed** / guard **4**。
 
 ## 4. 接手指引（新会话建议顺序）
 
-1. 先重跑 §1.3 四条验证命令，确认基线（尤其 **262 passed / 0 failed**）落地。
+1. 先重跑 §1.3 四条验证命令，确认基线（尤其 **264 passed / 0 failed**）落地。
 2. 处理 §2.1 提交待办：先 `git status` / `git diff` 摘本线 hunk，与并行线协调后统一提交类型样式渲染消费（settings 三文件 + grid.rs + host.rs + workbench view.rs）。
 3. 知悉 §2.2 外线阻塞（settings 契约测试）与 §1.3 契约测试既有失败，不替并行线补。
 4. 按 §2.4 优先级推进功能遗留（P0（注释与文档漂移）/ P1（分页·行号跳转·列宽落盘）/ P2（hex 翻页·图片预览·列浏览器多选）已交付；剩余见 §2.4 表，开工前先按模块惯例说理解、列方案）。

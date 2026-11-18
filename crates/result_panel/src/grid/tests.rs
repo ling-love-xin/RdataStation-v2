@@ -3002,7 +3002,7 @@ fn autofit_reserves_the_component_sort_icon_slot(cx: &mut gpui_kit::TestAppConte
     use gpui_kit::px;
 
     cx.update(gpui_kit::init);
-    let (_, mut vcx) = cx.add_window_view(|_window, _cx| BlankView);
+    let (_, vcx) = cx.add_window_view(|_window, _cx| BlankView);
 
     // 未知类型（没有 badge）、没有列筛选：表头块 = 列名 + 排序槽，没有 gap 参与
     let long_name = "order_identifier_column";
@@ -3286,6 +3286,66 @@ fn odd_rows_paint_the_stripe_from_the_delegate_row_container(
         odd.size.height >= gpui_kit::px(10.),
         "奇数行容器应有真实高度：odd={:?}",
         odd.size.height
+    );
+}
+
+/// 【选中行 2026-11-18】组件自己**不给**选中行铺色（vendor `table/state.rs:2249` 的
+/// `is_selected` 只决定行底线要不要画、hover 要不要抑制），于是「再点一下已选中的格子」
+/// 升级成整行选中（`grid/status.rs` 关掉了组件窄行头，这是选整行的唯一入口）时，
+/// 网格上一个像素都不变。DBeaver 的选中行是整行色（`LightGrid` 逐格按
+/// `getCellBackground(selected)` 取色），所以由 delegate 行容器整行铺
+/// `tokens.table_active`（与「选中单元格」同槽，两者不会各说各话）。
+///
+/// headless 读不到颜色，锁两件事：① 选中行分支真的跑了（`editor-result-row-selected`
+/// 哨兵，取不到就是 `render_tr` 没走选中分支）；② 选中行**压掉**斑马纹（同一条奇数行上
+/// `editor-result-row-odd` 必须消失——同一行只能铺一档色，否则两层叠加出偏色）。
+#[gpui_kit::test]
+fn selected_row_paints_a_whole_row_band(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+
+    // 选中第 1 行：它本身是奇数行（有斑马纹），正好验证「选中压掉斑马」
+    let mut delegate = grid_with(&[&["1", "a"], &["2", "b"], &["3", "c"]]);
+    delegate.set_selected_row(Some(1));
+    assert_eq!(
+        delegate.selected_view_row(),
+        Some(1),
+        "delegate 应记住组件报来的整行选中"
+    );
+    let (_, vcx) = cx.add_window_view(|window, cx| HeaderHarness {
+        state: cx.new(|cx| gpui_kit::component::table::TableState::new(delegate, window, cx)),
+    });
+
+    // 首帧只排位置，几何第二帧才稳定（配 retained 渲染内核尤其）
+    for _ in 0..2 {
+        vcx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+    }
+
+    let selected = vcx
+        .debug_bounds("editor-result-row-selected")
+        .expect("选中行应由 delegate 行容器铺色（取不到 → render_tr 没走选中分支）");
+    assert!(
+        selected.size.height >= gpui_kit::px(10.),
+        "选中行容器应有真实高度：selected={:?}",
+        selected.size.height
+    );
+    assert!(
+        vcx.debug_bounds("editor-result-row-odd").is_none(),
+        "选中的那一行不能再走斑马分支（同一行只能铺一档色）"
+    );
+
+    // 换结果集：上一份的行号不该跟到新数据上（否则新结果凭空多一行高亮）
+    let mut reused = grid_with(&[&["1", "a"], &["2", "b"], &["3", "c"]]);
+    reused.set_selected_row(Some(1));
+    reused.set_data(
+        vec!["id".to_string(), "name".to_string()],
+        vec![vec!["9".to_string(), "z".to_string()]],
+    );
+    assert_eq!(
+        reused.selected_view_row(),
+        None,
+        "换了一份结果，旧的整行选中应作废"
     );
 }
 

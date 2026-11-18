@@ -610,7 +610,7 @@ fn stats_tab_renders_toolbar_header_and_rows(cx: &mut gpui_kit::TestAppContext) 
         let grid: Entity<TableState<crate::grid::ResultGridDelegate>> =
             cx.new(|cx| TableState::new(delegate, window, cx));
         panel.update(cx, |p, cx| {
-            p.set_grids(grid, None, cx);
+            p.set_grids(grid, None, window, cx);
             // 列浏览器清单选中第 2 列（amount）→ 计算页作用列
             p.selected_col = Some(1);
             p.set_right_tab(RightTab::Stats, cx);
@@ -812,7 +812,7 @@ fn panel_harness<'a>(
         let grid: Entity<TableState<crate::grid::ResultGridDelegate>> =
             cx.new(|cx| TableState::new(delegate, window, cx));
         panel.update(cx, |p, cx| {
-            p.set_grids(grid, None, cx);
+            p.set_grids(grid, None, window, cx);
             p.selected_col = Some(1);
         });
         *slot_in.borrow_mut() = Some(panel.clone());
@@ -1020,4 +1020,48 @@ fn hex_page_clamps_to_the_last_page() {
     // 1KB = 4 页（每页 16 行 × 16 字节）
     assert_eq!(hex_page_clamp(1024, 3), (3, 4));
     assert_eq!(hex_page_clamp(1024, 4), (3, 4));
+}
+
+/// 【选中行 2026-11-18】接线用例：组件 `TableEvent::SelectRow` → 面板订阅 → delegate
+/// 镜像 → `render_tr` 整行铺色。
+///
+/// 为什么必须有这一条（而不只是测 delegate 字段）：面板是在**组件自己的事件回调**里
+/// 再 `grid.update` 一次，只有 gpui-fast 的 `Context::emit` 是**延迟派发**
+/// （`context.rs:738-753`，只把 `Effect::Emit` 排进 `pending_effects`）时这才成立；
+/// 万一将来改成同步派发，这条用例会以 double-lease panic 报错，而不是静默少一块底色。
+/// 另：`#` 列点第二下升级成整行选中是选整行的唯一入口（`grid/status.rs` 关了组件窄行头），
+/// 所以这条链路断了就等于「整行选中没有反馈」。
+#[gpui_kit::test]
+fn select_row_event_mirrors_into_the_delegate(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    // 网格句柄先取出来：`panel.read(app).grid().update(app, ..)` 会同时借 app 两次
+    let grid = cx.update(|_window, app| panel.read(app).grid().clone());
+
+    // 起点：没有整行选中（否则后面的断言可能被上一帧的残留糊弄过去）
+    let before = cx.update(|_window, app| grid.read(app).delegate().selected_view_row());
+    assert_eq!(before, None, "空起点：未选中整行时 delegate 不该有行号");
+
+    // 走生产入口：组件 `set_selected_row` 自己会 emit `TableEvent::SelectRow`
+    //（第 1 行是奇数行，正好能验证「选中压掉斑马纹」）
+    cx.update(|_window, app| {
+        grid.update(app, |state, cx| state.set_selected_row(1, cx));
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let mirrored = cx.update(|_window, app| grid.read(app).delegate().selected_view_row());
+    assert_eq!(
+        mirrored,
+        Some(1),
+        "面板订阅没把 `SelectRow` 镜像进 delegate（整行选中会没有底色）"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-row-selected").is_some(),
+        "选中行哨兵不在地：`render_tr` 没走选中分支"
+    );
+    // 「选中压掉斑马纹」的排他性交给 `grid/tests.rs::selected_row_paints_a_whole_row_band`
+    // 断言（那边整段不重绘，首帧就是唯一口径）。这里不能断言 `row-odd` 缺席：
+    // 本条先画过一帧未选中的画面，`debug_bounds` 的登记是**跨帧累积**的，
+    // 上一帧的斑马行会一直留在册子里。
 }

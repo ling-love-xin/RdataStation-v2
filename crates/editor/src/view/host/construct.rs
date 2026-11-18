@@ -168,7 +168,7 @@ impl EditorHostPanel {
         let result_action_queue = ResultActionQueue::new();
         let result_panel = cx.new(|cx| {
             let mut panel = ResultPanel::new(window, cx, result_action_queue.clone());
-            panel.set_grids(grid.clone(), Some(compare_grid.clone()), cx);
+            panel.set_grids(grid.clone(), Some(compare_grid.clone()), window, cx);
             // 【B2】全局偏好 `result_panel.show_column_comments` 启动时同步到面板（面板级临时开关
             // 覆盖此默认值；用户在面板工具栏切换后不再回写全局——全局只控"默认开不开"）
             if let Some(settings) = cx.try_global::<settings::model::Settings>() {
@@ -228,6 +228,16 @@ impl EditorHostPanel {
                         })
                     }
                     TableEvent::SelectRow(row) => {
+                        // 【选中行】整行选中要在网格上看得见：组件自己**不给**选中行铺色
+                        // （vendor `table/state.rs:2249` 的 `is_selected` 只决定行底线与
+                        // hover 抑制），由 delegate 的 `render_tr` 铺整行色，所以把行号
+                        // 镜像进去。组件发完事件已自刷新（`set_selected_row` 末尾
+                        // `cx.notify()`），这里不再 notify。
+                        grid.update(cx, |state, _cx| {
+                            state
+                                .delegate_mut()
+                                .set_selected_row(Some(*row))
+                        });
                         result_panel.update(cx, |panel, cx| {
                             panel.set_selected_cell(None, cx);
                             // 【侧栏】选整行不投影单格值详情
@@ -236,6 +246,8 @@ impl EditorHostPanel {
                         Some(result_grid::GridSelection::Row { row: *row })
                     }
                     TableEvent::ClearSelection => {
+                        // 【选中行】清除选择也把整行色撤掉（否则旧行一直亮着）
+                        grid.update(cx, |state, _cx| state.delegate_mut().set_selected_row(None));
                         result_panel.update(cx, |panel, cx| {
                             panel.set_selected_cell(None, cx);
                             panel.set_selection_pos(None, window, cx);
