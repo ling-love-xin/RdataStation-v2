@@ -205,6 +205,8 @@ impl ResultPanel {
             filter_settings_open: false,
             filter_order_input,
             filter_order: String::new(),
+            // 【筛选设置】默认停在「列约束」页（DBeaver 对话框先建列页并 setSelection(0)）
+            filter_settings_tab: crate::ports::FilterSettingsTab::Columns,
             presentation: Presentation::Grid,
             right_tab: RightTab::Browser,
             // 【R2 计算页】默认全集（与 DBeaver `loadDefaultFunctions` 同口径：默认函数全上）

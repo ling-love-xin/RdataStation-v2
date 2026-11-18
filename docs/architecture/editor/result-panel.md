@@ -3802,6 +3802,7 @@ WHERE <条件>` + `ORDER BY` 外提 + `dropped_limit` 回报），只差条件�
   理由是「同一个 `InputState` 只渲染一处」的硬约束，避免两处同时可编辑。
 - 「Columns」页签（列约束树 + 列可见勾选 + 列顺序移动）未做。本仓对等能力已分散在列头菜单
   （列级值筛选 / 清除）、列浏览器（隐藏列）、排序下发（单列），缺的是「集中管理界面」。
+  **（已由 §8.71 补上页签与列清单的可见 / 冻结切换；criteria / order / 列序移动仍在册。）**
 - 自定义排序目前只作用于**本次重查**（不入状态历史、不落盘），与 DBeaver 的
   `dataFilter.setOrder` 每次应用即生效同口径；是否入历史属待拍板项。
 
@@ -3817,6 +3818,66 @@ WHERE <条件>` + `ORDER BY` 外提 + `dropped_limit` 回报），只差条件�
 `invalid metadata files for crate similar`、`memory allocation of … failed` 三种假错——
 **都不是代码问题**：等并行线结束、`CARGO_BUILD_JOBS=2` 重跑即过。
 另：临时设 `CARGO_INCREMENTAL=0` 会让整条依赖链重编译，在低内存机器上必然 OOM，不要用。
+
+
+### 8.71 筛选设置浮层扩成两页签，「列约束」页的可见 / 冻结是真的能切（2026-11-18）
+
+**起点**：§8.70 把 `filtersCustomButton` 落地时只做了 DBeaver `FilterSettingsDialog`
+的**第二个**页签（Custom）。DBeaver 那份对话框是 `CTabFolder` 两页、**先建列页并
+`setSelection(0)`**（`FilterSettingsDialog.java:329-451`）——即默认停在「Columns」页。
+本批把浮层补成两页签，并把列页做成真控件。
+
+**取证（DBeaver Columns 页签的完整列集与工具条）**
+
+- 列：名称 `addColumn(...)` `:129`；**可见** `addBooleanColumn(...)` `:148`；**固定(pinned)**
+  `:178`；`order`（文本 `" " + constraint.getOrderPosition()`，`:214/223`）；`criteria`
+  （`SQLUtils.getConstraintCondition(...)`，`:230/239` 清空）；原位置 = `getOriginalVisualPosition()+1`
+  `:144`。
+- 工具条（`:278-318`）：移顶 `ARROW_TOP` → 上移 `ARROW_UP` → 下移 `ARROW_DOWN` → 移底
+  `ARROW_BOTTOM` → 排序 `SORT` → 全部显示 → 全部隐藏 → 重置 `ARROW_RESET`。
+  底层动作：`moveSelectedItems(reverse, singleStep)` `:529`、`moveColumns(curIndex,newIndex)`
+  `:399`、`swapVisualPositions` `:388`、`toggleColumnOrder` `:703`、`CheckStateProvider`（列可见）
+  `:612`、`FilterSettingsTreeEditor`（criteria 单元格编辑）`:649`。
+- 默认页：列页（与「先建列页 + `setSelection(0)`」一致）。
+
+**本批落点**
+
+1. `ports.rs`：新枚举 `FilterSettingsTab { Columns（默认）, Custom }` + 请求
+   `SetFilterSettingsTab(FilterSettingsTab)`。
+2. 面板状态：`filter_settings_tab`（默认 `Columns`）；`set_filter_settings_tab`（纯 UI 状态，
+   不入任何请求）；只读投影 `column_constraint_rows(cx) -> Vec<(列名, 可见, 冻结)>`，
+   按**数据列序**从网格 delegate 现算（不做缓存、不在 render 里写任何状态）。
+3. 浮层：`render_filter_settings` 改成「标题行 → 页签条（`TabBar::segmented` + 两个 `Tab`）→
+   页内容 → 页脚」。页签条挂 `editor-result-filter-settings-tabs` / `-tabbar`；
+   页内容分两支：`render_filter_settings_columns`（列清单表头 + 行 + 位置号）与
+   `render_filter_settings_custom`（§8.70 的 WHERE 只读回显 + 自定义 ORDER BY）。
+4. 列页的真控件：每行 `(列名 | 可见 Checkbox | 冻结 Checkbox | #位置号)`，
+   行 id `editor-result-filter-settings-row-{i}`、勾选 id `-vis-{i}` / `-pin-{i}`。
+   勾选回调**就地改 delegate**（与列头菜单同一条先例路径）：可见 →
+   `delegate_mut().set_columns_hidden(&[i], !show)`（内部仍有「至少留 1 列」兜底）；
+   冻结 → `delegate_mut().toggle_freeze(i)`；随后 `state.refresh(cx)` 并
+   `queue.request(ColumnLayoutChanged)` → 宿主 `save_session_now`，即落盘通道与列头菜单完全相同。
+5. 页脚：列页的「应用」置灰（列改动是即时的，没有待提交草稿），提示文案改为
+   「列约束改完即时生效（与列头菜单同一通道落盘）」；自定义页保持「应用 = 重查替换」。
+6. 尺寸：列清单区 `max_h(rems(18.))` + `overflow_y_scrollbar()`，宽度仍走
+   `ui::RESULT_FILTER_SETTINGS_WIDTH`；本批未引入任何裸 `px`（`rds-ui-guard` 4 条仍绿）。
+
+**与 DBeaver 的差异（在册，非漏做）**
+
+- **criteria 列**（列级条件）未做：本仓列级条件走列头菜单（`FilterColumnValue` /
+  `ClearColumnFilter`），**没有可投影的持久列条件状态**；要做先得把列条件提升为面板状态。
+- **order 列**（点击切 ASC/DESC）未做：本仓排序走服务端下发（`set_column_order`），
+  与 DBeaver 的「约束 sort 只影响本地视图」不同口径。
+- **工具条 8 项**（移顶/上移/下移/移底/排序/全显/全隐/重置）未做：本仓已有
+  `set_columns_hidden`（批量显隐）、`toggle_freeze`、`show_all_columns`，
+  列序移动实现存在（`grid/table_impl.rs::move_column`）但未接任何 UI。
+- 页签切换不做键盘左右键漫游（`TabBar` 自身管焦点，未额外绑键）。
+
+**验证**：`cargo test -p rds-result-panel --lib` = **282 passed**（新增
+`filter_settings_columns_tab_projects_the_grid_column_state`：默认停在列页 + 切页不入队 +
+列清单初始两列可见未冻结 + 隐藏第 1 列后投影变 `false` + 冻结第 2 列后投影变 `true`）；
+`cargo test -p rds-editor --lib results` = 45 passed；`cargo test -p rds-ui-guard` = 4 passed；
+`cargo check -p rds-result-panel -p rds-editor` = 0 error / 0 warning。
 
 
 ## 8. 协作纪律

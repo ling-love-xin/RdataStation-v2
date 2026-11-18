@@ -171,6 +171,10 @@ impl EditorHostPanel {
                 where_text,
                 order_text,
             } => self.run_custom_filter(where_text, order_text, cx),
+            // 【筛选设置】切页签（列约束 / 自定义条件）：纯 UI 状态，宿主只转发
+            ResultRequest::SetFilterSettingsTab(tab) => self
+                .result_panel
+                .update(cx, |p, cx| p.set_filter_settings_tab(tab, cx)),
             // 【1.2】复制「执行SQL」页签里的 wrapped SQL
             ResultRequest::CopyExecSql => {
                 let sql = self

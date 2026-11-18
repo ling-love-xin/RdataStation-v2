@@ -102,6 +102,11 @@ pub enum ResultRequest {
     /// 【筛选设置】点「应用」：面板在读输入框值的路径上（要 `&mut Context`）转手，
     /// 由宿主调 [`ResultPanel::apply_filter_settings`] 读出草稿并入队下面那条带参请求
     CommitFilterSettings,
+    /// 【筛选设置】切换页签：对齐 DBeaver `FilterSettingsDialog` 的两个页签
+    /// （「Columns」= 列约束树，`FilterSettingsDialog.java:329-330`；
+    /// 「Custom」= whereText / orderText，`:450-451`）。默认停在 **Columns**
+    /// （对话框先建列页、`tabFolder.setSelection(0)`）。
+    SetFilterSettingsTab(FilterSettingsTab),
     /// 【筛选设置】应用：`where` 回填筛选框并生效，`order` 是自定义排序文本
     /// （空 = 不自定义，沿用原查询的 ORDER BY）。宿主按两者重查替换当前结果集
     /// （对齐 DBeaver `FilterSettingsDialog` 的 Custom 页签：
@@ -415,6 +420,16 @@ pub enum RightTab {
     /// 【1.2】执行 SQL：筛选框运行后生成的 wrapped SQL（`select * from (原SQL) where …`）
     /// 原文展示（只读 + 复制）。执行完成后自动切到此页签。
     ExecSql,
+}
+
+/// 【筛选设置】浮层页签（对齐 DBeaver `FilterSettingsDialog` 的两页）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FilterSettingsTab {
+    /// 列约束：列名 / 可见 / 冻结 / 位置（默认；DBeaver 先建这一页并 `setSelection(0)`）
+    #[default]
+    Columns,
+    /// 自定义条件：WHERE（只读回显筛选框）+ 自定义 ORDER BY（可编辑）
+    Custom,
 }
 
 /// 结果动作队列（`Rc<RefCell<Vec<_>>>` 共享句柄）

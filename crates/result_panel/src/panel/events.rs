@@ -462,6 +462,39 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【筛选设置】切换页签（`FilterSettingsTab`：列约束 / 自定义）
+    pub fn set_filter_settings_tab(
+        &mut self,
+        tab: crate::ports::FilterSettingsTab,
+        cx: &mut Context<Self>,
+    ) {
+        if self.filter_settings_tab != tab {
+            self.filter_settings_tab = tab;
+            cx.notify();
+        }
+    }
+
+    /// 【筛选设置 · 列约束】当前列清单快照：`(列名, 可见, 冻结)`，按**数据列序**。
+    ///
+    /// DBeaver 的 Columns 页签是列约束树（名称 / 位置 / 可见 / 固定 / order / criteria，
+    /// `FilterSettingsDialog.java:129-243`）。本仓的「可见 / 冻结」状态权威在网格 delegate，
+    /// 这里只是只读投影——渲染期读，不做任何写入。
+    pub fn column_constraint_rows(&self, cx: &App) -> Vec<(String, bool, bool)> {
+        let delegate = self.grid.read(cx).delegate();
+        delegate
+            .columns()
+            .iter()
+            .enumerate()
+            .map(|(index, name)| {
+                (
+                    name.clone(),
+                    !delegate.is_hidden_column(index),
+                    delegate.is_frozen(index),
+                )
+            })
+            .collect()
+    }
+
     /// 应用：读出排序草稿 → 入队 [`ResultRequest::ApplyFilterSettings`]
     /// （WHERE 取筛选框当前文本，重查由宿主完成——面板不持有执行能力）
     pub fn apply_filter_settings(&mut self, cx: &mut Context<Self>) {

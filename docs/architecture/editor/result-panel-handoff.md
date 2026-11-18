@@ -1299,6 +1299,28 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   WHERE 在对话框内可编辑 vs 本仓只读；自定义排序不入状态历史 / 不落盘。
 - **验证**：sql 17 / panel **281** / editor 45 / guard 4 / check 0-0。
 
+### 2.60 筛选设置浮层扩成两页签，「列约束」页可见 / 冻结真能切（2026-11-18）
+
+全文见 `result-panel.md §8.71`。接手要点：
+
+- DBeaver 那份 `FilterSettingsDialog` 是 `CTabFolder` **两页**、**先建列页并 `setSelection(0)`**；
+  §8.70 只落了 Custom 页，本批补成「列约束 / 自定义条件」两页签，默认停在列约束。
+- 页签是纯 UI 状态：`FilterSettingsTab { Columns（默认）, Custom }` + 请求
+  `SetFilterSettingsTab`，面板 `set_filter_settings_tab`（不入队任何重查）。
+- 列页的**列清单不是假控件**：`column_constraint_rows(cx)` 从网格 delegate 现算
+  `(列名, 可见, 冻结)`；勾选回调就地改 delegate（`set_columns_hidden` / `toggle_freeze`）
+  + `ColumnLayoutChanged`，落盘通道与列头菜单完全一致。列页的「应用」因此置灰。
+- **仍在册**：criteria 列（本仓列级条件走列头菜单，无持久状态可投影）、order 列
+  （排序走服务端下发）、工具条 8 项（移顶/上移/下移/移底/排序/全显/全隐/重置；
+  列序移动 `grid/table_impl.rs::move_column` 已实现但没接 UI）。
+- 三条已踩过的 vendor 事实（别再撞）：`gpui_component::checkbox::Checkbox::on_click/on_change`
+  是 **3 参** `Fn(&bool, &mut Window, &mut App)`（不是 gpui-base 的 4 参）；
+  `Tab::new()` **无参**（没有逐页 id）；`TabBar::with_size(Size::Small)` 在
+  `panel/dialog.rs` 会报 `gpui_kit::Size<T>` 无 `Small`（`sidebars.rs` 同写法却能过，原因未查明），
+  本批直接不设 size。
+- **验证**：panel **282**（新增 `filter_settings_columns_tab_projects_the_grid_column_state`）/
+  editor 45 / guard 4 / check 0-0。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）

@@ -36,7 +36,9 @@ use crate::column_browser::ColumnBrowserDelegate;
 use crate::error_card::ErrorCard;
 use crate::export;
 use crate::grid::{ResultGridDelegate, ResultStatus, ResultToolbar};
-use crate::ports::{GroupSort, Presentation, ResultActionQueue, RightTab, StatsItem, StatsMode};
+use crate::ports::{
+    FilterSettingsTab, GroupSort, Presentation, ResultActionQueue, RightTab, StatsItem, StatsMode,
+};
 use crate::script_card::ScriptCard;
 use crate::sets::ResultSetTab;
 use workbench_shell::model::ColumnAnnotation;
@@ -367,4 +369,6 @@ pub struct ResultPanel {
     pub(crate) filter_order_input: Entity<InputState>,
     /// 已生效的自定义排序文本（空 = 沿用原查询的 ORDER BY）；打开浮层时用它回填
     pub(crate) filter_order: String,
+    /// 浮层当前页签（默认「列约束」——DBeaver 对话框先建列页并选中它）
+    pub(crate) filter_settings_tab: FilterSettingsTab,
 }

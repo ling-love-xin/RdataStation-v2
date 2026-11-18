@@ -1861,6 +1861,78 @@ fn status_row_pager_follows_dbeaver_nav_order(cx: &mut gpui_kit::TestAppContext)
     );
 }
 
+/// 【筛选设置 · 列约束】页签切换 + 列清单投影跟着 delegate 的真实状态走。
+///
+/// 对齐 DBeaver `FilterSettingsDialog` 的 Columns 页签（`addColumn` 名称 `:129`、
+/// `addBooleanColumn` 可见 `:148` / 固定 `:178`）。这里钉的是本仓这一侧的两件事实：
+/// ① 页签状态真的切（默认停在列页，与 DBeaver `setSelection(0)` 一致）；
+/// ② 列清单不是假的——隐藏 / 冻结改在网格 delegate 上，投影立刻反映出来。
+#[gpui_kit::test]
+fn filter_settings_columns_tab_projects_the_grid_column_state(cx: &mut gpui_kit::TestAppContext) {
+    use crate::ports::FilterSettingsTab;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 默认页签 = 列约束（DBeaver 对话框先建列页）
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.filter_settings_tab),
+        FilterSettingsTab::Columns,
+        "浮层默认应停在列约束页"
+    );
+
+    // 切到自定义条件页再切回来（纯 UI 状态，不入任何请求）
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.set_filter_settings_tab(FilterSettingsTab::Custom, cx)
+        })
+    });
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.filter_settings_tab),
+        FilterSettingsTab::Custom
+    );
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.set_filter_settings_tab(FilterSettingsTab::Columns, cx)
+        })
+    });
+    assert!(
+        panel.read_with(cx, |p, _| p.queue.is_empty()),
+        "切页签不该入队请求"
+    );
+
+    // 列清单初始：两列都可见、都没冻结
+    let rows = panel.read_with(cx, |p, app| p.column_constraint_rows(app));
+    assert_eq!(
+        rows,
+        vec![
+            ("id".to_string(), true, false),
+            ("amount".to_string(), true, false)
+        ],
+        "初始列清单应是「两列都可见、未冻结」"
+    );
+
+    // 隐藏第 1 列（走与列浏览器同一通道的批量接口），投影应立刻变 false
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| p.set_columns_hidden(vec![0], true, cx))
+    });
+    let rows = panel.read_with(cx, |p, app| p.column_constraint_rows(app));
+    assert!(!rows[0].1, "隐藏后 id 列应显示为不可见：{rows:?}");
+    assert!(rows[1].1, "另一列不该被牵连：{rows:?}");
+
+    // 冻结第 2 列（直接改 delegate，与列头菜单 ToggleFreeze 同一条路）
+    cx.update(|_window, app| {
+        let grid = panel.read(app).grid.clone();
+        grid.update(app, |state, app| {
+            state.delegate_mut().toggle_freeze(1);
+            state.refresh(app);
+        });
+    });
+    let rows = panel.read_with(cx, |p, app| p.column_constraint_rows(app));
+    assert!(rows[1].2, "冻结后 amount 列应显示为已冻结：{rows:?}");
+    assert!(!rows[0].2, "id 列不该被冻结：{rows:?}");
+}
+
 /// 【筛选设置】浮层开关 + 应用入队（对齐 DBeaver `filtersCustomButton` →
 /// `FilterSettingsDialog` 的 Custom 页签：`whereText` / `orderText` → `setWhere` / `setOrder`）。
 ///
