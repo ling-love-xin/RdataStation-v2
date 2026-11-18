@@ -1476,6 +1476,25 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   别先怀疑约束过滤。
 
 
+### 2.71 分组页「移除分组列」的接手要点（2026-11-18）
+
+- 可用性判定集中在纯函数 `panel::tabs::can_remove_group_column(group_columns, selected)`：
+  **选中列在显式分组键里 + 移除后仍 ≥1 列**才可用（对齐 DBeaver
+  `GroupingColumnsContainer.canColumnBeRemoved` `:92-94` 的「不许删到零」）。
+  删到零走「清空分组」（`ClearGroupColumns`），两条路径别合并。
+- 移除动作**复用** `ResultRequest::ToggleGroupColumn`（与下拉取消勾选同一条路径）。
+  要改移除语义（比如只允许从末尾删）就改这个端口，别在按钮回调里各写一份。
+- 分组页动作顺序对齐 `GroupingPanel.fillToolBar:164-176` 的段位：
+  列下拉（≈`EditColumns` 轻量形态）→ 排序口径 → 仅重复 → 移除分组列 → 清空分组。
+  排序口径与 DBeaver 的 `Unsorted/Asc/Desc` **不是同一件事**（本仓是本地聚合、
+  按值 / 按计数两态），不要为了「看起来一样」加一个永远不生效的三态（见 §8.83）。
+- 已知偏离：本仓下拉可以把分组键全取消（落回「选中列兜底」），DBeaver 的逐列删除
+  禁止删到零；终态不同但都不会出现「零分组键却有结果」。
+- 门禁基线：result_panel **314 passed**；`cargo check -p rds-editor` Finished。
+  **整包 check 的注意点**：并行线在 `crates/connection_dialog/src/components/connection_dialog/`
+  有未提交改动时（曾出现 `render.rs` 里 `result` 字段重复），`cargo check -p rds-workbench`
+  会因依赖它而失败——先看清报错归属，别当成自己改坏，也别替并行线修。
+
 ### 2.70 列浏览器「复制列名」与嵌套列 N/A 的接手要点（2026-11-18）
 
 - 「复制列名」= `ContextAction::CopyColumnNames`（**无载荷**）+ 清单侧纯函数

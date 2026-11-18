@@ -4435,6 +4435,48 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
 留待目视统一处理阶段。
 
 
+### 8.83 分组页补「移除分组列」（对齐 DBeaver `DeleteColumnAction`，2026-11-18）
+
+**取证**（`panel/grouping/`）：
+- `GroupingPanel.fillToolBar`（`:164-176`）的动作顺序：`Sort`（下拉，FORCE_TEXT）→
+  `DuplicatesOnly` → 分隔 → `EditColumns` → `DeleteColumn` → 分隔 → `ClearGrouping` → 分隔 → 扩展动作。
+- `DeleteColumnAction`（`DeleteColumnAction.java:39-77`）：作用于**分组视图自己的选中列**，
+  `readyToRemoveIndexes` 由选中属性映射到分组结果列下标得到；`isEnabled()` =
+  集合非空；`run()` 按下标**降序**移除后 `rebuildGrouping()`（重跑 `GROUP BY` SQL）。
+- 可删判定 `GroupingColumnsContainer.canColumnBeRemoved`（`:92-94`）：
+  `isValidIndex && (分组属性数 > 1 : 聚合函数数 > 1)` —— **不许删到零**，清空归 `ClearGroupingAction`。
+- 文案：`controls_resultset_grouping_remove_column = Remove grouping column`（`:24`）、
+  `controls_resultset_grouping_clear = Clear grouping`（`:25`）、
+  `controls_resultset_grouping_show_duplicates_only = Show duplicates only (COUNT > 1)`（`:27`）。
+
+**本仓落点**：
+- 纯函数 `panel::tabs::can_remove_group_column(group_columns, selected) -> bool`：
+  选中列在显式分组键里、且**移除后仍≥1 列**才可用；无显式键（走选中列兜底）时不可用。
+- 分组页工具条新增「移除分组列」钮（`IconName::CircleMinus`、id
+  `editor-result-group-remove`、`debug_selector` 同名），点击**复用**
+  `ResultRequest::ToggleGroupColumn`（下拉取消勾选是同一条路径，不新增端口/状态）。
+- 动作顺序改为：分组列下拉（≈`EditColumns` 的轻量形态）→ 排序口径 → 仅重复 →
+  移除分组列 → 清空分组，与 DBeaver 的「编辑 / 删除 / 清空」分组同一段位。
+- 「仅重复」的 tooltip 文案对齐 DBeaver 原话（`Show duplicates only (COUNT > 1)`）。
+
+**有意偏离**：
+- DBeaver 的 `Sort` 是 `Unsorted / Ascending / Descending` 三选下拉（`ChangeSortingAction`，
+  改的是 `RS_GROUPING_DEFAULT_SORTING` 偏好 + 重跑 SQL）；本仓分组是**本地聚合**
+  （`group_by_columns_for` + `arrange_groups`，不重查源库），排序口径是「按值 / 按计数」两态
+  ——两边的「排序」不是同一件事，不强行改成三态（否则会出现一个永远不生效的 `Unsorted`）。
+- DBeaver 的 `EditColumns` 打开 `GroupingConfigDialog`（列 + 聚合函数配置）；本仓用勾选式
+  下拉 + 计算页承担同样职责，不引入对话框。
+- 本仓下拉允许把分组键全部取消（落回「选中列兜底」），DBeaver 的逐列删除禁止删到零；
+  两者的终态不同（本仓不会出现「零分组键但有结果」的状态），属表单差异而非行为缺失。
+
+**验证**：
+- `panel::tests::remove_group_column_guards_the_last_key`（空键 / 单列 / 双列两向 / 不在集合 / 无选中，六路）。
+- `panel::tests::group_toolbar_offers_the_remove_column_action`：切到分组页后五个入口
+  （列下拉 / 排序口径 / 仅重复 / 移除 / 清空）都在渲染观测里。
+
+**已知缺口**：DBeaver 删除后重跑 `GROUP BY` 拿新结果；本仓是本地重算（无需 round-trip）。
+
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
