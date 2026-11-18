@@ -2,7 +2,7 @@
 
 > 适用：所有 GPUI 视图代码（`crates/*/src/**` 中的 `Div` / 组件调用）。
 > 定位：与 `theme-design.md`（颜色 token）互补——**颜色早已有硬约束，本文件补齐尺寸与排版约束**。
-> 代码常量落点：`crates/workbench/src/components/connection_dialog/helpers.rs`（`GAP_*` / `LABEL_W` / `BADGE_*` / …）。
+> 代码常量落点：`crates/connection_dialog/src/components/connection_dialog/helpers.rs`（`GAP_*` / `LABEL_W` / `BADGE_*` / …）。
 
 ---
 

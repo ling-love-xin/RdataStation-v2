@@ -8,7 +8,7 @@
 
 | 维度 | 基准 | 说明 |
 | --- | --- | --- |
-| 布局 | v1 v5 原型 | 模态对话框：标题栏 + 左侧栏（搜索/暂存/类型树）+ 右侧主面板（Header 三行 / 五 Tab / 内容区）+ 底部操作栏 |
+| 布局 | v1 v5 原型 | 模态对话框：标题栏 + 左侧栏（搜索/暂存/类型树）+ 右侧主面板（Header 三行 / Tab 页 / 内容区）+ 底部操作栏。**注（2026-11-18）**：Tab 已收敛为「常规 / 网络 / 高级」（文件型两页），能力与驱动属性并入高级页 |
 | 配色 | theme-design.md | 对话框=popover token；侧栏=sidebar token；选中项=coral 左边条；主按钮=primary coral |
 | 机制 | DataGrip + v1 后端设计 | 数据源=连接配置（driver/auth/network/env 引用），测试→保存→内省闭环 |
 | 后端契约 | v1 DATA-SOURCE-MODULE.md / DATASOURCE-DRIVER-ARCHITECTURE.md | drivers.config_schema 驱动表单；auth_configs AES-256-GCM；network_configs 协议链；environments+policies |
@@ -90,7 +90,9 @@
 - 与作用域的关系：草稿仅在保存时落库（G_/P_/GP_ 语义不变）；已保存条目的来源短码在对话框内仅供辨识（导航栏展示归 database-nav）。
 - 实现约束：草稿为**状态快照**（新增 / 编辑共用同一套字段；与 `load_for_edit` 的回读语义对齐），列表状态存 `ConnectionDialogState`（对话框层关闭不销毁，故草稿天然保留）。
 
-## 3. 五 Tab 内容（对照 v5 原型）
+## 3. Tab 页内容（对照 v5 原型）
+
+> **注（2026-11-18）**：本节保留 v5 原型的五页划分作历史对照；实现已收敛为「常规 / 网络 / 高级」三页（文件型两页），能力清单（只读）与驱动属性并入高级页，驱动属性置于页首。
 
 ### 3.1 常规（tab-general）—— 单列分组大纲（**按驱动动态渲染**）
 
@@ -225,7 +227,7 @@ info-banner（类型 · 驱动短名 · 特性）        ← 常驻，不参与�
 
 | 原型元素 | GPUI 落点 |
 | --- | --- |
-| 对话框 | `crates/workbench/src/components/connection_dialog/`（`render.rs` 为元素树；模态层 `window.open_dialog` + 宿主 `Root::render_dialog_layer`） |
+| 对话框 | `crates/connection_dialog/src/components/connection_dialog/`（`render.rs` 为元素树；模态层 `window.open_dialog` + 宿主 `Root::render_dialog_layer`） |
 | 标题栏/窗口点 | gpui-kit `TitleBar` 或自绘；窗口点由宿主窗口控制 |
 | 类型树/暂存列表 | 自绘行（`render.rs`）；草稿为状态快照（见 §2.2），**不从库并入已保存连接**；持久化在 `staging.rs` + `engine::persistence::connection_draft_store` |
 | 快捷键（Ctrl+Enter / Ctrl+T / ↑↓） | `crates/workbench/src/commands.rs`（Action）+ `crates/app/src/main.rs`（`bind_keys`，context `"connection-dialog"`）+ `render.rs` 容器 handler |
@@ -234,7 +236,7 @@ info-banner（类型 · 驱动短名 · 特性）        ← 常驻，不参与�
 | 认证/网络/环境配置 | 对接 engine `auth_store` / `network_store` / `env_store` |
 | 测试连接 | `DataSourceService::test_connection`（独立会话） |
 | 保存链路 | `DataSourceService::save` → global_db + Secret 联动 + introspection |
-| 五 Tab | **Tab 条为组件**（`TabBar::underline()`，Small 档；自绘属已清理的技术债）：两列同一行（行高 `DIALOG_BODY_HEIGHT`），**右列 = Header → Tab 条 → Tab 内容区（`flex_1 + min_h_0` 填满剩余高度）→ 结果行**（各子项之和不得超出行高）；文件型驱动隐藏「网络」Tab（索引不变） |
+| Tab 页 | **Tab 条为组件**（`TabBar::underline()`，Small 档；自绘属已清理的技术债）：两列同一行（行高 `DIALOG_BODY_HEIGHT`），**右列 = Header → Tab 条 → Tab 内容区（`flex_1 + min_h_0` 填满剩余高度）→ 结果行**（各子项之和不得超出行高）；文件型驱动隐藏「网络」Tab（索引不变） |
 | 项目栏 | `project_picker.rs`（`ProjectItem` = 项目名 + 路径双列，末项「＋ 新增项目」）；`state.rs::handle_project_confirm` 为确认落点；宿主（`view.rs`）消费 `Shared::project_new_request` → `project::ui::open_create_dialog` |
 
 ## 7. 开放问题

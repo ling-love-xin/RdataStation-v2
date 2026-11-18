@@ -149,7 +149,7 @@
 | D11 凭据与脱敏 | `crates/engine/src/duckdb/accel.rs`（`AccelSource::new` / `scrub_credentials`）+ `crates/engine/tests/federation_credentials_probe.rs` |
 | D14 L2 挂载差异（Secret / 无只读 / 两段名） | `.../federation/registry.rs`（`SourceSecret` + `oracle_secret_from_url`）+ `.../federation/session.rs`（`ensure_secret` / `attach_source` / `l2_write_refusal`，✅ T3.2）+ 扩展仓库选择 `accel::install_sql` + 真机验收 `crates/workbench/tests/oracle_federation.rs`（✅） |
 | D13 门控口径 | `crates/workbench/src/services/editor_channels.rs`（`federated_availability`） |
-| D15 源登记（复用开关） | `crates/workbench/src/components/connection_dialog/render.rs`（「DuckDB 直连（本地加速 / 用作联邦源）」分组） |
+| D15 源登记（复用开关） | `crates/connection_dialog/src/components/connection_dialog/render.rs`（「DuckDB 直连（本地加速 / 用作联邦源）」分组） |
 | D16 从记录组装源 | `crates/workbench/src/services/editor_exec.rs`（`federated_plan` / `plan_from_records`）+ `accel::normalize_scheme`（驱动 id → 扫描器 scheme） |
 | 源清单（数据 / 菜单模型 / 视图 / 动作） | `crates/editor/src/sources.rs` + `editor/view/host.rs`（`render_sources_picker`）+ `workbench/src/services/editor_sources.rs` + `editor/src/execution.rs`（`SourceAction` / `SourceNote`） |
 | 联邦档执行路径 / 源清单组装 | `crates/workbench/src/services/editor_exec.rs`（`federated_plan` / `run_on_federation`） |
