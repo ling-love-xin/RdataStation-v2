@@ -1492,10 +1492,12 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   本仓 `ColumnAnnotation`（`workbench_shell/src/model.rs:327`）与驱动 `ColumnDetail`
   （`shared/src/meta.rs:46`）都**没有 children 字段**。要做树得先改元数据模型（让驱动报
   `STRUCT` 子字段），面板层补不出来——不要用「按名字前缀猜层级」之类的假实现。
-- 下一处可见缺口：清单行不显示**列注释**（DBeaver 的额外列 `Description`，
-  `addExtraColumns` `:292-302`）。注释其实已经在 `ColumnBrowserDelegate::comments`
-  里（现在只参与搜索匹配），要显示它只需在 `render_item` 行尾加一格 + 记一条 §8.x。
-- 门禁基线：result_panel **310 passed**（本批 +1 例）。
+- 清单行**第二行是列注释**（DBeaver 的额外列 `Description`，`addExtraColumns` `:292-302`）；
+  值来自 `ColumnBrowserDelegate::comments`（网格 delegate 的 `column_annotations()`），
+  缺省（`None` / 空串 / 纯空白）不占行。别把它挪回第三列——窄侧栏（默认 320px）摆不下
+  三列；要加宽显示就改 `RESULT_SIDEBAR_RIGHT_WIDTH` 的默认值，不是改行结构。
+  第二行是单行截断，长注释看不全（记录在 §8.82 已知缺口）。
+- 门禁基线：result_panel **312 passed**（本批 +2 例：复制列名纯函数 + 注释行渲染/反证）。
 
 ### 2.69 「查看引用行」的接手要点（B′ 已接，多行与跨 schema 未接，2026-11-18）
 

@@ -4402,8 +4402,37 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
 - **「生成 DDL」**（`contributeActions` `:203-215` 贡献 `generate.ddl.by.resultSet`）：本仓
   第 18 批已落地（§8.77 / §2.67），口径一致。
 
-**已知缺口**：清单不显示列注释（DBeaver 的第二列）；树形嵌套列 N/A（见上）；
-清单右键不提供「折叠 / 展开全部」（无树即无此动作）。
+**已知缺口**：树形嵌套列 N/A（见上）；清单右键不提供「折叠 / 展开全部」（无树即无此动作）。
+列注释已在本批补上（原缺口，见 §8.82）。
+
+
+### 8.82 列浏览器清单的列注释第二行（对齐 DBeaver `addExtraColumns`，2026-11-18）
+
+**取证**：`MetaDataPanel.addExtraColumns`（`:292-302`）给清单加了第二列
+`Description`，值取 `entityAttribute.getDescription()`（即列的注释，来自表元数据），
+没有注释时该格空白。
+
+**本仓形态差异（有意）**：本仓右栏是**窄侧栏**（默认 320px，可拖到 192–640px），
+三列摆不下（列名 + 类型名已占满）。因此注释走**列名下的第二行**，而不是第三列：
+同一份数据、换形态，不是丢数据。
+
+**落点**：
+- `column_browser.rs` 纯函数 `browser_comment_text(comment: &Option<String>) -> Option<String>`：
+  `None` / 空串 / 纯空白 → `None`（不占第二行）；有内容则去首尾空白后原样显示。
+- `render_item`：行内容从「列名 / 类型名 / 眼睛」的水平三段改为
+  「（列名 + 注释第二行）竖排 / 类型名 / 眼睛」，注释行 `debug_selector` =
+  `editor-result-col-browser-comment`（缺省不渲染）。
+- 注释来源不变：`ColumnBrowserDelegate::comments` ← 网格 delegate 的
+  `column_annotations()`（`sync` 每帧重灌），即结果集的列注解，不是另开一次元数据查询。
+
+**验证**：
+- `panel::tests::browser_comment_skips_empty_and_blank`（`None` / 空串 / 空白 / 去首尾空白四路）。
+- `panel::tests::column_browser_draws_the_comment_line_below_the_name`：有注释 → 该元素出现在
+  渲染观测里；把两列注释都清空再画一帧 → 元素消失（反证「不画空行」）。
+
+**已知缺口**：第二行是**单行截断**（`truncate()`，长注释看不全，DBeaver 的列可横向滚动）；
+没有「按注释搜索后高亮匹配片段」。两者都属目视/交互细化，与本线「结构与行为」口径不冲突，
+留待目视统一处理阶段。
 
 
 ## 8. 协作纪律
