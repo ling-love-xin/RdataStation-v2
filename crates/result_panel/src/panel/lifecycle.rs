@@ -90,7 +90,8 @@ impl ResultPanel {
 
         // 【R6 段大小】状态行「一段」行数输入框（对齐 DBeaver `resultSetSize` Text，
         // `ResultSetViewer.java:2126-2152`：tooltip「Result-set fetch size」，`>0` 才生效）。
-        // 占位即默认值；有效输入把输入框规范化成该值（≈ 失焦回填），无效输入不动作。
+        // 占位即默认值；有效输入把输入框规范化成该值（≈ 失焦回填），
+        // 无效输入则不动作，等**失焦**时按当前生效值回填（那边的 `focusLost` 行为）。
         let segment_input = cx.new(|cx| {
             let mut state = InputState::new(window, cx);
             state.set_placeholder(
@@ -104,6 +105,18 @@ impl ResultPanel {
             &segment_input,
             window,
             |this, state, event: &InputEvent, window, cx| {
+                // 【失焦回填】对齐 `ResultSetViewer.java:2129-2137`：文本框内容与生效值不同就改写。
+                // 作用在「敲了非法值（`0` / `abc` / 空）却不回车」这种路径上——
+                // 否则状态行会一直留着一段不生效的文本。headless 不派发该事件（见 events 侧纯函数）。
+                if matches!(event, InputEvent::Blur) {
+                    let text = state.read(cx).value().to_string();
+                    if let Some(display) =
+                        super::events::segment_rows_blur_display(&text, this.segment_rows)
+                    {
+                        state.update(cx, |s, cx| s.set_value(display, window, cx));
+                    }
+                    return;
+                }
                 if !matches!(event, InputEvent::Change) {
                     return;
                 }

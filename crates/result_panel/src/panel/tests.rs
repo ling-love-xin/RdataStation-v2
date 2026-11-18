@@ -1564,6 +1564,27 @@ fn segment_rows_parse_accepts_positive_only() {
     assert_eq!(parse_segment_rows("12.5"), None, "小数不算行数");
 }
 
+/// 【R6 段大小】失焦回填（纯函数）：对齐 DBeaver `focusLost`（`ResultSetViewer.java:2129-2137`）
+/// ——文本框内容与生效值不同就改写成生效值；相同则什么都不做（避免无谓改写光标）。
+///
+/// headless 里 `InputEvent::Blur` 不 emit（元素级焦点事件不派发，见
+/// `crates/editor/src/view/tests/analysis.rs` 的同款注记），所以回填判定钉在这里。
+#[test]
+fn segment_rows_blur_restores_the_effective_value() {
+    use super::events::segment_rows_blur_display;
+
+    // 非法文本（敲了没回车 / 敲了 0）：回填成当前生效值
+    assert_eq!(segment_rows_blur_display("abc", 1000), Some("1000".to_string()));
+    assert_eq!(segment_rows_blur_display("0", 1000), Some("1000".to_string()));
+    assert_eq!(segment_rows_blur_display("", 1000), Some("1000".to_string()));
+    assert_eq!(segment_rows_blur_display("-5", 1000), Some("1000".to_string()));
+    // 未提交的合法值（输入框还没来得及规范化）：同样按生效值收口
+    assert_eq!(segment_rows_blur_display("200", 1000), Some("1000".to_string()));
+    // 已是生效值（含用户敲的首尾空白）：不动
+    assert_eq!(segment_rows_blur_display("1000", 1000), None);
+    assert_eq!(segment_rows_blur_display(" 1000 ", 1000), None);
+}
+
 /// 【R6 段大小】面板状态：改值生效、同值不重入、下限夹取（`MIN_SEGMENT_SIZE = 1`）。
 #[gpui_kit::test]
 fn set_segment_rows_clamps_to_the_minimum(cx: &mut gpui_kit::TestAppContext) {

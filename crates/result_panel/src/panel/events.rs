@@ -1897,11 +1897,25 @@ pub(crate) fn erase_menu_labels(filter_text: &str, hidden_columns: usize) -> Vec
 ///
 /// 对齐 DBeaver `resultSetSize` 的 modify 回调（`ResultSetViewer.java:2138-2152`）：
 /// `CommonUtils.toInt(text)` → 只有 `> 0` 才写偏好，`< MIN_SEGMENT_SIZE` 抬到下限；
-/// 非数字 / 0 / 负数 = 无效输入（**不写**，输入框文本保持用户所敲）。
+/// 非数字 / 0 / 负数 = 无效输入（**不写**，输入框文本此刻仍保持用户所敲，
+/// 由失焦回填收口，见 [`segment_rows_blur_display`]）。
 /// 本仓返回 `None` 让调用方「什么都不做」，`Some(rows)` 才是有效提交。
 pub(crate) fn parse_segment_rows(text: &str) -> Option<usize> {
     let rows = text.trim().parse::<usize>().ok()?;
     (rows > 0).then_some(rows)
+}
+
+/// 【段大小】失焦时输入框该显示什么（纯函数）。
+///
+/// 对齐 DBeaver 的 `focusLost` 监听器（`ResultSetViewer.java:2129-2137`）：
+/// 取当前生效值 `getSegmentMaxRows()`，**只要文本框内容和它不一样就 `setText(realValue)`**
+/// ——无效输入（`0` / `abc` / 空）与「格式怪但已生效」（`007`→`7` 已由 change 规范化）都靠这一步收口，
+/// 不会把非法文本留在状态行里。
+///
+/// 返回 `None` = 文本已是生效值、无需改写；`Some(s)` = 回填成 `s`。
+pub(crate) fn segment_rows_blur_display(text: &str, current: usize) -> Option<String> {
+    let effective = current.to_string();
+    (text.trim() != effective).then_some(effective)
 }
 
 /// 【状态历史】状态的一行描述（对齐 DBeaver `describeState`，`ResultSetViewer.java:5457-5473`）：/// 空白折叠成单空格（多行 SQL 在 tooltip 里不能换行），**超过 50 字符截断补 `…`**
