@@ -1630,6 +1630,25 @@ fn stats_copy_all_text_joins_function_equals_value() {
     assert_eq!(stats_copy_all_text(&[]), "");
 }
 
+/// 【页签提示】六页各有一条非空、互不重复的提示文案（对齐 DBeaver 面板描述：
+/// 页签只有图标 + 短名，靠 tooltip 说清这页做什么）。
+#[test]
+fn right_tab_descriptions_are_distinct_and_non_empty() {
+    use crate::panel::events::{right_tab_description, right_tabs};
+
+    let mut seen: Vec<&'static str> = Vec::new();
+    for tab in right_tabs() {
+        let description = right_tab_description(tab);
+        assert!(!description.is_empty(), "{tab:?} 缺少页签提示");
+        assert!(
+            !seen.contains(&description),
+            "{tab:?} 的提示与其它页重复：{description}"
+        );
+        seen.push(description);
+    }
+    assert_eq!(seen.len(), 6, "六页各一条提示");
+}
+
 #[test]
 fn hex_page_clamps_to_the_last_page() {
     use crate::panel::tabs::hex_page_clamp;

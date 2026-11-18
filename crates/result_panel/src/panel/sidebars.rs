@@ -23,7 +23,8 @@ use gpui_kit::*;
 
 use super::data::ResultPanel;
 use super::events::{
-    right_tab_from_index, right_tab_icon, right_tab_index, right_tab_label, right_tabs,
+    right_tab_description, right_tab_from_index, right_tab_icon, right_tab_index, right_tab_label,
+    right_tabs,
 };
 use super::tabs::kv_row;
 use crate::ports::{Presentation, ResultRequest, RightTab};
@@ -506,6 +507,10 @@ impl ResultPanel {
                 Tab::new()
                     .icon(right_tab_icon(tab))
                     .label(SharedString::from(right_tab_label(tab)))
+                    // 【页签提示】对齐 DBeaver `panelTab.setToolTipText(panelDescriptor.getDescription())`
+                    // （`ResultSetViewer.java:1361`）：页签只有图标 + 短名，窄右栏下靠 tooltip
+                    // 说清这一页做什么。
+                    .tooltip(SharedString::from(right_tab_description(tab)))
             })
             .collect();
         let tab_queue = self.queue.clone();

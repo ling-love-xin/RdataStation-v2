@@ -1796,6 +1796,26 @@ pub(crate) fn right_tab_icon(tab: RightTab) -> IconName {
     }
 }
 
+/// 右栏页签的**提示文案**（对齐 DBeaver `addPanel` 里
+/// `panelTab.setToolTipText(panelDescriptor.getDescription())`，`ResultSetViewer.java:1361`）。
+///
+/// 前五条按 `OSGI-INF/l10n/bundle.properties:15-24` 的 `panel.*.description` 逐条译：
+/// `value-view` = Results cell value viewer、`column-aggregate` = Result cells calculations
+/// (SUM, MAX, AVG, etc)、`results-metadata` = ResultSet metadata description、
+/// `results-grouping` = Results grouping (GROUP BY)、
+/// `results-references` = One or more rows referencing current row(-s)。
+/// 「执行SQL」是本仓独有页（DBeaver 无对应面板），按本仓实能做描述。
+pub(crate) fn right_tab_description(tab: RightTab) -> &'static str {
+    match tab {
+        RightTab::Browser => "结果集元数据说明（列清单 / 类型 / 注释，可筛可搜索）",
+        RightTab::Value => "结果单元格值查看器（文本 / 十六进制转储，可保存至文件）",
+        RightTab::Stats => "结果单元格计算（非空 / NULL / 最小 / 最大 / 均值 / 合计）",
+        RightTab::Group => "结果分组（按选中列做 GROUP BY 计数）",
+        RightTab::Reference => "引用当前行的其他行（外键清单 / 查看引用行）",
+        RightTab::ExecSql => "面板内 SQL 草稿与执行入口",
+    }
+}
+
 /// 「视图菜单」条目文案（动态条目按当前状态报动作，而不是报状态：
 /// 菜单项是「点了会做什么」——对齐 DBeaver `CMD_TOGGLE_PANELS` / `CMD_TOGGLE_LAYOUT` 的命令标签）
 pub(crate) fn panel_view_item_label(

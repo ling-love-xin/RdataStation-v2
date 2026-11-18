@@ -588,11 +588,11 @@ impl ResultPanel {
     /// `ResultSetViewer.java:1590-1614`：那边 `addPanel` 给**每个面板**的面板工具条右端都挂
     /// 一颗 `IMG_LCL_VIEW_MENU` 按钮，点开是 `fillPanelsMenu()`（`:1559-1588`）的菜单）。
     ///
-    /// 菜单 = 六页勾选项（`STYLE_CHECK`，当前页为勾选态）→ 分隔 → 面板总开关 → 布局方向；
-    /// 条目清单与文案分别由纯函数 `panel_view_menu_items` / `panel_view_item_label` 定
-    /// （`PopupMenu` 内部不可读，测试钉在纯函数上）。DBeaver 菜单里还有
-    /// `CMD_TOGGLE_MAXIMIZE`（面板最大化）与 `CMD_ACTIVATE_PANELS`（把焦点交给面板），
-    /// 本仓两者都还没有落地端口，按「能力没有就不摆」不列。
+    /// 菜单 = 六页勾选项（`STYLE_CHECK`，当前页为勾选态）→ 分隔 → 面板最大化 → 分隔 →
+    /// 面板总开关 → 布局方向（段位照 `fillPanelsMenu:1559-1588`；`CMD_ACTIVATE_PANELS`
+    /// 本仓无端口、按「能力没有就不摆」不列）。条目清单与文案分别由纯函数
+    /// `panel_view_menu_items` / `panel_view_item_label` 定
+    /// （`PopupMenu` 内部不可读，测试钉在纯函数上）。
     fn panel_view_menu(&self, debug_id: &'static str, cx: &App) -> AnyElement {
         let _ = cx;
         let queue = self.queue.clone();
