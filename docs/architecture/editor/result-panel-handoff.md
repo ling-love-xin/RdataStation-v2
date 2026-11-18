@@ -1493,6 +1493,20 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 2.85 列浏览器页的接手要点（2026-11-18）
+
+- 投影灌入点是 `ColumnBrowserDelegate::set_data(columns, type_names, hidden, comments)`，
+  **四份全等即直接返回**（对齐 `MetaDataPanel.refresh` 的 "No changes"）。它有副作用
+  （清 `last_selected` 与多选集合），所以别为了「刷新一下」反复重灌同一份投影——
+  会把用户多选和滚动位置打掉。真换结果集时才重灌（列数/列名变化自然不相等）。
+- 页内工具条固定两段语义：左侧只有「生成 DDL」（DBeaver `contributeActions` 唯一贡献），
+  右侧是共享视图菜单；多选批量动作（隐藏所选 / 显示所选 / 清空选择）是本仓扩展，
+  挂在左侧动作段里，选中为空时不生成元素（空 `Toolbar` 仍吃 gap，会把标题挤窄）。
+- 过滤口径**有意宽于** DBeaver（列名 / 类型名 / 注释 vs 只列名），不是漏做；
+  要收窄就改 `filter_browser_columns` 一处（用例 `browser_filter_*` 会跟着红）。
+- 两项**未做**的差异，别当遗漏：嵌套子列树（本仓列模型没有复合类型子属性）、
+  列布局按驱动记忆（`MetaData/<driverId>`）。
+
 ### 2.84 竖条 / 页签提示文案的接手要点（2026-11-18）
 
 - 描述只有一份：`panel::events::right_tab_description(tab)`（页签条 tooltip 与竖条 tooltip 共用）。

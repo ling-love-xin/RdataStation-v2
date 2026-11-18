@@ -4954,6 +4954,51 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
 非空描述，收起态不再堆描述）；`cargo test -p rds-result-panel --lib` = **329 passed**；
 `cargo check -p rds-editor` = Finished；`cargo test -p rds-ui-guard` = 4 passed。
 
+### 8.97 列浏览器页与 `MetaDataPanel` 的逐项对照（2026-11-18）
+
+**取证（`panel/metadata/MetaDataPanel.java`）**：
+- 页内结构（`createContents:80-141`）：第一行是**过滤条**——`UIUtils.createControlLabel(filterPanel,
+  panel_metadata_filter_label)` + `Text(SWT.BORDER | SWT.SEARCH | SWT.ICON_CANCEL)`，
+  `setMessage(panel_metadata_filter_hint)`，`modifyListener → refresh(true)`，
+  `ESC` 清空（`:87-98`）；其下是树形清单 `MetaDataTable`（`SWT.SHEET | SWT.BORDER`、`setFitWidth(true)`）。
+- 过滤口径（`refresh:178-183`）：**只匹配列名**，`a.getName().toUpperCase().contains(filterText)`。
+- **投影短路**（`refresh:184-196`）：新旧属性清单逐项相同就 `return`（注释 "No changes"）。
+- 不可见列：不剔出清单，**行字体斜体**（`getObjectFont:284-289`，顶层且 `!isAttributeVisible` → italic）。
+- 额外列：`Description`（`addExtraColumns:292-302`，取 `DBSEntityAttribute.getDescription()`，空则空串）。
+- 右键：默认 Tree 菜单 + `meta_data_panel_action_copy_column_text`（`:234-252`，选中几行拷几行，`\n` 分隔）。
+- 面板动作（`contributeActions:204-215`）：**只有一条**「按结果集生成 DDL」
+  （`generate.ddl.by.resultSet`，恒可用）。
+- 页头装配（`ResultSetViewer.java:1372-1383`）：每页两段工具条——
+  `panel.contributeActions(...)` 的那段（`FILL_HORIZONTAL`，靠左）+
+  `addDefaultPanelActions(...)` 的那段（`HORIZONTAL_ALIGN_END`，靠右）；后者**只有一颗**
+  「视图菜单」（`result_set_view_menu_text`，展开即 `fillPanelsMenu()`，`:1590-1614`）。
+- 列表列配置按**驱动**记：`getListConfigId:254-262` 返回 `"MetaData/<driverId>"`。
+
+**本仓现状对照**：
+| 项 | DBeaver | 本仓 | 结论 |
+| --- | --- | --- | --- |
+| 页头左侧动作 | 生成 DDL | 生成 DDL（`editor-result-generate-ddl`，常驻） | 已对齐 |
+| 页头右侧 | 视图菜单 | `panel_toolbar` 的视图菜单（同一份 `panel_view_menu_items`） | 已对齐 |
+| 过滤入口 | 独立 Filter 标签行 + 文本框 | List 内置搜索框 | 形态差异，留目视阶段 |
+| 过滤口径 | 只匹配列名 | 列名 / 类型名 / 注释 | **有意宽于**（已登记，用例 `browser_filter_matches_type_name`） |
+| 投影短路 | 有 | **本批补上**（`ColumnBrowserDelegate::set_data` 四份投影全等即返回） | 已对齐 |
+| 不可见列 | 留清单 + 斜体 | 留清单 + 置灰斜体 | 已对齐 |
+| 列注释 | 独立 Description 列 | 列名下第二行 | 等价（形态差异） |
+| 复制列名 | 右键多选拷贝 | 同（`column_names_to_copy`） | 已对齐 |
+| 嵌套子列 | 树（`getNestedBindings()`） | 平铺 | **差异**（本仓列模型无复合类型子属性） |
+| 列布局记忆 | 按驱动（`MetaData/<driverId>`） | 无 | **差异**（待定是否做） |
+
+**本批落点**：`set_data` 增加「四份投影（列名 / 类型名 / 隐藏标记 / 注释）全等则直接返回」的
+短路。动机不只是性能：`set_data` 会清 `last_selected` 与多选集合，而 `sync` 在「刷新到同一份
+结果」时也会被调用——不短路会把用户的多选与 List 滚动位置一起打掉（与 DBeaver "No changes"
+的意图一致）。
+
+**验证**：`panel::tests::identical_column_projection_keeps_the_browser_selection`
+（同投影重灌选集保留；换成另一份投影时旧序号失效、选集清空）+
+`column_browser_toolbar_offers_generate_ddl`（页内工具条常驻 DDL 入口）；
+`cargo test -p rds-result-panel --lib` = **331 passed**；`cargo check -p rds-editor` = Finished；
+`cargo test -p rds-ui-guard` = 4 passed。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
