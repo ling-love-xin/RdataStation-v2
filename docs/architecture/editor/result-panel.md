@@ -3050,6 +3050,73 @@ alpha 封顶 **0.2**，DBeaver 的整行选中是实心浅蓝。要实心必须�
   token；`.border_1()` 会缩内容盒、vendor/base 无 outline 能力）。
 - 真窗口目视挂账：20% tint 在浅色 / 深色下是否看得出「整行被选中」。
 
+### 8.55 表格打磨第六批：筛选框订阅同样被丢弃（「边打边筛」从未生效）
+
+#### 8.55.1 取证：`let _ = filter_sub;` 就是解订
+
+`lifecycle.rs::new` 里原本：
+
+```rust
+let filter_sub = cx.subscribe_in(&filter_input, window, |this, state, event, window, cx| {
+    if matches!(event, InputEvent::Change) { this.on_filter_input(state.read(cx).value().to_string(), cx); }
+});
+// 订阅句柄仅持有（防重复建立）
+let _ = filter_sub;
+```
+
+`Subscription` 是「句柄掉了就解订」的守卫类型，`let _ = expr;` 把值移进通配模式后
+**当场丢弃**（不是「持有」）。⇒ `InputEvent::Change` 一次也到不了 `on_filter_input`，
+输入框里打字只改文本框自身，不触发 300ms 防抖、不应用筛选。与 §8.54.2 的网格订阅是
+同一类错误（注释都写着「仅持有」，实现却是丢弃）。
+
+为什么一直没被发现：编辑器侧用例 `filtering_waits_for_the_debounce`
+（`crates/editor/src/view/tests/results_b.rs:88`）是**直接调 `on_filter_input`**，
+绕过了订阅这一层——断言全绿，接线却是死的。
+
+#### 8.55.2 落法
+
+| 项 | 落点 |
+| --- | --- |
+| 句柄入库 | `panel/data.rs` 新增 `_filter_sub: Option<Subscription>`（注释写明为什么要持有） |
+| 构造期持有 | `lifecycle.rs::new`：`let _filter_sub = Some(cx.subscribe_in(…))`，进 `Self { … _filter_sub }` |
+| 注释纠偏 | 删掉「仅持有 / `let _ =`」的错误说法，写明 `Subscription` 掉即解订 |
+
+#### 8.55.3 测试：走真输入框 + 真敲键，并做 A/B
+
+新增 `panel/tests.rs::typing_into_the_filter_box_reaches_the_panel`：
+
+1. `TextareaState::focus(window, cx)` 把焦点交给真筛选框（`base/state.rs:1804-1809`）；
+2. `cx.simulate_keystrokes("1")` 真敲键；
+3. 断言 `filter_text == "1"`（**这一条就证明订阅挂着**，不需要等防抖）；
+4. `advance_clock(400ms)` + `run_until_parked()`，断言 `view_total() == 1`
+   （harness 两行 `1 / 1234.5`、`2 / NULL` 里只有前者匹配）。
+
+**A/B 实测**（把句柄临时退回丢弃写法再跑同一条用例）：
+
+```
+panicked at panel/tests.rs:1091:
+敲进筛选框的字没到面板：`InputEvent::Change` 订阅没挂着（边打边筛失效）
+  left: ""        ← 真敲键后 filter_text 仍为空
+ right: "1"
+```
+
+⇒ 这条用例不是空转断言：修好绿、退回红。
+
+#### 8.55.4 验证
+
+- `cargo check -p rds-result-panel` = 0 error / 0 warning（18.04s）。
+- `cargo test -p rds-result-panel --lib` = **265 passed / 0 failed**（264 + 本批新增 1）。
+
+#### 8.55.5 遗留
+
+- 编辑器侧 `filtering_waits_for_the_debounce` 仍走 `on_filter_input` 直调（它测的是
+  「防抖语义」，不是接线）。接线归本条面板用例；两者分工，不重复。
+- 同类隐患的检查口径：查 `Subscription` / `Task` 的「仅持有」写法是否真进了字段。
+  本批在 `crates/result_panel/src` 逐条核过剩余 `let _ =`（`changes.rs` 两处忽略 `undo()`
+  返回值、`lifecycle.rs` 的 `let _ = (from, to)` 消解未用参数），**没有第三处句柄丢弃**；
+  两个真订阅（网格 / 筛选）现在都入库。
+
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

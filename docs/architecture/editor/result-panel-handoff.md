@@ -41,7 +41,7 @@
 
 ```powershell
 $env:RUST_MIN_STACK='268435456'; cd D:\RdataStation\RDS\RdataStation-v2
-cargo test -p rds-result-panel --lib    # 基线：264 passed / 0 failed（含 rendered_ui_elements_survive 防回退）
+cargo test -p rds-result-panel --lib    # 基线：265 passed / 0 failed（含 rendered_ui_elements_survive 防回退）
 cargo test -p rds-settings --lib        # 基线：35 passed / 0 failed
 cargo test -p rds-ui-guard              # 基线：4 passed / 0 failed（含 no_new_hardcoded_color_or_pixel）
 cargo test -p rds-workbench-shell --lib # 基线：14 passed / 0 failed
@@ -988,6 +988,27 @@ panel **262 passed** / guard **4**。
 **验证**：`cargo check -p rds-result-panel -p rds-editor` 0 error / 0 warning；
 panel **264 passed** / guard **4**（基线 20）/ editor 测试目标 `--no-run` 通过。
 
+### 2.45 表格打磨第六批：筛选框订阅同样被丢弃（「边打边筛」从未生效）
+
+全文见 `result-panel.md §8.55`，接手要点：
+
+- **同一个坑的第二例**：`let filter_sub = cx.subscribe_in(…)` 后面跟 `let _ = filter_sub;`
+  —— `Subscription` 掉即解订，`let _ =` 就是当场丢弃。于是 `InputEvent::Change`
+  从不到达 `on_filter_input`，输入框打字不触发 300ms 防抖、不筛行。现已入库为
+  `Self::_filter_sub`。
+- **为什么之前没发现**：编辑器侧 `results_b.rs::filtering_waits_for_the_debounce` 直接调
+  `on_filter_input`，测的是防抖语义、绕过了订阅。接线这事现在归面板用例
+  `typing_into_the_filter_box_reaches_the_panel`（真 `TextareaState::focus` + 真敲键 +
+  断言 `filter_text` 立刻变化 + 推进 400ms 后 `view_total()==1`）。
+- **A/B 已验**：把句柄退回丢弃写法，同一条用例在 `left: "" / right: "1"` 处红；
+  恢复即绿。别把它改回直调 `on_filter_input`，那样会重新变成空转断言。
+- **顺带记一笔**：§2.44 那批修好的网格订阅现在也把 `MoveColumn` 通了，
+  宿主 `host/results/dispatch.rs:263` 的 `ColumnOrderChanged => save_session_now`
+  确实在消费 ⇒ 列序跨会话落库从此真正生效（此前是死推送）。
+
+**验证**：`cargo check -p rds-result-panel` 0 error / 0 warning；
+panel **265 passed** / guard **4**。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）
@@ -1004,7 +1025,7 @@ panel **264 passed** / guard **4**（基线 20）/ editor 测试目标 `--no-run
 
 ## 4. 接手指引（新会话建议顺序）
 
-1. 先重跑 §1.3 四条验证命令，确认基线（尤其 **264 passed / 0 failed**）落地。
+1. 先重跑 §1.3 四条验证命令，确认基线（尤其 **265 passed / 0 failed**）落地。
 2. 处理 §2.1 提交待办：先 `git status` / `git diff` 摘本线 hunk，与并行线协调后统一提交类型样式渲染消费（settings 三文件 + grid.rs + host.rs + workbench view.rs）。
 3. 知悉 §2.2 外线阻塞（settings 契约测试）与 §1.3 契约测试既有失败，不替并行线补。
 4. 按 §2.4 优先级推进功能遗留（P0（注释与文档漂移）/ P1（分页·行号跳转·列宽落盘）/ P2（hex 翻页·图片预览·列浏览器多选）已交付；剩余见 §2.4 表，开工前先按模块惯例说理解、列方案）。

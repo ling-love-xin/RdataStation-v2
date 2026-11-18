@@ -24,6 +24,11 @@ impl ResultPanel {
     /// 交进来；构造后、首次 sync 前面板不渲染任何结果。
     pub fn new(window: &mut Window, cx: &mut Context<Self>, queue: ResultActionQueue) -> Self {
         // 【B15】本地筛选框：输入变化走防抖（原型 §5.5 的 300ms），到点才重算视图行序
+        //
+        // 句柄必须存进 `Self`：原来写成 `let filter_sub = …; let _ = filter_sub;`，
+        // `Subscription` 是「掉了就解订」的守卫，`let _ =` 等于当场丢弃 ⇒
+        // `InputEvent::Change` 从不到达 `on_filter_input`，边打边筛一直没生效
+        // （2026-11-18 与网格订阅同一个坑，由 `typing_into_the_filter_box_reaches_the_panel` 钉住）。
         let filter_input = cx.new(|cx| {
             // 【P3】多行控件：DBeaver 的筛选输入是 `TextViewer(SWT.MULTI)`
             // （`ResultSetFilterPanel.java:192`），常态 1 行高、展开 5 行
@@ -40,7 +45,7 @@ impl ResultPanel {
             state.set_submit_on_enter(true, cx);
             state
         });
-        let filter_sub = cx.subscribe_in(
+        let _filter_sub = Some(cx.subscribe_in(
             &filter_input,
             window,
             |this, state, event: &InputEvent, _window, cx| {
@@ -49,9 +54,7 @@ impl ResultPanel {
                     this.on_filter_input(text, cx);
                 }
             },
-        );
-        // 订阅句柄仅持有（防重复建立）；面板实体自身不需要额外使用
-        let _ = filter_sub;
+        ));
 
         // 【DBeaver 对齐】状态栏中段行数输入框：可编辑，输入行号跳转到该行
         let row_count_input = cx.new(|cx| {
@@ -157,6 +160,8 @@ impl ResultPanel {
             _row_count_sub: Some(row_count_sub),
             // 【网格事件订阅】构造期挂在占位网格上，`set_grids` 换网格后重挂
             _grid_sub,
+            // 【B15】筛选框订阅（边打边筛的唯一入口）
+            _filter_sub,
             presentation: Presentation::Grid,
             right_tab: RightTab::Browser,
             // 【R2 计算页】默认全集（与 DBeaver `loadDefaultFunctions` 同口径：默认函数全上）

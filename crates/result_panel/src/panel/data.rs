@@ -312,4 +312,7 @@ pub struct ResultPanel {
     /// 【网格事件】表格事件订阅句柄（选格 / 双击编辑 / 列序 / 列宽 / 清除选择 / 整行选中）。
     /// **必须持有**：句柄一丢就解订，`set_grids` 换网格时整体重挂（见 `set_grids` 注释）。
     pub(crate) _grid_sub: Option<Subscription>,
+    /// 【B15】筛选框订阅句柄（`InputEvent::Change` → 防抖 → 应用筛选）。
+    /// **必须持有**：早先写成 `let _ = filter_sub;` 当场丢弃，边打边筛从未生效。
+    pub(crate) _filter_sub: Option<Subscription>,
 }

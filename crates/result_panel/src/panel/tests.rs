@@ -1065,3 +1065,38 @@ fn select_row_event_mirrors_into_the_delegate(cx: &mut gpui_kit::TestAppContext)
     // 本条先画过一帧未选中的画面，`debug_bounds` 的登记是**跨帧累积**的，
     // 上一帧的斑马行会一直留在册子里。
 }
+
+/// 【B15 接线】筛选框的 `InputEvent::Change` 订阅必须真的挂着。
+///
+/// 早先句柄写成 `let filter_sub = …; let _ = filter_sub;`：`Subscription` 是「掉了就
+/// 解订」的守卫，`let _ =` 等于当场丢弃 ⇒ 真敲键一次也到不了 `on_filter_input`，
+/// 「边打边筛」从未生效。编辑器侧那条 `filtering_waits_for_the_debounce` 直接调
+/// `on_filter_input`，绕过了订阅，所以一直没暴露——本条走**真输入框 + 真敲键**。
+#[gpui_kit::test]
+fn typing_into_the_filter_box_reaches_the_panel(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let grid = cx.update(|_window, app| panel.read(app).grid().clone());
+
+    // 焦点交给真筛选框（`TextareaState::focus` 内部走 focus_handle）
+    cx.update(|window, cx| {
+        let input = panel.read(cx).filter_input.clone();
+        input.update(cx, |state, cx| state.focus(window, cx));
+    });
+    cx.simulate_keystrokes("1");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let typed = cx.update(|_window, cx| panel.read(cx).filter_text.clone());
+    assert_eq!(
+        typed, "1",
+        "敲进筛选框的字没到面板：`InputEvent::Change` 订阅没挂着（边打边筛失效）"
+    );
+
+    // 防抖到点后才应用：2 行里只有 `1` 那行匹配
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(400));
+    cx.run_until_parked();
+    let rows = cx.update(|_window, app| grid.read(app).delegate().view_total());
+    assert_eq!(rows, 1, "防抖到点后筛选应生效（`2 / NULL` 那行要被筛掉）");
+}
