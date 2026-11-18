@@ -1493,6 +1493,18 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 2.81 分组页的接手要点（2026-11-18）
+
+- **工具条顺序别打乱**：排序 → 仅重复 → 分隔 → 列（勾选下拉）→ 移除 → 分隔 → 清除，
+  照 `GroupingPanel.fillToolBar:164-176`。三簇的语义是「结果视角开关 / 分组键编辑 / 整体清除」，
+  把「列」挪到最前会把语义打散（本仓原布局就是这样，已改）。
+- **分组键刻意不持久化**：DBeaver 的 `loadSettings/saveSettings`（`:114-120`）是空壳且
+  `saveSettings` 无调用点；那边分组靠「生成 GROUP BY 查询交给数据源」
+  （`GroupingResultsContainer.rebuildGrouping:211-247`）。本仓是客户端分组，
+  因此更不该把键做成偏好项——真要"记住上次分组"，那是新增能力，得单独拍板。
+- 本仓分组结果没有「组内聚合函数列」（DBeaver 有 `getTransformerBindFunctions`），
+  要对齐得先有「生成 GROUP BY SQL → 执行 → 嵌套结果集」链路。
+
 ### 2.80 段大小输入框失焦回填的接手要点（2026-11-18）
 
 - 回填判定是纯函数 `panel::events::segment_rows_blur_display(text, current)`：

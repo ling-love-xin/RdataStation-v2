@@ -4829,6 +4829,48 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
 **验证**：`cargo test -p rds-result-panel --lib` = **325 passed**；`cargo check -p rds-editor`
 = Finished；`cargo test -p rds-ui-guard` = 4 passed。
 
+### 8.93 分组页工具条排布与「分组键不持久化」口径（2026-11-18）
+
+**取证 1（工具条 `GroupingPanel.fillToolBar:164-176`）**：
+`DefaultSortingAction`（`MODE_FORCE_TEXT`）→ `DuplicatesOnlyAction` →
+`ToolbarSeparatorContribution(true)` → `EditColumnsAction` → `DeleteColumnAction` →
+`ToolbarSeparatorContribution(true)` → `ClearGroupingAction` →
+`ToolbarSeparatorContribution(true)` → `addExtensionActions`（`GroupingRegistry` 插件贡献）。
+
+语义读法：前两个是**结果视角**开关（排序口径 / 只留 COUNT>1），中间两个是**分组键编辑**
+（加/减列），最后是整体清除——所以分隔把这三簇分开。
+
+**本仓落点**：`render_group_tab` 动作重排为
+「排序 → 仅重复 → `Separator::vertical()` → 列（勾选下拉）→ 移除 →
+`Separator::vertical()` → 清除」，分隔用 vendor 的
+`gpui_kit::component::separator::Separator`（不手搓竖线）。末段分隔与扩展动作不摆：
+本仓分组页无扩展点（那边 `GroupingRegistry` 是插件贡献点）。
+
+**取证 2（分组键到底存不存）**：
+- `GroupingPanel.loadSettings:114-116` 与 `saveSettings:118-120` 都是**空壳**：
+  只 `panelSettings.getSection("groups")` / `UIUtils.getSettingsSection(...)` 拿个 section 就返回；
+  且 **`saveSettings` 全仓无调用点**（`contributeActions`/`refresh`/`deactivatePanel` 都没调）。
+  → 分组键**不进**面板设置，跨会话不记忆。
+- 真正落地的是「**生成一条 GROUP BY 查询**」：`GroupingResultsContainer.rebuildGrouping:211-272`
+  用 `SQLGroupingQueryGenerator.generateGroupingQuery(queryText)` 生成查询后
+  `dataContainer.setGroupingQuery(...)` / `setGroupingAttributes(...)`，再交给内嵌的
+  `groupingViewer`（另一份 `ResultSetViewer`）显示——即分组**发生在服务端**，
+  键跟着查询/编辑器状态走，所以不需要偏好项。
+
+**本仓现状（有意保留的差异，已登记）**：
+1. **客户端分组**：`grid::group_by_columns_for` 直接在已加载的行上分组并算计数，
+   不发 GROUP BY 查询、不嵌第二份结果集。好处是零往返、对任何驱动一致；
+   代价是没有「组内聚合函数列」（DBeaver 那边由 `getTransformerBindFunctions` 决定）。
+   要完全对齐需要「生成 GROUP BY SQL → 执行 → 嵌套结果集」整条链路，属独立课题。
+2. `EditColumnsAction`（`GroupingConfigDialog` 多列编辑表格）→ 本仓用**勾选式下拉**
+   承载同一件事（列清单 + 勾选态），能力等价、入口更轻。
+3. 分组键与排序口径 / 仅重复**都不跨会话持久化**——与 DBeaver 同口径（见取证 2）。
+
+**验证**：`panel::tests::group_toolbar_offers_the_remove_column_action`（五个入口都在）；
+`clear_group_columns_drops_explicit_selection` / `remove_group_column_guards_the_last_key` /
+`arrange_groups_sorts_and_filters` 覆盖行为；`cargo test -p rds-result-panel --lib`
+= **325 passed**；`cargo check -p rds-editor` = Finished；`cargo test -p rds-ui-guard` = 4 passed。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
