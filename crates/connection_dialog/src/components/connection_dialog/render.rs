@@ -2253,98 +2253,9 @@ impl<H: 'static> ConnectionDialogState<H> {
             // 位置：右列最底部（Tab 内容区之下、footer 之上）。原型 §2 把状态画在 footer 里，
             // 这里刻意不放：① 展开详情会撑高 footer → 对话框高度跳动（现在是让内容区让位，高度恒定）；
             // ② 长原文在 footer 里会被按钮挤成窄条（>80 字就要折行）。
-            let result_ui = {
-                let line = result.borrow().clone();
-                match line {
-                    Some(line) => {
-                        // 级别图标：与配色双通道（色弱 / 高对比主题下颜色不一定分得出）。
-                        let (color, icon) = match line.level {
-                            ResultLevel::Success => {
-                                (theme.colors.success, lucide("icons/circle-check.svg"))
-                            }
-                            ResultLevel::Warning => {
-                                (theme.colors.warning, lucide("icons/triangle-alert.svg"))
-                            }
-                            ResultLevel::Error => {
-                                (theme.colors.danger, lucide("icons/circle-x.svg"))
-                            }
-                            ResultLevel::Info => {
-                                (theme.colors.muted_foreground, lucide("icons/info.svg"))
-                            }
-                        };
-                        let mut col = div()
-                            .v_flex()
-                            .gap_0p5()
-                            .flex_1()
-                            .min_w(rems(0.))
-                            .child(
-                                div()
-                                    .h_flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .text_xs()
-                                    .text_color(color)
-                                    .child(icon.size(rems(crate::ui::ICON_SIZE_SM)))
-                                    .child(line.summary.clone()),
-                            );
-                        if result_needs_detail(&line.summary) || line.detail.is_some() {
-                            let expanded = result_expanded.get();
-                            if expanded {
-                                col = col.child(
-                                    div()
-                                        .id("conn-result-detail")
-                                        // kit 观测：窗口用例断言「展开后正文才可见」。
-                                        .test_support()
-                                        .text_xs()
-                                        .text_color(theme.colors.muted_foreground)
-                                        .max_h(rems(6.))
-                                        .overflow_y_scroll()
-                                        .child(line.detail_text().to_string()),
-                                );
-                            }
-                            let toggle_expanded = result_expanded.clone();
-                            let toggle_entity = entity.clone();
-                            let copy_text = line.detail_text().to_string();
-                            col = col.child(
-                                div()
-                                    .h_flex()
-                                    .gap_2()
-                                    .child(
-                                        // 详情 / 收起：语义 `Button`（ghost + primary 文案）——
-                                        // 不再手搓可点 div（2026-10-28 审计）。
-                                        Button::new("conn-result-toggle")
-                                            .ghost()
-                                            .with_size(Size::XSmall)
-                                            .text_color(theme.colors.primary)
-                                            .child(if expanded { tr("收起") } else { tr("详情") })
-                                            .on_click(move |_, _, app| {
-                                                toggle_expanded.set(!toggle_expanded.get());
-                                                toggle_entity.update(app, |_, cx| cx.notify());
-                                            }),
-                                    )
-                                    .child(
-                                        // 复制：语义 `Button`（ghost + primary 文案）——
-                                        // 不再手搓可点 div（2026-10-28 审计）。
-                                        Button::new("conn-result-copy")
-                                            .ghost()
-                                            .with_size(Size::XSmall)
-                                            .text_color(theme.colors.primary)
-                                            .child(tr("复制"))
-                                            .on_click(move |_, _, app| {
-                                                app.write_to_clipboard(
-                                                    gpui_kit::ClipboardItem::new_string(
-                                                        copy_text.clone(),
-                                                    ),
-                                                );
-                                            }),
-                                    ),
-                            );
-                        }
-                        col
-                    }
-                    None => div().h(rems(crate::ui::DIALOG_HINT_PLACEHOLDER_HEIGHT)),
-                }
-            };
+            // 结果行（右列末尾固定块）。整块已被抽成 `result_row_ui`——它只吃四样东西
+            // （结果、展开标记、实体、主题），不再顺带牵住整个对话框状态。
+            let result_ui = result_row_ui(&result, &result_expanded, &entity, theme);
 
             // 测试连接动作（按钮 / Ctrl+T 共用）。
             //
@@ -3073,4 +2984,99 @@ impl<H: 'static> ConnectionDialogState<H> {
                 .footer(footer_ui)
         });
     }
+}
+
+/// 结果行（右列末尾的固定高度块）：四级配色 + 级别图标 + 详情 / 复制。
+///
+/// 从 `render` 那个巨型闭包里抽出来的第一块。它只依赖四样东西：
+/// - `result`：当前结果（`None` = 占位高度，保证右列底部不跳）；
+/// - `expanded`：详情展开标记（跨帧保留）；
+/// - `entity`：展开 / 切换时要 notify 的实体；
+/// - `theme`：取色（success / warning / danger / muted）。
+///
+/// 抽出来的理由是可读性而非性能：改结果行时不必再穿 2.9k 行的闭包。
+/// 行为与抽出前逐帧一致（`connection_dialog_ui::result_line_levels_and_detail_entry` 守）。
+fn result_row_ui<H: 'static>(
+    result: &Rc<RefCell<Option<ResultLine>>>,
+    expanded: &Rc<Cell<bool>>,
+    entity: &Entity<H>,
+    theme: &Theme,
+) -> AnyElement {
+    let Some(line) = result.borrow().clone() else {
+        return div()
+            .h(rems(crate::ui::DIALOG_HINT_PLACEHOLDER_HEIGHT))
+            .into_any_element();
+    };
+    // 级别图标：与配色双通道（色弱 / 高对比主题下颜色不一定分得出）。
+    let (color, icon) = match line.level {
+        ResultLevel::Success => (theme.colors.success, lucide("icons/circle-check.svg")),
+        ResultLevel::Warning => (theme.colors.warning, lucide("icons/triangle-alert.svg")),
+        ResultLevel::Error => (theme.colors.danger, lucide("icons/circle-x.svg")),
+        ResultLevel::Info => (theme.colors.muted_foreground, lucide("icons/info.svg")),
+    };
+    let mut col = div().v_flex().gap_0p5().flex_1().min_w(rems(0.)).child(
+        div()
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .text_xs()
+            .text_color(color)
+            .child(icon.size(rems(crate::ui::ICON_SIZE_SM)))
+            .child(line.summary.clone()),
+    );
+    if result_needs_detail(&line.summary) || line.detail.is_some() {
+        let is_expanded = expanded.get();
+        if is_expanded {
+            col = col.child(
+                div()
+                    .id("conn-result-detail")
+                    // kit 观测：窗口用例断言「展开后正文才可见」。
+                    .test_support()
+                    .text_xs()
+                    .text_color(theme.colors.muted_foreground)
+                    .max_h(rems(6.))
+                    .overflow_y_scroll()
+                    .child(line.detail_text().to_string()),
+            );
+        }
+        let toggle_expanded = expanded.clone();
+        let toggle_entity = entity.clone();
+        let copy_text = line.detail_text().to_string();
+        col = col.child(
+            div()
+                .h_flex()
+                .gap_2()
+                .child(
+                    // 详情 / 收起：语义 `Button`（ghost + primary 文案）——
+                    // 不再手搓可点 div（2026-10-28 审计）。
+                    Button::new("conn-result-toggle")
+                        .ghost()
+                        .with_size(Size::XSmall)
+                        .text_color(theme.colors.primary)
+                        .child(if is_expanded {
+                            tr("收起")
+                        } else {
+                            tr("详情")
+                        })
+                        .on_click(move |_, _, app| {
+                            toggle_expanded.set(!toggle_expanded.get());
+                            toggle_entity.update(app, |_, cx| cx.notify());
+                        }),
+                )
+                .child(
+                    // 复制：语义 `Button`（ghost + primary 文案）。
+                    Button::new("conn-result-copy")
+                        .ghost()
+                        .with_size(Size::XSmall)
+                        .text_color(theme.colors.primary)
+                        .child(tr("复制"))
+                        .on_click(move |_, _, app| {
+                            app.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                                copy_text.clone(),
+                            ));
+                        }),
+                ),
+        );
+    }
+    col.into_any_element()
 }
