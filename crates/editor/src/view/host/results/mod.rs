@@ -12,5 +12,6 @@ mod errors;
 mod export;
 mod filter;
 mod grid;
+mod references;
 mod sort;
 mod tests;

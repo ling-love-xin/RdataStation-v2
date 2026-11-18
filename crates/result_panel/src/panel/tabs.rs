@@ -948,14 +948,36 @@ impl ResultPanel {
             .into_any_element()
     }
 
-    /// 【引用】外键引用查看页签（对齐 DBeaver 引用页签；backlog 空态）
+    /// 【引用】外键引用查看页签（对齐 DBeaver `ReferencesPanel` + `ReferencesResultsContainer`）
     ///
-    /// 【2026-11-17 对齐】此前这一页只有一个空态、没有页内工具条，切到引用页时
-    /// 正文直接顶到页签条下方，与其它五页的「28px 工具条 + 正文」不同形。
-    /// DBeaver 每个面板都带一条自己的 `ToolBarManager`（`ResultSetViewer.java:1337-1374`），
-    /// 只是 `ReferencesPanel.contributeActions` 为空实现（`ReferencesPanel.java:156-158`），
-    /// 所以这里保留工具条（标题「引用」）+ 空态正文，动作留空。
+    /// 形：28px 页内工具条（标题「引用」，`contributeActions` 那边是空实现 ⇒ 本页也无动作）
+    /// + 正文。正文按清单状态分四态：
+    /// - 未读 / 读取中：空态文案（取数由宿主在切页签时分派，见 `ResultPanel::begin_references_load`）；
+    /// - 读失败（宿主自身原因，如未绑定连接）：显示原因；
+    /// - 读到但为空：「无引用」（照 DBeaver `ResultSetMessages.refs_no_refs_text`）；
+    /// - 读到非空：**只读键下拉**（DBeaver `CSmartCombo`）+「打开目标对象」+ 选中键的列映射。
+    ///
+    /// 与 DBeaver 的**已知差异**：那边下拉下面嵌一整份 `ResultSetViewer` 显示引用行，
+    /// 本仓首版只到「键 + 列映射」（引用行按 `result-panel-references-plan.md` 的
+    /// `B′` 方案另开结果集，尚未接线）。
     pub(crate) fn render_reference_tab(&self, cx: &App) -> AnyElement {
+        let body: AnyElement = match &self.references {
+            crate::references::ReferencesState::NotLoaded => {
+                self.sidebar_empty("切到本页时读取外键引用", cx)
+            }
+            crate::references::ReferencesState::Loading => {
+                self.sidebar_empty(crate::references::ReferencesState::LOADING, cx)
+            }
+            crate::references::ReferencesState::Failed(message) => {
+                self.sidebar_empty(message, cx)
+            }
+            crate::references::ReferencesState::Loaded(keys) if keys.is_empty() => {
+                self.sidebar_empty(crate::references::ReferencesState::NO_REFERENCES, cx)
+            }
+            crate::references::ReferencesState::Loaded(keys) => {
+                self.render_reference_keys(keys, cx)
+            }
+        };
         div()
             .flex_1()
             .min_h_0()
@@ -967,7 +989,124 @@ impl ResultPanel {
                 Vec::new(),
                 cx,
             ))
-            .child(self.sidebar_empty("选中一个列查看外键引用", cx))
+            .child(body)
+            .into_any_element()
+    }
+
+    /// 【引用页】有键时的正文：只读键下拉 + 「打开目标对象」+ 选中键的列映射。
+    ///
+    /// 下拉用 kit `DropdownButton` 承载只读选择器（DBeaver 用 `SWT.READ_ONLY` 的
+    /// `CSmartCombo`；本仓没有独立 combo 组件，用「按钮 + 勾选式菜单」表达同一件事：
+    /// 当前项打勾、选另一项即切换）。
+    fn render_reference_keys(
+        &self,
+        keys: &[crate::references::ReferenceKey],
+        cx: &App,
+    ) -> AnyElement {
+        let theme = cx.theme();
+        let active_index = self.active_reference.filter(|index| *index < keys.len());
+        let active = active_index.and_then(|index| keys.get(index));
+        let queue = self.queue.clone();
+
+        let label: SharedString = match active {
+            Some(key) => SharedString::from(crate::references::key_label(key)),
+            None => SharedString::from(crate::references::ReferencesState::NO_REFERENCES),
+        };
+        let items: Vec<(usize, String, bool)> = keys
+            .iter()
+            .enumerate()
+            .map(|(index, key)| {
+                (
+                    index,
+                    crate::references::key_label(key),
+                    active_index == Some(index),
+                )
+            })
+            .collect();
+        let chooser = DropdownButton::new("editor-result-reference-keys-anchor")
+            .button(
+                // 没有该页签该有的宽度弹性：长约束名要能截断，否则会把「打开目标对象」挤出去
+                Button::new("editor-result-reference-keys-button")
+                    .ghost()
+                    .xsmall()
+                    .label(label)
+                    .tooltip("选择引用键（本表外键）".to_string())
+                    .debug_selector(|| "editor-result-reference-keys".to_string()),
+            )
+            .menu_accessibility_label("引用键")
+            .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
+                let mut menu = menu;
+                for (index, text, checked) in items.iter() {
+                    let queue = queue.clone();
+                    let index = *index;
+                    let checked = *checked;
+                    let text = text.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(text)
+                            .checked(checked)
+                            .on_click(move |_, _window, app| {
+                                queue.request(
+                                    ResultRequest::SetActiveReference(Some(index)),
+                                    app,
+                                );
+                            }),
+                    );
+                }
+                menu
+            });
+
+        // 「打开目标对象」：目标表在当前连接里定位（DBeaver `refs_open_target`）
+        let schema = self
+            .reference_source(cx)
+            .map(|(schema, _, _)| schema)
+            .unwrap_or_default();
+        let target = active.map(|key| key.table.clone());
+        let open_queue = self.queue.clone();
+        let open = Button::new("editor-result-reference-open")
+            .ghost()
+            .xsmall()
+            .icon(IconName::Table)
+            .label("打开目标对象")
+            .tooltip("在导航树里定位该外键的目标表".to_string())
+            .debug_selector(|| "editor-result-reference-open".to_string())
+            .disabled(target.is_none())
+            .on_click(move |_, _window, app| {
+                let Some(table) = target.clone() else {
+                    return;
+                };
+                open_queue.request(
+                    ResultRequest::OpenReferenceTarget {
+                        schema: schema.clone(),
+                        table,
+                    },
+                    app,
+                );
+            });
+
+        let mapping: AnyElement = match active {
+            Some(key) => div()
+                .text_xs()
+                .text_color(theme.colors.muted_foreground)
+                .child(SharedString::from(crate::references::mapping_text(key)))
+                .into_any_element(),
+            None => div().into_any_element(),
+        };
+
+        div()
+            .flex_1()
+            .min_h_0()
+            .v_flex()
+            .child(
+                div()
+                    .h_flex()
+                    .gap_1()
+                    .px_2()
+                    .py_1()
+                    .border_b(ui::HAIRLINE)
+                    .child(div().flex_1().min_w_0().text_ellipsis().child(chooser))
+                    .child(open),
+            )
+            .child(div().px_2().py_1().child(mapping))
             .into_any_element()
     }
 

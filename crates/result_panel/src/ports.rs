@@ -311,6 +311,32 @@ pub enum ResultRequest {
     /// 且只有分组列非空时才可用）。本仓清空后回落到「当前选中列兜底」，DBeaver 是回到
     /// 空态（见 result-panel.md §8.49）
     ClearGroupColumns,
+    /// 【引用页】取当前结果集来源表的外键约束（对齐 DBeaver `ReferencesResultsContainer`
+    /// 的键清单加载 `refreshReferenceKeyList`）。面板交出「schema / 表 / 可见列」，
+    /// 宿主在后台任务里走 `MetadataService::list_constraints`（**不在 UI 线程 await**），
+    /// 回来经 [`crate::panel::data::ResultPanel::set_references`] 回填。
+    /// 为什么是面板发起：结果面板不认识 engine / database（依赖只向下），
+    /// 连接身份只在宿主手里（与 `GenerateResultSetDdl` 同一条队列通道）。
+    LoadReferences {
+        /// 表所属 schema（来源表限定名 `schema.表` 的前半段；裸表名时为空串）
+        schema: String,
+        /// 来源表名（不带 schema 前缀）
+        table: String,
+        /// 结果集**可见列**（隐藏列已排除）——DBeaver 只用可见属性收键
+        /// （`ReferencesResultsContainer.java:298`）
+        visible_columns: Vec<String>,
+    },
+    /// 【引用页】键下拉选中某一项（`None` = 清掉选中）。
+    /// render 是纯读路径，选中态只能经队列回面板改。
+    SetActiveReference(Option<usize>),
+    /// 【引用页】「打开目标对象」（对齐 DBeaver `refs_open_target`：
+    /// `NavigatorUtils.openNavigatorNode`）：宿主把目标表在导航树里定位出来。
+    OpenReferenceTarget {
+        /// 目标表所属 schema（与来源表同 schema）
+        schema: String,
+        /// 目标表名
+        table: String,
+    },
 }
 
 /// 【保存值】待落盘的内容：面板算字节与默认文件名，宿主只选路径 + 写盘。

@@ -216,6 +216,9 @@ impl ResultPanel {
             filter_settings_tab: crate::ports::FilterSettingsTab::Columns,
             presentation: Presentation::Grid,
             right_tab: RightTab::Browser,
+            // 【引用页】清单未读（切到该页签时宿主才去取外键）、没有选中键
+            references: crate::references::ReferencesState::NotLoaded,
+            active_reference: None,
             // 【R2 计算页】默认全集（与 DBeaver `loadDefaultFunctions` 同口径：默认函数全上）
             stats_items: crate::ports::StatsItem::ALL.to_vec(),
             stats_mode: crate::ports::StatsMode::Numeric,

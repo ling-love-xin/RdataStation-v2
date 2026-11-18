@@ -311,6 +311,123 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【引用页】回填外键清单（宿主取数回来后调用）。
+    ///
+    /// 与 DBeaver `ReferencesResultsContainer.fillKeysCombo`（`:359-377`）同口径：
+    /// 清单为空就清掉选中；非空时**优先保住原选中项**（同名键仍存在就不改），
+    /// 保不住再默认选第一条（`:341-343`）。
+    pub fn set_references(
+        &mut self,
+        state: crate::references::ReferencesState,
+        cx: &mut Context<Self>,
+    ) {
+        let same_state = self.references == state;
+        self.references = state;
+        let keys_len = match &self.references {
+            crate::references::ReferencesState::Loaded(keys) => keys.len(),
+            _ => 0,
+        };
+        if keys_len == 0 {
+            self.active_reference = None;
+        } else if self.active_reference.map(|index| index >= keys_len).unwrap_or(true) {
+            self.active_reference = Some(0);
+        }
+        if !same_state {
+            cx.notify();
+        }
+    }
+
+    /// 【引用页】键下拉选中某一项（`None` = 清掉选中）
+    pub fn set_active_reference(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
+        if self.active_reference == index {
+            return;
+        }
+        self.active_reference = index;
+        cx.notify();
+    }
+
+    /// 【引用页】当前选中的引用键（render 与「打开目标对象」都读它）
+    pub fn active_reference_key(&self) -> Option<&crate::references::ReferenceKey> {
+        match &self.references {
+            crate::references::ReferencesState::Loaded(keys) => {
+                keys.get(self.active_reference?)
+            }
+            _ => None,
+        }
+    }
+
+    /// 【引用页】当前结果的**来源表身份 + 可见列**（宿主据此取约束）。
+    ///
+    /// 来源表只认同一个限定名：所有已注解列都指向同一张表才认，否则返回 `None`
+    /// （口径与 `open_ddl_dialog` 的表名推导一致——来自多表 join / 计算列的结果
+    /// 没有单一来源表，DBeaver 那边也只按「可见属性所属实体」收集，收集不到就空着）。
+    ///
+    /// 可见列 = delegate 的列减去面板记的隐藏列，**并且**只留来自该来源表的列：
+    /// 结果里夹着计算列时，那些列不属于任何实体，DBeaver 的
+    /// `entityAttributes.containsAll(attributes)` 也不会拿它们放行。
+    pub fn reference_source(
+        &self,
+        cx: &App,
+    ) -> Option<(String, String, Vec<String>)> {
+        let grid = self.grid.read(cx);
+        let delegate = grid.delegate();
+        let columns = delegate.columns().to_vec();
+        let annotations = delegate.column_annotations().to_vec();
+
+        let source_tables: Vec<&str> = annotations
+            .iter()
+            .filter_map(|annotation| annotation.as_ref()?.source_table.as_deref())
+            .collect();
+        let table = match source_tables.first() {
+            Some(first) if source_tables.iter().all(|table| *table == *first) => *first,
+            _ => return None,
+        };
+        let (schema, name) = match table.split_once('.') {
+            Some((schema, name)) => (schema.to_string(), name.to_string()),
+            None => (String::new(), table.to_string()),
+        };
+
+        let visible: Vec<String> = columns
+            .iter()
+            .enumerate()
+            .filter(|(_, column)| !self.column_hidden.contains(column))
+            .filter(|(index, _)| {
+                annotations
+                    .get(*index)
+                    .and_then(|annotation| annotation.as_ref())
+                    .and_then(|annotation| annotation.source_table.as_deref())
+                    == Some(table)
+            })
+            .map(|(_, column)| column.clone())
+            .collect();
+        Some((schema, name, visible))
+    }
+
+    /// 【引用页】进入该页签时的取数入口（宿主在 `SetRightTab(Reference)` 分派里调）：
+    /// 状态置 `Loading` 并入队 [`crate::ports::ResultRequest::LoadReferences`]。
+    ///
+    /// 面板自己不判断「读过了没」——重复切页签重读一遍是 DBeaver 的行为
+    /// （`activatePanel` 每次都 `refresh`），这里照它。
+    pub fn begin_references_load(&mut self, cx: &mut Context<Self>) {
+        let Some((schema, table, visible_columns)) = self.reference_source(cx) else {
+            // 没有单一来源表：没有可读的约束，直接落在「无引用」
+            self.set_references(
+                crate::references::ReferencesState::Loaded(Vec::new()),
+                cx,
+            );
+            return;
+        };
+        self.set_references(crate::references::ReferencesState::Loading, cx);
+        self.queue.request(
+            crate::ports::ResultRequest::LoadReferences {
+                schema,
+                table,
+                visible_columns,
+            },
+            cx,
+        );
+    }
+
     /// 【R2 计算页】启用一个统计项（对齐 DBeaver Calc「＋添加函数」）。
     ///
     /// 插入位置按 [`StatsItem::ALL`] 的固定顺序算（不是追加到末尾）：DBeaver 的

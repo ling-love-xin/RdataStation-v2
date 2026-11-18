@@ -249,6 +249,14 @@ pub struct ResultPanel {
     pub(crate) presentation: Presentation,
     /// 【右栏】当前标签页（对齐 DBeaver 右侧面板组：列浏览器 / 值详情 / 计算 / 分组）
     pub(crate) right_tab: RightTab,
+    /// 【引用页】外键清单状态（对齐 DBeaver `ReferencesResultsContainer` 的键列表）：
+    /// 页签切到「引用」时由宿主经 `MetadataService::list_constraints` 取回并回填；
+    /// 初值 = 还没读过（`NotLoaded`）。**render 只读本字段**，取数不在 render 里发生。
+    pub(crate) references: crate::references::ReferencesState,
+    /// 【引用页】键下拉当前选中的下标（`None` = 没有可选键）。
+    /// 清单回填时默认选第一条（DBeaver `:341-343` 的兜底），选中态由
+    /// [`crate::ports::ResultRequest::SetActiveReference`] 改。
+    pub(crate) active_reference: Option<usize>,
     /// 【R2 计算页】启用的统计项集合（顺序 = 渲染顺序）。对齐 DBeaver Calc 的
     /// `AggregateColumnsPanel.enabledFunctions`：`+` 添加 / 行尾 × 删除 / Reset 恢复。
     /// 顺序按下标保存，用户增删不会打乱已启用项的相对次序。

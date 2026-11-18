@@ -2395,4 +2395,216 @@ fn filter_settings_open_close_and_apply_carry_the_draft(cx: &mut gpui_kit::TestA
     );
 }
 
+/// 【引用页】清单状态：回填后默认选第一条，长度不变时保住原选中，清单变空就清掉。
+///
+/// 口径照 DBeaver `ReferencesResultsContainer.fillKeysCombo`：`activeReferenceKey`
+/// 保不住时回落到 `referenceKeys.getFirst()`（`:341-343`）。
+#[gpui_kit::test]
+fn references_state_selects_first_key_and_drops_a_stale_selection(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::references::{ReferenceKey, ReferencesState};
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    let key = |table: &str| ReferenceKey {
+        table: table.to_string(),
+        constraint: "fk".to_string(),
+        columns: vec!["id".to_string()],
+        target_columns: vec!["id".to_string()],
+    };
+
+    // 读取中：没有可选键
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| p.set_references(ReferencesState::Loading, cx))
+    });
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.active_reference),
+        None,
+        "读取中没有可选项"
+    );
+
+    // 回填两条 → 默认第一条
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.set_references(
+                ReferencesState::Loaded(vec![key("customers"), key("regions")]),
+                cx,
+            )
+        })
+    });
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.active_reference),
+        Some(0),
+        "回填后默认选第一条"
+    );
+
+    // 用户改选第二条后，清单长度不变再回填 → 保住原选中
+    cx.update(|_window, app| panel.update(app, |p, cx| p.set_active_reference(Some(1), cx)));
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.set_references(
+                ReferencesState::Loaded(vec![key("customers"), key("regions")]),
+                cx,
+            )
+        })
+    });
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.active_reference),
+        Some(1),
+        "长度不变时应保住用户选的那条"
+    );
+
+    // 清单变空 → 选中清掉
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.set_references(ReferencesState::Loaded(Vec::new()), cx)
+        })
+    });
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.active_reference),
+        None,
+        "没有键时不该留一个悬空下标"
+    );
+}
+
+/// 【引用页】来源表身份：只有「所有已注解列都属于同一张表」才认；隐藏列不算可见列。
+#[gpui_kit::test]
+fn reference_source_needs_one_source_table_and_drops_hidden_columns(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use workbench_shell::model::ColumnAnnotation;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    let annotation = |table: &str, column: &str| ColumnAnnotation {
+        source_table: Some(table.to_string()),
+        source_column: Some(column.to_string()),
+        comment: None,
+        data_type: None,
+        nullable: None,
+        default_value: None,
+    };
+
+    // 两列都来自 public.orders；隐藏 amount 之后可见列只剩 id
+    cx.update(|_window, app| {
+        let grid = panel.read(app).grid.clone();
+        grid.update(app, |state, _cx| {
+            state.delegate_mut().set_column_annotations(vec![
+                Some(annotation("public.orders", "id")),
+                Some(annotation("public.orders", "amount")),
+            ]);
+        });
+        panel.update(app, |p, _cx| {
+            p.column_hidden = vec!["amount".to_string()];
+        });
+    });
+    let source = panel.read_with(cx, |p, app| p.reference_source(app));
+    assert_eq!(
+        source,
+        Some((
+            "public".to_string(),
+            "orders".to_string(),
+            vec!["id".to_string()]
+        )),
+        "来源表拆成 schema + 表名，隐藏列不进可见列"
+    );
+
+    // 两列来自不同表 → 没有单一来源表（多表 join 的结果不看外键清单）
+    cx.update(|_window, app| {
+        let grid = panel.read(app).grid.clone();
+        grid.update(app, |state, _cx| {
+            state.delegate_mut().set_column_annotations(vec![
+                Some(annotation("public.orders", "id")),
+                Some(annotation("public.items", "amount")),
+            ]);
+        });
+    });
+    assert_eq!(
+        panel.read_with(cx, |p, app| p.reference_source(app)),
+        None,
+        "多来源表不该认成某一张表"
+    );
+}
+
+/// 【引用页】切页签即入队取数；有键时渲染只读键下拉 + 「打开目标对象」。
+#[gpui_kit::test]
+fn reference_tab_requests_metadata_and_renders_the_key_list(cx: &mut gpui_kit::TestAppContext) {
+    use crate::references::{ReferenceKey, ReferencesState};
+    use workbench_shell::model::ColumnAnnotation;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    cx.update(|_window, app| {
+        let grid = panel.read(app).grid.clone();
+        grid.update(app, |state, _cx| {
+            state.delegate_mut().set_column_annotations(vec![
+                Some(ColumnAnnotation {
+                    source_table: Some("public.orders".to_string()),
+                    source_column: Some("id".to_string()),
+                    comment: None,
+                    data_type: None,
+                    nullable: None,
+                    default_value: None,
+                }),
+                Some(ColumnAnnotation {
+                    source_table: Some("public.orders".to_string()),
+                    source_column: Some("amount".to_string()),
+                    comment: None,
+                    data_type: None,
+                    nullable: None,
+                    default_value: None,
+                }),
+            ]);
+        });
+        panel.update(app, |p, cx| p.begin_references_load(cx));
+    });
+
+    let drained = cx.update(|_window, app| panel.read(app).queue.drain());
+    assert_eq!(drained.len(), 1, "取数只该入队一条请求：{drained:?}");
+    match &drained[0] {
+        crate::ports::ResultRequest::LoadReferences {
+            schema,
+            table,
+            visible_columns,
+        } => {
+            assert_eq!(schema, "public");
+            assert_eq!(table, "orders");
+            assert_eq!(
+                visible_columns,
+                &vec!["id".to_string(), "amount".to_string()]
+            );
+        }
+        other => panic!("应入队 LoadReferences，实际 {other:?}"),
+    }
+
+    // 回填一条键并把右栏切到引用页：下拉与「打开目标对象」都要在元素树里
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.set_references(
+                ReferencesState::Loaded(vec![ReferenceKey {
+                    table: "customers".to_string(),
+                    constraint: "fk_customer".to_string(),
+                    columns: vec!["id".to_string()],
+                    target_columns: vec!["id".to_string()],
+                }]),
+                cx,
+            );
+            p.set_right_tab(RightTab::Reference, cx);
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-reference-keys").is_some(),
+        "有键时该渲染只读键下拉"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-reference-open").is_some(),
+        "有键时该渲染「打开目标对象」"
+    );
+}
+
 

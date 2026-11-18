@@ -4,7 +4,7 @@
 //! 跨域互调经 `pub(crate)` 方法；字段在 mod.rs 统一 `pub(crate)`。
 
 use super::super::*;
-use result_panel::ports::ResultRequest;
+use result_panel::ports::{ResultRequest, RightTab};
 
 impl EditorHostPanel {
     /// 处理中可能**再入队**（如 `SetPushdown` 打开且有词 → 面板入队 `PushdownFilter`），
@@ -354,6 +354,29 @@ impl EditorHostPanel {
             ResultRequest::SetRightTab(tab) => {
                 self.result_panel
                     .update(cx, |p, cx| p.set_right_tab(tab, cx));
+                // 【引用页】切到该页签即读外键（DBeaver `activatePanel` → `refresh(false)`
+                // 每次激活都刷新，`ReferencesPanel.java:133-136`）：面板置 `Loading` +
+                // 入队 `LoadReferences`，真正的元数据查询在本文件的 `load_references` 里
+                // 走后台任务（UI 线程不 await）。
+                if tab == RightTab::Reference {
+                    self.result_panel
+                        .update(cx, |p, cx| p.begin_references_load(cx));
+                }
+            }
+            // 【引用页】宿主侧取外键（面板只交 schema / 表 / 可见列）
+            ResultRequest::LoadReferences {
+                schema,
+                table,
+                visible_columns,
+            } => self.load_references(schema, table, visible_columns, cx),
+            // 【引用页】键下拉选中（纯面板状态）
+            ResultRequest::SetActiveReference(index) => {
+                self.result_panel
+                    .update(cx, |p, cx| p.set_active_reference(index, cx));
+            }
+            // 【引用页】「打开目标对象」：导航树定位目标表
+            ResultRequest::OpenReferenceTarget { schema, table } => {
+                self.open_reference_target(schema, table, cx)
             }
             // 【列浏览器】清单单击选中列：面板写选中态 + 网格列高亮联动（方法内部已联动网格）
             ResultRequest::SelectColumn(column) => {
