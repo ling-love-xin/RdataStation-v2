@@ -3871,11 +3871,69 @@ WHERE <条件>` + `ORDER BY` 外提 + `dropped_limit` 回报），只差条件�
 - **工具条 8 项**（移顶/上移/下移/移底/排序/全显/全隐/重置）未做：本仓已有
   `set_columns_hidden`（批量显隐）、`toggle_freeze`、`show_all_columns`，
   列序移动实现存在（`grid/table_impl.rs::move_column`）但未接任何 UI。
+  **（其中全显 / 全隐 / 重置已由 §8.72 接上；四颗移动钮与「排序」仍受列序接口限制。）**
 - 页签切换不做键盘左右键漫游（`TabBar` 自身管焦点，未额外绑键）。
 
 **验证**：`cargo test -p rds-result-panel --lib` = **282 passed**（新增
 `filter_settings_columns_tab_projects_the_grid_column_state`：默认停在列页 + 切页不入队 +
 列清单初始两列可见未冻结 + 隐藏第 1 列后投影变 `false` + 冻结第 2 列后投影变 `true`）；
+`cargo test -p rds-editor --lib results` = 45 passed；`cargo test -p rds-ui-guard` = 4 passed；
+`cargo check -p rds-result-panel -p rds-editor` = 0 error / 0 warning。
+
+
+### 8.72 列约束页补齐「条件 / 排序」两列（只读投影）+ 页内工具条三颗（2026-11-18）
+
+**起点**：§8.71 落了列约束页，但只做「列名 / 可见 / 冻结 / #位置」，页内也还没有工具条。
+本批按 `FilterSettingsDialog.java` 补齐剩下**有落点**的部分。
+
+**取证**
+
+- 列集（`:129-243`）：名称 / 可见 / 固定 / order / criteria 五列 + 原位置（`getOriginalVisualPosition()+1`）。
+- 页内工具条（`:276-325`），八颗：
+  `moveTopButton` → `moveSelectedItems(false, false)`；`moveUpButton` → `(false, true)`；
+  `moveDownButton` → `(true, true)`；`moveBottomButton` → `(true, false)`（四颗默认 `setEnabled(false)`，
+  **要有选中行才亮**）；分隔 → `SORT`（`attributes.sort(ALPHA_SORTER)` 后逐条
+  `constraint.setVisualPosition(i)` 重排）→ 分隔 → `showAllButton`（全部 `setVisible(true)`）→
+  `showNoneButton`（全部 `setVisible(false)`）→ `reset`（`dataFilter.reset()` 后把 `orderText`
+  与 `whereText` 清空）。
+
+**本批落点**
+
+1. `ports.rs` 新结构 `ColumnConstraint { name, visible, frozen, criteria, sort }`；
+   `column_constraint_rows()` 的返回类型从元组换成它。
+2. 两列只读投影的来源（都是现有 delegate 真状态，不是常量）：
+   - **条件** ← `delegate.column_filter()`（列级「按值筛选 / 清除」从列头菜单写入，
+     `delegate.rs:656/663`）；
+   - **排序** ← `delegate.sort_state()`（列头点击的本地排序，`view_rows.rs:377`），
+     `Some(true)` 画 `↓`、`Some(false)` 画 `↑`、无则 `—`。
+   空条件显示 `—` 并用 `muted_foreground`，有值用正文色（避免满屏符号抢注意力）。
+3. 页内工具条（`Toolbar::xsmall`，三颗 `Button::ghost().xsmall().icon(...)`）：
+   - 全部显示 `IconName::Eye` → 请求 `ColumnsShowAll` → 面板 `show_all_columns`
+     （delegate `show_all_columns` 清隐藏清单）；
+   - 全部不显示 `IconName::EyeOff` → `ColumnsHideAll` → 面板 `hide_all_columns`
+     （逐列 `hide_column`；**本仓委托有「至少留 1 列可见」底线，故只留最后一列**——
+     与 DBeaver 允许全隐不同，属有意差异）；
+   - 重置 `IconName::RotateCcw` → `ColumnsResetLayout` → 面板 `reset_column_layout`
+     （新 delegate 方法：清隐藏 + 清冻结；列序与列宽不动，它们各有独立持久化通道）。
+   三颗都走 `snapshot_column_layout` → `ColumnLayoutChanged`，与列头菜单同一落盘通道。
+
+**未做与理由**
+
+- **四颗移动钮（移顶 / 上移 / 下移 / 移底）与「排序」**：DBeaver 直接改约束的
+  `visualPosition`；本仓列序权威在组件侧（`TableState` 的 `col_groups`），delegate 只有在拖拽
+  回调里同步 `display_order` 的一条通道（`table_impl.rs:196`）。要接四颗钮就得先拿到
+  「程序化重排列序」的组件接口，否则按钮是假的——本批不摆。
+- 「排序」在 DBeaver 里是**列名算法序重排**，同样受上述限制；本仓表头点击排序已有（本地排序）。
+- 「重置」在 DBeaver 还清 where/order 两页文本；本仓 where 归筛选框、order 归自定义页，
+  页内重置不跨页清它们的草稿（口径差异，记在此）。
+
+**验证**：`cargo test -p rds-result-panel --lib` = 282 passed，用例
+`filter_settings_columns_tab_projects_the_grid_column_state` 追加三段：
+① 初始列清单四要素全空；② `reset_column_layout` 后全可见全未冻结；
+③ 写入 `set_column_filter(Some((1, "> 100")))` + `apply_sort(Some((1, true)))` 后
+`rows[1].criteria == "> 100"`、`rows[1].sort == Some(true)`、`rows[0]` 两列仍为空
+（钉住「条件 / 排序是真投影、不是常量」）；④ 全部不显示后可见列数 = 1（钉住底线）；
+⑤ 全部显示后每列都可见。
 `cargo test -p rds-editor --lib results` = 45 passed；`cargo test -p rds-ui-guard` = 4 passed；
 `cargo check -p rds-result-panel -p rds-editor` = 0 error / 0 warning。
 

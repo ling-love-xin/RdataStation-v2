@@ -175,6 +175,16 @@ impl EditorHostPanel {
             ResultRequest::SetFilterSettingsTab(tab) => self
                 .result_panel
                 .update(cx, |p, cx| p.set_filter_settings_tab(tab, cx)),
+            // 【筛选设置 · 列约束】页内工具条三颗（全部显示 / 全部不显示 / 重置列布局）
+            ResultRequest::ColumnsShowAll => self
+                .result_panel
+                .update(cx, |p, cx| p.show_all_columns(cx)),
+            ResultRequest::ColumnsHideAll => self
+                .result_panel
+                .update(cx, |p, cx| p.hide_all_columns(cx)),
+            ResultRequest::ColumnsResetLayout => self
+                .result_panel
+                .update(cx, |p, cx| p.reset_column_layout(cx)),
             // 【1.2】复制「执行SQL」页签里的 wrapped SQL
             ResultRequest::CopyExecSql => {
                 let sql = self

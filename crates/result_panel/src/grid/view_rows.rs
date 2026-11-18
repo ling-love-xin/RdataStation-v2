@@ -60,6 +60,14 @@ impl ResultGridDelegate {
         self.hidden.clear();
     }
 
+    /// 【筛选设置】重置列布局：显示全部 + 取消全部冻结（对齐 DBeaver
+    /// `FilterSettingsDialog` 工具条「重置」的列布局那一支，`dataFilter.reset()` 的本地等价）。
+    /// 列序与列宽不动（它们各有持久化通道）。
+    pub fn reset_column_layout(&mut self) {
+        self.hidden.clear();
+        self.frozen.clear();
+    }
+
     /// 批量显隐（**数据列序**；列浏览器多选批量动作）。逐列复用单列接口——
     /// 隐藏时"至少留 1 列可见"的底线由 [`Self::hide_column`] 逐列把住，
     /// 因此整批隐藏一个只剩 1 列的宽表时，最后那一列会保留。

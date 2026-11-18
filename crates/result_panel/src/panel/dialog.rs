@@ -8,6 +8,7 @@ use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputState, Textarea};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::toolbar::Toolbar;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::*;
 
@@ -311,18 +312,64 @@ impl ResultPanel {
             .into_any_element()
     }
 
-    /// 【筛选设置 · 列约束】列清单（列名 / 可见 / 冻结 / 位置）。
+    /// 【筛选设置 · 列约束】列清单（列名 / 可见 / 冻结 / 条件 / 排序 / 位置）+ 页内工具条。
     ///
     /// 对齐 DBeaver `FilterSettingsDialog` 的 Columns 页签：`addColumn`(名称, `:129`) /
-    /// `addBooleanColumn`(可见 `:148`、固定 `:178`) / order(`:214`) / criteria(`:230`)。
-    /// 本仓的**可见与冻结是真的可切**（改网格 delegate + 走 `ColumnLayoutChanged` 落盘通道，
-    /// 与列头菜单同一条路）；「条件 / 排序」两列的编辑尚未接线（本仓列级条件走列头菜单、
-    /// 排序走服务端下发），故这里不摆假控件，只在页脚说明。
+    /// `addBooleanColumn`(可见 `:148`、固定 `:178`) / order(`:214`) / criteria(`:230`)，
+    /// 以及页顶工具条（`:276-325`）。
+    ///
+    /// 本仓口径：
+    /// - **可见与冻结可切**（改网格 delegate + `ColumnLayoutChanged` 落盘，与列头菜单同一条路）；
+    /// - **条件 / 排序只读投影**：条件取列级筛选（`delegate.column_filter()`，从列头菜单来）、
+    ///   排序取本地排序（`delegate.sort_state()`）；浮层里不摆假控件；
+    /// - **工具条只接三颗有落点的**：全部显示 / 全部不显示 / 重置（列布局）。DBeaver 还有
+    ///   移顶 / 上移 / 下移 / 移底 / 排序（列名 A→Z）——本仓列序改动只有拖拽一条通道
+    ///   （组件侧列序接口未接 UI），故不摆（见 `result-panel.md §8.72`）。
     fn render_filter_settings_columns(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let grid = self.grid.clone();
         let layout_queue = self.queue.clone();
         let rows = self.column_constraint_rows(cx);
+
+        // 页内工具条：三颗按钮（全部显示 / 全部不显示 / 重置），都直改 delegate 后走落盘通道
+        let show_all_queue = self.queue.clone();
+        let hide_all_queue = self.queue.clone();
+        let reset_queue = self.queue.clone();
+        let toolbar = Toolbar::new("editor-result-filter-settings-columns-toolbar")
+            .xsmall()
+            .p_0()
+            .contents([
+                Button::new("editor-result-filter-settings-show-all")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::Eye)
+                    .tooltip("全部显示".to_string())
+                    .debug_selector(|| "editor-result-filter-settings-show-all".to_string())
+                    .on_click(move |_, _window, app| {
+                        show_all_queue.request(ResultRequest::ColumnsShowAll, app);
+                    })
+                    .into_any_element(),
+                Button::new("editor-result-filter-settings-hide-all")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::EyeOff)
+                    .tooltip("全部不显示（至少保留一列可见）".to_string())
+                    .debug_selector(|| "editor-result-filter-settings-hide-all".to_string())
+                    .on_click(move |_, _window, app| {
+                        hide_all_queue.request(ResultRequest::ColumnsHideAll, app);
+                    })
+                    .into_any_element(),
+                Button::new("editor-result-filter-settings-reset")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::RotateCcw)
+                    .tooltip("重置列布局（显示全部 + 取消全部冻结）".to_string())
+                    .debug_selector(|| "editor-result-filter-settings-reset".to_string())
+                    .on_click(move |_, _window, app| {
+                        reset_queue.request(ResultRequest::ColumnsResetLayout, app);
+                    })
+                    .into_any_element(),
+            ]);
 
         let header = |text: &'static str| {
             div()
@@ -330,12 +377,25 @@ impl ResultPanel {
                 .text_color(theme.colors.muted_foreground)
                 .child(text)
         };
+        // 「条件 / 排序」两列固定窄宽，条件过长由 ellipsis 收口
+        let criteria_width = rems(9.);
+        let sort_width = rems(2.);
 
         let mut list = div().v_flex().gap_1().max_h(rems(18.)).overflow_y_scrollbar();
-        for (index, (name, visible, frozen)) in rows.iter().enumerate() {
-            let name = name.clone();
-            let visible = *visible;
-            let frozen = *frozen;
+        for (index, row) in rows.iter().enumerate() {
+            let name = row.name.clone();
+            let visible = row.visible;
+            let frozen = row.frozen;
+            let criteria = row
+                .criteria
+                .clone()
+                .unwrap_or_else(|| "—".to_string());
+            let criteria_set = row.criteria.is_some();
+            let sort_mark = match row.sort {
+                Some(true) => "↓",
+                Some(false) => "↑",
+                None => "—",
+            };
 
             // 可见：勾上 = 在网格里显示（隐藏列改 delegate，至少留 1 列可见由它兜底）
             let grid_vis = grid.clone();
@@ -393,6 +453,38 @@ impl ResultPanel {
                     )
                     .child(vis_box)
                     .child(pin_box)
+                    // 条件（只读投影；有值才用正文色，避免满屏都是「—」抢注意力）
+                    .child(
+                        div()
+                            .w(criteria_width)
+                            .min_w_0()
+                            .text_xs()
+                            .text_ellipsis()
+                            .overflow_hidden()
+                            .text_color(if criteria_set {
+                                theme.colors.foreground
+                            } else {
+                                theme.colors.muted_foreground
+                            })
+                            .debug_selector({
+                                let index = index;
+                                move || format!("editor-result-filter-settings-criteria-{index}")
+                            })
+                            .child(criteria),
+                    )
+                    // 排序（只读投影：↑ 升序 / ↓ 降序）
+                    .child(
+                        div()
+                            .w(sort_width)
+                            .text_xs()
+                            .text_center()
+                            .text_color(theme.colors.muted_foreground)
+                            .debug_selector({
+                                let index = index;
+                                move || format!("editor-result-filter-settings-sort-{index}")
+                            })
+                            .child(sort_mark),
+                    )
                     .child(
                         div()
                             .w(rems(2.))
@@ -409,7 +501,8 @@ impl ResultPanel {
             .gap_1()
             .px_3()
             .pt_3()
-            // 表头：与行同布局（列名 / 可见 / 冻结 / 位置）
+            .child(toolbar)
+            // 表头：与行同布局（列名 / 可见 / 冻结 / 条件 / 排序 / 位置）
             .child(
                 div()
                     .h_flex()
@@ -419,6 +512,8 @@ impl ResultPanel {
                     .child(div().flex_1().min_w_0().child(header("列")))
                     .child(div().child(header("可见")))
                     .child(div().child(header("冻结")))
+                    .child(div().w(criteria_width).child(header("条件")))
+                    .child(div().w(sort_width).text_center().child(header("排序")))
                     .child(div().w(rems(2.)).text_right().child(header("#"))),
             )
             .child(list)

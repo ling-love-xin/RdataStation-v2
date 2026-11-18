@@ -474,23 +474,29 @@ impl ResultPanel {
         }
     }
 
-    /// 【筛选设置 · 列约束】当前列清单快照：`(列名, 可见, 冻结)`，按**数据列序**。
+    /// 【筛选设置 · 列约束】当前列清单快照，按**数据列序**。
     ///
     /// DBeaver 的 Columns 页签是列约束树（名称 / 位置 / 可见 / 固定 / order / criteria，
-    /// `FilterSettingsDialog.java:129-243`）。本仓的「可见 / 冻结」状态权威在网格 delegate，
-    /// 这里只是只读投影——渲染期读，不做任何写入。
-    pub fn column_constraint_rows(&self, cx: &App) -> Vec<(String, bool, bool)> {
+    /// `FilterSettingsDialog.java:129-243`）。本仓「可见 / 冻结」的权威在网格 delegate（可写），
+    /// `criteria` / `sort` 分别取列级筛选与本地排序（只读投影）——渲染期读，不做任何写入。
+    pub fn column_constraint_rows(&self, cx: &App) -> Vec<crate::ports::ColumnConstraint> {
         let delegate = self.grid.read(cx).delegate();
+        let filter = delegate.column_filter();
+        let sort = delegate.sort_state();
         delegate
             .columns()
             .iter()
             .enumerate()
-            .map(|(index, name)| {
-                (
-                    name.clone(),
-                    !delegate.is_hidden_column(index),
-                    delegate.is_frozen(index),
-                )
+            .map(|(index, name)| crate::ports::ColumnConstraint {
+                name: name.clone(),
+                visible: !delegate.is_hidden_column(index),
+                frozen: delegate.is_frozen(index),
+                criteria: filter
+                    .filter(|(column, _)| *column == index)
+                    .map(|(_, text)| text.to_string()),
+                sort: sort
+                    .filter(|(column, _)| *column == index)
+                    .map(|(_, descending)| descending),
             })
             .collect()
     }
@@ -869,6 +875,47 @@ impl ResultPanel {
         let grid = self.grid.clone();
         grid.update(cx, |state, cx| {
             state.delegate_mut().set_columns_hidden(&columns, hidden);
+            state.refresh(cx);
+        });
+        self.snapshot_column_layout(cx);
+        cx.notify();
+    }
+
+    /// 【筛选设置 · 列约束】工具条「全部显示」（对齐 DBeaver `dialog_toolbar_show_all`，
+    /// `FilterSettingsDialog.java:304-310`：把每条约束 `setVisible(true)`）
+    pub fn show_all_columns(&mut self, cx: &mut Context<Self>) {
+        let grid = self.grid.clone();
+        grid.update(cx, |state, cx| {
+            state.delegate_mut().show_all_columns();
+            state.refresh(cx);
+        });
+        self.snapshot_column_layout(cx);
+        cx.notify();
+    }
+
+    /// 【筛选设置 · 列约束】工具条「全部不显示」（DBeaver `dialog_toolbar_show_none`，
+    /// `:311-317`：全部 `setVisible(false)`）。
+    ///
+    /// **口径差异（有意）**：本仓委托的逐列 `hide_column` 有「至少留 1 列可见」底线
+    /// （隐藏到空表没有意义），因此这里会保留最后那一列——与 DBeaver 允许全隐不同。
+    pub fn hide_all_columns(&mut self, cx: &mut Context<Self>) {
+        let columns: Vec<usize> = {
+            let delegate = self.grid.read(cx).delegate();
+            (0..delegate.columns().len()).collect()
+        };
+        self.set_columns_hidden(columns, true, cx);
+    }
+
+    /// 【筛选设置 · 列约束】工具条「重置」（DBeaver `dialog_toolbar_reset`，`:318-325`：
+    /// `dataFilter.reset()` 后重置两页文本）。
+    ///
+    /// 本仓只重置**列布局**这一支（显示全部 + 取消全部冻结），因为 where/order 的权威
+    /// 分别在筛选框与自定义排序输入里，且列序恢复默认序需要组件侧的列序接口（尚未接 UI，
+    /// 见 `result-panel.md §8.72`）。
+    pub fn reset_column_layout(&mut self, cx: &mut Context<Self>) {
+        let grid = self.grid.clone();
+        grid.update(cx, |state, cx| {
+            state.delegate_mut().reset_column_layout();
             state.refresh(cx);
         });
         self.snapshot_column_layout(cx);

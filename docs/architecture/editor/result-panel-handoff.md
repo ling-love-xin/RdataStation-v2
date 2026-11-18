@@ -1321,6 +1321,23 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - **验证**：panel **282**（新增 `filter_settings_columns_tab_projects_the_grid_column_state`）/
   editor 45 / guard 4 / check 0-0。
 
+### 2.61 列约束页补「条件 / 排序」只读两列 + 页内工具条三颗（2026-11-18）
+
+全文见 `result-panel.md §8.72`。接手要点：
+
+- `column_constraint_rows()` 现在返回 `ports::ColumnConstraint { name, visible, frozen,
+  criteria, sort }`（不再是三元组）。`criteria` ← `delegate.column_filter()`（列头菜单写入）、
+  `sort` ← `delegate.sort_state()`（列头点击的本地排序），两者**只读**。
+- 页内工具条三颗：`ColumnsShowAll` / `ColumnsHideAll` / `ColumnsResetLayout`
+  → 面板 `show_all_columns` / `hide_all_columns` / `reset_column_layout`，
+  三者都走 `snapshot_column_layout` → `ColumnLayoutChanged`（与列头菜单同一条落盘通道）。
+- **全部不显示有底线**：委托逐列 `hide_column` 保「至少留 1 列可见」，故结果是只剩一列
+  （DBeaver 允许全隐，这里是有意差异，别再当 bug 修）。
+- **四颗移动钮 + 「排序（列名 A→Z）」未做**：本仓列序权威在组件 `TableState` 的 `col_groups`，
+  delegate 只有拖拽回调里同步 `display_order` 一条通道（`grid/table_impl.rs::move_column`）。
+  要接先拿到「程序化重排列序」的组件接口，否则按钮是假的。
+- **验证**：panel 282 / editor 45 / guard 4 / check 0-0。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）

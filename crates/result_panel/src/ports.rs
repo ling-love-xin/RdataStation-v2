@@ -107,6 +107,15 @@ pub enum ResultRequest {
     /// 「Custom」= whereText / orderText，`:450-451`）。默认停在 **Columns**
     /// （对话框先建列页、`tabFolder.setSelection(0)`）。
     SetFilterSettingsTab(FilterSettingsTab),
+    /// 【筛选设置 · 列约束】工具条「全部显示」（DBeaver `dialog_toolbar_show_all`，
+    /// `FilterSettingsDialog.java:304-310`）
+    ColumnsShowAll,
+    /// 【筛选设置 · 列约束】工具条「全部不显示」（`dialog_toolbar_show_none`，`:311-317`；
+    /// 本仓委托有「至少留 1 列可见」底线，故会保留最后一列）
+    ColumnsHideAll,
+    /// 【筛选设置 · 列约束】工具条「重置」（`dialog_toolbar_reset`，`:318-325`）：
+    /// 本仓只重置列布局（显示全部 + 取消全部冻结）
+    ColumnsResetLayout,
     /// 【筛选设置】应用：`where` 回填筛选框并生效，`order` 是自定义排序文本
     /// （空 = 不自定义，沿用原查询的 ORDER BY）。宿主按两者重查替换当前结果集
     /// （对齐 DBeaver `FilterSettingsDialog` 的 Custom 页签：
@@ -430,6 +439,26 @@ pub enum FilterSettingsTab {
     Columns,
     /// 自定义条件：WHERE（只读回显筛选框）+ 自定义 ORDER BY（可编辑）
     Custom,
+}
+
+/// 【筛选设置 · 列约束】一行列约束的只读投影（对齐 DBeaver `FilterSettingsDialog` 列树列集：
+/// 名称 `:129` / 可见 `:148` / 固定 `:178` / order `:214` / criteria `:230`）。
+///
+/// 本仓**只有可见与冻结**是可写的（改网格 delegate）；`criteria` / `sort` 是只读投影——
+/// 条件来自列头菜单的列级筛选（`delegate.column_filter()`），排序来自本地排序状态
+/// （`delegate.sort_state()`），两者都不在浮层里编辑。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColumnConstraint {
+    /// 列名
+    pub name: String,
+    /// 是否可见（`false` = 已隐藏）
+    pub visible: bool,
+    /// 是否冻结
+    pub frozen: bool,
+    /// 该列当前的筛选条件（无 = `None`）
+    pub criteria: Option<String>,
+    /// 该列当前的本地排序（`Some(true)` = 降序、`Some(false)` = 升序、`None` = 未排序）
+    pub sort: Option<bool>,
 }
 
 /// 结果动作队列（`Rc<RefCell<Vec<_>>>` 共享句柄）

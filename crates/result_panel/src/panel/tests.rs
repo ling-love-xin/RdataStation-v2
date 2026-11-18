@@ -1901,15 +1901,27 @@ fn filter_settings_columns_tab_projects_the_grid_column_state(cx: &mut gpui_kit:
         "切页签不该入队请求"
     );
 
-    // 列清单初始：两列都可见、都没冻结
+    // 列清单初始：两列都可见、都没冻结、无条件、无排序
     let rows = panel.read_with(cx, |p, app| p.column_constraint_rows(app));
     assert_eq!(
         rows,
         vec![
-            ("id".to_string(), true, false),
-            ("amount".to_string(), true, false)
+            crate::ports::ColumnConstraint {
+                name: "id".to_string(),
+                visible: true,
+                frozen: false,
+                criteria: None,
+                sort: None,
+            },
+            crate::ports::ColumnConstraint {
+                name: "amount".to_string(),
+                visible: true,
+                frozen: false,
+                criteria: None,
+                sort: None,
+            }
         ],
-        "初始列清单应是「两列都可见、未冻结」"
+        "初始列清单应是「两列都可见、未冻结、无条件、无排序」"
     );
 
     // 隐藏第 1 列（走与列浏览器同一通道的批量接口），投影应立刻变 false
@@ -1917,8 +1929,8 @@ fn filter_settings_columns_tab_projects_the_grid_column_state(cx: &mut gpui_kit:
         panel.update(app, |p, cx| p.set_columns_hidden(vec![0], true, cx))
     });
     let rows = panel.read_with(cx, |p, app| p.column_constraint_rows(app));
-    assert!(!rows[0].1, "隐藏后 id 列应显示为不可见：{rows:?}");
-    assert!(rows[1].1, "另一列不该被牵连：{rows:?}");
+    assert!(!rows[0].visible, "隐藏后 id 列应显示为不可见：{rows:?}");
+    assert!(rows[1].visible, "另一列不该被牵连：{rows:?}");
 
     // 冻结第 2 列（直接改 delegate，与列头菜单 ToggleFreeze 同一条路）
     cx.update(|_window, app| {
@@ -1929,8 +1941,59 @@ fn filter_settings_columns_tab_projects_the_grid_column_state(cx: &mut gpui_kit:
         });
     });
     let rows = panel.read_with(cx, |p, app| p.column_constraint_rows(app));
-    assert!(rows[1].2, "冻结后 amount 列应显示为已冻结：{rows:?}");
-    assert!(!rows[0].2, "id 列不该被冻结：{rows:?}");
+    assert!(rows[1].frozen, "冻结后 amount 列应显示为已冻结：{rows:?}");
+    assert!(!rows[0].frozen, "id 列不该被冻结：{rows:?}");
+
+    // 工具条「重置列布局」：显示全部 + 取消全部冻结
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| p.reset_column_layout(cx))
+    });
+    let rows = panel.read_with(cx, |p, app| p.column_constraint_rows(app));
+    assert!(
+        rows.iter().all(|row| row.visible && !row.frozen),
+        "重置后应全部可见且全部未冻结：{rows:?}"
+    );
+
+    // 条件 / 排序两列是**只读投影**（不是常量「—」）：把 delegate 的列级筛选与本地排序
+    // 写进去，投影要跟着变（列级筛选从列头菜单来、本地排序从列头点击来）
+    cx.update(|_window, app| {
+        let grid = panel.read(app).grid.clone();
+        grid.update(app, |state, app| {
+            state.delegate_mut().set_column_filter(Some((1, "> 100".to_string())));
+            state.delegate_mut().apply_sort(Some((1, true)));
+            state.refresh(app);
+        });
+    });
+    let rows = panel.read_with(cx, |p, app| p.column_constraint_rows(app));
+    assert_eq!(
+        rows[1].criteria.as_deref(),
+        Some("> 100"),
+        "amount 列的条件应投影出列级筛选文本：{rows:?}"
+    );
+    assert_eq!(rows[1].sort, Some(true), "amount 列应投影出降序：{rows:?}");
+    assert_eq!(rows[0].criteria, None, "id 列不该有条件：{rows:?}");
+    assert_eq!(rows[0].sort, None, "id 列不该有排序：{rows:?}");
+
+    // 工具条「全部不显示」：逐列 hide 有「至少留 1 列可见」底线，故只留一列
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| p.hide_all_columns(cx))
+    });
+    let rows = panel.read_with(cx, |p, app| p.column_constraint_rows(app));
+    assert_eq!(
+        rows.iter().filter(|row| row.visible).count(),
+        1,
+        "全部不显示后应只剩 1 列可见（本仓底线）：{rows:?}"
+    );
+
+    // 工具条「全部显示」：回满
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| p.show_all_columns(cx))
+    });
+    let rows = panel.read_with(cx, |p, app| p.column_constraint_rows(app));
+    assert!(
+        rows.iter().all(|row| row.visible),
+        "全部显示后每列都可见：{rows:?}"
+    );
 }
 
 /// 【筛选设置】浮层开关 + 应用入队（对齐 DBeaver `filtersCustomButton` →
