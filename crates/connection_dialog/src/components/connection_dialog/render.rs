@@ -621,99 +621,7 @@ impl<H: 'static> ConnectionDialogState<H> {
                 theme,
             );
             let tab_content = match tab_ix_now {
-                1 => {
-                    // ===== 网络：引用「网络配置」档案（内联链已撤下，见架构 §14 #25）=====
-                    let network_ref_selected = network_ref.read(cx).selected_value().cloned();
-                    let is_ref = network_ref_selected.is_some();
-                    // 内联协议链已撤下（#25）：多跳改由「网络配置」档案承担（类型 `chain` 的 JSON 数组，
-                    // 连接时经 `parse_network_config_json` 解析为 `ConnectionMethod::Chain` 并逐跳执行）。
-                    // 此处只保留：引用下拉 + 管理入口 + 诚实提示 + 数据路径预览。
-                    let ref_label = network_ref_selected
-                        .as_ref()
-                        .map(|v| v.to_string())
-                        .unwrap_or_else(|| "直连（未引用档案）".to_string());
-                    let mut content = div().v_flex().gap_3();
-                    content = content.child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .gap_2()
-                            .child(div().text_sm().font_weight(FontWeight::BOLD).child(tr("网络配置")))
-                            .child(
-                                div().text_xs().text_color(theme.colors.muted_foreground)
-                                    .child(tr("引用网络档案：")),
-                            )
-                            .child(Select::new(&network_ref).placeholder(tr("（不引用：直连）")))
-                            .child(
-                                Button::new("mgr-network")
-                                    .ghost()
-                                    .label(tr("管理"))
-                                    .on_click({
-                                        let mgr = mgr.clone();
-                                        let entity = entity.clone();
-                                        let shared = shared.clone();
-                                        move |_, window, app| {
-                                            open_manager(1, &mgr, entity.clone(), shared.clone(), window, app);
-                                        }
-                                    }),
-                            ),
-                    );
-                    if is_ref {
-                        content = content.child(
-                            div().text_xs().text_color(theme.colors.info)
-                                .child("已引用网络档案 · 连接时生效（改档案一处全量生效）"),
-                        );
-                    } else {
-                        content = content.child(hint_line(
-                            theme,
-                            "未引用档案时直连；SSH 跳板 / 代理 / 多跳（chain）请在「管理」里建档案后在此引用。",
-                        ));
-                    }
-                    // 数据路径预览（TLS 徽标；SSL 细节在常规 → 连接安全）。
-                    content = content.child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .gap_2()
-                            .flex_wrap()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .rounded_md()
-                                    .border_1()
-                                    .border_color(theme.colors.border)
-                                    .px_2()
-                                    .py_1()
-                                    .child(tr("本机客户端")),
-                            )
-                            .child(div().text_xs().text_color(theme.colors.muted_foreground).child("→"))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .rounded_md()
-                                    .border_1()
-                                    .border_color(theme.colors.border)
-                                    .px_2()
-                                    .py_1()
-                                    .child(ref_label),
-                            )
-                            .child(div().text_xs().text_color(theme.colors.muted_foreground).child("→"))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .rounded_md()
-                                    .border_1()
-                                    .border_color(theme.colors.border)
-                                    .px_2()
-                                    .py_1()
-                                    .child(tr("目标数据库"))
-                                    .child(
-                                        div().text_xs().text_color(theme.colors.info).child(" TLS"),
-                                    ),
-                            ),
-                    );
-                    content
-                }
+                1 => network_tab_ui(&network_ref, &mgr, &entity, &shared, theme, cx),
                 4 => {
                     // ===== 高级：环境 + 策略覆盖 + DuckDB 加速 =====
                     let is_network_db = {
@@ -3256,4 +3164,131 @@ fn footer_ui<H: 'static>(p: Footer<'_, H>) -> Div {
                         }),
                 ),
         )
+}
+
+/// 网络页：引用「网络配置」档案（内联协议链已撤下，见架构 §14 #25）。
+///
+/// 多跳改由「网络配置」档案承担（类型 `chain` 的 JSON 数组，连接时经
+/// `parse_network_config_json` 解析为 `ConnectionMethod::Chain` 并逐跳执行）。
+/// 本页只保留四样东西：引用下拉 + 管理入口 + 诚实提示 + 数据路径预览（带 TLS 徽标；
+/// SSL 细节在常规 → 连接安全）。
+///
+/// 需要 `cx` 是为了读下拉当前值（`selected_value`），这是本页唯一的“读状态”行为。
+fn network_tab_ui<H: 'static>(
+    network_ref: &Entity<SelectState<SearchableVec<SharedString>>>,
+    mgr: &Rc<RefCell<ManagerWorkspace>>,
+    entity: &Entity<H>,
+    shared: &Rc<dyn ConnectionDialogHost>,
+    theme: &Theme,
+    cx: &App,
+) -> Div {
+    let mgr = Rc::clone(mgr);
+    let entity_click = entity.clone();
+    let shared_click = Rc::clone(shared);
+    let network_ref_selected = network_ref.read(cx).selected_value().cloned();
+    let is_ref = network_ref_selected.is_some();
+    let ref_label = network_ref_selected
+        .as_ref()
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "直连（未引用档案）".to_string());
+    let mut content = div().v_flex().gap_3();
+    content = content.child(
+        div()
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::BOLD)
+                    .child(tr("网络配置")),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.muted_foreground)
+                    .child(tr("引用网络档案：")),
+            )
+            .child(Select::new(network_ref).placeholder(tr("（不引用：直连）")))
+            .child(
+                Button::new("mgr-network")
+                    .ghost()
+                    .label(tr("管理"))
+                    .on_click(move |_, window, app| {
+                        open_manager(
+                            1,
+                            &mgr,
+                            entity_click.clone(),
+                            shared_click.clone(),
+                            window,
+                            app,
+                        );
+                    }),
+            ),
+    );
+    if is_ref {
+        content = content.child(
+            div()
+                .text_xs()
+                .text_color(theme.colors.info)
+                .child("已引用网络档案 · 连接时生效（改档案一处全量生效）"),
+        );
+    } else {
+        content = content.child(hint_line(
+            theme,
+            "未引用档案时直连；SSH 跳板 / 代理 / 多跳（chain）请在「管理」里建档案后在此引用。",
+        ));
+    }
+    // 数据路径预览（TLS 徽标；SSL 细节在常规 → 连接安全）。
+    content = content.child(
+        div()
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .flex_wrap()
+            .child(
+                div()
+                    .text_xs()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.colors.border)
+                    .px_2()
+                    .py_1()
+                    .child(tr("本机客户端")),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.muted_foreground)
+                    .child("→"),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.colors.border)
+                    .px_2()
+                    .py_1()
+                    .child(ref_label),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.muted_foreground)
+                    .child("→"),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.colors.border)
+                    .px_2()
+                    .py_1()
+                    .child(tr("目标数据库"))
+                    .child(div().text_xs().text_color(theme.colors.info).child(" TLS")),
+            ),
+    );
+    content
 }
