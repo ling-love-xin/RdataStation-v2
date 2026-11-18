@@ -187,6 +187,10 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::ResultPanelHiddenStatusCommands => {
             SettingValue::Text(settings.result_panel.hidden_status_commands.clone())
         }
+        // 【计算页持久化】启用统计项 id 列表（逗号分隔自由文本）
+        Slot::ResultPanelStatsItems => {
+            SettingValue::Text(settings.result_panel.stats_items.clone())
+        }
         // 【类型样式】13 项枚举：落盘值 → 设置页显示
         Slot::ResultPanelNumberFormat => {
             SettingValue::Text(settings.result_panel.number_format.as_str().to_string())
@@ -397,6 +401,7 @@ impl SettingsService {
             | Slot::ResultPanelSidebarWidth
             | Slot::ResultPanelSegmentRows
             | Slot::ResultPanelHiddenStatusCommands
+            | Slot::ResultPanelStatsItems
             | Slot::ResultPanelPersistColumnWidths
             | Slot::ResultPanelNumberFormat
             | Slot::ResultPanelNullPlaceholder

@@ -503,19 +503,24 @@ impl EditorHostPanel {
                 self.result_panel
                     .update(cx, |p, cx| p.set_show_column_comments(open, cx));
             }
-            // 【R2 计算页】函数集增删 / 复位 / 口径切换：全是面板本地视图状态
-            // （不落盘、不影响取数），宿主只转发（与 SetRightTab 同口径）
+            // 【R2 计算页】函数集增删 / 复位 / 口径切换：面板本地视图状态（不影响取数），
+            // 宿主只转发（与 SetRightTab 同口径）。**启用集要落盘**（对齐 DBeaver
+            // `AggregateColumnsPanel.saveSettings` 记住 `enabledFunctions`）：三条改动路径
+            // 生效后都按面板当前值回写一次，口径切换不落盘（DBeaver 也不存）。
             ResultRequest::AddStatsItem(item) => {
                 self.result_panel
                     .update(cx, |p, cx| p.add_stats_item(item, cx));
+                self.persist_result_stats_items(cx);
             }
             ResultRequest::RemoveStatsItem(item) => {
                 self.result_panel
                     .update(cx, |p, cx| p.remove_stats_item(item, cx));
+                self.persist_result_stats_items(cx);
             }
             ResultRequest::ResetStatsItems => {
                 self.result_panel
                     .update(cx, |p, cx| p.reset_stats_items(cx));
+                self.persist_result_stats_items(cx);
             }
             ResultRequest::SetStatsMode(mode) => {
                 self.result_panel
@@ -548,6 +553,16 @@ impl EditorHostPanel {
         let _ = self.window.update(cx, |_panel, window, app| {
             panel.update(app, |p, cx| p.clear_column_search(window, cx));
         });
+    }
+
+    /// 【计算页持久化】把面板当前的启用统计项写回全局偏好
+    /// （对齐 DBeaver `AggregateColumnsPanel.saveSettings` 记 `enabledFunctions`）。
+    ///
+    /// 三条改动路径（＋ / 行尾 × / Reset）生效后各回写一次：面板已把值夹成合法集合，
+    /// 宿主只负责读走那一串 id 交给设置服务（同值不写盘由设置侧判定）。
+    pub(crate) fn persist_result_stats_items(&mut self, cx: &mut Context<Self>) {
+        let ids = self.result_panel.read(cx).stats_items_ids();
+        settings::SettingsService::set_result_panel_stats_items(&ids, cx);
     }
 
     /// 需要 `&mut Window` 的动作走窗口句柄转手（headless / 窗口已关时静默跳过；

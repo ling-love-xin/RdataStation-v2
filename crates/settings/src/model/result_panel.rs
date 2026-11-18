@@ -55,6 +55,14 @@ pub struct ResultPanel {
     /// 作用域是**全局一份**（跨结果集 / 跨文档共用），不随会话快照落库。
     #[serde(default = "default_hidden_status_commands")]
     pub hidden_status_commands: String,
+    /// 【计算页持久化，对齐 DBeaver `AggregateColumnsPanel.loadSettings/saveSettings`】
+    /// 计算页启用的统计项，逗号分隔的稳定 id（`count,nulls,min,max,avg,sum`，顺序即行序）。
+    ///
+    /// 空串是合法状态（用户把六项全 × 掉）；「设置里没写过」由 `serde(default)` 落到
+    /// 出厂六项全开。未知 id 在面板侧忽略（id ↔ 项对应见 `result_panel::ports::StatsItem::id`）。
+    /// 作用域 = 全局一份（跨结果集 / 跨文档共用），不随会话快照落库。
+    #[serde(default = "default_result_stats_items")]
+    pub stats_items: String,
     /// 【类型样式】数字显示格式（默认原始值；只影响渲染显示，复制／导出仍用原始值）。
     #[serde(default)]
     pub number_format: workbench_shell::result_style::NumberFormatPref,
@@ -123,6 +131,7 @@ impl Default for ResultPanel {
             sidebar_width: default_result_sidebar_width(),
             segment_rows: default_result_segment_rows(),
             hidden_status_commands: default_hidden_status_commands(),
+            stats_items: default_result_stats_items(),
             // 类型样式默认全继承 / 原始值（与渲染现状逐项一致）
             number_format: workbench_shell::result_style::NumberFormatPref::Raw,
             null_placeholder: workbench_shell::result_style::NullPlaceholderPref::Null,
@@ -255,4 +264,10 @@ fn default_result_segment_rows() -> i64 {
 /// `defaultVisibility="false"` 且本仓不构成「唯一入口」；`fetch.page` 有意保持显示）。
 fn default_hidden_status_commands() -> String {
     "undo,redo".to_string()
+}
+
+/// 计算页出厂启用集：六项全开（顺序 = 原「计算」页六行顺序；DBeaver 出厂也把注册表里
+/// 非 `isDefault()` 之外的全部函数打开）。
+fn default_result_stats_items() -> String {
+    "count,nulls,min,max,avg,sum".to_string()
 }

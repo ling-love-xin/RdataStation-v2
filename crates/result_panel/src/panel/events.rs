@@ -522,6 +522,25 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【计算页持久化】宿主构造期注入启用集：设置里的 id 列表 → 面板状态。
+    ///
+    /// 对齐 DBeaver `AggregateColumnsPanel.loadSettings`（`:129-155`）：那边把
+    /// `enabledFunctions` 按存下的 `index` 顺序查回函数；本仓 `stats_items_from_ids`
+    /// 只保留六项里的已知 id、丢弃未知项与重复项（顺序照抄）。空串合法（全停用）。
+    pub fn set_stats_items_initial(&mut self, ids: &str, cx: &mut Context<Self>) {
+        let items = crate::ports::stats_items_from_ids(ids);
+        if items == self.stats_items {
+            return;
+        }
+        self.stats_items = items;
+        cx.notify();
+    }
+
+    /// 【计算页持久化】当前启用集的落盘形态（宿主在 ＋ / × / Reset 生效后读走这一串）。
+    pub fn stats_items_ids(&self) -> String {
+        crate::ports::stats_items_to_ids(&self.stats_items)
+    }
+
     /// 【R2 计算页】切换聚合口径（数值 / 字符串；对齐 `aggregateAsStrings` CHECK）
     pub fn set_stats_mode(&mut self, mode: StatsMode, cx: &mut Context<Self>) {
         if self.stats_mode == mode {

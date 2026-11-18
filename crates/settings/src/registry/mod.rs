@@ -214,6 +214,8 @@ pub enum Slot {
     ResultPanelSegmentRows,
     /// 【DBeaver 工具条配置】状态栏被隐藏的命令 id 列表（逗号分隔，自由文本）。
     ResultPanelHiddenStatusCommands,
+    /// 【计算页持久化】启用的统计项 id 列表（逗号分隔，顺序即行序）。
+    ResultPanelStatsItems,
     /// 【类型样式】数字显示格式（raw / grouped / fixed2 / scientific）。
     ResultPanelNumberFormat,
     /// 【类型样式】NULL 显示占位（null / emptyset / dash）。
@@ -329,6 +331,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "result_panel.sidebar_width" => Slot::ResultPanelSidebarWidth,
         "result_panel.segment_rows" => Slot::ResultPanelSegmentRows,
         "result_panel.hidden_status_commands" => Slot::ResultPanelHiddenStatusCommands,
+        "result_panel.stats_items" => Slot::ResultPanelStatsItems,
         "result_panel.number_format" => Slot::ResultPanelNumberFormat,
         "result_panel.null_placeholder" => Slot::ResultPanelNullPlaceholder,
         "result_panel.bool_display" => Slot::ResultPanelBoolDisplay,
@@ -436,6 +439,8 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::ResultPanelSidebarWidth | Slot::ResultPanelSegmentRows => KindTag::Number,
         // 自由文本（逗号分隔的命令 id）：面板末端 ▾ 菜单与设置页都可写。
         Slot::ResultPanelHiddenStatusCommands => KindTag::Text,
+        // 自由文本（逗号分隔的统计项 id）：计算页工具条 ＋ / 行尾 × / Reset 与设置页都可写。
+        Slot::ResultPanelStatsItems => KindTag::Text,
         // 【类型样式】23 项全是枚举（设置页下拉）。
         Slot::ResultPanelNumberFormat
         | Slot::ResultPanelNullPlaceholder

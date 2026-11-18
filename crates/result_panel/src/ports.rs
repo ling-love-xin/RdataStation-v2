@@ -417,6 +417,57 @@ impl StatsItem {
     pub fn supports_text_mode(self) -> bool {
         matches!(self, Self::Count | Self::Nulls | Self::Min | Self::Max)
     }
+
+    /// 落盘 / 设置项用的稳定 id（`result_panel.stats_items` 列表里的元素名）。
+    ///
+    /// 用英文 id 而不是中文标签：标签会随文案调整而漂移，id 是契约
+    /// （与 `StatusCommand::id` 同一口径）。
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Count => "count",
+            Self::Nulls => "nulls",
+            Self::Min => "min",
+            Self::Max => "max",
+            Self::Avg => "avg",
+            Self::Sum => "sum",
+        }
+    }
+
+    /// 解析 id；未知 / 大小写不符的值返回 `None`（由调用方忽略，不猜）。
+    pub fn parse(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|item| item.id() == id.trim())
+    }
+}
+
+/// 【计算页持久化】把设置里的 id 列表解析成启用集合（顺序照抄、未知项忽略、重复项丢弃）。
+///
+/// 对齐 DBeaver `AggregateColumnsPanel.loadSettings`（`:129-155`）：那边把
+/// `enabledFunctions` 按 `index` 顺序逐个 `FunctionsRegistry` 查回函数；本仓六项固定，
+/// 查不到的一律丢掉（升级 / 手改配置里的未知 id 不应该把整页搞坏）。
+pub fn stats_items_from_ids(text: &str) -> Vec<StatsItem> {
+    let mut items: Vec<StatsItem> = Vec::new();
+    for part in text.split(',') {
+        let Some(item) = StatsItem::parse(part) else {
+            continue;
+        };
+        if items.contains(&item) {
+            continue;
+        }
+        items.push(item);
+    }
+    items
+}
+
+/// 【计算页持久化】启用集合 → 落盘 id 列表（逗号分隔，顺序保留）。
+///
+/// 全停用时给空串——这是**合法状态**（用户在页内把六项全 × 掉了），
+/// 与「设置里没写过这一项」用默认值区分开（模型默认值 = 六项全开）。
+pub fn stats_items_to_ids(items: &[StatsItem]) -> String {
+    items
+        .iter()
+        .map(|item| item.id())
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// 【R2】计算页聚合口径（对齐 DBeaver Calc 的 `aggregateAsStrings` CHECK）
@@ -783,5 +834,28 @@ mod tests {
         queue.push(ResultRequest::Refresh);
         let second = queue.drain();
         assert_eq!(second, vec![ResultRequest::Refresh]);
+    }
+
+    /// 计算页启用集与落盘 id 列表的往返：顺序保留、未知项与重复项丢弃、空串 = 全停用。
+    #[test]
+    fn stats_item_ids_round_trip_and_drop_unknown() {
+        assert_eq!(
+            stats_items_to_ids(&StatsItem::ALL),
+            "count,nulls,min,max,avg,sum"
+        );
+        // 乱序 + 空白 + 大小写不规范的输入照 id 解析（空白由 `parse` 的 trim 吃掉，
+        // 大小写不匹配按未知项丢弃——id 是契约，不做模糊匹配）
+        assert_eq!(
+            stats_items_from_ids(" sum , min,,sum,COUNT "),
+            vec![StatsItem::Sum, StatsItem::Min]
+        );
+        // 空串 / 全未知 = 全停用（合法状态，不是"没写"）
+        assert!(stats_items_from_ids("").is_empty());
+        assert!(stats_items_from_ids("nosuch,another").is_empty());
+        // 每个 id 都能解析回自己（幂等）
+        for item in StatsItem::ALL {
+            assert_eq!(StatsItem::parse(item.id()), Some(item));
+        }
+        assert_eq!(stats_items_to_ids(&[]), "");
     }
 }

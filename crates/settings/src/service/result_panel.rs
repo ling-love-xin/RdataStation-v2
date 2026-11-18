@@ -377,6 +377,20 @@ pub(crate) fn apply_slot(
             }
             persist(&cx.global::<Settings>().clone());
         }
+        Slot::ResultPanelStatsItems => {
+            // 【计算页持久化】同口径：只做空白折叠 / 去重空项 / 小写，不校验 id
+            // （id ↔ 项对应表在 `result_panel::ports::StatsItem::id`，未知 id 面板侧丢弃）。
+            // 空串保留：它是「六项全停用」这个合法状态，不能被当成"没写"。
+            let Some(text) = value.as_text() else {
+                return false;
+            };
+            let normalized = normalize_command_list(text);
+            {
+                let settings = cx.global_mut::<Settings>();
+                settings.result_panel.stats_items = normalized;
+            }
+            persist(&cx.global::<Settings>().clone());
+        }
         _ => return false,
     }
     true
@@ -428,6 +442,21 @@ impl crate::service::SettingsService {
         {
             let settings = cx.global_mut::<Settings>();
             settings.result_panel.hidden_status_commands = normalized;
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
+    /// 【计算页持久化】写启用的统计项 id 列表（＋ / 行尾 × / Reset 生效后由宿主落盘）。
+    ///
+    /// 与现值相同则不写盘；面板自己已经重绘，这里不 `refresh_windows`。
+    pub fn set_result_panel_stats_items(list: &str, cx: &mut App) {
+        let normalized = normalize_command_list(list);
+        if cx.global::<Settings>().result_panel.stats_items == normalized {
+            return;
+        }
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.result_panel.stats_items = normalized;
         }
         persist(&cx.global::<Settings>().clone());
     }
