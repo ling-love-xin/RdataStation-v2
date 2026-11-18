@@ -1428,6 +1428,32 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - **验证**：settings 37 / panel 288（+2 用例）/ editor results 45 / guard 4 / check 0-0。
   提交 `7836006e`。
 
+### 2.67 列浏览器页「生成 DDL」（2026-11-18）
+
+全文见 `result-panel.md §8.78`。接手要点：
+
+- DBeaver 这条动作生成的是**新表** DDL（走数据迁移映射 `DatabaseMappingType.create`），
+  不是来源表 DDL。本仓没有迁移机制，类型**照驱动口径**出；驱动没报的列按值族给不带
+  精度的通用类型、行尾注明「按值族推断」；连值族都认不出（`ColumnKind::Unknown`）
+  则整份不出 SQL、只给说明（对齐 `sql_generator_nonsql_text`）——**不要**为了让输出
+  「看起来完整」而编类型。
+- 纯函数入口 `result_panel::ddl::create_table_ddl(table, &[DdlColumn])`；
+  类型解析 `ddl::resolve_type(driver_type, kind) -> Option<(String, bool)>`
+  （第二个返回值就是「是不是推断的」，决定要不要加行尾注明）。改生成规则改这里，
+  面板只负责取素材。
+- 面板侧：`open_ddl_dialog(window, cx)`（`TextareaState::new` 需要 `&mut Window`，
+  所以由宿主经 `ResultRequest::GenerateResultSetDdl` 分派）。素材 = 网格 delegate 的
+  `columns()` / `column_types()` / `column_annotations()`（后者的 `data_type` 是
+  NavCache 的驱动类型，比渲染层 `ColumnType.name` 更权威）。
+- 预览复用 SQL 预览浮层：`sql_dialog_title`（`None` = 原始 SQL）。**两个入口都要复位**
+  （`open_sql_dialog` / `close_sql_dialog` 已复位），新增第三个复用场景时别忘了。
+- 未做（DBeaver 有、本仓无）：树形嵌套列（`getNestedBindings`）、右键
+  「复制列名」项、可编辑 SQL（本仓浮层只读）、表名用户输入。
+- **并行线阻断**：本批 `cargo check -p rds-workbench` 失败于
+  `crates/connection_dialog/.../managers.rs` 6 处 E0308（并行线在改，与本批无关）；
+  本线三 crate（settings / result_panel / editor）check 0-0。
+- **验证**：settings 37 / panel 296（+8 用例）/ editor results 45 / guard 4。提交 `140079c1`。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）

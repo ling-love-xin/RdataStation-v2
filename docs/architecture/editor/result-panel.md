@@ -4141,6 +4141,77 @@ editor results 45、ui-guard 4、check 0-0。提交 `e1b797db`。
 即时生效；DBeaver 的工具条配置两处都即时。要补齐需要 settings → 活动面板的推送通道
 （现有 settings 层只在 NextUse / 各域自己的同步点用工），未做。
 
+### 8.78 列浏览器页补「生成 DDL」（对齐 DBeaver Metadata 面板唯一动作，2026-11-18）
+
+**取证**：
+- `panel/metadata/MetaDataPanel.java:203-215` 的 `contributeActions` **只贡献一条**命令：
+  `org.jkiss.dbeaver.ui.editors.sql.generate.ddl.by.resultSet`
+  （文案 `ResultSetMessages.generate_ddl_by_result_set_name`、图标 `DBIcon.SQL_TEXT`、
+  第四参 `true` = 恒可用）。该面板工具条其余内容 = 顶部筛选框（标签 + SEARCH 文本框 + ESC 清空，
+  `:84-98`）+ 无其它动作。
+- 处理器 `SQLGeneratorHandlerResultSetDDL.execute`：拿当前结果集 →
+  `new SQLGeneratorDDLFromResultSet()` → `generator.initGenerator(List.of(controller))`
+  → 弹 `ViewSQLDialog`（标题 `sql_generator_title_text` + 连接容器名），
+  `createDialogArea` 里跑 `generator` 并把结果 `setSQLText`。
+- 生成内容 `SQLGeneratorDDLFromResultSet.generateSQL`（`:52-99`）：
+  1. `ResultSetDataContainer` + `DatabaseMappingContainer(mapping.refreshMappingType(create))`
+     —— 走**数据迁移**的映射机制，所以生成的是「按结果集列建**新表**」的 DDL；
+  2. 动态元数据 → 直接写 `sql_generator_nonsql_text`（不出 SQL）；
+  3. 找不到目标对象容器 → `sql_generator_no_obj_container_text`；
+  4. `DatabaseTransferUtils.generateTargetTableDDL` + `SQLUtils.generateScript` 出方言脚本；
+     结果为空 → `sql_generator_no_ddl_text`。
+
+**本仓落点**：
+- 新模块 `crates/result_panel/src/ddl.rs`（纯函数，无 UI 依赖）：
+  - `create_table_ddl(table, &[DdlColumn]) -> DdlOutcome::{Sql, Unavailable}`：
+    逐列 `  name TYPE [NOT NULL] [DEFAULT v]`，列间逗号、末行 `);`；
+    `DdlColumn.nullable == Some(false)` 才写 `NOT NULL`（元数据没说就不写约束）；
+    `default_value` 照驱动原话直出。
+  - 类型：`resolve_type(driver_type, kind)` —— 驱动口径优先（`inferred=false`），
+    否则按 `ColumnKind` 值族给通用类型（**不带精度**）并 `inferred=true`（行尾注明
+    「类型按值族推断（驱动未报）」）；`ColumnKind::Unknown` 且无驱动类型 → `None`。
+  - 认不出类型的列 → **整份不出 SQL**，返回点名列出哪几列的说明（对齐 DBeaver 的
+    `nonsql_text` 分支：只给说明，不编一个假类型）。
+  - 标识符按原名直出、不套引号（引号字符随方言变，本层不知道目标方言；DBeaver 走
+    `SQLUtils` 的方言引用规则）。
+  - 表名由面板给：所有「有来源表」的列指向同一张表时用其**裸名**（去掉 `schema.`），
+    否则占位 `new_table`（DBeaver 的表名来自迁移映射容器，本仓无此机制）。
+- 列浏览器页页内工具条（`panel_toolbar`，28px + HAIRLINE）**常驻**一颗
+  「生成 DDL」钮（`IconName::FileCode`、id `editor-result-generate-ddl`、带 tooltip），
+  与多选批量动作同一 `Toolbar`（按钮在前、批量动作在后）→
+  `ResultRequest::GenerateResultSetDdl` → editor 走窗口句柄转手（`TextareaState::new`
+  需要 `&mut Window`）→ `ResultPanel::open_ddl_dialog`。
+- 预览复用既有 SQL 预览浮层：面板新增 `sql_dialog_title: Option<SharedString>`
+  （`None` = 「原始 SQL」；生成 DDL = 「生成 DDL（按结果集列建表）」）；
+  `open_sql_dialog` / `close_sql_dialog` 都把它复位成 `None`，避免两个场景互相串标题。
+- 素材来自网格 delegate：列名 `columns()`、驱动类型
+  `column_annotations()[i].data_type`（NavCache 列元数据）→ 退 `column_types()[i].name`、
+  可空 `annotations[i].nullable`、默认值 `annotations[i].default_value`、
+  值族 `column_types()[i].kind`。
+
+**验证**：
+- `ddl::tests`（6 例）：逐列形状与逗号位置；`NOT NULL` 只在明确不可空时写、默认值直出；
+  推断类型必须带行尾注明；缺类型列 → 拒绝出 SQL 且说明里点名该列；空列 / 空表名不崩；
+  `resolve_type` 的三档（驱动优先 / 值族推断 / `Unknown` → `None`）。
+- `panel::tests::column_browser_toolbar_queues_the_generate_ddl_request`：工具条常驻该钮，
+  点击入队 `GenerateResultSetDdl`。
+- `panel::tests::generate_ddl_dialog_shows_sql_or_an_explanation`：有驱动类型时浮层打开、
+  标题正确；清空类型后走说明分支；关闭后标题复位。
+- 门禁：check（settings / result_panel / editor）0 error / 0 warning；settings 37、
+  result_panel **296**、editor results 45、ui-guard 4。提交 `140079c1`。
+  `rds-workbench` 本批未编译：并行线正在改 `crates/connection_dialog/.../managers.rs`
+  （6 处 E0308，与本批无关）。
+
+**已知差异 / 缺口**：
+- 没有「值类型 → 方言类型」的映射转换（DBeaver 走迁移框架按 `DatabaseMappingType.create`
+  逐列选目标方言类型）；本仓只能照驱动类型出，表达式列给不带精度的通用类型并注明。
+- 表名不做用户输入：DBeaver 的 `ViewSQLDialog` 里 SQL 可编辑（可改表名后直接执行），
+  本仓预览浮层是**只读** Textarea（对齐既有 SQL 预览的做法）。
+- DBeaver 的 Metadata 面板还有：顶部筛选框（按列名过滤）、树形嵌套列（`getNestedBindings`）、
+  选中列与网格当前列**双向**同步、隐藏列用斜体、"Copy column text" 右键项
+  （`MetaDataPanel.java:219-301`）。本仓列浏览器页的搜索框（kit `List` 内置）、
+  选中列联动、隐藏列置灰斜体已具备；**树形嵌套列**与**右键「复制列名」**仍未做。
+
 
 ## 8. 协作纪律
 
