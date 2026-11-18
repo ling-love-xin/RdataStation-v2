@@ -4557,6 +4557,55 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
 - `panel::tests::set_segment_rows_clamps_to_the_minimum`（默认值 / 改值 / 0 抬到下限）。
 - `panel::tests::status_row_shows_the_segment_size_input`（注入 status 后状态行摆出段框）。
 
+### 8.86 段大小跨会话持久化（补齐 §8.85 的落盘缺口，2026-11-18）
+
+§8.85 把「取下一段」的行数做成可编辑输入框，但值只活到关窗。本批按 DBeaver
+`resultSetSize` 的 modify 语义（写偏好 + 立即存盘）补齐闭环。
+
+**settings 落点**（`crates/settings`，与 `result_panel.sidebar_width` 同一形态）：
+- 模型 `ResultPanel.segment_rows: i64`（`#[serde(default = "default_result_segment_rows")]`，
+  默认 `1000`；struct / `Default` / 末尾 default fn 三处登记）。
+- `Slot::ResultPanelSegmentRows` + key 映射 `result_panel.segment_rows` +
+  `registry::slot_kind` = `KindTag::Number`（契约测试要求与登记项 `kind.tag()` 一致）。
+- `service/mod.rs` 读值分支 + `apply_slot` 分派链；`service/result_panel.rs::apply_slot`
+  新臂：`as_number()`，`< 1.0 || > 100_000.0` 直接 `return false`（不静默夹取，
+  与 `sidebar_width` 的越界口径一致），否则写 `segment_rows` 并 `persist`。
+- `SettingsService::set_result_panel_segment_rows(rows: usize, cx)`：夹 `1..=100_000`、
+  同值不写盘、变更后 `persist`。
+- 登记项 `result_panel.segment_rows`（`group: "data"`，`SettingKind::Number`，
+  presets 200 / 500 / 1000 / 2000，`default_json: "1000"`，`SettingEffect::NextUse`，
+  consumer 指向 construct / dispatch / fetch_more）。**登记顺序必须在 `bool_display`
+  之后**：`registry::tests::groups_are_contiguous_and_consistently_named` 要求同 section
+  内 group 连续，插在 `sidebar_width`（`layout`）之后就打断 `data`。
+
+**宿主 / 面板落点**：
+- `panel.set_segment_rows_initial(rows, window, cx)`：构造期注入——状态落位 + 把值写进
+  输入框（`InputState::set_value` 内部 `emit_events = false`，不会把注入当成用户输入再入队）。
+  没有它的话，持久化成 `500` 时框里仍是空的（只有占位 `1000`），用户看不到当前生效值。
+- `construct.rs`：`segment_rows` 与 `sidebar_width` 一起在 `&mut cx` 之前拷贝
+  （E0502 教训），面板构造后调用 `set_segment_rows_initial(rows.max(1))`。
+- `dispatch.rs::SetSegmentRows`：面板先 `set_segment_rows`（夹下限、同值不重入），
+  再读回 `panel.segment_rows()` 交给 `SettingsService::set_result_panel_segment_rows`
+  落盘——写回的是**夹取后的生效值**，不是用户原始输入。
+- `ui.rs`：清掉行数框「行号跳转是 backlog」的过期注释（`GoRow` 早已接线），
+  段大小常量注释从「跨会话未持久化」改为指向本节。
+
+**仍存在的偏离（与 §8.85 一致的部分不重复）**：
+- 作用域：DBeaver 存**连接级**偏好（同一连接的所有结果集共用一份），本仓存**全局一份**
+  （所有连接共用），与 `result_panel.sidebar_width` 同口径。若日后要按连接分档，
+  需要把偏好键迁到连接配置域，属另一批。
+- 设置页手改是 `NextUse`：改完不影响已打开的面板（面板构造期注入），要下次打开生效；
+  状态行段框那边是立即生效。两者并存是刻意的（DBeaver 也是「偏好改后新开的结果集生效」）。
+- 设置页 Number 项渲染成预设分段（200/500/1000/2000），手填非预设值（如 `750`）在
+  设置页会回落到第一档显示——与 `sidebar_width` 同一限制，非本批引入。
+
+**验证**：
+- `cargo test -p rds-settings --lib` = **37 passed**（含分组连续性 / kind 契约）。
+- `cargo test -p rds-result-panel --lib` = **319 passed**；新增
+  `panel::tests::set_segment_rows_initial_puts_the_value_in_the_box`
+  （注入 500 → `segment_rows() == 500` 且输入框文本为 `"500"`）。
+- `cargo check -p rds-editor` = Finished；`cargo test -p rds-ui-guard` = 4 passed。
+
 
 
 ## 8. 协作纪律

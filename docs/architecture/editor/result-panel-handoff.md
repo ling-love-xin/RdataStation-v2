@@ -1490,8 +1490,31 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   内部元素的 id 进不了渲染观测。
 - 测试壳默认不注入 `status`，状态行整块不渲染（`show_status` 口径）：断言状态行元素前
   先 `p.status = Some(ResultStatus { .. })`。
-- 未落地：跨会话持久化（要新增 `result_panel.segment_rows` 偏好项 + 设置页条目 +
-  构造期注入）；无 focus-lost 回填（`InputState` 没有失焦钩子），只做「有效提交即规范化」。
+- 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；无 focus-lost 回填
+  （`InputState` 没有失焦钩子），只做「有效提交即规范化」。
+
+### 2.74 段大小持久化的接手要点（2026-11-18）
+
+- 值链路一条线：状态行段框（`InputState`）→ `parse_segment_rows`（`>0` 才算有效）→
+  `ResultRequest::SetSegmentRows` → 面板 `set_segment_rows`（夹 `MIN=1`）→
+  宿主读回 `panel.segment_rows()` → `SettingsService::set_result_panel_segment_rows`
+  （夹 `1..=100_000`、同值不写盘、persist）。**写盘写的是夹取后的生效值**，
+  别把用户原始输入直传持久层。
+- 构造期注入走 `panel.set_segment_rows_initial(rows, window, cx)`（需要 `&mut Window`），
+  它同时把值写进输入框：只设状态不写框，用户会看到空框 + 占位 `1000`，误以为没生效。
+  `set_value` 内部 `emit_events = false`，不会把注入当成用户输入再入队一次。
+- `construct.rs` 里 `segment_rows` 必须与 `sidebar_width` 一样**在 `&mut cx` 之前拷贝**
+  （E0502：`try_global` 的借用会跨到后面的 `panel.set_*(…, cx)`）。
+- settings 侧三处必登记：`ResultPanel.segment_rows`（struct + `Default` + 末尾 default fn）、
+  `Slot` 变体 + key 映射、**`registry::slot_kind` 的 `KindTag::Number`**
+  （漏这一处 → `E0004 non-exhaustive`；契约测试还要求它与登记项 `kind.tag()` 一致）。
+- 登记项顺序：`result_panel.segment_rows` 属 `group: "data"`，**必须插在 `bool_display`
+  之后**（插到 `sidebar_width`（`layout`）后面会打断 `data` 分组连续，
+  `groups_are_contiguous_and_consistently_named` 直接失败）。
+- 作用域偏离：DBeaver 存连接级 `RESULT_SET_MAX_ROWS`，本仓存**全局一份**（与
+  `result_panel.sidebar_width` 同口径）。要按连接分档得把键迁进连接配置域，属另一批。
+- 门禁基线：settings **37 passed** / result_panel **319 passed** / editor check Finished /
+  guard 4 passed。
 
 ### 2.72 面板最大化的接手要点（2026-11-18）
 
