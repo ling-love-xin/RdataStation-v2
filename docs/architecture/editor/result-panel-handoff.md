@@ -1094,6 +1094,23 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 
 未做（P2 在册）：`Manage Filters` 设置对话框（`ResultSetFilterDialog`）、历史持久化（无通道）。
 
+### 2.50 结果内查找栏（`find_next` 接上 UI）
+
+全文见 `result-panel.md §8.61`，接手要点：
+
+- 背景：`ResultGridDelegate::find_next` 早有实现 + 单测，但**从未接线**（注释说「选中/滚动是
+  宿主的决定」，宿主一直没做）。本批把这条能力接上。
+- 入口对齐 DBeaver 筛选条上的 CHECK 型 `openFindReplaceButton`（`ResultSetFilterPanel.java:356`）。
+- 形态：浮层（DBeaver `ResultsetFindReplaceOverlay`）→ 工具栏下方一行 `render_find_bar`：
+  词框 +「N 个匹配」+ 上一处 / 下一处 / ✕；回车 = 下一处；关闭保留词。
+- 定位 = `set_selected_cell(row, col)` + `scroll_to_row` + `scroll_to_col`；`ResultMatch.col`
+  是**视图列**（含 `#` 槽），不用折算。
+- 新增纯函数：`count_find_matches` / `find_prev`（口径与 `find_next` 对称）。
+- 收窄三项（在册）：替换（要改单元格值，另开一批）、正则/大小写/全词选项、格内区间高亮
+  （`ResultMatch.range` 已备好）。
+
+**验证**：panel **271 passed**（269 → 271）/ editor `--lib results` 45 / guard 4。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）

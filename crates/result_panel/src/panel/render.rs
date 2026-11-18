@@ -396,13 +396,31 @@ impl ResultPanel {
                         }),
                 )
             })
+            // 【结果内查找】查找栏开关：DBeaver 筛选条工具条上的 `openFindReplaceButton`
+            // 是 **SWT.CHECK**（`ResultSetFilterPanel.java:356`，图标 `UIIcon.FIND_REPLACE`，
+            // 命令 `EDIT_FIND_AND_REPLACE`）：按下打开查找浮层、再按关闭（`:361-385`）。
+            // 本仓用 `toggled` 表达按下态，浮层换成工具栏下方一行（`render_find_bar`）。
+            .child({
+                let find_queue = self.queue.clone();
+                Button::new("editor-result-find-toggle")
+                    .ghost()
+                    .xsmall()
+                    .toggled(self.find_open)
+                    .icon(IconName::Search)
+                    .debug_selector(|| "editor-result-find-toggle".to_string())
+                    .tooltip("在结果里查找（回车 = 下一处）")
+                    .on_click(move |_, _window, app| {
+                        find_queue.request(ResultRequest::ToggleFind, app);
+                    })
+            })
             .into_any_element();
 
         // 【B15】「下发源库」开关：开着时应用筛选会重查（拼 WHERE 到原查询）
         // 【DBeaver 对齐 2026-11-08】不再用 `Switch`：DBeaver 那条筛选条上的等价物是带
-        // 按下态的 CHECK `ToolItem`（`ResultSetFilterPanel.java:356` 的
-        // `openFindReplaceButton`），不是开关。这里改为图标 toggle（`toggled` = 按下态）
+        // 按下态的 CHECK `ToolItem`，不是开关。这里改为图标 toggle（`toggled` = 按下态）
         // + tooltip，保住「按下即开」的可读性，又不让一个开关占掉一整段文字宽度。
+        // （注：那个 CHECK 项其实是查找钮 `openFindReplaceButton`，`:356`；下发源库在本仓
+        //   是独立能力，样式照它取，位置留在筛选行尾。）
         let pushdown = {
             let queue = self.queue.clone();
             let checked = self.pushdown;
@@ -1146,6 +1164,9 @@ impl ResultPanel {
                 self.filter_expanded
                     .then(|| self.render_filter_expand_bar(cx)),
             )
+            // 【结果内查找】查找栏（工具栏下方一行；与展开条互斥场景由调用方口径定：
+            // 两者都开时先筛选条后查找栏，读起来仍是「筛选 → 找」）
+            .children(self.find_open.then(|| self.render_find_bar(cx)))
             // 第三行：主体
             .child(body)
             // 第四行：状态栏
@@ -1153,6 +1174,105 @@ impl ResultPanel {
             // 【2026-10-28 微调】SQL 预览弹窗**最后挂**（绘制顺序在全部内容之上，
             // 浮层才能盖住工具栏 / 主体；遮罩 absolute inset_0 铺满面板根）
             .children(self.sql_dialog_open.then(|| self.render_sql_dialog(cx)))
+            .into_any_element()
+    }
+
+    /// 【结果内查找】查找栏：查找词输入框 + 「N 个匹配」+ 上一处 / 下一处 / 关闭。
+    ///
+    /// 对齐 DBeaver：结果集的查找是 `ResultsetFindReplaceOverlay`（浮层，
+    /// `ResultsetFindReplaceOverlay.java:47`），带 Prev / Next 与命中数
+    /// （`SpreadsheetFindReplaceTarget`）；入口是筛选条上的 CHECK 型
+    /// `openFindReplaceButton`（`ResultSetFilterPanel.java:356`）。
+    ///
+    /// 本仓把「浮层」落成工具栏下方一行：浮层要绝对定位覆盖网格，会把网格行/列几何
+    /// 与格内命中高亮一起绑进来；而「找出并选中该格」（`find_step` 用
+    /// `set_selected_cell` + `scroll_to_row/col`）已经完成了读取那一半。
+    ///
+    /// 未做（在册）：替换（DBeaver 走 `SpreadsheetFindReplaceTarget.replaceSelection`
+    /// 改单元格值；本仓值编辑走「待提交」通道，批量替换另开一批）、正则 / 大小写 /
+    /// 全词三个选项、格内区间高亮。
+    pub(crate) fn render_find_bar(&self, cx: &App) -> AnyElement {
+        let theme = cx.theme();
+        let prev_queue = self.queue.clone();
+        let next_queue = self.queue.clone();
+        let close_queue = self.queue.clone();
+        let hits: SharedString = if self.find_query.trim().is_empty() {
+            "".into()
+        } else if self.find_hits == 0 {
+            "无匹配".into()
+        } else {
+            format!("{} 个匹配", self.find_hits).into()
+        };
+        let nav_disabled = self.find_hits == 0;
+        div()
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .w_full()
+            .flex_none()
+            .min_h_0()
+            .border_b(ui::HAIRLINE)
+            .border_color(theme.colors.border)
+            .bg(theme.colors.background)
+            .px_2()
+            .py_1()
+            .text_xs()
+            .debug_selector(|| "editor-result-find-bar".to_string())
+            .child(
+                // 查找词框：与筛选框同档（XSmall 20px）+ 无边框，两行控件高度一致不跳。
+                // 探针挂在包装 div 上：`Input`（RenderOnce）没有 `debug_selector`。
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .debug_selector(|| "editor-result-find-input".to_string())
+                    .child(
+                        Input::new(&self.find_input)
+                            .xsmall()
+                            .appearance(false),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(theme.colors.muted_foreground)
+                    .child(hits),
+            )
+            .child(
+                Button::new("editor-result-find-prev")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::ChevronUp)
+                    .disabled(nav_disabled)
+                    .debug_selector(|| "editor-result-find-prev".to_string())
+                    .tooltip("上一处匹配")
+                    .on_click(move |_, _window, app| {
+                        prev_queue.request(ResultRequest::FindPrev, app);
+                    }),
+            )
+            .child(
+                Button::new("editor-result-find-next")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::ChevronDown)
+                    .disabled(nav_disabled)
+                    .debug_selector(|| "editor-result-find-next".to_string())
+                    .tooltip("下一处匹配（回车同效）")
+                    .on_click(move |_, _window, app| {
+                        next_queue.request(ResultRequest::FindNext, app);
+                    }),
+            )
+            .child(
+                Button::new("editor-result-find-close")
+                    .ghost()
+                    .xsmall()
+                    // 与筛选行清除钮同一符号，读作「关掉这一行」
+                    .label("✕")
+                    .debug_selector(|| "editor-result-find-close".to_string())
+                    .tooltip("关闭查找栏")
+                    .on_click(move |_, _window, app| {
+                        close_queue.request(ResultRequest::CloseFind, app);
+                    }),
+            )
             .into_any_element()
     }
 }

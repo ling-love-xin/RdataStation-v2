@@ -117,6 +117,91 @@ impl ResultPanel {
         &self.filter_history
     }
 
+    // ── 【结果内查找】查找栏（对齐 DBeaver 的 `FindReplaceOverlay` / `SpreadsheetFindReplaceTarget`）
+
+    /// 打开 / 关闭查找栏
+    ///
+    /// 对齐 DBeaver：筛选条工具条上的 `openFindReplaceButton` 是 CHECK 型
+    /// （`ResultSetFilterPanel.java:356-385`）：选中打开浮层并进搜索框、取消关闭。
+    /// 关闭时**保留**查找词（DBeaver 浮层 close 也不清词），下次打开接着用。
+    pub fn toggle_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let open = !self.find_open;
+        self.find_open = open;
+        if open {
+            let input = self.find_input.clone();
+            input.update(cx, |state, cx| state.focus(window, cx));
+        }
+        cx.notify();
+    }
+
+    /// 查找词变化（订阅里真敲键时进）：重算命中数 + 定位到第一处命中
+    pub fn find_query_changed(&mut self, text: String, cx: &mut Context<Self>) {
+        self.find_query = text;
+        self.find_at = None;
+        self.find_hits = {
+            let delegate = self.grid.read(cx).delegate();
+            delegate.count_find_matches(&self.find_query)
+        };
+        if self.find_hits > 0 {
+            // 换词后从头找：先把光标当成「文档开头之前」再走一步
+            self.find_step(true, cx);
+            return;
+        }
+        cx.notify();
+    }
+
+    /// 上一处 / 下一处命中（`forward = false` 是反向），找完一圈回卷
+    ///
+    /// DBeaver 的查找浮层有 Prev / Next 两个按钮（`FindReplaceOverlay`），Enter = Next；
+    /// 本仓的定位 = 选中该格 + 滚到它（`set_selected_cell` + `scroll_to_row/col`）。
+    pub fn find_step(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let delegate = self.grid.read(cx).delegate();
+        let query = self.find_query.clone();
+        if query.trim().is_empty() {
+            return;
+        }
+        let after = if forward {
+            // 正向：从当前命中之后继续；没有当前命中就从开头
+            self.find_at
+        } else {
+            // 反向：从当前命中之前继续；没有当前命中就从末尾
+            self.find_at
+        };
+        let hit = if forward {
+            delegate.find_next(&query, after)
+        } else {
+            delegate.find_prev(&query, after)
+        };
+        let Some(hit) = hit else {
+            cx.notify();
+            return;
+        };
+        self.find_at = Some((hit.row, hit.col));
+        let (row, col) = (hit.row, hit.col);
+        let grid = self.grid.clone();
+        grid.update(cx, |state, cx| {
+            state.set_selected_cell(row, col, cx);
+            state.scroll_to_row(row, cx);
+            state.scroll_to_col(col, cx);
+            state.refresh(cx);
+        });
+        cx.notify();
+    }
+
+    /// 关闭查找栏（查找栏右端的 ✕）
+    pub fn close_find(&mut self, cx: &mut Context<Self>) {
+        if !self.find_open {
+            return;
+        }
+        self.find_open = false;
+        cx.notify();
+    }
+
+    /// 【结果内查找】只读快照（渲染「N 个匹配」与当前命中序号）
+    pub fn find_state(&self) -> (bool, &str, usize) {
+        (self.find_open, self.find_query.as_str(), self.find_hits)
+    }
+
     /// 【B15】应用筛选的公共实现；`requeue=false` 时不触发「下发源库」重查入队
     /// （drain 分派路径用，防队列死循环）
     pub(crate) fn apply_filter_inner(&mut self, cx: &mut Context<Self>, requeue: bool) {

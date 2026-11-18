@@ -59,6 +59,16 @@ pub enum ResultRequest {
     /// 选中一条即回到那个筛选口径）。回填输入框要 `&mut Window`，故照 `ClearFilter`
     /// 的同一条路子：宿主用窗口句柄转手调面板。
     ApplyFilter(String),
+    /// 【结果内查找】打开 / 关闭查找栏（DBeaver 筛选条上的 CHECK 型
+    /// `openFindReplaceButton`，`ResultSetFilterPanel.java:356`）。打开时要 `&mut Window`
+    /// 把焦点交给查找框，故同样走宿主的窗口转手。
+    ToggleFind,
+    /// 【结果内查找】下一处匹配（回车同效）
+    FindNext,
+    /// 【结果内查找】上一处匹配
+    FindPrev,
+    /// 【结果内查找】关闭查找栏（查找栏右端 ✕）
+    CloseFind,
     /// 下发源库开关翻转后的重查（开着时应用筛选会重查数据库）
     PushdownFilter { value: String },
     /// 【1.2】筛选框运行按钮：用 `select * from (原SQL) where 词` **替换**当前结果集

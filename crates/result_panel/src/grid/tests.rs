@@ -1020,6 +1020,46 @@ fn the_filter_matcher_keeps_the_lowercase_semantics() {
     assert_eq!(find_in_cell("plain", "plainly"), None, "词比格长");
 }
 
+/// 【结果内查找 2026-11-18】反向查找与命中计数：口径必须与 `find_next` 完全对称
+/// （大小写不敏感子串、只看看得见的行、`#` 槽不算、被删行不算）
+#[test]
+fn finding_backwards_and_counting_matches_mirror_forward() {
+    let mut grid = grid_with(&[&["1", "orders"], &["2", "users"], &["3", "orders_archive"]]);
+    assert_eq!(
+        grid.count_find_matches("orders"),
+        2,
+        "第三个格 `orders_archive` 也命中（子串口径），`#` 槽不参与"
+    );
+    assert_eq!(grid.count_find_matches("   "), 0, "空词一个也不算");
+
+    // 反向：从末尾往回走，最后绕回最后一条
+    assert_eq!(
+        grid.find_prev("orders", None).map(|hit| (hit.row, hit.col)),
+        Some((2, 2)),
+        "没给起点时反向从末尾开始"
+    );
+    assert_eq!(
+        grid
+            .find_prev("orders", Some((2, 2)))
+            .map(|hit| (hit.row, hit.col)),
+        Some((0, 2)),
+        "从上一处往前：中间行不命中，回到第 0 行"
+    );
+    assert_eq!(
+        grid
+            .find_prev("orders", Some((0, 2)))
+            .map(|hit| (hit.row, hit.col)),
+        Some((2, 2)),
+        "到头绕回末尾"
+    );
+    assert_eq!(grid.find_prev("nope", None), None);
+
+    // 筛选后只数看得见的行：`orders` 那两行里只剩一行还能看见
+    grid.set_filter("users");
+    assert_eq!(grid.count_find_matches("orders"), 0, "看不见的行不计命中");
+    assert_eq!(grid.count_find_matches("users"), 1);
+}
+
 /// 结果内查找：只看**数据列**（`#` 槽不算）、按视图行序、找完一圈回到开头
 #[test]
 fn finding_in_the_result_walks_the_visible_rows_and_wraps() {

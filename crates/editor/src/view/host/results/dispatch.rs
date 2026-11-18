@@ -54,6 +54,14 @@ impl EditorHostPanel {
             ResultRequest::TransposeNext => self.transpose_step(1, cx),
             ResultRequest::ClearFilter => self.clear_filter_via_window(cx),
             ResultRequest::ApplyFilter(value) => self.apply_filter_via_window(value, cx),
+            ResultRequest::ToggleFind => self.toggle_find_via_window(cx),
+            ResultRequest::FindNext => self
+                .result_panel
+                .update(cx, |p, cx| p.find_step(true, cx)),
+            ResultRequest::FindPrev => self
+                .result_panel
+                .update(cx, |p, cx| p.find_step(false, cx)),
+            ResultRequest::CloseFind => self.result_panel.update(cx, |p, cx| p.close_find(cx)),
             ResultRequest::PushdownFilter { value } => {
                 // 值以队列快照为准（drain 时面板筛选词可能已被用户改掉）；
                 // 定稿后重查走 `pushdown_filter`（读面板的 filter_text = 刚定稿的值）。
@@ -386,6 +394,15 @@ impl EditorHostPanel {
         let panel = self.result_panel.clone();
         let _ = self.window.update(cx, move |_panel, window, app| {
             panel.update(app, |p, cx| p.apply_filter_from_history(&value, window, cx));
+        });
+    }
+
+    /// 【结果内查找】开关查找栏：打开时要把焦点交给查找框，需窗口句柄
+    /// （同 [`Self::clear_filter_via_window`] 的转手口径）
+    pub(crate) fn toggle_find_via_window(&mut self, cx: &mut Context<Self>) {
+        let panel = self.result_panel.clone();
+        let _ = self.window.update(cx, |_panel, window, app| {
+            panel.update(app, |p, cx| p.toggle_find(window, cx));
         });
     }
 

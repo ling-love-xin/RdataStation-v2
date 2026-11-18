@@ -1231,3 +1231,78 @@ fn filter_history_dedupes_caps_and_replays(cx: &mut gpui_kit::TestAppContext) {
         "`k2` 不在两行数据里，应用后应筛成 0 行（证明真的下去了）"
     );
 }
+
+/// 【结果内查找 2026-11-18】查找栏走通：打开 → 真敲键 → 命中数 + 选中第一个命中
+/// → 下一个 → 上一个。数据是 `["1","1234.5"] / ["2","NULL"]`，词 `"1"` 命中两格
+/// （`id=1` 与 `amount=1234.5`），正好够验「步进」与「回卷」。
+#[gpui_kit::test]
+fn find_bar_locates_matches_and_steps_through_them(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let grid = cx.update(|_window, app| panel.read(app).grid().clone());
+
+    // 1) 打开查找栏（焦点交给查找框）
+    cx.update(|window, cx| panel.update(cx, |p, cx| p.toggle_find(window, cx)));
+    assert!(
+        cx.update(|_window, app| panel.read(app).find_state().0),
+        "打开后 `find_open` 应为真"
+    );
+
+    // 2) 真敲键：词进面板、命中数算出来、立刻选中第一个命中（`#` 槽旁边的 id 列）
+    cx.update(|window, cx| {
+        let input = panel.read(cx).find_input.clone();
+        input.update(cx, |state, cx| state.focus(window, cx));
+    });
+    cx.simulate_keystrokes("1");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let after_type = cx.update(|_window, app| {
+        let (open, query, hits) = panel.read(app).find_state();
+        (
+            open,
+            query.to_string(),
+            hits,
+            panel.read(app).find_at,
+            grid.read(app).selected_cell(),
+        )
+    });
+    assert!(after_type.0, "查找栏应仍开着");
+    assert_eq!(after_type.1, "1", "敲进去的词应到面板（订阅真的挂着）");
+    assert_eq!(
+        after_type.2, 2,
+        "`1` 命中两格：`id=1` 与 `amount=1234.5`（子串口径，大小写不敏感）"
+    );
+    assert_eq!(
+        (after_type.3, after_type.4),
+        (Some((0, 1)), Some((0, 1))),
+        "换词后应定位到第一处命中，且网格真的被选中（不是只改面板状态）"
+    );
+
+    // 3) 下一处：从当前命中往后走 → 第二处（同行 amount 列）；再按一次回卷到第一处
+    cx.update(|_window, cx| panel.update(cx, |p, cx| p.find_step(true, cx)));
+    let next = cx.update(|_window, app| (panel.read(app).find_at, grid.read(app).selected_cell()));
+    assert_eq!(next, (Some((0, 2)), Some((0, 2))), "下一处应是 amount 那格");
+    cx.update(|_window, cx| panel.update(cx, |p, cx| p.find_step(true, cx)));
+    let wrapped = cx.update(|_window, app| panel.read(app).find_at);
+    assert_eq!(wrapped, Some((0, 1)), "找完一圈回卷到第一处");
+
+    // 4) 上一处：反向绕过一圈回到末尾那格
+    cx.update(|_window, cx| panel.update(cx, |p, cx| p.find_step(false, cx)));
+    let prev = cx.update(|_window, app| panel.read(app).find_at);
+    assert_eq!(prev, Some((0, 2)), "上一处从第一处回卷到最后一处");
+
+    // 5) 没有命中的词：计数归零、导航不动作（仍是上一次的命中位置）
+    cx.update(|_window, cx| panel.update(cx, |p, cx| p.find_query_changed("zzz".into(), cx)));
+    let none = cx.update(|_window, app| panel.read(app).find_state().2);
+    assert_eq!(none, 0, "`zzz` 一个也不命中");
+
+    // 6) 关掉查找栏：状态回落，词保留（DBeaver 浮层 close 也不清词）
+    cx.update(|_window, cx| panel.update(cx, |p, cx| p.close_find(cx)));
+    let closed = cx.update(|_window, app| {
+        let (open, query, _hits) = panel.read(app).find_state();
+        (open, query.to_string())
+    });
+    assert!(!closed.0, "关掉后 `find_open` 应为假");
+    assert_eq!(closed.1, "zzz", "关闭时保留查找词，下次打开接着用");
+}

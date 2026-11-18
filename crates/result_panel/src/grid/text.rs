@@ -103,13 +103,76 @@ impl ResultGridDelegate {
         None
     }
 
+    /// 结果内查找的命中总数（口径与 [`Self::find_next`] 同一份：大小写不敏感子串、
+    /// 只看看得见的行、`#` 槽不算、被删行不算）。
+    ///
+    /// 用途是查找栏上的「N 个匹配」——DBeaver 的查找浮层也显示命中数
+    /// （`ResultsetFindReplaceOverlay` + `SpreadsheetFindReplaceTarget` 的 findAll）。
+    /// 纯读：不算选中、不滚屏。
+    pub fn count_find_matches(&self, needle: &str) -> usize {
+        let needle = needle.trim().to_lowercase();
+        if needle.is_empty() {
+            return 0;
+        }
+        let columns = self.columns.len();
+        let mut count = 0;
+        for row in 0..self.view_len() {
+            if self.is_deleted_row(row) {
+                continue;
+            }
+            for col in 1..=columns {
+                if self
+                    .row_cell_text(row, col)
+                    .is_some_and(|text| cell_matches(text, &needle))
+                {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    /// 结果内查找的**反向**走法：从 `before` 之前找上一处命中，到头回卷到最后
+    /// （`None` = 整份结果里没有）。口径与 [`Self::find_next`] 完全对称。
+    pub fn find_prev(&self, needle: &str, before: Option<(usize, usize)>) -> Option<ResultMatch> {
+        let needle = needle.trim().to_lowercase();
+        let columns = self.columns.len();
+        let rows = self.view_len();
+        if needle.is_empty() || columns == 0 || rows == 0 {
+            return None;
+        }
+        let per_row = columns + 1;
+        let cells = rows * per_row;
+        // 起点：从 before 的前一格往回走；没给起点就从末尾往回走
+        let start = match before {
+            Some((row, col)) if col < per_row && row < rows => {
+                let base = row.saturating_mul(per_row).saturating_add(col);
+                (base + cells - 1) % cells
+            }
+            _ => cells - 1,
+        };
+        for step in 0..cells {
+            let flat = (start + cells - (step % cells)) % cells;
+            let (row, col) = (flat / per_row, flat % per_row);
+            if self.is_deleted_row(row) {
+                continue;
+            }
+            let Some(text) = self.row_cell_text(row, col) else {
+                continue;
+            };
+            if let Some(range) = find_in_cell(text, &needle) {
+                return Some(ResultMatch { row, col, range });
+            }
+        }
+        None
+    }
+
     /// 这一数据列在**当前视图行序**下的全部取值（一行一个，换行分隔；逐格按 TSV 转义）
     ///
     /// 只给**已抓到的行**、不重查源库（与 mock 预览「复制此列」同一口径）：
     /// 一份十万行的结果整列就是十万个值，粘到哪里都不好用——真要全列就导出。
     /// 列浏览器清单「复制此列」与右键菜单共用这份文本。
-    pub fn column_text(&self, column: usize) -> String {
-        let mut text = String::new();
+    pub fn column_text(&self, column: usize) -> String {        let mut text = String::new();
         let mut first = true;
         for view_ix in 0..self.view_len() {
             let Some(reference) = self.row_ref(view_ix) else {

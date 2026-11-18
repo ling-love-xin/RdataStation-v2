@@ -3345,6 +3345,69 @@ panicked at panel/tests.rs:1091:
 
 未做（P2 仍在册）：`Manage Filters` 设置对话框（`ResultSetFilterDialog`）、历史持久化（无通道）。
 
+### 8.61 结果内查找栏（`FindReplaceOverlay` 的「查找」半边）
+
+#### 8.61.1 来龙去脉
+
+`ResultGridDelegate::find_next`（`grid/text.rs`，连同 `find_in_cell` / `cell_matches`）早就实现
+并有单测（`finding_in_the_result_walks_the_visible_rows_and_wraps`），但它**没有任何 UI 接线**：
+注释里写着「选中哪一格、要不要滚过去是宿主的决定」，宿主一直没做。本批把这条能力接上。
+
+#### 8.61.2 取证
+
+| 事实 | 出处 |
+| --- | --- |
+| 查找入口是筛选条工具条上的 **CHECK** 型 `openFindReplaceButton`（图标 `UIIcon.FIND_REPLACE`，命令 `EDIT_FIND_AND_REPLACE`）：选中打开查找、取消关闭 | `ResultSetFilterPanel.java:356-385` |
+| 结果集的查找是**浮层** `ResultsetFindReplaceOverlay extends FindReplaceOverlay`，构造带 `targetControl` / `target` / `presentation` | `ResultsetFindReplaceOverlay.java:47`、`:58-66` |
+| 查找目标实现 `canPerformFind()` / `getSelection()` / `setSelection(offset, len)` / `findAll` 等 | `SpreadsheetFindReplaceTarget.java:107`、`:113`、`:190` |
+| 替换会**改单元格值**（`controller.updateCellValue(…)`，replaceAll 逐格处理并记 `processedCells`） | `SpreadsheetFindReplaceTarget.java:212-299` |
+
+#### 8.61.3 落法（含三处有意收窄）
+
+- **入口**：筛选行尾一个 `Button`（`toggled(self.find_open)` + `IconName::Search`），
+  经 `ResultRequest::ToggleFind` 入队——渲染是纯读路径，不在 render 里改状态。
+- **形态**：浮层 → **工具栏下方一行**（`render_find_bar`）：词框（XSmall / 无边框，与筛选框
+  同档）+「N 个匹配」+ 上一处 / 下一处 / ✕。没有做绝对定位浮层：浮层要覆盖网格，会把网格
+  行/列几何与格内高亮一起绑进来；而「找出 + 选中该格」已经完成读取那一半。
+- **定位**：命中 = `grid.update(set_selected_cell(row, col) + scroll_to_row + scroll_to_col
+  + refresh)`。`ResultMatch.col` 是**视图列**（含 `#` 槽），直接喂 `set_selected_cell` 不必折算。
+- **交互**：输入框 `Change` → 重算命中数并定位第一处；`PressEnter` → 下一处（DBeaver 查找框
+  回车即 findNext）；`✕` → 关闭（**保留词**，与 DBeaver 浮层 close 一致）。
+- **纯函数新增**：`count_find_matches(needle)`（命中总数）与 `find_prev(needle, before)`
+  （反向走法 + 回卷），口径与 `find_next` 完全对称（大小写不敏感子串、只看看得见的行、
+  `#` 槽不算、被删行不算）。
+
+三处**有意收窄**（都在册）：① 替换不做（DBeaver 走 `replaceSelection` 改单元格值；本仓
+值编辑走「待提交」通道，批量替换另开一批）；② 正则 / 大小写 / 全词三个选项没做（本仓
+匹配口径与本地筛选共用 `find_in_cell`，一份口径优先）；③ 格内区间高亮没做（只选中整格，
+`ResultMatch.range` 已备好，待高亮通道）。
+
+#### 8.61.4 落点
+
+| 项 | 落点 |
+| --- | --- |
+| 纯逻辑 | `grid/text.rs`：`count_find_matches` + `find_prev`（紧跟 `find_next`） |
+| 状态 | `panel/data.rs`：`find_open` / `find_input` / `_find_sub` / `find_query` / `find_hits` / `find_at`（存视图列，长注释写明为什么不是数据列） |
+| 构造 | `panel/lifecycle.rs`：`InputState`（占位「在结果里查找…」）+ 订阅（`Change` → `find_query_changed`、`PressEnter` → `find_step(true)`）；句柄存 `_find_sub` |
+| 事件 | `panel/events.rs`：`toggle_find(window, cx)`（打开时焦点交给查找框）、`find_query_changed`、`find_step(forward, cx)`、`close_find`、`find_state()` 只读快照 |
+| 渲染 | `panel/render.rs`：筛选行尾查找钮；`render_find_bar(cx)` 挂在工具栏与展开条之后的 `find_open.then(...)` |
+| 端口 | `ports.rs`：`ResultRequest::{ToggleFind, FindNext, FindPrev, CloseFind}` |
+| 宿主 | `crates/editor/…/results/dispatch.rs`：四条分派臂 + `toggle_find_via_window`（打开要窗口句柄给焦点） |
+
+#### 8.61.5 测试
+
+| 用例 | 钉住什么 |
+| --- | --- |
+| `grid::tests::finding_backwards_and_counting_matches_mirror_forward` | 计数（`orders` 命中 2、空词 0、筛后看不见的行不计）+ 反向走法（末尾起点 / 往前往回卷）+ 无命中为 `None` |
+| `panel::tests::find_bar_locates_matches_and_steps_through_them` | 走**真订阅 + 真敲键**：打开 → 敲 `1` → 命中 2 且 `find_at` 与 `grid.selected_cell()` 都是 `(0,1)`（证明网格真被选中）→ 下一处 `(0,2)` → 再下一处回卷 `(0,1)` → 上一处 `(0,2)` → 敲 `zzz` 计数 0 → 关闭后状态回落但**词保留** |
+
+#### 8.61.6 验证
+
+- `cargo check -p rds-result-panel` / `-p rds-editor` = 0 error / 0 warning。
+- `cargo test -p rds-result-panel --lib` = **271 passed / 0 failed**（269 + 本批新增 2）。
+- `cargo test -p rds-editor --lib results` = **45 passed / 0 failed**（新分派臂后的回归）。
+- `cargo test -p rds-ui-guard`（不带 `--lib`）= 4 passed。
+
 
 ## 8. 协作纪律
 

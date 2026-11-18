@@ -299,6 +299,26 @@ pub struct ResultPanel {
     /// 本仓暂无那条持久化通道，故这里是**会话级内存**（面板存活期内有效），
     /// 关闭编辑器即丢。
     pub(crate) filter_history: Vec<String>,
+    /// 【结果内查找】查找栏是否打开（筛选条上的查找钮 + 查找栏本身都按它渲染）
+    ///
+    /// 对齐 DBeaver：筛选条工具条上的 `openFindReplaceButton` 是 **SWT.CHECK**
+    /// （`ResultSetFilterPanel.java:356`，图标 `UIIcon.FIND_REPLACE`，命令
+    /// `EDIT_FIND_AND_REPLACE`）：选中打开查找浮层、取消关闭（`:361-385`）。
+    pub(crate) find_open: bool,
+    /// 【结果内查找】查找词输入框（懒于构造期创建，与筛选框同口径）
+    pub(crate) find_input: Entity<InputState>,
+    /// 【结果内查找】输入框订阅句柄（**必须存字段**：`Subscription` 是「掉了即解订」
+    /// 的守卫，写成 `let _ = …` 等于当场丢弃——筛选框就踩过这条，见 §8.55）
+    pub(crate) _find_sub: Option<Subscription>,
+    /// 【结果内查找】当前查找词（trim + 小写前的原样，供输入框回填与命中数）
+    pub(crate) find_query: String,
+    /// 【结果内查找】命中总数（输入词变 / 数据变时重算；画在查找栏右端）
+    pub(crate) find_hits: usize,
+    /// 【结果内查找】当前停在哪个命中（**视图行, 视图列**；`None` = 还没定位过）
+    ///
+    /// 存视图列（含 `#` 槽）而不是数据列：`ResultGridDelegate::find_next` 吐的就是视图列，
+    /// 直接喂 `set_selected_cell` 不用再折算（算错一格就会跳到邻列）。
+    pub(crate) find_at: Option<(usize, usize)>,
     /// 【B14】下发源库开关（开着时应用筛选会重查源库——重查经队列交回编辑器）
     pub(crate) pushdown: bool,
     /// 【C1】正在重命名哪个结果集 tab（`None` = 不在重命名态）；会话级

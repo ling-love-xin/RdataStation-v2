@@ -61,6 +61,26 @@ impl ResultPanel {
             },
         ));
 
+        // 【结果内查找】查找词输入框 + 订阅（Enter = 下一处，与 DBeaver 查找浮层一致：
+        // `FindReplaceOverlay` 的文本框回车走 findNext）
+        let find_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx);
+            state.set_placeholder("在结果里查找…", window, cx);
+            state
+        });
+        let _find_sub = Some(cx.subscribe_in(
+            &find_input,
+            window,
+            |this, state, event: &InputEvent, _window, cx| match event {
+                InputEvent::Change => {
+                    let text = state.read(cx).value().to_string();
+                    this.find_query_changed(text, cx);
+                }
+                InputEvent::PressEnter { .. } => this.find_step(true, cx),
+                _ => {}
+            },
+        ));
+
         // 【DBeaver 对齐】状态栏中段行数输入框：可编辑，输入行号跳转到该行
         let row_count_input = cx.new(|cx| {
             let mut state = InputState::new(window, cx);
@@ -167,6 +187,13 @@ impl ResultPanel {
             _grid_sub,
             // 【B15】筛选框订阅（边打边筛的唯一入口）
             _filter_sub,
+            // 【结果内查找】查找栏状态（会话级；`find_at` 存视图列（含 `#` 槽））
+            find_open: false,
+            find_input,
+            _find_sub,
+            find_query: String::new(),
+            find_hits: 0,
+            find_at: None,
             presentation: Presentation::Grid,
             right_tab: RightTab::Browser,
             // 【R2 计算页】默认全集（与 DBeaver `loadDefaultFunctions` 同口径：默认函数全上）
