@@ -4633,7 +4633,7 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
 - 纯函数 `panel::tabs::stats_copy_all_text(entries: &[(StatsItem, String)]) -> String`：
   逐行 `函数=值`、`\n` 分隔，空集合 = 空串。
 - `stat_row` 挂 `.context_menu(...)`：`复制值` / `复制全部` / 分隔 /
-  `恢复默认统计项（六项全开）`；行容器补 `.id(("editor-result-stat-menu", item))`
+  `恢复默认统计项（默认只有「非空」）`；行容器补 `.id(("editor-result-stat-menu", item))`
   ——`context_menu` 的状态按元素 id 记账，六行共用同一 id 会串菜单
   （与 `column_browser` 的「按业务键取 id」同一教训）。
 - 两份文本在**渲染期定稿**：`render_stats_tab` 先把启用项与当前值算成
@@ -4704,7 +4704,7 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
   id ↔ 项对应表在 result_panel crate，依赖只向下）+ `set_result_panel_stats_items`。
 - 登记项 `result_panel.stats_items`：`group: "interaction"`（插在
   `persist_column_widths` 与 `hidden_status_commands` 之间，保持分组连续）、
-  `SettingKind::Text`、`default_json: "\"count,nulls,min,max,avg,sum\""`、`Effect::NextUse`。
+  `SettingKind::Text`、`default_json: "\"count\""`、`Effect::NextUse`。
 - 面板：`set_stats_items_initial(ids, cx)`（构造期注入；空串 = 全停用，页内本就给
   「没有启用任何统计项：点 ＋ 添加」提示）、`stats_items_ids() -> String`。
 - 宿主：`construct.rs` 在 `&mut cx` 之前先拷贝 `stats_items`（E0502 教训），
@@ -4713,11 +4713,12 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
   `persist_result_stats_items`（读面板当前 id 串 → `SettingsService`，同值不写盘由设置侧判定）。
 
 **语义边界**：
-- **空串是合法状态**（用户把六项全 × 掉），与「设置里没写过这一项」（serde 默认落六项全开）
-  区分开；设置页手填未知 id 在面板侧被丢弃，不会把页面搞坏。
+- **空串是合法状态**（用户把六项全 × 掉），与「设置里没写过这一项」（serde 默认落
+  `DEFAULT_SET` = 只有 `count`，见 §8.91）区分开；设置页手填未知 id 在面板侧被丢弃，
+  不会把页面搞坏。
 - 口径（`StatsMode`）不落盘：DBeaver 的 `aggregateAsStrings` 也不存面板设置。
-- 「Reset」在本仓语义仍是**六项全开**（DBeaver 是回到 registry 里 `isDefault()` 的子集）——
-  口径差异见 §8.87 的「有意省略」，本次不改变该决定。
+- 「Reset」口径见 §8.91（本仓已改为回到 `DEFAULT_SET`，与 DBeaver
+  `loadDefaultFunctions()` 一致；此前「六项全开」的差异已消除）。
 
 **验证**：
 - `ports::tests::stats_item_ids_round_trip_and_drop_unknown`（顺序保留 / 空白与重复丢弃 /
@@ -4757,6 +4758,46 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
 - `panel::tests::null_cell_has_no_value_payload`（NULL 格载荷 `None`、有值格有载荷）。
 - `cargo test -p rds-result-panel --lib` = **324 passed**；`cargo check -p rds-editor` = Finished；
   `cargo test -p rds-ui-guard` = 4 passed。
+
+### 8.91 计算页「默认函数集」与 Reset 口径（对齐 `isDefault`，2026-11-18）
+
+**取证（`AggregateColumnsPanel.java` + `plugin.xml`）**：
+- `ResetFunctionsAction:438-449`：`enabledFunctions.clear()` → `loadDefaultFunctions()` →
+  `refresh(false)`。Reset **不是**"打开全部函数"。
+- `loadDefaultFunctions:157-164`：只收 `FunctionsRegistry.getAggregateFunctions()` 里
+  `func.isDefault()` 的项，再 `sort(comparing(getLabel))` 按**标签字母序**。
+- `plugin.xml:89-99` 九个聚合函数的 `default` 属性：`count=true`、`countDistinct=true`、
+  `countNulls=false`（显式）、`sum/avg/min/max/median/mode` **无该属性**
+  → `AggregateFunctionDescriptor:51` 的 `CommonUtils.toBoolean(config.getAttribute("default"))`
+  对缺属性返回 `false`。
+- 结论：DBeaver 的默认集 = **Count + Count Distinct**（两行，按 label 排序）。
+
+**本仓映射**：六项里 `count` ↔ 「非空」（`StatsItem::Count`）；`countNulls` ↔ 「NULL 数」
+（DBeaver 显式非默认 → 本仓也不进默认集）；`sum/avg/min/max` 均非默认。
+**本仓没有 `countDistinct`（去重计数）**，按「能力没有就不摆」不造这一项 → 默认集 = 只有「非空」。
+
+**落点**：
+- `ports::StatsItem::DEFAULT_SET = [Count]` + `StatsItem::is_default()`（等价那边的 `isDefault` 标记，
+  以后要加/减默认项只改这一个常量）。
+- `panel::lifecycle` 出厂 `stats_items = DEFAULT_SET`；`panel::events::reset_stats_items`
+  回到 `DEFAULT_SET`（两者共用同一常量，"默认"与"重置目标"不会再分叉）。
+- 计算页工具条 Reset 的悬停提示与行右键菜单文案：「恢复默认统计项（默认只有「非空」）」
+  /「恢复默认统计项（对齐 DBeaver 默认集：只有「非空」）」——不再声称"六项全开"。
+- settings：`default_result_stats_items()` = `"count"`；登记项 `default_json` = `"\"count\""`
+  并同步 hint（不变式 3 `registered_defaults_match_the_model` 要求二者相等）。
+
+**行为变化（可见）**：新装/未写过该偏好的用户，计算页首屏只显示「非空」一行（此前六行）；
+其余五项仍可从工具条 ＋ 加回，Reset 则把它们收走。这与 DBeaver 首屏（Count + Count Distinct）
+同口径；若产品上更想要"首屏六项摘要"，改 `DEFAULT_SET` 一个常量即可回退（测试会在
+`stats_defaults_are_the_dbeaver_default_set_in_display_order` 处提醒）。
+
+**验证**：
+- `panel::tests::stats_defaults_are_the_dbeaver_default_set_in_display_order`
+  （`DEFAULT_SET == [Count]`、`is_default()` 三态、`ALL` 六项展示序不变）。
+- `panel::tests::stats_tab_renders_toolbar_header_and_rows`：改为显式置全六项验证六行渲染，
+  并钉住「停用 Min → 消失；Reset → 只有「非空」回来、Min/Sum 不回来」。
+- `cargo test -p rds-settings --lib` = **37 passed**；`cargo test -p rds-result-panel --lib`
+  = **324 passed**；`cargo check -p rds-editor` = Finished；`cargo test -p rds-ui-guard` = 4 passed。
 
 
 

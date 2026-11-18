@@ -1493,6 +1493,19 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；无 focus-lost 回填
   （`InputState` 没有失焦钩子），只做「有效提交即规范化」。
 
+### 2.79 计算页默认集 / Reset 的接手要点（2026-11-18）
+
+- 默认集只有**一个**定义：`ports::StatsItem::DEFAULT_SET`（现 = `[Count]`/「非空」）。
+  出厂初始化（`panel::lifecycle`）、Reset（`panel::events::reset_stats_items`）、
+  设置模型默认值（`default_result_stats_items()`）与登记项 `default_json` 都指向它；
+  **改默认集就改这一处 + 设置侧那条字符串**，别只改其中一边（不变式 3 会红）。
+- 为什么只有「非空」：DBeaver 用 `FunctionDescriptor.isDefault()` 标记默认集，
+  九个函数里只 `count`/`countDistinct` 标了 `default="true"`；本仓没有「去重计数」这一项，
+  所以默认集只剩 `count`。要补 `countDistinct` 得先有 distinct 计数能力，再把它加进
+  `DEFAULT_SET`（`is_default()` 会自动跟着变）。
+- Reset = `DEFAULT_SET`，**不是**六项全开；`stats_tab_renders_*` 用例里的「六行」是测试
+  自己 `p.stats_items = StatsItem::ALL.to_vec()` 摆出来的，别误以为是出厂状态。
+
 ### 2.78 值页动作可用性的接手要点（2026-11-18）
 
 - 「保存值到文件」的判据只有一份：`panel::tabs::value_can_save_to_file(col, raw)`。
@@ -1508,7 +1521,8 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 落盘形态 = `result_panel.stats_items`（逗号分隔的稳定 id：`count,nulls,min,max,avg,sum`，
   顺序即行序）。**英文 id 是契约**，中文 `StatsItem::label()` 只做展示——改文案不动 id。
 - 解析口径在 `ports::stats_items_from_ids`：顺序照抄、未知项与重复项丢弃；
-  **空串 = 全停用**（合法状态，页内给「点 ＋ 添加」提示），模型默认值才是六项全开。
+  **空串 = 全停用**（合法状态，页内给「点 ＋ 添加」提示），模型默认值 = `DEFAULT_SET`
+  （现在只有 `count`，见 §2.79）。
 - 写入口三条（计算页 ＋ / 行尾 × / Reset）都汇总到
   `EditorView::persist_result_stats_items`；**口径切换（StatsMode）不落盘**
   ——DBeaver 的 `aggregateAsStrings` 也不进面板设置。
