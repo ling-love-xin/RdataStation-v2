@@ -214,6 +214,10 @@ pub struct ResultPanel {
     /// `CMD_TOGGLE_MAXIMIZE` → `togglePanelsMaximize` = `viewerSash.hideUp()`）。
     /// 与 `show_value_sidebar` 正交：开合态原样保留，还原后回到用户原本的开合。
     pub(crate) panel_maximized: bool,
+    /// 【R6 段大小】「取下一段」一次取多少行（状态行输入框可改；默认
+    /// `ui::RESULT_SEGMENT_ROWS_DEFAULT`）。只影响后续取段，不改已加载行；
+    /// 对应 DBeaver `resultSetSize` → 数据源偏好 `RESULT_SET_MAX_ROWS`。
+    pub(crate) segment_rows: usize,
     /// 【R5 布局方向切换】竖排时右栏高度（默认 `RESULT_SIDEBAR_RIGHT_HEIGHT` = 240px）。
     /// **不进全局偏好项**：偏好项 `result_panel.sidebar_width` 是横向 px 宽度口径，
     /// 纵向高度共用一个值会互相串（偏离口径见 result-panel.md §8.46.2）。
@@ -374,6 +378,10 @@ pub struct ResultPanel {
     /// 【P1-2】行号输入框的订阅句柄（仅持有——句柄丢了解订就跟着走；`set_value`
     /// 程序化回填不发事件，所以只有用户真敲键才会入队 `GoRow`）
     pub(crate) _row_count_sub: Option<Subscription>,
+    /// 【R6 段大小】状态栏「一段」行数输入框（对齐 DBeaver `resultSetSize` Text）
+    pub(crate) segment_input: Entity<InputState>,
+    /// 【R6 段大小】输入框订阅句柄（仅持有；有效输入入队 `SetSegmentRows`）
+    pub(crate) _segment_sub: Option<Subscription>,
     /// 【网格事件】表格事件订阅句柄（选格 / 双击编辑 / 列序 / 列宽 / 清除选择 / 整行选中）。
     /// **必须持有**：句柄一丢就解订，`set_grids` 换网格时整体重挂（见 `set_grids` 注释）。
     pub(crate) _grid_sub: Option<Subscription>,

@@ -590,6 +590,9 @@ pub fn render_status_row(
     // 只在这里渲染，主 pane 不再读它们（面板解构后重组这份，见 panel.rs `render`）
     controls: ResultControls,
     row_count_input: Option<&gpui::Entity<gpui_kit::component::input::InputState>>,
+    // 【R6 段大小】「一段」行数输入框（对齐 DBeaver `resultSetSize` Text；
+    // `None` = 不摆，只读文案位照旧）
+    segment_input: Option<&gpui::Entity<gpui_kit::component::input::InputState>>,
     elapsed_ms: Option<u64>,
     left_switch: Option<AnyElement>,
     right_switch: Option<AnyElement>,
@@ -790,6 +793,29 @@ pub fn render_status_row(
                 .flex_none()
                 .children(left_ops),
         )
+        // 中段·段大小框（DBeaver `resultSetSize` Text：默认值占位，改成 >0 的行数才生效）
+        .children(segment_input.map(|state| {
+            div()
+                .h_flex()
+                .items_center()
+                .flex_none()
+                .w(rems(ui::RESULT_SEGMENT_BOX_WIDTH))
+                // 调试选择器挂在**外层行**：`Input` 自己是 RenderOnce 组件，其内部元素
+                // 的 id 进不了观测（与页签条同一口径，见 panel/tests.rs 的环境事实注释）
+                .debug_selector(|| "editor-result-segment-size".to_string())
+                .child(
+                    div()
+                        .text_color(muted)
+                        .flex_none()
+                        .child(SharedString::from("段")),
+                )
+                .child(
+                    div().flex_1().min_w_0().child(
+                        gpui_kit::component::input::Input::new(state)
+                            .with_size(gpui_kit::component::Size::Small),
+                    ),
+                )
+        }))
         // 中段·行数框（DBeaver：输入行号跳转；未注入 InputState 时摆只读文案）
         .child(
             div()

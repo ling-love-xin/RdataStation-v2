@@ -317,6 +317,11 @@ impl EditorHostPanel {
             ResultRequest::TogglePanelMaximize => self
                 .result_panel
                 .update(cx, |p, cx| p.toggle_panel_maximize(cx)),
+            // 【R6 段大小】状态行输入框提交的「一段」行数（对齐 DBeaver `resultSetSize`）：
+            // 只改面板视图态，下一次「取下一段」按它下发 limit（不重取已加载行）
+            ResultRequest::SetSegmentRows(rows) => self
+                .result_panel
+                .update(cx, |p, cx| p.set_segment_rows(rows, cx)),
             // 【侧栏】清单行眼睛：切换该列隐藏 / 显示（网格是另一实体，
             // update 它安全；面板再 notify 重画列浏览器的隐藏标记）
             ResultRequest::ToggleColumnVisibility(column) => {

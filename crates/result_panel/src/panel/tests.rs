@@ -1525,6 +1525,74 @@ fn group_toolbar_offers_the_remove_column_action(cx: &mut gpui_kit::TestAppConte
     }
 }
 
+/// 【R6 段大小】输入框文本解析（纯函数）：对齐 DBeaver `resultSetSize` 的 modify 回调
+/// （`ResultSetViewer.java:2138-2152`）——`>0` 才写，非数字 / 0 / 负数都不算有效提交。
+#[test]
+fn segment_rows_parse_accepts_positive_only() {
+    use super::events::parse_segment_rows;
+
+    assert_eq!(parse_segment_rows("200"), Some(200));
+    assert_eq!(parse_segment_rows(" 1000 "), Some(1000), "首尾空白忽略");
+    assert_eq!(parse_segment_rows("1"), Some(1));
+    assert_eq!(parse_segment_rows("0"), None, "0 无效（DBeaver 只在 >0 时写偏好）");
+    assert_eq!(parse_segment_rows("-5"), None, "负数无效");
+    assert_eq!(parse_segment_rows("abc"), None, "非数字无效");
+    assert_eq!(parse_segment_rows(""), None, "空串无效");
+    assert_eq!(parse_segment_rows("12.5"), None, "小数不算行数");
+}
+
+/// 【R6 段大小】面板状态：改值生效、同值不重入、下限夹取（`MIN_SEGMENT_SIZE = 1`）。
+#[gpui_kit::test]
+fn set_segment_rows_clamps_to_the_minimum(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    assert_eq!(
+        cx.update(|_, app| panel.read(app).segment_rows()),
+        crate::ui::RESULT_SEGMENT_ROWS_DEFAULT,
+        "默认一段 = 1000 行（与编辑器 SEGMENT_ROWS 同值）"
+    );
+
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_segment_rows(500, cx)));
+    assert_eq!(cx.update(|_, app| panel.read(app).segment_rows()), 500);
+
+    // 0 会被抬到下限（解析层已拦 0，这里兜住直接调用的情况）
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_segment_rows(0, cx)));
+    assert_eq!(
+        cx.update(|_, app| panel.read(app).segment_rows()),
+        crate::ui::RESULT_SEGMENT_ROWS_MIN
+    );
+}
+
+/// 【R6 段大小】状态行真的摆出「段」输入框（面板注入 InputState 后才有该元素）。
+#[gpui_kit::test]
+fn status_row_shows_the_segment_size_input(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    // 状态行只在「有 status / 有影响行数 / 失败 / 有耗时」时出现（`render.rs` 的
+    // `show_status` 口径），测试壳默认不注入 status，这里补一份最小的
+    cx.update(|_, app| {
+        panel.update(app, |p, _cx| {
+            p.status = Some(crate::grid::status::ResultStatus {
+                total_rows: 2,
+                ..Default::default()
+            });
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(
+        cx.debug_bounds("editor-result-segment-size").is_some(),
+        "状态行应摆出段大小输入框"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-status-row").is_some(),
+        "状态行本体应在（段框是它的一段）"
+    );
+}
+
 #[test]
 fn hex_page_clamps_to_the_last_page() {
     use crate::panel::tabs::hex_page_clamp;

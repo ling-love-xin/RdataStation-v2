@@ -88,6 +88,39 @@ impl ResultPanel {
             },
         ));
 
+        // 【R6 段大小】状态行「一段」行数输入框（对齐 DBeaver `resultSetSize` Text，
+        // `ResultSetViewer.java:2126-2152`：tooltip「Result-set fetch size」，`>0` 才生效）。
+        // 占位即默认值；有效输入把输入框规范化成该值（≈ 失焦回填），无效输入不动作。
+        let segment_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx);
+            state.set_placeholder(
+                crate::ui::RESULT_SEGMENT_ROWS_DEFAULT.to_string(),
+                window,
+                cx,
+            );
+            state
+        });
+        let segment_sub = cx.subscribe_in(
+            &segment_input,
+            window,
+            |this, state, event: &InputEvent, window, cx| {
+                if !matches!(event, InputEvent::Change) {
+                    return;
+                }
+                let text = state.read(cx).value().to_string();
+                let Some(rows) = super::events::parse_segment_rows(&text) else {
+                    return;
+                };
+                // 规范化（`007` → `7`）：DBeaver 在失焦时回填当前值，这里在有效提交时即回填
+                state.update(cx, |s, cx| s.set_value(rows.to_string(), window, cx));
+                if rows == this.segment_rows {
+                    return;
+                }
+                this.queue.push(ResultRequest::SetSegmentRows(rows));
+                cx.notify();
+            },
+        );
+
         // 【DBeaver 对齐】状态栏中段行数输入框：可编辑，输入行号跳转到该行
         let row_count_input = cx.new(|cx| {
             let mut state = InputState::new(window, cx);
@@ -197,6 +230,8 @@ impl ResultPanel {
             browser_list,
             row_count_input,
             _row_count_sub: Some(row_count_sub),
+            segment_input,
+            _segment_sub: Some(segment_sub),
             // 【网格事件订阅】构造期挂在占位网格上，`set_grids` 换网格后重挂
             _grid_sub,
             // 【B15】筛选框订阅（边打边筛的唯一入口）
@@ -233,6 +268,9 @@ impl ResultPanel {
             vertical_layout: false,
             // 【R5 面板最大化】默认不最大化（网格正常显示）
             panel_maximized: false,
+            // 【R6 段大小】默认一段 1000 行（与编辑器 `execution::SEGMENT_ROWS` 同值，
+            // 面板接管后编辑器按本值下发 limit）
+            segment_rows: crate::ui::RESULT_SEGMENT_ROWS_DEFAULT,
             right_sidebar_height: px(crate::ui::RESULT_SIDEBAR_RIGHT_HEIGHT * 16.0),
             compare_active: 0,
             compare_toolbar: None,

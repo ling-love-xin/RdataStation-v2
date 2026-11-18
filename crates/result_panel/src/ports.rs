@@ -217,6 +217,10 @@ pub enum ResultRequest {
     /// 【R5 面板最大化】收起 / 还原结果网格（对齐 DBeaver `CMD_TOGGLE_MAXIMIZE`
     /// → `togglePanelsMaximize`）：纯视图状态，不落盘。
     TogglePanelMaximize,
+    /// 【R6 段大小】状态行输入框提交的「一段」行数（对齐 DBeaver `resultSetSize`
+    /// Text → 数据源偏好 `RESULT_SET_MAX_ROWS`）：只影响**后续**「取下一段」的 limit，
+    /// 不改已加载行。宿主侧读该值决定 `ExecTarget::Segment { limit }`。
+    SetSegmentRows(usize),
     /// 左栏列浏览器清单行眼睛：切换该列隐藏 / 显示（宿主 update 网格 + 面板）
     ToggleColumnVisibility(usize),
     /// 【P2-3】列浏览器多选批量显隐：把 `columns`（数据列序）整批设为隐藏 / 显示

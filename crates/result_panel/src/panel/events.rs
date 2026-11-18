@@ -889,6 +889,17 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【R6 段大小】改「取下一段」的行数（对齐 DBeaver `resultSetSize` 的 modify 回调：
+    /// `>0` 才写、`< MIN_SEGMENT_SIZE` 抬到下限）。只影响后续取段，不改已加载行。
+    pub fn set_segment_rows(&mut self, rows: usize, cx: &mut Context<Self>) {
+        let rows = rows.max(crate::ui::RESULT_SEGMENT_ROWS_MIN);
+        if rows == self.segment_rows {
+            return;
+        }
+        self.segment_rows = rows;
+        cx.notify();
+    }
+
     /// 【R5 比例持久化】初值注入：面板构造后由宿主把全局偏好项（px）写进来。
     /// 复用 `clamp_right_sidebar_width`（`dx = 0` 时它就是"夹取当前值"），
     /// 保证与拖拽路径同一套上下限，不在这里再写一份常量比较。
@@ -1472,6 +1483,11 @@ impl ResultPanel {
         self.result_sql.as_deref()
     }
 
+    /// 【R6 段大小】「取下一段」一次取多少行（宿主下发给 `ExecTarget::Segment { limit }`）
+    pub fn segment_rows(&self) -> usize {
+        self.segment_rows
+    }
+
     /// 【1.2】筛选框运行生成的 wrapped SQL（右栏「执行SQL」页签；`None` = 未运行过）
     pub fn exec_sql(&self) -> Option<&str> {
         self.exec_sql.as_deref()
@@ -1819,8 +1835,18 @@ pub(crate) fn erase_menu_labels(filter_text: &str, hidden_columns: usize) -> Vec
     labels
 }
 
-/// 【状态历史】状态的一行描述（对齐 DBeaver `describeState`，`ResultSetViewer.java:5457-5473`）：
-/// 空白折叠成单空格（多行 SQL 在 tooltip 里不能换行），**超过 50 字符截断补 `…`**
+/// 【段大小】解析状态行输入框的文本（纯函数，测试直接钉）。
+///
+/// 对齐 DBeaver `resultSetSize` 的 modify 回调（`ResultSetViewer.java:2138-2152`）：
+/// `CommonUtils.toInt(text)` → 只有 `> 0` 才写偏好，`< MIN_SEGMENT_SIZE` 抬到下限；
+/// 非数字 / 0 / 负数 = 无效输入（**不写**，输入框文本保持用户所敲）。
+/// 本仓返回 `None` 让调用方「什么都不做」，`Some(rows)` 才是有效提交。
+pub(crate) fn parse_segment_rows(text: &str) -> Option<usize> {
+    let rows = text.trim().parse::<usize>().ok()?;
+    (rows > 0).then_some(rows)
+}
+
+/// 【状态历史】状态的一行描述（对齐 DBeaver `describeState`，`ResultSetViewer.java:5457-5473`）：/// 空白折叠成单空格（多行 SQL 在 tooltip 里不能换行），**超过 50 字符截断补 `…`**
 /// （DBeaver 的阈值也是 50 字符，`...` 是 ASCII 三点——本仓用中文省略号跟界面文案一致）。
 pub(crate) fn state_label(sql: &str) -> String {
     let flat = sql.split_whitespace().collect::<Vec<_>>().join(" ");
