@@ -75,6 +75,11 @@ pub enum ResultRequest {
     /// （`ResultSetFilterPanel.java:343-351`）：面板给目标状态（`history_target`），
     /// 宿主按该状态的 SQL **重跑数据泵**（`navigateHistory`，`ResultSetViewer.java:4050-4063`）。
     NavigateHistory(i32),
+    /// 【状态历史】跳到指定下标的状态（箭头下拉菜单选中某一条）。
+    ///
+    /// 对齐 DBeaver 箭头菜单（`ResultSetViewer.java:1456-1481`）：菜单里是该方向
+    /// **全部可达状态**，点哪条就 `navigateHistory(那条)`，不是只走一格。
+    NavigateHistoryTo(usize),
     /// 下发源库开关翻转后的重查（开着时应用筛选会重查数据库）
     PushdownFilter { value: String },
     /// 【1.2】筛选框运行按钮：用 `select * from (原SQL) where 词` **替换**当前结果集

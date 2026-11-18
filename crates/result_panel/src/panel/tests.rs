@@ -1478,10 +1478,11 @@ fn state_history_dedupes_steps_and_drops_the_forward_branch(cx: &mut gpui_kit::T
     assert_eq!((len, pos), (3, 0), "重复状态只挪位置，不追加");
 }
 
-/// 【2026-11-18 工具栏结构对齐】后退 / 前进两个按钮**在筛选行里常驻**、启用态跟位置走：
-/// DBeaver 的那一对按钮是常驻工具项，只有 `pos > 0` / `pos < size - 1` 才打开。
-/// 另外钉住 tooltip 口径（`describeState`，`ResultSetViewer.java:5457-5473`：折叠空白 +
-/// 50 字符截断）。
+/// 【2026-11-18 工具栏结构对齐】后退 / 前进两个**分裂按钮**在筛选行里常驻、启用态跟位置走：
+/// DBeaver 的那一对是 `SWT.DROP_DOWN`（主体走一格 + caret 弹「该方向全部可达状态」），
+/// 只有 `pos > 0` / `pos < size - 1` 才打开（`ResultSetViewer.java:456-475`）。
+/// 这里钉住：主体按钮在位与禁用态、方向菜单条目（近的在前）、tooltip / 标签口径
+/// （`describeState`，`:5457-5473`：折叠空白 + 50 字符截断）。
 #[gpui_kit::test]
 fn history_buttons_sit_in_the_filter_row_and_gate_on_position(cx: &mut gpui_kit::TestAppContext) {
     use gpui_kit::test::TestWindowExt as _;
@@ -1491,6 +1492,7 @@ fn history_buttons_sit_in_the_filter_row_and_gate_on_position(cx: &mut gpui_kit:
     let (panel, cx) = panel_harness(cx);
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
+    // 主体（分裂按钮左半）的 id 才是带 a11y 禁用位的那一半
     let state = |cx: &mut gpui_kit::VisualTestContext, id: &str| -> Option<Option<bool>> {
         let name = SharedString::from(id.to_string());
         cx.update(|window, _| {
@@ -1500,16 +1502,27 @@ fn history_buttons_sit_in_the_filter_row_and_gate_on_position(cx: &mut gpui_kit:
         })
     };
 
-    // 空历史：两个按钮都在，都禁用
+    // 空历史：两个主体都在，都禁用
     assert_eq!(
-        state(cx, "editor-result-history-back"),
+        state(cx, "editor-result-history-back-step"),
         Some(Some(true)),
         "空历史时后退钮应在位且禁用"
     );
     assert_eq!(
-        state(cx, "editor-result-history-forward"),
+        state(cx, "editor-result-history-forward-step"),
         Some(Some(true)),
         "空历史时前进钮应在位且禁用"
+    );
+    // 空历史：两个方向的菜单都空
+    assert!(
+        cx.update(|_, app| panel.read(app).history_menu_items(-1))
+            .is_empty(),
+        "空历史时后退菜单为空"
+    );
+    assert!(
+        cx.update(|_, app| panel.read(app).history_menu_items(1))
+            .is_empty(),
+        "空历史时前进菜单为空"
     );
 
     // 灌两条状态 → 位置在末位：后退可用、前进仍禁用
@@ -1524,12 +1537,12 @@ fn history_buttons_sit_in_the_filter_row_and_gate_on_position(cx: &mut gpui_kit:
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert_ne!(
-        state(cx, "editor-result-history-back"),
+        state(cx, "editor-result-history-back-step"),
         Some(Some(true)),
         "有历史可退时后退钮不该再禁用"
     );
     assert_eq!(
-        state(cx, "editor-result-history-forward"),
+        state(cx, "editor-result-history-forward-step"),
         Some(Some(true)),
         "在末位时前进钮仍禁用"
     );
@@ -1546,4 +1559,18 @@ fn history_buttons_sit_in_the_filter_row_and_gate_on_position(cx: &mut gpui_kit:
     let label = super::events::state_label(&long);
     assert_eq!(label.chars().count(), 51, "50 字符 + 省略号");
     assert!(label.ends_with('…'));
+
+    // 方向菜单：在末位时后退方向 = 全部前序状态，且近的在前；前进方向为空
+    let back_menu = cx.update(|_, app| panel.read(app).history_menu_items(-1));
+    assert_eq!(
+        back_menu,
+        vec![(0usize, "select 1".to_string())],
+        "后退菜单应列出该方向全部可达状态（近的在前）"
+    );
+    assert!(
+        cx.update(|_, app| panel.read(app).history_menu_items(1))
+            .is_empty(),
+        "末位没有前向状态，前进菜单应为空"
+    );
 }
+

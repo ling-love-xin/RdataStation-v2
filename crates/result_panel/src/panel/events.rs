@@ -1084,6 +1084,26 @@ impl ResultPanel {
         self.history_pos
     }
 
+    /// 【状态历史】按下标取状态 SQL（箭头菜单里选中某一条时，宿主用它重查）
+    pub fn history_sql_at(&self, pos: usize) -> Option<String> {
+        self.state_history.get(pos).cloned()
+    }
+
+    /// 【状态历史】某方向**全部可达状态**（对齐 DBeaver 的箭头菜单
+    /// `ResultSetViewer.java:1456-1481`）：后退方向 = 当前位置之前的全部项、
+    /// 前进方向 = 之后的全部项；两个方向都**近的在前**（菜单从上到下离用户越来越远）。
+    pub fn history_menu_items(&self, delta: i32) -> Vec<(usize, String)> {
+        let positions: Vec<usize> = if delta < 0 {
+            (0..self.history_pos).rev().collect()
+        } else {
+            ((self.history_pos + 1)..self.state_history.len()).collect()
+        };
+        positions
+            .into_iter()
+            .filter_map(|pos| self.state_history.get(pos).cloned().map(|sql| (pos, sql)))
+            .collect()
+    }
+
     /// 【状态历史】某条状态的 tooltip 文案（按钮悬停提示 / 测试断言）：
     /// 取该方向要去的状态，没有就到头或用「先有结果才能后退」这类说明
     pub fn history_hint(&self, delta: i32) -> String {

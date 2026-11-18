@@ -79,6 +79,19 @@ impl EditorHostPanel {
                     );
                 }
             }
+            // 【状态历史】箭头下拉里点了一条具体状态（不限于走一格）
+            ResultRequest::NavigateHistoryTo(pos) => {
+                let sql = self.result_panel.read(cx).history_sql_at(pos);
+                if let Some(sql) = sql {
+                    self.result_panel
+                        .update(cx, |p, cx| p.set_history_pos(pos, cx));
+                    self.execute(
+                        crate::execution::ExecTarget::Statement(sql),
+                        crate::store::ResultPlacement::Replace,
+                        cx,
+                    );
+                }
+            }
             ResultRequest::PushdownFilter { value } => {
                 // 值以队列快照为准（drain 时面板筛选词可能已被用户改掉）；
                 // 定稿后重查走 `pushdown_filter`（读面板的 filter_text = 刚定稿的值）。

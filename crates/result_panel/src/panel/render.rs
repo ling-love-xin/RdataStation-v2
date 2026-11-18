@@ -16,6 +16,7 @@ use gpui_kit::*;
 use ::shared::CurrentTier;
 
 use super::data::ResultPanel;
+use super::events::state_label;
 use crate::error_card::{self};
 use crate::export;
 use crate::grid::{self as result_grid, ResultToolbar};
@@ -405,37 +406,80 @@ impl ResultPanel {
             // 语义（`ResultSetViewer.java`）：历史项 = 一份「需要重查的状态」，后退 / 前进
             // 都按目标状态**重跑数据泵**（`navigateHistory`，`:4050-4063`）；启用态
             // 后退仅 `pos > 0`、前进仅 `pos < size - 1`（`:456-475`），tooltip = 目标状态描述。
-            // 本批先做**主体点击**（走一格 + tooltip 报目标），箭头下拉「列出该方向全部可达
-            // 状态」（`:1456-1481`）留作后续，在 `result-panel.md §8.63` 在册。
+            //
+            // 形态：`SWT.DROP_DOWN` = **分裂按钮**（主体点击走一格 + 右侧 caret 弹菜单），
+            // 对齐用组件的 `DropdownButton`（左半是带图标的主体按钮，右半是 caret，ghost
+            // 变体下两半连成一个控件）。菜单内容 = 该方向**全部可达状态**
+            // （DBeaver `:1456-1481`），点哪条就跳哪条（`NavigateHistoryTo`）。
             .when(!self.filter_expanded, |row| {
-                let queue = self.queue.clone();
+                let step_queue = self.queue.clone();
                 let hint = self.history_hint(-1);
+                let can_back = self.history_can_back();
+                let step = Button::new("editor-result-history-back-step")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::ChevronLeft)
+                    .debug_selector(|| "editor-result-history-back-step".to_string())
+                    .tooltip(hint)
+                    .on_click(move |_, _window, app| {
+                        step_queue.request(ResultRequest::NavigateHistory(-1), app);
+                    });
+                let items = self.history_menu_items(-1);
+                let menu_queue = self.queue.clone();
                 row.child(
-                    Button::new("editor-result-history-back")
-                        .ghost()
-                        .xsmall()
-                        .icon(IconName::ChevronLeft)
-                        .debug_selector(|| "editor-result-history-back".to_string())
-                        .disabled(!self.history_can_back())
-                        .tooltip(hint)
-                        .on_click(move |_, _window, app| {
-                            queue.request(ResultRequest::NavigateHistory(-1), app);
+                    DropdownButton::new("editor-result-history-back")
+                        .button(step)
+                        .disabled(!can_back)
+                        .menu_accessibility_label("后退历史")
+                        .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
+                            let mut menu = menu;
+                            for (pos, sql) in items.iter() {
+                                let label = state_label(sql);
+                                let pos = *pos;
+                                let queue = menu_queue.clone();
+                                menu = menu.item(PopupMenuItem::new(label).on_click(
+                                    move |_, _window, app| {
+                                        queue.request(ResultRequest::NavigateHistoryTo(pos), app);
+                                    },
+                                ));
+                            }
+                            menu
                         }),
                 )
             })
             .when(!self.filter_expanded, |row| {
-                let queue = self.queue.clone();
+                let step_queue = self.queue.clone();
                 let hint = self.history_hint(1);
+                let can_forward = self.history_can_forward();
+                let step = Button::new("editor-result-history-forward-step")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::ChevronRight)
+                    .debug_selector(|| "editor-result-history-forward-step".to_string())
+                    .tooltip(hint)
+                    .on_click(move |_, _window, app| {
+                        step_queue.request(ResultRequest::NavigateHistory(1), app);
+                    });
+                let items = self.history_menu_items(1);
+                let menu_queue = self.queue.clone();
                 row.child(
-                    Button::new("editor-result-history-forward")
-                        .ghost()
-                        .xsmall()
-                        .icon(IconName::ChevronRight)
-                        .debug_selector(|| "editor-result-history-forward".to_string())
-                        .disabled(!self.history_can_forward())
-                        .tooltip(hint)
-                        .on_click(move |_, _window, app| {
-                            queue.request(ResultRequest::NavigateHistory(1), app);
+                    DropdownButton::new("editor-result-history-forward")
+                        .button(step)
+                        .disabled(!can_forward)
+                        .menu_accessibility_label("前进历史")
+                        .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
+                            let mut menu = menu;
+                            for (pos, sql) in items.iter() {
+                                let label = state_label(sql);
+                                let pos = *pos;
+                                let queue = menu_queue.clone();
+                                menu = menu.item(PopupMenuItem::new(label).on_click(
+                                    move |_, _window, app| {
+                                        queue.request(ResultRequest::NavigateHistoryTo(pos), app);
+                                    },
+                                ));
+                            }
+                            menu
                         }),
                 )
             })

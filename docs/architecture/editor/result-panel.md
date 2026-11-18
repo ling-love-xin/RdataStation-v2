@@ -3495,22 +3495,37 @@ DBeaver 筛选条工具条上有一对浏览器式 **后退 / 前进** 按钮（
 `sync` 会把重跑回来的同一 SQL 再记一次 —— `note_state_sql` 的去重正好把位置落回那一条，
 所以「后退 → 宿主重查 → sync」不会把历史搞乱（这是口径 ① 能成立的关键）。
 
-#### 8.63.3 收窄（在册）
+#### 8.63.3 分裂按钮的箭头菜单（2026-11-18 补齐）
 
-- **箭头下拉**（DBeaver 是 `SWT.DROP_DOWN` 分裂按钮：菜单里列出该方向全部可达状态，
-  `:1456-1481`）本批未做，只做主体点击走一格。要做需要 `menu::DropdownButton` 分裂按钮，
-  另开一批。
+DBeaver 的这对按钮是 `SWT.DROP_DOWN`：**主体点击走一格**，右侧 caret 弹菜单列出
+**该方向全部可达状态**（`ResultSetViewer.java:1456-1481`），点哪条就
+`navigateHistory(那条)`。本仓用组件的 `menu::DropdownButton`（分裂按钮：左半是带图标的
+主体按钮，右半是 caret，ghost 变体下两半连成一个控件）：
+
+- 左半 = `Button::new("editor-result-history-back-step"/"…-forward-step")`（ghost xsmall、
+  `ChevronLeft`/`ChevronRight`、tooltip = 目标状态、点击发 `NavigateHistory(±1)`）；
+  整个分裂按钮 `.disabled(!can_back / !can_forward)`（DBeaver 无该方向状态时整项禁用）。
+- 右半菜单条目由 `history_menu_items(delta)` 给出：后退方向 = 当前位置之前的全部项、
+  前进方向 = 之后的全部项，两个方向都**近的在前**；条目文案 = `state_label(sql)`；
+  点击发新增的 `NavigateHistoryTo(usize)`（不限于走一格）。
+- `menu_accessibility_label("后退历史" / "前进历史")`：caret 半块本身没有可见文案，
+  不留 a11y 空白名。
+
+#### 8.63.4 收窄（在册）
+
 - **状态粒度**只到 SQL：本地视图层的东西（筛选词、转置、列布局、行位置）不入历史。
   DBeaver 的 `HistoryStateItem` 里含 `rowNumber`，本仓暂不还原行位置（回退后停在首行）。
 - `pushdown_filter`（下发源库）产生的是**新结果集**（`ResultPlacement::NewSet`），
   它的状态记在新面板自己的历史里；原结果集那一份历史不受影响。
+- 菜单条目只显示状态描述，不显示 DBeaver 那样的「navigate backward to …」前缀文案
+  与快捷键提示。
 
-#### 8.63.4 测试与验证
+#### 8.63.5 测试与验证
 
 | 用例 | 钉住什么 |
 | --- | --- |
 | `panel::tests::state_history_dedupes_steps_and_drops_the_forward_branch` | 纯状态机：空 SQL / 空白 SQL 不入栈；A→B→C 后位置在末位（能退不能进）；`history_target(-1)` 指向 B、末位无前向；落位 B 后两向都可走；从中间走新路 D → C 被截断；重复状态只挪位置不追加 |
-| `panel::tests::history_buttons_sit_in_the_filter_row_and_gate_on_position` | 渲染：空历史时两钮**在位且禁用**；灌两条后后退钮可用、前进钮仍禁用（末位）；`history_hint` = 目标 SQL；`state_label` 折叠空白 + 50 字符截断补 `…` |
+| `panel::tests::history_buttons_sit_in_the_filter_row_and_gate_on_position` | 渲染与菜单：空历史时两主体钮**在位且禁用**、两方向菜单都空；灌两条后后退钮可用、前进钮仍禁用（末位）；后退菜单 = `[(0, "select 1")]`（近的在前）、前进菜单空；`history_hint` = 目标 SQL；`state_label` 折叠空白 + 50 字符截断补 `…` |
 
 - `cargo check -p rds-result-panel -p rds-editor` = 0 error / 0 warning。
 - `cargo test -p rds-result-panel --lib` = **275 passed / 0 failed**（273 + 本批 2）。

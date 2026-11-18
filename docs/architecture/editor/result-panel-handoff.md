@@ -1140,13 +1140,13 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 宿主只执行：`ResultRequest::NavigateHistory(±1)` → `history_target` → `set_history_pos`
   → `execute(Statement(sql), Replace)`。执行完 `sync` 再记一次同款 SQL，去重把位置落回该条
   —— 这是「后退 / 前进」不乱套的关键。
-- 按钮在筛选行「清除钮 / 历史筛选下拉」之后、「查找开关」之前，ghost xsmall
-  `ChevronLeft` / `ChevronRight`，`disabled(!can_back/forward)`，tooltip = `history_hint`
-  （`state_label` = 折叠空白 + 50 字符截断补 `…`，对齐 `describeState`）。
-- **收窄在册**：箭头下拉（DBeaver 是 `SWT.DROP_DOWN` 分裂按钮，菜单列出该方向全部可达状态，
-  `ResultSetViewer.java:1456-1481`）未做，需 `menu::DropdownButton`；不还原行位置
-  （DBeaver 的 `HistoryStateItem` 含 `rowNumber`，本仓回退后停首行）；视图态
-  （筛选词 / 转置 / 列布局）不入历史。
+- 按钮在筛选行「清除钮 / 历史筛选下拉」之后、「查找开关」之前，**分裂按钮**形态
+  （`menu::DropdownButton`：左半 ghost xsmall `ChevronLeft` / `ChevronRight` 走一格，
+  右半 caret 弹「该方向全部可达状态」菜单，点哪条发 `NavigateHistoryTo(pos)`）；
+  `.disabled(!can_back/forward)`，tooltip = `history_hint`（`state_label` = 折叠空白 +
+  50 字符截断补 `…`，对齐 `describeState`）；菜单条目由 `history_menu_items(delta)` 给（近的在前）。
+- **收窄在册**：不还原行位置（DBeaver 的 `HistoryStateItem` 含 `rowNumber`，本仓回退后停首行）；
+  视图态（筛选词 / 转置 / 列布局）不入历史；菜单条目不带「navigate backward to …」前缀文案。
 - 用例：`state_history_dedupes_steps_and_drops_the_forward_branch`（纯状态机）、
   `history_buttons_sit_in_the_filter_row_and_gate_on_position`（在位数 + 启用态 + tooltip 口径）。
 - **验证**：panel **273 → 275 passed** / editor `--lib results` 45 / guard 4 / check 0-0。
