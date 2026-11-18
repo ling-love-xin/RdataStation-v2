@@ -29,6 +29,7 @@ use database::model::PropertyRequest;
 
 use crate::view::{ConnectionItem, LeftPanel, RightPanel, SidebarMode};
 use connection_dialog::host::ConnectionDialogHost;
+use connection_dialog::ManagerKind;
 use scratchpad::{ScratchpadDiffView, ScratchpadFileInfoView, ScratchpadSearchView};
 // 属性面板（中央 Dock 独立 tab）：Shared 只持弱句柄与打开回调。
 use super::property_panel::PropertyHostPanel;
@@ -407,6 +408,11 @@ pub struct Shared {
     /// 与 `open_property` 同形：面板创建 / `add_panel_view` 需要 `Window`，
     /// 因此走宿主回调；管理页实体由 `WorkbenchView` 持有，关 tab 后可再次挂回。
     pub open_plugin_manager: Rc<RefCell<Option<Rc<dyn Fn(&mut Window, &mut App)>>>>,
+    /// 打开 / 聚焦「配置中心」中央 tab 并切到指定域的宿主命令（连接对话框三处「管理」调用）。
+    ///
+    /// 带域参数：页是单实例，已经在别的域时只需切域 + 聚焦，不能重建上下文。
+    pub open_config_center:
+        Rc<RefCell<Option<Rc<dyn Fn(ManagerKind, &mut Window, &mut App)>>>>,
     /// 搜索结果标签页（「搜索: query」，中央 Dock 独立 tab，2026-10-10 VSCode 对齐）：
     /// 全局数据源——`ScratchpadHost::show_search_results` 写这里，标签页每帧从这里读。
     pub scratchpad_search: Rc<RefCell<Option<ScratchpadSearchView>>>,
@@ -490,6 +496,7 @@ impl Shared {
             property_panel: Rc::new(RefCell::new(None)),
             open_property: Rc::new(RefCell::new(None)),
             open_plugin_manager: Rc::new(RefCell::new(None)),
+            open_config_center: Rc::new(RefCell::new(None)),
             scratchpad_search: Rc::new(RefCell::new(None)),
             search_results_panel: Rc::new(RefCell::new(None)),
             search_results_dismissed: Rc::new(RefCell::new(false)),
@@ -714,6 +721,22 @@ impl Shared {
             return false;
         };
         open(window, cx);
+        true
+    }
+
+    /// 打开 / 聚焦配置中心页并切到指定域（连接对话框「管理认证 / 网络 / 环境」调用）。
+    ///
+    /// 无回调 → `false`，调用方回落旧的内层对话框（页未挂上不等于该功能消失）。
+    pub fn show_config_center(
+        &self,
+        kind: ManagerKind,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        let Some(open) = self.open_config_center.borrow().clone() else {
+            return false;
+        };
+        open(kind, window, cx);
         true
     }
 
@@ -1060,6 +1083,15 @@ impl ConnectionDialogHost for Shared {
 
     fn show_plugin_manager(&self, window: &mut Window, cx: &mut App) -> bool {
         Shared::show_plugin_manager(self, window, cx)
+    }
+
+    fn show_config_center(
+        &self,
+        kind: ManagerKind,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        Shared::show_config_center(self, kind, window, cx)
     }
 
     fn apply_saved_connections(&self, items: Vec<ConnectionItem>, notice: String, cx: &mut App) {

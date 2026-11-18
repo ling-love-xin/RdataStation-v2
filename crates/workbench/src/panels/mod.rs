@@ -39,6 +39,7 @@ use scratchpad::ScratchpadView;
 use ::editor::shared::EditorShared;
 
 mod editor;
+mod config_center;
 mod data_objects_tab;
 mod left_tabs;
 mod metadata_search;
@@ -58,6 +59,7 @@ pub use database::model::PropertyRequest;
 pub use data_objects_tab::DataObjectsTab;
 pub use editor::EditorPanel;
 pub use left_tabs::{DatabaseNavPanel, PluginPanel, ResourcePanelTab, ScratchPanel};
+pub use config_center::{ConfigCenterPanel, focus_config_center_tab};
 pub use metadata_search::{MetadataSearchHostPanel, focus_metadata_search_tab};
 pub use plugin_manager::{PluginManagerPanel, focus_plugin_manager_tab};
 pub use project_picker::ProjectPickerPanel;

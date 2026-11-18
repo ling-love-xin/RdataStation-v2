@@ -149,6 +149,7 @@ impl WorkbenchView {
             left_resource_tab: None,
             left_plugin_tab: None,
             plugin_manager: None,
+            config_center: None,
             right_insight_tab: None,
             right_mock_tab: None,
             right_history_tab: None,

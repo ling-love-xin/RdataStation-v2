@@ -16,6 +16,8 @@ pub mod host;
 pub mod services;
 // 根级 re-export：宿主（workbench editor.rs）以 `connection_dialog::ConnectionDialogState` 直连，
 // 避免穿透三层模块路径（components::connection_dialog::…）。
-pub use components::connection_dialog::ConnectionDialogState;
+pub use components::connection_dialog::{ConnectionDialogState, ManagerKind};
+// 配置中心页（三管理器的页级形态）：工作台面板直接持有它。
+pub use components::config_center::ConfigCenterPage;
 // 尺寸常量已下沉 `rds-workbench-shell`：这里重导保持 `crate::ui::*` 路径不变（与 workbench 同惯例）。
 pub use workbench_shell::ui;

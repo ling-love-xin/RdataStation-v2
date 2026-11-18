@@ -76,23 +76,17 @@ fn load_auth_config_by_name(name: &str, cx: &mut App) -> Option<(String, String)
         .flatten()
 }
 
-pub(crate) fn open_manager<H: 'static>(
+/// 切到某个配置域：重置编辑态 + 拉列表 + 重建类型下拉。
+///
+/// 旧弹窗打开时调一次；配置中心页在左侧导航切换域时调同一份（否则页内的类型下拉
+/// 会残留在上一个域的值，落库时把认证键写进 `network_type`）。
+pub(crate) fn prepare_manager_domain(
     kind: ManagerKind,
     mgr: &Rc<RefCell<ManagerWorkspace>>,
-    entity: Entity<H>,
-    shared: Rc<dyn ConnectionDialogHost>,
+    project_root: Option<String>,
     window: &mut Window,
     cx: &mut App,
 ) {
-    let mgr = mgr.clone();
-    let entity = entity.clone();
-    let shared_for_layer = shared.clone();
-
-    // 当前项目根：引用计数与删除守卫需要它才能看到 P_/GP_ 连接（未打开项目时仅全局）。
-    let project_root = shared
-        .current_project()
-        .map(|p| p.root.to_string_lossy().to_string());
-
     // 拉取列表（按 kind）。
     {
         let mut m = mgr.borrow_mut();
@@ -105,538 +99,72 @@ pub(crate) fn open_manager<H: 'static>(
         m.policy_editing = None;
         m.policies.borrow_mut().clear();
     }
-    refresh_manager_items(kind, &mgr, cx);
+    refresh_manager_items(kind, mgr, cx);
 
     // 类型下拉按管理器类别填充（认证 / 网络各自的**规范键**）；环境管理器不用类型列。
     // 此前网络管理器沿用认证选项（同一个 SelectState 实体）→ 落库 `network_type` 是
     // `proxy_pwd` 这类错值，解析器永远认不出（审计 #20 第三层根因）。
-    {
-        let type_items: Vec<SharedString> = match kind {
-            ManagerKind::Auth => AUTH_TYPES.iter().map(|t| SharedString::from(*t)).collect(),
-            ManagerKind::Network => NETWORK_TYPES
-                .iter()
-                .map(|t| SharedString::from(*t))
-                .collect(),
-            ManagerKind::Env => Vec::new(),
-        };
-        let type_sel = mgr.borrow().new_type.clone();
-        type_sel.update(cx, |s, cx| {
-            s.set_items(SearchableVec::new(type_items.clone()), window, cx);
-            // 旧选中值不在新选项里 → 改选首项（`set_items` 不会自动清理 selection）。
-            let cur = s.selected_value().cloned().unwrap_or_default().to_string();
-            if !type_items.iter().any(|t| t.as_ref() == cur) {
-                match type_items.first() {
-                    Some(first) => s.set_selected_value(first, window, cx),
-                    None => s.set_selected_index(None, window, cx),
-                }
-            }
-        });
-    }
-
-    window.open_dialog(cx, move |dialog, window, cx| {
-        // 网络字段占位随类型同步：必须在 `cx.theme()` 之前写（占位写入需要 `&mut cx`，
-        // 而 theme 持有 `cx` 的不可变借用）；只在类型变化时写，`set_placeholder` 会 notify。
-        if kind.is_network() {
-            let m0 = mgr.borrow();
-            let ty = m0
-                .new_type
-                .read(cx)
-                .selected_value()
-                .cloned()
-                .unwrap_or_default()
-                .to_string();
-            if m0.net_specs_for.borrow().as_str() != ty {
-                for spec in network_field_specs(&ty) {
-                    if let Some(input) = net_input_entity(&m0, spec.key) {
-                        let ph = spec.placeholder;
-                        input.update(cx, |s, cx| s.set_placeholder(ph, window, cx));
-                    }
-                }
+    let type_items: Vec<SharedString> = match kind {
+        ManagerKind::Auth => AUTH_TYPES.iter().map(|t| SharedString::from(*t)).collect(),
+        ManagerKind::Network => NETWORK_TYPES
+            .iter()
+            .map(|t| SharedString::from(*t))
+            .collect(),
+        ManagerKind::Env => Vec::new(),
+    };
+    let type_sel = mgr.borrow().new_type.clone();
+    type_sel.update(cx, |s, cx| {
+        s.set_items(SearchableVec::new(type_items.clone()), window, cx);
+        // 旧选中值不在新选项里 → 改选首项（`set_items` 不会自动清理 selection）。
+        let cur = s.selected_value().cloned().unwrap_or_default().to_string();
+        if !type_items.iter().any(|t| t.as_ref() == cur) {
+            match type_items.first() {
+                Some(first) => s.set_selected_value(first, window, cx),
+                None => s.set_selected_index(None, window, cx),
             }
         }
-        let theme = cx.theme();
-        let shared_layer = shared_for_layer.clone();
-        let m = mgr.borrow();
+    });
+}
+
+pub(crate) fn open_manager<H: 'static>(
+    kind: ManagerKind,
+    mgr: &Rc<RefCell<ManagerWorkspace>>,
+    entity: Entity<H>,
+    shared: Rc<dyn ConnectionDialogHost>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let mgr = mgr.clone();
+    let shared_for_layer = shared.clone();
+    // 面板体只认「重绘宿主」回调：弹窗侧等价于 `entity.update(app, |_, cx| cx.notify())`。
+    let notify: Rc<dyn Fn(&mut App)> = {
+        let entity = entity.clone();
+        Rc::new(move |app: &mut App| {
+            entity.update(app, |_, cx| cx.notify());
+        })
+    };
+
+    // 当前项目根：引用计数与删除守卫需要它才能看到 P_/GP_ 连接（未打开项目时仅全局）。
+    let project_root = shared
+        .current_project()
+        .map(|p| p.root.to_string_lossy().to_string());
+    prepare_manager_domain(kind, &mgr, project_root, window, cx);
+
+    window.open_dialog(cx, move |dialog, window, cx| {
         let title = match kind {
             ManagerKind::Auth => tr("认证配置管理（AuthConfigManager）"),
             ManagerKind::Network => tr("网络配置管理（NetworkConfigManager）"),
             ManagerKind::Env => tr("环境管理（EnvironmentManager）"),
         };
-
-        // 列表行。
-        let mut rows = div().v_flex().gap_1();
-        if m.items.is_empty() {
-            rows = rows.child(
-                div().text_xs().text_color(theme.colors.muted_foreground).child(tr("暂无配置，点击下方「新建」")),
-            );
-        }
-        for (i, item) in m.items.iter().enumerate() {
-            let item = item.clone();
-            let idx = i;
-            let mut row = div()
-                .h_flex()
-                .items_center()
-                .gap_2()
-                .rounded_md()
-                .border_1()
-                .border_color(theme.colors.border)
-                .px_2()
-                .py_1()
-                .child(div().text_sm().flex_1().child(item.name.clone()));
-            // 被引用计数（原型 §3.6）：被引用时删除会被拦下，先在这里告知数量。
-            if item.refs > 0 {
-                row = row.child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.colors.muted_foreground)
-                        .child(format!("被引用 {}", item.refs)),
-                );
-            }
-            if kind.is_env() {
-                row = row.child(
-                    Button::new(format!("mgr-policy-{idx}"))
-                        .secondary()
-                        .label(tr("策略"))
-                        .on_click({
-                            let item = item.clone();
-                            let mgr = mgr.clone();
-                            let entity = entity.clone();
-                            move |_, _window, app| {
-                                let mut m = mgr.borrow_mut();
-                                m.policy_env = Some(item.name.clone());
-                                m.policy_editing = None;
-                                m.policy_enabled.set(true);
-                                drop(m);
-                                refresh_policy_items(&item.name, &mgr, app);
-                                let mut m = mgr.borrow_mut();
-                                m.msg = Some(format!("环境「{}」策略管理", item.name));
-                                drop(m);
-                                entity.update(app, |_, cx| cx.notify());
-                            }
-                        }),
-                );
-            }
-            rows = rows.child(row.child(
-                Button::new(format!("mgr-edit-{idx}"))
-                            .secondary()
-                            .label(tr("编辑"))
-                            .on_click({
-                                let item = item.clone();
-                                let mgr = mgr.clone();
-                                let entity = entity.clone();
-                                move |_, window, app| {
-                                    let item_name = item.name.clone();
-                                    let mut m = mgr.borrow_mut();
-                                    m.editing = Some(item_name.clone());
-                                    m.msg = Some(format!("编辑中：{item_name}（保存后更新既有条目）"));
-                                    m.new_name.update(app, |s, cx| s.set_value(item_name.clone(), window, cx));
-                                    // 认证与网络：回填真实字段（此前只回填名称 →
-                                    // 保存会把已有 config / auth_data 覆盖成空）。
-                                    if kind.has_type_column() {
-                                        let loaded = if kind.is_auth() {
-                                            load_auth_config_by_name(&item_name, app)
-                                        } else {
-                                            load_network_config_by_name(&item_name, app)
-                                        };
-                                        if let Some((ty, config)) = loaded {
-                                            m.new_data
-                                                .update(app, |s, cx| s.set_value(config.clone(), window, cx));
-                                            let values = if kind.is_auth() {
-                                                auth_config_values(&ty, &config)
-                                            } else {
-                                                network_config_values(&ty, &config)
-                                            };
-                                            for (key, value) in values {
-                                                if let Some(input) = net_input_entity(&m, &key) {
-                                                    input.update(app, |s, cx| {
-                                                        s.set_value(value.clone(), window, cx)
-                                                    });
-                                                }
-                                            }
-                                            m.new_type.update(app, |s, cx| {
-                                                s.set_selected_value(&SharedString::from(ty.clone()), window, cx)
-                                            });
-                                            // 类型可能已变：立即按新类型重算字段声明（渲染期只读缓存）。
-                                            let _ = meta_field_specs_now(&m, kind, &ty);
-                                        }
-                                    }
-                                    drop(m);
-                                    entity.update(app, |_, cx| cx.notify());
-                                }
-                            }),
-                    )
-                    .child(
-                        Button::new(format!("mgr-del-{idx}"))
-                            .secondary()
-                            .label(tr("删除"))
-                            .on_click({
-                                let item = item.clone();
-                                let mgr = mgr.clone();
-                                let entity = entity.clone();
-                                move |_, _window, app| {
-                                    let project_root = mgr.borrow().project_root.clone();
-                                    let deleted = delete_manager_item(kind, &item.name, project_root.as_deref());
-                                    let mut m = mgr.borrow_mut();
-                                    m.msg = Some(deleted.clone());
-                                    drop(m);
-                                    if deleted.starts_with("已删除") || deleted.starts_with("删除成功") {
-                                        refresh_manager_items(kind, &mgr, app);
-                                    }
-                                    entity.update(app, |_, cx| cx.notify());
-                                }
-                            }),
-                    ),
-            );
-        }
-        drop(m);
-
-        // 新建/编辑表单。
-        let mgr_form = {
-            let m = mgr.borrow();
-            let new_name = m.new_name.clone();
-            let new_type = m.new_type.clone();
-            let new_data = m.new_data.clone();
-            let editing = m.editing.clone();
-            let msg = m.msg.clone();
-            // 网络配置字段（Network 域）：按类型显示子集；`chain`（或未选类型）回落到原始 JSON 文本框。
-            let net_type_now = m
-                .new_type
-                .read(cx)
-                .selected_value()
-                .cloned()
-                .unwrap_or_default()
-                .to_string();
-            // 认证与网络都按类型声明展开字段；无声明（如 chain）回落原始 JSON。
-            let net_specs: Vec<NetFieldSpec> = if kind.has_type_column() {
-                meta_field_specs_now(&m, kind, &net_type_now)
-            } else {
-                Vec::new()
-            };
-            let net_rows: Vec<(NetFieldSpec, Entity<InputState>)> = net_specs
-                .iter()
-                .cloned()
-                .filter_map(|spec| net_input_entity(&m, spec.key).map(|input| (spec, input)))
-                .collect();
-            drop(m);
-            let mgr = mgr.clone();
-            let entity = entity.clone();
-            let mut type_row = div()
-                .h_flex()
-                .items_center()
-                .gap_2()
-                .child(div().text_xs().child(tr("类型")))
-                .child(Select::new(&new_type).placeholder(tr("选择类型…")));
-            if net_rows.is_empty() {
-                type_row = type_row
-                    .child(div().text_xs().child(tr("数据(JSON)")))
-                    .child(Input::new(&new_data).w(cx.theme().font_size * crate::ui::DIALOG_JSON_INPUT_WIDTH));
-            }
-            let mut fields_block = div().v_flex().gap_1();
-            for (spec, input) in &net_rows {
-                // 凭据行（password / passphrase）：掩码显示 + 眼睛按钮（默认不肩窥也能确认自己敲了没）。
-                let mut field = Input::new(input);
-                if is_secret_field(spec.key) {
-                    field = field.mask_toggle();
-                }
-                let mut row = div()
-                    .h_flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .w(rems(NET_LABEL_W))
-                            .flex_shrink_0()
-                            .text_xs()
-                            .text_color(theme.colors.muted_foreground)
-                            .child(spec.label),
-                    )
-                    .child(field.w(rems(14.)));
-                if spec.required {
-                    row = row.child(div().text_xs().text_color(theme.colors.danger).child("*"));
-                }
-                fields_block = fields_block.child(row);
-            }
-            if !net_rows.is_empty() {
-                fields_block = fields_block.child(hint_line(
-                    theme,
-                    tr("字段按类型展开；协议链请选 chain 并直接填 JSON。"),
-                ));
-            }
-            div()
-                .v_flex()
-                .gap_2()
-                .rounded_md()
-                .border_1()
-                .border_color(theme.colors.border)
-                .px_3()
-                .py_2()
-                .child(
-                    div().text_sm().font_weight(FontWeight::BOLD)
-                        .child(if editing.is_some() { tr("编辑配置") } else { tr("新建配置") }),
-                )
-                .child(
-                    div().h_flex().items_center().gap_2()
-                        .child(div().text_xs().child(tr("名称")))
-                        .child(Input::new(&new_name).w(cx.theme().font_size * crate::ui::DIALOG_NAME_INPUT_WIDTH)),
-                )
-                .child(type_row)
-                .child(fields_block)
-                .child(
-                    div().h_flex().items_center().gap_2()
-                        .child(
-                            Button::new("mgr-save")
-                                .primary()
-                                .label(tr("保存"))
-                                .on_click({
-                                    let mgr = mgr.clone();
-                                    let entity = entity.clone();
-                                    move |_, window, app| {
-                                        let (name, tpe, raw_data, editing) = {
-                                            let m = mgr.borrow();
-                                            (
-                                                m.new_name.read(app).value().to_string(),
-                                                m.new_type.read(app).selected_value().cloned().unwrap_or_default().to_string(),
-                                                m.new_data.read(app).value().to_string(),
-                                                m.editing.clone(),
-                                            )
-                                        };
-                                        if name.trim().is_empty() {
-                                            mgr.borrow_mut().msg = Some(tr("名称不能为空").into());
-                                            entity.update(app, |_, cx| cx.notify());
-                                            return;
-                                        }
-                                        // 认证 / 网络：有字段声明时由字段组装 JSON；校验失败只提示，不落库。
-                                        // 无声明（如 chain / 未知认证类型）→ 继续用原始 JSON 文本框。
-                                        let data = if kind.has_type_column() {
-                                            let specs = meta_field_specs_now(&mgr.borrow(), kind, &tpe);
-                                            if specs.is_empty() {
-                                                raw_data
-                                            } else {
-                                                let values = collect_net_values(&mgr.borrow(), app);
-                                                let built = if kind.is_auth() {
-                                                    build_auth_config_json(&tpe, &values)
-                                                } else {
-                                                    build_network_config_json(&tpe, &values)
-                                                };
-                                                match built {
-                                                    Ok(json) => json,
-                                                    Err(e) => {
-                                                        mgr.borrow_mut().msg = Some(e);
-                                                        entity.update(app, |_, cx| cx.notify());
-                                                        return;
-                                                    }
-                                                }
-                                            }
-                                        } else {
-                                            raw_data
-                                        };
-                                        let outcome = upsert_manager_item(kind, &name, &tpe, &data, editing.as_deref());
-                                        let mut m = mgr.borrow_mut();
-                                        m.msg = Some(outcome.clone());
-                                        if outcome.starts_with("已保存") || outcome.starts_with("保存成功") {
-                                            m.editing = None;
-                                            m.new_name.update(app, |s, cx| s.set_value("", window, cx));
-                                            m.new_data.update(app, |s, cx| s.set_value("", window, cx));
-                                            clear_net_values(&m, window, app);
-                                        }
-                                        drop(m);
-                                        refresh_manager_items(kind, &mgr, app);
-                                        entity.update(app, |_, cx| cx.notify());
-                                    }
-                                }),
-                        )
-                        .child(
-                            Button::new("mgr-cancel-edit")
-                                .label(tr("取消编辑"))
-                                .on_click({
-                                    let mgr = mgr.clone();
-                                    let entity = entity.clone();
-                                    move |_, window, app| {
-                                        let mut m = mgr.borrow_mut();
-                                        m.editing = None;
-                                        m.msg = None;
-                                        m.new_name.update(app, |s, cx| s.set_value("", window, cx));
-                                        m.new_data.update(app, |s, cx| s.set_value("", window, cx));
-                                        clear_net_values(&m, window, app);
-                                        drop(m);
-                                        entity.update(app, |_, cx| cx.notify());
-                                    }
-                                }),
-                        ),
-                )
-                .child(
-                    if let Some(msg) = msg {
-                        div().text_xs().text_color(theme.colors.info).child(msg)
-                    } else {
-                        div().h(rems(crate::ui::DIALOG_HINT_PLACEHOLDER_HEIGHT))
-                    },
-                )
-        };
-
-        // 策略管理面板（仅环境管理器且已点开某环境时显示）。
-        let policy_panel = {
-            if kind.is_env() {
-                let m = mgr.borrow();
-                let policy_env = m.policy_env.clone();
-                let policy_type = m.policy_type.clone();
-                let policy_enabled = m.policy_enabled.clone();
-                let policies = m.policies.clone();
-                let policy_editing = m.policy_editing.clone();
-                drop(m);
-                match policy_env {
-                    Some(env_name) => {
-                        let mut plist = div().v_flex().gap_1();
-                        let list = policies.borrow();
-                        if list.is_empty() {
-                            plist = plist.child(
-                                div().text_xs().text_color(theme.colors.muted_foreground).child(tr("该环境暂无策略")),
-                            );
-                        }
-                        for (i, (ptype, pid, enabled)) in list.iter().enumerate() {
-                            let (ptype, pid, enabled) = (ptype.clone(), pid.clone(), *enabled);
-                            plist = plist.child(
-                                div()
-                                    .h_flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .rounded_md()
-                                    .border_1()
-                                    .border_color(theme.colors.border)
-                                    .px_2()
-                                    .py_1()
-                                    .child(div().text_sm().flex_1().child(ptype.clone()))
-                                    .child(
-                                        div().text_xs()
-                                            .text_color(if enabled { theme.colors.success } else { theme.colors.muted_foreground })
-                                            .child(if enabled { tr("启用") } else { tr("停用") }),
-                                    )
-                                    .child(
-                                        Button::new(format!("pol-del-{i}"))
-                                            .secondary()
-                                            .label(tr("删除"))
-                                            .on_click({
-                                                let pid = pid.clone();
-                                                let mgr = mgr.clone();
-                                                let entity = entity.clone();
-                                                move |_, _window, app| {
-                                                    let outcome = delete_policy_item(&pid);
-                                                    let env = mgr.borrow().policy_env.clone();
-                                                    {
-                                                        let mut m = mgr.borrow_mut();
-                                                        m.msg = Some(outcome);
-                                                    }
-                                                    if let Some(e) = env {
-                                                        refresh_policy_items(&e, &mgr, app);
-                                                    }
-                                                    entity.update(app, |_, cx| cx.notify());
-                                                }
-                                            }),
-                                    ),
-                            );
-                        }
-                        drop(list);
-                        let env_name2 = env_name.clone();
-                        let mgr2 = mgr.clone();
-                        let entity2 = entity.clone();
-                        div()
-                            .v_flex()
-                            .gap_2()
-                            .rounded_md()
-                            .border_1()
-                            .border_color(theme.colors.border)
-                            .px_3()
-                            .py_2()
-                            .child(
-                                div().text_sm().font_weight(FontWeight::BOLD)
-                                    .child(format!("策略管理：{}", env_name.clone())),
-                            )
-                            .child(plist)
-                            .child(
-                                div().h_flex().items_center().gap_2()
-                                    .child(div().text_xs().child(tr("类型")))
-                                    .child(Select::new(&policy_type).placeholder(tr("选择策略类型…")))
-                                    .child(div().text_xs().child(tr("启用")))
-                                    .child(
-                                        // 策略启用开关：gpui-component `Switch`（决策 #84；默认尺寸 36×20，
-                                        // 替代早期自绘 30×16 轨道，对齐原型 HTML）。
-                                        Switch::new("pol-toggle")
-                                            .checked(policy_enabled.get())
-                                            .on_click({
-                                                let policy_enabled = policy_enabled.clone();
-                                                let entity = entity.clone();
-                                                move |want, _window, app| {
-                                                    policy_enabled.set(*want);
-                                                    entity.update(app, |_, cx| cx.notify());
-                                                }
-                                            }),
-                                    )
-                                    .child(
-                                        Button::new("pol-save")
-                                            .primary()
-                                            .label(if policy_editing.is_some() { tr("更新策略") } else { tr("添加策略") })
-                                            .on_click({
-                                                let env_name = env_name2.clone();
-                                                let mgr = mgr2.clone();
-                                                let entity = entity2.clone();
-                                                move |_, _window, app| {
-                                                    let (label, enabled, editing) = {
-                                                        let m = mgr.borrow();
-                                                        (
-                                                            m.policy_type.read(app).selected_value().cloned().unwrap_or_default().to_string(),
-                                                            m.policy_enabled.get(),
-                                                            m.policy_editing.clone(),
-                                                        )
-                                                    };
-                                                    if label.is_empty() {
-                                                        mgr.borrow_mut().msg = Some(tr("请选择策略类型").into());
-                                                        entity.update(app, |_, cx| cx.notify());
-                                                        return;
-                                                    }
-                                                    let outcome = upsert_policy_item(&env_name, &label, enabled, editing.as_deref());
-                                                    let ok = outcome.starts_with("已保存") || outcome.starts_with("保存成功");
-                                                    let mut m = mgr.borrow_mut();
-                                                    m.msg = Some(outcome);
-                                                    if ok {
-                                                        m.policy_editing = None;
-                                                        m.policy_enabled.set(true);
-                                                    }
-                                                    drop(m);
-                                                    refresh_policy_items(&env_name, &mgr, app);
-                                                    entity.update(app, |_, cx| cx.notify());
-                                                }
-                                            }),
-                                    ),
-                            )
-                    }
-                    None => div().h_0(),
-                }
-            } else {
-                div().h_0()
-            }
-        };
-
+        let body = manager_panel_ui(kind, &mgr, &notify, window, cx);
+        let shared_layer = shared_for_layer.clone();
         dialog
             .title(title)
             .w(cx.theme().font_size * crate::ui::DIALOG_MANAGER_WIDTH)
             .overlay(true)
             .overlay_closable(true)
             .keyboard(true)
-            .child(
-                div()
-                    .v_flex()
-                    .gap_3()
-                    .child(rows)
-                    .child(policy_panel)
-                    .child(mgr_form)
-                    .child(
-                        div().text_xs().text_color(theme.colors.muted_foreground)
-                            .child(match kind {
-                                ManagerKind::Auth => tr("复用：数据库 A 可直接引用数据库 B 的认证配置；凭据 AES-256 加密存储，列表不回显明文。"),
-                                ManagerKind::Network => tr("复用：网络配置（SSH/代理档案）可被多个连接引用，建一次全项目/全局复用。"),
-                                ManagerKind::Env => tr("复用：环境（含策略）可被多个数据源共享；点击「策略」直接管理该环境的策略。"),
-                            }),
-                    ),
-            )
+            .child(body)
             .footer(
                 div().h_flex().justify_end().gap_2()
                     .child(
@@ -1023,4 +551,510 @@ pub(crate) fn delete_policy_item(id: &str) -> String {
         Ok(()) => "已删除策略".to_string(),
         Err(e) => format!("删除失败: {e}"),
     }
+}
+
+/// 管理器列表 + 表单 UI（旧弹窗与配置中心页共用的一份实现）。
+///
+/// `notify` 是「重绘宿主」的回调：弹窗传 `Entity<H>` 的 update，配置中心页传自身 `cx.notify`。
+/// 抽出的动机见 `docs/architecture/connection/prototypes/config-center.html`：
+/// 三域（认证 / 网络 / 环境）在页里要能并排切换，不能只存在于内层对话框闭包里。
+pub(crate) fn manager_panel_ui(
+    kind: ManagerKind,
+    mgr: &Rc<RefCell<ManagerWorkspace>>,
+    notify: &Rc<dyn Fn(&mut App)>,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let mgr = mgr.clone();
+    let notify = notify.clone();
+    // 网络字段占位随类型同步：必须在 `cx.theme()` 之前写（占位写入需要 `&mut cx`，
+    // 而 theme 持有 `cx` 的不可变借用）；只在类型变化时写，`set_placeholder` 会 notify。
+    if kind.is_network() {
+            let m0 = mgr.borrow();
+            let ty = m0
+                .new_type
+                .read(cx)
+                .selected_value()
+                .cloned()
+                .unwrap_or_default()
+                .to_string();
+            if m0.net_specs_for.borrow().as_str() != ty {
+                for spec in network_field_specs(&ty) {
+                    if let Some(input) = net_input_entity(&m0, spec.key) {
+                        let ph = spec.placeholder;
+                        input.update(cx, |s, cx| s.set_placeholder(ph, window, cx));
+                    }
+                }
+            }
+        }
+        let theme = cx.theme();
+        let m = mgr.borrow();
+
+        // 列表行。
+        let mut rows = div().v_flex().gap_1();
+        if m.items.is_empty() {
+            rows = rows.child(
+                div().text_xs().text_color(theme.colors.muted_foreground).child(tr("暂无配置，点击下方「新建」")),
+            );
+        }
+        for (i, item) in m.items.iter().enumerate() {
+            let item = item.clone();
+            let idx = i;
+            let mut row = div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .rounded_md()
+                .border_1()
+                .border_color(theme.colors.border)
+                .px_2()
+                .py_1()
+                .child(div().text_sm().flex_1().child(item.name.clone()));
+            // 被引用计数（原型 §3.6）：被引用时删除会被拦下，先在这里告知数量。
+            if item.refs > 0 {
+                row = row.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.colors.muted_foreground)
+                        .child(format!("被引用 {}", item.refs)),
+                );
+            }
+            if kind.is_env() {
+                row = row.child(
+                    Button::new(format!("mgr-policy-{idx}"))
+                        .secondary()
+                        .label(tr("策略"))
+                        .on_click({
+                            let item = item.clone();
+                            let mgr = mgr.clone();
+                            let notify = notify.clone();
+                            move |_, _window, app| {
+                                let mut m = mgr.borrow_mut();
+                                m.policy_env = Some(item.name.clone());
+                                m.policy_editing = None;
+                                m.policy_enabled.set(true);
+                                drop(m);
+                                refresh_policy_items(&item.name, &mgr, app);
+                                let mut m = mgr.borrow_mut();
+                                m.msg = Some(format!("环境「{}」策略管理", item.name));
+                                drop(m);
+                                notify(app);
+                            }
+                        }),
+                );
+            }
+            rows = rows.child(row.child(
+                Button::new(format!("mgr-edit-{idx}"))
+                            .secondary()
+                            .label(tr("编辑"))
+                            .on_click({
+                                let item = item.clone();
+                                let mgr = mgr.clone();
+                                let notify = notify.clone();
+                                move |_, window, app| {
+                                    let item_name = item.name.clone();
+                                    let mut m = mgr.borrow_mut();
+                                    m.editing = Some(item_name.clone());
+                                    m.msg = Some(format!("编辑中：{item_name}（保存后更新既有条目）"));
+                                    m.new_name.update(app, |s, cx| s.set_value(item_name.clone(), window, cx));
+                                    // 认证与网络：回填真实字段（此前只回填名称 →
+                                    // 保存会把已有 config / auth_data 覆盖成空）。
+                                    if kind.has_type_column() {
+                                        let loaded = if kind.is_auth() {
+                                            load_auth_config_by_name(&item_name, app)
+                                        } else {
+                                            load_network_config_by_name(&item_name, app)
+                                        };
+                                        if let Some((ty, config)) = loaded {
+                                            m.new_data
+                                                .update(app, |s, cx| s.set_value(config.clone(), window, cx));
+                                            let values = if kind.is_auth() {
+                                                auth_config_values(&ty, &config)
+                                            } else {
+                                                network_config_values(&ty, &config)
+                                            };
+                                            for (key, value) in values {
+                                                if let Some(input) = net_input_entity(&m, &key) {
+                                                    input.update(app, |s, cx| {
+                                                        s.set_value(value.clone(), window, cx)
+                                                    });
+                                                }
+                                            }
+                                            m.new_type.update(app, |s, cx| {
+                                                s.set_selected_value(&SharedString::from(ty.clone()), window, cx)
+                                            });
+                                            // 类型可能已变：立即按新类型重算字段声明（渲染期只读缓存）。
+                                            let _ = meta_field_specs_now(&m, kind, &ty);
+                                        }
+                                    }
+                                    drop(m);
+                                    notify(app);
+                                }
+                            }),
+                    )
+                    .child(
+                        Button::new(format!("mgr-del-{idx}"))
+                            .secondary()
+                            .label(tr("删除"))
+                            .on_click({
+                                let item = item.clone();
+                                let mgr = mgr.clone();
+                                let notify = notify.clone();
+                                move |_, _window, app| {
+                                    let project_root = mgr.borrow().project_root.clone();
+                                    let deleted = delete_manager_item(kind, &item.name, project_root.as_deref());
+                                    let mut m = mgr.borrow_mut();
+                                    m.msg = Some(deleted.clone());
+                                    drop(m);
+                                    if deleted.starts_with("已删除") || deleted.starts_with("删除成功") {
+                                        refresh_manager_items(kind, &mgr, app);
+                                    }
+                                    notify(app);
+                                }
+                            }),
+                    ),
+            );
+        }
+        drop(m);
+
+        // 新建/编辑表单。
+        let mgr_form = {
+            let m = mgr.borrow();
+            let new_name = m.new_name.clone();
+            let new_type = m.new_type.clone();
+            let new_data = m.new_data.clone();
+            let editing = m.editing.clone();
+            let msg = m.msg.clone();
+            // 网络配置字段（Network 域）：按类型显示子集；`chain`（或未选类型）回落到原始 JSON 文本框。
+            let net_type_now = m
+                .new_type
+                .read(cx)
+                .selected_value()
+                .cloned()
+                .unwrap_or_default()
+                .to_string();
+            // 认证与网络都按类型声明展开字段；无声明（如 chain）回落原始 JSON。
+            let net_specs: Vec<NetFieldSpec> = if kind.has_type_column() {
+                meta_field_specs_now(&m, kind, &net_type_now)
+            } else {
+                Vec::new()
+            };
+            let net_rows: Vec<(NetFieldSpec, Entity<InputState>)> = net_specs
+                .iter()
+                .cloned()
+                .filter_map(|spec| net_input_entity(&m, spec.key).map(|input| (spec, input)))
+                .collect();
+            drop(m);
+            let mgr = mgr.clone();
+            let notify = notify.clone();
+            let mut type_row = div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .child(div().text_xs().child(tr("类型")))
+                .child(Select::new(&new_type).placeholder(tr("选择类型…")));
+            if net_rows.is_empty() {
+                type_row = type_row
+                    .child(div().text_xs().child(tr("数据(JSON)")))
+                    .child(Input::new(&new_data).w(cx.theme().font_size * crate::ui::DIALOG_JSON_INPUT_WIDTH));
+            }
+            let mut fields_block = div().v_flex().gap_1();
+            for (spec, input) in &net_rows {
+                // 凭据行（password / passphrase）：掩码显示 + 眼睛按钮（默认不肩窥也能确认自己敲了没）。
+                let mut field = Input::new(input);
+                if is_secret_field(spec.key) {
+                    field = field.mask_toggle();
+                }
+                let mut row = div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .w(rems(NET_LABEL_W))
+                            .flex_shrink_0()
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .child(spec.label),
+                    )
+                    .child(field.w(rems(14.)));
+                if spec.required {
+                    row = row.child(div().text_xs().text_color(theme.colors.danger).child("*"));
+                }
+                fields_block = fields_block.child(row);
+            }
+            if !net_rows.is_empty() {
+                fields_block = fields_block.child(hint_line(
+                    theme,
+                    tr("字段按类型展开；协议链请选 chain 并直接填 JSON。"),
+                ));
+            }
+            div()
+                .v_flex()
+                .gap_2()
+                .rounded_md()
+                .border_1()
+                .border_color(theme.colors.border)
+                .px_3()
+                .py_2()
+                .child(
+                    div().text_sm().font_weight(FontWeight::BOLD)
+                        .child(if editing.is_some() { tr("编辑配置") } else { tr("新建配置") }),
+                )
+                .child(
+                    div().h_flex().items_center().gap_2()
+                        .child(div().text_xs().child(tr("名称")))
+                        .child(Input::new(&new_name).w(cx.theme().font_size * crate::ui::DIALOG_NAME_INPUT_WIDTH)),
+                )
+                .child(type_row)
+                .child(fields_block)
+                .child(
+                    div().h_flex().items_center().gap_2()
+                        .child(
+                            Button::new("mgr-save")
+                                .primary()
+                                .label(tr("保存"))
+                                .on_click({
+                                    let mgr = mgr.clone();
+                                    let notify = notify.clone();
+                                    move |_, window, app| {
+                                        let (name, tpe, raw_data, editing) = {
+                                            let m = mgr.borrow();
+                                            (
+                                                m.new_name.read(app).value().to_string(),
+                                                m.new_type.read(app).selected_value().cloned().unwrap_or_default().to_string(),
+                                                m.new_data.read(app).value().to_string(),
+                                                m.editing.clone(),
+                                            )
+                                        };
+                                        if name.trim().is_empty() {
+                                            mgr.borrow_mut().msg = Some(tr("名称不能为空").into());
+                                            notify(app);
+                                            return;
+                                        }
+                                        // 认证 / 网络：有字段声明时由字段组装 JSON；校验失败只提示，不落库。
+                                        // 无声明（如 chain / 未知认证类型）→ 继续用原始 JSON 文本框。
+                                        let data = if kind.has_type_column() {
+                                            let specs = meta_field_specs_now(&mgr.borrow(), kind, &tpe);
+                                            if specs.is_empty() {
+                                                raw_data
+                                            } else {
+                                                let values = collect_net_values(&mgr.borrow(), app);
+                                                let built = if kind.is_auth() {
+                                                    build_auth_config_json(&tpe, &values)
+                                                } else {
+                                                    build_network_config_json(&tpe, &values)
+                                                };
+                                                match built {
+                                                    Ok(json) => json,
+                                                    Err(e) => {
+                                                        mgr.borrow_mut().msg = Some(e);
+                                                        notify(app);
+                                                        return;
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            raw_data
+                                        };
+                                        let outcome = upsert_manager_item(kind, &name, &tpe, &data, editing.as_deref());
+                                        let mut m = mgr.borrow_mut();
+                                        m.msg = Some(outcome.clone());
+                                        if outcome.starts_with("已保存") || outcome.starts_with("保存成功") {
+                                            m.editing = None;
+                                            m.new_name.update(app, |s, cx| s.set_value("", window, cx));
+                                            m.new_data.update(app, |s, cx| s.set_value("", window, cx));
+                                            clear_net_values(&m, window, app);
+                                        }
+                                        drop(m);
+                                        refresh_manager_items(kind, &mgr, app);
+                                        notify(app);
+                                    }
+                                }),
+                        )
+                        .child(
+                            Button::new("mgr-cancel-edit")
+                                .label(tr("取消编辑"))
+                                .on_click({
+                                    let mgr = mgr.clone();
+                                    let notify = notify.clone();
+                                    move |_, window, app| {
+                                        let mut m = mgr.borrow_mut();
+                                        m.editing = None;
+                                        m.msg = None;
+                                        m.new_name.update(app, |s, cx| s.set_value("", window, cx));
+                                        m.new_data.update(app, |s, cx| s.set_value("", window, cx));
+                                        clear_net_values(&m, window, app);
+                                        drop(m);
+                                        notify(app);
+                                    }
+                                }),
+                        ),
+                )
+                .child(
+                    if let Some(msg) = msg {
+                        div().text_xs().text_color(theme.colors.info).child(msg)
+                    } else {
+                        div().h(rems(crate::ui::DIALOG_HINT_PLACEHOLDER_HEIGHT))
+                    },
+                )
+        };
+
+        // 策略管理面板（仅环境管理器且已点开某环境时显示）。
+        let policy_panel = {
+            if kind.is_env() {
+                let m = mgr.borrow();
+                let policy_env = m.policy_env.clone();
+                let policy_type = m.policy_type.clone();
+                let policy_enabled = m.policy_enabled.clone();
+                let policies = m.policies.clone();
+                let policy_editing = m.policy_editing.clone();
+                drop(m);
+                match policy_env {
+                    Some(env_name) => {
+                        let mut plist = div().v_flex().gap_1();
+                        let list = policies.borrow();
+                        if list.is_empty() {
+                            plist = plist.child(
+                                div().text_xs().text_color(theme.colors.muted_foreground).child(tr("该环境暂无策略")),
+                            );
+                        }
+                        for (i, (ptype, pid, enabled)) in list.iter().enumerate() {
+                            let (ptype, pid, enabled) = (ptype.clone(), pid.clone(), *enabled);
+                            plist = plist.child(
+                                div()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(theme.colors.border)
+                                    .px_2()
+                                    .py_1()
+                                    .child(div().text_sm().flex_1().child(ptype.clone()))
+                                    .child(
+                                        div().text_xs()
+                                            .text_color(if enabled { theme.colors.success } else { theme.colors.muted_foreground })
+                                            .child(if enabled { tr("启用") } else { tr("停用") }),
+                                    )
+                                    .child(
+                                        Button::new(format!("pol-del-{i}"))
+                                            .secondary()
+                                            .label(tr("删除"))
+                                            .on_click({
+                                                let pid = pid.clone();
+                                                let mgr = mgr.clone();
+                                                let notify = notify.clone();
+                                                move |_, _window, app| {
+                                                    let outcome = delete_policy_item(&pid);
+                                                    let env = mgr.borrow().policy_env.clone();
+                                                    {
+                                                        let mut m = mgr.borrow_mut();
+                                                        m.msg = Some(outcome);
+                                                    }
+                                                    if let Some(e) = env {
+                                                        refresh_policy_items(&e, &mgr, app);
+                                                    }
+                                                    notify(app);
+                                                }
+                                            }),
+                                    ),
+                            );
+                        }
+                        drop(list);
+                        let env_name2 = env_name.clone();
+                        let mgr2 = mgr.clone();
+                        let notify2 = notify.clone();
+                        div()
+                            .v_flex()
+                            .gap_2()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(theme.colors.border)
+                            .px_3()
+                            .py_2()
+                            .child(
+                                div().text_sm().font_weight(FontWeight::BOLD)
+                                    .child(format!("策略管理：{}", env_name.clone())),
+                            )
+                            .child(plist)
+                            .child(
+                                div().h_flex().items_center().gap_2()
+                                    .child(div().text_xs().child(tr("类型")))
+                                    .child(Select::new(&policy_type).placeholder(tr("选择策略类型…")))
+                                    .child(div().text_xs().child(tr("启用")))
+                                    .child(
+                                        // 策略启用开关：gpui-component `Switch`（决策 #84；默认尺寸 36×20，
+                                        // 替代早期自绘 30×16 轨道，对齐原型 HTML）。
+                                        Switch::new("pol-toggle")
+                                            .checked(policy_enabled.get())
+                                            .on_click({
+                                                let policy_enabled = policy_enabled.clone();
+                                                let notify = notify.clone();
+                                                move |want, _window, app| {
+                                                    policy_enabled.set(*want);
+                                                    notify(app);
+                                                }
+                                            }),
+                                    )
+                                    .child(
+                                        Button::new("pol-save")
+                                            .primary()
+                                            .label(if policy_editing.is_some() { tr("更新策略") } else { tr("添加策略") })
+                                            .on_click({
+                                                let env_name = env_name2.clone();
+                                                let mgr = mgr2.clone();
+                                                let notify = notify2.clone();
+                                                move |_, _window, app| {
+                                                    let (label, enabled, editing) = {
+                                                        let m = mgr.borrow();
+                                                        (
+                                                            m.policy_type.read(app).selected_value().cloned().unwrap_or_default().to_string(),
+                                                            m.policy_enabled.get(),
+                                                            m.policy_editing.clone(),
+                                                        )
+                                                    };
+                                                    if label.is_empty() {
+                                                        mgr.borrow_mut().msg = Some(tr("请选择策略类型").into());
+                                                        notify(app);
+                                                        return;
+                                                    }
+                                                    let outcome = upsert_policy_item(&env_name, &label, enabled, editing.as_deref());
+                                                    let ok = outcome.starts_with("已保存") || outcome.starts_with("保存成功");
+                                                    let mut m = mgr.borrow_mut();
+                                                    m.msg = Some(outcome);
+                                                    if ok {
+                                                        m.policy_editing = None;
+                                                        m.policy_enabled.set(true);
+                                                    }
+                                                    drop(m);
+                                                    refresh_policy_items(&env_name, &mgr, app);
+                                                    notify(app);
+                                                }
+                                            }),
+                                    ),
+                            )
+                    }
+                    None => div().h_0(),
+                }
+            } else {
+                div().h_0()
+            }
+        };
+
+    div()
+        .v_flex()
+        .gap_3()
+        .child(rows)
+        .child(policy_panel)
+        .child(mgr_form)
+        .child(
+            div().text_xs().text_color(theme.colors.muted_foreground)
+                .child(match kind {
+                    ManagerKind::Auth => tr("复用：数据库 A 可直接引用数据库 B 的认证配置；凭据 AES-256 加密存储，列表不回显明文。"),
+                    ManagerKind::Network => tr("复用：网络配置（SSH/代理档案）可被多个连接引用，建一次全项目/全局复用。"),
+                    ManagerKind::Env => tr("复用：环境（含策略）可被多个数据源共享；点击「策略」直接管理该环境的策略。"),
+                }),
+        )
+        .into_any_element()
 }

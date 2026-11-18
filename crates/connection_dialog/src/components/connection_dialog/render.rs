@@ -2258,6 +2258,10 @@ fn network_tab_ui<H: 'static>(
                     .ghost()
                     .label(tr("管理"))
                     .on_click(move |_, window, app| {
+                        // 优先「配置中心」页（三域同页）；宿主未挂页时回落旧的内层对话框。
+                        if shared_click.show_config_center(ManagerKind::Network, window, app) {
+                            return;
+                        }
                         open_manager(
                             ManagerKind::Network,
                             &mgr,
@@ -2473,6 +2477,9 @@ fn advanced_tab_ui<H: 'static>(p: AdvancedTab<'_, H>, cx: &App) -> Div {
                             .secondary()
                             .label(tr("管理环境"))
                             .on_click(move |_, window, app| {
+                                if shared_click.show_config_center(ManagerKind::Env, window, app) {
+                                    return;
+                                }
                                 open_manager(
                                     ManagerKind::Env,
                                     &mgr,
@@ -3055,6 +3062,9 @@ fn general_tab_ui<H: 'static>(p: GeneralTab<'_, H>, cx: &App) -> Div {
                     let entity = entity.clone();
                     let shared = shared.clone();
                     move |_, window, app| {
+                        if shared.show_config_center(ManagerKind::Auth, window, app) {
+                            return;
+                        }
                         open_manager(ManagerKind::Auth, &mgr, entity.clone(), shared.clone(), window, app);
                     }
                 })),

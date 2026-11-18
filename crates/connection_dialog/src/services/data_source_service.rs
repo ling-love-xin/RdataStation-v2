@@ -865,6 +865,60 @@ impl DataSourceService {
         Ok(())
     }
 
+    /// 只翻「DuckDB 直连（本地加速 / 用作联邦源）」这一个开关（数据对象面板「加源」的连接线）。
+    ///
+    /// 走**整记录回填**而不是裸 `UPDATE`：开关在 [`Self::update`] 里联动着 Secret 注册 /
+    /// 清理与连接指纹登记，绕开它会在开关翻开后留下不一致的凭据登记。回填与
+    /// 「复制为模板」同一条组装路径，差异只有两处：URL **带凭据**组装（Secret 联动要按
+    /// URL 里的凭据注册，与对话框保存同口径）、名字不变（不做改名）。密码不回传
+    /// （`None` = 保留现有密文——全局与项目两侧的更新 SQL 都是 `COALESCE` / 读旧值语义）。
+    pub async fn set_use_duckdb_fed(
+        &self,
+        conn_id: &str,
+        on: bool,
+        project_path: Option<&str>,
+    ) -> Result<(), CoreError> {
+        let ds = self
+            .get_with_project(conn_id, project_path)
+            .await?
+            .ok_or_else(|| {
+                CoreError::common(shared::error::CommonError::General(format!(
+                    "连接不存在：{conn_id}"
+                )))
+            })?;
+        let url = connection::url::build_connection_url(&ds)
+            .map_err(|e| CoreError::common(shared::error::CommonError::General(e)))?;
+        let scope = if id_prefix::is_global(conn_id) {
+            ConnectionScope::Global
+        } else {
+            ConnectionScope::Project
+        };
+        let input = DataSourceSaveInput {
+            name: ds.name.clone(),
+            db_type: ds.db_type.clone(),
+            url,
+            // 密码不回传：两侧存储都按「None = 保留现有密文」处理，避免无谓的重加密
+            password: None,
+            username: ds.username.clone(),
+            scope,
+            description: ds.description.clone(),
+            driver_id: ds.driver_id.clone(),
+            environment_id: ds.environment_id.clone(),
+            auth_config_id: ds.auth_config_id.clone(),
+            auth_method: ds.auth_method.clone(),
+            network_config_id: ds.network_config_id.clone(),
+            driver_properties: ds.driver_properties.clone(),
+            advanced_options: ds.advanced_options.clone(),
+            options: ds.options.clone(),
+            tags: ds.tags.clone(),
+            use_duckdb_fed: Some(on),
+            schema_name: ds.schema_name.clone(),
+            metadata_path: ds.metadata_path.clone(),
+            save_password: None,
+        };
+        self.update(conn_id, &input, project_path).await
+    }
+
     /// 删除连接（物理删除 + 清理分析库中的 DuckDB Secret）。
     pub async fn delete(
         &self,
