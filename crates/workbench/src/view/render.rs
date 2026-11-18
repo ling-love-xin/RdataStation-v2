@@ -278,6 +278,17 @@ impl Render for WorkbenchView {
                     entity.update(cx, |this, cx| this.open_settings(window, cx));
                 }
             })
+            // 【结果集设置】状态行齿轮派发的动作：打开设置窗口并定位到「结果集」节
+            // （对齐 DBeaver `ConfigAction` → `PrefPageResultSetMain.PAGE_ID`）。
+            .on_action({
+                let entity = cx.entity();
+                move |_: &settings::commands::OpenResultPanelSettings, window, cx| {
+                    tracing::info!("【探针】OpenResultPanelSettings：打开设置窗口（结果集节）");
+                    entity.update(cx, |this, cx| {
+                        this.open_settings_at(Some("result_panel"), window, cx)
+                    });
+                }
+            })
             // 主题切换（`Ctrl+Shift+L`，绑在 workbench context）：显式模式两态切换；
             // 跟随系统时按系统当前外观反切到显式对侧。处理在 SettingsService（设置层）。
             .on_action({

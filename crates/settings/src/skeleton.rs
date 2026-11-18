@@ -22,7 +22,12 @@ use crate::settings_page::SettingsHost;
 ///
 /// `notify`：任一设置项写入后要通知页面实体重读的闭包（在 `SettingsPage::new`
 /// 里构造并传入）。
-pub fn build(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> Settings {
+/// `initial_section`：打开时定位到的节 id（`None` = 首页）；未知 id 落回首页。
+pub fn build(
+    host: &SettingsHost,
+    notify: &Rc<dyn Fn(&mut App)>,
+    initial_section: Option<&str>,
+) -> Settings {
     let mut settings = Settings::new("rds-settings")
         // 分组卡片化：每个分组一个描边卡片（border + 圆角 + 内边距），
         // 与"无卡片平铺"相比分组边界更清楚，长节不显杂乱。
@@ -31,7 +36,7 @@ pub fn build(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> Settings {
         // 拖宽范围 160–360px 由组件默认（h_resizable，用户可自行调）。
         .sidebar_width(px(200.))
         .default_selected_index(SelectIndex {
-            page_ix: 0,
+            page_ix: page_index_for(initial_section),
             group_ix: None,
         });
 
@@ -109,6 +114,21 @@ pub fn build(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> Settings {
     settings
 }
 
+/// 节 id → 骨架里的页序号（`None` / 未知 id → 0 = 首页）。
+///
+/// 侧栏导航由 gpui-kit `setting` 组件按 `SelectIndex { page_ix }` 选址，页面顺序与
+/// `registry::sections()` 一致；「从结果集齿轮进来直接落在结果集页」就靠它
+/// （对齐 DBeaver `ConfigAction` → `PrefPageResultSetMain.PAGE_ID`）。
+pub(crate) fn page_index_for(section: Option<&str>) -> usize {
+    section
+        .and_then(|id| {
+            registry::sections()
+                .into_iter()
+                .position(|(key, _)| key == id)
+        })
+        .unwrap_or(0)
+}
+
 /// 页面级一句总览（从登记表行 label 归纳；缺省 None 不显示）。
 fn page_description(section: &str) -> Option<&'static str> {
     match section {
@@ -171,4 +191,23 @@ fn action_rows(
         _ => {}
     }
     items
+}
+
+#[cfg(test)]
+mod tests {
+    use super::page_index_for;
+
+    /// 齿轮入口定位：`Some("result_panel")` 必须落在该节在导航里的真实序号上
+    /// （不是硬编码 0，否则「从结果集进来」会落到首页）；未知 id / None 回首页。
+    #[test]
+    fn page_index_lands_on_the_requested_section() {
+        let sections = crate::registry::sections();
+        let expected = sections
+            .iter()
+            .position(|(id, _)| *id == "result_panel")
+            .expect("登记表里必须有结果集节");
+        assert_eq!(page_index_for(Some("result_panel")), expected);
+        assert_eq!(page_index_for(None), 0);
+        assert_eq!(page_index_for(Some("no-such-section")), 0);
+    }
 }

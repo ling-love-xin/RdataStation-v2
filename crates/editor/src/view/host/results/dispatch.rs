@@ -196,6 +196,18 @@ impl EditorHostPanel {
             ResultRequest::SetStatusCommandVisible { command, visible } => self
                 .result_panel
                 .update(cx, |p, cx| p.set_status_command_visible(command, visible, cx)),
+            // 【结果集设置】状态行齿轮：派发「打开设置并定位到结果集节」的动作
+            // （对齐 DBeaver `ConfigAction` → `PrefPageResultSetMain.PAGE_ID`）。
+            // 设置窗口归 workbench 所有，面板这一层只发动作（与菜单栏 / 快捷键同机制）；
+            // 需要 `&mut Window`，走窗口句柄转手（headless / 窗口已关时静默跳过）。
+            ResultRequest::OpenResultPanelSettings => {
+                let _ = self.window.update(cx, |_panel, window, app| {
+                    window.dispatch_action(
+                        Box::new(settings::commands::OpenResultPanelSettings),
+                        app,
+                    );
+                });
+            }
             // 【1.2】复制「执行SQL」页签里的 wrapped SQL
             ResultRequest::CopyExecSql => {
                 let sql = self

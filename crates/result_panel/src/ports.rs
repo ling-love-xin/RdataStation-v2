@@ -129,6 +129,10 @@ pub enum ResultRequest {
         command: StatusCommand,
         visible: bool,
     },
+    /// 【结果集设置】状态行最右端的齿轮（对齐 DBeaver 状态栏 `ConfigAction`：
+    /// 齿轮 → 打开结果集首选项页，`ResultSetViewer.java:5402-5418`）。
+    /// 面板不认识 settings crate（依赖只向下），只推请求，由宿主派发对应的动作。
+    OpenResultPanelSettings,
     /// 【筛选设置】应用：`where` 回填筛选框并生效，`order` 是自定义排序文本
     /// （空 = 不自定义，沿用原查询的 ORDER BY）。宿主按两者重查替换当前结果集
     /// （对齐 DBeaver `FilterSettingsDialog` 的 Custom 页签：

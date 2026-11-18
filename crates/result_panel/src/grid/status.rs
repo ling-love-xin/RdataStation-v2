@@ -604,6 +604,9 @@ pub fn render_status_row(
     hidden_commands: &std::collections::BTreeSet<StatusCommand>,
     // 状态行右端最末的配置菜单（面板构造；`None` = 不摆，键位仍可用）
     config_menu: Option<AnyElement>,
+    // 状态行最右端的「结果集设置」齿轮（对齐 DBeaver 状态栏 `ConfigAction`；
+    // 面板构造，`None` = 不摆）
+    settings_button: Option<AnyElement>,
     cx: &App,
 ) -> AnyElement {
     let theme = cx.theme();
@@ -829,5 +832,9 @@ pub fn render_status_row(
         .children(right_switch)
         // 【工具栏配置】最末端的 ▾：勾选要显示的命令项（DBeaver 工具条配置的等价物）
         .children(config_menu)
+        // 【结果集设置】最右端的齿轮：打开结果集首选项页
+        // （DBeaver `createStatusBar` 最后一个 config ToolBarManager 里的 `ConfigAction`，
+        //  `ResultSetViewer.java:2113-2122`）
+        .children(settings_button)
         .into_any_element()
 }

@@ -51,6 +51,10 @@ pub struct SettingsHost {
 /// 设置页实体（宿主把本实体放在 overlay 层渲染）。
 pub struct SettingsPage {
     host: SettingsHost,
+    /// 打开时定位到哪一节（`None` = 首页）。对齐 DBeaver 的 `ConfigAction`：
+    /// 从结果集齿轮进来直接落在「结果集」页（`PrefPageResultSetMain.PAGE_ID`），
+    /// 不让用户再在侧栏里翻一遍（`ResultSetViewer.java:5402-5418`）。
+    initial_section: Option<&'static str>,
     /// 页面焦点句柄：`Esc` 关闭靠它路由（`key_context("settings")`）。
     focus_handle: FocusHandle,
     /// 首次渲染时把焦点接到页面上（一次性；否则刚打开时按 `Esc` 没反应）。
@@ -60,7 +64,17 @@ pub struct SettingsPage {
 }
 
 impl SettingsPage {
-    pub fn new(_window: &mut Window, host: SettingsHost, cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, host: SettingsHost, cx: &mut Context<Self>) -> Self {
+        Self::new_at(window, host, None, cx)
+    }
+
+    /// 打开设置页并定位到 `section`（`None` = 首页）。节 id 来自 `registry::sections()`。
+    pub fn new_at(
+        _window: &mut Window,
+        host: SettingsHost,
+        initial_section: Option<&'static str>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         // 通知闭包：任一设置项写入成功后通知页面实体重渲染。
         // 页面不再维护第二份快照——骨架字段在 render 时直接读 global，重渲染即重读。
         let page = cx.entity().downgrade();
@@ -71,6 +85,7 @@ impl SettingsPage {
         });
         Self {
             host,
+            initial_section,
             focus_handle: cx.focus_handle(),
             focus_pending: true,
             notify,
@@ -137,7 +152,7 @@ impl Render for SettingsPage {
                 ))
         });
         // 骨架构造（纯函数）：节 → 页，行 → 分组项；值读写经闭包接 global。
-        let skeleton = skeleton::build(&self.host, &self.notify);
+        let skeleton = skeleton::build(&self.host, &self.notify, self.initial_section);
         // 独立窗口根视图：尺寸由窗口决定（`TitleBar::window_options()`），
         // 背景铺满窗口；`Esc` 关闭窗口（等价 TitleBar 的 ✕）。
         div()

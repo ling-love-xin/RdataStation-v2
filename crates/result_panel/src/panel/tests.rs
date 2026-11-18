@@ -955,6 +955,45 @@ fn status_commands_follow_dbeaver_default_visibility_and_can_be_restored(
     );
 }
 
+/// 【结果集设置】状态行最右端的齿轮（对齐 DBeaver 状态栏 `ConfigAction`，
+/// `ResultSetViewer.java:5402-5418`）：有状态行时必摆，点它只推
+/// `OpenResultPanelSettings`（面板不认识 settings crate，由宿主派发打开设置的动作）。
+#[gpui_kit::test]
+fn status_settings_gear_opens_the_result_panel_preferences(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.status = Some(crate::grid::status::ResultStatus {
+                total_rows: 2,
+                ..Default::default()
+            });
+            cx.notify();
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let gear = cx
+        .debug_bounds("editor-result-status-preferences")
+        .expect("状态行最右端应有「结果集设置」齿轮（DBeaver 的 ConfigAction）");
+    let point = gpui_kit::point(
+        gear.origin.x + gear.size.width / 2.,
+        gear.origin.y + gear.size.height / 2.,
+    );
+    cx.simulate_click(point, gpui_kit::Modifiers::default());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let queued = cx.update(|_, app| panel.read(app).queue.drain());
+    assert!(
+        queued
+            .iter()
+            .any(|request| matches!(request, crate::ports::ResultRequest::OpenResultPanelSettings)),
+        "点齿轮应入队「打开结果集设置」：{queued:?}，齿轮 {gear:?}"
+    );
+}
+
 /// 【R1】右栏页内工具条形态统一：值详情 / 分组 / 执行SQL 三页各一条 28px 工具条，
 /// 动作只挂已有能力（值详情=复制当前值 + 保存至文件（对齐 DBeaver
 /// `ContentValueManager.contributeContentActions`）、执行SQL=复制 SQL、分组无动作——DBeaver 的

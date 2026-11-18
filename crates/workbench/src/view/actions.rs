@@ -27,7 +27,20 @@ impl WorkbenchView {
         skin.set_tab_bar_variant(variant, cx);
     }
 
-    pub(crate) fn open_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_settings_at(None, window, cx);
+    }
+
+    /// 打开设置窗口并定位到 `section`（`None` = 首页）。
+    ///
+    /// 用途：结果集状态行的齿轮（DBeaver `ConfigAction`）进来要直接落在「结果集」页，
+    /// 不让用户再在侧栏里翻一遍。窗口已存在时**不**抢焦点（保持原行为：用户自己切过去）。
+    pub(crate) fn open_settings_at(
+        &mut self,
+        section: Option<&'static str>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // 窗口存活检测：已打开则直接返回（用户自己切过去）。
         if let Some(handle) = self.settings_window {
             if handle.update(cx, |_, _, _| {}).is_ok() {
@@ -111,7 +124,7 @@ impl WorkbenchView {
         ));
         let handle = cx
             .open_window(options, |window, cx| {
-                let view = cx.new(|cx| SettingsPage::new(window, host, cx));
+                let view = cx.new(|cx| SettingsPage::new_at(window, host, section, cx));
                 cx.new(|cx| gpui_kit::base::Root::new(view, window, cx))
             })
             .expect("打开设置窗口");

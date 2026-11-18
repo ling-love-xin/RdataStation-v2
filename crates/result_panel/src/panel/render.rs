@@ -1315,6 +1315,25 @@ impl ResultPanel {
             )
         };
 
+        // 【结果集设置】状态行最右端的齿轮：DBeaver 状态栏 `ConfigAction`
+        // （`ResultSetViewer.java:5402-5418`）打开结果集首选项页；本仓推一条请求，
+        // 由宿主派发「打开设置并定位到结果集节」的动作（面板不依赖 settings crate）。
+        let status_settings = {
+            let queue = self.queue.clone();
+            Some(
+                Button::new("editor-result-status-preferences")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Settings)
+                    .tooltip("结果集设置")
+                    .debug_selector(|| "editor-result-status-preferences".to_string())
+                    .on_click(move |_, _window, app| {
+                        queue.request(ResultRequest::OpenResultPanelSettings, app);
+                    })
+                    .into_any_element(),
+            )
+        };
+
         let status_row = show_status.then(|| {
             result_grid::render_status_row(
                 self.status.as_ref(),
@@ -1328,6 +1347,7 @@ impl ResultPanel {
                 status_affected,
                 &self.hidden_status_commands,
                 status_config,
+                status_settings,
                 cx,
             )
             .into_any_element()
