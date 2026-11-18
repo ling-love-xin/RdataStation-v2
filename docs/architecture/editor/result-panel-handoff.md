@@ -1493,6 +1493,18 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 2.83 右缘竖条 / 菜单面板项的开关键语义（2026-11-18）
+
+- 三条入口，语义不同，别混：
+  - `ResultRequest::SetRightTab`（**页签条**点选）＝ 只切页，永不收起；
+  - `ResultRequest::ToggleRightTab`（**右缘竖条**图标 / **视图菜单**面板项）＝
+    「该页已显示就收起整块面板，否则切页并展开」，对齐 `CMD_TOGGLE_PANEL`；
+  - `ResultRequest::SetPanelsVisible`（**竖条顶部总开关** / 状态栏三态开关 / 菜单总开关）＝ 整组收放。
+- 判定只有一份：`panel::events::right_tab_click_collapses(tab, active, panels_visible)`；
+  改口径改这一处。`toggle_right_tab` 的返回值 = 「是否真的切页」，宿主靠它决定
+  引用页要不要取外键（收起分支**不要**再触发一次元数据往返）。
+- 竖条提示随状态变：本页显示中 → 「收起结果面板（本页正在显示）」，否则是页名。
+
 ### 2.82 面板最大化 / 总开关的接手要点（2026-11-18）
 
 - **硬不变量：`panel_maximized ⇒ show_value_sidebar`**。守它的只有三处入口：

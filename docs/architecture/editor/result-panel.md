@@ -4907,6 +4907,38 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
 为 `None`」这类断言**不成立**——本用例改用 `panels_visible()` / `show_value_sidebar` 判可见性，
 渲染断言只用于网格（网格是真按条件挂载的）。
 
+### 8.95 右缘竖条 / 视图菜单的面板项改为「开 / 关」语义（2026-11-18）
+
+**取证（`handler/ResultSetHandlerTogglePanel.java`）**：
+- 竖条上每页是一颗 `VerticalButton(..., SWT.RIGHT | SWT.CHECK)`（`ResultSetViewer.java:1055-1080`），
+  `setChecked(panelsVisible && isPanelVisible(id))`、`setToolTipText(label + " (" + 命令描述 + ")")`，
+  点击走 `ResultSetHandlerTogglePanel` 的 `CMD_TOGGLE_PANEL`。
+- `toggleResultsPanel:64-69`：`isVisible = rsv.isPanelsVisible() && rsv.isPanelVisible(panelId)`，
+  把它交给 `showResultsPanel:71-81`——`isVisible` 真则 `rsv.closePanel(panelId)`，
+  否则 `rsv.activatePanel(panelId, true, true)` + `RESULT_SET_PANEL_OPEN.use(...)`。
+  → **点已打开的那一页 = 关掉它**；点别的页 = 打开 / 激活它。菜单里的面板项同理
+  （`execute:46-62` 同一 handler）。
+- DBeaver 面板是 CTabFolder 多页签（`addPanel` 里 `new CTabItem(panelFolder, SWT.CLOSE)`，
+  `:1330-1394`），关掉某页后其余页仍在；本仓是单页 + `TabBar::segmented()`，
+  所以「关掉当前这一页」**等价于收起整块面板**（多页签并存的差异见 §8.40 登记）。
+
+**本仓落点**：
+- 新增 `ResultRequest::ToggleRightTab(RightTab)`；右缘竖条的六颗页按钮与「视图菜单」的六个面板项
+  统一发它。页签条本身（`TabBar::on_click`）仍是 `SetRightTab`——点页签本来就只该切页，
+  不该把整块面板收掉（DBeaver 的 CTabItem 也没有「点页签收起面板」的行为，收起只发生在竖条 / 菜单）。
+- `panel::events::toggle_right_tab(tab)`：`right_tab_click_collapses(tab, active, panels_visible)`
+  为真 → `set_panels_visible(false)`，否则 `set_right_tab(tab)`；返回 `bool`（是否真的切页），
+  宿主据此对引用页触发 `begin_references_load`，与 `SetRightTab` 分支走同一条刷新路径。
+- 纯函数 `right_tab_click_collapses` 定义在 `panel::events`（模块级，不在 `impl` 里）。
+- 竖条按钮提示随状态切换：本页正在显示 → 「收起结果面板（本页正在显示）」，否则仍是页名。
+
+**验证**：`panel::tests::right_tab_click_closes_only_the_page_that_is_showing`（纯函数三态）+
+`toggling_the_active_page_collapses_the_panel`（窗口用例：已显示→点它收起→再点展开并切页）；
+`cargo test -p rds-result-panel --lib` = **328 passed**；`cargo check -p rds-editor` = Finished；
+`cargo test -p rds-ui-guard` = 4 passed。
+
+**仍存差异**：DBeaver 多页签可并存、可逐页关闭；本仓单页，只能「收起整块 / 切到某页」。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
