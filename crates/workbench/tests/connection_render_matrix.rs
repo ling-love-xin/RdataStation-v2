@@ -498,3 +498,34 @@ fn draft_list_is_keyboard_navigable(cx: &mut TestAppContext) {
         "↓ 应切回下一条草稿"
     );
 }
+
+/// 侧栏信息架构：**类型目录在上、暂存列表在下**。
+///
+/// 新建流程的第一个动作是选类型；暂存列表是回访产物（用户知道自己在攒草稿时才关心）。
+/// 顺序反了不会报错、不会崩，只会让每次新建都多滑一次眼——所以只能靠几何断言守。
+#[gpui_kit::test]
+fn type_list_sits_above_staging_list(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (harness, cx) = open_harness(cx);
+    open_new(&harness, cx);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(visible(cx, "conn-type-list"), "类型列表应可见");
+    assert!(visible(cx, "conn-staging-scroll"), "暂存列表应可见");
+
+    let types = snap(cx, "conn-type-list").bounds();
+    let staging = snap(cx, "conn-staging-scroll").bounds();
+    assert!(
+        types.origin.y < staging.origin.y,
+        "类型目录应在暂存列表之上：types.y={:?}，staging.y={:?}",
+        types.origin.y,
+        staging.origin.y
+    );
+    // 顺序换了，两块的约束不许跟着换：暂存区仍是固定高度，类型区仍吃剩余高度。
+    assert!(
+        types.size.height > staging.size.height,
+        "类型区应占剩余高度（{:?}），暂存区保持固定高度（{:?}）",
+        types.size.height,
+        staging.size.height
+    );
+}

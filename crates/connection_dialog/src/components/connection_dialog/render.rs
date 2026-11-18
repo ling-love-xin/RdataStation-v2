@@ -1651,7 +1651,10 @@ impl<H: 'static> ConnectionDialogState<H> {
                 .overflow_y_scrollbar()
                 .child(tab_content);
 
-            // ---- 左侧栏（对齐原型 §2）：类型搜索 + 数据库类型列表 ----
+            // ---- 左侧栏（对齐原型 §2）：类型搜索 → 数据库类型列表 → 暂存列表 ----
+            // 顺序即优先级：新建的第一步是选类型，所以类型目录占上半区（`flex_1` 吃剩余高度）；
+            // 暂存列表是回访产物，固定高度沉在底部（条目再多也只在区域内滚动）。
+            // 顺序由窗口用例 `type_list_sits_above_staging_list` 用几何坐标钉住（换回来会红）。
             // （列表的状态同步在前面的「侧栏类型列表同步」块里——那里能在 `cx.theme()` 之前拿可变借用）
             // ---- 暂存列表：交给 `List` 组件（委托见 `draft_list.rs`；决策 #107）----
             // 行内容（徽标 / 名称 / 脏标记 / 来源短码 / 行尾删除按钮）全在委托里，
@@ -1678,6 +1681,33 @@ impl<H: 'static> ConnectionDialogState<H> {
                             .size(rems(crate::ui::ICON_SIZE_SM))
                             .text_color(theme.colors.muted_foreground),
                     ),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .v_flex()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(theme.colors.muted_foreground)
+                                .child(tr("数据库类型")),
+                        )
+                        // 类型列表占满侧栏剩余高度：`List` 自带虚拟滚动与空态（不再外套滚动容器）。
+                        .child(
+                            div()
+                                .id("conn-type-list")
+                                // kit 观测：类型列表容器（与列表行同一批 id，供窗口用例/调试定位）。
+                                .test_support()
+                                .flex_1()
+                                .min_h_0()
+                                .w_full()
+                                .when_some(type_list, |d, list| {
+                                    d.child(List::new(&list).flex_1().min_h_0())
+                                }),
+                        ),
                 )
                 .child(
                     div()
@@ -1820,33 +1850,7 @@ impl<H: 'static> ConnectionDialogState<H> {
                                         }),
                                 ),
                         )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .v_flex()
-                        .gap_1()
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(theme.colors.muted_foreground)
-                                .child(tr("数据库类型")),
-                        )
-                        // 类型列表占满侧栏剩余高度：`List` 自带虚拟滚动与空态（不再外套滚动容器）。
-                        .child(
-                            div()
-                                .id("conn-type-list")
-                                // kit 观测：类型列表容器（与列表行同一批 id，供窗口用例/调试定位）。
-                                .test_support()
-                                .flex_1()
-                                .min_h_0()
-                                .w_full()
-                                .when_some(type_list, |d, list| {
-                                    d.child(List::new(&list).flex_1().min_h_0())
-                                }),
-                        ),
-                );
+                ;
 
             // ---- Header（对齐原型 §2）：名称 + 驱动类型 + 作用域 / 备注 / URI / 提示行 ----
             // 项目栏：固定位置（备注行右侧）；作用域为「仅全局」时不参与落库 → 置灰不可编辑，
