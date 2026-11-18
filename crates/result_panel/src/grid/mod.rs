@@ -94,7 +94,7 @@ pub use stats::{
 pub use status::{
     MAX_SINGLE_SEGMENT_ROWS, ResultControls, ResultPane, ResultStatus, ResultToolbar,
     WINDOW_FETCH_NOTICE, bytes_text, duration_text, fetch_more_hint, new_table_state, render,
-    render_status_row, render_toolbar, status_action_placeholders, status_segments, thousands,
-    truncated_hint, truncation_notice, window_fetch_active,
+    render_status_row, render_toolbar, status_action_placeholders, status_config_items,
+    status_segments, thousands, truncated_hint, truncation_notice, window_fetch_active,
 };
 pub use text::{GridSelection, ResultMatch};

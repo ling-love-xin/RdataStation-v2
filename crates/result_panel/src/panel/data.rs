@@ -181,6 +181,10 @@ pub struct ResultPanel {
     /// 【侧栏】右侧辅助栏（列浏览器 / 值详情 / 计算 / 分组）开关；默认关
     /// （不挤网格，工具栏「列浏览器」可开）。列浏览器与值详情等共用这一栏、页签切换。
     pub(crate) show_value_sidebar: bool,
+    /// 【工具栏配置】状态栏里被隐藏的命令项（对齐 DBeaver 工具条配置的
+    /// `defaultVisibility`：撤销 / 重做 / 取下一段默认隐藏，其余默认显示）。
+    /// 纯视图状态（不落盘）；状态行末端的配置菜单可逐项勾回。
+    pub(crate) hidden_status_commands: std::collections::BTreeSet<crate::ports::StatusCommand>,
     /// 【2026-10-28 微调】右缘竖条可见性——右侧开关**三态**（比左侧多一个展开态）：
     /// `(edge_bar_visible, show_value_sidebar)` = (false,false)=收起 / (true,false)=窄展开
     /// （只显右缘竖条图标条）/ (true,true)=宽展开（竖条 + 右栏内容）。不变量：宽展开 ⟹

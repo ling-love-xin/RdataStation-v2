@@ -166,6 +166,12 @@ impl ResultPanel {
             compare_mode: false,
             show_left_sidebar: true,
             show_value_sidebar: true,
+            // 【工具栏配置】默认隐藏集合 = DBeaver 的三项 `defaultVisibility="false"`
+            // （undo / redo / fetch.page），其余默认显示
+            hidden_status_commands: crate::ports::StatusCommand::ALL
+                .into_iter()
+                .filter(|command| !command.default_visible())
+                .collect(),
             edge_bar_visible: true,
             left_sidebar_epoch: 0,
             right_sidebar_epoch: 0,

@@ -1271,6 +1271,50 @@ impl ResultPanel {
         // 【四行布局】状态行渲染条件放宽：网格有状态行；写语句 / 失败只有执行信息
         // （affected_rows / failed / elapsed_ms）也给状态栏——用户口径：导出 / 刷新 /
         // 执行信息都在状态栏，写语句也要能刷新（cell_edit_esc 回归教训同源）
+        // 【工具栏配置】状态行末端的 ▾：勾选要显示的命令项。
+        // DBeaver 是右键工具条 → Configure；本仓没有右键工具条，用末端一颗 ▾ 菜单承载
+        // 同一件事（否则把 undo/redo/fetch.page 按 DBeaver 默认隐藏，就等于永久失去入口）。
+        let status_config = {
+            let queue = self.queue.clone();
+            let items = result_grid::status_config_items(&self.hidden_status_commands);
+            Some(
+                DropdownButton::new("editor-result-status-config")
+                    .button(
+                        Button::new("editor-result-status-config-button")
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::Settings2)
+                            .tooltip("工具栏配置（勾选要显示的命令）")
+                            .debug_selector(|| "editor-result-status-config".to_string()),
+                    )
+                    .menu_accessibility_label("工具栏配置")
+                    .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
+                        let mut menu = menu;
+                        for (command, label, checked) in items.iter() {
+                            let command = *command;
+                            let label = *label;
+                            let checked = *checked;
+                            let queue = queue.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(label).checked(checked).on_click(
+                                    move |_, _window, app| {
+                                        queue.request(
+                                            ResultRequest::SetStatusCommandVisible {
+                                                command,
+                                                visible: !checked,
+                                            },
+                                            app,
+                                        );
+                                    },
+                                ),
+                            );
+                        }
+                        menu
+                    })
+                    .into_any_element(),
+            )
+        };
+
         let status_row = show_status.then(|| {
             result_grid::render_status_row(
                 self.status.as_ref(),
@@ -1282,6 +1326,8 @@ impl ResultPanel {
                 Some(right_switch),
                 status_memory,
                 status_affected,
+                &self.hidden_status_commands,
+                status_config,
                 cx,
             )
             .into_any_element()

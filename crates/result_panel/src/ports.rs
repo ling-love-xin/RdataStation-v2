@@ -123,6 +123,12 @@ pub enum ResultRequest {
     /// 【筛选设置 · 列约束】工具条「排序」：列名 A→Z 重排
     /// （DBeaver `ALPHA_SORTER`，`FilterSettingsDialog.java:295-302`）
     SortColumnsByName,
+    /// 【工具栏配置】状态栏命令项显隐（对齐 DBeaver 工具条配置：右键工具条
+    /// → 勾选要显示的命令）。纯视图状态，不落盘。
+    SetStatusCommandVisible {
+        command: StatusCommand,
+        visible: bool,
+    },
     /// 【筛选设置】应用：`where` 回填筛选框并生效，`order` 是自定义排序文本
     /// （空 = 不自定义，沿用原查询的 ORDER BY）。宿主按两者重查替换当前结果集
     /// （对齐 DBeaver `FilterSettingsDialog` 的 Custom 页签：
@@ -466,6 +472,102 @@ pub struct ColumnConstraint {
     pub criteria: Option<String>,
     /// 该列当前的本地排序（`Some(true)` = 降序、`Some(false)` = 升序、`None` = 未排序）
     pub sort: Option<bool>,
+}
+
+/// 【工具栏配置】状态栏动作条上的命令项
+/// （对齐 DBeaver `resultsetViewer.bottom` 工具条配置的 `defaultVisibility`，
+/// `plugin.xml:1381-1397`：`undo` / `redo` / `fetch.page` 三项默认**不显示**，
+/// 其余默认显示；DBeaver 允许用户在工具条配置里重新打开，本仓用状态栏右端的
+/// 配置菜单做同一件事——不提供开关的话，直接隐藏等于永久丢掉入口）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum StatusCommand {
+    /// 提交变更
+    Commit,
+    /// 回滚变更
+    Reject,
+    /// 撤销
+    Undo,
+    /// 重做
+    Redo,
+    /// 修改单元格
+    EditRow,
+    /// 新增行
+    InsertRow,
+    /// 复制行
+    DuplicateRow,
+    /// 删除行
+    DeleteRow,
+    /// 首页
+    First,
+    /// 上一页
+    Prev,
+    /// 下一页
+    Next,
+    /// 末页
+    Last,
+    /// 取下一段（DBeaver `fetch.page`，默认不显示）
+    FetchPage,
+    /// 取全部（DBeaver `fetch.all`）
+    FetchAll,
+    /// 导出
+    Export,
+    /// 刷新
+    Refresh,
+}
+
+impl StatusCommand {
+    /// 全部命令（配置菜单的排列顺序 = DBeaver 工具条里的顺序）
+    pub const ALL: [StatusCommand; 16] = [
+        StatusCommand::Commit,
+        StatusCommand::Reject,
+        StatusCommand::Undo,
+        StatusCommand::Redo,
+        StatusCommand::EditRow,
+        StatusCommand::InsertRow,
+        StatusCommand::DuplicateRow,
+        StatusCommand::DeleteRow,
+        StatusCommand::First,
+        StatusCommand::Prev,
+        StatusCommand::Next,
+        StatusCommand::Last,
+        StatusCommand::FetchPage,
+        StatusCommand::FetchAll,
+        StatusCommand::Export,
+        StatusCommand::Refresh,
+    ];
+
+    /// DBeaver 的 `defaultVisibility`（`plugin.xml:1381-1397`）：只有
+    /// `org.eclipse.ui.edit.undo` / `edit.redo` 两项是 `false`，其余 `true`。
+    ///
+    /// **有意偏离一处**：DBeaver 把 `core.resultset.fetch.page` 也设成 `false`，
+    /// 因为它有自动取数 + 可随时打开工具条配置；本仓「取下一段」是窗口化取数的
+    /// **唯一可见入口**（没有第二处按钮、也没有快捷键），默认隐藏就等于读者拿不到
+    /// 后面的行——所以这里保持常显（仍可在配置菜单里手动隐藏）。
+    pub fn default_visible(self) -> bool {
+        !matches!(self, StatusCommand::Undo | StatusCommand::Redo)
+    }
+
+    /// 配置菜单里的条目文案
+    pub fn menu_label(self) -> &'static str {
+        match self {
+            StatusCommand::Commit => "提交变更",
+            StatusCommand::Reject => "回滚变更",
+            StatusCommand::Undo => "撤销",
+            StatusCommand::Redo => "重做",
+            StatusCommand::EditRow => "修改单元格",
+            StatusCommand::InsertRow => "新增行",
+            StatusCommand::DuplicateRow => "复制行",
+            StatusCommand::DeleteRow => "删除行",
+            StatusCommand::First => "首页",
+            StatusCommand::Prev => "上一页",
+            StatusCommand::Next => "下一页",
+            StatusCommand::Last => "末页",
+            StatusCommand::FetchPage => "取下一段",
+            StatusCommand::FetchAll => "取全部",
+            StatusCommand::Export => "导出",
+            StatusCommand::Refresh => "刷新",
+        }
+    }
 }
 
 /// 【筛选设置 · 列约束】列序移动的四个方向（DBeaver 工具条四颗移动钮）

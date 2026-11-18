@@ -971,6 +971,29 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【工具栏配置】状态栏命令项显隐（纯视图状态；对齐 DBeaver 工具条配置的
+    /// 「勾选 = 显示」，`undo` / `redo` / `fetch.page` 默认不勾）
+    pub fn set_status_command_visible(
+        &mut self,
+        command: crate::ports::StatusCommand,
+        visible: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if visible {
+            self.hidden_status_commands.remove(&command);
+        } else {
+            self.hidden_status_commands.insert(command);
+        }
+        cx.notify();
+    }
+
+    /// 【工具栏配置】当前被隐藏的命令项（渲染与用例读它）
+    pub fn hidden_status_commands(
+        &self,
+    ) -> &std::collections::BTreeSet<crate::ports::StatusCommand> {
+        &self.hidden_status_commands
+    }
+
     /// 【列序落盘】把 delegate 的显示序取回面板快照；变了就推 `ColumnOrderChanged`
     /// （与拖拽 `MoveColumn` 同一条通道，宿主据此落库）
     fn snapshot_column_order(&mut self, cx: &mut Context<Self>) {

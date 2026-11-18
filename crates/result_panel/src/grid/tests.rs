@@ -3767,3 +3767,60 @@ fn the_result_toolbar_keeps_the_tabs_height(cx: &mut gpui_kit::TestAppContext) {
         "工具栏高应为 30px（DBeaver `3 + 2 + 20 + 2 + 3`；本仓 20px 控件 + 24px 筛选区 + 上下各 3px），实得 {height}"
     );
 }
+
+/// 【工具栏配置】状态栏配置菜单的纯函数口径：顺序 = DBeaver 底部工具条顺序，
+/// 默认勾选 = `plugin.xml:1381-1397` 的 `defaultVisibility`（撤销 / 重做为 false；
+/// `fetch.page` 是有意偏离：本仓「取下一段」是窗口化取数的唯一入口，保持常显）
+#[test]
+fn status_config_items_follow_dbeaver_toolbar_order_and_defaults() {
+    use crate::grid::status_config_items;
+    use crate::ports::StatusCommand;
+
+    // 默认隐藏集合由 `default_visible` 折算
+    let hidden: std::collections::BTreeSet<StatusCommand> = StatusCommand::ALL
+        .into_iter()
+        .filter(|command| !command.default_visible())
+        .collect();
+    assert_eq!(hidden.len(), 2, "默认隐藏两项（撤销 / 重做）");
+    assert!(!StatusCommand::Undo.default_visible());
+    assert!(!StatusCommand::Redo.default_visible());
+    assert!(
+        StatusCommand::FetchPage.default_visible(),
+        "取下一段有意偏离 DBeaver：本仓它是取数的唯一可见入口"
+    );
+    assert!(StatusCommand::Commit.default_visible());
+    assert!(StatusCommand::Export.default_visible());
+
+    let items = status_config_items(&hidden);
+    assert_eq!(items.len(), StatusCommand::ALL.len(), "每个命令一项");
+    assert_eq!(
+        items.iter().map(|(command, _, _)| *command).collect::<Vec<_>>(),
+        StatusCommand::ALL.to_vec(),
+        "菜单顺序与 DBeaver 工具条命令顺序一致"
+    );
+    for (command, label, checked) in &items {
+        assert!(!label.is_empty(), "{command:?} 的文案不能为空");
+        assert_eq!(
+            *checked,
+            command.default_visible(),
+            "{command:?} 的勾选态应等于 defaultVisibility"
+        );
+    }
+
+    // 用户勾回撤销：该项变勾选，其余不变
+    let mut restored = hidden.clone();
+    restored.remove(&StatusCommand::Undo);
+    let items = status_config_items(&restored);
+    assert!(
+        items
+            .iter()
+            .any(|(command, _, checked)| *command == StatusCommand::Undo && *checked),
+        "撤销勾回后应为勾选"
+    );
+    assert!(
+        items
+            .iter()
+            .any(|(command, _, checked)| *command == StatusCommand::Redo && !*checked),
+        "重做仍保持未勾选"
+    );
+}

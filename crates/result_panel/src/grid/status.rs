@@ -14,6 +14,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::delegate::{RESULT_GRID_CONTEXT, ResultGridDelegate};
+use crate::ports::StatusCommand;
 use crate::status::elapsed_text;
 use crate::ui;
 use ::shared::CurrentTier;
@@ -379,6 +380,20 @@ pub fn render_toolbar(
         .into_any_element()
 }
 
+/// 【工具栏配置】状态栏配置菜单的条目清单（纯函数：顺序 / 文案 / 勾选态）
+///
+/// DBeaver 的口径是「每个命令一项、勾选 = 显示」；默认勾选态来自
+/// [`StatusCommand::default_visible`]（`undo` / `redo` / `fetch.page` 默认不显示），
+/// 用户勾选后由面板把该命令从隐藏集合里拿掉。
+pub fn status_config_items(
+    hidden: &std::collections::BTreeSet<StatusCommand>,
+) -> Vec<(StatusCommand, &'static str, bool)> {
+    StatusCommand::ALL
+        .into_iter()
+        .map(|command| (command, command.menu_label(), !hidden.contains(&command)))
+        .collect()
+}
+
 /// 截断提示文案（达到驱动行数上限时；原型 §2.4 的口径是 `已截断至 N 行`）
 ///
 /// 只报**我们真拿到多少行**；上限是驱动侧的事（`engine` 侧 10000 行），编辑器不猜那个数。
@@ -584,6 +599,11 @@ pub fn render_status_row(
     // 用「影响 N 行」）。
     memory: Option<String>,
     affected_rows: Option<u32>,
+    // 【工具栏配置】被隐藏的命令项（DBeaver 工具条配置的 `defaultVisibility`；
+    // 撤销 / 重做 / 取下一段默认在隐藏集合里，用户可在配置菜单里重新打开）
+    hidden_commands: &std::collections::BTreeSet<StatusCommand>,
+    // 状态行右端最末的配置菜单（面板构造；`None` = 不摆，键位仍可用）
+    config_menu: Option<AnyElement>,
     cx: &App,
 ) -> AnyElement {
     let theme = cx.theme();
@@ -620,61 +640,132 @@ pub fn render_status_row(
             .debug_selector(|| format!("editor-result-action-{:?}", icon))
             .into_any_element()
     };
+    // 【工具栏配置】显隐过滤：对齐 DBeaver 的 `defaultVisibility`（`plugin.xml:1381-1397`），
+    // 撤销 / 重做 / 取下一段默认不显示；用户可在状态行末端的配置菜单里勾回来。
+    let shown = |command: StatusCommand| !hidden_commands.contains(&command);
     let separator = || div().w_px().h_3().flex_none().bg(border).into_any_element();
     // 写操作段（对齐 DBeaver `toolbar:…status.editCmds`，plugin.xml:1407-1466）：
     // 前半 = 变更集动作「提交 · 回滚 · 撤销 · 重做」，后半（越过 `rowCmds.separator`）
     // = 行级动作「修改 · 新增行 · 复制行 · 删除行」。保存 / 回滚复用工具栏的提交 / 回滚对
     // （状态栏只摆占位，不重复挂载），行级动作与撤销重做由面板注入真钮，未注入回退占位。
-    let write_change = vec![
-        placeholder_btn(placeholders[0]), // 提交
-        placeholder_btn(placeholders[1]), // 回滚
-        controls
-            .undo
-            .unwrap_or_else(|| placeholder_btn(placeholders[2])),
-        controls
-            .redo
-            .unwrap_or_else(|| placeholder_btn(placeholders[3])),
-    ];
-    let write_row = vec![
-        placeholder_btn(placeholders[4]), // 修改（Pencil，禁用占位）
-        controls
-            .insert_row
-            .unwrap_or_else(|| placeholder_btn(placeholders[5])),
-        controls
-            .duplicate_row
-            .unwrap_or_else(|| placeholder_btn(placeholders[6])),
-        controls
-            .delete_row
-            .unwrap_or_else(|| placeholder_btn(placeholders[7])),
-    ];
+    let mut write_change: Vec<AnyElement> = Vec::new();
+    if shown(StatusCommand::Commit) {
+        write_change.push(placeholder_btn(placeholders[0]));
+    }
+    if shown(StatusCommand::Reject) {
+        write_change.push(placeholder_btn(placeholders[1]));
+    }
+    if shown(StatusCommand::Undo) {
+        write_change.push(
+            controls
+                .undo
+                .unwrap_or_else(|| placeholder_btn(placeholders[2])),
+        );
+    }
+    if shown(StatusCommand::Redo) {
+        write_change.push(
+            controls
+                .redo
+                .unwrap_or_else(|| placeholder_btn(placeholders[3])),
+        );
+    }
+    let mut write_row: Vec<AnyElement> = Vec::new();
+    if shown(StatusCommand::EditRow) {
+        write_row.push(placeholder_btn(placeholders[4])); // 修改（Pencil，禁用占位）
+    }
+    if shown(StatusCommand::InsertRow) {
+        write_row.push(
+            controls
+                .insert_row
+                .unwrap_or_else(|| placeholder_btn(placeholders[5])),
+        );
+    }
+    if shown(StatusCommand::DuplicateRow) {
+        write_row.push(
+            controls
+                .duplicate_row
+                .unwrap_or_else(|| placeholder_btn(placeholders[6])),
+        );
+    }
+    if shown(StatusCommand::DeleteRow) {
+        write_row.push(
+            controls
+                .delete_row
+                .unwrap_or_else(|| placeholder_btn(placeholders[7])),
+        );
+    }
     // 翻页段（对齐 `toolbar:…status.navCmds`，plugin.xml:1470-1512）：首页 · 上页 · **下页** ·
     // 末页，其后才是取下一段（`more` ≈ `fetch.page`）与取全部（`fetch_all` ≈ `fetch.all`）——
     // 四颗行导航都在面板注入（纯视图滚动），未注入回退禁用占位。
-    let pager_ops = vec![
-        controls
-            .first_page
-            .unwrap_or_else(|| placeholder_btn(placeholders[FIRST_PAGER_ACTION])),
-        controls
-            .prev_page
-            .unwrap_or_else(|| placeholder_btn(placeholders[FIRST_PAGER_ACTION + 1])),
-        controls
-            .next_page
-            .unwrap_or_else(|| placeholder_btn(placeholders[FIRST_PAGER_ACTION + 2])),
-        controls
-            .last_page
-            .unwrap_or_else(|| placeholder_btn(placeholders[FIRST_PAGER_ACTION + 3])),
-    ];
+    let mut pager_ops: Vec<AnyElement> = Vec::new();
+    if shown(StatusCommand::First) {
+        pager_ops.push(
+            controls
+                .first_page
+                .unwrap_or_else(|| placeholder_btn(placeholders[FIRST_PAGER_ACTION])),
+        );
+    }
+    if shown(StatusCommand::Prev) {
+        pager_ops.push(
+            controls
+                .prev_page
+                .unwrap_or_else(|| placeholder_btn(placeholders[FIRST_PAGER_ACTION + 1])),
+        );
+    }
+    if shown(StatusCommand::Next) {
+        pager_ops.push(
+            controls
+                .next_page
+                .unwrap_or_else(|| placeholder_btn(placeholders[FIRST_PAGER_ACTION + 2])),
+        );
+    }
+    if shown(StatusCommand::Last) {
+        pager_ops.push(
+            controls
+                .last_page
+                .unwrap_or_else(|| placeholder_btn(placeholders[FIRST_PAGER_ACTION + 3])),
+        );
+    }
+    let fetch_page = shown(StatusCommand::FetchPage).then(|| controls.more).flatten();
+    let fetch_all = shown(StatusCommand::FetchAll).then(|| controls.fetch_all).flatten();
     // 系统段：导出 · 刷新（2026-10-28 从工具栏移入状态栏；面板注入真钮，
     // 未注入（无导出上下文 / 不可刷新）回退禁用占位——占位仍占位，布局不跳）
     let refresh_placeholder = (IconName::RotateCw, "刷新（重跑当前 SQL）");
-    let system_ops = vec![
-        controls
-            .export
-            .unwrap_or_else(|| placeholder_btn(placeholders[FIRST_SYSTEM_ACTION])),
-        controls
-            .refresh
-            .unwrap_or_else(|| placeholder_btn(refresh_placeholder)),
-    ];
+    let mut system_ops: Vec<AnyElement> = Vec::new();
+    if shown(StatusCommand::Export) {
+        system_ops.push(
+            controls
+                .export
+                .unwrap_or_else(|| placeholder_btn(placeholders[FIRST_SYSTEM_ACTION])),
+        );
+    }
+    if shown(StatusCommand::Refresh) {
+        system_ops.push(
+            controls
+                .refresh
+                .unwrap_or_else(|| placeholder_btn(refresh_placeholder)),
+        );
+    }
+    // 分隔线只在两侧都还有内容时才画（DBeaver 用 `visibleWhen` 做同一件事，
+    // 全隐一段时不该留一条孤线）
+    let change_empty = write_change.is_empty();
+    let row_empty = write_row.is_empty();
+    let mut left_ops: Vec<AnyElement> = Vec::new();
+    left_ops.append(&mut write_change);
+    if !change_empty && !row_empty {
+        left_ops.push(separator()); // DBeaver `rowCmds.separator`（plugin.xml:1434）
+    }
+    left_ops.append(&mut write_row);
+    if !left_ops.is_empty() && !pager_ops.is_empty() {
+        left_ops.push(separator());
+    }
+    left_ops.append(&mut pager_ops);
+    left_ops.extend(fetch_page);
+    left_ops.extend(fetch_all);
+    if !left_ops.is_empty() && !system_ops.is_empty() {
+        left_ops.push(separator());
+    }
+    left_ops.append(&mut system_ops);
 
     div()
         .h_flex()
@@ -687,25 +778,14 @@ pub fn render_status_row(
         .debug_selector(|| "editor-result-status-row".to_string())
         // 最左：左栏开关（面板注入；`None` 不摆——无左栏语义时不注入）
         .children(left_switch)
-        // 左·动作组（写操作 ‖ 翻页 ‖ 系统，段间发丝分隔）
+        // 左·动作组（写操作 ‖ 翻页 ‖ 系统，段间发丝分隔；已按配置菜单的显隐过滤）
         .child(
             div()
                 .h_flex()
                 .items_center()
                 .gap_1()
                 .flex_none()
-                .children(write_change)
-                // DBeaver `rowCmds.separator`：变更集动作与行级动作之间的竖分隔（plugin.xml:1434）
-                .child(separator())
-                .children(write_row)
-                .child(separator())
-                .children(pager_ops)
-                // 【B5b】取下一段（≈ DBeaver `fetch.page`，只在还有下一段时由面板注入）
-                .children(controls.more)
-                // 【DBeaver 对齐】取全部行（≈ `fetch.all`，一次性抓全量）
-                .children(controls.fetch_all)
-                .child(separator())
-                .children(system_ops),
+                .children(left_ops),
         )
         // 中段·行数框（DBeaver：输入行号跳转；未注入 InputState 时摆只读文案）
         .child(
@@ -747,5 +827,7 @@ pub fn render_status_row(
         )
         // 最右：右栏开关（面板注入；`None` 不摆——文本视图无右栏语义时不注入）
         .children(right_switch)
+        // 【工具栏配置】最末端的 ▾：勾选要显示的命令项（DBeaver 工具条配置的等价物）
+        .children(config_menu)
         .into_any_element()
 }

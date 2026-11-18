@@ -857,6 +857,104 @@ fn panel_harness<'a>(
     (panel, vcx)
 }
 
+/// 【工具栏配置】状态栏命令项的默认可见性对齐 DBeaver `plugin.xml:1381-1397`：
+/// `undo` / `redo` 两项 `defaultVisibility="false"`（取下一段是有意偏离，常显），
+/// 其余 `true`；配置菜单把它们勾回来后应真的重新出现（否则隐藏 = 永久失去入口）。
+#[gpui_kit::test]
+fn status_commands_follow_dbeaver_default_visibility_and_can_be_restored(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{ElementId, SharedString};
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    // 有状态行才谈得上状态行的命令项（`show_status` 需要 status / 执行信息之一）
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.status = Some(crate::grid::status::ResultStatus {
+                total_rows: 2,
+                ..Default::default()
+            });
+            cx.notify();
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let visible = |id: &'static str, cx: &mut gpui_kit::VisualTestContext| -> bool {
+        let by_id = cx.update(|window, _| {
+            window
+                .try_find(ElementId::Name(SharedString::from(id.to_string())))
+                .is_some_and(|snap| snap.visible())
+        });
+        by_id || cx.debug_bounds(id).is_some()
+    };
+
+    // 1) 默认隐藏集合 = 两项（撤销 / 重做；取下一段有意常显）
+    let hidden = panel.read_with(cx, |p, _| p.hidden_status_commands().clone());
+    assert_eq!(
+        hidden.len(),
+        2,
+        "默认隐藏只该有两项（undo / redo）：{hidden:?}"
+    );
+    assert!(hidden.contains(&crate::ports::StatusCommand::Undo));
+    assert!(hidden.contains(&crate::ports::StatusCommand::Redo));
+    assert!(
+        !hidden.contains(&crate::ports::StatusCommand::FetchPage),
+        "取下一段常显（本仓唯一取数入口）"
+    );
+
+    // 2) 状态行里撤销 / 重做不摆（注入钮 id 是 `editor-result-undo` / `-redo`，
+    //    未注入时回退占位 `editor-result-action-Undo2`），首页这类默认可见的还在
+    assert!(
+        !visible("editor-result-undo", cx) && !visible("editor-result-action-Undo2", cx),
+        "撤销默认隐藏（DBeaver defaultVisibility=false）"
+    );
+    assert!(
+        !visible("editor-result-redo", cx) && !visible("editor-result-action-Redo2", cx),
+        "重做默认隐藏"
+    );
+    assert!(
+        visible("editor-result-page-first", cx),
+        "首页默认显示（注入钮 id 是 `editor-result-page-first`）"
+    );
+
+    // 3) 配置菜单本身挂出来了
+    assert!(
+        visible("editor-result-status-config", cx),
+        "状态行末端要有工具栏配置菜单入口"
+    );
+
+    // 4) 勾回撤销：状态行重新摆出撤销钮
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.set_status_command_visible(crate::ports::StatusCommand::Undo, true, cx)
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        visible("editor-result-undo", cx),
+        "勾选后撤销钮应回到状态行"
+    );
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.hidden_status_commands().len()),
+        1,
+        "勾选只移除该项（原两项剩一项）"
+    );
+
+    // 5) 反向：隐藏一个默认可见的项
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.set_status_command_visible(crate::ports::StatusCommand::First, false, cx)
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        !visible("editor-result-page-first", cx),
+        "取消勾选后首页钮应消失"
+    );
+}
+
 /// 【R1】右栏页内工具条形态统一：值详情 / 分组 / 执行SQL 三页各一条 28px 工具条，
 /// 动作只挂已有能力（值详情=复制当前值 + 保存至文件（对齐 DBeaver
 /// `ContentValueManager.contributeContentActions`）、执行SQL=复制 SQL、分组无动作——DBeaver 的

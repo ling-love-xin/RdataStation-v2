@@ -192,6 +192,10 @@ impl EditorHostPanel {
             ResultRequest::SortColumnsByName => self
                 .result_panel
                 .update(cx, |p, cx| p.sort_columns_by_name(cx)),
+            // 【工具栏配置】状态栏命令项显隐（纯 UI 态，不落盘）
+            ResultRequest::SetStatusCommandVisible { command, visible } => self
+                .result_panel
+                .update(cx, |p, cx| p.set_status_command_visible(command, visible, cx)),
             // 【1.2】复制「执行SQL」页签里的 wrapped SQL
             ResultRequest::CopyExecSql => {
                 let sql = self
