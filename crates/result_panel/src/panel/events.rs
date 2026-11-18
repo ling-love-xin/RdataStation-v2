@@ -1896,6 +1896,28 @@ pub(crate) fn right_tab_description(tab: RightTab) -> &'static str {
     }
 }
 
+/// 【计算行数】这颗钮能不能点（纯函数）。
+///
+/// 两个条件：
+/// - `has_data`：对齐 DBeaver `rowCountLabel` 的 `isActionEnabled = hasData()`；
+/// - `is_analysis`：**本地分析结果不能算**——它跑在桥接过来的那份行上、临时表早就不在了，
+///   重跑原 SQL 只会报错。与其给一颗点了必错的钮，不如置灰并在提示里说清原因
+///   （与「分析结果不摆 ⟳ 刷新」同一条纪律，见 `copy.rs::refresh_active_result`）。
+pub(crate) fn count_rows_available(has_data: bool, is_analysis: bool) -> bool {
+    has_data && !is_analysis
+}
+
+/// 【计算行数】提示文案（纯函数）：分析结果讲「为什么不能算」，其余讲「点了会怎样」。
+pub(crate) fn count_rows_tooltip(is_analysis: bool, computed: bool) -> &'static str {
+    match (is_analysis, computed) {
+        (true, _) => {
+            "分析结果是当时那份已抓行算出来的，没有可重算的源查询——总行数就是这里的行数"
+        }
+        (false, true) => "总行数（对原 SQL 跑 count(*)）：点一下重新计算",
+        (false, false) => "计算行数（对原 SQL 跑 count(*)，不产生新结果集）",
+    }
+}
+
 /// 【左缘竖条】视图方式按钮的提示文案（纯函数）。
 ///
 /// 对齐 `ResultSetViewer.updatePresentationInToolbar`（`:948-952`）：那里的每个

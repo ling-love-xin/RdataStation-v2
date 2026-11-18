@@ -1531,6 +1531,35 @@ fn column_browser_toolbar_offers_generate_ddl(cx: &mut gpui_kit::TestAppContext)
     );
 }
 
+/// 【计算行数】可点性 = 有数据 且 不是本地分析结果；提示分三态（分析结果讲原因、
+/// 已算过讲「重算」、没算过讲「算什么」）。分析结果两侧（面板置灰 + 宿主兜底）
+/// 同一条口径：临时表早就不在了，重跑原 SQL 只会报错。
+#[test]
+fn count_rows_action_is_gated_by_data_and_analysis_tier() {
+    use crate::panel::events::{count_rows_available, count_rows_tooltip};
+
+    assert!(count_rows_available(true, false), "有数据且普通结果 → 可点");
+    assert!(!count_rows_available(false, false), "没有数据 → 置灰（DBeaver hasData）");
+    assert!(
+        !count_rows_available(true, true),
+        "本地分析结果 → 置灰（临时表不在，重跑原 SQL 必错）"
+    );
+
+    let analysis = count_rows_tooltip(true, false);
+    assert!(
+        analysis.contains("分析结果") && analysis.contains("没有可重算的源查询"),
+        "分析结果的提示要说清为什么不能算：{analysis}"
+    );
+    assert_eq!(
+        count_rows_tooltip(false, true),
+        "总行数（对原 SQL 跑 count(*)）：点一下重新计算"
+    );
+    assert_eq!(
+        count_rows_tooltip(false, false),
+        "计算行数（对原 SQL 跑 count(*)，不产生新结果集）"
+    );
+}
+
 #[gpui_kit::test]
 fn status_bar_offers_a_count_rows_action(cx: &mut gpui_kit::TestAppContext) {
     use gpui_kit::test::TestWindowExt as _;

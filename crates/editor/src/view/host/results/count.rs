@@ -76,6 +76,15 @@ impl EditorHostPanel {
             self.set_message(Some("未绑定连接，算不了总行数".to_string()), cx);
             return;
         };
+        // 本地分析结果不重算：它跑在桥接过来的那份行上，临时表早就不在了——
+        // 面板那边这颗钮已置灰，这里再兜一道（队列可能有在途请求）
+        if entry.analysis {
+            self.set_message(
+                Some("分析结果是当时那份已抓行算出来的，没有可重算的源查询".to_string()),
+                cx,
+            );
+            return;
+        }
         let Some(count_sql) = rows_count_sql(&entry.sql, entry.pushdown.as_ref()) else {
             self.set_message(Some("这份结果没有可计数的 SQL".to_string()), cx);
             return;

@@ -16,7 +16,9 @@ use gpui_kit::*;
 use ::shared::CurrentTier;
 
 use super::data::ResultPanel;
-use super::events::{erase_menu_labels, state_label};
+use super::events::{
+    count_rows_available, count_rows_tooltip, erase_menu_labels, state_label,
+};
 use crate::error_card::{self};
 use crate::export;
 use crate::grid::{self as result_grid, ResultToolbar};
@@ -957,25 +959,24 @@ impl ResultPanel {
         // `ActiveStatusMessage` + `UIIcon.COMPILE`，`isActionEnabled = hasData()`
         // ——没有网格就置灰）。算回来的数字**就地**顶掉「计算行数」四个字，
         // 再点一次重算（DBeaver 点已算过的标签也是重算）。
+        // 本地分析结果另置灰：它跑在桥接过来的那份行上，临时表早就不在了（见 `count_rows_available`）。
         let count_rows = {
             let queue = self.queue.clone();
-            let has_data = self.status.is_some();
+            let enabled = count_rows_available(self.status.is_some(), self.result_is_analysis);
             let note = self.row_count_note.clone();
+            let tooltip = count_rows_tooltip(self.result_is_analysis, note.is_some());
             let button = Button::new("editor-result-count-rows")
                 .ghost()
                 .small()
                 .debug_selector(|| "editor-result-count-rows".to_string())
-                .disabled(!has_data)
+                .disabled(!enabled)
+                .tooltip(tooltip)
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::CountRows, app);
                 });
             let button = match note {
-                Some(text) => button
-                    .label(text)
-                    .tooltip("总行数（对原 SQL 跑 count(*)）：点一下重新计算"),
-                None => button
-                    .icon(IconName::Calculator)
-                    .tooltip("计算行数（对原 SQL 跑 count(*)，不产生新结果集）"),
+                Some(text) => button.label(text),
+                None => button.icon(IconName::Calculator),
             };
             Some(button.into_any_element())
         };
