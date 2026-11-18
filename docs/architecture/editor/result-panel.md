@@ -3176,6 +3176,30 @@ panicked at panel/tests.rs:1091:
 - 深色主题下 `table.head`（`#394248`）当整列底色是否偏重，需真窗口目视；若嫌重，
   改的是主题 token 而不是这里的分支。
 
+### 8.57 事件流接线复核（§8.54 / §8.55 的副作用排查）
+
+订阅修复把面板侧的事件处理从「从未执行」变成「真执行」，所以必须回头核一遍
+「同一条路径会不会因此写两遍」。结论与依据：
+
+| 路径 | 谁处理 | 会不会双写 |
+| --- | --- | --- |
+| `ColumnWidthsChanged` | 面板 `handle_grid_event` 推 `ResultRequest::ColumnWidthsChanged`（宿主 `dispatch.rs` 消费 → `save_session_now`）；宿主 `construct.rs:257-264` 的臂**只**写 delegate 宽度、**不**推请求 | **否**：落库只有面板这一路 ⇒ 每根手指拖一次宽只写一次 |
+| `ColumnOrderChanged` | 只有面板推（`MoveColumn` 臂） | **否**：这条在本轮之前是死功能，现在首次真正生效 |
+| `SelectCell` / `DoubleClickedCell` | 面板与宿主都收，各自更新各自持有的状态（面板选中镜像 / 宿主进入编辑门禁） | **否**：写的是不同字段，且同值幂等 |
+
+另一条口径：本仓的竖分隔线（数据格 `cell.rs:335-336`、表头 `header.rs:243/478`）与
+组件画的横分隔线（`vendor table/state.rs:2274-2276`）**取的是同一个 token**
+`theme.tables.table_row_border`（表头侧走 `colors.border`，对应 DBeaver 的
+`getHeaderBorder` 与网格线本就是两个函数，`GridColumnRenderer:105-108` /
+`LightGrid:2400-2440`），所以网格线在纵横向是一套颜色，没有深浅接缝。
+
+#### 验证（2026-11-18 复测）
+
+- `cargo test -p rds-editor --lib` = **789 passed / 0 failed / 1 ignored**。
+- `cargo test -p rds-editor --lib results` = 45 passed（结果集相关子集）。
+- 单跑 `results_a::the_result_header_sorts_from_its_arrow` = ok（早先记录的
+  `results_a.rs:290` panic 已不再复现，handoff §2 那三条基线失败口径作废）。
+
 
 ## 8. 协作纪律
 

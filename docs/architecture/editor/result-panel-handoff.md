@@ -45,6 +45,7 @@ cargo test -p rds-result-panel --lib    # 基线：266 passed / 0 failed（含 r
 cargo test -p rds-settings --lib        # 基线：35 passed / 0 failed
 cargo test -p rds-ui-guard              # 基线：4 passed / 0 failed（含 no_new_hardcoded_color_or_pixel）
 cargo test -p rds-workbench-shell --lib # 基线：14 passed / 0 failed
+cargo test -p rds-editor --lib          # 基线：789 passed / 0 failed / 1 ignored（2026-11-18 复测）
 cargo check -p rds-editor -p rds-workbench -p rds-workbench-shell  # 通过（workbench 7 warnings 为并行线遗留）
 ```
 
@@ -384,6 +385,12 @@ DBeaver 值查看器类型感知吸收（类型 → 内容形态分派），组�
 `results_a::the_result_header_sorts_from_its_arrow`（`editor-result-th-1 应登记坐标`）经 A/B 归因
 **非本轮引入**（把本轮两文件 `git stash` 后单跑同样 FAILED）；另两条是升级报告 §7 的基线失败。
 当时工作树另有并行线未完成改动（`crates/editor/src/ports/editor_exec/` 迁移中），本轮不动它。
+
+> **基线更新（2026-11-18，`6b945b8e` 之后复测）**：`cargo test -p rds-editor --lib` =
+> **789 passed / 0 failed / 1 ignored**。上面那三条失败（含 `the_result_header_sorts_from_its_arrow`
+> 在 `results_a.rs:290` 的 `window.draw` panic）**已全部不再复现**——单跑该用例 ok、
+> 全量 789 条 ok。归因是当时并行线的工作树状态；现在这条口径作废，读数以 789 为准。
+> 另：结果集相关的 45 条（`--lib results` 过滤）单独跑也是 45 passed。
 
 **未验证（需真窗口）**：六个图标 + 一条竖线挤在 40px 行里是否过密；`Save`/`Sigma`/`DatabaseZap`
 的语义是否一眼可读（靠 tooltip 兜底）；小图标上 `ComponentTooltip` 的延迟与位置。
