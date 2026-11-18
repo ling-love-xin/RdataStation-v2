@@ -378,6 +378,16 @@ impl EditorHostPanel {
             ResultRequest::OpenReferenceTarget { schema, table } => {
                 self.open_reference_target(schema, table, cx)
             }
+            // 【引用页】「查看引用行」：按当前行的外键值另开一份结果集（方案 B′）。
+            // 落位用 `NewSet`——DBeaver 在面板内嵌一份结果视图互不干扰，
+            // 本仓换成「原结果保持选中、引用行放旁边」，语义见 references-plan §5。
+            ResultRequest::OpenReferenceRows { sql } => {
+                self.execute(
+                    crate::execution::ExecTarget::Statement(sql),
+                    crate::store::ResultPlacement::NewSet,
+                    cx,
+                );
+            }
             // 【列浏览器】清单单击选中列：面板写选中态 + 网格列高亮联动（方法内部已联动网格）
             ResultRequest::SelectColumn(column) => {
                 self.result_panel

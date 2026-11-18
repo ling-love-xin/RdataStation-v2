@@ -428,6 +428,53 @@ impl ResultPanel {
         );
     }
 
+    /// 【引用页】「查看引用行」用的 SQL：选中键 + 当前行的外键值 → `SELECT …`。
+    ///
+    /// 拿不到就返回 `None`（按钮禁用），四种情形：没有选中键、没有选中行、
+    /// 参与列被隐藏（DBeaver 只用**可见属性**，隐藏列的值不该拿来查）、
+    /// 该列在当前行没有值。
+    pub fn reference_rows_sql(&self, cx: &App) -> Option<String> {
+        let key = self.active_reference_key()?.clone();
+        let grid = self.grid.read(cx);
+        let delegate = grid.delegate();
+        let row = delegate.selected_view_row()?;
+        let columns = delegate.columns().to_vec();
+        let annotations = delegate.column_annotations().to_vec();
+        // 显示序（隐藏列已被 delegate 排除）：`row_cell_text` 吃显示列号 + 1（首列是行号槽）
+        let display = delegate.display_order();
+
+        let mut values: Vec<crate::references::ReferenceValue> =
+            Vec::with_capacity(key.columns.len());
+        for column in key.columns.iter() {
+            let data_index = columns
+                .iter()
+                .position(|candidate| candidate.eq_ignore_ascii_case(column))?;
+            let data_type = annotations
+                .get(data_index)
+                .and_then(|annotation| annotation.as_ref())
+                .and_then(|annotation| annotation.data_type.clone());
+            let display_index = display
+                .iter()
+                .position(|candidate| candidate.eq_ignore_ascii_case(column))?;
+            let text = delegate.row_cell_text(row, display_index + 1)?;
+            values.push(crate::references::ReferenceValue {
+                column: column.clone(),
+                value: text.to_string(),
+                data_type,
+            });
+        }
+        crate::references::reference_rows_sql(&key, &values)
+    }
+
+    /// 【引用页】「查看引用行」：把上一条 SQL 交给编辑器另开一份结果集（方案 `B′`）。
+    pub fn open_reference_rows(&mut self, cx: &mut Context<Self>) {
+        let Some(sql) = self.reference_rows_sql(cx) else {
+            return;
+        };
+        self.queue
+            .request(crate::ports::ResultRequest::OpenReferenceRows { sql }, cx);
+    }
+
     /// 【R2 计算页】启用一个统计项（对齐 DBeaver Calc「＋添加函数」）。
     ///
     /// 插入位置按 [`StatsItem::ALL`] 的固定顺序算（不是追加到末尾）：DBeaver 的

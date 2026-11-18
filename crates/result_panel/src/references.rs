@@ -137,11 +137,128 @@ pub fn mapping_text(key: &ReferenceKey) -> String {
         .join("，")
 }
 
+/// 一条引用行查询的原料：本表列 + 当前行该列的值 + 驱动报的类型名。
+///
+/// 值是结果集里的**原始文本**（驱动返回的口径，不是渲染后的`—`）；
+/// `data_type` 拿不到时按字符串处理（宁可多一层引号，也不要让数字列被当成文本
+/// 或反过来把文本列裸拼进 SQL）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReferenceValue {
+    /// 本表列名（与 [`ReferenceKey::columns`] 同序对应）
+    pub column: String,
+    /// 该列的原始值文本
+    pub value: String,
+    /// 驱动报的类型名（`ColumnAnnotation::data_type`；`None` = 拿不到）
+    pub data_type: Option<String>,
+}
+
+/// 值是否「看起来是 NULL」。驱动与各库的文本口径不一（`NULL` / `null` / 空串），
+/// 三种都按 NULL 处理：外键列上的空值确实表示「没有引用」。
+fn is_null_text(value: &str) -> bool {
+    let v = value.trim();
+    v.is_empty() || v.eq_ignore_ascii_case("null")
+}
+
+/// 类型名是否数值族（可以裸拼，不加引号）。
+///
+/// 只认驱动类型名里的关键片段：数值列若被包成字符串，PostgreSQL / SQL Server 会直接
+/// 报「operator does not exist: integer = text」——这不是用户能自己绕过去的错。
+fn is_numeric_type(data_type: &str) -> bool {
+    let t = data_type.to_ascii_uppercase();
+    [
+        "INT", "SERIAL", "NUM", "DEC", "MONEY", "FLOAT", "REAL", "DOUBLE", "NUMBER",
+    ]
+    .iter()
+    .any(|key| t.contains(key))
+}
+
+/// 值是否是一个裸数值字面量（数值列上宁可退回加引号，也不把 `abc` 裸拼进 SQL）。
+fn looks_numeric(value: &str) -> bool {
+    let v = value.trim();
+    if v.is_empty() {
+        return false;
+    }
+    let mut chars = v.chars().peekable();
+    if matches!(chars.peek(), Some('+') | Some('-')) {
+        chars.next();
+    }
+    let mut digits = 0usize;
+    let mut dots = 0usize;
+    for ch in chars {
+        match ch {
+            '0'..='9' => digits += 1,
+            '.' if dots == 0 => dots += 1,
+            _ => return false,
+        }
+    }
+    digits > 0
+}
+
+/// 字符串字面量：单引号按 SQL 标准**双写**转义（`O'Brien` → `O''Brien`）。
+fn quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+/// 一个值 → SQL 字面量（纯函数，可单独钉）。
+///
+/// 三档口径：
+/// 1. NULL（空串 / `NULL`）→ `NULL`（调用方负责拼 `IS NULL`，`= NULL` 永远不成立）；
+/// 2. 数值列 + 值确实是数字 → 裸拼；数值列但值不是数字 → 加引号（不静默产出坏 SQL）；
+/// 3. 其余一律加引号（含布尔、日期：这两族各库字面量写法差异大，引号版本在
+///    PostgreSQL / MySQL / SQL Server / SQLite 上都能隐式转换）。
+pub fn sql_literal(value: &str, data_type: Option<&str>) -> String {
+    if is_null_text(value) {
+        return "NULL".to_string();
+    }
+    let raw = value.trim();
+    match data_type.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(kind) if is_numeric_type(kind) && looks_numeric(raw) => raw.to_string(),
+        _ => quote(raw),
+    }
+}
+
+/// 生成「引用行」查询：`SELECT * FROM 目标表 WHERE 目标列 = 值 [AND …]`。
+///
+/// 对齐 DBeaver `ReferencesResultsContainer.refreshKeyValues`（`:382-432`）的语义：
+/// 按**当前行的值**去查目标表。本仓走 `B′`（把这条 SQL 交给编辑器**另开一份结果集**），
+/// 而不是在面板里嵌套第二份结果视图——理由见 `result-panel-references-plan.md` §5。
+///
+/// 返回 `None` 的情形（都不编半条 SQL）：
+/// - 目标表为空；
+/// - 目标列没报 / 与参与列数量对不上（不知道往哪查）；
+/// - 值列表与参与列数量对不上（调用方少给了某一列的值）。
+pub fn reference_rows_sql(key: &ReferenceKey, values: &[ReferenceValue]) -> Option<String> {
+    let table = key.table.trim();
+    if table.is_empty() {
+        return None;
+    }
+    if key.target_columns.is_empty() || key.target_columns.len() != key.columns.len() {
+        return None;
+    }
+    if values.len() != key.columns.len() {
+        return None;
+    }
+    let mut clauses: Vec<String> = Vec::with_capacity(values.len());
+    for (target, value) in key.target_columns.iter().zip(values.iter()) {
+        if value.column.is_empty() {
+            return None;
+        }
+        let literal = sql_literal(&value.value, value.data_type.as_deref());
+        if literal == "NULL" {
+            clauses.push(format!("{target} IS NULL"));
+        } else {
+            clauses.push(format!("{target} = {literal}"));
+        }
+    }
+    Some(format!("SELECT * FROM {table} WHERE {}", clauses.join(" AND ")))
+}
+
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
     use super::{
-        ReferenceKey, ReferencesState, key_label, keys_from_constraints, mapping_text,
+        ReferenceKey, ReferenceValue, ReferencesState, key_label, keys_from_constraints,
+        mapping_text, reference_rows_sql, sql_literal,
     };
     use shared::meta::ConstraintDetail;
 
@@ -264,5 +381,93 @@ mod tests {
     fn states_start_unloaded_and_share_dbeaver_empty_text() {
         assert_eq!(ReferencesState::default(), ReferencesState::NotLoaded);
         assert_eq!(ReferencesState::NO_REFERENCES, "无引用");
+    }
+
+    fn value(column: &str, value: &str, data_type: Option<&str>) -> ReferenceValue {
+        ReferenceValue {
+            column: column.to_string(),
+            value: value.to_string(),
+            data_type: data_type.map(|t| t.to_string()),
+        }
+    }
+
+    /// 值 → 字面量：NULL 认三种文本；数值列裸拼、数值列上的非数字退回加引号；
+    /// 其余（布尔 / 日期 / 文本）统一加引号；单引号按标准双写。
+    #[test]
+    fn sql_literals_are_typed_and_escaped() {
+        assert_eq!(sql_literal("NULL", None), "NULL");
+        assert_eq!(sql_literal("null", None), "NULL");
+        assert_eq!(sql_literal("", Some("integer")), "NULL");
+
+        assert_eq!(sql_literal("42", Some("INTEGER")), "42", "数值列裸拼");
+        assert_eq!(sql_literal("-3.5", Some("numeric(10,2)")), "-3.5");
+        assert_eq!(
+            sql_literal("abc", Some("INTEGER")),
+            "'abc'",
+            "数值列上不是数字的值不能裸拼（会产出坏 SQL）"
+        );
+
+        assert_eq!(sql_literal("true", Some("boolean")), "'true'", "布尔按字符串，各库都能隐式转换");
+        assert_eq!(sql_literal("2026-11-18", Some("date")), "'2026-11-18'");
+        assert_eq!(sql_literal("O'Brien", None), "'O''Brien'", "单引号双写");
+        assert_eq!(sql_literal(" 7 ", Some("bigint")), "7", "裸拼时去掉两端空白");
+    }
+
+    /// 引用行 SQL：单列 / 多列 / NULL 走 `IS NULL` / 缺目标列或值数量不符时拒绝生成。
+    #[test]
+    fn reference_rows_sql_covers_the_three_shapes() {
+        let key = ReferenceKey {
+            table: "customers".to_string(),
+            constraint: "fk_customer".to_string(),
+            columns: vec!["customer_id".to_string()],
+            target_columns: vec!["id".to_string()],
+        };
+        let sql = reference_rows_sql(&key, &[value("customer_id", "7", Some("bigint"))])
+            .expect("一列外键应能生成 SQL");
+        assert_eq!(sql, "SELECT * FROM customers WHERE id = 7");
+
+        let composite = ReferenceKey {
+            columns: vec!["region_id".to_string(), "code".to_string()],
+            target_columns: vec!["region_id".to_string(), "code".to_string()],
+            ..key.clone()
+        };
+        let sql = reference_rows_sql(
+            &composite,
+            &[
+                value("region_id", "3", Some("int")),
+                value("code", "A1", Some("varchar")),
+            ],
+        )
+        .expect("复合外键应能生成 SQL");
+        assert_eq!(
+            sql,
+            "SELECT * FROM customers WHERE region_id = 3 AND code = 'A1'"
+        );
+
+        // 空值：`= NULL` 永远不成立，必须写 IS NULL
+        let sql = reference_rows_sql(&key, &[value("customer_id", "NULL", Some("bigint"))])
+            .expect("空值也能生成（IS NULL 分支）");
+        assert_eq!(sql, "SELECT * FROM customers WHERE id IS NULL");
+
+        // 驱动没报目标列：不知道往哪查，不编
+        let unknown = ReferenceKey {
+            target_columns: Vec::new(),
+            ..key.clone()
+        };
+        assert_eq!(reference_rows_sql(&unknown, &[value("customer_id", "7", None)]), None);
+
+        // 值数量与参与列不符（调用方少取了一列）：宁可不生成
+        assert_eq!(
+            reference_rows_sql(&composite, &[value("region_id", "3", Some("int"))]),
+            None,
+            "少给一列的值时不该拼出半条条件"
+        );
+
+        // 目标表为空
+        let no_table = ReferenceKey {
+            table: String::new(),
+            ..key
+        };
+        assert_eq!(reference_rows_sql(&no_table, &[value("customer_id", "7", None)]), None);
     }
 }

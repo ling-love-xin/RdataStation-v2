@@ -1055,6 +1055,26 @@ impl ResultPanel {
                 menu
             });
 
+        // 「查看引用行」：按当前行的外键值查目标表，交给编辑器**另开一份结果集**
+        // （方案 B′；DBeaver 是在本面板内嵌一份结果视图，见 result-panel-references-plan.md）。
+        // 取不到「选中键 + 当前行 + 可见列有值」就不摆这张票——不生成半条 SQL。
+        let rows_sql = self.reference_rows_sql(cx);
+        let rows_queue = self.queue.clone();
+        let rows = Button::new("editor-result-reference-rows")
+            .ghost()
+            .xsmall()
+            .icon(IconName::Rows3)
+            .label("查看引用行")
+            .tooltip("按当前行的外键值查询目标表（另开一份结果集）".to_string())
+            .debug_selector(|| "editor-result-reference-rows".to_string())
+            .disabled(rows_sql.is_none())
+            .on_click(move |_, _window, app| {
+                let Some(sql) = rows_sql.clone() else {
+                    return;
+                };
+                rows_queue.request(ResultRequest::OpenReferenceRows { sql }, app);
+            });
+
         // 「打开目标对象」：目标表在当前连接里定位（DBeaver `refs_open_target`）
         let schema = self
             .reference_source(cx)
@@ -1104,6 +1124,7 @@ impl ResultPanel {
                     .py_1()
                     .border_b(ui::HAIRLINE)
                     .child(div().flex_1().min_w_0().text_ellipsis().child(chooser))
+                    .child(rows)
                     .child(open),
             )
             .child(div().px_2().py_1().child(mapping))

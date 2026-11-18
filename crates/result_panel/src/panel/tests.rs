@@ -2607,4 +2607,93 @@ fn reference_tab_requests_metadata_and_renders_the_key_list(cx: &mut gpui_kit::T
     );
 }
 
+/// 【引用页】「查看引用行」：选中键 + 当前行 → 生成目标表查询，并按 `B′` 交给宿主另开结果集。
+///
+/// 口子对齐 DBeaver `refreshKeyValues`（`:382-432`）：查什么由**当前行的外键值**决定，
+/// 不是整表；本仓把这条查询交给编辑器新开一份结果集，不在面板里嵌第二份视图。
+#[gpui_kit::test]
+fn reference_rows_use_the_selected_row_values(cx: &mut gpui_kit::TestAppContext) {
+    use crate::references::{ReferenceKey, ReferencesState};
+    use workbench_shell::model::ColumnAnnotation;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 结果两列来自 public.orders：id(integer) / amount(numeric)
+    cx.update(|_window, app| {
+        let grid = panel.read(app).grid.clone();
+        grid.update(app, |state, _cx| {
+            state.delegate_mut().set_column_annotations(vec![
+                Some(ColumnAnnotation {
+                    source_table: Some("public.orders".to_string()),
+                    source_column: Some("id".to_string()),
+                    comment: None,
+                    data_type: Some("integer".to_string()),
+                    nullable: None,
+                    default_value: None,
+                }),
+                Some(ColumnAnnotation {
+                    source_table: Some("public.orders".to_string()),
+                    source_column: Some("amount".to_string()),
+                    comment: None,
+                    data_type: Some("numeric".to_string()),
+                    nullable: None,
+                    default_value: None,
+                }),
+            ]);
+        });
+    });
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.set_references(
+                ReferencesState::Loaded(vec![ReferenceKey {
+                    table: "customers".to_string(),
+                    constraint: "fk_customer".to_string(),
+                    columns: vec!["id".to_string()],
+                    target_columns: vec!["id".to_string()],
+                }]),
+                cx,
+            );
+        });
+    });
+
+    // 没选中行时生成不了（按钮禁用态由它决定）
+    assert_eq!(
+        panel.read_with(cx, |p, app| p.reference_rows_sql(app)),
+        None,
+        "没有当前行就没有值可查"
+    );
+
+    // 选中第一行（id = 1）后能生成：数值列裸拼，字符串列加引号
+    cx.update(|_window, app| {
+        let grid = panel.read(app).grid.clone();
+        grid.update(app, |state, _cx| {
+            state.delegate_mut().set_selected_row(Some(0));
+        });
+    });
+    let sql = panel
+        .read_with(cx, |p, app| p.reference_rows_sql(app))
+        .expect("选中行后应能生成引用行查询");
+    assert_eq!(sql, "SELECT * FROM customers WHERE id = 1");
+
+    // 交给宿主：请求里带的是同一条 SQL（宿主用 NewSet 落位）
+    cx.update(|_window, app| panel.update(app, |p, cx| p.open_reference_rows(cx)));
+    let drained = cx.update(|_window, app| panel.read(app).queue.drain());
+    assert_eq!(drained.len(), 1, "只该入队一条请求：{drained:?}");
+    match &drained[0] {
+        crate::ports::ResultRequest::OpenReferenceRows { sql: requested } => {
+            assert_eq!(requested, &sql);
+        }
+        other => panic!("应入队 OpenReferenceRows，实际 {other:?}"),
+    }
+
+    // 页面上也要有这张票（render 路径与上面同一个函数算可用性）
+    cx.update(|_window, app| panel.update(app, |p, cx| p.set_right_tab(RightTab::Reference, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-reference-rows").is_some(),
+        "有键且选中行时该渲染「查看引用行」"
+    );
+}
+
 

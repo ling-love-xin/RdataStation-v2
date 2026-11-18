@@ -337,6 +337,17 @@ pub enum ResultRequest {
         /// 目标表名
         table: String,
     },
+    /// 【引用页】「查看引用行」：按**当前行的外键值**生成查询，交给编辑器**另开一份结果集**
+    /// （方案 `B′`；DBeaver 是在面板内嵌一份 `ResultSetViewer`，见
+    /// `docs/architecture/editor/result-panel-references-plan.md` §5）。
+    ///
+    /// SQL 由面板算（它手里才有选中键、当前行与驱动类型，见
+    /// [`crate::references::reference_rows_sql`]），宿主只负责执行与落位：
+    /// `ExecTarget::Statement` + `ResultPlacement::NewSet`。
+    OpenReferenceRows {
+        /// 已生成好的 `SELECT * FROM 目标表 WHERE …`（不合法时面板不会发这条请求）
+        sql: String,
+    },
 }
 
 /// 【保存值】待落盘的内容：面板算字节与默认文件名，宿主只选路径 + 写盘。
