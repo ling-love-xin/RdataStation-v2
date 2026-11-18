@@ -60,7 +60,7 @@ flowchart TB
 | 视图 | ├ `mod.rs` | 模块声明与 re-export、常量、`ConnectionDialogState` 字段、输入控件工厂 |
 | 视图 | ├ `state.rs` | 构造 / 元数据刷新 / 编辑回读 / `ClonedDialogState`（保存按钮的轻量视图） |
 | 视图 | ├ `staging.rs` | `ConnectionDraft`、暂存状态机、持久化映射（`draft_to_row` / `row_to_draft`）、来源短码、模板导入导出 |
-| 视图 | ├ `render.rs` | `open()`：闭包只做同步 / 快照 / 装配；逐块函数 `result_row_ui` / `side_panel_ui` / `capability_panel_ui` / `driver_props_panel_ui` / `footer_ui` / `network_tab_ui` / `advanced_tab_ui` / `general_tab_ui`（Header 组装仍在内，待抽） |
+| 视图 | ├ `render.rs` | `open()`：闭包只做同步 / 快照 / 装配；逐块函数 `result_row_ui` / `side_panel_ui` / `header_ui`(`Header`) / `capability_panel_ui` / `driver_props_panel_ui` / `footer_ui` / `network_tab_ui` / `advanced_tab_ui` / `general_tab_ui`（头部已抽，闭包只剩装配） |
 | 视图 | ├ `managers.rs` | 三管理器覆盖层（认证 / 网络 / 环境）CRUD |
 | 视图 | ├ `type_tree.rs` / `draft_list.rs` | 左侧类型目录 / 暂存列表两处列表 UI（含同步指纹） |
 | 视图 | ├ `project_picker.rs` | 项目下拉项 `ProjectItem`（项目名 + 路径双列、搜索、末项「＋ 新增项目」） |

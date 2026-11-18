@@ -64,7 +64,7 @@
 | `mod.rs`            | 对话框入口：`ConnectionDialog` 组件、`open_connection_dialog` 宿主 API、`saved_result`/`conn_display_name`（`#[allow(dead_code)]` 保留给 helpers 单测）                                                                                            |
 | `state.rs`          | `ConnectionDialogState`：全部表单字段（gpui `Rc<Entity>` 模型）、三页 Tab 状态、`collect()`（表单→`DataSourceSaveInput`）、`draft_to_save_input()`（草稿→`DataSourceSaveInput`）、`cloned_state`/`ClonedDialogState`（批量提交快照）、`#[cfg(test)]` 3 项单测           |
 | `staging.rs`        | `ConnectionDraft` 草稿模型、`capture_draft`/`apply_draft`（表单↔草稿）、`staging_persist`/`staging_restore`/`staging_flush`（持久化）、`staging_clear`/`remove_drafts_at`（保存并退出的清空 / 部分失败）、`draft_dirty`（脏标记）、`templates_export/import`（模板，UI 暂缓） |
-| `render.rs`         | 渲染编排：`window.open_dialog` 闭包只留「同步状态 → 取快照 → 组装两列」；各块为独立函数（`result_row_ui` / `side_panel_ui`(`SidePanel`) / `capability_panel_ui` / `driver_props_panel_ui` / `footer_ui`(`Footer`) / `network_tab_ui` / `advanced_tab_ui`(`AdvancedTab`) / `general_tab_ui`(`GeneralTab`)，后三者按参数结构体收依赖）；动作闭包 `do_stage`（保存 = 追加暂存条目 + 自动新建空草稿，规则 2 已实现 2026-10-02）、`do_batch_commit`（保存并退出 = 批量提交）、`do_test`（测试连接）、`set_result`/`set_result_ok`（结果行分级）、`BatchOutcome`；Header 组装仍在闭包内（待抽） |
+| `render.rs`         | 渲染编排：`window.open_dialog` 闭包只留「同步状态 → 取快照 → 组装两列」；各块为独立函数（`result_row_ui` / `side_panel_ui`(`SidePanel`) / `header_ui`(`Header`) / `capability_panel_ui` / `driver_props_panel_ui` / `footer_ui`(`Footer`) / `network_tab_ui` / `advanced_tab_ui`(`AdvancedTab`) / `general_tab_ui`(`GeneralTab`)，后三者按参数结构体收依赖）；动作闭包 `do_stage`（保存 = 追加暂存条目 + 自动新建空草稿，规则 2 已实现 2026-10-02）、`do_batch_commit`（保存并退出 = 批量提交）、`do_test`（测试连接）、`set_result`/`set_result_ok`（结果行分级）、`BatchOutcome` |
 | `helpers/`（目录） | `mod`（`dialog_row_height` / `save_blocker` / `section_header` / `dialog_tab_defs` / `scope_seg_labels` 等）、`capability`（能力键 → 标签与验收态，消费 `engine::driver::capability` 字典）、`fields`（`DriverDerived` 驱动派生字段 / 认证方法）、`files`（`strip_file_db_noise` / `create_new_db_file`）、`summary`、`tests`（内嵌单测） |
 | `draft_list.rs`     | 暂存列表 UI：行渲染、脏标记 `●`、**同步指纹**（行数 + 光标 + 每条 saved\_id / 名称 + 光标位实时表单值，解决 "填名称列表不更新"）                                                                                                                                              |
 | `type_tree.rs`      | 左侧类型目录 UI + 同步指纹（目录 / 过滤词 / 选中项）                                                                                                                                                                                                |
@@ -267,7 +267,7 @@ pub struct ConnectionDraft {
 | 「保存并退出」（footer，原名「保存并关闭」）                           | `do_batch_commit` | 批量提交 + 清空 + 关闭     |
 | 「测试连接」（Ctrl+T）                                      | `do_test`         | 独立会话真实预演（不落库、不注册池） |
 
-### 6.2 `do_stage`（保存 = 暂存，`render.rs:1100`；闭包内行号随拆分漂移，按符号名检索为准）
+### 6.2 `do_stage`（保存 = 暂存；在 `render.rs` 的 `open_dialog` 闭包内，按符号名检索——闭包内行号随分块抽取漂移，不写死）
 
 
 
@@ -279,7 +279,7 @@ pub struct ConnectionDraft {
 
 4. `notify_host` 刷新宿主层。
 
-### 6.3 `do_batch_commit`（保存并退出，`render.rs:1164`；同上，按符号名检索）
+### 6.3 `do_batch_commit`（保存并退出；同在 `open_dialog` 闭包内，按符号名检索）
 
 
 
@@ -380,7 +380,7 @@ pub struct ConnectionDraft {
 
 * 类型目录按 `enabled` 过滤；无可用驱动的类型置灰「暂无驱动」，且**行可确认**——确认不切换类型，改开插件管理（宿主未挂 `show_plugin_manager` 时退为结果行说明原因，见 2026-11-18 打磨 ⑥⑩）。
 
-* 文件型驱动：地址输入在「常规 → 连接设置」卡片（`打开文件… / 新建文件…`），Header 只显示路径；网络型地址在 Header 输入框（占位取 `url_template`）。
+* 文件型驱动：地址输入在「常规 → 连接设置」卡片（`打开文件… / 新建文件…`），Header 只显示路径文本；网络型 Header 的地址是**只读派生 URI**（`Input` 恒 `disabled`，编辑在三字段，粘贴走「从剪贴板导入 URI」）。
 
 ### 8.1 新增类型动态渲染机制（MVP 设计审查，2026-10-03，不排期）
 
