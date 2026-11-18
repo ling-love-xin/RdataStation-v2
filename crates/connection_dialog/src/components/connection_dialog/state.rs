@@ -58,7 +58,7 @@ impl<H: 'static> ConnectionDialogState<H> {
             )
         });
 
-        Self {
+        let dialog = Self {
             name,
             url,
             user,
@@ -201,7 +201,17 @@ impl<H: 'static> ConnectionDialogState<H> {
             // 分组卡「＋ 新建分组」输入行（与 mod.rs 字段声明对应）。
             group_new_open: Rc::new(Cell::new(false)),
             group_new_name: cx.new(|cx| InputState::new(window, cx)),
-        }
+        };
+        // 规则 1（决策 #110）：默认「仅项目」必须**真的写进 Select**，不能只做渲染回退——
+        // 否则首开是「界面高亮项目、项目栏却禁用、落库走仅全局」的三方矛盾。
+        dialog.scope.update(cx, |s, cx| {
+            s.set_selected_value(
+                &SharedString::from(helpers::default_new_scope()),
+                window,
+                cx,
+            )
+        });
+        dialog
     }
 
     /// 拉取元数据（认证/网络/环境列表 + Select 选项）；首次打开时调用。
@@ -257,7 +267,7 @@ impl<H: 'static> ConnectionDialogState<H> {
             // 读不到就留空表——能力 Tab 会显示「本次启动尚未同步」，不编来源。
             if let Ok(rows) = rt.block_on(service.driver_sources()) {
                 *self.driver_sources.borrow_mut() = driver_sources_from_rows(&rows);
-            }            // 项目分组目录（项目级：需要当前项目根；未打开项目为空列表）。
+            } // 项目分组目录（项目级：需要当前项目根；未打开项目为空列表）。
             let root = self.project_path.read(cx).value().trim().to_string();
             let groups = service.list_groups(if root.is_empty() {
                 None
@@ -735,9 +745,7 @@ impl<H: 'static> ConnectionDialogState<H> {
             }
         }
         self.refresh_driver_items(window, cx);
-        let first = first_driver
-            .as_ref()
-            .map(|d| driver_menu_label(d));
+        let first = first_driver.as_ref().map(|d| driver_menu_label(d));
         match first {
             Some(name) => {
                 set_select_value(&self.driver, &name, window, cx);
@@ -788,9 +796,7 @@ impl<H: 'static> ConnectionDialogState<H> {
         cx: &mut App,
     ) -> bool {
         let url = self.url.read(cx).value().trim().to_string();
-        if url.is_empty()
-            || url_matches_driver_template(&url, driver.url_template.as_deref())
-        {
+        if url.is_empty() || url_matches_driver_template(&url, driver.url_template.as_deref()) {
             return false;
         }
         self.url
@@ -1158,6 +1164,9 @@ impl ClonedDialogState {
         name: &Entity<InputState>,
         driver: &Entity<SelectState<SearchableVec<SharedString>>>,
         url: &Entity<InputState>,
+        host: &Entity<InputState>,
+        port: &Entity<InputState>,
+        db: &Entity<InputState>,
         user: &Entity<InputState>,
         pass: &Entity<InputState>,
         cx: &mut App,
@@ -1196,7 +1205,15 @@ impl ClonedDialogState {
         // 密码、认证引用、SSL 覆盖一律不落库（避免“文件库带着 mysql 凭据”这类脏数据）。
         let is_file = crate::services::data_source_service::is_file_db_driver(&db_type);
         let name = name.read(cx).value().to_string();
-        let url = url.read(cx).value().to_string();
+        // 地址唯一口径（决策 #110）：**字段是权威**，URI 由字段重建（文件型原样返回）。
+        // 不能直接读 URI 输入框：那是派生展示，用户根本没在编辑它。
+        let url = helpers::url_from_fields(
+            selected_driver.as_ref(),
+            &url.read(cx).value(),
+            &host.read(cx).value(),
+            &port.read(cx).value(),
+            &db.read(cx).value(),
+        );
         if name.trim().is_empty() || url.trim().is_empty() {
             return None;
         }
@@ -1210,7 +1227,11 @@ impl ClonedDialogState {
         };
         let password = {
             let v = pass.read(cx).value().to_string();
-            if v.is_empty() { None } else { Some(v) }
+            if v.is_empty() {
+                None
+            } else {
+                Some(v)
+            }
         };
         let auth_config_id = self
             .auth_ref
@@ -1259,15 +1280,15 @@ impl ClonedDialogState {
                 Some(v.trim().to_string())
             }
         };
-        // 作用域（UI 标签 → ConnectionScope）。
-        let scope = scope_from_label(
-            self.scope
-                .read(cx)
-                .selected_value()
-                .cloned()
-                .unwrap_or_default()
-                .as_str(),
-        );
+        // 作用域（UI 标签 → ConnectionScope）。空值不是「全局」而是「没选过」→ 新建默认「仅项目」：
+        // 与渲染、草稿快照共用 `scope_label_or_default`，避免“界面显示项目、落库仅全局”。
+        let scope_label_raw = self
+            .scope
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .unwrap_or_default();
+        let scope = scope_from_label(&scope_label_or_default(&scope_label_raw));
         // 高级选项组装：ssl + policy_overrides 合并为一个 JSON。
         let mut adv = serde_json::Map::new();
         let ssl_mode = self
@@ -1357,7 +1378,11 @@ impl ClonedDialogState {
                     .cloned()
                     .unwrap_or_default()
                     .to_string();
-                if v.trim().is_empty() { None } else { Some(v) }
+                if v.trim().is_empty() {
+                    None
+                } else {
+                    Some(v)
+                }
             },
             network_config_id,
             driver_properties,
@@ -1486,7 +1511,7 @@ impl ClonedDialogState {
             url: d.url.trim().to_string(),
             username,
             password,
-            scope: scope_from_label(&d.scope),
+            scope: scope_from_label(&scope_label_or_default(&d.scope)),
             description: if d.remark.trim().is_empty() {
                 None
             } else {
@@ -1552,8 +1577,8 @@ pub(crate) fn url_matches_driver_template(url: &str, template: Option<&str>) -> 
 mod tests {
     // 不通配导入（`super::*` 会把 gpui 的 `test` 宏带入作用域）；需用到的类型显式引入。
     use super::{
-        AuthConfig, ConnectionDialogState, ConnectionDraft, ConnectionScope, Driver, Environment,
-        NetworkConfig, ResultLevel, url_matches_driver_template,
+        url_matches_driver_template, AuthConfig, ConnectionDialogState, ConnectionDraft,
+        ConnectionScope, Driver, Environment, NetworkConfig, ResultLevel,
     };
     use std::path::PathBuf;
     use std::rc::Rc;
@@ -1562,7 +1587,7 @@ mod tests {
     use engine::migration::install_global_db_manager;
     use engine::persistence::global_db::GlobalDatabaseManager;
     use gpui_kit::{
-        IntoElement, Render, Styled as _, TestAppContext, VisualTestContext, Window, div,
+        div, IntoElement, Render, Styled as _, TestAppContext, VisualTestContext, Window,
     };
 
     struct Host;
@@ -1594,10 +1619,7 @@ mod tests {
             "postgres://u@h:5432/db",
             Some("postgresql://{user}:{password}@{host}:{port}/{database}")
         ));
-        assert!(url_matches_driver_template(
-            "mysql://u@h:3306/db",
-            None
-        ));
+        assert!(url_matches_driver_template("mysql://u@h:3306/db", None));
         assert!(url_matches_driver_template("/tmp/app.sqlite", None));
     }
 
@@ -1721,6 +1743,42 @@ mod tests {
             dialog.selected_type.clone(),
             dialog.tags_input.clone(),
         )
+    }
+
+    /// 规则 1（决策 #110）回归：新建对话框的作用域必须**真的**是「仅项目」，
+    /// 且空作用域草稿落库同为 `Project` —— 而不是“界面显示项目、collect 落成全局”。
+    ///
+    /// 这条缝以前没人守：`default_new_scope()` 只被渲染层用作**显示回退**，
+    /// `collect` / `draft_to_save_input` 直接按空串 → `Global`，于是首开
+    /// 「分段高亮项目 + 项目栏禁用（仅全局不需要）+ 实际落全局」三方矛盾。
+    #[gpui_kit::test]
+    fn new_dialog_defaults_to_project_scope_in_ui_and_save_input(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (_, cx) = cx.add_window_view(|_, _cx| Host);
+        let cx: &mut VisualTestContext = cx;
+        let cl = dialog(cx);
+
+        // 1) UI 侧：Select 里必须有值（不是靠渲染层回退），否则项目栏判成「仅全局」。
+        let ui_scope = cx.update(|_, cx| cl.scope.read(cx).selected_value().map(|v| v.to_string()));
+        assert_eq!(
+            ui_scope.as_deref(),
+            Some("仅项目"),
+            "首开作用域应显式写入「仅项目」，而不是留空由渲染层回退"
+        );
+
+        // 2) 落库侧：空作用域草稿 → Project（与 UI 同口径）。
+        let draft = ConnectionDraft {
+            name: "首开默认".into(),
+            driver_id: "postgres".into(),
+            url: "postgres://db:5432/app".into(),
+            ..ConnectionDraft::empty()
+        };
+        let input = cl.draft_to_save_input(&draft).expect("应可提交");
+        assert_eq!(
+            input.scope,
+            ConnectionScope::Project,
+            "空作用域应按默认「仅项目」落库（P_ 前缀），不能落到全局"
+        );
     }
 
     /// 草稿快照 → 保存输入：网络型（postgres）全字段映射 + 作用域标签转换 + 引用名→ID。

@@ -1,18 +1,17 @@
 // 注意：不通配导入（`super::*` 会把 gpui 的 `test` 宏带入作用域）。
 use super::{
-    DriverDerived, DriverSource, address_field, address_label, address_placeholder,
-    app_level_capabilities,
-    auth_config_values, auth_field_specs, build_auth_config_json, build_network_config_json,
-    capability_rows, conn_display_name, create_new_db_file, default_new_scope, dialog_row_height,
-    dialog_tab_defs, driver_auth_types, driver_capabilities, driver_form_fields, driver_menu_label,
-    driver_short_name, plugin_short_code,
-    driver_source_text, driver_sources_from_rows,
-    enabled_drivers_of_type, field_spec, find_driver_by_value, first_selectable_type,
-    is_secret_field, network_config_values, network_field_specs, new_db_file_suggested_name,
-    policy_summary, policy_type_from_label, policy_type_label, property_note, result_needs_detail,
-    save_blocker, saved_result, scope_from_label, staging_display_type_id, strip_file_db_noise,
-    tags_from_json, tags_to_json, tr, type_badge, type_has_driver, type_matches_filter,
-    url_template_example, visible_tab_index,
+    address_field, address_label, address_placeholder, app_level_capabilities, auth_config_values,
+    auth_field_specs, build_auth_config_json, build_network_config_json, capability_rows,
+    conn_display_name, create_new_db_file, default_new_scope, dialog_row_height, dialog_tab_defs,
+    driver_auth_types, driver_capabilities, driver_form_fields, driver_menu_label,
+    driver_short_name, driver_source_text, driver_sources_from_rows, enabled_drivers_of_type,
+    field_spec, find_driver_by_value, first_selectable_type, is_secret_field,
+    network_config_values, network_field_specs, new_db_file_suggested_name, normalize_tab_index,
+    plugin_short_code, policy_summary, policy_type_from_label, policy_type_label, property_note,
+    result_needs_detail, save_blocker, saved_result, scope_from_label, staging_display_type_id,
+    strip_file_db_noise, tags_from_json, tags_to_json, tr, type_badge, type_has_driver,
+    type_matches_filter, url_from_fields, url_template_example, visible_tab_index, DriverDerived,
+    DriverSource,
 };
 use connection::model::ConnectionScope;
 use connection::model::DataSourceSaveInput;
@@ -460,42 +459,57 @@ fn saved_result_keeps_connection_id_out_of_the_summary() {
     assert!(line.detail.is_some(), "有详情才会出现「详情 / 复制」入口");
 
     // 空名回退占位，不出现空引号。
-    assert!(
-        saved_result("  ", "P_conn_1")
-            .summary
-            .contains("未命名连接")
-    );
+    assert!(saved_result("  ", "P_conn_1")
+        .summary
+        .contains("未命名连接"));
     assert_eq!(conn_display_name(" x "), "x");
 }
 
 #[test]
 fn save_blocker_reports_the_first_missing_item() {
-    // 顺序就是填写顺序：类型 → 驱动 → 名称 → 地址（与 `collect` 的判据一致）。
+    // 顺序就是填写顺序：类型 → 驱动 → 项目（仅当作用域要求）→ 名称 → 地址（与 `collect` 的判据一致）。
     assert_eq!(
-        save_blocker(false, "", "", "", false),
+        save_blocker(false, "", "", "", false, false, false),
         Some(tr("请先在左侧选择数据库类型"))
     );
     assert_eq!(
-        save_blocker(true, "", "n", "u", false),
+        save_blocker(true, "", "n", "u", false, false, false),
         Some(tr("请选择驱动实现"))
     );
+    // 作用域默认是「仅项目」：没有项目就无处落库，必须先选项目（不能等到保存时才报错）。
     assert_eq!(
-        save_blocker(true, "sqlx", "", "u", false),
+        save_blocker(true, "sqlx", "n", "u", false, true, false),
+        Some(tr("请先选择项目（作用域为「仅项目」）"))
+    );
+    // 已选项目 / 作用域不要求项目 → 不拦。
+    assert_eq!(
+        save_blocker(true, "sqlx", "n", "u", false, true, true),
+        None
+    );
+    assert_eq!(
+        save_blocker(true, "sqlx", "n", "u", false, false, false),
+        None
+    );
+    assert_eq!(
+        save_blocker(true, "sqlx", "", "u", false, false, false),
         Some(tr("请填写连接名称"))
     );
     // 地址缺口按连接方式给不同的可执行动作（文件型要的是“选文件”，不是“填 URI”）。
     assert_eq!(
-        save_blocker(true, "sqlx", "n", "", false),
+        save_blocker(true, "sqlx", "n", "", false, false, false),
         Some(tr("请填写连接 URI"))
     );
     assert_eq!(
-        save_blocker(true, "sqlx", "n", "", true),
+        save_blocker(true, "sqlx", "n", "", true, false, false),
         Some(tr("请选择或新建数据库文件（常规 → 连接设置）"))
     );
     // 全齐 / 全空格（名称与地址都是 trim 后判空）→ 无缺口。
-    assert_eq!(save_blocker(true, "sqlx", "n", "u", false), None);
     assert_eq!(
-        save_blocker(true, "  ", "  ", "  ", false),
+        save_blocker(true, "sqlx", "n", "u", false, false, false),
+        None
+    );
+    assert_eq!(
+        save_blocker(true, "  ", "  ", "  ", false, false, false),
         Some(tr("请选择驱动实现"))
     );
 }
@@ -511,26 +525,85 @@ fn secret_fields_are_the_credential_keys_only() {
 }
 
 #[test]
+fn url_from_fields_keeps_fields_as_single_authority() {
+    // 决策 #110：字段（host / port / db）是唯一真相源，URI 只是派生展示。
+    let mut mysql = driver("mysql", "mysql", "MySQL", true);
+    mysql.default_port = Some(3306);
+    let mut sqlite = driver("sqlite", "sqlite", "SQLite", true);
+    sqlite.is_file = true;
+
+    // ① 字段变了 → URI 跟着变，旧 URI 里的凭据 / 查询串保留
+    assert_eq!(
+        url_from_fields(
+            Some(&mysql),
+            "mysql://root:pw@old:3306/old?ssl=true",
+            "newhost",
+            "3307",
+            "newdb",
+        ),
+        "mysql://root:pw@newhost:3307/newdb?ssl=true"
+    );
+    // ② 字段与 URI 一致 → 原样（幂等；每帧重建才敢这么用）
+    assert_eq!(
+        url_from_fields(Some(&mysql), "mysql://h:3306/db", "h", "3306", "db"),
+        "mysql://h:3306/db"
+    );
+    // ③ 主机被清空 → 保留原 URI（不把半成品输入抹成非法 URL）
+    assert_eq!(
+        url_from_fields(Some(&mysql), "mysql://h:3306/db", "", "3306", "db"),
+        "mysql://h:3306/db"
+    );
+    // ④ 文件型 → 原样（路径不是可重建的 authority）
+    assert_eq!(
+        url_from_fields(Some(&sqlite), "C:/data/a.db", "h", "1", "x"),
+        "C:/data/a.db"
+    );
+    // ⑤ 新表单（URI 为空）：用驱动 type_id 补 scheme，否则地址栏填了字段也永远空着
+    assert_eq!(
+        url_from_fields(Some(&mysql), "", "h", "3307", "db"),
+        "mysql://h:3307/db"
+    );
+    // ⑥ 未选驱动 → 原样
+    assert_eq!(url_from_fields(None, "", "h", "1", "x"), "");
+}
+
+#[test]
 fn dialog_tabs_hide_network_for_file_db_and_map_visible_index() {
     // #15 迁移到 `TabBar` 后的接缝：文件型隐藏「网络」→ 可见下标与内部索引错开一位，
-    // 错了就会“点能力却显示网络内容”。
+    // 错了就会“点高级却显示网络内容”。
+    // #110 后的第二条：面板只留面向用户的三页——「能力」「驱动属性」是工程概念，
+    // 并入「高级」页尾，不再各占一个 Tab；旧草稿里的 2 / 3 必须落到「高级」，不能显示错页。
     let net = dialog_tab_defs(false);
-    assert_eq!(net.len(), 5);
+    assert_eq!(
+        net.iter().map(|(label, _)| *label).collect::<Vec<_>>(),
+        vec!["常规", "网络", "高级"],
+        "网络型只留三页：常规 / 网络 / 高级"
+    );
     assert_eq!(visible_tab_index(&net, 0), 0);
-    assert_eq!(visible_tab_index(&net, 4), 4);
+    assert_eq!(visible_tab_index(&net, 4), 2);
+    assert_eq!(visible_tab_index(&net, 2), 2, "旧「能力」应落到「高级」");
+    assert_eq!(
+        visible_tab_index(&net, 3),
+        2,
+        "旧「驱动属性」应落到「高级」"
+    );
 
     let file = dialog_tab_defs(true);
-    assert_eq!(file.len(), 4, "文件型不显示网络 Tab");
-    assert!(!file.iter().any(|(label, _)| *label == "网络"));
-    assert_eq!(visible_tab_index(&file, 0), 0);
     assert_eq!(
-        visible_tab_index(&file, 2),
-        1,
-        "能力在文件型里是第 2 个可见项"
+        file.iter().map(|(label, _)| *label).collect::<Vec<_>>(),
+        vec!["常规", "高级"],
+        "文件型只留两页：常规 / 高级"
     );
-    assert_eq!(visible_tab_index(&file, 4), 3);
+    assert_eq!(visible_tab_index(&file, 4), 1);
     // 隐藏的「网络」被选中（旧草稿 / 切类型后）回退到第一个可见项，不越界。
     assert_eq!(visible_tab_index(&file, 1), 0);
+
+    // 渲染侧用同一个规范化口径：旧索引 2 / 3 → 高级；文件型的网络 → 常规。
+    assert_eq!(normalize_tab_index(2, false), 4);
+    assert_eq!(normalize_tab_index(3, false), 4);
+    assert_eq!(normalize_tab_index(1, true), 0);
+    assert_eq!(normalize_tab_index(4, false), 4);
+    assert_eq!(normalize_tab_index(9, false), 4, "越界夹到高级");
 
     for (label, ix) in &file {
         assert_eq!(
@@ -734,7 +807,12 @@ fn short_name_strips_type_prefix() {
 #[test]
 fn driver_menu_label_marks_source() {
     // 内置驱动（plugin_code = None）：短名 + 内置
-    let native = driver("postgres_native", "postgresql", "PostgreSQL (Official)", true);
+    let native = driver(
+        "postgres_native",
+        "postgresql",
+        "PostgreSQL (Official)",
+        true,
+    );
     assert_eq!(driver_menu_label(&native), "Official · 内置");
 
     // 插件驱动：短名 + 插件短码（去掉 `rds.driver.` 前缀）
@@ -758,7 +836,12 @@ fn driver_lookup_accepts_menu_label() {
     let mut plugin = driver("postgresql", "postgresql", "PostgreSQL", true);
     plugin.plugin_code = Some("rds.driver.postgres-py".into());
     let drivers = vec![
-        driver("postgres_native", "postgresql", "PostgreSQL (Official)", true),
+        driver(
+            "postgres_native",
+            "postgresql",
+            "PostgreSQL (Official)",
+            true,
+        ),
         plugin,
     ];
     // 新下拉存的是带来源后缀的标签；旧草稿存短名，两条路径都要能回读
@@ -1129,8 +1212,8 @@ mod header_interaction {
     use gpui_kit::component::ActiveTheme as _;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{
-        Context, ElementId, IntoElement, ParentElement, Render, SharedString, Styled as _,
-        TestAppContext, VisualTestContext, WeakEntity, Window, div, point, rems,
+        div, point, rems, Context, ElementId, IntoElement, ParentElement, Render, SharedString,
+        Styled as _, TestAppContext, VisualTestContext, WeakEntity, Window,
     };
 
     use super::super::{lucide, outline_section};

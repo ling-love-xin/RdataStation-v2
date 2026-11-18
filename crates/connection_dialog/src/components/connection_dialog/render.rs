@@ -190,7 +190,7 @@ impl<H: 'static> ConnectionDialogState<H> {
         // 分组新建输入行状态（`org_body` 卡片用；与「＋ 新建分组」输入行展开/提交联动）。
         let group_new_open = self.group_new_open.clone();
         let group_new_name = self.group_new_name.clone();
-        // 连接设置字段（主机 / 端口 / 数据库）与同步标记：与 Header URI 双向同步。
+        // 连接设置字段（主机 / 端口 / 数据库）：地址的唯一来源；Header URI 由它们派生。
         let host_input = self.host_input.clone();
         let port_input = self.port_input.clone();
         let db_input = self.db_input.clone();
@@ -316,7 +316,16 @@ impl<H: 'static> ConnectionDialogState<H> {
             };
 
         window.open_dialog(cx, move |dialog, window, cx| {
-            let scope_sel = scope.read(cx).selected_value().cloned().unwrap_or_default().to_string();
+            // 作用域：「空」不是「仅全局」，而是「没显式选过」→ 默认「仅项目」。
+            // 该回退必须与 `collect` / 草稿快照共用 `scope_label_or_default`，
+            // 否则会出现「分段高亮项目 + 项目栏禁用 + 落库仅全局」的三方矛盾。
+            let scope_raw = scope
+                .read(cx)
+                .selected_value()
+                .cloned()
+                .unwrap_or_default()
+                .to_string();
+            let scope_sel = scope_label_or_default(&scope_raw);
             let includes_project = scope_from_label(&scope_sel).includes_project();
             // 项目下拉 → 路径输入同步（render 为权威同步点，兜底）：选中普通项目时写回路径，
             // 保存与作用域预检统一读路径输入（单一数据源）；「＋ 新增项目」由确认订阅处理。
@@ -476,10 +485,11 @@ impl<H: 'static> ConnectionDialogState<H> {
                 url.update(cx, |s, cx| s.set_placeholder(want_address_ph, window, cx));
             }
 
-            // ---- 连接设置字段 ⇄ Header URI 双向同步（render 为权威同步点）----
-            // 方向 A（URI → 字段）：URI 或驱动变化时反向填字段（编辑回读 / 手改 URI / 切类型）；
-            // 方向 B（字段 → URI）：字段被编辑时用 `rebuild_url_from_fields` 回写 URI（保留凭据 / 查询串）。
-            // 标记 `fields_synced_for` 记录上次同步的（驱动 id, URI）—— 避免两个方向互相覆盖。
+            // ---- 地址口径（决策 #110）：**字段是权威，URI 是派生展示** ----
+            // URI 输入框只读（网络型），每帧由 host / port / db 重建；这样不存在“两个真相源
+            // 互相覆盖”的手速问题。粘贴整条连接串走「从剪贴板导入」（常规 → 连接设置）。
+            // 只在“换驱动 / 首次进入 / 草稿恢复”时做一次反向回读（URI → 字段）：
+            // 用 `fields_synced_for` 记录上次同步的（驱动 id, URI），避免每帧把用户正在清的字段填回去。
             if !is_file_db {
                 let driver_id_fields = current_driver
                     .as_ref()
@@ -490,7 +500,7 @@ impl<H: 'static> ConnectionDialogState<H> {
                     fields_synced_for.borrow().as_ref(),
                     Some((d, u)) if d == &driver_id_fields && u == &url_now
                 );
-                if !already_synced {
+                if !already_synced && !url_now.trim().is_empty() {
                     let (h, p, d) = crate::services::data_source_service::parse_url_host_port_db(
                         &driver_id_fields,
                         &url_now,
@@ -511,30 +521,34 @@ impl<H: 'static> ConnectionDialogState<H> {
                         cx,
                     );
                     set_input_value(&db_input, d.unwrap_or_default(), window, cx);
+                    *fields_synced_for.borrow_mut() =
+                        Some((driver_id_fields.clone(), url_now.clone()));
+                }
+                // 无论刚才是否回读过，都再按字段重建一次 URI：新表单（URI 为空）也能在
+                // 第一次填字段后就出现地址，不必等下一帧；回读后的重建是幂等的。
+                let rebuilt = url_from_fields(
+                    current_driver.as_ref(),
+                    &url_now,
+                    &host_input.read(cx).value(),
+                    &port_input.read(cx).value(),
+                    &db_input.read(cx).value(),
+                );
+                if rebuilt != url_now {
+                    set_input_value(&url, rebuilt.clone(), window, cx);
+                    *fields_synced_for.borrow_mut() = Some((driver_id_fields, rebuilt));
+                } else if !already_synced {
                     *fields_synced_for.borrow_mut() = Some((driver_id_fields, url_now));
-                } else {
-                    let rebuilt = crate::services::data_source_service::rebuild_url_from_fields(
-                        &driver_id_fields,
-                        &url_now,
-                        &host_input.read(cx).value(),
-                        &port_input.read(cx).value(),
-                        &db_input.read(cx).value(),
-                        current_driver.as_ref().and_then(|d| d.default_port),
-                    );
-                    if rebuilt != url_now {
-                        set_input_value(&url, rebuilt.clone(), window, cx);
-                        *fields_synced_for.borrow_mut() = Some((driver_id_fields, rebuilt));
-                    }
                 }
             }
 
             let theme = cx.theme();
 
             // ---- Tab 条（gpui-component `TabBar::underline`，决策 #84）----
-            // 文件型驱动（SQLite/DuckDB）按原型隐藏「网络」Tab（无协议链 / SSL 语义）：
-            // 这里做「可见下标 ⇄ 内部 Tab 索引」映射，`active_tab` 仍是内部 0–4（内容分支不变）。
+            // 呈现在收敛后的三页（无网络型 → 两页）：常规 / 网络 / 高级（#110）。
+            // 「可见下标 ⇄ 内部索引」仍需映射：文件型藏起「网络」；2 / 3 已并入 4。
             let tab_defs: Vec<(&'static str, usize)> = dialog_tab_defs(is_file_db);
-            let tab_selected = visible_tab_index(&tab_defs, active_tab.get());
+            let tab_ix_now = normalize_tab_index(active_tab.get(), is_file_db);
+            let tab_selected = visible_tab_index(&tab_defs, tab_ix_now);
             let tab_bar = div()
                 .border_b_1()
                 .border_color(theme.colors.border)
@@ -588,101 +602,9 @@ impl<H: 'static> ConnectionDialogState<H> {
             };
 
             // ---- 各 Tab 内容 ----
-            let tab_content = match active_tab.get() {
-                1 => {
-                    // ===== 网络：引用「网络配置」档案（内联链已撤下，见架构 §14 #25）=====
-                    let network_ref_selected = network_ref.read(cx).selected_value().cloned();
-                    let is_ref = network_ref_selected.is_some();
-                    // 内联协议链已撤下（#25）：多跳改由「网络配置」档案承担（类型 `chain` 的 JSON 数组，
-                    // 连接时经 `parse_network_config_json` 解析为 `ConnectionMethod::Chain` 并逐跳执行）。
-                    // 此处只保留：引用下拉 + 管理入口 + 诚实提示 + 数据路径预览。
-                    let ref_label = network_ref_selected
-                        .as_ref()
-                        .map(|v| v.to_string())
-                        .unwrap_or_else(|| "直连（未引用档案）".to_string());
-                    let mut content = div().v_flex().gap_3();
-                    content = content.child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .gap_2()
-                            .child(div().text_sm().font_weight(FontWeight::BOLD).child(tr("网络配置")))
-                            .child(
-                                div().text_xs().text_color(theme.colors.muted_foreground)
-                                    .child(tr("引用网络档案：")),
-                            )
-                            .child(Select::new(&network_ref).placeholder(tr("（不引用：直连）")))
-                            .child(
-                                Button::new("mgr-network")
-                                    .ghost()
-                                    .label(tr("管理"))
-                                    .on_click({
-                                        let mgr = mgr.clone();
-                                        let entity = entity.clone();
-                                        let shared = shared.clone();
-                                        move |_, window, app| {
-                                            open_manager(1, &mgr, entity.clone(), shared.clone(), window, app);
-                                        }
-                                    }),
-                            ),
-                    );
-                    if is_ref {
-                        content = content.child(
-                            div().text_xs().text_color(theme.colors.info)
-                                .child("已引用网络档案 · 连接时生效（改档案一处全量生效）"),
-                        );
-                    } else {
-                        content = content.child(hint_line(
-                            theme,
-                            "未引用档案时直连；SSH 跳板 / 代理 / 多跳（chain）请在「管理」里建档案后在此引用。",
-                        ));
-                    }
-                    // 数据路径预览（TLS 徽标；SSL 细节在常规 → 连接安全）。
-                    content = content.child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .gap_2()
-                            .flex_wrap()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .rounded_md()
-                                    .border_1()
-                                    .border_color(theme.colors.border)
-                                    .px_2()
-                                    .py_1()
-                                    .child(tr("本机客户端")),
-                            )
-                            .child(div().text_xs().text_color(theme.colors.muted_foreground).child("→"))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .rounded_md()
-                                    .border_1()
-                                    .border_color(theme.colors.border)
-                                    .px_2()
-                                    .py_1()
-                                    .child(ref_label),
-                            )
-                            .child(div().text_xs().text_color(theme.colors.muted_foreground).child("→"))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .rounded_md()
-                                    .border_1()
-                                    .border_color(theme.colors.border)
-                                    .px_2()
-                                    .py_1()
-                                    .child(tr("目标数据库"))
-                                    .child(
-                                        div().text_xs().text_color(theme.colors.info).child(" TLS"),
-                                    ),
-                            ),
-                    );
-                    content
-                }
-                2 => {
+            // 能力面板：原本是独立 Tab「能力」（只读矩阵）。
+            // 收敛后挂在「高级」页尾——普通用户不必先读懂能力清单才敢保存连接。
+            let capability_panel = {
                     // ===== 能力：只读矩阵（清单与命中来自 `drivers.capabilities`；
                     // 标签 / 运行时位 / 真机验收状态来自引擎的能力字典，UI 不再另存字典）=====
                     let caps = derived.capabilities.clone();
@@ -749,8 +671,9 @@ impl<H: 'static> ConnectionDialogState<H> {
                         );
                     }
                     capability_tab
-                }
-                3 => {
+            };
+            // 驱动属性面板（同上）：key-value 动态增删 + 每行「去向」标注。
+            let driver_props_panel = {
                     // ===== 驱动属性：key-value 动态增删 =====
                     // 每行下方标注**去向**（判决来自 `engine::driver::property_spec`）：
                     // 会下发 / 当前实现会忽略 / 当前实现会报错 / 当前实现不下发。
@@ -884,6 +807,100 @@ impl<H: 'static> ConnectionDialogState<H> {
                         tab = tab.child(div().text_xs().text_color(theme.colors.muted_foreground).child(hint));
                     }
                     tab
+            };
+            let tab_content = match tab_ix_now {
+                1 => {
+                    // ===== 网络：引用「网络配置」档案（内联链已撤下，见架构 §14 #25）=====
+                    let network_ref_selected = network_ref.read(cx).selected_value().cloned();
+                    let is_ref = network_ref_selected.is_some();
+                    // 内联协议链已撤下（#25）：多跳改由「网络配置」档案承担（类型 `chain` 的 JSON 数组，
+                    // 连接时经 `parse_network_config_json` 解析为 `ConnectionMethod::Chain` 并逐跳执行）。
+                    // 此处只保留：引用下拉 + 管理入口 + 诚实提示 + 数据路径预览。
+                    let ref_label = network_ref_selected
+                        .as_ref()
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "直连（未引用档案）".to_string());
+                    let mut content = div().v_flex().gap_3();
+                    content = content.child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_2()
+                            .child(div().text_sm().font_weight(FontWeight::BOLD).child(tr("网络配置")))
+                            .child(
+                                div().text_xs().text_color(theme.colors.muted_foreground)
+                                    .child(tr("引用网络档案：")),
+                            )
+                            .child(Select::new(&network_ref).placeholder(tr("（不引用：直连）")))
+                            .child(
+                                Button::new("mgr-network")
+                                    .ghost()
+                                    .label(tr("管理"))
+                                    .on_click({
+                                        let mgr = mgr.clone();
+                                        let entity = entity.clone();
+                                        let shared = shared.clone();
+                                        move |_, window, app| {
+                                            open_manager(1, &mgr, entity.clone(), shared.clone(), window, app);
+                                        }
+                                    }),
+                            ),
+                    );
+                    if is_ref {
+                        content = content.child(
+                            div().text_xs().text_color(theme.colors.info)
+                                .child("已引用网络档案 · 连接时生效（改档案一处全量生效）"),
+                        );
+                    } else {
+                        content = content.child(hint_line(
+                            theme,
+                            "未引用档案时直连；SSH 跳板 / 代理 / 多跳（chain）请在「管理」里建档案后在此引用。",
+                        ));
+                    }
+                    // 数据路径预览（TLS 徽标；SSL 细节在常规 → 连接安全）。
+                    content = content.child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_2()
+                            .flex_wrap()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(theme.colors.border)
+                                    .px_2()
+                                    .py_1()
+                                    .child(tr("本机客户端")),
+                            )
+                            .child(div().text_xs().text_color(theme.colors.muted_foreground).child("→"))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(theme.colors.border)
+                                    .px_2()
+                                    .py_1()
+                                    .child(ref_label),
+                            )
+                            .child(div().text_xs().text_color(theme.colors.muted_foreground).child("→"))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(theme.colors.border)
+                                    .px_2()
+                                    .py_1()
+                                    .child(tr("目标数据库"))
+                                    .child(
+                                        div().text_xs().text_color(theme.colors.info).child(" TLS"),
+                                    ),
+                            ),
+                    );
+                    content
                 }
                 4 => {
                     // ===== 高级：环境 + 策略覆盖 + DuckDB 加速 =====
@@ -904,6 +921,16 @@ impl<H: 'static> ConnectionDialogState<H> {
                     };
 
                     let mut content = div().w_full().v_flex().gap(rems(GAP_MD));
+                    // 驱动属性放在最前：它直接决定连接能不能通，不该埋在页尾让人翻滚动条。
+                    content = content.child(
+                        div()
+                            .id("conn-sec-driver-props")
+                            .test_support()
+                            .text_sm()
+                            .font_weight(FontWeight::BOLD)
+                            .child(tr("驱动属性")),
+                    );
+                    content = content.child(driver_props_panel);
                     // 分组① 环境（引用 + 管理入口 + 策略生效摘要）
                     content = content.child(make_section(
                         "env",
@@ -1101,6 +1128,16 @@ impl<H: 'static> ConnectionDialogState<H> {
                             nav_body,
                         ));
                     }
+                    // 收敛（#110）：能力清单是**只读**展示，放页尾；驱动属性已在页首。
+                    content = content.child(
+                        div()
+                            .id("conn-sec-capability")
+                            .test_support()
+                            .text_sm()
+                            .font_weight(FontWeight::BOLD)
+                            .child(tr("能力（只读）")),
+                    );
+                    content = content.child(capability_panel);
                     content
                 }
                 _ => {
@@ -1205,8 +1242,8 @@ impl<H: 'static> ConnectionDialogState<H> {
                                 "本地文件路径；「新建文件…」创建库文件（DuckDB 立即初始化可用；SQLite 首次连接自动初始化结构）",
                             ))
                     } else {
-                        // 网络型：主机 / 端口 / 数据库 = **可编辑字段**（与 Header URI 双向同步；
-                        // 编辑字段会重建 URI（保留凭据与查询串），保存仍以 URI 为权威）。
+                        // 网络型：主机 / 端口 / 数据库 = **可编辑字段，也是地址的唯一来源**；
+                        // Header 的 URI 由这三项派生（只读）。粘贴整条连接串走「从剪贴板导入」。
                         let mut body = div().w_full().v_flex().gap(rems(GAP_SM));
                         for (key, fallback, input) in [
                             ("host", "主机", host_input.clone()),
@@ -1229,10 +1266,96 @@ impl<H: 'static> ConnectionDialogState<H> {
                         if form_fields.is_empty() && !form_disabled {
                             body = body.child(hint_line(theme, "驱动未声明连接字段：按内置字段展示"));
                         }
-                        body.child(hint_line(
-                            theme,
-                            "字段与上方 URI 双向同步（凭据与查询串保留）；保存以 URI 为准",
-                        ))
+                        body = body.child(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    Button::new("import-uri")
+                                        .ghost()
+                                        .label(tr("从剪贴板导入 URI"))
+                                        .disabled(form_disabled)
+                                        .tooltip("把剪贴板里的整条连接串解析成主机 / 端口 / 数据库")
+                                        .on_click({
+                                            let entity = entity.clone();
+                                            let host_input = host_input.clone();
+                                            let port_input = port_input.clone();
+                                            let db_input = db_input.clone();
+                                            let result = result.clone();
+                                            let driver_id_now = current_driver
+                                                .as_ref()
+                                                .map(|d| d.id.clone())
+                                                .unwrap_or_default();
+                                            move |_, window, app| {
+                                                let text = app
+                                                    .read_from_clipboard()
+                                                    .and_then(|item| {
+                                                        item.text().map(|s| s.to_string())
+                                                    })
+                                                    .unwrap_or_default();
+                                                let text = text.trim().to_string();
+                                                if text.is_empty() {
+                                                    set_result(
+                                                        &result,
+                                                        ResultLevel::Warning,
+                                                        tr("剪贴板里没有文本可导入"),
+                                                    );
+                                                    let _ = entity
+                                                        .update(app, |_, cx| cx.notify());
+                                                    return;
+                                                }
+                                                let (h, p, d) =
+                                                    crate::services::data_source_service::parse_url_host_port_db(
+                                                        &driver_id_now,
+                                                        &text,
+                                                    );
+                                                if h.is_none() && d.is_none() {
+                                                    set_result(
+                                                        &result,
+                                                        ResultLevel::Error,
+                                                        "未能从剪贴板文本解析出地址（需要完整连接串，如 mysql://user@host:3306/db）",
+                                                    );
+                                                    let _ = entity
+                                                        .update(app, |_, cx| cx.notify());
+                                                    return;
+                                                }
+                                                set_input_value(
+                                                    &host_input,
+                                                    h.unwrap_or_default(),
+                                                    window,
+                                                    app,
+                                                );
+                                                set_input_value(
+                                                    &port_input,
+                                                    p.map(|v| v.to_string())
+                                                        .unwrap_or_default(),
+                                                    window,
+                                                    app,
+                                                );
+                                                set_input_value(
+                                                    &db_input,
+                                                    d.unwrap_or_default(),
+                                                    window,
+                                                    app,
+                                                );
+                                                set_result_ok(
+                                                    &result,
+                                                    true,
+                                                    tr("已从剪贴板导入地址（URI 将随之重建）"),
+                                                );
+                                                let _ = entity.update(app, |_, cx| cx.notify());
+                                            }
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.colors.muted_foreground)
+                                        .child(tr("字段是地址的唯一来源；上方 URI 由字段自动生成（只读）")),
+                                ),
+                        );
+                        body
                     };
 
                     // 卡片 2：数据库认证（引用已保存配置 + 管理入口）。
@@ -1642,7 +1765,10 @@ impl<H: 'static> ConnectionDialogState<H> {
                 .overflow_y_scrollbar()
                 .child(tab_content);
 
-            // ---- 左侧栏（对齐原型 §2）：类型搜索 + 数据库类型列表 ----
+            // ---- 左侧栏（对齐原型 §2）：类型搜索 → 数据库类型列表 → 暂存列表 ----
+            // 顺序即优先级：新建的第一步是选类型，所以类型目录占上半区（`flex_1` 吃剩余高度）；
+            // 暂存列表是回访产物，固定高度沉在底部（条目再多也只在区域内滚动）。
+            // 顺序由窗口用例 `type_list_sits_above_staging_list` 用几何坐标钉住（换回来会红）。
             // （列表的状态同步在前面的「侧栏类型列表同步」块里——那里能在 `cx.theme()` 之前拿可变借用）
             // ---- 暂存列表：交给 `List` 组件（委托见 `draft_list.rs`；决策 #107）----
             // 行内容（徽标 / 名称 / 脏标记 / 来源短码 / 行尾删除按钮）全在委托里，
@@ -1669,6 +1795,33 @@ impl<H: 'static> ConnectionDialogState<H> {
                             .size(rems(crate::ui::ICON_SIZE_SM))
                             .text_color(theme.colors.muted_foreground),
                     ),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .v_flex()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(theme.colors.muted_foreground)
+                                .child(tr("数据库类型")),
+                        )
+                        // 类型列表占满侧栏剩余高度：`List` 自带虚拟滚动与空态（不再外套滚动容器）。
+                        .child(
+                            div()
+                                .id("conn-type-list")
+                                // kit 观测：类型列表容器（与列表行同一批 id，供窗口用例/调试定位）。
+                                .test_support()
+                                .flex_1()
+                                .min_h_0()
+                                .w_full()
+                                .when_some(type_list, |d, list| {
+                                    d.child(List::new(&list).flex_1().min_h_0())
+                                }),
+                        ),
                 )
                 .child(
                     div()
@@ -1811,53 +1964,34 @@ impl<H: 'static> ConnectionDialogState<H> {
                                         }),
                                 ),
                         )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .v_flex()
-                        .gap_1()
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(theme.colors.muted_foreground)
-                                .child(tr("数据库类型")),
-                        )
-                        // 类型列表占满侧栏剩余高度：`List` 自带虚拟滚动与空态（不再外套滚动容器）。
-                        .child(
-                            div()
-                                .id("conn-type-list")
-                                // kit 观测：类型列表容器（与列表行同一批 id，供窗口用例/调试定位）。
-                                .test_support()
-                                .flex_1()
-                                .min_h_0()
-                                .w_full()
-                                .when_some(type_list, |d, list| {
-                                    d.child(List::new(&list).flex_1().min_h_0())
-                                }),
-                        ),
-                );
+                ;
 
             // ---- Header（对齐原型 §2）：名称 + 驱动类型 + 作用域 / 备注 / URI / 提示行 ----
             // 项目栏：固定位置（备注行右侧）；作用域为「仅全局」时不参与落库 → 置灰不可编辑，
             // 保证三态切换时布局不跳动。
             // 项目栏（固定位置与宽度 17rem）：不参与项目作用域时置灰禁用；
             // 参与时为一个下拉框（项目名 + 路径左右结构；末项「＋ 新增项目」）。
-            let project_ui = {
-                let mut wrap = div()
-                    .h_flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap(rems(GAP_MD))
-                    .w(rems(PROJECT_W))
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .text_xs()
-                            .text_color(theme.colors.muted_foreground)
-                            .child(tr("项目")),
-                    );
+            // 作用域「仅项目」（默认）却没有项目根：落库目标不存在，先说清楚要选项目。
+            let needs_project = matches!(scope_from_label(&scope_sel), ConnectionScope::Project);
+            let has_project = !project_path.read(cx).value().trim().is_empty();
+            let mut wrap = div()
+                .h_flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(rems(GAP_MD))
+                .w(rems(PROJECT_W))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_xs()
+                        // 被拦过一次后，缺项目的标签与其它缺口一样染 danger 色。
+                        .text_color(if blocked_hint.get() && needs_project && !has_project {
+                            theme.colors.danger
+                        } else {
+                            theme.colors.muted_foreground
+                        })
+                        .child(tr("项目")),
+                );
                 if !includes_project {
                     // 仅全局：项目不参与落库，仍以禁用下拉占位（保持控件形态与行高一致）。
                     wrap = wrap.child(
@@ -1878,20 +2012,15 @@ impl<H: 'static> ConnectionDialogState<H> {
                             .child(Select::new(&project_sel).placeholder(tr("选择项目…"))),
                     );
                 }
-                wrap
-            };
+            let project_ui = wrap;
             // 作用域：三态分段（gpui-component `TabBar::segmented`，决策 #84）——
             // 短标签只用于显示，写库仍用全称标签（`SCOPE_SEG_LABELS` 的第二列）。
             let scope_seg = {
-                // 规则 1（决策 #110）：新建默认作用域 =「仅项目」（未显式选择时的回退值）。
-                let scope_now = if scope_sel.is_empty() {
-                    helpers::default_new_scope()
-                } else {
-                    scope_sel.as_str()
-                };
+                // 规则 1（决策 #110）：默认值已由 `scope_sel`（`scope_label_or_default`）统一给出；
+                // 这里不再单独回退，避免“显示走一条、落库走另一条”。
                 let selected = SCOPE_SEG_LABELS
                     .iter()
-                    .position(|(_, full)| *full == scope_now)
+                    .position(|(_, full)| *full == scope_sel.as_str())
                     .unwrap_or(0);
                 TabBar::new("scope-seg")
                     .segmented()
@@ -1940,7 +2069,7 @@ impl<H: 'static> ConnectionDialogState<H> {
                 badge
             };
             // ---- 最小可保存集（B2）：缺口提示 ----
-            // 判据与 `ClonedDialogState::collect` 完全一致（类型/驱动 → 名称 → 地址）：
+            // 判据与 `ClonedDialogState::collect` 完全一致（类型/驱动 → 项目 → 名称 → 地址）：
             // 点击时按**当前缺口**给理由（不再是笼统的「请填写名称、驱动与连接 URL」），
             // 被拦下一次后把缺口字段的标签染 danger 色（只换颜色，不动 Header 行高）。
             let name_now = name.read(cx).value().to_string();
@@ -1952,6 +2081,8 @@ impl<H: 'static> ConnectionDialogState<H> {
                 &name_now,
                 &url_now,
                 is_file_db,
+                needs_project,
+                has_project,
             );
             let hint_on = blocked_hint.get();
             let missing_name = hint_on && name_now.trim().is_empty();
@@ -2053,8 +2184,10 @@ impl<H: 'static> ConnectionDialogState<H> {
                                 .child(text)
                                 .into_any_element()
                         } else {
+                            // 网络型 URI 是**派生展示**：由「常规 → 连接设置」的三项字段自动生成，
+                            // 因此只读（`disabled` 恒真，不只是未选驱动时）。粘贴导入见那里的按钮。
                             Input::new(&url)
-                                .disabled(form_disabled)
+                                .disabled(true)
                                 .flex_1()
                                 .into_any_element()
                         }),
@@ -2186,6 +2319,10 @@ impl<H: 'static> ConnectionDialogState<H> {
                 let busy = busy.clone();
                 let blocked_hint = blocked_hint.clone();
                 let shared = shared.clone();
+                // 地址字段（唯一来源）：回调里 collect 需要它们；与 name/url 同样先 clone 再 move。
+                let host_for_collect = host_input.clone();
+                let port_for_collect = port_input.clone();
+                let db_for_collect = db_input.clone();
                 Rc::new(move |window, app| {
                     // 在途：忽略重复触发（按钮已置灰，快捷键也会走到这儿）。
                     if busy.get() != BusyOp::None {
@@ -2202,7 +2339,17 @@ impl<H: 'static> ConnectionDialogState<H> {
                         url = %url_now,
                         "【探针】连接对话框「测试连接」on_click 触发"
                     );
-                    let Some(input) = state.collect(&name, &driver, &url, &user, &pass, app) else {
+                    let Some(input) = state.collect(
+                        &name,
+                        &driver,
+                        &url,
+                        &host_for_collect,
+                        &port_for_collect,
+                        &db_for_collect,
+                        &user,
+                        &pass,
+                        app,
+                    ) else {
                         // 拦截文案按**当前缺口**给，并把缺口字段的标签标红（见 `blocker`）。
                         blocked_hint.set(true);
                         set_result_ok(
@@ -2358,6 +2505,9 @@ impl<H: 'static> ConnectionDialogState<H> {
                 let project_path = project_path.clone();
                 let busy = busy.clone();
                 let blocked_hint = blocked_hint.clone();
+                let host_for_collect = host_input.clone();
+                let port_for_collect = port_input.clone();
+                let db_for_collect = db_input.clone();
                 Rc::new(move |window, app| {
                     if busy.get() != BusyOp::None {
                         return;
@@ -2375,8 +2525,17 @@ impl<H: 'static> ConnectionDialogState<H> {
                     )> = Vec::new();
                     let editing = editing_id.borrow().clone();
                     if let Some(cid) = &editing {
-                        let Some(input) = state.collect(&name, &driver, &url, &user, &pass, app)
-                        else {
+                        let Some(input) = state.collect(
+                            &name,
+                            &driver,
+                            &url,
+                            &host_for_collect,
+                            &port_for_collect,
+                            &db_for_collect,
+                            &user,
+                            &pass,
+                            app,
+                        ) else {
                             blocked_hint.set(true);
                             set_result_ok(
                                 &result,

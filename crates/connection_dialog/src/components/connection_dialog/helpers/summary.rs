@@ -207,3 +207,17 @@ pub(crate) fn scope_from_label(l: &str) -> ConnectionScope {
 pub(crate) fn default_new_scope() -> &'static str {
     SCOPE_LABELS[1]
 }
+
+/// 作用域标签的**空值语义**：空 = 用户没显式选过（新建首开、空草稿、旧草稿）→ 默认「仅项目」。
+///
+/// 渲染、`collect`、草稿快照三条路**必须共用这一个口径**：此前渲染层单独回退
+/// （`scope_seg` 用 `default_new_scope()`），而 `collect` / `draft_to_save_input` 直接
+/// `scope_from_label("")` → `Global`，于是首开显示「项目」、实际落库「仅全局」。
+pub(crate) fn scope_label_or_default(label: &str) -> String {
+    let t = label.trim();
+    if t.is_empty() {
+        default_new_scope().to_string()
+    } else {
+        t.to_string()
+    }
+}

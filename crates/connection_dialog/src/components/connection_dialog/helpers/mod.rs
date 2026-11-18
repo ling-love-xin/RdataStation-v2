@@ -146,11 +146,16 @@ pub(crate) fn save_blocker(
     name: &str,
     url: &str,
     is_file_db: bool,
+    // 作用域 =「仅项目」却没有项目：落库目标不存在，先拦在保存之前。
+    needs_project: bool,
+    has_project: bool,
 ) -> Option<&'static str> {
     if !has_type {
         Some(tr("请先在左侧选择数据库类型"))
     } else if driver_value.trim().is_empty() {
         Some(tr("请选择驱动实现"))
+    } else if needs_project && !has_project {
+        Some(tr("请先选择项目（作用域为「仅项目」）"))
     } else if name.trim().is_empty() {
         Some(tr("请填写连接名称"))
     } else if url.trim().is_empty() {
@@ -162,6 +167,50 @@ pub(crate) fn save_blocker(
     } else {
         None
     }
+}
+
+// ===== 地址口径（字段权威，URI 派生）=====
+
+/// 地址的唯一口径：**结构化字段（host / port / db）是权威，URI 是派生展示**。
+///
+/// 为什么收成一处：URI 与字段曾各是一份真相源，来回编辑互相覆盖——用户改完端口再改 URI，
+/// 谁最后落笔谁赢，落库值取决于手速。现在 UI 侧 URI 只读（由本函数每帧重建），
+/// 粘贴整条连接串走「从剪贴板导入」一次性把字段填出来。
+///
+/// 规则（`rebuild_url_from_fields`）：
+/// - 文件型 / 未选驱动：地址就是路径或用户原样输入，原样返回；
+/// - 主机为空 → 原样返回（不把半成品输入抹成非法 URL）；
+/// - URI 还是空的（新表单）→ 用驱动 `type_id` 补 scheme（`postgres://` 等），
+///   否则 `rewrite_url_authority` 认不出 scheme，字段填了地址栏也永远是空的；
+/// - 端口空 → 驱动声明的默认端口；数据库空 → 去掉路径段。
+pub(crate) fn url_from_fields(
+    driver: Option<&Driver>,
+    url: &str,
+    host: &str,
+    port: &str,
+    db: &str,
+) -> String {
+    let Some(d) = driver else {
+        return url.to_string();
+    };
+    if d.is_file || host.trim().is_empty() {
+        return url.to_string();
+    }
+    let seeded;
+    let base = if url.contains("://") {
+        url
+    } else {
+        seeded = format!("{}://", d.type_id);
+        seeded.as_str()
+    };
+    crate::services::data_source_service::rebuild_url_from_fields(
+        &d.id,
+        base,
+        host,
+        port,
+        db,
+        d.default_port,
+    )
 }
 
 // ===== 标签文本 ↔ JSON（UI 逗号分隔 ⇄ 落库 / 回读）=====
@@ -193,25 +242,43 @@ pub(crate) fn tags_from_json(json: Option<&str>) -> String {
 
 /// Tab 定义（显示名, **内部 Tab 索引**）。
 ///
-/// 文件型驱动（SQLite / DuckDB）按原型隐藏「网络」Tab——内部索引保持不变，
-/// 所以 `active_tab` 与内容分支（0 常规 / 1 网络 / 2 能力 / 3 驱动属性 / 4 高级）不受影响。
+/// 内部索引保持不变（0 常规 / 1 网络 / 4 高级），收敛只发生在**呈现层**：
+/// - 「能力」(2) 与「驱动属性」(3) 是工程概念，并入「高级」页尾（见 `render` 的高级分支）；
+/// - 文件型驱动（SQLite / DuckDB）按原型隐藏「网络」。
+///
+/// 于是网络型三页、文件型两页；旧草稿里的索引 2 / 3 由 [`normalize_tab_index`]
+/// 归一到 4，不会打到一个空白页上。
 pub(crate) fn dialog_tab_defs(is_file_db: bool) -> Vec<(&'static str, usize)> {
     if is_file_db {
-        vec![("常规", 0), ("能力", 2), ("驱动属性", 3), ("高级", 4)]
+        vec![("常规", 0), ("高级", 4)]
     } else {
-        vec![
-            ("常规", 0),
-            ("网络", 1),
-            ("能力", 2),
-            ("驱动属性", 3),
-            ("高级", 4),
-        ]
+        vec![("常规", 0), ("网络", 1), ("高级", 4)]
     }
 }
 
 /// 内部 Tab 索引 → TabBar 的**可见下标**（隐藏「网络」后两者不相等，决策 #85）。
+///
+/// 已收敛的 2 / 3 先归一到「高级」，再查可见下标——否则旧草稿会落到第 0 页。
 pub(crate) fn visible_tab_index(defs: &[(&'static str, usize)], active: usize) -> usize {
-    defs.iter().position(|(_, ix)| *ix == active).unwrap_or(0)
+    let target = match active {
+        2 | 3 => 4,
+        ix => ix,
+    };
+    defs.iter().position(|(_, ix)| *ix == target).unwrap_or(0)
+}
+
+/// 内部 Tab 索引规范化（渲染入口与草稿恢复都先过这一道，避免旧索引打到空白页）。
+///
+/// - 2（能力）/ 3（驱动属性）→ 4（高级）：内容已并入高级页尾；
+/// - 文件型的 1（网络）→ 0（常规）：那一页根本不存在；
+/// - 越界 → 4，夹在最后一个真实页上。
+pub(crate) fn normalize_tab_index(active: usize, is_file_db: bool) -> usize {
+    match active {
+        1 if is_file_db => 0,
+        2 | 3 => 4,
+        ix if ix <= 4 => ix,
+        _ => 4,
+    }
 }
 
 // ===== 数据库类型 / 驱动展示（Header 去噪 + 条目类型徽标）=====
