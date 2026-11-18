@@ -1493,6 +1493,16 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；无 focus-lost 回填
   （`InputState` 没有失焦钩子），只做「有效提交即规范化」。
 
+### 2.78 值页动作可用性的接手要点（2026-11-18）
+
+- 「保存值到文件」的判据只有一份：`panel::tabs::value_can_save_to_file(col, raw)`。
+  UI（置灰 + 提示文案）与 `selected_value_payload`（返回 `None`）都读它——
+  以后要加强制条件（比如只对某个类型给保存），改这一处、两处行为同时变，
+  别在渲染分支里再写一遍判断。
+- `raw` 必须传 `delegate.row_cell_text(row, col)`（**原始格值**），不要传 `cell_text`
+  （它是展示文本，NULL 占位会被类型样式偏好改成 `∅` / `—`，`is_null_cell` 就认不出来了）。
+- 行号槽（`col == 0`）按「不是数据格」处理：上面显示的数字是视图行号，不是单元格内容。
+
 ### 2.77 计算页启用统计项持久化的接手要点（2026-11-18）
 
 - 落盘形态 = `result_panel.stats_items`（逗号分隔的稳定 id：`count,nulls,min,max,avg,sum`，

@@ -4729,6 +4729,35 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
   = **322 passed**；`cargo check -p rds-editor` = Finished；`cargo test -p rds-ui-guard`
   = 4 passed。
 
+### 8.90 值页「保存值到文件」的动作可用性（对齐 DBeaver 条件贡献，2026-11-18）
+
+**取证**：DBeaver 的「Save to file…」不是常驻按钮而是**条件贡献**的动作——
+`ContentValueManager.contributeContentActions`（`:86-99`）里先判
+`controller.getValue() instanceof DBDContent`，再判 `!content.isNull()` 才
+`manager.add(new Action(model_jdbc_save_to_file_ … saveToFile))`。也就是说**空值根本没有这个入口**，
+不是"摆着但点了没反应"。
+
+**本仓落点**：
+- 纯函数 `panel::tabs::value_can_save_to_file(col_ix, raw)`：`col_ix != 0`（`#` 行号槽不是数据格）
+  且 `!crate::export::is_null_cell(raw)`（判据复用导出侧那一份：`None` / 字面 `NULL`）。
+- `render_value_tab` 保存钮 `.disabled(!savable)`，提示随状态切换（不可用时说清原因，
+  而不是留一个点了没反应的钮）。
+- `selected_value_payload` 先用同一判据拦截：NULL 格 / 行号槽返回 `None`
+  ——**UI 与事件路径一份判据**，不会出现「钮灰了但请求还能落盘」。
+  宿主 `save_selected_value` 的兜底提示同步改成「先选中一个有值的单元格再保存值
+  （NULL / 行号槽没有内容）」。
+
+**有意保留的偏离**：DBeaver 只对 `DBDContent`（LOB / 二进制）贡献保存动作，
+本仓对任何**有值**的格子都给「保存到文件」（文本 / JSON / hex / 图片按值形态算扩展名）——
+这是能力超集，不是漏对齐（早期 §8.41 已记「本仓动作集 = 复制 + 保存至文件」）。
+
+**验证**：
+- `panel::tests::value_save_is_gated_by_null_and_row_number_slot`（真值 / 空串 / NULL / 缺列 /
+  行号槽五态）。
+- `panel::tests::null_cell_has_no_value_payload`（NULL 格载荷 `None`、有值格有载荷）。
+- `cargo test -p rds-result-panel --lib` = **324 passed**；`cargo check -p rds-editor` = Finished；
+  `cargo test -p rds-ui-guard` = 4 passed。
+
 
 
 
