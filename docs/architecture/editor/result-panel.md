@@ -4092,6 +4092,55 @@ editor results 45、ui-guard 4、check 0-0。提交 `e1b797db`。
 「已开则直接返回」保持原语义）；DBeaver 的 `showPreferencesFor` 遇到已开的对话框会
 重新选页。要改需要 workbench 侧对已开窗口再发一次「选页」信号（未做）。
 
+### 8.77 状态栏命令显隐落盘：`result_panel.hidden_status_commands`（2026-11-18）
+
+§8.74 的显隐只是面板内存态（关掉面板就丢），而 DBeaver 的这层状态是 workbench 级
+工具条配置：`plugin.xml:1381-1397` 的 `defaultVisibility` 只是**默认值**，每条命令都包在
+`org.jkiss.dbeaver.ui.toolbar.configuration.visible` 的 `visibleWhen` 里，用户勾掉/勾回后
+**重启仍保持**。本批把同一份状态落到全局偏好。
+
+**形态取舍**：不做 16 条布尔登记项，而是**一条 `KindTag::Text`**（逗号分隔的稳定 id）。
+理由：登记表的三条不变式要求「模型叶子必须登记」且「默认值一致」，16 条布尔会把
+一张显隐表拆成 16 行设置页噪声，而用户真正的写入口是状态行末端的 ▾ 菜单；
+设置页只需要「能看见、能手改」这一处。副作用是设置页显示的是 id 串而非中文名，
+已在登记项 `hint` 里把 16 个 id 全列出来。
+
+**实现**：
+- `ports::StatusCommand` 增 `id()`（kebab：`commit` / `reject` / `undo` / `redo` /
+  `edit-row` / `insert-row` / `duplicate-row` / `delete-row` / `first` / `prev` / `next` /
+  `last` / `fetch-page` / `fetch-all` / `export` / `refresh`，注释写明**不得改**——settings
+  文件里存的就是它）、`from_id()`、`parse_hidden_list()`（忽略空白项与未知 id）、
+  `hidden_list_text()`（按 `ALL` 顺序输出 ⇒ 同一集合序列化稳定，不随勾选顺序漂）。
+- 模型 `result_panel.hidden_status_commands: String`，`#[serde(default)]` =
+  `"undo,redo"`（与 `defaultVisibility=false` 的两项同集合；`fetch-page` 仍是有意常显）。
+- 登记表新增 `SettingSpec`（组「选择与操作」/ `SettingKind::Text` /
+  `default_json: "\"undo,redo\""` / `effect: NextUse` / `hint_inline`），
+  `Slot::ResultPanelHiddenStatusCommands` + `slot_for` + `slot_kind → Text` +
+  `value_by_key` / `apply_by_key` 分组臂齐备。
+- `service::result_panel`：`apply_slot` 新臂写 `normalize_command_list`（去空白、丢空项、
+  统一小写）后落盘；`SettingsService::set_result_panel_hidden_status_commands(list, cx)`
+  （同值不写盘、不 `refresh_windows`——面板自己已重绘）。**不校验 id**：id ↔ 命令的
+  对应表在面板 crate，settings 层不依赖它（依赖只向下），未知 id 由面板读取时忽略。
+- 面板：`set_hidden_status_commands(BTreeSet<StatusCommand>, cx)` = **整批替换**语义
+  （从偏好恢复），与 `set_status_command_visible`（增量 + 重绘）分工；值相同则不 notify。
+- editor：`construct.rs` 建面板时读偏好 → `parse_hidden_list` → 注入；`dispatch.rs` 的
+  `SetStatusCommandVisible` 改为「先改面板，再把面板的权威集合序列化回偏好」——
+  点一次 ▾ 菜单落一次盘。
+
+**验证**：
+- `grid::tests::status_command_ids_round_trip_and_parse_the_persisted_list`：id 唯一且
+  `from_id`/`id` 互逆、未知 id 与空项被忽略、`undo,redo` 解析成撤销 + 重做、
+  序列化按 `ALL` 顺序、往返回到同一集合。
+- `panel::tests::injected_hidden_status_commands_replace_the_default_set`：注入
+  `undo,first` 后面板只剩这两项（「重做」回到显示），状态行上首页钮消失、重做钮出现
+  ——钉住「整批替换而非与默认合并」，否则用户勾回的项下次启动会被默认集合吃掉。
+- 门禁：check（settings / result_panel / editor / workbench）0 error / 0 warning；
+  settings **37 passed**、panel **288 passed**、editor results 45、ui-guard 4。提交 `7836006e`。
+
+**已知取舍**：设置页改本项是 `NextUse`（下次创建结果集面板才生效），面板 ▾ 菜单改则
+即时生效；DBeaver 的工具条配置两处都即时。要补齐需要 settings → 活动面板的推送通道
+（现有 settings 层只在 NextUse / 各域自己的同步点用工），未做。
+
 
 ## 8. 协作纪律
 

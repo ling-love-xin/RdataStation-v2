@@ -1407,6 +1407,27 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   提交落在该分支后已用 `git branch -f main <sha>` 快进归到 `main`；两分支当时 tip 一致。
 - **验证**：settings 37 / panel 286 / editor results 45 / guard 4 / check 0-0。提交 `c398032f`。
 
+### 2.66 状态栏命令显隐落盘（2026-11-18）
+
+全文见 `result-panel.md §8.77`。接手要点：
+
+- 状态有两处：面板内存态 `hidden_status_commands: BTreeSet<StatusCommand>`（渲染用）与
+  全局偏好 `result_panel.hidden_status_commands`（落盘用，逗号分隔 kebab id）。
+  面板是内存权威，偏好是跨会话权威；**写回永远以面板集合为准**
+  （`StatusCommand::hidden_list_text`，按 `ALL` 顺序 ⇒ 稳定文本）。
+- id 红线：`StatusCommand::id()` 是落盘契约，**不得改名**；新增命令必须同时补
+  `id()` / `from_id()` / `ALL` / `menu_label()` / `default_visible()`，否则往返用例红。
+- 显隐写入口有两个：状态行末端 ▾ 菜单（`SetStatusCommandVisible` → 即时生效 + 落盘）、
+  设置页「状态栏隐藏的命令」（Text 文本，`NextUse`：下次创建面板生效）。两者写的是
+  同一条偏好，但生效时机不同（取舍见 §8.77 末段）。
+- `parse_hidden_list` 忽略未知 id / 空白项：settings 层**不做** id 校验（依赖只向下），
+  手改设置文件写错的 id 只是静默无效。
+- 默认值 `"undo,redo"` 必须与 `StatusCommand::default_visible()` 的口径一致
+  （撤销 / 重做默认隐藏，`fetch-page` 有意常显）；改默认要两边一起改，登记表默认值
+  一致性用例会拦。
+- **验证**：settings 37 / panel 288（+2 用例）/ editor results 45 / guard 4 / check 0-0。
+  提交 `7836006e`。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）
