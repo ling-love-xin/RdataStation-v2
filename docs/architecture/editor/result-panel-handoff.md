@@ -1476,6 +1476,23 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   别先怀疑约束过滤。
 
 
+### 2.73 段大小输入框的接手要点（2026-11-18）
+
+- 「段大小」的唯一权威是**面板状态** `ResultPanel.segment_rows`（默认 1000 =
+  `ui::RESULT_SEGMENT_ROWS_DEFAULT`，与编辑器 `execution::SEGMENT_ROWS` 同值）。
+  消费点只有一处：`view/host/results/copy.rs::fetch_more` 的
+  `ExecTarget::Segment { limit }`。别再回到写死常量。
+- 输入解析在 `panel::events::parse_segment_rows`：`>0` 才算有效（DBeaver 只在 `>0` 时写
+  偏好）；`0 / 负数 / 非数字 / 小数` 一律 `None` = 什么都不做。下限
+  `ui::RESULT_SEGMENT_ROWS_MIN = 1` 对齐 `ResultSetPreferences.MIN_SEGMENT_SIZE`。
+- 状态行注入方式与行数框一致（面板建 `InputState` + 订阅，`render_status_row` 取
+  `Option<&Entity<InputState>>`）；**调试选择器挂外层行**——`Input` 是 RenderOnce 组件，
+  内部元素的 id 进不了渲染观测。
+- 测试壳默认不注入 `status`，状态行整块不渲染（`show_status` 口径）：断言状态行元素前
+  先 `p.status = Some(ResultStatus { .. })`。
+- 未落地：跨会话持久化（要新增 `result_panel.segment_rows` 偏好项 + 设置页条目 +
+  构造期注入）；无 focus-lost 回填（`InputState` 没有失焦钩子），只做「有效提交即规范化」。
+
 ### 2.72 面板最大化的接手要点（2026-11-18）
 
 - 语义是「收起结果网格、面板独占整块区域」，**不是**「把右栏拖宽」：最大化是一个

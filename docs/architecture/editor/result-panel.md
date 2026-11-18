@@ -4515,6 +4515,50 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
 **已知缺口**：没有快捷键绑定（DBeaver 该命令带默认快捷键位，本仓 KeyBinding 表尚未登记）。
 
 
+### 8.85 状态行「段大小」输入框（对齐 DBeaver `resultSetSize`，2026-11-18）
+
+**取证**（`ResultSetViewer.java:2123-2153`）：
+- 状态行 config 工具条之后有一颗 `Text resultSetSize`（宽 `5 * fontHeight`），
+  tooltip = `DataEditorsResources:4 resultset_segment_size = Result-set fetch size`。
+- `focusLost`：把框里文本回填成 `getSegmentMaxRows()`（当前生效值）。
+- `ModifyListener`：`CommonUtils.toInt(text)` → 仅当 `fetchSize > 0` 才写，且
+  `< ResultSetPreferences.MIN_SEGMENT_SIZE(=1)` 抬到下限；写入的是**数据源容器偏好**
+  `ModelPreferences.RESULT_SET_MAX_ROWS` 并立即存盘。
+- 语义：**只影响之后的取数分段**，不改已加载行、不触发重查。
+
+**本仓落点**：
+- 面板状态 `segment_rows: usize`（默认 `ui::RESULT_SEGMENT_ROWS_DEFAULT = 1000`，
+  与编辑器 `execution::SEGMENT_ROWS` 同值）；常量 `RESULT_SEGMENT_ROWS_MIN = 1`
+  对齐 `MIN_SEGMENT_SIZE`。
+- 纯函数 `panel::events::parse_segment_rows(text) -> Option<usize>`：`> 0` 才算有效提交，
+  非数字 / 0 / 负数 / 小数 → `None`（不写、不动状态），口径照 DBeaver 只在 `>0` 时写。
+- 状态行中段新增「段」+ 输入框（`editor-result-segment-size`，`RESULT_SEGMENT_BOX_WIDTH = 4rem`），
+  注入口径与行数框一致（面板注入 `InputState`，`None` 时不摆）；有效输入就地规范化
+  （`007` → `7`，≈ DBeaver 失焦回填）+ 入队 `ResultRequest::SetSegmentRows`。
+- 宿主分发：`panel.set_segment_rows`（`max(MIN)` 夹取、同值不重入）。
+- **真正的消费者**：`fetch_more` 的 `ExecTarget::Segment { limit }` 改为读面板当前值
+  （过去是编辑器侧固定常量 `execution::SEGMENT_ROWS`），即「段大小」改完立刻作用于
+  下一次「取下一段 / 滚动到底续取」。
+
+**有意偏离 / 已知缺口**：
+- DBeaver 写的是**连接级**偏好（`RESULT_SET_MAX_ROWS` 存在数据源容器上），改一次对这个
+  连接的所有结果集都生效；本仓先落在**面板视图态**（同一会话内所有「取下一段」用它），
+  **跨会话不持久化**——接 `SettingsService` 需要新增 `result_panel.segment_rows` 偏好项
+  + 设置页条目 + 宿主构造期注入，属下一批（未落地，别当成已完成）。
+- DBeaver 的 focus-lost 回填做成了「有效提交即规范化」：用户敲无效文本（如 `abc`）后
+  失焦，框里会保留这段无效文本（不自动打回原值）。这是 `InputState` 没有失焦钩子的
+  直接后果，属交互细化，留目视阶段。
+- 行数框的注释仍写着「行号跳转是 backlog」，实际 `GoRow` 已接线（本批顺手未改注释文案，
+  下一批清理）。
+
+**验证**：
+- `panel::tests::segment_rows_parse_accepts_positive_only`（8 路：正常 / 空白 / 1 / 0 /
+  负数 / 非数字 / 空串 / 小数）。
+- `panel::tests::set_segment_rows_clamps_to_the_minimum`（默认值 / 改值 / 0 抬到下限）。
+- `panel::tests::status_row_shows_the_segment_size_input`（注入 status 后状态行摆出段框）。
+
+
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
