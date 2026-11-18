@@ -488,7 +488,10 @@ impl ResultPanel {
     /// 缓存聚合结果、或把聚合下推成服务端 GROUP BY 查询，属后续优化项（记在文档）。
     pub(crate) fn render_right_sidebar(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
-        let show = self.show_value_sidebar;
+        // 【R5 面板最大化】最大化时右栏**必定挂载**（网格已收起，右栏就是整块区域），
+        // 与开合开关解耦：`show_value_sidebar` 原值保留，还原后回到用户原本的开合。
+        let maximized = self.panel_maximized;
+        let show = self.show_value_sidebar || maximized;
         // 【2026-11-18 对齐 CTabFolder】横 tab 栏**列出全部六页**，点页签即切页：
         // DBeaver 的右栏是**一个**页签夹 `CTabFolder panelFolder`（`ResultSetViewer.java:1430-1478`），
         // 六页都作为页签常驻在其中（`addPanel` 里 `new CTabItem(panelFolder, SWT.CLOSE)`），
@@ -570,7 +573,10 @@ impl ResultPanel {
             .overflow_hidden()
             .bg(theme.colors.sidebar)
             .debug_selector(|| "editor-result-value-sidebar".to_string());
-        wrapper = if vertical {
+        wrapper = if maximized {
+            // 最大化：右栏独占整块区域（横排满宽 / 竖排满高），不接受拖拽尺寸
+            wrapper.w_full().h_full()
+        } else if vertical {
             wrapper
                 .w_full()
                 .h(self.right_sidebar_height)
@@ -602,9 +608,12 @@ impl ResultPanel {
             )
             // 【R5 可拖分栏】手柄贴分栏边缘（inside Leading）：横排是左边缘、竖排是顶边；
             // vendor 的 band 是绝对定位的细条，不占内容流；尺寸改动由拖拽请求回面板状态。
-            .child(self.render_right_sidebar_resize())
+            // 最大化时没有可拖的分栏，手柄不挂。
+            .children((!maximized).then(|| self.render_right_sidebar_resize()))
         });
-        if vertical {
+        // 最大化 / 竖排都不走宽度补间（`EffectTransition` 只有 width 补间，没有 height）：
+        // 直接落地，不做开合动画。
+        if vertical || maximized {
             return wrapper.into_any_element();
         }
         EffectTransition::new(Duration::from_millis(anim_ms))

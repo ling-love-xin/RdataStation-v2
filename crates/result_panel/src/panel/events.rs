@@ -874,6 +874,21 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【R5 面板最大化】收起 / 还原结果网格（对齐 DBeaver `togglePanelsMaximize`
+    /// `ResultSetViewer.java:1551-1557` = `viewerSash.hideUp()/showUp()`）。
+    ///
+    /// 语义是**独占整块结果集区域**，不是「把右栏拖宽」：最大化期间网格不渲染、
+    /// 右栏满宽（横排满宽 / 竖排满高），拖拽手柄也不挂（没有可拖的分栏了）。
+    /// 面板总开关（`show_value_sidebar`）保持原值——还原后回到用户原本的开合态。
+    pub fn toggle_panel_maximize(&mut self, cx: &mut Context<Self>) {
+        self.panel_maximized = !self.panel_maximized;
+        // 退出最大化时把拖拽标记一并清掉（最大化期间没有拖拽手柄可拖）
+        if self.panel_maximized {
+            self.right_sidebar_dragging = false;
+        }
+        cx.notify();
+    }
+
     /// 【R5 比例持久化】初值注入：面板构造后由宿主把全局偏好项（px）写进来。
     /// 复用 `clamp_right_sidebar_width`（`dx = 0` 时它就是"夹取当前值"），
     /// 保证与拖拽路径同一套上下限，不在这里再写一份常量比较。
@@ -1659,8 +1674,11 @@ impl ResultPanel {
 /// 生成（`:1559-1588`）：全部面板的 CHECK 条目 → 分隔 → `CMD_TOGGLE_MAXIMIZE` →
 /// `CMD_ACTIVATE_PANELS` → 分隔 → `CMD_TOGGLE_PANELS`（面板总开关）→ `CMD_TOGGLE_LAYOUT`。
 ///
-/// 本仓口径「能力没有就不摆」：`MAXIMIZE`（面板最大化）与 `ACTIVATE_PANELS`（把焦点交给面板）
-/// 还没有落地端口，故不列（不造点了没反应的条目）；其余四项都有真端口。
+/// 顺序照 `fillPanelsMenu`（`ResultSetViewer.java:1559-1588`）：六页 → 分隔 →
+/// `CMD_TOGGLE_MAXIMIZE` → `CMD_ACTIVATE_PANELS` → 分隔 → `CMD_TOGGLE_PANELS` → `CMD_TOGGLE_LAYOUT`。
+///
+/// 本仓口径「能力没有就不摆」：`ACTIVATE_PANELS`（把焦点交给面板）还没有落地端口，故不列
+/// （不造点了没反应的条目）；`MAXIMIZE` 本批已落地真端口。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PanelViewItem {
     /// 一页（勾选态 = 当前页；点击切到该页）
@@ -1671,6 +1689,8 @@ pub(crate) enum PanelViewItem {
     PanelsToggle,
     /// 布局方向（横排 / 竖排，≈ `CMD_TOGGLE_LAYOUT`）
     LayoutToggle,
+    /// 面板最大化（≈ `CMD_TOGGLE_MAXIMIZE`：收起结果网格，让面板占满结果集区域）
+    MaximizeToggle,
 }
 
 /// 右栏六页的**规范顺序**（页签条的左右顺序 / 索引映射 / 视图菜单条目共用一份）。
@@ -1702,12 +1722,18 @@ pub(crate) fn right_tab_from_index(index: usize) -> RightTab {
     right_tabs().get(index).copied().unwrap_or(RightTab::Browser)
 }
 
-/// 「视图菜单」条目清单（顺序照 `fillPanelsMenu`）：六页 → 分隔 → 面板总开关 → 布局方向
+/// 「视图菜单」条目清单（顺序照 `fillPanelsMenu:1559-1588`）：
+/// 六页 → 分隔 → 最大化 → 分隔 → 面板总开关 → 布局方向
 pub(crate) fn panel_view_menu_items() -> Vec<PanelViewItem> {
     let mut items: Vec<PanelViewItem> = right_tabs()
         .into_iter()
         .map(PanelViewItem::Page)
         .collect();
+    items.push(PanelViewItem::Separator);
+    // `CMD_TOGGLE_MAXIMIZE` 在原版里紧跟第一条分隔线（`:1578`），`CMD_ACTIVATE_PANELS` 之后
+    // 还有一条分隔线（`:1582`）再放「面板总开关 / 布局方向」——本仓没有 actiave-panels 端口，
+    // 但两条分隔线照留，菜单段位与那边一致。
+    items.push(PanelViewItem::MaximizeToggle);
     items.push(PanelViewItem::Separator);
     items.push(PanelViewItem::PanelsToggle);
     items.push(PanelViewItem::LayoutToggle);
@@ -1744,6 +1770,7 @@ pub(crate) fn panel_view_item_label(
     item: PanelViewItem,
     panels_visible: bool,
     vertical_layout: bool,
+    panel_maximized: bool,
 ) -> String {
     match item {
         PanelViewItem::Page(tab) => right_tab_label(tab).to_string(),
@@ -1760,6 +1787,15 @@ pub(crate) fn panel_view_item_label(
                 "切换为横排布局（左右分栏）".to_string()
             } else {
                 "切换为竖排布局（上下分栏）".to_string()
+            }
+        }
+        // 最大化是「独占整块结果集区域」（DBeaver `togglePanelsMaximize` =
+        // `viewerSash.hideUp()/showUp()`），文案报动作
+        PanelViewItem::MaximizeToggle => {
+            if panel_maximized {
+                "还原结果网格".to_string()
+            } else {
+                "面板最大化（收起结果网格）".to_string()
             }
         }
     }

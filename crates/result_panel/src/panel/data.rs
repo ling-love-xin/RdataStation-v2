@@ -210,6 +210,10 @@ pub struct ResultPanel {
     /// 默认 `false` = 网格左 / 右栏右）。为真时主体改竖排：网格在上、右栏满宽在下，
     /// 拖拽手柄改贴右栏顶边、位移按纵向算（`right_sidebar_height` 生效）。
     pub(crate) vertical_layout: bool,
+    /// 【R5 面板最大化】为真时收起结果网格、右栏独占整块结果集区域（对齐 DBeaver
+    /// `CMD_TOGGLE_MAXIMIZE` → `togglePanelsMaximize` = `viewerSash.hideUp()`）。
+    /// 与 `show_value_sidebar` 正交：开合态原样保留，还原后回到用户原本的开合。
+    pub(crate) panel_maximized: bool,
     /// 【R5 布局方向切换】竖排时右栏高度（默认 `RESULT_SIDEBAR_RIGHT_HEIGHT` = 240px）。
     /// **不进全局偏好项**：偏好项 `result_panel.sidebar_width` 是横向 px 宽度口径，
     /// 纵向高度共用一个值会互相串（偏离口径见 result-panel.md §8.46.2）。

@@ -1424,6 +1424,56 @@ fn column_browser_draws_the_comment_line_below_the_name(cx: &mut gpui_kit::TestA
     );
 }
 
+/// 【R5 面板最大化】对齐 DBeaver `CMD_TOGGLE_MAXIMIZE` → `togglePanelsMaximize`
+/// （`ResultSetViewer.java:1551-1557` = `viewerSash.hideUp()/showUp()`）：
+/// 最大化时**网格整块不渲染**，右栏独占区域；再切回网格回来。
+#[gpui_kit::test]
+fn maximize_panel_hides_the_grid_and_keeps_the_sidebar(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 基线：网格在、右栏在
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-main-grid").is_some(),
+        "基线应渲染结果网格"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-value-sidebar").is_some(),
+        "基线应渲染右栏"
+    );
+
+    // 最大化：网格整块消失，右栏仍在（独占区域）
+    cx.update(|_, app| panel.update(app, |p, cx| p.toggle_panel_maximize(cx)));
+    assert!(
+        cx.update(|_, app| panel.read(app).panel_maximized),
+        "最大化标记应翻转"
+    );
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-main-grid").is_none(),
+        "最大化时网格不应再渲染"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-value-sidebar").is_some(),
+        "最大化时右栏必须还在"
+    );
+
+    // 还原：网格回来，开合态（`show_value_sidebar`）不被最大化改动
+    cx.update(|_, app| panel.update(app, |p, cx| p.toggle_panel_maximize(cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-main-grid").is_some(),
+        "还原后网格应重新渲染"
+    );
+    assert!(
+        cx.update(|_, app| panel.read(app).show_value_sidebar),
+        "最大化不应改动右栏开合态"
+    );
+}
+
 /// 【R3 分组页】「移除分组列」的可用性（纯函数）：对齐 DBeaver
 /// `GroupingColumnsContainer.canColumnBeRemoved`（`:92-94`）——选中列在分组键里、
 /// 且移除后仍至少剩一列才可用；删到零归「清空分组」管。
@@ -2143,7 +2193,8 @@ fn right_panel_view_menu_lists_pages_then_the_two_toggles(cx: &mut gpui_kit::Tes
 
     cx.update(gpui_kit::init);
 
-    // ① 条目顺序：六页 → 分隔 → 面板总开关 → 布局方向
+    // ① 条目顺序：六页 → 分隔 → 最大化 → 分隔 → 面板总开关 → 布局方向
+    //    （对齐 DBeaver `fillPanelsMenu:1559-1588` 的两条分隔线段位）
     let items = super::events::panel_view_menu_items();
     let pages: Vec<RightTab> = items
         .iter()
@@ -2164,11 +2215,13 @@ fn right_panel_view_menu_lists_pages_then_the_two_toggles(cx: &mut gpui_kit::Tes
         ],
         "面板勾选项的顺序应与竖条 / 页签同一份（列浏览器在前）"
     );
-    assert_eq!(items.len(), 9, "六页 + 分隔 + 面板开关 + 布局方向");
+    assert_eq!(items.len(), 11, "六页 + 分隔 + 最大化 + 分隔 + 面板开关 + 布局方向");
     assert_eq!(items[6], super::events::PanelViewItem::Separator);
-    assert_eq!(items[7], super::events::PanelViewItem::PanelsToggle);
-    assert_eq!(items[8], super::events::PanelViewItem::LayoutToggle);
-    // 没有最大化 / 激活面板：本仓没有端口，不摆点了没反应的条目
+    assert_eq!(items[7], super::events::PanelViewItem::MaximizeToggle);
+    assert_eq!(items[8], super::events::PanelViewItem::Separator);
+    assert_eq!(items[9], super::events::PanelViewItem::PanelsToggle);
+    assert_eq!(items[10], super::events::PanelViewItem::LayoutToggle);
+    // 没有激活面板（`CMD_ACTIVATE_PANELS`）：本仓没有端口，不摆点了没反应的条目
     assert!(
         items
             .iter()
@@ -2178,29 +2231,40 @@ fn right_panel_view_menu_lists_pages_then_the_two_toggles(cx: &mut gpui_kit::Tes
                     super::events::PanelViewItem::Separator
                         | super::events::PanelViewItem::PanelsToggle
                         | super::events::PanelViewItem::LayoutToggle
+                        | super::events::PanelViewItem::MaximizeToggle
                 )),
-        "菜单里只应有四种条目"
+        "菜单里只应有五类条目"
     );
 
-    // ② 文案：页用页面名，两个开关报「点了会做什么」
+    // ② 文案：页用页面名，开关报「点了会做什么」
     let label = super::events::panel_view_item_label;
     let page = super::events::PanelViewItem::Page(RightTab::Stats);
-    assert_eq!(label(page, true, false), "计算");
+    assert_eq!(label(page, true, false, false), "计算");
     let panels = super::events::PanelViewItem::PanelsToggle;
     assert_eq!(
-        label(panels, true, false),
+        label(panels, true, false, false),
         "收起结果面板",
         "面板可见时报「收起」"
     );
     assert_eq!(
-        label(panels, false, false),
+        label(panels, false, false, false),
         "展开结果面板",
         "面板收起时报「展开」"
     );
     let layout = super::events::PanelViewItem::LayoutToggle;
-    assert_eq!(label(layout, true, false), "切换为竖排布局（上下分栏）");
-    assert_eq!(label(layout, true, true), "切换为横排布局（左右分栏）");
-    assert_eq!(label(super::events::PanelViewItem::Separator, true, false), "");
+    assert_eq!(label(layout, true, false, false), "切换为竖排布局（上下分栏）");
+    assert_eq!(label(layout, true, true, false), "切换为横排布局（左右分栏）");
+    assert_eq!(
+        label(super::events::PanelViewItem::Separator, true, false, false),
+        ""
+    );
+    // 最大化报动作：未最大化 → 去最大化；已最大化 → 还原
+    let maximize = super::events::PanelViewItem::MaximizeToggle;
+    assert_eq!(
+        label(maximize, true, false, false),
+        "面板最大化（收起结果网格）"
+    );
+    assert_eq!(label(maximize, true, false, true), "还原结果网格");
 
     // ③ 六页的页内工具条都挂上了视图菜单（id = `<页工具条 id>-view-menu`）
     let (panel, cx) = panel_harness(cx);

@@ -312,6 +312,11 @@ impl EditorHostPanel {
             ResultRequest::ToggleVerticalLayout => self
                 .result_panel
                 .update(cx, |p, cx| p.toggle_vertical_layout(cx)),
+            // 【R5 面板最大化】收起 / 还原结果网格（DBeaver `CMD_TOGGLE_MAXIMIZE`）：
+            // 纯面板视图状态，不落盘、不动网格数据
+            ResultRequest::TogglePanelMaximize => self
+                .result_panel
+                .update(cx, |p, cx| p.toggle_panel_maximize(cx)),
             // 【侧栏】清单行眼睛：切换该列隐藏 / 显示（网格是另一实体，
             // update 它安全；面板再 notify 重画列浏览器的隐藏标记）
             ResultRequest::ToggleColumnVisibility(column) => {

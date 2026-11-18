@@ -1167,9 +1167,21 @@ impl ResultPanel {
             } else {
                 main_area.h_flex().items_stretch()
             };
+            // 【R5 面板最大化】对齐 DBeaver `togglePanelsMaximize` = `viewerSash.hideUp()`：
+            // 最大化期间**网格整块不渲染**，右栏独占 main_area（横排满宽 / 竖排满高）。
+            // 注意这里不是「把右栏拖宽」——开合态（`show_value_sidebar`）保持原值，
+            // 还原后回到用户原本的开合。
+            let maximized = self.panel_maximized;
             row = row.child(
                 main_area
-                    .child(div().flex_1().min_w_0().min_h_0().child(result_pane))
+                    .children((!maximized).then(|| {
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .min_h_0()
+                            .debug_selector(|| "editor-result-main-grid".to_string())
+                            .child(result_pane)
+                    }))
                     .child(self.render_right_sidebar(cx)),
             );
             // 【右缘竖条】三态开关控制可见性（`edge_bar_visible`）；有可复制语义

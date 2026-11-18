@@ -214,6 +214,9 @@ pub enum ResultRequest {
     /// 【R5 布局方向切换】右栏在右侧 / 下方之间切换（对齐 DBeaver
     /// `CMD_TOGGLE_LAYOUT` → `toggleVerticalLayout`）：纯视图状态，不落盘。
     ToggleVerticalLayout,
+    /// 【R5 面板最大化】收起 / 还原结果网格（对齐 DBeaver `CMD_TOGGLE_MAXIMIZE`
+    /// → `togglePanelsMaximize`）：纯视图状态，不落盘。
+    TogglePanelMaximize,
     /// 左栏列浏览器清单行眼睛：切换该列隐藏 / 显示（宿主 update 网格 + 面板）
     ToggleColumnVisibility(usize),
     /// 【P2-3】列浏览器多选批量显隐：把 `columns`（数据列序）整批设为隐藏 / 显示

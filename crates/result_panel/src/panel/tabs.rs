@@ -579,6 +579,7 @@ impl ResultPanel {
         let current: RightTab = self.right_tab;
         let panels_visible = self.panels_visible();
         let vertical_layout = self.vertical_layout;
+        let panel_maximized = self.panel_maximized;
         let items = panel_view_menu_items();
         let menu_id = format!("{debug_id}-view-menu");
         let button = Button::new(menu_id.clone())
@@ -604,6 +605,7 @@ impl ResultPanel {
                                     item,
                                     panels_visible,
                                     vertical_layout,
+                                    panel_maximized,
                                 ))
                                 .checked(tab == current)
                                 .on_click(move |_, _window, app| {
@@ -620,6 +622,7 @@ impl ResultPanel {
                                     item,
                                     panels_visible,
                                     vertical_layout,
+                                    panel_maximized,
                                 ))
                                 .checked(panels_visible)
                                 .on_click(move |_, _window, app| {
@@ -634,9 +637,25 @@ impl ResultPanel {
                                     item,
                                     panels_visible,
                                     vertical_layout,
+                                    panel_maximized,
                                 ))
                                 .on_click(move |_, _window, app| {
                                     queue.request(ResultRequest::ToggleVerticalLayout, app);
+                                }),
+                            );
+                        }
+                        PanelViewItem::MaximizeToggle => {
+                            let queue = queue.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(panel_view_item_label(
+                                    item,
+                                    panels_visible,
+                                    vertical_layout,
+                                    panel_maximized,
+                                ))
+                                .checked(panel_maximized)
+                                .on_click(move |_, _window, app| {
+                                    queue.request(ResultRequest::TogglePanelMaximize, app);
                                 }),
                             );
                         }

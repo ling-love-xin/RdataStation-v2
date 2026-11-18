@@ -231,6 +231,8 @@ impl ResultPanel {
             right_sidebar_dragging: false,
             // 【R5 布局方向切换】默认横排（网格左 / 右栏右），与 DBeaver `verticalLayout = false` 一致
             vertical_layout: false,
+            // 【R5 面板最大化】默认不最大化（网格正常显示）
+            panel_maximized: false,
             right_sidebar_height: px(crate::ui::RESULT_SIDEBAR_RIGHT_HEIGHT * 16.0),
             compare_active: 0,
             compare_toolbar: None,
