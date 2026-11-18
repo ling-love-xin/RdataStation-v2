@@ -1058,6 +1058,10 @@ impl ConnectionDialogHost for Shared {
         self.notify_host(cx);
     }
 
+    fn show_plugin_manager(&self, window: &mut Window, cx: &mut App) -> bool {
+        Shared::show_plugin_manager(self, window, cx)
+    }
+
     fn apply_saved_connections(&self, items: Vec<ConnectionItem>, notice: String, cx: &mut App) {
         *self.connections.borrow_mut() = items;
         self.refresh_mock_connections(cx);
@@ -1071,7 +1075,7 @@ mod tests {
     // 注意：不通配导入（`use super::*` / `use gpui_kit::*` 会把 gpui 的 `test` 宏带入作用域）。
     use std::path::PathBuf;
 
-    use super::{OpenInEditorRequest, Shared, append_sql};
+    use super::{append_sql, OpenInEditorRequest, Shared};
     use crate::panels::RevealTarget;
     use crate::view::ConnectionItem;
 

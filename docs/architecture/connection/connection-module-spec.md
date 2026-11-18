@@ -25,7 +25,7 @@
 
 | 项    | 内容                                                                                                 |
 | ---- | -------------------------------------------------------------------------------------------------- |
-| 一句话  | 把「一个数据源该怎么连」做完整：选类型 / 驱动 → 填连接信息（五 Tab）→ 引用凭据与网络档案 → 测试连接 → 暂存 / 批量提交 → 运行时连接与隧道，全程一个对话框 + 一个服务层   |
+| 一句话  | 把「一个数据源该怎么连」做完整：选类型 / 驱动 → 填连接信息（三页 Tab：常规 / 网络 / 高级）→ 引用凭据与网络档案 → 测试连接 → 暂存 / 批量提交 → 运行时连接与隧道，全程一个对话框 + 一个服务层   |
 | 交付状态 | M3 主线完成（2026-09-13）；保存语义重构完成（2026-10-02，提交 `b2e07859`）                                             |
 | 权威文档 | `docs/architecture/connection/connection-dialog-architecture.md`（§14 = 已知问题唯一权威）                   |
 | 主要文件 | 见 §3 代码地图                                                                                          |
@@ -55,16 +55,16 @@
 
 ## 3. 代码地图
 
-### 3.1 `crates/workbench/src/components/connection_dialog/`（对话框主体，8 文件）
+### 3.1 `crates/connection_dialog/src/components/connection_dialog/`（对话框主体，8 文件）
 
 
 
 | 文件                  | 职责                                                                                                                                                                                                                              |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `mod.rs`            | 对话框入口：`ConnectionDialog` 组件、`open_connection_dialog` 宿主 API、`saved_result`/`conn_display_name`（`#[allow(dead_code)]` 保留给 helpers 单测）                                                                                            |
-| `state.rs`          | `ConnectionDialogState`：全部表单字段（gpui `Rc<Entity>` 模型）、五 Tab 状态、`collect()`（表单→`DataSourceSaveInput`）、`draft_to_save_input()`（草稿→`DataSourceSaveInput`）、`cloned_state`/`ClonedDialogState`（批量提交快照）、`#[cfg(test)]` 3 项单测           |
+| `state.rs`          | `ConnectionDialogState`：全部表单字段（gpui `Rc<Entity>` 模型）、三页 Tab 状态、`collect()`（表单→`DataSourceSaveInput`）、`draft_to_save_input()`（草稿→`DataSourceSaveInput`）、`cloned_state`/`ClonedDialogState`（批量提交快照）、`#[cfg(test)]` 3 项单测           |
 | `staging.rs`        | `ConnectionDraft` 草稿模型、`capture_draft`/`apply_draft`（表单↔草稿）、`staging_persist`/`staging_restore`/`staging_flush`（持久化）、`staging_clear`/`remove_drafts_at`（保存并退出的清空 / 部分失败）、`draft_dirty`（脏标记）、`templates_export/import`（模板，UI 暂缓） |
-| `render.rs`         | 全部渲染 + 交互：Header / 五 Tab / 暂存列表 / 类型树 /footer 按钮；`do_stage`（保存 = 追加暂存条目 + 自动新建空草稿，规则 2 已实现 2026-10-02）、`do_batch_commit`（保存并退出 = 批量提交）、`do_test`（测试连接）、`set_result`/`set_result_ok`（结果行分级）、`BatchOutcome`（\~2000-2272 行）                                          |
+| `render.rs`         | 全部渲染 + 交互：Header / 三页 Tab / 暂存列表 / 类型树 /footer 按钮；`do_stage`（保存 = 追加暂存条目 + 自动新建空草稿，规则 2 已实现 2026-10-02）、`do_batch_commit`（保存并退出 = 批量提交）、`do_test`（测试连接）、`set_result`/`set_result_ok`（结果行分级）、`BatchOutcome`（\~2000-2272 行）                                          |
 | `helpers.rs`        | `dialog_row_height`、`save_blocker`（缺项拦截）、`section_header`（w\_full 左对齐）、`strip_file_db_noise`、`create_new_db_file`（文件型按驱动分派初始化）                                                                                                  |
 | `draft_list.rs`     | 暂存列表 UI：行渲染、脏标记 `●`、**同步指纹**（行数 + 光标 + 每条 saved\_id / 名称 + 光标位实时表单值，解决 "填名称列表不更新"）                                                                                                                                              |
 | `type_tree.rs`      | 左侧类型目录 UI + 同步指纹（目录 / 过滤词 / 选中项）                                                                                                                                                                                                |
@@ -381,7 +381,7 @@ pub struct ConnectionDraft {
 
 ### 8.1 新增类型动态渲染机制（MVP 设计审查，2026-10-03，不排期）
 
-* **结论**：五 Tab 内容**全部由 `DriverDescriptor` 声明派生**（`registry/descriptors.rs` builder），UI 层零类型写死——新增类型注册驱动后 UI 无需改动。
+* **结论**：Tab 页内容**全部由 `DriverDescriptor` 声明派生**（2026-11-18 起收敛为三页）（`registry/descriptors.rs` builder），UI 层零类型写死——新增类型注册驱动后 UI 无需改动。
 * **Tab 派生映射**（`render.rs` 实证）：常规 = `fields[]` 表单 + SSL 卡（`supported_auth_types` 含 `ssl` 才显示）、文件型整卡变形（只剩「连接设置 + 组织」）；网络 = `is_file` 门控（文件型隐藏，网络型显示档案引用 + 拓扑预览）；能力 = `capabilities` 只读（12 键标签表）；驱动属性 = `driver_properties` key-value 透传；高级 = 环境（策略套）+ 单连接覆盖 + DuckDB 加速（网络库 = 本地加速 + 跨源、文件库 = 仅联邦源，render.rs:960 注释）。
 * **新类型四道闸**（真正成本所在，非 UI）：
 
@@ -445,7 +445,7 @@ pub struct ConnectionDraft {
 | -------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `README.md`                            | 模块入口：特点 / 边界 / 代码地图 / 硬约束 / 文档地图 / 下一步                                                                        |
 | `connection-dialog-architecture.md`    | **唯一权威设计**：分层 / 概念模型 / 状态所有权 / 数据流 / 决策表 / 测试策略 / 实现映射 / 数据字典 / 错误降级 / 性能安全 / 成熟度 /§14 待办 / 数据来源审计 / M3↔M4 契约 |
-| `connection-prototype-design.md`       | 原型设计：设计基准 / 布局 / 五 Tab / 关键交互 / 主题映射 / GPUI 落点 / 开放问题                                                         |
+| `connection-prototype-design.md`       | 原型设计：设计基准 / 布局 / Tab 页 / 关键交互 / 主题映射 / GPUI 落点 / 开放问题                                                         |
 | `connection-user-guide.md`             | 使用指南：能做 / 入口 / 导览 / 流程 / Tab 速览 / 快捷键 / 草稿安全 / FAQ/USIT 清单                                                    |
 | `connection-crate-interfaces.md`       | connection crate 接口与接线                                                                                        |
 | `connection-dev-plan.md`               | 开发方案（Phase A/B/C + 变更史）                                                                                       |

@@ -133,6 +133,19 @@ pub(crate) fn dialog_row_height(viewport_h_rem: f32) -> Rems {
     rems(crate::ui::DIALOG_BODY_HEIGHT.min(budget).max(16.))
 }
 
+/// 对话框左右留给遮罩的余量（rem）：窗口比设计宽度窄时，先把这圈余量让出去。
+const DIALOG_SIDE_MARGIN: f32 = 2.;
+
+/// 对话框宽度（**rem 值**）：设计基准 [`crate::ui::DIALOG_EDIT_WIDTH`] 与窗口可用宽度取小。
+///
+/// 与 [`dialog_row_height`] 同一个理由：设计宽度 61.25rem 是按 980px 定的，
+/// 小屏（或高缩放）上窗口逻辑宽度可能只有 700px——固定宽度会让对话框左右溢出、
+/// 「保存并退出」被推到屏幕外。下限 32rem：再窄也只是内容区内挤，不压成一条缝。
+pub(crate) fn dialog_width(viewport_w_rem: f32) -> Rems {
+    let budget = viewport_w_rem - DIALOG_SIDE_MARGIN;
+    rems(crate::ui::DIALOG_EDIT_WIDTH.min(budget).max(32.))
+}
+
 // ===== 最小可保存集（缺口提示）=====
 
 /// 还差什么才能测试 / 保存：按顺序给出**第一个**缺口，全齐则 `None`。
@@ -323,6 +336,21 @@ pub(crate) fn driver_menu_label(driver: &Driver) -> String {
 /// 实现收敛在 `shared::utils::string`（插件管理页的驱动标签也用它）：两处显示的短码
 /// 必须是同一个词，否则「插件声明的驱动」与「下拉里的驱动」还是对不上号。
 pub(crate) use shared::utils::string::plugin_short_code;
+
+/// 驱动实现类型的说法（信息条用）：**按 `drivers.driver_kind` 说话，不一律叫「原生连接」**。
+///
+/// 为什么不能硬编码：`sidecar` 驱动是插件进程、`native` 是内核内置客户端库，
+/// 两者排障路径完全不同（前者看插件日志、后者看连接参数）。信息条说错，
+/// 用户会往错的方向查。
+pub(crate) fn driver_kind_label(kind: &str) -> &'static str {
+    match kind.trim() {
+        "native" => tr("原生连接"),
+        "sidecar" => tr("插件驱动"),
+        "file" => tr("文件型"),
+        "" => tr("未声明实现类型"),
+        _ => tr("其它实现"),
+    }
+}
 
 /// 解析驱动声明的属性默认值（`drivers.driver_properties`：SQL 对象 → **按键排序**的键值列表）。
 ///

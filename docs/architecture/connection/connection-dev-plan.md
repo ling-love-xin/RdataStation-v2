@@ -89,7 +89,7 @@
 | --- | --- | --- | --- |
 | A1 | 模型：`DataSource` / `SaveInput` / `TestResult{success,message,latency_ms,version}`，字段对齐 v1 全局扩展 + `G_` 前缀 | `crates/connection/src/model.rs` | 编译通过；字段与 global_connections 列一一对应 |
 | A2 | 服务：`DataSourceService`——类型/驱动查询（driver_store）、认证/网络/环境配置读取（stores）、`test_connection`（独立会话，复用 ConnectionFactory + 探测版本）、`save/update/delete`（global_db + AES 凭据 + Secret 联动） | `crates/connection/src/service.rs`（实际：`crates/workbench/src/services/data_source_service.rs`——connection 不得反向依赖 engine） | 集成测试：真实 PostgreSQL/DuckDB 新增→测试→保存→回读→更新→删除 |
-| A3 | 对话框骨架：标题栏/左侧栏（搜索+暂存+类型树）/Header（名称+驱动类型+作用域+备注+URI 编辑）/常规 Tab（动态表单+认证+**连接安全 SSL**）/测试/保存/取消 | `crates/connection/src/connection_dialog.rs`（实际：`crates/workbench/src/components/connection_dialog.rs`） | UI 手动走通全流程；配置按 config_schema 渲染 |
+| A3 | 对话框骨架：标题栏/左侧栏（搜索+暂存+类型树）/Header（名称+驱动类型+作用域+备注+URI 编辑）/常规 Tab（动态表单+认证+**连接安全 SSL**）/测试/保存/取消 | `crates/connection/src/connection_dialog.rs`（实际：`crates/connection_dialog/src/components/connection_dialog.rs`） | UI 手动走通全流程；配置按 config_schema 渲染 |
 | A4 | panels/ 5 字段表单退役，改弹对话框；列表刷新走新服务 | `crates/workbench/src/panels/`、`workspace_loader.rs` | 空态/列表入口可弹框；保存后列表即时刷新 |
 | A5 | `update_global_connection` 已有，补齐 `test_connection` 探测 SQL（按 driver） | `engine`（复用现有管道） | 返回 version/latency 正确 |
 | A6 | 文档验收：`cargo check --workspace` 零告警；无 unwrap/expect；架构红线复核 | 全仓 | 全绿 |
@@ -116,7 +116,7 @@
 | C5 | **多连接暂存列表（连续编辑）**：草稿条目新增 / 切换 / 删除（删至最后一条自动补位）、关闭对话框不丢失；**保存语义（2026-10-02 用户决策）**：「保存」= 仅暂存草稿箱（不落库）；「保存并退出」= 批量提交暂存栏全部条目（编辑条目 update / 新建草稿 save，空草稿跳过）→ 全成功清空草稿箱并关闭，中途失败已成功条目移出、其余保留；参考 v1 v5 §8（`saved-section`）与原型设计 §2.2｜✅ 2026-09-11 暂存快照实现；✅ 2026-10-02 保存语义重构（`render.rs do_stage / do_batch_commit`、`staging.rs staging_clear / remove_drafts_at`、`state.rs draft_to_save_input`；`connection_staging` 7 项 / `connection_multi_save` 7 项 / lib 38 项全绿） | 对话框侧栏 + `ConnectionDialogState` 草稿快照 | 一个对话框内可连续暂存多个连接；只有保存并退出才批量落库并清空草稿箱；切换不丢字段；关闭对话框草稿保留 |
 | C6 | **草稿跨会话持久化（不存密码）**：迁移 `global/020` + `connection_draft_store`（`list` / `replace_all`）；`staging_restore` 首次打开恢复、`staging_persist` 变更与关闭时落库｜✅ 2026-09-11 已实现（`connection_drafts_persist.rs` 跨会话恢复 + 密码不落库） | `crates/engine/migrations/global/020_add_connection_drafts.sql`、`engine::persistence::connection_draft_store`、`connection_dialog/staging.rs` | 重启后草稿与表单恢复；表无 password 列；未初始化全局单例的进程不写库 |
 | C7 | **对话框 UX 收尾**：「保存并退出」（批量提交）/ 条目脏标记`●` / 来源短码`P/G/GP` / 键盘导航（Ctrl+Enter = 暂存 / Ctrl+T / ↑↓）｜✅ 2026-09-11 按钮与快捷键；✅ 2026-10-02「保存并关闭」→「保存并退出」批量语义 | `connection_dialog/{render,staging}.rs`、`commands.rs`、`app/main.rs` | 按钮与快捷键行为一致；输入框内 Ctrl+Enter 暂存草稿箱 |
-| C8 | **结构拆分**：`connection_dialog.rs`（3777 行）→ `connection_dialog/{mod,state,staging,render,managers,helpers}.rs`，并删废弃副本｜✅ 2026-09-11 已实现（零警告、测试全绿） | `crates/workbench/src/components/connection_dialog/` | 公开路径不变；工作台测试无回归 |
+| C8 | **结构拆分**：`connection_dialog.rs`（3777 行）→ `connection_dialog/{mod,state,staging,render,managers,helpers}.rs`，并删废弃副本｜✅ 2026-09-11 已实现（零警告、测试全绿） | `crates/connection_dialog/src/components/connection_dialog/` | 公开路径不变；工作台测试无回归 |
 | C9 | **真机集成用例**：单例临时库批量提交两条连接（保存并退出语义：暂存 → 批量落库 + 清空草稿箱 + 库可读回）｜✅ 2026-09-11 初版；✅ 2026-10-02 按新保存语义改写（`two_connections_staged_then_batch_committed` / `batch_commit_updates_editing_entry`）；导航栏「在对话框中编辑」入口（✎）同步补齐 | `crates/workbench/tests/connection_multi_save.rs`、`database/src/nav_view.rs::render_connection_row` | 两条记录落库；保存并退出批量提交与需求一致 |
 | C10 | **类型 × 驱动两层选择去噪**：左侧只选类型（类型树行首 + 暂存条目显示缩小的类型 UI = 类型 emoji），右侧驱动下拉只列**当前类型启用驱动**并显示实现短名（`MySQL (sqlx)` → `sqlx`）；未选类型时 Header 提示「请先在左侧选择数据库类型」；草稿/持久化新增 `type_id` + `driver_id`（迁移 021）｜✅ 2026-09-11 已实现 | `connection_dialog/{helpers,state,staging,render}.rs`、`engine/migrations/global/021_add_draft_type_driver.sql`、`connection_draft_store.rs` | 同类型下实现名唯一；跨类型同名短名不歧义（按类型过滤解析）；旧草稿（完整名）可回退解析 |
 | C11 | **布局稳定 / Header 去拥挤 / 标签·分组入口 / 文档体系**：Tab 内容区固定高度 + 内部滚动（切 Tab 不改变对话框高度）；作用域三态分段按钮 + 项目名（悬停显示完整路径）；常规 Tab 新增「组织」卡片（标签 + 项目分组勾选，替换语义同步，迁移 022）；`meta_refreshed` 一次性元数据拉取修复重渲染查库；新增用户指南（含 USIT 清单）与架构文档 §10–§13（字典 / 降级 / 性能·可观测·安全 / 成熟度）｜✅ 2026-09-11 已实现 | `connection_dialog/{render,staging,state,helpers}.rs`、`data_source_service.rs`、`connection_org_store.rs`、`engine/migrations/global/022_add_draft_tags_groups.sql`、`docs/architecture/connection/connection-user-guide.md` | 切 Tab 时侧栏 / Header 不跳动；标签回显与分组勾选可往返（`connection_staging.rs` / `connection_multi_save.rs`） |
@@ -237,8 +237,8 @@
 | 连续保存集成用例（C9） | `crates/workbench/tests/connection_multi_save.rs` |
 | 连接组织元数据（标签 / 分组，M3 与 M4 共用） | `crates/engine/src/persistence/connection_org_store.rs` |
 | 作用域可见性 / 运行态状态填充 | `crates/workbench/src/services/workspace_loader.rs` |
-| 连接对话框（五 Tab / 作用域 / SSL / 编辑回读） | `crates/workbench/src/components/connection_dialog/`（`mod` / `state` / `staging` / `render` / `managers` / `helpers`） |
-| 对话框原型对齐辅助（`sec_card` / `grid_row` / `val_readonly` / `reuse_note` / `lucide`） | `crates/workbench/src/components/connection_dialog/helpers.rs` |
+| 连接对话框（三页 Tab / 作用域 / SSL / 编辑回读） | `crates/connection_dialog/src/components/connection_dialog/`（`mod` / `state` / `staging` / `render` / `managers` / `helpers`） |
+| 对话框原型对齐辅助（`sec_card` / `grid_row` / `val_readonly` / `reuse_note` / `lucide`） | `crates/connection_dialog/src/components/connection_dialog/helpers.rs` |
 | 对话框快捷键 Action（Ctrl+Enter / Ctrl+T / ↑↓） | `crates/workbench/src/commands.rs`、`crates/app/src/main.rs` |
 | 领域模型（DataSource / Scope / TestResult） | `crates/connection/src/model.rs` |
 | 传输层（协议链配置 / 连接器 / 流 / known_hosts） | `crates/connection/src/{config,connector,factory,stream,known_hosts}.rs` |

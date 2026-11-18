@@ -197,5 +197,9 @@
   "（可选）覆盖档案里的用户名": "(optional) overrides the profile's username",
   "（可选）随私钥使用": "(optional) used with the private key",
   "（未命名连接）": "(untitled connection)",
-  "（未声明）": "(undeclared)"
+  "（未声明）": "(undeclared)",
+  "原生连接": "Native connection",
+  "插件驱动": "Plugin driver",
+  "未声明实现类型": "Undeclared driver type",
+  "其它实现": "Other implementation"
 }

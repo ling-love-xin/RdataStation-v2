@@ -48,7 +48,7 @@ flowchart TB
 
 | 层 | 文件 | 职责 |
 | --- | --- | --- |
-| 视图 | `crates/workbench/src/components/connection_dialog/` | 对话框（五 Tab / Header / 侧栏暂存列表 / 三管理器覆盖层）——按职责拆分： |
+| 视图 | `crates/connection_dialog/src/components/connection_dialog/` | 对话框（三页 Tab / Header / 侧栏暂存列表 / 三管理器覆盖层）——按职责拆分： |
 | 视图 | ├ `mod.rs` | 模块声明与 re-export、常量、`ConnectionDialogState` 字段、输入控件工厂 |
 | 视图 | ├ `state.rs` | 构造 / 元数据刷新 / 编辑回读 / `ClonedDialogState`（保存按钮的轻量视图） |
 | 视图 | ├ `staging.rs` | `ConnectionDraft`、暂存状态机、持久化映射（`draft_to_row` / `row_to_draft`）、来源短码 |
@@ -131,7 +131,7 @@ flowchart TB
 | **草稿（Draft）** | `saved_id = None` | 全部字段为内存快照；`✕` 可删除；保存成功后转正式；当前条目有未写回修改时名称旁显示`●` |
 | **已保存（Saved）** | `saved_id = Some(id)` | 打开对话框时由 `DataSourceService::list()` 合并生成；点击走 `load_for_edit` 回读；**不在暂存列表删除**（删除入口归导航栏）；名称旁显示来源短码 `P/G/GP` |
 
-- 快照字段 = Header + 五 Tab 的全部可编辑状态（`type_id` 数据库类型、`driver_id` 驱动 id、`driver_name` 实现短名、URL、凭据、作用域与项目路径、SSL、驱动属性、策略覆盖、三类引用）。
+- 快照字段 = Header + 三页 Tab 的全部可编辑状态（`type_id` 数据库类型、`driver_id` 驱动 id、`driver_name` 实现短名、URL、凭据、作用域与项目路径、SSL、驱动属性、策略覆盖、三类引用）。
 - **内存 + 跨会话持久化**：关闭对话框不丢失（状态挂在 `EditorPanel` 的对话框句柄上）；变更与关闭时写入 global.db 的 `connection_drafts` 表（迁移 `020`），重启后首次打开自动恢复。
 - **凭据安全边界**：持久化表**不含密码列**（`ConnectionDraftRow` 无 password 字段，恢复后密码框为空），只随正式保存写入连接库（AES-256-GCM）。
 
@@ -513,12 +513,12 @@ flowchart LR
 | 服务层 | `data_source_lifecycle.rs` | 保存 / 回读 / 更新 / 删除 / 同名拦截 / 作用域预检 / tags 同步 / **空密码更新保留原密文** / **项目侧回读（`get_with_project`）** / **GP_ 快照同步（含错误路径）** / **导航入口项目侧解析** / **环境策略按环境名读库** / **文件型路径落 `database`（全局 + 项目两侧；更新不清空；可还原连接 URL）** / **驱动目录 id 能在 DriverRegistry 解析 + SQLite 真实文件测试连接（建库 + 版本探测）** |
 | 服务层 | `real_connections.rs` / `connection_scope_and_state.rs` / `global_service_singleton.rs` | 加载器契约 / 可见性与运行态 / 单例生产路径 |
 | 服务层 | `connection_tunnel_cleanup.rs` | 连接失败后隧道回滚（`tunnel_count == 0`） |
-| 窗口 | `connection_dialog_ui.rs` | 打开 / 渲染 / 关闭、五 Tab、编辑入口、状态保留、重入不叠加 |
+| 窗口 | `connection_dialog_ui.rs` | 打开 / 渲染 / 关闭、三页 Tab、编辑入口、状态保留、重入不叠加 |
 | 窗口 | `dialog_host_layer.rs` | 入口调起（`debug_bounds("dialog-layer")`）、关闭移除层、面板 notify 级联 |
 | 窗口 | `connection_staging.rs` | 暂存：切换保留字段 / 删至最后补位 / 保存后转正式补位 / 已保存不参与删除 |
 | 窗口 | `connection_drafts_persist.rs` | 跨会话恢复：变更落库 → 新状态恢复草稿与表单；**密码不落库**（恢复后为空） |
 | 窗口 | `connection_type_driver.rs` | 类型 × 驱动两层选择：选类型→下拉切到该类型启用驱动并默认选中（短名）；按驱动 id 回读（跨类型同名短名不歧义）；快照携带 `type_id` / `driver_id`；**无可用驱动的类型被拒绝并给出原因**；**文件型与网络型常规 Tab 互切渲染不 panic**（占位 / 分组集合随驱动重建）；**分组折叠态切换后重渲染**；**主机/端口/数据库 ↔ URI 双向同步（含幂等）**；**地址占位按驱动推导且只在变化时写入（`url_placeholder_for` 缓存与输入框实际占位一致）** |
-| 窗口 | `connection_render_matrix.rs`（组件化轮） | 降级路径的状态矩阵（空态引导条未渲染 / 可见 / 降级消失的循环、五 Tab 逐一渲染且行高不变、作用域三态、结果行四级、暂存区固定高度、右列不越出行高）；**侧栏两处列表的键盘路径**（↑↓ + Enter，决策 #107）；**分组折叠**（标题行快照可见 + 整行宽；收起后正文**被夹成不可见但仍挂载**、后面的分组上移，展开后回到原位，决策 #108）；**密码掩码只影响渲染**（`value()` 仍是明文，决策 #104） |
+| 窗口 | `connection_render_matrix.rs`（组件化轮） | 降级路径的状态矩阵（空态引导条未渲染 / 可见 / 降级消失的循环、三页 Tab 逐一渲染且行高不变（旧索引 2/3 归一后）、无驱动类型的安装入口、作用域三态、结果行四级、暂存区固定高度、右列不越出行高）；**侧栏两处列表的键盘路径**（↑↓ + Enter，决策 #107）；**分组折叠**（标题行快照可见 + 整行宽；收起后正文**被夹成不可见但仍挂载**、后面的分组上移，展开后回到原位，决策 #108）；**密码掩码只影响渲染**（`value()` 仍是明文，决策 #104） |
 | 窗口（内嵌，无对话框层） | `connection_dialog/helpers.rs::tests::header_interaction`（决策 #108） | 分组标题行的**真点击**：点行远端空白也能触发 `on_toggle`（整行都是按钮）→ `Collapsible` 收起后面板变矮 → 再点复原。为什么单独开窗口：headless 下鼠标事件到不了对话框层（deferred 子树），而“点击 → 回调”这段接线必须用真点击钉住 |
 | 窗口 | `connection_project_picker.rs` | 项目下拉：会话项目置顶 + 选中（默认选当前项目、项目根写回路径）/ 末项 `＋ 新增项目` 在选项中 / 确认「新增项目」→ 置位 `project_new_request` 并清空选中 / 确认普通项目 → 路径写回 / 空确认无副作用 / 下拉项搜索与 `path`·`is_new` 契约（宿主走生产入口 `request_new_connection`） |
 | 服务层 | `data_source_lifecycle.rs::nav_runtime_resolves_project_connection_with_project_path` | 导航入口项目侧解析：带项目根可解析（作用域回推为“仅项目”）、无项目根报「数据源不存在」 |
@@ -646,7 +646,7 @@ flowchart LR
 
 | 设计决策 | 代码 |
 | --- | --- |
-| 对话框（五 Tab / Header / 侧栏 / 暂存列表 / 管理器） | `crates/workbench/src/components/connection_dialog/{render,managers,helpers}.rs` |
+| 对话框（三页 Tab / Header / 侧栏 / 暂存列表 / 管理器） | `crates/connection_dialog/src/components/connection_dialog/{render,managers,helpers}.rs` |
 | 草稿快照与暂存方法 | `connection_dialog/staging.rs`（`ConnectionDraft` + `staging_*`） |
 | 快捷键 Action | `crates/workbench/src/commands.rs` + `crates/app/src/main.rs` |
 | 入口与宿主重绘桥 | `crates/workbench/src/panels/`（`EditorPanel::{request_new_connection, request_edit_connection}`、`Shared::{host_redraw, notify_host}`） |

@@ -1,7 +1,7 @@
 # RdataStation · 数据源连接 —— 一页看懂
 
 > 左侧选类型、右侧选驱动、填完点保存——连接落进正确的作用域，凭据加密、草稿不丢、**测通即真通**。
-> **两层目录 · 三态作用域 · 五 Tab · 六个驱动实现 · 零 UI 造数据。**
+> **两层目录 · 三态作用域 · 三页 Tab · 六个驱动实现 · 零 UI 造数据。**
 >
 > 本页是**可贴版**（纯文本 + 流程图，适合贴进 PR / wiki）；视觉版见 [`connection-showcase.html`](connection-showcase.html)
 > （自包含、明暗双主题、离线可开，首屏可在四种数据库类型间切换，看表单与 Tab 如何联动）。
@@ -161,7 +161,7 @@ sequenceDiagram
 
 ---
 
-## 6. 五 Tab · 一个对话框
+## 6. 三页 Tab · 一个对话框
 
 | Tab | 看什么 | 数据来源 |
 | --- | --- | --- |
@@ -231,7 +231,7 @@ flowchart TD
 | 维度 | 数字 / 手段 |
 | --- | --- |
 | 自动化测试（逐包口径） | 连接 crate **48 项**（单元 44 + 集成 `tunnel_roundtrip` 4）；工作台连接套件 **15 个目标 / 75 项**（`data_source_lifecycle` 28 · `connection_project_picker`/`connection_type_driver` 各 7 · `connection_staging` 6 · `real_connections` 5 · `connection_dialog_ui`/`dialog_host_layer` 各 4 · …）；引擎 lib **443 项**（含标签回填 / 网络档案加密 / 启动迁移接线等本模块用例）。全仓对照：84 目标 / 1963 通过——数字口径与逐目标明细见 [`../module-status.md`](../module-status.md) §2 |
-| 窗口级测试 | 打开/关闭、五 Tab 渲染、作用域三态、结果行分级、首次引导三态、**暂存区与两列高度恒定**、编辑回填逐项断言 |
+| 窗口级测试 | 打开/关闭、三页 Tab 渲染、作用域三态、结果行分级、首次引导三态、**暂存区与两列高度恒定**、编辑回填逐项断言、无驱动类型的安装入口 |
 | 真机验收 | 4 条连接（MySQL · PostgreSQL · SQLite · DuckDB）× 测试连接 + 真实连接双链路；最近一次实测 MySQL / PG / SQLite 全部通过，DuckDB 那条因目标库文件被 DBeaver 占用而失败（环境原因，非代码缺陷，见台账 §6.2） |
 | 集成测试 | 隧道数据往返（SOCKS5 / HTTP CONNECT / 两跳链）、连续保存、草稿跨会话、项目侧空密码保留、跨项目引用拦截 |
 | 契约测试 | 尺寸与颜色扫描本模块全部文件 |

@@ -682,7 +682,7 @@ flowchart TD
 | 缓存管理（占用 / 清理） | `crates/workbench/src/components/cache_dialog.rs`；engine `MetadataCacheManager::size` / `delete`，仅由本对话框调用（设置面板与导航面板头两处入口） |
 | UI 偏好（短码开关 / 属性面板宽度） | `crates/settings/src/model.rs`（`Navigator` 分区）+ `settings_view.rs`；属性面板拖拽 `h_resizable`（`EditorPanel::render`） |
 | 连接 / 断开 | `crates/workbench/src/services/connection_service.rs`（断开不再删缓存） |
-| 新建 / 编辑连接对话框 | `crates/workbench/src/components/connection_dialog.rs`（复用） |
+| 新建 / 编辑连接对话框 | `crates/connection_dialog/src/components/connection_dialog.rs`（复用） |
 | 数据源列表 / CRUD / 标签 | `crates/workbench/src/services/data_source_service.rs`（已有，扩展 tags） |
 | 主题 token | `assets/themes/rds-theme.json`（+ `search.match.background`） |
 | 依赖声明 | `crates/workbench/Cargo.toml` 增加 `database.workspace = true`（无环） |

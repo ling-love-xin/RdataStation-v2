@@ -175,6 +175,6 @@ DBeaver Community 是 **Apache-2.0** 开源，品牌图标就在各 driver 扩�
 | 品牌包目录 | `<RDS_HOME>/icons/db/<type_id>.svg`（`paths::home()` 解析，见 `docs/architecture/runtime/data-paths.md`） |
 | 类型 → 图标映射、品牌标落点、守卫测试 | `crates/workbench_shell/src/db_icons.rs` |
 | 类型目录（`id` / `name` / `category` / `icon`） | `data_source_types` 表；种子 `crates/engine/migrations/global/008_add_data_source_module.sql`；读侧 `engine::persistence::{driver_store, driver_catalog}` |
-| 徽标渲染现状（emoji） | `crates/workbench/src/components/connection_dialog/helpers.rs::type_badge`；导航侧「形状 + 2 字母」在 `crates/database/src/nav_view.rs` |
+| 徽标渲染现状（emoji） | `crates/connection_dialog/src/components/connection_dialog/helpers.rs::type_badge`；导航侧「形状 + 2 字母」在 `crates/database/src/nav_view.rs` |
 | 图标尺寸 / 取色 | `crates/workbench_shell/src/ui.rs`（`ICON_SIZE_SM` / `ICON_SIZE_MD`）+ 主题 token |
 | 第三方声明（图标资产许可 + 商标口径） | 仓库根 `NOTICE`（§1 Lucide / Feather / GPUI Kit、§2 DuckDB、§3 商标） |

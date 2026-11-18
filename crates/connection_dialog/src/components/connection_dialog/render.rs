@@ -1165,7 +1165,15 @@ impl<H: 'static> ConnectionDialogState<H> {
                         } else {
                             format!("支持 {} 认证", methods.join(" / "))
                         };
-                        format!("{type_label} · {driver_value} · 原生连接 · {methods_text}")
+                        format!(
+                            "{type_label} · {driver_value} · {} · {methods_text}",
+                            driver_kind_label(
+                                current_driver
+                                    .as_ref()
+                                    .map(|d| d.driver_kind.as_str())
+                                    .unwrap_or("")
+                            )
+                        )
                     };
                     let info_banner = div()
                         .w_full()
@@ -1773,6 +1781,50 @@ impl<H: 'static> ConnectionDialogState<H> {
             // ---- 暂存列表：交给 `List` 组件（委托见 `draft_list.rs`；决策 #107）----
             // 行内容（徽标 / 名称 / 脏标记 / 来源短码 / 行尾删除按钮）全在委托里，
             // 这里只负责把它放进固定高度的容器（高度恒定的锚点仍在下面的 `conn-staging-scroll`）。
+            // 无驱动类型的就地出口：灰字「暂无驱动」只说明事实，这里补一个按钮直达插件管理
+            // （没有它，目录里没驱动的那几族对用户就是死路——只能自己猜去哪个页面装）。
+            let driverless_count = types_snapshot
+                .iter()
+                .filter(|t| t.enabled && !type_has_driver(&drivers_snapshot, &t.id))
+                .count();
+            let install_hint = div()
+                .id("conn-driver-install")
+                .test_support()
+                .h_flex()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.colors.muted_foreground)
+                        .child(format!("{driverless_count} 个类型暂无驱动")),
+                )
+                .child(
+                    div().id("install-drivers").test_support().child(
+                        Button::new("install-drivers-btn")
+                            .ghost()
+                            .label(tr("安装驱动"))
+                            .tooltip("打开插件管理页：安装并启用驱动插件后，这些类型即可选用")
+                            .on_click({
+                                let shared = shared.clone();
+                                let result = result.clone();
+                                let entity = entity.clone();
+                                move |_, window, app| {
+                                    if shared.show_plugin_manager(window, app) {
+                                        return;
+                                    }
+                                    // 宿主没挂上回调时别让按钮“点了没反应”。
+                                    set_result(
+                                        &result,
+                                        ResultLevel::Warning,
+                                        tr("插件管理页没挂上，暂时无法从这里安装驱动"),
+                                    );
+                                    entity.update(app, |_, cx| cx.notify());
+                                }
+                            }),
+                    ),
+                );
             let side_panel = div()
                 .id("conn-side-panel")
                 // 测试快照：矩阵测试断言侧栏与内容区「同底」（两列等高才谈得上“布局恒定”）。
@@ -1796,6 +1848,7 @@ impl<H: 'static> ConnectionDialogState<H> {
                             .text_color(theme.colors.muted_foreground),
                     ),
                 )
+                .when(driverless_count > 0, |d| d.child(install_hint))
                 .child(
                     div()
                         .flex_1()
@@ -2875,10 +2928,14 @@ impl<H: 'static> ConnectionDialogState<H> {
             let viewport_rem =
                 f32::from(window.viewport_size().height) / f32::from(window.rem_size());
             let row_h = dialog_row_height(viewport_rem);
+            // 宽度同样夹：61.25rem 是按 980px 定的设计基准，窄窗口上会左右溢出。
+            let viewport_w_rem =
+                f32::from(window.viewport_size().width) / f32::from(window.rem_size());
+            let dialog_w = dialog_width(viewport_w_rem);
 
             dialog
                 .title(if editing_id.borrow().is_some() { tr("编辑数据源连接") } else { tr("新建数据源连接") })
-                .w(cx.theme().font_size * crate::ui::DIALOG_EDIT_WIDTH)
+                .w(cx.theme().font_size * dialog_w.0)
                 .overlay(true)
                 .overlay_closable(true)
                 .keyboard(true)
