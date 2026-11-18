@@ -572,6 +572,34 @@ fn uri_is_derived_from_fields(cx: &mut TestAppContext) {
     );
 }
 
+/// 无驱动类型：侧栏常驻「N 个类型暂无驱动 + 安装驱动」入口。
+///
+/// 灰色「暂无驱动」只说明了事实，没给出下一步——用户得自己知道去插件管理页。
+/// 这条用例守「入口存在且可点」：没有它，类型目录里没驱动的那几族永远是死路。
+#[gpui_kit::test]
+fn driverless_types_offer_an_install_entry(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (harness, cx) = open_harness(cx);
+    open_new(&harness, cx);
+    let dialog = cx.update(|_, cx| harness.read(cx).dialog(cx));
+
+    cx.update(|_, _cx| {
+        *dialog.types.borrow_mut() = vec![
+            ds_type("mysql", "MySQL", "relational"),
+            ds_type("oracle", "Oracle", "relational"),
+        ];
+        // 只登记 mysql 的驱动：oracle 落到「暂无驱动」。
+        *dialog.drivers.borrow_mut() = vec![driver("mysql", "mysql", "MySQL (sqlx)", true)];
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(
+        visible(cx, "conn-driver-install"),
+        "存在无驱动类型时，侧栏必须给出安装入口"
+    );
+    assert!(visible(cx, "install-drivers"), "安装入口要可点");
+}
+
 /// 侧栏信息架构：**类型目录在上、暂存列表在下**。
 ///
 /// 新建流程的第一个动作是选类型；暂存列表是回访产物（用户知道自己在攒草稿时才关心）。

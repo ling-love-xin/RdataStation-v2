@@ -5,7 +5,7 @@
 //! 保存成功后的宿主副作用（连接列表 / Mock 刷新 / 状态栏提示）。
 //! workbench 的 `Shared` 实现本 trait（见 `rds-workbench` `panels/shared.rs`）。
 
-use gpui_kit::App;
+use gpui_kit::{App, Window};
 use project::ui::OpenProject;
 use workbench_shell::model::ConnectionItem;
 
@@ -28,6 +28,12 @@ pub trait ConnectionDialogHost {
 
     /// 请求宿主打开「打开现有目录…」入口（置位标记 + 通知宿主重绘）。
     fn request_open_project(&self, cx: &mut App);
+
+    /// 打开 / 聚焦「插件管理」页（无驱动类型的就近安装入口）。
+    ///
+    /// 返回是否真的打开了：宿主没挂上回调时返回 `false`，调用方据此给出可读提示，
+    /// 而不是让按钮点了像没反应。
+    fn show_plugin_manager(&self, window: &mut Window, cx: &mut App) -> bool;
 
     /// 批量保存成功后的宿主副作用（对应 workbench `Shared` 的
     /// `connections` 替换 + `refresh_mock_connections` + `notice` 提示）。
