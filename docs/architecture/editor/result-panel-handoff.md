@@ -1039,6 +1039,21 @@ panel **265 passed** / guard **4**。
 **验证**：`cargo check -p rds-result-panel` 0 error / 0 warning；
 panel **266 passed** / guard **4**。
 
+### 2.47 表格打磨第八批：获焦行的行号加粗
+
+全文见 `result-panel.md §8.58`，接手要点：
+
+- DBeaver 的行头文本 `selected ? boldFont : normalFont`（`GridRowRenderer.java:96`）——
+  **只有当前行**的行号加粗；列头反过来恒 normalFont（`GridColumnRenderer.java:84-87`）。
+- 本仓「当前行」= 整行选中行（`selected_row`），所以判据 `row_number_is_bold(row_ix)`
+  与行号槽底色共用同一来源，不引新状态；与底色正交（选中行既不铺表头色又加粗）。
+- 渲染只调 delegate 判据；断言并入 `row_number_gutter_paints_the_header_background`
+  （选中行 true / 另一行 false），不碰颜色层。
+- **未做**：表头获焦列字重（DBeaver 本来就不加粗）。
+
+**验证**：`cargo check -p rds-result-panel` 0 error / 0 warning；
+panel **266 passed** / guard **4**。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）

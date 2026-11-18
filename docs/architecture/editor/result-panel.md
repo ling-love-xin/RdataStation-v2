@@ -3200,6 +3200,40 @@ panicked at panel/tests.rs:1091:
 - 单跑 `results_a::the_result_header_sorts_from_its_arrow` = ok（早先记录的
   `results_a.rs:290` panic 已不再复现，handoff §2 那三条基线失败口径作废）。
 
+### 8.58 表格打磨第八批：获焦行的行号加粗
+
+#### 8.58.1 取证
+
+| 事实 | 出处 |
+| --- | --- |
+| 行头文本：`selected ? boldFont : normalFont` —— **只有当前行**的行号加粗 | `GridRowRenderer.java:96` |
+| 列头反过来恒用 `grid.normalFont`，**不对获焦列加粗**（获焦列只画 1px 边框） | `GridColumnRenderer.java:84-87`、`:96-104` |
+
+#### 8.58.2 口径
+
+本仓「当前行」= 整行选中行（行模式下 `selected_row` 唯一非空，§8.54 已落地），
+所以判据与行号槽底色**共用同一个来源**，不引入新状态：
+
+- 整行选中行 → `font_weight(FontWeight::BOLD)`
+- 其余行 → 继承单元格默认字重（不写死 normal，避免压掉上游字号档位）
+- 与底色正交：未选中行铺 `table_head`、选中行留空且加粗（两者可同时成立，互不覆盖）
+
+#### 8.58.3 落点与测试
+
+| 项 | 落点 |
+| --- | --- |
+| 判据 | `grid/cell.rs` 新增 `impl ResultGridDelegate::row_number_is_bold(row_ix)`（渲染只调它） |
+| 渲染 | 行号槽分支 `.when(is_focused_row, |cell| cell.font_weight(FontWeight::BOLD))`，紧跟底色分支 |
+| 断言 | `row_number_gutter_paints_the_header_background` 追加两条：选中行 `true`、另一行 `false`（走 delegate 真状态，不碰颜色） |
+
+未做：表头获焦列的字重——DBeaver 明确不加粗，本仓也不加（与 `:84-87` 一致）。
+
+#### 8.58.4 验证
+
+- `cargo check -p rds-result-panel` = 0 error / 0 warning。
+- `cargo test -p rds-result-panel --lib` = **266 passed / 0 failed**（断言扩写，未新增用例）。
+- `cargo test -p rds-ui-guard`（不带 `--lib`）= 4 passed。
+
 
 ## 8. 协作纪律
 

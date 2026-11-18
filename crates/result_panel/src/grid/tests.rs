@@ -3376,6 +3376,14 @@ fn row_number_gutter_paints_the_header_background() {
         delegate.row_number_paints_head(1),
         "没被选中的另一行照旧铺表头底色"
     );
+    assert!(
+        delegate.row_number_is_bold(0),
+        "整行选中行 = 当前行，行号要加粗（DBeaver GridRowRenderer:96）"
+    );
+    assert!(
+        !delegate.row_number_is_bold(1),
+        "非当前行的行号保持常规字重"
+    );
 }
 
 /// 【注释表头 2026-11-08】注释开关开启时表头是**两行**（列名主行 + 注释小字），

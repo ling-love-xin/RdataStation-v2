@@ -195,6 +195,12 @@ impl ResultGridDelegate {
             self.selected_view_row() == Some(row_ix),
         )
     }
+
+    /// 第 `row_ix` 个可见行的行号要不要加粗：DBeaver 只给当前行换粗体
+    /// （`GridRowRenderer.java:96`），本仓「当前行」即整行选中行。
+    pub fn row_number_is_bold(&self, row_ix: usize) -> bool {
+        self.selected_view_row() == Some(row_ix)
+    }
 }
 
 /// 单元格渲染（2026-10-29 目录拆分：由 `TableDelegate::render_td` 薄转发至此，
@@ -270,6 +276,11 @@ pub(crate) fn render_td(
         // 一层同色会叠成两倍透明度、比数据格深一档（判据见 `row_number_paints_head`）。
         let paints_head = delegate.row_number_paints_head(row_ix);
         let head_bg = theme.tokens.table_head;
+        // 【获焦行加粗】DBeaver 只给「当前行」的行号换粗体（`GridRowRenderer.java:96`
+        // `selected ? boldFont : normalFont`），列头反而恒用 normalFont
+        // （`GridColumnRenderer.java:84-87`）。本仓「当前行」= 整行选中行（行模式下
+        // `selected_row` 唯一非空），所以判据与铺色共用同一个来源。
+        let is_focused_row = delegate.row_number_is_bold(row_ix);
         return div()
             // 内距 6px（DBeaver `GridCellRenderer.LEFT/RIGHT_MARGIN = 6`）；
             // 列的组件层内距已置零（`table_impl::cell_paddings`），这里才是唯一一层
@@ -283,6 +294,7 @@ pub(crate) fn render_td(
             // 它与数据列之间的那条线由右侧数据格的 `border_l` 画。
             .when_some(local_bg, |cell, bg| cell.bg(bg))
             .when(paints_head, |cell| cell.bg(head_bg))
+            .when(is_focused_row, |cell| cell.font_weight(FontWeight::BOLD))
             .when(is_deleted, |cell| cell.line_through())
             // 用例按它量行高（`.id()` 不登记坐标）：这是「表格密度」那条口径的回归哨兵
             .debug_selector(move || format!("editor-result-rowno-{row_ix}"))
