@@ -19,13 +19,17 @@ fn net_input_entity(mgr: &ManagerWorkspace, key: &str) -> Option<Entity<InputSta
 ///
 /// 认证（kind 0）与网络（kind 1）共用同一批输入实体，所以缓存键必须带 kind 前缀，
 /// 避免两个管理器互相作废 / 错用对方的声明。
-fn meta_field_specs_now(mgr: &ManagerWorkspace, kind: usize, type_key: &str) -> Vec<NetFieldSpec> {
-    let cache_key = format!("{kind}:{}", type_key.trim().to_ascii_lowercase());
+fn meta_field_specs_now(
+    mgr: &ManagerWorkspace,
+    kind: ManagerKind,
+    type_key: &str,
+) -> Vec<NetFieldSpec> {
+    let cache_key = format!("{}:{}", kind.index(), type_key.trim().to_ascii_lowercase());
     if mgr.net_specs_for.borrow().as_str() != cache_key {
         *mgr.net_specs.borrow_mut() = match kind {
-            0 => auth_field_specs(type_key),
-            1 => network_field_specs(type_key),
-            _ => Vec::new(),
+            ManagerKind::Auth => auth_field_specs(type_key),
+            ManagerKind::Network => network_field_specs(type_key),
+            ManagerKind::Env => Vec::new(),
         };
         *mgr.net_specs_for.borrow_mut() = cache_key;
     }
@@ -73,7 +77,7 @@ fn load_auth_config_by_name(name: &str, cx: &mut App) -> Option<(String, String)
 }
 
 pub(crate) fn open_manager<H: 'static>(
-    kind: usize,
+    kind: ManagerKind,
     mgr: &Rc<RefCell<ManagerWorkspace>>,
     entity: Entity<H>,
     shared: Rc<dyn ConnectionDialogHost>,
@@ -108,12 +112,12 @@ pub(crate) fn open_manager<H: 'static>(
     // `proxy_pwd` 这类错值，解析器永远认不出（审计 #20 第三层根因）。
     {
         let type_items: Vec<SharedString> = match kind {
-            0 => AUTH_TYPES.iter().map(|t| SharedString::from(*t)).collect(),
-            1 => NETWORK_TYPES
+            ManagerKind::Auth => AUTH_TYPES.iter().map(|t| SharedString::from(*t)).collect(),
+            ManagerKind::Network => NETWORK_TYPES
                 .iter()
                 .map(|t| SharedString::from(*t))
                 .collect(),
-            _ => Vec::new(),
+            ManagerKind::Env => Vec::new(),
         };
         let type_sel = mgr.borrow().new_type.clone();
         type_sel.update(cx, |s, cx| {
@@ -132,7 +136,7 @@ pub(crate) fn open_manager<H: 'static>(
     window.open_dialog(cx, move |dialog, window, cx| {
         // 网络字段占位随类型同步：必须在 `cx.theme()` 之前写（占位写入需要 `&mut cx`，
         // 而 theme 持有 `cx` 的不可变借用）；只在类型变化时写，`set_placeholder` 会 notify。
-        if kind == 1 {
+        if kind.is_network() {
             let m0 = mgr.borrow();
             let ty = m0
                 .new_type
@@ -154,9 +158,9 @@ pub(crate) fn open_manager<H: 'static>(
         let shared_layer = shared_for_layer.clone();
         let m = mgr.borrow();
         let title = match kind {
-            0 => tr("认证配置管理（AuthConfigManager）"),
-            1 => tr("网络配置管理（NetworkConfigManager）"),
-            _ => tr("环境管理（EnvironmentManager）"),
+            ManagerKind::Auth => tr("认证配置管理（AuthConfigManager）"),
+            ManagerKind::Network => tr("网络配置管理（NetworkConfigManager）"),
+            ManagerKind::Env => tr("环境管理（EnvironmentManager）"),
         };
 
         // 列表行。
@@ -188,7 +192,7 @@ pub(crate) fn open_manager<H: 'static>(
                         .child(format!("被引用 {}", item.refs)),
                 );
             }
-            if kind == 2 {
+            if kind.is_env() {
                 row = row.child(
                     Button::new(format!("mgr-policy-{idx}"))
                         .secondary()
@@ -226,10 +230,10 @@ pub(crate) fn open_manager<H: 'static>(
                                     m.editing = Some(item_name.clone());
                                     m.msg = Some(format!("编辑中：{item_name}（保存后更新既有条目）"));
                                     m.new_name.update(app, |s, cx| s.set_value(item_name.clone(), window, cx));
-                                    // 认证（0）与网络（1）：回填真实字段（此前只回填名称 →
+                                    // 认证与网络：回填真实字段（此前只回填名称 →
                                     // 保存会把已有 config / auth_data 覆盖成空）。
-                                    if kind <= 1 {
-                                        let loaded = if kind == 0 {
+                                    if kind.has_type_column() {
+                                        let loaded = if kind.is_auth() {
                                             load_auth_config_by_name(&item_name, app)
                                         } else {
                                             load_network_config_by_name(&item_name, app)
@@ -237,7 +241,7 @@ pub(crate) fn open_manager<H: 'static>(
                                         if let Some((ty, config)) = loaded {
                                             m.new_data
                                                 .update(app, |s, cx| s.set_value(config.clone(), window, cx));
-                                            let values = if kind == 0 {
+                                            let values = if kind.is_auth() {
                                                 auth_config_values(&ty, &config)
                                             } else {
                                                 network_config_values(&ty, &config)
@@ -294,7 +298,7 @@ pub(crate) fn open_manager<H: 'static>(
             let new_data = m.new_data.clone();
             let editing = m.editing.clone();
             let msg = m.msg.clone();
-            // 网络配置字段（kind=1）：按类型显示子集；`chain`（或未选类型）回落到原始 JSON 文本框。
+            // 网络配置字段（Network 域）：按类型显示子集；`chain`（或未选类型）回落到原始 JSON 文本框。
             let net_type_now = m
                 .new_type
                 .read(cx)
@@ -302,8 +306,8 @@ pub(crate) fn open_manager<H: 'static>(
                 .cloned()
                 .unwrap_or_default()
                 .to_string();
-            // 认证（kind 0）与网络（kind 1）都按类型声明展开字段；无声明（如 chain）回落原始 JSON。
-            let net_specs: Vec<NetFieldSpec> = if kind <= 1 {
+            // 认证与网络都按类型声明展开字段；无声明（如 chain）回落原始 JSON。
+            let net_specs: Vec<NetFieldSpec> = if kind.has_type_column() {
                 meta_field_specs_now(&m, kind, &net_type_now)
             } else {
                 Vec::new()
@@ -403,13 +407,13 @@ pub(crate) fn open_manager<H: 'static>(
                                         }
                                         // 认证 / 网络：有字段声明时由字段组装 JSON；校验失败只提示，不落库。
                                         // 无声明（如 chain / 未知认证类型）→ 继续用原始 JSON 文本框。
-                                        let data = if kind <= 1 {
+                                        let data = if kind.has_type_column() {
                                             let specs = meta_field_specs_now(&mgr.borrow(), kind, &tpe);
                                             if specs.is_empty() {
                                                 raw_data
                                             } else {
                                                 let values = collect_net_values(&mgr.borrow(), app);
-                                                let built = if kind == 0 {
+                                                let built = if kind.is_auth() {
                                                     build_auth_config_json(&tpe, &values)
                                                 } else {
                                                     build_network_config_json(&tpe, &values)
@@ -471,7 +475,7 @@ pub(crate) fn open_manager<H: 'static>(
 
         // 策略管理面板（仅环境管理器且已点开某环境时显示）。
         let policy_panel = {
-            if kind == 2 {
+            if kind.is_env() {
                 let m = mgr.borrow();
                 let policy_env = m.policy_env.clone();
                 let policy_type = m.policy_type.clone();
@@ -626,12 +630,10 @@ pub(crate) fn open_manager<H: 'static>(
                     .child(mgr_form)
                     .child(
                         div().text_xs().text_color(theme.colors.muted_foreground)
-                            .child(if kind == 0 {
-                                tr("复用：数据库 A 可直接引用数据库 B 的认证配置；凭据 AES-256 加密存储，列表不回显明文。")
-                            } else if kind == 1 {
-                                tr("复用：网络配置（SSH/代理档案）可被多个连接引用，建一次全项目/全局复用。")
-                            } else {
-                                tr("复用：环境（含策略）可被多个数据源共享；点击「策略」直接管理该环境的策略。")
+                            .child(match kind {
+                                ManagerKind::Auth => tr("复用：数据库 A 可直接引用数据库 B 的认证配置；凭据 AES-256 加密存储，列表不回显明文。"),
+                                ManagerKind::Network => tr("复用：网络配置（SSH/代理档案）可被多个连接引用，建一次全项目/全局复用。"),
+                                ManagerKind::Env => tr("复用：环境（含策略）可被多个数据源共享；点击「策略」直接管理该环境的策略。"),
                             }),
                     ),
             )
@@ -664,7 +666,7 @@ pub(crate) fn open_manager<H: 'static>(
 /// 引用范围：全局库全部连接 + 当前项目根（`mgr.project_root`；未打开项目时仅全局）。
 /// 逐条扫库会变成 N × (全局 + 项目) 两次查询，所以用 `count_references_batch` 一次取齐。
 pub(crate) fn refresh_manager_items(
-    kind: usize,
+    kind: ManagerKind,
     mgr: &Rc<RefCell<ManagerWorkspace>>,
     cx: &mut App,
 ) {
@@ -677,29 +679,29 @@ pub(crate) fn refresh_manager_items(
     };
     let project_root = mgr.borrow().project_root.clone();
     let field = match kind {
-        0 => ReferenceField::AuthConfig,
-        1 => ReferenceField::NetworkConfig,
-        _ => ReferenceField::Environment,
+        ManagerKind::Auth => ReferenceField::AuthConfig,
+        ManagerKind::Network => ReferenceField::NetworkConfig,
+        ManagerKind::Env => ReferenceField::Environment,
     };
 
     let items: Vec<ManagerItem> = rt.block_on(async {
         // (id, 显示名)：id 用于引用计数，显示名用于列表。
         let rows: Vec<(String, String)> = match kind {
-            0 => service
+            ManagerKind::Auth => service
                 .list_auth_configs()
                 .await
                 .unwrap_or_default()
                 .into_iter()
                 .filter_map(|a| a.name.map(|n| (a.id, n)))
                 .collect(),
-            1 => service
+            ManagerKind::Network => service
                 .list_network_configs()
                 .await
                 .unwrap_or_default()
                 .into_iter()
                 .filter_map(|n| n.name.map(|name| (n.id, name)))
                 .collect(),
-            _ => service
+            ManagerKind::Env => service
                 .list_environments()
                 .await
                 .unwrap_or_default()
@@ -724,7 +726,7 @@ pub(crate) fn refresh_manager_items(
 
 /// 新建/更新配置（block_on store CRUD；auth_data 密文由 store 内部处理）。
 pub(crate) fn upsert_manager_item(
-    kind: usize,
+    kind: ManagerKind,
     name: &str,
     tpe: &str,
     data: &str,
@@ -744,14 +746,14 @@ pub(crate) fn upsert_manager_item(
     };
 
     let id = match kind {
-        0 => engine::persistence::id_prefix::generate_gid("auth", name),
-        1 => engine::persistence::id_prefix::generate_gid("net", name),
-        _ => engine::persistence::id_prefix::generate_gid("env", name),
+        ManagerKind::Auth => engine::persistence::id_prefix::generate_gid("auth", name),
+        ManagerKind::Network => engine::persistence::id_prefix::generate_gid("net", name),
+        ManagerKind::Env => engine::persistence::id_prefix::generate_gid("env", name),
     };
 
     let outcome = rt.block_on(async {
         match kind {
-            0 => {
+            ManagerKind::Auth => {
                 let config = AuthConfig {
                     id,
                     name: Some(name.to_string()),
@@ -777,7 +779,7 @@ pub(crate) fn upsert_manager_item(
                     db.create_auth_config(&config).await
                 }
             }
-            1 => {
+            ManagerKind::Network => {
                 let config = NetworkConfig {
                     id,
                     name: Some(name.to_string()),
@@ -808,7 +810,7 @@ pub(crate) fn upsert_manager_item(
                     db.create_network_config(&config).await
                 }
             }
-            _ => {
+            ManagerKind::Env => {
                 let env = Environment {
                     id,
                     name: name.to_string(),
@@ -843,7 +845,11 @@ pub(crate) fn upsert_manager_item(
 ///
 /// 原型 §3.6：「被引用的配置不可删除」——守卫在服务层（`ensure_no_references`），
 /// 范围与列表计数一致（全局库 + 当前项目）。
-pub(crate) fn delete_manager_item(kind: usize, name: &str, project_root: Option<&str>) -> String {
+pub(crate) fn delete_manager_item(
+    kind: ManagerKind,
+    name: &str,
+    project_root: Option<&str>,
+) -> String {
     let Some(rt) = crate::services::rt::runtime() else {
         return crate::services::rt::RT_UNAVAILABLE.to_string();
     };
@@ -856,26 +862,26 @@ pub(crate) fn delete_manager_item(kind: usize, name: &str, project_root: Option<
         return "全局库未初始化".into();
     };
     let field = match kind {
-        0 => ReferenceField::AuthConfig,
-        1 => ReferenceField::NetworkConfig,
-        _ => ReferenceField::Environment,
+        ManagerKind::Auth => ReferenceField::AuthConfig,
+        ManagerKind::Network => ReferenceField::NetworkConfig,
+        ManagerKind::Env => ReferenceField::Environment,
     };
 
     let outcome = rt.block_on(async {
         let id = match kind {
-            0 => db
+            ManagerKind::Auth => db
                 .list_auth_configs(None)
                 .await?
                 .iter()
                 .find(|a| a.name.as_deref() == Some(name))
                 .map(|a| a.id.clone()),
-            1 => db
+            ManagerKind::Network => db
                 .list_network_configs(None)
                 .await?
                 .iter()
                 .find(|n| n.name.as_deref() == Some(name))
                 .map(|n| n.id.clone()),
-            _ => db
+            ManagerKind::Env => db
                 .list_environments()
                 .await?
                 .iter()
@@ -890,9 +896,9 @@ pub(crate) fn delete_manager_item(kind: usize, name: &str, project_root: Option<
             .ensure_no_references(field, &id, name, project_root)
             .await?;
         match kind {
-            0 => db.delete_auth_config(&id).await,
-            1 => db.delete_network_config(&id).await,
-            _ => db.delete_environment(&id).await,
+            ManagerKind::Auth => db.delete_auth_config(&id).await,
+            ManagerKind::Network => db.delete_network_config(&id).await,
+            ManagerKind::Env => db.delete_environment(&id).await,
         }
     });
 

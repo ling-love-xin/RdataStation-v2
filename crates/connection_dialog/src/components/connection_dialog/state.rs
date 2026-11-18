@@ -120,7 +120,7 @@ impl<H: 'static> ConnectionDialogState<H> {
             prop_key,
             prop_val,
             mgr: Rc::new(RefCell::new(ManagerWorkspace {
-                kind: 0,
+                kind: ManagerKind::Auth,
                 items: Vec::new(),
                 project_root: None,
                 new_name,

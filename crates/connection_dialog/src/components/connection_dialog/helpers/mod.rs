@@ -1,7 +1,7 @@
 use super::*;
 use shared::i18n::tr;
 
-/// 打开管理器覆盖层（嵌套 Dialog；kind: 0 认证 / 1 网络 / 2 环境）。
+/// 按资产路径加载 Lucide 图标。
 /// 组件默认集（`IconName`）不含数据库 / 锁 / 盾牌等图标；应用注册的是全量
 /// Lucide 目录（`gpui_kit::assets::AllAssets`），故按资产路径直接加载。
 pub(crate) fn lucide(path: &'static str) -> Icon {

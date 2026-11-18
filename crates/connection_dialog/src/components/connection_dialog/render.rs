@@ -2259,7 +2259,7 @@ fn network_tab_ui<H: 'static>(
                     .label(tr("管理"))
                     .on_click(move |_, window, app| {
                         open_manager(
-                            1,
+                            ManagerKind::Network,
                             &mgr,
                             entity_click.clone(),
                             shared_click.clone(),
@@ -2474,7 +2474,7 @@ fn advanced_tab_ui<H: 'static>(p: AdvancedTab<'_, H>, cx: &App) -> Div {
                             .label(tr("管理环境"))
                             .on_click(move |_, window, app| {
                                 open_manager(
-                                    2,
+                                    ManagerKind::Env,
                                     &mgr,
                                     entity_click.clone(),
                                     shared_click.clone(),
@@ -2721,7 +2721,7 @@ struct GeneralTab<'a, H: 'static> {
     entity: &'a Entity<H>,
     /// 宿主（管理器页要重绘）。
     shared: &'a Rc<dyn ConnectionDialogHost>,
-    /// 管理器工作区（认证页入口 `open_manager(0, …)`）。
+    /// 管理器工作区（认证页入口 `open_manager(ManagerKind::Auth, …)`）。
     mgr: &'a Rc<RefCell<ManagerWorkspace>>,
     /// 结果行（导入 URI / 建分组的反馈）。
     result: &'a Rc<RefCell<Option<ResultLine>>>,
@@ -3055,7 +3055,7 @@ fn general_tab_ui<H: 'static>(p: GeneralTab<'_, H>, cx: &App) -> Div {
                     let entity = entity.clone();
                     let shared = shared.clone();
                     move |_, window, app| {
-                        open_manager(0, &mgr, entity.clone(), shared.clone(), window, app);
+                        open_manager(ManagerKind::Auth, &mgr, entity.clone(), shared.clone(), window, app);
                     }
                 })),
         )

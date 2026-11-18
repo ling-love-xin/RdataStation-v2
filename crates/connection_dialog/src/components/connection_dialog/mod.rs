@@ -268,16 +268,66 @@ pub struct ManagerItem {
     pub refs: usize,
 }
 
+/// 配置域（三个管理器 / 未来配置中心页的页签顺序）。
+///
+/// 以前这里是裸 `usize`（0 认证 / 1 网络 / 2 环境），分派散落在 `managers.rs` 二十多处；
+/// 换成枚举后，「哪一类」只在类型上表达一次，新增第四类时编译器会点名未覆盖的分支。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ManagerKind {
+    /// 认证档案（`auth_configs`）。
+    Auth,
+    /// 网络档案（`network_configs`）。
+    Network,
+    /// 环境与策略（`environments` / `environment_policies`）。
+    Env,
+}
+
+impl ManagerKind {
+    /// 页签 / 侧栏显示顺序。
+    pub const ALL: [Self; 3] = [Self::Auth, Self::Network, Self::Env];
+
+    /// 序号（仅用于页签下标与缓存键，不再参与业务分派）。
+    pub fn index(self) -> usize {
+        match self {
+            Self::Auth => 0,
+            Self::Network => 1,
+            Self::Env => 2,
+        }
+    }
+
+    /// 由序号还原（越界 → `None`）。
+    pub fn from_index(ix: usize) -> Option<Self> {
+        Self::ALL.get(ix).copied()
+    }
+
+    pub fn is_auth(self) -> bool {
+        matches!(self, Self::Auth)
+    }
+
+    pub fn is_network(self) -> bool {
+        matches!(self, Self::Network)
+    }
+
+    pub fn is_env(self) -> bool {
+        matches!(self, Self::Env)
+    }
+
+    /// 是否带「类型」列（认证 / 网络按类型切字段集；环境没有类型）。
+    pub fn has_type_column(self) -> bool {
+        !self.is_env()
+    }
+}
+
 /// 管理器工作区（三个管理器共用；列表 + 新建/编辑表单，Entity 状态持久）。
 pub struct ManagerWorkspace {
-    pub kind: usize,
+    pub kind: ManagerKind,
     pub items: Vec<ManagerItem>,
     /// 当前项目根（引用计数与删除守卫用；打开管理器时由宿主会话写入）。
     pub project_root: Option<String>,
     pub new_name: Entity<InputState>,
     pub new_type: Entity<SelectState<SearchableVec<SharedString>>>,
     pub new_data: Entity<InputState>,
-    /// 网络配置字段输入（键 → 实体；`kind=1` 按类型显示子集，`chain` 仍走 `new_data`）。
+    /// 网络配置字段输入（键 → 实体；`Network` 域按类型显示子集，`chain` 仍走 `new_data`）。
     pub net_inputs: Rc<RefCell<Vec<(&'static str, Entity<InputState>)>>>,
     /// 已缓存的字段声明所对应的网络类型（与 `net_specs` 配套，避免每帧重算）。
     pub net_specs_for: Rc<RefCell<String>>,
@@ -286,7 +336,7 @@ pub struct ManagerWorkspace {
     /// 编辑中的条目名（Some = 更新既有条目，None = 新建）。
     pub editing: Option<String>,
     pub msg: Option<String>,
-    // ---- 环境策略（kind=2 展开面板）----
+    // ---- 环境策略（`Env` 域展开面板）----
     /// 当前展开策略管理的环境名（None = 收起）。
     pub policy_env: Option<String>,
     pub policy_type: Entity<SelectState<SearchableVec<SharedString>>>,
@@ -477,4 +527,35 @@ fn state_inputs(
         cx.new(|cx| InputState::new(window, cx)),
         cx.new(|cx| InputState::new(window, cx)),
     )
+}
+
+#[cfg(test)]
+mod manager_kind_tests {
+    use super::ManagerKind;
+
+    /// 序号与枚举必须一一对应：配置中心页的侧栏下标、字段声明缓存键都靠它。
+    #[test]
+    fn index_roundtrip_covers_all_domains() {
+        for (ix, kind) in ManagerKind::ALL.iter().enumerate() {
+            assert_eq!(kind.index(), ix);
+            assert_eq!(ManagerKind::from_index(ix), Some(*kind));
+        }
+        assert_eq!(ManagerKind::from_index(3), None);
+    }
+
+    /// 「带类型列」只对认证 / 网络成立；环境没有类型维度（改造时最容易写漏的一处）。
+    #[test]
+    fn type_column_only_on_typed_domains() {
+        assert!(ManagerKind::Auth.has_type_column());
+        assert!(ManagerKind::Network.has_type_column());
+        assert!(!ManagerKind::Env.has_type_column());
+        // 互斥：任何一类只能命中一个判定。
+        for kind in ManagerKind::ALL {
+            let hits = [kind.is_auth(), kind.is_network(), kind.is_env()]
+                .into_iter()
+                .filter(|v| *v)
+                .count();
+            assert_eq!(hits, 1, "{kind:?} 的域判定必须且只能命中一个");
+        }
+    }
 }
