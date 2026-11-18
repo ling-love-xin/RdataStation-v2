@@ -134,6 +134,15 @@ impl EditorHostPanel {
                     panel.update(app, |p, cx| p.open_sql_dialog(window, cx));
                 });
             }
+            // 【Metadata · 生成 DDL】列浏览器页内工具条：按结果集列出建表 DDL 并弹预览浮层
+            // （对齐 DBeaver `MetaDataPanel.contributeActions` 的那条命令；文本生成在面板内
+            // 用纯函数算，预览需要 `&mut Window` 建 Textarea，走窗口句柄转手）。
+            ResultRequest::GenerateResultSetDdl => {
+                let panel = self.result_panel.clone();
+                let _ = self.window.update(cx, |_panel, window, app| {
+                    panel.update(app, |p, cx| p.open_ddl_dialog(window, cx));
+                });
+            }
             ResultRequest::CloseSqlDialog => {
                 self.result_panel.update(cx, |p, cx| p.close_sql_dialog(cx));
             }

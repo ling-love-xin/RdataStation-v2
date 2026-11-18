@@ -1008,6 +1008,90 @@ fn injected_hidden_status_commands_replace_the_default_set(cx: &mut gpui_kit::Te
     );
 }
 
+/// 【Metadata · 生成 DDL】列浏览器页内工具条的「生成 DDL」钮（对齐 DBeaver
+/// `MetaDataPanel.contributeActions` 的 `generate.ddl.by.resultSet`）：常驻可见，
+/// 点它入队 `GenerateResultSetDdl`（文本生成与预览浮层在宿主分派后由面板完成）。
+#[gpui_kit::test]
+fn column_browser_toolbar_queues_the_generate_ddl_request(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, vcx) = panel_harness(cx);
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let button = vcx
+        .debug_bounds("editor-result-generate-ddl")
+        .expect("列浏览器页内工具条应有「生成 DDL」钮（DBeaver metadata 面板唯一动作）");
+    let point = gpui_kit::point(
+        button.origin.x + button.size.width / 2.,
+        button.origin.y + button.size.height / 2.,
+    );
+    vcx.simulate_click(point, gpui_kit::Modifiers::default());
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let queued = vcx.update(|_, app| panel.read(app).queue.drain());
+    assert!(
+        queued
+            .iter()
+            .any(|request| matches!(request, crate::ports::ResultRequest::GenerateResultSetDdl)),
+        "点「生成 DDL」应入队 GenerateResultSetDdl：{queued:?}，按钮 {button:?}"
+    );
+}
+
+/// 【Metadata · 生成 DDL】生成结果走 SQL 预览浮层：有驱动类型时出 `CREATE TABLE`，
+/// 类型全缺（认不出值族）时给说明而不是编类型（对齐 DBeaver 的
+/// `sql_generator_nonsql_text` 分支）。
+#[gpui_kit::test]
+fn generate_ddl_dialog_shows_sql_or_an_explanation(cx: &mut gpui_kit::TestAppContext) {
+    use crate::store::ColumnType;
+
+    cx.update(gpui_kit::init);
+    let (panel, vcx) = panel_harness(cx);
+
+    // 1) 两列都补驱动类型 → 出 SQL
+    vcx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.grid.update(cx, |grid, cx| {
+                grid.delegate_mut().set_column_types(vec![
+                    Some(ColumnType::parse("integer")),
+                    Some(ColumnType::parse("numeric(10,2)")),
+                ]);
+                cx.notify();
+            });
+        });
+    });
+    vcx.update(|window, app| {
+        panel.update(app, |p, cx| p.open_ddl_dialog(window, cx));
+    });
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let (open, title) = vcx.update(|_, app| {
+        let p = panel.read(app);
+        (p.sql_dialog_open, p.sql_dialog_title.clone())
+    });
+    assert!(open, "生成 DDL 应打开预览浮层");
+    assert_eq!(
+        title.map(|title| title.to_string()).as_deref(),
+        Some("生成 DDL（按结果集列建表）"),
+        "浮层标题要说明这是生成 DDL（同一浮层也复用给原始 SQL 预览）"
+    );
+
+    // 2) 清掉类型 → 两列都是 Unknown 值族，不能编类型出来 → 浮层里应是说明句
+    vcx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.grid.update(cx, |grid, cx| {
+                grid.delegate_mut().set_column_types(vec![None, None]);
+                cx.notify();
+            });
+        });
+    });
+    vcx.update(|window, app| {
+        panel.update(app, |p, cx| p.open_ddl_dialog(window, cx));
+    });
+    // 关闭后标题复位（原始 SQL 预览不能顶着「生成 DDL」的标题）
+    vcx.update(|_window, app| panel.update(app, |p, cx| p.close_sql_dialog(cx)));
+    let title = vcx.update(|_, app| panel.read(app).sql_dialog_title.clone());
+    assert!(title.is_none(), "关掉浮层后标题要复位成「原始 SQL」档");
+}
+
 /// 【结果集设置】状态行最右端的齿轮（对齐 DBeaver 状态栏 `ConfigAction`，
 /// `ResultSetViewer.java:5402-5418`）：有状态行时必摆，点它只推
 /// `OpenResultPanelSettings`（面板不认识 settings crate，由宿主派发打开设置的动作）。

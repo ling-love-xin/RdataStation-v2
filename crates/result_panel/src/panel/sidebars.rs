@@ -428,6 +428,25 @@ impl ResultPanel {
                 .into_any_element()
         });
 
+        // 【Metadata · 生成 DDL】页内工具条常驻动作（对齐 DBeaver `MetaDataPanel.
+        // contributeActions`：那边只贡献这一条 `generate.ddl.by.resultSet`，恒可用）。
+        // 文本生成是纯函数（`crate::ddl`），但预览浮层的 Textarea 需要 `&mut Window`，
+        // 所以走队列回宿主分派。
+        let ddl_queue = self.queue.clone();
+        let ddl_action = Button::new("editor-result-generate-ddl")
+            .ghost()
+            .small()
+            .icon(IconName::FileCode)
+            .label("生成 DDL")
+            .tooltip("按结果集列生成建表 DDL（对齐 DBeaver Metadata 面板的 Generate DDL）")
+            .debug_selector(|| "editor-result-generate-ddl".to_string())
+            .on_click(move |_, _window, app| {
+                ddl_queue.request(ResultRequest::GenerateResultSetDdl, app);
+            })
+            .into_any_element();
+        let mut toolbar_actions = vec![ddl_action];
+        toolbar_actions.extend(batch_actions);
+
         // 页签内容区：宽度 / 边框 / 背景由右栏外壳统一控制，这里只排上下四段
         // 【2026-11-17 对齐】页内工具条与值 / 计算 / 分组 / 执行SQL 四页同形
         // （`panel_toolbar`：28px + 底边一条 HAIRLINE，标题在左、动作在右）。
@@ -442,7 +461,7 @@ impl ResultPanel {
             .child(self.panel_toolbar(
                 "editor-result-browser-toolbar",
                 SharedString::from(format!("列浏览器 · {} 列", columns.len())),
-                batch_actions.into_iter().collect(),
+                toolbar_actions,
                 cx,
             ))
             .child(table_head)

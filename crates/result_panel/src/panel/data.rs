@@ -172,6 +172,10 @@ pub struct ResultPanel {
     /// 需要 window + &mut App，也在事件路径建；SQL 变化时 `set_text` 刷新）。
     /// render 期 `Textarea::new(&entity)` 只需 &Entity，可直接挂浮层。
     pub(crate) sql_textarea: Option<Entity<TextareaState>>,
+    /// 【Metadata 生成 DDL】SQL 预览浮层的标题：`None` = 原始 SQL（默认）,
+    /// 有的值为「生成 DDL」这类复用同一浮层的场景（对齐 DBeaver 用 `ViewSQLDialog`
+    /// 展示生成结果的做法，`MetaDataPanel.java:203-215` → `SQLGeneratorHandlerResultSetDDL`）。
+    pub(crate) sql_dialog_title: Option<gpui_kit::SharedString>,
     /// 【1.2】筛选框展开态：点击筛选组展开按钮后，工具栏下方出现顶宽筛选条
     /// （输入框全宽 + ▶ 运行 + ✕ 清除 + wrapped SQL 预览）。默认收起。
     pub(crate) filter_expanded: bool,

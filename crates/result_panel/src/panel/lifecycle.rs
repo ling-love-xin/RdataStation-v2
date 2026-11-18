@@ -177,6 +177,7 @@ impl ResultPanel {
             right_sidebar_epoch: 0,
             sql_dialog_open: false,
             sql_textarea: None,
+            sql_dialog_title: None,
             filter_expanded: false,
             selection_pos: None,
             // 【P2-1】值查看器 hex 页号（纯视图态，换选中格复位）

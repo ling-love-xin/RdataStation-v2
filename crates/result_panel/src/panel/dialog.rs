@@ -69,7 +69,11 @@ impl ResultPanel {
                                     .items_center()
                                     .gap_2()
                                     .min_w_0()
-                                    .child(div().text_sm().flex_none().child("原始 SQL"))
+                                    .child(div().text_sm().flex_none().child(
+                                        self.sql_dialog_title
+                                            .clone()
+                                            .unwrap_or_else(|| "原始 SQL".into()),
+                                    ))
                                     // 【B5 余项】来源行：血缘 + 连接（B15 血缘摘要自
                                     // 2026-10-28 状态栏三项重构后断头，这里把它接回——
                                     // 看 SQL 全文时顺带知道这份数据怎么来的）。

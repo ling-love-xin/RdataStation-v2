@@ -430,12 +430,102 @@ impl ResultPanel {
             ta.update(cx, |state, cx| state.set_value(sql.clone(), window, cx));
         }
         self.sql_dialog_open = true;
+        // 复用同一浮层的另一场景（生成 DDL）可能改过标题，这里恢复成「原始 SQL」
+        self.sql_dialog_title = None;
         cx.notify();
     }
 
     /// 【2026-10-28 微调】关闭 SQL 预览弹窗（✕ 按钮 / Esc 触发）
     pub fn close_sql_dialog(&mut self, cx: &mut Context<Self>) {
         self.sql_dialog_open = false;
+        self.sql_dialog_title = None;
+        cx.notify();
+    }
+
+    /// 【对齐 DBeaver Metadata 面板「Generate DDL」】按当前结果集的列生成建表 DDL，
+    /// 复用 SQL 预览浮层展示（DBeaver 也是把生成结果塞进 `ViewSQLDialog` 弹出来）。
+    ///
+    /// 素材取网格 delegate 的列名 / 类型 / 注解（`ColumnAnnotation.data_type` 是驱动
+    /// 口径类型、`nullable` / `default_value` 也来自列元数据；`ColumnType.kind` 只用于
+    /// 驱动没报类型时按值族推断——推断会在行尾注明）。表名取「所有已注解列一致的
+    /// 来源表裸名」，否则 `new_table`（DBeaver 的表名来自迁移映射容器，本仓无此机制）。
+    /// 出不了 SQL 时（缺类型 / 认不出值族）浮层里直接显示说明，不编类型。
+    pub fn open_ddl_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // 网格读借用必须在本块内结束：后面建 Textarea 要 `&mut Context`
+        let (table, ddl_columns) = {
+            let grid = self.grid.read(cx);
+            let delegate = grid.delegate();
+        let columns = delegate.columns().to_vec();
+        let types = delegate.column_types().to_vec();
+        let annotations = delegate.column_annotations().to_vec();
+
+        // 表名：所有「有来源表」的列指向同一张表才用它的裸名，否则占位
+        let source_tables: Vec<&str> = annotations
+            .iter()
+            .filter_map(|annotation| annotation.as_ref()?.source_table.as_deref())
+            .collect();
+        let table = match source_tables.first() {
+            Some(first) if source_tables.iter().all(|table| *table == *first) => first
+                .rsplit('.')
+                .next()
+                .unwrap_or(*first)
+                .to_string(),
+            _ => "new_table".to_string(),
+        };
+
+        let ddl_columns: Vec<crate::ddl::DdlColumn> = columns
+            .iter()
+            .enumerate()
+            .map(|(data_col, name)| {
+                let annotation = annotations.get(data_col).cloned().flatten();
+                let kind = types
+                    .get(data_col)
+                    .cloned()
+                    .flatten()
+                    .map(|ty| ty.kind)
+                    .unwrap_or_default();
+                // 驱动口径优先：注解里的 data_type（NavCache）→ 渲染层 ColumnType.name
+                let driver_type = annotation
+                    .as_ref()
+                    .and_then(|annotation| annotation.data_type.as_deref())
+                    .or_else(|| {
+                        types
+                            .get(data_col)
+                            .and_then(|ty| ty.as_ref())
+                            .map(|ty| ty.name.as_str())
+                    });
+                let (type_name, inferred) = match crate::ddl::resolve_type(driver_type, kind) {
+                    Some((name, inferred)) => (Some(name), inferred),
+                    None => (None, false),
+                };
+                crate::ddl::DdlColumn {
+                    name: name.clone(),
+                    type_name,
+                    inferred,
+                    nullable: annotation.as_ref().and_then(|annotation| annotation.nullable),
+                    default_value: annotation
+                        .as_ref()
+                        .and_then(|annotation| annotation.default_value.clone()),
+                }
+            })
+            .collect();
+            (table, ddl_columns)
+        };
+
+        let text = match crate::ddl::create_table_ddl(&table, &ddl_columns) {
+            crate::ddl::DdlOutcome::Sql(sql) => sql,
+            crate::ddl::DdlOutcome::Unavailable(reason) => reason,
+        };
+
+        let title = gpui_kit::SharedString::from("生成 DDL（按结果集列建表）");
+        if self.sql_textarea.is_none() {
+            let textarea = cx.new(|cx| TextareaState::new(window, cx).default_value(text.clone()));
+            self.sql_textarea = Some(textarea);
+        } else if let Some(ta) = self.sql_textarea.clone() {
+            ta.update(cx, |state, cx| state.set_value(text.clone(), window, cx));
+        }
+        self.sql_dialog_title = Some(title);
+        self.sql_dialog_open = true;
         cx.notify();
     }
 

@@ -272,6 +272,12 @@ pub enum ResultRequest {
     /// 【DBeaver 对齐】拖动标签重排：把第 `from` 份结果集搬到第 `to` 位
     /// （对应 `SQLEditor.java:1518` 的 `TabFolderReorder`；槽位整份搬，选中项跟着走）。
     MoveSet { from: usize, to: usize },
+    /// 【Metadata · 生成 DDL】按当前结果集的列生成建表 DDL 并弹预览浮层
+    /// （对齐 DBeaver Metadata 面板工具条的 `generate.ddl.by.resultSet`，
+    /// `MetaDataPanel.java:203-215` → `SQLGeneratorHandlerResultSetDDL`）。
+    /// 文本生成在面板内完成（纯函数 `crate::ddl::create_table_ddl`），
+    /// 但 `TextareaState::new` 需要 `&mut Window`，所以走队列回宿主分派。
+    GenerateResultSetDdl,
     /// 【C1】进入第 `index` 份结果集的重命名态（面板弹输入框；输入确认后再发
     /// [`Self::RenameSet`]）。单独走一条事件路径是因为 render 闭包拿不到 `&mut App`，
     /// 不能在 render 里直接改面板状态。
