@@ -15,14 +15,14 @@
 //! `test` 属性宏带入作用域，导致 `#[gpui_kit::test]` 展开出的裸 `#[test]`
 //! 解析到它自己，造成无限递归。所有依赖显式列举。
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gpui_kit::component::Root;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
-    App, AppContext as _, Context, ElementId, Entity, IntoElement, ParentElement, Render,
-    SharedString, Styled as _, TestAppContext, VisualTestContext, Window, div,
+    div, App, AppContext as _, Context, ElementId, Entity, IntoElement, ParentElement, Render,
+    SharedString, Styled as _, TestAppContext, VisualTestContext, Window,
 };
 
 use rds_workbench::components::connection_dialog::{
@@ -598,6 +598,86 @@ fn driverless_types_offer_an_install_entry(cx: &mut TestAppContext) {
         "存在无驱动类型时，侧栏必须给出安装入口"
     );
     assert!(visible(cx, "install-drivers"), "安装入口要可点");
+}
+
+/// 无驱动类型行：**真的能点**。
+///
+/// 它曾经是 `disabled(true)` 的灰行——不进点击、不进键盘序列，用户看着「暂无驱动」
+/// 却没有任何下一步。这条用例点的是行的真实几何（`ListItem` 自带 `test_support`，
+/// 行 id 以 `type-` 开头），守的就是「点得动 + 点完有话说」这条最容易被回归吃掉的行为。
+#[gpui_kit::test]
+fn driverless_type_row_is_clickable(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (harness, cx) = open_harness(cx);
+    open_new(&harness, cx);
+    let dialog = cx.update(|_, cx| harness.read(cx).dialog(cx));
+
+    cx.update(|_, _cx| {
+        *dialog.types.borrow_mut() = vec![
+            ds_type("mysql", "MySQL", "relational"),
+            ds_type("oracle", "Oracle", "relational"),
+        ];
+        *dialog.drivers.borrow_mut() = vec![driver("mysql", "mysql", "MySQL (sqlx)", true)];
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let before = cx.update(|_, _cx| dialog.selected_type.borrow().clone());
+    let row = snap(cx, "type-oracle");
+    cx.simulate_click(row.bounds().center(), gpui_kit::Modifiers::default());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let after = cx.update(|_, _cx| dialog.selected_type.borrow().clone());
+    assert_eq!(before, after, "无驱动类型仍然选不上（这条不变）");
+    let msg = cx
+        .update(|_, _cx| dialog.result_summary())
+        .unwrap_or_default();
+    assert!(
+        msg.contains("暂无可用驱动"),
+        "点灰行必须给出「为什么不能选、去哪装」，实际：{msg}"
+    );
+}
+
+/// 无驱动类型行：**确认 = 去插件管理页**（不是「选不上就完事」）。
+///
+/// 上一轮把 `confirm` 改成「先开插件管理页、宿主没挂回调再退回说明」，但宿主回退分支
+/// 的文案与旧行为一模一样——只有挂上回调才能看出区别。这条用例注入回调，钉住「真跳转」。
+#[gpui_kit::test]
+fn driverless_type_row_opens_plugin_manager(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (harness, cx) = open_harness(cx);
+    open_new(&harness, cx);
+    let dialog = cx.update(|_, cx| harness.read(cx).dialog(cx));
+
+    // 注入「插件管理页」回调：等价于工作台把 Dock 面板挂上。
+    let opened = Rc::new(Cell::new(false));
+    let opened_in = opened.clone();
+    let slot = cx.update(|_, cx| harness.read(cx)._shared.open_plugin_manager.clone());
+    *slot.borrow_mut() = Some(Rc::new(move |_, _| opened_in.set(true)));
+
+    cx.update(|_, _cx| {
+        *dialog.types.borrow_mut() = vec![
+            ds_type("mysql", "MySQL", "relational"),
+            ds_type("oracle", "Oracle", "relational"),
+        ];
+        *dialog.drivers.borrow_mut() = vec![driver("mysql", "mysql", "MySQL (sqlx)", true)];
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let row = snap(cx, "type-oracle");
+    cx.simulate_click(row.bounds().center(), gpui_kit::Modifiers::default());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(
+        opened.get(),
+        "无驱动类型的行，确认时必须真的把插件管理页叫出来"
+    );
+    let msg = cx
+        .update(|_, _cx| dialog.result_summary())
+        .unwrap_or_default();
+    assert!(
+        !msg.contains("暂无可用驱动"),
+        "已经跳到插件管理页，就不该再往结果行写错误：{msg}"
+    );
 }
 
 /// 侧栏信息架构：**类型目录在上、暂存列表在下**。

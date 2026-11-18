@@ -206,9 +206,8 @@ impl<H: 'static> ListDelegate for TypeTreeDelegate<H> {
         );
         if !has_driver {
             // 无可用驱动：置灰 + 行尾「暂无驱动」。
-            // **不再 `disabled(true)`**：灰行曾经点不动、也进不了键盘序列——对用户就是死路。
-            // 现在它可以被选中/确认，`confirm` 会把「去哪装驱动」接上（插件管理页），
-            // 宿主没挂上回调时退回 `select_type` 的守卫文案（同样说清原因）。
+            // **不再 `disabled(true)`**：组件把 disabled 行当「不可选」，选中态 / 键盘语义都不成立；
+            // 而这行本来就要能确认——确认通向插件管理页（`confirm` 里接的出口）。
             row = row.suffix(|_, cx| {
                 div()
                     .text_xs()
@@ -256,6 +255,8 @@ impl<H: 'static> ListDelegate for TypeTreeDelegate<H> {
         let Some(type_id) = self.type_id_at(ix) else {
             return;
         };
+        // 无可用驱动：确认 = 「去哪装」而不是「选不了」。先试着打开插件管理页；
+        // 宿主没挂回调时退回 `select_type` 的守卫（结果行给原因，不静默）。
         // 无可用驱动：确认 = 「去哪装」而不是「选不了」。先试着打开插件管理页；
         // 宿主没挂回调时退回 `select_type` 的守卫（结果行给原因，不静默）。
         if !type_has_driver(&self.drivers, &type_id) {
