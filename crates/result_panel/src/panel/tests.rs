@@ -1649,6 +1649,46 @@ fn right_tab_descriptions_are_distinct_and_non_empty() {
     assert_eq!(seen.len(), 6, "六页各一条提示");
 }
 
+/// 【值页动作可用性】「保存值到文件」的判据（对齐 DBeaver `!content.isNull()` 才贡献
+/// `saveToFile`）：NULL / 缺列 / 行号槽都不给入口，真实值才给。
+#[test]
+fn value_save_is_gated_by_null_and_row_number_slot() {
+    use crate::panel::tabs::value_can_save_to_file;
+
+    assert!(value_can_save_to_file(1, Some("1234.5")));
+    assert!(value_can_save_to_file(2, Some("")));
+    assert!(!value_can_save_to_file(1, Some("NULL")));
+    assert!(!value_can_save_to_file(1, None));
+    // 行号槽（col == 0）显示的是视图行号，不是数据格
+    assert!(!value_can_save_to_file(0, Some("3")));
+}
+
+/// 【值页动作可用性】选中 NULL 格时 `selected_value_payload` 给 `None`
+/// （宿主据此提示「没有内容」，不会写一个内容为 `NULL` 的文件）。
+#[gpui_kit::test]
+fn null_cell_has_no_value_payload(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    // 第 2 行 amount 列 = NULL；第 1 行同一列 = 1234.5
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.selection_pos = Some((1, 2));
+            cx.notify();
+        })
+    });
+    let payload = panel.read_with(cx, |p, app| p.selected_value_payload(app));
+    assert!(payload.is_none(), "NULL 格不应给出落盘载荷");
+
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.selection_pos = Some((0, 2));
+            p.set_right_tab(crate::ports::RightTab::Value, cx);
+        })
+    });
+    let payload = panel.read_with(cx, |p, app| p.selected_value_payload(app));
+    assert!(payload.is_some(), "有值的格应给出落盘载荷");
+}
+
 #[test]
 fn hex_page_clamps_to_the_last_page() {
     use crate::panel::tabs::hex_page_clamp;

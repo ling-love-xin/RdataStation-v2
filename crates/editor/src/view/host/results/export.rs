@@ -101,7 +101,10 @@ impl EditorHostPanel {
             return;
         }
         let Some(payload) = self.result_panel.read(cx).selected_value_payload(cx) else {
-            self.set_message(Some("先选中一个单元格再保存值".to_string()), cx);
+            self.set_message(
+                Some("先选中一个有值的单元格再保存值（NULL / 行号槽没有内容）".to_string()),
+                cx,
+            );
             return;
         };
         let Some(path) = self.shared.pick_save_path(None, payload.default_name) else {

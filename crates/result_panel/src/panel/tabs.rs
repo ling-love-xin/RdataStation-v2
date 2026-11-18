@@ -185,7 +185,11 @@ impl ResultPanel {
         };
         // 【保存值】对齐 DBeaver「保存至文件…」（`ContentValueManager.contributeContentActions`
         // `:86-99` → `saveToFile` `:291-334`）：落盘动作在宿主（选路径 + 写盘），
-        // 面板只交字节与默认文件名
+        // 面板只交字节与默认文件名。
+        //
+        // 【动作可用性】DBeaver 那份动作是**条件贡献**的：`if (!content.isNull())` 才加
+        // `saveToFile`（`:92-99`）。本仓按同一口径置灰——NULL 格 / 行号槽没有内容可写。
+        let savable = value_can_save_to_file(col, delegate.row_cell_text(row, col));
         let save = {
             let queue = self.queue.clone();
             Button::new("editor-result-value-save")
@@ -193,7 +197,12 @@ impl ResultPanel {
                 .xsmall()
                 .debug_selector(|| "editor-result-value-save".to_string())
                 .icon(IconName::Download)
-                .tooltip("把当前值保存到文件")
+                .disabled(!savable)
+                .tooltip(if savable {
+                    "把当前值保存到文件"
+                } else {
+                    "该格没有内容可保存（NULL / 行号槽）"
+                })
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::SaveValue, app);
                 })
@@ -239,6 +248,11 @@ impl ResultPanel {
         let (row, col) = self.selection_pos?;
         let grid = self.grid.read(cx);
         let delegate = grid.delegate();
+        // 【动作可用性】与页内「保存值」钮同一个判据：NULL 格 / 行号槽没有内容可写，
+        // 给空载荷就是让宿主写一个内容为 `NULL` 的文件（DBeaver 干脆不贡献该动作）。
+        if !value_can_save_to_file(col, delegate.row_cell_text(row, col)) {
+            return None;
+        }
         let value = delegate.cell_text(row, col, cx);
         let kind = if col == 0 {
             ColumnKind::Unknown
@@ -1347,6 +1361,17 @@ impl ResultPanel {
             .child(SharedString::from(text))
             .into_any_element()
     }
+}
+
+/// 【值页动作可用性】「保存值到文件」什么时候可用：DBeaver 的 `saveToFile` 是
+/// **条件贡献**的（`ContentValueManager.contributeContentActions`：`if (!content.isNull())`
+/// 才加，`:92-99`），NULL 值不给保存入口。本仓再加一条：`#` 行号槽不是数据格
+/// （`row_cell_text` 对它返回 `None`），显示的数字是视图行号，也按「没有内容」处理。
+///
+/// 判据统一走 [`crate::export::is_null_cell`]（`None` / 字面 `NULL` 都算），
+/// 不另造一套"是不是空值"的规则。
+pub(crate) fn value_can_save_to_file(col_ix: usize, raw: Option<&str>) -> bool {
+    col_ix != 0 && !crate::export::is_null_cell(raw)
 }
 
 /// 【R3 分组页】分组结果排序 + 「仅重复」筛选（纯函数，便于单测）。
