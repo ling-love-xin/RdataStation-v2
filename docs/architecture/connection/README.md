@@ -38,7 +38,7 @@
 
 | 特点 | 含义 | 出处 |
 | --- | --- | --- |
-| **依赖只向下** | 视图只依赖 `gpui-kit`；`connection` crate 不吃 engine；传输/协议层（URL 处理、隧道、协议链）已全部下沉到 `crates/connection`，workbench 只留编排 | 架构 §2.1 |
+| **依赖只向下** | 视图只依赖 `gpui-kit`；`connection` crate 不吃 engine；传输/协议层（URL 处理、隧道、协议链）全部下沉到 `crates/connection`，编排与服务层收在 `crates/connection_dialog/src/services/`（workbench 只挂宿主桥） | 架构 §2.1 |
 | **状态所有权清晰** | 对话框状态挂 `EditorPanel`（`Rc<ConnectionDialogState>`）；副作用（订阅 / 宿主重绘）一律在面板入口，`render` 是模式同步的权威点 | 架构 §4、#30 |
 | **对话框层挂载机制** | `window.open_dialog` + 宿主 `Root::render_dialog_layer`；`cx.notify` 只重渲染子树 → 打开/关闭后显式 `notify_host` | 架构 §4.2 |
 | **渲染热路径收敛** | 驱动派生数据按“驱动 id + 声明原文”缓存、地址占位“变化才写”（`set_placeholder` 是无条件 notify）、暂存列表用 `LiveEntryView` 逐行短借用 | 架构 #67、#73 |
@@ -49,7 +49,7 @@
 
 | 特点 | 含义 | 出处 |
 | --- | --- | --- |
-| **六文件拆分** | `connection_dialog/{mod,state,staging,render,managers,helpers}.rs` + `project_picker.rs`，每个文件职责单一（状态 / 快照 / 渲染 / 覆盖层 / 纯函数） | 架构 §2.2 |
+| **按块拆分的渲染** | `connection_dialog/{mod,state,staging,render,managers,type_tree,draft_list,project_picker}.rs` + `helpers/`（纯函数目录）+ `services/`（服务层，含共用 `rt.rs`）；`render.rs` 内闭包只做装配，各块是独立函数 | 架构 §2.2、#13 |
 | **纯函数优先** | 可测的判定都拍成纯函数：`driver_form_fields` / `build_{auth,network}_config_json` / `strip_file_db_noise` / `dialog_tab_defs` / `visible_tab_index` / `saved_result` / `create_new_db_file` / `metadata_identity::*` | 架构 §7 |
 | **测试分层** | 传输单测（`crates/connection`）→ 服务集成（`data_source_lifecycle` 等）→ 窗口测试（`#[gpui_kit::test]` headless）→ 契约（`ui_contract`）；测试落临时目录、不触真实库 | 架构 §7 |
 | **真机反馈成文** | 每轮 USIT 的问题 → 决策编号 → 文档 + 测试同步；`§14` 是唯一待办清单，`dev-plan` 顶部是逐轮记录 | 架构 §6 / §14、dev-plan |
@@ -58,26 +58,41 @@
 ## 2. 边界
 
 - **做**：数据源连接的**新增 / 编辑 / 删除 / 测试**、作用域路由、凭据与档案引用、DuckDB Secret 加速、运行时连接与隧道、暂存草稿、连接的组织元数据（标签 / 分组勾选）。
-- **不做**：数据源**导航树 / 分组管理 / 标签检索视图**（属 database-nav，见 `../database/database-nav-dev-plan.md`）；驱动**安装 / 插件**（平台）；模板**导入导出 UI**（能力与测试已就绪，入口按决策暂缓）。
+- **不做**：数据源**导航树 / 分组管理 / 标签检索视图**（属 database-nav，见 `../database/database-nav-dev-plan.md`）；驱动**安装 / 插件**本体（平台；对话框只做「一键跳到插件管理」的入口）。
+- 模板**导入导出**已实装（暂存列表标题行 `导出 / 导入`，剪贴板 JSON、不含密码）。
 
 ## 3. 代码地图（要改什么去哪）
 
 | 想改 | 去哪 |
 | --- | --- |
-| 对话框 UI / 布局 / 交互 | `crates/connection_dialog/src/components/connection_dialog/render.rs`（+ `helpers.rs` 纯函数、`ui.rs` 尺寸常量） |
-| 暂存列表 / 草稿快照 | `connection_dialog/staging.rs`（`ConnectionDraft` + `staging_*`） |
+| 对话框 UI / 布局 / 交互 | `crates/connection_dialog/src/components/connection_dialog/render.rs`（逐块函数：`result_row_ui` / `side_panel_ui` / `capability_panel_ui` / `driver_props_panel_ui` / `footer_ui` / `network_tab_ui` / `advanced_tab_ui` / `general_tab_ui`）+ `helpers/` 纯函数 + `crates/workbench_shell/src/ui.rs` 尺寸常量 |
+| 暂存列表 / 草稿快照 | `crates/connection_dialog/src/components/connection_dialog/staging.rs`（`ConnectionDraft` + `staging_*`）+ `draft_list.rs` |
+| 类型树 / 项目下拉 | `connection_dialog/type_tree.rs`、`connection_dialog/project_picker.rs`（+ `Shared::{project_new_request, project_open_request}` → `take_project_action_request`） |
 | 三个管理器覆盖层 | `connection_dialog/managers.rs` |
-| 项目下拉 | `connection_dialog/project_picker.rs`（+ `Shared::{project_new_request, project_open_request}` → `take_project_action_request`） |
-| 落库 / 回读 / 测试连接 / 作用域路由 | `crates/workbench/src/services/data_source_service.rs` |
-| 连接组装与隧道 | `crates/workbench/src/services/connection_service.rs` + `crates/connection/src/{url,url_params,chain}.rs` |
-| **网络配置（SSH / 代理 / SOCKS / SSL）**：模型 | `crates/connection/src/config.rs`（`SshConfig` / `SshAuth` / `ProxyConfig` / `SslConfig` / `ChainHop` / `ConnectionMethod`） |
-| **网络配置**：真实拨号与隧道 | `crates/connection/src/connector.rs`（`SshTunnelConnector` 基于 **russh** 做端口转发、`SslConnector`、`TunnelGuard`）、`stream.rs`（隧道流）、`known_hosts.rs`（主机指纹校验）、`chain.rs`（`apply_network_method` 单跳 + `process_chain` 多跳 + `TunnelRegistry` 守卫表） |
-| **网络配置**：落库 | `crates/engine/src/persistence/network_store.rs`（结构化字段组装 / 回填 + 凭据 AES 加密 / 脱敏 / 存量迁移） |
-| **网络配置**：UI 入口 | 「网络」Tab（引用下拉 + 「管理网络配置」）→ `connection_dialog/managers.rs`（类型 + 字段表单）+ `helpers.rs::{network_field_specs, network_config_values}`（按类型展开字段）；**内联协议链编辑器已撤下**（决策 #72，多跳走 `chain` 档案） |
-| 表结构与迁移 | `crates/engine/src/{migrations/global,persistence}/*`（`global_connections` / `connection_drafts` / `auth_store` / `network_store` / `connection_org_store` / `metadata_identity`） |
-| ID 规则与作用域判定 | `crates/engine/src/persistence/id_prefix.rs` |
+| 落库 / 回读 / 测试连接 / 作用域路由 | `crates/connection_dialog/src/services/data_source_service.rs` |
+| 连接组装与隧道 | `crates/connection_dialog/src/services/connection_service.rs`（+ `connection_service/{network,runtime}.rs`）+ `crates/connection/src/{url,url_params,chain,secret}.rs` |
+| 共用 tokio 运行时 | `crates/connection_dialog/src/services/rt.rs`（`OnceLock<Option<Runtime>>` + `runtime()`） |
+| **网络配置（SSH / 代理 / SOCKS / SSL）**：模型 | `crates/connection/src/config.rs`（`SshConfig` / `SshAuth` / `ProxyConfig` / `SslConfig` / `ChainHop` / `ConnectionMethod`）+ `model.rs` |
+| **网络配置**：真实拨号与隧道 | `crates/connection/src/connector/`（`ssh.rs`：`establish_ssh_tunnel` 基于 **russh** 本地端口转发 + `SshTunnelConnector`〔废弃占位，防静默直连〕；`proxy.rs`：HTTP / SOCKS 代理；`tls.rs`：`SslConnector` / `wrap_tls_stream`；`mod.rs`：`Connector` trait / `Connection` / `DirectConnector` / `TunnelGuard`）+ `factory.rs`（按配置选连接器）+ `stream.rs`（隧道流）、`known_hosts.rs`（主机指纹校验）、`chain.rs`（`apply_network_method` 单跳 + `process_chain` 多跳 + `TunnelRegistry` 守卫表） |
+| **网络配置**：落库 | `crates/store/src/persistence/network_store.rs`（结构化字段组装 / 回填 + 凭据 AES 加密 / 脱敏 / 存量迁移） |
+| **网络配置**：UI 入口 | 「网络」页（引用下拉 + 「管理网络配置」）→ `connection_dialog/managers.rs`（类型 + 字段表单）+ `helpers::{network_field_specs, network_config_values}`（按类型展开字段）；**内联协议链编辑器已撤下**（决策 #72，多跳走 `chain` 档案） |
+| 表结构与迁移 | `crates/store/src/persistence/*`（`network_store` / `auth_store` / `driver_store` / `connection_org_store` / `metadata_identity`）+ `crates/store/migrations/{global,project_meta}/*` |
+| ID 规则与作用域判定 | `crates/store/src/persistence/id_prefix.rs` |
 
-数据链路：`UI（对话框 / 导航）→ DataSourceService（唯一的服务层入口）→ engine 持久化层 → 本地 SQLite / DuckDB`。**无 HTTP / IPC 层**——“前后端联通”在本模块即“UI 只经服务层读写本地库”。
+数据链路：`UI（对话框 / 导航）→ DataSourceService（唯一的服务层入口，位于 crates/connection_dialog）→ rds-store 持久化层 → 本地 SQLite / DuckDB`。**无 HTTP / IPC 层**——“前后端联通”在本模块即“UI 只经服务层读写本地库”。
+
+**路径口径（2026-11-18 代码重排，读旧文档前先看这张表）**
+
+| 旧路径（历史文档里常见） | 现在 |
+| --- | --- |
+| `crates/engine/src/driver/{declaration.rs, registry/descriptors.rs, capability.rs, property_spec.rs}` | 实体在 `rds-driver` = `crates/driver/src/{declaration,registry/descriptors,capability,property_spec}.rs`；`engine::driver::*` 仍是零改动薄壳 re-export |
+| `crates/engine/src/persistence/*`（`id_prefix` / `*_store` / `metadata_cache_pool` / `project_db` / `global_db` …） | 实体在 `rds-store` = `crates/store/src/persistence/*`；`engine::persistence::*` 同样是薄壳 re-export |
+| `crates/engine/migrations/**` | `crates/store/migrations/**`（`global` / `project_meta`） |
+| `crates/workbench/src/services/{data_source_service,connection_service}.rs` | `crates/connection_dialog/src/services/{data_source_service,connection_service}.rs`（+ `connection_service/{network,runtime}.rs` / `rt.rs`） |
+| `crates/connection/src/connector.rs` | 已拆成目录 `crates/connection/src/connector/`（`mod` / `proxy` / `ssh` / `tls`） |
+| `components/connection_dialog/helpers.rs` | `helpers/`（目录：`mod` / `capability` / `fields` / `files` / `summary` / `tests`） |
+
+按此映射阅读历史记录（dev-plan、架构决策、测试报告里的路径均为当时状态，不再逐条改写）。
 
 ## 4. 改这个模块前必须遵守
 
@@ -94,23 +109,24 @@
 
 ```sh
 # 模块回归（连接组织存储 + 工作台 lib + 连接相关套件）
-cargo test -p rds-engine --lib connection_org_store -j 2
-cargo test -p rds-workbench --lib \
+cargo test -p rds-store --lib connection_org_store -j 2
+cargo test -p rds-workbench --lib -j 2
+cargo test -p rds-workbench -j 2 \
   --test data_source_lifecycle --test connection_dialog_ui --test connection_staging \
   --test connection_multi_save --test connection_drafts_persist --test connection_type_driver \
   --test connection_project_picker --test dialog_host_layer --test connection_tunnel_cleanup \
-  --test connection_scope_and_state --test real_connections --test global_service_singleton \
-  --test connection_template --test ui_contract \
-  --test connection_render_matrix --test connection_edit_backfill -j 2
+  --test connection_scope_and_state --test connection_rule12 --test real_connections \
+  --test global_service_singleton --test connection_template --test ui_contract \
+  --test connection_render_matrix --test connection_edit_backfill
 
 # 全工作区编译守卫（含全部 target）
 cargo check --workspace --all-targets -j 2
 ```
 
-- 基准（2026-09-19，**逐包口径**——数字来源与复现命令见 `../module-status.md` §1/§2；connection 数字已按 2026-10-01 复跑核对为 **102 = 单元 96 + 集成 `tunnel_roundtrip` 6**）：连接 crate **102**（单元 96 + 集成 `tunnel_roundtrip` 6）；工作台连接套件 **15 个目标 / 75 项**——`data_source_lifecycle` 28、`connection_type_driver` 7、`connection_project_picker` 7、`connection_staging` 6、`real_connections` 5、`connection_dialog_ui` 4、`dialog_host_layer` 4、`connection_multi_save` 3、`connection_render_matrix` 2、`connection_scope_and_state` 2、`connection_template` 2、`global_service_singleton` 2、`connection_drafts_persist` 1、`connection_edit_backfill` 1、`connection_tunnel_cleanup` 1。跨模块参照：`ui_contract` 7（全局 UI 契约）· `db_navigator` 2（M4）。
-- **引擎侧**：`cargo test -p rds-engine --lib` = **443 项**（含本模块的标签回填、网络档案加密、启动迁移接线、项目打开回填等用例）。
+- 基准（2026-09-19 快照，**未随本轮打磨重跑**；逐包口径见 `../module-status.md` §1/§2；connection 数字已按 2026-10-01 复跑核对为 **102 = 单元 96 + 集成 `tunnel_roundtrip` 6**）：连接 crate **102**；工作台连接套件 **15 个目标 / 75 项**——`data_source_lifecycle` 28、`connection_type_driver` 7（本轮已增至 9）、`connection_project_picker` 7、`connection_staging` 6、`real_connections` 5、`connection_dialog_ui` 4、`dialog_host_layer` 4、`connection_multi_save` 3、`connection_render_matrix` 2（本轮已增至 12）、`connection_scope_and_state` 2、`connection_template` 2、`global_service_singleton` 2、`connection_drafts_persist` 1、`connection_edit_backfill` 1、`connection_tunnel_cleanup` 1。跨模块参照：`ui_contract` 7（全局 UI 契约）· `db_navigator` 2（M4）。本轮实跑基线：`rds-connection-dialog --lib` 78、六套窗口用例 4/12/9/7/1/2。
+- **引擎侧**：`cargo test -p rds-engine --lib` = **443 项（2026-09-19 口径）**（含本模块的标签回填、网络档案加密、启动迁移接线、项目打开回填等用例）；`rds-store` 侧另有连接组织 / 草稿 / 认证 / 网络存储单测。
 - 全仓对照：**84 目标 / 1963 通过**（含 16 个 Doc-tests 目标；唯一失败是已取消跟踪的本机诊断 `zz_fixture_probe`，环境原因）。
-- **两条补强套件**（2026-09-17）：`connection_render_matrix`（状态 × 渲染矩阵：引导条三态、五 Tab 降级渲染、作用域三态、结果行四级、**暂存区固定高度 + 两列等高**）与 `connection_edit_backfill`（编辑入口 → 读库 → 表单逐项回填 + 五 Tab 渲染；**本轮由此拖出“类型 / 驱动不回填”缺陷**）。
+- **两条补强套件**（2026-09-17）：`connection_render_matrix`（状态 × 渲染矩阵：引导条三态、Tab 降级渲染〔当时五页，现三页且用例已随之改写〕、作用域三态、结果行四级、**暂存区固定高度 + 两列等高**）与 `connection_edit_backfill`（编辑入口 → 读库 → 表单逐项回填 + 各页渲染；**本轮由此拖出“类型 / 驱动不回填”缺陷**）。
 - **布局高度的写法约定**（本轮踩到，必守）：固定高度必须 `h + min_h + max_h` **三向显式**约束——只给 `h()`（哪怕再加 `min_h_0()`）夹不住 flex 子项的自动最小尺寸，内容多时会按内容撑高（实测暂存区 120px → 412px、侧栏 522px 撑高对话框）。
 - 测试模块的硬规则：**禁** `use gpui_kit::*` / `use super::*`（`#[test]` 宏遮蔽）；断言“节点真的渲染”必须 `.debug_selector(...)` + `cx.debug_bounds(...)`（`.id(...)` **不**登记坐标）；宿主设置 `host_redraw` 桥时，面板入口要**从宿主外部**触发（在 `Harness::update` 内调会重入 panic）。
 - **标签单一权威**（2026-09-17 收尾）：读取**只认** `connection_tags`；行内 `tags` JSON 降为写入侧投影；存量数据由**两处**一次性回填迁入（都幂等）——① 启动迁移 `initialize_global_system` → `migrate_legacy_data`（全局库 + 名册里已存在权威表的项目库）；② 打开项目、项目迁移建好表之后 `ProjectDatabaseManager::open` → `backfill_project_connection_tags`（否则升级后第一次打开项目看不到旧标签）；两处都不建表不建目录（决策 #95）。
