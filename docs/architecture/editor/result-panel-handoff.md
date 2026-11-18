@@ -1493,6 +1493,17 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；无 focus-lost 回填
   （`InputState` 没有失焦钩子），只做「有效提交即规范化」。
 
+### 2.76 右栏页签提示的接手要点（2026-11-18）
+
+- 文案单一来源 = `panel::events::right_tab_description`（前五条译 DBeaver
+  `bundle.properties:15-24` 的 `panel.*.description`）；新增页要在这里登记一条，
+  用例 `right_tab_descriptions_are_distinct_and_non_empty` 会拦重复 / 空串。
+- 页签条用 `.tooltip(...)`（`Tab::tooltip`）；右缘竖条的按钮仍用 `right_tab_label`
+  ——DBeaver 竖条按钮提示就是面板 label，别把两处统一成同一个字符串。
+- 新增页时一并核对：`right_tabs()` 顺序、`right_tab_index` / `right_tab_from_index`
+  映射、`right_tab_icon`、`panel_view_menu_items()`（页数 + 分隔段位）、
+  `render_right_sidebar` 的 `match self.right_tab`——五处漏一处就会出现「页签在但点不开」。
+
 ### 2.75 计算页右键菜单的接手要点（2026-11-18）
 
 - 菜单内容写死在一处：`panel::tabs::stat_row` 的 `.context_menu(...)`；文本由

@@ -4644,6 +4644,36 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
 - `cargo test -p rds-result-panel --lib` = **320 passed**；`cargo check -p rds-editor`
   = Finished；`cargo test -p rds-ui-guard` = 4 passed。
 
+### 8.88 右栏页签补提示文案（对齐 DBeaver 面板 descriptor，2026-11-18）
+
+**取证**：
+- 面板扩展定义在 `plugin.xml:127-170`：每个面板有 `id / label / description / icon /
+  default / class`（内置五个：`value-view`（`default="true"`）、`column-aggregate`、
+  `results-metadata`、`results-grouping`（`supports if="context.supportsGrouping()"`）、
+  `results-references`）。
+- `addPanel` 建页签时 `panelTab.setToolTipText(panelDescriptor.getDescription())`
+  （`ResultSetViewer.java:1361`）——页签只有图标 + 短名，靠 tooltip 说明用途。
+- 描述文案在 `OSGI-INF/l10n/bundle.properties:15-24`：
+  `value-view` = Results cell value viewer、`column-aggregate` = Result cells calculations
+  (SUM, MAX, AVG, etc)、`results-metadata` = ResultSet metadata description、
+  `results-grouping` = Results grouping (GROUP BY)、
+  `results-references` = One or more rows referencing current row(-s)。
+
+**本仓落点**：
+- 纯函数 `panel::events::right_tab_description(tab) -> &'static str`：前五条逐条译，
+  「执行SQL」是本仓独有页（DBeaver 无对应面板），按实能做描述。
+- `render_right_sidebar` 的页签 `Tab::new()…​.tooltip(right_tab_description(tab))`
+  （vendor `tab/tab.rs:745`）；右缘竖条的面板按钮**仍是短名作提示**——
+  DBeaver 竖条（`VerticalFolder`）的按钮提示就是面板 label，两处不同不算不一致。
+- 顺手修掉 `panel_view_menu` 上方一段过期注释（写着「面板最大化没有落地端口、不摆」，
+  而 §8.84 已把 `CMD_TOGGLE_MAXIMIZE` 的等价物摆进菜单）。
+
+**验证**：
+- `panel::tests::right_tab_descriptions_are_distinct_and_non_empty`（六页各非空、互不重复）。
+- `cargo test -p rds-result-panel --lib` = **321 passed**；`cargo check -p rds-editor`
+  = Finished；`cargo test -p rds-ui-guard` = 4 passed。
+
+
 
 
 
