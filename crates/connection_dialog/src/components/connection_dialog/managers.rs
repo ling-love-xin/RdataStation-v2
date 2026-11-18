@@ -24,6 +24,11 @@ fn item_matches_filter(name: &str, query: &str) -> bool {
     q.is_empty() || name.to_lowercase().contains(&q)
 }
 
+/// 列表可见判据 = 名称匹配 ∧ 类型筛选（`None` = 全部）。
+fn item_visible(item: &ManagerItem, query: &str, type_filter: Option<&str>) -> bool {
+    item_matches_filter(&item.name, query) && type_filter.map_or(true, |t| item.tpe == t)
+}
+
 /// 取字段输入实体（键不存在 → None）。
 fn net_input_entity(mgr: &ManagerWorkspace, key: &str) -> Option<Entity<InputState>> {
     mgr.net_inputs
@@ -113,6 +118,7 @@ pub(crate) fn prepare_manager_domain(
         m.editing = None;
         // 切域一律回到列表态：上一个域停在「编辑某条」时，切过来不该直接看到半张表单。
         m.form_open = false;
+        m.type_filter = None;
         m.msg = None;
         m.items.clear();
         m.project_root = project_root;
@@ -174,38 +180,39 @@ pub(crate) fn refresh_manager_items(
     };
 
     let items: Vec<ManagerItem> = rt.block_on(async {
-        // (id, 显示名)：id 用于引用计数，显示名用于列表。
-        let rows: Vec<(String, String)> = match kind {
+        // (id, 显示名, 类型键)：id 用于引用计数，显示名与类型键用于列表 / 类型筛选。
+        let rows: Vec<(String, String, String)> = match kind {
             ManagerKind::Auth => service
                 .list_auth_configs()
                 .await
                 .unwrap_or_default()
                 .into_iter()
-                .filter_map(|a| a.name.map(|n| (a.id, n)))
+                .filter_map(|a| a.name.map(|n| (a.id, n, a.auth_type)))
                 .collect(),
             ManagerKind::Network => service
                 .list_network_configs()
                 .await
                 .unwrap_or_default()
                 .into_iter()
-                .filter_map(|n| n.name.map(|name| (n.id, name)))
+                .filter_map(|n| n.name.map(|name| (n.id, name, n.network_type)))
                 .collect(),
             ManagerKind::Env => service
                 .list_environments()
                 .await
                 .unwrap_or_default()
                 .into_iter()
-                .map(|e| (e.id, e.name))
+                .map(|e| (e.id, e.name, String::new()))
                 .collect(),
         };
-        let ids: Vec<String> = rows.iter().map(|(id, _)| id.clone()).collect();
+        let ids: Vec<String> = rows.iter().map(|(id, _, _)| id.clone()).collect();
         let counts = service
             .count_references_batch(field, &ids, project_root.as_deref())
             .await;
         rows.into_iter()
-            .map(|(id, name)| ManagerItem {
+            .map(|(id, name, tpe)| ManagerItem {
                 refs: counts.get(&id).map(|c| c.total()).unwrap_or(0),
                 name,
+                tpe,
             })
             .collect()
     });
@@ -551,12 +558,13 @@ pub(crate) fn manager_panel_ui(
         let theme = cx.theme();
         let m = mgr.borrow();
         let form_open = m.form_open;
-        // 搜索：只过滤显示（`items` / 引用计数 / 删除仍走全量）。
+        // 搜索 + 类型筛选：只过滤显示（`items` / 引用计数 / 删除仍走全量）。
         let raw_query = m.filter_text.read(cx).value().trim().to_string();
+        let type_filter = m.type_filter.clone();
         let visible_items: Vec<ManagerItem> = m
             .items
             .iter()
-            .filter(|it| item_matches_filter(&it.name, &raw_query))
+            .filter(|it| item_visible(it, &raw_query, type_filter.as_deref()))
             .cloned()
             .collect();
 
@@ -609,12 +617,53 @@ pub(crate) fn manager_panel_ui(
                             }),
                     ),
             );
+            // 类型筛选 chips（只在有类型列的域出现）：再点一次当前类型 = 回到「全部」。
+            // 放在空态之前：筛出 0 条时仍然看得到 chips，否则用户没法把筛选撤回来。
+            if kind.has_type_column() && !m.items.is_empty() {
+                let mut types: Vec<String> = Vec::new();
+                for it in &m.items {
+                    if !it.tpe.is_empty() && !types.iter().any(|t| t == &it.tpe) {
+                        types.push(it.tpe.clone());
+                    }
+                }
+                let current = m.type_filter.clone();
+                let mut chips = div().h_flex().items_center().gap_1().pb_1();
+                let mgr_all = mgr.clone();
+                let notify_all = notify.clone();
+                let mut all_btn = Button::new("mgr-type-all").label(tr("全部"));
+                all_btn = if current.is_none() {
+                    all_btn.secondary()
+                } else {
+                    all_btn.ghost()
+                };
+                chips = chips.child(all_btn.on_click(move |_, _window, app| {
+                    mgr_all.borrow_mut().type_filter = None;
+                    notify_all(app);
+                }));
+                for (ti, tpe) in types.iter().enumerate() {
+                    let mgr_chip = mgr.clone();
+                    let notify_chip = notify.clone();
+                    let active = current.as_deref() == Some(tpe.as_str());
+                    let tpe_for = tpe.clone();
+                    let mut chip = Button::new(format!("mgr-type-{ti}")).label(tpe.clone());
+                    chip = if active { chip.secondary() } else { chip.ghost() };
+                    chips = chips.child(chip.on_click(move |_, _window, app| {
+                        let mut m = mgr_chip.borrow_mut();
+                        m.type_filter = if active { None } else { Some(tpe_for.clone()) };
+                        drop(m);
+                        notify_chip(app);
+                    }));
+                }
+                rows = rows.child(chips);
+            }
         }
         if visible_items.is_empty() {
-            let text = if raw_query.is_empty() {
-                tr("暂无配置，点右上「新建」").to_string()
-            } else {
+            let text = if !raw_query.is_empty() {
                 format!("没搜到「{}」", raw_query)
+            } else if type_filter.is_some() {
+                tr("该类型下暂无配置（点「全部」撤销筛选）").to_string()
+            } else {
+                tr("暂无配置，点右上「新建」").to_string()
             };
             rows = rows.child(
                 div().text_xs().text_color(theme.colors.muted_foreground).child(text),
@@ -633,6 +682,15 @@ pub(crate) fn manager_panel_ui(
                 .px_2()
                 .py_1()
                 .child(div().text_sm().flex_1().child(item.name.clone()));
+            // 类型列（认证 / 网络有类型键；环境域列表不显示假类型）。
+            if !item.tpe.is_empty() {
+                row = row.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.colors.muted_foreground)
+                        .child(item.tpe.clone()),
+                );
+            }
             // 被引用计数（原型 §3.6）：被引用时删除会被拦下，先在这里告知数量。
             if item.refs > 0 {
                 row = row.child(
@@ -1120,7 +1178,16 @@ pub(crate) fn manager_panel_ui(
 
 #[cfg(test)]
 mod tests {
-    use super::item_matches_filter;
+    use super::{item_matches_filter, item_visible};
+    use crate::components::connection_dialog::ManagerItem;
+
+    fn item(name: &str, tpe: &str) -> ManagerItem {
+        ManagerItem {
+            name: name.to_string(),
+            tpe: tpe.to_string(),
+            refs: 0,
+        }
+    }
 
     #[test]
     fn empty_query_matches_every_item() {
@@ -1140,5 +1207,26 @@ mod tests {
     fn non_matching_returns_false() {
         assert!(!item_matches_filter("Prod-Auth", "test"));
         assert!(!item_matches_filter("", "prod"));
+    }
+
+    #[test]
+    fn type_filter_narrows_within_name_hits() {
+        let a = item("prod-auth", "password");
+        let b = item("prod-ssh", "ssh_key");
+        // 无类型筛选：两条都命中。
+        assert!(item_visible(&a, "prod", None) && item_visible(&b, "prod", None));
+        // 选了类型：只剩该类型那条。
+        assert!(item_visible(&a, "prod", Some("password")));
+        assert!(!item_visible(&b, "prod", Some("password")));
+        // 名称与类型同时不满足 → 不可见（两个条件是与，不是或）。
+        assert!(!item_visible(&b, "test", Some("password")));
+    }
+
+    #[test]
+    fn empty_type_key_never_matches_a_type_filter() {
+        // 环境域条目 `tpe` 为空；若误把它算进任何类型筛选会「越筛越多」。
+        let env = item("生产环境", "");
+        assert!(!item_visible(&env, "", Some("password")));
+        assert!(item_visible(&env, "", None));
     }
 }

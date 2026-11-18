@@ -260,10 +260,14 @@ pub(crate) fn saved_result(name: &str, conn_id: &str) -> ResultLine {
     ))
 }
 
-/// 管理器列表条目：名称 + 被引用计数（原型 §3.6 要求显示引用计数）。
+/// 管理器列表条目：名称 + 类型 + 被引用计数（原型 §3.6 要求显示引用计数）。
 #[derive(Clone, Debug)]
 pub struct ManagerItem {
     pub name: String,
+    /// 类型键（认证 `auth_type` / 网络 `network_type`；环境域为空）。
+    ///
+    /// 列表侧的「类型筛选」按它过滤；环境没有类型列，所以留空而不是造一个假类型。
+    pub tpe: String,
     /// 引用该配置的连接数（全局库 + 当前打开项目）。
     pub refs: usize,
 }
@@ -342,6 +346,8 @@ pub struct ManagerWorkspace {
     pub form_open: bool,
     /// 列表搜索词（按名称过滤；切域时清空）。只过滤显示，不动 `items`（被引用计数 / 删除仍是全量口径）。
     pub filter_text: Entity<InputState>,
+    /// 列表类型筛选（`None` = 全部；只在认证 / 网络域有值）。切域时清空。
+    pub type_filter: Option<String>,
     pub msg: Option<String>,
     // ---- 环境策略（`Env` 域展开面板）----
     /// 当前展开策略管理的环境名（None = 收起）。
@@ -411,6 +417,7 @@ pub(crate) fn manager_workspace(window: &mut Window, cx: &mut App) -> ManagerWor
         editing: None,
         form_open: false,
         filter_text,
+        type_filter: None,
         msg: None,
         policy_env: None,
         policy_type,
