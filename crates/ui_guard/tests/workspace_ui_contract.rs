@@ -53,7 +53,11 @@ const BASELINE: &[(&str, usize, usize)] = &[
     // 图标量不出字形推进宽，只能按 `Icon::size_3()` 的尺寸档记常量）与
     // `RESULT_FIT_HEADER_CHROME = px(20.)`（组件排序图标槽 16 + 右侧偏移 4：自适应宽度
     // 原来漏算这 20px，双击算出的列宽会把列名挤成省略号）。
-    ("crates/result_panel/src/ui.rs", 0, 20),
+    // 2026-11-18 20 → 21：新增 `RESULT_CELL_PADDING_X = px(6.)`（单元格**单侧**左右内距，
+    // 渲染侧（`grid/cell.rs` / `grid/header.rs`）与列宽自适应（`grid/fit.rs`）共用这一个来源；
+    // 原先渲染写 `rems(0.375)`、自适应写 `RESULT_FIT_CELL_PADDING = px(12.)`，两个独立编码
+    // 一旦分叉，双击算出的列宽就会差 12px）。
+    ("crates/result_panel/src/ui.rs", 0, 21),
     ("crates/settings/src/skeleton.rs", 0, 1),
     ("crates/workbench/src/components/dialog_helpers.rs", 0, 1),
     (

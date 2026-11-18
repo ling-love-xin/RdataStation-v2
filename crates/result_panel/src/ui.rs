@@ -171,11 +171,23 @@ pub const RESULT_TABLE_SIZE: ComponentSize = ComponentSize::XSmall;
 /// 由 56 变成 68；最小宽维持 80 不动——它是下限兜底，不因余量变宽就回头下调。）
 pub const RESULT_COLUMN_MIN_WIDTH: Pixels = px(80.);
 
-/// 列宽自适应（`grid/fit.rs`）：单元格自身左右内边距合计（`render_td` 的 `px(rems(0.375))`）。
+/// 单元格内容**单侧**左右内距（渲染侧唯一来源：`grid/cell.rs` 与 `grid/header.rs`
+/// 的 `render_td` / `render_th` 都读它）。
+///
+/// 取 DBeaver `GridCellRenderer.LEFT_MARGIN` / `RIGHT_MARGIN = 6`（`:43-50`）。
+/// 用**物理 px** 而不是 `rems(0.375)`：数据网格的条带高本身就是固定的（26px），
+/// 内距如果随主题基准字号浮动，改字号就会让「自适应算出来的宽」和「渲染出来的宽」再次分叉。
+pub const RESULT_CELL_PADDING_X: Pixels = px(6.);
+
+/// 列宽自适应（`grid/fit.rs`）：单元格自身左右内边距合计（= 单侧 × 2）。
 ///
 /// 2026-11-17 16 → 12：内距按 DBeaver `GridCellRenderer.LEFT/RIGHT_MARGIN = 6` 收紧，
 /// 且列的组件层内距已置零（`grid/table_impl.rs::cell_paddings`）——原先「组件再加 8px」
 /// 那一层没有了，所以这里就是肉眼看到的全部余量（`fit_col` 与渲染同一份 padding）。
+///
+/// **必须等于 `RESULT_CELL_PADDING_X * 2`**：`Pixels` 的字段是 `pub(crate)`，const 上下文
+/// 里没法写乘法，所以这里另写一个常量；`grid/tests.rs` 有一条用例把这个等式钉住，
+/// 改单侧内距时它会红，提醒同步。
 pub const RESULT_FIT_CELL_PADDING: Pixels = px(12.);
 
 /// 列宽自适应：表头 `main_row` 的 `gap_1`（badge / 列名 / 筛选图标之间）

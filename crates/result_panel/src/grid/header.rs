@@ -232,8 +232,8 @@ pub(crate) fn render_th(
             .min_w_0()
             .justify_center()
             // 左右内距 6px：与单元格同一个口径（DBeaver `GridColumnRenderer.LEFT/RIGHT_MARGIN = 6`），
-            // 列名与下面格子的文字才落在同一条竖线上
-            .px(rems(0.375))
+            // 列名与下面格子的文字才落在同一条竖线上；来源是 `ui::RESULT_CELL_PADDING_X`
+            .px(ui::RESULT_CELL_PADDING_X)
             // 列边界线画在**左**边：表头格的盒子右端被组件排序图标槽占去 20px
             // （`state.rs:1910` 的 `render_sort_icon`，图标 + 2px 内距），右边界线会
             // 落在列内侧；左边与列左边界重合（列级内距已置零，`table_impl::cell_paddings`）。
@@ -470,8 +470,9 @@ pub(crate) fn render_th(
         .min_w_0()
         .justify_center()
         // 左右内距 6px：与单元格同口径（DBeaver `GridColumnRenderer.LEFT/RIGHT_MARGIN = 6`），
-        // 表头文字与格子文字左边缘对齐；组件层内距已置零（`table_impl::cell_paddings`）
-        .px(rems(0.375))
+        // 表头文字与格子文字左边缘对齐；组件层内距已置零（`table_impl::cell_paddings`），
+        // 单侧宽度取 `ui::RESULT_CELL_PADDING_X`（列宽自适应用的是同一个来源）
+        .px(ui::RESULT_CELL_PADDING_X)
         // 列边界线：同 early-return 分支（画左边、跳过首列），数据区的竖分隔线
         // 因此从表头一直贯到末行
         .when(col_ix > 0, |this| {

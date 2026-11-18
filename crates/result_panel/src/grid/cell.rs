@@ -284,7 +284,7 @@ pub(crate) fn render_td(
         return div()
             // 内距 6px（DBeaver `GridCellRenderer.LEFT/RIGHT_MARGIN = 6`）；
             // 列的组件层内距已置零（`table_impl::cell_paddings`），这里才是唯一一层
-            .px(rems(0.375))
+            .px(crate::ui::RESULT_CELL_PADDING_X)
             .h_full()
             .truncate()
             .text_xs()
@@ -337,7 +337,9 @@ pub(crate) fn render_td(
             "editor-result-cell",
             row_ix * (delegate.columns.len() + 1) + col_ix,
         ))
-        .px(rems(0.375))
+        // 左右内距 6px：与列宽自适应共用 `ui::RESULT_CELL_PADDING_X` 一个来源
+        // （DBeaver `GridCellRenderer.LEFT/RIGHT_MARGIN = 6`）
+        .px(crate::ui::RESULT_CELL_PADDING_X)
         .truncate()
         .text_xs()
         // 【网格线】列分隔：DBeaver `LightGrid` 的 `linesVisible` 默认开（`:295`），逐列在

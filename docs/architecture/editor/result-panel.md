@@ -3234,6 +3234,50 @@ panicked at panel/tests.rs:1091:
 - `cargo test -p rds-result-panel --lib` = **266 passed / 0 failed**（断言扩写，未新增用例）。
 - `cargo test -p rds-ui-guard`（不带 `--lib`）= 4 passed。
 
+### 8.59 内距收成单一来源（渲染 6px ↔ 自适应 12px）
+
+#### 8.59.1 问题
+
+同一份 6px 内距，代码里写着两遍：
+
+| 侧 | 原来写的 | 性质 |
+| --- | --- | --- |
+| 渲染（`grid/cell.rs` 两处、`grid/header.rs` 两处） | `.px(rems(0.375))` | **随主题基准字号浮动**（16px 基准下才等于 6px） |
+| 列宽自适应（`grid/fit.rs` → `ui::RESULT_FIT_CELL_PADDING`） | `px(12.)` | **固定物理像素** |
+
+两套编码一旦分叉（改主题基准字号、或有人只动一边），双击列头分隔线算出的宽度就会
+和实际渲染差一整个边距，列名照样被省略号吃掉——而这正是 §8.x 自适应那批要解决的问题，
+会在无人察觉时复发。
+
+#### 8.59.2 落法
+
+- `ui.rs` 新增 **`RESULT_CELL_PADDING_X: Pixels = px(6.)`**：单元格 / 表头内容**单侧**
+  左右内距，取值对齐 DBeaver `GridCellRenderer.LEFT_MARGIN / RIGHT_MARGIN = 6`
+  （`:43-50`），用物理 px（数据网格行高本来就固定，内距不该随字号浮动）。
+- 四处渲染字面量全部改成 `.px(ui::RESULT_CELL_PADDING_X)`；`RESULT_FIT_CELL_PADDING`
+  保持 `px(12.)`，注释写明「必须 = 单侧 × 2」。
+- `Pixels` 的字段是 `pub(crate)`，`const` 上下文里写不了乘法 ⇒ 用一条用例代那个写不出来的
+  等式：`grid/tests.rs::cell_padding_single_source_matches_fit_padding` 断言
+  `RESULT_FIT_CELL_PADDING == RESULT_CELL_PADDING_X * 2.`。
+- 同步更新 `grid/fit.rs` 与 `grid/table_impl.rs` 里引用旧写法的注释。
+
+#### 8.59.3 观感影响
+
+**默认主题下零变化**（16px 基准 × 0.375 = 6px）。只在用户把基准字号调离 16 时不同——
+此时内距保持 6px 不再缩放，与 DBeaver 的固定 6px 一致。
+
+#### 8.59.4 门禁
+
+`ui.rs` 多了一个 `px(6.)` 常量，`rds-ui-guard` 的 BASELINE 里
+`crates/result_panel/src/ui.rs` 从 **20 → 21**（守门只拦新增，常量定义是推荐写法，
+登记时写明理由）。
+
+#### 8.59.5 验证
+
+- `cargo check -p rds-result-panel` = 0 error / 0 warning。
+- `cargo test -p rds-result-panel --lib` = **267 passed / 0 failed**（266 + 本批新增 1）。
+- `cargo test -p rds-ui-guard`（不带 `--lib`）= 4 passed（基线 21 生效）。
+
 
 ## 8. 协作纪律
 

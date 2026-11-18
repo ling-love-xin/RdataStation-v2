@@ -3349,6 +3349,25 @@ fn selected_row_paints_a_whole_row_band(cx: &mut gpui_kit::TestAppContext) {
     );
 }
 
+/// 【内距单一来源 2026-11-18】渲染侧的「单侧 6px」与自适应侧的「合计 12px」必须是
+/// 同一个尺寸：`render_td` / `render_th` 读 `RESULT_CELL_PADDING_X`（单侧），
+/// `fit_col` 读 `RESULT_FIT_CELL_PADDING`（合计）。两者分叉时，双击自适应算出的列宽
+/// 会和实际渲染差一整个边距，列名被省略号吃掉一半——2026-11-17 之前渲染写的是
+/// `rems(0.375)`（随主题字号浮动）、自适应写的是 `px(12.)`（固定），就埋着这个雷。
+///
+/// `Pixels` 的字段是 `pub(crate)`，const 上下文写不了乘法，所以两个常量只能各写各的字面量；
+/// 这条用例就是替那个写不出来的 `= 单侧 × 2` 兜底。
+#[test]
+fn cell_padding_single_source_matches_fit_padding() {
+    use crate::ui::{RESULT_CELL_PADDING_X, RESULT_FIT_CELL_PADDING};
+
+    assert_eq!(
+        RESULT_FIT_CELL_PADDING,
+        RESULT_CELL_PADDING_X * 2.,
+        "自适应用的合计内距必须等于渲染用的单侧内距 × 2"
+    );
+}
+
 /// 【行号槽底色 2026-11-18】DBeaver 每个行头格都铺表头底色
 /// （`GridRowRenderer.java:55-70` 逐行 `getHeaderBackground(element, selected)`），
 /// 行号列因此读起来是一条独立的浅色竖条。本仓同口径，但「选中行不铺」——

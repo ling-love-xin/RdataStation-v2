@@ -28,7 +28,8 @@ use crate::ui::{
 pub(crate) const FIT_SAMPLE_ROWS: usize = 200;
 
 // 三档几何进 `crate::ui`（结构尺寸单一来源，本文件不留裸 px）：
-// `CELL_H_PADDING` = 单元格自身左右内边距（`render_td` 的 `px(rems(0.375))`，合计 12px）；
+// `CELL_H_PADDING` = 单元格自身左右内边距合计（渲染侧读 `ui::RESULT_CELL_PADDING_X` 单侧 6px，
+// 合计即本常量 12px；两者的等式由 `grid/tests.rs::cell_padding_single_source_matches_fit_padding` 钉住）；
 // `HEADER_GAP` = 表头 `main_row` 的 `gap_1`（badge / 列名 / 筛选图标之间，4px）；
 // `BADGE_H_PADDING` = 类型 badge 的 `px_1` 左右合计（8px）；
 // `HEADER_ICON` / `HEADER_CHROME` = 表头右侧两处图标占位（见下）。

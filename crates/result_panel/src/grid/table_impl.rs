@@ -21,7 +21,7 @@ use workbench_shell::product_tokens;
 
 /// 单元格内距（对齐 DBeaver `GridCellRenderer.LEFT_MARGIN / RIGHT_MARGIN = 6`）。
 ///
-/// **左右置零**，由单元格自己画（`grid/cell.rs` 的 `.px(rems(0.375))`）：这样那条 1px
+/// **左右置零**，由单元格自己画（`grid/cell.rs` 的 `.px(ui::RESULT_CELL_PADDING_X)`）：这样那条 1px
 /// 竖分隔线正好落在列边界上。若左右内距留在组件层，单元格的右边线会画在离边界 6px 的
 /// 位置——列与列之间就没有分界线了（DBeaver `LightGrid.linesVisible = true` 是逐列画线，
 /// `LightGrid.java:2425-2439`）。上下仍留 2px：与组件 XSmall 档原值一致，垂直位置不变。

@@ -41,7 +41,7 @@
 
 ```powershell
 $env:RUST_MIN_STACK='268435456'; cd D:\RdataStation\RDS\RdataStation-v2
-cargo test -p rds-result-panel --lib    # 基线：266 passed / 0 failed（含 rendered_ui_elements_survive 防回退）
+cargo test -p rds-result-panel --lib    # 基线：267 passed / 0 failed（含 rendered_ui_elements_survive 防回退）
 cargo test -p rds-settings --lib        # 基线：35 passed / 0 failed
 cargo test -p rds-ui-guard              # 基线：4 passed / 0 failed（含 no_new_hardcoded_color_or_pixel）
 cargo test -p rds-workbench-shell --lib # 基线：14 passed / 0 failed
@@ -1054,6 +1054,23 @@ panel **266 passed** / guard **4**。
 **验证**：`cargo check -p rds-result-panel` 0 error / 0 warning；
 panel **266 passed** / guard **4**。
 
+### 2.48 内距收成单一来源（渲染 6px ↔ 自适应 12px）
+
+全文见 `result-panel.md §8.59`，接手要点：
+
+- 同一份 6px 内距原来写两遍：渲染 `.px(rems(0.375))`（**随主题基准字号浮动**）、
+  自适应 `ui::RESULT_FIT_CELL_PADDING = px(12.)`（固定）。分叉 ⇒ 双击自适应算出的列宽
+  差一整个边距，列名被省略号吃掉。
+- 现在 `ui::RESULT_CELL_PADDING_X = px(6.)` 是单侧唯一来源，四处渲染字面量全改它；
+  合计 12px 仍是 `RESULT_FIT_CELL_PADDING`。
+- `Pixels` 字段 `pub(crate)`，`const` 里写不了乘法 ⇒ 等式由用例兜底：
+  `grid/tests.rs::cell_padding_single_source_matches_fit_padding`。
+- 默认主题下零观感变化；只有基准字号不是 16px 时内距保持 6px 不再缩放（对齐 DBeaver 的固定 6px）。
+- `rds-ui-guard` BASELINE：`crates/result_panel/src/ui.rs` **20 → 21**（新增那个 `px(6.)` 常量）。
+
+**验证**：`cargo check -p rds-result-panel` 0 error / 0 warning；
+panel **267 passed** / guard **4**（基线 21 生效）。
+
 ---
 
 ## 3. 并行线协作纪律（工作区现状）
@@ -1070,7 +1087,7 @@ panel **266 passed** / guard **4**。
 
 ## 4. 接手指引（新会话建议顺序）
 
-1. 先重跑 §1.3 四条验证命令，确认基线（尤其 **266 passed / 0 failed**）落地。
+1. 先重跑 §1.3 四条验证命令，确认基线（尤其 **267 passed / 0 failed**）落地。
 2. 处理 §2.1 提交待办：先 `git status` / `git diff` 摘本线 hunk，与并行线协调后统一提交类型样式渲染消费（settings 三文件 + grid.rs + host.rs + workbench view.rs）。
 3. 知悉 §2.2 外线阻塞（settings 契约测试）与 §1.3 契约测试既有失败，不替并行线补。
 4. 按 §2.4 优先级推进功能遗留（P0（注释与文档漂移）/ P1（分页·行号跳转·列宽落盘）/ P2（hex 翻页·图片预览·列浏览器多选）已交付；剩余见 §2.4 表，开工前先按模块惯例说理解、列方案）。
