@@ -5105,6 +5105,64 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
 `cargo test -p rds-result-panel --lib` = **333 passed**；`cargo check -p rds-editor` = Finished；
 `cargo test -p rds-ui-guard` = 4 passed。
 
+### 9.00 状态栏与左缘竖条的逐项对照（2026-11-19）
+
+**取证（`ResultSetViewer.createStatusBar0:2043-2195`）**——左到右共十段：
+1. **刷新工具条**（`:2058-2074`）：`getAutoRefresh().populateRefreshButton(...)`，
+   tooltip 拼成 `动作名 + " (" + 命令描述 + ")"`，图标 `UIIcon.REFRESH`，点击 → `refreshData(null)`；
+   `getAutoRefresh().enableControls(false)`（自动刷新默认关）。
+2. **编辑工具条**（`:2077-2083`）：`FEATURE_EDIT` 且未禁编辑时才有。
+3. **导航工具条**（`:2084-2090`）：`TOOLBAR_NAVIGATION_CONTRIBUTION_ID`。
+4. **空配置工具条**（`:2091-2096`）：只建 manager、不填贡献（留给下游插件）。
+5. **附加 + 视图工具条**（`:2098-2111`）：导出贡献（受 `POLICY_DATA_EXPORT` 约束）→
+   `GroupMarker(PRESENTATIONS)` → `Separator(ADDITIONS)` → `TOOLBAR_CONTRIBUTION_ID`。
+6. **配置工具条**（`:2113-2122`）：`ToolbarSeparatorContribution` + `ConfigAction`（齿轮）。
+7. **段大小输入框** `resultSetSize`（`:2126-2153`）：宽 `5 * fontHeight`，
+   tooltip `DataEditorsMessages.resultset_segment_size`；失焦 → 与 `getSegmentMaxRows()`
+   不同就回填真实值；`modify` → 解析 int，`>0` 且 `< MIN_SEGMENT_SIZE` 抬到下限，
+   与 `RESULT_SET_MAX_ROWS` 不同则**立即写偏好并落盘**（`:2144-2150`）。
+8. **行数标签** `rowCountLabel`（`:2155-2180`）：`ActiveStatusMessage` + `UIIcon.COMPILE`，
+   文案是「计算行数」，`isActionEnabled = hasData()`，点击异步 `readRowCount(monitor)`
+   后按 `ROW_COUNT_FORMAT` 显示。
+9. **选区统计标签** `selectionStatLabel`（`:2182-2184`）：只读 `Text` + 统计 tooltip。
+10. **状态标签** `statusLabel`（`:2186-2191`）：不支持 `FEATURE_COMPACT_STATUS` 才有，
+    宽 `50 * fontHeight`。
+布局：`RowLayout(SWT.HORIZONTAL)` + `wrap = true` + `pack = true`（`:2048-2056`）。
+
+**取证（左缘竖条 `updatePresentationInToolbar:931-974`）**：
+- 不可见时整块 `exclude`（`:939-940`）；可见时先清空子控件（`:945-947`）。
+- 每个展示方式是 `VerticalButton(SWT.LEFT | SWT.RADIO)`：`setImage(pd.getIcon())`、
+  `setText(pd.getLabel())`、**`setToolTipText(pd.getDescription())`**、`setData(pd)`，
+  当前活动项 `setSelection`（`:948-962`）。
+- 然后 `createEmptyLabel(1,1)` + `FILL_VERTICAL` 当弹簧（`:963`）。
+- 末位 `recordModeButton = VerticalButton(SWT.LEFT | SWT.CHECK)` + `ToggleModeAction`
+  （`:964-965`）——记录模式是 **CHECK / 沉底**，不是 RADIO。
+
+**本仓对照**：
+| 段 | DBeaver | 本仓 | 结论 |
+| --- | --- | --- | --- |
+| 写操作 / 行级 / 翻页 / 取段 / 导出 / 刷新 | 分散在多个 toolBarManager | 状态行左动作组，段间发丝分隔，显隐由 `hidden_status_commands` 控制 | 已对齐 |
+| 段大小框 | `resultSetSize` Text | `segment_input`（`段` + Input） | 已对齐（clamp / 失焦回填见 §8.85 / §8.92） |
+| 行数框 | **「计算行数」动作**（异步算总行数） | 行号跳转输入框 | **差异**：本仓提供跳转，不是算总行数 |
+| 选区统计 | `selectionStatLabel` | 无 | **有意不摆**（用户 2026-10-28 口径：右段只留内存 / 耗时 / 条数） |
+| 状态长文本 | `statusLabel`（50 字宽） | 无（notice 行在网格上方） | 差异，登记 |
+| 自动刷新 | `AutoRefresh` 控件 | 无 | **能力缺口**（无自动刷新机制） |
+| 齿轮 / 配置菜单 | `ConfigAction` + 工具条配置 | 齿轮 + `▾` 显隐菜单 | 已对齐 |
+| 布局 | `RowLayout(wrap=true)` | `h_flex` + 右段 `ml_auto` + 逐项 truncate | 等价 |
+| 左竖条分组 | RADIO 展示组 → 弹簧 → CHECK 记录模式 | 同（`render_vertical_bar`） | 已对齐（2026-11-18） |
+| 左竖条提示 | `setText(label)` + `setToolTipText(description)` | 图标按钮，提示 = `标签（描述）` | **本批补齐** |
+
+**本批落点**：左缘竖条三颗按钮的提示从「网格视图 / 文本视图 / 记录视图（单行转置）」
+换成带描述的形态——新增纯函数 `panel::events::presentation_tooltip(Presentation)`
+（`网格视图（表头冻结，可排序 / 筛选 / 分栏）`、`文本视图（等宽文本呈现，便于整表复制或对照原样）`）
+与 `record_view_tooltip(active)`（未激活报「会看到什么」、已激活报「点一下回到网格」，
+因为记录模式是 CHECK 语义而不是视图方式）。
+
+**验证**：`panel::tests::presentation_tooltips_carry_a_description`（两条互不相同、
+都以「名字（描述）」起头且含括号描述；记录视图两态文案不同）；
+`cargo test -p rds-result-panel --lib` = **334 passed**；`cargo check -p rds-editor` = Finished；
+`cargo test -p rds-ui-guard` = 4 passed。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

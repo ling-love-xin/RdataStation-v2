@@ -1493,6 +1493,23 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 2.88 状态栏 / 左缘竖条的接手要点（2026-11-19）
+
+- 状态栏十段对照见 `result-panel.md` §9.00。三处**已登记的差异**（别当遗漏）：
+  「计算行数」动作本仓没有（行数框是**行号跳转**，不是算总行数，算总数需要
+  `SELECT count(*) FROM (<原 SQL>)` 一条新链路）；选区统计标签**有意不摆**
+  （用户 2026-10-28 口径只留内存 / 耗时 / 条数）；自动刷新无机制。
+- 段大小框的行为契约集中在三个纯函数：`panel::events::parse_segment_rows`
+  （只认 `>0`）、`segment_rows_blur_display`（失焦回填）、设置侧
+  `result_panel.segment_rows`；改口径改这三处。
+- 左缘竖条 = `panel/sidebars.rs::render_vertical_bar`：**展示组 RADIO 在上 → 弹簧 →
+  记录模式 CHECK 沉底**（`ResultSetViewer:948-965`），宽度用 `EffectTransition` 补间，
+  容器始终挂载、内容按 `show_left_sidebar` 挂载（headless 里 `debug_bounds` 收起态仍命中，
+  别用它断言「未渲染」）。
+- 竖条提示只有两份纯函数：`presentation_tooltip(presentation)`（网格 / 文本 =
+  「名字（描述）」）与 `record_view_tooltip(active)`（记录模式随开关报「会看到什么 /
+  怎么回去」）。要改文案改这两处，别在渲染里写字符串。
+
 ### 2.87 计算页的接手要点（2026-11-19）
 
 - 工具条三颗：＋（缺项下拉）/ Reset / 口径 toggle，都在 `panel/tabs.rs::stats_toolbar`；
