@@ -836,7 +836,21 @@ pub(crate) fn manager_panel_ui(
                 .items_center()
                 .gap_2()
                 .child(div().text_xs().child(tr("类型")))
-                .child(Select::new(&new_type).placeholder(tr("选择类型…")));
+                // 编辑态类型只读（原型口径）：类型决定字段集与落库列，改它等于换一条档案；
+                // 想换类型就新建一条（`Select::disabled` 关掉展开，值仍照常显示）。
+                .child(
+                    Select::new(&new_type)
+                        .disabled(editing.is_some())
+                        .placeholder(tr("选择类型…")),
+                );
+            if editing.is_some() && kind.has_type_column() {
+                type_row = type_row.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.colors.muted_foreground)
+                        .child(tr("类型创建后不可修改；要换类型请新建一条")),
+                );
+            }
             if net_rows.is_empty() {
                 type_row = type_row
                     .child(div().text_xs().child(tr("数据(JSON)")))
