@@ -1750,9 +1750,18 @@ fn history_buttons_sit_in_the_filter_row_and_gate_on_position(cx: &mut gpui_kit:
         "在末位时前进钮仍禁用"
     );
 
-    // tooltip 口径：目标状态描述（折叠空白、超 50 字符截断）
+    // tooltip 口径：目标状态描述 + 命令描述（DBeaver `describeState + " (" + 命令 + ")"`，
+    // `ResultSetFilterPanel.java:456-475`）；描述里的空白折叠、超 50 字符截断
     let hint = cx.update(|_, app| panel.read(app).history_hint(-1));
-    assert_eq!(hint, "select 1", "tooltip 应是目标状态 SQL");
+    assert_eq!(
+        hint, "select 1 (后退历史)",
+        "tooltip 应是目标状态 SQL + 命令描述"
+    );
+    let hint = cx.update(|_, app| panel.read(app).history_hint(1));
+    assert_eq!(
+        hint, "已经在最新的状态",
+        "已在末位时给说明（DBeaver 禁用态不刷新 tooltip，本仓保留一句）"
+    );
     assert_eq!(
         super::events::state_label("select\n  1\n   from t"),
         "select 1 from t",

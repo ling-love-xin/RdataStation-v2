@@ -1350,9 +1350,20 @@ impl ResultPanel {
 
     /// 【状态历史】某条状态的 tooltip 文案（按钮悬停提示 / 测试断言）：
     /// 取该方向要去的状态，没有就到头或用「先有结果才能后退」这类说明
+    ///
+    /// 对齐 DBeaver：有目标时 tooltip = `describeState() + " (" + 命令描述 + ")"`
+    /// （`ResultSetFilterPanel.java:456-475`，命令描述取自
+    /// `IWorkbenchCommandConstants.NAVIGATE_BACKWARD_HISTORY` /
+    /// `NAVIGATE_FORWARD_HISTORY`，即「后退历史」/「前进历史」）；DBeaver 在按钮禁用时
+    /// 不刷新 tooltip，本仓仍给一句说明（禁用态读者看不到，没有副作用）。
     pub fn history_hint(&self, delta: i32) -> String {
+        let command = if delta < 0 {
+            "后退历史"
+        } else {
+            "前进历史"
+        };
         match self.history_target(delta) {
-            Some((_, sql)) => state_label(&sql),
+            Some((_, sql)) => format!("{} ({command})", state_label(&sql)),
             None if self.state_history.is_empty() => "还没有可回退的状态".to_string(),
             None if delta < 0 => "已经在最早的状态".to_string(),
             None => "已经在最新的状态".to_string(),
