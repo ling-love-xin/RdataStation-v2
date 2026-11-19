@@ -2216,7 +2216,9 @@ DBeaver 的分组面板动作由 `GroupingAction` 扩展点驱动，配置来自
   一个 `"groups"` section 就结束，函数体为空；分组面板真正走 preference 的只有「仅重复」
   与「默认排序」（`GroupingResultsContainer.java:231-232` 读
   `RS_GROUPING_SHOW_DUPLICATES_ONLY`、`:250` 读 `RS_GROUPING_DEFAULT_SORTING`）。分组列
-  集合本处未见持久化，是否另有存取路径本轮未核实，故本仓不做不算偏离
+  集合本处未见持久化，是否另有存取路径本轮未核实，故本仓不做不算偏离。
+  `RS_GROUPING_DEFAULT_SORTING` 的三档（`""`/`ASC`/`DESC`）本仓已由 §9.15 对应为
+  原序 / 按值 / 按计数
 - 每组展开看行（DBeaver 的分组结果是**另一条查询的结果集**，不是原结果集的行树）；
   本仓是平列表 + 计数
 - 分组列顺序的可视化调整（本仓按勾选顺序固定，不开拖拽；DBeaver 走
@@ -4474,8 +4476,9 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
 **有意偏离**：
 - DBeaver 的 `Sort` 是 `Unsorted / Ascending / Descending` 三选下拉（`ChangeSortingAction`，
   改的是 `RS_GROUPING_DEFAULT_SORTING` 偏好 + 重跑 SQL）；本仓分组是**本地聚合**
-  （`group_by_columns_for` + `arrange_groups`，不重查源库），排序口径是「按值 / 按计数」两态
-  ——两边的「排序」不是同一件事，不强行改成三态（否则会出现一个永远不生效的 `Unsorted`）。
+  （`group_by_columns_for` + `arrange_groups`，不重查源库），排序口径是
+  「原序（不排序）/ 按值 / 按计数」三档（§9.15 补齐了「不排序」档）
+  ——两边的「排序」不是同一件事：那边的键是 COUNT 列，本仓「按值」是超集档。
 - DBeaver 的 `EditColumns` 打开 `GroupingConfigDialog`（列 + 聚合函数配置）；本仓用勾选式
   下拉 + 计算页承担同样职责，不引入对话框。
 - 本仓下拉允许把分组键全部取消（落回「选中列兜底」），DBeaver 的逐列删除禁止删到零；
@@ -5393,9 +5396,9 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
    写回（与 `AddStatsItem` 那三条同一形态）。分组键增删 / 清空仍然不落盘。
 
 **与 DBeaver 的已知差异（登记，不是缺陷）**：
-- 本仓两态（按值升序 / 按计数降序）里只有 `countdesc` 与那边的 `DESC` 等价；
-  `value` 是超集档，那边没有「按分组键值排序」这个手动档（它的 `ASC` 排的是 count）。
-  「不排序」档本仓暂不做（面板排序钮仍是二态 toggle）。
+- 本仓三态（不排序 / 按值升序 / 按计数降序）里 `countdesc` 与那边的 `DESC` 等价、
+  `none` 与 `NONE("")` 等价；`value` 是超集档，那边没有「按分组键值排序」这个手动档
+  （它的 `ASC` 排的是 count）。本节落笔时「不排序」档尚未做，**已由 §9.15 补齐**。
 - 作用域：DBeaver 存**按连接**的 preference store（`getContainer().getPreferenceStore()`），
   本仓沿用结果集偏好的**全局一份**口径（与 `stats_items` 一致）。
 - 客户端分组 vs SQL 分组：DBeaver 的「仅重复」进 `HAVING COUNT > 1` 的生成 SQL，
@@ -5888,6 +5891,67 @@ DBeaver 只匹配列名（`refresh:178-183`）。此处加宽是此前批次拍�
 - 门禁：`cargo test -p rds-result-panel --lib` = **352 passed**（warning 0）、
   `cargo check -p rds-editor` 通过、`cargo test -p rds-editor --lib -- --test-threads=4`
   = **795 passed**（1 ignored）、`cargo test -p rds-ui-guard` = 4 passed。
+
+### 9.15 分组页补「不排序」档（2026-11-19）
+
+分组页此前只有两档排序（按值 / 按计数降序），DBeaver 是三档。取证
+（`org.jkiss.dbeaver.ui.editors.data`）：
+
+```text
+panel\grouping\action\ChangeSortingAction.java
+  :44-52   ASC = "ASC" / DESC = "DESC" / NONE = ""（descending == null 即这一档）
+           style = AS_RADIO_BUTTON（三档单选）
+  run:73-88  写 PreferenceStore(RS_GROUPING_DEFAULT_SORTING) + persistConfiguration()
+             + container.rebuildGrouping()
+panel\grouping\GroupingResultsContainer.java
+  rebuildGrouping:249-265   仅当 isDefaultGrouping（默认函数只有 COUNT）且该值非空时，
+                            dataFilter.setOrder(别名 + " " + defaultSorting)
+                            —— NONE 档就是**不设 ORDER BY**
+panel\grouping\GroupingPanel.java
+  fillToolBar:164-176       工具条里挂 DefaultSortingAction（下拉，含三个 ChangeSortingAction）
+panel\grouping\action\DefaultSortingAction.java
+  :44-46    按顺序加 null / FALSE / TRUE 三个 ChangeSortingAction
+```
+
+**关键差异**：DBeaver 的排序键是 **COUNT 列**、方向是「无 / 升 / 降」；本仓 `GroupSort`
+是「按分组键字典序 / 按计数降序」。所以三档映射是 `none ↔ ""`、`countdesc ↔ DESC`，
+「按值升序」是本仓超集档（对 `ASC` 的差异已在 §9.05 登记）。本批只补缺口最小的
+**「不排序」**，不动既有两档语义。
+
+**改动**：
+
+1. `ports.rs::GroupSort` 加 `None` 变体（`#[default]` 仍是 `Value`，出厂档不变）；
+   `toggled` 改三档循环 `None → Value → CountDesc → None`；`label` = 原序 / 按值 / 按计数
+   （2 字版本，右侧窄栏够放）；`id` = `none` / `value` / `countdesc`；`parse` 认 `"none"`。
+2. `panel/tabs.rs::arrange_groups` 加 `GroupSort::None => {}` 分支：不排序 = 保留
+   `group_by_columns_for` 的插入顺序。该顺序天然是**首现序**——单列走 `group_by_for`、
+   多列走 `grid/stats.rs::group_by_tuples:89-99` 的 Vec 线性插入，两条路径都不含 HashMap。
+3. settings 三处口径同步：`service/result_panel.rs` 的槽白名单与 `set_result_panel_group_sort`
+   归一都扩到 `none / value / countdesc`（未知值仍回落 `value`，不跟着乱排序）；
+   `registry/entries/result_panel.rs` 的 hint 补上 `none` 档并删掉旧「本仓暂不做」；
+   `model/result_panel.rs` / `registry/mod.rs` / `service/mod.rs` 的注释改三档。
+4. 落盘链路无需改：`dispatch.rs::SetGroupSort` 走 `persist_result_group_sort`，写的就是
+   `sort.id()`；`events::set_group_prefs_initial` 走 `GroupSort::parse(..).unwrap_or_default()`。
+
+**验证**：
+- `ports::tests::group_sort_ids_round_trip_and_reject_unknown`：三档 id 原地往返，
+  `"none"` 不再被当未知值；`ports::tests::group_sort_toggle_cycles_through_three_modes`（新增）：
+  循环回到「不排序」+ 三个标签互不相同。
+- `panel::tests::arrange_groups_sorts_and_filters`：先以 `GroupSort::None` 跑一遍，断言
+  顺序仍是 `["b", "a", "c"]`（首现序没被任何排序打乱），再接着验按值 / 按计数 / 仅重复。
+- `panel::tests::group_prefs_initial_round_trip_and_unknown_sort_falls_back`：新增
+  `set_group_prefs_initial("none", false, cx)` → `group_sort_id() == "none"`，
+  证明「不排序」是合法档而非未知值（未知仍回落 `value`）。
+- 门禁：`cargo test -p rds-settings --lib` = **41 passed**（第 31 批同时改了 settings）、
+  `cargo test -p rds-result-panel --lib` = **353 passed**（warning 0）、
+  `cargo check -p rds-editor` 通过、`cargo test -p rds-editor --lib -- --test-threads=4`
+  = **798 passed**（1 ignored）、`cargo test -p rds-ui-guard` = 4 passed。
+
+**仍与 DBeaver 有差**（未做）：① DBeaver 的排序键是 COUNT 列、`ASC` 档是「计数升序」，
+本仓「按值」是分组键字典序（超集档，差异见 §9.05）；② DBeaver 的档位只在
+`isDefaultGrouping`（函数列只有 COUNT）时生效，本仓不受此限制；③ 交互形态不同——
+DBeaver 是工具条下拉里的三个单选，本仓是一个循环按钮（三档依次切换），
+点击次数与最终可达档位一致，属形态取舍（用户口径「目视部分后面统一处理」）。
 
 ## 8. 协作纪律
 

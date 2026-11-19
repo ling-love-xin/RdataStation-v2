@@ -1493,6 +1493,35 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 3.04 分组页补「不排序」档（2026-11-19）
+
+- DBeaver 取证：`ChangeSortingAction` 的常量是 `ASC = "ASC" / DESC = "DESC" / NONE = ""`，
+  `descending == null` 即「不排序」，三个动作在 `DefaultSortingAction:44-46` 里按顺序装进
+  一个 `AS_DROP_DOWN_MENU`；`GroupingResultsContainer.rebuildGrouping:249-265` 只在值
+  **非空**且 `isDefaultGrouping`（函数列只有 COUNT）时 `dataFilter.setOrder(别名 + " " + 值)`，
+  所以 NONE 档 = **不设 ORDER BY**，结果就是数据源/扫描顺序。
+- 本仓映射：`GroupSort::None ↔ NONE("")`、`GroupSort::CountDesc ↔ DESC`；
+  `GroupSort::Value`（按分组键字典序）是**超集档**，DBeaver 的 `ASC` 是「COUNT 列升序」，
+  不是一回事（差异继续登记在 §3.05 之前的旧节 / `result-panel.md` §9.05）。
+- 实现要点：`GroupSort` 加 `None` 变体（`#[default]` 仍是 `Value`，出厂档不动）；
+  `toggled` 三档循环 `None → Value → CountDesc → None`；`id` = `none`/`value`/`countdesc`
+  直接作为 `result_panel.group_sort` 的落盘值（`dispatch.rs` 写的就是 `sort.id()`，无需改）。
+- **「不排序」不需要额外状态**：`arrange_groups` 的 `None` 分支什么都不做，
+  因为 `group_by_columns_for` 已经是**首现序**——单列走 `group_by_for`、多列走
+  `grid/stats.rs::group_by_tuples:89-99` 的 `Vec` 线性插入，两条路径都没有 `HashMap`。
+  别为了「原序」引入 `BTreeMap` / 排序后再还原，那反而会打乱首现序。
+- 设置侧口径：`Slot::ResultPanelGroupSort` 白名单与 `set_result_panel_group_sort` 归一
+  都扩到三档；**未知值仍回落 `value`**（手改坏配置不该让面板乱排序），
+  `registry/entries/result_panel.rs` 的 hint 已删掉旧「本仓暂不做」句。
+- 用例：`group_sort_ids_round_trip_and_reject_unknown`（三档往返、`"none"` 不再是未知）、
+  `group_sort_toggle_cycles_through_three_modes`（循环回「不排序」+ 三标签互不相同）、
+  `arrange_groups_sorts_and_filters`（先以 `None` 跑一遍断言仍是 `["b","a","c"]` 首现序）、
+  `group_prefs_initial_round_trip_and_unknown_sort_falls_back`（`"none"` 注入后 `group_sort_id() == "none"`）。
+- 门禁基线：settings **41**、panel **353**、editor check 通过、editor **798**（1 ignored）、
+  ui-guard **4**。
+- 形态差异（未改，属目视/形态范围）：DBeaver 是下拉里的三个单选，本仓是一个循环按钮
+  （点一次换一档，三档可达）；另 DBeaver 的三档只在「函数列只有 COUNT」时生效，本仓不受限。
+
 ### 3.03 列浏览器过滤框 ESC 清空（2026-11-19）
 
 - DBeaver 取证（`MetaDataPanel.java:84-98`）：过滤行 = 标签 + `Text(SWT.BORDER|SWT.SEARCH|SWT.ICON_CANCEL)`，
@@ -1662,7 +1691,7 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   `persistConfiguration()`）与 `resultset.grouping.showDuplicatesOnly`（`DuplicatesOnlyAction`
   的 check box）。**两键在 plugin.xml 里都没有 initializer**，故默认 = 空串（不排序）/
   false（显示全部组）。
-- 本仓对应键：`result_panel.group_sort`（`value`|`countdesc`）与
+- 本仓对应键：`result_panel.group_sort`（`none`|`value`|`countdesc`）与
   `result_panel.group_duplicates_only`（bool）。写入口 = 分组页的两个钮，落盘走
   `dispatch.rs::persist_result_group_sort` / `persist_result_group_duplicates_only`；
   读入口 = `construct.rs` 注入 `panel.set_group_prefs_initial(...)`。
@@ -1670,9 +1699,10 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   `Slot` + key 映射 + `slot_kind` → `service::mod.rs` 读值 arm + 写分发 or-pattern →
   `service/result_panel.rs` 的 `apply_slot` 分支 + `set_*` 快捷写 → 面板 `set_*_initial`
   + 只读访问器 → 宿主注入与回写 + 两条用例。
-- 已知差异（别改）：本仓只有「按值 / 按计数」两档，`countdesc` 对应那边的 `DESC`；
-  「不排序」档未做。作用域是全局一份（那边按连接）。
-- 门禁：settings 37 / panel 342 / editor 794（1 ignored）/ ui-guard 4。
+- 已知差异（别改）：本仓 `none`/`value`/`countdesc` 三档，`countdesc` 对应那边的 `DESC`、
+  `none` 对应 `""`（本批 §3.04 已补），`value` 是超集档（那边的 `ASC` 排的是 count）。
+  作用域是全局一份（那边按连接）。
+- 门禁：settings 41 / panel 353 / editor 798（1 ignored）/ ui-guard 4（§3.04 后基线）。
 
 ### 2.92 计算页统计项扩到九项（2026-11-19）
 
@@ -1991,7 +2021,8 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 分组页动作顺序对齐 `GroupingPanel.fillToolBar:164-176` 的段位：
   列下拉（≈`EditColumns` 轻量形态）→ 排序口径 → 仅重复 → 移除分组列 → 清空分组。
   排序口径与 DBeaver 的 `Unsorted/Asc/Desc` **不是同一件事**（本仓是本地聚合、
-  按值 / 按计数两态），不要为了「看起来一样」加一个永远不生效的三态（见 §8.83）。
+  原序 / 按值 / 按计数三档）；三档里的「原序」不是摆设——它保留首现序
+  （§3.04），加第四档之前先问「它对应哪条排序键」。
 - 已知偏离：本仓下拉可以把分组键全取消（落回「选中列兜底」），DBeaver 的逐列删除
   禁止删到零；终态不同但都不会出现「零分组键却有结果」。
 - 门禁基线：result_panel **314 passed**；`cargo check -p rds-editor` Finished。
