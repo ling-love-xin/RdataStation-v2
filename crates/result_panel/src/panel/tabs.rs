@@ -1161,36 +1161,87 @@ impl ResultPanel {
                 .into_any_element()
         };
 
+        // 正文：列头（每个分组键一列 + 函数列）+ 分组行。
+        //
+        // 【对齐】DBeaver 的分组结果是**表**而不是文本行：`GroupingResultsContainer`
+        // 用 `GroupingColumnsContainer` 装配「属性列 + 函数列」
+        // （`rebuildGrouping:240-270` 的 `addAttribute` / `addFunction`），
+        // 默认函数表达式 = `COUNT(*)`（`getDefaultFunction:75-80`：`FUNCTION_COUNT + "(" +
+        // (dataSource == null ? COLUMN_ASTERISK : 方言默认分组属性) + ")"`）。
+        // 所以正文按「键列各一格 + 计数列一格」排，表头写列名与 `COUNT(*)`。
+        let header = group_table_header(&names);
+        let header_len = header.len();
+        let header_el: Option<AnyElement> = (!cols.is_empty()).then(|| {
+            div()
+                .h_flex()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .h_5()
+                .flex_none()
+                .border_b(ui::HAIRLINE)
+                .border_color(theme.colors.border)
+                .debug_selector(|| "editor-result-group-header".to_string())
+                .children(header.into_iter().enumerate().map(|(index, text)| {
+                    let mut cell = div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_ellipsis()
+                        .child(SharedString::from(text));
+                    // 末列是函数列（COUNT(*)）：数值列右对齐，与网格里的数字列同侧
+                    if index + 1 == header_len {
+                        cell = cell.text_right();
+                    }
+                    cell.into_any_element()
+                }))
+                .into_any_element()
+        });
         let rows_el: Vec<AnyElement> = groups
             .iter()
             .map(|(values, count)| {
-                div()
+                let mut row = div()
                     .h_flex()
                     .items_center()
                     .gap_1()
                     .px_2()
                     .h_6()
                     .text_xs()
-                    .child(
+                    .children(values.iter().map(|value| {
                         div()
                             .flex_1()
                             .min_w_0()
                             .text_ellipsis()
-                            .child(SharedString::from(values.join(" | "))),
-                    )
-                    .child(div().text_xs().text_color(muted).child(count.to_string()))
-                    .into_any_element()
+                            .child(SharedString::from(value.clone()))
+                            .into_any_element()
+                    }));
+                row = row.child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_right()
+                        .text_color(muted)
+                        .child(SharedString::from(count.to_string()))
+                        .into_any_element(),
+                );
+                row.into_any_element()
             })
             .collect();
-        // 正文：有分组键时是分组行清单，否则是「还没选列」空态（工具条常驻，见上）
+        // 正文：有分组键时是表头 + 分组行，否则是「还没选列」空态（工具条常驻，见上）
         let body: AnyElement = if cols.is_empty() {
             self.sidebar_empty("选中一个数据列查看分组", cx)
         } else {
             div()
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scrollbar()
-                .children(rows_el)
+                .v_flex()
+                .children(header_el)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scrollbar()
+                        .children(rows_el),
+                )
                 .into_any_element()
         };
         div()
@@ -1563,6 +1614,19 @@ pub(crate) fn value_empty_lines() -> [&'static str; 2] {
 /// 不另造一套"是不是空值"的规则。
 pub(crate) fn value_can_save_to_file(col_ix: usize, raw: Option<&str>) -> bool {
     col_ix != 0 && !crate::export::is_null_cell(raw)
+}
+
+/// 【分组页表头】分组结果表的列头：每个分组键一列 + 末尾函数列 `COUNT(*)`。
+///
+/// 对齐 DBeaver：分组结果是**表**（`GroupingResultsContainer` 的
+/// `GroupingColumnsContainer` 装配属性列 + 函数列），默认函数表达式由
+/// `getDefaultFunction:75-80` 拼成 `COUNT(<方言默认分组属性>)`，无数据源时用 `*`。
+/// 本仓本地分组固定只有一个计数函数（`group_by_columns_for` 返回 `(键, 计数)`），
+/// 所以表头恒为「键列名… + COUNT(*)」。
+pub(crate) fn group_table_header(names: &[String]) -> Vec<String> {
+    let mut header: Vec<String> = names.to_vec();
+    header.push("COUNT(*)".to_string());
+    header
 }
 
 /// 【R3 分组页】分组结果排序 + 「仅重复」筛选（纯函数，便于单测）。

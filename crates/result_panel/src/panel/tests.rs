@@ -948,6 +948,41 @@ fn arrange_groups_sorts_and_filters() {
     assert_eq!(multi[0].0, vec!["a".to_string(), "1".to_string()]);
 }
 
+/// 【分组页表头】分组结果按表排：每个分组键一列，末列是函数列 `COUNT(*)`
+/// （对齐 DBeaver `GroupingResultsContainer` 的属性列 + 函数列 + `getDefaultFunction`）。
+#[gpui_kit::test]
+fn group_tab_shows_a_header_row_with_count_star(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use super::tabs::group_table_header;
+
+    // 纯函数：表头 = 键列名 + COUNT(*)，位置在末列
+    let names = vec!["id".to_string(), "amount".to_string()];
+    let header = group_table_header(&names);
+    assert_eq!(header.len(), names.len() + 1, "表头 = 键列 + 一个函数列");
+    assert_eq!(header[0], "id");
+    assert_eq!(header[1], "amount");
+    assert_eq!(header.last().unwrap(), "COUNT(*)");
+    // 单个键也一样
+    let single = group_table_header(&["id".to_string()]);
+    assert_eq!(single, vec!["id".to_string(), "COUNT(*)".to_string()]);
+
+    // 渲染：显式选一个分组键 → 表头行挂上
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.toggle_group_column(1, cx);
+            p.set_right_tab(RightTab::Group, cx);
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-group-header").is_some(),
+        "有分组键时分组页应渲染表头行（editor-result-group-header）"
+    );
+}
+
 /// 【R3】清空分组列：对齐 DBeaver `ClearGroupingAction`（分组列非空才可用；
 /// 清空后回到「选中列兜底」而不是空态）。这里钉状态与幂等，按钮存在性由
 /// 渲染用例断言。
