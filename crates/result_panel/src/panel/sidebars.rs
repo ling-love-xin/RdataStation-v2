@@ -15,7 +15,7 @@ use gpui_kit::component::list::List;
 use gpui_kit::component::resizable::{HandleEdge, resize_handle};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::{ActiveTheme as _, Sizable as _, Size};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, Size};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -464,6 +464,41 @@ impl ResultPanel {
             .iter()
             .copied()
             .map(|tab| {
+                // 【页签关闭】每个页签**内侧**一颗 ×：对齐 DBeaver
+                // `new CTabItem(panelFolder, SWT.CLOSE)`（`ResultSetViewer.addPanel:1357`）——
+                // 关闭按钮属于**那一页**，不是整条页签条。语义走同一条端口
+                // `CloseRightTab(tab)`，所以能关掉任意一页（不必先切过去）。
+                //
+                // 形态取舍：kit `Tab` 没有 `closable`，这里用 `Tab::suffix` 槽塞一颗
+                // 12px 图标（`Icon::new(..).size_3()`）+ 自绘点击区——**不能用 `Button`**，
+                // 按钮 XSmall 档 `min_h_7`(28px) 会撑破 24px 页签条（`RESULT_STATUS_BAR_HEIGHT`）。
+                // 点击命中后由 GPUI 先派发给内层元素；外层 `TabBar` 的「切页」回调照样会
+                // 收到冒泡，但 `CloseRightTab` 先把该页从 `open_tabs` 摘掉，随后
+                // `SetRightTab` 收到的 index 已按新集合重算（`tab_at_strip_index` 对越界
+                // 兜底最后一个），所以不会把已关掉的页再切回来 —— 用例
+                // `closing_a_tab_from_the_strip_keeps_the_active_page` 钉这个行为。
+                let close_queue = self.queue.clone();
+                let muted = theme.colors.muted_foreground;
+                let hover = theme.colors.list_hover;
+                let close = div()
+                    .id(gpui::ElementId::Name(
+                        crate::panel::events::tab_close_selector(tab).into(),
+                    ))
+                    .debug_selector(move || crate::panel::events::tab_close_selector(tab).to_string())
+                    .flex_none()
+                    .cursor_pointer()
+                    .rounded_sm()
+                    .hover(move |style| style.bg(hover))
+                    .on_click(move |_, _window, app| {
+                        // 必须吃掉这次点击：`TabBar` 外层也挂了「切页」回调（按渲染时的下标
+                        // 快照映射），冒泡上去会把刚关掉的页按旧下标**重新打开**
+                        // （用例 `right_tab_close_button_closes_only_that_page` 实测过
+                        // `[CloseRightTab(Browser), SetRightTab(Browser)]` 这个组合）。
+                        app.stop_propagation();
+                        close_queue.request(ResultRequest::CloseRightTab(tab), app);
+                    })
+                    .child(Icon::new(IconName::X).size_3().text_color(muted))
+                    .into_any_element();
                 Tab::new()
                     .icon(right_tab_icon(tab))
                     .label(SharedString::from(right_tab_label(tab)))
@@ -471,6 +506,7 @@ impl ResultPanel {
                     // （`ResultSetViewer.java:1361`）：页签只有图标 + 短名，窄右栏下靠 tooltip
                     // 说清这一页做什么。
                     .tooltip(SharedString::from(right_tab_description(tab)))
+                    .suffix(close)
             })
             .collect();
         let tab_queue = self.queue.clone();
@@ -494,25 +530,11 @@ impl ResultPanel {
             RightTab::Reference => self.render_reference_tab(cx),
             RightTab::ExecSql => self.render_exec_sql_tab(cx),
         };
-        // 【页签关闭】行尾 × = 关掉**当前这一页**（其余页仍在页签条里，对齐 DBeaver
-        // `new CTabItem(panelFolder, SWT.CLOSE)` 的语义）。全部页都关掉时右栏整体收起，
+        // 【页签关闭】关闭入口已改到**每个页签内侧的 ×**（见上面 `Tab::suffix`）——
+        // 行尾那颗「关当前页」的按钮已移除：DBeaver 的关闭按钮属于页签本身
+        // （`CTabItem(SWT.CLOSE)`），行尾再挂一颗会让「关哪一页」与「点哪一页」两套语义并存。
+        // 全部页都关掉时右栏整体收起（`close_right_tab` 的既有分支），
         // 视图菜单的勾选项可以再开回来。
-        let close = {
-            let queue = self.queue.clone();
-            let tab = self.right_tab;
-            Some(
-                Button::new("editor-result-right-tab-close")
-                    .ghost()
-                    .small()
-                    .icon(IconName::X)
-                    .debug_selector(|| "editor-result-right-tab-close".to_string())
-                    .tooltip("关闭此页（其余页仍保留）")
-                    .on_click(move |_, _window, app| {
-                        queue.request(ResultRequest::CloseRightTab(tab), app);
-                    })
-                    .into_any_element(),
-            )
-        };
         // 【侧栏丝滑】右栏收起 / 展开与左栏同法：宽度过渡 + 容器始终挂载（宽 0 不占
         // 空间），页签条与内容按 show 挂载（收起时无焦点残留）。开合由
         // `right_sidebar_epoch` 递增重播动画；首帧（epoch=0）免动画。
@@ -569,8 +591,7 @@ impl ResultPanel {
                     // 页签条的**外层行**才带调试选择器（`TabBar` 组件自身不挂 id；
                     // 测试要按这一行的真实像素点坐标模拟点击）
                     .debug_selector(|| "editor-result-right-tabs".to_string())
-                    .child(div().flex_1().min_w_0().child(tab_bar))
-                    .children(close),
+                    .child(div().flex_1().min_w_0().child(tab_bar)),
             )
             .child(
                 // 页内容吃满剩余高：各页自己再排「28px 工具条 + flex_1 正文」

@@ -1954,6 +1954,22 @@ pub(crate) fn tab_at_strip_index(open: &[RightTab], index: usize) -> RightTab {
     open.get(index).copied().unwrap_or(RightTab::Browser)
 }
 
+/// 【页签条】每个页签内侧那颗 × 的稳定选择器（`debug_selector` / 测试定位用）。
+///
+/// 必须**逐页不同**：六颗按钮同时存在，共用一个 id 会让 `debug_bounds` 只命中第一个、
+/// 也会造成 a11y 重复 id（`gpui-kit` 0.9 已知坑）。返回 `&'static str` 是为了让
+/// `TestAppContext::debug_bounds` 能按字面量定位。
+pub(crate) fn tab_close_selector(tab: RightTab) -> &'static str {
+    match tab {
+        RightTab::Browser => "editor-result-right-tab-close-browser",
+        RightTab::Value => "editor-result-right-tab-close-value",
+        RightTab::Stats => "editor-result-right-tab-close-stats",
+        RightTab::Group => "editor-result-right-tab-close-group",
+        RightTab::Reference => "editor-result-right-tab-close-reference",
+        RightTab::ExecSql => "editor-result-right-tab-close-execsql",
+    }
+}
+
 /// 【关闭一页】关掉某页后当前页落到哪：**规范序里紧随其后**的剩余页，没有则取最后一个。
 ///
 /// `remaining` 必须是规范序（`open_tabs` 的维护方式保证）。对齐 DBeaver 的

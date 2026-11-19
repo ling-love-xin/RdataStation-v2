@@ -2406,6 +2406,77 @@ fn clicking_an_edge_tab_toggles_that_page(cx: &mut gpui_kit::TestAppContext) {
     assert_eq!(cx.update(|_, app| panel.read(app).right_tab), RightTab::Value);
 }
 
+/// 【页签条】每页签**内侧**那颗 ×（对齐 DBeaver `CTabItem(SWT.CLOSE)`）：
+/// 点它只推「关这一页」，**不能**顺带把该页切回来。
+///
+/// 这条用例的存在理由：× 是 `Tab::suffix` 里的自绘点击区，点中后事件仍会冒泡到
+/// `TabBar` 的「切页」回调（用渲染时快照的下标映射）。若两者都生效，关掉一页会变成
+/// 「先摘除、再按旧下标把它重新打开」。所以断言分两层：队列里有 `CloseRightTab`、
+/// 且**没有** `SetRightTab`。
+#[gpui_kit::test]
+fn right_tab_close_button_closes_only_that_page(cx: &mut gpui_kit::TestAppContext) {
+    use crate::ports::{ResultRequest, RightTab};
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 当前页 = 值详情；随后点「列浏览器」页签的 ×（不是当前页）
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_right_tab(RightTab::Value, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let close = cx
+        .debug_bounds("editor-result-right-tab-close-browser")
+        .expect("列浏览器页签内侧应有一颗 ×（每页一颗，对齐 SWT.CLOSE）");
+    let point = gpui_kit::point(
+        close.origin.x + close.size.width / 2.,
+        close.origin.y + close.size.height / 2.,
+    );
+    cx.simulate_click(point, gpui_kit::Modifiers::default());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let queued = cx.update(|_, app| panel.read(app).queue.drain());
+    assert!(
+        queued
+            .iter()
+            .any(|request| matches!(request, ResultRequest::CloseRightTab(RightTab::Browser))),
+        "点页签内侧 × 应入队「关掉这一页」：{queued:?}"
+    );
+    assert!(
+        !queued
+            .iter()
+            .any(|request| matches!(request, ResultRequest::SetRightTab(_))),
+        "× 的点击不能冒泡成「切页」（那会把刚关掉的页按旧下标重新打开）：{queued:?}"
+    );
+}
+
+/// 【页签条】六页的 × 选择器必须互不相同（共用 id 会让 `debug_bounds` 只命中第一个，
+/// 并且重复 id 在 a11y 上有已知风险）。
+#[test]
+fn right_tab_close_selectors_are_distinct() {
+    use crate::ports::RightTab;
+
+    let selectors: Vec<&'static str> = [
+        RightTab::Browser,
+        RightTab::Value,
+        RightTab::Stats,
+        RightTab::Group,
+        RightTab::Reference,
+        RightTab::ExecSql,
+    ]
+    .into_iter()
+    .map(super::events::tab_close_selector)
+    .collect();
+    for (ix, selector) in selectors.iter().enumerate() {
+        assert!(
+            selectors
+                .iter()
+                .skip(ix + 1)
+                .all(|other| other != selector),
+            "选择器重复：{selector}"
+        );
+    }
+}
+
 /// 【右缘竖条】关到最后一页 = 整栏收起（DBeaver `removePanel:1447-1449`：
 /// `activePanels.isEmpty()` → `showPanels(false, true, true)`）。
 #[gpui_kit::test]
