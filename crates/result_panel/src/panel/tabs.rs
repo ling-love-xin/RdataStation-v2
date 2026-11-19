@@ -1692,6 +1692,9 @@ pub(crate) fn arrange_groups(
         groups.retain(|(_, count)| *count > 1);
     }
     match sort {
+        // 不排序 = 沿用 `group_by_columns_for` 的首现顺序（DBeaver `RS_GROUPING_DEFAULT_SORTING=""`：
+        // 不设 ORDER BY，结果就是数据源/扫描顺序）
+        GroupSort::None => {}
         GroupSort::Value => groups.sort_by(|a, b| a.0.cmp(&b.0)),
         GroupSort::CountDesc => groups.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0))),
     }

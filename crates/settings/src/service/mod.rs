@@ -191,7 +191,7 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::ResultPanelStatsItems => {
             SettingValue::Text(settings.result_panel.stats_items.clone())
         }
-        // 【分组页持久化】排序口径 id（`value` / `countdesc`）
+        // 【分组页持久化】排序口径 id（`none` / `value` / `countdesc`）
         Slot::ResultPanelGroupSort => {
             SettingValue::Text(settings.result_panel.group_sort.clone())
         }

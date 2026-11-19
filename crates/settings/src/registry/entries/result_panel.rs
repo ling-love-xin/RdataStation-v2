@@ -238,9 +238,10 @@ pub fn entries() -> Vec<SettingSpec> {
             group: "interaction",
             group_label: Some("选择与操作"),
             label: "分组结果排序口径",
-            hint: "分组页排序钮的持久化值：`value` = 按分组键值升序（出厂），\
+            hint: "分组页排序钮的持久化值：`none` = 不排序（保持分组首次出现顺序，等价 DBeaver 的 \
+                  `RS_GROUPING_DEFAULT_SORTING=\"\"`）、`value` = 按分组键值升序（出厂）、\
                  `countdesc` = 按组内行数降序（等价 DBeaver 的 `DESC`）。\
-                 未知值按出厂处理；DBeaver 另有一档「不排序」，本仓暂不做",
+                 未知值按出厂处理",
             hint_inline: true,
             kind: SettingKind::Text,
             presets: &[],

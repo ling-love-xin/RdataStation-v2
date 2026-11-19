@@ -555,6 +555,12 @@ impl StatsMode {
 /// 【R3 分组页】分组结果排序口径（对齐 DBeaver 分组面板的排序配置）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GroupSort {
+    /// 不排序：保持分组**首次出现**的顺序（视图行序扫描出来的插入序）。
+    ///
+    /// 对齐 DBeaver `ChangeSortingAction.NONE = ""`（`RS_GROUPING_DEFAULT_SORTING`
+    /// 的「不排序」档）：那边不设 ORDER BY，于是结果就是数据源返回的分组顺序。
+    /// 本仓 `group_by_tuples`（`grid/stats.rs:89-99`）按行扫描线性插入，天然是首现序。
+    None,
     /// 按分组键字典序升序（默认；未排序的首现顺序也接近这个直觉）
     #[default]
     Value,
@@ -563,17 +569,21 @@ pub enum GroupSort {
 }
 
 impl GroupSort {
-    /// 另一个口径（按钮 toggle 用）
+    /// 另一个口径（按钮 toggle 用）：三档循环（不排序 → 按值 → 按计数 → 不排序），
+    /// 对齐 DBeaver `DefaultSortingAction` 下拉里的三个单选档
+    /// （`ChangeSortingAction:44-52`：`descending == null` 即「不排序」）。
     pub fn toggled(self) -> Self {
         match self {
+            Self::None => Self::Value,
             Self::Value => Self::CountDesc,
-            Self::CountDesc => Self::Value,
+            Self::CountDesc => Self::None,
         }
     }
 
     /// 按钮文案（右侧窄栏只放得下 3 个字）
     pub fn label(self) -> &'static str {
         match self {
+            Self::None => "原序",
             Self::Value => "按值",
             Self::CountDesc => "按计数",
         }
@@ -582,6 +592,7 @@ impl GroupSort {
     /// 落盘 id（全小写，与设置项 `result_panel.group_sort` 同一契约）
     pub fn id(self) -> &'static str {
         match self {
+            Self::None => "none",
             Self::Value => "value",
             Self::CountDesc => "countdesc",
         }
@@ -590,6 +601,7 @@ impl GroupSort {
     /// 解析落盘 id；未知 / 大小写不符的值返回 `None`（调用方按出厂档处理，不猜）。
     pub fn parse(id: &str) -> Option<Self> {
         match id.trim() {
+            "none" => Some(Self::None),
             "value" => Some(Self::Value),
             "countdesc" => Some(Self::CountDesc),
             _ => None,
@@ -969,13 +981,14 @@ mod tests {
         assert_eq!(stats_items_to_ids(&[]), "");
     }
 
-    /// 分组排序口径的落盘 id：两档都能原地往返，未知 / 大小写不符一律 `None`
+    /// 分组排序口径的落盘 id：三档都能原地往返，未知 / 大小写不符一律 `None`
     /// （调用方按出厂 `value` 处理，与设置服务侧的归一同一口径）。
     #[test]
     fn group_sort_ids_round_trip_and_reject_unknown() {
+        assert_eq!(GroupSort::None.id(), "none");
         assert_eq!(GroupSort::Value.id(), "value");
         assert_eq!(GroupSort::CountDesc.id(), "countdesc");
-        for sort in [GroupSort::Value, GroupSort::CountDesc] {
+        for sort in [GroupSort::None, GroupSort::Value, GroupSort::CountDesc] {
             assert_eq!(GroupSort::parse(sort.id()), Some(sort));
         }
         // 空白由 parse 的 trim 吃掉；大小写与未知档按未知处理（id 是契约）
@@ -985,5 +998,26 @@ mod tests {
         assert_eq!(GroupSort::parse(""), None);
         // 出厂档 = 按值（与设置模型默认 `"value"` 同档）
         assert_eq!(GroupSort::default().id(), "value");
+    }
+
+    /// 分组排序按钮的三档循环（对齐 DBeaver `DefaultSortingAction` 三个单选档：
+    /// 不排序 / 升序 / 降序 —— 本仓对应 原序 / 按值 / 按计数）。
+    #[test]
+    fn group_sort_toggle_cycles_through_three_modes() {
+        assert_eq!(GroupSort::None.toggled(), GroupSort::Value);
+        assert_eq!(GroupSort::Value.toggled(), GroupSort::CountDesc);
+        assert_eq!(
+            GroupSort::CountDesc.toggled(),
+            GroupSort::None,
+            "第三档必须回到「不排序」，否则没有回到原序的入口"
+        );
+        // 三个标签互不相同（按钮文案靠它区分当前档）
+        let labels = [
+            GroupSort::None.label(),
+            GroupSort::Value.label(),
+            GroupSort::CountDesc.label(),
+        ];
+        assert_eq!(labels.len(), 3);
+        assert!(labels[0] != labels[1] && labels[1] != labels[2] && labels[0] != labels[2]);
     }
 }

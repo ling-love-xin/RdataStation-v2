@@ -1070,6 +1070,14 @@ fn arrange_groups_sorts_and_filters() {
         (vec!["a".to_string()], 3),
         (vec!["c".to_string()], 1),
     ];
+    // 不排序：保持首现顺序（对齐 DBeaver `RS_GROUPING_DEFAULT_SORTING=""` 不设 ORDER BY）
+    arrange_groups(&mut groups, GroupSort::None, false);
+    assert_eq!(
+        groups.iter().map(|(key, _)| key[0].as_str()).collect::<Vec<_>>(),
+        ["b", "a", "c"],
+        "「不排序」档必须原样保留首现顺序"
+    );
+
     // 按值序
     arrange_groups(&mut groups, GroupSort::Value, false);
     assert_eq!(
@@ -1398,6 +1406,18 @@ fn group_prefs_initial_round_trip_and_unknown_sort_falls_back(
         "countdesc"
     );
     assert!(cx.update(|_, app| panel.read(app).group_duplicates_only_value()));
+
+    // 「不排序」档（对齐 DBeaver `RS_GROUPING_DEFAULT_SORTING=""`）也要能注入
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.set_group_prefs_initial("none", false, cx);
+        })
+    });
+    assert_eq!(
+        cx.update(|_, app| panel.read(app).group_sort_id()),
+        "none",
+        "「不排序」是合法档位，不能当未知值回落"
+    );
 
     // 未知 id（手改配置文件）→ 回落到出厂 value，开关照注入（两字段各自独立）
     cx.update(|_, app| {

@@ -217,7 +217,7 @@ pub enum Slot {
     /// 【计算页持久化】启用的统计项 id 列表（逗号分隔，顺序即行序）。
     ResultPanelStatsItems,
     /// 【分组页持久化，对齐 DBeaver `RS_GROUPING_DEFAULT_SORTING`】分组结果排序口径
-    /// （`value` = 按分组键值升序 / `countdesc` = 按组内行数降序）。
+    /// （`none` = 不排序（保持首现顺序）/ `value` = 按分组键值升序 / `countdesc` = 按组内行数降序）。
     ResultPanelGroupSort,
     /// 【分组页持久化，对齐 DBeaver `RS_GROUPING_SHOW_DUPLICATES_ONLY`】是否只显示
     /// 重复分组（组内行数 > 1，默认 false）。
@@ -453,7 +453,7 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::ResultPanelHiddenStatusCommands => KindTag::Text,
         // 自由文本（逗号分隔的统计项 id）：计算页工具条 ＋ / 行尾 × / Reset 与设置页都可写。
         Slot::ResultPanelStatsItems => KindTag::Text,
-        // 【分组页持久化】排序口径 = 单个 id（`value` / `countdesc`），面板排序钮点击即落盘。
+        // 【分组页持久化】排序口径 = 单个 id（`none` / `value` / `countdesc`），面板排序钮点击即落盘。
         Slot::ResultPanelGroupSort => KindTag::Text,
         // 【分组页持久化】「仅重复」开关（面板「仅重复」钮与设置页都可写）。
         Slot::ResultPanelGroupDuplicatesOnly => KindTag::Bool,

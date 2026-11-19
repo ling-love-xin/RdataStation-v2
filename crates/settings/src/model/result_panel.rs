@@ -66,11 +66,12 @@ pub struct ResultPanel {
     #[serde(default = "default_result_stats_items")]
     pub stats_items: String,
     /// 【分组页持久化，对齐 DBeaver `ResultSetPreferences.RS_GROUPING_DEFAULT_SORTING`】
-    /// 分组结果排序口径的稳定 id：`value`（按分组键值升序）/ `countdesc`（按组内行数降序）。
+    /// 分组结果排序口径的稳定 id：`none`（不排序，保持首现顺序）/ `value`（按分组键值升序）
+    /// / `countdesc`（按组内行数降序）。
     ///
-    /// DBeaver 那边存的是 `""` / `ASC` / `DESC`（默认空 = 不排序，且只作用于 count 列），
-    /// 本仓两态里只有「按计数降序」与之等价，「按值升序」是超集档（差异登记在文档）。
-    /// 作用域 = 全局一份（DBeaver 是按连接存，本仓沿用结果集偏好的全局口径）。
+    /// DBeaver 那边存的是 `""` / `ASC` / `DESC`（空 = 不排序，且排序只作用于 count 列），
+    /// 本仓的 `none` 与 `""` 等价、「按计数降序」与 `DESC` 等价，「按值升序」是超集档
+    /// （差异登记在文档）。作用域 = 全局一份（DBeaver 是按连接存，本仓沿用结果集偏好的全局口径）。
     #[serde(default = "default_result_group_sort")]
     pub group_sort: String,
     /// 【分组页持久化，对齐 DBeaver `ResultSetPreferences.RS_GROUPING_SHOW_DUPLICATES_ONLY`】

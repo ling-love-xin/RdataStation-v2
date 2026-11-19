@@ -392,14 +392,14 @@ pub(crate) fn apply_slot(
             persist(&cx.global::<Settings>().clone());
         }
         Slot::ResultPanelGroupSort => {
-            // 【分组页持久化】只认 `value` / `countdesc` 两档；未知值拒绝（设置页手填坏值时
-            // 让设置页自己报错，而不是悄悄把面板排序换成别的档）。口径与
+            // 【分组页持久化】只认 `none` / `value` / `countdesc` 三档；未知值拒绝（设置页手填
+            // 坏值时让设置页自己报错，而不是悄悄把面板排序换成别的档）。口径与
             // `set_result_panel_group_sort` 一致。
             let Some(text) = value.as_text() else {
                 return false;
             };
             let normalized = text.trim().to_ascii_lowercase();
-            if !matches!(normalized.as_str(), "value" | "countdesc") {
+            if !matches!(normalized.as_str(), "none" | "value" | "countdesc") {
                 return false;
             }
             {
@@ -509,10 +509,11 @@ impl crate::service::SettingsService {
 
     /// 【分组页持久化】写分组结果排序口径的 id（分组页排序钮点一次落一次盘）。
     ///
-    /// 只认 `value` / `countdesc`（小写、去空白）；其它值按出厂 `value` 处理——
+    /// 只认 `none` / `value` / `countdesc`（小写、去空白）；其它值按出厂 `value` 处理——
     /// 手改配置文件写了个不存在的档位时，面板不该跟着乱排序。
     pub fn set_result_panel_group_sort(id: &str, cx: &mut App) {
         let normalized = match id.trim().to_ascii_lowercase().as_str() {
+            "none" => "none".to_string(),
             "countdesc" => "countdesc".to_string(),
             _ => "value".to_string(),
         };
