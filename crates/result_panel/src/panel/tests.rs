@@ -324,6 +324,66 @@ fn browser_filter_no_match_returns_empty() {
     assert!(filter_browser_columns(&n, &t, &c, "zzz").is_empty());
 }
 
+/// 【过滤框 ESC 清空】对齐 `MetaDataPanel.java:87-98`：过滤框是
+/// `Text(SWT.BORDER|SWT.SEARCH|SWT.ICON_CANCEL)` + KeyListener
+/// （`e.character == SWT.ESC → filterTextBox.setText("")`，随后 `refresh(true)` 重算）。
+///
+/// 本仓过滤框由 kit `List` 内置（`searchable`），`ListState` 不暴露内部 `InputState`，
+/// 但暴露 `set_query`（会顺带触发一次搜索）。kit `Input` 不消费 Esc（见
+/// `panel/render.rs` 重命名条的同款注释），所以按键会冒泡到列表外层的
+/// `on_key_down` 容器 —— 在那里清空。
+#[gpui_kit::test]
+fn column_browser_filter_clears_on_escape(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    // 测试壳只灌网格；列浏览器的 delegate 数据要单独喂（同
+    // `column_browser_draws_the_comment_line_below_the_name` 的做法）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.set_right_tab(RightTab::Browser, cx);
+            let list = p.browser_list.clone();
+            list.update(cx, |list, cx| {
+                list.delegate_mut().set_data(
+                    vec!["id".to_string(), "amount".to_string()],
+                    vec!["INTEGER".to_string(), "DECIMAL".to_string()],
+                    vec![false, false],
+                    vec![None, None],
+                );
+                cx.notify();
+            });
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let list = panel.read_with(cx, |p, _| p.browser_list.clone());
+    // 输入搜索词（`set_query` 内部会直接起一次搜索，等价于用户敲键）
+    cx.update(|window, cx| list.update(cx, |list, cx| list.set_query("amount", window, cx)));
+    assert_eq!(
+        list.read_with(cx, |list, _| list.delegate().query().to_string()),
+        "amount",
+        "搜索词应写进 delegate"
+    );
+    assert_eq!(
+        list.read_with(cx, |list, _| list.delegate().matched().len()),
+        1,
+        "只命中 amount 一列"
+    );
+
+    // 聚焦搜索框 → 敲 ESC
+    cx.update(|window, cx| list.update(cx, |list, cx| list.focus(window, cx)));
+    cx.simulate_keystrokes("escape");
+    assert_eq!(
+        list.read_with(cx, |list, _| list.delegate().query().to_string()),
+        "",
+        "ESC 应清空过滤词（对齐 MetaDataPanel:91-98）"
+    );
+    assert_eq!(
+        list.read_with(cx, |list, _| list.delegate().matched().len()),
+        2,
+        "清空后回到全量清单"
+    );
+}
+
 /// 页签顺序 / 下标映射（`events::right_tabs` 单一来源）：全集下
 /// 0=列浏览器（默认）/ 1=值详情 / 2=计算 / 3=分组 / 4=引用 / 5=执行SQL，越界回落默认页；
 /// 反查（枚举 → 下标）与之互逆，页签条 `selected_index` 与点击回调用的是同一份换算

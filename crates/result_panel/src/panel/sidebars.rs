@@ -330,13 +330,34 @@ impl ResultPanel {
             .child(div().flex_none().child("类型"))
             .child(div().flex_none().child(""))
             .into_any_element();
-        let list_body: AnyElement = List::new(&browser)
-            .with_size(Size::Small)
-            .search_placeholder("搜索列名 / 类型 / 注释…")
-            .scrollbar_visible(true)
-            .flex_1()
-            .min_h_0()
-            .into_any_element();
+        let list_body: AnyElement = {
+            // 【过滤框 ESC 清空】对齐 `MetaDataPanel.java:87-98`：过滤框是
+            // `Text(SWT.BORDER | SWT.SEARCH | SWT.ICON_CANCEL)`，并挂了 KeyListener——
+            // `e.character == SWT.ESC → filterTextBox.setText("")`（清空后 `refresh(true)` 重算）。
+            // kit `Input` 不消费 Enter/Esc（见 `panel/render.rs` 的重命名条同款处理），
+            // 按键沿 Bubble 冒泡到这个容器；`ListState::set_query` 会顺带触发一次搜索。
+            let browser_for_keys = browser.clone();
+            div()
+                .flex_1()
+                .min_h_0()
+                .debug_selector(|| "editor-result-col-browser-list".to_string())
+                .on_key_down(move |event: &KeyDownEvent, window, app| {
+                    if event.keystroke.key == "escape" {
+                        browser_for_keys.update(app, |list, cx| {
+                            list.set_query("", &mut *window, cx);
+                        });
+                    }
+                })
+                .child(
+                    List::new(&browser)
+                        .with_size(Size::Small)
+                        .search_placeholder("搜索列名 / 类型 / 注释…")
+                        .scrollbar_visible(true)
+                        .flex_1()
+                        .min_h_0(),
+                )
+                .into_any_element()
+        };
 
         let detail_body: AnyElement = match detail {
             Some((title, items)) => div()
