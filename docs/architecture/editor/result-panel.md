@@ -5734,6 +5734,56 @@ toolBar.setLayoutData(new GridData(GridData.HORIZONTAL_ALIGN_END));// :1382  右
 - `needsSeparator` 的视觉形态：DBeaver 用 `UIUtils.createLabelSeparator`（SWT 细线 label），
   本仓复用工具条容器自身的 `border_b(HAIRLINE)`；两者都是 1px 横线，视觉归属不同（不引入新元素）。
 
+### 9.12 列浏览器工具条只留「生成 DDL」，多选动作下沉到右键菜单（2026-11-19）
+
+**DBeaver 的 Metadata 面板只有一条页内动作**（`MetaDataPanel.java:204-215`）：
+
+```java
+@Override
+public void contributeActions(IContributionManager manager) {
+    manager.add(ActionUtils.makeCommandContribution(
+        UIUtils.getActiveWorkbenchWindow(),
+        "org.jkiss.dbeaver.ui.editors.sql.generate.ddl.by.resultSet",
+        ResultSetMessages.generate_ddl_by_result_set_name,
+        DBIcon.SQL_TEXT,
+        ResultSetMessages.generate_ddl_by_result_set_tip,
+        true));
+}
+```
+
+多选能力不在这条工具条上：`MetaDataTable.fillCustomActions:234-252` 在**清单右键菜单**里加
+「复制列文本」（`meta_data_panel_action_copy_column_text`），操作对象是
+`getItemsViewer().getStructuredSelection()`——清单的结构化选中项，而不是单行。
+
+**本仓改动**（此前 P2-3 把批量按钮放进了页内工具条，与该面板形态不符）：
+1. `sidebars.rs` 的列浏览器工具条只剩「生成 DDL」一颗；「已选 N 列」计数 chip 与
+   「隐藏所选 / 显示所选 / 清空选择」三颗按钮从工具条移除。
+2. 这三条改挂**行右键菜单尾部**（前一格分隔），由纯函数
+   `crate::column_browser::batch_menu_items(selected, clicked)` 决定是否出现：
+   **只有右键那一列在多选集合内**才生成（与 DBeaver 的「结构化选中项」口径一致），
+   标签带集合规模（`隐藏所选（N 列）` / `显示所选（N 列）` / `清空选择（N 列）`）。
+   动作经 `ResultRequest::SetColumnsHidden { columns, hidden }` /
+   `ResultRequest::ClearColumnSelection` 走队列，与原来的按钮同一条路径。
+3. 面板侧 `multi_selected` 镜像保留（由 `ColumnSelectionChanged` / `ClearColumnSelection`
+   维护），只是不再渲染成工具条控件。
+
+**验证**：
+- 新增 `panel::tests::column_browser_toolbar_keeps_only_the_ddl_action`：
+  ① 纯函数——空集合 / 右键列不在集合里 → 空；命中 → 三条且顺序
+  `HideSelected → ShowSelected → ClearSelection`、标签含「2 列」；
+  ② 渲染层——多选非空（`set_multi_selected([1,2])`）时 `editor-result-generate-ddl` 仍在，
+  `editor-result-col-batch-hide/-show/-clear` 三颗**不再渲染**。
+- 门禁：`cargo test -p rds-result-panel --lib` = **349 passed**（warning 0）、
+  `cargo test -p rds-ui-guard` = 4 passed。
+- **本批 editor 门禁未能执行**：并行线未提交改动（`crates/sql/src/formatter.rs` 给
+  `FormatOptions` 新增 `blank_lines_between` / `comma_style` / `indent_char` 三字段，
+  `crates/editor/src/view/host/format.rs:36` 尚未跟进）使 `cargo check -p rds-editor`
+  报 E0063。本批未改 editor 任何文件，该失败与本批无关；按「不碰并行线未提交改动」
+  的协作纪律，等并行线自行修好后重跑 editor 两道门禁。
+
+**登记（未做）**：工具条移除计数后，「已选 N 列」只在右键菜单标签里体现；
+DBeaver 本来也没有该计数，若要常显应放状态栏而不是页内工具条。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

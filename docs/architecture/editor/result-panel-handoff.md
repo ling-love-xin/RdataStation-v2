@@ -1493,6 +1493,21 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 3.01 列浏览器工具条只留「生成 DDL」（2026-11-19）
+
+- 对齐 `MetaDataPanel.contributeActions:204-215`：页内工具条只贡献一条「生成 DDL」。
+  多选动作在 DBeaver 那边挂**清单右键菜单**（`fillCustomActions:234-252`，操作对象 =
+  `getStructuredSelection()`）。
+- 本仓：列浏览器工具条只剩 `editor-result-generate-ddl`；「已选 N 列」chip 与
+  「隐藏所选 / 显示所选 / 清空选择」三颗按钮改挂行右键菜单尾部，由纯函数
+  `column_browser::batch_menu_items(selected, clicked)` 决定是否出现（右键列须在集合内），
+  标签带集合规模。
+- 用例 `column_browser_toolbar_keeps_only_the_ddl_action`（纯函数 + 渲染层：DDL 在、
+  三颗批量按钮不在）。
+- 门禁基线：panel **349**、ui-guard **4**。**editor 门禁本批未跑通**——并行线未提交改动
+  （`crates/sql/src/formatter.rs` 新增 `FormatOptions` 字段，`crates/editor/src/view/host/format.rs:36`
+  未跟进，E0063）；本批未改 editor，等并行线修好重跑。
+
 ### 3.00 页内工具条列位 + 分隔线只值页（2026-11-19）
 
 - 对齐 `ResultSetViewer.addPanel:1337-1383` 的 `GridLayout(2, false)`：左列
