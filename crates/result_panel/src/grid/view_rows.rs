@@ -313,6 +313,27 @@ impl ResultGridDelegate {
         &self.filter
     }
 
+    /// 【结果内查找】开关「只显示匹配行」：`Some(词)` 开、`None` 关。
+    ///
+    /// 与 [`Self::set_filter`] 分开存的理由见 `find_filter` 字段注释——筛词是用户的，
+    /// 这里只是查找栏的临时态。归一化（去空白 + 小写）在这里一次做完，之后比较不再处理。
+    /// 只改视图行序，不重查；设成同一个词不重建（开关反复点不炸）。
+    pub fn set_find_filter(&mut self, needle: Option<String>) {
+        let normalized = needle
+            .map(|needle| needle.trim().to_lowercase())
+            .filter(|needle| !needle.is_empty());
+        if self.find_filter == normalized {
+            return;
+        }
+        self.find_filter = normalized;
+        self.rebuild_view_rows();
+    }
+
+    /// 【结果内查找】当前临时过滤词（`None` = 不过滤）
+    pub fn find_filter(&self) -> Option<&str> {
+        self.find_filter.as_deref()
+    }
+
     /// 【B15】筛选后的行（导出跟随筛选：原型 §5.5 的口径）
     /// 文本视图序列：底层未删行 + 本地行（#28-B1 拍板 D2：文本视图纳入本地行、排除被删行）。
     /// 隐藏列投影在调用方（[`Self::text_presentation`]）。
@@ -492,18 +513,24 @@ impl ResultGridDelegate {
         let filter = self.filter.trim().to_lowercase();
         // 既没筛选也没排序：视图行序就是基准序列——**不物化**那份映射（`None` 即恒等）。
         // 入库 / 切结果集时这一步占了整一轮逐行工作，而绝大多数时候根本用不上。
-        if filter.is_empty() && self.column_filter.is_none() && self.sort.is_none() {
+        if filter.is_empty()
+            && self.column_filter.is_none()
+            && self.sort.is_none()
+            && self.find_filter.is_none()
+        {
             self.view_rows = None;
             return;
         }
         // 底层行：全局筛选词（所有列包含匹配）与列级筛选（单列包含匹配）**叠加取交集**：
         // 一个词卡所有列，一个值卡一列，同时生效时行要两个都过。被删底层行不进筛选 /
         // 排序序列（#28-B1 排除矩阵：筛选命中、列排序都排除被删行；网格内灰显删除线保留可见）。
+        // 查找栏的「只显示匹配行」是**第三层**（`find_filter`），同样取交集。
         let mut data: Vec<usize> = (0..self.rows.len())
             .filter(|ix| {
                 !self.local.as_ref().is_some_and(|set| set.is_deleted(*ix))
                     && (filter.is_empty() || self.row_matches(*ix, &filter))
                     && self.column_filter_matches(*ix)
+                    && self.find_filter_matches(*ix)
             })
             .collect();
         if let Some((column, descending)) = self.sort {
@@ -524,6 +551,7 @@ impl ResultGridDelegate {
             for row in local.local_rows() {
                 if (filter.is_empty() || self.local_row_matches(row, &filter))
                     && self.local_column_filter_matches(row)
+                    && self.local_find_filter_matches(row)
                 {
                     view.push(RowRef::Local(row.id));
                 }
@@ -588,6 +616,22 @@ impl ResultGridDelegate {
             .get(row_ix)
             .and_then(|row| row.get(*column))
             .is_some_and(|cell| cell_matches(cell, value))
+    }
+
+    /// 【结果内查找】底层行是否过「只显示匹配行」（口径同全局筛选：所有列包含匹配）
+    pub(crate) fn find_filter_matches(&self, row_ix: usize) -> bool {
+        match &self.find_filter {
+            Some(needle) => self.row_matches(row_ix, needle),
+            None => true,
+        }
+    }
+
+    /// 【结果内查找】本地行是否过「只显示匹配行」（口径同全局筛选的本地行分支）
+    pub(crate) fn local_find_filter_matches(&self, row: &LocalRow) -> bool {
+        match &self.find_filter {
+            Some(needle) => self.local_row_matches(row, needle),
+            None => true,
+        }
     }
 
     /// 【B15】该数据列在表头上的排序标记

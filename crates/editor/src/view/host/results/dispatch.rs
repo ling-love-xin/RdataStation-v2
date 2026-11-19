@@ -62,6 +62,9 @@ impl EditorHostPanel {
                 .result_panel
                 .update(cx, |p, cx| p.find_step(false, cx)),
             ResultRequest::CloseFind => self.result_panel.update(cx, |p, cx| p.close_find(cx)),
+            ResultRequest::SetFindFilterOnly(on) => self
+                .result_panel
+                .update(cx, |p, cx| p.set_find_filter_only(on, cx)),
             // 【状态历史】浏览器式后退 / 前进（DBeaver `navigateHistory`，
             // `ResultSetViewer.java:4050-4063`：按该状态**重跑数据泵**）。
             // 面板只给「目标下标 + 该状态 SQL」，重查走与「筛选框运行」同一条通道

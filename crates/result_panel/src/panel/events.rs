@@ -131,7 +131,46 @@ impl ResultPanel {
         if open {
             let input = self.find_input.clone();
             input.update(cx, |state, cx| state.focus(window, cx));
+        } else {
+            // 关查找栏 = 撤掉「只显示匹配行」（DBeaver：`ResultsetFindReplaceOverlay.onClose`
+            // 在 `findAllActionApplied` 时 `applyFilterAction(null)`，浮层关了过滤不残留）。
+            self.set_find_filter_only(false, cx);
         }
+        cx.notify();
+    }
+
+    /// 「只显示匹配行」开关（查找栏上的勾选框）
+    ///
+    /// 对齐 DBeaver 的 `selectAllButton`（`SWT.CHECK`，`ResultsetFindReplaceOverlay:107-135`）：
+    /// 勾上 → 把当前查找词作为 quickFilter 灌进视图；取消 → 撤掉。
+    /// 与 DBeaver 的差异登记：它是「边敲边过滤」（250ms 去抖的 `scheduleFilter`），
+    /// 本仓是「勾选框 + 词变时同步」（没有独立 job，靠 `find_query_changed` 驱动）。
+    pub fn set_find_filter_only(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.find_filter_only == on {
+            return;
+        }
+        self.find_filter_only = on;
+        let needle = if on {
+            Some(self.find_query.clone())
+        } else {
+            None
+        };
+        self.push_find_filter(needle, cx);
+    }
+
+    /// 把查找过滤词写进 delegate（`None` = 撤掉），并让视图重排
+    fn push_find_filter(&mut self, needle: Option<String>, cx: &mut Context<Self>) {
+        let grid = self.grid.clone();
+        grid.update(cx, |state, cx| {
+            state.delegate_mut().set_find_filter(needle);
+            state.refresh(cx);
+        });
+        // 行集合变了：旧的光标（视图行, 视图列）可能已经不在视图里，清掉重新定位
+        self.find_at = None;
+        self.find_hits = {
+            let delegate = self.grid.read(cx).delegate();
+            delegate.count_find_matches(&self.find_query)
+        };
         cx.notify();
     }
 
@@ -139,6 +178,16 @@ impl ResultPanel {
     pub fn find_query_changed(&mut self, text: String, cx: &mut Context<Self>) {
         self.find_query = text;
         self.find_at = None;
+        // 「只显示匹配行」开着时词变要跟着过滤（DBeaver 的边敲边过滤；本仓没有
+        // 独立 job，直接跟随每次输入，行集合与词始终一致）
+        if self.find_filter_only {
+            let needle = Some(self.find_query.clone());
+            let grid = self.grid.clone();
+            grid.update(cx, |state, cx| {
+                state.delegate_mut().set_find_filter(needle);
+                state.refresh(cx);
+            });
+        }
         self.find_hits = {
             let delegate = self.grid.read(cx).delegate();
             delegate.count_find_matches(&self.find_query)
@@ -189,12 +238,14 @@ impl ResultPanel {
         cx.notify();
     }
 
-    /// 关闭查找栏（查找栏右端的 ✕）
+    /// 关闭查找栏（查找栏右端的 ✕，也供工具栏查找钮 / Esc 走）
     pub fn close_find(&mut self, cx: &mut Context<Self>) {
         if !self.find_open {
             return;
         }
         self.find_open = false;
+        // 同 DBeaver 的 `onClose`：关浮层就撤掉曾应用的过滤（词本身保留）
+        self.set_find_filter_only(false, cx);
         cx.notify();
     }
 

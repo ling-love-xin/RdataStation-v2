@@ -6,6 +6,7 @@ use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, Textarea};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::toolbar::ToolbarGroup;
@@ -1461,6 +1462,8 @@ impl ResultPanel {
         let prev_queue = self.queue.clone();
         let next_queue = self.queue.clone();
         let close_queue = self.queue.clone();
+        let only_queue = self.queue.clone();
+        let only_on = self.find_filter_only;
         let hits: SharedString = if self.find_query.trim().is_empty() {
             "".into()
         } else if self.find_hits == 0 {
@@ -1494,6 +1497,25 @@ impl ResultPanel {
                         Input::new(&self.find_input)
                             .xsmall()
                             .appearance(false),
+                    ),
+            )
+            .child(
+                // 「只显示匹配行」：DBeaver 的 `selectAllButton`（SWT.CHECK，图标
+                // `FIND_REPLACE_FIND_ALL_FILTER`）。勾上把查找词当临时行过滤。
+                // `Checkbox` 是 RenderOnce，自身 id 进不了 `debug_bounds`，探针挂外层 div。
+                div()
+                    .flex_none()
+                    .debug_selector(|| "editor-result-find-only-wrap".to_string())
+                    .child(
+                        Checkbox::new(ElementId::Name(SharedString::from(
+                            "editor-result-find-only",
+                        )))
+                        .checked(only_on)
+                        .label("仅显示匹配")
+                        .accessibility_label("只显示匹配行")
+                        .on_click(move |_checked, _window, app| {
+                            only_queue.request(ResultRequest::SetFindFilterOnly(!only_on), app);
+                        }),
                     ),
             )
             .child(

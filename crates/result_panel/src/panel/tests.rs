@@ -3327,6 +3327,156 @@ fn find_bar_locates_matches_and_steps_through_them(cx: &mut gpui_kit::TestAppCon
     assert_eq!(closed.1, "zzz", "关闭时保留查找词，下次打开接着用");
 }
 
+/// 【结果内查找 2026-11-20】「只显示匹配行」（DBeaver 的 `selectAllButton` / 「Show
+/// matching」）：查找词是**第三层**行过滤——全局筛选词（所有列）/ 列级筛选（一列）/
+/// 查找词，三层叠加取交集；撤掉后必须回到该有的行数，且**不动**筛选框的词。
+#[test]
+fn find_filter_narrows_rows_and_stacks_with_the_other_filters() {
+    let mut delegate = crate::grid::ResultGridDelegate::default();
+    delegate.set_data(
+        vec!["id".to_string(), "name".to_string()],
+        vec![
+            vec!["1".to_string(), "Alpha".to_string()],
+            vec!["2".to_string(), "beta".to_string()],
+            vec!["3".to_string(), "gamma".to_string()],
+            vec!["4".to_string(), "ALPHABET".to_string()],
+        ],
+    );
+    let rows = |delegate: &crate::grid::ResultGridDelegate| delegate.view_total();
+
+    // 0) 没开：视图行序是恒等的（不物化映射，`view_rows = None`）
+    assert_eq!(rows(&delegate), 4, "没有查找过滤时应看到全部四行");
+
+    // 1) 打开：归一化（去首尾空白 + 小写）+ 所有列大小写不敏感子串匹配
+    delegate.set_find_filter(Some("  ALPHA  ".to_string()));
+    assert_eq!(
+        delegate.find_filter(),
+        Some("alpha"),
+        "过滤词应归一成小写、去空白（比较时不再二次处理）"
+    );
+    assert_eq!(rows(&delegate), 2, "`alpha` 命中 Alpha 与 ALPHABET 两行");
+
+    // 2) 与列级筛选叠加取交集：id 列 = `2` 的那行是 beta，不含 alpha → 0 行
+    delegate.set_column_filter(Some((0, "2".to_string())));
+    assert_eq!(rows(&delegate), 0, "查找过滤与列级筛选必须同时满足（交集）");
+    delegate.set_column_filter(None);
+
+    // 3) 与全局筛选词叠加取交集：`gam` 只在 gamma 行，alpha 行不含 → 0 行
+    delegate.set_filter("gam");
+    assert_eq!(rows(&delegate), 0, "查找过滤与全局筛词也必须同时满足");
+    assert_eq!(
+        delegate.filter(),
+        "gam",
+        "查找过滤**不得**改写筛选框的权威词"
+    );
+    delegate.set_filter("");
+
+    // 4) 撤掉：回到全部四行（且筛选词仍为空，没被查找层写脏）
+    delegate.set_find_filter(None);
+    assert_eq!(delegate.find_filter(), None);
+    assert_eq!(rows(&delegate), 4, "撤掉查找过滤后应回到全部四行");
+    assert_eq!(delegate.filter(), "", "撤销后筛选框的词原样保留（空）");
+
+    // 5) 空白词等同关闭（DBeaver：文本空即 `applyFilterAction(null)`）
+    delegate.set_find_filter(Some("   ".to_string()));
+    assert_eq!(delegate.find_filter(), None, "全空白词应视为不过滤");
+    assert_eq!(rows(&delegate), 4);
+
+    // 6) 幂等：同一个词再设一次不改变任何东西
+    delegate.set_find_filter(Some("alpha".to_string()));
+    let before = rows(&delegate);
+    delegate.set_find_filter(Some("ALPHA".to_string()));
+    assert_eq!(rows(&delegate), before, "同词（归一后相同）再设应无变化");
+}
+
+/// 【结果内查找 2026-11-20】面板层：勾「仅显示匹配」把词灌进视图行序；关查找栏
+/// 自动撤销过滤但**保留查找词**（对齐 DBeaver `ResultsetFindReplaceOverlay.onClose`
+/// → `applyFilterAction(null)`，词不清）。
+#[gpui_kit::test]
+fn closing_the_find_bar_drops_the_matching_filter_but_keeps_the_query(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let grid = cx.update(|_window, app| panel.read(app).grid().clone());
+
+    // 数据 `["1","1234.5"] / ["2","NULL"]`：词 `1` 只命中第一行 → 1 行
+    cx.update(|window, cx| {
+        panel.update(cx, |p, cx| {
+            p.toggle_find(window, cx);
+            p.find_query_changed("1".to_string(), cx);
+            p.set_find_filter_only(true, cx);
+        })
+    });
+    let open = cx.update(|_window, app| {
+        let d = grid.read(app).delegate();
+        (
+            d.find_filter().map(str::to_string),
+            d.view_total(),
+            panel.read(app).find_filter_only,
+            panel.read(app).find_hits,
+        )
+    });
+    assert_eq!(open.0.as_deref(), Some("1"), "勾上后词应进 delegate 的查找过滤");
+    assert_eq!(open.1, 1, "网格应只剩命中那一行");
+    assert!(open.2, "`find_filter_only` 应为真");
+    assert_eq!(
+        open.3, 2,
+        "命中口径按**格**算：过滤只剩第一行，但 `1` 在该行的 id 与 amount 各命中一格"
+    );
+
+    // 关查找栏：过滤撤销、行回来、词与筛选框都不动
+    cx.update(|_window, cx| panel.update(cx, |p, cx| p.close_find(cx)));
+    let closed = cx.update(|_window, app| {
+        let d = grid.read(app).delegate();
+        (
+            d.find_filter().map(str::to_string),
+            d.view_total(),
+            d.filter().to_string(),
+            panel.read(app).find_filter_only,
+            panel.read(app).find_state().1.to_string(),
+        )
+    });
+    assert_eq!(closed.0, None, "关查找栏应撤掉查找过滤");
+    assert_eq!(closed.1, 2, "行集合应回到全部两行");
+    assert_eq!(closed.2, "", "筛选框的权威词不受查找过滤影响");
+    assert!(!closed.3, "开关应回落");
+    assert_eq!(closed.4, "1", "查找词保留，下次打开接着用");
+}
+
+/// 【结果内查找 2026-11-20】查找栏那颗勾选框真的在栏里，点它入队
+/// `SetFindFilterOnly(true)`（DBeaver 的 `selectAllButton` 是个 `SWT.CHECK`）。
+#[gpui_kit::test]
+fn find_bar_only_matching_checkbox_queues_the_toggle(cx: &mut gpui_kit::TestAppContext) {
+    use crate::ports::ResultRequest;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|window, cx| panel.update(cx, |p, cx| p.toggle_find(window, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // `Checkbox` 是 RenderOnce，自身 id 进不了 `debug_bounds` → 量外层探针 div
+    let wrap = cx
+        .debug_bounds("editor-result-find-only-wrap")
+        .expect("查找栏应有「仅显示匹配」勾选框");
+    let point = gpui_kit::point(
+        wrap.origin.x + wrap.size.width / 2.,
+        wrap.origin.y + wrap.size.height / 2.,
+    );
+    cx.simulate_click(point, gpui_kit::Modifiers::default());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let queued = cx.update(|_, app| panel.read(app).queue.drain());
+    assert!(
+        queued.iter().any(|request| matches!(
+            request,
+            ResultRequest::SetFindFilterOnly(true)
+        )),
+        "勾选框应以「开启」入队：{queued:?}"
+    );
+}
+
 /// 【2026-11-18 侧栏结构对齐】左缘竖条两段式：展示组（网格 / 文本）在上，
 /// **记录模式沉底**。对齐 DBeaver `VerticalFolder(SWT.LEFT)`：
 /// - 逐条摆 `VerticalButton(SWT.LEFT | SWT.RADIO)` 展示按钮（`ResultSetViewer.java:948-962`）

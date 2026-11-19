@@ -364,6 +364,13 @@ pub struct ResultPanel {
     /// 存视图列（含 `#` 槽）而不是数据列：`ResultGridDelegate::find_next` 吐的就是视图列，
     /// 直接喂 `set_selected_cell` 不用再折算（算错一格就会跳到邻列）。
     pub(crate) find_at: Option<(usize, usize)>,
+    /// 【结果内查找】「只显示匹配行」开关（查找栏上那颗勾选框，DBeaver 的
+    /// `selectAllButton` / 「Show matching」）。
+    ///
+    /// 语义：开着时把 `find_query` 当临时行过滤灌进 delegate（`set_find_filter`），
+    /// 网格只留命中行；关掉查找栏 / 取消勾选 / 词清空时撤销。**不动筛选框的 `filter`**
+    /// ——那是用户的词，撤查找过滤时必须原样还在。
+    pub(crate) find_filter_only: bool,
     /// 【B14】下发源库开关（开着时应用筛选会重查源库——重查经队列交回编辑器）
     pub(crate) pushdown: bool,
     /// 【C1】正在重命名哪个结果集 tab（`None` = 不在重命名态）；会话级

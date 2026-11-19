@@ -72,6 +72,11 @@ pub enum ResultRequest {
     FindPrev,
     /// 【结果内查找】关闭查找栏（查找栏右端 ✕）
     CloseFind,
+    /// 【结果内查找】「只显示匹配行」开关（查找栏上的勾选框，DBeaver 的
+    /// `selectAllButton` / 「Show matching」：勾上把查找词当临时行过滤，取消撤销）。
+    /// 纯视图态，不落盘——DBeaver 只把「交互过滤是否启用」写进 dialog settings，
+    /// 勾选本身不持久化。
+    SetFindFilterOnly(bool),
     /// 【右缘竖条】面板总开关（DBeaver 竖条顶部那颗 `panelsButton`，CHECK 态 =
     /// 面板可见；`ResultSetViewer.java:1038-1056`）。关 = 整条收起。
     SetPanelsVisible(bool),
