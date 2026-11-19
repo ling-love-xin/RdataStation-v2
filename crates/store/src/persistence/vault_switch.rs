@@ -173,17 +173,102 @@ pub fn reencrypt_project(
     new_key: &[u8; 32],
 ) -> Result<ReencryptReport, CoreError> {
     let old = crypto_old_keys();
+    reencrypt_project_with_keys(conn, &old, new_key)
+}
+
+/// 显式旧钥版（切档编排与测试用）。
+pub fn reencrypt_project_with_keys(
+    conn: &mut Connection,
+    old: &[[u8; 32]],
+    new_key: &[u8; 32],
+) -> Result<ReencryptReport, CoreError> {
     let tx = conn
         .transaction()
         .map_err(|e| store_err("begin_switch_project", e.to_string()))?;
     let report = ReencryptReport {
-        auth: reencrypt_table(&tx, "auth_configs", "auth_data", &old, new_key)?,
-        network: reencrypt_table(&tx, "network_configs", "config", &old, new_key)?,
-        resources: reencrypt_table(&tx, "net_resources", "props", &old, new_key)?,
+        auth: reencrypt_table(&tx, "auth_configs", "auth_data", old, new_key)?,
+        network: reencrypt_table(&tx, "network_configs", "config", old, new_key)?,
+        resources: reencrypt_table(&tx, "net_resources", "props", old, new_key)?,
     };
     tx.commit()
         .map_err(|e| store_err("commit_switch_project", e.to_string()))?;
     Ok(report)
+}
+
+/// 一次切档的完整结果（全局 + 各项目库条数）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SwitchReport {
+    pub global: ReencryptReport,
+    /// 各项目库：`(项目名, 条数)`；没落过盘的旧项目不出现在这里。
+    pub projects: Vec<(String, usize)>,
+    /// 没有改动（目标档位就是当前档位，只做了口令校验 / 解锁）。
+    pub unchanged: bool,
+}
+
+impl SwitchReport {
+    /// 总共改写了多少条密文（全局 + 项目）。
+    pub fn total(&self) -> usize {
+        self.global.total() + self.projects.iter().map(|(_, n)| *n).sum::<usize>()
+    }
+}
+
+/// 切档全流程：**项目库先、全局库后、最后才写档位文件**。
+///
+/// 顺序是刻意的：任何一步失败都让档位文件保持旧值，旧钥仍能解开全部密文；反过来
+/// （先写档位）一旦后面失败，用户会得到一个「档位说新钥、库里一半旧密文」的库。
+pub async fn switch_source(
+    gdb: &crate::persistence::global_db::GlobalDatabaseManager,
+    target: shared::vault_source::VaultSource,
+    master_password: Option<&str>,
+) -> Result<SwitchReport, CoreError> {
+    use shared::vault_source;
+
+    // 目标档位的钥：master 档在这里完成「首次建立 / 解锁」；口令错误直接在此中止。
+    let new_key = vault_source::prepare_source_key(target, master_password)?;
+    if vault_source::current_source() == target {
+        // 同档位：不解密也不重加密（master 的口令校验已由上一行完成）
+        return Ok(SwitchReport {
+            unchanged: true,
+            ..Default::default()
+        });
+    }
+    // 旧钥集合必须在**任何写之前**固定（切档途中进程缓存可能已变）
+    let old = crypto_old_keys();
+
+    // ① 项目库（先做：失败则全局库与档位文件都还没动）
+    let mut projects = Vec::new();
+    for project in gdb.get_all_projects().await? {
+        if project.removed_at.is_some() {
+            continue;
+        }
+        let db_path = std::path::Path::new(&project.path)
+            .join(".RSmeta")
+            .join("project.db");
+        if !db_path.exists() {
+            continue;
+        }
+        let mut conn = Connection::open(&db_path).map_err(|e| {
+            store_err(
+                "open_project_for_switch",
+                format!("{} 打不开: {e}", db_path.display()),
+            )
+        })?;
+        let report = reencrypt_project_with_keys(&mut conn, &old, &new_key)?;
+        projects.push((project.name, report.total()));
+    }
+
+    // ② 全局库
+    let mut conn = gdb.sqlite_pool().acquire().await?;
+    let global = reencrypt_global_with_keys(conn.inner_mut()?, &old, &new_key)?;
+
+    // ③ 档位文件放最后
+    vault_source::set_source(target)?;
+
+    Ok(SwitchReport {
+        global,
+        projects,
+        unchanged: false,
+    })
 }
 
 /// 旧钥集合 = 现行三档的可用钥（机器档 + 系统档 + 主密码已解锁档）。

@@ -9,9 +9,9 @@
 use std::rc::Rc;
 
 use gpui_kit::base::StyledExt as _;
-use gpui_kit::component::{ActiveTheme as _, Icon, IconName};
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, TabGroup};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName};
 use gpui_kit::*;
 
 use connection_dialog::{ConfigCenterPage, ManagerKind};
@@ -49,7 +49,10 @@ impl ConfigCenterPanel {
             }
             None => {
                 self.page = Some(Rc::new(ConfigCenterPage::new(
-                    kind, project_root, window, cx,
+                    kind,
+                    project_root,
+                    window,
+                    cx,
                 )));
             }
         }
@@ -59,6 +62,24 @@ impl ConfigCenterPanel {
     /// 当前域（`None` = 页面还没建）。测试与宿主据此判断落点。
     pub fn current_kind(&self) -> Option<ManagerKind> {
         self.page.as_ref().map(|page| page.kind())
+    }
+
+    /// 直接落到「密钥来源」域（等价于点导航第 4 项；给宿主入口与测试用）。
+    pub fn show_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match &self.page {
+            Some(page) => page.open_vault(),
+            None => {
+                let page = Rc::new(ConfigCenterPage::new(ManagerKind::Auth, None, window, cx));
+                page.open_vault();
+                self.page = Some(page);
+            }
+        }
+        cx.notify();
+    }
+
+    /// 「密钥来源」域是否在前台（测试读它判断落点）。
+    pub fn vault_open(&self) -> bool {
+        self.page.as_ref().is_some_and(|page| page.vault_open())
     }
 }
 

@@ -12,8 +12,9 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{ActiveTheme, Theme};
 use gpui_kit::*;
 
+use super::config_center_vault::VaultView;
 use super::connection_dialog::{
-    ManagerKind, ManagerWorkspace, manager_panel_ui, manager_workspace, prepare_manager_domain,
+    manager_panel_ui, manager_workspace, prepare_manager_domain, ManagerKind, ManagerWorkspace,
 };
 use shared::i18n::tr;
 
@@ -31,6 +32,8 @@ pub struct ConfigCenterPage {
     mgr: Rc<RefCell<ManagerWorkspace>>,
     /// 各域条目数（只在域被打开过之后才有值；`None` = 还没查库，导航显示「—」）。
     known: Rc<RefCell<[Option<usize>; 3]>>,
+    /// 「密钥来源」域（导航第 4 项：三档选择 + 切档；不属于三管理器 workspace）
+    vault: Rc<RefCell<VaultView>>,
 }
 
 impl ConfigCenterPage {
@@ -44,6 +47,7 @@ impl ConfigCenterPage {
         let page = Self {
             mgr: Rc::new(RefCell::new(manager_workspace(window, cx))),
             known: Rc::new(RefCell::new([None; 3])),
+            vault: Rc::new(RefCell::new(VaultView::new(window, cx))),
         };
         prepare_manager_domain(kind, &page.mgr, project_root, window, cx);
         page.remember_count(kind);
@@ -61,6 +65,18 @@ impl ConfigCenterPage {
         self.mgr.borrow().kind
     }
 
+    /// 落到「密钥来源」域（宿主入口 / 测试用；等价于点导航第 4 项）。
+    pub fn open_vault(&self) {
+        let mut vault = self.vault.borrow_mut();
+        vault.open = true;
+        vault.refresh();
+    }
+
+    /// 「密钥来源」域是否在前台。
+    pub fn vault_open(&self) -> bool {
+        self.vault.borrow().open
+    }
+
     /// 更新引用计数口径用的项目根（每次从宿主打开时刷新：项目会话可能已切换）。
     pub fn set_project_root(&self, project_root: Option<String>) {
         self.mgr.borrow_mut().project_root = project_root;
@@ -68,6 +84,8 @@ impl ConfigCenterPage {
 
     /// 切域（同域再点不重新拉库，避免误清正在编辑的表单）。
     pub fn switch(&self, kind: ManagerKind, window: &mut Window, cx: &mut App) {
+        // 从密钥域切回管理器域：先关掉密钥视图（同域再点也不误清表单）
+        self.vault.borrow_mut().open = false;
         if self.kind() == kind {
             return;
         }
@@ -97,9 +115,10 @@ impl ConfigCenterPage {
             );
         for kind in ManagerKind::ALL {
             let (label, _) = domain_meta(kind);
-            let active = kind == cur;
+            let active = kind == cur && !self.vault.borrow().open;
             let mgr = self.mgr.clone();
             let known = self.known.clone();
+            let vault = self.vault.clone();
             let notify = notify.clone();
             let mut btn = Button::new(format!("cc-nav-{}", kind.index()))
                 .label(tr(label))
@@ -123,6 +142,7 @@ impl ConfigCenterPage {
                     .items_center()
                     .gap_2()
                     .child(btn.on_click(move |_, window, app| {
+                        vault.borrow_mut().open = false;
                         let project_root = mgr.borrow().project_root.clone();
                         prepare_manager_domain(kind, &mgr, project_root, window, app);
                         known.borrow_mut()[kind.index()] = Some(mgr.borrow().items.len());
@@ -145,6 +165,49 @@ impl ConfigCenterPage {
                 );
             }
         }
+        // 第四项：密钥来源（不挂在三管理器 workspace 上：它是全局单选，不是列表 + 表单）
+        let vault_open = self.vault.borrow().open;
+        let current_label = self.vault.borrow().current().label();
+        let vault_click = self.vault.clone();
+        let notify_vault = notify.clone();
+        let mut vault_btn = Button::new("cc-nav-3").label(tr("密钥来源")).flex_1();
+        vault_btn = if vault_open {
+            vault_btn.primary()
+        } else {
+            vault_btn.ghost()
+        };
+        nav = nav.child(
+            div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .child(vault_btn.on_click(move |_, _window, app| {
+                    let mut v = vault_click.borrow_mut();
+                    v.open = true;
+                    v.refresh();
+                    drop(v);
+                    notify_vault(app);
+                }))
+                .child(
+                    div()
+                        .id("cc-count-3")
+                        .test_support()
+                        .px_1()
+                        .rounded_sm()
+                        .text_xs()
+                        .text_color(theme.colors.muted_foreground)
+                        .child(current_label.to_string()),
+                ),
+        );
+        if vault_open {
+            nav = nav.child(
+                div()
+                    .px_2()
+                    .text_xs()
+                    .text_color(theme.colors.muted_foreground)
+                    .child(tr("密钥三档：机器绑定 / 系统凭据 / 主密码")),
+            );
+        }
         let _ = cx;
         nav
     }
@@ -155,7 +218,10 @@ impl ConfigCenterPage {
     fn stats(&self, theme: &Theme) -> Div {
         let (total, referenced) = {
             let m = self.mgr.borrow();
-            (m.items.len(), m.items.iter().filter(|it| it.refs > 0).count())
+            (
+                m.items.len(),
+                m.items.iter().filter(|it| it.refs > 0).count(),
+            )
         };
         let cell = |id: &'static str, label: &'static str, value: usize, hued: Hsla| {
             div()
@@ -180,7 +246,12 @@ impl ConfigCenterPage {
         div()
             .h_flex()
             .gap_2()
-            .child(cell("cc-stat-total", "条目", total, theme.colors.foreground))
+            .child(cell(
+                "cc-stat-total",
+                "条目",
+                total,
+                theme.colors.foreground,
+            ))
             .child(cell(
                 "cc-stat-referenced",
                 "被连接引用",
@@ -195,14 +266,46 @@ impl ConfigCenterPage {
             ))
     }
 
-    /// 右栏（面包屑 + 域头 + 三域共用面板体）。
+    /// 右栏（面包屑 + 域头 + 三域共用面板体；密钥域走独立正文）。
     pub fn render(
-        &self,
+        self: &Rc<Self>,
         notify: &Rc<dyn Fn(&mut App)>,
         window: &mut Window,
         cx: &mut App,
     ) -> AnyElement {
         let theme = cx.theme();
+        if self.vault.borrow().open {
+            let crumb = div()
+                .h_flex()
+                .items_center()
+                .gap_1()
+                .text_xs()
+                .text_color(theme.colors.muted_foreground)
+                .child(tr("配置中心"))
+                .child(tr("›"))
+                .child(tr("密钥来源"));
+            let view = self.vault.clone();
+            let body = {
+                let vault_ref = view.borrow();
+                vault_ref.render(notify, &view, &theme)
+            };
+            let nav = self.nav(notify, &theme, cx);
+            return div()
+                .h_flex()
+                .size_full()
+                .child(nav)
+                .child(
+                    div()
+                        .v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap_3()
+                        .p_4()
+                        .child(crumb)
+                        .child(body),
+                )
+                .into_any_element();
+        }
         let kind = self.kind();
         let (label, table) = domain_meta(kind);
         let nav = self.nav(notify, &theme, cx);

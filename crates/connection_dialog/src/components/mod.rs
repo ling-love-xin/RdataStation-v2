@@ -2,4 +2,5 @@
 //! 宿主泛型化：`ConnectionDialogState<H>`，`H: ConnectionDialogHost`（见 `crate::host`）。
 
 pub mod config_center;
+pub mod config_center_vault;
 pub mod connection_dialog;

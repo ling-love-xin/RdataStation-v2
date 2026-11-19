@@ -5,6 +5,7 @@
 //! - `duckdb_service`：DuckDB 专用服务（临时表 / 行转 Arrow / 列洞察数据）
 //! - `execution_service`：执行编排（串行/并发执行）
 //! - `policy_guard`：环境策略解算与执行前拦截（原型 ⑨ 执行语义矩阵）
+//! - `vault_service`：密钥来源三档的壳层入口（状态 / 切档编排）
 //! - `snapshot_service`：快照持久化
 //! - `result_types`：结果集类型（自 result_service 抽取，随 workbench 轮次归属确认）
 
@@ -17,3 +18,4 @@ pub mod result_types;
 pub mod snapshot_service;
 pub mod sql_parser_service;
 pub mod sql_service;
+pub mod vault_service;

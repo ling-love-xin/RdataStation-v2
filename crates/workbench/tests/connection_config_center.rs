@@ -13,8 +13,8 @@ use std::rc::Rc;
 use gpui_kit::component::Root;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
-    AppContext as _, Context, ElementId, Entity, IntoElement, Render, SharedString,
-    TestAppContext, VisualTestContext, Window, point,
+    point, AppContext as _, Context, ElementId, Entity, IntoElement, Render, SharedString,
+    TestAppContext, VisualTestContext, Window,
 };
 
 use connection_dialog::ManagerKind;
@@ -78,8 +78,9 @@ fn page_is_created_lazily_then_switches_domain(cx: &mut TestAppContext) {
 
     cx.update(|window, cx| {
         harness.update(cx, |h, cx| {
-            h.panel
-                .update(cx, |panel, cx| panel.show_domain(ManagerKind::Auth, None, window, cx));
+            h.panel.update(cx, |panel, cx| {
+                panel.show_domain(ManagerKind::Auth, None, window, cx)
+            });
         });
     });
     assert_eq!(current_kind(&panel, cx), Some(ManagerKind::Auth));
@@ -93,7 +94,10 @@ fn page_is_created_lazily_then_switches_domain(cx: &mut TestAppContext) {
     assert!(visible(cx, "cc-stat-unreferenced"), "统计：未引用格应渲染");
     // 导航计数 chip：打开过的域给真数字，没打开过的显示「—」占位（格子本身常驻）。
     assert!(visible(cx, "cc-count-0"), "导航：当前域计数 chip 应渲染");
-    assert!(visible(cx, "cc-count-1"), "导航：未访问域计数 chip 应渲染（占位）");
+    assert!(
+        visible(cx, "cc-count-1"),
+        "导航：未访问域计数 chip 应渲染（占位）"
+    );
 
     cx.update(|window, cx| {
         harness.update(cx, |h, cx| {
@@ -108,8 +112,9 @@ fn page_is_created_lazily_then_switches_domain(cx: &mut TestAppContext) {
     // 同域再点不重建：切回认证仍只切域。
     cx.update(|window, cx| {
         harness.update(cx, |h, cx| {
-            h.panel
-                .update(cx, |panel, cx| panel.show_domain(ManagerKind::Auth, None, window, cx));
+            h.panel.update(cx, |panel, cx| {
+                panel.show_domain(ManagerKind::Auth, None, window, cx)
+            });
         });
     });
     assert_eq!(current_kind(&panel, cx), Some(ManagerKind::Auth));
@@ -126,8 +131,9 @@ fn manager_panel_is_list_first_then_toggles_form(cx: &mut TestAppContext) {
 
     cx.update(|window, cx| {
         harness.update(cx, |h, cx| {
-            h.panel
-                .update(cx, |panel, cx| panel.show_domain(ManagerKind::Auth, None, window, cx));
+            h.panel.update(cx, |panel, cx| {
+                panel.show_domain(ManagerKind::Auth, None, window, cx)
+            });
         });
     });
     cx.run_until_parked();
@@ -136,19 +142,14 @@ fn manager_panel_is_list_first_then_toggles_form(cx: &mut TestAppContext) {
     assert!(!visible(cx, "mgr-back"), "列表态不该有返回栏");
 
     // 点「新建」→ 表单态。
-    let new_btn = cx.update(|window, _| {
-        window.find(ElementId::Name(SharedString::from("mgr-new")))
-    });
+    let new_btn =
+        cx.update(|window, _| window.find(ElementId::Name(SharedString::from("mgr-new"))));
     let center = point(
         new_btn.bounds().size.width / 2.,
         new_btn.bounds().size.height / 2.,
     );
     cx.update(|window, cx| {
-        window.click_at(
-            ElementId::Name(SharedString::from("mgr-new")),
-            center,
-            cx,
-        )
+        window.click_at(ElementId::Name(SharedString::from("mgr-new")), center, cx)
     });
     cx.run_until_parked();
 
@@ -156,22 +157,65 @@ fn manager_panel_is_list_first_then_toggles_form(cx: &mut TestAppContext) {
     assert!(!visible(cx, "mgr-new"), "表单态不该还挂着「新建」");
 
     // 点「返回列表」→ 回到列表态。
-    let back_btn = cx.update(|window, _| {
-        window.find(ElementId::Name(SharedString::from("mgr-back")))
-    });
+    let back_btn =
+        cx.update(|window, _| window.find(ElementId::Name(SharedString::from("mgr-back"))));
     let center = point(
         back_btn.bounds().size.width / 2.,
         back_btn.bounds().size.height / 2.,
     );
     cx.update(|window, cx| {
-        window.click_at(
-            ElementId::Name(SharedString::from("mgr-back")),
-            center,
-            cx,
-        )
+        window.click_at(ElementId::Name(SharedString::from("mgr-back")), center, cx)
     });
     cx.run_until_parked();
 
     assert!(visible(cx, "mgr-new"), "返回列表后「新建」应回来");
     assert!(!visible(cx, "mgr-back"), "返回列表后表单应关掉");
+}
+
+/// 第四域「密钥来源」：导航第 4 项 + 三档按钮 + 当前档位行 + 结果行，且切回管理器域会收起。
+///
+/// 只验形态（不触发真实切档：那要重加密整库，留给 `rds-store` 的 `switch_source` 单测）。
+#[gpui_kit::test]
+fn vault_domain_is_the_fourth_nav_entry(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (harness, cx) = open_harness(cx);
+    let panel = cx.update(|_, app| harness.read(app).panel.clone());
+
+    // 页面已建过一域再进密钥域：四域导航齐在
+    cx.update(|window, cx| {
+        harness.update(cx, |h, cx| {
+            h.panel.update(cx, |panel, cx| {
+                panel.show_domain(ManagerKind::Auth, None, window, cx)
+            });
+            h.panel.update(cx, |panel, cx| panel.show_vault(window, cx));
+        });
+    });
+    cx.run_until_parked();
+
+    assert!(
+        cx.update(|_, app| panel.read(app).vault_open()),
+        "show_vault 后密钥域应在前台"
+    );
+    assert!(visible(cx, "cc-nav-3"), "导航第 4 项（密钥来源）应渲染");
+    assert!(visible(cx, "cc-count-3"), "密钥来源的档位 chip 应渲染");
+    assert!(visible(cx, "vault-current"), "当前档位行应渲染");
+    assert!(visible(cx, "vault-switch-machine"), "机器绑定档按钮应渲染");
+    assert!(visible(cx, "vault-switch-os"), "系统凭据档按钮应渲染");
+    assert!(visible(cx, "vault-switch-master"), "主密码档按钮应渲染");
+
+    // 切回管理器域：密钥域收起，面包屑回到该域
+    cx.update(|window, cx| {
+        harness.update(cx, |h, cx| {
+            h.panel.update(cx, |panel, cx| {
+                panel.show_domain(ManagerKind::Auth, None, window, cx)
+            });
+        });
+    });
+    cx.run_until_parked();
+    assert!(
+        !cx.update(|_, app| panel.read(app).vault_open()),
+        "切回管理器域后密钥域应收起"
+    );
+    assert!(visible(cx, "mgr-new"), "回到认证域应是列表态");
+    assert!(!visible(cx, "vault-current"), "密钥域的正文不应还留在右栏");
 }

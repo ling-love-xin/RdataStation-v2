@@ -65,6 +65,7 @@
 - **网络域已切两层模型（2026-11-19）**：列表把 `net_resources` / `chains` 与旧 `network_configs` 合并展示（同 id 只留两层那条）；保存按类型分派——`chain` 写 `chains`（hop 数组逐跳复用/新建资源），单跳写 `net_resources`（编辑沿用原 id，旧表同名行被接管），**旧表不再接收新写入**但仍作为读路径回落。删除同时清两层节点与旧表同名行；资源被链引用会计入引用数（删除守卫拦得住）。`http` / `socks` 共用「proxy」展示类型，编辑既有 socks 资源时保留其 `kind`（不被表单改写成 http）。
 - **DML 需确认已通车（2026-11-19，执行语义矩阵第 8 行）**：环境开 `security.confirm_dml` 后，UPDATE / DELETE 由编辑器在执行前弹确认（正文写明环境名、语句种类与 SQL 摘要），用户点「执行」才入队；引擎侧 `SqlExecuteOptions.dml_confirmed` 兜底拒绝没被问过的写（错误码 `ENV_POLICY_DML_CONFIRM`，审计记 `confirm_required`）。单元执行没有确认入口，一律由引擎拒绝。
 - **连接级策略覆盖已生效（2026-11-19）**：高级页打开的策略开关会写进 `advanced_options.policy_overrides`，含义是**这条连接不吃这条环境策略**（连接 > 环境）。执行侧三处（`execute` / `dml_confirm_for` / schema 过滤）统一走 `resolve_for_connection`，覆盖在环境结果上叠加，保存后即时生效（不需要等 5 秒缓存）。
+- **密钥来源三档进了配置中心第 4 域（2026-11-19）**：左栏「密钥来源」与认证 / 网络 / 环境并列（`cc-nav-3`），右栏给出当前档位、主密码输入与三档各自代价（机器绑定 / 系统凭据（DPAPI，仅 Windows） / 主密码），按钮 `vault-switch-{machine,os,master}` 就地切档。切档会重加密认证 / 网络 / 资源三张表（项目库先、全局库后、档位文件最后，失败则档位不变），结果行写清条数或失败原因；系统凭据档在非 Windows 上直接禁用。启动时 master 档的解锁入口尚未做（见决策 #131 边界）。
 
 ## 3. 代码地图（要改什么去哪）
 
@@ -75,6 +76,7 @@
 | 类型树 / 项目下拉 | `connection_dialog/type_tree.rs`、`connection_dialog/project_picker.rs`（+ `Shared::{project_new_request, project_open_request}` → `take_project_action_request`） |
 | 三个配置域（认证 / 网络 / 环境）的列表 + 表单 | `connection_dialog/managers.rs`（`manager_panel_ui` / `prepare_manager_domain` 为唯一实现，对话框与页共用） |
 | 配置中心页（三域左导航 + 右内容） | `crates/connection_dialog/src/components/config_center.rs`（页面本体）+ `crates/workbench/src/panels/config_center.rs`（中央 Dock 单实例页）+ `ConnectionDialogHost::show_config_center` |
+| 密钥来源三档（选档 / 切档） | `crates/connection_dialog/src/components/config_center_vault.rs`（`VaultView`）+ `engine::services::vault_service`（状态 / 编排）+ `store::persistence::vault_switch::switch_source`（重加密 + 档位落盘） |
 | 落库 / 回读 / 测试连接 / 作用域路由 | `crates/connection_dialog/src/services/data_source_service.rs` |
 | 连接组装与隧道 | `crates/connection_dialog/src/services/connection_service.rs`（+ `connection_service/{network,runtime}.rs`）+ `crates/connection/src/{url,url_params,chain,secret}.rs` |
 | 共用 tokio 运行时 | `crates/connection_dialog/src/services/rt.rs`（`OnceLock<Option<Runtime>>` + `runtime()`） |

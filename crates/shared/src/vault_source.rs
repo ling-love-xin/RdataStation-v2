@@ -45,11 +45,41 @@ pub enum VaultSource {
 }
 
 impl VaultSource {
+    /// 三档的展示顺序（UI 与文档同序：机器绑定 → 系统凭据 → 主密码）。
+    pub const ALL: [VaultSource; 3] = [Self::Machine, Self::Os, Self::Master];
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Machine => "机器绑定",
             Self::Os => "系统凭据",
             Self::Master => "主密码",
+        }
+    }
+
+    /// 稳定短名（与落盘值一致；UI 的按钮 id / 测试定位用它，不用展示名）。
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Machine => "machine",
+            Self::Os => "os",
+            Self::Master => "master",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key.trim().to_ascii_lowercase().as_str() {
+            "machine" => Some(Self::Machine),
+            "os" => Some(Self::Os),
+            "master" => Some(Self::Master),
+            _ => None,
+        }
+    }
+
+    /// 一句话说明（切档前要让用户看清代价，文案就是这里）。
+    pub fn hint(self) -> &'static str {
+        match self {
+            Self::Machine => "盐值 + 机器标识派生。换机需搬 data 目录；忘记无代价（可重建）。",
+            Self::Os => "随机密钥由 Windows DPAPI 保护，绑定本机本账户。删档即重建，旧密文将解不开。",
+            Self::Master => "随机密钥由口令（Argon2id）派生的 KEK 封装。换机拷 data 目录 + 口令即可；忘记口令不可恢复。",
         }
     }
 }
