@@ -56,13 +56,14 @@ flowchart TB
 
 | 层 | 文件 | 职责 |
 | --- | --- | --- |
-| 视图 | `crates/connection_dialog/src/components/connection_dialog/` | 对话框（三页 Tab / Header / 侧栏暂存列表 / 三管理器覆盖层）——按职责拆分： |
+| 视图 | `crates/connection_dialog/src/components/connection_dialog/` | 对话框（三页 Tab / Header / 侧栏暂存列表；三域管理器已迁出到配置中心页，见下一行）——按职责拆分： |
 | 视图 | ├ `mod.rs` | 模块声明与 re-export、常量、`ConnectionDialogState` 字段、输入控件工厂 |
 | 视图 | ├ `state.rs` | 构造 / 元数据刷新 / 编辑回读 / `ClonedDialogState`（保存按钮的轻量视图） |
 | 视图 | ├ `staging.rs` | `ConnectionDraft`、暂存状态机、持久化映射（`draft_to_row` / `row_to_draft`）、来源短码、模板导入导出 |
 | 视图 | ├ `render.rs` | `open()`：闭包只做同步 / 快照 / 装配；逐块函数 `result_row_ui` / `side_panel_ui` / `header_ui`(`Header`) / `capability_panel_ui` / `driver_props_panel_ui` / `footer_ui` / `network_tab_ui` / `advanced_tab_ui` / `general_tab_ui`（头部已抽，闭包只剩装配） |
 | 视图 | ├ `managers.rs` | 三域列表 + 表单的**唯一实现**（`ManagerWorkspace` / `manager_panel_ui` / `prepare_manager_domain` / `upsert_manager_item` / `delete_manager_item` / 环境策略 CRUD）；旧内层对话框（`open_manager`）已于 2026-11-18 删除 |
-| 视图 | ├ `../config_center.rs` | 配置中心页（左三域导航 + 右面包屑 + `manager_panel_ui`），`ConfigCenterPage::new/switch/render` |
+| 视图 | ├ `../config_center.rs` | 配置中心页（左四域导航 + 右面包屑 + `manager_panel_ui`），`ConfigCenterPage::new/switch/render`、`open_vault` / `vault_open` |
+| 视图 | ├ `../config_center_vault.rs` | 密钥来源域（`VaultView`：当前档位 / 主密码输入 / 三档按钮 `vault-switch-*` / 结果行），切档走 `vault_service::switch_source` |
 | 视图 | ├ `type_tree.rs` / `draft_list.rs` | 左侧类型目录 / 暂存列表两处列表 UI（含同步指纹） |
 | 视图 | ├ `project_picker.rs` | 项目下拉项 `ProjectItem`（项目名 + 路径双列、搜索、末项「＋ 新增项目」） |
 | 视图 | ├ `host.rs` / `commands.rs` | `ConnectionDialogHost` trait（宿主桥：重绘 / 当前项目 / 请求新建·打开项目 / `show_plugin_manager` / `show_config_center` / 应用保存结果）与快捷键 Action |
@@ -184,10 +185,10 @@ flowchart TB
 | 配套 | 内容 | 状态 |
 | --- | --- | --- |
 | 注册表 `metadata_identity_registry` | 进程内 `conn_id → (指纹, 规范化串)` 单例；保存 / 连接建立 / 更新登记、删除注销；不可共享不登记 | ✅ 已实现（2026-10-02） |
-| 索引表 `metadata_cache_index` | `fingerprint`(PK) / `canonical_desc` / `type_id` / `format_version` / `ref_conn_ids` / `last_used_at` / `size_bytes`：给「缓存管理」提供占用与孤儿视图 | ⏳ 未建（随「缓存管理」轮，见 §14 #39 之后新增观察项） |
-| 引用计数与孤儿 | 连接删除只减引用，引用为 0 标记孤儿、不自动删 | ⏳ 未做（随索引表） |
-| 并发预热 | 同一指纹被两条连接同时预热 → per-fingerprint 互斥 | ⏳ 观察项（SQLite WAL / busy_timeout 已兜底） |
-| 存量迁移 | 旧 `conn_*.sqlite` 全部按 legacy 保留；需要时按需复制（copy，不 move）到指纹路径 | ✅ legacy 保留（不自动迁移，观察项） |
+| 索引表 `metadata_cache_index` | `fingerprint`(PK) / `canonical_desc` / `type_id` / `format_version` / `ref_conn_ids` / `last_used_at` / `size_bytes`：给「缓存管理」提供占用与孤儿视图 | ✅ 已建（2026-10-03，独立 `{system}/metadata_cache_index.sqlite`，见 §14 #19） |
+| 引用计数与孤儿 | 连接删除只减引用，引用为 0 标记孤儿、不自动删 | ✅ 已实现（`record` 幂等 / `release` → 孤儿 / `orphans` / `prune_orphans`，见 §14 #19） |
+| 并发预热 | 同一指纹被两条连接同时预热 → per-fingerprint 互斥 | ✅ 已补 `PRAGMA busy_timeout=5000`（WAL 下写锁竞争等待，见 §14 #19） |
+| 存量迁移 | 旧 `conn_*.sqlite` 全部按 legacy 保留；需要时按需复制（copy，不 move）到指纹路径 | ✅ `copy_legacy_cache_if_absent`（`open()` 自动调用；旧文件保留不删，回退路径同名即空操作） |
 
 ---
 
@@ -661,7 +662,7 @@ flowchart LR
 | # | 项 | 价值 | 前置 |
 | --- | --- | --- | --- |
 | A | C4 模板导入导出（无密码） | 团队间共享连接配置；与草稿快照结构天然同源 | ~~按用户决策暂缓~~（**2026-11-18 已实装**：暂存列表标题行 `导出 / 导入`，剪贴板 JSON） |
-| B | 暂存条目拖拽排序 / 「测试全部」 | 批量配置的可用性 | gpui-kit 0.6 无开箱拖拽，可用上下移替代 |
+| B | 暂存条目拖拽排序 / 「测试全部」 | 批量配置的可用性 | 暂存列表现为 `List` + `ListItem`（键盘可控），未接拖拽排序；可用上下移替代 |
 | C | 自绘 tooltip（暂存条目短码释义） | 减少认知成本 | 需接入 gpui-base `TooltipOverlay` |
 | D | 分组 / 标签管理与视图（新建分组、按标签检索） | 组织能力的消费侧 | 导航模块（database-nav） |
 | E | ~~项目下拉支持**浏览目录打开其他项目**~~（**已完成**：决策 #26/#41 补 `project_open_request` + 「打开现有目录…」，#4 又让它在脏草稿下确认后直接开窗） | — | — |
@@ -958,8 +959,6 @@ flowchart LR
 | 新增（🔴） | **密码框明文显示**（表单密码 + 档案 `password` / `passphrase` 字段）：`masked(true)` + `mask_toggle()`（决策 #104） | `helpers::tests::secret_fields_are_the_credential_keys_only`、`connection_render_matrix::password_input_masks_display_without_hiding_the_value`（掩码 + `value()` 仍是明文） |
 | 新增（🟡） | **测试连接 / 保存阻塞 UI 线程**（连不上的主机要等满超时，窗口被判“无响应”，loading 也转不起来）：改「前台取快照 → `background_executor` 跑服务 → `spawn_in` 回前台写结果」，`BusyOp` 挡住重复触发，「保存并关闭」的关闭动作改到结果回来之后（决策 #102） | `ConnectionDialogState` / `do_test` / `do_save` 路径由现有窗口回归（`connection_dialog_ui` / `connection_render_matrix` / `dialog_host_layer` 全绿）覆盖渲染与宿主重绘；**真机待验**：长超时主机的“窗口不卡死 + loading 可见” |
 | 新增（⚪） | **缺项提示笼统 + 无字段级指引**：`helpers::save_blocker` 纯函数 + Header 标签标红（决策 #103） | `helpers::tests::save_blocker_reports_the_first_missing_item`（含文件型 / 网络型文案分流、全空格判空） |
-
-| 新增（⚪） | **缺项提示笼统 + 无字段级指引**：`helpers::save_blocker` 纯函数 + Header 标签标红（决策 #103） | `helpers::tests::save_blocker_reports_the_first_missing_item`（含文件型 / 网络型文案分流、全空格判空） |
 | 新增（⚪） | **矮窗口 / 高缩放下对话框会把 footer 顶出屏幕**（行高只按设计基准，不夹窗口） | `helpers::tests::row_height_follows_the_viewport_and_has_a_floor`（基准 / 768+125% 夹住 / 极矮下限）；真机：在小窗口里缩放页面看 footer 是否仍可见 |
 | 新增（⚪） | **侧栏可点行无悬停反馈 + 搜索无命中只留空白** | 窗口用例：`connection_render_matrix::dialog_state_matrix_renders_on_degraded_path`（`conn-type-empty` 在目录为空时出现）；悬停为视觉反馈，真机看 |
 | 新增（🟡） | **选类型没有键盘入口**（类型树行是自绘可点行，Tab 到不了）：搜索框回车选中第一个匹配类型（决策 #106） | `helpers::tests::{type_filter_matches_name_id_and_driver_name, keyboard_type_match_prefers_a_type_with_a_driver}`；**端口链路真机待验**（headless 拿不到 `InputEnter`，见决策 #106） |
@@ -1022,6 +1021,9 @@ flowchart LR
 | 39 | 🟢 | **新建默认作用域 / 地址 / 问号徽标（决策 #110，2026-10-02 用户规则 1，已实现）**：新建草稿默认「仅项目」+ 地址取当前会话项目根；作用域三态旁加 `?` 徽标（`Tooltip` 说明落库语义） | 现状：新建时作用域渲染回退 `SCOPE_LABELS[0]`（仅全局），与"项目内数据源"心智不符；三态无解释入口 | **已实现（2026-10-02 提交）**：渲染回退改用 `helpers::default_new_scope()`（= `SCOPE_LABELS[1]`「仅项目」，单一来源）；`state.rs::select_type` 文件型（sqlite/duckdb）+ 地址空 + 项目根非空 → 地址预填项目根（网络型不预填、已填值不覆盖）；`render.rs` Header 作用域分段旁加 `?` 徽标（`gpui_kit::assets::IconName::BadgeQuestionMark` + `Button::ghost().tooltip`）。测试：`helpers` 单测 `default_new_scope_is_project_only`；集成 `connection_rule12::select_type_prefills_project_root_for_file_db_only`（3 断言：预填 / 不覆盖 / 网络型不预填 / 无根不预填） |
 | 40 | 🟢 | **保存 = 追加暂存条目（决策 #111，2026-10-02 用户规则 2，已实现）**：新建模式下「保存」（Ctrl+Enter）把当前表单**追加为新暂存条目**并自动新建空草稿；编辑模式行为不变 | 现状：保存只写回当前草稿（连续录入多条需先点 `+ 添加`） | **已实现（2026-10-02 提交）**：`render.rs::do_stage` 新建分支 = `capture_draft`（固化表单）→ 空草稿拦截（`is_empty_draft` 全空不追加，提示"内容为空，未暂存"）→ `staging_add`（追加空草稿并选中，复用既有方法）→ 提示"已暂存「{label}」并新建空草稿"；编辑模式行为不变。测试：`connection_rule12::save_flow_captures_then_appends_blank_draft`（快照写回 / 追加 / 光标指向新草稿 / 新草稿空 / 表单清空） |
 | 41 | 🟢 | **MVP 设计审查结论（2026-10-03，不排期，决策 #117）**：新增类型动态渲染机制成立——~~五 Tab~~ **三页 Tab**（2026-11-18 收敛）内容全部由 `DriverDescriptor` 声明派生（`registry/descriptors.rs` builder：category / target_database / default_port / url_template / require_file / fields / capabilities / supported_auth_types / driver_properties），UI 层零类型写死；**新类型真实成本在四道闸**：① 驱动声明 ✅（builder 完备，`mysql_driver()` 为模板）；② 驱动注册 ⚠️（`BuiltinDriverDiscovery::builtin_factories()` = 6 工厂，`WasmDriverDiscovery::load_drivers` 空实现 → mssql / mongo / redis「暂无驱动」置灰）；③ 连接器实现 ⚠️（`DriverFactory::create` + connection crate URL / probe / SSL / SSH 适配，每类型一套）；④ 认证字典 ⚠️（`AUTH_TYPES` 6 类无 bearer / api_key → HTTP 类需扩字典）。**张力点**：认证方法双源字典未对齐（驱动侧 `supported_auth_types` vs 档案侧 `AUTH_TYPES`，ssl 只在驱动侧）；能力 tab ~~12 键标签表是第二份字典~~（**2026-11-18 更正：硬编码标签表已于 2026-09-19 删除，改由 `engine::driver::capability` 唯一字典驱动，见决策 #100；本条不再成立**）；加速卡「所有类型都摆」与 #38 注册门控并存（sqlite 有 scanner 可注册、duckdb 文件源无扩展不注册，UI 文案已区分「本地加速 / 联邦源」）；环境 = 全局库 + 项目库双域同构。**缺口（观察项）**：「引用方列表」UI（#33 残留）；认证字典未覆盖 http / nosql；加速 + 认证档案引用同开的集成验证未做；网络档案类型对 http 语义需重新定义 | 机制成立、MVP 边界 = 4 类型全链路；扩展待驱动插件机制（M9） | **不排期**（观察项，详见 spec §8.1） |
+| 42 | ⚪ | **网络两层缺「档案侧」创建与编辑入口（2026-11-20 记录，决策 #122 的已知缺口）**：`net_resources` / `chains` 只能经**连接对话框的网络 Tab** 保存；档案域列表能看 / 能删，但没有「新建链」与「编辑某条链的某一跳」 | 用户想把一条链从连接里抽出来复用、或改某一跳的主机，只能复制 `ChainHop` JSON 再导入；链的图形化编辑（拖拽 / 排序 / 每跳独立表单）完全缺失 | 档案域加「链编辑器」：复用 `network_field_specs` 逐跳表单 + `chain` 的 `upsert_chain_from_config`；先做「逐跳表单」再谈图形化 |
+| 43 | ⚪ | **环境策略没有「独立成态」与「影响面预览」**：策略现在只是环境表单里的一组开关行（`mgr-policy-{i}`），原型 ⑨ 设想的是「策略列表 + 这条策略影响哪些连接」 | 用户不知道该改一条策略会波及多少连接；多环境并排比对也无入口 | 环境域加「策略」子视图（列表 + 启用态 + 引用连接数，复用 `count_references_batch`）；影响面预览属「先看后改」类，需先有 dry-run 口径 |
+| 44 | ⚪ | **密钥三档缺「切档前预览」与「换机迁移包」（2026-11-20 记录，决策 #131/#132 的已知缺口）**：切档现在只有**事后**结果行（重加密条数 / 失败原因）；没有「先算将换钥多少行、哪几张表」的 dry-run，也没有「拷 `data/` + 口令即可换机」的打包 / 校验入口 | 用户在大库上切档只能盲切（失败虽不改档，但耗时不可预期）；换机时要自己猜哪些文件要一起搬（档位文件 + `vault-master-key` + 各项目 `.RSmeta/project.db`） | 切档前用同一遍历只读统计（`reencrypt_project` 的计数分支）出预览；迁移包 = 显式清单 + 校验和，不做自动上传 |
 
 ---
 

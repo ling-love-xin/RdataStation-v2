@@ -234,7 +234,7 @@ pub struct ConnectionDraft {
 
 3. SSL 覆盖：**仅当驱动声明&#x20;**`ssl`**&#x20;认证类型**时组装（mode/ca/cert/key）；`disable` 不落。
 
-4. 策略覆盖：落已勾选的 `policy_type`（`policy_overrides` 数组）。
+4. 策略覆盖：落**标记为「已覆盖」**的 `policy_type`（`policy_overrides` 数组）。注意语义是「这条连接不吃这条环境策略」（连接 > 环境，见架构决策 #130），**不是**「启用了哪些策略」——环境策略本身默认生效，UI 开关只在用户主动覆盖时才写数组。
 
 5. 文件型驱动（`is_file_db_driver`）：`strip_file_db_noise` 清掉 username/password/ 凭据引用 / SSL。
 
