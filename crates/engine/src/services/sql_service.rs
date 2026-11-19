@@ -534,6 +534,16 @@ impl SqlService {
         )
         .await;
         if let Err(err) = policies.check_statement(&stmt_type, sql) {
+            // 审计：被策略拦下的语句也要留痕（原型 ⑨「审计」不是只记成功的）
+            if policies.audit {
+                crate::services::policy_guard::audit_sql(
+                    &conn_key,
+                    policies.environment.as_deref(),
+                    sql,
+                    "denied",
+                    None,
+                );
+            }
             if options.record_history {
                 self.record_history(
                     conn_id.as_deref(),
@@ -552,6 +562,16 @@ impl SqlService {
         }
         // 环境超时：调用方显式给的优先，没给才用环境值（原型 Tab2「环境值 > 全局」）。
         let effective_timeout = policies.timeout_or(options.timeout_ms);
+        // 审计：放行的语句同样留痕（关闭审计时零开销）
+        if policies.audit {
+            crate::services::policy_guard::audit_sql(
+                &conn_key,
+                policies.environment.as_deref(),
+                sql,
+                "allowed",
+                None,
+            );
+        }
 
         // 获取查询缓存
         let query_cache = get_query_cache();

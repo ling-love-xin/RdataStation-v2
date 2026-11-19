@@ -235,6 +235,70 @@ fn policy_cache() -> &'static PolicyCache {
     CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
+// ===== 审计（原型 ⑨ Tab2 `audit.enabled`）=====
+//
+// 落点 = 全局库 `app_logs`（`store::logging` 的 LogStore），target 固定 `audit.sql`：
+// 审计与运行日志同一套留存/清理策略，不另建表；`fields` 里带 conn / environment / outcome
+// 供过滤。**不阻塞执行**：写成 tokio 任务，写失败只打 warn（审计库不可用不该让 SQL 失败）。
+
+/// 写一条 SQL 审计（`outcome` = `allowed` / `denied`；`detail` = 错误码等补充）。
+pub fn audit_sql(
+    conn_key: &str,
+    environment: Option<&str>,
+    sql: &str,
+    outcome: &str,
+    detail: Option<&str>,
+) {
+    use rds_store::logging::get_log_store;
+    let Some(log_store) = get_log_store() else {
+        return;
+    };
+    let record = build_audit_record(conn_key, environment, sql, outcome, detail);
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    handle.spawn(async move {
+        if let Err(e) = log_store.flush_records(&[record]).await {
+            tracing::warn!(error = %e, "SQL 审计写入失败");
+        }
+    });
+}
+
+/// 构造审计记录（纯函数，便于单测断言口径）。
+pub fn build_audit_record(
+    conn_key: &str,
+    environment: Option<&str>,
+    sql: &str,
+    outcome: &str,
+    detail: Option<&str>,
+) -> rds_store::logging::record::LogRecord {
+    use rds_store::logging::record::{LogLevel, LogRecord};
+    let level = if outcome == "denied" {
+        LogLevel::Warn
+    } else {
+        LogLevel::Info
+    };
+    let snippet: String = sql.chars().take(500).collect();
+    let fields = serde_json::json!({
+        "conn": conn_key,
+        "environment": environment,
+        "outcome": outcome,
+        "detail": detail,
+    })
+    .to_string();
+    LogRecord {
+        id: 0,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        level,
+        target: "audit.sql".to_string(),
+        message: format!("[{outcome}] env={} {snippet}", environment.unwrap_or("-")),
+        fields: Some(fields),
+        file: None,
+        line: None,
+        session_id: rds_store::logging::session_id(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,6 +323,26 @@ mod tests {
                 true,
             ),
         ]
+    }
+
+    #[test]
+    fn audit_record_marks_denied_as_warn_and_truncates_sql() {
+        use rds_store::logging::record::LogLevel;
+        let long = "S".repeat(600);
+        let rec = build_audit_record("conn-1", Some("prod"), &long, "denied", Some("ENV_POLICY_READ_ONLY"));
+        assert_eq!(rec.target, "audit.sql");
+        assert_eq!(rec.level, LogLevel::Warn, "被拦语句应为 Warn");
+        let fields: serde_json::Value =
+            serde_json::from_str(rec.fields.as_deref().unwrap()).unwrap();
+        assert_eq!(fields["outcome"], "denied");
+        assert_eq!(fields["environment"], "prod");
+        assert_eq!(fields["conn"], "conn-1");
+        assert_eq!(fields["detail"], "ENV_POLICY_READ_ONLY");
+        assert_eq!(rec.message.chars().filter(|c| *c == 'S').count(), 500, "SQL 片段限 500 字符");
+        assert!(rec.message.contains("env=prod"));
+        let ok = build_audit_record("conn-1", None, "SELECT 1", "allowed", None);
+        assert_eq!(ok.level, LogLevel::Info);
+        assert!(ok.message.contains("env=-"));
     }
 
     #[test]
