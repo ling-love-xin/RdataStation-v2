@@ -87,6 +87,22 @@ pub(crate) fn move_group_column_in_place(
     true
 }
 
+/// 【分组页】列下拉里某一项要显示的文字：**已选中的列带上它在分组键里的位次**（1 起）。
+///
+/// DBeaver 的分组列顺序在 `GroupingConfigDialog` 的列表格里直接可见（表格行序 = 分组顺序）；
+/// 本仓用勾选式下拉承载同一件事，若不标位次，用户从菜单上看不出「先按 A 再按 B」，
+/// 只能靠猜。位次只加在已勾选项上，未勾选项保持列名原文。
+pub(crate) fn group_column_menu_label(
+    group_columns: &[usize],
+    column: usize,
+    name: &str,
+) -> String {
+    match group_columns.iter().position(|existing| *existing == column) {
+        Some(index) => format!("{}. {}", index + 1, name),
+        None => name.to_string(),
+    }
+}
+
 /// 【计算页】「复制全部」文本（纯函数）。
 ///
 /// 对齐 DBeaver `AggregateColumnsPanel.CopyAllAction`（`:471-495`）的**非分组口径**：
@@ -1161,8 +1177,10 @@ impl ResultPanel {
                         }
                         let queue = queue.clone();
                         let checked = selected.contains(&column);
+                        // 已勾选的项标出分组位次（顺序即层级；见 group_column_menu_label）
+                        let label = group_column_menu_label(&selected, column, name);
                         menu = menu.item(
-                            PopupMenuItem::new(name.clone())
+                            PopupMenuItem::new(label)
                                 .checked(checked)
                                 .on_click(move |_, _window, app| {
                                     queue.request(ResultRequest::ToggleGroupColumn(column), app);

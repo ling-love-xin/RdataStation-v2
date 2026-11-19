@@ -1254,6 +1254,28 @@ fn moving_group_column_reorders_the_group_keys(cx: &mut gpui_kit::TestAppContext
     assert_eq!(cx.update(|_, app| panel.read(app).group_columns.clone()), vec![2, 0]);
 }
 
+/// 【R3 分组页】列下拉的项文字：已勾选的列要带位次，未勾选的保持列名。
+///
+/// DBeaver 的分组顺序在 `GroupingConfigDialog` 的表格行序里直接可见；本仓是勾选下拉，
+/// 不标位次就看不出「先按 A 再按 B」。菜单内部不可读（kit 只暴露 `is_empty()`），
+/// 所以按项目规范抽成纯函数来钉。
+#[test]
+fn group_column_menu_label_marks_only_selected_columns() {
+    use crate::panel::tabs::group_column_menu_label;
+
+    let keys = [3usize, 7, 9];
+    assert_eq!(group_column_menu_label(&keys, 3, "id"), "1. id");
+    assert_eq!(group_column_menu_label(&keys, 7, "name"), "2. name");
+    assert_eq!(group_column_menu_label(&keys, 9, "amount"), "3. amount");
+    assert_eq!(group_column_menu_label(&keys, 5, "extra"), "extra", "未勾选不加位次");
+    assert_eq!(group_column_menu_label(&[], 5, "extra"), "extra", "空集合全部保持原名");
+
+    // 顺序变了位次跟着变（上移后 9 变成第 2 位）
+    let reordered = [3usize, 9, 7];
+    assert_eq!(group_column_menu_label(&reordered, 9, "amount"), "2. amount");
+    assert_eq!(group_column_menu_label(&reordered, 7, "name"), "3. name");
+}
+
 /// 【R3 分组页】工具条的上移 / 下移按钮真的把请求入队（渲染路径 + 可用性门）。
 #[gpui_kit::test]
 fn group_move_buttons_queue_the_request_for_the_selected_column(
