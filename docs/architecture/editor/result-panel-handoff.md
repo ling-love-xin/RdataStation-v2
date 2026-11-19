@@ -1494,6 +1494,21 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 3.09 筛选设置列约束表的列序（2026-11-20）
+
+- 竞品列序（`FilterSettingsDialog.addColumn` 依次挂）：Name `:129-137` → `#` `:139-146`
+  → Visible `:148-176`（可编辑）→ Pinned `:178-211`（可编辑，顶层属性才允许）→
+  Order `:213+`（仅 `supportsResultSetOrdering()`）。
+- 本仓改法：`#` 从行尾挪到列名正后方（`rems(2.)` 左对齐，表头同步）；
+  可见/冻结本来就是可编辑勾选框（对 DBeaver 的 `EditingSupport`），不动；
+  「条件 / 排序」是本仓追加的只读投影列，仍在末尾。
+- 用例：`filter_settings_columns_put_the_position_right_after_the_name`（几何断言
+  `pos < vis < pin < criteria`；两个 `Checkbox` 各包一层带 id 的 div 才能被 `debug_bounds` 量到）。
+- **登记差异**：`#` 取值 = 当前数据列序（DBeaver = `OriginalVisualPosition + 1`，移动列后不变）。
+  本仓列序即持久化显示序（`display_order`），没有「模型原始序」；要复刻得给 delegate 加不可变
+  初始序 + 定义「重置列布局」语义，属独立设计题。
+- 门禁基线：panel **361**、editor check 通过、editor **798**（1 ignored）。
+
 ### 3.08 分组列下拉标位次（2026-11-20）
 
 - 承 §3.07：键顺序可改了，但下拉里看不见顺序。DBeaver 的顺序在 `GroupingConfigDialog`

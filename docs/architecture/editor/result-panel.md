@@ -6132,6 +6132,45 @@ ui-guard 仍红，归因外部（并行线未跟踪 `crates/workbench/src/unlock
 （`queue.rs:143`「中断在它开跑前就到了」，`left: 1 / right: 0`）。该目录本批零改动、单跑通过、
 重跑全量 798 全绿——属「cancel 与开跑」的并发时序抖动，登记备查，不在本线修。
 
+### 9.20 筛选设置的列约束表：`#` 挪到列名之后（2026-11-20）
+
+**竞品取证**（`FilterSettingsDialog.createDialogArea:116-…`）——列是**依次 `addColumn` 挂上去的**，
+所以顺序就是列序：
+
+```text
+:129-137  Name      列名 + 类型图标
+:139-146  "#"       值 = String.valueOf(constraint.getOriginalVisualPosition() + 1)
+:148-176  Visible   布尔列，**可编辑**（EditingSupport → constraint.setVisible）
+:178-211  Pinned    布尔列，可编辑；canEdit 只对顶层属性为真（binding == binding.getTopParent()）
+:213+     Order     仅当 resultSetViewer.getDataSource().getInfo().supportsResultSetOrdering()
+```
+
+本仓此前是「列 / 可见 / 冻结 / 条件 / 排序 / **#**」——`#` 落在行尾，跟 DBeaver 的列序对不上，
+且它读起来像「行尾序号」而不是「列位置」。
+
+**本批改法**（`panel/dialog.rs::render_filter_settings_columns`）：
+
+1. 行内把 `#` 移到**列名正后方**（`rems(2.)` 宽、左对齐、muted 色），表头同步：
+   `列 / # / 可见 / 冻结 / 条件 / 排序`。
+2. 「条件 / 排序」两列不动，仍在末尾——它们是本仓追加的**只读投影**（条件来自列头菜单的列级筛选、
+   排序来自本地排序），DBeaver 的行里没有这两列（那边靠表格的列头筛选/排序表达）。
+3. 可见 / 冻结本来就是可编辑的（`Checkbox` → `set_columns_hidden` / `toggle_freeze` +
+   `ColumnLayoutChanged` 落盘），与 DBeaver 的 `EditingSupport` 同构，本批不动。
+
+**验证**：`panel::tests::filter_settings_columns_put_the_position_right_after_the_name`——打开浮层后
+量四段几何（`pos` / `vis-cell` / `pin-cell` / `criteria`），断言 `pos < vis < pin < criteria`。
+为此给两个 `Checkbox` 各包了一层带 `debug_selector` 的 div（`Checkbox` 是 `RenderOnce`，
+自身 id 进不了 `debug_bounds`，套一层才能量到位置）。
+
+**登记差异（未改）**：`#` 的**取值**口径不同——DBeaver 是 `OriginalVisualPosition + 1`（原始可见位置，
+移动/排序列之后**不变**），本仓是**当前数据列序**（`delegate.columns()` 的枚举下标 + 1）。
+本仓没有「模型原始序」这一层：列序就是持久化的显示序（`display_order`），
+`MoveSelectedColumn` / 拖拽都会改它。要在本仓复刻「原始位置」得给 delegate 加一份不可变的初始序并
+定义它在「重置列布局」时的语义，属独立设计题，本批不做。
+
+**门禁**：result_panel **361 passed**（+1）、editor check 通过、editor **798 passed**（1 ignored）。
+ui-guard 仍红，归因外部（并行线未跟踪 `crates/workbench/src/unlock.rs` 的裸 px，见 §9.17 末段）。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
