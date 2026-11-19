@@ -30,7 +30,7 @@ use engine::persistence::id_prefix;
 use engine::persistence::network_store::NetworkConfig;
 use engine::persistence::project_connection_store::{ProjectConnection, ProjectConnectionStore};
 use engine::persistence::project_db::ProjectDatabaseManager;
-use shared::error::CoreError;
+use shared::error::{CoreError, invalid_arg};
 use std::sync::Arc;
 
 use super::connection_service::{ConnectionService, ProbeConfigInput};
@@ -70,10 +70,22 @@ impl ReferenceCount {
     pub fn total(&self) -> usize {
         self.global + self.project + self.other.len()
     }
-
     /// 其它项目数（便捷读法）。
     pub fn other_projects(&self) -> usize {
         self.other.len()
+    }
+}
+
+/// 两层资源的 `kind` → UI 展示用的网络类型键（管理器类型选项：ssh / proxy / ssl / chain）。
+///
+/// `socks` 归到 `proxy`：表单里 socks 与 http 共用 `ProxyConfig` 字段组（见 `network_field_specs`）。
+fn network_type_of_kind(kind: &str) -> &'static str {
+    match kind.trim().to_ascii_lowercase().as_str() {
+        "ssh" => "ssh",
+        "ssl" => "ssl",
+        "http" | "socks" => "proxy",
+        "chain" => "chain",
+        _ => "proxy",
     }
 }
 
@@ -200,7 +212,50 @@ impl DataSourceService {
     /// 管理器行 / 名称匹配）只需要 id / name / type——明文凭据不进 UI 内存（原型 §3.6）。
     /// 需回填字段时走 [`Self::network_config_detail_by_name`]。
     pub async fn list_network_configs(&self) -> Result<Vec<NetworkConfig>, CoreError> {
+        // 两层模型优先：资源 / 链与旧表**同 id** 时只保留两层那条（迁移是 1:1 沿用 id，
+        // 展示两份等于同一个档案出现两次）。
+        let mut nodes: Vec<NetworkConfig> = Vec::new();
+        if let Ok(pool_conn) = self.global_db.sqlite_pool().acquire().await {
+            if let Ok(conn) = pool_conn.inner() {
+                use engine::persistence::network_two_layer as tl;
+                if let Ok(resources) = tl::list_resources(conn, None) {
+                    for r in resources {
+                        nodes.push(NetworkConfig {
+                            id: r.id,
+                            name: Some(r.name),
+                            network_type: network_type_of_kind(&r.kind).to_string(),
+                            config: String::new(),
+                            auth_config_id: r.auth_config_id,
+                            origin: r.origin,
+                            source_id: r.source_id,
+                            snapshot_at: r.snapshot_at,
+                            created_at: r.created_at,
+                            updated_at: r.updated_at,
+                        });
+                    }
+                }
+                if let Ok(chains) = tl::list_chains(conn) {
+                    for c in chains {
+                        nodes.push(NetworkConfig {
+                            id: c.id,
+                            name: Some(c.name),
+                            network_type: "chain".to_string(),
+                            config: String::new(),
+                            auth_config_id: None,
+                            origin: c.origin,
+                            source_id: c.source_id,
+                            snapshot_at: c.snapshot_at,
+                            created_at: c.created_at,
+                            updated_at: c.updated_at,
+                        });
+                    }
+                }
+            }
+        }
+        let node_ids: Vec<String> = nodes.iter().map(|n| n.id.clone()).collect();
         let mut list = self.global_db.list_network_configs(None).await?;
+        list.retain(|n| !node_ids.contains(&n.id));
+        list.append(&mut nodes);
         for n in &mut list {
             n.config.clear();
         }
@@ -211,10 +266,26 @@ impl DataSourceService {
     ///
     /// 与 `auth_config_detail_by_name` 同款：列表接口在服务层已脱敏（`config` 置空），
     /// 回填必须走这里。返回 `(network_type, config JSON)`；不存在 → `Ok(None)`。
+    ///
+    /// 两层模型优先：链 → `("chain", 展开后的 hop 数组)`；资源 → `(展示类型, props)`；
+    /// 都未命中才回落旧 `network_configs`。
     pub async fn network_config_detail_by_name(
         &self,
         name: &str,
     ) -> Result<Option<(String, String)>, CoreError> {
+        if let Ok(pool_conn) = self.global_db.sqlite_pool().acquire().await {
+            if let Ok(conn) = pool_conn.inner() {
+                use engine::persistence::network_two_layer as tl;
+                if let Ok(Some(chain)) = tl::chain_by_name(conn, name) {
+                    let cfg = tl::expand_chain_config(conn, &chain.id)?
+                        .unwrap_or_else(|| "[]".to_string());
+                    return Ok(Some(("chain".to_string(), cfg)));
+                }
+                if let Ok(Some(r)) = tl::resource_by_name(conn, name) {
+                    return Ok(Some((network_type_of_kind(&r.kind).to_string(), r.props)));
+                }
+            }
+        }
         let items = self.global_db.list_network_configs(None).await?;
         let Some(id) = items
             .iter()
@@ -228,6 +299,121 @@ impl DataSourceService {
             return Ok(None);
         };
         Ok(Some((cfg.network_type, cfg.config)))
+    }
+
+    /// 按名称找两层节点的 id（删除守卫要 id；资源 / 链 / 旧表同名行都查）。
+    pub async fn network_node_id_by_name(&self, name: &str) -> Result<Option<String>, CoreError> {
+        if let Ok(pool_conn) = self.global_db.sqlite_pool().acquire().await {
+            if let Ok(conn) = pool_conn.inner() {
+                use engine::persistence::network_two_layer as tl;
+                if let Ok(Some(chain)) = tl::chain_by_name(conn, name) {
+                    return Ok(Some(chain.id));
+                }
+                if let Ok(Some(r)) = tl::resource_by_name(conn, name) {
+                    return Ok(Some(r.id));
+                }
+            }
+        }
+        Ok(self
+            .global_db
+            .list_network_configs(None)
+            .await?
+            .iter()
+            .find(|n| n.name.as_deref() == Some(name))
+            .map(|n| n.id.clone()))
+    }
+
+    /// 保存网络节点到两层模型（链 → `chains`；单跳 → `net_resources`）。
+    ///
+    /// 编辑时按 `existing_name` 找既有节点，**沿用其 id**（连接上的引用不变）；
+    /// 旧表里的同名档案也会被「接管」（资源沿用旧 id），避免出现两条同义记录。
+    /// 返回最终节点 id。
+    pub async fn save_network_node(
+        &self,
+        existing_name: Option<&str>,
+        name: &str,
+        type_key: &str,
+        config: &str,
+    ) -> Result<String, CoreError> {
+        use engine::persistence::network_two_layer as tl;
+        let pool_conn = self
+            .global_db
+            .sqlite_pool()
+            .acquire()
+            .await
+            .map_err(|e| invalid_arg("network_pool", format!("全局库连接不可用: {e}")))?;
+        let conn = pool_conn
+            .inner()
+            .map_err(|e| invalid_arg("network_pool", format!("全局库连接不可用: {e}")))?;
+        let lookup = existing_name.unwrap_or(name);
+        let t = type_key.trim().to_ascii_lowercase();
+        if t == "chain" {
+            let existing_id = tl::chain_by_name(conn, lookup)?.map(|c| c.id);
+            return tl::upsert_chain_from_config(conn, existing_id.as_deref(), name, config);
+        }
+        let Some(kind) = tl::legacy_kind_of(&t) else {
+            return Err(invalid_arg(
+                "network_type",
+                format!("无法识别的网络类型「{type_key}」"),
+            ));
+        };
+        let existing_meta = tl::resource_by_name(conn, lookup)?.map(|r| (r.id, r.kind));
+        let mut existing_id = existing_meta.as_ref().map(|(id, _)| id.clone());
+        // 展示类型把 http 与 socks 都归到 `proxy`（表单共用 ProxyConfig 字段），
+        // 编辑既有 socks 资源时**沿用它的 kind**，否则一次编辑会把它悄悄改成 http。
+        let kind = match existing_meta.as_ref().map(|(_, k)| k.as_str()) {
+            Some(k) if k == "socks" || k == "ssh" || k == "ssl" || k == "http" => k,
+            _ => kind,
+        };
+        if existing_id.is_none() {
+            // 旧表同名行：接管其 id（该 id 可能已被连接引用，换 id 会断开引用）
+            existing_id = self
+                .global_db
+                .list_network_configs(None)
+                .await?
+                .iter()
+                .find(|n| n.name.as_deref() == Some(lookup))
+                .map(|n| n.id.clone());
+        }
+        tl::upsert_resource_from_config(conn, existing_id.as_deref(), name, kind, config)
+    }
+
+    /// 按名称删除网络节点（两层与旧表同名行一并删；返回是否删到了东西）。
+    pub async fn delete_network_node(&self, name: &str) -> Result<bool, CoreError> {
+        use engine::persistence::network_two_layer as tl;
+        let mut deleted = false;
+        {
+            let pool_conn = self
+                .global_db
+                .sqlite_pool()
+                .acquire()
+                .await
+                .map_err(|e| invalid_arg("network_pool", format!("全局库连接不可用: {e}")))?;
+            let conn = pool_conn
+                .inner()
+                .map_err(|e| invalid_arg("network_pool", format!("全局库连接不可用: {e}")))?;
+            if let Some(chain) = tl::chain_by_name(conn, name)? {
+                tl::delete_chain(conn, &chain.id)?;
+                deleted = true;
+            }
+            if let Some(r) = tl::resource_by_name(conn, name)? {
+                tl::delete_resource(conn, &r.id)?;
+                deleted = true;
+            }
+        }
+        // 旧表同名行（连接可能仍指向它，但同名即同义，一并清掉）
+        if let Some(id) = self
+            .global_db
+            .list_network_configs(None)
+            .await?
+            .iter()
+            .find(|n| n.name.as_deref() == Some(name))
+            .map(|n| n.id.clone())
+        {
+            self.global_db.delete_network_config(&id).await?;
+            deleted = true;
+        }
+        Ok(deleted)
     }
 
     /// 环境列表
@@ -282,6 +468,24 @@ impl DataSourceService {
                 if let Some(id) = id {
                     if let Some(entry) = map.get_mut(id) {
                         entry.global += 1;
+                    }
+                }
+            }
+        }
+
+        // 两层模型：资源被**链**的 hop 引用（删除守卫必须看见，否则删掉后整条链失效）。
+        if matches!(field, ReferenceField::NetworkConfig) {
+            use engine::persistence::network_two_layer as tl;
+            if let Ok(pool_conn) = self.global_db.sqlite_pool().acquire().await {
+                if let Ok(conn) = pool_conn.inner() {
+                    if let Ok(chains) = tl::list_chains(conn) {
+                        for c in chains {
+                            for hop in tl::chain_hop_ids(&c) {
+                                if let Some(entry) = map.get_mut(&hop) {
+                                    entry.global += 1;
+                                }
+                            }
+                        }
                     }
                 }
             }

@@ -523,6 +523,81 @@ pub fn migrate_legacy_network_configs(conn: &Connection) -> Result<usize, CoreEr
     Ok(created)
 }
 
+/// 按名称找资源（管理器「按名称编辑 / 删除」用；同名取第一条）。
+pub fn resource_by_name(conn: &Connection, name: &str) -> Result<Option<NetResource>, CoreError> {
+    ensure_tables(conn)?;
+    let found = conn
+        .query_row(
+            "SELECT id, name, kind, host, port, auth_config_id, props, origin, source_id, snapshot_at, created_at, updated_at
+             FROM net_resources WHERE name = ?1 LIMIT 1",
+            params![name],
+            |row| {
+                Ok(NetResource {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    kind: row.get(2)?,
+                    host: row.get(3)?,
+                    port: row.get(4)?,
+                    auth_config_id: row.get(5)?,
+                    props: row.get(6)?,
+                    origin: row.get(7)?,
+                    source_id: row.get(8)?,
+                    snapshot_at: row.get(9)?,
+                    created_at: row.get(10)?,
+                    updated_at: row.get(11)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| storage_err("resource_by_name", e.to_string()))?;
+    Ok(found.map(|mut r| {
+        if let Ok(plain) = decrypt_network_config(&r.props) {
+            r.props = plain;
+        }
+        r
+    }))
+}
+
+/// 按名称找链（同名取第一条）。
+pub fn chain_by_name(conn: &Connection, name: &str) -> Result<Option<NetChain>, CoreError> {
+    ensure_tables(conn)?;
+    conn.query_row(
+        "SELECT id, name, hops, timeout_s, origin, source_id, snapshot_at, created_at, updated_at
+         FROM chains WHERE name = ?1 LIMIT 1",
+        params![name],
+        |row| {
+            Ok(NetChain {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                hops: row.get(2)?,
+                timeout_s: row.get(3)?,
+                origin: row.get(4)?,
+                source_id: row.get(5)?,
+                snapshot_at: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| storage_err("chain_by_name", e.to_string()))
+}
+
+/// 删除节点（先判类型再落到对应表；不存在 → `Ok(false)`）。
+pub fn delete_node(conn: &Connection, id: &str) -> Result<bool, CoreError> {
+    match node_kind(conn, id)? {
+        Some(NetNodeKind::Resource) => {
+            delete_resource(conn, id)?;
+            Ok(true)
+        }
+        Some(NetNodeKind::Chain) => {
+            delete_chain(conn, id)?;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
 fn kind_of_hop_tag(tag: &str) -> Option<&'static str> {
     match tag {
         "ssh" => Some("ssh"),
@@ -555,6 +630,157 @@ fn strip_type(hop: &serde_json::Value) -> String {
     }
     v.to_string()
 }
+
+// ===== 表单直写两表（管理器网络域用）=====
+
+/// 单跳档案写入资源表：`existing_id` 为空即新建（`NR_` 前缀按名称生成），
+/// 存在则保留 `auth_config_id` / `origin` 等归属性字段，只改名称、kind、host/port、props。
+///
+/// `config` 是**明文**单跳 JSON（与旧 `network_configs.config` 同形，无 `type` 字段也行）：
+/// 加密由 [`create_resource`] / [`update_resource`] 负责，调用方不要预先加密。
+pub fn upsert_resource_from_config(
+    conn: &Connection,
+    existing_id: Option<&str>,
+    name: &str,
+    kind: &str,
+    config: &str,
+) -> Result<String, CoreError> {
+    ensure_tables(conn)?;
+    let keep = match existing_id {
+        Some(id) => get_resource(conn, id)?,
+        None => None,
+    };
+    let parsed = serde_json::from_str::<serde_json::Value>(config).ok();
+    let host = parsed
+        .as_ref()
+        .and_then(|v| v.get("host").and_then(|h| h.as_str()))
+        .map(str::to_string)
+        .unwrap_or_default();
+    let port = parsed
+        .as_ref()
+        .and_then(|v| v.get("port").and_then(|p| p.as_i64()))
+        .unwrap_or(0);
+    let id = keep
+        .as_ref()
+        .map(|r| r.id.clone())
+        .unwrap_or_else(|| crate::persistence::id_prefix::generate_gid("netres", name));
+    let now = now_iso();
+    let r = NetResource {
+        id: id.clone(),
+        name: if name.trim().is_empty() {
+            format!("{host}:{port}")
+        } else {
+            name.to_string()
+        },
+        kind: kind.trim().to_ascii_lowercase(),
+        host,
+        port,
+        auth_config_id: keep.as_ref().and_then(|k| k.auth_config_id.clone()),
+        props: config.to_string(),
+        origin: keep.as_ref().and_then(|k| k.origin.clone()),
+        source_id: keep.as_ref().and_then(|k| k.source_id.clone()),
+        snapshot_at: keep.as_ref().and_then(|k| k.snapshot_at.clone()),
+        created_at: keep
+            .as_ref()
+            .map(|k| k.created_at.clone())
+            .unwrap_or_else(|| now.clone()),
+        updated_at: now,
+    };
+    if keep.is_some() {
+        update_resource(conn, &r)?;
+    } else {
+        create_resource(conn, &r)?;
+    }
+    Ok(id)
+}
+
+/// 链档案写入链表：`config` 是 hop 数组 JSON（`ChainHop` 同形，带 `type`）。
+///
+/// 逐跳按 `(kind, host, port)` 复用既有资源（与存量迁移同一口径），未命中即建资源；
+/// 随后新建 / 更新链的 `hops`。**任一跳无法识别**（未知 `type`）→ 报错，不写半条链。
+pub fn upsert_chain_from_config(
+    conn: &Connection,
+    existing_id: Option<&str>,
+    name: &str,
+    config: &str,
+) -> Result<String, CoreError> {
+    ensure_tables(conn)?;
+    let hops: Vec<serde_json::Value> = serde_json::from_str(config)
+        .map_err(|e| storage_err("upsert_chain_parse", format!("链配置不是 JSON 数组: {e}")))?;
+    if hops.is_empty() {
+        return Err(storage_err("upsert_chain_empty", "链至少需要一跳".to_string()));
+    }
+    let keep = match existing_id {
+        Some(id) => get_chain(conn, id)?,
+        None => None,
+    };
+    let id = keep
+        .as_ref()
+        .map(|c| c.id.clone())
+        .unwrap_or_else(|| crate::persistence::id_prefix::generate_gid("chain", name));
+    let now = now_iso();
+    let mut hop_ids = Vec::with_capacity(hops.len());
+    for (idx, hop) in hops.iter().enumerate() {
+        let tag = hop.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let kind = kind_of_hop_tag(tag).ok_or_else(|| {
+            storage_err(
+                "upsert_chain_hop",
+                format!("第 {} 跳的类型 `{tag}` 无法识别", idx + 1),
+            )
+        })?;
+        let host = hop.get("host").and_then(|v| v.as_str()).unwrap_or("");
+        let port = hop.get("port").and_then(|v| v.as_i64()).unwrap_or(0);
+        if let Some(existing) = find_resource(conn, kind, host, port)? {
+            hop_ids.push(existing);
+            continue;
+        }
+        let rid = format!("NR_{}_{idx}", id);
+        create_resource(
+            conn,
+            &NetResource {
+                id: rid.clone(),
+                name: format!("{host}:{port}"),
+                kind: kind.to_string(),
+                host: host.to_string(),
+                port,
+                auth_config_id: None,
+                props: strip_type(hop),
+                origin: None,
+                source_id: None,
+                snapshot_at: None,
+                created_at: now.clone(),
+                updated_at: now.clone(),
+            },
+        )?;
+        hop_ids.push(rid);
+    }
+    let chain = NetChain {
+        id: id.clone(),
+        name: if name.trim().is_empty() {
+            "chain".to_string()
+        } else {
+            name.to_string()
+        },
+        hops: serde_json::to_string(&hop_ids)
+            .map_err(|e| storage_err("upsert_chain_hops", e.to_string()))?,
+        timeout_s: keep.as_ref().and_then(|c| c.timeout_s),
+        origin: keep.as_ref().and_then(|c| c.origin.clone()),
+        source_id: keep.as_ref().and_then(|c| c.source_id.clone()),
+        snapshot_at: keep.as_ref().and_then(|c| c.snapshot_at.clone()),
+        created_at: keep
+            .as_ref()
+            .map(|c| c.created_at.clone())
+            .unwrap_or_else(|| now.clone()),
+        updated_at: now,
+    };
+    if keep.is_some() {
+        update_chain(conn, &chain)?;
+    } else {
+        create_chain(conn, &chain)?;
+    }
+    Ok(id)
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -712,6 +938,90 @@ mod tests {
         assert!(!raw.contains("plain") && raw.contains("AES:"), "{raw}");
         let back = get_resource(&c, "NR_s").expect("get").expect("exists");
         assert!(back.props.contains("plain"), "读路径应解密");
+    }
+
+    #[test]
+    fn upsert_chain_from_config_builds_resources_and_roundtrips() {
+        let c = conn();
+        let cfg = r#"[{"type":"ssh","host":"jump","port":22,"username":"u","password":"p1"},{"type":"socks_proxy","host":"s5","port":1080,"auth":{"username":"a","password":"b"}}]"#;
+        let id = upsert_chain_from_config(&c, None, "我的链", cfg).expect("upsert");
+        assert!(id.starts_with("C_") || id.starts_with("G_"), "{id}");
+        let chain = get_chain(&c, &id).expect("get").expect("exists");
+        assert_eq!(chain_hop_ids(&chain).len(), 2, "逐跳都应有资源");
+        let res = list_resources(&c, None).expect("list");
+        assert_eq!(res.len(), 2);
+        let expanded = expand_chain_config(&c, &id).expect("expand").expect("json");
+        let v: serde_json::Value = serde_json::from_str(&expanded).expect("json");
+        assert_eq!(v[0]["host"], "jump");
+        assert_eq!(v[1]["type"], "socks_proxy");
+        assert_eq!(v[1]["auth"]["password"], "b", "密码应可解密");
+        // 同一跳板机再来一条链 → 复用资源，不重复建
+        let cfg2 = r#"[{"type":"ssh","host":"jump","port":22,"username":"u","password":"p1"}]"#;
+        let id2 = upsert_chain_from_config(&c, None, "第二条", cfg2).expect("upsert2");
+        assert_eq!(list_resources(&c, None).expect("list").len(), 2, "复用既有资源");
+        assert_eq!(
+            chain_hop_ids(&get_chain(&c, &id2).expect("g").expect("e")).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn upsert_chain_rejects_unknown_hop_type_and_keeps_old_chain() {
+        let c = conn();
+        let good = r#"[{"type":"ssh","host":"j","port":22}]"#;
+        let id = upsert_chain_from_config(&c, None, "c", good).expect("ok");
+        let before = get_chain(&c, &id).expect("g").expect("e");
+        let bad = r#"[{"type":"telnet","host":"x","port":23}]"#;
+        let err = upsert_chain_from_config(&c, Some(&id), "c", bad).expect_err("未知跳类型必须拒绝");
+        assert!(format!("{err}").contains("无法识别"), "{err}");
+        let after = get_chain(&c, &id).expect("g").expect("e");
+        assert_eq!(chain_hop_ids(&after), chain_hop_ids(&before), "旧链不得被改坏");
+    }
+
+    #[test]
+    fn upsert_resource_keeps_id_on_edit_and_replaces_props() {
+        let c = conn();
+        let id = upsert_resource_from_config(
+            &c,
+            None,
+            "代理",
+            "http",
+            r#"{"host":"p1","port":8080,"auth":{"username":"u","password":"old"}}"#,
+        )
+        .expect("create");
+        let id2 = upsert_resource_from_config(
+            &c,
+            Some(&id),
+            "代理改名",
+            "http",
+            r#"{"host":"p2","port":9090,"auth":{"username":"u","password":"new"}}"#,
+        )
+        .expect("update");
+        assert_eq!(id, id2, "编辑必须沿用原 id（连接引用不能断）");
+        let r = get_resource(&c, &id).expect("g").expect("e");
+        assert_eq!(r.name, "代理改名");
+        assert_eq!(r.host, "p2");
+        assert_eq!(r.port, 9090);
+        assert!(r.props.contains("new") && !r.props.contains("old"));
+    }
+
+    #[test]
+    fn delete_node_dispatching_by_kind() {
+        let c = conn();
+        let rid = upsert_resource_from_config(&c, None, "r", "ssl", r#"{"verify_server_cert":true}"#)
+            .expect("res");
+        let cid = upsert_chain_from_config(
+            &c,
+            None,
+            "c",
+            r#"[{"type":"ssh","host":"h","port":22}]"#,
+        )
+        .expect("chain");
+        assert!(delete_node(&c, &rid).expect("del res"));
+        assert!(!delete_node(&c, "missing").expect("missing"));
+        assert_eq!(node_kind(&c, &cid).expect("k"), Some(NetNodeKind::Chain));
+        assert!(delete_node(&c, &cid).expect("del chain"));
+        assert_eq!(node_kind(&c, &rid).expect("k"), None);
     }
 
     #[test]

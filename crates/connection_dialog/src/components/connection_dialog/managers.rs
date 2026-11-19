@@ -276,35 +276,12 @@ pub(crate) fn upsert_manager_item(
                 }
             }
             ManagerKind::Network => {
-                let config = NetworkConfig {
-                    id,
-                    name: Some(name.to_string()),
-                    network_type: {
-                        // 只接受规范键（防「下拉残留认证值」写进库）；空 / 未知 → 默认 ssh。
-                        let t = tpe.trim().to_ascii_lowercase();
-                        if NETWORK_TYPES.contains(&t.as_str()) {
-                            t
-                        } else {
-                            "ssh".to_string()
-                        }
-                    },
-                    config: if data.is_empty() {
-                        "{}".into()
-                    } else {
-                        data.into()
-                    },
-                    auth_config_id: None,
-                    origin: None,
-                    source_id: None,
-                    snapshot_at: None,
-                    created_at: String::new(),
-                    updated_at: String::new(),
-                };
-                if editing.is_some() {
-                    db.update_network_config(&config).await
-                } else {
-                    db.create_network_config(&config).await
-                }
+                // 两层模型（原型 ⑧ Tab5）：链写 `chains`，单跳写 `net_resources`；
+                // 旧 `network_configs` 不再接收新写入（读路径保留回落，存量连接仍可解析）。
+                service
+                    .save_network_node(editing, name, tpe, data)
+                    .await
+                    .map(|_| ())
             }
             ManagerKind::Env => {
                 let env = Environment {
@@ -371,12 +348,7 @@ pub(crate) fn delete_manager_item(
                 .iter()
                 .find(|a| a.name.as_deref() == Some(name))
                 .map(|a| a.id.clone()),
-            ManagerKind::Network => db
-                .list_network_configs(None)
-                .await?
-                .iter()
-                .find(|n| n.name.as_deref() == Some(name))
-                .map(|n| n.id.clone()),
+            ManagerKind::Network => service.network_node_id_by_name(name).await?,
             ManagerKind::Env => db
                 .list_environments()
                 .await?
@@ -393,7 +365,8 @@ pub(crate) fn delete_manager_item(
             .await?;
         match kind {
             ManagerKind::Auth => db.delete_auth_config(&id).await,
-            ManagerKind::Network => db.delete_network_config(&id).await,
+            // 两层节点 + 旧表同名行一并删（同义记录不留在两处）
+            ManagerKind::Network => service.delete_network_node(name).await.map(|_| ()),
             ManagerKind::Env => db.delete_environment(&id).await,
         }
     });
