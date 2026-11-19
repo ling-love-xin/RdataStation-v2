@@ -5623,6 +5623,61 @@ presentationSettings.enabledPanelIds.add(panelDescriptor.getId());   // :1388
   `cargo check -p rds-editor` 通过、`cargo test -p rds-editor --lib -- --test-threads=4`
   = **794 passed**（1 ignored）、`cargo test -p rds-ui-guard` = 4 passed。
 
+### 9.10 `open_tabs` 落盘：对齐 `PresentationSettings.enabledPanelIds`（2026-11-19）
+
+**DBeaver 的「启用了哪几页」是持久状态**：`ResultSetViewer.addPanel:1388` 每次开面板都做
+`presentationSettings.enabledPanelIds.add(id)`，`PresentationSettings` 随工作区/演示设置存盘，
+下次打开仍是那几页；`activateDefaultPanels:1396-1400` 只在集合为空时补默认面板：
+
+```java
+private void activateDefaultPanels() {
+    presentationSettings.enabledPanelIds.removeIf(CommonUtils::isEmpty);
+    if (presentationSettings.enabledPanelIds.isEmpty()) {
+        // 逐个 addPanel 默认面板
+    }
+}
+```
+
+第 24 批只做了会话内的 `open_tabs`（当时登记「不持久化」），第 25 批把关闭语义收敛干净后，
+这一批把集合补上落盘。
+
+**改法**：
+1. `ports::RightTab` 新增 `ALL`（规范序常量）、`id()`（`browser` / `value` / `stats` / `group` /
+   `reference` / `execsql`）与 `parse()`（未知值 `None`，不猜页）——落盘形态与面板内枚举的
+   唯一桥梁。
+2. 偏好键 `result_panel.open_tabs`（Text，出厂
+   `"browser,value,stats,group,reference,execsql"`），加进 `Slot::ResultPanelOpenTabs`、
+   `KindTag::Text`、`key_name`、`apply_slot`、`get_by_key`、`apply_by_key` 的域分发。
+   读写口径与 `stats_items` 一致（空白折叠 / 去重 / 小写，不校验 id）。
+3. `apply_slot` / `set_result_panel_open_tabs` 把**空串归一为出厂六页全开**——与
+   `activateDefaultPanels` 的「空集合补默认」同语义，同时避免「关空 → 下次启动页签条空白」
+   这个中间态。
+4. 面板 `set_open_tabs_initial(tabs, cx)`：入参按 `RightTab::ALL` 规范序归一（去重、丢未知），
+   结果为空则保持现状；当前页不在新集合里就落到集合第一页。
+5. 宿主：`construct.rs` 启动时解析偏好注入面板；`dispatch.rs` 在 `CloseRightTab` /
+   `OpenRightTab` / `ToggleRightTab`（`switched` 时，竖条可把被 × 关掉的页重新启用）
+   三条路径后调用 `persist_result_open_tabs`（同值不写盘由设置侧判定）。
+
+**与 DBeaver 的已知差异（登记）**：
+- 作用域：DBeaver 按工作区/演示设置存，本仓沿用结果集偏好的**全局一份**口径
+  （与 `sidebar_width` / `stats_items` 同批一致）。
+- 不记「哪一页是当前页」（`right_tab` 仍不落盘，重开回到列浏览器）：DBeaver 的
+  `activatePanel` 也不会把选中页写进 `enabledPanelIds`，这一项不影响对齐。
+
+**验证**：
+- `panel::tests::right_tab_ids_round_trip`：`RightTab::ALL` 六项的 id ↔ 页互逆、空白/大小写
+  容忍、未知与空串返回 `None`。
+- `panel::tests::open_tabs_initial_normalizes_and_keeps_defaults`：乱序 + 重复 → 规范序两页；
+  空集合保持现状；当前页被关掉时落到集合第一页。
+- settings 侧由登记表不变量用例兜底（`every_registered_key_has_a_matching_slot` /
+  `registered_defaults_match_the_model` / `default_value_follows_the_declared_kind`）。
+- 门禁：`cargo test -p rds-settings --lib` = **37 passed**、
+  `cargo test -p rds-result-panel --lib` = **347 passed**（warning 0）、
+  `cargo check -p rds-editor` 通过、`cargo test -p rds-editor --lib -- --test-threads=4`
+  = **794 passed**（1 ignored）、`cargo test -p rds-ui-guard` = 4 passed。
+  （首次跑 editor 用例时 rustc 报 `memory allocation ... failed`（机器内存瞬时不足），
+  降并行度后重跑通过，非代码问题。）
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

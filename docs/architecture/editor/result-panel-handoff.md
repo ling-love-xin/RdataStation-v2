@@ -1493,6 +1493,19 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 2.99 `open_tabs` 已落盘（2026-11-19）
+
+- 偏好键 `result_panel.open_tabs`（Text）：出厂六页全开，落盘值 = 逗号分隔的
+  `RightTab::id()`（`browser,value,stats,group,reference,execsql`）。**空串归一为出厂全集**
+  （对齐 `activateDefaultPanels` 的「空集合补默认」），所以「全关」不会被记成空白条。
+- 新增 `Slot::ResultPanelOpenTabs`；`ports::RightTab` 有 `ALL` / `id()` / `parse()`（未知值
+  返回 `None`）。面板入口 `set_open_tabs_initial(tabs, cx)`：按规范序去重、丢未知、
+  空集合保持现状、当前页被关掉则落到集合第一页。
+- 宿主：`construct.rs` 启动注入；`dispatch.rs::persist_result_open_tabs` 在
+  `CloseRightTab` / `OpenRightTab` / `ToggleRightTab`（`switched`）后写回。
+- 仍不落盘：当前页 `right_tab`（DBeaver 也不把选中页写进 `enabledPanelIds`，不算差异）。
+- 门禁基线（本批之后）：settings **37**、panel **347**、editor **794**（1 ignored）、ui-guard **4**。
+
 ### 2.98 方案 B 第 2 步：竖条不再「点当前页收起整栏」（2026-11-19）
 
 - `toggle_right_tab` 现在是**纯切页**：未启用 → 先启用再切（`true`）；已启用且正在显示
