@@ -8,7 +8,7 @@
 
 ## 1. 公开接口总览
 
-`lib.rs` 导出 10 个 `pub mod`，另有 5 个顶层 `pub use`：
+`lib.rs` 导出 10 个 `pub mod`，另有 5 条顶层 `pub use`（合计 9 个名字；`model` 里的 `NavigatorSettings` 等不在顶层再导出）：
 
 ```text
 pub mod chain;        // 协议链执行 + 隧道生命周期守卫
@@ -78,9 +78,10 @@ pub use stream::ConnectionStream;
 | `HttpProxyConnector` / `SocksProxyConnector` | 两种代理连接器 |
 | `establish_ssh_tunnel` / `establish_http_proxy` / `establish_socks_proxy` | 各通道建立逻辑 |
 | `SshTunnelConnector` | **已废弃占位**：`connect(Ssh)` 返回 `NotSupported`（`supports(Ssh)` 仍为 true），SSH 走 `chain` 层 |
-| `TunnelGuard` | 隧道守卫（生命周期） |
-| `check_cert_expiry(cert_path)` | 证书过期检查 |
-| `wrap_tls_stream` | 把 stream 包装成 TLS |
+| `TunnelGuard` | 隧道守卫（生命周期：持有 bridge 任务 + 关闭信号，drop 即清理） |
+| `wrap_tls_stream` | 把 stream 包装成 TLS（`SslConnector` 与链式场景共用） |
+
+> 证书处理没有独立「过期检查」API：校验与加载都在 `SslConnector` / `wrap_tls_stream` 内部完成（`verify_server_cert`、`ca_cert_path`、`client_cert_path + client_key_path` 走 mTLS），失败以 `CoreError::Connection` 上抛。
 
 ### 2.5 `factory` — 连接工厂
 
@@ -102,15 +103,17 @@ pub use stream::ConnectionStream;
 
 | 项 | 作用 |
 |---|---|
-| `enum ConnectionStream` | 统一的异步流（TCP / TLS / 代理 / 隧道后的流） |
-| `trait StreamWrapper` | 流包装抽象（`AsyncRead + AsyncWrite`） |
-| `StreamInfo` | 流信息（对端、是否 TLS 等） |
+| `enum ConnectionStream` | 统一异步流，5 个变体：`Tcp` / `Tls` / `SshTunnel` / `HttpProxy` / `SocksProxy`；手写 `AsyncRead + AsyncWrite` 转发 |
+| `impl AsyncRead / AsyncWrite` | 按变体把读写转给底层 `TcpStream` / `TlsStream`（隧道与代理场景在建立阶段已换成回环 `TcpStream`） |
+
+> 没有 `StreamWrapper` / `StreamInfo` 这类抽象：流类型只有这一个枚举，元信息（对端、是否 TLS）由 `Connection` 持有。
 
 ### 2.8 `known_hosts` — SSH host key 校验
 
 | 项 | 作用 |
 |---|---|
-| `KnownHosts` | known_hosts 解析器 |
+| `KnownHosts` | known_hosts 解析器（解析 / 追加 / 匹配） |
+| `HostKeyCheck` / `HostKeyOutcome` | 三态校验结果（已信任 / 未知需 TOFU / 不匹配拒绝），供 SSH 建立前的判定 |
 | `create_known_hosts_checker(allow_unknown)` | 生成校验器（是否允许未知主机） |
 
 ### 2.9 `secret` — DuckDB Secret 本地加速（M3 差异化能力）
@@ -127,27 +130,35 @@ pub use stream::ConnectionStream;
 
 ### 2.10 `model` — 领域模型
 
-`DataSource`（ID 前缀双轨制 G_/P_/GP_）、`ConnectionScope`、`DataSourceSaveInput`、`TestResult`、`DeleteResult`，字段对齐 `global_connections` 表。
+`DataSource`（ID 前缀双轨制 G_/P_/GP_）、`ConnectionScope`、`DataSourceSaveInput`、`TestResult`、`DeleteResult`（字段对齐全局/项目连接表），另有 `NavigatorSettings`（导航视图偏好，只被 workbench 导航消费）。
 
 ---
 
 ## 3. 接线关系（谁消费本 crate）
 
-### 3.1 workbench（主消费方）
+### 3.1 `connection_dialog`（主消费方）
 
-- `services::connection_service::ConnectionService` —— 消费 `config` / `chain` / `url_params` / `secret`，把 `ConnectRequest` 转成可拨号配置；**连接生命周期必须走 service 层**，本 crate 不持有全局连接池。
-- `services::data_source_service::DataSourceService` —— 负责「存储 + 生命周期」编排，`build_probe_config` 与 `connect` 都经 `ConnectionService`。
-- `services::nav_runtime` —— 复用同一 `ConnectionManager`，只留需宿主服务的部分。
+服务编排已从 workbench 沉到 `crates/connection_dialog/src/services/`；workbench 侧只做 `pub use` 重导，因此 `rds_workbench::services::connection_service::*` 这类老路径仍可用（`workbench/src/services/mod.rs` 有注释说明）。
 
-### 3.2 engine
+- `connection_service.rs`（+ `connection_service/{runtime,network}.rs`）—— 消费 `config` / `chain` / `url_params` / `secret`，把 `ConnectRequest` 转成可拨号配置；`tls_request_of` 也在这里（结构化 TLS 请求的唯一派生点）；**连接生命周期必须走 service 层**，本 crate 不持有全局连接池。
+- `data_source_service.rs` —— 「存储 + 生命周期」编排，`build_probe_config` 与 `connect` 都经 `ConnectionService`。
+- `secret_integration.rs` —— 把凭据交给 `secret::SecretManager`（DuckDB 加速注册）。
+- `workspace_loader.rs` —— 连接列表加载成视图模型（全局单例优先、项目侧 `P_/GP_` 合并、填充运行时状态）。
+- `driver_service.rs` —— 驱动档案管理（发现 / 安装校验 / 项目可用性），不属传输层。
 
-- connection 只被 engine 消费，**不回依赖 engine**。
-- 联邦直连源库时，经 workbench 的 `ConnectionService` 走 `secret.rs` 注册 DuckDB Secret。
-- 驱动声明 / 族目录在 engine 侧（`driver/declaration.rs`），不属本 crate。
+### 3.2 workbench
 
-### 3.3 依赖
+- `services::nav_runtime.rs` —— 导航侧复用 `engine::ConnectionManager`，只留需宿主服务的部分（`connection::` 只被引 2 处：`DataSource` 与流类型）。
 
-本 crate 依赖仅 `rds-shared`（错误 `CoreError`、AES 加密）。无 HTTP / IPC / UI。
+### 3.3 engine / driver
+
+- `engine::services::connection_probe` 与驱动装配用 `connection::config`（`ConnectionConfig` / `TlsRequest`）构造真实拨号。
+- `driver::native::{mysql_native, postgres_native}` 直接消费 `connection::config` 的 `TlsRequest`（native TLS 连接器从结构化请求建连，sqlx 驱动仍走 URL 参数）。
+- 方向是单向的：connection 不回依赖 engine / driver / UI。
+
+### 3.4 依赖
+
+本 crate 依赖仅 `rds-shared`（错误 `CoreError`、AES 加密）与 tokio 异步栈。无 HTTP / IPC / UI。
 
 ---
 
@@ -162,6 +173,6 @@ pub use stream::ConnectionStream;
 
 ## 5. 测试锚点
 
-- crate 内 96 项单测（2026-10-01 扩充并修复后）：URL 分派、参数注入、TLS 请求、Secret 踩坑回归、连接器错误分支、隧道守卫生命周期等。
+- crate 内单测（数量以 `cargo test -p rds-connection --lib` 输出为准，不在文档固化数字）：URL 分派、参数注入、TLS 请求、Secret 踩坑回归、连接器错误分支、隧道守卫生命周期等。
 - `tests/tunnel_roundtrip.rs`：`apply_network_method` 隧道往返——本地回环 echo + 最小 HTTP CONNECT / SOCKS5 代理端（全 127.0.0.1 临时端口，不触外网）。
 - 真实拨号回归在 workbench（`official_driver_real.rs` / `connection_tunnel_cleanup.rs`）——本 crate 保持无 I/O 副作用。

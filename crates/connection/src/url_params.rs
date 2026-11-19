@@ -498,7 +498,7 @@ pub fn normalize_url_scheme(url: &str, scheme: &str) -> String {
 ///   （未知键报错），**verify 档与证书路径都靠驱动的 TLS 连接器**；
 ///   所以 verify-ca / verify-full 在 URL 上退化为 `sslmode=require`（加密），
 ///   校验意图随 `TlsRequest` 一起交给驱动——**两边必须成对使用**（唯一派生点是
-///   `workbench::services::connection_service::tls_request_of`）；
+///   `connection_dialog::services::connection_service::tls_request_of`）；
 /// - 文件型（sqlite / duckdb）与未实现族：不注入，返回原 URL（记日志）。
 pub fn append_ssl_params(
     url: &str,

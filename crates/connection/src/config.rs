@@ -60,7 +60,7 @@ pub enum ConnectionMethod {
 /// 所以在 URL 注入之外，还要把同一份请求结构地交给驱动：native 驱动的 TLS 连接器从
 /// 这里构造（见 `engine::driver::native::{mysql_native, postgres_native}`），sqlx 驱动仍读 URL 参数。
 ///
-/// 派生规则唯一来源：`workbench::services::connection_service::tls_request_of`
+/// 派生规则唯一来源：`connection_dialog::services::connection_service::tls_request_of`
 /// （网络档案 SSL 跳优先 → 「连接安全」内联覆盖）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TlsRequest {
