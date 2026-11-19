@@ -6,7 +6,7 @@ use crate::grid::cell::{
     detect_image_format, hex_lines, image_format_of, json_tree_items, pretty_json_display,
 };
 use crate::grid::header::header_tooltip_lines;
-use crate::grid::stats::{fmt_grouped, fmt_stat_num, text_minmax};
+use crate::grid::stats::{distinct_count, fmt_grouped, fmt_stat_num, median_of, mode_of, text_minmax};
 use crate::grid::status::{format_integer_cell, render_toolbar};
 use crate::grid::status::{FIRST_PAGER_ACTION, FIRST_SYSTEM_ACTION};
 use crate::grid::text::{cell_matches, find_in_cell, preview_of};
@@ -2418,6 +2418,55 @@ fn text_minmax_ignores_null_and_orders_lexically() {
     // 全 NULL / 空列 = 无极值（渲染层出 —）
     assert_eq!(text_minmax(&["NULL".to_string()]), (None, None));
     assert_eq!(text_minmax(&[] as &[String]), (None, None));
+}
+
+/// 【R2 计算页·去重计数】NULL 不计入；按值文本判等（`1` 与 `1.0` 算两个值，登记在册）
+#[test]
+fn distinct_count_skips_null_and_counts_text_values() {
+    let values = vec![
+        "a".to_string(),
+        "NULL".to_string(),
+        "b".to_string(),
+        "a".to_string(),
+        "1".to_string(),
+        "1.0".to_string(),
+    ];
+    assert_eq!(distinct_count(&values), 4, "a / b / 1 / 1.0");
+    assert_eq!(distinct_count(&["NULL".to_string()]), 0, "全 NULL = 0 个不同值");
+    assert_eq!(distinct_count(&[] as &[String]), 0);
+}
+
+/// 【R2 计算页·中位数】只取可解析的数值样本：奇数取中间、偶数取中间两个的均值；
+/// 没有数值样本 = None（渲染层出 —）
+#[test]
+fn median_of_uses_sorted_numeric_samples() {
+    let odd = vec!["3".to_string(), "1".to_string(), "NULL".to_string(), "2".to_string()];
+    assert_eq!(median_of(&odd), Some(2.0));
+    let even = vec!["4".to_string(), "1".to_string(), "3".to_string(), "2".to_string()];
+    assert_eq!(median_of(&even), Some(2.5));
+    // 文本样本不参与；全是文本 = None
+    assert_eq!(median_of(&["apple".to_string(), "zebra".to_string()]), None);
+    assert_eq!(median_of(&[] as &[String]), None);
+    // 单个数值样本：中位数就是它自己
+    assert_eq!(median_of(&["7.5".to_string()]), Some(7.5));
+}
+
+/// 【R2 计算页·众数】出现最多的非空值；并列时取**首现更早**的那个（确定性口径）；
+/// 全 NULL = None
+#[test]
+fn mode_of_picks_most_frequent_value_and_breaks_ties_by_first_occurrence() {
+    let values = vec![
+        "b".to_string(),
+        "a".to_string(),
+        "b".to_string(),
+        "NULL".to_string(),
+        "a".to_string(),
+    ];
+    assert_eq!(mode_of(&values).as_deref(), Some("b"), "b 与 a 都是 2 次，b 先出现");
+    let clear_winner = vec!["x".to_string(), "y".to_string(), "y".to_string()];
+    assert_eq!(mode_of(&clear_winner).as_deref(), Some("y"));
+    assert_eq!(mode_of(&["NULL".to_string()]), None);
+    assert_eq!(mode_of(&[] as &[String]), None);
 }
 
 /// 【P2-1】隐藏到只剩 1 列就拒绝（全藏了表格没有内容）

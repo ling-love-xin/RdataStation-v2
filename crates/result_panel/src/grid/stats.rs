@@ -195,3 +195,63 @@ pub fn text_minmax(values: &[String]) -> (Option<String>, Option<String>) {
     }
     (min.cloned(), max.cloned())
 }
+
+/// 【计算页·去重计数】非空值里**不同取值**的个数（DBeaver `FunctionCountDistinct`）。
+///
+/// 口径：`NULL` 不计入（与 COUNT 的非空口径一致，`COUNT(DISTINCT x)` 也不计 NULL）；
+/// 按值文本判定相等——本仓拿到的已经是展示文本，`1` 与 `1.0` 会被当成两个值，
+/// 这与「按文本去重」的字符串语义一致，登记在文档里。
+pub fn distinct_count(values: &[String]) -> usize {
+    let mut seen: Vec<&String> = Vec::new();
+    for cell in values {
+        if cell == "NULL" {
+            continue;
+        }
+        if !seen.iter().any(|existing| *existing == cell) {
+            seen.push(cell);
+        }
+    }
+    seen.len()
+}
+
+/// 【计算页·中位数】把可解析为 f64 的样本排序后取中间值（偶数个取中间两个的均值）；
+/// 没有数值样本（或只有 `NULL`）→ `None`（界面显示 `—`，与 Avg/Sum 同款缺省）。
+///
+/// 与 [`column_stats_from_values`] 的数值判定**同一份解析**（`str::parse::<f64>`），
+/// 避免两处对「什么算数字」给出不同答案。
+pub fn median_of(values: &[String]) -> Option<f64> {
+    let mut numbers: Vec<f64> = values
+        .iter()
+        .filter(|cell| *cell != "NULL")
+        .filter_map(|cell| cell.parse::<f64>().ok())
+        .collect();
+    if numbers.is_empty() {
+        return None;
+    }
+    numbers.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
+    let len = numbers.len();
+    Some(if len % 2 == 1 {
+        numbers[len / 2]
+    } else {
+        (numbers[len / 2 - 1] + numbers[len / 2]) / 2.0
+    })
+}
+
+/// 【计算页·众数】出现次数最多的非空值（DBeaver `FunctionMode`）。
+///
+/// 并列时取**首现更早**的那个（本仓拿到的行序即结果集顺序，天然稳定；
+/// DBeaver 的 `FunctionMode` 实现未在本仓快照里，无法逐行对照，故取确定性口径）。
+/// 全为 `NULL` → `None`（显示 `—`）。
+pub fn mode_of(values: &[String]) -> Option<String> {
+    let mut best: Option<(String, usize)> = None;
+    for (value, count) in group_by_values(values) {
+        if value == "NULL" {
+            continue;
+        }
+        // 严格大于才替换：并列时保留首现更早的那个（确定性口径）
+        if best.as_ref().map_or(true, |(_, best_count)| count > *best_count) {
+            best = Some((value, count));
+        }
+    }
+    best.map(|(value, _)| value)
+}

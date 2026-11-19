@@ -56,10 +56,12 @@ pub struct ResultPanel {
     #[serde(default = "default_hidden_status_commands")]
     pub hidden_status_commands: String,
     /// 【计算页持久化，对齐 DBeaver `AggregateColumnsPanel.loadSettings/saveSettings`】
-    /// 计算页启用的统计项，逗号分隔的稳定 id（`count,nulls,min,max,avg,sum`，顺序即行序）。
+    /// 计算页启用的统计项，逗号分隔的稳定 id（`count,countdistinct,nulls,min,max,median,`
+    /// `mode,avg,sum`，顺序即行序）。
     ///
-    /// 空串是合法状态（用户把六项全 × 掉）；「设置里没写过」由 `serde(default)` 落到
-    /// 出厂六项全开。未知 id 在面板侧忽略（id ↔ 项对应见 `result_panel::ports::StatsItem::id`）。
+    /// 空串是合法状态（用户把九项全 × 掉）；「设置里没写过」由 `serde(default)` 落到
+    /// 出厂默认集（非空 + 去重计数）。未知 id 在面板侧忽略（id ↔ 项对应见
+    /// `result_panel::ports::StatsItem::id`）。
     /// 作用域 = 全局一份（跨结果集 / 跨文档共用），不随会话快照落库。
     #[serde(default = "default_result_stats_items")]
     pub stats_items: String,
@@ -266,12 +268,12 @@ fn default_hidden_status_commands() -> String {
     "undo,redo".to_string()
 }
 
-/// 计算页出厂启用集：只有 `count`（= 「非空」）。
+/// 计算页出厂启用集：`count`（非空）+ `countdistinct`（去重计数）。
 ///
 /// 对齐 DBeaver：九个聚合函数里仅 `count` / `countDistinct` 标了 `default="true"`
-/// （`plugin.xml:89-99`），`loadDefaultFunctions()` 只收 `isDefault()` 的项；本仓没有
-/// `countDistinct`（去重计数），故默认集只剩「非空」（六项全开不再是默认，
-/// 见 `docs/architecture/editor/result-panel.md` §8.91）。
+/// （`plugin.xml:89-99`），`loadDefaultFunctions()` 只收 `isDefault()` 的项。
+/// 本仓九项与 DBeaver 九函数一一对应（见 `result_panel::ports::StatsItem`），
+/// 默认集口径与那边一致（2026-11-19 补上 `countdistinct` 后由「只有非空」改为两项）。
 fn default_result_stats_items() -> String {
-    "count".to_string()
+    "count,countdistinct".to_string()
 }

@@ -21,7 +21,7 @@ use super::events::{panel_view_item_label, panel_view_menu_items, PanelViewItem}
 use crate::grid::cell::{
     HEX_DUMP_BYTES_PER_LINE, ViewerMode, classify_value, hex_lines, hex_to_bytes,
 };
-use crate::grid::stats::{ColumnStats, fmt_grouped, text_minmax};
+use crate::grid::stats::{ColumnStats, distinct_count, fmt_grouped, median_of, mode_of, text_minmax};
 use crate::ports::{
     GroupSort, ResultActionQueue, ResultRequest, RightTab, StatsItem, StatsMode, ValuePayload,
 };
@@ -563,16 +563,26 @@ impl ResultPanel {
             .cloned()
             .unwrap_or_else(|| "列".to_string());
         let stats = delegate.column_stats_for(data_col);
-        // 字符串口径才需要整列取值（数值口径走事实档列式原生聚合，不物化矩阵）
+        // 整列取值：字符串口径的极值要它，去重计数 / 中位数 / 众数也要它
+        // （数值口径的 min/max/avg/sum 走事实档列式统计，不必物化矩阵）
+        let need_values = matches!(self.stats_mode, StatsMode::Text)
+            || self.stats_items.iter().any(|item| item.needs_column_values());
+        let values = need_values.then(|| delegate.column_values(data_col));
         let text_extremes = matches!(self.stats_mode, StatsMode::Text)
-            .then(|| text_minmax(&delegate.column_values(data_col)));
+            .then(|| text_minmax(values.as_deref().unwrap_or(&[])));
         // 【函数=值】启用项 + 当前值先算成一对表：行渲染与「复制全部」共用同一份快照
         // （复制全部必须拷「此刻看到的这些」，不能在菜单回调里再算一遍）
+        let extras = StatExtras {
+            text_extremes: text_extremes.as_ref(),
+            distinct: values.as_deref().map(distinct_count),
+            median: values.as_deref().and_then(median_of),
+            mode: values.as_deref().and_then(mode_of),
+        };
         let entries: Vec<(StatsItem, String)> = self
             .stats_items
             .iter()
             .map(|item| {
-                let value = stat_value(*item, &stats, text_extremes.as_ref(), self.stats_mode);
+                let value = stat_value(*item, &stats, &extras, self.stats_mode);
                 (*item, value)
             })
             .collect();
@@ -800,7 +810,7 @@ impl ResultPanel {
                 .ghost()
                 .xsmall()
                 .icon(IconName::Plus)
-                .tooltip("六项统计都已启用")
+                .tooltip("九项统计都已启用")
                 .disabled(true)
                 .into_any_element()
         } else {
@@ -836,7 +846,7 @@ impl ResultPanel {
                 .xsmall()
                 .debug_selector(|| "editor-result-stat-reset".to_string())
                 .icon(IconName::RotateCcw)
-                .tooltip("恢复默认统计项（对齐 DBeaver 默认集：只有「非空」）")
+                .tooltip("恢复默认统计项（对齐 DBeaver 默认集：非空 + 去重计数）")
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::ResetStatsItems, app);
                 })
@@ -1552,23 +1562,43 @@ pub(crate) fn fmt_stat(value: Option<f64>) -> String {
     value.map(fmt_grouped).unwrap_or_else(|| "—".to_string())
 }
 
+/// 【R2 计算页】单项取值需要的「整列派生量」：字符串口径极值、去重计数、中位数、众数。
+///
+/// 为什么打包：这几项都要扫整列取值，而数值口径的 min/max/avg/sum 走事实档列式统计。
+/// 打包后 `render_stats_tab` **只取一次值**（`needs_column_values` 为假时连取都不取），
+/// 不用为每个新函数各扫一遍。
+pub(crate) struct StatExtras<'a> {
+    /// 字符串口径的字典序极值（非字符串口径 = `None`）
+    pub text_extremes: Option<&'a (Option<String>, Option<String>)>,
+    /// 去重计数（列取值未取 = `None` → 显示 `—`）
+    pub distinct: Option<usize>,
+    /// 数值中位数
+    pub median: Option<f64>,
+    /// 众数
+    pub mode: Option<String>,
+}
+
 /// 【R2 计算页】单项取值（纯函数，便于单测）：
-/// - 计数类（非空 / NULL）不受口径影响，走千分位整数
-/// - 数值口径：Min/Max/Avg/Sum 走千分位浮点，无样本 = —
-/// - 字符串口径：Min/Max 走字典序（文本列也给极值）；Avg/Sum 不出值（DBeaver 的
-///   SUM/AVG 对字符串累计不成立）
+/// - 计数类（非空 / 去重计数 / NULL）不受口径影响，走千分位整数
+/// - 数值口径：Min/Max/Avg/Sum/Median 走千分位浮点，无样本 = —
+/// - 字符串口径：Min/Max 走字典序（文本列也给极值）；众数两种口径都给值文本；
+///   Avg/Sum/Median 不出值（DBeaver 的 SUM/AVG 与中位数都要能排序的数字）
 pub(crate) fn stat_value(
     item: StatsItem,
     stats: &ColumnStats,
-    text_extremes: Option<&(Option<String>, Option<String>)>,
+    extras: &StatExtras<'_>,
     mode: StatsMode,
 ) -> String {
     match item {
         StatsItem::Count => fmt_grouped(stats.count as f64),
         StatsItem::Nulls => fmt_grouped(stats.nulls as f64),
+        StatsItem::CountDistinct => extras
+            .distinct
+            .map(|count| fmt_grouped(count as f64))
+            .unwrap_or_else(|| "—".to_string()),
         StatsItem::Min | StatsItem::Max => {
             if matches!(mode, StatsMode::Text) {
-                let pick = text_extremes.and_then(|(min, max)| {
+                let pick = extras.text_extremes.and_then(|(min, max)| {
                     if matches!(item, StatsItem::Min) {
                         min.clone()
                     } else {
@@ -1582,6 +1612,17 @@ pub(crate) fn stat_value(
                 fmt_stat(stats.max)
             }
         }
+        StatsItem::Median => {
+            if matches!(mode, StatsMode::Text) {
+                "—".to_string()
+            } else {
+                fmt_stat(extras.median)
+            }
+        }
+        StatsItem::Mode => extras
+            .mode
+            .clone()
+            .unwrap_or_else(|| "—".to_string()),
         StatsItem::Avg | StatsItem::Sum => {
             if matches!(mode, StatsMode::Text) {
                 "—".to_string()

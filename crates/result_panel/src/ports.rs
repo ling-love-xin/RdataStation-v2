@@ -384,17 +384,25 @@ pub struct ValuePayload {
 
 /// 【R2】计算页的统计项（对齐 DBeaver Calc 的可配置聚合函数集
 /// `AggregateColumnsPanel.enabledFunctions`，来源 `FunctionsRegistry` 的
-/// `AggregateFunctionDescriptor`）。本仓不引注册表，六项固定可选。
+/// `AggregateFunctionDescriptor`）。本仓不引注册表，九项固定可选（对照
+/// `plugin.xml:89-99` 的九个 `aggregateFunction`：count / countDistinct /
+/// countNulls / sum / avg / min / max / median / mode）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StatsItem {
-    /// 非空值数（COUNT，DBeaver `IAggregateFunction` 的 count）
+    /// 非空值数（COUNT，DBeaver `count`）
     Count,
-    /// NULL 数（本地扩展项：DBeaver 用 COUNT 与行数的差表达，本仓直给）
+    /// 去重计数（COUNT DISTINCT，DBeaver `countDistinct`）
+    CountDistinct,
+    /// NULL 数（DBeaver `countNulls`；本地扩展：本仓直给，不用「行数 − 非空」表达）
     Nulls,
     /// 最小值
     Min,
     /// 最大值
     Max,
+    /// 中位数（仅数值口径有值；DBeaver `median`）
+    Median,
+    /// 众数（出现最多的非空值；DBeaver `mode`）
+    Mode,
     /// 均值（仅数值口径有值）
     Avg,
     /// 合计（仅数值口径有值）
@@ -402,12 +410,15 @@ pub enum StatsItem {
 }
 
 impl StatsItem {
-    /// 默认全集（顺序 = 原「计算」页六行的顺序）
-    pub const ALL: [StatsItem; 6] = [
+    /// 全部项（顺序 = 计算页的展示顺序：计数一组 → 极值 → 中间值 → 数值聚合）
+    pub const ALL: [StatsItem; 9] = [
         Self::Count,
+        Self::CountDistinct,
         Self::Nulls,
         Self::Min,
         Self::Max,
+        Self::Median,
+        Self::Mode,
         Self::Avg,
         Self::Sum,
     ];
@@ -418,44 +429,61 @@ impl StatsItem {
     /// 取证：DBeaver 九个聚合函数里只有 `count` 与 `countDistinct` 写了 `default="true"`，
     /// `countNulls` 显式 `default="false"`，其余（sum/avg/min/max/median/mode）没写属性
     /// （缺省即 false）；`loadDefaultFunctions()`（`AggregateColumnsPanel:157-164`）只收
-    /// `isDefault()` 的项、再按 label 排序。本仓六项里对应 `count` 的是「非空」，
-    /// **没有 `countDistinct`（去重计数）这一项**——按「能力没有就不摆」只保留「非空」，
-    /// 该差异登记在 `docs/architecture/editor/result-panel.md` §8.91。
-    pub const DEFAULT_SET: [StatsItem; 1] = [Self::Count];
+    /// `isDefault()` 的项、再按 label 排序 → 默认集 = Count + Count Distinct。
+    /// 本仓 `Count` = 「非空」，`CountDistinct` = 「去重计数」，顺序照 `ALL`。
+    pub const DEFAULT_SET: [StatsItem; 2] = [Self::Count, Self::CountDistinct];
 
     /// 这一项是否属于默认集（等价于 DBeaver 描述符上的 `isDefault` 标记）
     pub fn is_default(self) -> bool {
         Self::DEFAULT_SET.contains(&self)
     }
 
-    /// 展示名（语义对标 DBeaver 的 COUNT / SUM / AVG / MIN / MAX 函数标签）
+    /// 展示名（语义对标 DBeaver 的函数标签：COUNT / COUNT DISTINCT / SUM / AVG / MIN / MAX /
+    /// MEDIAN / MODE）
     pub fn label(self) -> &'static str {
         match self {
             Self::Count => "非空",
+            Self::CountDistinct => "去重计数",
             Self::Nulls => "NULL",
             Self::Min => "最小值",
             Self::Max => "最大值",
+            Self::Median => "中位数",
+            Self::Mode => "众数",
             Self::Avg => "均值",
             Self::Sum => "合计",
         }
     }
 
-    /// 数值口径之外是否仍有意义：Min/Max 在字符串口径下按字典序比较，
-    /// Avg/Sum 只有数值口径有值（DBeaver 的 SUM/AVG 对字符串累计不成立）。
+    /// 数值口径之外是否仍有意义：Min/Max 在字符串口径下按字典序比较，众数按值文本统计；
+    /// Avg/Sum/Median 只有数值口径有值（DBeaver 的 SUM/AVG 对字符串累计不成立，
+    /// 中位数同理要能排序的数字）。
     pub fn supports_text_mode(self) -> bool {
-        matches!(self, Self::Count | Self::Nulls | Self::Min | Self::Max)
+        matches!(
+            self,
+            Self::Count | Self::CountDistinct | Self::Nulls | Self::Min | Self::Max | Self::Mode
+        )
+    }
+
+    /// 这一项的计算是否需要**整列取值**（数值口径的 min/max/avg/sum 走事实档列式统计，
+    /// 不必物化矩阵；这三项没有列式实现，只能扫值）。
+    pub fn needs_column_values(self) -> bool {
+        matches!(self, Self::CountDistinct | Self::Median | Self::Mode)
     }
 
     /// 落盘 / 设置项用的稳定 id（`result_panel.stats_items` 列表里的元素名）。
     ///
     /// 用英文 id 而不是中文标签：标签会随文案调整而漂移，id 是契约
-    /// （与 `StatusCommand::id` 同一口径）。
+    /// （与 `StatusCommand::id` 同一口径）。`countdistinct` 全小写——本仓 id 一律小写，
+    /// 不与 DBeaver 的驼峰 `countDistinct` 混用。
     pub fn id(self) -> &'static str {
         match self {
             Self::Count => "count",
+            Self::CountDistinct => "countdistinct",
             Self::Nulls => "nulls",
             Self::Min => "min",
             Self::Max => "max",
+            Self::Median => "median",
+            Self::Mode => "mode",
             Self::Avg => "avg",
             Self::Sum => "sum",
         }
@@ -470,10 +498,9 @@ impl StatsItem {
 /// 【计算页持久化】把设置里的 id 列表解析成启用集合（顺序照抄、未知项忽略、重复项丢弃）。
 ///
 /// 对齐 DBeaver `AggregateColumnsPanel.loadSettings`（`:129-155`）：那边把
-/// `enabledFunctions` 按 `index` 顺序逐个 `FunctionsRegistry` 查回函数；本仓六项固定，
+/// `enabledFunctions` 按 `index` 顺序逐个 `FunctionsRegistry` 查回函数；本仓九项固定，
 /// 查不到的一律丢掉（升级 / 手改配置里的未知 id 不应该把整页搞坏）。
-pub fn stats_items_from_ids(text: &str) -> Vec<StatsItem> {
-    let mut items: Vec<StatsItem> = Vec::new();
+pub fn stats_items_from_ids(text: &str) -> Vec<StatsItem> {    let mut items: Vec<StatsItem> = Vec::new();
     for part in text.split(',') {
         let Some(item) = StatsItem::parse(part) else {
             continue;
@@ -488,7 +515,7 @@ pub fn stats_items_from_ids(text: &str) -> Vec<StatsItem> {
 
 /// 【计算页持久化】启用集合 → 落盘 id 列表（逗号分隔，顺序保留）。
 ///
-/// 全停用时给空串——这是**合法状态**（用户在页内把六项全 × 掉了），
+/// 全停用时给空串——这是**合法状态**（用户在页内把九项全 × 掉了），
 /// 与「设置里没写过这一项」用默认值区分开（模型默认值 = [`StatsItem::DEFAULT_SET`]）。
 pub fn stats_items_to_ids(items: &[StatsItem]) -> String {
     items
@@ -869,7 +896,7 @@ mod tests {
     fn stats_item_ids_round_trip_and_drop_unknown() {
         assert_eq!(
             stats_items_to_ids(&StatsItem::ALL),
-            "count,nulls,min,max,avg,sum"
+            "count,countdistinct,nulls,min,max,median,mode,avg,sum"
         );
         // 乱序 + 空白 + 大小写不规范的输入照 id 解析（空白由 `parse` 的 trim 吃掉，
         // 大小写不匹配按未知项丢弃——id 是契约，不做模糊匹配）

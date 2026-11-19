@@ -7,6 +7,7 @@ use super::reorder_by;
 use super::right_tab_from_index;
 use super::sidebar_width_anim;
 use super::tabs::stat_value;
+use super::tabs::StatExtras;
 use super::tabs::value_payload;
 use crate::column_browser::filter_browser_columns;
 use crate::grid::stats::ColumnStats;
@@ -377,7 +378,7 @@ fn presentation_tooltips_carry_a_description() {
 fn stat_context_menu_mirrors_the_toolbar_actions() {
     use crate::panel::tabs::{StatMenuEntry, stat_menu_entries, stat_menu_label};
 
-    // 只启用「非空」→ 五个缺项逐个列出来
+    // 只启用「非空」→ 其余八项逐个列出来
     let entries = stat_menu_entries(&[StatsItem::Count], StatsMode::Numeric);
     let labels: Vec<String> = entries.iter().map(stat_menu_label).collect();
     assert_eq!(labels[0], "复制值");
@@ -387,7 +388,7 @@ fn stat_context_menu_mirrors_the_toolbar_actions() {
         .iter()
         .filter(|entry| matches!(entry, StatMenuEntry::AddMissing(_)))
         .count();
-    assert_eq!(adds, 5, "六项里已启用一项 → 五个可添加");
+    assert_eq!(adds, 8, "九项里已启用一项 → 八个可添加");
     // 末尾是口径切换，且报「切到哪一档」（当前数值 → 报字符串）
     assert!(matches!(
         entries.last(),
@@ -400,7 +401,7 @@ fn stat_context_menu_mirrors_the_toolbar_actions() {
     // 恢复默认仍在（DBeaver ResetFunctionsAction）
     assert!(entries.iter().any(|entry| matches!(entry, StatMenuEntry::Reset)));
 
-    // 六项全启用 → 没有「添加」段，也就没有那条悬空分隔线
+    // 九项全启用 → 没有「添加」段，也就没有那条悬空分隔线
     let entries = stat_menu_entries(&StatsItem::ALL, StatsMode::Text);
     assert!(
         !entries
@@ -419,7 +420,7 @@ fn stat_context_menu_mirrors_the_toolbar_actions() {
     );
 }
 
-/// 【R2 计算页】单项取值：口径决定 Min/Max 的比较方式，Avg/Sum 只在数值口径出值，
+/// 【R2 计算页】单项取值：口径决定 Min/Max 的比较方式，Avg/Sum/Median 只在数值口径出值，
 /// 计数类不受口径影响（对齐 DBeaver `aggregateAsStrings`）
 #[test]
 fn stat_value_respects_mode_and_missing_samples() {
@@ -433,50 +434,130 @@ fn stat_value_respects_mode_and_missing_samples() {
     };
     let text = (Some("apple".to_string()), Some("zebra".to_string()));
     // 数值口径：极值走数值比较 + 千分位
-    assert_eq!(stat_value(StatsItem::Min, &stats, None, StatsMode::Numeric), "1");
+    let plain = StatExtras {
+        text_extremes: None,
+        distinct: None,
+        median: None,
+        mode: None,
+    };
     assert_eq!(
-        stat_value(StatsItem::Max, &stats, None, StatsMode::Numeric),
+        stat_value(StatsItem::Min, &stats, &plain, StatsMode::Numeric),
+        "1"
+    );
+    assert_eq!(
+        stat_value(StatsItem::Max, &stats, &plain, StatsMode::Numeric),
         "2,000"
     );
-    // 字符串口径：极值走字典序，Avg/Sum 不出值
+    // 字符串口径：极值走字典序，Avg/Sum/Median 不出值
+    let textual = StatExtras {
+        text_extremes: Some(&text),
+        distinct: None,
+        median: None,
+        mode: None,
+    };
     assert_eq!(
-        stat_value(StatsItem::Min, &stats, Some(&text), StatsMode::Text),
+        stat_value(StatsItem::Min, &stats, &textual, StatsMode::Text),
         "apple"
     );
     assert_eq!(
-        stat_value(StatsItem::Max, &stats, Some(&text), StatsMode::Text),
+        stat_value(StatsItem::Max, &stats, &textual, StatsMode::Text),
         "zebra"
     );
     assert_eq!(
-        stat_value(StatsItem::Avg, &stats, Some(&text), StatsMode::Text),
+        stat_value(StatsItem::Avg, &stats, &textual, StatsMode::Text),
         "—"
     );
     assert_eq!(
-        stat_value(StatsItem::Sum, &stats, Some(&text), StatsMode::Text),
+        stat_value(StatsItem::Sum, &stats, &textual, StatsMode::Text),
+        "—"
+    );
+    assert_eq!(
+        stat_value(StatsItem::Median, &stats, &textual, StatsMode::Text),
         "—"
     );
     // 计数类不受口径影响（字符串口径下仍是千分位整数）
     assert_eq!(
-        stat_value(StatsItem::Count, &stats, None, StatsMode::Text),
+        stat_value(StatsItem::Count, &stats, &plain, StatsMode::Text),
         "1,234"
     );
 }
 
-/// 【R2 计算页】可选全集 = 六项、展示顺序固定；**默认集**对齐 DBeaver `isDefault()` 打标
-/// （本仓映射只有「非空」）；口径默认数值且可来回切
+/// 【R2 计算页·新增三项】去重计数 / 中位数 / 众数：有值走千分位或原文，缺样本一律 `—`
+/// （与 Avg/Sum 同一缺省口径——界面不摆空行）
+#[test]
+fn stat_value_covers_distinct_median_and_mode() {
+    let stats = ColumnStats::default();
+    let extras = StatExtras {
+        text_extremes: None,
+        distinct: Some(42),
+        median: Some(2.5),
+        mode: Some("x".to_string()),
+    };
+    assert_eq!(
+        stat_value(StatsItem::CountDistinct, &stats, &extras, StatsMode::Numeric),
+        "42"
+    );
+    assert_eq!(
+        stat_value(StatsItem::CountDistinct, &stats, &extras, StatsMode::Text),
+        "42",
+        "去重计数不看口径（两种口径都是「不同取值个数」）"
+    );
+    assert_eq!(
+        stat_value(StatsItem::Median, &stats, &extras, StatsMode::Numeric),
+        "2.5"
+    );
+    assert_eq!(
+        stat_value(StatsItem::Mode, &stats, &extras, StatsMode::Text),
+        "x",
+        "众数两种口径都给值文本"
+    );
+    // 缺样本：一律 —
+    let empty = StatExtras {
+        text_extremes: None,
+        distinct: None,
+        median: None,
+        mode: None,
+    };
+    for item in [StatsItem::CountDistinct, StatsItem::Median, StatsItem::Mode] {
+        assert_eq!(
+            stat_value(item, &stats, &empty, StatsMode::Numeric),
+            "—",
+            "{item:?} 没有样本应该给 —"
+        );
+    }
+}
+
+/// 【R2 计算页】可选全集 = 九项、展示顺序固定；**默认集**对齐 DBeaver `isDefault()` 打标
+/// （count + countDistinct → 本仓「非空」+「去重计数」）；口径默认数值且可来回切
 #[test]
 fn stats_defaults_are_the_dbeaver_default_set_in_display_order() {
-    assert_eq!(StatsItem::ALL.len(), 6);
+    assert_eq!(StatsItem::ALL.len(), 9);
     assert_eq!(StatsItem::ALL[0], StatsItem::Count);
-    assert_eq!(StatsItem::ALL[5], StatsItem::Sum);
-    // 默认集 = 只有 count（DBeaver 里 countDistinct 也标了 default，但本仓没有这一项）
-    assert_eq!(StatsItem::DEFAULT_SET, [StatsItem::Count]);
+    assert_eq!(StatsItem::ALL[1], StatsItem::CountDistinct);
+    assert_eq!(StatsItem::ALL[8], StatsItem::Sum);
+    // 默认集 = count + countdistinct（DBeaver 里也只有这两个标了 default）
+    assert_eq!(
+        StatsItem::DEFAULT_SET,
+        [StatsItem::Count, StatsItem::CountDistinct]
+    );
     assert!(StatsItem::Count.is_default());
+    assert!(StatsItem::CountDistinct.is_default());
     assert!(!StatsItem::Nulls.is_default());
     assert!(!StatsItem::Sum.is_default());
-    // 只有 Min/Max 支持字符串口径（SUM/AVG 对字符串累计不成立）
+    // 字符串口径：计数 / 极值 / 众数有意义；SUM/AVG/中位数要能排序的数字
     assert!(StatsItem::Min.supports_text_mode());
+    assert!(StatsItem::CountDistinct.supports_text_mode());
+    assert!(StatsItem::Mode.supports_text_mode());
     assert!(!StatsItem::Sum.supports_text_mode());
+    assert!(!StatsItem::Median.supports_text_mode());
+    // 只有这三项要扫整列取值（其余走列式统计）
+    for item in StatsItem::ALL {
+        let needs = matches!(
+            item,
+            StatsItem::CountDistinct | StatsItem::Median | StatsItem::Mode
+        );
+        assert_eq!(item.needs_column_values(), needs, "{item:?}");
+    }
     assert_eq!(StatsMode::default(), StatsMode::Numeric);
     assert_eq!(StatsMode::Numeric.toggled(), StatsMode::Text);
     assert_eq!(StatsMode::Text.toggled(), StatsMode::Numeric);
