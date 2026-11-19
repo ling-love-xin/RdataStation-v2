@@ -95,6 +95,25 @@ impl ResolvedPolicies {
             _ => global,
         }
     }
+
+    /// 该 schema 是否对导航可见（原型 ⑨ Tab2「schema 白/黑名单」）。
+    ///
+    /// - `include` 非空 = **白名单**：只放行命中项；
+    /// - `exclude` 命中 = 隐藏（黑名单优先于「没写白名单」的默认全放）；
+    /// - 两者都空 = 全放（未配置策略的库不受影响）。
+    ///
+    /// 模式只支持 `*` 通配（与 UI 里的提示一致）；大小写敏感——PG 的 schema 名就是
+    /// 大小写敏感的，这里不替用户「猜」。
+    pub fn schema_visible(&self, schema: &str) -> bool {
+        if self.schema_include.is_empty() && self.schema_exclude.is_empty() {
+            return true;
+        }
+        let hit = |patterns: &[String]| patterns.iter().any(|p| glob_match(p, schema));
+        if !self.schema_include.is_empty() && !hit(&self.schema_include) {
+            return false;
+        }
+        !hit(&self.schema_exclude)
+    }
 }
 
 fn policy_error(code: &str, sql: &str, message: String) -> CoreError {
@@ -102,6 +121,37 @@ fn policy_error(code: &str, sql: &str, message: String) -> CoreError {
         format!("[{code}] {message}"),
         sql.to_string(),
     ))
+}
+
+/// `*` 通配匹配（仅此一种元字符；其余字符按字面比较，大小写敏感）。
+fn glob_match(pattern: &str, text: &str) -> bool {
+    if !pattern.contains('*') {
+        return pattern == text;
+    }
+    let mut rest = text;
+    let mut parts = pattern.split('*');
+    let Some(first) = parts.next() else {
+        return pattern == text;
+    };
+    if !rest.starts_with(first) {
+        return false;
+    }
+    rest = &rest[first.len()..];
+    let mut pieces = parts.peekable();
+    while let Some(part) = pieces.next() {
+        if part.is_empty() {
+            continue;
+        }
+        if pieces.peek().is_none() {
+            // 最后一段：必须落在结尾
+            return rest.ends_with(part);
+        }
+        match rest.find(part) {
+            Some(idx) => rest = &rest[idx + part.len()..],
+            None => return false,
+        }
+    }
+    true
 }
 
 /// 首关键字是否属于只读语法（用于分类器落到 `Unknown` 的语句）。
@@ -343,6 +393,35 @@ mod tests {
         let ok = build_audit_record("conn-1", None, "SELECT 1", "allowed", None);
         assert_eq!(ok.level, LogLevel::Info);
         assert!(ok.message.contains("env=-"));
+    }
+
+    #[test]
+    fn schema_visibility_honours_include_exclude_glob() {
+        let p = resolve_from_rows(
+            Some("prod".into()),
+            &[(
+                "schema".into(),
+                Some(r#"{"include":["public","biz_*"],"exclude":["biz_tmp*"]}"#.into()),
+                true,
+            )],
+        );
+        assert!(p.schema_visible("public"));
+        assert!(p.schema_visible("biz_orders"));
+        assert!(!p.schema_visible("biz_tmp_1"), "exclude 优先于 include");
+        assert!(!p.schema_visible("pg_catalog"), "不在白名单即隐藏");
+        let all = resolve_from_rows(Some("prod".into()), &[]);
+        assert!(all.schema_visible("anything"), "空名单 = 全放");
+        // 通配只在 * 处生效：无 * 的写死名单按字面比较
+        let literal = resolve_from_rows(
+            Some("prod".into()),
+            &[(
+                "schema".into(),
+                Some(r#"{"exclude":["tmp"]}"#.into()),
+                true,
+            )],
+        );
+        assert!(!literal.schema_visible("tmp"));
+        assert!(literal.schema_visible("tmp_2"), "无 * 不得前缀匹配");
     }
 
     #[test]
