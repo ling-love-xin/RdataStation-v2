@@ -257,6 +257,12 @@ pub enum ResultRequest {
     /// 该页**当前可见**就收起面板，否则切到该页并展开。对齐 DBeaver
     /// `ResultSetHandlerTogglePanel.toggleResultsPanel:64-69`（`CMD_TOGGLE_PANEL`）。
     ToggleRightTab(RightTab),
+    /// 关闭右栏某一页（**只关这一页**，其余页仍在页签条里）。对齐 DBeaver
+    /// `ResultSetViewer.addPanel:1330-1394` 的 `new CTabItem(panelFolder, SWT.CLOSE)`
+    /// 与 `presentationSettings.enabledPanelIds` 的增删语义：关掉一页 = 从已启用集合移除。
+    CloseRightTab(RightTab),
+    /// 重新打开右栏某一页（视图菜单的勾选项）：按规范序插回集合并置为当前页。
+    OpenRightTab(RightTab),
     /// 【#28-B3】在指定视图行下方插入一条本地空行（`None` = 追加到末尾区段）。
     /// 宿主经网格 `RowRef` 翻译身份后落到 `LocalRowSet`；只改叠加层，不下发 INSERT。
     InsertRowBelow(Option<usize>),

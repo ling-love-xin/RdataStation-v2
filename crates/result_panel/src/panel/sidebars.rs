@@ -24,8 +24,7 @@ use gpui_kit::*;
 use super::data::ResultPanel;
 use super::events::{
     edge_tab_tooltip, presentation_tooltip, record_view_tooltip, right_tab_click_collapses,
-    right_tab_description, right_tab_from_index, right_tab_icon, right_tab_index, right_tab_label,
-    right_tabs,
+    right_tab_description, right_tab_icon, right_tab_label, strip_index, tab_at_strip_index,
 };
 use super::tabs::kv_row;
 use crate::ports::{Presentation, ResultRequest, RightTab};
@@ -497,16 +496,14 @@ impl ResultPanel {
         let show = self.show_value_sidebar;
         // 布局层面仍要知道"是否最大化"（满宽满高、不挂拖拽手柄）
         let maximized = self.panel_maximized;
-        // 【2026-11-18 对齐 CTabFolder】横 tab 栏**列出全部六页**，点页签即切页：
-        // DBeaver 的右栏是**一个**页签夹 `CTabFolder panelFolder`（`ResultSetViewer.java:1430-1478`），
-        // 六页都作为页签常驻在其中（`addPanel` 里 `new CTabItem(panelFolder, SWT.CLOSE)`），
-        // 点页签走 `setActivePanel`；顺序即 `availablePanels` 的注册顺序。
-        // 此前这里是「只显示当前页签」的极简做法，横向条只当标题用、`on_click` 是空实现
-        // （点了没反应），与那边「页签可点」差着一条交互。顺序与索引映射取
-        // `events::right_tabs` 单一来源（视图菜单 / 右缘竖条共用同一份）。
-        let tabs = right_tabs();
-        let children: Vec<Tab> = tabs
-            .into_iter()
+        // 【页签条 = 已启用集合】对齐 DBeaver `CTabFolder`：页签条只列已启用的页
+        // （`presentationSettings.enabledPanelIds`，`ResultSetViewer.addPanel:1388`），
+        // 关掉一页后它从条上消失、其余页仍在；重开走视图菜单的勾选项。
+        // 顺序与索引映射取 `events::{right_tabs, strip_index, tab_at_strip_index}`。
+        let open_tabs = self.open_tabs.clone();
+        let children: Vec<Tab> = open_tabs
+            .iter()
+            .copied()
             .map(|tab| {
                 Tab::new()
                     .icon(right_tab_icon(tab))
@@ -518,16 +515,17 @@ impl ResultPanel {
             })
             .collect();
         let tab_queue = self.queue.clone();
+        let strip = open_tabs.clone();
         let tab_bar = TabBar::new("editor-result-right-tabs")
             .segmented()
             .with_size(Size::Small)
-            .selected_index(right_tab_index(self.right_tab))
+            .selected_index(strip_index(&open_tabs, self.right_tab))
             .children(children)
             // 六页在窄右栏里可能放不下：`menu(true)` 在溢出时给一颗菜单钮（否则被裁掉的
             // 页签没法点，只能横向滚轮——不显眼）
             .menu(true)
             .on_click(move |index, _window, app| {
-                tab_queue.request(ResultRequest::SetRightTab(right_tab_from_index(*index)), app);
+                tab_queue.request(ResultRequest::SetRightTab(tab_at_strip_index(&strip, *index)), app);
             });
         let content = match self.right_tab {
             RightTab::Browser => self.render_browser_tab(cx),
@@ -537,21 +535,25 @@ impl ResultPanel {
             RightTab::Reference => self.render_reference_tab(cx),
             RightTab::ExecSql => self.render_exec_sql_tab(cx),
         };
-        // 【页签关闭】非默认「列浏览器」页时，行尾给一个 ×：退回默认页（不收起右栏——
-        // 拍板口径：× 只退页，右栏开合仍由工具栏「列浏览器」开关控制）。
-        let close = (self.right_tab != RightTab::Browser).then(|| {
+        // 【页签关闭】行尾 × = 关掉**当前这一页**（其余页仍在页签条里，对齐 DBeaver
+        // `new CTabItem(panelFolder, SWT.CLOSE)` 的语义）。全部页都关掉时右栏整体收起，
+        // 视图菜单的勾选项可以再开回来。
+        let close = {
             let queue = self.queue.clone();
-            Button::new("editor-result-right-tab-close")
-                .ghost()
-                .small()
-                .icon(IconName::X)
-                .debug_selector(|| "editor-result-right-tab-close".to_string())
-                .tooltip("关闭页签，返回列浏览器")
-                .on_click(move |_, _window, app| {
-                    queue.request(ResultRequest::SetRightTab(RightTab::Browser), app);
-                })
-                .into_any_element()
-        });
+            let tab = self.right_tab;
+            Some(
+                Button::new("editor-result-right-tab-close")
+                    .ghost()
+                    .small()
+                    .icon(IconName::X)
+                    .debug_selector(|| "editor-result-right-tab-close".to_string())
+                    .tooltip("关闭此页（其余页仍保留）")
+                    .on_click(move |_, _window, app| {
+                        queue.request(ResultRequest::CloseRightTab(tab), app);
+                    })
+                    .into_any_element(),
+            )
+        };
         // 【侧栏丝滑】右栏收起 / 展开与左栏同法：宽度过渡 + 容器始终挂载（宽 0 不占
         // 空间），页签条与内容按 show 挂载（收起时无焦点残留）。开合由
         // `right_sidebar_epoch` 递增重播动画；首帧（epoch=0）免动画。

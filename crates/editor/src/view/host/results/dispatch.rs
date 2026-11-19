@@ -392,6 +392,22 @@ impl EditorHostPanel {
                         .update(cx, |p, cx| p.begin_references_load(cx));
                 }
             }
+            // 【右栏】关掉这一页（其余页保留）：纯面板状态，宿主只转发。
+            // 对齐 DBeaver `CTabItem(panelFolder, SWT.CLOSE)` + `enabledPanelIds` 移除语义。
+            ResultRequest::CloseRightTab(tab) => {
+                self.result_panel
+                    .update(cx, |p, cx| p.close_right_tab(tab, cx));
+            }
+            // 【右栏】重新打开一页（视图菜单勾选项）：与 `SetRightTab` 同口径，
+            // 切到引用页时同样要触发外键读取。
+            ResultRequest::OpenRightTab(tab) => {
+                self.result_panel
+                    .update(cx, |p, cx| p.open_right_tab(tab, cx));
+                if tab == RightTab::Reference {
+                    self.result_panel
+                        .update(cx, |p, cx| p.begin_references_load(cx));
+                }
+            }
             // 【值详情页】在外部程序中打开当前值（临时文件 + 系统默认程序）
             ResultRequest::OpenValueExternally => {
                 self.open_selected_value_externally(cx);

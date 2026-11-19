@@ -261,6 +261,10 @@ pub struct ResultPanel {
     pub(crate) presentation: Presentation,
     /// 【右栏】当前标签页（对齐 DBeaver 右侧面板组：列浏览器 / 值详情 / 计算 / 分组）
     pub(crate) right_tab: RightTab,
+    /// 【右栏】已启用的页集合（规范序，恒非空；对齐 DBeaver `presentationSettings
+    /// .enabledPanelIds`，`ResultSetViewer.addPanel:1388`）。页签条只列出集合内的页，
+    /// 「关闭一页」= 从集合移除（其余页仍在），视图菜单的勾选态即成员关系。
+    pub(crate) open_tabs: Vec<RightTab>,
     /// 【引用页】外键清单状态（对齐 DBeaver `ReferencesResultsContainer` 的键列表）：
     /// 页签切到「引用」时由宿主经 `MetadataService::list_constraints` 取回并回填；
     /// 初值 = 还没读过（`NotLoaded`）。**render 只读本字段**，取数不在 render 里发生。

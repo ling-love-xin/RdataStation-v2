@@ -4,7 +4,6 @@ use super::clamp_right_sidebar_height;
 use super::clamp_right_sidebar_width;
 use super::next_right_edge_state;
 use super::reorder_by;
-use super::right_tab_from_index;
 use super::sidebar_width_anim;
 use super::tabs::stat_value;
 use super::tabs::StatExtras;
@@ -325,26 +324,116 @@ fn browser_filter_no_match_returns_empty() {
     assert!(filter_browser_columns(&n, &t, &c, "zzz").is_empty());
 }
 
-/// 页签顺序 / 下标映射（`events::right_tabs` 单一来源）：
+/// 页签顺序 / 下标映射（`events::right_tabs` 单一来源）：全集下
 /// 0=列浏览器（默认）/ 1=值详情 / 2=计算 / 3=分组 / 4=引用 / 5=执行SQL，越界回落默认页；
-/// 反查（枚举 → 下标）与之互逆，页签条 `selected_index` 与点击回调用的是同一份顺序。
+/// 反查（枚举 → 下标）与之互逆，页签条 `selected_index` 与点击回调用的是同一份换算
+/// （`strip_index` / `tab_at_strip_index`，作用在「当前已启用集合」上）。
 #[test]
 fn right_tab_index_maps_to_the_six_panel_tabs() {
-    use super::events::{right_tab_index, right_tabs};
+    use super::events::{right_tabs, strip_index, tab_at_strip_index};
 
-    assert_eq!(right_tab_from_index(0), RightTab::Browser);
-    assert_eq!(right_tab_from_index(1), RightTab::Value);
-    assert_eq!(right_tab_from_index(2), RightTab::Stats);
-    assert_eq!(right_tab_from_index(3), RightTab::Group);
-    assert_eq!(right_tab_from_index(4), RightTab::Reference);
-    assert_eq!(right_tab_from_index(5), RightTab::ExecSql);
-    assert_eq!(right_tab_from_index(99), RightTab::Browser);
+    let all = right_tabs();
+    assert_eq!(tab_at_strip_index(&all, 0), RightTab::Browser);
+    assert_eq!(tab_at_strip_index(&all, 1), RightTab::Value);
+    assert_eq!(tab_at_strip_index(&all, 2), RightTab::Stats);
+    assert_eq!(tab_at_strip_index(&all, 3), RightTab::Group);
+    assert_eq!(tab_at_strip_index(&all, 4), RightTab::Reference);
+    assert_eq!(tab_at_strip_index(&all, 5), RightTab::ExecSql);
+    assert_eq!(tab_at_strip_index(&all, 99), RightTab::Browser);
 
     // 互逆：每个页签既是自己的下标对应的枚举，下标也唯一
-    for (index, tab) in right_tabs().into_iter().enumerate() {
-        assert_eq!(right_tab_from_index(index), tab);
-        assert_eq!(right_tab_index(tab), index);
+    for (index, tab) in all.iter().copied().enumerate() {
+        assert_eq!(tab_at_strip_index(&all, index), tab);
+        assert_eq!(strip_index(&all, tab), index);
     }
+
+    // 集合是子集时换算跟着集合走（关掉「计算」页后，分组从 3 变成 2）
+    let partial = [RightTab::Browser, RightTab::Value, RightTab::Group];
+    assert_eq!(strip_index(&partial, RightTab::Group), 2);
+    assert_eq!(tab_at_strip_index(&partial, 2), RightTab::Group);
+    // 不在集合里的页 → 下标 0（不会画到条上）
+    assert_eq!(strip_index(&partial, RightTab::Stats), 0);
+}
+
+/// 【右栏关闭/重开】对齐 DBeaver `CTabItem(panelFolder, SWT.CLOSE)` +
+/// `presentationSettings.enabledPanelIds`：关一页只移除这一页（其余仍在），
+/// 关当前页则落到规范序的下一剩页；关到空集收起右栏；重开按规范序插回并置为当前。
+#[gpui_kit::test]
+fn close_right_tab_drops_one_page_and_reopen_restores_order(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use super::events::{neighbor_after_close, right_tabs};
+
+    // 纯函数：关掉规范序中间那页 → 落到紧随其后的剩页；关最后一页 → 落到最后一个剩页
+    let all = right_tabs();
+    let without_stats: Vec<RightTab> =
+        all.iter().copied().filter(|t| *t != RightTab::Stats).collect();
+    assert_eq!(neighbor_after_close(&without_stats, RightTab::Stats), RightTab::Group);
+    let only_tail = [RightTab::Browser, RightTab::Value];
+    assert_eq!(neighbor_after_close(&only_tail, RightTab::ExecSql), RightTab::Value);
+
+    // 面板态：出厂六页全开
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.open_tabs().to_vec()),
+        right_tabs().to_vec(),
+        "出厂应是六页全开"
+    );
+
+    // 关「计算」页（当前页是列浏览器 → 当前页不变，只少一项）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.close_right_tab(RightTab::Stats, cx))
+    });
+    let open = panel.read_with(cx, |p, _| p.open_tabs().to_vec());
+    assert_eq!(open.len(), 5);
+    assert!(!open.contains(&RightTab::Stats));
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.right_tab),
+        RightTab::Browser,
+        "关的不是当前页 → 当前页不动"
+    );
+
+    // 关当前页（先切到分组页，再关它）→ 落到紧随其后的「引用」
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.set_right_tab(RightTab::Group, cx);
+            p.close_right_tab(RightTab::Group, cx);
+        })
+    });
+    assert_eq!(panel.read_with(cx, |p, _| p.right_tab), RightTab::Reference);
+
+    // 重开「计算」页：按规范序插回（在「值详情」之后、分组之前），并置为当前
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.open_right_tab(RightTab::Stats, cx))
+    });
+    let open = panel.read_with(cx, |p, _| p.open_tabs().to_vec());
+    assert_eq!(
+        open,
+        vec![
+            RightTab::Browser,
+            RightTab::Value,
+            RightTab::Stats,
+            RightTab::Reference,
+            RightTab::ExecSql
+        ],
+        "重开应按规范序插回原位"
+    );
+    assert_eq!(panel.read_with(cx, |p, _| p.right_tab), RightTab::Stats);
+
+    // 关到空集 → 右栏整体收起（与「关掉最后一个面板」在那边导致页签夹无项一致）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            for tab in right_tabs() {
+                p.close_right_tab(tab, cx);
+            }
+        })
+    });
+    assert!(panel.read_with(cx, |p, _| p.open_tabs().is_empty()));
+    assert!(
+        !panel.read_with(cx, |p, _| p.panels_visible()),
+        "关掉最后一页后右栏应收起"
+    );
 }
 
 /// 【左缘竖条】视图按钮提示 = 「名字（描述）」，两条互不相同；记录视图的提示随开关

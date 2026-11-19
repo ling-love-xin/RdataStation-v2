@@ -709,7 +709,7 @@ impl ResultPanel {
     fn panel_view_menu(&self, debug_id: &'static str, cx: &App) -> AnyElement {
         let _ = cx;
         let queue = self.queue.clone();
-        let current: RightTab = self.right_tab;
+        let open_tabs: Vec<RightTab> = self.open_tabs.clone();
         let panels_visible = self.panels_visible();
         let vertical_layout = self.vertical_layout;
         let panel_maximized = self.panel_maximized;
@@ -733,9 +733,15 @@ impl ResultPanel {
                         }
                         PanelViewItem::Page(tab) => {
                             let queue = queue.clone();
-                            // 【面板开关语义】菜单里的面板项与右缘竖条同口径：该页当前可见就收起，
-                            // 否则切到该页（`CMD_TOGGLE_PANEL`，见 `ResultRequest::ToggleRightTab`）
-                            let target = ResultRequest::ToggleRightTab(tab);
+                            // 【勾选态 = 已启用】对齐 DBeaver `fillPanelsMenu:1559-1588`：
+                            // 每页是 `STYLE_CHECK` 的 `CMD_TOGGLE_PANEL`，勾 = 该页在
+                            // `enabledPanelIds` 里。未勾 → 打开并切过去；已勾 → 切到下该页。
+                            let is_open = open_tabs.contains(&tab);
+                            let target = if is_open {
+                                ResultRequest::SetRightTab(tab)
+                            } else {
+                                ResultRequest::OpenRightTab(tab)
+                            };
                             menu = menu.item(
                                 PopupMenuItem::new(panel_view_item_label(
                                     item,
@@ -743,7 +749,7 @@ impl ResultPanel {
                                     vertical_layout,
                                     panel_maximized,
                                 ))
-                                .checked(tab == current)
+                                .checked(is_open)
                                 .on_click(move |_, _window, app| {
                                     queue.request(target.clone(), app);
                                 }),

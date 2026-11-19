@@ -298,15 +298,75 @@ impl ResultPanel {
         cx.notify();
     }
 
-    /// 【右栏】标签页切换（列浏览器 / 值详情 / 计算 / 分组 / 引用）。
+    /// 【右栏】标签页切换（列浏览器 / 值详情 / 计算 / 分组 / 引用 / 执行SQL）。
     /// 右栏收起时切页签会自动展开（DBeaver 口径：右缘竖条点图标即展开对应面板）。
+    /// 目标页若已被关闭，会先按规范序重新启用它（点得到就等于开得回来）。
     pub fn set_right_tab(&mut self, tab: RightTab, cx: &mut Context<Self>) {
+        self.open_right_tab_only(tab);
         self.right_tab = tab;
         if !self.show_value_sidebar {
             // 窄展开 / 收起态点页签图标 → 宽展开（竖条可见性保持；收起态在窄态已置 true）
             self.edge_bar_visible = true;
             self.show_value_sidebar = true;
             self.right_sidebar_epoch = self.right_sidebar_epoch.wrapping_add(1);
+        }
+        cx.notify();
+    }
+
+    /// 【右栏】把某页登记进已启用集合（已存在则不动），按**规范序**插入。
+    fn open_right_tab_only(&mut self, tab: RightTab) {
+        if self.open_tabs.contains(&tab) {
+            return;
+        }
+        let canonical = right_tabs();
+        let pos = canonical
+            .iter()
+            .position(|candidate| *candidate == tab)
+            .unwrap_or(canonical.len());
+        let insert_at = self
+            .open_tabs
+            .iter()
+            .position(|existing| {
+                canonical
+                    .iter()
+                    .position(|candidate| candidate == existing)
+                    .unwrap_or(usize::MAX)
+                    > pos
+            })
+            .unwrap_or(self.open_tabs.len());
+        self.open_tabs.insert(insert_at, tab);
+    }
+
+    /// 【右栏】已启用的页集合（规范序）：页签条按它渲染，视图菜单勾选态读它。
+    pub fn open_tabs(&self) -> &[RightTab] {
+        &self.open_tabs
+    }
+
+    /// 【右栏】重新打开一页 = 登记进集合 + 置为当前页（视图菜单勾选项）。
+    pub fn open_right_tab(&mut self, tab: RightTab, cx: &mut Context<Self>) {
+        self.set_right_tab(tab, cx);
+    }
+
+    /// 【右栏】**只关掉这一页**（其余页仍在页签条里），对齐 DBeaver
+    /// `CTabItem(panelFolder, SWT.CLOSE)` + `presentationSettings.enabledPanelIds` 的移除语义
+    /// （`ResultSetViewer.addPanel:1357/:1388`）。
+    ///
+    /// 规则：
+    /// - 关的是当前页 → 落到**规范序里紧随其后**的剩余页，没有则取前一页；
+    /// - 集合被关空 → 整块面板收起（`set_panels_visible(false)`，与「关掉最后一个面板」
+    ///   在那边导致页签夹无项一致）；再打开任一一页会重新展开。
+    /// - 关一页**不**复位最大化 / 宽度等其它面板状态。
+    pub fn close_right_tab(&mut self, tab: RightTab, cx: &mut Context<Self>) {
+        if !self.open_tabs.contains(&tab) {
+            return;
+        }
+        self.open_tabs.retain(|existing| *existing != tab);
+        if self.open_tabs.is_empty() {
+            self.set_panels_visible(false, cx);
+            return;
+        }
+        if self.right_tab == tab {
+            self.right_tab = neighbor_after_close(&self.open_tabs, tab);
         }
         cx.notify();
     }
@@ -324,6 +384,11 @@ impl ResultPanel {
     /// 返回 `true` = 本次**切到了该页**（调用方可能要像切页签那样触发刷新，如引用页取外键）；
     /// 返回 `false` = 本次是把面板收起了。
     pub fn toggle_right_tab(&mut self, tab: RightTab, cx: &mut Context<Self>) -> bool {
+        // 已被关掉的页：先启用（页签条里看不到它，但右缘竖条 / 视图菜单仍可达）
+        if !self.open_tabs.contains(&tab) {
+            self.set_right_tab(tab, cx);
+            return true;
+        }
         if right_tab_click_collapses(tab, self.right_tab, self.panels_visible()) {
             self.set_panels_visible(false, cx);
             false
@@ -1853,16 +1918,38 @@ pub(crate) fn right_tab_click_collapses(tab: RightTab, active: RightTab, panels_
     panels_visible && tab == active
 }
 
-/// 页签枚举 → 页签下标（`TabBar::selected_index` 用）
-pub(crate) fn right_tab_index(tab: RightTab) -> usize {    right_tabs()
-        .iter()
-        .position(|candidate| *candidate == tab)
-        .unwrap_or(0)
+/// 【页签条】已启用集合内某页的下标（`TabBar::selected_index` 用；不在集合里 → 0）。
+pub(crate) fn strip_index(open: &[RightTab], tab: RightTab) -> usize {
+    open.iter().position(|existing| *existing == tab).unwrap_or(0)
 }
 
-/// 页签下标 → 页签枚举（`TabBar::on_click` 回调用；越界兜底默认页）
-pub(crate) fn right_tab_from_index(index: usize) -> RightTab {
-    right_tabs().get(index).copied().unwrap_or(RightTab::Browser)
+/// 【页签条】下标 → 已启用集合内的页（`TabBar::on_click` 回调用；越界兜底默认页）。
+pub(crate) fn tab_at_strip_index(open: &[RightTab], index: usize) -> RightTab {
+    open.get(index).copied().unwrap_or(RightTab::Browser)
+}
+
+/// 【关闭一页】关掉某页后当前页落到哪：**规范序里紧随其后**的剩余页，没有则取最后一个。
+///
+/// `remaining` 必须是规范序（`open_tabs` 的维护方式保证）。对齐 DBeaver 的
+/// `CTabFolder` 行为：关掉选中的页签后焦点落到相邻页签，而不是回到第一页。
+pub(crate) fn neighbor_after_close(remaining: &[RightTab], closed: RightTab) -> RightTab {
+    let canonical = right_tabs();
+    let closed_pos = canonical
+        .iter()
+        .position(|candidate| *candidate == closed)
+        .unwrap_or(0);
+    remaining
+        .iter()
+        .find(|candidate| {
+            canonical
+                .iter()
+                .position(|tab| *tab == **candidate)
+                .unwrap_or(0)
+                > closed_pos
+        })
+        .or_else(|| remaining.last())
+        .copied()
+        .unwrap_or(RightTab::Browser)
 }
 
 /// 「视图菜单」条目清单（顺序照 `fillPanelsMenu:1559-1588`）：
