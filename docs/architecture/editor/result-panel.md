@@ -464,8 +464,8 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
 > 历史记录：当时序为 Value/Stats/Metadata/Group；Metadata 页签后于 §8.11 删除，§8.12 重排为 Browser/Value/Stats/Group、默认页改为 Browser。当前口径以 §8.12 为准。
 
 - `RightTab` 顺序重排为 `Value(0, 默认) / Stats(1) / Metadata(2) / Group(3)`，映射 `right_tab_from_index` 同步；`render_right_sidebar` labels = `["值详情", "计算", "元数据", "分组"]`，match 顺序 Value / Stats / Metadata / Group。
-- 非默认「值详情」页时，页签行尾挂 `IconName::X` 关闭钮（`editor-result-right-tab-close`），点击入队 `SetRightTab(RightTab::Value)`。**拍板口径：× 只退回默认页，不收起整个右栏**；右栏开合仍由工具栏「值详情」开关控制。
-- 实现备注：`TabBar` 的 suffix 槽内子按钮点击会冒泡触发页签切换（vendor `tab.rs` 已核实），故关闭钮挂在 TabBar 行右侧独立元素，不用 suffix 内嵌。
+- 非默认「值详情」页时，页签行尾挂 `IconName::X` 关闭钮（`editor-result-right-tab-close`），点击入队 `SetRightTab(RightTab::Value)`。**拍板口径：× 只退回默认页，不收起整个右栏**；右栏开合仍由工具栏「值详情」开关控制。**（已作废：第 24 批起页签条 = 已启用集合、× 改为逐页 `CloseRightTab`，见 §9.08；第 32 批又把 × 收到每页签内侧，见 §9.16）**
+- 实现备注：`TabBar` 的 suffix 槽内子按钮点击会冒泡触发页签切换（vendor `tab.rs` 已核实），故关闭钮挂在 TabBar 行右侧独立元素，不用 suffix 内嵌。**（已订正：§9.16 仍用 `Tab::suffix`，靠 `app.stop_propagation()` 吃掉冒泡；「不能内嵌」这个结论不成立）**
 - 「引用」页（外键面包屑 + 引用表只读预览）本轮不做，留 backlog。
 
 **③ 底部三段式动作组（#26 Rust 视图骨架已落地；动作模型归 #28）**
@@ -5554,6 +5554,7 @@ presentationSettings.enabledPanelIds.add(panelDescriptor.getId());   // :1388
    （原 `right_tab_index` / `right_tab_from_index` 删除，避免两套换算分叉）；
    `selected_index` 取当前页在集合里的位置。
 3. 行尾 × 改为**无条件渲染**、发 `CloseRightTab(self.right_tab)`：只关这一页，其余页留在条上。
+   **（已被 §9.16 取代：× 收到每页签内侧，可关任意一页；行尾那颗删除）**
 4. 视图菜单的六个页项改成「勾选态 = 该页在集合里」（`fillPanelsMenu:1559-1588` 的
    `STYLE_CHECK` + `CMD_TOGGLE_PANEL` 语义）：未勾 → `OpenRightTab`（插回并切过去），
    已勾 → `SetRightTab`（切过去）。
@@ -5852,8 +5853,9 @@ ResultSetViewer.java
 - 第 28 批遗留的 editor E0063 已消失（并行线补齐了 `FormatOptions` 的调用点），
   本批 editor 两道门禁**实测恢复全绿**。
 
-**仍与 DBeaver 有差**（未做）：逐页关闭仍是页签条**行尾单颗 ×**（DBeaver 是每页签内侧
-`SWT.CLOSE`；kit `Tab` 无 `closable`），属目视/上游能力范围。
+**仍与 DBeaver 有差**（未做）：逐页关闭已由 §9.16 收到页签内侧（`Tab::suffix` 的 12px ×），
+但视觉形态仍是自绘图标（DBeaver 的 `SWT.CLOSE` 由 `CTabFolder` 内建绘制），
+× 的内距与悬停色属目视范围。
 
 ### 9.14 列浏览器过滤框：ESC 清空（2026-11-19）
 
@@ -5952,6 +5954,54 @@ panel\grouping\action\DefaultSortingAction.java
 `isDefaultGrouping`（函数列只有 COUNT）时生效，本仓不受此限制；③ 交互形态不同——
 DBeaver 是工具条下拉里的三个单选，本仓是一个循环按钮（三档依次切换），
 点击次数与最终可达档位一致，属形态取舍（用户口径「目视部分后面统一处理」）。
+
+### 9.16 逐页关闭按钮收到页签内侧（2026-11-19）
+
+DBeaver 的关闭按钮**属于页签本身**：
+
+```text
+ResultSetViewer.java
+  addPanel:1357   final CTabItem panelTab = new CTabItem(panelFolder, SWT.CLOSE);
+                  —— 每个页签自带内侧 ×（SWT.CLOSE 是 CTabItem 的样式位）
+  closePanel:1536-1542   dispose tab + removePanel（关的就是点中的那一个）
+```
+
+此前本仓只有**行尾一颗**「关当前页」的按钮（用户要关别的页得先切过去），语义上是
+「关当前页」而不是「关这一页」。本批改成每页签内侧一颗 ×，与 `SWT.CLOSE` 同构。
+
+**实现**（`panel/sidebars.rs::render_right_sidebar`）：
+
+1. 页签构造改为 `Tab::new().icon(..).label(..).tooltip(..).suffix(close)`。
+2. `close` 是 `Tab::suffix` 槽里的紧凑点击区：`div().id(..).cursor_pointer().rounded_sm()
+   .hover(bg list_hover).on_click(..).child(Icon::new(IconName::X).size_3().text_color(muted))`。
+   - **不用 `Button`**：XSmall 档 `min_h_7`(28px) 会撑破 24px 页签条
+     （`ui::RESULT_STATUS_BAR_HEIGHT`），kit `Tab` 也没有 `closable` 样式位。
+   - 语义仍走**同一条端口** `ResultRequest::CloseRightTab(tab)`，与视图菜单 / 竖条同一实现。
+3. `panel/events.rs` 新增纯函数 `tab_close_selector(tab) -> &'static str`：六页各一个稳定
+   选择器（`editor-result-right-tab-close-{browser,value,stats,group,reference,execsql}`）。
+   共用 id 会让 `debug_bounds` 只命中第一个，且 a11y 重复 id 是 0.9 已知坑。
+4. 行尾那颗 `editor-result-right-tab-close` 已删除——两套关闭入口并存会让「关哪一页」
+   与「点哪一页」语义打架。
+
+**必须拦截冒泡（本批实证）**：`×` 的 `on_click` 里调 `app.stop_propagation()`。
+不拦截时队列会收到 `[CloseRightTab(Browser), SetRightTab(Browser)]`——`TabBar` 外层
+`on_click` 用的是**渲染时**的 `open_tabs` 快照做下标映射，`CloseRightTab` 把该页摘掉之后，
+同一个下标又映射回它自己，等于「关掉又立刻重开」。这条不是理论风险，是用例先跑出来的。
+
+**验证**：
+- `panel::tests::right_tab_close_button_closes_only_that_page`（窗口级）：active = 值详情，
+  点「列浏览器」页签的 ×（`debug_bounds` → `simulate_click`），断言队列含
+  `CloseRightTab(Browser)` **且不含** `SetRightTab(_)`。
+- `panel::tests::right_tab_close_selectors_are_distinct`（纯函数）：六页选择器两两不同。
+- 回归：`clicking_an_edge_tab_toggles_that_page` / `closing_the_last_edge_tab_collapses_the_bar`
+  等既有用例不受影响（关闭端口与竖条语义未动）。
+- 门禁：`cargo test -p rds-result-panel --lib` = **355 passed**（+2）、
+  `cargo check -p rds-editor` 通过、`cargo test -p rds-editor --lib -- --test-threads=4`
+  = **798 passed**（1 ignored）、`cargo test -p rds-ui-guard` = 4 passed。
+
+**仍与 DBeaver 有差**（未做）：DBeaver 的 × 由 `CTabFolder` 内建绘制（悬停变红、页签
+未激活时也能关），本仓是自绘 12px 图标 + `list_hover` 底色；× 与页签正文之间的内距
+（`CTabItem` 由 SWT 决定）不在本批范围（属目视，用户口径「后面统一处理」）。
 
 ## 8. 协作纪律
 

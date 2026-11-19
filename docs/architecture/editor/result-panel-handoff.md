@@ -1251,8 +1251,9 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   组件自身没有可查 id，按这一行的真实像素做 `simulate_click` 才点得到页签。
 - **切页是宿主动作**：面板只 `queue.request`，断言要看**队列**（`panel.read(app).queue.drain()`）
   而不是面板的 `right_tab`（宿主 `dispatch` 才会调 `set_right_tab`）。
-- **仍在册**：kit `TabBar` 无逐页关闭通道，故 DBeaver 的 `SWT.CLOSE` 由「行尾 × → 回默认页」
-  近似（× 只退页，不收起右栏）。
+- **已落地**（原「仍在册」）：逐页关闭先由第 24 批的行尾 ×（`CloseRightTab`）承接，
+  第 32 批再收到**每页签内侧**（`Tab::suffix` + `app.stop_propagation()`，见 §3.05）；
+  与 DBeaver `CTabItem(SWT.CLOSE)` 同构，剩下的只是视觉形态。
 - **验证**：panel **280 passed** / editor `--lib results` 45 / guard 4 / check 0-0。
 
 ---
@@ -1493,6 +1494,25 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 3.05 逐页关闭按钮收到页签内侧（2026-11-19）
+
+- DBeaver 取证：`addPanel:1357` 的长相是 `new CTabItem(panelFolder, SWT.CLOSE)`
+  ——关闭样式位属于**那个页签**，所以能关任意一页；此前本仓只有行尾一颗「关当前页」。
+- 本仓：页签构造加 `Tab::suffix(close)`，`close` 是 12px × 的自绘点击区
+  （`Icon::new(IconName::X).size_3()` + `.hover(list_hover)`），点击推
+  `CloseRightTab(tab)`——端口与视图菜单 / 竖条共用，别另开一个「关页」请求。
+- **两个坑（都踩过）**：① 不能用 `Button`，XSmall 档 `min_h_7`(28px) 撑破 24px 页签条；
+  ② 必须 `app.stop_propagation()`，否则 `TabBar` 外层的切页回调按**渲染时**的
+  `open_tabs` 快照映射下标，会把刚摘掉的页按旧下标重开（实测队列
+  `[CloseRightTab(Browser), SetRightTab(Browser)]`）。
+- 选择器 `events::tab_close_selector(tab)` 六页各一个（`&'static str`，供
+  `debug_bounds` 定位）；共用 id 会让定位只命中第一个，也是 a11y 重复 id 风险。
+- 用例：`right_tab_close_button_closes_only_that_page`（窗口级，点非当前页的 × →
+  队列只有 Close、没有 SetRightTab）、`right_tab_close_selectors_are_distinct`。
+- 门禁基线：panel **355**、editor check 通过、editor **798**（1 ignored）、ui-guard **4**。
+- 未做（目视）：× 的内距 / 悬停色 / 未激活页签上的表现；DBeaver 由 `CTabFolder`
+  内建绘制。
+
 ### 3.04 分组页补「不排序」档（2026-11-19）
 
 - DBeaver 取证：`ChangeSortingAction` 的常量是 `ASC = "ASC" / DESC = "DESC" / NONE = ""`，
@@ -1555,7 +1575,8 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   `edge_bar_tooltip_reports_the_toggle_action`（原 `..._carries_label_and_description` 三态断言作废）。
 - 门禁基线：panel **351**、editor check 通过、editor **795**（1 ignored）、ui-guard **4**
   ——第 28 批遗留的 editor E0063 已由并行线补齐，editor 两道门禁恢复全绿。
-- 未做：逐页关闭仍是页签条行尾单颗 ×（DBeaver 每页签内侧 `SWT.CLOSE`；kit `Tab` 无 `closable`）。
+- 未做：逐页关闭已由 §3.05 收到页签内侧（自绘 12px × + `Tab::suffix`；DBeaver 是
+  `SWT.CLOSE` 由 `CTabFolder` 内建绘制，视觉差异属目视范围）。
 
 ### 3.01 列浏览器工具条只留「生成 DDL」（2026-11-19）
 
@@ -1610,7 +1631,7 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   可重新打开；勾选态 `toggled = panels_visible && active == tab`（整栏收起时不再谎报勾选）。
 - 竖条页序改为取 `events::right_tabs()`（原先在 `sidebars.rs` 硬编码了一份六页数组）。
 - 仍缺（登记，非缺陷）：DBeaver 竖条对已勾选页是 `closePanel`（逐页关），本仓把逐页关
-  收敛到页签条行尾 ×，竖条点已勾选页为无操作。
+  收敛到页签条的 ×（第 32 批起在每页签内侧，见 §3.05），竖条点已勾选页为无操作。
 - 门禁基线（本批之后）：panel **345**、editor **794**（1 ignored）、ui-guard **4**。
 
 ### 2.97 右栏页签模型已落地第 1 步（2026-11-19）
@@ -1628,10 +1649,10 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   `begin_references_load`）。
 - **关闭规则**：关当前页 → 落后继（无后继取最后一个剩页）；关空 → `set_panels_visible(false)`
   整栏收起，再开任一一页重新展开。
-- **仍缺（下一步）**：① 右缘竖条的 `ToggleRightTab` 还是「点当前页收起整栏」的旧语义，
-  要统一成「勾选 = 已启用，整栏收起只走总开关」；② 关闭按钮是行尾单颗，不是每页签
-  `SWT.CLOSE`（kit `Tab` 无 `closable`，suffix 内嵌按钮在 headless 无法验证双触发）；
-  ③ `open_tabs` 不持久化（要新增 settings 键）。
+- **仍缺（下一步）**：① ~~右缘竖条的 `ToggleRightTab` 还是「点当前页收起整栏」的旧语义~~
+  （已由 §3.02 统一为「开/关该页」）；② ~~关闭按钮是行尾单颗，不是每页签 `SWT.CLOSE`~~
+  （已由 §3.05 收到页签内侧，`stop_propagation()` 已验证不双触发）；
+  ③ `open_tabs` 不持久化（已由第 26 批的 `result_panel.open_tabs` 补齐）。
 - 门禁基线（本批之后）：panel **345**、editor **794**（1 ignored）、ui-guard **4**。
 
 ### 2.96 右栏页签模型：方案已定，代码未动（2026-11-19）
