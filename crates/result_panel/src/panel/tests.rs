@@ -496,7 +496,74 @@ fn close_right_tab_drops_one_page_and_reopen_restores_order(
     );
 }
 
-/// 【左缘竖条】视图按钮提示 = 「名字（描述）」，两条互不相同；记录视图的提示随开关
+/// 【右栏】关空集 → 收起 → **再展开必须恢复默认页集合**。
+///
+/// 取证 `ResultSetViewer.showPanels:1478-1518`：展开时 `showDefaults=true` 会先跑
+/// `activateDefaultPanels(getPresentationSettings())`（`:1493-1496`）再
+/// `setMaximizedControl(null)` + `updatePanelsContent(false)`——也就是「面板集合被关空之后
+/// 重新显示，一定有默认面板可显示」，不会留下一个空页签夹。
+///
+/// 本仓在修这条之前：`close_right_tab` 关空只收起（`open_tabs` 留空），`set_panels_visible(true)`
+/// 只翻可见位，于是重新展开得到的是「右栏空白、页签条上一个页签都没有」。
+#[gpui_kit::test]
+fn reopening_after_closing_all_pages_restores_default_tabs(cx: &mut gpui_kit::TestAppContext) {
+    use super::events::right_tabs;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            for tab in right_tabs() {
+                p.close_right_tab(tab, cx);
+            }
+        })
+    });
+    assert!(panel.read_with(cx, |p, _| p.open_tabs().is_empty()));
+    assert!(!panel.read_with(cx, |p, _| p.panels_visible()));
+
+    // 再展开（工具栏/宿主路径）
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_panels_visible(true, cx)));
+    assert!(panel.read_with(cx, |p, _| p.panels_visible()), "应重新展开");
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.open_tabs().to_vec()),
+        right_tabs().to_vec(),
+        "空集重新展开应恢复默认页集合（否则页签条是空的）"
+    );
+    let current = panel.read_with(cx, |p, _| p.right_tab);
+    assert!(
+        panel.read_with(cx, |p, _| p.open_tabs().contains(&current)),
+        "当前页必须落在恢复后的集合里"
+    );
+}
+
+/// 【右栏】非空集合在开合之间**保持不变**（恢复默认集合只针对「被关空」的情况）。
+#[gpui_kit::test]
+fn toggling_the_sidebar_keeps_a_custom_tab_set(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 关掉「列浏览器」→ 五页
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.close_right_tab(RightTab::Browser, cx))
+    });
+    let custom = panel.read_with(cx, |p, _| p.open_tabs().to_vec());
+    assert_eq!(custom.len(), 5);
+
+    // 状态栏三态开关：宽展开 → 收起 → 窄展开 → 宽展开（每次都经过收起再回来）
+    cx.update(|_, app| panel.update(app, |p, cx| p.toggle_value_sidebar(cx)));
+    assert!(!panel.read_with(cx, |p, _| p.panels_visible()));
+    cx.update(|_, app| panel.update(app, |p, cx| p.toggle_value_sidebar(cx)));
+    cx.update(|_, app| panel.update(app, |p, cx| p.toggle_value_sidebar(cx)));
+
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.open_tabs().to_vec()),
+        custom,
+        "自定义集合不应被「恢复默认」覆盖"
+    );
+    assert!(!panel.read_with(cx, |p, _| p.open_tabs().contains(&RightTab::Browser)));
+}
+
 /// 状态说明会看到什么（对齐 `updatePresentationInToolbar:948-952` 的
 /// `setText(label)` + `setToolTipText(description)`）。
 #[test]

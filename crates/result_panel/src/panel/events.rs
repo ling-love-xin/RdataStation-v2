@@ -968,6 +968,23 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【右栏】集合被**关空**之后再显示时，恢复默认页集合。
+    ///
+    /// 对齐 `ResultSetViewer.showPanels:1478-1518`：展开路径带 `showDefaults=true`，
+    /// 于是 `:1493-1496` 先 `activateDefaultPanels(getPresentationSettings())` 再放开 sash——
+    /// 「面板被关光过一次」不会让页签夹继续空着，重新显示一定有页可显示。
+    /// 本仓默认集合 = 出厂六页（`right_tabs()`；宿主注入的偏好集合走
+    /// `set_open_tabs_initial`）。**只在空集时补**，非空的自定义集合原样保留。
+    fn restore_default_tabs_when_empty(&mut self) {
+        if !self.open_tabs.is_empty() {
+            return;
+        }
+        self.open_tabs = right_tabs().to_vec();
+        if !self.open_tabs.contains(&self.right_tab) {
+            self.right_tab = self.open_tabs[0];
+        }
+    }
+
     /// 【右缘竖条】面板总开关：对齐 DBeaver 右缘竖条顶部那颗 `panelsButton`
     /// （`SWT.RIGHT | SWT.CHECK`，图标 `UIIcon.PANEL_CUSTOMIZE`，点击
     /// `showPanels(!isPanelsVisible(), true, true)`，checked = 面板可见；`ResultSetViewer.java:1038-1056`）。
@@ -983,6 +1000,8 @@ impl ResultPanel {
     pub fn set_panels_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
         if visible {
             if !self.panels_visible() {
+                // 关空过就补回默认页集合（见 restore_default_tabs_when_empty 的取证）
+                self.restore_default_tabs_when_empty();
                 self.edge_bar_visible = true;
                 self.show_value_sidebar = true;
                 self.right_sidebar_epoch = self.right_sidebar_epoch.wrapping_add(1);
@@ -1008,6 +1027,11 @@ impl ResultPanel {
     /// 内容）→ 收起。epoch 递增让宽度动画重播（首帧 epoch=0 免动画，见 `sidebar_width_anim`）
     pub fn toggle_value_sidebar(&mut self, cx: &mut Context<Self>) {
         let (edge, show) = next_right_edge_state(self.edge_bar_visible, self.show_value_sidebar);
+        // 走「显示」方向时同样补默认页集合：这条路径是 DBeaver `CMD_TOGGLE_PANELS` 的等价物，
+        // 关空过之后再显也不能留下空页签夹（见 restore_default_tabs_when_empty 的取证）
+        if show {
+            self.restore_default_tabs_when_empty();
+        }
         self.edge_bar_visible = edge;
         self.show_value_sidebar = show;
         // 走到「收起」时最大化没有意义（不变量：最大化 ⇒ 面板展开），顺手复位
