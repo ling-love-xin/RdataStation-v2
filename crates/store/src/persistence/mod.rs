@@ -46,6 +46,7 @@ pub mod project_store;
 pub mod script_env_store;
 pub mod sql_template_store;
 pub mod trash;
+pub mod vault_switch;
 pub mod workbench_context_store;
 
 /// 插件存储的 manager 级集成测试（真实 SQLite + DuckDB 临时库）。

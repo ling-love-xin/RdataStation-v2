@@ -51,6 +51,14 @@ fn get_or_create_salt() -> Vec<u8> {
         .clone()
 }
 
+/// 机器绑定档密钥（默认档；也可能作为历史密文的兼容钥）。
+///
+/// ⚠ 对外不要直接用它加密——加密走 `vault_source::active_key()`，
+/// 否则用户选了「系统凭据 / 主密码」档也会被这里悄悄改回机器档。
+pub(crate) fn machine_key() -> [u8; 32] {
+    derive_key()
+}
+
 /// 主密钥派生：使用随机安装盐值 + 机器ID
 fn derive_key() -> [u8; 32] {
     let salt = get_or_create_salt();
@@ -119,8 +127,15 @@ fn build_fallback_id() -> String {
 }
 
 pub fn encrypt_password(password: &str) -> Result<String, CoreError> {
-    let key = derive_key();
-    let cipher = Aes256Gcm::new_from_slice(&key)
+    // 密钥来源三档：加密永远用**当前档位**的密钥（主密码档未解锁 → 明确报错，
+    // 不允许悄悄回落到机器档——那等于用户以为加了口令、实际没有）。
+    let key = crate::vault_source::active_key()?;
+    encrypt_password_with_key(&key, password)
+}
+
+/// 用**显式密钥**加密（切档重加密时用：不能依赖进程内的当前档位）。
+pub fn encrypt_password_with_key(key: &[u8; 32], password: &str) -> Result<String, CoreError> {
+    let cipher = Aes256Gcm::new_from_slice(key)
         .map_err(|e| CoreError::common(CommonError::Internal(format!("AES init error: {}", e))))?;
 
     let mut nonce_bytes = [0u8; 12];
@@ -148,6 +163,18 @@ pub fn encrypt_password(password: &str) -> Result<String, CoreError> {
 }
 
 pub fn decrypt_password(encrypted: &str) -> Result<String, CoreError> {
+    // 多钥尝试：当前档位 + 机器档（历史密文）+ 兼容档。切换密钥来源时若有密文未被
+    // 重加密（迁移中断、手工拷库），至少还能解开，而不是让用户看到一堆「解密失败」。
+    let mut keys = crate::vault_source::candidates();
+    keys.push(derive_legacy_key());
+    decrypt_password_with_keys(&keys, encrypted)
+}
+
+/// 用**显式钥集**解密（切档重加密时用：旧钥集合由调用方固定下来再逐条改写）。
+pub fn decrypt_password_with_keys(
+    keys: &[[u8; 32]],
+    encrypted: &str,
+) -> Result<String, CoreError> {
     let combined = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encrypted)
         .map_err(|e| {
             CoreError::common(CommonError::Internal(format!("Base64 decode error: {}", e)))
@@ -164,9 +191,8 @@ pub fn decrypt_password(encrypted: &str) -> Result<String, CoreError> {
         CoreError::common(CommonError::Internal(format!("Nonce init error: {}", e)))
     })?;
 
-    // 先用新密钥（随机盐值）解密
-    let keys = [derive_key(), derive_legacy_key()];
-    for key in &keys {
+    // 多钥尝试：顺序无关正确性，命中即返回。
+    for key in keys {
         let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| {
             CoreError::common(CommonError::Internal(format!("AES init error: {}", e)))
         })?;
@@ -178,7 +204,7 @@ pub fn decrypt_password(encrypted: &str) -> Result<String, CoreError> {
     }
 
     Err(CoreError::common(CommonError::Internal(
-        "Decryption failed with both new and legacy keys".to_string(),
+        "Decryption failed with all available keys (machine/os/master/legacy)".to_string(),
     )))
 }
 

@@ -25,6 +25,7 @@ pub mod memory;
 pub mod meta;
 pub mod models;
 pub mod utils;
+pub mod vault_source;
 
 // 重新导出常用错误类型（与 v1 core/mod.rs 一致）
 pub use error::{
