@@ -19,6 +19,7 @@ pub mod services;
 // 尺寸常量已下沉 `rds-workbench-shell`（依赖键 `workbench_shell`，与本仓库其它内部 crate 同惯例）：
 // 这里重导保持 `crate::ui::*` / `rds_workbench::ui::*` 路径不变。
 pub use workbench_shell::ui;
+pub mod unlock;
 pub mod view;
 
 // 重新导出服务层（与 v1 core/mod.rs 顶层 re-export 对齐）

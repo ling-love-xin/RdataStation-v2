@@ -124,7 +124,11 @@ pub(crate) struct PendingDmlConfirm {
     pub(crate) target: ExecTarget,
     pub(crate) placement: ResultPlacement,
     pub(crate) title: Option<String>,
-    /// 要展示给用户的事实（环境名 / 语句种类 / 摘要）
+    /// 要展示给用户的事实（环境名 / 语句种类 / 摘要）。
+    ///
+    /// 弹窗内容在 `execute.rs` 里已从 `dml_confirm_for` 直接取用（不经过这里），
+    /// 保存这份是为了让挂起态自带完整上下文（测试与将来重放都要读它）。
+    #[cfg_attr(not(any(test, feature = "test-support")), allow(dead_code))]
     pub(crate) detail: engine::services::policy_guard::DmlConfirm,
 }
 
