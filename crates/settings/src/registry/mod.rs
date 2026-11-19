@@ -222,6 +222,9 @@ pub enum Slot {
     /// 【分组页持久化，对齐 DBeaver `RS_GROUPING_SHOW_DUPLICATES_ONLY`】是否只显示
     /// 重复分组（组内行数 > 1，默认 false）。
     ResultPanelGroupDuplicatesOnly,
+    /// 【右栏页签持久化，对齐 DBeaver `PresentationSettings.enabledPanelIds`】右栏启用了哪些页
+    /// （逗号分隔 id；空 = 没写过 → 六页全开）。
+    ResultPanelOpenTabs,
     /// 【类型样式】数字显示格式（raw / grouped / fixed2 / scientific）。
     ResultPanelNumberFormat,
     /// 【类型样式】NULL 显示占位（null / emptyset / dash）。
@@ -340,6 +343,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "result_panel.stats_items" => Slot::ResultPanelStatsItems,
         "result_panel.group_sort" => Slot::ResultPanelGroupSort,
         "result_panel.group_duplicates_only" => Slot::ResultPanelGroupDuplicatesOnly,
+        "result_panel.open_tabs" => Slot::ResultPanelOpenTabs,
         "result_panel.number_format" => Slot::ResultPanelNumberFormat,
         "result_panel.null_placeholder" => Slot::ResultPanelNullPlaceholder,
         "result_panel.bool_display" => Slot::ResultPanelBoolDisplay,
@@ -453,6 +457,8 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::ResultPanelGroupSort => KindTag::Text,
         // 【分组页持久化】「仅重复」开关（面板「仅重复」钮与设置页都可写）。
         Slot::ResultPanelGroupDuplicatesOnly => KindTag::Bool,
+        // 【右栏页签持久化】自由文本（逗号分隔的页 id）：页签条 × / 视图菜单勾选项与设置页都可写。
+        Slot::ResultPanelOpenTabs => KindTag::Text,
         // 【类型样式】23 项全是枚举（设置页下拉）。
         Slot::ResultPanelNumberFormat
         | Slot::ResultPanelNullPlaceholder

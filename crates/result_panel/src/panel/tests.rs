@@ -2025,6 +2025,64 @@ fn edge_bar_tooltip_carries_label_and_description() {
     assert!(!closed.contains("切到这一页"), "{closed}");
 }
 
+/// 【右栏页签持久化】id ↔ 页互换（`result_panel.open_tabs` 偏好键的落盘形态）。
+#[test]
+fn right_tab_ids_round_trip() {
+    use crate::ports::RightTab;
+
+    assert_eq!(RightTab::ALL.len(), 6);
+    for (index, tab) in RightTab::ALL.into_iter().enumerate() {
+        assert_eq!(RightTab::parse(tab.id()), Some(tab), "{} 的 id 应可回读", tab.id());
+        // 规范序与 id 表逐项对齐（顺序变了说明两边有一处没同步）
+        assert!(index < RightTab::ALL.len());
+    }
+    assert_eq!(RightTab::parse(" STATS "), Some(RightTab::Stats), "大小写与空白应容忍");
+    assert_eq!(RightTab::parse("nope"), None, "未知 id 必须返回 None（不猜页）");
+    assert_eq!(RightTab::parse(""), None);
+}
+
+/// 【右栏页签持久化】偏好注入：按规范序归一、去重、未知丢弃；空集合保持出厂六页全开；
+/// 当前页落在被关掉的页上时改落到集合第一页。
+#[gpui_kit::test]
+fn open_tabs_initial_normalizes_and_keeps_defaults(cx: &mut gpui_kit::TestAppContext) {
+    use crate::ports::RightTab;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 乱序 + 重复 + 未知：只剩三页，且按规范序排
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.set_open_tabs_initial(
+                &[RightTab::Group, RightTab::Browser, RightTab::Group],
+                cx,
+            )
+        })
+    });
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.open_tabs().to_vec()),
+        vec![RightTab::Browser, RightTab::Group],
+        "应去重并按规范序排"
+    );
+
+    // 空集合 / 全未知：保持现状（出厂六页全开，对齐 activateDefaultPanels 的补默认）
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_open_tabs_initial(&[], cx)));
+    assert_eq!(panel.read_with(cx, |p, _| p.open_tabs().to_vec()).len(), 2);
+
+    // 当前页不在新集合里 → 落到集合第一页
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.set_right_tab(RightTab::Stats, cx);
+            p.set_open_tabs_initial(&[RightTab::Value, RightTab::ExecSql], cx);
+        })
+    });
+    assert_eq!(panel.read_with(cx, |p, _| p.right_tab), RightTab::Value);
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.open_tabs().to_vec()),
+        vec![RightTab::Value, RightTab::ExecSql]
+    );
+}
+
 /// 【右缘竖条】点当前页 = 无操作；点别页 = 切过去；面板收起时点当前页 = 重新展开。
 /// 对齐 DBeaver「点已选中页签什么都不做、整栏显隐是另一条命令」（第 25 批口径）。
 #[gpui_kit::test]

@@ -187,6 +187,14 @@ impl EditorHostPanel {
                 // 【分组页持久化】排序口径 id + 「仅重复」开关：同款先拷贝（借用不能跨到 `&mut cx`）。
                 let group_sort = settings.result_panel.group_sort.clone();
                 let group_duplicates_only = settings.result_panel.group_duplicates_only;
+                // 【右栏页签持久化】启用页 id 列表（对齐 `enabledPanelIds`）：同样先拷贝，
+                // 解析成页集合后交给面板（未知 id 被 `RightTab::parse` 丢掉）。
+                let open_tabs: Vec<result_panel::ports::RightTab> = settings
+                    .result_panel
+                    .open_tabs
+                    .split(',')
+                    .filter_map(result_panel::ports::RightTab::parse)
+                    .collect();
                 // 【工具栏配置】状态栏命令显隐（DBeaver 工具条配置的等价物）：偏好里存的是
                 // 逗号分隔 id，这里解析成命令集合；未知 id 被 `parse_hidden_list` 丢掉。
                 let hidden_status_commands = result_panel::ports::StatusCommand::parse_hidden_list(
@@ -208,6 +216,8 @@ impl EditorHostPanel {
                 panel.set_stats_items_initial(&stats_items, cx);
                 // 【分组页持久化】用户上次的分组排序口径与「仅重复」开关
                 panel.set_group_prefs_initial(&group_sort, group_duplicates_only, cx);
+                // 【右栏页签持久化】用户上次启用的页（空 / 全未知 id → 保持出厂六页全开）
+                panel.set_open_tabs_initial(&open_tabs, cx);
             }
             panel
         });

@@ -342,6 +342,27 @@ impl ResultPanel {
         &self.open_tabs
     }
 
+    /// 【右栏】注入已启用的页集合（宿主在创建后按偏好 `result_panel.open_tabs` 调用）。
+    ///
+    /// 入参按**规范序**归一：只收已知页、重复丢弃、顺序按 [`RightTab::ALL`]；
+    /// 结果为空 = 「偏好里没写过 / 被关空」→ 保持现状（出厂六页全开），对齐 DBeaver
+    /// `activateDefaultPanels:1396-1400`（先把空的 id 清掉再补默认面板，所以空集在那边
+    /// 也等于「恢复默认」）。当前页不在新集合里时落到集合第一页。
+    pub fn set_open_tabs_initial(&mut self, tabs: &[RightTab], cx: &mut Context<Self>) {
+        let normalized: Vec<RightTab> = RightTab::ALL
+            .into_iter()
+            .filter(|tab| tabs.contains(tab))
+            .collect();
+        if normalized.is_empty() || normalized == self.open_tabs {
+            return;
+        }
+        if !normalized.contains(&self.right_tab) {
+            self.right_tab = normalized[0];
+        }
+        self.open_tabs = normalized;
+        cx.notify();
+    }
+
     /// 【右栏】重新打开一页 = 登记进集合 + 置为当前页（视图菜单勾选项）。
     pub fn open_right_tab(&mut self, tab: RightTab, cx: &mut Context<Self>) {
         self.set_right_tab(tab, cx);

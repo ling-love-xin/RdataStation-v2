@@ -199,6 +199,10 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::ResultPanelGroupDuplicatesOnly => {
             SettingValue::Bool(settings.result_panel.group_duplicates_only)
         }
+        // 【右栏页签持久化】启用页 id 列表
+        Slot::ResultPanelOpenTabs => {
+            SettingValue::Text(settings.result_panel.open_tabs.clone())
+        }
         // 【类型样式】13 项枚举：落盘值 → 设置页显示
         Slot::ResultPanelNumberFormat => {
             SettingValue::Text(settings.result_panel.number_format.as_str().to_string())
@@ -412,6 +416,7 @@ impl SettingsService {
             | Slot::ResultPanelStatsItems
             | Slot::ResultPanelGroupSort
             | Slot::ResultPanelGroupDuplicatesOnly
+            | Slot::ResultPanelOpenTabs
             | Slot::ResultPanelPersistColumnWidths
             | Slot::ResultPanelNumberFormat
             | Slot::ResultPanelNullPlaceholder

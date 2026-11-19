@@ -628,6 +628,37 @@ pub enum RightTab {
     ExecSql,
 }
 
+impl RightTab {
+    /// 全部页（规范序 = 页签条 / 竖条 / 视图菜单的渲染序）。
+    pub const ALL: [RightTab; 6] = [
+        RightTab::Browser,
+        RightTab::Value,
+        RightTab::Stats,
+        RightTab::Group,
+        RightTab::Reference,
+        RightTab::ExecSql,
+    ];
+
+    /// 落盘用的稳定 id（`result_panel.open_tabs` 偏好键；对齐 DBeaver
+    /// `PresentationSettings.enabledPanelIds` 的字符串 id）。
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Browser => "browser",
+            Self::Value => "value",
+            Self::Stats => "stats",
+            Self::Group => "group",
+            Self::Reference => "reference",
+            Self::ExecSql => "execsql",
+        }
+    }
+
+    /// 解析落盘 id；未知值返回 `None`（调用方丢弃，而不是猜一个页）。
+    pub fn parse(s: &str) -> Option<Self> {
+        let normalized = s.trim().to_ascii_lowercase();
+        Self::ALL.into_iter().find(|tab| tab.id() == normalized)
+    }
+}
+
 /// 【筛选设置】浮层页签（对齐 DBeaver `FilterSettingsDialog` 的两页）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FilterSettingsTab {

@@ -78,6 +78,14 @@ pub struct ResultPanel {
     /// 该键在 plugin.xml 里没有 initializer）。
     #[serde(default)]
     pub group_duplicates_only: bool,
+    /// 【右栏页签持久化，对齐 DBeaver `PresentationSettings.enabledPanelIds`】右栏启用了哪些页，
+    /// 逗号分隔的稳定 id（`browser,value,stats,group,reference,execsql`，顺序无关——
+    /// 读的时候按规范序归一）。空串 = 「没写过」→ 出厂六页全开（DBeaver
+    /// `activateDefaultPanels:1396-1400` 同样把空集合补成默认面板）。
+    /// 未知 id 在面板侧丢弃（id ↔ 页对应见 `result_panel::ports::RightTab::id`）。
+    /// 作用域 = 全局一份（DBeaver 是随工作区/演示设置存，本仓沿用结果集偏好的全局口径）。
+    #[serde(default = "default_result_open_tabs")]
+    pub open_tabs: String,
     /// 【类型样式】数字显示格式（默认原始值；只影响渲染显示，复制／导出仍用原始值）。
     #[serde(default)]
     pub number_format: workbench_shell::result_style::NumberFormatPref,
@@ -149,6 +157,7 @@ impl Default for ResultPanel {
             stats_items: default_result_stats_items(),
             group_sort: default_result_group_sort(),
             group_duplicates_only: false,
+            open_tabs: default_result_open_tabs(),
             // 类型样式默认全继承 / 原始值（与渲染现状逐项一致）
             number_format: workbench_shell::result_style::NumberFormatPref::Raw,
             null_placeholder: workbench_shell::result_style::NullPlaceholderPref::Null,
@@ -299,4 +308,12 @@ fn default_result_stats_items() -> String {
 /// 避免「设置里的默认」与「面板里的默认」两处给出不同答案。
 fn default_result_group_sort() -> String {
     "value".to_string()
+}
+
+/// 右栏启用页的出厂值：六页全开（规范序）。
+///
+/// 对齐 DBeaver：内置面板都注册在 `availablePanels` 里，`activateDefaultPanels:1396-1400`
+/// 会把 `enabledPanelIds` 补成默认集合——本仓的默认集合就是六页全开。
+fn default_result_open_tabs() -> String {
+    "browser,value,stats,group,reference,execsql".to_string()
 }

@@ -387,6 +387,10 @@ impl EditorHostPanel {
                 let switched = self
                     .result_panel
                     .update(cx, |p, cx| p.toggle_right_tab(tab, cx));
+                // 【右栏页签持久化】竖条也能把被 × 关掉的页重新启用 → 同一次落盘
+                if switched {
+                    self.persist_result_open_tabs(cx);
+                }
                 if switched && tab == RightTab::Reference {
                     self.result_panel
                         .update(cx, |p, cx| p.begin_references_load(cx));
@@ -397,12 +401,16 @@ impl EditorHostPanel {
             ResultRequest::CloseRightTab(tab) => {
                 self.result_panel
                     .update(cx, |p, cx| p.close_right_tab(tab, cx));
+                // 【右栏页签持久化】对齐 `enabledPanelIds` 的移除语义：关一次落一次盘
+                self.persist_result_open_tabs(cx);
             }
             // 【右栏】重新打开一页（视图菜单勾选项）：与 `SetRightTab` 同口径，
             // 切到引用页时同样要触发外键读取。
             ResultRequest::OpenRightTab(tab) => {
                 self.result_panel
                     .update(cx, |p, cx| p.open_right_tab(tab, cx));
+                // 【右栏页签持久化】重开一页同样落盘（与 × 的移除共用同一份集合）
+                self.persist_result_open_tabs(cx);
                 if tab == RightTab::Reference {
                     self.result_panel
                         .update(cx, |p, cx| p.begin_references_load(cx));
@@ -617,6 +625,24 @@ impl EditorHostPanel {
     pub(crate) fn persist_result_group_duplicates_only(&mut self, cx: &mut Context<Self>) {
         let on = self.result_panel.read(cx).group_duplicates_only_value();
         settings::SettingsService::set_result_panel_group_duplicates_only(on, cx);
+    }
+
+    /// 【右栏页签持久化】把面板当前启用的页写回全局偏好
+    /// （对齐 DBeaver `ResultSetViewer.addPanel:1388` 的 `enabledPanelIds.add(id)` 与
+    /// 关闭时的移除：那边这份集合随 `PresentationSettings` 存，下次打开仍是这几页）。
+    ///
+    /// 两条改动路径（页签条行尾 × / 视图菜单勾选项）生效后各回写一次；面板已把集合
+    /// 归成规范序，宿主只负责拼成 id 串交给设置服务（同值不写盘由设置侧判定）。
+    pub(crate) fn persist_result_open_tabs(&mut self, cx: &mut Context<Self>) {
+        let ids = self
+            .result_panel
+            .read(cx)
+            .open_tabs()
+            .iter()
+            .map(|tab| tab.id())
+            .collect::<Vec<_>>()
+            .join(",");
+        settings::SettingsService::set_result_panel_open_tabs(&ids, cx);
     }
 
     /// 需要 `&mut Window` 的动作走窗口句柄转手（headless / 窗口已关时静默跳过；

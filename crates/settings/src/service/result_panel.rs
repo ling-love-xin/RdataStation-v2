@@ -419,6 +419,24 @@ pub(crate) fn apply_slot(
             }
             persist(&cx.global::<Settings>().clone());
         }
+        Slot::ResultPanelOpenTabs => {
+            // 【右栏页签持久化】同口径：只做空白折叠 / 去重空项 / 小写，不校验 id
+            // （id ↔ 页对应表在 `result_panel::ports::RightTab::id`，未知 id 面板侧丢弃）。
+            // 空串归一为出厂六页全开：对齐 DBeaver `activateDefaultPanels:1396-1400`
+            // （空集合会被补成默认面板），也避免「关空 → 下次启动页签条空白」的怪状态。
+            let Some(text) = value.as_text() else {
+                return false;
+            };
+            let mut normalized = normalize_command_list(text);
+            if normalized.is_empty() {
+                normalized = crate::model::ResultPanel::default().open_tabs;
+            }
+            {
+                let settings = cx.global_mut::<Settings>();
+                settings.result_panel.open_tabs = normalized;
+            }
+            persist(&cx.global::<Settings>().clone());
+        }
         _ => return false,
     }
     true
@@ -516,6 +534,24 @@ impl crate::service::SettingsService {
         {
             let settings = cx.global_mut::<Settings>();
             settings.result_panel.group_duplicates_only = on;
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
+    /// 【右栏页签持久化】写启用的页 id 列表（页签条 × / 视图菜单勾选项生效后由宿主落盘）。
+    ///
+    /// 与现值相同则不写盘；空列表归一为出厂六页全开（见 `apply_slot` 同名分支）。
+    pub fn set_result_panel_open_tabs(list: &str, cx: &mut App) {
+        let mut normalized = normalize_command_list(list);
+        if normalized.is_empty() {
+            normalized = crate::model::ResultPanel::default().open_tabs;
+        }
+        if cx.global::<Settings>().result_panel.open_tabs == normalized {
+            return;
+        }
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.result_panel.open_tabs = normalized;
         }
         persist(&cx.global::<Settings>().clone());
     }

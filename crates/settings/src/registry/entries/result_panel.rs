@@ -275,6 +275,32 @@ pub fn entries() -> Vec<SettingSpec> {
             disabled: false,
         },
         SettingSpec {
+            // 【右栏页签持久化，对齐 DBeaver `PresentationSettings.enabledPanelIds`】
+            // 那边每开一个面板就 `enabledPanelIds.add(id)`（`ResultSetViewer.addPanel:1388`），
+            // 关掉则移除；写入口 = 页签条行尾 × 与视图菜单的页项勾选。
+            key: "result_panel.open_tabs",
+            section: "result_panel",
+            section_label: "结果集面板",
+            group: "interaction",
+            group_label: Some("选择与操作"),
+            label: "右栏启用的页",
+            hint: "右栏页签条上启用了哪些页，逗号分隔 id（出厂六页全开 \
+                 `browser,value,stats,group,reference,execsql`）。\
+                 页签条行尾 × 关一页、视图菜单勾一项改的都是这份状态；\
+                 顺序无关（读的时候按规范序归一），未知 id 被忽略，\
+                 空串按出厂处理（对齐 DBeaver `activateDefaultPanels` 把空集合补成默认）",
+            hint_inline: true,
+            kind: SettingKind::Text,
+            presets: &[],
+            default_json: "\"browser,value,stats,group,reference,execsql\"",
+            effect: SettingEffect::NextUse,
+            entry: SettingEntry::Page,
+            consumer: "crates/editor/src/view/host/construct.rs（面板创建时注入已启用集合）\
+                      / crates/editor/src/view/host/results/dispatch.rs（关闭 / 重开一页后写回）",
+            composite: false,
+            disabled: false,
+        },
+        SettingSpec {
             // 【DBeaver 工具条配置】状态栏命令的显隐：DBeaver 每条结果集底部命令都挂
             // `toolbar.configuration.visible` 的 `visibleWhen`（`plugin.xml:1381-1397`），
             // 隐藏的命令随时能勾回来。本仓的写入口 = 状态行末端 ▾ 菜单（点一次落一次盘），
