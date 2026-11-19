@@ -23,8 +23,9 @@ use gpui_kit::*;
 
 use super::data::ResultPanel;
 use super::events::{
-    edge_tab_tooltip, presentation_tooltip, record_view_tooltip, right_tab_description,
-    right_tab_icon, right_tab_label, right_tabs, strip_index, tab_at_strip_index,
+    edge_tab_active, edge_tab_tooltip, presentation_tooltip, record_view_tooltip,
+    right_tab_description, right_tab_icon, right_tab_label, right_tabs, strip_index,
+    tab_at_strip_index,
 };
 use super::tabs::kv_row;
 use crate::ports::{Presentation, ResultRequest, RightTab};
@@ -648,7 +649,6 @@ impl ResultPanel {
         let queue = self.queue.clone();
         let layout_queue = self.queue.clone();
         let master_queue = self.queue.clone();
-        let active = self.right_tab;
         let panels_visible = self.panels_visible();
         div()
             .h_full()
@@ -689,21 +689,21 @@ impl ResultPanel {
             )
             .children(tabs.into_iter().map(|tab| {
                 let queue = queue.clone();
-                // 【竖条语义】DBeaver 竖条上每页是一颗 CHECK（`ResultSetViewer.java:1055-1080`），
-                // 勾选态 = 「面板可见且是这一页」。点已勾选的那颗 = 无操作（整栏显隐只走
-                // 顶部总开关 `showPanels`，`ResultSetHandlerTogglePanel:64-81` 关的是**那一页**
-                // 而不是整栏，而本仓页签条已能逐页 ×，见 §9.08）；
-                // 点未勾选的那颗 = 切到该页（该页被关掉过则先重新启用）。
+                // 【竖条语义】DBeaver 竖条上每页是一颗 CHECK（`ResultSetViewer.java:1055-1080`）：
+                // 勾选态 = `panelsVisible && isPanelVisible(id)`（多页可同时勾亮）；
+                // 点击 → `showResultsPanel(id, 勾选态)`（`:1070-1078`）→
+                // 勾着 → `closePanel(id)`（关掉这一页）；没勾 → `activatePanel(id, true, true)`
+                // （打开并激活，整栏收起时顺带展开）。
                 let is_open = self.open_tabs.contains(&tab);
-                let is_current = panels_visible && active == tab;
+                let lit = edge_tab_active(panels_visible, is_open);
                 let target = ResultRequest::ToggleRightTab(tab);
                 Button::new(format!("editor-result-edge-{:?}", tab))
                     .ghost()
                     .small()
                     .debug_selector(|| format!("editor-result-edge-{:?}", tab))
-                    .toggled(is_current)
+                    .toggled(lit)
                     .icon(right_tab_icon(tab))
-                    .tooltip(edge_tab_tooltip(tab, is_open, is_current))
+                    .tooltip(edge_tab_tooltip(tab, is_open, panels_visible))
                     .on_click(move |_, _window, app| {
                         queue.request(target.clone(), app);
                     })

@@ -379,16 +379,21 @@ impl EditorHostPanel {
                         .update(cx, |p, cx| p.begin_references_load(cx));
                 }
             }
-            // 【右栏】面板开关语义（右缘竖条图标 / 视图菜单面板项）：该页已显示就收起整块面板，
-            // 否则切到该页。对齐 DBeaver `ResultSetHandlerTogglePanel`（`CMD_TOGGLE_PANEL`）。
+            // 【右栏】面板开/关语义（右缘竖条图标 / 视图菜单页项）：该页**开着且整栏可见**就
+            // 关掉这一页，否则打开并切到该页。对齐 DBeaver `ResultSetHandlerTogglePanel`
+            // （`CMD_TOGGLE_PANEL` → `toggleResultsPanel:64-69` → `closePanel` / `activatePanel`）。
             // 面板状态本身与 `SetRightTab` 同口径（纯面板状态，宿主只转发）；
             // 只有「真的切到了引用页」才需要读外键，与 `SetRightTab` 分支同一条刷新路径。
             ResultRequest::ToggleRightTab(tab) => {
+                // toggle 是「开/关该页」（`ResultSetHandlerTogglePanel:64-81`）：关掉一页同样改
+                // `open_tabs`，所以要按集合变化落盘，不能只看「是否切到了该页」。
+                let before = self.result_panel.read(cx).open_tabs().to_vec();
                 let switched = self
                     .result_panel
                     .update(cx, |p, cx| p.toggle_right_tab(tab, cx));
-                // 【右栏页签持久化】竖条也能把被 × 关掉的页重新启用 → 同一次落盘
-                if switched {
+                let changed = self.result_panel.read(cx).open_tabs() != before.as_slice();
+                // 【右栏页签持久化】竖条也能关掉 / 重新启用某页 → 同一次落盘
+                if switched || changed {
                     self.persist_result_open_tabs(cx);
                 }
                 if switched && tab == RightTab::Reference {

@@ -763,12 +763,18 @@ impl ResultPanel {
                         }
                         PanelViewItem::Page(tab) => {
                             let queue = queue.clone();
-                            // 【勾选态 = 已启用】对齐 DBeaver `fillPanelsMenu:1559-1588`：
-                            // 每页是 `STYLE_CHECK` 的 `CMD_TOGGLE_PANEL`，勾 = 该页在
-                            // `enabledPanelIds` 里。未勾 → 打开并切过去；已勾 → 切到下该页。
+                            // 【勾选态 = 已启用 / 点击 = 开或关】对齐 DBeaver
+                            // `fillPanelsMenu:1559-1588` + `ResultSetHandlerTogglePanel`：
+                            // 每页是 `STYLE_CHECK` 的 `CMD_TOGGLE_PANEL`，勾 =
+                            // `isPanelVisible(id)`（`updateElement:99`）；点击走
+                            // `toggleResultsPanel:64-69` → 「已可见 → `closePanel`（关掉该页）；
+                            // 其余 → `activatePanel(id,true,true)`（打开并切过去）」。
+                            // 所以「已启用且整栏可见」= 关闭，其余一律 = 打开。
                             let is_open = open_tabs.contains(&tab);
-                            let target = if is_open {
-                                ResultRequest::SetRightTab(tab)
+                            // 判定抽成纯函数（`PopupMenu` 内部不可读，菜单用例只能钉纯函数）
+                            let closes = super::events::page_item_closes(panels_visible, is_open);
+                            let target = if closes {
+                                ResultRequest::CloseRightTab(tab)
                             } else {
                                 ResultRequest::OpenRightTab(tab)
                             };

@@ -404,16 +404,18 @@ impl ResultPanel {
     /// 返回 `true` = 本次**切到了该页**（调用方要像切页签那样触发刷新，如引用页取外键）；
     /// 返回 `false` = 已经停在这一页（无操作，不需要刷新）。
     pub fn toggle_right_tab(&mut self, tab: RightTab, cx: &mut Context<Self>) -> bool {
-        // 已被关掉的页：先启用（页签条里看不到它，但右缘竖条仍可达）
-        if !self.open_tabs.contains(&tab) {
-            self.set_right_tab(tab, cx);
-            return true;
-        }
-        // 已选中且面板可见：DBeaver 点已选中页签什么都不做（选中不变、不收起）
-        if tab == self.right_tab && self.panels_visible() {
+        // 【toggle 语义】对齐 `ResultSetHandlerTogglePanel`：`toggleResultsPanel:64-69` 先算
+        // `isVisible = isPanelsVisible() && isPanelVisible(id)`，再 `showResultsPanel(id, isVisible)`
+        // ——`showResultsPanel:71-81` 是「可见 → `closePanel(id)`（关掉这一页）；不可见 →
+        // `activatePanel(id, true, true)`（打开并激活，整栏收起时顺带展开）」。
+        // 所以这一层就是「开/关该页」，不是「切页 / 无操作」：
+        // - 已启用且整栏可见 → 关掉这一页（其余页仍在，`closePanel→removePanel:1441-1451`）；
+        // - 其余（已启用但整栏收起 / 已启用但当前不是它 / 被关掉过）→ 打开并切到该页。
+        let visible = self.panels_visible() && self.open_tabs.contains(&tab);
+        if visible {
+            self.close_right_tab(tab, cx);
             return false;
         }
-        // 面板收起时点同一页 = 重新展开到该页（`set_right_tab` 内含展开）
         self.set_right_tab(tab, cx);
         true
     }
@@ -2086,25 +2088,43 @@ pub(crate) fn record_view_tooltip(active: bool) -> String {
     }
 }
 
+/// 【右缘竖条】某一页图标的勾选态 = 「整栏可见且该页已启用」。
+///
+/// 对齐 `ResultSetViewer.java:1079`：`panelButton.setChecked(panelsVisible && isPanelVisible(panel.getId()))`
+/// ——竖条按钮是 `SWT.CHECK`，**多页可同时勾亮**（勾的是「这页开着」，不是「这页是当前页」）。
+pub(crate) fn edge_tab_active(panels_visible: bool, is_open: bool) -> bool {
+    panels_visible && is_open
+}
+
+/// 【视图菜单】勾选中的页项被点击时，是「关闭该页」还是「打开并切过去」。
+///
+/// 对齐 `ResultSetHandlerTogglePanel.toggleResultsPanel:64-69` 的
+/// `isVisible = isPanelsVisible() && isPanelVisible(id)`：真 → `closePanel`，假 →
+/// `activatePanel(id, true, true)`。菜单项勾选态是 `isPanelVisible(id)`（`updateElement:99`，
+/// 不含整栏可见），所以「勾着但整栏收起」时点它仍是打开（顺带展开），不是关闭。
+pub(crate) fn page_item_closes(panels_visible: bool, is_open: bool) -> bool {
+    panels_visible && is_open
+}
+
 /// 【右缘竖条】某一页图标的提示文案。
 ///
 /// 对齐 `ResultSetViewer.java:1055-1080`：竖条按钮 `setToolTipText(panel.getLabel())`，
 /// 取得到命令描述时拼成 `label + " (" + toolTip + ")"`——即**页名 + 命令/面板描述**，
 /// 而不是只有页名。本仓页签条已经用描述（`right_tab_description`），竖条这里同样拼起来。
 ///
-/// 三态（第 25 批起不再有「收起整栏」这一态，见 `toggle_right_tab`）：
-/// - 当前页（面板可见且就是它）→ 报「当前页」；
-/// - 已启用但没在显示 → 报「切到这一页」；
-/// - 已关闭（不在 `open_tabs` 里）→ 报「已关闭，点一下重新打开」。
-pub(crate) fn edge_tab_tooltip(tab: RightTab, is_open: bool, is_current: bool) -> String {
+/// 三态（对齐 `toggleResultsPanel:64-69` 的 `isPanelVisible = isPanelsVisible() && isPanelVisible(id)`）：
+/// - 已启用且整栏可见（点一下会 `closePanel`）→ 报「点一下关闭这一页」；
+/// - 已启用但整栏收起（点一下会 `activatePanel`，顺带展开）→ 报「展开并切到这一页」；
+/// - 已关闭（不在 `open_tabs` 里，点一下会重新启用）→ 报「已关闭，点一下打开」。
+pub(crate) fn edge_tab_tooltip(tab: RightTab, is_open: bool, panels_visible: bool) -> String {
     let base = format!("{}（{}）", right_tab_label(tab), right_tab_description(tab));
     if !is_open {
-        return format!("{base} — 此页已关闭，点一下重新打开");
+        return format!("{base} — 此页已关闭，点一下打开");
     }
-    if is_current {
-        return format!("{base} — 当前页");
+    if panels_visible {
+        return format!("{base} — 点一下关闭这一页");
     }
-    format!("{base} — 点一下切到这一页")
+    format!("{base} — 点一下展开并切到这一页")
 }
 
 /// 「视图菜单」条目文案（动态条目按当前状态报动作，而不是报状态：
