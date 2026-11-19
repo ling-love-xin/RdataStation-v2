@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>代理隧道管理 · 新增数据源原型 · RdataStation</title>
+<link rel="stylesheet" href="_theme.css">
+<script src="_theme.js"></script>
+<style>
+  .hop-node{border:1.5px solid var(--border);border-radius:9px;padding:6px 11px;font-size:11.5px;text-align:center;min-width:118px;background:var(--bg);position:relative;}
+  .hop-node .hn-kind{font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;}
+  .hop-node .hn-addr{font-family:ui-monospace,Consolas,monospace;font-size:11px;margin-top:1px;}
+  .hop-node.st-ok{border-color:color-mix(in srgb,var(--success) 55%,transparent);}
+  .hop-node.st-err{border-color:var(--danger);background:var(--danger-bg);}
+  .hop-node.st-err .hn-addr{color:var(--danger);font-weight:700;}
+  .hop-node.st-idle{opacity:.55;}
+  .hop-wire{flex:1;min-width:26px;height:0;border-top:2px solid var(--input-border);position:relative;display:flex;align-items:center;justify-content:center;}
+  .hop-wire.ok{border-color:var(--success);}
+  .hop-wire.err{border-top-style:dashed;border-color:var(--danger);}
+  .hop-wire .lat{position:absolute;top:-18px;font-size:9.5px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap;}
+  .hop-wire .drill{position:absolute;top:-7px;right:-6px;width:9px;height:9px;border-radius:50%;border:2px solid var(--bg);background:var(--warning);}
+  .tnl-row{border:1px solid var(--border);border-radius:11px;padding:12px 14px;margin-bottom:11px;background:var(--bg);}
+  .tnl-head{display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;}
+  .tnl-head .t-name{font-size:13px;font-weight:700;}
+  .tnl-flow{display:flex;align-items:center;margin:2px 0 8px;}
+  .res-card{border:1px solid var(--border);border-radius:11px;padding:11px 13px;background:var(--bg);}
+  .res-card .r-head{display:flex;align-items:center;gap:9px;margin-bottom:7px;flex-wrap:wrap;}
+  .res-card .r-name{font-size:13px;font-weight:700;}
+  .res-card .r-rows{font-size:11.5px;line-height:1.8;}
+  .res-card .r-rows .lbl{color:var(--muted);display:inline-block;min-width:58px;}
+  .res-card .r-acts{display:flex;gap:5px;align-items:center;}
+  .chain-card{border:1px solid var(--border);border-radius:11px;padding:11px 14px;margin-bottom:9px;background:var(--bg);}
+  .chain-hop{display:flex;align-items:center;gap:10px;border:1.5px solid var(--border);border-radius:10px;padding:8px 12px;margin-bottom:8px;background:var(--bg);position:relative;}
+  .chain-hop .ch-idx{position:absolute;left:-9px;top:-9px;width:19px;height:19px;border-radius:50%;background:var(--primary);color:var(--primary-fg);font-size:10.5px;font-weight:700;display:flex;align-items:center;justify-content:center;}
+  .chain-hop .ch-grip{color:var(--muted);cursor:grab;font-size:13px;line-height:1;}
+  .diag-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:9px;}
+  .ddl{font-family:ui-monospace,Consolas,monospace;font-size:10.5px;background:var(--group-box);border:1px solid var(--border);border-radius:8px;padding:9px 12px;line-height:1.7;overflow-x:auto;white-space:pre;color:var(--fg);}
+  .ddl b{color:var(--cyan);font-weight:700;}
+  .ddl i{color:var(--muted);font-style:normal;}
+  /* 编辑视图（新增/编辑共用） */
+  .edit-bar{display:flex;align-items:center;gap:10px;padding:10px 14px;border:1px solid var(--border);border-radius:10px;background:var(--group-box);margin-bottom:13px;}
+  .edit-bar .eb-title{font-size:13px;font-weight:700;}
+  .edit-bar .eb-crumb{color:var(--muted);font-size:11.5px;}
+  .edit-foot{display:flex;align-items:center;gap:10px;margin-top:14px;padding-top:13px;border-top:1px solid var(--sidebar-border);}
+  .edit-foot .ef-err{color:var(--danger);font-size:11.5px;}
+  /* 删除确认弹层（两态） */
+  .modal-mask{position:fixed;inset:0;background:rgba(10,10,14,.45);display:flex;align-items:center;justify-content:center;z-index:50;padding:20px;}
+  .modal{width:430px;max-width:100%;border:1px solid var(--border);border-radius:12px;background:var(--bg);box-shadow:var(--shadow);overflow:hidden;}
+  .modal .m-head{display:flex;align-items:center;gap:9px;padding:13px 16px;border-bottom:1px solid var(--sidebar-border);font-size:13px;font-weight:700;}
+  .modal .m-body{padding:14px 16px;font-size:12px;line-height:1.8;}
+  .modal .m-body .ref-list{border:1px solid var(--border);border-radius:8px;margin-top:8px;padding:8px 11px;font-size:11.5px;background:var(--group-box);}
+  .modal .m-foot{display:flex;justify-content:flex-end;gap:9px;padding:12px 16px;border-top:1px solid var(--sidebar-border);}
+</style>
+</head>
+<body>
+
+<header class="page-head">
+  <div class="brand">
+    <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><path d="M4 19V5"/><path d="M4 5h11l-2.5 3.5L15 12H4"/></svg></div>
+    <div>
+      <h1>🛰️ 代理隧道管理 · 资源 / 链 两层模型</h1>
+      <div class="sub">manager-network · 列表 ⇄ 编辑视图 + 删除确认（对齐实现形态：覆盖层 CRUD）—— CRUD 流 <span class="st st-key">本轮补全</span></div>
+    </div>
+  </div>
+  <div class="head-actions">
+    <a class="back-link" href="index.html">← 总览</a>
+    <button class="theme-toggle" data-theme-toggle>🌙 暗色</button>
+  </div>
+</header>
+
+<div style="max-width:1080px;margin:0 auto 14px;" class="note info">
+  <b>两层模型</b>：<b>网络资源 = 最小单位</b>（SSH 跳板 / HTTP 代理 / SOCKS / SSL 材料），凭据引用 <a href="manager-auth.html">认证档案</a>；<b>协议链 = 组合</b>（资源引用序列）。本页含完整增删改流：<b>① 列表 → ② 新建/编辑（视图切换）→ ③ 删除确认（被引用即拦截）</b>；点列表卡片上的按钮实际走一遍。
+</div>
+
+<div style="max-width:1080px;margin:0 auto;" class="card">
+  <div class="tabs" data-tabs style="padding:0 14px;">
+    <button class="tab on" data-tab="res">① 网络资源</button>
+    <button class="tab" data-tab="chain">② 协议链</button>
+    <button class="tab" data-tab="live">③ 活动隧道</button>
+    <button class="tab" data-tab="diag">④ 逐跳诊断</button>
+    <button class="tab" data-tab="model">⑤ 数据模型与迁移</button>
+  </div>
+
+  <!-- ============ Tab1 网络资源：列表 ⇄ 编辑 ============ -->
+  <div data-panel="res" class="card-body">
+
+    <!-- ── 列表视图 ── -->
+    <div id="res-list">
+      <div style="display:flex;gap:9px;margin-bottom:12px;align-items:center;flex-wrap:wrap;">
+        <input class="inp" style="width:200px" placeholder="搜索资源名 / 主机…">
+        <div class="seg"><button class="on">全部</button><button>SSH</button><button>HTTP</button><button>SOCKS</button><button>SSL</button><button>未引用</button></div>
+        <span class="f-help">「未引用」= ssh config 批量导入后的清理视图（可安全删除项）</span>
+        <button class="btn sm" onclick="importSsh()">导入 ~/.ssh/config…</button>
+        <button class="btn primary sm" style="margin-left:auto" onclick="openResEditor('new')">＋ 新建资源</button>
+      </div>
+
+      <details class="fold">
+        <summary>导入 ~/.ssh/config（提案 · DBeaver 长期不读它——社区最高频请求之一，RDS 反向做）</summary>
+        <div class="fold-body">
+          <div class="f-row" style="margin-bottom:6px;">
+            <input class="inp mono" style="flex:1" value="C:\Users\sling\.ssh\config" disabled>
+            <button class="btn sm">解析预览…</button>
+          </div>
+          <dl class="kv">
+            <dt>映射规则</dt><dd>Host 别名 → 资源名；HostName / Port / User → 基础字段；IdentityFile → 生成 <code>ssh_key</code> auth 档案（静态拷贝，档案标来源 <code>ssh-config</code>）；ProxyJump 条目 → 展开为链（跳序按 Jump 链）</dd>
+            <dt>冲突</dt><dd>与既有资源同 <code>kind+host:port</code> → 逐条「复用 / 新建」选择（同重复检测口径）</dd>
+            <dt>引用型</dt><dd>「资源运行时读 config、config 改自动跟随」挂 <span class="st st-no">观察</span>——涉及 config 变更失效语义与指纹联动，第一版只做导入</dd>
+          </dl>
+        </div>
+      </details>
+
+      <div class="grid c2" style="margin-top:12px;">
+        <div class="res-card">
+          <div class="r-head"><span style="font-size:15px">🖥</span><span class="r-name">跳板机 A（bastion-a）</span><span class="chip">ssh</span>
+            <span class="r-acts" style="margin-left:auto;"><span class="dot ok" title="最近测试通过"></span><button class="btn sm">单跳测试</button><button class="btn sm" onclick="openResEditor('edit')">编辑</button><button class="btn sm danger" onclick="askDelete('res','跳板机 A（bastion-a）')">删除</button></span>
+          </div>
+          <div class="r-rows">
+            <span class="lbl">端点</span><span class="mono">bastion-a.internal:22</span><br>
+            <span class="lbl">认证</span>引用 <a href="manager-auth.html">「生产跳板机 SSH」</a>（tunnel_svc · ssh_key）<br>
+            <span class="lbl">主机密钥</span>TOFU · 已记录指纹 <span class="chip ok">Matched</span><br>
+            <span class="lbl">转发</span><span class="mono">-L · 继承连接目标 · 自动端口</span> <span class="chip info">-D 可选</span><br>
+            <span class="lbl">keepalive</span>30s（防 NAT 断连 <span class="st st-prop">提案</span>）<br>
+            <span class="lbl">被引用</span>直引 0 连接 · 经链 2 条（生产跳板链 · 备用链）
+          </div>
+        </div>
+
+        <div class="res-card">
+          <div class="r-head"><span style="font-size:15px">🧱</span><span class="r-name">公司代理（proxy-corp）</span><span class="chip">http</span>
+            <span class="r-acts" style="margin-left:auto;"><span class="dot ok"></span><button class="btn sm">单跳测试</button><button class="btn sm" onclick="openResEditor('edit')">编辑</button><button class="btn sm danger" onclick="askDelete('res','公司代理（proxy-corp）')">删除</button></span>
+          </div>
+          <div class="r-rows">
+            <span class="lbl">端点</span><span class="mono">proxy-corp:8080</span><br>
+            <span class="lbl">认证</span>引用 <a href="manager-auth.html">「公司代理认证」</a>（proxy_pwd · Basic）<br>
+            <span class="lbl">方案</span>CONNECT 隧道 · Basic（NTLM / Kerberos-Negotiate 见编辑器 <span class="st st-prop">提案</span>）<br>
+            <span class="lbl">被引用</span>直引 1 连接 · 经链 1 条
+          </div>
+        </div>
+
+        <div class="res-card">
+          <div class="r-head"><span style="font-size:15px">🧦</span><span class="r-name">只读库 SOCKS 网关</span><span class="chip">socks</span>
+            <span class="r-acts" style="margin-left:auto;"><span class="dot idle"></span><button class="btn sm">单跳测试</button><button class="btn sm" onclick="openResEditor('edit')">编辑</button><button class="btn sm danger" onclick="askDelete('res','只读库 SOCKS 网关',true)">删除</button></span>
+          </div>
+          <div class="r-rows">
+            <span class="lbl">端点</span><span class="mono">socks-gw.internal:1080</span><br>
+            <span class="lbl">认证</span>无（匿名）<br>
+            <span class="lbl">版本</span>SOCKS5（远程 DNS 解析，对齐 ssh -D 语义）<br>
+            <span class="lbl">被引用</span>未引用（可直接删除——点删除走普通确认）
+          </div>
+        </div>
+
+        <div class="res-card" style="border-style:dashed">
+          <div class="r-head"><span style="font-size:15px">🔐</span><span class="r-name">TLS 材料集（kind=ssl）</span><span class="chip">ssl</span>
+            <span class="r-acts" style="margin-left:auto;"><span class="st st-no">归属待拍板</span></span>
+          </div>
+          <div class="r-rows">
+            现状 TLS 材料两处有影子：连接内联 SSL 卡（CA / 客户端证书）+ auth_configs 的 keyPath/certPath 字段。<br>
+            <b>提案</b>：可复用材料集（CA 捆绑 / 证书对）作为 ssl 资源，凭据口令引用 auth 档案；连接内联卡 = 私有覆盖（优先级：资源 &gt; 内联）。<span class="f-help">避免第三处影子。</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 编辑视图（新建 / 编辑共用） ── -->
+    <div id="res-edit" class="hidden">
+      <div class="edit-bar">
+        <button class="btn sm" onclick="closeResEditor()">← 返回资源列表</button>
+        <span class="eb-title" id="res-edit-title">编辑资源：跳板机 A</span>
+        <span class="eb-crumb" id="res-edit-mode">编辑模式 · 必填校验在保存时触发（缺项标红 + 首个缺项说明）</span>
+      </div>
+
+      <div class="sec"><h3>基础</h3><span class="hint">kind 切换后下方分区字段集随之变化（HTTP / SOCKS / SSL 各有专属表单）</span></div>
+      <div class="f-row"><span class="f-label req">资源名</span><input class="inp" id="f-name" style="width:200px" value="跳板机 A">
+        <span class="f-label">类型</span>
+        <div class="seg" id="kind-seg">
+          <button class="on" data-kind="ssh">SSH</button><button data-kind="http">HTTP</button><button data-kind="socks">SOCKS</button><button data-kind="ssl">SSL</button>
+        </div>
+      </div>
+      <div class="f-row"><span class="f-label req">主机</span><input class="inp mono" id="f-host" style="width:200px" value="bastion-a.internal">
+        <span class="f-label" style="min-width:28px">端口</span><input class="inp" style="width:64px" value="22">
+      </div>
+
+      <div class="sec" style="margin-top:14px;"><h3>认证</h3><span class="hint">凭据不落在资源上——只持有引用（与密码管理的交互点）</span></div>
+      <div class="f-row"><span class="f-label">认证档案</span>
+        <select class="inp" style="min-width:250px"><option>「生产跳板机 SSH」（ssh_key · tunnel_svc · ~/.ssh/id_ed25519）</option><option>「跳板密码档案」（password）</option><option>「Agent 签发」（ssh_agent · 首选系统 Agent）</option><option>无认证</option></select>
+        <a class="btn ghost sm" href="manager-auth.html">管理凭据档案 →</a>
+      </div>
+      <div class="f-row"><span class="f-label">Agent 集成</span>
+        <span class="st st-prop">提案</span>
+        <span class="f-help"><code>ssh_agent</code> 档案类型：Windows OpenSSH Agent（命名管道 <code>\\.\pipe\openssh-ssh-agent</code>）/ Pageant —— <b>私钥不落 RDS 库</b>，档案只存 agent 来源 + 用户名，凭据面缩小（对齐 DBeaver 认证方法列表的 Agent 选项）</span>
+      </div>
+      <div class="f-row" id="hostkey-row"><span class="f-label">主机密钥</span>
+        <select class="inp"><option>TOFU（首次信任并记录）</option><option>严格校验（未知即拒）</option><option>允许未知（不落盘）</option></select>
+        <span class="chip ok">指纹 SHA256:eX9f… 已记录</span>
+        <button class="btn sm">指纹历史 / 变更告警</button>
+      </div>
+
+      <details class="fold" id="fwd-fold" style="margin-top:12px;">
+        <summary>转发（Forwarding）<span class="st st-key">核心</span>—— 对齐 ssh -L / -D（新建时收起 · 编辑既有资源展开）</summary>
+        <div class="fold-body">
+          <div class="f-row"><span class="f-label req">转发类型</span>
+            <div class="seg"><button class="on">本地端口转发（-L）</button><button>动态转发（-D · SOCKS）</button><button>不转发（仅测试连通）</button></div>
+          </div>
+          <div class="f-row"><span class="f-label">转发目标</span>
+            <div class="seg"><button class="on">继承连接地址</button><button>固定目标</button></div>
+            <span class="f-help">继承 = 跳板转发的就是各连接自己的目标库（数据库工具主场景）；固定 = 跳板后端点写死</span>
+          </div>
+          <div class="f-row"><span class="f-label">固定目标</span>
+            <input class="inp mono" style="width:180px" placeholder="db-internal.host" disabled>
+            <input class="inp" style="width:64px" placeholder="3306" disabled>
+            <span class="f-help">仅「固定目标」模式可编辑</span>
+          </div>
+          <div class="f-row"><span class="f-label">本地绑定</span>
+            <select class="inp"><option>127.0.0.1（默认 · 仅本机）</option><option>0.0.0.0（暴露到网络 ⚠ 需确认）</option></select>
+            <span class="f-label" style="min-width:auto">本地端口</span>
+            <div class="seg"><button class="on">自动分配 49152–65535</button><button>手动指定</button></div>
+            <input class="inp" style="width:70px" placeholder="自动" disabled>
+          </div>
+          <div class="note info" style="margin-top:7px;">一条连接 = 资源上一个<b>转发会话</b>（-L 继承目标时逐连接一条；固定目标可共享）；活动隧道页「转发会话 N」即来源于此。-D = 本资源提供本地 SOCKS5 出口，等效内置 SOCKS 资源（<span class="st st-prop">修订</span>：原挂「不做」，2026-11-10 评审纳入）。-R 维持不做。</div>
+        </div>
+      </details>
+
+      <details class="fold" id="adv-fold">
+        <summary>高级 —— keepalive / 压缩 / 算法（新建时收起且全默认）</summary>
+        <div class="fold-body">
+          <div class="f-row"><span class="f-label">keepalive</span>
+            <input class="inp" style="width:52px" value="30"> 秒 ×
+            <input class="inp" style="width:44px" value="3"> 次无响应判死
+            <span class="f-label" style="min-width:auto">连接超时</span><input class="inp" style="width:52px" value="10"> 秒
+            <span class="f-help">对齐 ServerAliveInterval / CountMax——防 NAT 断连（活动隧道「重连」的来源）</span>
+          </div>
+          <div class="f-row"><span class="f-label">压缩</span>
+            <label class="switch"><input type="checkbox"><span class="track"></span>zlib（低带宽跳板开启）</label>
+            <span class="f-label" style="min-width:auto">算法偏好</span>
+            <select class="inp"><option>协商默认（cipher / mac / kex 自动）</option><option>偏好列表…（合规环境指定算法）</option></select>
+          </div>
+        </div>
+      </details>
+
+      <div class="edit-foot">
+        <button class="btn" onclick="closeResEditor()">取消</button>
+        <button class="btn primary" onclick="saveRes()">保存资源</button>
+        <span class="ef-err" id="res-save-err"></span>
+        <span class="f-help" style="margin-left:auto"><b>新建最小化分层</b>：新建只展开「基础 + 认证」，必填 = 名称 / 主机 / 端口 / 认证（对齐 DBeaver「一屏 4 字段即可通」）</span>
+      </div>
+
+      <div class="note warn" style="margin-top:10px;"><b>保存时校验</b>（演示：清空资源名或主机再点保存）：① 必填缺失 → 行内标红 + 首个缺项说明（<code>save_blocker</code> 同款纯函数风格）；② 重复检测：按 <code>kind + host:port</code> 查既有资源，命中提示「已存在『跳板机 A』bastion-a.internal:22，是否改为引用？」</div>
+    </div>
+  </div>
+
+  <!-- ============ Tab2 协议链：列表 ⇄ 编辑 ============ -->
+  <div data-panel="chain" class="card-body hidden">
+
+    <!-- ── 链列表视图 ── -->
+    <div id="chain-list">
+      <div style="display:flex;gap:9px;margin-bottom:12px;align-items:center;">
+        <span class="f-help">链 = 资源的有序引用序列（不内嵌主机/凭据）；资源改动全链生效</span>
+        <button class="btn primary sm" style="margin-left:auto" onclick="openChainEditor('new')">＋ 新建链</button>
+      </div>
+
+      <div class="chain-card">
+        <div class="r-head" style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;">
+          <span style="font-size:14px">⛓</span><b style="font-size:13px;">生产跳板链</b>
+          <span class="f-help">🖥 跳板机 A → 🧱 公司代理</span>
+          <span class="chip info">被 3 条连接引用</span>
+          <span style="margin-left:auto;display:flex;gap:5px;"><button class="btn sm" onclick="openChainEditor('edit')">编辑</button><button class="btn sm danger" onclick="askDelete('chain','生产跳板链')">删除</button></span>
+        </div>
+      </div>
+      <div class="chain-card">
+        <div class="r-head" style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;">
+          <span style="font-size:14px">⛓</span><b style="font-size:13px;">备用链（仅跳板）</b>
+          <span class="f-help">🖥 跳板机 A</span>
+          <span class="chip">未引用</span>
+          <span style="margin-left:auto;display:flex;gap:5px;"><button class="btn sm" onclick="openChainEditor('edit')">编辑</button><button class="btn sm danger" onclick="askDelete('chain','备用链（仅跳板）',true)">删除</button></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 链编辑视图 ── -->
+    <div id="chain-edit" class="hidden">
+      <div class="edit-bar">
+        <button class="btn sm" onclick="closeChainEditor()">← 返回链列表</button>
+        <span class="eb-title" id="chain-edit-title">编辑链：生产跳板链</span>
+        <span class="eb-crumb">跳 = 资源引用（拖拽 / ↑↓ 排序；删除只是移出链，不动资源本身）</span>
+      </div>
+
+      <div class="f-row"><span class="f-label req">链名</span><input class="inp" style="width:190px" value="生产跳板链">
+        <span class="f-help">被 3 条连接引用 · 删除链将被拦截（见列表删除确认）</span>
+      </div>
+
+      <div class="chain-hop"><span class="ch-idx">1</span><span class="ch-grip">⠿</span>
+        <span style="font-size:15px">🖥</span>
+        <div style="flex:1;display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:11.5px;">
+          <b>跳板机 A</b><span class="chip">ssh</span><span class="mono">bastion-a.internal:22</span>
+          <span style="color:var(--muted)">凭据：引用「生产跳板机 SSH」档案</span>
+          <span class="chip ok">TOFU Matched</span>
+        </div>
+        <div style="display:flex;gap:5px;"><button class="btn sm">↑</button><button class="btn sm">↓</button><button class="btn sm danger">✕</button></div>
+      </div>
+      <div class="chain-hop"><span class="ch-idx">2</span><span class="ch-grip">⠿</span>
+        <span style="font-size:15px">🧱</span>
+        <div style="flex:1;display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:11.5px;">
+          <b>公司代理</b><span class="chip">http</span><span class="mono">proxy-corp:8080</span>
+          <span style="color:var(--muted)">凭据：引用「公司代理认证」档案</span>
+          <span class="chip ok">Basic</span>
+        </div>
+        <div style="display:flex;gap:5px;"><button class="btn sm">↑</button><button class="btn sm">↓</button><button class="btn sm danger">✕</button></div>
+      </div>
+      <div style="border:1.5px dashed var(--input-border);border-radius:10px;padding:9px;color:var(--muted);font-size:12px;cursor:pointer;text-align:center;">＋ 从资源库追加跳（下拉选既有资源；末跳目标留空 = 连接引用时由地址补全）</div>
+
+      <div class="edit-foot">
+        <button class="btn" onclick="closeChainEditor()">取消</button>
+        <button class="btn primary">保存链</button>
+        <button class="btn">验证链路（逐跳诊断）</button>
+        <span class="f-help" style="margin-left:auto">序列化为 <code>hops: [resource_id…]</code>；空链 / 单资源链保存时提示「只有一跳建议直接引用资源，不必建链」</span>
+      </div>
+
+      <div class="note info" style="margin-top:10px;">
+        <b>默认网络路径</b>（<span class="st st-prop">提案</span>，DBeaver「全局代理 + 连接覆盖」分层的资源化版本）：应用设置可指定默认资源 / 链——新建连接的网络方式预选它，连接内仍可换（覆盖优先）。
+      </div>
+
+      <div class="grid c2" style="margin-top:12px;">
+        <div class="note ok"><b>两层引用解决了什么</b>：改 bastion-a 端点 / 换 tunnel_svc 密钥 → 资源页改一处，「生产跳板链」「备用链」及全部引用连接自动生效；删除任何一层都被拦截并列影响面。</div>
+        <div class="note warn"><b>与现状差异（如实）</b>：现状 chain 档案每跳内嵌（含加密凭据副本）；本页为<b>提案</b>，落地需 <code>network_configs</code> 拆表迁移（Tab5）。原 #25「多跳可视化编辑器」由本视图取代——编辑对象从内嵌字段变为资源引用。</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ Tab3 活动隧道 ============ -->
+  <div data-panel="live" class="card-body hidden">
+    <div class="note warn" style="margin-bottom:12px;">
+      <span class="st st-prop">提案</span> <b>运行态监控设计</b>。现状 <code>TunnelRegistry</code> 只提供 <code>count()</code>；本页需守卫暴露状态 / 每跳建连时刻 / RTT 采样 / 字节计数（注册表侧扩展，不动协议链本体）。每跳节点挂<b>资源名</b>，点击跳 Tab1 对应资源。
+    </div>
+
+    <div class="tnl-row">
+      <div class="tnl-head">
+        <span class="dot ok"></span>
+        <span class="t-name">订单库(生产)</span>
+        <span class="chip">单资源 · 跳板机 A</span>
+        <span class="f-help">建立 14:02:11 · 重连 0 次</span>
+        <div style="margin-left:auto;display:flex;gap:7px;"><button class="btn sm">诊断</button><button class="btn sm danger">断开（释放隧道）</button></div>
+      </div>
+      <div class="tnl-flow">
+        <div class="hop-node st-ok"><div class="hn-kind">本地</div><div class="hn-addr">127.0.0.1:49152</div></div>
+        <div class="hop-wire ok"><span class="lat">SSH · RTT 8ms</span><span class="drill" title="1 次重协商"></span></div>
+        <div class="hop-node st-ok"><div class="hn-kind">ssh · 跳板机 A</div><div class="hn-addr">bastion-a:22</div></div>
+        <div class="hop-wire ok"><span class="lat">TCP · 3ms</span></div>
+        <div class="hop-node st-ok"><div class="hn-kind">mysql</div><div class="hn-addr">db-order-ro:3306</div></div>
+        <div style="margin-left:14px;display:flex;flex-direction:column;gap:3px;font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums;">
+          <span>↑ 2.1 MB · ↓ 18.4 MB</span><span>转发会话 1（编辑器 · orders.q.sql）</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="tnl-row">
+      <div class="tnl-head">
+        <span class="dot warn"></span>
+        <span class="t-name">报表同步（P_）</span>
+        <span class="chip warn">链 · 生产跳板链（2 跳）· 第 2 跳降级</span>
+        <span class="f-help">建立 13:47:03 · 重连 1 次（proxy 连接重置后自动恢复）</span>
+        <div style="margin-left:auto;display:flex;gap:7px;"><button class="btn sm">诊断</button><button class="btn sm danger">断开（释放隧道）</button></div>
+      </div>
+      <div class="tnl-flow">
+        <div class="hop-node st-ok"><div class="hn-kind">本地</div><div class="hn-addr">127.0.0.1:49158</div></div>
+        <div class="hop-wire ok"><span class="lat">SSH · 8ms</span></div>
+        <div class="hop-node st-ok"><div class="hn-kind">ssh · 跳板机 A</div><div class="hn-addr">bastion-a:22</div></div>
+        <div class="hop-wire err"><span class="lat" style="color:var(--warning)">HTTP · 210ms ↗</span><span class="drill"></span></div>
+        <div class="hop-node st-ok"><div class="hn-kind">http · 公司代理</div><div class="hn-addr">proxy-corp:8080</div></div>
+        <div class="hop-wire ok"><span class="lat">TCP · 5ms</span></div>
+        <div class="hop-node st-ok"><div class="hn-kind">pg</div><div class="hn-addr">pg-report:5432</div></div>
+      </div>
+      <div class="note warn" style="padding:6px 10px;">RTT 基线 45ms → 210ms（连续 5 次采样超阈值）：标记降级供观察；重连 / 告警策略待拍板，不写死。</div>
+    </div>
+
+    <div style="display:flex;gap:9px;align-items:center;color:var(--muted);font-size:11.5px;">
+      <span class="dot idle"></span>空闲连接无隧道（惰性建链） · 空闲回收默认 30 分钟 · 本地端口自动分配 49152–65535，冲突顺延（<span class="st st-prop">提案</span>显式化）
+    </div>
+  </div>
+
+  <!-- ============ Tab4 逐跳诊断 ============ -->
+  <div data-panel="diag" class="card-body hidden">
+    <div class="sec"><h3>「生产跳板链」诊断</h3><span class="hint">提案 · 失败定位到跳；每步挂资源名，结论直达可修改处</span>
+      <div class="right"><button class="btn sm">▶ 重新诊断</button></div>
+    </div>
+    <div class="note danger" style="margin-bottom:13px;">诊断结论：<b>第 2 跳 · 资源「公司代理」CONNECT 被拒 —— HTTP 407 Proxy Authentication Required</b>。问题收敛到该资源引用的凭据档案；第 1 跳（跳板机 A）与目标可达性正常。
+      <div style="margin-top:6px;display:flex;gap:8px;"><a class="btn sm" href="manager-auth.html">去改「公司代理认证」档案 →</a><a class="btn sm" href="#res" onclick="void(0)">查看资源「公司代理」</a></div>
+    </div>
+
+    <div class="diag-grid">
+      <div class="hop-node st-ok"><div class="hn-kind">① DNS · 跳板机 A</div><div class="hn-addr">bastion-a.internal</div><div style="font-size:10.5px;color:var(--success);margin-top:3px;">✔ 10.2.1.7 · 12ms</div></div>
+      <div class="hop-node st-ok"><div class="hn-kind">② TCP</div><div class="hn-addr">bastion-a:22</div><div style="font-size:10.5px;color:var(--success);margin-top:3px;">✔ 8ms</div></div>
+      <div class="hop-node st-ok"><div class="hn-kind">③ SSH 握手</div><div class="hn-addr">主机密钥 Matched</div><div style="font-size:10.5px;color:var(--success);margin-top:3px;">✔ tunnel_svc 认证通过</div></div>
+      <div class="hop-node st-ok"><div class="hn-kind">④ DNS · 公司代理</div><div class="hn-addr">proxy-corp:8080</div><div style="font-size:10.5px;color:var(--success);margin-top:3px;">✔ 经跳板解析 · 3ms</div></div>
+      <div class="hop-node st-err"><div class="hn-kind">⑤ HTTP CONNECT</div><div class="hn-addr">proxy-corp:8080</div><div style="font-size:10.5px;color:var(--danger);margin-top:3px;">✘ 407 · 认证被拒</div></div>
+      <div class="hop-node st-idle"><div class="hn-kind">⑥ 目标</div><div class="hn-addr">pg-report:5432</div><div style="font-size:10.5px;color:var(--muted);margin-top:3px;">— 未到达</div></div>
+    </div>
+
+    <dl class="kv" style="margin-top:14px;">
+      <dt>两级测试</dt><dd><b>单跳测试</b>（资源页）= 只验证该资源（DNS → TCP → 协议握手 → 认证）；<b>链验证</b> = 顺序测试各引用跳 + 目标可达。连接对话框「测试连接」仍走整链（真实连到库），三者共用 <code>connector</code> 判定函数</dd>
+      <dt>响应判定</dt><dd>407 取状态行（不做子串 contains）——沿用 <code>establish_http_proxy</code> 严谨口径</dd>
+    </dl>
+  </div>
+
+  <!-- ============ Tab5 数据模型与迁移 ============ -->
+  <div data-panel="model" class="card-body hidden">
+    <div class="sec"><h3>表模型（提案）</h3><span class="hint">network_configs 一张表 → 资源 + 链两张表</span></div>
+    <div class="grid c2">
+      <div>
+        <div class="f-help" style="margin-bottom:6px;"><b>net_resources（网络资源 · 最小单位）</b></div>
+        <div class="ddl"><b>CREATE TABLE</b> net_resources (
+  id            TEXT PRIMARY KEY,
+  name          TEXT NOT NULL UNIQUE,
+  kind          TEXT NOT NULL,  <i>-- ssh | http | socks | ssl</i>
+  host          TEXT NOT NULL,
+  port          INTEGER NOT NULL,
+  auth_config_id TEXT <b>REFERENCES</b> auth_configs(id),
+  props         TEXT,           <i>-- kind 特定 JSON：ssh.forwarding{type:-L/-D,
+                                 --   targetMode:inherit/fixed,bind,portPolicy}/
+                                 --   host_key_check/keepalive/compress/ciphers；
+                                 --   http.auth_scheme/CONNECT 超时；
+                                 --   socks.ver/remoteDns；ssl.material</i>
+  created_at, updated_at
+);
+<i>-- 唯一性：UNIQUE(kind, host, port) 软校验（保存前 UI 查重提示）</i></div>
+      </div>
+      <div>
+        <div class="f-help" style="margin-bottom:6px;"><b>chains（协议链 · 组合）</b></div>
+        <div class="ddl"><b>CREATE TABLE</b> chains (
+  id            TEXT PRIMARY KEY,
+  name          TEXT NOT NULL UNIQUE,
+  hops          TEXT NOT NULL,  <i>-- JSON: [resource_id…]
+                                 -- 有序、可重复引用、不内嵌</i>
+  timeout_s     INTEGER,        <i>-- 链整体建链超时（可选）</i>
+  created_at, updated_at
+);
+<i>-- 连接侧：network_method =
+--   direct | { resource: id } | { chain: id }</i></div>
+      </div>
+    </div>
+
+    <div class="sec" style="margin-top:16px;"><h3>存量迁移（network_configs → 两表）</h3></div>
+    <table class="tbl">
+      <tr><th>存量形态</th><th>迁移</th><th>说明</th></tr>
+      <tr><td>单跳档案（ssh / http / socks / ssl）</td><td>→ 资源 1:1</td><td>内嵌加密凭据 → 拆出 / 复用 auth 档案引用（凭据字段对齐 <code>auth_field_specs</code> 键）</td></tr>
+      <tr><td>chain 档案（config 内嵌多跳）</td><td>逐跳按 <code>kind+host:port</code> 匹配既有资源 → 命中复用、未命中建资源</td><td>然后链记录 hops=资源引用；同跳板多链自动去重（正是两层模型的收益）</td></tr>
+      <tr><td>引用关系</td><td>连接的 network_config_id → 按形态改指 resource 或 chain</td><td>旧表保留只读一个过渡版本（读取期双格式识别），验证后删除</td></tr>
+    </table>
+
+    <div class="grid c2" style="margin-top:14px;">
+      <div class="note info"><b>三层影响面闭包</b>（与 <a href="manager-auth.html">密码管理</a> 联动）：auth 档案 → 引用它的资源 → 引用资源/链的连接。改「公司代理认证」= 资源 proxy-corp（1）→ 链生产跳板链（1）→ 连接（3），密码管理页影响面即按此闭包展开。</div>
+      <div class="note warn"><b>不做与观察</b>：远程转发（-R）不做（桌面工具无场景）；<b>-D 动态转发已按 2026-11-10 评审纳入</b>（见 Tab1 转发区，修订原观察项）；「引用型 ~/.ssh/config 资源」（运行时读 config、变更自动跟随）挂 <span class="st st-no">观察</span>；后台健康巡检（定期单跳探测）<b>默认必须关</b>、仅用户显式开启——桌面工具主动扫内网是不合适的安全姿态；「最近使用」时间戳（资源卡引用数旁补最近哪条连接使用过）<span class="st st-prop">提案</span>；环境同名资源端点映射（prod/dev 不同跳板）维持观察；链不做条件分支（单一路径）。</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 删除确认弹层（两态共用） ============ -->
+<div class="modal-mask hidden" id="del-modal">
+  <div class="modal">
+    <div class="m-head" id="del-head">删除资源</div>
+    <div class="m-body" id="del-body"></div>
+    <div class="m-foot" id="del-foot"></div>
+  </div>
+</div>
+
+<footer class="page-foot">
+  <b>对照</b>：现状 = <code>network_store.rs</code>（单表 + config JSON 内嵌加密）+ <code>connection::chain.rs</code>（逐跳执行，ChainHop 已是运行时抽象——两层表模型与它天然对齐）+ <code>TunnelRegistry</code>（count()）+ <code>managers.rs</code> 覆盖层 CRUD（本页列表 ⇄ 编辑 + 删除确认即对齐该形态：行内校验 / 引用拦截在管理器已有 <code>count_references_batch</code> 支撑）。资源/链两层 + CRUD 流 + 运行态 + 诊断均为<span class="st st-prop">提案</span>（2026-11-10 评审：最小单位与组合分离）。· <a href="index.html">返回总览</a> · <a href="manager-environment.html">下一页：环境管理 →</a>
+</footer>
+
+<script>
+/* ===== CRUD 流交互（原型演示）：列表 ⇄ 编辑视图、删除确认两态、保存校验 ===== */
+
+/* 资源编辑视图 */
+function openResEditor(mode) {
+  document.getElementById("res-list").classList.add("hidden");
+  document.getElementById("res-edit").classList.remove("hidden");
+  var isNew = mode === "new";
+  document.getElementById("res-edit-title").textContent = isNew ? "新建资源" : "编辑资源：跳板机 A";
+  document.getElementById("res-edit-mode").textContent = isNew
+    ? "新建模式 · 仅「基础 + 认证」必填，转发 / 高级收起且全默认"
+    : "编辑模式 · 保存时必填校验 + 重复检测";
+  if (isNew) {
+    document.getElementById("f-name").value = "";
+    document.getElementById("f-host").value = "";
+    document.getElementById("fwd-fold").open = false;
+    document.getElementById("adv-fold").open = false;
+  } else {
+    document.getElementById("f-name").value = "跳板机 A";
+    document.getElementById("f-host").value = "bastion-a.internal";
+    document.getElementById("fwd-fold").open = true;
+    document.getElementById("adv-fold").open = false;
+  }
+  document.getElementById("res-save-err").textContent = "";
+}
+function closeResEditor() {
+  document.getElementById("res-edit").classList.add("hidden");
+  document.getElementById("res-list").classList.remove("hidden");
+}
+function saveRes() {
+  var name = document.getElementById("f-name").value.trim();
+  var host = document.getElementById("f-host").value.trim();
+  var err = document.getElementById("res-save-err");
+  if (!name) { err.textContent = "✘ 缺少必填：资源名"; document.getElementById("f-name").focus(); return; }
+  if (!host) { err.textContent = "✘ 缺少必填：主机"; document.getElementById("f-host").focus(); return; }
+  err.textContent = "";
+  alert("演示：保存成功（真实实现：写库 → 引用计数刷新 → 返回列表并选中该行）");
+  closeResEditor();
+}
+
+/* kind 切换联动：转发 / 主机密钥为 SSH 特有（原型演示，静态提示） */
+document.querySelectorAll("#kind-seg [data-kind]").forEach(function (b) {
+  b.addEventListener("click", function () {
+    document.querySelectorAll("#kind-seg [data-kind]").forEach(function (x) { x.classList.remove("on"); });
+    b.classList.add("on");
+    var ssh = b.getAttribute("data-kind") === "ssh";
+    document.getElementById("fwd-fold").classList.toggle("hidden", !ssh);
+    document.getElementById("hostkey-row").classList.toggle("hidden", !ssh);
+  });
+});
+
+/* 链编辑视图 */
+function openChainEditor(mode) {
+  document.getElementById("chain-list").classList.add("hidden");
+  document.getElementById("chain-edit").classList.remove("hidden");
+  document.getElementById("chain-edit-title").textContent = mode === "new" ? "新建链" : "编辑链：生产跳板链";
+}
+function closeChainEditor() {
+  document.getElementById("chain-edit").classList.add("hidden");
+  document.getElementById("chain-list").classList.remove("hidden");
+}
+
+/* 删除确认两态：unref=true 走普通确认；否则被引用拦截 */
+function askDelete(kind, name, unref) {
+  var modal = document.getElementById("del-modal");
+  var head = document.getElementById("del-head");
+  var body = document.getElementById("del-body");
+  var foot = document.getElementById("del-foot");
+  var label = kind === "res" ? "资源" : "链";
+  head.textContent = "删除" + label + "：" + name;
+  if (unref) {
+    body.innerHTML = "该" + label + "未被任何连接或链引用，删除后不可恢复。<br><span style='color:var(--muted);font-size:11px;'>（真实实现：删除 → 刷新列表；TLS 材料等含本地文件引用的 kind 追问「是否同时删除文件」）</span>";
+    foot.innerHTML = "<button class='btn' onclick='hideDelete()'>取消</button><button class='btn danger' onclick='confirmDelete()'>删除</button>";
+  } else {
+    var refs = kind === "res"
+      ? "<div class='ref-list'>经链引用 2 条：<b>生产跳板链</b>（3 连接在用）· <b>备用链</b><br>直引连接 0 条</div>"
+      : "<div class='ref-list'>被 3 条连接引用：<b>订单库(生产)</b> · <b>报表同步</b> · <b>订单库只读副本(草稿)</b></div>";
+    body.innerHTML = "<b style='color:var(--danger);'>已拦截：该" + label + "正在被引用，不可删除。</b><br>引用计数覆盖全局库 + 已登记项目库（#33 同口径）。" + refs + "<br><span style='color:var(--muted);font-size:11px;'>先到引用方改用其他" + (kind === "res" ? "资源" : "链") + "或断开引用，再回来删除。</span>";
+    foot.innerHTML = "<button class='btn primary' onclick='hideDelete()'>知道了</button>";
+  }
+  modal.classList.remove("hidden");
+}
+function hideDelete() { document.getElementById("del-modal").classList.add("hidden"); }
+function confirmDelete() {
+  hideDelete();
+  alert("演示：已删除（真实实现：删除 → 刷新列表 → 被删行所在引用计数同步减一）");
+}
+
+/* 导入 ssh config（演示入口） */
+function importSsh() {
+  alert("演示：解析 ~/.ssh/config → 资源预览清单（Host 别名 → 资源名；冲突逐条「复用 / 新建」）——映射规则见折叠说明");
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>对话框骨架 · 新增数据源原型 · RdataStation</title>
+<link rel="stylesheet" href="_theme.css">
+<script src="_theme.js"></script>
+<style>
+  .dlg-body{display:flex;min-height:460px;}
+  .sidebar{width:216px;flex-shrink:0;background:var(--sidebar);border-right:1px solid var(--sidebar-border);display:flex;flex-direction:column;}
+  .side-search{padding:12px 12px 8px;position:relative;}
+  .side-search input{width:100%;border:1px solid var(--input-border);border-radius:7px;background:var(--bg);color:var(--fg);padding:6px 10px 6px 30px;font-size:12px;outline:none;font-family:inherit;}
+  .side-search .s-ic{position:absolute;left:20px;top:19px;width:13px;height:13px;color:var(--muted);pointer-events:none;}
+  .side-section{padding:4px 12px 10px;}
+  .side-title{font-size:10.5px;font-weight:700;color:var(--muted);letter-spacing:.8px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;}
+  .side-add{font-size:11.5px;color:var(--active-border);cursor:pointer;border:none;background:none;padding:0;}
+  .side-add:hover{color:var(--primary-hover);text-decoration:underline;}
+  .stage-box{max-height:128px;overflow-y:auto;display:flex;flex-direction:column;gap:3px;}
+  .type-box{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:2px;}
+  .stage-item{display:flex;align-items:center;gap:7px;font-size:12px;padding:4.5px 9px;border-radius:6px;cursor:pointer;transition:background .12s;}
+  .stage-item:hover{background:var(--hover);}
+  .stage-item.active{background:var(--accent);box-shadow:inset 2.5px 0 0 var(--active-border);}
+  .stage-item .st-code{margin-left:auto;font-size:9.5px;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:0 5px;line-height:14px;}
+  .stage-item .st-dot{margin-left:auto;color:var(--warning);font-size:10px;}
+  .stage-item .st-del{margin-left:5px;font-size:11px;color:var(--muted);}
+  .main-panel{flex:1;display:flex;flex-direction:column;min-width:0;}
+  .panel-header{padding:12px 16px 11px;border-bottom:1px solid var(--sidebar-border);}
+  .tab-body{flex:1;min-height:0;padding:14px 16px;overflow-y:auto;}
+  .dlg-footer{border-top:1px solid var(--sidebar-border);padding:10px 16px;display:flex;align-items:center;gap:10px;}
+  .tab-map{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px;margin-top:6px;}
+  .tab-map a{display:flex;flex-direction:column;gap:5px;border:1px solid var(--border);border-radius:10px;padding:11px 13px;color:var(--fg);transition:all .15s;background:var(--bg);}
+  .tab-map a:hover{border-color:var(--active-border);background:var(--hover);text-decoration:none;}
+  .tab-map .tm-t{font-size:12.5px;font-weight:700;display:flex;gap:7px;align-items:center;}
+  .tab-map .tm-d{font-size:11px;color:var(--muted);line-height:1.6;}
+  .guide{display:flex;gap:10px;align-items:flex-start;border:1px solid color-mix(in srgb,var(--info) 30%,transparent);background:var(--info-bg);border-radius:9px;padding:10px 13px;font-size:11.5px;line-height:1.7;margin-bottom:12px;}
+  .guide svg{width:15px;height:15px;color:var(--info);flex-shrink:0;margin-top:2px;}
+  .anno{position:absolute;background:var(--purple-bg);border:1px solid color-mix(in srgb,var(--purple) 45%,transparent);color:var(--fg);border-radius:7px;padding:4px 9px;font-size:10.5px;line-height:1.5;max-width:230px;box-shadow:0 4px 12px rgba(20,20,30,.12);}
+  .anno b{color:var(--purple);}
+  .anno .a-line{position:absolute;background:var(--purple);top:50%;width:26px;height:1.5px;}
+  .hotspot{outline:1.5px dashed var(--purple);outline-offset:2px;border-radius:6px;position:relative;cursor:help;}
+  #anno-layer{position:relative;}
+</style>
+</head>
+<body>
+
+<header class="page-head">
+  <div class="brand">
+    <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.66 3.58 3 8 3s8-1.34 8-3v-13"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg></div>
+    <div>
+      <h1>① 对话框骨架 · 信息架构</h1>
+      <div class="sub">dialog-shell · 类型树 / 暂存草稿 / Header / 五 Tab / footer / 结果行 —— 全部 <span class="st st-impl">已实现</span></div>
+    </div>
+  </div>
+  <div class="head-actions">
+    <a class="back-link" href="index.html">← 总览</a>
+    <button class="theme-toggle" data-theme-toggle>🌙 暗色</button>
+  </div>
+</header>
+
+<!-- ============ 窗口拟真 ============ -->
+<div class="dialog" id="anno-layer">
+  <div class="dlg-titlebar">
+    <div class="app-mark"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.66 3.58 3 8 3s8-1.34 8-3v-13"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg></div>
+    <div class="dlg-title">新增数据源<span class="sep">·</span><span class="sub">MySQL · mysql_native</span></div>
+    <div class="win-dots"><i></i><i></i><i class="close"></i></div>
+  </div>
+
+  <div class="dlg-body">
+    <!-- 左侧栏 -->
+    <div class="sidebar">
+      <div class="side-search">
+        <svg class="s-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input placeholder="搜索类型 / 驱动…  (Enter 选中首个匹配)" value="my">
+      </div>
+
+      <div class="side-section">
+        <div class="side-title">正在编辑 <span style="font-weight:400;text-transform:none">3 条</span>
+          <button class="side-add">＋ 添加</button>
+        </div>
+        <div class="stage-box">
+          <div class="stage-item"><span>🗄</span> 订单库(生产)<span class="st-code">G</span></div>
+          <div class="stage-item active"><span>🗄</span> 订单库只读副本<span class="st-dot">●</span></div>
+          <div class="stage-item"><span>📄</span> 本地分析.duckdb<span class="st-code">P</span></div>
+          <div class="stage-item" style="opacity:.55"><span>＋</span> 新草稿 4</div>
+        </div>
+      </div>
+      <div style="height:1px;background:var(--sidebar-border);margin:2px 12px 6px;"></div>
+
+      <div class="side-section" style="flex:1;display:flex;flex-direction:column;min-height:0;">
+        <div class="side-title">数据库类型</div>
+        <div class="type-box">
+          <div class="cat-label">关系型</div>
+          <div class="tree-item active"><span class="db-ic">🐬</span> MySQL<span class="hint">2 实现</span></div>
+          <div class="tree-item"><span class="db-ic">🐘</span> PostgreSQL<span class="hint">2 实现</span></div>
+          <div class="tree-item dim"><span class="db-ic">🧱</span> SQL Server<span class="hint">暂无驱动</span></div>
+          <div class="tree-item dim"><span class="db-ic">🍊</span> Oracle<span class="hint">暂无驱动</span></div>
+          <div class="cat-label">文件型</div>
+          <div class="tree-item"><span class="db-ic">📄</span> SQLite</div>
+          <div class="cat-label">分析型</div>
+          <div class="tree-item"><span class="db-ic">🦆</span> DuckDB</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右侧主体 -->
+    <div class="main-panel">
+      <div class="panel-header">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <span class="type-badge hotspots" title="类型徽标">🐬</span>
+          <input class="inp" style="width:180px" value="订单库只读副本" placeholder="连接名称 *">
+          <span class="f-label">作用域</span>
+          <div class="seg">
+            <button>仅全局</button>
+            <button class="on">仅项目</button>
+            <button>项目内全局</button>
+          </div>
+          <span class="chip" title="Tooltip：G_ 全局库 / P_ 项目库 / GP_ 项目内全局快照">? 落库语义</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:9px;flex-wrap:wrap;">
+          <span class="f-label">驱动实现</span>
+          <select class="inp"><option>mysql_native（sqlx）</option><option>mysql_official</option></select>
+          <span class="f-label">项目</span>
+          <select class="inp" style="min-width:150px"><option>RdataStation-v2（当前）</option><option>打开现有目录…</option><option>＋ 新增项目</option></select>
+          <span class="chip" style="margin-left:auto">ID 不外显 · 见「详情」（B 案）</span>
+        </div>
+      </div>
+
+      <div class="tabs" data-tabs style="padding:0 16px;">
+        <button class="tab on" data-tab="t1">常规</button>
+        <button class="tab" data-tab="t2">网络</button>
+        <button class="tab" data-tab="t3">能力</button>
+        <button class="tab" data-tab="t4">驱动属性</button>
+        <button class="tab" data-tab="t5">高级</button>
+      </div>
+
+      <div class="tab-body">
+        <div data-panel="t1">
+          <div class="guide">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v.01M12 11v5"/></svg>
+            <div><b>首次使用引导</b>：左侧选类型 → 选驱动 → 填地址与凭据 → 「测试连接」预演 → 保存（进暂存，Ctrl+Enter）→ 全部录完再「保存并关闭」批量提交。草稿跨会话不丢（密码除外，重启后需重填）。</div>
+          </div>
+          <div class="sec"><h3>本页 = 骨架</h3><span class="hint">五个 Tab 的完整设计在分页中</span></div>
+          <div class="tab-map">
+            <a href="tab-general.html"><span class="tm-t">📋 常规 <span class="st st-impl">已实现</span></span><span class="tm-d">地址 / 认证 / SSL / 组织；网络型 ⇄ 文件型双形态</span></a>
+            <a href="tab-network.html"><span class="tm-t">🌐 网络 <span class="st st-part">部分</span></span><span class="tm-d">直连 / SSH / 代理 / SOCKS / 协议链；档案引用 ⇄ 内联</span></a>
+            <a href="tab-capability-props.html"><span class="tm-t">🧩 能力 / 驱动属性 <span class="st st-impl">已实现</span></span><span class="tm-d">capabilities 只读矩阵 · 属性键值透传</span></a>
+            <a href="tab-advanced.html"><span class="tm-t">⚙️ 高级 <span class="st st-part">部分</span></span><span class="tm-d">环境引用 / 策略覆盖 / DuckDB 加速 / 缓存指纹</span></a>
+          </div>
+        </div>
+        <div data-panel="t2" class="hidden" style="color:var(--muted);font-size:12px;">网络 Tab → <a href="tab-network.html">tab-network.html</a></div>
+        <div data-panel="t3" class="hidden" style="color:var(--muted);font-size:12px;">能力 Tab → <a href="tab-capability-props.html">tab-capability-props.html</a></div>
+        <div data-panel="t4" class="hidden" style="color:var(--muted);font-size:12px;">驱动属性 Tab → <a href="tab-capability-props.html">tab-capability-props.html</a></div>
+        <div data-panel="t5" class="hidden" style="color:var(--muted);font-size:12px;">高级 Tab → <a href="tab-advanced.html">tab-advanced.html</a></div>
+      </div>
+
+      <div class="dlg-footer">
+        <div style="flex:1;min-width:0;">
+          <div class="result-line success">
+            <svg class="rl-ic" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2.4" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg>
+            <div><b>测试连接成功</b> · 0.42s · server 8.0.36 · 已应用「连接安全」SSL 覆盖 · 隧道 1 跳（SSH·跳板机A）
+              <div class="rl-act"><a>详情</a><a>复制</a></div>
+            </div>
+          </div>
+        </div>
+        <button class="btn">测试连接</button>
+        <button class="btn primary">保存（进暂存）</button>
+        <button class="btn primary">保存并关闭</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 结构注解卡 ============ -->
+<div style="max-width:1180px;margin:22px auto 0;" class="grid c2">
+  <div class="card">
+    <div class="card-head"><h2>左侧栏两区</h2><span class="desc">点击暂存行 = 切换正在编辑的连接</span></div>
+    <div class="card-body" style="font-size:12px;line-height:1.8;">
+      <dl class="kv">
+        <dt>暂存草稿区</dt><dd><b>只放未保存草稿</b>（决策 #80）；<code>●</code> = 有未写回修改；<code>G/P/GP</code> = 已保存条目来源短码（已保存条目不在暂存区删除，删除入口归导航栏）</dd>
+        <dt>类型树</dt><dd>目录来自 <code>data_source_types</code>；无可用驱动 → 置灰 + 「暂无驱动」（#1）；搜索框 Enter = 选中首个有驱动的匹配（#106）；不可折叠（决策 #91）</dd>
+        <dt>同步指纹</dt><dd>行徽标 / 名称取实时表单快照（不等草稿写回）——「填名称列表不更新」的修复</dd>
+      </dl>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-head"><h2>Header 与 footer 的关键语义</h2></div>
+    <div class="card-body" style="font-size:12px;line-height:1.8;">
+      <dl class="kv">
+        <dt>作用域三态</dt><dd>仅全局 <code>G_</code> / 仅项目 <code>P_</code> / 项目内全局 <code>GP_</code>（项目快照）；<code>?</code> 徽标 = 落库语义 Tooltip（决策 #110）；新建默认「仅项目」（#39）</dd>
+        <dt>保存语义</dt><dd>「保存」= 追加暂存条目 + 自动新建空草稿（#40，Ctrl+Enter）；「保存并关闭」= 批量提交全部暂存（部分失败保留现场）</dd>
+        <dt>结果行</dt><dd>四级分级 Info/Success/Warning/Error（#28）；摘要 &gt;80 字或含换行 → 「详情 / 复制」；Warning 有真实生产者（分组同步失败降级）</dd>
+        <dt>异步</dt><dd>测试 / 保存跑在后台执行器，不阻塞 UI（#102）；重复触发被 <code>BusyOp</code> 挡住</dd>
+      </dl>
+    </div>
+  </div>
+</div>
+
+<footer class="page-foot">
+  <b>对照</b>：本页还原 <code>render.rs</code> 主布局（对话框行高三向夹住 · 决策 #94/#101）；左栏 = <code>draft_list.rs</code> + <code>type_tree.rs</code>；Header 作用域 = <code>TabBar::segmented</code>。
+  文件型连接的 Tab 集会收缩（网络 Tab 隐藏，<code>visible_tab_index</code> 纯函数）。· <a href="index.html">返回总览</a>
+</footer>
+
+</body>
+</html>

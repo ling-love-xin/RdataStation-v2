@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>网络 Tab · 新增数据源原型 · RdataStation</title>
+<link rel="stylesheet" href="_theme.css">
+<script src="_theme.js"></script>
+<style>
+  .method-list{display:flex;flex-direction:column;gap:5px;}
+  .method{display:flex;align-items:flex-start;gap:9px;padding:8px 11px;border:1.5px solid var(--border);border-radius:9px;cursor:pointer;transition:all .12s;background:var(--bg);}
+  .method:hover{background:var(--hover);}
+  .method.on{border-color:var(--active-border);box-shadow:0 0 0 3px color-mix(in srgb,var(--active-border) 12%,transparent);}
+  .method .m-ic{width:17px;text-align:center;flex-shrink:0;margin-top:1px;}
+  .method .m-t{font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:7px;flex-wrap:wrap;}
+  .method .m-d{color:var(--muted);font-size:11px;margin-top:1px;line-height:1.55;}
+  .radio{width:13px;height:13px;border-radius:50%;border:1.7px solid var(--input-border);flex-shrink:0;margin-top:2px;display:inline-block;}
+  .method.on .radio{border-color:var(--active-border);box-shadow:inset 0 0 0 3px var(--active-border);}
+  .tunnel-preview{border:1px dashed var(--input-border);border-radius:9px;padding:10px 12px;background:var(--group-box);}
+  .flow{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:11px;}
+  .flow .node{border:1px solid var(--border);border-radius:7px;background:var(--bg);padding:4px 9px;white-space:nowrap;font-size:11px;}
+  .flow .node.hl{border-color:var(--active-border);color:var(--active-border);font-weight:600;}
+  .flow .hop{color:var(--muted);}
+  .flow .hop::after{content:'→';margin-left:6px;}
+  /* 弹层（转资源确认） */
+  .modal-mask{position:fixed;inset:0;background:rgba(10,10,14,.45);display:flex;align-items:center;justify-content:center;z-index:50;padding:20px;}
+  .modal{width:470px;max-width:100%;border:1px solid var(--border);border-radius:12px;background:var(--bg);box-shadow:var(--shadow);overflow:hidden;}
+  .modal .m-head{display:flex;align-items:center;gap:9px;padding:13px 16px;border-bottom:1px solid var(--sidebar-border);font-size:13px;font-weight:700;}
+  .modal .m-body{padding:14px 16px;font-size:12px;line-height:1.8;}
+  .modal .m-foot{display:flex;justify-content:flex-end;gap:9px;padding:12px 16px;border-top:1px solid var(--sidebar-border);}
+</style>
+</head>
+<body>
+
+<header class="page-head">
+  <div class="brand">
+    <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.66 3.58 3 8 3s8-1.34 8-3v-13"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg></div>
+    <div>
+      <h1>③ 网络 Tab · 连接路径（两层引用口径）</h1>
+      <div class="sub">tab-network · 直连 / 引用资源 / 引用链 / 内联一次性 —— <span class="st st-key">本轮对齐两层模型</span>（原五选为旧单表口径）</div>
+    </div>
+  </div>
+  <div class="head-actions">
+    <a class="back-link" href="index.html">← 总览</a>
+    <button class="theme-toggle" data-theme-toggle>🌙 暗色</button>
+  </div>
+</header>
+
+<div class="note warn" style="max-width:920px;margin:12px auto 0;border-color:#8a6d3b;">
+  <b>状态更正（2026-11-20）</b>：本页是 2026-11-10 的两层模型<b>提案快照</b>。资源 / 链两层<b>已实现</b>（`net_resources` / `chains`，档案域可读写、连接层只做引用）；页内的「内联一次性 SSH」与连接内联 TOFU 下拉<b>未采纳</b>——决策 #72 已撤下内联链编辑器（多跳一律走 `chain` 档案，TOFU 三态校验落在资源 / 链档案侧）。以 `README.md` 状态列与架构文档 §14 为准。
+</div>
+
+<div style="max-width:920px;margin:0 auto;display:flex;gap:16px;align-items:flex-start;">
+
+  <!-- 左：网络方式（四态） -->
+  <div style="width:290px;flex-shrink:0;" class="card">
+    <div class="card-head"><h2>网络方式</h2><span class="desc">连接层只选「走哪条路径」</span></div>
+    <div class="card-body">
+      <div class="method-list">
+        <div class="method on" data-way="direct"><span class="radio"></span><div><div class="m-t">🔗 直连</div><div class="m-d">驱动 TCP 直连目标库（默认）</div></div></div>
+        <div class="method" data-way="resource"><span class="radio"></span><div><div class="m-t">📦 引用网络资源… <span class="st st-prop">两层模型</span></div><div class="m-d">从资源库选单个资源（跳板 / 代理）——最常见</div></div></div>
+        <div class="method" data-way="chain"><span class="radio"></span><div><div class="m-t">⛓ 引用协议链… <span class="st st-prop">两层模型</span></div><div class="m-d">多跳组合（资源引用序列）</div></div></div>
+        <div class="method" data-way="inline"><span class="radio"></span><div><div class="m-t">✏️ 内联（一次性）</div><div class="m-d">快速临时配置，仅本连接可见；建议转为资源（下方入口）</div></div></div>
+      </div>
+      <div class="note info" style="margin-top:10px;">SSH / HTTP / SOCKS 是<b>资源类型</b>，在 <a href="manager-network.html">网络资源管理</a>里建；连接层不再按协议分形态。内联是入口不是终点——保存前可一键沉淀为资源。</div>
+    </div>
+  </div>
+
+  <!-- 右：四态面板 -->
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:14px;">
+
+    <!-- 直连 -->
+    <div data-way-panel="direct" class="card">
+      <div class="card-body" style="color:var(--muted);font-size:12px;line-height:1.8;">
+        直连 = 驱动直接 TCP 连接常规 Tab 的地址。<br>
+        高级场景（SSL 材料、客户端证书）见 <a href="tab-general.html">常规 Tab 连接安全卡</a> 与驱动属性；文件型连接无本 Tab。
+      </div>
+    </div>
+
+    <!-- 引用资源 -->
+    <div data-way-panel="resource" class="card hidden">
+      <div class="card-head"><h2>引用网络资源</h2><span class="desc">资源 = 最小单位 · 凭据随资源（引用 auth 档案）</span></div>
+      <div class="card-body">
+        <div class="f-row"><span class="f-label">资源</span>
+          <select class="inp" style="min-width:250px">
+            <option>🖥 跳板机 A（ssh · bastion-a.internal:22）</option>
+            <option>🧱 公司代理（http · proxy-corp:8080）</option>
+            <option>🧦 只读库 SOCKS 网关（socks · socks-gw:1080）</option>
+          </select>
+          <button class="btn sm">单跳测试</button>
+          <a class="btn ghost sm" href="manager-network.html">管理资源 →</a>
+        </div>
+        <div class="ref-banner">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          已引用「跳板机 A」：路径字段由资源提供（只读）；改资源一处，引用它的 2 条链 + 0 条直引连接全部生效。
+        </div>
+        <dl class="kv">
+          <dt>路径</dt><dd class="mono" style="font-size:11px">本机 :自动 → bastion-a:22（-L 继承连接目标）→ db-order-ro:3306</dd>
+          <dt>凭据</dt><dd>资源引用「生产跳板机 SSH」档案（AES 加密）</dd>
+          <dt>主机密钥</dt><dd>TOFU · <span class="chip ok">Matched</span></dd>
+        </dl>
+        <div class="note warn" style="margin-top:9px;">资源被删 / 凭据档案缺失时，测试连接与真实连接<b>双双显式报错</b>，不静默回退直连（A2 轮口径，防「以为走了隧道实际裸连」）。</div>
+      </div>
+    </div>
+
+    <!-- 引用链 -->
+    <div data-way-panel="chain" class="card hidden">
+      <div class="card-head"><h2>引用协议链</h2><span class="desc">链 = 资源引用序列 · 不内嵌定义</span></div>
+      <div class="card-body">
+        <div class="f-row"><span class="f-label">链</span>
+          <select class="inp" style="min-width:230px"><option>⛓ 生产跳板链（2 跳）</option><option>⛓ 备用链（1 跳）</option></select>
+          <button class="btn sm">验证链路</button>
+          <a class="btn ghost sm" href="manager-network.html">管理链 →</a>
+        </div>
+        <div class="tunnel-preview">
+          <div style="font-size:10.5px;color:var(--muted);margin-bottom:7px;">跳序（资源引用 · 保存后「连接」按序建链，断开统一释放）</div>
+          <div class="flow">
+            <span class="node">本机 :自动</span><span class="hop">SSH</span>
+            <span class="node">🖥 跳板机 A · bastion-a:22</span><span class="hop">HTTP</span>
+            <span class="node">🧱 公司代理 · proxy-corp:8080</span><span class="hop">TCP</span>
+            <span class="node hl">db-order-ro:3306/orders</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 内联（一次性） -->
+    <div data-way-panel="inline" class="card hidden">
+      <div class="card-head"><h2>内联 SSH（一次性）</h2><span class="desc">快速临时配置 · 仅本连接可见，不进资源库</span></div>
+      <div class="card-body">
+        <div class="f-row"><span class="f-label req">跳板主机</span><input class="inp mono" style="width:190px" value="bastion-a.internal">
+          <span class="f-label" style="min-width:28px">端口</span><input class="inp" style="width:64px" value="22">
+        </div>
+        <div class="f-row"><span class="f-label req">用户名</span><input class="inp" style="width:150px" value="tunnel_svc">
+          <span class="f-label req" style="min-width:30px">密码</span>
+          <span style="position:relative;display:inline-flex;"><input class="inp" type="password" value="secret" style="width:170px;padding-right:34px;"><button style="position:absolute;right:6px;top:50%;transform:translateY(-50%);border:none;background:none;color:var(--muted);cursor:pointer;font-size:11px;">👁</button></span>
+        </div>
+        <div class="f-row"><span class="f-label">主机密钥</span>
+          <select class="inp"><option>TOFU（首次自动信任并记录）</option><option>严格校验（未知即拒）</option><option>允许未知（内网退路，不落盘）</option></select>
+          <span class="chip ok">Matched · 指纹已在 known_hosts</span>
+        </div>
+        <div class="note info" style="margin-top:8px;">内联探测与真实连接同源真实建隧道（A1 轮）；保存的连接里它是一次性私有快照——<b>不随资源库演进</b>，跳板换密码需逐连接改。</div>
+        <div style="margin-top:11px;display:flex;gap:9px;align-items:center;">
+          <button class="btn primary" onclick="showConvert()">⬆ 转为可复用资源…</button>
+          <span class="f-help">把这份内联配置沉淀为资源 + 本连接改为引用（推荐复用时做）</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 执行模型 -->
+<div style="max-width:920px;margin:16px auto 0;" class="card">
+  <div class="card-head"><h2>协议链执行模型（两层引用下的解析）</h2><span class="desc">connection::chain + TunnelRegistry（现状已实现 · 入口口径升级为两层）</span></div>
+  <div class="card-body">
+    <div class="flow" style="margin-bottom:12px;">
+      <span class="node">network_method = resource / chain</span><span class="hop">解析</span>
+      <span class="node">资源 / 链 → ChainHop[]</span><span class="hop">逐跳</span>
+      <span class="node">SSH 本地转发 / 代理 CONNECT</span><span class="hop">改写</span>
+      <span class="node">连接 URL 重写 + SSL 注入</span><span class="hop">登记</span>
+      <span class="node hl">TunnelRegistry（按连接持有守卫）</span>
+    </div>
+    <dl class="kv">
+      <dt>生命周期</dt><dd>connect 成功 → insert 守卫；close_connection → take + drop；重复 insert 先释放旧隧道</dd>
+      <dt>执行层零改动</dt><dd>ChainHop 已是运行时抽象，两层表模型与它天然对齐——本 Tab 口径升级不触碰 chain.rs</dd>
+      <dt>混填优先级</dt><dd>资源 / 链引用优先；测试连接结果行注明应用了哪层（A1 轮同源口径）</dd>
+    </dl>
+  </div>
+</div>
+
+<!-- 转资源弹层 -->
+<div class="modal-mask hidden" id="convert-modal">
+  <div class="modal">
+    <div class="m-head">⬆ 转为可复用资源</div>
+    <div class="m-body">
+      将把本连接的内联 SSH 配置沉淀为<b>网络资源</b>，本连接改为引用它：<br>
+      <div style="border:1px solid var(--border);border-radius:8px;margin-top:8px;padding:9px 12px;background:var(--group-box);font-size:11.5px;">
+        资源名：<input class="inp" style="width:190px" value="跳板机 A"><br>
+        端点：<span class="mono">bastion-a.internal:22</span> · 类型 ssh<br>
+        凭据：生成 <a href="manager-auth.html">ssh_key 认证档案</a>「跳板机 A 凭据」（标来源 <code>inline-convert</code>）<br>
+        <span style="color:var(--muted);">已存在同 <code>kind+host:port</code> 资源「跳板机 A」→ 默认改为引用既有资源（重复检测）</span>
+      </div>
+      <span class="f-help">转为资源后：跳板改端点 / 换凭据只改一处；其他连接也能引用它。</span>
+    </div>
+    <div class="m-foot">
+      <button class="btn" onclick="hideConvert()">取消</button>
+      <button class="btn" onclick="void(0)">保留一次性（不改）</button>
+      <button class="btn primary" onclick="confirmConvert()">转为资源（推荐）</button>
+    </div>
+  </div>
+</div>
+
+<footer class="page-foot">
+  <b>对照</b>：现状 <code>render.rs</code> 网络 Tab 为五选 + 内联表单（旧单表口径）；资源 / 链引用选择器与「转为可复用资源」为<span class="st st-prop">提案</span>（两层模型联动，落地依赖 network_configs 拆表）。
+  执行链 / TOFU / 加密为已实现部分的现状还原。· <a href="index.html">返回总览</a> · <a href="tab-advanced.html">下一页：高级 Tab →</a>
+</footer>
+
+<script>
+/* 四态切换 */
+document.querySelectorAll("[data-way]").forEach(function (el) {
+  el.addEventListener("click", function () {
+    document.querySelectorAll("[data-way]").forEach(function (m) { m.classList.remove("on"); });
+    el.classList.add("on");
+    var way = el.getAttribute("data-way");
+    document.querySelectorAll("[data-way-panel]").forEach(function (p) {
+      p.classList.toggle("hidden", p.getAttribute("data-way-panel") !== way);
+    });
+  });
+});
+/* 转资源弹层 */
+function showConvert(){ document.getElementById("convert-modal").classList.remove("hidden"); }
+function hideConvert(){ document.getElementById("convert-modal").classList.add("hidden"); }
+function confirmConvert(){
+  hideConvert();
+  alert("演示：已创建资源「跳板机 A」（或复用既有）→ 本连接 network_method 改为 resource 引用 → 引用计数刷新");
+}
+</script>
+
+</body>
+</html>

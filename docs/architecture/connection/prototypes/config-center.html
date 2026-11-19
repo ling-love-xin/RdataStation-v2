@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>配置中心外壳 · 认证 / 网络 / 环境</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%23C25B46'/%3E%3Cpath d='M6 8h12M6 12h12M6 16h7' stroke='%23fff' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="_theme.css">
+<style>
+  /* ---------- 页面级：配置中心外壳 ---------- */
+  .guide{display:flex;gap:10px;align-items:flex-start;border:1px solid color-mix(in srgb,var(--info) 30%,transparent);background:var(--info-bg);border-radius:9px;padding:10px 13px;font-size:11.5px;line-height:1.7;max-width:1180px;margin:0 auto 14px;}
+  .guide svg{width:15px;height:15px;color:var(--info);flex-shrink:0;margin-top:2px;}
+
+  .cc-shell{max-width:1180px;margin:0 auto;display:grid;grid-template-columns:232px minmax(0,1fr);border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--bg);box-shadow:0 1px 3px rgba(20,20,30,.08);min-height:560px;}
+
+  /* 左侧：域导航 */
+  .cc-nav{background:var(--sidebar);border-right:1px solid var(--sidebar-border);display:flex;flex-direction:column;min-width:0;}
+  .cc-nav-h{padding:12px 14px 8px;font-size:11px;letter-spacing:.08em;color:var(--muted);text-transform:uppercase;}
+  .cc-nav-item{display:flex;gap:9px;align-items:flex-start;padding:9px 14px;border-left:3px solid transparent;cursor:pointer;color:var(--fg);}
+  .cc-nav-item:hover{background:var(--hover);text-decoration:none;color:var(--fg);}
+  .cc-nav-item.on{background:var(--tabactive-bg);border-left-color:var(--active-border);}
+  .cc-nav-item svg{width:15px;height:15px;flex-shrink:0;margin-top:2px;color:var(--muted);}
+  .cc-nav-item.on svg{color:var(--active-border);}
+  .cc-nav-name{font-size:13px;font-weight:600;display:flex;align-items:center;gap:7px;}
+  .cc-nav-sub{font-size:10.5px;color:var(--muted);margin-top:2px;line-height:1.5;}
+  .cc-nav-note{margin-top:auto;padding:11px 14px;border-top:1px solid var(--sidebar-border);font-size:10.5px;line-height:1.65;color:var(--muted);}
+  .cc-nav-note b{color:var(--fg);font-weight:600;}
+
+  /* 右侧：内容 */
+  .cc-main{display:flex;flex-direction:column;min-width:0;}
+  .cc-crumbs{display:flex;align-items:center;gap:6px;padding:9px 16px;border-bottom:1px solid var(--sidebar-border);font-size:11px;color:var(--muted);background:var(--group-box);}
+  .cc-crumbs .cur{color:var(--fg);font-weight:600;}
+  .cc-crumbs .sep{color:var(--muted);}
+  .cc-domain{padding:14px 16px 4px;display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;}
+  .cc-domain h2{font-size:15px;font-weight:700;display:flex;align-items:center;gap:8px;}
+  .cc-domain p{font-size:11.5px;color:var(--muted);line-height:1.7;margin-top:3px;}
+  .cc-domain .acts{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+  .cc-toolbar{display:flex;gap:8px;align-items:center;padding:6px 16px 10px;flex-wrap:wrap;}
+  .cc-toolbar .inp{height:28px;}
+  .cc-body{padding:0 16px 14px;overflow:auto;}
+  .cc-foot{border-top:1px solid var(--sidebar-border);padding:9px 16px;display:flex;gap:12px;align-items:center;font-size:11px;color:var(--muted);margin-top:auto;}
+  .cc-foot .links{margin-left:auto;display:flex;gap:12px;}
+
+  /* 列表 */
+  .cc-list{width:100%;table-layout:fixed;border-collapse:collapse;font-size:12px;}
+  .cc-list th{text-align:left;font-size:10.5px;font-weight:600;color:var(--muted);padding:7px 8px;border-bottom:1px solid var(--border);white-space:nowrap;}
+  .cc-list td{padding:8px;border-bottom:1px solid var(--border);vertical-align:middle;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .cc-list tbody tr:hover{background:var(--hover);}
+  .cc-list .acts{display:flex;gap:6px;justify-content:flex-end;}
+  .cc-empty{padding:26px 8px;text-align:center;color:var(--muted);font-size:11.5px;}
+  .cc-masked{font-family:ui-monospace,Consolas,monospace;color:var(--muted);letter-spacing:.1em;}
+
+  /* 编辑视图 */
+  .edit-bar{display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--border);border-radius:8px;background:var(--group-box);margin-bottom:12px;flex-wrap:wrap;}
+  .eb-title{font-size:13px;font-weight:700;}
+  .eb-crumb{color:var(--muted);font-size:11px;}
+  .cc-form{display:flex;flex-direction:column;gap:0;}
+  .cc-form .f-row{border-bottom:1px solid var(--border);padding:10px 2px;}
+  .cc-form .f-row:last-child{border-bottom:none;}
+  .cc-form .inp{height:28px;min-width:180px;}
+  .cc-form-actions{display:flex;gap:8px;padding-top:12px;}
+
+  /* 顶部统计条 */
+  .cc-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--sidebar-border);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin:0 16px 12px;}
+  .cc-stat{background:var(--bg);padding:9px 12px;}
+  .cc-stat .v{font-size:15px;font-weight:700;}
+  .cc-stat .l{font-size:10.5px;color:var(--muted);margin-top:2px;}
+
+  /* 弹层 / toast */
+  .cc-mask{position:fixed;inset:0;background:rgba(20,20,30,.28);display:flex;align-items:center;justify-content:center;z-index:40;}
+  .cc-modal{width:min(420px,92vw);background:var(--bg);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow);padding:16px 18px;font-size:12px;line-height:1.7;}
+  .cc-modal h3{font-size:13px;margin-bottom:8px;}
+  .cc-modal .refs{border:1px dashed var(--border);border-radius:7px;padding:8px 10px;margin:8px 0;font-size:11.5px;color:var(--muted);}
+  .cc-modal .m-acts{display:flex;justify-content:flex-end;gap:8px;margin-top:12px;}
+  .cc-toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:var(--fg);color:var(--bg);font-size:12px;padding:8px 14px;border-radius:8px;opacity:0;pointer-events:none;transition:opacity .18s;z-index:50;}
+  .cc-toast.on{opacity:1;}
+
+  /* 底部的落地说明 */
+  .cc-notes{max-width:1180px;margin:16px auto 0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;}
+  .cc-notes .card{margin:0;}
+  .map-tbl{width:100%;border-collapse:collapse;font-size:11.5px;table-layout:fixed;}
+  .map-tbl th{text-align:left;color:var(--muted);font-size:10.5px;padding:6px 8px;border-bottom:1px solid var(--border);}
+  .map-tbl td{padding:7px 8px;border-bottom:1px solid var(--border);vertical-align:top;}
+  .map-tbl code{font-size:10.5px;}
+
+  @media (max-width: 900px){
+    body{padding:18px 12px 40px;}
+    .cc-shell{grid-template-columns:1fr;min-height:0;}
+    .cc-nav{border-right:none;border-bottom:1px solid var(--sidebar-border);}
+    .cc-nav-item{padding:8px 12px;}
+    .cc-nav-note{display:none;}
+    .cc-stats{grid-template-columns:1fr;margin:0 12px 10px;}
+    .cc-notes{grid-template-columns:1fr;}
+    .cc-domain{padding:12px;}
+    .cc-toolbar,.cc-body,.cc-foot{padding-left:12px;padding-right:12px;}
+  }
+</style>
+</head>
+<body>
+
+<header class="page-head">
+  <div class="brand">
+    <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><rect x="3.5" y="4" width="17" height="16" rx="2.5"/><path d="M7.5 9h9M7.5 12.5h9M7.5 16h5.5"/></svg></div>
+    <div>
+      <h1>⑩ 配置中心外壳 · 认证 / 网络 / 环境</h1>
+      <div class="sub">config-center · 左域导航 + 右内容 + 面包屑 <span class="st st-prop">外壳：设计提案</span> · 三域内容 <span class="st st-part">列表 ⇄ 编辑沿用现有语言</span></div>
+    </div>
+  </div>
+  <div class="head-actions">
+    <a class="back-link" href="index.html">← 总览</a>
+    <a class="back-link" href="dialog-shell.html">连接对话框</a>
+    <button class="theme-toggle" data-theme-toggle></button>
+  </div>
+</header>
+
+<div class="guide">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v.5M12 11v5"/></svg>
+  <div>
+    <b>这一页只定外壳。</b>三种配置（<code>auth_configs</code> / <code>network_configs</code> / <code>environments</code>）此前各是一个「对话框里的弹窗」；
+    升格为一页后：左域导航切域、右侧列表 ⇄ 编辑、顶部面包屑，连接对话框里的「管理」变成跳转而不是再开一层。
+    三域内部的字段语言不在本页重复，见各自的详细页（页脚有链接）。
+  </div>
+</div>
+
+<!-- ============ 外壳本体 ============ -->
+<div class="cc-shell">
+  <!-- 左：域导航 -->
+  <nav class="cc-nav" id="cc-nav" aria-label="配置域"></nav>
+
+  <!-- 右：内容 -->
+  <section class="cc-main">
+    <div class="cc-crumbs" id="cc-crumbs"></div>
+    <div id="cc-domain"></div>
+    <div class="cc-stats" id="cc-stats"></div>
+    <div class="cc-toolbar" id="cc-toolbar"></div>
+    <div class="cc-body" id="cc-body"></div>
+    <div class="cc-foot">
+      <span id="cc-foot-note"></span>
+      <span class="links" id="cc-foot-links"></span>
+    </div>
+  </section>
+</div>
+
+<!-- ============ 落地说明 ============ -->
+<div class="cc-notes">
+  <div class="card">
+    <div class="card-head"><h2>旧 → 新 映射</h2><span class="desc">一刀一刀替换，旧弹窗保留到对应域落地</span></div>
+    <div class="card-body" style="padding-top:4px;">
+      <table class="map-tbl">
+        <colgroup><col style="width:26%"><col style="width:30%"><col style="width:44%"></colgroup>
+        <tr><th>旧入口</th><th>旧实现</th><th>新落点</th></tr>
+        <tr><td><code>mgr-auth</code><br>常规页「管理」</td><td><code>open_manager(0, …)</code> 第二层 dialog</td><td>跳转配置中心 · 域 <b>认证档案</b>，返回后刷新引用计数</td></tr>
+        <tr><td><code>mgr-network</code><br>网络页「管理」</td><td><code>open_manager(1, …)</code></td><td>跳转配置中心 · 域 <b>网络代理</b>，回来的引用下拉就地刷新</td></tr>
+        <tr><td><code>mgr-env</code><br>高级页「管理环境」</td><td><code>open_manager(2, …)</code></td><td>跳转配置中心 · 域 <b>环境策略</b></td></tr>
+      </table>
+      <div class="note info" style="margin-top:10px;">请求协议只有一条：<code>OpenManager { kind, focus? }</code>（<code>focus</code> = 从某条配置点进来时定位到它）。宿主渲染页面、对话框只发请求，职责与现在一致。</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>第一版口径（不要画过头）</h2><span class="desc">按现有表与现有语义渲染，提案留在详细页</span></div>
+    <div class="card-body" style="padding-top:4px;">
+      <div class="sec" style="border:none;padding:0;margin:0;"><h3>只做这些</h3><span class="hint">三域一致</span></div>
+      <ul style="font-size:11.5px;line-height:1.85;color:var(--muted);padding-left:18px;margin:6px 0 10px;">
+        <li>列表：搜索 + 类型筛选 + <b>直引计数</b>（全局库 + 当前项目）+ 更新日期；</li>
+        <li>编辑：<code>.edit-bar</code> 返回列表 + 名称 / 类型（<b>新建可选、编辑只读</b>）/ 字段集；</li>
+        <li>删除两态：被引用 → 拦截并列引用方；未引用 → 普通确认。</li>
+      </ul>
+      <div class="sec" style="border:none;padding:0;margin:0;"><h3>明确不做（未落地的设计）</h3><span class="hint">画了就等于宣称能用</span></div>
+      <ul style="font-size:11.5px;line-height:1.85;color:var(--muted);padding-left:18px;margin:6px 0 0;">
+        <li>网络：<b>资源 / 链两层拆表</b>、活动隧道监控、逐跳诊断；引用数只算直引，不出现「经链 N 条」；</li>
+        <li>环境：<b>执行语义矩阵</b>、应用预览（5 类策略当前只存不执行）；</li>
+        <li>认证：密钥来源三档、轮换影响面、换机迁移包；</li>
+        <li>网络页的「内联一次性 + TOFU 三态」已于 2026-09-12 撤下（决策 #72），不再出现。</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="cc-mask hidden" id="cc-mask"><div class="cc-modal" id="cc-modal"></div></div>
+<div class="cc-toast" id="cc-toast"></div>
+
+<script src="_theme.js"></script>
+<script>
+/* ============================================================
+ * 配置中心外壳 · 页面内交互（原生 JS，无框架）
+ * 数据为示例，仅用于演示列表 / 编辑 / 删除两态；
+ * 真实计数与字段以库表与服务为准（见页面底部口径说明）。
+ * ============================================================ */
+
+var SVG = {
+  auth: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="9.5" width="16" height="10" rx="2.4"/><path d="M8 9.5V7a4 4 0 0 1 8 0v2.5"/></svg>',
+  net:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="2.4"/><circle cx="5.5" cy="18" r="2.4"/><circle cx="18.5" cy="18" r="2.4"/><path d="M12 7.4v3.2M12 10.6 6.6 16M12 10.6l5.4 5.4"/></svg>',
+  env:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19h16M6 15l4-7 3 4 3-6 2 9"/></svg>'
+};
+
+/* 示例数据：每域一张表 + 一组字段；rows 的 refs 为「直引连接数」 */
+var DOMAINS = {
+  auth: {
+    key: 'auth', name: '认证档案', short: '认证',
+    table: 'auth_configs',
+    desc: '密码 / 密钥 / 代理口令的复用单元；连接、网络档案都只引用它，不复制凭据。',
+    cols: [
+      { t: '档案名', w: '20%' }, { t: '类型', w: '11%' }, { t: '主体', w: '15%' },
+      { t: '凭据', w: '17%' }, { t: '被引用', w: '12%' }, { t: '更新', w: '11%' }, { t: '', w: '14%' }
+    ],
+    types: ['password', 'ssh_key', 'ssh_agent', 'proxy_pwd', 'kerberos'],
+    rows: [
+      { name: '订单库只读账号', type: 'password', subject: 'app_ro', secret: '••••••••', refs: 3, updated: '2026-10-28' },
+      { name: '生产跳板机 SSH', type: 'ssh_key', subject: 'tunnel_svc', secret: 'key: ~/.ssh/id_ed25519', refs: 2, updated: '2026-09-30' },
+      { name: '公司代理认证', type: 'proxy_pwd', subject: 'corp\\tunnel_svc', secret: '••••••••', refs: 1, updated: '2026-08-14' },
+      { name: '测试库账号', type: 'password', subject: 'test_user', secret: '••••••••', refs: 0, updated: '2026-11-08' }
+    ],
+    fields: [
+      { k: 'name', label: '档案名', kind: 'text', required: true },
+      { k: 'type', label: '类型', kind: 'seg', required: true, hint: '决定字段集；创建后不可改，换类型请新建' },
+      { k: 'user', label: '用户名', kind: 'text', required: true },
+      { k: 'pass', label: '密码', kind: 'secret', hint: '列表脱敏；保存即加密（AES-256-GCM），不回显明文' }
+    ],
+    stats: [['4', '认证档案（示例）'], ['6', '直引连接次数'], ['100%', '密文存储']],
+    impl: '存储 / 脱敏 / 引用计数',
+    notYet: '密钥来源三档 · 轮换影响面 · 换机迁移包',
+    link: 'manager-auth.html'
+  },
+  net: {
+    key: 'net', name: '网络代理', short: '网络',
+    table: 'network_configs',
+    desc: 'SSH / 代理 / SOCKS / TLS 材料 / 多跳链的引用单元；连上之后多跳按档案解析成协议链。',
+    cols: [
+      { t: '档案名', w: '22%' }, { t: '类型', w: '11%' }, { t: '目标', w: '27%' },
+      { t: '说明', w: '16%' }, { t: '被引用', w: '11%' }, { t: '更新', w: '8%' }, { t: '', w: '15%' }
+    ],
+    types: ['ssh', 'proxy', 'socks5', 'ssl', 'chain'],
+    rows: [
+      { name: '生产跳板链', type: 'chain', target: 'ssh×2 → proxy×1', note: '3 跳 · 逐跳引用', refs: 2, updated: '2026-10-30' },
+      { name: '跳板机 A', type: 'ssh', target: '10.20.1.7:22', note: '凭据引用认证档案', refs: 1, updated: '2026-10-12' },
+      { name: '公司代理', type: 'proxy', target: '10.0.8.8:3128', note: '认证：公司代理认证', refs: 1, updated: '2026-09-18' },
+      { name: '内网 SOCKS', type: 'socks5', target: '127.0.0.1:1080', note: '本机端口转发', refs: 0, updated: '2026-07-02' }
+    ],
+    fields: [
+      { k: 'name', label: '档案名', kind: 'text', required: true },
+      { k: 'type', label: '类型', kind: 'seg', required: true, hint: 'ssh / proxy / socks5 / ssl 用结构化字段；chain 仍填 JSON 数组' },
+      { k: 'host', label: '主机', kind: 'text', required: true },
+      { k: 'port', label: '端口', kind: 'text' },
+      { k: 'json', label: '数据（JSON）', kind: 'textarea', hint: '仅 chain 或未声明字段的类型使用；落库前校验' }
+    ],
+    stats: [['4', '网络档案（示例）'], ['4', '直引连接次数'], ['0', '活动隧道（未接入监控）']],
+    impl: '档案 CRUD / 引用下拉 / 数据路径预览',
+    notYet: '资源 / 链两层拆表 · 活动隧道 · 逐跳诊断（内联链已撤下）',
+    link: 'manager-network.html'
+  },
+  env: {
+    key: 'env', name: '环境策略', short: '环境',
+    table: 'environments + environment_policies',
+    desc: '给连接套一组策略（安全 / Schema / 超时 / 权限 / 审计）；连接侧只选环境，不逐个勾。',
+    cols: [
+      { t: '环境名', w: '24%' }, { t: '启用策略', w: '30%' }, { t: '被引用', w: '14%' },
+      { t: '更新', w: '14%' }, { t: '', w: '18%' }
+    ],
+    types: [],
+    rows: [
+      { name: '生产', policies: '安全 · Schema · 超时 · 权限 · 审计', refs: 4, updated: '2026-10-26' },
+      { name: '预发', policies: '安全 · 超时', refs: 1, updated: '2026-09-11' },
+      { name: '本地', policies: '未启用', refs: 0, updated: '2026-06-20' }
+    ],
+    fields: [
+      { k: 'name', label: '环境名', kind: 'text', required: true },
+      { k: 'policies', label: '策略', kind: 'checks', hint: '当前仅存储与展示，执行侧零消费（见执行语义矩阵页）' }
+    ],
+    stats: [['3', '环境（示例）'], ['5', '策略类型（只存不执行）'], ['5', '直引连接次数']],
+    impl: '环境 / 策略存储 · 连接侧引用',
+    notYet: '执行语义矩阵 · 应用预览 · 5 类策略的执行侧消费',
+    link: 'manager-environment.html'
+  }
+};
+
+var ORDER = ['auth', 'net', 'env'];
+var state = { domain: 'auth', view: 'list', editing: null, q: '', type: '' };
+
+function $(id) { return document.getElementById(id); }
+function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+
+function toast(msg) {
+  var t = $('cc-toast');
+  t.textContent = msg; t.classList.add('on');
+  clearTimeout(t._h); t._h = setTimeout(function () { t.classList.remove('on'); }, 1900);
+}
+
+/* ---------- 左侧导航 ---------- */
+function renderNav() {
+  var html = '<div class="cc-nav-h">配置</div>';
+  ORDER.forEach(function (k) {
+    var d = DOMAINS[k];
+    var on = state.domain === k ? ' on' : '';
+    html += '<a class="cc-nav-item' + on + '" href="#' + k + '" data-domain="' + k + '">' +
+      SVG[k] +
+      '<div><div class="cc-nav-name">' + esc(d.name) + '<span class="chip">' + d.rows.length + '</span></div>' +
+      '<div class="cc-nav-sub">' + esc(d.table) + '</div></div></a>';
+  });
+  html += '<div class="cc-nav-note"><b>入口</b>：连接对话框「管理」· 网络页「管理」· 高级页「管理环境」。跳转后回到连接对话框时会刷新引用计数。</div>';
+  $('cc-nav').innerHTML = html;
+}
+
+/* ---------- 域头 ---------- */
+function renderDomainHead(d) {
+  $('cc-domain').innerHTML =
+    '<div class="cc-domain"><div><h2>' + esc(d.name) + ' <span class="st st-part">列表 ⇄ 编辑</span></h2>' +
+    '<p>' + esc(d.desc) + '</p></div>' +
+    '<div class="acts"><span class="chip info">' + esc(d.table) + '</span>' +
+    '<button class="btn primary sm" data-act="new">＋ 新建' + esc(d.short) + '</button></div></div>';
+
+  var st = '';
+  d.stats.forEach(function (s) {
+    st += '<div class="cc-stat"><div class="v">' + esc(s[0]) + '</div><div class="l">' + esc(s[1]) + '</div></div>';
+  });
+  $('cc-stats').innerHTML = st;
+
+  var tb = '';
+  if (state.view === 'list') {
+    tb += '<input class="inp" id="cc-q" placeholder="搜索' + esc(d.name) + '…" value="' + esc(state.q) + '" style="width:220px">';
+    if (d.types.length) {
+      tb += '<select class="inp" id="cc-type"><option value="">全部类型</option>' +
+        d.types.map(function (t) { return '<option value="' + esc(t) + '"' + (state.type === t ? ' selected' : '') + '>' + esc(t) + '</option>'; }).join('') +
+        '</select>';
+    }
+    tb += '<span class="f-help">被引用 = 直引连接数（全局库 + 当前项目）；不折叠间接引用</span>';
+  }
+  $('cc-toolbar').innerHTML = tb;
+
+  $('cc-foot-note').innerHTML = '已落地：' + esc(d.impl) + ' · 未落地：' + esc(d.notYet);
+  $('cc-foot-links').innerHTML = '<a href="' + d.link + '">该域详细设计 →</a><span class="f-help">示例数据 · 真实计数取库</span>';
+}
+
+/* ---------- 列表 ---------- */
+function renderList(d) {
+  if (state.view === 'edit') { renderEdit(d); return; }
+  var rows = d.rows.map(function (r, idx) { return { r: r, idx: idx }; }).filter(function (x) {
+    var r = x.r;
+    var hitQ = !state.q || (r.name + (r.subject || '') + (r.target || '')).toLowerCase().indexOf(state.q.toLowerCase()) >= 0;
+    var hitT = !state.type || r.type === state.type;
+    return hitQ && hitT;
+  });
+  var head = '<tr>' + d.cols.map(function (c) { return '<th style="width:' + c.w + '">' + esc(c.t) + '</th>'; }).join('') + '</tr>';
+  var body = '';
+  rows.forEach(function (x) {
+    var r = x.r;
+    var refs = r.refs > 0
+      ? '<span class="chip info">直引 ' + r.refs + '</span>'
+      : '<span class="chip">未引用</span>';
+    var cells = '';
+    if (d.key === 'auth') {
+      cells = '<td><b>' + esc(r.name) + '</b></td><td><span class="chip">' + esc(r.type) + '</span></td>' +
+        '<td class="mono">' + esc(r.subject) + '</td><td class="cc-masked">' + esc(r.secret) + '</td>' +
+        '<td>' + refs + '</td><td class="mono">' + esc(r.updated) + '</td>';
+    } else if (d.key === 'net') {
+      cells = '<td><b>' + esc(r.name) + '</b></td><td><span class="chip">' + esc(r.type) + '</span></td>' +
+        '<td class="mono">' + esc(r.target) + '</td><td class="f-help" style="white-space:normal">' + esc(r.note) + '</td>' +
+        '<td>' + refs + '</td><td class="mono">' + esc(r.updated) + '</td>';
+    } else {
+      cells = '<td><b>' + esc(r.name) + '</b></td><td class="f-help" style="white-space:normal">' + esc(r.policies) + '</td>' +
+        '<td>' + refs + '</td><td class="mono">' + esc(r.updated) + '</td>';
+    }
+    body += '<tr>' + cells +
+      '<td><div class="acts"><button class="btn sm" data-act="edit" data-i="' + x.idx + '">编辑</button>' +
+      '<button class="btn sm danger" data-act="del" data-i="' + x.idx + '">删除</button></div></td></tr>';
+  });
+  if (!body) body = '<tr><td colspan="' + d.cols.length + '"><div class="cc-empty">没有匹配的' + esc(d.name) + '。清空搜索或类型筛选再试，或点右上「新建」。</div></td></tr>';
+  $('cc-body').innerHTML = '<table class="cc-list"><tbody>' + head + body + '</tbody></table>';
+}
+
+/* ---------- 编辑视图 ---------- */
+function renderEdit(d) {
+  var r = state.editing != null ? d.rows[state.editing] : null;
+  var title = r ? ('编辑' + d.short + '：' + r.name) : ('新建' + d.short);
+  var crumb = r ? '编辑模式 · 类型创建后不可改，字段集随类型走' : '新建模式 · 先选类型再填字段';
+  var h = '<div class="edit-bar"><button class="btn sm" data-act="back">← 返回列表</button>' +
+    '<span class="eb-title">' + esc(title) + '</span><span class="eb-crumb">' + esc(crumb) + '</span></div>' +
+    '<div class="cc-form">';
+  d.fields.forEach(function (f) {
+    var val = r ? (r[f.k] || '') : '';
+    h += '<div class="f-row"><span class="f-label' + (f.required ? ' req' : '') + '">' + esc(f.label) + '</span>';
+    if (f.kind === 'seg') {
+      var opts = d.types;
+      h += '<div class="seg" data-seg="' + f.k + '">' + opts.map(function (t) {
+        var on = ((r && r.type === t) || (!r && opts[0] === t)) ? ' class="on"' : '';
+        return '<button type="button"' + on + (r ? ' disabled title="编辑时类型只读"' : '') + '>' + esc(t) + '</button>';
+      }).join('') + '</div>';
+    } else if (f.kind === 'checks') {
+      h += '<div style="display:flex;flex-wrap:wrap;gap:8px 16px;padding-top:4px;">' +
+        ['安全策略', 'Schema 过滤', '超时与行数', '权限控制', '审计'].map(function (p) {
+          var ck = r ? (r.policies.indexOf(p.slice(0, 2)) >= 0 ? ' checked' : '') : '';
+          return '<label class="switch"><input type="checkbox"' + ck + '><span class="track"></span>' + esc(p) + '</label>';
+        }).join('') + '</div>';
+    } else if (f.kind === 'textarea') {
+      h += '<input class="inp" style="min-width:min(420px,60vw)" value="' + esc(val) + '" placeholder="[{\"kind\":\"ssh\",\"resource\":\"跳板机 A\"}]" readonly>';
+    } else if (f.kind === 'secret') {
+      h += '<input class="inp" type="password" value="' + esc(val || 'decrypted-once') + '" style="min-width:200px">';
+    } else {
+      h += '<input class="inp" value="' + esc(val) + '">';
+    }
+    if (f.hint) h += '<span class="f-help" style="margin-left:10px">' + esc(f.hint) + '</span>';
+    h += '</div>';
+  });
+  h += '<div class="cc-form-actions"><button class="btn primary" data-act="save">保存</button>' +
+    '<button class="btn" data-act="back">取消</button>' +
+    '<span class="f-help">保存即写库；编辑既有条目时类型只读（与原型口径一致）</span></div></div>';
+  $('cc-body').innerHTML = h;
+}
+
+/* ---------- 面包屑 ---------- */
+function renderCrumbs(d) {
+  $('cc-crumbs').innerHTML = '<a href="dialog-shell.html">数据源连接</a><span class="sep">›</span>' +
+    '<a href="index.html">配置中心</a><span class="sep">›</span>' +
+    '<span class="cur">' + esc(d.name) + '</span>' +
+    (state.view === 'edit' ? '<span class="sep">›</span><span class="cur">' + (state.editing != null ? '编辑' : '新建') + '</span>' : '') +
+    '<span style="margin-left:auto">' + (state.view === 'list' ? '列表' : '编辑') + '</span>';
+}
+
+/* ---------- 删除两态 ---------- */
+function askDelete(d, r) {
+  var modal = $('cc-modal');
+  if (r.refs > 0) {
+    modal.innerHTML = '<h3>不能删除：「' + esc(r.name) + '」正被引用</h3>' +
+      '<div class="refs">直引连接 ' + r.refs + ' 条（全局库 + 当前项目）<br>（示例；真实引用方按 ID + 名称列出，可点进对应连接）</div>' +
+      '<div style="color:var(--muted)">先解除引用，或改这些连接引用别的' + esc(d.short) + '。</div>' +
+      '<div class="m-acts"><button class="btn" data-act="close-modal">知道了</button></div>';
+  } else {
+    modal.innerHTML = '<h3>删除「' + esc(r.name) + '」？</h3>' +
+      '<div style="color:var(--muted)">未被任何连接引用，删除只影响这一条记录。此操作不可撤销。</div>' +
+      '<div class="m-acts"><button class="btn" data-act="close-modal">取消</button>' +
+      '<button class="btn danger" data-act="do-delete">删除</button></div>';
+  }
+  $('cc-mask').classList.remove('hidden');
+}
+
+/* ---------- 组装 ---------- */
+function render() {
+  var d = DOMAINS[state.domain];
+  renderNav();
+  renderCrumbs(d);
+  renderDomainHead(d);
+  renderList(d);
+}
+
+/* ---------- 事件 ---------- */
+document.addEventListener('click', function (e) {
+  var nav = e.target.closest('[data-domain]');
+  if (nav) {
+    e.preventDefault();
+    state.domain = nav.getAttribute('data-domain');
+    state.view = 'list'; state.editing = null; state.q = ''; state.type = '';
+    if (history.replaceState) history.replaceState(null, '', '#' + state.domain);
+    render();
+    return;
+  }
+  var btn = e.target.closest('[data-act]');
+  if (!btn) return;
+  var act = btn.getAttribute('data-act');
+  var d = DOMAINS[state.domain];
+
+  if (act === 'new') { state.view = 'edit'; state.editing = null; render(); }
+  else if (act === 'edit') {
+    state.editing = parseInt(btn.getAttribute('data-i'), 10);
+    state.view = 'edit';
+    render();
+  }
+  else if (act === 'back') { state.view = 'list'; state.editing = null; render(); }
+  else if (act === 'save') {
+    toast(state.editing != null ? '原型演示：保存后回列表并刷新引用计数' : '原型演示：新建条目已加入列表');
+    state.view = 'list'; state.editing = null; render();
+  }
+  else if (act === 'del') {
+    askDelete(d, d.rows[parseInt(btn.getAttribute('data-i'), 10)]);
+  }
+  else if (act === 'close-modal') { $('cc-mask').classList.add('hidden'); }
+  else if (act === 'do-delete') { $('cc-mask').classList.add('hidden'); toast('原型演示：条目已删除'); }
+});
+
+document.addEventListener('input', function (e) {
+  if (e.target.id === 'cc-q') { state.q = e.target.value; renderList(DOMAINS[state.domain]); }
+});
+document.addEventListener('change', function (e) {
+  if (e.target.id === 'cc-type') { state.type = e.target.value; renderList(DOMAINS[state.domain]); }
+});
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape') $('cc-mask').classList.add('hidden');
+});
+
+/* ---------- 初始化：hash 决定首屏域 ---------- */
+(function boot() {
+  var h = (location.hash || '').replace('#', '');
+  if (ORDER.indexOf(h) >= 0) { state.domain = h; }
+  render();
+})();
+</script>
+</body>
+</html>
