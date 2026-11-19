@@ -5522,6 +5522,64 @@ private String getDefaultFunction() {
   `cargo check -p rds-editor` 通过、`cargo test -p rds-editor --lib -- --test-threads=4`
   = **794 passed**（1 ignored）、`cargo test -p rds-ui-guard` = 4 passed。
 
+### 9.08 右栏页签模型：可并存多页 + 逐页关闭（方案 B 第 1 步，2026-11-19）
+
+**DBeaver 的右栏是一个 `CTabFolder`，页签可并存、可逐页关闭**：`ResultSetViewer.addPanel:1330-1394`
+给每个面板建一条 `CTabItem`，且**带 `SWT.CLOSE`**：
+
+```java
+CTabItem panelItem = new CTabItem(panelFolder, SWT.CLOSE);
+panelItem.setData(panelDescriptor);
+panelItem.setText(panelDescriptor.getPanelName());
+panelItem.setImage(UIUtils.getImage(panelDescriptor.getIcon()));
+panelItem.setToolTipText(panelDescriptor.getDescription());
+...
+presentationSettings.enabledPanelIds.add(panelDescriptor.getId());   // :1388
+```
+
+页签夹里同时挂着的页是「已启用集合」——`enabledPanelIds` 是持久化的（`PresentationSettings`），
+所以关掉一页 = 从集合移除并析构该页的内容，重开 = 再 `addPanel` 一次。
+
+**本仓此前的状态（第 9.x 之后）**：页签条恒定列六页、`selected_index` 是规范序下标；
+行尾 × 只在非「列浏览器」页出现，点它是 `SetRightTab(Browser)`——即「退回默认页」，
+不是「关掉这一页」。右栏只有一个可见页，没有「已启用集合」这个概念。
+
+**本步改法（方案 B 第 1 步；方案正文见 `result-panel-right-panel-tabs.md`）**：
+1. 面板新增状态 `open_tabs: Vec<RightTab>`（`panel/data.rs`），**规范序、恒非空**；
+   出厂初值 = 六页全开（`right_tabs().to_vec()`，对齐 `activateDefaultPanels:1396-1400`）。
+2. 页签条按 `open_tabs` 渲染，下标换算改用集合化的 `strip_index` / `tab_at_strip_index`
+   （原 `right_tab_index` / `right_tab_from_index` 删除，避免两套换算分叉）；
+   `selected_index` 取当前页在集合里的位置。
+3. 行尾 × 改为**无条件渲染**、发 `CloseRightTab(self.right_tab)`：只关这一页，其余页留在条上。
+4. 视图菜单的六个页项改成「勾选态 = 该页在集合里」（`fillPanelsMenu:1559-1588` 的
+   `STYLE_CHECK` + `CMD_TOGGLE_PANEL` 语义）：未勾 → `OpenRightTab`（插回并切过去），
+   已勾 → `SetRightTab`（切过去）。
+5. 右缘竖条仍走 `ToggleRightTab`，但补一条：目标页不在集合里时**先启用再切**
+   （竖条列的是全集，被关掉的页仍可从竖条点回来）。
+6. 关闭规则：关的是当前页 → 落到**规范序里紧随其后**的剩余页（纯函数
+   `neighbor_after_close`，没有后继则取最后一个）；集合被关空 → 整块右栏收起
+   （`set_panels_visible(false)`），再开任一一页会重新展开。
+
+**与 DBeaver 的已知差异（登记）**：
+- 关闭按钮是**行尾单颗**（`editor-result-right-tab-close`），不是每页签内侧的 `SWT.CLOSE`：
+  kit `Tab` 没有 `closable`，只能 `.suffix(...)` 内嵌按钮或行尾独立按钮；而 suffix 内嵌按钮
+  在 headless 下无法验证「不双触发」，故取行尾按钮。属后续/目视项。
+- `open_tabs` **不持久化**（那边 `enabledPanelIds` 会存到工作区）。要落盘需新增 settings 键，
+  本轮有意不做（已登记）。
+- 「点当前页签收起整栏」的旧语义仍在 `ToggleRightTab` 路径（右缘竖条）；第 2 步将把它统一到
+  「勾选 = 已启用 + 整栏收起只走总开关」。
+
+**验证**：
+- 纯函数：`neighbor_after_close`（关中间页取后继、关末页取最后）；
+- 面板态：`panel::tests::close_right_tab_drops_one_page_and_reopen_restores_order`
+  —— 出厂六页、关非当前页当前页不动、关当前页落后继、重开按规范序插回并置为当前、
+  关到空集右栏收起；
+- 映射：`right_tab_index_maps_to_the_six_panel_tabs` 迁到 `strip_index` / `tab_at_strip_index`
+  （含子集与越界断言）；
+- 门禁：`cargo test -p rds-result-panel --lib` = **345 passed**（344 + 1，warning 0）、
+  `cargo check -p rds-editor` 通过、`cargo test -p rds-editor --lib -- --test-threads=4`
+  = **794 passed**（1 ignored）、`cargo test -p rds-ui-guard` = 4 passed。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

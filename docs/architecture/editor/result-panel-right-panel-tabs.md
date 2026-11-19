@@ -1,6 +1,8 @@
 # 结果集右栏页签模型：对齐 DBeaver `CTabFolder`
 
-> 状态：**方案**（未改代码）。本文只定模型与迁移步骤，实施拆到后续批次。
+> 状态：**方案 B 第 1 步已实施**（2026-11-19，`open_tabs` 集合 + 逐页关闭 + 视图菜单勾选态；
+> 实施记录见 `result-panel.md` §9.08、`result-panel-handoff.md` §2.97）。第 2 步（右缘竖条
+> 去掉「点当前页签收起整栏」、整栏收起只走总开关）仍待做。本文保留为模型与迁移步骤的依据。
 > 范围：`crates/result_panel/src/panel/{data.rs,events.rs,tabs.rs,sidebars.rs,tests.rs}`，
 > 以及 `crates/editor/src/view/host/results/{dispatch.rs,mod.rs}` 的分派。
 > 竞品取证目录：`D:\RdataStation\RDS\dbeaver-ref`（`org.jkiss.dbeaver.ui.editors.data`）。
@@ -27,6 +29,9 @@
    已单独对齐过（§8.94 面板最大化 ↔ 总开关互斥、§8.95 竖条/视图菜单的面板项语义）。
 
 ## 2. 本仓现状
+
+> 下表记的是**方案定稿时**的现状；第 1 步已落地（差异见 §5），实际状态以
+> `result-panel.md` §9.08 为准。
 
 | 项 | 现状 |
 | --- | --- |
@@ -100,6 +105,19 @@
    `close_right_tab`）。
 4. 用例：关中间页后页签条少一项且当前页落到邻近页；关当前页后视图菜单该页未勾选；
    关到空集时 `show_value_sidebar == false` 且右栏不渲染；再勾回来恢复。
+
+**第 1 步的实际实施差异（2026-11-19 落地时登记）**：
+- 页签 ×：改为**行尾单颗**（`editor-result-right-tab-close`），不是每页 `Tab::suffix`。
+  原因：kit `Tab` 无 `closable`，`.suffix` 内嵌按钮在 headless 下无法验证「不会与页签点击
+  双触发」；行尾按钮独立成 hitbox，行为可断言。DBeaver 的 `SWT.CLOSE` 仍属未对齐项。
+- 空集兜底：走 `set_panels_visible(false)`（面板总开关同一入口），不用裸
+  `show_value_sidebar = false`——保证「关空 = 右栏收起」与工具栏开关的互斥关系一致。
+- 视图菜单第 1 步就一并改成「勾选 = 在集合里」，未等第 2 步：勾选态与页签 × 共用同一个集合，
+  分开做会临时出现「× 已关但菜单仍显示当前页勾选」的错态。
+- 右缘竖条：`toggle_right_tab` 补「目标页不在集合 → 先启用再切」，避免被关掉的页只能从菜单找回。
+
+**第 2 步（仍未做）**：`toggle_right_tab` 的「点已选中页签 → 收起整栏」语义还在，
+需改成无操作，把整栏收起收敛到 `SetPanelsVisible`。
 
 **第 2 步：消掉「点当前页签收起整栏」**
 1. `toggle_right_tab` 改为「点已选中页签 → 无操作」（不再收起整栏）；

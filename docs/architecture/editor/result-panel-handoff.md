@@ -1493,7 +1493,31 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 2.97 右栏页签模型已落地第 1 步（2026-11-19）
+
+- **已实现（方案 B 第 1 步）**：`panel::data::open_tabs: Vec<RightTab>`（规范序、恒非空，
+  出厂 = `right_tabs().to_vec()`）；`ports.rs` 新增 `CloseRightTab(RightTab)` /
+  `OpenRightTab(RightTab)`；`events.rs` 有 `open_tabs()` / `open_right_tab()` /
+  `close_right_tab()` + 私有 `open_right_tab_only()`；`set_right_tab` 与 `toggle_right_tab`
+  都会先确保目标页在集合里；纯函数换成集合化的 `strip_index` / `tab_at_strip_index` +
+  `neighbor_after_close`。**`right_tab_index` / `right_tab_from_index` 已删除**。
+- **界面落点**：`sidebars.rs` 页签条按 `open_tabs` 渲染、行尾 × 无条件渲染并发
+  `CloseRightTab(self.right_tab)`（提示「关闭此页（其余页仍保留）」）；
+  `tabs.rs::panel_view_menu` 的六个页项 = 「勾选态看集合成员」+ 未勾走 `OpenRightTab`；
+  `host/results/dispatch.rs` 两个新分支（`OpenRightTab` 切到引用页时同样触发
+  `begin_references_load`）。
+- **关闭规则**：关当前页 → 落后继（无后继取最后一个剩页）；关空 → `set_panels_visible(false)`
+  整栏收起，再开任一一页重新展开。
+- **仍缺（下一步）**：① 右缘竖条的 `ToggleRightTab` 还是「点当前页收起整栏」的旧语义，
+  要统一成「勾选 = 已启用，整栏收起只走总开关」；② 关闭按钮是行尾单颗，不是每页签
+  `SWT.CLOSE`（kit `Tab` 无 `closable`，suffix 内嵌按钮在 headless 无法验证双触发）；
+  ③ `open_tabs` 不持久化（要新增 settings 键）。
+- 门禁基线（本批之后）：panel **345**、editor **794**（1 ignored）、ui-guard **4**。
+
 ### 2.96 右栏页签模型：方案已定，代码未动（2026-11-19）
+
+> **状态更新**：本节已被 §2.97 取代（方案 B 第 1 步已落地，含 `right_tab_index` /
+> `right_tab_from_index` 的删除）。本节保留为「当时的方案口径与竞品行号」，改代码前读 §2.97。
 
 - **先读方案再改**：`docs/architecture/editor/result-panel-right-panel-tabs.md`（方案 B：
   `open_tabs` 集合 + 每页 × 关闭 + 去掉「点当前页签收起整栏」）。代码一行未改，
