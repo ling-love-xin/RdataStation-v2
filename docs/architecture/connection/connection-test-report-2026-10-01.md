@@ -1,5 +1,7 @@
 # connection crate 系统测试报告
 
+> **快照说明（2026-11-20 补注）**：本文是 2026-10-01 的测试快照，**不作为现状依据**。模块数以 `crates/connection/src/lib.rs` 为准（10 个 `pub mod`）；待办与缺口只看 `connection-dialog-architecture.md` §14；测试通过数不固化在文档里，跑 `cargo test -p rds-connection` 取当次输出。
+
 
 
 * 日期：2026-10-01（UTC+8）；**2026-10-02 更新**（保存语义重构回归见 §10）
