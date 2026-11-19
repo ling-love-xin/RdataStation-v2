@@ -91,6 +91,9 @@ fn page_is_created_lazily_then_switches_domain(cx: &mut TestAppContext) {
     assert!(visible(cx, "cc-stat-total"), "统计：条目格应渲染");
     assert!(visible(cx, "cc-stat-referenced"), "统计：被引用格应渲染");
     assert!(visible(cx, "cc-stat-unreferenced"), "统计：未引用格应渲染");
+    // 导航计数 chip：打开过的域给真数字，没打开过的显示「—」占位（格子本身常驻）。
+    assert!(visible(cx, "cc-count-0"), "导航：当前域计数 chip 应渲染");
+    assert!(visible(cx, "cc-count-1"), "导航：未访问域计数 chip 应渲染（占位）");
 
     cx.update(|window, cx| {
         harness.update(cx, |h, cx| {

@@ -29,6 +29,8 @@ fn domain_meta(kind: ManagerKind) -> (&'static str, &'static str) {
 /// 配置中心页状态（工作台面板持有；`Rc` 与对话框同路，窗口参与输入实体构造）。
 pub struct ConfigCenterPage {
     mgr: Rc<RefCell<ManagerWorkspace>>,
+    /// 各域条目数（只在域被打开过之后才有值；`None` = 还没查库，导航显示「—」）。
+    known: Rc<RefCell<[Option<usize>; 3]>>,
 }
 
 impl ConfigCenterPage {
@@ -41,9 +43,17 @@ impl ConfigCenterPage {
     ) -> Self {
         let page = Self {
             mgr: Rc::new(RefCell::new(manager_workspace(window, cx))),
+            known: Rc::new(RefCell::new([None; 3])),
         };
         prepare_manager_domain(kind, &page.mgr, project_root, window, cx);
+        page.remember_count(kind);
         page
+    }
+
+    /// 记录当前域条目数（导航 chip 用）。
+    fn remember_count(&self, kind: ManagerKind) {
+        let n = self.mgr.borrow().items.len();
+        self.known.borrow_mut()[kind.index()] = Some(n);
     }
 
     /// 当前域（宿主「编辑某条档案」时可据此跳到对应页签）。
@@ -63,6 +73,7 @@ impl ConfigCenterPage {
         }
         let project_root = self.mgr.borrow().project_root.clone();
         prepare_manager_domain(kind, &self.mgr, project_root, window, cx);
+        self.remember_count(kind);
     }
 
     /// 左栏（三域导航）。
@@ -88,14 +99,37 @@ impl ConfigCenterPage {
             let (label, _) = domain_meta(kind);
             let active = kind == cur;
             let mgr = self.mgr.clone();
+            let known = self.known.clone();
             let notify = notify.clone();
-            let mut btn = Button::new(format!("cc-nav-{}", kind.index())).label(tr(label));
+            let mut btn = Button::new(format!("cc-nav-{}", kind.index()))
+                .label(tr(label))
+                .flex_1();
             btn = if active { btn.primary() } else { btn.ghost() };
-            nav = nav.child(btn.on_click(move |_, window, app| {
-                let project_root = mgr.borrow().project_root.clone();
-                prepare_manager_domain(kind, &mgr, project_root, window, app);
-                notify(app);
-            }));
+            // 计数 chip：只有打开过的域才给真数字，其余显示「—」（没查库就不编造）。
+            let count_chip = div()
+                .id(format!("cc-count-{}", kind.index()))
+                .test_support()
+                .px_1()
+                .rounded_sm()
+                .text_xs()
+                .text_color(theme.colors.muted_foreground)
+                .child(match (*self.known.borrow())[kind.index()] {
+                    Some(n) => n.to_string(),
+                    None => "—".to_string(),
+                });
+            nav = nav.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(btn.on_click(move |_, window, app| {
+                        let project_root = mgr.borrow().project_root.clone();
+                        prepare_manager_domain(kind, &mgr, project_root, window, app);
+                        known.borrow_mut()[kind.index()] = Some(mgr.borrow().items.len());
+                        notify(app);
+                    }))
+                    .child(count_chip),
+            );
             // 引用口径提示（原型：导航项下方一行小字说明该域管什么）。
             if active {
                 nav = nav.child(
