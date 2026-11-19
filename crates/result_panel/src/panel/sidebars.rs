@@ -23,8 +23,8 @@ use gpui_kit::*;
 
 use super::data::ResultPanel;
 use super::events::{
-    edge_tab_tooltip, presentation_tooltip, record_view_tooltip, right_tab_click_collapses,
-    right_tab_description, right_tab_icon, right_tab_label, strip_index, tab_at_strip_index,
+    edge_tab_tooltip, presentation_tooltip, record_view_tooltip, right_tab_description,
+    right_tab_icon, right_tab_label, right_tabs, strip_index, tab_at_strip_index,
 };
 use super::tabs::kv_row;
 use crate::ports::{Presentation, ResultRequest, RightTab};
@@ -705,15 +705,9 @@ impl ResultPanel {
     pub(crate) fn render_right_edge_bar(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
         // 页签快捷图标：与右栏页签同一组图标 / 文案（单一定义在 `events::right_tab_icon` /
-        // `right_tab_label`，页签条、竖条、视图菜单共用一份）
-        let tabs = [
-            RightTab::Browser,
-            RightTab::Value,
-            RightTab::Stats,
-            RightTab::Group,
-            RightTab::Reference,
-            RightTab::ExecSql,
-        ];
+        // `right_tab_label`，页签条、竖条、视图菜单共用一份）；顺序取 `events::right_tabs()`
+        // 单一来源——竖条列的是**全集**（被 × 关掉的页也能从这里点回来，见 §9.08）
+        let tabs = right_tabs();
         let queue = self.queue.clone();
         let layout_queue = self.queue.clone();
         let master_queue = self.queue.clone();
@@ -758,19 +752,21 @@ impl ResultPanel {
             )
             .children(tabs.into_iter().map(|tab| {
                 let queue = queue.clone();
-                // 【面板开关语义】DBeaver 竖条上每页是一颗 CHECK：勾选 = 「面板可见且是这一页」，
-                // 再点已勾选的那颗 = 关掉该面板（`ResultSetHandlerTogglePanel:64-81`，
-                // `closePanel`）。本仓单页模型下等价于收起整块面板，请求同样走
-                // `ToggleRightTab`（与视图菜单里的面板项同一份语义）。
-                let collapses = right_tab_click_collapses(tab, active, panels_visible);
+                // 【竖条语义】DBeaver 竖条上每页是一颗 CHECK（`ResultSetViewer.java:1055-1080`），
+                // 勾选态 = 「面板可见且是这一页」。点已勾选的那颗 = 无操作（整栏显隐只走
+                // 顶部总开关 `showPanels`，`ResultSetHandlerTogglePanel:64-81` 关的是**那一页**
+                // 而不是整栏，而本仓页签条已能逐页 ×，见 §9.08）；
+                // 点未勾选的那颗 = 切到该页（该页被关掉过则先重新启用）。
+                let is_open = self.open_tabs.contains(&tab);
+                let is_current = panels_visible && active == tab;
                 let target = ResultRequest::ToggleRightTab(tab);
                 Button::new(format!("editor-result-edge-{:?}", tab))
                     .ghost()
                     .small()
                     .debug_selector(|| format!("editor-result-edge-{:?}", tab))
-                    .toggled(active == tab)
+                    .toggled(is_current)
                     .icon(right_tab_icon(tab))
-                    .tooltip(edge_tab_tooltip(tab, collapses))
+                    .tooltip(edge_tab_tooltip(tab, is_open, is_current))
                     .on_click(move |_, _window, app| {
                         queue.request(target.clone(), app);
                     })

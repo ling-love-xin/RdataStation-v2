@@ -253,9 +253,10 @@ pub enum ResultRequest {
     /// 右栏标签页切换（列浏览器 / 值详情 / 计算 / 分组；对齐 DBeaver 右侧 metadata /
     /// valueviewer / aggregate / grouping 同栏页签体系）
     SetRightTab(RightTab),
-    /// 右栏「面板开关」语义的页签点击（右缘竖条图标 / 视图菜单里的面板项）：
-    /// 该页**当前可见**就收起面板，否则切到该页并展开。对齐 DBeaver
-    /// `ResultSetHandlerTogglePanel.toggleResultsPanel:64-69`（`CMD_TOGGLE_PANEL`）。
+    /// 右缘竖条上点某一页的图标：切到该页（已被关掉的页会先重新启用），
+    /// 点当前页 = 无操作。对齐 DBeaver `ResultSetHandlerTogglePanel.toggleResultsPanel:64-69`
+    /// ——那边「关」的是**那一页**（`CTabFolder` 多页签 + `SWT.CLOSE`），整栏显隐是另一条
+    /// 命令（`CMD_TOGGLE_PANELS` → `SetPanelsVisible`）。本仓第 25 批起同样不在此收起整栏。
     ToggleRightTab(RightTab),
     /// 关闭右栏某一页（**只关这一页**，其余页仍在页签条里）。对齐 DBeaver
     /// `ResultSetViewer.addPanel:1330-1394` 的 `new CTabItem(panelFolder, SWT.CLOSE)`

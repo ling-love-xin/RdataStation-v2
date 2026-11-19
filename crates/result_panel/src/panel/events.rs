@@ -371,31 +371,30 @@ impl ResultPanel {
         cx.notify();
     }
 
-    /// 【右缘竖条 / 视图菜单】按「面板开关」语义点某一页：该页当前可见就收起面板，
-    /// 否则切到该页并展开。
+    /// 【右缘竖条】点某一页的图标：切到该页（未启用的页会先启用），**不收起整栏**。
     ///
-    /// 取证 `ResultSetHandlerTogglePanel.java`：`toggleResultsPanel:64-69` 先算
-    /// `isVisible = rsv.isPanelsVisible() && rsv.isPanelVisible(panelId)`，再交给
-    /// `showResultsPanel:71-81`——`isVisible` 真就 `rsv.closePanel(panelId)`，否则
-    /// `activatePanel(panelId, true, true)`。也就是**点已打开的那一页 = 关掉它**。
-    /// DBeaver 面板是 CTabFolder 多页签（`SWT.CLOSE`），关掉某页后其余页仍在；
-    /// 本仓是单页模型，因此「关掉当前这一页」等价于把整块面板收起（见 §8.40 的
-    /// 单页/多页签差异登记）。
-    /// 返回 `true` = 本次**切到了该页**（调用方可能要像切页签那样触发刷新，如引用页取外键）；
-    /// 返回 `false` = 本次是把面板收起了。
+    /// 取证 `ResultSetHandlerTogglePanel.java`：`toggleResultsPanel:64-69` 算
+    /// `isVisible = rsv.isPanelsVisible() && rsv.isPanelVisible(panelId)`，真则
+    /// `rsv.closePanel(panelId)`——**关掉的是那一页**；DBeaver 面板是 `CTabFolder` 多页签
+    /// （`addPanel:1357` 的 `SWT.CLOSE`），其余页仍在。本仓第 24 批起同样是多页签模型
+    /// （`open_tabs`），所以「点当前页就收起整栏」这条自造语义没有理由再留着：
+    /// 点已选中的页 = 无操作，整栏显隐只走 `SetPanelsVisible`（竖条顶部总开关 / 工具栏）。
+    ///
+    /// 返回 `true` = 本次**切到了该页**（调用方要像切页签那样触发刷新，如引用页取外键）；
+    /// 返回 `false` = 已经停在这一页（无操作，不需要刷新）。
     pub fn toggle_right_tab(&mut self, tab: RightTab, cx: &mut Context<Self>) -> bool {
-        // 已被关掉的页：先启用（页签条里看不到它，但右缘竖条 / 视图菜单仍可达）
+        // 已被关掉的页：先启用（页签条里看不到它，但右缘竖条仍可达）
         if !self.open_tabs.contains(&tab) {
             self.set_right_tab(tab, cx);
             return true;
         }
-        if right_tab_click_collapses(tab, self.right_tab, self.panels_visible()) {
-            self.set_panels_visible(false, cx);
-            false
-        } else {
-            self.set_right_tab(tab, cx);
-            true
+        // 已选中且面板可见：DBeaver 点已选中页签什么都不做（选中不变、不收起）
+        if tab == self.right_tab && self.panels_visible() {
+            return false;
         }
+        // 面板收起时点同一页 = 重新展开到该页（`set_right_tab` 内含展开）
+        self.set_right_tab(tab, cx);
+        true
     }
 
     /// 【引用页】回填外键清单（宿主取数回来后调用）。
@@ -1911,13 +1910,6 @@ pub(crate) fn right_tabs() -> [RightTab; 6] {
 
 /// 【右缘竖条 / 视图菜单】点某一页时是否「关掉面板」而不是「切页」。
 ///
-/// 对齐 DBeaver `ResultSetHandlerTogglePanel.toggleResultsPanel:64-69`：
-/// `isVisible = isPanelsVisible() && isPanelVisible(panelId)`，真则 `closePanel`。
-/// 本仓单页模型下「已激活 + 面板可见」= 该页正在显示 → 再点它就是收起。
-pub(crate) fn right_tab_click_collapses(tab: RightTab, active: RightTab, panels_visible: bool) -> bool {
-    panels_visible && tab == active
-}
-
 /// 【页签条】已启用集合内某页的下标（`TabBar::selected_index` 用；不在集合里 → 0）。
 pub(crate) fn strip_index(open: &[RightTab], tab: RightTab) -> usize {
     open.iter().position(|existing| *existing == tab).unwrap_or(0)
@@ -2068,14 +2060,19 @@ pub(crate) fn record_view_tooltip(active: bool) -> String {
 /// 取得到命令描述时拼成 `label + " (" + toolTip + ")"`——即**页名 + 命令/面板描述**，
 /// 而不是只有页名。本仓页签条已经用描述（`right_tab_description`），竖条这里同样拼起来。
 ///
-/// 例外：该页**正在显示**时提示改成「收起结果面板」——因为此时点它是收起（见
-/// `right_tab_click_collapses` / `toggle_right_tab`），提示要说清点了会发生什么。
-pub(crate) fn edge_tab_tooltip(tab: RightTab, collapses: bool) -> String {
-    if collapses {
-        "收起结果面板（本页正在显示）".to_string()
-    } else {
-        format!("{}（{}）", right_tab_label(tab), right_tab_description(tab))
+/// 三态（第 25 批起不再有「收起整栏」这一态，见 `toggle_right_tab`）：
+/// - 当前页（面板可见且就是它）→ 报「当前页」；
+/// - 已启用但没在显示 → 报「切到这一页」；
+/// - 已关闭（不在 `open_tabs` 里）→ 报「已关闭，点一下重新打开」。
+pub(crate) fn edge_tab_tooltip(tab: RightTab, is_open: bool, is_current: bool) -> String {
+    let base = format!("{}（{}）", right_tab_label(tab), right_tab_description(tab));
+    if !is_open {
+        return format!("{base} — 此页已关闭，点一下重新打开");
     }
+    if is_current {
+        return format!("{base} — 当前页");
+    }
+    format!("{base} — 点一下切到这一页")
 }
 
 /// 「视图菜单」条目文案（动态条目按当前状态报动作，而不是报状态：

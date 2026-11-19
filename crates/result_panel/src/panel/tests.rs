@@ -1986,14 +1986,16 @@ fn maximize_panel_hides_the_grid_and_keeps_the_sidebar(cx: &mut gpui_kit::TestAp
 }
 
 /// 【右缘竖条】提示文案 = 页名 + 面板描述（对齐 `ResultSetViewer.java:1055-1080`
-/// 的 `label + " (" + toolTip + ")"`）；该页正在显示时改报「点它会收起」。
+/// 的 `label + " (" + toolTip + ")"`），再把该页的三态补在后半句：
+/// 已启用 → 「点一下切到这一页」；当前页 → 「当前页」；已关闭 → 「点一下重新打开」。
+/// （第 25 批起不再有「点它会收起整栏」这一态，见 `toggle_right_tab`。）
 #[test]
 fn edge_bar_tooltip_carries_label_and_description() {
     use super::events::{edge_tab_tooltip, right_tab_description, right_tab_label};
     use crate::ports::RightTab;
 
     for tab in super::events::right_tabs() {
-        let tip = edge_tab_tooltip(tab, false);
+        let tip = edge_tab_tooltip(tab, true, false);
         assert!(tip.contains(right_tab_label(tab)), "{} 的提示应含页名", tip);
         assert!(
             tip.contains(right_tab_description(tab)),
@@ -2005,48 +2007,28 @@ fn edge_bar_tooltip_carries_label_and_description() {
             "{} 的描述不应为空",
             right_tab_label(tab)
         );
+        assert!(tip.contains("切到这一页"), "已启用但非当前页：{tip}");
     }
 
-    // 正在显示的页：提示改说「收起」，不再堆描述
-    let collapse_tip = edge_tab_tooltip(RightTab::Value, true);
-    assert!(collapse_tip.contains("收起"));
+    // 当前页：报「当前页」，不再说切换
+    let current = edge_tab_tooltip(RightTab::Value, true, true);
+    assert!(current.contains("当前页"), "{current}");
+    assert!(!current.contains("切到这一页"), "{current}");
     assert!(
-        !collapse_tip.contains(right_tab_description(RightTab::Value)),
-        "收起提示不必再塞面板描述"
+        current.contains(right_tab_description(RightTab::Value)),
+        "当前页提示也保留描述：{current}"
     );
+
+    // 已关闭（页签条上被 × 关掉）：报「重新打开」
+    let closed = edge_tab_tooltip(RightTab::Stats, false, false);
+    assert!(closed.contains("重新打开"), "{closed}");
+    assert!(!closed.contains("切到这一页"), "{closed}");
 }
 
-/// 【右缘竖条 / 视图菜单】点某一页的开关语义（纯函数）：对齐 DBeaver
-/// `ResultSetHandlerTogglePanel.toggleResultsPanel:64-69` + `showResultsPanel:71-81`
-/// （`isVisible = isPanelsVisible() && isPanelVisible(id)`，真则 `closePanel`）。
-#[test]
-fn right_tab_click_closes_only_the_page_that_is_showing() {
-    use super::events::right_tab_click_collapses;
-    use crate::ports::RightTab;
-
-    // 面板可见 + 点的正是当前页 → 收起
-    assert!(right_tab_click_collapses(
-        RightTab::Value,
-        RightTab::Value,
-        true
-    ));
-    // 面板可见但点的是别的页 → 切页（不收起）
-    assert!(!right_tab_click_collapses(
-        RightTab::Stats,
-        RightTab::Value,
-        true
-    ));
-    // 面板不可见 → 任何点击都是「展开并切到该页」
-    assert!(!right_tab_click_collapses(
-        RightTab::Value,
-        RightTab::Value,
-        false
-    ));
-}
-
-/// 同上的状态机行为（窗口用例）：连点两次同一页 = 收起 → 再点又回到该页。
+/// 【右缘竖条】点当前页 = 无操作；点别页 = 切过去；面板收起时点当前页 = 重新展开。
+/// 对齐 DBeaver「点已选中页签什么都不做、整栏显隐是另一条命令」（第 25 批口径）。
 #[gpui_kit::test]
-fn toggling_the_active_page_collapses_the_panel(cx: &mut gpui_kit::TestAppContext) {
+fn clicking_the_active_edge_tab_is_a_noop(cx: &mut gpui_kit::TestAppContext) {
     use crate::ports::RightTab;
 
     cx.update(gpui_kit::init);
@@ -2055,18 +2037,51 @@ fn toggling_the_active_page_collapses_the_panel(cx: &mut gpui_kit::TestAppContex
     cx.update(|_, app| panel.update(app, |p, cx| p.set_right_tab(RightTab::Value, cx)));
     assert!(cx.update(|_, app| panel.read(app).panels_visible()));
 
-    // 已显示 → 再点这一页 = 收起
+    // 已显示 → 再点这一页 = 什么都不做（尤其**不再收起整栏**）
     let switched = cx.update(|_, app| panel.update(app, |p, cx| p.toggle_right_tab(RightTab::Value, cx)));
     assert!(!switched, "点当前页不应算「切页」");
     assert!(
-        !cx.update(|_, app| panel.read(app).panels_visible()),
-        "点当前页应收起面板"
+        cx.update(|_, app| panel.read(app).panels_visible()),
+        "点当前页不应收起面板"
     );
+    assert_eq!(cx.update(|_, app| panel.read(app).right_tab), RightTab::Value);
 
-    // 收起后再点 → 展开并切到该页
-    let switched = cx.update(|_, app| panel.update(app, |p, cx| p.toggle_right_tab(RightTab::Value, cx)));
+    // 点别页 = 切过去，右栏保持展开
+    let switched = cx.update(|_, app| panel.update(app, |p, cx| p.toggle_right_tab(RightTab::Stats, cx)));
+    assert!(switched, "点别页应算切页");
+    assert_eq!(cx.update(|_, app| panel.read(app).right_tab), RightTab::Stats);
+
+    // 整栏收起（总开关）后再点当前页 = 重新展开到该页
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_panels_visible(false, cx)));
+    assert!(!cx.update(|_, app| panel.read(app).panels_visible()));
+    let switched = cx.update(|_, app| panel.update(app, |p, cx| p.toggle_right_tab(RightTab::Stats, cx)));
     assert!(switched, "收起态点击应是切页/展开");
     assert!(cx.update(|_, app| panel.read(app).panels_visible()));
+}
+
+/// 【右缘竖条】点已被 × 关掉的页 = 先重新启用它再切过去（竖条列的是全集）。
+#[gpui_kit::test]
+fn edge_bar_reopens_a_closed_page(cx: &mut gpui_kit::TestAppContext) {
+    use crate::ports::RightTab;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    cx.update(|_, app| panel.update(app, |p, cx| p.close_right_tab(RightTab::Stats, cx)));
+    assert!(!cx.update(|_, app| panel.read(app).open_tabs().contains(&RightTab::Stats)));
+
+    let switched = cx.update(|_, app| panel.update(app, |p, cx| p.toggle_right_tab(RightTab::Stats, cx)));
+    assert!(switched);
+    assert!(
+        cx.update(|_, app| panel.read(app).open_tabs().contains(&RightTab::Stats)),
+        "点竖条应把被关掉的页重新启用"
+    );
+    assert_eq!(cx.update(|_, app| panel.read(app).right_tab), RightTab::Stats);
+    // 重新启用时按规范序插回（计算仍在值详情之后、分组之前）
+    assert_eq!(
+        cx.update(|_, app| panel.read(app).open_tabs().to_vec()),
+        super::events::right_tabs().to_vec()
+    );
 }
 
 /// 【R5 面板最大化】与「面板总开关」的互斥口径（不变量：最大化 ⇒ 面板展开）。
