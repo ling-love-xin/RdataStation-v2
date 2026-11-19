@@ -7,10 +7,12 @@
 
 mod analysis;
 mod copy;
+mod count;
 mod dispatch;
 mod errors;
 mod export;
 mod filter;
 mod grid;
+mod references;
 mod sort;
 mod tests;

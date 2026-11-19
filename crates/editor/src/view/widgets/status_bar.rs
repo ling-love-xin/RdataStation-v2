@@ -72,6 +72,11 @@ pub struct StatusInputs<'a> {
     pub connection: Option<&'a str>,
     /// 【T2c-2】方言段（`方言 PostgreSQL`；从绑定连接的 db_type 解析）；`None` = 不显示
     pub dialect: Option<&'a str>,
+    /// 绑定连接所属环境的展示名（如 `prod` / `生产`）；`None` = 未绑定环境
+    ///
+    /// 只承载**真实名字**：名字是不是生产由 [`is_prod_environment`] 判定，
+    /// 展示成 `PROD` 徽标是渲染层的事（同一个名字不在这里提前翻译）。
+    pub environment: Option<&'a str>,
     /// 【B13】执行通道段（`通道 源库` / `通道 本地加速（快照）`）；`None` = 不显示
     pub channel: Option<&'a str>,
     /// 【2b】通用模式的执行环境段（`环境 Python 3.12`）；`None` = 不显示（非通用模式 / 未选）
@@ -139,6 +144,25 @@ pub struct StatusLabels {
     /// 渲染层把每一项画成独立微标（独立 `div` + 分隔），互不挤占：
     /// 宽窗口全显，窄窗口从左裁（最不重要的先走）而不是整段消失。
     pub right: Vec<String>,
+    /// 生产环境徽标（`Some("PROD")` = 绑定连接属于生产环境）；`None` = 不打
+    ///
+    /// 左段独占一个着色 chip（危险色），不进 `body`：它是**风险提示**，
+    /// 不能跟普通状态文案混在一串灰字里被读漏。
+    pub prod: Option<String>,
+}
+
+/// 环境名是否属于「生产」（徽标判据，纯函数）。
+///
+/// 只认明确写法：`prod` / `production` / `prd`（忽略大小写与首尾空白），
+/// 以及中文 `生产` / `生产环境`。**不做模糊推测**——`preprod`、`prod_test`、`生产测试`
+/// 这类名字不是生产（预发 / 测试库打 PROD 徽标反而是风险）。
+pub fn is_prod_environment(name: &str) -> bool {
+    let trimmed = name.trim();
+    matches!(trimmed, "生产" | "生产环境")
+        || matches!(
+            trimmed.to_ascii_lowercase().as_str(),
+            "prod" | "production" | "prd"
+        )
 }
 
 /// 右段单个微标：图标 + 文案（VSCode 式：语义徽标带图标、数据徽标纯文字）
@@ -315,6 +339,10 @@ pub fn labels(inputs: &StatusInputs) -> StatusLabels {
         dialect,
         body,
         right,
+        prod: inputs
+            .environment
+            .filter(|name| is_prod_environment(name))
+            .map(|_| "PROD".to_string()),
     }
 }
 
@@ -359,6 +387,19 @@ pub fn render(inputs: &StatusInputs, controls: StatusControls, cx: &App) -> impl
         // 方言段（它是「这个连接是什么引擎」，不是路径）
         .when(text.dialect.is_some(), |row| {
             row.child(text.dialect.clone().unwrap())
+        })
+        // 生产环境徽标：危险色 chip，紧跟方言——「这个引擎 + 这是生产库」连在一起读
+        .when(text.prod.is_some(), |row| {
+            row.child(
+                div()
+                    .debug_selector(|| "status-prod-badge".to_string())
+                    .flex_none()
+                    .px_1()
+                    .rounded_sm()
+                    .bg(theme.colors.danger.opacity(0.16))
+                    .text_color(theme.colors.danger)
+                    .child(text.prod.clone().unwrap()),
+            )
         })
         // 执行方式控件（源库 / 加速 / 联邦可切）：有控件时替代正文里的通道文本段
         .children(controls.channel)
@@ -447,6 +488,7 @@ mod tests {
             connection: None,
             // 方言段默认不显示（没绑定连接）；方言相关的断言在专用用例里给值
             dialect: None,
+            environment: None,
             channel: None,
             env: None,
             file_type: None,
@@ -456,6 +498,26 @@ mod tests {
             kernel: None,
             units: None,
         }
+    }
+
+    #[test]
+    fn prod_environment_shows_badge_and_near_misses_do_not() {
+        use super::is_prod_environment;
+        for name in ["prod", "PROD", "Production", " prd ", "生产", "生产环境"] {
+            assert!(is_prod_environment(name), "{name} 应判为生产");
+        }
+        // 预发 / 测试库打 PROD 徽标反而是风险提示错误，一律不打
+        for name in ["preprod", "prod_test", "staging", "test", "", "生产测试"] {
+            assert!(!is_prod_environment(name), "{name} 不该判为生产");
+        }
+
+        let mut with_env = inputs(ReadOnly::none());
+        with_env.environment = Some("prod");
+        assert_eq!(labels(&with_env).prod.as_deref(), Some("PROD"));
+
+        let mut staging = inputs(ReadOnly::none());
+        staging.environment = Some("staging");
+        assert!(labels(&staging).prod.is_none(), "非生产不打徽标");
     }
 
     /// 连接段（B1）独立成一段：面包屑控件渲染时用它替代（控件显示 连接▸库▸Schema）

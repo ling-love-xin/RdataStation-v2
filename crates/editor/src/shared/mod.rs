@@ -127,6 +127,14 @@ pub type OpenHistoryPort = Rc<dyn Fn(&mut gpui_kit::App)>;
 pub type ShowDocumentPort =
     Rc<dyn Fn(&lsp_types::ShowDocumentParams, &mut gpui_kit::Window, &mut gpui_kit::App) -> bool>;
 
+/// 【引用页】「导航树定位对象」端口（由宿主注入：workbench 接到 Quick Open `⌥↵` /
+/// 跳转定义同一条 `EditorHost::request_reveal`）。
+///
+/// 结果面板的「打开目标对象」要定位外键目标表（对齐 DBeaver `refs_open_target`），
+/// 但面板与编辑器视图都不持宿主句柄（宿主是 workbench 侧的实现），所以照
+/// [`ShowDocumentPort`] 同款做成注入端口：只投递 `ObjectRef`，入队与消费都不在这里。
+pub type RevealObjectPort = Rc<dyn Fn(engine::ObjectRef)>;
+
 /// 一次执行完成后的**回执**（给宿主看，不给编辑区看）。
 ///
 /// 编辑器的结果归编辑区（`drain_exec`），回执只回答“哪份文档、用了哪个连接、成没成”——
@@ -257,6 +265,8 @@ pub struct EditorShared {
     pub(crate) catalog_revision: Rc<std::cell::Cell<u64>>,
     /// 【#54 C6/C7】跳转定义目标解析端口（宿主注入；未注入 = 内核走默认文档内移动）
     pub(crate) show_document_port: Rc<RefCell<Option<ShowDocumentPort>>>,
+    /// 【引用页】导航树定位对象端口（宿主注入；未注入 = 「打开目标对象」只发消息）
+    pub(crate) reveal_object: Rc<RefCell<Option<RevealObjectPort>>>,
     /// 【书签】每文档一份书签（与 sidecar 同一数据源：`file_meta::Bookmark`）。
     ///
     /// 打开文档时从 `.filename.meta.json` 读入、切换后写回（事件路径，`view/host`）；
@@ -297,6 +307,7 @@ impl Clone for EditorShared {
             catalog_snapshots: self.catalog_snapshots.clone(),
             catalog_revision: self.catalog_revision.clone(),
             show_document_port: self.show_document_port.clone(),
+            reveal_object: self.reveal_object.clone(),
             show_folds: self.show_folds.clone(),
             indent_folding: self.indent_folding.clone(),
             fold_open_keywords: self.fold_open_keywords.clone(),
@@ -351,6 +362,7 @@ impl EditorShared {
             catalog_snapshots: Rc::new(RefCell::new(std::collections::HashMap::new())),
             catalog_revision: Rc::new(std::cell::Cell::new(0)),
             show_document_port: Rc::new(RefCell::new(None)),
+            reveal_object: Rc::new(RefCell::new(None)),
             show_folds: Rc::new(std::cell::Cell::new(true)),
             indent_folding: Rc::new(std::cell::Cell::new(true)),
             fold_open_keywords: Rc::new(std::cell::RefCell::new(

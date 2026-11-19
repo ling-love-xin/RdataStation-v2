@@ -85,7 +85,12 @@ impl ColumnBrowserDelegate {
     }
 
     /// 面板 `sync` 灌入列投影（每次换结果集 / 刷新都会重灌；`set_data` 后清
-    /// `last_selected`，避免旧结果集的列序号被 `confirm` 误用）
+    /// `last_selected`，避免旧结果集的列序号被 `confirm` 误用）。
+    ///
+    /// **投影没变就什么都不做**：对齐 DBeaver `MetaDataPanel.refresh:184-196`
+    /// （属性清单逐项相同就直接 `return`，注释原文 "No changes"）。本仓这条短路还有
+    /// 实际收益——`set_data` 会清掉 `last_selected` 与多选集合，而 `sync` 在「刷新到同一份
+    /// 结果」这种无实质变化时也会被调用，不短路会把用户的多选和 List 滚动位置一起打掉。
     pub fn set_data(
         &mut self,
         columns: Vec<String>,
@@ -93,6 +98,13 @@ impl ColumnBrowserDelegate {
         hidden_columns: Vec<bool>,
         comments: Vec<Option<String>>,
     ) {
+        let unchanged = self.columns == columns
+            && self.type_names == type_names
+            && self.hidden_columns == hidden_columns
+            && self.comments == comments;
+        if unchanged {
+            return;
+        }
         self.columns = columns;
         self.type_names = type_names;
         self.hidden_columns = hidden_columns;
@@ -165,6 +177,10 @@ impl ListDelegate for ColumnBrowserDelegate {
         let data_col = *self.matched().get(ix.row)?;
         let name = self.columns.get(data_col)?.clone();
         let type_name = self.type_names.get(data_col).cloned().unwrap_or_default();
+        // 【DBeaver 对齐】列注释（`MetaDataPanel.addExtraColumns` 的 `Description` 列，
+        // 值 = `entityAttribute.getDescription()`）。窄侧栏摆不下第三列，改成列名下的
+        // 第二行（同一份数据，换形态）。
+        let comment = browser_comment_text(self.comments.get(data_col).unwrap_or(&None));
         let hidden = self.hidden_columns.get(data_col).copied().unwrap_or(false);
         let theme = cx.theme();
         let muted = theme.muted_foreground;
@@ -225,8 +241,21 @@ impl ListDelegate for ColumnBrowserDelegate {
             is_deleted: false,
         };
         let menu_items = result_grid::column_browser_menu_items(&target);
+        // 【多选批量动作】对齐 DBeaver：多选动作挂在**清单右键菜单**上
+        // （`MetaDataPanel.fillCustomActions:234-252`），页内工具条只留「生成 DDL」。
+        // 只有右键落在**多选集合内**时才出现（语义与「复制列文本」一致：
+        // 操作对象是清单的结构化选中项，而不是单行）。
+        let batch = batch_menu_items(&self.selected_set, data_col);
+        let batch_queue = self.queue.clone();
+        let selected: Vec<usize> = self.selected_set.clone();
         let copy_text = delegate.column_text(data_col);
         let stats_payload = delegate.column_stats_payload(data_col);
+        // 【复制列名】要拷哪些列：右键这一列在**多选集合**里 → 拷整个集合（升序），
+        // 否则只拷这一列（对齐 DBeaver：拷的是清单当前的结构化选中项，多选才有多行）
+        let copy_names = {
+            let columns = delegate.columns();
+            column_names_to_copy(columns, &self.selected_set, data_col)
+        };
 
         // 双击判定：ListItem 无 on_double_click，单击（click_count == 1）留给 List
         // 内部 confirm（SelectColumn），双击在第二次点击时入队 LocateColumn
@@ -253,8 +282,22 @@ impl ListDelegate for ColumnBrowserDelegate {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .text_ellipsis()
-                    .child(SharedString::from(name.clone())),
+                    .v_flex()
+                    .child(
+                        div()
+                            .min_w_0()
+                            .text_ellipsis()
+                            .child(SharedString::from(name.clone())),
+                    )
+                    // 注释第二行：只在有注释时出现（DBeaver 的 Description 列）
+                    .children(comment.map(|comment| {
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(muted)
+                            .debug_selector(|| "editor-result-col-browser-comment".to_string())
+                            .child(SharedString::from(comment))
+                    })),
             )
             .when(!type_name.is_empty(), |r| {
                 r.child(
@@ -269,6 +312,19 @@ impl ListDelegate for ColumnBrowserDelegate {
             .context_menu(move |mut menu: PopupMenu, _window, _cx| {
                 for item in menu_items.clone() {
                     match item.action {
+                        result_grid::ContextAction::CopyColumnNames => {
+                            // 文本在渲染期算好（多选集合 / 列名都只有此刻拿得到）
+                            let text = copy_names.clone();
+                            menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                                move |_, _window, app| {
+                                    // 空文本不写剪贴板（DBeaver 同口径：`text.isEmpty()` 直接返回）
+                                    if text.is_empty() {
+                                        return;
+                                    }
+                                    app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                                },
+                            ));
+                        }
                         result_grid::ContextAction::CopyColumn(_) => {
                             let text = copy_text.clone();
                             menu = menu.item(PopupMenuItem::new(item.label).on_click(
@@ -342,6 +398,39 @@ impl ListDelegate for ColumnBrowserDelegate {
                         }
                     }
                 }
+                // 多选批量动作接在菜单尾部（前置一条分隔）：只在右键落在多选集合内时出现
+                if !batch.is_empty() {
+                    menu = menu.item(PopupMenuItem::separator());
+                }
+                for (action, label) in batch.iter() {
+                    let queue = batch_queue.clone();
+                    let action = *action;
+                    let columns = selected.clone();
+                    menu = menu.item(PopupMenuItem::new(label.clone()).on_click(
+                        move |_, _window, app| {
+                            app.stop_propagation();
+                            match action {
+                                ColumnBatchAction::HideSelected => queue.request(
+                                    ResultRequest::SetColumnsHidden {
+                                        columns: columns.clone(),
+                                        hidden: true,
+                                    },
+                                    app,
+                                ),
+                                ColumnBatchAction::ShowSelected => queue.request(
+                                    ResultRequest::SetColumnsHidden {
+                                        columns: columns.clone(),
+                                        hidden: false,
+                                    },
+                                    app,
+                                ),
+                                ColumnBatchAction::ClearSelection => {
+                                    queue.request(ResultRequest::ClearColumnSelection, app)
+                                }
+                            }
+                        },
+                    ));
+                }
                 menu
             });
 
@@ -411,6 +500,34 @@ impl ListDelegate for ColumnBrowserDelegate {
     }
 }
 
+/// 【多选批量动作】列浏览器行右键菜单里的批量项（纯函数）：操作对象 = 清单的结构化
+/// 选中项，所以只有「右键的那一列在多选集合里」时才出现（对齐 DBeaver
+/// `MetaDataPanel.fillCustomActions:234-252` 的 `getStructuredSelection()` 口径）。
+///
+/// 集合为空、或右键列不在集合里 → 不生成任何批量项（此时右键菜单就是单列菜单）。
+pub(crate) fn batch_menu_items(
+    selected: &[usize],
+    clicked: usize,
+) -> Vec<(ColumnBatchAction, String)> {
+    if selected.is_empty() || !selected.contains(&clicked) {
+        return Vec::new();
+    }
+    let n = selected.len();
+    vec![
+        (ColumnBatchAction::HideSelected, format!("隐藏所选（{n} 列）")),
+        (ColumnBatchAction::ShowSelected, format!("显示所选（{n} 列）")),
+        (ColumnBatchAction::ClearSelection, format!("清空选择（{n} 列）")),
+    ]
+}
+
+/// 批量动作种类（右键菜单里的三条；渲染层按它入队对应 `ResultRequest`）
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ColumnBatchAction {
+    HideSelected,
+    ShowSelected,
+    ClearSelection,
+}
+
 /// 多选集合推进（纯函数）：`additive`（Ctrl/Cmd 点击）= 有则删、无则加；
 /// 非 additive = 替换成单元素。返回值升序去重（面板/批量动作都按数据列序处理）。
 pub(crate) fn next_multi_selection(
@@ -429,6 +546,39 @@ pub(crate) fn next_multi_selection(
         next.sort_unstable();
         next.dedup();
         next
+    }
+}
+
+/// 【列注释】清单第二行要显示的注释文本（纯函数）：`None` / 纯空白 → 不显示；
+/// 有内容则去首尾空白后原样返回（对齐 DBeaver `addExtraColumns` 的 `Description` 列，
+/// 空注释不占第二行）。
+pub(crate) fn browser_comment_text(comment: &Option<String>) -> Option<String> {
+    comment
+        .as_ref()
+        .map(|comment| comment.trim())
+        .filter(|comment| !comment.is_empty())
+        .map(|comment| comment.to_string())
+}
+
+/// 【复制列名】要写进剪贴板的文本（纯函数；对齐 DBeaver
+/// `meta_data_panel_action_copy_column_text`：选中几行就拷几行，换行分隔）。
+///
+/// 取法：右键那一列在**多选集合**里 → 拷整个集合（按数据列序）；否则只拷它自己。
+/// 集合里的下标越界一律跳过（搜索词把行过滤掉后旧下标可能失效）。
+pub(crate) fn column_names_to_copy(
+    columns: &[String],
+    selected: &[usize],
+    clicked: usize,
+) -> String {
+    if selected.contains(&clicked) {
+        selected
+            .iter()
+            .filter_map(|column| columns.get(*column))
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        columns.get(clicked).cloned().unwrap_or_default()
     }
 }
 

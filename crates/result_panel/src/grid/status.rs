@@ -241,6 +241,10 @@ pub struct ResultControls {
     pub undo: Option<AnyElement>,
     /// 【#28-B3】重做（组合语义与撤销对称）
     pub redo: Option<AnyElement>,
+    /// 【计算行数】状态行中段那颗动作钮（对齐 DBeaver `rowCountLabel:2155-2180`：
+    /// `ActiveStatusMessage` + `UIIcon.COMPILE`，点它异步 `readRowCount`，算完把数字
+    /// **就地显示在标签上**）。面板构造：点击 → 宿主跑 `count(*)`；`None` = 不摆
+    pub count_rows: Option<AnyElement>,
 }
 
 /// 结果区一次要画的东西（面板一次读齐；`render` 只负责画）
@@ -590,6 +594,9 @@ pub fn render_status_row(
     // 只在这里渲染，主 pane 不再读它们（面板解构后重组这份，见 panel.rs `render`）
     controls: ResultControls,
     row_count_input: Option<&gpui::Entity<gpui_kit::component::input::InputState>>,
+    // 【R6 段大小】「一段」行数输入框（对齐 DBeaver `resultSetSize` Text；
+    // `None` = 不摆，只读文案位照旧）
+    segment_input: Option<&gpui::Entity<gpui_kit::component::input::InputState>>,
     elapsed_ms: Option<u64>,
     left_switch: Option<AnyElement>,
     right_switch: Option<AnyElement>,
@@ -790,6 +797,29 @@ pub fn render_status_row(
                 .flex_none()
                 .children(left_ops),
         )
+        // 中段·段大小框（DBeaver `resultSetSize` Text：默认值占位，改成 >0 的行数才生效）
+        .children(segment_input.map(|state| {
+            div()
+                .h_flex()
+                .items_center()
+                .flex_none()
+                .w(rems(ui::RESULT_SEGMENT_BOX_WIDTH))
+                // 调试选择器挂在**外层行**：`Input` 自己是 RenderOnce 组件，其内部元素
+                // 的 id 进不了观测（与页签条同一口径，见 panel/tests.rs 的环境事实注释）
+                .debug_selector(|| "editor-result-segment-size".to_string())
+                .child(
+                    div()
+                        .text_color(muted)
+                        .flex_none()
+                        .child(SharedString::from("段")),
+                )
+                .child(
+                    div().flex_1().min_w_0().child(
+                        gpui_kit::component::input::Input::new(state)
+                            .with_size(gpui_kit::component::Size::Small),
+                    ),
+                )
+        }))
         // 中段·行数框（DBeaver：输入行号跳转；未注入 InputState 时摆只读文案）
         .child(
             div()
@@ -809,6 +839,9 @@ pub fn render_status_row(
                     d.child(SharedString::from(left))
                 }),
         )
+        // 中段·「计算行数」（对齐 DBeaver `resultSetSize` 之后那颗 `rowCountLabel`：
+        // 点一下对原 SQL 跑 `count(*)`，算完把总数就地显示在这颗钮上）
+        .children(controls.count_rows)
         // 右·元信息（【状态栏三项】只显示 内存 / 查询时间 / 查询条数，其它不显示；
         // 右段弹性收缩 + 每项 truncate：宽度不足时截断而非重叠/溢出）
         .child(

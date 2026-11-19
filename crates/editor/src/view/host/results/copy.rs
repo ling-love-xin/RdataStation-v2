@@ -117,11 +117,15 @@ impl EditorHostPanel {
             return;
         };
         let offset = entry.row_count();
+        // 【R6 段大小】段大小由面板持有（状态行输入框可改，对齐 DBeaver
+        // `resultSetSize` → `RESULT_SET_MAX_ROWS`）：这里按面板当前值下发 limit，
+        // 不再写死编辑器常量。
+        let limit = self.result_panel.read(cx).segment_rows();
         let submitted = self.execute(
             ExecTarget::Segment {
                 sql,
                 offset,
-                limit: execution::SEGMENT_ROWS,
+                limit,
             },
             ResultPlacement::Append,
             cx,

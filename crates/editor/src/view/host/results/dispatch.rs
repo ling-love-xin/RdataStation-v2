@@ -4,7 +4,7 @@
 //! 跨域互调经 `pub(crate)` 方法；字段在 mod.rs 统一 `pub(crate)`。
 
 use super::super::*;
-use result_panel::ports::ResultRequest;
+use result_panel::ports::{ResultRequest, RightTab};
 
 impl EditorHostPanel {
     /// 处理中可能**再入队**（如 `SetPushdown` 打开且有词 → 面板入队 `PushdownFilter`），
@@ -254,6 +254,8 @@ impl EditorHostPanel {
             // 字节与默认文件名由面板按值形态算好，这里只走「选路径 + 写盘」
             ResultRequest::SaveValue => self.save_selected_value(cx),
             ResultRequest::Refresh => self.refresh_active_result(cx),
+            // 【计算行数】状态行那颗钮：对原 SQL 跑 count(*)，数字就地回填到钮上
+            ResultRequest::CountRows => self.count_result_rows(cx),
             ResultRequest::FetchMore => self.fetch_more(cx),
             ResultRequest::FetchAll => {
                 // 【DBeaver 对齐】取全部行：循环 fetch_more 直到没有下一段
@@ -312,6 +314,20 @@ impl EditorHostPanel {
             ResultRequest::ToggleVerticalLayout => self
                 .result_panel
                 .update(cx, |p, cx| p.toggle_vertical_layout(cx)),
+            // 【R5 面板最大化】收起 / 还原结果网格（DBeaver `CMD_TOGGLE_MAXIMIZE`）：
+            // 纯面板视图状态，不落盘、不动网格数据
+            ResultRequest::TogglePanelMaximize => self
+                .result_panel
+                .update(cx, |p, cx| p.toggle_panel_maximize(cx)),
+            // 【R6 段大小】状态行输入框提交的「一段」行数（对齐 DBeaver `resultSetSize`）：
+            // 面板视图态立即生效（下一次「取下一段」按它下发 limit，不重取已加载行），
+            // 同时写回全局偏好 `result_panel.segment_rows`，下次启动沿用。
+            ResultRequest::SetSegmentRows(rows) => {
+                self.result_panel
+                    .update(cx, |p, cx| p.set_segment_rows(rows, cx));
+                let effective = self.result_panel.read(cx).segment_rows();
+                settings::SettingsService::set_result_panel_segment_rows(effective, cx);
+            }
             // 【侧栏】清单行眼睛：切换该列隐藏 / 显示（网格是另一实体，
             // update 它安全；面板再 notify 重画列浏览器的隐藏标记）
             ResultRequest::ToggleColumnVisibility(column) => {
@@ -354,6 +370,85 @@ impl EditorHostPanel {
             ResultRequest::SetRightTab(tab) => {
                 self.result_panel
                     .update(cx, |p, cx| p.set_right_tab(tab, cx));
+                // 【引用页】切到该页签即读外键（DBeaver `activatePanel` → `refresh(false)`
+                // 每次激活都刷新，`ReferencesPanel.java:133-136`）：面板置 `Loading` +
+                // 入队 `LoadReferences`，真正的元数据查询在本文件的 `load_references` 里
+                // 走后台任务（UI 线程不 await）。
+                if tab == RightTab::Reference {
+                    self.result_panel
+                        .update(cx, |p, cx| p.begin_references_load(cx));
+                }
+            }
+            // 【右栏】面板开/关语义（右缘竖条图标 / 视图菜单页项）：该页**开着且整栏可见**就
+            // 关掉这一页，否则打开并切到该页。对齐 DBeaver `ResultSetHandlerTogglePanel`
+            // （`CMD_TOGGLE_PANEL` → `toggleResultsPanel:64-69` → `closePanel` / `activatePanel`）。
+            // 面板状态本身与 `SetRightTab` 同口径（纯面板状态，宿主只转发）；
+            // 只有「真的切到了引用页」才需要读外键，与 `SetRightTab` 分支同一条刷新路径。
+            ResultRequest::ToggleRightTab(tab) => {
+                // toggle 是「开/关该页」（`ResultSetHandlerTogglePanel:64-81`）：关掉一页同样改
+                // `open_tabs`，所以要按集合变化落盘，不能只看「是否切到了该页」。
+                let before = self.result_panel.read(cx).open_tabs().to_vec();
+                let switched = self
+                    .result_panel
+                    .update(cx, |p, cx| p.toggle_right_tab(tab, cx));
+                let changed = self.result_panel.read(cx).open_tabs() != before.as_slice();
+                // 【右栏页签持久化】竖条也能关掉 / 重新启用某页 → 同一次落盘
+                if switched || changed {
+                    self.persist_result_open_tabs(cx);
+                }
+                if switched && tab == RightTab::Reference {
+                    self.result_panel
+                        .update(cx, |p, cx| p.begin_references_load(cx));
+                }
+            }
+            // 【右栏】关掉这一页（其余页保留）：纯面板状态，宿主只转发。
+            // 对齐 DBeaver `CTabItem(panelFolder, SWT.CLOSE)` + `enabledPanelIds` 移除语义。
+            ResultRequest::CloseRightTab(tab) => {
+                self.result_panel
+                    .update(cx, |p, cx| p.close_right_tab(tab, cx));
+                // 【右栏页签持久化】对齐 `enabledPanelIds` 的移除语义：关一次落一次盘
+                self.persist_result_open_tabs(cx);
+            }
+            // 【右栏】重新打开一页（视图菜单勾选项）：与 `SetRightTab` 同口径，
+            // 切到引用页时同样要触发外键读取。
+            ResultRequest::OpenRightTab(tab) => {
+                self.result_panel
+                    .update(cx, |p, cx| p.open_right_tab(tab, cx));
+                // 【右栏页签持久化】重开一页同样落盘（与 × 的移除共用同一份集合）
+                self.persist_result_open_tabs(cx);
+                if tab == RightTab::Reference {
+                    self.result_panel
+                        .update(cx, |p, cx| p.begin_references_load(cx));
+                }
+            }
+            // 【值详情页】在外部程序中打开当前值（临时文件 + 系统默认程序）
+            ResultRequest::OpenValueExternally => {
+                self.open_selected_value_externally(cx);
+            }
+            // 【引用页】宿主侧取外键（面板只交 schema / 表 / 可见列）
+            ResultRequest::LoadReferences {
+                schema,
+                table,
+                visible_columns,
+            } => self.load_references(schema, table, visible_columns, cx),
+            // 【引用页】键下拉选中（纯面板状态）
+            ResultRequest::SetActiveReference(index) => {
+                self.result_panel
+                    .update(cx, |p, cx| p.set_active_reference(index, cx));
+            }
+            // 【引用页】「打开目标对象」：导航树定位目标表
+            ResultRequest::OpenReferenceTarget { schema, table } => {
+                self.open_reference_target(schema, table, cx)
+            }
+            // 【引用页】「查看引用行」：按当前行的外键值另开一份结果集（方案 B′）。
+            // 落位用 `NewSet`——DBeaver 在面板内嵌一份结果视图互不干扰，
+            // 本仓换成「原结果保持选中、引用行放旁边」，语义见 references-plan §5。
+            ResultRequest::OpenReferenceRows { sql } => {
+                self.execute(
+                    crate::execution::ExecTarget::Statement(sql),
+                    crate::store::ResultPlacement::NewSet,
+                    cx,
+                );
             }
             // 【列浏览器】清单单击选中列：面板写选中态 + 网格列高亮联动（方法内部已联动网格）
             ResultRequest::SelectColumn(column) => {
@@ -456,36 +551,50 @@ impl EditorHostPanel {
                 self.result_panel
                     .update(cx, |p, cx| p.set_show_column_comments(open, cx));
             }
-            // 【R2 计算页】函数集增删 / 复位 / 口径切换：全是面板本地视图状态
-            // （不落盘、不影响取数），宿主只转发（与 SetRightTab 同口径）
+            // 【R2 计算页】函数集增删 / 复位 / 口径切换：面板本地视图状态（不影响取数），
+            // 宿主只转发（与 SetRightTab 同口径）。**启用集要落盘**（对齐 DBeaver
+            // `AggregateColumnsPanel.saveSettings` 记住 `enabledFunctions`）：三条改动路径
+            // 生效后都按面板当前值回写一次，口径切换不落盘（DBeaver 也不存）。
             ResultRequest::AddStatsItem(item) => {
                 self.result_panel
                     .update(cx, |p, cx| p.add_stats_item(item, cx));
+                self.persist_result_stats_items(cx);
             }
             ResultRequest::RemoveStatsItem(item) => {
                 self.result_panel
                     .update(cx, |p, cx| p.remove_stats_item(item, cx));
+                self.persist_result_stats_items(cx);
             }
             ResultRequest::ResetStatsItems => {
                 self.result_panel
                     .update(cx, |p, cx| p.reset_stats_items(cx));
+                self.persist_result_stats_items(cx);
             }
             ResultRequest::SetStatsMode(mode) => {
                 self.result_panel
                     .update(cx, |p, cx| p.set_stats_mode(mode, cx));
             }
-            // 【R3 分组页】纯面板视图状态：不落盘、不影响取数
+            // 【R3 分组页】分组键增删 / 清空是纯面板视图状态（不落盘、不影响取数）；
+            // 【分组页持久化】排序口径与「仅重复」要落盘（对齐 DBeaver `ChangeSortingAction`
+            // 写 `RS_GROUPING_DEFAULT_SORTING` + `persistConfiguration()`、`DuplicatesOnlyAction`
+            // 写 `RS_GROUPING_SHOW_DUPLICATES_ONLY`），两条都按面板当前值回写一次。
             ResultRequest::ToggleGroupColumn(column) => {
                 self.result_panel
                     .update(cx, |p, cx| p.toggle_group_column(column, cx));
             }
+            ResultRequest::MoveGroupColumn { column, delta } => {
+                self.result_panel
+                    .update(cx, |p, cx| p.move_group_column(column, delta, cx));
+            }
             ResultRequest::SetGroupSort(sort) => {
                 self.result_panel
                     .update(cx, |p, cx| p.set_group_sort(sort, cx));
+                self.persist_result_group_sort(cx);
             }
             ResultRequest::SetGroupDuplicatesOnly(on) => {
                 self.result_panel
                     .update(cx, |p, cx| p.set_group_duplicates_only(on, cx));
+                self.persist_result_group_duplicates_only(cx);
             }
             ResultRequest::ClearGroupColumns => {
                 self.result_panel
@@ -501,6 +610,48 @@ impl EditorHostPanel {
         let _ = self.window.update(cx, |_panel, window, app| {
             panel.update(app, |p, cx| p.clear_column_search(window, cx));
         });
+    }
+
+    /// 【计算页持久化】把面板当前的启用统计项写回全局偏好
+    /// （对齐 DBeaver `AggregateColumnsPanel.saveSettings` 记 `enabledFunctions`）。
+    ///
+    /// 三条改动路径（＋ / 行尾 × / Reset）生效后各回写一次：面板已把值夹成合法集合，
+    /// 宿主只负责读走那一串 id 交给设置服务（同值不写盘由设置侧判定）。
+    pub(crate) fn persist_result_stats_items(&mut self, cx: &mut Context<Self>) {
+        let ids = self.result_panel.read(cx).stats_items_ids();
+        settings::SettingsService::set_result_panel_stats_items(&ids, cx);
+    }
+
+    /// 【分组页持久化】把面板当前的排序口径写回全局偏好
+    /// （对齐 DBeaver `ChangeSortingAction.run` 写 `RS_GROUPING_DEFAULT_SORTING`）。
+    pub(crate) fn persist_result_group_sort(&mut self, cx: &mut Context<Self>) {
+        let id = self.result_panel.read(cx).group_sort_id();
+        settings::SettingsService::set_result_panel_group_sort(id, cx);
+    }
+
+    /// 【分组页持久化】把面板当前的「仅重复」开关写回全局偏好
+    /// （对齐 DBeaver `DuplicatesOnlyAction.run` 写 `RS_GROUPING_SHOW_DUPLICATES_ONLY`）。
+    pub(crate) fn persist_result_group_duplicates_only(&mut self, cx: &mut Context<Self>) {
+        let on = self.result_panel.read(cx).group_duplicates_only_value();
+        settings::SettingsService::set_result_panel_group_duplicates_only(on, cx);
+    }
+
+    /// 【右栏页签持久化】把面板当前启用的页写回全局偏好
+    /// （对齐 DBeaver `ResultSetViewer.addPanel:1388` 的 `enabledPanelIds.add(id)` 与
+    /// 关闭时的移除：那边这份集合随 `PresentationSettings` 存，下次打开仍是这几页）。
+    ///
+    /// 两条改动路径（页签条行尾 × / 视图菜单勾选项）生效后各回写一次；面板已把集合
+    /// 归成规范序，宿主只负责拼成 id 串交给设置服务（同值不写盘由设置侧判定）。
+    pub(crate) fn persist_result_open_tabs(&mut self, cx: &mut Context<Self>) {
+        let ids = self
+            .result_panel
+            .read(cx)
+            .open_tabs()
+            .iter()
+            .map(|tab| tab.id())
+            .collect::<Vec<_>>()
+            .join(",");
+        settings::SettingsService::set_result_panel_open_tabs(&ids, cx);
     }
 
     /// 需要 `&mut Window` 的动作走窗口句柄转手（headless / 窗口已关时静默跳过；

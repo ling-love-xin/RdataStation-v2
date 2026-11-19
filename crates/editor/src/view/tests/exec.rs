@@ -700,6 +700,7 @@ fn toggling_autocommit_puts_the_next_execution_in_a_transaction(cx: &mut TestApp
         [crate::execution::RunOptions {
             use_transaction: true,
             lineage: Some(crate::execution::LINEAGE_ORIGINAL),
+            dml_confirmed: false,
         }],
         "自动提交关 → 执行要进事务（血缘由 worker 统一注入）"
     );

@@ -4,9 +4,9 @@ use super::clamp_right_sidebar_height;
 use super::clamp_right_sidebar_width;
 use super::next_right_edge_state;
 use super::reorder_by;
-use super::right_tab_from_index;
 use super::sidebar_width_anim;
 use super::tabs::stat_value;
+use super::tabs::StatExtras;
 use super::tabs::value_payload;
 use crate::column_browser::filter_browser_columns;
 use crate::grid::stats::ColumnStats;
@@ -324,29 +324,319 @@ fn browser_filter_no_match_returns_empty() {
     assert!(filter_browser_columns(&n, &t, &c, "zzz").is_empty());
 }
 
-/// 页签顺序 / 下标映射（`events::right_tabs` 单一来源）：
-/// 0=列浏览器（默认）/ 1=值详情 / 2=计算 / 3=分组 / 4=引用 / 5=执行SQL，越界回落默认页；
-/// 反查（枚举 → 下标）与之互逆，页签条 `selected_index` 与点击回调用的是同一份顺序。
-#[test]
-fn right_tab_index_maps_to_the_six_panel_tabs() {
-    use super::events::{right_tab_index, right_tabs};
+/// 【过滤框 ESC 清空】对齐 `MetaDataPanel.java:87-98`：过滤框是
+/// `Text(SWT.BORDER|SWT.SEARCH|SWT.ICON_CANCEL)` + KeyListener
+/// （`e.character == SWT.ESC → filterTextBox.setText("")`，随后 `refresh(true)` 重算）。
+///
+/// 本仓过滤框由 kit `List` 内置（`searchable`），`ListState` 不暴露内部 `InputState`，
+/// 但暴露 `set_query`（会顺带触发一次搜索）。kit `Input` 不消费 Esc（见
+/// `panel/render.rs` 重命名条的同款注释），所以按键会冒泡到列表外层的
+/// `on_key_down` 容器 —— 在那里清空。
+#[gpui_kit::test]
+fn column_browser_filter_clears_on_escape(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    // 测试壳只灌网格；列浏览器的 delegate 数据要单独喂（同
+    // `column_browser_draws_the_comment_line_below_the_name` 的做法）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.set_right_tab(RightTab::Browser, cx);
+            let list = p.browser_list.clone();
+            list.update(cx, |list, cx| {
+                list.delegate_mut().set_data(
+                    vec!["id".to_string(), "amount".to_string()],
+                    vec!["INTEGER".to_string(), "DECIMAL".to_string()],
+                    vec![false, false],
+                    vec![None, None],
+                );
+                cx.notify();
+            });
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
 
-    assert_eq!(right_tab_from_index(0), RightTab::Browser);
-    assert_eq!(right_tab_from_index(1), RightTab::Value);
-    assert_eq!(right_tab_from_index(2), RightTab::Stats);
-    assert_eq!(right_tab_from_index(3), RightTab::Group);
-    assert_eq!(right_tab_from_index(4), RightTab::Reference);
-    assert_eq!(right_tab_from_index(5), RightTab::ExecSql);
-    assert_eq!(right_tab_from_index(99), RightTab::Browser);
+    let list = panel.read_with(cx, |p, _| p.browser_list.clone());
+    // 输入搜索词（`set_query` 内部会直接起一次搜索，等价于用户敲键）
+    cx.update(|window, cx| list.update(cx, |list, cx| list.set_query("amount", window, cx)));
+    assert_eq!(
+        list.read_with(cx, |list, _| list.delegate().query().to_string()),
+        "amount",
+        "搜索词应写进 delegate"
+    );
+    assert_eq!(
+        list.read_with(cx, |list, _| list.delegate().matched().len()),
+        1,
+        "只命中 amount 一列"
+    );
 
-    // 互逆：每个页签既是自己的下标对应的枚举，下标也唯一
-    for (index, tab) in right_tabs().into_iter().enumerate() {
-        assert_eq!(right_tab_from_index(index), tab);
-        assert_eq!(right_tab_index(tab), index);
-    }
+    // 聚焦搜索框 → 敲 ESC
+    cx.update(|window, cx| list.update(cx, |list, cx| list.focus(window, cx)));
+    cx.simulate_keystrokes("escape");
+    assert_eq!(
+        list.read_with(cx, |list, _| list.delegate().query().to_string()),
+        "",
+        "ESC 应清空过滤词（对齐 MetaDataPanel:91-98）"
+    );
+    assert_eq!(
+        list.read_with(cx, |list, _| list.delegate().matched().len()),
+        2,
+        "清空后回到全量清单"
+    );
 }
 
-/// 【R2 计算页】单项取值：口径决定 Min/Max 的比较方式，Avg/Sum 只在数值口径出值，
+/// 页签顺序 / 下标映射（`events::right_tabs` 单一来源）：全集下
+/// 0=列浏览器（默认）/ 1=值详情 / 2=计算 / 3=分组 / 4=引用 / 5=执行SQL，越界回落默认页；
+/// 反查（枚举 → 下标）与之互逆，页签条 `selected_index` 与点击回调用的是同一份换算
+/// （`strip_index` / `tab_at_strip_index`，作用在「当前已启用集合」上）。
+#[test]
+fn right_tab_index_maps_to_the_six_panel_tabs() {
+    use super::events::{right_tabs, strip_index, tab_at_strip_index};
+
+    let all = right_tabs();
+    assert_eq!(tab_at_strip_index(&all, 0), RightTab::Browser);
+    assert_eq!(tab_at_strip_index(&all, 1), RightTab::Value);
+    assert_eq!(tab_at_strip_index(&all, 2), RightTab::Stats);
+    assert_eq!(tab_at_strip_index(&all, 3), RightTab::Group);
+    assert_eq!(tab_at_strip_index(&all, 4), RightTab::Reference);
+    assert_eq!(tab_at_strip_index(&all, 5), RightTab::ExecSql);
+    assert_eq!(tab_at_strip_index(&all, 99), RightTab::Browser);
+
+    // 互逆：每个页签既是自己的下标对应的枚举，下标也唯一
+    for (index, tab) in all.iter().copied().enumerate() {
+        assert_eq!(tab_at_strip_index(&all, index), tab);
+        assert_eq!(strip_index(&all, tab), index);
+    }
+
+    // 集合是子集时换算跟着集合走（关掉「计算」页后，分组从 3 变成 2）
+    let partial = [RightTab::Browser, RightTab::Value, RightTab::Group];
+    assert_eq!(strip_index(&partial, RightTab::Group), 2);
+    assert_eq!(tab_at_strip_index(&partial, 2), RightTab::Group);
+    // 不在集合里的页 → 下标 0（不会画到条上）
+    assert_eq!(strip_index(&partial, RightTab::Stats), 0);
+}
+
+/// 【右栏关闭/重开】对齐 DBeaver `CTabItem(panelFolder, SWT.CLOSE)` +
+/// `presentationSettings.enabledPanelIds`：关一页只移除这一页（其余仍在），
+/// 关当前页则落到规范序的下一剩页；关到空集收起右栏；重开按规范序插回并置为当前。
+#[gpui_kit::test]
+fn close_right_tab_drops_one_page_and_reopen_restores_order(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use super::events::{neighbor_after_close, right_tabs};
+
+    // 纯函数：关掉规范序中间那页 → 落到紧随其后的剩页；关最后一页 → 落到最后一个剩页
+    let all = right_tabs();
+    let without_stats: Vec<RightTab> =
+        all.iter().copied().filter(|t| *t != RightTab::Stats).collect();
+    assert_eq!(neighbor_after_close(&without_stats, RightTab::Stats), RightTab::Group);
+    let only_tail = [RightTab::Browser, RightTab::Value];
+    assert_eq!(neighbor_after_close(&only_tail, RightTab::ExecSql), RightTab::Value);
+
+    // 面板态：出厂六页全开
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.open_tabs().to_vec()),
+        right_tabs().to_vec(),
+        "出厂应是六页全开"
+    );
+
+    // 关「计算」页（当前页是列浏览器 → 当前页不变，只少一项）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.close_right_tab(RightTab::Stats, cx))
+    });
+    let open = panel.read_with(cx, |p, _| p.open_tabs().to_vec());
+    assert_eq!(open.len(), 5);
+    assert!(!open.contains(&RightTab::Stats));
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.right_tab),
+        RightTab::Browser,
+        "关的不是当前页 → 当前页不动"
+    );
+
+    // 关当前页（先切到分组页，再关它）→ 落到紧随其后的「引用」
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.set_right_tab(RightTab::Group, cx);
+            p.close_right_tab(RightTab::Group, cx);
+        })
+    });
+    assert_eq!(panel.read_with(cx, |p, _| p.right_tab), RightTab::Reference);
+
+    // 重开「计算」页：按规范序插回（在「值详情」之后、分组之前），并置为当前
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.open_right_tab(RightTab::Stats, cx))
+    });
+    let open = panel.read_with(cx, |p, _| p.open_tabs().to_vec());
+    assert_eq!(
+        open,
+        vec![
+            RightTab::Browser,
+            RightTab::Value,
+            RightTab::Stats,
+            RightTab::Reference,
+            RightTab::ExecSql
+        ],
+        "重开应按规范序插回原位"
+    );
+    assert_eq!(panel.read_with(cx, |p, _| p.right_tab), RightTab::Stats);
+
+    // 关到空集 → 右栏整体收起（与「关掉最后一个面板」在那边导致页签夹无项一致）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            for tab in right_tabs() {
+                p.close_right_tab(tab, cx);
+            }
+        })
+    });
+    assert!(panel.read_with(cx, |p, _| p.open_tabs().is_empty()));
+    assert!(
+        !panel.read_with(cx, |p, _| p.panels_visible()),
+        "关掉最后一页后右栏应收起"
+    );
+}
+
+/// 【右栏】关空集 → 收起 → **再展开必须恢复默认页集合**。
+///
+/// 取证 `ResultSetViewer.showPanels:1478-1518`：展开时 `showDefaults=true` 会先跑
+/// `activateDefaultPanels(getPresentationSettings())`（`:1493-1496`）再
+/// `setMaximizedControl(null)` + `updatePanelsContent(false)`——也就是「面板集合被关空之后
+/// 重新显示，一定有默认面板可显示」，不会留下一个空页签夹。
+///
+/// 本仓在修这条之前：`close_right_tab` 关空只收起（`open_tabs` 留空），`set_panels_visible(true)`
+/// 只翻可见位，于是重新展开得到的是「右栏空白、页签条上一个页签都没有」。
+#[gpui_kit::test]
+fn reopening_after_closing_all_pages_restores_default_tabs(cx: &mut gpui_kit::TestAppContext) {
+    use super::events::right_tabs;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            for tab in right_tabs() {
+                p.close_right_tab(tab, cx);
+            }
+        })
+    });
+    assert!(panel.read_with(cx, |p, _| p.open_tabs().is_empty()));
+    assert!(!panel.read_with(cx, |p, _| p.panels_visible()));
+
+    // 再展开（工具栏/宿主路径）
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_panels_visible(true, cx)));
+    assert!(panel.read_with(cx, |p, _| p.panels_visible()), "应重新展开");
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.open_tabs().to_vec()),
+        right_tabs().to_vec(),
+        "空集重新展开应恢复默认页集合（否则页签条是空的）"
+    );
+    let current = panel.read_with(cx, |p, _| p.right_tab);
+    assert!(
+        panel.read_with(cx, |p, _| p.open_tabs().contains(&current)),
+        "当前页必须落在恢复后的集合里"
+    );
+}
+
+/// 【右栏】非空集合在开合之间**保持不变**（恢复默认集合只针对「被关空」的情况）。
+#[gpui_kit::test]
+fn toggling_the_sidebar_keeps_a_custom_tab_set(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 关掉「列浏览器」→ 五页
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.close_right_tab(RightTab::Browser, cx))
+    });
+    let custom = panel.read_with(cx, |p, _| p.open_tabs().to_vec());
+    assert_eq!(custom.len(), 5);
+
+    // 状态栏三态开关：宽展开 → 收起 → 窄展开 → 宽展开（每次都经过收起再回来）
+    cx.update(|_, app| panel.update(app, |p, cx| p.toggle_value_sidebar(cx)));
+    assert!(!panel.read_with(cx, |p, _| p.panels_visible()));
+    cx.update(|_, app| panel.update(app, |p, cx| p.toggle_value_sidebar(cx)));
+    cx.update(|_, app| panel.update(app, |p, cx| p.toggle_value_sidebar(cx)));
+
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.open_tabs().to_vec()),
+        custom,
+        "自定义集合不应被「恢复默认」覆盖"
+    );
+    assert!(!panel.read_with(cx, |p, _| p.open_tabs().contains(&RightTab::Browser)));
+}
+
+/// 状态说明会看到什么（对齐 `updatePresentationInToolbar:948-952` 的
+/// `setText(label)` + `setToolTipText(description)`）。
+#[test]
+fn presentation_tooltips_carry_a_description() {
+    use crate::panel::events::{presentation_tooltip, record_view_tooltip};
+    use crate::ports::Presentation;
+
+    let grid = presentation_tooltip(Presentation::Grid);
+    let text = presentation_tooltip(Presentation::Text);
+    for tip in [&grid, &text] {
+        assert!(tip.contains('（') && tip.contains('）'), "缺描述：{tip}");
+    }
+    assert!(grid.starts_with("网格视图"), "{grid}");
+    assert!(text.starts_with("文本视图"), "{text}");
+    assert_ne!(grid, text);
+
+    // 记录视图：未激活时报「会看到什么」，已激活时报「怎么回去」
+    let off = record_view_tooltip(false);
+    let on = record_view_tooltip(true);
+    assert!(off.contains("转置"), "{off}");
+    assert!(on.contains("网格"), "{on}");
+    assert_ne!(off, on);
+}
+
+/// 【计算页右键菜单】条目清单 = 复制值 / 复制全部 / 分隔 / 缺项逐个「添加」/ 分隔 /
+/// 恢复默认 / 分隔 / 口径切换；缺项为空时整段跳过（DBeaver 此时菜单为空、点了没反应）。
+#[test]
+fn stat_context_menu_mirrors_the_toolbar_actions() {
+    use crate::panel::tabs::{StatMenuEntry, stat_menu_entries, stat_menu_label};
+
+    // 只启用「非空」→ 其余八项逐个列出来
+    let entries = stat_menu_entries(&[StatsItem::Count], StatsMode::Numeric);
+    let labels: Vec<String> = entries.iter().map(stat_menu_label).collect();
+    assert_eq!(labels[0], "复制值");
+    assert_eq!(labels[1], "复制全部");
+    assert!(matches!(entries[2], StatMenuEntry::Separator));
+    let adds = entries
+        .iter()
+        .filter(|entry| matches!(entry, StatMenuEntry::AddMissing(_)))
+        .count();
+    assert_eq!(adds, 8, "九项里已启用一项 → 八个可添加");
+    // 末尾是口径切换，且报「切到哪一档」（当前数值 → 报字符串）
+    assert!(matches!(
+        entries.last(),
+        Some(StatMenuEntry::ToggleMode(StatsMode::Text))
+    ));
+    assert_eq!(
+        stat_menu_label(entries.last().unwrap()),
+        "改为按字符串聚合"
+    );
+    // 恢复默认仍在（DBeaver ResetFunctionsAction）
+    assert!(entries.iter().any(|entry| matches!(entry, StatMenuEntry::Reset)));
+
+    // 九项全启用 → 没有「添加」段，也就没有那条悬空分隔线
+    let entries = stat_menu_entries(&StatsItem::ALL, StatsMode::Text);
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| matches!(entry, StatMenuEntry::AddMissing(_))),
+        "全启用时不应再列添加项"
+    );
+    let separators = entries
+        .iter()
+        .filter(|entry| matches!(entry, StatMenuEntry::Separator))
+        .count();
+    assert_eq!(separators, 2, "复制段后一条、恢复默认后一条");
+    assert_eq!(
+        stat_menu_label(entries.last().unwrap()),
+        "改为按数值聚合"
+    );
+}
+
+/// 【R2 计算页】单项取值：口径决定 Min/Max 的比较方式，Avg/Sum/Median 只在数值口径出值，
 /// 计数类不受口径影响（对齐 DBeaver `aggregateAsStrings`）
 #[test]
 fn stat_value_respects_mode_and_missing_samples() {
@@ -360,44 +650,130 @@ fn stat_value_respects_mode_and_missing_samples() {
     };
     let text = (Some("apple".to_string()), Some("zebra".to_string()));
     // 数值口径：极值走数值比较 + 千分位
-    assert_eq!(stat_value(StatsItem::Min, &stats, None, StatsMode::Numeric), "1");
+    let plain = StatExtras {
+        text_extremes: None,
+        distinct: None,
+        median: None,
+        mode: None,
+    };
     assert_eq!(
-        stat_value(StatsItem::Max, &stats, None, StatsMode::Numeric),
+        stat_value(StatsItem::Min, &stats, &plain, StatsMode::Numeric),
+        "1"
+    );
+    assert_eq!(
+        stat_value(StatsItem::Max, &stats, &plain, StatsMode::Numeric),
         "2,000"
     );
-    // 字符串口径：极值走字典序，Avg/Sum 不出值
+    // 字符串口径：极值走字典序，Avg/Sum/Median 不出值
+    let textual = StatExtras {
+        text_extremes: Some(&text),
+        distinct: None,
+        median: None,
+        mode: None,
+    };
     assert_eq!(
-        stat_value(StatsItem::Min, &stats, Some(&text), StatsMode::Text),
+        stat_value(StatsItem::Min, &stats, &textual, StatsMode::Text),
         "apple"
     );
     assert_eq!(
-        stat_value(StatsItem::Max, &stats, Some(&text), StatsMode::Text),
+        stat_value(StatsItem::Max, &stats, &textual, StatsMode::Text),
         "zebra"
     );
     assert_eq!(
-        stat_value(StatsItem::Avg, &stats, Some(&text), StatsMode::Text),
+        stat_value(StatsItem::Avg, &stats, &textual, StatsMode::Text),
         "—"
     );
     assert_eq!(
-        stat_value(StatsItem::Sum, &stats, Some(&text), StatsMode::Text),
+        stat_value(StatsItem::Sum, &stats, &textual, StatsMode::Text),
+        "—"
+    );
+    assert_eq!(
+        stat_value(StatsItem::Median, &stats, &textual, StatsMode::Text),
         "—"
     );
     // 计数类不受口径影响（字符串口径下仍是千分位整数）
     assert_eq!(
-        stat_value(StatsItem::Count, &stats, None, StatsMode::Text),
+        stat_value(StatsItem::Count, &stats, &plain, StatsMode::Text),
         "1,234"
     );
 }
 
-/// 【R2 计算页】默认函数集 = 六项全集、展示顺序固定；口径默认数值且可来回切
+/// 【R2 计算页·新增三项】去重计数 / 中位数 / 众数：有值走千分位或原文，缺样本一律 `—`
+/// （与 Avg/Sum 同一缺省口径——界面不摆空行）
 #[test]
-fn stats_defaults_are_full_set_in_display_order() {
-    assert_eq!(StatsItem::ALL.len(), 6);
+fn stat_value_covers_distinct_median_and_mode() {
+    let stats = ColumnStats::default();
+    let extras = StatExtras {
+        text_extremes: None,
+        distinct: Some(42),
+        median: Some(2.5),
+        mode: Some("x".to_string()),
+    };
+    assert_eq!(
+        stat_value(StatsItem::CountDistinct, &stats, &extras, StatsMode::Numeric),
+        "42"
+    );
+    assert_eq!(
+        stat_value(StatsItem::CountDistinct, &stats, &extras, StatsMode::Text),
+        "42",
+        "去重计数不看口径（两种口径都是「不同取值个数」）"
+    );
+    assert_eq!(
+        stat_value(StatsItem::Median, &stats, &extras, StatsMode::Numeric),
+        "2.5"
+    );
+    assert_eq!(
+        stat_value(StatsItem::Mode, &stats, &extras, StatsMode::Text),
+        "x",
+        "众数两种口径都给值文本"
+    );
+    // 缺样本：一律 —
+    let empty = StatExtras {
+        text_extremes: None,
+        distinct: None,
+        median: None,
+        mode: None,
+    };
+    for item in [StatsItem::CountDistinct, StatsItem::Median, StatsItem::Mode] {
+        assert_eq!(
+            stat_value(item, &stats, &empty, StatsMode::Numeric),
+            "—",
+            "{item:?} 没有样本应该给 —"
+        );
+    }
+}
+
+/// 【R2 计算页】可选全集 = 九项、展示顺序固定；**默认集**对齐 DBeaver `isDefault()` 打标
+/// （count + countDistinct → 本仓「非空」+「去重计数」）；口径默认数值且可来回切
+#[test]
+fn stats_defaults_are_the_dbeaver_default_set_in_display_order() {
+    assert_eq!(StatsItem::ALL.len(), 9);
     assert_eq!(StatsItem::ALL[0], StatsItem::Count);
-    assert_eq!(StatsItem::ALL[5], StatsItem::Sum);
-    // 只有 Min/Max 支持字符串口径（SUM/AVG 对字符串累计不成立）
+    assert_eq!(StatsItem::ALL[1], StatsItem::CountDistinct);
+    assert_eq!(StatsItem::ALL[8], StatsItem::Sum);
+    // 默认集 = count + countdistinct（DBeaver 里也只有这两个标了 default）
+    assert_eq!(
+        StatsItem::DEFAULT_SET,
+        [StatsItem::Count, StatsItem::CountDistinct]
+    );
+    assert!(StatsItem::Count.is_default());
+    assert!(StatsItem::CountDistinct.is_default());
+    assert!(!StatsItem::Nulls.is_default());
+    assert!(!StatsItem::Sum.is_default());
+    // 字符串口径：计数 / 极值 / 众数有意义；SUM/AVG/中位数要能排序的数字
     assert!(StatsItem::Min.supports_text_mode());
+    assert!(StatsItem::CountDistinct.supports_text_mode());
+    assert!(StatsItem::Mode.supports_text_mode());
     assert!(!StatsItem::Sum.supports_text_mode());
+    assert!(!StatsItem::Median.supports_text_mode());
+    // 只有这三项要扫整列取值（其余走列式统计）
+    for item in StatsItem::ALL {
+        let needs = matches!(
+            item,
+            StatsItem::CountDistinct | StatsItem::Median | StatsItem::Mode
+        );
+        assert_eq!(item.needs_column_values(), needs, "{item:?}");
+    }
     assert_eq!(StatsMode::default(), StatsMode::Numeric);
     assert_eq!(StatsMode::Numeric.toggled(), StatsMode::Text);
     assert_eq!(StatsMode::Text.toggled(), StatsMode::Numeric);
@@ -601,7 +977,10 @@ fn rendered_ui_elements_survive(cx: &mut gpui_kit::TestAppContext) {
 }
 
 /// 【R2】计算页真渲染（不只跑纯函数）：面板工具条三件 / 两列表头 / 六行统计（含行尾 ×）
-/// 都要真画出来；行高 20px、工具条 28px；停用一项后该行消失、Reset 后回来（行为闭环）。
+/// 都要真画出来；行高 20px、工具条 28px。
+///
+/// 六行是**手动置全**的（出厂默认只有「非空」，对齐 DBeaver 的 `isDefault()` 集合，
+/// 见 §8.91）；同时钉住 Reset 的新语义：回到默认集，而不是六项全开。
 ///
 /// 谁把工具条拿掉、把 `stats_items` 写死回六行、或让 `Text` 口径把 Avg/Sum 也算出值，
 /// 此用例即红。
@@ -647,6 +1026,8 @@ fn stats_tab_renders_toolbar_header_and_rows(cx: &mut gpui_kit::TestAppContext) 
             p.set_grids(grid, None, window, cx);
             // 列浏览器清单选中第 2 列（amount）→ 计算页作用列
             p.selected_col = Some(1);
+            // 本用例要验「六行都画得出来」，出厂默认只有一项 → 先置全六项
+            p.stats_items = crate::ports::StatsItem::ALL.to_vec();
             p.set_right_tab(RightTab::Stats, cx);
         });
         *slot_in.borrow_mut() = Some(panel.clone());
@@ -717,22 +1098,34 @@ fn stats_tab_renders_toolbar_header_and_rows(cx: &mut gpui_kit::TestAppContext) 
         "统计行应 20px，实际 {row_h}px"
     );
 
-    // 3) 行为闭环：停用 Sum → 该行消失；Reset → 回来
+    // 3) 行为闭环：停用 Min → 该行消失；Reset → 回到**默认集**（只剩「非空」），
+    //    被停用的 Min 与其余非默认项都不回来（对齐 DBeaver `ResetFunctionsAction`
+    //    = `loadDefaultFunctions()` 只收 `isDefault()`）
     cx.update(|_, app| {
         panel.update(app, |p, cx| {
-            p.remove_stats_item(StatsItem::Sum, cx);
+            p.remove_stats_item(StatsItem::Min, cx);
         })
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(
-        !visible("editor-result-stat-row-Sum", cx),
-        "停用 Sum 后该行应消失"
+        !visible("editor-result-stat-row-Min", cx),
+        "停用 Min 后该行应消失"
     );
     cx.update(|_, app| panel.update(app, |p, cx| p.reset_stats_items(cx)));
     cx.update(|window, cx| window.draw(cx).clear(cx));
+    let after_reset = panel.read_with(cx, |p, _app| p.stats_items.clone());
+    assert_eq!(
+        after_reset,
+        crate::ports::StatsItem::DEFAULT_SET.to_vec(),
+        "Reset 应回到默认集（只有「非空」），不是六项全开"
+    );
     assert!(
-        visible("editor-result-stat-row-Sum", cx),
-        "Reset 后 Sum 行应回来"
+        visible("editor-result-stat-row-Count", cx),
+        "Reset 后默认项「非空」行应在"
+    );
+    assert!(
+        !visible("editor-result-stat-row-Sum", cx) && !visible("editor-result-stat-row-Min", cx),
+        "Reset 后非默认项（Sum / Min）不应自动回来"
     );
 }
 
@@ -744,6 +1137,14 @@ fn arrange_groups_sorts_and_filters() {
         (vec!["a".to_string()], 3),
         (vec!["c".to_string()], 1),
     ];
+    // 不排序：保持首现顺序（对齐 DBeaver `RS_GROUPING_DEFAULT_SORTING=""` 不设 ORDER BY）
+    arrange_groups(&mut groups, GroupSort::None, false);
+    assert_eq!(
+        groups.iter().map(|(key, _)| key[0].as_str()).collect::<Vec<_>>(),
+        ["b", "a", "c"],
+        "「不排序」档必须原样保留首现顺序"
+    );
+
     // 按值序
     arrange_groups(&mut groups, GroupSort::Value, false);
     assert_eq!(
@@ -769,6 +1170,151 @@ fn arrange_groups_sorts_and_filters() {
     ];
     arrange_groups(&mut multi, GroupSort::Value, false);
     assert_eq!(multi[0].0, vec!["a".to_string(), "1".to_string()]);
+}
+
+/// 【分组页表头】分组结果按表排：每个分组键一列，末列是函数列 `COUNT(*)`
+/// （对齐 DBeaver `GroupingResultsContainer` 的属性列 + 函数列 + `getDefaultFunction`）。
+#[gpui_kit::test]
+fn group_tab_shows_a_header_row_with_count_star(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use super::tabs::group_table_header;
+
+    // 纯函数：表头 = 键列名 + COUNT(*)，位置在末列
+    let names = vec!["id".to_string(), "amount".to_string()];
+    let header = group_table_header(&names);
+    assert_eq!(header.len(), names.len() + 1, "表头 = 键列 + 一个函数列");
+    assert_eq!(header[0], "id");
+    assert_eq!(header[1], "amount");
+    assert_eq!(header.last().unwrap(), "COUNT(*)");
+    // 单个键也一样
+    let single = group_table_header(&["id".to_string()]);
+    assert_eq!(single, vec!["id".to_string(), "COUNT(*)".to_string()]);
+
+    // 渲染：显式选一个分组键 → 表头行挂上
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.toggle_group_column(1, cx);
+            p.set_right_tab(RightTab::Group, cx);
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-group-header").is_some(),
+        "有分组键时分组页应渲染表头行（editor-result-group-header）"
+    );
+}
+
+/// 【R3 分组页】分组键顺序可上 / 下移：纯函数钉边界，面板态钉「顺序真的变了」。
+///
+/// 对齐 `GroupingColumnsContainer.moveColumns:126-152`——分组键顺序 = 嵌套顺序，
+/// 挪一位就是改层级（DBeaver 靠拖放表达，本仓是工具条的一对按钮）。
+#[gpui_kit::test]
+fn moving_group_column_reorders_the_group_keys(cx: &mut gpui_kit::TestAppContext) {
+    use crate::panel::tabs::{can_move_group_column, move_group_column_in_place};
+
+    // 纯函数：相邻交换 + 边界不动 + 不在键里不动
+    let mut keys = vec![3usize, 7, 9];
+    assert!(move_group_column_in_place(&mut keys, 7, -1));
+    assert_eq!(keys, vec![7, 3, 9], "上移一位应与前一项交换");
+    assert!(!move_group_column_in_place(&mut keys, 7, -1), "已在首位不能再上移");
+    assert!(move_group_column_in_place(&mut keys, 3, 1));
+    assert_eq!(keys, vec![7, 9, 3], "下移一位应与后一项交换");
+    assert!(!move_group_column_in_place(&mut keys, 3, 1), "已在末位不能再下移");
+    assert!(!move_group_column_in_place(&mut keys, 42, -1), "不在分组键里应无动作");
+
+    // 可用性：无选中 / 不在键里 / 已到边界 → 不可用
+    assert!(!can_move_group_column(&keys, None, -1));
+    assert!(!can_move_group_column(&keys, Some(42), 1));
+    assert!(!can_move_group_column(&keys, Some(7), -1), "首位不能上移");
+    assert!(!can_move_group_column(&keys, Some(3), 1), "末位不能下移");
+    assert!(can_move_group_column(&keys, Some(9), -1));
+    assert!(can_move_group_column(&keys, Some(9), 1));
+
+    // 面板态：勾 [0, 2] → 把 2 上移 → 顺序变 [2, 0]（分组层级随之改）
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.toggle_group_column(0, cx);
+            p.toggle_group_column(2, cx);
+        })
+    });
+    assert_eq!(cx.update(|_, app| panel.read(app).group_columns.clone()), vec![0, 2]);
+    cx.update(|_, app| panel.update(app, |p, cx| p.move_group_column(2, -1, cx)));
+    assert_eq!(
+        cx.update(|_, app| panel.read(app).group_columns.clone()),
+        vec![2, 0],
+        "上移应改分组键顺序"
+    );
+    // 到边界后再移：状态不变（也不该触发无谓重绘）
+    cx.update(|_, app| panel.update(app, |p, cx| p.move_group_column(2, -1, cx)));
+    assert_eq!(cx.update(|_, app| panel.read(app).group_columns.clone()), vec![2, 0]);
+}
+
+/// 【R3 分组页】列下拉的项文字：已勾选的列要带位次，未勾选的保持列名。
+///
+/// DBeaver 的分组顺序在 `GroupingConfigDialog` 的表格行序里直接可见；本仓是勾选下拉，
+/// 不标位次就看不出「先按 A 再按 B」。菜单内部不可读（kit 只暴露 `is_empty()`），
+/// 所以按项目规范抽成纯函数来钉。
+#[test]
+fn group_column_menu_label_marks_only_selected_columns() {
+    use crate::panel::tabs::group_column_menu_label;
+
+    let keys = [3usize, 7, 9];
+    assert_eq!(group_column_menu_label(&keys, 3, "id"), "1. id");
+    assert_eq!(group_column_menu_label(&keys, 7, "name"), "2. name");
+    assert_eq!(group_column_menu_label(&keys, 9, "amount"), "3. amount");
+    assert_eq!(group_column_menu_label(&keys, 5, "extra"), "extra", "未勾选不加位次");
+    assert_eq!(group_column_menu_label(&[], 5, "extra"), "extra", "空集合全部保持原名");
+
+    // 顺序变了位次跟着变（上移后 9 变成第 2 位）
+    let reordered = [3usize, 9, 7];
+    assert_eq!(group_column_menu_label(&reordered, 9, "amount"), "2. amount");
+    assert_eq!(group_column_menu_label(&reordered, 7, "name"), "3. name");
+}
+
+/// 【R3 分组页】工具条的上移 / 下移按钮真的把请求入队（渲染路径 + 可用性门）。
+#[gpui_kit::test]
+fn group_move_buttons_queue_the_request_for_the_selected_column(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ports::ResultRequest;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 分组键 [0, 2]，选中第 2 列（→ 上移可用、下移不可用）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.toggle_group_column(0, cx);
+            p.toggle_group_column(2, cx);
+            p.select_column(2, cx);
+            p.set_right_tab(RightTab::Group, cx);
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let up = cx
+        .debug_bounds("editor-result-group-move-up")
+        .expect("分组页工具条应有上移按钮");
+    let point = gpui_kit::point(
+        up.origin.x + up.size.width / 2.,
+        up.origin.y + up.size.height / 2.,
+    );
+    cx.simulate_click(point, gpui_kit::Modifiers::default());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let queued = cx.update(|_, app| panel.read(app).queue.drain());
+    assert!(
+        queued.iter().any(|request| matches!(
+            request,
+            ResultRequest::MoveGroupColumn { column: 2, delta: -1 }
+        )),
+        "上移按钮应以「选中列 + delta=-1」入队：{queued:?}"
+    );
 }
 
 /// 【R3】清空分组列：对齐 DBeaver `ClearGroupingAction`（分组列非空才可用；
@@ -801,6 +1347,267 @@ fn clear_group_columns_drops_explicit_selection(cx: &mut gpui_kit::TestAppContex
     // 幂等：空集合再清空不改变状态（对应 DBeaver 动作在空集合时不可用）
     cx.update(|_, app| panel.update(app, |p, cx| p.clear_group_columns(cx)));
     assert!(cx.update(|_, app| panel.read(app).group_columns.clone()).is_empty());
+}
+
+/// 【值页空态】形态对齐 DBeaver `ValueViewerPanel.createContents:89-106`：空态是**两行**
+/// （选值提示 + 收起面板提示），且页内工具条仍在（六页同形）。
+#[gpui_kit::test]
+fn value_page_empty_state_shows_two_hint_lines_with_toolbar(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 纯函数层：两行非空、互不相同（不是把一句话拆两截）
+    let lines = {
+        use super::tabs::value_empty_lines;
+        value_empty_lines()
+    };
+    assert_eq!(lines.len(), 2, "值页空态应是两行");
+    assert!(lines.iter().all(|line| !line.trim().is_empty()));
+    assert_ne!(lines[0], lines[1]);
+    // 第二行必须兑现「怎么收起面板」这条语义（本仓的两个入口之一）
+    assert!(
+        lines[1].contains("面板"),
+        "第二行应指向收起面板的入口，实际 {}",
+        lines[1]
+    );
+
+    // 渲染层：未选中单元格 → 空态页（带工具条）+ 新空态容器可见
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.selection_pos = None;
+            p.set_right_tab(RightTab::Value, cx);
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-value-toolbar").is_some(),
+        "值页空态也要保留页内工具条（六页同形）"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-empty-page").is_some(),
+        "值页空态正文容器应渲染（editor-result-empty-page）"
+    );
+}
+
+/// 【列浏览器工具条】对齐 DBeaver `MetaDataPanel.contributeActions:204-215`：
+/// 页内工具条**只贡献一条**「生成 DDL」。多选批量动作（隐藏所选 / 显示所选 / 清空选择）
+/// 改挂在清单行右键菜单上（`MetaDataPanel.fillCustomActions:234-252` 的同一处口径：
+/// 操作对象是清单的结构化选中项），不再挤在工具条里。
+#[gpui_kit::test]
+fn column_browser_toolbar_keeps_only_the_ddl_action(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::column_browser::{batch_menu_items, filter_browser_columns, ColumnBatchAction};
+
+    // 纯函数：批量项只在「右键列属于多选集合」时出现，标签带集合规模
+    assert!(
+        batch_menu_items(&[], 0).is_empty(),
+        "空集合不该有批量项"
+    );
+    assert!(
+        batch_menu_items(&[1, 3], 0).is_empty(),
+        "右键列不在集合里时，菜单退回单列菜单"
+    );
+    let items = batch_menu_items(&[1, 3], 3);
+    assert_eq!(items.len(), 3, "命中集合 → 隐藏 / 显示 / 清空三条");
+    assert_eq!(items[0].0, ColumnBatchAction::HideSelected);
+    assert_eq!(items[1].0, ColumnBatchAction::ShowSelected);
+    assert_eq!(items[2].0, ColumnBatchAction::ClearSelection);
+    for (_, label) in &items {
+        assert!(
+            label.contains("2 列"),
+            "标签要带集合规模，实际 {label}"
+        );
+    }
+    // 过滤函数不受影响（清单仍按搜索词映射行号）
+    assert_eq!(
+        filter_browser_columns(&["id".into(), "amount".into()], &[], &[], "am").len(),
+        1
+    );
+
+    // 渲染层：多选非空时工具条仍只有「生成 DDL」，批量按钮不再出现
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.set_multi_selected(vec![1, 2], cx);
+            p.set_right_tab(RightTab::Browser, cx);
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let visible = |id: &'static str, cx: &mut gpui_kit::VisualTestContext| -> bool {
+        use gpui_kit::test::TestWindowExt as _;
+        let by_id = cx.update(|window, _| {
+            window
+                .try_find(gpui_kit::ElementId::Name(gpui_kit::SharedString::from(
+                    id.to_string(),
+                )))
+                .is_some_and(|snap| snap.visible())
+        });
+        by_id || cx.debug_bounds(id).is_some()
+    };
+    assert!(
+        visible("editor-result-generate-ddl", cx),
+        "列浏览器工具条应保留「生成 DDL」（DBeaver 的唯一页内动作）"
+    );
+    for id in [
+        "editor-result-col-batch-hide",
+        "editor-result-col-batch-show",
+        "editor-result-col-batch-clear",
+    ] {
+        assert!(
+            !visible(id, cx),
+            "多选批量动作应只在右键菜单里，工具条不应再有 {id}"
+        );
+    }
+}
+
+/// 【页内工具条列位】对齐 DBeaver `addPanel:1337-1383` 的 `GridLayout(2, false)`：
+/// 左列（`panel.contributeActions` + `FILL_HORIZONTAL`）吃满剩余宽度 → 页内动作**贴左**；
+/// 右列（`addDefaultPanelActions`）`HORIZONTAL_ALIGN_END` → 视图菜单**贴右**。
+/// 改动前本仓是「标题 flex_1 吃满 + 动作组紧贴菜单」，动作和菜单挤在同一侧右端。
+///
+/// 另钉 `needsSeparator()`：`addPanel:1345-1347` 只在面板声明 `true` 时才在工具条与正文之间
+/// 插水平分隔线；全仓只有 `ValueViewerPanel.java:171-173` 为 `true`，其余继承
+/// `ResultSetPanelBase.java:26-28` 的 `false`。
+#[gpui_kit::test]
+fn panel_toolbar_puts_actions_left_and_view_menu_right(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 纯函数层：六页里只有值详情页需要那条水平分隔线
+    {
+        use super::events::{page_needs_separator, right_tabs};
+        let flagged: Vec<RightTab> = right_tabs()
+            .into_iter()
+            .filter(|tab| page_needs_separator(*tab))
+            .collect();
+        assert_eq!(
+            flagged,
+            vec![RightTab::Value],
+            "needsSeparator 只有值详情页为 true（ValueViewerPanel.java:171-173）"
+        );
+    }
+
+    // 渲染层：值页带真实动作集（选一格 → 复制 / 保存 / 外部打开三颗都挂上）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.selection_pos = Some((0, 1));
+            p.set_right_tab(RightTab::Value, cx);
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let toolbar = cx
+        .debug_bounds("editor-result-value-toolbar")
+        .expect("值页工具条应带 debug_selector 才量得到");
+    let copy = cx
+        .debug_bounds("editor-result-value-copy")
+        .expect("值页复制钮应带 debug_selector 才量得到");
+    let menu = cx
+        .debug_bounds("editor-result-value-toolbar-view-menu")
+        .expect("值页视图菜单应带 debug_selector 才量得到");
+
+    let toolbar_left = f32::from(toolbar.origin.x);
+    let toolbar_right = toolbar_left + f32::from(toolbar.size.width);
+    let copy_left = f32::from(copy.origin.x);
+    let copy_right = copy_left + f32::from(copy.size.width);
+    let menu_left = f32::from(menu.origin.x);
+    let menu_right = menu_left + f32::from(menu.size.width);
+
+    // 1) 动作在菜单左侧（同一条工具条行）
+    assert!(
+        (f32::from(copy.origin.y) - f32::from(menu.origin.y)).abs() < 4.0,
+        "动作与视图菜单应同行：copy.y={} menu.y={}",
+        f32::from(copy.origin.y),
+        f32::from(menu.origin.y)
+    );
+    assert!(
+        copy_left < menu_left,
+        "页内动作应在视图菜单左侧，copy.x={copy_left} menu.x={menu_left}"
+    );
+
+    // 2) 动作贴左：标题（「值」）之后紧接动作，离工具条左端不超过 200px
+    assert!(
+        copy_left - toolbar_left <= 200.0,
+        "动作应贴左列起点（标题之后），实际距左端 {}px",
+        copy_left - toolbar_left
+    );
+
+    // 3) 左列吃满剩余宽度：动作右缘到菜单左缘之间应留出大段空隙
+    //    （改动前动作组紧贴菜单，空隙只有 gap_1=4px）
+    let gap = menu_left - copy_right;
+    assert!(
+        gap >= 24.0,
+        "左列应吃满剩余宽度，动作与菜单间空隙过小：{gap}px"
+    );
+
+    // 4) 菜单贴右：右缘落在工具条右端内（实测 28px = 行 px_2 + ghost 按钮自带内距；
+    //    阈值 40px 只盯住「菜单不在行中段」这条语义）
+    let trailing = toolbar_right - menu_right;
+    assert!(
+        (0.0..=40.0).contains(&trailing),
+        "视图菜单应贴右，距工具条右端 {trailing}px"
+    );
+}
+
+/// 【分组页持久化】宿主注入的两项偏好：排序口径 id 与「仅重复」开关都要落到面板状态；
+/// 未知 id 按出厂 `value`（与设置服务归一同一口径），重复注入同值不重复 notify。
+#[gpui_kit::test]
+fn group_prefs_initial_round_trip_and_unknown_sort_falls_back(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 面板出厂态：按值 + 不只显示重复
+    assert_eq!(
+        cx.update(|_, app| panel.read(app).group_sort_id()),
+        "value"
+    );
+    assert!(!cx.update(|_, app| panel.read(app).group_duplicates_only_value()));
+
+    // 注入用户上次的口径：按计数降序 + 仅重复
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.set_group_prefs_initial("countdesc", true, cx);
+        })
+    });
+    assert_eq!(
+        cx.update(|_, app| panel.read(app).group_sort_id()),
+        "countdesc"
+    );
+    assert!(cx.update(|_, app| panel.read(app).group_duplicates_only_value()));
+
+    // 「不排序」档（对齐 DBeaver `RS_GROUPING_DEFAULT_SORTING=""`）也要能注入
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.set_group_prefs_initial("none", false, cx);
+        })
+    });
+    assert_eq!(
+        cx.update(|_, app| panel.read(app).group_sort_id()),
+        "none",
+        "「不排序」是合法档位，不能当未知值回落"
+    );
+
+    // 未知 id（手改配置文件）→ 回落到出厂 value，开关照注入（两字段各自独立）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.set_group_prefs_initial("asc", false, cx);
+        })
+    });
+    assert_eq!(
+        cx.update(|_, app| panel.read(app).group_sort_id()),
+        "value",
+        "未知排序 id 应按出厂 value 处理（不猜 ASC 之类的档位）"
+    );
+    assert!(!cx.update(|_, app| panel.read(app).group_duplicates_only_value()));
 }
 
 /// 【R1/R2 测试壳】空面板 + 两列网格（`id` / `amount`，含一个 NULL 值）。
@@ -1309,6 +2116,933 @@ fn multi_selection_toggles_with_ctrl_and_replaces_without() {
 
     // 重复项不会累积（同一列 Ctrl 加两次回到原集合）
     assert_eq!(next_multi_selection(&[0, 2], 2, true), vec![0]);
+}
+
+/// 【复制列名】剪贴板文本：多选集合逐行拼（换行分隔）、单列只拷自己、越界跳过。
+///
+/// 对齐 DBeaver `MetaDataPanel.fillCustomActions` 的 `meta_data_panel_action_copy_column_text`
+/// （选中几行就拷几行，`"\n"` 分隔，空文本直接返回不写剪贴板）。
+#[test]
+fn copy_column_names_joins_the_selection_with_newlines() {
+    use crate::column_browser::column_names_to_copy;
+
+    let columns = vec![
+        "id".to_string(),
+        "name".to_string(),
+        "amount".to_string(),
+    ];
+
+    // 单选：右键那一列不在集合里（或集合是空）→ 只拷它自己
+    assert_eq!(column_names_to_copy(&columns, &[], 1), "name");
+    assert_eq!(column_names_to_copy(&columns, &[0], 2), "amount");
+
+    // 多选且右键的那一列在集合里 → 整个集合按数据列序（换行分隔）
+    assert_eq!(
+        column_names_to_copy(&columns, &[0, 2], 2),
+        "id\namount",
+        "选中两列时一次带走两行"
+    );
+
+    // 越界下标跳过（搜索过滤后旧下标可能失效）：集合里只剩有效的那几个
+    assert_eq!(
+        column_names_to_copy(&columns, &[0, 9], 9),
+        "id",
+        "9 在集合里但列已不存在 → 跳过它，只留有效列"
+    );
+    assert_eq!(
+        column_names_to_copy(&columns, &[87, 99], 99),
+        "",
+        "集合全越界 = 空文本（调用方据此不写剪贴板）"
+    );
+    // 右键那一列越界且不在集合里 → 同样空文本
+    assert_eq!(column_names_to_copy(&columns, &[0], 9), "");
+    // 列名清单本身为空（无列的结果集）→ 空文本，不 panic
+    assert_eq!(column_names_to_copy(&[], &[0, 1], 0), "");
+}
+
+/// 【列注释】清单第二行的取值：`None` / 空串 / 纯空白都不占行（DBeaver 的
+/// `Description` 额外列对没有注释的列显示空白），有内容则去掉首尾空白后原样显示。
+#[test]
+fn browser_comment_skips_empty_and_blank() {
+    use crate::column_browser::browser_comment_text;
+
+    assert_eq!(browser_comment_text(&None), None);
+    assert_eq!(browser_comment_text(&Some(String::new())), None);
+    assert_eq!(browser_comment_text(&Some("   ".to_string())), None);
+    assert_eq!(
+        browser_comment_text(&Some("  用户登录名 ".to_string())),
+        Some("用户登录名".to_string()),
+        "注释去首尾空白后原样显示"
+    );
+}
+
+/// 【列注释】渲染路径：有注释的列在列名下画出第二行，没有注释的列不画。
+/// 数据经 delegate 投影直灌（`sync` 的接线由 toolbar 既有用例覆盖，这里只验渲染）。
+/// 【列浏览器 · MetaDataPanel.refresh 短路】投影完全相同就什么都不做：
+/// 对齐 `MetaDataPanel.refresh:184-196`（属性清单逐项相同 → 直接 return，注释 "No changes"）。
+/// 本仓 `set_data` 会清 `last_selected` 与多选集合，若「刷新到同一份结果」也照清，
+/// 用户的多选会被无意义地打掉。
+#[gpui_kit::test]
+fn identical_column_projection_keeps_the_browser_selection(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    let cols = || vec!["id".to_string(), "amount".to_string()];
+    let types = || vec!["INTEGER".to_string(), "DECIMAL".to_string()];
+    let hidden = || vec![false, false];
+    let comments = || vec![Some("主键".to_string()), None];
+
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            let list = p.browser_list.clone();
+            list.update(cx, |list, cx| {
+                list.delegate_mut()
+                    .set_data(cols(), types(), hidden(), comments());
+                list.delegate_mut().set_selected_columns(vec![0, 1]);
+                assert_eq!(list.delegate().selected_columns(), &[0, 1]);
+                // 同一份投影再来一次 → 选集保留（不清空）
+                list.delegate_mut()
+                    .set_data(cols(), types(), hidden(), comments());
+                assert_eq!(
+                    list.delegate().selected_columns(),
+                    &[0, 1],
+                    "投影没变时不该把用户的多选打掉"
+                );
+                // 换成另一份投影（列数变了）→ 旧序号失效，选集清空
+                list.delegate_mut().set_data(
+                    vec!["id".to_string()],
+                    vec!["INTEGER".to_string()],
+                    vec![false],
+                    vec![None],
+                );
+                assert!(
+                    list.delegate().selected_columns().is_empty(),
+                    "换结果集后旧列序号必须失效"
+                );
+                cx.notify();
+            });
+        });
+    });
+}
+
+/// 【列浏览器 · 页内工具条】DBeaver `MetaDataPanel.contributeActions:204-215` 只贡献
+/// 一条「按结果集生成 DDL」（`generate.ddl.by.resultSet`，恒可用）；本仓列浏览器页
+/// 工具条常驻的第一颗动作就是它——这里钉住入口存在。
+#[gpui_kit::test]
+fn column_browser_toolbar_offers_generate_ddl(cx: &mut gpui_kit::TestAppContext) {
+
+    cx.update(gpui_kit::init);
+    // 默认页就是列浏览器，面板实体本身不再用到（只要它被挂上窗口即可）
+    let (_panel, cx) = panel_harness(cx);
+
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-generate-ddl").is_some(),
+        "列浏览器页工具条应常驻「生成 DDL」入口"
+    );
+}
+
+/// 【计算行数】可点性 = 有数据 且 不是本地分析结果；提示分三态（分析结果讲原因、
+/// 已算过讲「重算」、没算过讲「算什么」）。分析结果两侧（面板置灰 + 宿主兜底）
+/// 同一条口径：临时表早就不在了，重跑原 SQL 只会报错。
+#[test]
+fn count_rows_action_is_gated_by_data_and_analysis_tier() {
+    use crate::panel::events::{count_rows_available, count_rows_tooltip};
+
+    assert!(count_rows_available(true, false), "有数据且普通结果 → 可点");
+    assert!(!count_rows_available(false, false), "没有数据 → 置灰（DBeaver hasData）");
+    assert!(
+        !count_rows_available(true, true),
+        "本地分析结果 → 置灰（临时表不在，重跑原 SQL 必错）"
+    );
+
+    let analysis = count_rows_tooltip(true, false);
+    assert!(
+        analysis.contains("分析结果") && analysis.contains("没有可重算的源查询"),
+        "分析结果的提示要说清为什么不能算：{analysis}"
+    );
+    assert_eq!(
+        count_rows_tooltip(false, true),
+        "总行数（对原 SQL 跑 count(*)）：点一下重新计算"
+    );
+    assert_eq!(
+        count_rows_tooltip(false, false),
+        "计算行数（对原 SQL 跑 count(*)，不产生新结果集）"
+    );
+}
+
+#[gpui_kit::test]
+fn status_bar_offers_a_count_rows_action(cx: &mut gpui_kit::TestAppContext) {
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    // 状态行只在有 `status`（或执行信息）时才摆：测试壳默认没注入，这里补一条
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.status = Some(crate::grid::status::ResultStatus {
+                total_rows: 2,
+                ..Default::default()
+            });
+            cx.notify();
+        })
+    });
+
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-count-rows").is_some(),
+        "状态行应摆「计算行数」钮（对齐 DBeaver `rowCountLabel`）"
+    );
+
+    // 宿主算回来的数字**就地**变成钮的文案（不开新结果集、不增标签页）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.set_row_count_notice("总行数 1,234".to_string(), cx)
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-count-rows").is_some(),
+        "回填总行数后同一颗钮仍在"
+    );
+}
+
+#[gpui_kit::test]
+fn column_browser_draws_the_comment_line_below_the_name(cx: &mut gpui_kit::TestAppContext) {
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    // 只有第一列（id）有注释，第二列（amount）没有 → 第二行应该只出现一次
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            let list = p.browser_list.clone();
+            list.update(cx, |list, cx| {
+                list.delegate_mut().set_data(
+                    vec!["id".to_string(), "amount".to_string()],
+                    vec!["INTEGER".to_string(), "DECIMAL".to_string()],
+                    vec![false, false],
+                    vec![Some("主键".to_string()), None],
+                );
+                cx.notify();
+            });
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let visible = |id: &'static str, cx: &mut gpui_kit::VisualTestContext| -> bool {
+        cx.debug_bounds(id).is_some()
+    };
+    assert!(
+        visible("editor-result-col-browser-comment", cx),
+        "有注释的列应在列名下画出注释行"
+    );
+
+    // 反证：全部列都没有注释时，第二行不出现（不许画一行空文本占高）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            let list = p.browser_list.clone();
+            list.update(cx, |list, cx| {
+                list.delegate_mut().set_data(
+                    vec!["id".to_string(), "amount".to_string()],
+                    vec!["INTEGER".to_string(), "DECIMAL".to_string()],
+                    vec![false, false],
+                    vec![None, None],
+                );
+                cx.notify();
+            });
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        !visible("editor-result-col-browser-comment", cx),
+        "没有注释的列不应占第二行"
+    );
+}
+
+/// 【R5 面板最大化】对齐 DBeaver `CMD_TOGGLE_MAXIMIZE` → `togglePanelsMaximize`
+/// （`ResultSetViewer.java:1551-1557` = `viewerSash.hideUp()/showUp()`）：
+/// 最大化时**网格整块不渲染**，右栏独占区域；再切回网格回来。
+#[gpui_kit::test]
+fn maximize_panel_hides_the_grid_and_keeps_the_sidebar(cx: &mut gpui_kit::TestAppContext) {
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 基线：网格在、右栏在
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-main-grid").is_some(),
+        "基线应渲染结果网格"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-value-sidebar").is_some(),
+        "基线应渲染右栏"
+    );
+
+    // 最大化：网格整块消失，右栏仍在（独占区域）
+    cx.update(|_, app| panel.update(app, |p, cx| p.toggle_panel_maximize(cx)));
+    assert!(
+        cx.update(|_, app| panel.read(app).panel_maximized),
+        "最大化标记应翻转"
+    );
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-main-grid").is_none(),
+        "最大化时网格不应再渲染"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-value-sidebar").is_some(),
+        "最大化时右栏必须还在"
+    );
+
+    // 还原：网格回来，开合态（`show_value_sidebar`）不被最大化改动
+    cx.update(|_, app| panel.update(app, |p, cx| p.toggle_panel_maximize(cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-main-grid").is_some(),
+        "还原后网格应重新渲染"
+    );
+    assert!(
+        cx.update(|_, app| panel.read(app).show_value_sidebar),
+        "最大化不应改动右栏开合态"
+    );
+}
+
+/// 【右缘竖条】提示文案 = 页名 + 面板描述（对齐 `ResultSetViewer.java:1055-1080`
+/// 的 `label + " (" + toolTip + ")"`），后半句按 `toggleResultsPanel:64-69` 的
+/// `isPanelVisible = isPanelsVisible() && isPanelVisible(id)` 分三态报动作：
+/// 开且整栏可见 → 「点一下关闭这一页」；开但整栏收起 → 「展开并切到这一页」；
+/// 已关闭 → 「已关闭，点一下打开」。勾选态 = [`edge_tab_active`]（多页可同时勾亮）。
+#[test]
+fn edge_bar_tooltip_reports_the_toggle_action() {
+    use super::events::{
+        edge_tab_active, edge_tab_tooltip, right_tab_description, right_tab_label,
+    };
+    use crate::ports::RightTab;
+
+    for tab in super::events::right_tabs() {
+        let tip = edge_tab_tooltip(tab, true, true);
+        assert!(tip.contains(right_tab_label(tab)), "{} 的提示应含页名", tip);
+        assert!(
+            tip.contains(right_tab_description(tab)),
+            "{} 的提示应含描述",
+            tip
+        );
+        assert!(
+            !right_tab_description(tab).is_empty(),
+            "{} 的描述不应为空",
+            right_tab_label(tab)
+        );
+        assert!(tip.contains("关闭这一页"), "开且整栏可见：{tip}");
+    }
+
+    // 开但整栏收起：点一下会展开并切过去（`activatePanel(id,true,true)`）
+    let hidden = edge_tab_tooltip(RightTab::Value, true, false);
+    assert!(hidden.contains("展开并切到这一页"), "{hidden}");
+    assert!(!hidden.contains("关闭这一页"), "{hidden}");
+    assert!(
+        hidden.contains(right_tab_description(RightTab::Value)),
+        "收起态提示也保留描述：{hidden}"
+    );
+
+    // 已关闭（页签条上被 × 关掉）：点一下会重新启用
+    let closed = edge_tab_tooltip(RightTab::Stats, false, true);
+    assert!(closed.contains("点一下打开"), "{closed}");
+    assert!(!closed.contains("关闭这一页"), "{closed}");
+
+    // 勾选态：整栏可见 **且** 该页在 `open_tabs` 里（`ResultSetViewer.java:1079`），
+    // 与「是不是当前页」无关 —— 多页可同时勾亮。
+    assert!(edge_tab_active(true, true));
+    assert!(!edge_tab_active(true, false));
+    assert!(!edge_tab_active(false, true), "整栏收起时竖条按钮全不勾");
+    assert!(!edge_tab_active(false, false));
+}
+
+/// 【右栏页签持久化】id ↔ 页互换（`result_panel.open_tabs` 偏好键的落盘形态）。
+#[test]
+fn right_tab_ids_round_trip() {
+    use crate::ports::RightTab;
+
+    assert_eq!(RightTab::ALL.len(), 6);
+    for (index, tab) in RightTab::ALL.into_iter().enumerate() {
+        assert_eq!(RightTab::parse(tab.id()), Some(tab), "{} 的 id 应可回读", tab.id());
+        // 规范序与 id 表逐项对齐（顺序变了说明两边有一处没同步）
+        assert!(index < RightTab::ALL.len());
+    }
+    assert_eq!(RightTab::parse(" STATS "), Some(RightTab::Stats), "大小写与空白应容忍");
+    assert_eq!(RightTab::parse("nope"), None, "未知 id 必须返回 None（不猜页）");
+    assert_eq!(RightTab::parse(""), None);
+}
+
+/// 【右栏页签持久化】偏好注入：按规范序归一、去重、未知丢弃；空集合保持出厂六页全开；
+/// 当前页落在被关掉的页上时改落到集合第一页。
+#[gpui_kit::test]
+fn open_tabs_initial_normalizes_and_keeps_defaults(cx: &mut gpui_kit::TestAppContext) {
+    use crate::ports::RightTab;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 乱序 + 重复 + 未知：只剩三页，且按规范序排
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.set_open_tabs_initial(
+                &[RightTab::Group, RightTab::Browser, RightTab::Group],
+                cx,
+            )
+        })
+    });
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.open_tabs().to_vec()),
+        vec![RightTab::Browser, RightTab::Group],
+        "应去重并按规范序排"
+    );
+
+    // 空集合 / 全未知：保持现状（出厂六页全开，对齐 activateDefaultPanels 的补默认）
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_open_tabs_initial(&[], cx)));
+    assert_eq!(panel.read_with(cx, |p, _| p.open_tabs().to_vec()).len(), 2);
+
+    // 当前页不在新集合里 → 落到集合第一页
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.set_right_tab(RightTab::Stats, cx);
+            p.set_open_tabs_initial(&[RightTab::Value, RightTab::ExecSql], cx);
+        })
+    });
+    assert_eq!(panel.read_with(cx, |p, _| p.right_tab), RightTab::Value);
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.open_tabs().to_vec()),
+        vec![RightTab::Value, RightTab::ExecSql]
+    );
+}
+
+/// 【视图菜单】页项点击判定（`fillPanelsMenu:1559-1588` + `toggleResultsPanel:64-69`）：
+/// 只有「勾着且整栏可见」才是关闭；勾着但整栏收起 / 未勾 → 打开并切过去。
+#[test]
+fn view_menu_page_item_closes_only_when_the_bar_is_open() {
+    use super::events::page_item_closes;
+
+    assert!(page_item_closes(true, true), "勾着且整栏可见 → closePanel");
+    assert!(!page_item_closes(true, false), "未勾 → activatePanel（打开并切过去）");
+    assert!(
+        !page_item_closes(false, true),
+        "勾着但整栏收起 → 也走 activatePanel（顺带展开）"
+    );
+    assert!(!page_item_closes(false, false));
+}
+
+/// 【右缘竖条】点某一页 = 开/关**这一页**（不是「切页」也不是「收整栏」）。
+///
+/// 对齐 `ResultSetHandlerTogglePanel`：`toggleResultsPanel:64-69` 算
+/// `isVisible = isPanelsVisible() && isPanelVisible(id)`，`showResultsPanel:71-81` 里
+/// 可见 → `closePanel(id)`（该页从页签夹移除，`removePanel:1441-1451` 从
+/// `enabledPanelIds` 摘掉），否则 → `activatePanel(id, true, true)`（打开 + 激活，
+/// 整栏收起时先 `showPanels(true,false,false)` 展开）。
+#[gpui_kit::test]
+fn clicking_an_edge_tab_toggles_that_page(cx: &mut gpui_kit::TestAppContext) {
+    use crate::ports::RightTab;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_right_tab(RightTab::Value, cx)));
+    assert!(cx.update(|_, app| panel.read(app).panels_visible()));
+
+    // 当前页、整栏可见 → 点它 = 关掉这一页（返回 false 表示没有「切到该页」）
+    let switched =
+        cx.update(|_, app| panel.update(app, |p, cx| p.toggle_right_tab(RightTab::Value, cx)));
+    assert!(!switched, "关闭该页不算切页");
+    assert!(
+        !cx.update(|_, app| panel.read(app).open_tabs().contains(&RightTab::Value)),
+        "点当前页应把这页从已启用集合里摘掉"
+    );
+    assert!(
+        cx.update(|_, app| panel.read(app).panels_visible()),
+        "还有别的页在，整栏不该收起"
+    );
+    assert_eq!(
+        cx.update(|_, app| panel.read(app).right_tab),
+        RightTab::Stats,
+        "关掉当前页应落到规范序里的下一页"
+    );
+
+    // 再点一次（该页已关闭）→ 重新启用并切过去
+    let switched =
+        cx.update(|_, app| panel.update(app, |p, cx| p.toggle_right_tab(RightTab::Value, cx)));
+    assert!(switched);
+    assert_eq!(cx.update(|_, app| panel.read(app).right_tab), RightTab::Value);
+    assert!(cx.update(|_, app| panel.read(app).open_tabs().contains(&RightTab::Value)));
+
+    // 整栏收起（总开关）后点同一页：`isPanelsVisible` 为假 → 走 activate 分支（展开 + 切页），
+    // 不能因为「开着的页」就当成关闭。
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_panels_visible(false, cx)));
+    assert!(!cx.update(|_, app| panel.read(app).panels_visible()));
+    let switched =
+        cx.update(|_, app| panel.update(app, |p, cx| p.toggle_right_tab(RightTab::Value, cx)));
+    assert!(switched, "收起态点击应展开并切到该页");
+    assert!(cx.update(|_, app| panel.read(app).panels_visible()));
+    assert_eq!(cx.update(|_, app| panel.read(app).right_tab), RightTab::Value);
+}
+
+/// 【页签条】每页签**内侧**那颗 ×（对齐 DBeaver `CTabItem(SWT.CLOSE)`）：
+/// 点它只推「关这一页」，**不能**顺带把该页切回来。
+///
+/// 这条用例的存在理由：× 是 `Tab::suffix` 里的自绘点击区，点中后事件仍会冒泡到
+/// `TabBar` 的「切页」回调（用渲染时快照的下标映射）。若两者都生效，关掉一页会变成
+/// 「先摘除、再按旧下标把它重新打开」。所以断言分两层：队列里有 `CloseRightTab`、
+/// 且**没有** `SetRightTab`。
+#[gpui_kit::test]
+fn right_tab_close_button_closes_only_that_page(cx: &mut gpui_kit::TestAppContext) {
+    use crate::ports::{ResultRequest, RightTab};
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 当前页 = 值详情；随后点「列浏览器」页签的 ×（不是当前页）
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_right_tab(RightTab::Value, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let close = cx
+        .debug_bounds("editor-result-right-tab-close-browser")
+        .expect("列浏览器页签内侧应有一颗 ×（每页一颗，对齐 SWT.CLOSE）");
+    let point = gpui_kit::point(
+        close.origin.x + close.size.width / 2.,
+        close.origin.y + close.size.height / 2.,
+    );
+    cx.simulate_click(point, gpui_kit::Modifiers::default());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let queued = cx.update(|_, app| panel.read(app).queue.drain());
+    assert!(
+        queued
+            .iter()
+            .any(|request| matches!(request, ResultRequest::CloseRightTab(RightTab::Browser))),
+        "点页签内侧 × 应入队「关掉这一页」：{queued:?}"
+    );
+    assert!(
+        !queued
+            .iter()
+            .any(|request| matches!(request, ResultRequest::SetRightTab(_))),
+        "× 的点击不能冒泡成「切页」（那会把刚关掉的页按旧下标重新打开）：{queued:?}"
+    );
+}
+
+/// 【页签条】六页的 × 选择器必须互不相同（共用 id 会让 `debug_bounds` 只命中第一个，
+/// 并且重复 id 在 a11y 上有已知风险）。
+#[test]
+fn right_tab_close_selectors_are_distinct() {
+    use crate::ports::RightTab;
+
+    let selectors: Vec<&'static str> = [
+        RightTab::Browser,
+        RightTab::Value,
+        RightTab::Stats,
+        RightTab::Group,
+        RightTab::Reference,
+        RightTab::ExecSql,
+    ]
+    .into_iter()
+    .map(super::events::tab_close_selector)
+    .collect();
+    for (ix, selector) in selectors.iter().enumerate() {
+        assert!(
+            selectors
+                .iter()
+                .skip(ix + 1)
+                .all(|other| other != selector),
+            "选择器重复：{selector}"
+        );
+    }
+}
+
+/// 【右缘竖条】关到最后一页 = 整栏收起（DBeaver `removePanel:1447-1449`：
+/// `activePanels.isEmpty()` → `showPanels(false, true, true)`）。
+#[gpui_kit::test]
+fn closing_the_last_edge_tab_collapses_the_bar(cx: &mut gpui_kit::TestAppContext) {
+    use crate::ports::RightTab;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    let all = RightTab::ALL;
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            for tab in all.iter().skip(1).copied() {
+                p.close_right_tab(tab, cx);
+            }
+        })
+    });
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.open_tabs().to_vec()),
+        vec![RightTab::Browser],
+        "只剩一页"
+    );
+    cx.update(|_, app| panel.update(app, |p, cx| p.close_right_tab(RightTab::Browser, cx)));
+    assert!(cx.update(|_, app| panel.read(app).open_tabs().is_empty()));
+    assert!(
+        !cx.update(|_, app| panel.read(app).panels_visible()),
+        "关掉最后一页应整栏收起"
+    );
+
+    // 收起态再点任一一页 → 重新展开（`activatePanel` 的 `showPanels` 分支）
+    let switched =
+        cx.update(|_, app| panel.update(app, |p, cx| p.toggle_right_tab(RightTab::Stats, cx)));
+    assert!(switched);
+    assert!(cx.update(|_, app| panel.read(app).panels_visible()));
+    assert_eq!(cx.update(|_, app| panel.read(app).right_tab), RightTab::Stats);
+}
+
+/// 【右缘竖条】点已被 × 关掉的页 = 先重新启用它再切过去（竖条列的是全集）。
+#[gpui_kit::test]
+fn edge_bar_reopens_a_closed_page(cx: &mut gpui_kit::TestAppContext) {
+    use crate::ports::RightTab;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    cx.update(|_, app| panel.update(app, |p, cx| p.close_right_tab(RightTab::Stats, cx)));
+    assert!(!cx.update(|_, app| panel.read(app).open_tabs().contains(&RightTab::Stats)));
+
+    let switched = cx.update(|_, app| panel.update(app, |p, cx| p.toggle_right_tab(RightTab::Stats, cx)));
+    assert!(switched);
+    assert!(
+        cx.update(|_, app| panel.read(app).open_tabs().contains(&RightTab::Stats)),
+        "点竖条应把被关掉的页重新启用"
+    );
+    assert_eq!(cx.update(|_, app| panel.read(app).right_tab), RightTab::Stats);
+    // 重新启用时按规范序插回（计算仍在值详情之后、分组之前）
+    assert_eq!(
+        cx.update(|_, app| panel.read(app).open_tabs().to_vec()),
+        super::events::right_tabs().to_vec()
+    );
+}
+
+/// 【R5 面板最大化】与「面板总开关」的互斥口径（不变量：最大化 ⇒ 面板展开）。
+///
+/// 取证依据：DBeaver 里两者共用同一份 sash 可见性——`togglePanelsMaximize` 是
+/// `viewerSash.hideUp()/showUp()`（`ResultSetViewer.java:1551-1557`），而
+/// `showPanels(false)` 就是 `viewerSash.setMaximizedControl(children[0])`（`:1487`），
+/// 也就是「关面板」之后不可能还停在最大化。本仓若不同步复位，会出现
+/// 「面板已关（竖条也没了）但右栏被最大化强行挂满整块」的自相矛盾。
+#[gpui_kit::test]
+fn maximize_yields_to_the_panels_master_switch(cx: &mut gpui_kit::TestAppContext) {
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 1) 面板关着时点最大化 → 先把面板展开，再进入最大化（否则整块区域空白）
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_panels_visible(false, cx)));
+    assert!(!cx.update(|_, app| panel.read(app).panels_visible()), "基线：面板已关");
+    cx.update(|_, app| panel.update(app, |p, cx| p.toggle_panel_maximize(cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.update(|_, app| panel.read(app).panels_visible()),
+        "进入最大化必须隐含展开面板"
+    );
+    assert!(
+        cx.update(|_, app| panel.read(app).panel_maximized),
+        "最大化标记应已置位"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-value-sidebar").is_some(),
+        "最大化时右栏必须在（否则网格收起后整块空白）"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-main-grid").is_none(),
+        "最大化时网格不渲染"
+    );
+
+    // 2) 最大化期间关面板 → 最大化被吃掉（不复位就会留下"面板关了但右栏还占满"）
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_panels_visible(false, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        !cx.update(|_, app| panel.read(app).panel_maximized),
+        "关面板必须一并退出最大化（DBeaver 里两者是同一份 sash 可见性）"
+    );
+    assert!(
+        !cx.update(|_, app| panel.read(app).panels_visible()),
+        "关面板后「面板可见」应为假"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-main-grid").is_some(),
+        "关面板后网格必须回到整块区域"
+    );
+
+    // 3) 最大化期间走状态栏三态开关到「收起」→ 同样复位最大化
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_panels_visible(true, cx)));
+    cx.update(|_, app| panel.update(app, |p, cx| p.toggle_panel_maximize(cx)));
+    assert!(cx.update(|_, app| panel.read(app).panel_maximized));
+    // 宽展开（edge+show）→ 收起（edge/show 都关）
+    cx.update(|_, app| panel.update(app, |p, cx| p.toggle_value_sidebar(cx)));
+    assert!(
+        !cx.update(|_, app| panel.read(app).show_value_sidebar),
+        "三态开关这一跳应到「收起」"
+    );
+    assert!(
+        !cx.update(|_, app| panel.read(app).panel_maximized),
+        "三态开关走到收起时必须一并退出最大化"
+    );
+}
+
+/// 【R3 分组页】「移除分组列」的可用性（纯函数）：对齐 DBeaver
+/// `GroupingColumnsContainer.canColumnBeRemoved`（`:92-94`）——选中列在分组键里、
+/// 且移除后仍至少剩一列才可用；删到零归「清空分组」管。
+#[test]
+fn remove_group_column_guards_the_last_key() {
+    use super::tabs::can_remove_group_column;
+
+    // 没有显式分组键（走选中列兜底）→ 没得删
+    assert!(!can_remove_group_column(&[], Some(0)));
+    // 只剩一列 → 不允许逐列删（哪怕选中的就是它）
+    assert!(!can_remove_group_column(&[0], Some(0)));
+    // 选中列在集合里且还有别的列 → 可删
+    assert!(can_remove_group_column(&[0, 2], Some(2)));
+    assert!(can_remove_group_column(&[0, 2], Some(0)));
+    // 选中列不在集合里 / 没有选中列 → 不适用
+    assert!(!can_remove_group_column(&[0, 2], Some(1)));
+    assert!(!can_remove_group_column(&[0, 2], None));
+}
+
+/// 【R3 分组页】工具条形状：分组列下拉 / 排序口径 / 仅重复 / 移除分组列 / 清空分组
+/// 五个入口都在，且顺序与分隔照 `GroupingPanel.fillToolBar:164-176`
+/// （`Sort` → `Dups` → 分隔 → `EditColumns`（本仓=勾选下拉） → `DeleteColumn` → 分隔 → `Clear`）；
+/// 排序口径的语义差异见 §8.83。移除钮的可用性由纯函数钉，这里只验它真的画出来。
+#[gpui_kit::test]
+fn group_toolbar_offers_the_remove_column_action(cx: &mut gpui_kit::TestAppContext) {
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.toggle_group_column(0, cx);
+            p.toggle_group_column(2, cx);
+            p.set_right_tab(RightTab::Group, cx);
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let visible = |id: &'static str, cx: &mut gpui_kit::VisualTestContext| -> bool {
+        cx.debug_bounds(id).is_some()
+    };
+    for id in [
+        "editor-result-group-columns",
+        "editor-result-group-sort",
+        "editor-result-group-dup",
+        "editor-result-group-remove",
+        "editor-result-group-clear",
+    ] {
+        assert!(visible(id, cx), "分组页工具条缺少入口：{id}");
+    }
+}
+
+/// 【R6 段大小】输入框文本解析（纯函数）：对齐 DBeaver `resultSetSize` 的 modify 回调
+/// （`ResultSetViewer.java:2138-2152`）——`>0` 才写，非数字 / 0 / 负数都不算有效提交。
+#[test]
+fn segment_rows_parse_accepts_positive_only() {
+    use super::events::parse_segment_rows;
+
+    assert_eq!(parse_segment_rows("200"), Some(200));
+    assert_eq!(parse_segment_rows(" 1000 "), Some(1000), "首尾空白忽略");
+    assert_eq!(parse_segment_rows("1"), Some(1));
+    assert_eq!(parse_segment_rows("0"), None, "0 无效（DBeaver 只在 >0 时写偏好）");
+    assert_eq!(parse_segment_rows("-5"), None, "负数无效");
+    assert_eq!(parse_segment_rows("abc"), None, "非数字无效");
+    assert_eq!(parse_segment_rows(""), None, "空串无效");
+    assert_eq!(parse_segment_rows("12.5"), None, "小数不算行数");
+}
+
+/// 【R6 段大小】失焦回填（纯函数）：对齐 DBeaver `focusLost`（`ResultSetViewer.java:2129-2137`）
+/// ——文本框内容与生效值不同就改写成生效值；相同则什么都不做（避免无谓改写光标）。
+///
+/// headless 里 `InputEvent::Blur` 不 emit（元素级焦点事件不派发，见
+/// `crates/editor/src/view/tests/analysis.rs` 的同款注记），所以回填判定钉在这里。
+#[test]
+fn segment_rows_blur_restores_the_effective_value() {
+    use super::events::segment_rows_blur_display;
+
+    // 非法文本（敲了没回车 / 敲了 0）：回填成当前生效值
+    assert_eq!(segment_rows_blur_display("abc", 1000), Some("1000".to_string()));
+    assert_eq!(segment_rows_blur_display("0", 1000), Some("1000".to_string()));
+    assert_eq!(segment_rows_blur_display("", 1000), Some("1000".to_string()));
+    assert_eq!(segment_rows_blur_display("-5", 1000), Some("1000".to_string()));
+    // 未提交的合法值（输入框还没来得及规范化）：同样按生效值收口
+    assert_eq!(segment_rows_blur_display("200", 1000), Some("1000".to_string()));
+    // 已是生效值（含用户敲的首尾空白）：不动
+    assert_eq!(segment_rows_blur_display("1000", 1000), None);
+    assert_eq!(segment_rows_blur_display(" 1000 ", 1000), None);
+}
+
+/// 【R6 段大小】面板状态：改值生效、同值不重入、下限夹取（`MIN_SEGMENT_SIZE = 1`）。
+#[gpui_kit::test]
+fn set_segment_rows_clamps_to_the_minimum(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    assert_eq!(
+        cx.update(|_, app| panel.read(app).segment_rows()),
+        crate::ui::RESULT_SEGMENT_ROWS_DEFAULT,
+        "默认一段 = 1000 行（与编辑器 SEGMENT_ROWS 同值）"
+    );
+
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_segment_rows(500, cx)));
+    assert_eq!(cx.update(|_, app| panel.read(app).segment_rows()), 500);
+
+    // 0 会被抬到下限（解析层已拦 0，这里兜住直接调用的情况）
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_segment_rows(0, cx)));
+    assert_eq!(
+        cx.update(|_, app| panel.read(app).segment_rows()),
+        crate::ui::RESULT_SEGMENT_ROWS_MIN
+    );
+}
+
+/// 【R6 段大小】状态行真的摆出「段」输入框（面板注入 InputState 后才有该元素）。
+#[gpui_kit::test]
+fn status_row_shows_the_segment_size_input(cx: &mut gpui_kit::TestAppContext) {
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    // 状态行只在「有 status / 有影响行数 / 失败 / 有耗时」时出现（`render.rs` 的
+    // `show_status` 口径），测试壳默认不注入 status，这里补一份最小的
+    cx.update(|_, app| {
+        panel.update(app, |p, _cx| {
+            p.status = Some(crate::grid::status::ResultStatus {
+                total_rows: 2,
+                ..Default::default()
+            });
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(
+        cx.debug_bounds("editor-result-segment-size").is_some(),
+        "状态行应摆出段大小输入框"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-status-row").is_some(),
+        "状态行本体应在（段框是它的一段）"
+    );
+}
+
+/// 【R6 段大小·持久化闭环】构造期注入持久化值：状态落位，且输入框显示该值
+/// （只有占位 1000 时，用户在状态行上看不到「我上次设的是 500」）。
+#[gpui_kit::test]
+fn set_segment_rows_initial_puts_the_value_in_the_box(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|window, app| {
+        panel.update(app, |p, cx| p.set_segment_rows_initial(500, window, cx))
+    });
+
+    assert_eq!(cx.update(|_, app| panel.read(app).segment_rows()), 500);
+    let text = cx.update(|_, app| {
+        let input = panel.read(app).segment_input.clone();
+        input.read(app).value().to_string()
+    });
+    assert_eq!(text, "500", "注入后输入框应显示持久化值而非留空");
+}
+
+/// 【R7 计算页右键菜单】「复制全部」文本按 DBeaver `CopyAllAction` 的非分组口径：
+/// 逐行 `函数=值`、`\n` 分隔；空集合 = 空串（调用点凭空串跳过写剪贴板）。
+#[test]
+fn stats_copy_all_text_joins_function_equals_value() {
+    use crate::panel::tabs::stats_copy_all_text;
+    use crate::ports::StatsItem;
+
+    let entries = vec![
+        (StatsItem::Count, "12".to_string()),
+        (StatsItem::Min, "3.5".to_string()),
+    ];
+    assert_eq!(stats_copy_all_text(&entries), "非空=12\n最小值=3.5");
+
+    let single = vec![(StatsItem::Count, "0".to_string())];
+    assert_eq!(stats_copy_all_text(&single), "非空=0");
+
+    assert_eq!(stats_copy_all_text(&[]), "");
+}
+
+/// 【页签提示】六页各有一条非空、互不重复的提示文案（对齐 DBeaver 面板描述：
+/// 页签只有图标 + 短名，靠 tooltip 说清这页做什么）。
+#[test]
+fn right_tab_descriptions_are_distinct_and_non_empty() {
+    use crate::panel::events::{right_tab_description, right_tabs};
+
+    let mut seen: Vec<&'static str> = Vec::new();
+    for tab in right_tabs() {
+        let description = right_tab_description(tab);
+        assert!(!description.is_empty(), "{tab:?} 缺少页签提示");
+        assert!(
+            !seen.contains(&description),
+            "{tab:?} 的提示与其它页重复：{description}"
+        );
+        seen.push(description);
+    }
+    assert_eq!(seen.len(), 6, "六页各一条提示");
+}
+
+/// 【值页动作可用性】「保存值到文件」的判据（对齐 DBeaver `!content.isNull()` 才贡献
+/// `saveToFile`）：NULL / 缺列 / 行号槽都不给入口，真实值才给。
+#[test]
+fn value_save_is_gated_by_null_and_row_number_slot() {
+    use crate::panel::tabs::value_can_save_to_file;
+
+    assert!(value_can_save_to_file(1, Some("1234.5")));
+    assert!(value_can_save_to_file(2, Some("")));
+    assert!(!value_can_save_to_file(1, Some("NULL")));
+    assert!(!value_can_save_to_file(1, None));
+    // 行号槽（col == 0）显示的是视图行号，不是数据格
+    assert!(!value_can_save_to_file(0, Some("3")));
+}
+
+/// 【值页工具条】「在外部程序中打开」入口常驻（对齐 `ContentValueManager` 的
+/// 「Open in external editor」，与保存至文件同一处贡献）。零内容时不生效由
+/// `value_can_save_to_file` 同口径置灰覆盖。
+#[gpui_kit::test]
+fn value_toolbar_offers_open_in_external_app(cx: &mut gpui_kit::TestAppContext) {
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    // 出厂默认页是列浏览器；本用例要验值页工具条（空态是另一条渲染分支，没有这几颗动作）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.selection_pos = Some((0, 1));
+            p.set_right_tab(RightTab::Value, cx);
+        })
+    });
+
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-value-open-external").is_some(),
+        "值页工具条应有「在外部程序中打开」"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-value-save").is_some(),
+        "同一行里保存至文件应仍在"
+    );
+}
+
+/// 【值页动作可用性】选中 NULL 格时 `selected_value_payload` 给 `None`
+/// （宿主据此提示「没有内容」，不会写一个内容为 `NULL` 的文件）。
+#[gpui_kit::test]
+fn null_cell_has_no_value_payload(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    // 第 2 行 amount 列 = NULL；第 1 行同一列 = 1234.5
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.selection_pos = Some((1, 2));
+            cx.notify();
+        })
+    });
+    let payload = panel.read_with(cx, |p, app| p.selected_value_payload(app));
+    assert!(payload.is_none(), "NULL 格不应给出落盘载荷");
+
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.selection_pos = Some((0, 2));
+            p.set_right_tab(crate::ports::RightTab::Value, cx);
+        })
+    });
+    let payload = panel.read_with(cx, |p, app| p.selected_value_payload(app));
+    assert!(payload.is_some(), "有值的格应给出落盘载荷");
 }
 
 #[test]
@@ -1979,7 +3713,8 @@ fn right_panel_view_menu_lists_pages_then_the_two_toggles(cx: &mut gpui_kit::Tes
 
     cx.update(gpui_kit::init);
 
-    // ① 条目顺序：六页 → 分隔 → 面板总开关 → 布局方向
+    // ① 条目顺序：六页 → 分隔 → 最大化 → 分隔 → 面板总开关 → 布局方向
+    //    （对齐 DBeaver `fillPanelsMenu:1559-1588` 的两条分隔线段位）
     let items = super::events::panel_view_menu_items();
     let pages: Vec<RightTab> = items
         .iter()
@@ -2000,11 +3735,13 @@ fn right_panel_view_menu_lists_pages_then_the_two_toggles(cx: &mut gpui_kit::Tes
         ],
         "面板勾选项的顺序应与竖条 / 页签同一份（列浏览器在前）"
     );
-    assert_eq!(items.len(), 9, "六页 + 分隔 + 面板开关 + 布局方向");
+    assert_eq!(items.len(), 11, "六页 + 分隔 + 最大化 + 分隔 + 面板开关 + 布局方向");
     assert_eq!(items[6], super::events::PanelViewItem::Separator);
-    assert_eq!(items[7], super::events::PanelViewItem::PanelsToggle);
-    assert_eq!(items[8], super::events::PanelViewItem::LayoutToggle);
-    // 没有最大化 / 激活面板：本仓没有端口，不摆点了没反应的条目
+    assert_eq!(items[7], super::events::PanelViewItem::MaximizeToggle);
+    assert_eq!(items[8], super::events::PanelViewItem::Separator);
+    assert_eq!(items[9], super::events::PanelViewItem::PanelsToggle);
+    assert_eq!(items[10], super::events::PanelViewItem::LayoutToggle);
+    // 没有激活面板（`CMD_ACTIVATE_PANELS`）：本仓没有端口，不摆点了没反应的条目
     assert!(
         items
             .iter()
@@ -2014,29 +3751,40 @@ fn right_panel_view_menu_lists_pages_then_the_two_toggles(cx: &mut gpui_kit::Tes
                     super::events::PanelViewItem::Separator
                         | super::events::PanelViewItem::PanelsToggle
                         | super::events::PanelViewItem::LayoutToggle
+                        | super::events::PanelViewItem::MaximizeToggle
                 )),
-        "菜单里只应有四种条目"
+        "菜单里只应有五类条目"
     );
 
-    // ② 文案：页用页面名，两个开关报「点了会做什么」
+    // ② 文案：页用页面名，开关报「点了会做什么」
     let label = super::events::panel_view_item_label;
     let page = super::events::PanelViewItem::Page(RightTab::Stats);
-    assert_eq!(label(page, true, false), "计算");
+    assert_eq!(label(page, true, false, false), "计算");
     let panels = super::events::PanelViewItem::PanelsToggle;
     assert_eq!(
-        label(panels, true, false),
+        label(panels, true, false, false),
         "收起结果面板",
         "面板可见时报「收起」"
     );
     assert_eq!(
-        label(panels, false, false),
+        label(panels, false, false, false),
         "展开结果面板",
         "面板收起时报「展开」"
     );
     let layout = super::events::PanelViewItem::LayoutToggle;
-    assert_eq!(label(layout, true, false), "切换为竖排布局（上下分栏）");
-    assert_eq!(label(layout, true, true), "切换为横排布局（左右分栏）");
-    assert_eq!(label(super::events::PanelViewItem::Separator, true, false), "");
+    assert_eq!(label(layout, true, false, false), "切换为竖排布局（上下分栏）");
+    assert_eq!(label(layout, true, true, false), "切换为横排布局（左右分栏）");
+    assert_eq!(
+        label(super::events::PanelViewItem::Separator, true, false, false),
+        ""
+    );
+    // 最大化报动作：未最大化 → 去最大化；已最大化 → 还原
+    let maximize = super::events::PanelViewItem::MaximizeToggle;
+    assert_eq!(
+        label(maximize, true, false, false),
+        "面板最大化（收起结果网格）"
+    );
+    assert_eq!(label(maximize, true, false, true), "还原结果网格");
 
     // ③ 六页的页内工具条都挂上了视图菜单（id = `<页工具条 id>-view-menu`）
     let (panel, cx) = panel_harness(cx);
@@ -2333,6 +4081,50 @@ fn filter_settings_columns_tab_projects_the_grid_column_state(cx: &mut gpui_kit:
     assert_eq!(order, vec!["id".to_string(), "amount".to_string()], "重置后回数据序");
 }
 
+/// 【筛选设置 · 列约束表】列序 = DBeaver `FilterSettingsDialog.addColumn` 的顺序：
+/// Name → `#`（`:139-146`）→ Visible（`:148-176`）→ Pinned（`:178-211`）。
+///
+/// 本仓此前把 `#` 摆在行尾（`列 / 可见 / 冻结 / 条件 / 排序 / #`），与 DBeaver 的列序对不上；
+/// 本批把它挪到列名**正后方**。「条件 / 排序」列是本仓扩展（列头菜单设置项的只读投影），
+/// 排在 DBeaver 三列之后。
+#[gpui_kit::test]
+fn filter_settings_columns_put_the_position_right_after_the_name(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|window, app| panel.update(app, |p, cx| p.open_filter_settings(window, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let pos = cx
+        .debug_bounds("editor-result-filter-settings-pos-0")
+        .expect("列约束表应渲染 # 列");
+    let vis = cx
+        .debug_bounds("editor-result-filter-settings-vis-cell-0")
+        .expect("列约束表应渲染可见勾选框");
+    let pin = cx
+        .debug_bounds("editor-result-filter-settings-pin-cell-0")
+        .expect("列约束表应渲染冻结勾选框");
+    let criteria = cx
+        .debug_bounds("editor-result-filter-settings-criteria-0")
+        .expect("列约束表应渲染条件列");
+
+    assert!(
+        pos.origin.x < vis.origin.x,
+        "# 应在可见勾选框左侧（DBeaver 里 # 紧跟列名）：pos={:?} vis={:?}",
+        pos.origin.x,
+        vis.origin.x
+    );
+    assert!(
+        vis.origin.x < pin.origin.x,
+        "可见应在冻结左侧（Name / # / Visible / Pinned 的列序）"
+    );
+    assert!(
+        pin.origin.x < criteria.origin.x,
+        "冻结应在条件列左侧（条件/排序是本仓追加在末尾的投影列）"
+    );
+}
+
 /// 【筛选设置】浮层开关 + 应用入队（对齐 DBeaver `filtersCustomButton` →
 /// `FilterSettingsDialog` 的 Custom 页签：`whereText` / `orderText` → `setWhere` / `setOrder`）。
 ///
@@ -2392,6 +4184,307 @@ fn filter_settings_open_close_and_apply_carry_the_draft(cx: &mut gpui_kit::TestA
     assert!(
         cx.debug_bounds("editor-result-filter-settings-card").is_none(),
         "应用之后浮层应关闭"
+    );
+}
+
+/// 【引用页】清单状态：回填后默认选第一条，长度不变时保住原选中，清单变空就清掉。
+///
+/// 口径照 DBeaver `ReferencesResultsContainer.fillKeysCombo`：`activeReferenceKey`
+/// 保不住时回落到 `referenceKeys.getFirst()`（`:341-343`）。
+#[gpui_kit::test]
+fn references_state_selects_first_key_and_drops_a_stale_selection(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::references::{ReferenceKey, ReferencesState};
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    let key = |table: &str| ReferenceKey {
+        table: table.to_string(),
+        constraint: "fk".to_string(),
+        columns: vec!["id".to_string()],
+        target_columns: vec!["id".to_string()],
+    };
+
+    // 读取中：没有可选键
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| p.set_references(ReferencesState::Loading, cx))
+    });
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.active_reference),
+        None,
+        "读取中没有可选项"
+    );
+
+    // 回填两条 → 默认第一条
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.set_references(
+                ReferencesState::Loaded(vec![key("customers"), key("regions")]),
+                cx,
+            )
+        })
+    });
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.active_reference),
+        Some(0),
+        "回填后默认选第一条"
+    );
+
+    // 用户改选第二条后，清单长度不变再回填 → 保住原选中
+    cx.update(|_window, app| panel.update(app, |p, cx| p.set_active_reference(Some(1), cx)));
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.set_references(
+                ReferencesState::Loaded(vec![key("customers"), key("regions")]),
+                cx,
+            )
+        })
+    });
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.active_reference),
+        Some(1),
+        "长度不变时应保住用户选的那条"
+    );
+
+    // 清单变空 → 选中清掉
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.set_references(ReferencesState::Loaded(Vec::new()), cx)
+        })
+    });
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.active_reference),
+        None,
+        "没有键时不该留一个悬空下标"
+    );
+}
+
+/// 【引用页】来源表身份：只有「所有已注解列都属于同一张表」才认；隐藏列不算可见列。
+#[gpui_kit::test]
+fn reference_source_needs_one_source_table_and_drops_hidden_columns(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use workbench_shell::model::ColumnAnnotation;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    let annotation = |table: &str, column: &str| ColumnAnnotation {
+        source_table: Some(table.to_string()),
+        source_column: Some(column.to_string()),
+        comment: None,
+        data_type: None,
+        nullable: None,
+        default_value: None,
+    };
+
+    // 两列都来自 public.orders；隐藏 amount 之后可见列只剩 id
+    cx.update(|_window, app| {
+        let grid = panel.read(app).grid.clone();
+        grid.update(app, |state, _cx| {
+            state.delegate_mut().set_column_annotations(vec![
+                Some(annotation("public.orders", "id")),
+                Some(annotation("public.orders", "amount")),
+            ]);
+        });
+        panel.update(app, |p, _cx| {
+            p.column_hidden = vec!["amount".to_string()];
+        });
+    });
+    let source = panel.read_with(cx, |p, app| p.reference_source(app));
+    assert_eq!(
+        source,
+        Some((
+            "public".to_string(),
+            "orders".to_string(),
+            vec!["id".to_string()]
+        )),
+        "来源表拆成 schema + 表名，隐藏列不进可见列"
+    );
+
+    // 两列来自不同表 → 没有单一来源表（多表 join 的结果不看外键清单）
+    cx.update(|_window, app| {
+        let grid = panel.read(app).grid.clone();
+        grid.update(app, |state, _cx| {
+            state.delegate_mut().set_column_annotations(vec![
+                Some(annotation("public.orders", "id")),
+                Some(annotation("public.items", "amount")),
+            ]);
+        });
+    });
+    assert_eq!(
+        panel.read_with(cx, |p, app| p.reference_source(app)),
+        None,
+        "多来源表不该认成某一张表"
+    );
+}
+
+/// 【引用页】切页签即入队取数；有键时渲染只读键下拉 + 「打开目标对象」。
+#[gpui_kit::test]
+fn reference_tab_requests_metadata_and_renders_the_key_list(cx: &mut gpui_kit::TestAppContext) {
+    use crate::references::{ReferenceKey, ReferencesState};
+    use workbench_shell::model::ColumnAnnotation;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    cx.update(|_window, app| {
+        let grid = panel.read(app).grid.clone();
+        grid.update(app, |state, _cx| {
+            state.delegate_mut().set_column_annotations(vec![
+                Some(ColumnAnnotation {
+                    source_table: Some("public.orders".to_string()),
+                    source_column: Some("id".to_string()),
+                    comment: None,
+                    data_type: None,
+                    nullable: None,
+                    default_value: None,
+                }),
+                Some(ColumnAnnotation {
+                    source_table: Some("public.orders".to_string()),
+                    source_column: Some("amount".to_string()),
+                    comment: None,
+                    data_type: None,
+                    nullable: None,
+                    default_value: None,
+                }),
+            ]);
+        });
+        panel.update(app, |p, cx| p.begin_references_load(cx));
+    });
+
+    let drained = cx.update(|_window, app| panel.read(app).queue.drain());
+    assert_eq!(drained.len(), 1, "取数只该入队一条请求：{drained:?}");
+    match &drained[0] {
+        crate::ports::ResultRequest::LoadReferences {
+            schema,
+            table,
+            visible_columns,
+        } => {
+            assert_eq!(schema, "public");
+            assert_eq!(table, "orders");
+            assert_eq!(
+                visible_columns,
+                &vec!["id".to_string(), "amount".to_string()]
+            );
+        }
+        other => panic!("应入队 LoadReferences，实际 {other:?}"),
+    }
+
+    // 回填一条键并把右栏切到引用页：下拉与「打开目标对象」都要在元素树里
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.set_references(
+                ReferencesState::Loaded(vec![ReferenceKey {
+                    table: "customers".to_string(),
+                    constraint: "fk_customer".to_string(),
+                    columns: vec!["id".to_string()],
+                    target_columns: vec!["id".to_string()],
+                }]),
+                cx,
+            );
+            p.set_right_tab(RightTab::Reference, cx);
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-reference-keys").is_some(),
+        "有键时该渲染只读键下拉"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-reference-open").is_some(),
+        "有键时该渲染「打开目标对象」"
+    );
+}
+
+/// 【引用页】「查看引用行」：选中键 + 当前行 → 生成目标表查询，并按 `B′` 交给宿主另开结果集。
+///
+/// 口子对齐 DBeaver `refreshKeyValues`（`:382-432`）：查什么由**当前行的外键值**决定，
+/// 不是整表；本仓把这条查询交给编辑器新开一份结果集，不在面板里嵌第二份视图。
+#[gpui_kit::test]
+fn reference_rows_use_the_selected_row_values(cx: &mut gpui_kit::TestAppContext) {
+    use crate::references::{ReferenceKey, ReferencesState};
+    use workbench_shell::model::ColumnAnnotation;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 结果两列来自 public.orders：id(integer) / amount(numeric)
+    cx.update(|_window, app| {
+        let grid = panel.read(app).grid.clone();
+        grid.update(app, |state, _cx| {
+            state.delegate_mut().set_column_annotations(vec![
+                Some(ColumnAnnotation {
+                    source_table: Some("public.orders".to_string()),
+                    source_column: Some("id".to_string()),
+                    comment: None,
+                    data_type: Some("integer".to_string()),
+                    nullable: None,
+                    default_value: None,
+                }),
+                Some(ColumnAnnotation {
+                    source_table: Some("public.orders".to_string()),
+                    source_column: Some("amount".to_string()),
+                    comment: None,
+                    data_type: Some("numeric".to_string()),
+                    nullable: None,
+                    default_value: None,
+                }),
+            ]);
+        });
+    });
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.set_references(
+                ReferencesState::Loaded(vec![ReferenceKey {
+                    table: "customers".to_string(),
+                    constraint: "fk_customer".to_string(),
+                    columns: vec!["id".to_string()],
+                    target_columns: vec!["id".to_string()],
+                }]),
+                cx,
+            );
+        });
+    });
+
+    // 没选中行时生成不了（按钮禁用态由它决定）
+    assert_eq!(
+        panel.read_with(cx, |p, app| p.reference_rows_sql(app)),
+        None,
+        "没有当前行就没有值可查"
+    );
+
+    // 选中第一行（id = 1）后能生成：数值列裸拼，字符串列加引号
+    cx.update(|_window, app| {
+        let grid = panel.read(app).grid.clone();
+        grid.update(app, |state, _cx| {
+            state.delegate_mut().set_selected_row(Some(0));
+        });
+    });
+    let sql = panel
+        .read_with(cx, |p, app| p.reference_rows_sql(app))
+        .expect("选中行后应能生成引用行查询");
+    assert_eq!(sql, "SELECT * FROM customers WHERE id = 1");
+
+    // 交给宿主：请求里带的是同一条 SQL（宿主用 NewSet 落位）
+    cx.update(|_window, app| panel.update(app, |p, cx| p.open_reference_rows(cx)));
+    let drained = cx.update(|_window, app| panel.read(app).queue.drain());
+    assert_eq!(drained.len(), 1, "只该入队一条请求：{drained:?}");
+    match &drained[0] {
+        crate::ports::ResultRequest::OpenReferenceRows { sql: requested } => {
+            assert_eq!(requested, &sql);
+        }
+        other => panic!("应入队 OpenReferenceRows，实际 {other:?}"),
+    }
+
+    // 页面上也要有这张票（render 路径与上面同一个函数算可用性）
+    cx.update(|_window, app| panel.update(app, |p, cx| p.set_right_tab(RightTab::Reference, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-reference-rows").is_some(),
+        "有键且选中行时该渲染「查看引用行」"
     );
 }
 

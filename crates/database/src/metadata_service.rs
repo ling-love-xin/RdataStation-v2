@@ -148,11 +148,29 @@ impl MetadataService {
         catalog: &str,
     ) -> Result<Vec<String>, CoreError> {
         let db = self.database_for(conn_id, catalog).await?;
-        if let Some(browser) = db.as_metadata_browser() {
+        let names = if let Some(browser) = db.as_metadata_browser() {
             let nodes = browser.get_schemas(catalog).await?;
-            return Ok(nodes.into_iter().map(|n| n.name).collect());
-        }
-        db.list_schemas(catalog).await
+            nodes.into_iter().map(|n| n.name).collect::<Vec<_>>()
+        } else {
+            db.list_schemas(catalog).await?
+        };
+        // 环境策略的 schema 白/黑名单在此生效（原型 ⑨ Tab2）：导航树看不到被隐藏的 schema，
+        // 也就不会再去列表 / 抓手（比「列出后再隐藏」更省连接与查询）。
+        let policies = self.policies_for(conn_id).await;
+        Ok(names
+            .into_iter()
+            .filter(|name| policies.schema_visible(name))
+            .collect())
+    }
+
+    /// 当前连接的解算后策略（连接级 `policy_overrides` 优先于环境；未绑定环境 = 全放行）。
+    async fn policies_for(&self, conn_id: &str) -> engine::services::policy_guard::ResolvedPolicies {
+        let info = self.manager.get_connection_info(&conn_id.to_string()).await;
+        engine::services::policy_guard::resolve_for_connection(
+            info.as_ref().and_then(|i| i.environment_id.as_deref()),
+            info.as_ref().and_then(|i| i.advanced_options.as_deref()),
+        )
+        .await
     }
 
     /// 在能访问该 catalog 的连接上执行一条只读查询（表数据预览用）。

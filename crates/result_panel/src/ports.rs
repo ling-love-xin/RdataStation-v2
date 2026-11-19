@@ -175,10 +175,18 @@ pub enum ResultRequest {
     /// 字节与默认文件名由面板算好（[`ResultPanel::selected_value_payload`]），
     /// 宿主只负责选路径 + 写盘。
     SaveValue,
+    /// 【值详情页】在系统默认程序里打开当前格的值（对齐 DBeaver
+    /// `ContentValueManager.contributeContentActions` 的「Open in external editor」`：`:
+    /// 100-140`）：面板交字节与建议文件名，宿主落到临时文件后唤起外部程序。
+    OpenValueExternally,
     /// 刷新（重跑当前结果 SQL）
     Refresh,
     /// 取下一段
     FetchMore,
+    /// 【计算行数】状态行那颗 `rowCountLabel`（对齐 DBeaver `:2155-2180`）：
+    /// 面板只发请求，宿主对**当前结果的原 SQL**跑 `count(*)`（下发筛选时带 WHERE），
+    /// 算回来的数字经 `ResultPanel::set_row_count_notice` 就地显示，**不开新结果集**
+    CountRows,
     /// 取全部行（DBeaver 对齐：抓全量数据）
     FetchAll,
     /// 【分页】状态栏翻页（首页 / 上页 / 下页 / 末页）：**纯视图滚动**，不重查
@@ -214,6 +222,13 @@ pub enum ResultRequest {
     /// 【R5 布局方向切换】右栏在右侧 / 下方之间切换（对齐 DBeaver
     /// `CMD_TOGGLE_LAYOUT` → `toggleVerticalLayout`）：纯视图状态，不落盘。
     ToggleVerticalLayout,
+    /// 【R5 面板最大化】收起 / 还原结果网格（对齐 DBeaver `CMD_TOGGLE_MAXIMIZE`
+    /// → `togglePanelsMaximize`）：纯视图状态，不落盘。
+    TogglePanelMaximize,
+    /// 【R6 段大小】状态行输入框提交的「一段」行数（对齐 DBeaver `resultSetSize`
+    /// Text → 数据源偏好 `RESULT_SET_MAX_ROWS`）：只影响**后续**「取下一段」的 limit，
+    /// 不改已加载行。宿主侧读该值决定 `ExecTarget::Segment { limit }`。
+    SetSegmentRows(usize),
     /// 左栏列浏览器清单行眼睛：切换该列隐藏 / 显示（宿主 update 网格 + 面板）
     ToggleColumnVisibility(usize),
     /// 【P2-3】列浏览器多选批量显隐：把 `columns`（数据列序）整批设为隐藏 / 显示
@@ -238,6 +253,17 @@ pub enum ResultRequest {
     /// 右栏标签页切换（列浏览器 / 值详情 / 计算 / 分组；对齐 DBeaver 右侧 metadata /
     /// valueviewer / aggregate / grouping 同栏页签体系）
     SetRightTab(RightTab),
+    /// 右缘竖条上点某一页的图标：切到该页（已被关掉的页会先重新启用），
+    /// 点当前页 = 无操作。对齐 DBeaver `ResultSetHandlerTogglePanel.toggleResultsPanel:64-69`
+    /// ——那边「关」的是**那一页**（`CTabFolder` 多页签 + `SWT.CLOSE`），整栏显隐是另一条
+    /// 命令（`CMD_TOGGLE_PANELS` → `SetPanelsVisible`）。本仓第 25 批起同样不在此收起整栏。
+    ToggleRightTab(RightTab),
+    /// 关闭右栏某一页（**只关这一页**，其余页仍在页签条里）。对齐 DBeaver
+    /// `ResultSetViewer.addPanel:1330-1394` 的 `new CTabItem(panelFolder, SWT.CLOSE)`
+    /// 与 `presentationSettings.enabledPanelIds` 的增删语义：关掉一页 = 从已启用集合移除。
+    CloseRightTab(RightTab),
+    /// 重新打开右栏某一页（视图菜单的勾选项）：按规范序插回集合并置为当前页。
+    OpenRightTab(RightTab),
     /// 【#28-B3】在指定视图行下方插入一条本地空行（`None` = 追加到末尾区段）。
     /// 宿主经网格 `RowRef` 翻译身份后落到 `LocalRowSet`；只改叠加层，不下发 INSERT。
     InsertRowBelow(Option<usize>),
@@ -303,6 +329,13 @@ pub enum ResultRequest {
     SetStatsMode(StatsMode),
     /// 【R3 分组页】切换分组列集合里的某一列（点选加入 / 再点移除；空集合 = 用当前选中列）
     ToggleGroupColumn(usize),
+    /// 【R3 分组页】把分组键里某一列上移 / 下移一位（`delta` = -1 上移 / +1 下移）。
+    /// 分组键顺序 = 分组嵌套顺序，改顺序 = 改层级（对齐 DBeaver
+    /// `GroupingColumnsContainer.moveColumns:126-152`，那边是拖拽，本仓是工具条按钮）
+    MoveGroupColumn {
+        column: usize,
+        delta: i8,
+    },
     /// 【R3 分组页】分组结果排序口径（按值 / 按计数）
     SetGroupSort(GroupSort),
     /// 【R3 分组页】「仅重复」：只保留行数 > 1 的分组（对齐 DBeaver 分组面板同名选项）
@@ -311,6 +344,43 @@ pub enum ResultRequest {
     /// 且只有分组列非空时才可用）。本仓清空后回落到「当前选中列兜底」，DBeaver 是回到
     /// 空态（见 result-panel.md §8.49）
     ClearGroupColumns,
+    /// 【引用页】取当前结果集来源表的外键约束（对齐 DBeaver `ReferencesResultsContainer`
+    /// 的键清单加载 `refreshReferenceKeyList`）。面板交出「schema / 表 / 可见列」，
+    /// 宿主在后台任务里走 `MetadataService::list_constraints`（**不在 UI 线程 await**），
+    /// 回来经 [`crate::panel::data::ResultPanel::set_references`] 回填。
+    /// 为什么是面板发起：结果面板不认识 engine / database（依赖只向下），
+    /// 连接身份只在宿主手里（与 `GenerateResultSetDdl` 同一条队列通道）。
+    LoadReferences {
+        /// 表所属 schema（来源表限定名 `schema.表` 的前半段；裸表名时为空串）
+        schema: String,
+        /// 来源表名（不带 schema 前缀）
+        table: String,
+        /// 结果集**可见列**（隐藏列已排除）——DBeaver 只用可见属性收键
+        /// （`ReferencesResultsContainer.java:298`）
+        visible_columns: Vec<String>,
+    },
+    /// 【引用页】键下拉选中某一项（`None` = 清掉选中）。
+    /// render 是纯读路径，选中态只能经队列回面板改。
+    SetActiveReference(Option<usize>),
+    /// 【引用页】「打开目标对象」（对齐 DBeaver `refs_open_target`：
+    /// `NavigatorUtils.openNavigatorNode`）：宿主把目标表在导航树里定位出来。
+    OpenReferenceTarget {
+        /// 目标表所属 schema（与来源表同 schema）
+        schema: String,
+        /// 目标表名
+        table: String,
+    },
+    /// 【引用页】「查看引用行」：按**当前行的外键值**生成查询，交给编辑器**另开一份结果集**
+    /// （方案 `B′`；DBeaver 是在面板内嵌一份 `ResultSetViewer`，见
+    /// `docs/architecture/editor/result-panel-references-plan.md` §5）。
+    ///
+    /// SQL 由面板算（它手里才有选中键、当前行与驱动类型，见
+    /// [`crate::references::reference_rows_sql`]），宿主只负责执行与落位：
+    /// `ExecTarget::Statement` + `ResultPlacement::NewSet`。
+    OpenReferenceRows {
+        /// 已生成好的 `SELECT * FROM 目标表 WHERE …`（不合法时面板不会发这条请求）
+        sql: String,
+    },
 }
 
 /// 【保存值】待落盘的内容：面板算字节与默认文件名，宿主只选路径 + 写盘。
@@ -328,17 +398,25 @@ pub struct ValuePayload {
 
 /// 【R2】计算页的统计项（对齐 DBeaver Calc 的可配置聚合函数集
 /// `AggregateColumnsPanel.enabledFunctions`，来源 `FunctionsRegistry` 的
-/// `AggregateFunctionDescriptor`）。本仓不引注册表，六项固定可选。
+/// `AggregateFunctionDescriptor`）。本仓不引注册表，九项固定可选（对照
+/// `plugin.xml:89-99` 的九个 `aggregateFunction`：count / countDistinct /
+/// countNulls / sum / avg / min / max / median / mode）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StatsItem {
-    /// 非空值数（COUNT，DBeaver `IAggregateFunction` 的 count）
+    /// 非空值数（COUNT，DBeaver `count`）
     Count,
-    /// NULL 数（本地扩展项：DBeaver 用 COUNT 与行数的差表达，本仓直给）
+    /// 去重计数（COUNT DISTINCT，DBeaver `countDistinct`）
+    CountDistinct,
+    /// NULL 数（DBeaver `countNulls`；本地扩展：本仓直给，不用「行数 − 非空」表达）
     Nulls,
     /// 最小值
     Min,
     /// 最大值
     Max,
+    /// 中位数（仅数值口径有值；DBeaver `median`）
+    Median,
+    /// 众数（出现最多的非空值；DBeaver `mode`）
+    Mode,
     /// 均值（仅数值口径有值）
     Avg,
     /// 合计（仅数值口径有值）
@@ -346,33 +424,119 @@ pub enum StatsItem {
 }
 
 impl StatsItem {
-    /// 默认全集（顺序 = 原「计算」页六行的顺序）
-    pub const ALL: [StatsItem; 6] = [
+    /// 全部项（顺序 = 计算页的展示顺序：计数一组 → 极值 → 中间值 → 数值聚合）
+    pub const ALL: [StatsItem; 9] = [
         Self::Count,
+        Self::CountDistinct,
         Self::Nulls,
         Self::Min,
         Self::Max,
+        Self::Median,
+        Self::Mode,
         Self::Avg,
         Self::Sum,
     ];
 
-    /// 展示名（语义对标 DBeaver 的 COUNT / SUM / AVG / MIN / MAX 函数标签）
+    /// 【默认函数集】出厂 / Reset 之后启用的项（对齐 DBeaver `FunctionDescriptor.isDefault()`
+    /// 打标的集合，`plugin.xml:89-99`）。
+    ///
+    /// 取证：DBeaver 九个聚合函数里只有 `count` 与 `countDistinct` 写了 `default="true"`，
+    /// `countNulls` 显式 `default="false"`，其余（sum/avg/min/max/median/mode）没写属性
+    /// （缺省即 false）；`loadDefaultFunctions()`（`AggregateColumnsPanel:157-164`）只收
+    /// `isDefault()` 的项、再按 label 排序 → 默认集 = Count + Count Distinct。
+    /// 本仓 `Count` = 「非空」，`CountDistinct` = 「去重计数」，顺序照 `ALL`。
+    pub const DEFAULT_SET: [StatsItem; 2] = [Self::Count, Self::CountDistinct];
+
+    /// 这一项是否属于默认集（等价于 DBeaver 描述符上的 `isDefault` 标记）
+    pub fn is_default(self) -> bool {
+        Self::DEFAULT_SET.contains(&self)
+    }
+
+    /// 展示名（语义对标 DBeaver 的函数标签：COUNT / COUNT DISTINCT / SUM / AVG / MIN / MAX /
+    /// MEDIAN / MODE）
     pub fn label(self) -> &'static str {
         match self {
             Self::Count => "非空",
+            Self::CountDistinct => "去重计数",
             Self::Nulls => "NULL",
             Self::Min => "最小值",
             Self::Max => "最大值",
+            Self::Median => "中位数",
+            Self::Mode => "众数",
             Self::Avg => "均值",
             Self::Sum => "合计",
         }
     }
 
-    /// 数值口径之外是否仍有意义：Min/Max 在字符串口径下按字典序比较，
-    /// Avg/Sum 只有数值口径有值（DBeaver 的 SUM/AVG 对字符串累计不成立）。
+    /// 数值口径之外是否仍有意义：Min/Max 在字符串口径下按字典序比较，众数按值文本统计；
+    /// Avg/Sum/Median 只有数值口径有值（DBeaver 的 SUM/AVG 对字符串累计不成立，
+    /// 中位数同理要能排序的数字）。
     pub fn supports_text_mode(self) -> bool {
-        matches!(self, Self::Count | Self::Nulls | Self::Min | Self::Max)
+        matches!(
+            self,
+            Self::Count | Self::CountDistinct | Self::Nulls | Self::Min | Self::Max | Self::Mode
+        )
     }
+
+    /// 这一项的计算是否需要**整列取值**（数值口径的 min/max/avg/sum 走事实档列式统计，
+    /// 不必物化矩阵；这三项没有列式实现，只能扫值）。
+    pub fn needs_column_values(self) -> bool {
+        matches!(self, Self::CountDistinct | Self::Median | Self::Mode)
+    }
+
+    /// 落盘 / 设置项用的稳定 id（`result_panel.stats_items` 列表里的元素名）。
+    ///
+    /// 用英文 id 而不是中文标签：标签会随文案调整而漂移，id 是契约
+    /// （与 `StatusCommand::id` 同一口径）。`countdistinct` 全小写——本仓 id 一律小写，
+    /// 不与 DBeaver 的驼峰 `countDistinct` 混用。
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Count => "count",
+            Self::CountDistinct => "countdistinct",
+            Self::Nulls => "nulls",
+            Self::Min => "min",
+            Self::Max => "max",
+            Self::Median => "median",
+            Self::Mode => "mode",
+            Self::Avg => "avg",
+            Self::Sum => "sum",
+        }
+    }
+
+    /// 解析 id；未知 / 大小写不符的值返回 `None`（由调用方忽略，不猜）。
+    pub fn parse(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|item| item.id() == id.trim())
+    }
+}
+
+/// 【计算页持久化】把设置里的 id 列表解析成启用集合（顺序照抄、未知项忽略、重复项丢弃）。
+///
+/// 对齐 DBeaver `AggregateColumnsPanel.loadSettings`（`:129-155`）：那边把
+/// `enabledFunctions` 按 `index` 顺序逐个 `FunctionsRegistry` 查回函数；本仓九项固定，
+/// 查不到的一律丢掉（升级 / 手改配置里的未知 id 不应该把整页搞坏）。
+pub fn stats_items_from_ids(text: &str) -> Vec<StatsItem> {    let mut items: Vec<StatsItem> = Vec::new();
+    for part in text.split(',') {
+        let Some(item) = StatsItem::parse(part) else {
+            continue;
+        };
+        if items.contains(&item) {
+            continue;
+        }
+        items.push(item);
+    }
+    items
+}
+
+/// 【计算页持久化】启用集合 → 落盘 id 列表（逗号分隔，顺序保留）。
+///
+/// 全停用时给空串——这是**合法状态**（用户在页内把九项全 × 掉了），
+/// 与「设置里没写过这一项」用默认值区分开（模型默认值 = [`StatsItem::DEFAULT_SET`]）。
+pub fn stats_items_to_ids(items: &[StatsItem]) -> String {
+    items
+        .iter()
+        .map(|item| item.id())
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// 【R2】计算页聚合口径（对齐 DBeaver Calc 的 `aggregateAsStrings` CHECK）
@@ -398,6 +562,12 @@ impl StatsMode {
 /// 【R3 分组页】分组结果排序口径（对齐 DBeaver 分组面板的排序配置）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GroupSort {
+    /// 不排序：保持分组**首次出现**的顺序（视图行序扫描出来的插入序）。
+    ///
+    /// 对齐 DBeaver `ChangeSortingAction.NONE = ""`（`RS_GROUPING_DEFAULT_SORTING`
+    /// 的「不排序」档）：那边不设 ORDER BY，于是结果就是数据源返回的分组顺序。
+    /// 本仓 `group_by_tuples`（`grid/stats.rs:89-99`）按行扫描线性插入，天然是首现序。
+    None,
     /// 按分组键字典序升序（默认；未排序的首现顺序也接近这个直觉）
     #[default]
     Value,
@@ -406,19 +576,42 @@ pub enum GroupSort {
 }
 
 impl GroupSort {
-    /// 另一个口径（按钮 toggle 用）
+    /// 另一个口径（按钮 toggle 用）：三档循环（不排序 → 按值 → 按计数 → 不排序），
+    /// 对齐 DBeaver `DefaultSortingAction` 下拉里的三个单选档
+    /// （`ChangeSortingAction:44-52`：`descending == null` 即「不排序」）。
     pub fn toggled(self) -> Self {
         match self {
+            Self::None => Self::Value,
             Self::Value => Self::CountDesc,
-            Self::CountDesc => Self::Value,
+            Self::CountDesc => Self::None,
         }
     }
 
     /// 按钮文案（右侧窄栏只放得下 3 个字）
     pub fn label(self) -> &'static str {
         match self {
+            Self::None => "原序",
             Self::Value => "按值",
             Self::CountDesc => "按计数",
+        }
+    }
+
+    /// 落盘 id（全小写，与设置项 `result_panel.group_sort` 同一契约）
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Value => "value",
+            Self::CountDesc => "countdesc",
+        }
+    }
+
+    /// 解析落盘 id；未知 / 大小写不符的值返回 `None`（调用方按出厂档处理，不猜）。
+    pub fn parse(id: &str) -> Option<Self> {
+        match id.trim() {
+            "none" => Some(Self::None),
+            "value" => Some(Self::Value),
+            "countdesc" => Some(Self::CountDesc),
+            _ => None,
         }
     }
 }
@@ -452,6 +645,37 @@ pub enum RightTab {
     /// 【1.2】执行 SQL：筛选框运行后生成的 wrapped SQL（`select * from (原SQL) where …`）
     /// 原文展示（只读 + 复制）。执行完成后自动切到此页签。
     ExecSql,
+}
+
+impl RightTab {
+    /// 全部页（规范序 = 页签条 / 竖条 / 视图菜单的渲染序）。
+    pub const ALL: [RightTab; 6] = [
+        RightTab::Browser,
+        RightTab::Value,
+        RightTab::Stats,
+        RightTab::Group,
+        RightTab::Reference,
+        RightTab::ExecSql,
+    ];
+
+    /// 落盘用的稳定 id（`result_panel.open_tabs` 偏好键；对齐 DBeaver
+    /// `PresentationSettings.enabledPanelIds` 的字符串 id）。
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Browser => "browser",
+            Self::Value => "value",
+            Self::Stats => "stats",
+            Self::Group => "group",
+            Self::Reference => "reference",
+            Self::ExecSql => "execsql",
+        }
+    }
+
+    /// 解析落盘 id；未知值返回 `None`（调用方丢弃，而不是猜一个页）。
+    pub fn parse(s: &str) -> Option<Self> {
+        let normalized = s.trim().to_ascii_lowercase();
+        Self::ALL.into_iter().find(|tab| tab.id() == normalized)
+    }
 }
 
 /// 【筛选设置】浮层页签（对齐 DBeaver `FilterSettingsDialog` 的两页）
@@ -739,5 +963,68 @@ mod tests {
         queue.push(ResultRequest::Refresh);
         let second = queue.drain();
         assert_eq!(second, vec![ResultRequest::Refresh]);
+    }
+
+    /// 计算页启用集与落盘 id 列表的往返：顺序保留、未知项与重复项丢弃、空串 = 全停用。
+    #[test]
+    fn stats_item_ids_round_trip_and_drop_unknown() {
+        assert_eq!(
+            stats_items_to_ids(&StatsItem::ALL),
+            "count,countdistinct,nulls,min,max,median,mode,avg,sum"
+        );
+        // 乱序 + 空白 + 大小写不规范的输入照 id 解析（空白由 `parse` 的 trim 吃掉，
+        // 大小写不匹配按未知项丢弃——id 是契约，不做模糊匹配）
+        assert_eq!(
+            stats_items_from_ids(" sum , min,,sum,COUNT "),
+            vec![StatsItem::Sum, StatsItem::Min]
+        );
+        // 空串 / 全未知 = 全停用（合法状态，不是"没写"）
+        assert!(stats_items_from_ids("").is_empty());
+        assert!(stats_items_from_ids("nosuch,another").is_empty());
+        // 每个 id 都能解析回自己（幂等）
+        for item in StatsItem::ALL {
+            assert_eq!(StatsItem::parse(item.id()), Some(item));
+        }
+        assert_eq!(stats_items_to_ids(&[]), "");
+    }
+
+    /// 分组排序口径的落盘 id：三档都能原地往返，未知 / 大小写不符一律 `None`
+    /// （调用方按出厂 `value` 处理，与设置服务侧的归一同一口径）。
+    #[test]
+    fn group_sort_ids_round_trip_and_reject_unknown() {
+        assert_eq!(GroupSort::None.id(), "none");
+        assert_eq!(GroupSort::Value.id(), "value");
+        assert_eq!(GroupSort::CountDesc.id(), "countdesc");
+        for sort in [GroupSort::None, GroupSort::Value, GroupSort::CountDesc] {
+            assert_eq!(GroupSort::parse(sort.id()), Some(sort));
+        }
+        // 空白由 parse 的 trim 吃掉；大小写与未知档按未知处理（id 是契约）
+        assert_eq!(GroupSort::parse(" value "), Some(GroupSort::Value));
+        assert_eq!(GroupSort::parse("COUNTDESC"), None);
+        assert_eq!(GroupSort::parse("asc"), None);
+        assert_eq!(GroupSort::parse(""), None);
+        // 出厂档 = 按值（与设置模型默认 `"value"` 同档）
+        assert_eq!(GroupSort::default().id(), "value");
+    }
+
+    /// 分组排序按钮的三档循环（对齐 DBeaver `DefaultSortingAction` 三个单选档：
+    /// 不排序 / 升序 / 降序 —— 本仓对应 原序 / 按值 / 按计数）。
+    #[test]
+    fn group_sort_toggle_cycles_through_three_modes() {
+        assert_eq!(GroupSort::None.toggled(), GroupSort::Value);
+        assert_eq!(GroupSort::Value.toggled(), GroupSort::CountDesc);
+        assert_eq!(
+            GroupSort::CountDesc.toggled(),
+            GroupSort::None,
+            "第三档必须回到「不排序」，否则没有回到原序的入口"
+        );
+        // 三个标签互不相同（按钮文案靠它区分当前档）
+        let labels = [
+            GroupSort::None.label(),
+            GroupSort::Value.label(),
+            GroupSort::CountDesc.label(),
+        ];
+        assert_eq!(labels.len(), 3);
+        assert!(labels[0] != labels[1] && labels[1] != labels[2] && labels[0] != labels[2]);
     }
 }

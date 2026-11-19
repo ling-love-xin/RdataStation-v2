@@ -9,6 +9,8 @@ use gpui_kit::{App, Window};
 use project::ui::OpenProject;
 use workbench_shell::model::ConnectionItem;
 
+use crate::components::connection_dialog::ManagerKind;
+
 /// 连接对话框的宿主能力（由工作台面板状态 `Shared` 实现）。
 ///
 /// 方法与 workbench `Shared` 的对应面一一对应：
@@ -34,6 +36,12 @@ pub trait ConnectionDialogHost {
     /// 返回是否真的打开了：宿主没挂上回调时返回 `false`，调用方据此给出可读提示，
     /// 而不是让按钮点了像没反应。
     fn show_plugin_manager(&self, window: &mut Window, cx: &mut App) -> bool;
+
+    /// 打开 / 聚焦「配置中心」页，并切到指定域（认证 / 网络 / 环境）。
+    ///
+    /// 与 [`Self::show_plugin_manager`] 同口径：返回 `false` 表示宿主没挂页面，
+    /// 调用方回落到旧的内层对话框，不让「管理」按钮变哑。
+    fn show_config_center(&self, kind: ManagerKind, window: &mut Window, cx: &mut App) -> bool;
 
     /// 批量保存成功后的宿主副作用（对应 workbench `Shared` 的
     /// `connections` 替换 + `refresh_mock_connections` + `notice` 提示）。

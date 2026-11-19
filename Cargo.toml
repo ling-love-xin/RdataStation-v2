@@ -203,6 +203,10 @@ x509-parser = "0.18.1"
 base64 = "0.22.1"
 sha2 = "0.10.9"
 hex = "0.4"
+# 主密码档 KEK 派生（原型 ⑦ Tab2 第三档；Argon2id）
+argon2 = "0.6.0"
+# 系统凭据档：Windows DPAPI 直接调 crypt32（`keyring` crate 不在 lock，不引入新生态）
+windows-sys = { version = "0.52.0", default-features = false }
 percent-encoding = "2.3.2"
 dirs = "7.0.0"
 dashmap = "6.2.1"

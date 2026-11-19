@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>环境管理 · 新增数据源原型 · RdataStation</title>
+<link rel="stylesheet" href="_theme.css">
+<script src="_theme.js"></script>
+<style>
+  .env-item{display:flex;align-items:center;gap:10px;border:1.5px solid var(--border);border-radius:10px;padding:10px 13px;cursor:pointer;transition:all .12s;background:var(--bg);}
+  .env-item:hover{background:var(--hover);}
+  .env-item.on{border-color:var(--active-border);box-shadow:0 0 0 3px color-mix(in srgb,var(--active-border) 12%,transparent);}
+  .env-item .e-color{width:10px;height:10px;border-radius:3px;flex-shrink:0;}
+  .env-item .e-name{font-size:13px;font-weight:700;}
+  .env-item .e-desc{font-size:11px;color:var(--muted);margin-top:1px;}
+  .env-item .e-meta{margin-left:auto;display:flex;gap:5px;flex-shrink:0;}
+  /* CRUD 视图切换与删除弹层 */
+  .edit-bar{display:flex;align-items:center;gap:10px;padding:10px 14px;border:1px solid var(--border);border-radius:10px;background:var(--group-box);margin-bottom:13px;}
+  .edit-bar .eb-title{font-size:13px;font-weight:700;}
+  .edit-bar .eb-crumb{color:var(--muted);font-size:11.5px;}
+  .edit-foot{display:flex;align-items:center;gap:10px;margin-top:14px;padding-top:13px;border-top:1px solid var(--sidebar-border);}
+  .edit-foot .ef-err{color:var(--danger);font-size:11.5px;}
+  .modal-mask{position:fixed;inset:0;background:rgba(10,10,14,.45);display:flex;align-items:center;justify-content:center;z-index:50;padding:20px;}
+  .modal{width:450px;max-width:100%;border:1px solid var(--border);border-radius:12px;background:var(--bg);box-shadow:var(--shadow);overflow:hidden;}
+  .modal .m-head{display:flex;align-items:center;gap:9px;padding:13px 16px;border-bottom:1px solid var(--sidebar-border);font-size:13px;font-weight:700;}
+  .modal .m-body{padding:14px 16px;font-size:12px;line-height:1.8;}
+  .modal .m-body .ref-list{border:1px solid var(--border);border-radius:8px;margin-top:8px;padding:8px 11px;font-size:11.5px;background:var(--group-box);}
+  .modal .m-foot{display:flex;justify-content:flex-end;gap:9px;padding:12px 16px;border-top:1px solid var(--sidebar-border);}
+  .pol-card{border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--bg);}
+  .pol-card .p-head{display:flex;align-items:center;gap:9px;padding:9px 12px;background:var(--group-box);border-bottom:1px solid var(--sidebar-border);font-size:12.5px;font-weight:700;}
+  .pol-card .p-body{padding:10px 12px;font-size:11.5px;line-height:1.75;}
+  .fx{display:inline-flex;align-items:center;gap:4px;font-size:10px;border-radius:5px;padding:1px 6px;font-weight:600;}
+  .fx.exec{color:var(--danger);background:var(--danger-bg);}
+  .fx.nav{color:var(--info);background:var(--info-bg);}
+  .fx.ui{color:var(--purple);background:var(--purple-bg);}
+  .fx.none{color:var(--muted);background:var(--group-box);}
+  .matrix td,.matrix th{font-size:11.5px;}
+  .matrix .fx-cell{white-space:nowrap;}
+</style>
+</head>
+<body>
+
+<header class="page-head">
+  <div class="brand">
+    <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><path d="M3 21h18"/><path d="M5 21V8l7-5 7 5v13"/><path d="M9 21v-4h6v4"/></svg></div>
+    <div>
+      <h1>🏭 环境管理（environments）· 含策略执行语义</h1>
+      <div class="sub">manager-environment · 存储/展示 <span class="st st-impl">已实现</span> · <b>执行 = 零消费</b> → 本页核心是<span class="st st-key">执行语义设计</span></div>
+    </div>
+  </div>
+  <div class="head-actions">
+    <a class="back-link" href="index.html">← 总览</a>
+    <button class="theme-toggle" data-theme-toggle>🌙 暗色</button>
+  </div>
+</header>
+
+<div style="max-width:1080px;margin:0 auto 14px;" class="note danger">
+  <b>现状诚实声明（2026-11-10 代码实测）</b>：<code>environment_policies</code> 的 5 类策略（security / schema / performance / audit / ui）目前只有三个消费者——对话框展示、属性面板展示、快照复制。<b>执行侧（sql_service / execution / 导航）零消费</b>：生产环境配了「只读 + 行数限制」，执行时不会有任何拦截发生。本页 Tab2「执行语义矩阵」即为此缺口的设计交付。
+</div>
+
+<div style="max-width:1080px;margin:0 auto;" class="card">
+  <div class="tabs" data-tabs style="padding:0 14px;">
+    <button class="tab on" data-tab="envs">环境与策略配置</button>
+    <button class="tab" data-tab="matrix">② 执行语义矩阵</button>
+    <button class="tab" data-tab="preview">③ 应用预览</button>
+  </div>
+
+  <!-- ============ Tab1 环境与策略 ============ -->
+  <div data-panel="envs" class="card-body">
+    <!-- ── 列表视图 ── -->
+    <div id="env-list-view">
+    <div style="display:grid;grid-template-columns:250px 1fr;gap:14px;align-items:start;">
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div class="env-item on">
+          <span class="e-color" style="background:#DC2626"></span>
+          <div><div class="e-name">生产 prod</div><div class="e-desc">只读 + 严格超时 + 审计</div></div>
+          <div class="e-meta" style="flex-direction:column;gap:4px;align-items:flex-end;">
+            <span class="chip info">3 连接</span>
+            <span style="display:flex;gap:4px;"><button class="btn sm" onclick="openEnvEditor('edit')">编辑</button><button class="btn sm danger" onclick="askEnvDelete('生产 prod')">删除</button></span>
+          </div>
+        </div>
+        <div class="env-item">
+          <span class="e-color" style="background:#B45309"></span>
+          <div><div class="e-name">预发布 staging</div><div class="e-desc">写需确认 + 行数上限放宽</div></div>
+          <div class="e-meta" style="flex-direction:column;gap:4px;align-items:flex-end;">
+            <span class="chip info">1 连接</span>
+            <span style="display:flex;gap:4px;"><button class="btn sm" onclick="openEnvEditor('edit')">编辑</button><button class="btn sm danger" onclick="askEnvDelete('预发布 staging')">删除</button></span>
+          </div>
+        </div>
+        <div class="env-item">
+          <span class="e-color" style="background:#16A34A"></span>
+          <div><div class="e-name">开发 dev</div><div class="e-desc">近乎无限制</div></div>
+          <div class="e-meta" style="flex-direction:column;gap:4px;align-items:flex-end;">
+            <span class="chip">未引用</span>
+            <span style="display:flex;gap:4px;"><button class="btn sm" onclick="openEnvEditor('edit')">编辑</button><button class="btn sm danger" onclick="askEnvDelete('开发 dev', true)">删除</button></span>
+          </div>
+        </div>
+        <button class="btn" style="justify-content:center;" onclick="openEnvEditor('new')">＋ 新建环境</button>
+        <div class="f-help" style="text-align:center;">环境本体 = 名称 / 颜色 / 描述 / 排序（全局库 · env_store）</div>
+      </div>
+
+      <div>
+        <div class="sec"><h3>「生产 prod」策略摘要</h3><span class="hint">进「编辑环境」改配置；对话框引用环境后策略在建连时解析进快照</span>
+          <div class="right"><button class="btn primary sm" onclick="openEnvEditor('edit')">✎ 编辑环境与策略</button></div>
+        </div>
+        <table class="tbl">
+          <tr><th>策略</th><th>状态</th><th>配置摘要</th><th>生效层（提案）</th></tr>
+          <tr><td><b>🛡 安全策略</b> security</td><td><label class="switch"><input type="checkbox" checked><span class="track"></span></label></td><td>只读 ✔ · DDL 阻断 ✔ · DML 需确认 ✘</td><td><span class="fx exec">执行前拦截</span></td></tr>
+          <tr><td><b>🧭 模式加载</b> schema</td><td><label class="switch"><input type="checkbox" checked><span class="track"></span></label></td><td class="mono" style="font-size:11px;">include orders, report* · exclude *_tmp</td><td><span class="fx nav">导航与补全</span></td></tr>
+          <tr><td><b>⚡ 性能策略</b> performance</td><td><label class="switch"><input type="checkbox" checked><span class="track"></span></label></td><td>超时 30s · 行数 ≤ 1000</td><td><span class="fx exec">执行层</span></td></tr>
+          <tr><td><b>📜 审计策略</b> audit</td><td><label class="switch"><input type="checkbox" checked><span class="track"></span></label></td><td>记录全部写语句尝试</td><td><span class="fx exec">拦截点旁路</span></td></tr>
+          <tr><td><b>🖥 界面策略</b> ui</td><td><label class="switch"><input type="checkbox" checked><span class="track"></span></label></td><td>PROD 徽标 · 标签色条 · 确认每次</td><td><span class="fx ui">编辑器/状态栏</span></td></tr>
+        </table>
+        <div class="note warn" style="margin-top:10px;"><b>删除两态</b>（点左栏「删除」即演示）：环境被连接引用 → 拦截；未引用 → 普通确认。<b>现状诚实口径</b>：策略开关与配置为存储 / 展示态，<b>执行侧零消费</b>（Tab2 执行语义矩阵为落地设计）。</div>
+      </div>
+    </div>
+    </div><!-- /env-list-view -->
+
+    <!-- ── 环境编辑视图 ── -->
+    <div id="env-edit-view" class="hidden">
+      <div class="edit-bar">
+        <button class="btn sm" onclick="closeEnvEditor()">← 返回环境列表</button>
+        <span class="eb-title" id="env-edit-title">编辑环境：生产 prod</span>
+        <span class="eb-crumb">基本字段 + 5 类策略（每卡独立启用开关；保存时整体落库）</span>
+      </div>
+
+      <div class="sec"><h3>基本</h3></div>
+      <div class="f-row"><span class="f-label req">环境名</span><input class="inp" id="e-name" style="width:170px" value="生产 prod">
+        <span class="f-label">颜色</span>
+        <div class="seg" style="gap:5px;padding:3px 6px;">
+          <span title="生产" style="width:15px;height:15px;border-radius:4px;background:#DC2626;cursor:pointer;box-shadow:0 0 0 2px var(--bg),0 0 0 3.5px var(--active-border);"></span>
+          <span title="预发布" style="width:15px;height:15px;border-radius:4px;background:#B45309;cursor:pointer;"></span>
+          <span title="开发" style="width:15px;height:15px;border-radius:4px;background:#16A34A;cursor:pointer;"></span>
+          <span title="灰" style="width:15px;height:15px;border-radius:4px;background:var(--muted);cursor:pointer;"></span>
+        </div>
+        <span class="f-label">排序</span><input class="inp" style="width:52px" value="0">
+        <input class="inp" style="width:230px" value="生产库：只读 + 严格超时 + 审计" placeholder="描述…">
+      </div>
+
+      <div class="sec" style="margin-top:14px;"><h3>策略（5 类）</h3><span class="hint">字段化配置 → policy_config JSON；覆盖优先级：连接 policy_overrides &gt; 环境策略 &gt; 无（放行）</span></div>
+        <div class="grid c2">
+          <div class="pol-card">
+            <div class="p-head">🛡 安全策略 security<div class="right"><label class="switch"><input type="checkbox" checked><span class="track"></span>启用</label></div></div>
+            <div class="p-body">
+              <label class="switch"><input type="checkbox" checked><span class="track"></span>只读连接（拦截一切写语句）</label><br>
+              <label class="switch"><input type="checkbox" checked><span class="track"></span>DDL 阻断</label><br>
+              <label class="switch"><input type="checkbox"><span class="track"></span>DML 需确认（UPDATE/DELETE 弹确认）</label><br>
+              <span class="f-help">覆盖优先级：连接 policy_overrides &gt; 环境策略 &gt; 无（放行）</span>
+            </div>
+          </div>
+          <div class="pol-card" style="grid-column:1 / -1;" id="schema-filter-card">
+            <div class="p-head">🧭 模式加载 schema（过滤器）<span class="st st-key">核心</span><span class="f-help" style="font-weight:400;">写法对齐 DBeaver DBSObjectFilter 与本仓 ObjectMaskRule（B5-D13）——同一 pattern 语言</span><div class="right"><label class="switch"><input type="checkbox" checked><span class="track"></span>启用</label></div></div>
+            <div class="p-body">
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+                <div>
+                  <div class="f-row"><span class="f-label" style="min-width:auto">显示（include）</span>
+                    <input class="inp mono" id="sf-inc" style="flex:1" value="orders, report*" placeholder="orders, report*, *_master">
+                  </div>
+                  <div class="f-row"><span class="f-label" style="min-width:auto">隐藏（exclude）</span>
+                    <input class="inp mono" id="sf-exc" style="flex:1" value="*_tmp, pg_catalog" placeholder="information_schema, pg_catalog, tmp_*">
+                  </div>
+                  <div class="f-row">
+                    <label class="switch"><input type="checkbox" id="sf-re"><span class="track"></span>正则表达式</label>
+                    <label class="switch"><input type="checkbox" id="sf-case"><span class="track"></span>大小写敏感</label>
+                    <span class="f-help">不勾正则 = glob：<code>*</code> 任意串 · <code>?</code> 单字符 · 逗号分隔多条（OR）</span>
+                  </div>
+                  <div class="f-help" style="line-height:1.8;">
+                    <b>语义</b>（与导航过滤器一致）：<b>exclude 命中 → 必隐藏</b>（优先级高于 include）；include 空 = 全量候选；include 与 exclude 均不命中 = 隐藏。<br>
+                    <b>两层过滤的分工</b>：环境策略 = <b>配置期</b>（建连时解析，进内省请求与补全候选）；导航浏览过滤器（B5-D13）= <b>浏览期</b>（已加载对象上叠加，不入环境）。两层同语言、可叠加。<br>
+                    <b>适用层级</b>：schema（本期）· catalog / table / column 按 DBeaver per-type 过滤能力挂 <span class="st st-no">观察</span>。过滤<b>不进缓存指纹</b>（指纹按物理库，过滤是呈现口径）。
+                  </div>
+                </div>
+                <div>
+                  <div class="f-help" style="margin-bottom:6px;">实时匹配预览（模拟 schema 清单 · 输入即算）</div>
+                  <div id="sf-preview" class="mono" style="border:1px solid var(--border);border-radius:8px;background:var(--group-box);padding:8px 11px;font-size:11.5px;line-height:1.9;min-height:150px;"></div>
+                  <div class="f-help" id="sf-count" style="margin-top:5px;"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="pol-card">
+            <div class="p-head">⚡ 性能策略 performance<div class="right"><label class="switch"><input type="checkbox" checked><span class="track"></span>启用</label></div></div>
+            <div class="p-body">
+              查询超时 <input class="inp" style="width:56px" value="30"> s（覆盖全局设置）<br>
+              结果行数上限 <input class="inp" style="width:64px" value="1000">（截断 + 提示，不静默丢弃）<br>
+              <label class="switch"><input type="checkbox" checked><span class="track"></span>采样预览走缓存指纹共享</label>
+            </div>
+          </div>
+          <div class="pol-card">
+            <div class="p-head">📜 审计策略 audit<div class="right"><label class="switch"><input type="checkbox" checked><span class="track"></span>启用</label></div></div>
+            <div class="p-body">
+              <label class="switch"><input type="checkbox" checked><span class="track"></span>记录本环境全部写语句尝试（含被拦截的）</label><br>
+              <span class="f-help">落 <code>{RDS_HOME}/logs/audit-{env}.log</code>；只读环境记录「谁在何时试图写」</span>
+            </div>
+          </div>
+          <div class="pol-card">
+            <div class="p-head">🖥 界面策略 ui<div class="right"><label class="switch"><input type="checkbox" checked><span class="track"></span>启用</label></div></div>
+            <div class="p-body">
+              状态栏环境徽标：<span class="chip err">PROD</span>（颜色 = 环境色）<br>
+              编辑器标签色条（DBeaver connection-type 同款）：<br>
+              <span style="display:inline-flex;margin:3px 0;border:1px solid var(--border);border-radius:6px;overflow:hidden;"><span style="width:4px;background:#DC2626;"></span><span style="padding:2px 10px;font-size:11px;background:var(--group-box);">orders.q.sql</span></span>
+              <span style="display:inline-flex;margin:3px 0 3px 6px;border:1px solid var(--border);border-radius:6px;overflow:hidden;"><span style="width:4px;background:#B45309;"></span><span style="padding:2px 10px;font-size:11px;background:var(--group-box);">report.sql</span></span><br>
+              写确认弹窗级别：<select class="inp" style="font-size:11.5px;"><option>每次（prod 默认）</option><option>会话一次</option></select>
+            </div>
+          </div>
+          <div class="pol-card" style="border-style:dashed;display:flex;align-items:center;justify-content:center;color:var(--muted);min-height:96px;">
+            <span class="f-help">策略类型可扩展（policy_type 开放枚举，未知类型 UI 原样展示不解释）</span>
+          </div>
+        </div>
+
+        <div class="edit-foot">
+          <button class="btn" onclick="closeEnvEditor()">取消</button>
+          <button class="btn primary" onclick="saveEnv()">保存环境</button>
+          <span class="ef-err" id="env-save-err"></span>
+          <span class="f-help" style="margin-left:auto">保存 → environments + environment_policies 落库 → 引用本环境的连接<b>下次建连生效</b>（在连会话持旧快照，不中途换规则）</span>
+        </div>
+    </div><!-- /env-edit-view -->
+  </div>
+
+  <!-- ============ Tab2 执行语义矩阵 ============ -->
+  <div data-panel="matrix" class="card-body hidden">
+    <div class="sec"><h3>策略 → 生效点映射</h3><span class="hint">本矩阵为<span class="st st-key">核心设计</span>：每条策略配的规则 × 在哪层生效（消费入口）× 现状 → 目标</span></div>
+    <table class="tbl matrix">
+      <tr><th>策略项</th><th>规则</th><th>生效层</th><th>消费入口（代码锚点）</th><th>现状</th><th>目标</th></tr>
+      <tr>
+        <td><b>只读连接</b></td><td>非 SELECT / SHOW / EXPLAIN 语句 → 拒绝</td>
+        <td class="fx-cell"><span class="fx exec">执行前拦截</span></td>
+        <td class="mono" style="font-size:10.5px">sql_service::execute 入口（语句分类已有 is_read_only）</td>
+        <td><span class="st st-prop">未执行</span></td><td>拦截 + 结果报「环境策略」来源</td>
+      </tr>
+      <tr>
+        <td><b>DDL 阻断</b></td><td>CREATE / ALTER / DROP / TRUNCATE → 拒绝</td>
+        <td class="fx-cell"><span class="fx exec">执行前拦截</span></td>
+        <td class="mono" style="font-size:10.5px">同上（与只读共用分类器，粒度不同）</td>
+        <td><span class="st st-prop">未执行</span></td><td>同上；错误码区分 DDL_BLOCKED / WRITE_BLOCKED</td>
+      </tr>
+      <tr>
+        <td><b>DML 需确认</b></td><td>UPDATE / DELETE → UI 确认后放行</td>
+        <td class="fx-cell"><span class="fx ui">编辑器 UI</span></td>
+        <td class="mono" style="font-size:10.5px">editor 提交前（execution.submit 之前的宿主确认）</td>
+        <td><span class="st st-prop">未执行</span></td><td>确认对话含环境名与影响语句摘要</td>
+      </tr>
+      <tr>
+        <td><b>查询超时</b></td><td>per-环境 timeout 覆盖全局</td>
+        <td class="fx-cell"><span class="fx exec">执行层</span></td>
+        <td class="mono" style="font-size:10.5px">sql_service 已有 timeout 管道（现仅全局）→ 取值加环境来源</td>
+        <td><span class="st st-part">管道有 · 环境源无</span></td><td>环境值 &gt; 连接 driver_properties &gt; 全局</td>
+      </tr>
+      <tr>
+        <td><b>结果行数上限</b></td><td>超出截断 + 明示</td>
+        <td class="fx-cell"><span class="fx exec">执行层</span></td>
+        <td class="mono" style="font-size:10.5px">ResultStore 写入前（fetch 循环计数）</td>
+        <td><span class="st st-prop">未执行</span></td><td>截断行 + 「已按 prod 策略截断至 1000 行」提示</td>
+      </tr>
+      <tr>
+        <td><b>schema 白/黑名单</b></td><td>include / exclude pattern（glob 或正则，exclude 优先）——语言对齐 <code>ObjectMaskRule</code></td>
+        <td class="fx-cell"><span class="fx nav">导航与补全</span></td>
+        <td class="mono" style="font-size:10.5px">database::MetadataService 内省过滤 + 补全 provider（建连时解析进快照）</td>
+        <td><span class="st st-prop">未执行</span></td><td>过滤不进缓存指纹（指纹按物理库，过滤按环境呈现）</td>
+      </tr>
+      <tr>
+        <td><b>审计</b></td><td>写语句尝试（含被拦截）落日志</td>
+        <td class="fx-cell"><span class="fx exec">执行前拦截点</span> + <span class="fx ui">log_store</span></td>
+        <td class="mono" style="font-size:10.5px">拦截器旁路 → log_store（已有基础设施）</td>
+        <td><span class="st st-prop">未执行</span></td><td>拦截与审计同点位落，一次接线</td>
+      </tr>
+      <tr>
+        <td><b>UI 徽标 / 确认级别</b></td><td>状态栏 PROD 徽标 · 确认弹窗级别</td>
+        <td class="fx-cell"><span class="fx ui">编辑器 / 状态栏</span></td>
+        <td class="mono" style="font-size:10.5px">editor 状态栏 + 确认对话</td>
+        <td><span class="st st-prop">未执行</span></td><td>徽标 = 环境色（低实现成本，可先行）</td>
+      </tr>
+    </table>
+
+    <div class="grid c2" style="margin-top:14px;">
+      <div class="note info">
+        <b>取值优先级（提案）</b>：连接 <code>policy_overrides</code>（收紧或放宽单项）&gt; 连接绑定环境的策略 &gt; 无环境（现状行为，全部放行）。<br>
+        <b>连接建立时快照</b>：策略值在建连时解析一次挂 <code>ConnectionItem</code>（<code>environment_id</code> 字段已存在，补 resolved 快照），执行中改环境不影响在跑会话——避免半条语句换规则。
+      </div>
+      <div class="note warn">
+        <b>不做什么（边界）</b>：不做库内权限（GRANT 之类仍在库侧）；不在驱动层改写 SQL；schema 过滤不写进元数据缓存指纹（环境是<b>呈现口径</b>，不是缓存身份）；未绑定环境 = 显式「无策略」而非默认 prod（防误伤）。
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ Tab3 应用预览 ============ -->
+  <div data-panel="preview" class="card-body hidden">
+    <div class="sec"><h3>同一连接在不同环境下的行为差异</h3><span class="hint">以「订单库(生产) · G_ · mysql_native」为例 · 提案</span></div>
+    <table class="tbl">
+      <tr><th>行为</th><th>🏭 生产 prod</th><th>🧪 预发布 staging</th><th>🛠 开发 dev / 未绑定</th></tr>
+      <tr><td><code class="mono">UPDATE orders SET …</code></td><td style="color:var(--danger);font-weight:600;">✘ 拦截：prod 只读（WR_BLOCKED）</td><td><span style="color:var(--warning)">⚠ 确认后放行</span></td><td style="color:var(--success)">✔ 直接执行</td></tr>
+      <tr><td><code class="mono">SELECT * FROM orders</code>（180 万行）</td><td>✔ 截断至 1000 行 + 明示</td><td>✔ 截断至 10000 行</td><td>✔ 全量（受全局设置）</td></tr>
+      <tr><td>慢查询（&gt;60s）</td><td>✘ 30s 超时取消</td><td>✘ 60s 超时</td><td>全局设置（无覆盖）</td></tr>
+      <!-- Tab3 应用预览的 schema 行使用同一 pattern 语言 -->
+  <tr><td>导航树 schema</td><td>include <code class="mono">orders, report*</code> · exclude <code class="mono">*_tmp</code> → 2 个（其余隐藏）</td><td>exclude <code class="mono">tmp_*</code></td><td>全量</td></tr>
+      <tr><td>状态栏</td><td><span class="chip err">PROD</span> 徽标 + TX 态隐藏（只读无事务）</td><td><span class="chip warn">STAGING</span></td><td>无徽标</td></tr>
+      <tr><td>审计</td><td>全部写尝试落 audit-prod.log</td><td>仅 DDL 落</td><td>不记</td></tr>
+    </table>
+    <div class="note info" style="margin-top:10px;">预览的用途：<b>环境切换的即时反馈</b>（连接编辑处换环境 → 本表即时变化），以及文档口径——「环境到底改变什么」一表说清，替代散在各策略卡里的心智负担。</div>
+  </div>
+</div>
+
+<footer class="page-foot">
+  <b>对照</b>：现状 = <code>env_store.rs</code>（environments + environment_policies 表 / 字段化 CRUD）+ 对话框策略覆盖（policy_type 落库）+ <code>snapshot_service.rs</code>（GP_ 快照复制策略）。执行侧接线点见 Tab2 矩阵（sql_service 语句分类、timeout 管道、ResultStore、MetadataService 内省、状态栏）——全部为<span class="st st-prop">提案</span>，落地按「UI 徽标 → 只读/DDL 拦截 → 超时/行数 → schema 过滤 → 审计」顺序分批。· <a href="index.html">返回总览</a>
+</footer>
+
+<script>
+/* schema 过滤器实时预览：glob/正则双分支、exclude 优先（对齐 ObjectMaskRule 语义，纯前端模拟） */
+(function () {
+  var SCHEMAS = ['orders', 'order_archive', 'order_tmp_2026', 'report', 'report_daily', 'report_tmp',
+                 'pg_catalog', 'information_schema', 'public', 'tmp_stage', 'audit_logs'];
+  function pats(s) {
+    return s.split(',').map(function (x) { return x.trim(); }).filter(Boolean);
+  }
+  function globToRe(p) {
+    return new RegExp('^' + p.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
+  }
+  function build(list, useRe, caseSens) {
+    return list.map(function (p) {
+      try { return useRe ? new RegExp(p, caseSens ? '' : 'i') : globToRe(caseSens ? p : p.toLowerCase()); }
+      catch (e) { return null; }  // 非法正则 → 该条不参与匹配
+    });
+  }
+  function hit(name, res, caseSens) {
+    var n = caseSens ? name : name.toLowerCase();
+    return res.some(function (re) { return re && re.test(n); });
+  }
+  function refresh() {
+    var inc = pats(document.getElementById('sf-inc').value);
+    var exc = pats(document.getElementById('sf-exc').value);
+    var useRe = document.getElementById('sf-re').checked;
+    var caseSens = document.getElementById('sf-case').checked;
+    var incR = build(inc, useRe, caseSens), excR = build(exc, useRe, caseSens);
+    var box = document.getElementById('sf-preview'); var shown = 0;
+    box.innerHTML = SCHEMAS.map(function (s) {
+      var excluded = hit(s, excR, caseSens);
+      var visible = !excluded && (inc.length === 0 || hit(s, incR, caseSens));
+      if (visible) shown++;
+      var mark = visible ? '<span style="color:var(--success);font-weight:700;">✓</span>'
+        : (excluded ? '<span style="color:var(--danger);font-weight:700;">⊘</span> <span style="color:var(--muted);">exclude 命中</span>'
+                    : '<span style="color:var(--muted);font-weight:700;">·</span> <span style="color:var(--muted);">include 未命中</span>');
+      return '<div>' + mark + ' &nbsp;' + s + '</div>';
+    }).join('');
+    document.getElementById('sf-count').textContent =
+      '显示 ' + shown + ' / ' + SCHEMAS.length + ' 个 schema（⊘ = exclude 命中必隐藏 · · = include 未命中）';
+  }
+  ['sf-inc', 'sf-exc', 'sf-re', 'sf-case'].forEach(function (id) {
+    var el = document.getElementById(id);
+    el.addEventListener('input', refresh);
+    el.addEventListener('change', refresh);
+  });
+  refresh();
+})();
+
+/* ===== 环境 CRUD 流（列表 ⇄ 编辑 + 删除两态） ===== */
+function openEnvEditor(mode) {
+  document.getElementById("env-list-view").classList.add("hidden");
+  document.getElementById("env-edit-view").classList.remove("hidden");
+  var isNew = mode === "new";
+  document.getElementById("env-edit-title").textContent = isNew ? "新建环境" : "编辑环境：生产 prod";
+  document.getElementById("e-name").value = isNew ? "" : "生产 prod";
+  document.getElementById("env-save-err").textContent = "";
+}
+function closeEnvEditor() {
+  document.getElementById("env-edit-view").classList.add("hidden");
+  document.getElementById("env-list-view").classList.remove("hidden");
+}
+function saveEnv() {
+  var name = document.getElementById("e-name").value.trim();
+  var err = document.getElementById("env-save-err");
+  if (!name) { err.textContent = "✘ 缺少必填：环境名"; document.getElementById("e-name").focus(); return; }
+  err.textContent = "";
+  alert("演示：保存成功（environments + environment_policies 落库 · 在连会话持旧策略快照不中途换规则）");
+  closeEnvEditor();
+}
+function askEnvDelete(name, unref) {
+  var m = document.getElementById("env-del-modal");
+  document.getElementById("env-del-head").textContent = "删除环境：" + name;
+  var body = document.getElementById("env-del-body");
+  var foot = document.getElementById("env-del-foot");
+  if (unref) {
+    body.innerHTML = "该环境未被连接引用，删除后不可恢复（策略随环境级联删除）。";
+    foot.innerHTML = "<button class='btn' onclick='hideEnvDelete()'>取消</button><button class='btn danger' onclick='confirmEnvDelete()'>删除</button>";
+  } else {
+    body.innerHTML = "<b style='color:var(--danger);'>已拦截：该环境正被连接引用，不可删除。</b>" +
+      "<div class='ref-list'>被 3 条连接引用：订单库(生产) · 报表同步 · 订单库只读副本(草稿)</div>" +
+      "<span style='color:var(--muted);font-size:11px;'>先将这些连接改绑其他环境或清除环境引用，再回来删除。</span>";
+    foot.innerHTML = "<button class='btn primary' onclick='hideEnvDelete()'>知道了</button>";
+  }
+  m.classList.remove("hidden");
+}
+function hideEnvDelete() { document.getElementById("env-del-modal").classList.add("hidden"); }
+function confirmEnvDelete() {
+  hideEnvDelete();
+  alert("演示：已删除（环境 + 策略级联删除 → 刷新列表与连接的环境徽标）");
+}
+</script>
+
+<!-- 删除确认弹层（两态） -->
+<div class="modal-mask hidden" id="env-del-modal">
+  <div class="modal">
+    <div class="m-head" id="env-del-head">删除环境</div>
+    <div class="m-body" id="env-del-body"></div>
+    <div class="m-foot" id="env-del-foot"></div>
+  </div>
+</div>
+
+</body>
+</html>

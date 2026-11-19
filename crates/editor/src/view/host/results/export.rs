@@ -8,6 +8,73 @@ use crate::execution::{self, ExecTarget};
 use crate::export::{self, ExportFormat, ExportScope};
 use crate::store::{ResultEntry, ResultPlacement};
 
+/// 「在外部程序中打开」用的临时文件名（纯函数）：沿用面板算出的建议名，
+/// 只保留路径安全的部分——`/` `\` 与控制字符一律换成 `_`，去掉前导点，
+/// 空名 / 全是非法字符时回退 `value.bin`（宁可换个名字，也不要写到目录外）。
+pub(crate) fn external_file_name(default_name: &str) -> String {
+    let cleaned: String = default_name
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let cleaned = cleaned.trim().trim_start_matches('.').to_string();
+    // 只剩分隔符替换出来的 `_`（如 `../` → `_`）也算没名字
+    if cleaned.is_empty() || cleaned.trim_matches('_').is_empty() {
+        "value.bin".to_string()
+    } else {
+        cleaned
+    }
+}
+
+/// 用系统默认程序打开一个本地文件（宿主侧副作用，不进 render 路径）。
+///
+/// Windows 走 `cmd /C start "" <path>` 并用 `CREATE_NO_WINDOW` 藏掉控制台闪窗；
+/// macOS `open`、Linux `xdg-open`。
+fn open_with_default_app(path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt as _;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let status = std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("start")
+            .arg("")
+            .arg(path)
+            .creation_flags(CREATE_NO_WINDOW)
+            .status()?;
+        return if status.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::other(format!("cmd start 退出码 {status}")))
+        };
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let status = std::process::Command::new("open").arg(path).status()?;
+        return if status.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::other(format!("open 退出码 {status}")))
+        };
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let status = std::process::Command::new("xdg-open").arg(path).status()?;
+        return if status.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::other(format!("xdg-open 退出码 {status}")))
+        };
+    }
+    #[allow(unreachable_code)]
+    Err(std::io::Error::other("当前平台不支持外部程序打开"))
+}
+
 impl EditorHostPanel {
     /// 【B7】导出选中结果集（**仅已抓取的行**，不发新查询）
     pub(crate) fn export_active_result(&mut self, format: ExportFormat, cx: &mut Context<Self>) {
@@ -101,7 +168,10 @@ impl EditorHostPanel {
             return;
         }
         let Some(payload) = self.result_panel.read(cx).selected_value_payload(cx) else {
-            self.set_message(Some("先选中一个单元格再保存值".to_string()), cx);
+            self.set_message(
+                Some("先选中一个有值的单元格再保存值（NULL / 行号槽没有内容）".to_string()),
+                cx,
+            );
             return;
         };
         let Some(path) = self.shared.pick_save_path(None, payload.default_name) else {
@@ -114,6 +184,43 @@ impl EditorHostPanel {
                 cx,
             ),
             Err(err) => self.set_message(Some(format!("保存值失败：{err}")), cx),
+        }
+    }
+
+    /// 【在外部程序中打开】把值详情页当前格的值落成临时文件，再交系统默认程序打开。
+    ///
+    /// DBeaver 侧实证：`ContentValueManager.contributeContentActions`（`:100-140`）与
+    /// 「保存至文件」同一处**无条件**贡献「Open in external editor」——内容类走
+    /// `openExternalFile` / `getDBDContent`，非内容类按显示文本写字节后
+    /// `openOctetStream(bytes)`（`:122-130`）。本仓按本仓的值形态（文本 / hex / 图片）
+    /// 直接落字节，扩展名沿用面板算出的建议名。
+    ///
+    /// 与「保存至文件」的区别是**不选路径**：写进会话临时目录，不打扰用户；
+    /// 失败（写盘 / 唤起）只提示，不改任何结果集状态。
+    pub(crate) fn open_selected_value_externally(&mut self, cx: &mut Context<Self>) {
+        let Some(payload) = self.result_panel.read(cx).selected_value_payload(cx) else {
+            self.set_message(
+                Some("先选中一个有值的单元格再在外部程序打开（NULL / 行号槽没有内容）".to_string()),
+                cx,
+            );
+            return;
+        };
+        let dir = std::env::temp_dir().join("rds-value-preview");
+        if let Err(err) = std::fs::create_dir_all(&dir) {
+            self.set_message(Some(format!("创建临时目录失败：{err}")), cx);
+            return;
+        }
+        let path = dir.join(external_file_name(&payload.default_name));
+        if let Err(err) = std::fs::write(&path, &payload.bytes) {
+            self.set_message(Some(format!("写临时文件失败：{err}")), cx);
+            return;
+        }
+        match open_with_default_app(&path) {
+            Ok(()) => self.set_message(
+                Some(format!("已在外部程序中打开 {}", path.display())),
+                cx,
+            ),
+            Err(err) => self.set_message(Some(format!("打开外部程序失败：{err}")), cx),
         }
     }
 
@@ -315,5 +422,30 @@ impl EditorHostPanel {
         }
         self.set_message(Some("有未保存的改动，先保存再关闭".to_string()), cx);
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::external_file_name;
+
+    /// 临时文件名只保留安全字符：路径分隔符 / 控制字符换成 `_`，空名回退 `value.bin`
+    #[test]
+    fn external_file_name_is_path_safe() {
+        assert_eq!(external_file_name("value-1-2.txt"), "value-1-2.txt");
+        // 目录穿越 / 分隔符：不许出现 `/` 或 `\`
+        let sanitized = external_file_name("../../etc/passwd");
+        assert!(!sanitized.contains('/'), "{sanitized}");
+        assert!(!sanitized.contains('\\'), "{sanitized}");
+        assert!(!sanitized.starts_with('.'), "{sanitized}");
+        // Windows 非法字符
+        let sanitized = external_file_name("a<b>c:d*e?f\"g|h.png");
+        for bad in ['<', '>', ':', '*', '?', '"', '|'] {
+            assert!(!sanitized.contains(bad), "{sanitized} 仍含 {bad}");
+        }
+        // 空 / 全非法 → 兜底名
+        assert_eq!(external_file_name(""), "value.bin");
+        assert_eq!(external_file_name("   "), "value.bin");
+        assert_eq!(external_file_name("../"), "value.bin");
     }
 }

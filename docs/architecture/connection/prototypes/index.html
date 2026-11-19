@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>新增数据源 · 原型集总览 · RdataStation</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23A84A38'/%3E%3Ctext x='16' y='22' font-family='Segoe UI, sans-serif' font-size='15' font-weight='700' fill='%23fff' text-anchor='middle'%3ERS%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="_theme.css">
+<style>
+  .legend{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:11.5px;color:var(--muted);}
+  .group-title{max-width:1180px;margin:26px auto 10px;display:flex;align-items:center;gap:10px;}
+  .group-title h2{font-size:14px;font-weight:700;}
+  .group-title .line{flex:1;height:1px;background:var(--border);}
+  .group-title .n{font-size:11px;color:var(--muted);}
+</style>
+</head>
+<body>
+
+<header class="page-head">
+  <div class="brand">
+    <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.66 3.58 3 8 3s8-1.34 8-3v-13"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg></div>
+    <div>
+      <h1>新增数据源 · 原型集 v2</h1>
+      <div class="sub">docs/architecture/connection/prototypes/ · 按功能拆分 · 2026-11-10</div>
+    </div>
+  </div>
+  <div class="head-actions">
+    <button class="theme-toggle" data-theme-toggle>🌙 暗色</button>
+  </div>
+</header>
+
+<div style="max-width:1180px;margin:0 auto 8px;" class="note info">
+  <b>状态口径（对齐仓库诚实约定）</b>：本原型集每个交互元素都标注实现状态——
+  <span class="st st-impl">已实现</span> 现有代码已落地（原型 = 现状还原，供回归对照）；
+  <span class="st st-part">部分实现</span> 主链路有、缺口明确；
+  <span class="st st-prop">设计提案</span> 本原型新增的设计、<b>代码尚未实现</b>（补齐密码管理 / 代理隧道管理 / 环境管理三个管理域的详细设计）；
+  <span class="st st-no">不做/观察</span> 已拍板不做或挂观察项。
+  本页与各页均为<b>非权威视觉参考</b>，语义以 <code>connection-dialog-architecture.md</code> 与代码为准。
+</div>
+
+<!-- ============ 1 对话框主体 ============ -->
+<div class="group-title"><h2>① 连接对话框主体</h2><div class="line"></div><span class="n">一个对话框 = 选类型 → 五 Tab → 暂存 → 批量提交</span></div>
+<div style="max-width:1180px;margin:0 auto;" class="nav-cards">
+  <a class="nav-card" href="dialog-shell.html">
+    <div class="nc-ic">🪟</div>
+    <div class="nc-t">对话框骨架 <span class="st st-impl">已实现</span></div>
+    <div class="nc-d">信息架构总图：左侧类型树 + 暂存草稿列表，右侧 Header（名称 / 作用域三态 / ? 徽标）+ 五 Tab 导航 + footer（测试 / 保存 / 保存并关闭）+ 结果行四级分级。各 Tab 内容由各分页承接。</div>
+    <div class="nc-tags"><span class="chip">类型树</span><span class="chip">暂存草稿</span><span class="chip">作用域</span><span class="chip">结果行</span></div>
+  </a>
+  <a class="nav-card" href="tab-general.html">
+    <div class="nc-ic">📋</div>
+    <div class="nc-t">常规 Tab <span class="st st-impl">已实现</span></div>
+    <div class="nc-d">地址 / 认证 / 连接安全（SSL）/ 组织（分组 / 标签）。网络型与文件型双形态（字段由 <code>DriverDescriptor</code> 派生）；引用认证档案后字段转只读。</div>
+    <div class="nc-tags"><span class="chip">网络型</span><span class="chip">文件型</span><span class="chip">SSL</span><span class="chip">分组/标签</span></div>
+  </a>
+  <a class="nav-card" href="tab-network.html">
+    <div class="nc-ic">🌐</div>
+    <div class="nc-t">网络 Tab <span class="st st-part">部分实现</span></div>
+    <div class="nc-d">直连 / SSH 隧道 / HTTP 代理 / SOCKS / 协议链五选；内联 SSH（主机密钥 TOFU 三态）与档案引用两种模式。多跳可视化编辑器为提案（归档案侧，#25）。</div>
+    <div class="nc-tags"><span class="chip">SSH</span><span class="chip">代理</span><span class="chip">TOFU</span><span class="chip">协议链</span></div>
+  </a>
+  <a class="nav-card" href="tab-advanced.html">
+    <div class="nc-ic">⚙️</div>
+    <div class="nc-t">高级 Tab <span class="st st-part">部分实现</span></div>
+    <div class="nc-d">环境引用 + 策略覆盖 + DuckDB 加速（scanner 扩展门控）+ 元数据缓存身份指纹。策略覆盖的<b>执行效果预览</b>为提案（依赖环境策略执行语义落地）。</div>
+    <div class="nc-tags"><span class="chip">环境</span><span class="chip">策略覆盖</span><span class="chip">加速</span><span class="chip">指纹</span></div>
+  </a>
+  <a class="nav-card" href="tab-capability-props.html">
+    <div class="nc-ic">🧩</div>
+    <div class="nc-t">能力 / 驱动属性 Tab <span class="st st-impl">已实现</span></div>
+    <div class="nc-d">能力 = 驱动 capabilities 只读矩阵（单一来源 <code>drivers.capabilities</code>）；驱动属性 = 键值对透传（写入 <code>driver_properties</code>）。</div>
+    <div class="nc-tags"><span class="chip">只读矩阵</span><span class="chip">键值透传</span></div>
+  </a>
+</div>
+
+<!-- ============ 2 三个管理域 ============ -->
+<div class="group-title"><h2>② 三类复用引用的管理域</h2><div class="line"></div><span class="n">上轮分析确认的详细设计缺口：能配，缺「配了之后发生什么、怎么运维」</span></div>
+<div style="max-width:1180px;margin:0 auto;" class="nav-cards">
+  <a class="nav-card" href="manager-auth.html">
+    <div class="nc-ic">🔐</div>
+    <div class="nc-t">密码管理（认证档案） <span class="st st-key">重点补设计</span></div>
+    <div class="nc-d">现状：AES-256-GCM 存储 / 脱敏 / 引用计数已硬。补：<b>密钥来源</b>（机器绑定 → 系统凭据管理器 / 主密码）、<b>引用影响面</b>（改档案 → 哪些连接受影响）、<b>轮换与换机迁移</b>流程。</div>
+    <div class="nc-tags"><span class="chip">密钥来源</span><span class="chip">引用影响面</span><span class="chip">轮换</span><span class="chip">换机迁移</span></div>
+  </a>
+  <a class="nav-card" href="manager-network.html">
+    <div class="nc-ic">🛰️</div>
+    <div class="nc-t">代理隧道管理 <span class="st st-key">重点补设计</span></div>
+    <div class="nc-d">现状：协议链执行 / TOFU / 加密已硬，但混在一张表（chain 内嵌每跳）。提案：<b>资源/链两层</b>（SSH、HTTP 代理等最小单位 + 组合引用序列，凭据引用密码档案）、<b>活动隧道监控</b>、<b>逐跳诊断</b>、存量拆表迁移。</div>
+    <div class="nc-tags"><span class="chip">最小单位/组合</span><span class="chip">活动隧道</span><span class="chip">逐跳诊断</span><span class="chip">拆表迁移</span></div>
+  </a>
+  <a class="nav-card" href="manager-environment.html">
+    <div class="nc-ic">🏭</div>
+    <div class="nc-t">环境管理 <span class="st st-key">重点补设计</span></div>
+    <div class="nc-d">现状最弱：5 类策略<b>只存储展示、执行侧零消费</b>。补：<b>策略执行语义矩阵</b>（每类策略 × 生效层 × 消费入口）、策略字段化配置、环境应用预览（同一连接在 prod / dev 下行为差异）。</div>
+    <div class="nc-tags"><span class="chip">执行语义矩阵</span><span class="chip">5 类策略</span><span class="chip">应用预览</span></div>
+  </a>
+  <a class="nav-card" href="config-center.html">
+    <div class="nc-ic">🗂️</div>
+    <div class="nc-t">配置中心页 <span class="st st-done">已实现</span></div>
+    <div class="nc-d">三域（认证档案 / 网络代理 / 环境策略）从「对话框内再开一层」升格为中央 Dock 单实例页：左域导航 + 右面包屑 + 三格统计条 + 列表/表单两态 + 名称搜索与类型 chips。外壳已落地，与源码一致。</div>
+    <div class="nc-tags"><span class="chip">三域导航</span><span class="chip">列表⇄表单</span><span class="chip">统计条</span><span class="chip">搜索/筛选</span></div>
+  </a>
+</div>
+
+<!-- ============ 3 数据与契约 ============ -->
+<div class="group-title"><h2>③ 阅读顺序与对照</h2><div class="line"></div></div>
+<div style="max-width:1180px;margin:0 auto 18px;" class="card">
+  <div class="card-body" style="display:flex;gap:24px;flex-wrap:wrap;font-size:12px;line-height:1.9;">
+    <div style="flex:1;min-width:280px;">
+      <b>推荐阅读顺序</b><br>
+      1. <a href="dialog-shell.html">dialog-shell</a> 建立整体骨架认知<br>
+      2. 五个 Tab 分页（常规 → 网络 → 高级 → 能力/属性）<br>
+      3. 三个管理域分页（密码 / 隧道 / 环境）——详细设计增量所在
+    </div>
+    <div style="flex:1;min-width:280px;">
+      <b>与旧原型的关系</b><br>
+      本集承接 <code>../connection-dialog-prototype.html</code>（单文件全景，保留作历史参考）。
+      拆分动机：单文件已承载不下三个管理域的深度；按功能分页便于逐页评审与实现对照。
+    </div>
+    <div style="flex:1;min-width:280px;">
+      <b>权威文档</b><br>
+      架构：<code>../connection-dialog-architecture.md</code>（§14 = 已知问题唯一权威）<br>
+      规格：<code>../connection-module-spec.md</code> · 原型设计：<code>../connection-prototype-design.md</code>
+    </div>
+  </div>
+</div>
+
+<footer class="page-foot">
+  <b>非权威声明</b>：本页为视觉 / 交互参考原型，不构成交付物；与源码冲突时以源码为准。
+  <span class="st st-prop">设计提案</span> 元素表示「代码未实现，本原型即为该功能的详细设计载体」，落地前需过 <code>connection-dialog-architecture.md</code> §14 待办登记。
+  · 原型集基线：2026-11-10 · 主线 HEAD d7e94bbb 期。
+</footer>
+
+</body>
+</html>

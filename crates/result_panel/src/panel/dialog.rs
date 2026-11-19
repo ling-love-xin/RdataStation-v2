@@ -527,8 +527,37 @@ impl ResultPanel {
                             .overflow_hidden()
                             .child(name.clone()),
                     )
-                    .child(vis_box)
-                    .child(pin_box)
+                    // `#`：列位置（1 起）。**紧跟在列名之后**，与 DBeaver
+                    // `FilterSettingsDialog.addColumn("#"):139-146` 的列序一致
+                    .child(
+                        div()
+                            .w(rems(2.))
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .debug_selector({
+                                let index = index;
+                                move || format!("editor-result-filter-settings-pos-{index}")
+                            })
+                            .child(format!("{}", index + 1)),
+                    )
+                    // 勾选框各包一层带 id 的 div：`Checkbox` 是 `RenderOnce`，
+                    // 自身 id 进不了 `debug_bounds`（项目规范里的同类做法）
+                    .child(
+                        div()
+                            .debug_selector({
+                                let index = index;
+                                move || format!("editor-result-filter-settings-vis-cell-{index}")
+                            })
+                            .child(vis_box),
+                    )
+                    .child(
+                        div()
+                            .debug_selector({
+                                let index = index;
+                                move || format!("editor-result-filter-settings-pin-cell-{index}")
+                            })
+                            .child(pin_box),
+                    )
                     // 条件（只读投影；有值才用正文色，避免满屏都是「—」抢注意力）
                     .child(
                         div()
@@ -560,14 +589,6 @@ impl ResultPanel {
                                 move || format!("editor-result-filter-settings-sort-{index}")
                             })
                             .child(sort_mark),
-                    )
-                    .child(
-                        div()
-                            .w(rems(2.))
-                            .text_right()
-                            .text_xs()
-                            .text_color(theme.colors.muted_foreground)
-                            .child(format!("{}", index + 1)),
                     ),
             );
         }
@@ -578,7 +599,10 @@ impl ResultPanel {
             .px_3()
             .pt_3()
             .child(toolbar)
-            // 表头：与行同布局（列名 / 可见 / 冻结 / 条件 / 排序 / 位置）
+            // 表头：与行同布局（列名 / # / 可见 / 冻结 / 条件 / 排序）。
+            // 列序照 DBeaver `FilterSettingsDialog.addColumn`：Name → `#`（`:139-146`）
+            // → Visible（`:148-176`）→ Pinned（`:178-211`）→ Order（`:213+`）；
+            // 「条件 / 排序」两列是本仓扩展（列头菜单里设置的东西在这里做只读投影）。
             .child(
                 div()
                     .h_flex()
@@ -586,11 +610,11 @@ impl ResultPanel {
                     .gap_2()
                     .px_2()
                     .child(div().flex_1().min_w_0().child(header("列")))
+                    .child(div().w(rems(2.)).child(header("#")))
                     .child(div().child(header("可见")))
                     .child(div().child(header("冻结")))
                     .child(div().w(criteria_width).child(header("条件")))
-                    .child(div().w(sort_width).text_center().child(header("排序")))
-                    .child(div().w(rems(2.)).text_right().child(header("#"))),
+                    .child(div().w(sort_width).text_center().child(header("排序"))),
             )
             .child(list)
             .into_any_element()

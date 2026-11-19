@@ -6,7 +6,7 @@ use crate::grid::cell::{
     detect_image_format, hex_lines, image_format_of, json_tree_items, pretty_json_display,
 };
 use crate::grid::header::header_tooltip_lines;
-use crate::grid::stats::{fmt_grouped, fmt_stat_num, text_minmax};
+use crate::grid::stats::{distinct_count, fmt_grouped, fmt_stat_num, median_of, mode_of, text_minmax};
 use crate::grid::status::{format_integer_cell, render_toolbar};
 use crate::grid::status::{FIRST_PAGER_ACTION, FIRST_SYSTEM_ACTION};
 use crate::grid::text::{cell_matches, find_in_cell, preview_of};
@@ -1511,18 +1511,31 @@ fn column_menu_is_the_column_level_subset() {
     assert!(!labels.iter().any(|l| l.contains("查看完整值")));
     assert!(!labels.iter().any(|l| l.contains("按值筛选")));
     assert!(!labels.iter().any(|l| l.contains("复制整行")));
+    // 「复制列名」只属于列浏览器清单（网格右键没有多选集合这个概念）
+    assert!(!labels.contains(&"复制列名"));
     // 没隐藏列就不摆「显示全部列」
     assert!(!labels.contains(&"显示全部列"));
 }
 
 /// 列浏览器清单菜单 = 列头菜单的本地动作子集：复制 / 冻结 / 隐藏 / 列统计；
 /// 排序下发 / 值筛选 / 洞察 / 查看完整值 / 复制整行不进清单入口（前者依赖宿主
-/// 钩子，后者属于格 / 行交互，见拍板口径）。
+/// 钩子，后者属于格 / 行交互，见拍板口径）。**「复制列名」只在清单入口**——
+/// 它拷的是清单的多选集合，网格右键没有这个概念。
 #[test]
 fn column_browser_menu_is_local_column_subset() {
     let target = target("x", "id", 1);
     let items = column_browser_menu_items(&target);
     let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+    // 【DBeaver 对齐】`meta_data_panel_action_copy_column_text` = "Copy Column Names"
+    assert_eq!(
+        items[0].label, "复制列名",
+        "清单右键第一项是「复制列名」（DBeaver fillCustomActions 的形状）"
+    );
+    assert_eq!(
+        items[0].action,
+        ContextAction::CopyColumnNames,
+        "这一项的动作是纯 Clipboard 语义，不依赖宿主钩子"
+    );
     assert!(labels.contains(&"复制此列（2 个取值）"));
     assert!(labels.contains(&"冻结「id」"));
     assert!(labels.contains(&"隐藏「id」"));
@@ -2405,6 +2418,55 @@ fn text_minmax_ignores_null_and_orders_lexically() {
     // 全 NULL / 空列 = 无极值（渲染层出 —）
     assert_eq!(text_minmax(&["NULL".to_string()]), (None, None));
     assert_eq!(text_minmax(&[] as &[String]), (None, None));
+}
+
+/// 【R2 计算页·去重计数】NULL 不计入；按值文本判等（`1` 与 `1.0` 算两个值，登记在册）
+#[test]
+fn distinct_count_skips_null_and_counts_text_values() {
+    let values = vec![
+        "a".to_string(),
+        "NULL".to_string(),
+        "b".to_string(),
+        "a".to_string(),
+        "1".to_string(),
+        "1.0".to_string(),
+    ];
+    assert_eq!(distinct_count(&values), 4, "a / b / 1 / 1.0");
+    assert_eq!(distinct_count(&["NULL".to_string()]), 0, "全 NULL = 0 个不同值");
+    assert_eq!(distinct_count(&[] as &[String]), 0);
+}
+
+/// 【R2 计算页·中位数】只取可解析的数值样本：奇数取中间、偶数取中间两个的均值；
+/// 没有数值样本 = None（渲染层出 —）
+#[test]
+fn median_of_uses_sorted_numeric_samples() {
+    let odd = vec!["3".to_string(), "1".to_string(), "NULL".to_string(), "2".to_string()];
+    assert_eq!(median_of(&odd), Some(2.0));
+    let even = vec!["4".to_string(), "1".to_string(), "3".to_string(), "2".to_string()];
+    assert_eq!(median_of(&even), Some(2.5));
+    // 文本样本不参与；全是文本 = None
+    assert_eq!(median_of(&["apple".to_string(), "zebra".to_string()]), None);
+    assert_eq!(median_of(&[] as &[String]), None);
+    // 单个数值样本：中位数就是它自己
+    assert_eq!(median_of(&["7.5".to_string()]), Some(7.5));
+}
+
+/// 【R2 计算页·众数】出现最多的非空值；并列时取**首现更早**的那个（确定性口径）；
+/// 全 NULL = None
+#[test]
+fn mode_of_picks_most_frequent_value_and_breaks_ties_by_first_occurrence() {
+    let values = vec![
+        "b".to_string(),
+        "a".to_string(),
+        "b".to_string(),
+        "NULL".to_string(),
+        "a".to_string(),
+    ];
+    assert_eq!(mode_of(&values).as_deref(), Some("b"), "b 与 a 都是 2 次，b 先出现");
+    let clear_winner = vec!["x".to_string(), "y".to_string(), "y".to_string()];
+    assert_eq!(mode_of(&clear_winner).as_deref(), Some("y"));
+    assert_eq!(mode_of(&["NULL".to_string()]), None);
+    assert_eq!(mode_of(&[] as &[String]), None);
 }
 
 /// 【P2-1】隐藏到只剩 1 列就拒绝（全藏了表格没有内容）

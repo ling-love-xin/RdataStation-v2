@@ -94,6 +94,20 @@ pub trait QueryRunner: Send + Sync + 'static {
         Err("当前执行器不支持事务".to_string())
     }
 
+    /// 这个连接上的这条语句要不要「写确认」（原型 ⑨ · DML 需确认）
+    ///
+    /// 编辑器在**提交前**调用（UI 线程、同步）：返回 `Some` 就弹确认，用户点头后带
+    /// `RunOptions.dml_confirmed` 重新提交。默认实现 = 不需要（宿主没接策略时的真实状态）。
+    ///
+    /// 实现**必须快**：策略解算有 5 秒进程缓存，只应在第一次读库；不允许在这里跑 SQL。
+    fn dml_confirm(
+        &self,
+        _connection: Option<&str>,
+        _sql: &str,
+    ) -> Option<engine::services::policy_guard::DmlConfirm> {
+        None
+    }
+
     /// 这个执行器支不支持事务（B4）：界面据此决定**要不要摆 TX 区**
     ///
     /// 与全仓口径一致：能力没有就不摆控件，而不是摆一个点了没用的（原型 §2.2 排除项）。

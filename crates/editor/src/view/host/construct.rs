@@ -179,6 +179,22 @@ impl EditorHostPanel {
                 // 【R5 比例持久化】右栏宽度初值（px）：必须与上面两项一起**先拷贝**，
                 // 最后一行再读 `settings` 会把借用拉到块末，与下面的 `&mut cx` 冲突（E0502）。
                 let sidebar_width = settings.result_panel.sidebar_width;
+                // 【R6 段大小】状态行段框的持久化值（DBeaver `resultSetSize` 的等价物）：
+                // 同样先拷贝，避免 `settings` 借用跨到 `&mut cx` 处（E0502）。
+                let segment_rows = settings.result_panel.segment_rows;
+                // 【计算页持久化】启用统计项 id 列表：同样先拷贝（借用不能跨到 `&mut cx`）。
+                let stats_items = settings.result_panel.stats_items.clone();
+                // 【分组页持久化】排序口径 id + 「仅重复」开关：同款先拷贝（借用不能跨到 `&mut cx`）。
+                let group_sort = settings.result_panel.group_sort.clone();
+                let group_duplicates_only = settings.result_panel.group_duplicates_only;
+                // 【右栏页签持久化】启用页 id 列表（对齐 `enabledPanelIds`）：同样先拷贝，
+                // 解析成页集合后交给面板（未知 id 被 `RightTab::parse` 丢掉）。
+                let open_tabs: Vec<result_panel::ports::RightTab> = settings
+                    .result_panel
+                    .open_tabs
+                    .split(',')
+                    .filter_map(result_panel::ports::RightTab::parse)
+                    .collect();
                 // 【工具栏配置】状态栏命令显隐（DBeaver 工具条配置的等价物）：偏好里存的是
                 // 逗号分隔 id，这里解析成命令集合；未知 id 被 `parse_hidden_list` 丢掉。
                 let hidden_status_commands = result_panel::ports::StatusCommand::parse_hidden_list(
@@ -194,6 +210,14 @@ impl EditorHostPanel {
                 panel.set_right_sidebar_width_px(sidebar_width as f32, cx);
                 // 状态栏命令显隐：用户上次在 ▾ 菜单里勾掉的那几项
                 panel.set_hidden_status_commands(hidden_status_commands, cx);
+                // 【R6】段大小：给自己上次设的值（框里也显示它，不然只看得到占位 1000）
+                panel.set_segment_rows_initial(segment_rows.max(1) as usize, window, cx);
+                // 【计算页持久化】用户上次启用的统计项（空串 = 九项全停用，页内给「点 ＋ 添加」提示）
+                panel.set_stats_items_initial(&stats_items, cx);
+                // 【分组页持久化】用户上次的分组排序口径与「仅重复」开关
+                panel.set_group_prefs_initial(&group_sort, group_duplicates_only, cx);
+                // 【右栏页签持久化】用户上次启用的页（空 / 全未知 id → 保持出厂六页全开）
+                panel.set_open_tabs_initial(&open_tabs, cx);
             }
             panel
         });
@@ -603,6 +627,8 @@ impl EditorHostPanel {
             group: None,
             area: None,
             message: None,
+            // 重查类动作的「已去掉 LIMIT」说明：递交前记下，回执落定后由泵补到状态栏
+            pending_result_notice: None,
             edit_mode: EditMode::Row,
             closed: false,
             // #48 面板创建即取设置当前值（与内核默认一致；后续变化由 render 同步）
@@ -639,6 +665,7 @@ impl EditorHostPanel {
             compare_grid: Some(compare_grid),
             pending_bind: None,
             pending_federated: None,
+            pending_dml_confirm: None,
             error_site: None,
             script_card: None,
             error_site_key: None,

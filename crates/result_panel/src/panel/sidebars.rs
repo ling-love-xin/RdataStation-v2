@@ -15,7 +15,7 @@ use gpui_kit::component::list::List;
 use gpui_kit::component::resizable::{HandleEdge, resize_handle};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::{ActiveTheme as _, Sizable as _, Size};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, Size};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -23,7 +23,9 @@ use gpui_kit::*;
 
 use super::data::ResultPanel;
 use super::events::{
-    right_tab_from_index, right_tab_icon, right_tab_index, right_tab_label, right_tabs,
+    edge_tab_active, edge_tab_tooltip, presentation_tooltip, record_view_tooltip,
+    right_tab_description, right_tab_icon, right_tab_label, right_tabs, strip_index,
+    tab_at_strip_index,
 };
 use super::tabs::kv_row;
 use crate::ports::{Presentation, ResultRequest, RightTab};
@@ -109,7 +111,7 @@ impl ResultPanel {
             .icon(IconName::Table2)
             .debug_selector(|| "editor-result-bar-grid".to_string())
             .toggled(!self.transposed && !is_text)
-            .tooltip("网格视图")
+            .tooltip(presentation_tooltip(Presentation::Grid))
             .on_click(move |_, _window, app| {
                 queue.request(ResultRequest::SetPresentation(Presentation::Grid), app);
             });
@@ -120,7 +122,7 @@ impl ResultPanel {
             .icon(IconName::FileText)
             .debug_selector(|| "editor-result-bar-text".to_string())
             .toggled(is_text)
-            .tooltip("文本视图")
+            .tooltip(presentation_tooltip(Presentation::Text))
             .on_click(move |_, _window, app| {
                 queue.request(ResultRequest::SetPresentation(Presentation::Text), app);
             });
@@ -135,7 +137,7 @@ impl ResultPanel {
             .debug_selector(|| "editor-result-bar-record".to_string())
             .disabled(is_text)
             .toggled(self.transposed)
-            .tooltip("记录视图（单行转置）")
+            .tooltip(record_view_tooltip(self.transposed))
             .on_click(move |_, _window, app| {
                 queue.request(ResultRequest::ToggleTranspose, app);
             });
@@ -328,13 +330,34 @@ impl ResultPanel {
             .child(div().flex_none().child("类型"))
             .child(div().flex_none().child(""))
             .into_any_element();
-        let list_body: AnyElement = List::new(&browser)
-            .with_size(Size::Small)
-            .search_placeholder("搜索列名 / 类型 / 注释…")
-            .scrollbar_visible(true)
-            .flex_1()
-            .min_h_0()
-            .into_any_element();
+        let list_body: AnyElement = {
+            // 【过滤框 ESC 清空】对齐 `MetaDataPanel.java:87-98`：过滤框是
+            // `Text(SWT.BORDER | SWT.SEARCH | SWT.ICON_CANCEL)`，并挂了 KeyListener——
+            // `e.character == SWT.ESC → filterTextBox.setText("")`（清空后 `refresh(true)` 重算）。
+            // kit `Input` 不消费 Enter/Esc（见 `panel/render.rs` 的重命名条同款处理），
+            // 按键沿 Bubble 冒泡到这个容器；`ListState::set_query` 会顺带触发一次搜索。
+            let browser_for_keys = browser.clone();
+            div()
+                .flex_1()
+                .min_h_0()
+                .debug_selector(|| "editor-result-col-browser-list".to_string())
+                .on_key_down(move |event: &KeyDownEvent, window, app| {
+                    if event.keystroke.key == "escape" {
+                        browser_for_keys.update(app, |list, cx| {
+                            list.set_query("", &mut *window, cx);
+                        });
+                    }
+                })
+                .child(
+                    List::new(&browser)
+                        .with_size(Size::Small)
+                        .search_placeholder("搜索列名 / 类型 / 注释…")
+                        .scrollbar_visible(true)
+                        .flex_1()
+                        .min_h_0(),
+                )
+                .into_any_element()
+        };
 
         let detail_body: AnyElement = match detail {
             Some((title, items)) => div()
@@ -363,75 +386,11 @@ impl ResultPanel {
             None => self.sidebar_empty("暂无列", cx),
         };
 
-        // 标题行：【P2-3】多选非空时右侧摆批量动作（隐藏所选 / 显示所选 / 清空选择）。
-        // 计数与按钮都随 `multi_selected` 现算；按钮走队列回宿主分派（render 是纯读路径）。
-        // 无选中时**不生成**动作元素：页内工具条右段（`Toolbar`）即使空容器也会占 gap，
-        // 标题应单独占满整行。
-        let selected_count = self.multi_selected.len();
-        let batch_actions: Option<AnyElement> = (selected_count > 0).then(|| {
-            let selected: Vec<usize> = self.multi_selected.clone();
-            let hide_queue = self.queue.clone();
-            let hide_cols = selected.clone();
-            let show_queue = self.queue.clone();
-            let show_cols = selected;
-            let clear_queue = self.queue.clone();
-            div()
-                .h_flex()
-                .items_center()
-                .gap_1()
-                .child(
-                    div()
-                        .text_color(muted)
-                        .child(SharedString::from(format!("已选 {selected_count} 列"))),
-                )
-                .child(
-                    Button::new("editor-result-col-batch-hide")
-                        .ghost()
-                        .small()
-                        .label("隐藏所选")
-                        .tooltip("把选中的列整批隐藏（仍保留至少 1 列可见）")
-                        .on_click(move |_, _window, app| {
-                            hide_queue.request(
-                                ResultRequest::SetColumnsHidden {
-                                    columns: hide_cols.clone(),
-                                    hidden: true,
-                                },
-                                app,
-                            );
-                        }),
-                )
-                .child(
-                    Button::new("editor-result-col-batch-show")
-                        .ghost()
-                        .small()
-                        .label("显示所选")
-                        .tooltip("把选中的列整批取消隐藏")
-                        .on_click(move |_, _window, app| {
-                            show_queue.request(
-                                ResultRequest::SetColumnsHidden {
-                                    columns: show_cols.clone(),
-                                    hidden: false,
-                                },
-                                app,
-                            );
-                        }),
-                )
-                .child(
-                    Button::new("editor-result-col-batch-clear")
-                        .ghost()
-                        .small()
-                        .label("清空选择")
-                        .on_click(move |_, _window, app| {
-                            clear_queue.request(ResultRequest::ClearColumnSelection, app);
-                        }),
-                )
-                .into_any_element()
-        });
-
-        // 【Metadata · 生成 DDL】页内工具条常驻动作（对齐 DBeaver `MetaDataPanel.
-        // contributeActions`：那边只贡献这一条 `generate.ddl.by.resultSet`，恒可用）。
-        // 文本生成是纯函数（`crate::ddl`），但预览浮层的 Textarea 需要 `&mut Window`，
-        // 所以走队列回宿主分派。
+        // 【多选动作的位置】对齐 DBeaver：`MetaDataPanel.contributeActions:204-215` 的
+        // 页内工具条**只贡献一条**「生成 DDL」；多选的操作（拷列名 / 冻结 / 隐藏 …）
+        // 都在清单的右键菜单里（`MetaDataPanel.fillCustomActions:234-252`）。
+        // 所以这里不再往工具条塞批量按钮，多选批量动作改挂在行右键菜单
+        // （见 `crate::column_browser::batch_menu_items`）。
         let ddl_queue = self.queue.clone();
         let ddl_action = Button::new("editor-result-generate-ddl")
             .ghost()
@@ -444,8 +403,7 @@ impl ResultPanel {
                 ddl_queue.request(ResultRequest::GenerateResultSetDdl, app);
             })
             .into_any_element();
-        let mut toolbar_actions = vec![ddl_action];
-        toolbar_actions.extend(batch_actions);
+        let toolbar_actions = vec![ddl_action];
 
         // 页签内容区：宽度 / 边框 / 背景由右栏外壳统一控制，这里只排上下四段
         // 【2026-11-17 对齐】页内工具条与值 / 计算 / 分组 / 执行SQL 四页同形
@@ -462,6 +420,8 @@ impl ResultPanel {
                 "editor-result-browser-toolbar",
                 SharedString::from(format!("列浏览器 · {} 列", columns.len())),
                 toolbar_actions,
+                // 列浏览器页（DBeaver `MetaDataPanel`）未覆写 `needsSeparator()` → 不画
+                super::events::page_needs_separator(RightTab::Browser),
                 cx,
             ))
             .child(table_head)
@@ -488,34 +448,79 @@ impl ResultPanel {
     /// 缓存聚合结果、或把聚合下推成服务端 GROUP BY 查询，属后续优化项（记在文档）。
     pub(crate) fn render_right_sidebar(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
+        // 【R5 面板最大化】不变量：`panel_maximized ⇒ show_value_sidebar`
+        // （`toggle_panel_maximize` 进入最大化会先展开面板；收起面板 / 三态开关走到「收起」
+        // 都会复位最大化，见 `events::set_panels_visible` / `toggle_value_sidebar`）。
+        // 所以这里不需要再 `|| maximized` 兜底——单一真值，避免两处状态互相打掩护。
         let show = self.show_value_sidebar;
-        // 【2026-11-18 对齐 CTabFolder】横 tab 栏**列出全部六页**，点页签即切页：
-        // DBeaver 的右栏是**一个**页签夹 `CTabFolder panelFolder`（`ResultSetViewer.java:1430-1478`），
-        // 六页都作为页签常驻在其中（`addPanel` 里 `new CTabItem(panelFolder, SWT.CLOSE)`），
-        // 点页签走 `setActivePanel`；顺序即 `availablePanels` 的注册顺序。
-        // 此前这里是「只显示当前页签」的极简做法，横向条只当标题用、`on_click` 是空实现
-        // （点了没反应），与那边「页签可点」差着一条交互。顺序与索引映射取
-        // `events::right_tabs` 单一来源（视图菜单 / 右缘竖条共用同一份）。
-        let tabs = right_tabs();
-        let children: Vec<Tab> = tabs
-            .into_iter()
+        // 布局层面仍要知道"是否最大化"（满宽满高、不挂拖拽手柄）
+        let maximized = self.panel_maximized;
+        // 【页签条 = 已启用集合】对齐 DBeaver `CTabFolder`：页签条只列已启用的页
+        // （`presentationSettings.enabledPanelIds`，`ResultSetViewer.addPanel:1388`），
+        // 关掉一页后它从条上消失、其余页仍在；重开走视图菜单的勾选项。
+        // 顺序与索引映射取 `events::{right_tabs, strip_index, tab_at_strip_index}`。
+        let open_tabs = self.open_tabs.clone();
+        let children: Vec<Tab> = open_tabs
+            .iter()
+            .copied()
             .map(|tab| {
+                // 【页签关闭】每个页签**内侧**一颗 ×：对齐 DBeaver
+                // `new CTabItem(panelFolder, SWT.CLOSE)`（`ResultSetViewer.addPanel:1357`）——
+                // 关闭按钮属于**那一页**，不是整条页签条。语义走同一条端口
+                // `CloseRightTab(tab)`，所以能关掉任意一页（不必先切过去）。
+                //
+                // 形态取舍：kit `Tab` 没有 `closable`，这里用 `Tab::suffix` 槽塞一颗
+                // 12px 图标（`Icon::new(..).size_3()`）+ 自绘点击区——**不能用 `Button`**，
+                // 按钮 XSmall 档 `min_h_7`(28px) 会撑破 24px 页签条（`RESULT_STATUS_BAR_HEIGHT`）。
+                // 点击命中后由 GPUI 先派发给内层元素；外层 `TabBar` 的「切页」回调照样会
+                // 收到冒泡，但 `CloseRightTab` 先把该页从 `open_tabs` 摘掉，随后
+                // `SetRightTab` 收到的 index 已按新集合重算（`tab_at_strip_index` 对越界
+                // 兜底最后一个），所以不会把已关掉的页再切回来 —— 用例
+                // `closing_a_tab_from_the_strip_keeps_the_active_page` 钉这个行为。
+                let close_queue = self.queue.clone();
+                let muted = theme.colors.muted_foreground;
+                let hover = theme.colors.list_hover;
+                let close = div()
+                    .id(gpui::ElementId::Name(
+                        crate::panel::events::tab_close_selector(tab).into(),
+                    ))
+                    .debug_selector(move || crate::panel::events::tab_close_selector(tab).to_string())
+                    .flex_none()
+                    .cursor_pointer()
+                    .rounded_sm()
+                    .hover(move |style| style.bg(hover))
+                    .on_click(move |_, _window, app| {
+                        // 必须吃掉这次点击：`TabBar` 外层也挂了「切页」回调（按渲染时的下标
+                        // 快照映射），冒泡上去会把刚关掉的页按旧下标**重新打开**
+                        // （用例 `right_tab_close_button_closes_only_that_page` 实测过
+                        // `[CloseRightTab(Browser), SetRightTab(Browser)]` 这个组合）。
+                        app.stop_propagation();
+                        close_queue.request(ResultRequest::CloseRightTab(tab), app);
+                    })
+                    .child(Icon::new(IconName::X).size_3().text_color(muted))
+                    .into_any_element();
                 Tab::new()
                     .icon(right_tab_icon(tab))
                     .label(SharedString::from(right_tab_label(tab)))
+                    // 【页签提示】对齐 DBeaver `panelTab.setToolTipText(panelDescriptor.getDescription())`
+                    // （`ResultSetViewer.java:1361`）：页签只有图标 + 短名，窄右栏下靠 tooltip
+                    // 说清这一页做什么。
+                    .tooltip(SharedString::from(right_tab_description(tab)))
+                    .suffix(close)
             })
             .collect();
         let tab_queue = self.queue.clone();
+        let strip = open_tabs.clone();
         let tab_bar = TabBar::new("editor-result-right-tabs")
             .segmented()
             .with_size(Size::Small)
-            .selected_index(right_tab_index(self.right_tab))
+            .selected_index(strip_index(&open_tabs, self.right_tab))
             .children(children)
             // 六页在窄右栏里可能放不下：`menu(true)` 在溢出时给一颗菜单钮（否则被裁掉的
             // 页签没法点，只能横向滚轮——不显眼）
             .menu(true)
             .on_click(move |index, _window, app| {
-                tab_queue.request(ResultRequest::SetRightTab(right_tab_from_index(*index)), app);
+                tab_queue.request(ResultRequest::SetRightTab(tab_at_strip_index(&strip, *index)), app);
             });
         let content = match self.right_tab {
             RightTab::Browser => self.render_browser_tab(cx),
@@ -525,21 +530,11 @@ impl ResultPanel {
             RightTab::Reference => self.render_reference_tab(cx),
             RightTab::ExecSql => self.render_exec_sql_tab(cx),
         };
-        // 【页签关闭】非默认「列浏览器」页时，行尾给一个 ×：退回默认页（不收起右栏——
-        // 拍板口径：× 只退页，右栏开合仍由工具栏「列浏览器」开关控制）。
-        let close = (self.right_tab != RightTab::Browser).then(|| {
-            let queue = self.queue.clone();
-            Button::new("editor-result-right-tab-close")
-                .ghost()
-                .small()
-                .icon(IconName::X)
-                .debug_selector(|| "editor-result-right-tab-close".to_string())
-                .tooltip("关闭页签，返回列浏览器")
-                .on_click(move |_, _window, app| {
-                    queue.request(ResultRequest::SetRightTab(RightTab::Browser), app);
-                })
-                .into_any_element()
-        });
+        // 【页签关闭】关闭入口已改到**每个页签内侧的 ×**（见上面 `Tab::suffix`）——
+        // 行尾那颗「关当前页」的按钮已移除：DBeaver 的关闭按钮属于页签本身
+        // （`CTabItem(SWT.CLOSE)`），行尾再挂一颗会让「关哪一页」与「点哪一页」两套语义并存。
+        // 全部页都关掉时右栏整体收起（`close_right_tab` 的既有分支），
+        // 视图菜单的勾选项可以再开回来。
         // 【侧栏丝滑】右栏收起 / 展开与左栏同法：宽度过渡 + 容器始终挂载（宽 0 不占
         // 空间），页签条与内容按 show 挂载（收起时无焦点残留）。开合由
         // `right_sidebar_epoch` 递增重播动画；首帧（epoch=0）免动画。
@@ -570,7 +565,10 @@ impl ResultPanel {
             .overflow_hidden()
             .bg(theme.colors.sidebar)
             .debug_selector(|| "editor-result-value-sidebar".to_string());
-        wrapper = if vertical {
+        wrapper = if maximized {
+            // 最大化：右栏独占整块区域（横排满宽 / 竖排满高），不接受拖拽尺寸
+            wrapper.w_full().h_full()
+        } else if vertical {
             wrapper
                 .w_full()
                 .h(self.right_sidebar_height)
@@ -593,8 +591,7 @@ impl ResultPanel {
                     // 页签条的**外层行**才带调试选择器（`TabBar` 组件自身不挂 id；
                     // 测试要按这一行的真实像素点坐标模拟点击）
                     .debug_selector(|| "editor-result-right-tabs".to_string())
-                    .child(div().flex_1().min_w_0().child(tab_bar))
-                    .children(close),
+                    .child(div().flex_1().min_w_0().child(tab_bar)),
             )
             .child(
                 // 页内容吃满剩余高：各页自己再排「28px 工具条 + flex_1 正文」
@@ -602,9 +599,12 @@ impl ResultPanel {
             )
             // 【R5 可拖分栏】手柄贴分栏边缘（inside Leading）：横排是左边缘、竖排是顶边；
             // vendor 的 band 是绝对定位的细条，不占内容流；尺寸改动由拖拽请求回面板状态。
-            .child(self.render_right_sidebar_resize())
+            // 最大化时没有可拖的分栏，手柄不挂。
+            .children((!maximized).then(|| self.render_right_sidebar_resize()))
         });
-        if vertical {
+        // 最大化 / 竖排都不走宽度补间（`EffectTransition` 只有 width 补间，没有 height）：
+        // 直接落地，不做开合动画。
+        if vertical || maximized {
             return wrapper.into_any_element();
         }
         EffectTransition::new(Duration::from_millis(anim_ms))
@@ -685,19 +685,12 @@ impl ResultPanel {
     pub(crate) fn render_right_edge_bar(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
         // 页签快捷图标：与右栏页签同一组图标 / 文案（单一定义在 `events::right_tab_icon` /
-        // `right_tab_label`，页签条、竖条、视图菜单共用一份）
-        let tabs = [
-            RightTab::Browser,
-            RightTab::Value,
-            RightTab::Stats,
-            RightTab::Group,
-            RightTab::Reference,
-            RightTab::ExecSql,
-        ];
+        // `right_tab_label`，页签条、竖条、视图菜单共用一份）；顺序取 `events::right_tabs()`
+        // 单一来源——竖条列的是**全集**（被 × 关掉的页也能从这里点回来，见 §9.08）
+        let tabs = right_tabs();
         let queue = self.queue.clone();
         let layout_queue = self.queue.clone();
         let master_queue = self.queue.clone();
-        let active = self.right_tab;
         let panels_visible = self.panels_visible();
         div()
             .h_full()
@@ -738,15 +731,23 @@ impl ResultPanel {
             )
             .children(tabs.into_iter().map(|tab| {
                 let queue = queue.clone();
+                // 【竖条语义】DBeaver 竖条上每页是一颗 CHECK（`ResultSetViewer.java:1055-1080`）：
+                // 勾选态 = `panelsVisible && isPanelVisible(id)`（多页可同时勾亮）；
+                // 点击 → `showResultsPanel(id, 勾选态)`（`:1070-1078`）→
+                // 勾着 → `closePanel(id)`（关掉这一页）；没勾 → `activatePanel(id, true, true)`
+                // （打开并激活，整栏收起时顺带展开）。
+                let is_open = self.open_tabs.contains(&tab);
+                let lit = edge_tab_active(panels_visible, is_open);
+                let target = ResultRequest::ToggleRightTab(tab);
                 Button::new(format!("editor-result-edge-{:?}", tab))
                     .ghost()
                     .small()
                     .debug_selector(|| format!("editor-result-edge-{:?}", tab))
-                    .toggled(active == tab)
+                    .toggled(lit)
                     .icon(right_tab_icon(tab))
-                    .tooltip(right_tab_label(tab))
+                    .tooltip(edge_tab_tooltip(tab, is_open, panels_visible))
                     .on_click(move |_, _window, app| {
-                        queue.request(ResultRequest::SetRightTab(tab), app);
+                        queue.request(target.clone(), app);
                     })
                     .into_any_element()
             }))

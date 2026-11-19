@@ -115,6 +115,23 @@ pub(crate) struct PendingFederated {
     pub(crate) title: Option<String>,
 }
 
+/// 【环境策略】写操作确认前的挂起（原型 ⑨ · DML 需确认）
+///
+/// 与 `PendingFederated` 同样存「目标 + 落点 + 标题」：确认只代表用户看到了风险，
+/// 取消则连队列都不进；两条确认可以先后发生（联邦 → 写确认），各存各的。
+#[derive(Clone)]
+pub(crate) struct PendingDmlConfirm {
+    pub(crate) target: ExecTarget,
+    pub(crate) placement: ResultPlacement,
+    pub(crate) title: Option<String>,
+    /// 要展示给用户的事实（环境名 / 语句种类 / 摘要）。
+    ///
+    /// 弹窗内容在 `execute.rs` 里已从 `dml_confirm_for` 直接取用（不经过这里），
+    /// 保存这份是为了让挂起态自带完整上下文（测试与将来重放都要读它）。
+    #[cfg_attr(not(any(test, feature = "test-support")), allow(dead_code))]
+    pub(crate) detail: engine::services::policy_guard::DmlConfirm,
+}
+
 impl PendingBind {
     /// 用填好的值替换目标里的 `:name`。只对**用户写的 SQL** 变体
     /// （Selection / Statement / All / Batch）生效；内部生成的目标本就没有参数，原样。
@@ -194,6 +211,8 @@ pub struct EditorStatusSnapshot {
     pub connection: Option<String>,
     /// 方言（`PostgreSQL`）；`None` = 未绑定连接
     pub dialect: Option<String>,
+    /// 绑定连接所属环境的展示名（`prod` / `生产`）；`None` = 未绑定环境（不打 PROD 徽标）
+    pub environment: Option<String>,
     /// 通道段文案；`None` = 不显示
     pub channel: Option<String>,
     /// 当前 Schema（`None` = 用连接默认）
@@ -312,6 +331,11 @@ pub struct EditorHostPanel {
     /// 为什么要队列：执行是**一条语句一个结论**地回到界面的（批量更是好几条），
     /// “这一份是执行计划”这种信息必须**按位**对上，不能拿一个布尔量糊过去。
     pub(crate) pending_labels: std::collections::VecDeque<Option<String>>,
+    /// 【结果集说明】重查类动作（筛选框「运行」/ 自定义条件）在递交前算出的说明
+    /// （目前只有“已去掉原查询的 LIMIT”）。为什么要挂在这里：`execute` 起步会
+    /// `set_message(None)`，结果回执时 `sync_result_view` 之后又按成败重写一遍状态栏，
+    /// 递交前摆的消息两处都会被清掉；说明得等这一轮回执落定后由泵补上。
+    pub(crate) pending_result_notice: Option<String>,
     /// 结果面板实体（Dock 化：面板归 workbench dock 渲染；编辑器只做两件事——
     /// 事件路径算 [`ResultSyncInput`] 投影 + `drain_result_actions` 分派面板动作）
     pub(crate) result_panel: Entity<ResultPanel>,
@@ -328,6 +352,8 @@ pub struct EditorHostPanel {
     pub(crate) pending_bind: Option<PendingBind>,
     /// 【联邦确认】执行联邦前的挂起：确认框弹出后目标存这里，点「执行」才真正入队
     pub(crate) pending_federated: Option<PendingFederated>,
+    /// 【环境策略】写确认挂起：UPDATE / DELETE 需要用户点头才入队（原型 ⑨）
+    pub(crate) pending_dml_confirm: Option<PendingDmlConfirm>,
     /// 【B6】当前选中结果集定位到的出错处（诊断范围 + 状态栏里的位置文案读它）
     pub(crate) error_site: Option<diagnostics::ErrorSite>,
     /// 【2b】脚本执行输出卡片（通用模式回执写入；sync 时经 `ResultSyncInput` 透传面板——

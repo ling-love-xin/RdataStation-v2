@@ -69,6 +69,8 @@
 | `draft_list.rs`     | 暂存列表 UI：行渲染、脏标记 `●`、**同步指纹**（行数 + 光标 + 每条 saved\_id / 名称 + 光标位实时表单值，解决 "填名称列表不更新"）                                                                                                                                              |
 | `type_tree.rs`      | 左侧类型目录 UI + 同步指纹（目录 / 过滤词 / 选中项）                                                                                                                                                                                                |
 | `project_picker.rs` | 项目下拉（仅项目 / 全局 + 项目作用域）                                                                                                                                                                                                          |
+| `managers.rs`（本目录） | 三域列表 + 表单的唯一实现：`ManagerWorkspace` / `ManagerKind` 分派 / `manager_panel_ui`（对话框与页共用）/ `prepare_manager_domain`（切域重置 + 拉列表 + 类型下拉）/ `upsert_manager_item` / `delete_manager_item` / 环境策略 CRUD |
+| `../config_center.rs` | 配置中心页（左三域导航 + 右面包屑 + `manager_panel_ui`）：`ConfigCenterPage::{new, switch, render, kind, set_project_root}`；工作台侧 `panels/config_center.rs` 只做 Dock 契约 |
 
 ### 3.2 `crates/connection/`（传输层 crate，10 个模块）
 
@@ -232,7 +234,7 @@ pub struct ConnectionDraft {
 
 3. SSL 覆盖：**仅当驱动声明&#x20;**`ssl`**&#x20;认证类型**时组装（mode/ca/cert/key）；`disable` 不落。
 
-4. 策略覆盖：落已勾选的 `policy_type`（`policy_overrides` 数组）。
+4. 策略覆盖：落**标记为「已覆盖」**的 `policy_type`（`policy_overrides` 数组）。注意语义是「这条连接不吃这条环境策略」（连接 > 环境，见架构决策 #130），**不是**「启用了哪些策略」——环境策略本身默认生效，UI 开关只在用户主动覆盖时才写数组。
 
 5. 文件型驱动（`is_file_db_driver`）：`strip_file_db_noise` 清掉 username/password/ 凭据引用 / SSL。
 

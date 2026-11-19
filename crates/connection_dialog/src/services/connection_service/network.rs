@@ -26,6 +26,10 @@ pub async fn resolve_network_method_with_project(
         if let Some(pp) = project_path {
             let db_path = Path::new(pp).join(".RSmeta").join("project.db");
             if db_path.exists() {
+                if let Some((t, cfg, auth)) = project_query_two_layer(&db_path, net_id) {
+                    return parse_network_config_json(&t, &cfg, auth.as_deref(), project_path)
+                        .await;
+                }
                 if let Ok((network_type, config_str, auth_config_id)) =
                     project_query_network_config_with_auth(&db_path, net_id)
                 {
@@ -48,6 +52,10 @@ pub async fn resolve_network_method_with_project(
         if let Some(pp) = project_path {
             let db_path = Path::new(pp).join(".RSmeta").join("project.db");
             if db_path.exists() {
+                if let Some((t, cfg, auth)) = project_query_two_layer(&db_path, net_id) {
+                    return parse_network_config_json(&t, &cfg, auth.as_deref(), project_path)
+                        .await;
+                }
                 if let Ok((network_type, config_str, auth_config_id)) =
                     project_query_network_config_with_auth(&db_path, net_id)
                 {
@@ -67,6 +75,14 @@ pub async fn resolve_network_method_with_project(
 
     // ===== 全局配置（G_ 前缀或无前缀） =====
     if let Some(gdb) = engine::migration::get_global_db_manager() {
+        // 两层模型优先：资源 / 链命中即用（链在这里展开成旧格式 hop 数组）。
+        if let Ok(conn) = gdb.sqlite_pool().acquire().await {
+            if let Ok(inner) = conn.inner() {
+                if let Some((t, cfg, auth)) = two_layer_lookup(inner, net_id) {
+                    return parse_network_config_json(&t, &cfg, auth.as_deref(), None).await;
+                }
+            }
+        }
         if let Ok(nets) = gdb.list_network_configs(None).await {
             if let Some(net) = nets.iter().find(|n| n.id == net_id) {
                 return parse_network_config_json(
@@ -85,6 +101,10 @@ pub async fn resolve_network_method_with_project(
         if let Some(pp) = project_path {
             let db_path = Path::new(pp).join(".RSmeta").join("project.db");
             if db_path.exists() {
+                if let Some((t, cfg, auth)) = project_query_two_layer(&db_path, net_id) {
+                    return parse_network_config_json(&t, &cfg, auth.as_deref(), project_path)
+                        .await;
+                }
                 if let Ok((network_type, config_str, auth_config_id)) =
                     project_query_network_config_with_auth(&db_path, net_id)
                 {
@@ -102,6 +122,45 @@ pub async fn resolve_network_method_with_project(
 
     tracing::warn!(net_id = %net_id, "未找到网络配置");
     Ok(None)
+}
+
+/// 两层模型查询：命中资源 → `(kind, props, auth_config_id)`；命中链 → `("chain", 展开后的 hops JSON, None)`。
+///
+/// 两表都未命中 → `None`（由调用方回落到旧 `network_configs`）。
+fn two_layer_lookup(
+    conn: &rusqlite::Connection,
+    id: &str,
+) -> Option<(String, String, Option<String>)> {
+    use engine::persistence::network_two_layer as tl;
+    if let Ok(Some(chain)) = tl::get_chain(conn, id) {
+        let _ = chain;
+        // 链 → 旧格式 hop 数组；展开失败（缺资源 / 坏 JSON）按「链不可用」处理。
+        return tl::expand_chain_config(conn, id)
+            .ok()
+            .flatten()
+            .map(|json| ("chain".to_string(), json, None));
+    }
+    if let Ok(Some(res)) = tl::get_resource(conn, id) {
+        return Some((res.kind, res.props, res.auth_config_id));
+    }
+    None
+}
+
+/// 项目库两层查询（打开独立只读连接；库不存在 / 无表 → `None`，**不建任何东西**）。
+fn project_query_two_layer(
+    db_path: &std::path::Path,
+    id: &str,
+) -> Option<(String, String, Option<String>)> {
+    let conn = rusqlite::Connection::open(db_path).ok()?;
+    let has_tables: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='chains'",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+    has_tables?;
+    two_layer_lookup(&conn, id)
 }
 
 /// 查询项目网络配置，同时返回 network_type、config 和 auth_config_id。
@@ -321,4 +380,127 @@ fn inject_proxy_auth_from_auth_data(
     }
 
     proxy_config
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use connection::config::ConnectionMethod;
+
+    fn conn_with_two_layer() -> rusqlite::Connection {
+        let c = rusqlite::Connection::open_in_memory().expect("memory db");
+        use engine::persistence::network_two_layer as tl;
+        tl::create_resource(
+            &c,
+            &tl::NetResource {
+                id: "NR_jump".into(),
+                name: "jump".into(),
+                kind: "ssh".into(),
+                host: "10.0.0.1".into(),
+                port: 22,
+                auth_config_id: None,
+                props: r#"{"host":"10.0.0.1","port":22,"username":"deploy","auth_type":"password","password":"pw","remote_host":"db.internal","remote_port":5432}"#
+                    .into(),
+                origin: None,
+                source_id: None,
+                snapshot_at: None,
+                created_at: "x".into(),
+                updated_at: "x".into(),
+            },
+        )
+        .expect("res1");
+        tl::create_resource(
+            &c,
+            &tl::NetResource {
+                id: "NR_proxy".into(),
+                name: "proxy".into(),
+                kind: "http".into(),
+                host: "proxy.corp".into(),
+                port: 8080,
+                auth_config_id: None,
+                props: r#"{"host":"proxy.corp","port":8080}"#.into(),
+                origin: None,
+                source_id: None,
+                snapshot_at: None,
+                created_at: "x".into(),
+                updated_at: "x".into(),
+            },
+        )
+        .expect("res2");
+        tl::create_chain(
+            &c,
+            &tl::NetChain {
+                id: "C_prod".into(),
+                name: "prod".into(),
+                hops: r#"["NR_jump","NR_proxy"]"#.into(),
+                timeout_s: None,
+                origin: None,
+                source_id: None,
+                snapshot_at: None,
+                created_at: "x".into(),
+                updated_at: "x".into(),
+            },
+        )
+        .expect("chain");
+        c
+    }
+
+    #[test]
+    fn chain_expands_to_same_runtime_method_as_legacy() {
+        let c = conn_with_two_layer();
+        let (t, cfg, auth) = two_layer_lookup(&c, "C_prod").expect("chain lookup");
+        assert_eq!(t, "chain");
+        assert!(auth.is_none());
+
+        // 与旧实现等价：同一份 hop JSON 解析出的 Chain 序列逐跳一致
+        let method = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("rt")
+            .block_on(parse_network_config_json(&t, &cfg, None, None))
+            .unwrap_or_else(|e| panic!("parse 失败：{e}；cfg={cfg}"))
+            .expect("chain");
+        match method {
+            ConnectionMethod::Chain(hops) => {
+                assert_eq!(hops.len(), 2);
+                assert_eq!(hops[0].hop_name(), "ssh");
+                assert_eq!(hops[1].hop_name(), "http_proxy");
+            }
+            other => panic!("应为协议链，实际 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resource_lookup_returns_kind_and_props() {
+        let c = conn_with_two_layer();
+        let (t, cfg, auth) = two_layer_lookup(&c, "NR_proxy").expect("resource lookup");
+        assert_eq!(t, "http");
+        assert!(cfg.contains("proxy.corp"));
+        assert!(auth.is_none());
+    }
+
+    #[test]
+    fn missing_hop_makes_chain_unusable_not_partial() {
+        let c = rusqlite::Connection::open_in_memory().expect("memory db");
+        use engine::persistence::network_two_layer as tl;
+        tl::create_chain(
+            &c,
+            &tl::NetChain {
+                id: "C_bad".into(),
+                name: "bad".into(),
+                hops: r#"["NR_gone"]"#.into(),
+                timeout_s: None,
+                origin: None,
+                source_id: None,
+                snapshot_at: None,
+                created_at: "x".into(),
+                updated_at: "x".into(),
+            },
+        )
+        .expect("chain");
+        assert!(
+            two_layer_lookup(&c, "C_bad").is_none(),
+            "缺资源 → 整链不可用"
+        );
+    }
 }

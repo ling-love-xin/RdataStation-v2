@@ -179,9 +179,29 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::ResultPanelSidebarWidth => {
             SettingValue::Number(settings.result_panel.sidebar_width as f64)
         }
+        // 【R6】一段行数（对齐 DBeaver `resultSetSize` / `RESULT_SET_MAX_ROWS`）
+        Slot::ResultPanelSegmentRows => {
+            SettingValue::Number(settings.result_panel.segment_rows as f64)
+        }
         // 【工具条配置】隐藏命令 id 列表（逗号分隔自由文本）
         Slot::ResultPanelHiddenStatusCommands => {
             SettingValue::Text(settings.result_panel.hidden_status_commands.clone())
+        }
+        // 【计算页持久化】启用统计项 id 列表（逗号分隔自由文本）
+        Slot::ResultPanelStatsItems => {
+            SettingValue::Text(settings.result_panel.stats_items.clone())
+        }
+        // 【分组页持久化】排序口径 id（`none` / `value` / `countdesc`）
+        Slot::ResultPanelGroupSort => {
+            SettingValue::Text(settings.result_panel.group_sort.clone())
+        }
+        // 【分组页持久化】「仅重复」开关
+        Slot::ResultPanelGroupDuplicatesOnly => {
+            SettingValue::Bool(settings.result_panel.group_duplicates_only)
+        }
+        // 【右栏页签持久化】启用页 id 列表
+        Slot::ResultPanelOpenTabs => {
+            SettingValue::Text(settings.result_panel.open_tabs.clone())
         }
         // 【类型样式】13 项枚举：落盘值 → 设置页显示
         Slot::ResultPanelNumberFormat => {
@@ -391,7 +411,12 @@ impl SettingsService {
             | Slot::ResultPanelLoopSelection
             | Slot::ResultPanelSelectOnModifierClick
             | Slot::ResultPanelSidebarWidth
+            | Slot::ResultPanelSegmentRows
             | Slot::ResultPanelHiddenStatusCommands
+            | Slot::ResultPanelStatsItems
+            | Slot::ResultPanelGroupSort
+            | Slot::ResultPanelGroupDuplicatesOnly
+            | Slot::ResultPanelOpenTabs
             | Slot::ResultPanelPersistColumnWidths
             | Slot::ResultPanelNumberFormat
             | Slot::ResultPanelNullPlaceholder

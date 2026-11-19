@@ -96,6 +96,17 @@ impl WorkbenchView {
         // #54 C6/C7：跳转定义目标解析注入（`rds://navigator/<限定表名>` → 导航树定位，
         // 复用 Quick Open `⌥↵` 的 `request_reveal`；未接 = 内核默认文档内移动）
         crate::services::editor_catalog::attach_jump(&editor_service, editor_host.clone());
+        // 【结果集引用页】导航定位端口：「引用」页的「打开目标对象」要定位外键目标表
+        // （对齐 DBeaver `refs_open_target`）。复用同一条 `EditorHost::request_reveal`
+        // （Quick Open `⌥↵` / 跳转定义也走它）：编辑器只投递 `ObjectRef`，入队与消费在导航侧。
+        {
+            // 先擦成 trait 对象再调：`request_reveal` 是 `EditorHost` 的方法，
+            // 具体类型上直接调要先把 trait 引进来；与 `attach_jump` 同一写法。
+            let host: std::rc::Rc<dyn editor::host::EditorHost> = editor_host.clone();
+            editor_service.attach_reveal_object(std::rc::Rc::new(move |object| {
+                host.request_reveal(object);
+            }));
+        }
         // T2c-1：把库 / schema 端口接上（导航缓存 → 状态栏面包屑可切项；未接时退文本连接段）
         crate::services::editor_schema::attach(&editor_service, editor_host.clone());
         // #20：内核注册表端口（后台探测一次 + 内存快照；未接时执行源「内核」档菜单置灰）
@@ -138,6 +149,7 @@ impl WorkbenchView {
             left_resource_tab: None,
             left_plugin_tab: None,
             plugin_manager: None,
+            config_center: None,
             right_insight_tab: None,
             right_mock_tab: None,
             right_history_tab: None,

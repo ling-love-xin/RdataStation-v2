@@ -374,6 +374,16 @@ impl EditorHostPanel {
             if let Some(reason) = segment_failure {
                 self.set_message(Some(reason), cx);
             }
+            // 【结果集说明】重查类动作的说明（目前是「已去掉原查询的 LIMIT」）在这里落：
+            // 递交前 `set_message` 会被 `execute` 起步的清空盖掉、又被上面这次
+            // `sync_result_view` 按成败重写一次，所以只能等结果区同步完再补。
+            // 执行器自己带回的说明（`fresh_notice`）优先——那是这一轮结论的一部分。
+            if let Some(notice) = self.pending_result_notice.take()
+                && fresh_notice.is_none()
+                && self.message.is_none()
+            {
+                self.set_message(Some(notice), cx);
+            }
             // 【B14】执行自带的说明（成功且没有失败原因时才说，别把失败提示盖掉）
             if let Some(notice) = fresh_notice
                 && self.message.is_none()

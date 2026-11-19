@@ -413,6 +413,8 @@ mod tests {
 
             use_duckdb_fed: fed,
 
+            environment: None,
+
             created_at: String::new(),
 
             updated_at: String::new(),

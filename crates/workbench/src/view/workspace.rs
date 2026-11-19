@@ -3,6 +3,8 @@
 //! 自 `view.rs` 拆分（行为不变）。
 
 use super::*;
+// 宿主能力 trait：取当前项目快照（`Shared::current_project` 是本 trait 的方法）。
+use connection_dialog::host::ConnectionDialogHost as _;
 impl WorkbenchView {
     /// 启动「结果集落库回执」泵（装配期一次）。
     ///
@@ -627,6 +629,57 @@ impl WorkbenchView {
                         crate::panels::focus_plugin_manager_tab(&panel_for_open, window, cx);
                     }));
             }
+        }
+
+        // 配置中心页（中央常驻 tab，单实例）：连接对话框「管理认证 / 网络 / 环境」打开 / 聚焦。
+        // 页面首次打开时才建（建页要查库拉三域列表），工作台初始化不付这次 DB 往返。
+        {
+            let panel = cx.new(crate::panels::ConfigCenterPanel::new);
+            self.config_center = Some(panel.clone());
+            let area_for_cc = area.clone();
+            let panel_for_open = panel;
+            let shared_for_cc = shared.clone();
+            *shared.open_config_center.borrow_mut() = Some(Rc::new(
+                move |kind, window: &mut Window, cx: &mut App| {
+                    let project_root = shared_for_cc
+                        .current_project()
+                        .map(|p| p.root.to_string_lossy().to_string());
+                    panel_for_open.update(cx, |panel, cx| {
+                        panel.show_domain(kind, project_root, window, cx);
+                    });
+                    let id = PanelId::from(panel_for_open.entity_id());
+                    let present = area_for_cc.update(cx, |area, cx| {
+                        let held = [
+                            DockPlacement::Center,
+                            DockPlacement::Left,
+                            DockPlacement::Right,
+                            DockPlacement::Bottom,
+                        ]
+                        .into_iter()
+                        .any(|placement| {
+                            area.layout(placement)
+                                .is_some_and(|tree| tree.contains_panel(id))
+                        });
+                        if held {
+                            area.select_panel(id, window, cx);
+                        }
+                        held
+                    });
+                    if !present {
+                        let handle = panel_handle(panel_for_open.clone());
+                        area_for_cc.update(cx, |area, cx| {
+                            area.add_panel_view(
+                                handle,
+                                DockPlacement::Center,
+                                None,
+                                window,
+                                cx,
+                            );
+                        });
+                    }
+                    crate::panels::focus_config_center_tab(&panel_for_open, window, cx);
+                },
+            ));
         }
 
         // M7：宿主命令——打开某张表 / 草稿的详情 tab（面板「查看详情」与结果表清单调用）。

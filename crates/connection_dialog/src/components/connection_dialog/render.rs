@@ -142,7 +142,6 @@ impl<H: 'static> ConnectionDialogState<H> {
         let props_synced = self.props_synced.clone();
         let prop_key = self.prop_key.clone();
         let prop_val = self.prop_val.clone();
-        let mgr = self.mgr.clone();
         let result = self.result.clone();
         let result_expanded = self.result_expanded.clone();
         let editing_id = self.editing_id.clone();
@@ -621,7 +620,7 @@ impl<H: 'static> ConnectionDialogState<H> {
                 theme,
             );
             let tab_content = match tab_ix_now {
-                1 => network_tab_ui(&network_ref, &mgr, &entity, &shared, theme, cx),
+                1 => network_tab_ui(&network_ref, &shared, theme, cx),
                 4 => advanced_tab_ui(
                     AdvancedTab {
                         driver: &driver,
@@ -629,7 +628,6 @@ impl<H: 'static> ConnectionDialogState<H> {
                         env_list: &env_list,
                         env_policies: &env_policies,
                         overrides: &sec_overrides,
-                        mgr: &mgr,
                         duckdb_fed: &duckdb_fed,
                         show_system_objects: &show_system_objects,
                         cache_path: &cache_path,
@@ -671,7 +669,6 @@ impl<H: 'static> ConnectionDialogState<H> {
                         state: &state,
                         entity: &entity,
                         shared: &shared,
-                        mgr: &mgr,
                         result: &result,
                         save_credentials: &save_credentials,
                         group_checks: &group_checks,
@@ -2217,16 +2214,12 @@ fn footer_ui<H: 'static>(p: Footer<'_, H>) -> Div {
 /// SSL 细节在常规 → 连接安全）。
 ///
 /// 需要 `cx` 是为了读下拉当前值（`selected_value`），这是本页唯一的“读状态”行为。
-fn network_tab_ui<H: 'static>(
+fn network_tab_ui(
     network_ref: &Entity<SelectState<SearchableVec<SharedString>>>,
-    mgr: &Rc<RefCell<ManagerWorkspace>>,
-    entity: &Entity<H>,
     shared: &Rc<dyn ConnectionDialogHost>,
     theme: &Theme,
     cx: &App,
 ) -> Div {
-    let mgr = Rc::clone(mgr);
-    let entity_click = entity.clone();
     let shared_click = Rc::clone(shared);
     let network_ref_selected = network_ref.read(cx).selected_value().cloned();
     let is_ref = network_ref_selected.is_some();
@@ -2258,14 +2251,9 @@ fn network_tab_ui<H: 'static>(
                     .ghost()
                     .label(tr("管理"))
                     .on_click(move |_, window, app| {
-                        open_manager(
-                            1,
-                            &mgr,
-                            entity_click.clone(),
-                            shared_click.clone(),
-                            window,
-                            app,
-                        );
+                        // 配置中心页是唯一入口（旧内层对话框已删）：宿主没挂页时什么也不做，
+                        // 由宿主侧保证「打开对话框的路径一定能挂页」。
+                        shared_click.show_config_center(ManagerKind::Network, window, app);
                     }),
             ),
     );
@@ -2352,8 +2340,6 @@ struct AdvancedTab<'a, H: 'static> {
     env_policies: &'a Rc<RefCell<Vec<(String, String, String)>>>,
     /// 已勾选的覆盖键（存策略类型）。
     overrides: &'a Rc<RefCell<Vec<String>>>,
-    /// 管理器（「管理环境」入口）。
-    mgr: &'a Rc<RefCell<ManagerWorkspace>>,
     /// DuckDB 直连开关。
     duckdb_fed: &'a Rc<Cell<bool>>,
     /// 导航「显示系统对象」开关。
@@ -2391,7 +2377,6 @@ fn advanced_tab_ui<H: 'static>(p: AdvancedTab<'_, H>, cx: &App) -> Div {
         env_list,
         env_policies,
         overrides,
-        mgr,
         duckdb_fed,
         show_system_objects,
         cache_path,
@@ -2404,13 +2389,11 @@ fn advanced_tab_ui<H: 'static>(p: AdvancedTab<'_, H>, cx: &App) -> Div {
         theme,
         make_section,
     } = p;
-    let mgr = Rc::clone(mgr);
     let duckdb_fed = Rc::clone(duckdb_fed);
     let show_system_objects = Rc::clone(show_system_objects);
     let overrides_click = Rc::clone(overrides);
     let state_click = Rc::clone(state);
     let shared_click = Rc::clone(shared);
-    let entity_click = entity.clone();
 
     // ===== 高级：环境 + 策略覆盖 + DuckDB 加速 =====
     let is_network_db = {
@@ -2473,14 +2456,7 @@ fn advanced_tab_ui<H: 'static>(p: AdvancedTab<'_, H>, cx: &App) -> Div {
                             .secondary()
                             .label(tr("管理环境"))
                             .on_click(move |_, window, app| {
-                                open_manager(
-                                    2,
-                                    &mgr,
-                                    entity_click.clone(),
-                                    shared_click.clone(),
-                                    window,
-                                    app,
-                                );
+                                shared_click.show_config_center(ManagerKind::Env, window, app);
                             }),
                     ),
             ))
@@ -2721,8 +2697,6 @@ struct GeneralTab<'a, H: 'static> {
     entity: &'a Entity<H>,
     /// 宿主（管理器页要重绘）。
     shared: &'a Rc<dyn ConnectionDialogHost>,
-    /// 管理器工作区（认证页入口 `open_manager(0, …)`）。
-    mgr: &'a Rc<RefCell<ManagerWorkspace>>,
     /// 结果行（导入 URI / 建分组的反馈）。
     result: &'a Rc<RefCell<Option<ResultLine>>>,
     /// 「保存凭据」开关。
@@ -2773,7 +2747,6 @@ fn general_tab_ui<H: 'static>(p: GeneralTab<'_, H>, cx: &App) -> Div {
         state,
         entity,
         shared,
-        mgr,
         result,
         save_credentials,
         group_checks,
@@ -2784,7 +2757,6 @@ fn general_tab_ui<H: 'static>(p: GeneralTab<'_, H>, cx: &App) -> Div {
     } = p;
     let state = Rc::clone(state);
     let shared = Rc::clone(shared);
-    let mgr = Rc::clone(mgr);
     let result = Rc::clone(result);
     let save_credentials = Rc::clone(save_credentials);
     let group_checks = Rc::clone(group_checks);
@@ -3051,14 +3023,11 @@ fn general_tab_ui<H: 'static>(p: GeneralTab<'_, H>, cx: &App) -> Div {
                     ),
                 )
                 .child(Button::new("mgr-auth").ghost().label(tr("管理")).on_click({
-                    let mgr = mgr.clone();
-                    let entity = entity.clone();
                     let shared = shared.clone();
                     move |_, window, app| {
-                        open_manager(0, &mgr, entity.clone(), shared.clone(), window, app);
+                        shared.show_config_center(ManagerKind::Auth, window, app);
                     }
-                })),
-        )
+                })),        )
         .child(if is_auth_ref {
             reuse_note(
                 theme,

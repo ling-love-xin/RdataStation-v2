@@ -29,9 +29,18 @@ once_cell.workspace = true
 lru.workspace = true
 dirs.workspace = true
 rand.workspace = true
+# 密钥来源三档：主密码档 KEK 派生（Argon2id）
+argon2.workspace = true
 tokio.workspace = true
 futures.workspace = true
 tracing.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# 密钥来源三档：系统凭据档（DPAPI / crypt32，仅 Windows 编译）
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+] }
 
 [dev-dependencies]
 # 测试构建的数据根自动隔离（不写产品目录；见 data-paths.md §5）

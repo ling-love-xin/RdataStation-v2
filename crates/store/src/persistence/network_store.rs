@@ -376,7 +376,7 @@ pub fn get_global_network_config(
 /// - SSH：`password`（密码认证）/ `passphrase`（私钥口令）；
 /// - 代理：`password`（`ProxyConfig.auth.password`，嵌套一层）；
 /// - 协议链：数组里每个 hop 的同类字段（递归覆盖）。
-const SECRET_KEYS: [&str; 2] = ["password", "passphrase"];
+pub(crate) const SECRET_KEYS: [&str; 3] = ["password", "passphrase", "clientSecret"];
 
 /// 写入前加密 `config` 里的敏感键（**幂等**：已带 `AES:` 前缀的值原样保留）。
 ///

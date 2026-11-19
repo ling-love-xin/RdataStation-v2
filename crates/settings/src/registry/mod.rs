@@ -210,8 +210,21 @@ pub enum Slot {
     ResultPanelPersistColumnWidths,
     /// 【R5 对齐 DBeaver `setWeights`】结果集右栏（页签侧栏）宽度（px，192~640）。
     ResultPanelSidebarWidth,
+    /// 【R6 对齐 DBeaver `resultSetSize`】「取下一段」一次多少行（下限 1）。
+    ResultPanelSegmentRows,
     /// 【DBeaver 工具条配置】状态栏被隐藏的命令 id 列表（逗号分隔，自由文本）。
     ResultPanelHiddenStatusCommands,
+    /// 【计算页持久化】启用的统计项 id 列表（逗号分隔，顺序即行序）。
+    ResultPanelStatsItems,
+    /// 【分组页持久化，对齐 DBeaver `RS_GROUPING_DEFAULT_SORTING`】分组结果排序口径
+    /// （`none` = 不排序（保持首现顺序）/ `value` = 按分组键值升序 / `countdesc` = 按组内行数降序）。
+    ResultPanelGroupSort,
+    /// 【分组页持久化，对齐 DBeaver `RS_GROUPING_SHOW_DUPLICATES_ONLY`】是否只显示
+    /// 重复分组（组内行数 > 1，默认 false）。
+    ResultPanelGroupDuplicatesOnly,
+    /// 【右栏页签持久化，对齐 DBeaver `PresentationSettings.enabledPanelIds`】右栏启用了哪些页
+    /// （逗号分隔 id；空 = 没写过 → 六页全开）。
+    ResultPanelOpenTabs,
     /// 【类型样式】数字显示格式（raw / grouped / fixed2 / scientific）。
     ResultPanelNumberFormat,
     /// 【类型样式】NULL 显示占位（null / emptyset / dash）。
@@ -325,7 +338,12 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "result_panel.select_on_modifier_click" => Slot::ResultPanelSelectOnModifierClick,
         "result_panel.persist_column_widths" => Slot::ResultPanelPersistColumnWidths,
         "result_panel.sidebar_width" => Slot::ResultPanelSidebarWidth,
+        "result_panel.segment_rows" => Slot::ResultPanelSegmentRows,
         "result_panel.hidden_status_commands" => Slot::ResultPanelHiddenStatusCommands,
+        "result_panel.stats_items" => Slot::ResultPanelStatsItems,
+        "result_panel.group_sort" => Slot::ResultPanelGroupSort,
+        "result_panel.group_duplicates_only" => Slot::ResultPanelGroupDuplicatesOnly,
+        "result_panel.open_tabs" => Slot::ResultPanelOpenTabs,
         "result_panel.number_format" => Slot::ResultPanelNumberFormat,
         "result_panel.null_placeholder" => Slot::ResultPanelNullPlaceholder,
         "result_panel.bool_display" => Slot::ResultPanelBoolDisplay,
@@ -430,9 +448,17 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         | Slot::ResultPanelLoopSelection
         | Slot::ResultPanelSelectOnModifierClick
         | Slot::ResultPanelPersistColumnWidths => KindTag::Bool,
-        Slot::ResultPanelSidebarWidth => KindTag::Number,
+        Slot::ResultPanelSidebarWidth | Slot::ResultPanelSegmentRows => KindTag::Number,
         // 自由文本（逗号分隔的命令 id）：面板末端 ▾ 菜单与设置页都可写。
         Slot::ResultPanelHiddenStatusCommands => KindTag::Text,
+        // 自由文本（逗号分隔的统计项 id）：计算页工具条 ＋ / 行尾 × / Reset 与设置页都可写。
+        Slot::ResultPanelStatsItems => KindTag::Text,
+        // 【分组页持久化】排序口径 = 单个 id（`none` / `value` / `countdesc`），面板排序钮点击即落盘。
+        Slot::ResultPanelGroupSort => KindTag::Text,
+        // 【分组页持久化】「仅重复」开关（面板「仅重复」钮与设置页都可写）。
+        Slot::ResultPanelGroupDuplicatesOnly => KindTag::Bool,
+        // 【右栏页签持久化】自由文本（逗号分隔的页 id）：页签条 × / 视图菜单勾选项与设置页都可写。
+        Slot::ResultPanelOpenTabs => KindTag::Text,
         // 【类型样式】23 项全是枚举（设置页下拉）。
         Slot::ResultPanelNumberFormat
         | Slot::ResultPanelNullPlaceholder

@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>常规 Tab · 新增数据源原型 · RdataStation</title>
+<link rel="stylesheet" href="_theme.css">
+<script src="_theme.js"></script>
+<style>
+  .form-card{border:1px solid var(--border);border-radius:10px;background:var(--bg);overflow:hidden;}
+  .form-card .fc-head{display:flex;align-items:center;gap:9px;padding:9px 13px;background:var(--group-box);border-bottom:1px solid var(--sidebar-border);font-size:12.5px;font-weight:700;}
+  .form-card .fc-head .r{margin-left:auto;display:flex;gap:8px;font-weight:400;}
+  .form-card .fc-body{padding:12px 13px;}
+  .ssl-grid{display:flex;gap:18px;flex-wrap:wrap;align-items:center;}
+  .mask-wrap{position:relative;display:inline-flex;}
+  .mask-wrap input{padding-right:56px;width:190px;}
+  .mask-toggle{position:absolute;right:6px;top:50%;transform:translateY(-50%);border:none;background:none;color:var(--muted);cursor:pointer;font-size:11px;padding:2px 4px;}
+  .tagbox{display:flex;gap:5px;flex-wrap:wrap;align-items:center;}
+  .tag{display:inline-flex;align-items:center;gap:4px;font-size:11px;border:1px solid var(--border);border-radius:999px;padding:1.5px 8px;background:var(--group-box);}
+  .tag button{border:none;background:none;color:var(--muted);cursor:pointer;font-size:10px;padding:0;}
+  .mode-note{font-size:11px;color:var(--muted);margin-left:2px;}
+</style>
+</head>
+<body>
+
+<header class="page-head">
+  <div class="brand">
+    <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.66 3.58 3 8 3s8-1.34 8-3v-13"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg></div>
+    <div>
+      <h1>② 常规 Tab · 双形态</h1>
+      <div class="sub">tab-general · 字段全部由 DriverDescriptor 派生（零类型写死）—— <span class="st st-impl">已实现</span></div>
+    </div>
+  </div>
+  <div class="head-actions">
+    <div class="seg" data-tabs>
+      <button class="on" data-tab="net">网络型（MySQL）</button>
+      <button data-tab="file">文件型（SQLite）</button>
+    </div>
+    <a class="back-link" href="index.html">← 总览</a>
+    <button class="theme-toggle" data-theme-toggle>🌙 暗色</button>
+  </div>
+</header>
+
+<!-- ================= 形态 A：网络型 ================= -->
+<div data-panel="net" style="max-width:920px;margin:0 auto;display:flex;flex-direction:column;gap:14px;">
+
+  <div class="form-card">
+    <div class="fc-head">🗄 连接设置
+      <span class="r"><span class="f-help">地址占位随驱动推导</span></span>
+    </div>
+    <div class="fc-body">
+      <div class="f-row"><span class="f-label req">地址</span>
+        <input class="inp mono" style="flex:1;min-width:260px" value="db-order-ro.internal:3306/orders" placeholder="mysql://host:3306/database">
+        <span class="f-help">支持完整 URL；主机 / 端口 / 库名会解析回填</span>
+      </div>
+      <div class="f-row"><span class="f-label">认证方法</span>
+        <select class="inp"><option>用户名 / 密码（password）</option><option>LDAP</option><option>Kerberos</option><option>引用认证档案…</option></select>
+        <span class="mode-note">选「引用认证档案…」后下方凭据字段转只读（见网络 Tab 同款引用态）</span>
+      </div>
+      <div class="f-row"><span class="f-label req">用户名</span><input class="inp" style="width:170px" value="app_ro">
+        <span class="f-label req" style="min-width:40px">密码</span>
+        <span class="mask-wrap"><input class="inp" type="password" value="secret123"><button class="mask-toggle">👁</button></span>
+        <span class="f-help">密码不含 URL 时随凭据注入（userinfo 转义）；项目侧更新留空 = 不改密码</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="form-card">
+    <div class="fc-head">🔒 连接安全（SSL）<span class="r"><span class="st st-impl">已实现</span><span class="f-help">词汇按驱动分派 · 档案优先</span></span></div>
+    <div class="fc-body">
+      <div class="ssl-grid">
+        <span class="f-label" style="min-width:auto">模式</span>
+        <div class="seg">
+          <button>禁用</button><button>优先</button><button class="on">要求</button><button>校验 CA</button><button>校验全</button>
+        </div>
+        <label class="switch"><input type="checkbox" checked><span class="track"></span>随连接保存</label>
+      </div>
+      <div class="f-row" style="margin-top:9px;"><span class="f-label">CA 证书</span><input class="inp mono" style="flex:1;min-width:220px" placeholder="PEM 路径（PKCS#12 客户端证书限 mysql_native）">
+        <button class="btn sm">浏览…</button>
+      </div>
+      <div class="note info" style="margin-top:8px;">测试连接与真实连接<b>同源</b>应用本卡（<code>build_probe_config</code>，A1 轮）：档案 SSL 优先，内联卡覆盖；「要求」档若驱动不支持将产生可见错误而非静默直连。</div>
+    </div>
+  </div>
+
+  <div class="form-card">
+    <div class="fc-head">🗂 组织</div>
+    <div class="fc-body">
+      <div class="f-row"><span class="f-label">分组</span>
+        <select class="inp"><option>生产库（2 连接）</option><option>＋ 暂无分组 —— 归导航侧管理</option></select>
+        <span class="f-help">分组的新建 / 管理在导航栏（M4 侧），对话框只勾选</span>
+      </div>
+      <div class="f-row"><span class="f-label">标签</span>
+        <div class="tagbox">
+          <span class="tag">生产<button>✕</button></span><span class="tag">只读<button>✕</button></span><span class="tag">订单域<button>✕</button></span>
+          <input class="inp" style="width:110px" placeholder="输入标签回车…">
+        </div>
+        <span class="f-help">权威表 <code>connection_tags</code>（检索 <code>tag:x</code>；行内 JSON 为兼容投影）</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 形态 B：文件型 ================= -->
+<div data-panel="file" class="hidden" style="max-width:920px;margin:0 auto;display:flex;flex-direction:column;gap:14px;">
+  <div class="note info">文件型（SQLite / DuckDB）：网络 Tab 整体隐藏（<code>visible_tab_index</code>）；凭据 / 网络 / TLS 字段在落库前清洗；选类型时地址空且项目根非空 → 预填项目根（#39，已填不覆盖）。</div>
+
+  <div class="form-card">
+    <div class="fc-head">📄 连接设置</div>
+    <div class="fc-body">
+      <div class="f-row"><span class="f-label req">数据库文件</span>
+        <input class="inp mono" style="flex:1;min-width:260px" value="D:\RdataStation\orders\analysis.duckdb" placeholder="路径（去 scheme 归一，Windows 三斜杠修正）">
+        <button class="btn sm">打开…</button>
+        <button class="btn sm">＋ 新建</button>
+      </div>
+      <div class="f-row"><span class="f-label"></span><span class="f-help">「＋ 新建」按驱动分派初始化（SQLite 建空库 / DuckDB 建目录结构）；只读打开 = 驱动属性加 <code>mode=ro</code>（影响连接方式、不改变缓存身份）</span></div>
+    </div>
+  </div>
+
+  <div class="form-card">
+    <div class="fc-head">🗂 组织</div>
+    <div class="fc-body">
+      <div class="f-row"><span class="f-label">分组</span><select class="inp"><option>本地分析</option></select></div>
+      <div class="f-row"><span class="f-label">标签</span>
+        <div class="tagbox"><span class="tag">duckdb<button>✕</button></span><span class="tag">本地<button>✕</button></span><input class="inp" style="width:110px" placeholder="输入标签回车…"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 字段来源说明 -->
+<div style="max-width:920px;margin:16px auto 0;" class="card">
+  <div class="card-head"><h2>字段从哪来（零 UI 造数据）</h2></div>
+  <div class="card-body">
+    <table class="tbl">
+      <tr><th>字段 / 卡片</th><th>数据来源</th><th>判定</th></tr>
+      <tr><td>地址占位 / 标签</td><td><code>DriverDescriptor.url_template</code></td><td><span class="chip ok">库驱动</span></td></tr>
+      <tr><td>SSL 模式词汇</td><td>驱动分派（mysql 五档 / pg 四档；不支持则可见报错）</td><td><span class="chip ok">库驱动</span></td></tr>
+      <tr><td>认证方法下拉</td><td><code>drivers.supported_auth_types</code>（驱动未声明 → 置灰）</td><td><span class="chip ok">库驱动</span></td></tr>
+      <tr><td>分组选项</td><td><code>connection_groups</code>（无分组 → 「暂无分组」如实展示）</td><td><span class="chip ok">库读取</span></td></tr>
+      <tr><td>标签</td><td><code>connection_tags</code> 权威表（#31 单源）</td><td><span class="chip ok">库读取</span></td></tr>
+    </table>
+  </div>
+</div>
+
+<footer class="page-foot">
+  <b>对照</b>：<code>render.rs</code> 常规 Tab 段 + <code>helpers/fields.rs</code>（字段派生）；文件型 = <code>helpers/files.rs</code>（<code>create_new_db_file</code> 按驱动分派 / <code>strip_file_db_noise</code>）。
+  缺项拦截 = <code>save_blocker</code> 纯函数（文件型 / 网络型文案分流，#103）。· <a href="index.html">返回总览</a> · <a href="tab-network.html">下一页：网络 Tab →</a>
+</footer>
+
+</body>
+</html>

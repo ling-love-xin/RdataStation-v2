@@ -79,6 +79,22 @@ pub(crate) fn apply_slot(
             }
             persist(&cx.global::<Settings>().clone());
         }
+        Slot::ResultPanelSegmentRows => {
+            // 【R6】一段行数：数值项，`< 1` 直接拒绝（对齐
+            // `ResultSetPreferences.MIN_SEGMENT_SIZE = 1`；面板侧输入框已按同口径过滤，
+            // 设置页手填一个 0 / 负数同样应当报错而不是静默变 1）。
+            let Some(n) = value.as_number() else {
+                return false;
+            };
+            if n < 1.0 || n > 100_000.0 {
+                return false;
+            }
+            {
+                let settings = cx.global_mut::<Settings>();
+                settings.result_panel.segment_rows = n as i64;
+            }
+            persist(&cx.global::<Settings>().clone());
+        }
         Slot::ResultPanelSidebarWidth => {
             // 【R5】右栏宽度：数值项，超出 192~640 直接拒绝（不静默夹取 ——
             // 手柄拖拽路径自己夹，设置页手填则按登记范围报错）。
@@ -361,6 +377,66 @@ pub(crate) fn apply_slot(
             }
             persist(&cx.global::<Settings>().clone());
         }
+        Slot::ResultPanelStatsItems => {
+            // 【计算页持久化】同口径：只做空白折叠 / 去重空项 / 小写，不校验 id
+            // （id ↔ 项对应表在 `result_panel::ports::StatsItem::id`，未知 id 面板侧丢弃）。
+            // 空串保留：它是「九项全停用」这个合法状态，不能被当成"没写"。
+            let Some(text) = value.as_text() else {
+                return false;
+            };
+            let normalized = normalize_command_list(text);
+            {
+                let settings = cx.global_mut::<Settings>();
+                settings.result_panel.stats_items = normalized;
+            }
+            persist(&cx.global::<Settings>().clone());
+        }
+        Slot::ResultPanelGroupSort => {
+            // 【分组页持久化】只认 `none` / `value` / `countdesc` 三档；未知值拒绝（设置页手填
+            // 坏值时让设置页自己报错，而不是悄悄把面板排序换成别的档）。口径与
+            // `set_result_panel_group_sort` 一致。
+            let Some(text) = value.as_text() else {
+                return false;
+            };
+            let normalized = text.trim().to_ascii_lowercase();
+            if !matches!(normalized.as_str(), "none" | "value" | "countdesc") {
+                return false;
+            }
+            {
+                let settings = cx.global_mut::<Settings>();
+                settings.result_panel.group_sort = normalized;
+            }
+            persist(&cx.global::<Settings>().clone());
+        }
+        Slot::ResultPanelGroupDuplicatesOnly => {
+            // 【分组页持久化】「仅重复」开关（与 `DuplicatesOnlyAction` 的 check box 同口径）
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            {
+                let settings = cx.global_mut::<Settings>();
+                settings.result_panel.group_duplicates_only = on;
+            }
+            persist(&cx.global::<Settings>().clone());
+        }
+        Slot::ResultPanelOpenTabs => {
+            // 【右栏页签持久化】同口径：只做空白折叠 / 去重空项 / 小写，不校验 id
+            // （id ↔ 页对应表在 `result_panel::ports::RightTab::id`，未知 id 面板侧丢弃）。
+            // 空串归一为出厂六页全开：对齐 DBeaver `activateDefaultPanels:1396-1400`
+            // （空集合会被补成默认面板），也避免「关空 → 下次启动页签条空白」的怪状态。
+            let Some(text) = value.as_text() else {
+                return false;
+            };
+            let mut normalized = normalize_command_list(text);
+            if normalized.is_empty() {
+                normalized = crate::model::ResultPanel::default().open_tabs;
+            }
+            {
+                let settings = cx.global_mut::<Settings>();
+                settings.result_panel.open_tabs = normalized;
+            }
+            persist(&cx.global::<Settings>().clone());
+        }
         _ => return false,
     }
     true
@@ -384,6 +460,23 @@ impl crate::service::SettingsService {
         cx.refresh_windows();
     }
 
+    /// 【R6 段大小】写「取下一段」的行数（状态行段框提交后由宿主落盘）。
+    ///
+    /// 与 `set_result_panel_sidebar_width` 同一形态：夹到 `1..=100000`（下限对齐
+    /// `ResultSetPreferences.MIN_SEGMENT_SIZE`，上界防手填天文数字把一次取段拖垮），
+    /// 与现值相同不写盘。
+    pub fn set_result_panel_segment_rows(rows: usize, cx: &mut App) {
+        let rows = (rows as i64).clamp(1, 100_000);
+        if cx.global::<Settings>().result_panel.segment_rows == rows {
+            return;
+        }
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.result_panel.segment_rows = rows;
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
     /// 【工具条配置】写状态栏隐藏的命令 id 列表（面板末端 ▾ 菜单点一次就落一次盘）。
     ///
     /// 与现值相同则不写盘；面板自己已经重绘，这里不 `refresh_windows`。
@@ -395,6 +488,71 @@ impl crate::service::SettingsService {
         {
             let settings = cx.global_mut::<Settings>();
             settings.result_panel.hidden_status_commands = normalized;
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
+    /// 【计算页持久化】写启用的统计项 id 列表（＋ / 行尾 × / Reset 生效后由宿主落盘）。
+    ///
+    /// 与现值相同则不写盘；面板自己已经重绘，这里不 `refresh_windows`。
+    pub fn set_result_panel_stats_items(list: &str, cx: &mut App) {
+        let normalized = normalize_command_list(list);
+        if cx.global::<Settings>().result_panel.stats_items == normalized {
+            return;
+        }
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.result_panel.stats_items = normalized;
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
+    /// 【分组页持久化】写分组结果排序口径的 id（分组页排序钮点一次落一次盘）。
+    ///
+    /// 只认 `none` / `value` / `countdesc`（小写、去空白）；其它值按出厂 `value` 处理——
+    /// 手改配置文件写了个不存在的档位时，面板不该跟着乱排序。
+    pub fn set_result_panel_group_sort(id: &str, cx: &mut App) {
+        let normalized = match id.trim().to_ascii_lowercase().as_str() {
+            "none" => "none".to_string(),
+            "countdesc" => "countdesc".to_string(),
+            _ => "value".to_string(),
+        };
+        if cx.global::<Settings>().result_panel.group_sort == normalized {
+            return;
+        }
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.result_panel.group_sort = normalized;
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
+    /// 【分组页持久化】写「仅显示重复分组」开关（分组页「仅重复」钮点一次落一次盘）。
+    pub fn set_result_panel_group_duplicates_only(on: bool, cx: &mut App) {
+        if cx.global::<Settings>().result_panel.group_duplicates_only == on {
+            return;
+        }
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.result_panel.group_duplicates_only = on;
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
+    /// 【右栏页签持久化】写启用的页 id 列表（页签条 × / 视图菜单勾选项生效后由宿主落盘）。
+    ///
+    /// 与现值相同则不写盘；空列表归一为出厂六页全开（见 `apply_slot` 同名分支）。
+    pub fn set_result_panel_open_tabs(list: &str, cx: &mut App) {
+        let mut normalized = normalize_command_list(list);
+        if normalized.is_empty() {
+            normalized = crate::model::ResultPanel::default().open_tabs;
+        }
+        if cx.global::<Settings>().result_panel.open_tabs == normalized {
+            return;
+        }
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.result_panel.open_tabs = normalized;
         }
         persist(&cx.global::<Settings>().clone());
     }

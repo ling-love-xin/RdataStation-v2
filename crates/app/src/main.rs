@@ -28,10 +28,9 @@ use editor::commands::{
 use gpui_kit::component::{Root, Theme, ThemeRegistry, TitleBar};
 use gpui_kit::*;
 use insight::commands::InsightRefresh;
-use settings::SettingsService;
 use settings::commands::{CloseSettings, FocusSettingsSearch, OpenSettings, ToggleThemeMode};
 use settings::model::AppearanceMode;
-use workbench::WorkbenchView;
+use settings::SettingsService;
 use workbench::commands::{
     CloseProject, DraftNext, DraftPrev, FocusNavSearch, GenerateMock, NavClearSearch, NavCollapse,
     NavCommitStaged, NavDeleteToStaged, NavDown, NavEnd, NavExpand, NavHome, NavOpenProperties,
@@ -40,6 +39,7 @@ use workbench::commands::{
     ScratchpadNewFile, ScratchpadOpen, ScratchpadRename, ScratchpadSelectAll, ScratchpadUp,
     SwitchProject, TestConnection, ToggleQuickGoto, ToggleQuickOpen,
 };
+use workbench::WorkbenchView;
 
 mod assets;
 mod theme_pack;
@@ -178,12 +178,26 @@ fn run_app() {
             );
             // SQL 分析三开关的出口：设置页改开关 → 落盘 + 调这个 sink →
             // `rds_sql::analysis` 的进程内偏好即时生效（语言服务读侧无锁，下一帧就换口径）。
-            settings::install_sql_analysis_sink(|semantic_diagnostics, predicate_pushdown, hover_scope| {
-                engine::sql::set_prefs(engine::sql::AnalysisPrefs {
-                    semantic_diagnostics,
-                    predicate_pushdown,
-                    hover_scope,
-                });
+            settings::install_sql_analysis_sink(
+                |semantic_diagnostics, predicate_pushdown, hover_scope| {
+                    engine::sql::set_prefs(engine::sql::AnalysisPrefs {
+                        semantic_diagnostics,
+                        predicate_pushdown,
+                        hover_scope,
+                    });
+                },
+            );
+            // SQL 格式化设置页实时预览的出口（2026-11-19）：settings 不依赖 engine /
+            // editor，格式化计算在这里桥接——设置页改旋钮 → 重渲 → 回调重算，预览
+            // 即时变化。映射与编辑器格式化共用同一份纯函数（口径永远一致）。
+            settings::install_sql_format_preview(|prefs| {
+                let options = editor::support::format::options_from_settings(prefs);
+                engine::sql::SqlEngine::format_report(
+                    editor::support::format::PREVIEW_SAMPLE_SQL,
+                    engine::sql::SqlDialect::Ansi,
+                    options,
+                )
+                .text
             });
             // 退出前把最后一批日志落库：库侧是"每 100 条或每 1 秒"批量提交，
             // 不等这一下，关窗口前最后 1 秒的记录就没了。
@@ -406,49 +420,68 @@ fn run_app() {
             ]);
 
             cx.spawn(async move |cx| {
-                // 自绘标题栏窗口：隐藏系统标题栏（appears_transparent），
-                // 拖拽与窗口控件（最小化/最大化/关闭）由 workbench 标题栏的
-                // window_control_area 自绘机制接管（Windows/macOS）。
-                let mut options = TitleBar::window_options();
-                if let Some(titlebar) = options.titlebar.as_mut() {
-                    titlebar.title = Some("RdataStation".into());
-                }
-                cx.open_window(options, |window, cx| {
-                    // 同步界面字号：窗口创建默认 rem_size = 16px，按设置覆盖
-                    // （rems / Tailwind 档位 / 布局全缩放；主题字号已在启动 4b 应用）。
-                    window.set_rem_size(px(SettingsService::font_size(cx)));
-                    // 跟随系统外观：`system` 模式下系统明暗变化即时跟随。
-                    // 订阅由下方 spawn 任务保活（Subscription drop 即取消）；回调只
-                    // 在 `system` 时生效，显式模式不受系统外观影响。
-                    let appearance_subscription = window.observe_window_appearance(|window, cx| {
-                        if SettingsService::theme_mode(cx) == AppearanceMode::System {
-                            Theme::sync_system_appearance(Some(window), cx);
-                        }
-                    });
-                    let workspace = cx.new(|cx| WorkbenchView::new(cx));
-                    // E3【窗口退出草稿兜底】：平台关闭路径（点 ✕ / `Alt+F4`）没有任何钩子，
-                    // 会话只在 `Ctrl+S` 与「关掉这份文档」时写——不补这一刀，敲了一半的 SQL 直接丢。
-                    // 它把**每一份**打开文档的会话落库，然后**返回 true**：兜底是「存了再走」，
-                    // 不是拦住不让走（拦人那是「关单个文档」那条路的事，那里有三态确认）。
-                    let session_saver = workspace.clone();
-                    window.on_window_should_close(cx, move |_window, cx| {
-                        session_saver.update(cx, |view, cx| view.save_all_editor_sessions(cx));
-                        true
-                    });
-                    // 保活外观订阅：spawn 一个永不完成的空任务持有它（Subscription
-                    // drop 即取消；窗口销毁后 SubscriberSet 随 window drop，回调不再触发）。
-                    cx.spawn(async move |_| {
-                        let _keep_alive = appearance_subscription;
-                        std::future::pending::<()>().await;
-                    })
-                    .detach();
-                    // 窗口第一层必须是 Root
-                    cx.new(|cx| Root::new(workspace, window, cx))
-                })
-                .expect("failed to open window");
+                // 启动门禁：主密码档未解锁时先开解锁窗（成功回调里再开主窗口）。
+                // 语义与「为什么没有跳过入口」见 `unlock.rs` 文件头。
+                let unlock_first = workbench::unlock::needs_unlock();
+                cx.update(|cx| {
+                    if unlock_first {
+                        let on_unlocked: std::rc::Rc<dyn Fn(&mut App)> =
+                            std::rc::Rc::new(open_main_window);
+                        workbench::unlock::open_unlock_window(cx, on_unlocked);
+                    } else {
+                        open_main_window(cx);
+                    }
+                });
             })
             .detach();
         });
+}
+
+/// 打开主窗口（workbench）。
+///
+/// 自绘标题栏：隐藏系统标题栏（appears_transparent），拖拽与窗口控件（最小化/最大化/关闭）
+/// 由 workbench 标题栏的 `window_control_area` 自绘机制接管（Windows/macOS）。
+///
+/// 抽成独立函数的原因：启动时可能是「解锁窗 → 主窗口」两段式（见 `unlock.rs`），
+/// 解锁成功回调需要一个可调用的入口。
+fn open_main_window(cx: &mut App) {
+    let mut options = TitleBar::window_options();
+    if let Some(titlebar) = options.titlebar.as_mut() {
+        titlebar.title = Some("RdataStation".into());
+    }
+    cx.open_window(options, |window, cx| {
+        // 同步界面字号：窗口创建默认 rem_size = 16px，按设置覆盖
+        // （rems / Tailwind 档位 / 布局全缩放；主题字号已在启动 4b 应用）。
+        window.set_rem_size(px(SettingsService::font_size(cx)));
+        // 跟随系统外观：`system` 模式下系统明暗变化即时跟随。
+        // 订阅由下方 spawn 任务保活（Subscription drop 即取消）；回调只
+        // 在 `system` 时生效，显式模式不受系统外观影响。
+        let appearance_subscription = window.observe_window_appearance(|window, cx| {
+            if SettingsService::theme_mode(cx) == AppearanceMode::System {
+                Theme::sync_system_appearance(Some(window), cx);
+            }
+        });
+        let workspace = cx.new(|cx| WorkbenchView::new(cx));
+        // E3【窗口退出草稿兜底】：平台关闭路径（点 ✕ / `Alt+F4`）没有任何钩子，
+        // 会话只在 `Ctrl+S` 与「关掉这份文档」时写——不补这一刀，敲了一半的 SQL 直接丢。
+        // 它把**每一份**打开文档的会话落库，然后**返回 true**：兜底是「存了再走」，
+        // 不是拦住不让走（拦人那是「关单个文档」那条路的事，那里有三态确认）。
+        let session_saver = workspace.clone();
+        window.on_window_should_close(cx, move |_window, cx| {
+            session_saver.update(cx, |view, cx| view.save_all_editor_sessions(cx));
+            true
+        });
+        // 保活外观订阅：spawn 一个永不完成的空任务持有它（Subscription
+        // drop 即取消；窗口销毁后 SubscriberSet 随 window drop，回调不再触发）。
+        cx.spawn(async move |_| {
+            let _keep_alive = appearance_subscription;
+            std::future::pending::<()>().await;
+        })
+        .detach();
+        // 窗口第一层必须是 Root
+        cx.new(|cx| Root::new(workspace, window, cx))
+    })
+    .expect("failed to open window");
 }
 
 /// Windows 控制台输出代码页切到 UTF-8（cp65001）。
@@ -707,7 +740,11 @@ fn attach_rds_theme(themes_dir: &std::path::Path, cx: &mut App) {
                 let theme = cx.global_mut::<Theme>();
                 theme.light_theme = std::rc::Rc::new(light);
                 theme.dark_theme = std::rc::Rc::new(dark);
-                eprintln!("[startup] 主题包 {} 已接入（{}）", pack.id, pack.dir.display());
+                eprintln!(
+                    "[startup] 主题包 {} 已接入（{}）",
+                    pack.id,
+                    pack.dir.display()
+                );
                 return;
             }
             Err(e) => eprintln!(

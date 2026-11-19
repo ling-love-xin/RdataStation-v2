@@ -32,6 +32,7 @@ pub mod export;
 pub mod grid;
 pub mod panel;
 pub mod ports;
+pub mod references;
 pub mod rowset;
 pub mod script_card;
 pub mod sets;

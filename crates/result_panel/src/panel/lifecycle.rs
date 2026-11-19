@@ -88,6 +88,52 @@ impl ResultPanel {
             },
         ));
 
+        // 【R6 段大小】状态行「一段」行数输入框（对齐 DBeaver `resultSetSize` Text，
+        // `ResultSetViewer.java:2126-2152`：tooltip「Result-set fetch size」，`>0` 才生效）。
+        // 占位即默认值；有效输入把输入框规范化成该值（≈ 失焦回填），
+        // 无效输入则不动作，等**失焦**时按当前生效值回填（那边的 `focusLost` 行为）。
+        let segment_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx);
+            state.set_placeholder(
+                crate::ui::RESULT_SEGMENT_ROWS_DEFAULT.to_string(),
+                window,
+                cx,
+            );
+            state
+        });
+        let segment_sub = cx.subscribe_in(
+            &segment_input,
+            window,
+            |this, state, event: &InputEvent, window, cx| {
+                // 【失焦回填】对齐 `ResultSetViewer.java:2129-2137`：文本框内容与生效值不同就改写。
+                // 作用在「敲了非法值（`0` / `abc` / 空）却不回车」这种路径上——
+                // 否则状态行会一直留着一段不生效的文本。headless 不派发该事件（见 events 侧纯函数）。
+                if matches!(event, InputEvent::Blur) {
+                    let text = state.read(cx).value().to_string();
+                    if let Some(display) =
+                        super::events::segment_rows_blur_display(&text, this.segment_rows)
+                    {
+                        state.update(cx, |s, cx| s.set_value(display, window, cx));
+                    }
+                    return;
+                }
+                if !matches!(event, InputEvent::Change) {
+                    return;
+                }
+                let text = state.read(cx).value().to_string();
+                let Some(rows) = super::events::parse_segment_rows(&text) else {
+                    return;
+                };
+                // 规范化（`007` → `7`）：DBeaver 在失焦时回填当前值，这里在有效提交时即回填
+                state.update(cx, |s, cx| s.set_value(rows.to_string(), window, cx));
+                if rows == this.segment_rows {
+                    return;
+                }
+                this.queue.push(ResultRequest::SetSegmentRows(rows));
+                cx.notify();
+            },
+        );
+
         // 【DBeaver 对齐】状态栏中段行数输入框：可编辑，输入行号跳转到该行
         let row_count_input = cx.new(|cx| {
             let mut state = InputState::new(window, cx);
@@ -197,6 +243,8 @@ impl ResultPanel {
             browser_list,
             row_count_input,
             _row_count_sub: Some(row_count_sub),
+            segment_input,
+            _segment_sub: Some(segment_sub),
             // 【网格事件订阅】构造期挂在占位网格上，`set_grids` 换网格后重挂
             _grid_sub,
             // 【B15】筛选框订阅（边打边筛的唯一入口）
@@ -216,8 +264,14 @@ impl ResultPanel {
             filter_settings_tab: crate::ports::FilterSettingsTab::Columns,
             presentation: Presentation::Grid,
             right_tab: RightTab::Browser,
+            // 出厂 = 六页全开（DBeaver `activateDefaultPanels` 会补默认面板；
+            // 本仓的六页一直可用，初值取规范序全集）
+            open_tabs: super::events::right_tabs().to_vec(),
+            // 【引用页】清单未读（切到该页签时宿主才去取外键）、没有选中键
+            references: crate::references::ReferencesState::NotLoaded,
+            active_reference: None,
             // 【R2 计算页】默认全集（与 DBeaver `loadDefaultFunctions` 同口径：默认函数全上）
-            stats_items: crate::ports::StatsItem::ALL.to_vec(),
+            stats_items: crate::ports::StatsItem::DEFAULT_SET.to_vec(),
             stats_mode: crate::ports::StatsMode::Numeric,
             // 【R3 分组页】默认不额外选列（只用当前选中列）、按值序、不筛重复
             group_columns: Vec::new(),
@@ -228,6 +282,13 @@ impl ResultPanel {
             right_sidebar_dragging: false,
             // 【R5 布局方向切换】默认横排（网格左 / 右栏右），与 DBeaver `verticalLayout = false` 一致
             vertical_layout: false,
+            // 【R5 面板最大化】默认不最大化（网格正常显示）
+            panel_maximized: false,
+            // 【计算行数】还没算过总行数（钮显示图标 + 「计算行数」）
+            row_count_note: None,
+            // 【R6 段大小】默认一段 1000 行（与编辑器 `execution::SEGMENT_ROWS` 同值，
+            // 面板接管后编辑器按本值下发 limit）
+            segment_rows: crate::ui::RESULT_SEGMENT_ROWS_DEFAULT,
             right_sidebar_height: px(crate::ui::RESULT_SIDEBAR_RIGHT_HEIGHT * 16.0),
             compare_active: 0,
             compare_toolbar: None,
@@ -410,6 +471,8 @@ impl ResultPanel {
         self.error_card = input.error_card;
         self.script_card = input.script_card;
         self.result_sql = input.sql;
+        // 【计算行数】旧数字只对旧结果有意义：换进来一份新结果就清掉
+        self.row_count_note = None;
         // 【状态历史】每份同步进来的结果 SQL 记一条状态（去重 / 截断前向由它自己管）
         self.note_state_sql();
         self.result_can_copy = input.can_copy;

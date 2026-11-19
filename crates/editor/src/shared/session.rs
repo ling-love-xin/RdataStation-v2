@@ -138,4 +138,15 @@ impl EditorShared {
     pub fn show_document_port(&self) -> Option<ShowDocumentPort> {
         self.show_document_port.borrow().clone()
     }
+
+    /// 【引用页】注入「导航树定位对象」端口（宿主在装配期调用一次；
+    /// 未注入 = 「打开目标对象」只发消息，不定位）
+    pub fn attach_reveal_object(&self, port: RevealObjectPort) {
+        *self.reveal_object.borrow_mut() = Some(port);
+    }
+
+    /// 【引用页】「导航树定位对象」端口（结果面板「打开目标对象」经它投递 `ObjectRef`）
+    pub fn reveal_object_port(&self) -> Option<RevealObjectPort> {
+        self.reveal_object.borrow().clone()
+    }
 }

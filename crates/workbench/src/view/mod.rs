@@ -79,6 +79,8 @@ pub struct WorkbenchView {
     left_plugin_tab: Option<Entity<PluginPanel>>,
     /// 插件管理页（中央常驻 tab，单实例；左 Dock「管理」按钮打开 / 聚焦）。
     plugin_manager: Option<Entity<PluginManagerPanel>>,
+    /// 配置中心页（认证 / 网络 / 环境三域，中央常驻 tab 单实例）。
+    config_center: Option<Entity<crate::panels::ConfigCenterPanel>>,
     right_insight_tab: Option<Entity<InsightPanelTab>>,
     right_mock_tab: Option<Entity<MockPanelTab>>,
     right_history_tab: Option<Entity<HistoryPanelTab>>,

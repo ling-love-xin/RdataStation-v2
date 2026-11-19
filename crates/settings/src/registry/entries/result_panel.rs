@@ -122,6 +122,36 @@ pub fn entries() -> Vec<SettingSpec> {
             disabled: false,
         },
         SettingSpec {
+            // 【R6 对齐 DBeaver `resultSetSize` / `ModelPreferences.RESULT_SET_MAX_ROWS`】
+            // 状态行段框改的是同一份值；只影响**之后**的分段取数（如「取下一段 / 滚动到底续取」）。
+            key: "result_panel.segment_rows",
+            section: "result_panel",
+            section_label: "结果集面板",
+            group: "data",
+            group_label: Some("数据与显示"),
+            label: "取段行数",
+            hint: "「取下一段 / 滚动到底续取」一次抓多少行（下限 1）。\
+                 状态栏中段的「段」输入框改的是同一份值；只影响之后的分段取数，\
+                 不动已加载行、不重查。DBeaver 对应项是连接级偏好 `RESULT_SET_MAX_ROWS`，\
+                 本仓存全局一份",
+            hint_inline: true,
+            kind: SettingKind::Number,
+            presets: &[
+                (200, "200 行"),
+                (500, "500 行"),
+                (1000, "1000 行（默认）"),
+                (2000, "2000 行"),
+            ],
+            default_json: "1000",
+            effect: SettingEffect::NextUse,
+            entry: SettingEntry::Page,
+            consumer: "crates/editor/src/view/host/construct.rs（面板创建时注入初值）\
+                      / crates/editor/src/view/host/results/dispatch.rs::SetSegmentRows（提交后写回）\
+                      / crates/editor/src/view/host/results/copy.rs::fetch_more（读面板当前值下发 limit）",
+            composite: false,
+            disabled: false,
+        },
+        SettingSpec {
             key: "result_panel.loop_selection",
             section: "result_panel",
             section_label: "结果集面板",
@@ -172,6 +202,102 @@ pub fn entries() -> Vec<SettingSpec> {
             effect: SettingEffect::NextUse,
             entry: SettingEntry::Page,
             consumer: "crates/editor/src/view/host/session.rs::save_session / restore_session（读开关决定是否落库与回读）",
+            composite: false,
+            disabled: false,
+        },
+        SettingSpec {
+            // 【计算页持久化，对齐 DBeaver `AggregateColumnsPanel.loadSettings/saveSettings`】
+            // 计算页启用哪几项统计，跨会话记住；写入口 = 页内工具条 ＋ / 行尾 × / Reset。
+            key: "result_panel.stats_items",
+            section: "result_panel",
+            section_label: "结果集面板",
+            group: "interaction",
+            group_label: Some("选择与操作"),
+            label: "计算页启用统计项",
+            hint: "计算页启用的统计项 id，逗号分隔（出厂 `count,countdistinct`，即「非空」+「去重计数」——\
+                 对齐 DBeaver 只把 `isDefault()` 打标的 count / countDistinct 当默认）。\
+                 面板计算页的 ＋ 添加 / 行尾 × 停用 / Reset 恢复改的是同一份状态；\
+                 空串表示九项全停用（页内显示「点 ＋ 添加」提示），未知 id 被忽略",
+            hint_inline: true,
+            kind: SettingKind::Text,
+            presets: &[],
+            default_json: "\"count,countdistinct\"",
+            effect: SettingEffect::NextUse,
+            entry: SettingEntry::Page,
+            consumer: "crates/editor/src/view/host/construct.rs（面板创建时注入启用集）\
+                      / crates/editor/src/view/host/results/dispatch.rs（＋ / × / Reset 生效后写回）",
+            composite: false,
+            disabled: false,
+        },
+        SettingSpec {
+            // 【分组页持久化】对齐 DBeaver `ResultSetPreferences.RS_GROUPING_DEFAULT_SORTING`
+            // （`ChangeSortingAction` 写它并 `persistConfiguration()`）；写入口 = 分组页排序钮。
+            key: "result_panel.group_sort",
+            section: "result_panel",
+            section_label: "结果集面板",
+            group: "interaction",
+            group_label: Some("选择与操作"),
+            label: "分组结果排序口径",
+            hint: "分组页排序钮的持久化值：`none` = 不排序（保持分组首次出现顺序，等价 DBeaver 的 \
+                  `RS_GROUPING_DEFAULT_SORTING=\"\"`）、`value` = 按分组键值升序（出厂）、\
+                 `countdesc` = 按组内行数降序（等价 DBeaver 的 `DESC`）。\
+                 未知值按出厂处理",
+            hint_inline: true,
+            kind: SettingKind::Text,
+            presets: &[],
+            default_json: "\"value\"",
+            effect: SettingEffect::NextUse,
+            entry: SettingEntry::Page,
+            consumer: "crates/editor/src/view/host/construct.rs（面板创建时注入）\
+                      / crates/editor/src/view/host/results/dispatch.rs（排序钮生效后写回）",
+            composite: false,
+            disabled: false,
+        },
+        SettingSpec {
+            // 【分组页持久化】对齐 DBeaver `ResultSetPreferences.RS_GROUPING_SHOW_DUPLICATES_ONLY`
+            // （`DuplicatesOnlyAction` 是 check box，读写同一偏好键）；写入口 = 分组页「仅重复」钮。
+            key: "result_panel.group_duplicates_only",
+            section: "result_panel",
+            section_label: "结果集面板",
+            group: "interaction",
+            group_label: Some("选择与操作"),
+            label: "分组仅显示重复",
+            hint: "开启后分组页只列组内行数 > 1 的分组（对齐 DBeaver「Show duplicates only \
+                 (COUNT > 1)」；DBeaver 默认关，该偏好键在 plugin.xml 里没有 initializer）",
+            hint_inline: true,
+            kind: SettingKind::Bool,
+            presets: &[],
+            default_json: "false",
+            effect: SettingEffect::NextUse,
+            entry: SettingEntry::Page,
+            consumer: "crates/editor/src/view/host/construct.rs（面板创建时注入）\
+                      / crates/editor/src/view/host/results/dispatch.rs（「仅重复」钮生效后写回）",
+            composite: false,
+            disabled: false,
+        },
+        SettingSpec {
+            // 【右栏页签持久化，对齐 DBeaver `PresentationSettings.enabledPanelIds`】
+            // 那边每开一个面板就 `enabledPanelIds.add(id)`（`ResultSetViewer.addPanel:1388`），
+            // 关掉则移除；写入口 = 页签条行尾 × 与视图菜单的页项勾选。
+            key: "result_panel.open_tabs",
+            section: "result_panel",
+            section_label: "结果集面板",
+            group: "interaction",
+            group_label: Some("选择与操作"),
+            label: "右栏启用的页",
+            hint: "右栏页签条上启用了哪些页，逗号分隔 id（出厂六页全开 \
+                 `browser,value,stats,group,reference,execsql`）。\
+                 页签条行尾 × 关一页、视图菜单勾一项改的都是这份状态；\
+                 顺序无关（读的时候按规范序归一），未知 id 被忽略，\
+                 空串按出厂处理（对齐 DBeaver `activateDefaultPanels` 把空集合补成默认）",
+            hint_inline: true,
+            kind: SettingKind::Text,
+            presets: &[],
+            default_json: "\"browser,value,stats,group,reference,execsql\"",
+            effect: SettingEffect::NextUse,
+            entry: SettingEntry::Page,
+            consumer: "crates/editor/src/view/host/construct.rs（面板创建时注入已启用集合）\
+                      / crates/editor/src/view/host/results/dispatch.rs（关闭 / 重开一页后写回）",
             composite: false,
             disabled: false,
         },

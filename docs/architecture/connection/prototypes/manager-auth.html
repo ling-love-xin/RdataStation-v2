@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>密码管理（认证档案） · 新增数据源原型 · RdataStation</title>
+<link rel="stylesheet" href="_theme.css">
+<script src="_theme.js"></script>
+<style>
+  .stat-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px;}
+  .stat{border:1px solid var(--border);border-radius:10px;padding:10px 13px;background:var(--bg);}
+  .stat .s-v{font-size:19px;font-weight:700;font-variant-numeric:tabular-nums;}
+  .stat .s-l{font-size:11px;color:var(--muted);margin-top:1px;}
+  .opt-card{border:1.5px solid var(--border);border-radius:10px;padding:12px 14px;cursor:pointer;transition:all .12s;background:var(--bg);position:relative;}
+  .opt-card:hover{background:var(--hover);}
+  .opt-card.on{border-color:var(--active-border);box-shadow:0 0 0 3px color-mix(in srgb,var(--active-border) 12%,transparent);}
+  .opt-card .o-t{font-size:13px;font-weight:700;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .opt-card .o-d{font-size:11.5px;color:var(--muted);line-height:1.65;margin-top:5px;}
+  .opt-card .o-radio{position:absolute;top:12px;right:12px;}
+  .steps{display:flex;flex-direction:column;gap:0;}
+  .step{display:flex;gap:11px;position:relative;padding-bottom:16px;}
+  .step:last-child{padding-bottom:0;}
+  .step::before{content:'';position:absolute;left:10px;top:24px;bottom:0;width:1.5px;background:var(--border);}
+  .step:last-child::before{display:none;}
+  .step .s-n{width:21px;height:21px;border-radius:50%;background:var(--group-box);border:1.5px solid var(--input-border);color:var(--fg);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;z-index:1;}
+  .step.now .s-n{background:var(--primary);border-color:var(--primary);color:var(--primary-fg);}
+  .step .s-t{font-size:12.5px;font-weight:600;}
+  .step .s-d{font-size:11.5px;color:var(--muted);line-height:1.65;margin-top:2px;}
+  .step .s-d .bad{color:var(--danger);font-weight:600;}
+  .step .s-d .good{color:var(--success);font-weight:600;}
+  /* CRUD 视图切换与删除弹层（与 manager-network 同款形态） */
+  .edit-bar{display:flex;align-items:center;gap:10px;padding:10px 14px;border:1px solid var(--border);border-radius:10px;background:var(--group-box);margin-bottom:13px;}
+  .edit-bar .eb-title{font-size:13px;font-weight:700;}
+  .edit-bar .eb-crumb{color:var(--muted);font-size:11.5px;}
+  .edit-foot{display:flex;align-items:center;gap:10px;margin-top:14px;padding-top:13px;border-top:1px solid var(--sidebar-border);}
+  .edit-foot .ef-err{color:var(--danger);font-size:11.5px;}
+  .modal-mask{position:fixed;inset:0;background:rgba(10,10,14,.45);display:flex;align-items:center;justify-content:center;z-index:50;padding:20px;}
+  .modal{width:450px;max-width:100%;border:1px solid var(--border);border-radius:12px;background:var(--bg);box-shadow:var(--shadow);overflow:hidden;}
+  .modal .m-head{display:flex;align-items:center;gap:9px;padding:13px 16px;border-bottom:1px solid var(--sidebar-border);font-size:13px;font-weight:700;}
+  .modal .m-body{padding:14px 16px;font-size:12px;line-height:1.8;}
+  .modal .m-body .ref-list{border:1px solid var(--border);border-radius:8px;margin-top:8px;padding:8px 11px;font-size:11.5px;background:var(--group-box);}
+  .modal .m-foot{display:flex;justify-content:flex-end;gap:9px;padding:12px 16px;border-top:1px solid var(--sidebar-border);}
+  .ftype-fields{border:1px solid var(--border);border-radius:10px;padding:11px 13px;background:var(--bg);}
+</style>
+</head>
+<body>
+
+<header class="page-head">
+  <div class="brand">
+    <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><rect x="4" y="10" width="16" height="10" rx="2.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></div>
+    <div>
+      <h1>🔐 密码管理 · 认证档案（auth_configs）</h1>
+      <div class="sub">manager-auth · 存储/脱敏/引用计数 <span class="st st-impl">已实现</span> · 密钥生命周期/影响面/轮换 <span class="st st-prop">提案</span></div>
+    </div>
+  </div>
+  <div class="head-actions">
+    <a class="back-link" href="index.html">← 总览</a>
+    <button class="theme-toggle" data-theme-toggle>🌙 暗色</button>
+  </div>
+</header>
+
+<div style="max-width:1080px;margin:0 auto;">
+
+  <!-- 概览条 -->
+  <div class="stat-strip">
+    <div class="stat"><div class="s-v">6</div><div class="s-l">认证档案（全局库）</div></div>
+    <div class="stat"><div class="s-v">11</div><div class="s-l">被引用次数（全局 + 项目名册）</div></div>
+    <div class="stat"><div class="s-v" style="color:var(--success)">AES-256-GCM</div><div class="s-l">存量密文 100%（已迁移）</div></div>
+    <div class="stat"><div class="s-v" style="color:var(--warning)">机器绑定</div><div class="s-l">当前密钥来源（见 Tab2）</div></div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="card">
+    <div class="tabs" data-tabs style="padding:0 14px;">
+      <button class="tab on" data-tab="lib">档案库</button>
+      <button class="tab" data-tab="key">密钥来源</button>
+      <button class="tab" data-tab="rotate">轮换与影响面</button>
+      <button class="tab" data-tab="migrate">换机迁移</button>
+    </div>
+
+    <!-- ============ Tab1 档案库（列表 ⇄ 编辑 + 删除两态） ============ -->
+    <div data-panel="lib" class="card-body">
+
+      <!-- 列表视图 -->
+      <div id="auth-list">
+        <div style="display:flex;gap:9px;margin-bottom:11px;align-items:center;">
+          <input class="inp" style="width:220px" placeholder="搜索档案名 / 用户名…">
+          <select class="inp"><option>全部类型</option><option>password</option><option>kerberos</option><option>ssh_key</option><option>proxy_pwd</option></select>
+          <span class="f-help">列表脱敏：凭据值以掩码展示，点「编辑」单条解密回填</span>
+          <button class="btn primary sm" style="margin-left:auto" onclick="openAuthEditor('new')">＋ 新建档案</button>
+        </div>
+        <table class="tbl">
+          <tr><th>档案名</th><th>类型</th><th>主体</th><th>凭据（脱敏）</th><th>被引用</th><th>更新</th><th></th></tr>
+          <tr>
+            <td><b>订单库只读账号</b></td><td><span class="chip">password</span></td>
+            <td class="mono">app_ro</td><td class="mono">••••••••</td>
+            <td><span class="chip info">3 连接</span></td><td>2026-10-28</td>
+            <td style="white-space:nowrap"><button class="btn sm" onclick="openAuthEditor('edit')">编辑</button> <button class="btn sm danger" onclick="askAuthDelete('订单库只读账号')">删除</button></td>
+          </tr>
+          <tr>
+            <td><b>生产跳板机 SSH</b></td><td><span class="chip">ssh_key</span></td>
+            <td class="mono">tunnel_svc</td><td class="mono">key: ~/.ssh/id_ed25519 · pass •••</td>
+            <td><span class="chip info">经资源 1 + 连接 2</span></td><td>2026-09-30</td>
+            <td style="white-space:nowrap"><button class="btn sm" onclick="openAuthEditor('edit')">编辑</button> <button class="btn sm danger" onclick="askAuthDelete('生产跳板机 SSH')">删除</button></td>
+          </tr>
+          <tr>
+            <td><b>公司代理认证</b></td><td><span class="chip">proxy_pwd</span></td>
+            <td class="mono">corp\tunnel_svc</td><td class="mono">••••••••</td>
+            <td><span class="chip info">经资源 1 + 连接 1</span></td><td>2026-08-14</td>
+            <td style="white-space:nowrap"><button class="btn sm" onclick="openAuthEditor('edit')">编辑</button> <button class="btn sm danger" onclick="askAuthDelete('公司代理认证')">删除</button></td>
+          </tr>
+          <tr>
+            <td><b>测试库账号</b></td><td><span class="chip">password</span></td>
+            <td class="mono">test_user</td><td class="mono">••••••••</td>
+            <td><span class="chip">未引用</span></td><td>2026-11-08</td>
+            <td style="white-space:nowrap"><button class="btn sm" onclick="openAuthEditor('edit')">编辑</button> <button class="btn sm danger" onclick="askAuthDelete('测试库账号', true)">删除</button></td>
+          </tr>
+        </table>
+        <div class="note warn" style="margin-top:10px;">删除两态（点行内「删除」即演示）：被引用 → 拦截并列引用方（<b>含经网络资源间接引用</b>，三层闭包）；未引用 → 普通确认。引用计数覆盖全局库 + 已登记项目库（#33）。</div>
+      </div>
+
+      <!-- 编辑视图（新建 / 编辑共用 · 按认证类型切换字段集） -->
+      <div id="auth-edit" class="hidden">
+        <div class="edit-bar">
+          <button class="btn sm" onclick="closeAuthEditor()">← 返回档案列表</button>
+          <span class="eb-title" id="auth-edit-title">编辑档案：订单库只读账号</span>
+          <span class="eb-crumb" id="auth-edit-mode">编辑模式 · 类型创建后不可改（字段集不同）</span>
+        </div>
+
+        <div class="f-row"><span class="f-label req">档案名</span><input class="inp" id="a-name" style="width:220px" value="订单库只读账号">
+          <span class="f-label">类型</span>
+          <div class="seg" id="atype-seg">
+            <button class="on" data-atype="password">password</button>
+            <button data-atype="ssh_key">ssh_key</button>
+            <button data-atype="ssh_agent">ssh_agent</button>
+          </div>
+          <span class="f-help">其余类型（ldap / pg_class / kerberos / proxy_pwd）同 <code>auth_field_specs</code> 字段集</span>
+        </div>
+
+        <div class="ftype-fields" id="ft-password">
+          <div class="f-row"><span class="f-label req">用户名</span><input class="inp" style="width:170px" value="app_ro"></div>
+          <div class="f-row"><span class="f-label req">密码</span>
+            <span style="position:relative;display:inline-flex;"><input class="inp" type="password" style="width:190px;padding-right:34px;" value="decrypted-once"><button style="position:absolute;right:6px;top:50%;transform:translateY(-50%);border:none;background:none;color:var(--muted);cursor:pointer;font-size:11px;">👁</button></span>
+            <label class="switch"><input type="checkbox"><span class="track"></span>验证后立即失效（不留内存）</label>
+          </div>
+        </div>
+
+        <div class="ftype-fields hidden" id="ft-ssh_key">
+          <div class="f-row"><span class="f-label req">用户名</span><input class="inp" style="width:170px" value="tunnel_svc"></div>
+          <div class="f-row"><span class="f-label req">私钥路径</span><input class="inp mono" style="width:280px" value="~/.ssh/id_ed25519"><button class="btn sm">浏览…</button></div>
+          <div class="f-row"><span class="f-label">口令</span>
+            <span style="position:relative;display:inline-flex;"><input class="inp" type="password" style="width:180px;padding-right:34px;" placeholder="私钥未加密可留空"><button style="position:absolute;right:6px;top:50%;transform:translateY(-50%);border:none;background:none;color:var(--muted);cursor:pointer;font-size:11px;">👁</button></span>
+            <span class="f-help">口令 / 密码二选一校验（A5 轮）；路径明文、口令 AES 加密落库</span>
+          </div>
+        </div>
+
+        <div class="ftype-fields hidden" id="ft-ssh_agent">
+          <div class="f-row"><span class="f-label">Agent 来源</span>
+            <select class="inp"><option>Windows OpenSSH Agent（\\.\pipe\openssh-ssh-agent）</option><option>Pageant</option></select>
+          </div>
+          <div class="f-row"><span class="f-label req">用户名</span><input class="inp" style="width:170px" value="tunnel_svc">
+            <span class="f-help"><span class="st st-prop">提案</span>：私钥不落 RDS 库——签名时经 agent 完成握手；档案只存 agent 来源 + 用户名（联动 <a href="manager-network.html">网络资源</a>）</span>
+          </div>
+        </div>
+
+        <div class="edit-foot">
+          <button class="btn" onclick="closeAuthEditor()">取消</button>
+          <button class="btn primary" onclick="saveAuth()">保存档案</button>
+          <span class="ef-err" id="auth-save-err"></span>
+          <span class="f-help" style="margin-left:auto">保存 → 写库（凭据 AES-256-GCM）→ 刷新列表与引用计数 → 返回列表并选中该行</span>
+        </div>
+
+        <div class="note warn" style="margin-top:10px;"><b>保存时校验</b>（演示：清空档案名再保存）：必填缺失 → 行内标红 + 首个缺项说明；ssh_key 口令 / 密码二选一（A5 轮同款）。改既有档案凭据 → 保存前先展示<a href="#rotate" onclick="document.querySelector('[data-tab=&quot;rotate&quot;]').click()">轮换影响面</a>（三层闭包）。</div>
+      </div>
+    </div>
+
+    <!-- ============ Tab2 密钥来源 ============ -->
+    <div data-panel="key" class="card-body hidden">
+      <div class="sec"><h3>现状</h3><span class="hint">shared/crypto.rs · 已实现</span></div>
+      <div class="note warn" style="margin-bottom:14px;">
+        当前实现：AES key = SHA256(<b>安装级随机盐</b> <code>{RDS_HOME}/data/encryption-salt</code> + <b>机器 ID</b> <code>machine-id</code>)。
+        优点：零输入、无明文主密码驻留内存。代价：<b>密文与机器绑定</b>——直接拷数据目录到新机器 = 全部凭据解不开；且本机任意进程可读盐文件，加密挡不住同机攻击者（防的是「误提交 / 误分享数据目录时的明文泄露」，不是全量威胁模型）。
+      </div>
+
+      <div class="sec"><h3>密钥来源选项</h3><span class="hint">提案 · 三档可选，默认 ①</span></div>
+      <div class="grid c3">
+        <div class="opt-card on">
+          <div class="o-t">① 机器绑定（现状默认）<span class="st st-impl">已实现</span></div>
+          <div class="o-d">安装盐 + 机器 ID。零配置；换机需走迁移流程（Tab4）。适合个人桌面工具的默认档。</div>
+        </div>
+        <div class="opt-card">
+          <div class="o-t">② 系统凭据管理器 <span class="st st-prop">提案</span></div>
+          <div class="o-d">主密钥存 Windows Credential Manager（DPAPI 保护，按当前用户派生）。换机 = 系统账户漫游 / 手动导出；盐文件泄露不再等于密钥泄露。落点：<code>shared::crypto</code> 增加 KeyProvider 抽象。</div>
+        </div>
+        <div class="opt-card">
+          <div class="o-t">③ 主密码（最高档）<span class="st st-prop">提案</span></div>
+          <div class="o-d">PBKDF2/Argon2 从主密码派生 KEK，加密随机 DEK 落盘。数据目录被整份拷走也无法解密；代价：启动 / 首次解锁需输入，忘记 = 凭据不可恢复（如实提示，不做后门）。</div>
+        </div>
+      </div>
+      <div class="note info" style="margin-top:12px;">迁移语义：三档之间切换 = 用旧 key 解密全量 → 新 key 重加密（<code>reencrypt_all</code>，事务内分批；失败回滚保留 <code>AES:</code> 旧前缀密文）。档案密文格式不变（仍是 <code>AES:{nonce}{ct}</code>），只换 key 派生层。</div>
+    </div>
+
+    <!-- ============ Tab3 轮换与影响面 ============ -->
+    <div data-panel="rotate" class="card-body hidden">
+      <div class="sec"><h3>轮换流程</h3><span class="hint">提案 · 档案「编辑保存」触发，不是独立按钮</span></div>
+      <div class="steps" style="max-width:640px;">
+        <div class="step"><div class="s-n">1</div><div><div class="s-t">修改档案凭据并保存</div><div class="s-d">编辑「订单库只读账号」→ 改密码 → 保存。保存前先展示影响面（下一步）。</div></div></div>
+        <div class="step now"><div class="s-n">2</div><div><div class="s-t">影响面确认（引用方列表 · 含网络资源传导）</div><div class="s-d">
+          <b>直接引用</b>（连接凭据位直接选了本档案）1 条：<br>
+          · <b>订单库只读副本</b> <span class="chip">草稿</span> —— 保存时生效<br>
+          <b>经网络资源间接引用</b>（<a href="manager-network.html">网络资源</a>引用本档案 → 资源/链再被连接引用）2 条：<br>
+          · <b>订单库(生产)</b> <span class="chip">G</span> —— 空闲，下次连接用新密码<br>
+          · <b>报表同步</b> <span class="chip">P · 已连接</span> —— <span class="bad">在连会话仍持旧凭据</span>，需断开重连；列表提供「全部断开」<br>
+          <span class="f-help">传导链：本档案 → 资源「公司代理」→ 链「生产跳板链」→ 连接（三层闭包，依赖网络资源模型落地）</span>
+        </div></div></div>
+        <div class="step"><div class="s-n">3</div><div><div class="s-t">联动检查</div><div class="s-d">DuckDB PERSISTENT SECRET 同步更新（开启加速的引用连接 · #38 注册链路复用）；失效连接标 ⚠ 待重连。</div></div></div>
+      </div>
+      <div class="note warn" style="margin-top:10px;"><span class="st st-prop">提案</span> 与现状差异：当前改档案立即生效于「下次建连」，但无影响面展示、无在连会话提示、DuckDB Secret 需等保存连接时才刷新。本流程把「改了什么、影响谁、还要做什么」三问显式化。</div>
+    </div>
+
+    <!-- ============ Tab4 换机迁移 ============ -->
+    <div data-panel="migrate" class="card-body hidden">
+      <div class="sec"><h3>换机 / 重装迁移包</h3><span class="hint">提案 · 密文机器绑定的配套出口</span></div>
+      <div class="grid c2">
+        <div>
+          <div class="f-row"><span class="f-label">导出</span>
+            <button class="btn">生成迁移包…</button>
+            <span class="f-help">旧机：全部 auth_configs + 网络资源 + 链 + 环境（含策略）→ 单文件 <code>.rds-vault</code>「连接基础设施包」——换机一次恢复，无需分头重建</span>
+          </div>
+          <dl class="kv" style="margin-top:8px;">
+            <dt>包内格式</dt><dd>迁移用 KEK（用户一次性口令 PBKDF2 派生）加密的「连接基础设施」清单：凭据档案 + 网络资源（<a href="manager-network.html">两层模型</a>）+ 链 + 环境与策略 —— 导出文件本身不含明文，可安全走网盘 / 聊天传输</dd>
+            <dt>不含</dt><dd>连接定义（走项目 / 全局库常规备份）、元数据缓存（指纹重建）、known_hosts（TOFU 首连重建）</dd>
+          </dl>
+        </div>
+        <div>
+          <div class="f-row"><span class="f-label">导入</span>
+            <button class="btn primary">导入迁移包…</button>
+            <span class="f-help">新机：口令解锁 → 按当前机器密钥来源（Tab2 所选档）重加密落库</span>
+          </div>
+          <dl class="kv" style="margin-top:8px;">
+            <dt>冲突</dt><dd>同名档案 → 逐条选择「覆盖 / 保留 / 重命名」；引用连接的 <code>auth_config_id</code> 随覆盖保持</dd>
+            <dt>当前兜底</dt><dd>现状（已实现）：无迁移包——换机后凭据全部失效需逐条重录；<code>paths::migrate</code> 只保证<b>同机</b>数据目录搬迁时盐文件跟随</dd>
+          </dl>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="page-foot">
+  <b>对照</b>：现状 = <code>auth_store.rs</code>（AES: 前缀幂等 / 读路径解密）+ <code>shared/crypto.rs</code>（盐 + 机器 ID 派生，legacy 兼容）+ <code>managers.rs</code> 覆盖层 CRUD + <code>count_references_batch</code>（引用计数）。
+  <span class="st st-prop">提案</span> 部分（密钥来源三档 / 影响面 / 轮换三步 / 迁移包）为本原型承载的详细设计，落地需登记 §14 并先拍板 KeyProvider 抽象与 Argon2 依赖。· <a href="index.html">返回总览</a> · <a href="manager-network.html">下一页：代理隧道管理 →</a>
+</footer>
+
+<!-- 删除确认弹层（两态） -->
+<div class="modal-mask hidden" id="auth-del-modal">
+  <div class="modal">
+    <div class="m-head" id="auth-del-head">删除档案</div>
+    <div class="m-body" id="auth-del-body"></div>
+    <div class="m-foot" id="auth-del-foot"></div>
+  </div>
+</div>
+
+<script>
+/* ===== 档案 CRUD 流（列表 ⇄ 编辑 + 删除两态 + 类型联动） ===== */
+function openAuthEditor(mode) {
+  document.getElementById("auth-list").classList.add("hidden");
+  document.getElementById("auth-edit").classList.remove("hidden");
+  var isNew = mode === "new";
+  document.getElementById("auth-edit-title").textContent = isNew ? "新建档案" : "编辑档案：订单库只读账号";
+  document.getElementById("auth-edit-mode").textContent = isNew
+    ? "新建模式 · 先选类型（决定字段集），再填字段"
+    : "编辑模式 · 类型创建后不可改（字段集不同）";
+  document.getElementById("a-name").value = isNew ? "" : "订单库只读账号";
+  document.getElementById("auth-save-err").textContent = "";
+}
+function closeAuthEditor() {
+  document.getElementById("auth-edit").classList.add("hidden");
+  document.getElementById("auth-list").classList.remove("hidden");
+}
+function saveAuth() {
+  var name = document.getElementById("a-name").value.trim();
+  var err = document.getElementById("auth-save-err");
+  if (!name) { err.textContent = "✘ 缺少必填：档案名"; document.getElementById("a-name").focus(); return; }
+  err.textContent = "";
+  alert("演示：保存成功（写库 · 凭据 AES-256-GCM · 刷新引用计数）");
+  closeAuthEditor();
+}
+/* 认证类型联动字段集 */
+document.querySelectorAll("#atype-seg [data-atype]").forEach(function (b) {
+  b.addEventListener("click", function () {
+    document.querySelectorAll("#atype-seg [data-atype]").forEach(function (x) { x.classList.remove("on"); });
+    b.classList.add("on");
+    var t = b.getAttribute("data-atype");
+    ["password", "ssh_key", "ssh_agent"].forEach(function (k) {
+      document.getElementById("ft-" + k).classList.toggle("hidden", k !== t);
+    });
+  });
+});
+/* 删除两态 */
+function askAuthDelete(name, unref) {
+  var m = document.getElementById("auth-del-modal");
+  document.getElementById("auth-del-head").textContent = "删除档案：" + name;
+  var body = document.getElementById("auth-del-body");
+  var foot = document.getElementById("auth-del-foot");
+  if (unref) {
+    body.innerHTML = "该档案未被引用，删除后不可恢复。<br><span style='color:var(--muted);font-size:11px;'>（真实实现：删除 → 刷新列表；在连会话若持旧凭据标 ⚠ 待重连）</span>";
+    foot.innerHTML = "<button class='btn' onclick='hideAuthDelete()'>取消</button><button class='btn danger' onclick='confirmAuthDelete()'>删除</button>";
+  } else {
+    body.innerHTML = "<b style='color:var(--danger);'>已拦截：该档案正在被引用，不可删除。</b><br>引用计数覆盖全局库 + 已登记项目库（#33）。" +
+      "<div class='ref-list'>直接引用：连接凭据位 3 条（订单库(生产) · 报表同步 · 订单库只读副本草稿）<br>经网络资源间接：生产跳板机 SSH（资源「跳板机 A」→ 2 链）· 公司代理认证（资源「公司代理」→ 1 链）</div>" +
+      "<span style='color:var(--muted);font-size:11px;'>三层闭包（档案 → 资源 → 链 → 连接）；先到引用方改用其他档案或断开引用。</span>";
+    foot.innerHTML = "<button class='btn primary' onclick='hideAuthDelete()'>知道了</button>";
+  }
+  m.classList.remove("hidden");
+}
+function hideAuthDelete() { document.getElementById("auth-del-modal").classList.add("hidden"); }
+function confirmAuthDelete() {
+  hideAuthDelete();
+  alert("演示：已删除（真实实现：删除 → 刷新列表 → 相关连接凭据状态标 ⚠ 待重连）");
+}
+</script>
+
+</body>
+</html>

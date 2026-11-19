@@ -210,6 +210,18 @@ pub struct ResultPanel {
     /// 默认 `false` = 网格左 / 右栏右）。为真时主体改竖排：网格在上、右栏满宽在下，
     /// 拖拽手柄改贴右栏顶边、位移按纵向算（`right_sidebar_height` 生效）。
     pub(crate) vertical_layout: bool,
+    /// 【R5 面板最大化】为真时收起结果网格、右栏独占整块结果集区域（对齐 DBeaver
+    /// `CMD_TOGGLE_MAXIMIZE` → `togglePanelsMaximize` = `viewerSash.hideUp()`）。
+    /// 与 `show_value_sidebar` 正交：开合态原样保留，还原后回到用户原本的开合。
+    pub(crate) panel_maximized: bool,
+    /// 【计算行数】宿主算回的总行数文案（对齐 DBeaver `rowCountLabel`：数字**就地**
+    /// 显示在状态行那颗钮上，而不是弹一个新结果集）。`None` = 还没算过，钮显示图标 +
+    /// 「计算行数」；换新结果 / 换选中结果时清空（旧数字对新结果无意义）。
+    pub(crate) row_count_note: Option<String>,
+    /// 【R6 段大小】「取下一段」一次取多少行（状态行输入框可改；默认
+    /// `ui::RESULT_SEGMENT_ROWS_DEFAULT`）。只影响后续取段，不改已加载行；
+    /// 对应 DBeaver `resultSetSize` → 数据源偏好 `RESULT_SET_MAX_ROWS`。
+    pub(crate) segment_rows: usize,
     /// 【R5 布局方向切换】竖排时右栏高度（默认 `RESULT_SIDEBAR_RIGHT_HEIGHT` = 240px）。
     /// **不进全局偏好项**：偏好项 `result_panel.sidebar_width` 是横向 px 宽度口径，
     /// 纵向高度共用一个值会互相串（偏离口径见 result-panel.md §8.46.2）。
@@ -249,6 +261,18 @@ pub struct ResultPanel {
     pub(crate) presentation: Presentation,
     /// 【右栏】当前标签页（对齐 DBeaver 右侧面板组：列浏览器 / 值详情 / 计算 / 分组）
     pub(crate) right_tab: RightTab,
+    /// 【右栏】已启用的页集合（规范序，恒非空；对齐 DBeaver `presentationSettings
+    /// .enabledPanelIds`，`ResultSetViewer.addPanel:1388`）。页签条只列出集合内的页，
+    /// 「关闭一页」= 从集合移除（其余页仍在），视图菜单的勾选态即成员关系。
+    pub(crate) open_tabs: Vec<RightTab>,
+    /// 【引用页】外键清单状态（对齐 DBeaver `ReferencesResultsContainer` 的键列表）：
+    /// 页签切到「引用」时由宿主经 `MetadataService::list_constraints` 取回并回填；
+    /// 初值 = 还没读过（`NotLoaded`）。**render 只读本字段**，取数不在 render 里发生。
+    pub(crate) references: crate::references::ReferencesState,
+    /// 【引用页】键下拉当前选中的下标（`None` = 没有可选键）。
+    /// 清单回填时默认选第一条（DBeaver `:341-343` 的兜底），选中态由
+    /// [`crate::ports::ResultRequest::SetActiveReference`] 改。
+    pub(crate) active_reference: Option<usize>,
     /// 【R2 计算页】启用的统计项集合（顺序 = 渲染顺序）。对齐 DBeaver Calc 的
     /// `AggregateColumnsPanel.enabledFunctions`：`+` 添加 / 行尾 × 删除 / Reset 恢复。
     /// 顺序按下标保存，用户增删不会打乱已启用项的相对次序。
@@ -258,6 +282,10 @@ pub struct ResultPanel {
     pub(crate) stats_mode: StatsMode,
     /// 【R3 分组页】额外分组列集合（数据列序；空 = 只用当前选中列）。
     /// 点选加入 / 再点移除（顺序即分组键的拼接顺序，用户可感知地决定「按 A 再按 B」）。
+    /// **只活在本视图态、跨会话不记**：DBeaver 侧 `GroupingPanel.loadSettings/saveSettings`
+    /// （`:114-120`）是空实现（`saveSettings` 全仓无调用点），分组键不进面板设置——
+    /// 那边真正落地的是「生成一条 GROUP BY 查询交给数据源执行」（`GroupingResultsContainer
+    /// .rebuildGrouping:211-247`），所以键跟着查询/编辑器走而不是偏好。见 §8.93。
     pub(crate) group_columns: Vec<usize>,
     /// 【R3 分组页】分组结果排序口径
     pub(crate) group_sort: GroupSort,
@@ -362,6 +390,10 @@ pub struct ResultPanel {
     /// 【P1-2】行号输入框的订阅句柄（仅持有——句柄丢了解订就跟着走；`set_value`
     /// 程序化回填不发事件，所以只有用户真敲键才会入队 `GoRow`）
     pub(crate) _row_count_sub: Option<Subscription>,
+    /// 【R6 段大小】状态栏「一段」行数输入框（对齐 DBeaver `resultSetSize` Text）
+    pub(crate) segment_input: Entity<InputState>,
+    /// 【R6 段大小】输入框订阅句柄（仅持有；有效输入入队 `SetSegmentRows`）
+    pub(crate) _segment_sub: Option<Subscription>,
     /// 【网格事件】表格事件订阅句柄（选格 / 双击编辑 / 列序 / 列宽 / 清除选择 / 整行选中）。
     /// **必须持有**：句柄一丢就解订，`set_grids` 换网格时整体重挂（见 `set_grids` 注释）。
     pub(crate) _grid_sub: Option<Subscription>,

@@ -5,7 +5,9 @@
 > **一句话**：把「一个数据源该怎么连」这件事做完整、做诚实——从选类型/驱动、填连接信息、引用凭据与网络档案，到测试连接、落库、运行时连接，全程一个对话框 + 一个服务层。
 >
 > 本文只提炼**特点 / 边界 / 硬约束 / 地图**；细节一律指向下方五份文档（本目录内），**不复制设计**。
-> 状态：M3 主线完成（2026-09-13）。已知缺口与排期**唯一权威**是架构文档 §14。
+> 状态：M3 主线完成（2026-09-13）。已知缺口与排期**唯一权威**是架构文档 §14（本文不再另列「未做清单」，避免两处漂移）。
+>
+> **打磨轮记录**：2026-11-18 一轮（下列 ①–⑪）已完成并合流；2026-11-18 起的分支 `feature/connection-config-center` 又做了 22 刀——配置中心页、网络两层模型、执行语义矩阵 8 行（只读/DDL、超时、行数、审计、schema 过滤、DML 确认、PROD 徽标、连接级覆盖）、密钥三档与启动解锁，决策编号 **#118–#132**，权威描述在架构文档 §6。
 >
 > **本轮打磨（2026-11-18）**：① 首开作用域默认「仅项目」真正写进 Select（此前界面显示项目、落库走全局）；② 侧栏「类型目录」置顶、暂存列表沉底；③ Tab 由五页收敛为「常规 / 网络 / 高级」（文件型两页），能力（只读）与驱动属性并入高级页，驱动属性置页首；④ 地址单一权威：host/port/db 为唯一真相源，URI 只读派生（粘贴整条连接串走「从剪贴板导入」）；⑤ 作用域「仅项目」但没选项目 → 保存前拦截并要求先选项目；⑥ 无驱动类型的「安装驱动」就近入口（直达插件管理）；⑦ 信息条按 `driver_kind` 说话（不再一律「原生连接」）；⑧ 对话框宽度按窗口夹取；⑨ Tab 标签与作用域分段短标签走 `tr`，补齐 26 个缺失文案键（作用域**语义值**不翻译——`scope_from_label` 靠字面值解析）；⑩ 无驱动类型行变为可确认：确认即打开插件管理页，宿主没挂回调时回退为结果行说明原因；⑪ 全模块共用一个惰性初始化的 tokio `Runtime`（`services/rt.rs`），首开六条目录查询（认证 / 网络 / 环境 / 类型 / 驱动 / 驱动来源）并成一次 `block_on` 并发发出——此前是六个运行时、六次串行等待。对应提交见分支 `feat/driver-entry-polish`、`feat/i18n-install-polish`、`feat/type-row-click` 与 `feat/first-open-batch`。
 
@@ -15,7 +17,7 @@
 
 | 特点 | 含义 | 出处 |
 | --- | --- | --- |
-| **一个对话框管完** | 类型/驱动两层选择 + 三页 Tab（常规 / 网络 / 高级；文件型两页，能力与驱动属性并入高级） + 侧栏「N 个类型暂无驱动 → 安装驱动」+ 暂存列表 + 三个管理器覆盖层（认证 / 网络 / 环境），保存后不关闭、连续配置多条 | 架构 §2、原型 §2–§4 |
+| **一个对话框管完** | 类型/驱动两层选择 + 三页 Tab（常规 / 网络 / 高级；文件型两页，能力与驱动属性并入高级） + 侧栏「N 个类型暂无驱动 → 安装驱动」+ 暂存列表；档案与密钥在同窗口的**配置中心页**（认证 / 网络 / 环境 / 密钥来源四域，单实例），保存后不关闭、连续配置多条 | 架构 §2、#118–#119、#131 |
 | **测试连接 = 真实连接的预演** | 唯一组装点 `build_probe_config`：同一套凭据注入 + **真实建隧道**（测完即关）+ 驱动属性/高级选项；差异只剩“不注册连接池 / 不落库” | 架构 §6 #74 |
 | **严格模式，不静默降级** | 引用的认证 / 网络档案缺失、解析不出连接方式 → 测试与真实连接**双双报错**（绝不回退“直连 + 无凭据”） | 架构 §6 #75、§11 |
 | **反馈不静默** | 同名拦截、项目根无效、文件新建失败、分组未落库（warning 级）、测试进度…全部落到结果行；只有标签同步等次要路径保留日志告警 | 架构 §11 |
@@ -60,6 +62,13 @@
 - **做**：数据源连接的**新增 / 编辑 / 删除 / 测试**、作用域路由、凭据与档案引用、DuckDB Secret 加速、运行时连接与隧道、暂存草稿、连接的组织元数据（标签 / 分组勾选）。
 - **不做**：数据源**导航树 / 分组管理 / 标签检索视图**（属 database-nav，见 `../database/database-nav-dev-plan.md`）；驱动**安装 / 插件**本体（平台；对话框只做「一键跳到插件管理」的入口）。
 - 模板**导入导出**已实装（暂存列表标题行 `导出 / 导入`，剪贴板 JSON、不含密码）。
+- **配置中心页（2026-11-18 起，四域）**：认证 / 网络 / 环境三域已从「对话框内再开一层」升格为中央 Dock 单实例页（左域导航 + 右面包屑 + 内容）；2026-11-19 又加了第 4 项**密钥来源**（不属于三管理器 workspace，见下）。列表与表单仍复用 `managers::manager_panel_ui` 同一份实现（页面不是对话框的克隆）；三处「管理」直开该页，**旧内层对话框已删**（`open_manager` 与本模块的 `DIALOG_MANAGER_WIDTH` 一并退场）。
+- **域内两态 + 列表工具条**：进域先看列表（域名 + 条目数 + 名称搜索 + 类型 chips + 「新建」），点「新建 / 编辑」进表单，`‹ 返回列表` 回去；列表态回显删除结果。列表行显示类型键与被引用数，类型 chips 只在认证 / 网络域出现（环境无类型列），再点当前 chip = 回到「全部」。页头有三格统计条（条目 / 被连接引用 / 尚未被引用，仅统计当前域已拉到的列表）。左栏各域（含密钥来源）各带一个计数 chip：管理器域打开过的给真数字、没打开过的显示「—」，密钥域以**当前档位名**充当 chip；点任一管理器域会先收起密钥域。
+- **网络域已切两层模型（2026-11-19）**：列表把 `net_resources` / `chains` 与旧 `network_configs` 合并展示（同 id 只留两层那条）；保存按类型分派——`chain` 写 `chains`（hop 数组逐跳复用/新建资源），单跳写 `net_resources`（编辑沿用原 id，旧表同名行被接管），**旧表不再接收新写入**但仍作为读路径回落。删除同时清两层节点与旧表同名行；资源被链引用会计入引用数（删除守卫拦得住）。`http` / `socks` 共用「proxy」展示类型，编辑既有 socks 资源时保留其 `kind`（不被表单改写成 http）。
+- **DML 需确认已通车（2026-11-19，执行语义矩阵第 8 行）**：环境开 `security.confirm_dml` 后，UPDATE / DELETE 由编辑器在执行前弹确认（正文写明环境名、语句种类与 SQL 摘要），用户点「执行」才入队；引擎侧 `SqlExecuteOptions.dml_confirmed` 兜底拒绝没被问过的写（错误码 `ENV_POLICY_DML_CONFIRM`，审计记 `confirm_required`）。单元执行没有确认入口，一律由引擎拒绝。
+- **连接级策略覆盖已生效（2026-11-19）**：高级页打开的策略开关会写进 `advanced_options.policy_overrides`，含义是**这条连接不吃这条环境策略**（连接 > 环境）。执行侧三处（`execute` / `dml_confirm_for` / schema 过滤）统一走 `resolve_for_connection`，覆盖在环境结果上叠加，保存后即时生效（不需要等 5 秒缓存）。
+- **密钥来源三档进了配置中心第 4 域（2026-11-19）**：左栏「密钥来源」与认证 / 网络 / 环境并列（`cc-nav-3`），右栏给出当前档位、主密码输入与三档各自代价（机器绑定 / 系统凭据（DPAPI，仅 Windows） / 主密码），按钮 `vault-switch-{machine,os,master}` 就地切档。切档会重加密认证 / 网络 / 资源三张表（项目库先、全局库后、档位文件最后，失败则档位不变），结果行写清条数或失败原因；系统凭据档在非 Windows 上直接禁用。
+- **主密码档有启动门禁（2026-11-20）**：切到 master 档后，下次启动先弹解锁小窗（`workbench::unlock`），输对口令才进工作台；只有「解锁 / 退出应用」两个出口，失败三次禁用解锁键（防误触，不是安全边界）。忘记口令无绕过路径，只能拿备份的 `vault-master-key` 覆盖后重启（决策 #132）。
 
 ## 3. 代码地图（要改什么去哪）
 
@@ -68,14 +77,17 @@
 | 对话框 UI / 布局 / 交互 | `crates/connection_dialog/src/components/connection_dialog/render.rs`（逐块函数：`result_row_ui` / `side_panel_ui` / `header_ui` / `capability_panel_ui` / `driver_props_panel_ui` / `footer_ui` / `network_tab_ui` / `advanced_tab_ui` / `general_tab_ui`）+ `helpers/` 纯函数 + `crates/workbench_shell/src/ui.rs` 尺寸常量 |
 | 暂存列表 / 草稿快照 | `crates/connection_dialog/src/components/connection_dialog/staging.rs`（`ConnectionDraft` + `staging_*`）+ `draft_list.rs` |
 | 类型树 / 项目下拉 | `connection_dialog/type_tree.rs`、`connection_dialog/project_picker.rs`（+ `Shared::{project_new_request, project_open_request}` → `take_project_action_request`） |
-| 三个管理器覆盖层 | `connection_dialog/managers.rs` |
+| 三个配置域（认证 / 网络 / 环境）的列表 + 表单 | `connection_dialog/managers.rs`（`manager_panel_ui` / `prepare_manager_domain` 为唯一实现，对话框与页共用） |
+| 配置中心页（三域左导航 + 右内容） | `crates/connection_dialog/src/components/config_center.rs`（页面本体）+ `crates/workbench/src/panels/config_center.rs`（中央 Dock 单实例页）+ `ConnectionDialogHost::show_config_center` |
+| 环境策略在执行侧生效（拦截 / 超时 / 行数 / 审计 / schema / 写确认 / 覆盖） | `crates/engine/src/services/policy_guard.rs`（解析 + 5s 缓存 + `resolve_for_connection` + `dml_confirm_for` 数据）+ `sql_service.rs`（`execute` 闸）+ `crates/database/src/metadata_service.rs`（`policies_for` → schema 过滤） |
+| 密钥来源三档（选档 / 切档） | `crates/connection_dialog/src/components/config_center_vault.rs`（`VaultView`）+ `engine::services::vault_service`（状态 / 编排）+ `store::persistence::vault_switch::switch_source`（重加密 + 档位落盘） |
 | 落库 / 回读 / 测试连接 / 作用域路由 | `crates/connection_dialog/src/services/data_source_service.rs` |
 | 连接组装与隧道 | `crates/connection_dialog/src/services/connection_service.rs`（+ `connection_service/{network,runtime}.rs`）+ `crates/connection/src/{url,url_params,chain,secret}.rs` |
 | 共用 tokio 运行时 | `crates/connection_dialog/src/services/rt.rs`（`OnceLock<Option<Runtime>>` + `runtime()`） |
 | **网络配置（SSH / 代理 / SOCKS / SSL）**：模型 | `crates/connection/src/config.rs`（`SshConfig` / `SshAuth` / `ProxyConfig` / `SslConfig` / `ChainHop` / `ConnectionMethod`）+ `model.rs` |
 | **网络配置**：真实拨号与隧道 | `crates/connection/src/connector/`（`ssh.rs`：`establish_ssh_tunnel` 基于 **russh** 本地端口转发 + `SshTunnelConnector`〔废弃占位，防静默直连〕；`proxy.rs`：HTTP / SOCKS 代理；`tls.rs`：`SslConnector` / `wrap_tls_stream`；`mod.rs`：`Connector` trait / `Connection` / `DirectConnector` / `TunnelGuard`）+ `factory.rs`（按配置选连接器）+ `stream.rs`（隧道流）、`known_hosts.rs`（主机指纹校验）、`chain.rs`（`apply_network_method` 单跳 + `process_chain` 多跳 + `TunnelRegistry` 守卫表） |
 | **网络配置**：落库 | `crates/store/src/persistence/network_store.rs`（结构化字段组装 / 回填 + 凭据 AES 加密 / 脱敏 / 存量迁移） |
-| **网络配置**：UI 入口 | 「网络」页（引用下拉 + 「管理网络配置」）→ `connection_dialog/managers.rs`（类型 + 字段表单）+ `helpers::{network_field_specs, network_config_values}`（按类型展开字段）；**内联协议链编辑器已撤下**（决策 #72，多跳走 `chain` 档案） |
+| **网络配置**：UI 入口 | 「网络」页（引用下拉 + 「管理」）→ 打开**配置中心页的网络代理域**（`show_config_center`）；表单按类型展开字段（`helpers::{network_field_specs, network_config_values}`）；**内联协议链编辑器已撤下**（决策 #72，多跳走 `chain` 档案） |
 | 表结构与迁移 | `crates/store/src/persistence/*`（`network_store` / `auth_store` / `driver_store` / `connection_org_store` / `metadata_identity`）+ `crates/store/migrations/{global,project_meta}/*` |
 | ID 规则与作用域判定 | `crates/store/src/persistence/id_prefix.rs` |
 

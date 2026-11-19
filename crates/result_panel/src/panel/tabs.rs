@@ -5,8 +5,9 @@ use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::list::ListItem;
-use gpui_kit::component::menu::PopupMenuItem;
+use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::separator::Separator;
 use gpui_kit::component::table::TableDelegate;
 use gpui_kit::component::toolbar::Toolbar;
 use gpui_kit::component::tree::tree;
@@ -16,11 +17,13 @@ use gpui_kit::*;
 // 【B5】事实帧只读句柄随网格投影进 delegate（列式统计 / 原生数值排序交互派生时读取）
 
 use super::data::ResultPanel;
-use super::events::{panel_view_item_label, panel_view_menu_items, PanelViewItem};
+use super::events::{
+    page_needs_separator, panel_view_item_label, panel_view_menu_items, PanelViewItem,
+};
 use crate::grid::cell::{
     HEX_DUMP_BYTES_PER_LINE, ViewerMode, classify_value, hex_lines, hex_to_bytes,
 };
-use crate::grid::stats::{ColumnStats, fmt_grouped, text_minmax};
+use crate::grid::stats::{ColumnStats, distinct_count, fmt_grouped, median_of, mode_of, text_minmax};
 use crate::ports::{
     GroupSort, ResultActionQueue, ResultRequest, RightTab, StatsItem, StatsMode, ValuePayload,
 };
@@ -29,6 +32,148 @@ use crate::ui;
 
 /// 【P2-1】hex 转储每页行数（16 行 × 16 字节 = 256 字节 / 页）
 const HEX_LINES_PER_PAGE: usize = 16;
+
+/// 【R3 分组页】「移除分组列」是否可用（纯函数）。
+///
+/// 对齐 DBeaver `GroupingColumnsContainer.canColumnBeRemoved`（`:92-94`）：只有
+/// 「选中列在分组键里」且「移除后仍至少剩一列」时才可用——**删到零是「清空分组」
+/// 的职责**，逐列删除不许把分组键删空。没显式分组键（走选中列兜底）时也没得删。
+pub(crate) fn can_remove_group_column(group_columns: &[usize], selected: Option<usize>) -> bool {
+    match selected {
+        Some(selected) => group_columns.len() > 1 && group_columns.contains(&selected),
+        None => false,
+    }
+}
+
+/// 【分组页】分组键内某列能否上 / 下移一位（纯函数）。
+///
+/// 对齐 DBeaver `GroupingColumnsContainer.moveColumns:126-152`：分组键（属性列）顺序
+/// 就是分组嵌套顺序，移动会改层级。本仓用「上移 / 下移一位」表达同一动作
+/// （键盘可达、headless 可验；DBeaver 是拖到目标列的拖放）。
+/// 可用条件 = 选中列**在分组键里**且移动后仍在界内。
+pub(crate) fn can_move_group_column(
+    group_columns: &[usize],
+    selected: Option<usize>,
+    delta: i8,
+) -> bool {
+    let Some(selected) = selected else {
+        return false;
+    };
+    let Some(index) = group_columns.iter().position(|column| *column == selected) else {
+        return false;
+    };
+    let target = index as i64 + delta as i64;
+    target >= 0 && (target as usize) < group_columns.len()
+}
+
+/// 【分组页】把分组键里某列上 / 下移一位；返回是否真的动了
+/// （列不在分组键里 / 已经到边界 = `false`，调用方据此决定要不要通知）。
+///
+/// 这一层只动 `Vec<usize>` 顺序：分组行的键值排列由 `arrange_groups` 现算，
+/// 顺序一变层级就跟着变，不需要在别处补状态。
+pub(crate) fn move_group_column_in_place(
+    group_columns: &mut [usize],
+    column: usize,
+    delta: i8,
+) -> bool {
+    let Some(index) = group_columns.iter().position(|existing| *existing == column) else {
+        return false;
+    };
+    let target = index as i64 + delta as i64;
+    if target < 0 || (target as usize) >= group_columns.len() {
+        return false;
+    }
+    group_columns.swap(index, target as usize);
+    true
+}
+
+/// 【分组页】列下拉里某一项要显示的文字：**已选中的列带上它在分组键里的位次**（1 起）。
+///
+/// DBeaver 的分组列顺序在 `GroupingConfigDialog` 的列表格里直接可见（表格行序 = 分组顺序）；
+/// 本仓用勾选式下拉承载同一件事，若不标位次，用户从菜单上看不出「先按 A 再按 B」，
+/// 只能靠猜。位次只加在已勾选项上，未勾选项保持列名原文。
+pub(crate) fn group_column_menu_label(
+    group_columns: &[usize],
+    column: usize,
+    name: &str,
+) -> String {
+    match group_columns.iter().position(|existing| *existing == column) {
+        Some(index) => format!("{}. {}", index + 1, name),
+        None => name.to_string(),
+    }
+}
+
+/// 【计算页】「复制全部」文本（纯函数）。
+///
+/// 对齐 DBeaver `AggregateColumnsPanel.CopyAllAction`（`:471-495`）的**非分组口径**：
+/// 逐行 `函数=值`、`\n` 分隔（分组口径是树缩进，本仓没有分组聚合，见 §8.87）。
+/// 空集合返回空串——调用点按 DBeaver 同款「空文本不写剪贴板」处理。
+pub(crate) fn stats_copy_all_text(entries: &[(StatsItem, String)]) -> String {
+    entries
+        .iter()
+        .map(|(item, value)| format!("{}={}", item.label(), value))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// 【计算页】右键菜单条目（`PopupMenu` 内部不可读，所以清单抽成纯函数 + 单测）。
+///
+/// 对齐 `AggregateColumnsPanel` 的右键菜单（`:106-116`）：
+/// `CopyAction` → `CopyAllAction` → `Separator` → `fillToolBar` 那一组。
+/// `fillToolBar:322-331` 的顺序是 Add / Remove / Reset / SEP / GroupBy / ValueType，
+/// 本仓差异（都属能力缺口，不是漏做）：Remove 换成了行尾 ×（本仓无树行选中模型，
+/// §8.83）、GroupBy 不做（本仓无组内聚合列，§8.87）。
+pub(crate) enum StatMenuEntry {
+    CopyValue,
+    CopyAll,
+    Separator,
+    /// 「添加」= 只列**尚未启用**的函数（`AddFunctionAction.createMenuManager:372-386`）
+    AddMissing(StatsItem),
+    Reset,
+    /// 口径切换：菜单项报的是**点它会切到哪一档**（与工具条按钮报当前档相反）
+    ToggleMode(StatsMode),
+}
+
+/// 右键菜单条目清单（顺序照 `menuMgr.addMenuListener` + `fillToolBar`）。
+///
+/// 缺项为空时不出「添加」那一段（DBeaver 此时菜单为空、点了没反应）；为了让分隔线
+/// 不留悬空的两条，缺项为空就整段跳过（不渲染 Separator）。
+pub(crate) fn stat_menu_entries(enabled: &[StatsItem], mode: StatsMode) -> Vec<StatMenuEntry> {
+    let mut entries = vec![
+        StatMenuEntry::CopyValue,
+        StatMenuEntry::CopyAll,
+        StatMenuEntry::Separator,
+    ];
+    let missing: Vec<StatMenuEntry> = StatsItem::ALL
+        .into_iter()
+        .filter(|item| !enabled.contains(item))
+        .map(StatMenuEntry::AddMissing)
+        .collect();
+    if !missing.is_empty() {
+        entries.extend(missing);
+        entries.push(StatMenuEntry::Separator);
+    }
+    entries.push(StatMenuEntry::Reset);
+    entries.push(StatMenuEntry::Separator);
+    entries.push(StatMenuEntry::ToggleMode(match mode {
+        StatsMode::Numeric => StatsMode::Text,
+        StatsMode::Text => StatsMode::Numeric,
+    }));
+    entries
+}
+
+/// 菜单条目文案（纯函数，测试直接钉它）：口径项报「切到哪一档」，其余与工具条同款。
+pub(crate) fn stat_menu_label(entry: &StatMenuEntry) -> String {
+    match entry {
+        StatMenuEntry::CopyValue => "复制值".to_string(),
+        StatMenuEntry::CopyAll => "复制全部".to_string(),
+        StatMenuEntry::Separator => String::new(),
+        StatMenuEntry::AddMissing(item) => format!("添加「{}」", item.label()),
+        StatMenuEntry::Reset => "恢复默认统计项（默认只有「非空」）".to_string(),
+        StatMenuEntry::ToggleMode(StatsMode::Text) => "改为按字符串聚合".to_string(),
+        StatMenuEntry::ToggleMode(StatsMode::Numeric) => "改为按数值聚合".to_string(),
+    }
+}
 
 /// 【保存值】按值形态给出待落盘的字节与默认文件名（纯函数；测试直接钉它）。
 ///
@@ -92,8 +237,15 @@ impl ResultPanel {
         let theme = cx.theme();
         let muted = theme.colors.muted_foreground;
         let Some((row, col)) = self.selection_pos else {
-            // 空态也保留页内工具条（六页同形，见 `empty_page`）
-            return self.empty_page("editor-result-value-toolbar", "值", "未选中单元格", cx);
+            // 空态也保留页内工具条（六页同形，见 `empty_page`）；
+            // 值页正文是**两行**（DBeaver `ValueViewerPanel` 的空态形态，见 [`value_empty_lines`]）
+            return self.empty_page_lines(
+                RightTab::Value,
+                "editor-result-value-toolbar",
+                "值",
+                &value_empty_lines(),
+                cx,
+            );
         };
         let grid = self.grid.read(cx);
         let delegate = grid.delegate();
@@ -160,7 +312,11 @@ impl ResultPanel {
         };
         // 【保存值】对齐 DBeaver「保存至文件…」（`ContentValueManager.contributeContentActions`
         // `:86-99` → `saveToFile` `:291-334`）：落盘动作在宿主（选路径 + 写盘），
-        // 面板只交字节与默认文件名
+        // 面板只交字节与默认文件名。
+        //
+        // 【动作可用性】DBeaver 那份动作是**条件贡献**的：`if (!content.isNull())` 才加
+        // `saveToFile`（`:92-99`）。本仓按同一口径置灰——NULL 格 / 行号槽没有内容可写。
+        let savable = value_can_save_to_file(col, delegate.row_cell_text(row, col));
         let save = {
             let queue = self.queue.clone();
             Button::new("editor-result-value-save")
@@ -168,9 +324,35 @@ impl ResultPanel {
                 .xsmall()
                 .debug_selector(|| "editor-result-value-save".to_string())
                 .icon(IconName::Download)
-                .tooltip("把当前值保存到文件")
+                .disabled(!savable)
+                .tooltip(if savable {
+                    "把当前值保存到文件"
+                } else {
+                    "该格没有内容可保存（NULL / 行号槽）"
+                })
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::SaveValue, app);
+                })
+                .into_any_element()
+        };
+        // 【在外部程序中打开】对齐 DBeaver `ContentValueManager` 的
+        // 「Open in external editor」（`:100-140`，与「保存至文件」同一处无条件贡献）：
+        // 落一份临时文件后交系统默认程序打开。零内容格与保存钮同口径置灰。
+        let open_external = {
+            let queue = self.queue.clone();
+            Button::new("editor-result-value-open-external")
+                .ghost()
+                .xsmall()
+                .debug_selector(|| "editor-result-value-open-external".to_string())
+                .icon(IconName::ExternalLink)
+                .disabled(!savable)
+                .tooltip(if savable {
+                    "用系统默认程序打开当前值（先落一份临时文件）"
+                } else {
+                    "该格没有内容可打开（NULL / 行号槽）"
+                })
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::OpenValueExternally, app);
                 })
                 .into_any_element()
         };
@@ -182,7 +364,12 @@ impl ResultPanel {
             .child(self.panel_toolbar(
                 "editor-result-value-toolbar",
                 SharedString::from(title),
-                vec![marker, copy, save],
+                // 顺序照 `ValueViewerPanel.fillToolBar:409-428`：内容类动作（保存至文件 /
+                // 在外部程序打开）在前，写回类 SaveValueAction 在后（本仓无写回）。
+                vec![marker, copy, save, open_external],
+                // 分隔线：全仓只有值详情页声明 `needsSeparator() = true`
+                // （`ValueViewerPanel.java:171-173`）。
+                true,
                 cx,
             ))
             .child({
@@ -214,6 +401,11 @@ impl ResultPanel {
         let (row, col) = self.selection_pos?;
         let grid = self.grid.read(cx);
         let delegate = grid.delegate();
+        // 【动作可用性】与页内「保存值」钮同一个判据：NULL 格 / 行号槽没有内容可写，
+        // 给空载荷就是让宿主写一个内容为 `NULL` 的文件（DBeaver 干脆不贡献该动作）。
+        if !value_can_save_to_file(col, delegate.row_cell_text(row, col)) {
+            return None;
+        }
         let value = delegate.cell_text(row, col, cx);
         let kind = if col == 0 {
             ColumnKind::Unknown
@@ -429,6 +621,7 @@ impl ResultPanel {
         let Some(data_col) = self.inspect_column(delegate) else {
             // 空态也保留页内工具条（六页同形，见 `empty_page`）
             return self.empty_page(
+                RightTab::Stats,
                 "editor-result-stats-toolbar",
                 "计算",
                 "选中一个数据列查看统计",
@@ -441,16 +634,33 @@ impl ResultPanel {
             .cloned()
             .unwrap_or_else(|| "列".to_string());
         let stats = delegate.column_stats_for(data_col);
-        // 字符串口径才需要整列取值（数值口径走事实档列式原生聚合，不物化矩阵）
+        // 整列取值：字符串口径的极值要它，去重计数 / 中位数 / 众数也要它
+        // （数值口径的 min/max/avg/sum 走事实档列式统计，不必物化矩阵）
+        let need_values = matches!(self.stats_mode, StatsMode::Text)
+            || self.stats_items.iter().any(|item| item.needs_column_values());
+        let values = need_values.then(|| delegate.column_values(data_col));
         let text_extremes = matches!(self.stats_mode, StatsMode::Text)
-            .then(|| text_minmax(&delegate.column_values(data_col)));
-        let rows: Vec<AnyElement> = self
+            .then(|| text_minmax(values.as_deref().unwrap_or(&[])));
+        // 【函数=值】启用项 + 当前值先算成一对表：行渲染与「复制全部」共用同一份快照
+        // （复制全部必须拷「此刻看到的这些」，不能在菜单回调里再算一遍）
+        let extras = StatExtras {
+            text_extremes: text_extremes.as_ref(),
+            distinct: values.as_deref().map(distinct_count),
+            median: values.as_deref().and_then(median_of),
+            mode: values.as_deref().and_then(mode_of),
+        };
+        let entries: Vec<(StatsItem, String)> = self
             .stats_items
             .iter()
             .map(|item| {
-                let value = stat_value(*item, &stats, text_extremes.as_ref(), self.stats_mode);
-                self.stat_row(*item, &value, cx)
+                let value = stat_value(*item, &stats, &extras, self.stats_mode);
+                (*item, value)
             })
+            .collect();
+        let copy_all = stats_copy_all_text(&entries);
+        let rows: Vec<AnyElement> = entries
+            .iter()
+            .map(|(item, value)| self.stat_row(*item, value, copy_all.clone(), cx))
             .collect();
         // 全停用时的空态提示（不引 `when`：本 crate 的 styled 扩展没带这个便捷方法）
         let empty_hint = rows.is_empty().then(|| {
@@ -510,8 +720,18 @@ impl ResultPanel {
     /// 【R1】右栏各页共用的页内工具条：对齐 DBeaver 每个面板内部的一条
     /// `ToolBarManager(SWT.HORIZONTAL | SWT.RIGHT | SWT.FLAT)`（`ResultSetViewer.java:1337-1374`，
     /// 动作由各面板 `contributeActions` 贡献）。
-    /// 形态：高 28px（面板头档 = vendor `Toolbar` XSmall 自带的 `min_h_7`，容器同高才不溢出）、
-    /// 左标题 / 右动作组、底边一条 `HAIRLINE` 分隔线。
+    ///
+    /// **列位照 `addPanel:1337-1383`**：那边是 `GridLayout(2, false)` 的两列——左列
+    /// （`panel.contributeActions(...).createControl(trControl)` + `FILL_HORIZONTAL`）吃满剩余宽度，
+    /// 页内动作因此**贴左**；右列（`addDefaultPanelActions` 的视图菜单）`HORIZONTAL_ALIGN_END`，
+    /// 贴右。本仓照同一列位：左 = 标题 + 动作组，右 = 视图菜单。
+    /// 标题是本仓额外保留的（DBeaver 页名只在页签上；统计页标题带列名，仍有用），
+    /// 登记为「保留的有意差异」。
+    ///
+    /// **分隔线照 `panel.needsSeparator()`**：`ResultSetViewer.java:1345-1347` 只在面板
+    /// 声明 `needsSeparator()` 时才在工具条与正文之间插一条水平分隔；全仓只有
+    /// `ValueViewerPanel:171-173` 返回 `true`，其余继承 `ResultSetPanelBase:26-28` 的 `false`。
+    /// 所以这里的分隔线由调用方按页传入，不再每页无条件画。
     /// **动作只给本仓已有能力**——不造没有底层实现的按钮：DBeaver 的引用页
     /// `contributeActions` 是空实现（`ReferencesPanel.java:156-158`），该页保持空态。
     pub(crate) fn panel_toolbar(
@@ -519,10 +739,11 @@ impl ResultPanel {
         debug_id: &'static str,
         title: SharedString,
         actions: Vec<AnyElement>,
+        separator: bool,
         cx: &App,
     ) -> AnyElement {
         let theme = cx.theme();
-        div()
+        let mut row = div()
             .h_flex()
             .items_center()
             .justify_between()
@@ -531,42 +752,55 @@ impl ResultPanel {
             .h(rems(ui::RESULT_PANEL_TOOLBAR_HEIGHT))
             .flex_none()
             .text_xs()
-            .border_b(ui::HAIRLINE)
-            .border_color(theme.colors.border)
-            .debug_selector(move || debug_id.to_string())
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(theme.colors.muted_foreground)
-                    .child(title),
-            )
-            .child(
-                Toolbar::new(format!("{debug_id}-actions"))
-                    .xsmall()
-                    .p_0()
-                    .contents(actions),
-            )
-            .child(self.panel_view_menu(debug_id, cx))
-            .into_any_element()
+            .debug_selector(move || debug_id.to_string());
+        if separator {
+            row = row
+                .border_b(ui::HAIRLINE)
+                .border_color(theme.colors.border);
+        }
+        row.child(
+            div()
+                .h_flex()
+                .items_center()
+                .gap_1()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .child(
+                    div()
+                        .flex_none()
+                        .max_w(rems(14.))
+                        .truncate()
+                        .text_color(theme.colors.muted_foreground)
+                        .child(title),
+                )
+                .child(
+                    Toolbar::new(format!("{debug_id}-actions"))
+                        .xsmall()
+                        .p_0()
+                        .contents(actions),
+                ),
+        )
+        .child(self.panel_view_menu(debug_id, cx))
+        .into_any_element()
     }
 
     /// 【右栏视图菜单】每页条右端那颗「视图菜单」（对齐 DBeaver `addDefaultPanelActions`，
     /// `ResultSetViewer.java:1590-1614`：那边 `addPanel` 给**每个面板**的面板工具条右端都挂
     /// 一颗 `IMG_LCL_VIEW_MENU` 按钮，点开是 `fillPanelsMenu()`（`:1559-1588`）的菜单）。
     ///
-    /// 菜单 = 六页勾选项（`STYLE_CHECK`，当前页为勾选态）→ 分隔 → 面板总开关 → 布局方向；
-    /// 条目清单与文案分别由纯函数 `panel_view_menu_items` / `panel_view_item_label` 定
-    /// （`PopupMenu` 内部不可读，测试钉在纯函数上）。DBeaver 菜单里还有
-    /// `CMD_TOGGLE_MAXIMIZE`（面板最大化）与 `CMD_ACTIVATE_PANELS`（把焦点交给面板），
-    /// 本仓两者都还没有落地端口，按「能力没有就不摆」不列。
+    /// 菜单 = 六页勾选项（`STYLE_CHECK`，当前页为勾选态）→ 分隔 → 面板最大化 → 分隔 →
+    /// 面板总开关 → 布局方向（段位照 `fillPanelsMenu:1559-1588`；`CMD_ACTIVATE_PANELS`
+    /// 本仓无端口、按「能力没有就不摆」不列）。条目清单与文案分别由纯函数
+    /// `panel_view_menu_items` / `panel_view_item_label` 定
+    /// （`PopupMenu` 内部不可读，测试钉在纯函数上）。
     fn panel_view_menu(&self, debug_id: &'static str, cx: &App) -> AnyElement {
         let _ = cx;
         let queue = self.queue.clone();
-        let current: RightTab = self.right_tab;
+        let open_tabs: Vec<RightTab> = self.open_tabs.clone();
         let panels_visible = self.panels_visible();
         let vertical_layout = self.vertical_layout;
+        let panel_maximized = self.panel_maximized;
         let items = panel_view_menu_items();
         let menu_id = format!("{debug_id}-view-menu");
         let button = Button::new(menu_id.clone())
@@ -587,15 +821,31 @@ impl ResultPanel {
                         }
                         PanelViewItem::Page(tab) => {
                             let queue = queue.clone();
+                            // 【勾选态 = 已启用 / 点击 = 开或关】对齐 DBeaver
+                            // `fillPanelsMenu:1559-1588` + `ResultSetHandlerTogglePanel`：
+                            // 每页是 `STYLE_CHECK` 的 `CMD_TOGGLE_PANEL`，勾 =
+                            // `isPanelVisible(id)`（`updateElement:99`）；点击走
+                            // `toggleResultsPanel:64-69` → 「已可见 → `closePanel`（关掉该页）；
+                            // 其余 → `activatePanel(id,true,true)`（打开并切过去）」。
+                            // 所以「已启用且整栏可见」= 关闭，其余一律 = 打开。
+                            let is_open = open_tabs.contains(&tab);
+                            // 判定抽成纯函数（`PopupMenu` 内部不可读，菜单用例只能钉纯函数）
+                            let closes = super::events::page_item_closes(panels_visible, is_open);
+                            let target = if closes {
+                                ResultRequest::CloseRightTab(tab)
+                            } else {
+                                ResultRequest::OpenRightTab(tab)
+                            };
                             menu = menu.item(
                                 PopupMenuItem::new(panel_view_item_label(
                                     item,
                                     panels_visible,
                                     vertical_layout,
+                                    panel_maximized,
                                 ))
-                                .checked(tab == current)
+                                .checked(is_open)
                                 .on_click(move |_, _window, app| {
-                                    queue.request(ResultRequest::SetRightTab(tab), app);
+                                    queue.request(target.clone(), app);
                                 }),
                             );
                         }
@@ -608,6 +858,7 @@ impl ResultPanel {
                                     item,
                                     panels_visible,
                                     vertical_layout,
+                                    panel_maximized,
                                 ))
                                 .checked(panels_visible)
                                 .on_click(move |_, _window, app| {
@@ -622,9 +873,25 @@ impl ResultPanel {
                                     item,
                                     panels_visible,
                                     vertical_layout,
+                                    panel_maximized,
                                 ))
                                 .on_click(move |_, _window, app| {
                                     queue.request(ResultRequest::ToggleVerticalLayout, app);
+                                }),
+                            );
+                        }
+                        PanelViewItem::MaximizeToggle => {
+                            let queue = queue.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(panel_view_item_label(
+                                    item,
+                                    panels_visible,
+                                    vertical_layout,
+                                    panel_maximized,
+                                ))
+                                .checked(panel_maximized)
+                                .on_click(move |_, _window, app| {
+                                    queue.request(ResultRequest::TogglePanelMaximize, app);
                                 }),
                             );
                         }
@@ -649,7 +916,7 @@ impl ResultPanel {
                 .ghost()
                 .xsmall()
                 .icon(IconName::Plus)
-                .tooltip("六项统计都已启用")
+                .tooltip("九项统计都已启用")
                 .disabled(true)
                 .into_any_element()
         } else {
@@ -685,7 +952,7 @@ impl ResultPanel {
                 .xsmall()
                 .debug_selector(|| "editor-result-stat-reset".to_string())
                 .icon(IconName::RotateCcw)
-                .tooltip("恢复默认统计项（六项全开）")
+                .tooltip("恢复默认统计项（对齐 DBeaver 默认集：非空 + 去重计数）")
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::ResetStatsItems, app);
                 })
@@ -719,17 +986,35 @@ impl ResultPanel {
             "editor-result-stats-toolbar",
             SharedString::from(format!("「{column_name}」统计")),
             vec![add, reset, mode_button],
+            page_needs_separator(RightTab::Stats),
             cx,
         )
     }
 
-    /// 【R2】计算页一行：函数名（左）+ 值（右）+ 行尾停用钮（替代 DBeaver 的「−」）
-    fn stat_row(&self, item: StatsItem, value: &str, cx: &App) -> AnyElement {
+    /// 【R2】计算页一行：函数名（左）+ 值（右）+ 行尾停用钮（替代 DBeaver 的「−」）。
+    ///
+    /// 【R7 对齐右键菜单】行上挂 `AggregateColumnsPanel` 的右键菜单（`:106-116`）：
+    /// 复制值 / 复制全部 / 分隔 / 与工具条同款动作（本仓只摆「恢复默认统计项」，
+    /// 添加在工具条 ＋ 里、分组聚合不适用，见 §8.87）。
+    fn stat_row(
+        &self,
+        item: StatsItem,
+        value: &str,
+        copy_all: String,
+        cx: &App,
+    ) -> AnyElement {
         let muted = cx.theme().colors.muted_foreground;
         let queue = self.queue.clone();
         let row_id = format!("editor-result-stat-row-{:?}", item);
         let remove_id = format!("editor-result-stat-remove-{:?}", item);
+        // 菜单里的两份文本在渲染期定稿：复制值 = 本行值，复制全部 = 上面的整表快照
+        let copy_value = value.to_string();
+        let reset_queue = self.queue.clone();
+        let menu_queue = self.queue.clone();
+        // 菜单条目按「此刻启用的集合 + 当前口径」定稿（与 `stat_menu_entries` 纯函数同一口径）
+        let menu_entries = stat_menu_entries(&self.stats_items, self.stats_mode);
         div()
+            .id(("editor-result-stat-menu", item as usize))
             .h_flex()
             .items_center()
             .gap_1()
@@ -737,6 +1022,59 @@ impl ResultPanel {
             .h_5()
             .text_xs()
             .debug_selector(move || row_id.clone())
+            .context_menu(move |mut menu: PopupMenu, _window, _cx| {
+                for entry in menu_entries.iter() {
+                    if matches!(entry, StatMenuEntry::Separator) {
+                        menu = menu.separator();
+                        continue;
+                    }
+                    // 空文本不写剪贴板（DBeaver `CopyAction` 靠 SWT 自己早退，本仓显式判空）
+                    let label = stat_menu_label(entry);
+                    let item = PopupMenuItem::new(label);
+                    menu = menu.item(match entry {
+                        StatMenuEntry::CopyValue => {
+                            let one = copy_value.clone();
+                            item.on_click(move |_, _window, app| {
+                                if one.is_empty() {
+                                    return;
+                                }
+                                app.write_to_clipboard(ClipboardItem::new_string(one.clone()));
+                            })
+                        }
+                        StatMenuEntry::CopyAll => {
+                            let all = copy_all.clone();
+                            item.on_click(move |_, _window, app| {
+                                if all.is_empty() {
+                                    return;
+                                }
+                                app.write_to_clipboard(ClipboardItem::new_string(all.clone()));
+                            })
+                        }
+                        StatMenuEntry::AddMissing(target) => {
+                            let queue = menu_queue.clone();
+                            let target = *target;
+                            item.on_click(move |_, _window, app| {
+                                queue.request(ResultRequest::AddStatsItem(target), app);
+                            })
+                        }
+                        StatMenuEntry::Reset => {
+                            let queue = reset_queue.clone();
+                            item.on_click(move |_, _window, app| {
+                                queue.request(ResultRequest::ResetStatsItems, app);
+                            })
+                        }
+                        StatMenuEntry::ToggleMode(target) => {
+                            let queue = menu_queue.clone();
+                            let target = *target;
+                            item.on_click(move |_, _window, app| {
+                                queue.request(ResultRequest::SetStatsMode(target), app);
+                            })
+                        }
+                        StatMenuEntry::Separator => item,
+                    });
+                }
+                menu
+            })
             .child(
                 div()
                     .w(rems(ui::RESULT_SIDEBAR_KV_LABEL_WIDTH))
@@ -839,8 +1177,10 @@ impl ResultPanel {
                         }
                         let queue = queue.clone();
                         let checked = selected.contains(&column);
+                        // 已勾选的项标出分组位次（顺序即层级；见 group_column_menu_label）
+                        let label = group_column_menu_label(&selected, column, name);
                         menu = menu.item(
-                            PopupMenuItem::new(name.clone())
+                            PopupMenuItem::new(label)
                                 .checked(checked)
                                 .on_click(move |_, _window, app| {
                                     queue.request(ResultRequest::ToggleGroupColumn(column), app);
@@ -876,14 +1216,63 @@ impl ResultPanel {
                 .debug_selector(|| "editor-result-group-dup".to_string())
                 .label("仅重复")
                 .toggled(duplicates_on)
-                .tooltip("只显示出现多于一次的分组".to_string())
+                // DBeaver `controls_resultset_grouping_show_duplicates_only`
+                // = "Show duplicates only (COUNT > 1)"
+                .tooltip("仅显示重复分组（COUNT > 1）".to_string())
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::SetGroupDuplicatesOnly(!duplicates_on), app);
                 })
                 .into_any_element()
         };
 
-        // 动作四：清空分组列（对齐 DBeaver `ClearGroupingAction`：图标动作，
+        // 动作四：分组键顺序上移 / 下移（作用于**当前选中列**）。
+        // 对齐 DBeaver `GroupingColumnsContainer.moveColumns:126-152`：那边靠拖拽
+        // （`GroupingResultsDecorator.dropColumns`），本仓用一对按钮——键盘可达，
+        // 且 headless 下能用窗口用例钉住「顺序变 = 层级变」。
+        let selected = self.selected_col;
+        let [move_up, move_down] = [
+            (-1i8, IconName::ChevronUp, "上移分组列", "editor-result-group-move-up"),
+            (1i8, IconName::ChevronDown, "下移分组列", "editor-result-group-move-down"),
+        ]
+        .map(|(delta, icon, tip, id)| {
+            let queue = self.queue.clone();
+            let enabled = can_move_group_column(&self.group_columns, selected, delta);
+            let column = selected.unwrap_or(0);
+            Button::new(id)
+                .ghost()
+                .xsmall()
+                .debug_selector(move || id.to_string())
+                .icon(icon)
+                .disabled(!enabled)
+                .tooltip(tip.to_string())
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::MoveGroupColumn { column, delta }, app);
+                })
+                .into_any_element()
+        });
+
+        // 动作五：移除分组列（对齐 DBeaver `DeleteColumnAction` +
+        // `controls_resultset_grouping_remove_column`：作用于**当前选中列**，
+        // 选中列不在分组键里 / 只剩一列时不可用）
+        let remove_button = {
+            let queue = self.queue.clone();
+            let enabled = can_remove_group_column(&self.group_columns, self.selected_col);
+            let column = self.selected_col.unwrap_or(0);
+            Button::new("editor-result-group-remove")
+                .ghost()
+                .xsmall()
+                .debug_selector(|| "editor-result-group-remove".to_string())
+                .icon(IconName::CircleMinus)
+                .disabled(!enabled)
+                .tooltip("移除分组列".to_string())
+                .on_click(move |_, _window, app| {
+                    // 复用勾选语义：已在集合里 → 移除（与下拉取消勾选同一路径）
+                    queue.request(ResultRequest::ToggleGroupColumn(column), app);
+                })
+                .into_any_element()
+        };
+
+        // 动作五：清空分组列（对齐 DBeaver `ClearGroupingAction`：图标动作，
         // 只在有显式分组列时可用；清空后回到「选中列兜底」）
         let clear_button = {
             let queue = self.queue.clone();
@@ -901,36 +1290,87 @@ impl ResultPanel {
                 .into_any_element()
         };
 
+        // 正文：列头（每个分组键一列 + 函数列）+ 分组行。
+        //
+        // 【对齐】DBeaver 的分组结果是**表**而不是文本行：`GroupingResultsContainer`
+        // 用 `GroupingColumnsContainer` 装配「属性列 + 函数列」
+        // （`rebuildGrouping:240-270` 的 `addAttribute` / `addFunction`），
+        // 默认函数表达式 = `COUNT(*)`（`getDefaultFunction:75-80`：`FUNCTION_COUNT + "(" +
+        // (dataSource == null ? COLUMN_ASTERISK : 方言默认分组属性) + ")"`）。
+        // 所以正文按「键列各一格 + 计数列一格」排，表头写列名与 `COUNT(*)`。
+        let header = group_table_header(&names);
+        let header_len = header.len();
+        let header_el: Option<AnyElement> = (!cols.is_empty()).then(|| {
+            div()
+                .h_flex()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .h_5()
+                .flex_none()
+                .border_b(ui::HAIRLINE)
+                .border_color(theme.colors.border)
+                .debug_selector(|| "editor-result-group-header".to_string())
+                .children(header.into_iter().enumerate().map(|(index, text)| {
+                    let mut cell = div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_ellipsis()
+                        .child(SharedString::from(text));
+                    // 末列是函数列（COUNT(*)）：数值列右对齐，与网格里的数字列同侧
+                    if index + 1 == header_len {
+                        cell = cell.text_right();
+                    }
+                    cell.into_any_element()
+                }))
+                .into_any_element()
+        });
         let rows_el: Vec<AnyElement> = groups
             .iter()
             .map(|(values, count)| {
-                div()
+                let mut row = div()
                     .h_flex()
                     .items_center()
                     .gap_1()
                     .px_2()
                     .h_6()
                     .text_xs()
-                    .child(
+                    .children(values.iter().map(|value| {
                         div()
                             .flex_1()
                             .min_w_0()
                             .text_ellipsis()
-                            .child(SharedString::from(values.join(" | "))),
-                    )
-                    .child(div().text_xs().text_color(muted).child(count.to_string()))
-                    .into_any_element()
+                            .child(SharedString::from(value.clone()))
+                            .into_any_element()
+                    }));
+                row = row.child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_right()
+                        .text_color(muted)
+                        .child(SharedString::from(count.to_string()))
+                        .into_any_element(),
+                );
+                row.into_any_element()
             })
             .collect();
-        // 正文：有分组键时是分组行清单，否则是「还没选列」空态（工具条常驻，见上）
+        // 正文：有分组键时是表头 + 分组行，否则是「还没选列」空态（工具条常驻，见上）
         let body: AnyElement = if cols.is_empty() {
             self.sidebar_empty("选中一个数据列查看分组", cx)
         } else {
             div()
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scrollbar()
-                .children(rows_el)
+                .v_flex()
+                .children(header_el)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scrollbar()
+                        .children(rows_el),
+                )
                 .into_any_element()
         };
         div()
@@ -941,21 +1381,60 @@ impl ResultPanel {
             .child(self.panel_toolbar(
                 "editor-result-group-toolbar",
                 SharedString::from(title),
-                vec![columns_menu, sort_button, duplicates_button, clear_button],
+                // 顺序与分隔照 `GroupingPanel.fillToolBar:164-176`：
+                // `DefaultSorting` → `DuplicatesOnly` → SEP → `EditColumns` → `DeleteColumn`
+                // → SEP → `ClearGrouping` → SEP → 扩展动作（本仓无扩展点，不摆）。
+                // 「编辑列」在那边是 `GroupingConfigDialog`（多列编辑表格），本仓用勾选式下拉
+                // 承载同一件事（列清单 + 勾选状态，能力等价、形态更轻）。
+                vec![
+                    sort_button,
+                    duplicates_button,
+                    Separator::vertical().into_any_element(),
+                    columns_menu,
+                    // 上移 / 下移（本仓对 `moveColumns` 的等价表达，见 can_move_group_column 注释）
+                    move_up,
+                    move_down,
+                    remove_button,
+                    Separator::vertical().into_any_element(),
+                    clear_button,
+                ],
+                page_needs_separator(RightTab::Group),
                 cx,
             ))
             .child(body)
             .into_any_element()
     }
 
-    /// 【引用】外键引用查看页签（对齐 DBeaver 引用页签；backlog 空态）
+    /// 【引用】外键引用查看页签（对齐 DBeaver `ReferencesPanel` + `ReferencesResultsContainer`）
     ///
-    /// 【2026-11-17 对齐】此前这一页只有一个空态、没有页内工具条，切到引用页时
-    /// 正文直接顶到页签条下方，与其它五页的「28px 工具条 + 正文」不同形。
-    /// DBeaver 每个面板都带一条自己的 `ToolBarManager`（`ResultSetViewer.java:1337-1374`），
-    /// 只是 `ReferencesPanel.contributeActions` 为空实现（`ReferencesPanel.java:156-158`），
-    /// 所以这里保留工具条（标题「引用」）+ 空态正文，动作留空。
+    /// 形：28px 页内工具条（标题「引用」，`contributeActions` 那边是空实现 ⇒ 本页也无动作）
+    /// + 正文。正文按清单状态分四态：
+    /// - 未读 / 读取中：空态文案（取数由宿主在切页签时分派，见 `ResultPanel::begin_references_load`）；
+    /// - 读失败（宿主自身原因，如未绑定连接）：显示原因；
+    /// - 读到但为空：「无引用」（照 DBeaver `ResultSetMessages.refs_no_refs_text`）；
+    /// - 读到非空：**只读键下拉**（DBeaver `CSmartCombo`）+「打开目标对象」+ 选中键的列映射。
+    ///
+    /// 与 DBeaver 的**已知差异**：那边下拉下面嵌一整份 `ResultSetViewer` 显示引用行，
+    /// 本仓首版只到「键 + 列映射」（引用行按 `result-panel-references-plan.md` 的
+    /// `B′` 方案另开结果集，尚未接线）。
     pub(crate) fn render_reference_tab(&self, cx: &App) -> AnyElement {
+        let body: AnyElement = match &self.references {
+            crate::references::ReferencesState::NotLoaded => {
+                self.sidebar_empty("切到本页时读取外键引用", cx)
+            }
+            crate::references::ReferencesState::Loading => {
+                self.sidebar_empty(crate::references::ReferencesState::LOADING, cx)
+            }
+            crate::references::ReferencesState::Failed(message) => {
+                self.sidebar_empty(message, cx)
+            }
+            crate::references::ReferencesState::Loaded(keys) if keys.is_empty() => {
+                self.sidebar_empty(crate::references::ReferencesState::NO_REFERENCES, cx)
+            }
+            crate::references::ReferencesState::Loaded(keys) => {
+                self.render_reference_keys(keys, cx)
+            }
+        };
         div()
             .flex_1()
             .min_h_0()
@@ -965,9 +1444,148 @@ impl ResultPanel {
                 "editor-result-reference-toolbar",
                 SharedString::from("引用"),
                 Vec::new(),
+                page_needs_separator(RightTab::Reference),
                 cx,
             ))
-            .child(self.sidebar_empty("选中一个列查看外键引用", cx))
+            .child(body)
+            .into_any_element()
+    }
+
+    /// 【引用页】有键时的正文：只读键下拉 + 「打开目标对象」+ 选中键的列映射。
+    ///
+    /// 下拉用 kit `DropdownButton` 承载只读选择器（DBeaver 用 `SWT.READ_ONLY` 的
+    /// `CSmartCombo`；本仓没有独立 combo 组件，用「按钮 + 勾选式菜单」表达同一件事：
+    /// 当前项打勾、选另一项即切换）。
+    fn render_reference_keys(
+        &self,
+        keys: &[crate::references::ReferenceKey],
+        cx: &App,
+    ) -> AnyElement {
+        let theme = cx.theme();
+        let active_index = self.active_reference.filter(|index| *index < keys.len());
+        let active = active_index.and_then(|index| keys.get(index));
+        let queue = self.queue.clone();
+
+        let label: SharedString = match active {
+            Some(key) => SharedString::from(crate::references::key_label(key)),
+            None => SharedString::from(crate::references::ReferencesState::NO_REFERENCES),
+        };
+        let items: Vec<(usize, String, bool)> = keys
+            .iter()
+            .enumerate()
+            .map(|(index, key)| {
+                (
+                    index,
+                    crate::references::key_label(key),
+                    active_index == Some(index),
+                )
+            })
+            .collect();
+        let chooser = DropdownButton::new("editor-result-reference-keys-anchor")
+            .button(
+                // 没有该页签该有的宽度弹性：长约束名要能截断，否则会把「打开目标对象」挤出去
+                Button::new("editor-result-reference-keys-button")
+                    .ghost()
+                    .xsmall()
+                    .label(label)
+                    .tooltip("选择引用键（本表外键）".to_string())
+                    .debug_selector(|| "editor-result-reference-keys".to_string()),
+            )
+            .menu_accessibility_label("引用键")
+            .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
+                let mut menu = menu;
+                for (index, text, checked) in items.iter() {
+                    let queue = queue.clone();
+                    let index = *index;
+                    let checked = *checked;
+                    let text = text.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(text)
+                            .checked(checked)
+                            .on_click(move |_, _window, app| {
+                                queue.request(
+                                    ResultRequest::SetActiveReference(Some(index)),
+                                    app,
+                                );
+                            }),
+                    );
+                }
+                menu
+            });
+
+        // 「查看引用行」：按当前行的外键值查目标表，交给编辑器**另开一份结果集**
+        // （方案 B′；DBeaver 是在本面板内嵌一份结果视图，见 result-panel-references-plan.md）。
+        // 取不到「选中键 + 当前行 + 可见列有值」就不摆这张票——不生成半条 SQL。
+        let rows_sql = self.reference_rows_sql(cx);
+        let rows_queue = self.queue.clone();
+        let rows = Button::new("editor-result-reference-rows")
+            .ghost()
+            .xsmall()
+            .icon(IconName::Rows3)
+            .label("查看引用行")
+            .tooltip("按当前行的外键值查询目标表（另开一份结果集）".to_string())
+            .debug_selector(|| "editor-result-reference-rows".to_string())
+            .disabled(rows_sql.is_none())
+            .on_click(move |_, _window, app| {
+                let Some(sql) = rows_sql.clone() else {
+                    return;
+                };
+                rows_queue.request(ResultRequest::OpenReferenceRows { sql }, app);
+            });
+
+        // 「打开目标对象」：目标表在当前连接里定位（DBeaver `refs_open_target`）
+        let schema = self
+            .reference_source(cx)
+            .map(|(schema, _, _)| schema)
+            .unwrap_or_default();
+        let target = active.map(|key| key.table.clone());
+        let open_queue = self.queue.clone();
+        let open = Button::new("editor-result-reference-open")
+            .ghost()
+            .xsmall()
+            .icon(IconName::Table)
+            .label("打开目标对象")
+            .tooltip("在导航树里定位该外键的目标表".to_string())
+            .debug_selector(|| "editor-result-reference-open".to_string())
+            .disabled(target.is_none())
+            .on_click(move |_, _window, app| {
+                let Some(table) = target.clone() else {
+                    return;
+                };
+                open_queue.request(
+                    ResultRequest::OpenReferenceTarget {
+                        schema: schema.clone(),
+                        table,
+                    },
+                    app,
+                );
+            });
+
+        let mapping: AnyElement = match active {
+            Some(key) => div()
+                .text_xs()
+                .text_color(theme.colors.muted_foreground)
+                .child(SharedString::from(crate::references::mapping_text(key)))
+                .into_any_element(),
+            None => div().into_any_element(),
+        };
+
+        div()
+            .flex_1()
+            .min_h_0()
+            .v_flex()
+            .child(
+                div()
+                    .h_flex()
+                    .gap_1()
+                    .px_2()
+                    .py_1()
+                    .border_b(ui::HAIRLINE)
+                    .child(div().flex_1().min_w_0().text_ellipsis().child(chooser))
+                    .child(rows)
+                    .child(open),
+            )
+            .child(div().px_2().py_1().child(mapping))
             .into_any_element()
     }
 
@@ -1018,6 +1636,7 @@ impl ResultPanel {
                 "editor-result-exec-sql-toolbar",
                 SharedString::from("生成的 SQL"),
                 copy.into_iter().collect(),
+                page_needs_separator(RightTab::ExecSql),
                 cx,
             ))
             .child(body)
@@ -1030,6 +1649,7 @@ impl ResultPanel {
     /// 空态也保留工具条——否则切页时正文起点会比其它页高 28px（2026-11-17 对齐）。
     fn empty_page(
         &self,
+        tab: RightTab,
         toolbar_id: &'static str,
         title: &str,
         body: &str,
@@ -1043,6 +1663,7 @@ impl ResultPanel {
                 toolbar_id,
                 SharedString::from(title),
                 Vec::new(),
+                page_needs_separator(tab),
                 cx,
             ))
             .child(self.sidebar_empty(body, cx))
@@ -1051,6 +1672,13 @@ impl ResultPanel {
 
     /// 【侧栏】右栏各页共用的空态（居中灰字；页内容区 `flex_1`）
     pub(crate) fn sidebar_empty(&self, text: &str, cx: &App) -> AnyElement {
+        self.sidebar_empty_lines(&[text], cx)
+    }
+
+    /// 【侧栏】多行空态：每行一条灰字（DBeaver 值页空态是**两行**，
+    /// 见 `ValueViewerPanel.createContents:89-106`：第一行 `value_viewer_select_view_message`
+    /// 画在 y=0，第二行 `value_viewer_hide_panel_message` 画在 y=30）。
+    pub(crate) fn sidebar_empty_lines(&self, lines: &[&str], cx: &App) -> AnyElement {
         div()
             .flex_1()
             .min_h_0()
@@ -1061,9 +1689,83 @@ impl ResultPanel {
             .px_2()
             .text_xs()
             .text_color(cx.theme().colors.muted_foreground)
-            .child(SharedString::from(text))
+            .children(
+                lines
+                    .iter()
+                    .map(|line| SharedString::from(*line))
+                    .collect::<Vec<_>>(),
+            )
             .into_any_element()
     }
+
+    /// 【侧栏】「页内工具条 + 多行空态正文」的整页骨架（同 [`Self::empty_page`]，
+    /// 只是正文允许多行——值页空态两行要用它）。
+    fn empty_page_lines(
+        &self,
+        tab: RightTab,
+        toolbar_id: &'static str,
+        title: &str,
+        lines: &[&str],
+        cx: &App,
+    ) -> AnyElement {
+        div()
+            .flex_1()
+            .min_h_0()
+            .v_flex()
+            .debug_selector(|| "editor-result-empty-page".to_string())
+            .child(self.panel_toolbar(
+                toolbar_id,
+                SharedString::from(title),
+                Vec::new(),
+                page_needs_separator(tab),
+                cx,
+            ))
+            .child(self.sidebar_empty_lines(lines, cx))
+            .into_any_element()
+    }
+}
+
+/// 【值页空态】两行提示（纯函数，便于单测）。
+///
+/// 形态对齐 DBeaver `ValueViewerPanel.createContents:89-106`：空态在 `PaintListener` 里
+/// 画**两条**消息（第一条在 y=0、第二条在 y=30），不是一条长文本。
+/// 第一条的语义 = 「先在结果集里选一个值」（`value_viewer_select_view_message`）；
+/// 第二条的语义 = 「怎么收起这个面板腾出空间」（`value_viewer_hide_panel_message`，
+/// 原文把 toggle-panels **命令名**绑进去，如 `NLS.bind(..., hidePanelCmd)`）。
+///
+/// **文案是本仓自拟**：dbeaver-ref 快照里的 `bundle.properties` / `bundle_zh.properties`
+/// 都没有这两个 key 的正文（全文件仅 12 行含 `viewer`，无一命中 `value_viewer_`），
+/// 逐字翻译无从取得，故按语义写、并把第二行指向本仓真实存在的两个入口
+/// （右缘竖条、视图菜单的面板项），不编造 DBeaver 的快捷键。
+pub(crate) fn value_empty_lines() -> [&'static str; 2] {
+    [
+        "在网格中选中一个单元格，这里显示它的值",
+        "右缘竖条或视图菜单可收起全部面板，腾出更多高度",
+    ]
+}
+
+/// 【值页动作可用性】「保存值到文件」什么时候可用：DBeaver 的 `saveToFile` 是
+/// **条件贡献**的（`ContentValueManager.contributeContentActions`：`if (!content.isNull())`
+/// 才加，`:92-99`），NULL 值不给保存入口。本仓再加一条：`#` 行号槽不是数据格
+/// （`row_cell_text` 对它返回 `None`），显示的数字是视图行号，也按「没有内容」处理。
+///
+/// 判据统一走 [`crate::export::is_null_cell`]（`None` / 字面 `NULL` 都算），
+/// 不另造一套"是不是空值"的规则。
+pub(crate) fn value_can_save_to_file(col_ix: usize, raw: Option<&str>) -> bool {
+    col_ix != 0 && !crate::export::is_null_cell(raw)
+}
+
+/// 【分组页表头】分组结果表的列头：每个分组键一列 + 末尾函数列 `COUNT(*)`。
+///
+/// 对齐 DBeaver：分组结果是**表**（`GroupingResultsContainer` 的
+/// `GroupingColumnsContainer` 装配属性列 + 函数列），默认函数表达式由
+/// `getDefaultFunction:75-80` 拼成 `COUNT(<方言默认分组属性>)`，无数据源时用 `*`。
+/// 本仓本地分组固定只有一个计数函数（`group_by_columns_for` 返回 `(键, 计数)`），
+/// 所以表头恒为「键列名… + COUNT(*)」。
+pub(crate) fn group_table_header(names: &[String]) -> Vec<String> {
+    let mut header: Vec<String> = names.to_vec();
+    header.push("COUNT(*)".to_string());
+    header
 }
 
 /// 【R3 分组页】分组结果排序 + 「仅重复」筛选（纯函数，便于单测）。
@@ -1079,6 +1781,9 @@ pub(crate) fn arrange_groups(
         groups.retain(|(_, count)| *count > 1);
     }
     match sort {
+        // 不排序 = 沿用 `group_by_columns_for` 的首现顺序（DBeaver `RS_GROUPING_DEFAULT_SORTING=""`：
+        // 不设 ORDER BY，结果就是数据源/扫描顺序）
+        GroupSort::None => {}
         GroupSort::Value => groups.sort_by(|a, b| a.0.cmp(&b.0)),
         GroupSort::CountDesc => groups.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0))),
     }
@@ -1124,23 +1829,43 @@ pub(crate) fn fmt_stat(value: Option<f64>) -> String {
     value.map(fmt_grouped).unwrap_or_else(|| "—".to_string())
 }
 
+/// 【R2 计算页】单项取值需要的「整列派生量」：字符串口径极值、去重计数、中位数、众数。
+///
+/// 为什么打包：这几项都要扫整列取值，而数值口径的 min/max/avg/sum 走事实档列式统计。
+/// 打包后 `render_stats_tab` **只取一次值**（`needs_column_values` 为假时连取都不取），
+/// 不用为每个新函数各扫一遍。
+pub(crate) struct StatExtras<'a> {
+    /// 字符串口径的字典序极值（非字符串口径 = `None`）
+    pub text_extremes: Option<&'a (Option<String>, Option<String>)>,
+    /// 去重计数（列取值未取 = `None` → 显示 `—`）
+    pub distinct: Option<usize>,
+    /// 数值中位数
+    pub median: Option<f64>,
+    /// 众数
+    pub mode: Option<String>,
+}
+
 /// 【R2 计算页】单项取值（纯函数，便于单测）：
-/// - 计数类（非空 / NULL）不受口径影响，走千分位整数
-/// - 数值口径：Min/Max/Avg/Sum 走千分位浮点，无样本 = —
-/// - 字符串口径：Min/Max 走字典序（文本列也给极值）；Avg/Sum 不出值（DBeaver 的
-///   SUM/AVG 对字符串累计不成立）
+/// - 计数类（非空 / 去重计数 / NULL）不受口径影响，走千分位整数
+/// - 数值口径：Min/Max/Avg/Sum/Median 走千分位浮点，无样本 = —
+/// - 字符串口径：Min/Max 走字典序（文本列也给极值）；众数两种口径都给值文本；
+///   Avg/Sum/Median 不出值（DBeaver 的 SUM/AVG 与中位数都要能排序的数字）
 pub(crate) fn stat_value(
     item: StatsItem,
     stats: &ColumnStats,
-    text_extremes: Option<&(Option<String>, Option<String>)>,
+    extras: &StatExtras<'_>,
     mode: StatsMode,
 ) -> String {
     match item {
         StatsItem::Count => fmt_grouped(stats.count as f64),
         StatsItem::Nulls => fmt_grouped(stats.nulls as f64),
+        StatsItem::CountDistinct => extras
+            .distinct
+            .map(|count| fmt_grouped(count as f64))
+            .unwrap_or_else(|| "—".to_string()),
         StatsItem::Min | StatsItem::Max => {
             if matches!(mode, StatsMode::Text) {
-                let pick = text_extremes.and_then(|(min, max)| {
+                let pick = extras.text_extremes.and_then(|(min, max)| {
                     if matches!(item, StatsItem::Min) {
                         min.clone()
                     } else {
@@ -1154,6 +1879,17 @@ pub(crate) fn stat_value(
                 fmt_stat(stats.max)
             }
         }
+        StatsItem::Median => {
+            if matches!(mode, StatsMode::Text) {
+                "—".to_string()
+            } else {
+                fmt_stat(extras.median)
+            }
+        }
+        StatsItem::Mode => extras
+            .mode
+            .clone()
+            .unwrap_or_else(|| "—".to_string()),
         StatsItem::Avg | StatsItem::Sum => {
             if matches!(mode, StatsMode::Text) {
                 "—".to_string()

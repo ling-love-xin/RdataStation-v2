@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>高级 Tab · 新增数据源原型 · RdataStation</title>
+<link rel="stylesheet" href="_theme.css">
+<script src="_theme.js"></script>
+<style>
+  .pol-item{display:flex;align-items:center;gap:9px;padding:6px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;font-size:12px;}
+  .pol-item .p-name{font-weight:600;}
+  .pol-item .p-desc{color:var(--muted);font-size:11px;}
+  .pol-item .p-eff{margin-left:auto;font-size:10.5px;color:var(--muted);display:flex;gap:5px;align-items:center;}
+  .ck{width:14px;height:14px;border-radius:4px;border:1.6px solid var(--input-border);display:inline-block;flex-shrink:0;position:relative;cursor:pointer;}
+  .ck.on{background:var(--primary);border-color:var(--primary);}
+  .ck.on::after{content:'✓';position:absolute;inset:0;color:var(--primary-fg);font-size:10px;display:flex;align-items:center;justify-content:center;}
+  .fp-box{font-family:ui-monospace,Consolas,monospace;font-size:11px;border:1px solid var(--border);border-radius:8px;background:var(--group-box);padding:8px 11px;color:var(--fg);display:flex;align-items:center;gap:9px;flex-wrap:wrap;}
+  .fp-box .seg-b{color:var(--muted);}
+  .fp-box .v{color:var(--cyan);}
+  .diff-row{display:flex;gap:10px;align-items:stretch;}
+  .diff-col{flex:1;border:1px solid var(--border);border-radius:9px;overflow:hidden;}
+  .diff-col .dc-h{padding:7px 11px;font-size:11.5px;font-weight:700;border-bottom:1px solid var(--sidebar-border);display:flex;align-items:center;gap:7px;}
+  .diff-col .dc-b{padding:9px 11px;font-size:11.5px;line-height:1.8;color:var(--fg);}
+  .diff-col .dc-b .no{color:var(--muted);}
+</style>
+</head>
+<body>
+
+<header class="page-head">
+  <div class="brand">
+    <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.66 3.58 3 8 3s8-1.34 8-3v-13"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg></div>
+    <div>
+      <h1>④ 高级 Tab · 环境与加速</h1>
+      <div class="sub">tab-advanced · 环境引用 + 策略覆盖 + DuckDB 加速 + 缓存指纹 —— 存储/展示 <span class="st st-impl">已实现</span> · 策略执行 <span class="st st-prop">提案</span></div>
+    </div>
+  </div>
+  <div class="head-actions">
+    <a class="back-link" href="index.html">← 总览</a>
+    <button class="theme-toggle" data-theme-toggle>🌙 暗色</button>
+  </div>
+</header>
+
+<div style="max-width:920px;margin:0 auto;display:flex;flex-direction:column;gap:14px;">
+
+  <!-- ① 环境 -->
+  <div class="card">
+    <div class="card-head"><h2>① 环境（引用）</h2><span class="desc">环境决定这条连接「按什么规矩跑」</span>
+      <div class="right"><a class="btn ghost sm" href="manager-environment.html">管理环境 →</a></div>
+    </div>
+    <div class="card-body">
+      <div class="f-row"><span class="f-label">环境</span>
+        <select class="inp" style="min-width:200px"><option>🏭 生产（prod）</option><option>🧪 预发布（staging）</option><option>🛠 开发（dev）</option><option>未选择（使用连接默认策略）</option></select>
+        <span class="chip info" style="margin-left:6px">5 项策略启用 · 摘要来自 environment_policies</span>
+      </div>
+      <div class="note warn" style="margin-top:6px;">
+        <span class="st st-prop">提案</span> <b>执行效果预览</b>（当前代码未实现策略执行——环境管理原型的执行语义矩阵是落地前提）：绑定环境后，此处实时展示本连接在所选环境下的行为差异，避免「配了策略不知道改了什么」。
+      </div>
+      <div class="diff-row" style="margin-top:10px;">
+        <div class="diff-col">
+          <div class="dc-h"><span class="dot idle"></span>未绑定环境（现状行为）</div>
+          <div class="dc-b">
+            语句执行 <span class="no">无拦截</span><br>
+            查询超时 <span class="no">全局设置</span><br>
+            结果行数 <span class="no">无限制</span><br>
+            DDL / DML <span class="no">放行</span><br>
+            导航树 <span class="no">全 schema</span>
+          </div>
+        </div>
+        <div class="diff-col" style="border-color:color-mix(in srgb,var(--success) 40%,transparent);">
+          <div class="dc-h"><span class="dot ok"></span>生产（prod）绑定后（提案）</div>
+          <div class="dc-b">
+            只读连接 <b style="color:var(--success)">拦截写语句</b><br>
+            查询超时 <b>30s</b>（覆盖全局）<br>
+            结果行数 <b>≤ 1000</b>（截断提示）<br>
+            DDL 阻断 · DML 需确认<br>
+            导航树 <b>仅 orders / report</b>（过滤）
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ② 策略覆盖 -->
+  <div class="card">
+    <div class="card-head"><h2>② 安全策略（覆盖环境默认）</h2><span class="desc">勾选项存 policy_type；清单 = 所选环境的启用策略</span>
+      <div class="right"><label class="switch"><input type="checkbox" checked><span class="track"></span>启用覆盖</label></div>
+    </div>
+    <div class="card-body">
+      <div class="pol-item"><span class="ck on"></span><div><div class="p-name">只读连接（read_only）</div><div class="p-desc">覆盖环境默认：本连接在生产环境也允许临时只读之外…反向收紧</div></div><span class="p-eff">生效层：执行前拦截 <span class="st st-prop">提案</span></span></div>
+      <div class="pol-item"><span class="ck"></span><div><div class="p-name">DDL 阻断（block_ddl）</div><div class="p-desc">环境默认开启；此处可对本连接单独关闭</div></div><span class="p-eff">生效层：执行前拦截 <span class="st st-prop">提案</span></span></div>
+      <div class="pol-item"><span class="ck"></span><div><div class="p-name">导航 schema 过滤（schema_filter）</div><div class="p-desc">只显示白名单 schema（orders / report）</div></div><span class="p-eff">生效层：导航内省 <span class="st st-prop">提案</span></span></div>
+      <div class="note info" style="margin-top:8px;">现状：覆盖勾选会写入 <code>advanced_options.policy_overrides</code>（策略类型数组）并正确回显；<b>但执行侧（sql_service / 导航）尚无消费</b>——本卡「生效层」标注即执行语义设计入口，详见 <a href="manager-environment.html">环境管理</a>。</div>
+    </div>
+  </div>
+
+  <!-- ③ DuckDB 加速 -->
+  <div class="card">
+    <div class="card-head"><h2>③ 本地加速（DuckDB 联邦）</h2><span class="desc">门控 = 加速开 + 驱动族有 scanner 扩展（#38）</span>
+      <div class="right"><label class="switch"><input type="checkbox" checked><span class="track"></span>启用</label></div>
+    </div>
+    <div class="card-body">
+      <dl class="kv">
+        <dt>联邦源</dt><dd>mysql（mysql_scanner ✅）——凭据注册为 DuckDB PERSISTENT SECRET（secret 目录在应用数据目录，不写用户主目录）</dd>
+        <dt>注册目标</dt><dd>按作用域：G_ → 全局分析库；P_/GP_ → <code>{项目}/.RSmeta/analytics.duckdb</code>（与缓存指纹同源域隔离）</dd>
+        <dt>回收</dt><dd>断开连接 / 关闭加速 / 删除连接 → Secret 移除；注册失败只告警不影响连接</dd>
+      </dl>
+      <div class="note info" style="margin-top:8px;">无 scanner 扩展的类型（如 DuckDB 文件源）此卡禁用并说明「本地文件无需联邦」；UI 文案区分「本地加速 / 联邦源」。</div>
+    </div>
+  </div>
+
+  <!-- ④ 缓存指纹 -->
+  <div class="card">
+    <div class="card-head"><h2>④ 元数据缓存身份指纹</h2><span class="desc">已实现（#19/#113）· 只读展示</span></div>
+    <div class="card-body">
+      <div class="fp-box">
+        <span class="v">v1</span><span class="seg-b">|</span>
+        <span class="v">mysql</span><span class="seg-b">|</span>
+        <span>net:db-order-ro.internal:3306/orders/-</span><span class="seg-b">|</span>
+        <span>user:app_ro</span>
+        <span class="chip" style="margin-left:auto">meta_a1b2c3d4e5f67890.sqlite · 域内共享</span>
+      </div>
+      <dl class="kv" style="margin-top:9px;">
+        <dt>作用</dt><dd>同物理库的多条连接共享一份 L2 元数据缓存（避免重复预热）；密码与密钥绝不进指纹；驱动实现 id 不进身份（差异属能力覆盖面）</dd>
+        <dt>域隔离</dt><dd>全局域 / 项目域目录分离互不互通；GP_ 项目侧走项目域</dd>
+        <dt>不共享</dt><dd>内存库、地址为空、或 <code>driver_properties.identity_salt</code> 显式声明独立目标</dd>
+      </dl>
+    </div>
+  </div>
+</div>
+
+<footer class="page-foot">
+  <b>对照</b>：<code>render.rs</code> 高级 Tab 段（环境切换每帧比较重查策略 · 防勾选与真实策略不一致）；<code>secret_integration.rs</code>（扩展门控 / 作用域路由）；<code>metadata_identity.rs</code>（指纹规则 13 单测）。
+  「执行效果预览」与策略「生效层」为 <span class="st st-prop">提案</span>，落地排期先于策略执行接线本体。· <a href="index.html">返回总览</a> · <a href="tab-capability-props.html">下一页：能力/驱动属性 →</a>
+</footer>
+
+</body>
+</html>

@@ -610,6 +610,7 @@ pub(crate) fn option(id: &str, short: &str, name: &str) -> ConnectionOption {
         connected: false,
         // B10：方言来自驱动；大多数用例用 MySQL，需要别的方言的用例自己改这一项
         db_type: "mysql_native".to_string(),
+        environment: None,
     }
 }
 

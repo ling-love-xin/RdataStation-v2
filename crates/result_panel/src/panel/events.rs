@@ -298,9 +298,11 @@ impl ResultPanel {
         cx.notify();
     }
 
-    /// 【右栏】标签页切换（列浏览器 / 值详情 / 计算 / 分组 / 引用）。
+    /// 【右栏】标签页切换（列浏览器 / 值详情 / 计算 / 分组 / 引用 / 执行SQL）。
     /// 右栏收起时切页签会自动展开（DBeaver 口径：右缘竖条点图标即展开对应面板）。
+    /// 目标页若已被关闭，会先按规范序重新启用它（点得到就等于开得回来）。
     pub fn set_right_tab(&mut self, tab: RightTab, cx: &mut Context<Self>) {
+        self.open_right_tab_only(tab);
         self.right_tab = tab;
         if !self.show_value_sidebar {
             // 窄展开 / 收起态点页签图标 → 宽展开（竖条可见性保持；收起态在窄态已置 true）
@@ -309,6 +311,287 @@ impl ResultPanel {
             self.right_sidebar_epoch = self.right_sidebar_epoch.wrapping_add(1);
         }
         cx.notify();
+    }
+
+    /// 【右栏】把某页登记进已启用集合（已存在则不动），按**规范序**插入。
+    fn open_right_tab_only(&mut self, tab: RightTab) {
+        if self.open_tabs.contains(&tab) {
+            return;
+        }
+        let canonical = right_tabs();
+        let pos = canonical
+            .iter()
+            .position(|candidate| *candidate == tab)
+            .unwrap_or(canonical.len());
+        let insert_at = self
+            .open_tabs
+            .iter()
+            .position(|existing| {
+                canonical
+                    .iter()
+                    .position(|candidate| candidate == existing)
+                    .unwrap_or(usize::MAX)
+                    > pos
+            })
+            .unwrap_or(self.open_tabs.len());
+        self.open_tabs.insert(insert_at, tab);
+    }
+
+    /// 【右栏】已启用的页集合（规范序）：页签条按它渲染，视图菜单勾选态读它。
+    pub fn open_tabs(&self) -> &[RightTab] {
+        &self.open_tabs
+    }
+
+    /// 【右栏】注入已启用的页集合（宿主在创建后按偏好 `result_panel.open_tabs` 调用）。
+    ///
+    /// 入参按**规范序**归一：只收已知页、重复丢弃、顺序按 [`RightTab::ALL`]；
+    /// 结果为空 = 「偏好里没写过 / 被关空」→ 保持现状（出厂六页全开），对齐 DBeaver
+    /// `activateDefaultPanels:1396-1400`（先把空的 id 清掉再补默认面板，所以空集在那边
+    /// 也等于「恢复默认」）。当前页不在新集合里时落到集合第一页。
+    pub fn set_open_tabs_initial(&mut self, tabs: &[RightTab], cx: &mut Context<Self>) {
+        let normalized: Vec<RightTab> = RightTab::ALL
+            .into_iter()
+            .filter(|tab| tabs.contains(tab))
+            .collect();
+        if normalized.is_empty() || normalized == self.open_tabs {
+            return;
+        }
+        if !normalized.contains(&self.right_tab) {
+            self.right_tab = normalized[0];
+        }
+        self.open_tabs = normalized;
+        cx.notify();
+    }
+
+    /// 【右栏】重新打开一页 = 登记进集合 + 置为当前页（视图菜单勾选项）。
+    pub fn open_right_tab(&mut self, tab: RightTab, cx: &mut Context<Self>) {
+        self.set_right_tab(tab, cx);
+    }
+
+    /// 【右栏】**只关掉这一页**（其余页仍在页签条里），对齐 DBeaver
+    /// `CTabItem(panelFolder, SWT.CLOSE)` + `presentationSettings.enabledPanelIds` 的移除语义
+    /// （`ResultSetViewer.addPanel:1357/:1388`）。
+    ///
+    /// 规则：
+    /// - 关的是当前页 → 落到**规范序里紧随其后**的剩余页，没有则取前一页；
+    /// - 集合被关空 → 整块面板收起（`set_panels_visible(false)`，与「关掉最后一个面板」
+    ///   在那边导致页签夹无项一致）；再打开任一一页会重新展开。
+    /// - 关一页**不**复位最大化 / 宽度等其它面板状态。
+    pub fn close_right_tab(&mut self, tab: RightTab, cx: &mut Context<Self>) {
+        if !self.open_tabs.contains(&tab) {
+            return;
+        }
+        self.open_tabs.retain(|existing| *existing != tab);
+        if self.open_tabs.is_empty() {
+            self.set_panels_visible(false, cx);
+            return;
+        }
+        if self.right_tab == tab {
+            self.right_tab = neighbor_after_close(&self.open_tabs, tab);
+        }
+        cx.notify();
+    }
+
+    /// 【右缘竖条】点某一页的图标：切到该页（未启用的页会先启用），**不收起整栏**。
+    ///
+    /// 取证 `ResultSetHandlerTogglePanel.java`：`toggleResultsPanel:64-69` 算
+    /// `isVisible = rsv.isPanelsVisible() && rsv.isPanelVisible(panelId)`，真则
+    /// `rsv.closePanel(panelId)`——**关掉的是那一页**；DBeaver 面板是 `CTabFolder` 多页签
+    /// （`addPanel:1357` 的 `SWT.CLOSE`），其余页仍在。本仓第 24 批起同样是多页签模型
+    /// （`open_tabs`），所以「点当前页就收起整栏」这条自造语义没有理由再留着：
+    /// 点已选中的页 = 无操作，整栏显隐只走 `SetPanelsVisible`（竖条顶部总开关 / 工具栏）。
+    ///
+    /// 返回 `true` = 本次**切到了该页**（调用方要像切页签那样触发刷新，如引用页取外键）；
+    /// 返回 `false` = 已经停在这一页（无操作，不需要刷新）。
+    pub fn toggle_right_tab(&mut self, tab: RightTab, cx: &mut Context<Self>) -> bool {
+        // 【toggle 语义】对齐 `ResultSetHandlerTogglePanel`：`toggleResultsPanel:64-69` 先算
+        // `isVisible = isPanelsVisible() && isPanelVisible(id)`，再 `showResultsPanel(id, isVisible)`
+        // ——`showResultsPanel:71-81` 是「可见 → `closePanel(id)`（关掉这一页）；不可见 →
+        // `activatePanel(id, true, true)`（打开并激活，整栏收起时顺带展开）」。
+        // 所以这一层就是「开/关该页」，不是「切页 / 无操作」：
+        // - 已启用且整栏可见 → 关掉这一页（其余页仍在，`closePanel→removePanel:1441-1451`）；
+        // - 其余（已启用但整栏收起 / 已启用但当前不是它 / 被关掉过）→ 打开并切到该页。
+        let visible = self.panels_visible() && self.open_tabs.contains(&tab);
+        if visible {
+            self.close_right_tab(tab, cx);
+            return false;
+        }
+        self.set_right_tab(tab, cx);
+        true
+    }
+
+    /// 【引用页】回填外键清单（宿主取数回来后调用）。
+    ///
+    /// 与 DBeaver `ReferencesResultsContainer.fillKeysCombo`（`:359-377`）同口径：
+    /// 清单为空就清掉选中；非空时**优先保住原选中项**（同名键仍存在就不改），
+    /// 保不住再默认选第一条（`:341-343`）。
+    pub fn set_references(
+        &mut self,
+        state: crate::references::ReferencesState,
+        cx: &mut Context<Self>,
+    ) {
+        let same_state = self.references == state;
+        self.references = state;
+        let keys_len = match &self.references {
+            crate::references::ReferencesState::Loaded(keys) => keys.len(),
+            _ => 0,
+        };
+        if keys_len == 0 {
+            self.active_reference = None;
+        } else if self.active_reference.map(|index| index >= keys_len).unwrap_or(true) {
+            self.active_reference = Some(0);
+        }
+        if !same_state {
+            cx.notify();
+        }
+    }
+
+    /// 【计算行数】回填宿主算回来的总行数文案（对齐 DBeaver `rowCountLabel`：
+    /// 数字**就地**显示在状态行那颗钮上，不开新结果集）。
+    pub fn set_row_count_notice(&mut self, note: String, cx: &mut Context<Self>) {
+        if self.row_count_note.as_deref() == Some(note.as_str()) {
+            return;
+        }
+        self.row_count_note = Some(note);
+        cx.notify();
+    }
+
+    /// 【引用页】键下拉选中某一项（`None` = 清掉选中）
+    pub fn set_active_reference(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
+        if self.active_reference == index {
+            return;
+        }
+        self.active_reference = index;
+        cx.notify();
+    }
+
+    /// 【引用页】当前选中的引用键（render 与「打开目标对象」都读它）
+    pub fn active_reference_key(&self) -> Option<&crate::references::ReferenceKey> {
+        match &self.references {
+            crate::references::ReferencesState::Loaded(keys) => {
+                keys.get(self.active_reference?)
+            }
+            _ => None,
+        }
+    }
+
+    /// 【引用页】当前结果的**来源表身份 + 可见列**（宿主据此取约束）。
+    ///
+    /// 来源表只认同一个限定名：所有已注解列都指向同一张表才认，否则返回 `None`
+    /// （口径与 `open_ddl_dialog` 的表名推导一致——来自多表 join / 计算列的结果
+    /// 没有单一来源表，DBeaver 那边也只按「可见属性所属实体」收集，收集不到就空着）。
+    ///
+    /// 可见列 = delegate 的列减去面板记的隐藏列，**并且**只留来自该来源表的列：
+    /// 结果里夹着计算列时，那些列不属于任何实体，DBeaver 的
+    /// `entityAttributes.containsAll(attributes)` 也不会拿它们放行。
+    pub fn reference_source(
+        &self,
+        cx: &App,
+    ) -> Option<(String, String, Vec<String>)> {
+        let grid = self.grid.read(cx);
+        let delegate = grid.delegate();
+        let columns = delegate.columns().to_vec();
+        let annotations = delegate.column_annotations().to_vec();
+
+        let source_tables: Vec<&str> = annotations
+            .iter()
+            .filter_map(|annotation| annotation.as_ref()?.source_table.as_deref())
+            .collect();
+        let table = match source_tables.first() {
+            Some(first) if source_tables.iter().all(|table| *table == *first) => *first,
+            _ => return None,
+        };
+        let (schema, name) = match table.split_once('.') {
+            Some((schema, name)) => (schema.to_string(), name.to_string()),
+            None => (String::new(), table.to_string()),
+        };
+
+        let visible: Vec<String> = columns
+            .iter()
+            .enumerate()
+            .filter(|(_, column)| !self.column_hidden.contains(column))
+            .filter(|(index, _)| {
+                annotations
+                    .get(*index)
+                    .and_then(|annotation| annotation.as_ref())
+                    .and_then(|annotation| annotation.source_table.as_deref())
+                    == Some(table)
+            })
+            .map(|(_, column)| column.clone())
+            .collect();
+        Some((schema, name, visible))
+    }
+
+    /// 【引用页】进入该页签时的取数入口（宿主在 `SetRightTab(Reference)` 分派里调）：
+    /// 状态置 `Loading` 并入队 [`crate::ports::ResultRequest::LoadReferences`]。
+    ///
+    /// 面板自己不判断「读过了没」——重复切页签重读一遍是 DBeaver 的行为
+    /// （`activatePanel` 每次都 `refresh`），这里照它。
+    pub fn begin_references_load(&mut self, cx: &mut Context<Self>) {
+        let Some((schema, table, visible_columns)) = self.reference_source(cx) else {
+            // 没有单一来源表：没有可读的约束，直接落在「无引用」
+            self.set_references(
+                crate::references::ReferencesState::Loaded(Vec::new()),
+                cx,
+            );
+            return;
+        };
+        self.set_references(crate::references::ReferencesState::Loading, cx);
+        self.queue.request(
+            crate::ports::ResultRequest::LoadReferences {
+                schema,
+                table,
+                visible_columns,
+            },
+            cx,
+        );
+    }
+
+    /// 【引用页】「查看引用行」用的 SQL：选中键 + 当前行的外键值 → `SELECT …`。
+    ///
+    /// 拿不到就返回 `None`（按钮禁用），四种情形：没有选中键、没有选中行、
+    /// 参与列被隐藏（DBeaver 只用**可见属性**，隐藏列的值不该拿来查）、
+    /// 该列在当前行没有值。
+    pub fn reference_rows_sql(&self, cx: &App) -> Option<String> {
+        let key = self.active_reference_key()?.clone();
+        let grid = self.grid.read(cx);
+        let delegate = grid.delegate();
+        let row = delegate.selected_view_row()?;
+        let columns = delegate.columns().to_vec();
+        let annotations = delegate.column_annotations().to_vec();
+        // 显示序（隐藏列已被 delegate 排除）：`row_cell_text` 吃显示列号 + 1（首列是行号槽）
+        let display = delegate.display_order();
+
+        let mut values: Vec<crate::references::ReferenceValue> =
+            Vec::with_capacity(key.columns.len());
+        for column in key.columns.iter() {
+            let data_index = columns
+                .iter()
+                .position(|candidate| candidate.eq_ignore_ascii_case(column))?;
+            let data_type = annotations
+                .get(data_index)
+                .and_then(|annotation| annotation.as_ref())
+                .and_then(|annotation| annotation.data_type.clone());
+            let display_index = display
+                .iter()
+                .position(|candidate| candidate.eq_ignore_ascii_case(column))?;
+            let text = delegate.row_cell_text(row, display_index + 1)?;
+            values.push(crate::references::ReferenceValue {
+                column: column.clone(),
+                value: text.to_string(),
+                data_type,
+            });
+        }
+        crate::references::reference_rows_sql(&key, &values)
+    }
+
+    /// 【引用页】「查看引用行」：把上一条 SQL 交给编辑器另开一份结果集（方案 `B′`）。
+    pub fn open_reference_rows(&mut self, cx: &mut Context<Self>) {
+        let Some(sql) = self.reference_rows_sql(cx) else {
+            return;
+        };
+        self.queue
+            .request(crate::ports::ResultRequest::OpenReferenceRows { sql }, cx);
     }
 
     /// 【R2 计算页】启用一个统计项（对齐 DBeaver Calc「＋添加函数」）。
@@ -349,13 +632,35 @@ impl ResultPanel {
         }
     }
 
-    /// 【R2 计算页】恢复默认函数集（六项全开；对齐「Reset」）
+    /// 【R2 计算页】恢复默认函数集（对齐 DBeaver `ResetFunctionsAction`
+    /// `:438-449`：`enabledFunctions.clear()` + `loadDefaultFunctions()` →
+    /// 只留 `isDefault()` 打标的项，本仓 = 「非空」，见 `StatsItem::DEFAULT_SET`）
     pub fn reset_stats_items(&mut self, cx: &mut Context<Self>) {
-        if self.stats_items == StatsItem::ALL.to_vec() {
+        let defaults = StatsItem::DEFAULT_SET.to_vec();
+        if self.stats_items == defaults {
             return;
         }
-        self.stats_items = StatsItem::ALL.to_vec();
+        self.stats_items = defaults;
         cx.notify();
+    }
+
+    /// 【计算页持久化】宿主构造期注入启用集：设置里的 id 列表 → 面板状态。
+    ///
+    /// 对齐 DBeaver `AggregateColumnsPanel.loadSettings`（`:129-155`）：那边把
+    /// `enabledFunctions` 按存下的 `index` 顺序查回函数；本仓 `stats_items_from_ids`
+    /// 只保留九项里的已知 id、丢弃未知项与重复项（顺序照抄）。空串合法（全停用）。
+    pub fn set_stats_items_initial(&mut self, ids: &str, cx: &mut Context<Self>) {
+        let items = crate::ports::stats_items_from_ids(ids);
+        if items == self.stats_items {
+            return;
+        }
+        self.stats_items = items;
+        cx.notify();
+    }
+
+    /// 【计算页持久化】当前启用集的落盘形态（宿主在 ＋ / × / Reset 生效后读走这一串）。
+    pub fn stats_items_ids(&self) -> String {
+        crate::ports::stats_items_to_ids(&self.stats_items)
     }
 
     /// 【R2 计算页】切换聚合口径（数值 / 字符串；对齐 `aggregateAsStrings` CHECK）
@@ -378,6 +683,17 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【R3 分组页】把分组键里某一列上移 / 下移一位（`delta` = -1 / +1）。
+    ///
+    /// 对齐 DBeaver `GroupingColumnsContainer.moveColumns:126-152`：分组键顺序 = 分组嵌套顺序，
+    /// 挪一位就是改层级。列不在键里 / 已在边界 → 什么都不做（不 notify，避免无谓重绘）。
+    pub fn move_group_column(&mut self, column: usize, delta: i8, cx: &mut Context<Self>) {
+        if !super::tabs::move_group_column_in_place(&mut self.group_columns, column, delta) {
+            return;
+        }
+        cx.notify();
+    }
+
     /// 【R3 分组页】切换分组结果排序口径（按值 / 按计数）
     pub fn set_group_sort(&mut self, sort: GroupSort, cx: &mut Context<Self>) {
         if self.group_sort == sort {
@@ -394,6 +710,37 @@ impl ResultPanel {
         }
         self.group_duplicates_only = on;
         cx.notify();
+    }
+
+    /// 【分组页持久化】宿主构造期注入排序口径与「仅重复」：设置里的 id / bool → 面板状态。
+    ///
+    /// 对齐 DBeaver 两个结果集偏好：`RS_GROUPING_DEFAULT_SORTING`（`ChangeSortingAction`
+    /// 读写，`""`/`ASC`/`DESC`）与 `RS_GROUPING_SHOW_DUPLICATES_ONLY`（`DuplicatesOnlyAction`
+    /// 的 check box 状态）。本仓两态排序里 `countdesc` 对应那边的 `DESC`，`value` 是超集档；
+    /// 未知 id 按出厂 `value` 处理（不猜，与设置服务侧的归一同一口径）。
+    pub fn set_group_prefs_initial(
+        &mut self,
+        sort_id: &str,
+        duplicates_only: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let sort = GroupSort::parse(sort_id).unwrap_or_default();
+        if self.group_sort == sort && self.group_duplicates_only == duplicates_only {
+            return;
+        }
+        self.group_sort = sort;
+        self.group_duplicates_only = duplicates_only;
+        cx.notify();
+    }
+
+    /// 【分组页持久化】当前排序口径的落盘 id（宿主在排序钮生效后读走这一串）
+    pub fn group_sort_id(&self) -> &'static str {
+        self.group_sort.id()
+    }
+
+    /// 【分组页持久化】当前「仅重复」开关值（宿主在该钮生效后读走）
+    pub fn group_duplicates_only_value(&self) -> bool {
+        self.group_duplicates_only
     }
 
     /// 【R3 分组页】清空分组列集合（对齐 DBeaver `ClearGroupingAction`；该动作在
@@ -632,6 +979,23 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【右栏】集合被**关空**之后再显示时，恢复默认页集合。
+    ///
+    /// 对齐 `ResultSetViewer.showPanels:1478-1518`：展开路径带 `showDefaults=true`，
+    /// 于是 `:1493-1496` 先 `activateDefaultPanels(getPresentationSettings())` 再放开 sash——
+    /// 「面板被关光过一次」不会让页签夹继续空着，重新显示一定有页可显示。
+    /// 本仓默认集合 = 出厂六页（`right_tabs()`；宿主注入的偏好集合走
+    /// `set_open_tabs_initial`）。**只在空集时补**，非空的自定义集合原样保留。
+    fn restore_default_tabs_when_empty(&mut self) {
+        if !self.open_tabs.is_empty() {
+            return;
+        }
+        self.open_tabs = right_tabs().to_vec();
+        if !self.open_tabs.contains(&self.right_tab) {
+            self.right_tab = self.open_tabs[0];
+        }
+    }
+
     /// 【右缘竖条】面板总开关：对齐 DBeaver 右缘竖条顶部那颗 `panelsButton`
     /// （`SWT.RIGHT | SWT.CHECK`，图标 `UIIcon.PANEL_CUSTOMIZE`，点击
     /// `showPanels(!isPanelsVisible(), true, true)`，checked = 面板可见；`ResultSetViewer.java:1038-1056`）。
@@ -639,9 +1003,16 @@ impl ResultPanel {
     /// 本仓「面板可见」= 竖条与右栏内容都显（`edge_bar_visible && show_value_sidebar`）；
     /// 关 = 整条收起（与状态栏右端三态开关的收起态是同一定义）。重新打开走状态栏那个开关
     /// ——DBeaver 那边关掉后竖条也消失，重新打开走菜单命令 `CMD_TOGGLE_PANELS`，同一处境。
+    ///
+    /// **收起会吃掉最大化**：DBeaver 里面板可见性与最大化共用同一份 sash 可见性
+    /// （`showPanels(false)` 就是 `setMaximizedControl(children[0])`，`:1487`），
+    /// 关掉面板之后不可能还停在最大化。本仓同样复位 `panel_maximized`，
+    /// 否则「面板已关但右栏被最大化强行挂着」会出现状态自相矛盾（竖条也一起没了）。
     pub fn set_panels_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
         if visible {
             if !self.panels_visible() {
+                // 关空过就补回默认页集合（见 restore_default_tabs_when_empty 的取证）
+                self.restore_default_tabs_when_empty();
                 self.edge_bar_visible = true;
                 self.show_value_sidebar = true;
                 self.right_sidebar_epoch = self.right_sidebar_epoch.wrapping_add(1);
@@ -650,6 +1021,7 @@ impl ResultPanel {
         } else {
             self.edge_bar_visible = false;
             self.show_value_sidebar = false;
+            self.panel_maximized = false;
             self.right_sidebar_epoch = self.right_sidebar_epoch.wrapping_add(1);
             self.right_sidebar_dragging = false;
         }
@@ -666,8 +1038,17 @@ impl ResultPanel {
     /// 内容）→ 收起。epoch 递增让宽度动画重播（首帧 epoch=0 免动画，见 `sidebar_width_anim`）
     pub fn toggle_value_sidebar(&mut self, cx: &mut Context<Self>) {
         let (edge, show) = next_right_edge_state(self.edge_bar_visible, self.show_value_sidebar);
+        // 走「显示」方向时同样补默认页集合：这条路径是 DBeaver `CMD_TOGGLE_PANELS` 的等价物，
+        // 关空过之后再显也不能留下空页签夹（见 restore_default_tabs_when_empty 的取证）
+        if show {
+            self.restore_default_tabs_when_empty();
+        }
         self.edge_bar_visible = edge;
         self.show_value_sidebar = show;
+        // 走到「收起」时最大化没有意义（不变量：最大化 ⇒ 面板展开），顺手复位
+        if !show {
+            self.panel_maximized = false;
+        }
         self.right_sidebar_epoch = self.right_sidebar_epoch.wrapping_add(1);
         // 【R5 可拖分栏】开合重新走 160ms 补间（拖拽期是直写，见 render_right_sidebar）
         self.right_sidebar_dragging = false;
@@ -707,6 +1088,56 @@ impl ResultPanel {
     pub fn toggle_vertical_layout(&mut self, cx: &mut Context<Self>) {
         self.vertical_layout = !self.vertical_layout;
         self.right_sidebar_dragging = false;
+        cx.notify();
+    }
+
+    /// 【R5 面板最大化】收起 / 还原结果网格（对齐 DBeaver `togglePanelsMaximize`
+    /// `ResultSetViewer.java:1551-1557` = `viewerSash.hideUp()/showUp()`）。
+    ///
+    /// 语义是**独占整块结果集区域**，不是「把右栏拖宽」：最大化期间网格不渲染、
+    /// 右栏满宽（横排满宽 / 竖排满高），拖拽手柄也不挂（没有可拖的分栏了）。
+    /// 面板总开关（`show_value_sidebar`）**保持原值不动**——还原后回到用户原本的开合态；
+    /// 唯一的例外是「面板当前是关的」时进入最大化：面板关着就没有可最大化的东西，
+    /// 这时先把面板展开（与 DBeaver 共用同一份 sash 可见性同一道理），再进入最大化。
+    pub fn toggle_panel_maximize(&mut self, cx: &mut Context<Self>) {
+        self.panel_maximized = !self.panel_maximized;
+        if self.panel_maximized {
+            // 不变量：最大化 ⇒ 面板可见（否则网格已收起、面板又不显示，整块区域空白）
+            if !self.show_value_sidebar {
+                self.show_value_sidebar = true;
+                self.edge_bar_visible = true;
+                self.right_sidebar_epoch = self.right_sidebar_epoch.wrapping_add(1);
+            }
+            // 最大化期间没有拖拽手柄可拖
+            self.right_sidebar_dragging = false;
+        }
+        cx.notify();
+    }
+
+    /// 【R6 段大小】改「取下一段」的行数（对齐 DBeaver `resultSetSize` 的 modify 回调：
+    /// `>0` 才写、`< MIN_SEGMENT_SIZE` 抬到下限）。只影响后续取段，不改已加载行。
+    pub fn set_segment_rows(&mut self, rows: usize, cx: &mut Context<Self>) {
+        let rows = rows.max(crate::ui::RESULT_SEGMENT_ROWS_MIN);
+        if rows == self.segment_rows {
+            return;
+        }
+        self.segment_rows = rows;
+        cx.notify();
+    }
+
+    /// 【R6 段大小】宿主构造期注入持久化值：状态落位 + 输入框显示该值
+    /// （过去只有占位 `1000`，持久化成 `500` 时框里仍是空 → 看不到真值）。
+    pub fn set_segment_rows_initial(
+        &mut self,
+        rows: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let rows = rows.max(crate::ui::RESULT_SEGMENT_ROWS_MIN);
+        self.segment_rows = rows;
+        // `set_value` 内部临时 `emit_events = false`：不会把注入当成用户输入再入队一次
+        let input = self.segment_input.clone();
+        input.update(cx, |state, cx| state.set_value(rows.to_string(), window, cx));
         cx.notify();
     }
 
@@ -1293,6 +1724,11 @@ impl ResultPanel {
         self.result_sql.as_deref()
     }
 
+    /// 【R6 段大小】「取下一段」一次取多少行（宿主下发给 `ExecTarget::Segment { limit }`）
+    pub fn segment_rows(&self) -> usize {
+        self.segment_rows
+    }
+
     /// 【1.2】筛选框运行生成的 wrapped SQL（右栏「执行SQL」页签；`None` = 未运行过）
     pub fn exec_sql(&self) -> Option<&str> {
         self.exec_sql.as_deref()
@@ -1495,8 +1931,11 @@ impl ResultPanel {
 /// 生成（`:1559-1588`）：全部面板的 CHECK 条目 → 分隔 → `CMD_TOGGLE_MAXIMIZE` →
 /// `CMD_ACTIVATE_PANELS` → 分隔 → `CMD_TOGGLE_PANELS`（面板总开关）→ `CMD_TOGGLE_LAYOUT`。
 ///
-/// 本仓口径「能力没有就不摆」：`MAXIMIZE`（面板最大化）与 `ACTIVATE_PANELS`（把焦点交给面板）
-/// 还没有落地端口，故不列（不造点了没反应的条目）；其余四项都有真端口。
+/// 顺序照 `fillPanelsMenu`（`ResultSetViewer.java:1559-1588`）：六页 → 分隔 →
+/// `CMD_TOGGLE_MAXIMIZE` → `CMD_ACTIVATE_PANELS` → 分隔 → `CMD_TOGGLE_PANELS` → `CMD_TOGGLE_LAYOUT`。
+///
+/// 本仓口径「能力没有就不摆」：`ACTIVATE_PANELS`（把焦点交给面板）还没有落地端口，故不列
+/// （不造点了没反应的条目）；`MAXIMIZE` 本批已落地真端口。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PanelViewItem {
     /// 一页（勾选态 = 当前页；点击切到该页）
@@ -1507,6 +1946,8 @@ pub(crate) enum PanelViewItem {
     PanelsToggle,
     /// 布局方向（横排 / 竖排，≈ `CMD_TOGGLE_LAYOUT`）
     LayoutToggle,
+    /// 面板最大化（≈ `CMD_TOGGLE_MAXIMIZE`：收起结果网格，让面板占满结果集区域）
+    MaximizeToggle,
 }
 
 /// 右栏六页的**规范顺序**（页签条的左右顺序 / 索引映射 / 视图菜单条目共用一份）。
@@ -1525,25 +1966,81 @@ pub(crate) fn right_tabs() -> [RightTab; 6] {
     ]
 }
 
-/// 页签枚举 → 页签下标（`TabBar::selected_index` 用）
-pub(crate) fn right_tab_index(tab: RightTab) -> usize {
-    right_tabs()
+/// 【页内工具条】该页是否在「工具条与正文之间」画一条水平分隔线。
+///
+/// 对齐 DBeaver `IResultSetPanel.needsSeparator()`：`ResultSetViewer.addPanel:1345-1347`
+/// 只在面板声明 `true` 时才 `UIUtils.createLabelSeparator(panelComposite, SWT.HORIZONTAL)`；
+/// 全仓只有 `ValueViewerPanel.java:171-173` 返回 `true`，其余面板继承
+/// `ResultSetPanelBase.java:26-28` 的 `false`（`MetaDataPanel` / `AggregateColumnsPanel` /
+/// `GroupingPanel` / `ReferencesPanel` 均未覆写）。
+pub(crate) fn page_needs_separator(tab: RightTab) -> bool {
+    matches!(tab, RightTab::Value)
+}
+
+/// 【右缘竖条 / 视图菜单】点某一页时是否「关掉面板」而不是「切页」。
+///
+/// 【页签条】已启用集合内某页的下标（`TabBar::selected_index` 用；不在集合里 → 0）。
+pub(crate) fn strip_index(open: &[RightTab], tab: RightTab) -> usize {
+    open.iter().position(|existing| *existing == tab).unwrap_or(0)
+}
+
+/// 【页签条】下标 → 已启用集合内的页（`TabBar::on_click` 回调用；越界兜底默认页）。
+pub(crate) fn tab_at_strip_index(open: &[RightTab], index: usize) -> RightTab {
+    open.get(index).copied().unwrap_or(RightTab::Browser)
+}
+
+/// 【页签条】每个页签内侧那颗 × 的稳定选择器（`debug_selector` / 测试定位用）。
+///
+/// 必须**逐页不同**：六颗按钮同时存在，共用一个 id 会让 `debug_bounds` 只命中第一个、
+/// 也会造成 a11y 重复 id（`gpui-kit` 0.9 已知坑）。返回 `&'static str` 是为了让
+/// `TestAppContext::debug_bounds` 能按字面量定位。
+pub(crate) fn tab_close_selector(tab: RightTab) -> &'static str {
+    match tab {
+        RightTab::Browser => "editor-result-right-tab-close-browser",
+        RightTab::Value => "editor-result-right-tab-close-value",
+        RightTab::Stats => "editor-result-right-tab-close-stats",
+        RightTab::Group => "editor-result-right-tab-close-group",
+        RightTab::Reference => "editor-result-right-tab-close-reference",
+        RightTab::ExecSql => "editor-result-right-tab-close-execsql",
+    }
+}
+
+/// 【关闭一页】关掉某页后当前页落到哪：**规范序里紧随其后**的剩余页，没有则取最后一个。
+///
+/// `remaining` 必须是规范序（`open_tabs` 的维护方式保证）。对齐 DBeaver 的
+/// `CTabFolder` 行为：关掉选中的页签后焦点落到相邻页签，而不是回到第一页。
+pub(crate) fn neighbor_after_close(remaining: &[RightTab], closed: RightTab) -> RightTab {
+    let canonical = right_tabs();
+    let closed_pos = canonical
         .iter()
-        .position(|candidate| *candidate == tab)
-        .unwrap_or(0)
+        .position(|candidate| *candidate == closed)
+        .unwrap_or(0);
+    remaining
+        .iter()
+        .find(|candidate| {
+            canonical
+                .iter()
+                .position(|tab| *tab == **candidate)
+                .unwrap_or(0)
+                > closed_pos
+        })
+        .or_else(|| remaining.last())
+        .copied()
+        .unwrap_or(RightTab::Browser)
 }
 
-/// 页签下标 → 页签枚举（`TabBar::on_click` 回调用；越界兜底默认页）
-pub(crate) fn right_tab_from_index(index: usize) -> RightTab {
-    right_tabs().get(index).copied().unwrap_or(RightTab::Browser)
-}
-
-/// 「视图菜单」条目清单（顺序照 `fillPanelsMenu`）：六页 → 分隔 → 面板总开关 → 布局方向
+/// 「视图菜单」条目清单（顺序照 `fillPanelsMenu:1559-1588`）：
+/// 六页 → 分隔 → 最大化 → 分隔 → 面板总开关 → 布局方向
 pub(crate) fn panel_view_menu_items() -> Vec<PanelViewItem> {
     let mut items: Vec<PanelViewItem> = right_tabs()
         .into_iter()
         .map(PanelViewItem::Page)
         .collect();
+    items.push(PanelViewItem::Separator);
+    // `CMD_TOGGLE_MAXIMIZE` 在原版里紧跟第一条分隔线（`:1578`），`CMD_ACTIVATE_PANELS` 之后
+    // 还有一条分隔线（`:1582`）再放「面板总开关 / 布局方向」——本仓没有 actiave-panels 端口，
+    // 但两条分隔线照留，菜单段位与那边一致。
+    items.push(PanelViewItem::MaximizeToggle);
     items.push(PanelViewItem::Separator);
     items.push(PanelViewItem::PanelsToggle);
     items.push(PanelViewItem::LayoutToggle);
@@ -1574,12 +2071,120 @@ pub(crate) fn right_tab_icon(tab: RightTab) -> IconName {
     }
 }
 
+/// 右栏页签的**提示文案**（对齐 DBeaver `addPanel` 里
+/// `panelTab.setToolTipText(panelDescriptor.getDescription())`，`ResultSetViewer.java:1361`）。
+///
+/// 前五条按 `OSGI-INF/l10n/bundle.properties:15-24` 的 `panel.*.description` 逐条译：
+/// `value-view` = Results cell value viewer、`column-aggregate` = Result cells calculations
+/// (SUM, MAX, AVG, etc)、`results-metadata` = ResultSet metadata description、
+/// `results-grouping` = Results grouping (GROUP BY)、
+/// `results-references` = One or more rows referencing current row(-s)。
+/// 「执行SQL」是本仓独有页（DBeaver 无对应面板），按本仓实能做描述。
+pub(crate) fn right_tab_description(tab: RightTab) -> &'static str {
+    match tab {
+        RightTab::Browser => "结果集元数据说明（列清单 / 类型 / 注释，可筛可搜索）",
+        RightTab::Value => "结果单元格值查看器（文本 / 十六进制转储，可保存至文件）",
+        RightTab::Stats => "结果单元格计算（非空 / NULL / 最小 / 最大 / 均值 / 合计）",
+        RightTab::Group => "结果分组（按选中列做 GROUP BY 计数）",
+        RightTab::Reference => "引用当前行的其他行（外键清单 / 查看引用行）",
+        RightTab::ExecSql => "面板内 SQL 草稿与执行入口",
+    }
+}
+
+/// 【计算行数】这颗钮能不能点（纯函数）。
+///
+/// 两个条件：
+/// - `has_data`：对齐 DBeaver `rowCountLabel` 的 `isActionEnabled = hasData()`；
+/// - `is_analysis`：**本地分析结果不能算**——它跑在桥接过来的那份行上、临时表早就不在了，
+///   重跑原 SQL 只会报错。与其给一颗点了必错的钮，不如置灰并在提示里说清原因
+///   （与「分析结果不摆 ⟳ 刷新」同一条纪律，见 `copy.rs::refresh_active_result`）。
+pub(crate) fn count_rows_available(has_data: bool, is_analysis: bool) -> bool {
+    has_data && !is_analysis
+}
+
+/// 【计算行数】提示文案（纯函数）：分析结果讲「为什么不能算」，其余讲「点了会怎样」。
+pub(crate) fn count_rows_tooltip(is_analysis: bool, computed: bool) -> &'static str {
+    match (is_analysis, computed) {
+        (true, _) => {
+            "分析结果是当时那份已抓行算出来的，没有可重算的源查询——总行数就是这里的行数"
+        }
+        (false, true) => "总行数（对原 SQL 跑 count(*)）：点一下重新计算",
+        (false, false) => "计算行数（对原 SQL 跑 count(*)，不产生新结果集）",
+    }
+}
+
+/// 【左缘竖条】视图方式按钮的提示文案（纯函数）。
+///
+/// 对齐 `ResultSetViewer.updatePresentationInToolbar`（`:948-952`）：那里的每个
+/// `VerticalButton` 是 `setText(pd.getLabel())` + `setToolTipText(pd.getDescription())`
+/// ——**按钮上写名字、提示里写描述**。本仓按钮只有图标，所以提示承担两件事：
+/// 「这是哪一档」+「这一档怎么用」，即 `标签（描述）`（与右缘竖条 `edge_tab_tooltip`
+/// 同一形态）。
+pub(crate) fn presentation_tooltip(presentation: Presentation) -> String {
+    match presentation {
+        Presentation::Grid => "网格视图（表头冻结，可排序 / 筛选 / 分栏）".to_string(),
+        Presentation::Text => "文本视图（等宽文本呈现，便于整表复制或对照原样）".to_string(),
+    }
+}
+
+/// 【左缘竖条】记录视图按钮（CHECK 语义，沉在竖条底部）的提示文案。
+///
+/// DBeaver 那颗是 `recordModeButton` + `ToggleModeAction`（`:964-965`），点一下在
+/// 「网格」与「记录」之间切；本仓是转置开关，提示要直接说清会看到什么。
+pub(crate) fn record_view_tooltip(active: bool) -> String {
+    if active {
+        "记录视图（本行已转置）：点一下回到网格".to_string()
+    } else {
+        "记录视图：当前行转置成 # / 字段 / 值 三列竖排".to_string()
+    }
+}
+
+/// 【右缘竖条】某一页图标的勾选态 = 「整栏可见且该页已启用」。
+///
+/// 对齐 `ResultSetViewer.java:1079`：`panelButton.setChecked(panelsVisible && isPanelVisible(panel.getId()))`
+/// ——竖条按钮是 `SWT.CHECK`，**多页可同时勾亮**（勾的是「这页开着」，不是「这页是当前页」）。
+pub(crate) fn edge_tab_active(panels_visible: bool, is_open: bool) -> bool {
+    panels_visible && is_open
+}
+
+/// 【视图菜单】勾选中的页项被点击时，是「关闭该页」还是「打开并切过去」。
+///
+/// 对齐 `ResultSetHandlerTogglePanel.toggleResultsPanel:64-69` 的
+/// `isVisible = isPanelsVisible() && isPanelVisible(id)`：真 → `closePanel`，假 →
+/// `activatePanel(id, true, true)`。菜单项勾选态是 `isPanelVisible(id)`（`updateElement:99`，
+/// 不含整栏可见），所以「勾着但整栏收起」时点它仍是打开（顺带展开），不是关闭。
+pub(crate) fn page_item_closes(panels_visible: bool, is_open: bool) -> bool {
+    panels_visible && is_open
+}
+
+/// 【右缘竖条】某一页图标的提示文案。
+///
+/// 对齐 `ResultSetViewer.java:1055-1080`：竖条按钮 `setToolTipText(panel.getLabel())`，
+/// 取得到命令描述时拼成 `label + " (" + toolTip + ")"`——即**页名 + 命令/面板描述**，
+/// 而不是只有页名。本仓页签条已经用描述（`right_tab_description`），竖条这里同样拼起来。
+///
+/// 三态（对齐 `toggleResultsPanel:64-69` 的 `isPanelVisible = isPanelsVisible() && isPanelVisible(id)`）：
+/// - 已启用且整栏可见（点一下会 `closePanel`）→ 报「点一下关闭这一页」；
+/// - 已启用但整栏收起（点一下会 `activatePanel`，顺带展开）→ 报「展开并切到这一页」；
+/// - 已关闭（不在 `open_tabs` 里，点一下会重新启用）→ 报「已关闭，点一下打开」。
+pub(crate) fn edge_tab_tooltip(tab: RightTab, is_open: bool, panels_visible: bool) -> String {
+    let base = format!("{}（{}）", right_tab_label(tab), right_tab_description(tab));
+    if !is_open {
+        return format!("{base} — 此页已关闭，点一下打开");
+    }
+    if panels_visible {
+        return format!("{base} — 点一下关闭这一页");
+    }
+    format!("{base} — 点一下展开并切到这一页")
+}
+
 /// 「视图菜单」条目文案（动态条目按当前状态报动作，而不是报状态：
 /// 菜单项是「点了会做什么」——对齐 DBeaver `CMD_TOGGLE_PANELS` / `CMD_TOGGLE_LAYOUT` 的命令标签）
 pub(crate) fn panel_view_item_label(
     item: PanelViewItem,
     panels_visible: bool,
     vertical_layout: bool,
+    panel_maximized: bool,
 ) -> String {
     match item {
         PanelViewItem::Page(tab) => right_tab_label(tab).to_string(),
@@ -1596,6 +2201,15 @@ pub(crate) fn panel_view_item_label(
                 "切换为横排布局（左右分栏）".to_string()
             } else {
                 "切换为竖排布局（上下分栏）".to_string()
+            }
+        }
+        // 最大化是「独占整块结果集区域」（DBeaver `togglePanelsMaximize` =
+        // `viewerSash.hideUp()/showUp()`），文案报动作
+        PanelViewItem::MaximizeToggle => {
+            if panel_maximized {
+                "还原结果网格".to_string()
+            } else {
+                "面板最大化（收起结果网格）".to_string()
             }
         }
     }
@@ -1619,8 +2233,32 @@ pub(crate) fn erase_menu_labels(filter_text: &str, hidden_columns: usize) -> Vec
     labels
 }
 
-/// 【状态历史】状态的一行描述（对齐 DBeaver `describeState`，`ResultSetViewer.java:5457-5473`）：
-/// 空白折叠成单空格（多行 SQL 在 tooltip 里不能换行），**超过 50 字符截断补 `…`**
+/// 【段大小】解析状态行输入框的文本（纯函数，测试直接钉）。
+///
+/// 对齐 DBeaver `resultSetSize` 的 modify 回调（`ResultSetViewer.java:2138-2152`）：
+/// `CommonUtils.toInt(text)` → 只有 `> 0` 才写偏好，`< MIN_SEGMENT_SIZE` 抬到下限；
+/// 非数字 / 0 / 负数 = 无效输入（**不写**，输入框文本此刻仍保持用户所敲，
+/// 由失焦回填收口，见 [`segment_rows_blur_display`]）。
+/// 本仓返回 `None` 让调用方「什么都不做」，`Some(rows)` 才是有效提交。
+pub(crate) fn parse_segment_rows(text: &str) -> Option<usize> {
+    let rows = text.trim().parse::<usize>().ok()?;
+    (rows > 0).then_some(rows)
+}
+
+/// 【段大小】失焦时输入框该显示什么（纯函数）。
+///
+/// 对齐 DBeaver 的 `focusLost` 监听器（`ResultSetViewer.java:2129-2137`）：
+/// 取当前生效值 `getSegmentMaxRows()`，**只要文本框内容和它不一样就 `setText(realValue)`**
+/// ——无效输入（`0` / `abc` / 空）与「格式怪但已生效」（`007`→`7` 已由 change 规范化）都靠这一步收口，
+/// 不会把非法文本留在状态行里。
+///
+/// 返回 `None` = 文本已是生效值、无需改写；`Some(s)` = 回填成 `s`。
+pub(crate) fn segment_rows_blur_display(text: &str, current: usize) -> Option<String> {
+    let effective = current.to_string();
+    (text.trim() != effective).then_some(effective)
+}
+
+/// 【状态历史】状态的一行描述（对齐 DBeaver `describeState`，`ResultSetViewer.java:5457-5473`）：/// 空白折叠成单空格（多行 SQL 在 tooltip 里不能换行），**超过 50 字符截断补 `…`**
 /// （DBeaver 的阈值也是 50 字符，`...` 是 ASCII 三点——本仓用中文省略号跟界面文案一致）。
 pub(crate) fn state_label(sql: &str) -> String {
     let flat = sql.split_whitespace().collect::<Vec<_>>().join(" ");

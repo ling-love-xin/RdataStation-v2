@@ -12,6 +12,8 @@
 >
 > **不接 plugin**；未接通能力不写成已上线；本文不构成 0.2.4 交付物。
 
+> **进度更新（2026-11-20 实测）**：阶段 0 ✅（`ExecQueue::drain_for` 按文档排空）；阶段 2 ✅（提交 `7ac86854`「执行队列按连接分组并发」——`ConnQueue` 每连接一条 worker + `pending` 计数 + `cancel_requested`，`is_busy_for(connection)` 取代旧的全局 `busy` 位与 `running_connection` 单槽）；**阶段 1、阶段 3 未做**。所以下文 §2.1 / §2.2 / §3 中「全局单忙位 / 单工作线程 / 单 `running_connection` 槽」是**阶段②之前**的现状口径（保留作对照），当前执行队列以本节结论为准；事务归属（阶段 1 / 3）仍按 `conn_id`，四通道回执仍「全量 drain 再按文档过滤」。
+
 ---
 
 ## 0. 结论先行（先回答三个决策问题）
@@ -29,7 +31,7 @@
 
 ### 0.2 源库执行照搬 DBeaver 这种经过市场检验的方案，是不是更好？——**是，推荐照搬其上下文隔离模型**
 
-DBeaver 模型经过十余年市场检验：**每个 SQL 编辑器一个独立执行上下文，上下文各自持有一条物理连接、独立事务、独立取消，结果集归属编辑器**。它比我们现状「`conn_id` 单连接 + 单事务槽 + 全局单忙位串行」语义更干净，也正好消解我们这轮碰到的跨面板共享状态竞态。
+DBeaver 模型经过十余年市场检验：**每个 SQL 编辑器一个独立执行上下文，上下文各自持有一条物理连接、独立事务、独立取消，结果集归属编辑器**。它比我们当时的现状「`conn_id` 单连接 + 单事务槽 + 全局单忙位串行」语义更干净（并发那半段已由阶段②按连接分组消解，见文首进度更新），也正好消解我们这轮碰到的跨面板共享状态竞态。
 
 **裁剪照搬**（§4.2）：① 不照搬「打开编辑器即建连接」→ 改为**惰性建连**；② 不照搬「关闭即真关 TCP、无空闲回收」→ 补**空闲超时回收**；③ 补上 DBeaver 已有的成熟做法：**元数据浏览连接与 SQL 执行连接分开**。
 
@@ -122,21 +124,21 @@ DBPDataSourceContainer（导航树里那条连接配置 / 凭据）
 
 | 层 | 现状归属 | 锚点 |
 | --- | --- | --- |
-| 文档属性 | 每文档一份 `connection: Option<String>` / `channel` / `schema` | `crates/editor/src/service.rs` `Document`（L29–47），访问器 L133–144，`OpenRequest` L232–244 |
-| 结果集 | **已按文档分槽**：`ResultStore.documents: Vec<DocumentResults>`，`sets(document)` / `active(document)` 按文档取 | `crates/editor/src/store.rs` L606–631、L692–709 |
-| 执行队列 | **全局一份** `ExecQueue`，单个 `busy: AtomicBool` + 单工作线程 + 单 `running_connection` 槽；任意文档在跑，其余文档 `submit` 直接 `SubmitError::Busy` | `crates/editor/src/execution.rs` `submit` L1177（`is_busy()` L1489、`running_connection` L1200）；`crates/editor/src/shared.rs` `exec: Rc<RefCell<Option<ExecQueue>>>` L121 |
-| 物理连接 | `connections: HashMap<ConnId, DynDatabase>`：**一个 conn_id 一条，跨绑定该连接的所有文档共享**；未绑定文档回退全局 `active_conn_id` | `crates/engine/src/connection_manager.rs` L114、L122；`crates/workbench/src/services/editor_exec.rs` `resolve_conn_id` L83–91 |
-| 事务 | `transactions: Mutex<HashMap<ConnId, ActiveTransaction>>`：**每个连接至多一个事务，跨文档共享**；事务动作只收 `conn_id`，无文档参数 | `connection_manager.rs` L136、`begin_transaction` L649、`commit_transaction` L671、`rollback_transaction` L689；`crates/engine/src/services/sql_service.rs` 事务动作 L846–871 |
-| 执行路由 | 事务键 `tx_key = conn_key_for(conn_id)`；`in_transaction` / `auto_begin` / `query_in_transaction(tx_key, ...)` 全按连接键 | `sql_service.rs` `execute` L437，`tx_key` L515、`in_transaction` L516、`auto_begin` L517、事务语句 L531–538 |
-| 取消令牌 | `cancel_tokens: HashMap<ConnId, CancellationToken>`：每连接一个在跑查询令牌；单 `running_connection` 槽记录当前作业连接 | `connection_manager.rs` L130；`execution.rs` L1200 |
-| 加速会话 | `SESSIONS: HashMap<conn_id, Arc<AccelSession>>`：本地内存 DuckDB，只读挂载源库，按连接复用 | `crates/engine/src/duckdb/accel.rs` `AccelSource` L194、`SESSIONS` L453、`ensure_session` L490 |
-| 联邦会话 | `SESSIONS: HashMap<key, CachedFederation>`，键 = owner + 源集合指纹，本地多源挂载会话复用 | `crates/engine/src/duckdb/federation/session.rs` L458、`ensure_session` L501 |
+| 文档属性 | 每文档一份 `connection: Option<String>` / `channel` / `schema` | `crates/editor/src/core/service.rs` `Document`（L29），`OpenRequest` L249–253 |
+| 结果集 | **已按文档分槽**：`ResultStore.documents: Vec<DocumentResults>`，`sets(document)` / `active(document)` 按文档取 | `crates/result_panel/src/store/store.rs` `DocumentResults` L106、`ResultStore` L122（已从 editor 迁到 result_panel） |
+| 执行队列 | **按连接分组的并发队列**（阶段②已落地）：`conns: HashMap<String, Arc<ConnQueue>>`，每连接一条工作线程 + `pending: AtomicUsize` + `cancel_requested`；不同连接并行、同连接 FIFO 串行，`None` 未绑定统一键 `""` | `crates/editor/src/exec/queue.rs` `ExecQueue` L78、`ConnQueue` L58、`submit` L353、`is_busy_for` L678、`drain_for` L607；共享点 `crates/editor/src/shared/mod.rs` `exec` L190 |
+| 物理连接 | `connections: HashMap<ConnId, DynDatabase>`：**一个 conn_id 一条，跨绑定该连接的所有文档共享**；未绑定文档回退全局 `active_conn_id` | `crates/engine/src/connection_manager.rs` L114、L122；`crates/editor/src/ports/editor_exec/` `resolve_conn_id`（原 `workbench/services/editor_exec.rs` 已迁） |
+| 事务 | `transactions: Mutex<HashMap<ConnId, ActiveTransaction>>`：**每个连接至多一个事务，跨文档共享**；事务动作只收 `conn_id`，无文档参数 | `connection_manager.rs` L136、`begin_transaction` L649、`commit_transaction` L671、`rollback_transaction` L689；`crates/engine/src/services/sql_service.rs` 事务动作（阶段②之后行号已变，以符号为准） |
+| 执行路由 | 事务键 `tx_key = conn_key_for(conn_id)`；`in_transaction` / `auto_begin` / `query_in_transaction(tx_key, ...)` 全按连接键 | `sql_service.rs` `execute` / `tx_key` / `in_transaction` / `auto_begin`（按符号定位） |
+| 取消令牌 | **按连接**：`cancel_requested` 在每条 `ConnQueue` 上（+ 执行器侧 `cancel_tokens: HashMap<ConnId, CancellationToken>`）；不再是全局单槽 | `crates/editor/src/exec/queue.rs` `ConnQueue` L58；`connection_manager.rs` L130 |
+| 加速会话 | `SESSIONS: HashMap<conn_id, Arc<AccelSession>>`：本地内存 DuckDB，只读挂载源库，按连接复用 | `crates/engine/src/duckdb/accel.rs` `AccelSource`、`SESSIONS`、`ensure_session` |
+| 联邦会话 | `SESSIONS: HashMap<key, CachedFederation>`，键 = owner + 源集合指纹，本地多源挂载会话复用 | `crates/engine/src/duckdb/federation/session.rs` `SESSIONS` / `ensure_session` |
 
 ### 2.2 现状的三个实际问题（对应本轮现象与后续债）
 
-1. **事务跨文档共享**：两个文档绑同一 `conn_id` 时，共享同一个事务槽；文档 A 开的事务对文档 B 可见、可被 B 的 commit / rollback 误操作；状态栏 TX 徽标 / 事务时长 / 提交回滚按钮当前按连接口径呈现，不是文档自己的状态。
-2. **全局单忙位串行**：`busy` 是全应用一个原子位，文档 A 跑长查询时，文档 B 提交直接被 `Busy` 拒绝，用户体感「编辑器卡住不能执行」；不同连接之间也被迫串行。
-3. **取消单槽位**：`running_connection` 单槽在多文档 / 并发下会把取消信号发给错误连接（`execution.rs` 注释 L1197–1199 已自标该隐患）；事务内语句目前也无取消 / 超时入口（驱动 `Transaction` trait 未提供，见 `editor-showcase.md` 已声明边界）。
+1. **事务跨文档共享**（未变，阶段 1 / 3 目标）：两个文档绑同一 `conn_id` 时，共享同一个事务槽；文档 A 开的事务对文档 B 可见、可被 B 的 commit / rollback 误操作；状态栏 TX 徽标 / 事务时长 / 提交回滚按钮当前按连接口径呈现，不是文档自己的状态。
+2. ~~**全局单忙位串行**~~ **（阶段②已消解，`7ac86854`）**：队列改为按连接分组，不同连接各自并行；残留是**同一连接的多文档仍排队串行**（这是设计意图，不再误伤无关连接），未绑定文档共用键 `""`。
+3. ~~**取消单槽位**~~ **（阶段②已消解）**：取消位挂在每条 `ConnQueue`（`cancel_requested`），`is_busy_for(connection)` 判定该连接是否有作业，不会再发给错误连接；残留是同一连接多文档时取消只能命中「该连接当前那条」——文档粒度取消要等阶段 3 的 per-context 令牌。事务内语句目前仍无取消 / 超时入口（驱动 `Transaction` trait 未提供，见 `editor-showcase.md` 已声明边界）。
 
 > 结果集归属这一层我们已经做对了：`ResultStore` 按文档分槽，与 DBeaver 结果集挂编辑器同构，目标模型保持不动。
 
@@ -153,8 +155,8 @@ DBPDataSourceContainer（导航树里那条连接配置 / 凭据）
 | 1 | 物理连接归属 | 默认每 SQL 编辑器隔离上下文一条独立连接；可配共享 Main | `conn_id` 一条，跨文档共享 | Source 档 per-context 独立连接 |
 | 2 | 事务归属 | 每上下文独立 `autoCommit` / 隔离级别 / 事务对象 / 监听器，独立 commit / rollback | `transactions[conn_id]` 每连接一个，跨文档共享 | per-context 独立事务 |
 | 3 | 事务状态展示 | 状态栏读自己上下文的 `DBCTransactionManager` | 按 `conn_id` 口径，非文档归属 | 阶段 1 先把 UI 归属修正到文档；阶段 3 落到独立上下文 |
-| 4 | 执行并发 | 不同上下文（不同连接）可并行；同上下文 `StatementLock` 串行 | 全局一份队列 + 单 `busy` 位 + 单工作线程，全应用串行，忙时拒绝其他文档 | 阶段 2 按连接分组排队；阶段 3 按上下文分组，同上下文语句锁串行 |
-| 5 | 取消 | 按上下文 / 当前语句句柄发出取消信号 | 单 `running_connection` 槽，按当前作业连接发令牌 | 阶段 2 改为作业 / 连接句柄持令牌；阶段 3 归属上下文 |
+| 4 | 执行并发 | 不同上下文（不同连接）可并行；同上下文 `StatementLock` 串行 | **阶段②已达成「不同连接并行、同连接串行」**（`ConnQueue` + 每连接 worker）；与 DBeaver 的差在粒度：按连接而非按上下文 | 阶段 3 按上下文分组，同上下文语句锁串行 |
+| 5 | 取消 | 按上下文 / 当前语句句柄发出取消信号 | **阶段②已按连接**（`cancel_requested` per `ConnQueue`）；同连接多文档仍共享一次取消 | 阶段 3 归属上下文 |
 | 6 | 结果集归属 | 挂编辑器（`QueryProcessor` / `QueryResultsContainer` / `resultTabs`），容器回指上下文 | `ResultStore.documents[]` 按文档分槽 | 维持现状（已对齐） |
 | 7 | 生命周期 | 上下文随编辑器打开建、关闭释放；关上下文先处理活动事务（回滚 / 提示） | 连接 / 事务随 `conn_id` 常驻，与编辑器生命周期解耦；关闭文档不释放连接 | 阶段 3：上下文惰性建连、关闭释放、空闲回收、活动事务先收尾 |
 | 8 | 元数据连接 | 独立 `metaContext`（可配复用 Main），导航 / 补全 / schema 浏览不占执行连接 | 导航内省与 SQL 执行共用同一连接 / 队列，存在相互阻塞风险 | 阶段 3 拆出独立只读元数据上下文 |
@@ -178,7 +180,7 @@ DBPDataSourceContainer（导航树里那条连接配置 / 凭据）
 | `source_conn_ref` | 绑定的 `conn_id` / 数据源配置（连接参数、凭据、网络档案来源不变） | `Document.connection` |
 | `driver_connection` | 上下文持有的独立物理连接句柄（Source 档）；未建连为 `None`（惰性） | `connections[ConnId]` 单条 |
 | `tx_state` | `auto_commit`、隔离级别、活动事务对象、开始时刻、事务监听器 | `transactions[ConnId]` |
-| `cancel_token` | 本上下文当前语句的取消令牌（替代全局单槽） | `cancel_tokens[ConnId]` + `running_connection` |
+| `cancel_token` | 本上下文当前语句的取消令牌（阶段②已从全局单槽改为每连接一份） | `ConnQueue.cancel_requested`（`crates/editor/src/exec/queue.rs`）+ `cancel_tokens[ConnId]`（执行器侧） |
 | `schema_default` | 上下文默认 catalog / schema（从数据源默认或 Main 拷贝，对齐 DBeaver 初始化拷贝） | `Document.schema` |
 | `lifecycle` | 状态：`Idle`（未建连）/ `Connected` / `Disconnected` / `Closed`；活动事务标记 | 现状无显式状态机 |
 | `result_slot` | 回指本上下文的结果集槽（`ResultStore` 已有文档分槽，只建引用关系） | 现状隐式按文档取 |
@@ -223,6 +225,7 @@ DBPDataSourceContainer（导航树里那条连接配置 / 凭据）
 
 ### 阶段 1（小，下一版本前段）：事务状态归属文档级 UI 修正
 
+- **状态（2026-11-20）：未开始**。四通道仍「全量 drain 再按文档 `continue` 过滤」，`tx_pending` 在过滤前 `saturating_sub(1)`（实测 `crates/editor/src/view/host/exec/pump.rs` L116–130、L137–140）。
 - **范围**：不动物理连接模型；把事务状态读取、TX 徽标、事务时长、提交 / 回滚按钮、自动提交开关、事务提示全部绑定到当前文档视图，不再跨文档显示连接级事务状态。
 - **顺带清偿同根因债**：`host.rs` 现有 `tx_notes` / `commit_notes` / `source_notes` / `export_notes` 四通道仍是「先全量 drain 再按文档 `continue` 过滤」，且 pending 计数在过滤前就 `saturating_sub(1)`，存在与现象 2 同类的跨面板丢回执风险；本阶段改为与 `drain_exec_for` 同口径：按文档隔离排空，认领后再扣 pending。
 - **验收**：两个文档绑同一连接时，A 文档的 TX 状态不出现在 B 文档状态栏；四通道回执归属正确、pending 计数不错减；单测覆盖「非归属回执被跳过、不计 pending」。
@@ -230,10 +233,11 @@ DBPDataSourceContainer（导航树里那条连接配置 / 凭据）
 
 ### 阶段 2（中）：队列按连接分组并发，取消按句柄
 
+- **状态（2026-11-20）：✅ 已落地**（提交 `7ac86854`）：`ExecQueue.conns: Mutex<HashMap<String, Arc<ConnQueue>>>`，每连接一条 worker 通道 + `pending: AtomicUsize` + `cancel_requested`；`is_busy_for(connection)` 取代全局忙位；`drain_for(document)` 与每连接取消位并存。残留见 §2.2 第 2/3 条（同连接多文档仍共享串行与一次取消，属阶段 3 范围）。
 - **范围**：队列从全应用一份 `ExecQueue` 改为**按 `conn_id` 分组**——不同连接的作业可并行提交与执行；同一连接内排队串行。`busy` 位 / `running_connection` 单槽改为每连接独立忙位与作业令牌。
 - 取消令牌挂到连接当前作业句柄，取代全局单槽；`cancel_tokens[ConnId]` 语义保留，增加作业级标识。
 - 驱动线程安全核验先行：非线程安全驱动在连接内加语句锁；线程安全驱动可并行语句（先以源码 / 驱动文档确认，不凭经验判断）。
-- **验收**：连接 A 跑长查询时，连接 B 的文档可正常提交执行；同一连接多文档按序排队、互不并发；取消只命中目标连接当前作业；现有 3161 项测试基线不回归。
+- **验收**：连接 A 跑长查询时，连接 B 的文档可正常提交执行；同一连接多文档按序排队、互不并发；取消只命中目标连接当前作业；现有测试基线不回归。
 
 ### 阶段 3（大）：ExecutionContext + per-context 独立连接 + 生命周期
 
@@ -281,16 +285,17 @@ DBPDataSourceContainer（导航树里那条连接配置 / 凭据）
 
 | 文件 | 符号 / 位置 | 现状口径 |
 | --- | --- | --- |
-| `crates/editor/src/service.rs` | `Document.connection/channel/schema`（L29–47）、访问器 L133–144、`OpenRequest` L232–244 | 文档级绑定属性 |
-| `crates/editor/src/store.rs` | `ResultStore.documents` L606–631、`sets/active(document)` L692–709 | 结果集已按文档分槽 |
-| `crates/editor/src/execution.rs` | `ExecQueue::submit` L1177、`is_busy()` L1489、`running_connection` L1200、`drain_for(document)`（阶段 0 新增） | 全局单队列 / 单忙位 / 单连接槽；阶段 0 已按文档隔离排空 |
-| `crates/editor/src/shared.rs` | `exec: Rc<RefCell<Option<ExecQueue>>>` L121、`drain_exec_for`（阶段 0 新增） | 队列跨面板共享 |
-| `crates/engine/src/connection_manager.rs` | `connections` L114、`active_conn_id` L122、`cancel_tokens` L130、`transactions` L136、`scoped` L144、`current_catalog` L151、`idle_timeout` L138、`get_connection` L317、`begin_transaction` L649、`commit_transaction` L671、`rollback_transaction` L689 | 连接注册表；事务 / 取消按 `conn_id` |
-| `crates/engine/src/services/sql_service.rs` | `execute` L437、`tx_key = conn_key_for` L515、`in_transaction` L516、`auto_begin` L517、事务内语句 L531–538、事务动作 L846–871 | 事务路由按连接键 |
-| `crates/workbench/src/services/editor_exec.rs` | `resolve_conn_id` L83–91、`run` L378、三档分流 L399–404 | 未绑定回退全局活动连接；Source / Accel / Federated 分流 |
-| `crates/engine/src/duckdb/accel.rs` | `AccelSource` L194、`SESSIONS[conn_id]` L453、`ensure_session` L490 | 本地加速会话按连接复用 |
-| `crates/engine/src/duckdb/federation/session.rs` | `SESSIONS[owner + fingerprint]` L458、`ensure_session` L501 | 联邦会话按计划与源指纹复用 |
-| `crates/editor/src/view/host.rs` | `tx_notes` / `commit_notes` / `source_notes` / `export_notes` 四通道（阶段 1 清偿） | 先全量 drain 再按文档过滤、pending 提前扣减的同根因竞态 |
+| `crates/editor/src/core/service.rs` | `Document`（L29）、`OpenRequest.connection/channel/schema`（L249–253） | 文档级绑定属性 |
+| `crates/result_panel/src/store/store.rs` | `DocumentResults` L106、`ResultStore.documents` L122、`sets/active(document)` | 结果集已按文档分槽（随 result_panel 抽取迁出 editor） |
+| `crates/editor/src/exec/queue.rs` | `ExecQueue` L78、`ConnQueue` L58、`submit` L353、`drain_for` L607、`is_busy_for` L678 | **阶段②：按连接分组并发**（不同连接并行 / 同连接串行，取消位 per 连接） |
+| `crates/editor/src/shared/mod.rs` | `exec: Rc<RefCell<Option<ExecQueue>>>` L190 | 队列跨面板共享（单实例，内部按连接分组） |
+| `crates/editor/src/shared/exec.rs` | `drain_exec_for(document)` L152 | 阶段 0 已按文档隔离排空 |
+| `crates/engine/src/connection_manager.rs` | `connections` L114、`active_conn_id` L122、`cancel_tokens` L130、`transactions` L136、`idle_timeout` L138、`scoped` L144、`current_catalog` L151、`get_connection` L317、`begin_transaction` L649、`commit_transaction` L671、`rollback_transaction` L689 | 连接注册表；事务 / 取消令牌按 `conn_id` |
+| `crates/engine/src/services/sql_service.rs` | `execute`、`tx_key = conn_key_for`、`in_transaction` / `auto_begin`、事务内语句分支、事务动作（按符号定位，阶段②后行号已变） | 事务路由按连接键 |
+| `crates/editor/src/ports/editor_exec/` | `resolve_conn_id`、`run`、三档分流（原 `workbench/src/services/editor_exec.rs` 已迁） | 未绑定回退全局活动连接；Source / Accel / Federated 分流 |
+| `crates/engine/src/duckdb/accel.rs` | `AccelSource`、`SESSIONS[conn_id]`、`ensure_session` | 本地加速会话按连接复用 |
+| `crates/engine/src/duckdb/federation/session.rs` | `SESSIONS[owner + fingerprint]`、`ensure_session` | 联邦会话按计划与源指纹复用 |
+| `crates/editor/src/view/host/exec/pump.rs` | L116–130 `drain_tx_notes` + 文档过滤、L137–140 `drain_commit_notes`（阶段 1 待清偿） | 先全量 drain 再按文档过滤、pending 提前扣减的同根因竞态 |
 
 ### 附录 C：关联文档
 

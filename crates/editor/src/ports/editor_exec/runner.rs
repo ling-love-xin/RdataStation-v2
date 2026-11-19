@@ -50,6 +50,8 @@ impl QueryRunner for EngineQueryRunner {
             schema: schema.map(str::to_string),
             // 【B5 余项】血缘随执行进历史（队列从 `ExecTarget::lineage()` 注入）
             lineage: run_options.lineage.map(str::to_string),
+            // 【环境策略】用户在确认弹窗里点过「执行」才为真（引擎侧兜底拒绝没被问过的写）
+            dml_confirmed: run_options.dml_confirmed,
             ..Default::default()
         };
         // 连接：文档绑定了就用它（B1）；未绑定回退到“当前活动连接”（1a 口径）
@@ -261,6 +263,16 @@ impl QueryRunner for EngineQueryRunner {
         // “还有没有下一段”由**拿没拿满**判（引擎不问总数）
         data.has_more = data.rows.len() == limit;
         Ok(data)
+    }
+
+    /// 写确认：把「要不要确认」交给引擎（策略解析只有一处真相，编辑器不自己读库）
+    fn dml_confirm(
+        &self,
+        connection: Option<&str>,
+        sql: &str,
+    ) -> Option<engine::services::policy_guard::DmlConfirm> {
+        self.runtime
+            .block_on(self.service.dml_confirm_for(connection, sql))
     }
 
     /// 事务状态：读引擎的**真值**（活动事务挂在连接管理器上，不是猜的）

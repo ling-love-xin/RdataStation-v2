@@ -37,6 +37,8 @@ pub struct ConnectionOption {
     /// 编辑器用它决定**格式化 / 执行计划 / 转译用哪套方言**（同一个连接、两种引擎时，
     /// 方言不能猜）。宿主填（它才知道连接是什么驱动）。
     pub db_type: String,
+    /// 所属环境展示名（如 `prod` / `生产`）；`None` = 未绑定环境（不打 PROD 徽标）
+    pub environment: Option<String>,
 }
 
 /// 连接端口（宿主注入；未注入 = 没有可选项，且建连请求明确失败）
@@ -221,6 +223,7 @@ mod tests {
             name: name.to_string(),
             connected,
             db_type: "mysql_native".to_string(),
+            environment: None,
         }
     }
 

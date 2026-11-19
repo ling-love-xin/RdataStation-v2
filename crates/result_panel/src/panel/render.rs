@@ -16,7 +16,9 @@ use gpui_kit::*;
 use ::shared::CurrentTier;
 
 use super::data::ResultPanel;
-use super::events::{erase_menu_labels, state_label};
+use super::events::{
+    count_rows_available, count_rows_tooltip, erase_menu_labels, state_label,
+};
 use crate::error_card::{self};
 use crate::export;
 use crate::grid::{self as result_grid, ResultToolbar};
@@ -953,6 +955,31 @@ impl ResultPanel {
                 .into_any_element()
         });
 
+        // 【计算行数】状态行中段那颗钮（DBeaver `rowCountLabel:2155-2180`：
+        // `ActiveStatusMessage` + `UIIcon.COMPILE`，`isActionEnabled = hasData()`
+        // ——没有网格就置灰）。算回来的数字**就地**顶掉「计算行数」四个字，
+        // 再点一次重算（DBeaver 点已算过的标签也是重算）。
+        // 本地分析结果另置灰：它跑在桥接过来的那份行上，临时表早就不在了（见 `count_rows_available`）。
+        let count_rows = {
+            let queue = self.queue.clone();
+            let enabled = count_rows_available(self.status.is_some(), self.result_is_analysis);
+            let note = self.row_count_note.clone();
+            let tooltip = count_rows_tooltip(self.result_is_analysis, note.is_some());
+            let button = Button::new("editor-result-count-rows")
+                .ghost()
+                .small()
+                .debug_selector(|| "editor-result-count-rows".to_string())
+                .disabled(!enabled)
+                .tooltip(tooltip)
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::CountRows, app);
+                });
+            let button = match note {
+                Some(text) => button.label(text),
+                None => button.icon(IconName::Calculator),
+            };
+            Some(button.into_any_element())
+        };
         let controls = result_grid::ResultControls {
             filter: Some(filter),
             value_sidebar: None,
@@ -973,6 +1000,8 @@ impl ResultPanel {
             delete_row,
             undo: Some(undo),
             redo: Some(redo),
+            // 「计算行数」只由状态行消费（工具栏不放）；这里先挂上，随后解构进状态行
+            count_rows,
         };
         // 【DBeaver 对齐】工具栏横跨整个顶部（从主 pane 里抽出来）
         // 解构 controls，取出工具栏需要的字段；状态栏（面板级第四行）与主 pane
@@ -998,6 +1027,8 @@ impl ResultPanel {
             delete_row,
             undo,
             redo,
+            // 状态行要的那颗钮（弹到上面的 status_controls 里）
+            count_rows: count_rows_el,
         } = controls;
         // 【四行布局】状态栏动作控件 = 解构出的移动字段重组（more / fetch_all / 翻页 /
         // 行级 / 撤销重做 / 导出 / 刷新；`..Default` 兜底其余槽位）。导出 / 刷新 2026-10-28
@@ -1016,6 +1047,7 @@ impl ResultPanel {
             redo,
             export,
             refresh,
+            count_rows: count_rows_el,
             ..Default::default()
         };
         // 工具栏：右栏开关已移状态栏右端，这里不再摆（None）；导出/刷新已移状态栏
@@ -1167,9 +1199,21 @@ impl ResultPanel {
             } else {
                 main_area.h_flex().items_stretch()
             };
+            // 【R5 面板最大化】对齐 DBeaver `togglePanelsMaximize` = `viewerSash.hideUp()`：
+            // 最大化期间**网格整块不渲染**，右栏独占 main_area（横排满宽 / 竖排满高）。
+            // 注意这里不是「把右栏拖宽」——开合态（`show_value_sidebar`）保持原值，
+            // 还原后回到用户原本的开合。
+            let maximized = self.panel_maximized;
             row = row.child(
                 main_area
-                    .child(div().flex_1().min_w_0().min_h_0().child(result_pane))
+                    .children((!maximized).then(|| {
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .min_h_0()
+                            .debug_selector(|| "editor-result-main-grid".to_string())
+                            .child(result_pane)
+                    }))
                     .child(self.render_right_sidebar(cx)),
             );
             // 【右缘竖条】三态开关控制可见性（`edge_bar_visible`）；有可复制语义
@@ -1339,6 +1383,7 @@ impl ResultPanel {
                 self.status.as_ref(),
                 status_controls,
                 self.status.as_ref().and(Some(&self.row_count_input)),
+                Some(&self.segment_input),
                 elapsed_ms,
                 Some(left_switch),
                 // 【2026-10-28 微调】右侧开关回状态栏右端（三态：收起 / 窄展开 / 宽展开）

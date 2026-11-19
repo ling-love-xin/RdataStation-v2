@@ -37,6 +37,14 @@ pub struct ResultPanel {
     /// - 作用域与 DBeaver 一致：**全局一份**（跨结果集 / 跨文档共用），不随会话快照落库。
     #[serde(default = "default_result_sidebar_width")]
     pub sidebar_width: i64,
+    /// 【R6 对齐 DBeaver `resultSetSize` / `RESULT_SET_MAX_ROWS`】「取下一段」一次多少行。
+    ///
+    /// 语义边界（`docs/architecture/editor/result-panel.md` §8.85）：只影响**之后**的分段取数
+    /// （`ExecTarget::Segment { limit }`），不改已加载行、不触发重查；下限 1（对齐
+    /// `ResultSetPreferences.MIN_SEGMENT_SIZE`）。DBeaver 把这份值存在**数据源容器**上
+    /// （连接级），本仓存**全局一份**（与右栏宽度同一作用域口径）。
+    #[serde(default = "default_result_segment_rows")]
+    pub segment_rows: i64,
     /// 【DBeaver 对齐】状态栏被隐藏的命令 id（逗号分隔，如 `undo,redo`）。
     ///
     /// 对应 DBeaver 的「工具条配置」：`plugin.xml` 里每条结果集底部命令都挂了
@@ -47,6 +55,38 @@ pub struct ResultPanel {
     /// 作用域是**全局一份**（跨结果集 / 跨文档共用），不随会话快照落库。
     #[serde(default = "default_hidden_status_commands")]
     pub hidden_status_commands: String,
+    /// 【计算页持久化，对齐 DBeaver `AggregateColumnsPanel.loadSettings/saveSettings`】
+    /// 计算页启用的统计项，逗号分隔的稳定 id（`count,countdistinct,nulls,min,max,median,`
+    /// `mode,avg,sum`，顺序即行序）。
+    ///
+    /// 空串是合法状态（用户把九项全 × 掉）；「设置里没写过」由 `serde(default)` 落到
+    /// 出厂默认集（非空 + 去重计数）。未知 id 在面板侧忽略（id ↔ 项对应见
+    /// `result_panel::ports::StatsItem::id`）。
+    /// 作用域 = 全局一份（跨结果集 / 跨文档共用），不随会话快照落库。
+    #[serde(default = "default_result_stats_items")]
+    pub stats_items: String,
+    /// 【分组页持久化，对齐 DBeaver `ResultSetPreferences.RS_GROUPING_DEFAULT_SORTING`】
+    /// 分组结果排序口径的稳定 id：`none`（不排序，保持首现顺序）/ `value`（按分组键值升序）
+    /// / `countdesc`（按组内行数降序）。
+    ///
+    /// DBeaver 那边存的是 `""` / `ASC` / `DESC`（空 = 不排序，且排序只作用于 count 列），
+    /// 本仓的 `none` 与 `""` 等价、「按计数降序」与 `DESC` 等价，「按值升序」是超集档
+    /// （差异登记在文档）。作用域 = 全局一份（DBeaver 是按连接存，本仓沿用结果集偏好的全局口径）。
+    #[serde(default = "default_result_group_sort")]
+    pub group_sort: String,
+    /// 【分组页持久化，对齐 DBeaver `ResultSetPreferences.RS_GROUPING_SHOW_DUPLICATES_ONLY`】
+    /// 是否只显示重复分组（组内行数 > 1）。默认 false（DBeaver 取 `getBoolean` 缺省也是 false，
+    /// 该键在 plugin.xml 里没有 initializer）。
+    #[serde(default)]
+    pub group_duplicates_only: bool,
+    /// 【右栏页签持久化，对齐 DBeaver `PresentationSettings.enabledPanelIds`】右栏启用了哪些页，
+    /// 逗号分隔的稳定 id（`browser,value,stats,group,reference,execsql`，顺序无关——
+    /// 读的时候按规范序归一）。空串 = 「没写过」→ 出厂六页全开（DBeaver
+    /// `activateDefaultPanels:1396-1400` 同样把空集合补成默认面板）。
+    /// 未知 id 在面板侧丢弃（id ↔ 页对应见 `result_panel::ports::RightTab::id`）。
+    /// 作用域 = 全局一份（DBeaver 是随工作区/演示设置存，本仓沿用结果集偏好的全局口径）。
+    #[serde(default = "default_result_open_tabs")]
+    pub open_tabs: String,
     /// 【类型样式】数字显示格式（默认原始值；只影响渲染显示，复制／导出仍用原始值）。
     #[serde(default)]
     pub number_format: workbench_shell::result_style::NumberFormatPref,
@@ -113,7 +153,12 @@ impl Default for ResultPanel {
             persist_column_widths: true,
             // 右栏宽度出厂值 = `result_panel::ui::RESULT_SIDEBAR_RIGHT_WIDTH`（20rem @16px）
             sidebar_width: default_result_sidebar_width(),
+            segment_rows: default_result_segment_rows(),
             hidden_status_commands: default_hidden_status_commands(),
+            stats_items: default_result_stats_items(),
+            group_sort: default_result_group_sort(),
+            group_duplicates_only: false,
+            open_tabs: default_result_open_tabs(),
             // 类型样式默认全继承 / 原始值（与渲染现状逐项一致）
             number_format: workbench_shell::result_style::NumberFormatPref::Raw,
             null_placeholder: workbench_shell::result_style::NullPlaceholderPref::Null,
@@ -236,8 +281,40 @@ fn default_result_sidebar_width() -> i64 {
     320
 }
 
+/// 「一段」默认行数：1000（= `result_panel::ui::RESULT_SEGMENT_ROWS_DEFAULT` 与编辑器
+/// `execution::SEGMENT_ROWS` 同值；常量在那两处定义，此处只写数值并保持一致）。
+fn default_result_segment_rows() -> i64 {
+    1000
+}
+
 /// 状态栏隐藏命令的出厂值：撤销 / 重做（DBeaver `plugin.xml:1381-1397` 里仅这两项
 /// `defaultVisibility="false"` 且本仓不构成「唯一入口」；`fetch.page` 有意保持显示）。
 fn default_hidden_status_commands() -> String {
     "undo,redo".to_string()
+}
+
+/// 计算页出厂启用集：`count`（非空）+ `countdistinct`（去重计数）。
+///
+/// 对齐 DBeaver：九个聚合函数里仅 `count` / `countDistinct` 标了 `default="true"`
+/// （`plugin.xml:89-99`），`loadDefaultFunctions()` 只收 `isDefault()` 的项。
+/// 本仓九项与 DBeaver 九函数一一对应（见 `result_panel::ports::StatsItem`），
+/// 默认集口径与那边一致（2026-11-19 补上 `countdistinct` 后由「只有非空」改为两项）。
+fn default_result_stats_items() -> String {
+    "count,countdistinct".to_string()
+}
+
+/// 分组结果排序口径的出厂值：`value`（按分组键值升序）。
+///
+/// 与 `GroupingPanel` 面板内初值同一档（`lifecycle.rs` 里 `group_sort: GroupSort::Value`），
+/// 避免「设置里的默认」与「面板里的默认」两处给出不同答案。
+fn default_result_group_sort() -> String {
+    "value".to_string()
+}
+
+/// 右栏启用页的出厂值：六页全开（规范序）。
+///
+/// 对齐 DBeaver：内置面板都注册在 `availablePanels` 里，`activateDefaultPanels:1396-1400`
+/// 会把 `enabledPanelIds` 补成默认集合——本仓的默认集合就是六页全开。
+fn default_result_open_tabs() -> String {
+    "browser,value,stats,group,reference,execsql".to_string()
 }

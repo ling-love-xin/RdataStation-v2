@@ -375,6 +375,7 @@ pub async fn probe_source_columns(source: &SampleSource) -> Result<Vec<String>, 
                 use_cache: false,
                 schema: None,
                 lineage: None,
+                dml_confirmed: false,
             };
             let sql = format!("SELECT * FROM ({inner}) AS rds_cols LIMIT 0");
             let result = service
@@ -429,6 +430,7 @@ async fn count_source_rows(conn_id: &str, source: &SampleSource) -> Result<u64, 
         use_cache: false,
         schema: None,
         lineage: None,
+        dml_confirmed: false,
     };
     let inner = source.sql.trim().trim_end_matches(';');
     let count_sql = format!("SELECT COUNT(*) FROM ({inner}) AS rds_count");
@@ -467,6 +469,7 @@ async fn sample_from_connection(
         // 取样用三段限定名（`db`.`schema`.`table`），无需会话上下文
         schema: None,
         lineage: None,
+        dml_confirmed: false,
     };
     let result = service
         .execute(Some(conn_id.to_string()), sample_sql, opts)

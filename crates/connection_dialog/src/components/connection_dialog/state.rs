@@ -22,41 +22,7 @@ impl<H: 'static> ConnectionDialogState<H> {
         let (remark, cache_path, prop_key, prop_val) = state_inputs(window, cx);
         let driver_filter = cx.new(|cx| InputState::new(window, cx));
         let (host_input, port_input, db_input, _) = state_inputs(window, cx);
-        let (new_name, new_data, _, _) = state_inputs(window, cx);
         let (project_path, ssl_ca, ssl_cert, ssl_key) = state_inputs(window, cx);
-        // 网络配置字段输入（按类型显示子集；键固定，见 `NET_FIELD_KEYS`）：凭据类字段从一开始就是掩码输入。
-        let net_inputs: Vec<(&'static str, Entity<InputState>)> = NET_FIELD_KEYS
-            .iter()
-            .map(|key| {
-                let entity = if is_secret_field(key) {
-                    secret_input(window, cx)
-                } else {
-                    cx.new(|cx| InputState::new(window, cx))
-                };
-                (*key, entity)
-            })
-            .collect();
-        let new_type = cx.new(|cx| {
-            SelectState::new(
-                SearchableVec::new(
-                    AUTH_TYPES
-                        .iter()
-                        .map(|t| SharedString::from(*t))
-                        .collect::<Vec<_>>(),
-                ),
-                None,
-                window,
-                cx,
-            )
-        });
-        let policy_type = cx.new(|cx| {
-            SelectState::new(
-                SearchableVec::new(Vec::<SharedString>::new()),
-                None,
-                window,
-                cx,
-            )
-        });
 
         let dialog = Self {
             name,
@@ -119,24 +85,7 @@ impl<H: 'static> ConnectionDialogState<H> {
             props_synced: Rc::new(RefCell::new((None, Vec::new()))),
             prop_key,
             prop_val,
-            mgr: Rc::new(RefCell::new(ManagerWorkspace {
-                kind: 0,
-                items: Vec::new(),
-                project_root: None,
-                new_name,
-                new_type,
-                new_data,
-                net_inputs: Rc::new(RefCell::new(net_inputs)),
-                net_specs_for: Rc::new(RefCell::new(String::new())),
-                net_specs: Rc::new(RefCell::new(Vec::new())),
-                editing: None,
-                msg: None,
-                policy_env: None,
-                policy_type,
-                policy_enabled: Rc::new(Cell::new(true)),
-                policies: Rc::new(RefCell::new(Vec::new())),
-                policy_editing: None,
-            })),
+            mgr: Rc::new(RefCell::new(manager_workspace(window, cx))),
             editing_id: Rc::new(RefCell::new(None)),
             scope: cx.new(|cx| {
                 SelectState::new(

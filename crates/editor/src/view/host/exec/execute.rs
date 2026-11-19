@@ -161,6 +161,21 @@ impl EditorHostPanel {
         title: Option<String>,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.submit_target_with(target, placement, title, false, cx)
+    }
+
+    /// 同 [`Self::submit_target`]，额外带「写操作已确认」标记（原型 ⑨ · DML 需确认）
+    ///
+    /// `dml_confirmed = true` 只在用户点了确认弹窗的「执行」时为真：
+    /// 它同时被写进 `RunOptions`（引擎据此放行），也避免确认后再次弹同一个框。
+    fn submit_target_with(
+        &mut self,
+        target: ExecTarget,
+        placement: ResultPlacement,
+        title: Option<String>,
+        dml_confirmed: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let channel = self.channel();
         let conn = self.bound_connection();
         // 【B16】参数绑定（DBeaver 式）：目标里有 `:name` → 挂起等表单，填完再替换执行。
@@ -195,6 +210,32 @@ impl EditorHostPanel {
             return false;
         }
         // 预期回填条数 = 本次要跑的语句数（批量 > 1）：跑完这几条才算“不执行中”
+        // 【环境策略】DML 需确认（原型 ⑨ 矩阵第 8 行）：UPDATE / DELETE 在入队前先说清
+        // 「哪个环境、要改什么」；用户点头后才提交，引擎同时收到 `dml_confirmed`。
+        if !dml_confirmed {
+            let detail = target
+                .statements()
+                .iter()
+                .find_map(|sql| self.shared.dml_confirm_for(conn.as_deref(), sql));
+            if let Some(detail) = detail {
+                tracing::info!(
+                    target = "rds_editor::exec",
+                    doc = %self.document,
+                    connection = ?conn,
+                    environment = %detail.environment,
+                    statement = detail.statement,
+                    "执行挂起：写操作待用户确认"
+                );
+                self.pending_dml_confirm = Some(PendingDmlConfirm {
+                    target,
+                    placement,
+                    title,
+                    detail: detail.clone(),
+                });
+                self.open_dml_confirm(detail, cx);
+                return false;
+            }
+        }
         let expected = target.statements().len();
         // B4：自动提交关掉时，本次执行进事务（引擎在没有事务时会先自动开一个）；
         // B13：加速 / 联邦没有事务语义，那两档上不走事务
@@ -203,6 +244,8 @@ impl EditorHostPanel {
             // 【B5 余项】血缘不用在这里给：worker 侧统一从 `ExecJob.lineage`
             //（= `ExecTarget::lineage()`）注入，避免两处口径
             lineage: None,
+            // 【环境策略】只有用户在确认弹窗里点过「执行」才为真（引擎兜底拒绝没问过的写）
+            dml_confirmed,
         };
         match self
             .shared
@@ -276,6 +319,61 @@ impl EditorHostPanel {
             return false;
         };
         self.submit_target(pending.target, pending.placement, pending.title, cx)
+    }
+
+    /// 【写确认】弹「这是写操作，确认执行？」
+    ///
+    /// 与联邦确认同款实现：headless 下弹不出就留可读原因，不 panic。
+    pub(crate) fn open_dml_confirm(
+        &mut self,
+        detail: engine::services::policy_guard::DmlConfirm,
+        cx: &mut Context<Self>,
+    ) {
+        let entity = cx.entity();
+        let result = self.window.update(cx, move |_panel, window, app| {
+            let run_entity = entity.clone();
+            let cancel_entity = entity.clone();
+            dialogs::open_dml_confirm(
+                window,
+                app,
+                detail,
+                move |_window, cx| {
+                    run_entity.update(cx, |panel, cx| panel.finish_dml_confirm(cx));
+                },
+                move |cx| {
+                    cancel_entity.update(cx, |panel, cx| panel.cancel_dml_confirm(cx));
+                },
+            );
+        });
+        if let Err(error) = result {
+            self.set_message(Some(format!("写确认框弹不出：{error}")), cx);
+        }
+    }
+
+    /// 【写确认】点了「执行」：取出挂起的目标，带 `dml_confirmed` 重新进提交链
+    pub(crate) fn finish_dml_confirm(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(pending) = self.pending_dml_confirm.take() else {
+            return false;
+        };
+        self.submit_target_with(
+            pending.target,
+            pending.placement,
+            pending.title,
+            true,
+            cx,
+        )
+    }
+
+    /// 【写确认】取消：只清挂起，不跑、也不留消息（状态栏没有“失败”可言）
+    pub(crate) fn cancel_dml_confirm(&mut self, cx: &mut Context<Self>) {
+        self.pending_dml_confirm = None;
+        cx.notify();
+    }
+
+    /// 【写确认】只读访问器：确认是否在挂起（测试断言用）
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn pending_dml_confirm_for_test(&self) -> bool {
+        self.pending_dml_confirm.is_some()
     }
 
     /// 【联邦确认】取消：只清挂起，源与会话一律不动（Esc / 点遮罩同样靠这个收口）

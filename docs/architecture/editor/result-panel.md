@@ -464,8 +464,8 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
 > 历史记录：当时序为 Value/Stats/Metadata/Group；Metadata 页签后于 §8.11 删除，§8.12 重排为 Browser/Value/Stats/Group、默认页改为 Browser。当前口径以 §8.12 为准。
 
 - `RightTab` 顺序重排为 `Value(0, 默认) / Stats(1) / Metadata(2) / Group(3)`，映射 `right_tab_from_index` 同步；`render_right_sidebar` labels = `["值详情", "计算", "元数据", "分组"]`，match 顺序 Value / Stats / Metadata / Group。
-- 非默认「值详情」页时，页签行尾挂 `IconName::X` 关闭钮（`editor-result-right-tab-close`），点击入队 `SetRightTab(RightTab::Value)`。**拍板口径：× 只退回默认页，不收起整个右栏**；右栏开合仍由工具栏「值详情」开关控制。
-- 实现备注：`TabBar` 的 suffix 槽内子按钮点击会冒泡触发页签切换（vendor `tab.rs` 已核实），故关闭钮挂在 TabBar 行右侧独立元素，不用 suffix 内嵌。
+- 非默认「值详情」页时，页签行尾挂 `IconName::X` 关闭钮（`editor-result-right-tab-close`），点击入队 `SetRightTab(RightTab::Value)`。**拍板口径：× 只退回默认页，不收起整个右栏**；右栏开合仍由工具栏「值详情」开关控制。**（已作废：第 24 批起页签条 = 已启用集合、× 改为逐页 `CloseRightTab`，见 §9.08；第 32 批又把 × 收到每页签内侧，见 §9.16）**
+- 实现备注：`TabBar` 的 suffix 槽内子按钮点击会冒泡触发页签切换（vendor `tab.rs` 已核实），故关闭钮挂在 TabBar 行右侧独立元素，不用 suffix 内嵌。**（已订正：§9.16 仍用 `Tab::suffix`，靠 `app.stop_propagation()` 吃掉冒泡；「不能内嵌」这个结论不成立）**
 - 「引用」页（外键面包屑 + 引用表只读预览）本轮不做，留 backlog。
 
 **③ 底部三段式动作组（#26 Rust 视图骨架已落地；动作模型归 #28）**
@@ -2077,8 +2077,10 @@ SUM/AVG 对字符串累计不成立）。
    只有 `selection_pos: Option<(usize, usize)>` 单格 + `selected_col` 单列（`multi_selected`
    是列浏览器清单的多选，不是网格选区），派生不出「选中的若干单元格」。要做需先给
    `DataTable` 引入单元格选区，属独立工程；且本仓已有独立「分组」页签，重复实现会两处打架。
-3. **不做右键 Copy / CopyAll**：本仓统计页尚无右键菜单基建，且工具栏已有全局复制；
-   登记为后续增强（`AggregateColumnsPanel.java:471-496` 的 `func=value` 文案可直接照搬）。
+3. ~~**不做右键 Copy / CopyAll**~~：本仓统计页尚无右键菜单基建，且工具栏已有全局复制；
+   ~~登记为后续增强~~
+   → **已由 §8.87 补齐**（`复制值` / `复制全部` / 分隔 / 恢复默认统计项，
+   `func=value` 文案即 `AggregateColumnsPanel.java:471-496` 的口径）。
 
 #### 8.40.5 新增测试（5 条）
 
@@ -2099,6 +2101,7 @@ SUM/AVG 对字符串累计不成立）。
 
 - 值详情 / 分组 / 引用 / 执行SQL 四页的同构面板工具条（R1 剩余部分）
 - 统计项增删的**跨会话持久化**（DBeaver 写 `IDialogSettings`；本仓暂无对应偏好项）
+  → **已由 §8.89 补齐**（`result_panel.stats_items`，2026-11-18）
 - `AggregateColumnsPanel` 的 `packColumns` 等列宽自适应（本仓右栏是固定列宽）
 - R3（Grouping 配置化）/ R4（Metadata、References 实做）/ R5（布局方向切换 + 可拖分栏）
 
@@ -2213,7 +2216,9 @@ DBeaver 的分组面板动作由 `GroupingAction` 扩展点驱动，配置来自
   一个 `"groups"` section 就结束，函数体为空；分组面板真正走 preference 的只有「仅重复」
   与「默认排序」（`GroupingResultsContainer.java:231-232` 读
   `RS_GROUPING_SHOW_DUPLICATES_ONLY`、`:250` 读 `RS_GROUPING_DEFAULT_SORTING`）。分组列
-  集合本处未见持久化，是否另有存取路径本轮未核实，故本仓不做不算偏离
+  集合本处未见持久化，是否另有存取路径本轮未核实，故本仓不做不算偏离。
+  `RS_GROUPING_DEFAULT_SORTING` 的三档（`""`/`ASC`/`DESC`）本仓已由 §9.15 对应为
+  原序 / 按值 / 按计数
 - 每组展开看行（DBeaver 的分组结果是**另一条查询的结果集**，不是原结果集的行树）；
   本仓是平列表 + 计数
 - 分组列顺序的可视化调整（本仓按勾选顺序固定，不开拖拽；DBeaver 走
@@ -4212,6 +4217,1959 @@ editor results 45、ui-guard 4、check 0-0。提交 `e1b797db`。
   （`MetaDataPanel.java:219-301`）。本仓列浏览器页的搜索框（kit `List` 内置）、
   选中列联动、隐藏列置灰斜体已具备；**树形嵌套列**与**右键「复制列名」**仍未做。
 
+
+### 8.79 「引用」页接上外键清单（对齐 DBeaver References 面板的键列表，2026-11-18）
+
+**取证**（`plugins\org.jkiss.dbeaver.ui.editors.data\src\org\jkiss\dbeaver\ui\controls\resultset\panel\references\`）：
+- `ReferencesPanel.java`：`contributeActions` **空实现**（`:156-158`）⇒ 该页没有页内动作；
+  正文只有一个占位容器，内容在 `ReferencesResultsContainer`（`:62-113`）；
+  `activatePanel` → `refresh(false)`（`:133-136`）⇒ **每次切到该页都重读**。
+- `ReferencesResultsContainer.java`：顶部一行 = 只读下拉 `CSmartCombo<ReferenceKey>`
+  （首项 `null`，文案 `ResultSetMessages.refs_no_refs_text`，`:97-121`）+「打开目标对象」
+  （`refs_open_target`，`:124-140`）+ 下方**嵌套一份 `ResultSetViewer`** 显示引用行（`:143-149`）。
+- 键清单 `refreshReferenceKeyList`（`:219-357`）：可见属性所属实体 → 出向 FK
+  （`DBVUtils.getAllAssociations`）与入向引用（`getAllReferences`）；
+  **出向的收键条件是该 FK 的全部列都在可见属性里**（`:298`）；读失败**静默**
+  （`:347-350`，注释「References or FKs may be unsupported by current database」）。
+- 键文案（`:512-528`）= `目标表 (约束名)`，跨数据源再追加 `[连接名]`；
+  活动键持久化在虚拟实体属性 `ref-panel-associations`（`:106-120`）。
+
+**本仓落点（本轮 = 方案 C：清单 + 打开目标对象，不做引用行）**：
+- 新模块 `crates/result_panel/src/references.rs`（纯函数 + 状态，无 UI 依赖）：
+  - `ReferenceKey{table, constraint, columns, target_columns}`；
+  - `keys_from_constraints(&[ConstraintDetail], visible)`：三条过滤（是外键 /
+    驱动报了目标表 / **全部本表列都在可见列里**），列名按忽略大小写比对
+    （约束来自驱动、可见列来自结果集，大小写不保证一致）；结果按
+    目标表 → 约束名 → 本表列 排序（DBeaver 按遍历序不排序，这里排序是为了渲染稳定）；
+  - `key_label` = `目标表 (约束名)`（没约束名时只留目标表，同 `RefKeyLabelProvider`）；
+  - `mapping_text` = `本表列 → 目标表.目标列`（驱动没报目标列时只到表名，**不编列名**）；
+  - `ReferencesState::{NotLoaded, Loading, Loaded, Failed}` + `NO_REFERENCES = "无引用"`
+    （照 DBeaver 的空项文案）。
+- 取数走宿主（`result_panel` 不认识 engine / database，连接身份只在宿主手里）：
+  `ResultRequest::LoadReferences { schema, table, visible_columns }` →
+  `crates/editor/src/view/host/results/references.rs::load_references` →
+  `database::metadata_service::MetadataService::list_constraints`
+  （与 ER 视图同一套服务，**不直连库、不碰凭据**）在 `cx.background_spawn` +
+  `background_executor().spawn` 的后台任务里跑，**UI 线程不 await**。
+  失败分两类：宿主自身原因（未绑定连接）→ `Failed` 显示原因；驱动不支持 / 查询报错 →
+  按 DBeaver 口径静默成 `Loaded([])`（只记 `debug` 日志）。
+- 来源表身份 `ResultPanel::reference_source(cx)`：所有已注解列指向**同一张**来源表才认
+  （多表 join / 计算列 → `None`，直接落「无引用」）；`schema` 取限定名前半段；
+  可见列 = delegate 列 **减去** 面板隐藏列，并且只留来自该来源表的列。
+- 触发点：editor 的 `ResultRequest::SetRightTab(Reference)` 分派里追加
+  `begin_references_load`（面板置 `Loading` + 入队取数）——对应 DBeaver
+  「激活即刷新」，不做「读过了就不再读」的缓存。
+- 页面（`panel/tabs.rs::render_reference_tab`）四态：未读 / 读取中 / 失败原因 / 「无引用」/
+  有键时 = 只读键下拉（`DropdownButton` + 勾选式菜单，对齐 `SWT.READ_ONLY` 的 combo）
+  +「打开目标对象」（`IconName::Table`，无键时禁用）+ 选中键的列映射文本。
+- 「打开目标对象」：宿主注入端口 `EditorShared::attach_reveal_object`
+  （`RevealObjectPort = Rc<dyn Fn(engine::ObjectRef)>`，workbench 在装配期接到
+  `EditorHost::request_reveal`，与 Quick Open `⌥↵` / 跳转定义同一条通道；
+  未注入时按钮只发消息「宿主未接入导航定位」）。
+
+**验证**：
+- `references::tests`（7 例）：过滤三条件（非外键 / 无目标表 / 列不在可见列）；
+  大小写不一致仍收；渲染顺序稳定；空输入；`key_label` 两种形状；
+  `mapping_text` 两分支（有目标列 / 没目标列不编）；状态默认值 + 空文案。
+- `panel::tests`（3 例）：`references_state_selects_first_key_and_drops_a_stale_selection`
+  （回填默认第一条、长度不变保住用户选中、清单变空清掉）；
+  `reference_source_needs_one_source_table_and_drops_hidden_columns`；
+  `reference_tab_requests_metadata_and_renders_the_key_list`（切页签只入队一条
+  `LoadReferences` 且载荷正确；有键时下拉与「打开目标对象」都在元素树里）。
+- 门禁：check（result_panel / editor）0 error / 0 warning；result_panel **306**、
+  editor results 45、ui-guard 4。`rds-workbench` 仍被并行线阻断（`config_center.rs`
+  的 `Icon` / `IconName` 未导入、`workspace.rs` 的 `Shared::current_project` 缺失，
+  均与本批无关）；本批在 workbench 的装配期改动已复检到「不再报 lifecycle 处错误」。
+
+**已知缺口 / 有意偏离**：
+- **引用行数据**未做：DBeaver 在面板内嵌一整份 `ResultSetViewer` 跑
+  `navigateReference` / `navigateAssociation`；本仓按 `result-panel-references-plan.md`
+  的 `B′` 方案（生成外键条件 SQL → 编辑器新开一份结果集）留待下一步，
+  故本页目前只到「键 + 列映射」。
+- **入向引用**（其它表 → 本表）未做：要扫 schema 内其它表的约束（N 次往返），
+  与 DBeaver 的 `ARROW_LEFT_ALL` 那一类不对齐。
+- **catalog 传空串**：`list_constraints(conn_id, "", schema, table)` 依赖
+  `MetadataService::database_for` 的默认展开；多 catalog 驱动（PG 跨库）没有精确目录时
+  可能读不到——本仓结果集的列注解只带 `schema.表`，没有目录层。
+- **活动键不持久化**：DBeaver 把选中键写进虚拟实体属性 `ref-panel-associations`
+  跨会话恢复；本仓面板状态只在本次面板生命周期内有效（换结果集即回落第一条）。
+
+
+### 8.80 「查看引用行」：按当前行值另开一份结果集（方案 B′，2026-11-18）
+
+**取证**（`ReferencesResultsContainer.java`）：
+- `refreshKeyValues`（`:382-432`）：键选好后按父结果集的**选中行集合**取数，
+  `dataViewer.navigateReference` / `navigateAssociation` 生成查询后执行；选中行为空则清空该区域。
+  也就是说「查什么」由**当前行的外键值**决定，不是整表扫。
+- 本仓不嵌第二份 `ResultSetViewer`（会把「一份结果集 = 一份 store / exec 上下文」的假设打破），
+  按 `result-panel-references-plan.md` §5 的 `B′`：生成查询 → 编辑器**另开一份结果集**。
+
+**本仓落点**：
+- `references.rs` 新增纯函数：
+  - `ReferenceValue { column, value, data_type }`（值是驱动原始文本，不是渲染后的 `—`）；
+  - `sql_literal(value, data_type)`：三档 —— NULL（空串 / `NULL`）→ `NULL`；
+    数值列 + 值确实是数字 → 裸拼（数值列被包成字符串时 PostgreSQL / SQL Server 会直接报
+    `operator does not exist: integer = text`）；数值列上不是数字的值 → 加引号（不静默产出坏 SQL）；
+    其余（布尔 / 日期 / 文本）一律加引号，单引号按标准**双写**（`O'Brien` → `O''Brien`）。
+  - `reference_rows_sql(key, values)`：`SELECT * FROM 目标表 WHERE 目标列 = 值 [AND …]`，
+    空值改 `IS NULL`（`= NULL` 永远不成立）；目标表为空、目标列没报 / 数量对不上、
+    值数量与参与列不符 → `None`（不拼半条条件）。
+- 面板 `ResultPanel::reference_rows_sql(cx)`：选中键 + 当前行 → 逐列取值。
+  **参与列被隐藏也算拿不到**（DBeaver 只按可见属性收集），列号走
+  `display_order()` 的显示位次 + 1（首列是行号槽），隐藏列自然不在显示序里。
+- 页面：键下拉右侧加「查看引用行」钮（`IconName::Rows3`、id `editor-result-reference-rows`），
+  四缺一（无键 / 无选中行 / 列被隐藏 / 该格无值）就置灰。
+- 端口 `ResultRequest::OpenReferenceRows { sql }` → editor 分派
+  `execute(ExecTarget::Statement(sql), ResultPlacement::NewSet)`：
+  **原结果保持选中、引用行落在旁边新标签**（`ResultPlacement::NewSet` 的既有语义，
+  `ResultEntry` 注释里的「别动我正在看的东西，新的那份放旁边」）。
+
+**验证**：
+- `references::tests`（+2 例）：`sql_literals_are_typed_and_escaped`（NULL 三态 / 数值裸拼 /
+  数值列上非数字退回引号 / 布尔与日期加引号 / 单引号双写 / 裸拼去空白）；
+  `reference_rows_sql_covers_the_three_shapes`（单列 / 复合两列 / `IS NULL` /
+  缺目标列、值数量不符、空表名三种拒绝）。
+- `panel::tests::reference_rows_use_the_selected_row_values`：无选中行 → `None`；
+  选中第一行 → `SELECT * FROM customers WHERE id = 1`（数值列裸拼）；入队一条
+  `OpenReferenceRows` 且载荷同一条 SQL；切到引用页后按钮真的在元素树里。
+- 门禁：check（editor / workbench）**Finished 0 warning**；result_panel **309**、
+  editor results 45、ui-guard 4。
+
+**已知缺口 / 有意偏离**：
+- 只按**单个选中行**取（DBeaver 支持多行选中后批量 `IN`）；本仓网格的多行选择目前只用于
+  列多选 / 复制，未接到这一支。
+- 目标表不带 schema 前缀（`ConstraintDetail.referenced_table` 是驱动原话，通常同 schema）：
+  跨 schema 的外键在目标表另属一个 schema 时会查错库，需按驱动元数据补全，未做。
+- 值取自结果集文本（不是按列类型反序列化）：二进制 / 时间带时区的值会按字面量传下去，
+  与 DBeaver 的 `ColumnType` 绑定不同。
+- 不做「执行前预览」：DBeaver 也是选中即查；本仓的差别是新结果集**换了标签**，用户能看见 SQL
+  （标签悬停即原始 SQL）。
+- **不做 `confirmPanelsReset()`（DBeaver 「面板内容将被重置，是否继续」确认）—— 本仓没有会触发它的路径。**
+  取证：`confirmPanelsReset` 全仓只有一处调用（`ResultSetViewer.java:3962`），在
+  `navigateAssociation(...)` 里 `!newWindow && !confirmPanelsReset()` 时才拦；语义是
+  「**在同一窗口里**跳到关联表 → 原结果被替换 → 右栏面板（分组等）里的成果会跟着废掉」。
+  本仓把「查看引用行」做成 `ResultPlacement::NewSet`（原结果不动、新结果落旁边标签），
+  连「同窗口替换」都不存在，所以那层确认**不该加**——加了就是给一个永远走不到的分支做弹窗。
+  反过来说：哪天做了「同标签内替换结果」的导航，必须同时补这份确认
+  （判定口径 `IResultSetPanel.isDirty()`：`GroupingPanel` = 有分组键（`:104-107`）、
+  `AggregateColumnsPanel` 恒 `false`（`:125-127`））。
+
+### 8.81 列浏览器清单「复制列名」+ 嵌套列判定（对齐 DBeaver MetaDataPanel，2026-11-18）
+
+**取证**（`plugins/org.jkiss.dbeaver.ui.editors.data/.../controls/resultset/panel/metadata/MetaDataPanel.java`，
+文案在同插件 `internal/ResultSetMessages.properties`）：
+
+- 清单右键 `fillCustomActions`（`:234-252`）：先 `UIWidgets.fillDefaultTreeContextMenu`，
+  再**只追加一项** `meta_data_panel_action_copy_column_text`（`:236`）；文案
+  `:457 = Copy Column Names`。
+- 该动作 `run()`：遍历 `getItemsViewer().getStructuredSelection().toArray()`，逐项若是
+  `DBDAttributeBinding` 就取 `getName()` 拼接，**项之间 `"\n"`**；`text.isEmpty()` 时
+  直接 `return`（不写剪贴板）；否则 `UIUtils.setClipboardContents(display, TextTransfer, text)`。
+- 即：拷的是**清单当前的结构化选中项**（多选才有多行），不是整表全部列。
+
+**本仓落点**：
+
+- `grid/menu.rs`：`ContextAction` 新增 `CopyColumnNames`（**无载荷**——选哪些列是清单自己的
+  多选集合，菜单纯函数不该知道界面状态）；`column_browser_menu_items` 首项摆「复制列名」
+  （`:396` 起），网格右键 / 列头菜单的消费 match 末尾补忽略分支（该动作只属于清单入口，
+  网格右键没有多选集合概念）。
+- `column_browser.rs`：纯函数 `column_names_to_copy(columns, selected, clicked)` —— 右键列
+  在选中集合里 → 按数据列序整集合逐行拼（`"\n"` 分隔）；否则只拷它自己。集合内越界下标
+  跳过（搜索词把行过滤掉后旧下标可能失效）；结果空串则点击直接 return，不写剪贴板
+  （对齐 DBeaver `text.isEmpty()` 早退）。`render_item` 渲染期算好文本（闭包活到比本帧长，
+  只有此刻拿得到多选集合与列名）。
+- 验证：`grid::tests::column_browser_menu_is_local_column_subset`（首项文案 + `ContextAction`、
+  列头菜单不含该项）、`panel::tests::copy_column_names_joins_the_selection_with_newlines`
+  （单选 / 多选 / 部分越界 / 全越界 / 空列清单五路）。门禁：result_panel **310**、
+  check（editor / workbench）Finished 0 warning、ui-guard 4。
+
+**嵌套列：本仓 N/A（不做，不造假）**
+
+DBeaver 的清单是**树**：`TreeContentProvider.getChildren` 返回
+`DBDAttributeBinding.getNestedBindings()`（`:221-230`），加载完成后
+`itemsViewer.expandToLevel(2)`（`:315`）；`getObjectFont`（`:284-289`）只对
+「无父且不可见」的顶层列用斜体，子节点永不斜体。
+
+本仓不可表达，理由是**数据结构本身没有层级**：
+
+- `crates/workbench_shell/src/model.rs:327` `ColumnAnnotation` 只有
+  `source_table / source_column / comment / data_type / nullable / default_value`，
+  没有 children 字段；
+- 驱动侧 `crates/shared/src/meta.rs:46` `ColumnDetail` 同样扁平（`name / data_type /
+  nullable / is_primary_key / is_foreign_key / references`）。
+
+要造树得先让驱动把 `STRUCT` / 嵌套对象的子字段报上来（JDBC `DatabaseMetaData` 不提供，
+DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于**元数据模型改造**，
+不是面板层能补的活。因此本仓清单恒为平表：一条列注解 = 一行，无展开箭头、无二级缩进。
+
+**同批取证到的其余差异（事实陈述，未在本批实现）**：
+
+- **额外列 `Description`**（`addExtraColumns` `:292-302`，值 = `entityAttribute.getDescription()`
+  即列注释）：本仓清单行只显示「列名 + 类型名 + 眼睛」，注释仅参与搜索匹配
+  （`filter_browser_columns` 的 `comments` 参数），不显示出来。
+- **选中双向同步**（`:104-134`）：清单选中 → `presentation.setCurrentAttribute`（且要求
+  `isAttributeVisible`）；presentation 选中 → 清单 `setSelection`，用 `updateSelection` 布尔防回环。
+  本仓已有 `SelectColumn` / `ColumnSelectionChanged` 双向通道 + 面板镜像，口径一致。
+- **过滤**（`refresh(force)` `:173-201`，忽略大小写包含匹配；ESC 清空 `:91-98`；
+  `curAttributes` 逐元素引用比较无变化直接 return）：本仓 `filter_browser_columns` 同口径
+  （额外把类型名与注释也纳入匹配），ESC 清空由 `List` 内置搜索框提供。
+- **「生成 DDL」**（`contributeActions` `:203-215` 贡献 `generate.ddl.by.resultSet`）：本仓
+  第 18 批已落地（§8.77 / §2.67），口径一致。
+
+**已知缺口**：树形嵌套列 N/A（见上）；清单右键不提供「折叠 / 展开全部」（无树即无此动作）。
+列注释已在本批补上（原缺口，见 §8.82）。
+
+
+### 8.82 列浏览器清单的列注释第二行（对齐 DBeaver `addExtraColumns`，2026-11-18）
+
+**取证**：`MetaDataPanel.addExtraColumns`（`:292-302`）给清单加了第二列
+`Description`，值取 `entityAttribute.getDescription()`（即列的注释，来自表元数据），
+没有注释时该格空白。
+
+**本仓形态差异（有意）**：本仓右栏是**窄侧栏**（默认 320px，可拖到 192–640px），
+三列摆不下（列名 + 类型名已占满）。因此注释走**列名下的第二行**，而不是第三列：
+同一份数据、换形态，不是丢数据。
+
+**落点**：
+- `column_browser.rs` 纯函数 `browser_comment_text(comment: &Option<String>) -> Option<String>`：
+  `None` / 空串 / 纯空白 → `None`（不占第二行）；有内容则去首尾空白后原样显示。
+- `render_item`：行内容从「列名 / 类型名 / 眼睛」的水平三段改为
+  「（列名 + 注释第二行）竖排 / 类型名 / 眼睛」，注释行 `debug_selector` =
+  `editor-result-col-browser-comment`（缺省不渲染）。
+- 注释来源不变：`ColumnBrowserDelegate::comments` ← 网格 delegate 的
+  `column_annotations()`（`sync` 每帧重灌），即结果集的列注解，不是另开一次元数据查询。
+
+**验证**：
+- `panel::tests::browser_comment_skips_empty_and_blank`（`None` / 空串 / 空白 / 去首尾空白四路）。
+- `panel::tests::column_browser_draws_the_comment_line_below_the_name`：有注释 → 该元素出现在
+  渲染观测里；把两列注释都清空再画一帧 → 元素消失（反证「不画空行」）。
+
+**已知缺口**：第二行是**单行截断**（`truncate()`，长注释看不全，DBeaver 的列可横向滚动）；
+没有「按注释搜索后高亮匹配片段」。两者都属目视/交互细化，与本线「结构与行为」口径不冲突，
+留待目视统一处理阶段。
+
+
+### 8.83 分组页补「移除分组列」（对齐 DBeaver `DeleteColumnAction`，2026-11-18）
+
+**取证**（`panel/grouping/`）：
+- `GroupingPanel.fillToolBar`（`:164-176`）的动作顺序：`Sort`（下拉，FORCE_TEXT）→
+  `DuplicatesOnly` → 分隔 → `EditColumns` → `DeleteColumn` → 分隔 → `ClearGrouping` → 分隔 → 扩展动作。
+- `DeleteColumnAction`（`DeleteColumnAction.java:39-77`）：作用于**分组视图自己的选中列**，
+  `readyToRemoveIndexes` 由选中属性映射到分组结果列下标得到；`isEnabled()` =
+  集合非空；`run()` 按下标**降序**移除后 `rebuildGrouping()`（重跑 `GROUP BY` SQL）。
+- 可删判定 `GroupingColumnsContainer.canColumnBeRemoved`（`:92-94`）：
+  `isValidIndex && (分组属性数 > 1 : 聚合函数数 > 1)` —— **不许删到零**，清空归 `ClearGroupingAction`。
+- 文案：`controls_resultset_grouping_remove_column = Remove grouping column`（`:24`）、
+  `controls_resultset_grouping_clear = Clear grouping`（`:25`）、
+  `controls_resultset_grouping_show_duplicates_only = Show duplicates only (COUNT > 1)`（`:27`）。
+
+**本仓落点**：
+- 纯函数 `panel::tabs::can_remove_group_column(group_columns, selected) -> bool`：
+  选中列在显式分组键里、且**移除后仍≥1 列**才可用；无显式键（走选中列兜底）时不可用。
+- 分组页工具条新增「移除分组列」钮（`IconName::CircleMinus`、id
+  `editor-result-group-remove`、`debug_selector` 同名），点击**复用**
+  `ResultRequest::ToggleGroupColumn`（下拉取消勾选是同一条路径，不新增端口/状态）。
+- 动作顺序改为：分组列下拉（≈`EditColumns` 的轻量形态）→ 排序口径 → 仅重复 →
+  移除分组列 → 清空分组，与 DBeaver 的「编辑 / 删除 / 清空」分组同一段位。
+- 「仅重复」的 tooltip 文案对齐 DBeaver 原话（`Show duplicates only (COUNT > 1)`）。
+
+**有意偏离**：
+- DBeaver 的 `Sort` 是 `Unsorted / Ascending / Descending` 三选下拉（`ChangeSortingAction`，
+  改的是 `RS_GROUPING_DEFAULT_SORTING` 偏好 + 重跑 SQL）；本仓分组是**本地聚合**
+  （`group_by_columns_for` + `arrange_groups`，不重查源库），排序口径是
+  「原序（不排序）/ 按值 / 按计数」三档（§9.15 补齐了「不排序」档）
+  ——两边的「排序」不是同一件事：那边的键是 COUNT 列，本仓「按值」是超集档。
+- DBeaver 的 `EditColumns` 打开 `GroupingConfigDialog`（列 + 聚合函数配置）；本仓用勾选式
+  下拉 + 计算页承担同样职责，不引入对话框。
+- 本仓下拉允许把分组键全部取消（落回「选中列兜底」），DBeaver 的逐列删除禁止删到零；
+  两者的终态不同（本仓不会出现「零分组键但有结果」的状态），属表单差异而非行为缺失。
+
+**验证**：
+- `panel::tests::remove_group_column_guards_the_last_key`（空键 / 单列 / 双列两向 / 不在集合 / 无选中，六路）。
+- `panel::tests::group_toolbar_offers_the_remove_column_action`：切到分组页后五个入口
+  （列下拉 / 排序口径 / 仅重复 / 移除 / 清空）都在渲染观测里。
+
+**已知缺口**：DBeaver 删除后重跑 `GROUP BY` 拿新结果；本仓是本地重算（无需 round-trip）。
+
+
+### 8.84 视图菜单补「面板最大化」（对齐 DBeaver `CMD_TOGGLE_MAXIMIZE`，2026-11-18）
+
+**取证**：
+- `ResultSetHandlerMain:173-175`：`CMD_TOGGLE_MAXIMIZE` → `rsv.togglePanelsMaximize()`。
+- `ResultSetViewer.togglePanelsMaximize()`（`:1551-1557`）= `viewerSash.hideUp()` /
+  `showUp()` 切换——即**收起结果网格那一半**，让面板独占整个结果集区域；它不看
+  `panelsVisible`（面板开合是另一条命令 `CMD_TOGGLE_PANELS`）。
+- 菜单段位（`fillPanelsMenu:1559-1588`）：六页 → 分隔 → `CMD_TOGGLE_MAXIMIZE` →
+  `CMD_ACTIVATE_PANELS` → 分隔 → `CMD_TOGGLE_PANELS` → `CMD_TOGGLE_LAYOUT`。
+
+**本仓落点**：
+- 端口 `ResultRequest::TogglePanelMaximize` → 面板事件 `toggle_panel_maximize`
+  （`panel_maximized` 纯视图态，不落盘）；编辑器侧在
+  `crates/editor/src/view/host/results/dispatch.rs` 分发到面板。
+- `render`：最大化时**网格整块不渲染**（`editor-result-main-grid` 不挂），右栏独占
+  `main_area`；右栏渲染强制挂载（`show = show_value_sidebar || panel_maximized`）、
+  满宽 / 满高、不挂拖拽手柄、不走宽度补间。开合态（`show_value_sidebar`）原值保留。
+- 视图菜单条目 `PanelViewItem::MaximizeToggle`：段位照原版（两条分隔线之间单独一段），
+  勾选态 = 当前是否最大化，文案报动作（「面板最大化（收起结果网格）」/「还原结果网格」）。
+- `panel_view_item_label` 增加 `panel_maximized` 入参（与 `panels_visible` / `vertical_layout`
+  同一形态：纯函数按状态算文案，测试直接钉）。
+
+**有意偏离 / 未列项**：
+- `CMD_ACTIVATE_PANELS`（把焦点交给面板）仍未落地端口，菜单里不摆（口径未变）。
+- DBeaver 最大化只动 sash 的上下半边，页签夹仍在原位；本仓右栏是唯一的面板容器，
+  因此「满宽 / 满高」等价表达（横排满宽、竖排满高）。
+
+**验证**：
+- `panel::tests::maximize_panel_hides_the_grid_and_keeps_the_sidebar`：基线网格在 →
+  最大化后 `editor-result-main-grid` 消失而右栏仍在 → 还原后网格回来且
+  `show_value_sidebar` 未被改动（三态闭环）。
+- `panel::tests::right_panel_view_menu_lists_pages_then_the_two_toggles` 更新为
+  11 条目（六页 + 分隔 + 最大化 + 分隔 + 面板开关 + 布局方向）与两条分隔线的索引，
+  并断言「未最大化 → 去最大化 / 已最大化 → 还原」两条文案。
+
+**已知缺口**：没有快捷键绑定（DBeaver 该命令带默认快捷键位，本仓 KeyBinding 表尚未登记）。
+
+
+### 8.85 状态行「段大小」输入框（对齐 DBeaver `resultSetSize`，2026-11-18）
+
+**取证**（`ResultSetViewer.java:2123-2153`）：
+- 状态行 config 工具条之后有一颗 `Text resultSetSize`（宽 `5 * fontHeight`），
+  tooltip = `DataEditorsResources:4 resultset_segment_size = Result-set fetch size`。
+- `focusLost`：把框里文本回填成 `getSegmentMaxRows()`（当前生效值）。
+- `ModifyListener`：`CommonUtils.toInt(text)` → 仅当 `fetchSize > 0` 才写，且
+  `< ResultSetPreferences.MIN_SEGMENT_SIZE(=1)` 抬到下限；写入的是**数据源容器偏好**
+  `ModelPreferences.RESULT_SET_MAX_ROWS` 并立即存盘。
+- 语义：**只影响之后的取数分段**，不改已加载行、不触发重查。
+
+**本仓落点**：
+- 面板状态 `segment_rows: usize`（默认 `ui::RESULT_SEGMENT_ROWS_DEFAULT = 1000`，
+  与编辑器 `execution::SEGMENT_ROWS` 同值）；常量 `RESULT_SEGMENT_ROWS_MIN = 1`
+  对齐 `MIN_SEGMENT_SIZE`。
+- 纯函数 `panel::events::parse_segment_rows(text) -> Option<usize>`：`> 0` 才算有效提交，
+  非数字 / 0 / 负数 / 小数 → `None`（不写、不动状态），口径照 DBeaver 只在 `>0` 时写。
+- 状态行中段新增「段」+ 输入框（`editor-result-segment-size`，`RESULT_SEGMENT_BOX_WIDTH = 4rem`），
+  注入口径与行数框一致（面板注入 `InputState`，`None` 时不摆）；有效输入就地规范化
+  （`007` → `7`，≈ DBeaver 失焦回填）+ 入队 `ResultRequest::SetSegmentRows`；
+  **失焦回填**见 §8.92。
+- 宿主分发：`panel.set_segment_rows`（`max(MIN)` 夹取、同值不重入）。
+- **真正的消费者**：`fetch_more` 的 `ExecTarget::Segment { limit }` 改为读面板当前值
+  （过去是编辑器侧固定常量 `execution::SEGMENT_ROWS`），即「段大小」改完立刻作用于
+  下一次「取下一段 / 滚动到底续取」。
+
+**有意偏离 / 已知缺口**：
+- DBeaver 写的是**连接级**偏好（`RESULT_SET_MAX_ROWS` 存在数据源容器上），改一次对这个
+  连接的所有结果集都生效；本仓先落在**面板视图态**（同一会话内所有「取下一段」用它），
+  **跨会话不持久化**——接 `SettingsService` 需要新增 `result_panel.segment_rows` 偏好项
+  + 设置页条目 + 宿主构造期注入，属下一批（未落地，别当成已完成）。
+- ~~DBeaver 的 focus-lost 回填~~（**已补齐，见 §8.92**：`InputEvent::Blur` 在 vendor 0.9.0
+  的 `InputEvent` 里存在，此前"`InputState` 没有失焦钩子"的结论是错的）。
+- 行数框的注释仍写着「行号跳转是 backlog」，实际 `GoRow` 已接线（本批顺手未改注释文案，
+  下一批清理）。
+
+**验证**：
+- `panel::tests::segment_rows_parse_accepts_positive_only`（8 路：正常 / 空白 / 1 / 0 /
+  负数 / 非数字 / 空串 / 小数）。
+- `panel::tests::set_segment_rows_clamps_to_the_minimum`（默认值 / 改值 / 0 抬到下限）。
+- `panel::tests::status_row_shows_the_segment_size_input`（注入 status 后状态行摆出段框）。
+
+### 8.86 段大小跨会话持久化（补齐 §8.85 的落盘缺口，2026-11-18）
+
+§8.85 把「取下一段」的行数做成可编辑输入框，但值只活到关窗。本批按 DBeaver
+`resultSetSize` 的 modify 语义（写偏好 + 立即存盘）补齐闭环。
+
+**settings 落点**（`crates/settings`，与 `result_panel.sidebar_width` 同一形态）：
+- 模型 `ResultPanel.segment_rows: i64`（`#[serde(default = "default_result_segment_rows")]`，
+  默认 `1000`；struct / `Default` / 末尾 default fn 三处登记）。
+- `Slot::ResultPanelSegmentRows` + key 映射 `result_panel.segment_rows` +
+  `registry::slot_kind` = `KindTag::Number`（契约测试要求与登记项 `kind.tag()` 一致）。
+- `service/mod.rs` 读值分支 + `apply_slot` 分派链；`service/result_panel.rs::apply_slot`
+  新臂：`as_number()`，`< 1.0 || > 100_000.0` 直接 `return false`（不静默夹取，
+  与 `sidebar_width` 的越界口径一致），否则写 `segment_rows` 并 `persist`。
+- `SettingsService::set_result_panel_segment_rows(rows: usize, cx)`：夹 `1..=100_000`、
+  同值不写盘、变更后 `persist`。
+- 登记项 `result_panel.segment_rows`（`group: "data"`，`SettingKind::Number`，
+  presets 200 / 500 / 1000 / 2000，`default_json: "1000"`，`SettingEffect::NextUse`，
+  consumer 指向 construct / dispatch / fetch_more）。**登记顺序必须在 `bool_display`
+  之后**：`registry::tests::groups_are_contiguous_and_consistently_named` 要求同 section
+  内 group 连续，插在 `sidebar_width`（`layout`）之后就打断 `data`。
+
+**宿主 / 面板落点**：
+- `panel.set_segment_rows_initial(rows, window, cx)`：构造期注入——状态落位 + 把值写进
+  输入框（`InputState::set_value` 内部 `emit_events = false`，不会把注入当成用户输入再入队）。
+  没有它的话，持久化成 `500` 时框里仍是空的（只有占位 `1000`），用户看不到当前生效值。
+- `construct.rs`：`segment_rows` 与 `sidebar_width` 一起在 `&mut cx` 之前拷贝
+  （E0502 教训），面板构造后调用 `set_segment_rows_initial(rows.max(1))`。
+- `dispatch.rs::SetSegmentRows`：面板先 `set_segment_rows`（夹下限、同值不重入），
+  再读回 `panel.segment_rows()` 交给 `SettingsService::set_result_panel_segment_rows`
+  落盘——写回的是**夹取后的生效值**，不是用户原始输入。
+- `ui.rs`：清掉行数框「行号跳转是 backlog」的过期注释（`GoRow` 早已接线），
+  段大小常量注释从「跨会话未持久化」改为指向本节。
+
+**仍存在的偏离（与 §8.85 一致的部分不重复）**：
+- 作用域：DBeaver 存**连接级**偏好（同一连接的所有结果集共用一份），本仓存**全局一份**
+  （所有连接共用），与 `result_panel.sidebar_width` 同口径。若日后要按连接分档，
+  需要把偏好键迁到连接配置域，属另一批。
+- 设置页手改是 `NextUse`：改完不影响已打开的面板（面板构造期注入），要下次打开生效；
+  状态行段框那边是立即生效。两者并存是刻意的（DBeaver 也是「偏好改后新开的结果集生效」）。
+- 设置页 Number 项渲染成预设分段（200/500/1000/2000），手填非预设值（如 `750`）在
+  设置页会回落到第一档显示——与 `sidebar_width` 同一限制，非本批引入。
+
+**验证**：
+- `cargo test -p rds-settings --lib` = **37 passed**（含分组连续性 / kind 契约）。
+- `cargo test -p rds-result-panel --lib` = **319 passed**；新增
+  `panel::tests::set_segment_rows_initial_puts_the_value_in_the_box`
+  （注入 500 → `segment_rows() == 500` 且输入框文本为 `"500"`）。
+- `cargo check -p rds-editor` = Finished；`cargo test -p rds-ui-guard` = 4 passed。
+
+### 8.87 计算页右键菜单（对齐 DBeaver `AggregateColumnsPanel` 表格菜单，2026-11-18）
+
+**取证**（`AggregateColumnsPanel.java`）：
+- `createContents:106-116`：`Tree` 上挂 `MenuManager`，`setRemoveAllWhenShown(true)`，
+  监听器每次重装「`CopyAction` → `CopyAllAction` → `Separator` → `fillToolBar(manager)`」。
+- `CopyAction:451-469`：拷选中行的值（函数行取第 2 列、分组行取第 1 列），`\n` 拼接后
+  写剪贴板。
+- `CopyAllAction:471-495`：非分组口径逐行 `函数=值`（`\n`）；分组口径是树缩进 +
+  每个子函数一行（`\t`）。
+- `fillToolBar:322-331` 的动作在菜单里同样出现（Add / Remove / Reset / GroupBy / ValueType）。
+
+**本仓落点**：
+- 纯函数 `panel::tabs::stats_copy_all_text(entries: &[(StatsItem, String)]) -> String`：
+  逐行 `函数=值`、`\n` 分隔，空集合 = 空串。
+- `stat_row` 挂 `.context_menu(...)`：`复制值` / `复制全部` / 分隔 /
+  `恢复默认统计项（默认只有「非空」）`；行容器补 `.id(("editor-result-stat-menu", item))`
+  ——`context_menu` 的状态按元素 id 记账，六行共用同一 id 会串菜单
+  （与 `column_browser` 的「按业务键取 id」同一教训）。
+- 两份文本在**渲染期定稿**：`render_stats_tab` 先把启用项与当前值算成
+  `Vec<(StatsItem, String)>`，行渲染与「复制全部」共用同一快照——菜单回调里再算一遍
+  会拿到「点开菜单那一刻」的另一份数据，与用户看到的对不上。
+- 空文本不写剪贴板（DBeaver 靠 SWT 的 `text.isEmpty()` 退出；本仓显式判空，
+  与列浏览器「复制列名」同口径）。
+
+**有意省略**：
+- 菜单里的「添加函数」不做：工具条 ＋ 是 `DropdownButton`（二级菜单），
+  塞进 popup 里再套一层没有收益；入口本来就常驻。
+- `GroupByColumnsAction` 不适用（本仓网格只有单格选择，`selection_pos: Option<(usize, usize)>`，
+  见 §8.40.4 第 2 条）；
+  `ValueTypeToggle` 只在工具条摆（菜单里再加一遍会让两处状态文案分叉）。
+
+**验证**：
+- `panel::tests::stats_copy_all_text_joins_function_equals_value`（两项 / 单项 / 空集合）。
+- `cargo test -p rds-result-panel --lib` = **320 passed**；`cargo check -p rds-editor`
+  = Finished；`cargo test -p rds-ui-guard` = 4 passed。
+
+### 8.88 右栏页签补提示文案（对齐 DBeaver 面板 descriptor，2026-11-18）
+
+**取证**：
+- 面板扩展定义在 `plugin.xml:127-170`：每个面板有 `id / label / description / icon /
+  default / class`（内置五个：`value-view`（`default="true"`）、`column-aggregate`、
+  `results-metadata`、`results-grouping`（`supports if="context.supportsGrouping()"`）、
+  `results-references`）。
+- `addPanel` 建页签时 `panelTab.setToolTipText(panelDescriptor.getDescription())`
+  （`ResultSetViewer.java:1361`）——页签只有图标 + 短名，靠 tooltip 说明用途。
+- 描述文案在 `OSGI-INF/l10n/bundle.properties:15-24`：
+  `value-view` = Results cell value viewer、`column-aggregate` = Result cells calculations
+  (SUM, MAX, AVG, etc)、`results-metadata` = ResultSet metadata description、
+  `results-grouping` = Results grouping (GROUP BY)、
+  `results-references` = One or more rows referencing current row(-s)。
+
+**本仓落点**：
+- 纯函数 `panel::events::right_tab_description(tab) -> &'static str`：前五条逐条译，
+  「执行SQL」是本仓独有页（DBeaver 无对应面板），按实能做描述。
+- `render_right_sidebar` 的页签 `Tab::new()…​.tooltip(right_tab_description(tab))`
+  （vendor `tab/tab.rs:745`）；右缘竖条的面板按钮**仍是短名作提示**——
+  DBeaver 竖条（`VerticalFolder`）的按钮提示就是面板 label，两处不同不算不一致。
+- 顺手修掉 `panel_view_menu` 上方一段过期注释（写着「面板最大化没有落地端口、不摆」，
+  而 §8.84 已把 `CMD_TOGGLE_MAXIMIZE` 的等价物摆进菜单）。
+
+**验证**：
+- `panel::tests::right_tab_descriptions_are_distinct_and_non_empty`（六页各非空、互不重复）。
+- `cargo test -p rds-result-panel --lib` = **321 passed**；`cargo check -p rds-editor`
+  = Finished；`cargo test -p rds-ui-guard` = 4 passed。
+
+### 8.89 计算页启用统计项跨会话持久化（对齐 `AggregateColumnsPanel.saveSettings`，2026-11-18）
+
+**取证**：
+- `AggregateColumnsPanel.loadSettings()`（`:129-155`）从面板 `IDialogSettings` 里读
+  `functions`（函数名清单）与 `index`（顺序），逐个回 `FunctionsRegistry` 查函数对象；
+- `saveSettings()`（`:166-181`）把 `enabledFunctions` 的名称与下标回写；
+- 结果：**关掉结果集再打开，Calc 页还是上次那几个函数、还是那个顺序**。
+  `aggregateAsStrings`（数值 / 字符串口径）**不**进面板设置，故口径切换不落盘。
+
+**本仓落点**（与 §8.86 段大小同一套「设置项 + 面板注入 + 宿主回写」形态）：
+- `ports`：`StatsItem::id()` = `count / nulls / min / max / avg / sum`（长期契约用英文 id，
+  中文 `label()` 只做展示）；`StatsItem::parse(id)`；纯函数
+  `stats_items_from_ids`（顺序照抄、未知项与重复项丢弃）与 `stats_items_to_ids`。
+- settings 五处：`ResultPanel.stats_items: String`（`#[serde(default = "default_result_stats_items")]`
+  = `count,nulls,min,max,avg,sum`）+ Default + 末尾 default fn；`Slot::ResultPanelStatsItems`；
+  key 映射 `"result_panel.stats_items"`；`slot_kind` → `KindTag::Text`（**漏这处报 E0004**）；
+  `service/mod.rs` 读值分支 + 派发链；`service/result_panel.rs::apply_slot` 新臂
+  （`normalize_command_list` 只做空白折叠 / 丢空项 / 小写，**不校验 id**——
+  id ↔ 项对应表在 result_panel crate，依赖只向下）+ `set_result_panel_stats_items`。
+- 登记项 `result_panel.stats_items`：`group: "interaction"`（插在
+  `persist_column_widths` 与 `hidden_status_commands` 之间，保持分组连续）、
+  `SettingKind::Text`、`default_json: "\"count\""`、`Effect::NextUse`。
+- 面板：`set_stats_items_initial(ids, cx)`（构造期注入；空串 = 全停用，页内本就给
+  「没有启用任何统计项：点 ＋ 添加」提示）、`stats_items_ids() -> String`。
+- 宿主：`construct.rs` 在 `&mut cx` 之前先拷贝 `stats_items`（E0502 教训），
+  构造后 `set_stats_items_initial(&stats_items, cx)`；`dispatch.rs` 的
+  `AddStatsItem` / `RemoveStatsItem` / `ResetStatsItems` 生效后走
+  `persist_result_stats_items`（读面板当前 id 串 → `SettingsService`，同值不写盘由设置侧判定）。
+
+**语义边界**：
+- **空串是合法状态**（用户把六项全 × 掉），与「设置里没写过这一项」（serde 默认落
+  `DEFAULT_SET` = 只有 `count`，见 §8.91）区分开；设置页手填未知 id 在面板侧被丢弃，
+  不会把页面搞坏。
+- 口径（`StatsMode`）不落盘：DBeaver 的 `aggregateAsStrings` 也不存面板设置。
+- 「Reset」口径见 §8.91（本仓已改为回到 `DEFAULT_SET`，与 DBeaver
+  `loadDefaultFunctions()` 一致；此前「六项全开」的差异已消除）。
+
+**验证**：
+- `ports::tests::stats_item_ids_round_trip_and_drop_unknown`（顺序保留 / 空白与重复丢弃 /
+  大小写不符按未知 id 丢弃 / 空串与全未知 = 全停用 / 每个 id 幂等解析）。
+- settings 侧由既有注册表用例兜底：`every_registered_key_has_a_matching_slot`
+  （槽位形态 ↔ 登记形态一致）、`every_model_leaf_is_registered`（新字段必须登记）、
+  `groups_are_contiguous_and_consistently_named`（`interaction` 分组连续）。
+- `cargo test -p rds-settings --lib` = **37 passed**；`cargo test -p rds-result-panel --lib`
+  = **322 passed**；`cargo check -p rds-editor` = Finished；`cargo test -p rds-ui-guard`
+  = 4 passed。
+
+### 8.90 值页「保存值到文件」的动作可用性（对齐 DBeaver 条件贡献，2026-11-18）
+
+**取证**：DBeaver 的「Save to file…」不是常驻按钮而是**条件贡献**的动作——
+`ContentValueManager.contributeContentActions`（`:86-99`）里先判
+`controller.getValue() instanceof DBDContent`，再判 `!content.isNull()` 才
+`manager.add(new Action(model_jdbc_save_to_file_ … saveToFile))`。也就是说**空值根本没有这个入口**，
+不是"摆着但点了没反应"。
+
+**本仓落点**：
+- 纯函数 `panel::tabs::value_can_save_to_file(col_ix, raw)`：`col_ix != 0`（`#` 行号槽不是数据格）
+  且 `!crate::export::is_null_cell(raw)`（判据复用导出侧那一份：`None` / 字面 `NULL`）。
+- `render_value_tab` 保存钮 `.disabled(!savable)`，提示随状态切换（不可用时说清原因，
+  而不是留一个点了没反应的钮）。
+- `selected_value_payload` 先用同一判据拦截：NULL 格 / 行号槽返回 `None`
+  ——**UI 与事件路径一份判据**，不会出现「钮灰了但请求还能落盘」。
+  宿主 `save_selected_value` 的兜底提示同步改成「先选中一个有值的单元格再保存值
+  （NULL / 行号槽没有内容）」。
+
+**有意保留的偏离**：DBeaver 只对 `DBDContent`（LOB / 二进制）贡献保存动作，
+本仓对任何**有值**的格子都给「保存到文件」（文本 / JSON / hex / 图片按值形态算扩展名）——
+这是能力超集，不是漏对齐（早期 §8.41 已记「本仓动作集 = 复制 + 保存至文件」）。
+
+**验证**：
+- `panel::tests::value_save_is_gated_by_null_and_row_number_slot`（真值 / 空串 / NULL / 缺列 /
+  行号槽五态）。
+- `panel::tests::null_cell_has_no_value_payload`（NULL 格载荷 `None`、有值格有载荷）。
+- `cargo test -p rds-result-panel --lib` = **324 passed**；`cargo check -p rds-editor` = Finished；
+  `cargo test -p rds-ui-guard` = 4 passed。
+
+### 8.91 计算页「默认函数集」与 Reset 口径（对齐 `isDefault`，2026-11-18）
+
+**取证（`AggregateColumnsPanel.java` + `plugin.xml`）**：
+- `ResetFunctionsAction:438-449`：`enabledFunctions.clear()` → `loadDefaultFunctions()` →
+  `refresh(false)`。Reset **不是**"打开全部函数"。
+- `loadDefaultFunctions:157-164`：只收 `FunctionsRegistry.getAggregateFunctions()` 里
+  `func.isDefault()` 的项，再 `sort(comparing(getLabel))` 按**标签字母序**。
+- `plugin.xml:89-99` 九个聚合函数的 `default` 属性：`count=true`、`countDistinct=true`、
+  `countNulls=false`（显式）、`sum/avg/min/max/median/mode` **无该属性**
+  → `AggregateFunctionDescriptor:51` 的 `CommonUtils.toBoolean(config.getAttribute("default"))`
+  对缺属性返回 `false`。
+- 结论：DBeaver 的默认集 = **Count + Count Distinct**（两行，按 label 排序）。
+
+**本仓映射**：六项里 `count` ↔ 「非空」（`StatsItem::Count`）；`countNulls` ↔ 「NULL 数」
+（DBeaver 显式非默认 → 本仓也不进默认集）；`sum/avg/min/max` 均非默认。
+**本仓没有 `countDistinct`（去重计数）**，按「能力没有就不摆」不造这一项 → 默认集 = 只有「非空」。
+
+**落点**：
+- `ports::StatsItem::DEFAULT_SET = [Count]` + `StatsItem::is_default()`（等价那边的 `isDefault` 标记，
+  以后要加/减默认项只改这一个常量）。
+- `panel::lifecycle` 出厂 `stats_items = DEFAULT_SET`；`panel::events::reset_stats_items`
+  回到 `DEFAULT_SET`（两者共用同一常量，"默认"与"重置目标"不会再分叉）。
+- 计算页工具条 Reset 的悬停提示与行右键菜单文案：「恢复默认统计项（默认只有「非空」）」
+  /「恢复默认统计项（对齐 DBeaver 默认集：只有「非空」）」——不再声称"六项全开"。
+- settings：`default_result_stats_items()` = `"count"`；登记项 `default_json` = `"\"count\""`
+  并同步 hint（不变式 3 `registered_defaults_match_the_model` 要求二者相等）。
+
+**行为变化（可见）**：新装/未写过该偏好的用户，计算页首屏只显示「非空」一行（此前六行）；
+其余五项仍可从工具条 ＋ 加回，Reset 则把它们收走。这与 DBeaver 首屏（Count + Count Distinct）
+同口径；若产品上更想要"首屏六项摘要"，改 `DEFAULT_SET` 一个常量即可回退（测试会在
+`stats_defaults_are_the_dbeaver_default_set_in_display_order` 处提醒）。
+
+**验证**：
+- `panel::tests::stats_defaults_are_the_dbeaver_default_set_in_display_order`
+  （`DEFAULT_SET == [Count]`、`is_default()` 三态、`ALL` 六项展示序不变）。
+- `panel::tests::stats_tab_renders_toolbar_header_and_rows`：改为显式置全六项验证六行渲染，
+  并钉住「停用 Min → 消失；Reset → 只有「非空」回来、Min/Sum 不回来」。
+- `cargo test -p rds-settings --lib` = **37 passed**；`cargo test -p rds-result-panel --lib`
+  = **324 passed**；`cargo check -p rds-editor` = Finished；`cargo test -p rds-ui-guard` = 4 passed。
+
+### 8.92 段大小输入框的失焦回填（补 §8.85 缺口，对齐 `resultSetSize.focusLost`，2026-11-18）
+
+**取证**（`ResultSetViewer.java:2126-2153`，`resultSetSize` 是 SWT `Text`，两条监听器）：
+- `modifyListener:2138-2152`：`toInt(text)` → `fetchSize > 0` 才进容器偏好分支，
+  `> 0 && < MIN_SEGMENT_SIZE` 抬到下限（`MIN_SEGMENT_SIZE = 1`）。
+- `focusLost:2129-2137`：`String realValue = String.valueOf(getSegmentMaxRows())`，
+  **`if (!realValue.equals(resultSetSize.getText())) resultSetSize.setText(realValue)`**
+  ——失焦时把框里的文本强制改回当前生效值。
+
+**本仓此前的缺口**：只做了第一段（有效输入即规范化），**没有第二段**：敲 `0` / `abc` / 空串
+又不回车，状态行会一直留着一段不生效的文本，用户看不出"你的输入被忽略了"。
+（此前文档写的「`InputState` 没有失焦钩子」是**错的**：vendor 0.9.0 的
+`gpui_base::input::base::state::InputEvent` 带 `Blur` 变体，见 `state.rs:137-147`。）
+
+**落点**：
+- 纯函数 `panel::events::segment_rows_blur_display(text, current) -> Option<String>`：
+  去首尾空白后 ≠ 生效值 → `Some(生效值)`；相等 → `None`（不改写、不打回光标）。
+- `panel::lifecycle` 的段输入订阅新增 `InputEvent::Blur` 分支（排在 `Change` 判断之前）：
+  读文本 → 按上式 `set_value(生效值)`。`set_value` 内部 `emit_events = false`，
+  回填不会自触发 `Change`。
+
+**测试限制（已知、别当成漏测）**：headless 里 `window.focus(...)` 只改窗口焦点跟踪，
+**不派发元素级焦点事件**，`InputEvent::Blur` 不 emit（同款注记见
+`crates/editor/src/view/tests/analysis.rs:476-483`）；所以回填判定钉在纯函数
+`segment_rows_blur_restores_the_effective_value`（`abc` / `0` / 空 / 负数 / 未提交的合法值
+→ 回填；已是生效值、带首尾空白 → 不动），真窗口失焦行为留目视阶段确认。
+
+**验证**：`cargo test -p rds-result-panel --lib` = **325 passed**；`cargo check -p rds-editor`
+= Finished；`cargo test -p rds-ui-guard` = 4 passed。
+
+### 8.93 分组页工具条排布与「分组键不持久化」口径（2026-11-18）
+
+**取证 1（工具条 `GroupingPanel.fillToolBar:164-176`）**：
+`DefaultSortingAction`（`MODE_FORCE_TEXT`）→ `DuplicatesOnlyAction` →
+`ToolbarSeparatorContribution(true)` → `EditColumnsAction` → `DeleteColumnAction` →
+`ToolbarSeparatorContribution(true)` → `ClearGroupingAction` →
+`ToolbarSeparatorContribution(true)` → `addExtensionActions`（`GroupingRegistry` 插件贡献）。
+
+语义读法：前两个是**结果视角**开关（排序口径 / 只留 COUNT>1），中间两个是**分组键编辑**
+（加/减列），最后是整体清除——所以分隔把这三簇分开。
+
+**本仓落点**：`render_group_tab` 动作重排为
+「排序 → 仅重复 → `Separator::vertical()` → 列（勾选下拉）→ 移除 →
+`Separator::vertical()` → 清除」，分隔用 vendor 的
+`gpui_kit::component::separator::Separator`（不手搓竖线）。末段分隔与扩展动作不摆：
+本仓分组页无扩展点（那边 `GroupingRegistry` 是插件贡献点）。
+
+**取证 2（分组键到底存不存）**：
+- `GroupingPanel.loadSettings:114-116` 与 `saveSettings:118-120` 都是**空壳**：
+  只 `panelSettings.getSection("groups")` / `UIUtils.getSettingsSection(...)` 拿个 section 就返回；
+  且 **`saveSettings` 全仓无调用点**（`contributeActions`/`refresh`/`deactivatePanel` 都没调）。
+  → 分组键**不进**面板设置，跨会话不记忆。
+- 真正落地的是「**生成一条 GROUP BY 查询**」：`GroupingResultsContainer.rebuildGrouping:211-272`
+  用 `SQLGroupingQueryGenerator.generateGroupingQuery(queryText)` 生成查询后
+  `dataContainer.setGroupingQuery(...)` / `setGroupingAttributes(...)`，再交给内嵌的
+  `groupingViewer`（另一份 `ResultSetViewer`）显示——即分组**发生在服务端**，
+  键跟着查询/编辑器状态走，所以不需要偏好项。
+
+**本仓现状（有意保留的差异，已登记）**：
+1. **客户端分组**：`grid::group_by_columns_for` 直接在已加载的行上分组并算计数，
+   不发 GROUP BY 查询、不嵌第二份结果集。好处是零往返、对任何驱动一致；
+   代价是没有「组内聚合函数列」（DBeaver 那边由 `getTransformerBindFunctions` 决定）。
+   要完全对齐需要「生成 GROUP BY SQL → 执行 → 嵌套结果集」整条链路，属独立课题。
+2. `EditColumnsAction`（`GroupingConfigDialog` 多列编辑表格）→ 本仓用**勾选式下拉**
+   承载同一件事（列清单 + 勾选态），能力等价、入口更轻。
+3. 分组键与排序口径 / 仅重复**都不跨会话持久化**——与 DBeaver 同口径（见取证 2）。
+
+**验证**：`panel::tests::group_toolbar_offers_the_remove_column_action`（五个入口都在）；
+`clear_group_columns_drops_explicit_selection` / `remove_group_column_guards_the_last_key` /
+`arrange_groups_sorts_and_filters` 覆盖行为；`cargo test -p rds-result-panel --lib`
+= **325 passed**；`cargo check -p rds-editor` = Finished；`cargo test -p rds-ui-guard` = 4 passed。
+
+### 8.94 面板最大化与面板总开关的互斥（不变量：最大化 ⇒ 面板展开）（2026-11-18）
+
+**取证（DBeaver 里两者是同一份 sash 可见性）**：
+- `togglePanelsMaximize`（`ResultSetViewer.java:1551-1557`）= `if (!isUpHidden()) hideUp(); else showUp();`
+  —— 只收起 / 还原 **presentation（`children[0]` = 网格）**，不落盘（不走 `savePresentationSettings`）。
+- `isPanelsVisible()`（`:1473-1476`）= `viewerSash.getMaximizedControl() == null`；
+  `showPanels(false)`（`:1478-1518`）在 `:1487` 就是 `setMaximizedControl(viewerSash.getChildren()[0])`。
+  → 「关面板」与「最大化」操作的是**同一个 sash 的最大化控制权**，两者不可能同时成立。
+- `fillPanelsMenu`（`:1559-1588`）里 `CMD_TOGGLE_MAXIMIZE` 只有菜单一条入口，
+  且全仓无默认快捷键（`IResultSetCommands.java:27` 的命令 id 无 keyBinding）→ 不加快捷键不构成偏离。
+
+**本仓此前的问题**：`set_panels_visible(false)` 只清 `edge_bar_visible` / `show_value_sidebar`，
+不清 `panel_maximized`；而 `render_right_sidebar` 的挂载条件是 `show_value_sidebar || maximized`。
+于是「关掉面板」之后右栏仍被最大化强行挂满整块，同时右缘竖条已消失 —— 既没有可点的入口
+重新展开，也与总开关的 checked 态（`panels_visible()`）自相矛盾。
+
+**修法（单一真值 + 入口守不变量）**：
+1. `set_panels_visible(false)` 一并 `panel_maximized = false`（对齐 `showPanels(false)` 的语义）。
+2. `toggle_value_sidebar`（状态栏右端三态开关）走到「收起」态时同样复位最大化。
+3. `toggle_panel_maximize` 进入最大化时，若面板当前是关的则先展开
+   （`show_value_sidebar = true` + `edge_bar_visible = true` + epoch++）——面板关着就没有
+   可最大化的东西，否则网格收起 + 面板不显示 = 整块区域空白。
+4. `render_right_sidebar` 的 `show` 收成 `self.show_value_sidebar`（去掉 `|| maximized`），
+   不变量由上面三个入口守住；`maximized` 只用于布局（满宽满高、不挂拖拽手柄）。
+
+**验证**：`panel::tests::maximize_yields_to_the_panels_master_switch` 覆盖三条路径
+（面板关着→最大化必展开；最大化→关面板必退出最大化且网格回满；最大化→三态开关收起必复位），
+断言 `panels_visible()` / `panel_maximized` 与网格、右栏的实际渲染。
+`cargo test -p rds-result-panel --lib` = **326 passed**；`cargo check -p rds-editor` = Finished；
+`cargo test -p rds-ui-guard` = 4 passed。
+
+**测试口径注记**：右栏外壳容器**始终挂载**（收起时宽度补间到 0 不占空间，见
+`render_right_sidebar` 注释），所以「收起态 `debug_bounds("editor-result-value-sidebar")`
+为 `None`」这类断言**不成立**——本用例改用 `panels_visible()` / `show_value_sidebar` 判可见性，
+渲染断言只用于网格（网格是真按条件挂载的）。
+
+### 8.95 右缘竖条 / 视图菜单的面板项改为「开 / 关」语义（2026-11-18）
+
+**取证（`handler/ResultSetHandlerTogglePanel.java`）**：
+- 竖条上每页是一颗 `VerticalButton(..., SWT.RIGHT | SWT.CHECK)`（`ResultSetViewer.java:1055-1080`），
+  `setChecked(panelsVisible && isPanelVisible(id))`、`setToolTipText(label + " (" + 命令描述 + ")")`，
+  点击走 `ResultSetHandlerTogglePanel` 的 `CMD_TOGGLE_PANEL`。
+- `toggleResultsPanel:64-69`：`isVisible = rsv.isPanelsVisible() && rsv.isPanelVisible(panelId)`，
+  把它交给 `showResultsPanel:71-81`——`isVisible` 真则 `rsv.closePanel(panelId)`，
+  否则 `rsv.activatePanel(panelId, true, true)` + `RESULT_SET_PANEL_OPEN.use(...)`。
+  → **点已打开的那一页 = 关掉它**；点别的页 = 打开 / 激活它。菜单里的面板项同理
+  （`execute:46-62` 同一 handler）。
+- DBeaver 面板是 CTabFolder 多页签（`addPanel` 里 `new CTabItem(panelFolder, SWT.CLOSE)`，
+  `:1330-1394`），关掉某页后其余页仍在；本仓是单页 + `TabBar::segmented()`，
+  所以「关掉当前这一页」**等价于收起整块面板**（多页签并存的差异见 §8.40 登记）。
+
+**本仓落点**：
+- 新增 `ResultRequest::ToggleRightTab(RightTab)`；右缘竖条的六颗页按钮与「视图菜单」的六个面板项
+  统一发它。页签条本身（`TabBar::on_click`）仍是 `SetRightTab`——点页签本来就只该切页，
+  不该把整块面板收掉（DBeaver 的 CTabItem 也没有「点页签收起面板」的行为，收起只发生在竖条 / 菜单）。
+- `panel::events::toggle_right_tab(tab)`：`right_tab_click_collapses(tab, active, panels_visible)`
+  为真 → `set_panels_visible(false)`，否则 `set_right_tab(tab)`；返回 `bool`（是否真的切页），
+  宿主据此对引用页触发 `begin_references_load`，与 `SetRightTab` 分支走同一条刷新路径。
+- 纯函数 `right_tab_click_collapses` 定义在 `panel::events`（模块级，不在 `impl` 里）。
+- 竖条按钮提示随状态切换：本页正在显示 → 「收起结果面板（本页正在显示）」，否则仍是页名。
+
+**验证**：`panel::tests::right_tab_click_closes_only_the_page_that_is_showing`（纯函数三态）+
+`toggling_the_active_page_collapses_the_panel`（窗口用例：已显示→点它收起→再点展开并切页）；
+`cargo test -p rds-result-panel --lib` = **328 passed**；`cargo check -p rds-editor` = Finished；
+`cargo test -p rds-ui-guard` = 4 passed。
+
+**仍存差异**：DBeaver 多页签可并存、可逐页关闭；本仓单页，只能「收起整块 / 切到某页」。
+
+### 8.96 右缘竖条按钮提示补回面板描述（2026-11-18）
+
+**取证**：`ResultSetViewer.java:1055-1080` 里竖条每颗按钮
+`setToolTipText(panel.getLabel())`，若拿得到命令描述则拼成
+`label + " (" + toolTip + ")"`（`ActionUtils.findCommandDescription(CMD_TOGGLE_PANEL, …)`）。
+也就是竖条提示 = **页名 + 命令/面板描述**，只有页名是此前登记的偏差。
+
+**落点**：纯函数 `panel::events::edge_tab_tooltip(tab, collapses)`——
+正常态 `页名（面板描述）`（描述复用页签条那份 `right_tab_description`，单一来源），
+该页正在显示时改报「收起结果面板（本页正在显示）」（此时点它是收起，见 §8.95）。
+
+**验证**：`panel::tests::edge_bar_tooltip_carries_label_and_description`（六页都含页名 +
+非空描述，收起态不再堆描述）；`cargo test -p rds-result-panel --lib` = **329 passed**；
+`cargo check -p rds-editor` = Finished；`cargo test -p rds-ui-guard` = 4 passed。
+
+### 8.97 列浏览器页与 `MetaDataPanel` 的逐项对照（2026-11-18）
+
+**取证（`panel/metadata/MetaDataPanel.java`）**：
+- 页内结构（`createContents:80-141`）：第一行是**过滤条**——`UIUtils.createControlLabel(filterPanel,
+  panel_metadata_filter_label)` + `Text(SWT.BORDER | SWT.SEARCH | SWT.ICON_CANCEL)`，
+  `setMessage(panel_metadata_filter_hint)`，`modifyListener → refresh(true)`，
+  `ESC` 清空（`:87-98`）；其下是树形清单 `MetaDataTable`（`SWT.SHEET | SWT.BORDER`、`setFitWidth(true)`）。
+- 过滤口径（`refresh:178-183`）：**只匹配列名**，`a.getName().toUpperCase().contains(filterText)`。
+- **投影短路**（`refresh:184-196`）：新旧属性清单逐项相同就 `return`（注释 "No changes"）。
+- 不可见列：不剔出清单，**行字体斜体**（`getObjectFont:284-289`，顶层且 `!isAttributeVisible` → italic）。
+- 额外列：`Description`（`addExtraColumns:292-302`，取 `DBSEntityAttribute.getDescription()`，空则空串）。
+- 右键：默认 Tree 菜单 + `meta_data_panel_action_copy_column_text`（`:234-252`，选中几行拷几行，`\n` 分隔）。
+- 面板动作（`contributeActions:204-215`）：**只有一条**「按结果集生成 DDL」
+  （`generate.ddl.by.resultSet`，恒可用）。
+- 页头装配（`ResultSetViewer.java:1372-1383`）：每页两段工具条——
+  `panel.contributeActions(...)` 的那段（`FILL_HORIZONTAL`，靠左）+
+  `addDefaultPanelActions(...)` 的那段（`HORIZONTAL_ALIGN_END`，靠右）；后者**只有一颗**
+  「视图菜单」（`result_set_view_menu_text`，展开即 `fillPanelsMenu()`，`:1590-1614`）。
+- 列表列配置按**驱动**记：`getListConfigId:254-262` 返回 `"MetaData/<driverId>"`。
+
+**本仓现状对照**：
+| 项 | DBeaver | 本仓 | 结论 |
+| --- | --- | --- | --- |
+| 页头左侧动作 | 生成 DDL | 生成 DDL（`editor-result-generate-ddl`，常驻） | 已对齐 |
+| 页头右侧 | 视图菜单 | `panel_toolbar` 的视图菜单（同一份 `panel_view_menu_items`） | 已对齐 |
+| 过滤入口 | 独立 Filter 标签行 + 文本框 | List 内置搜索框 | 形态差异，留目视阶段 |
+| 过滤口径 | 只匹配列名 | 列名 / 类型名 / 注释 | **有意宽于**（已登记，用例 `browser_filter_matches_type_name`） |
+| 投影短路 | 有 | **本批补上**（`ColumnBrowserDelegate::set_data` 四份投影全等即返回） | 已对齐 |
+| 不可见列 | 留清单 + 斜体 | 留清单 + 置灰斜体 | 已对齐 |
+| 列注释 | 独立 Description 列 | 列名下第二行 | 等价（形态差异） |
+| 复制列名 | 右键多选拷贝 | 同（`column_names_to_copy`） | 已对齐 |
+| 嵌套子列 | 树（`getNestedBindings()`） | 平铺 | **差异**（本仓列模型无复合类型子属性） |
+| 列布局记忆 | 按驱动（`MetaData/<driverId>`） | 无 | **差异**（待定是否做） |
+
+**本批落点**：`set_data` 增加「四份投影（列名 / 类型名 / 隐藏标记 / 注释）全等则直接返回」的
+短路。动机不只是性能：`set_data` 会清 `last_selected` 与多选集合，而 `sync` 在「刷新到同一份
+结果」时也会被调用——不短路会把用户的多选与 List 滚动位置一起打掉（与 DBeaver "No changes"
+的意图一致）。
+
+**验证**：`panel::tests::identical_column_projection_keeps_the_browser_selection`
+（同投影重灌选集保留；换成另一份投影时旧序号失效、选集清空）+
+`column_browser_toolbar_offers_generate_ddl`（页内工具条常驻 DDL 入口）；
+`cargo test -p rds-result-panel --lib` = **331 passed**；`cargo check -p rds-editor` = Finished；
+`cargo test -p rds-ui-guard` = 4 passed。
+
+### 8.98 值详情页补「在外部程序中打开」（对齐 `ContentValueManager`，2026-11-18）
+
+**取证（`panel/valueviewer/ValueViewerPanel.java` + `ui/data/managers/ContentValueManager.java`）**：
+- 值页工具条装配顺序（`fillToolBar:409-428`）：① `valueManager.contributeActions(...)`
+  （内容类动作，来自 `ContentValueManager.contributeContentActions:86-…`）→
+  ② `GroupMarker(GROUP_ACTIONS_ADDITIONAL)` → ③ 引用值编辑器的贡献项（仅 reference value 时）→
+  ④ `SaveValueAction`（**仅当 `valueEditor != null && !valueEditor.isReadOnly()`**）。
+- 内容类动作有**两颗**（`contributeContentActions:86-140`）：「保存至文件」**条件**贡献
+  （`if (!content.isNull())`，`:92-99`，图标 `UIIcon.SAVE_AS`）；「Open in external editor」
+  **无条件**贡献（`:100-140`，图标 `UIIcon.FILE`）——DBDContent 走 `openExternalFile` /
+  `getDBDContent`，非内容类把值按 `DBDDisplayFormat.EDIT` 取显示串、按
+  `getDefaultBinaryFileEncoding` 编码后 `openOctetStream(bytes)`（`:122-130`）；null 值时 run()
+  报 "Can not save null data value"（`:105-107`）。
+- 其余值页事实：`needsSeparator()` 恒 true（唯一覆写，`:170-173`）；空态 PaintListener 画**两行**
+  （`value_viewer_select_view_message` 与 `NLS.bind(value_viewer_hide_panel_message,
+  CMD_TOGGLE_PANELS 命令描述)`，y=0/30，`:89-106`），无编辑器时另画 "No editor for [type]"
+  （`:305-314`）；`deactivatePanel:146-153` 销毁 `viewPlaceholder`（省内存），
+  `activatePanel:141-144` 重新 `refreshValue(false)`；`isDirty()` =
+  `valueEditor != null && valueEditor.isDirty()`（`:136-139`）。
+
+**本批落点**：
+- `ports.rs` 新增 `ResultRequest::OpenValueExternally`（紧随 `SaveValue`）。
+- `panel/tabs.rs` 值页工具条补第四颗按钮 `editor-result-value-open-external`
+  （`IconName::ExternalLink`，与保存钮同一置灰口径 `value_can_save_to_file`，两态 tooltip）；
+  工具条顺序照 `fillToolBar` 的「内容类动作在前」= `[位置标记, 复制, 保存, 外部打开]`。
+- `crates/editor/src/view/host/results/export.rs`：`open_selected_value_externally`
+  （落 `std::env::temp_dir()/rds-value-preview/<安全文件名>` 后唤起系统默认程序；无内容格提示
+  「先选中一个有值的单元格再在外部程序打开…」）+ 模块级纯函数 `external_file_name`
+  （`/` `\` 及 Windows 非法字符 / 控制字符 → `_`，去前导点，只剩 `_` 也回退 `value.bin`）+
+  `open_with_default_app`（Windows `cmd /C start ""` + `CREATE_NO_WINDOW`；macOS `open`；
+  Linux `xdg-open`）。
+- `dispatch.rs` 新增分支（插在 `ToggleRightTab` 之后、`LoadReferences` 之前）。
+
+**与 DBeaver 的口径差异（有意）**：
+| 项 | DBeaver | 本仓 | 说明 |
+| --- | --- | --- | --- |
+| 「在外部程序打开」置灰 | 恒可用，null 值时点按报错 | 无内容格置灰 | 与保存钮同口径，避免「点了才报错」 |
+| 落盘位置 | 外部编辑器专用文件 / 系统临时流 | `%TEMP%/rds-value-preview/` | 会话级临时目录，不惊动用户 |
+| 「保存至文件」适用面 | 仅 LOB / 二进制内容 | 任何有值格 | 能力超集（已登记于 §8.90） |
+| SaveValueAction（写回 + 编辑后自动应用） | 有（`AS_DROP_DOWN_MENU` + `RS_EDIT_AUTO_UPDATE_VALUE`） | 不做 | 本仓值页是只读预览 |
+| 空态提示 | 两行（select a value view / hide panel 命令） | 一行 | 文案属目视阶段 |
+| `deactivatePanel` 销毁内容 | 销毁并释放编辑器 | 无（每帧重算、无缓存） | — |
+
+**验证**：`panel::tests::value_toolbar_offers_open_in_external_app`（值页非空态工具条里
+外部打开与保存钮同在）+ `crates/editor` 的 `external_file_name_is_path_safe`
+（目录穿越 / 非法字符 / 空名兜底）；`cargo test -p rds-result-panel --lib` = **332 passed**；
+`cargo test -p rds-editor --lib` = 790 passed（1 ignored）；`cargo check -p rds-editor` = Finished；
+`cargo test -p rds-ui-guard` = 4 passed。真窗口唤起未做目视（用户口径：目视统一处理）。
+
+### 8.99 计算页与 `AggregateColumnsPanel` 的逐项对照（2026-11-19）
+
+**取证（`panel/aggregate/AggregateColumnsPanel.java`，436 行）**：
+- 右键菜单（`createContents:106-116`）：`CopyAction` → `CopyAllAction` → `Separator` →
+  **`fillToolBar` 那一整组**（即右键菜单是「复制两份 + 工具条动作全量」）；`MenuManager`
+  `setRemoveAllWhenShown(true)`，每次弹出重算。
+- `isDirty()` 恒 `false`（`:125-127`）——计算页没有可保存的编辑态。
+- 设置读写：`loadSettings:129-155` 读 `PARAM_GROUP_BY_COLUMNS` / `PARAM_GROUP_AS_STRINGS` +
+  `functions/<funcId>{enabled,index}`，按 `index` 排序还原顺序，**全部未启用时回落默认集**
+  （`:152-154` `loadDefaultFunctions()`）；`saveSettings:166-181` 每次都把六（N）个函数的
+  `enabled` 与 `index` 写回（未启用写 `index=-1`）。
+- `refresh:199-214`：`removeAll` → `aggregateSelection` → `packColumns` → **`saveSettings()`**
+  （刷新即落盘）。
+- `fillToolBar:322-331` 顺序：`AddFunctionAction`（`MODE_FORCE_TEXT`，按钮恒带文字）→
+  `RemoveFunctionAction` → `ResetFunctionsAction` → `ToolbarSeparator` → `GroupByColumnsAction`
+  → `ValueTypeToggleAction`。
+- `AddFunctionAction:365-401`：菜单只列**尚未启用**的函数；缺项为空时 `run()` 什么都不弹
+  （`:389-392` 判 `isEmpty`）；`AddFunctionItemAction:403-416` 追加到末尾。
+- `RemoveFunctionAction:418-436`：`isEnabled()` = `aggregateTable.getSelectionCount() > 0`，
+  删除的是**选中行**（可多选）。
+- `ResetFunctionsAction:438-449`：`clear()` + `loadDefaultFunctions()`（默认集按 label 排序）。
+- `ValueTypeToggleAction:348-363`：勾选态表达**当前口径**，图标随档位切
+  （`aggregateAsStrings ? TYPE_STRING : TYPE_NUMBER`）。
+- `aggregateSelection:221-262`：`groupByColumns` 真 → 每个属性一个展开的 TreeItem（组内再列各函数）；
+  假 → 所有值并成一组，平铺 N 行。
+- `aggregateValues:264-315`：行序 = `enabledFunctions` 顺序；`funcCount[i] <= 0` **跳过不写值**
+  （该行存在但值列为空）；数值结果走 `DOUBLE_FORMAT` / `INTEGER_FORMAT`。
+- `CopyAction:451-469`：函数行拷**值列**，分组行拷**组名**；`CopyAllAction:471-496` 非分组
+  `函数=值` 逐行，分组模式 `组名` + `\n\t函数=值` 缩进。
+
+**本仓现状对照**：
+| 项 | DBeaver | 本仓 | 结论 |
+| --- | --- | --- | --- |
+| 工具条顺序 | Add / Remove / Reset / SEP / GroupBy / ValueType | ＋ / Reset / 口径 | 顺序等价；Remove 换行尾 ×（§8.83）、GroupBy 不做（§8.87） |
+| 添加菜单口径 | 只列未启用项 | 同（`missing` 过滤） | 已对齐 |
+| 添加全启用时 | 菜单为空、点了没反应 | 按钮直接禁用 + tooltip | 有意（避免假按钮） |
+| Remove 可用性 | 有选中行才可用（可多选删） | 行尾 × 恒可用（单行） | **形态差异**（本仓无树行选中模型） |
+| Reset | clear + 默认集 | 同（`DEFAULT_SET`） | 已对齐（§8.91） |
+| 口径 toggle | 勾选态 + 图标随档 | 文字标签 + `toggled` | 形态差异，留目视 |
+| **右键菜单** | 复制值 / 复制全部 / SEP / 工具条整组 | 复制值 / 复制全部 / 恢复默认 | **本批补齐** |
+| 无样本的行 | `funcCount<=0` → 值列空 | 显示 `—`（计数类显示 `0`） | **有意偏离**（`—` 比空白更可读） |
+| 设置持久化 | `functions/<id>{enabled,index}`，刷新即写 | `result_panel.stats_items`（id 列表，顺序照抄） | 等价 |
+| 空集回落默认 | 载入时全集为空 → 默认集 | 空串 = 全停用（合法态） | **有意偏离**（空表是用户主动选择，不静默改回） |
+| `isDirty` | 恒 false | 无编辑态 | 已对齐 |
+| 组内聚合 / 分组视图 | 有（TreeItem 嵌套） | 无 | **能力缺口**（需「生成 GROUP BY SQL → 执行」链路，独立课题） |
+
+**本批落点**：右键菜单从「三条写死」改成按清单装配。新增两组纯函数
+`panel::tabs::stat_menu_entries(enabled, mode)`（顺序照 `menuMgr.addMenuListener` +
+`fillToolBar`：复制值 → 复制全部 → SEP → 缺项逐个「添加」→ SEP → 恢复默认 → SEP → 口径切换；
+缺项为空时整段跳过，不留悬空分隔线）与 `stat_menu_label(entry)`（口径项报**点它会切到哪一档**，
+与工具条按钮报当前档互补）。渲染只按条目挂事件。
+
+**验证**：`panel::tests::stat_context_menu_mirrors_the_toolbar_actions`（顺序 / 五项缺项 /
+全启用时无添加段且只剩两条分隔 / 口径项文案随档位翻转）；
+`cargo test -p rds-result-panel --lib` = **333 passed**；`cargo check -p rds-editor` = Finished；
+`cargo test -p rds-ui-guard` = 4 passed。
+
+### 9.00 状态栏与左缘竖条的逐项对照（2026-11-19）
+
+**取证（`ResultSetViewer.createStatusBar0:2043-2195`）**——左到右共十段：
+1. **刷新工具条**（`:2058-2074`）：`getAutoRefresh().populateRefreshButton(...)`，
+   tooltip 拼成 `动作名 + " (" + 命令描述 + ")"`，图标 `UIIcon.REFRESH`，点击 → `refreshData(null)`；
+   `getAutoRefresh().enableControls(false)`（自动刷新默认关）。
+2. **编辑工具条**（`:2077-2083`）：`FEATURE_EDIT` 且未禁编辑时才有。
+3. **导航工具条**（`:2084-2090`）：`TOOLBAR_NAVIGATION_CONTRIBUTION_ID`。
+4. **空配置工具条**（`:2091-2096`）：只建 manager、不填贡献（留给下游插件）。
+5. **附加 + 视图工具条**（`:2098-2111`）：导出贡献（受 `POLICY_DATA_EXPORT` 约束）→
+   `GroupMarker(PRESENTATIONS)` → `Separator(ADDITIONS)` → `TOOLBAR_CONTRIBUTION_ID`。
+6. **配置工具条**（`:2113-2122`）：`ToolbarSeparatorContribution` + `ConfigAction`（齿轮）。
+7. **段大小输入框** `resultSetSize`（`:2126-2153`）：宽 `5 * fontHeight`，
+   tooltip `DataEditorsMessages.resultset_segment_size`；失焦 → 与 `getSegmentMaxRows()`
+   不同就回填真实值；`modify` → 解析 int，`>0` 且 `< MIN_SEGMENT_SIZE` 抬到下限，
+   与 `RESULT_SET_MAX_ROWS` 不同则**立即写偏好并落盘**（`:2144-2150`）。
+8. **行数标签** `rowCountLabel`（`:2155-2180`）：`ActiveStatusMessage` + `UIIcon.COMPILE`，
+   文案是「计算行数」，`isActionEnabled = hasData()`，点击异步 `readRowCount(monitor)`
+   后按 `ROW_COUNT_FORMAT` 显示。
+9. **选区统计标签** `selectionStatLabel`（`:2182-2184`）：只读 `Text` + 统计 tooltip。
+10. **状态标签** `statusLabel`（`:2186-2191`）：不支持 `FEATURE_COMPACT_STATUS` 才有，
+    宽 `50 * fontHeight`。
+布局：`RowLayout(SWT.HORIZONTAL)` + `wrap = true` + `pack = true`（`:2048-2056`）。
+
+**取证（左缘竖条 `updatePresentationInToolbar:931-974`）**：
+- 不可见时整块 `exclude`（`:939-940`）；可见时先清空子控件（`:945-947`）。
+- 每个展示方式是 `VerticalButton(SWT.LEFT | SWT.RADIO)`：`setImage(pd.getIcon())`、
+  `setText(pd.getLabel())`、**`setToolTipText(pd.getDescription())`**、`setData(pd)`，
+  当前活动项 `setSelection`（`:948-962`）。
+- 然后 `createEmptyLabel(1,1)` + `FILL_VERTICAL` 当弹簧（`:963`）。
+- 末位 `recordModeButton = VerticalButton(SWT.LEFT | SWT.CHECK)` + `ToggleModeAction`
+  （`:964-965`）——记录模式是 **CHECK / 沉底**，不是 RADIO。
+
+**本仓对照**：
+| 段 | DBeaver | 本仓 | 结论 |
+| --- | --- | --- | --- |
+| 写操作 / 行级 / 翻页 / 取段 / 导出 / 刷新 | 分散在多个 toolBarManager | 状态行左动作组，段间发丝分隔，显隐由 `hidden_status_commands` 控制 | 已对齐 |
+| 段大小框 | `resultSetSize` Text | `segment_input`（`段` + Input） | 已对齐（clamp / 失焦回填见 §8.85 / §8.92） |
+| 行数框 | **「计算行数」动作**（异步算总行数） | 行号跳转输入框 | **差异**：本仓提供跳转，不是算总行数 |
+| 选区统计 | `selectionStatLabel` | 无 | **有意不摆**（用户 2026-10-28 口径：右段只留内存 / 耗时 / 条数） |
+| 状态长文本 | `statusLabel`（50 字宽） | 无（notice 行在网格上方） | 差异，登记 |
+| 自动刷新 | `AutoRefresh` 控件 | 无 | **能力缺口**（无自动刷新机制） |
+| 齿轮 / 配置菜单 | `ConfigAction` + 工具条配置 | 齿轮 + `▾` 显隐菜单 | 已对齐 |
+| 布局 | `RowLayout(wrap=true)` | `h_flex` + 右段 `ml_auto` + 逐项 truncate | 等价 |
+| 左竖条分组 | RADIO 展示组 → 弹簧 → CHECK 记录模式 | 同（`render_vertical_bar`） | 已对齐（2026-11-18） |
+| 左竖条提示 | `setText(label)` + `setToolTipText(description)` | 图标按钮，提示 = `标签（描述）` | **本批补齐** |
+
+**本批落点**：左缘竖条三颗按钮的提示从「网格视图 / 文本视图 / 记录视图（单行转置）」
+换成带描述的形态——新增纯函数 `panel::events::presentation_tooltip(Presentation)`
+（`网格视图（表头冻结，可排序 / 筛选 / 分栏）`、`文本视图（等宽文本呈现，便于整表复制或对照原样）`）
+与 `record_view_tooltip(active)`（未激活报「会看到什么」、已激活报「点一下回到网格」，
+因为记录模式是 CHECK 语义而不是视图方式）。
+
+**验证**：`panel::tests::presentation_tooltips_carry_a_description`（两条互不相同、
+都以「名字（描述）」起头且含括号描述；记录视图两态文案不同）；
+`cargo test -p rds-result-panel --lib` = **334 passed**；`cargo check -p rds-editor` = Finished；
+`cargo test -p rds-ui-guard` = 4 passed。
+
+### 9.01 状态栏「计算行数」落地（2026-11-19）
+
+上一节表格里「行数框 vs `rowCountLabel`」那一行是**差异**，本节把它补上：状态行中段
+（`段大小框` → `行数框` 之后）常驻一颗「计算行数」钮，点它对**当前结果的原 SQL** 跑一条
+`count(*)`，算回来的数字**就地**顶掉「计算行数」四个字（再点一次 = 重算）。
+
+**DBeaver 口径（`ResultSetViewer.createStatusBar0:2155-2180`）**：
+- `ActiveStatusMessage` + `UIIcon.COMPILE`，文案 `controls_resultset_viewer_calculate_row_count`；
+- `isActionEnabled = hasData()` —— 没有数据就置灰；
+- 点击 `readRowCount(monitor)` **异步**取数，结果按 `ROW_COUNT_FORMAT` 显示在**同一个标签**上；
+- 关键语义：**算的是源库总行数，不是已抓到的行数**；也**不新增结果标签页**。
+
+**本仓落点（5 处）**：
+1. `ports.rs`：`ResultRequest::CountRows`（面板只发请求，取数与拼 SQL 归宿主）；
+2. `grid/status.rs`：`ResultControls.count_rows: Option<AnyElement>`，摆在
+   `render_status_row` 的「中段·行数框」之后（DBeaver 里它紧跟 `resultSetSize`）；
+3. `panel/render.rs`：构造 `editor-result-count-rows`（`Button::ghost().small()`），
+   `disabled(!self.status.is_some())` = `hasData()` 的等价物；`row_count_note` 为空时
+   图标 `IconName::Calculator` + tooltip「计算行数」，有数字时改用 `.label(数字)`；
+4. `panel/events.rs`：`set_row_count_notice(text, cx)`——宿主算完回填；
+   `panel/data.rs` 新增 `row_count_note`，`lifecycle.rs` 在**换新结果**时清空
+   （旧数字对新结果无意义）；
+5. `view/host/results/count.rs`（新文件）：`count_result_rows` +
+   纯函数 `rows_count_sql` / `count_from_rows` / `thousands`。`dispatch.rs` 加分支。
+
+**拼 SQL 口径**（`rows_count_sql`，与 `execution_service::re_execute_with_filter:19-26` 同形）：
+- 原 SQL `trim` + 去尾分号，包成 `SELECT count(*) FROM (<base>) AS _rds_count`；
+- 结果集带**下发筛选**（`Pushdown::Filtered`）时把 `WHERE <filter>` 带进内层
+  ——否则用户看着筛后的行数，报的却是全表行数；
+- 排序下发（`SortedDown`）的 `ORDER BY` 对计数无意义，不拼。
+
+**为什么直调 `SqlService` 而不是走编辑执行链**：`ExecTarget` 没有 Count 变体，
+而仅有的两个落点 `ResultPlacement::{Replace, NewSet}` 都会污染结果标签
+（Replace 换掉用户当前结果，NewSet 多开一页）——DBeaver 这边只写状态标签。
+故按引用页同一纪律（`host/results/references.rs:44-70`）在
+`cx.background_executor()` 里 spawn 一次 `SqlService::execute`，
+`record_history: false` / `use_cache: false` / `use_transaction: false`，
+取数期间先写「正在计算总行数…」，回来后 `set_row_count_notice`。
+
+**已登记的取舍**：
+- `ResultEntry` 没有 schema 字段 → 计数查询按**连接默认 schema** 跑；原 SQL 若依赖别的
+  schema（显式写了库名 / 会话 search_path 被改过）可能算错口径，tooltip 已写明是
+  「对原 SQL 跑 count(*)」；
+- 本地分析结果（`ResultEntry.analysis = true`，临时表早已不在）重跑原 SQL 没有意义——
+  已在 §9.02 两处（面板置灰 + 宿主兜底）拦住；
+- 行数框仍是**行号跳转**（本仓既有能力），「计算行数」并列在它右侧，两者不是同一个控件
+  （DBeaver 只有后者）。
+
+**验证**：`panel::tests::status_bar_offers_a_count_rows_action`（状态行摆出该钮；
+回填数字后仍是同一颗钮 = 不新开结果集）；`view::host::results::count::tests` 三条
+（`count_sql_wraps_the_original_query` 含筛选 / 空 SQL / 排序不拼 ORDER BY、
+`count_reads_numbers_from_the_first_cell`、`thousands_groups_digits`）；
+`cargo test -p rds-result-panel --lib` = **335 passed**；
+`cargo test -p rds-editor --lib` = **793 passed**（1 ignored，+3 条新用例）；
+`cargo test -p rds-ui-guard` = 4 passed。
+
+### 9.02 「计算行数」对分析结果的拦截（2026-11-19）
+
+**为什么必须拦**：本地分析结果（`ExecuteTarget::Analysis` / `ResultEntry.analysis = true`）
+是**当时那份已抓行**在 DuckDB 里算出来的，临时表在结果标签被替换后就不存在了；它的
+`entry.sql` 是**分析 SQL**（`{table}` 占位已被替换成那张临时表名），重跑必然报
+「table not found」。DBeaver 没有这一档（它的分析走别的容器），所以这条属于
+**本仓能力超集带来的新约束**，不是照抄。
+
+**两处同口径**（缺一条都会漏）：
+1. **面板侧**（`panel/render.rs`）：`events::count_rows_available(has_data, is_analysis)`
+   = `has_data && !is_analysis` 决定 `disabled`；`events::count_rows_tooltip(is_analysis, computed)`
+   决定提示——分析结果那句是「分析结果是当时那份已抓行算出来的，没有可重算的源查询——
+   总行数就是这里的行数」（**把「行数就在状态栏」这件事说给用户**，而不是只说"不行"）。
+2. **宿主侧**（`view/host/results/count.rs`）：拼 SQL **之前**先判 `entry.analysis`，
+   直接 `set_message` 返回。理由：面板置灰只挡新点击，队列里可能还有在途的
+   `CountRows`（例如结果刚被分析结果替换、请求已入队）。
+
+**验证**：`panel::tests::count_rows_action_is_gated_by_data_and_analysis_tier`
+（三态可点性 + 三条提示互不相同且分析态文案含原因）；
+`cargo test -p rds-result-panel --lib` = **336 passed**；
+`cargo test -p rds-editor --lib` = **793 passed**；`cargo test -p rds-ui-guard` = 4 passed。
+
+### 9.03 「筛选运行 → 重查并替换」的端到端用例与说明落点（2026-11-19）
+
+**为什么补**：这条链路此前只有 `engine::sql::rewrite_with_where` 的**纯函数**用例
+（拼装形状对不对），宿主侧整条链——空词拦截 → 改写 → `set_exec_sql` → 递交执行器 →
+结果**原地替换** → 「已去掉 LIMIT」的提示——一条断言都没有。
+
+**新用例**：`view::tests::results_b::run_filter_as_query_rewraps_and_replaces_the_result`
+（用 `shared_with_runner` 的 `ScriptRunner` 记下发 SQL）。五条断言：
+1. 空筛选词只回提示（含「先填一个筛选词」），**不递交执行器**（`seen` 长度不变）；
+2. 确实递了一条，且含 `rds_filtered`（包层别名）；
+3. 筛选词**原样**进 WHERE（`n > 1`），不是「关键词 → 每列 LIKE」那一版；
+4. 下发的 SQL 里**没有** `limit`（大小写无关比较）；
+5. 回执提示含「已去掉原查询的」，且 `result_tabs` 仍是 **1 份**（`Replace`，不是 `NewSet`）。
+
+**顺带修掉的真实缺陷：说明被清两次，从来没露过面。**
+- `execute` 起步会 `set_message(None)`（`view/host/exec/execute.rs:229`，清上一轮旧提示）；
+- 回执时 `sync_result_view` 之后，泵又按成败重写一次状态栏（`pump.rs` 的
+  `segment_failure` / `fresh_notice` 区）。
+
+于是 `run_filter_as_query` / `run_custom_filter` 里**递交前**摆的那句
+「已去掉原查询的条件 LIMIT 10（按条件重查要能查到全部行）」两处都被擦掉，
+用户界面上永远看不到（DBeaver 那句是结果集级说明，得跟着这一轮结果挂着）。
+
+**修法（新增一个「待落说明」字段）**：
+- `EditorHostPanel` 加 `pending_result_notice: Option<String>`；
+- 两个重查入口只把说明**记进去**（不再 `set_message`），紧接着 `execute`；
+  `execute` 同步就被拒（`message.is_some()`）时把该字段清掉——错误提示已摆上，
+  说明作废，免得搭下一次执行的便车；
+- 泵在 `sync_result_view` 之后、执行器自带说明之前补上：`take()` 后要求
+  `fresh_notice.is_none() && message.is_none()`。优先级 = 取段失败 > 执行器说明
+  > 本说明（错误比说明重要）。
+
+**验证**：`cargo test -p rds-editor --lib -- --test-threads=4` = **794 passed**
+（1 ignored，含新用例 1 条）；`cargo test -p rds-result-panel --lib` = **336 passed**；
+`cargo test -p rds-ui-guard` = 4 passed。
+注：默认线程数并行跑全量时，`ports::editor_completion` 三条「后台线程 3s 内」用例
+会偶发超时（机器满负载起不来线程；单跑与 `--test-threads=4` 均全绿），不是回归。
+
+### 9.04 计算页统计项 6 → 9 项（2026-11-19）
+
+**为什么补**：第 12 批对齐计算页时只摆了六项（非空 / NULL / Min / Max / Avg / Sum），
+而 DBeaver 的聚合函数全集是**九个**——`plugin.xml:89-99` 逐条列出 `count`、
+`countDistinct`、`countNulls`、`sum`、`avg`、`min`、`max`、`median`、`mode`，
+其中 `count` 与 `countDistinct` 带 `default="true"`。缺的三项（去重计数 / 中位数 /
+众数）在那边不是可选插件，是**出厂就进菜单**的能力，补上才算把「计算页」这一页的
+功能面收口。
+
+**取证**：
+- `plugin.xml:89-99` 九个 `aggregateFunction`（含各自 `label` 与 `default` 标记）；
+- `panel/aggregate/AggregateColumnsPanel.java`：`loadSettings:129-155`（空集回落
+  `loadDefaultFunctions`）、`loadDefaultFunctions:157-164`（只收 `isDefault()`、
+  按 label 排序）、`saveSettings:166-181`、`refresh:199-214`（`:213` saveSettings）；
+- **`AggregateFunctionDescriptor` / `AggregateColumnsConfig` / `FunctionXxx` 在本仓
+  dbeaver-ref 快照里不存在**（该目录只有 `AggregateColumnsPanel.java`），所以
+  median / mode 的算法无法逐行对照——本仓自定确定性口径并在此登记。
+
+**「组内聚合函数列」为什么不做**：DBeaver 的 Tree 是「每列父节点 + 函数子项」两层，
+但那条路径只走 `aggregateSelection:221-262` 的 `groupByColumns == true` 分支，前提是
+**多单元格选区**；本仓的选择模型是单格（`selection_pos: Option<(usize, usize)>`），
+第 14 批已登记不适用，这里不再重复。
+
+**改法（四项）**：
+1. `ports::StatsItem` 扩到 9 变体，`ALL` 顺序 = 上表顺序（`Count`、`CountDistinct`、
+   `Nulls`、`Min`、`Max`、`Median`、`Mode`、`Avg`、`Sum`），`DEFAULT_SET =
+   [Count, CountDistinct]`；`label` 新增「去重计数」「中位数」「众数」；`id` 新增
+   `countdistinct`（**全小写**，与 `countDistinct` 的驼峰写法不同，落盘 id 是契约）。
+2. `grid/stats.rs` 新增三条纯函数：
+   - `distinct_count(&[String]) -> usize`：跳过 `"NULL"`，按**值文本**判等；
+   - `median_of(&[String]) -> Option<f64>`：只收可解析为 `f64` 的样本（与
+     `column_stats_from_values` 同一份 `str::parse::<f64>` 判定），奇数取中、偶数取
+     两中均值，无样本 `None`；
+   - `mode_of(&[String]) -> Option<String>`：复用 `group_by_values`，跳过 `"NULL"`，
+     **严格大于才替换**（并列取首现更早；`max_by_key` 会取最后一个最大值，故手写循环）。
+3. `panel/tabs.rs`：整列取值从「字符串口径才取」收成「字符串口径 **或** 任一项
+   `needs_column_values()`」——`need_values` 一次判断、`values` 一次取；
+   `text_extremes` 仍只在字符串口径算。派生量打包成 `StatExtras { text_extremes,
+   distinct, median, mode }` 传给 `stat_value(item, stats, &extras, mode)`，
+   这样再加聚合函数只需在 `StatExtras` 添一字段 + 在 `stat_value` 添一分支，
+   不再为每个函数各扫一遍整列。取值规则：`CountDistinct` 不看口径（两种口径都是
+   不同取值个数）、`Median` 在字符串口径出 `—`、`Mode` 两种口径都给值文本、
+   缺样本一律 `—`（与 Avg/Sum 同一缺省口径）。
+4. settings：`result_panel.stats_items` 的模型默认由 `"count"` 改为
+   `"count,countdistinct"`，registry 的 `default_json` / `hint` 同步（registry 不变式
+   要求二者相等）。**注意这是默认集的第二次变动**：§8.91 当时写「本仓没有
+   countDistinct，故默认集只剩非空」，这次补上 `countdistinct` 后回到 DBeaver 的两项口径。
+
+**登记的有意偏离（不是缺陷）**：
+- 去重计数按**值文本**判等 → `1` 与 `1.0` 算两个不同值（本仓拿到的是展示文本，
+  `COUNT(DISTINCT x)` 的数据库语义这里拿不到）；
+- 中位数只统计可解析为 `f64` 的样本（文本样本不参与；全是文本 → `—`）；
+- 众数并列取**首现更早**者（DBeaver 实现不可考，取确定性口径）；
+- 计算页空集仍**不**回落默认集（DBeaver `loadSettings` 空集会 `loadDefaultFunctions`，
+  本仓把这个「空」当作合法的「用户全停用」，见 §8.91 起的既有登记）。
+
+**验证**：
+- `grid/tests.rs`：`distinct_count_skips_null_and_counts_text_values`、
+  `median_of_uses_sorted_numeric_samples`、
+  `mode_of_picks_most_frequent_value_and_breaks_ties_by_first_occurrence`；
+- `panel/tests.rs`：重写 `stat_value_respects_mode_and_missing_samples`、
+  `stats_defaults_are_the_dbeaver_default_set_in_display_order`（9 项 / 默认两项 /
+  `needs_column_values` 逐项核对），新增 `stat_value_covers_distinct_median_and_mode`；
+  右键菜单用例同步为「九项里已启用一项 → 八个可添加」；
+- 门禁：`cargo test -p rds-settings --lib` = **37 passed**；
+  `cargo test -p rds-result-panel --lib` = **340 passed**（336 + 4 条新用例）；
+  `cargo check -p rds-editor` 通过；`cargo test -p rds-editor --lib -- --test-threads=4`
+  = **794 passed**（1 ignored）；`cargo test -p rds-ui-guard` = 4 passed。
+
+### 9.05 分组页两项偏好的持久化（2026-11-19）
+
+**先纠正一个误判**：分组键（「按哪几列分组」）在 DBeaver **不持久化**。
+`GroupingPanel.java` 的 `loadSettings:114-116` 只是拿了个 `"groups"` section 就返回，
+`saveSettings:118-120` 同样只有一行取 section、**且全仓没有任何调用点**（grep `saveSettings`
+只命中定义行）。所以「重开就丢」不是本仓与 DBeaver 的差异，本仓不做分组键落盘是
+与那边一致的，不再当缺口。
+
+**真正缺的是另两项**（`ResultSetPreferences:41-42`）：
+- `RS_GROUPING_DEFAULT_SORTING = "resultset.grouping.defaultSorting"`：
+  `ChangeSortingAction` 读它决定三档单选（`""` / `ASC` / `DESC`，`:58-71`），
+  写它之后紧跟 `persistConfiguration()`（`:80-81`）；
+  `GroupingResultsContainer:250-265` 只在「唯一函数列且等于默认函数(count)」时
+  按这个方向排 count 列（`:251` 的 `isDefaultGrouping`）。
+- `RS_GROUPING_SHOW_DUPLICATES_ONLY = "resultset.grouping.showDuplicatesOnly"`：
+  `DuplicatesOnlyAction` 是 `AS_CHECK_BOX`，`isChecked:41-45` 读、`run:48-53` 取反写，
+  随后 `rebuildGrouping()`；该值进 `SQLGroupingQueryGenerator`（`GroupingResultsContainer:231-245`）。
+- **两键的默认值**：`plugin.xml` 里没有任何 preference initializer（扫全仓 `plugin.xml`
+  都搜不到这两个键），所以 `getString` 缺省 `""`（不排序）、`getBoolean` 缺省 `false`
+  （显示全部组）。
+
+**本仓此前的状态**：两项**功能都已存在**（分组页工具条有「按值 / 按计数」排序钮与
+「仅重复」钮，`arrange_groups(groups, sort, duplicates_only)` 三段行为都有用例），
+但都只是面板会话态（`panel/data.rs` 的 `group_sort` / `group_duplicates_only`），
+没进设置，重开应用就回到出厂档——这次补的就是这一层。
+
+**改法**：
+1. `ports::GroupSort` 新增 `id()`（`value` / `countdesc`，全小写）与 `parse()`；
+   未知 / 大小写不符一律 `None`（调用方按出厂 `value` 处理）。
+2. settings 新增两键（同 section `result_panel`、同 group `interaction`，紧跟在
+   `stats_items` 之后以保持 group 连续）：
+   - `result_panel.group_sort`（Text，出厂 `"value"`）
+   - `result_panel.group_duplicates_only`（Bool，出厂 `false`）
+   四处同步：模型字段 + 默认函数、`Slot` 两变体、key 映射、`slot_kind`
+   （Text / Bool）、`service::mod.rs` 的读值三处（`slot_value` + 写分发 or-pattern）、
+   `service/result_panel.rs` 的 `apply_slot` 两个分支 + 两个 `set_*` 快捷写。
+3. 面板：`set_group_prefs_initial(sort_id, duplicates_only, cx)` 注入
+   （未知 id 回落 `GroupSort::default()`），配 `group_sort_id()` /
+   `group_duplicates_only_value()` 两个只读访问器给宿主回写用。
+4. 宿主：`construct.rs` 创建面板时注入；`dispatch.rs` 的 `SetGroupSort` /
+   `SetGroupDuplicatesOnly` 两条在面板更新后立刻调
+   `persist_result_group_sort` / `persist_result_group_duplicates_only`
+   写回（与 `AddStatsItem` 那三条同一形态）。分组键增删 / 清空仍然不落盘。
+
+**与 DBeaver 的已知差异（登记，不是缺陷）**：
+- 本仓三态（不排序 / 按值升序 / 按计数降序）里 `countdesc` 与那边的 `DESC` 等价、
+  `none` 与 `NONE("")` 等价；`value` 是超集档，那边没有「按分组键值排序」这个手动档
+  （它的 `ASC` 排的是 count）。本节落笔时「不排序」档尚未做，**已由 §9.15 补齐**。
+- 作用域：DBeaver 存**按连接**的 preference store（`getContainer().getPreferenceStore()`），
+  本仓沿用结果集偏好的**全局一份**口径（与 `stats_items` 一致）。
+- 客户端分组 vs SQL 分组：DBeaver 的「仅重复」进 `HAVING COUNT > 1` 的生成 SQL，
+  本仓是客户端分组后按组大小过滤（`arrange_groups` 的第三个参数），语义一致、
+  实现位置不同（`SQLGroupingQueryGenerator` 不在本仓 dbeaver-ref 快照里，无法逐行对照）。
+
+**验证**：
+- `ports::tests::group_sort_ids_round_trip_and_reject_unknown`（两档往返 / 大小写与未知档
+  拒绝 / 出厂档 = `value`）；
+- `panel::tests::group_prefs_initial_round_trip_and_unknown_sort_falls_back`
+  （注入后两字段各自生效 / 未知 id 回落 `value` 且不影响开关）；
+- 门禁：`cargo test -p rds-settings --lib` = **37 passed**；
+  `cargo test -p rds-result-panel --lib` = **342 passed**（340 + 2 条新用例）；
+  `cargo check -p rds-editor` 通过；`cargo test -p rds-editor --lib -- --test-threads=4`
+  = **794 passed**（1 ignored）；`cargo test -p rds-ui-guard` = 4 passed。
+
+### 9.06 值页空态两行提示（2026-11-19）
+
+**DBeaver 的形态**（`panel/valueviewer/ValueViewerPanel.java:85-107`）：值页空态不是一条
+文案，而是在 `viewPlaceholder` 的 `PaintListener` 里画**两条**消息——
+
+```java
+viewPlaceholder.addPaintListener(e -> {
+    if (previewController == null && viewPlaceholder.getChildren().length == 0) {
+        String hidePanelCmd = ActionUtils.findCommandDescription(
+            IResultSetCommands.CMD_TOGGLE_PANELS, ..., true);
+        UIUtils.drawMessageOverControl(viewPlaceholder, e, ResultSetMessages.value_viewer_select_view_message, 0);
+        UIUtils.drawMessageOverControl(viewPlaceholder, e,
+            NLS.bind(ResultSetMessages.value_viewer_hide_panel_message, hidePanelCmd), 30);
+    }
+});
+```
+
+第一行（y=0）讲「选哪个值」；第二行（y=30）讲「怎么收起这个面板腾空间」，并且把
+toggle-panels **命令描述**（含快捷键）绑进文案。两条都是 `drawMessageOverControl`
+（居中绘制），不是两个 Label。
+
+**取不到的正文**：`org.jkiss.dbeaver.ui.editors.data/OSGI-INF/l10n/bundle.properties`
+（24969 字节）全文只有 **12 行**含 `viewer`，且没有一行是 `value_viewer_*`；同目录
+`bundle_zh.properties`（26719 字节）同样零命中；`ResultSetMessages.java:432-433` 只有字段
+声明（`value_viewer_select_view_message` / `value_viewer_hide_panel_message`，无默认值）。
+⇒ 文案逐字对齐**做不到**，本仓按语义自拟并登记（见下）。
+
+**改法**：
+1. `panel/tabs.rs` 把单行空态抽成多行版本：`sidebar_empty(text, cx)` 改为委托
+   `sidebar_empty_lines(&[text], cx)`（`.children()` 逐行，其余页仍是单行，行为不变）。
+2. 新增 `empty_page_lines(toolbar_id, title, lines, cx)`：与 `empty_page` 同骨架
+   （28px 页内工具条 + 居中灰字正文），只是正文允许多行；挂
+   `debug_selector("editor-result-empty-page")` 便于窗口用例断言。
+3. `render_value_tab` 的空态分支由 `empty_page(..., "未选中单元格")` 改为
+   `empty_page_lines(..., &value_empty_lines())`；`empty_page` 仍被引用页使用，保留。
+4. 新增纯函数 `value_empty_lines() -> [&'static str; 2]`：
+
+   | 行 | 文案 | 语义来源 |
+   | --- | --- | --- |
+   | 1 | 在网格中选中一个单元格，这里显示它的值 | `value_viewer_select_view_message` |
+   | 2 | 右缘竖条或视图菜单可收起全部面板，腾出更多高度 | `value_viewer_hide_panel_message` + `CMD_TOGGLE_PANELS` |
+
+   第二行**不写快捷键**：本仓的面板总开关没有绑定按键，照抄 DBeaver 的快捷键串会是
+   假承诺；改成指向本仓两个真实入口（右缘竖条、视图菜单的面板项——见 §8.94 / §8.95）。
+
+**验证**：
+- 纯函数：两行非空、互不相同（不是把一句话拆两截）、第二行含「面板」；
+- 渲染：`panel::tests::value_page_empty_state_shows_two_hint_lines_with_toolbar`
+  ——未选中单元格时 `editor-result-value-toolbar` 与 `editor-result-empty-page`
+  两个 `debug_bounds` 都 `is_some()`（工具条仍在 = 六页同形不受影响）；
+- 门禁：`cargo test -p rds-result-panel --lib` = **343 passed**、
+  `cargo check -p rds-editor` 通过、`cargo test -p rds-editor --lib -- --test-threads=4`
+  = **794 passed**（1 ignored）、`cargo test -p rds-ui-guard` = 4 passed。
+
+**顺手清掉的历史告警**（同一文件，无行为变化）：`panel/tests.rs` 里 8 处
+`use gpui_kit::test::TestWindowExt as _;` 在各自用例中确实未使用（编译器证明），
+连同 `column_browser_toolbar_offers_generate_ddl` 的 `let (panel, cx)` → `let (_panel, cx)`。
+清理后 `cargo test -p rds-result-panel --lib` 的 `warning` 计数为 **0**（此前 9 条）。
+
+### 9.07 分组页正文改成「表」：键列一列一格 + `COUNT(*)` 列（2026-11-19）
+
+**DBeaver 的分组结果是表，不是文本行**：`GroupingResultsContainer` 用
+`GroupingColumnsContainer` 装配列——属性列（每个分组键一列，
+`rebuildGrouping:155-165` 的 `addAttribute`）与函数列（`addFunction`，
+`:180-185` 按 `getFunctionColumns()` 逐个建）。默认函数由 `getDefaultFunction:75-80` 拼：
+
+```java
+private String getDefaultFunction() {
+    DBPDataSource dataSource = dataContainer.getDataSource();
+    return FUNCTION_COUNT + "(" +
+        (dataSource == null ? SQLConstants.COLUMN_ASTERISK :
+            dataSource.getSQLDialect().getDefaultGroupAttribute()) + ")";
+}
+```
+
+即无数据源时 `COUNT(*)`，否则 `COUNT(<方言默认分组属性>)`（多数方言就是 `*`）。
+列宽由容器自己管，`GroupingResultsContainer:253-256` 在默认排序时按
+「键列数 + 1」定位 count 列的序位。
+
+**本仓此前的状态**：正文把键值拼成一行文本（`values.join(" | ")`）再跟一个计数数字，
+表头也没有——读起来是一串「a | b  3」，与那边「每键一列、末尾一列函数值」的表结构不一致。
+
+**改法**：
+1. 新增纯函数 `group_table_header(names) -> Vec<String>`：键列名原样 + 末尾固定
+   `"COUNT(*)"`（本仓本地分组只有计数这一个函数，见 `group_by_columns_for` 的
+   `(键, 计数)` 返回形）。
+2. `render_group_tab` 正文加表头行：`editor-result-group-header`，
+   `h_5` + `border_b(HAIRLINE)`（与计算页列头同高同分隔线），每格 `flex_1` 等分、
+   `text_ellipsis`，末列（函数列）`text_right` 与网格里数值列同侧。
+3. 分组行由「joined 文本 + 数字」改为「每键一格 + 计数一格」：键格 `flex_1` 等分 + 省略号，
+   计数格 `text_right` + `muted`。空态（没有分组键）不变，工具条仍常驻。
+4. 表头只在有分组键时渲染（`Option<AnyElement>` + `.children(...)`），空态不带表头。
+
+**与 DBeaver 的已知差异（登记）**：
+- 列宽：那边是查询结果自带列宽（结果集的列宽体系），本仓用等分 flex，没有拖拽调整；
+  这是布局精度问题，属「目视统一处理」的范围。
+- 只有一列函数（`COUNT(*)`）。DBeaver 可挂多个函数列（`GroupingColumnsContainer`
+  支持任意 `GroupingFunctionColumn`，含 `PercentGroupingFunctionColumn` 之类的
+  扩展动作列），本仓没有组内聚合函数列（此前已登记：「需多格选区」）。
+- 表头文案 `COUNT(*)` 是本仓常量，不是从 SQL 别名反推的——本地分组不发 SQL，
+  没有别名可取。
+
+**验证**：
+- 纯函数：`group_table_header` 的「键列 + 末列 COUNT(*)」两种情形（单键 / 双键）；
+- 渲染：`panel::tests::group_tab_shows_a_header_row_with_count_star`
+  —— 显式选一个分组键后 `editor-result-group-header` 的 `debug_bounds` 为 `Some`；
+- 门禁：`cargo test -p rds-result-panel --lib` = **344 passed**（343 + 1，warning 仍为 0）、
+  `cargo check -p rds-editor` 通过、`cargo test -p rds-editor --lib -- --test-threads=4`
+  = **794 passed**（1 ignored）、`cargo test -p rds-ui-guard` = 4 passed。
+
+### 9.08 右栏页签模型：可并存多页 + 逐页关闭（方案 B 第 1 步，2026-11-19）
+
+**DBeaver 的右栏是一个 `CTabFolder`，页签可并存、可逐页关闭**：`ResultSetViewer.addPanel:1330-1394`
+给每个面板建一条 `CTabItem`，且**带 `SWT.CLOSE`**：
+
+```java
+CTabItem panelItem = new CTabItem(panelFolder, SWT.CLOSE);
+panelItem.setData(panelDescriptor);
+panelItem.setText(panelDescriptor.getPanelName());
+panelItem.setImage(UIUtils.getImage(panelDescriptor.getIcon()));
+panelItem.setToolTipText(panelDescriptor.getDescription());
+...
+presentationSettings.enabledPanelIds.add(panelDescriptor.getId());   // :1388
+```
+
+页签夹里同时挂着的页是「已启用集合」——`enabledPanelIds` 是持久化的（`PresentationSettings`），
+所以关掉一页 = 从集合移除并析构该页的内容，重开 = 再 `addPanel` 一次。
+
+**本仓此前的状态（第 9.x 之后）**：页签条恒定列六页、`selected_index` 是规范序下标；
+行尾 × 只在非「列浏览器」页出现，点它是 `SetRightTab(Browser)`——即「退回默认页」，
+不是「关掉这一页」。右栏只有一个可见页，没有「已启用集合」这个概念。
+
+**本步改法（方案 B 第 1 步；方案正文见 `result-panel-right-panel-tabs.md`）**：
+1. 面板新增状态 `open_tabs: Vec<RightTab>`（`panel/data.rs`），**规范序、恒非空**；
+   出厂初值 = 六页全开（`right_tabs().to_vec()`，对齐 `activateDefaultPanels:1396-1400`）。
+2. 页签条按 `open_tabs` 渲染，下标换算改用集合化的 `strip_index` / `tab_at_strip_index`
+   （原 `right_tab_index` / `right_tab_from_index` 删除，避免两套换算分叉）；
+   `selected_index` 取当前页在集合里的位置。
+3. 行尾 × 改为**无条件渲染**、发 `CloseRightTab(self.right_tab)`：只关这一页，其余页留在条上。
+   **（已被 §9.16 取代：× 收到每页签内侧，可关任意一页；行尾那颗删除）**
+4. 视图菜单的六个页项改成「勾选态 = 该页在集合里」（`fillPanelsMenu:1559-1588` 的
+   `STYLE_CHECK` + `CMD_TOGGLE_PANEL` 语义）：未勾 → `OpenRightTab`（插回并切过去），
+   已勾 → `SetRightTab`（切过去）。
+5. 右缘竖条仍走 `ToggleRightTab`，但补一条：目标页不在集合里时**先启用再切**
+   （竖条列的是全集，被关掉的页仍可从竖条点回来）。
+6. 关闭规则：关的是当前页 → 落到**规范序里紧随其后**的剩余页（纯函数
+   `neighbor_after_close`，没有后继则取最后一个）；集合被关空 → 整块右栏收起
+   （`set_panels_visible(false)`），再开任一一页会重新展开。
+
+**与 DBeaver 的已知差异（登记）**：
+- 关闭按钮是**行尾单颗**（`editor-result-right-tab-close`），不是每页签内侧的 `SWT.CLOSE`：
+  kit `Tab` 没有 `closable`，只能 `.suffix(...)` 内嵌按钮或行尾独立按钮；而 suffix 内嵌按钮
+  在 headless 下无法验证「不双触发」，故取行尾按钮。属后续/目视项。
+- `open_tabs` **不持久化**（那边 `enabledPanelIds` 会存到工作区）。要落盘需新增 settings 键，
+  本轮有意不做（已登记）。
+- 「点当前页签收起整栏」的旧语义仍在 `ToggleRightTab` 路径（右缘竖条）；第 2 步将把它统一到
+  「勾选 = 已启用 + 整栏收起只走总开关」。
+
+**验证**：
+- 纯函数：`neighbor_after_close`（关中间页取后继、关末页取最后）；
+- 面板态：`panel::tests::close_right_tab_drops_one_page_and_reopen_restores_order`
+  —— 出厂六页、关非当前页当前页不动、关当前页落后继、重开按规范序插回并置为当前、
+  关到空集右栏收起；
+- 映射：`right_tab_index_maps_to_the_six_panel_tabs` 迁到 `strip_index` / `tab_at_strip_index`
+  （含子集与越界断言）；
+- 门禁：`cargo test -p rds-result-panel --lib` = **345 passed**（344 + 1，warning 0）、
+  `cargo check -p rds-editor` 通过、`cargo test -p rds-editor --lib -- --test-threads=4`
+  = **794 passed**（1 ignored）、`cargo test -p rds-ui-guard` = 4 passed。
+
+### 9.09 消掉「点当前页签收起整栏」（方案 B 第 2 步，2026-11-19）
+
+**DBeaver 里从来没有「点已选中页签就收起整栏」**：`ResultSetHandlerTogglePanel.toggleResultsPanel:64-69`
+算 `isVisible = rsv.isPanelsVisible() && rsv.isPanelVisible(panelId)`，真则
+`rsv.closePanel(panelId)`——关的是**那一个面板**；而 `closePanel` 之后 `CTabFolder` 里
+其余页签仍在（`addPanel:1357` 的 `SWT.CLOSE`）。整栏显隐是另一条命令：
+`showPanels(false)` = `viewerSash.setMaximizedControl(children[0])`（`:1487`），
+入口是 `CMD_TOGGLE_PANELS` / 竖条顶部那颗 `SWT.CHECK` 总开关（`:1038-1056`）。
+
+**本仓此前的状态**：单页模型时代，「关掉当前这一页」只能等价成「收起整块面板」，
+于是 `toggle_right_tab` 里留了 `right_tab_click_collapses(tab, active, panels_visible)`：
+点已选中页 → `set_panels_visible(false)`，连点两次同一页 = 收起 / 再展开。
+
+**改法**（第 24 批已有 `open_tabs`「已启用集合」与逐页 ×，第 2 步删掉上面这条自造语义）：
+1. `toggle_right_tab` 改成纯「切到该页」：未登记 → 先启用再切（`true`）；
+   已登记且正显示 → **无操作**（返回 `false`，调用方不触发引用页刷新）；
+   已登记但没在显示（含整栏收起态）→ `set_right_tab`（`true`）。
+   整栏收起 / 展开**只剩** `SetPanelsVisible` 一个入口（竖条顶部总开关、状态栏三态、视图菜单）。
+2. 删除纯函数 `right_tab_click_collapses`（不再有第二种语义可算）。
+3. 竖条提示改成三态（`edge_tab_tooltip(tab, is_open, is_current)`）：
+   当前页报「当前页」、已启用未显示报「点一下切到这一页」、被 × 关掉的报「此页已关闭，
+   点一下重新打开」——取代原来那条「收起结果面板（本页正在显示）」。
+4. 竖条勾选态（`toggled`）改判 `panels_visible && active == tab`（原判 `active == tab`，
+   整栏收起时仍会显示一颗「勾着」的按钮，与「可见才是勾」的 DBeaver 口径不符）。
+
+**与 DBeaver 的已知差异（登记）**：DBeaver 竖条那颗 `CHECK` 点下去对**已勾选**的页是
+`closePanel`（关掉该页，页签里消失）；本仓把「关页」收敛到页签条行尾 ×（与视图菜单勾选项
+同源），竖条点已勾选页为无操作。两者都做到「整栏收起不在这里发生」，差别只在
+「竖条能否逐页关」——属后续可选项，不做没有功能性损失。
+
+**验证**：
+- 窗口用例 `panel::tests::clicking_the_active_edge_tab_is_a_noop`：点当前页返回 `false`
+  且面板仍可见、页签不变；点别页切过去；整栏收起后点当前页重新展开。
+- 窗口用例 `panel::tests::edge_bar_reopens_a_closed_page`：× 关掉「计算」页后，
+  点竖条把它重新启用并按规范序插回（`open_tabs == right_tabs()` 全集）。
+- 提示用例 `edge_bar_tooltip_carries_label_and_description` 改为三态断言
+  （含「当前页」不再说切换、「已关闭」说重新打开）。
+- 删除的用例：`right_tab_click_closes_only_the_page_that_is_showing`（纯函数已没了）、
+  `toggling_the_active_page_collapses_the_panel`（该行为已按设计移除）。
+- 门禁：`cargo test -p rds-result-panel --lib` = **345 passed**（warning 0）、
+  `cargo check -p rds-editor` 通过、`cargo test -p rds-editor --lib -- --test-threads=4`
+  = **794 passed**（1 ignored）、`cargo test -p rds-ui-guard` = 4 passed。
+
+### 9.10 `open_tabs` 落盘：对齐 `PresentationSettings.enabledPanelIds`（2026-11-19）
+
+**DBeaver 的「启用了哪几页」是持久状态**：`ResultSetViewer.addPanel:1388` 每次开面板都做
+`presentationSettings.enabledPanelIds.add(id)`，`PresentationSettings` 随工作区/演示设置存盘，
+下次打开仍是那几页；`activateDefaultPanels:1396-1400` 只在集合为空时补默认面板：
+
+```java
+private void activateDefaultPanels() {
+    presentationSettings.enabledPanelIds.removeIf(CommonUtils::isEmpty);
+    if (presentationSettings.enabledPanelIds.isEmpty()) {
+        // 逐个 addPanel 默认面板
+    }
+}
+```
+
+第 24 批只做了会话内的 `open_tabs`（当时登记「不持久化」），第 25 批把关闭语义收敛干净后，
+这一批把集合补上落盘。
+
+**改法**：
+1. `ports::RightTab` 新增 `ALL`（规范序常量）、`id()`（`browser` / `value` / `stats` / `group` /
+   `reference` / `execsql`）与 `parse()`（未知值 `None`，不猜页）——落盘形态与面板内枚举的
+   唯一桥梁。
+2. 偏好键 `result_panel.open_tabs`（Text，出厂
+   `"browser,value,stats,group,reference,execsql"`），加进 `Slot::ResultPanelOpenTabs`、
+   `KindTag::Text`、`key_name`、`apply_slot`、`get_by_key`、`apply_by_key` 的域分发。
+   读写口径与 `stats_items` 一致（空白折叠 / 去重 / 小写，不校验 id）。
+3. `apply_slot` / `set_result_panel_open_tabs` 把**空串归一为出厂六页全开**——与
+   `activateDefaultPanels` 的「空集合补默认」同语义，同时避免「关空 → 下次启动页签条空白」
+   这个中间态。
+4. 面板 `set_open_tabs_initial(tabs, cx)`：入参按 `RightTab::ALL` 规范序归一（去重、丢未知），
+   结果为空则保持现状；当前页不在新集合里就落到集合第一页。
+5. 宿主：`construct.rs` 启动时解析偏好注入面板；`dispatch.rs` 在 `CloseRightTab` /
+   `OpenRightTab` / `ToggleRightTab`（`switched` 时，竖条可把被 × 关掉的页重新启用）
+   三条路径后调用 `persist_result_open_tabs`（同值不写盘由设置侧判定）。
+
+**与 DBeaver 的已知差异（登记）**：
+- 作用域：DBeaver 按工作区/演示设置存，本仓沿用结果集偏好的**全局一份**口径
+  （与 `sidebar_width` / `stats_items` 同批一致）。
+- 不记「哪一页是当前页」（`right_tab` 仍不落盘，重开回到列浏览器）：DBeaver 的
+  `activatePanel` 也不会把选中页写进 `enabledPanelIds`，这一项不影响对齐。
+
+**验证**：
+- `panel::tests::right_tab_ids_round_trip`：`RightTab::ALL` 六项的 id ↔ 页互逆、空白/大小写
+  容忍、未知与空串返回 `None`。
+- `panel::tests::open_tabs_initial_normalizes_and_keeps_defaults`：乱序 + 重复 → 规范序两页；
+  空集合保持现状；当前页被关掉时落到集合第一页。
+- settings 侧由登记表不变量用例兜底（`every_registered_key_has_a_matching_slot` /
+  `registered_defaults_match_the_model` / `default_value_follows_the_declared_kind`）。
+- 门禁：`cargo test -p rds-settings --lib` = **37 passed**、
+  `cargo test -p rds-result-panel --lib` = **347 passed**（warning 0）、
+  `cargo check -p rds-editor` 通过、`cargo test -p rds-editor --lib -- --test-threads=4`
+  = **794 passed**（1 ignored）、`cargo test -p rds-ui-guard` = 4 passed。
+  （首次跑 editor 用例时 rustc 报 `memory allocation ... failed`（机器内存瞬时不足），
+  降并行度后重跑通过，非代码问题。）
+
+### 9.11 页内工具条的列位与「分隔线只有值页」（2026-11-19）
+
+**DBeaver 一个面板头 = 两列 ToolBarManager**（`ResultSetViewer.addPanel:1337-1383`）：
+
+```java
+GridLayout layout = new GridLayout(2, false);      // :1338  两列
+Composite trControl = new ConComposite(panelComposite, SWT.NONE);
+trControl.setLayoutData(new GridData(GridData.FILL_HORIZONTAL));   // :1344
+if (panel.needsSeparator()) {
+    UIUtils.createLabelSeparator(panelComposite, SWT.HORIZONTAL);  // :1345-1347
+}
+...
+panelInfo.actionToolBar = new ToolBarManager(SWT.HORIZONTAL | SWT.RIGHT | SWT.FLAT);
+panel.contributeActions(panelInfo.actionToolBar);                  // :1373-1374
+toolBar.setLayoutData(new GridData(GridData.FILL_HORIZONTAL));     // :1376  左列吃满
+...
+ToolBarManager panelToolBar = new ToolBarManager(SWT.HORIZONTAL | SWT.RIGHT | SWT.FLAT);
+addDefaultPanelActions(panelToolBar);                             // :1379-1381
+toolBar.setLayoutData(new GridData(GridData.HORIZONTAL_ALIGN_END));// :1382  右列贴右
+```
+
+两条结构事实：
+1. **页内动作贴左，视图菜单贴右**。左列 `FILL_HORIZONTAL` 吃满剩余宽度，页内动作从列首排起；
+   右列只有一颗 `IMG_LCL_VIEW_MENU`（`addDefaultPanelActions:1590-1614`）且 `HORIZONTAL_ALIGN_END`。
+   **面板头没有页标题文案**——页名/图标只在页签上（`addPanel:1357-1361` 的
+   `CTabItem(SWT.CLOSE)` + `setText(panelDescriptor.getLabel())` + `setImage(...)`）。
+2. **分隔线只由面板自己声明**。`panel.needsSeparator()` 全仓只有 `ValueViewerPanel.java:171-173`
+   返回 `true`；`ResultSetPanelBase.java:26-28` 默认 `false`，`MetaDataPanel` /
+   `AggregateColumnsPanel` / `GroupingPanel` / `ReferencesPanel` 均未覆写。
+
+**本仓改动**：
+- `panel_toolbar` 由「标题 `flex_1` 吃满 + `Toolbar` + 视图菜单」改成两列列位：
+  左列 `h_flex`（`flex_1 min_w_0 overflow_hidden`）= 标题（`flex_none max_w(rems(14.)) truncate`）
+  + `Toolbar::new(..).xsmall().p_0().contents(actions)`；右列 = `panel_view_menu`。
+  标题保留是本仓有意差异（统计页标题带列名 `「列名」统计`，DBeaver 那边列名在正文表格里），
+  页名本身与页签重复。
+- 新增纯函数 `events::page_needs_separator(tab)`（`matches!(tab, RightTab::Value)`），
+  `panel_toolbar` 新增 `separator: bool` 参数，只有 `true` 时才挂 `border_b(HAIRLINE)`；
+  七处调用点全部按页传入（值页 `true`，列浏览器 / 计算 / 分组 / 引用 / 执行SQL / 空态页 `false`）。
+  `empty_page` / `empty_page_lines` 因此各多一个 `tab` 参数（空态也要按页判分隔线）。
+
+**验证**：
+- 新增 `panel::tests::panel_toolbar_puts_actions_left_and_view_menu_right`：
+  ① 纯函数层——`right_tabs()` 六页里只有 `Value` 命中 `page_needs_separator`；
+  ② 渲染层（值页选中一格）——`copy` 与视图菜单**同行**（`|Δy| < 4px`）、`copy.x < menu.x`、
+  `copy` 距工具条左端 ≤ 200px（贴左列）、`copy` 右缘到 `menu.x` 的空隙 ≥ 24px
+  （左列吃满剩余宽度；改动前该空隙只有 `gap_1` = 4px）、菜单右缘距工具条右端 ≤ 40px（贴右）。
+- 门禁：`cargo test -p rds-result-panel --lib` = **348 passed**（warning 0）、
+  `cargo check -p rds-editor` 通过（0 warning）、`cargo test -p rds-editor --lib -- --test-threads=4`
+  = **794 passed**（1 ignored）、`cargo test -p rds-ui-guard` = 4 passed。
+
+**登记（未做）**：
+- 页标题文案（本仓保留，DBeaver 无）。
+- `needsSeparator` 的视觉形态：DBeaver 用 `UIUtils.createLabelSeparator`（SWT 细线 label），
+  本仓复用工具条容器自身的 `border_b(HAIRLINE)`；两者都是 1px 横线，视觉归属不同（不引入新元素）。
+
+### 9.12 列浏览器工具条只留「生成 DDL」，多选动作下沉到右键菜单（2026-11-19）
+
+**DBeaver 的 Metadata 面板只有一条页内动作**（`MetaDataPanel.java:204-215`）：
+
+```java
+@Override
+public void contributeActions(IContributionManager manager) {
+    manager.add(ActionUtils.makeCommandContribution(
+        UIUtils.getActiveWorkbenchWindow(),
+        "org.jkiss.dbeaver.ui.editors.sql.generate.ddl.by.resultSet",
+        ResultSetMessages.generate_ddl_by_result_set_name,
+        DBIcon.SQL_TEXT,
+        ResultSetMessages.generate_ddl_by_result_set_tip,
+        true));
+}
+```
+
+多选能力不在这条工具条上：`MetaDataTable.fillCustomActions:234-252` 在**清单右键菜单**里加
+「复制列文本」（`meta_data_panel_action_copy_column_text`），操作对象是
+`getItemsViewer().getStructuredSelection()`——清单的结构化选中项，而不是单行。
+
+**本仓改动**（此前 P2-3 把批量按钮放进了页内工具条，与该面板形态不符）：
+1. `sidebars.rs` 的列浏览器工具条只剩「生成 DDL」一颗；「已选 N 列」计数 chip 与
+   「隐藏所选 / 显示所选 / 清空选择」三颗按钮从工具条移除。
+2. 这三条改挂**行右键菜单尾部**（前一格分隔），由纯函数
+   `crate::column_browser::batch_menu_items(selected, clicked)` 决定是否出现：
+   **只有右键那一列在多选集合内**才生成（与 DBeaver 的「结构化选中项」口径一致），
+   标签带集合规模（`隐藏所选（N 列）` / `显示所选（N 列）` / `清空选择（N 列）`）。
+   动作经 `ResultRequest::SetColumnsHidden { columns, hidden }` /
+   `ResultRequest::ClearColumnSelection` 走队列，与原来的按钮同一条路径。
+3. 面板侧 `multi_selected` 镜像保留（由 `ColumnSelectionChanged` / `ClearColumnSelection`
+   维护），只是不再渲染成工具条控件。
+
+**验证**：
+- 新增 `panel::tests::column_browser_toolbar_keeps_only_the_ddl_action`：
+  ① 纯函数——空集合 / 右键列不在集合里 → 空；命中 → 三条且顺序
+  `HideSelected → ShowSelected → ClearSelection`、标签含「2 列」；
+  ② 渲染层——多选非空（`set_multi_selected([1,2])`）时 `editor-result-generate-ddl` 仍在，
+  `editor-result-col-batch-hide/-show/-clear` 三颗**不再渲染**。
+- 门禁：`cargo test -p rds-result-panel --lib` = **349 passed**（warning 0）、
+  `cargo test -p rds-ui-guard` = 4 passed。
+- **本批 editor 门禁未能执行**：并行线未提交改动（`crates/sql/src/formatter.rs` 给
+  `FormatOptions` 新增 `blank_lines_between` / `comma_style` / `indent_char` 三字段，
+  `crates/editor/src/view/host/format.rs:36` 尚未跟进）使 `cargo check -p rds-editor`
+  报 E0063。本批未改 editor 任何文件，该失败与本批无关；按「不碰并行线未提交改动」
+  的协作纪律，等并行线自行修好后重跑 editor 两道门禁。
+
+**登记（未做）**：工具条移除计数后，「已选 N 列」只在右键菜单标签里体现；
+DBeaver 本来也没有该计数，若要常显应放状态栏而不是页内工具条。
+
+### 9.13 右缘竖条 / 视图菜单页项：改成「开/关该页」的 toggle 语义（2026-11-19）
+
+第 25 批按「点当前页什么都不做、整栏显隐另有一条命令」定过 `toggle_right_tab`，
+本轮重新取证后该口径被推翻：**DBeaver 的页按钮/页菜单项本身就是开关**，关掉的是
+**那一页**，不是整块面板。
+
+取证（`org.jkiss.dbeaver.ui.editors.data`）：
+
+```text
+handler\ResultSetHandlerTogglePanel.java
+  toggleResultsPanel:64-69   isVisible = isPanelsVisible() && isPanelVisible(panelId)
+                             showResultsPanel(rsv, panelId, isVisible)
+  showResultsPanel:71-81     if (isVisible) rsv.closePanel(panelId);
+                             else rsv.activatePanel(panelId, true, true);
+                             (+ DataEditorFeatures.RESULT_SET_PANEL_OPEN.use)
+  updateElement:83-103       element.setChecked(rsv.isPanelVisible(panelId))   // 勾选态不含整栏可见
+
+ResultSetViewer.java
+  竖条总开关:1038-1051       SWT.CHECK，点它 showPanels(!isPanelsVisible(), true, true)，
+                             勾选态 = panelsVisible
+  竖条每页  :1055-1080       SWT.CHECK；tooltip = label + " (" + 命令描述 + ")"；
+                             点击 → showResultsPanel(id, panelsVisible && isPanelVisible(id))；
+                             setChecked(panelsVisible && isPanelVisible(id))  // 多页可同时勾亮
+  closePanel:1536-1542       dispose tab + removePanel
+  removePanel:1441-1451      enabledPanelIds.remove(id)；activePanels 空 → showPanels(false, true, true)
+  activatePanel:1287-1320    showPanels && 整栏收起 → 先 showPanels(true,false,false)；
+                             已建页 → setActive 切过去；未建 → 新建（addPanel 里入 enabledPanelIds）
+  isPanelVisible:1532-1534   enabledPanelIds.contains(panelId)
+  fillPanelsMenu:1559-1588   每页 STYLE_CHECK + CMD_TOGGLE_PANEL + panelId 参数
+```
+
+**本仓改动**（`open_tabs` 即 `enabledPanelIds` 的等价物，第 24/26 批已落地）：
+
+1. `events::toggle_right_tab`：`visible = panels_visible() && open_tabs.contains(tab)`；
+   `visible → close_right_tab`（返回 `false`，没有「切到该页」）；否则 `set_right_tab`
+   （打开并激活，整栏收起时顺带展开，返回 `true`）。关闭最后一页由 `close_right_tab`
+   已有的「集合空 → 收起整栏」分支承接（对应 `removePanel:1447-1449`）。
+2. 新增纯函数 `events::edge_tab_active(panels_visible, is_open)`：竖条勾选态 =
+   `panelsVisible && isPanelVisible(id)`，**多页可同时勾亮**（不再是「只有当前页勾亮」）。
+3. `events::edge_tab_tooltip(tab, is_open, panels_visible)` 三态改为报动作：
+   开且整栏可见「点一下关闭这一页」/ 开但整栏收起「点一下展开并切到这一页」/
+   已关闭「此页已关闭，点一下打开」。
+4. `sidebars.rs` 竖条：`toggled(edge_tab_active(..))`、tooltip 改传 `panels_visible`。
+5. `tabs.rs` 视图菜单页项：勾选态仍是「该页已启用」，点击改为纯函数
+   `events::page_item_closes(panels_visible, is_open)` 决定 `CloseRightTab` / `OpenRightTab`
+   （两者都是 `toggleResultsPanel` 的两条分支）。
+6. `dispatch.rs`：`ToggleRightTab` 现在也会关页（改 `open_tabs`），落盘判据从
+   「`switched`」改为「`switched` **或** 集合有变化」，修掉关闭时漏写
+   `result_panel.open_tabs` 的路径。
+
+**验证**：
+- `panel::tests::clicking_an_edge_tab_toggles_that_page`（原 `..._is_a_noop` 作废）：
+  点当前页 → 摘出集合、整栏仍展开、当前页落到规范序下一页；再点 → 重新启用并切过去；
+  整栏收起后点同一页 → 展开并切到该页（不能因为「开着的页」就当关闭）。
+- 新增 `closing_the_last_edge_tab_collapses_the_bar`：逐页关到只剩一页再关最后一页 →
+  `open_tabs` 空 + 面板收起；收起态点任一一页 → 重新展开。
+- 新增 `view_menu_page_item_closes_only_when_the_bar_is_open`（纯函数四象限）。
+- `panel::tests::edge_bar_tooltip_reports_the_toggle_action`（原 `..._carries_label_and_description`
+  的三态断言作废）覆盖三态文案 + `edge_tab_active` 四象限。
+- 门禁：`cargo test -p rds-result-panel --lib` = **351 passed**（warning 0）、
+  `cargo check -p rds-editor` 通过、`cargo test -p rds-editor --lib -- --test-threads=4`
+  = **795 passed**（1 ignored）、`cargo test -p rds-ui-guard` = 4 passed。
+- 第 28 批遗留的 editor E0063 已消失（并行线补齐了 `FormatOptions` 的调用点），
+  本批 editor 两道门禁**实测恢复全绿**。
+
+**仍与 DBeaver 有差**（未做）：逐页关闭已由 §9.16 收到页签内侧（`Tab::suffix` 的 12px ×），
+但视觉形态仍是自绘图标（DBeaver 的 `SWT.CLOSE` 由 `CTabFolder` 内建绘制），
+× 的内距与悬停色属目视范围。
+
+### 9.14 列浏览器过滤框：ESC 清空（2026-11-19）
+
+取证（`org.jkiss.dbeaver.ui.editors.data`）：
+
+```text
+panel\metadata\MetaDataPanel.java
+  createContents:84-98   过滤行 = createControlLabel(过滤标签) + Text(SWT.BORDER|SWT.SEARCH|SWT.ICON_CANCEL)
+                         （FILL_HORIZONTAL），setMessage(过滤提示)；
+                         addModifyListener → refresh(true)；
+                         KeyListener: e.character == SWT.ESC → filterTextBox.setText("")
+  refresh:173-201        filterText = 输入转大写；非空时
+                         .filter(a -> a.getName().toUpperCase().contains(filterText))
+                         ——只匹配**列名**；集合与上次相同则早退，否则 clearListData + loadData
+```
+
+本仓过滤框不是自绘，而是 kit `List::searchable` 内置的搜索框（`ListState` 不暴露内部
+`InputState`）。因此：
+
+1. `sidebars.rs` 把 `List` 套进一个带 id 的容器 div（`editor-result-col-browser-list`），
+   在容器上挂 `on_key_down`：`escape → ListState::set_query("")`。`set_query` 内部
+   `set_value` 后**直接** `start_search`（`vendor/gpui-component/src/list/list.rs:226-235`），
+   等价于 DBeaver 的「清空 + refresh」两步。
+2. kit `Input` 不消费 Enter/Esc（`panel/render.rs` 的重命名条已实测同结论：按键沿 Bubble
+   冒泡到外层 `div.on_key_down`），所以焦点在搜索框里敲 ESC 也能到容器。
+
+**仍与 DBeaver 有差**（登记，未改）：本仓过滤匹配**列名 / 类型名 / 注释**三处，
+DBeaver 只匹配列名（`refresh:178-183`）。此处加宽是此前批次拍板的取舍（按类型/注释找列
+在宽表里更实用），若要严格对齐需回退为只匹配列名。
+
+**验证**：
+- `panel::tests::column_browser_filter_clears_on_escape`（窗口级）：`set_query("amount")`
+  后 delegate `query() == "amount"`、`matched().len() == 1`；`list.focus(window, cx)` 后
+  `simulate_keystrokes("escape")` → `query() == ""`、`matched().len() == 2`（回到全量）。
+- 门禁：`cargo test -p rds-result-panel --lib` = **352 passed**（warning 0）、
+  `cargo check -p rds-editor` 通过、`cargo test -p rds-editor --lib -- --test-threads=4`
+  = **795 passed**（1 ignored）、`cargo test -p rds-ui-guard` = 4 passed。
+
+### 9.15 分组页补「不排序」档（2026-11-19）
+
+分组页此前只有两档排序（按值 / 按计数降序），DBeaver 是三档。取证
+（`org.jkiss.dbeaver.ui.editors.data`）：
+
+```text
+panel\grouping\action\ChangeSortingAction.java
+  :44-52   ASC = "ASC" / DESC = "DESC" / NONE = ""（descending == null 即这一档）
+           style = AS_RADIO_BUTTON（三档单选）
+  run:73-88  写 PreferenceStore(RS_GROUPING_DEFAULT_SORTING) + persistConfiguration()
+             + container.rebuildGrouping()
+panel\grouping\GroupingResultsContainer.java
+  rebuildGrouping:249-265   仅当 isDefaultGrouping（默认函数只有 COUNT）且该值非空时，
+                            dataFilter.setOrder(别名 + " " + defaultSorting)
+                            —— NONE 档就是**不设 ORDER BY**
+panel\grouping\GroupingPanel.java
+  fillToolBar:164-176       工具条里挂 DefaultSortingAction（下拉，含三个 ChangeSortingAction）
+panel\grouping\action\DefaultSortingAction.java
+  :44-46    按顺序加 null / FALSE / TRUE 三个 ChangeSortingAction
+```
+
+**关键差异**：DBeaver 的排序键是 **COUNT 列**、方向是「无 / 升 / 降」；本仓 `GroupSort`
+是「按分组键字典序 / 按计数降序」。所以三档映射是 `none ↔ ""`、`countdesc ↔ DESC`，
+「按值升序」是本仓超集档（对 `ASC` 的差异已在 §9.05 登记）。本批只补缺口最小的
+**「不排序」**，不动既有两档语义。
+
+**改动**：
+
+1. `ports.rs::GroupSort` 加 `None` 变体（`#[default]` 仍是 `Value`，出厂档不变）；
+   `toggled` 改三档循环 `None → Value → CountDesc → None`；`label` = 原序 / 按值 / 按计数
+   （2 字版本，右侧窄栏够放）；`id` = `none` / `value` / `countdesc`；`parse` 认 `"none"`。
+2. `panel/tabs.rs::arrange_groups` 加 `GroupSort::None => {}` 分支：不排序 = 保留
+   `group_by_columns_for` 的插入顺序。该顺序天然是**首现序**——单列走 `group_by_for`、
+   多列走 `grid/stats.rs::group_by_tuples:89-99` 的 Vec 线性插入，两条路径都不含 HashMap。
+3. settings 三处口径同步：`service/result_panel.rs` 的槽白名单与 `set_result_panel_group_sort`
+   归一都扩到 `none / value / countdesc`（未知值仍回落 `value`，不跟着乱排序）；
+   `registry/entries/result_panel.rs` 的 hint 补上 `none` 档并删掉旧「本仓暂不做」；
+   `model/result_panel.rs` / `registry/mod.rs` / `service/mod.rs` 的注释改三档。
+4. 落盘链路无需改：`dispatch.rs::SetGroupSort` 走 `persist_result_group_sort`，写的就是
+   `sort.id()`；`events::set_group_prefs_initial` 走 `GroupSort::parse(..).unwrap_or_default()`。
+
+**验证**：
+- `ports::tests::group_sort_ids_round_trip_and_reject_unknown`：三档 id 原地往返，
+  `"none"` 不再被当未知值；`ports::tests::group_sort_toggle_cycles_through_three_modes`（新增）：
+  循环回到「不排序」+ 三个标签互不相同。
+- `panel::tests::arrange_groups_sorts_and_filters`：先以 `GroupSort::None` 跑一遍，断言
+  顺序仍是 `["b", "a", "c"]`（首现序没被任何排序打乱），再接着验按值 / 按计数 / 仅重复。
+- `panel::tests::group_prefs_initial_round_trip_and_unknown_sort_falls_back`：新增
+  `set_group_prefs_initial("none", false, cx)` → `group_sort_id() == "none"`，
+  证明「不排序」是合法档而非未知值（未知仍回落 `value`）。
+- 门禁：`cargo test -p rds-settings --lib` = **41 passed**（第 31 批同时改了 settings）、
+  `cargo test -p rds-result-panel --lib` = **353 passed**（warning 0）、
+  `cargo check -p rds-editor` 通过、`cargo test -p rds-editor --lib -- --test-threads=4`
+  = **798 passed**（1 ignored）、`cargo test -p rds-ui-guard` = 4 passed。
+
+**仍与 DBeaver 有差**（未做）：① DBeaver 的排序键是 COUNT 列、`ASC` 档是「计数升序」，
+本仓「按值」是分组键字典序（超集档，差异见 §9.05）；② DBeaver 的档位只在
+`isDefaultGrouping`（函数列只有 COUNT）时生效，本仓不受此限制；③ 交互形态不同——
+DBeaver 是工具条下拉里的三个单选，本仓是一个循环按钮（三档依次切换），
+点击次数与最终可达档位一致，属形态取舍（用户口径「目视部分后面统一处理」）。
+
+### 9.16 逐页关闭按钮收到页签内侧（2026-11-19）
+
+DBeaver 的关闭按钮**属于页签本身**：
+
+```text
+ResultSetViewer.java
+  addPanel:1357   final CTabItem panelTab = new CTabItem(panelFolder, SWT.CLOSE);
+                  —— 每个页签自带内侧 ×（SWT.CLOSE 是 CTabItem 的样式位）
+  closePanel:1536-1542   dispose tab + removePanel（关的就是点中的那一个）
+```
+
+此前本仓只有**行尾一颗**「关当前页」的按钮（用户要关别的页得先切过去），语义上是
+「关当前页」而不是「关这一页」。本批改成每页签内侧一颗 ×，与 `SWT.CLOSE` 同构。
+
+**实现**（`panel/sidebars.rs::render_right_sidebar`）：
+
+1. 页签构造改为 `Tab::new().icon(..).label(..).tooltip(..).suffix(close)`。
+2. `close` 是 `Tab::suffix` 槽里的紧凑点击区：`div().id(..).cursor_pointer().rounded_sm()
+   .hover(bg list_hover).on_click(..).child(Icon::new(IconName::X).size_3().text_color(muted))`。
+   - **不用 `Button`**：XSmall 档 `min_h_7`(28px) 会撑破 24px 页签条
+     （`ui::RESULT_STATUS_BAR_HEIGHT`），kit `Tab` 也没有 `closable` 样式位。
+   - 语义仍走**同一条端口** `ResultRequest::CloseRightTab(tab)`，与视图菜单 / 竖条同一实现。
+3. `panel/events.rs` 新增纯函数 `tab_close_selector(tab) -> &'static str`：六页各一个稳定
+   选择器（`editor-result-right-tab-close-{browser,value,stats,group,reference,execsql}`）。
+   共用 id 会让 `debug_bounds` 只命中第一个，且 a11y 重复 id 是 0.9 已知坑。
+4. 行尾那颗 `editor-result-right-tab-close` 已删除——两套关闭入口并存会让「关哪一页」
+   与「点哪一页」语义打架。
+
+**必须拦截冒泡（本批实证）**：`×` 的 `on_click` 里调 `app.stop_propagation()`。
+不拦截时队列会收到 `[CloseRightTab(Browser), SetRightTab(Browser)]`——`TabBar` 外层
+`on_click` 用的是**渲染时**的 `open_tabs` 快照做下标映射，`CloseRightTab` 把该页摘掉之后，
+同一个下标又映射回它自己，等于「关掉又立刻重开」。这条不是理论风险，是用例先跑出来的。
+
+**验证**：
+- `panel::tests::right_tab_close_button_closes_only_that_page`（窗口级）：active = 值详情，
+  点「列浏览器」页签的 ×（`debug_bounds` → `simulate_click`），断言队列含
+  `CloseRightTab(Browser)` **且不含** `SetRightTab(_)`。
+- `panel::tests::right_tab_close_selectors_are_distinct`（纯函数）：六页选择器两两不同。
+- 回归：`clicking_an_edge_tab_toggles_that_page` / `closing_the_last_edge_tab_collapses_the_bar`
+  等既有用例不受影响（关闭端口与竖条语义未动）。
+- 门禁：`cargo test -p rds-result-panel --lib` = **355 passed**（+2）、
+  `cargo check -p rds-editor` 通过、`cargo test -p rds-editor --lib -- --test-threads=4`
+  = **798 passed**（1 ignored）、`cargo test -p rds-ui-guard` = 4 passed。
+
+**仍与 DBeaver 有差**（未做）：DBeaver 的 × 由 `CTabFolder` 内建绘制（悬停变红、页签
+未激活时也能关），本仓是自绘 12px 图标 + `list_hover` 底色；× 与页签正文之间的内距
+（`CTabItem` 由 SWT 决定）不在本批范围（属目视，用户口径「后面统一处理」）。
+
+### 9.17 右栏被关空后重新展开要恢复默认页集合（2026-11-20）
+
+**竞品取证**（`ResultSetViewer.java`）：
+
+```text
+showPanels(show, showDefaults, saveSettings):1478-1518
+  :1482   CTabItem activePanelTab = panelFolder.getSelection();   —— 先记住当前页
+  :1492-1496  else 分支：if (showDefaults) activateDefaultPanels(getPresentationSettings());
+              viewerSash.setMaximizedControl(null);
+  :1513    getPresentationSettings().panelsVisible = show;
+removePanel:1441-1451  activePanels 空 → showPanels(false, true, true)
+```
+
+结论：**「面板被关光」与「面板收起」是两件事**。关掉最后一页只让整块面板收起；下次显示
+（`toggleResultsPanel` / `CMD_TOGGLE_PANELS` / 竖条总开关）走的是 `showDefaults=true` 的路径，
+先 `activateDefaultPanels` 把默认面板重新挂上，再放开 sash——所以**不存在「展开后页签夹是空的」**
+这种中间态。
+
+**本仓的缺陷（本批修复前实测）**：`close_right_tab` 关空 → `open_tabs` 留空 + `set_panels_visible(false)`；
+而 `set_panels_visible(true)` 只翻 `edge_bar_visible` / `show_value_sidebar` 两个可见位，
+不补集合。于是「关掉六页 → 再点状态栏右端开关展开」得到的是右栏空白、页签条一颗页签都没有。
+
+**修法**（`panel/events.rs`）：
+
+1. 新增私有 `restore_default_tabs_when_empty()`：集合为空时填回出厂六页（`right_tabs()`），
+   并把 `right_tab` 归一到集合内（空集时当前页必然已被关掉）。
+   - **只在空集时补**：非空的自定义集合（比如用户关掉「列浏览器」后的五页）在开合之间必须原样保留，
+     否则每次「收起再展开」都会把用户的选择冲掉。
+   - 默认集合的口径与 `activateDefaultPanels` 对齐：DBeaver 用的是「偏好里记录的默认面板 id 集」，
+     本仓偏好注入走 `set_open_tabs_initial`（空值也等价于恢复默认，见该方法注释）。
+2. 两条展开路径都调用：`set_panels_visible(true)`（工具栏 / 宿主 / 竖条总开关）、
+   `toggle_value_sidebar` 的显示方向（状态栏右端三态开关 = DBeaver `CMD_TOGGLE_PANELS` 的等价物）。
+
+**验证**：
+- `panel::tests::reopening_after_closing_all_pages_restores_default_tabs`：关空六页 → 断言
+  `open_tabs` 空 + 收起 → `set_panels_visible(true)` → 断言六页恢复、当前页落在集合里。
+  **这条是先跑红再修的**（红时失败在「空集重新展开应恢复默认页集合」）。
+- `panel::tests::toggling_the_sidebar_keeps_a_custom_tab_set`（反向）：关掉「列浏览器」后
+  走一遍三态开关（宽 → 收 → 窄 → 宽），断言仍是那五页、且不含 `Browser`。
+- 门禁：`cargo test -p rds-result-panel --lib` = **357 passed**（+2）、
+  `cargo check -p rds-editor` 通过、`cargo test -p rds-editor --lib -- --test-threads=4`
+  = **798 passed**（1 ignored）。
+
+**门禁异常（外部因素，非本批因果）**：`cargo test -p rds-ui-guard` 的
+`no_new_hardcoded_color_or_pixel` 报红，指向**并行线未跟踪新文件**
+`crates/workbench/src/unlock.rs`（裸 px 1 未登记 BASELINE）。本批未触碰 `crates/workbench`，
+也未新增任何颜色 / px 字面量，待并行线收敛后复跑。不要为了让 guard 变绿去改别人的
+BASELINE。
+
+### 9.18 分组键可上移 / 下移（2026-11-20）
+
+**竞品取证**（`panel/grouping/GroupingColumnsContainer.java`）：
+
+```text
+moveColumns(overColumnIndex, indexesToMove):126-152
+  :137-141  分组把被拖的列分进两个集合（属性列 / 函数列），按反序 TreeSet 处理
+  :143       // for now functions can only be placed after attributes
+  :144-147  属性列：目标列是属性列就用它，否则插到属性列末尾
+  :148-151  函数列：目标列是属性列则插到函数列 0 位
+moveElements(...):154-168  remove 时按反序移除、再整体 addAll(toIndex, …)
+```
+
+也就是说：**分组键（属性列）的顺序就是分组嵌套顺序**，把某列拖到别处 = 改层级；
+属性列与聚合函数列是两段，函数列永远排在属性列之后。入口是
+`GroupingResultsDecorator.dropColumns`（从结果集拖列到分组面板）。
+
+**本仓此前的状态**：`group_columns: Vec<usize>` 只记录「勾了哪几列」，顺序由**勾选先后**决定，
+没有任何重排手段——想「先按 B 再按 A」只能先清空再按新顺序勾。
+
+**本批改法**（表达同一动作，形态换成一对按钮）：
+
+1. `ports.rs`：新增 `MoveGroupColumn { column, delta }`（`delta` = -1 上移 / +1 下移）。
+2. `panel/tabs.rs` 两个纯函数：
+   - `can_move_group_column(group_columns, selected, delta)`：选中列**在键里**且移动后仍在界内；
+   - `move_group_column_in_place(&mut [usize], column, delta)`：相邻交换，越界 / 不在键里 → `false`。
+3. 分组页工具条在勾选下拉之后插一对图标按钮（`ChevronUp` / `ChevronDown`，
+   `editor-result-group-move-up` / `-move-down`），作用于**当前选中列**，不可用即 `disabled`。
+4. `panel/events.rs::move_group_column`：只动 `group_columns` 顺序。分组行的键值排列由
+   `arrange_groups` 每帧现算（`group_by_columns_for` 按 `group_columns` 逐层嵌套），所以
+   **顺序一变层级就跟着变**，不需要在别处补状态。没真动就不 `notify`（避免无谓重绘）。
+5. `host/results/dispatch.rs`：新分支转成面板方法调用（无持久化——DBeaver 的分组键顺序也不落盘，
+   `loadSettings`/`saveSettings` 是空桩，见 §9.15 取证）。
+
+**形态差异（有意，非缺口）**：DBeaver 用拖放（`dropColumns`）；本仓用「上移 / 下移一位」——
+键盘可达、headless 可验，且不引入拖拽排序模型（GPUI 下拖拽需要手势 + 插入指示线 + 落点判定，
+本批不做）。语义等价：都能把某列挪到任意位置（重复按即可）。若以后要拖拽，`moveColumns` 的
+落点语义可以直接复刻到这个纯函数上（把 `delta` 换成 `to_index`）。
+
+**验证**：
+- `panel::tests::moving_group_column_reorders_the_group_keys`：纯函数四点（相邻交换 / 首位不能再上移 /
+  末位不能再下移 / 不在键里无动作）+ 可用性六点 + 面板态（勾 `[0,2]` → 上移 2 → `[2,0]`，再移一次不变）。
+- `panel::tests::group_move_buttons_queue_the_request_for_the_selected_column`（窗口级）：渲染分组页，
+  点 `editor-result-group-move-up`，断言队列收到 `MoveGroupColumn { column: 2, delta: -1 }`。
+- 门禁：result_panel **359 passed**（+2）、editor check 通过、editor **798 passed**（1 ignored）。
+- ui-guard 仍红，归因外部（并行线未跟踪 `crates/workbench/src/unlock.rs` 的裸 px），见 §9.17 末段。
+
+### 9.19 分组列下拉给已选项标位次（2026-11-20）
+
+承接 §9.18：分组键顺序已经是可改的（上移 / 下移），但**顺序本身在界面上不可见**——勾选式下拉里
+只有「列名 + 勾选态」，看不出「先按 A 再按 B」。
+
+**竞品对照**：DBeaver 的分组顺序在 `GroupingConfigDialog` 的列表格里**直接可见**（表格行序 = 分组
+顺序，配合 `moveColumns` 的拖放改序）。本仓把「多列编辑表格」换成了勾选式下拉（能力等价、形态更轻，
+见 §9.18 的工具条注释），代价就是顺序丢在了菜单外面。
+
+**本批改法**（`panel/tabs.rs`）：
+
+1. 新增纯函数 `group_column_menu_label(group_columns, column, name)`：
+   - 列在分组键里 → `format!("{}. {}", 位次 + 1, name)`（位次取自分组键顺序，1 起）；
+   - 不在 → 列名原文（未勾选项不该看着像「已启用」）。
+2. 分组列下拉的菜单项文字改用该函数。**勾选态、点击语义、菜单项顺序都不动**：
+   - 菜单项仍按**数据列序**列出（不按分组顺序重排）——重排会让勾选时项位置跳动，
+     位次已经足够表达顺序；
+   - 位次在「选中列兜底」态也会出现（兜底列在生效分组键里就是第 1 位，与勾选态一致，
+     不引入第二套口径）。
+
+**验证**：`panel::tests::group_column_menu_label_marks_only_selected_columns`
+（三个位次 / 未勾选不加位次 / 空集合保持原名 / 上移后位次跟随）。
+`PopupMenu` 内部不可读（kit 只暴露 `is_empty()`），所以按项目规范抽纯函数钉，
+不在渲染层做脆弱断言。
+
+**门禁**：result_panel **360 passed**（+1）、editor check 通过、editor **798 passed**（1 ignored）。
+ui-guard 仍红，归因外部（并行线未跟踪 `crates/workbench/src/unlock.rs` 的裸 px，见 §9.17 末段）。
+
+**附带记录（flaky，非本批因果）**：editor 首轮 4 线程跑出
+`exec::execution::tests::queue::cancel_right_after_submit_still_targets_the_job_connection` 失败
+（`queue.rs:143`「中断在它开跑前就到了」，`left: 1 / right: 0`）。该目录本批零改动、单跑通过、
+重跑全量 798 全绿——属「cancel 与开跑」的并发时序抖动，登记备查，不在本线修。
+
+### 9.20 筛选设置的列约束表：`#` 挪到列名之后（2026-11-20）
+
+**竞品取证**（`FilterSettingsDialog.createDialogArea:116-…`）——列是**依次 `addColumn` 挂上去的**，
+所以顺序就是列序：
+
+```text
+:129-137  Name      列名 + 类型图标
+:139-146  "#"       值 = String.valueOf(constraint.getOriginalVisualPosition() + 1)
+:148-176  Visible   布尔列，**可编辑**（EditingSupport → constraint.setVisible）
+:178-211  Pinned    布尔列，可编辑；canEdit 只对顶层属性为真（binding == binding.getTopParent()）
+:213+     Order     仅当 resultSetViewer.getDataSource().getInfo().supportsResultSetOrdering()
+```
+
+本仓此前是「列 / 可见 / 冻结 / 条件 / 排序 / **#**」——`#` 落在行尾，跟 DBeaver 的列序对不上，
+且它读起来像「行尾序号」而不是「列位置」。
+
+**本批改法**（`panel/dialog.rs::render_filter_settings_columns`）：
+
+1. 行内把 `#` 移到**列名正后方**（`rems(2.)` 宽、左对齐、muted 色），表头同步：
+   `列 / # / 可见 / 冻结 / 条件 / 排序`。
+2. 「条件 / 排序」两列不动，仍在末尾——它们是本仓追加的**只读投影**（条件来自列头菜单的列级筛选、
+   排序来自本地排序），DBeaver 的行里没有这两列（那边靠表格的列头筛选/排序表达）。
+3. 可见 / 冻结本来就是可编辑的（`Checkbox` → `set_columns_hidden` / `toggle_freeze` +
+   `ColumnLayoutChanged` 落盘），与 DBeaver 的 `EditingSupport` 同构，本批不动。
+
+**验证**：`panel::tests::filter_settings_columns_put_the_position_right_after_the_name`——打开浮层后
+量四段几何（`pos` / `vis-cell` / `pin-cell` / `criteria`），断言 `pos < vis < pin < criteria`。
+为此给两个 `Checkbox` 各包了一层带 `debug_selector` 的 div（`Checkbox` 是 `RenderOnce`，
+自身 id 进不了 `debug_bounds`，套一层才能量到位置）。
+
+**登记差异（未改）**：`#` 的**取值**口径不同——DBeaver 是 `OriginalVisualPosition + 1`（原始可见位置，
+移动/排序列之后**不变**），本仓是**当前数据列序**（`delegate.columns()` 的枚举下标 + 1）。
+本仓没有「模型原始序」这一层：列序就是持久化的显示序（`display_order`），
+`MoveSelectedColumn` / 拖拽都会改它。要在本仓复刻「原始位置」得给 delegate 加一份不可变的初始序并
+定义它在「重置列布局」时的语义，属独立设计题，本批不做。
+
+**门禁**：result_panel **361 passed**（+1）、editor check 通过、editor **798 passed**（1 ignored）。
+ui-guard 仍红，归因外部（并行线未跟踪 `crates/workbench/src/unlock.rs` 的裸 px，见 §9.17 末段）。
 
 ## 8. 协作纪律
 

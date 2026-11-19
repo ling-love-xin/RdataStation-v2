@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>能力 / 驱动属性 Tab · 新增数据源原型 · RdataStation</title>
+<link rel="stylesheet" href="_theme.css">
+<script src="_theme.js"></script>
+<style>
+  .cap-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px;}
+  .cap{display:flex;align-items:center;gap:8px;border:1px solid var(--border);border-radius:8px;padding:6.5px 10px;font-size:12px;background:var(--bg);}
+  .cap .c-name{flex:1;}
+  .cap .c-v{font-size:11px;font-weight:700;}
+  .cap .c-v.yes{color:var(--success);}
+  .cap .c-v.no{color:var(--muted);}
+  .prop-row{display:flex;align-items:center;gap:9px;padding:6px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;}
+  .prop-row input{flex:1;}
+  .kv-add{border:1.5px dashed var(--input-border);border-radius:8px;padding:7px 10px;color:var(--muted);font-size:12px;cursor:pointer;text-align:center;transition:all .12s;}
+  .kv-add:hover{border-color:var(--active-border);color:var(--active-border);}
+</style>
+</head>
+<body>
+
+<header class="page-head">
+  <div class="brand">
+    <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.66 3.58 3 8 3s8-1.34 8-3v-13"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg></div>
+    <div>
+      <h1>⑤ 能力 / 驱动属性 Tab</h1>
+      <div class="sub">tab-capability-props · 单一数据源（drivers 表）—— <span class="st st-impl">已实现</span></div>
+    </div>
+  </div>
+  <div class="head-actions">
+    <a class="back-link" href="index.html">← 总览</a>
+    <button class="theme-toggle" data-theme-toggle>🌙 暗色</button>
+  </div>
+</header>
+
+<div style="max-width:920px;margin:0 auto;display:flex;flex-direction:column;gap:14px;">
+
+  <!-- 能力 Tab -->
+  <div class="card">
+    <div class="card-head"><h2>🧩 能力（只读）</h2><span class="desc">mysql_native · 来自 drivers.capabilities 能力掩码</span>
+      <div class="right"><span class="chip">选不同驱动实现 → 掩码差异即时反映</span></div>
+    </div>
+    <div class="card-body">
+      <div class="cap-grid">
+        <div class="cap"><span class="c-name">查询执行</span><span class="c-v yes">✔</span></div>
+        <div class="cap"><span class="c-name">事务</span><span class="c-v yes">✔</span></div>
+        <div class="cap"><span class="c-name">批量写入</span><span class="c-v yes">✔</span></div>
+        <div class="cap"><span class="c-name">目录内省</span><span class="c-v yes">✔</span></div>
+        <div class="cap"><span class="c-name">采样</span><span class="c-v yes">✔</span></div>
+        <div class="cap"><span class="c-name">SSL / TLS</span><span class="c-v yes">✔</span></div>
+        <div class="cap"><span class="c-name">SSH 隧道</span><span class="c-v yes">✔</span></div>
+        <div class="cap"><span class="c-name">取消语句</span><span class="c-v no">—</span></div>
+        <div class="cap"><span class="c-name">保存点</span><span class="c-v no">—</span></div>
+        <div class="cap"><span class="c-name">存储过程</span><span class="c-v no">—</span></div>
+        <div class="cap"><span class="c-name">异步流式</span><span class="c-v no">—</span></div>
+        <div class="cap"><span class="c-name">行级变更回调</span><span class="c-v no">—</span></div>
+      </div>
+      <div class="note info" style="margin-top:10px;">能力矩阵在历史版本曾是 UI 硬编码（§15 审计的「UI 自造数据」之一），已改为唯一来源 <code>drivers.capabilities</code>；驱动切换时能力差异即时反映，元数据缓存命中时按能力掩码校验（对象覆盖面）。</div>
+    </div>
+  </div>
+
+  <!-- 驱动属性 Tab -->
+  <div class="card">
+    <div class="card-head"><h2>🔑 驱动属性（透传）</h2><span class="desc">键值对 → driver_properties · 不做键白名单校验（驱动侧解释）</span></div>
+    <div class="card-body">
+      <div class="prop-row"><input class="inp mono" value="connect_timeout"><input class="inp mono" value="10"><button class="btn sm danger">删除</button></div>
+      <div class="prop-row"><input class="inp mono" value="charset"><input class="inp mono" value="utf8mb4"><button class="btn sm danger">删除</button></div>
+      <div class="prop-row"><input class="inp mono" value="identity_salt"><input class="inp mono" value="（该连接缓存独立 · #19 反例兜底）"><button class="btn sm danger">删除</button></div>
+      <div class="kv-add">＋ 添加属性（键 / 值）</div>
+      <div class="note info" style="margin-top:9px;">测试连接与真实连接同源应用（<code>build_probe_config</code> 尾段）；文件型连接的 <code>mode=ro</code> 等只读开关也走此处。ElementId 命名空间 <code>prop-del-{key}</code>（#17）。</div>
+    </div>
+  </div>
+</div>
+
+<footer class="page-foot">
+  <b>对照</b>：<code>helpers/capability.rs</code>（能力解析 12 键）+ <code>render.rs</code> 两 Tab 段。驱动属性为「透传」语义：键拼写错误不会在保存时报错，仅在测试连接时由驱动侧反馈——原型如实呈现该边界。
+  · <a href="index.html">返回总览</a> · 下一组：<a href="manager-auth.html">密码管理 →</a>
+</footer>
+
+</body>
+</html>

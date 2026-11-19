@@ -72,13 +72,17 @@ pub struct SqlExecuteOptions {
     /// 由**执行器**填（编辑器队列从 `ExecTarget::lineage()` 取来）；引擎不解释它，
     /// 只随历史落库。不填 = 老调用方没给（历史里不出现，不编一个）。
     pub lineage: Option<String>,
-    /// 【T2c-1】本次执行的 schema 上下文（`None` = 未选 → 用连接默认 schema）
-    ///
+    /// 【T2c-1】本次执行的 schema 上下文（`None` = 未选 → 用连接默认 schema）    ///
     /// 由**执行器**填（它从文档绑定取；编辑器侧 `EditorShared` 在提交时从服务层拷出）。
     /// 引擎在执行用户语句**前**、在同一连接上应用方言对应的会话上下文（PG `SET search_path`
     /// / MySQL `USE` / DuckDB `USE`；SQLite 无此概念）——这样未限定表名才真的落到所选
     /// schema。上下文语句是**管道**不是用户意图：不进历史、不记缓存。
     pub schema: Option<String>,
+    /// 【环境策略】用户已对本次写操作明确点过确认（原型 ⑨：DML 需确认）
+    ///
+    /// 由 UI 在确认弹窗点「执行」后置真；不置真时引擎只**兜底拒绝**（`ENV_POLICY_DML_CONFIRM`），
+    /// 不让“绕过 UI 的调用方”静默写生产库。
+    pub dml_confirmed: bool,
 }
 
 /// 把一条查询套成**窗口**（`LIMIT n OFFSET m`）——分段抓取的取数方式
@@ -472,11 +476,36 @@ impl SqlService {
                     // T2c-1：后续段必须落在**同一 schema**（首段是在这个 schema 上下文里取的）
                     schema,
                     lineage: None,
+                    dml_confirmed: false,
                 },
             )
             .await;
         // 同上：分段执行也不能把包装掉包给用户看
         unwrap_segment_error(result, sql, &window)
+    }
+
+    /// 这条语句在这条连接上是否需要「写确认」；`None` = 不需要。
+    ///
+    /// 编辑器在**提交前**问这一句（提交动作在 UI 线程，策略解算有 5 秒进程缓存，
+    /// 只有第一次读库）：需要确认就弹窗，用户点头后再带 `dml_confirmed` 提交。
+    /// 这里不执行任何语句，也不改策略缓存。
+    pub async fn dml_confirm_for(
+        &self,
+        conn_id: Option<&str>,
+        sql: &str,
+    ) -> Option<crate::services::policy_guard::DmlConfirm> {
+        let conn_key = match conn_id {
+            Some(id) => id.to_string(),
+            None => DEFAULT_CONN_KEY.to_string(),
+        };
+        let info = self.manager.get_connection_info(&conn_key).await;
+        let policies = crate::services::policy_guard::resolve_for_connection(
+            info.as_ref().and_then(|i| i.environment_id.as_deref()),
+            info.as_ref().and_then(|i| i.advanced_options.as_deref()),
+        )
+        .await;
+        let (stmt_type, _) = SqlEngine::parse_and_route(sql, SqlDialect::Ansi);
+        crate::services::policy_guard::DmlConfirm::for_statement(&policies, &stmt_type, sql)
     }
 
     /// 执行 SQL 查询
@@ -518,6 +547,89 @@ impl SqlService {
             (is_ddl, is_dml, is_dql)
         };
 
+        // ---- 环境策略：执行前拦截（原型 ⑨ 执行语义矩阵 · 只读 / DDL 阻断）----
+        // 策略按**每次执行**解析（连接未绑定环境 = 显式无策略，不放行也不误伤）。
+        // 拦截发生在语句分类之后、缓存与下发之前：被拦的写语句不会命中缓存，也不会动库。
+        let conn_key = match conn_id.clone() {
+            Some(id) => id,
+            None => DEFAULT_CONN_KEY.to_string(),
+        };
+        let info = self.manager.get_connection_info(&conn_key).await;
+        let policies = crate::services::policy_guard::resolve_for_connection(
+            info.as_ref().and_then(|i| i.environment_id.as_deref()),
+            info.as_ref().and_then(|i| i.advanced_options.as_deref()),
+        )
+        .await;
+        if let Err(err) = policies.check_statement(&stmt_type, sql) {
+            // 审计：被策略拦下的语句也要留痕（原型 ⑨「审计」不是只记成功的）
+            if policies.audit {
+                crate::services::policy_guard::audit_sql(
+                    &conn_key,
+                    policies.environment.as_deref(),
+                    sql,
+                    "denied",
+                    None,
+                );
+            }
+            if options.record_history {
+                self.record_history(
+                    conn_id.as_deref(),
+                    &conn_key,
+                    sql,
+                    start_time.elapsed().as_millis() as u64,
+                    Some(err.to_string()),
+                    None,
+                    None,
+                    options.channel.as_deref(),
+                    options.lineage.as_deref(),
+                )
+                .await;
+            }
+            return Err(err);
+        }
+        // ---- 环境策略：写确认兜底（原型 ⑨ 执行语义矩阵 · DML 需确认）----
+        // 正常路径由编辑器在提交前弹窗并把 `dml_confirmed = true` 带下来；这里拦的是
+        // **绕过 UI 的调用方**（脚本 / 内部入口）——不能让它们静默写生产库。
+        if policies.dml_needs_confirm(&stmt_type) && !options.dml_confirmed {
+            if policies.audit {
+                crate::services::policy_guard::audit_sql(
+                    &conn_key,
+                    policies.environment.as_deref(),
+                    sql,
+                    "confirm_required",
+                    None,
+                );
+            }
+            if options.record_history {
+                self.record_history(
+                    conn_id.as_deref(),
+                    &conn_key,
+                    sql,
+                    start_time.elapsed().as_millis() as u64,
+                    Some("写操作待确认".to_string()),
+                    None,
+                    None,
+                    options.channel.as_deref(),
+                    options.lineage.as_deref(),
+                )
+                .await;
+            }
+            let env = policies.environment.as_deref().unwrap_or("?");
+            return Err(crate::services::policy_guard::dml_confirm_error(env, sql));
+        }
+        // 环境超时：调用方显式给的优先，没给才用环境值（原型 Tab2「环境值 > 全局」）。
+        let effective_timeout = policies.timeout_or(options.timeout_ms);
+        // 审计：放行的语句同样留痕（关闭审计时零开销）
+        if policies.audit {
+            crate::services::policy_guard::audit_sql(
+                &conn_key,
+                policies.environment.as_deref(),
+                sql,
+                "allowed",
+                None,
+            );
+        }
+
         // 获取查询缓存
         let query_cache = get_query_cache();
 
@@ -540,11 +652,6 @@ impl SqlService {
 
         // 获取数据库连接
         let db = self.get_database(conn_id.clone()).await?;
-
-        let conn_key = match conn_id.clone() {
-            Some(id) => id,
-            None => DEFAULT_CONN_KEY.to_string(),
-        };
 
         // ---- T2c-1：schema 会话上下文 ----
         // 切 schema 真影响执行：执行用户语句**前**、在**同一连接**上应用所选 schema 的
@@ -636,13 +743,13 @@ impl SqlService {
             // `tokio::time::timeout` 兜——到点放弃等待并**断开重连**该物理连接（连接一断，
             // 服务端会中止还在跑的语句），事务随之整个回滚。半途的事务无法续用（丢了这条
             // 语句的上下文），如实报「事务已回滚」比假装能继续诚实。
-            match query_in_transaction_bounded(&self.manager, &tx_key, sql, options.timeout_ms)
+            match query_in_transaction_bounded(&self.manager, &tx_key, sql, effective_timeout)
                 .await
             {
                 TransactionBounded::Done(result) => result,
                 // 竞态兜底：刚判过还有、这会儿被别处提交/回滚了 → 回落普通路径
                 TransactionBounded::NoTransaction => {
-                    run_plain(&self.manager, &db, sql, options.timeout_ms, &conn_key).await
+                    run_plain(&self.manager, &db, sql, effective_timeout, &conn_key).await
                 }
                 TransactionBounded::TimedOut(timeout_ms) => {
                     tracing::warn!(
@@ -681,7 +788,7 @@ impl SqlService {
                 // 上下文真落上了才记（解绑发的恢复语句同样记：记为「默认」）
                 self.remember_schema(&tx_key, desired_schema);
             }
-            run_plain(&self.manager, &db, sql, options.timeout_ms, &conn_key).await
+            run_plain(&self.manager, &db, sql, effective_timeout, &conn_key).await
         };
 
         // 失败留痕：v1 只在成功时写历史，失败查询在历史里不可见（排障时无法回溯）
@@ -706,8 +813,8 @@ impl SqlService {
             }
         };
 
-        // 应用行数限制，防止内存溢出
-        let truncated = result.truncate(MAX_QUERY_ROWS) > 0;
+        // 应用行数限制，防止内存溢出：全局上限与**环境行数策略**取小（原型 Tab2 行数上限）
+        let truncated = result.truncate(policies.row_cap(MAX_QUERY_ROWS)) > 0;
 
         // 将结果存入缓存（仅当启用缓存、非事务操作、且为 SELECT 查询时）
         if options.use_cache && !options.use_transaction && is_dql {
