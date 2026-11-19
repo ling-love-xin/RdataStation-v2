@@ -7,7 +7,8 @@
 //! ## 取舍
 //!
 //! - **多语句脚本**：走 `super::script::rewrite_statements`（切分 → 逐条格式化 → 原位回填），
-//!   语句之间以 `;\n\n` 拉开；**一条没写完不影响其它条**。
+//!   语句之间以 `;\n\n` 拉开（空行数可配，[`FormatOptions::blank_lines_between`]）；
+//!   **一条没写完不影响其它条**。
 //! - **解析失败原样返回**：编辑中的文本（未写完）不能因为格式化成坏内容，也不报错。
 //! - **注释**：只有**语句前**的注释能通过解析——实测（`crates/engine/tests/sqlglot_capabilities.rs` 的
 //!   「块注释位置与可解析性」）行内 / 尾随注释会让整条语句解析失败，而解析失败即**原样返回**，
@@ -23,7 +24,7 @@ use sqlglot_rust::{Dialect, generate_pretty, parse_statements_with_comments};
 
 use super::engine::SqlDialect;
 use super::highlight::{TokenClass, highlight_spans};
-use super::rewrite::rewrite_statements;
+use super::rewrite::rewrite_statements_with_gap;
 
 /// 格式化选项（sqlglot pretty 输出固定，这些选项靠安全后处理实现）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,15 +43,43 @@ impl Default for KeywordCase {
     }
 }
 
+/// 缩进字符（sqlglot pretty 固定空格缩进，Tab 靠行首重排实现）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum IndentChar {
+    /// 空格缩进（默认；配合 [`FormatOptions::indent_width`]）
+    #[default]
+    Space,
+    /// Tab 缩进（每级一个 `\t`，宽度档不参与）
+    Tab,
+}
+
+/// 逗号风格（sqlglot pretty 固定尾随逗号，前导靠行级迁移实现）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CommaStyle {
+    /// 尾随逗号（默认，sqlglot 原生：`col1,\n  col2`）
+    #[default]
+    Trailing,
+    /// 前导逗号（`col1\n  , col2`；只迁移**行尾**逗号，行内 / 字符串 / 注释内逗号不动）
+    Leading,
+}
+
 /// SQL 格式化选项
 ///
-/// `indent_width` 是缩进空格数（sqlglot pretty 固定 2 空格，这里按配置重排行首缩进）。
+/// - `indent_char` / `indent_width`：缩进字符与宽度（`Tab` 模式下每级一个 `\t`，宽度不参与）
+/// - `comma_style`：SELECT 项列表的逗号风格（尾随 = sqlglot 原生）
+/// - `blank_lines_between`：语句之间的空行数（0 = 语句紧挨；1 = 默认 `;\n\n`）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FormatOptions {
     /// 关键字大小写
     pub keyword_case: KeywordCase,
-    /// 缩进宽度（空格数；2 = sqlglot 原生）
+    /// 缩进宽度（空格数；2 = sqlglot 原生；`indent_char = Tab` 时不参与）
     pub indent_width: u8,
+    /// 缩进字符（空格 / Tab）
+    pub indent_char: IndentChar,
+    /// 逗号风格（尾随 / 前导）
+    pub comma_style: CommaStyle,
+    /// 语句之间空行数（0 / 1 / 2）
+    pub blank_lines_between: u8,
 }
 
 impl Default for FormatOptions {
@@ -58,6 +87,9 @@ impl Default for FormatOptions {
         Self {
             keyword_case: KeywordCase::Preserve,
             indent_width: 2,
+            indent_char: IndentChar::Space,
+            comma_style: CommaStyle::Trailing,
+            blank_lines_between: 1,
         }
     }
 }
@@ -85,7 +117,9 @@ pub struct FormatReport {
 ///   格式化再**回填原位**：区间外的内容（注释、空行、没写完的那句）一个字节都不动。
 pub fn format_with_report(sql: &str, dialect: SqlDialect, options: FormatOptions) -> FormatReport {
     let inner = to_inner_dialect(dialect);
-    let rewritten = rewrite_statements(sql, |body| format_single(body, inner, options));
+    let rewritten = rewrite_statements_with_gap(sql, options.blank_lines_between, |body| {
+        format_single(body, inner, options)
+    });
     FormatReport {
         text: rewritten.text,
         formatted: rewritten.rewritten,
@@ -107,21 +141,33 @@ fn format_single(body: &str, dialect: Dialect, options: FormatOptions) -> Option
     if bodies.is_empty() {
         return None;
     }
-    let joined = bodies.join(";\n\n");
+    // 语句分隔：`;` + (空行数 + 1) 个换行（1 个空行 = `;\n\n`，与 gap 口径一致）
+    let separator = format!(";{}", "\n".repeat(options.blank_lines_between as usize + 1));
+    let joined = bodies.join(&separator);
     Some(apply_options(&joined, options))
 }
 
 /// 对**已格式化**的语句文本应用选项（字符串 / 注释区间不碰）
 ///
-/// sqlglot pretty 输出固定（2 空格缩进、无大小写选项），选项在这里安全后处理：
+/// sqlglot pretty 输出固定（2 空格缩进、无大小写选项），选项在这里安全后处理。
+/// 阶段顺序有讲究：**改写长度的步骤放最后**，它之前的步骤共用同一份词法区间——
 ///
-/// - **关键字大小写**：复用高亮词法器（[`highlight_spans`]），只改写
-///   `TokenClass::Keyword` 区间。标识符 / 字符串 / 注释天然排除（TokenType 语义判定，
-///   不是文本猜测）——`select 'select'` 里的字符串不会被改。
-/// - **缩进宽度**：只重排**行首**缩进（pretty 缩进都在行首、2 空格倍数）；行首落在
-///   字符串 / 注释区间内的行不碰（多行字符串里的缩进是内容，不是排版）。
+/// 1. **关键字大小写**（同长 ASCII 改写，区间偏移不动）：复用高亮词法器
+///    （[`highlight_spans`]），只改写 `TokenClass::Keyword` 区间。标识符 / 字符串 /
+///    注释天然排除（TokenType 语义判定，不是文本猜测）——`select 'select'` 里的
+///    字符串不会被改。
+/// 2. **逗号前导迁移**（长度会变，但在缩进重排前）：只认**行尾** `,` 且不在字符串 /
+///    注释保护区间内——行内逗号（GROUP BY 单行列表）、多行字符串里的 `,\n`、
+///    行尾注释里的逗号一律不动。
+/// 3. **缩进重排**（Tab 或宽度）：只重排**行首**缩进（pretty 缩进都在行首、2 空格
+///    倍数）；行首落在字符串 / 注释区间内的行不碰（多行字符串里的缩进是内容）。
+///    第 2 步已改变偏移，保护区间在这一步**重算**。
 fn apply_options(text: &str, options: FormatOptions) -> String {
-    if options.keyword_case == KeywordCase::Preserve && options.indent_width == 2 {
+    let untouched = options.keyword_case == KeywordCase::Preserve
+        && options.indent_char == IndentChar::Space
+        && options.indent_width == 2
+        && options.comma_style == CommaStyle::Trailing;
+    if untouched {
         return text.to_string();
     }
     let spans = highlight_spans(text);
@@ -152,8 +198,23 @@ fn apply_options(text: &str, options: FormatOptions) -> String {
         }
     }
 
-    // 2) 缩进宽度（逐行处理行首空格）
-    if options.indent_width != 2 {
+    // 2) 逗号前导迁移（第 1 步同长，`protected` 偏移仍然有效）
+    if options.comma_style == CommaStyle::Leading {
+        out = migrate_trailing_commas(&out, &protected);
+    }
+
+    // 3) 缩进重排（Tab 每级一个 \t；空格按宽度。第 2 步之后偏移已变，保护区间重算）
+    let tab_indent = options.indent_char == IndentChar::Tab;
+    if tab_indent || options.indent_width != 2 {
+        let protected_now: Vec<Range<usize>> = if options.comma_style == CommaStyle::Leading {
+            highlight_spans(&out)
+                .iter()
+                .filter(|s| matches!(s.class, TokenClass::String | TokenClass::Comment))
+                .map(|s| s.start..s.end)
+                .collect()
+        } else {
+            protected
+        };
         let width = (options.indent_width.max(1)) as usize;
         let mut out2 = String::with_capacity(out.len());
         let mut offset = 0usize;
@@ -162,11 +223,15 @@ fn apply_options(text: &str, options: FormatOptions) -> String {
             offset += line.len();
             let stripped = line.trim_start_matches(' ');
             let indent_bytes = line.len() - stripped.len();
-            let in_protected = protected
+            let in_protected = protected_now
                 .iter()
                 .any(|r| r.start <= line_start && line_start < r.end);
             if indent_bytes >= 2 && indent_bytes % 2 == 0 && !in_protected {
-                out2.push_str(&" ".repeat(indent_bytes / 2 * width));
+                let level = indent_bytes / 2;
+                match options.indent_char {
+                    IndentChar::Tab => out2.push_str(&"\t".repeat(level)),
+                    IndentChar::Space => out2.push_str(&" ".repeat(level * width)),
+                }
                 out2.push_str(stripped);
             } else {
                 out2.push_str(line);
@@ -175,6 +240,68 @@ fn apply_options(text: &str, options: FormatOptions) -> String {
         out = out2;
     }
 
+    out
+}
+
+/// 尾随逗号 → 前导逗号（行级迁移；`protected` 是**与 `text` 同一偏移**的区间表）
+///
+/// pretty 输出的形状是「每个 SELECT 项一行、行尾带 `,`」；前导风格把逗号挪到下一行
+/// 第一个非空白字符前（`  col1\n  , col2`）。只认**行尾** `,` 且不在保护区间内：
+/// 行内逗号（GROUP BY 单行列表）、多行字符串里的 `,\n`（行尾逗号在字符串区间内）、
+/// 行尾注释里的逗号（同理在注释区间内）一律不动。末行 / 下一行为空的行尾逗号不迁（防御）。
+fn migrate_trailing_commas(text: &str, protected: &[Range<usize>]) -> String {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    // 先按**原偏移**逐行判定（判定互不影响），再统一重建
+    let mut migrate = vec![false; lines.len()];
+    let mut offset = 0usize;
+    for i in 0..lines.len() {
+        let line = lines[i];
+        let line_start = offset;
+        offset += line.len();
+        if i + 1 >= lines.len() {
+            continue; // 末行无处可迁
+        }
+        let body_end = line.trim_end_matches(['\n', '\r']).len();
+        let trimmed = line[..body_end].trim_end();
+        let Some(comma_offset) = trimmed.len().checked_sub(1) else {
+            continue;
+        };
+        if !trimmed.ends_with(',') {
+            continue;
+        }
+        let comma_at = line_start + comma_offset;
+        if protected.iter().any(|r| r.contains(&comma_at)) {
+            continue;
+        }
+        if lines[i + 1].trim().is_empty() {
+            continue;
+        }
+        migrate[i] = true;
+    }
+    if !migrate.iter().any(|&m| m) {
+        return text.to_string();
+    }
+
+    let mut out = String::with_capacity(text.len());
+    for (i, line) in lines.iter().enumerate() {
+        let mut owned = line.to_string();
+        if migrate[i] {
+            // 摘掉行尾逗号（连同逗号之后的空白；换行保留）
+            let body_end = owned.trim_end_matches(['\n', '\r']).len();
+            let trimmed_end = owned[..body_end].trim_end().len();
+            let comma_idx = trimmed_end - 1;
+            let newline_suffix = owned.split_off(body_end); // `\n`（或空）
+            owned.truncate(comma_idx);
+            owned.push_str(&newline_suffix);
+        }
+        if i > 0 && migrate[i - 1] {
+            // 在第一个非空白字符前插 `, `（紧跟缩进之后；逗号后留一个空格，读感对齐 DataGrip 前导风格）
+            if let Some(pos) = owned.find(|ch: char| !ch.is_whitespace()) {
+                owned.insert_str(pos, ", ");
+            }
+        }
+        out.push_str(&owned);
+    }
     out
 }
 
@@ -336,6 +463,7 @@ mod tests {
             FormatOptions {
                 keyword_case: KeywordCase::Uppercase,
                 indent_width: 2,
+                ..FormatOptions::default()
             },
         );
         let text = &upper.text;
@@ -355,6 +483,7 @@ mod tests {
             FormatOptions {
                 keyword_case: KeywordCase::Lowercase,
                 indent_width: 2,
+                ..FormatOptions::default()
             },
         );
         let text = &lower.text;
@@ -373,6 +502,7 @@ mod tests {
             FormatOptions {
                 keyword_case: KeywordCase::Preserve,
                 indent_width: 4,
+                ..FormatOptions::default()
             },
         );
         let text = &wide.text;
@@ -393,6 +523,7 @@ mod tests {
             FormatOptions {
                 keyword_case: KeywordCase::Preserve,
                 indent_width: 4,
+                ..FormatOptions::default()
             },
         );
         assert!(
@@ -411,6 +542,7 @@ mod tests {
             FormatOptions {
                 keyword_case: KeywordCase::Uppercase,
                 indent_width: 4,
+                ..FormatOptions::default()
             },
         );
         assert!(
@@ -444,5 +576,122 @@ mod tests {
         .text;
         let twice = format_with_report(&once, SqlDialect::Ansi, FormatOptions::default()).text;
         assert_eq!(once, twice, "格式化应当是幂等的");
+    }
+
+    /// 【格式化设置页】前导逗号：行尾逗号迁到下一行内容前，结果可再解析且幂等
+    #[test]
+    fn leading_commas_move_to_next_line_and_reparse() {
+        let leading = FormatOptions {
+            comma_style: CommaStyle::Leading,
+            ..FormatOptions::default()
+        };
+        let report = format_with_report("select a, b from t", SqlDialect::Ansi, leading);
+        let text = &report.text;
+        // 逗号挪到下一行内容前：`a\n  , b`（不再有行尾逗号）
+        assert!(text.contains("a\n  , b"), "{text:?}");
+        assert!(!text.contains(",\n  b"), "行尾逗号应已迁移：{text:?}");
+        assert!(
+            parse_many(text, Dialect::Ansi).is_ok(),
+            "前导逗号结果必须能再次解析：{text}"
+        );
+        // 幂等：前导逗号文本再格式化（parse → 重新生成尾随 → 再迁移）结果一致
+        let twice = format_with_report(text, SqlDialect::Ansi, leading).text;
+        assert_eq!(&twice, text, "前导逗号格式化应当是幂等的");
+    }
+
+    /// 【格式化设置页】前导逗号只迁**行尾**逗号：多行字符串里的 `,\n` 不碰
+    #[test]
+    fn leading_commas_never_touch_multiline_strings() {
+        let leading = FormatOptions {
+            comma_style: CommaStyle::Leading,
+            ..FormatOptions::default()
+        };
+        // 字符串内部有 `,` + 换行：行 1 `'a,` 的行尾逗号在字符串区间内，不能迁
+        let report = format_with_report(
+            "select 'a,\nb' as v, c from t",
+            SqlDialect::Ansi,
+            leading,
+        );
+        let text = &report.text;
+        assert!(text.contains("'a,\nb'"), "多行字符串内容原样：{text:?}");
+        assert!(
+            !text.contains("\n,b'"),
+            "字符串内的逗号不能被迁到下一行前：{text:?}"
+        );
+        // 字符串**外**的分隔逗号（`AS v` 行尾）照常迁移
+        assert!(text.contains("v\n  , c"), "字符串外的逗号应迁移：{text:?}");
+    }
+
+    /// 【格式化设置页】语句间空行数可配：0 = 紧挨，2 = 两个空行
+    #[test]
+    fn blank_lines_between_statements_is_configurable() {
+        let compact = format_with_report(
+            "select 1; select 2;",
+            SqlDialect::Ansi,
+            FormatOptions {
+                blank_lines_between: 0,
+                ..FormatOptions::default()
+            },
+        )
+        .text;
+        assert!(compact.contains(";\nSELECT"), "0 空行应紧挨：{compact:?}");
+        assert!(!compact.contains(";\n\n"), "不应有空行：{compact:?}");
+
+        let airy = format_with_report(
+            "select 1; select 2;",
+            SqlDialect::Ansi,
+            FormatOptions {
+                blank_lines_between: 2,
+                ..FormatOptions::default()
+            },
+        )
+        .text;
+        assert!(
+            airy.contains(";\n\n\nSELECT"),
+            "2 空行应拉开三个换行：{airy:?}"
+        );
+    }
+
+    /// 【格式化设置页】Tab 缩进：每级一个 `\t`，不再输出空格缩进
+    #[test]
+    fn tab_indent_uses_one_tab_per_level() {
+        let tabbed = format_with_report(
+            "select a from t where x = (select y from u)",
+            SqlDialect::Ansi,
+            FormatOptions {
+                indent_char: IndentChar::Tab,
+                ..FormatOptions::default()
+            },
+        );
+        let text = &tabbed.text;
+        // 子查询至少到第二级：出现 `\n\t\t`
+        assert!(text.contains("\n\t\t"), "应有二级 Tab 缩进：{text:?}");
+        assert!(
+            text.lines().all(|line| {
+                let indent = &line[..line.len() - line.trim_start_matches('\t').len()];
+                indent.chars().all(|ch| ch == '\t')
+            }),
+            "缩进只允许 Tab（不允许空格缩进行）：{text:?}"
+        );
+    }
+
+    /// 【格式化设置页】全旋钮组合：大写 + 前导逗号 + Tab，仍可再解析且幂等
+    #[test]
+    fn combined_options_still_reparse_and_idempotent() {
+        let options = FormatOptions {
+            keyword_case: KeywordCase::Uppercase,
+            indent_width: 4,
+            indent_char: IndentChar::Tab,
+            comma_style: CommaStyle::Leading,
+            blank_lines_between: 0,
+        };
+        let once = format_with_report("select a, b from t; select c", SqlDialect::Ansi, options);
+        assert!(
+            parse_many(&once.text, Dialect::Ansi).is_ok(),
+            "组合结果必须能再次解析：{}",
+            once.text
+        );
+        let twice = format_with_report(&once.text, SqlDialect::Ansi, options);
+        assert_eq!(once.text, twice.text, "组合选项应当幂等");
     }
 }

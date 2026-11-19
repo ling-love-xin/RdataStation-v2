@@ -13,8 +13,10 @@
 //! 2. 逐条交给调用方的改写函数（拿不到结果就**原样保留**并计数，不静默丢）；
 //! 3. 回填原位——区间之外的注释 / 空行 / 没写完的那半句**一个字节都不动**。
 //!
-//! 语句之间的**空白**会被规整为「`;` + 两个换行」（读感，DBeaver 也这么做）；
-//! 但只要那一段里含注释或其它内容，就**原样保留**（注释归用户，不归我们）。
+//! 语句之间的**空白**会被规整为「`;` + 两个换行」（读感，DBeaver 也这么做；
+//! 格式化按 [`FormatOptions::blank_lines_between`](super::formatter::FormatOptions::blank_lines_between)
+//! 配置空行数，走 [`rewrite_statements_with_gap`]）；但只要那一段里含注释或其它内容，
+//! 就**原样保留**（注释归用户，不归我们）。
 
 use super::split::split_statements;
 
@@ -30,12 +32,21 @@ pub struct ScriptRewrite {
     pub kept_verbatim: usize,
 }
 
-/// 逐条改写脚本
+/// 逐条改写脚本（语句间空行数 = 1，即 `;\n\n`；方言转译等默认场景用这个）
 ///
 /// `rewrite` 收一条语句的原文，返回改写后的文本；返回 `None` 表示这一条改写不了
 /// （解析失败 / 未写完），调用方（这里）会把它逐字保留。
 pub fn rewrite_statements(
     sql: &str,
+    rewrite: impl FnMut(&str) -> Option<String>,
+) -> ScriptRewrite {
+    rewrite_statements_with_gap(sql, 1, rewrite)
+}
+
+/// 逐条改写脚本，语句间空行数可配（0 = 语句紧挨 `;\n`；N = `;` + (N+1) 个换行）
+pub fn rewrite_statements_with_gap(
+    sql: &str,
+    blank_lines: u8,
     mut rewrite: impl FnMut(&str) -> Option<String>,
 ) -> ScriptRewrite {
     let spans = split_statements(sql);
@@ -46,6 +57,7 @@ pub fn rewrite_statements(
             kept_verbatim: 0,
         };
     }
+    let separator = format!(";{}", "\n".repeat(blank_lines as usize + 1));
 
     let mut out = String::with_capacity(sql.len() + sql.len() / 8);
     let mut cursor = 0usize;
@@ -58,7 +70,7 @@ pub fn rewrite_statements(
         }
         // 语句之间的内容：注释与空行都在这里
         let gap = &sql[cursor..span.start];
-        out.push_str(&normalize_gap(gap, index == 0));
+        out.push_str(&normalize_gap(gap, index == 0, &separator));
 
         let body = span.text(sql);
         match rewrite(body) {
@@ -83,8 +95,9 @@ pub fn rewrite_statements(
     }
 }
 
-/// 语句之间的空白：只有空白与分号时规整成 `;\n\n`；含注释或其它内容就原样保留
-fn normalize_gap(gap: &str, is_first: bool) -> String {
+/// 语句之间的空白：只有空白与分号时规整成 `separator`（默认 `;\n\n`）；
+/// 含注释或其它内容就原样保留
+fn normalize_gap(gap: &str, is_first: bool, separator: &str) -> String {
     // 分号属于 gap（语句区间不含尾分号），所以“只有空白 + 分号”才是可规整的形状
     let only_separators = gap.chars().all(|ch| ch.is_whitespace() || ch == ';');
     if only_separators {
@@ -92,7 +105,7 @@ fn normalize_gap(gap: &str, is_first: bool) -> String {
             // 开头到第一条语句之间：只留空白（不凭空插换行）
             return String::new();
         }
-        return ";\n\n".to_string();
+        return separator.to_string();
     }
     // 含注释：原样（注释归用户）
     gap.to_string()
@@ -153,5 +166,17 @@ mod tests {
         let out = rewrite_statements("   \n", |body| Some(body.to_uppercase()));
         assert_eq!(out.text, "   \n");
         assert_eq!(out.rewritten, 0);
+    }
+
+    #[test]
+    fn gap_is_configurable() {
+        use super::rewrite_statements_with_gap;
+        // 0 空行：`;` + 单换行
+        let compact = rewrite_statements_with_gap("select 1; select 2;", 0, |body| Some(body.to_string()));
+        assert!(compact.text.contains(";\nselect"), "{:?}", compact.text);
+        assert!(!compact.text.contains(";\n\n"), "{:?}", compact.text);
+        // 2 空行：`;` + 三个换行
+        let airy = rewrite_statements_with_gap("select 1; select 2;", 2, |body| Some(body.to_string()));
+        assert!(airy.text.contains(";\n\n\nselect"), "{:?}", airy.text);
     }
 }

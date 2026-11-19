@@ -22,6 +22,40 @@ use std::ops::Range;
 
 use engine::sql::{FormatOptions, SqlDialect, SqlEngine, split_statements};
 
+/// 【格式化设置页】`SqlFormat` 落盘值 → [`FormatOptions`]（纯函数；设置异常回退
+/// sqlglot 原生，不猜：未知档位 → 原样/空格/尾随，越界数值 → 夹回档位区间）。
+///
+/// 两个消费方共用同一份口径：编辑器格式化（Ctrl+Shift+F / 保存时格式化，经
+/// `view/host/format.rs::format_options`）与设置页实时预览（app 装配经
+/// `settings::install_sql_format_preview` 注入）——改映射只动这里，两边永远一致。
+pub fn options_from_settings(prefs: &settings::model::SqlFormat) -> FormatOptions {
+    use engine::sql::{CommaStyle, IndentChar, KeywordCase};
+    FormatOptions {
+        keyword_case: match prefs.keyword_case.as_str() {
+            "upper" => KeywordCase::Uppercase,
+            "lower" => KeywordCase::Lowercase,
+            _ => KeywordCase::Preserve,
+        },
+        indent_char: if prefs.indent_char == "tab" {
+            IndentChar::Tab
+        } else {
+            IndentChar::Space
+        },
+        indent_width: prefs.indent_width.clamp(2, 8) as u8,
+        comma_style: if prefs.comma_style == "leading" {
+            CommaStyle::Leading
+        } else {
+            CommaStyle::Trailing
+        },
+        blank_lines_between: prefs.blank_lines_between.clamp(0, 2) as u8,
+    }
+}
+
+/// 【格式化设置页】实时预览的固定示例（刻意覆盖全部旋钮的可见效果：多列 SELECT
+/// 换行见逗号风格与缩进、JOIN/WHERE 见子句排版、字符串字面量见「内容不动」、
+/// 两条语句见空行数）。按 ANSI 方言格式化（预览卡标题注明实际跟随绑定连接）。
+pub const PREVIEW_SAMPLE_SQL: &str = "select u.id, u.name, o.total from users u join orders o on o.user_id = u.id where o.status = 'paid'; select count(*) from users";
+
 /// 一次格式化要做的全部事情（纯计算，不碰窗口）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FormatPlan {

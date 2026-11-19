@@ -55,9 +55,54 @@ pub fn settings_path() -> PathBuf {
 /// 从指定路径加载设置；文件不存在或解析失败时回退默认值（**不覆盖**坏文件）。
 pub fn load_settings_from(path: &std::path::Path) -> Settings {
     match std::fs::read_to_string(path) {
-        Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
+        Ok(text) => {
+            let migrated = migrate_editor_format_keys(&text);
+            serde_json::from_str(&migrated).unwrap_or_default()
+        }
         Err(_) => Settings::default(),
     }
+}
+
+/// 【2026-11-19】旧 `editor.format_*` 三键 → `sql_format.*` 迁移（JSON 级预变换）。
+///
+/// SQL 格式化设置自 editor 域迁出成独立节（模型字段随迁）；用户已存的值不能静默
+/// 丢成默认。只做**搬移**：旧键存在且新键缺失时才搬，搬完删旧键；两边都有时以
+/// 新键为准（用户此后又改过新键的场景）。非对象 / 缺 editor 的 JSON 原样返回。
+fn migrate_editor_format_keys(text: &str) -> String {
+    let Ok(mut root) = serde_json::from_str::<serde_json::Value>(text) else {
+        return text.to_string();
+    };
+    const LEGACY: [(&str, &str); 3] = [
+        ("format_keyword_case", "keyword_case"),
+        ("format_indent_width", "indent_width"),
+        ("format_on_save", "format_on_save"),
+    ];
+    // 先取出旧值（`editor` 的可变借用在这块结束时释放），再写入新节
+    let mut taken: Vec<(&str, serde_json::Value)> = Vec::new();
+    {
+        let Some(editor) = root.get_mut("editor").and_then(|v| v.as_object_mut()) else {
+            return text.to_string();
+        };
+        for (old_key, new_key) in LEGACY {
+            if let Some(value) = editor.remove(old_key) {
+                taken.push((new_key, value));
+            }
+        }
+    }
+    if taken.is_empty() {
+        return text.to_string();
+    }
+    if let Some(root_map) = root.as_object_mut() {
+        let target = root_map
+            .entry("sql_format")
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+        if let Some(map) = target.as_object_mut() {
+            for (new_key, value) in taken {
+                map.entry(new_key).or_insert(value);
+            }
+        }
+    }
+    serde_json::to_string(&root).unwrap_or_else(|_| text.to_string())
 }
 
 /// 从磁盘加载设置（用户配置目录）。
@@ -117,4 +162,63 @@ pub fn save_settings(settings: &Settings) -> Result<(), String> {
 /// 各 `set_*` 走这里：它们不因落盘失败而回滚内存值，也不向调用方改签名。
 pub(crate) fn persist(settings: &Settings) {
     let _ = save_settings(settings);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::migrate_editor_format_keys;
+
+    /// 旧 editor.format_* 三键搬进 sql_format.*，旧键删除、其余键不动
+    #[test]
+    fn legacy_editor_format_keys_move_to_sql_format() {
+        let old = r#"{
+            "editor": {"show_line_numbers": true, "format_keyword_case": "upper", "format_indent_width": 4, "format_on_save": true},
+            "appearance": {"font_size": 14}
+        }"#;
+        let out = migrate_editor_format_keys(old);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        // 旧键已删
+        assert!(v["editor"].get("format_keyword_case").is_none());
+        assert!(v["editor"].get("format_indent_width").is_none());
+        assert!(v["editor"].get("format_on_save").is_none());
+        // 新键在位，值原样
+        assert_eq!(v["sql_format"]["keyword_case"], "upper");
+        assert_eq!(v["sql_format"]["indent_width"], 4);
+        assert_eq!(v["sql_format"]["format_on_save"], true);
+        // editor 其余键与别的节不动
+        assert_eq!(v["editor"]["show_line_numbers"], true);
+        assert_eq!(v["appearance"]["font_size"], 14);
+    }
+
+    /// 两边都有时以新键为准（用户迁移后又改过新键的场景）
+    #[test]
+    fn existing_sql_format_keys_win_over_legacy() {
+        let old = r#"{
+            "editor": {"format_keyword_case": "upper"},
+            "sql_format": {"keyword_case": "lower"}
+        }"#;
+        let out = migrate_editor_format_keys(old);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["sql_format"]["keyword_case"], "lower");
+        assert!(v["editor"].get("format_keyword_case").is_none());
+    }
+
+    /// 没有旧键 / 坏 JSON：原样返回
+    #[test]
+    fn untouched_inputs_pass_through() {
+        let fresh = r#"{"editor": {"env_timeout_ms": 60000}}"#;
+        assert_eq!(migrate_editor_format_keys(fresh), fresh);
+        let broken = "not json";
+        assert_eq!(migrate_editor_format_keys(broken), broken);
+    }
+
+    /// 迁移后的 JSON 能解析进 Settings（sql_format 字段拿到搬来的值）
+    #[test]
+    fn migrated_json_loads_into_settings() {
+        let old = r#"{"editor": {"format_keyword_case": "upper", "format_indent_width": 8}}"#;
+        let migrated = migrate_editor_format_keys(old);
+        let settings: super::Settings = serde_json::from_str(&migrated).unwrap();
+        assert_eq!(settings.sql_format.keyword_case, "upper");
+        assert_eq!(settings.sql_format.indent_width, 8);
+    }
 }

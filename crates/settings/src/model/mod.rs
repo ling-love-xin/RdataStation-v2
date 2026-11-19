@@ -22,6 +22,7 @@ pub mod resources;
 pub mod result_panel;
 pub mod scratchpad;
 pub mod sql_analysis;
+pub mod sql_format;
 pub mod startup;
 
 use serde::{Deserialize, Serialize};
@@ -41,6 +42,7 @@ pub use resources::Resources;
 pub use result_panel::{FactStoragePref, ResultPanel};
 pub use scratchpad::{Scratchpad, ToolbarButtonCfg};
 pub use sql_analysis::SqlAnalysis;
+pub use sql_format::SqlFormat;
 pub use startup::Startup;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -79,6 +81,10 @@ pub struct Settings {
     /// SQL 分析设置（sqlglot 高级能力在编辑器侧的开关，见 `model/sql_analysis.rs`）。
     #[serde(default)]
     pub sql_analysis: SqlAnalysis,
+    /// SQL 格式化设置（格式化输出风格六旋钮，见 `model/sql_format.rs`；
+    /// 2026-11-19 自 editor 域迁出，旧 `editor.format_*` 键由 persistence 迁移）。
+    #[serde(default)]
+    pub sql_format: SqlFormat,
 }
 
 impl gpui_kit::Global for Settings {}

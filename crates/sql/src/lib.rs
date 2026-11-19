@@ -55,7 +55,7 @@ pub use filter::{
     Rewrite, rewrite_with_filter, rewrite_with_order, rewrite_with_where,
     rewrite_with_where_order,
 };
-pub use formatter::{FormatOptions, FormatReport, KeywordCase};
+pub use formatter::{CommaStyle, FormatOptions, FormatReport, IndentChar, KeywordCase};
 pub use function_manual::{MANUAL, ManualCategory, ManualEntry, search_manual};
 pub use functions::{
     FunctionSignature, ParamInfo, builtin_signatures, catalog_query, parameter_query,

@@ -46,6 +46,7 @@ pub use workbench_shell::product_tokens;
 pub use service::{SettingsService, value_by_key};
 pub use service::{install_insight_memory_limit_sink, install_log_level_sink};
 pub use service::install_sql_analysis_sink;
+pub use service::install_sql_format_preview;
 pub use service::install_theme_pack_sink;
 
 #[allow(unused_imports)]

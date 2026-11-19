@@ -236,6 +236,56 @@ pub fn layout_preview() -> SettingItem {
     .on_reset(|_| false, |_, _| {})
 }
 
+// ===== SQL 格式化实时预览（sql_format 节首项） =====
+
+/// SQL 格式化节的实时预览卡：示例 SQL 按当前六旋钮格式化后的样子。
+///
+/// 格式化计算不在本 crate（依赖方向：settings 不依赖 engine）——由装配层经
+/// [`crate::install_sql_format_preview`] 注入；未注入（如单元测试）显示占位说明。
+/// 实时性：行控件写入 → global 更新 → `notify` 重渲 → 本 render 重读重算。
+/// 示例固定按 ANSI 方言（卡片标题注明；实际格式化跟随文档绑定连接的方言）。
+pub fn sql_format_preview() -> SettingItem {
+    SettingItem::render(move |_options, _window, cx| {
+        let theme = cx.theme().clone();
+        let prefs = SettingsService::sql_format(cx);
+        let body = crate::service::sql_format_preview(&prefs)
+            // 展示层把 Tab 展开成 4 空格（等宽块里制表符宽度随平台不定，视觉口径统一）
+            .map(|text| text.replace('\t', "    "))
+            .unwrap_or_else(|| "（预览不可用：格式化引擎未接入）".to_string());
+        div()
+            .w_full()
+            .flex_none()
+            .v_flex()
+            .gap_1()
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.muted_foreground)
+                    .child("预览（示例按 ANSI 方言；实际格式化跟随文档绑定连接的方言）"),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.colors.border)
+                    .bg(theme.colors.sidebar)
+                    .p(rems(0.75))
+                    .v_flex()
+                    // 逐行渲染：gpui 文本不折行，行宽超出时横向裁掉比挤换行诚实；
+                    // 空行给一个空格占位（否则空 div 零高，语句间空行在预览里消失）
+                    .overflow_hidden()
+                    .font_family(theme.mono_font_family.clone())
+                    .text_size(theme.mono_font_size)
+                    .children(body.lines().map(|line| {
+                        div().child(if line.is_empty() { " ".to_string() } else { line.to_string() })
+                    })),
+            )
+    })
+    // 预览不是设置项，不参与 reset-all。
+    .on_reset(|_| false, |_, _| {})
+}
+
 // ===== 类型样式矩阵（结果集面板「对齐 / 着色 / 背景色 / 字体样式」四组合并） =====
 
 /// 把结果集面板「对齐」「着色」「背景色」「字体样式」四个登记组（各 5 项、

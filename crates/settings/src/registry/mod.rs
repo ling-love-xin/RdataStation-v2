@@ -133,12 +133,6 @@ pub enum Slot {
     EditorDefaultHardTabs,
     EditorDefaultLineEnding,
     EditorDefaultEncoding,
-    /// 【2026-10-28】SQL 格式化关键字大小写（`"preserve"` / `"upper"` / `"lower"`）。
-    EditorFormatKeywordCase,
-    /// 【2026-10-28】SQL 格式化缩进宽度（空格数；2 = sqlglot 原生）。
-    EditorFormatIndentWidth,
-    /// 【2026-10-28】保存时自动格式化 SQL（默认关）。
-    EditorFormatOnSave,
     /// 【2026-11-08】脚本执行超时（毫秒，默认 60000；随 `ScriptRequest` 进执行线程）。
     EditorEnvTimeoutMs,
     AppearanceFontSize,
@@ -195,6 +189,19 @@ pub enum Slot {
     SqlAnalysisPredicatePushdown,
     /// 悬停补一行「来源表」。
     SqlAnalysisHoverScope,
+    /// 【2026-11-19】SQL 格式化独立节六旋钮（原 editor.format_* 三键迁出 + 扩全）。
+    /// 关键字大小写（`"preserve"` / `"upper"` / `"lower"`）。
+    SqlFormatKeywordCase,
+    /// 缩进字符（`"space"` / `"tab"`；Tab 每级一个制表符，宽度不参与）。
+    SqlFormatIndentChar,
+    /// 缩进宽度（空格数 2 / 4 / 8，仅空格缩进时生效）。
+    SqlFormatIndentWidth,
+    /// 逗号风格（`"trailing"` 尾随 = sqlglot 原生 / `"leading"` 前导）。
+    SqlFormatCommaStyle,
+    /// 语句间空行数（0 / 1 / 2）。
+    SqlFormatBlankLines,
+    /// 保存时自动格式化 SQL（默认关）。
+    SqlFormatOnSave,
     /// 结果集事实档载体偏好（auto / memory / table；分流纯函数在 `shared::fact`，
     /// 触发物化路径 B 批接通消费）。
     ResultPanelFactStorage,
@@ -289,9 +296,6 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "editor.default_hard_tabs" => Slot::EditorDefaultHardTabs,
         "editor.default_line_ending" => Slot::EditorDefaultLineEnding,
         "editor.default_encoding" => Slot::EditorDefaultEncoding,
-        "editor.format_keyword_case" => Slot::EditorFormatKeywordCase,
-        "editor.format_indent_width" => Slot::EditorFormatIndentWidth,
-        "editor.format_on_save" => Slot::EditorFormatOnSave,
         "editor.env_timeout_ms" => Slot::EditorEnvTimeoutMs,
         "appearance.font_size" => Slot::AppearanceFontSize,
         "appearance.locale" => Slot::AppearanceLocale,
@@ -331,6 +335,12 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "sql_analysis.semantic_diagnostics" => Slot::SqlAnalysisSemanticDiagnostics,
         "sql_analysis.predicate_pushdown" => Slot::SqlAnalysisPredicatePushdown,
         "sql_analysis.hover_scope" => Slot::SqlAnalysisHoverScope,
+        "sql_format.keyword_case" => Slot::SqlFormatKeywordCase,
+        "sql_format.indent_char" => Slot::SqlFormatIndentChar,
+        "sql_format.indent_width" => Slot::SqlFormatIndentWidth,
+        "sql_format.comma_style" => Slot::SqlFormatCommaStyle,
+        "sql_format.blank_lines_between" => Slot::SqlFormatBlankLines,
+        "sql_format.format_on_save" => Slot::SqlFormatOnSave,
         "result_panel.fact_storage" => Slot::ResultPanelFactStorage,
         "result_panel.show_column_comments" => Slot::ResultPanelShowColumnComments,
         "result_panel.show_type_badge" => Slot::ResultPanelShowTypeBadge,
@@ -496,10 +506,14 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         | Slot::NotificationSuccessToSystem
         | Slot::NotificationInfoToSystem
         | Slot::NotificationDoNotDisturb => KindTag::Bool,
-        // 【2026-10-28】SQL 格式化：关键字大小写是枚举，缩进宽度是数值，保存时格式化是布尔。
-        Slot::EditorFormatKeywordCase => KindTag::Enum,
-        Slot::EditorFormatIndentWidth => KindTag::Number,
-        Slot::EditorFormatOnSave => KindTag::Bool,
+        // 【2026-11-19】SQL 格式化独立节（六旋钮，原 editor.format_* 三键迁出）：
+        // 关键字大小写 / 缩进字符 / 逗号风格是枚举，缩进宽度 / 语句间空行是数值，
+        // 保存时格式化是布尔。
+        Slot::SqlFormatKeywordCase
+        | Slot::SqlFormatIndentChar
+        | Slot::SqlFormatCommaStyle => KindTag::Enum,
+        Slot::SqlFormatIndentWidth | Slot::SqlFormatBlankLines => KindTag::Number,
+        Slot::SqlFormatOnSave => KindTag::Bool,
     }
 }
 

@@ -21,27 +21,18 @@ impl EditorHostPanel {
     /// 计划（格式化哪一段 / 光标去哪 / 有几条没动）由纯函数 [`crate::format::plan`] 算；
     /// 这里只做三件事：**只读拒绝**、落一次**可撤销**的替换（`replace_all` 保留撤销历史）、
     /// 把结果如实说给用户（“改了 N 条” / “M 条解析不了，原样保留”）。
-    /// 【格式化增强】从设置解析格式化选项（关键字大小写 + 缩进宽度）。
+    /// 【格式化设置页】六旋钮（关键字大小写 / 缩进字符与宽度 / 逗号风格 / 语句间空行）
+    /// 从 `sql_format` 域读取；映射与回退口径跟设置页实时预览共用同一份纯函数
+    /// （[`crate::format::options_from_settings`]），两边永远一致。
     ///
-    /// 设置异常（未知档位 / 越界）回退 sqlglot 原生（preserve / 2），不猜。
     /// `cx` 借了 `Context`（Deref 到 `App`），读设置是只读，放这里安全。
     fn format_options(cx: &mut Context<Self>) -> engine::sql::FormatOptions {
-        let editor = editor_settings_or_default(cx);
-        let keyword_case = match editor.format_keyword_case.as_str() {
-            "upper" => engine::sql::KeywordCase::Uppercase,
-            "lower" => engine::sql::KeywordCase::Lowercase,
-            _ => engine::sql::KeywordCase::Preserve,
-        };
-        let indent_width = editor.format_indent_width.clamp(2, 8) as u8;
-        engine::sql::FormatOptions {
-            keyword_case,
-            indent_width,
-        }
+        format::options_from_settings(&sql_format_or_default(cx))
     }
 
-    /// 【格式化增强】保存时自动格式化是否开启（设置在设置页；测试环境回退默认关）。
+    /// 【格式化设置页】保存时自动格式化是否开启（设置在 `sql_format` 节；测试环境回退默认关）。
     pub(crate) fn format_on_save_enabled(&self, cx: &Context<Self>) -> bool {
-        editor_settings_or_default(cx).format_on_save
+        sql_format_or_default(cx).format_on_save
     }
 
     pub(crate) fn format_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {

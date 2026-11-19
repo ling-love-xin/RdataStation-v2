@@ -26,12 +26,16 @@ mod resources;
 mod result_panel;
 mod scratchpad;
 mod sql_analysis;
+mod sql_format;
 mod startup;
 
 // 副作用出口 sink 的 re-export：lib.rs 据此保持 `settings::install_*` 公共路径不变。
 pub use insight::install_insight_memory_limit_sink;
 pub use logging::install_log_level_sink;
 pub use sql_analysis::install_sql_analysis_sink;
+// SQL 格式化设置页的实时预览出口（格式化计算由装配层注入，本 crate 不依赖 engine）。
+pub use sql_format::install_sql_format_preview;
+pub(crate) use sql_format::sql_format_preview;
 // 主题方案（包）变更出口：装配层接“重装主题 + 产品 token”。
 pub use appearance::install_theme_pack_sink;
 
@@ -97,13 +101,6 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
             SettingValue::Text(settings.editor.default_line_ending.clone())
         }
         Slot::EditorDefaultEncoding => SettingValue::Text(settings.editor.default_encoding.clone()),
-        Slot::EditorFormatKeywordCase => {
-            SettingValue::Text(settings.editor.format_keyword_case.clone())
-        }
-        Slot::EditorFormatIndentWidth => {
-            SettingValue::Number(settings.editor.format_indent_width as f64)
-        }
-        Slot::EditorFormatOnSave => SettingValue::Bool(settings.editor.format_on_save),
         Slot::NavigatorSourceShortCode => SettingValue::Bool(settings.navigator.source_short_code),
         Slot::NavigatorShowTags => SettingValue::Bool(settings.navigator.show_tags),
         Slot::NavigatorShowScope => SettingValue::Bool(settings.navigator.show_scope),
@@ -161,6 +158,22 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
             SettingValue::Bool(settings.sql_analysis.predicate_pushdown)
         }
         Slot::SqlAnalysisHoverScope => SettingValue::Bool(settings.sql_analysis.hover_scope),
+        Slot::SqlFormatKeywordCase => {
+            SettingValue::Text(settings.sql_format.keyword_case.clone())
+        }
+        Slot::SqlFormatIndentChar => {
+            SettingValue::Text(settings.sql_format.indent_char.clone())
+        }
+        Slot::SqlFormatIndentWidth => {
+            SettingValue::Number(settings.sql_format.indent_width as f64)
+        }
+        Slot::SqlFormatCommaStyle => {
+            SettingValue::Text(settings.sql_format.comma_style.clone())
+        }
+        Slot::SqlFormatBlankLines => {
+            SettingValue::Number(settings.sql_format.blank_lines_between as f64)
+        }
+        Slot::SqlFormatOnSave => SettingValue::Bool(settings.sql_format.format_on_save),
         Slot::ResultPanelFactStorage => {
             SettingValue::Text(settings.result_panel.fact_storage.as_str().to_string())
         }
@@ -366,9 +379,6 @@ impl SettingsService {
             | Slot::EditorDefaultHardTabs
             | Slot::EditorDefaultLineEnding
             | Slot::EditorDefaultEncoding
-            | Slot::EditorFormatKeywordCase
-            | Slot::EditorFormatIndentWidth
-            | Slot::EditorFormatOnSave
             | Slot::EditorEnvTimeoutMs => editor::apply_slot(slot, value, window, cx),
             Slot::NavigatorSourceShortCode
             | Slot::NavigatorShowTags
@@ -405,6 +415,12 @@ impl SettingsService {
             Slot::SqlAnalysisSemanticDiagnostics
             | Slot::SqlAnalysisPredicatePushdown
             | Slot::SqlAnalysisHoverScope => sql_analysis::apply_slot(slot, value, window, cx),
+            Slot::SqlFormatKeywordCase
+            | Slot::SqlFormatIndentChar
+            | Slot::SqlFormatIndentWidth
+            | Slot::SqlFormatCommaStyle
+            | Slot::SqlFormatBlankLines
+            | Slot::SqlFormatOnSave => sql_format::apply_slot(slot, value, window, cx),
             Slot::ResultPanelFactStorage
             | Slot::ResultPanelShowColumnComments
             | Slot::ResultPanelShowTypeBadge

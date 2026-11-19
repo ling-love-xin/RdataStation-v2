@@ -76,6 +76,11 @@ pub fn build(
             if section == "layout" && *gid == page_groups[0].0 {
                 group = group.item(fields::layout_preview());
             }
+            // SQL 格式化节：参数行之前放实时预览卡（改任何旋钮立即看到效果；
+            // 格式化计算由装配层注入，见 fields::sql_format_preview）。
+            if section == "sql_format" && *gid == page_groups[0].0 {
+                group = group.item(fields::sql_format_preview());
+            }
             for spec in registry::page_rows().filter(|s| s.section == section && s.group == *gid) {
                 group = group.item(fields::value_item(spec, host, notify));
             }
@@ -144,6 +149,7 @@ fn page_description(section: &str) -> Option<&'static str> {
         "resources" => Some("资源库历史保留、排序与分组"),
         "result_panel" => Some("结果集网格的值呈现（对齐 / 着色 / 数据与显示）"),
         "scratchpad" => Some("便签工具栏与分区高度"),
+        "sql_format" => Some("SQL 格式化输出风格（Ctrl+Shift+F 与保存时格式化共用）；方言自动跟随文档绑定的连接"),
         "startup" => Some("启动时显示的模块"),
         _ => None,
     }

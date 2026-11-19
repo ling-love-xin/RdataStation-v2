@@ -120,31 +120,6 @@ pub(crate) fn apply_slot(
             }
             SettingsService::set_default_encoding(&v, cx);
         }
-        Slot::EditorFormatKeywordCase => {
-            let Some(v) = value.as_text() else {
-                return false;
-            };
-            // 只认三档（preserve / upper / lower；手改坏时拒绝，不猜）。
-            if !(v == "preserve" || v == "upper" || v == "lower") {
-                return false;
-            }
-            SettingsService::set_format_keyword_case(&v, cx);
-        }
-        Slot::EditorFormatIndentWidth => {
-            let Some(n) = value.as_number() else {
-                return false;
-            };
-            if !(2.0..=8.0).contains(&n) {
-                return false;
-            }
-            SettingsService::set_format_indent_width(n as i64, cx);
-        }
-        Slot::EditorFormatOnSave => {
-            let Some(on) = value.as_bool() else {
-                return false;
-            };
-            SettingsService::set_format_on_save(on, cx);
-        }
         Slot::EditorEnvTimeoutMs => {
             let Some(n) = value.as_number() else {
                 return false;
@@ -368,42 +343,6 @@ impl SettingsService {
         {
             let settings = cx.global_mut::<Settings>();
             settings.editor.default_encoding = v.to_string();
-        }
-        persist(&cx.global::<Settings>().clone());
-    }
-    /// SQL 格式化关键字大小写（`"preserve"` / `"upper"` / `"lower"`）。
-    pub fn format_keyword_case(cx: &App) -> String {
-        cx.global::<Settings>().editor.format_keyword_case.clone()
-    }
-    /// 设置 SQL 格式化关键字大小写：更新 global → 持久化。
-    pub fn set_format_keyword_case(v: &str, cx: &mut App) {
-        {
-            let settings = cx.global_mut::<Settings>();
-            settings.editor.format_keyword_case = v.to_string();
-        }
-        persist(&cx.global::<Settings>().clone());
-    }
-    /// SQL 格式化缩进宽度（空格数；2 = sqlglot 原生）。
-    pub fn format_indent_width(cx: &App) -> i64 {
-        cx.global::<Settings>().editor.format_indent_width
-    }
-    /// 设置 SQL 格式化缩进宽度：更新 global → 持久化。
-    pub fn set_format_indent_width(v: i64, cx: &mut App) {
-        {
-            let settings = cx.global_mut::<Settings>();
-            settings.editor.format_indent_width = v;
-        }
-        persist(&cx.global::<Settings>().clone());
-    }
-    /// 保存时自动格式化 SQL（默认关）。
-    pub fn format_on_save(cx: &App) -> bool {
-        cx.global::<Settings>().editor.format_on_save
-    }
-    /// 保存时自动格式化开关：更新 global → 持久化。
-    pub fn set_format_on_save(on: bool, cx: &mut App) {
-        {
-            let settings = cx.global_mut::<Settings>();
-            settings.editor.format_on_save = on;
         }
         persist(&cx.global::<Settings>().clone());
     }

@@ -15,6 +15,16 @@ pub(crate) fn editor_settings_or_default(cx: &App) -> settings::model::Editor {
     }
 }
 
+/// 【格式化设置页】读 SQL 格式化六旋钮快照（2026-11-19 自 editor 域迁出成
+/// `sql_format` 独立节；测试环境回退出厂默认）。
+pub(crate) fn sql_format_or_default(cx: &App) -> settings::model::SqlFormat {
+    if cx.has_global::<settings::model::Settings>() {
+        SettingsService::sql_format(cx)
+    } else {
+        settings::model::SqlFormat::default()
+    }
+}
+
 /// #48 读行号开关（同上：测试环境回退默认 true）。
 pub(crate) fn editor_show_line_numbers_or_default(cx: &App) -> bool {
     if cx.has_global::<settings::model::Settings>() {
