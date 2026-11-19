@@ -184,6 +184,9 @@ impl EditorHostPanel {
                 let segment_rows = settings.result_panel.segment_rows;
                 // 【计算页持久化】启用统计项 id 列表：同样先拷贝（借用不能跨到 `&mut cx`）。
                 let stats_items = settings.result_panel.stats_items.clone();
+                // 【分组页持久化】排序口径 id + 「仅重复」开关：同款先拷贝（借用不能跨到 `&mut cx`）。
+                let group_sort = settings.result_panel.group_sort.clone();
+                let group_duplicates_only = settings.result_panel.group_duplicates_only;
                 // 【工具栏配置】状态栏命令显隐（DBeaver 工具条配置的等价物）：偏好里存的是
                 // 逗号分隔 id，这里解析成命令集合；未知 id 被 `parse_hidden_list` 丢掉。
                 let hidden_status_commands = result_panel::ports::StatusCommand::parse_hidden_list(
@@ -201,8 +204,10 @@ impl EditorHostPanel {
                 panel.set_hidden_status_commands(hidden_status_commands, cx);
                 // 【R6】段大小：给自己上次设的值（框里也显示它，不然只看得到占位 1000）
                 panel.set_segment_rows_initial(segment_rows.max(1) as usize, window, cx);
-                // 【计算页持久化】用户上次启用的统计项（空串 = 六项全停用，页内给「点 ＋ 添加」提示）
+                // 【计算页持久化】用户上次启用的统计项（空串 = 九项全停用，页内给「点 ＋ 添加」提示）
                 panel.set_stats_items_initial(&stats_items, cx);
+                // 【分组页持久化】用户上次的分组排序口径与「仅重复」开关
+                panel.set_group_prefs_initial(&group_sort, group_duplicates_only, cx);
             }
             panel
         });

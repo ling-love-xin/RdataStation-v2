@@ -545,7 +545,10 @@ impl EditorHostPanel {
                 self.result_panel
                     .update(cx, |p, cx| p.set_stats_mode(mode, cx));
             }
-            // 【R3 分组页】纯面板视图状态：不落盘、不影响取数
+            // 【R3 分组页】分组键增删 / 清空是纯面板视图状态（不落盘、不影响取数）；
+            // 【分组页持久化】排序口径与「仅重复」要落盘（对齐 DBeaver `ChangeSortingAction`
+            // 写 `RS_GROUPING_DEFAULT_SORTING` + `persistConfiguration()`、`DuplicatesOnlyAction`
+            // 写 `RS_GROUPING_SHOW_DUPLICATES_ONLY`），两条都按面板当前值回写一次。
             ResultRequest::ToggleGroupColumn(column) => {
                 self.result_panel
                     .update(cx, |p, cx| p.toggle_group_column(column, cx));
@@ -553,10 +556,12 @@ impl EditorHostPanel {
             ResultRequest::SetGroupSort(sort) => {
                 self.result_panel
                     .update(cx, |p, cx| p.set_group_sort(sort, cx));
+                self.persist_result_group_sort(cx);
             }
             ResultRequest::SetGroupDuplicatesOnly(on) => {
                 self.result_panel
                     .update(cx, |p, cx| p.set_group_duplicates_only(on, cx));
+                self.persist_result_group_duplicates_only(cx);
             }
             ResultRequest::ClearGroupColumns => {
                 self.result_panel
@@ -582,6 +587,20 @@ impl EditorHostPanel {
     pub(crate) fn persist_result_stats_items(&mut self, cx: &mut Context<Self>) {
         let ids = self.result_panel.read(cx).stats_items_ids();
         settings::SettingsService::set_result_panel_stats_items(&ids, cx);
+    }
+
+    /// 【分组页持久化】把面板当前的排序口径写回全局偏好
+    /// （对齐 DBeaver `ChangeSortingAction.run` 写 `RS_GROUPING_DEFAULT_SORTING`）。
+    pub(crate) fn persist_result_group_sort(&mut self, cx: &mut Context<Self>) {
+        let id = self.result_panel.read(cx).group_sort_id();
+        settings::SettingsService::set_result_panel_group_sort(id, cx);
+    }
+
+    /// 【分组页持久化】把面板当前的「仅重复」开关写回全局偏好
+    /// （对齐 DBeaver `DuplicatesOnlyAction.run` 写 `RS_GROUPING_SHOW_DUPLICATES_ONLY`）。
+    pub(crate) fn persist_result_group_duplicates_only(&mut self, cx: &mut Context<Self>) {
+        let on = self.result_panel.read(cx).group_duplicates_only_value();
+        settings::SettingsService::set_result_panel_group_duplicates_only(on, cx);
     }
 
     /// 需要 `&mut Window` 的动作走窗口句柄转手（headless / 窗口已关时静默跳过；

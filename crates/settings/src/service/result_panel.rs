@@ -380,7 +380,7 @@ pub(crate) fn apply_slot(
         Slot::ResultPanelStatsItems => {
             // 【计算页持久化】同口径：只做空白折叠 / 去重空项 / 小写，不校验 id
             // （id ↔ 项对应表在 `result_panel::ports::StatsItem::id`，未知 id 面板侧丢弃）。
-            // 空串保留：它是「六项全停用」这个合法状态，不能被当成"没写"。
+            // 空串保留：它是「九项全停用」这个合法状态，不能被当成"没写"。
             let Some(text) = value.as_text() else {
                 return false;
             };
@@ -388,6 +388,34 @@ pub(crate) fn apply_slot(
             {
                 let settings = cx.global_mut::<Settings>();
                 settings.result_panel.stats_items = normalized;
+            }
+            persist(&cx.global::<Settings>().clone());
+        }
+        Slot::ResultPanelGroupSort => {
+            // 【分组页持久化】只认 `value` / `countdesc` 两档；未知值拒绝（设置页手填坏值时
+            // 让设置页自己报错，而不是悄悄把面板排序换成别的档）。口径与
+            // `set_result_panel_group_sort` 一致。
+            let Some(text) = value.as_text() else {
+                return false;
+            };
+            let normalized = text.trim().to_ascii_lowercase();
+            if !matches!(normalized.as_str(), "value" | "countdesc") {
+                return false;
+            }
+            {
+                let settings = cx.global_mut::<Settings>();
+                settings.result_panel.group_sort = normalized;
+            }
+            persist(&cx.global::<Settings>().clone());
+        }
+        Slot::ResultPanelGroupDuplicatesOnly => {
+            // 【分组页持久化】「仅重复」开关（与 `DuplicatesOnlyAction` 的 check box 同口径）
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            {
+                let settings = cx.global_mut::<Settings>();
+                settings.result_panel.group_duplicates_only = on;
             }
             persist(&cx.global::<Settings>().clone());
         }
@@ -457,6 +485,37 @@ impl crate::service::SettingsService {
         {
             let settings = cx.global_mut::<Settings>();
             settings.result_panel.stats_items = normalized;
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
+    /// 【分组页持久化】写分组结果排序口径的 id（分组页排序钮点一次落一次盘）。
+    ///
+    /// 只认 `value` / `countdesc`（小写、去空白）；其它值按出厂 `value` 处理——
+    /// 手改配置文件写了个不存在的档位时，面板不该跟着乱排序。
+    pub fn set_result_panel_group_sort(id: &str, cx: &mut App) {
+        let normalized = match id.trim().to_ascii_lowercase().as_str() {
+            "countdesc" => "countdesc".to_string(),
+            _ => "value".to_string(),
+        };
+        if cx.global::<Settings>().result_panel.group_sort == normalized {
+            return;
+        }
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.result_panel.group_sort = normalized;
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
+    /// 【分组页持久化】写「仅显示重复分组」开关（分组页「仅重复」钮点一次落一次盘）。
+    pub fn set_result_panel_group_duplicates_only(on: bool, cx: &mut App) {
+        if cx.global::<Settings>().result_panel.group_duplicates_only == on {
+            return;
+        }
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.result_panel.group_duplicates_only = on;
         }
         persist(&cx.global::<Settings>().clone());
     }

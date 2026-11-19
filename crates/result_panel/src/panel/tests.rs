@@ -980,6 +980,48 @@ fn clear_group_columns_drops_explicit_selection(cx: &mut gpui_kit::TestAppContex
     assert!(cx.update(|_, app| panel.read(app).group_columns.clone()).is_empty());
 }
 
+/// 【分组页持久化】宿主注入的两项偏好：排序口径 id 与「仅重复」开关都要落到面板状态；
+/// 未知 id 按出厂 `value`（与设置服务归一同一口径），重复注入同值不重复 notify。
+#[gpui_kit::test]
+fn group_prefs_initial_round_trip_and_unknown_sort_falls_back(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 面板出厂态：按值 + 不只显示重复
+    assert_eq!(
+        cx.update(|_, app| panel.read(app).group_sort_id()),
+        "value"
+    );
+    assert!(!cx.update(|_, app| panel.read(app).group_duplicates_only_value()));
+
+    // 注入用户上次的口径：按计数降序 + 仅重复
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.set_group_prefs_initial("countdesc", true, cx);
+        })
+    });
+    assert_eq!(
+        cx.update(|_, app| panel.read(app).group_sort_id()),
+        "countdesc"
+    );
+    assert!(cx.update(|_, app| panel.read(app).group_duplicates_only_value()));
+
+    // 未知 id（手改配置文件）→ 回落到出厂 value，开关照注入（两字段各自独立）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.set_group_prefs_initial("asc", false, cx);
+        })
+    });
+    assert_eq!(
+        cx.update(|_, app| panel.read(app).group_sort_id()),
+        "value",
+        "未知排序 id 应按出厂 value 处理（不猜 ASC 之类的档位）"
+    );
+    assert!(!cx.update(|_, app| panel.read(app).group_duplicates_only_value()));
+}
+
 /// 【R1/R2 测试壳】空面板 + 两列网格（`id` / `amount`，含一个 NULL 值）。
 /// `ResultPanel` 没有标准 `Render`（自定义 `render(&self, cx)`，宿主手动调），
 /// 所以包一层 `PanelHost` 实体转发；`selected_col` 预置第 2 列，计算 / 分组页才有作用列。

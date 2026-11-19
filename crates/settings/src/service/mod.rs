@@ -191,6 +191,14 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::ResultPanelStatsItems => {
             SettingValue::Text(settings.result_panel.stats_items.clone())
         }
+        // 【分组页持久化】排序口径 id（`value` / `countdesc`）
+        Slot::ResultPanelGroupSort => {
+            SettingValue::Text(settings.result_panel.group_sort.clone())
+        }
+        // 【分组页持久化】「仅重复」开关
+        Slot::ResultPanelGroupDuplicatesOnly => {
+            SettingValue::Bool(settings.result_panel.group_duplicates_only)
+        }
         // 【类型样式】13 项枚举：落盘值 → 设置页显示
         Slot::ResultPanelNumberFormat => {
             SettingValue::Text(settings.result_panel.number_format.as_str().to_string())
@@ -402,6 +410,8 @@ impl SettingsService {
             | Slot::ResultPanelSegmentRows
             | Slot::ResultPanelHiddenStatusCommands
             | Slot::ResultPanelStatsItems
+            | Slot::ResultPanelGroupSort
+            | Slot::ResultPanelGroupDuplicatesOnly
             | Slot::ResultPanelPersistColumnWidths
             | Slot::ResultPanelNumberFormat
             | Slot::ResultPanelNullPlaceholder

@@ -561,7 +561,7 @@ impl ResultPanel {
     ///
     /// 对齐 DBeaver `AggregateColumnsPanel.loadSettings`（`:129-155`）：那边把
     /// `enabledFunctions` 按存下的 `index` 顺序查回函数；本仓 `stats_items_from_ids`
-    /// 只保留六项里的已知 id、丢弃未知项与重复项（顺序照抄）。空串合法（全停用）。
+    /// 只保留九项里的已知 id、丢弃未知项与重复项（顺序照抄）。空串合法（全停用）。
     pub fn set_stats_items_initial(&mut self, ids: &str, cx: &mut Context<Self>) {
         let items = crate::ports::stats_items_from_ids(ids);
         if items == self.stats_items {
@@ -612,6 +612,37 @@ impl ResultPanel {
         }
         self.group_duplicates_only = on;
         cx.notify();
+    }
+
+    /// 【分组页持久化】宿主构造期注入排序口径与「仅重复」：设置里的 id / bool → 面板状态。
+    ///
+    /// 对齐 DBeaver 两个结果集偏好：`RS_GROUPING_DEFAULT_SORTING`（`ChangeSortingAction`
+    /// 读写，`""`/`ASC`/`DESC`）与 `RS_GROUPING_SHOW_DUPLICATES_ONLY`（`DuplicatesOnlyAction`
+    /// 的 check box 状态）。本仓两态排序里 `countdesc` 对应那边的 `DESC`，`value` 是超集档；
+    /// 未知 id 按出厂 `value` 处理（不猜，与设置服务侧的归一同一口径）。
+    pub fn set_group_prefs_initial(
+        &mut self,
+        sort_id: &str,
+        duplicates_only: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let sort = GroupSort::parse(sort_id).unwrap_or_default();
+        if self.group_sort == sort && self.group_duplicates_only == duplicates_only {
+            return;
+        }
+        self.group_sort = sort;
+        self.group_duplicates_only = duplicates_only;
+        cx.notify();
+    }
+
+    /// 【分组页持久化】当前排序口径的落盘 id（宿主在排序钮生效后读走这一串）
+    pub fn group_sort_id(&self) -> &'static str {
+        self.group_sort.id()
+    }
+
+    /// 【分组页持久化】当前「仅重复」开关值（宿主在该钮生效后读走）
+    pub fn group_duplicates_only_value(&self) -> bool {
+        self.group_duplicates_only
     }
 
     /// 【R3 分组页】清空分组列集合（对齐 DBeaver `ClearGroupingAction`；该动作在

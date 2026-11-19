@@ -571,6 +571,23 @@ impl GroupSort {
             Self::CountDesc => "按计数",
         }
     }
+
+    /// 落盘 id（全小写，与设置项 `result_panel.group_sort` 同一契约）
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Value => "value",
+            Self::CountDesc => "countdesc",
+        }
+    }
+
+    /// 解析落盘 id；未知 / 大小写不符的值返回 `None`（调用方按出厂档处理，不猜）。
+    pub fn parse(id: &str) -> Option<Self> {
+        match id.trim() {
+            "value" => Some(Self::Value),
+            "countdesc" => Some(Self::CountDesc),
+            _ => None,
+        }
+    }
 }
 
 /// 结果集呈现方式（DBeaver Data Editor 的显示方式：网格 / 文本）
@@ -912,5 +929,23 @@ mod tests {
             assert_eq!(StatsItem::parse(item.id()), Some(item));
         }
         assert_eq!(stats_items_to_ids(&[]), "");
+    }
+
+    /// 分组排序口径的落盘 id：两档都能原地往返，未知 / 大小写不符一律 `None`
+    /// （调用方按出厂 `value` 处理，与设置服务侧的归一同一口径）。
+    #[test]
+    fn group_sort_ids_round_trip_and_reject_unknown() {
+        assert_eq!(GroupSort::Value.id(), "value");
+        assert_eq!(GroupSort::CountDesc.id(), "countdesc");
+        for sort in [GroupSort::Value, GroupSort::CountDesc] {
+            assert_eq!(GroupSort::parse(sort.id()), Some(sort));
+        }
+        // 空白由 parse 的 trim 吃掉；大小写与未知档按未知处理（id 是契约）
+        assert_eq!(GroupSort::parse(" value "), Some(GroupSort::Value));
+        assert_eq!(GroupSort::parse("COUNTDESC"), None);
+        assert_eq!(GroupSort::parse("asc"), None);
+        assert_eq!(GroupSort::parse(""), None);
+        // 出厂档 = 按值（与设置模型默认 `"value"` 同档）
+        assert_eq!(GroupSort::default().id(), "value");
     }
 }

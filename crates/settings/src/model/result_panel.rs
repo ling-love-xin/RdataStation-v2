@@ -65,6 +65,19 @@ pub struct ResultPanel {
     /// 作用域 = 全局一份（跨结果集 / 跨文档共用），不随会话快照落库。
     #[serde(default = "default_result_stats_items")]
     pub stats_items: String,
+    /// 【分组页持久化，对齐 DBeaver `ResultSetPreferences.RS_GROUPING_DEFAULT_SORTING`】
+    /// 分组结果排序口径的稳定 id：`value`（按分组键值升序）/ `countdesc`（按组内行数降序）。
+    ///
+    /// DBeaver 那边存的是 `""` / `ASC` / `DESC`（默认空 = 不排序，且只作用于 count 列），
+    /// 本仓两态里只有「按计数降序」与之等价，「按值升序」是超集档（差异登记在文档）。
+    /// 作用域 = 全局一份（DBeaver 是按连接存，本仓沿用结果集偏好的全局口径）。
+    #[serde(default = "default_result_group_sort")]
+    pub group_sort: String,
+    /// 【分组页持久化，对齐 DBeaver `ResultSetPreferences.RS_GROUPING_SHOW_DUPLICATES_ONLY`】
+    /// 是否只显示重复分组（组内行数 > 1）。默认 false（DBeaver 取 `getBoolean` 缺省也是 false，
+    /// 该键在 plugin.xml 里没有 initializer）。
+    #[serde(default)]
+    pub group_duplicates_only: bool,
     /// 【类型样式】数字显示格式（默认原始值；只影响渲染显示，复制／导出仍用原始值）。
     #[serde(default)]
     pub number_format: workbench_shell::result_style::NumberFormatPref,
@@ -134,6 +147,8 @@ impl Default for ResultPanel {
             segment_rows: default_result_segment_rows(),
             hidden_status_commands: default_hidden_status_commands(),
             stats_items: default_result_stats_items(),
+            group_sort: default_result_group_sort(),
+            group_duplicates_only: false,
             // 类型样式默认全继承 / 原始值（与渲染现状逐项一致）
             number_format: workbench_shell::result_style::NumberFormatPref::Raw,
             null_placeholder: workbench_shell::result_style::NullPlaceholderPref::Null,
@@ -276,4 +291,12 @@ fn default_hidden_status_commands() -> String {
 /// 默认集口径与那边一致（2026-11-19 补上 `countdistinct` 后由「只有非空」改为两项）。
 fn default_result_stats_items() -> String {
     "count,countdistinct".to_string()
+}
+
+/// 分组结果排序口径的出厂值：`value`（按分组键值升序）。
+///
+/// 与 `GroupingPanel` 面板内初值同一档（`lifecycle.rs` 里 `group_sort: GroupSort::Value`），
+/// 避免「设置里的默认」与「面板里的默认」两处给出不同答案。
+fn default_result_group_sort() -> String {
+    "value".to_string()
 }

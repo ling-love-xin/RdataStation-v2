@@ -230,6 +230,51 @@ pub fn entries() -> Vec<SettingSpec> {
             disabled: false,
         },
         SettingSpec {
+            // 【分组页持久化】对齐 DBeaver `ResultSetPreferences.RS_GROUPING_DEFAULT_SORTING`
+            // （`ChangeSortingAction` 写它并 `persistConfiguration()`）；写入口 = 分组页排序钮。
+            key: "result_panel.group_sort",
+            section: "result_panel",
+            section_label: "结果集面板",
+            group: "interaction",
+            group_label: Some("选择与操作"),
+            label: "分组结果排序口径",
+            hint: "分组页排序钮的持久化值：`value` = 按分组键值升序（出厂），\
+                 `countdesc` = 按组内行数降序（等价 DBeaver 的 `DESC`）。\
+                 未知值按出厂处理；DBeaver 另有一档「不排序」，本仓暂不做",
+            hint_inline: true,
+            kind: SettingKind::Text,
+            presets: &[],
+            default_json: "\"value\"",
+            effect: SettingEffect::NextUse,
+            entry: SettingEntry::Page,
+            consumer: "crates/editor/src/view/host/construct.rs（面板创建时注入）\
+                      / crates/editor/src/view/host/results/dispatch.rs（排序钮生效后写回）",
+            composite: false,
+            disabled: false,
+        },
+        SettingSpec {
+            // 【分组页持久化】对齐 DBeaver `ResultSetPreferences.RS_GROUPING_SHOW_DUPLICATES_ONLY`
+            // （`DuplicatesOnlyAction` 是 check box，读写同一偏好键）；写入口 = 分组页「仅重复」钮。
+            key: "result_panel.group_duplicates_only",
+            section: "result_panel",
+            section_label: "结果集面板",
+            group: "interaction",
+            group_label: Some("选择与操作"),
+            label: "分组仅显示重复",
+            hint: "开启后分组页只列组内行数 > 1 的分组（对齐 DBeaver「Show duplicates only \
+                 (COUNT > 1)」；DBeaver 默认关，该偏好键在 plugin.xml 里没有 initializer）",
+            hint_inline: true,
+            kind: SettingKind::Bool,
+            presets: &[],
+            default_json: "false",
+            effect: SettingEffect::NextUse,
+            entry: SettingEntry::Page,
+            consumer: "crates/editor/src/view/host/construct.rs（面板创建时注入）\
+                      / crates/editor/src/view/host/results/dispatch.rs（「仅重复」钮生效后写回）",
+            composite: false,
+            disabled: false,
+        },
+        SettingSpec {
             // 【DBeaver 工具条配置】状态栏命令的显隐：DBeaver 每条结果集底部命令都挂
             // `toolbar.configuration.visible` 的 `visibleWhen`（`plugin.xml:1381-1397`），
             // 隐藏的命令随时能勾回来。本仓的写入口 = 状态行末端 ▾ 菜单（点一次落一次盘），
