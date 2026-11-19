@@ -259,7 +259,7 @@ td .mono{font-size:11.6px;color:var(--muted);}
     <a href="#s3">四个剧本</a>
     <a href="#s4">一次保存的全流程</a>
     <a href="#s5">两层目录</a>
-    <a href="#s6">五 Tab</a>
+    <a href="#s6">三页 Tab</a>
     <a href="#s7">安全与凭据</a>
     <a href="#s8">零造数据</a>
     <a href="#s9">架构</a>
@@ -272,7 +272,7 @@ td .mono{font-size:11.6px;color:var(--muted);}
   <div class="hero">
     <div class="hero-grid">
       <div>
-        <div class="eyebrow">新增数据源连接 · 两层目录 <b>三态作用域</b> · 五 Tab · 六个驱动实现</div>
+        <div class="eyebrow">新增数据源连接 · 两层目录 <b>三态作用域</b> · 三页 Tab · 六个驱动实现 · 配置中心四域</div>
         <h2>选类型 → 选驱动 → 填连接，<em>按住 Ctrl+Enter</em>——<br>连接落在正确的作用域里。</h2>
         <p class="lead">
           它不是一个"填 URL 的弹窗"：类型目录、驱动实现、认证与网络档案、TLS、环境策略、多连接暂存、作用域路由、凭据加密，是一条完整的闭环。
@@ -530,20 +530,20 @@ td .mono{font-size:11.6px;color:var(--muted);}
 
   <!-- ══ s6 ══ -->
   <section id="s6">
-    <div class="sec-head"><span class="no">6</span><h3>五 Tab · 一个对话框</h3><span class="tag">布局恒定：两列同行高</span></div>
+    <div class="sec-head"><span class="no">6</span><h3>三页 Tab · 一个对话框</h3><span class="tag">2026-11-18 由五页收敛：布局恒定两列同行高</span></div>
     <table>
       <tr><th>Tab</th><th>看什么</th><th>数据来源</th></tr>
       <tr><td>常规</td><td>连接设置（随驱动变形）+ 数据库认证 + 连接安全（TLS）+ 组织（标签 / 分组）</td><td class="mono">drivers.config_schema + 库表</td></tr>
-      <tr><td>网络</td><td>引用网络档案（SSH / 代理 / SOCKS / 多跳链）；文件型自动隐藏</td><td class="mono">network_configs</td></tr>
-      <tr><td>能力</td><td>驱动声明的能力矩阵（只读）</td><td class="mono">drivers.capabilities</td></tr>
-      <tr><td>驱动属性</td><td>驱动自定义键值（可增删）</td><td class="mono">drivers.driver_properties</td></tr>
-      <tr><td>高级</td><td>环境 + 安全策略覆盖 + DuckDB 联邦加速</td><td class="mono">environments / environment_policies</td></tr>
+      <tr><td>网络</td><td>引用网络档案（SSH / 代理 / SOCKS / 多跳链）；文件型自动隐藏</td><td class="mono">net_resources / chains（旧 network_configs 只读回落）</td></tr>
+      <tr><td>高级</td><td>页首：驱动属性（key-value 增删 + 常用键提示）→ 环境 / 安全策略覆盖（八行执行语义）/ DuckDB 加速 → 页尾：能力矩阵（只读）</td><td class="mono">drivers.driver_properties / capabilities、environments / environment_policies</td></tr>
     </table>
+    <p style="margin:12px 0 0">「能力」「驱动属性」两页已并入「高级」：工程概念集中在一页，用户常规路径只剩两页。旧草稿停在 2/3 页的，恢复时归一到「高级」。</p>
     <div class="grid g3" style="margin-top:12px">
       <div class="card"><h4><span class="ico">▭</span>左侧栏</h4><ul><li>类型搜索框</li><li>暂存列表：固定 7.5rem + 内部滚动</li><li>类型树：占满剩余高度 + 内部滚动</li></ul><div class="foot">条目再多也不会拉长对话框</div></div>
       <div class="card"><h4><span class="ico">▤</span>Header 三行</h4><ul><li>类型徽标（仅图标）+ 名称 + 作用域三态分段</li><li>备注 + 项目（定宽单下拉）</li><li>驱动（定宽）+ 地址 / URI（弹性）</li></ul><div class="foot">定宽元素保证切换类型时后续元素不移动</div></div>
       <div class="card"><h4><span class="ico">⌨</span>快捷键</h4><ul><li><span class="mono">Ctrl+T</span> 测试连接</li><li><span class="mono">Ctrl+Enter</span> 保存</li><li><span class="mono">↑</span> / <span class="mono">↓</span> 切换暂存条目</li><li><span class="mono">Esc</span> 关闭（先写回草稿）</li></ul><div class="foot">两列同行高 32.5rem：切 Tab / 加草稿都不改对话框高度</div></div>
     </div>
+    <div class="card" style="margin-top:12px"><h4><span class="ico">⚙</span>同一页的另一面：配置中心（四域）</h4><p>认证 / 网络 / 环境三域的「管理」不再开对话框内覆盖层，而是进工作台中央 Dock 的单实例页；2026-11-19 又加第 4 域<b>密钥来源</b>（机器绑定 / 操作系统钥匙串 / 主密码档，含切档重加密与切档结果行）。列表与表单复用与对话框同一份 <span class="mono">manager_panel_ui</span> 实现。</p><div class="foot">主密码档启动时先出解锁窗（3 次失败禁用，忘记口令只能按文档恢复）</div></div>
   </section>
 
   <!-- ══ s7 ══ -->
@@ -590,7 +590,7 @@ td .mono{font-size:11.6px;color:var(--muted);}
   <section id="s9">
     <div class="sec-head"><span class="no">9</span><h3>架构 · 依赖只向下</h3><span class="tag">没有 HTTP / IPC 层</span></div>
     <div class="layers">
-      <div class="layer"><div class="tag">视图层</div><div class="body">连接对话框六文件（<span class="mono">render / state / staging / managers / helpers / project_picker</span>）——只依赖 <span class="mono">gpui-kit</span>，颜色走 <span class="mono">theme.colors.*</span>，尺寸走 <span class="mono">ui.rs</span> 常量</div></div>
+      <div class="layer"><div class="tag">视图层</div><div class="body">连接对话框（<span class="mono">render / state / staging / managers / helpers / project_picker</span>）+ 配置中心页（<span class="mono">config_center</span> 四域导航与 <span class="mono">config_center_vault</span> 密钥档位）——只依赖 <span class="mono">gpui-kit</span>，颜色走 <span class="mono">theme.colors.*</span>，尺寸走 <span class="mono">ui.rs</span> 常量</div></div>
       <div class="layer"><div class="tag">服务层</div><div class="body"><span class="mono">DataSourceService</span>（CRUD / 测试 / 作用域路由）· <span class="mono">ConnectionService</span>（组装 / 隧道）· <span class="mono">workspace_loader</span>（可见性与运行态）· <span class="mono">nav_runtime</span></div></div>
       <div class="layer"><div class="tag">传输层</div><div class="body"><span class="mono">connection</span> crate：URL 构建与脱敏、参数注入、协议链执行、SSH / 代理 / SOCKS 连接器、known_hosts</div></div>
       <div class="layer"><div class="tag">持久化层</div><div class="body"><span class="mono">engine</span>：全局库 / 项目库 / 认证 / 网络 / 组织元数据 / 草稿 / 缓存指纹规则 + 迁移</div></div>
@@ -605,7 +605,7 @@ td .mono{font-size:11.6px;color:var(--muted);}
     <table>
       <tr><th style="width:22%">维度</th><th>数字 / 手段</th></tr>
       <tr><td>自动化测试（逐包口径）</td><td>连接 crate <b>48 项</b>（单元 44 + 集成 <span class="mono">tunnel_roundtrip</span> 4）；工作台连接套件 <b>15 个目标 / 75 项</b>；引擎 lib <b>443 项</b>（含标签回填 / 网络档案加密 / 启动迁移接线等本模块用例）。全仓对照：84 目标 / 1963 通过——口径与逐目标明细见 <a href="../module-status.md">module-status.md</a> §2</td></tr>
-      <tr><td>窗口级测试</td><td>打开/关闭 · 五 Tab 渲染 · 作用域三态 · 结果行分级 · 首次引导三态 · <b>暂存区与两列高度恒定</b> · 编辑回填逐项断言</td></tr>
+      <tr><td>窗口级测试</td><td>打开/关闭 · 三页 Tab 渲染 · 作用域三态 · 结果行分级 · 首次引导三态 · <b>暂存区与两列高度恒定</b> · 编辑回填逐项断言 · 配置中心四域导航与密钥切档</td></tr>
       <tr><td>真机验收</td><td>4 条连接（MySQL · PostgreSQL · SQLite · DuckDB）× 测试连接 + 真实连接双链路；最近一次实测 MySQL / PG / SQLite 全通，DuckDB 因目标库被 DBeaver 占用而失败（环境原因，非代码缺陷）</td></tr>
       <tr><td>集成测试</td><td>隧道数据往返（SOCKS5 / HTTP CONNECT / 两跳链）· 连续保存 · 草稿跨会话 · 项目侧空密码保留 · 跨项目引用拦截</td></tr>
       <tr><td>契约测试</td><td>尺寸与颜色扫描本模块全部文件</td></tr>
