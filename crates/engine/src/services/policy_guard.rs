@@ -15,7 +15,8 @@
 //!
 //! 口径（与原型 Tab2 一致，不许漂）：
 //! - **未绑定环境 = 显式「无策略」**，不是默认 prod；不会误伤临时连接；
-//! - 优先级：连接级覆盖（尚未落地）> 环境策略；本模块当前只有环境一层；
+//! - 优先级：**连接级覆盖 > 环境策略**（`advanced_options.policy_overrides` 列出的策略类型
+//!   在本连接上不生效；见 [`ResolvedPolicies::apply_overrides`]）；
 //! - 策略值在**每次执行**时解析（原型提到的「建连快照」需连接对象持有解算结果，
 //!   在连接层改造前先按执行时解析，语义更保守：改策略对下一次执行即生效）；
 //! - 不在驱动层改写 SQL：拦截发生在语句分类之后、下发之前。
@@ -47,6 +48,37 @@ pub struct ResolvedPolicies {
 impl ResolvedPolicies {
     pub fn is_empty(&self) -> bool {
         self.environment.is_none()
+    }
+
+    /// 连接级覆盖：把列出的 `policy_type` 在本连接上**不生效**（连接 > 环境）。
+    ///
+    /// 语义来自对话框高级页（`advanced_options.policy_overrides`，值是策略类型）：开关默认关
+    /// （「默认」）、打开才写进数组并标「已覆盖」。环境策略本来就默认生效，所以「覆盖」只能
+    /// 是**这条连接不吃这条环境策略**——反过来（强制启用）在开关默认关时无法表达。
+    ///
+    /// 覆盖按**整类**停用（`security` 同时关掉只读 / DDL 阻断 / 写确认）：UI 是按策略类型
+    /// 给的开关，没有更细的粒度，这里也不凭空发明。
+    pub fn apply_overrides(&mut self, override_types: &[String]) {
+        for policy_type in override_types {
+            match policy_type.trim().to_ascii_lowercase().as_str() {
+                "security" => {
+                    self.read_only = false;
+                    self.block_ddl = false;
+                    self.dml_confirm = false;
+                }
+                "performance" => {
+                    self.max_rows = None;
+                    self.timeout_ms = None;
+                }
+                "schema" => {
+                    self.schema_include.clear();
+                    self.schema_exclude.clear();
+                }
+                "audit" => self.audit = false,
+                // `ui`（徽标）等展示类策略没有执行侧字段，覆盖 = 无事可做
+                _ => {}
+            }
+        }
     }
 
     /// 执行前拦截：只读 / DDL 阻断。
@@ -348,6 +380,38 @@ fn policy_cache() -> &'static PolicyCache {
     CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
+/// 从连接的高级选项读 `policy_overrides`（纯函数：坏 JSON / 非字符串项一律忽略）。
+///
+/// 与对话框写入端同口径：值是 `environment_policies.policy_type`（`security` / `performance` /
+/// `schema` / `audit` / `ui`）。旧版本存过 6 项布尔键，不匹配任何类型，自然被忽略。
+pub fn policy_overrides(advanced_options: Option<&str>) -> Vec<String> {
+    advanced_options
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .and_then(|v| v.get("policy_overrides").and_then(|x| x.as_array()).cloned())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| item.as_str())
+                .map(|s| s.trim().to_ascii_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 按连接解算策略：**连接级覆盖 > 环境策略**。
+///
+/// 环境那层走按环境 id 的 5 秒缓存；覆盖是连接自己的字段（调用方手里已有），
+/// 所以只多做一次 JSON 解析，不加缓存（也就不会因“刚保存的覆盖”延迟生效）。
+pub async fn resolve_for_connection(
+    environment_id: Option<&str>,
+    advanced_options: Option<&str>,
+) -> ResolvedPolicies {
+    let mut policies = resolve_for_environment(environment_id).await;
+    let overrides = policy_overrides(advanced_options);
+    policies.apply_overrides(&overrides);
+    policies
+}
+
 // ===== 审计（原型 ⑨ Tab2 `audit.enabled`）=====
 //
 // 落点 = 全局库 `app_logs`（`store::logging` 的 LogStore），target 固定 `audit.sql`：
@@ -489,6 +553,59 @@ mod tests {
         let off = resolve_from_rows(Some("staging".into()), &[]);
         assert!(!off.dml_confirm);
         assert!(DmlConfirm::for_statement(&off, &SqlStatementType::Delete, "delete from t").is_none());
+    }
+
+    #[test]
+    fn connection_overrides_turn_off_only_the_listed_policy_type() {
+        let mut p = resolve_from_rows(
+            Some("prod".into()),
+            &[
+                (
+                    "security".into(),
+                    Some(r#"{"read_only":true,"block_ddl":true,"confirm_dml":true}"#.into()),
+                    true,
+                ),
+                (
+                    "performance".into(),
+                    Some(r#"{"max_rows":500,"timeout_s":30}"#.into()),
+                    true,
+                ),
+                (
+                    "schema".into(),
+                    Some(r#"{"exclude":["tmp_*"]}"#.into()),
+                    true,
+                ),
+            ],
+        );
+        // 只覆盖 security：读写类闸全关，行数 / 超时 / schema 仍按环境生效
+        p.apply_overrides(&["security".to_string()]);
+        assert!(!p.read_only && !p.block_ddl && !p.dml_confirm);
+        assert_eq!(p.max_rows, Some(500));
+        assert_eq!(p.timeout_ms, Some(30_000));
+        assert!(!p.schema_visible("tmp_1"), "没被覆盖的那类不受影响");
+
+        // 覆盖 performance：行数 / 超时都退回“无策略”，其余保留
+        let mut q = resolve_from_rows(
+            Some("prod".into()),
+            &[(
+                "performance".into(),
+                Some(r#"{"max_rows":500,"timeout_s":30}"#.into()),
+                true,
+            )],
+        );
+        q.apply_overrides(&["PERFORMANCE".to_string()]); // 大小写不敏感
+        assert_eq!(q.max_rows, None);
+        assert_eq!(q.timeout_ms, None);
+    }
+
+    #[test]
+    fn policy_overrides_reading_ignores_bad_json_and_unknown_items() {
+        assert!(policy_overrides(None).is_empty());
+        assert!(policy_overrides(Some("not json")).is_empty());
+        let list = policy_overrides(Some(
+            r#"{"ssl":{"mode":"require"},"policy_overrides":[" Security ","",3,"audit"]}"#,
+        ));
+        assert_eq!(list, vec!["security".to_string(), "audit".to_string()]);
     }
 
     #[test]

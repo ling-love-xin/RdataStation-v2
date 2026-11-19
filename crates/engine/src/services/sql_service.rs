@@ -498,12 +498,10 @@ impl SqlService {
             Some(id) => id.to_string(),
             None => DEFAULT_CONN_KEY.to_string(),
         };
-        let policies = crate::services::policy_guard::resolve_for_environment(
-            self.manager
-                .get_connection_info(&conn_key)
-                .await
-                .and_then(|info| info.environment_id)
-                .as_deref(),
+        let info = self.manager.get_connection_info(&conn_key).await;
+        let policies = crate::services::policy_guard::resolve_for_connection(
+            info.as_ref().and_then(|i| i.environment_id.as_deref()),
+            info.as_ref().and_then(|i| i.advanced_options.as_deref()),
         )
         .await;
         let (stmt_type, _) = SqlEngine::parse_and_route(sql, SqlDialect::Ansi);
@@ -556,12 +554,10 @@ impl SqlService {
             Some(id) => id,
             None => DEFAULT_CONN_KEY.to_string(),
         };
-        let policies = crate::services::policy_guard::resolve_for_environment(
-            self.manager
-                .get_connection_info(&conn_key)
-                .await
-                .and_then(|info| info.environment_id)
-                .as_deref(),
+        let info = self.manager.get_connection_info(&conn_key).await;
+        let policies = crate::services::policy_guard::resolve_for_connection(
+            info.as_ref().and_then(|i| i.environment_id.as_deref()),
+            info.as_ref().and_then(|i| i.advanced_options.as_deref()),
         )
         .await;
         if let Err(err) = policies.check_statement(&stmt_type, sql) {

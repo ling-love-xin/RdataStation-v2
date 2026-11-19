@@ -163,14 +163,14 @@ impl MetadataService {
             .collect())
     }
 
-    /// 当前连接所属环境的解算后策略（未绑定环境 = 全放行）。
+    /// 当前连接的解算后策略（连接级 `policy_overrides` 优先于环境；未绑定环境 = 全放行）。
     async fn policies_for(&self, conn_id: &str) -> engine::services::policy_guard::ResolvedPolicies {
-        let environment_id = self
-            .manager
-            .get_connection_info(&conn_id.to_string())
-            .await
-            .and_then(|info| info.environment_id);
-        engine::services::policy_guard::resolve_for_environment(environment_id.as_deref()).await
+        let info = self.manager.get_connection_info(&conn_id.to_string()).await;
+        engine::services::policy_guard::resolve_for_connection(
+            info.as_ref().and_then(|i| i.environment_id.as_deref()),
+            info.as_ref().and_then(|i| i.advanced_options.as_deref()),
+        )
+        .await
     }
 
     /// 在能访问该 catalog 的连接上执行一条只读查询（表数据预览用）。
