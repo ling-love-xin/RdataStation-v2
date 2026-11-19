@@ -1146,6 +1146,80 @@ fn value_page_empty_state_shows_two_hint_lines_with_toolbar(
     );
 }
 
+/// 【列浏览器工具条】对齐 DBeaver `MetaDataPanel.contributeActions:204-215`：
+/// 页内工具条**只贡献一条**「生成 DDL」。多选批量动作（隐藏所选 / 显示所选 / 清空选择）
+/// 改挂在清单行右键菜单上（`MetaDataPanel.fillCustomActions:234-252` 的同一处口径：
+/// 操作对象是清单的结构化选中项），不再挤在工具条里。
+#[gpui_kit::test]
+fn column_browser_toolbar_keeps_only_the_ddl_action(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::column_browser::{batch_menu_items, filter_browser_columns, ColumnBatchAction};
+
+    // 纯函数：批量项只在「右键列属于多选集合」时出现，标签带集合规模
+    assert!(
+        batch_menu_items(&[], 0).is_empty(),
+        "空集合不该有批量项"
+    );
+    assert!(
+        batch_menu_items(&[1, 3], 0).is_empty(),
+        "右键列不在集合里时，菜单退回单列菜单"
+    );
+    let items = batch_menu_items(&[1, 3], 3);
+    assert_eq!(items.len(), 3, "命中集合 → 隐藏 / 显示 / 清空三条");
+    assert_eq!(items[0].0, ColumnBatchAction::HideSelected);
+    assert_eq!(items[1].0, ColumnBatchAction::ShowSelected);
+    assert_eq!(items[2].0, ColumnBatchAction::ClearSelection);
+    for (_, label) in &items {
+        assert!(
+            label.contains("2 列"),
+            "标签要带集合规模，实际 {label}"
+        );
+    }
+    // 过滤函数不受影响（清单仍按搜索词映射行号）
+    assert_eq!(
+        filter_browser_columns(&["id".into(), "amount".into()], &[], &[], "am").len(),
+        1
+    );
+
+    // 渲染层：多选非空时工具条仍只有「生成 DDL」，批量按钮不再出现
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.set_multi_selected(vec![1, 2], cx);
+            p.set_right_tab(RightTab::Browser, cx);
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let visible = |id: &'static str, cx: &mut gpui_kit::VisualTestContext| -> bool {
+        use gpui_kit::test::TestWindowExt as _;
+        let by_id = cx.update(|window, _| {
+            window
+                .try_find(gpui_kit::ElementId::Name(gpui_kit::SharedString::from(
+                    id.to_string(),
+                )))
+                .is_some_and(|snap| snap.visible())
+        });
+        by_id || cx.debug_bounds(id).is_some()
+    };
+    assert!(
+        visible("editor-result-generate-ddl", cx),
+        "列浏览器工具条应保留「生成 DDL」（DBeaver 的唯一页内动作）"
+    );
+    for id in [
+        "editor-result-col-batch-hide",
+        "editor-result-col-batch-show",
+        "editor-result-col-batch-clear",
+    ] {
+        assert!(
+            !visible(id, cx),
+            "多选批量动作应只在右键菜单里，工具条不应再有 {id}"
+        );
+    }
+}
+
 /// 【页内工具条列位】对齐 DBeaver `addPanel:1337-1383` 的 `GridLayout(2, false)`：
 /// 左列（`panel.contributeActions` + `FILL_HORIZONTAL`）吃满剩余宽度 → 页内动作**贴左**；
 /// 右列（`addDefaultPanelActions`）`HORIZONTAL_ALIGN_END` → 视图菜单**贴右**。

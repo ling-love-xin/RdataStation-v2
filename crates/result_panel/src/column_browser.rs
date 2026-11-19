@@ -241,6 +241,13 @@ impl ListDelegate for ColumnBrowserDelegate {
             is_deleted: false,
         };
         let menu_items = result_grid::column_browser_menu_items(&target);
+        // 【多选批量动作】对齐 DBeaver：多选动作挂在**清单右键菜单**上
+        // （`MetaDataPanel.fillCustomActions:234-252`），页内工具条只留「生成 DDL」。
+        // 只有右键落在**多选集合内**时才出现（语义与「复制列文本」一致：
+        // 操作对象是清单的结构化选中项，而不是单行）。
+        let batch = batch_menu_items(&self.selected_set, data_col);
+        let batch_queue = self.queue.clone();
+        let selected: Vec<usize> = self.selected_set.clone();
         let copy_text = delegate.column_text(data_col);
         let stats_payload = delegate.column_stats_payload(data_col);
         // 【复制列名】要拷哪些列：右键这一列在**多选集合**里 → 拷整个集合（升序），
@@ -391,6 +398,39 @@ impl ListDelegate for ColumnBrowserDelegate {
                         }
                     }
                 }
+                // 多选批量动作接在菜单尾部（前置一条分隔）：只在右键落在多选集合内时出现
+                if !batch.is_empty() {
+                    menu = menu.item(PopupMenuItem::separator());
+                }
+                for (action, label) in batch.iter() {
+                    let queue = batch_queue.clone();
+                    let action = *action;
+                    let columns = selected.clone();
+                    menu = menu.item(PopupMenuItem::new(label.clone()).on_click(
+                        move |_, _window, app| {
+                            app.stop_propagation();
+                            match action {
+                                ColumnBatchAction::HideSelected => queue.request(
+                                    ResultRequest::SetColumnsHidden {
+                                        columns: columns.clone(),
+                                        hidden: true,
+                                    },
+                                    app,
+                                ),
+                                ColumnBatchAction::ShowSelected => queue.request(
+                                    ResultRequest::SetColumnsHidden {
+                                        columns: columns.clone(),
+                                        hidden: false,
+                                    },
+                                    app,
+                                ),
+                                ColumnBatchAction::ClearSelection => {
+                                    queue.request(ResultRequest::ClearColumnSelection, app)
+                                }
+                            }
+                        },
+                    ));
+                }
                 menu
             });
 
@@ -458,6 +498,34 @@ impl ListDelegate for ColumnBrowserDelegate {
             .child("无匹配列")
             .into_any_element()
     }
+}
+
+/// 【多选批量动作】列浏览器行右键菜单里的批量项（纯函数）：操作对象 = 清单的结构化
+/// 选中项，所以只有「右键的那一列在多选集合里」时才出现（对齐 DBeaver
+/// `MetaDataPanel.fillCustomActions:234-252` 的 `getStructuredSelection()` 口径）。
+///
+/// 集合为空、或右键列不在集合里 → 不生成任何批量项（此时右键菜单就是单列菜单）。
+pub(crate) fn batch_menu_items(
+    selected: &[usize],
+    clicked: usize,
+) -> Vec<(ColumnBatchAction, String)> {
+    if selected.is_empty() || !selected.contains(&clicked) {
+        return Vec::new();
+    }
+    let n = selected.len();
+    vec![
+        (ColumnBatchAction::HideSelected, format!("隐藏所选（{n} 列）")),
+        (ColumnBatchAction::ShowSelected, format!("显示所选（{n} 列）")),
+        (ColumnBatchAction::ClearSelection, format!("清空选择（{n} 列）")),
+    ]
+}
+
+/// 批量动作种类（右键菜单里的三条；渲染层按它入队对应 `ResultRequest`）
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ColumnBatchAction {
+    HideSelected,
+    ShowSelected,
+    ClearSelection,
 }
 
 /// 多选集合推进（纯函数）：`additive`（Ctrl/Cmd 点击）= 有则删、无则加；

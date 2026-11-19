@@ -364,75 +364,11 @@ impl ResultPanel {
             None => self.sidebar_empty("暂无列", cx),
         };
 
-        // 标题行：【P2-3】多选非空时右侧摆批量动作（隐藏所选 / 显示所选 / 清空选择）。
-        // 计数与按钮都随 `multi_selected` 现算；按钮走队列回宿主分派（render 是纯读路径）。
-        // 无选中时**不生成**动作元素：页内工具条右段（`Toolbar`）即使空容器也会占 gap，
-        // 标题应单独占满整行。
-        let selected_count = self.multi_selected.len();
-        let batch_actions: Option<AnyElement> = (selected_count > 0).then(|| {
-            let selected: Vec<usize> = self.multi_selected.clone();
-            let hide_queue = self.queue.clone();
-            let hide_cols = selected.clone();
-            let show_queue = self.queue.clone();
-            let show_cols = selected;
-            let clear_queue = self.queue.clone();
-            div()
-                .h_flex()
-                .items_center()
-                .gap_1()
-                .child(
-                    div()
-                        .text_color(muted)
-                        .child(SharedString::from(format!("已选 {selected_count} 列"))),
-                )
-                .child(
-                    Button::new("editor-result-col-batch-hide")
-                        .ghost()
-                        .small()
-                        .label("隐藏所选")
-                        .tooltip("把选中的列整批隐藏（仍保留至少 1 列可见）")
-                        .on_click(move |_, _window, app| {
-                            hide_queue.request(
-                                ResultRequest::SetColumnsHidden {
-                                    columns: hide_cols.clone(),
-                                    hidden: true,
-                                },
-                                app,
-                            );
-                        }),
-                )
-                .child(
-                    Button::new("editor-result-col-batch-show")
-                        .ghost()
-                        .small()
-                        .label("显示所选")
-                        .tooltip("把选中的列整批取消隐藏")
-                        .on_click(move |_, _window, app| {
-                            show_queue.request(
-                                ResultRequest::SetColumnsHidden {
-                                    columns: show_cols.clone(),
-                                    hidden: false,
-                                },
-                                app,
-                            );
-                        }),
-                )
-                .child(
-                    Button::new("editor-result-col-batch-clear")
-                        .ghost()
-                        .small()
-                        .label("清空选择")
-                        .on_click(move |_, _window, app| {
-                            clear_queue.request(ResultRequest::ClearColumnSelection, app);
-                        }),
-                )
-                .into_any_element()
-        });
-
-        // 【Metadata · 生成 DDL】页内工具条常驻动作（对齐 DBeaver `MetaDataPanel.
-        // contributeActions`：那边只贡献这一条 `generate.ddl.by.resultSet`，恒可用）。
-        // 文本生成是纯函数（`crate::ddl`），但预览浮层的 Textarea 需要 `&mut Window`，
-        // 所以走队列回宿主分派。
+        // 【多选动作的位置】对齐 DBeaver：`MetaDataPanel.contributeActions:204-215` 的
+        // 页内工具条**只贡献一条**「生成 DDL」；多选的操作（拷列名 / 冻结 / 隐藏 …）
+        // 都在清单的右键菜单里（`MetaDataPanel.fillCustomActions:234-252`）。
+        // 所以这里不再往工具条塞批量按钮，多选批量动作改挂在行右键菜单
+        // （见 `crate::column_browser::batch_menu_items`）。
         let ddl_queue = self.queue.clone();
         let ddl_action = Button::new("editor-result-generate-ddl")
             .ghost()
@@ -445,8 +381,7 @@ impl ResultPanel {
                 ddl_queue.request(ResultRequest::GenerateResultSetDdl, app);
             })
             .into_any_element();
-        let mut toolbar_actions = vec![ddl_action];
-        toolbar_actions.extend(batch_actions);
+        let toolbar_actions = vec![ddl_action];
 
         // 页签内容区：宽度 / 边框 / 背景由右栏外壳统一控制，这里只排上下四段
         // 【2026-11-17 对齐】页内工具条与值 / 计算 / 分组 / 执行SQL 四页同形
