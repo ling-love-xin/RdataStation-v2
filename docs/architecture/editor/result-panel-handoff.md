@@ -1494,6 +1494,22 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 3.07 分组键可上移 / 下移（2026-11-20）
+
+- 竞品：`GroupingColumnsContainer.moveColumns:126-152` —— 分组键顺序 = 嵌套顺序；列分
+  「属性列 / 函数列」两段，函数列只能在属性列之后；入口是 `GroupingResultsDecorator.dropColumns`
+  （拖放）。`GroupingPanel.loadSettings`/`saveSettings` 是空桩，顺序不落盘。
+- 本仓：`group_columns` 顺序即层级；新增 `MoveGroupColumn { column, delta }` +
+  `tabs::can_move_group_column` / `tabs::move_group_column_in_place`（纯函数，相邻交换）+
+  `events::move_group_column`；分组页工具条在勾选下拉后加一对 Chevron 按钮。
+- 形态差异（有意）：DBeaver 拖放，本仓上移/下移一位——键盘可达、headless 可验，不引入
+  拖拽排序模型。要做拖拽时把纯函数的 `delta` 换成 `to_index` 就能复刻 `moveColumns` 的落点语义。
+- 用例：`moving_group_column_reorders_the_group_keys`（纯函数 + 面板态）、
+  `group_move_buttons_queue_the_request_for_the_selected_column`（窗口级点击 → 队列）。
+- 门禁基线：panel **359**、editor check 通过、editor **798**（1 ignored）。ui-guard 仍红，
+  归因并行线 `crates/workbench/src/unlock.rs`。
+- 未做：拖拽排序；函数列段的重排（本仓分组页没有聚合函数列，见 §9.15 的「不做」清单）。
+
 ### 3.06 右栏关空后重新展开恢复默认页（2026-11-20）
 
 - 竞品口径：`showPanels:1478-1518` 的展开分支带 `showDefaults=true`，先

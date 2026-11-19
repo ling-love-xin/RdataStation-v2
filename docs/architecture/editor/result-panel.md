@@ -6052,6 +6052,53 @@ removePanel:1441-1451  activePanels 空 → showPanels(false, true, true)
 也未新增任何颜色 / px 字面量，待并行线收敛后复跑。不要为了让 guard 变绿去改别人的
 BASELINE。
 
+### 9.18 分组键可上移 / 下移（2026-11-20）
+
+**竞品取证**（`panel/grouping/GroupingColumnsContainer.java`）：
+
+```text
+moveColumns(overColumnIndex, indexesToMove):126-152
+  :137-141  分组把被拖的列分进两个集合（属性列 / 函数列），按反序 TreeSet 处理
+  :143       // for now functions can only be placed after attributes
+  :144-147  属性列：目标列是属性列就用它，否则插到属性列末尾
+  :148-151  函数列：目标列是属性列则插到函数列 0 位
+moveElements(...):154-168  remove 时按反序移除、再整体 addAll(toIndex, …)
+```
+
+也就是说：**分组键（属性列）的顺序就是分组嵌套顺序**，把某列拖到别处 = 改层级；
+属性列与聚合函数列是两段，函数列永远排在属性列之后。入口是
+`GroupingResultsDecorator.dropColumns`（从结果集拖列到分组面板）。
+
+**本仓此前的状态**：`group_columns: Vec<usize>` 只记录「勾了哪几列」，顺序由**勾选先后**决定，
+没有任何重排手段——想「先按 B 再按 A」只能先清空再按新顺序勾。
+
+**本批改法**（表达同一动作，形态换成一对按钮）：
+
+1. `ports.rs`：新增 `MoveGroupColumn { column, delta }`（`delta` = -1 上移 / +1 下移）。
+2. `panel/tabs.rs` 两个纯函数：
+   - `can_move_group_column(group_columns, selected, delta)`：选中列**在键里**且移动后仍在界内；
+   - `move_group_column_in_place(&mut [usize], column, delta)`：相邻交换，越界 / 不在键里 → `false`。
+3. 分组页工具条在勾选下拉之后插一对图标按钮（`ChevronUp` / `ChevronDown`，
+   `editor-result-group-move-up` / `-move-down`），作用于**当前选中列**，不可用即 `disabled`。
+4. `panel/events.rs::move_group_column`：只动 `group_columns` 顺序。分组行的键值排列由
+   `arrange_groups` 每帧现算（`group_by_columns_for` 按 `group_columns` 逐层嵌套），所以
+   **顺序一变层级就跟着变**，不需要在别处补状态。没真动就不 `notify`（避免无谓重绘）。
+5. `host/results/dispatch.rs`：新分支转成面板方法调用（无持久化——DBeaver 的分组键顺序也不落盘，
+   `loadSettings`/`saveSettings` 是空桩，见 §9.15 取证）。
+
+**形态差异（有意，非缺口）**：DBeaver 用拖放（`dropColumns`）；本仓用「上移 / 下移一位」——
+键盘可达、headless 可验，且不引入拖拽排序模型（GPUI 下拖拽需要手势 + 插入指示线 + 落点判定，
+本批不做）。语义等价：都能把某列挪到任意位置（重复按即可）。若以后要拖拽，`moveColumns` 的
+落点语义可以直接复刻到这个纯函数上（把 `delta` 换成 `to_index`）。
+
+**验证**：
+- `panel::tests::moving_group_column_reorders_the_group_keys`：纯函数四点（相邻交换 / 首位不能再上移 /
+  末位不能再下移 / 不在键里无动作）+ 可用性六点 + 面板态（勾 `[0,2]` → 上移 2 → `[2,0]`，再移一次不变）。
+- `panel::tests::group_move_buttons_queue_the_request_for_the_selected_column`（窗口级）：渲染分组页，
+  点 `editor-result-group-move-up`，断言队列收到 `MoveGroupColumn { column: 2, delta: -1 }`。
+- 门禁：result_panel **359 passed**（+2）、editor check 通过、editor **798 passed**（1 ignored）。
+- ui-guard 仍红，归因外部（并行线未跟踪 `crates/workbench/src/unlock.rs` 的裸 px），见 §9.17 末段。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
