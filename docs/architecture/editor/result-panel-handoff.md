@@ -1493,6 +1493,18 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 2.95 分组页正文的表结构（键列 + COUNT(*)）与三条差异（2026-11-19）
+
+- DBeaver 的分组结果是**表**：属性列 = 每个分组键一列，函数列 = `getFunctionColumns()`
+  逐个建（`GroupingResultsContainer` 的 `addAttribute` / `addFunction`），默认函数由
+  `getDefaultFunction:75-80` 拼成 `COUNT(<方言默认分组属性>)`，无数据源时 `COUNT(*)`。
+- 本仓：`group_table_header(names)` = 键列名 + `COUNT(*)`；正文表头
+  `editor-result-group-header`（`h_5` + `HAIRLINE` 下边线，与计算页列头同形），
+  行内每键一格 `flex_1` + 省略号，计数格 `text_right` + `muted`。
+- 差异（改了会返工，先看这里）：列宽是等分 flex（那边用结果集列宽体系）；
+  只有一个函数列；`COUNT(*)` 是本仓常量（本地分组不发 SQL，无别名可反推）。
+- 门禁：panel 344 / editor 794（1 ignored）/ ui-guard 4。
+
 ### 2.94 值页空态两行与「文案取不到」（2026-11-19）
 
 - DBeaver 值页空态是**两行**（`ValueViewerPanel.createContents:89-106` 的 `PaintListener`，

@@ -5471,6 +5471,57 @@ toggle-panels **命令描述**（含快捷键）绑进文案。两条都是 `dra
 连同 `column_browser_toolbar_offers_generate_ddl` 的 `let (panel, cx)` → `let (_panel, cx)`。
 清理后 `cargo test -p rds-result-panel --lib` 的 `warning` 计数为 **0**（此前 9 条）。
 
+### 9.07 分组页正文改成「表」：键列一列一格 + `COUNT(*)` 列（2026-11-19）
+
+**DBeaver 的分组结果是表，不是文本行**：`GroupingResultsContainer` 用
+`GroupingColumnsContainer` 装配列——属性列（每个分组键一列，
+`rebuildGrouping:155-165` 的 `addAttribute`）与函数列（`addFunction`，
+`:180-185` 按 `getFunctionColumns()` 逐个建）。默认函数由 `getDefaultFunction:75-80` 拼：
+
+```java
+private String getDefaultFunction() {
+    DBPDataSource dataSource = dataContainer.getDataSource();
+    return FUNCTION_COUNT + "(" +
+        (dataSource == null ? SQLConstants.COLUMN_ASTERISK :
+            dataSource.getSQLDialect().getDefaultGroupAttribute()) + ")";
+}
+```
+
+即无数据源时 `COUNT(*)`，否则 `COUNT(<方言默认分组属性>)`（多数方言就是 `*`）。
+列宽由容器自己管，`GroupingResultsContainer:253-256` 在默认排序时按
+「键列数 + 1」定位 count 列的序位。
+
+**本仓此前的状态**：正文把键值拼成一行文本（`values.join(" | ")`）再跟一个计数数字，
+表头也没有——读起来是一串「a | b  3」，与那边「每键一列、末尾一列函数值」的表结构不一致。
+
+**改法**：
+1. 新增纯函数 `group_table_header(names) -> Vec<String>`：键列名原样 + 末尾固定
+   `"COUNT(*)"`（本仓本地分组只有计数这一个函数，见 `group_by_columns_for` 的
+   `(键, 计数)` 返回形）。
+2. `render_group_tab` 正文加表头行：`editor-result-group-header`，
+   `h_5` + `border_b(HAIRLINE)`（与计算页列头同高同分隔线），每格 `flex_1` 等分、
+   `text_ellipsis`，末列（函数列）`text_right` 与网格里数值列同侧。
+3. 分组行由「joined 文本 + 数字」改为「每键一格 + 计数一格」：键格 `flex_1` 等分 + 省略号，
+   计数格 `text_right` + `muted`。空态（没有分组键）不变，工具条仍常驻。
+4. 表头只在有分组键时渲染（`Option<AnyElement>` + `.children(...)`），空态不带表头。
+
+**与 DBeaver 的已知差异（登记）**：
+- 列宽：那边是查询结果自带列宽（结果集的列宽体系），本仓用等分 flex，没有拖拽调整；
+  这是布局精度问题，属「目视统一处理」的范围。
+- 只有一列函数（`COUNT(*)`）。DBeaver 可挂多个函数列（`GroupingColumnsContainer`
+  支持任意 `GroupingFunctionColumn`，含 `PercentGroupingFunctionColumn` 之类的
+  扩展动作列），本仓没有组内聚合函数列（此前已登记：「需多格选区」）。
+- 表头文案 `COUNT(*)` 是本仓常量，不是从 SQL 别名反推的——本地分组不发 SQL，
+  没有别名可取。
+
+**验证**：
+- 纯函数：`group_table_header` 的「键列 + 末列 COUNT(*)」两种情形（单键 / 双键）；
+- 渲染：`panel::tests::group_tab_shows_a_header_row_with_count_star`
+  —— 显式选一个分组键后 `editor-result-group-header` 的 `debug_bounds` 为 `Some`；
+- 门禁：`cargo test -p rds-result-panel --lib` = **344 passed**（343 + 1，warning 仍为 0）、
+  `cargo check -p rds-editor` 通过、`cargo test -p rds-editor --lib -- --test-threads=4`
+  = **794 passed**（1 ignored）、`cargo test -p rds-ui-guard` = 4 passed。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
