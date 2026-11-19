@@ -980,6 +980,48 @@ fn clear_group_columns_drops_explicit_selection(cx: &mut gpui_kit::TestAppContex
     assert!(cx.update(|_, app| panel.read(app).group_columns.clone()).is_empty());
 }
 
+/// 【值页空态】形态对齐 DBeaver `ValueViewerPanel.createContents:89-106`：空态是**两行**
+/// （选值提示 + 收起面板提示），且页内工具条仍在（六页同形）。
+#[gpui_kit::test]
+fn value_page_empty_state_shows_two_hint_lines_with_toolbar(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 纯函数层：两行非空、互不相同（不是把一句话拆两截）
+    let lines = {
+        use super::tabs::value_empty_lines;
+        value_empty_lines()
+    };
+    assert_eq!(lines.len(), 2, "值页空态应是两行");
+    assert!(lines.iter().all(|line| !line.trim().is_empty()));
+    assert_ne!(lines[0], lines[1]);
+    // 第二行必须兑现「怎么收起面板」这条语义（本仓的两个入口之一）
+    assert!(
+        lines[1].contains("面板"),
+        "第二行应指向收起面板的入口，实际 {}",
+        lines[1]
+    );
+
+    // 渲染层：未选中单元格 → 空态页（带工具条）+ 新空态容器可见
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.selection_pos = None;
+            p.set_right_tab(RightTab::Value, cx);
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-value-toolbar").is_some(),
+        "值页空态也要保留页内工具条（六页同形）"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-empty-page").is_some(),
+        "值页空态正文容器应渲染（editor-result-empty-page）"
+    );
+}
+
 /// 【分组页持久化】宿主注入的两项偏好：排序口径 id 与「仅重复」开关都要落到面板状态；
 /// 未知 id 按出厂 `value`（与设置服务归一同一口径），重复注入同值不重复 notify。
 #[gpui_kit::test]
@@ -1642,10 +1684,10 @@ fn identical_column_projection_keeps_the_browser_selection(cx: &mut gpui_kit::Te
 /// 工具条常驻的第一颗动作就是它——这里钉住入口存在。
 #[gpui_kit::test]
 fn column_browser_toolbar_offers_generate_ddl(cx: &mut gpui_kit::TestAppContext) {
-    use gpui_kit::test::TestWindowExt as _;
 
     cx.update(gpui_kit::init);
-    let (panel, cx) = panel_harness(cx);
+    // 默认页就是列浏览器，面板实体本身不再用到（只要它被挂上窗口即可）
+    let (_panel, cx) = panel_harness(cx);
 
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(
@@ -1685,7 +1727,6 @@ fn count_rows_action_is_gated_by_data_and_analysis_tier() {
 
 #[gpui_kit::test]
 fn status_bar_offers_a_count_rows_action(cx: &mut gpui_kit::TestAppContext) {
-    use gpui_kit::test::TestWindowExt as _;
 
     cx.update(gpui_kit::init);
     let (panel, cx) = panel_harness(cx);
@@ -1721,7 +1762,6 @@ fn status_bar_offers_a_count_rows_action(cx: &mut gpui_kit::TestAppContext) {
 
 #[gpui_kit::test]
 fn column_browser_draws_the_comment_line_below_the_name(cx: &mut gpui_kit::TestAppContext) {
-    use gpui_kit::test::TestWindowExt as _;
 
     cx.update(gpui_kit::init);
     let (panel, cx) = panel_harness(cx);
@@ -1777,7 +1817,6 @@ fn column_browser_draws_the_comment_line_below_the_name(cx: &mut gpui_kit::TestA
 /// 最大化时**网格整块不渲染**，右栏独占区域；再切回网格回来。
 #[gpui_kit::test]
 fn maximize_panel_hides_the_grid_and_keeps_the_sidebar(cx: &mut gpui_kit::TestAppContext) {
-    use gpui_kit::test::TestWindowExt as _;
 
     cx.update(gpui_kit::init);
     let (panel, cx) = panel_harness(cx);
@@ -1915,7 +1954,6 @@ fn toggling_the_active_page_collapses_the_panel(cx: &mut gpui_kit::TestAppContex
 /// 「面板已关（竖条也没了）但右栏被最大化强行挂满整块」的自相矛盾。
 #[gpui_kit::test]
 fn maximize_yields_to_the_panels_master_switch(cx: &mut gpui_kit::TestAppContext) {
-    use gpui_kit::test::TestWindowExt as _;
 
     cx.update(gpui_kit::init);
     let (panel, cx) = panel_harness(cx);
@@ -1999,7 +2037,6 @@ fn remove_group_column_guards_the_last_key() {
 /// 排序口径的语义差异见 §8.83。移除钮的可用性由纯函数钉，这里只验它真的画出来。
 #[gpui_kit::test]
 fn group_toolbar_offers_the_remove_column_action(cx: &mut gpui_kit::TestAppContext) {
-    use gpui_kit::test::TestWindowExt as _;
 
     cx.update(gpui_kit::init);
     let (panel, cx) = panel_harness(cx);
@@ -2089,7 +2126,6 @@ fn set_segment_rows_clamps_to_the_minimum(cx: &mut gpui_kit::TestAppContext) {
 /// 【R6 段大小】状态行真的摆出「段」输入框（面板注入 InputState 后才有该元素）。
 #[gpui_kit::test]
 fn status_row_shows_the_segment_size_input(cx: &mut gpui_kit::TestAppContext) {
-    use gpui_kit::test::TestWindowExt as _;
 
     cx.update(gpui_kit::init);
     let (panel, cx) = panel_harness(cx);
@@ -2190,7 +2226,6 @@ fn value_save_is_gated_by_null_and_row_number_slot() {
 /// `value_can_save_to_file` 同口径置灰覆盖。
 #[gpui_kit::test]
 fn value_toolbar_offers_open_in_external_app(cx: &mut gpui_kit::TestAppContext) {
-    use gpui_kit::test::TestWindowExt as _;
 
     cx.update(gpui_kit::init);
     let (panel, cx) = panel_harness(cx);

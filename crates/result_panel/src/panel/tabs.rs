@@ -177,8 +177,14 @@ impl ResultPanel {
         let theme = cx.theme();
         let muted = theme.colors.muted_foreground;
         let Some((row, col)) = self.selection_pos else {
-            // 空态也保留页内工具条（六页同形，见 `empty_page`）
-            return self.empty_page("editor-result-value-toolbar", "值", "未选中单元格", cx);
+            // 空态也保留页内工具条（六页同形，见 `empty_page`）；
+            // 值页正文是**两行**（DBeaver `ValueViewerPanel` 的空态形态，见 [`value_empty_lines`]）
+            return self.empty_page_lines(
+                "editor-result-value-toolbar",
+                "值",
+                &value_empty_lines(),
+                cx,
+            );
         };
         let grid = self.grid.read(cx);
         let delegate = grid.delegate();
@@ -1478,6 +1484,13 @@ impl ResultPanel {
 
     /// 【侧栏】右栏各页共用的空态（居中灰字；页内容区 `flex_1`）
     pub(crate) fn sidebar_empty(&self, text: &str, cx: &App) -> AnyElement {
+        self.sidebar_empty_lines(&[text], cx)
+    }
+
+    /// 【侧栏】多行空态：每行一条灰字（DBeaver 值页空态是**两行**，
+    /// 见 `ValueViewerPanel.createContents:89-106`：第一行 `value_viewer_select_view_message`
+    /// 画在 y=0，第二行 `value_viewer_hide_panel_message` 画在 y=30）。
+    pub(crate) fn sidebar_empty_lines(&self, lines: &[&str], cx: &App) -> AnyElement {
         div()
             .flex_1()
             .min_h_0()
@@ -1488,9 +1501,57 @@ impl ResultPanel {
             .px_2()
             .text_xs()
             .text_color(cx.theme().colors.muted_foreground)
-            .child(SharedString::from(text))
+            .children(
+                lines
+                    .iter()
+                    .map(|line| SharedString::from(*line))
+                    .collect::<Vec<_>>(),
+            )
             .into_any_element()
     }
+
+    /// 【侧栏】「页内工具条 + 多行空态正文」的整页骨架（同 [`Self::empty_page`]，
+    /// 只是正文允许多行——值页空态两行要用它）。
+    fn empty_page_lines(
+        &self,
+        toolbar_id: &'static str,
+        title: &str,
+        lines: &[&str],
+        cx: &App,
+    ) -> AnyElement {
+        div()
+            .flex_1()
+            .min_h_0()
+            .v_flex()
+            .debug_selector(|| "editor-result-empty-page".to_string())
+            .child(self.panel_toolbar(
+                toolbar_id,
+                SharedString::from(title),
+                Vec::new(),
+                cx,
+            ))
+            .child(self.sidebar_empty_lines(lines, cx))
+            .into_any_element()
+    }
+}
+
+/// 【值页空态】两行提示（纯函数，便于单测）。
+///
+/// 形态对齐 DBeaver `ValueViewerPanel.createContents:89-106`：空态在 `PaintListener` 里
+/// 画**两条**消息（第一条在 y=0、第二条在 y=30），不是一条长文本。
+/// 第一条的语义 = 「先在结果集里选一个值」（`value_viewer_select_view_message`）；
+/// 第二条的语义 = 「怎么收起这个面板腾出空间」（`value_viewer_hide_panel_message`，
+/// 原文把 toggle-panels **命令名**绑进去，如 `NLS.bind(..., hidePanelCmd)`）。
+///
+/// **文案是本仓自拟**：dbeaver-ref 快照里的 `bundle.properties` / `bundle_zh.properties`
+/// 都没有这两个 key 的正文（全文件仅 12 行含 `viewer`，无一命中 `value_viewer_`），
+/// 逐字翻译无从取得，故按语义写、并把第二行指向本仓真实存在的两个入口
+/// （右缘竖条、视图菜单的面板项），不编造 DBeaver 的快捷键。
+pub(crate) fn value_empty_lines() -> [&'static str; 2] {
+    [
+        "在网格中选中一个单元格，这里显示它的值",
+        "右缘竖条或视图菜单可收起全部面板，腾出更多高度",
+    ]
 }
 
 /// 【值页动作可用性】「保存值到文件」什么时候可用：DBeaver 的 `saveToFile` 是
