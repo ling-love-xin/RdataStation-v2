@@ -1929,6 +1929,17 @@ pub(crate) fn right_tabs() -> [RightTab; 6] {
     ]
 }
 
+/// 【页内工具条】该页是否在「工具条与正文之间」画一条水平分隔线。
+///
+/// 对齐 DBeaver `IResultSetPanel.needsSeparator()`：`ResultSetViewer.addPanel:1345-1347`
+/// 只在面板声明 `true` 时才 `UIUtils.createLabelSeparator(panelComposite, SWT.HORIZONTAL)`；
+/// 全仓只有 `ValueViewerPanel.java:171-173` 返回 `true`，其余面板继承
+/// `ResultSetPanelBase.java:26-28` 的 `false`（`MetaDataPanel` / `AggregateColumnsPanel` /
+/// `GroupingPanel` / `ReferencesPanel` 均未覆写）。
+pub(crate) fn page_needs_separator(tab: RightTab) -> bool {
+    matches!(tab, RightTab::Value)
+}
+
 /// 【右缘竖条 / 视图菜单】点某一页时是否「关掉面板」而不是「切页」。
 ///
 /// 【页签条】已启用集合内某页的下标（`TabBar::selected_index` 用；不在集合里 → 0）。

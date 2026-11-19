@@ -1146,6 +1146,97 @@ fn value_page_empty_state_shows_two_hint_lines_with_toolbar(
     );
 }
 
+/// 【页内工具条列位】对齐 DBeaver `addPanel:1337-1383` 的 `GridLayout(2, false)`：
+/// 左列（`panel.contributeActions` + `FILL_HORIZONTAL`）吃满剩余宽度 → 页内动作**贴左**；
+/// 右列（`addDefaultPanelActions`）`HORIZONTAL_ALIGN_END` → 视图菜单**贴右**。
+/// 改动前本仓是「标题 flex_1 吃满 + 动作组紧贴菜单」，动作和菜单挤在同一侧右端。
+///
+/// 另钉 `needsSeparator()`：`addPanel:1345-1347` 只在面板声明 `true` 时才在工具条与正文之间
+/// 插水平分隔线；全仓只有 `ValueViewerPanel.java:171-173` 为 `true`，其余继承
+/// `ResultSetPanelBase.java:26-28` 的 `false`。
+#[gpui_kit::test]
+fn panel_toolbar_puts_actions_left_and_view_menu_right(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 纯函数层：六页里只有值详情页需要那条水平分隔线
+    {
+        use super::events::{page_needs_separator, right_tabs};
+        let flagged: Vec<RightTab> = right_tabs()
+            .into_iter()
+            .filter(|tab| page_needs_separator(*tab))
+            .collect();
+        assert_eq!(
+            flagged,
+            vec![RightTab::Value],
+            "needsSeparator 只有值详情页为 true（ValueViewerPanel.java:171-173）"
+        );
+    }
+
+    // 渲染层：值页带真实动作集（选一格 → 复制 / 保存 / 外部打开三颗都挂上）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.selection_pos = Some((0, 1));
+            p.set_right_tab(RightTab::Value, cx);
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let toolbar = cx
+        .debug_bounds("editor-result-value-toolbar")
+        .expect("值页工具条应带 debug_selector 才量得到");
+    let copy = cx
+        .debug_bounds("editor-result-value-copy")
+        .expect("值页复制钮应带 debug_selector 才量得到");
+    let menu = cx
+        .debug_bounds("editor-result-value-toolbar-view-menu")
+        .expect("值页视图菜单应带 debug_selector 才量得到");
+
+    let toolbar_left = f32::from(toolbar.origin.x);
+    let toolbar_right = toolbar_left + f32::from(toolbar.size.width);
+    let copy_left = f32::from(copy.origin.x);
+    let copy_right = copy_left + f32::from(copy.size.width);
+    let menu_left = f32::from(menu.origin.x);
+    let menu_right = menu_left + f32::from(menu.size.width);
+
+    // 1) 动作在菜单左侧（同一条工具条行）
+    assert!(
+        (f32::from(copy.origin.y) - f32::from(menu.origin.y)).abs() < 4.0,
+        "动作与视图菜单应同行：copy.y={} menu.y={}",
+        f32::from(copy.origin.y),
+        f32::from(menu.origin.y)
+    );
+    assert!(
+        copy_left < menu_left,
+        "页内动作应在视图菜单左侧，copy.x={copy_left} menu.x={menu_left}"
+    );
+
+    // 2) 动作贴左：标题（「值」）之后紧接动作，离工具条左端不超过 200px
+    assert!(
+        copy_left - toolbar_left <= 200.0,
+        "动作应贴左列起点（标题之后），实际距左端 {}px",
+        copy_left - toolbar_left
+    );
+
+    // 3) 左列吃满剩余宽度：动作右缘到菜单左缘之间应留出大段空隙
+    //    （改动前动作组紧贴菜单，空隙只有 gap_1=4px）
+    let gap = menu_left - copy_right;
+    assert!(
+        gap >= 24.0,
+        "左列应吃满剩余宽度，动作与菜单间空隙过小：{gap}px"
+    );
+
+    // 4) 菜单贴右：右缘落在工具条右端内（实测 28px = 行 px_2 + ghost 按钮自带内距；
+    //    阈值 40px 只盯住「菜单不在行中段」这条语义）
+    let trailing = toolbar_right - menu_right;
+    assert!(
+        (0.0..=40.0).contains(&trailing),
+        "视图菜单应贴右，距工具条右端 {trailing}px"
+    );
+}
+
 /// 【分组页持久化】宿主注入的两项偏好：排序口径 id 与「仅重复」开关都要落到面板状态；
 /// 未知 id 按出厂 `value`（与设置服务归一同一口径），重复注入同值不重复 notify。
 #[gpui_kit::test]

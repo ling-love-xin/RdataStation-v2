@@ -463,6 +463,8 @@ impl ResultPanel {
                 "editor-result-browser-toolbar",
                 SharedString::from(format!("列浏览器 · {} 列", columns.len())),
                 toolbar_actions,
+                // 列浏览器页（DBeaver `MetaDataPanel`）未覆写 `needsSeparator()` → 不画
+                super::events::page_needs_separator(RightTab::Browser),
                 cx,
             ))
             .child(table_head)

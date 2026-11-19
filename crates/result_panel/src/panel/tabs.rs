@@ -17,7 +17,9 @@ use gpui_kit::*;
 // 【B5】事实帧只读句柄随网格投影进 delegate（列式统计 / 原生数值排序交互派生时读取）
 
 use super::data::ResultPanel;
-use super::events::{panel_view_item_label, panel_view_menu_items, PanelViewItem};
+use super::events::{
+    page_needs_separator, panel_view_item_label, panel_view_menu_items, PanelViewItem,
+};
 use crate::grid::cell::{
     HEX_DUMP_BYTES_PER_LINE, ViewerMode, classify_value, hex_lines, hex_to_bytes,
 };
@@ -180,6 +182,7 @@ impl ResultPanel {
             // 空态也保留页内工具条（六页同形，见 `empty_page`）；
             // 值页正文是**两行**（DBeaver `ValueViewerPanel` 的空态形态，见 [`value_empty_lines`]）
             return self.empty_page_lines(
+                RightTab::Value,
                 "editor-result-value-toolbar",
                 "值",
                 &value_empty_lines(),
@@ -306,6 +309,9 @@ impl ResultPanel {
                 // 顺序照 `ValueViewerPanel.fillToolBar:409-428`：内容类动作（保存至文件 /
                 // 在外部程序打开）在前，写回类 SaveValueAction 在后（本仓无写回）。
                 vec![marker, copy, save, open_external],
+                // 分隔线：全仓只有值详情页声明 `needsSeparator() = true`
+                // （`ValueViewerPanel.java:171-173`）。
+                true,
                 cx,
             ))
             .child({
@@ -557,6 +563,7 @@ impl ResultPanel {
         let Some(data_col) = self.inspect_column(delegate) else {
             // 空态也保留页内工具条（六页同形，见 `empty_page`）
             return self.empty_page(
+                RightTab::Stats,
                 "editor-result-stats-toolbar",
                 "计算",
                 "选中一个数据列查看统计",
@@ -655,8 +662,18 @@ impl ResultPanel {
     /// 【R1】右栏各页共用的页内工具条：对齐 DBeaver 每个面板内部的一条
     /// `ToolBarManager(SWT.HORIZONTAL | SWT.RIGHT | SWT.FLAT)`（`ResultSetViewer.java:1337-1374`，
     /// 动作由各面板 `contributeActions` 贡献）。
-    /// 形态：高 28px（面板头档 = vendor `Toolbar` XSmall 自带的 `min_h_7`，容器同高才不溢出）、
-    /// 左标题 / 右动作组、底边一条 `HAIRLINE` 分隔线。
+    ///
+    /// **列位照 `addPanel:1337-1383`**：那边是 `GridLayout(2, false)` 的两列——左列
+    /// （`panel.contributeActions(...).createControl(trControl)` + `FILL_HORIZONTAL`）吃满剩余宽度，
+    /// 页内动作因此**贴左**；右列（`addDefaultPanelActions` 的视图菜单）`HORIZONTAL_ALIGN_END`，
+    /// 贴右。本仓照同一列位：左 = 标题 + 动作组，右 = 视图菜单。
+    /// 标题是本仓额外保留的（DBeaver 页名只在页签上；统计页标题带列名，仍有用），
+    /// 登记为「保留的有意差异」。
+    ///
+    /// **分隔线照 `panel.needsSeparator()`**：`ResultSetViewer.java:1345-1347` 只在面板
+    /// 声明 `needsSeparator()` 时才在工具条与正文之间插一条水平分隔；全仓只有
+    /// `ValueViewerPanel:171-173` 返回 `true`，其余继承 `ResultSetPanelBase:26-28` 的 `false`。
+    /// 所以这里的分隔线由调用方按页传入，不再每页无条件画。
     /// **动作只给本仓已有能力**——不造没有底层实现的按钮：DBeaver 的引用页
     /// `contributeActions` 是空实现（`ReferencesPanel.java:156-158`），该页保持空态。
     pub(crate) fn panel_toolbar(
@@ -664,10 +681,11 @@ impl ResultPanel {
         debug_id: &'static str,
         title: SharedString,
         actions: Vec<AnyElement>,
+        separator: bool,
         cx: &App,
     ) -> AnyElement {
         let theme = cx.theme();
-        div()
+        let mut row = div()
             .h_flex()
             .items_center()
             .justify_between()
@@ -676,25 +694,37 @@ impl ResultPanel {
             .h(rems(ui::RESULT_PANEL_TOOLBAR_HEIGHT))
             .flex_none()
             .text_xs()
-            .border_b(ui::HAIRLINE)
-            .border_color(theme.colors.border)
-            .debug_selector(move || debug_id.to_string())
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(theme.colors.muted_foreground)
-                    .child(title),
-            )
-            .child(
-                Toolbar::new(format!("{debug_id}-actions"))
-                    .xsmall()
-                    .p_0()
-                    .contents(actions),
-            )
-            .child(self.panel_view_menu(debug_id, cx))
-            .into_any_element()
+            .debug_selector(move || debug_id.to_string());
+        if separator {
+            row = row
+                .border_b(ui::HAIRLINE)
+                .border_color(theme.colors.border);
+        }
+        row.child(
+            div()
+                .h_flex()
+                .items_center()
+                .gap_1()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .child(
+                    div()
+                        .flex_none()
+                        .max_w(rems(14.))
+                        .truncate()
+                        .text_color(theme.colors.muted_foreground)
+                        .child(title),
+                )
+                .child(
+                    Toolbar::new(format!("{debug_id}-actions"))
+                        .xsmall()
+                        .p_0()
+                        .contents(actions),
+                ),
+        )
+        .child(self.panel_view_menu(debug_id, cx))
+        .into_any_element()
     }
 
     /// 【右栏视图菜单】每页条右端那颗「视图菜单」（对齐 DBeaver `addDefaultPanelActions`，
@@ -892,6 +922,7 @@ impl ResultPanel {
             "editor-result-stats-toolbar",
             SharedString::from(format!("「{column_name}」统计")),
             vec![add, reset, mode_button],
+            page_needs_separator(RightTab::Stats),
             cx,
         )
     }
@@ -1272,6 +1303,7 @@ impl ResultPanel {
                     Separator::vertical().into_any_element(),
                     clear_button,
                 ],
+                page_needs_separator(RightTab::Group),
                 cx,
             ))
             .child(body)
@@ -1317,6 +1349,7 @@ impl ResultPanel {
                 "editor-result-reference-toolbar",
                 SharedString::from("引用"),
                 Vec::new(),
+                page_needs_separator(RightTab::Reference),
                 cx,
             ))
             .child(body)
@@ -1508,6 +1541,7 @@ impl ResultPanel {
                 "editor-result-exec-sql-toolbar",
                 SharedString::from("生成的 SQL"),
                 copy.into_iter().collect(),
+                page_needs_separator(RightTab::ExecSql),
                 cx,
             ))
             .child(body)
@@ -1520,6 +1554,7 @@ impl ResultPanel {
     /// 空态也保留工具条——否则切页时正文起点会比其它页高 28px（2026-11-17 对齐）。
     fn empty_page(
         &self,
+        tab: RightTab,
         toolbar_id: &'static str,
         title: &str,
         body: &str,
@@ -1533,6 +1568,7 @@ impl ResultPanel {
                 toolbar_id,
                 SharedString::from(title),
                 Vec::new(),
+                page_needs_separator(tab),
                 cx,
             ))
             .child(self.sidebar_empty(body, cx))
@@ -1571,6 +1607,7 @@ impl ResultPanel {
     /// 只是正文允许多行——值页空态两行要用它）。
     fn empty_page_lines(
         &self,
+        tab: RightTab,
         toolbar_id: &'static str,
         title: &str,
         lines: &[&str],
@@ -1585,6 +1622,7 @@ impl ResultPanel {
                 toolbar_id,
                 SharedString::from(title),
                 Vec::new(),
+                page_needs_separator(tab),
                 cx,
             ))
             .child(self.sidebar_empty_lines(lines, cx))
