@@ -683,6 +683,17 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【R3 分组页】把分组键里某一列上移 / 下移一位（`delta` = -1 / +1）。
+    ///
+    /// 对齐 DBeaver `GroupingColumnsContainer.moveColumns:126-152`：分组键顺序 = 分组嵌套顺序，
+    /// 挪一位就是改层级。列不在键里 / 已在边界 → 什么都不做（不 notify，避免无谓重绘）。
+    pub fn move_group_column(&mut self, column: usize, delta: i8, cx: &mut Context<Self>) {
+        if !super::tabs::move_group_column_in_place(&mut self.group_columns, column, delta) {
+            return;
+        }
+        cx.notify();
+    }
+
     /// 【R3 分组页】切换分组结果排序口径（按值 / 按计数）
     pub fn set_group_sort(&mut self, sort: GroupSort, cx: &mut Context<Self>) {
         if self.group_sort == sort {

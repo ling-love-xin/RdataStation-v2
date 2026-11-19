@@ -582,6 +582,10 @@ impl EditorHostPanel {
                 self.result_panel
                     .update(cx, |p, cx| p.toggle_group_column(column, cx));
             }
+            ResultRequest::MoveGroupColumn { column, delta } => {
+                self.result_panel
+                    .update(cx, |p, cx| p.move_group_column(column, delta, cx));
+            }
             ResultRequest::SetGroupSort(sort) => {
                 self.result_panel
                     .update(cx, |p, cx| p.set_group_sort(sort, cx));

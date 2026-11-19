@@ -329,6 +329,13 @@ pub enum ResultRequest {
     SetStatsMode(StatsMode),
     /// 【R3 分组页】切换分组列集合里的某一列（点选加入 / 再点移除；空集合 = 用当前选中列）
     ToggleGroupColumn(usize),
+    /// 【R3 分组页】把分组键里某一列上移 / 下移一位（`delta` = -1 上移 / +1 下移）。
+    /// 分组键顺序 = 分组嵌套顺序，改顺序 = 改层级（对齐 DBeaver
+    /// `GroupingColumnsContainer.moveColumns:126-152`，那边是拖拽，本仓是工具条按钮）
+    MoveGroupColumn {
+        column: usize,
+        delta: i8,
+    },
     /// 【R3 分组页】分组结果排序口径（按值 / 按计数）
     SetGroupSort(GroupSort),
     /// 【R3 分组页】「仅重复」：只保留行数 > 1 的分组（对齐 DBeaver 分组面板同名选项）

@@ -1207,6 +1207,94 @@ fn group_tab_shows_a_header_row_with_count_star(
     );
 }
 
+/// 【R3 分组页】分组键顺序可上 / 下移：纯函数钉边界，面板态钉「顺序真的变了」。
+///
+/// 对齐 `GroupingColumnsContainer.moveColumns:126-152`——分组键顺序 = 嵌套顺序，
+/// 挪一位就是改层级（DBeaver 靠拖放表达，本仓是工具条的一对按钮）。
+#[gpui_kit::test]
+fn moving_group_column_reorders_the_group_keys(cx: &mut gpui_kit::TestAppContext) {
+    use crate::panel::tabs::{can_move_group_column, move_group_column_in_place};
+
+    // 纯函数：相邻交换 + 边界不动 + 不在键里不动
+    let mut keys = vec![3usize, 7, 9];
+    assert!(move_group_column_in_place(&mut keys, 7, -1));
+    assert_eq!(keys, vec![7, 3, 9], "上移一位应与前一项交换");
+    assert!(!move_group_column_in_place(&mut keys, 7, -1), "已在首位不能再上移");
+    assert!(move_group_column_in_place(&mut keys, 3, 1));
+    assert_eq!(keys, vec![7, 9, 3], "下移一位应与后一项交换");
+    assert!(!move_group_column_in_place(&mut keys, 3, 1), "已在末位不能再下移");
+    assert!(!move_group_column_in_place(&mut keys, 42, -1), "不在分组键里应无动作");
+
+    // 可用性：无选中 / 不在键里 / 已到边界 → 不可用
+    assert!(!can_move_group_column(&keys, None, -1));
+    assert!(!can_move_group_column(&keys, Some(42), 1));
+    assert!(!can_move_group_column(&keys, Some(7), -1), "首位不能上移");
+    assert!(!can_move_group_column(&keys, Some(3), 1), "末位不能下移");
+    assert!(can_move_group_column(&keys, Some(9), -1));
+    assert!(can_move_group_column(&keys, Some(9), 1));
+
+    // 面板态：勾 [0, 2] → 把 2 上移 → 顺序变 [2, 0]（分组层级随之改）
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.toggle_group_column(0, cx);
+            p.toggle_group_column(2, cx);
+        })
+    });
+    assert_eq!(cx.update(|_, app| panel.read(app).group_columns.clone()), vec![0, 2]);
+    cx.update(|_, app| panel.update(app, |p, cx| p.move_group_column(2, -1, cx)));
+    assert_eq!(
+        cx.update(|_, app| panel.read(app).group_columns.clone()),
+        vec![2, 0],
+        "上移应改分组键顺序"
+    );
+    // 到边界后再移：状态不变（也不该触发无谓重绘）
+    cx.update(|_, app| panel.update(app, |p, cx| p.move_group_column(2, -1, cx)));
+    assert_eq!(cx.update(|_, app| panel.read(app).group_columns.clone()), vec![2, 0]);
+}
+
+/// 【R3 分组页】工具条的上移 / 下移按钮真的把请求入队（渲染路径 + 可用性门）。
+#[gpui_kit::test]
+fn group_move_buttons_queue_the_request_for_the_selected_column(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ports::ResultRequest;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 分组键 [0, 2]，选中第 2 列（→ 上移可用、下移不可用）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.toggle_group_column(0, cx);
+            p.toggle_group_column(2, cx);
+            p.select_column(2, cx);
+            p.set_right_tab(RightTab::Group, cx);
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let up = cx
+        .debug_bounds("editor-result-group-move-up")
+        .expect("分组页工具条应有上移按钮");
+    let point = gpui_kit::point(
+        up.origin.x + up.size.width / 2.,
+        up.origin.y + up.size.height / 2.,
+    );
+    cx.simulate_click(point, gpui_kit::Modifiers::default());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let queued = cx.update(|_, app| panel.read(app).queue.drain());
+    assert!(
+        queued.iter().any(|request| matches!(
+            request,
+            ResultRequest::MoveGroupColumn { column: 2, delta: -1 }
+        )),
+        "上移按钮应以「选中列 + delta=-1」入队：{queued:?}"
+    );
+}
+
 /// 【R3】清空分组列：对齐 DBeaver `ClearGroupingAction`（分组列非空才可用；
 /// 清空后回到「选中列兜底」而不是空态）。这里钉状态与幂等，按钮存在性由
 /// 渲染用例断言。

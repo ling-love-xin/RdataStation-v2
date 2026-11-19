@@ -45,6 +45,48 @@ pub(crate) fn can_remove_group_column(group_columns: &[usize], selected: Option<
     }
 }
 
+/// 【分组页】分组键内某列能否上 / 下移一位（纯函数）。
+///
+/// 对齐 DBeaver `GroupingColumnsContainer.moveColumns:126-152`：分组键（属性列）顺序
+/// 就是分组嵌套顺序，移动会改层级。本仓用「上移 / 下移一位」表达同一动作
+/// （键盘可达、headless 可验；DBeaver 是拖到目标列的拖放）。
+/// 可用条件 = 选中列**在分组键里**且移动后仍在界内。
+pub(crate) fn can_move_group_column(
+    group_columns: &[usize],
+    selected: Option<usize>,
+    delta: i8,
+) -> bool {
+    let Some(selected) = selected else {
+        return false;
+    };
+    let Some(index) = group_columns.iter().position(|column| *column == selected) else {
+        return false;
+    };
+    let target = index as i64 + delta as i64;
+    target >= 0 && (target as usize) < group_columns.len()
+}
+
+/// 【分组页】把分组键里某列上 / 下移一位；返回是否真的动了
+/// （列不在分组键里 / 已经到边界 = `false`，调用方据此决定要不要通知）。
+///
+/// 这一层只动 `Vec<usize>` 顺序：分组行的键值排列由 `arrange_groups` 现算，
+/// 顺序一变层级就跟着变，不需要在别处补状态。
+pub(crate) fn move_group_column_in_place(
+    group_columns: &mut [usize],
+    column: usize,
+    delta: i8,
+) -> bool {
+    let Some(index) = group_columns.iter().position(|existing| *existing == column) else {
+        return false;
+    };
+    let target = index as i64 + delta as i64;
+    if target < 0 || (target as usize) >= group_columns.len() {
+        return false;
+    }
+    group_columns.swap(index, target as usize);
+    true
+}
+
 /// 【计算页】「复制全部」文本（纯函数）。
 ///
 /// 对齐 DBeaver `AggregateColumnsPanel.CopyAllAction`（`:471-495`）的**非分组口径**：
@@ -1165,7 +1207,33 @@ impl ResultPanel {
                 .into_any_element()
         };
 
-        // 动作四：移除分组列（对齐 DBeaver `DeleteColumnAction` +
+        // 动作四：分组键顺序上移 / 下移（作用于**当前选中列**）。
+        // 对齐 DBeaver `GroupingColumnsContainer.moveColumns:126-152`：那边靠拖拽
+        // （`GroupingResultsDecorator.dropColumns`），本仓用一对按钮——键盘可达，
+        // 且 headless 下能用窗口用例钉住「顺序变 = 层级变」。
+        let selected = self.selected_col;
+        let [move_up, move_down] = [
+            (-1i8, IconName::ChevronUp, "上移分组列", "editor-result-group-move-up"),
+            (1i8, IconName::ChevronDown, "下移分组列", "editor-result-group-move-down"),
+        ]
+        .map(|(delta, icon, tip, id)| {
+            let queue = self.queue.clone();
+            let enabled = can_move_group_column(&self.group_columns, selected, delta);
+            let column = selected.unwrap_or(0);
+            Button::new(id)
+                .ghost()
+                .xsmall()
+                .debug_selector(move || id.to_string())
+                .icon(icon)
+                .disabled(!enabled)
+                .tooltip(tip.to_string())
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::MoveGroupColumn { column, delta }, app);
+                })
+                .into_any_element()
+        });
+
+        // 动作五：移除分组列（对齐 DBeaver `DeleteColumnAction` +
         // `controls_resultset_grouping_remove_column`：作用于**当前选中列**，
         // 选中列不在分组键里 / 只剩一列时不可用）
         let remove_button = {
@@ -1305,6 +1373,9 @@ impl ResultPanel {
                     duplicates_button,
                     Separator::vertical().into_any_element(),
                     columns_menu,
+                    // 上移 / 下移（本仓对 `moveColumns` 的等价表达，见 can_move_group_column 注释）
+                    move_up,
+                    move_down,
                     remove_button,
                     Separator::vertical().into_any_element(),
                     clear_button,
