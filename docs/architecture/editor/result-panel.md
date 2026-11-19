@@ -5784,6 +5784,74 @@ public void contributeActions(IContributionManager manager) {
 **登记（未做）**：工具条移除计数后，「已选 N 列」只在右键菜单标签里体现；
 DBeaver 本来也没有该计数，若要常显应放状态栏而不是页内工具条。
 
+### 9.13 右缘竖条 / 视图菜单页项：改成「开/关该页」的 toggle 语义（2026-11-19）
+
+第 25 批按「点当前页什么都不做、整栏显隐另有一条命令」定过 `toggle_right_tab`，
+本轮重新取证后该口径被推翻：**DBeaver 的页按钮/页菜单项本身就是开关**，关掉的是
+**那一页**，不是整块面板。
+
+取证（`org.jkiss.dbeaver.ui.editors.data`）：
+
+```text
+handler\ResultSetHandlerTogglePanel.java
+  toggleResultsPanel:64-69   isVisible = isPanelsVisible() && isPanelVisible(panelId)
+                             showResultsPanel(rsv, panelId, isVisible)
+  showResultsPanel:71-81     if (isVisible) rsv.closePanel(panelId);
+                             else rsv.activatePanel(panelId, true, true);
+                             (+ DataEditorFeatures.RESULT_SET_PANEL_OPEN.use)
+  updateElement:83-103       element.setChecked(rsv.isPanelVisible(panelId))   // 勾选态不含整栏可见
+
+ResultSetViewer.java
+  竖条总开关:1038-1051       SWT.CHECK，点它 showPanels(!isPanelsVisible(), true, true)，
+                             勾选态 = panelsVisible
+  竖条每页  :1055-1080       SWT.CHECK；tooltip = label + " (" + 命令描述 + ")"；
+                             点击 → showResultsPanel(id, panelsVisible && isPanelVisible(id))；
+                             setChecked(panelsVisible && isPanelVisible(id))  // 多页可同时勾亮
+  closePanel:1536-1542       dispose tab + removePanel
+  removePanel:1441-1451      enabledPanelIds.remove(id)；activePanels 空 → showPanels(false, true, true)
+  activatePanel:1287-1320    showPanels && 整栏收起 → 先 showPanels(true,false,false)；
+                             已建页 → setActive 切过去；未建 → 新建（addPanel 里入 enabledPanelIds）
+  isPanelVisible:1532-1534   enabledPanelIds.contains(panelId)
+  fillPanelsMenu:1559-1588   每页 STYLE_CHECK + CMD_TOGGLE_PANEL + panelId 参数
+```
+
+**本仓改动**（`open_tabs` 即 `enabledPanelIds` 的等价物，第 24/26 批已落地）：
+
+1. `events::toggle_right_tab`：`visible = panels_visible() && open_tabs.contains(tab)`；
+   `visible → close_right_tab`（返回 `false`，没有「切到该页」）；否则 `set_right_tab`
+   （打开并激活，整栏收起时顺带展开，返回 `true`）。关闭最后一页由 `close_right_tab`
+   已有的「集合空 → 收起整栏」分支承接（对应 `removePanel:1447-1449`）。
+2. 新增纯函数 `events::edge_tab_active(panels_visible, is_open)`：竖条勾选态 =
+   `panelsVisible && isPanelVisible(id)`，**多页可同时勾亮**（不再是「只有当前页勾亮」）。
+3. `events::edge_tab_tooltip(tab, is_open, panels_visible)` 三态改为报动作：
+   开且整栏可见「点一下关闭这一页」/ 开但整栏收起「点一下展开并切到这一页」/
+   已关闭「此页已关闭，点一下打开」。
+4. `sidebars.rs` 竖条：`toggled(edge_tab_active(..))`、tooltip 改传 `panels_visible`。
+5. `tabs.rs` 视图菜单页项：勾选态仍是「该页已启用」，点击改为纯函数
+   `events::page_item_closes(panels_visible, is_open)` 决定 `CloseRightTab` / `OpenRightTab`
+   （两者都是 `toggleResultsPanel` 的两条分支）。
+6. `dispatch.rs`：`ToggleRightTab` 现在也会关页（改 `open_tabs`），落盘判据从
+   「`switched`」改为「`switched` **或** 集合有变化」，修掉关闭时漏写
+   `result_panel.open_tabs` 的路径。
+
+**验证**：
+- `panel::tests::clicking_an_edge_tab_toggles_that_page`（原 `..._is_a_noop` 作废）：
+  点当前页 → 摘出集合、整栏仍展开、当前页落到规范序下一页；再点 → 重新启用并切过去；
+  整栏收起后点同一页 → 展开并切到该页（不能因为「开着的页」就当关闭）。
+- 新增 `closing_the_last_edge_tab_collapses_the_bar`：逐页关到只剩一页再关最后一页 →
+  `open_tabs` 空 + 面板收起；收起态点任一一页 → 重新展开。
+- 新增 `view_menu_page_item_closes_only_when_the_bar_is_open`（纯函数四象限）。
+- `panel::tests::edge_bar_tooltip_reports_the_toggle_action`（原 `..._carries_label_and_description`
+  的三态断言作废）覆盖三态文案 + `edge_tab_active` 四象限。
+- 门禁：`cargo test -p rds-result-panel --lib` = **351 passed**（warning 0）、
+  `cargo check -p rds-editor` 通过、`cargo test -p rds-editor --lib -- --test-threads=4`
+  = **795 passed**（1 ignored）、`cargo test -p rds-ui-guard` = 4 passed。
+- 第 28 批遗留的 editor E0063 已消失（并行线补齐了 `FormatOptions` 的调用点），
+  本批 editor 两道门禁**实测恢复全绿**。
+
+**仍与 DBeaver 有差**（未做）：逐页关闭仍是页签条**行尾单颗 ×**（DBeaver 是每页签内侧
+`SWT.CLOSE`；kit `Tab` 无 `closable`），属目视/上游能力范围。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

@@ -1493,6 +1493,26 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 3.02 竖条 / 视图菜单页项 = 「开/关该页」toggle（2026-11-19）
+
+- DBeaver 取证：`ResultSetHandlerTogglePanel.toggleResultsPanel:64-69` +
+  `showResultsPanel:71-81`——`isPanelsVisible() && isPanelVisible(id)` 为真 →
+  `closePanel(id)`（关**那一页**）；否则 → `activatePanel(id, true, true)`
+  （打开并激活，整栏收起时顺带展开）。竖条每页 `SWT.CHECK`（`:1056-1080`），勾选态 =
+  `panelsVisible && isPanelVisible(id)`（多页可同时勾亮）；视图菜单页项
+  （`fillPanelsMenu:1559-1588`）绑同一命令，勾选态 = `isPanelVisible(id)`（`updateElement:99`）。
+- 本仓：`toggle_right_tab` 改为「可见 → `close_right_tab`（返回 false）；否则
+  `set_right_tab`（返回 true）」；新增纯函数 `edge_tab_active` / `page_item_closes`；
+  `edge_tab_tooltip(tab, is_open, panels_visible)` 三态报动作；`dispatch.rs` 的
+  `ToggleRightTab` 落盘判据改为「switched 或 `open_tabs` 有变化」。
+- 用例：`clicking_an_edge_tab_toggles_that_page`（原 `..._is_a_noop` 作废）、
+  `closing_the_last_edge_tab_collapses_the_bar`、
+  `view_menu_page_item_closes_only_when_the_bar_is_open`、
+  `edge_bar_tooltip_reports_the_toggle_action`（原 `..._carries_label_and_description` 三态断言作废）。
+- 门禁基线：panel **351**、editor check 通过、editor **795**（1 ignored）、ui-guard **4**
+  ——第 28 批遗留的 editor E0063 已由并行线补齐，editor 两道门禁恢复全绿。
+- 未做：逐页关闭仍是页签条行尾单颗 ×（DBeaver 每页签内侧 `SWT.CLOSE`；kit `Tab` 无 `closable`）。
+
 ### 3.01 列浏览器工具条只留「生成 DDL」（2026-11-19）
 
 - 对齐 `MetaDataPanel.contributeActions:204-215`：页内工具条只贡献一条「生成 DDL」。
