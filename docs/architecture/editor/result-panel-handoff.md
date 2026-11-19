@@ -1493,6 +1493,20 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 2.94 值页空态两行与「文案取不到」（2026-11-19）
+
+- DBeaver 值页空态是**两行**（`ValueViewerPanel.createContents:89-106` 的 `PaintListener`，
+  y=0 与 y=30 各一条 `UIUtils.drawMessageOverControl`），第二行把 `CMD_TOGGLE_PANELS`
+  的**命令描述**绑进文案。抄这个形态时别做成两个 Label——它是居中绘制的两段文字。
+- 正文**取不到**：`OSGI-INF/l10n/bundle.properties` 只有 12 行含 `viewer`、无
+  `value_viewer_*`，`bundle_zh.properties` 同；`ResultSetMessages.java:432-433` 只有字段声明。
+  任何人再说「按 DBeaver 原文逐字对齐」，先给出这两个 key 的正文出处。
+- 本仓实现：`tabs.rs` 的 `sidebar_empty` 委托 `sidebar_empty_lines(&[text])`（其余页仍单行）；
+  `empty_page_lines(...)` 多行版骨架 + `debug_selector("editor-result-empty-page")`；
+  值页空态走纯函数 `value_empty_lines()`。第二行**不写快捷键**（本仓面板总开关无按键绑定），
+  改为指向右缘竖条 / 视图菜单两个真实入口。
+- 门禁：panel 343（告警清零）/ editor 794（1 ignored）/ ui-guard 4。
+
 ### 2.93 分组页偏好的持久化与「DBeaver 不存分组键」（2026-11-19）
 
 - **别把「分组键重开就丢」当缺口**：DBeaver `GroupingPanel.saveSettings:118-120` 只有一行

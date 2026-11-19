@@ -5412,6 +5412,65 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
   `cargo check -p rds-editor` 通过；`cargo test -p rds-editor --lib -- --test-threads=4`
   = **794 passed**（1 ignored）；`cargo test -p rds-ui-guard` = 4 passed。
 
+### 9.06 值页空态两行提示（2026-11-19）
+
+**DBeaver 的形态**（`panel/valueviewer/ValueViewerPanel.java:85-107`）：值页空态不是一条
+文案，而是在 `viewPlaceholder` 的 `PaintListener` 里画**两条**消息——
+
+```java
+viewPlaceholder.addPaintListener(e -> {
+    if (previewController == null && viewPlaceholder.getChildren().length == 0) {
+        String hidePanelCmd = ActionUtils.findCommandDescription(
+            IResultSetCommands.CMD_TOGGLE_PANELS, ..., true);
+        UIUtils.drawMessageOverControl(viewPlaceholder, e, ResultSetMessages.value_viewer_select_view_message, 0);
+        UIUtils.drawMessageOverControl(viewPlaceholder, e,
+            NLS.bind(ResultSetMessages.value_viewer_hide_panel_message, hidePanelCmd), 30);
+    }
+});
+```
+
+第一行（y=0）讲「选哪个值」；第二行（y=30）讲「怎么收起这个面板腾空间」，并且把
+toggle-panels **命令描述**（含快捷键）绑进文案。两条都是 `drawMessageOverControl`
+（居中绘制），不是两个 Label。
+
+**取不到的正文**：`org.jkiss.dbeaver.ui.editors.data/OSGI-INF/l10n/bundle.properties`
+（24969 字节）全文只有 **12 行**含 `viewer`，且没有一行是 `value_viewer_*`；同目录
+`bundle_zh.properties`（26719 字节）同样零命中；`ResultSetMessages.java:432-433` 只有字段
+声明（`value_viewer_select_view_message` / `value_viewer_hide_panel_message`，无默认值）。
+⇒ 文案逐字对齐**做不到**，本仓按语义自拟并登记（见下）。
+
+**改法**：
+1. `panel/tabs.rs` 把单行空态抽成多行版本：`sidebar_empty(text, cx)` 改为委托
+   `sidebar_empty_lines(&[text], cx)`（`.children()` 逐行，其余页仍是单行，行为不变）。
+2. 新增 `empty_page_lines(toolbar_id, title, lines, cx)`：与 `empty_page` 同骨架
+   （28px 页内工具条 + 居中灰字正文），只是正文允许多行；挂
+   `debug_selector("editor-result-empty-page")` 便于窗口用例断言。
+3. `render_value_tab` 的空态分支由 `empty_page(..., "未选中单元格")` 改为
+   `empty_page_lines(..., &value_empty_lines())`；`empty_page` 仍被引用页使用，保留。
+4. 新增纯函数 `value_empty_lines() -> [&'static str; 2]`：
+
+   | 行 | 文案 | 语义来源 |
+   | --- | --- | --- |
+   | 1 | 在网格中选中一个单元格，这里显示它的值 | `value_viewer_select_view_message` |
+   | 2 | 右缘竖条或视图菜单可收起全部面板，腾出更多高度 | `value_viewer_hide_panel_message` + `CMD_TOGGLE_PANELS` |
+
+   第二行**不写快捷键**：本仓的面板总开关没有绑定按键，照抄 DBeaver 的快捷键串会是
+   假承诺；改成指向本仓两个真实入口（右缘竖条、视图菜单的面板项——见 §8.94 / §8.95）。
+
+**验证**：
+- 纯函数：两行非空、互不相同（不是把一句话拆两截）、第二行含「面板」；
+- 渲染：`panel::tests::value_page_empty_state_shows_two_hint_lines_with_toolbar`
+  ——未选中单元格时 `editor-result-value-toolbar` 与 `editor-result-empty-page`
+  两个 `debug_bounds` 都 `is_some()`（工具条仍在 = 六页同形不受影响）；
+- 门禁：`cargo test -p rds-result-panel --lib` = **343 passed**、
+  `cargo check -p rds-editor` 通过、`cargo test -p rds-editor --lib -- --test-threads=4`
+  = **794 passed**（1 ignored）、`cargo test -p rds-ui-guard` = 4 passed。
+
+**顺手清掉的历史告警**（同一文件，无行为变化）：`panel/tests.rs` 里 8 处
+`use gpui_kit::test::TestWindowExt as _;` 在各自用例中确实未使用（编译器证明），
+连同 `column_browser_toolbar_offers_generate_ddl` 的 `let (panel, cx)` → `let (_panel, cx)`。
+清理后 `cargo test -p rds-result-panel --lib` 的 `warning` 计数为 **0**（此前 9 条）。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
