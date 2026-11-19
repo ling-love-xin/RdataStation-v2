@@ -1493,6 +1493,38 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 2.92 计算页统计项扩到九项（2026-11-19）
+
+- 取证位置：`dbeaver-ref` 的 `org.jkiss.dbeaver.ui.editors.data/plugin.xml:89-99` 列九个
+  `aggregateFunction`（`count` / `countDistinct` 标了 `default="true"`，另有 `countNulls`、
+  `sum`、`avg`、`min`、`max`、`median`、`mode`）；行为在
+  `panel/aggregate/AggregateColumnsPanel.java`（`loadSettings:129-155` 空集回落
+  `loadDefaultFunctions:157-164`、`saveSettings:166-181`、`refresh:199-214`）。
+- **`AggregateFunctionDescriptor` / `AggregateColumnsConfig` / `FunctionXxx` 这几个类在本仓
+  dbeaver-ref 快照里不存在**（`panel/aggregate/` 只有 `AggregateColumnsPanel.java`），所以
+  median / mode 的具体算法无法逐行对照。本仓自定确定性口径，改这两项时先看
+  `grid/stats.rs` 的 `median_of` / `mode_of` 文档注释与 `grid/tests.rs` 的三条纯函数用例。
+- 九项的稳定 id 与顺序（`ports::StatsItem::ALL`，id 全小写）：
+  `count,countdistinct,nulls,min,max,median,mode,avg,sum`。落盘串由
+  `stats_items_to_ids` 生成，`stats_items_from_ids` 解析（未知项丢弃、重复项丢弃）。
+- 默认集 = `DEFAULT_SET = [Count, CountDistinct]`（对齐 `isDefault()` 两个打标），
+  settings 里 `result_panel.stats_items` 的模型默认与 registry 的 `default_json` 是
+  `"count,countdistinct"`——**两处必须同时改**，registry 不变式校验二者相等。
+- 整列取值的门槛：`StatsItem::needs_column_values()`（仅 `CountDistinct` / `Median` /
+  `Mode`）+ `StatsMode::Text`。`render_stats_tab` 把「要扫整列」压成一次 `need_values`
+  判断，算好的派生量通过 `tabs::StatExtras` 传给纯函数 `stat_value(item, stats, &extras, mode)`。
+  再加聚合函数时按这个位置扩：`ALL` / `label` / `supports_text_mode` /
+  `needs_column_values` / `id` 五处同改，然后 `StatExtras` 加字段、`stat_value` 加分支。
+- 已登记口径（**有意偏离**，不是缺陷）：`distinct_count` 按**值文本**判等，所以 `1` 与
+  `1.0` 算两个值；`median_of` 只收可解析为 `f64` 的样本（与 `column_stats_from_values`
+  同一份解析）；`mode_of` 并列时取**首现更早**的值（DBeaver 实现不可考）。
+- **「组内聚合函数列」不适用**：DBeaver 的 Tree 嵌套（每列父节点挂函数子项）只在
+  `aggregateSelection:221-262` 的 `groupByColumns == true` 分支出现，需要多单元格选区；
+  本仓只有单格选择（`selection_pos: Option<(usize, usize)>`），见第 14 批登记。
+- 门禁：`cargo test -p rds-settings --lib`（registry 不变式会校验 `default_json`）→
+  `cargo test -p rds-result-panel --lib` → `cargo check -p rds-editor` →
+  `cargo test -p rds-editor --lib -- --test-threads=4` → `cargo test -p rds-ui-guard`。
+
 ### 2.91 「筛选运行」链路与状态栏说明的接手要点（2026-11-19）
 
 - 链路：面板 `ResultRequest::RunFilterAsQuery` → `dispatch` → 宿主

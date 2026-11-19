@@ -5279,6 +5279,75 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
 注：默认线程数并行跑全量时，`ports::editor_completion` 三条「后台线程 3s 内」用例
 会偶发超时（机器满负载起不来线程；单跑与 `--test-threads=4` 均全绿），不是回归。
 
+### 9.04 计算页统计项 6 → 9 项（2026-11-19）
+
+**为什么补**：第 12 批对齐计算页时只摆了六项（非空 / NULL / Min / Max / Avg / Sum），
+而 DBeaver 的聚合函数全集是**九个**——`plugin.xml:89-99` 逐条列出 `count`、
+`countDistinct`、`countNulls`、`sum`、`avg`、`min`、`max`、`median`、`mode`，
+其中 `count` 与 `countDistinct` 带 `default="true"`。缺的三项（去重计数 / 中位数 /
+众数）在那边不是可选插件，是**出厂就进菜单**的能力，补上才算把「计算页」这一页的
+功能面收口。
+
+**取证**：
+- `plugin.xml:89-99` 九个 `aggregateFunction`（含各自 `label` 与 `default` 标记）；
+- `panel/aggregate/AggregateColumnsPanel.java`：`loadSettings:129-155`（空集回落
+  `loadDefaultFunctions`）、`loadDefaultFunctions:157-164`（只收 `isDefault()`、
+  按 label 排序）、`saveSettings:166-181`、`refresh:199-214`（`:213` saveSettings）；
+- **`AggregateFunctionDescriptor` / `AggregateColumnsConfig` / `FunctionXxx` 在本仓
+  dbeaver-ref 快照里不存在**（该目录只有 `AggregateColumnsPanel.java`），所以
+  median / mode 的算法无法逐行对照——本仓自定确定性口径并在此登记。
+
+**「组内聚合函数列」为什么不做**：DBeaver 的 Tree 是「每列父节点 + 函数子项」两层，
+但那条路径只走 `aggregateSelection:221-262` 的 `groupByColumns == true` 分支，前提是
+**多单元格选区**；本仓的选择模型是单格（`selection_pos: Option<(usize, usize)>`），
+第 14 批已登记不适用，这里不再重复。
+
+**改法（四项）**：
+1. `ports::StatsItem` 扩到 9 变体，`ALL` 顺序 = 上表顺序（`Count`、`CountDistinct`、
+   `Nulls`、`Min`、`Max`、`Median`、`Mode`、`Avg`、`Sum`），`DEFAULT_SET =
+   [Count, CountDistinct]`；`label` 新增「去重计数」「中位数」「众数」；`id` 新增
+   `countdistinct`（**全小写**，与 `countDistinct` 的驼峰写法不同，落盘 id 是契约）。
+2. `grid/stats.rs` 新增三条纯函数：
+   - `distinct_count(&[String]) -> usize`：跳过 `"NULL"`，按**值文本**判等；
+   - `median_of(&[String]) -> Option<f64>`：只收可解析为 `f64` 的样本（与
+     `column_stats_from_values` 同一份 `str::parse::<f64>` 判定），奇数取中、偶数取
+     两中均值，无样本 `None`；
+   - `mode_of(&[String]) -> Option<String>`：复用 `group_by_values`，跳过 `"NULL"`，
+     **严格大于才替换**（并列取首现更早；`max_by_key` 会取最后一个最大值，故手写循环）。
+3. `panel/tabs.rs`：整列取值从「字符串口径才取」收成「字符串口径 **或** 任一项
+   `needs_column_values()`」——`need_values` 一次判断、`values` 一次取；
+   `text_extremes` 仍只在字符串口径算。派生量打包成 `StatExtras { text_extremes,
+   distinct, median, mode }` 传给 `stat_value(item, stats, &extras, mode)`，
+   这样再加聚合函数只需在 `StatExtras` 添一字段 + 在 `stat_value` 添一分支，
+   不再为每个函数各扫一遍整列。取值规则：`CountDistinct` 不看口径（两种口径都是
+   不同取值个数）、`Median` 在字符串口径出 `—`、`Mode` 两种口径都给值文本、
+   缺样本一律 `—`（与 Avg/Sum 同一缺省口径）。
+4. settings：`result_panel.stats_items` 的模型默认由 `"count"` 改为
+   `"count,countdistinct"`，registry 的 `default_json` / `hint` 同步（registry 不变式
+   要求二者相等）。**注意这是默认集的第二次变动**：§8.91 当时写「本仓没有
+   countDistinct，故默认集只剩非空」，这次补上 `countdistinct` 后回到 DBeaver 的两项口径。
+
+**登记的有意偏离（不是缺陷）**：
+- 去重计数按**值文本**判等 → `1` 与 `1.0` 算两个不同值（本仓拿到的是展示文本，
+  `COUNT(DISTINCT x)` 的数据库语义这里拿不到）；
+- 中位数只统计可解析为 `f64` 的样本（文本样本不参与；全是文本 → `—`）；
+- 众数并列取**首现更早**者（DBeaver 实现不可考，取确定性口径）；
+- 计算页空集仍**不**回落默认集（DBeaver `loadSettings` 空集会 `loadDefaultFunctions`，
+  本仓把这个「空」当作合法的「用户全停用」，见 §8.91 起的既有登记）。
+
+**验证**：
+- `grid/tests.rs`：`distinct_count_skips_null_and_counts_text_values`、
+  `median_of_uses_sorted_numeric_samples`、
+  `mode_of_picks_most_frequent_value_and_breaks_ties_by_first_occurrence`；
+- `panel/tests.rs`：重写 `stat_value_respects_mode_and_missing_samples`、
+  `stats_defaults_are_the_dbeaver_default_set_in_display_order`（9 项 / 默认两项 /
+  `needs_column_values` 逐项核对），新增 `stat_value_covers_distinct_median_and_mode`；
+  右键菜单用例同步为「九项里已启用一项 → 八个可添加」；
+- 门禁：`cargo test -p rds-settings --lib` = **37 passed**；
+  `cargo test -p rds-result-panel --lib` = **340 passed**（336 + 4 条新用例）；
+  `cargo check -p rds-editor` 通过；`cargo test -p rds-editor --lib -- --test-threads=4`
+  = **794 passed**（1 ignored）；`cargo test -p rds-ui-guard` = 4 passed。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
