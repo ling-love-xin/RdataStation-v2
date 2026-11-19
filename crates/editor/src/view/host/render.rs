@@ -314,6 +314,8 @@ pub(crate) fn render_editor_status_bar(
         // 状态栏左段不再显示连接路径文本（labels().connection 保留给纯函数测试）
         connection: None,
         dialect: snapshot.dialect.as_deref(),
+        // 环境名：PROD 徽标在 labels 里判定（这里只传真实名字，不预判）
+        environment: snapshot.environment.as_deref(),
         // 执行方式由左段 channel 控件表达（可点切换）；文本段不再重复显示
         channel: None,
         env: snapshot.env.as_deref(),

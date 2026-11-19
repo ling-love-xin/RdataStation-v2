@@ -43,6 +43,8 @@ impl ConnectionsPort for WorkbenchConnections {
                 connected: c.connected,
                 // 【B10】驱动类型：编辑器据此选格式化 / 执行计划 / 转译的方言
                 db_type: c.driver.clone(),
+                // 环境名：状态栏 PROD 徽标的唯一判据（未绑定环境 = None，不打徽标）
+                environment: c.environment.clone(),
             })
             .collect()
     }

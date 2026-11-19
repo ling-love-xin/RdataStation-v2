@@ -14,6 +14,7 @@ fn conn(id: &str, name: &str, connected: bool) -> ConnectionOption {
         name: name.into(),
         connected,
         db_type: "test".into(),
+        environment: None,
     }
 }
 

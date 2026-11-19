@@ -59,10 +59,13 @@ pub fn load_persisted_connections_from(dir: &Path) -> (Vec<ConnectionItem>, Opti
 
     match runtime.block_on(async {
         let manager = GlobalDatabaseManager::new(sqlite, duckdb, 2).await?;
-        manager.get_global_connections(None, None).await
+        let infos = manager.get_global_connections(None, None).await?;
+        let envs = manager.list_environments().await.unwrap_or_default();
+        Ok::<_, engine::CoreError>((infos, envs))
     }) {
-        Ok(infos) => {
-            let mut items = map_infos(infos);
+        Ok((infos, envs)) => {
+            let env_map = environment_name_map(&envs);
+            let mut items = map_infos_with_env(infos, &env_map);
             fill_connected(&mut items);
             (items, None)
         }
@@ -129,12 +132,26 @@ fn query_manager(manager: &GlobalDatabaseManager) -> (Vec<ConnectionItem>, Optio
     };
     match runtime.block_on(manager.get_global_connections(None, None)) {
         Ok(infos) => {
-            let mut items = map_infos(infos);
+            // 环境名在渲染路径要读（状态栏 PROD 徽标）：随列表一次取好，渲染期不再查库。
+            let envs = runtime
+                .block_on(manager.list_environments())
+                .unwrap_or_default();
+            let env_map = environment_name_map(&envs);
+            let mut items = map_infos_with_env(infos, &env_map);
             fill_connected(&mut items);
             (items, None)
         }
         Err(e) => (Vec::new(), Some(format!("加载全局连接失败: {e}"))),
     }
+}
+
+/// 环境 id → 展示名（连接记录只存 `environment_id`，状态栏要显示名字）。
+fn environment_name_map(
+    envs: &[engine::persistence::env_store::Environment],
+) -> std::collections::HashMap<String, String> {
+    envs.iter()
+        .map(|e| (e.id.clone(), e.name.clone()))
+        .collect()
 }
 
 /// 项目根判定：目录存在且含项目元数据目录（`.RSmeta`）。
@@ -188,7 +205,24 @@ fn load_project_connections(root: &Path) -> Result<Vec<ConnectionItem>, String> 
 
 /// 批量映射（持久化记录 → 视图模型）。
 pub fn map_infos(infos: Vec<GlobalConnectionInfo>) -> Vec<ConnectionItem> {
-    infos.into_iter().map(connection_item_from_info).collect()
+    map_infos_with_env(infos, &std::collections::HashMap::new())
+}
+
+/// 同 [`map_infos`]，附带「环境 id → 名称」映射（状态栏 PROD 徽标的数据源）。
+pub fn map_infos_with_env(
+    infos: Vec<GlobalConnectionInfo>,
+    env_map: &std::collections::HashMap<String, String>,
+) -> Vec<ConnectionItem> {
+    infos
+        .into_iter()
+        .map(|c| {
+            let environment = c
+                .environment_id
+                .as_deref()
+                .and_then(|id| env_map.get(id).cloned());
+            connection_item_from_info(c, environment)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -225,7 +259,7 @@ mod tests {
 
 /// 单条映射：`connected` 初始为 false，由 `fill_connected` 填充运行时状态；
 /// `is_active` 语义见 `connection_item_from_info`。
-pub fn connection_item_from_info(c: GlobalConnectionInfo) -> ConnectionItem {
+pub fn connection_item_from_info(c: GlobalConnectionInfo, environment: Option<String>) -> ConnectionItem {
     ConnectionItem {
         id: c.id,
         name: c.name,
@@ -237,6 +271,7 @@ pub fn connection_item_from_info(c: GlobalConnectionInfo) -> ConnectionItem {
         schema: c.schema_name,
         description: c.description,
         use_duckdb_fed: c.use_duckdb_fed,
+        environment,
         created_at: c.created_at,
         updated_at: c.updated_at,
     }
@@ -255,6 +290,8 @@ fn project_connection_to_item(c: ProjectConnection) -> ConnectionItem {
         schema: c.schema_name,
         description: c.description,
         use_duckdb_fed: c.use_duckdb_fed,
+        // 项目侧连接模型没有环境绑定（环境是全局域的概念），如实置 None
+        environment: None,
         created_at: c.created_at,
         updated_at: c.updated_at,
     }

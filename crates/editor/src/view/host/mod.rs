@@ -194,6 +194,8 @@ pub struct EditorStatusSnapshot {
     pub connection: Option<String>,
     /// 方言（`PostgreSQL`）；`None` = 未绑定连接
     pub dialect: Option<String>,
+    /// 绑定连接所属环境的展示名（`prod` / `生产`）；`None` = 未绑定环境（不打 PROD 徽标）
+    pub environment: Option<String>,
     /// 通道段文案；`None` = 不显示
     pub channel: Option<String>,
     /// 当前 Schema（`None` = 用连接默认）

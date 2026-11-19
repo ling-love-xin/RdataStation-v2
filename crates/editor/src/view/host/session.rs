@@ -128,17 +128,22 @@ impl EditorHostPanel {
         };
         let current_channel = self.channel();
         let channel = communicating.then(|| channel::status_text(current_channel).to_string());
-        let dialect = communicating
+        let bound_option = communicating
             .then(|| {
                 bound.as_deref().and_then(|conn_id| {
                     self.shared
                         .connection_options()
                         .iter()
                         .find(|option| option.id == conn_id)
-                        .map(|option| crate::connection::dialect_label(&option.db_type))
+                        .cloned()
                 })
             })
             .flatten();
+        let dialect = bound_option
+            .as_ref()
+            .map(|option| crate::connection::dialect_label(&option.db_type));
+        // 环境名：状态栏 PROD 徽标的唯一判据（连接未绑环境 = 无徽标，不猜）
+        let environment = bound_option.as_ref().and_then(|o| o.environment.clone());
         let tx_available = communicating
             && self.shared.has_transactions()
             && current_channel.allows_transactions();
@@ -225,6 +230,7 @@ impl EditorHostPanel {
             elapsed: self.running_since.map(|since| since.elapsed()),
             connection,
             dialect,
+            environment,
             channel,
             schema,
             env,
