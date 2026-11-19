@@ -4081,6 +4081,50 @@ fn filter_settings_columns_tab_projects_the_grid_column_state(cx: &mut gpui_kit:
     assert_eq!(order, vec!["id".to_string(), "amount".to_string()], "重置后回数据序");
 }
 
+/// 【筛选设置 · 列约束表】列序 = DBeaver `FilterSettingsDialog.addColumn` 的顺序：
+/// Name → `#`（`:139-146`）→ Visible（`:148-176`）→ Pinned（`:178-211`）。
+///
+/// 本仓此前把 `#` 摆在行尾（`列 / 可见 / 冻结 / 条件 / 排序 / #`），与 DBeaver 的列序对不上；
+/// 本批把它挪到列名**正后方**。「条件 / 排序」列是本仓扩展（列头菜单设置项的只读投影），
+/// 排在 DBeaver 三列之后。
+#[gpui_kit::test]
+fn filter_settings_columns_put_the_position_right_after_the_name(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|window, app| panel.update(app, |p, cx| p.open_filter_settings(window, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let pos = cx
+        .debug_bounds("editor-result-filter-settings-pos-0")
+        .expect("列约束表应渲染 # 列");
+    let vis = cx
+        .debug_bounds("editor-result-filter-settings-vis-cell-0")
+        .expect("列约束表应渲染可见勾选框");
+    let pin = cx
+        .debug_bounds("editor-result-filter-settings-pin-cell-0")
+        .expect("列约束表应渲染冻结勾选框");
+    let criteria = cx
+        .debug_bounds("editor-result-filter-settings-criteria-0")
+        .expect("列约束表应渲染条件列");
+
+    assert!(
+        pos.origin.x < vis.origin.x,
+        "# 应在可见勾选框左侧（DBeaver 里 # 紧跟列名）：pos={:?} vis={:?}",
+        pos.origin.x,
+        vis.origin.x
+    );
+    assert!(
+        vis.origin.x < pin.origin.x,
+        "可见应在冻结左侧（Name / # / Visible / Pinned 的列序）"
+    );
+    assert!(
+        pin.origin.x < criteria.origin.x,
+        "冻结应在条件列左侧（条件/排序是本仓追加在末尾的投影列）"
+    );
+}
+
 /// 【筛选设置】浮层开关 + 应用入队（对齐 DBeaver `filtersCustomButton` →
 /// `FilterSettingsDialog` 的 Custom 页签：`whereText` / `orderText` → `setWhere` / `setOrder`）。
 ///
