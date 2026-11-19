@@ -1111,6 +1111,21 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 
 **验证**：panel **271 passed**（269 → 271）/ editor `--lib results` 45 / guard 4。
 
+**2026-11-20 更新（Show matching，全文见 `result-panel.md §9.21`）**：查找栏补上 DBeaver 的
+`selectAllButton` 语义——**勾上「仅显示匹配」把查找词当临时行过滤**（`model.setQuickFilter`
+那一半），不再只能逐处定位。接手要点：
+
+- `ResultGridDelegate::find_filter: Option<String>` 与 `filter` **分字段**（撤查找过滤绝不能
+  动筛选框的词）；`rebuild_view_rows` 里三层叠加取交集（全局筛词 / 列级筛选 / 查找词），
+  口径同全局筛选（所有列、大小写不敏感子串）；`TextFingerprint` 必须带上它。
+- 面板态 `find_filter_only`；**关查找栏即撤销**（`toggle_find(false)` 与 `close_find` 都走），
+  词保留；端口 `ResultRequest::SetFindFilterOnly(bool)`；勾选框探针 = `editor-result-find-only-wrap`。
+- 差异：DBeaver 是边敲边过滤（250ms 去抖），本仓是勾选框 + 词变即同步；大小写 / 正则 /
+  全词 / 替换栏 / info 行仍在册。
+- 验证：`find_filter_narrows_rows_and_stacks_with_the_other_filters` /
+  `closing_the_find_bar_drops_the_matching_filter_but_keeps_the_query` /
+  `find_bar_only_matching_checkbox_queues_the_toggle`；panel **364**。
+
 ### 2.51 工具栏 / 侧栏结构对齐第一批（2026-11-18）
 
 全文见 `result-panel.md §8.62`（已做）+ `§8.63`（待拍板）。接手要点：

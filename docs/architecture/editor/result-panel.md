@@ -6171,6 +6171,70 @@ ui-guard 仍红，归因外部（并行线未跟踪 `crates/workbench/src/unlock
 **门禁**：result_panel **361 passed**（+1）、editor check 通过、editor **798 passed**（1 ignored）。
 ui-guard 仍红，归因外部（并行线未跟踪 `crates/workbench/src/unlock.rs` 的裸 px，见 §9.17 末段）。
 
+### 9.21 查找栏「仅显示匹配行」（Show matching，2026-11-20）
+
+**竞品取证**——`ResultsetFindReplaceOverlay` 里的 `selectAllButton` **不是「全选文本」**：
+
+```text
+configureSelectAllButton:107-135   SWT.CHECK + 图标 UIIcon.FIND_REPLACE_FIND_ALL_FILTER
+                                   + tooltip「ResultSetMessages.find_and_replace_find_all_tooltip」
+                                   + 快捷键 KeyboardShortcuts.SEARCH_ALL
+                                   右键两项：enable/disableInteractiveFilterAction
+onSearchFieldModified:171-183      交互过滤启用且勾上 → scheduleFilter()
+scheduleFilter:292-301             去抖 250ms（job 正在跑时翻倍 500）
+applyQuickFilter:225-242           文本空 → applyFilterAction(null)；
+                                   否则 new SearchQuickFilterInfo(text, caseSensitive, regex, wholeWord)
+applyFilterAction:198-202          model.setQuickFilter(qf) + refreshData + setExtrasVisibility(qf != null)
+onClose:250-264                    findAllActionApplied → 复位并 applyFilterAction(null)
+restoreOverlaySettings:149-157     只持久化 interactiveFilterDisabled（**存反转值**，默认启用）
+```
+
+本仓查找栏此前只有「定位」（`grid/text.rs::find_next` / `find_prev` + `count_find_matches`），
+没有「把不匹配的行收起来」这一半。
+
+**本批改法**：查找词作为**第三层**行过滤，与全局筛词（所有列）/ 列级筛选（单列）叠加取交集。
+
+1. `grid/delegate.rs`：新增 `find_filter: Option<String>`，**与 `filter` 分字段存**——
+   `filter` 是筛选框的权威值（用户设的，跟着结果集走），`find_filter` 只是查找栏的临时态，
+   撤销时绝不能回头动 `filter`（否则用户筛的词会被查找栏清掉）。
+2. `grid/view_rows.rs`：`rebuild_view_rows` 早退条件加 `find_filter.is_none()`；
+   底层行与本地行各接一层（`find_filter_matches` / `local_find_filter_matches`，
+   口径复用全局筛选的 `row_matches` / `local_row_matches`：所有列、大小写不敏感子串）；
+   `set_find_filter` 一次做完归一化（trim + 小写、空 → `None`、同值不重建）。
+3. `TextFingerprint` 补该字段：两个**不同的**词可能凑出同样的行数，只看 `view_len`
+   会把文本视图缓存当成命中（内容型变更的显式失效兜不住这条）。
+4. 面板态 `find_filter_only` + `set_find_filter_only` / `push_find_filter`；
+   查找词变化时若开着就跟随（行集合与词始终一致）；**关查找栏即撤销**
+   （`toggle_find(false)` 与 `close_find` 两条路都走，对应 DBeaver 的 `onClose`），
+   词本身保留。
+5. 端口 `ResultRequest::SetFindFilterOnly(bool)` + 宿主分派；
+   渲染层在查找栏输入框右侧加勾选框「仅显示匹配」（`Checkbox` 是 `RenderOnce`，
+   自身 id 进不了 `debug_bounds` → 探针挂外层 div `editor-result-find-only-wrap`）。
+
+**不落盘**：DBeaver 只把 `interactiveFilterDisabled` 写进 dialog settings，勾选本身不持久化；
+本仓同样按会话级临时态处理。
+
+**登记差异（未改）**：
+
+- 交互形态：DBeaver 是「边敲边过滤」（250ms 去抖 `scheduleFilter`，job 在跑时退避到 500），
+  本仓是「勾选框 + 词变即同步」——没有独立 job/去抖，好处是行集合与词**永远不会错位**，
+  代价是大结果集逐键重算（与筛选框同档，走 `rebuild_view_rows` 的 O(行数) 扫描）。
+- 大小写 / 正则 / 全词三个选项、替换栏（DBeaver 对结果集无落点）、额外 info 行、
+  `interactiveFilterDisabled` 落盘——均在册未做。
+
+**验证**：
+
+- `panel::tests::find_filter_narrows_rows_and_stacks_with_the_other_filters`——归一化、
+  与列级筛选 / 全局筛词的双重交集、撤销后行数与筛词不变、空白词等同关闭、同词幂等。
+- `panel::tests::closing_the_find_bar_drops_the_matching_filter_but_keeps_the_query`——
+  勾上 → delegate 拿到词 + 网格只剩命中行 + 命中数按**格**重算；关栏 → 撤销、行回来、
+  筛词与查找词都不动。
+- `panel::tests::find_bar_only_matching_checkbox_queues_the_toggle`——窗口级点击 →
+  入队 `SetFindFilterOnly(true)`。
+
+**门禁**：result_panel **364 passed**（+3）、editor check 通过、editor **798 passed**（1 ignored）。
+ui-guard 仍红，归因外部（并行线未跟踪 `crates/workbench/src/unlock.rs` 的裸 px，见 §9.17 末段）。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
