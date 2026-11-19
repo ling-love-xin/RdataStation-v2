@@ -54,6 +54,20 @@ impl EditorShared {
         )
     }
 
+    /// 【环境策略】这条语句在这条连接上要不要写确认（原型 ⑨ · DML 需确认）
+    ///
+    /// 走执行器端口（策略真相在执行层，编辑器不读库）；未接执行器 = 不需要确认。
+    pub fn dml_confirm_for(
+        &self,
+        connection: Option<&str>,
+        sql: &str,
+    ) -> Option<engine::services::policy_guard::DmlConfirm> {
+        self.exec
+            .borrow()
+            .as_ref()
+            .and_then(|queue| queue.dml_confirm(connection, sql))
+    }
+
     /// 【B13】请一个源动作（重挂 / 换主源）
     ///
     /// 与 [`Self::submit`] 同一口径：连接从**服务层**取（调用方不需要知道绑定在哪）。

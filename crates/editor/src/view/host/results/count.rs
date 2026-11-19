@@ -108,6 +108,8 @@ impl EditorHostPanel {
                             channel: None,
                             schema: None,
                             lineage: None,
+                            // 计数是 SELECT，不涉及写确认
+                            dml_confirmed: false,
                         },
                     )
                     .await

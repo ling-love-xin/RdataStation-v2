@@ -100,6 +100,7 @@ mod bookmarks;
 mod channels;
 mod core;
 mod dialogs;
+mod dml_confirm;
 mod encoding;
 mod exec;
 mod export_pq;

@@ -104,6 +104,15 @@ impl ExecQueue {
         self.runner.clone()
     }
 
+    /// 【环境策略】这条语句要不要写确认（UI 提交前问；策略真相在执行器侧）
+    pub fn dml_confirm(
+        &self,
+        connection: Option<&str>,
+        sql: &str,
+    ) -> Option<engine::services::policy_guard::DmlConfirm> {
+        self.runner.dml_confirm(connection, sql)
+    }
+
     /// 用一个执行器起队列（连接队列懒建：第一次提交时才 spawn 对应 worker）
     pub fn new(runner: Arc<dyn QueryRunner>) -> Self {
         let done: Arc<Mutex<VecDeque<ExecOutcome>>> = Arc::new(Mutex::new(VecDeque::new()));

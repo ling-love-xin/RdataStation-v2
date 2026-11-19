@@ -72,13 +72,17 @@ pub struct SqlExecuteOptions {
     /// 由**执行器**填（编辑器队列从 `ExecTarget::lineage()` 取来）；引擎不解释它，
     /// 只随历史落库。不填 = 老调用方没给（历史里不出现，不编一个）。
     pub lineage: Option<String>,
-    /// 【T2c-1】本次执行的 schema 上下文（`None` = 未选 → 用连接默认 schema）
-    ///
+    /// 【T2c-1】本次执行的 schema 上下文（`None` = 未选 → 用连接默认 schema）    ///
     /// 由**执行器**填（它从文档绑定取；编辑器侧 `EditorShared` 在提交时从服务层拷出）。
     /// 引擎在执行用户语句**前**、在同一连接上应用方言对应的会话上下文（PG `SET search_path`
     /// / MySQL `USE` / DuckDB `USE`；SQLite 无此概念）——这样未限定表名才真的落到所选
     /// schema。上下文语句是**管道**不是用户意图：不进历史、不记缓存。
     pub schema: Option<String>,
+    /// 【环境策略】用户已对本次写操作明确点过确认（原型 ⑨：DML 需确认）
+    ///
+    /// 由 UI 在确认弹窗点「执行」后置真；不置真时引擎只**兜底拒绝**（`ENV_POLICY_DML_CONFIRM`），
+    /// 不让“绕过 UI 的调用方”静默写生产库。
+    pub dml_confirmed: bool,
 }
 
 /// 把一条查询套成**窗口**（`LIMIT n OFFSET m`）——分段抓取的取数方式
@@ -472,11 +476,38 @@ impl SqlService {
                     // T2c-1：后续段必须落在**同一 schema**（首段是在这个 schema 上下文里取的）
                     schema,
                     lineage: None,
+                    dml_confirmed: false,
                 },
             )
             .await;
         // 同上：分段执行也不能把包装掉包给用户看
         unwrap_segment_error(result, sql, &window)
+    }
+
+    /// 这条语句在这条连接上是否需要「写确认」；`None` = 不需要。
+    ///
+    /// 编辑器在**提交前**问这一句（提交动作在 UI 线程，策略解算有 5 秒进程缓存，
+    /// 只有第一次读库）：需要确认就弹窗，用户点头后再带 `dml_confirmed` 提交。
+    /// 这里不执行任何语句，也不改策略缓存。
+    pub async fn dml_confirm_for(
+        &self,
+        conn_id: Option<&str>,
+        sql: &str,
+    ) -> Option<crate::services::policy_guard::DmlConfirm> {
+        let conn_key = match conn_id {
+            Some(id) => id.to_string(),
+            None => DEFAULT_CONN_KEY.to_string(),
+        };
+        let policies = crate::services::policy_guard::resolve_for_environment(
+            self.manager
+                .get_connection_info(&conn_key)
+                .await
+                .and_then(|info| info.environment_id)
+                .as_deref(),
+        )
+        .await;
+        let (stmt_type, _) = SqlEngine::parse_and_route(sql, SqlDialect::Ansi);
+        crate::services::policy_guard::DmlConfirm::for_statement(&policies, &stmt_type, sql)
     }
 
     /// 执行 SQL 查询
@@ -559,6 +590,36 @@ impl SqlService {
                 .await;
             }
             return Err(err);
+        }
+        // ---- 环境策略：写确认兜底（原型 ⑨ 执行语义矩阵 · DML 需确认）----
+        // 正常路径由编辑器在提交前弹窗并把 `dml_confirmed = true` 带下来；这里拦的是
+        // **绕过 UI 的调用方**（脚本 / 内部入口）——不能让它们静默写生产库。
+        if policies.dml_needs_confirm(&stmt_type) && !options.dml_confirmed {
+            if policies.audit {
+                crate::services::policy_guard::audit_sql(
+                    &conn_key,
+                    policies.environment.as_deref(),
+                    sql,
+                    "confirm_required",
+                    None,
+                );
+            }
+            if options.record_history {
+                self.record_history(
+                    conn_id.as_deref(),
+                    &conn_key,
+                    sql,
+                    start_time.elapsed().as_millis() as u64,
+                    Some("写操作待确认".to_string()),
+                    None,
+                    None,
+                    options.channel.as_deref(),
+                    options.lineage.as_deref(),
+                )
+                .await;
+            }
+            let env = policies.environment.as_deref().unwrap_or("?");
+            return Err(crate::services::policy_guard::dml_confirm_error(env, sql));
         }
         // 环境超时：调用方显式给的优先，没给才用环境值（原型 Tab2「环境值 > 全局」）。
         let effective_timeout = policies.timeout_or(options.timeout_ms);

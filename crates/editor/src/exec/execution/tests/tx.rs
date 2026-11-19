@@ -349,6 +349,7 @@ fn run_options_reach_the_runner_and_the_snapshot_rides_along() {
             RunOptions {
                 use_transaction: true,
                 lineage: None,
+                dml_confirmed: false,
             },
             crate::channel::ExecChannel::default(),
         )
@@ -360,6 +361,7 @@ fn run_options_reach_the_runner_and_the_snapshot_rides_along() {
         [RunOptions {
             use_transaction: true,
             lineage: Some(crate::execution::LINEAGE_ORIGINAL),
+            dml_confirmed: false,
         }],
         "自动提交关掉时，执行要带上“进事务”的选项（血缘由 worker 统一注入）"
     );

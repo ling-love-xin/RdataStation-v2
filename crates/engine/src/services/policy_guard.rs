@@ -40,6 +40,8 @@ pub struct ResolvedPolicies {
     pub schema_include: Vec<String>,
     pub schema_exclude: Vec<String>,
     pub audit: bool,
+    /// DML 需确认（UPDATE / DELETE 执行前要用户点头）
+    pub dml_confirm: bool,
 }
 
 impl ResolvedPolicies {
@@ -83,6 +85,18 @@ impl ResolvedPolicies {
         Ok(())
     }
 
+    /// 这条语句是否需要「写确认」（原型 ⑨ 矩阵第 8 行：DML 需确认）。
+    ///
+    /// 只认 UPDATE / DELETE——INSERT 是追加、TRUNCATE 属于 DDL（由 `block_ddl` 管），
+    /// 都不走这条。是否需要确认是**事实**，弹不弹窗由 UI 决定（引擎侧只做兜底拒绝）。
+    pub fn dml_needs_confirm(&self, stmt: &SqlStatementType) -> bool {
+        self.dml_confirm
+            && matches!(
+                stmt,
+                SqlStatementType::Update | SqlStatementType::Delete
+            )
+    }
+
     /// 超时取值：调用方显式给的优先；没给才用环境值。
     pub fn timeout_or(&self, requested: Option<u64>) -> Option<u64> {
         requested.or(self.timeout_ms)
@@ -116,8 +130,50 @@ impl ResolvedPolicies {
     }
 }
 
-fn policy_error(code: &str, sql: &str, message: String) -> CoreError {
-    CoreError::database(DatabaseError::query(
+/// 写确认请求：UI 弹窗直接拿这三项事实，不再自己解析 SQL。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DmlConfirm {
+    /// 环境展示名（弹窗要写清「哪个环境」）
+    pub environment: String,
+    /// 语句种类（`UPDATE` / `DELETE`）
+    pub statement: &'static str,
+    /// 语句摘要（前 120 字符；不把整段 SQL 塞进对话框）
+    pub preview: String,
+}
+
+impl DmlConfirm {
+    /// 由策略 + 语句造一个确认请求（`None` = 不需要确认）。
+    pub fn for_statement(
+        policies: &ResolvedPolicies,
+        stmt: &SqlStatementType,
+        sql: &str,
+    ) -> Option<Self> {
+        if !policies.dml_needs_confirm(stmt) {
+            return None;
+        }
+        let statement = match stmt {
+            SqlStatementType::Update => "UPDATE",
+            SqlStatementType::Delete => "DELETE",
+            _ => return None,
+        };
+        Some(Self {
+            environment: policies.environment.clone().unwrap_or_default(),
+            statement,
+            preview: sql.trim().chars().take(120).collect(),
+        })
+    }
+}
+
+/// DML 待确认的兜底错误（UI 会先弹窗；这条错误是「没人问过用户就要写」的拒绝）。
+pub fn dml_confirm_error(environment: &str, sql: &str) -> CoreError {
+    policy_error(
+        "ENV_POLICY_DML_CONFIRM",
+        sql,
+        format!("环境「{environment}」的写操作（UPDATE / DELETE）需要确认后才能执行"),
+    )
+}
+
+fn policy_error(code: &str, sql: &str, message: String) -> CoreError {    CoreError::database(DatabaseError::query(
         format!("[{code}] {message}"),
         sql.to_string(),
     ))
@@ -197,6 +253,13 @@ pub fn resolve_from_rows(
             "security" => {
                 p.read_only |= v.get("read_only").and_then(|x| x.as_bool()).unwrap_or(false);
                 p.block_ddl |= v.get("block_ddl").and_then(|x| x.as_bool()).unwrap_or(false);
+                // 写确认：原型 Tab1 的安全策略块里是「DML 需确认」开关。两个键都认
+                // （`confirm_dml` 为规范键，`dml_confirm` 兼容手写 JSON）。
+                p.dml_confirm |= v
+                    .get("confirm_dml")
+                    .or_else(|| v.get("dml_confirm"))
+                    .and_then(|x| x.as_bool())
+                    .unwrap_or(false);
             }
             "performance" => {
                 if let Some(n) = v.get("max_rows").and_then(|x| x.as_u64()) {
@@ -393,6 +456,39 @@ mod tests {
         let ok = build_audit_record("conn-1", None, "SELECT 1", "allowed", None);
         assert_eq!(ok.level, LogLevel::Info);
         assert!(ok.message.contains("env=-"));
+    }
+
+    #[test]
+    fn dml_confirm_covers_update_and_delete_only() {
+        let p = resolve_from_rows(
+            Some("staging".into()),
+            &[(
+                "security".into(),
+                Some(r#"{"confirm_dml":true}"#.into()),
+                true,
+            )],
+        );
+        assert!(p.dml_confirm);
+        assert!(p.dml_needs_confirm(&SqlStatementType::Update));
+        assert!(p.dml_needs_confirm(&SqlStatementType::Delete));
+        assert!(!p.dml_needs_confirm(&SqlStatementType::Insert), "追加不算");
+        assert!(!p.dml_needs_confirm(&SqlStatementType::Select));
+        assert!(!p.dml_needs_confirm(&SqlStatementType::Ddl), "DDL 归 block_ddl 管");
+
+        let confirm = DmlConfirm::for_statement(
+            &p,
+            &SqlStatementType::Update,
+            "update orders set total = 0 where id = 1",
+        )
+        .expect("UPDATE 应要求确认");
+        assert_eq!(confirm.environment, "staging");
+        assert_eq!(confirm.statement, "UPDATE");
+        assert!(confirm.preview.starts_with("update orders"));
+
+        // 未配置 = 不需要确认（未绑定环境也走这条）
+        let off = resolve_from_rows(Some("staging".into()), &[]);
+        assert!(!off.dml_confirm);
+        assert!(DmlConfirm::for_statement(&off, &SqlStatementType::Delete, "delete from t").is_none());
     }
 
     #[test]

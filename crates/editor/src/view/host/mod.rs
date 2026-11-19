@@ -115,6 +115,19 @@ pub(crate) struct PendingFederated {
     pub(crate) title: Option<String>,
 }
 
+/// 【环境策略】写操作确认前的挂起（原型 ⑨ · DML 需确认）
+///
+/// 与 `PendingFederated` 同样存「目标 + 落点 + 标题」：确认只代表用户看到了风险，
+/// 取消则连队列都不进；两条确认可以先后发生（联邦 → 写确认），各存各的。
+#[derive(Clone)]
+pub(crate) struct PendingDmlConfirm {
+    pub(crate) target: ExecTarget,
+    pub(crate) placement: ResultPlacement,
+    pub(crate) title: Option<String>,
+    /// 要展示给用户的事实（环境名 / 语句种类 / 摘要）
+    pub(crate) detail: engine::services::policy_guard::DmlConfirm,
+}
+
 impl PendingBind {
     /// 用填好的值替换目标里的 `:name`。只对**用户写的 SQL** 变体
     /// （Selection / Statement / All / Batch）生效；内部生成的目标本就没有参数，原样。
@@ -335,6 +348,8 @@ pub struct EditorHostPanel {
     pub(crate) pending_bind: Option<PendingBind>,
     /// 【联邦确认】执行联邦前的挂起：确认框弹出后目标存这里，点「执行」才真正入队
     pub(crate) pending_federated: Option<PendingFederated>,
+    /// 【环境策略】写确认挂起：UPDATE / DELETE 需要用户点头才入队（原型 ⑨）
+    pub(crate) pending_dml_confirm: Option<PendingDmlConfirm>,
     /// 【B6】当前选中结果集定位到的出错处（诊断范围 + 状态栏里的位置文案读它）
     pub(crate) error_site: Option<diagnostics::ErrorSite>,
     /// 【2b】脚本执行输出卡片（通用模式回执写入；sync 时经 `ResultSyncInput` 透传面板——

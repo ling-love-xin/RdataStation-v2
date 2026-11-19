@@ -217,6 +217,8 @@ impl EditorShared {
                     use_transaction: false,
                     // 单元执行不走 `run` 的历史链（worker 侧对 Cell 载荷另路分派）
                     lineage: None,
+                    // 单元执行没有写确认入口：一律 false，由引擎兜底拒绝（不静默写）
+                    dml_confirmed: false,
                 },
                 channel,
             )

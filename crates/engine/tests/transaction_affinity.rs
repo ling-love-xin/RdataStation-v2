@@ -47,6 +47,7 @@ fn options() -> SqlExecuteOptions {
         // 事务亲和探针：无 schema 概念（各驱动默认），不注入会话上下文
         schema: None,
         lineage: None,
+        dml_confirmed: false,
     }
 }
 

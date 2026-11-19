@@ -333,6 +333,11 @@ pub struct RunOptions {
     /// 【B5 余项】本次执行的血缘（队列侧从 `ExecJob.lineage` 注入；执行器把它带进
     /// 历史记录）。`None` = 老调用方没给（历史里不出现血缘，不编一个）
     pub lineage: Option<&'static str>,
+    /// 【环境策略】用户已对本次写操作点过确认（原型 ⑨ · DML 需确认）
+    ///
+    /// 只有「用户刚在确认弹窗里点了执行」这一种情况为真；其余全部为假，
+    /// 引擎侧据此兜底拒绝没被问过的 UPDATE / DELETE。
+    pub dml_confirmed: bool,
 }
 
 /// 会话的事务状态快照（B4）
