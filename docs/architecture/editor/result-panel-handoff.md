@@ -1493,6 +1493,21 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 3.00 页内工具条列位 + 分隔线只值页（2026-11-19）
+
+- 对齐 `ResultSetViewer.addPanel:1337-1383` 的 `GridLayout(2, false)`：左列
+  （`panel.contributeActions` + `FILL_HORIZONTAL`）= 页内动作**贴左**；右列
+  （`addDefaultPanelActions` + `HORIZONTAL_ALIGN_END`）= 视图菜单**贴右**。
+  本仓 `panel_toolbar` 已按此列位重排：左组 = 标题 + `Toolbar`，右 = `panel_view_menu`。
+- 新增纯函数 `events::page_needs_separator(tab)`（只有 `RightTab::Value` 为 true，
+  对齐 `ValueViewerPanel.java:171-173`；其余继承 `ResultSetPanelBase.java:26-28`）；
+  `panel_toolbar` 多一个 `separator: bool`，`empty_page` / `empty_page_lines` 多一个 `tab`，
+  七处调用点按页传值。
+- 有意差异（保留）：工具条左边的页标题（DBeaver 面板头无标题，页名只在页签上）；
+  统计页标题带列名，仍有信息价值。
+- 用例 `panel_toolbar_puts_actions_left_and_view_menu_right`（纯函数 + 窗口列位四条断言）。
+- 门禁基线（本批之后）：panel **348**、editor **794**（1 ignored）且 check 0 warning、ui-guard **4**。
+
 ### 2.99 `open_tabs` 已落盘（2026-11-19）
 
 - 偏好键 `result_panel.open_tabs`（Text）：出厂六页全开，落盘值 = 逗号分隔的

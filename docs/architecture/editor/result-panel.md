@@ -5678,6 +5678,62 @@ private void activateDefaultPanels() {
   （首次跑 editor 用例时 rustc 报 `memory allocation ... failed`（机器内存瞬时不足），
   降并行度后重跑通过，非代码问题。）
 
+### 9.11 页内工具条的列位与「分隔线只有值页」（2026-11-19）
+
+**DBeaver 一个面板头 = 两列 ToolBarManager**（`ResultSetViewer.addPanel:1337-1383`）：
+
+```java
+GridLayout layout = new GridLayout(2, false);      // :1338  两列
+Composite trControl = new ConComposite(panelComposite, SWT.NONE);
+trControl.setLayoutData(new GridData(GridData.FILL_HORIZONTAL));   // :1344
+if (panel.needsSeparator()) {
+    UIUtils.createLabelSeparator(panelComposite, SWT.HORIZONTAL);  // :1345-1347
+}
+...
+panelInfo.actionToolBar = new ToolBarManager(SWT.HORIZONTAL | SWT.RIGHT | SWT.FLAT);
+panel.contributeActions(panelInfo.actionToolBar);                  // :1373-1374
+toolBar.setLayoutData(new GridData(GridData.FILL_HORIZONTAL));     // :1376  左列吃满
+...
+ToolBarManager panelToolBar = new ToolBarManager(SWT.HORIZONTAL | SWT.RIGHT | SWT.FLAT);
+addDefaultPanelActions(panelToolBar);                             // :1379-1381
+toolBar.setLayoutData(new GridData(GridData.HORIZONTAL_ALIGN_END));// :1382  右列贴右
+```
+
+两条结构事实：
+1. **页内动作贴左，视图菜单贴右**。左列 `FILL_HORIZONTAL` 吃满剩余宽度，页内动作从列首排起；
+   右列只有一颗 `IMG_LCL_VIEW_MENU`（`addDefaultPanelActions:1590-1614`）且 `HORIZONTAL_ALIGN_END`。
+   **面板头没有页标题文案**——页名/图标只在页签上（`addPanel:1357-1361` 的
+   `CTabItem(SWT.CLOSE)` + `setText(panelDescriptor.getLabel())` + `setImage(...)`）。
+2. **分隔线只由面板自己声明**。`panel.needsSeparator()` 全仓只有 `ValueViewerPanel.java:171-173`
+   返回 `true`；`ResultSetPanelBase.java:26-28` 默认 `false`，`MetaDataPanel` /
+   `AggregateColumnsPanel` / `GroupingPanel` / `ReferencesPanel` 均未覆写。
+
+**本仓改动**：
+- `panel_toolbar` 由「标题 `flex_1` 吃满 + `Toolbar` + 视图菜单」改成两列列位：
+  左列 `h_flex`（`flex_1 min_w_0 overflow_hidden`）= 标题（`flex_none max_w(rems(14.)) truncate`）
+  + `Toolbar::new(..).xsmall().p_0().contents(actions)`；右列 = `panel_view_menu`。
+  标题保留是本仓有意差异（统计页标题带列名 `「列名」统计`，DBeaver 那边列名在正文表格里），
+  页名本身与页签重复。
+- 新增纯函数 `events::page_needs_separator(tab)`（`matches!(tab, RightTab::Value)`），
+  `panel_toolbar` 新增 `separator: bool` 参数，只有 `true` 时才挂 `border_b(HAIRLINE)`；
+  七处调用点全部按页传入（值页 `true`，列浏览器 / 计算 / 分组 / 引用 / 执行SQL / 空态页 `false`）。
+  `empty_page` / `empty_page_lines` 因此各多一个 `tab` 参数（空态也要按页判分隔线）。
+
+**验证**：
+- 新增 `panel::tests::panel_toolbar_puts_actions_left_and_view_menu_right`：
+  ① 纯函数层——`right_tabs()` 六页里只有 `Value` 命中 `page_needs_separator`；
+  ② 渲染层（值页选中一格）——`copy` 与视图菜单**同行**（`|Δy| < 4px`）、`copy.x < menu.x`、
+  `copy` 距工具条左端 ≤ 200px（贴左列）、`copy` 右缘到 `menu.x` 的空隙 ≥ 24px
+  （左列吃满剩余宽度；改动前该空隙只有 `gap_1` = 4px）、菜单右缘距工具条右端 ≤ 40px（贴右）。
+- 门禁：`cargo test -p rds-result-panel --lib` = **348 passed**（warning 0）、
+  `cargo check -p rds-editor` 通过（0 warning）、`cargo test -p rds-editor --lib -- --test-threads=4`
+  = **794 passed**（1 ignored）、`cargo test -p rds-ui-guard` = 4 passed。
+
+**登记（未做）**：
+- 页标题文案（本仓保留，DBeaver 无）。
+- `needsSeparator` 的视觉形态：DBeaver 用 `UIUtils.createLabelSeparator`（SWT 细线 label），
+  本仓复用工具条容器自身的 `border_b(HAIRLINE)`；两者都是 1px 横线，视觉归属不同（不引入新元素）。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
