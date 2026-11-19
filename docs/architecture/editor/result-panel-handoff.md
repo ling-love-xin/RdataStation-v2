@@ -1494,6 +1494,18 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 3.08 分组列下拉标位次（2026-11-20）
+
+- 承 §3.07：键顺序可改了，但下拉里看不见顺序。DBeaver 的顺序在 `GroupingConfigDialog`
+  的表格行序里天然可见；本仓换成勾选下拉后丢了这层信息。
+- 落点：`tabs::group_column_menu_label`（已勾选 → `"{位次}. {列名}"`，否则原名），
+  菜单项文字改用它；勾选态 / 点击 / 菜单项顺序（按数据列序）都不动。
+- 用例：`group_column_menu_label_marks_only_selected_columns`（纯函数，因 `PopupMenu`
+  内部不可读）。
+- 门禁基线：panel **360**、editor check 通过、editor **798**（1 ignored）。
+- flaky 备查：editor 4 线程偶发 `exec/.../queue.rs:143`「中断在它开跑前就到了」，
+  该目录无改动、单跑通过、重跑全绿——并发时序抖动，不在本线修。
+
 ### 3.07 分组键可上移 / 下移（2026-11-20）
 
 - 竞品：`GroupingColumnsContainer.moveColumns:126-152` —— 分组键顺序 = 嵌套顺序；列分

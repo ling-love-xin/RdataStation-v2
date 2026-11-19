@@ -6099,6 +6099,39 @@ moveElements(...):154-168  remove 时按反序移除、再整体 addAll(toIndex,
 - 门禁：result_panel **359 passed**（+2）、editor check 通过、editor **798 passed**（1 ignored）。
 - ui-guard 仍红，归因外部（并行线未跟踪 `crates/workbench/src/unlock.rs` 的裸 px），见 §9.17 末段。
 
+### 9.19 分组列下拉给已选项标位次（2026-11-20）
+
+承接 §9.18：分组键顺序已经是可改的（上移 / 下移），但**顺序本身在界面上不可见**——勾选式下拉里
+只有「列名 + 勾选态」，看不出「先按 A 再按 B」。
+
+**竞品对照**：DBeaver 的分组顺序在 `GroupingConfigDialog` 的列表格里**直接可见**（表格行序 = 分组
+顺序，配合 `moveColumns` 的拖放改序）。本仓把「多列编辑表格」换成了勾选式下拉（能力等价、形态更轻，
+见 §9.18 的工具条注释），代价就是顺序丢在了菜单外面。
+
+**本批改法**（`panel/tabs.rs`）：
+
+1. 新增纯函数 `group_column_menu_label(group_columns, column, name)`：
+   - 列在分组键里 → `format!("{}. {}", 位次 + 1, name)`（位次取自分组键顺序，1 起）；
+   - 不在 → 列名原文（未勾选项不该看着像「已启用」）。
+2. 分组列下拉的菜单项文字改用该函数。**勾选态、点击语义、菜单项顺序都不动**：
+   - 菜单项仍按**数据列序**列出（不按分组顺序重排）——重排会让勾选时项位置跳动，
+     位次已经足够表达顺序；
+   - 位次在「选中列兜底」态也会出现（兜底列在生效分组键里就是第 1 位，与勾选态一致，
+     不引入第二套口径）。
+
+**验证**：`panel::tests::group_column_menu_label_marks_only_selected_columns`
+（三个位次 / 未勾选不加位次 / 空集合保持原名 / 上移后位次跟随）。
+`PopupMenu` 内部不可读（kit 只暴露 `is_empty()`），所以按项目规范抽纯函数钉，
+不在渲染层做脆弱断言。
+
+**门禁**：result_panel **360 passed**（+1）、editor check 通过、editor **798 passed**（1 ignored）。
+ui-guard 仍红，归因外部（并行线未跟踪 `crates/workbench/src/unlock.rs` 的裸 px，见 §9.17 末段）。
+
+**附带记录（flaky，非本批因果）**：editor 首轮 4 线程跑出
+`exec::execution::tests::queue::cancel_right_after_submit_still_targets_the_job_connection` 失败
+（`queue.rs:143`「中断在它开跑前就到了」，`left: 1 / right: 0`）。该目录本批零改动、单跑通过、
+重跑全量 798 全绿——属「cancel 与开跑」的并发时序抖动，登记备查，不在本线修。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
