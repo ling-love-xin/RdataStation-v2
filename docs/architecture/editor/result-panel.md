@@ -5348,6 +5348,70 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
   `cargo check -p rds-editor` 通过；`cargo test -p rds-editor --lib -- --test-threads=4`
   = **794 passed**（1 ignored）；`cargo test -p rds-ui-guard` = 4 passed。
 
+### 9.05 分组页两项偏好的持久化（2026-11-19）
+
+**先纠正一个误判**：分组键（「按哪几列分组」）在 DBeaver **不持久化**。
+`GroupingPanel.java` 的 `loadSettings:114-116` 只是拿了个 `"groups"` section 就返回，
+`saveSettings:118-120` 同样只有一行取 section、**且全仓没有任何调用点**（grep `saveSettings`
+只命中定义行）。所以「重开就丢」不是本仓与 DBeaver 的差异，本仓不做分组键落盘是
+与那边一致的，不再当缺口。
+
+**真正缺的是另两项**（`ResultSetPreferences:41-42`）：
+- `RS_GROUPING_DEFAULT_SORTING = "resultset.grouping.defaultSorting"`：
+  `ChangeSortingAction` 读它决定三档单选（`""` / `ASC` / `DESC`，`:58-71`），
+  写它之后紧跟 `persistConfiguration()`（`:80-81`）；
+  `GroupingResultsContainer:250-265` 只在「唯一函数列且等于默认函数(count)」时
+  按这个方向排 count 列（`:251` 的 `isDefaultGrouping`）。
+- `RS_GROUPING_SHOW_DUPLICATES_ONLY = "resultset.grouping.showDuplicatesOnly"`：
+  `DuplicatesOnlyAction` 是 `AS_CHECK_BOX`，`isChecked:41-45` 读、`run:48-53` 取反写，
+  随后 `rebuildGrouping()`；该值进 `SQLGroupingQueryGenerator`（`GroupingResultsContainer:231-245`）。
+- **两键的默认值**：`plugin.xml` 里没有任何 preference initializer（扫全仓 `plugin.xml`
+  都搜不到这两个键），所以 `getString` 缺省 `""`（不排序）、`getBoolean` 缺省 `false`
+  （显示全部组）。
+
+**本仓此前的状态**：两项**功能都已存在**（分组页工具条有「按值 / 按计数」排序钮与
+「仅重复」钮，`arrange_groups(groups, sort, duplicates_only)` 三段行为都有用例），
+但都只是面板会话态（`panel/data.rs` 的 `group_sort` / `group_duplicates_only`），
+没进设置，重开应用就回到出厂档——这次补的就是这一层。
+
+**改法**：
+1. `ports::GroupSort` 新增 `id()`（`value` / `countdesc`，全小写）与 `parse()`；
+   未知 / 大小写不符一律 `None`（调用方按出厂 `value` 处理）。
+2. settings 新增两键（同 section `result_panel`、同 group `interaction`，紧跟在
+   `stats_items` 之后以保持 group 连续）：
+   - `result_panel.group_sort`（Text，出厂 `"value"`）
+   - `result_panel.group_duplicates_only`（Bool，出厂 `false`）
+   四处同步：模型字段 + 默认函数、`Slot` 两变体、key 映射、`slot_kind`
+   （Text / Bool）、`service::mod.rs` 的读值三处（`slot_value` + 写分发 or-pattern）、
+   `service/result_panel.rs` 的 `apply_slot` 两个分支 + 两个 `set_*` 快捷写。
+3. 面板：`set_group_prefs_initial(sort_id, duplicates_only, cx)` 注入
+   （未知 id 回落 `GroupSort::default()`），配 `group_sort_id()` /
+   `group_duplicates_only_value()` 两个只读访问器给宿主回写用。
+4. 宿主：`construct.rs` 创建面板时注入；`dispatch.rs` 的 `SetGroupSort` /
+   `SetGroupDuplicatesOnly` 两条在面板更新后立刻调
+   `persist_result_group_sort` / `persist_result_group_duplicates_only`
+   写回（与 `AddStatsItem` 那三条同一形态）。分组键增删 / 清空仍然不落盘。
+
+**与 DBeaver 的已知差异（登记，不是缺陷）**：
+- 本仓两态（按值升序 / 按计数降序）里只有 `countdesc` 与那边的 `DESC` 等价；
+  `value` 是超集档，那边没有「按分组键值排序」这个手动档（它的 `ASC` 排的是 count）。
+  「不排序」档本仓暂不做（面板排序钮仍是二态 toggle）。
+- 作用域：DBeaver 存**按连接**的 preference store（`getContainer().getPreferenceStore()`），
+  本仓沿用结果集偏好的**全局一份**口径（与 `stats_items` 一致）。
+- 客户端分组 vs SQL 分组：DBeaver 的「仅重复」进 `HAVING COUNT > 1` 的生成 SQL，
+  本仓是客户端分组后按组大小过滤（`arrange_groups` 的第三个参数），语义一致、
+  实现位置不同（`SQLGroupingQueryGenerator` 不在本仓 dbeaver-ref 快照里，无法逐行对照）。
+
+**验证**：
+- `ports::tests::group_sort_ids_round_trip_and_reject_unknown`（两档往返 / 大小写与未知档
+  拒绝 / 出厂档 = `value`）；
+- `panel::tests::group_prefs_initial_round_trip_and_unknown_sort_falls_back`
+  （注入后两字段各自生效 / 未知 id 回落 `value` 且不影响开关）；
+- 门禁：`cargo test -p rds-settings --lib` = **37 passed**；
+  `cargo test -p rds-result-panel --lib` = **342 passed**（340 + 2 条新用例）；
+  `cargo check -p rds-editor` 通过；`cargo test -p rds-editor --lib -- --test-threads=4`
+  = **794 passed**（1 ignored）；`cargo test -p rds-ui-guard` = 4 passed。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

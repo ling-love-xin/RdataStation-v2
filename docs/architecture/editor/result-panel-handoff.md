@@ -1493,6 +1493,28 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 2.93 分组页偏好的持久化与「DBeaver 不存分组键」（2026-11-19）
+
+- **别把「分组键重开就丢」当缺口**：DBeaver `GroupingPanel.saveSettings:118-120` 只有一行
+  取 `"groups"` section，全仓无调用点；`loadSettings:114-116` 同样只取 section 不读。
+  分组键在那边就是会话态。要改这个结论，先给出该文件里的读写调用点。
+- 真持久化的是两个偏好键（`ResultSetPreferences:41-42`）：
+  `resultset.grouping.defaultSorting`（`""`/`ASC`/`DESC`，`ChangeSortingAction` 写后
+  `persistConfiguration()`）与 `resultset.grouping.showDuplicatesOnly`（`DuplicatesOnlyAction`
+  的 check box）。**两键在 plugin.xml 里都没有 initializer**，故默认 = 空串（不排序）/
+  false（显示全部组）。
+- 本仓对应键：`result_panel.group_sort`（`value`|`countdesc`）与
+  `result_panel.group_duplicates_only`（bool）。写入口 = 分组页的两个钮，落盘走
+  `dispatch.rs::persist_result_group_sort` / `persist_result_group_duplicates_only`；
+  读入口 = `construct.rs` 注入 `panel.set_group_prefs_initial(...)`。
+- 加同类偏好照这个五步：`ports::GroupSort::id/parse` → settings 模型字段 + 默认 →
+  `Slot` + key 映射 + `slot_kind` → `service::mod.rs` 读值 arm + 写分发 or-pattern →
+  `service/result_panel.rs` 的 `apply_slot` 分支 + `set_*` 快捷写 → 面板 `set_*_initial`
+  + 只读访问器 → 宿主注入与回写 + 两条用例。
+- 已知差异（别改）：本仓只有「按值 / 按计数」两档，`countdesc` 对应那边的 `DESC`；
+  「不排序」档未做。作用域是全局一份（那边按连接）。
+- 门禁：settings 37 / panel 342 / editor 794（1 ignored）/ ui-guard 4。
+
 ### 2.92 计算页统计项扩到九项（2026-11-19）
 
 - 取证位置：`dbeaver-ref` 的 `org.jkiss.dbeaver.ui.editors.data/plugin.xml:89-99` 列九个
