@@ -1494,6 +1494,25 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 3.06 右栏关空后重新展开恢复默认页（2026-11-20）
+
+- 竞品口径：`showPanels:1478-1518` 的展开分支带 `showDefaults=true`，先
+  `activateDefaultPanels`（`:1493-1496`）再放开 sash；`removePanel:1441-1451` 关空只
+  触发 `showPanels(false, true, true)`。所以 DBeaver 里**没有「展开后页签夹空」这种态**。
+- 本仓修复前的洞：`close_right_tab` 关空把 `open_tabs` 留空，`set_panels_visible(true)`
+  只翻可见位 → 重新展开是「右栏空白、一个页签都没有」。
+- 修法：`events::restore_default_tabs_when_empty()`（**仅空集时**填回 `right_tabs()` 并
+  归一当前页），在 `set_panels_visible(true)` 与 `toggle_value_sidebar` 的显示方向各调一次。
+  非空的自定义集合必须原样保留——否则每次开合都会冲掉用户关掉的页。
+- 用例：`reopening_after_closing_all_pages_restores_default_tabs`（先红后绿）、
+  `toggling_the_sidebar_keeps_a_custom_tab_set`（反向）。
+- 门禁基线：panel **357**、editor check 通过、editor **798**（1 ignored）。
+  **ui-guard 本批红，归因外部**：`no_new_hardcoded_color_or_pixel` 指向并行线未跟踪
+  文件 `crates/workbench/src/unlock.rs`（裸 px 未登记），本批未碰 workbench。
+- 未做：`showPanels` 还会在展开后把焦点还给「之前那个页签的内容」
+  （`:1504-1506`）与 `showAttribute(currentAttribute)`（`:1508-1511`）；本仓焦点由
+  点击来源决定，不做程序化回焦（属交互细节）。
+
 ### 3.05 逐页关闭按钮收到页签内侧（2026-11-19）
 
 - DBeaver 取证：`addPanel:1357` 的长相是 `new CTabItem(panelFolder, SWT.CLOSE)`

@@ -6003,6 +6003,55 @@ ResultSetViewer.java
 未激活时也能关），本仓是自绘 12px 图标 + `list_hover` 底色；× 与页签正文之间的内距
 （`CTabItem` 由 SWT 决定）不在本批范围（属目视，用户口径「后面统一处理」）。
 
+### 9.17 右栏被关空后重新展开要恢复默认页集合（2026-11-20）
+
+**竞品取证**（`ResultSetViewer.java`）：
+
+```text
+showPanels(show, showDefaults, saveSettings):1478-1518
+  :1482   CTabItem activePanelTab = panelFolder.getSelection();   —— 先记住当前页
+  :1492-1496  else 分支：if (showDefaults) activateDefaultPanels(getPresentationSettings());
+              viewerSash.setMaximizedControl(null);
+  :1513    getPresentationSettings().panelsVisible = show;
+removePanel:1441-1451  activePanels 空 → showPanels(false, true, true)
+```
+
+结论：**「面板被关光」与「面板收起」是两件事**。关掉最后一页只让整块面板收起；下次显示
+（`toggleResultsPanel` / `CMD_TOGGLE_PANELS` / 竖条总开关）走的是 `showDefaults=true` 的路径，
+先 `activateDefaultPanels` 把默认面板重新挂上，再放开 sash——所以**不存在「展开后页签夹是空的」**
+这种中间态。
+
+**本仓的缺陷（本批修复前实测）**：`close_right_tab` 关空 → `open_tabs` 留空 + `set_panels_visible(false)`；
+而 `set_panels_visible(true)` 只翻 `edge_bar_visible` / `show_value_sidebar` 两个可见位，
+不补集合。于是「关掉六页 → 再点状态栏右端开关展开」得到的是右栏空白、页签条一颗页签都没有。
+
+**修法**（`panel/events.rs`）：
+
+1. 新增私有 `restore_default_tabs_when_empty()`：集合为空时填回出厂六页（`right_tabs()`），
+   并把 `right_tab` 归一到集合内（空集时当前页必然已被关掉）。
+   - **只在空集时补**：非空的自定义集合（比如用户关掉「列浏览器」后的五页）在开合之间必须原样保留，
+     否则每次「收起再展开」都会把用户的选择冲掉。
+   - 默认集合的口径与 `activateDefaultPanels` 对齐：DBeaver 用的是「偏好里记录的默认面板 id 集」，
+     本仓偏好注入走 `set_open_tabs_initial`（空值也等价于恢复默认，见该方法注释）。
+2. 两条展开路径都调用：`set_panels_visible(true)`（工具栏 / 宿主 / 竖条总开关）、
+   `toggle_value_sidebar` 的显示方向（状态栏右端三态开关 = DBeaver `CMD_TOGGLE_PANELS` 的等价物）。
+
+**验证**：
+- `panel::tests::reopening_after_closing_all_pages_restores_default_tabs`：关空六页 → 断言
+  `open_tabs` 空 + 收起 → `set_panels_visible(true)` → 断言六页恢复、当前页落在集合里。
+  **这条是先跑红再修的**（红时失败在「空集重新展开应恢复默认页集合」）。
+- `panel::tests::toggling_the_sidebar_keeps_a_custom_tab_set`（反向）：关掉「列浏览器」后
+  走一遍三态开关（宽 → 收 → 窄 → 宽），断言仍是那五页、且不含 `Browser`。
+- 门禁：`cargo test -p rds-result-panel --lib` = **357 passed**（+2）、
+  `cargo check -p rds-editor` 通过、`cargo test -p rds-editor --lib -- --test-threads=4`
+  = **798 passed**（1 ignored）。
+
+**门禁异常（外部因素，非本批因果）**：`cargo test -p rds-ui-guard` 的
+`no_new_hardcoded_color_or_pixel` 报红，指向**并行线未跟踪新文件**
+`crates/workbench/src/unlock.rs`（裸 px 1 未登记 BASELINE）。本批未触碰 `crates/workbench`，
+也未新增任何颜色 / px 字面量，待并行线收敛后复跑。不要为了让 guard 变绿去改别人的
+BASELINE。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
