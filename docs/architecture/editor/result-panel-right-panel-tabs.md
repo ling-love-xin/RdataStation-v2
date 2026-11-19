@@ -1,8 +1,8 @@
 # 结果集右栏页签模型：对齐 DBeaver `CTabFolder`
 
-> 状态：**方案 B 第 1 步已实施**（2026-11-19，`open_tabs` 集合 + 逐页关闭 + 视图菜单勾选态；
-> 实施记录见 `result-panel.md` §9.08、`result-panel-handoff.md` §2.97）。第 2 步（右缘竖条
-> 去掉「点当前页签收起整栏」、整栏收起只走总开关）仍待做。本文保留为模型与迁移步骤的依据。
+> 状态：**方案 B 两步均已实施**（2026-11-19：第 1 步 `open_tabs` 集合 + 逐页关闭 + 视图菜单
+> 勾选态；第 2 步删掉「点当前页签收起整栏」）。实施记录见 `result-panel.md` §9.08 / §9.09、
+> `result-panel-handoff.md` §2.97 / §2.98。本文保留为模型与竞品取证的依据。
 > 范围：`crates/result_panel/src/panel/{data.rs,events.rs,tabs.rs,sidebars.rs,tests.rs}`，
 > 以及 `crates/editor/src/view/host/results/{dispatch.rs,mod.rs}` 的分派。
 > 竞品取证目录：`D:\RdataStation\RDS\dbeaver-ref`（`org.jkiss.dbeaver.ui.editors.data`）。
@@ -116,14 +116,18 @@
   分开做会临时出现「× 已关但菜单仍显示当前页勾选」的错态。
 - 右缘竖条：`toggle_right_tab` 补「目标页不在集合 → 先启用再切」，避免被关掉的页只能从菜单找回。
 
-**第 2 步（仍未做）**：`toggle_right_tab` 的「点已选中页签 → 收起整栏」语义还在，
-需改成无操作，把整栏收起收敛到 `SetPanelsVisible`。
-
 **第 2 步：消掉「点当前页签收起整栏」**
 1. `toggle_right_tab` 改为「点已选中页签 → 无操作」（不再收起整栏）；
    保留 `set_panels_visible` / 视图菜单「收起全部面板」作为唯一整栏收起入口。
 2. 视图菜单六项勾选态改读 `open_tabs`，点击走 `open_right_tab` / `close_right_tab`。
 3. 改上述三条既有用例，补一条「视图菜单勾选 → 页签条同步增减」的闭环用例。
+
+**第 2 步的实际实施差异（2026-11-19 落地时登记）**：① `toggle_right_tab` 已改成纯切页
+（点已选中页返回 `false`、面板不动），`right_tab_click_collapses` 删除；② 视图菜单的勾选态
+与 `close_right_tab` 已经在第 1 步落地，本步只补竖条侧；③ 既有用例改为
+`clicking_the_active_edge_tab_is_a_noop`（点当前页无操作 / 点别页切过去 / 收起后点当前页重展）
+与 `edge_bar_reopens_a_closed_page`（× 关掉的页可由竖条重新启用），竖条提示改三态、
+勾选态改判「面板可见且是这一页」。详见 `result-panel.md` §9.09。
 
 ## 6. 边界与不做的事
 

@@ -5580,6 +5580,49 @@ presentationSettings.enabledPanelIds.add(panelDescriptor.getId());   // :1388
   `cargo check -p rds-editor` 通过、`cargo test -p rds-editor --lib -- --test-threads=4`
   = **794 passed**（1 ignored）、`cargo test -p rds-ui-guard` = 4 passed。
 
+### 9.09 消掉「点当前页签收起整栏」（方案 B 第 2 步，2026-11-19）
+
+**DBeaver 里从来没有「点已选中页签就收起整栏」**：`ResultSetHandlerTogglePanel.toggleResultsPanel:64-69`
+算 `isVisible = rsv.isPanelsVisible() && rsv.isPanelVisible(panelId)`，真则
+`rsv.closePanel(panelId)`——关的是**那一个面板**；而 `closePanel` 之后 `CTabFolder` 里
+其余页签仍在（`addPanel:1357` 的 `SWT.CLOSE`）。整栏显隐是另一条命令：
+`showPanels(false)` = `viewerSash.setMaximizedControl(children[0])`（`:1487`），
+入口是 `CMD_TOGGLE_PANELS` / 竖条顶部那颗 `SWT.CHECK` 总开关（`:1038-1056`）。
+
+**本仓此前的状态**：单页模型时代，「关掉当前这一页」只能等价成「收起整块面板」，
+于是 `toggle_right_tab` 里留了 `right_tab_click_collapses(tab, active, panels_visible)`：
+点已选中页 → `set_panels_visible(false)`，连点两次同一页 = 收起 / 再展开。
+
+**改法**（第 24 批已有 `open_tabs`「已启用集合」与逐页 ×，第 2 步删掉上面这条自造语义）：
+1. `toggle_right_tab` 改成纯「切到该页」：未登记 → 先启用再切（`true`）；
+   已登记且正显示 → **无操作**（返回 `false`，调用方不触发引用页刷新）；
+   已登记但没在显示（含整栏收起态）→ `set_right_tab`（`true`）。
+   整栏收起 / 展开**只剩** `SetPanelsVisible` 一个入口（竖条顶部总开关、状态栏三态、视图菜单）。
+2. 删除纯函数 `right_tab_click_collapses`（不再有第二种语义可算）。
+3. 竖条提示改成三态（`edge_tab_tooltip(tab, is_open, is_current)`）：
+   当前页报「当前页」、已启用未显示报「点一下切到这一页」、被 × 关掉的报「此页已关闭，
+   点一下重新打开」——取代原来那条「收起结果面板（本页正在显示）」。
+4. 竖条勾选态（`toggled`）改判 `panels_visible && active == tab`（原判 `active == tab`，
+   整栏收起时仍会显示一颗「勾着」的按钮，与「可见才是勾」的 DBeaver 口径不符）。
+
+**与 DBeaver 的已知差异（登记）**：DBeaver 竖条那颗 `CHECK` 点下去对**已勾选**的页是
+`closePanel`（关掉该页，页签里消失）；本仓把「关页」收敛到页签条行尾 ×（与视图菜单勾选项
+同源），竖条点已勾选页为无操作。两者都做到「整栏收起不在这里发生」，差别只在
+「竖条能否逐页关」——属后续可选项，不做没有功能性损失。
+
+**验证**：
+- 窗口用例 `panel::tests::clicking_the_active_edge_tab_is_a_noop`：点当前页返回 `false`
+  且面板仍可见、页签不变；点别页切过去；整栏收起后点当前页重新展开。
+- 窗口用例 `panel::tests::edge_bar_reopens_a_closed_page`：× 关掉「计算」页后，
+  点竖条把它重新启用并按规范序插回（`open_tabs == right_tabs()` 全集）。
+- 提示用例 `edge_bar_tooltip_carries_label_and_description` 改为三态断言
+  （含「当前页」不再说切换、「已关闭」说重新打开）。
+- 删除的用例：`right_tab_click_closes_only_the_page_that_is_showing`（纯函数已没了）、
+  `toggling_the_active_page_collapses_the_panel`（该行为已按设计移除）。
+- 门禁：`cargo test -p rds-result-panel --lib` = **345 passed**（warning 0）、
+  `cargo check -p rds-editor` 通过、`cargo test -p rds-editor --lib -- --test-threads=4`
+  = **794 passed**（1 ignored）、`cargo test -p rds-ui-guard` = 4 passed。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

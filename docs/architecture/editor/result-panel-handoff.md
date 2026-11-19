@@ -1493,6 +1493,19 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 2.98 方案 B 第 2 步：竖条不再「点当前页收起整栏」（2026-11-19）
+
+- `toggle_right_tab` 现在是**纯切页**：未启用 → 先启用再切（`true`）；已启用且正在显示
+  → 无操作（返回 `false`，派发侧据此不触发引用页刷新）；其余 → `set_right_tab`（`true`）。
+  **整栏收起只剩 `SetPanelsVisible`**（竖条顶部总开关 / 状态栏三态 / 视图菜单）。
+  `right_tab_click_collapses` 已删除——不要再按旧语义写「点当前页 = 收起」的用例或提示。
+- 竖条提示 `edge_tab_tooltip(tab, is_open, is_current)` 三态：当前页 / 可切到 / 已关闭
+  可重新打开；勾选态 `toggled = panels_visible && active == tab`（整栏收起时不再谎报勾选）。
+- 竖条页序改为取 `events::right_tabs()`（原先在 `sidebars.rs` 硬编码了一份六页数组）。
+- 仍缺（登记，非缺陷）：DBeaver 竖条对已勾选页是 `closePanel`（逐页关），本仓把逐页关
+  收敛到页签条行尾 ×，竖条点已勾选页为无操作。
+- 门禁基线（本批之后）：panel **345**、editor **794**（1 ignored）、ui-guard **4**。
+
 ### 2.97 右栏页签模型已落地第 1 步（2026-11-19）
 
 - **已实现（方案 B 第 1 步）**：`panel::data::open_tabs: Vec<RightTab>`（规范序、恒非空，
