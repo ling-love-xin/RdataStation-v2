@@ -5852,6 +5852,43 @@ ResultSetViewer.java
 **仍与 DBeaver 有差**（未做）：逐页关闭仍是页签条**行尾单颗 ×**（DBeaver 是每页签内侧
 `SWT.CLOSE`；kit `Tab` 无 `closable`），属目视/上游能力范围。
 
+### 9.14 列浏览器过滤框：ESC 清空（2026-11-19）
+
+取证（`org.jkiss.dbeaver.ui.editors.data`）：
+
+```text
+panel\metadata\MetaDataPanel.java
+  createContents:84-98   过滤行 = createControlLabel(过滤标签) + Text(SWT.BORDER|SWT.SEARCH|SWT.ICON_CANCEL)
+                         （FILL_HORIZONTAL），setMessage(过滤提示)；
+                         addModifyListener → refresh(true)；
+                         KeyListener: e.character == SWT.ESC → filterTextBox.setText("")
+  refresh:173-201        filterText = 输入转大写；非空时
+                         .filter(a -> a.getName().toUpperCase().contains(filterText))
+                         ——只匹配**列名**；集合与上次相同则早退，否则 clearListData + loadData
+```
+
+本仓过滤框不是自绘，而是 kit `List::searchable` 内置的搜索框（`ListState` 不暴露内部
+`InputState`）。因此：
+
+1. `sidebars.rs` 把 `List` 套进一个带 id 的容器 div（`editor-result-col-browser-list`），
+   在容器上挂 `on_key_down`：`escape → ListState::set_query("")`。`set_query` 内部
+   `set_value` 后**直接** `start_search`（`vendor/gpui-component/src/list/list.rs:226-235`），
+   等价于 DBeaver 的「清空 + refresh」两步。
+2. kit `Input` 不消费 Enter/Esc（`panel/render.rs` 的重命名条已实测同结论：按键沿 Bubble
+   冒泡到外层 `div.on_key_down`），所以焦点在搜索框里敲 ESC 也能到容器。
+
+**仍与 DBeaver 有差**（登记，未改）：本仓过滤匹配**列名 / 类型名 / 注释**三处，
+DBeaver 只匹配列名（`refresh:178-183`）。此处加宽是此前批次拍板的取舍（按类型/注释找列
+在宽表里更实用），若要严格对齐需回退为只匹配列名。
+
+**验证**：
+- `panel::tests::column_browser_filter_clears_on_escape`（窗口级）：`set_query("amount")`
+  后 delegate `query() == "amount"`、`matched().len() == 1`；`list.focus(window, cx)` 后
+  `simulate_keystrokes("escape")` → `query() == ""`、`matched().len() == 2`（回到全量）。
+- 门禁：`cargo test -p rds-result-panel --lib` = **352 passed**（warning 0）、
+  `cargo check -p rds-editor` 通过、`cargo test -p rds-editor --lib -- --test-threads=4`
+  = **795 passed**（1 ignored）、`cargo test -p rds-ui-guard` = 4 passed。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

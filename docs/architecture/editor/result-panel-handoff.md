@@ -1493,6 +1493,21 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 3.03 列浏览器过滤框 ESC 清空（2026-11-19）
+
+- DBeaver 取证（`MetaDataPanel.java:84-98`）：过滤行 = 标签 + `Text(SWT.BORDER|SWT.SEARCH|SWT.ICON_CANCEL)`，
+  每改一次 `refresh(true)`；`KeyListener` 里 `SWT.ESC → setText("")`。`refresh:178-183`
+  只按列名大小写不敏感匹配，集合不变则早退。
+- 本仓：过滤框仍是 kit `List` 内置 searchable（不手搓）；`List` 外套一层
+  `editor-result-col-browser-list` 容器挂 `on_key_down`，`escape → ListState::set_query("")`
+  （该 API 内部会直接起一次搜索，等价「清空 + refresh」）。kit `Input` 不消费 Esc，
+  焦点在搜索框也能冒泡到容器。
+- 用例 `column_browser_filter_clears_on_escape`（窗口级：set_query("amount") → 1 行；
+  focus + simulate_keystrokes("escape") → query 空、matched 回 2）。
+- 门禁基线：panel **352**、editor check 通过（唯一 warning 来自并行线 host/mod.rs）、
+  editor **795**（1 ignored）、ui-guard **4**。
+- 登记差异（未改）：本仓过滤还匹配类型名 / 注释（此前拍板加宽），DBeaver 只匹配列名。
+
 ### 3.02 竖条 / 视图菜单页项 = 「开/关该页」toggle（2026-11-19）
 
 - DBeaver 取证：`ResultSetHandlerTogglePanel.toggleResultsPanel:64-69` +
