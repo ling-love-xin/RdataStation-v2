@@ -1493,6 +1493,24 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 未落地：~~跨会话持久化~~（已由 §2.74 补齐）；~~失焦回填~~（已由 §2.80 补齐，
   `InputEvent::Blur` 是有的，此前"没有失焦钩子"的结论已作废）。
 
+### 2.96 右栏页签模型：方案已定，代码未动（2026-11-19）
+
+- **先读方案再改**：`docs/architecture/editor/result-panel-right-panel-tabs.md`（方案 B：
+  `open_tabs` 集合 + 每页 × 关闭 + 去掉「点当前页签收起整栏」）。代码一行未改，
+  别把它当成「已经实现」。
+- 竞品事实（都在 `ResultSetViewer.java`）：`addPanel:1330-1394` 的
+  `CTabItem(panelFolder, SWT.CLOSE)`（每页带关闭）、`:1388` 的
+  `presentationSettings.enabledPanelIds.add(id)`（已启用集合会持久化）、
+  `fillPanelsMenu:1559-1588`（视图菜单逐页是 `STYLE_CHECK` 的 `CMD_TOGGLE_PANEL`）。
+  ⇒ 「关掉一页」= 从集合移除，「收起整栏」是另一条命令（`CMD_TOGGLE_PANELS`），
+  两者在 DBeaver 里**从不混用**；本仓当前把两者合成「点当前页签」是自造语义。
+- 改的时候必须同步的六处：`events::right_tabs()` 顺序、`right_tab_index` /
+  `right_tab_from_index`（改成「规范序 × 当前集合」两段换算）、`right_tab_icon`、
+  `right_tab_description`、`right_tab_label`、`panel_view_menu_items()` + `tabs.rs`
+  / `sidebars.rs` 的 `match self.right_tab`。
+- 不做（已登记）：六页同时挂载（会把统计/分组/引用的每帧重算放大六倍）、
+  `open_tabs` 持久化（要新增 settings 键，与 §9.05 那类偏好同批做）。
+
 ### 2.95 分组页正文的表结构（键列 + COUNT(*)）与三条差异（2026-11-19）
 
 - DBeaver 的分组结果是**表**：属性列 = 每个分组键一列，函数列 = `getFunctionColumns()`
