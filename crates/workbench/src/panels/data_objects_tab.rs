@@ -28,6 +28,11 @@ use gpui_kit::component::Sizable as _;
 use gpui_kit::component::tag::Tag;
 use gpui_kit::*;
 
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use workbench_shell::{tree, ui};
+
 use crate::components::data_objects::{self, Group};
 use crate::view::RightPanel;
 
@@ -63,7 +68,7 @@ pub struct DataObjectsTab {
     note: Option<PanelNote>,
     /// 哪一行的会话动作条展开着：一屏只开一个，跟原型一致
     expanded_session: Option<String>,
-    /// 分组筛选（原型 07 的 6 个 chips）：`None` = 全部
+    /// 分组筛选（四段 + 全部，2026-11-18 合并后 5 个 chips）：`None` = 全部
     filter: Option<Group>,
     /// 上次刷新时的进程内存读数（字节, 临时表数）；`None` = 读不到
     memory: Option<(u64, usize)>,
@@ -71,6 +76,12 @@ pub struct DataObjectsTab {
     session: Option<(usize, usize)>,
     /// 收起的段：段头照画（带计数），行不画——空段也得让人知道它空着
     collapsed: Vec<Group>,
+    /// 展开着的源行（键 = 源行 key）。展开态**跨刷新保留**：会话可能被重建，
+    /// 清单在每次 `refresh` 时对仍展开的源重取一遍（见 [`Self::refresh`] 尾段）
+    expanded_sources: HashSet<String>,
+    /// 源行展开出的表 / 视图清单（键 = 源行 key；`Arc` 让 render 只引用不拷贝）。
+    /// 列举走引擎（事件路径写入），渲染纯读
+    source_children: HashMap<String, Arc<Vec<engine::duckdb::accel::MountedTable>>>,
 }
 
 impl DataObjectsTab {
@@ -84,6 +95,8 @@ impl DataObjectsTab {
             memory: None,
             session: None,
             collapsed: Vec::new(),
+            expanded_sources: HashSet::new(),
+            source_children: HashMap::new(),
         };
         tab.refresh(cx);
         tab
@@ -91,6 +104,8 @@ impl DataObjectsTab {
 
     /// 删掉清单里的临时对象（进程内存里的临时表；删了要重跑才有）。
     ///
+    /// 范围与「存为表」对称（`can_clear` = `result:` 前缀）：Mock / 插件表同段但
+    /// 归各自模块管，不从这里删（删了它们模块的登记就指向空表）。
     /// 属于破坏性动作，调用前必须过确认框；这里只管执行与把失败原话留在面板上。
     fn clear_temp_objects(&mut self, cx: &mut Context<Self>) {
         let names: Vec<String> = self
@@ -98,7 +113,7 @@ impl DataObjectsTab {
             .data_objects
             .borrow()
             .iter()
-            .filter(|object| object.group == Group::TemporaryTables)
+            .filter(|object| data_objects::can_clear(object))
             .map(|object| object.name.clone())
             .collect();
         if names.is_empty() {
@@ -183,8 +198,9 @@ impl DataObjectsTab {
     /// 重新取一次清单（事件路径）。
     ///
     /// 资产那段不走库查询：资产面板实体已经把存活行载在内存里（`view_rows`），
-    /// 这里只做形状翻译。面板还没载过（弱句柄取不到 / 行还空）时资产段就是空——
-    /// 显示「资产面板载过之后可见」，而不是自己开一次连接去查（那是两套真相）。
+    /// 这里只做形状翻译。资产面板在侧栏构造期就建好并**预载一次**（`build_resources_panel`
+    /// 尾部的 `refresh_resources`，注释点名就是为本面板预载的），项目切换与资产增删也都会
+    /// 推新快照——所以这里**永远有行可读**，不需要自己开连接查库（那是两套真相）。
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         let mut collected = data_objects::collect(&self.shared);
         // 内存读数与会话统计都在这里取：render 每帧跑，不能在里面查库。
@@ -203,7 +219,54 @@ impl DataObjectsTab {
         // 资产行单独存一份：`Object` 只带名字与版本，构造来源还要本体路径
         *self.shared.data_object_assets.borrow_mut() = collected.assets.clone();
         *self.shared.data_objects.borrow_mut() = data_objects::objects(&collected);
+        // 展开着的源行：清单重取一遍（会话可能被重建，旧清单会骗人）。
+        // 刷新是例行动作，失败不刷提示——真正的展开点击才把原因亮出来
+        let expanded: Vec<String> = self.expanded_sources.iter().cloned().collect();
+        for key in expanded {
+            self.load_source_children(&key, false);
+        }
         cx.notify();
+    }
+
+    /// 展开 / 收起一个源行（联邦源与本地加速源可展开，其余行没有下一层）。
+    fn toggle_source_expand(&mut self, key: &str, cx: &mut Context<Self>) {
+        if self.expanded_sources.contains(key) {
+            self.expanded_sources.remove(key);
+            // 收起不清缓存：再展开立即可见，refresh 会让它跟上现实
+        } else {
+            self.expanded_sources.insert(key.to_string());
+            self.load_source_children(key, true);
+        }
+        cx.notify();
+    }
+
+    /// 去引擎列举一个源里的表 / 视图（**事件路径**：查的是那条会话连接）。
+    ///
+    /// `announce`：用户点击展开时失败要给提示（否则点了像没反应）；例行刷新
+    /// 的重取则静默跳过，避免每次刷新都弹一遍旧错误。重绘由**调用方**负责
+    /// （两个调用点各自 `cx.notify()`，这里不重复通知）。
+    fn load_source_children(&mut self, key: &str, announce: bool) {
+        let outcome = match data_objects::source_ref(key) {
+            Some(data_objects::SourceRef::Federated { owner, alias }) => {
+                engine::duckdb::federation::session::list_tables_for(&owner, &alias)
+            }
+            Some(data_objects::SourceRef::Accel { conn_id }) => {
+                engine::duckdb::accel::list_tables_for(&conn_id)
+            }
+            Some(data_objects::SourceRef::FileView { alias }) => {
+                engine::duckdb::file_view::list_tables_global(&alias)
+            }
+            None => return,
+        };
+        match outcome {
+            Ok(tables) => {
+                self.source_children.insert(key.to_string(), Arc::new(tables));
+            }
+            Err(reason) if announce => {
+                self.note = Some(PanelNote::error(reason));
+            }
+            Err(_) => {}
+        }
     }
 
     /// 从资产面板的已载行取资产（只读；不触发任何加载）
@@ -333,7 +396,7 @@ impl DataObjectsTab {
             .pb_2()
             .child("每组只显示最新版本；洞察产物 tmp_i_ 不进本清单");
 
-        // 分组 chips：五段全展开太长，先收窄到一段再看（原型 07 的 6 个 chip）
+        // 分组 chips：四段全展开太长，先收窄到一段再看（2026-11-18 合并后 5 个 chip）
         let mut chips = div()
             .h_flex()
             .items_center()
@@ -344,9 +407,8 @@ impl DataObjectsTab {
         let mut entries: Vec<(Option<Group>, String)> = vec![(None, "全部".to_string())];
         for group in [
             Group::MountedSources,
-            Group::ProjectLibrary,
-            Group::GlobalLibrary,
-            Group::ExternalFiles,
+            Group::PersistentTables,
+            Group::Files,
             Group::TemporaryTables,
         ] {
             entries.push((Some(group), group.title().to_string()));
@@ -553,7 +615,7 @@ impl DataObjectsTab {
                 last_group = Some(object.group);
                 // 段头带计数：这一段里几行，扫一眼就知道要不要往下翻
                 let group_count = objects.iter().filter(|o| o.group == object.group).count();
-                let group = object.group.clone();
+                let group = object.group;
                 let expanded = !self.collapsed.contains(&group);
                 let entity_for_group = entity.clone();
                 list = list.child(
@@ -578,7 +640,7 @@ impl DataObjectsTab {
                                 gpui_kit::assets::IconName::ChevronRight
                             })
                             .on_click(move |_, _, cx| {
-                                let group = group.clone();
+                                let group = group;
                                 entity_for_group.update(cx, |tab, cx| {
                                     tab.toggle_group(group, cx);
                                 });
@@ -711,6 +773,38 @@ impl DataObjectsTab {
                     }),
                 )
             };
+            // 源行可展开（联邦可用源 / 加速源）：行首给展开指示，与段头 chevron 同一习惯。
+            // 失败的联邦源展不开（没有表清单可列），该段内留同宽空位对齐
+            let source_expandable = object.group == Group::MountedSources
+                && object.can_analyze()
+                && data_objects::source_ref(&object.key).is_some();
+            let expanded_now = self.expanded_sources.contains(&object.key);
+            let disclosure = if object.group == Group::MountedSources {
+                Some(if source_expandable {
+                    let key = object.key.clone();
+                    let entity = entity.clone();
+                    Button::new(SharedString::from(format!(
+                        "data-object-expand-{}",
+                        object.key
+                    )))
+                    .ghost()
+                    .xsmall()
+                    .icon(if expanded_now {
+                        gpui_kit::assets::IconName::ChevronDown
+                    } else {
+                        gpui_kit::assets::IconName::ChevronRight
+                    })
+                    .on_click(move |_, _, cx| {
+                        let key = key.clone();
+                        entity.update(cx, |tab, cx| tab.toggle_source_expand(&key, cx));
+                    })
+                    .into_any_element()
+                } else {
+                    tree::disclosure_slot().into_any_element()
+                })
+            } else {
+                None
+            };
             list = list.child(
                 div()
                     // 每一行都要能被 hover 与键盘看清：hover 需要命中的 id，不是样式
@@ -728,6 +822,8 @@ impl DataObjectsTab {
                     .when(is_picked, |el| el.child(workbench_shell::tree::active_bar(colors.primary)))
                     // 失效行压暗：仍然看得见，但别让人以为能直接点
                     .opacity(if object.can_analyze() { 1.0 } else { 0.55 })
+                    // 源段的展开指示（可展开 = chevron 钮；不可展开 = 同宽空位）
+                    .children(disclosure)
                     // 五段图标各不同，靠它扫一眼分形状（原型 07 的图标列）
                     .child(
                         div().flex_none().child(
@@ -770,10 +866,12 @@ impl DataObjectsTab {
                             .text_xs()
                             .flex_none()
                             // 固定一档最小宽：`→ 联邦` 与 `→ 进程 DuckDB` 差太多，
-                            // 不钉住的话每行的按钮位置都在跳
+                            // 不钉住的话每行的按钮位置都在跳。
+                            // 文案直接用 `channel.label()`（自带箭头）——这里再拼一层
+                            // 会画出「→ → 联邦」（修掉的旧缺陷）
                             .min_w_16()
                             .text_color(colors.muted_foreground)
-                            .child(format!("→ {}", object.channel.label())),
+                            .child(object.channel.label()),
                     )
                     .child(
                         div()
@@ -819,6 +917,41 @@ impl DataObjectsTab {
                     );
                 }
                 list = list.child(bar);
+            }
+            // 展开着的源行：把叶子（表 / 视图）画在它下面。清单没到（刷新竞态 /
+            // 列举失败）就不画——下一次事件会补上，宁可少一拍也不画猜的
+            if expanded_now {
+                match self.source_children.get(&object.key) {
+                    Some(children) if !children.is_empty() => {
+                        for table in children.iter() {
+                            list =
+                                list.child(source_leaf_row(&object.key, table, &entity, cx));
+                        }
+                    }
+                    Some(_) => {
+                        list = list.child(
+                            div()
+                                .id(SharedString::from(format!(
+                                    "data-object-leaf-empty-{}",
+                                    object.key
+                                )))
+                                .h_flex()
+                                .items_center()
+                                .gap_2()
+                                .px_3()
+                                .py_1()
+                                .child(tree::indent_spacer(ui::TREE_INDENT, 1))
+                                .child(tree::disclosure_slot())
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(colors.muted_foreground)
+                                        .child("没有可列的表（挂载成功但目录为空）"),
+                                ),
+                        );
+                    }
+                    None => {}
+                }
             }
         }
 
@@ -917,6 +1050,90 @@ impl DataObjectsTab {
                 )
             })
     }
+}
+
+/// 源行展开出的表 / 视图叶子行：缩进 + 图标 + 名字 + 「复制名」。
+///
+/// 叶子**只做复制限定名**——限定名由引擎按源种类生成（三段 / 两段，判据在
+/// `AccelKind::two_segment_names`），粘进对应通道的 SQL 就能用。**不给「选用」入口**：
+/// 联邦 / 加速的表在各自的专用连接上，洞察取样（进程单例）够不着；等公共入口
+/// Phase 3「洞察搬结果」落地再开。与其摆一个点了会炸的入口，不如只给写 SQL
+/// 真正需要的那一截。
+fn source_leaf_row(
+    parent_key: &str,
+    table: &engine::duckdb::accel::MountedTable,
+    entity: &Entity<DataObjectsTab>,
+    cx: &App,
+) -> AnyElement {
+    let colors = cx.theme().colors;
+    let muted = colors.muted_foreground;
+    let leaf_id = format!("data-object-leaf-{parent_key}-{}", table.qualified);
+    let mut row = div()
+        .id(SharedString::from(leaf_id.clone()))
+        .h_flex()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .py_1()
+        .border_b_1()
+        .border_color(colors.border)
+        .hover(|s| s.bg(colors.list_hover))
+        // 缩进一层（与 picker 树同一套原语：`TREE_INDENT × depth`）
+        .child(tree::indent_spacer(ui::TREE_INDENT, 1))
+        // 展开槽留空：叶子没有下一层，但缩进对齐靠这个固定宽槽
+        .child(tree::disclosure_slot())
+        .child(
+            Icon::new(if table.is_view {
+                gpui_kit::assets::IconName::Eye
+            } else {
+                gpui_kit::assets::IconName::Table
+            })
+            .xsmall()
+            .text_color(muted),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_xs()
+                .text_color(colors.foreground)
+                .overflow_hidden()
+                .text_ellipsis()
+                .child(if table.is_view {
+                    format!("{}（视图）", table.name)
+                } else {
+                    table.name.clone()
+                }),
+        );
+    // schema 不是 main 时补在行尾（两段名源与 DuckDB 文件源的 main 不展示，噪音）
+    if table.schema != "main" && !table.schema.is_empty() {
+        row = row.child(
+            div()
+                .flex_none()
+                .text_xs()
+                .text_color(muted)
+                .child(table.schema.clone()),
+        );
+    }
+    let qualified = table.qualified.clone();
+    row.child(
+        Button::new(SharedString::from(format!("data-object-leaf-copy-{leaf_id}")))
+            .ghost()
+            .xsmall()
+            .label("复制名")
+            .on_click({
+                let qualified = qualified.clone();
+                let entity = entity.clone();
+                move |_, _, cx| {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(qualified.clone()));
+                    entity.update(cx, |tab, cx| {
+                        tab.note = Some(PanelNote::info(format!("已复制限定名：{qualified}")));
+                        cx.notify();
+                    });
+                }
+            }),
+    )
+    .into_any_element()
 }
 
 impl EventEmitter<BasePanelEvent> for DataObjectsTab {}

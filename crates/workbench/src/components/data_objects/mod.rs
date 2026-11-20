@@ -16,8 +16,6 @@
 //! **最新版本**；要用旧版本数据得先在资产管理里回退。所以资产行**不给版本选择**
 //! 控件，只在行上标 `v{n}`，让用户知道自己读的是哪一版。
 
-use std::path::PathBuf;
-
 use insight::SampleSource;
 
 use crate::panels::Shared;
@@ -41,6 +39,8 @@ pub enum Channel {
     Asset,
     /// 联邦会话里挂上的源
     Federated,
+    /// 本地加速会话挂上的源（一源一条专用 DuckDB 连接）
+    Accel,
 }
 
 impl Channel {
@@ -53,6 +53,7 @@ impl Channel {
             Self::File => "→ 文件",
             Self::Asset => "→ 资产",
             Self::Federated => "→ 联邦",
+            Self::Accel => "→ 本地加速",
         }
     }
 
@@ -65,6 +66,7 @@ impl Channel {
             Self::File => "用 reader 函数直接读文件，不复制",
             Self::Asset => "受管资产，只读且只取最新版本",
             Self::Federated => "挂进联邦会话，跨源查询共享一次会话",
+            Self::Accel => "挂进本地加速专用连接，未限定名在该连接的加速档里解析",
         }
     }
 }
@@ -117,20 +119,20 @@ impl State {
     }
 }
 
-/// 分组**按 DuckDB 容器**排（2026-11-16 定稿）：面板回答的是「哪些对象已经在
-/// 可以分析的位置上」，不是「业务上算什么」。资产 / 项目 / 全局 / 结果集这些
-/// 业务身份降为行内标签，不再各占一段——同一个容器里的表回答同一件事。
+/// 分组按**对象形态**排（2026-11-18 合并定稿，取代 2026-11-16 的五容器口径）：
+/// 段回答「这是什么形态的东西、怎么读」，业务身份（资产 / 项目 / 全局 / 自建 /
+/// 落库 / 结果集）全是行内 pill。合并掉的两段：本项目分析库 + 全局分析库 →
+/// 持久表（都是本机 DuckDB 文件库里的表，项目 vs 全局是标签不是形态）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Group {
-    /// 联邦会话里已挂上的源（ATTACH 进来的库）
+    /// 联邦会话 / 本地加速会话里已挂上的源（ATTACH 进来的库）
     MountedSources,
-    /// 本项目分析库（`<项目>/.RSmeta/analytics.duckdb`）：落库的 `res_`、项目自建表、
-    /// 落在项目库里的资产，都是这一个 duckdb 文件里的对象
-    ProjectLibrary,
-    /// 全局分析库（`<RDS_HOME>/data/system/analytics.duckdb`）
-    GlobalLibrary,
-    /// 外部文件（草稿箱 / 导入的文件；能加载进 DuckDB 的才在这里）
-    ExternalFiles,
+    /// 持久表：项目分析库（自建 / `res_` 落库 / 资产·表型）与全局分析库（`G_`）
+    PersistentTables,
+    /// 文件：已加载进 DuckDB 的文件视图（外部文件 / 手动加入的草稿）与资产·文件型
+    /// （本体在 `resources/`，分析时按扩展名用 reader 函数读）。**未加载的草稿不在这里**——
+    /// 草稿不自动进面板，要「加源」手动加入（2026-11-18 口径）
+    Files,
     /// 临时表（进程内存单例里的 `tmp_q_`）
     TemporaryTables,
 }
@@ -139,9 +141,8 @@ impl Group {
     pub fn title(self) -> &'static str {
         match self {
             Self::MountedSources => "已挂载的源",
-            Self::ProjectLibrary => "本项目分析库",
-            Self::GlobalLibrary => "全局分析库",
-            Self::ExternalFiles => "外部文件",
+            Self::PersistentTables => "持久表",
+            Self::Files => "文件",
             Self::TemporaryTables => "临时表",
         }
     }
@@ -150,10 +151,9 @@ impl Group {
     pub fn order(self) -> u8 {
         match self {
             Self::MountedSources => 0,
-            Self::ProjectLibrary => 1,
-            Self::GlobalLibrary => 2,
-            Self::ExternalFiles => 3,
-            Self::TemporaryTables => 4,
+            Self::PersistentTables => 1,
+            Self::Files => 2,
+            Self::TemporaryTables => 3,
         }
     }
 }
@@ -178,15 +178,14 @@ pub struct Object {
 }
 
 impl Group {
-    /// 行首图标：**段决定形状**——扫一眼就知道这是源表、分析库表还是临时表，
+    /// 行首图标：**段决定形状**——扫一眼就知道这是源表、持久表还是临时表，
     /// 不用去读通道文案（原型 07 的 14px 图标列）
     pub fn icon(self) -> gpui_kit::assets::IconName {
         use gpui_kit::assets::IconName;
         match self {
             Self::MountedSources => IconName::Database,
-            Self::ProjectLibrary => IconName::Table,
-            Self::GlobalLibrary => IconName::Layers,
-            Self::ExternalFiles => IconName::FileSpreadsheet,
+            Self::PersistentTables => IconName::Table,
+            Self::Files => IconName::FileSpreadsheet,
             Self::TemporaryTables => IconName::Clock,
         }
     }
@@ -247,7 +246,6 @@ pub struct AssetRow {
 /// 这里只带**连接数量**给分组标题用。
 pub struct Collected {
     pub conn_count: usize,
-    pub drafts: Vec<(String, PathBuf)>,
     pub analysis_tables: Vec<String>,
     pub global_tables: Vec<String>,
     pub result_sets: Vec<String>,
@@ -259,6 +257,8 @@ pub struct Collected {
     pub assets: Vec<AssetRow>,
     /// 联邦会话里已挂上的源
     pub session_sources: Vec<SessionSource>,
+    /// 本地加速会话已挂上的源（`owner` = 源连接 id；`alias` 已翻译成连接显示名）
+    pub accel_sources: Vec<SessionSource>,
 }
 
 impl Collected {
@@ -266,7 +266,6 @@ impl Collected {
     pub fn empty() -> Self {
         Self {
             conn_count: 0,
-            drafts: Vec::new(),
             analysis_tables: Vec::new(),
             global_tables: Vec::new(),
             result_sets: Vec::new(),
@@ -274,6 +273,7 @@ impl Collected {
             loaded_files: Vec::new(),
             assets: Vec::new(),
             session_sources: Vec::new(),
+            accel_sources: Vec::new(),
         }
     }
 }
@@ -303,10 +303,43 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
         });
     }
 
+    // 本地加速源：与联邦源同段（都是"挂进 DuckDB 的源"），pill 区分。
+    // 会话存在即挂载成功（加速档建会话失败不留会话），所以这里没有失败态。
+    for source in &collected.accel_sources {
+        out.push(Object {
+            key: format!("accel:{}", source.owner),
+            name: source.alias.clone(),
+            note: format!("{} · 引用需切到本地加速档", source.note),
+            channel: Channel::Accel,
+            life: Life::Session,
+            state: State::Ready,
+            group: Group::MountedSources,
+            pill: "加速",
+            version: None,
+        });
+    }
+
     // 分析库里的两类表必须分开：`res_` 是「结果集落库」留下的，与项目自建表
     // 在用户心里不是一回事（前者可删、后者可能是他自己建的）
     // 注意返回顺序是 (普通表, 持久表)，写反会让两段整体错位
+    //
+    // 资产·表型的本体也在这一个库里（`information_schema` 会把它们一起列出）：
+    // 不排除的话同一张表出两行，其中一行还会错标「项目自建」——它们只从资产行进
+    // （pill「资产」、只读、带版本），归属由 M6 登记说了算
+    let asset_tables: Vec<String> = collected
+        .assets
+        .iter()
+        .filter_map(|asset| asset.analytics_table.clone())
+        .collect();
     let (own, persistent) = split_persistent_tables(&collected.analysis_tables);
+    let own = own
+        .into_iter()
+        .filter(|name| !asset_tables.contains(name))
+        .collect::<Vec<_>>();
+    let persistent = persistent
+        .into_iter()
+        .filter(|name| !asset_tables.contains(name))
+        .collect::<Vec<_>>();
     for name in persistent {
         out.push(Object {
             key: format!("persistent:{name}"),
@@ -315,7 +348,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             channel: Channel::Local,
             life: Life::Project,
             state: State::Ready,
-            group: Group::ProjectLibrary,
+            group: Group::PersistentTables,
             pill: "结果集落库",
             version: None,
         });
@@ -328,12 +361,15 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             channel: Channel::Local,
             life: Life::Project,
             state: State::Ready,
-            group: Group::ProjectLibrary,
+            group: Group::PersistentTables,
             pill: "项目自建",
             version: None,
         });
     }
 
+    // 资产按**本体形态**分派（2026-11-18 口径：资产对象全部进面板）：
+    // 表型本体在项目分析库里 → 持久表段；文件型本体在 `resources/` → 文件段。
+    // pill 都是「资产」，行上标注只读 + 最新版本
     for asset in &collected.assets {
         out.push(Object {
             key: format!("asset:{}", asset.name),
@@ -346,7 +382,11 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             channel: Channel::Asset,
             life: Life::Managed,
             state: State::Ready,
-            group: Group::ProjectLibrary,
+            group: if asset.analytics_table.is_some() {
+                Group::PersistentTables
+            } else {
+                Group::Files
+            },
             pill: "资产",
             version: Some(asset.version),
         });
@@ -360,7 +400,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             channel: Channel::Local,
             life: Life::Project,
             state: State::Ready,
-            group: Group::GlobalLibrary,
+            group: Group::PersistentTables,
             pill: "全局",
             version: None,
         });
@@ -380,26 +420,21 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
         });
     }
 
+    // Mock（`tmp_m_`）与插件（`tmp_p_`）产物**不进面板**（2026-11-18 用户口径）：
+    // mock 的下游是草稿箱 / 外部目录 / 资产归档，插件产物归插件——它们是各模块的
+    // 生成物，不是分析链路的输入对象；与 `tmp_i_`（洞察样本）同一条纪律。
+
     // 洞察产物（`tmp_i_`）**不进面板**：它是抽取的样，不是全量；生命周期属于洞察
     // 会话。要留就由用户在洞察里「保留到项目库」，落成持久表后再从这里看。
 
-    for (rel, abs) in &collected.drafts {
-        out.push(Object {
-            key: format!("draft:{rel}"),
-            name: rel.clone(),
-            note: abs.to_string_lossy().to_string(),
-            channel: Channel::File,
-            life: Life::Project,
-            state: State::Ready,
-            group: Group::ExternalFiles,
-            pill: "草稿",
-            version: None,
-        });
-    }
-
-    // 已加载进进程单例的文件视图：视图名就是 SQL 里能直接用的那个（`f_<ascii>`），
-    // 文件名放 note，用户才知道它对应哪份文件
+    // 已加载进进程单例的文件，按**加载形态**分派（2026-11-18 拍板：库文件走 ATTACH）：
+    // - 数据文件（csv / parquet / excel…）是 `f_` 视图 → 文件段，视图名即 SQL 里
+    //   能直接用的名字，路径放 note；
+    // - 数据库文件（.duckdb / .sqlite）ATTACH 成了 catalog → 「已挂载的源」段
+    //   （与网络源同一段：都是挂进来的库），行可展开列其表 / 视图（复用源行叶子）。
+    //   按路径扩展判定——加载那一刻是什么形态，这里就是什么形态
     for (alias, path) in &collected.loaded_files {
+        let is_database = engine::duckdb::file_view::is_database_file(path);
         out.push(Object {
             key: format!("fileview:{alias}"),
             name: alias.clone(),
@@ -407,8 +442,12 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             channel: Channel::File,
             life: Life::External,
             state: State::Ready,
-            group: Group::ExternalFiles,
-            pill: "已加载",
+            group: if is_database {
+                Group::MountedSources
+            } else {
+                Group::Files
+            },
+            pill: if is_database { "文件库" } else { "已加载" },
             version: None,
         });
     }
@@ -508,6 +547,42 @@ pub fn session_actions(key: &str, state: &State) -> Vec<SessionAction> {
     actions
 }
 
+/// 源行展开时要去的连接（**纯函数**：面板据此分派「去哪列举表」）。
+///
+/// 两类源行可展开：联邦源（`session:{owner}:{alias}`）与本地加速源（`accel:{conn_id}`）；
+/// 其它 key 一律 `None`——表 / 文件 / 资产行没有下一层。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceRef {
+    /// 联邦会话里的源（owner = 会话主人，alias = 挂载别名）
+    Federated { owner: String, alias: String },
+    /// 本地加速会话（conn_id = 源连接 id）
+    Accel { conn_id: String },
+    /// ATTACH 进进程单例的数据库文件（alias = 挂载别名）
+    FileView { alias: String },
+}
+
+/// 从行 key 解出 [`SourceRef`]（与 `session_actions` 同一套 `rsplit_once` 口径：
+/// owner 里可能带冒号——文档名，按**最后一个**冒号切）。
+pub fn source_ref(key: &str) -> Option<SourceRef> {
+    if let Some(conn_id) = key.strip_prefix("accel:") {
+        return (!conn_id.is_empty()).then(|| SourceRef::Accel {
+            conn_id: conn_id.to_string(),
+        });
+    }
+    if let Some(alias) = key.strip_prefix("fileview:") {
+        // ATTACH 进单例的数据库文件：表清单走同一份列举实现
+        return (!alias.is_empty()).then(|| SourceRef::FileView {
+            alias: alias.to_string(),
+        });
+    }
+    let rest = key.strip_prefix("session:")?;
+    let (owner, alias) = rest.rsplit_once(':')?;
+    (!owner.is_empty() && !alias.is_empty()).then(|| SourceRef::Federated {
+        owner: owner.to_string(),
+        alias: alias.to_string(),
+    })
+}
+
 /// 已选对象 → 洞察取样来源（面板「分析已选」的取数口径，**纯函数**）。
 ///
 /// 返回 `(来源, 跳过原因)`：能给出**完整取数描述**的对象才转成来源，
@@ -515,7 +590,8 @@ pub fn session_actions(key: &str, state: &State) -> Vec<SessionAction> {
 ///
 /// 目前能转的：项目分析库表 / 全局分析库表 / 结果集 / 洞察产物。
 /// 转不了的：资产（面板只知道名字与版本，不知道本体是表还是文件）、
-/// 文件（草稿行有路径但这里没按扩展名选读取器）、联邦源（别名下是哪张表要等会话快照）。
+/// 文件（草稿行有路径但这里没按扩展名选读取器）、联邦源与加速源（表在各自的
+/// 专用连接上，进程单例取样够不着——等公共入口 Phase 3「洞察搬结果」）。
 /// 这几类都能在 02 对话框里选——那是它们的正路，面板不抢。
 pub fn analysis_sources(
     objects: &[Object],
@@ -543,6 +619,14 @@ pub fn analysis_sources(
                 format!("SELECT * FROM \"{table}\""),
                 object.name.clone(),
             )),
+            // 已加载的**数据文件视图**也在单例上,同样能取样;库文件挂的是 catalog
+            // (在 MountedSources 段),没有"整库取样"这回事,落到兜底分支老实说
+            Some(("fileview", alias)) if object.group == Group::Files => {
+                Some(SampleSource::on_duckdb(
+                    format!("SELECT * FROM \"{alias}\""),
+                    object.name.clone(),
+                ))
+            }
             // 资产：本体是 `resources/` 下的受管文件，读它 = 按扩展名交给 DuckDB 读
             Some(("asset", name)) => {
                 let row = assets.iter().find(|a| a.name == *name);
@@ -577,13 +661,22 @@ pub fn analysis_sources(
 
 /// 这一行能不能「存到项目分析库」。
 ///
-/// 只有**进程单例里已经是表**的两组可以：结果集（`tmp_q_`）与洞察产物（`tmp_i_`）。
-/// 落库就是整表搬一份，不需要重建；源库表 / 文件 / 资产各有各的路（连接下推 / reader
-/// 函数 / 只读受管），别把它们塞进这条通道——那会给「只读资产」写出一份副本，
-/// 用户再也分不清哪份是本体。
+/// 只有**结果集**（`tmp_q_`，进程单例里的表）可以：落库就是整表搬一份，不需要重建。
+/// 源库表 / 文件 / 资产各有各的路（连接下推 / reader 函数 / 只读受管），别把它们塞进
+/// 这条通道——那会给「只读资产」写出一份副本，用户再也分不清哪份是本体。
+/// 判据收在 **key 前缀**而不是整段：段里将来再进新对象（Mock / 插件曾被误放过又撤出，
+/// 2026-11-18）也不会误放开这条通道。
 pub fn can_persist(object: &Object) -> bool {
-    // 临时表才谈得上「存为表」：项目库/全局库里的对象本来就已经持久了
-    object.group == Group::TemporaryTables && object.can_analyze()
+    object.key.starts_with("result:") && object.can_analyze()
+}
+
+/// 这一行能不能被「清理临时对象」删掉。
+///
+/// 与 [`can_persist`] **同一口径**（`result:` 前缀）：面板对临时对象的“进 / 出”两个
+/// 动作必须对称——落库只收结果集，清理就也只能删结果集，谁单独放宽都会留下
+/// “能进不能出”或“能删不该删”的对象。
+pub fn can_clear(object: &Object) -> bool {
+    object.key.starts_with("result:")
 }
 
 /// 落库时给人看的名字：去掉临时前缀（`tmp_q_` / `tmp_i_`），别让表名里再出现一层 `tmp_`。
@@ -597,8 +690,9 @@ pub fn persist_label(table: &str) -> String {
 
 /// 现取一次（面板打开 / 刷新时调）。
 ///
-/// 资产清单暂由调用方填：它要过资产模块的登记层（本项目 `analytics_resources`），
-/// 那套入口还没从这里可达，缺的就是空——不猜一个查询塞进去。
+/// 资产清单由调用方填：资产面板实体启动即构造并预载快照（`build_resources_panel` 尾部
+/// `refresh_resources`），项目切换与资产增删都会推新——面板 refresh 时从它的 `view_rows`
+/// 翻译即可，取数只有这一份（这里不另开连接查库，避免两套真相）。
 pub fn collect(shared: &Shared) -> Collected {
     let conn_count = shared
         .connections
@@ -606,7 +700,6 @@ pub fn collect(shared: &Shared) -> Collected {
         .iter()
         .filter(|c| c.connected)
         .count();
-    let drafts = super::source_picker::collect_drafts(shared);
     let project = shared.project.borrow().clone();
     let analysis_tables = project
         .as_ref()
@@ -645,9 +738,30 @@ pub fn collect(shared: &Shared) -> Collected {
         })
         .collect();
 
+    // 本地加速会话：引擎按源连接登记，这里把连接 id 翻译成用户认得的名字
+    // （连接清单是宿主快照；找不到就用 id 兜底——比显示空白强，且可定位）
+    let accel_sources = {
+        let connections = shared.connections.borrow();
+        engine::duckdb::accel::owners()
+            .into_iter()
+            .map(|(conn_id, kind)| {
+                let alias = connections
+                    .iter()
+                    .find(|item| item.id == conn_id)
+                    .map(|item| item.name.clone())
+                    .unwrap_or_else(|| conn_id.clone());
+                SessionSource {
+                    owner: conn_id,
+                    alias,
+                    note: format!("{} · 本地加速会话", kind.label()),
+                    failed: None,
+                }
+            })
+            .collect()
+    };
+
     Collected {
         conn_count,
-        drafts,
         analysis_tables,
         global_tables,
         result_sets,
@@ -655,6 +769,7 @@ pub fn collect(shared: &Shared) -> Collected {
         loaded_files: shared.loaded_files.borrow().clone(),
         assets: Vec::new(),
         session_sources,
+        accel_sources,
     }
 }
 
@@ -665,12 +780,10 @@ mod tests {
         AssetRow, Channel, Collected, Group, Life, Object, SessionSource, State,
         objects,
     };
-    use std::path::PathBuf;
 
     fn sample() -> Collected {
         Collected {
             conn_count: 14,
-            drafts: vec![("数据/a.parquet".into(), PathBuf::from("C:/p/a.parquet"))],
             analysis_tables: vec![
                 "res_订单明细_20261115103000".into(),
                 "数据修复".into(),
@@ -678,7 +791,10 @@ mod tests {
             global_tables: vec!["G_月度经营".into()],
             result_sets: vec!["tmp_q_结果_3".into()],
             insight_samples: vec!["tmp_i_orders_sample".into()],
-            loaded_files: Vec::new(),
+            loaded_files: vec![
+                ("f_sales".into(), "D:/数据/sales_2026q1.csv".into()),
+                ("f_warehouse".into(), "D:/数据/warehouse.duckdb".into()),
+            ],
             assets: vec![AssetRow {
                 name: "月度经营快照".into(),
                 version: 3,
@@ -702,6 +818,12 @@ mod tests {
                     failed: Some("扩展未安装".into()),
                 },
             ],
+            accel_sources: vec![SessionSource {
+                owner: "C_mysql_9".into(),
+                alias: "订单库".into(),
+                note: "MySQL · 本地加速会话".into(),
+                failed: None,
+            }],
         }
     }
 
@@ -718,7 +840,7 @@ mod tests {
         assert_eq!(rows.last().map(|o| o.group), Some(Group::TemporaryTables));
     }
 
-    /// `res_` 表单独成段且换成可读名；项目自建表留在「项目分析库」段、名字原样。
+    /// `res_` 表换可读名；落库 / 自建 / 全局同在「持久表」段，行内标签区分。
     #[test]
     fn persistent_tables_are_split_from_project_owned_ones() {
         let rows = objects(&sample());
@@ -730,22 +852,72 @@ mod tests {
         // 身份仍是原名：面板上改了显示，删除 / 分析仍按原名定位
         assert_eq!(persistent.key, "persistent:res_订单明细_20261115103000");
 
-        // 分组已经不按「落库 / 自建」分（都在本项目分析库里），行内标签负责说清是哪一类
+        // 落库 / 自建 / 全局同在「持久表」段（2026-11-18 合并），行内标签负责说清是哪一类
+        assert_eq!(persistent.group, Group::PersistentTables);
         let own = rows
             .iter()
             .find(|o| o.key.starts_with("project:"))
             .unwrap();
+        assert_eq!(own.group, Group::PersistentTables);
+        let global = rows
+            .iter()
+            .find(|o| o.key.starts_with("global:"))
+            .unwrap();
+        assert_eq!(global.group, Group::PersistentTables);
         assert_eq!(own.name, "数据修复");
         assert_eq!(own.pill, "项目自建");
         assert_eq!(persistent.pill, "结果集落库");
+        assert_eq!(global.pill, "全局");
+    }
+
+    /// 资产·表型只从资产行进：`information_schema` 会把它与自建表一起列出，
+    /// 不排除的话同一张表出两行、其中一行错标「项目自建」——SQL 解析上它确实
+    /// 不冲突（同名靠 catalog 区分），但**面板清单**上两行会让人以为有两份数据。
+    #[test]
+    fn asset_backed_tables_appear_only_as_asset_rows() {
+        let mut c = sample();
+        c.analysis_tables = vec!["数据修复".into(), "arp_客户画像_v2".into()];
+        c.assets.push(AssetRow {
+            name: "客户画像".into(),
+            version: 2,
+            detail: String::new(),
+            payload_rel_path: None,
+            resource_id: "arp_2".into(),
+            analytics_table: Some("arp_客户画像_v2".into()),
+        });
+        let rows = objects(&c);
+        // 表名只出现一次：资产行（不在「项目自建」里再列一遍）
+        let hits: Vec<&Object> = rows
+            .iter()
+            .filter(|o| o.name == "arp_客户画像_v2" || o.key == "asset:客户画像")
+            .collect();
+        assert_eq!(hits.len(), 1, "同一张表只该有一行：{hits:?}");
+        assert_eq!(hits[0].pill, "资产", "归属由 M6 登记说了算：{hits:?}");
+        // 自建表不受影响
+        assert!(rows.iter().any(|o| o.key == "project:数据修复"));
     }
 
     /// 资产行必须标出「最新版本」且只读，并且不给版本选择（模型层没有这个字段）。
+    /// 表型 / 文件型资产都进面板（2026-11-18 口径），按本体形态分派段。
     #[test]
     fn asset_rows_carry_latest_version_and_are_read_only() {
-        let rows = objects(&sample());
-        let asset = rows.iter().find(|o| o.pill == "资产").unwrap();
-        assert_eq!(asset.group, Group::ProjectLibrary, "资产的本体在项目分析库里");
+        let mut c = sample();
+        // 表型资产（本体是项目分析库里的表）
+        c.assets.push(AssetRow {
+            name: "客户画像".into(),
+            version: 2,
+            detail: String::new(),
+            payload_rel_path: None,
+            resource_id: "arp_2".into(),
+            analytics_table: Some("arp_客户画像_v2".into()),
+        });
+        let rows = objects(&c);
+        let asset = rows.iter().find(|o| o.key == "asset:月度经营快照").unwrap();
+        // 文件型（本体在 resources/）→ 文件段
+        assert_eq!(asset.group, Group::Files, "文件型资产按本体进文件段");
+        let table_asset = rows.iter().find(|o| o.key == "asset:客户画像").unwrap();
+        // 表型（本体在项目分析库）→ 持久表段
+        assert_eq!(table_asset.group, Group::PersistentTables, "表型资产按本体进持久表段");
         assert_eq!(asset.version, Some(3));
         assert!(asset.note.contains("只读"));
         assert_eq!(asset.channel, Channel::Asset);
@@ -803,8 +975,9 @@ mod tests {
             },
         ];
         let rows = objects(&c);
+        // 按 `session:` 键前缀滤（段里还有加速源行，不能按整段数）
         let session_rows: Vec<&Object> =
-            rows.iter().filter(|o| o.group == Group::MountedSources).collect();
+            rows.iter().filter(|o| o.key.starts_with("session:")).collect();
         assert_eq!(session_rows.len(), 2);
         assert_ne!(session_rows[0].key, session_rows[1].key);
         // 界面上仍显示同一个别名（用户认的是别名，不是 owner）
@@ -877,12 +1050,18 @@ mod tests {
         assert_eq!(dup.0.len(), 1, "{:?}", dup.0);
     }
 
-    /// 只有「进程单例里已经是表」的两组能走落库通道；给人看的名字要去掉临时前缀。
+    /// 只有结果集（`result:`）能走落库通道；给人看的名字要去掉临时前缀。
+    /// 判据用 key 前缀而不是整段：段里将来再进新对象（Mock / 插件曾被误放过，
+    /// 2026-11-18 撤出）也不会误放开这条通道。
     #[test]
-    fn only_session_tables_can_be_persisted_and_labels_drop_the_temp_prefix() {
+    fn only_result_sets_can_be_persisted_and_labels_drop_the_temp_prefix() {
         let rows = objects(&sample());
+        assert!(
+            rows.iter().any(|o| o.key == "result:tmp_q_结果_3"),
+            "sample 要有结果集行：{rows:?}"
+        );
         for object in &rows {
-            let expected = object.group == Group::TemporaryTables;
+            let expected = object.key.starts_with("result:");
             assert_eq!(
                 super::can_persist(object),
                 expected,
@@ -893,6 +1072,102 @@ mod tests {
         assert_eq!(super::persist_label("tmp_q_结果_3"), "结果_3");
         assert_eq!(super::persist_label("tmp_i_orders_sample"), "orders_sample");
         assert_eq!(super::persist_label("orders"), "orders");
+    }
+
+    /// 「存为表」与「清理」必须对称：都只认 `result:`——进 / 出两个动作同一口径，
+    /// 谁单独放宽都会留下"能进不能出"或"能删不该删"的对象。
+    #[test]
+    fn persist_and_clear_share_the_same_prefix_rule() {
+        let rows = objects(&sample());
+        for object in &rows {
+            assert_eq!(
+                super::can_persist(object),
+                super::can_clear(object) && object.can_analyze(),
+                "{} 进出两个动作的口径要一致",
+                object.key
+            );
+        }
+    }
+
+    /// 已加载文件按形态分派：库文件（ATTACH 成 catalog）进「已挂载的源」段、
+    /// 可展开（source_ref 认它）；数据文件视图进「文件」段、能转洞察取样来源。
+    #[test]
+    fn loaded_files_split_by_form_database_vs_view() {
+        let rows = objects(&sample());
+        let db_file = rows
+            .iter()
+            .find(|o| o.key == "fileview:f_warehouse")
+            .expect("库文件要有行");
+        assert_eq!(db_file.group, Group::MountedSources, "ATTACH 的库是挂载的源");
+        assert_eq!(db_file.pill, "文件库");
+        assert!(
+            super::source_ref(&db_file.key).is_some(),
+            "库文件行可展开列表"
+        );
+        let view = rows
+            .iter()
+            .find(|o| o.key == "fileview:f_sales")
+            .expect("数据文件视图要有行");
+        assert_eq!(view.group, Group::Files);
+        assert_eq!(view.pill, "已加载");
+
+        // 视图能转取样来源（它在单例上）；库文件 catalog 转不了，老实进跳过清单
+        let picked = vec!["fileview:f_sales".to_string(), "fileview:f_warehouse".to_string()];
+        let (sources, skipped) = super::analysis_sources(&rows, &picked, &sample().assets, None);
+        assert_eq!(sources.len(), 1, "{sources:?}");
+        assert!(sources[0].sql.contains("f_sales"), "{sources:?}");
+        assert_eq!(skipped.len(), 1, "库文件整库取样不成立：{skipped:?}");
+        assert!(skipped[0].contains("文件库"), "{skipped:?}");
+    }
+
+    /// 本地加速源进「已挂载的源」段：pill 区分「加速」，副标题把「要切通道」说清。
+    #[test]
+    fn accel_sources_join_the_mounted_group_with_their_own_pill() {
+        let rows = objects(&sample());
+        let accel = rows
+            .iter()
+            .find(|o| o.key == "accel:C_mysql_9")
+            .expect("加速源要有行");
+        assert_eq!(accel.group, Group::MountedSources);
+        assert_eq!(accel.pill, "加速");
+        assert_eq!(accel.channel, Channel::Accel);
+        assert_eq!(accel.life, Life::Session);
+        assert!(accel.can_analyze(), "会话在就是挂上了");
+        assert!(
+            accel.note.contains("本地加速档"),
+            "要提示引用需切通道：{}",
+            accel.note
+        );
+        // 显示名是连接名（用户认名字，不认 conn_id）
+        assert_eq!(accel.name, "订单库");
+    }
+
+    /// 源行 key → 展开目标：联邦源按最后一个冒号切（owner 可能带冒号），加速源直取；
+    /// 其它行没有下一层。
+    #[test]
+    fn source_ref_parses_both_source_kinds_and_rejects_flat_rows() {
+        assert_eq!(
+            super::source_ref("session:编辑器 · a.sql:mysql_src"),
+            Some(super::SourceRef::Federated {
+                owner: "编辑器 · a.sql".into(),
+                alias: "mysql_src".into(),
+            })
+        );
+        assert_eq!(
+            super::source_ref("accel:C_mysql_9"),
+            Some(super::SourceRef::Accel {
+                conn_id: "C_mysql_9".into()
+            })
+        );
+        assert_eq!(
+            super::source_ref("fileview:f_warehouse"),
+            Some(super::SourceRef::FileView {
+                alias: "f_warehouse".into()
+            })
+        );
+        assert_eq!(super::source_ref("project:orders"), None);
+        assert_eq!(super::source_ref("result:tmp_q_1"), None);
+        assert_eq!(super::source_ref("accel:"), None, "空 id 不是源");
     }
 
     /// 软上限：8 个不提示，第 9 个才提示；提示里不出现「不能」。
