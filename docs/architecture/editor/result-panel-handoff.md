@@ -1196,6 +1196,26 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   `default="true"` ⇒ DBeaver 首开只开值查看器；本仓六页全开、active = 列浏览器）。
   若照抄，改法只有一处：默认集合收窄到 `show_by_default` 那几页。
 
+**2026-11-20 更新（筛选设置·存档，全文见 `result-panel.md §9.26`）**：上面 ③ 那条
+「`filtersCustomButton` 的 DROP_DOWN 箭头不做」**本批销账**——后两项的能力补上了，
+箭头随之补齐：
+
+- 面板新增 `SavedFilterSetting`（结果 SQL + 筛选词 + 自定义排序 + 唯一来源表）+ 字段
+  `saved_filter`；`save_filter_setting` 读当前生效值，`reset_filter_setting` 只清存档、
+  不动正在生效的筛选（DBeaver `ResultSetViewer.java:648-664` / `:671-687`）。
+- 箭头菜单三项 = `CustomFilterListener.fillDropDownMenu`（`ResultSetFilterPanel.java:1561-1571`）：
+  编辑筛选设置 / 保存过滤器设置 / 重置过滤器设置。筛选设置钮 `Button` → `DropdownButton`。
+- 自动套用：`sync` 里过 `saved_filter_applies`（**按结果 SQL 认领、空筛选词不算、已有筛选不覆盖**）
+  就写回 `filter_text` 并 `apply_filter_inner(cx, false)`（不 requeue，不替用户重查）。
+  **只恢复筛选词，不套自定义排序**（排序要重查才算数，属显式动作）。
+- 输入框回填走 `filter_backfill` → 宿主 `self.window.update` 转手（`sync` 没有窗口句柄）。
+- **仍未做（登记）**：① `CMD_FILTER_CLEAR_SETTING`「删除所有过滤/排序」（DBeaver 一次清
+  filter + order + 隐藏 + 冻结 + 颜色覆盖 + 转换器 + pin，`EraseItemListener:1525-1551`），
+  本仓 erase 箭头只有「清除筛选词」+「显示隐藏列」；② 列头右键 `filtersMenu` 尾部四项
+  （`ResultSetViewer.java:3926-3932`）；③ 存档**尚未落盘**（`SavedSession` 无字段，跨会话会丢）。
+- 门禁：panel **371**（+3）/ editor check `Finished` / editor **798**（1 ignored）；
+  ui-guard 红 2 项均来自并行线（`workbench/unlock.rs` 裸 px、`settings` 的 `BUILTIN` 分叉）。
+
 ### 2.52 筛选条「状态历史」后退 / 前进（2026-11-18 已实现主体）
 
 全文见 `result-panel.md §8.63`。接手要点：

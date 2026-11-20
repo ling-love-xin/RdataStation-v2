@@ -6505,6 +6505,109 @@ active = 列浏览器；DBeaver 只开值查看器。
 `view/host/mod.rs:132 field detail is never read`，来自已提交的并行线
 （`3c15b2d2` / `fba8acad`），本线未代改。
 
+### 9.26 筛选设置·存档：显式「保存 / 重置过滤器设置」（2026-11-20）
+
+紧接 §9.25 的结构对账：§9.25.4 曾把「`filtersCustomButton` 的箭头菜单」登记为**唯一形态
+差异**，判据是「DBeaver 箭头里的后两项（保存 / 重置）本仓没有能力」。本批把能力补上、
+箭头随之补齐，这条差异销账；同时把 DBeaver 那套「筛选存档」语义在本仓落地。
+
+#### 9.26.1 命令与 handler（dbeaver-ref 现源）
+
+| 命令 id（`IResultSetCommands.java:60-62`） | handler 分支（`ResultSetHandlerMain.java:546-561`） | 面板侧实现 |
+| --- | --- | --- |
+| `...resultset.filterSave` | `saveDataFilter()` | `ResultSetViewer.saveDataFilter:648-664` |
+| `...resultset.filterReset` | `resetSavedDataFilter()` | `ResultSetViewer.resetSavedDataFilter:671-687` |
+| `...resultset.filterClear` | `clearDataFilter(true)` | 已有对应，但只是**窄口径**（见 §9.26.5 第一条） |
+| `...resultset.filterSettings` | `showFilterSettingsDialog()` | 已做（面板「筛选设置」浮层） |
+
+- `saveDataFilter` 的实际动作：`DataFilterRegistry.getInstance().saveDataFilter(dataContainer,
+  model.getDataFilter())`，成功后发一条 `INFORMATION` 通知（`:661-663`）。
+- `resetSavedDataFilter`：`removeDataFilter(dataContainer)` + 通知（`:679-685`）。
+- `hasSavedDataFilter`（`:666-669`）= `dataContainer instanceof DBSEntity && hasDataFilter(...)`
+  —— 只有**实体表**才可能有存档。
+
+#### 9.26.2 存档内容与落盘（`DataFilterRegistry.java`）
+
+| 事实 | 行 | 含义 |
+| --- | --- | --- |
+| `CONFIG_FILE = "saved-data-filter.xml"` | `:63` | 全局一份配置文件 |
+| `OBJ_PATH_DELIMITER = "@@/@@"` | `:65` | 对象路径分隔符 |
+| `SavedDataFilter` 四件 | `:182-251` | `constraints`（逐列约束：可见 / 顺序 / 冻结 / 筛选值）+ `anyConstraint`（OR/AND）+ `order`（ORDER BY 文本）+ `where`（WHERE 文本） |
+| `restoreDataFilter` | `:205-250` | 四件回灌 `DBDDataFilter`；schema 外列走 `SQLUtils.appendConditionString` 合成 where |
+| `saveDataFilter` | `:273-288` | **`isDirty()` 才存，否则把旧键删掉**；`ConfigSaver.schedule(3000)` 延迟落盘 |
+| `removeDataFilter` | `:290-300` | 删键 + 同样延迟落盘 |
+| `hasDataFilter` | `:302-307` | 键存在即「有」 |
+| `makeObjectId` | `:310-318` | `DBUtils.getObjectPath(object, true)` 逐段 `getName()` 拼成 `catalog@@/@@schema@@/@@table` |
+
+恢复侧两道，口径一致：`ResultSetUtils.restoreDataFilter:174-189` 与
+`ResultSetViewer.restoreDataFilter:4266-4284`，都是 `getSavedConfig` → `restoreDataFilter`
+→ **`dataFilter.hasFilters()` 才返回**。也就是「存了但里面没有筛选条件」= 视为没有。
+
+#### 9.26.3 本仓落点
+
+| DBeaver | 本仓 |
+| --- | --- |
+| `SavedDataFilter.constraints`（逐列可见 / 顺序 / 冻结 / 筛选值） | **已有独立通道**：`column_order` / `column_widths` / `column_hidden` / `column_frozen`，随会话自动存（`crates/editor/src/notebook/session.rs:112-120`） |
+| `SavedDataFilter.where` | `SavedFilterSetting.filter`（= 面板 `filter_text`） |
+| `SavedDataFilter.order` | `SavedFilterSetting.order`（= 面板 `filter_order`） |
+| 存档键 `catalog@@/@@schema@@/@@table` | `SavedFilterSetting.sql`（当前结果 SQL）+ `table`（唯一来源表，仅记录） |
+| `CMD_FILTER_SAVE_SETTING` | `ResultRequest::SaveFilterSetting` → `ResultPanel::save_filter_setting` |
+| `CMD_FILTER_RESET_SETTING` | `ResultRequest::ResetFilterSetting` → `ResultPanel::reset_filter_setting` |
+| 打开时自动套用 | `sync` 内 `saved_filter_applies` 通过就写 `filter_text` + `apply_filter_inner(cx, false)` |
+
+箭头菜单对齐 `CustomFilterListener.fillDropDownMenu`（`ResultSetFilterPanel.java:1561-1571`）：
+
+| 项 | DBeaver | 本仓 |
+| --- | --- | --- |
+| 1 | `CMD_FILTER_EDIT_SETTINGS`（zh `filterSettings.name` =「自定义过滤 ...」） | 「编辑筛选设置」→ `OpenFilterSettings`（= 主点击；文案取本仓既有术语「筛选设置」） |
+| 2 | `CMD_FILTER_SAVE_SETTING`（`bundle_zh.properties:84` =「保存过滤器设置」） | 「保存过滤器设置」 |
+| 3 | `CMD_FILTER_RESET_SETTING`（zh 未翻译，回落英文 `Reset default filter`） | 「重置过滤器设置」（不照抄英文） |
+| 门控 | `viewer.getDataContainer() instanceof DBSEntity`（`:1565`） | 恒摆；存档的 `table` 只做记录（`None` = 多表 join / 计算列） |
+| 追加段 | `showHistoryItems` 时 Separator + back / forward / clear（`:1572-1586`） | **不做**：本仓的清除与历史是**独立两颗钮**（erase 箭头 + 历史下拉），不往筛选设置菜单里再复制一份 |
+
+#### 9.26.4 口径差异（三条，均为有意）
+
+1. **存档键按结果 SQL**：DBeaver 按表对象路径，任何查这张表的语句都会套上；本仓收窄，
+   避免把 A 查询的筛选串到 B 查询上。代价是同表不同 SQL 不共享存档。
+2. **自动套用只恢复筛选词，不套自定义排序**：DBeaver 的 `order` 跟着查询走（它重查出的
+   就是带 WHERE / ORDER 的 SQL）；本仓本地过滤不重查，套 `order` 必须下发查询才有效，
+   等于替用户跑一次库——排序仍属用户的显式动作（筛选设置 → 应用）。
+3. **存档本批不落盘**：`SavedSession` 还没有对应字段，跨会话会丢（下一批接通道）。
+
+#### 9.26.5 仍未对齐（本批登记，未做）
+
+- **`CMD_FILTER_CLEAR_SETTING`「删除所有过滤 / 排序」**（zh `bundle_zh.properties:78`）：
+  DBeaver 的 `clearDataFilter(true)` 一次清 **filter + order + 隐藏 + 冻结 + 颜色覆盖 +
+  转换器 + pin**（`EraseItemListener.fillDropDownMenu:1525-1545` 的菜单首项，且这是
+  清除钮的**主点击**默认动作 `executeDefaultAction:1549-1551`）。本仓 erase 箭头只有
+  「清除筛选词」+「显示隐藏列」，**没有这一项** —— 真缺口，下一批候选（需同时清
+  `filter_text` / `filter_order` / `column_hidden` / `column_frozen`）。
+- **列头右键 `filtersMenu` 尾部四项**（`ResultSetViewer.java:3926-3932`：Separator →
+  (DBSEntity) SAVE + RESET → CLEAR → EDIT_SETTINGS）：本仓列头菜单已有按值筛选 /
+  取消排序 / 冻结 / 隐藏 / 显示全部列，**没有**这四项全局命令。登记待做。
+- 三处菜单挂载（筛选条箭头 / `filtersMenu` / 面板右键）本仓按「一处入口」原则只做
+  筛选条那一处，判法与 §9.25.6 对面板菜单三挂载点的处理一致。
+
+#### 9.26.6 本轮改动 + 门禁
+
+- `ports.rs`：`SaveFilterSetting` / `ResetFilterSetting`
+- `panel/data.rs`：`SavedFilterSetting`（4 字段）+ 面板字段 `saved_filter` / `filter_backfill`
+- `panel/events.rs`：`save_filter_setting` / `reset_filter_setting` / `saved_filter_setting` /
+  `take_filter_backfill` / `unique_source_table`，以及纯函数 `saved_filter_applies`
+- `panel/lifecycle.rs`：`sync` 末尾按判据套用（`apply_filter_inner(cx, false)` 不 requeue）
+- `panel/render.rs`：筛选设置钮 `Button` → `DropdownButton`（主钮 + 三项菜单）
+- `editor/src/view/host/results/{dispatch,grid}.rs`：两条请求转发；`sync` 后经
+  `self.window.update` 转手回填筛选输入框（窗口不可用就只留真值）
+- 用例三条：`saving_the_filter_setting_records_the_current_filter`、
+  `a_saved_filter_is_reapplied_only_to_its_own_sql`、
+  `the_saved_filter_needs_its_own_sql_and_an_untouched_filter_box`（纯函数四判据）
+
+**门禁**：result_panel **371 passed**（+3）、editor check `Finished`、editor
+**798 passed**（1 ignored）。ui-guard 本轮 **2 failed**：`no_new_hardcoded_color_or_pixel`
+（`crates/workbench/src/unlock.rs` 裸 px 1）与 `shared_constants_do_not_diverge`
+（`crates/settings/src/{theme_pack,window_material}.rs` 的 `BUILTIN` 常量分叉）——两条
+都在并行线未提交改动面内，本批未触碰。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
