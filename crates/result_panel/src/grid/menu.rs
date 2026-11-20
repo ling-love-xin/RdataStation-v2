@@ -67,6 +67,14 @@ pub enum ContextAction {
     /// 不带载荷：选哪些列是清单自己的多选集合（委托 `selected_set`），
     /// 由清单在点击时展开成列名——菜单纯函数不该知道界面状态。
     CopyColumnNames,
+    /// 【列头菜单】复制**这一列**的列名（对齐 DBeaver 列头 `CMD_COPY_COLUMN_NAMES`，
+    /// `ResultSetViewer.java:3151-3161`，handler 在 `ResultSetHandlerMain.java:333-376`；
+    /// zh 文案是「复制字段名」，本仓术语统一叫「列」）。
+    ///
+    /// 不带载荷：列头菜单天然只针对一列，列名在渲染闭包里已算好
+    /// （`header.rs` 的 `column_name_for_menu`）。与列浏览器的 [`Self::CopyColumnNames`]
+    /// 分开：那个拷的是多选集合、换行分隔；这个是单列名。
+    CopyColumnName,
     /// 【列头菜单·筛选段尾部】保存当前筛选设置（对齐 DBeaver `CMD_FILTER_SAVE_SETTING`，
     /// `ResultSetViewer.java:3928`）。与筛选设置箭头里的「保存过滤器设置」是同一条请求。
     SaveFilterSetting,
@@ -359,6 +367,15 @@ pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
         });
     }
     items.extend(values);
+    // 【DBeaver 对齐】列头菜单第一件复制动作是「复制列名」（`ResultSetViewer.java:3151-3161`
+    // 在 DATA 落点之外单独给 COLUMN_HEADER 挂 `CMD_COPY_COLUMN_NAMES`）。本仓列头菜单是
+    // 扁平结构（DBeaver 是「过滤 / 排序 / 编辑」子菜单），放在复制段首位：
+    // 用户拿列名是为了拼 SQL，比「复制整列取值」更靠前。
+    items.push(ContextMenuItem {
+        label: format!("复制列名「{column_name}」"),
+        action: ContextAction::CopyColumnName,
+        separator_before: false,
+    });
     items.push(ContextMenuItem {
         label: format!("复制此列（{} 个取值）", target.rows),
         action: ContextAction::CopyColumn(target.column),
@@ -794,6 +811,8 @@ pub(crate) fn context_menu(
             | ContextAction::OpenFilterSettings => {}
             // 「复制列名」只属于列浏览器清单（它要多选集合，网格右键没有这个概念）
             ContextAction::CopyColumnNames => {}
+            // 列头的「复制列名」也只属于列头：右键的「复制此列」复制的是**取值**，不是名字
+            ContextAction::CopyColumnName => {}
         }
     }
     menu

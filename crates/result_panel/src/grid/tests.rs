@@ -1750,6 +1750,37 @@ fn column_menu_shows_conditional_items() {
     assert!(!labels.iter().any(|l| l.contains("INSERT")));
 }
 
+/// 【DBeaver 对齐】列头菜单的「复制列名」（`CMD_COPY_COLUMN_NAMES`，
+/// `ResultSetViewer.java:3151-3161`）：文案带列名、排在复制段首位（在「复制此列」之前）；
+/// 单元格右键不摆——右键的「复制此列」复制的是**取值**，列名在那里没有落点。
+#[test]
+fn column_menu_offers_copying_the_column_name() {
+    let target = target("", "status", 1);
+    let items = column_menu_items(&target);
+    let copy_name = items
+        .iter()
+        .position(|i| matches!(i.action, ContextAction::CopyColumnName))
+        .expect("列头菜单要摆「复制列名」");
+    assert_eq!(items[copy_name].label, "复制列名「status」");
+    assert!(!items[copy_name].separator_before);
+
+    // 位置：复制段首位（拿列名拼 SQL 比拷整列取值更靠前）
+    let copy_column = items
+        .iter()
+        .position(|i| matches!(i.action, ContextAction::CopyColumn(_)))
+        .expect("列头菜单一直有「复制此列」");
+    assert!(
+        copy_name < copy_column,
+        "「复制列名」要排在「复制此列」之前"
+    );
+
+    // 单元格右键不摆（DBeaver 的 DATA 落点只有 EDIT_COPY，没有复制列名）
+    let ctx = context_menu_items(&target);
+    assert!(!ctx
+        .iter()
+        .any(|i| matches!(i.action, ContextAction::CopyColumnName)));
+}
+
 /// 列头菜单筛选段：值列表（去重取值，按出现顺序）平铺成「按值筛选「值」」项，
 /// 第一项带分隔线；筛选生效时才摆「清除此列筛选」
 #[test]

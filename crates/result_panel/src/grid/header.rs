@@ -327,6 +327,20 @@ pub(crate) fn render_th(
                                         ));
                                     }
                                 }
+                                ContextAction::CopyColumnName => {
+                                    // 【DBeaver 对齐】列头「复制列名」：DBeaver 侧走
+                                    // `getQuotedIdentifier`（按方言加引号，`ResultSetHandlerMain.java:367-371`），
+                                    // 本仓网格不持有方言（结果可能来自联邦 / 计算列），复制**裸名**；
+                                    // 需要引号时由用户自己加——宁可少猜，不给出一个错的引号。
+                                    let text = column_name_for_menu.clone();
+                                    menu = menu.item(PopupMenuItem::new(label).on_click(
+                                        move |_, _window, app| {
+                                            app.write_to_clipboard(ClipboardItem::new_string(
+                                                text.clone(),
+                                            ));
+                                        },
+                                    ));
+                                }
                                 ContextAction::CopyColumn(_) => {
                                     // 列头菜单只针对当前列：复制整列文本在闭包外已算好
                                     let text = copy_column_text.clone();
