@@ -6320,6 +6320,50 @@ applyQuickFilter:225-242         new SearchQuickFilterInfo(text, caseSensitive, 
 **798 passed**（1 ignored）。ui-guard 仍红，归因外部（并行线未跟踪
 `crates/workbench/src/unlock.rs` 的裸 px，见 §9.17 末段）。
 
+### 9.23 工具栏 CHECK 型按钮补按下态（2026-11-20）
+
+**缺口**：`Button::toggled(bool)` 在 0.9.0 里**只写 a11y 元数据**，不产生样式：
+
+```text
+vendor/gpui-component/src/button/button.rs:513-522
+/// Only affects accessibility metadata. Use [`Selectable::selected`] for
+/// the selected styling, and call this in addition when the button really
+/// is a toggle, otherwise the button stays an ordinary push button.
+pub fn toggled(mut self, toggled: bool) -> Self { self.toggled = Some(toggled); self }
+:564-571  impl Selectable for Button { fn selected(mut self, selected: bool) -> Self { … } }
+:527-529  fn shows_selected_style(&self) -> bool { self.selected || self.open }
+```
+
+本仓工具栏这批按钮照着 DBeaver 的 CHECK `ToolItem` 写的，但只调了 `toggled` ⇒
+a11y 上是「按下」，画面上是普通 ghost 按钮，「开着还是关着」肉眼分不出来
+（DBeaver 的 `SWT.CHECK` 自带勾选态，`selected` 就是它的等价物）。
+
+**本批补齐的五处**（`.selected(<同一布尔>)`，与既有 `toggled` 并排）：
+
+| 探针 | DBeaver 对应 | 状态字段 |
+|---|---|---|
+| `editor-result-filter-expand` | `FilterExpandPanel`（`ResultSetFilterPanel.java:186`） | `filter_expanded` |
+| `editor-result-find-toggle` | `openFindReplaceButton`（`:356`） | `find_open` |
+| `editor-result-pushdown` | 本仓独有（样式照 CHECK 取） | `pushdown` |
+| `editor-result-show-comments` | 列注释显示 | `show_column_comments` |
+| `editor-result-compare` | 本仓独有（并排对比） | `compare_mode` |
+
+样式沿用主题的 selected token ⇒ 无裸色值 / 裸 px，ui-guard 口径不变；
+具体选中色与对比度属**目视验收项**（用户在册「目视部分后面统一处理」）。
+
+**登记未做**：侧栏（左缘竖条展示组 `editor-result-bar-grid/text/record`、右缘页签
+`editor-result-edge-*`、布局方向 `editor-result-edge-vertical-layout`）、统计页
+`editor-result-stat-mode`、分组页 `editor-result-group-sort` / `-group-dup`、
+布尔格内选择器（`grid/edit.rs` 的 true/false）同属 CHECK/RADIO 语义、同样只调了
+`toggled`——留下一批统一处理（同一份机械改法，先看工具栏批的效果再铺开）。
+
+**验证**：`panel::tests::toolbar_check_buttons_flip_their_panel_state`（窗口）——
+四颗探针都在；点列注释 / 下发源库 / 筛选展开分别入队
+`SetShowColumnComments{open:true}` / `SetPushdown{open:true}` / `ToggleFilterExpand`。
+
+**门禁**：result_panel **367 passed**（+1）、editor check 零 warning、editor
+**798 passed**（1 ignored）。ui-guard 仍红于外部文件（同上）。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

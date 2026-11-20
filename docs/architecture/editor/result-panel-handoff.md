@@ -1163,6 +1163,18 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 后续已补齐：状态历史（§2.52）、✕ 箭头菜单（§2.53）、右缘竖条面板总开关（§2.54）。
   仍在册：DBeaver 面板按钮是「独立 CHECK + 可增减页签」而本仓是固定页签。
 
+**2026-11-20 更新（CHECK 按下态，全文见 `result-panel.md §9.23`）**：0.9.0 的
+`Button::toggled(bool)` **只写 a11y**（`vendor/gpui-component/src/button/button.rs:513-522`），
+按下态必须另调 `Selectable::selected`。工具栏五颗 CHECK 已补齐：
+`editor-result-filter-expand` / `-find-toggle` / `-pushdown` / `-show-comments` / `-compare`
+（`selected` 与 `toggled` 用同一个布尔，样式走主题 selected token）。
+- 用例 `toolbar_check_buttons_flip_their_panel_state`：四颗探针在 + 点击入队对应「开」请求。
+- **在册未做**：侧栏同类（`editor-result-bar-grid/text/record`、`editor-result-edge-*`、
+  `editor-result-edge-vertical-layout`）、`editor-result-stat-mode`、`editor-result-group-sort`
+  / `-group-dup`、`grid/edit.rs` 布尔选择器——同属 CHECK/RADIO 语义、同样只有 `toggled`，
+  下一批统一铺开。
+- 选中色 / 对比度属目视验收（用户口径：目视后面统一处理）。
+
 ### 2.52 筛选条「状态历史」后退 / 前进（2026-11-18 已实现主体）
 
 全文见 `result-panel.md §8.63`。接手要点：
