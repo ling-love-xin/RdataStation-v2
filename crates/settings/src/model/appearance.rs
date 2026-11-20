@@ -28,7 +28,7 @@ pub struct Appearance {
     pub theme_pack: String,
     /// 窗口材质（`"off"` / `"mica"` / `"mica_alt"`，默认 `"off"` = 现状）。
     ///
-    /// 值域见 `crate::window_material::BUILTIN`；只调外壳面少数 token 的 alpha 让系统
+    /// 值域见 `crate::window_material::BUILTIN_MATERIALS`；只调外壳面少数 token 的 alpha 让系统
     /// 背景（Windows 11 的 Mica）从窗口透出来，**不是**主题体系的一部分。
     /// 非 Windows 平台写入照存，应用时降级为不透明（见 `WindowMaterial::background_appearance`）。
     #[serde(default = "default_window_material")]

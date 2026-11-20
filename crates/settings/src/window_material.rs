@@ -16,7 +16,10 @@ use gpui_kit::WindowBackgroundAppearance;
 pub const DEFAULT_CODE: &str = "off";
 
 /// 值域（设置页选项与写入校验的唯一来源，`registry` 直接引用）。
-pub const BUILTIN: &[(&str, &str)] = &[
+///
+/// 名字带 `MATERIALS`：`theme_pack::BUILTIN`（主题包值域）是本 crate 的同名先例，
+/// 两个不同语义的常量同名会让「改一个、另一个不生效」查不出来（`ui_guard` 拦的就是这个）。
+pub const BUILTIN_MATERIALS: &[(&str, &str)] = &[
     ("off", "关闭"),
     ("mica", "云母 Mica"),
     ("mica_alt", "云母 Alt"),
@@ -95,10 +98,10 @@ mod tests {
     fn value_domain_is_closed() {
         assert_eq!(DEFAULT_CODE, "off", "默认档必须是关闭");
         assert!(
-            BUILTIN.iter().any(|(code, _)| *code == DEFAULT_CODE),
+            BUILTIN_MATERIALS.iter().any(|(code, _)| *code == DEFAULT_CODE),
             "默认值必须在值域内（否则「恢复默认」落到档位之外）"
         );
-        for (code, label) in BUILTIN {
+        for (code, label) in BUILTIN_MATERIALS {
             assert!(!label.is_empty(), "`{code}` 缺显示名");
             let parsed = WindowMaterial::from_code(code).expect("登记值必须可解析");
             assert_eq!(parsed.code(), *code, "`{code}` 落盘值往返不一致");

@@ -72,6 +72,10 @@ const BASELINE: &[(&str, usize, usize)] = &[
         0,
         1,
     ),
+    // 1 = 解锁窗尺寸 `size(px(440.), px(250.))`：窗口尺寸是**物理像素**（不随字号缩放，
+    // 缩放会让口令框一屏放不下），且只有这一处来源；它不是视图内距/字号档位，
+    // 提去 `ui.rs` 反而把「窗口多大」与「控件留白」两件事混在一张表里。
+    ("crates/workbench/src/unlock.rs", 0, 1),
     ("crates/workbench_shell/src/ui.rs", 0, 7),
 ];
 

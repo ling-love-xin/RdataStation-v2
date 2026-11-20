@@ -140,8 +140,8 @@ pub fn entries() -> Vec<SettingSpec> {
             label: "窗口材质",
             hint: "让系统背景（Windows 11 的 Mica / Mica Alt）从窗口透出来；只调标题栏 / 状态栏 / 标签条 / 侧栏的不透明度，内容区保持不透明以保证可读性。非 Windows 系统不生效",
             hint_inline: false,
-            // 选项来自 `crate::window_material::BUILTIN`（值域唯一来源，页面与校验同源）。
-            kind: SettingKind::Enum(crate::window_material::BUILTIN),
+            // 选项来自 `crate::window_material::BUILTIN_MATERIALS`（值域唯一来源，页面与校验同源）。
+            kind: SettingKind::Enum(crate::window_material::BUILTIN_MATERIALS),
             presets: &[],
             default_json: "\"off\"",
             effect: SettingEffect::Immediate,

@@ -141,7 +141,7 @@ pub enum Slot {
     AppearanceTabBarVariant,
     /// 主题包（整套明暗 + 产品 token；值域见 `crate::theme_pack::BUILTIN`）。
     AppearanceThemePack,
-    /// 窗口材质（Mica / Mica Alt；值域见 `crate::window_material::BUILTIN`）。
+    /// 窗口材质（Mica / Mica Alt；值域见 `crate::window_material::BUILTIN_MATERIALS`）。
     AppearanceWindowMaterial,
     NavigatorSourceShortCode,
     NavigatorShowTags,

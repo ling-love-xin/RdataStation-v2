@@ -335,6 +335,12 @@ fn view_layer_has_no_raw_size_literals() {
             "panels/overview.rs",
             include_str!("../src/panels/overview.rs"),
         ),
+        // 配置中心页（2026-11-20 补登记）：三刀落下时没同步登记，扫不到就等于
+        // 这两份契约对它静默失效
+        (
+            "panels/config_center.rs",
+            include_str!("../src/panels/config_center.rs"),
+        ),
         // Quick Open（Phase 0：结果区换成 List 组件；后续改动不得回退）
         // 2026-11-09 重构 S0–S5：单文件 → 目录（palette / delegate / host）。
         // 登记按目录**逐文件**列出（include_str 漏一个就静默放过那个文件的裸值）。
@@ -957,6 +963,12 @@ fn ui_sources_have_no_raw_color_literals() {
             "panels/overview.rs",
             include_str!("../src/panels/overview.rs"),
         ),
+        // 配置中心页（2026-11-20 补登记）：三刀落下时没同步登记，扫不到就等于
+        // 这两份契约对它静默失效
+        (
+            "panels/config_center.rs",
+            include_str!("../src/panels/config_center.rs"),
+        ),
         (
             "quick_open/delegate/mod.rs",
             include_str!("../src/quick_open/delegate/mod.rs"),
@@ -1495,6 +1507,8 @@ fn shared_fields_are_whitelisted() {
         "nav_cache_epoch",
         "nav_panel",
         "notice",
+        // 配置中心（2026-11-20）：宿主级开关（谁都能「打开配置中心」），不携带状态本体。
+        "open_config_center",
         "open_mock_detail",
         "open_plugin_manager",
         "open_property",
