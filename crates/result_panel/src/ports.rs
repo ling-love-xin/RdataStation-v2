@@ -53,6 +53,17 @@ pub enum ResultRequest {
     TransposeNext,
     /// 工具栏筛选框「✕」清除（清空输入框 + 立即应用空词；`window` 由宿主分派时提供）
     ClearFilter,
+    /// 【筛选条 ✕】「删除所有过滤/排序」：一次清掉筛选词、自定义排序、列级筛选与本地排序，
+    /// **不动**隐藏列 / 冻结列。
+    ///
+    /// 对齐 DBeaver `CMD_FILTER_CLEAR_SETTING` → `ResultSetViewer.clearDataFilter(true)`
+    /// （`ResultSetViewer.java:605-626`：造一份新 filter，但把每列的 `visible` / `options`
+    /// 搬回去，注释「keeping all visual state (visibility, etc.)」）。这条同时也是
+    /// DBeaver 清除钮的**主点击**默认动作（`EraseItemListener.executeDefaultAction:1549-1551`）
+    /// 与它的 tooltip 说明（`ResultSetFilterPanel.java:319-325`，zh
+    /// `bundle_zh.properties:77` =「删除所有过滤/排序」）。需要 `&mut Window` 回填输入框，
+    /// 故与 [`Self::ClearFilter`] 同一条宿主转手路子。
+    ClearFilterAndOrdering,
     /// 【筛选条 ✕ 箭头菜单】显示全部列（对齐 DBeaver erase 箭头里的
     /// 「显示隐藏列」，`ResultSetViewer.java:1525-1545`）
     ShowAllColumns,

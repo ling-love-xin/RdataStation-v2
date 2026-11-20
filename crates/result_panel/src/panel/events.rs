@@ -307,9 +307,12 @@ impl ResultPanel {
         }
     }
 
-    /// 清除筛选（工具栏那个 ✕）：输入框清空 + 立即应用空词。
+    /// 清除筛选（工具栏那个 ✕ 的**窄口径**入口：只清筛选词）：输入框清空 + 立即应用空词。
     /// 需要 `window`（`InputState::set_value` 的签名）——编辑器分派
-    /// [`ResultRequest::ClearFilter`] 时转手调用
+    /// [`ResultRequest::ClearFilter`] 时转手调用。
+    ///
+    /// 【2026-11-20】这颗钮的主点击已改为全清（[`Self::clear_filter_and_ordering`]），
+    /// 与 DBeaver 一致；本方法保留给「只想清词」的路径（查找栏 / 测试直调）。
     pub fn clear_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.filter_text.clear();
         self.filter_version = self.filter_version.wrapping_add(1);
@@ -318,6 +321,40 @@ impl ResultPanel {
         let grid = self.grid.clone();
         grid.update(cx, |state, cx| {
             state.delegate_mut().set_filter(String::new());
+            state.refresh(cx);
+        });
+        self.refresh_filter_hint(cx);
+        cx.notify();
+    }
+
+    /// 【筛选条 ✕】「删除所有过滤 / 排序」：清筛选词 + 自定义排序 + 列级筛选 + 本地排序。
+    ///
+    /// 对齐 DBeaver `CMD_FILTER_CLEAR_SETTING` → `ResultSetViewer.clearDataFilter(true)`
+    /// （`:605-626`）：造一份新 filter 再 **把每列的视觉状态（`visible` / `options`）
+    /// 搬回去**（`:609-623`，注释原文「keeping all visual state (visibility, etc.)」）。
+    /// 由此本仓照抄两处边界：
+    /// - **隐藏列不会被放出来**（DBeaver 显式保留可见性）；`column_hidden` / `column_frozen`
+    ///   一概不动——想放隐藏列走同一份菜单里的「显示全部列」；
+    /// - 清的是 **filter 与排序**（where / order / 每列 criteria / 每列 orderPosition），
+    ///   对应本仓的 `filter_text` / `filter_order` / `delegate.column_filter` / `sort`。
+    ///
+    /// 这是 DBeaver 清除钮的**主点击**（`EraseItemListener.executeDefaultAction:1549-1551`），
+    /// 也是它 tooltip 的说明（`ResultSetFilterPanel.java:319-325`）。需要 `&mut Window`
+    /// 回填输入框（同 [`Self::clear_filter`] 的宿主转手口径）。
+    pub fn clear_filter_and_ordering(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.filter_text.clear();
+        self.filter_version = self.filter_version.wrapping_add(1);
+        let input = self.filter_input.clone();
+        input.update(cx, |state, cx| state.set_value("", window, cx));
+        // 自定义排序一起清（连同浮层里的草稿，否则重新打开浮层又看到旧排序）
+        self.filter_order.clear();
+        let order_input = self.filter_order_input.clone();
+        order_input.update(cx, |state, cx| state.set_value("", window, cx));
+        let grid = self.grid.clone();
+        grid.update(cx, |state, cx| {
+            state.delegate_mut().set_filter(String::new());
+            state.delegate_mut().set_column_filter(None);
+            state.delegate_mut().clear_sort();
             state.refresh(cx);
         });
         self.refresh_filter_hint(cx);
@@ -2402,16 +2439,18 @@ pub(crate) fn panel_view_item_label(
 
 /// 【筛选条 ✕ 箭头菜单】条目清单（纯函数，测试直接覆盖；`PopupMenu` 内部不可读）。
 ///
-/// 对齐 DBeaver `EraseItemListener`（`ResultSetViewer.java:1525-1545`）：那边是
-/// 清筛选设置 / 显示隐藏列 / 重置颜色 / 重置 transformers / 重置 pins / 全部重置。
+/// 对齐 DBeaver `EraseItemListener.fillDropDownMenu`（`ResultSetViewer.java:1525-1545`）：
+/// 那边第一项恒是 `CMD_FILTER_CLEAR_SETTING`（「删除所有过滤 / 排序」），其后按条件摆
+/// 显示隐藏列 / 重置颜色 / 重置 transformers / 重置 pins，最后「全部重置」。
 /// 本仓口径「能力没有就不摆」：只留**真有落点**的两条——
-/// - `清除筛选词`（有词才可点，等价筛选行的 ✕ 本体）
+/// - `删除所有过滤 / 排序`（恒在：它就是清除钮的主点击动作，也是它的 tooltip 文案，
+///   `ResultSetFilterPanel.java:319-325`；空态下点了是 no-op，DBeaver 那边同样恒可用）
 /// - `显示全部列`（有隐藏列才摆，与列头 / 右键菜单同口径）
-pub(crate) fn erase_menu_labels(filter_text: &str, hidden_columns: usize) -> Vec<&'static str> {
-    let mut labels = Vec::new();
-    if !filter_text.trim().is_empty() {
-        labels.push("清除筛选词");
-    }
+///
+/// `filter_text` 不再影响条目清单（原先「有词才摆『清除筛选词』」那条已并进全清），
+/// 参数保留是为了调用点不用跟着改，且将来若恢复窄口径项可直接用。
+pub(crate) fn erase_menu_labels(_filter_text: &str, hidden_columns: usize) -> Vec<&'static str> {
+    let mut labels = vec!["删除所有过滤 / 排序"];
     if hidden_columns > 0 {
         labels.push("显示全部列");
     }

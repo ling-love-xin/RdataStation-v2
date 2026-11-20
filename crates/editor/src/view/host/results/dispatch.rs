@@ -53,6 +53,11 @@ impl EditorHostPanel {
             ResultRequest::TransposePrev => self.transpose_step(-1, cx),
             ResultRequest::TransposeNext => self.transpose_step(1, cx),
             ResultRequest::ClearFilter => self.clear_filter_via_window(cx),
+            // 【筛选条 ✕】「删除所有过滤 / 排序」（DBeaver `clearDataFilter(true)`）：
+            // 同样要回填输入框，走同一条窗口转手路子
+            ResultRequest::ClearFilterAndOrdering => {
+                self.clear_filter_and_ordering_via_window(cx)
+            }
             ResultRequest::ApplyFilter(value) => self.apply_filter_via_window(value, cx),
             ResultRequest::ToggleFind => self.toggle_find_via_window(cx),
             ResultRequest::FindNext => self
@@ -675,6 +680,16 @@ impl EditorHostPanel {
         let panel = self.result_panel.clone();
         let _ = self.window.update(cx, |_panel, window, app| {
             panel.update(app, |p, cx| p.clear_filter(window, cx));
+        });
+    }
+
+    /// 【筛选条 ✕】「删除所有过滤 / 排序」的窗口转手（同
+    /// [`Self::clear_filter_via_window`] 的口径；测试走直接入口
+    /// [`result_panel::ResultPanel::clear_filter_and_ordering`]）
+    pub(crate) fn clear_filter_and_ordering_via_window(&mut self, cx: &mut Context<Self>) {
+        let panel = self.result_panel.clone();
+        let _ = self.window.update(cx, |_panel, window, app| {
+            panel.update(app, |p, cx| p.clear_filter_and_ordering(window, cx));
         });
     }
 

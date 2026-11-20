@@ -3768,12 +3768,13 @@ fn left_bar_puts_presentation_group_on_top_and_record_mode_at_the_bottom(
     );
 }
 
-/// 【2026-11-18 工具栏结构对齐】筛选清除钮 = **常驻 + 空词禁用**：
-/// DBeaver 的 `filtersClearButton` 建出来就是禁用态（`ResultSetFilterPanel.java:319-327`），
-/// 有筛选后才由 `enablePanelControls` 打开（`:449-454`）。此前本仓是「有词才出现」，
-/// 位置随打字跳一格。此用例钉住「一直在、状态跟着词走」。
+/// 【2026-11-18 工具栏结构对齐 / 2026-11-20 改正】筛选清除钮 = **常驻 + 恒可用**：
+/// DBeaver 建钮时确实 `setEnabled(false)`（`ResultSetFilterPanel.java:319-327`），但
+/// `enablePanelControls` 里是**无条件** `filtersClearButton.setEnabled(true)`（`:449-454`，
+/// 旧条件 `hasFilters() || hasOrdering() || 词非空` 已被注释掉）⇒ 一旦结果就绪恒可用。
+/// 本仓照此：位置常驻、不看筛选词。
 #[gpui_kit::test]
-fn filter_clear_button_is_always_there_and_gated_by_the_filter_text(
+fn filter_clear_button_is_always_present_and_never_gated(
     cx: &mut gpui_kit::TestAppContext,
 ) {
     use gpui_kit::test::TestWindowExt as _;
@@ -3793,11 +3794,11 @@ fn filter_clear_button_is_always_there_and_gated_by_the_filter_text(
         })
     };
 
-    // 空词：按钮在，且处于禁用态
+    // 空词：按钮在，且**不禁用**（DBeaver 的 enablePanelControls 无条件开它）
     let empty = clear_state(cx).expect("清除钮应常驻（不再按词出现）");
-    assert_eq!(empty, Some(true), "空词时清除钮应禁用");
+    assert_ne!(empty, Some(true), "空词时清除钮也该是可用的");
 
-    // 有词：同一个按钮转成可用
+    // 有词：同一个按钮，状态不变
     cx.update(|_, app| {
         panel.update(app, |p, cx| {
             p.filter_text = "1".to_string();
@@ -3808,52 +3809,41 @@ fn filter_clear_button_is_always_there_and_gated_by_the_filter_text(
     cx.update(|window, cx| window.draw(cx).clear(cx));
     let filled = clear_state(cx).expect("有词时清除钮仍应在原位");
     // 实测口径：可用态**不暴露** a11y disabled 位（`None`），只有禁用时才写 `Some(true)`；
-    // 所以这里钉「不再是禁用」，而不是钉 `Some(false)`
-    assert_ne!(
-        filled,
-        Some(true),
-        "有词时清除钮不该再是禁用态（可用态不暴露 disabled 位）"
-    );
+    // 所以这里钉「不是禁用」，而不是钉 `Some(false)`
+    assert_ne!(filled, Some(true), "有词时清除钮同样可用");
+    assert_eq!(empty, filled, "词的有无不影响清除钮的可用状态");
 }
 
-/// 【2026-11-18 工具栏结构对齐】筛选条 ✕ 的箭头菜单条目（纯函数）：
-/// DBeaver 的 `EraseItemListener` 菜单是清筛选设置 / 显示隐藏列 / 重置颜色 /
-/// transformers / pins / 全部重置（`ResultSetViewer.java:1525-1545`）。
-/// 本仓「能力没有就不摆」只留真有落点的两条，且都按条件出现：
-/// 有筛选词才有「清除筛选词」，有隐藏列才有「显示全部列」。
-#[gpui_kit::test]
-fn erase_menu_lists_only_the_entries_this_repo_can_honour(cx: &mut gpui_kit::TestAppContext) {
-    cx.update(gpui_kit::init);
-
-    // 空词 + 无隐藏列：菜单里什么都没有（渲染侧摆一条禁用说明）
-    assert!(
-        super::events::erase_menu_labels("", 0).is_empty(),
-        "没有可清除项时清单应为空"
-    );
-    assert!(
-        super::events::erase_menu_labels("   ", 0).is_empty(),
-        "空白筛选词不算有词"
-    );
-
-    // 有词：清除筛选词
+/// 【2026-11-18 工具栏结构对齐 / 2026-11-20 改正】筛选条 ✕ 的箭头菜单条目（纯函数）：
+/// DBeaver `EraseItemListener.fillDropDownMenu`（`ResultSetViewer.java:1525-1545`）里
+/// `CMD_FILTER_CLEAR_SETTING` 是第一项且**无门控**，其后才按条件摆「显示隐藏列」等项。
+/// 本仓「能力没有就不摆」只留真有落点的两条：全清恒在，隐藏列项按需。
+#[test]
+fn the_erase_menu_always_offers_the_full_clear() {
     assert_eq!(
-        super::events::erase_menu_labels("abc", 0),
-        vec!["清除筛选词"],
-        "有筛选词时应有清除项"
+        super::events::erase_menu_labels("", 0),
+        vec!["删除所有过滤 / 排序"],
+        "没词、没隐藏列时也要有全清项（它就是清除钮的主点击动作）"
     );
-
-    // 有隐藏列：显示全部列（与列头菜单同口径，不看筛选词）
     assert_eq!(
-        super::events::erase_menu_labels("", 2),
-        vec!["显示全部列"],
-        "有隐藏列时应能一键放回"
+        super::events::erase_menu_labels("   ", 0),
+        vec!["删除所有过滤 / 排序"],
+        "空白筛选词也一样——全清项不看词"
     );
-
-    // 两者都有：两条都在，顺序固定（清除在前）
     assert_eq!(
-        super::events::erase_menu_labels("abc", 1),
-        vec!["清除筛选词", "显示全部列"],
-        "两条都有时顺序固定"
+        super::events::erase_menu_labels("x", 0),
+        vec!["删除所有过滤 / 排序"],
+        "有词也不再单列「清除筛选词」——已并进全清（DBeaver 没有单独的窄口径项）"
+    );
+    assert_eq!(
+        super::events::erase_menu_labels("x", 2),
+        vec!["删除所有过滤 / 排序", "显示全部列"],
+        "有隐藏列时补「显示全部列」（hasHiddenAttributes 口径，顺序固定：全清在前）"
+    );
+    assert_eq!(
+        super::events::erase_menu_labels("", 1),
+        vec!["删除所有过滤 / 排序", "显示全部列"],
+        "隐藏列项不看筛选词"
     );
 }
 
@@ -5023,6 +5013,69 @@ fn sync_input_with_sql(sql: &str) -> crate::panel::ResultSyncInput {
         local: None,
     });
     input
+}
+
+/// 【筛选条 ✕】「删除所有过滤 / 排序」：清筛选词 + 自定义排序 + 列级筛选 + 本地排序，
+/// **不动**隐藏列。
+///
+/// 对齐 DBeaver `clearDataFilter(true)`（`ResultSetViewer.java:605-626`）：造一份新
+/// filter 后把每列的 `visible` / `options` 搬回去（注释「keeping all visual state
+/// (visibility, etc.)」）⇒ 隐藏列照样保留。这也是清除钮的主点击动作
+/// （`EraseItemListener.executeDefaultAction:1549-1551`）。
+#[gpui_kit::test]
+fn clearing_all_filters_drops_ordering_but_keeps_hidden_columns(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 造「什么都开着」的状态：筛选词 + 自定义排序 + 列级筛选 + 本地排序 + 隐藏一列
+    cx.update(|_window, app| {
+        let grid = panel.read(app).grid().clone();
+        panel.update(app, |p, _cx| {
+            p.filter_text = "1".to_string();
+            p.filter_order = "amount desc".to_string();
+            p.column_hidden = vec!["amount".to_string()];
+        });
+        grid.update(app, |state, cx| {
+            let hidden = vec!["amount".to_string()];
+            state.delegate_mut().set_filter("1".to_string());
+            state
+                .delegate_mut()
+                .set_column_filter(Some((0, "1".to_string())));
+            state.delegate_mut().apply_sort(Some((1, true)));
+            state.delegate_mut().apply_hidden_columns(&hidden);
+            state.refresh(cx);
+        });
+    });
+
+    cx.update(|window, cx| {
+        panel.update(cx, |p, cx| p.clear_filter_and_ordering(window, cx));
+    });
+
+    let after = cx.update(|_window, app| {
+        let p = panel.read(app);
+        let delegate = p.grid().read(app).delegate();
+        (
+            p.filter_text().to_string(),
+            p.filter_order.clone(),
+            delegate.column_filter().map(|(c, v)| (c, v.to_string())),
+            delegate.sort_state(),
+            p.column_hidden.clone(),
+            delegate.is_hidden_column(1),
+        )
+    });
+    assert_eq!(after.0, "", "筛选词要清掉");
+    assert_eq!(after.1, "", "自定义排序要清掉（浮层与真值同一份）");
+    assert_eq!(after.2, None, "列级筛选要清掉");
+    assert_eq!(after.3, None, "本地排序要清掉");
+    assert_eq!(
+        after.4,
+        vec!["amount".to_string()],
+        "隐藏列不受影响（DBeaver 的 clearDataFilter 显式保留 visual state）"
+    );
+    assert!(after.5, "delegate 侧隐藏态也还在");
 }
 
 

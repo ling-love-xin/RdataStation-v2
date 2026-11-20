@@ -367,20 +367,24 @@ impl ResultPanel {
             // 形态：DBeaver 那颗是 `SWT.DROP_DOWN`——本体清筛选词，右侧箭头弹
             // `EraseItemListener` 菜单（`ResultSetViewer.java:1525-1545`：清筛选设置 /
             // 显示隐藏列 / 重置颜色 / transformers / pins / 全部重置）。本仓按「能力没有
-            // 就不摆」只留两条真有落点的：清除筛选词、显示全部列（见 `erase_menu_labels`）；
-            // 条目为空时摆一条禁用说明，保持箭头常在、宽度不跳。
+            // 就不摆」只留两条真有落点的：「删除所有过滤 / 排序」、显示全部列
+            // （见 `erase_menu_labels`）；条目恒非空，箭头常在、宽度不跳。
+            //
+            // 主点击 = 「删除所有过滤 / 排序」（DBeaver 的 `executeDefaultAction:1549-1551`
+            // 就是 `clearDataFilter(true)`），tooltip 同该命令说明
+            // （`ResultSetFilterPanel.java:319-325`）。**恒可用**：DBeaver 的
+            // `enablePanelControls` 把它无条件 `setEnabled(true)`（`:449-454`，
+            // 旧条件 `hasFilters() || hasOrdering() || 词非空` 已被注释掉）。
             .when(!self.filter_expanded, |row| {
                 let clear_queue = self.queue.clone();
-                let can_clear = !self.filter_text.trim().is_empty();
                 let clear = Button::new("editor-result-filter-clear")
                     .ghost()
                     .xsmall()
                     .debug_selector(|| "editor-result-filter-clear".to_string())
-                    .disabled(!can_clear)
                     .label("✕")
-                    .tooltip("清除筛选词")
+                    .tooltip("删除所有过滤 / 排序")
                     .on_click(move |_, _window, app| {
-                        clear_queue.request(ResultRequest::ClearFilter, app);
+                        clear_queue.request(ResultRequest::ClearFilterAndOrdering, app);
                     });
                 let labels = erase_menu_labels(&self.filter_text, self.column_hidden.len());
                 let menu_queue = self.queue.clone();
@@ -400,7 +404,9 @@ impl ResultPanel {
                                     move |_, _window, app| {
                                         // 条目与请求一一对应（清单由 `erase_menu_labels` 定）
                                         let request = match label {
-                                            "清除筛选词" => ResultRequest::ClearFilter,
+                                            "删除所有过滤 / 排序" => {
+                                                ResultRequest::ClearFilterAndOrdering
+                                            }
                                             _ => ResultRequest::ShowAllColumns,
                                         };
                                         queue.request(request, app);
