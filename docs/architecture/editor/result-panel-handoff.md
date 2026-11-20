@@ -1175,6 +1175,27 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   （`crates/result_panel/src` 内 19 处 `.toggled(` 已全部配 `.selected(`，脚本核对 0 缺）。
 - 选中色 / 对比度属目视验收（用户口径：目视后面统一处理）。
 
+**2026-11-20 更新（结构对账复核，全文见 `result-panel.md §9.25`）**：把注册表 / 五列筛选区 /
+五颗工具条钮 / 右缘竖条 / 面板菜单三挂载点回到 DBeaver 源码重核一遍，结论是**结构对齐已收尾**，
+只余一处可落地的小差异，本批已改：
+
+- 筛选框空提示（`ResultSetFilterPanel.java:219-223`）→
+  「输入一个 SQL 表达式来过滤结果」，**截掉 DBeaver 原文尾随的 `(使用 Ctrl+Space)`**
+  （那半句指内容辅助 `:304-308`，本仓无补全）。用例 `the_filter_box_hints_the_sql_expression_it_takes`
+  经 `presentation().placeholder()` 钉住。panel **368**（+1）/ editor **798**。
+- **`org.jkiss.dbeaver.resultset.panel` 只注册 5 个 panel，没有 SQL 面板**（`plugin.xml:127-173`）：
+  本仓第六页 `RightTab::ExecSql` 属本仓扩展页（在册待拍板：保留则登记、砍掉要另找地方放 wrapped SQL）。
+- **不做（附理由，勿当缺口重做）**：
+  ① 面板区右键菜单——DBeaver 把 `fillPanelsMenu` 挂三处（`:407-417` / `:1590-1614` / `:3231-3233`），
+  本仓视图菜单按钮常驻，右键是同一份条目的第二个入口；
+  ② `CMD_ACTIVATE_PANELS`（无焦点模型）；
+  ③ `filtersCustomButton` 的 DROP_DOWN 箭头（能落地的只有「编辑筛选设置」，与主点击重复；
+  另两条「按表保存 / 重置筛选」本仓无能力，`:1563-1570`）；
+  ④ `panelsButton` 不加下拉（DBeaver 那颗本身就是纯 CHECK，`:1038-1052`）。
+- **待拍板**：默认页集合（`activateDefaultPanels:1396-1426` + 只有 `value-view` 是
+  `default="true"` ⇒ DBeaver 首开只开值查看器；本仓六页全开、active = 列浏览器）。
+  若照抄，改法只有一处：默认集合收窄到 `show_by_default` 那几页。
+
 ### 2.52 筛选条「状态历史」后退 / 前进（2026-11-18 已实现主体）
 
 全文见 `result-panel.md §8.63`。接手要点：

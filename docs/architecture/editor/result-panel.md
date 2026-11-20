@@ -6390,6 +6390,121 @@ a11y 上是「按下」，画面上是普通 ghost 按钮，「开着还是关�
 **门禁**：result_panel **367 passed**、editor check 零 warning、editor
 **798 passed**（1 ignored）。ui-guard 仍红于外部文件（同上）。
 
+### 9.25 工具栏 + 左右栏结构对账复核（2026-11-20）
+
+§9.20~§9.24 断断续续铺了十几批，为免「照记忆以为对完了」，本批把 DBeaver 侧
+的**注册表 / 五列筛选区 / 五颗工具条钮 / 右缘竖条 / 面板菜单三挂载点**逐项回到源码
+重核一遍，结论成表；只找出**一处**仍可落地的小差异（筛选框空提示文案，已在本批改掉），
+其余为「不做」或「待拍板」。
+
+#### 9.25.1 右栏面板注册表（`org.jkiss.dbeaver.resultset.panel`）
+
+`plugin.xml:127-173` 一共注册 5 个 panel，**没有 SQL 面板**：
+
+| DBeaver id | 类 | `default` / `supports` | 本仓页 |
+|---|---|---|---|
+| `value-view` | `ValueViewerPanel`（`:134`，`supports type="columns"`） | **`default="true"`**（`:133`） | `RightTab::Value` |
+| `column-aggregate` | `AggregateColumnsPanel`（`:143`） | `supports type="columns"`（`:144`） | `RightTab::Stats` |
+| `results-metadata` | `MetaDataPanel`（`:152`） | 无 `supports` | `RightTab::Browser` |
+| `results-grouping` | `GroupingPanel`（`:160`） | `supports if="context.supportsGrouping()"`（`:161`） | `RightTab::Group` |
+| `results-references` | `ReferencesPanel`（`:169`） | `supports` **被注释掉**（`:170-171`，注释原文「引用永远显示，因为我们能定义虚拟外键」） | `RightTab::Reference` |
+
+- 本仓第六页 `RightTab::ExecSql`（筛选框运行后生成的 wrapped SQL 原文，只读 + 复制）
+  在 DBeaver 侧**没有对应 panel**——在册待拍板（保留则登记为「本仓扩展页」，
+  砍掉则要另找地方显示那句 wrapped SQL）。
+- `supports` 门控：DBeaver 的 grouping 需要 `context.supportsGrouping()`（能不能下发
+  `GROUP BY`）；本仓分组是本地 groupby，恒可用，按「本仓能力恒真」不摆门控。
+  references 在 DBeaver 侧反而**故意去掉门控**，与本仓「恒摆」一致。
+
+#### 9.25.2 默认页集合（`activateDefaultPanels`，`:1396-1426`）
+
+DBeaver 的六步：清掉 `enabledPanelIds` 里的空串（`:1398`）→ 空则补所有
+`pd.isShowByDefault()`（`:1401-1407`）→ **仍空则取第一个**（`:1408-1410`）→
+`activePanelId` 不在集合里则置 `null`（`:1411-1413`）→ `active` 为空则取集合首个
+（`:1414-1417`）→ 逐个 `activatePanel`，**失败的就从集合里剔除**（`:1419-1425`）。
+
+因为只有 `value-view` 是 `default="true"`，**DBeaver 首次打开结果集只开「值查看器」一页**，
+其余页靠用户手动开、之后跟着 `enabledPanelIds` 记忆。
+
+本仓 `restore_default_tabs_when_empty`（`panel/events.rs`）只做「空 → 出厂六页 +
+active 不在集合则取第一个」：出厂集合恒非空（第 2、3 步等价跳过）、本仓六页都有空态
+可显示（第 6 步的剔除无对象）。**唯一实质差异 = 第 2 步的默认集合**：本仓六页全开、
+active = 列浏览器；DBeaver 只开值查看器。
+
+**这条不擅自动手**：改成只开一页会直接改掉用户每天看到的开局（列浏览器是本仓主力页），
+属「待拍板」；若最终要照抄，改法只有一处——把默认集合收窄到 registry 里
+`show_by_default` 的那几页。
+
+#### 9.25.3 筛选区五列（`filterComposite`，`ResultSetFilterPanel.java:174-214`）
+
+`GridLayout(compactMode ? 4 : 5, false)` + `horizontalSpacing = 0`（`:174-179`）：
+
+| 列 | DBeaver | 本仓 |
+|---|---|---|
+| 1 | `ActiveObjectPanel`（`:184`）：对象图标 + 固定文案「显示 SQL」，点开弹完整 SQL | `editor-result-sql-preview`（`render.rs`，图标 + 「显示 SQL」，点击弹窗） |
+| 2 | `FilterExpandPanel`（`:186`）：展开钮，非 hover 灰度图、hover 实图（`:1309-1317`） | `editor-result-filter-expand`（`Button::ghost()` 的 hover 底代替灰度双份资源，已在 §9.x 登记） |
+| 3 | `filtersTextViewer`（`:192`）：`SWT.MULTI` 视图器 | `Textarea::new(&filter_input)`（同一 `TextareaState` 只渲染一处） |
+| 4 | `ExecutePanel`（`:209`）：执行钮 | `editor-result-filter-run`（输入框 suffix 的 ▶） |
+| 5 | `HistoryPanel`（`:214`）：历史下拉 | `editor-result-filter-history`（有历史才摆） |
+
+空提示（`:219-223` 的 `addEmptyTextHint`）两分支：能过滤 → 「输入一个 SQL 表达式来过滤结果
+(使用 Ctrl+Space)」（zh `:671`）；不能过滤 → 「不支持数据过滤」（zh `:669`）。
+本仓只有第一支，且**截掉了 Ctrl+Space 半句**（无内容辅助，`:304-308`）——见本批改动。
+
+#### 9.25.4 筛选区右侧工具条（`filterToolbar`，`:315-386`）
+
+| DBeaver | 形态 | 本仓 |
+|---|---|---|
+| `filtersClearButton`（`:319-327`） | `NO_FOCUS \| DROP_DOWN`，`ERASE` 图标，建出来就 `setEnabled(false)` | `editor-result-filter-clear`（`DropdownButton` + 清除项菜单；常驻 + 空词禁用，§9.x 已对齐） |
+| `filtersCustomButton`（`:330-338`） | `NO_FOCUS \| DROP_DOWN`，`FILTER` 图标，**恒建且恒 enabled**（compact 下 clear/history 都不建，它仍在） | `editor-result-filter-settings`（普通 `Button`，无箭头） |
+| `historyBackButton`（`:343-346`） | `DROP_DOWN`，`RS_BACK`，初值 `setEnabled(false)` | `editor-result-history-back`（`DropdownButton` 分裂钮） |
+| `historyForwardButton`（`:348-351`） | `DROP_DOWN`，`RS_FORWARD`，初值 `setEnabled(false)` | `editor-result-history-forward` |
+| 分隔（`:354`） | `UIUtils.createToolBarSeparator` | 无（本仓同一行内靠间距分隔） |
+| `openFindReplaceButton`（`:356-385`） | `CHECK \| NO_FOCUS`，`FIND_REPLACE`；勾选态 = 浮层开着（`:419-428` 由 `isOpened` 回写） | `editor-result-find-toggle`（第 39 批补了 `selected`） |
+
+**唯一形态差异 = `filtersCustomButton` 的箭头**：DBeaver 的箭头菜单（`CustomFilterListener`，
+`:1554-1592`）=「编辑筛选设置」+（容器是 `DBSEntity` 时）「保存筛选设置」/「重置筛选设置」
+（`:1563-1570`）。本仓只有第一项、且主点击就是它，摆个箭头只会多一条重复项；后两项
+（按表持久化 / 恢复筛选条件）本仓无能力。按「能力没有就不摆」**不加箭头**——
+若将来做「按表保存筛选」，箭头才有落点。
+
+#### 9.25.5 右缘竖条 + 面板菜单（`ResultSetViewer.java:1037-1085` / `:1559-1588`）
+
+竖条三组，已全部对齐（§9.24 补齐按下态）：
+
+| DBeaver | 行号 | 本仓 |
+|---|---|---|
+| `panelsButton`（`SWT.CHECK`，`PANEL_CUSTOMIZE`，**点击 = 整组收放，无下拉**） | `:1038-1052` | `editor-result-edge-panels` |
+| 逐页 `VerticalButton(SWT.CHECK)`，`checked = panelsVisible && isPanelVisible(id)` | `:1054-1080` | `editor-result-edge-{tab}` |
+| 1×1 `FILL_VERTICAL` 空标签撑开后 `CMD_TOGGLE_LAYOUT` 沉底 | `:1082-1083` | `div().flex_1()` + `editor-result-edge-vertical-layout` |
+
+菜单内容 `fillPanelsMenu()`（`:1559-1588`）= 逐页 `STYLE_CHECK`（`CMD_TOGGLE_PANEL`）→
+分隔 → `CMD_TOGGLE_MAXIMIZE` → `CMD_ACTIVATE_PANELS` →（有 `FEATURE_PANELS` 时）分隔 +
+`CMD_TOGGLE_PANELS` + `CMD_TOGGLE_LAYOUT`。本仓 `panel_view_menu_items()` 同段位，`CMD_ACTIVATE_PANELS` 无端口不摆。
+
+**三处挂载点，只做一处**：DBeaver 把这份菜单挂了三次——面板区右键（`:407-417`）、
+每个面板工具条右端的视图菜单按钮（`:1590-1614`）、单元格右键的 panels 子菜单（`:3231-3233`）。
+本仓已有页签条右端的视图菜单（`DropdownButton` + `panel_view_menu_items`），
+**右键菜单判为冗余不做**：DBeaver 需要三处是因为它的面板工具条在某些 presentation 下不渲染，
+本仓视图菜单按钮常驻，再挂右键只是同一份条目的第二个入口。
+
+#### 9.25.6 本轮改动
+
+筛选框空提示文案：`lifecycle.rs` 里 `set_placeholder("筛选当前结果…")` →
+**「输入一个 SQL 表达式来过滤结果」**（截掉 Ctrl+Space 半句）。用例
+`the_filter_box_hints_the_sql_expression_it_takes` 经
+`filter_input.read(app).presentation().placeholder()` 钉住文案并断言不含 `Ctrl+Space`
+（`TextareaState` 的 `presentation()` 是 pub，`InputPresentation::placeholder()` 亦 pub，
+`gpui-base/src/input/base/state.rs:911` / `:825`）。
+
+**门禁**：result_panel **368 passed**（+1）、editor check `Finished`、editor
+**798 passed**（1 ignored）。ui-guard 仍红于并行线未跟踪的
+`crates/workbench/src/unlock.rs`（裸 px 1，外因）。
+另登记 2 条**既有**告警（不是本批引入）：editor `lib test` 的
+`view/tests/dml_confirm.rs:29 unused variable: sql` 与
+`view/host/mod.rs:132 field detail is never read`，来自已提交的并行线
+（`3c15b2d2` / `fba8acad`），本线未代改。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
