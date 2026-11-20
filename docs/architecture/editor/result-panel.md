@@ -6818,11 +6818,59 @@ active = 列浏览器；DBeaver 只开值查看器。
 
 #### 9.29.6 仍在册
 
-- 「自定义 ORDER BY 是否入历史」：`order` 本批已随存档落盘，但**筛选历史**仍只记 `filter`
-  词（DBeaver 另有排序历史 `fillOrderingsMenu`，`ResultSetViewer.java:3935-3948`）——归
-  目视 / 交互批次。
+- ~~「自定义 ORDER BY 是否入历史」~~（**订正**：这一条原文把 `fillOrderingsMenu` 说成
+  「排序历史」，现源实读 `ResultSetViewer.java:3935-3948` 后确认是错的——`fillOrderingsMenu`
+  只摆**按此列升序 / 降序 /（正在按此列排时）清除**三项命令，全类里没有任何排序历史存储。
+  DBeaver 没有「排序历史」这一层；本仓筛选历史只记 `filter` 词与它一致，不算缺口。
+  真要登记的是「筛选历史 / 排序**命令的文案与门控**已经对齐（§9.28 批核对）」）。
 - 存档通知走面板内 `set_notice` 提示条；DBeaver 用平台通知气泡（`DBeaverNotifications`
   `NT_GENERIC`，`ResultSetViewer.java:657-663`）。本仓无平台通知设施，属跨模块批次。
+
+### 9.30 列头菜单补「复制列名」（2026-11-20）
+
+列浏览器清单右键早有「复制列名」（`column_browser_menu_items` 第一项 → `CopyColumnNames`，
+对应 DBeaver 元数据面板 `meta_data_panel_action_copy_column_text`），但**列头菜单没有**。
+DBeaver 的列头右键是有的（`:3151-3161`），本批补上。
+
+#### 9.30.1 dbeaver-ref 口径（现源实读）
+
+| 事实 | 行 | 含义 |
+| --- | --- | --- |
+| 列头分支 | `ResultSetViewer.java:3151-3161` | `attr != null && menuLocation == COLUMN_HEADER` 时挂 `CMD_COPY_COLUMN_NAMES`，并带参数 `columns = attr.getName()`——即**只复制当前这一列** |
+| 行头分支 | `:3162-3164` | `ROW_HEADER` 落点挂 `CMD_COPY_ROW_NAMES`（复制行号，不是行内容） |
+| 实现 | `ResultSetHandlerMain.java:333-376` | 有 `columns` 参数且只认出一列 → 按名定位；否则取选中属性或**全部可见属性**；`attrs.size() > 1` 时弹「复制选项」对话框配分隔符；列名取 `getLabel()`、空则 `getName()`；有数据源时 `DBUtils.getQuotedIdentifier` 加引号；`ResultSetUtils.copyToClipboard` |
+| 另一入口 | `ResultSetHandlerCopyAs.java:275-276` | 「复制特殊」子菜单里同样挂这两条命令 |
+| 文案 | `bundle.properties:63`、`bundle_zh.properties:100` | `Copy column name(s)` /「复制字段名」（描述「复制选中的字段名」） |
+
+#### 9.30.2 本仓落点
+
+- `grid/menu.rs`：`ContextAction` 新增 **`CopyColumnName`**（无载荷，与列浏览器的
+  `CopyColumnNames` 明确区分：那个拷多选集合、换行分隔；这个是单列名、单行）；`column_menu_items`
+  在复制段**首位**插入「复制列名「列名」」（`separator_before: false`，紧随值筛选段，
+  在「复制此列」之前）；`context_menu`（单元格右键）加忽略分支。
+- `grid/header.rs`：`dropdown_menu` 闭包新增 `CopyColumnName` 分支，直接
+  `app.write_to_clipboard(ClipboardItem::new_string(column_name_for_menu.clone()))`——
+  列名在闭包外已算好（`:282`），不需要再碰 delegate。
+- 不改 editor 侧、不改端口：这条是纯剪贴板语义，与 `CopyColumn` 同族，宿主不需要钩子。
+
+#### 9.30.3 口径差异（两条，有意）
+
+- **裸名，不加方言引号**：DBeaver 走 `getQuotedIdentifier(dataSource, …)`（`"x"` / `` `x` `` /
+  `[x]`，按方言）。本仓网格不持有方言（结果可能来自联邦查询或计算列，语句形态未必是单表），
+  复制**裸列名**，需要引号时由用户自己加——宁可少猜，也不给出一个错的引号。
+- **不做多列配置对话框**：DBeaver 在 `attrs.size() > 1` 时弹对话框配分隔符（`:351-357`）。
+  本仓列头菜单天然只针对一列，没有多选语义，所以不摆这一层；多列复制的入口在列浏览器
+  （`CopyColumnNames`，已支持多选）。
+- **「复制行号」（`CMD_COPY_ROW_NAMES`）不做**：本仓没有行头菜单（行号槽 `#` 不挂右键），
+  这条命令在本仓没有落点，不在册。
+
+#### 9.30.4 用例与门禁
+
+- `column_menu_offers_copying_the_column_name`（纯函数）：列头菜单有
+  `ContextAction::CopyColumnName`、文案 `复制列名「status」`、无前置分隔线、位置在
+  「复制此列」之前；单元格右键**不摆**（DBeaver 的 DATA 落点只有 `EDIT_COPY`，即复制取值）。
+- **门禁**：`rds-result-panel` **376 passed**（+1）、editor check `Finished`、
+  `rds-editor` **800 passed**（1 ignored）、`rds-ui-guard` **4 passed**。
 
 ## 8. 协作纪律
 

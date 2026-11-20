@@ -1278,8 +1278,23 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 门禁：store **193**（2 ignored，+1）/ panel **375**（+2）/ editor check `Finished` /
   editor **800**（1 ignored，+2）/ ui-guard **4 passed**（`unlock.rs` 裸 px 已由 `07162b9e`
   修掉，本线首次全绿）。
-- 仍在册：自定义 ORDER BY 的**历史**（排序已随存档落盘，DBeaver `fillOrderingsMenu`
-  `:3935-3948` 那份未做）、存档通知用平台气泡（本仓只有面板内 `set_notice`，属跨模块）。
+- ~~仍在册：自定义 ORDER BY 的**历史**~~（**订正**：`fillOrderingsMenu`
+  `ResultSetViewer.java:3935-3948` 只是「按列升序 / 降序 /（正在按此列排时）清除」三项命令，
+  DBeaver **没有**排序历史这一层，本仓筛选历史只记 `filter` 词与它一致）；存档通知用平台
+  气泡（本仓只有面板内 `set_notice`，属跨模块）。
+
+**2026-11-20 更新（列头菜单补「复制列名」，全文见 `result-panel.md §9.30`）**：列浏览器
+清单右键早有「复制列名」，列头菜单没有；DBeaver 的列头右键是有的（`:3151-3161` 挂
+`CMD_COPY_COLUMN_NAMES` 并带 `columns = attr.getName()`，即只复制当前列）：
+
+- `ContextAction::CopyColumnName`（无载荷）+ `column_menu_items` 复制段首位
+  「复制列名「列名」」；`header.rs` 分支直接写剪贴板（列名闭包外已算好）。
+- 与列浏览器的 `CopyColumnNames` 分开：那个拷多选集合、换行分隔；列头这个是单列名。
+- 两条有意差异：复制**裸名**（本仓网格不持有方言，DBeaver 走 `getQuotedIdentifier`）；
+  不做多列配置对话框（列头菜单天然单列）。「复制行号」（`CMD_COPY_ROW_NAMES`）本仓没有
+  行头菜单，无落点，不在册。
+- 门禁：panel **376**（+1）/ editor check `Finished` / editor **800**（1 ignored）/
+  ui-guard **4 passed**。
 
 ### 2.52 筛选条「状态历史」后退 / 前进（2026-11-18 已实现主体）
 
