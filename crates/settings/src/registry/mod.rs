@@ -141,6 +141,8 @@ pub enum Slot {
     AppearanceTabBarVariant,
     /// 主题包（整套明暗 + 产品 token；值域见 `crate::theme_pack::BUILTIN`）。
     AppearanceThemePack,
+    /// 窗口材质（Mica / Mica Alt；值域见 `crate::window_material::BUILTIN`）。
+    AppearanceWindowMaterial,
     NavigatorSourceShortCode,
     NavigatorShowTags,
     NavigatorShowScope,
@@ -302,6 +304,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "appearance.tab_bar_max_width" => Slot::AppearanceTabBarMaxWidth,
         "appearance.tab_bar_variant" => Slot::AppearanceTabBarVariant,
         "appearance.theme_pack" => Slot::AppearanceThemePack,
+        "appearance.window_material" => Slot::AppearanceWindowMaterial,
         "navigator.source_short_code" => Slot::NavigatorSourceShortCode,
         "navigator.show_tags" => Slot::NavigatorShowTags,
         "navigator.show_scope" => Slot::NavigatorShowScope,
@@ -416,6 +419,7 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::AppearanceTabBarMaxWidth => KindTag::Number,
         Slot::AppearanceTabBarVariant => KindTag::Enum,
         Slot::AppearanceThemePack => KindTag::Enum,
+        Slot::AppearanceWindowMaterial => KindTag::Enum,
         Slot::NavigatorSourceShortCode => KindTag::BoolPair,
         Slot::NavigatorShowTags
         | Slot::NavigatorShowScope

@@ -10,6 +10,7 @@ use crate::SettingsService;
 use crate::model::{AppearanceMode, Settings};
 use crate::persistence::persist;
 use crate::registry::{SettingValue, Slot};
+use crate::window_material::WindowMaterial;
 
 /// 主题方案（包）变更的副作用出口。
 ///
@@ -106,6 +107,16 @@ pub(crate) fn apply_slot(
             }
             SettingsService::set_theme_pack(id, cx);
         }
+        Slot::AppearanceWindowMaterial => {
+            let Some(code) = value.as_text() else {
+                return false;
+            };
+            // 只认值域里的三档（页面只给这几档；设置文件被手改坏时拒绝，不猜）。
+            let Some(material) = WindowMaterial::from_code(code) else {
+                return false;
+            };
+            SettingsService::set_window_material(material, cx);
+        }
         _ => return false,
     }
     true
@@ -144,6 +155,10 @@ impl SettingsService {
         // 而窗口 rem 基准是用户字号——不重放一次，切换后 font_size 系与 rem 系错位，
         // 表现就是「切明暗字体大小变了」。与启动装配同序：先主题、后字号。
         Self::set_font_size(Self::font_size(cx), window, cx);
+        // 材质的外壳 alpha 必须跟着主题颜色一起重放：`Theme::change` /
+        // `sync_system_appearance` 会从资产重建 `ThemeColor`，重建出来的 alpha 恒为 1.0，
+        // 不重放就等于「材质只在刚打开那一瞬生效」。
+        Self::apply_window_material_alpha(cx);
     }
     /// 明暗切换（`ToggleThemeMode` 命令与设置页「主题模式」两条路径共用）。
     ///
@@ -222,6 +237,63 @@ impl SettingsService {
         let settings = cx.global::<Settings>().clone();
         persist(&settings);
         notify_theme_pack(cx);
+    }
+    /// 读取窗口材质（默认「关闭」）。
+    ///
+    /// 手改坏的值按「关闭」处理而不报错：材质是显示项，坏值不该拦住启动。
+    pub fn window_material(cx: &App) -> WindowMaterial {
+        WindowMaterial::from_code(&cx.global::<Settings>().appearance.window_material)
+            .unwrap_or(WindowMaterial::Off)
+    }
+    /// 设置并持久化窗口材质，即时生效：落盘 → 外壳 alpha 重放 → 重设**全部**窗口的
+    /// 背景外观 → 刷新。
+    ///
+    /// 材质作用在**窗口**上（`set_background_appearance`），不在主题里；主题这边只做
+    /// 外壳面 alpha 的覆盖（见 `apply_window_material_alpha`）。
+    ///
+    /// 为什么不分"只设当前窗口"：材质是全局外观项，主窗 / 设置窗 / 解锁窗同时存在，
+    /// 只改改设置的那个窗会留下"一窗透一窗不透"的错位。
+    pub fn set_window_material(material: WindowMaterial, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.appearance.window_material = material.code().to_string();
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
+        Self::apply_window_material_alpha(cx);
+        Self::apply_window_material_to_all(cx);
+        cx.refresh_windows();
+    }
+    /// 窗口创建回调里调用：按当前设置给**这一个**窗口设背景外观。
+    ///
+    /// 必须在 `open_window` 的回调里做：窗口建好之后再设会先出一帧不透明底色。
+    pub fn apply_window_material(window: &mut gpui_kit::Window, cx: &App) {
+        window.set_background_appearance(Self::window_material(cx).background_appearance());
+    }
+    /// 把当前材质的背景外观设到**所有**现有窗口（设置页切换时没有"目标窗口"）。
+    pub fn apply_window_material_to_all(cx: &mut App) {
+        let appearance = Self::window_material(cx).background_appearance();
+        for handle in cx.windows() {
+            // update 返回 Result（窗口可能已失效），此处无更优处理路径，显式忽略。
+            let _ = handle.update(cx, |_view, window, _| {
+                window.set_background_appearance(appearance)
+            });
+        }
+    }
+    /// 按当前材质重放**外壳面**的 alpha（关闭档写 1.0，避免上一次的透明残留）。
+    ///
+    /// 落点只有四个 token：`title_bar` / `status_bar` / `tab_bar` / `sidebar`。
+    /// 内容面（`background` / `table` / `popover` / `list` / `input` …）**刻意不动**：
+    /// 文字直接贴在上面，透明了对比度就靠系统壁纸的运气。
+    pub fn apply_window_material_alpha(cx: &mut App) {
+        let alpha = Self::window_material(cx).shell_alpha().unwrap_or(1.0);
+        Theme::update(cx, |theme| {
+            let colors = &mut theme.colors;
+            colors.title_bar.a = alpha;
+            colors.status_bar.a = alpha;
+            colors.tab_bar.a = alpha;
+            colors.sidebar.a = alpha;
+        });
     }
     /// 设置并持久化界面语言，即时生效：更新 global → 写 settings.json →
     /// 同步 `shared::i18n` 全局语言（`tr()` 查表基准）→ 刷新所有窗口（全 UI 文案即时切换）。

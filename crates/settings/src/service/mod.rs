@@ -79,6 +79,9 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
             SettingValue::Text(settings.appearance.tab_bar_variant.clone())
         }
         Slot::AppearanceThemePack => SettingValue::Text(settings.appearance.theme_pack.clone()),
+        Slot::AppearanceWindowMaterial => {
+            SettingValue::Text(settings.appearance.window_material.clone())
+        }
         Slot::EditorShowLineNumbers => SettingValue::Bool(settings.editor.show_line_numbers),
         Slot::EditorBookmarkHoverNote => SettingValue::Bool(settings.editor.bookmark_hover_note),
         Slot::EditorBookmarkColumn => SettingValue::Bool(settings.editor.bookmark_column),
@@ -364,6 +367,7 @@ impl SettingsService {
             | Slot::AppearanceTabBarMaxWidth
             | Slot::AppearanceTabBarVariant
             | Slot::AppearanceThemePack => appearance::apply_slot(slot, value, window, cx),
+            Slot::AppearanceWindowMaterial => appearance::apply_slot(slot, value, window, cx),
             Slot::EditorShowLineNumbers
             | Slot::EditorBookmarkHoverNote
             | Slot::EditorBookmarkColumn

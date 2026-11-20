@@ -27,6 +27,7 @@ pub mod service;
 pub mod settings_page;
 pub mod skeleton;
 pub mod theme_pack;
+pub mod window_material;
 
 // 持久化与进程级快照已下沉到 `persistence`；以下 re-export 保持 `settings::*` 公共路径不变。
 pub use persistence::{

@@ -125,6 +125,8 @@ impl WorkbenchView {
         let handle = cx
             .open_window(options, |window, cx| {
                 let view = cx.new(|cx| SettingsPage::new_at(window, host, section, cx));
+                // 材质跟着用户当前的窗口设置走（设置窗同样是应用窗口，不给它单独开后门）。
+                settings::SettingsService::apply_window_material(window, cx);
                 cx.new(|cx| gpui_kit::base::Root::new(view, window, cx))
             })
             .expect("打开设置窗口");

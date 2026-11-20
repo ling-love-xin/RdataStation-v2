@@ -26,6 +26,13 @@ pub struct Appearance {
     /// （换包必须“主题 + 产品 token”一起换，只换一半会留下上一包的语义色）。
     #[serde(default = "default_theme_pack")]
     pub theme_pack: String,
+    /// 窗口材质（`"off"` / `"mica"` / `"mica_alt"`，默认 `"off"` = 现状）。
+    ///
+    /// 值域见 `crate::window_material::BUILTIN`；只调外壳面少数 token 的 alpha 让系统
+    /// 背景（Windows 11 的 Mica）从窗口透出来，**不是**主题体系的一部分。
+    /// 非 Windows 平台写入照存，应用时降级为不透明（见 `WindowMaterial::background_appearance`）。
+    #[serde(default = "default_window_material")]
+    pub window_material: String,
 }
 
 impl Default for Appearance {
@@ -37,6 +44,7 @@ impl Default for Appearance {
             tab_bar_max_width: default_tab_bar_max_width(),
             tab_bar_variant: default_tab_bar_variant(),
             theme_pack: default_theme_pack(),
+            window_material: default_window_material(),
         }
     }
 }
@@ -59,6 +67,10 @@ fn default_tab_bar_variant() -> String {
 
 fn default_theme_pack() -> String {
     crate::theme_pack::DEFAULT_PACK.to_string()
+}
+
+fn default_window_material() -> String {
+    crate::window_material::DEFAULT_CODE.to_string()
 }
 
 /// 编辑器常规设置。

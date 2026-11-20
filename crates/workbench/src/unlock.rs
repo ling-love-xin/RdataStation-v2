@@ -44,6 +44,8 @@ pub fn open_unlock_window(cx: &mut App, on_unlocked: Rc<dyn Fn(&mut App)>) {
         ..Default::default()
     };
     cx.open_window(options, |window, cx| {
+        // 解锁窗也是应用窗口：材质按当前设置来，避免「解锁窗不透明 → 主窗透明」的跳变。
+        settings::SettingsService::apply_window_material(window, cx);
         let view = cx.new(|cx| VaultUnlockView::new(window, cx, on_unlocked.clone()));
         cx.new(|cx| Root::new(view, window, cx))
     })

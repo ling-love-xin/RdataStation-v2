@@ -453,12 +453,17 @@ fn open_main_window(cx: &mut App) {
         // 同步界面字号：窗口创建默认 rem_size = 16px，按设置覆盖
         // （rems / Tailwind 档位 / 布局全缩放；主题字号已在启动 4b 应用）。
         window.set_rem_size(px(SettingsService::font_size(cx)));
+        // 窗口材质（Mica / Mica Alt）：必须在建窗回调里设，建完再设会先出一帧不透明底。
+        SettingsService::apply_window_material(window, cx);
         // 跟随系统外观：`system` 模式下系统明暗变化即时跟随。
         // 订阅由下方 spawn 任务保活（Subscription drop 即取消）；回调只
         // 在 `system` 时生效，显式模式不受系统外观影响。
         let appearance_subscription = window.observe_window_appearance(|window, cx| {
             if SettingsService::theme_mode(cx) == AppearanceMode::System {
                 Theme::sync_system_appearance(Some(window), cx);
+                // 系统明暗切换同样会重建 `ThemeColor`（alpha 归 1.0），材质的外壳 alpha
+                // 得跟着重放，否则跟随系统一变化材质就"消失"。
+                SettingsService::apply_window_material_alpha(cx);
             }
         });
         let workspace = cx.new(|cx| WorkbenchView::new(cx));
