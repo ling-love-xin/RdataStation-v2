@@ -1214,7 +1214,8 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - **仍未做（登记）**：① `CMD_FILTER_CLEAR_SETTING`「删除所有过滤/排序」（DBeaver 一次清
   filter + order + 隐藏 + 冻结 + 颜色覆盖 + 转换器 + pin，`EraseItemListener:1525-1551`），
   本仓 erase 箭头只有「清除筛选词」+「显示隐藏列」；② 列头右键 `filtersMenu` 尾部四项
-  （`ResultSetViewer.java:3926-3932`）；③ 存档**尚未落盘**（`SavedSession` 无字段，跨会话会丢）。
+  （`ResultSetViewer.java:3926-3932`）；③ ~~存档尚未落盘（`SavedSession` 无字段，跨会话会丢）~~
+  ——**第 45 批已销账**，见本文 §2.51 末段与 `result-panel.md §9.29`。
 - 门禁：panel **371**（+3）/ editor check `Finished` / editor **798**（1 ignored）；
   ui-guard 红 2 项均来自并行线（`workbench/unlock.rs` 裸 px、`settings` 的 `BUILTIN` 分叉）。
 
@@ -1236,8 +1237,8 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   断言，对应 `restoreConstraintVisualState` 语义）。
 - 门禁：panel **372**（+1 净增）/ editor check `Finished` / editor **798**（1 ignored）；
   ui-guard 3 passed / 1 failed（`workbench/unlock.rs` 裸 px，并行线面）。
-- 仍在册：列头右键 `filtersMenu` 尾部四项（`ResultSetViewer.java:3926-3932`）、存档落盘、
-  筛选条之外的菜单挂载点。
+- 仍在册：~~列头右键 `filtersMenu` 尾部四项（`ResultSetViewer.java:3926-3932`）~~（第 44 批
+  销账）、~~存档落盘~~（第 45 批销账，见本文 §2.51 末段）、筛选条之外的菜单挂载点。
 
 **2026-11-20 更新（列头菜单 `filtersMenu` 尾部四项，全文见 `result-panel.md §9.28`）**：
 上面「仍在册」第一条**本批销账**：
@@ -1254,8 +1255,31 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   右键落点是单格，语义不对。
 - 门禁：panel **373**（+1）/ editor check `Finished` / editor **798**（1 ignored）；
   ui-guard 3 passed / 1 failed（`workbench/unlock.rs` 裸 px，并行线面）。
-- 仍在册：存档落盘（`SavedSession` 无 `result_filter_*`）、面板区右键入口（按「一处入口」
-  原则不摆）。
+- 仍在册：~~存档落盘（`SavedSession` 无 `result_filter_*`）~~（第 45 批销账，见本文 §2.51
+  末段）、面板区右键入口（按「一处入口」原则不摆）。
+
+**2026-11-20 更新（筛选存档落盘，全文见 `result-panel.md §9.29`）**：上面「③ 存档尚未
+落盘」**本批销账**（§9.26 更新段那一条与 §9.28 更新段的「仍在册」同时失效）：
+
+- 存档串用 **JSON 单列**（`SavedFilterSetting::encode` / `decode`）。不用列布局那套逗号串：
+  SQL 原文与筛选词里本来就有逗号，逗号串必拆错。`#[serde(default)]` 让缺字段的旧串按空
+  默认补齐，空串 / 坏 JSON 一律 `None`（宁可不恢复，也不恢复半份错存档）。
+- 面板推 `ResultRequest::SavedFilterChanged`（无载荷，与 `ColumnLayoutChanged` 同分工：面板
+  推、宿主存）。`save_filter_setting` 与 `reset_filter_setting` 只在**真的变了 / 真的有一份
+  存档**时才推，避免空操作把整份会话写一遍。
+- editor：`SavedSession.result_saved_filter: Option<String>`，`worth_saving` 加
+  `|| result_saved_filter.is_some()`（空文档只带一份存档也要落库）；`restore_session` 走
+  新方法 `set_saved_filter`——**只注入、不套用**（套用仍归下一次 `sync` 的
+  `saved_filter_applies`，等价 DBeaver「打开结果才 `restoreDataFilter`」），且注入不推请求
+  （否则恢复会把读出来的存档回写一遍，成环）。
+- store：`EditorContext.result_saved_filter: String` 放**最末**（`updated_at_ms` 之后）；
+  `updated_at_ms` 仍 `row.get(17)`、新列 `row.get(18)`，既有下标不平移；`ensure_column`
+  幂等给老库补列。
+- 门禁：store **193**（2 ignored，+1）/ panel **375**（+2）/ editor check `Finished` /
+  editor **800**（1 ignored，+2）/ ui-guard **4 passed**（`unlock.rs` 裸 px 已由 `07162b9e`
+  修掉，本线首次全绿）。
+- 仍在册：自定义 ORDER BY 的**历史**（排序已随存档落盘，DBeaver `fillOrderingsMenu`
+  `:3935-3948` 那份未做）、存档通知用平台气泡（本仓只有面板内 `set_notice`，属跨模块）。
 
 ### 2.52 筛选条「状态历史」后退 / 前进（2026-11-18 已实现主体）
 

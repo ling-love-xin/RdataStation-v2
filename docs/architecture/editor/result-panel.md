@@ -6732,6 +6732,98 @@ active = 列浏览器；DBeaver 只开值查看器。
 - 仍在册：面板区右键入口（按 §9.26.5 的「一处入口」原则只做列头这一处）、存档落盘
   （`SavedSession` 无 `result_filter_*` 字段）。
 
+### 9.29 筛选存档落盘（`SavedSession` → `EditorContext`，2026-11-20）
+
+§9.26 落了「保存 / 重置过滤器设置」两个入口，§9.28 把它们接进了列头菜单，但存档**只活在
+内存里**：关掉编辑器重开，存档就没了。handoff §2.51 在册的「③ 存档尚未落盘」本批销账；
+§9.28.4 末句那条「`SavedSession` 无 `result_filter_*` 字段」同时失效。
+
+#### 9.29.1 dbeaver-ref 口径（现源实读）
+
+| 事实 | 行 | 含义 |
+| --- | --- | --- |
+| 存档内容 | `DataFilterRegistry.java:182-203` | `SavedDataFilter { constraints(逐列), anyConstraint(OR), order, where }`——存的是**列级约束 + order/where 串**，不是语句原文 |
+| 键 | `DataFilterRegistry.java:310-318` | `makeObjectId` 拼 `catalog@@/@@schema@@/@@table`：**按表对象**存取，任何查这张表的语句都套同一份 |
+| 保存 | `ResultSetViewer.java:648-664` | `saveDataFilter()` → `DataFilterRegistry.saveDataFilter(dataContainer, model.getDataFilter())`，随后无条件发一条「Data filter was saved」通知 |
+| 重置 | `ResultSetViewer.java:671-687` | `resetSavedDataFilter()` → `removeDataFilter(dataContainer)`；**只删存档**，当前生效的筛选不动；通知无条件发 |
+| 何时套用 | `ResultSetViewer.java:4266-4284` | `restoreDataFilter(dataContainer)` 在**打开这张表的结果**时才被调用：读回配置、按列名绑回 `dataFilter`、`hasFilters()` 才用；不是恢复会话时立刻套 |
+| 有无存档 | `ResultSetViewer.java:666-669` | `hasSavedDataFilter()` = 容器是 `DBSEntity` 且 registry 里有 |
+
+#### 9.29.2 本仓落点（三层，一条链路）
+
+- **面板**（`crates/result_panel`）：`SavedFilterSetting` 加 `serde::Serialize/Deserialize`
+  + struct 级 `#[serde(default)]`，新增 `encode()` / `decode(raw)`（`panel/data.rs:83-100`）。
+  新端口 `ResultRequest::SavedFilterChanged`（`ports.rs:135-137`，无载荷——存档本体就在
+  面板里，宿主只要知道「变了」就够）。`save_filter_setting`（`panel/events.rs:1106`）改成
+  先算 `next`、比 `changed`，**真的变了才推**；`reset_filter_setting`（`:1131`）只在
+  `had` 时推；两者的通知仍无条件发（DBeaver 的通知也是无条件）。新方法
+  `set_saved_filter`（`:1157`）给恢复路径注入存档。
+- **editor 会话**：`SavedSession` 末尾加 `result_saved_filter: Option<String>`
+  （`notebook/session.rs:130`），`worth_saving` 加 `|| result_saved_filter.is_some()`
+  （`:242`）——**空文档只带了一份存档也要落库**。`session_snapshot`
+  （`view/host/session.rs:22`）取 `panel.saved_filter_setting().map(encode)`；
+  `restore_session`（`:270`）在注入列布局之后、`result_height` 之前
+  `decode` + `set_saved_filter`（`:366-371`）。`WorkbenchSessionStore::to_context` /
+  `to_session`（`ports/editor_session.rs:112` / `:190`）把 `Option<String>` 与 `String`
+  互换：`None` ↔ `""`（空串 = 没存过存档）。`dispatch.rs:536-539` 的
+  `SavedFilterChanged` 分支只有 `save_session_now(cx)` + `cx.notify()`，**不再取快照**——
+  存档的权威值就在面板里（与 `ColumnWidthsChanged` 同款）；`ColumnLayoutChanged`
+  之所以要先取快照（`:528-533`），是因为隐藏 / 冻结是列头就地改 delegate 的，面板还没跟上。
+- **store**（`crates/store`）：`EditorContext` 最末加 `result_saved_filter: String`
+  （`workbench_context_store.rs:128`），建表列追加在 `updated_at_ms` 之后（`:198`），
+  `ensure_column` 幂等给老库补列（`:288`），INSERT 19 参（`:361-382`），三处 SELECT 都带
+  新列（`:400` / `:450` / `:508`），三处行构造一律 `result_saved_filter: row.get(18)`。
+
+#### 9.29.3 三处取舍（都是有意，不是缺项）
+
+1. **存档串用 JSON 单列，不用列布局那套逗号串**。`SavedFilterSetting` 带 SQL 原文
+   （`select a, b from t` 本身有逗号）与筛选词（常见 `id in (1,2)`），逗号串必拆错。JSON
+   顺带解决引号转义；`#[serde(default)]` 让缺字段的旧串按空默认补齐而不是整份丢弃，
+   `decode` 对空串 / 坏 JSON 一律 `None`（宁可不恢复，也不恢复半份错存档）。
+2. **`set_saved_filter` 只注入、不套用、不推请求**。套用交给下一次 `sync` 的
+   `saved_filter_applies`（同一份结果 SQL + 当前没有筛选词才写回筛选框，
+   `panel/lifecycle.rs:566-570` → `panel/events.rs:2188`），与 DBeaver「打开结果才
+   `restoreDataFilter`」同口径——恢复会话时通常还没有结果集，当场套是无米之炊。注入若推
+   `SavedFilterChanged`，恢复就会把刚读出来的存档回写一遍，成环。
+3. **store 新列放最末**（`updated_at_ms` 之后）。`updated_at_ms` 仍是 `row.get(17)`，新列
+   `row.get(18)`，既有下标不平移；三处 SELECT 按列名顺序加列，不靠位置推算。
+
+#### 9.29.4 口径差异（两条，有意）
+
+- **存档键**：DBeaver 按表对象路径（`makeObjectId`），本仓按**结果 SQL**
+  （`SavedFilterSetting.sql`，§9.26.4 第 1 条既有决定，本批不改）。代价是换一条等价 SQL
+  不认同一份存档；收益是不会把 A 查询的筛选串到 B 查询。
+- **存档内容**：DBeaver 存逐列约束 + `order`/`where` 串；本仓筛选模型是「一个整体词串」
+  （不是逐列约束），所以存档只含 `sql` + `filter`（词）+ `order`（自定义排序）+ `table`
+  （唯一来源表，供将来按表检索；本仓没有 `DBSEntity` 这一层，用「有没有唯一来源表」等价
+  表达）。逐列那部分本仓早有独立通道（`column_order` / `column_widths` / `column_hidden` /
+  `column_frozen`，且**随会话自动存**），不重复进这份存档。
+
+#### 9.29.5 用例与门禁
+
+- `saved_filter_setting_round_trips_through_the_session_codec`（panel，纯函数）：四字段
+  带逗号 / 引号往返、空串与坏 JSON → `None`、缺字段旧串补默认。
+- `restoring_the_saved_filter_injects_it_without_applying`（panel，窗口用例）：注入后存档
+  在册、`filter_text` 仍空、`take_filter_backfill()` 为 `None`、`queue.is_empty()` 为真、
+  重复注入幂等——§9.29.3 第 2 条的反回归钉子。
+- `editor_context_round_trips_the_saved_filter_json`（store）：三条 SELECT 路径往返、
+  邻列（`updated_at_ms`）不串位、没存过时为空串。
+- `the_saved_filter_rides_along_with_the_session`（editor session）：空文档只带存档时
+  `worth_saving` 也为真，存 → 读字段相等。
+- `the_saved_filter_travels_as_one_opaque_string`（editor session 端口）：`Option` ↔
+  `String` 的 `None` ↔ `""` 换算。
+- **门禁**：`rds-store` **193 passed**（2 ignored，+1）、`rds-result-panel` **375 passed**
+  （+2）、editor check `Finished`、`rds-editor` **800 passed**（1 ignored，+2）、
+  `rds-ui-guard` **4 passed**（上批 `unlock.rs` 裸 px 已由 `07162b9e` 修掉，本次全绿）。
+
+#### 9.29.6 仍在册
+
+- 「自定义 ORDER BY 是否入历史」：`order` 本批已随存档落盘，但**筛选历史**仍只记 `filter`
+  词（DBeaver 另有排序历史 `fillOrderingsMenu`，`ResultSetViewer.java:3935-3948`）——归
+  目视 / 交互批次。
+- 存档通知走面板内 `set_notice` 提示条；DBeaver 用平台通知气泡（`DBeaverNotifications`
+  `NT_GENERIC`，`ResultSetViewer.java:657-663`）。本仓无平台通知设施，属跨模块批次。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
