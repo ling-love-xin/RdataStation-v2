@@ -3449,12 +3449,19 @@ panicked at panel/tests.rs:1091:
 箭头菜单（DBeaver 侧那 6 项）按「能力没有就不摆」只合并了本仓真有落点的两条，
 见 §8.64。
 
+> **2026-11-20 更正（见 §9.27）**：本节两处判断已被现源推翻——
+> ① `enablePanelControls` 里是**无条件** `setEnabled(true)`（`:449-454`，旧条件
+> `hasFilters() || hasOrdering() || 词非空` 已注释掉）⇒ 清除钮**恒可用**，不做空词门控；
+> ② `clearDataFilter(true)` **不清隐藏列**（`:605-626` 造新 filter 后逐列搬回
+> `visible` / `options`），只清 where / order / 每列 criteria / 每列 orderPosition。
+> 主点击已改为全清。标题与本节点名用例保留为历史记载（用例已改名，见 §8.62.3）。
+
 #### 8.62.3 测试
 
 | 用例 | 钉住什么 |
 | --- | --- |
 | `panel::tests::left_bar_puts_presentation_group_on_top_and_record_mode_at_the_bottom` | 量**真实像素**：网格在文本之上；记录按钮与文本按钮相距 > 60px（无弹簧时只差 20~24px）；未进记录视图时不摆行导航 |
-| `panel::tests::filter_clear_button_is_always_there_and_gated_by_the_filter_text` | 空词：按钮**在位**且 a11y `disabled = Some(true)`；有词：仍在原位、不再是禁用态（实测可用态不暴露 disabled 位，断言用 `assert_ne!(…, Some(true))`） |
+| `panel::tests::filter_clear_button_is_always_there_and_gated_by_the_filter_text` | 空词：按钮**在位**且 a11y `disabled = Some(true)`；有词：仍在原位、不再是禁用态（实测可用态不暴露 disabled 位，断言用 `assert_ne!(…, Some(true))`）——**2026-11-20 口径已变**：用例改名 `filter_clear_button_is_always_present_and_never_gated`，钉「空词 / 有词都可用」（§9.27.4） |
 
 #### 8.62.4 验证
 
@@ -3553,7 +3560,7 @@ DBeaver 的 `filtersClearButton` 是 `SWT.DROP_DOWN`：本体 `clearDataFilter(t
 
 | 条目 | 本仓落点 | 出现条件 |
 | --- | --- | --- |
-| 清除筛选词 | `ResultRequest::ClearFilter`（与 ✕ 本体同一条通道） | 有筛选词 |
+| ~~清除筛选词~~ → **删除所有过滤 / 排序**（2026-11-20） | `ResultRequest::ClearFilterAndOrdering`（= ✕ 主点击，见 §9.27） | **恒在**（原「有筛选词」门控已取消） |
 | 显示全部列 | 新增 `ResultRequest::ShowAllColumns` → 宿主 `delegate.show_all_columns()` + 网格 refresh + `snapshot_column_layout`（与列头 / 右键「显示全部列」同一能力、同一落盘路径） | 有隐藏列（`column_hidden` 非空） |
 
 - 条目清单抽成纯函数 `erase_menu_labels(filter_text, hidden_columns)`
@@ -6455,8 +6462,8 @@ active = 列浏览器；DBeaver 只开值查看器。
 
 | DBeaver | 形态 | 本仓 |
 |---|---|---|
-| `filtersClearButton`（`:319-327`） | `NO_FOCUS \| DROP_DOWN`，`ERASE` 图标，建出来就 `setEnabled(false)` | `editor-result-filter-clear`（`DropdownButton` + 清除项菜单；常驻 + 空词禁用，§9.x 已对齐） |
-| `filtersCustomButton`（`:330-338`） | `NO_FOCUS \| DROP_DOWN`，`FILTER` 图标，**恒建且恒 enabled**（compact 下 clear/history 都不建，它仍在） | `editor-result-filter-settings`（普通 `Button`，无箭头） |
+| `filtersClearButton`（`:319-327`） | `NO_FOCUS \| DROP_DOWN`，`ERASE` 图标，建出来 `setEnabled(false)` 但 `enablePanelControls` 无条件开（`:449-454`） | `editor-result-filter-clear`（`DropdownButton` + 菜单；**恒可用**，主点击 = 全清，见 §9.27） |
+| `filtersCustomButton`（`:330-338`） | `NO_FOCUS \| DROP_DOWN`，`FILTER` 图标，**恒建且恒 enabled**（compact 下 clear/history 都不建，它仍在） | `editor-result-filter-settings`（`DropdownButton`：三项菜单，§9.26） |
 | `historyBackButton`（`:343-346`） | `DROP_DOWN`，`RS_BACK`，初值 `setEnabled(false)` | `editor-result-history-back`（`DropdownButton` 分裂钮） |
 | `historyForwardButton`（`:348-351`） | `DROP_DOWN`，`RS_FORWARD`，初值 `setEnabled(false)` | `editor-result-history-forward` |
 | 分隔（`:354`） | `UIUtils.createToolBarSeparator` | 无（本仓同一行内靠间距分隔） |
@@ -6467,6 +6474,10 @@ active = 列浏览器；DBeaver 只开值查看器。
 （`:1563-1570`）。本仓只有第一项、且主点击就是它，摆个箭头只会多一条重复项；后两项
 （按表持久化 / 恢复筛选条件）本仓无能力。按「能力没有就不摆」**不加箭头**——
 若将来做「按表保存筛选」，箭头才有落点。
+
+> **2026-11-20 已变（§9.26）**：存档能力已补（`SavedFilterSetting` + 保存 / 重置两条请求），
+> 该钮已改为 `DropdownButton`，箭头三项（编辑 / 保存 / 重置）。上面这段与本节
+> 「唯一形态差异」的判断同时销账。
 
 #### 9.25.5 右缘竖条 + 面板菜单（`ResultSetViewer.java:1037-1085` / `:1559-1588`）
 
@@ -6517,7 +6528,7 @@ active = 列浏览器；DBeaver 只开值查看器。
 | --- | --- | --- |
 | `...resultset.filterSave` | `saveDataFilter()` | `ResultSetViewer.saveDataFilter:648-664` |
 | `...resultset.filterReset` | `resetSavedDataFilter()` | `ResultSetViewer.resetSavedDataFilter:671-687` |
-| `...resultset.filterClear` | `clearDataFilter(true)` | 已有对应，但只是**窄口径**（见 §9.26.5 第一条） |
+| `...resultset.filterClear` | `clearDataFilter(true)` | **已做**（§9.27：清除钮的主点击 = 全清，语义按 `:605-626` 校正） |
 | `...resultset.filterSettings` | `showFilterSettingsDialog()` | 已做（面板「筛选设置」浮层） |
 
 - `saveDataFilter` 的实际动作：`DataFilterRegistry.getInstance().saveDataFilter(dataContainer,
@@ -6576,12 +6587,17 @@ active = 列浏览器；DBeaver 只开值查看器。
 
 #### 9.26.5 仍未对齐（本批登记，未做）
 
-- **`CMD_FILTER_CLEAR_SETTING`「删除所有过滤 / 排序」**（zh `bundle_zh.properties:78`）：
-  DBeaver 的 `clearDataFilter(true)` 一次清 **filter + order + 隐藏 + 冻结 + 颜色覆盖 +
-  转换器 + pin**（`EraseItemListener.fillDropDownMenu:1525-1545` 的菜单首项，且这是
-  清除钮的**主点击**默认动作 `executeDefaultAction:1549-1551`）。本仓 erase 箭头只有
-  「清除筛选词」+「显示隐藏列」，**没有这一项** —— 真缺口，下一批候选（需同时清
-  `filter_text` / `filter_order` / `column_hidden` / `column_frozen`）。
+- ~~**`CMD_FILTER_CLEAR_SETTING`「删除所有过滤 / 排序」**：`clearDataFilter(true)` 一次清
+  filter + order + 隐藏 + 冻结 + 颜色覆盖 + 转换器 + pin；本仓 erase 箭头只有「清除筛选词」
+  +「显示隐藏列」，没有这一项 —— 真缺口，下一批候选（需同时清 `filter_text` /
+  `filter_order` / `column_hidden` / `column_frozen`）。~~ **已做，见 §9.27。**
+  同时**纠正 §9.26 的记载错误**：`clearDataFilter(true)` 并不清隐藏列。实读
+  `ResultSetViewer.java:605-626`——它造一份新 filter，然后把每列的
+  `saveConstraintVisualState`（只含 `visible` + `options`）逐列搬回去（`:609-623`，注释
+  原文「Creates a new data filter, keeping all visual state (visibility, etc.) from a
+  previous one.」）⇒ **隐藏列照样保留**；被清的是 where / order / 每列 criteria /
+  每列 orderPosition。颜色覆盖 / 转换器 / pin 也不在这条命令里，那是
+  `fillDropDownMenu` 里另外的菜单项（`ResultSetViewer.java:1525-1545`）。
 - **列头右键 `filtersMenu` 尾部四项**（`ResultSetViewer.java:3926-3932`：Separator →
   (DBSEntity) SAVE + RESET → CLEAR → EDIT_SETTINGS）：本仓列头菜单已有按值筛选 /
   取消排序 / 冻结 / 隐藏 / 显示全部列，**没有**这四项全局命令。登记待做。
@@ -6607,6 +6623,61 @@ active = 列浏览器；DBeaver 只开值查看器。
 （`crates/workbench/src/unlock.rs` 裸 px 1）与 `shared_constants_do_not_diverge`
 （`crates/settings/src/{theme_pack,window_material}.rs` 的 `BUILTIN` 常量分叉）——两条
 都在并行线未提交改动面内，本批未触碰。
+
+### 9.27 筛选条 ✕ = 「删除所有过滤 / 排序」（2026-11-20）
+
+§9.26.5 登记的那条缺口（`CMD_FILTER_CLEAR_SETTING`）本批补齐；同一份取证也纠正了
+§9.26 里对 `clearDataFilter` 的错误描述（修订段见 §9.26.5 第一条）。
+
+#### 9.27.1 dbeaver-ref 口径（均为现源实读）
+
+| 事实 | 行 | 含义 |
+| --- | --- | --- |
+| `clearDataFilter(refresh)` | `ResultSetViewer.java:605-626` | 造新 filter → 逐列搬回 `visible` / `options`（`:609-623`）⇒ **隐藏列与列选项保留**；只清 where、order、每列 criteria、每列 orderPosition |
+| `EraseItemListener.fillDropDownMenu` | `ResultSetViewer.java:1525-1545` | 第一项恒为 `CMD_FILTER_CLEAR_SETTING`，**无门控**；其后「显示隐藏列」看 `hasHiddenAttributes()`（`:1527-1533`），再后是重置颜色 / 转换器 / pins，`menuManager.getSize() > 1` 时补「全部重置」 |
+| `executeDefaultAction` | `ResultSetViewer.java:1549-1551` | 主点击 = `viewer.clearDataFilter(true)` |
+| tooltip / zh 文案 | `ResultSetFilterPanel.java:319-325`；`bundle_zh.properties:77`、`:78` | 就是该命令说明 =「删除所有过滤/排序」 |
+| 可用性 | `ResultSetFilterPanel.java:327` + `:449-454` | 建钮 `setEnabled(false)`，`enablePanelControls` **无条件** `setEnabled(true)`（旧条件 `hasFilters() \|\| hasOrdering() \|\| 词非空` 已被注释掉）⇒ 恒可用 |
+
+#### 9.27.2 本仓落点
+
+- `ResultRequest::ClearFilterAndOrdering`（`ports.rs`）→
+  `ResultPanel::clear_filter_and_ordering(window, cx)`：清 `filter_text` + `filter_version`
+  + 输入框、清 `filter_order` + `filter_order_input` 草稿、delegate 侧
+  `set_filter("")` / `set_column_filter(None)` / `clear_sort()` / `refresh`，最后
+  `refresh_filter_hint` + `notify`。
+- **不动** `column_hidden` / `column_frozen`——照 DBeaver 保留可见性；要放出来走同一个
+  箭头菜单里的「显示全部列」。
+- `clear_filter` 保留为**窄口径**入口（只清词，查找栏 / 测试直调），不带排序。
+- render：主钮去掉 `.disabled(..)`（恒可用）、tooltip 改「删除所有过滤 / 排序」、主点击
+  改 `ClearFilterAndOrdering`；箭头菜单的 label→request 映射同步加一条同名项。
+- `erase_menu_labels`：**恒含**「删除所有过滤 / 排序」，有隐藏列时追加「显示全部列」；
+  原先「有词才摆『清除筛选词』」的窄项并进全清（`filter_text` 参数保留、暂不参与判定）。
+- editor `dispatch.rs`：新分支 + `clear_filter_and_ordering_via_window`（`window.update`
+  转手，与 `clear_filter_via_window` 同口径）。
+
+#### 9.27.3 口径差异（两条，均为有意）
+
+1. **只摆本仓有落点的项**：DBeaver 菜单里的「重置颜色 / 重置 transformers / 重置 pins」
+   本仓无对应能力（无颜色覆盖、无转换器、无 pin），按「能力没有就不摆」不摆；它们之后的
+   聚合项「全部重置」自然也没有。
+2. **历史不动**：DBeaver 的 `filterHistory` 是独立组件，`clearDataFilter` 不清历史；本仓
+   `filter_history` 同样保留。
+
+#### 9.27.4 用例与门禁
+
+- `the_erase_menu_always_offers_the_full_clear`（纯函数，五组：空词 / 空白词 / 有词 /
+  有隐藏列 / 有词 + 有隐藏列）
+- `clearing_all_filters_drops_ordering_but_keeps_hidden_columns`（窗口用例：先造「筛选词 +
+  自定义排序 + 列级筛选 + 本地排序 + 隐藏一列」，全清后断言前四项都没了、隐藏态仍在）
+- 旧用例随口径更新：清除钮那条改名为 `filter_clear_button_is_always_present_and_never_gated`
+  （空词也不禁用，与有词时等价）；旧的菜单用例整体改写为上表第一条。
+
+**门禁**：result_panel **372 passed**（+1 净增）、editor check `Finished`、editor
+**798 passed**（1 ignored）。ui-guard **3 passed; 1 failed**：`no_new_hardcoded_color_or_pixel`
+红于 `crates/workbench/src/unlock.rs`（裸 px 1，并行线未提交改动面，本批未触碰）；
+`shared_constants_do_not_diverge` 本轮转绿（worktree 基于 `main`，不含 settings 的
+`window_material` 改动）。
 
 ## 8. 协作纪律
 

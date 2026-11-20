@@ -1154,12 +1154,14 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - **左缘竖条两段式**：展示组（网格 / 文本）在上、弹簧、**记录模式沉底**
   （DBeaver `ResultSetViewer.java:948-965`：RADIO 展示按钮 → `createEmptyLabel(FILL_VERTICAL)`
   → `recordModeButton`）。记录视图的行导航跟记录按钮走（本仓独有）。
-- **筛选清除钮常驻 + 空词禁用**（DBeaver `filtersClearButton` 建出来就 disabled，
-  `ResultSetFilterPanel.java:319-327`，生效后 `enablePanelControls` 打开，`:449-454`）。
-  箭头菜单（清设置 / 显示隐藏列 / 重置颜色 / transformers / pins / 全部重置）本轮未合并。
+- **筛选清除钮常驻**（~~空词禁用~~ → 已被 2026-11-20 更新推翻：DBeaver
+  `enablePanelControls` 是**无条件** `setEnabled(true)`（`ResultSetFilterPanel.java:449-454`，
+  旧条件已注释掉），见本节末「删除所有过滤 / 排序」段）。箭头菜单（清设置 / 显示隐藏列 /
+  重置颜色 / transformers / pins / 全部重置）本轮未合并。
 - 用例：`left_bar_puts_presentation_group_on_top_and_record_mode_at_the_bottom`（量真实像素）、
   `filter_clear_button_is_always_there_and_gated_by_the_filter_text`（a11y disabled 位口径：
-  **可用态不暴露** disabled，只有禁用时才是 `Some(true)`）。
+  **可用态不暴露** disabled，只有禁用时才是 `Some(true)`；2026-11-20 改名
+  `filter_clear_button_is_always_present_and_never_gated`）。
 - 后续已补齐：状态历史（§2.52）、✕ 箭头菜单（§2.53）、右缘竖条面板总开关（§2.54）。
   仍在册：DBeaver 面板按钮是「独立 CHECK + 可增减页签」而本仓是固定页签。
 
@@ -1216,6 +1218,27 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 门禁：panel **371**（+3）/ editor check `Finished` / editor **798**（1 ignored）；
   ui-guard 红 2 项均来自并行线（`workbench/unlock.rs` 裸 px、`settings` 的 `BUILTIN` 分叉）。
 
+**2026-11-20 更新（筛选条 ✕ = 删除所有过滤 / 排序，全文见 `result-panel.md §9.27`）**：
+上面「仍未做 ①」**本批销账**，同时纠正 §9.26 一处记载错误：
+
+- `clearDataFilter(true)`（`ResultSetViewer.java:605-626`）**不清隐藏列**——造新 filter 后
+  把每列 `visible` / `options` 搬回去（`:609-623`，注释「keeping all visual state」）；
+  被清的是 where / order / 每列 criteria / 每列 orderPosition。颜色覆盖 / 转换器 / pins
+  是 `fillDropDownMenu` 里**另外的菜单项**，不在这条命令里。
+- 本仓：`ResultRequest::ClearFilterAndOrdering` → `ResultPanel::clear_filter_and_ordering`，
+  清 `filter_text` / `filter_order`（连浮层草稿）/ 列级筛选 / 本地排序，**不动**
+  `column_hidden` / `column_frozen`；`clear_filter` 降为窄口径（只清词）。
+- 清除钮改**恒可用**（DBeaver `enablePanelControls` 无条件 `setEnabled(true)`，`:449-454`），
+  tooltip 与主点击都改为「删除所有过滤 / 排序」；箭头菜单第一项恒为该命令（原「清除筛选词」
+  窄项并入，`erase_menu_labels` 的 `filter_text` 参数暂不参与判定）。
+- 用例：`the_erase_menu_always_offers_the_full_clear`、
+  `clearing_all_filters_drops_ordering_but_keeps_hidden_columns`（窗口用例，含隐藏列保留
+  断言，对应 `restoreConstraintVisualState` 语义）。
+- 门禁：panel **372**（+1 净增）/ editor check `Finished` / editor **798**（1 ignored）；
+  ui-guard 3 passed / 1 failed（`workbench/unlock.rs` 裸 px，并行线面）。
+- 仍在册：列头右键 `filtersMenu` 尾部四项（`ResultSetViewer.java:3926-3932`）、存档落盘、
+  筛选条之外的菜单挂载点。
+
 ### 2.52 筛选条「状态历史」后退 / 前进（2026-11-18 已实现主体）
 
 全文见 `result-panel.md §8.63`。接手要点：
@@ -1256,6 +1279,11 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   禁用说明「暂无可清除项」，宽度不跳。
 - 用例：`erase_menu_lists_only_the_entries_this_repo_can_honour`。
 - **验证**：panel **276 passed** / editor `--lib results` 45 / guard 4 / check 0-0。
+- **2026-11-20 已变（见 `result-panel.md §9.27` 与本文件 §2.51 末段）**：第一条改为
+  「删除所有过滤 / 排序」且**恒在**，左半主点击 = 全清，清除钮**恒可用**；原
+  「清除筛选词（有词才出现）」窄项并入，用例改为
+  `the_erase_menu_always_offers_the_full_clear`。「两条都不可用 → 摆禁用说明」这一分支
+  已不可达（清单恒非空）。
 
 ### 2.54 右缘竖条顶部的面板总开关（2026-11-18）
 
