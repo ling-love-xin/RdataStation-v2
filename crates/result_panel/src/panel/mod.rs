@@ -26,7 +26,7 @@ pub(crate) mod tabs;
 mod tests;
 
 // —— 对外 pub 面（editor 侧 use result_panel::panel::{ExportCtx, GridPayload, ResultPanel, ResultSyncInput}）——
-pub use data::{AnalysisItem, ExportCtx, GridPayload, ResultPanel, ResultSyncInput};
+pub use data::{AnalysisItem, ExportCtx, GridPayload, ResultPanel, ResultSyncInput, SavedFilterSetting};
 
 // —— crate 内部顶层辅助（tests 以 use super::X 定位；生产编译不引用故整体 cfg(test)）——
 #[cfg(test)]

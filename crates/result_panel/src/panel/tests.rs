@@ -4879,4 +4879,150 @@ fn reference_rows_use_the_selected_row_values(cx: &mut gpui_kit::TestAppContext)
     );
 }
 
+/// 【筛选设置 · 存档】「保存 / 重置」的语义：显式存、只清存档不动当前筛选。
+///
+/// 对齐 DBeaver `ResultSetViewer.java:648-664`（`saveDataFilter`，存当前 `model.getDataFilter()`）
+/// 与 `:671-687`（`resetSavedDataFilter`，`removeDataFilter` + 通知）。两条都是**用户点了
+/// 才算**——与列布局那套「随会话自动存」不是一回事。
+#[gpui_kit::test]
+fn saving_the_filter_setting_records_the_current_filter(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 造一份「当前生效」的筛选：结果 SQL + 筛选词 + 自定义排序
+    cx.update(|_window, app| {
+        panel.update(app, |p, _cx| {
+            p.result_sql = Some("select * from orders".to_string());
+            p.filter_text = "amount > 100".to_string();
+            p.filter_order = "amount desc".to_string();
+        });
+    });
+
+    cx.update(|_window, app| panel.update(app, |p, cx| p.save_filter_setting(cx)));
+    let saved = cx
+        .update(|_window, app| panel.read(app).saved_filter_setting().cloned())
+        .expect("点「保存过滤器设置」后应留下存档");
+    assert_eq!(saved.sql, "select * from orders", "存档要记住它属于哪条 SQL");
+    assert_eq!(saved.filter, "amount > 100", "存的是当前生效的筛选词");
+    assert_eq!(saved.order, "amount desc", "自定义排序一并进存档（DBeaver 存整份 filter）");
+
+    // 重置：只清存档，当前筛选原样还在（DBeaver 同样只删配置项）
+    cx.update(|_window, app| panel.update(app, |p, cx| p.reset_filter_setting(cx)));
+    assert!(
+        cx.update(|_window, app| panel.read(app).saved_filter_setting().is_none()),
+        "重置后不应再留着存档"
+    );
+    assert_eq!(
+        cx.update(|_window, app| panel.read(app).filter_text().to_string()),
+        "amount > 100",
+        "重置只清存档，不能把正在生效的筛选也抹掉"
+    );
+}
+
+/// 【筛选设置 · 存档】换进来同一条 SQL 的结果时自动套用；换个 SQL 就不套。
+///
+/// 对齐 `ResultSetUtils.restoreDataFilter:174-189`（打开结果时恢复存档，且只在
+/// `hasFilters()` 时算数）。本仓投影入口是 [`super::ResultPanel::sync`]：套用后
+/// 词进 `filter_text` 并立即应用，输入框回填留给宿主（`filter_backfill`）。
+#[gpui_kit::test]
+fn a_saved_filter_is_reapplied_only_to_its_own_sql(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 别的 SQL：存档不生效
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.saved_filter = Some(crate::panel::SavedFilterSetting {
+                sql: "select * from orders".to_string(),
+                filter: "id = 1".to_string(),
+                order: String::new(),
+                table: None,
+            });
+            p.sync(cx, sync_input_with_sql("select * from customers"));
+        });
+    });
+    assert_eq!(
+        cx.update(|_window, app| panel.read(app).filter_text().to_string()),
+        "",
+        "换了一条 SQL 不该套用别人的筛选"
+    );
+
+    // 同一条 SQL：套用（词进真值，并留一份待回填输入框的内容）
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| {
+            p.sync(cx, sync_input_with_sql("select * from orders"));
+        });
+    });
+    assert_eq!(
+        cx.update(|_window, app| panel.read(app).filter_text().to_string()),
+        "id = 1",
+        "同一条 SQL 的结果应恢复存档里的筛选词"
+    );
+    assert_eq!(
+        cx.update(|_window, app| panel.update(app, |p, _| p.take_filter_backfill())),
+        Some("id = 1".to_string()),
+        "输入框回填要留给宿主（`sync` 没有窗口句柄）"
+    );
+}
+
+/// 【筛选设置 · 存档】套用判据（纯函数）：四条任一不成立就不套。
+#[test]
+fn the_saved_filter_needs_its_own_sql_and_an_untouched_filter_box() {
+    let saved = crate::panel::SavedFilterSetting {
+        sql: "select 1".to_string(),
+        filter: "id = 1".to_string(),
+        ..Default::default()
+    };
+    assert!(super::events::saved_filter_applies(
+        &saved,
+        Some("select 1"),
+        ""
+    ));
+    // 换 SQL 不套
+    assert!(!super::events::saved_filter_applies(
+        &saved,
+        Some("select 2"),
+        ""
+    ));
+    // 已有筛选词不覆盖（用户手写的优先）
+    assert!(!super::events::saved_filter_applies(
+        &saved,
+        Some("select 1"),
+        "id = 2"
+    ));
+    // 当前结果没有 SQL 就无从判断归属
+    assert!(!super::events::saved_filter_applies(&saved, None, ""));
+    // 空筛选的存档等于「没有可恢复的筛选」（DBeaver `hasFilters()` 同口径）
+    let empty = crate::panel::SavedFilterSetting {
+        sql: "select 1".to_string(),
+        ..Default::default()
+    };
+    assert!(!super::events::saved_filter_applies(
+        &empty,
+        Some("select 1"),
+        ""
+    ));
+}
+
+/// 投影输入的最小骨架（`sql` + 两列两行），只给存档套用那几条用例用。
+fn sync_input_with_sql(sql: &str) -> crate::panel::ResultSyncInput {
+    let mut input = crate::panel::ResultSyncInput::default();
+    input.sql = Some(sql.to_string());
+    input.grid = Some(crate::panel::GridPayload {
+        columns: vec!["id".to_string(), "amount".to_string()],
+        rows: vec![
+            vec!["1".to_string(), "10".to_string()],
+            vec!["2".to_string(), "20".to_string()],
+        ],
+        column_types: vec![None, None],
+        table: None,
+        annotations: vec![None, None],
+        fact: None,
+        local: None,
+    });
+    input
+}
+
 

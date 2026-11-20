@@ -370,6 +370,20 @@ impl EditorHostPanel {
         };
         self.result_panel.update(cx, |p, cx| p.sync(cx, input));
 
+        // 【筛选设置 · 存档】`sync` 套用了存档时会把待回填的词留在 `filter_backfill`：
+        // 真值已在 `sync` 里定稿并应用过，输入框回填还要窗口句柄，照
+        // `apply_filter_value` 的同一条路子转手（窗口不可用就只留真值，界面下次
+        // 重新渲染时框里仍是旧词——已在文档登记为已知限制）。
+        let backfill = self
+            .result_panel
+            .update(cx, |p, _cx| p.take_filter_backfill());
+        if let Some(text) = backfill {
+            let panel = self.result_panel.clone();
+            let _ = self.window.update(cx, |_panel, window, app| {
+                panel.update(app, |p, cx| p.sync_filter_input(&text, window, cx));
+            });
+        }
+
         // 【并排对比】结果变化（替换 / 追加 / 选中切换）后，对比栏网格跟着同步
         self.sync_compare_grid(cx);
     }

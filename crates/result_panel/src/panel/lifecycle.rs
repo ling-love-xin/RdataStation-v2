@@ -11,6 +11,8 @@ use gpui_kit::*;
 // 【B5】事实帧只读句柄随网格投影进 delegate（列式统计 / 原生数值排序交互派生时读取）
 
 use super::data::{ResultPanel, ResultSyncInput};
+/// 【筛选设置 · 存档】套用判据（纯函数，事件域定义、投影路径复用）
+use super::events::saved_filter_applies;
 use crate::column_browser::ColumnBrowserDelegate;
 use crate::grid::{self as result_grid, ResultGridDelegate, ResultStatus, ResultToolbar};
 use crate::ports::{Presentation, ResultActionQueue, ResultRequest, RightTab};
@@ -277,6 +279,9 @@ impl ResultPanel {
             filter_order: String::new(),
             // 【筛选设置】默认停在「列约束」页（DBeaver 对话框先建列页并 setSelection(0)）
             filter_settings_tab: crate::ports::FilterSettingsTab::Columns,
+            // 【筛选设置 · 存档】没存过就没有；待回填的词同理（首次 sync 才可能产生）
+            saved_filter: None,
+            filter_backfill: None,
             presentation: Presentation::Grid,
             right_tab: RightTab::Browser,
             // 出厂 = 六页全开（DBeaver `activateDefaultPanels` 会补默认面板；
@@ -548,6 +553,22 @@ impl ResultPanel {
             state.delegate_mut().set_conflict(input.conflict);
             state.refresh(cx);
         });
+
+        // 【筛选设置 · 存档】换进来的是**存档同一条 SQL** 的结果、且当前没有筛选词时，
+        // 自动套用存档——对齐 DBeaver：打开该表的数据编辑器就 `restoreDataFilter`
+        // （`ResultSetViewer.java:4266-4284`；只认 `hasFilters()` 的存档，本仓对应
+        // 「存档里的筛选词非空」）。三条边界：
+        // - `apply_filter_inner(cx, false)` 不 requeue：自动套用**不能**顺手触发「下发源库
+        //   重查」，否则每开一次结果就多跑一次数据库；
+        // 只恢复**筛选词**；存档里的自定义排序不自动套用——排序必须重查数据库才有意义，
+        // 那是用户的显式动作（打开筛选设置 → 应用），自动套用等于替用户下发查询。
+        if let Some(saved) = self.saved_filter.clone() {
+            if saved_filter_applies(&saved, self.result_sql.as_deref(), &self.filter_text) {
+                self.filter_text = saved.filter.clone();
+                self.apply_filter_inner(cx, false);
+                self.filter_backfill = Some(saved.filter);
+            }
+        }
 
         // 【列浏览器】清单数据跟随网格投影重灌（换结果集 / 刷新 / 取段都走到这里；
         // 搜索词**跨结果保留**的既有口径不变——`set_data` 只换投影，不清搜索框）。

@@ -419,9 +419,15 @@ impl ResultPanel {
             // 本仓落点：打开「筛选设置」浮层（见 `dialog.rs::render_filter_settings`）。
             // 与 DBeaver 的差异在册：浮层里 WHERE 一栏只读回显（筛选框本体才是它的输入源），
             // 真正新增的能力是**自定义 ORDER BY**（本仓此前只有按列排序下发）。
+            //
+            // 箭头菜单两项对齐 `CustomFilterListener.fillDropDownMenu`
+            // （`ResultSetFilterPanel.java:1561-1571`）：`CMD_FILTER_EDIT_SETTINGS`（= 主点击
+            // 那个动作）+ `CMD_FILTER_SAVE_SETTING` + `CMD_FILTER_RESET_SETTING`。
+            // DBeaver 后两项在 `dataContainer instanceof DBSEntity` 的门控下；本仓没有
+            // 实体这一层，故恒摆（存档自己也允许 `table` 为空，见 `SavedFilterSetting`）。
             .child({
                 let settings_queue = self.queue.clone();
-                Button::new("editor-result-filter-settings")
+                let open = Button::new("editor-result-filter-settings")
                     .ghost()
                     .xsmall()
                     .icon(IconName::Funnel)
@@ -429,6 +435,27 @@ impl ResultPanel {
                     .tooltip("筛选设置（自定义条件与排序）")
                     .on_click(move |_, _window, app| {
                         settings_queue.request(ResultRequest::OpenFilterSettings, app);
+                    });
+                let menu_queue = self.queue.clone();
+                DropdownButton::new("editor-result-filter-settings-menu")
+                    .button(open)
+                    .menu_accessibility_label("筛选设置选项")
+                    .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
+                        let mut menu = menu;
+                        let entries = [
+                            ("编辑筛选设置", ResultRequest::OpenFilterSettings),
+                            ("保存过滤器设置", ResultRequest::SaveFilterSetting),
+                            ("重置过滤器设置", ResultRequest::ResetFilterSetting),
+                        ];
+                        for (label, request) in entries {
+                            let queue = menu_queue.clone();
+                            menu = menu.item(PopupMenuItem::new(label).on_click(
+                                move |_, _window, app| {
+                                    queue.request(request.clone(), app);
+                                },
+                            ));
+                        }
+                        menu
                     })
             })
             // 【筛选历史】DBeaver 筛选条的第 5 列是 `HistoryPanel`（`ResultSetFilterPanel.java:214`）：

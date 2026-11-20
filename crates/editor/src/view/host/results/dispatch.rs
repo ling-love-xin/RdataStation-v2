@@ -187,6 +187,14 @@ impl EditorHostPanel {
                 where_text,
                 order_text,
             } => self.run_custom_filter(where_text, order_text, cx),
+            // 【筛选设置 · 存档】「保存 / 重置过滤器设置」：整份状态都在面板里
+            // （读当前筛选词与排序，不碰宿主任何字段），宿主只转发
+            ResultRequest::SaveFilterSetting => self
+                .result_panel
+                .update(cx, |p, cx| p.save_filter_setting(cx)),
+            ResultRequest::ResetFilterSetting => self
+                .result_panel
+                .update(cx, |p, cx| p.reset_filter_setting(cx)),
             // 【筛选设置】切页签（列约束 / 自定义条件）：纯 UI 状态，宿主只转发
             ResultRequest::SetFilterSettingsTab(tab) => self
                 .result_panel

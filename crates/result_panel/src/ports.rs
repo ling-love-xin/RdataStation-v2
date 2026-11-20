@@ -107,6 +107,18 @@ pub enum ResultRequest {
     OpenFilterSettings,
     /// 【筛选设置】关闭浮层（取消 / Esc / ✕）：丢弃草稿，不改任何已生效的状态
     CloseFilterSettings,
+    /// 【筛选设置·存档】「保存过滤器设置」：把当前这份筛选（筛选词 + 自定义排序）
+    /// 连同它属于哪份结果（结果 SQL、来源表）记下来。对齐 DBeaver 的
+    /// `CMD_FILTER_SAVE_SETTING` → `saveDataFilter()`（`ResultSetViewer.java:648-664`，
+    /// 落到 `DataFilterRegistry` 的 `saved-data-filter.xml`）。
+    ///
+    /// 与列布局的差别在语义：列序 / 列宽 / 隐藏 / 冻结是**随会话自动存**，而这一份是
+    /// **用户显式点了才存**（DBeaver 同款：`isDirty()` 才写，否则删掉旧键，`:273-288`）。
+    SaveFilterSetting,
+    /// 【筛选设置·存档】「重置过滤器设置」：忘掉这份存档。对齐 DBeaver 的
+    /// `CMD_FILTER_RESET_SETTING` → `resetSavedDataFilter()`（`ResultSetViewer.java:671-687`，
+    /// `DataFilterRegistry.removeDataFilter`）。只清存档，**不动**当前正在生效的筛选。
+    ResetFilterSetting,
     /// 【筛选设置】点「应用」：面板在读输入框值的路径上（要 `&mut Context`）转手，
     /// 由宿主调 [`ResultPanel::apply_filter_settings`] 读出草稿并入队下面那条带参请求
     CommitFilterSettings,

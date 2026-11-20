@@ -10,7 +10,7 @@ use gpui_kit::*;
 
 // 【B5】事实帧只读句柄随网格投影进 delegate（列式统计 / 原生数值排序交互派生时读取）
 
-use super::data::{ResultPanel, FILTER_HISTORY_LIMIT};
+use super::data::{ResultPanel, SavedFilterSetting, FILTER_HISTORY_LIMIT};
 use super::sidebars::next_right_edge_state;
 use crate::error_card::ErrorCard;
 use crate::grid::cell::{
@@ -1053,6 +1053,80 @@ impl ResultPanel {
         )
     }
 
+    /// 【筛选设置 · 存档】「保存过滤器设置」：把当前这份筛选记下来。
+    ///
+    /// 对齐 DBeaver `CMD_FILTER_SAVE_SETTING` → `saveDataFilter()`
+    /// （`ResultSetViewer.java:648-664`）：存的是**当前生效的那一份**（面板读自己持有的
+    /// `filter_text` / `filter_order`，不读输入框草稿——草稿没提交就不算数）。
+    ///
+    /// 与 DBeaver 的两处口径差：
+    /// - 那边 `isDirty()` 为假就把旧键**删掉**（`:273-288`）；本仓没有「脏」概念，
+    ///   空筛选也照存（存一份「无筛选」的存档比静默删掉更可解释）；
+    /// - 那边只对 `DBSEntity` 提供（`ResultSetFilterPanel.java:1565-1570`）；
+    ///   本仓用「有没有唯一来源表」等价表达，但**不禁止**存（`table` 只做记录）。
+    ///
+    /// 存完给一行提示（对齐 `:661-663` 的 `DBeaverNotifications.showNotification`）。
+    pub fn save_filter_setting(&mut self, cx: &mut Context<Self>) {
+        let table = self.unique_source_table(cx);
+        self.saved_filter = Some(crate::panel::SavedFilterSetting {
+            sql: self.result_sql.clone().unwrap_or_default(),
+            filter: self.filter_text.trim().to_string(),
+            order: self.filter_order.trim().to_string(),
+            table,
+        });
+        self.set_notice(Some("筛选设置已保存".to_string()), cx);
+        cx.notify();
+    }
+
+    /// 【筛选设置 · 存档】「重置过滤器设置」：忘掉存档。
+    ///
+    /// 对齐 DBeaver `CMD_FILTER_RESET_SETTING` → `resetSavedDataFilter()`
+    /// （`ResultSetViewer.java:671-687`，`DataFilterRegistry.removeDataFilter`）。
+    /// **只清存档**：当前正生效的筛选、筛选框里的词都不动——DBeaver 那边同样只删
+    /// 配置项，随后同样发一条「已重置」通知。
+    pub fn reset_filter_setting(&mut self, cx: &mut Context<Self>) {
+        let had = self.saved_filter.is_some();
+        self.saved_filter = None;
+        self.set_notice(
+            Some(if had {
+                "筛选设置已重置".to_string()
+            } else {
+                // 没有存档也照发（DBeaver 的 remove 是幂等的，通知同样无条件发）
+                "没有被保存的筛选设置".to_string()
+            }),
+            cx,
+        );
+        cx.notify();
+    }
+
+    /// 【筛选设置 · 存档】当前存档（渲染菜单项禁用态 / 测试断言用）
+    pub fn saved_filter_setting(&self) -> Option<&crate::panel::SavedFilterSetting> {
+        self.saved_filter.as_ref()
+    }
+
+    /// 【筛选设置 · 存档】取走「待回填筛选输入框的词」（宿主在窗口可用时转手调
+    /// [`Self::sync_filter_input`]；取走即清，避免每次 sync 都回填一遍）
+    pub fn take_filter_backfill(&mut self) -> Option<String> {
+        self.filter_backfill.take()
+    }
+
+    /// 【筛选设置 · 存档】结果集有没有**唯一来源表**（`Some` = 能认成一张实体表）。
+    ///
+    /// 判据与 [`Self::reference_source`] 同源：所有已注解列都指向同一张表才认。
+    /// 只用于记录在存档里（DBeaver 用 `instanceof DBSEntity` 做同一件事）。
+    fn unique_source_table(&self, cx: &App) -> Option<String> {
+        let delegate = self.grid.read(cx).delegate();
+        let annotations = delegate.column_annotations().to_vec();
+        let tables: Vec<&str> = annotations
+            .iter()
+            .filter_map(|annotation| annotation.as_ref()?.source_table.as_deref())
+            .collect();
+        match tables.first() {
+            Some(first) if tables.iter().all(|table| *table == *first) => Some((*first).to_string()),
+            _ => None,
+        }
+    }
+
     /// 【1.2】筛选框运行后宿主写入 wrapped SQL（执行完成后），并切到「执行SQL」页签    /// （右栏收起时自动展开——用户要在右侧栏看到执行 SQL）
     pub fn set_exec_sql(&mut self, sql: Option<String>, cx: &mut Context<Self>) {
         self.exec_sql = sql;
@@ -2034,6 +2108,31 @@ pub(crate) enum PanelViewItem {
     LayoutToggle,
     /// 面板最大化（≈ `CMD_TOGGLE_MAXIMIZE`：收起结果网格，让面板占满结果集区域）
     MaximizeToggle,
+}
+
+/// 【筛选设置 · 存档】换进来一份结果时要不要套用存档（纯函数，投影路径读）。
+///
+/// 四条判据同时成立才套，任一条不成立就原样不动：
+/// 1. 存档里的筛选词**非空**——空存档等于「没有筛选可恢复」。DBeaver 同口径：
+///    `ResultSetUtils.restoreDataFilter:174-189` 只在 `dataFilter.hasFilters()` 时返回；
+/// 2. 存档记了它属于哪条 SQL，且非空（本仓按 SQL 收窄，见 [`SavedFilterSetting::sql`]）；
+/// 3. 当前这份结果的 SQL 与存档一致——换了一条查询就别套别人的筛选；
+/// 4. 当前**还没有**筛选词——用户手写的词优先，不能被存档顶掉。
+pub(crate) fn saved_filter_applies(
+    saved: &SavedFilterSetting,
+    result_sql: Option<&str>,
+    current_filter: &str,
+) -> bool {
+    if saved.filter.trim().is_empty() || saved.sql.trim().is_empty() {
+        return false;
+    }
+    if !current_filter.trim().is_empty() {
+        return false;
+    }
+    let Some(sql) = result_sql else {
+        return false;
+    };
+    sql.trim() == saved.sql.trim()
 }
 
 /// 右栏六页的**规范顺序**（页签条的左右顺序 / 索引映射 / 视图菜单条目共用一份）。

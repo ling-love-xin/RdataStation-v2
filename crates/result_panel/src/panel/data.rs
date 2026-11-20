@@ -49,6 +49,36 @@ use workbench_shell::result_style::TypeStylePrefs;
 /// 本仓只保最近 8 条——筛选词通常很短，8 条已覆盖「回到上一个筛选口径」这类真实用法。
 pub(crate) const FILTER_HISTORY_LIMIT: usize = 8;
 
+/// 【筛选设置 · 存档】用户显式「保存过滤器设置」记下的那一份筛选。
+///
+/// 对齐 DBeaver `DataFilterRegistry.SavedDataFilter`（`DataFilterRegistry.java:182-251`）：
+/// 那边一整份存的是 `constraints`（逐列的可见 / 顺序 / 冻结 / 筛选值）+ `where` + `order`。
+/// 本仓的逐列部分已有独立通道（`column_order` / `column_widths` / `column_hidden` /
+/// `column_frozen`，都是**随会话自动存**），所以这里只补 DBeaver 那份里本仓缺的两样
+/// ——**筛选词（where）与自定义排序（order）**——外加「这份存档属于哪份结果」的键。
+///
+/// 语义差别要记住：列布局是自动存，这一份是**用户点了「保存过滤器设置」才存**
+/// （DBeaver 同款：`isDirty()` 才写，否则把旧键删掉，`DataFilterRegistry.java:273-288`）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SavedFilterSetting {
+    /// 存档时那份结果的 SQL：只有重新载入**同一条 SQL** 的结果时才套用。
+    ///
+    /// 口径比 DBeaver 窄：它按表对象路径存（`makeObjectId` 拼
+    /// `catalog@@/@@schema@@/@@table`，`DataFilterRegistry.java:310-318`），
+    /// 任何查这张表的语句都会套上；本仓按 SQL 收窄，避免把 A 查询的筛选串到 B 查询。
+    pub sql: String,
+    /// 筛选词（对应 DBeaver 的 `SavedDataFilter.getWhere()`；空 = 存档里没有筛选）
+    pub filter: String,
+    /// 自定义排序（对应 `SavedDataFilter.getOrder()`；空 = 沿用原查询的 ORDER BY）
+    pub order: String,
+    /// 存档时的来源表（`None` = 结果没有唯一来源表，如多表 join / 计算列）。
+    ///
+    /// DBeaver 只在 `viewer.getDataContainer() instanceof DBSEntity` 时才摆「保存/重置」
+    /// （`ResultSetFilterPanel.java:1565-1570`）；本仓没有 `DBSEntity` 这一层，
+    /// 用「有没有唯一来源表」等价表达——空着也允许存（用户按本仓口径仍能记住筛选）。
+    pub table: Option<String>,
+}
+
 /// 一次投影里交到网格的数据（列 / 行 / 类型 / 来源表 / 字段注释；`set_data` 之后
 /// 的类型与注释要紧接着设——`set_data` 会清空它们，见 [`crate::grid`] 实现）
 #[derive(Debug, Clone)]
@@ -423,4 +453,12 @@ pub struct ResultPanel {
     pub(crate) filter_order: String,
     /// 浮层当前页签（默认「列约束」——DBeaver 对话框先建列页并选中它）
     pub(crate) filter_settings_tab: FilterSettingsTab,
+    /// 【筛选设置 · 存档】用户显式「保存过滤器设置」留下的那一份（`None` = 没存过 /
+    /// 刚重置）。面板级内存：本批不落盘，跨会话通道见 `docs/architecture/editor/result-panel.md`
+    /// 的下一批登记项。
+    pub(crate) saved_filter: Option<SavedFilterSetting>,
+    /// 【筛选设置 · 存档】待回填筛选输入框的词：`sync` 套用存档时写在这里，由宿主在
+    /// 窗口可用时转手调 [`Self::sync_filter_input`]（回填需要 `&mut Window`，`sync` 没有）。
+    /// 真值不等它——`sync` 里已经把词写进 `filter_text` 并应用过了。
+    pub(crate) filter_backfill: Option<String>,
 }
