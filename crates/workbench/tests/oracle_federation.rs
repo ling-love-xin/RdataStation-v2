@@ -94,6 +94,8 @@ fn an_oracle_record_joins_the_federation() {
     let options = || RunOptions {
         use_transaction: false,
         lineage: None,
+        // 探针只跑 SELECT：不是「写确认」的对象（老调用方口径）
+        dml_confirmed: false,
     };
 
     // ① 一条 SQL 同时读两边：MySQL 源（catalog）× Oracle 源（scanner 表函数）

@@ -26,7 +26,7 @@ impl QueryRunner for DmlRunner {
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,
-        sql: &str,
+        _sql: &str,
         options: crate::execution::RunOptions,
     ) -> Result<QueryData, String> {
         self.options.lock().expect("锁").push(options);

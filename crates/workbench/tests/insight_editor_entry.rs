@@ -132,6 +132,8 @@ fn the_editor_entry_re_samples_on_the_active_connection(cx: &mut TestAppContext)
         use_cache: false,
         schema: None,
         lineage: None,
+        // 探针只跑 SELECT：不是「写确认」的对象（老调用方口径）
+        dml_confirmed: false,
     };
     let run = |conn_id: &str, sql: String| {
         let service = SqlService::new(manager.clone());

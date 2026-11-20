@@ -94,6 +94,8 @@ fn opts() -> SqlExecuteOptions {
         use_cache: false,
         schema: None,
         lineage: None,
+        // 探针只跑 SELECT：不是「写确认」的对象（老调用方口径）
+        dml_confirmed: false,
     }
 }
 

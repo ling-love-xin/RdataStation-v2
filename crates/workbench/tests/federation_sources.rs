@@ -115,6 +115,8 @@ fn marked_connections_become_federated_sources() {
             RunOptions {
                 use_transaction: false,
                 lineage: None,
+                // 探针只跑 SELECT：不是「写确认」的对象（老调用方口径）
+                dml_confirmed: false,
             },
         )
         .expect("跨源查询该成功");
@@ -158,6 +160,7 @@ fn marked_connections_become_federated_sources() {
             RunOptions {
                 use_transaction: false,
                 lineage: None,
+                dml_confirmed: false,
             },
         )
         .expect("换主源后该照常能查");
@@ -199,6 +202,7 @@ fn marked_connections_become_federated_sources() {
             RunOptions {
                 use_transaction: false,
                 lineage: None,
+                dml_confirmed: false,
             },
         )
         .expect_err("只剩一个源该拒");

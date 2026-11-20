@@ -355,6 +355,15 @@ impl EditorHostPanel {
         let Some(pending) = self.pending_dml_confirm.take() else {
             return false;
         };
+        // 挂起态里存着确认时的事实：点「执行」这一刻把它写进日志，
+        // 事后可与引擎侧审计（`confirm_required` / 真执行两条）对上号
+        tracing::info!(
+            target = "rds_editor::exec",
+            doc = %self.document,
+            environment = %pending.detail.environment,
+            statement = pending.detail.statement,
+            "写确认通过：带 dml_confirmed 重新提交"
+        );
         self.submit_target_with(
             pending.target,
             pending.placement,

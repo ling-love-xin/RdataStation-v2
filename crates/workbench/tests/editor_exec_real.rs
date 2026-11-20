@@ -521,6 +521,8 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
             RunOptions {
                 use_transaction: true,
                 lineage: None,
+                // INSERT 不是「写确认」的对象（只有 UPDATE / DELETE 走那条），老调用方口径
+                dml_confirmed: false,
             },
         );
         assert!(
@@ -549,6 +551,7 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
             RunOptions {
                 use_transaction: true,
                 lineage: None,
+                dml_confirmed: false,
             },
         );
         assert!(
@@ -654,7 +657,7 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
         // B10：执行计划 —— 权威来源是**源库自己的 EXPLAIN**，前缀按方言生成
         // （SQLite 是 `EXPLAIN QUERY PLAN`；裸 EXPLAIN 给的是 VM 指令，对用户没意义）
         let plan_sql = engine::sql::explain_sql(
-            editor::format::dialect_of(&target.driver),
+            editor::format::dialect_of(target.driver),
             &format!("SELECT n FROM {affected_table}"),
         )
         .unwrap_or_else(|| panic!("{}：内置驱动都该能生成执行计划", target.driver));
