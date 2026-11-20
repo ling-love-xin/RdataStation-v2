@@ -1169,10 +1169,10 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 `editor-result-filter-expand` / `-find-toggle` / `-pushdown` / `-show-comments` / `-compare`
 （`selected` 与 `toggled` 用同一个布尔，样式走主题 selected token）。
 - 用例 `toolbar_check_buttons_flip_their_panel_state`：四颗探针在 + 点击入队对应「开」请求。
-- **在册未做**：侧栏同类（`editor-result-bar-grid/text/record`、`editor-result-edge-*`、
-  `editor-result-edge-vertical-layout`）、`editor-result-stat-mode`、`editor-result-group-sort`
-  / `-group-dup`、`grid/edit.rs` 布尔选择器——同属 CHECK/RADIO 语义、同样只有 `toggled`，
-  下一批统一铺开。
+- **在册未做 → 已在 §9.24 铺完**：侧栏同类（`editor-result-bar-grid/text/record`、
+  `editor-result-edge-*`、`editor-result-edge-vertical-layout`）、`editor-result-stat-mode`、
+  `editor-result-group-dup`、`grid/edit.rs` 布尔选择器共 12 处，同一份改法补齐
+  （`crates/result_panel/src` 内 19 处 `.toggled(` 已全部配 `.selected(`，脚本核对 0 缺）。
 - 选中色 / 对比度属目视验收（用户口径：目视后面统一处理）。
 
 ### 2.52 筛选条「状态历史」后退 / 前进（2026-11-18 已实现主体）

@@ -6351,17 +6351,43 @@ a11y 上是「按下」，画面上是普通 ghost 按钮，「开着还是关�
 样式沿用主题的 selected token ⇒ 无裸色值 / 裸 px，ui-guard 口径不变；
 具体选中色与对比度属**目视验收项**（用户在册「目视部分后面统一处理」）。
 
-**登记未做**：侧栏（左缘竖条展示组 `editor-result-bar-grid/text/record`、右缘页签
-`editor-result-edge-*`、布局方向 `editor-result-edge-vertical-layout`）、统计页
-`editor-result-stat-mode`、分组页 `editor-result-group-sort` / `-group-dup`、
-布尔格内选择器（`grid/edit.rs` 的 true/false）同属 CHECK/RADIO 语义、同样只调了
-`toggled`——留下一批统一处理（同一份机械改法，先看工具栏批的效果再铺开）。
+**登记未做 → 已在 §9.24 铺完**：侧栏（左缘竖条展示组 `editor-result-bar-grid/text/record`、
+右缘页签 `editor-result-edge-*`、布局方向 `editor-result-edge-vertical-layout`）、统计页
+`editor-result-stat-mode`、分组页 `editor-result-group-dup`、布尔格内选择器
+（`grid/edit.rs` 的 true/false）同属 CHECK/RADIO 语义、本批时仍只调了 `toggled`，
+下一批已统一补齐。
 
 **验证**：`panel::tests::toolbar_check_buttons_flip_their_panel_state`（窗口）——
 四颗探针都在；点列注释 / 下发源库 / 筛选展开分别入队
 `SetShowColumnComments{open:true}` / `SetPushdown{open:true}` / `ToggleFilterExpand`。
 
 **门禁**：result_panel **367 passed**（+1）、editor check 零 warning、editor
+**798 passed**（1 ignored）。ui-guard 仍红于外部文件（同上）。
+
+### 9.24 侧栏 / 统计页 / 布尔格的 CHECK·RADIO 按下态（2026-11-20）
+
+§9.23 那批只覆盖工具栏五颗；本批把同一缺口按「凡 CHECK / RADIO 语义」铺完，
+共 12 处（`selected` 与 `toggled` 用同一布尔）：
+
+| 位置 | 探针 | DBeaver 对应 |
+|---|---|---|
+| 左缘竖条展示组（RADIO） | `editor-result-bar-grid` / `-bar-text` / `-bar-record` | `VerticalButton(SWT.LEFT\|SWT.RADIO)`，`ResultSetViewer.java:948-965` |
+| 文本视图头部（RADIO「文本」档常亮） | `editor-result-text-head-text` | 同族 RADIO |
+| 右缘竖条总开关（CHECK） | `editor-result-edge-panels` | `VerticalButton(SWT.CHECK)`，`:1038-1056`（checkbox 态 = 面板可见） |
+| 右缘竖条逐页（CHECK） | `editor-result-edge-{tab}` | `:1055-1080`（勾选态 = `panelsVisible && isPanelVisible`） |
+| 布局方向（CHECK） | `editor-result-edge-vertical-layout` | `:1082-1083`（`CMD_TOGGLE_LAYOUT`） |
+| 状态栏左 / 右栏开关 | `editor-result-left-sidebar-toggle` / `-right-sidebar-toggle` | 本仓三态循环（「有内容 / 只有图标条」都算按下） |
+| 统计页口径 | `editor-result-stat-mode` | `TYPE_STRING` CHECK（文本档高亮） |
+| 分组页「仅重复」 | `editor-result-group-dup` | `controls_resultset_grouping_show_duplicates_only` |
+| 布尔格内二选一（RADIO） | `grid/edit.rs` 的 true / false | 布尔编辑器 |
+
+**全局核对**：`crates/result_panel/src` 内共 19 处 `.toggled(`，逐处配对 `.selected(`
+（脚本核对 0 缺）。样式仍走主题 selected token，无裸色值 / 裸 px。
+
+**验证**：纯样式补丁（不改任何业务分支），靠 `cargo check --lib --tests` 零 warning
+＋ result_panel **367 passed** 全绿回归；按下态的实际色值与对比度属**目视验收项**。
+
+**门禁**：result_panel **367 passed**、editor check 零 warning、editor
 **798 passed**（1 ignored）。ui-guard 仍红于外部文件（同上）。
 
 ## 8. 协作纪律
