@@ -6197,10 +6197,13 @@ restoreOverlaySettings:149-157     只持久化 interactiveFilterDisabled（**�
 1. `grid/delegate.rs`：新增 `find_filter: Option<String>`，**与 `filter` 分字段存**——
    `filter` 是筛选框的权威值（用户设的，跟着结果集走），`find_filter` 只是查找栏的临时态，
    撤销时绝不能回头动 `filter`（否则用户筛的词会被查找栏清掉）。
+   （§9.22 起该字段升为 `Option<FindFilter{needle, criteria}>`，多带一份三口径。）
 2. `grid/view_rows.rs`：`rebuild_view_rows` 早退条件加 `find_filter.is_none()`；
    底层行与本地行各接一层（`find_filter_matches` / `local_find_filter_matches`，
    口径复用全局筛选的 `row_matches` / `local_row_matches`：所有列、大小写不敏感子串）；
    `set_find_filter` 一次做完归一化（trim + 小写、空 → `None`、同值不重建）。
+   （§9.22 起只 trim（正则不能小写化），大小写交给 `FindCriteria`；上面两个
+   `*_matches` 辅助函数也并成了复用一个 `FindMatcher` 的版本。）
 3. `TextFingerprint` 补该字段：两个**不同的**词可能凑出同样的行数，只看 `view_len`
    会把文本视图缓存当成命中（内容型变更的显式失效兜不住这条）。
 4. 面板态 `find_filter_only` + `set_find_filter_only` / `push_find_filter`；
@@ -6219,13 +6222,14 @@ restoreOverlaySettings:149-157     只持久化 interactiveFilterDisabled（**�
 - 交互形态：DBeaver 是「边敲边过滤」（250ms 去抖 `scheduleFilter`，job 在跑时退避到 500），
   本仓是「勾选框 + 词变即同步」——没有独立 job/去抖，好处是行集合与词**永远不会错位**，
   代价是大结果集逐键重算（与筛选框同档，走 `rebuild_view_rows` 的 O(行数) 扫描）。
-- 大小写 / 正则 / 全词三个选项、替换栏（DBeaver 对结果集无落点）、额外 info 行、
-  `interactiveFilterDisabled` 落盘——均在册未做。
+- 大小写 / 正则 / 全词三个选项**已在 §9.22 落地**；替换栏（DBeaver 对结果集无落点）、
+  额外 info 行、`interactiveFilterDisabled` 落盘——均在册未做。
 
 **验证**：
 
 - `panel::tests::find_filter_narrows_rows_and_stacks_with_the_other_filters`——归一化、
-  与列级筛选 / 全局筛词的双重交集、撤销后行数与筛词不变、空白词等同关闭、同词幂等。
+  与列级筛选 / 全局筛词的双重交集、撤销后行数与筛词不变、空白词等同关闭、同词幂等
+  （§9.22 起断言改为「只 trim」并补一条「换大小写不改变行集合」）。
 - `panel::tests::closing_the_find_bar_drops_the_matching_filter_but_keeps_the_query`——
   勾上 → delegate 拿到词 + 网格只剩命中行 + 命中数按**格**重算；关栏 → 撤销、行回来、
   筛词与查找词都不动。
@@ -6234,6 +6238,87 @@ restoreOverlaySettings:149-157     只持久化 interactiveFilterDisabled（**�
 
 **门禁**：result_panel **364 passed**（+3）、editor check 通过、editor **798 passed**（1 ignored）。
 ui-guard 仍红，归因外部（并行线未跟踪 `crates/workbench/src/unlock.rs` 的裸 px，见 §9.17 末段）。
+
+### 9.22 查找栏三口径开关（大小写 / 正则 / 全词，2026-11-20）
+
+**竞品取证**——`FindReplaceOverlay` 的 `searchTools` 里三颗都是 `SWT.CHECK`：
+
+```text
+createRegexSearchButton:726      ToolItem(SWT.CHECK) 图标 UIIcon.FIND_REPLACE_MATCH_REGEX
+                                 tooltip find_and_replace_regex_tooltip
+                                 handleSelected: setQuickFilterInfo(...) + updateIncrementalSearch()
+createCaseSensitiveButton:740    ToolItem(SWT.CHECK) 图标 UIIcon.FIND_REPLACE_MATCH_CASE
+createWholeWordsButton:751       ToolItem(SWT.CHECK) 图标 UIIcon.FIND_REPLACE_MATCH_WORD
+                                 勾正则后 setEnabled(info.isAvailable(WHOLE_WORD))
+applyQuickFilter:225-242         new SearchQuickFilterInfo(text, caseSensitive, regex, wholeWord)
+```
+
+口径本体在 `SearchQuickFilterInfo.java:24-93`：
+
+```text
+:29-31   flags = caseSensitive ? 0 : CASE_INSENSITIVE | UNICODE_CASE
+:33-35   regex = useRegex ? text : Pattern.quote(text)
+:47-58   wholeWord：首字符是字母数字 → 前置 \b；末字符是字母数字 → 后置 \b
+:93      matcher.find()（子串语义，不是整行匹配）
+```
+
+非法正则：`applyQuickFilter` 无 try/catch ⇒ `Pattern.compile` 抛
+`PatternSyntaxException`，被 job 的异常处理吞掉（用户看到的是「没有结果」而不是弹框）。
+
+**本批改法**（上一批 §9.21 只做了「仅显示匹配行」，查找词一律 `trim + 小写` + 大小写不敏感子串）：
+
+1. `ports.rs`：新增 `pub struct FindCriteria{case_sensitive, regex, whole_word}`（默认三 false）
+   与 `pub enum FindOption{CaseSensitive, Regex, WholeWord}`（`ALL` = 正则 → 大小写 → 全词，
+   顺序同 `searchTools`；`id()` / `label()` / `tooltip()` / `get()` / `set()`）。
+   **类型放 ports 而不是 `grid::text`**：`grid` 的 `text` / `view_rows` / `delegate` 都是
+   `pub(crate) mod`，公开方法签名里出现 pub(crate) 类型会触发 private-interface 警告。
+2. `grid/text.rs`：新增 `pub(crate) struct FindMatcher` —— `needle`（trim 后原样、不小写化，
+   否则正则里 `[A-Z]` / `\D` 会失真）、`needle_lower`（仅纯子串大小写不敏感分支用）、
+   `compiled`（仅正则 / 全词编译一次，失败为 `None` → 恒不命中）。
+   `find_in` 返回 `Option<Option<Range>>`（外层「是否命中」、内层「能否给格内区间」）；
+   `find_next` / `find_prev` / `count_find_matches` 签名统一补 `criteria`。
+3. `grid/delegate.rs`：`find_filter` 从 `Option<String>` 升为 `Option<FindFilter{needle, criteria}>`
+   ——改口径也算「变了」，要重排视图行序。
+4. `grid/view_rows.rs`：`set_find_filter(needle, criteria)` 只 `trim`（**不再小写化**）；
+   `rebuild_view_rows` 建**一次** matcher 供全表复用（`row_matches_find` /
+   `local_row_matches_find`）；**不过滤空 cell**（`a*` 这类正则在空串上应命中，
+   DBeaver 的判据就是 `matcher.find()`）；`TextFingerprint.find_filter` 类型随之变。
+5. 面板：`find_criteria` 字段（生命周期默认三 false）、`set_find_option(option, on)` ——
+   改口径 → 清光标 → 过滤开着则按新口径重推（`push_find_filter`）、否则重算命中数 →
+   有命中就跳到第一处；`count_find_hits` 抽出为命中数的唯一算法（面板显示 / 定位共用）；
+   `find_step` 的 `find_next` / `find_prev` 补传口径。
+6. 渲染：三颗 `Button` 插在输入框之后、`selectAllButton`（「仅显示匹配」）之前。
+   本仓没有 `FIND_REPLACE_MATCH_REGEX/_CASE/_WORD` 图标名 → 用惯用视觉记号
+   `.*` / `Aa` / `W` 作 label。选中态用 `Selectable::selected`（0.9.0 里 `toggled`
+   只写 a11y，样式必须走 `Selectable`）+ `toggled` 出 a11y；勾正则时全词那颗
+   `disabled`（`isAvailable(WHOLE_WORD)` 的同构）。
+7. 端口 `ResultRequest::SetFindOption(FindOption, bool)` + editor `dispatch` 分派。
+
+**联动**：勾正则时把 `whole_word` 一并清 false（与 DBeaver 禁用全词同义——否则 `\b`
+会被包进用户正则里再按正则解释，语义打架）。
+
+**登记差异（未改）**：
+
+- 非法正则：本仓「编译失败 = 零命中」，DBeaver 是抛异常后被 job 吞掉（现象一致，路径不同）。
+- 三颗开关**不落盘**（DBeaver 也不持久化，随 dialog settings 之外的会话态走）。
+- 图标：本仓缺三颗图标，用文字记号代替（目视阶段再补）。
+- 去抖（250ms / job 在跑时 500ms）与额外 info 行仍未做（见 §9.21）。
+
+**验证**：
+
+- `panel::tests::find_criteria_case_regex_whole_word_narrow_the_filter`（纯函数）——
+  默认大小写不敏感 2 行 / 区分大小写 1 行；未勾正则时 `^al` 按字面 0 行 / 勾上 2 行；
+  全词 `gam` 0 行 / `gamma` 1 行；非法正则 `[` 零命中且 `find_next` 无位置。
+- `panel::tests::find_bar_criteria_buttons_queue_their_option`（窗口）——
+  三颗探针（`editor-result-find-regex-wrap` / `-case-wrap` / `-word-wrap`）都在；
+  点 `Aa` 入队 `SetFindOption(CaseSensitive, true)`；先勾全词再勾正则 →
+  `(regex, whole_word) == (true, false)`。
+- §9.21 的两个用例随口径升级改写：`find_filter` 断言从 `Some("alpha")`（小写化后）
+  改为 `Some("ALPHA")`（只 trim），"同词幂等"改为"换大小写不改变行集合"。
+
+**门禁**：result_panel **366 passed**（+2）、editor check 零 warning、editor
+**798 passed**（1 ignored）。ui-guard 仍红，归因外部（并行线未跟踪
+`crates/workbench/src/unlock.rs` 的裸 px，见 §9.17 末段）。
 
 ## 8. 协作纪律
 

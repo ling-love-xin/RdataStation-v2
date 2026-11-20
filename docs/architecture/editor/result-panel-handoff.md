@@ -1126,6 +1126,27 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   `closing_the_find_bar_drops_the_matching_filter_but_keeps_the_query` /
   `find_bar_only_matching_checkbox_queues_the_toggle`；panel **364**。
 
+**2026-11-20 更新（三口径开关，全文见 `result-panel.md §9.22`）**：补齐 DBeaver
+`FindReplaceOverlay` 行内那三颗 `SWT.CHECK`（`createRegexSearchButton:726` /
+`createCaseSensitiveButton:740` / `createWholeWordsButton:751`）。接手要点：
+
+- 口径本体 = `ports::FindCriteria{case_sensitive, regex, whole_word}`（**放 ports**，
+  因为 `grid::text` / `view_rows` / `delegate` 都是 `pub(crate) mod`，公开签名里用会触发
+  private-interface 警告）；按钮枚举 = `ports::FindOption`（`ALL` 顺序 = 正则 → 大小写 → 全词）。
+- 匹配归一 `grid::text::FindMatcher`：词只 `trim`（**不小写化**，否则 `[A-Z]` / `\D` 失真）；
+  非正则 + 非全词走既有零分配子串快路径，其余编译一次复用；编译失败（非法正则）= 零命中。
+- `delegate.find_filter` 从 `Option<String>` 升为 `Option<FindFilter{needle, criteria}>`
+  ——改口径也算「变了」，要重排视图行序；`rebuild_view_rows` 建一次 matcher 全表复用。
+- 面板 `find_criteria` + `set_find_option`（改口径 → 清光标 → 过滤开着重推 / 否则重算命中
+  → 有命中跳到第一处）；`count_find_hits` 是命中数的唯一算法；`find_step` 补传口径。
+- 渲染三颗 `Button`（`.*` / `Aa` / `W`，本仓没有 `FIND_REPLACE_MATCH_*` 图标名），
+  选中态必须用 `Selectable::selected`（0.9.0 的 `toggled` 只写 a11y）；勾正则时全词 disabled
+  且被清 false。端口 `ResultRequest::SetFindOption(FindOption, bool)`。
+- 差异：非法正则路径不同（本仓零命中 / DBeaver 抛 `PatternSyntaxException` 后被 job 吞）；
+  三颗开关**不落盘**；图标目视阶段再补；替换栏 / 250ms 去抖 / info 行仍在册。
+- 验证：`find_criteria_case_regex_whole_word_narrow_the_filter` /
+  `find_bar_criteria_buttons_queue_their_option`；panel **366**（+2）、editor **798**。
+
 ### 2.51 工具栏 / 侧栏结构对齐第一批（2026-11-18）
 
 全文见 `result-panel.md §8.62`（已做）+ `§8.63`（待拍板）。接手要点：
