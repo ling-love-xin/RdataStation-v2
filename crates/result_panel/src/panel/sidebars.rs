@@ -9,6 +9,7 @@ use gpui_kit::base::StyledExt as _;
 /// 挂在 gpui 元素树上——render 无需 `&mut App`；id 变化即重启，故用 epoch 区分每次
 /// 开合，与 vendor sidebar 组件同款机制）。
 use gpui_kit::base::animation::{EffectTransition, ease_in_out_cubic};
+use gpui_kit::component::Selectable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Textarea;
 use gpui_kit::component::list::List;
@@ -71,6 +72,9 @@ impl ResultPanel {
                         Button::new("editor-result-text-head-text")
                             .ghost()
                             .small()
+                            // RADIO 语义（DBeaver 走 `SWT.RADIO` 的展示组）：按下态要看得见，
+                            // 0.9.0 的 `toggled` 只写 a11y，样式必须走 `Selectable::selected`
+                            .selected(true)
                             .toggled(true)
                             .label("文本"),
                     ),
@@ -110,6 +114,7 @@ impl ResultPanel {
             .small()
             .icon(IconName::Table2)
             .debug_selector(|| "editor-result-bar-grid".to_string())
+            .selected(!self.transposed && !is_text)
             .toggled(!self.transposed && !is_text)
             .tooltip(presentation_tooltip(Presentation::Grid))
             .on_click(move |_, _window, app| {
@@ -121,6 +126,7 @@ impl ResultPanel {
             .small()
             .icon(IconName::FileText)
             .debug_selector(|| "editor-result-bar-text".to_string())
+            .selected(is_text)
             .toggled(is_text)
             .tooltip(presentation_tooltip(Presentation::Text))
             .on_click(move |_, _window, app| {
@@ -136,6 +142,7 @@ impl ResultPanel {
             .icon(IconName::Form)
             .debug_selector(|| "editor-result-bar-record".to_string())
             .disabled(is_text)
+            .selected(self.transposed)
             .toggled(self.transposed)
             .tooltip(record_view_tooltip(self.transposed))
             .on_click(move |_, _window, app| {
@@ -714,6 +721,7 @@ impl ResultPanel {
                     .ghost()
                     .small()
                     .debug_selector(|| "editor-result-edge-panels".to_string())
+                    .selected(panels_visible)
                     .toggled(panels_visible)
                     .icon(if panels_visible {
                         IconName::PanelRight
@@ -743,6 +751,7 @@ impl ResultPanel {
                     .ghost()
                     .small()
                     .debug_selector(|| format!("editor-result-edge-{:?}", tab))
+                    .selected(lit)
                     .toggled(lit)
                     .icon(right_tab_icon(tab))
                     .tooltip(edge_tab_tooltip(tab, is_open, panels_visible))
@@ -754,13 +763,14 @@ impl ResultPanel {
             // 【R5 布局方向切换】DBeaver 把 toggleLayout 挂在这条竖条**底部**
             // （`ResultSetViewer.java:1082-1083`：先塞一个 1×1 `FILL_VERTICAL` 空标签把按钮
             // 推到最下方，再 `VerticalButton.create(..., CMD_TOGGLE_LAYOUT, false)`）。
-            // 本仓用 `flex_1()` 间隔块同法；按钮沿用 `toggled` 表达「当前是否竖排」。
+            // 本仓用 `flex_1()` 间隔块同法；按钮沿用 `selected` + `toggled` 表达「当前是否竖排」。
             .child(div().flex_1())
             .child(
                 Button::new("editor-result-edge-vertical-layout")
                     .ghost()
                     .small()
                     .debug_selector(|| "editor-result-edge-vertical-layout".to_string())
+                    .selected(self.vertical_layout)
                     .toggled(self.vertical_layout)
                     .icon(IconName::RotateCcw)
                     .tooltip(if self.vertical_layout {

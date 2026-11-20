@@ -4,6 +4,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
+use gpui_kit::component::Selectable as _;
 use gpui_kit::component::list::ListItem;
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
@@ -968,6 +969,7 @@ impl ResultPanel {
                 .xsmall()
                 .debug_selector(|| "editor-result-stat-mode".to_string())
                 .label(if text_mode { "字符串" } else { "数值" })
+                .selected(text_mode)
                 .toggled(text_mode)
                 .tooltip("聚合口径：数值时最小/最大值按数值比较；字符串时按字典序（文本列也给极值）")
                 .on_click(move |_, _window, app| {
@@ -1215,6 +1217,7 @@ impl ResultPanel {
                 .xsmall()
                 .debug_selector(|| "editor-result-group-dup".to_string())
                 .label("仅重复")
+                .selected(duplicates_on)
                 .toggled(duplicates_on)
                 // DBeaver `controls_resultset_grouping_show_duplicates_only`
                 // = "Show duplicates only (COUNT > 1)"

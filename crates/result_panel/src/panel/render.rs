@@ -1130,6 +1130,7 @@ impl ResultPanel {
                 .ghost()
                 .small()
                 .debug_selector(|| "editor-result-left-sidebar-toggle".to_string())
+                .selected(self.show_left_sidebar)
                 .toggled(self.show_left_sidebar)
                 .icon(if self.show_left_sidebar {
                     IconName::PanelLeft
@@ -1161,6 +1162,8 @@ impl ResultPanel {
                 .ghost()
                 .small()
                 .debug_selector(|| "editor-result-right-sidebar-toggle".to_string())
+                // 三态循环里「栏有内容 / 只有图标条」都算按下（收起态不亮）
+                .selected(toggled)
                 .toggled(toggled)
                 .icon(icon)
                 .tooltip(tooltip)

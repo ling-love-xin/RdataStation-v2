@@ -2,6 +2,7 @@
 //! `cancel_edit` / 编辑框渲染）+ 提交值类型校验。
 
 use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Selectable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::date_picker::{DatePicker, DatePickerState};
 use gpui_kit::component::Sizable as _;
@@ -276,6 +277,8 @@ impl ResultGridDelegate {
             )))
             .label("true")
             .ghost()
+            // RADIO 语义（布尔格的二选一）：当前值是 true 时这颗要显示按下态
+            .selected(is_true)
             .toggled(is_true)
             .on_click({
                 let table = table.clone();
@@ -291,6 +294,7 @@ impl ResultGridDelegate {
             )))
             .label("false")
             .ghost()
+            .selected(is_false)
             .toggled(is_false)
             .on_click({
                 let table = table.clone();
