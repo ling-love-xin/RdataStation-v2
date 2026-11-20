@@ -112,7 +112,10 @@ mod tests {
         assert_eq!(parse_pack_id(Some("rds")), None);
         assert_eq!(parse_pack_id(Some("RDS")), None);
         assert_eq!(parse_pack_id(Some("default")), None);
-        assert_eq!(parse_pack_id(Some(" qinghua ")), Some("qinghua".to_string()));
+        assert_eq!(
+            parse_pack_id(Some(" qinghua ")),
+            Some("qinghua".to_string())
+        );
         // 挡掉目录穿越：包 id 会直接当目录名用。
         assert_eq!(parse_pack_id(Some("../x")), None);
         assert_eq!(parse_pack_id(Some("a/b")), None);
@@ -123,15 +126,18 @@ mod tests {
     fn every_shipped_pack_loads() {
         let root = packs_root();
         let mut packs = 0;
-        let entries = std::fs::read_dir(&root)
-            .unwrap_or_else(|e| panic!("读不到 {}: {e}", root.display()));
+        let entries =
+            std::fs::read_dir(&root).unwrap_or_else(|e| panic!("读不到 {}: {e}", root.display()));
         for entry in entries.flatten() {
             let dir = entry.path();
             if !dir.is_dir() {
                 continue;
             }
             let id = dir.file_name().unwrap().to_string_lossy().to_string();
-            let pack = ThemePack { id: id.clone(), dir: dir.clone() };
+            let pack = ThemePack {
+                id: id.clone(),
+                dir: dir.clone(),
+            };
             let (light, dark) = pack
                 .load_pair()
                 .unwrap_or_else(|e| panic!("包 {id} 载入失败: {e}"));
@@ -157,8 +163,8 @@ mod tests {
             let pt = pack.product_tokens_file();
             assert!(pt.exists(), "包 {id} 缺 product-tokens.json");
             let pt_raw = std::fs::read_to_string(&pt).unwrap();
-            let file: settings::product_tokens::ProductTokenFile =
-                serde_json::from_str(&pt_raw).unwrap_or_else(|e| panic!("包 {id} 产品 token 解析失败: {e}"));
+            let file: settings::product_tokens::ProductTokenFile = serde_json::from_str(&pt_raw)
+                .unwrap_or_else(|e| panic!("包 {id} 产品 token 解析失败: {e}"));
             for (mode, map) in [("light", &file.light), ("dark", &file.dark)] {
                 let defined = [
                     map.activity_bar_background.is_some(),

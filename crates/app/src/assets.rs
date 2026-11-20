@@ -215,11 +215,9 @@ mod tests {
             "品牌包未命中 → 交给内置源；内置也没这张 → Err（名字写错能在日志里看见）"
         );
         // 换资产源不能影响既有图标：内置图标照常可读
-        assert!(
-            AppAssets
-                .load("icons/database.svg")
-                .expect("内置可读")
-                .is_some()
-        );
+        assert!(AppAssets
+            .load("icons/database.svg")
+            .expect("内置可读")
+            .is_some());
     }
 }
