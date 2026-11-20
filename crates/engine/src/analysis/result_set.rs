@@ -38,6 +38,10 @@ pub fn list_result_sets() -> Result<Vec<String>, CoreError> {
 /// 与 [`list_result_sets`] 同一个取数面（进程单例 + 按前缀查 `information_schema`），
 /// 区别只在来源前缀：`tmp_q_` 是查询结果、`tmp_i_` 是洞察样本（联邦取样搬回来的也在
 /// 这一档）。把这条列出来的意义：**二次产物还能再分析**——样本表不是终点。
+///
+/// Mock（`tmp_m_`）与插件（`tmp_p_`）产物**不在这里列**（2026-11-18 口径）：mock 的
+/// 下游是草稿箱 / 外部目录 / 资产归档，插件产物归插件——它们不是分析链路的输入对象。
+/// 需要列时用 `DuckDBManager::in_memory_temp_tables(Mock | Plugin)`（原语已在）。
 pub fn list_insight_samples() -> Result<Vec<String>, CoreError> {
     let conn = DuckDbService::get_or_create_duckdb()?;
     let guard = conn
@@ -79,7 +83,9 @@ fn invalid(message: String) -> CoreError {
 
 #[cfg(test)]
 mod tests {
-    use super::{list_insight_samples, list_result_sets, materialize_rows, open_for_result_set};
+    use super::{
+        list_insight_samples, list_result_sets, materialize_rows, open_for_result_set,
+    };
 
     #[test]
     fn materialized_result_set_is_a_registered_tmp_q_table() {

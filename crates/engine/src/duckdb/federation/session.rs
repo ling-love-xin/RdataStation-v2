@@ -41,7 +41,9 @@ use once_cell::sync::Lazy;
 use shared::error::CoreError;
 use shared::models::QueryResult;
 
-use super::super::accel::{AccelKind, mount_lock, run_sql_on, scrub_credentials};
+use super::super::accel::{
+    AccelKind, MountedTable, list_mounted_tables, mount_lock, run_sql_on, scrub_credentials,
+};
 use super::super::manager::DuckDBManager;
 use super::registry::{FederatedSource, MountState, MountedSource, SessionSnapshot};
 
@@ -277,6 +279,29 @@ impl FederatedSession {
             Some(reason) => Err(reason),
             None => Ok(()),
         }
+    }
+
+    /// 列出某个挂载源里的表 / 视图（数据对象面板「源行展开」的数据）
+    ///
+    /// 会查这条会话的连接（**事件路径**，不是渲染路径）。别名不在会话里、或那个源
+    /// 挂载失败时如实报错——面板叶子行要的是清单，不是一句“算了吧”。
+    pub fn list_tables(&self, alias: &str) -> Result<Vec<MountedTable>, String> {
+        let (ready, kind) = {
+            let mounted = self
+                .mounted
+                .lock()
+                .map_err(|_| "会话状态锁被污染".to_string())?;
+            let entry = mounted
+                .iter()
+                .find(|entry| entry.alias() == alias)
+                .ok_or_else(|| format!("会话里没有源 {alias}"))?;
+            (entry.is_ready(), entry.source.kind)
+        };
+        if !ready {
+            return Err(format!("源 {alias} 当前不可用，列不出表清单"));
+        }
+        let conn = self.lock().map_err(|error| error.to_string())?;
+        list_mounted_tables(&conn, alias, kind)
     }
 
     /// 会话快照（**界面读这个**：纯内存，渲染路径可调）
@@ -693,6 +718,16 @@ pub fn refresh_all(owner: &str) -> Result<Vec<(String, Result<(), String>)>, Str
         .collect())
 }
 
+/// 列出某条会话里某个源的表 / 视图（数据对象面板「源行展开」用）
+///
+/// 面板只知道 `(owner, alias)`（它从 [`owners`] 的快照里拿到的就是这两样），
+/// 这里替它找会话；没有会话如实报错——**不替用户建一条**，那是执行路径的事。
+pub fn list_tables_for(owner: &str, alias: &str) -> Result<Vec<MountedTable>, String> {
+    let session =
+        session_for(owner).ok_or_else(|| "还没有联邦会话：先执行一次再展开源".to_string())?;
+    session.list_tables(alias)
+}
+
 /// **列出当前进程所有存活会话**（owner + 快照），按 owner 排序。
 ///
 /// 给「会话面板」用：面板不知道 owner 是谁也能把会话看全（`snapshot_for` 要先知道 owner，
@@ -752,6 +787,29 @@ mod tests {
         // 重名再挂要被挡下（与 open 同口径）
         let again = file_source(&dir, "c.csv", "src_b", 1);
         assert!(session.add_source(again).is_err(), "重名应被拒");
+    }
+
+    /// 数据对象面板「源行展开」：列出挂载源里的表，限定名粘进 SQL 要真能查
+    #[test]
+    fn listing_tables_of_a_mounted_source_gives_copiable_names() {
+        let dir = workdir("list_tables");
+        let source = file_source(&dir, "alpha", "alpha", 2);
+        let session = FederatedSession::open(&[source], None).expect("建会话");
+
+        let tables = session.list_tables("alpha").expect("列源里的表");
+        let items = tables.iter().find(|t| t.name == "items").expect("有 items 表");
+        assert!(!items.is_view);
+        // duckdb 文件源是三段名（两段名只有 L2 源，见 AccelKind::two_segment_names）
+        assert_eq!(items.schema, "main");
+        assert!(items.qualified.contains("alpha"), "{}", items.qualified);
+        let result = session
+            .run(&format!("SELECT count(*) AS n FROM {}", items.qualified))
+            .expect("限定名可查");
+        assert_eq!(result.to_rows()[0][0].to_string(), "2");
+
+        // 别名不在会话里：如实报错（界面据此说「为什么展不开」）
+        assert!(session.list_tables("nope").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1012,10 +1070,10 @@ mod tests {
         let alpha = file_source(&dir, "alpha", "alpha", 1);
         let beta = file_source(&dir, "beta", "beta", 1);
 
-        let one = super::source_fingerprint(&[alpha.clone()]);
+        let one = super::source_fingerprint(std::slice::from_ref(&alpha));
         assert_eq!(
             one,
-            super::source_fingerprint(&[alpha.clone()]),
+            super::source_fingerprint(std::slice::from_ref(&alpha)),
             "同样输入同指纹"
         );
         assert_ne!(

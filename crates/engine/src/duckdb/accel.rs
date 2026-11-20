@@ -181,6 +181,15 @@ impl AccelKind {
         matches!(self, Self::Oracle)
     }
 
+    /// 限定名是**两段**（`别名.表`）还是**三段**（`别名.schema.表`）
+    ///
+    /// 真机台账（架构 §2.1）：Oracle 的 scanner 把表挂进 `main`，引用写两段；
+    /// 其余源三段（DuckDB 对三段名永远合法）。数据对象面板的「复制限定名」按这个
+    /// 分支——**判据只有这一处**，UI 不各自猜。
+    pub fn two_segment_names(self) -> bool {
+        matches!(self, Self::Oracle)
+    }
+
     /// 这个种类能不能做**本地加速**（不能则给出原因：菜单行尾要显示的就是这句）
     ///
     /// 本地加速是“一条源一条连接、连接串直接进 `ATTACH`”：L2（Oracle）的凭据得先建成会话级
@@ -339,6 +348,9 @@ pub(crate) fn scrub_credentials(connection_string: &str, text: &str) -> String {
 pub struct AccelSession {
     conn: Mutex<Connection>,
     kind: AccelKind,
+    /// 源连接 id（与会话表的键同源）：存一份让会话**自己知道自己挂的是谁**，
+    /// [`owners`] 枚举时不依赖调用方再拿键去对
+    conn_id: String,
     /// 挂载语句（`refresh` 用同一份口径重建；**里面有凭据**，只在本进程里用）
     source_attach: String,
     /// 源连接串（脱敏用：错误文本要把里面的口令抹掉才能离开引擎）
@@ -523,9 +535,7 @@ pub fn ensure_session(source: &AccelSource) -> Result<Arc<AccelSession>, String>
     super::manager::DuckDBManager::configure_connection(&conn)
         .map_err(|error| format!("配置本地分析连接失败：{error}"))?;
 
-    if let Err(reason) = ensure_extension(&conn, source.kind) {
-        return Err(reason);
-    }
+    ensure_extension(&conn, source.kind)?;
 
     let attach = source.attach_sql();
     run_attach_steps(&conn, &attach)
@@ -539,6 +549,7 @@ pub fn ensure_session(source: &AccelSource) -> Result<Arc<AccelSession>, String>
         interrupt: conn.interrupt_handle(),
         conn: Mutex::new(conn),
         kind: source.kind,
+        conn_id: source.conn_id.clone(),
         source_attach: attach,
         connection_string: source.connection_string.clone(),
         running: std::sync::atomic::AtomicBool::new(false),
@@ -596,9 +607,138 @@ fn run_attach_steps(conn: &Connection, attach_sql: &str) -> Result<(), CoreError
     Ok(())
 }
 
+/// 挂载源里的一张表 / 视图（数据对象面板「源行展开」的叶子数据）
+///
+/// `qualified` 是**可直接粘进 SQL 的限定名**：按源种类给三段（`别名.schema.表`）或
+/// 两段（`别名.表`，判据 [`AccelKind::two_segment_names`]）——命名规则只有这一处，
+/// 界面不重复拼。标识符含特殊字符时加双引号（DuckDB 的转义规则）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MountedTable {
+    pub schema: String,
+    pub name: String,
+    pub is_view: bool,
+    /// 限定名（写 SQL 用；面板叶子的「复制」就是它）
+    pub qualified: String,
+}
+
+/// 列出一条 DuckDB 连接里某个挂载别名下的表 / 视图（按 schema、名字排序）
+///
+/// 过滤口径与联邦的 `count_tables` 同一份（`duckdb_tables()` / `duckdb_views()` 按别名），
+/// 加速档与联邦档共用这一实现——两处各写一遍迟早给出不一样的清单。
+/// 表与视图同名时**保表**（DuckDB 里同 schema 同名本就不可能，这里是防外源元数据抖动）。
+pub(crate) fn list_mounted_tables(
+    conn: &Connection,
+    alias: &str,
+    kind: AccelKind,
+) -> Result<Vec<MountedTable>, String> {
+    let qualified_of = |schema: &str, name: &str| -> String {
+        let alias_part = quote_ident(alias);
+        if kind.two_segment_names() {
+            // L2：表挂进 main，引用写两段（真机台账）；schema 名不进限定名
+            format!("{alias_part}.{}", quote_ident(name))
+        } else {
+            format!(
+                "{alias_part}.{}.{}",
+                quote_ident(schema),
+                quote_ident(name)
+            )
+        }
+    };
+
+    let mut out: Vec<MountedTable> = Vec::new();
+    let mut stmt = conn
+        .prepare(
+            "SELECT schema_name, table_name FROM duckdb_tables() \
+             WHERE database_name = ? ORDER BY schema_name, table_name",
+        )
+        .map_err(|error| format!("列源 {alias} 的表失败：{error}"))?;
+    let mut rows = stmt
+        .query([alias])
+        .map_err(|error| format!("列源 {alias} 的表失败：{error}"))?;
+    while let Some(row) = rows.next().map_err(|error| error.to_string())? {
+        let (schema, name) = (
+            row.get::<_, String>(0).map_err(|error| error.to_string())?,
+            row.get::<_, String>(1).map_err(|error| error.to_string())?,
+        );
+        let qualified = qualified_of(&schema, &name);
+        out.push(MountedTable {
+            schema,
+            name,
+            is_view: false,
+            qualified,
+        });
+    }
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT schema_name, view_name FROM duckdb_views() \
+             WHERE database_name = ? ORDER BY schema_name, view_name",
+        )
+        .map_err(|error| format!("列源 {alias} 的视图失败：{error}"))?;
+    let mut rows = stmt
+        .query([alias])
+        .map_err(|error| format!("列源 {alias} 的视图失败：{error}"))?;
+    while let Some(row) = rows.next().map_err(|error| error.to_string())? {
+        let (schema, name) = (
+            row.get::<_, String>(0).map_err(|error| error.to_string())?,
+            row.get::<_, String>(1).map_err(|error| error.to_string())?,
+        );
+        // 同名去重：表优先（正常不会发生，防外源元数据把同名报两遍）
+        if out
+            .iter()
+            .any(|entry| entry.schema == schema && entry.name == name)
+        {
+            continue;
+        }
+        let qualified = qualified_of(&schema, &name);
+        out.push(MountedTable {
+            schema,
+            name,
+            is_view: true,
+            qualified,
+        });
+    }
+    Ok(out)
+}
+
+/// 标识符转双引号形式（含 `"` 的加转义；普通名也加，DuckDB 一律认）
+fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
 /// 已建立的会话（不做 I/O）
 pub fn session_for(conn_id: &str) -> Option<Arc<AccelSession>> {
     SESSIONS.lock().ok()?.get(conn_id).cloned()
+}
+
+/// **列出当前进程全部加速会话**（owner = 源连接 id），按 id 排序
+///
+/// 给数据对象面板用（联邦侧的 `owners()` 对应物）：面板不知道哪些连接被加速档用过，
+/// 从这里拿全。**纯内存读**，渲染路径可调；返回的是拷贝，不持会话句柄。
+pub fn owners() -> Vec<(String, AccelKind)> {
+    let Ok(sessions) = SESSIONS.lock() else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, AccelKind)> = sessions
+        .values()
+        .map(|session| (session.conn_id.clone(), session.kind))
+        .collect();
+    // 只按 conn_id 排（它是键，天然唯一；AccelKind 不参与排序语义）
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// 列出某个加速会话里源库的表 / 视图（面板「源行展开」用；没有会话如实报错）
+///
+/// 会查那条专用连接（**事件路径**）。加速档的默认 catalog 已 `USE` 到源库别名上，
+/// 但这里仍按别名过滤——清单口径与联邦侧一字不差。
+pub fn list_tables_for(conn_id: &str) -> Result<Vec<MountedTable>, String> {
+    let session = session_for(conn_id)
+        .ok_or_else(|| format!("连接 {conn_id} 还没有本地加速会话：先在该连接上执行一次"))?;
+    let conn = session
+        .lock()
+        .map_err(|error| format!("加速会话连接锁被污染：{error}"))?;
+    list_mounted_tables(&conn, SOURCE_ALIAS, session.kind)
 }
 
 /// 放掉某个源的会话（测试 / 连接被删时用）
@@ -649,7 +789,7 @@ mod tests {
     // 安全模式：**不通配导入**
     use super::{
         AccelKind, AccelSource, SOURCE_ALIAS, drop_all, drop_session, ensure_session,
-        extension_state, normalize_file_path,
+        extension_state, list_tables_for, normalize_file_path, owners, session_for,
     };
     use duckdb::Connection;
     use std::sync::Arc;
@@ -769,6 +909,46 @@ mod tests {
         );
         assert!(drop_session("C_session"), "会话被放掉");
         assert!(!drop_session("C_session"), "再放一次就没有了");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 数据对象面板用：`owners()` 能枚举存活会话，`list_tables_for` 给出可粘贴的限定名
+    #[test]
+    fn owners_enumerate_sessions_and_tables_list_with_qualified_names() {
+        drop_all();
+        let dir = temp_dir("owners");
+        let path = source_file(&dir, 2);
+        let source = AccelSource {
+            conn_id: "C_owners".to_string(),
+            kind: AccelKind::DuckDb,
+            connection_string: path.to_string_lossy().to_string(),
+        };
+        ensure_session(&source).expect("建会话");
+
+        let owners = owners();
+        assert!(
+            owners.contains(&("C_owners".to_string(), AccelKind::DuckDb)),
+            "枚举里要有这条会话：{owners:?}"
+        );
+
+        let tables = list_tables_for("C_owners").expect("列源里的表");
+        let orders = tables.iter().find(|t| t.name == "orders").expect("有 orders 表");
+        assert!(!orders.is_view);
+        // 限定名按挂载别名给三段（DuckDB 文件源不是两段名），粘进 SQL 要真能查
+        assert!(
+            orders.qualified.starts_with(&format!("\"{SOURCE_ALIAS}\".")),
+            "限定名应带挂载别名：{}",
+            orders.qualified
+        );
+        let session = session_for("C_owners").expect("会话还在");
+        let result = session
+            .run(&format!("SELECT count(*) AS n FROM {}", orders.qualified))
+            .expect("限定名可查");
+        assert_eq!(result.to_rows()[0][0].to_string(), "2");
+
+        // 没有会话的连接：如实报错（面板据此给「为什么展不开」）
+        assert!(list_tables_for("C_nope").is_err());
+        drop_all();
         let _ = std::fs::remove_dir_all(dir);
     }
 
