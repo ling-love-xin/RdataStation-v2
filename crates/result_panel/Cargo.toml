@@ -24,6 +24,10 @@ tracing.workspace = true
 # 结果导出写文件 / DuckDB 直灌（B7：TSV/JSON/CSV/SQL Updates/Parquet/XLSX）
 serde_json.workspace = true
 
+# 结果内查找的「正则 / 全词」口径（对齐 DBeaver `SearchQuickFilterInfo`：
+# 它把非正则的词 `Pattern.quote` 后统一交给 regex 引擎，全词靠 `\b`）
+regex.workspace = true
+
 [dev-dependencies]
 # 测试构建的数据根自动隔离（不写产品目录；见 data-paths.md §5）
 paths = { workspace = true, features = ["test-support"] }

@@ -257,6 +257,7 @@ impl ResultPanel {
             find_hits: 0,
             find_at: None,
             find_filter_only: false,
+            find_criteria: crate::ports::FindCriteria::default(),
             // 【筛选设置】浮层默认关闭、排序草稿为空（空 = 沿用原查询 ORDER BY）
             filter_settings_open: false,
             filter_order_input,

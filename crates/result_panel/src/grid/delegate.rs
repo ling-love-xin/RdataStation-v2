@@ -117,6 +117,18 @@ pub type ColumnStatsHook = Rc<dyn Fn(String, String, &mut App)>;
 /// 网格不持本地行真值，动作意图打包成 [`crate::ports::ResultRequest`] 经钩子入队，
 /// 宿主在权威 store 槽位落地叠加层变更。
 pub type RowActionHook = Rc<dyn Fn(crate::ports::ResultRequest, &mut App)>;
+
+/// 【结果内查找】查找过滤的完整口径：词 + 三开关（对齐 DBeaver 的
+/// `SearchQuickFilterInfo(text, caseSensitive, useRegex, wholeWord)`）。
+///
+/// 词存 `trim` 后的**原样**，不小写化——正则模式下小写化会破坏 `[A-Z]` / `\D`
+/// 这类写法；小写副本在建 [`super::text::FindMatcher`] 时按需生成。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FindFilter {
+    pub(crate) needle: String,
+    pub(crate) criteria: crate::ports::FindCriteria,
+}
+
 /// 网格数据（表头 + 行）
 #[derive(Default)]
 pub struct ResultGridDelegate {
@@ -165,16 +177,16 @@ pub struct ResultGridDelegate {
     /// 【筛选】列级筛选（`(数据列, 值)`；本地包含匹配，与全局 `filter` 叠加取交集）。
     /// 独立于全局筛选词：列头菜单的「按值筛选此列」走它，清空也不动筛选框。
     pub(crate) column_filter: Option<(usize, String)>,
-    /// 【结果内查找】「只显示匹配行」的临时过滤词（已归一为小写、非空）。
+    /// 【结果内查找】「只显示匹配行」的临时过滤（词 + 三开关，词已 `trim`）。
     ///
     /// 与 `filter` **不是同一个东西**：`filter` 是筛选框的权威值（用户显式设的，会跟着
     /// 结果集走），这里是查找栏「Show matching」开关的临时态——关掉查找栏就撤掉，
     /// 绝不能回头去动 `filter`（否则用户筛的词会被查找栏清掉）。
     /// 对齐 DBeaver 的 `SearchQuickFilterInfo`：`ResultsetFindReplaceOverlay` 把它灌进
     /// `model.setQuickFilter`，`onClose`/取消勾选时 `applyFilterAction(null)` 撤回。
-    /// 口径与 `filter` 一致（所有列、大小写不敏感子串），三层筛选（全局 / 列级 / 查找）
-    /// 叠加取交集。
-    pub(crate) find_filter: Option<String>,
+    /// 口径与查找定位同一份实现（[`super::text::FindMatcher`]），三层筛选
+    /// （全局 / 列级 / 查找）叠加取交集。
+    pub(crate) find_filter: Option<FindFilter>,
     /// 【B15】本地排序（列下标按**数据列**算，`0` = 第一数据列；`None` = 原顺序）
     pub(crate) sort: Option<(usize, bool /* 降序 */)>,
     /// 【文本视图】TSV 缓存：指纹命中直接复用，避免大结果集每次渲染全量重拼

@@ -77,6 +77,9 @@ pub enum ResultRequest {
     /// 纯视图态，不落盘——DBeaver 只把「交互过滤是否启用」写进 dialog settings，
     /// 勾选本身不持久化。
     SetFindFilterOnly(bool),
+    /// 【结果内查找】三颗口径开关之一（大小写 / 正则 / 全词，DBeaver `FindReplaceOverlay`
+    /// 的三颗 `SWT.CHECK`）。改口径会同时影响定位与「只显示匹配行」的过滤。
+    SetFindOption(FindOption, bool),
     /// 【右缘竖条】面板总开关（DBeaver 竖条顶部那颗 `panelsButton`，CHECK 态 =
     /// 面板可见；`ResultSetViewer.java:1038-1056`）。关 = 整条收起。
     SetPanelsVisible(bool),
@@ -560,6 +563,83 @@ impl StatsMode {
         match self {
             Self::Numeric => Self::Text,
             Self::Text => Self::Numeric,
+        }
+    }
+}
+
+/// 【结果内查找】匹配口径：DBeaver `SearchQuickFilterInfo` 的三个布尔开关
+/// （`caseSensitive` / `useRegex` / `wholeWord`，`SearchQuickFilterInfo.java:29-31`）。
+///
+/// 查找栏上就是那三颗 `SWT.CHECK`（`FindReplaceOverlay.createCaseSensitiveButton:740` /
+/// `createRegexSearchButton:726` / `createWholeWordsButton:751`），面板态一直持着它，
+/// 定位（`find_next` / `find_prev` / `count_find_matches`）与「只显示匹配行」的过滤
+/// 都吃同一份口径 —— 也就是 DBeaver 把同一个 `SearchQuickFilterInfo` 既喂给
+/// `setQuickFilter` 又喂给 findAll 的形态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FindCriteria {
+    /// 区分大小写（不勾时等价 `CASE_INSENSITIVE | UNICODE_CASE`）
+    pub case_sensitive: bool,
+    /// 查找词按正则解释（不勾时按字面比较，等价 `Pattern.quote`）
+    pub regex: bool,
+    /// 全词匹配（DBeaver：只在词首 / 词尾**是字母数字**时补 `\b`，`:47-58`）
+    pub whole_word: bool,
+}
+
+/// 【结果内查找】三颗口径开关本身（端口 / 按钮表用）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FindOption {
+    CaseSensitive,
+    Regex,
+    WholeWord,
+}
+
+impl FindOption {
+    /// 工具栏 / 查找栏按这个顺序摆（DBeaver 的 searchTools 顺序：正则 → 大小写 → 全词）
+    pub const ALL: [Self; 3] = [Self::Regex, Self::CaseSensitive, Self::WholeWord];
+
+    /// 探针 id（与按钮一一对应，测试与文档用同一份命名）
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::CaseSensitive => "editor-result-find-case",
+            Self::Regex => "editor-result-find-regex",
+            Self::WholeWord => "editor-result-find-word",
+        }
+    }
+
+    /// 按钮上的字面（DBeaver 用图标 `FIND_REPLACE_MATCH_CASE` / `_REGEX` / `_WORD`，
+    /// 本仓没有对应图标名 → 用它们的视觉语义「Aa」/「.*」/「W」表达）
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::CaseSensitive => "Aa",
+            Self::Regex => ".*",
+            Self::WholeWord => "W",
+        }
+    }
+
+    /// 悬停说明
+    pub fn tooltip(self) -> &'static str {
+        match self {
+            Self::CaseSensitive => "区分大小写",
+            Self::Regex => "按正则表达式解释查找词",
+            Self::WholeWord => "全词匹配（不命中单词的一部分）",
+        }
+    }
+
+    /// 这条口径在给定口径里是否勾上
+    pub fn get(self, criteria: FindCriteria) -> bool {
+        match self {
+            Self::CaseSensitive => criteria.case_sensitive,
+            Self::Regex => criteria.regex,
+            Self::WholeWord => criteria.whole_word,
+        }
+    }
+
+    /// 就地改这条口径
+    pub fn set(self, criteria: &mut FindCriteria, on: bool) {
+        match self {
+            Self::CaseSensitive => criteria.case_sensitive = on,
+            Self::Regex => criteria.regex = on,
+            Self::WholeWord => criteria.whole_word = on,
         }
     }
 }

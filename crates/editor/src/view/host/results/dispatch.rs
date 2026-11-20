@@ -65,6 +65,10 @@ impl EditorHostPanel {
             ResultRequest::SetFindFilterOnly(on) => self
                 .result_panel
                 .update(cx, |p, cx| p.set_find_filter_only(on, cx)),
+            // 【结果内查找】三颗口径开关（大小写 / 正则 / 全词）
+            ResultRequest::SetFindOption(option, on) => self
+                .result_panel
+                .update(cx, |p, cx| p.set_find_option(option, on, cx)),
             // 【状态历史】浏览器式后退 / 前进（DBeaver `navigateHistory`，
             // `ResultSetViewer.java:4050-4063`：按该状态**重跑数据泵**）。
             // 面板只给「目标下标 + 该状态 SQL」，重查走与「筛选框运行」同一条通道

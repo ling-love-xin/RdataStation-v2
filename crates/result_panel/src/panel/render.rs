@@ -5,6 +5,7 @@ use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Sizable as _;
+use gpui_kit::component::Selectable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, Textarea};
@@ -23,7 +24,7 @@ use super::events::{
 use crate::error_card::{self};
 use crate::export;
 use crate::grid::{self as result_grid, ResultToolbar};
-use crate::ports::{PageTarget, Presentation, ResultRequest};
+use crate::ports::{FindOption, PageTarget, Presentation, ResultRequest};
 use crate::script_card::{self};
 use crate::sets::{self as result_sets};
 use crate::ui;
@@ -1443,20 +1444,21 @@ impl ResultPanel {
             .into_any_element()
     }
 
-    /// 【结果内查找】查找栏：查找词输入框 + 「N 个匹配」+ 上一处 / 下一处 / 关闭。
+    /// 【结果内查找】查找栏：查找词输入框 + 三口径开关 + 「N 个匹配」+ 上一处 /
+    /// 下一处 / 关闭。
     ///
     /// 对齐 DBeaver：结果集的查找是 `ResultsetFindReplaceOverlay`（浮层，
     /// `ResultsetFindReplaceOverlay.java:47`），带 Prev / Next 与命中数
     /// （`SpreadsheetFindReplaceTarget`）；入口是筛选条上的 CHECK 型
-    /// `openFindReplaceButton`（`ResultSetFilterPanel.java:356`）。
+    /// `openFindReplaceButton`（`ResultSetFilterPanel.java:356`）；行内三颗口径开关是
+    /// `FindReplaceOverlay` 的 Regex / Case / WholeWord 三颗 `SWT.CHECK`。
     ///
     /// 本仓把「浮层」落成工具栏下方一行：浮层要绝对定位覆盖网格，会把网格行/列几何
     /// 与格内命中高亮一起绑进来；而「找出并选中该格」（`find_step` 用
     /// `set_selected_cell` + `scroll_to_row/col`）已经完成了读取那一半。
     ///
     /// 未做（在册）：替换（DBeaver 走 `SpreadsheetFindReplaceTarget.replaceSelection`
-    /// 改单元格值；本仓值编辑走「待提交」通道，批量替换另开一批）、正则 / 大小写 /
-    /// 全词三个选项、格内区间高亮。
+    /// 改单元格值；本仓值编辑走「待提交」通道，批量替换另开一批）、格内区间高亮。
     pub(crate) fn render_find_bar(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let prev_queue = self.queue.clone();
@@ -1498,6 +1500,45 @@ impl ResultPanel {
                             .xsmall()
                             .appearance(false),
                     ),
+            )
+            .child(
+                // 三颗口径开关：DBeaver `FindReplaceOverlay` 的 `createRegexSearchButton:726`
+                // / `createCaseSensitiveButton:740` / `createWholeWordsButton:751`（都是
+                // `SWT.CHECK`，摆在本行输入框之后、`selectAllButton` 之前）。本仓没有
+                // `FIND_REPLACE_MATCH_REGEX/_CASE/_WORD` 图标名 → 用它们惯用的视觉记号
+                // 「.*」/「Aa」/「W」作 label。勾正则时全词被禁用（`isAvailable`）。
+                div()
+                    .h_flex()
+                    .flex_none()
+                    .gap_1()
+                    .children({
+                        let criteria = self.find_criteria;
+                        FindOption::ALL.into_iter().map(move |option| {
+                            let queue = self.queue.clone();
+                            let on = option.get(criteria);
+                            let blocked = option == FindOption::WholeWord && criteria.regex;
+                            div()
+                                .flex_none()
+                                // `Button` 是 RenderOnce，自身 id 进不了 `debug_bounds`
+                                .debug_selector(move || format!("{}-wrap", option.id()))
+                                .child(
+                                    Button::new(option.id())
+                                        .ghost()
+                                        .xsmall()
+                                        .label(option.label())
+                                        .selected(on)
+                                        .toggled(on)
+                                        .disabled(blocked)
+                                        .tooltip(option.tooltip())
+                                        .on_click(move |_, _window, app| {
+                                            queue.request(
+                                                ResultRequest::SetFindOption(option, !on),
+                                                app,
+                                            );
+                                        }),
+                                )
+                        })
+                    }),
             )
             .child(
                 // 「只显示匹配行」：DBeaver 的 `selectAllButton`（SWT.CHECK，图标

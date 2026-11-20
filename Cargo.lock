@@ -8664,6 +8664,7 @@ dependencies = [
  "rds-paths",
  "rds-shared",
  "rds-workbench-shell",
+ "regex",
  "serde_json",
  "tracing",
 ]

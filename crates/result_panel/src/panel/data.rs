@@ -371,6 +371,11 @@ pub struct ResultPanel {
     /// 网格只留命中行；关掉查找栏 / 取消勾选 / 词清空时撤销。**不动筛选框的 `filter`**
     /// ——那是用户的词，撤查找过滤时必须原样还在。
     pub(crate) find_filter_only: bool,
+    /// 【结果内查找】匹配口径（大小写 / 正则 / 全词三开关；查找栏上三颗 CHECK）
+    ///
+    /// 定位与「只显示匹配行」共用这一份（DBeaver 的 `SearchQuickFilterInfo` 同款：
+    /// 同一个对象既喂 `setQuickFilter` 又喂 findAll）。
+    pub(crate) find_criteria: crate::ports::FindCriteria,
     /// 【B14】下发源库开关（开着时应用筛选会重查源库——重查经队列交回编辑器）
     pub(crate) pushdown: bool,
     /// 【C1】正在重命名哪个结果集 tab（`None` = 不在重命名态）；会话级

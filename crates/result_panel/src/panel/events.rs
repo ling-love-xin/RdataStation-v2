@@ -17,7 +17,9 @@ use crate::grid::cell::{
     ViewerMode, classify_value, hex_to_bytes, image_format_of, json_tree_items,
 };
 use crate::grid::{ResultGridDelegate, ResultStatus, ResultToolbar};
-use crate::ports::{GroupSort, Presentation, ResultRequest, RightTab, StatsItem, StatsMode};
+use crate::ports::{
+    FindOption, GroupSort, Presentation, ResultRequest, RightTab, StatsItem, StatsMode,
+};
 use crate::script_card::ScriptCard;
 use crate::sets::ResultSetTab;
 use crate::store::ColumnKind;
@@ -158,19 +160,54 @@ impl ResultPanel {
         self.push_find_filter(needle, cx);
     }
 
+    /// 三颗口径开关之一（大小写 / 正则 / 全词）
+    ///
+    /// 对齐 DBeaver `FindReplaceOverlay`：`createCaseSensitiveButton:740` /
+    /// `createRegexSearchButton:726` / `createWholeWordsButton:751` 都是 `SWT.CHECK`，
+    /// 点击后 `updateIncrementalSearch()` + `decorate()`——即**重算命中与高亮**，
+    /// 行过滤开着时也按新口径重筛（同一个 `SearchQuickFilterInfo`）。
+    pub fn set_find_option(&mut self, option: FindOption, on: bool, cx: &mut Context<Self>) {
+        if option.get(self.find_criteria) == on {
+            return;
+        }
+        option.set(&mut self.find_criteria, on);
+        // 对齐 DBeaver `FindReplaceOverlay.createRegexSearchButton` → 勾正则后
+        // `wholeWordSearchButton.setEnabled(info.isAvailable(WHOLE_WORD))`：正则与全词
+        // 互斥，勾正则时把全词一并取消（否则 `\b` 会包进正则里又按正则解释，语义打架）
+        if option == FindOption::Regex && on {
+            self.find_criteria.whole_word = false;
+        }
+        // 口径变了：旧的光标可能已经不是命中了，清掉重新定位
+        self.find_at = None;
+        if self.find_filter_only {
+            // 过滤开着 → 按新口径重推（内部会重算命中数并 notify）
+            self.push_find_filter(Some(self.find_query.clone()), cx);
+        } else {
+            self.find_hits = self.count_find_hits(cx);
+            cx.notify();
+        }
+        if self.find_hits > 0 {
+            self.find_step(true, cx);
+        }
+    }
+
+    /// 按当前词 + 当前口径重算命中数（面板与「N 个匹配」的唯一算法）
+    fn count_find_hits(&self, cx: &App) -> usize {
+        let delegate = self.grid.read(cx).delegate();
+        delegate.count_find_matches(&self.find_query, self.find_criteria)
+    }
+
     /// 把查找过滤词写进 delegate（`None` = 撤掉），并让视图重排
     fn push_find_filter(&mut self, needle: Option<String>, cx: &mut Context<Self>) {
+        let criteria = self.find_criteria;
         let grid = self.grid.clone();
         grid.update(cx, |state, cx| {
-            state.delegate_mut().set_find_filter(needle);
+            state.delegate_mut().set_find_filter(needle, criteria);
             state.refresh(cx);
         });
         // 行集合变了：旧的光标（视图行, 视图列）可能已经不在视图里，清掉重新定位
         self.find_at = None;
-        self.find_hits = {
-            let delegate = self.grid.read(cx).delegate();
-            delegate.count_find_matches(&self.find_query)
-        };
+        self.find_hits = self.count_find_hits(cx);
         cx.notify();
     }
 
@@ -181,17 +218,15 @@ impl ResultPanel {
         // 「只显示匹配行」开着时词变要跟着过滤（DBeaver 的边敲边过滤；本仓没有
         // 独立 job，直接跟随每次输入，行集合与词始终一致）
         if self.find_filter_only {
+            let criteria = self.find_criteria;
             let needle = Some(self.find_query.clone());
             let grid = self.grid.clone();
             grid.update(cx, |state, cx| {
-                state.delegate_mut().set_find_filter(needle);
+                state.delegate_mut().set_find_filter(needle, criteria);
                 state.refresh(cx);
             });
         }
-        self.find_hits = {
-            let delegate = self.grid.read(cx).delegate();
-            delegate.count_find_matches(&self.find_query)
-        };
+        self.find_hits = self.count_find_hits(cx);
         if self.find_hits > 0 {
             // 换词后从头找：先把光标当成「文档开头之前」再走一步
             self.find_step(true, cx);
@@ -218,9 +253,9 @@ impl ResultPanel {
             self.find_at
         };
         let hit = if forward {
-            delegate.find_next(&query, after)
+            delegate.find_next(&query, self.find_criteria, after)
         } else {
-            delegate.find_prev(&query, after)
+            delegate.find_prev(&query, self.find_criteria, after)
         };
         let Some(hit) = hit else {
             cx.notify();

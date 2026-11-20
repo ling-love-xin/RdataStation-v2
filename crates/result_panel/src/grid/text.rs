@@ -8,6 +8,7 @@ use super::delegate::ResultGridDelegate;
 use super::stats::{
     ColumnStats, column_stats_from_values, group_by_values, number_group_key, stats_from_fact,
 };
+use crate::ports::FindCriteria;
 use crate::rowset::RowRef;
 use crate::ui;
 use ::shared::FactKind;
@@ -60,20 +61,25 @@ impl ResultGridDelegate {
 
     /// 结果内查找：从 `after` **之后**找下一处命中，找完一圈回到开头（`None` = 整份结果里没有）
     ///
-    /// 口径与本地筛选**同一个实现**（[`find_in_cell`]）：大小写不敏感的子串；只看**看得见的行**
+    /// 口径由 [`FindMatcher`] 决定（默认 = 大小写不敏感子串，勾上「大小写 / 正则 / 全词」
+    /// 后随之变化，对齐 DBeaver `SearchQuickFilterInfo`）；只看**看得见的行**
     /// （筛选 / 排序之后的视图行序——找到看不见的行等于没找到）；`#` 行号槽不是数据，不参与。
     ///
-    /// `after = None` = 从第一格开始。区间只在与词**都是 ASCII** 时给出（折叠不改字节长度）；
-    /// 含非 ASCII 时是 `None`，宿主退化成**整格**高亮（`İ` → 两个字符，折叠后的字节偏移在原文里
-    /// 不是合法边界，格内高亮的区间映射要单独设计，不在本切片）。
+    /// `after = None` = 从第一格开始。区间：纯子串分支只在格与词**都是 ASCII** 时给出；
+    /// 正则 / 全词分支由 regex 引擎给出合法字符边界的字节区间。
     ///
     /// 为什么是纯读：查找**不改任何状态**——选中哪一格、要不要滚过去、要不要画高亮都是宿主的
     /// 决定（宿主才知道焦点与滚动句柄）。这里只回答“下一处在哪”。
-    pub fn find_next(&self, needle: &str, after: Option<(usize, usize)>) -> Option<ResultMatch> {
-        let needle = needle.trim().to_lowercase();
+    pub fn find_next(
+        &self,
+        needle: &str,
+        criteria: FindCriteria,
+        after: Option<(usize, usize)>,
+    ) -> Option<ResultMatch> {
+        let matcher = FindMatcher::new(criteria, needle);
         let columns = self.columns.len();
         let rows = self.view_len();
-        if needle.is_empty() || columns == 0 || rows == 0 {
+        if matcher.is_empty() || columns == 0 || rows == 0 {
             return None;
         }
         // 把（视图行, 列）当成一条带子上的格子：搜一圈就是一条不大不小的扫描
@@ -96,22 +102,22 @@ impl ResultGridDelegate {
             let Some(text) = self.row_cell_text(row, col) else {
                 continue;
             };
-            if let Some(range) = find_in_cell(text, &needle) {
+            if let Some(range) = matcher.find_in(text) {
                 return Some(ResultMatch { row, col, range });
             }
         }
         None
     }
 
-    /// 结果内查找的命中总数（口径与 [`Self::find_next`] 同一份：大小写不敏感子串、
+    /// 结果内查找的命中总数（口径与 [`Self::find_next`] 同一份匹配器、
     /// 只看看得见的行、`#` 槽不算、被删行不算）。
     ///
     /// 用途是查找栏上的「N 个匹配」——DBeaver 的查找浮层也显示命中数
     /// （`ResultsetFindReplaceOverlay` + `SpreadsheetFindReplaceTarget` 的 findAll）。
     /// 纯读：不算选中、不滚屏。
-    pub fn count_find_matches(&self, needle: &str) -> usize {
-        let needle = needle.trim().to_lowercase();
-        if needle.is_empty() {
+    pub fn count_find_matches(&self, needle: &str, criteria: FindCriteria) -> usize {
+        let matcher = FindMatcher::new(criteria, needle);
+        if matcher.is_empty() {
             return 0;
         }
         let columns = self.columns.len();
@@ -123,7 +129,7 @@ impl ResultGridDelegate {
             for col in 1..=columns {
                 if self
                     .row_cell_text(row, col)
-                    .is_some_and(|text| cell_matches(text, &needle))
+                    .is_some_and(|text| matcher.matches(text))
                 {
                     count += 1;
                 }
@@ -134,11 +140,16 @@ impl ResultGridDelegate {
 
     /// 结果内查找的**反向**走法：从 `before` 之前找上一处命中，到头回卷到最后
     /// （`None` = 整份结果里没有）。口径与 [`Self::find_next`] 完全对称。
-    pub fn find_prev(&self, needle: &str, before: Option<(usize, usize)>) -> Option<ResultMatch> {
-        let needle = needle.trim().to_lowercase();
+    pub fn find_prev(
+        &self,
+        needle: &str,
+        criteria: FindCriteria,
+        before: Option<(usize, usize)>,
+    ) -> Option<ResultMatch> {
+        let matcher = FindMatcher::new(criteria, needle);
         let columns = self.columns.len();
         let rows = self.view_len();
-        if needle.is_empty() || columns == 0 || rows == 0 {
+        if matcher.is_empty() || columns == 0 || rows == 0 {
             return None;
         }
         let per_row = columns + 1;
@@ -160,7 +171,7 @@ impl ResultGridDelegate {
             let Some(text) = self.row_cell_text(row, col) else {
                 continue;
             };
-            if let Some(range) = find_in_cell(text, &needle) {
+            if let Some(range) = matcher.find_in(text) {
                 return Some(ResultMatch { row, col, range });
             }
         }
@@ -557,3 +568,98 @@ pub(crate) fn find_in_cell(cell: &str, needle: &str) -> Option<Option<Range<usiz
 pub(crate) fn cell_matches(cell: &str, needle: &str) -> bool {
     find_in_cell(cell, needle).is_some()
 }
+
+/// 【结果内查找】一次性编译好的匹配器：同一个词 + 同一套口径在整轮扫描里只编译一次
+/// （`rebuild_view_rows` 要过全表，逐格编译正则会直接把 UI 拖死）。
+///
+/// 口径严格对齐 `SearchQuickFilterInfo`：非正则的词先 `escape`（= `Pattern.quote`），
+/// 全词再按首尾字符决定加不加 `\b`，最后 `is_match`（= `matcher.find()`，子串语义）。
+/// 纯子串（非正则、非全词）走既有的零分配快路径，与筛选框同一份实现。
+pub(crate) struct FindMatcher {
+    /// `trim` 后的原词（**不做小写化**：正则里 `[A-Z]`、`\D` 这类写法会因此失真）
+    needle: String,
+    /// 纯子串、大小写不敏感分支用的小写副本（预存一次，别在每格里 `to_lowercase`）
+    needle_lower: String,
+    criteria: FindCriteria,
+    /// 仅正则 / 全词模式需要；编译失败（非法正则）时为 `None` → 一律不命中
+    /// （DBeaver 那边 `Pattern.compile` 抛异常被 job 吞掉，本仓按「零命中」处理）
+    compiled: Option<regex::Regex>,
+}
+
+impl FindMatcher {
+    pub(crate) fn new(criteria: FindCriteria, needle: &str) -> Self {
+        let needle = needle.trim().to_string();
+        let needle_lower = if criteria.case_sensitive {
+            String::new()
+        } else {
+            needle.to_lowercase()
+        };
+        // 纯子串（不带正则 / 全词）不进 regex 引擎：筛选与查找都走零分配快路径
+        let compiled = if needle.is_empty() || (!criteria.regex && !criteria.whole_word) {
+            None
+        } else {
+            compile_find_pattern(&needle, criteria)
+        };
+        Self {
+            needle,
+            needle_lower,
+            criteria,
+            compiled,
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.needle.is_empty()
+    }
+
+    /// 这一格文本里的命中：`Some(Some(区间))` = 命中且给得出格内字节区间（用于高亮）；
+    /// `Some(None)` = 命中但给不出区间（只在极端非 ASCII 子串下出现）；
+    /// `None` = 没命中。
+    pub(crate) fn find_in(&self, cell: &str) -> Option<Option<Range<usize>>> {
+        if self.needle.is_empty() {
+            return None;
+        }
+        match &self.compiled {
+            // 正则 / 全词：regex 给出的区间一定落在字符边界上，可直接用于高亮
+            Some(pattern) => pattern.find(cell).map(|found| Some(found.range())),
+            // 纯子串：区分大小写时直接 `find`（字节区间天然准确，落在字符边界上）
+            None if self.criteria.case_sensitive => cell
+                .find(&self.needle)
+                .map(|at| Some(at..at + self.needle.len())),
+            // 纯子串、不区分大小写：与筛选框同一份实现（ASCII 零分配）
+            None => find_in_cell(cell, &self.needle_lower),
+        }
+    }
+
+    pub(crate) fn matches(&self, cell: &str) -> bool {
+        self.find_in(cell).is_some()
+    }
+}
+
+/// 按 `SearchQuickFilterInfo` 的口径拼出正则（`:44-59`）：
+/// `escape(词)`（或用户原词）→ 词首 / 词尾是字母数字时各补一个 `\b` → 大小写标志。
+fn compile_find_pattern(needle: &str, criteria: FindCriteria) -> Option<regex::Regex> {
+    let body = if criteria.regex {
+        needle.to_string()
+    } else {
+        regex::escape(needle)
+    };
+    let mut pattern = body;
+    if criteria.whole_word {
+        if needle.chars().next().is_some_and(|c| c.is_alphanumeric()) {
+            pattern = format!("\\b{pattern}");
+        }
+        if needle
+            .chars()
+            .last()
+            .is_some_and(|c| c.is_alphanumeric())
+        {
+            pattern = format!("{pattern}\\b");
+        }
+    }
+    regex::RegexBuilder::new(&pattern)
+        .case_insensitive(!criteria.case_sensitive)
+        .build()
+        .ok()
+}
+

@@ -11,7 +11,7 @@ use super::tabs::value_payload;
 use crate::column_browser::filter_browser_columns;
 use crate::grid::stats::ColumnStats;
 use super::tabs::arrange_groups;
-use crate::ports::{GroupSort, RightTab, StatsItem, StatsMode};
+use crate::ports::{FindCriteria, GroupSort, RightTab, StatsItem, StatsMode};
 use crate::store::ColumnKind;
 use gpui_kit::Pixels;
 use gpui_kit::px;
@@ -3347,14 +3347,15 @@ fn find_filter_narrows_rows_and_stacks_with_the_other_filters() {
     // 0) 没开：视图行序是恒等的（不物化映射，`view_rows = None`）
     assert_eq!(rows(&delegate), 4, "没有查找过滤时应看到全部四行");
 
-    // 1) 打开：归一化（去首尾空白 + 小写）+ 所有列大小写不敏感子串匹配
-    delegate.set_find_filter(Some("  ALPHA  ".to_string()));
+    // 1) 打开：只去首尾空白（大小写**不**归一；大小写不敏感靠匹配口径实现，
+    //    DBeaver 的 `SearchQuickFilterInfo` 也是拿原词配 `CASE_INSENSITIVE`）+ 所有列匹配
+    delegate.set_find_filter(Some("  ALPHA  ".to_string()), FindCriteria::default());
     assert_eq!(
         delegate.find_filter(),
-        Some("alpha"),
-        "过滤词应归一成小写、去空白（比较时不再二次处理）"
+        Some("ALPHA"),
+        "过滤词只 trim，不再小写化（大小写交给匹配口径）"
     );
-    assert_eq!(rows(&delegate), 2, "`alpha` 命中 Alpha 与 ALPHABET 两行");
+    assert_eq!(rows(&delegate), 2, "`ALPHA` 命中 Alpha 与 ALPHABET 两行");
 
     // 2) 与列级筛选叠加取交集：id 列 = `2` 的那行是 beta，不含 alpha → 0 行
     delegate.set_column_filter(Some((0, "2".to_string())));
@@ -3372,21 +3373,95 @@ fn find_filter_narrows_rows_and_stacks_with_the_other_filters() {
     delegate.set_filter("");
 
     // 4) 撤掉：回到全部四行（且筛选词仍为空，没被查找层写脏）
-    delegate.set_find_filter(None);
+    delegate.set_find_filter(None, FindCriteria::default());
     assert_eq!(delegate.find_filter(), None);
     assert_eq!(rows(&delegate), 4, "撤掉查找过滤后应回到全部四行");
     assert_eq!(delegate.filter(), "", "撤销后筛选框的词原样保留（空）");
 
     // 5) 空白词等同关闭（DBeaver：文本空即 `applyFilterAction(null)`）
-    delegate.set_find_filter(Some("   ".to_string()));
+    delegate.set_find_filter(Some("   ".to_string()), FindCriteria::default());
     assert_eq!(delegate.find_filter(), None, "全空白词应视为不过滤");
     assert_eq!(rows(&delegate), 4);
 
-    // 6) 幂等：同一个词再设一次不改变任何东西
-    delegate.set_find_filter(Some("alpha".to_string()));
+    // 6) 换词大小写：默认口径（大小写不敏感）下行集合不变
+    delegate.set_find_filter(Some("alpha".to_string()), FindCriteria::default());
     let before = rows(&delegate);
-    delegate.set_find_filter(Some("ALPHA".to_string()));
-    assert_eq!(rows(&delegate), before, "同词（归一后相同）再设应无变化");
+    delegate.set_find_filter(Some("ALPHA".to_string()), FindCriteria::default());
+    assert_eq!(rows(&delegate), before, "不区分大小写时换大小写不改变行集合");
+}
+
+/// 【结果内查找 2026-11-20 第 38 批】三口径（大小写 / 正则 / 全词）真的参与匹配：
+/// 对齐 DBeaver `SearchQuickFilterInfo.java:24-93`——
+/// `flags = caseSensitive ? 0 : CASE_INSENSITIVE|UNICODE_CASE`；
+/// `regex = useRegex ? text : Pattern.quote(text)`；
+/// `wholeWord` 只在词首 / 词尾**是字母数字**时补 `\b`（`:47-58`）；
+/// 匹配口径是 `matcher.find()`（子串），非法正则抛 `PatternSyntaxException`
+/// （本仓按「编译失败 = 零命中」登记差异）。
+#[test]
+fn find_criteria_case_regex_whole_word_narrow_the_filter() {
+    let mut delegate = crate::grid::ResultGridDelegate::default();
+    delegate.set_data(
+        vec!["id".to_string(), "name".to_string()],
+        vec![
+            vec!["1".to_string(), "Alpha".to_string()],
+            vec!["2".to_string(), "beta".to_string()],
+            vec!["3".to_string(), "gamma".to_string()],
+            vec!["4".to_string(), "ALPHABET".to_string()],
+        ],
+    );
+    let rows = |delegate: &crate::grid::ResultGridDelegate| delegate.view_total();
+    let plain = FindCriteria::default();
+
+    // 大小写：默认不敏感命中 2 行；勾上区分大小写只剩 1 行
+    delegate.set_find_filter(Some("alpha".to_string()), plain);
+    assert_eq!(rows(&delegate), 2, "默认大小写不敏感：Alpha / ALPHABET");
+    delegate.set_find_filter(
+        Some("Alpha".to_string()),
+        FindCriteria {
+            case_sensitive: true,
+            ..plain
+        },
+    );
+    assert_eq!(rows(&delegate), 1, "区分大小写：只剩 Alpha（ALPHABET 里没有带小写尾巴的串）");
+
+    // 正则：不勾时 `^al` 是字面量（没人含这个串）；勾上按锚点解释 → 2 行
+    delegate.set_find_filter(Some("^al".to_string()), FindCriteria { case_sensitive: true, ..plain });
+    assert_eq!(rows(&delegate), 0, "未勾正则时 `^al` 按字面比较");
+    delegate.set_find_filter(Some("^al".to_string()), FindCriteria { regex: true, ..plain });
+    assert_eq!(rows(&delegate), 2, "勾上正则 + 大小写不敏感：Alpha / ALPHABET");
+
+    // 全词：`gam` 不是 gamma 的全词（词尾还在字母里），`gamma` 才是
+    delegate.set_find_filter(
+        Some("gam".to_string()),
+        FindCriteria {
+            whole_word: true,
+            ..plain
+        },
+    );
+    assert_eq!(rows(&delegate), 0, "全词匹配不得命中单词的一部分");
+    delegate.set_find_filter(
+        Some("gamma".to_string()),
+        FindCriteria {
+            whole_word: true,
+            ..plain
+        },
+    );
+    assert_eq!(rows(&delegate), 1, "全词 gamma 命中 gamma 行");
+
+    // 非法正则：编译失败按零命中（DBeaver 那边是抛 `PatternSyntaxException`）
+    delegate.set_find_filter(
+        Some("[".to_string()),
+        FindCriteria {
+            regex: true,
+            ..plain
+        },
+    );
+    assert_eq!(rows(&delegate), 0, "非法正则按零命中处理");
+    assert_eq!(
+        delegate.find_next("[", FindCriteria { regex: true, ..plain }, None),
+        None,
+        "非法正则也不产出命中位置"
+    );
 }
 
 /// 【结果内查找 2026-11-20】面板层：勾「仅显示匹配」把词灌进视图行序；关查找栏
@@ -3475,6 +3550,74 @@ fn find_bar_only_matching_checkbox_queues_the_toggle(cx: &mut gpui_kit::TestAppC
         )),
         "勾选框应以「开启」入队：{queued:?}"
     );
+}
+
+/// 【结果内查找 2026-11-20 第 38 批】三颗口径按钮（Aa / .* / W）真的在查找栏里，
+/// 点第一颗入队 `SetFindOption(CaseSensitive, true)`；勾正则后全词那颗变灰
+/// （对齐 DBeaver `FindReplaceOverlay`：`createCaseSensitiveButton:740` 等三颗
+/// `SWT.CHECK`，勾正则时 `wholeWordSearchButton.setEnabled(info.isAvailable(WHOLE_WORD))`）。
+#[gpui_kit::test]
+fn find_bar_criteria_buttons_queue_their_option(cx: &mut gpui_kit::TestAppContext) {
+    use crate::ports::{FindOption, ResultRequest};
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|window, cx| panel.update(cx, |p, cx| p.toggle_find(window, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 三颗按钮都在（`Button` 是 RenderOnce，量外层探针 div）
+    for id in [
+        "editor-result-find-regex-wrap",
+        "editor-result-find-case-wrap",
+        "editor-result-find-word-wrap",
+    ] {
+        assert!(
+            cx.debug_bounds(id).is_some(),
+            "查找栏应有 {id} 口径按钮"
+        );
+    }
+
+    let wrap = cx
+        .debug_bounds("editor-result-find-case-wrap")
+        .expect("查找栏应有区分大小写按钮");
+    let point = gpui_kit::point(
+        wrap.origin.x + wrap.size.width / 2.,
+        wrap.origin.y + wrap.size.height / 2.,
+    );
+    cx.simulate_click(point, gpui_kit::Modifiers::default());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let queued = cx.update(|_, app| panel.read(app).queue.drain());
+    assert!(
+        queued.iter().any(|request| matches!(
+            request,
+            ResultRequest::SetFindOption(FindOption::CaseSensitive, true)
+        )),
+        "点击应以「勾上」入队：{queued:?}"
+    );
+
+    // 直接调面板动作：勾正则应把全词一并取消并重算命中
+    cx.update(|_, cx| {
+        panel.update(cx, |p, cx| {
+            p.set_find_option(FindOption::WholeWord, true, cx);
+        })
+    });
+    assert!(cx.update(|_, app| panel.read(app).find_criteria.whole_word));
+    cx.update(|_, cx| {
+        panel.update(cx, |p, cx| {
+            p.set_find_option(FindOption::Regex, true, cx);
+        })
+    });
+    let after = cx.update(|_, app| {
+        (
+            panel.read(app).find_criteria.regex,
+            panel.read(app).find_criteria.whole_word,
+        )
+    });
+    assert_eq!(after, (true, false), "勾正则应把全词取消（DBeaver 的 isAvailable 联动）");
+
+    // 正则勾上后全词那颗应被禁用（渲染层的 disabled 由 criteria 推导，这里只钉状态）
+    assert!(cx.update(|_, app| panel.read(app).find_criteria.regex));
 }
 
 /// 【2026-11-18 侧栏结构对齐】左缘竖条两段式：展示组（网格 / 文本）在上，

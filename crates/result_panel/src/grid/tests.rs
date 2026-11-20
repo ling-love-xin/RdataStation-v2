@@ -11,6 +11,7 @@ use crate::grid::status::{format_integer_cell, render_toolbar};
 use crate::grid::status::{FIRST_PAGER_ACTION, FIRST_SYSTEM_ACTION};
 use crate::grid::text::{cell_matches, find_in_cell, preview_of};
 use crate::grid::view_rows::compare_cells;
+use crate::ports::FindCriteria;
 use gpui_kit::ImageFormat;
 use crate::grid::{
     CELL_DISPLAY_LIMIT, ContextAction, ContextTarget, GridSelection, MAX_SINGLE_SEGMENT_ROWS,
@@ -1026,38 +1027,38 @@ fn the_filter_matcher_keeps_the_lowercase_semantics() {
 fn finding_backwards_and_counting_matches_mirror_forward() {
     let mut grid = grid_with(&[&["1", "orders"], &["2", "users"], &["3", "orders_archive"]]);
     assert_eq!(
-        grid.count_find_matches("orders"),
+        grid.count_find_matches("orders", FindCriteria::default()),
         2,
         "第三个格 `orders_archive` 也命中（子串口径），`#` 槽不参与"
     );
-    assert_eq!(grid.count_find_matches("   "), 0, "空词一个也不算");
+    assert_eq!(grid.count_find_matches("   ", FindCriteria::default()), 0, "空词一个也不算");
 
     // 反向：从末尾往回走，最后绕回最后一条
     assert_eq!(
-        grid.find_prev("orders", None).map(|hit| (hit.row, hit.col)),
+        grid.find_prev("orders", FindCriteria::default(), None).map(|hit| (hit.row, hit.col)),
         Some((2, 2)),
         "没给起点时反向从末尾开始"
     );
     assert_eq!(
         grid
-            .find_prev("orders", Some((2, 2)))
+            .find_prev("orders", FindCriteria::default(), Some((2, 2)))
             .map(|hit| (hit.row, hit.col)),
         Some((0, 2)),
         "从上一处往前：中间行不命中，回到第 0 行"
     );
     assert_eq!(
         grid
-            .find_prev("orders", Some((0, 2)))
+            .find_prev("orders", FindCriteria::default(), Some((0, 2)))
             .map(|hit| (hit.row, hit.col)),
         Some((2, 2)),
         "到头绕回末尾"
     );
-    assert_eq!(grid.find_prev("nope", None), None);
+    assert_eq!(grid.find_prev("nope", FindCriteria::default(), None), None);
 
     // 筛选后只数看得见的行：`orders` 那两行里只剩一行还能看见
     grid.set_filter("users");
-    assert_eq!(grid.count_find_matches("orders"), 0, "看不见的行不计命中");
-    assert_eq!(grid.count_find_matches("users"), 1);
+    assert_eq!(grid.count_find_matches("orders", FindCriteria::default()), 0, "看不见的行不计命中");
+    assert_eq!(grid.count_find_matches("users", FindCriteria::default()), 1);
 }
 
 /// 结果内查找：只看**数据列**（`#` 槽不算）、按视图行序、找完一圈回到开头
@@ -1065,7 +1066,7 @@ fn finding_backwards_and_counting_matches_mirror_forward() {
 fn finding_in_the_result_walks_the_visible_rows_and_wraps() {
     let mut grid = grid_with(&[&["1", "orders"], &["2", "users"], &["3", "orders_archive"]]);
     assert_eq!(
-        grid.find_next("orders", None),
+        grid.find_next("orders", FindCriteria::default(), None),
         Some(ResultMatch {
             row: 0,
             col: 2,
@@ -1074,32 +1075,32 @@ fn finding_in_the_result_walks_the_visible_rows_and_wraps() {
         "第一处命中的是**数据列**（行号槽不是数据）"
     );
     assert_eq!(
-        grid.find_next("orders", Some((0, 2))).map(|hit| hit.row),
+        grid.find_next("orders", FindCriteria::default(), Some((0, 2))).map(|hit| hit.row),
         Some(2),
         "从上一处继续：中间那行的第二列（users）不命中，继续往后找"
     );
     assert_eq!(
-        grid.find_next("orders", Some((2, 2))).map(|hit| hit.row),
+        grid.find_next("orders", FindCriteria::default(), Some((2, 2))).map(|hit| hit.row),
         Some(0),
         "找不到就绕回开头（表是圆的）"
     );
 
     // 行号槽里的数字不算命中（`#` 显示的是视图行号，不是数据）
     assert_eq!(
-        grid.find_next("3", None),
+        grid.find_next("3", FindCriteria::default(), None),
         Some(ResultMatch {
             row: 2,
             col: 1,
             range: Some(0..1),
         })
     );
-    assert_eq!(grid.find_next("nope", None), None);
-    assert_eq!(grid.find_next("   ", None), None, "空词不找任何东西");
+    assert_eq!(grid.find_next("nope", FindCriteria::default(), None), None);
+    assert_eq!(grid.find_next("   ", FindCriteria::default(), None), None, "空词不找任何东西");
 
     // 含非 ASCII 的格：命中但不给格内区间（宿主退化成整格高亮）
     let chinese = grid_with(&[&["1", "订单_2026"]]);
     assert_eq!(
-        chinese.find_next("2026", None),
+        chinese.find_next("2026", FindCriteria::default(), None),
         Some(ResultMatch {
             row: 0,
             col: 2,
@@ -1109,8 +1110,8 @@ fn finding_in_the_result_walks_the_visible_rows_and_wraps() {
 
     // 筛选之后只找**看得见的行**（找到看不见的行等于没找到）
     grid.set_filter("users");
-    assert_eq!(grid.find_next("orders", None), None);
-    assert_eq!(grid.find_next("users", None).map(|hit| hit.row), Some(0));
+    assert_eq!(grid.find_next("orders", FindCriteria::default(), None), None);
+    assert_eq!(grid.find_next("users", FindCriteria::default(), None).map(|hit| hit.row), Some(0));
 }
 
 /// 【B15】换一份结果：排序跟不过来（列都可能不是同一批），筛选词留着（用户还在找同样的东西）
