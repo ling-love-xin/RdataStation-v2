@@ -3143,6 +3143,33 @@ fn typing_into_the_filter_box_reaches_the_panel(cx: &mut gpui_kit::TestAppContex
     assert_eq!(rows, 1, "防抖到点后筛选应生效（`2 / NULL` 那行要被筛掉）");
 }
 
+/// 【空提示文案】筛选框占位文案 = DBeaver `enter_sql_to_filter` 的前半句。
+///
+/// `ResultSetFilterPanel.java:219-223` 给 `filtersText` 挂 `UIUtils.addEmptyTextHint`，
+/// 支持过滤时写 `sql_editor_resultset_filter_panel_text_enter_sql_to_filter`
+/// （zh `ResultSetMessages_zh.properties:671` =
+/// 「输入一个 SQL 表达式来过滤结果 (使用 Ctrl+Space)」）。尾随那半句是内容辅助
+/// （列名 / 函数补全，`:304-308` 装的），本仓没有补全能力，照抄就是承诺一个按不出来
+/// 的快捷键——这条用例同时钉住「前半句要对齐」和「不许带 Ctrl+Space」。
+#[gpui_kit::test]
+fn the_filter_box_hints_the_sql_expression_it_takes(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    let hint = cx.update(|_window, app| {
+        let input = panel.read(app).filter_input.clone();
+        input.read(app).presentation().placeholder().clone()
+    });
+    assert_eq!(
+        hint.to_string(),
+        "输入一个 SQL 表达式来过滤结果",
+        "筛选框空提示没对齐 DBeaver 的 enter_sql_to_filter 文案"
+    );
+    assert!(
+        !hint.contains("Ctrl+Space"),
+        "本仓没有内容辅助，空提示不该承诺 Ctrl+Space"
+    );
+}
+
 /// 【筛选历史 2026-11-18】Enter 提交：立即应用 + 记进历史。
 ///
 /// 对齐 DBeaver：Enter 触发 `setCustomDataFilter()`（`ResultSetFilterPanel.java:296`）；

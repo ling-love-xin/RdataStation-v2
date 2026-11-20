@@ -41,7 +41,20 @@ impl ResultPanel {
             // 拼出的 WHERE 带 `\n`。关掉后回车只发 Submit 事件，本仓未订阅该事件，
             // 交互与改造前的单行框一致。
             let mut state = TextareaState::new(window, cx);
-            state.set_placeholder("筛选当前结果…", window, cx);
+            // 【空提示文案】对齐 DBeaver `ResultSetFilterPanel.java:219-223` 的
+            // `UIUtils.addEmptyTextHint(filtersText, …)`：支持数据过滤时写
+            // `sql_editor_resultset_filter_panel_text_enter_sql_to_filter`
+            // （zh `ResultSetMessages_zh.properties:671` =
+            // 「输入一个 SQL 表达式来过滤结果 (使用 Ctrl+Space)」），不支持时写
+            // 「不支持数据过滤」。本仓本地过滤恒可用，只取第一支。
+            //
+            // **尾随的「(使用 Ctrl+Space)」截掉**：那半句指 DBeaver 的内容辅助
+            // （`ContentAssistUtils.installContentProposalWithPreferences`，`:304-308`
+            // 装列名 / 函数补全）。本仓筛选框没有补全能力，照抄等于承诺一个按不出来的
+            // 快捷键；按「能力没有就不说」只留前半句。此前写的是「筛选当前结果…」，
+            // 既没对齐文案，也没说清这一格接受的是 **SQL 表达式**（`rewrite_with_where`
+            // 直接把它拼进 `where`）。
+            state.set_placeholder("输入一个 SQL 表达式来过滤结果", window, cx);
             state.set_submit_on_enter(true, cx);
             state
         });
