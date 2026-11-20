@@ -287,6 +287,9 @@ pub(crate) fn render_th(
     // 【列布局落盘】动作队列在闭包外取出（owned）：builder 要求 `'static`，闭包里
     // 不能再借 `delegate`
     let layout_queue = delegate.action_queue.clone();
+    // 【列头筛选段尾部】四项筛选命令（保存 / 重置 / 全清 / 编辑筛选设置）走同一个动作队列：
+    // 它们都由面板执行（存档、清空筛选、打开设置浮层都不是网格自己能做的）
+    let filter_queue = delegate.action_queue.clone();
     // 【列头菜单】贴在主行**右端之上**（绝对定位，不参与流）：既不当第二行 child
     // （表头带只有 22px 内容高，任何"第二行"都会把主行挤成 0 高、列名被裁——2026-11-08
     // 截图实证：字只有半截残线），也不占列宽（恒吃 24px 会把窄列列名挤到读不出）。
@@ -443,6 +446,48 @@ pub(crate) fn render_th(
                                             });
                                         },
                                     ));
+                                }
+                                // 【DBeaver 对齐】`fillFiltersMenu` 尾部四项
+                                // （`ResultSetViewer.java:3926-3932`）：保存 / 重置筛选设置、
+                                // 删除所有过滤 / 排序、编辑筛选设置——全部转交面板执行
+                                ContextAction::SaveFilterSetting => {
+                                    if let Some(queue) = filter_queue.clone() {
+                                        menu = menu.item(PopupMenuItem::new(label).on_click(
+                                            move |_, _window, app| {
+                                                queue.request(ResultRequest::SaveFilterSetting, app);
+                                            },
+                                        ));
+                                    }
+                                }
+                                ContextAction::ResetFilterSetting => {
+                                    if let Some(queue) = filter_queue.clone() {
+                                        menu = menu.item(PopupMenuItem::new(label).on_click(
+                                            move |_, _window, app| {
+                                                queue.request(ResultRequest::ResetFilterSetting, app);
+                                            },
+                                        ));
+                                    }
+                                }
+                                ContextAction::ClearAllFilters => {
+                                    if let Some(queue) = filter_queue.clone() {
+                                        menu = menu.item(PopupMenuItem::new(label).on_click(
+                                            move |_, _window, app| {
+                                                queue.request(
+                                                    ResultRequest::ClearFilterAndOrdering,
+                                                    app,
+                                                );
+                                            },
+                                        ));
+                                    }
+                                }
+                                ContextAction::OpenFilterSettings => {
+                                    if let Some(queue) = filter_queue.clone() {
+                                        menu = menu.item(PopupMenuItem::new(label).on_click(
+                                            move |_, _window, app| {
+                                                queue.request(ResultRequest::OpenFilterSettings, app);
+                                            },
+                                        ));
+                                    }
                                 }
                                 _ => {
                                     // 值与行相关的动作（预览 / 按值筛选 / 复制值 / 复制行）

@@ -67,6 +67,16 @@ pub enum ContextAction {
     /// 不带载荷：选哪些列是清单自己的多选集合（委托 `selected_set`），
     /// 由清单在点击时展开成列名——菜单纯函数不该知道界面状态。
     CopyColumnNames,
+    /// 【列头菜单·筛选段尾部】保存当前筛选设置（对齐 DBeaver `CMD_FILTER_SAVE_SETTING`，
+    /// `ResultSetViewer.java:3928`）。与筛选设置箭头里的「保存过滤器设置」是同一条请求。
+    SaveFilterSetting,
+    /// 【列头菜单·筛选段尾部】重置已保存的筛选设置（`CMD_FILTER_RESET_SETTING`，`:3929`）
+    ResetFilterSetting,
+    /// 【列头菜单·筛选段尾部】删除所有过滤 / 排序（`CMD_FILTER_CLEAR_SETTING`，`:3931`；
+    /// DBeaver 侧恒摆，无门控）
+    ClearAllFilters,
+    /// 【列头菜单·筛选段尾部】打开筛选设置浮层（`CMD_FILTER_EDIT_SETTINGS`，`:3932`）
+    OpenFilterSettings,
 }
 /// 右键菜单里的一项
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -391,6 +401,33 @@ pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             separator_before: true,
         });
     }
+    // 【DBeaver 对齐】`fillFiltersMenu` 尾部四项（`ResultSetViewer.java:3926-3932`）：
+    // Separator → (DBSEntity) 保存 / 重置 → 删除所有过滤 / 排序 → 编辑筛选设置。
+    //
+    // 门控差异：DBeaver 只在 `getDataContainer() instanceof DBSEntity` 时摆保存 / 重置
+    // （`:3927-3930`），本仓存档键是**结果 SQL**（§9.26.4 第 1 条），不存在「非实体容器」
+    // 这一层——join / 计算列结果同样能存能取，故四项恒摆。清空与编辑设置 DBeaver 侧
+    // 也恒摆（`:3931-3932`）。
+    items.push(ContextMenuItem {
+        label: "保存过滤器设置".to_string(),
+        action: ContextAction::SaveFilterSetting,
+        separator_before: true,
+    });
+    items.push(ContextMenuItem {
+        label: "重置过滤器设置".to_string(),
+        action: ContextAction::ResetFilterSetting,
+        separator_before: false,
+    });
+    items.push(ContextMenuItem {
+        label: "删除所有过滤 / 排序".to_string(),
+        action: ContextAction::ClearAllFilters,
+        separator_before: false,
+    });
+    items.push(ContextMenuItem {
+        label: "编辑筛选设置…".to_string(),
+        action: ContextAction::OpenFilterSettings,
+        separator_before: false,
+    });
     items
 }
 /// 左栏「列浏览器」清单行右键菜单的项（**纯函数**；对齐 DBeaver 元数据面板清单右键口径：
@@ -749,6 +786,12 @@ pub(crate) fn context_menu(
             }
             // 列级筛选只属于列头菜单（右键的「按值筛选」是全局词）：右键收到即忽略
             ContextAction::FilterColumnValue { .. } | ContextAction::ClearColumnFilter { .. } => {}
+            // 筛选段尾部四项（保存 / 重置 / 全清 / 编辑筛选设置）只属于列头菜单：
+            // 它们要按「当前结果的筛选状态」动手，右键的落点是单个单元格，语义不对
+            ContextAction::SaveFilterSetting
+            | ContextAction::ResetFilterSetting
+            | ContextAction::ClearAllFilters
+            | ContextAction::OpenFilterSettings => {}
             // 「复制列名」只属于列浏览器清单（它要多选集合，网格右键没有这个概念）
             ContextAction::CopyColumnNames => {}
         }

@@ -1518,6 +1518,68 @@ fn column_menu_is_the_column_level_subset() {
     assert!(!labels.contains(&"显示全部列"));
 }
 
+/// 【DBeaver 对齐】列头菜单尾部筛选段四项（`ResultSetViewer.java:3926-3932`）：
+/// 一条 Separator 之后连摆「保存过滤器设置 / 重置过滤器设置 / 删除所有过滤 / 排序 /
+/// 编辑筛选设置」。DBeaver 只在容器是 `DBSEntity` 时摆前两项（`:3927-3930`）；本仓
+/// 存档键是结果 SQL（§9.26.4 第 1 条），没有「非实体容器」这一层，四项恒摆。
+#[test]
+fn column_menu_ends_with_the_four_filter_commands() {
+    let target = ContextTarget {
+        value: String::new(),
+        column_name: "id".to_string(),
+        column: 0,
+        row: 0,
+        rows: 12,
+        frozen: false,
+        hidden_columns: 0,
+        insight: false,
+        analyze: false,
+        persist: false,
+        // 表名猜不到（多表 join / 计算列）：四项仍应恒摆
+        table: None,
+        column_filter_active: false,
+        column_values: Vec::new(),
+        sort_active: false,
+        row_ref: RowRef::default(),
+        editable: true,
+        is_deleted: false,
+    };
+    let items = column_menu_items(&target);
+    let tail_start = items.len() - 4;
+    let tail: Vec<&str> = items[tail_start..]
+        .iter()
+        .map(|item| item.label.as_str())
+        .collect();
+    assert_eq!(
+        tail,
+        vec![
+            "保存过滤器设置",
+            "重置过滤器设置",
+            "删除所有过滤 / 排序",
+            "编辑筛选设置…",
+        ],
+        "尾部四项的顺序与文案（DBeaver zh bundle:84 / :78 / :86）"
+    );
+    assert_eq!(items[tail_start].action, ContextAction::SaveFilterSetting);
+    assert_eq!(
+        items[tail_start + 1].action,
+        ContextAction::ResetFilterSetting
+    );
+    assert_eq!(items[tail_start + 2].action, ContextAction::ClearAllFilters);
+    assert_eq!(
+        items[tail_start + 3].action,
+        ContextAction::OpenFilterSettings
+    );
+    // 只有第一项前有分隔线：DBeaver 是一条 Separator 之后四连摆（`:3926-3932`）
+    assert!(items[tail_start].separator_before, "四项前应有分隔线");
+    assert!(
+        items[tail_start + 1..]
+            .iter()
+            .all(|item| !item.separator_before),
+        "四项内部不再插分隔线"
+    );
+}
+
 /// 列浏览器清单菜单 = 列头菜单的本地动作子集：复制 / 冻结 / 隐藏 / 列统计；
 /// 排序下发 / 值筛选 / 洞察 / 查看完整值 / 复制整行不进清单入口（前者依赖宿主
 /// 钩子，后者属于格 / 行交互，见拍板口径）。**「复制列名」只在清单入口**——
