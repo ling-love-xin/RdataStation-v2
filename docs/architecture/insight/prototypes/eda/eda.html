@@ -274,6 +274,17 @@
   .cc-detail .row { display: flex; justify-content: space-between; font-size: 12px; padding: 3px 0; border-bottom: 1px dashed var(--border-soft); }
   .cc-detail .row span { color: var(--muted); }
   .cc-detail .row b { font-family: var(--mono); font-weight: 500; }
+  /* 两栏统计布局（数值列：分位数 + 描述统计） */
+  .cc-two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .cc-col { min-width: 0; }
+  .cc-col-title { font-size: 11px; color: var(--dim); margin-bottom: 4px; }
+  /* 常见值频率表（文本列） */
+  .cc-freq { display: flex; flex-direction: column; gap: 4px; }
+  /* 布尔分布 */
+  .bool-split-wrap { margin-top: 4px; }
+  .bool-legend { display: flex; gap: 12px; margin-top: 6px; font-size: 11px; color: var(--muted); }
+  .bool-legend .it { display: flex; align-items: center; gap: 4px; }
+  .bool-legend .sw { width: 8px; height: 8px; border-radius: 2px; }
   /* 规则命中 */
   .rule-list { display: flex; flex-direction: column; gap: 5px; }
   .rule-item { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--chrome); }
@@ -676,19 +687,135 @@ function miniVis(col) {
 
 /* ---------- 列卡：折叠概要 + 展开单列长滚动（对齐 ydata）+ 检查器特色 ---------- */
 function expandedBody(col) {
-  // 基础统计（单列文字列表，对齐 ydata）
-  const statsRows = (col.stats || []).map(([k, v]) =>
-    `<div class="row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("");
-  // 分布可视化（静态条形图，无交互）
+  // 按数据类型分支布局（对齐 ydata）
+  if (col.kind === "num") return numExpanded(col);
+  if (col.kind === "text") return textExpanded(col);
+  if (col.kind === "dt") return dtExpanded(col);
+  if (col.kind === "bool") return boolExpanded(col);
+  return genericExpanded(col);
+}
+
+/* 数值列：分位数统计 + 描述统计 双栏 + 直方图 + 样本（对齐 ydata Numeric） */
+function numExpanded(col) {
+  const q = col.quantile || [];
+  const d = col.descriptive || [];
   const vis = miniVis(col);
-  // 正态性检验（数值列特色）
   const norm = col.norm ? `<div class="norm-line ${col.norm.cls}">
     <span class="nlabel">正态性</span>
-    <span class="nval">Shapiro-Wilk p=${col.norm.p}</span>
+    <span class="nval">Shapiro p=${col.norm.p}</span>
     <span class="nval">偏度 ${col.norm.skew}</span>
     <span class="nval">峰度 ${col.norm.kurt}</span>
     <span class="njudge">${esc(col.norm.judge)}</span></div>` : "";
-  // 样本（前 5 条，对齐 ydata 的 sample）
+  const sampleRows = (col.samples || []).map((v, i) =>
+    `<div class="row"><span>样本 ${i+1}</span><b style="font-family:var(--mono)">${esc(v)}</b></div>`).join("");
+  return `
+    <div class="cc-section">
+      <div class="cc-sec-title">统计分布 <span class="cc-sec-note">数值列</span></div>
+      <div class="cc-two-col">
+        <div class="cc-col">
+          <div class="cc-col-title">分位数统计</div>
+          <div class="cc-detail">${q.map(([k,v]) => `<div class="row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("")}</div>
+        </div>
+        <div class="cc-col">
+          <div class="cc-col-title">描述统计</div>
+          <div class="cc-detail">${d.map(([k,v]) => `<div class="row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("")}</div>
+        </div>
+      </div>
+    </div>
+    <div class="cc-section">
+      <div class="cc-sec-title">分布直方图</div>
+      <div class="cc-vis">${vis}</div>
+      ${norm}
+    </div>
+    <div class="cc-section">
+      <div class="cc-sec-title">样本值</div>
+      <div class="cc-detail">${sampleRows}</div>
+    </div>`;
+}
+
+/* 文本列：常见值频率表 + 条形图 + 样本（对齐 ydata Categorical） */
+function textExpanded(col) {
+  const dist = col.dist || { items: [], max: 1 };
+  const freqRows = (dist.items || []).map(([k, v]) => {
+    const pct = dist.max ? (v / dist.max * 100) : 0;
+    return `<div class="freq-row"><span class="fk">${esc(k)}</span><span class="ftrk"><i style="width:${pct}%"></i></span><span class="fv">${v}</span></div>`;
+  }).join("");
+  const sampleRows = (col.samples || []).map((v, i) =>
+    `<div class="row"><span>样本 ${i+1}</span><b style="font-family:var(--mono)">${esc(v)}</b></div>`).join("");
+  const statsRows = (col.stats || []).map(([k, v]) =>
+    `<div class="row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("");
+  return `
+    <div class="cc-section">
+      <div class="cc-sec-title">基础信息</div>
+      <div class="cc-detail">${statsRows}</div>
+    </div>
+    <div class="cc-section">
+      <div class="cc-sec-title">常见值 <span class="cc-sec-note">Top ${(dist.items||[]).length}</span></div>
+      <div class="cc-freq">${freqRows}</div>
+    </div>
+    <div class="cc-section">
+      <div class="cc-sec-title">样本值</div>
+      <div class="cc-detail">${sampleRows}</div>
+    </div>`;
+}
+
+/* 日期列：时间范围 + 季节性分布 + 样本（对齐 ydata DateTime） */
+function dtExpanded(col) {
+  const statsRows = (col.stats || []).map(([k, v]) =>
+    `<div class="row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("");
+  const vis = miniVis(col);
+  const sampleRows = (col.samples || []).map((v, i) =>
+    `<div class="row"><span>样本 ${i+1}</span><b style="font-family:var(--mono)">${esc(v)}</b></div>`).join("");
+  return `
+    <div class="cc-section">
+      <div class="cc-sec-title">时间范围</div>
+      <div class="cc-detail">${statsRows}</div>
+    </div>
+    <div class="cc-section">
+      <div class="cc-sec-title">时间分布</div>
+      <div class="cc-vis">${vis}</div>
+    </div>
+    <div class="cc-section">
+      <div class="cc-sec-title">样本值</div>
+      <div class="cc-detail">${sampleRows}</div>
+    </div>`;
+}
+
+/* 布尔列：True/False 占比 + 样本 */
+function boolExpanded(col) {
+  const statsRows = (col.stats || []).map(([k, v]) =>
+    `<div class="row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("");
+  const split = col.boolSplit ? `<div class="bool-split-wrap">
+    <div class="bool-split">
+      <i style="width:${col.boolSplit.truePct}%;background:var(--success)"></i>
+      <i style="width:${col.boolSplit.falsePct}%;background:var(--muted)"></i>
+    </div>
+    <div class="bool-legend">
+      <span class="it"><span class="sw" style="background:var(--success)"></span>True ${col.boolSplit.truePct}%</span>
+      <span class="it"><span class="sw" style="background:var(--muted)"></span>False ${col.boolSplit.falsePct}%</span>
+    </div>
+  </div>` : "";
+  const sampleRows = (col.samples || []).map((v, i) =>
+    `<div class="row"><span>样本 ${i+1}</span><b style="font-family:var(--mono)">${esc(v)}</b></div>`).join("");
+  return `
+    <div class="cc-section">
+      <div class="cc-sec-title">基础信息</div>
+      <div class="cc-detail">${statsRows}</div>
+    </div>
+    <div class="cc-section">
+      <div class="cc-sec-title">取值分布</div>
+      ${split}
+    </div>
+    <div class="cc-section">
+      <div class="cc-sec-title">样本值</div>
+      <div class="cc-detail">${sampleRows}</div>
+    </div>`;
+}
+
+/* 通用兜底 */
+function genericExpanded(col) {
+  const statsRows = (col.stats || []).map(([k, v]) =>
+    `<div class="row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("");
   const sampleRows = (col.samples || []).map((v, i) =>
     `<div class="row"><span>样本 ${i+1}</span><b style="font-family:var(--mono)">${esc(v)}</b></div>`).join("");
   return `
@@ -697,12 +824,7 @@ function expandedBody(col) {
       <div class="cc-detail">${statsRows}</div>
     </div>
     <div class="cc-section">
-      <div class="cc-sec-title">分布</div>
-      <div class="cc-vis">${vis}</div>
-      ${norm}
-    </div>
-    <div class="cc-section">
-      <div class="cc-sec-title">样本</div>
+      <div class="cc-sec-title">样本值</div>
       <div class="cc-detail">${sampleRows}</div>
     </div>`;
 }
@@ -1483,11 +1605,13 @@ const TABLES = {
     ],
     columns: [
       { name: "id", kind: "num", missing: 0, unique: "128,450", statsLine: [["缺失", "0%", false], ["唯一", "128,450", false], ["均值", "#64,225", false]],
-        stats: [["唯一值", "128,450"], ["缺失", "0"], ["最小", "#1"], ["最大", "#128450"], ["均值", "#64,225"], ["类型", "BIGINT (PK)"]],
+        stats: [["唯一值", "128,450"], ["缺失", "0"], ["类型", "BIGINT (PK)"]],
+        quantile: [["最小值", "#1"], ["5% 分位", "#6,423"], ["Q1", "#32,112"], ["中位数", "#64,225"], ["Q3", "#96,338"], ["95% 分位", "#122,028"], ["最大值", "#128,450"], ["极差", "#128,449"]],
+        descriptive: [["均值", "#64,225.5"], ["标准差", "#37,062"], ["方差", "1.37B"], ["变异系数", "0.577"], ["偏度", "0.00"], ["峰度", "-1.20"], ["MAD", "#44,077"], ["总和", "8.26B"], ["单调性", "严格递增"]],
         quality: [["非空率", "100%", false], ["唯一率", "100%", false], ["空串", "0", false], ["规则命中", "3/3", false]],
         samples: ["#1", "#2", "#3", "#4", "#5"],
         rules: [{ name: "主键非空", pass: true, msg: "0 缺失" }, { name: "主键唯一", pass: true, msg: "无重复" }, { name: "整数范围", pass: true, msg: "1 ~ 128450" }],
-        dist: { type: "freq", items: [["#101", 1000], ["#102", 998], ["#103", 996], ["#104", 993], ["#105", 991]], max: 1000 } },
+        dist: { type: "hist", bins: [6422, 6423, 6422, 6422, 6423, 6422, 6422, 6423, 6421], max: 6423 } },
       { name: "material_id", kind: "text", missing: 0, unique: "2,184", statsLine: [["缺失", "0%", false], ["唯一", "2,184", false], ["高频", "MAT-00841", false]],
         stats: [["唯一值", "2,184"], ["缺失", "0"], ["高频", "MAT-00841 (412)"], ["低频", "MAT-00002 (1)"], ["类型", "VARCHAR(32)"]],
         quality: [["非空率", "100%", false], ["唯一率", "1.7%", false], ["空串", "0", false], ["规则命中", "2/2", false]],
@@ -1607,7 +1731,9 @@ const TABLES = {
         rules: [{ name: "订单号唯一", pass: false, msg: "3 组重复" }, { name: "非空", pass: true, msg: "0 缺失" }],
         dist: { type: "freq", items: [["SO-2026-01001", 1], ["SO-2026-01002", 1], ["SO-2026-01003", 1], ["SO-2026-01004", 1], ["SO-2026-01005", 1]], max: 1 } },
       { name: "amount", kind: "num", missing: 0, unique: "9,820", statsLine: [["均值", "482.6", false], ["中位", "468.0", false], ["0 值", "6.2%", true]],
-        stats: [["最小值", "0.00"], ["Q1", "128.50"], ["中位数", "468.00"], ["Q3", "1,220.00"], ["最大值", "8,640.00"], ["0 值占比", "6.2%"]],
+        stats: [["唯一值", "9,820"], ["缺失", "0"], ["类型", "DECIMAL(12,2)"]],
+        quantile: [["最小值", "0.00"], ["5% 分位", "0.00"], ["Q1", "128.50"], ["中位数", "468.00"], ["Q3", "1,220.00"], ["95% 分位", "3,880.00"], ["最大值", "8,640.00"], ["极差", "8,640.00"]],
+        descriptive: [["均值", "482.60"], ["标准差", "724.35"], ["方差", "524,682"], ["变异系数", "1.50"], ["偏度", "1.84"], ["峰度", "5.21"], ["MAD", "312.40"], ["总和", "4.74M"], ["单调性", "—"]],
         quality: [["非空率", "100%", false], ["0 值", "6.2%", true], ["规则命中", "1/2", false]],
         samples: ["1,280.00", "0.00", "640.50", "3,200.00", "86.00"],
         rules: [{ name: "金额 ≥ 0", pass: true, msg: "负值 0" }, { name: "0 值占比 ≤ 2%", pass: false, msg: "6.2%（未支付订单）" }],

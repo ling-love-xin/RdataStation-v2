@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EDA 列卡片 · 对齐 ydata-profiling · RdataStation</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23A84A38'/%3E%3Ctext x='16' y='22' font-family='Segoe UI, sans-serif' font-size='15' font-weight='700' fill='%23fff' text-anchor='middle'%3ERS%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --chrome: #181818;
+    --editor: #1F1F1F;
+    --popover: #202020;
+    --border: #2A2A2A;
+    --border-soft: #232323;
+    --text: #CCCCCC;
+    --muted: #858585;
+    --dim: #6E6E6E;
+    --coral: #A84A38;
+    --success: #4A9B6B;
+    --warning: #C9A23A;
+    --danger: #D0534A;
+    --info: #4A8BC9;
+    --radius: 6px;
+    --mono: "Cascadia Mono", "Consolas", monospace;
+    --sans: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: var(--sans); font-size: 13px; color: var(--text); background: var(--chrome); padding: 24px; }
+  .page-title { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+  .page-sub { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .compare-note { font-size: 11.5px; color: var(--dim); margin-bottom: 24px; padding: 10px 12px; background: var(--popover); border-radius: 6px; border-left: 3px solid var(--coral); line-height: 1.6; }
+  .type-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 1200px; }
+  .type-card { background: var(--editor); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .type-card-head { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+  .type-card-head .tag { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 500; }
+  .type-card-head .tag.num { background: rgba(74,139,201,.15); color: var(--info); }
+  .type-card-head .tag.text { background: rgba(74,155,107,.15); color: var(--success); }
+  .type-card-head .tag.dt { background: rgba(201,162,58,.15); color: var(--warning); }
+  .type-card-head .tag.bool { background: rgba(208,83,74,.15); color: var(--danger); }
+  .type-card-head .desc { font-size: 11.5px; color: var(--dim); }
+  .type-card-body { padding: 12px; }
+
+  /* ===== 列卡片 ===== */
+  .col-card { background: var(--popover); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 12px; }
+  .col-card:last-child { margin-bottom: 0; }
+  .cc-head { padding: 10px 12px; }
+  .cc-title-row { display: flex; align-items: center; gap: 8px; }
+  .cc-name { font-family: var(--mono); font-size: 14px; font-weight: 600; }
+  .kind-badge { font-size: 10.5px; padding: 1px 6px; border-radius: 3px; font-weight: 500; }
+  .kind-badge.num { background: rgba(74,139,201,.15); color: var(--info); }
+  .kind-badge.text { background: rgba(74,155,107,.15); color: var(--success); }
+  .kind-badge.dt { background: rgba(201,162,58,.15); color: var(--warning); }
+  .kind-badge.bool { background: rgba(208,83,74,.15); color: var(--danger); }
+  .cc-tags { display: flex; gap: 4px; margin-top: 4px; }
+  .cc-tag { font-size: 10.5px; padding: 1px 6px; background: #2A2A2A; border-radius: 3px; color: var(--muted); font-family: var(--mono); }
+  .cc-basic { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; margin-top: 8px; padding: 8px 0; border-top: 1px solid var(--border-soft); }
+  .cc-basic .row { display: flex; justify-content: space-between; font-size: 11.5px; padding: 2px 0; }
+  .cc-basic .row span { color: var(--muted); }
+  .cc-basic .row b { font-family: var(--mono); font-weight: 500; }
+
+  .cc-section { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-soft); }
+  .cc-section:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
+  .cc-sec-title { font-size: 11.5px; font-weight: 600; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.3px; }
+  .cc-sec-note { font-weight: 400; color: var(--dim); text-transform: none; letter-spacing: 0; margin-left: 6px; }
+  .cc-detail { display: flex; flex-direction: column; gap: 0; }
+  .cc-detail .row { display: flex; justify-content: space-between; font-size: 12px; padding: 3px 0; border-bottom: 1px dashed var(--border-soft); }
+  .cc-detail .row span { color: var(--muted); }
+  .cc-detail .row b { font-family: var(--mono); font-weight: 500; }
+
+  /* 数值列双栏统计（对齐 ydata col-sm-6 + col-sm-6） */
+  .stats-two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .stats-col-title { font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+
+  /* 直方图 */
+  .hist-box { margin-top: 8px; }
+  .mini-bar { display: flex; align-items: flex-end; gap: 2px; height: 70px; }
+  .mini-bar .bk { flex: 1; background: var(--coral); opacity: .72; border-radius: 2px 2px 0 0; min-height: 4px; }
+
+  /* 常见值频率表（对齐 ydata Common Values） */
+  .freq-table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+  .freq-table th { text-align: left; font-size: 11px; color: var(--dim); font-weight: 500; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+  .freq-table td { font-size: 12px; padding: 5px 8px; border-bottom: 1px solid var(--border-soft); }
+  .freq-table td.val { font-family: var(--mono); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .freq-table td.cnt { font-family: var(--mono); text-align: right; width: 60px; }
+  .freq-table td.pct { width: 180px; }
+  .freq-bar-wrap { background: #2E2E2E; border-radius: 3px; height: 14px; overflow: hidden; position: relative; }
+  .freq-bar { height: 100%; background: var(--coral); opacity: .75; border-radius: 3px; display: flex; align-items: center; justify-content: flex-end; padding-right: 4px; font-size: 10px; color: #fff; font-family: var(--mono); }
+
+  /* 布尔分布 */
+  .bool-split-wrap { margin-top: 4px; }
+  .bool-split { display: flex; height: 14px; border-radius: 3px; overflow: hidden; }
+  .bool-split i.t { background: var(--success); }
+  .bool-split i.f { background: var(--muted); }
+  .bool-legend { display: flex; gap: 16px; margin-top: 8px; font-size: 11px; color: var(--muted); }
+  .bool-legend .it { display: flex; align-items: center; gap: 4px; }
+  .bool-legend .sw { width: 8px; height: 8px; border-radius: 2px; }
+
+  /* 检查器（咱们的特色，保留在底部） */
+  .rule-list { display: flex; flex-direction: column; gap: 5px; margin-top: 4px; }
+  .rule-item { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--chrome); }
+  .rule-item .st { flex: none; width: 36px; text-align: center; font-size: 10.5px; padding: 1px 0; border-radius: 3px; }
+  .rule-item .st.pass { background: rgba(74,155,107,.14); color: var(--success); }
+  .rule-item .st.fail { background: rgba(208,83,74,.15); color: var(--danger); }
+  .rule-item .rn { font-family: var(--mono); }
+  .rule-item .rm { margin-left: auto; color: var(--muted); font-size: 11px; }
+</style>
+</head>
+<body>
+
+<div class="page-title">EDA 列卡片 · 对齐 ydata-profiling 布局</div>
+<div class="page-sub">单列长滚动 · 按数据类型展示不同统计区块 · 保留咱们的检查器特色</div>
+
+<div class="compare-note">
+  <b>对齐说明：</b>ydata-profiling 每个列详情布局 = 头部（列名+类型标签）→ 基本信息（Distinct/Missing）→ 核心统计（按类型不同）→ 分布可视化 → 样本值 → 咱们的检查器（特色区，在 ydata 基础上叠加）。
+</div>
+
+<div class="type-grid">
+
+  <!-- ========== 数值列（对齐 ydata Numeric / Real number） ========== -->
+  <div class="type-card">
+    <div class="type-card-head">
+      <span class="tag num">NUM</span>
+      <span class="desc">数值列 — 分位数统计 + 描述统计 双栏 + 直方图</span>
+    </div>
+    <div class="type-card-body">
+      <div class="col-card">
+        <div class="cc-head">
+          <div class="cc-title-row">
+            <span class="cc-name">Fare</span>
+            <span class="kind-badge num">Real number</span>
+          </div>
+          <div class="cc-tags">
+            <span class="cc-tag">UNIFORM</span>
+            <span class="cc-tag">UNIQUE</span>
+          </div>
+          <div class="cc-basic">
+            <div class="row"><span>Distinct</span><b>248</b></div>
+            <div class="row"><span>Missing</span><b>0</b></div>
+            <div class="row"><span>Distinct (%)</span><b>27.8%</b></div>
+            <div class="row"><span>Missing (%)</span><b>0.0%</b></div>
+          </div>
+        </div>
+
+        <!-- 双栏统计：分位数 + 描述统计（对齐 ydata col-sm-6） -->
+        <div class="cc-section">
+          <div class="stats-two-col">
+            <div>
+              <div class="stats-col-title">Quantile statistics</div>
+              <div class="cc-detail">
+                <div class="row"><span>Minimum</span><b>0.00</b></div>
+                <div class="row"><span>5-th percentile</span><b>7.23</b></div>
+                <div class="row"><span>Q1</span><b>7.91</b></div>
+                <div class="row"><span>median</span><b>14.45</b></div>
+                <div class="row"><span>Q3</span><b>31.00</b></div>
+                <div class="row"><span>95-th percentile</span><b>112.08</b></div>
+                <div class="row"><span>Maximum</span><b>512.33</b></div>
+                <div class="row"><span>Range</span><b>512.33</b></div>
+                <div class="row"><span>IQR</span><b>23.09</b></div>
+              </div>
+            </div>
+            <div>
+              <div class="stats-col-title">Descriptive statistics</div>
+              <div class="cc-detail">
+                <div class="row"><span>Mean</span><b>32.20</b></div>
+                <div class="row"><span>Std deviation</span><b>49.69</b></div>
+                <div class="row"><span>Variance</span><b>2469.44</b></div>
+                <div class="row"><span>CV</span><b>1.54</b></div>
+                <div class="row"><span>Skewness</span><b>4.78</b></div>
+                <div class="row"><span>Kurtosis</span><b>33.20</b></div>
+                <div class="row"><span>MAD</span><b>18.00</b></div>
+                <div class="row"><span>Sum</span><b>28663.00</b></div>
+                <div class="row"><span>Monotonicity</span><b>—</b></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 直方图（对齐 ydata Histogram） -->
+        <div class="cc-section">
+          <div class="cc-sec-title">Histogram</div>
+          <div class="hist-box">
+            <div class="mini-bar">
+              <div class="bk" style="height:95%"></div>
+              <div class="bk" style="height:45%"></div>
+              <div class="bk" style="height:25%"></div>
+              <div class="bk" style="height:15%"></div>
+              <div class="bk" style="height:10%"></div>
+              <div class="bk" style="height:6%"></div>
+              <div class="bk" style="height:3%"></div>
+              <div class="bk" style="height:2%"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 样本值（对齐 ydata Sample） -->
+        <div class="cc-section">
+          <div class="cc-sec-title">Sample <span class="cc-sec-note">前 5 行</span></div>
+          <div class="cc-detail">
+            <div class="row"><span>1st row</span><b>7.2500</b></div>
+            <div class="row"><span>2nd row</span><b>71.2833</b></div>
+            <div class="row"><span>3rd row</span><b>7.9250</b></div>
+            <div class="row"><span>4th row</span><b>53.1000</b></div>
+            <div class="row"><span>5th row</span><b>8.0500</b></div>
+          </div>
+        </div>
+
+        <!-- 检查器（咱们的特色） -->
+        <div class="cc-section">
+          <div class="cc-sec-title">检查器 <span class="cc-sec-note">1/2 命中 · 咱们的特色</span></div>
+          <div class="rule-list">
+            <div class="rule-item"><span class="st pass">命中</span><span class="rn">金额 ≥ 0</span><span class="rm">负值 0</span></div>
+            <div class="rule-item"><span class="st fail">未命中</span><span class="rn">零值占比 ≤ 2%</span><span class="rm">13% 零值</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 文本列（对齐 ydata Categorical / String） ========== -->
+  <div class="type-card">
+    <div class="type-card-head">
+      <span class="tag text">TEXT</span>
+      <span class="desc">文本列 — 常见值频率表 + 样本值</span>
+    </div>
+    <div class="type-card-body">
+      <div class="col-card">
+        <div class="cc-head">
+          <div class="cc-title-row">
+            <span class="cc-name">Embarked</span>
+            <span class="kind-badge text">Categorical</span>
+          </div>
+          <div class="cc-basic">
+            <div class="row"><span>Distinct</span><b>3</b></div>
+            <div class="row"><span>Missing</span><b>2</b></div>
+            <div class="row"><span>Distinct (%)</span><b>0.3%</b></div>
+            <div class="row"><span>Missing (%)</span><b>0.2%</b></div>
+          </div>
+        </div>
+
+        <!-- 常见值（对齐 ydata Common Values） -->
+        <div class="cc-section">
+          <div class="cc-sec-title">Common Values</div>
+          <table class="freq-table">
+            <thead>
+              <tr>
+                <th>Value</th>
+                <th style="text-align:right">Count</th>
+                <th>Frequency (%)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="val">S</td>
+                <td class="cnt">644</td>
+                <td class="pct"><div class="freq-bar-wrap"><div class="freq-bar" style="width:100%">72.4%</div></div></td>
+              </tr>
+              <tr>
+                <td class="val">C</td>
+                <td class="cnt">168</td>
+                <td class="pct"><div class="freq-bar-wrap"><div class="freq-bar" style="width:26%">18.9%</div></div></td>
+              </tr>
+              <tr>
+                <td class="val">Q</td>
+                <td class="cnt">77</td>
+                <td class="pct"><div class="freq-bar-wrap"><div class="freq-bar" style="width:12%">8.7%</div></div></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- 样本值（对齐 ydata Sample） -->
+        <div class="cc-section">
+          <div class="cc-sec-title">Sample <span class="cc-sec-note">前 5 行</span></div>
+          <div class="cc-detail">
+            <div class="row"><span>1st row</span><b>S</b></div>
+            <div class="row"><span>2nd row</span><b>C</b></div>
+            <div class="row"><span>3rd row</span><b>S</b></div>
+            <div class="row"><span>4th row</span><b>S</b></div>
+            <div class="row"><span>5th row</span><b>S</b></div>
+          </div>
+        </div>
+
+        <!-- 检查器（咱们的特色） -->
+        <div class="cc-section">
+          <div class="cc-sec-title">检查器 <span class="cc-sec-note">1/2 命中 · 咱们的特色</span></div>
+          <div class="rule-list">
+            <div class="rule-item"><span class="st pass">命中</span><span class="rn">枚举范围</span><span class="rm">3 个已知港口</span></div>
+            <div class="rule-item"><span class="st fail">未命中</span><span class="rn">缺失率 ≤ 0.1%</span><span class="rm">0.2% 缺失（2 行）</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 日期列（咱们的扩展，ydata 有 DateTime 类型） ========== -->
+  <div class="type-card">
+    <div class="type-card-head">
+      <span class="tag dt">DATE</span>
+      <span class="desc">日期列 — 时间范围 + 月度分布 + 样本</span>
+    </div>
+    <div class="type-card-body">
+      <div class="col-card">
+        <div class="cc-head">
+          <div class="cc-title-row">
+            <span class="cc-name">created_at</span>
+            <span class="kind-badge dt">TIMESTAMP</span>
+          </div>
+          <div class="cc-basic">
+            <div class="row"><span>Distinct</span><b>128,441</b></div>
+            <div class="row"><span>Missing</span><b>0</b></div>
+            <div class="row"><span>Distinct (%)</span><b>99.9%</b></div>
+            <div class="row"><span>Missing (%)</span><b>0.0%</b></div>
+          </div>
+        </div>
+
+        <!-- 时间范围统计 -->
+        <div class="cc-section">
+          <div class="stats-two-col">
+            <div>
+              <div class="stats-col-title">时间范围</div>
+              <div class="cc-detail">
+                <div class="row"><span>最早</span><b>2026-01-01 08:00</b></div>
+                <div class="row"><span>最晚</span><b>2026-09-30 23:59</b></div>
+                <div class="row"><span>跨度</span><b>273 天</b></div>
+              </div>
+            </div>
+            <div>
+              <div class="stats-col-title">统计</div>
+              <div class="cc-detail">
+                <div class="row"><span>日均行数</span><b>470</b></div>
+                <div class="row"><span>峰值日</span><b>9/15 (1,240)</b></div>
+                <div class="row"><span>谷值日</span><b>2/3 (12)</b></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 月度分布 -->
+        <div class="cc-section">
+          <div class="cc-sec-title">月度分布</div>
+          <div class="hist-box">
+            <div class="mini-bar">
+              <div class="bk" style="height:40%"></div>
+              <div class="bk" style="height:45%"></div>
+              <div class="bk" style="height:60%"></div>
+              <div class="bk" style="height:55%"></div>
+              <div class="bk" style="height:70%"></div>
+              <div class="bk" style="height:85%"></div>
+              <div class="bk" style="height:90%"></div>
+              <div class="bk" style="height:75%"></div>
+              <div class="bk" style="height:65%"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 样本值 -->
+        <div class="cc-section">
+          <div class="cc-sec-title">Sample <span class="cc-sec-note">前 5 行</span></div>
+          <div class="cc-detail">
+            <div class="row"><span>1st row</span><b>2026-09-30 14:23:11</b></div>
+            <div class="row"><span>2nd row</span><b>2026-09-30 14:22:58</b></div>
+            <div class="row"><span>3rd row</span><b>2026-09-30 14:21:45</b></div>
+            <div class="row"><span>4th row</span><b>2026-09-30 14:20:32</b></div>
+            <div class="row"><span>5th row</span><b>2026-09-30 14:19:08</b></div>
+          </div>
+        </div>
+
+        <!-- 检查器（咱们的特色） -->
+        <div class="cc-section">
+          <div class="cc-sec-title">检查器 <span class="cc-sec-note">1/1 命中 · 咱们的特色</span></div>
+          <div class="rule-list">
+            <div class="rule-item"><span class="st pass">命中</span><span class="rn">时间范围合理</span><span class="rm">2026-01 ~ 2026-09</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 布尔列（咱们的扩展） ========== -->
+  <div class="type-card">
+    <div class="type-card-head">
+      <span class="tag bool">BOOL</span>
+      <span class="desc">布尔列 — True/False 占比 + 样本值</span>
+    </div>
+    <div class="type-card-body">
+      <div class="col-card">
+        <div class="cc-head">
+          <div class="cc-title-row">
+            <span class="cc-name">Survived</span>
+            <span class="kind-badge bool">Boolean</span>
+          </div>
+          <div class="cc-basic">
+            <div class="row"><span>Distinct</span><b>2</b></div>
+            <div class="row"><span>Missing</span><b>0</b></div>
+            <div class="row"><span>Distinct (%)</span><b>0.2%</b></div>
+            <div class="row"><span>Missing (%)</span><b>0.0%</b></div>
+          </div>
+        </div>
+
+        <!-- 取值分布 -->
+        <div class="cc-section">
+          <div class="cc-sec-title">Value distribution</div>
+          <div class="bool-split-wrap">
+            <div class="bool-split">
+              <i class="t" style="width:38.4%"></i>
+              <i class="f" style="width:61.6%"></i>
+            </div>
+            <div class="bool-legend">
+              <span class="it"><span class="sw" style="background:var(--success)"></span>True 38.4% (342)</span>
+              <span class="it"><span class="sw" style="background:var(--muted)"></span>False 61.6% (549)</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 样本值 -->
+        <div class="cc-section">
+          <div class="cc-sec-title">Sample <span class="cc-sec-note">前 5 行</span></div>
+          <div class="cc-detail">
+            <div class="row"><span>1st row</span><b>0</b></div>
+            <div class="row"><span>2nd row</span><b>1</b></div>
+            <div class="row"><span>3rd row</span><b>1</b></div>
+            <div class="row"><span>4th row</span><b>1</b></div>
+            <div class="row"><span>5th row</span><b>0</b></div>
+          </div>
+        </div>
+
+        <!-- 检查器（咱们的特色） -->
+        <div class="cc-section">
+          <div class="cc-sec-title">检查器 <span class="cc-sec-note">0/1 命中 · 咱们的特色</span></div>
+          <div class="rule-list">
+            <div class="rule-item"><span class="st fail">未命中</span><span class="rn">True 占比 ≥ 50%</span><span class="rm">仅 38.4%</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>

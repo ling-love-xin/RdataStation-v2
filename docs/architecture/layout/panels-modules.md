@@ -68,7 +68,7 @@
 > 另一类不在此列的字段是**宿主 ↔ 特性 crate 视图的实体弱句柄**（`mock_panel` / `mock_details` / `insight_panel` / `resources_panel` / `property_panel` / `plugin_manager`）：
 > 它们只在 workbench 内部读写——特性 crate 拿到的是注入的宿主端口，根本不认识 `Shared`——用途是
 > "宿主转发渲染 / 取面板选中项"（例：M6 的存档详情读左栏选中项；状态栏读 Mock 面板的运行中任务——“面板被切走时任务还在跑”）。
-> `open_property` / `open_plugin_manager` / `open_mock_detail` 同列：中央 tab「已建则聚焦、未建则新建」的创建/聚焦通道。
+> `open_property` / `open_plugin_manager` / `open_mock_detail` / `open_config_center` 同列：中央 tab「已建则聚焦、未建则新建」的创建/聚焦通道（`open_config_center` 为配置中心页，2026-11-20 补登记）。
 > 注意 `plugin_manager` 是**强持有**（关 tab 后再次点击复用同一实体，搜索/筛选状态不丢），
 > `property_panel` 是弱句柄（关闭即释放，下次重建）。
 > 新增同类句柄只需更新 `ui_contract.rs` 的白名单，不必改本表。

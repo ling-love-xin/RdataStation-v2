@@ -264,3 +264,89 @@ B 已落地一半（2026-11-16）：engine `duckdb::file_view::load_file_global`
 文件这条已闭环（2026-11-16）：面板工具栏「加源」（`e2f10895`）→ `source_picker` → `load_file_global` → 缓存写回，面板即时多出「已加载」行。
 
 连接这条差最后一段：`FederatedSession::add_source` 已具备（`0c12383a`，会话开着也能追加源、重名先挡、失败留痕），但面板侧要构造 `FederatedSource{conn_id, alias, kind: AccelKind, connection_string, secret}`（`registry.rs:197`）——连接串得从 `DataSourceService` 取回再 `build_connection_url`；且会话 owner 是“文档绑定的连接”、面板是全局单例看不到，只能取 `session::owners()` 里最新那个，并在对话框顶部写明会挂到谁。建议 B：视图不拷、与二次分析同一个实例；只有需要稳定快照（源文件会变）时才走 C。
+
+## 12. 数据对象面板 · 面板规格（2026-11-18 实施批定稿）
+
+> 本节是右侧 `RightPanel::DataObjects` 面板（07 原型承载）的**规格权威**：把面板落成「分析引擎 DuckDB 视角的对象总清单」——写 SQL 时回答“我此刻能引用什么”。§11 的 14 条口径在本节继续有效，冲突时以本节为准（更细）。
+> 实施批（刀 0–5）**已于 2026-11-18 全部落地**（逐刀记录与遗留清单见 `federation-entry-handoff.md` §9）；§12.5 为核实后定稿（不做第二条资产取数）。
+
+### 12.1 口径一句话
+
+**面板 = 分析引擎视角的对象清单**：只列“此刻已经被某个 DuckDB 实例（进程单例 / 联邦会话 / 本地加速会话）装进去的东西”。源库直连档下未挂载的连接**不进面板**（那是 M4 导航树的领域）；差异靠行上通道徽标表达，不做两棵树。
+
+### 12.2 分组与树化
+
+- 顶层是**四个形态段**（`Group`，2026-11-18 合并定稿，取代 11-16 的五容器口径）：已挂载的源 → 持久表 → 文件 → 临时表；业务身份（资产 / 项目自建 / 全局 / 结果集落库 / 已加载）是行内 pill。「持久表」合并了项目分析库与全局分析库（项目 vs 全局是标签不是形态）；「文件」只收**已加载**的（外部文件视图 / 手动加入的草稿视图）与资产·文件型——**未加载的草稿不进面板**，要「加源」手动加入。
+- **树化只做一层**：「已挂载的源」段的源行可展开出**表 / 视图叶子**。挂载源包含两类（pill 区分）：
+  - **联邦源**（`federation::session::owners()` 快照，pill「源」）；
+  - **本地加速源**（`accel::owners()`，pill「加速」）——accel 是“一源一条专用 DuckDB 连接”，表清单照 `duckdb_tables()` 按 `rds_src` 过滤；note 提示“引用需切到对应执行通道档”。
+- 叶子在**事件路径**懒加载（展开回调查引擎，结果缓存进面板字段），render 零 I/O——沿 source_picker `load_db_layer` 先例。
+- 复用 `tree::{active_bar, disclosure_slot, disclosure_icon, indent_*}` 行原语与 `RowHeight`；**不引 `tree::Tree`**（06 卡 02 清单）。深度预算：段头 → 源行 → 叶子，共三层可视层级，列不做节点。
+
+### 12.3 叶子动作：复制限定名（如实降级）
+
+叶子唯一动作是**复制限定名**：联邦源按 kind 生成三段 `别名.schema.表`（L2 两段 `别名.表`）；加速源给 `rds_src.schema.表`。**不给「选用 / 洞察」入口**——联邦 / 加速表在独立 DuckDB 连接上，洞察取样（进程单例）够不着；等 Phase 3「洞察搬结果」落地后再开。宁可少一个入口，不摆一个点了会炸的。
+
+### 12.4 行模型映射（`components/data_objects/mod.rs`）
+
+| 对象 | key 前缀 | Channel | Group | pill |
+| --- | --- | --- | --- | --- |
+| 联邦会话源 | `session:{owner}:{alias}` | Federated | MountedSources | 源 |
+| 本地加速源 | `accel:{conn_id}` | Federated | MountedSources | 加速 |
+| 项目分析库自建表 | `project:` | Local | PersistentTables | 项目自建 |
+| 结果集落库（`res_`） | `persistent:` | Local | PersistentTables | 结果集落库 |
+| 资产·表型（只读最新版） | `asset:` | Asset | PersistentTables | 资产 |
+| 资产·文件型（只读最新版） | `asset:` | Asset | Files | 资产 |
+| 全局分析库（`G_`） | `global:` | Local | PersistentTables | 全局 |
+| 已加载文件视图（外部文件 / 手动加入的草稿） | `fileview:` | File | Files | 已加载 |
+| 结果集（`tmp_q_`） | `result:` | Process | TemporaryTables | 结果集 |
+
+- **Mock（`tmp_m_`）与插件（`tmp_p_`）产物不进面板**（2026-11-18 用户口径）：mock 的下游是
+  草稿箱 / 外部目录 / 资产归档，插件产物归插件——它们是各模块的**生成物**，不是分析链路的
+  输入对象；与 `tmp_i_`（洞察样本）同一条纪律。
+
+- **`can_persist` 收紧为按前缀**（`tmp_q_` / `tmp_i_`）：Mock / 插件表各有模块管生命周期，不从面板落库（`persist_label` 本就按前缀剥前缀）。
+- **失效语义不变**：失效行留着带原因（`State::Stale/Failed`），不给动作只给“为什么”。
+- **未加载的草稿不进面板**（2026-11-18 口径）：草稿是“候选文件”不是 DuckDB 对象，自动列出来与“只含已加载对象”冲突；「加源」picker 里手动选了才进来（成为 `f_<ascii>` 视图）。
+
+### 12.5 资产行来源（单份取数，2026-11-18 核实后定稿）
+
+资产行由**资产面板实体**供给：侧栏构造期就建好该实体并预载一次快照（`build_resources_panel` 尾部
+`refresh_resources`——那条预载的注释点名就是为数据对象面板），项目切换（`project_host`）与资产增删
+（归档 / 取回 / 回收站）都会推新快照；数据对象面板 refresh 时从 `view_rows()` 翻译成 `AssetRow`。
+**不做第二条取数**（enqueue + drain 直达登记层）：那会造出两套真相，与“面板与对话框共用同一份取数”
+的模块立身之本冲突。曾以为存在“资产面板没载过就没有行”的缺口——核实为过时信息（预载早已落地）。
+
+### 12.6 「加源」：三分法与连接线（§11.14 收口）
+
+「加源」弹 01 原型形态（`source_picker`，已是三分法树）。kinds 扩为 `[Connected, External, Scratchpad]`（DuckDB 根在加源语境无叶子，自动不显示）。三条去向：
+
+| 去向 | 语义 | 状态 |
+| --- | --- | --- |
+| B 文件线 · 数据文件 | 进程单例建 `f_<ascii>` 视图，二次分析 / 洞察立即可用（视图行可「选用」） | ✅ 已闭环 |
+| B 文件线 · 库文件 | `.duckdb` / `.sqlite` **ATTACH 成 catalog**（2026-11-18 拍板：库文件走 ATTACH；DuckDB 自带扩展与凭据管理，只读挂载与联邦源同纪律），行进「已挂载的源」段、可展开列表 | ✅ 本批落地 |
+| C 连接线 | **标记 `use_duckdb_fed`（持久）**，回执写明“下一次联邦执行时挂载；源清单变化会重建会话（D12）” | ✅ 已落地 |
+| D 表级全量拉取 | **不支持 scanner 的库**（国产库等）：picker 里只能选其**表 / 视图**，确认后**全量拉取**进 DuckDB 物化（2026-11-18 拍板：做分析，肯定全量） | 🟡 已拍板未实现——归第二期 L3 表级刀（拉数链路 + 大表内存闸兜底），现状对这类库标记开关也无效（`federated_plan` 不认其驱动），界面如实跳过 |
+| A 会话视图 | `session::add_file_view`，联邦会话内可见 | 保留能力，加源默认不走（面板看不到会话视图，界面与事实会不一致） |
+
+连接线**不做“立即挂进当前会话”**：会话 owner 归文档（D2），面板是全局单例不越权；标记开关与 `federated_plan` 的组装口径（D15/D16）天然一致。
+
+### 12.7 边界（防误解）
+
+- 洞察产物 `tmp_i_` **不进面板**（§11.7）；要留走“保留到项目库”。
+- 全局库**不 ATTACH 进单例 / 会话**：全局行走短命挂载会话（`analysis::global`）+ `SampleSource::on_global`，单写者约束维持；“列得出、SQL 直查不到”的缺口等 Phase 1+ 一并处理并在行 note 如实说明。
+- 「升级到全局」只在资产库详情（§11.3）；面板不设该按钮。
+- 不做拖拽 / 右键 / 多选 / 重命名（06 卡 06 差异表）；工作集仍是“面板只承载一个对象”（§11.9）。
+
+### 12.8 实现位置映射
+
+| 规格 | 落点 |
+| --- | --- |
+| 行模型 / 纯函数（objects / analysis_sources / can_persist / session_actions） | `workbench/src/components/data_objects/mod.rs` |
+| 面板（refresh / 渲染 / 动作 / 树化字段） | `workbench/src/panels/data_objects_tab.rs` |
+| 加源对话框 | `workbench/src/components/data_objects_load.rs`（复用 `source_picker`） |
+| 联邦表清单列举 | `engine/src/duckdb/federation/session.rs`（`list_tables` / `list_tables_for`） |
+| 加速会话枚举与表清单 | `engine/src/duckdb/accel.rs`（`owners` / `list_tables_for`） |
+| 库文件挂载与列举（ATTACH） | `engine/src/duckdb/file_view.rs`（`is_database_file` / `load_database_global` / `list_tables_global`） |
+| 资产直达 | `analytics_resource::jobs::{enqueue_refresh, drain_snapshot}`（复用，不改） |
+| 取数复用 | `source_picker::{analysis_tables_of, collect_drafts, split_persistent_tables, persistent_table_label}`（复用，不改） |

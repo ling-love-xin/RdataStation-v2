@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>文本列 · 列详情原型 · RdataStation</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23A84A38'/%3E%3Ctext x='16' y='22' font-family='Segoe UI, sans-serif' font-size='15' font-weight='700' fill='%23fff' text-anchor='middle'%3ERS%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --chrome: #181818;
+    --editor: #1F1F1F;
+    --popover: #202020;
+    --border: #2A2A2A;
+    --border-soft: #232323;
+    --text: #CCCCCC;
+    --muted: #858585;
+    --dim: #6E6E6E;
+    --coral: #A84A38;
+    --success: #4A9B6B;
+    --warning: #C9A23A;
+    --danger: #D0534A;
+    --info: #4A8BC9;
+    --radius: 6px;
+    --mono: "Cascadia Mono", "Consolas", monospace;
+    --sans: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: var(--sans); font-size: 13px; color: var(--text); background: var(--chrome); padding: 24px; }
+  .page-title { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+  .page-sub { font-size: 12px; color: var(--muted); margin-bottom: 20px; }
+  .demo-hint { font-size: 11.5px; color: var(--dim); margin-bottom: 16px; padding: 8px 12px; background: var(--popover); border-radius: 6px; border-left: 3px solid var(--success); }
+
+  /* ===== 列卡片 ===== */
+  .col-card { background: var(--popover); border: 1px solid var(--border); border-radius: var(--radius); max-width: 560px; }
+
+  /* 折叠态（概览） */
+  .cc-folded { padding: 12px; cursor: pointer; }
+  .cc-folded:hover { background: #222; }
+  .cc-head { display: flex; align-items: center; gap: 8px; }
+  .cc-name { font-family: var(--mono); font-size: 14px; font-weight: 600; }
+  .kind-badge { font-size: 10.5px; padding: 1px 6px; border-radius: 3px; font-weight: 500; background: rgba(74,155,107,.15); color: var(--success); }
+  .cc-tags { display: flex; gap: 4px; margin-top: 2px; }
+  .cc-tag { font-size: 10px; padding: 1px 5px; background: #2A2A2A; border-radius: 3px; color: var(--muted); font-family: var(--mono); }
+  .cc-chev { margin-left: auto; color: var(--dim); font-size: 14px; }
+  .cc-overview { display: flex; gap: 16px; margin-top: 10px; }
+  .cc-basic { flex: 1; min-width: 0; }
+  .cc-basic .row { display: flex; justify-content: space-between; font-size: 12px; padding: 2px 0; }
+  .cc-basic .row span { color: var(--muted); }
+  .cc-basic .row b { font-family: var(--mono); font-weight: 500; }
+  .cc-mini-vis { width: 140px; flex: none; display: flex; flex-direction: column; gap: 3px; justify-content: center; }
+  .cc-mini-vis .frow { display: flex; align-items: center; gap: 4px; font-size: 10px; }
+  .cc-mini-vis .fk { width: 40px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-family: var(--mono); }
+  .cc-mini-vis .ftrk { flex: 1; height: 8px; background: #2E2E2E; border-radius: 2px; overflow: hidden; }
+  .cc-mini-vis .ftrk i { display: block; height: 100%; background: var(--coral); opacity: .7; }
+
+  /* 展开态（Tab 布局） */
+  .cc-expanded { display: block; border-top: 1px solid var(--border-soft); }
+  .cc-tabs { display: flex; border-bottom: 1px solid var(--border); padding: 0 12px; }
+  .cc-tab { padding: 8px 12px; font-size: 12px; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .cc-tab:hover { color: var(--text); }
+  .cc-tab.active { color: var(--info); border-bottom-color: var(--info); }
+  .cc-tab-content { padding: 14px 16px; }
+  .cc-tab-pane { display: none; }
+  .cc-tab-pane.active { display: block; }
+
+  .pane-title { font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
+  .pane-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; }
+  .pane-col { min-width: 0; }
+  .kv-list { display: flex; flex-direction: column; gap: 0; }
+  .kv-list .row { display: flex; justify-content: space-between; font-size: 12px; padding: 4px 0; border-bottom: 1px dashed var(--border-soft); }
+  .kv-list .row span { color: var(--muted); }
+  .kv-list .row b { font-family: var(--mono); font-weight: 500; }
+
+  /* 常见值频率表 */
+  .freq-table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+  .freq-table th { text-align: left; font-size: 11px; color: var(--dim); font-weight: 500; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+  .freq-table td { font-size: 12px; padding: 5px 8px; border-bottom: 1px solid var(--border-soft); }
+  .freq-table td.val { font-family: var(--mono); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .freq-table td.cnt { font-family: var(--mono); text-align: right; width: 60px; }
+  .freq-table td.pct { width: 160px; }
+  .freq-bar-wrap { background: #2E2E2E; border-radius: 3px; height: 14px; overflow: hidden; }
+  .freq-bar { height: 100%; background: var(--coral); opacity: .75; border-radius: 3px; }
+
+  /* 检查器 */
+  .cc-rules { border-top: 1px solid var(--border-soft); padding: 12px 16px; background: var(--chrome); }
+  .rules-title { font-size: 11.5px; font-weight: 600; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.3px; }
+  .rule-list { display: flex; flex-direction: column; gap: 5px; }
+  .rule-item { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--popover); }
+  .rule-item .st { flex: none; width: 36px; text-align: center; font-size: 10.5px; padding: 1px 0; border-radius: 3px; }
+  .rule-item .st.pass { background: rgba(74,155,107,.14); color: var(--success); }
+  .rule-item .st.fail { background: rgba(208,83,74,.15); color: var(--danger); }
+  .rule-item .rn { font-family: var(--mono); }
+  .rule-item .rm { margin-left: auto; color: var(--muted); font-size: 11px; }
+</style>
+</head>
+<body>
+
+<div class="page-title">文本列 · 列详情原型</div>
+<div class="page-sub">对齐 ydata-profiling Categorical 布局 · 折叠态概览 + 展开态 Tab 切换</div>
+<div class="demo-hint">
+  折叠态：左侧基本统计 + 右侧迷你频率条形图（概览）<br>
+  展开态：Tab 切换（概览 / 常见值 / 字符统计 / 样本），底部固定检查器区
+</div>
+
+<div class="col-card">
+  <!-- 折叠态 -->
+  <div class="cc-folded">
+    <div class="cc-head">
+      <span class="cc-name">Embarked</span>
+      <span class="kind-badge">CATEGORICAL</span>
+      <span class="cc-chev">▾</span>
+    </div>
+    <div class="cc-overview">
+      <div class="cc-basic">
+        <div class="row"><span>Distinct 唯一值</span><b>3</b></div>
+        <div class="row"><span>Missing 缺失</span><b>2</b></div>
+        <div class="row"><span>Missing (%)</span><b>0.2%</b></div>
+      </div>
+      <div class="cc-mini-vis">
+        <div class="frow"><span class="fk">S</span><span class="ftrk"><i style="width:100%"></i></span></div>
+        <div class="frow"><span class="fk">C</span><span class="ftrk"><i style="width:26%"></i></span></div>
+        <div class="frow"><span class="fk">Q</span><span class="ftrk"><i style="width:12%"></i></span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 展开态（Tab 布局） -->
+  <div class="cc-expanded">
+    <div class="cc-tabs">
+      <div class="cc-tab active">概览</div>
+      <div class="cc-tab">常见值</div>
+      <div class="cc-tab">字符统计</div>
+      <div class="cc-tab">样本</div>
+    </div>
+
+    <!-- Tab 1: 概览 -->
+    <div class="cc-tab-content">
+      <div class="cc-tab-pane active">
+        <div class="pane-grid">
+          <div class="pane-col">
+            <div class="pane-title">基本信息</div>
+            <div class="kv-list">
+              <div class="row"><span>Distinct 唯一值</span><b>3</b></div>
+              <div class="row"><span>Distinct (%)</span><b>0.3%</b></div>
+              <div class="row"><span>Missing 缺失</span><b>2</b></div>
+              <div class="row"><span>Missing (%)</span><b>0.2%</b></div>
+              <div class="row"><span>Memory size</span><b>7.2 KiB</b></div>
+            </div>
+          </div>
+          <div class="pane-col">
+            <div class="pane-title">长度统计</div>
+            <div class="kv-list">
+              <div class="row"><span>Max length</span><b>1</b></div>
+              <div class="row"><span>Median length</span><b>1</b></div>
+              <div class="row"><span>Mean length</span><b>1.0</b></div>
+              <div class="row"><span>Min length</span><b>1</b></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 2: 常见值 -->
+      <div class="cc-tab-pane">
+        <div class="pane-title">Common Values</div>
+        <table class="freq-table">
+          <thead>
+            <tr>
+              <th>Value</th>
+              <th style="text-align:right">Count</th>
+              <th>Frequency (%)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="val">S</td>
+              <td class="cnt">644</td>
+              <td class="pct"><div class="freq-bar" style="width:100%"></div></td>
+            </tr>
+            <tr>
+              <td class="val">C</td>
+              <td class="cnt">168</td>
+              <td class="pct"><div class="freq-bar" style="width:26%"></div></td>
+            </tr>
+            <tr>
+              <td class="val">Q</td>
+              <td class="cnt">77</td>
+              <td class="pct"><div class="freq-bar" style="width:12%"></div></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Tab 3: 字符统计 -->
+      <div class="cc-tab-pane">
+        <div class="pane-title">Characters and Unicode</div>
+        <div class="kv-list">
+          <div class="row"><span>Total characters</span><b>889</b></div>
+          <div class="row"><span>Distinct characters</span><b>3</b></div>
+          <div class="row"><span>Distinct categories</span><b>1</b></div>
+          <div class="row"><span>Distinct scripts</span><b>1</b></div>
+          <div class="row"><span>Distinct blocks</span><b>1</b></div>
+        </div>
+      </div>
+
+      <!-- Tab 4: 样本 -->
+      <div class="cc-tab-pane">
+        <div class="kv-list">
+          <div class="row"><span>1st row</span><b>S</b></div>
+          <div class="row"><span>2nd row</span><b>C</b></div>
+          <div class="row"><span>3rd row</span><b>S</b></div>
+          <div class="row"><span>4th row</span><b>S</b></div>
+          <div class="row"><span>5th row</span><b>S</b></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 检查器（固定底部） -->
+    <div class="cc-rules">
+      <div class="rules-title">检查器 · 1/2 命中</div>
+      <div class="rule-list">
+        <div class="rule-item"><span class="st pass">命中</span><span class="rn">枚举范围</span><span class="rm">3 个已知港口</span></div>
+        <div class="rule-item"><span class="st fail">未命中</span><span class="rn">缺失率 ≤ 0.1%</span><span class="rm">0.2% 缺失（2 行）</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

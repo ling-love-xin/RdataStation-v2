@@ -6,6 +6,8 @@
 > 「源清单 ▾」能看到并维护源（重挂 · 换主源）。剩余：扩展的显式安装动作与进度（T3.1 后半）、
 > SQL Server 真机（T3.3 待通知）、第二期 L3 桥接。
 > 进度与验收见 `federation-dev-plan.md`；凭据与 Secret 的实测台账见架构 §8。
+> **公共入口与数据对象面板**：「联邦 / 二次分析 / 洞察共用一个分析入口与一套 DuckDB 资源」的方案见
+> `federation-entry-design.md`（§11 入口口径定稿、§12 数据对象面板规格）；逐刀进度见 `federation-entry-handoff.md`。
 
 ## 1. 模块特点
 
@@ -74,6 +76,7 @@
 | 临时表生命周期 | `crates/engine/src/duckdb/{analysis.rs, temp_table.rs}`（✅） |
 | 通道档位（编辑器侧） | `crates/editor/src/channel.rs`（✅） |
 | 选型实测探针 | `crates/engine/tests/duckdb_extensions_probe.rs`（✅） |
+| 数据对象面板（DuckDB 视角全览，规格见 `federation-entry-design.md` §12） | `workbench/src/panels/data_objects_tab.rs` + `workbench/src/components/data_objects/`（✅ 2026-11-18：四形态分组（源/持久表/文件/临时表）、源行展开表/视图叶子、本地加速源、加源文件线+连接线；未加载草稿与 tmp_i_/tmp_m_/tmp_p_ 均不进清单） |
 
 ## 4. 改这个模块前必须遵守
 
@@ -139,6 +142,10 @@ RDS_TEST_MYSQL_URL='…' RDS_TEST_ORACLE_URL='oracle://user:pass@host:1521/XEPDB
 | `federation-prototype-design.md` | 长什么样：源清单 / 主源 / 错误呈现 / 代价与一致性怎么给用户看 |
 | `federation-architecture.md` | 为什么这样设计：三层选型（含实测证据）、关键决策、已知问题权威清单 |
 | `federation-dev-plan.md` | 怎么落地：分期与任务表、验收口径、进度记录 |
+| `federation-entry-design.md` | 公共分析入口怎么共用会话：`AnalysisSession` 模型 / 三分法来源 / **§11 入口口径定稿 / §12 数据对象面板规格（面板归属此文档）** |
+| `federation-entry-handoff.md` | 接到哪一步：已定裁决 / 逐刀进度（§8）/ 禁令与坑 |
+| `prototypes/entry/`（索引见其 `README.md`） | 界面原型 7 张：根 3 / 叶 5 映射、对象树与搜索规范（06）、面板（07）、编辑器联动（09）、加源（01） |
+| `archive-analytics-table-handoff.md` | 一次性修正交接：存档三档不覆盖「本体 = 项目分析库持久表」的事实与改动点 |
 
 ## 7. 下一步
 

@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>数值列 · 列详情原型 · RdataStation</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23A84A38'/%3E%3Ctext x='16' y='22' font-family='Segoe UI, sans-serif' font-size='15' font-weight='700' fill='%23fff' text-anchor='middle'%3ERS%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --chrome: #181818;
+    --editor: #1F1F1F;
+    --popover: #202020;
+    --border: #2A2A2A;
+    --border-soft: #232323;
+    --text: #CCCCCC;
+    --muted: #858585;
+    --dim: #6E6E6E;
+    --coral: #A84A38;
+    --success: #4A9B6B;
+    --warning: #C9A23A;
+    --danger: #D0534A;
+    --info: #4A8BC9;
+    --radius: 6px;
+    --mono: "Cascadia Mono", "Consolas", monospace;
+    --sans: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: var(--sans); font-size: 13px; color: var(--text); background: var(--chrome); padding: 24px; }
+  .page-title { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+  .page-sub { font-size: 12px; color: var(--muted); margin-bottom: 20px; }
+  .demo-hint { font-size: 11.5px; color: var(--dim); margin-bottom: 16px; padding: 8px 12px; background: var(--popover); border-radius: 6px; border-left: 3px solid var(--info); }
+
+  /* ===== 列卡片 ===== */
+  .col-card { background: var(--popover); border: 1px solid var(--border); border-radius: var(--radius); max-width: 560px; }
+
+  /* 折叠态（概览） */
+  .cc-folded { padding: 12px; cursor: pointer; }
+  .cc-folded:hover { background: #222; }
+  .cc-head { display: flex; align-items: center; gap: 8px; }
+  .cc-name { font-family: var(--mono); font-size: 14px; font-weight: 600; }
+  .kind-badge { font-size: 10.5px; padding: 1px 6px; border-radius: 3px; font-weight: 500; background: rgba(74,139,201,.15); color: var(--info); }
+  .cc-chev { margin-left: auto; color: var(--dim); font-size: 14px; }
+  .cc-overview { display: flex; gap: 16px; margin-top: 10px; }
+  .cc-basic { flex: 1; min-width: 0; }
+  .cc-basic .row { display: flex; justify-content: space-between; font-size: 12px; padding: 2px 0; }
+  .cc-basic .row span { color: var(--muted); }
+  .cc-basic .row b { font-family: var(--mono); font-weight: 500; }
+  .cc-mini-vis { width: 140px; flex: none; display: flex; align-items: flex-end; gap: 2px; height: 40px; }
+  .cc-mini-vis .bk { flex: 1; background: var(--coral); opacity: .7; border-radius: 2px 2px 0 0; min-height: 3px; }
+
+  /* 展开态（Tab 布局） */
+  .cc-expanded { display: block; border-top: 1px solid var(--border-soft); }
+  .cc-tabs { display: flex; border-bottom: 1px solid var(--border); padding: 0 12px; }
+  .cc-tab { padding: 8px 12px; font-size: 12px; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .cc-tab:hover { color: var(--text); }
+  .cc-tab.active { color: var(--info); border-bottom-color: var(--info); }
+  .cc-tab-content { padding: 14px 16px; }
+  .cc-tab-pane { display: none; }
+  .cc-tab-pane.active { display: block; }
+
+  .pane-title { font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
+  .pane-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; }
+  .pane-col { min-width: 0; }
+  .kv-list { display: flex; flex-direction: column; gap: 0; }
+  .kv-list .row { display: flex; justify-content: space-between; font-size: 12px; padding: 4px 0; border-bottom: 1px dashed var(--border-soft); }
+  .kv-list .row span { color: var(--muted); }
+  .kv-list .row b { font-family: var(--mono); font-weight: 500; }
+
+  .hist-box { margin-top: 10px; }
+  .hist-bar { display: flex; align-items: flex-end; gap: 2px; height: 60px; }
+  .hist-bar .bk { flex: 1; background: var(--coral); opacity: .72; border-radius: 2px 2px 0 0; min-height: 4px; }
+
+  /* 检查器 */
+  .cc-rules { border-top: 1px solid var(--border-soft); padding: 12px 16px; background: var(--chrome); }
+  .rules-title { font-size: 11.5px; font-weight: 600; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.3px; }
+  .rule-list { display: flex; flex-direction: column; gap: 5px; }
+  .rule-item { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--popover); }
+  .rule-item .st { flex: none; width: 36px; text-align: center; font-size: 10.5px; padding: 1px 0; border-radius: 3px; }
+  .rule-item .st.pass { background: rgba(74,155,107,.14); color: var(--success); }
+  .rule-item .st.fail { background: rgba(208,83,74,.15); color: var(--danger); }
+  .rule-item .rn { font-family: var(--mono); }
+  .rule-item .rm { margin-left: auto; color: var(--muted); font-size: 11px; }
+</style>
+</head>
+<body>
+
+<div class="page-title">数值列 · 列详情原型</div>
+<div class="page-sub">对齐 ydata-profiling Numeric 布局 · 折叠态概览 + 展开态 Tab 切换</div>
+<div class="demo-hint">
+  折叠态：左侧基本统计 + 右侧迷你直方图（概览）<br>
+  展开态：Tab 切换（统计分布 / 极值 / 样本），底部固定检查器区
+</div>
+
+<div class="col-card">
+  <!-- 折叠态 -->
+  <div class="cc-folded">
+    <div class="cc-head">
+      <span class="cc-name">Fare</span>
+      <span class="kind-badge">REAL NUMBER</span>
+      <span class="cc-chev">▾</span>
+    </div>
+    <div class="cc-overview">
+      <div class="cc-basic">
+        <div class="row"><span>Distinct 唯一值</span><b>248</b></div>
+        <div class="row"><span>Missing 缺失</span><b>0</b></div>
+        <div class="row"><span>Missing (%)</span><b>0.0%</b></div>
+      </div>
+      <div class="cc-mini-vis">
+        <div class="bk" style="height:95%"></div>
+        <div class="bk" style="height:45%"></div>
+        <div class="bk" style="height:25%"></div>
+        <div class="bk" style="height:15%"></div>
+        <div class="bk" style="height:10%"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 展开态（Tab 布局） -->
+  <div class="cc-expanded">
+    <div class="cc-tabs">
+      <div class="cc-tab active">统计分布</div>
+      <div class="cc-tab">极值</div>
+      <div class="cc-tab">样本</div>
+    </div>
+
+    <!-- Tab 1: 统计分布 -->
+    <div class="cc-tab-content">
+      <div class="cc-tab-pane active">
+        <div class="pane-grid">
+          <div class="pane-col">
+            <div class="pane-title">分位数统计</div>
+            <div class="kv-list">
+              <div class="row"><span>Minimum</span><b>0.00</b></div>
+              <div class="row"><span>5-th percentile</span><b>7.23</b></div>
+              <div class="row"><span>Q1</span><b>7.91</b></div>
+              <div class="row"><span>median</span><b>14.45</b></div>
+              <div class="row"><span>Q3</span><b>31.00</b></div>
+              <div class="row"><span>95-th percentile</span><b>112.08</b></div>
+              <div class="row"><span>Maximum</span><b>512.33</b></div>
+              <div class="row"><span>Range</span><b>512.33</b></div>
+              <div class="row"><span>IQR</span><b>23.09</b></div>
+            </div>
+          </div>
+          <div class="pane-col">
+            <div class="pane-title">描述统计</div>
+            <div class="kv-list">
+              <div class="row"><span>Mean 均值</span><b>32.20</b></div>
+              <div class="row"><span>Std deviation 标准差</span><b>49.69</b></div>
+              <div class="row"><span>Variance 方差</span><b>2469.44</b></div>
+              <div class="row"><span>CV 变异系数</span><b>1.54</b></div>
+              <div class="row"><span>Skewness 偏度</span><b>4.78</b></div>
+              <div class="row"><span>Kurtosis 峰度</span><b>33.20</b></div>
+              <div class="row"><span>MAD</span><b>18.00</b></div>
+              <div class="row"><span>Sum 总和</span><b>28663.00</b></div>
+              <div class="row"><span>Monotonicity</span><b>—</b></div>
+            </div>
+          </div>
+        </div>
+        <div class="hist-box">
+          <div class="pane-title">直方图</div>
+          <div class="hist-bar">
+            <div class="bk" style="height:95%"></div>
+            <div class="bk" style="height:45%"></div>
+            <div class="bk" style="height:25%"></div>
+            <div class="bk" style="height:15%"></div>
+            <div class="bk" style="height:10%"></div>
+            <div class="bk" style="height:6%"></div>
+            <div class="bk" style="height:3%"></div>
+            <div class="bk" style="height:2%"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 2: 极值 -->
+      <div class="cc-tab-pane">
+        <div class="pane-title">最小极值</div>
+        <div class="kv-list" style="margin-bottom: 16px;">
+          <div class="row"><span>0.00</span><b>577 行</b></div>
+          <div class="row"><span>7.225</span><b>63 行</b></div>
+          <div class="row"><span>7.75</span><b>52 行</b></div>
+          <div class="row"><span>7.8792</span><b>49 行</b></div>
+          <div class="row"><span>8.05</span><b>47 行</b></div>
+        </div>
+        <div class="pane-title">最大极值</div>
+        <div class="kv-list">
+          <div class="row"><span>512.3292</span><b>1 行</b></div>
+          <div class="row"><span>263.000</span><b>1 行</b></div>
+          <div class="row"><span>262.375</span><b>1 行</b></div>
+          <div class="row"><span>247.5208</span><b>1 行</b></div>
+          <div class="row"><span>227.525</span><b>3 行</b></div>
+        </div>
+      </div>
+
+      <!-- Tab 3: 样本 -->
+      <div class="cc-tab-pane">
+        <div class="kv-list">
+          <div class="row"><span>1st row</span><b>7.2500</b></div>
+          <div class="row"><span>2nd row</span><b>71.2833</b></div>
+          <div class="row"><span>3rd row</span><b>7.9250</b></div>
+          <div class="row"><span>4th row</span><b>53.1000</b></div>
+          <div class="row"><span>5th row</span><b>8.0500</b></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 检查器（固定底部） -->
+    <div class="cc-rules">
+      <div class="rules-title">检查器 · 1/2 命中</div>
+      <div class="rule-list">
+        <div class="rule-item"><span class="st pass">命中</span><span class="rn">金额 ≥ 0</span><span class="rm">负值 0</span></div>
+        <div class="rule-item"><span class="st fail">未命中</span><span class="rn">零值占比 ≤ 2%</span><span class="rm">13% 零值</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

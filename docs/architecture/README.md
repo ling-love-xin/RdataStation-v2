@@ -104,6 +104,9 @@
 | `federation/federation-architecture.md` | 联邦查询**设计理念与架构** | 三层选型的**实测依据**（`duckdb_extensions_probe`：官方与社区 scanner 全部 INSTALL + LOAD 成功）/ 与邻居的关系（accel · extensions · analysis · editor 通道 · 1c 会话）/ **D1–D10 决策表** / 表名解析与写作规范 / 资源与生命周期 / 失败降级矩阵 / **§8 已知问题（权威，10 条）** / 实现位置映射 |
 | `federation/federation-prototype-design.md` | 联邦查询原型 | 入口（执行位置第三档）/ **源清单浮层**（失败行带原话原因 · 按源重挂 · 设为主源）/ 主源与同名表报错卡片 / 结果区的代价与一致性标注 / 跨源错误点名源 / 门控与空态矩阵 / 主题映射 |
 | `federation/federation-dev-plan.md` | 联邦查询开发方案 | 进度记录 / 现状盘点 / **三期任务表（第一期多源挂载 · 第二期 L3 桥接 · 第三期社区 scanner 待真机）** / 测试场景 11 条 / 风险 R1–R5 / 实现位置映射 |
+| `federation/federation-entry-design.md` | 联邦查询**公共入口方案**（数据对象面板归属此文档） | `AnalysisSession` 统一会话模型 / 三分法来源（根 3 · 叶 5）/ 二维表（持久×临时 × 本机×外部）/ **§11 入口口径定稿（14 条）** / **§12 数据对象面板规格**（五容器分组 · 树化 · 加源三去向 · 资产行来源）/ Phase 0–5 开发计划与可证伪验收 |
+| `federation/federation-entry-handoff.md` | 联邦查询公共入口**交接活文档** | 已定裁决 12 条（不要再问）/ 已落地逐刀（§8）/ 未完成按优先级 / 关键事实免重查 / 禁令与坑 |
+| `federation/prototypes/entry/`（7 张 HTML + 索引 README） | 公共入口**界面原型** | 加源三分法 picker（01）/ 对象树与搜索规范（06）/ 右侧数据对象面板（07）/ 结果集分析对话框（08）/ 编辑器联邦联动（09）/ 三段模型总览（10） |
 
 ## 关联目录
 
@@ -138,7 +141,7 @@
 | `insight/` | ✅ | ✅ | ✅ `insight-architecture.md` | ✅ | ✅ `insight-user-guide.md`（规则格式属对外契约，已补） |
 | `analytics_resource/` | ✅ | ✅ | ✅ `analytics-resource-architecture.md`（本轮新增，兼语义裁决书） | ✅ | ✅ `analytics-resource-user-guide.md`（本轮新增） |
 | `mock/` | ✅（本轮新增） | ✅（自 v1 迁入） | ✅ `mock-architecture.md`（本轮新增） | ✅ `mock-dev-plan.md`（本轮新增） | ✅ `mock-user-guide.md` |
-| `federation/` | ✅（本轮新增） | ⬜ 缺交互稿（实现后补） | ✅ `federation-architecture.md`（本轮新增） | ✅ `federation-dev-plan.md`（本轮新增，**第一期未开工**） | ⬜ 缺使用手册（实现后补） |
+| `federation/` | ✅（本轮新增） | ✅ `prototypes/entry/`（7 张公共入口原型 + 索引；另 `federation-prototype-design.md` 覆盖源清单浮层） | ✅ `federation-architecture.md`（本轮新增）+ `federation-entry-design.md`（公共入口） | ✅ `federation-dev-plan.md`（第一期与 T3.2 已完成 2026-09-18） | ⬜ 缺使用手册（实现后补） |
 | `file-meta/`（基础元数据 crate，无 UI） | ⬜ 无 UI | ⬜ 无 UI | ✅ `file-meta-design.md`（本轮新增） | ✅ 实现随设计（`file-meta-design.md` §8 实现状态） | ⬜ 无 UI |
 
 > `layout/` / `theme/` / `ui/` / `dependencies/` 属**规格类**（单文档即可，不强制五件套）。

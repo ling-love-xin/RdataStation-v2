@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>日期列 · 列详情原型 · RdataStation</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23A84A38'/%3E%3Ctext x='16' y='22' font-family='Segoe UI, sans-serif' font-size='15' font-weight='700' fill='%23fff' text-anchor='middle'%3ERS%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --chrome: #181818;
+    --editor: #1F1F1F;
+    --popover: #202020;
+    --border: #2A2A2A;
+    --border-soft: #232323;
+    --text: #CCCCCC;
+    --muted: #858585;
+    --dim: #6E6E6E;
+    --coral: #A84A38;
+    --success: #4A9B6B;
+    --warning: #C9A23A;
+    --danger: #D0534A;
+    --info: #4A8BC9;
+    --radius: 6px;
+    --mono: "Cascadia Mono", "Consolas", monospace;
+    --sans: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: var(--sans); font-size: 13px; color: var(--text); background: var(--chrome); padding: 24px; }
+  .page-title { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+  .page-sub { font-size: 12px; color: var(--muted); margin-bottom: 20px; }
+  .demo-hint { font-size: 11.5px; color: var(--dim); margin-bottom: 16px; padding: 8px 12px; background: var(--popover); border-radius: 6px; border-left: 3px solid var(--warning); }
+
+  /* ===== 列卡片 ===== */
+  .col-card { background: var(--popover); border: 1px solid var(--border); border-radius: var(--radius); max-width: 560px; }
+
+  /* 折叠态（概览） */
+  .cc-folded { padding: 12px; cursor: pointer; }
+  .cc-folded:hover { background: #222; }
+  .cc-head { display: flex; align-items: center; gap: 8px; }
+  .cc-name { font-family: var(--mono); font-size: 14px; font-weight: 600; }
+  .kind-badge { font-size: 10.5px; padding: 1px 6px; border-radius: 3px; font-weight: 500; background: rgba(201,162,58,.15); color: var(--warning); }
+  .cc-chev { margin-left: auto; color: var(--dim); font-size: 14px; }
+  .cc-overview { display: flex; gap: 16px; margin-top: 10px; }
+  .cc-basic { flex: 1; min-width: 0; }
+  .cc-basic .row { display: flex; justify-content: space-between; font-size: 12px; padding: 2px 0; }
+  .cc-basic .row span { color: var(--muted); }
+  .cc-basic .row b { font-family: var(--mono); font-weight: 500; }
+  .cc-mini-vis { width: 140px; flex: none; display: flex; align-items: flex-end; gap: 2px; height: 40px; }
+  .cc-mini-vis .bk { flex: 1; background: var(--coral); opacity: .7; border-radius: 2px 2px 0 0; min-height: 3px; }
+
+  /* 展开态（Tab 布局） */
+  .cc-expanded { display: block; border-top: 1px solid var(--border-soft); }
+  .cc-tabs { display: flex; border-bottom: 1px solid var(--border); padding: 0 12px; }
+  .cc-tab { padding: 8px 12px; font-size: 12px; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .cc-tab:hover { color: var(--text); }
+  .cc-tab.active { color: var(--info); border-bottom-color: var(--info); }
+  .cc-tab-content { padding: 14px 16px; }
+  .cc-tab-pane { display: none; }
+  .cc-tab-pane.active { display: block; }
+
+  .pane-title { font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
+  .pane-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; }
+  .pane-col { min-width: 0; }
+  .kv-list { display: flex; flex-direction: column; gap: 0; }
+  .kv-list .row { display: flex; justify-content: space-between; font-size: 12px; padding: 4px 0; border-bottom: 1px dashed var(--border-soft); }
+  .kv-list .row span { color: var(--muted); }
+  .kv-list .row b { font-family: var(--mono); font-weight: 500; }
+
+  .hist-box { margin-top: 10px; }
+  .hist-bar { display: flex; align-items: flex-end; gap: 2px; height: 60px; }
+  .hist-bar .bk { flex: 1; background: var(--coral); opacity: .72; border-radius: 2px 2px 0 0; min-height: 4px; }
+
+  /* 检查器 */
+  .cc-rules { border-top: 1px solid var(--border-soft); padding: 12px 16px; background: var(--chrome); }
+  .rules-title { font-size: 11.5px; font-weight: 600; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.3px; }
+  .rule-list { display: flex; flex-direction: column; gap: 5px; }
+  .rule-item { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--popover); }
+  .rule-item .st { flex: none; width: 36px; text-align: center; font-size: 10.5px; padding: 1px 0; border-radius: 3px; }
+  .rule-item .st.pass { background: rgba(74,155,107,.14); color: var(--success); }
+  .rule-item .st.fail { background: rgba(208,83,74,.15); color: var(--danger); }
+  .rule-item .rn { font-family: var(--mono); }
+  .rule-item .rm { margin-left: auto; color: var(--muted); font-size: 11px; }
+</style>
+</head>
+<body>
+
+<div class="page-title">日期列 · 列详情原型</div>
+<div class="page-sub">对齐 ydata-profiling DateTime 布局 · 折叠态概览 + 展开态 Tab 切换</div>
+<div class="demo-hint">
+  折叠态：左侧时间范围概要 + 右侧迷你月度分布<br>
+  展开态：Tab 切换（概览 / 月度分布 / 日分布 / 样本），底部固定检查器区
+</div>
+
+<div class="col-card">
+  <!-- 折叠态 -->
+  <div class="cc-folded">
+    <div class="cc-head">
+      <span class="cc-name">created_at</span>
+      <span class="kind-badge">TIMESTAMP</span>
+      <span class="cc-chev">▾</span>
+    </div>
+    <div class="cc-overview">
+      <div class="cc-basic">
+        <div class="row"><span>Distinct 唯一值</span><b>128,441</b></div>
+        <div class="row"><span>Missing 缺失</span><b>0</b></div>
+        <div class="row"><span>范围</span><b>2026-01 ~ 2026-09</b></div>
+      </div>
+      <div class="cc-mini-vis">
+        <div class="bk" style="height:40%"></div>
+        <div class="bk" style="height:45%"></div>
+        <div class="bk" style="height:60%"></div>
+        <div class="bk" style="height:55%"></div>
+        <div class="bk" style="height:70%"></div>
+        <div class="bk" style="height:85%"></div>
+        <div class="bk" style="height:90%"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 展开态（Tab 布局） -->
+  <div class="cc-expanded">
+    <div class="cc-tabs">
+      <div class="cc-tab active">概览</div>
+      <div class="cc-tab">月度分布</div>
+      <div class="cc-tab">日分布</div>
+      <div class="cc-tab">样本</div>
+    </div>
+
+    <!-- Tab 1: 概览 -->
+    <div class="cc-tab-content">
+      <div class="cc-tab-pane active">
+        <div class="pane-grid">
+          <div class="pane-col">
+            <div class="pane-title">时间范围</div>
+            <div class="kv-list">
+              <div class="row"><span>最早</span><b>2026-01-01 08:00:00</b></div>
+              <div class="row"><span>最晚</span><b>2026-09-30 23:59:59</b></div>
+              <div class="row"><span>跨度</span><b>273 天</b></div>
+              <div class="row"><span>Missing 缺失</span><b>0</b></div>
+              <div class="row"><span>Missing (%)</span><b>0.0%</b></div>
+            </div>
+          </div>
+          <div class="pane-col">
+            <div class="pane-title">统计</div>
+            <div class="kv-list">
+              <div class="row"><span>Distinct 唯一值</span><b>128,441</b></div>
+              <div class="row"><span>Distinct (%)</span><b>99.9%</b></div>
+              <div class="row"><span>日均行数</span><b>470</b></div>
+              <div class="row"><span>峰值日</span><b>9/15 (1,240)</b></div>
+              <div class="row"><span>谷值日</span><b>2/3 (12)</b></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 2: 月度分布 -->
+      <div class="cc-tab-pane">
+        <div class="pane-title">月度分布</div>
+        <div class="hist-box">
+          <div class="hist-bar">
+            <div class="bk" style="height:40%"></div>
+            <div class="bk" style="height:45%"></div>
+            <div class="bk" style="height:60%"></div>
+            <div class="bk" style="height:55%"></div>
+            <div class="bk" style="height:70%"></div>
+            <div class="bk" style="height:85%"></div>
+            <div class="bk" style="height:90%"></div>
+            <div class="bk" style="height:75%"></div>
+            <div class="bk" style="height:65%"></div>
+          </div>
+        </div>
+        <div class="kv-list" style="margin-top: 12px;">
+          <div class="row"><span>2026-01</span><b>5,200 行</b></div>
+          <div class="row"><span>2026-02</span><b>5,800 行</b></div>
+          <div class="row"><span>2026-03</span><b>7,700 行</b></div>
+          <div class="row"><span>2026-04</span><b>7,000 行</b></div>
+          <div class="row"><span>2026-05</span><b>8,900 行</b></div>
+          <div class="row"><span>2026-06</span><b>10,800 行</b></div>
+          <div class="row"><span>2026-07</span><b>11,500 行</b></div>
+          <div class="row"><span>2026-08</span><b>9,600 行</b></div>
+          <div class="row"><span>2026-09</span><b>8,300 行</b></div>
+        </div>
+      </div>
+
+      <!-- Tab 3: 日分布 -->
+      <div class="cc-tab-pane">
+        <div class="pane-title">星期分布</div>
+        <div class="kv-list">
+          <div class="row"><span>周一</span><b>21,300 行 (16.6%)</b></div>
+          <div class="row"><span>周二</span><b>20,800 行 (16.2%)</b></div>
+          <div class="row"><span>周三</span><b>19,500 行 (15.2%)</b></div>
+          <div class="row"><span>周四</span><b>18,200 行 (14.2%)</b></div>
+          <div class="row"><span>周五</span><b>16,100 行 (12.5%)</b></div>
+          <div class="row"><span>周六</span><b>17,800 行 (13.9%)</b></div>
+          <div class="row"><span>周日</span><b>14,741 行 (11.5%)</b></div>
+        </div>
+      </div>
+
+      <!-- Tab 4: 样本 -->
+      <div class="cc-tab-pane">
+        <div class="kv-list">
+          <div class="row"><span>1st row</span><b>2026-09-30 14:23:11</b></div>
+          <div class="row"><span>2nd row</span><b>2026-09-30 14:22:58</b></div>
+          <div class="row"><span>3rd row</span><b>2026-09-30 14:21:45</b></div>
+          <div class="row"><span>4th row</span><b>2026-09-30 14:20:32</b></div>
+          <div class="row"><span>5th row</span><b>2026-09-30 14:19:08</b></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 检查器（固定底部） -->
+    <div class="cc-rules">
+      <div class="rules-title">检查器 · 1/1 命中</div>
+      <div class="rule-list">
+        <div class="rule-item"><span class="st pass">命中</span><span class="rn">时间范围合理</span><span class="rm">2026-01 ~ 2026-09</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

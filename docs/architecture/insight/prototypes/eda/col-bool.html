@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>布尔列 · 列详情原型 · RdataStation</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23A84A38'/%3E%3Ctext x='16' y='22' font-family='Segoe UI, sans-serif' font-size='15' font-weight='700' fill='%23fff' text-anchor='middle'%3ERS%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --chrome: #181818;
+    --editor: #1F1F1F;
+    --popover: #202020;
+    --border: #2A2A2A;
+    --border-soft: #232323;
+    --text: #CCCCCC;
+    --muted: #858585;
+    --dim: #6E6E6E;
+    --coral: #A84A38;
+    --success: #4A9B6B;
+    --warning: #C9A23A;
+    --danger: #D0534A;
+    --info: #4A8BC9;
+    --radius: 6px;
+    --mono: "Cascadia Mono", "Consolas", monospace;
+    --sans: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: var(--sans); font-size: 13px; color: var(--text); background: var(--chrome); padding: 24px; }
+  .page-title { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+  .page-sub { font-size: 12px; color: var(--muted); margin-bottom: 20px; }
+  .demo-hint { font-size: 11.5px; color: var(--dim); margin-bottom: 16px; padding: 8px 12px; background: var(--popover); border-radius: 6px; border-left: 3px solid var(--danger); }
+
+  /* ===== 列卡片 ===== */
+  .col-card { background: var(--popover); border: 1px solid var(--border); border-radius: var(--radius); max-width: 560px; }
+
+  /* 折叠态（概览） */
+  .cc-folded { padding: 12px; cursor: pointer; }
+  .cc-folded:hover { background: #222; }
+  .cc-head { display: flex; align-items: center; gap: 8px; }
+  .cc-name { font-family: var(--mono); font-size: 14px; font-weight: 600; }
+  .kind-badge { font-size: 10.5px; padding: 1px 6px; border-radius: 3px; font-weight: 500; background: rgba(208,83,74,.15); color: var(--danger); }
+  .cc-chev { margin-left: auto; color: var(--dim); font-size: 14px; }
+  .cc-overview { display: flex; gap: 16px; margin-top: 10px; }
+  .cc-basic { flex: 1; min-width: 0; }
+  .cc-basic .row { display: flex; justify-content: space-between; font-size: 12px; padding: 2px 0; }
+  .cc-basic .row span { color: var(--muted); }
+  .cc-basic .row b { font-family: var(--mono); font-weight: 500; }
+  .cc-mini-vis { width: 140px; flex: none; }
+  .mini-split { display: flex; height: 12px; border-radius: 3px; overflow: hidden; margin-top: 8px; }
+  .mini-split i.t { background: var(--success); }
+  .mini-split i.f { background: var(--muted); }
+
+  /* 展开态（Tab 布局） */
+  .cc-expanded { display: block; border-top: 1px solid var(--border-soft); }
+  .cc-tabs { display: flex; border-bottom: 1px solid var(--border); padding: 0 12px; }
+  .cc-tab { padding: 8px 12px; font-size: 12px; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .cc-tab:hover { color: var(--text); }
+  .cc-tab.active { color: var(--info); border-bottom-color: var(--info); }
+  .cc-tab-content { padding: 14px 16px; }
+  .cc-tab-pane { display: none; }
+  .cc-tab-pane.active { display: block; }
+
+  .pane-title { font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
+  .kv-list { display: flex; flex-direction: column; gap: 0; }
+  .kv-list .row { display: flex; justify-content: space-between; font-size: 12px; padding: 4px 0; border-bottom: 1px dashed var(--border-soft); }
+  .kv-list .row span { color: var(--muted); }
+  .kv-list .row b { font-family: var(--mono); font-weight: 500; }
+
+  /* 布尔分布 */
+  .bool-dist-box { margin-top: 8px; }
+  .bool-split { display: flex; height: 20px; border-radius: 4px; overflow: hidden; }
+  .bool-split i.t { background: var(--success); }
+  .bool-split i.f { background: var(--muted); }
+  .bool-legend { display: flex; gap: 20px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+  .bool-legend .it { display: flex; align-items: center; gap: 6px; }
+  .bool-legend .sw { width: 10px; height: 10px; border-radius: 2px; }
+  .bool-legend b { font-family: var(--mono); color: var(--text); }
+
+  /* 检查器 */
+  .cc-rules { border-top: 1px solid var(--border-soft); padding: 12px 16px; background: var(--chrome); }
+  .rules-title { font-size: 11.5px; font-weight: 600; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.3px; }
+  .rule-list { display: flex; flex-direction: column; gap: 5px; }
+  .rule-item { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--popover); }
+  .rule-item .st { flex: none; width: 36px; text-align: center; font-size: 10.5px; padding: 1px 0; border-radius: 3px; }
+  .rule-item .st.pass { background: rgba(74,155,107,.14); color: var(--success); }
+  .rule-item .st.fail { background: rgba(208,83,74,.15); color: var(--danger); }
+  .rule-item .rn { font-family: var(--mono); }
+  .rule-item .rm { margin-left: auto; color: var(--muted); font-size: 11px; }
+</style>
+</head>
+<body>
+
+<div class="page-title">布尔列 · 列详情原型</div>
+<div class="page-sub">对齐 ydata-profiling Boolean 布局 · 折叠态概览 + 展开态 Tab 切换</div>
+<div class="demo-hint">
+  折叠态：左侧基本统计 + 右侧迷你占比条<br>
+  展开态：Tab 切换（概览 / 样本），底部固定检查器区
+</div>
+
+<div class="col-card">
+  <!-- 折叠态 -->
+  <div class="cc-folded">
+    <div class="cc-head">
+      <span class="cc-name">Survived</span>
+      <span class="kind-badge">BOOLEAN</span>
+      <span class="cc-chev">▾</span>
+    </div>
+    <div class="cc-overview">
+      <div class="cc-basic">
+        <div class="row"><span>True 占比</span><b>38.4%</b></div>
+        <div class="row"><span>Missing 缺失</span><b>0</b></div>
+        <div class="row"><span>Missing (%)</span><b>0.0%</b></div>
+      </div>
+      <div class="cc-mini-vis">
+        <div class="mini-split">
+          <i class="t" style="width:38.4%"></i>
+          <i class="f" style="width:61.6%"></i>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 展开态（Tab 布局） -->
+  <div class="cc-expanded">
+    <div class="cc-tabs">
+      <div class="cc-tab active">概览</div>
+      <div class="cc-tab">样本</div>
+    </div>
+
+    <!-- Tab 1: 概览 -->
+    <div class="cc-tab-content">
+      <div class="cc-tab-pane active">
+        <div class="pane-title">基本信息</div>
+        <div class="kv-list" style="margin-bottom: 16px;">
+          <div class="row"><span>Distinct 唯一值</span><b>2</b></div>
+          <div class="row"><span>Distinct (%)</span><b>0.2%</b></div>
+          <div class="row"><span>Missing 缺失</span><b>0</b></div>
+          <div class="row"><span>Missing (%)</span><b>0.0%</b></div>
+          <div class="row"><span>Memory size</span><b>0.9 KiB</b></div>
+        </div>
+
+        <div class="pane-title">取值分布</div>
+        <div class="bool-dist-box">
+          <div class="bool-split">
+            <i class="t" style="width:38.4%"></i>
+            <i class="f" style="width:61.6%"></i>
+          </div>
+          <div class="bool-legend">
+            <span class="it"><span class="sw" style="background:var(--success)"></span>True <b>342</b> (38.4%)</span>
+            <span class="it"><span class="sw" style="background:var(--muted)"></span>False <b>549</b> (61.6%)</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 2: 样本 -->
+      <div class="cc-tab-pane">
+        <div class="kv-list">
+          <div class="row"><span>1st row</span><b>0</b></div>
+          <div class="row"><span>2nd row</span><b>1</b></div>
+          <div class="row"><span>3rd row</span><b>1</b></div>
+          <div class="row"><span>4th row</span><b>1</b></div>
+          <div class="row"><span>5th row</span><b>0</b></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 检查器（固定底部） -->
+    <div class="cc-rules">
+      <div class="rules-title">检查器 · 0/1 命中</div>
+      <div class="rule-list">
+        <div class="rule-item"><span class="st fail">未命中</span><span class="rn">True 占比 ≥ 50%</span><span class="rm">仅 38.4%</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

@@ -71,6 +71,11 @@
 </div>
 <div class="lead">你要「复用草稿箱、数据库导航栏那类」，可复用的**不是树控件**，而是外壳里的行原语（激活条 / 展开槽 / 缩进 / 行高预算）。这三个面板的行模型与交互各不相同，外壳已明确不抽通用树组件——picker 同样只借原语。</div>
 
+<div class="lead" style="border-left:3px solid #7A9A6B">
+  <b>实现状态（2026-11-18 核对）</b>：本页卡 07 的三步切片已在 <code>source_picker</code> 落地（三分法 tab + TreeState 树态 / 跨根搜索 / 最近使用 / 懒加载 DbCache / 深度预算 3 / 60 行切虚拟列表）。
+  <b>本批在途</b>：数据对象面板按卡 02 原语清单做「源行 → 表 / 视图」一层展开（规格见 federation-entry-design.md §12.2）——同样只借行原语、不引 tree::Tree。
+</div>
+
 <div class="cols">
 
   <div class="card">

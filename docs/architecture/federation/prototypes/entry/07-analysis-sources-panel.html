@@ -116,7 +116,18 @@
   <span class="tagline">洞察 / 结果集二次分析 / 联邦共用同一份「可分析对象」清单</span>
 </div>
 <div class="lead">
-  这块面板不是「选一次就关掉的对话框」，而是<b>常驻在右侧的清单</b>：列出的是<b>已经被 DuckDB 加载进来、可以直接分析的对象</b>。分组就是五个 duckdb 容器（本项目分析库 / 全局分析库 / 已挂载的源 / 外部文件 / 临时表）；「这是资产 / 项目自建 / 全局 / 结果集 / 草稿」只是行内一个 pill，不再各占一段。行上的对象<b>永远是最后版本</b>——历史版本只在资产库里看。
+  这块面板不是「选一次就关掉的对话框」，而是<b>常驻在右侧的清单</b>：列出的是<b>已经被 DuckDB 加载进来、可以直接分析的对象</b>。分组按对象形态四段（2026-11-18 合并定稿：已挂载的源 / 持久表 / 文件 / 临时表）；「这是资产 / 项目自建 / 全局 / 结果集落库 / 已加载」只是行内一个 pill，不再各占一段；未加载的草稿不进面板（加源手动加入）。行上的对象<b>永远是最后版本</b>——历史版本只在资产库里看。
+</div>
+
+<div class="lead" style="border-left:3px solid #7A9A6B">
+  <b>实现状态（2026-11-18 核对）</b>：<b>已落地</b>——四形态分组（源 / 持久表 / 文件 / 临时表）与行内 pill、行上「选用」（单对象）+「洞察此对象」、
+  「存为表」（仅结果集 tmp_q_）、会话动作条（重挂 / 设主源 / 关会话）与「清理临时对象」、搜索 / 筛选 chips / 分组折叠、
+  头部内存读数与刷新、工具栏「加源」（→ 01 picker → 单例视图 / 标记联邦连接）。
+  <b>2026-11-18 实施批已落地</b>（规格见 federation-entry-design.md §12）：源行可展开出<b>表 / 视图叶子</b>
+  （复制限定名，引擎按源种类给三段 / 两段）；<b>本地加速源</b>进「已挂载的源」段（pill「加速」）；
+  资产行由资产面板快照供给（侧栏构造期预载，不依赖先打开过）；「加源」补<b>连接线</b>（标记 use_duckdb_fed，
+  下次联邦执行挂载，回执留在对话框）。Mock（tmp_m_）与插件（tmp_p_）产物<b>不进面板</b>
+  （2026-11-18 口径：mock 下游 = 草稿箱 / 外部目录 / 资产归档，不是分析链路的输入）。
 </div>
 
 <div class="stage">
@@ -149,9 +160,8 @@
         <div class="chips">
           <span class="chip on">全部</span>
           <span class="chip">已挂载的源</span>
-          <span class="chip">本项目分析库</span>
-          <span class="chip">全局分析库</span>
-          <span class="chip">外部文件</span>
+          <span class="chip">持久表</span>
+          <span class="chip">文件</span>
           <span class="chip">临时表</span>
         </div>
       </div>
@@ -177,8 +187,8 @@
           <div class="tail"><span class="pill">源</span><span class="chan fed">→ 联邦</span><button class="go">选用</button></div>
         </div>
 
-        <!-- ② 本项目分析库：落库的 res_ / 项目自建 / 项目库里的资产，都是这一个 duckdb 文件 -->
-        <div class="grp"><span class="caret">▾</span><span>本项目分析库</span><span class="sp"></span><span class="cnt">4</span></div>
+        <!-- ② 持久表：项目分析库（落库 res_ / 自建 / 资产·表型）+ 全局分析库，2026-11-18 合并（项目 vs 全局是标签） -->
+        <div class="grp"><span class="caret">▾</span><span>持久表</span><span class="sp"></span><span class="cnt">5</span></div>
         <div class="row">
           <span class="ic">◆</span>
           <div class="nm"><b>订单明细 · 2026-11-15 10:30</b><i>res_orders_20261115103000 · &lt;项目&gt;/.RSmeta/analytics.duckdb</i></div>
@@ -203,20 +213,18 @@
           这里只给<b style="color:var(--text)">最新版本</b>。要用旧版本的数据，先在资产库里回退——避免「同一个分析里混了不同版本」。
         </div>
 
-        <!-- ③ 全局分析库：另一个 duckdb 文件，跨项目只读 -->
-        <div class="grp"><span class="caret">▾</span><span>全局分析库</span><span class="sp"></span><span class="cnt">1</span></div>
         <div class="row">
           <span class="ic">◆</span>
-          <div class="nm"><b>月度经营 · 全局 v1</b><i>res_月度经营_20261112093000 · &lt;RDS_HOME&gt;/data/system/analytics.duckdb</i></div>
-          <div class="tail"><span class="pill coral">全局</span><span class="chan fed">→ 全局库</span><button class="go">选用</button></div>
+          <div class="nm"><b>月度经营 · 全局 v1</b><i>res_月度经营_20261112093000 · &lt;RDS_HOME&gt;/data/system/analytics.duckdb · 跨项目只读</i></div>
+          <div class="tail"><span class="pill coral">全局</span><span class="chan proc">→ 本地分析库</span><button class="go">选用</button></div>
         </div>
 
-        <!-- ④ 外部文件：能被 DuckDB 加载的才算（csv / parquet / 装了扩展的 excel） -->
-        <div class="grp"><span class="caret">▾</span><span>外部文件</span><span class="sp"></span><span class="cnt">2</span></div>
+        <!-- ④ 文件：已加载进 DuckDB 的（外部文件 / 手动加入的草稿，都是 f_ 视图）+ 资产·文件型；未加载的草稿不进面板 -->
+        <div class="grp"><span class="caret">▾</span><span>文件</span><span class="sp"></span><span class="cnt">2</span></div>
         <div class="row">
           <span class="ic">▥</span>
-          <div class="nm"><b>sales_2026q1.csv</b><i>草稿箱 · 18,204 行 · UTF-8 带表头</i></div>
-          <div class="tail"><span class="pill">草稿</span><span class="chan proc">→ 进程 DuckDB</span><button class="go">选用</button></div>
+          <div class="nm"><b>f_sales_2026q1</b><i>已加载视图 ← 草稿箱 sales_2026q1.csv · 18,204 行</i></div>
+          <div class="tail"><span class="pill">已加载</span><span class="chan proc">→ 进程 DuckDB</span><button class="go">选用</button></div>
         </div>
         <div class="row dead">
           <span class="ic">✕</span>

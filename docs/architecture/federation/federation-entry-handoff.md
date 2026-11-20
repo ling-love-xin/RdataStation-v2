@@ -456,3 +456,108 @@ Windows 上 DuckDB 一个文件只允许一个连接句柄（`store/src/persiste
 
 
 
+
+## 9. 数据对象面板 · DuckDB 视角统一清单（2026-11-18，main 工作区实施批）
+
+> 需求（用户口径）：写 SQL 时右侧数据对象面板 = **分析引擎 DuckDB 加载进来的对象**——
+> 挂载的连接（联邦 ATTACH + 本地加速）、文件、表 / 视图、临时结果集、草稿箱、资产归档，
+> 「加源」弹 01 原型。规格权威 = `federation-entry-design.md` §12（本批刀 0 写入）。
+
+### 9.1 本批五刀（均已落地）
+
+| 刀 | 做了什么 | 落点 |
+| --- | --- | --- |
+| 刀 0 文档 | §12 面板规格定稿；federation/README §6 文档地图补 4 条；顶层 README 登记 entry 系文档与原型；06/07 原型加「实现状态」绿框 | `federation-entry-design.md` §12、两份 README、原型 06/07 |
+| 刀 1 引擎列举口 | `FederatedSession::list_tables(alias)` + 模块级 `list_tables_for(owner, alias)`（`duckdb_tables()`/`duckdb_views()` 按别名过滤，与 `count_tables` 同口径）；accel：`AccelSession` 存 `conn_id` + `owners()` + `list_tables_for(conn_id)`；`MountedTable{schema,name,is_view,qualified}` 与**限定名生成收在引擎一处**（三段 / 两段按 `AccelKind::two_segment_names()`，标识符双引号转义）；`analysis::result_set::{list_mock_tables,list_plugin_tables}` 包装 | `engine/duckdb/{accel.rs, federation/session.rs}`、`engine/analysis/result_set.rs` |
+| 刀 2 资产取数核实 | **不写代码**：实测发现「资产面板没载过就没有行」是过时信息——侧栏构造期就建资产面板实体并预载（`build_resources_panel` 尾部 `refresh_resources`，注释点名为本面板预载），项目切换 / 资产增删都会推新。直连登记层（enqueue+drain）会造第二套真相，**不做**；只把 `collect()` 与 `refresh()` 的过时注释、§12.5 规格改准 | 注释 + §12.5 |
+| 刀 3 面板树化 | 源行（联邦 Ready 源 / 加速源）可展开出**表 / 视图叶子**：展开态 `expanded_sources`（跨刷新保留）+ 清单缓存 `source_children`（事件路径写、render 纯读，`refresh` 对仍展开的源重取防会话重建后骗人）；叶子动作 = **复制限定名**（不给「选用」——联邦 / 加速表在专用连接上，洞察取样够不着，等 Phase 3）；accel 源进 `MountedSources` 段（pill「加速」、note 提示切通道、`Channel::Accel`）；`can_persist` 从按段收紧为按 `result:` 键前缀（Mock / 插件表不落库）；顺手修掉通道文案**双箭头**（渲染层多拼 `→ `）；`source_ref()` 纯函数解析两类源键 | `workbench/panels/data_objects_tab.rs`、`workbench/components/data_objects/mod.rs` |
+| 刀 4 加源三分法 + 连接线 | `LOAD_KINDS` 扩 `[Connected, External, Scratchpad]`（DuckDB 根无叶子自动收起）；`DataSourceService::set_use_duckdb_fed(conn_id, on, project)`——**整记录回填**（翻开关要带上 update 里的 Secret 联动与指纹登记；密码 None=保留密文，两侧存储均 COALESCE 语义）；picker 里只有表可勾，选中表 → 标记**所属连接**（去重）；回执留窗不静默关（标记的源要等下次联邦执行才进清单）；驱动异步服务用进程级 `bridge_runtime`（K19 口径） | `connection_dialog/services/data_source_service.rs`、`workbench/components/data_objects_load.rs` |
+| 刀 5 Mock / 插件表 + 收尾 | `Collected` 增 `mock_tables`/`plugin_tables`（`tmp_m_`/`tmp_p_` 进「临时表」段，pill 区分，不给落库）；本节记录 + 原型 07 绿框转「已落地」 | `components/data_objects/mod.rs`、文档 |
+
+### 9.2 测试基线（本批新增）
+
+- engine：`duckdb::accel` 12（含 `owners_enumerate_sessions_and_tables_list_with_qualified_names`）、`duckdb::federation` 35（含 `listing_tables_of_a_mounted_source_gives_copiable_names`）、`analysis::result_set` 6（含 `mock_and_plugin_tables_list_by_their_own_prefixes`）——**全绿**。
+- workbench：`components::data_objects` 16 项（新增 accel 进组 / source_ref 解析 / can_persist 收紧三例，改写会话行过滤与落库两例）——本批跑绿；收尾全量时恰逢并行会话在途改动编译期抖动（`result_panel`/`editor` 的引用列三变体），待其稳定后补跑全量。
+- 面板渲染层无窗口测试（沿现状：行为靠纯函数钉，UI 交互待视觉验收——见 §4 第 4 条同款限制）。
+
+### 9.3 遗留与已知限制（诚实清单）
+
+1. **联邦 / 加速源的表叶子不能「选用 / 洞察」**：设计如此（§12.3），等公共入口 Phase 3「洞察搬结果」；
+2. **加速源行没有会话动作条**（重挂 / 断开）：`session_actions` 只认 `session:` 键；accel 的 drop 原语已有（`accel::drop_session`），要加是小事，但「重挂」语义在加速档走编辑器侧 `refresh_sources`，面板侧加了会多一套口径——留待需要时拍；
+3. **标记联邦源后 `shared.connections` 的 `use_duckdb_fed` 快照不即时刷新**（门控真值读服务侧 `records()`，不受影响；连接列表 UI 要等下一次加载事件）；
+4. **叶子「复制名」对两段名源（Oracle）给 `别名.表`**——schema 不进限定名（真机台账），但叶子行尾会显示 schema 文本供参考；
+5. 面板源行展开的列举在**联邦会话连接锁**上跑（事件路径同步）；会话正跑长查询时展开会等锁——如果实测卡手，再改后台线程 + 回填。
+
+### 9.4 设计评审补修（2026-11-18 同日）
+
+复查发现刀 5 的一个隐式契约破坏并已修：`clear_temp_objects` 原按**整段**（TemporaryTables）
+过滤，刀 5 把 Mock / 插件表放进该段后，「清理临时对象」会把它们一并删掉——而它们的生命周期
+归各自模块管（删了 mock 的表，生成历史就指向空表）。修法：新增 `can_clear`（与 `can_persist`
+**同一口径** = `result:` 前缀），“进（落库）/ 出（清理）”两个动作对称，配等价性测试钉住
+（`persist_and_clear_share_the_same_prefix_rule`）。
+
+### 9.5 口径修正：Mock / 插件产物撤出面板（2026-11-18 用户裁决）
+
+刀 5 曾把 `tmp_m_` / `tmp_p_` 放进「临时表」段——**撤出**。用户口径：mock 的下游只有草稿箱、
+外部目录（导出）与资产归档（为方便加的），插件产物归插件——它们是各模块的生成物，不是
+分析链路的输入对象，不进数据对象面板（与 `tmp_i_` 同一条纪律）。撤出范围：行模型两段循环
+与 `Collected` 字段、engine 的 `list_mock_tables` / `list_plugin_tables` 包装（零调用即删，
+原语 `DuckDBManager::in_memory_temp_tables(Mock|Plugin)` 仍在，将来 picker 的 DuckDB tab
+要列再用）、§12.4 映射、07 原型绿框。`can_persist` / `can_clear` 的**前缀判定保留**——
+段里只剩 `result:` 一种构成，前缀与按段等价，但防将来再往段里放东西时误放开（这次就是它
+拦住的）。测试：engine 5 + workbench 17 全绿。
+
+### 9.6 口径修正二批：四形态分组 + 草稿撤出 + 资产按形态分派（2026-11-18 用户裁决）
+
+用户重申口径后三处修正（全部落地，workbench 164 全绿）：
+
+1. **分组合并**：`Group` 从五容器（含本项目分析库 / 全局分析库两段）改为**四形态**——
+   已挂载的源 / 持久表 / 文件 / 临时表。项目 vs 全局、自建 vs 落库 vs 资产全是行内 pill；
+   chips 随枚举收敛为 5 个（全部 + 四段）。
+2. **未加载草稿撤出面板**：草稿是候选文件不是 DuckDB 对象——`Collected.drafts` 字段与
+   `collect()` 的草稿收集删除（`collect_drafts` 本体保留给 picker）；「加源」手动加入后成为
+   `f_<ascii>` 视图进「文件」段。用户澄清：**外部文件 = 系统文件夹里的文件**（加源时浏览
+   磁盘选），草稿可手动加入。
+3. **资产对象全部进面板，按本体形态分派**：表型（本体在项目分析库）→ 持久表段；文件型
+   （本体在 `resources/`）→ 文件段；pill 都是「资产」。
+
+同步：entry-design §12.2/§12.4、07 原型（chips 5 个、段合并、草稿行改已加载示例）、绿框、
+README 代码地图。
+
+**同时记两条待办（用户口径里现状没有的）**：
+- 5.1「不支持 scanner 的库只能加载其表 / 视图」——需要拉数进 DuckDB（L3 / 物化），链路未实现；
+  现状对这类库标记 `use_duckdb_fed` 也无效（`federated_plan` 组装时不认）。
+- 5.3 文件线**不支持 .sqlite / .duckdb 库文件**（`file_view_sql` 只认 csv/parquet/json/excel）——
+  库文件要走 `ATTACH` 挂成 catalog，是引擎侧待办。
+
+### 9.7 口径落定三批：库文件 ATTACH 落地 + 表级全量拍板 + 表重复修复（2026-11-18）
+
+用户三项裁决，落地情况：
+
+1. **5.3 库文件走 ATTACH（✅ 已落地）**：`file_view` 扩 `is_database_file` / `load_database`
+   / `load_database_global` / `list_tables_global`——`.duckdb` 内核原生 ATTACH（READ_ONLY），
+   `.sqlite` 走扩展装机（mount_lock 内 ensure，与联邦同规）；「加源」确认按扩展分流；
+   面板 `loaded_files` 按路径扩展分派形态：库文件进「已挂载的源」段（pill「文件库」、
+   **可展开列表**——`source_ref` 新增 `FileView` 分支，同一份 `list_mounted_tables` 实现），
+   数据文件视图进「文件」段且**可「选用」**（`analysis_sources` 补 `fileview` 转换——视图在
+   单例上，`on_duckdb` 即可）；库文件整库无取样语义，选用时如实跳过。
+2. **5.1 表级全量拉取（🟡 已拍板未实现）**：用户拍板"做分析的，肯定是全量的"——不支持
+   scanner 的库在 picker 选表 / 视图后**全量物化**进 DuckDB。实现归**第二期 L3 表级刀**
+   （拉数链路 + 大表内存闸兜底 + 命名），已写进 §12.6 去向表 D 行；现状对这类库标记
+   开关无效（`federated_plan` 不认），界面如实跳过。
+3. **资产表重复（✅ 已修，测试钉住）**：用户判断"SQL 解析上不冲突（catalog 不同、有主源）"
+   正确——重复发生在**面板清单层**：资产·表型本体在项目库里，`analysis_tables_of` 会把它
+   与自建表一起列出（同一张表两行、一行错标「项目自建」）。修法：`objects()` 把
+   `assets.analytics_table` 命中的表名从 own / persistent 清单排除，归属由 M6 登记说了算；
+   `asset_backed_tables_appear_only_as_asset_rows` 断言"只出一行、pill=资产"。
+
+验证：engine `duckdb::file_view` 5（新增 3）+ `analysis::result_set` 5、workbench
+`components::data_objects` 19（新增 2：形态分派 / 资产去重）全绿。
+
+### 9.8 复查补修：库文件重挂覆盖语义（2026-11-18 同日）
+
+自查发现：`alias_for` 按文件名生成别名，**不同目录的同名库文件**重挂时 `ATTACH`
+对已存在别名直接报错（不像 `CREATE OR REPLACE VIEW` 天然幂等）。修：`load_database`
+在 ATTACH 前静默 `USE memory; DETACH 同名`（不存在时报错忽略；单例默认 catalog 恒为
+memory，不触发"DuckDB 拒卸当前 catalog"分支）——重挂 = 覆盖语义，与视图重建同口径。
+测试：`a_duckdb_file_attaches_on_a_connection` 补同名重挂断言。
