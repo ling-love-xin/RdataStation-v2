@@ -120,6 +120,12 @@ pub struct EditorContext {
     pub result_column_frozen: String,
     /// 更新时间
     pub updated_at_ms: u64,
+    /// 【筛选存档落盘】「保存过滤器设置」存下的那一份筛选（JSON 串；空串 = 没存过）。
+    ///
+    /// 为什么不跟列布局一样用逗号串：这一份带 SQL 原文（`select a, b from t`）与筛选词
+    /// （用户可能写 `id in (1,2)`），逗号串必然拆错。列放在**最末**（建表与 `ensure_column`
+    /// 的追加位一致），`updated_at_ms` 的列位因此不动——三处 SELECT 的既有下标不用平移。
+    pub result_saved_filter: String,
 }
 
 /// 工作台上下文存储服务
@@ -188,7 +194,8 @@ impl WorkbenchContextStore {
                     result_column_widths TEXT NOT NULL DEFAULT '',
                     result_column_hidden TEXT NOT NULL DEFAULT '',
                     result_column_frozen TEXT NOT NULL DEFAULT '',
-                    updated_at_ms INTEGER NOT NULL
+                    updated_at_ms INTEGER NOT NULL,
+                    result_saved_filter TEXT NOT NULL DEFAULT ''
                 )",
                 [],
             )
@@ -274,6 +281,13 @@ impl WorkbenchContextStore {
                 "result_column_frozen",
                 "TEXT NOT NULL DEFAULT ''",
             )?;
+            // 【筛选存档落盘】老库也要能存筛选存档（空串 = 没存过）
+            ensure_column(
+                conn,
+                "editor_contexts",
+                "result_saved_filter",
+                "TEXT NOT NULL DEFAULT ''",
+            )?;
 
             Ok(())
         })
@@ -344,8 +358,8 @@ impl WorkbenchContextStore {
                 "INSERT OR REPLACE INTO editor_contexts
                  (id, connection_id, mode, channel, content, cursor_position, selection_start, selection_end,
                   toolbar, schema, tab_size, hard_tabs, result_height, result_column_order, result_column_widths,
-                  result_column_hidden, result_column_frozen, updated_at_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                  result_column_hidden, result_column_frozen, updated_at_ms, result_saved_filter)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
                 params![
                     context.id,
                     context.connection_id,
@@ -365,6 +379,7 @@ impl WorkbenchContextStore {
                     context.result_column_hidden,
                     context.result_column_frozen,
                     context.updated_at_ms as i64,
+                    context.result_saved_filter,
                 ],
             ).map_err(|e| CoreError::storage(StorageError::Persistence {
                 store: "sqlite".to_string(),
@@ -382,7 +397,7 @@ impl WorkbenchContextStore {
             let mut stmt = conn.prepare(
                 "SELECT id, connection_id, mode, channel, content, cursor_position, selection_start, selection_end,
                         toolbar, schema, tab_size, hard_tabs, result_height, result_column_order, result_column_widths,
-                        result_column_hidden, result_column_frozen, updated_at_ms
+                        result_column_hidden, result_column_frozen, updated_at_ms, result_saved_filter
                  FROM editor_contexts WHERE id = ?1"
             ).map_err(|e| CoreError::storage(StorageError::Persistence {
                 store: "sqlite".to_string(),
@@ -410,6 +425,7 @@ impl WorkbenchContextStore {
                     result_column_hidden: row.get(15)?,
                     result_column_frozen: row.get(16)?,
                     updated_at_ms: row.get::<_, i64>(17)? as u64,
+                    result_saved_filter: row.get(18)?,
                 })
             }).optional().map_err(|e| CoreError::storage(StorageError::Persistence {
                 store: "sqlite".to_string(),
@@ -431,7 +447,7 @@ impl WorkbenchContextStore {
                 .prepare(
                     "SELECT id, connection_id, mode, channel, content, cursor_position, selection_start, selection_end,
                             toolbar, schema, tab_size, hard_tabs, result_height, result_column_order, result_column_widths,
-                            result_column_hidden, result_column_frozen, updated_at_ms
+                            result_column_hidden, result_column_frozen, updated_at_ms, result_saved_filter
                      FROM editor_contexts ORDER BY updated_at_ms DESC LIMIT 1",
                 )
                 .map_err(|e| {
@@ -463,6 +479,7 @@ impl WorkbenchContextStore {
                         result_column_hidden: row.get(15)?,
                         result_column_frozen: row.get(16)?,
                         updated_at_ms: row.get::<_, i64>(17)? as u64,
+                        result_saved_filter: row.get(18)?,
                     })
                 })
                 .optional()
@@ -488,7 +505,7 @@ impl WorkbenchContextStore {
                 .prepare(
                     "SELECT id, connection_id, mode, channel, content, cursor_position, selection_start, selection_end,
                             toolbar, schema, tab_size, hard_tabs, result_height, result_column_order, result_column_widths,
-                            result_column_hidden, result_column_frozen, updated_at_ms
+                            result_column_hidden, result_column_frozen, updated_at_ms, result_saved_filter
                      FROM editor_contexts ORDER BY updated_at_ms DESC",
                 )
                 .map_err(|e| {
@@ -520,6 +537,7 @@ impl WorkbenchContextStore {
                         result_column_hidden: row.get(15)?,
                         result_column_frozen: row.get(16)?,
                         updated_at_ms: row.get::<_, i64>(17)? as u64,
+                        result_saved_filter: row.get(18)?,
                     })
                 })
                 .map_err(|e| {
@@ -679,6 +697,7 @@ mod tests {
             result_column_hidden: String::new(),
             result_column_frozen: String::new(),
             updated_at_ms: 1_700_000_000_000,
+            result_saved_filter: String::new(),
         }
     }
 
@@ -740,6 +759,48 @@ mod tests {
         let all = store.load_all_editor_contexts().expect("load all");
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].result_column_frozen, "id");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 【筛选存档落盘】存档串是带逗号 / 引号的 JSON：三条 SELECT 路径原样读回，
+    /// 且不与前面的列布局串串位（新列在 `updated_at_ms` 之后，既有下标不动）
+    #[test]
+    fn editor_context_round_trips_the_saved_filter_json() {
+        let (dir, db) = temp_db("saved-filter");
+        let store = open_store(&db);
+
+        let raw = r#"{"sql":"select a, b from t","filter":"id in (1,2)","order":"","table":null}"#;
+        let mut saved = context("doc.sql", "sql");
+        saved.result_column_hidden = "blob".to_string();
+        saved.result_saved_filter = raw.to_string();
+        store.save_editor_context(&saved).expect("save");
+
+        let loaded = store
+            .load_editor_context("doc.sql")
+            .expect("load")
+            .expect("存在");
+        assert_eq!(loaded.result_saved_filter, raw, "JSON 串原样进原样出");
+        assert_eq!(loaded.result_column_hidden, "blob", "邻列没串位");
+        assert_eq!(loaded.updated_at_ms, 1_700_000_000_000);
+
+        let latest = store
+            .load_latest_editor_context()
+            .expect("load")
+            .expect("有记录");
+        assert_eq!(latest.result_saved_filter, raw);
+        let all = store.load_all_editor_contexts().expect("load all");
+        assert_eq!(all[0].result_saved_filter, raw);
+
+        // 没存过 → 空串（列 NOT NULL 的默认）
+        store
+            .save_editor_context(&context("plain.sql", "sql"))
+            .expect("save");
+        let plain = store
+            .load_editor_context("plain.sql")
+            .expect("load")
+            .expect("存在");
+        assert_eq!(plain.result_saved_filter, "");
 
         let _ = std::fs::remove_dir_all(dir);
     }

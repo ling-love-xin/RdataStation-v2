@@ -92,6 +92,13 @@ impl EditorHostPanel {
                 let height = self.result_height.get();
                 (height != crate::ui::RESULT_PANE_HEIGHT).then_some(height)
             },
+            // 【筛选存档落盘】存档随会话走（面板自持权威值，编码成 JSON 串）。
+            // `None` = 没存过 → 不落库；与列布局的差别：这一份只在用户显式保存 / 重置时变
+            result_saved_filter: self
+                .result_panel
+                .read(cx)
+                .saved_filter_setting()
+                .map(|saved| saved.encode()),
         })
     }
 
@@ -350,6 +357,17 @@ impl EditorHostPanel {
                     panel.set_column_frozen(frozen);
                 });
             }
+        }
+        // 【筛选存档落盘】存档随会话回来：**只注入、不套用**。套用交给下一次 `sync`
+        // （`saved_filter_applies` 判「同一份结果 SQL + 当前没有筛选词」才写回筛选框）——
+        // 恢复会话时往往还没有结果集，现在就套等于无米之炊；DBeaver 那边也是「打开
+        // 这张表的结果」才 `restoreDataFilter`（`ResultSetViewer.java:4266-4284`）。
+        // 解不开的串（手改库 / 旧格式）当没存过：`decode` 已归一成 `None`。
+        if let Some(raw) = session.result_saved_filter.as_deref() {
+            let saved = result_panel::panel::SavedFilterSetting::decode(raw);
+            self.result_panel.update(cx, |panel, cx| {
+                panel.set_saved_filter(saved, cx);
+            });
         }
         // 【B5 余项】结果区高度随会话回来：钳到分栏拖拽范围（与 render 的 size_range
         // 同一份常量——旧库离谱值不带病恢复，恢复的高度必须还拖得动）

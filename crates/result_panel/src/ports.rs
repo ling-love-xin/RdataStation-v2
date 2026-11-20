@@ -130,6 +130,11 @@ pub enum ResultRequest {
     /// `CMD_FILTER_RESET_SETTING` → `resetSavedDataFilter()`（`ResultSetViewer.java:671-687`，
     /// `DataFilterRegistry.removeDataFilter`）。只清存档，**不动**当前正在生效的筛选。
     ResetFilterSetting,
+    /// 【筛选存档落盘】存档被保存 / 重置了：面板自己已经改完状态，宿主只做落库。
+    ///
+    /// 与 [`Self::ColumnLayoutChanged`] 同一条分工（面板推、宿主存）：存档只在用户
+    /// 显式点「保存 / 重置」时才变，不必像列布局那样靠快照比对，直接由面板推一条。
+    SavedFilterChanged,
     /// 【筛选设置】点「应用」：面板在读输入框值的路径上（要 `&mut Context`）转手，
     /// 由宿主调 [`ResultPanel::apply_filter_settings`] 读出草稿并入队下面那条带参请求
     CommitFilterSettings,

@@ -107,6 +107,9 @@ impl WorkbenchSessionStore {
                 .clone()
                 .unwrap_or_default()
                 .join(","),
+            // 【筛选存档落盘】存档串本来就编码成 JSON（面板侧 `SavedFilterSetting::encode`），
+            // 空 = 没存过 → 空串（列是 NOT NULL）
+            result_saved_filter: session.result_saved_filter.clone().unwrap_or_default(),
             updated_at_ms: now_ms(),
         }
     }
@@ -182,6 +185,10 @@ impl WorkbenchSessionStore {
                 }
                 _ => None,
             },
+            // 【筛选存档落盘】空串 = 没存过 → `None`（恢复侧据此不动面板里的存档；
+            // 非空原样交回，JSON 解析失败由面板侧 `decode` 归一成「当没存过」）
+            result_saved_filter: (!context.result_saved_filter.is_empty())
+                .then_some(context.result_saved_filter),
         }
     }
 }
@@ -255,6 +262,7 @@ mod tests {
             result_column_hidden: None,
             result_column_frozen: None,
             result_height: None,
+            result_saved_filter: None,
         }
     }
 
@@ -450,6 +458,28 @@ mod tests {
             None,
             "坏串宁可回默认档"
         );
+    }
+
+    /// 【筛选存档落盘】存档串在行里原样往返（面板编码成 JSON，桥接层不拆不改；
+    /// 空串 = 没存过 → `None`）
+    #[test]
+    fn the_saved_filter_travels_as_one_opaque_string() {
+        let mut customized = session();
+        let encoded =
+            r#"{"sql":"select a, b from t","filter":"id in (1,2)","order":"","table":null}"#;
+        customized.result_saved_filter = Some(encoded.to_string());
+
+        let row = WorkbenchSessionStore::to_context(&customized);
+        assert_eq!(
+            row.result_saved_filter, encoded,
+            "编码是面板侧的事，桥接层只搬串"
+        );
+        let back = WorkbenchSessionStore::to_session(row);
+        assert_eq!(back.result_saved_filter.as_deref(), Some(encoded));
+
+        let plain =
+            WorkbenchSessionStore::to_session(WorkbenchSessionStore::to_context(&session()));
+        assert_eq!(plain.result_saved_filter, None, "空串 = 没存过存档");
     }
 
     #[test]

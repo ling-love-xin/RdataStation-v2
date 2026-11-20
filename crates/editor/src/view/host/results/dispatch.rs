@@ -531,6 +531,12 @@ impl EditorHostPanel {
                 self.save_session_now(cx);
                 cx.notify();
             }
+            // 【筛选存档落盘】存档被保存 / 重置：面板已是权威值（链接口都从面板方法发出），
+            // 宿主只落库——与 `ColumnWidthsChanged` 同款，不再额外取快照
+            ResultRequest::SavedFilterChanged => {
+                self.save_session_now(cx);
+                cx.notify();
+            }
             // 【C1】切换第 index 份结果集的钉住态（钉住不被 FIFO 淘汰）
             ResultRequest::TogglePin(index) => {
                 self.shared

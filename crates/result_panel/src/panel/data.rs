@@ -59,7 +59,8 @@ pub(crate) const FILTER_HISTORY_LIMIT: usize = 8;
 ///
 /// 语义差别要记住：列布局是自动存，这一份是**用户点了「保存过滤器设置」才存**
 /// （DBeaver 同款：`isDirty()` 才写，否则把旧键删掉，`DataFilterRegistry.java:273-288`）。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct SavedFilterSetting {
     /// 存档时那份结果的 SQL：只有重新载入**同一条 SQL** 的结果时才套用。
     ///
@@ -77,6 +78,25 @@ pub struct SavedFilterSetting {
     /// （`ResultSetFilterPanel.java:1565-1570`）；本仓没有 `DBSEntity` 这一层，
     /// 用「有没有唯一来源表」等价表达——空着也允许存（用户按本仓口径仍能记住筛选）。
     pub table: Option<String>,
+}
+
+impl SavedFilterSetting {
+    /// 【筛选存档落盘】编码成会话存档串（JSON）。
+    ///
+    /// 为什么不用列布局那套逗号串：这一份里带 `sql`（`select a, b from t` 本身就有逗号）
+    /// 与筛选词（用户可能写 `in (1,2)`），逗号串必然拆错。JSON 顺带解决了转义问题；
+    /// `#[serde(default)]` 让旧串缺字段也能解出来（宁可用空默认，也不整份丢弃）。
+    pub fn encode(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+
+    /// 解码会话存档串。空串 / 非法 JSON → `None`（宁可不恢复，也不恢复半份错存档）。
+    pub fn decode(raw: &str) -> Option<Self> {
+        if raw.is_empty() {
+            return None;
+        }
+        serde_json::from_str(raw).ok()
+    }
 }
 
 /// 一次投影里交到网格的数据（列 / 行 / 类型 / 来源表 / 字段注释；`set_data` 之后

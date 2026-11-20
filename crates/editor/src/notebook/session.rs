@@ -121,6 +121,13 @@ pub struct SavedSession {
     /// 【B5 余项】结果区分栏高度（rem；`None` = 没拖过 / 与默认同值 → 不覆盖默认）。
     /// 随会话走（与列序同语义：面板自持的展示偏好，文档级而非全局）
     pub result_height: Option<f32>,
+    /// 【筛选存档落盘】「保存过滤器设置」存下的那一份筛选
+    /// （[`result_panel::panel::SavedFilterSetting::encode`] 的 JSON 串；`None` = 没存过）。
+    ///
+    /// 与列布局的区别在**谁决定存**：列序 / 列宽 / 隐藏 / 冻结是自动存，这一份只在用户
+    /// 显式点「保存 / 重置过滤器设置」时才变（DBeaver 把这一份落到
+    /// `saved-data-filter.xml`，与本仓「走会话通道」是同一件事的两种载体）。
+    pub result_saved_filter: Option<String>,
 }
 
 /// 会话存储端口（宿主注入）
@@ -230,6 +237,9 @@ pub fn worth_saving(session: &SavedSession) -> bool {
     session.schema.is_some()
         || session.tab_size.is_some_and(|size| size != 2)
         || session.hard_tabs == Some(true)
+        // 【筛选存档落盘】存档是用户显式动作的产物：空文档只有这一份存档时也要落库，
+        // 否则「存了又没存」——重启回来它凭空消失
+        || session.result_saved_filter.is_some()
 }
 
 #[cfg(test)]
@@ -260,6 +270,7 @@ mod tests {
             result_column_hidden: None,
             result_column_frozen: None,
             result_height: None,
+            result_saved_filter: None,
         }
     }
 
@@ -457,5 +468,33 @@ mod tests {
         let mut hard = blank.clone();
         hard.hard_tabs = Some(true);
         assert!(worth_saving(&hard));
+
+        // 【筛选存档落盘】存档也是「用户花过时间」的成果：空文档只存了它一个也要落库
+        let mut with_saved_filter = blank.clone();
+        with_saved_filter.result_saved_filter =
+            Some(r#"{"sql":"select 1","filter":"id > 1","order":"","table":null}"#.to_string());
+        assert!(worth_saving(&with_saved_filter), "存档重启不该凭空消失");
+    }
+
+    /// 【筛选存档落盘】存档串随会话原样往返（编码 / 解码在面板侧，这里只钉通道）
+    #[test]
+    fn the_saved_filter_rides_along_with_the_session() {
+        let store = MemorySessionStore::new();
+        let mut saved = session("d:/sql/a.sql", "select 1;", EditorMode::Sql);
+        saved.result_saved_filter = Some(
+            r#"{"sql":"select a, b from t","filter":"id in (1,2)","order":"order by b desc","table":"t"}"#
+                .to_string(),
+        );
+        store.save(&saved).expect("save");
+
+        let loaded = store.load("d:/sql/a.sql").expect("load").expect("有");
+        assert_eq!(loaded.result_saved_filter, saved.result_saved_filter);
+
+        // 没存过 → `None` 原样往返（恢复侧据此不动面板里的存档）
+        store
+            .save(&session("d:/sql/b.sql", "select 2;", EditorMode::Sql))
+            .expect("save");
+        let plain = store.load("d:/sql/b.sql").expect("load").expect("有");
+        assert_eq!(plain.result_saved_filter, None);
     }
 }

@@ -4996,6 +4996,90 @@ fn the_saved_filter_needs_its_own_sql_and_an_untouched_filter_box() {
     ));
 }
 
+/// 【筛选存档落盘】存档走 JSON 编解码：SQL / 筛选词里的逗号与引号原样往返，
+/// 空串与坏串都归一成「没存过」，缺字段的旧串按默认补齐。
+#[test]
+fn saved_filter_setting_round_trips_through_the_session_codec() {
+    let saved = crate::panel::SavedFilterSetting {
+        sql: "select a, b from t where name = 'x,y'".to_string(),
+        filter: "id in (1,2)".to_string(),
+        order: "order by b desc".to_string(),
+        table: Some("t".to_string()),
+    };
+    let encoded = saved.encode();
+    assert_eq!(
+        crate::panel::SavedFilterSetting::decode(&encoded),
+        Some(saved),
+        "带逗号 / 引号的四字段都要原样回来"
+    );
+    assert_eq!(
+        crate::panel::SavedFilterSetting::decode(""),
+        None,
+        "空串 = 没存过"
+    );
+    assert_eq!(
+        crate::panel::SavedFilterSetting::decode("{oops"),
+        None,
+        "坏串当没存过（不恢复半份错存档）"
+    );
+
+    // 缺字段的旧串按默认补齐（`#[serde(default)]`；不整份丢弃）
+    let back = crate::panel::SavedFilterSetting::decode(r#"{"sql":"select 1","filter":"id = 1"}"#)
+        .expect("缺字段也能解");
+    assert_eq!(back.order, "");
+    assert_eq!(back.table, None);
+}
+
+/// 【筛选存档落盘】恢复会话只**注入**存档、不套用：词要等下一次 `sync` 且 SQL 对得上
+/// 才进筛选框（与 DBeaver「打开这张表的结果才 `restoreDataFilter`」同口径）。
+#[gpui_kit::test]
+fn restoring_the_saved_filter_injects_it_without_applying(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let saved = crate::panel::SavedFilterSetting {
+        sql: "select * from orders".to_string(),
+        filter: "id = 1".to_string(),
+        order: String::new(),
+        table: None,
+    };
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| p.set_saved_filter(Some(saved.clone()), cx));
+    });
+    assert_eq!(
+        cx.update(|_window, app| panel.read(app).saved_filter_setting().cloned()),
+        Some(saved.clone()),
+        "注入后存档应当在场（菜单禁用态靠它）"
+    );
+    assert_eq!(
+        cx.update(|_window, app| panel.read(app).filter_text().to_string()),
+        "",
+        "只注入不套用：筛选框不能自己长出词"
+    );
+    assert_eq!(
+        cx.update(|_window, app| panel.update(app, |p, _| p.take_filter_backfill())),
+        None,
+        "注入不产生回填请求"
+    );
+    // 注入不是用户改动：不推落库请求，否则恢复动作会把刚读回来的存档再写一遍
+    assert!(
+        cx.update(|_window, app| panel.read(app).queue.is_empty()),
+        "注入不该推 SavedFilterChanged"
+    );
+
+    // 同一次会话里再注入同样的值：幂等，不重复 notify
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| p.set_saved_filter(Some(saved.clone()), cx));
+    });
+    assert_eq!(
+        cx.update(|_window, app| panel.read(app).saved_filter_setting().cloned()),
+        Some(saved)
+    );
+}
+
 /// 投影输入的最小骨架（`sql` + 两列两行），只给存档套用那几条用例用。
 fn sync_input_with_sql(sql: &str) -> crate::panel::ResultSyncInput {
     let mut input = crate::panel::ResultSyncInput::default();

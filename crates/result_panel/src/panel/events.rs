@@ -1105,12 +1105,19 @@ impl ResultPanel {
     /// 存完给一行提示（对齐 `:661-663` 的 `DBeaverNotifications.showNotification`）。
     pub fn save_filter_setting(&mut self, cx: &mut Context<Self>) {
         let table = self.unique_source_table(cx);
-        self.saved_filter = Some(crate::panel::SavedFilterSetting {
+        let next = crate::panel::SavedFilterSetting {
             sql: self.result_sql.clone().unwrap_or_default(),
             filter: self.filter_text.trim().to_string(),
             order: self.filter_order.trim().to_string(),
             table,
-        });
+        };
+        // 【筛选存档落盘】与列布局同一条分工：面板推、宿主存。只在真的变了才推，
+        // 免得用户连点两次「保存」就写两遍会话（写一次就是整份文档落库）
+        let changed = self.saved_filter.as_ref() != Some(&next);
+        self.saved_filter = Some(next);
+        if changed {
+            self.queue.push(ResultRequest::SavedFilterChanged);
+        }
         self.set_notice(Some("筛选设置已保存".to_string()), cx);
         cx.notify();
     }
@@ -1124,6 +1131,11 @@ impl ResultPanel {
     pub fn reset_filter_setting(&mut self, cx: &mut Context<Self>) {
         let had = self.saved_filter.is_some();
         self.saved_filter = None;
+        // 【筛选存档落盘】真的删掉了才推落库（DBeaver 的 remove 是幂等的，本仓也照
+        // 幂等发通知；但「本来就没有存档」时不该为一次空操作写一遍整份会话）
+        if had {
+            self.queue.push(ResultRequest::SavedFilterChanged);
+        }
         self.set_notice(
             Some(if had {
                 "筛选设置已重置".to_string()
@@ -1133,6 +1145,24 @@ impl ResultPanel {
             }),
             cx,
         );
+        cx.notify();
+    }
+
+    /// 【筛选存档落盘】注入会话里读回来的存档（恢复路径）。
+    ///
+    /// **只注入、不套用**：套用交给下一次 `sync`（`saved_filter_applies` 判「同一份
+    /// 结果 SQL + 当前没有筛选词」才写回筛选框），与 DBeaver「打开这张表的结果才
+    /// `restoreDataFilter`」同口径——恢复会话时往往还没有结果集，现在就套等于无米之炊。
+    /// 注入不推 [`ResultRequest::SavedFilterChanged`]：这不是用户改动，推了会回写成环。
+    pub fn set_saved_filter(
+        &mut self,
+        saved: Option<crate::panel::SavedFilterSetting>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.saved_filter == saved {
+            return;
+        }
+        self.saved_filter = saved;
         cx.notify();
     }
 
