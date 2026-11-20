@@ -1239,6 +1239,24 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 仍在册：列头右键 `filtersMenu` 尾部四项（`ResultSetViewer.java:3926-3932`）、存档落盘、
   筛选条之外的菜单挂载点。
 
+**2026-11-20 更新（列头菜单 `filtersMenu` 尾部四项，全文见 `result-panel.md §9.28`）**：
+上面「仍在册」第一条**本批销账**：
+
+- `column_menu_items` 尾部补四项（一条分隔线之后）：保存过滤器设置 / 重置过滤器设置 /
+  删除所有过滤 / 排序 / 编辑筛选设置…（`ResultSetViewer.java:3926-3932`）。
+- 四条命令全部复用既有端口（`SaveFilterSetting` / `ResetFilterSetting` /
+  `ClearFilterAndOrdering` / `OpenFilterSettings`），本批只补入口，editor 侧不改；
+  `header.rs` 新增 `filter_queue` 把请求转给面板。
+- **门控差异**：DBeaver 只在 `getDataContainer() instanceof DBSEntity` 时摆保存 / 重置
+  （`:3927-3930`）；本仓存档键是结果 SQL（§9.26.4 第 1 条），没有「非实体容器」层，
+  四项恒摆（用例用 `table: None` 钉死这条）。
+- 单元格右键（`context_menu`）对这四项走忽略分支：它们按「当前结果的筛选状态」出手，
+  右键落点是单格，语义不对。
+- 门禁：panel **373**（+1）/ editor check `Finished` / editor **798**（1 ignored）；
+  ui-guard 3 passed / 1 failed（`workbench/unlock.rs` 裸 px，并行线面）。
+- 仍在册：存档落盘（`SavedSession` 无 `result_filter_*`）、面板区右键入口（按「一处入口」
+  原则不摆）。
+
 ### 2.52 筛选条「状态历史」后退 / 前进（2026-11-18 已实现主体）
 
 全文见 `result-panel.md §8.63`。接手要点：

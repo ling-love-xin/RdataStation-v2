@@ -6598,11 +6598,14 @@ active = 列浏览器；DBeaver 只开值查看器。
   previous one.」）⇒ **隐藏列照样保留**；被清的是 where / order / 每列 criteria /
   每列 orderPosition。颜色覆盖 / 转换器 / pin 也不在这条命令里，那是
   `fillDropDownMenu` 里另外的菜单项（`ResultSetViewer.java:1525-1545`）。
-- **列头右键 `filtersMenu` 尾部四项**（`ResultSetViewer.java:3926-3932`：Separator →
+- ~~**列头右键 `filtersMenu` 尾部四项**（`ResultSetViewer.java:3926-3932`：Separator →
   (DBSEntity) SAVE + RESET → CLEAR → EDIT_SETTINGS）：本仓列头菜单已有按值筛选 /
-  取消排序 / 冻结 / 隐藏 / 显示全部列，**没有**这四项全局命令。登记待做。
-- 三处菜单挂载（筛选条箭头 / `filtersMenu` / 面板右键）本仓按「一处入口」原则只做
-  筛选条那一处，判法与 §9.25.6 对面板菜单三挂载点的处理一致。
+  取消排序 / 冻结 / 隐藏 / 显示全部列，**没有**这四项全局命令。登记待做。~~
+  **已做，见 §9.28。**
+- ~~三处菜单挂载（筛选条箭头 / `filtersMenu` / 面板右键）本仓按「一处入口」原则只做
+  筛选条那一处，判法与 §9.25.6 对面板菜单三挂载点的处理一致。~~
+  **2026-11-20 修订**：`filtersMenu` 那处已补（§9.28）；面板右键仍不摆（右键落点是单格，
+  与「当前结果的筛选状态」语义不合，见 §9.28.2 的忽略分支）。
 
 #### 9.26.6 本轮改动 + 门禁
 
@@ -6678,6 +6681,56 @@ active = 列浏览器；DBeaver 只开值查看器。
 红于 `crates/workbench/src/unlock.rs`（裸 px 1，并行线未提交改动面，本批未触碰）；
 `shared_constants_do_not_diverge` 本轮转绿（worktree 基于 `main`，不含 settings 的
 `window_material` 改动）。
+
+### 9.28 列头菜单 `filtersMenu` 尾部四项（2026-11-20）
+
+§9.26.5 与 handoff §2.51 同时登记的那条缺口（列头右键菜单没有 `filtersMenu` 尾部四项）
+本批补齐。本批**只补入口**：四条命令的落地行为在第 41/42/43 批已经各自实现，这次
+只是把它们接进列头菜单。
+
+#### 9.28.1 dbeaver-ref 口径（均为现源实读）
+
+| 事实 | 行 | 含义 |
+| --- | --- | --- |
+| 尾部四连摆 | `ResultSetViewer.java:3926-3932` | `filtersMenu.add(new Separator())` → `if (getDataContainer() instanceof DBSEntity)` 摆 `CMD_FILTER_SAVE_SETTING`(`:3928`) + `CMD_FILTER_RESET_SETTING`(`:3929`) → `CMD_FILTER_CLEAR_SETTING`(`:3931`) → `CMD_FILTER_EDIT_SETTINGS`(`:3932`) |
+| 门控只在摆放处 | `ResultSetViewer.java:3927` | 前两项的条件就是容器类型；后两项**无条件**摆。handler 里没有任何 enable 逻辑 |
+| 四个 handler 分支 | `ResultSetHandlerMain.java:546-561` | `saveDataFilter` / `resetSavedDataFilter` / `clearDataFilter(true)` / `showFilterSettingsDialog` |
+| zh 文案 | `bundle_zh.properties:84`、`:86`、`:78` | 保存过滤器设置 / 自定义过滤 ... / 删除所有过滤/排序 |
+
+#### 9.28.2 本仓落点
+
+- `grid/menu.rs`：`ContextAction` 新增 `SaveFilterSetting` / `ResetFilterSetting` /
+  `ClearAllFilters` / `OpenFilterSettings`（注释带 DBeaver 行号）；`column_menu_items`
+  尾部追加四项（「保存过滤器设置」`separator_before: true`，其后「重置过滤器设置」→
+  「删除所有过滤 / 排序」→「编辑筛选设置…」，后三项 `separator_before: false`）；
+  `context_menu`（单元格右键）match 里加忽略分支——这四项按「当前结果的筛选状态」出手，
+  右键落点是单格，语义不对。
+- `grid/header.rs`：新增 `filter_queue = delegate.action_queue.clone()`（与 `layout_queue`
+  同款理由：`'static` 闭包外取），`dropdown_menu` 闭包在 `ClearSort` 分支之后新增四个
+  分支，分别 `queue.request(ResultRequest::{SaveFilterSetting|ResetFilterSetting|
+  ClearFilterAndOrdering|OpenFilterSettings}, app)`。
+- 四条请求都是既有端口：`SaveFilterSetting` / `ResetFilterSetting`（§9.26 批）、
+  `ClearFilterAndOrdering`（§9.27 批）、`OpenFilterSettings`（筛选设置浮层）。本批不改
+  editor `dispatch.rs`。
+
+#### 9.28.3 口径差异（一条，有意）
+
+**保存 / 重置恒摆**：DBeaver 只在 `getDataContainer() instanceof DBSEntity` 时摆前两项
+（`:3927-3930`）；本仓存档键是**结果 SQL**（§9.26.4 第 1 条），join / 计算列的结果同样
+能存能取，不存在「非实体容器」这一层，所以四项恒摆。「删除所有过滤 / 排序」与
+「编辑筛选设置…」两边都是无门控，口径一致。
+
+#### 9.28.4 用例与门禁
+
+- `column_menu_ends_with_the_four_filter_commands`：断尾部四项的文案与顺序
+  （DBeaver zh bundle `:84` / `:78` / `:86`）、各自 `ContextAction`、只有首项有分隔线；
+  `table: None`（表名猜不到的多表 join / 计算列）时四项仍恒摆——正是 §9.28.3 那条差异的
+  回归钉子。
+- **门禁**：result_panel **373 passed**（+1）、editor check `Finished`、editor
+  **798 passed**（1 ignored）。ui-guard **3 passed; 1 failed**：`no_new_hardcoded_color_or_pixel`
+  红于 `crates/workbench/src/unlock.rs`（裸 px 1，并行线未提交改动面，本批未触碰）。
+- 仍在册：面板区右键入口（按 §9.26.5 的「一处入口」原则只做列头这一处）、存档落盘
+  （`SavedSession` 无 `result_filter_*` 字段）。
 
 ## 8. 协作纪律
 
