@@ -3620,6 +3620,77 @@ fn find_bar_criteria_buttons_queue_their_option(cx: &mut gpui_kit::TestAppContex
     assert!(cx.update(|_, app| panel.read(app).find_criteria.regex));
 }
 
+/// 【工具栏 2026-11-20】CHECK 型按钮的「点一次就翻转面板态」：筛选展开 / 查找 /
+/// 下发源库 / 列注释四颗都是 DBeaver 的 CHECK `ToolItem`
+/// （`openFindReplaceButton:356`、`FilterExpandPanel`、`filtersClearButton` 同族），
+/// 点一下只改面板态、由 `sync` 回写；按下态视觉走 `Selectable::selected`
+/// （属于目视验收项，见 `result-panel.md §9.23`）。
+#[gpui_kit::test]
+fn toolbar_check_buttons_flip_their_panel_state(cx: &mut gpui_kit::TestAppContext) {
+    use crate::ports::ResultRequest;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 四颗探针都在（缺一颗说明工具栏结构漂了）
+    for id in [
+        "editor-result-filter-expand",
+        "editor-result-find-toggle",
+        "editor-result-pushdown",
+        "editor-result-show-comments",
+    ] {
+        assert!(
+            cx.debug_bounds(id).is_some(),
+            "工具栏应有 {id}（CHECK 型按钮）"
+        );
+    }
+
+    let click = |id: &'static str, cx: &mut gpui_kit::VisualTestContext| {
+        let b = cx
+            .debug_bounds(id)
+            .unwrap_or_else(|| panic!("工具栏应有 {id}"));
+        let point = gpui_kit::point(
+            b.origin.x + b.size.width / 2.,
+            b.origin.y + b.size.height / 2.,
+        );
+        cx.simulate_click(point, gpui_kit::Modifiers::default());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    };
+
+    // 列注释：默认关 → 点一下入队「开」
+    click("editor-result-show-comments", cx);
+    let queued = cx.update(|_, app| panel.read(app).queue.drain());
+    assert!(
+        queued.iter().any(|request| matches!(
+            request,
+            ResultRequest::SetShowColumnComments { open: true }
+        )),
+        "列注释按钮应入队「开」：{queued:?}"
+    );
+
+    // 下发源库：默认关 → 点一下入队「开」
+    click("editor-result-pushdown", cx);
+    let queued = cx.update(|_, app| panel.read(app).queue.drain());
+    assert!(
+        queued.iter().any(|request| matches!(
+            request,
+            ResultRequest::SetPushdown { open: true }
+        )),
+        "下发源库按钮应入队「开」：{queued:?}"
+    );
+
+    // 筛选展开：默认收 → 点一下入队展开
+    click("editor-result-filter-expand", cx);
+    let queued = cx.update(|_, app| panel.read(app).queue.drain());
+    assert!(
+        queued
+            .iter()
+            .any(|request| matches!(request, ResultRequest::ToggleFilterExpand)),
+        "筛选展开按钮应入队展开：{queued:?}"
+    );
+}
+
 /// 【2026-11-18 侧栏结构对齐】左缘竖条两段式：展示组（网格 / 文本）在上，
 /// **记录模式沉底**。对齐 DBeaver `VerticalFolder(SWT.LEFT)`：
 /// - 逐条摆 `VerticalButton(SWT.LEFT | SWT.RADIO)` 展示按钮（`ResultSetViewer.java:948-962`）

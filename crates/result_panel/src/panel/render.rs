@@ -292,6 +292,10 @@ impl ResultPanel {
                     .ghost()
                     .xsmall()
                     .icon(IconName::Maximize2)
+                    // `selected` 出按下态、`toggled` 只写 a11y（0.9.0 实测，
+                    // 见 gpui-component `button.rs:513-571`）：DBeaver 这颗是 CHECK，
+                    // 展开态必须看得见按下去
+                    .selected(self.filter_expanded)
                     .toggled(self.filter_expanded)
                     .debug_selector(|| "editor-result-filter-expand".to_string())
                     .tooltip(if self.filter_expanded {
@@ -548,6 +552,7 @@ impl ResultPanel {
                 Button::new("editor-result-find-toggle")
                     .ghost()
                     .xsmall()
+                    .selected(self.find_open)
                     .toggled(self.find_open)
                     .icon(IconName::Search)
                     .debug_selector(|| "editor-result-find-toggle".to_string())
@@ -560,16 +565,19 @@ impl ResultPanel {
 
         // 【B15】「下发源库」开关：开着时应用筛选会重查（拼 WHERE 到原查询）
         // 【DBeaver 对齐 2026-11-08】不再用 `Switch`：DBeaver 那条筛选条上的等价物是带
-        // 按下态的 CHECK `ToolItem`，不是开关。这里改为图标 toggle（`toggled` = 按下态）
-        // + tooltip，保住「按下即开」的可读性，又不让一个开关占掉一整段文字宽度。
+        // 按下态的 CHECK `ToolItem`，不是开关。这里改为图标 toggle + tooltip，
+        // 保住「按下即开」的可读性，又不让一个开关占掉一整段文字宽度。
         // （注：那个 CHECK 项其实是查找钮 `openFindReplaceButton`，`:356`；下发源库在本仓
         //   是独立能力，样式照它取，位置留在筛选行尾。）
+        // 【2026-11-20】按下态改由 `Selectable::selected` 给（0.9.0 的 `toggled` 只写 a11y），
+        // 否则 CHECK 语义只剩 a11y、肉眼分辨不出开着还是关着。
         let pushdown = {
             let queue = self.queue.clone();
             let checked = self.pushdown;
             Button::new("editor-result-pushdown")
                 .ghost()
                 .xsmall()
+                .selected(checked)
                 .toggled(checked)
                 .icon(IconName::DatabaseZap)
                 .tooltip("下发源库：开着时应用筛选会拼 WHERE 重查源库")
@@ -586,6 +594,7 @@ impl ResultPanel {
             Button::new("editor-result-show-comments")
                 .ghost()
                 .xsmall()
+                .selected(checked)
                 .toggled(checked)
                 .icon(IconName::FileText)
                 .tooltip("显示列注释（列头第二行）")
@@ -610,6 +619,7 @@ impl ResultPanel {
             Button::new("editor-result-compare")
                 .ghost()
                 .xsmall()
+                .selected(self.compare_mode)
                 .toggled(self.compare_mode)
                 .icon(IconName::Columns2)
                 .tooltip("并排对比")
