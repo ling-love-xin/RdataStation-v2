@@ -2,7 +2,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use gpui::{
     AnyElement, App, AppContext as _, Axis, Bounds, ClickEvent, Context, Div, Element, ElementId,
-    FocusHandle, GlobalElementId, InspectorElementId, InteractiveElement, Interactivity,
+    Entity, FocusHandle, GlobalElementId, InspectorElementId, InteractiveElement, Interactivity,
     IntoElement, KeyDownEvent, LayoutId, MouseButton, ParentElement, Pixels, Refineable as _,
     Render, RenderOnce, Role, SharedString, StatefulInteractiveElement, StyleRefinement, Styled,
     Window, accesskit, div, hsla, prelude::FluentBuilder as _, relative,
