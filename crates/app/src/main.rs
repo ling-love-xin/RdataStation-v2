@@ -332,6 +332,20 @@ fn run_app() {
                     editor::commands::RedoResultEdit,
                     Some(editor::commands::RESULT_GRID_CONTEXT),
                 ),
+                // 【第 59 批】结果网格的 `ENTER`（进入行内编辑）/ `Ctrl+反引号`（切换表示）。
+                // 对齐 DBeaver `plugin.xml:1072` 的 `CMD_ROW_EDIT_INLINE`（`ENTER`）与
+                // `:1059` 的 `CMD_SWITCH_PRESENTATION`（`Ctrl+反引号`），同挂在网格上下文上：
+                // 焦点在编辑框时 `ENTER` 由输入内核先处理（提交），不会重复进入编辑。
+                KeyBinding::new(
+                    "enter",
+                    editor::commands::EnterCellEdit,
+                    Some(editor::commands::RESULT_GRID_CONTEXT),
+                ),
+                KeyBinding::new(
+                    "ctrl-`",
+                    editor::commands::CycleResultPresentation,
+                    Some(editor::commands::RESULT_GRID_CONTEXT),
+                ),
                 // M8 洞察：`Ctrl+Shift+R` = 重算当前目标的画像。键位绑在 `insight` context 上
                 // （面板根元素的 `key_context`），只有焦点在洞察面板内才生效，
                 // 不抢其它面板的同名键。

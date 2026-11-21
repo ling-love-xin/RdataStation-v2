@@ -54,3 +54,7 @@ actions!(
 /// 2026-10-23 下移：定义随结果面板（`result_panel::grid::RESULT_GRID_CONTEXT`），
 /// 这里重导出保持 `crate::commands::RESULT_GRID_CONTEXT` 路径不变（字符串值跨 crate 一致）。
 pub use result_panel::grid::RESULT_GRID_CONTEXT;
+
+/// 【第 59 批】结果网格键位动作（定义随结果面板，键位在 `crates/app` 注册）：
+/// `ENTER` → 行内编辑、`Ctrl+反引号` → 切换表示。与 [`RESULT_GRID_CONTEXT`] 配对。
+pub use result_panel::grid::{CycleResultPresentation, EnterCellEdit};

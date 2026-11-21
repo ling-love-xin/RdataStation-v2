@@ -77,6 +77,17 @@ fn bind_editor_keys(cx: &mut TestAppContext) {
                 CopyGridSelection,
                 Some(crate::commands::RESULT_GRID_CONTEXT),
             ),
+            // 【第 59 批】结果网格 `ENTER`（行内编辑）/ `Ctrl+反引号`（切换表示）
+            KeyBinding::new(
+                "enter",
+                crate::commands::EnterCellEdit,
+                Some(crate::commands::RESULT_GRID_CONTEXT),
+            ),
+            KeyBinding::new(
+                "ctrl-`",
+                crate::commands::CycleResultPresentation,
+                Some(crate::commands::RESULT_GRID_CONTEXT),
+            ),
         ]);
     });
 }

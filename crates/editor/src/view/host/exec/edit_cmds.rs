@@ -4,7 +4,10 @@
 //! 跨域互调经 `pub(crate)` 方法；本文件不得出现新的逻辑。
 
 use crate::changes::CellChange;
-use crate::commands::{CopyGridSelection, ExecuteSql, RedoResultEdit, UndoResultEdit};
+use crate::commands::{
+    CopyGridSelection, CycleResultPresentation, EnterCellEdit, ExecuteSql, RedoResultEdit,
+    UndoResultEdit,
+};
 
 use super::*;
 
@@ -51,6 +54,39 @@ impl EditorHostPanel {
     ) {
         tracing::info!(doc = %self.document, "【探针】on_redo_result_edit：结果网格重做（Ctrl+Shift+Z）");
         self.redo_result_edit(cx);
+    }
+
+    /// 【第 59 批】结果网格 `ENTER`：进入当前选中格的行内编辑
+    /// （DBeaver `CMD_ROW_EDIT_INLINE` → `openValueEditor(true)`，`plugin.xml:1072`）。
+    ///
+    /// 与状态栏「修改」钮共用面板的 `begin_edit_cell`（emit `DoubleClickedCell`）——
+    /// 键位只是多一个入口，链路不另开。焦点在编辑框时 `ENTER` 被输入内核先吃掉
+    /// （`gpui-base` 的 `Input` context 绑了 `enter`），不会走到这里。
+    pub(crate) fn on_enter_cell_edit(
+        &mut self,
+        _: &EnterCellEdit,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        tracing::info!(doc = %self.document, "【探针】on_enter_cell_edit：结果网格进入行内编辑（Enter）");
+        self.result_panel
+            .update(cx, |panel, cx| panel.begin_edit_cell(cx));
+    }
+
+    /// 【第 59 批】结果网格 `Ctrl+反引号`：切到下一个呈现
+    /// （DBeaver `CMD_SWITCH_PRESENTATION`，`plugin.xml:1059`）。
+    pub(crate) fn on_cycle_result_presentation(
+        &mut self,
+        _: &CycleResultPresentation,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        tracing::info!(
+            doc = %self.document,
+            "【探针】on_cycle_result_presentation：结果网格切换表示（Ctrl+反引号）"
+        );
+        self.result_panel
+            .update(cx, |panel, cx| panel.cycle_presentation(cx));
     }
 
     /// 【撤销】撤销一步结果编辑：格子恢复「上一步的值」（DBeaver 粒度 = 每格编辑一步）。

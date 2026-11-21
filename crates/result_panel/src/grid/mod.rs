@@ -76,6 +76,25 @@ mod tests;
 pub(crate) mod text;
 pub(crate) mod view_rows;
 
+// 【第 59 批】结果网格的键盘动作
+//
+// 键位在 `crates/app` 注册，context = [`RESULT_GRID_CONTEXT`]（只挂网格那层，
+// 编辑区 / SQL 编辑器不受影响）。对应 DBeaver 的
+// `org.jkiss.dbeaver.ui.context.resultset.focused`：
+// `plugin.xml:1071/1072` 的 `SHIFT+ENTER`（外部值编辑器）/ `ENTER`（内嵌编辑）、
+// `:1059` 的 `Ctrl+反引号`（切换表示）。
+use gpui_kit::actions;
+
+actions!(
+    result_panel,
+    [
+        /// `ENTER`：进入当前选中格的行内编辑（`CMD_ROW_EDIT_INLINE` → `openValueEditor(true)`）
+        EnterCellEdit,
+        /// `Ctrl+反引号`：切到下一个呈现（`CMD_SWITCH_PRESENTATION`，`plugin.xml:1059`）
+        CycleResultPresentation,
+    ]
+);
+
 pub use cell::format_cell_text;
 pub use delegate::{
     CELL_DISPLAY_LIMIT, COLUMN_FILTER_VALUE_LIMIT, CellEdit, ColumnFilterHook, ColumnStatsHook,

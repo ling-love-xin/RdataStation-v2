@@ -145,6 +145,10 @@ impl Render for EditorHostPanel {
             // 编辑框内 `Ctrl+Z` 由输入内核处理，只有焦点在网格（非编辑框）时才到这两个
             .on_action(cx.listener(Self::on_undo_result_edit))
             .on_action(cx.listener(Self::on_redo_result_edit))
+            // 【第 59 批】网格里的 `ENTER` 进入行内编辑 / `Ctrl+反引号` 切换表示：
+            // 同一套 `RESULT_GRID_CONTEXT`，编辑框内 `ENTER` 被输入内核先吃掉
+            .on_action(cx.listener(Self::on_enter_cell_edit))
+            .on_action(cx.listener(Self::on_cycle_result_presentation))
             // 【书签】`Ctrl+Shift+B` 切换 / `F8` 下一 / `Shift+F8` 上一（键位在 crates/app 注册）
             .on_action(cx.listener(Self::on_toggle_bookmark))
             .on_action(cx.listener(Self::on_next_bookmark))

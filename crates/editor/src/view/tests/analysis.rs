@@ -1155,3 +1155,82 @@ fn begin_edit_cell_request_enters_inline_editing(cx: &mut TestAppContext) {
         "「修改」钮应进入行内编辑（与双击同一链路）"
     );
 }
+
+/// 【第 59 批】结果网格 `ENTER` = 行内编辑（DBeaver `CMD_ROW_EDIT_INLINE`，
+/// `plugin.xml:1072`；键位 context = `RESULT_GRID_CONTEXT`）。
+///
+/// 与上一批（`begin_edit_cell_request_enters_inline_editing`）的差别：那条直接调面板方法，
+/// 这条从**真按键**走完整条 dispatch（keybinding → editor 的 `on_action` → 面板 emit → 宿主）。
+#[gpui_kit::test]
+fn enter_key_on_the_grid_enters_cell_editing(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id) = edit_ready_shared("select * from orders");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let handle = cx.update(|_window, cx| panel.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&handle, cx));
+    cx.simulate_keystrokes("ctrl-enter");
+    wait_for_result(cx, &panel);
+
+    // 选中 (0, 2)：组件列 2 = 第 1 个数据列
+    cx.update(|_window, cx| {
+        panel.read(cx).grid_for_test().update(cx, |state, cx| {
+            state.set_selected_cell(0, 2, cx);
+        });
+    });
+    // 焦点交给网格（`DataTable` 自己 `track_focus`，用的就是 `TableState` 的 handle），
+    // 按键才会落在 `RESULT_GRID_CONTEXT` 的 dispatch path 上
+    let grid_focus = cx.update(|_window, app| {
+        use gpui_kit::Focusable as _;
+        panel.read(app).grid_for_test().read(app).focus_handle(app)
+    });
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+    cx.simulate_keystrokes("enter");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(
+        cx.update(|_window, cx| {
+            panel
+                .read(cx)
+                .grid_for_test()
+                .read(cx)
+                .delegate()
+                .editing()
+                .is_some()
+        }),
+        "网格里按 ENTER 应进入行内编辑（与双击 / 状态栏「修改」同一条链）"
+    );
+}
+
+/// 【第 59 批】`Ctrl+反引号` = 切换表示（DBeaver `CMD_SWITCH_PRESENTATION`，
+/// `plugin.xml:1059`；本仓两档：网格 ⇄ 文本）。
+#[gpui_kit::test]
+fn ctrl_backtick_on_the_grid_cycles_presentation(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id) = edit_ready_shared("select * from orders");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let handle = cx.update(|_window, cx| panel.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&handle, cx));
+    cx.simulate_keystrokes("ctrl-enter");
+    wait_for_result(cx, &panel);
+
+    let results = cx.update(|_window, app| panel.read(app).result_panel_for_test());
+    let before = cx.update(|_window, app| results.read(app).presentation());
+
+    let grid_focus = cx.update(|_window, app| {
+        use gpui_kit::Focusable as _;
+        panel.read(app).grid_for_test().read(app).focus_handle(app)
+    });
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+    cx.simulate_keystrokes("ctrl-`");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let after = cx.update(|_window, app| results.read(app).presentation());
+    assert_ne!(before, after, "`Ctrl+反引号` 应切到下一个呈现");
+    assert_eq!(after, before.next(), "循环语义：当前档的 `next()`");
+}
