@@ -528,6 +528,12 @@ impl EditorHostPanel {
             ResultRequest::BeginEditCell => {
                 self.result_panel.update(cx, |p, cx| p.begin_edit_cell(cx));
             }
+            // 【第 61 批】右键「修改单元格」：编辑的是**右键落点那一格**（不是焦点格），
+            // 与 DBeaver `fillEditMenu:3524-3525` 的 `CMD_ROW_EDIT_INLINE` 同义。
+            ResultRequest::BeginEditCellAt { row, col } => {
+                self.result_panel
+                    .update(cx, |p, cx| p.begin_edit_cell_at(row, col, cx));
+            }
             // 【第 55 批】「从上一行 / 下一行复制」：逐格改写现有行（不是插新行）
             ResultRequest::CopyRowValuesFrom { row, above } => {
                 self.copy_row_values_from_adjacent(row, above, cx);

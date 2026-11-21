@@ -331,6 +331,15 @@ pub enum ResultRequest {
     /// `TableEvent::DoubleClickedCell`，与双击完全同路（门控在 editor 侧再判一次）。
     /// 无选中格 / 选中行号槽（组件列 0）时不动作。
     BeginEditCell,
+    /// 【第 61 批】按**指定格**进入行内编辑（右键菜单「修改单元格」）。
+    ///
+    /// 对齐 DBeaver `ResultSetViewer.fillEditMenu:3518-3525`：右键「编辑」子菜单的
+    /// `CMD_ROW_EDIT` / `CMD_ROW_EDIT_INLINE` 针对的是**右键落点那一格**，不是焦点格。
+    /// 本仓只有内嵌通道，所以只接 `_INLINE` 那条。
+    ///
+    /// `col` 是**组件列**（含行号槽，数据格从 1 起）：右键 `ContextTarget::column` 是
+    /// 折算了行号槽的数据列下标，出菜单时 +1（见 `menu.rs` 的 `EditCell` 分派）。
+    BeginEditCellAt { row: usize, col: usize },
     /// 【第 55 批】把**相邻行**的值复制到当前行（对齐 DBeaver
     /// `CMD_ROW_COPY_FROM_ABOVE` / `_BELOW`，`IResultSetCommands.java:45-46` →
     /// `ResultSetHandlerMain:246-249` → `ResultSetViewer.copyRowValues:5062-5156`）。

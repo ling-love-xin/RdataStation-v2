@@ -553,7 +553,8 @@ fn context_menu_row_actions_gate_on_editable_and_deleted() {
     );
     assert!(
         insert.separator_before,
-        "行级动作独立分组，新增项前带分隔线"
+        "行级动作独立分组：新增项前带分隔线（第 61 批后这条是 edit 段内第二条，\
+         第一条在「修改单元格」上、对应 DBeaver `:3208`）"
     );
     assert!(!duplicate.separator_before, "复制 / 删除与新增同组");
     assert!(!delete.separator_before, "复制 / 删除与新增同组");
@@ -624,6 +625,67 @@ fn context_menu_row_actions_gate_on_editable_and_deleted() {
                 | ContextAction::CopyRowValuesFrom { .. }
         )),
         "已删除行不再摆行级动作"
+    );
+}
+
+/// 【第 61 批】右键「修改单元格」：对齐 DBeaver `fillEditMenu:3518-3525`——edit 子菜单里
+/// 最先摆 `CMD_ROW_EDIT` / `CMD_ROW_EDIT_INLINE`（门控 `valueController != null` 且
+/// `!isReadOnly()`），之后 `:3208` 再来一条 Separator 才接行级 ADD/COPY/DELETE。
+///
+/// 本仓扁平化后的对应形态：`EditCell` 是 edit 段**首项**且在「在下方插入新行」之前，
+/// 这两项各自带前导分隔线（第一条开段、第二条是 DBeaver 那条段内 Separator）。
+/// 只读 / 已删行整段不摆（与行级动作同一道门）。
+#[test]
+fn context_menu_edit_cell_leads_the_edit_group() {
+    // 只读：没有「修改单元格」
+    let read_only = context_menu_items(&target("orders", "name", 1));
+    assert!(
+        !read_only
+            .iter()
+            .any(|item| matches!(item.action, ContextAction::EditCell { .. })),
+        "只读结果集不摆「修改单元格」"
+    );
+
+    // 可编辑未删：摆在 edit 段首
+    let mut editable = target("orders", "name", 1);
+    editable.editable = true;
+    let items = context_menu_items(&editable);
+    let edit = items
+        .iter()
+        .position(|item| matches!(item.action, ContextAction::EditCell { .. }))
+        .expect("可编辑结果集要摆「修改单元格」");
+    assert_eq!(
+        items[edit].action,
+        ContextAction::EditCell {
+            row: 0,
+            // 右键 target 的 `column` 是**数据列下标**（已折算掉行号槽），出菜单时才 +1
+            column: 1,
+        }
+    );
+    assert_eq!(
+        items[edit].label, "修改单元格",
+        "文案沿用状态栏那颗（§9.24），不照 bundle_zh 的「内嵌编辑」"
+    );
+    assert!(items[edit].separator_before, "edit 段首项带开段分隔线");
+    let insert = items
+        .iter()
+        .position(|item| matches!(item.action, ContextAction::InsertRowBelow(_)))
+        .expect("可编辑结果集要摆新增行");
+    assert!(edit < insert, "「修改单元格」在 edit 段首（先于行级三项）");
+    assert!(
+        items[insert].separator_before,
+        "新增行前的分隔线 = DBeaver `:3208` 的段内 Separator"
+    );
+
+    // 已删除行：整段不摆
+    let mut deleted = target("orders", "name", 1);
+    deleted.editable = true;
+    deleted.is_deleted = true;
+    assert!(
+        !context_menu_items(&deleted)
+            .iter()
+            .any(|item| matches!(item.action, ContextAction::EditCell { .. })),
+        "已标记删除的行不摆「修改单元格」"
     );
 }
 

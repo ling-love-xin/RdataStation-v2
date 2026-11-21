@@ -320,11 +320,21 @@ impl ResultPanel {
         let Some((row, col)) = self.grid.read(cx).selected_cell() else {
             return;
         };
+        self.begin_edit_cell_at(row, col, cx);
+    }
+
+    /// 【第 61 批】按**指定格**进入行内编辑（右键「修改单元格」）。
+    ///
+    /// 与 [`Self::begin_edit_cell`] 只差定位来源：那条读网格选中格，这条用右键落点。
+    /// 右键 target 与选中格可以不同（右键不会改选区），所以不能复用选中格那条。
+    ///
+    /// `col` 是**组件列**（含行号槽，数据格从 1 起，见 `host/construct.rs:337`）；
+    /// 行号槽与非数据位置直接忽略。其余门控（通道 / 项目 / 键列 / 只读）由
+    /// `DoubleClickedCell` 的宿主订阅再判一次，与双击完全同路。
+    pub fn begin_edit_cell_at(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
         if col == 0 {
             return;
         }
-        // 面板侧不用手动记选区：`DoubleClickedCell` 的订阅在 lifecycle 里，
-        // emit 之后面板自己会收到并把 `selection_pos` 对齐。
         self.grid
             .update(cx, |_state, cx| cx.emit(TableEvent::DoubleClickedCell(row, col)));
     }

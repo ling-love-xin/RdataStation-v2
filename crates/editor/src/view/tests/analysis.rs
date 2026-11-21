@@ -1156,6 +1156,52 @@ fn begin_edit_cell_request_enters_inline_editing(cx: &mut TestAppContext) {
     );
 }
 
+/// 【第 61 批】右键「修改单元格」的整链：宿主分派 `BeginEditCellAt { row, col }`
+/// → `panel.begin_edit_cell_at` → emit `DoubleClickedCell(row, col)` → 行内编辑。
+///
+/// 与上一批的差别：**不设选中格**——右键落点自带坐标、不读选区，这正是本批把两条
+/// 入口分开的原因（`begin_edit_cell` 读选中格，`begin_edit_cell_at` 用给定格）。
+#[gpui_kit::test]
+fn begin_edit_cell_at_request_enters_inline_editing_without_a_selection(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id) = edit_ready_shared("select * from orders");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let handle = cx.update(|_window, cx| panel.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&handle, cx));
+    cx.simulate_keystrokes("ctrl-enter");
+    wait_for_result(cx, &panel);
+
+    // 刻意不点格 / 不清选区：请求自带 (row, col)，组件列 2 = 第 1 个数据列
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.dispatch_result_request(
+                result_panel::ports::ResultRequest::BeginEditCellAt { row: 0, col: 2 },
+                window,
+                cx,
+            );
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(
+        cx.update(|_window, cx| {
+            panel
+                .read(cx)
+                .grid_for_test()
+                .read(cx)
+                .delegate()
+                .editing()
+                .is_some()
+        }),
+        "右键落点请求应进入行内编辑（不依赖选中格）"
+    );
+}
+
 /// 【第 59 批】结果网格 `ENTER` = 行内编辑（DBeaver `CMD_ROW_EDIT_INLINE`，
 /// `plugin.xml:1072`；键位 context = `RESULT_GRID_CONTEXT`）。
 ///

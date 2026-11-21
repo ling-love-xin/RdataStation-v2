@@ -1727,6 +1727,43 @@ fn begin_edit_cell_emits_the_double_click_only_for_data_cells(
     );
 }
 
+/// 【第 61 批】右键「修改单元格」用**右键落点**定位，不是焦点格：右键不会改选区，
+/// 所以 `begin_edit_cell_at` 发出的 `DoubleClickedCell` 必须是传入的那一格。
+/// 行号槽（组件列 0）仍然什么都不发。
+#[gpui_kit::test]
+fn begin_edit_cell_at_uses_the_given_cell_instead_of_the_selection(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    let grid = cx.update(|_, app| panel.read(app).grid.clone());
+
+    // 选中 (0, 1)，但右键落在 (1, 3)：事件应对齐右键那一格
+    cx.update(|_, app| {
+        grid.update(app, |state, cx| state.set_selected_cell(0, 1, cx));
+    });
+    cx.update(|_, app| panel.update(app, |p, _cx| p.selection_pos = Some((9, 9))));
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.begin_edit_cell_at(1, 3, cx));
+    });
+    assert_eq!(
+        cx.update(|_, app| panel.read(app).selection_pos),
+        Some((1, 3)),
+        "右键落点 (1,3) 才是要编辑的格，与选中格 (0,1) 无关"
+    );
+
+    // 行号槽：哨兵不被覆盖
+    cx.update(|_, app| panel.update(app, |p, _cx| p.selection_pos = Some((9, 9))));
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.begin_edit_cell_at(0, 0, cx));
+    });
+    assert_eq!(
+        cx.update(|_, app| panel.read(app).selection_pos),
+        Some((9, 9)),
+        "行号槽（组件列 0）不是数据格，「修改单元格」不该 emit"
+    );
+}
+
 /// 【第 58 批】「修改」钮的可用态照 DBeaver `PROP_EDITABLE` 的 `"inline"` 分支：
 /// 要求 `presentation instanceof IResultSetEditor` **且** `getCurrentAttribute() != null`
 /// （`ResultSetPropertyTester.java:127-133`）。记录模式是 `PlainTextPresentation` 的变体、

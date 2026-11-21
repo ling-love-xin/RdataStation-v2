@@ -86,6 +86,13 @@ pub enum ContextAction {
     /// 【第 55 批】把相邻行的值复制到**这一行**（对齐 DBeaver `CMD_ROW_COPY_FROM_ABOVE` /
     /// `_BELOW`，`fillContextMenu:3213-3214`）：逐格改写现有行，不插新行
     CopyRowValuesFrom { row: usize, above: bool },
+    /// 【第 61 批】编辑**右键落点这一格**（对齐 DBeaver `fillEditMenu:3518-3525` 的
+    /// `CMD_ROW_EDIT_INLINE`；`row` = 视图行，`column` = 数据列下标）。
+    ///
+    /// 与状态栏「修改单元格」（[`ContextAction`] 之外那条 `ResultRequest::BeginEditCell`）
+    /// 的区别：那条读网格选中格，这条用右键定位——右键的格与选中格可以不同。
+    /// 落点走内嵌编辑（本仓无外部值编辑器通道）。
+    EditCell { row: usize, column: usize },
     /// 【列浏览器】复制选中列的**列名**（对齐 DBeaver 元数据面板清单右键
     /// `meta_data_panel_action_copy_column_text`：多选时逐行拼、换行分隔）。
     ///
@@ -322,9 +329,25 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
     // 新增空行也一并收起（被删行区段不再产生新的叠加动作）。动作只改本地叠加层，
     // 不下发 INSERT / DELETE。
     if target.editable && !target.is_deleted {
+        // 【第 61 批】edit 段首「修改单元格」：对齐 DBeaver `fillEditMenu:3518-3525`——
+        // 子菜单内最先摆 `CMD_ROW_EDIT` / `CMD_ROW_EDIT_INLINE`（门控 `valueController != null`
+        // 且 `!isReadOnly()`），之后 `:3208` 再来一条 Separator 才接行级的 add/copy/delete。
+        // 本仓没有外部值编辑器通道（`ports.rs:214-215` 只读预览、无写回），只接 inline 那条；
+        // 文案沿用状态栏那颗（「修改单元格」，§9.24）而不照 `bundle_zh` 的「内嵌编辑」，
+        // 免得同一条链路在界面上有两个名字。
+        // 行号槽落点不进本函数（`context_menu:786` 早退），所以这里 `column` 一定是数据列。
+        items.push(ContextMenuItem {
+            label: "修改单元格".to_string(),
+            action: ContextAction::EditCell {
+                row: target.row,
+                column: target.column,
+            },
+            separator_before: true,
+        });
         items.push(ContextMenuItem {
             label: "在下方插入新行".to_string(),
             action: ContextAction::InsertRowBelow(target.row),
+            // 组内第二条分隔线：对应 DBeaver `line 3208` 的 `editMenu.add(new Separator())`
             separator_before: true,
         });
         items.push(ContextMenuItem {
@@ -1034,6 +1057,20 @@ pub(crate) fn context_menu(
                         });
                     },
                 ));
+            }
+            // 【第 61 批】右键「修改单元格」：把右键落点坐标折成**组件列**（+1 补行号槽）
+            // 后交回宿主，走与双击同一条 `TableEvent::DoubleClickedCell` 链路。
+            // 用 `on_row_action` 钩子（同一份队列），与行级动作一致；没接钩子（只读网格 /
+            // 未挂宿主的单测）时菜单项已在 `context_menu_items` 收起，这里兜底忽略。
+            ContextAction::EditCell { row, column } => {
+                if let Some(hook) = delegate.on_row_action.clone() {
+                    let col = column + 1;
+                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| {
+                            hook(crate::ports::ResultRequest::BeginEditCellAt { row, col }, app);
+                        },
+                    ));
+                }
             }
             // 【#28-B3】行级动作：网格不持本地行真值，打包成请求交回宿主分派；
             // 没接钩子（只读结果集）时菜单项已被 `context_menu_items` 收起，这里兜底忽略。
