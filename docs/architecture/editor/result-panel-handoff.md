@@ -2685,6 +2685,33 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 门禁基线（第 61 批后）：result_panel **399 passed**、editor check `Finished`（0 warning）、
   editor lib **805 passed（1 ignored）**、ui-guard **4 passed**；本批未动 settings。
 
+### 2.113 编辑门控单一判据的接手要点（2026-11-21）
+
+- **改编辑入口的可用态只改一处**：`crates/result_panel/src/grid/edit.rs` 的
+  `can_edit_cell(editable, record_view, has_current_cell)`（`grid/mod.rs` 已 re-export）。
+  状态栏「修改」钮（`panel/render.rs`）与右键编辑段（`grid/menu.rs`）都读它；
+  别再在任一处写 `transposed || !picked` 之类的局部式子。
+- **`editable` 的来源别搞错**：面板的 `self.editable` 是宿主用
+  `editor::exec::editability::result_editable(...)` 算好同步的（`host/results/grid.rs:211-223`），
+  已含 通道 / 项目 / 文档只读 / 连接只读 / 行标识。`can_edit_cell` 只补「呈现」与
+  「当前属性」两条；在面板层再判前五项就是重复（也拿不到 channel）。
+- **`is_deleted` 故意不在函数里**：它是本仓叠加层的第 4 个维度，只作用于右键整段
+  （DBeaver `STATE_REMOVED` 只管 `CMD_CELL_RESET`）。要给状态栏钮也加，是另一批的事。
+- **键位不要跟着判 `editable`**：`begin_edit_cell_at` 只拦 `col == 0` 与 `self.transposed`。
+  判 `editable` 会让只读结果集**丢掉**宿主 `cell_editable` 给出的原因提示
+  （`host/construct.rs:340-354` 的顶部说明）。
+- **权威判据仍在下游**：delegate `begin_edit`（`grid/edit.rs`，转置 / 可编辑 / 编辑中 /
+  行号槽 / 已删行）与 `cell_editable`。`can_edit_cell` 只是它们的 UI 投影，
+  别把它当第二套规则去加白名单。
+- **新增入口时**：先问「它有没有当前属性 / 能不能在记录视图里用」，再决定传参；
+  `has_current_cell` 的说法是「组件列 > 0」，不是「选中了行」。
+- **既有 flake 的处置**：`ports::editor_completion` 的 4 条在默认并发下会踩
+  `wait_until` 3s deadline（`editor_completion.rs:1574-1592`）。跑门禁用
+  `cargo test -p rds-editor --lib -- --test-threads=1`（805 全过）；要根治就单独一刀
+  放宽 deadline，别混进功能批。
+- 门禁基线（第 62 批后）：result_panel **401 passed**、editor check `Finished`（0 warning）、
+  editor lib **805 passed（1 ignored，单线程）**、ui-guard **4 passed**；本批未动 settings。
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。

@@ -7733,10 +7733,9 @@ toolbar 只剩 `filtersCustomButton` + `openFindReplaceButton`。
 **有意差异（3 条）**：
 
 1. **DBeaver 由 property tester 统一驱动所有入口**（状态条 item、编辑菜单项、快捷键、右键项
-   共享同一套 enablement）；本仓分三处各自判：状态条那颗（选中格 + 可编辑 + 非记录视图，
-   §9.41）、键位（`ENTER`，§9.42）、右键项（`editable && !is_deleted`，§9.44 —— 右键 target
-   天然带格坐标，所以不需要再判「有没有当前属性」）。规则相同但实现分家，改一处不自动同步
-   另两处。
+   共享同一套 enablement）；本仓**已由 §9.45 收成一条纯函数** `grid::can_edit_cell`，
+   状态栏钮与右键项共用；只剩**键位**有意不走它（宿主要拿 `cell_editable` 的 `Err(EditGate)`
+   在顶部报原因，提前拦会吞掉提示）。
 2. **没有「属性级只读」判定**：本仓没有列级只读模型（列的可编辑性只有面板级 `editable`），
    inline 的第三条（属性本身可写）落不了。
 3. **`"edit"` 与 `"inline"` 两条口径合并成一条**：本仓只有 inline 链路，所以门控比 DBeaver
@@ -7978,7 +7977,7 @@ toolbar 只剩 `filtersCustomButton` + `openFindReplaceButton`。
 1. **位置**：编辑项在 edit 段**最前**，行级 ADD/COPY/DELETE 在它之后，且两者之间有一条
    分隔线（对应 `:3208`）。
 2. **门控**：只读结果集、已标记删除的行都不摆（对应 `!isReadOnly()`；`STATE_REMOVED` 那侧
-   本仓表现为整段收起）。
+   本仓表现为整段收起）。可编辑 / 非记录视图两条已并入 §9.45 的 `can_edit_cell`。
 3. **落点是右键那一格**：`fillEditMenu` 的 `valueController` 就是右键所在单元格的处理器，
    本仓 `ContextAction::EditCell` 携带 `(row, column)` 并折算成组件列。
 
@@ -8006,6 +8005,90 @@ toolbar 只剩 `filtersCustomButton` + `openFindReplaceButton`。
 - **踩坑**：`ports::editor_completion::tests::*` 在全量并发下有 3 条偶发失败
   （warm-introspection 竞态），单独跑 `ports::editor_completion::tests::` 13 条全过、
   全量重跑也全过 —— 与本批改动无关的既有不稳定用例，重跑即可判定。
+
+### 9.45 第 62 批：编辑门控收成一条纯函数 `can_edit_cell`
+
+#### 9.45.1 问题：判据分叉
+
+`crates/editor/src/exec/editability.rs` 的模块头写着「这里是"能不能编辑这一格"的**唯一**
+判据：网格双击、工具栏入口、提交按钮全走 [`cell_editable`]，不许各写一份判断（判断分叉 =
+界面行为分叉）」。但 `result_panel` 侧的 UI 入口实际各写了一份**投影**：
+
+| 入口 | 位置 | 原式子 |
+| --- | --- | --- |
+| 状态栏「修改」钮 | `panel/render.rs:885` | `disabled = transposed \|\| !(col > 0)` |
+| 右键「修改单元格」 | `grid/menu.rs` edit 段 | `editable && !is_deleted` |
+| 网格 `ENTER` | `panel/events.rs::begin_edit_cell_at` | `col == 0` 早退 |
+
+三条式子各自成立，但改一条不同步另两条。`result_panel` 不能依赖 `editor`（依赖只向下），
+拿不到 `channel` / `project` / `row_key`——这是拆分的**结构性原因**，不是疏忽。
+
+#### 9.45.2 dbeaver-ref 取证（现源实读）
+
+`ResultSetPropertyTester.java:120-136` 的 `PROP_EDITABLE`，对 `"edit"` / `"inline"` 都判三段：
+
+1. `getActivePresentation() instanceof IResultSetEditor`；
+2. `getCurrentAttribute() != null`；
+3. 值处理器非只读（`!valueController.isReadOnly()`）。
+
+⇒ 面板态的三条条件：**呈现可编辑** + **有当前属性** + **面板级可编辑**。DBeaver 用它统一
+驱动状态条 item / 编辑菜单项 / 快捷键 / 右键项——`can_edit_cell` 就是这层的对应物。
+
+#### 9.45.3 本仓落地
+
+`grid/edit.rs` 新增自由函数（`grid/mod.rs` re-export）：
+
+```rust
+pub fn can_edit_cell(editable: bool, record_view: bool, has_current_cell: bool) -> bool {
+    editable && !record_view && has_current_cell
+}
+```
+
+三处用法：
+
+| 入口 | 传参 | 说明 |
+| --- | --- | --- |
+| 状态栏钮 | `(self.editable, self.transposed, picked)` → `disabled = !…` | 闭包内 `editable` 恒真（只读结果集走占位），写进去是为了让这条式子就是全部条件 |
+| 右键编辑段 | `(target.editable, target.record_mode, true)` + `!target.is_deleted` | 右键 target 天然带格坐标 ⇒ `has_current_cell` 恒真；`is_deleted` 是本仓第 4 个维度，见 §9.44.3 |
+| 网格 `ENTER` | 只判 `col == 0 \|\| self.transposed` | **有意不判 `editable`**：宿主要拿 `cell_editable` 的 `Err(EditGate)` 在顶部展示原因（`host/construct.rs:340-354`），提前拦会吞掉提示 |
+
+`editable` 的来源：宿主在同步数据时算 `editor::exec::editability::result_editable(...)`
+（`host/results/grid.rs:211-223`），即 `self.editable` 已含 通道 / 项目 / 文档只读 / 连接只读 /
+行标识五项。所以 `can_edit_cell` 只补呈现与当前属性两条，不重复判前五项。
+
+#### 9.45.4 已对上 / 有意差异
+
+**已对上（3 条）**：
+
+1. 状态条钮 + 右键项共用同一条式子（DBeaver 的 property tester 语义）。
+2. 记录视图 → `record_view` 为真 → 一律不可编辑（对应 `PlainTextPresentation` 不实现
+   `IResultSetEditor`，`PlainTextPresentation.java:63`）。
+3. 无当前属性 → 不可编辑（组件列 0 是行号槽；右键侧天然满足）。
+
+**有意差异（3 条，勿当 bug 修）**：
+
+1. **键位不预判 `editable`**（见上表第 3 行）：宁可让宿主报原因，也不要面板层静默拦截。
+   DBeaver 那边 `PROP_EDITABLE` 同时驱动快捷键，但它的 handler 同样会再判一次——
+   本仓只是把这个「报原因」的顺序保留了。
+2. **`is_deleted` 不进函数**：它是本仓叠加层语义（DBeaver 的 `STATE_REMOVED` 只管
+   `CMD_CELL_RESET`），塞进 `can_edit_cell` 会让状态栏那颗钮也得判删除态——那是另一批。
+3. **函数不是权威判据**：权威仍在 delegate `begin_edit`（转置 / 可编辑 / 编辑中 / 行号槽 /
+   已删行）与 `cell_editable`。函数注释里写死了这层关系，避免有人把它当第二套规则。
+
+#### 9.45.5 用例与门禁
+
+- 纯函数 `grid/tests.rs::can_edit_cell_requires_all_three_conditions`：三 False 一 True 的真值表。
+- `context_menu_edit_cell_leads_the_edit_group` 补第四段：可编辑 + `record_mode = true` →
+  编辑段五项都不摆。
+- 面板窗口 `panel/tests.rs::begin_edit_cell_at_is_ignored_in_record_view`：`transposed = true`
+  时 `begin_edit_cell_at(0, 2)` 不覆盖哨兵 `selection_pos`。
+- **门禁**：`rds-result-panel` **401 passed（+2）**、`cargo check --workspace --all-targets`
+  `Finished`（0 warning）、`rds-editor --lib` **805 passed（1 ignored，数字不变）**、
+  `rds-ui-guard` **4 passed**。
+- **已知 flake（非本批回归）**：`ports::editor_completion::tests::*` 在**默认并发**下有 4 条
+  会踩 `wait_until` 的 3s deadline（`editor_completion.rs:1574-1592`，后台线程落笔慢）；
+  `--test-threads=1` 全量 805 全过、单 filter 13 条全过。门禁数字取单线程结果。
+  修法是放宽该 deadline（测试侧一行）或给该模块加串行执行——**另开一刀**，别混进功能批。
 
 ## 8. 协作纪律
 
