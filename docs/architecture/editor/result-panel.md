@@ -7658,10 +7658,10 @@ toolbar 只剩 `filtersCustomButton` + `openFindReplaceButton`。
    双击本身就是内嵌编辑，菜单再加一项是重复入口；且本仓 `BeginEditCell` 读的是**网格选中格**，
    右键菜单的 target 是**右键定位的格**，两者语义不同，要摆得另开一个带 `(row, col)` 的请求。
    **登记为候选，不擅自加。**
-5. **记录（整行）模式下这颗钮不动作**：`selected_cell()` 只在 cell 选择模式返回 `Some`；
-   记录模式下网格没有「选中格」，点「修改」静默无反应（不是灰掉）。记录模式是「一列一行的键值
-   视图」，其编辑入口本仓尚未定义；本批**不**用 `selected_row` 兜底猜列（那会改错格）。
-   **登记为候选。**
+5. **记录（整行）模式下的可用态（第 58 批已补齐）**：第 57 批刚落线时这颗钮在记录视图里是
+   「可点但静默落空」；第 58 批按 DBeaver `PROP_EDITABLE` 改成**置灰**——记录模式是
+   `PlainTextPresentation` 的变体、不实现 `IResultSetEditor`（`PlainTextPresentation.java:63`），
+   那边同样是灰的。详见 §9.41。
 
 #### 9.40.4 用例与门禁
 
@@ -7680,6 +7680,78 @@ toolbar 只剩 `filtersCustomButton` + `openFindReplaceButton`。
 - **门禁**：`rds-result-panel` **395 passed**（并列首跑 394 passed / 1 failed，即缺 `gpui_kit::init` 那条）、
   editor `cargo check` `Finished`（0 warning）、`rds-editor --lib` **801 passed（1 ignored）**、
   `rds-ui-guard` **4 passed**。本批未动 `crates/settings`，不重跑其测试。
+
+### 9.41 「修改」钮的可用态门控（对齐 DBeaver `PROP_EDITABLE`：记录视图 / 当前属性，2026-11-21）
+
+§9.40 把「修改」钮接上线，但只做了「结果集是否可编辑」一层门控。点下去有两种静默落空：
+记录（转置）视图、以及没有选中任何格。本批按 DBeaver 的 `PROP_EDITABLE` 把这两层补齐。
+
+#### 9.41.1 dbeaver-ref 取证（现源实读）
+
+| 位置 | 内容 |
+| --- | --- |
+| `ResultSetPropertyTester.java:120-126` | `PROP_EDITABLE` 前置：`actionsDisabled` / 无数据 / `!rsv.supportsEdit()` / `DATA_EDIT_DISABLED` 任一为真即 `false` |
+| `:127-131` | `"edit"` / `"inline"` 都要求 `getActivePresentation().getCurrentAttribute() != null` **且** `presentation instanceof IResultSetEditor` |
+| `:132-133` | `"inline"` 额外要求 `rsv.getAttributeReadOnlyStatus(attr, true, false) == null`（属性本身可写） |
+| `:135` | `"edit"` 只要求 `getCurrentRow() != null` |
+| `PlainTextPresentation.java:63` | `implements IResultSetDisplayFormatProvider, DBPAdaptable` —— **不实现** `IResultSetEditor` |
+| `PlainTextPresentation.java:109/171/243/367/570` | `controller.isRecordMode()` 分支：记录模式是**文本呈现器的变体**，不是独立呈现器 |
+
+两条结论：
+
+1. 记录模式下 `instanceof IResultSetEditor` 为假 ⇒ `row.edit` / `row.edit.inline` 都是**置灰**，
+   不是「可点但没效果」。
+2. 正常网格里 `"edit"` 只要当前行，`"inline"` 还要当前属性（选中格且该格可写）。
+   **状态条那颗是 `"edit"`，本仓落的是 inline 链路 ⇒ 门控必须比那边严。**
+
+#### 9.41.2 本仓落地
+
+| 条件 | 表现 |
+| --- | --- |
+| `!self.editable` | 不注入真钮 → 禁用占位（既有口径，不变） |
+| `self.transposed`（记录视图） | 真钮在位 + `disabled(true)`，tooltip「记录视图是只读的：切回网格视图后可编辑单元格」 |
+| `selection_pos` 为空 / 组件列 0 | 真钮在位 + `disabled(true)`，tooltip「先在网格里选中一个数据单元格」 |
+| 选中数据格 | 可用，tooltip「修改当前选中单元格（进入行内编辑）」 |
+
+实现只有一处：`panel/render.rs` 的 `edit_row` 上
+`.disabled(transposed || !picked)`，其中 `picked = self.selection_pos.is_some_and(|(_, col)| col > 0)`。
+
+**灰态为什么跟得上选中**：`selection_pos` 由 `TableEvent::SelectCell` / `ClearSelection` 维护
+（`lifecycle.rs:365-410`，两条都 `cx.notify()`），记录模式切换 `toggle_transpose` 也 `cx.notify()`
+（`events.rs:432`）—— 三段重绘都有事件源，不需要额外订阅。render 只读 `self.selection_pos`。
+
+#### 9.41.3 已对上 / 有意差异
+
+**已对上（4 条）**：
+
+1. 记录视图只读 → 置灰，对应 `instanceof IResultSetEditor` 判假。
+2. 无当前属性 → 置灰，对应 inline 的 `getCurrentAttribute() != null`。
+3. 行号槽（组件列 0）不当作数据格，与 `begin_edit_cell` 的 `col == 0` 早退同一口径。
+4. 只读结果集 → 禁用占位（既有 `self.editable` 门控）。
+
+**有意差异（3 条）**：
+
+1. **DBeaver 由 property tester 统一驱动所有入口**（状态条 item、编辑菜单项、快捷键、右键项
+   共享同一套 enablement）；本仓只在状态条这颗钮上判——因为本仓没有其它入口
+   （菜单项与键位都未接，§9.40.3 第 3 / 4 条）。
+2. **没有「属性级只读」判定**：本仓没有列级只读模型（列的可编辑性只有面板级 `editable`），
+   inline 的第三条（属性本身可写）落不了。
+3. **`"edit"` 与 `"inline"` 两条口径合并成一条**：本仓只有 inline 链路，所以门控比 DBeaver
+   的 `"edit"` 严（那边状态条那颗只要当前行）。这是 §9.40.2 落点选择的必然结果。
+
+#### 9.41.4 用例与门禁
+
+- 新增窗口用例 `panel/tests.rs::edit_row_button_is_disabled_in_record_view`，四段断言：
+  (1) 一个格都没选 → 灰；(2) 选中 `(0, 2)` → 可用；(3) 停在行号槽 `(0, 0)` → 灰；
+  (4) 记录视图（场景是选中数据格）→ 灰。断言走
+  `window.try_find(ElementId::Name("editor-result-edit-cell")).disabled()`：可用态**不写**
+  a11y disabled 位（`None`），只有禁用才 `Some(true)`（与 `filter_clear_button_is_…` 同一实测口径）。
+- **用例前提（踩过的坑）**：`panel_harness` 默认只读且**没有状态行**，钮不进树
+  （首跑 `try_find` 直接 `None`）。必须先 `p.editable = true` 并注入
+  `ResultStatus { total_rows: 2, ..Default::default() }`（`show_status` 需要 status / 执行信息之一）。
+- **门禁**：`rds-result-panel` **396 passed**、editor `cargo check` `Finished`（0 warning）、
+  `rds-editor --lib` **801 passed（1 ignored）**、`rds-ui-guard` **4 passed**。
+  本批未动 `crates/settings`，不重跑其测试。
 
 ## 8. 协作纪律
 

@@ -2570,15 +2570,37 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   `plugin.xml:1071/1072`）。本仓无「值编辑器 + 写回」通道（`ports.rs:214-215`），只能落内嵌这一族，
   这是 §9.40.3 记的第 1 条有意差异。
 - **未做**：`SHIFT+ENTER` 外部编辑键位；右键 edit 段的「编辑单元格」项（`BeginEditCell` 读的是
-  选中格，菜单 target 是右键格，语义不同）；**记录（整行）模式下这颗钮静默无动作**
-  （`selected_cell()` 只在 cell 选择模式返回 `Some`，不要拿 `selected_row` 兜底猜列，会改错格）；
-  状态条默认可见集里 `fetch.page`（本仓有意常显）与 `undo`/`redo`（本仓默认隐藏，已对上）之外的其余差异。
+  选中格，菜单 target 是右键格，语义不同）；状态条默认可见集里 `fetch.page`（本仓有意常显）与
+  `undo`/`redo`（本仓默认隐藏，已对上）之外的其余差异。
+  记录（整行）模式下这颗钮的可用态**已由第 58 批补齐**（置灰，见 §2.109）；不要再用
+  `selected_row` 兜底猜列，那会改错格。
 - 用例：`begin_edit_cell_emits_the_double_click_only_for_data_cells`（窗口，哨兵 `selection_pos`
   抹掉 `SelectCell` 副作用）、`analysis.rs::begin_edit_cell_request_enters_inline_editing`
   （端到端：真跑 SQL → 选中 → 面板入口 → `delegate().editing()`）。窗口用例必须先
   `cx.update(gpui_kit::init)`；`VisualTestContext` 里取 `Entity::read` 要
   `cx.update(|_window, app| panel.read(app).…)`。
 - 门禁基线（第 57 批后）：result_panel **395 passed**、editor check `Finished`（0 warning）、
+  editor lib **801 passed（1 ignored）**、ui-guard **4 passed**；本批未动 settings。
+
+### 2.109 「修改」钮可用态门控的接手要点（2026-11-21）
+
+- **唯一口径**：`panel/render.rs` 的 `edit_row` —— `disabled(transposed || !picked)`，
+  `picked = self.selection_pos.is_some_and(|(_, col)| col > 0)`。别在 `begin_edit_cell` 里
+  再加一套判定：那是运行时防线（无选中格即 return），这里是 UI 灰态，两回事。
+- **灰态靠三段事件重绘**：`TableEvent::SelectCell` / `ClearSelection`（`lifecycle.rs:365-410`）
+  与 `toggle_transpose`（`events.rs:432`）都会 `cx.notify()`。以后若新增「设置选中格」的入口，
+  忘了 notify 就会让灰态滞后一帧甚至更久。
+- **测试前提是 `panel_harness` 的两个默认值**：只读（`editable == false`）+ 无状态行
+  （`show_status` 为假）。测这颗钮必须先 `p.editable = true` 并注入
+  `p.status = Some(ResultStatus { total_rows: 2, ..Default::default() })`，否则钮根本不在树里
+  （本批首跑 `try_find` 返回 `None` 就是这个原因）。
+- **断言口径**：可用态不写 a11y disabled 位（`disabled()` = `None`），只有禁用才 `Some(true)`
+  ——钉 `assert_ne!(.., Some(true))` 而不是 `assert_eq!(.., Some(false))`。
+- **为什么比 DBeaver 严**：那边状态条那颗是 `"edit"`（只要当前行），本仓落 inline 链路
+  （§9.40.2），所以还要求「有选中数据格」。要放松就先改落点，别只改这一个 bool。
+- 未做：属性级只读（本仓无列级只读模型）、面板级键位层（`ENTER` 内嵌编辑 / `Ctrl+反引号`）、
+  其它行级钮是否也按格判（新增 / 复制 / 删除目前只按选中行）。
+- 门禁基线（第 58 批后）：result_panel **396 passed**、editor check `Finished`（0 warning）、
   editor lib **801 passed（1 ignored）**、ui-guard **4 passed**；本批未动 settings。
 
 ## 3. 并行线协作纪律（工作区现状）
