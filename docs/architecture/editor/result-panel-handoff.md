@@ -3083,6 +3083,13 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 
 ## 3. 并行线协作纪律（工作区现状）
 
+- **共享文件的提交姿势**（第 77 批踩过，务必照做）：`git commit --only <paths>` /
+  `git commit -F msg -- <paths>` 提交的是**工作区内容**，会绕过刚用 `hash-object -w` +
+  `update-index --cacheinfo` 摘好的那个 blob。所以顺序必须是：摘 blob →
+  `update-index --cacheinfo` → `git add` 本线其余文件 → **不带 paths 的** `git commit -F msg`。
+  第 77 批第一次提交用了 `--only`，把 `crates/app/src/main.rs` 里的通知线 3 个 hunk 一起带进了
+  本线提交（25 行而不是 11 行）；发现后用 `git reset --soft HEAD~2` + `git reset` 重做，
+  工作区未受影响、通知线改动仍在未提交状态。
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。
 - 当前未提交（并行线在动，改前先 `git status` 确认归属）：
   - 本线混合：`result_panel/src/{store/, export/, grid/, panel/}`（2026-10-29 拆分目录）/ `ports.rs` / `host.rs` / `settings/*` / `workbench/src/view.rs` / `panels/mod.rs` / `tests/ui_contract.rs` / `workbench_shell/src/ui.rs`
