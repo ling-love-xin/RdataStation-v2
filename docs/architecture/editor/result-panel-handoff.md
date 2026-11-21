@@ -2727,6 +2727,35 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   默认并发）**、ui-guard **4 passed**、check Finished（并行线 `rds-notification` 有 2 条
   never-used warning，与本线无关）。
 
+### 2.115 行级三钮可用态的接手要点（2026-11-21）
+
+- **判据只有一处**：`crates/result_panel/src/grid/menu.rs` 的
+  `pub fn row_action_state(editable, has_current_row, row_deleted) -> RowActionState`。
+  渲染层不要再自己写 `row.is_none()` 之类的条件——那是第 64 批之前的写法，已替换。
+- **两套门不要混**：`can_edit_cell(editable, record_view, has_current_cell)` 管「编辑某一格」；
+  `row_action_state` 管「行级新增/复制/删除」。前者不调后者，后者也不调前者。
+- **`add` 不要求当前行**：`InsertRowBelow(None)` 的语义就是追加到末尾，所以无选中时
+  「新增」仍应可点。若后续有人改成 `has_current_row && ...`，那是回退。
+- **`delete` 为什么只看 `!row_deleted`**：本仓没有 `isDeletable` 能力位，`editable` 已含
+  通道/项目/文档/连接只读/行标识/列缺失六道门（§9.45）。DBeaver 那边多出的那层是
+  `isManipulationSupported(FEATURE_DATA_DELETE)`，本仓以 `editable` 代偿。
+- **`copy` 有意不看行状态**：DBeaver 的 `"copy"` 分支只判 `currentRow != null && isInsertable()`，
+  已删行仍可复制。别「顺手」给它加 `!row_deleted`。
+- **`row_deleted` 的来源**：`panel/render.rs` 用 `status.selected_row`（1 基）减 1 得视图行，
+  再 `self.grid.read(cx).delegate().is_deleted_row(row)`。`render` 是 `pub fn render(&self, cx: &App)`，
+  拿不到 `&mut Context`，所以只能 `read`——这是既有约束，不是遗漏。
+- **造已删行的测试素材**：`set_data(columns, rows)` + `set_local_snapshot(Some(LocalRowSet::new()))`
+  再 `local.mark_deleted(底层行号)` + `state.refresh(cx)`；无筛选无排序时底层行号即视图行号。
+  `LocalRowSet` 从 `crate::rowset` 取，`RowRef::Local` 的行 `is_deleted_row` 恒 false。
+- **断言禁用态**：可用时 a11y `disabled()` 是 `None`，只有真禁用才是 `Some(true)` ⇒
+  用 `assert_ne!(…, Some(true))` 断「可用」。钮的 `ElementId` 是
+  `editor-result-insert-row` / `-duplicate-row` / `-delete-row` / `-edit-cell`。
+- 门禁基线（第 64 批后）：result_panel **403 passed**、editor lib **805 passed（1 ignored，
+  默认并发）**、ui-guard **4 passed**、check Finished（并行线 `rds-notification` 2 条
+  never-used warning，与本线无关）。
+- **仍未接**：状态栏「修改」钮不感知已删行；`SET_NULL` / `SET_DEFAULT` / `CELL_RESET` 无对应语义；
+  列级只读缺失。
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。

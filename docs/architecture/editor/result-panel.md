@@ -8133,6 +8133,67 @@ assert!(std::time::Instant::now() < deadline, "后台线程未在 3s 内{what}")
   （都是「后台落笔某个字段」，有界），再考虑提高到 30s 或改成「收到信号量」；
   **不要**用「重跑到过」当结论。
 
+### 9.47 第 64 批：行级三钮按行状态判可用态
+
+#### 9.47.1 缺口
+
+工具栏三颗行级钮（`editor-result-insert-row` / `-duplicate-row` / `-delete-row`）此前只看两件事：
+`self.editable`（是否可编辑）与 `selected_view_row.is_none()`（有没有当前行）。于是：
+
+- 一条**已被标记删除**的底层行，选中它，「删除」钮仍然亮着——点下去宿主侧是空操作，
+  用户得不到任何反馈；
+- 「新增」在无当前行时也置灰了（其实是可用的，`InsertRowBelow(None)` 语义就是追加到末尾）。
+
+#### 9.47.2 DBeaver 取证
+
+`ResultSetPropertyTester.java:137-158` 把三颗钮拆成三个分支：
+
+- `"add"` → `rsv.isInsertable()`，**不要求** `currentRow`；
+- `"copy"` → `currentRow != null && isInsertable()`；
+- `"delete"` → `currentRow == null` 直接 false；再看 `isDeletable()`，false 则 false；
+  记录模式下看 `currentRow.getState() == STATE_ADDED`，否则要求「选中行全部是 `STATE_ADDED`」。
+
+`ResultSetViewer.java:2927-2943` 的 `isInsertable` / `isDeletable` 都等于
+`isManipulationSupported(FEATURE_DATA_INSERT / FEATURE_DATA_DELETE)`，展开是四条：
+`!DATA_EDIT_DISABLED && getReadOnlyStatus() == null && 数据源是 DBSDataManipulator 且支持该 feature
+&& 可见列数 > 0`。
+
+#### 9.47.3 本仓落地
+
+本仓**没有** `isDeletable` 能力位（`editable` 已经是「通道 / 项目 / 文档 / 连接只读 / 行标识 /
+列缺失」六道门之后的合成结果，见 §9.45），因此 `delete` 退化为
+`editable && has_current_row && !row_deleted`：
+
+- `grid/menu.rs` 新增 `RowActionState { add, copy, delete }` 与
+  `pub fn row_action_state(editable: bool, has_current_row: bool, row_deleted: bool) -> RowActionState`，
+  注释里带 DBeaver 三分支对照表，并写明它与 `can_edit_cell` 的分工：**那条管「编辑某一格」，
+  这条管「行级增删复制」**，两者不互相调用。
+- `grid/mod.rs` re-export 两者。
+- `panel/render.rs`：在 `selected_view_row` 之后读
+  `self.grid.read(cx).delegate().is_deleted_row(row)` 得 `row_deleted`，再算 `row_actions`；
+  三颗钮的 `.disabled(...)` 分别改接 `!row_actions.add / !row_actions.copy / !row_actions.delete`；
+  「删除」钮 tooltip 两态——已删行显示「这一行已标记删除；撤销删除后才能再删」。
+- 本地新增行（`RowRef::Local`）在 `is_deleted_row` 里恒 false（不是底层行），因此照常可删，
+  语义与 DBeaver 的 `STATE_ADDED` 行同向。
+
+#### 9.47.4 验证
+
+- 纯函数真值表 `row_action_state_follows_the_dbeaver_branches`：只读全灰 / 无当前行只有 add /
+  有当前行三颗全亮 / 已删行 add+copy 亮而 delete 灰。
+- 面板 `delete_row_button_is_disabled_on_a_deleted_row`：`set_local_snapshot(Some(LocalRowSet::new().mark_deleted(1)))`
+  后选中第 2 行 → 「删除」`disabled() == Some(true)`；同时断言「复制」不受影响；
+  清空叠加层（`set_local_snapshot(None)`）重绘 → 恢复可用。
+- 门禁：panel **403 passed**（401 + 本批 2 条）、editor **805 passed（1 ignored）**、
+  ui-guard **4 passed**、`cargo check --workspace --all-targets` Finished
+  （仅并行线 `rds-notification` 的 2 条 never-used warning）。
+
+#### 9.47.5 遗留
+
+- 状态栏「修改」钮仍未感知「已删行」（`is_deleted` 目前只接给了整颗 delete 钮）；
+- `CMD_CELL_SET_NULL` / `CMD_CELL_SET_DEFAULT` / `CMD_CELL_RESET` 未做（本仓无 NULL / 默认值 /
+  单格撤销语义，见 §9.44.5）；
+- 属性级只读模型（列级可编辑性）缺失，`getAttributeReadOnlyStatus` 那条落不了。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
