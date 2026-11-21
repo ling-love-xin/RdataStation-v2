@@ -8698,6 +8698,85 @@ DBeaver 有整套：`plugin.xml:1073/1075/1079`（增删复制）+ `:1077/1078`�
   对这两个键影响有限（`CTRL+G` 读的是 `unwrap_or(1)`，当前行丢了就默认第 1 行）。
 - `fetch.page` 本仓常显、DBeaver 默认隐藏：既有有意差异，不因本批改。
 
+### 9.54 第 71 批：`FetchAll` 真循环（修「钮叫取全部、实际只取一段」）
+
+#### 9.54.1 缺口
+
+第 70 批取证时发现：`dispatch.rs` 的 `FetchAll` 分支注释承诺「循环 fetch_more 直到没有
+下一段」，实现却只调一次 `self.fetch_more(cx)`。状态栏那颗「获取全部数据」钮
+（`panel/render.rs:761-796`）按下去只多一行段——**名字与行为不符**，是既有 bug，
+与键位无关。
+
+#### 9.54.2 DBeaver 依据
+
+- `ResultSetViewer.readAllData:4426-4459`：`verifyQuerySafety()` → `!isHasMoreData()` 则
+  return → **`ConfirmationDialog.confirmAction(..., WARNING, ResultSetPreferences.CONFIRM_RS_FETCH_ALL, QUESTION)`**
+  → 通过后循环取到没有下一段。偏好常量 `fetch_all_rows`（`ResultSetPreferences.java:113`）。
+- 与 `readNextSegment:4377-4409` 的关系：取全部 = 「反复取下一段直到 `isHasMoreData()` 为假」，
+  不是另一条取数通道；前置判定（quickFilter / verifyQuerySafety / hasMoreData / 防重入）
+  两者共用。
+
+#### 9.54.3 落地
+
+**为什么不能写成 `while`**：本仓取段是**异步**的（`execute` 提交 → 工作线程 → 回填），
+`fetch_more` 返回时这一段的行还没到。所以循环拆成两半：
+
+| 半 | 位置 | 职责 |
+| --- | --- | --- |
+| 发起 | `fetch_all(cx)`（`results/copy.rs`） | 门控 → 提交首段 → 置 `fetching_all` |
+| 推进 | `advance_fetch_all(last_segment_failed, cx)`（同文件，**由 `pump.rs` 的回填块调**） | 本段回来后判「还有没有下一段」：有就再提交，没有就收口说一句 |
+
+调用点必须在 `sync_result_view` **之后**：下一段的 `offset` 取的是「已抓到的行数」，
+只有同步过才是新值（`pump.rs` 里排在 `advance_pending_export` 之后）。
+
+**单一提交点**：原 `fetch_more` 的函数体抽成 `submit_segment(&mut self, cx) -> bool`
+（无 SQL / 已取完的判定与提示都在里面，成功即 `mark_fetching_more`）。
+`fetch_more`、`fetch_all`、`advance_fetch_all` 全走它——不出现第二套「能不能取」的真值表。
+
+**在途状态**：`FetchAllProgress { set, segments }`（`host/mod.rs`）。
+
+- `set`：发起时 `ResultPanel::active()`。取段是 `Append` 落位，接到**当前选中**那份上；
+  中途切了结果集必须停（否则往另一份结果的尾巴上接行）——停时提示「取全部取消：结果集已切换」。
+- `segments`：已提交段数（含首段），给安全阀用。
+
+**两条互斥**（都在 `fetch_more` / `fetch_all` 入口处判，提示可读）：
+
+| 场景 | 行为 |
+| --- | --- |
+| 正在取全部时按「取下一段」/滚动到底 | 拒绝：「正在取全部数据（已取 N 段），稍等」。否则同一个 `offset` 会被提交两次、行重复 |
+| 导出正在抓全量时按任一取数 | 拒绝：「导出正在取数，先等它结束」。两条都是 `Append`，会互相打乱 offset |
+
+导出侧不需要改：`advance_pending_export` 自己直接 `execute(Segment)`，**不**调 `fetch_more`，
+所以这两道门控不会误伤导出。
+
+**安全阀（本仓差异）**：`FETCH_ALL_MAX_SEGMENTS = 100` 段（默认 1000 行/段 = 10 万行）。
+DBeaver 那边没有上限（它同步阻塞、用户能取消）；本仓异步无中断入口，源库若每段都报
+「还有」（比如视图在别的会话里持续增长）就是停不下来的循环。到顶停住并如实说
+「已取 N 段（M 行），先停在这里；要更多就把段大小调大再来」。
+
+#### 9.54.4 验证
+
+- `fetching_all_keeps_fetching_until_there_is_no_more`（三段 runner）：首段 2 行、
+  `has_more` 真；`ResultRequest::FetchAll` 入队 + drain 后，断言
+  `asked == [(2, SEGMENT_ROWS), (4, SEGMENT_ROWS)]`（**两次**提交，offset 各对）、
+  行数 6、`has_more` 假、`set_count == 1`、状态栏含「已取全部 6 行」。
+  为什么必须用三段 runner：两段的 runner 下「取全部」与「取下一段」都只发一次，分不出来。
+- `asking_for_all_after_the_end_only_says_so`（两段 runner）：先 `FetchMore` 取到底，
+  再 `FetchAll`，断言取段请求数不增、状态栏含「这份结果已经取完了」。
+- 门禁：`check -p rds-editor --all-targets` 无 error/warning；editor lib
+  **814 passed（1 ignored）**（812 → +2）；panel 未改动（仍 408）；ui-guard 与
+  workspace check 见本批提交说明。
+
+#### 9.54.5 遗留
+
+- **确认弹窗未做**（DBeaver `CONFIRM_RS_FETCH_ALL`）：当前按下去直接开始取。第 72 批补
+  面板内浮层（`panel/dialog.rs:149` 已声明「不是窗口级 dialog」，照 SQL 预览那套范式），
+  并在同一批接 `CTRL+SHIFT+=`（`plugin.xml:1070`）。
+- **导出启动侧未加互斥**：`fetch_all` 侧已拒绝「导出在跑」，但导出启动时没有反向检查
+  `fetching_all`（理论上用户可以在取全部途中点「导出全部」）。两条都进 `Append`，
+  会互相打乱 offset——第 72 批与确认弹窗一起收口。
+- 上限 100 段是自定值，不是 DBeaver 口径；若将来加了「取消取数」入口，可重新评估。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

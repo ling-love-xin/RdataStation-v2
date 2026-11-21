@@ -2951,6 +2951,31 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - **只摘 main.rs 本线 hunk**：`.rds/tmp/stage-main-hunk-r130.py`（锚在第 69 批
   `ctrl-alt-d` → `CopyRowValuesFromBelow` 那条 KeyBinding 之后）。
 
+### 2.122 `FetchAll` 真循环（2026-11-22）
+
+- **循环只能落在回填点**：`fetch_all` 只负责「发起 + 置标志」，每段的推进在
+  `pump.rs` 的 `pending == 0` 块里（`advance_fetch_all`）。写成 `while` 是错的——
+  `execute` 返回时这一段的行还没回来，`offset` 会一直停在旧值。
+- **调用顺序**：`advance_pending_export`（导出）→ `advance_fetch_all`（取全部），
+  两者都在 `sync_result_view` 之后。**不要在 `sync` 之前调**：下一段的 offset 取
+  「已抓到的行数」，只有同步过才是新值。
+- **提交只有一个入口**：`submit_segment`（`results/copy.rs`，私有）。`fetch_more` /
+  `fetch_all` / `advance_fetch_all` 都走它；判定（无 SQL / `can_fetch_more` 为假）与提示
+  都在里面。**不要在别处再写一遍 `entry.can_fetch_more()` 分支**——第 70 批之前
+  `dispatch` 的注释与实现不符就是这种双写的后果。
+- **两道互斥门控**：`fetch_more` 与 `fetch_all` 入口都判「正在取全部」和「导出在跑」。
+  导出侧不用改：`advance_pending_export` 自己 `execute(Segment)`，不经过 `fetch_more`。
+  但导出**启动**时反查 `fetching_all` 还没加（§9.54.5），第 72 批收口。
+- **`fetching_all` 与 `fetching_more` 不是一回事**：前者跨多轮（回填时才推进），
+  后者只在「提交到回填之间」为真。别用 `fetching_more` 当取全部的防重入判据。
+- **切结果集必须停**：`FetchAllProgress.set` 记发起时的 `active()`，每轮比对；
+  `Append` 落位永远接「当前选中」那份，不停就会把行接到另一份结果上。
+- **测试想验「真循环」必须三段 runner**（`shared_with_three_segment_runner`）：
+  两段的 runner 下取全部与取下一段都是「发一次」，断言分不开。
+- **安全阀**：`FETCH_ALL_MAX_SEGMENTS = 100`（本仓差异，DBeaver 无上限）。
+  改这个值时同步改 `result-panel.md` §9.54.5。
+- **门禁基线（第 71 批后）**：editor lib **814 passed（1 ignored）**（812 → +2）。
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。
