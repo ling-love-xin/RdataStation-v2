@@ -147,6 +147,13 @@ impl EditorHostPanel {
             );
             return;
         }
+        // 【第 73 批】导出正在抓全量：它已经占着取段，这个问题问下去只会白走一趟浮层
+        // （「继续」照样会被 `fetch_all` 的 `pending_export` 判定拒）。判在 `fetching_more`
+        // 之前：导出的在途段也会置 `fetching_more`，说「正在取下一段」不如说清是谁在取。
+        if self.pending_export.is_some() {
+            self.set_message(Some("导出正在取数，先等它结束".to_string()), cx);
+            return;
+        }
         // 取下一段还在途：这会儿问「要不要取全部」没有意义——`fetch_all` 用的 offset
         // 是「已抓到的行数」，在途那一段还没回来，一问一答之间行数就变了
         if self.fetching_more {

@@ -110,6 +110,18 @@ impl EditorHostPanel {
             self.set_message(Some("没有可导出的结果集".to_string()), cx);
             return;
         };
+        // 【第 73 批】取全部还在跑时先拦住，且**判在「执行器忙」之前**：
+        // 两条都是 `Append` 取段，一起跑会抢同一个 offset（按已抓到的行数算，各自算各自的）；
+        // 而且段与段之间通道是空闲的（`is_executing()` 会是 false），那时放过去就是落半截文件。
+        // 提示也要比「执行中，稍候」更具体：取全部是本仓自己在续段，不是别人占着通道。
+        if let Some(progress) = self.fetching_all.as_ref() {
+            let segments = progress.segments;
+            self.set_message(
+                Some(format!("正在取全部数据（已取 {segments} 段），等它结束再导出")),
+                cx,
+            );
+            return;
+        }
         // 抓到一半再发现“执行器忙”更糟（路径都选完了），先问清楚（通道的忙是全局的：别的文档也在跑）
         if self.shared.is_executing() {
             self.set_message(Some("执行中，稍候再导出".to_string()), cx);

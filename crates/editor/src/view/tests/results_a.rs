@@ -5,6 +5,7 @@ use gpui_kit::component::table::TableDelegate as _;
 use gpui_kit::{TestAppContext, VisualTestContext};
 
 use crate::execution::{self};
+use crate::export::ExportFormat;
 use crate::model::EditorMode;
 use crate::service::OpenRequest;
 use crate::shared::EditorShared;
@@ -12,6 +13,7 @@ use crate::shared::EditorShared;
 use super::LocatedFailureRunner;
 use super::MoreUnsupportedRunner;
 use super::dialogs::dialog_button_rendered;
+use super::results_b::{attach_export_picker, export_temp_path};
 use super::{
     bind_editor_keys, open_panel, run_statement, shared_with_runner, shared_with_segment_runner,
     shared_with_sized_runner, shared_with_three_segment_runner, shared_with_toolbar_runner,
@@ -1275,5 +1277,136 @@ fn the_fetch_all_key_after_the_end_only_says_so(cx: &mut TestAppContext) {
     assert!(
         message.contains("这份结果已经取完了"),
         "键位不可用要留提示（第 69 批口径），实际是：{message}"
+    );
+}
+
+/// 【第 73 批】取全部在跑时导出要**在入口就被拦**（第 71 批的互斥只做了反方向）
+///
+/// 两个理由：
+/// 1. 段与段之间通道是空闲的（`is_executing()` 会短暂为 false），那时放过去就会落半截文件；
+/// 2. 两条都是 `Append` 取段，各算各的 offset（都按「已抓到的行数」），一起跑会重复抓同一段。
+///
+/// 这条同时钉住判据顺序：必须判在「执行器忙」之前，否则用户只看到「执行中，稍候」
+/// ——听起来像等一下就好，实际取全部可能还要跑很久。
+#[gpui_kit::test]
+fn exporting_while_fetching_all_is_refused(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, asked) = shared_with_three_segment_runner("select n from t");
+    let path = export_temp_path("fetchall", "csv");
+    let picked = attach_export_picker(&shared, Some(path.clone()));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(
+        cx,
+        &panel,
+        "select n from t",
+        execution::ResultPlacement::Replace,
+    );
+    assert_eq!(asked.lock().expect("锁").len(), 0, "首段之外没有取段");
+
+    // 起取全部（与浮层「继续」同一条队列路径），只 drain 不推进：首段还在途
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.result_action_queue
+                .request(result_panel::ports::ResultRequest::FetchAll, cx);
+            host.drain_result_actions(window, cx);
+        });
+    });
+    assert_eq!(
+        asked.lock().expect("锁").len(),
+        1,
+        "前置：取全部已提交首段"
+    );
+
+    // 此时 fetch_all 在跑、通道也忙：导出该被「取全部」拦
+    cx.update(|_window, cx| {
+        panel.update(cx, |host, cx| {
+            host.export_active_result_all(ExportFormat::Csv, cx);
+        });
+    });
+
+    assert!(
+        picked.lock().expect("锁").is_empty(),
+        "连路径都不该问：拦在选路径之前（否则用户白选一次）"
+    );
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .unwrap_or_default();
+    assert!(
+        message.contains("正在取全部数据") && message.contains("等它结束再导出"),
+        "要说明是谁在占着通道，实际是：{message}"
+    );
+
+    // 收尾：取全部自己跑完，导出一事无成
+    wait_for_all_pending(cx, &panel);
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
+        6,
+        "取全部没被导出的这次尝试打断"
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).export_pending_for_test()),
+        0,
+        "导出没有留下在途状态"
+    );
+}
+
+/// 【第 73 批】导出正在抓全量时问「要不要取全部」：不弹浮层，直接说清是谁在取
+///
+/// 反向那一格。导出抓全量期间也置 `fetching_more`，所以这条同时钉住判据顺序：
+/// `pending_export` 必须判在 `fetching_more` 之前，否则提示会变成「正在取下一段」，
+/// 用户不知道那次取段其实是自己刚点的导出在跑。
+#[gpui_kit::test]
+fn asking_for_all_while_the_export_is_fetching_says_so(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, asked) = shared_with_three_segment_runner("select n from t");
+    let path = export_temp_path("pends", "csv");
+    let _picked = attach_export_picker(&shared, Some(path.clone()));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(
+        cx,
+        &panel,
+        "select n from t",
+        execution::ResultPlacement::Replace,
+    );
+
+    // 导出并抓全量：首段之后还有下一段，于是置 `pending_export` 并发一段
+    cx.update(|_window, cx| {
+        panel.update(cx, |host, cx| {
+            host.export_active_result_all(ExportFormat::Csv, cx);
+        });
+    });
+    assert_eq!(
+        asked.lock().expect("锁").as_slice(),
+        [(2, execution::SEGMENT_ROWS)],
+        "前置：导出占着取段（它自己发的第一段，offset 是已抓到的行数）"
+    );
+
+    // 这时按键（与状态栏那颗钮同一条）：只该给一句提示
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.result_action_queue
+                .request(result_panel::ports::ResultRequest::AskFetchAll, cx);
+            host.drain_result_actions(window, cx);
+        });
+    });
+
+    assert!(
+        !cx.update(|_window, cx| panel.read(cx).fetch_all_confirm_for_test(cx)),
+        "不该弹浮层：问了也没有「继续」可点（那一下照样会被 fetch_all 拒）"
+    );
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .unwrap_or_default();
+    assert!(
+        message.contains("导出正在取数"),
+        "要说清是导出在取，而不是含糊的「正在取下一段」，实际是：{message}"
+    );
+
+    // 收尾：导出把全量抓完、落盘，取全部没被启动
+    wait_for_all_pending(cx, &panel);
+    assert_eq!(
+        asked.lock().expect("锁").as_slice(),
+        [(2, execution::SEGMENT_ROWS), (4, execution::SEGMENT_ROWS)],
+        "导出自己跨轮抓完了；取全部一次都没发"
     );
 }
