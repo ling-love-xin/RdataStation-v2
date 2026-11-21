@@ -156,6 +156,17 @@ fn bind_editor_keys(cx: &mut TestAppContext) {
                 crate::commands::GotoColumn,
                 Some(crate::commands::RESULT_GRID_CONTEXT),
             ),
+            // 【第 76 批】选列 / 选行（`CMD_SELECT_COLUMNS` / `CMD_SELECT_ROWS`，`:1088/1089`）
+            KeyBinding::new(
+                "ctrl-alt-c",
+                crate::commands::SelectCurrentColumn,
+                Some(crate::commands::RESULT_GRID_CONTEXT),
+            ),
+            KeyBinding::new(
+                "ctrl-alt-r",
+                crate::commands::SelectCurrentRow,
+                Some(crate::commands::RESULT_GRID_CONTEXT),
+            ),
         ]);
     });
 }

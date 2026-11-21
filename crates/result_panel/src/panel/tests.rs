@@ -5766,3 +5766,117 @@ fn an_unknown_column_keeps_the_overlay_open_with_the_reason(
     cx.update(|window, app| panel.update(app, |p, cx| p.submit_goto_column(window, cx)));
     assert!(!cx.update(|_w, app| panel.read(app).goto_column_for_test(app)));
 }
+
+/// 【第 76 批】`CTRL+ALT+C` 选列（DBeaver `CMD_SELECT_COLUMNS`，
+/// `SpreadsheetCommandHandler:106-118`）：当前格所在的**整列**选中，
+/// 组件列 = 显示列 + 1（0 是行号槽）；行号槽里的格不算数据列。
+///
+/// 上游是把「选中列 × 所有行」拼成单元格集合（多区域），本仓选区是单区域的，
+/// 等价表达取组件整列选中——口径差异记在 `result-panel.md` §9.59.2。
+#[gpui_kit::test]
+fn select_column_goes_to_the_column_under_the_current_cell(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    let grid = cx.update(|_w, app| panel.read(app).grid.clone());
+
+    // 当前格 = (行 0, 组件列 1) → 数据列 0
+    cx.update(|_w, app| grid.update(app, |state, cx| state.set_selected_cell(0, 1, cx)));
+    assert!(
+        cx.update(|_w, app| panel.update(app, |p, cx| p.select_current_column(cx))),
+        "有当前数据格时选列要成立"
+    );
+    let (component_col, data_col) = cx.update(|_w, app| {
+        (
+            grid.read(app).selected_col(),
+            panel.read(app).selected_col,
+        )
+    });
+    assert_eq!(
+        component_col,
+        Some(1),
+        "组件整列选中落在显示列 0 上（0 是行号槽，不能左移）"
+    );
+    assert_eq!(data_col, Some(0), "右栏列浏览器跟到数据列 0");
+
+    // 移到第 2 个数据列（组件列 2）→ 数据列 1
+    cx.update(|_w, app| grid.update(app, |state, cx| state.set_selected_cell(1, 2, cx)));
+    assert!(
+        cx.update(|_w, app| panel.update(app, |p, cx| p.select_current_column(cx))),
+        "换到第 2 列后照样成立"
+    );
+    let (component_col, data_col) = cx.update(|_w, app| {
+        (
+            grid.read(app).selected_col(),
+            panel.read(app).selected_col,
+        )
+    });
+    assert_eq!(component_col, Some(2));
+    assert_eq!(data_col, Some(1));
+
+    // 行号槽（组件列 0）没有数据列可跟
+    cx.update(|_w, app| grid.update(app, |state, cx| state.set_selected_cell(0, 0, cx)));
+    assert!(
+        !cx.update(|_w, app| panel.update(app, |p, cx| p.select_current_column(cx))),
+        "行号槽不当作数据列（宿主据此留提示）"
+    );
+
+    // 没有当前格
+    cx.update(|_w, app| panel.update(app, |p, _cx| p.selection_pos = None));
+    assert!(!cx.update(|_w, app| panel.update(app, |p, cx| p.select_current_column(cx))));
+}
+
+/// 【第 76 批】`CTRL+ALT+R` 选行（DBeaver `CMD_SELECT_ROWS`，
+/// `SpreadsheetCommandHandler:119-131`）：组件整行选中 + 状态行那口「已选第 N 行」
+/// 同步写（1 基）——行级三钮 / 「修改」钮都读 `status.selected_row`，不写的话
+/// 按完键位它们仍全是灰的。
+#[gpui_kit::test]
+fn select_row_marks_the_row_and_the_status_line(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // harness 出厂没有状态行；先装一条（set_selected_row 只写既有的 status）
+    cx.update(|_w, app| {
+        panel.update(app, |p, _cx| {
+            p.status = Some(crate::grid::ResultStatus {
+                total_rows: 2,
+                selected_row: None,
+                selected_cell: None,
+                truncated_hint: None,
+                has_more: false,
+                selected_rows: 0,
+                selected_columns: 0,
+                selected_cells: 0,
+            });
+        });
+    });
+    let grid = cx.update(|_w, app| panel.read(app).grid.clone());
+
+    // 当前格 = (行 1, 组件列 1)
+    cx.update(|_w, app| grid.update(app, |state, cx| state.set_selected_cell(1, 1, cx)));
+    assert!(
+        cx.update(|_w, app| panel.update(app, |p, cx| p.select_current_row(cx))),
+        "有当前格时选行要成立"
+    );
+    let (component_row, status_row) = cx.update(|_w, app| {
+        (
+            grid.read(app).selected_row(),
+            panel.read(app).status.as_ref().and_then(|s| s.selected_row),
+        )
+    });
+    assert_eq!(component_row, Some(1), "组件整行选中（delegate 据此铺色）");
+    assert_eq!(
+        status_row,
+        Some(2),
+        "状态行写 1 基行号（`row_target_state` 靠它把行级动作解开）"
+    );
+
+    // 行级门控真的跟着打开（harness 出厂只读，先打开可编辑）
+    cx.update(|_w, app| panel.update(app, |p, _cx| p.editable = true));
+    let target = cx.update(|_w, app| panel.read(app).row_target_state(app));
+    assert_eq!(target.row, Some(1), "0 基视图行");
+    assert!(target.actions.copy && target.actions.delete, "整行选中后行级三钮可用");
+
+    // 没有当前格
+    cx.update(|_w, app| panel.update(app, |p, _cx| p.selection_pos = None));
+    assert!(!cx.update(|_w, app| panel.update(app, |p, cx| p.select_current_row(cx))));
+}

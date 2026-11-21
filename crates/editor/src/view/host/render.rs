@@ -175,6 +175,10 @@ impl Render for EditorHostPanel {
             // 【第 75 批】`CTRL+SHIFT+G` 跳转到列（`CMD_GO_TO_COLUMN`，`:1090`）：
             // 开面板内浮层（列名 / 1 基序号二选一），`ENTER` 提交、Esc 关闭
             .on_action(cx.listener(Self::on_goto_column))
+            // 【第 76 批】`CTRL+ALT+C` / `CTRL+ALT+R` 选列 / 选行
+            // （`CMD_SELECT_COLUMNS` / `CMD_SELECT_ROWS`，`:1088/1089`）
+            .on_action(cx.listener(Self::on_select_current_column))
+            .on_action(cx.listener(Self::on_select_current_row))
             // 【书签】`Ctrl+Shift+B` 切换 / `F8` 下一 / `Shift+F8` 上一（键位在 crates/app 注册）
             .on_action(cx.listener(Self::on_toggle_bookmark))
             .on_action(cx.listener(Self::on_next_bookmark))

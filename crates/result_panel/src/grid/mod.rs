@@ -82,7 +82,9 @@ pub(crate) mod view_rows;
 // 编辑区 / SQL 编辑器不受影响）。对应 DBeaver 的
 // `org.jkiss.dbeaver.ui.context.resultset.focused`：
 // `plugin.xml:1071/1072` 的 `SHIFT+ENTER`（外部值编辑器）/ `ENTER`（内嵌编辑）、
-// `:1059` 的 `Ctrl+反引号`（切换表示）、`:1082` 的 `Ctrl+S`（提交变更）。
+// `:1059` 的 `Ctrl+反引号`（切换表示）、`:1082` 的 `Ctrl+S`（提交变更）、
+// `:1083` 的 `Ctrl+R`（撤销未提交变更）、`:1090` 的 `Ctrl+Shift+G`（跳转到列）、
+// `:1088` / `:1089` 的 `Ctrl+Alt+C` / `Ctrl+Alt+R`（选列 / 选行）。
 use gpui_kit::actions;
 
 actions!(
@@ -138,6 +140,12 @@ actions!(
         /// （`goto_column_open`）——只送 `ResultRequest::AskGotoColumn`，
         /// 开不开由宿主判（没有列可跳时留提示）。
         GotoColumn,
+        /// 【第 76 批】`CTRL+ALT+C`：把当前格所在的**整列**选中
+        /// （`CMD_SELECT_COLUMNS` → `SpreadsheetCommandHandler:106-118`）。
+        SelectCurrentColumn,
+        /// 【第 76 批】`CTRL+ALT+R`：把当前格所在的**整行**选中
+        /// （`CMD_SELECT_ROWS` → `SpreadsheetCommandHandler:119-131`）。
+        SelectCurrentRow,
     ]
 );
 

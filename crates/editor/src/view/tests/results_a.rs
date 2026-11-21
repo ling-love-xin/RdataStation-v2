@@ -1515,3 +1515,105 @@ fn the_goto_column_key_without_a_result_only_says_so(cx: &mut TestAppContext) {
         "键位不可用要留提示，实际是：{message}"
     );
 }
+
+/// 【第 76 批】`CTRL+ALT+C` 选列全链：键位 → 面板方法 → 组件整列选中。
+///
+/// 当前格放在「note」（第 2 个数据列 → 组件列 2）上，用例钉「选列不会左移到行号槽」
+/// （`set_selected_col` 收组件列，0 是行号槽）。
+#[gpui_kit::test]
+fn the_select_column_key_selects_the_whole_column(cx: &mut TestAppContext) {
+    use gpui_kit::Focusable as _;
+
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+
+    let grid = cx.update(|_window, app| panel.read(app).grid_for_test());
+    cx.update(|_window, app| grid.update(app, |state, cx| state.set_selected_cell(0, 2, cx)));
+
+    let grid_focus = cx.update(|_window, app| grid.read(app).focus_handle(app));
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+    cx.simulate_keystrokes("ctrl-alt-c");
+    cx.run_until_parked();
+
+    assert_eq!(
+        cx.update(|_window, app| grid.read(app).selected_col()),
+        Some(2),
+        "「note」整列选中（组件列 2，不是行号槽也不是 id）"
+    );
+}
+
+/// 【第 76 批】`CTRL+ALT+R` 选行全链：键位 → 组件整行选中 + 状态行写 1 基行号。
+/// 状态那口正是 `row_target_state` 的输入，行级三钮 / 邻行复制都靠它。
+#[gpui_kit::test]
+fn the_select_row_key_selects_the_whole_row_and_marks_the_status_line(cx: &mut TestAppContext) {
+    use gpui_kit::Focusable as _;
+
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+
+    let grid = cx.update(|_window, app| panel.read(app).grid_for_test());
+    cx.update(|_window, app| grid.update(app, |state, cx| state.set_selected_cell(0, 1, cx)));
+
+    let grid_focus = cx.update(|_window, app| grid.read(app).focus_handle(app));
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+    cx.simulate_keystrokes("ctrl-alt-r");
+    cx.run_until_parked();
+
+    let (component_row, status_row) = cx.update(|_window, app| {
+        let status_row = panel
+            .read(app)
+            .result_panel
+            .read(app)
+            .status()
+            .and_then(|s| s.selected_row);
+        (grid.read(app).selected_row(), status_row)
+    });
+    assert_eq!(component_row, Some(0), "整行选中");
+    assert_eq!(status_row, Some(1), "状态行写 1 基行号（行级动作读这口）");
+}
+
+/// 【第 76 批】还没有结果时按 `CTRL+ALT+C` / `CTRL+ALT+R`：不动作，各留一句提示
+/// （与第 75 批跳列同口径：键位没有「灰」这一态，不可用要说出来）。
+///
+/// 没有结果时网格不在焦点路径上，直接调 action 的处理方法。
+#[gpui_kit::test]
+fn the_select_column_and_row_keys_without_a_result_only_say_so(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.on_select_current_column(&crate::commands::SelectCurrentColumn, window, cx);
+        });
+    });
+    cx.run_until_parked();
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .unwrap_or_default();
+    assert!(
+        message.contains("选列"),
+        "选列不可用要留提示，实际是：{message}"
+    );
+
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.on_select_current_row(&crate::commands::SelectCurrentRow, window, cx);
+        });
+    });
+    cx.run_until_parked();
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .unwrap_or_default();
+    assert!(
+        message.contains("选行"),
+        "选行不可用要留提示，实际是：{message}"
+    );
+}

@@ -430,6 +430,22 @@ fn run_app() {
                     editor::commands::GotoColumn,
                     Some(editor::commands::RESULT_GRID_CONTEXT),
                 ),
+                // 【第 76 批】`CTRL+ALT+C` / `CTRL+ALT+R` = `CMD_SELECT_COLUMNS` /
+                // `CMD_SELECT_ROWS`（`plugin.xml:1088/1089`；两个 action 都在
+                // `SpreadsheetCommandHandler:106-131`，不进 `ResultSetHandlerMain`）。
+                // 语义是「把当前格所在的整列 / 整行选成单元格」；本仓单区域选区，等价表达
+                // 取组件整列 / 整行选中。两个键此前都没绑定（已占的 ctrl-alt 只有 d / n /
+                // insert），不覆写任何既有键。
+                KeyBinding::new(
+                    "ctrl-alt-c",
+                    editor::commands::SelectCurrentColumn,
+                    Some(editor::commands::RESULT_GRID_CONTEXT),
+                ),
+                KeyBinding::new(
+                    "ctrl-alt-r",
+                    editor::commands::SelectCurrentRow,
+                    Some(editor::commands::RESULT_GRID_CONTEXT),
+                ),
                 // 【第 60 批】同一条 `Ctrl+反引号` 再绑到**面板层**上下文：文本态下网格
                 // 整块不渲染，网格 context 不在焦点路径上；焦点落在面板根时靠这条命中
                 // （两层同时匹配时 gpui 按 context 深度取更深的网格那条，不会切两次）。

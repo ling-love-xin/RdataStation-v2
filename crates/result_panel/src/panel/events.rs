@@ -2134,6 +2134,49 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【第 76 批】`CTRL+ALT+C` 选中当前格所在的整列
+    /// （DBeaver `CMD_SELECT_COLUMNS`，`SpreadsheetCommandHandler.java:106-118`：
+    /// 把选中列的所有行选成单元格，焦点格复位但焦点列保留）。
+    ///
+    /// 本仓选区是单区域的（组件只有 Row / Column / Cell 三态），等价表达 = **整列选中**；
+    /// 当前格在行号槽 / 没有当前格时返回 `false`（宿主补提示）。
+    pub fn select_current_column(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some((_row, col_ix)) = self.selection_pos else {
+            return false;
+        };
+        // 组件列 0 是行号槽（`table_impl.rs` 的 `data_column(col_ix - 1)` 口径）
+        if col_ix == 0 {
+            return false;
+        }
+        let data_col = self
+            .grid
+            .read(cx)
+            .delegate()
+            .data_column_checked(col_ix - 1);
+        let Some(data_col) = data_col else {
+            return false;
+        };
+        self.select_column(data_col, cx);
+        true
+    }
+
+    /// 【第 76 批】`CTRL+ALT+R` 选中当前格所在的整行
+    /// （DBeaver `CMD_SELECT_ROWS`，`SpreadsheetCommandHandler.java:119-131`：
+    /// 把选中行的所有列选成单元格，焦点格复位但焦点行保留）。
+    ///
+    /// 本仓等价表达 = 组件整行选中（`set_selected_row`，delegate 据此整行铺色）；
+    /// 同时把状态行那口「已选第 N 行」写进去（1 基）——行级三钮 / 「修改」钮都读
+    /// `status.selected_row`（`row_target_state`），不写的话按完键位仍全是灰的。
+    pub fn select_current_row(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some((row, _col)) = self.selection_pos else {
+            return false;
+        };
+        let grid = self.grid.clone();
+        grid.update(cx, |state, cx| state.set_selected_row(row, cx));
+        self.set_selected_row(Some(row + 1), cx);
+        true
+    }
+
     /// 【列浏览器】清单双击定位：网格滚到该列首行并选中（列不可见 = 隐藏列，不动作）。
     pub fn locate_column(&mut self, data_col: usize, cx: &mut Context<Self>) {
         self.selected_col = Some(data_col);

@@ -8,7 +8,7 @@ use crate::commands::{
     CommitResultChanges, CopyGridSelection, CopyRowValuesFromAbove, CopyRowValuesFromBelow,
     CycleResultPresentation, DeleteResultRow, DuplicateResultRow, EnterCellEdit, ExecuteSql,
     FetchAllData, FetchNextSegment, FocusRowJump, GotoColumn, InsertResultRow, RedoResultEdit,
-    RejectPendingChanges, UndoResultEdit,
+    RejectPendingChanges, SelectCurrentColumn, SelectCurrentRow, UndoResultEdit,
 };
 
 use super::*;
@@ -283,6 +283,42 @@ impl EditorHostPanel {
             .update(cx, |panel, cx| panel.open_goto_column(window, cx));
         if !opened {
             self.set_message(Some("这份结果还没有列可跳；先执行查询".to_string()), cx);
+        }
+    }
+
+    /// 【第 76 批】结果网格 `CTRL+ALT+C`：选中当前格所在的整列
+    /// （DBeaver `CMD_SELECT_COLUMNS`，`plugin.xml:1088`；
+    /// `SpreadsheetCommandHandler:106-118`）。
+    ///
+    /// 没有当前格 / 当前格在行号槽时留一句提示（第 69 批「键位不可用要说话」口径）。
+    pub(crate) fn on_select_current_column(
+        &mut self,
+        _: &SelectCurrentColumn,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let selected = self
+            .result_panel
+            .update(cx, |panel, cx| panel.select_current_column(cx));
+        if !selected {
+            self.set_message(Some("先在网格里选中一个数据格再选列".to_string()), cx);
+        }
+    }
+
+    /// 【第 76 批】结果网格 `CTRL+ALT+R`：选中当前格所在的整行
+    /// （DBeaver `CMD_SELECT_ROWS`，`plugin.xml:1089`；
+    /// `SpreadsheetCommandHandler:119-131`）。
+    pub(crate) fn on_select_current_row(
+        &mut self,
+        _: &SelectCurrentRow,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let selected = self
+            .result_panel
+            .update(cx, |panel, cx| panel.select_current_row(cx));
+        if !selected {
+            self.set_message(Some("先在网格里选中一个数据格再选行".to_string()), cx);
         }
     }
 
