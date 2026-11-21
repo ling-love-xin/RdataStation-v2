@@ -502,6 +502,205 @@ impl ResultPanel {
         }
     }
 
+    /// 【第 70 批】`CTRL+ALT+N` 的取数入口：取下一段
+    /// （DBeaver `CMD_FETCH_PAGE` → `readNextSegment()`，`plugin.xml:1069`）。
+    ///
+    /// 与状态栏「获取数据」钮**完全同一条路**：只把 [`crate::ports::ResultRequest::FetchMore`]
+    /// 入队，剩下的判定（没 SQL / 已经取完 / 执行器不支持 / 正在取）全在宿主
+    /// `fetch_more` 里——那边每条分支都留可读原因，键位这边不必再写一遍。
+    /// DBeaver 在无更多数据时是静默 `return`（`ResultSetViewer:4384`），本仓键位层
+    /// 统一走「不可用留提示」（第 69 批口径），所以这里也不额外拦。
+    pub fn request_next_segment(&mut self, cx: &mut Context<Self>) {
+        self.queue.request(crate::ports::ResultRequest::FetchMore, cx);
+    }
+
+    /// 【第 72 批】`CTRL+SHIFT+=` 的取全部入口（DBeaver `fetch.all`，`plugin.xml:1070`）
+    ///
+    /// 与状态栏「获取全部数据」钮**同一条路**：只送 [`crate::ports::ResultRequest::AskFetchAll`]
+    /// （先问一声），不在这里直接开跑——DBeaver 点 `fetch.all` 也是先过
+    /// `ConfirmationDialog`。弹不弹、要不要弹由宿主判（看 `can_fetch_more`）。
+    pub fn request_fetch_all(&mut self, cx: &mut Context<Self>) {
+        self.queue
+            .request(crate::ports::ResultRequest::AskFetchAll, cx);
+    }
+
+    /// 【第 74 批】`CTRL+R` 的「撤销未提交变更」入口（DBeaver `CMD_REJECT_CHANGES`
+    /// → `rejectChanges()`，`plugin.xml:1083`；`ResultSetHandlerMain:313-314`）。
+    ///
+    /// 与工具栏那颗「回滚」钮同一条路：只入队 [`crate::ports::ResultRequest::RollbackPending`]。
+    /// 判定（有没有待提交 / 清完怎么提示）在宿主 `discard_pending_changes`，
+    /// 这里不复制第二套真值表。
+    pub fn request_rollback_pending(&mut self, cx: &mut Context<Self>) {
+        self.queue
+            .request(crate::ports::ResultRequest::RollbackPending, cx);
+    }
+
+    /// 【第 70 批】`CTRL+G` 的行号跳转入口：把那口行号输入框准备好并返回焦点句柄
+    /// （DBeaver `CMD_GO_TO_ROW` → `GotoLineDialog`，`plugin.xml:1091`）。
+    ///
+    /// 本仓没有「弹一个输入框」这一层：状态栏中段本来就常驻一口可编辑输入框
+    /// （`row_count_input`，订阅 `InputEvent::Change` 即时入队 `GoRow`，见构造期的
+    /// `_row_count_sub`）。所以键位的职责只是照 DBeaver 的**行为**做三件事：
+    /// 1. 让用户知道当前在哪一行；2. 把焦点交进去（宿主 `window.focus`，面板层拿不到
+    /// window）；3. 用户敲完 `ENTER` 时焦点交回网格（见 `_row_count_sub` 的 `PressEnter` 分支）。
+    ///
+    /// **位置信息放 placeholder，不预填进 value**：DBeaver 的 `InputDialog` 预填当前行号
+    /// 且默认全选（`ResultSetHandlerMain:506` + `InputDialog` 的 Text），敲第一下就覆盖；
+    /// 但 gpui-kit 的 `InputState` 对外只暴露 `value` / `focus_handle`（`input/state.rs:325/335`），
+    /// **没有 `select_all`**——预填之后用户再敲数字会追加成 `22` 这种误跳。所以这里清空
+    /// value、把当前行号写进 placeholder：位置照样看得见，输入也不会被拼错。
+    ///
+    /// `status` 为 `None`（还没执行过）时没有可跳的行，返回 `None` 让宿主留提示。
+    pub fn row_jump_focus(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<FocusHandle> {
+        // 当前行（1 基）；没选中行时按 DBeaver 的口径从第 1 行起（`getCurrentRow() == null`
+        // → `initialValue` 取 1）
+        let current = self.status.as_ref()?.selected_row.unwrap_or(1);
+        self.row_count_input.update(cx, |state, inner| {
+            state.set_value("", window, inner);
+            state.set_placeholder(current.to_string(), window, inner);
+        });
+        Some(self.row_count_input.read(cx).focus_handle(cx))
+    }
+
+    /// 打开跳列浮层（`HostPanel::on_goto_column` 直接调到这里，与 `CTRL+G` 的
+    /// `row_jump_focus` 同构——都要 window 交焦点）：没有列可跳时返回 `false`
+    /// 让宿主留提示；否则清空上一轮的值 / 错误，把焦点交给输入框。
+    ///
+    /// 当前列名的提示放 **placeholder**、不预填 value——同 [`Self::row_jump_focus`]
+    /// 的理由（`InputState` 没有 `select_all`，预填后敲字会拼成「ORDER BYa」这种误跳）。
+    pub fn open_goto_column(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let columns = self.grid.read(cx).delegate().columns().to_vec();
+        if columns.is_empty() {
+            return false;
+        }
+        let hint = self
+            .selected_col
+            .and_then(|data| columns.get(data).cloned())
+            .unwrap_or_else(|| "列名或序号（从 1 起）".to_string());
+        self.goto_column_open = true;
+        self.goto_column_error = None;
+        self.goto_column_input.update(cx, |state, inner| {
+            state.set_value("", window, inner);
+            state.set_placeholder(hint, window, inner);
+        });
+        let handle = self.goto_column_input.read(cx).focus_handle(cx);
+        window.focus(&handle, cx);
+        cx.notify();
+        true
+    }
+
+    /// 关掉跳列浮层（取消 / Esc / ✕）：只收开关与错误，不动结果集，**焦点回网格**
+    /// （否则焦点留在已隐藏的输入框上，网格键位全部失效——与 `row_jump_focus` 同一条坑）。
+    pub fn close_goto_column(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.goto_column_open {
+            return;
+        }
+        self.goto_column_open = false;
+        self.goto_column_error = None;
+        let handle = self.grid.read(cx).focus_handle(cx);
+        window.focus(&handle, cx);
+        cx.notify();
+    }
+
+    /// 提交跳列（输入框 `ENTER`）：解析 → 命中就跳并收浮层；没命中就把原因留在
+    /// 输入框下面，**浮层不关**（DBeaver 弹错后仍留在同一对话框，用户可以改了再试）。
+    pub fn submit_goto_column(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.goto_column_input.read(cx).value().to_string();
+        match self.goto_column_target(&text, cx) {
+            Ok(data_col) => {
+                self.goto_column_open = false;
+                self.goto_column_error = None;
+                self.goto_column(data_col, cx);
+                let handle = self.grid.read(cx).focus_handle(cx);
+                window.focus(&handle, cx);
+                cx.notify();
+            }
+            Err(reason) => {
+                self.goto_column_error = Some(reason.into());
+                cx.notify();
+            }
+        }
+    }
+
+    /// 跳列解析（对齐 DBeaver `askForColumnToGo:815-849` 的三段顺序）：
+    ///
+    /// 1. **先按名字**，大小写不敏感（上游 `attrsByName` 用 `name.toUpperCase()` 建映射）；
+    ///    重名：上游 `put` 是后到覆盖，本仓取**第一个**（列序稳定，跳转结果可预期）。
+    /// 2. 名字没命中，再按 **1 基序号**，范围 `1..=列数`（上游 `index >= 1 && index <=
+    ///    attributes.length` 后取 `attributes[index-1]`）。
+    /// 3. 都不中 → 「未知列名」（上游同一句 `"Unknown column name"`，不细分越界 / 打错）。
+    ///
+    /// 本仓额外一条：命中的列在**显示序里被隐藏**时报「已隐藏」——上游没有隐藏列这层，
+    /// 本仓也不做「跳过去顺手取消隐藏」，让用户自己去列浏览器里恢复。
+    pub fn goto_column_target(&self, input: &str, cx: &App) -> Result<usize, String> {
+        let columns = self.grid.read(cx).delegate().columns();
+        if columns.is_empty() {
+            return Err("没有可跳转的列".to_string());
+        }
+        let text = input.trim();
+        if text.is_empty() {
+            return Err("请输入列名或序号".to_string());
+        }
+        let data_col = match columns
+            .iter()
+            .position(|column| column.eq_ignore_ascii_case(text))
+        {
+            Some(index) => index,
+            None => match text.parse::<usize>() {
+                Ok(index) if (1..=columns.len()).contains(&index) => index - 1,
+                _ => return Err(format!("未知列名：{text}")),
+            },
+        };
+        if self.grid.read(cx).delegate().view_column(data_col).is_none() {
+            let name = columns[data_col].clone();
+            return Err(format!("「{name}」已隐藏，先在列浏览器里取消隐藏"));
+        }
+        Ok(data_col)
+    }
+
+    /// 定位到某列：**保持当前行**（DBeaver `setCurrentAttribute` 之后是
+    /// `scrollToRow(CURRENT)`，`:531-534`——纵向滚回当前行，不是跳到首行）+ 横向滚到该列。
+    ///
+    /// 列映射：数据列 → 显示列（`view_column`）→ **组件列**（`+1`：组件列 0 是行号槽）。
+    /// `selected_col` 一并写，右栏列浏览器 / 值详情跟着换列。
+    fn goto_column(&mut self, data_col: usize, cx: &mut Context<Self>) {
+        self.selected_col = Some(data_col);
+        let grid = self.grid.clone();
+        grid.update(cx, |state, cx| {
+            if let Some(view_col) = state.delegate().view_column(data_col) {
+                let row = state
+                    .selected_cell()
+                    .map(|(row, _)| row)
+                    .or_else(|| state.selected_row())
+                    .unwrap_or(0);
+                state.set_selected_cell(row, view_col + 1, cx);
+                state.scroll_to_row(row, cx);
+                state.refresh(cx);
+            }
+        });
+        cx.notify();
+    }
+
+    /// 【测试】跳列浮层是否开着（editor 用例跨 crate，读不到 `pub(crate)` 字段）
+    pub fn goto_column_for_test(&self, _cx: &App) -> bool {
+        self.goto_column_open
+    }
+
+    /// 【测试】回填跳列输入框（同上：跨 crate 拿不到 `goto_column_input`）
+    pub fn set_goto_column_text_for_test(
+        &mut self,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.goto_column_input
+            .update(cx, |state, inner| state.set_value(text, window, inner));
+    }
+
     /// 【右栏】标签页切换（列浏览器 / 值详情 / 计算 / 分组 / 引用 / 执行SQL）。
     /// 右栏收起时切页签会自动展开（DBeaver 口径：右缘竖条点图标即展开对应面板）。
     /// 目标页若已被关闭，会先按规范序重新启用它（点得到就等于开得回来）。
@@ -991,6 +1190,37 @@ impl ResultPanel {
         self.sql_dialog_open = false;
         self.sql_dialog_title = None;
         cx.notify();
+    }
+
+    /// 【第 72 批】打开「获取全部数据」确认浮层
+    /// （DBeaver `CONFIRM_RS_FETCH_ALL`，`ResultSetViewer.readAllData:4433-4440`）。
+    ///
+    /// **弹不弹由宿主判**：宿主先看结果条目 `can_fetch_more`（无下一段 / 有执行错误
+    /// 都直接回一句提示，不打扰用户，对齐 DBeaver `:4430` 的静默 `return`），确认要
+    /// 问才调这里。所以本方法只置标志，不再做一遍判定——两处真值表迟早会分叉。
+    ///
+    /// 不开 `filter_settings_open` 那类「回填输入框 + 交焦点」的活：浮层只有两颗
+    /// 按钮，没有输入源，`&mut Window` 不是必需品（与 SQL 预览同一签名）。
+    pub fn open_fetch_all_confirm(&mut self, cx: &mut Context<Self>) {
+        if self.fetch_all_confirm_open {
+            return;
+        }
+        self.fetch_all_confirm_open = true;
+        cx.notify();
+    }
+
+    /// 【第 72 批】关掉确认浮层（取消 / Esc / ✕）：只收标志，不动结果集
+    pub fn close_fetch_all_confirm(&mut self, cx: &mut Context<Self>) {
+        if !self.fetch_all_confirm_open {
+            return;
+        }
+        self.fetch_all_confirm_open = false;
+        cx.notify();
+    }
+
+    /// 【第 72 批】确认浮层是否开着（供宿主派发与测试断言「真弹了」）
+    pub fn fetch_all_confirm_state(&self) -> bool {
+        self.fetch_all_confirm_open
     }
 
     /// 【对齐 DBeaver Metadata 面板「Generate DDL」】按当前结果集的列生成建表 DDL，
@@ -1894,7 +2124,10 @@ impl ResultPanel {
         let grid = self.grid.clone();
         grid.update(cx, |state, cx| {
             if let Some(view_col) = state.delegate().view_column(data_col) {
-                state.set_selected_col(view_col, cx);
+                // 【第 75 批顺手修】`set_selected_col` 收的是**组件列**（0 是行号槽，
+                // 与 `table_impl.rs` 的 `data_column(col_ix - 1)` 同一口径），原来直接喂
+                // `view_col` 会让网格高亮左移一格（第 0 列时整列选中落在行号槽上）。
+                state.set_selected_col(view_col + 1, cx);
             }
             state.refresh(cx);
         });
@@ -1907,7 +2140,8 @@ impl ResultPanel {
         let grid = self.grid.clone();
         grid.update(cx, |state, cx| {
             if let Some(view_col) = state.delegate().view_column(data_col) {
-                state.set_selected_cell(0, view_col, cx);
+                // 【第 75 批顺手修】同 `select_column`：组件列 = 显示列 + 1（0 是行号槽）。
+                state.set_selected_cell(0, view_col + 1, cx);
             }
             state.refresh(cx);
         });

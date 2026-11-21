@@ -64,9 +64,20 @@ pub use result_panel::grid::RESULT_GRID_CONTEXT;
 /// 【第 69 批】行级键位组（都只挂网格 context）：`ALT+INSERT` 新增行 / `CTRL+ALT+INSERT`
 /// 复制行 / `ALT+DELETE` 删除行（`plugin.xml:1073/1075/1079`）、`CTRL+D` / `CTRL+ALT+D`
 /// 邻行复制（`:1077/1078`）。
+///
+/// 【第 70 批】取数与跳转：`CTRL+ALT+N` 取下一段（`CMD_FETCH_PAGE`，`:1069`）、
+/// `CTRL+G` 行号跳转（`CMD_GO_TO_ROW`，`:1091`）。
+///
+/// 【第 72 批】`CTRL+SHIFT+=` 取全部行（`CMD_FETCH_ALL`，`:1070`）：先经确认浮层，
+/// 确认过才开跑。
+///
+/// 【第 74 批】`CTRL+R` 撤销全部未提交变更（`CMD_REJECT_CHANGES`，`:1083`）。
+///
+/// 【第 75 批】`CTRL+SHIFT+G` 跳转到列（`CMD_GO_TO_COLUMN`，`:1090`）。
 pub use result_panel::grid::{
     CommitResultChanges, CopyRowValuesFromAbove, CopyRowValuesFromBelow, CycleResultPresentation,
-    DeleteResultRow, DuplicateResultRow, EnterCellEdit, InsertResultRow,
+    DeleteResultRow, DuplicateResultRow, EnterCellEdit, FetchAllData, FetchNextSegment,
+    FocusRowJump, GotoColumn, InsertResultRow, RejectPendingChanges,
 };
 
 /// 【第 60 批】结果**面板**的 key context（`RESULT_GRID_CONTEXT` 的父层）。

@@ -2910,6 +2910,142 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - **只摘 main.rs 本线 hunk**：`.rds/tmp/stage-main-hunk-r129.py`（锚在第 68 批
   `ctrl-s` 那条 KeyBinding 之后；同样从工作区逐字摘块 + `update-index`）。
 
+### 2.121 取数与跳转键位（2026-11-22）
+
+- **`CTRL+ALT+N` 不要在面板层重写判定**：`ResultPanel::request_next_segment` 只
+  入队 `ResultRequest::FetchMore`，一切前置与提示都在宿主 `fetch_more`
+  （`host/results/copy.rs:105-143`）。DBeaver 的四道前置（quickFilter /
+  verifyQuerySafety / hasMoreData / blocked）在本仓的对应物就是这一段——
+  **在键位 handler 里再写一遍「有没有下一段」，就是第二套真值表**。
+- **`CTRL+G` 只准备 + 聚焦，不弹窗**：`ResultPanel::row_jump_focus(window, cx)`
+  返回 `Option<FocusHandle>`，`status` 为空时返回 `None`（宿主据此提示
+  「还没有行可跳」）。行号框的 `InputEvent::PressEnter` 必须把焦点交回网格
+  （`grid.read(cx).focus_handle(cx)`；要 `use gpui_kit::Focusable as _`）——
+  **漏了这步，跳完行网格键位全哑**，是本批最容易回归的一处。
+- **不预填 value，改放 placeholder**：`InputState` 对外没有 `select_all`
+  （`vendor/gpui-component/src/input/state.rs:214` 是 `pub(crate)`）。预填后用户
+  敲数字会追加（`1` + `2` = `12`）直接误跳，所以写 `set_placeholder(当前行号)`
+  + `set_value("")`。这是与 DBeaver（预填 + 全选）**有意**的差异，别当 bug 改回来。
+- **`goto_row` 之后 `status.selected_row` 会被事件路径补回**：
+  `TableState::set_selected_row` 会 `emit(TableEvent::SelectRow)`（`table/state.rs:555`），
+  所以「敲 `2` → 当前行变 2」是一个干净可断言的判据，也是「焦点确实进了输入框」
+  的证明（数字落在网格上不会产生 `GoRow`）。
+- **取段用例必须先钉死「按键前 `asked` 为空」**：`delegate.load_more` 在渲染路径里
+  也会被触发（`rendering_a_short_result_asks_for_more_by_itself`），不先断言空，
+  就分不清请求是按键发的还是重绘发的。
+- **`ctrl-g` 在本仓 `RESULT_GRID_CONTEXT` 没有既有绑定**，不覆写任何键；
+  `ctrl-alt-n` 同理。两条都只挂网格 context（面板层不挂）。
+- **没接的三条**：`CTRL+SHIFT+=`（fetch.all，缺确认弹窗 + 宿主 `FetchAll` 只取一段）、
+  `CTRL+SHIFT+G`（gotoColumn，本仓无「选中列并滚动」入口）、`CTRL+R`
+  （rejectChanges，`discard_pending_changes` 无确认）。前两条见主文档 §9.53.5。
+- **门禁基线（第 70 批后）**：result_panel **408 passed**、editor lib
+  **812 passed（1 ignored）**（+2）、ui-guard **4 passed**、
+  `cargo check --workspace --all-targets` Finished。
+- **editor 全量首跑 rustc OOM 的规避**：本轮首跑在**编译阶段**挂掉
+  （`memory allocation of 2097152 bytes failed` + `STATUS_STACK_BUFFER_OVERRUN`，
+  `error: could not compile rds-editor (lib test)`），当时物理内存仅余 ~3.8 GB。
+  加 `$env:CARGO_INCREMENTAL='0'`（本轮不用增量，**不删**
+  `target\debug\incremental`）后一次通过。这是继第 66 批 `StorageFull` 之后
+  第二个环境性失败点，与代码无关；判据看日志里的 `test result:` 行，不看 exit code
+  （`2>&1 | Tee-Object` 会把 cargo 的 stderr 包成 `NativeCommandError`）。
+- **只摘 main.rs 本线 hunk**：`.rds/tmp/stage-main-hunk-r130.py`（锚在第 69 批
+  `ctrl-alt-d` → `CopyRowValuesFromBelow` 那条 KeyBinding 之后）。
+
+### 2.122 `FetchAll` 真循环（2026-11-22）
+
+- **循环只能落在回填点**：`fetch_all` 只负责「发起 + 置标志」，每段的推进在
+  `pump.rs` 的 `pending == 0` 块里（`advance_fetch_all`）。写成 `while` 是错的——
+  `execute` 返回时这一段的行还没回来，`offset` 会一直停在旧值。
+- **调用顺序**：`advance_pending_export`（导出）→ `advance_fetch_all`（取全部），
+  两者都在 `sync_result_view` 之后。**不要在 `sync` 之前调**：下一段的 offset 取
+  「已抓到的行数」，只有同步过才是新值。
+- **提交只有一个入口**：`submit_segment`（`results/copy.rs`，私有）。`fetch_more` /
+  `fetch_all` / `advance_fetch_all` 都走它；判定（无 SQL / `can_fetch_more` 为假）与提示
+  都在里面。**不要在别处再写一遍 `entry.can_fetch_more()` 分支**——第 70 批之前
+  `dispatch` 的注释与实现不符就是这种双写的后果。
+- **两道互斥门控**：`fetch_more` 与 `fetch_all` 入口都判「正在取全部」和「导出在跑」。
+  导出侧不用改：`advance_pending_export` 自己 `execute(Segment)`，不经过 `fetch_more`。
+  导出**启动**时反查 `fetching_all` 是第 73 批补的（§9.56.2），别以为已经在了。
+- **`fetching_all` 与 `fetching_more` 不是一回事**：前者跨多轮（回填时才推进），
+  后者只在「提交到回填之间」为真。别用 `fetching_more` 当取全部的防重入判据。
+- **切结果集必须停**：`FetchAllProgress.set` 记发起时的 `active()`，每轮比对；
+  `Append` 落位永远接「当前选中」那份，不停就会把行接到另一份结果上。
+- **测试想验「真循环」必须三段 runner**（`shared_with_three_segment_runner`）：
+  两段的 runner 下取全部与取下一段都是「发一次」，断言分不开。
+- **安全阀**：`FETCH_ALL_MAX_SEGMENTS = 100`（本仓差异，DBeaver 无上限）。
+  改这个值时同步改 `result-panel.md` §9.54.5。
+- **门禁基线（第 71 批后）**：editor lib **814 passed（1 ignored）**（812 → +2）。
+
+### 2.123 「取全部」先确认 + `CTRL+SHIFT+=`（2026-11-22）
+
+- **入口三分，别退回去**：钮与键位只发 `AskFetchAll`，`FetchAll` 只由浮层「继续」发。
+  谁会想把钮直接接回 `FetchAll`，先想清楚「点按钮不确认、按键要确认」这个矛盾。
+- **判定在宿主**：`ask` 的四道前置（取全部在跑 / 取段在途 / 有执行错误 / 没有下一段）
+  读的是 `ResultEntry` 的真值；面板只有 `status.has_more`，别在面板里再造一份。
+- **`FetchAll` 分支先收浮层（幂等）再 `fetch_all`**：顺序反了会让浮层在取数期间盖着结果。
+- **`fetching_more` 是短结果自动补齐的并发源**：第 71 批只在「取全部 → 取段」方向做了
+  互斥，本批补上反向。`fetch_all` 与 `ask_fetch_all` 都必须先看它，否则同一个
+  `offset` 会被提交两次（用例里表现为 `asked` 重复 `(2, …)`）。
+- **写「取全部」的用例要掐渲染旁路**：2 行 + `has_more` 的结果一重绘就自动取下一段
+  （`rendering_a_short_result_asks_for_more_by_itself` 是有意行为）。用例里
+  `state.delegate_mut().set_has_more(false)` 只关 delegate，store 仍真，
+  于是「该不该弹」与「有没有自动取」分得开。
+- **浮层不开输入框就不需要 `&mut Window`**：`open_fetch_all_confirm` / `close_...`
+  都是 `&mut Context` 签名，与 SQL 预览一致；别为了对称硬塞窗口参数。
+- **门禁基线（第 72 批后）**：editor lib **817 passed（1 ignored）**、
+  panel **409 passed**、ui-guard **4 passed**。改到这几处时同步改 `result-panel.md` §9.55.6。
+
+### 2.124 互斥矩阵闭合（2026-11-22，第 73 批）
+
+- **加取数类入口前先查矩阵**：`result-panel.md` §9.56.3 那张表是权威。入口 × 在途状态
+  每一格都要么「拒」要么「让出」，别留空。
+- **`start_export` 的 `fetching_all` 判在 `is_executing()` 之前**。段与段之间
+  `is_executing()` 会短暂为 false（回填那一下），那个窗口放过去就是落半截文件；
+  而且提示要说清是「本仓在续段」而不是「通道被占用」。
+- **`ask_fetch_all` 的 `pending_export` 判在 `fetching_more` 之前**：导出抓全量也会置
+  `fetching_more`，顺序反了提示就变成「正在取下一段」，看不出是谁在取。
+- **别用 `export_pending_for_test()` 验 `pending_export`**：它读的是 `export_pending`
+  （DuckDB 导出回执计数，`host/format.rs:316-324`）。抓全量的在途证据用取段请求序列
+  （测试里的 `asked`）。
+- **门禁基线（第 73 批后）**：editor lib **819 passed（1 ignored）**、
+  panel **409 passed**、ui-guard **4 passed**。改到这几处时同步改 `result-panel.md` §9.56.4。
+
+### 2.125 `CTRL+R` 撤销未提交变更（2026-11-22，第 74 批）
+
+- **`mutate_change_set` 的返回值不是「有变化」**：它在找到槽位、执行完闭包后一律返回
+  `true`（`store/store.rs:522-536`），`ChangeSet::discard_pending` 返回 `()`。
+  判断「撤销掉没有」要自己读 `pending_count()`。
+- **有条件的钮会掩盖死分支**：`discard_pending_changes` 的 `else` 分支因为钮只在
+  `pending_changes > 0` 时摆而永远跑不到，接键位才暴露。以后给「条件渲染的钮」加键位，
+  先问一句「无数据时这条路径能不能走到」。
+- **回滚不要求 `editable`**：它不写源库，只丢本地改动。`CTRL+S`（提交）才要求。
+- **键位只转请求，不带判定**：`request_rollback_pending` 只入队 `RollbackPending`，
+  清什么、怎么提示都在 `discard_pending_changes`（钮与键位共用）。
+- **DBeaver 的 `undoRedoManager.clear()` 无对应物**：本仓没有结果编辑的 undo 栈。
+  别为了「对齐」去造一个。
+- **门禁基线（第 74 批后）**：editor lib **820 passed（1 ignored）**、
+  panel **409 passed**、ui-guard **4 passed**。改到这几处时同步改 `result-panel.md` §9.57.6。
+
+### 2.126 跳转到列（2026-11-22，第 75 批）
+
+- 键位：`CTRL+SHIFT+G` → `result_panel::grid::GotoColumn`（`plugin.xml:1090`），挂
+  `RESULT_GRID_CONTEXT`，生产注册在 `crates/app/src/main.rs`、测试注册在 `bind_editor_keys`。
+- 形态：面板内浮层（`goto_column_open` + 常驻 `goto_column_input`），不另开窗口。输入框在
+  **构造期**建（`InputState::new` 要 `&mut Window`），打开时回填 placeholder + 交焦点。
+- 解析（`ResultPanel::goto_column_target`）：名字（`eq_ignore_ascii_case`，重名取第一个）
+  → 1 基序号 `1..=列数` → 否则「未知列名」。命中但被隐藏 → 「已隐藏」。
+- 落点：`set_selected_cell(当前行, view_col + 1)` —— 组件列 0 是行号槽；**行保持不动**
+  （DBeaver `scrollToRow(CURRENT)`）。`selected_col` 一并写。
+- 顺手修：`select_column` / `locate_column` 原来直接喂 `view_col`（少 1），网格列高亮左移一格；
+  已改 `view_col + 1`。
+- 用例：panel 3 条（解析 / 开-跳-保持行 / 失败不关浮层）；editor 2 条（键位全链 / 无结果提示）。
+- 门禁：editor 822、panel 412、ui-guard 4、workspace `Finished`（2 warning 来自通知并行线）。
+- 差异：无内容补全、不预填不全选（`InputState` 无 `select_all`）、隐藏列不自动取消隐藏、
+  未知列名文案中文化。
+- Esc：`InputState::clean_on_escape` 默认 false（`gpui-base/input/base/state.rs:1099`），
+  单光标时走 `cx.propagate()`（`:2607`）→ 遮罩的 `on_key_down` 收得到；**无窗口用例**
+  （四个浮层同口径都缺）。
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。

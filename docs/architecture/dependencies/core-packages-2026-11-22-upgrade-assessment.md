@@ -163,29 +163,110 @@ python .rds\tmp\probe_2026_1122g.py   # 0.9.0 vs 0.10.0 公开符号集合差
 
 产物落在 `.rds/tmp/`（gitignore，不入库）。发布包解包在 `.rds/tmp/crates1011/`。
 
+## 10. 续篇：对「结果集面板对齐 DBeaver」这条线的具体影响
+
+> 口径：本节只回答一个问题——**升级会不会让结果集面板这条线更好做**。取证件与 §1-§9 同源（`.rds/tmp/crates1011/` 里已解包的 0.9.0 / 0.10.0 发布包 + 本地 `vendor/` 0.9.0），逐条带源码位置。
+
+### 10.1 结论
+
+**直接帮助接近于零。** 这条线上正在欠的三个缺口里，两个是「本仓没接线」而不是「组件没能力」，第三个（输入框全选）两版都不给。升级的真正价值只有三处：`gpui-fast` 的观察层修复（预防性，不修红用例）、`ColumnFixed::Right`（本线当前无对应需求）、`DataTable::scrollbar_mode` 与 `Table::hover`（都属目视类，已统一后处理）。
+
+### 10.2 0.10.0 的公开 API 增量（逐模块实测）
+
+按 `pub fn` 做集合差（`gpui-component` 0.9.0 vs 0.10.0）：
+
+| 模块 | 增/删 | 具体符号 |
+| --- | --- | --- |
+| `table` | **+4 / −0** | `column.rs::fixed_right`、`data_table.rs::scrollbar_mode`、`table.rs::hover`、`table.rs::id` |
+| `dialog` | **+0 / −0** | `AlertDialog` / `Dialog` 全套 0.9.0 即有（`alert_dialog.rs` 的 `new:80` / `confirm:96` / `trigger:109` / `on_ok:303` / `on_cancel:314`） |
+| `menu` | **+0 / −0** | 右键菜单能力无变化 |
+| `input` | **+1 / −0** | 仅 `number_input.rs::stepper` |
+
+表格语义层面完全没动：`TableEvent` 枚举、`SelectionMode` 枚举、`set_selected_row` 函数体**两版逐字一致**（`table/state.rs`）。
+
+### 10.3 三个在跑的缺口 ↔ 升级是否解决
+
+| 缺口 | 升级能解决吗 | 实证 |
+| --- | --- | --- |
+| `FetchAll` 确认弹窗（对齐 `CONFIRM_RS_FETCH_ALL`） | **不能** | 组件侧 0.9.0 已有 `dialog/alert_dialog.rs`；项目另有 8 处在用 `window.open_alert_dialog`（`database/src/nav_view/rows.rs:1066`、`analytics_resource/src/dialogs/*`）。结果集面板没用它，是因为本仓选了**面板内浮层**范式——`result_panel/src/panel/dialog.rs:149` 明写「不是窗口级 dialog」 |
+| `gotoColumn`（`CTRL+SHIFT+G`） | **不能** | `vendor/gpui-component/src/table/state.rs` 0.9.0 已有 `scroll_to_col`(:454) / `selected_col`(:583) / `set_selected_col`(:589) / `set_selected_cell`(:629) / `set_selection`(:647) / `clear_selection`(:657)；且本仓**已在用**——`result_panel/src/panel/events.rs:257` 的「定位」就是 `set_selected_cell` + `scroll_to_row/col`。缺的只是「列名/索引 → 列序」的输入层 |
+| `CTRL+G` 的「预填 + 全选」 | **不能** | 0.10.0 的 `InputState` 公开面与 0.9.0 完全相同（`as_input`/`as_textarea`/`as_editor`/`as_otp`/`value`/`focus_handle`），`select_all_from_edit_menu` 仍是 `pub(crate)`；`as_input()` 返回 `Option<&Entity<InputState>>`，拿不到 base state 的 `select_all` |
+| `sync_result_view` 清 `selected_row` | **不能** | 本仓 `editor/src/view/host/results/grid.rs:169` 自己的写法（`selected_row: None`），组件不涉及 |
+
+**这条对上一批的更正**：第 70 批遗留里写的「本仓无『选中某列并滚动』的现成入口」不准确。组件有、本仓也已在用（`events.rs:257`）。`gotoColumn` 不需要等升级，缺的是输入交互层。
+
+### 10.4 升级真正新增的三样东西（对本线的定位）
+
+| 能力 | 内容 | 对本线 |
+| --- | --- | --- |
+| `ColumnFixed::Right` / `fixed_right()` | 0.9.0 的 `ColumnFixed` 只有 `Left`；0.10.0 加 `Right`，渲染实现完整（`table/state.rs:823/833/1456/1469/1672/1849/2262/2325/2533` 十处：右固定列计数、表头 bounds、滚动区切分、内边缘边框） | **当前无对应需求**：DBeaver 结果集没有右固定列。本仓只用 `fixed_left`（`grid/table_impl.rs:314/341` 的 B15 冻结列）。只有将来做「行操作列钉右侧」才用得上 |
+| `DataTable::scrollbar_mode(ScrollbarMode)` | Windows 默认 `Hover`（悬停才显） | **目视类**（滚动条显隐策略），并进目视统一那一轮，不在对齐批次里做 |
+| `Table::hover(f)` / `Table::id(ElementId)` | 行悬停样式 / 行带稳定身份（重排时行内元素状态跟行走） | `hover` 属目视类。`id` 是**潜在**能力：排序或行重排后行内编辑框/tooltip 位置漂移理论上能修，但本仓插入固定落末尾、排序时清编辑态，**当前没有实证红点**，不算已证收益 |
+
+### 10.5 `gpui-fast` 0.1.17：本线唯一「真」收益，但是预防性
+
+§7 第 5 条已定性：开 fast 后的失败**全部落在观察层**（`Weak` 元素注册 + 绘制记录复用），没有一条是画面不对。0.1.17 的修复正打这些机制（`#91` 子树未变不重建、`#106` 释放实体仍被依赖表持有、`#114` 绘制记录按进出集合记账、`#117`、`#122`/`#126`、`#129` 宽度变化后跨帧 measure）。
+
+本仓结果集面板侧的观察层断言分布（`debug_bounds` / `try_find` 命中数）：
+
+| 文件 | 处数 |
+| --- | --- |
+| `crates/result_panel/src/panel/tests.rs` | 85 |
+| `crates/result_panel/src/grid/tests.rs` | 19 |
+| `crates/editor/src/view/tests/results_a.rs` | 12 |
+| `crates/editor/src/view/tests/analysis.rs` | 13 |
+
+这些断言**现在全绿**（panel 408 / editor 812），所以升级的意义是「降低对渲染帧的偶然依赖、把绕的部分收回」，不是「修某个红用例」。这条线不会因为升级变绿或变红。
+
+### 10.6 代价与并行冲突
+
+- **本线代码零返工**：0.9.0→0.10.0 删除的 3 个符号（`dock_extent` / `BORDER_RADIUS` / `render_tooltip`）在 `crates/**` 各 0 引用（§2.1 实测），本线不需要改代码。
+- **门禁要重跑**：editor 812 条里含 fold / bookmark（吃 gutter 重做）。第 70 批已踩过一次 rustc 编译期 OOM（物理内存余 ~3.8 GB），升级那轮会再碰一次，`CARGO_INCREMENTAL='0'` 要备着。
+- **文件冲突面**：升级分支占 `Cargo.toml` / `Cargo.lock` / `vendor/`；本线只碰 `crates/**` 与 `docs/**`。**唯一共享的是 `crates/app/src/main.rs`**（键位注册表）——通知并行线与升级分支都会碰它，三线同改，提交必须继续用 `.rds/tmp/stage-main-hunk-*.py` 只摘自家 hunk。
+- 升级验证期整仓可能一段时间编不过，**本线必须停在干净 HEAD**，不要在同一时间往 `crates/**` 叠新批。
+
+### 10.7 建议
+
+1. **升级不改变本线节奏**：继续「一小批 + 四门禁 + 代码/文档两刀」。升级合入前，本线只做不碰 `Cargo.*` / `vendor/` / `main.rs` 的批（`result_panel` / `editor` 内部逻辑 + 文档）。
+2. 升级合入后可顺手接的三件，按价值排：`Table::id`（先写「排序后行内编辑态错位」探测用例，证实了才改）→ `scrollbar_mode`（并入目视统一那轮）→ `fixed_right`（无需求，不动）。
+3. 真正该先做的是两件**不用升级就能做**的：`FetchAll` 真循环 + 确认浮层（修既有 bug，顺带解锁 `CTRL+SHIFT+=`）、`gotoColumn`（组件能力已在手）。
+
+### 10.8 取证命令（可复跑）
+
+```powershell
+# 0.10.0 / 0.9.0 发布包已在本地
+ls .rds/tmp/crates1011
+# 公开 API 集合差（table / dialog / menu / input）
+python -c "..."   # 见本节表格的实现方式：遍历 src/<module>/*.rs 抽 `pub fn`
+# 表格语义是否变动
+python -c "..."   # 对比两版 table/state.rs 的 set_selected_row 函数体
+```
+
 ---
 
-## 10. 隔离分支实测记录（2026-11-22，`upgrade/core-2026-11-22`）
+---
+
+## 11. 隔离分支实测记录（2026-11-22，`upgrade/core-2026-11-22`）
 
 本节把「§8 本次未做」里的 `cargo check` 探针补上了，并记录实测口径。
 
-### 10.1 分支与工作区
+### 11.1 分支与工作区
 
 | 项 | 值 |
 | --- | --- |
-| 主工作区 | `D:\RdataStation\RDS\RdataStation-v2`（`main` = `f7e2946a`，本轮**未改动**） |
+| 主工作区 | `D:\RdataStation\RDS\RdataStation-v2`（分支拉出时 `main` = `f7e2946a`；验证期间 main 前进到 `96a6893f`，已并入分支，见 §11.5） |
 | 隔离 worktree | `D:\RdataStation\RDS\RdataStation-v2-core-1122` |
-| 分支 | `upgrade/core-2026-11-22`（从 `f7e2946a` 拉出） |
+| 分支 | `upgrade/core-2026-11-22`（从 `f7e2946a` 拉出，后续 `git merge main`） |
 | 隔离手段 | `git worktree add`：物理两个工作目录，`target/`、`third_party/duckdb/` 各一份，互不覆盖 |
 
-### 10.2 版本落点（实测 `Cargo.lock`）
+### 11.2 版本落点（实测 `Cargo.lock`）
 
 `gpui-kit 0.10.0` / `gpui-base`·`gpui-component`·`gpui-kit-assets`·`gpui-component-macros` **0.10.0** /
 `gpui-fast 0.1.17` / `gpui-pre 0.3.12` / `sqlglot-rust 0.11.2` / `rustls-webpki 0.103.17`；
 `duckdb`·`libduckdb-sys` 仍 `1.10506.1`、`arrow` 仍 `58.4.0`（按 §4 结论不升 2.0 线）。
 相对 `main` 共 37 个包版本变化。
 
-### 10.3 私有 patch 的跨大版本重打
+### 11.3 私有 patch 的跨大版本重打
 
 发布包源码替换 `vendor/gpui-base`、`vendor/gpui-component` 后，私有 patch 面（12 文件 / 67 hunk / +1166 −49）**不能走锚点法**：
 锚点自动插入只成 22/67，失败区全是上游重写区（`element.rs` 的 gutter / 折叠区）。
@@ -194,7 +275,7 @@ python .rds\tmp\probe_2026_1122g.py   # 0.9.0 vs 0.10.0 公开符号集合差
 
 **结论（可复用）**：跨大版本 vendor patch 的主线是三方合并，锚点法只能当兜底。
 
-### 10.4 编译验证阶梯（含一次环境级阻塞的根因）
+### 11.4 编译验证阶梯（含一次环境级阻塞的根因）
 
 1. 首次 `cargo check -p gpui-base` 报 `LNK1104 无法打开 ...\.rds\tmp\lnk{GUID}`。
    根因：`.cargo/config.toml` 用 `force = true` 把 `TEMP/TMP/TMPDIR` 钉成相对路径 `.rds/tmp`，
@@ -211,7 +292,7 @@ python .rds\tmp\probe_2026_1122g.py   # 0.9.0 vs 0.10.0 公开符号集合差
 **可复用口径**：串行冷编固定用
 `RUST_MIN_STACK=1073741824`、`CARGO_INCREMENTAL=0`、`-j 1`；遇到 `windows` 崩溃先单独编它。
 
-### 10.5 验证结果
+### 11.5 验证结果
 
 | 验证项 | 命令 | 结果 |
 | --- | --- | --- |
@@ -223,9 +304,10 @@ python .rds\tmp\probe_2026_1122g.py   # 0.9.0 vs 0.10.0 公开符号集合差
 | 编辑器 | `cargo test -p rds-editor -j 1` | ✅ 810 passed / 1 ignored |
 | 结果面板 | `cargo test -p rds-result-panel` | ✅ 408 passed |
 | UI 契约 | `cargo test -p rds-ui-guard --test workspace_ui_contract` | ✅ 4 passed |
-| 全量 | `cargo test --workspace -j 1 --no-fail-fast` | ✅ 155 个 test target 全 ok、0 failed、1 ignored（见 §10.6-4） |
+| 全量 | `cargo test --workspace -j 1 --no-fail-fast` | ✅ 155 个 test target 全 ok、0 failed、1 ignored（见 §11.6-4） |
+| 并入 main 后复验（`96a6893f` + 14 提交） | `cargo check --workspace` / `cargo test --workspace` | ✅ 1m18s / 155 target 全 ok、0 failed |
 
-### 10.6 升级暴露并已处理的 4 处
+### 11.6 升级暴露并已处理的 4 处
 
 1. `vendor/gpui-base/src/tabs.rs`：三方合并时导入列表取了上游那行，漏掉 `Entity`（上游 0.10.0 自己在用）。
    → 补回 `Entity` 导入。
@@ -251,13 +333,13 @@ python .rds\tmp\probe_2026_1122g.py   # 0.9.0 vs 0.10.0 公开符号集合差
    不悄悄放宽断言，因为「面板拖窄后还能不能横滚看全右对齐列」需要肉眼判断。
    真机确认结果出来后再决定：要么改断言（接受新语义），要么在装配上换手段（例如内容用 `min_w` 之外的方式定宽）。
 
-### 10.7 没做 / 需要人工目视的部分
+### 11.7 没做 / 需要人工目视的部分
 
 **目视清单（对应本轮实测，按优先级）**：
 
 1. `docs/architecture/ui/ui-todo.md` §五 的 `V-1 ~ V-8` 目视项（未做）。
 2. gutter 书签图标 vs 折叠箭头重叠时的 z 序（`paint_gutter_markers` 在 `paint_fold_icons` 之后）。
-3. 导航树面板拖窄后：是否还能横向滚动看全右对齐列（§10.6-4 的实测结论要肉眼定案）。
+3. 导航树面板拖窄后：是否还能横向滚动看全右对齐列（§11.6-4 的实测结论要肉眼定案）。
 4. 主题：`list.highlight.foreground` 未配值，列表高亮前景色走的是上游默认色，看是否与 RDS Light/Dark 冲突。
 5. 折叠行占位符（`FoldPlaceholderRenderer`）与我们的书签列同时出现时的行高/对齐。
 
@@ -267,12 +349,12 @@ python .rds\tmp\probe_2026_1122g.py   # 0.9.0 vs 0.10.0 公开符号集合差
 - `cargo clippy` / `cargo fmt --check` 未跑。
 - RustSec / `cargo-audit` 仍未核查（`rustls-webpki` 只做到「版本落后已消除」，未断言 CVE 一手影响面）。
 
-### 10.8 全量测试
+### 11.8 全量测试
 
 `cargo test --workspace -j 1 --no-fail-fast`：**155 个 test target 全 ok，0 failed**，
-唯一非绿是 §10.6-4 的 `#[ignore]`（故意挂着）。日志 `.rds/tmp/wt_test_ws2.log`（gitignore）。
+唯一非绿是 §11.6-4 的 `#[ignore]`（故意挂着）。日志 `.rds/tmp/wt_test_ws2.log`（gitignore）。
 
-### 10.9 合并与回退指引（本地、不推远端）
+### 11.9 合并与回退指引（本地、不推远端）
 
 ```powershell
 # 验收通过后，把隔离分支并入 main（本地合并，不 push）

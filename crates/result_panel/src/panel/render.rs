@@ -776,7 +776,10 @@ impl ResultPanel {
                     })
                     .into_any_element()
             });
-        // 【DBeaver 对齐】获取全部数据：只在这份结果真还有下一段时摆（一次性抓全量）
+        // 【DBeaver 对齐】获取全部数据：只在这份结果真还有下一段时摆（一次性抓全量）。
+        // 【第 72 批】按钮发 `AskFetchAll` 而不是 `FetchAll`：DBeaver 点下去第一件事是
+        // `CONFIRM_RS_FETCH_ALL` 确认（`ResultSetViewer.readAllData:4433-4440`），
+        // 确认过才真取。与 `CTRL+SHIFT+=` 走同一条入口。
         let fetch_all = self
             .status
             .as_ref()
@@ -790,7 +793,7 @@ impl ResultPanel {
                     .label("获取全部数据")
                     .tooltip("一次性抓取全部行")
                     .on_click(move |_, _window, app| {
-                        queue.request(ResultRequest::FetchAll, app);
+                        queue.request(ResultRequest::AskFetchAll, app);
                     })
                     .into_any_element()
             });
@@ -1598,6 +1601,17 @@ impl ResultPanel {
             .children(
                 self.filter_settings_open
                     .then(|| self.render_filter_settings(cx)),
+            )
+            // 【第 72 批】取全部确认浮层：与上面两层同范式、最后挂（它只可能在
+            // 用户刚点过按钮的瞬间出现，与另两层不会同时开）
+            .children(
+                self.fetch_all_confirm_open
+                    .then(|| self.render_fetch_all_confirm(cx)),
+            )
+            // 【第 75 批】跳列浮层：同范式最后挂（只在键位刚按下的那一刻出现）
+            .children(
+                self.goto_column_open
+                    .then(|| self.render_goto_column(cx)),
             )
             .into_any_element()
     }

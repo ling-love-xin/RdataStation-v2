@@ -107,6 +107,37 @@ actions!(
         CopyRowValuesFromAbove,
         /// 【第 69 批】`CTRL+ALT+D`：把下一行的值填进当前行（`CMD_ROW_COPY_FROM_BELOW`，`:1078`）
         CopyRowValuesFromBelow,
+        /// 【第 70 批】`CTRL+ALT+N`：取下一段（`CMD_FETCH_PAGE` → `readNextSegment()`，
+        /// `plugin.xml:1069`）。与状态栏「获取数据」钮同一条路（`ResultRequest::FetchMore`）。
+        FetchNextSegment,
+        /// 【第 70 批】`CTRL+G`：行号跳转（`CMD_GO_TO_ROW` → `GotoLineDialog`，`:1091`）。
+        ///
+        /// DBeaver 那边是弹输入框；本仓状态栏本来就有一口常驻行号输入框
+        /// （`row_count_input`，`InputEvent::Change` 即时跳），所以键位的职责是
+        /// **把那口框准备好并聚焦**，不另造一个弹窗。
+        FocusRowJump,
+        /// 【第 72 批】`CTRL+SHIFT+=`：取全部行（`CMD_FETCH_ALL` → `readAllData()`，
+        /// `plugin.xml:1070`）。
+        ///
+        /// 键名写的是物理键 `=`（shift 下打出 `+`，但 gpui 的 `Keystroke` 比的是
+        /// 规范化后的键名 + 修饰位，`platform/keystroke.rs:112`）。
+        /// 与状态栏「获取全部数据」钮同一条入口：只送 `ResultRequest::AskFetchAll`
+        /// （先确认），判定与真执行都在宿主侧。
+        FetchAllData,
+        /// 【第 74 批】`CTRL+R`：撤销全部未提交变更（`CMD_REJECT_CHANGES`
+        /// → `rejectChanges()`，`plugin.xml:1083`）。
+        ///
+        /// 与工具栏那颗「回滚」钮同一条路（`ResultRequest::RollbackPending`）：
+        /// 钮只在有待提交时摆（`panel/render.rs` 的 `pending_changes > 0`），
+        /// 无待提交时键位留一句提示（第 69 批口径，DBeaver 那边是静默 return）。
+        RejectPendingChanges,
+        /// 【第 75 批】`CTRL+SHIFT+G`：跳转到列（`CMD_GO_TO_COLUMN` →
+        /// `askForColumnToGo`，`plugin.xml:1090`）。
+        ///
+        /// DBeaver 弹 `InputDialog`（名字 / 1 基序号二选一）；本仓做成面板内浮层
+        /// （`goto_column_open`）——只送 `ResultRequest::AskGotoColumn`，
+        /// 开不开由宿主判（没有列可跳时留提示）。
+        GotoColumn,
     ]
 );
 

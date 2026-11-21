@@ -127,6 +127,35 @@ fn bind_editor_keys(cx: &mut TestAppContext) {
                 crate::commands::CopyRowValuesFromBelow,
                 Some(crate::commands::RESULT_GRID_CONTEXT),
             ),
+            // 【第 70 批】取数与跳转（与生产同一份注册，`plugin.xml:1069/1091`）
+            KeyBinding::new(
+                "ctrl-alt-n",
+                crate::commands::FetchNextSegment,
+                Some(crate::commands::RESULT_GRID_CONTEXT),
+            ),
+            KeyBinding::new(
+                "ctrl-g",
+                crate::commands::FocusRowJump,
+                Some(crate::commands::RESULT_GRID_CONTEXT),
+            ),
+            // 【第 72 批】取全部行（`CMD_FETCH_ALL`，`plugin.xml:1070`）
+            KeyBinding::new(
+                "ctrl-shift-=",
+                crate::commands::FetchAllData,
+                Some(crate::commands::RESULT_GRID_CONTEXT),
+            ),
+            // 【第 74 批】撤销未提交变更（`CMD_REJECT_CHANGES`，`plugin.xml:1083`）
+            KeyBinding::new(
+                "ctrl-r",
+                crate::commands::RejectPendingChanges,
+                Some(crate::commands::RESULT_GRID_CONTEXT),
+            ),
+            // 【第 75 批】跳转到列（`CMD_GO_TO_COLUMN`，`plugin.xml:1090`）
+            KeyBinding::new(
+                "ctrl-shift-g",
+                crate::commands::GotoColumn,
+                Some(crate::commands::RESULT_GRID_CONTEXT),
+            ),
         ]);
     });
 }
@@ -444,6 +473,91 @@ impl QueryRunner for SegmentRunner {
             source_fact_set: 0,
         })
     }
+}
+
+/// 【第 71 批】假执行器：**三段**才到底（首段 2 行 → 第二段 2 行 → 第三段 2 行）
+///
+/// 「取全部」与「取下一段」唯一可观察的区别是**提交了几段**：两段的 runner 分不出来
+/// （两者都只发一次）。所以这条专门用三段——取全部应当发两次 `fetch_next`。
+struct ThreeSegmentRunner {
+    asked: std::sync::Arc<std::sync::Mutex<Vec<(usize, usize)>>>,
+}
+
+impl QueryRunner for ThreeSegmentRunner {
+    fn run(
+        &self,
+        _connection: Option<&str>,
+        _schema: Option<&str>,
+        _channel: ExecChannel,
+        _sql: &str,
+        _options: execution::RunOptions,
+    ) -> Result<QueryData, String> {
+        Ok(QueryData {
+            columns: vec!["n".to_string()],
+            rows: vec![vec!["1".to_string()], vec!["2".to_string()]],
+            column_types: Vec::new(),
+            elapsed_ms: 2,
+            truncated: false,
+            affected_rows: None,
+            has_more: true,
+            notice: None,
+            fact: None,
+            source_fact_table: None,
+            source_fact_release: false,
+            source_fact_set: 0,
+        })
+    }
+
+    fn fetch_next(
+        &self,
+        _connection: Option<&str>,
+        _schema: Option<&str>,
+        _channel: ExecChannel,
+        _sql: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<QueryData, String> {
+        self.asked.lock().expect("锁").push((offset, limit));
+        let (rows, has_more) = if offset <= 2 {
+            (vec![vec!["3".to_string()], vec!["4".to_string()]], true)
+        } else {
+            (vec![vec!["5".to_string()], vec!["6".to_string()]], false)
+        };
+        Ok(QueryData {
+            columns: vec!["n".to_string()],
+            rows,
+            column_types: Vec::new(),
+            elapsed_ms: 1,
+            truncated: false,
+            affected_rows: None,
+            has_more,
+            notice: None,
+            fact: None,
+            source_fact_table: None,
+            source_fact_release: false,
+            source_fact_set: 0,
+        })
+    }
+}
+
+/// 带 `ThreeSegmentRunner` 的共享状态 + 一份文档（第 71 批：取全部要跨三轮）
+fn shared_with_three_segment_runner(
+    content: &str,
+) -> (
+    EditorShared,
+    DocumentId,
+    std::sync::Arc<std::sync::Mutex<Vec<(usize, usize)>>>,
+) {
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let shared = EditorShared::new();
+    shared.attach_runner(std::sync::Arc::new(ThreeSegmentRunner {
+        asked: asked.clone(),
+    }));
+    let id = shared
+        .open(OpenRequest::untitled(content, EditorMode::Sql))
+        .id()
+        .clone();
+    (shared, id, asked)
 }
 
 /// 带 `SegmentRunner` 的共享状态 + 一份文档（B5b）

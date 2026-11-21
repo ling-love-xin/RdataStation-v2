@@ -161,6 +161,20 @@ impl Render for EditorHostPanel {
             .on_action(cx.listener(Self::on_delete_result_row))
             .on_action(cx.listener(Self::on_copy_row_values_from_above))
             .on_action(cx.listener(Self::on_copy_row_values_from_below))
+            // 【第 70 批】取数与跳转（`plugin.xml:1069` / `:1091`）：
+            // `CTRL+ALT+N` 取下一段（与状态栏「获取数据」钮同一条路）、
+            // `CTRL+G` 行号跳转（聚焦状态栏那口常驻行号框，`ENTER` 后焦点回网格）
+            .on_action(cx.listener(Self::on_fetch_next_segment))
+            .on_action(cx.listener(Self::on_focus_row_jump))
+            // 【第 72 批】`CTRL+SHIFT+=` 取全部行（`CMD_FETCH_ALL`，`plugin.xml:1070`）：
+            // 先过确认浮层，确认过才开跑（DBeaver `CONFIRM_RS_FETCH_ALL`）
+            .on_action(cx.listener(Self::on_fetch_all_data))
+            // 【第 74 批】`CTRL+R` 撤销全部未提交变更（`CMD_REJECT_CHANGES`，`:1083`）：
+            // 与工具栏「回滚」钮同一条路；无待提交时只说一句（不静默吞键）
+            .on_action(cx.listener(Self::on_reject_pending_changes))
+            // 【第 75 批】`CTRL+SHIFT+G` 跳转到列（`CMD_GO_TO_COLUMN`，`:1090`）：
+            // 开面板内浮层（列名 / 1 基序号二选一），`ENTER` 提交、Esc 关闭
+            .on_action(cx.listener(Self::on_goto_column))
             // 【书签】`Ctrl+Shift+B` 切换 / `F8` 下一 / `Shift+F8` 上一（键位在 crates/app 注册）
             .on_action(cx.listener(Self::on_toggle_bookmark))
             .on_action(cx.listener(Self::on_next_bookmark))

@@ -398,6 +398,9 @@ impl EditorHostPanel {
             }
             // 【B7】导出在跑就推进它（还要抓就再提交一段；抓完了/崩了就落盘或作废）
             self.advance_pending_export(segment_reason, cx);
+            // 【第 71 批】取全部的多轮推进：必须在这之后、且在 `sync_result_view` 之后
+            // （下一段的 offset 取「已抓到的行数」，只有同步过才是新值）
+            self.advance_fetch_all(segment_reason, cx);
             // 【B6】失败且能定位：把光标送到出错处并聚焦（拿不到位置就只留原因）
             if let Some(sql) = fresh_failure
                 && self.result_panel.read(cx).sql().as_deref() == Some(sql.as_str())

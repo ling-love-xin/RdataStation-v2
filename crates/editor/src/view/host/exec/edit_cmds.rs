@@ -7,7 +7,8 @@ use crate::changes::CellChange;
 use crate::commands::{
     CommitResultChanges, CopyGridSelection, CopyRowValuesFromAbove, CopyRowValuesFromBelow,
     CycleResultPresentation, DeleteResultRow, DuplicateResultRow, EnterCellEdit, ExecuteSql,
-    InsertResultRow, RedoResultEdit, UndoResultEdit,
+    FetchAllData, FetchNextSegment, FocusRowJump, GotoColumn, InsertResultRow, RedoResultEdit,
+    RejectPendingChanges, UndoResultEdit,
 };
 
 use super::*;
@@ -190,6 +191,99 @@ impl EditorHostPanel {
         cx: &mut Context<Self>,
     ) {
         self.copy_row_values_from(false, cx);
+    }
+
+    /// 【第 70 批】结果网格 `CTRL+ALT+N`：取下一段
+    /// （DBeaver `CMD_FETCH_PAGE` → `readNextSegment()`，`plugin.xml:1069`）。
+    ///
+    /// 与状态栏「获取数据」钮同一条路（`ResultRequest::FetchMore`）：判定全在
+    /// `fetch_more` 里（没 SQL / 已经取完 / 执行器不支持 / 正在取），每条都留可读原因，
+    /// 所以这里只转一次请求，不再复制一套门控。
+    ///
+    /// 与 `ALT+INSERT` 的差别：这条**不要求**有当前行（取数跟选中无关）。
+    pub(crate) fn on_fetch_next_segment(
+        &mut self,
+        _: &FetchNextSegment,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.result_panel
+            .update(cx, |panel, cx| panel.request_next_segment(cx));
+    }
+
+    /// 【第 72 批】结果网格 `CTRL+SHIFT+=`：取全部行
+    /// （DBeaver `CMD_FETCH_ALL` → `readAllData()`，`plugin.xml:1070`）。
+    ///
+    /// 与状态栏「获取全部数据」钮同一条入口（`ResultRequest::AskFetchAll`）：DBeaver
+    /// 那边点下去先是 `CONFIRM_RS_FETCH_ALL` 确认（`ResultSetViewer:4433-4440`），
+    /// 确认过才真取。所以这条键**不直接开跑**，弹不弹由宿主判（`ask_fetch_all`）。
+    pub(crate) fn on_fetch_all_data(
+        &mut self,
+        _: &FetchAllData,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.result_panel
+            .update(cx, |panel, cx| panel.request_fetch_all(cx));
+    }
+
+    /// 【第 74 批】结果网格 `CTRL+R`：撤销全部未提交变更
+    /// （DBeaver `CMD_REJECT_CHANGES` → `rejectChanges()`，`plugin.xml:1083`；
+    /// `ResultSetHandlerMain:313-314`）。
+    ///
+    /// 与工具栏「回滚」钮同一条路（`ResultRequest::RollbackPending`）。不像 `CTRL+S`
+    /// 那样要求可编辑：回滚只是丢本地改动、不写源库，只读结果集上按下去也只会得到
+    /// 「没有可撤销的变更」（那条提示在 `discard_pending_changes` 里，与钮共用）。
+    pub(crate) fn on_reject_pending_changes(
+        &mut self,
+        _: &RejectPendingChanges,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.result_panel
+            .update(cx, |panel, cx| panel.request_rollback_pending(cx));
+    }
+
+    /// 【第 70 批】结果网格 `CTRL+G`：行号跳转
+    /// （DBeaver `CMD_GO_TO_ROW` → `GotoLineDialog`，`plugin.xml:1091`）。
+    ///
+    /// 本仓不弹对话框：把状态栏那口常驻行号框回填当前行号并聚焦，敲 `ENTER`
+    /// 后焦点交回网格（见 `ResultPanel::row_jump_focus` 的说明）。
+    pub(crate) fn on_focus_row_jump(
+        &mut self,
+        _: &FocusRowJump,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let target = self
+            .result_panel
+            .update(cx, |panel, cx| panel.row_jump_focus(window, cx));
+        let Some(target) = target else {
+            self.set_message(Some("这份结果还没有行可跳；先执行查询".to_string()), cx);
+            return;
+        };
+        window.focus(&target, cx);
+    }
+
+    /// 【第 75 批】结果网格 `CTRL+SHIFT+G`：跳转到列
+    /// （DBeaver `CMD_GO_TO_COLUMN` → `askForColumnToGo`，`plugin.xml:1090`；
+    /// `ResultSetHandlerMain:526-534`）。
+    ///
+    /// 与 `CTRL+G` 的形态差别：行号有状态栏常驻输入框可落脚，列名没有——所以这条
+    /// **开面板内浮层**（`ResultPanel::open_goto_column` 要 window 交焦点给输入框）。
+    /// 没有列可跳时留一句提示（第 69 批「键位不可用要说话」口径）。
+    pub(crate) fn on_goto_column(
+        &mut self,
+        _: &GotoColumn,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let opened = self
+            .result_panel
+            .update(cx, |panel, cx| panel.open_goto_column(window, cx));
+        if !opened {
+            self.set_message(Some("这份结果还没有列可跳；先执行查询".to_string()), cx);
+        }
     }
 
     /// 邻行复制的共用段：门控 + 越界 / 已删 / 无写入 三种「按了但没改」的提示。

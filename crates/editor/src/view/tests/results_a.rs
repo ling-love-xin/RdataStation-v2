@@ -5,6 +5,7 @@ use gpui_kit::component::table::TableDelegate as _;
 use gpui_kit::{TestAppContext, VisualTestContext};
 
 use crate::execution::{self};
+use crate::export::ExportFormat;
 use crate::model::EditorMode;
 use crate::service::OpenRequest;
 use crate::shared::EditorShared;
@@ -12,9 +13,11 @@ use crate::shared::EditorShared;
 use super::LocatedFailureRunner;
 use super::MoreUnsupportedRunner;
 use super::dialogs::dialog_button_rendered;
+use super::results_b::{attach_export_picker, export_temp_path};
 use super::{
     bind_editor_keys, open_panel, run_statement, shared_with_runner, shared_with_segment_runner,
-    shared_with_sized_runner, shared_with_toolbar_runner, wait_for_all_pending,
+    shared_with_sized_runner, shared_with_three_segment_runner, shared_with_toolbar_runner,
+    wait_for_all_pending,
 };
 
 // ===== B5：结果工具栏（复制 / 刷新 / 影响行数 / 截断 / 分栏）=====
@@ -915,4 +918,600 @@ fn a_finished_result_does_not_ask_for_more(cx: &mut TestAppContext) {
     cx.run_until_parked();
     wait_for_all_pending(cx, &panel);
     assert!(!wants(cx), "第二段没拿满 → 到底了");
+}
+
+/// 【第 70 批】`CTRL+ALT+N` = 取下一段（DBeaver `CMD_FETCH_PAGE` → `readNextSegment()`，
+/// `plugin.xml:1069`，context = `...resultset.focused`）。
+///
+/// 与状态栏「获取数据」钮**同一条路**（`ResultRequest::FetchMore`）：断言落在
+/// 执行器真的被要了「已经拿到的行数之后那一段」以及行数翻倍上。
+///
+/// 这条用例的前提是**按键前后都不 draw**：渲染路径自己也会在「可见范围靠近末尾」时
+/// 触发 `delegate.load_more`（见 `rendering_a_short_result_asks_for_more_by_itself`），
+/// 一 draw 就分不清请求是谁发的。所以先断言「按键前 `asked` 为空」，把这个前提钉死；
+/// 哪天 `simulate_keystrokes` 开始顺带渲染，这一句会先失败提醒改用例。
+#[gpui_kit::test]
+fn the_fetch_page_key_asks_for_the_next_segment(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id, asked) = shared_with_segment_runner("select n from t");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(
+        cx,
+        &panel,
+        "select n from t",
+        execution::ResultPlacement::Replace,
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
+        2,
+        "首段两行"
+    );
+    let status = cx
+        .update(|_window, cx| panel.read(cx).result_status_for_test(cx))
+        .expect("有网格就有状态行");
+    assert!(status.has_more, "拿满了 → 还有下一段");
+    assert!(
+        asked.lock().expect("锁").is_empty(),
+        "按键前不该有取段请求（一半靠这条证明请求真是键位发的）"
+    );
+
+    // 焦点交给网格：键位只挂在 `RESULT_GRID_CONTEXT` 上
+    let grid_focus = cx.update(|_window, app| {
+        use gpui_kit::Focusable as _;
+        panel.read(app).grid_for_test().read(app).focus_handle(app)
+    });
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+
+    cx.simulate_keystrokes("ctrl-alt-n");
+    cx.run_until_parked();
+    wait_for_all_pending(cx, &panel);
+
+    assert_eq!(
+        asked.lock().expect("锁").as_slice(),
+        [(2, execution::SEGMENT_ROWS)],
+        "键位要的正是「已经拿到的行数」之后那一段（与「获取数据」钮同一条路），而且只发一次"
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
+        4,
+        "两段接起来"
+    );
+    let status = cx
+        .update(|_window, cx| panel.read(cx).result_status_for_test(cx))
+        .expect("还有状态行");
+    assert!(!status.has_more, "最后一段没拿满 → 到底了");
+    assert_eq!(shared.results().set_count(&id), 1, "取下一段不新开结果集");
+}
+
+/// 【第 71 批】「获取全部数据」= 一直取到没有下一段（DBeaver `readAllData:4426-4459`）
+///
+/// 第 70 批之前 `dispatch` 的 `FetchAll` 分支只调一次 `fetch_more`，注释承诺的循环没实现
+/// （钮叫「获取全部数据」，实际只取一段）。这条用**三段** runner 钉住「真的循环」：
+/// 取全部要发两次 `fetch_next`（offset 2 → 4），而「取下一段」只发一次
+/// （对照见上面 `the_fetch_page_key_asks_for_the_next_segment`）。
+#[gpui_kit::test]
+fn fetching_all_keeps_fetching_until_there_is_no_more(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, asked) = shared_with_three_segment_runner("select n from t");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(
+        cx,
+        &panel,
+        "select n from t",
+        execution::ResultPlacement::Replace,
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
+        2,
+        "首段两行"
+    );
+    assert!(
+        asked.lock().expect("锁").is_empty(),
+        "取全部之前不该有取段请求（与渲染路径分开：这条不 draw）"
+    );
+
+    // 与状态栏那颗钮同一条入队路径（`ResultRequest::FetchAll` → `dispatch` → `fetch_all`）
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.result_action_queue
+                .request(result_panel::ports::ResultRequest::FetchAll, cx);
+            host.drain_result_actions(window, cx);
+        });
+    });
+    wait_for_all_pending(cx, &panel);
+
+    assert_eq!(
+        asked.lock().expect("锁").as_slice(),
+        [(2, execution::SEGMENT_ROWS), (4, execution::SEGMENT_ROWS)],
+        "取全部要跨轮：每一轮的 offset 都得是「已经拿到的行数」"
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
+        6,
+        "三段接起来"
+    );
+    let status = cx
+        .update(|_window, cx| panel.read(cx).result_status_for_test(cx))
+        .expect("还有状态行");
+    assert!(!status.has_more, "最后一段没拿满 → 到底了");
+    assert_eq!(shared.results().set_count(&id), 1, "取全部不新开结果集");
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .unwrap_or_default();
+    assert!(
+        message.contains("已取全部 6 行"),
+        "收口要如实说一句（拿到多少行），实际是：{message}"
+    );
+}
+
+/// 【第 71 批】已经取完时再按「获取全部数据」：只给一句提示，不再发取段请求
+///
+/// 门控与「取下一段」同源（都走 `submit_segment` 的 `can_fetch_more` 判定），
+/// 不是为取全部另写一条真值表。
+#[gpui_kit::test]
+fn asking_for_all_after_the_end_only_says_so(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, asked) = shared_with_segment_runner("select n from t");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(
+        cx,
+        &panel,
+        "select n from t",
+        execution::ResultPlacement::Replace,
+    );
+    // 先取一段：两段 runner 的第二段没拿满 → 到底
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.result_action_queue
+                .request(result_panel::ports::ResultRequest::FetchMore, cx);
+            host.drain_result_actions(window, cx);
+        });
+    });
+    wait_for_all_pending(cx, &panel);
+    let taken = asked.lock().expect("锁").len();
+    assert_eq!(taken, 1, "先取了一段");
+
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.result_action_queue
+                .request(result_panel::ports::ResultRequest::FetchAll, cx);
+            host.drain_result_actions(window, cx);
+        });
+    });
+    wait_for_all_pending(cx, &panel);
+
+    assert_eq!(
+        asked.lock().expect("锁").len(),
+        taken,
+        "已经到底：不该再发取段请求"
+    );
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .unwrap_or_default();
+    assert!(
+        message.contains("这份结果已经取完了"),
+        "要如实说「已经取完」，实际是：{message}"
+    );
+}
+
+/// 【第 72 批】`CTRL+SHIFT+=` = 取全部行（DBeaver `CMD_FETCH_ALL` → `readAllData()`，
+/// `plugin.xml:1070`），但**先问一声**：`CONFIRM_RS_FETCH_ALL`
+/// （`ResultSetViewer.readAllData:4433-4440`）。
+///
+/// 这条钉两件事：
+/// 1. 键位真的命中（`ctrl-shift-=` 里 `=` 是物理键名，shift 下打出的是 `+`，
+///    gpui 比的是规范化键名 + 修饰位，`platform/keystroke.rs:112`）；
+/// 2. 命中的结果只是**弹确认**，一行都没取——第 71 批之前键位与按钮是直接开跑的。
+#[gpui_kit::test]
+fn the_fetch_all_key_asks_before_it_starts(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id, asked) = shared_with_three_segment_runner("select n from t");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(
+        cx,
+        &panel,
+        "select n from t",
+        execution::ResultPlacement::Replace,
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
+        2,
+        "首段两行"
+    );
+    // 掐掉「渲染自动补齐」这条旁路：短结果一重绘就会自己取下一段
+    // （`rendering_a_short_result_asks_for_more_by_itself` 钉的就是这个**有意**行为），
+    // 但浮层一打开面板就要重绘，那条旁路会把「键位 → 确认」这条链路淹掉。
+    // 只关 delegate 侧：store 里的 `has_more` 仍为真，所以 `ask_fetch_all` 照样该弹。
+    let grid = cx.update(|_window, app| panel.read(app).grid_for_test());
+    cx.update(|_window, cx| {
+        grid.update(cx, |state, cx| {
+            state.delegate_mut().set_has_more(false);
+            cx.notify();
+        });
+    });
+    assert!(
+        asked.lock().expect("锁").is_empty(),
+        "按键前不该有取段请求（与渲染路径分开：这条不 draw）"
+    );
+    assert!(
+        !cx.update(|_window, cx| panel.read(cx).fetch_all_confirm_for_test(cx)),
+        "出厂不弹"
+    );
+
+    // 焦点交给网格：键位只挂在 `RESULT_GRID_CONTEXT` 上
+    let grid_focus = cx.update(|_window, app| {
+        use gpui_kit::Focusable as _;
+        panel.read(app).grid_for_test().read(app).focus_handle(app)
+    });
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+
+    cx.simulate_keystrokes("ctrl-shift-=");
+    cx.run_until_parked();
+
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).fetch_all_confirm_for_test(cx)),
+        "键位要先把确认浮层打开（DBeaver 也是先 CONFIRM_RS_FETCH_ALL）"
+    );
+    assert!(
+        asked.lock().expect("锁").is_empty(),
+        "确认之前一行都不该取：键位不是「开跑」而是「先问」"
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
+        2,
+        "行数保持首段"
+    );
+}
+
+/// 【第 72 批】确认之后才真跑：`FetchAll`（浮层「继续」发的就是它）走完三段循环，
+/// 顺手把浮层收掉。
+#[gpui_kit::test]
+fn confirming_the_prompt_starts_the_fetch_all(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id, asked) = shared_with_three_segment_runner("select n from t");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(
+        cx,
+        &panel,
+        "select n from t",
+        execution::ResultPlacement::Replace,
+    );
+
+    // 先按键把确认浮层打开（与上一条同一条入队路径）
+    let grid = cx.update(|_window, app| panel.read(app).grid_for_test());
+    cx.update(|_window, cx| {
+        grid.update(cx, |state, cx| {
+            state.delegate_mut().set_has_more(false);
+            cx.notify();
+        });
+    });
+    let grid_focus = cx.update(|_window, app| {
+        use gpui_kit::Focusable as _;
+        panel.read(app).grid_for_test().read(app).focus_handle(app)
+    });
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+    cx.simulate_keystrokes("ctrl-shift-=");
+    cx.run_until_parked();
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).fetch_all_confirm_for_test(cx)),
+        "前置：浮层已开"
+    );
+
+    // 浮层「继续」与这里同一条队列请求
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.result_action_queue
+                .request(result_panel::ports::ResultRequest::FetchAll, cx);
+            host.drain_result_actions(window, cx);
+        });
+    });
+    wait_for_all_pending(cx, &panel);
+
+    assert_eq!(
+        asked.lock().expect("锁").as_slice(),
+        [(2, execution::SEGMENT_ROWS), (4, execution::SEGMENT_ROWS)],
+        "确认后真的要跨轮取到没有下一段"
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
+        6,
+        "三段接起来"
+    );
+    assert!(
+        !cx.update(|_window, cx| panel.read(cx).fetch_all_confirm_for_test(cx)),
+        "真跑起来要先把浮层收掉（不然遮罩盖着结果）"
+    );
+}
+
+/// 【第 72 批】已经取完时按 `CTRL+SHIFT+=`：**不弹浮层**，只给一句提示
+///
+/// 对齐 DBeaver：`readAllData` 第一件事是 `!isHasMoreData()` → 静默 return
+/// （`:4430-4432`）；本仓键位层统一「不可用留提示」，所以这里说一句而不是什么都不做。
+#[gpui_kit::test]
+fn the_fetch_all_key_after_the_end_only_says_so(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id, asked) = shared_with_segment_runner("select n from t");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(
+        cx,
+        &panel,
+        "select n from t",
+        execution::ResultPlacement::Replace,
+    );
+    // 先取一段：两段 runner 的第二段没拿满 → 到底
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.result_action_queue
+                .request(result_panel::ports::ResultRequest::FetchMore, cx);
+            host.drain_result_actions(window, cx);
+        });
+    });
+    wait_for_all_pending(cx, &panel);
+    let taken = asked.lock().expect("锁").len();
+    assert_eq!(taken, 1, "先取了一段");
+
+    let grid_focus = cx.update(|_window, app| {
+        use gpui_kit::Focusable as _;
+        panel.read(app).grid_for_test().read(app).focus_handle(app)
+    });
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+    cx.simulate_keystrokes("ctrl-shift-=");
+    cx.run_until_parked();
+
+    assert!(
+        !cx.update(|_window, cx| panel.read(cx).fetch_all_confirm_for_test(cx)),
+        "已经到底：不该弹确认（问了也没有下一段可取）"
+    );
+    assert_eq!(
+        asked.lock().expect("锁").len(),
+        taken,
+        "不该再发取段请求"
+    );
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .unwrap_or_default();
+    assert!(
+        message.contains("这份结果已经取完了"),
+        "键位不可用要留提示（第 69 批口径），实际是：{message}"
+    );
+}
+
+/// 【第 73 批】取全部在跑时导出要**在入口就被拦**（第 71 批的互斥只做了反方向）
+///
+/// 两个理由：
+/// 1. 段与段之间通道是空闲的（`is_executing()` 会短暂为 false），那时放过去就会落半截文件；
+/// 2. 两条都是 `Append` 取段，各算各的 offset（都按「已抓到的行数」），一起跑会重复抓同一段。
+///
+/// 这条同时钉住判据顺序：必须判在「执行器忙」之前，否则用户只看到「执行中，稍候」
+/// ——听起来像等一下就好，实际取全部可能还要跑很久。
+#[gpui_kit::test]
+fn exporting_while_fetching_all_is_refused(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, asked) = shared_with_three_segment_runner("select n from t");
+    let path = export_temp_path("fetchall", "csv");
+    let picked = attach_export_picker(&shared, Some(path.clone()));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(
+        cx,
+        &panel,
+        "select n from t",
+        execution::ResultPlacement::Replace,
+    );
+    assert_eq!(asked.lock().expect("锁").len(), 0, "首段之外没有取段");
+
+    // 起取全部（与浮层「继续」同一条队列路径），只 drain 不推进：首段还在途
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.result_action_queue
+                .request(result_panel::ports::ResultRequest::FetchAll, cx);
+            host.drain_result_actions(window, cx);
+        });
+    });
+    assert_eq!(
+        asked.lock().expect("锁").len(),
+        1,
+        "前置：取全部已提交首段"
+    );
+
+    // 此时 fetch_all 在跑、通道也忙：导出该被「取全部」拦
+    cx.update(|_window, cx| {
+        panel.update(cx, |host, cx| {
+            host.export_active_result_all(ExportFormat::Csv, cx);
+        });
+    });
+
+    assert!(
+        picked.lock().expect("锁").is_empty(),
+        "连路径都不该问：拦在选路径之前（否则用户白选一次）"
+    );
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .unwrap_or_default();
+    assert!(
+        message.contains("正在取全部数据") && message.contains("等它结束再导出"),
+        "要说明是谁在占着通道，实际是：{message}"
+    );
+
+    // 收尾：取全部自己跑完，导出一事无成
+    wait_for_all_pending(cx, &panel);
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
+        6,
+        "取全部没被导出的这次尝试打断"
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).export_pending_for_test()),
+        0,
+        "导出没有留下在途状态"
+    );
+}
+
+/// 【第 73 批】导出正在抓全量时问「要不要取全部」：不弹浮层，直接说清是谁在取
+///
+/// 反向那一格。导出抓全量期间也置 `fetching_more`，所以这条同时钉住判据顺序：
+/// `pending_export` 必须判在 `fetching_more` 之前，否则提示会变成「正在取下一段」，
+/// 用户不知道那次取段其实是自己刚点的导出在跑。
+#[gpui_kit::test]
+fn asking_for_all_while_the_export_is_fetching_says_so(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, asked) = shared_with_three_segment_runner("select n from t");
+    let path = export_temp_path("pends", "csv");
+    let _picked = attach_export_picker(&shared, Some(path.clone()));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(
+        cx,
+        &panel,
+        "select n from t",
+        execution::ResultPlacement::Replace,
+    );
+
+    // 导出并抓全量：首段之后还有下一段，于是置 `pending_export` 并发一段
+    cx.update(|_window, cx| {
+        panel.update(cx, |host, cx| {
+            host.export_active_result_all(ExportFormat::Csv, cx);
+        });
+    });
+    assert_eq!(
+        asked.lock().expect("锁").as_slice(),
+        [(2, execution::SEGMENT_ROWS)],
+        "前置：导出占着取段（它自己发的第一段，offset 是已抓到的行数）"
+    );
+
+    // 这时按键（与状态栏那颗钮同一条）：只该给一句提示
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.result_action_queue
+                .request(result_panel::ports::ResultRequest::AskFetchAll, cx);
+            host.drain_result_actions(window, cx);
+        });
+    });
+
+    assert!(
+        !cx.update(|_window, cx| panel.read(cx).fetch_all_confirm_for_test(cx)),
+        "不该弹浮层：问了也没有「继续」可点（那一下照样会被 fetch_all 拒）"
+    );
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .unwrap_or_default();
+    assert!(
+        message.contains("导出正在取数"),
+        "要说清是导出在取，而不是含糊的「正在取下一段」，实际是：{message}"
+    );
+
+    // 收尾：导出把全量抓完、落盘，取全部没被启动
+    wait_for_all_pending(cx, &panel);
+    assert_eq!(
+        asked.lock().expect("锁").as_slice(),
+        [(2, execution::SEGMENT_ROWS), (4, execution::SEGMENT_ROWS)],
+        "导出自己跨轮抓完了；取全部一次都没发"
+    );
+}
+
+/// 【第 75 批】`CTRL+SHIFT+G` 跳列全链：键位 → 面板浮层（真挂到渲染树上）→ 列名提交 →
+/// 选中该列，**行不动**（DBeaver `setCurrentAttribute` 之后 `scrollToRow(CURRENT)`）。
+///
+/// 列映射要点：`set_selected_cell` 收的是**组件列**（0 是行号槽），所以「note」这一列
+/// （第 2 个数据列）落到组件列 2；用 1 会选到 id，用例就是钉这一格。
+#[gpui_kit::test]
+fn the_goto_column_key_opens_the_overlay_and_selects_the_named_column(cx: &mut TestAppContext) {
+    use gpui_kit::Focusable as _;
+
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+
+    let grid = cx.update(|_window, app| panel.read(app).grid_for_test());
+    // 当前行 = 第 1 行、当前列 = 第 1 个数据列（组件列 1）
+    cx.update(|_window, app| grid.update(app, |state, cx| state.set_selected_cell(0, 1, cx)));
+
+    let grid_focus = cx.update(|_window, app| grid.read(app).focus_handle(app));
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+    cx.simulate_keystrokes("ctrl-shift-g");
+    cx.run_until_parked();
+
+    assert!(
+        cx.update(|_window, app| panel
+            .read(app)
+            .result_panel
+            .read(app)
+            .goto_column_for_test(app)),
+        "键位应打开浮层"
+    );
+    assert!(
+        dialog_button_rendered(cx, "editor-result-goto-column-go"),
+        "浮层要真的挂到面板渲染树上"
+    );
+
+    cx.update(|window, cx| {
+        panel.update(cx, |p, cx| {
+            let result_panel = p.result_panel.clone();
+            result_panel.update(cx, |p, cx| {
+                p.set_goto_column_text_for_test("note", window, cx)
+            });
+        });
+    });
+    // 走浮层「跳转」钮那条端口：与 Enter 同一终点（宿主 dispatch 调 submit）
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.result_action_queue
+                .request(result_panel::ports::ResultRequest::SubmitGotoColumn, cx);
+            host.drain_result_actions(window, cx);
+        });
+    });
+
+    assert_eq!(
+        cx.update(|_window, app| grid.read(app).selected_cell()),
+        Some((0, 2)),
+        "「note」是第 2 个数据列 → 组件列 2；行保持 0"
+    );
+    assert!(
+        !cx.update(|_window, app| panel
+            .read(app)
+            .result_panel
+            .read(app)
+            .goto_column_for_test(app)),
+        "提交后浮层要收"
+    );
+}
+
+/// 【第 75 批】还没有结果时按 `CTRL+SHIFT+G`：不弹浮层，只留一句提示
+/// （DBeaver 那边没有列也就没有对话框；本仓键位层统一「不可用要说话」）。
+///
+/// 这里直接调 action 的处理方法而不再 `simulate_keystrokes`：没有结果时结果区整块
+/// 不渲染，网格不在焦点路径上，键位根本走不到（键位全链由上面那条用例钉）。
+#[gpui_kit::test]
+fn the_goto_column_key_without_a_result_only_says_so(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.on_goto_column(&crate::commands::GotoColumn, window, cx);
+        });
+    });
+    cx.run_until_parked();
+
+    assert!(
+        !cx.update(|_window, app| panel
+            .read(app)
+            .result_panel
+            .read(app)
+            .goto_column_for_test(app)),
+        "没列可跳就不该开浮层"
+    );
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .unwrap_or_default();
+    assert!(
+        message.contains("还没有列可跳"),
+        "键位不可用要留提示，实际是：{message}"
+    );
 }

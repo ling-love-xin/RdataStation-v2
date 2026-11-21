@@ -313,6 +313,12 @@ pub const RESULT_SIDEBAR_RIGHT_MAX_HEIGHT: f32 = 32.0;
 /// 又窄于 SQL 预览弹窗（42.5rem）——两个浮层不是同一档，避免看起来像同一个框。
 pub const RESULT_FILTER_SETTINGS_WIDTH: f32 = 35.0;
 
+/// 【第 72 批 · 取全部确认】浮层卡片宽度（28rem = 448px）：只有两段文案 + 两颗按钮，
+/// 比筛选设置还窄一档——DBeaver 那边是 `ConfirmationDialog` 系统确认框，本来就不宽。
+pub const RESULT_FETCH_ALL_CONFIRM_WIDTH: f32 = 28.0;
+/// 【第 75 批】跳列浮层卡片宽度（rem）：输入框 + 一行错误 / 口径提示够用即可
+pub const RESULT_GOTO_COLUMN_WIDTH: f32 = 24.0;
+
 /// 右栏「计算 / 列浏览器明细」键值行的**标签列宽**（4.5rem = 72px）：
 /// 「最小值 / 来源表 / 默认值」这类最长约四个字，72px 放下不挤值列
 pub const RESULT_SIDEBAR_KV_LABEL_WIDTH: f32 = 4.5;

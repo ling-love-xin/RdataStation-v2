@@ -385,6 +385,51 @@ fn run_app() {
                     editor::commands::CopyRowValuesFromBelow,
                     Some(editor::commands::RESULT_GRID_CONTEXT),
                 ),
+                // 【第 70 批】取数与跳转（`plugin.xml:1069` / `:1091`，context 都是
+                // `...resultset.focused`）：
+                // `CTRL+ALT+N` = `CMD_FETCH_PAGE` → `readNextSegment()`（取下一段，
+                // 与状态栏「获取数据」钮同一条路）；`CTRL+G` = `CMD_GO_TO_ROW` →
+                // `GotoLineDialog`（本仓落到状态栏那口常驻行号框，`ENTER` 后焦点回网格）。
+                // 两条都只挂网格 context：`ctrl-g` 在本仓此前没有绑定，不覆写任何既有键。
+                KeyBinding::new(
+                    "ctrl-alt-n",
+                    editor::commands::FetchNextSegment,
+                    Some(editor::commands::RESULT_GRID_CONTEXT),
+                ),
+                KeyBinding::new(
+                    "ctrl-g",
+                    editor::commands::FocusRowJump,
+                    Some(editor::commands::RESULT_GRID_CONTEXT),
+                ),
+                // 【第 72 批】`CTRL+SHIFT+=` = `CMD_FETCH_ALL` → `readAllData()`
+                // （`plugin.xml:1070`）。DBeaver 点下去先过 `CONFIRM_RS_FETCH_ALL` 确认
+                // （`ResultSetViewer:4433-4440`），本仓同序：键只送 `AskFetchAll`，
+                // 弹确认浮层 → 用户点「继续」才真取。键名写物理键 `=`（shift 下打出 `+`，
+                // gpui 的 `Keystroke` 比的是规范化键名 + 修饰位，`platform/keystroke.rs:112`）。
+                KeyBinding::new(
+                    "ctrl-shift-=",
+                    editor::commands::FetchAllData,
+                    Some(editor::commands::RESULT_GRID_CONTEXT),
+                ),
+                // 【第 74 批】`CTRL+R` = `CMD_REJECT_CHANGES` → `rejectChanges()`
+                // （`plugin.xml:1083`；`ResultSetHandlerMain:313-314`）。DBeaver 在
+                // `!isDirty()` 时静默 return（`ResultSetViewer:4787-4789`），本仓键位层
+                // 留一句「没有可撤销的变更」（第 69 批口径）。回滚不写源库，所以不绑
+                // `editable` 前置（与 `ctrl-s` 提交不同）。
+                KeyBinding::new(
+                    "ctrl-r",
+                    editor::commands::RejectPendingChanges,
+                    Some(editor::commands::RESULT_GRID_CONTEXT),
+                ),
+                // 【第 75 批】`CTRL+SHIFT+G` = `CMD_GO_TO_COLUMN` → `askForColumnToGo`
+                // （`plugin.xml:1090`；`ResultSetHandlerMain:526-534`）。与 `CTRL+G` 的
+                // 行号跳转成对：那条复用状态栏常驻行号框，这条开面板内浮层（列名 /
+                // 1 基序号二选一）。`ctrl-shift-g` 此前没有绑定，不覆写任何既有键。
+                KeyBinding::new(
+                    "ctrl-shift-g",
+                    editor::commands::GotoColumn,
+                    Some(editor::commands::RESULT_GRID_CONTEXT),
+                ),
                 // 【第 60 批】同一条 `Ctrl+反引号` 再绑到**面板层**上下文：文本态下网格
                 // 整块不渲染，网格 context 不在焦点路径上；焦点落在面板根时靠这条命中
                 // （两层同时匹配时 gpui 按 context 深度取更深的网格那条，不会切两次）。

@@ -8593,6 +8593,598 @@ DBeaver 有整套：`plugin.xml:1073/1075/1079`（增删复制）+ `:1077/1078`�
 - 只读结果集上 DBeaver 的 `add` 仍可能因偏好 / 通道差异而亮（本仓一律灰）——
   与第 64 批的「有意收紧一档」同一条，不重复记。
 
+### 9.53 第 70 批：取数与跳转键位（`CTRL+ALT+N` / `CTRL+G`）
+
+#### 9.53.1 缺口
+
+「取下一段」与「跳到第 N 行」都只有鼠标入口——前者是状态栏那颗「获取数据」钮
+（`panel/render.rs:761-796`，只在 `status.has_more` 时摆），后者是状态栏常驻行号框
+（`lifecycle.rs:161-178` 的 `InputEvent::Change` → `ResultRequest::GoRow`）。
+键盘上两条都没有，而 DBeaver 两条都有专用键。
+
+#### 9.53.2 DBeaver 依据
+
+- 键位表（`plugin.xml:1056-1095`，context 全部是 `...resultset.focused`）：
+
+  | 键 | 命令 | 行号 |
+  | --- | --- | --- |
+  | `CTRL+ALT+N` | `fetch.page`（`CMD_FETCH_PAGE`） | `:1069` |
+  | `CTRL+SHIFT+=` | `fetch.all`（`CMD_FETCH_ALL`） | `:1070` |
+  | `CTRL+G` | `gotoRow`（`CMD_GO_TO_ROW`） | `:1091` |
+  | `CTRL+SHIFT+G` | `gotoColumn`（`CMD_GO_TO_COLUMN`） | `:1090` |
+
+- handler（`ResultSetHandlerMain`）：
+  - `CMD_FETCH_PAGE`（`:201-203`）→ `rsv.readNextSegment()`。
+  - `CMD_FETCH_ALL`（`:204-206`）→ `rsv.readAllData()`。
+  - `CMD_GO_TO_ROW`（`:496-525`）→ `GotoLineDialog`（`extends InputDialog`，
+    `:739-749`，尺寸落 settings）：初值 `currentRow.getVisualNumber() + 1`，
+    校验「不是数字 / 超出 1..rowCount」，OK 后 `setCurrentRow(newRow)` +
+    `scrollToRow(CURRENT)`。
+  - `CMD_GO_TO_COLUMN`（`:526-534`）→ `askForColumnToGo`（`:762-840`）：
+    输入框 + 内容辅助，接受列名（大小写不敏感）或 `1..n` 索引。
+- 取段的四道前置（`ResultSetViewer.readNextSegment:4377-4409`）：
+  `getQuickFilter() != null` → return（本地过滤态不许取）、`verifyQuerySafety()`、
+  `!isHasMoreData()` → return、`nextSegmentReadingBlocked` 防重入（异步在跑时再按无效）。
+  `readAllData:4426-4459`：`verifyQuerySafety()` + `!hasMoreData` → return +
+  **`ConfirmationDialog.confirmAction(..., WARNING, ResultSetPreferences.CONFIRM_RS_FETCH_ALL, QUESTION)`**
+  ——取全部有确认弹窗（偏好常量 `fetch_all_rows`，`ResultSetPreferences.java:113`）。
+
+#### 9.53.3 落地
+
+**动作**（`grid/mod.rs` 的 `actions!`，都只挂 `RESULT_GRID_CONTEXT`）：
+`FetchNextSegment` / `FocusRowJump`。
+
+**`CTRL+ALT+N` → `FetchNextSegment`**：
+
+- `ResultPanel::request_next_segment(cx)`（`panel/events.rs`）只做一件事：
+  `self.queue.request(ResultRequest::FetchMore, cx)`。
+- **判定不在这里重写**：宿主 `fetch_more`（`host/results/copy.rs:105-143`）已经
+  承担全部前置与提示——无结果 / 无 SQL、`can_fetch_more` 过滤为空时提示
+  「这份结果已经取完了」、提交成功后 `mark_fetching_more`。键位与状态栏那颗钮
+  走的是同一条路，第 70 批**没有**复制第二套门控（DBeaver 的四道前置在本仓的
+  对应物就是这一段）。
+- 不要求当前行（取段与选中无关，与 `fetch_all` 同理）。
+
+**`CTRL+G` → `FocusRowJump`**：
+
+- `ResultPanel::row_jump_focus(window, cx) -> Option<FocusHandle>`（`panel/events.rs`）：
+  `status` 为 `None`（还没执行过查询）返回 `None`；否则读
+  `status.selected_row.unwrap_or(1)`，把状态栏那口常驻框 `set_value("")` +
+  `set_placeholder(current)`，返回 `focus_handle`。
+- 宿主 `on_focus_row_jump`：拿不到句柄 → 状态栏提示「这份结果还没有行可跳；先执行查询」；
+  拿到 → `window.focus(&target, cx)`。
+- `row_count_input` 的订阅补 `InputEvent::PressEnter`（`panel/lifecycle.rs`）：
+  敲完回车把焦点交回网格。**这一步不做就废**——输入框吃掉焦点后网格键位全哑，
+  用户跳完行按 `ALT+INSERT` 毫无反应。
+- **不另造弹窗**：DBeaver 的 `GotoLineDialog` 在本仓没有对应物，但状态栏本来就
+  常驻一口行号框（`Change` 已经入队 `GoRow`），键位只是把焦点送进去 + 回车交回来。
+
+**焦点/取值上的取舍（与 DBeaver 的差异）**：DBeaver 是「预填当前行号 + 默认全选」，
+用户敲数字直接替换。本仓 **gpui-kit 的 `InputState` 对外没有 `select_all`**
+（`vendor/gpui-component/src/input/state.rs:214` 的 `select_all_from_edit_menu`
+是 `pub(crate)`，外面只拿到 `value` / `focus_handle`，`:325` / `:335`）。若照样预填，
+用户敲 `2` 会追加成 `22` 直接误跳 —— 所以**位置信息放 placeholder、value 留空**：
+用户看到「当前是第 N 行」的提示，输入即全新值。
+
+#### 9.53.4 验证
+
+- `the_fetch_page_key_asks_for_the_next_segment`（窗口用例，`results_a.rs`）：
+  先断言 `asked` 为空——**渲染路径自己会触发 `delegate.load_more`**
+  （见 `rendering_a_short_result_asks_for_more_by_itself`），不先钉死这一点就分不清
+  请求来自按键还是来自重绘。然后焦点给网格 → `ctrl-alt-n` → 断言
+  `asked == [(2, SEGMENT_ROWS)]`、行数 2 → 4、`has_more` 变 false、`set_count == 1`。
+- `the_goto_row_key_prepares_the_row_input_and_enter_returns_to_the_grid`
+  （窗口用例，`analysis.rs`）：焦点给网格、`set_selected_row(Some(1))` → `ctrl-g`
+  → 敲 `2` → 断言 `status().selected_row == Some(2)`（**这一条同时证明焦点真进了
+  输入框**：若 `2` 落在网格上，`DataTable` 不认数字键，`GoRow` 也入不了队）→
+  `enter` → `alt-insert` → 断言 `local_count == 1`（证明焦点回到网格、网格键位复活）。
+- 门禁：`cargo check -p rds-result-panel -p rds-editor --all-targets` Finished
+  无 warning、panel **408 passed**、editor **812 passed（1 ignored）**（810 → +2）、
+  ui-guard **4 passed**、`cargo check --workspace --all-targets` Finished
+  （并行线 `rds-notification` 2 条 never-used warning）。
+
+#### 9.53.5 遗留
+
+- **`CTRL+SHIFT+=`（`fetch.all`，`plugin.xml:1070`）有意未接**，两个理由都得先解决：
+  1. DBeaver `readAllData:4433-4440` 有 `CONFIRM_RS_FETCH_ALL` 确认弹窗，本仓
+     `FetchAll` 无确认；
+  2. `dispatch.rs:288-294` 的 `FetchAll` 分支注释写「循环 fetch_more 直到没有下一段」，
+     实现却只调一次 `self.fetch_more(cx)` ——「获取全部数据」钮实际只取一段。
+  这是既有缺口（不是本批引入），要同时补确认弹窗与真循环才谈得上绑键。
+- **`CTRL+SHIFT+G`（`gotoColumn`，`:1090`）未接**：DBeaver 是「输入框 + 内容辅助」，
+  按列名（大小写不敏感）或索引选列并滚动过去；本仓没有「选中某列并滚动」的现成
+  入口（列浏览器的搜索框是**过滤**语义，不是跳转）。
+- 取段后 `sync_result_view` 仍会清 `status.selected_row`（§9.52.5 第一条，同一缺口），
+  对这两个键影响有限（`CTRL+G` 读的是 `unwrap_or(1)`，当前行丢了就默认第 1 行）。
+- `fetch.page` 本仓常显、DBeaver 默认隐藏：既有有意差异，不因本批改。
+
+### 9.54 第 71 批：`FetchAll` 真循环（修「钮叫取全部、实际只取一段」）
+
+#### 9.54.1 缺口
+
+第 70 批取证时发现：`dispatch.rs` 的 `FetchAll` 分支注释承诺「循环 fetch_more 直到没有
+下一段」，实现却只调一次 `self.fetch_more(cx)`。状态栏那颗「获取全部数据」钮
+（`panel/render.rs:761-796`）按下去只多一行段——**名字与行为不符**，是既有 bug，
+与键位无关。
+
+#### 9.54.2 DBeaver 依据
+
+- `ResultSetViewer.readAllData:4426-4459`：`verifyQuerySafety()` → `!isHasMoreData()` 则
+  return → **`ConfirmationDialog.confirmAction(..., WARNING, ResultSetPreferences.CONFIRM_RS_FETCH_ALL, QUESTION)`**
+  → 通过后循环取到没有下一段。偏好常量 `fetch_all_rows`（`ResultSetPreferences.java:113`）。
+- 与 `readNextSegment:4377-4409` 的关系：取全部 = 「反复取下一段直到 `isHasMoreData()` 为假」，
+  不是另一条取数通道；前置判定（quickFilter / verifyQuerySafety / hasMoreData / 防重入）
+  两者共用。
+
+#### 9.54.3 落地
+
+**为什么不能写成 `while`**：本仓取段是**异步**的（`execute` 提交 → 工作线程 → 回填），
+`fetch_more` 返回时这一段的行还没到。所以循环拆成两半：
+
+| 半 | 位置 | 职责 |
+| --- | --- | --- |
+| 发起 | `fetch_all(cx)`（`results/copy.rs`） | 门控 → 提交首段 → 置 `fetching_all` |
+| 推进 | `advance_fetch_all(last_segment_failed, cx)`（同文件，**由 `pump.rs` 的回填块调**） | 本段回来后判「还有没有下一段」：有就再提交，没有就收口说一句 |
+
+调用点必须在 `sync_result_view` **之后**：下一段的 `offset` 取的是「已抓到的行数」，
+只有同步过才是新值（`pump.rs` 里排在 `advance_pending_export` 之后）。
+
+**单一提交点**：原 `fetch_more` 的函数体抽成 `submit_segment(&mut self, cx) -> bool`
+（无 SQL / 已取完的判定与提示都在里面，成功即 `mark_fetching_more`）。
+`fetch_more`、`fetch_all`、`advance_fetch_all` 全走它——不出现第二套「能不能取」的真值表。
+
+**在途状态**：`FetchAllProgress { set, segments }`（`host/mod.rs`）。
+
+- `set`：发起时 `ResultPanel::active()`。取段是 `Append` 落位，接到**当前选中**那份上；
+  中途切了结果集必须停（否则往另一份结果的尾巴上接行）——停时提示「取全部取消：结果集已切换」。
+- `segments`：已提交段数（含首段），给安全阀用。
+
+**两条互斥**（都在 `fetch_more` / `fetch_all` 入口处判，提示可读）：
+
+| 场景 | 行为 |
+| --- | --- |
+| 正在取全部时按「取下一段」/滚动到底 | 拒绝：「正在取全部数据（已取 N 段），稍等」。否则同一个 `offset` 会被提交两次、行重复 |
+| 导出正在抓全量时按任一取数 | 拒绝：「导出正在取数，先等它结束」。两条都是 `Append`，会互相打乱 offset |
+
+导出侧不需要改：`advance_pending_export` 自己直接 `execute(Segment)`，**不**调 `fetch_more`，
+所以这两道门控不会误伤导出。
+
+**安全阀（本仓差异）**：`FETCH_ALL_MAX_SEGMENTS = 100` 段（默认 1000 行/段 = 10 万行）。
+DBeaver 那边没有上限（它同步阻塞、用户能取消）；本仓异步无中断入口，源库若每段都报
+「还有」（比如视图在别的会话里持续增长）就是停不下来的循环。到顶停住并如实说
+「已取 N 段（M 行），先停在这里；要更多就把段大小调大再来」。
+
+#### 9.54.4 验证
+
+- `fetching_all_keeps_fetching_until_there_is_no_more`（三段 runner）：首段 2 行、
+  `has_more` 真；`ResultRequest::FetchAll` 入队 + drain 后，断言
+  `asked == [(2, SEGMENT_ROWS), (4, SEGMENT_ROWS)]`（**两次**提交，offset 各对）、
+  行数 6、`has_more` 假、`set_count == 1`、状态栏含「已取全部 6 行」。
+  为什么必须用三段 runner：两段的 runner 下「取全部」与「取下一段」都只发一次，分不出来。
+- `asking_for_all_after_the_end_only_says_so`（两段 runner）：先 `FetchMore` 取到底，
+  再 `FetchAll`，断言取段请求数不增、状态栏含「这份结果已经取完了」。
+- 门禁：`check -p rds-editor --all-targets` 无 error/warning；editor lib
+  **814 passed（1 ignored）**（812 → +2）；panel 未改动（仍 408）；ui-guard 与
+  workspace check 见本批提交说明。
+
+#### 9.54.5 遗留
+
+- **确认弹窗未做**（DBeaver `CONFIRM_RS_FETCH_ALL`）：当前按下去直接开始取。第 72 批补
+  面板内浮层（`panel/dialog.rs:149` 已声明「不是窗口级 dialog」，照 SQL 预览那套范式），
+  并在同一批接 `CTRL+SHIFT+=`（`plugin.xml:1070`）。
+- **导出启动侧未加互斥**：`fetch_all` 侧已拒绝「导出在跑」，但导出启动时没有反向检查
+  `fetching_all`（理论上用户可以在取全部途中点「导出全部」）。两条都进 `Append`，
+  会互相打乱 offset——第 72 批与确认弹窗一起收口。
+- 上限 100 段是自定值，不是 DBeaver 口径；若将来加了「取消取数」入口，可重新评估。
+
+### 9.55 第 72 批：`CTRL+SHIFT+=` 取全部 + `CONFIRM_RS_FETCH_ALL` 确认浮层
+
+#### 9.55.1 缺口
+
+第 71 批让「获取全部数据」真的循环了，但**按下去没有任何预警**：DBeaver 在
+`readAllData` 里第一件事就是确认对话框，本仓直接开跑——一份 10 万行的结果会被
+一次性抓进内存，用户点之前毫不知情。同时 `CTRL+SHIFT+=`（`fetch.all`）一直没绑。
+
+#### 9.55.2 DBeaver 依据
+
+- 键位：`plugin.xml:1070` `CMD_FETCH_ALL`（context `...resultset.focused`）。
+- 行为：`ResultSetHandlerMain.java:204-206` `CMD_FETCH_ALL` → `rsv.readAllData()`。
+- `ResultSetViewer.readAllData:4426-4459` 五步：
+  1. `verifyQuerySafety()`（`:4427`）；
+  2. `!dataReceiver.isHasMoreData()` → 静默 return（`:4430-4432`）；
+  3. `ConfirmationDialog.confirmAction(shell, WARNING, CONFIRM_RS_FETCH_ALL, QUESTION)`
+     ≠ YES → return（`:4433-4440`）；
+  4. `checkForChanges()`（`:4441`）；
+  5. `runDataPump(...)`（`:4445-4460`）。
+- 偏好项：`ResultSetPreferences.java:113` `CONFIRM_RS_FETCH_ALL = "fetch_all_rows"`；
+  定义在 `plugin.xml:1353-1356`（title / description / message 三条资源键）。
+- 文案（`OSGI-INF/l10n/bundle_zh.properties:161-162`）：
+  - 标题「读取所有行」；
+  - 正文「读取结果集中的所有行会**会**花费大量时间和内存。确定要获取所有行吗？」
+    （上游原文有重复字「会会」，本仓写作「会花费」，见 §9.55.4）。
+
+#### 9.55.3 落地：入口三分
+
+| 请求 | 谁发 | 谁处理 |
+| --- | --- | --- |
+| `ResultRequest::AskFetchAll` | 状态栏「获取全部数据」钮、`CTRL+SHIFT+=` | 宿主 `ask_fetch_all`：判完再决定弹不弹 |
+| `ResultRequest::FetchAll` | 只有确认浮层的「继续」 | 宿主先收浮层，再 `fetch_all`（真循环） |
+| `ResultRequest::CloseFetchAllConfirm` | 取消 / Esc / ✕ | 面板 `close_fetch_all_confirm`（只收标志） |
+
+**为什么判定放宿主**：「还有没有下一段 / 有没有执行错误」的真值在结果条目
+（`ResultEntry::can_fetch_more`，`error.is_none() && has_more`），面板只投影
+`status.has_more`，拿不到 error。`ask_fetch_all` 的四个前置：
+
+1. `fetching_all` 在跑 → 「正在取全部数据（已取 N 段），稍等」；
+2. `fetching_more` 在途 → 「正在取下一段，等它回来再取全部」；
+3. `entry.error` 有值 → 「这份结果执行出错了；修好再试取全部」（与「取完了」分开说）；
+4. `!entry.has_more` → 「这份结果已经取完了（共 N 行）」（对齐 DBeaver `:4430` 的
+   静默 return，但本仓键位层留提示，第 69 批口径）。
+
+**按钮也改了口**：`panel/render.rs` 的 `fetch_all` 钮第 71 批发的是 `FetchAll`（直接开跑），
+本批改成 `AskFetchAll`——与键位同一条入口，否则「点按钮不确认、按键要确认」自相矛盾。
+
+#### 9.55.4 确认浮层
+
+范式与 SQL 预览 / 筛选设置一致：面板内 `absolute().inset_0()` 遮罩 +
+居中卡片（`dialog.rs::render_fetch_all_confirm`），**不是**窗口级 `AlertDialog`
+（理由同 `render_filter_settings` 的注释：面板 render 拿不到 `&mut Window`）。
+
+- 状态：`ResultPanel.fetch_all_confirm_open`（`panel/data.rs`，出厂 false，
+  `panel/lifecycle.rs` 初始化）；
+- 打开 / 关闭都是 `pub fn`（`panel/events.rs`），开关幂等；
+- 渲染挂在面板根的最后（与另外两层浮层同侧），整段 `then()` 条件渲染；
+- 宽度 `ui::RESULT_FETCH_ALL_CONFIRM_WIDTH = 28.0`（448px）：比筛选设置（35rem）
+  还窄一档——DBeaver 那边是系统确认框，本来就不宽。
+
+**有意差异**：
+- 正文把上游的「会会花费」修成「会花费」（重复字是笔误，照抄没意义）；
+- 多一句「当前已取 N 行，新抓到的行会接在后面」：DBeaver 只说「会花时间和内存」，
+  用户点之前其实不知道规模；
+- 页脚提示「取数期间切换结果集会取消这次取全部」（对应 `advance_fetch_all` 的
+  切结果集即停）。
+
+**没做的**：偏好项 `fetch_all_rows` 没建模——当前**每次必问**，不能像 DBeaver
+那样「问过一次就不再问」。要接得先补「结果集偏好」的设置页下发链路
+（§9.32.3 / §9.34.3 记的是同一个缺口）。
+
+#### 9.55.5 顺手补的互斥：`fetch_all` 侧也要查 `fetching_more`
+
+第 71 批只做了「取全部 / 导出」方向（取全部在跑时拒绝取段、拒绝导出），反向没做：
+`fetching_more` 在途时点「取全部」，`submit_segment` 拿的 `offset` 是「已抓到的行数」，
+在途那一段还没回填 → 同一个 offset 被两个请求各提交一次，行重复。
+
+这是本批写用例时撞出来的真缺口（测试里表现为 `asked` 里出现两条同样的 `(2, …)`）。
+补在第 72 批：`fetch_all` 与 `ask_fetch_all` 都先判 `fetching_more`，各自给一句
+「等它回来」。DBeaver 的对应机制是 `nextSegmentReadingBlocked`
+（`ResultSetViewer:4384` 的第三道 return），粒度比本仓粗，但意图一致。
+
+#### 9.55.6 验证
+
+| 用例 | 钉住什么 |
+| --- | --- |
+| `the_fetch_all_key_asks_before_it_starts`（editor） | 键位命中（`ctrl-shift-=`）+ 只弹确认、一行没取 |
+| `confirming_the_prompt_starts_the_fetch_all`（editor） | 「继续」之后真的跨轮取到没有下一段，且浮层被收掉 |
+| `the_fetch_all_key_after_the_end_only_says_so`（editor） | 到底时按键**不弹**浮层，只留提示 |
+| `fetch_all_confirm_renders_only_while_open`（panel） | 遮罩 / 卡片 / 正文 / 两颗按钮随开关整段出现与消失 |
+
+**editor 三条为什么要掐「渲染自动补齐」**：短结果（2 行 + `has_more`）一重绘，
+网格的 `load_more` 就会自己取下一段（`rendering_a_short_result_asks_for_more_by_itself`
+钉的就是这个**有意**行为）；而打开浮层必然让面板重绘。用例里调
+`delegate_mut().set_has_more(false)` 只关 delegate 侧（store 里仍是真，所以
+`ask_fetch_all` 照样该弹），把那条旁路摘掉，观察的就只剩「键位 → 确认 → 真取」。
+
+键名说明：`ctrl-shift-=` 写的是**物理键** `=`（shift 下打出 `+`）。gpui 的匹配是
+「修饰位相等 + 规范化键名相等」（`gpui-pre-0.3.11/src/platform/keystroke.rs:112`），
+`KeyBinding::new` 的 `=` 与平台事件的 `=` 同一份键名，所以不用写 `+`。
+
+门禁（第 72 批）：pair check `Finished` 无 warning；editor lib
+**817 passed（1 ignored）**（814 → +3）；panel **409 passed**（408 → +1）；
+ui-guard **4 passed**；workspace check `Finished`
+（2 warning 全来自并行线 `rds-notification`）。
+
+#### 9.55.7 遗留
+
+- 偏好项 `CONFIRM_RS_FETCH_ALL` 未建模（每次必弹）；
+- 导出**启动侧**现已反查 `fetching_all`（第 73 批闭合，见 §9.56.2）；
+- 短结果上「取全部」意义有限（自动补齐会先把它取完），本批不改自动补齐行为；
+- `CTRL+SHIFT+=` 在文本呈现态（无网格焦点）不生效——与 `CTRL+ALT+N` 同一口径。
+
+### 9.56 第 73 批：取全部 / 导出互斥矩阵闭合
+
+#### 9.56.1 缺口
+
+第 71 批定了「取全部期间拒绝取段、拒绝导出」，第 72 批补上反向（`fetch_all` /
+`ask_fetch_all` 都先判 `fetching_more`）。但**导出入口**那一侧始终没有反查
+`fetching_all`——第 72 批的 §9.55.7 就记着这条遗留。
+
+为什么是真缺口，而不是「反正 `is_executing()` 会拦住」：
+
+1. **段与段之间通道是空闲的**。取全部是「提交一段 → 回填 → 再提交」，回填那一刻
+   `pending == 0`、`is_executing()` 会短暂为 false。这个窗口里点导出，`start_export`
+   会认为通道空闲，直接 `write_export`——落到盘上的是**半截结果**。
+2. **两条都是 `Append` 取段，各算各的 offset**（都取「已抓到的行数」），一起跑就会
+   重复抓同一段，行重复。
+
+第二个缺口是上一批留下的不对称：`ask_fetch_all` 判了 `fetching_all` 与 `fetching_more`，
+唯独没判 `pending_export`。导出抓全量期间按「取全部」，浮层照样弹出，用户点「继续」
+才被 `fetch_all` 的 `pending_export` 判定拒——白走一趟。
+
+#### 9.56.2 落地
+
+两处都只加判定，不改行为：
+
+| 位置 | 新判据 | 文案 |
+| --- | --- | --- |
+| `results/export.rs::start_export` | `fetching_all` 为 Some | 「正在取全部数据（已取 N 段），等它结束再导出」 |
+| `results/copy.rs::ask_fetch_all` | `pending_export` 为 Some | 「导出正在取数，先等它结束」 |
+
+**判据顺序是有意的，两处都别乱挪**：
+
+- `start_export` 里 `fetching_all` 判在 `is_executing()` **之前**。反过来的话用户只看到
+  「执行中，稍候再导出」——听起来像等一下就好，实际取全部可能还要跑很久；而且
+  「通道被别的文档占着」与「本仓自己在续段」是两件事，提示该说清是谁。
+- `ask_fetch_all` 里 `pending_export` 判在 `fetching_more` **之前**。导出抓全量期间也会
+  置 `fetching_more`，先说它的话提示会变成「正在取下一段」，用户不知道那段其实是
+  自己刚点的导出在跑。
+
+#### 9.56.3 互斥矩阵（本批后完整）
+
+| 入口 | `fetching_all` | `fetching_more` | `pending_export` |
+| --- | --- | --- | --- |
+| `fetch_more`（取下一段） | 拒（§9.54） | —（自己就是发起方） | 拒（§9.54） |
+| `ask_fetch_all`（钮 / 键位） | 拒（§9.55） | 拒（§9.55.5） | 拒（**本批**） |
+| `fetch_all`（浮层「继续」） | 拒（§9.55） | 拒（§9.55.5） | 拒（§9.54） |
+| `advance_fetch_all`（回填推进） | —（自己是持有方） | —（回填即清） | 让出（§9.54） |
+| `start_export`（导出入口） | 拒（**本批**） | 由 `is_executing` 覆盖 | —（自己就是发起方） |
+| `advance_pending_export`（导出推进） | 让出（§9.54） | — | —（自己是持有方） |
+
+「让出」= 静默放弃自己那条循环。「拒」= 留一句可读提示。矩阵里没有空格了；
+以后再加取数类入口，先在这张表上找自己那一行。
+
+#### 9.56.4 验证
+
+| 用例 | 钉住什么 |
+| --- | --- |
+| `exporting_while_fetching_all_is_refused`（editor） | 取全部在跑时导出**连路径都不问**，提示说清是谁占着通道；收尾确认 6 行取完、导出没留状态 |
+| `asking_for_all_while_the_export_is_fetching_says_so`（editor） | 导出抓全量时按键**不弹浮层**，提示是「导出正在取数」而不是「正在取下一段」 |
+
+两条用例都用 `asked`（取段请求序列）当证据：
+
+- 第一条：起取全部后不发导出，`picked` 为空（导出没走到选路径那一步）；收尾
+  `asked == [(2, SEGMENT_ROWS), (4, SEGMENT_ROWS)]`，证明这次导出没打断取全部。
+- 第二条：导出抓全量后 `asked == [(2, SEGMENT_ROWS)]`（前置：导出自己占着取段），
+  收尾 `asked == [(2, …), (4, …)]`（导出跨轮抓完、取全部一次都没发）。
+
+**踩坑**：别拿 `export_pending_for_test()` 当 `pending_export` 的证据——它读的是
+`export_pending`，那是「还没回执的 DuckDB 导出数」（`format.rs:316-324`），与
+「导出正在抓全量」的 `pending_export` 是两件事。首跑就栽在这上面（断言 `1`，实得 `0`）。
+
+#### 9.56.5 遗留
+
+- 偏好项 `CONFIRM_RS_FETCH_ALL` 仍未建模（每次必弹，§9.55.7 的同一项）；
+- 短结果上「取全部」意义有限（渲染自动补齐会先取完），行为不改；
+- 取全部没有「取消」：本仓只能等它跑完或切结果集。DBeaver 侧是「任务被取消 + 超时兜底」
+  （`ResultSetJobDataRead.java:182-197` 读 `RESULT_SET_CANCEL_TIMEOUT`，偏好项在
+  `ResultSetPreferences.java:46`），本仓执行通道没有中断能力，要做另开批次。
+
+### 9.57 第 74 批：`CTRL+R` 撤销未提交变更（`CMD_REJECT_CHANGES`）
+
+#### 9.57.1 缺口
+
+`plugin.xml:1083` 的 `CTRL+R` 是 `rejectChanges`，本仓工具栏一直摆着「回滚」钮
+（`panel/render.rs` 的 `editor-result-discard`）但没绑键：能点不能按。§9.55/§9.56 两批
+把取数类键位补完之后，提交/回滚这一对里只剩它是空的（`CTRL+S` 提交在第 68 批已绑）。
+
+#### 9.57.2 DBeaver 依据
+
+- 键位：`plugin.xml:1083` `CTRL+R`（context `...resultset.focused`）。
+- 命令：`IResultSetCommands.java:53` `CMD_REJECT_CHANGES =
+  "org.jkiss.dbeaver.core.resultset.rejectChanges"`。
+- handler：`ResultSetHandlerMain.java:313-314` → `rsv.rejectChanges()`。
+- `ResultSetViewer.rejectChanges:4785-4804`：
+  1. `!isDirty()` → **静默 return**（`:4787-4789`）；
+  2. `getActivePresentation().rejectChanges()`（`:4790`）；
+  3. `createDataPersister(true).rejectChanges()`（`:4795`）；
+  4. `undoRedoManager.clear()`（`:4796`）；
+  5. 行集合空了就把当前行/选中行一并清掉（`:4797-4800`）。
+- `ResultSetPersister.rejectChanges:372-392`：逐格把值还原成旧值 + `row.clearChanges()`。
+
+#### 9.57.3 落地
+
+| 层 | 东西 |
+| --- | --- |
+| action | `result_panel::grid::RejectPendingChanges`（`grid/mod.rs`，与既有一组键位动作同处） |
+| 面板入口 | `ResultPanel::request_rollback_pending`（`panel/events.rs`）：只入队 `ResultRequest::RollbackPending` |
+| 宿主处理器 | `EditorHostPanel::on_reject_pending_changes`（`exec/edit_cmds.rs`）：转一次请求，不带判定 |
+| 键位 | `ctrl-r` → `RESULT_GRID_CONTEXT`（`crates/app/src/main.rs` + 测试里的 `bind_editor_keys`） |
+
+**不另写判定**：回滚的行为（清什么、留什么）在 `discard_pending_changes`
+（`host/editor_body.rs`），钮与键位共用同一段；键位只多一层「不可用留提示」。
+
+**不要求 `editable`**：回滚只丢本地改动、不写源库，只读结果集上按下去也只是得到
+「没有可撤销的变更」。这一点与 `CTRL+S`（提交）刻意不同——那条要求可编辑。
+
+#### 9.57.4 顺手修的缺陷：`discard_pending_changes` 的原判据是死分支
+
+原实现：
+
+```rust
+let changed = self.shared.update_results(|store| {
+    store.mutate_change_set(&self.document, index, |changes| changes.discard_pending())
+});
+if changed { /* 已撤销 */ } else { /* 没有可撤销 */ }
+```
+
+`mutate_change_set` 返回的是「**变更集在不在**」（`store/store.rs:522-536`：找到槽位就
+执行闭包再 `true`），`ChangeSet::discard_pending` 自己返回 `()`（`changes.rs:126-129`）。
+所以 `changed` 与「撤销掉了东西」毫无关系，`else` 分支只有在「连变更集都没有」时才可能
+走到。
+
+**为什么一直没暴露**：工具栏那颗钮只在 `pending_changes > 0` 时才摆（`render.rs:697`），
+按下去必然有东西可撤销。键位才第一次把「0 条」变成可达状态——用例一跑就撞上了
+（首跑失败：期望「没有可撤销的变更」，实得「已撤销未提交的变更」）。
+
+修法：先读 `change_set(...).pending_count()` 再决定提示，然后无条件执行
+`discard_pending()`（0 条时它是 no-op）。
+
+#### 9.57.5 有意差异
+
+- DBeaver 还 `undoRedoManager.clear()`（`:4796`）：本仓没有**结果编辑**的 undo 栈
+  （undo/redo 是文本内核的，`UndoResultEdit`/`RedoResultEdit` 走的是编辑器历史），
+  所以这一步无对应物，不做。
+- DBeaver `!isDirty()` 静默 return；本仓键位留一句「没有可撤销的变更」（第 69 批口径）。
+- DBeaver 回滚后若行集合空了会清当前行（`:4797-4800`）；本仓清的是待提交项、行本身
+  还在，不需要这一步。
+
+#### 9.57.6 验证
+
+用例 `the_reject_key_discards_pending_but_keeps_conflicts`（editor，`view/tests/analysis.rs`）
+一条走两态：
+
+1. 无待提交时按 `ctrl-r` → 提示「没有可撤销的变更」，变更集不动；
+2. 预置 1 条待提交 + 1 条冲突后再按 → `pending_count == 0`、`conflicts == [(1, 1)]`
+   （冲突是证据，不抹掉），提示「已撤销未提交的变更」。
+
+焦点必须先交给网格（`ctrl-r` 只挂 `RESULT_GRID_CONTEXT`）——`run_orders_result` 结束时
+焦点在面板根，直接发键不会命中。
+
+门禁（第 74 批）：pair check `Finished` 无 warning；editor lib **820 passed（1 ignored）**
+（819 → +1）；panel **409 passed**；ui-guard **4 passed**；workspace check `Finished`
+（2 warning 全来自并行线 `rds-notification`）。
+
+#### 9.57.7 遗留
+
+- `CTRL+R` 在文本呈现态（无网格焦点）不生效——与 `CTRL+ALT+N` / `CTRL+SHIFT+=` 同口径；
+- 取全部 / 导出 / 提交进行中时按 `CTRL+R` 没有额外互斥：回滚只动本地变更集，
+  与那几条在途动作不共享 offset 或文件，不需要；
+- `SHIFT+ENTER`（外部值编辑器）、`ESC`（`cell.reset`）、`CTRL+BACKSPACE`
+  （`CMD_CELL_SET_DEFAULT`）、`CTRL+ALT+C` / `CTRL+ALT+R`（选列 / 选行）、
+  `ALT+SHIFT+ARROW`（移列）仍未接，见 §9.48.5 的清单。
+
+### 9.58 第 75 批：`CTRL+SHIFT+G` 跳转到列（`CMD_GO_TO_COLUMN`）
+
+#### 9.58.1 缺口
+
+`plugin.xml:1090` 的 `CTRL+SHIFT+G` 是 `CMD_GO_TO_COLUMN`，本仓一直没绑。列浏览器里
+「双击定位」只把网格滚到**首行**（`locate_column`），键盘上没有「去哪一列」的入口。
+`CTRL+G`（行号跳转）在第 70 批落地，这一条是它成对的另一半。
+
+#### 9.58.2 DBeaver 依据
+
+- 键位：`plugin.xml:1090` `CTRL+SHIFT+G`（context `...resultset.focused`）；右键「导航」段
+  也挂这两条（`ResultSetViewer:3620-3621` navigateMenu）。
+- 命令：`IResultSetCommands.java:71` `CMD_GO_TO_COLUMN =
+  "org.jkiss.dbeaver.core.resultset.grid.gotoColumn"`。
+- handler：`ResultSetHandlerMain.java:526-534` → `askForColumnToGo(...)`，成功则
+  `setCurrentAttribute(target)` + `scrollToRow(CURRENT)`（**纵向**滚回当前行，不是跳首行）。
+- `ResultSetHandlerMain.askForColumnToGo:762-849`：
+  1. `attrsByName` 用 `name.toUpperCase()` 建映射（`put`：重名后到覆盖）；
+  2. 先按**名字**查；查不到再 `parseInt`，合法范围 `1..=attributes.length` 后取
+     `attributes[index-1]`；
+  3. 都不中 → `"Unknown column name"`；
+  4. 初值 = 当前属性名（`initialValue = currentAttribute.getName()`）；
+  5. 输入框带内容补全（`ContentAssistUtils.installContentProposal`：后缀匹配 + 前缀优先）。
+- 文案：`bundle_zh.properties:252-255`「跳转到列」/「跳转到指定列」。
+
+#### 9.58.3 入口形态：面板内浮层 vs 复用状态栏行号框
+
+两种落法的代价都摆过：
+
+| 方案 | 代价 |
+| --- | --- |
+| A 把状态栏那口 `row_count_input` 扩成行列双输入 | 中段只有一格宽（`RESULT_ROW_COUNT_BOX_WIDTH`），塞两个框要么改布局常量，要么和「行号即时跳」打架——那口的 `Change` 是**边打边跳**，列名不能边打边跳 |
+| B 面板内浮层 + 常驻 `InputState` | 多一组字段 / 订阅 / 一个遮罩层；但语义干净（Enter 提交、Esc 关），且与「取全部确认」「筛选设置」同一套范式 |
+
+选 B。`InputState::new` 要 `&mut Window`，所以输入框在**构造期**建好
+（`goto_column_input`），打开时只回填 placeholder + 交焦点——同 `row_count_input` 的做法。
+
+#### 9.58.4 落地
+
+| 层 | 东西 |
+| --- | --- |
+| action | `result_panel::grid::GotoColumn` |
+| 宿主处理器 | `EditorHostPanel::on_goto_column`（`exec/edit_cmds.rs`）：直接调 `ResultPanel::open_goto_column`；没列可跳留提示（与 `CTRL+G` 的 `on_focus_row_jump` 同构） |
+| 面板打开 | `ResultPanel::open_goto_column`：清 value / 错误 → 当前列名进 placeholder → `window.focus` 交给输入框 |
+| 面板提交 | `ResultPanel::submit_goto_column`：解析 → 命中跳 + 收浮层 + 焦点回网格；未命中把原因留在浮层（**不关**） |
+| 面板关闭 | `ResultPanel::close_goto_column`：收开关 + 焦点回网格 |
+| 端口 | `ResultRequest::SubmitGotoColumn` / `CloseGotoColumn`（浮层钮与 Esc 只有 `&App`，拿不到 window） |
+| 渲染 | `panel/dialog.rs::render_goto_column` + `panel/render.rs` 第四层浮层；宽度 `ui::RESULT_GOTO_COLUMN_WIDTH = 24.0` |
+| 键位 | `ctrl-shift-g` → `RESULT_GRID_CONTEXT`（`app/main.rs` + 测试 `bind_editor_keys`） |
+
+解析是纯函数 `goto_column_target(&self, input, cx) -> Result<usize, String>`：先名字
+（`eq_ignore_ascii_case`）→ 再 1 基序号 `1..=列数` → 不然「未知列名：…」。
+
+Enter 与浮层「跳转」钮同一终点：前者在面板订阅里有 window，直接调 `submit_goto_column`；
+后者经端口回宿主 `dispatch_result_request` 再调同一个方法。
+
+#### 9.58.5 列映射与顺手修的两处 off-by-one
+
+`set_selected_cell` / `set_selected_col` 收的是**组件列**（0 是行号槽，与
+`grid/table_impl.rs` 的 `data_column(col_ix - 1)` 同一口径），而 `delegate.view_column(data_col)`
+返回**显示列**（0 基数据区）。所以正确落点是 `view_col + 1`。
+
+顺手发现两处既有调用少加了这 1：
+
+- `ResultPanel::select_column`（列浏览器单击）：`set_selected_col(view_col)` → 网格列高亮
+  左移一格，选第 1 列时整列选中落在行号槽上；
+- `ResultPanel::locate_column`（列浏览器双击）：`set_selected_cell(0, view_col)` → 同样左移。
+
+两处都改成 `view_col + 1`。既有用例不受影响
+（`group_move_buttons_queue_the_request_for_the_selected_column` 只读 `selected_col`
+这个**数据列序**字段，与组件列无关）。
+
+#### 9.58.6 有意差异
+
+- 上游是 `InputDialog`（模态窗口），本仓是面板内遮罩卡片（与 SQL 预览 / 筛选设置 / 取全部确认同范式）。
+- 上游预填当前属性名且默认全选；本仓放 placeholder（`InputState` 无 `select_all`，预填会拼串，与第 70 批行号框同一条理由）。
+- 上游带内容补全；本仓 `InputState` 无补全通道。
+- 重名：上游 `put` 后到覆盖，本仓取**第一个**（列序稳定，跳转结果可预期）。
+- 隐藏列：上游没有隐藏列这层；本仓命中的列若在显示序里隐藏（`view_column` 返回 `None`），
+  报「已隐藏，先在列浏览器里取消隐藏」，不做「跳过去顺手取消隐藏」。
+- 「未知列名」文案中文化并带上输入值（上游只有一句 `Unknown column name`，不细分越界 / 打错）。
+- `locate_column`（列浏览器双击）仍落**首行**，`goto_column` 落**当前行**：前者是清单定位的
+  既有行为，本批不动，只修列号。
+
+#### 9.58.7 验证
+
+panel（`panel/tests.rs`）：
+
+- `goto_column_target_matches_its_name_then_its_one_based_index`：名字 / 大小写 / 两端空白 /
+  1 基序号 / 越界 / 未知 / 空；
+- `the_goto_column_overlay_jumps_and_keeps_the_current_row`：开 → 遮罩与「跳转」钮挂上 →
+  输「amount」提交 → `selected_cell == Some((1, 2))`（行保持 1、组件列 2）→ 浮层收掉；
+- `an_unknown_column_keeps_the_overlay_open_with_the_reason`：未知列名不关浮层、错误行渲染；
+  改成合法序号再提交成功。
+
+editor（`view/tests/results_a.rs`）：
+
+- `the_goto_column_key_opens_the_overlay_and_selects_the_named_column`：`ctrl-shift-g` → 浮层真挂到
+  渲染树（`dialog_button_rendered`）→ 输「note」→ 走浮层端口 `SubmitGotoColumn` →
+  `selected_cell == Some((0, 2))`；
+- `the_goto_column_key_without_a_result_only_says_so`：没有结果时提示「还没有列可跳」。这条
+  **直接调 action 方法**而不是 `simulate_keystrokes`——没有结果时结果区整块不渲染、网格不在
+  焦点路径上，键位走不到。
+
+门禁（第 75 批）：pair check `Finished` 无 warning；editor lib **822 passed（1 ignored）**
+（820 → +2）；panel **412 passed**（409 → +3）；ui-guard **4 passed**；workspace check
+`Finished`（2 warning 全来自并行线 `rds-notification`）。
+
+#### 9.58.8 遗留
+
+- 文本呈现态（无网格焦点）不生效——与同行号跳转同口径；
+- 内容补全 / 预填全选两项等 `InputState` 能力补齐再谈（不是本批的取舍）；
+- 列浏览器双击仍落首行（见 §9.58.6）；
+- **Esc 关闭依赖事件冒泡**：`InputState` 的 `clean_on_escape` 默认 **false**
+  （`gpui-base/input/base/state.rs:1099`），单光标 / 单选区时 Esc 走到 `cx.propagate()`
+  （`:2607`），遮罩的 `on_key_down` 才收得到；多选区 / 行内补全途中会被输入内核先吃掉
+  （`:2577-2600`）——这与「输入框里 Esc 先清自己的态」一致，不算缺陷。
+  **本批没有加 Esc 的窗口用例**：既有四个浮层（SQL 预览 / 取全部确认 / 筛选设置 / 跳列）
+  共用同一套 handler，`panel/tests.rs` 里也只有列浏览器搜索框那条 Esc 用例
+  （`column_browser_filter_clears_on_escape`），补测留待统一处理；
+- `SHIFT+ENTER`、`ESC`（`cell.reset`）、`CTRL+BACKSPACE`、`CTRL+ALT+C` / `CTRL+ALT+R`、
+  `ALT+SHIFT+ARROW` 仍未接，见 §9.48.5。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
