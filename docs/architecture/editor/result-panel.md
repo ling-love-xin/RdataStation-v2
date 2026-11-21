@@ -8193,6 +8193,7 @@ assert!(std::time::Instant::now() < deadline, "后台线程未在 3s 内{what}")
 #### 9.47.5 遗留
 
 - 状态栏「修改」钮仍未感知「已删行」（`is_deleted` 目前只接给了整颗 delete 钮）；
+  **已由第 66 批补上，见 §9.49**。
 - `CMD_CELL_SET_NULL` / `CMD_CELL_SET_DEFAULT` / `CMD_CELL_RESET` 未做（本仓无 NULL / 默认值 /
   单格撤销语义，见 §9.44.5）；
 - 属性级只读模型（列级可编辑性）缺失，`getAttributeReadOnlyStatus` 那条落不了。
@@ -8272,8 +8273,73 @@ assert!(std::time::Instant::now() < deadline, "后台线程未在 3s 内{what}")
   需逐段对照 DBeaver 的 `setEnabled` 调用点（未做，避免一次性铺开）。
 - 菜单灰项的**视觉**（前景色/悬停）由组件主题决定，headless 只锁数据层（`disabled` 布尔）与
   编译级接线（`PopupMenuItem::disabled` 存在）。
-- 9.47.5 的三条遗留仍在（状态栏「修改」钮不感知已删行、`SET_NULL`/`SET_DEFAULT`/`CELL_RESET`、
-  列级只读模型）。
+- 9.47.5 的三条遗留仍在（状态栏「修改」钮不感知已删行（**第 66 批已补，见 §9.49**）、
+  `SET_NULL`/`SET_DEFAULT`/`CELL_RESET`、列级只读模型）。
+
+### 9.49 第 66 批：状态栏「修改」钮也看行状态（当前格 ≠ 当前行）
+
+#### 9.49.1 缺口
+
+同一个动作在两个入口两种态度：右键「修改单元格」在第 65 批已按 `is_deleted` 灰掉，
+状态栏那颗 `editor-result-edit-cell` 仍只看「呈现 + 有没有数据格」，已删行上照样亮着——
+点下去 `begin_edit` 拒绝，界面毫无反应。
+
+#### 9.49.2 DBeaver 依据（与 §9.48.1 同族）
+
+`PROP_EDITABLE` 的 `"edit"` / `"inline"` 分支（`ResultSetPropertyTester.java:127-136`）看的是
+`getCurrentAttribute()` 与 `presentation instanceof IResultSetEditor`，**不看**行状态；
+`"inline"` 另加 `getAttributeReadOnlyStatus(attr, true, false) == null`。
+行状态在那边只由 `CMD_CELL_RESET` 处理（`fillEditMenu:3536` →
+`ResultSetModel.resetCellValue:572-577`，`STATE_REMOVED` → `STATE_NORMAL`）。
+
+本仓没有「重置单元格 / 撤销删除」这条命令通道，`grid/edit.rs` 的 `begin_edit` 直接拒绝已删行
+⇒ 只能灰。**这是本仓有意收紧一档**，与第 65 批右键那条同一口径，不是对齐。
+
+#### 9.49.3 落地：两个不同的「当前位置」
+
+写这条时踩了一次口径错误，值得记下来：
+
+- `selection_pos: Option<(row, col)>` = **当前格**（`TableEvent::SelectCell` 写入，
+  `lifecycle.rs:370-374`），对应 DBeaver 的 `getCurrentAttribute()`；
+- `status.selected_row`（**1 基**）= **当前行**（宿主 `set_selected_row` 同步，
+  `events.rs:2057-2060`），对应 `getCurrentRow()`。
+
+「修改单元格」钮属于前者（`picked` 一直就是 `selection_pos` 算的），所以**「这一行已删」也必须
+同源**：
+
+```rust
+let selected = self.selection_pos;
+let picked = selected.is_some_and(|(_, col)| col > 0);
+let cell_deleted = selected.is_some_and(|(row, _)| grid.delegate().is_deleted_row(row));
+let disabled = !can_edit_cell(self.editable, transposed, picked) || cell_deleted;
+```
+
+tooltip 因此多一态（四态）：记录视图 → 没选数据格 → 已删行（「这一行已标记删除；撤销删除后才能修改」）
+→ 正常。
+
+**首版用的是 `status.selected_row`**，测试立刻抓出来：选中已删行 → 灰（对）；改选未删行 →
+`status.selected_row` 还是旧值（宿主没在测试里同步）→ 仍然灰（错）。两个来源混用会在真实场景里
+表现为「换了格但钮不亮」，所以这里不是「测试造数不全」，而是**判据取错了源**。
+
+行级三钮（新增 / 复制 / 删除）仍取 `status.selected_row`——它们对应 `getCurrentRow()`，
+与「当前格」无关（`row_action_state` 的 `has_current_row`），两者不要混。
+
+#### 9.49.4 验证
+
+- 新增 `edit_row_button_is_disabled_on_a_deleted_row`（面板级，三段）：
+  选中已删行的数据格 → `disabled() == Some(true)`；改选未删行同一列 → `assert_ne!(…, Some(true))`；
+  清空叠加层后再选回那一行 → 恢复可用。
+- 第 58 批的记录视图用例保持全绿（那条守的是「呈现 + 当前属性」，与本批的「行状态」正交）。
+- 门禁：panel **405 passed**、editor **805 passed（1 ignored）**、ui-guard **4 passed**、
+  `cargo check --workspace --all-targets` Finished（仅并行线 2 条 never-used warning）。
+
+#### 9.49.5 遗留
+
+- 本批只统一了「修改」钮；`filters` / 布局段的灰项判定（§9.48.5 第 1 条）仍在。
+- 「撤销删除」在 UI 上只有组合撤销（`undo_row_action`，格级栈优先、空再走行级），状态栏
+  `undo` / `redo` 两颗默认隐藏（DBeaver `plugin.xml:1381-1397` 同为 false）——用户要先在
+  配置菜单里勾出来才点得到。是否给它们接可用态（栈空时灰）另议。
+- `SET_NULL` / `SET_DEFAULT` / `CELL_RESET` 与列级只读模型仍未做（§9.47.5）。
 
 ## 8. 协作纪律
 

@@ -2753,8 +2753,8 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 门禁基线（第 64 批后）：result_panel **403 passed**、editor lib **805 passed（1 ignored，
   默认并发）**、ui-guard **4 passed**、check Finished（并行线 `rds-notification` 2 条
   never-used warning，与本线无关）。
-- **仍未接**：状态栏「修改」钮不感知已删行；`SET_NULL` / `SET_DEFAULT` / `CELL_RESET` 无对应语义；
-  列级只读缺失。
+- **仍未接**：状态栏「修改」钮不感知已删行（**第 66 批已补，见 §2.117**）；
+  `SET_NULL` / `SET_DEFAULT` / `CELL_RESET` 无对应语义；列级只读缺失。
 
 ### 2.116 右键菜单「灰项」的接手要点（2026-11-21）
 
@@ -2781,6 +2781,29 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   never-used warning，与本线无关）。
 - **未做**：`filters` / 布局段仍用「不摆」表达不可用，是否统一成灰项要逐段对照 DBeaver 的
   `setEnabled` 调用点，别一次性铺开。
+
+### 2.117 状态栏「修改」钮的行状态判据（2026-11-21）
+
+- **判据取当前格，不取当前行**：`panel/render.rs` 的 `edit_row` 闭包用
+  `selected = self.selection_pos` 算 `picked`（`col > 0`）与 `cell_deleted`
+  （`grid.delegate().is_deleted_row(row)`），**不要**改用 `status.selected_row`。
+  两者是两个来源：`selection_pos` 由 `TableEvent::SelectCell` 写（`lifecycle.rs:370-374`），
+  `status.selected_row` 由宿主 `set_selected_row` 写（`events.rs:2057`）。混用会在
+  「换了格但 currentRow 还是旧的」时让钮不亮。
+- **对应 DBeaver 的两个不同方法**：「修改单元格」= `getCurrentAttribute()`
+  （`ResultSetPropertyTester.java:127-136`）；行级三钮 = `getCurrentRow()`
+  （`:142-157`）。照抄对应关系，别互相借用。
+- **`disabled = !can_edit_cell(...) || cell_deleted`**：`can_edit_cell` 仍是唯一「呈现 + 当前属性」
+  判据（第 62 批），行状态由**调用方叠加**，函数签名不动。
+- **tooltip 四态序**：记录视图 → 未选数据格 → 行已删 → 正常。新增态插在第三位，别打乱前两态的
+  文案（有用例守着 `status_commands_follow_dbeaver_default_visibility_and_can_be_restored` 邻居）。
+- **用例口径**：三段（已删行灰 → 换未删行可用 → `set_local_snapshot(None)` 后恢复）。可用态断言
+  用 `assert_ne!(snap.disabled(), Some(true))`，别写 `== None`。
+- **门禁注意**：`cargo test -p rds-editor --lib` 的 `view::tests::exec` 两条大文件用例会
+  `set_len(200MiB/50MiB)` 造稀疏文件，磁盘吃紧时直接 panic `StorageFull`（`exec.rs:943`）——
+  **是环境态，不是回归**。D 盘现在只剩 ~40MB（target 在 D 盘），跑之前先看 `Get-PSDrive`。
+- 门禁基线（第 66 批后）：result_panel **405 passed**、editor lib **805 passed（1 ignored）**、
+  ui-guard **4 passed**、check Finished（并行线 `rds-notification` 2 条 never-used warning）。
 
 ## 3. 并行线协作纪律（工作区现状）
 
