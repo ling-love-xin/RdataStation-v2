@@ -104,10 +104,13 @@ file_meta = { path = "crates/file-meta", package = "rds-file-meta" }
 # 0.9.0：在 upgrade/gpui-kit-0.9.0 分支升级（2026-11-08）。gpui-pre =0.3.11、
 # gpui-fast 0.1.13；重点改动是输入内核 blink_cursor 重写（+429/−80）与
 # 文本选择、布局若干处；私有 patch 需重打（上游未实现其中 4 个符号）。
+# 0.10.0：在 upgrade/core-2026-11-22 分支升级（2026-11-22）。gpui-pre =0.3.12、
+# gpui-fast 0.1.17；上游新增 GridLayout / FoldPlaceholderRenderer / 表格右固定列，
+# 并在 element.rs（+845/−50）重做了 gutter 与折叠行绘制，私有 patch 用三方合并重打。
 # gpui-fast：换渲染内核（gpui-fast / gpui-fast-platform / gpui-fast-web 一并进图，
 # 与 gpui-pre 两套核心同编，二进制不双份）。开启后宿主 exe 必须自带 Windows
 # manifest（gpui-fast 的 windows-manifest-provided-by-host），见 crates/app/build.rs。
-gpui-kit = { version = "0.9.0", features = ["gpui-fast"] }
+gpui-kit = { version = "0.10.0", features = ["gpui-fast"] }
 
 # ===== 分析引擎与数据库驱动 =====
 # arrow 主版本由 duckdb 决定（两端之间传 RecordBatch，必须是同一 arrow），
@@ -225,7 +228,7 @@ tar = "0.4.46"
 zip = "0.6.6"
 # SQL 编辑器核心解析/转译：业务关键依赖，精确锁定
 # （接入点唯一，见 crates/sql/；升大版本前先跑 SQL 回归）
-sqlglot-rust = "=0.11.1"
+sqlglot-rust = "=0.11.2"
 
 # 系统文件对话框（打开 / 另存为）：编辑器与工作台共用，仅 workbench 直接依赖
 rfd = "0.17"
