@@ -8593,6 +8593,111 @@ DBeaver 有整套：`plugin.xml:1073/1075/1079`（增删复制）+ `:1077/1078`�
 - 只读结果集上 DBeaver 的 `add` 仍可能因偏好 / 通道差异而亮（本仓一律灰）——
   与第 64 批的「有意收紧一档」同一条，不重复记。
 
+### 9.53 第 70 批：取数与跳转键位（`CTRL+ALT+N` / `CTRL+G`）
+
+#### 9.53.1 缺口
+
+「取下一段」与「跳到第 N 行」都只有鼠标入口——前者是状态栏那颗「获取数据」钮
+（`panel/render.rs:761-796`，只在 `status.has_more` 时摆），后者是状态栏常驻行号框
+（`lifecycle.rs:161-178` 的 `InputEvent::Change` → `ResultRequest::GoRow`）。
+键盘上两条都没有，而 DBeaver 两条都有专用键。
+
+#### 9.53.2 DBeaver 依据
+
+- 键位表（`plugin.xml:1056-1095`，context 全部是 `...resultset.focused`）：
+
+  | 键 | 命令 | 行号 |
+  | --- | --- | --- |
+  | `CTRL+ALT+N` | `fetch.page`（`CMD_FETCH_PAGE`） | `:1069` |
+  | `CTRL+SHIFT+=` | `fetch.all`（`CMD_FETCH_ALL`） | `:1070` |
+  | `CTRL+G` | `gotoRow`（`CMD_GO_TO_ROW`） | `:1091` |
+  | `CTRL+SHIFT+G` | `gotoColumn`（`CMD_GO_TO_COLUMN`） | `:1090` |
+
+- handler（`ResultSetHandlerMain`）：
+  - `CMD_FETCH_PAGE`（`:201-203`）→ `rsv.readNextSegment()`。
+  - `CMD_FETCH_ALL`（`:204-206`）→ `rsv.readAllData()`。
+  - `CMD_GO_TO_ROW`（`:496-525`）→ `GotoLineDialog`（`extends InputDialog`，
+    `:739-749`，尺寸落 settings）：初值 `currentRow.getVisualNumber() + 1`，
+    校验「不是数字 / 超出 1..rowCount」，OK 后 `setCurrentRow(newRow)` +
+    `scrollToRow(CURRENT)`。
+  - `CMD_GO_TO_COLUMN`（`:526-534`）→ `askForColumnToGo`（`:762-840`）：
+    输入框 + 内容辅助，接受列名（大小写不敏感）或 `1..n` 索引。
+- 取段的四道前置（`ResultSetViewer.readNextSegment:4377-4409`）：
+  `getQuickFilter() != null` → return（本地过滤态不许取）、`verifyQuerySafety()`、
+  `!isHasMoreData()` → return、`nextSegmentReadingBlocked` 防重入（异步在跑时再按无效）。
+  `readAllData:4426-4459`：`verifyQuerySafety()` + `!hasMoreData` → return +
+  **`ConfirmationDialog.confirmAction(..., WARNING, ResultSetPreferences.CONFIRM_RS_FETCH_ALL, QUESTION)`**
+  ——取全部有确认弹窗（偏好常量 `fetch_all_rows`，`ResultSetPreferences.java:113`）。
+
+#### 9.53.3 落地
+
+**动作**（`grid/mod.rs` 的 `actions!`，都只挂 `RESULT_GRID_CONTEXT`）：
+`FetchNextSegment` / `FocusRowJump`。
+
+**`CTRL+ALT+N` → `FetchNextSegment`**：
+
+- `ResultPanel::request_next_segment(cx)`（`panel/events.rs`）只做一件事：
+  `self.queue.request(ResultRequest::FetchMore, cx)`。
+- **判定不在这里重写**：宿主 `fetch_more`（`host/results/copy.rs:105-143`）已经
+  承担全部前置与提示——无结果 / 无 SQL、`can_fetch_more` 过滤为空时提示
+  「这份结果已经取完了」、提交成功后 `mark_fetching_more`。键位与状态栏那颗钮
+  走的是同一条路，第 70 批**没有**复制第二套门控（DBeaver 的四道前置在本仓的
+  对应物就是这一段）。
+- 不要求当前行（取段与选中无关，与 `fetch_all` 同理）。
+
+**`CTRL+G` → `FocusRowJump`**：
+
+- `ResultPanel::row_jump_focus(window, cx) -> Option<FocusHandle>`（`panel/events.rs`）：
+  `status` 为 `None`（还没执行过查询）返回 `None`；否则读
+  `status.selected_row.unwrap_or(1)`，把状态栏那口常驻框 `set_value("")` +
+  `set_placeholder(current)`，返回 `focus_handle`。
+- 宿主 `on_focus_row_jump`：拿不到句柄 → 状态栏提示「这份结果还没有行可跳；先执行查询」；
+  拿到 → `window.focus(&target, cx)`。
+- `row_count_input` 的订阅补 `InputEvent::PressEnter`（`panel/lifecycle.rs`）：
+  敲完回车把焦点交回网格。**这一步不做就废**——输入框吃掉焦点后网格键位全哑，
+  用户跳完行按 `ALT+INSERT` 毫无反应。
+- **不另造弹窗**：DBeaver 的 `GotoLineDialog` 在本仓没有对应物，但状态栏本来就
+  常驻一口行号框（`Change` 已经入队 `GoRow`），键位只是把焦点送进去 + 回车交回来。
+
+**焦点/取值上的取舍（与 DBeaver 的差异）**：DBeaver 是「预填当前行号 + 默认全选」，
+用户敲数字直接替换。本仓 **gpui-kit 的 `InputState` 对外没有 `select_all`**
+（`vendor/gpui-component/src/input/state.rs:214` 的 `select_all_from_edit_menu`
+是 `pub(crate)`，外面只拿到 `value` / `focus_handle`，`:325` / `:335`）。若照样预填，
+用户敲 `2` 会追加成 `22` 直接误跳 —— 所以**位置信息放 placeholder、value 留空**：
+用户看到「当前是第 N 行」的提示，输入即全新值。
+
+#### 9.53.4 验证
+
+- `the_fetch_page_key_asks_for_the_next_segment`（窗口用例，`results_a.rs`）：
+  先断言 `asked` 为空——**渲染路径自己会触发 `delegate.load_more`**
+  （见 `rendering_a_short_result_asks_for_more_by_itself`），不先钉死这一点就分不清
+  请求来自按键还是来自重绘。然后焦点给网格 → `ctrl-alt-n` → 断言
+  `asked == [(2, SEGMENT_ROWS)]`、行数 2 → 4、`has_more` 变 false、`set_count == 1`。
+- `the_goto_row_key_prepares_the_row_input_and_enter_returns_to_the_grid`
+  （窗口用例，`analysis.rs`）：焦点给网格、`set_selected_row(Some(1))` → `ctrl-g`
+  → 敲 `2` → 断言 `status().selected_row == Some(2)`（**这一条同时证明焦点真进了
+  输入框**：若 `2` 落在网格上，`DataTable` 不认数字键，`GoRow` 也入不了队）→
+  `enter` → `alt-insert` → 断言 `local_count == 1`（证明焦点回到网格、网格键位复活）。
+- 门禁：`cargo check -p rds-result-panel -p rds-editor --all-targets` Finished
+  无 warning、panel **408 passed**、editor **812 passed（1 ignored）**（810 → +2）、
+  ui-guard **4 passed**、`cargo check --workspace --all-targets` Finished
+  （并行线 `rds-notification` 2 条 never-used warning）。
+
+#### 9.53.5 遗留
+
+- **`CTRL+SHIFT+=`（`fetch.all`，`plugin.xml:1070`）有意未接**，两个理由都得先解决：
+  1. DBeaver `readAllData:4433-4440` 有 `CONFIRM_RS_FETCH_ALL` 确认弹窗，本仓
+     `FetchAll` 无确认；
+  2. `dispatch.rs:288-294` 的 `FetchAll` 分支注释写「循环 fetch_more 直到没有下一段」，
+     实现却只调一次 `self.fetch_more(cx)` ——「获取全部数据」钮实际只取一段。
+  这是既有缺口（不是本批引入），要同时补确认弹窗与真循环才谈得上绑键。
+- **`CTRL+SHIFT+G`（`gotoColumn`，`:1090`）未接**：DBeaver 是「输入框 + 内容辅助」，
+  按列名（大小写不敏感）或索引选列并滚动过去；本仓没有「选中某列并滚动」的现成
+  入口（列浏览器的搜索框是**过滤**语义，不是跳转）。
+- 取段后 `sync_result_view` 仍会清 `status.selected_row`（§9.52.5 第一条，同一缺口），
+  对这两个键影响有限（`CTRL+G` 读的是 `unwrap_or(1)`，当前行丢了就默认第 1 行）。
+- `fetch.page` 本仓常显、DBeaver 默认隐藏：既有有意差异，不因本批改。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

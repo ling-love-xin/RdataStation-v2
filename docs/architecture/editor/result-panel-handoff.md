@@ -2910,6 +2910,47 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - **只摘 main.rs 本线 hunk**：`.rds/tmp/stage-main-hunk-r129.py`（锚在第 68 批
   `ctrl-s` 那条 KeyBinding 之后；同样从工作区逐字摘块 + `update-index`）。
 
+### 2.121 取数与跳转键位（2026-11-22）
+
+- **`CTRL+ALT+N` 不要在面板层重写判定**：`ResultPanel::request_next_segment` 只
+  入队 `ResultRequest::FetchMore`，一切前置与提示都在宿主 `fetch_more`
+  （`host/results/copy.rs:105-143`）。DBeaver 的四道前置（quickFilter /
+  verifyQuerySafety / hasMoreData / blocked）在本仓的对应物就是这一段——
+  **在键位 handler 里再写一遍「有没有下一段」，就是第二套真值表**。
+- **`CTRL+G` 只准备 + 聚焦，不弹窗**：`ResultPanel::row_jump_focus(window, cx)`
+  返回 `Option<FocusHandle>`，`status` 为空时返回 `None`（宿主据此提示
+  「还没有行可跳」）。行号框的 `InputEvent::PressEnter` 必须把焦点交回网格
+  （`grid.read(cx).focus_handle(cx)`；要 `use gpui_kit::Focusable as _`）——
+  **漏了这步，跳完行网格键位全哑**，是本批最容易回归的一处。
+- **不预填 value，改放 placeholder**：`InputState` 对外没有 `select_all`
+  （`vendor/gpui-component/src/input/state.rs:214` 是 `pub(crate)`）。预填后用户
+  敲数字会追加（`1` + `2` = `12`）直接误跳，所以写 `set_placeholder(当前行号)`
+  + `set_value("")`。这是与 DBeaver（预填 + 全选）**有意**的差异，别当 bug 改回来。
+- **`goto_row` 之后 `status.selected_row` 会被事件路径补回**：
+  `TableState::set_selected_row` 会 `emit(TableEvent::SelectRow)`（`table/state.rs:555`），
+  所以「敲 `2` → 当前行变 2」是一个干净可断言的判据，也是「焦点确实进了输入框」
+  的证明（数字落在网格上不会产生 `GoRow`）。
+- **取段用例必须先钉死「按键前 `asked` 为空」**：`delegate.load_more` 在渲染路径里
+  也会被触发（`rendering_a_short_result_asks_for_more_by_itself`），不先断言空，
+  就分不清请求是按键发的还是重绘发的。
+- **`ctrl-g` 在本仓 `RESULT_GRID_CONTEXT` 没有既有绑定**，不覆写任何键；
+  `ctrl-alt-n` 同理。两条都只挂网格 context（面板层不挂）。
+- **没接的三条**：`CTRL+SHIFT+=`（fetch.all，缺确认弹窗 + 宿主 `FetchAll` 只取一段）、
+  `CTRL+SHIFT+G`（gotoColumn，本仓无「选中列并滚动」入口）、`CTRL+R`
+  （rejectChanges，`discard_pending_changes` 无确认）。前两条见主文档 §9.53.5。
+- **门禁基线（第 70 批后）**：result_panel **408 passed**、editor lib
+  **812 passed（1 ignored）**（+2）、ui-guard **4 passed**、
+  `cargo check --workspace --all-targets` Finished。
+- **editor 全量首跑 rustc OOM 的规避**：本轮首跑在**编译阶段**挂掉
+  （`memory allocation of 2097152 bytes failed` + `STATUS_STACK_BUFFER_OVERRUN`，
+  `error: could not compile rds-editor (lib test)`），当时物理内存仅余 ~3.8 GB。
+  加 `$env:CARGO_INCREMENTAL='0'`（本轮不用增量，**不删**
+  `target\debug\incremental`）后一次通过。这是继第 66 批 `StorageFull` 之后
+  第二个环境性失败点，与代码无关；判据看日志里的 `test result:` 行，不看 exit code
+  （`2>&1 | Tee-Object` 会把 cargo 的 stderr 包成 `NativeCommandError`）。
+- **只摘 main.rs 本线 hunk**：`.rds/tmp/stage-main-hunk-r130.py`（锚在第 69 批
+  `ctrl-alt-d` → `CopyRowValuesFromBelow` 那条 KeyBinding 之后）。
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。
