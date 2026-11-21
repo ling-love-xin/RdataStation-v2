@@ -7,8 +7,9 @@ use crate::changes::CellChange;
 use crate::commands::{
     CommitResultChanges, CopyGridSelection, CopyRowValuesFromAbove, CopyRowValuesFromBelow,
     CycleResultPresentation, DeleteResultRow, DuplicateResultRow, EnterCellEdit, ExecuteSql,
-    FetchAllData, FetchNextSegment, FocusRowJump, GotoColumn, InsertResultRow, RedoResultEdit,
-    RejectPendingChanges, SelectCurrentColumn, SelectCurrentRow, SwitchFilterFocus, UndoResultEdit,
+    FetchAllData, FetchNextSegment, FocusRowJump, GotoColumn, HideCurrentColumn, InsertResultRow,
+    RedoResultEdit, RejectPendingChanges, SelectCurrentColumn, SelectCurrentRow, ShowHiddenColumns,
+    SwitchFilterFocus, UndoResultEdit,
 };
 
 use super::*;
@@ -343,6 +344,42 @@ impl EditorHostPanel {
             .update(cx, |panel, cx| panel.select_current_row(cx));
         if !selected {
             self.set_message(Some("先在网格里选中一个数据格再选行".to_string()), cx);
+        }
+    }
+
+    /// 【第 78 批】`ALT+SHIFT+H`：隐藏当前格所在的列
+    /// （DBeaver `CMD_HIDE_COLUMNS`，`plugin.xml:1096`；
+    /// `SpreadsheetCommandHandler:174-194`）。
+    ///
+    /// 上游在「选中列 >= 可见列总数」时弹 ERROR 框；本仓走状态栏一句话（第 69 批口径）。
+    pub(crate) fn on_hide_current_column(
+        &mut self,
+        _: &HideCurrentColumn,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let result = self
+            .result_panel
+            .update(cx, |panel, cx| panel.hide_current_column(window, cx));
+        if let Err(reason) = result {
+            self.set_message(Some(reason), cx);
+        }
+    }
+
+    /// 【第 78 批】`ALT+SHIFT+T`：把所有隐藏列显示回来
+    /// （DBeaver `CMD_SHOW_COLUMNS`，`plugin.xml:1097`；
+    /// `SpreadsheetCommandHandler:195-212`）。
+    pub(crate) fn on_show_hidden_columns(
+        &mut self,
+        _: &ShowHiddenColumns,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let shown = self
+            .result_panel
+            .update(cx, |panel, cx| panel.show_hidden_columns(window, cx));
+        if !shown {
+            self.set_message(Some("现在没有隐藏的列".to_string()), cx);
         }
     }
 

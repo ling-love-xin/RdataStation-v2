@@ -2177,6 +2177,85 @@ impl ResultPanel {
         true
     }
 
+    /// 【第 78 批】`ALT+SHIFT+H`：隐藏当前格所在的列
+    /// （DBeaver `CMD_HIDE_COLUMNS`，`plugin.xml:1096`；
+    /// `SpreadsheetCommandHandler.java:174-194`）。
+    ///
+    /// 上游取 `getColumnSelection()`，只选中 1 列时退化成焦点列；本仓是单区域选区，
+    /// 等价表达 = **当前格所在的数据列**。
+    ///
+    /// 底线同上游：上游「选中列数 >= 可见列总数」就弹 ERROR 框（表格不能 hide 成空），
+    /// 本仓一次只藏一列，等价判据是「可见列只剩 1 列」。delegate 的 `hide_column`
+    /// 自己也把着这条底线——这里先判一遍，只为让宿主说得出原因（而不是点了没反应）。
+    ///
+    /// 藏完把当前格**在同一视觉列位**上重投影一次：视图列号没变，但那个位置现在
+    /// 指着后面那一列（DBeaver 刷新后焦点列也停在原位）；藏掉的是最右一列时列位
+    /// 越界，直接清选，别让 `selection_pos` 指着空气。
+    pub fn hide_current_column(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let Some((row, col_ix)) = self.selection_pos else {
+            return Err("先在网格里选中一个数据格再隐藏列".to_string());
+        };
+        if col_ix == 0 {
+            return Err("行号槽不是数据列；先选中一个数据格".to_string());
+        }
+        let data_col = self
+            .grid
+            .read(cx)
+            .delegate()
+            .data_column_checked(col_ix - 1);
+        let Some(data_col) = data_col else {
+            return Err("当前格不在可见列上；先选中一个数据格".to_string());
+        };
+        let (visible, already_hidden) = {
+            let delegate = self.grid.read(cx).delegate();
+            (
+                delegate.visible_column_count(),
+                delegate.is_hidden_column(data_col),
+            )
+        };
+        if already_hidden {
+            return Err("这一列已经隐藏了".to_string());
+        }
+        if visible <= 1 {
+            return Err("不能隐藏最后一列：结果集至少要留一列".to_string());
+        }
+        self.set_columns_hidden(vec![data_col], true, cx);
+        let visible_after = self.grid.read(cx).delegate().visible_column_count();
+        if col_ix <= visible_after {
+            self.set_selection_pos(Some((row, col_ix)), window, cx);
+        } else {
+            self.set_selection_pos(None, window, cx);
+        }
+        Ok(())
+    }
+
+    /// 【第 78 批】`ALT+SHIFT+T`：把所有隐藏列显示回来
+    /// （DBeaver `CMD_SHOW_COLUMNS`，`plugin.xml:1097`；
+    /// `SpreadsheetCommandHandler.java:195-212`：遍历列约束，把「不可见且默认可见」
+    /// 的列全部恢复）。
+    ///
+    /// 本仓的隐藏清单只有「用户藏起来的」这一种来源（没有驱动侧默认隐藏列的概念），
+    /// 所以 [`Self::show_all_columns`] 正好等价于上游那道 `isVisibleByDefault` 过滤
+    /// ——差异记在 `result-panel.md §9.61.6`。恢复后同样把当前格重新投影一次
+    /// （列位不变、指向的列变了，右栏的选中列高亮要跟着改）。
+    ///
+    /// 本来就没有隐藏列时返回 `false`（宿主提示一句，而不是毫无反应）。
+    pub fn show_hidden_columns(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let hidden = self.grid.read(cx).delegate().hidden_count();
+        if hidden == 0 {
+            return false;
+        }
+        self.show_all_columns(cx);
+        if let Some(pos) = self.selection_pos {
+            self.set_selection_pos(Some(pos), window, cx);
+        }
+        true
+    }
+
     /// 【第 77 批】`CTRL+ALT+SHIFT+T`：焦点在「筛选框」与「结果呈现」之间来回切
     /// （DBeaver `CMD_FOCUS_FILTER` → `ResultSetViewer.switchFilterFocus()`，
     /// `plugin.xml:1058`；`ResultSetHandlerMain:179-181`）。

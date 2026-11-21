@@ -1683,3 +1683,69 @@ fn the_filter_focus_key_is_inert_without_a_result(cx: &mut TestAppContext) {
         "没有结果时焦点不动（与上游 enabledWhen 一致）"
     );
 }
+
+/// 【第 78 批】`ALT+SHIFT+H` / `ALT+SHIFT+T` 全链（`CMD_HIDE_COLUMNS` /
+/// `CMD_SHOW_COLUMNS`，`plugin.xml:1096/1097`；`SpreadsheetCommandHandler:174-212`）：
+/// 没有隐藏列时按「显示」只留提示 → 按「隐藏」把当前列藏掉 → 再按「显示」放回来。
+#[gpui_kit::test]
+fn the_hide_and_show_column_keys_round_trip(cx: &mut TestAppContext) {
+    use gpui_kit::Focusable as _;
+
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+
+    let grid = cx.update(|_window, app| panel.read(app).grid_for_test());
+    // 组件列 2 = 数据列 1（`note`）
+    cx.update(|_window, app| grid.update(app, |state, cx| state.set_selected_cell(0, 2, cx)));
+    let grid_focus = cx.update(|_window, app| grid.read(app).focus_handle(app));
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+
+    // 本来没有隐藏列 → `ALT+SHIFT+T` 只留一句提示
+    cx.simulate_keystrokes("alt-shift-t");
+    cx.run_until_parked();
+    assert!(
+        cx.update(|_w, app| panel
+            .read(app)
+            .result_panel
+            .read(app)
+            .column_hidden()
+            .is_empty()),
+        "没有隐藏列时什么也不变"
+    );
+    let message = cx
+        .update(|_w, cx| panel.read(cx).message.clone())
+        .unwrap_or_default();
+    assert!(
+        message.contains("没有隐藏的列"),
+        "要说出来，实际是：{message}"
+    );
+
+    // `ALT+SHIFT+H`：藏掉当前列
+    cx.simulate_keystrokes("alt-shift-h");
+    cx.run_until_parked();
+    let hidden = cx.update(|_w, app| {
+        panel
+            .read(app)
+            .result_panel
+            .read(app)
+            .column_hidden()
+    });
+    assert_eq!(hidden, vec!["note".to_string()], "当前列进隐藏清单");
+
+    // 焦点在网格里；`ALT+SHIFT+T` 把隐藏列放回来
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+    cx.simulate_keystrokes("alt-shift-t");
+    cx.run_until_parked();
+    assert!(
+        cx.update(|_w, app| panel
+            .read(app)
+            .result_panel
+            .read(app)
+            .column_hidden()
+            .is_empty()),
+        "所有隐藏列都回来了"
+    );
+}

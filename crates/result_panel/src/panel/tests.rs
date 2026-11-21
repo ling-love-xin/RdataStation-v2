@@ -5935,3 +5935,91 @@ fn switching_the_filter_focus_does_nothing_when_the_filter_area_is_collapsed(
         "筛选区收起时不切焦点"
     );
 }
+
+/// 【第 78 批】`ALT+SHIFT+H` 隐藏当前列（DBeaver `CMD_HIDE_COLUMNS`，
+/// `SpreadsheetCommandHandler:174-194`）：当前格所在的数据列进隐藏清单、可见列少一列；
+/// 当前格按同一视觉列位重投影（指向后面那一列，而不是被藏掉的那一列）。
+#[gpui_kit::test]
+fn hiding_the_current_column_takes_it_out_of_the_view(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    let grid = cx.update(|_w, app| panel.read(app).grid.clone());
+
+    // harness 出厂两列，这里扩成三列，才能藏「中间一列」——只剩两列时藏右端那一列
+    // 会让组件列位越界（那条分支由代码清选，见 `hide_current_column` 的说明）
+    cx.update(|_w, app| {
+        grid.update(app, |state, cx| {
+            state.delegate_mut().set_data(
+                vec!["a".to_string(), "b".to_string(), "c".to_string()],
+                vec![vec!["1".to_string(), "2".to_string(), "3".to_string()]],
+            );
+            state.refresh(cx);
+        })
+    });
+
+    // 组件列 2 = 数据列 1（`b`）
+    cx.update(|_w, app| grid.update(app, |state, cx| state.set_selected_cell(0, 2, cx)));
+    assert_eq!(
+        cx.update(|_w, app| panel.read(app).grid.read(app).delegate().visible_column_count()),
+        3,
+        "三列都可见"
+    );
+
+    let result = cx.update(|window, app| {
+        panel.update(app, |p, cx| p.hide_current_column(window, cx))
+    });
+    assert!(result.is_ok(), "有当前列且不止一列时可隐藏：{result:?}");
+
+    let after = cx.update(|_w, app| {
+        let delegate = panel.read(app).grid.read(app).delegate();
+        (
+            delegate.visible_column_count(),
+            delegate.hidden_count(),
+            delegate.is_hidden_column(1),
+            panel.read(app).selection_pos,
+            panel.read(app).selected_col,
+        )
+    });
+    assert_eq!(after.0, 2, "可见列少一列");
+    assert_eq!(after.1, 1, "隐藏清单只有这一列");
+    assert!(after.2, "藏掉的是数据列 1（b）");
+    assert_eq!(
+        after.3,
+        Some((0, 2)),
+        "当前格停在原视觉列位（此时指向 c），不是被藏掉的 b"
+    );
+    assert_eq!(after.4, Some(2), "右栏选中列跟着投影到 c");
+}
+
+/// 【第 78 批】只剩一列时再藏被拒：上游 `selectedColumns.size() >=
+/// model.getVisibleAttributeCount()` 就弹 ERROR 框（`SpreadsheetCommandHandler:182-186`），
+/// 本仓等价判据 = 可见列只剩 1 列，理由交宿主说。
+#[gpui_kit::test]
+fn hiding_the_last_visible_column_is_refused(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 先把 amount 藏掉，只剩 id
+    cx.update(|_w, app| panel.update(app, |p, cx| p.set_columns_hidden(vec![1], true, cx)));
+    assert_eq!(
+        cx.update(|_w, app| panel.read(app).grid.read(app).delegate().visible_column_count()),
+        1,
+        "先藏到只剩一列"
+    );
+
+    // 组件列 1 = 剩下的数据列 0（id）
+    cx.update(|_w, app| {
+        let grid = panel.read(app).grid.clone();
+        grid.update(app, |state, cx| state.set_selected_cell(0, 1, cx))
+    });
+    let result = cx.update(|window, app| {
+        panel.update(app, |p, cx| p.hide_current_column(window, cx))
+    });
+    let reason = result.err().unwrap_or_default();
+    assert!(reason.contains("最后一列"), "要说明原因，实际是：{reason}");
+    assert_eq!(
+        cx.update(|_w, app| panel.read(app).grid.read(app).delegate().visible_column_count()),
+        1,
+        "底线守住：仍有一列可见"
+    );
+}

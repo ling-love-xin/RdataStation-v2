@@ -86,8 +86,9 @@ pub(crate) mod view_rows;
 // `:1083` 的 `Ctrl+R`（撤销未提交变更）、`:1090` 的 `Ctrl+Shift+G`（跳转到列）、
 // `:1088` / `:1089` 的 `Ctrl+Alt+C` / `Ctrl+Alt+R`（选列 / 选行）、
 // `:1058` 的 `Ctrl+Alt+Shift+T`（焦点在筛选框与结果呈现之间双向切换；
-// DBeaver 的 `resultset.focus.filter` 用的是 `...ui.context.resultset` 而不是
-// `...focused`，所以这一条与上面几条不同：键位挂在 `editor-result-panel` 上下文上）。
+// `:1096` / `:1097` 的 `Alt+Shift+H` / `Alt+Shift+T`（隐藏当前列 / 显示全部隐藏列）。
+// 后三条在上游都挂 `...ui.context.resultset`（整块面板）而不是 `...resultset.focused`，
+// 所以与上面几条不同：键位挂 `editor-result-panel` 上下文。
 use gpui_kit::actions;
 
 actions!(
@@ -156,6 +157,15 @@ actions!(
         /// （上游同一条也绑 `...context.resultset`，不是 `...resultset.focused`），
         /// 否则焦点已经在筛选框里时按不到「切回来」那一半。
         SwitchFilterFocus,
+        /// 【第 78 批】`ALT+SHIFT+H`：隐藏当前格所在的列
+        /// （`CMD_HIDE_COLUMNS` → `SpreadsheetCommandHandler:174-194`，`plugin.xml:1096`）。
+        ///
+        /// 面板级命令（上游同样挂 `...context.resultset`）：焦点在筛选框 / 侧栏里也能按到，
+        /// 判据只看「当前格在哪一列」。
+        HideCurrentColumn,
+        /// 【第 78 批】`ALT+SHIFT+T`：把所有隐藏列显示回来
+        /// （`CMD_SHOW_COLUMNS` → `SpreadsheetCommandHandler:195-212`，`plugin.xml:1097`）。
+        ShowHiddenColumns,
     ]
 );
 

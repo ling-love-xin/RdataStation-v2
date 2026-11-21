@@ -182,6 +182,10 @@ impl Render for EditorHostPanel {
             // 【第 77 批】`CTRL+ALT+SHIFT+T` 焦点在筛选框与结果呈现之间来回切
             // （`CMD_FOCUS_FILTER`，`:1058`；键位挂面板 context，见命令定义）
             .on_action(cx.listener(Self::on_switch_filter_focus))
+            // 【第 78 批】`ALT+SHIFT+H` 隐藏当前列 / `ALT+SHIFT+T` 显示全部隐藏列
+            // （`CMD_HIDE_COLUMNS` / `CMD_SHOW_COLUMNS`，`:1096/1097`）
+            .on_action(cx.listener(Self::on_hide_current_column))
+            .on_action(cx.listener(Self::on_show_hidden_columns))
             // 【书签】`Ctrl+Shift+B` 切换 / `F8` 下一 / `Shift+F8` 上一（键位在 crates/app 注册）
             .on_action(cx.listener(Self::on_toggle_bookmark))
             .on_action(cx.listener(Self::on_next_bookmark))

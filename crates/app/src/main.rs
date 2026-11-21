@@ -457,6 +457,20 @@ fn run_app() {
                     editor::commands::SwitchFilterFocus,
                     Some(editor::commands::RESULT_PANEL_CONTEXT),
                 ),
+                // 【第 78 批】`ALT+SHIFT+H` / `ALT+SHIFT+T` = `CMD_HIDE_COLUMNS` /
+                // `CMD_SHOW_COLUMNS`（`plugin.xml:1096/1097`；
+                // `SpreadsheetCommandHandler:174-194 / 195-212`）。上游这两条挂的是整块面板的
+                // `...ui.context.resultset`，这里同口径挂面板层——焦点在筛选框或侧栏里也能按到。
+                KeyBinding::new(
+                    "alt-shift-h",
+                    editor::commands::HideCurrentColumn,
+                    Some(editor::commands::RESULT_PANEL_CONTEXT),
+                ),
+                KeyBinding::new(
+                    "alt-shift-t",
+                    editor::commands::ShowHiddenColumns,
+                    Some(editor::commands::RESULT_PANEL_CONTEXT),
+                ),
                 // 【第 60 批】同一条 `Ctrl+反引号` 再绑到**面板层**上下文：文本态下网格
                 // 整块不渲染，网格 context 不在焦点路径上；焦点落在面板根时靠这条命中
                 // （两层同时匹配时 gpui 按 context 深度取更深的网格那条，不会切两次）。

@@ -174,6 +174,18 @@ fn bind_editor_keys(cx: &mut TestAppContext) {
                 crate::commands::SwitchFilterFocus,
                 Some(crate::commands::RESULT_PANEL_CONTEXT),
             ),
+            // 【第 78 批】隐藏当前列 / 显示全部隐藏列（`CMD_HIDE_COLUMNS` /
+            // `CMD_SHOW_COLUMNS`，`:1096/1097`；面板层 context，与生产注册同口径）
+            KeyBinding::new(
+                "alt-shift-h",
+                crate::commands::HideCurrentColumn,
+                Some(crate::commands::RESULT_PANEL_CONTEXT),
+            ),
+            KeyBinding::new(
+                "alt-shift-t",
+                crate::commands::ShowHiddenColumns,
+                Some(crate::commands::RESULT_PANEL_CONTEXT),
+            ),
         ]);
     });
 }
