@@ -8418,11 +8418,87 @@ store.mutate_change_set(&document, active, |changes| { reset = changes.remove(ix
 
 - 文案自定「重置单元格」（对仗「修改单元格」，§9.24 口径），未照 `bundle_zh` 的
   「重置单元格更改」；与第 61 批「修改单元格」同一类自定，等用户表决。
-- `ESC` 键（`plugin.xml:1081`）**未接**：面板现有一批键处理，先要查清 `ESC` 在结果面板里
-  是否已被占用（收编辑 / 关弹层），再决定要不要挂 `cell.reset`。
+- `ESC` 键（`plugin.xml:1081`）**不接**：第 68 批已查清（§9.51.3）——组件 `DataTable`
+  自带 `escape → Cancel`（有选区先清选区），本仓网格 context 挂在外层 div，按键深度上
+  必然先被组件吃掉。要接只能改 vendor 或另加拦截层。
 - `CMD_CELL_SET_NULL` / `CMD_CELL_SET_DEFAULT` 仍未做：本仓 `CellChange` 只承载字符串，
   NULL / 默认值语义还没建模，`CTRL+BACKSPACE` 未接。
 - 是否把 `RowHistory` 里的 `DeleteData` 一并清掉（让「重置删除」不占撤销栈），待用户拍板。
+
+### 9.51 第 68 批：键位层 `Ctrl+S` = 提交待提交变更（`CMD_APPLY_CHANGES`）
+
+#### 9.51.1 缺口
+
+工具栏「提交 N 处」是唯一提交入口，键盘上无路可走。DBeaver 的 `applyChanges` 有键：
+`plugin.xml:1082` 把 `CTRL+S` 挂到 `applyChanges`（context `...resultset.focused`）。
+同一张表里还有 `CTRL+R` → `rejectChanges`（`:1083`），本批只接前者。
+
+**原计划的 `ESC`（`cell.reset`，§9.50.5）本批查清后判定不接**，理由见 §9.51.3 末段。
+
+#### 9.51.2 DBeaver 依据
+
+- `plugin.xml:1056-1095` 是一整段结果集键位表，context 多为
+  `org.jkiss.dbeaver.ui.controls.resultset.focused`；`:1082` = `CTRL+S` / `applyChanges`，
+  `:1083` = `CTRL+R` / `rejectChanges`。
+- 命令与 handler：`:268-269` 声明两条 command，`:768`/`:776` 的 handler class 都是
+  `...handler.ResultSetHandlerMain`（即提交动作与按钮同源实现，不是另写一条路）。
+- 文案：`bundle_zh.properties:69-70`（提交/回滚的 name + description）。
+
+#### 9.51.3 落地
+
+键位层（`crates/app/src/main.rs`，紧跟第 59 批 `ctrl-反引号` 网格那条之后）：
+
+```rust
+KeyBinding::new(
+    "ctrl-s",
+    editor::commands::CommitResultChanges,
+    Some(editor::commands::RESULT_GRID_CONTEXT),
+),
+```
+
+**覆写是有先例的**：同一个 `ctrl-s` 在 `editor` context 是 `SaveDocument`（`:301`），
+在 `database-nav` context 是 `NavCommitStaged`（`:410`）。gpui 按 dispatch 路径深度匹配，
+焦点在网格时网格那条更深 → 先命中，不会既提交又存文档。
+
+动作接线（与工具栏钮共用一段，避免两套提交路径）：
+
+- `result_panel/src/grid/mod.rs`：`actions!` 增 `CommitResultChanges`；
+  `editor/src/support/commands.rs` 转出。
+- `editor/src/view/host/editor_body.rs::commit_pending_from_ui`：调
+  `submit_pending_changes`（五道复核：在途 / 源库通道 / 项目只读 / 连接只读 / 无行标识 /
+  无变更），失败把原因写状态栏（`set_message`），成功进在途。
+- `editor/src/view/host/results/dispatch.rs`：`ResultRequest::CommitPending` 改走这个入口
+  （原来是就地 `if let Err(reason) = self.submit_pending_changes(cx)`）。
+- `editor/src/view/host/exec/edit_cmds.rs::on_commit_result_changes` +
+  `host/render.rs` 的 `.on_action(...)`：面板根挂监听。
+
+`ESC` **不接，结构性原因**：组件 `DataTable` 自己在 `DataTable` context 上绑了
+`escape → Cancel`（`vendor/gpui-component/src/table/data_table.rs:19`），实现
+`table/state.rs:943-949` 是「有选区就清选区并 return，没有才 `cx.propagate()`」。
+本仓 `RESULT_GRID_CONTEXT` 挂在**包裹 `DataTable` 的外层 div**（`grid/status.rs:594-602`），
+焦点在网格时组件那条更深 → 必然先吃掉 `ESC`，我们挂不上。要接只能改 vendor
+（超出「不改 vendor」边界）或另加拦截层。DBeaver 本身也没有「表格 ESC 清选区」，
+这条差异记档为**有意差异**：本仓 `ESC` 保留组件语义（清选区）。
+
+#### 9.51.4 验证
+
+- `ctrl_s_on_the_grid_commits_pending_changes`（窗口用例，两段）：
+  ① 无待提交 → 按 `ctrl-s` 后 `commit_in_flight_for_test()` 为空，状态栏提示含「没有待提交」
+    （被拦有可读原因，不是静默无反应）；
+  ② 预置两格待提交（行 0 列 1、行 1 列 1）→ 按 `ctrl-s` 后在途非空 → 等回执 →
+    `pending_count() == 0`、`editor-result-commit-group` 按钮组消失。
+- 门禁：panel **407 passed**（不变）、editor **808 passed（1 ignored）**（807 → +1）、
+  ui-guard **4 passed**、`cargo check --workspace --all-targets` Finished
+  （2 条 `write_history` never-used warning 来自并行线 `rds-notification` 未提交改动）。
+
+#### 9.51.5 遗留
+
+- `CTRL+R`（`rejectChanges`，`plugin.xml:1083`）未接：`discard_pending_changes` 是破坏性动作
+  且当前**没有确认弹窗**，绑键前要先决定是否补确认。
+- 本仓 `Ctrl+S` 在网格里不再保存 SQL 文档：符合 DBeaver，但属用户可感知的行为变更，
+  需用户确认接受（`editor` context 那层不受影响，焦点不在网格时照旧）。
+- `ESC`（`cell.reset`）不接（§9.51.3 末段）；`CTRL+BACKSPACE`（`cell.setDefault`）随
+  `SET_NULL`/`SET_DEFAULT` 一起仍未做（§9.50.5）。
 
 ## 8. 协作纪律
 

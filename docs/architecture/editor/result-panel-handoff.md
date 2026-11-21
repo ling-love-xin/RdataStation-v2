@@ -2835,9 +2835,46 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   `Get-Volume` 实测 **86.72 GB 空闲**。真正的原因见 §2.117 的 `StorageFull` 段（机制未查透），
   处置仍是：跑 editor 全量前清掉 `.rds/tmp` 下 `rds-test-root-*` / `rds_editor_tier_*` /
   `rds_gtest_*` / `rds_svc_it_*`（本批清掉一个 `rds-test-root-*`，864 MB，之后一次通过）。
-- **本批未做**：`ESC`（`plugin.xml:1081`）未接；`SET_NULL` / `SET_DEFAULT` 仍未建模；
+- **本批未做**：`ESC`（`plugin.xml:1081`）未接——**第 68 批已查清原因，见 §2.119**
+  （组件 `DataTable` 的 `Cancel` 抢键，不改 vendor 接不了）；`SET_NULL` / `SET_DEFAULT` 仍未建模；
   「重置」是否连带清 `RowHistory` 的 `DeleteData` 待拍板；文案「重置单元格」是自定
   （`bundle_zh` 是「重置单元格更改」）。
+
+### 2.119 键位层 `Ctrl+S` = 提交待提交变更（2026-11-21）
+
+- **覆写键位是既有手法，不是新发明**：`ctrl-s` 在 `editor` context = `SaveDocument`
+  （`app/src/main.rs:301`），在 `database-nav` = `NavCommitStaged`（`:410`）。第 68 批加第三条：
+  `RESULT_GRID_CONTEXT` = `CommitResultChanges`。gpui 按 dispatch 路径深度取更深者，
+  焦点在网格时不会同时触发存文档。
+- **动作与命令同源**：`ResultRequest::CommitPending` 与工具栏「提交 N 处」都走
+  `commit_pending_from_ui` → `submit_pending_changes`（在途 / 通道 / 项目只读 / 连接只读 /
+  无行标识 / 无变更 五道复核）。**不要再给键位单独写一条提交路径**——两套复核迟早会漂。
+- **`ESC` 在本仓结果网格里是死路（结构性）**：组件 `DataTable` 自己绑了 `escape → Cancel`
+  （`vendor/gpui-component/src/table/data_table.rs:19`），`table/state.rs:943-949` 是
+  「有选区先清选区并 return，无选区才 `cx.propagate()`」。本仓 `RESULT_GRID_CONTEXT` 挂在
+  **包裹 `DataTable` 的外层 div**（`grid/status.rs:594-602`），gpui 按键按 dispatch 路径
+  深层优先（`gpui-pre-0.3.11 window.rs:6321-6363` 一次匹配后不再换 binding）⇒ 焦点在网格时
+  `ESC` 必先被组件吃掉，我们挂不上 `cell.reset`。要接只能改 vendor 或另加拦截层，
+  两者都超出「不改 vendor」边界；DBeaver 也没有「表格 ESC 清选区」。
+  **记档为有意差异：`ESC` 保留组件语义（清选区）。**
+- **`Ctrl+S` 在网格里不再保存 SQL 文档**：这是 DBeaver 同行为（`plugin.xml:1082`），
+  但用户感知上是行为变更，需要用户确认接受。`editor` context 那层不受影响。
+- **用例造法**：与 §2.118 的提交用例一致——`commit_ready_shared` + 两条 `seed_cell_change`
+  （行 0 列 1、行 1 列 1），回执 `per_statement: vec![1, 1]`。**列 0 不能拿来 seed**：
+  行号槽不参与提交映射，`pending_count()` 不归零，用例会假失败（本批踩过一次）。
+- **焦点移交**：`panel.read(app).grid_for_test().read(app).focus_handle(app)` +
+  `window.focus(&grid_focus, cx)`，之后 `simulate_keystrokes("ctrl-s")` 才落在网格 context。
+- **空态的断言**：`commit_in_flight_for_test().is_none()` + 状态栏 `message` 含「没有待提交」
+  （`EditorHostPanel::message` 是 `pub` 字段，测试可直读；**没有** `notice_for_test`）。
+- **门禁基线（第 68 批后）**：result_panel **407 passed**（不变）、editor lib
+  **808 passed（1 ignored）**（+1）、ui-guard **4 passed**、`cargo check --workspace
+  --all-targets` Finished（并行线 `rds-notification` 2 条 never-used warning）。
+- **提交摘 hunk**：`crates/app/src/main.rs` 与通知并行线共享（app identity ~行 44、
+  `flush_now` ~211、`set_app_identity` ~223），本批键位 hunk 在 ~360。做法见
+  `.rds/tmp/stage-main-hunk-r128.py`（取 HEAD 内容 + 从工作区逐字摘块 + `update-index`）。
+- **本批未做**：`CTRL+R`（`rejectChanges`，`plugin.xml:1083`）未接，`discard_pending_changes`
+  无确认弹窗，绑键前先决定是否补确认；`CTRL+BACKSPACE`（`setDefault`）随 `SET_NULL`/
+  `SET_DEFAULT` 一起仍未建模。
 
 ## 3. 并行线协作纪律（工作区现状）
 
