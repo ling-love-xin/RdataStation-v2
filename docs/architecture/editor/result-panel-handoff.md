@@ -2436,6 +2436,27 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 工作区提醒：2026-11-21 打开时 `crates/notification/src/{core,service}.rs` 有**并行线**大改
   （通知中心历史/图标/合并窗口），**不随本线提交**；提交前一律按文件列表 add，不用 `git add -A`。
 
+### 2.103 数据格右键 filters 段的接手要点（2026-11-21）
+
+- 四项（保存 / 重置 / 删除所有过滤·排序 / 编辑筛选设置）的口径**只有一处定义**：
+  `grid/menu.rs::filter_settings_menu_items()`（纯函数）。列头菜单与数据格右键都 `extend` 它；
+  别在任何一处再手写一遍 push（文案 / 分隔线会漂）。
+- 落点依据：`ResultSetViewer.fillContextMenu:3169-3177` 的 `filtersMenu` **没有落点门控**，
+  DATA / COLUMN_HEADER / ROW_HEADER 都摆。所以「这四项只属于列头菜单」是**错判**，已在 §9.35.2
+  推翻并把 `grid/menu.rs` 的注释改成取证结论；不要按旧注释把数据格这一组删掉。
+- 位置：数据格右键里在**复制段之后、行级动作段之前**（对应 `fillContextMenu:3166` 的
+  Separator + filtersMenu 位置）。排序段仍在行级动作之后——DBeaver 是 filters → order →
+  navigate → edit，本仓 filters → edit → order；把 order 提到 edit 之前的「段落顺序归一」
+  是独立候选（会动 §2.28-B3 那批的断言）。
+- 点击路径：`grid/menu.rs` 的 `context_menu()` 四个分支发 `ResultRequest`（保存 / 重置 /
+  `ClearFilterAndOrdering` / `OpenFilterSettings`），与 `grid/header.rs:476-514` 同一组请求；
+  没有 `action_queue` 的独立网格不摆（沿用既有写法）。
+- 暂不做的三项（§9.35.3 已登记）：`EDIT_FIND_AND_REPLACE`（本仓 `ToggleFind` 是开关态，
+  菜单要命令语义，需单独一批）；按操作符过滤组与 `FilterResetAttributeAction`（本仓没有列级
+  约束模型，筛选是一条 SQL 过滤串）；`CMD_FILTER_MENU_DISTINCT` 同属该组。
+- 门禁基线（第 52 批后）：result_panel **388 passed**、editor check `Finished`（0 warning）、
+  editor lib **800 passed（1 ignored）**、ui-guard **4 passed**；本批未动 settings。
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。

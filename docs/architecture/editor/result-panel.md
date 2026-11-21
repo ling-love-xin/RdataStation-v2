@@ -7260,6 +7260,67 @@ DBeaver 的 layout 菜单在「呈现方式」组与三颗选中统计之后还�
   editor `cargo check` `Finished`（0 warning）、`rds-editor --lib` **800 passed（1 ignored）**、
   `rds-ui-guard` **4 passed**。
 
+### 9.35 数据格右键补齐 filters 段（对齐 DBeaver `fillContextMenu` 的三个落点，2026-11-21）
+
+DBeaver 的右键在复制段之后先放一条 Separator，再挂 `filters` 子菜单（`fillContextMenu:3166-3177`）；
+该子菜单**对 DATA / COLUMN_HEADER / ROW_HEADER 三个落点都摆**（方法内没有落点门控）。
+本仓此前只把 `fillFiltersMenu` 的尾部四项摆进列头菜单（§9.26 / 第 44 批），数据格右键没有——
+本批补齐，并把「四项只属于列头菜单」这条既有判断纠正掉。
+
+#### 9.35.1 dbeaver-ref 取证（现源实读）
+
+| 事实 | 位置 | 内容 |
+| --- | --- | --- |
+| 挂载与落点 | `ResultSetViewer.java:3166-3177` | `manager.add(new Separator())` → `if ((decoratorFeatures & FEATURE_FILTERS) != 0) { filtersMenu(…); manager.add(filtersMenu); }`；`menuLocation` 只影响 COPY / 复制列名等，filters 无落点门控 |
+| 子菜单内容 | `fillFiltersMenu:3864-3933` | ① `EDIT_FIND_AND_REPLACE`（`:3869`）② 有列时 `CMD_FILTER_MENU_DISTINCT` + 按操作符生成的条件项（`:3870-3918`）③ 该列已有约束时 `FilterResetAttributeAction`（`:3920-3924`）④ Separator + (DBSEntity) 保存 / 重置（`:3926-3930`）⑤ 删除所有过滤（`:3931`）⑥ 编辑筛选设置（`:3932`） |
+| 门前紧邻 | `ResultSetViewer.java:3179-3187` | `order` 子菜单紧接 filters 之后（两者之间无 Separator） |
+| 能力位 | `IResultSetDecorator.java:31` | `FEATURE_FILTERS = 1` |
+
+#### 9.35.2 本仓落地
+
+- `grid/menu.rs` 新纯函数 `filter_settings_menu_items()`：四项（保存过滤器设置 / 重置过滤器设置 /
+  删除所有过滤·排序 / 编辑筛选设置…），首项 `separator_before: true`，内部不再插分隔线；
+  文案与动作顺序沿用 §9.26 那一批的取证结论（`ResultSetMessages_zh.properties:84 / :78 / :86`）。
+- `column_menu_items` 尾部四项改为调用该纯函数（原来分散的四个 `items.push` 收敛成一处，
+  列头菜单的文案与顺序不再有第二份定义）。
+- `context_menu_items`（数据格）在**复制段之后、行级动作段之前** `extend` 同一组
+  （对应 `fillContextMenu:3166` 的 Separator + filtersMenu 位置）。
+- `context_menu()` 里这四项从「空分支占位」改为真实发请求：`SaveFilterSetting` /
+  `ResetFilterSetting` / `ClearFilterAndOrdering`（= 删除所有过滤·排序）/ `OpenFilterSettings`，
+  与列头菜单（`grid/header.rs:476-514`）走同一组 `ResultRequest`。
+- `grid/mod.rs` re-export 新函数（`grid/tests.rs` 直接断言同一份口径）。
+
+**被纠正的既有判断**：`grid/menu.rs` 原来写着「筛选段尾部四项只属于列头菜单：它们要按当前结果的
+筛选状态动手，右键的落点是单个单元格，语义不对」。这与 DBeaver 源码不符——`filtersMenu` 恰恰是
+对所有落点都挂的（`:3169-3177`），四项动手的是「当前结果的筛选状态」，与右键落在哪个单元格无关。
+本批以源码为准推翻该判断，并把注释改写成取证结论。
+
+#### 9.35.3 口径差异（有意 / 结构性）
+
+1. **菜单扁平**：DBeaver 是 `filters` 子菜单，本仓平铺在右键里（与 §9.32 / §9.33 同一条口径）。
+2. **四项恒摆**：DBeaver 保存 / 重置有 `DBSEntity` 门控（`:3927-3930`）；本仓存档键是结果 SQL
+   （§9.26.4 第 1 条），join / 计算列结果也能存能取，故恒摆（§9.26 已登记，本批沿用）。
+3. **`EDIT_FIND_AND_REPLACE`（filters 首项）暂不摆**：本仓「结果内查找」是面板里的 `ToggleFind`
+   **开关态**（`ports.rs`），菜单项是命令语义（点开查找栏，即使已开也不该反关），需要单独一批
+   处理开关/命令两种语义，本批不动。
+4. **条件项组（按操作符过滤 / 按不同值过滤 / 清除本列条件）不做**：本仓筛选模型是**一条手写
+   SQL 过滤串**（`filter` 输入 + 重跑），没有 DBeaver 的列级 `DBDAttributeConstraint` 约束模型，
+   操作符组（`:3877-3917`）与 `FilterResetAttributeAction`（`:3921-3924`）没有落地对象。
+   属结构性差异，暂不做。
+5. **段落顺序仍有一处偏差（登记）**：DBeaver 是 filters → order → navigate → edit；本仓是
+   filters → edit（行级动作）→ order。本批只保证「filters 在 order 之前、在 edit 之前」，
+   把 order 提到 edit 之前留作单独一批（会动 §2.28-B3 的既有断言）。
+
+#### 9.35.4 用例与门禁
+
+- `data_cell_context_menu_also_offers_the_filter_settings_group`（纯函数）：四项文案与动作、
+  首项分隔线 / 内部无分隔线、位置在复制段之后且排序段之前、列头菜单只有一份。
+- 既有用例随之更新：`context_menu_offers_filter_copy_and_freeze`（全量标签列表补四项，
+  `items[7..]` 之后的冻 / 隐 / 统计下标与分隔线断言整体后移 4 位并改口径）。
+- **门禁**：`rds-result-panel` **388 passed**（387 + 1）、editor `cargo check` `Finished`
+  （0 warning）、`rds-editor --lib` **800 passed（1 ignored）**、`rds-ui-guard` **4 passed**。
+  本批未动 `crates/settings`，不重跑其测试。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
