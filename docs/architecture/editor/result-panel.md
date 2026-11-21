@@ -7321,6 +7321,58 @@ DBeaver 的右键在复制段之后先放一条 Separator，再挂 `filters` 子
   （0 warning）、`rds-editor --lib` **800 passed（1 ignored）**、`rds-ui-guard` **4 passed**。
   本批未动 `crates/settings`，不重跑其测试。
 
+### 9.36 数据格右键段序按 `fillContextMenu` 归一（2026-11-21）
+
+第 52 批补了 filters 段后，本仓数据格右键的段序是 filters → 行级动作（edit）→ order，与 DBeaver
+的 filters → order → navigate → edit 不符。本批把排序段前移到 filters 之后、行级动作之前，
+并按 DBeaver 的分隔线口径重排三条线。
+
+#### 9.36.1 dbeaver-ref 取证（现源实读）
+
+| 段 | 位置 | 内容 |
+| --- | --- | --- |
+| Separator | `fillContextMenu:3166` | 复制段之后 |
+| filters | `:3169-3177` | `filtersMenu`，三落点都摆（见 §9.35） |
+| order | `:3179-3187` | `orderMenu` 紧接 filters，**两者之间无 Separator**；`fillOrderingsMenu:3939-3946` 内部 ASC / DESC / NONE 三项彼此无分隔线 |
+| navigate | `:3189-3195` | `navigateMenu`（本仓无对应物） |
+| edit | `:3197-3215` | 先构造 `editMenu`（有行才 `fillEditMenu`），再补 增 / 复制 / 删 + 从上行·下行复制 |
+| Separator | `:3217` | edit 子菜单之前 |
+| Separator | `:3219` | edit 子菜单之后 |
+| panels / view / hints / virtual | `:3225-3262` | 面板、列视图格式、提示、逻辑结构 |
+| layout | `:3264+` | 本仓已对齐（§9.32 / §9.33 / §9.34） |
+
+#### 9.36.2 本仓落地（`grid/menu.rs::context_menu_items`）
+
+- 排序段（升序 / 降序 / 取消排序）移到 filters 四项之后、行级动作之前；
+- 排序首项 `separator_before` 由 `true` 改 `false`（DBeaver filters 与 order 相邻无 Separator）；
+- 「取消排序」由独立分组（`separator_before: true`）改同组（`false`），对齐 `fillOrderingsMenu`
+  三项同组；
+- 行级动作段保持 `separator_before: true`（对应 `:3217`），内容与门控不变；
+- 列级视图段首项「冻结」由 `false` 改 `true`（对应 `:3219` 的 Separator，后面接 view 子菜单）；
+  隐藏 / 列统计 / 显示全部列仍与冻结同组（无分隔线）。
+
+#### 9.36.3 口径差异（有意 / 结构性）
+
+1. **没有 navigate 段**：DBeaver 的 `navigate` 子菜单（`:3189-3195`，上下行 / 首末行跳转）本仓
+   没有对应命令集，不摆；不拿别的段冒充。
+2. **panels / hints / virtual model 段无对应**：本仓没有面板定制、提示、逻辑结构模型这一层；
+   列级视图动作（冻结 / 隐藏 / 统计）近似 DBeaver 的 view 子菜单位置，但内容不同（登记）。
+3. **edit 段只三行动作**：DBeaver 另有「从上一行复制 / 从下一行复制」（`:3213-3214`）；本仓
+   只有 新增 / 复制此行 / 删除此行（既有口径，不在本批扩）。
+4. **仍是扁平菜单**：所有段平铺，没有子菜单（与 §9.32-§9.35 同一口径）。
+
+#### 9.36.4 用例与门禁
+
+- `context_menu_sections_follow_fill_context_menu_order`（纯函数）：可编辑落点下
+  复制段 → filters → order → edit → 视图段（冻结）的相对顺序，以及 filters 首项 / edit 首项 /
+  视图段首项各一条分隔线、order 段无前导分隔线。
+- 既有用例随之更新：`context_menu_offers_filter_copy_and_freeze`（排序首项分隔线断言改
+  「无」、冻结改「有」）、`context_menu_row_actions_gate_on_editable_and_deleted`
+  （行级动作位置断言由「排序段之前」改为「排序段之后」，补 `last_sort`）。
+- **门禁**：`rds-result-panel` **389 passed**（388 + 1）、editor `cargo check` `Finished`
+  （0 warning）、`rds-editor --lib` **800 passed（1 ignored）**、`rds-ui-guard` **4 passed**。
+  本批未动 `crates/settings`，不重跑其测试。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

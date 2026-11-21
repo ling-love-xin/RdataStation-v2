@@ -2457,6 +2457,30 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 门禁基线（第 52 批后）：result_panel **388 passed**、editor check `Finished`（0 warning）、
   editor lib **800 passed（1 ignored）**、ui-guard **4 passed**；本批未动 settings。
 
+### 2.104 数据格右键段序归一的接手要点（2026-11-21）
+
+- 段序口径照 `ResultSetViewer.fillContextMenu:3166-3219`：复制段 → filters → **order** →
+  navigate（本仓无）→ **edit 行级动作** → [Separator `:3219`] → 列级视图段 → layout。
+  `grid/menu.rs::context_menu_items` 的 push 顺序就是这个顺序，改菜单项位置前先对着这段源码。
+- 三条分隔线的理由各不相同，别合并：
+  1. filters 首项 `separator_before: true` —— `:3166` 的 Separator；
+  2. 行级动作首项 `separator_before: true` —— `:3217` edit 子菜单前的 Separator；
+  3. 冻结首项 `separator_before: true` —— `:3219` edit 之后的 Separator（后面接 view 子菜单）。
+  **排序段首项是 `false`**：`fillContextMenu:3177-3179` 里 filters 与 order 两个子菜单相邻无 Separator；
+  「取消排序」也与升降序同组（`fillOrderingsMenu:3939-3946` 内部无分隔线）。
+- 不要为了「补齐段数」造假的 navigate / panels / hints / virtual 段：本仓没有对应命令集或模型，
+  如实缺省（§9.36.3 已登记）。edit 段也只有 新增 / 复制此行 / 删除此行 三行
+  （DBeaver 另有 `CMD_ROW_COPY_FROM_ABOVE` / `_BELOW`，`:3213-3214`，本批不扩）。
+- 用例：`context_menu_sections_follow_fill_context_menu_order` 钉段序与三条分隔线；
+  改顺序时同步更新 `context_menu_offers_filter_copy_and_freeze`（下标 + 分隔线断言）与
+  `context_menu_row_actions_gate_on_editable_and_deleted`（行级动作现在在排序**之后**）。
+- **环境坑（这次真踩到）**：D 盘写满时 `cargo check -p rds-editor` 会报
+  `error: failed to write query cache to …\target\debug\incremental\rds_engine-…`
+  并 exit 101——看起来像编译错误，其实是磁盘满。先 `Get-PSDrive D` 看 `Free`，
+  `target\debug\incremental` 曾占 75 GB（纯缓存，可删）。清理前需用户确认，不要自行删除。
+- 门禁基线（第 53 批后）：result_panel **389 passed**、editor check `Finished`（0 warning）、
+  editor lib **800 passed（1 ignored）**、ui-guard **4 passed**；本批未动 settings。
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。
