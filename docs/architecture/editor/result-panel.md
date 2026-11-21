@@ -9185,6 +9185,119 @@ editor（`view/tests/results_a.rs`）：
 - `SHIFT+ENTER`、`ESC`（`cell.reset`）、`CTRL+BACKSPACE`、`CTRL+ALT+C` / `CTRL+ALT+R`、
   `ALT+SHIFT+ARROW` 仍未接，见 §9.48.5。
 
+### 9.59 第 76 批：`CTRL+ALT+C` / `CTRL+ALT+R` 选列 / 选行（`CMD_SELECT_COLUMNS` / `CMD_SELECT_ROWS`）
+
+#### 9.59.1 缺口
+
+`plugin.xml:1088/1089` 两条键位一直没绑。更要紧的是**行为缺口**：网格「整行选中」
+（`TableEvent::SelectRow`）那条事件路径只镜像 delegate 的铺色，不写状态行
+`status.selected_row`；而第 64 / 69 批的行级三钮、邻行复制、「修改」钮**全都读那口**
+（`row_target_state → status.selected_row`），所以整行选中之后这些动作仍然全灰，
+用户看不出「行已经选中了」。本批给这条路径补键位入口，并顺手把状态那口补齐。
+
+`CTRL+BACKSPACE`（`CMD_CELL_SET_DEFAULT`）同族，但语义是**驱动侧默认值**
+（`ResultSetHandlerMain:258-296` → `DBDValueDefaultGenerator.generateDefaultValue(session, valueType)`，
+需开 `DBCSession`），本仓没有驱动侧默认值生成通道，**结构性不可行**，只记档不实现
+（与第 67 批「重置单元格」同一口径）。
+
+#### 9.59.2 DBeaver 依据
+
+- 键位：`plugin.xml:1088` `CTRL+ALT+C` → `org.jkiss.dbeaver.core.resultset.grid.selectColumn`；
+  `:1089` `CTRL+ALT+R` → `...grid.selectRow`（context `...resultset.focused`）。
+- 这两个 action **不进** `ResultSetHandlerMain`，在
+  `plugins/org.jkiss.dbeaver.ui.editors.data/src/org/jkiss/dbeaver/ui/controls/resultset/spreadsheet/SpreadsheetCommandHandler.java`：
+  - `:55/56` 常量 `CMD_SELECT_COLUMNS` / `CMD_SELECT_ROWS`；
+  - `:106-118` 选列 = 取 `getColumnSelection()` 的每一列 × `0..rowsCount` 组成 `GridPos` 集合 →
+    `s.selectCells(cellsToSelect)` → `resetFocus()` → `setFocusColumn(focusPos.col)`（**焦点列保留**）；
+  - `:119-131` 选行 = 对称（每一行 × `0..columnsCount`），末尾 `setFocusItem(focusPos.row)`（**焦点行保留**）。
+- 本质：把「已选列 / 行」**扩成整列 / 整行的单元格集合**，焦点格复位但焦点列 / 行不丢。
+
+#### 9.59.3 落点：单区域选区的等价表达
+
+本仓组件选区是单区域三态（`SelectionMode::{Cell, Row, Column}`，
+`vendor/gpui-component/src/table/state.rs:536/589`），没有上游那种任意多单元格集合。
+所以对齐取等价表达：
+
+| DBeaver | 本仓 |
+| --- | --- |
+| 选中列 × 所有行 → 单元格集合 | 组件**整列选中**（`set_selected_col(view_col + 1)`） |
+| 选中行 × 所有列 → 单元格集合 | 组件**整行选中**（`set_selected_row(view_row)`）+ 状态行写 1 基行号 |
+
+多区域 / 多选的连续分区语义本批仍不做（§9.48.5 记档的另一条）。
+
+#### 9.59.4 落地
+
+| 层 | 东西 |
+| --- | --- |
+| action | `result_panel::grid::SelectCurrentColumn` / `SelectCurrentRow` |
+| 面板 | `ResultPanel::select_current_column(cx) -> bool`：取 `selection_pos` 的组件列（0 是行号槽，**不选**）→ `delegate.data_column_checked(col - 1)` → 复用既有 `select_column(data_col)` |
+| 面板 | `ResultPanel::select_current_row(cx) -> bool`：取 `selection_pos` 的视图行 → `grid.set_selected_row(row)` + `set_selected_row(Some(row + 1))`（写 1 基状态行） |
+| 宿主 | `EditorHostPanel::on_select_current_column` / `on_select_current_row`（`exec/edit_cmds.rs`）：返回 `false` 留提示（「先在网格里选中一个数据格再选列 / 选行」） |
+| 渲染 | `view/host/render.rs` 两条 `.on_action` |
+| 键位 | `ctrl-alt-c` / `ctrl-alt-r` → `RESULT_GRID_CONTEXT`（`app/main.rs` + 测试 `bind_editor_keys`）；两个键此前都空着（既有 ctrl-alt 只有 d / n / insert） |
+
+`grid/mod.rs` 顶部键位注释同时补了 `:1088/:1089/:1090` 三行（`:1090` 是第 75 批漏记的一条）。
+
+#### 9.59.5 选行为什么要写状态行
+
+`SelectRow` 事件路径（`panel/lifecycle.rs::handle_grid_event`）只镜像 delegate 铺色，
+不写 `status.selected_row`；而 `row_target_state`（`panel/events.rs`）**只认**
+`status.selected_row`（`saturating_sub(1)` 折视图行）。所以：
+
+- 只调组件 `set_selected_row` → 网格整行铺色、行级三钮仍灰、`ALT+DELETE` / `CTRL+D` 仍报
+  「先在网格里选中一行」——视觉上已经「选中了一行」，动作却不可用；
+- 补写 `status.selected_row(row + 1)` → 三钮 / 邻行复制 / 「修改」钮当场可用。
+
+既有缺口照旧：`sync_result_view` 会全量覆写 status（`selected_row: None`），取段 / 刷新
+之后状态行不再记「已选第 N 行」。本批不改那条（§9.48.5 已记档），只保证**按键当下**成立。
+
+#### 9.59.6 有意差异
+
+- 上游是「多区域单元格集合」，本仓是单区域整列 / 整行选中（见 §9.59.3）。
+- 上游 `resetFocus()` 之后焦点格无值；本仓 `selection_pos` 保留原格——行级动作的行判据
+  （第 66 批「修改」钮取 `selection_pos`）不会因为选行 / 选列而丢。
+- 行号槽里的格（组件列 0）按 `CTRL+ALT+C` 不算列：不选行号槽，留提示。
+- 选列会一并写 `selected_col`（数据列序），右栏列浏览器跟着高亮——既有行为，本批沿用。
+- 文本呈现态（网格不在焦点路径）不生效，与 `CTRL+R` / `CTRL+SHIFT+G` 同口径。
+
+#### 9.59.7 验证
+
+panel（`panel/tests.rs`）：
+
+- `select_column_goes_to_the_column_under_the_current_cell`：第 1 个数据列 → 组件列 1 / 数据列 0；
+  第 2 个 → 组件列 2 / 数据列 1；行号槽不选；无当前格不动作；
+- `select_row_marks_the_row_and_the_status_line`：整行选中 + 状态行 `Some(2)`；打开 `editable`
+  后 `row_target_state` 的 `copy` / `delete` 都为真；无当前格不动作
+  （harness 出厂没有 `status`，用例先装一条——`set_selected_row` 只写既有的 status）。
+
+editor（`view/tests/results_a.rs`）：
+
+- `the_select_column_key_selects_the_whole_column`：`ctrl-alt-c` → `selected_col() == Some(2)`
+  （当前格在「note」，钉「不左移到行号槽」）；
+- `the_select_row_key_selects_the_whole_row_and_marks_the_status_line`：`ctrl-alt-r` →
+  `selected_row() == Some(0)`、`status().selected_row == Some(1)`；
+- `the_select_column_and_row_keys_without_a_result_only_say_so`：没有结果时两条各留一句提示
+  （直接调 action 方法，同第 75 批口径）。
+
+门禁（第 76 批）：pair check `Finished` 无 warning；panel **414 passed**（412 → +2）；
+ui-guard **4 passed**；workspace check `Finished`（2 warning 全来自 `rds-notification`）；
+editor 本批 3 条全绿。
+
+⚠️ **editor 全量本批不绿，原因不在本批**：`support::format` / `view::tests::format` 共 6 条失败，
+由并行线 `crates/sql` 给 `FormatOptions` 新增 `line_width` / `clause_style` / `new_line_kind` /
+`ignore_*_comment_text` 引起——引擎默认值变了、设置侧 `SqlFormat` 还没有对应旋钮。为让检查跑通，
+`crates/editor/src/support/format.rs` 临时补了 `..FormatOptions::default()`（**不进本批提交**，
+真实映射归格式化线）。全量数字仍对得上：819 passed + 6 failed + 1 ignored = 826 = 基线 823 + 本批 3。
+
+#### 9.59.8 遗留
+
+- 多区域 / 多选的单元格集合（§9.59.3）；
+- `CTRL+BACKSPACE`（`cell.setDefault`）结构性不可行，见 §9.59.1；
+- 选列不服务行号槽（有意差异）；
+- `sync_result_view` 清 `selected_row` 的既有缺口未动；
+- **鼠标整行选中**（`SelectRow` 事件路径）仍不写状态行——本批只补键位路径。要不要在事件路径
+  统一补，待拍板（会改变既有「鼠标整行选中不点亮行级动作」的观感）。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

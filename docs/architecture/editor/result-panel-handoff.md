@@ -3046,6 +3046,24 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   单光标时走 `cx.propagate()`（`:2607`）→ 遮罩的 `on_key_down` 收得到；**无窗口用例**
   （四个浮层同口径都缺）。
 
+### 2.127 选列 / 选行（2026-11-22，第 76 批）
+
+- 键位：`CTRL+ALT+C` / `CTRL+ALT+R` → `result_panel::grid::SelectCurrentColumn` /
+  `SelectCurrentRow`（`plugin.xml:1088/1089`；`SpreadsheetCommandHandler:106-131`），挂
+  `RESULT_GRID_CONTEXT`，注册在 `crates/app/src/main.rs` + `bind_editor_keys`。
+- 落点：单选区的等价表达——选列 = `select_column(data_column(col - 1))`（组件列 0 是行号槽，
+  按下去不选、留提示）；选行 = 组件 `set_selected_row(row)` + 状态行 `Some(row + 1)`。
+- 为什么选行要写状态行：`row_target_state` 只读 `status.selected_row`，而 `SelectRow`
+  事件路径不写 → 只铺色不带状态时，行级三钮 / 邻行复制 / 「修改」钮仍全灰。
+- 用例：panel 2 条（列映射 / 行 + 状态行）；editor 3 条（两键全链 / 无结果提示）。
+- 门禁：pair `Finished`；panel 414；ui-guard 4；workspace `Finished`（2 warning 来自通知线）；
+  editor 本批 3 条绿。**editor 全量 6 条格式化失败来自 `crates/sql` 并行线**
+  （`FormatOptions` 新增 5 字段、`support/format.rs` 未同步最后一手），已临时补
+  `..Default::default()` 让检查能跑，**该文件不进本批提交**。
+- 记档不实现：`CTRL+BACKSPACE`（`cell.setDefault`）要 `DBDValueDefaultGenerator` + 会话，
+  本仓无驱动侧默认值通道。
+- 未决：`SelectRow` 事件路径要不要统一写 `status.selected_row`（本批只补键位路径）。
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。
