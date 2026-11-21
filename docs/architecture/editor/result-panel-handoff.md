@@ -2761,7 +2761,8 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - **`ContextMenuItem` 多了必填字段 `disabled: bool`**（`grid/menu.rs`，56 处字面量已按默认 `false`
   补齐）。新加菜单项时编译器会逼你写，**默认必须给 `false`**：守卫用例
   `context_menu_items_are_enabled_unless_explicitly_shaded` 会在「可编辑未删行出现灰项」时炸。
-- **渲染只能走 `shade(menu, item.disabled, …)`**：`context_menu` 里 33 处 add 点已统一。
+- **渲染只能走 `shade(menu, item.disabled, …)`**：`context_menu` 里 **34 处** add 点已统一
+  （主循环 33 + 行号槽早退路径 1）。
   若有人写回 `menu = menu.item(...)`，**编译不报错**，但灰态静默丢失——这是本批最容易踩的坑。
   `shade` 就是 `menu.item(el.disabled(disabled))` 的薄封装（vendor `menu/popup_menu.rs:159-171`）。
 - **§9.47 的 delete 归因已更正**：DBeaver `"delete"` 分支在 `isDeletable()` 为真时**直接返回

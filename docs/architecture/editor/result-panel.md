@@ -8235,9 +8235,10 @@ assert!(std::time::Instant::now() < deadline, "后台线程未在 3s 内{what}")
 - `grid/menu.rs` 的 `ContextMenuItem` 新增 `pub disabled: bool`，字段注释写明 vendor 依据；
   56 处字面量按默认 `false` 补齐。
 - 渲染侧新增单点接线 `fn shade(menu, disabled, el) -> PopupMenu { menu.item(el.disabled(disabled)) }`，
-  `context_menu` 里 33 处 add 点统一改成 `shade(menu, item.disabled, …)`——新加分支只要照这个写法，
-  灰态就自动生效（vendor `menu/popup_menu.rs:159-171` 是 builder，`:1343-1351` 用
-  `when(!disabled, …)` 断掉 `on_click`）。
+  `context_menu` 里 **34 处** add 点（主循环 33 + 行号槽早退路径 1）统一改成
+  `shade(menu, item.disabled, …)`——新加分支只要照这个写法，灰态就自动生效
+  （vendor `menu/popup_menu.rs:159-171` 是 builder，`:1343-1351` 用 `when(!disabled, …)`
+  断掉 `on_click`）。
 
 #### 9.48.3 右键 edit 段：由「整段收起」改为「项在、灰掉」
 
