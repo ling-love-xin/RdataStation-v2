@@ -1410,3 +1410,108 @@ fn asking_for_all_while_the_export_is_fetching_says_so(cx: &mut TestAppContext) 
         "导出自己跨轮抓完了；取全部一次都没发"
     );
 }
+
+/// 【第 75 批】`CTRL+SHIFT+G` 跳列全链：键位 → 面板浮层（真挂到渲染树上）→ 列名提交 →
+/// 选中该列，**行不动**（DBeaver `setCurrentAttribute` 之后 `scrollToRow(CURRENT)`）。
+///
+/// 列映射要点：`set_selected_cell` 收的是**组件列**（0 是行号槽），所以「note」这一列
+/// （第 2 个数据列）落到组件列 2；用 1 会选到 id，用例就是钉这一格。
+#[gpui_kit::test]
+fn the_goto_column_key_opens_the_overlay_and_selects_the_named_column(cx: &mut TestAppContext) {
+    use gpui_kit::Focusable as _;
+
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+
+    let grid = cx.update(|_window, app| panel.read(app).grid_for_test());
+    // 当前行 = 第 1 行、当前列 = 第 1 个数据列（组件列 1）
+    cx.update(|_window, app| grid.update(app, |state, cx| state.set_selected_cell(0, 1, cx)));
+
+    let grid_focus = cx.update(|_window, app| grid.read(app).focus_handle(app));
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+    cx.simulate_keystrokes("ctrl-shift-g");
+    cx.run_until_parked();
+
+    assert!(
+        cx.update(|_window, app| panel
+            .read(app)
+            .result_panel
+            .read(app)
+            .goto_column_for_test(app)),
+        "键位应打开浮层"
+    );
+    assert!(
+        dialog_button_rendered(cx, "editor-result-goto-column-go"),
+        "浮层要真的挂到面板渲染树上"
+    );
+
+    cx.update(|window, cx| {
+        panel.update(cx, |p, cx| {
+            let result_panel = p.result_panel.clone();
+            result_panel.update(cx, |p, cx| {
+                p.set_goto_column_text_for_test("note", window, cx)
+            });
+        });
+    });
+    // 走浮层「跳转」钮那条端口：与 Enter 同一终点（宿主 dispatch 调 submit）
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.result_action_queue
+                .request(result_panel::ports::ResultRequest::SubmitGotoColumn, cx);
+            host.drain_result_actions(window, cx);
+        });
+    });
+
+    assert_eq!(
+        cx.update(|_window, app| grid.read(app).selected_cell()),
+        Some((0, 2)),
+        "「note」是第 2 个数据列 → 组件列 2；行保持 0"
+    );
+    assert!(
+        !cx.update(|_window, app| panel
+            .read(app)
+            .result_panel
+            .read(app)
+            .goto_column_for_test(app)),
+        "提交后浮层要收"
+    );
+}
+
+/// 【第 75 批】还没有结果时按 `CTRL+SHIFT+G`：不弹浮层，只留一句提示
+/// （DBeaver 那边没有列也就没有对话框；本仓键位层统一「不可用要说话」）。
+///
+/// 这里直接调 action 的处理方法而不再 `simulate_keystrokes`：没有结果时结果区整块
+/// 不渲染，网格不在焦点路径上，键位根本走不到（键位全链由上面那条用例钉）。
+#[gpui_kit::test]
+fn the_goto_column_key_without_a_result_only_says_so(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.on_goto_column(&crate::commands::GotoColumn, window, cx);
+        });
+    });
+    cx.run_until_parked();
+
+    assert!(
+        !cx.update(|_window, app| panel
+            .read(app)
+            .result_panel
+            .read(app)
+            .goto_column_for_test(app)),
+        "没列可跳就不该开浮层"
+    );
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .unwrap_or_default();
+    assert!(
+        message.contains("还没有列可跳"),
+        "键位不可用要留提示，实际是：{message}"
+    );
+}

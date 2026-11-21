@@ -172,6 +172,9 @@ impl Render for EditorHostPanel {
             // 【第 74 批】`CTRL+R` 撤销全部未提交变更（`CMD_REJECT_CHANGES`，`:1083`）：
             // 与工具栏「回滚」钮同一条路；无待提交时只说一句（不静默吞键）
             .on_action(cx.listener(Self::on_reject_pending_changes))
+            // 【第 75 批】`CTRL+SHIFT+G` 跳转到列（`CMD_GO_TO_COLUMN`，`:1090`）：
+            // 开面板内浮层（列名 / 1 基序号二选一），`ENTER` 提交、Esc 关闭
+            .on_action(cx.listener(Self::on_goto_column))
             // 【书签】`Ctrl+Shift+B` 切换 / `F8` 下一 / `Shift+F8` 上一（键位在 crates/app 注册）
             .on_action(cx.listener(Self::on_toggle_bookmark))
             .on_action(cx.listener(Self::on_next_bookmark))

@@ -150,6 +150,12 @@ fn bind_editor_keys(cx: &mut TestAppContext) {
                 crate::commands::RejectPendingChanges,
                 Some(crate::commands::RESULT_GRID_CONTEXT),
             ),
+            // 【第 75 批】跳转到列（`CMD_GO_TO_COLUMN`，`plugin.xml:1090`）
+            KeyBinding::new(
+                "ctrl-shift-g",
+                crate::commands::GotoColumn,
+                Some(crate::commands::RESULT_GRID_CONTEXT),
+            ),
         ]);
     });
 }

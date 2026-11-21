@@ -1608,6 +1608,11 @@ impl ResultPanel {
                 self.fetch_all_confirm_open
                     .then(|| self.render_fetch_all_confirm(cx)),
             )
+            // 【第 75 批】跳列浮层：同范式最后挂（只在键位刚按下的那一刻出现）
+            .children(
+                self.goto_column_open
+                    .then(|| self.render_goto_column(cx)),
+            )
             .into_any_element()
     }
 

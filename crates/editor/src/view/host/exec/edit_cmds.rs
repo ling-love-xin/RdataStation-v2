@@ -7,7 +7,7 @@ use crate::changes::CellChange;
 use crate::commands::{
     CommitResultChanges, CopyGridSelection, CopyRowValuesFromAbove, CopyRowValuesFromBelow,
     CycleResultPresentation, DeleteResultRow, DuplicateResultRow, EnterCellEdit, ExecuteSql,
-    FetchAllData, FetchNextSegment, FocusRowJump, InsertResultRow, RedoResultEdit,
+    FetchAllData, FetchNextSegment, FocusRowJump, GotoColumn, InsertResultRow, RedoResultEdit,
     RejectPendingChanges, UndoResultEdit,
 };
 
@@ -263,6 +263,27 @@ impl EditorHostPanel {
             return;
         };
         window.focus(&target, cx);
+    }
+
+    /// 【第 75 批】结果网格 `CTRL+SHIFT+G`：跳转到列
+    /// （DBeaver `CMD_GO_TO_COLUMN` → `askForColumnToGo`，`plugin.xml:1090`；
+    /// `ResultSetHandlerMain:526-534`）。
+    ///
+    /// 与 `CTRL+G` 的形态差别：行号有状态栏常驻输入框可落脚，列名没有——所以这条
+    /// **开面板内浮层**（`ResultPanel::open_goto_column` 要 window 交焦点给输入框）。
+    /// 没有列可跳时留一句提示（第 69 批「键位不可用要说话」口径）。
+    pub(crate) fn on_goto_column(
+        &mut self,
+        _: &GotoColumn,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let opened = self
+            .result_panel
+            .update(cx, |panel, cx| panel.open_goto_column(window, cx));
+        if !opened {
+            self.set_message(Some("这份结果还没有列可跳；先执行查询".to_string()), cx);
+        }
     }
 
     /// 邻行复制的共用段：门控 + 越界 / 已删 / 无写入 三种「按了但没改」的提示。

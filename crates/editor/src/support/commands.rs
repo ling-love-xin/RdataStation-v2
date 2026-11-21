@@ -72,10 +72,12 @@ pub use result_panel::grid::RESULT_GRID_CONTEXT;
 /// 确认过才开跑。
 ///
 /// 【第 74 批】`CTRL+R` 撤销全部未提交变更（`CMD_REJECT_CHANGES`，`:1083`）。
+///
+/// 【第 75 批】`CTRL+SHIFT+G` 跳转到列（`CMD_GO_TO_COLUMN`，`:1090`）。
 pub use result_panel::grid::{
     CommitResultChanges, CopyRowValuesFromAbove, CopyRowValuesFromBelow, CycleResultPresentation,
     DeleteResultRow, DuplicateResultRow, EnterCellEdit, FetchAllData, FetchNextSegment,
-    FocusRowJump, InsertResultRow, RejectPendingChanges,
+    FocusRowJump, GotoColumn, InsertResultRow, RejectPendingChanges,
 };
 
 /// 【第 60 批】结果**面板**的 key context（`RESULT_GRID_CONTEXT` 的父层）。

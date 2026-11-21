@@ -131,6 +131,13 @@ actions!(
         /// 钮只在有待提交时摆（`panel/render.rs` 的 `pending_changes > 0`），
         /// 无待提交时键位留一句提示（第 69 批口径，DBeaver 那边是静默 return）。
         RejectPendingChanges,
+        /// 【第 75 批】`CTRL+SHIFT+G`：跳转到列（`CMD_GO_TO_COLUMN` →
+        /// `askForColumnToGo`，`plugin.xml:1090`）。
+        ///
+        /// DBeaver 弹 `InputDialog`（名字 / 1 基序号二选一）；本仓做成面板内浮层
+        /// （`goto_column_open`）——只送 `ResultRequest::AskGotoColumn`，
+        /// 开不开由宿主判（没有列可跳时留提示）。
+        GotoColumn,
     ]
 );
 

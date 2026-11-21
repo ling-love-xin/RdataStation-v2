@@ -5651,3 +5651,118 @@ fn presentation_focus_target_follows_the_presentation(cx: &mut gpui_kit::TestApp
     let text_target = cx.update(|_w, app| panel.read(app).presentation_focus_target(app));
     assert_eq!(text_target, panel_handle, "文本态应把焦点交给面板根");
 }
+
+/// 【第 75 批】跳列解析的三段顺序（DBeaver `askForColumnToGo:815-849`）：
+/// 先按名字（大小写不敏感）→ 再按 1 基序号 → 都不中才报「未知列名」。
+#[gpui_kit::test]
+fn goto_column_target_matches_its_name_then_its_one_based_index(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    cx.update(|_window, app| {
+        let panel = panel.read(app);
+        // harness 的列 = ["id", "amount"]，数据列序 0 / 1
+        assert_eq!(panel.goto_column_target("amount", app), Ok(1));
+        assert_eq!(
+            panel.goto_column_target("AMOUNT", app),
+            Ok(1),
+            "列名不区分大小写（上游用 name.toUpperCase() 建映射）"
+        );
+        assert_eq!(panel.goto_column_target(" id ", app), Ok(0), "两端空白要吃掉");
+        assert_eq!(panel.goto_column_target("2", app), Ok(1), "序号从 1 起");
+        assert_eq!(panel.goto_column_target("1", app), Ok(0));
+        assert!(
+            panel.goto_column_target("3", app).is_err(),
+            "越界序号必须报错，不能夹到最后一列"
+        );
+        assert!(
+            panel.goto_column_target("nope", app).is_err(),
+            "未知列名要报错"
+        );
+        assert!(
+            panel.goto_column_target("", app).is_err(),
+            "空输入要报错"
+        );
+    });
+}
+
+/// 【第 75 批】跳列浮层：开 → 遮罩挂上；提交后 → 选中该列（**组件列 = 显示列 + 1**）、
+/// 行保持不动、浮层收掉。
+#[gpui_kit::test]
+fn the_goto_column_overlay_jumps_and_keeps_the_current_row(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    let grid = cx.update(|_w, app| panel.read(app).grid.clone());
+
+    // 当前行 = 第 2 行（组件行 1），当前列 = 第 1 个数据列（组件列 1）
+    cx.update(|_w, app| grid.update(app, |state, cx| state.set_selected_cell(1, 1, cx)));
+
+    let opened = cx.update(|window, app| panel.update(app, |p, cx| p.open_goto_column(window, cx)));
+    assert!(opened, "有列时可跳");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-goto-column").is_some(),
+        "打开后遮罩要挂上"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-goto-column-go").is_some(),
+        "浮层要有「跳转」钮"
+    );
+
+    // 输列名「amount」（第 2 个数据列 → 组件列 2）并提交
+    cx.update(|window, app| {
+        panel.update(app, |p, cx| p.set_goto_column_text_for_test("amount", window, cx));
+    });
+    cx.update(|window, app| panel.update(app, |p, cx| p.submit_goto_column(window, cx)));
+
+    let (selected, open) = cx.update(|_w, app| {
+        let p = panel.read(app);
+        (p.grid.read(app).selected_cell(), p.goto_column_for_test(app))
+    });
+    assert_eq!(
+        selected,
+        Some((1, 2)),
+        "选中 amount（组件列 2），且**行保持 1**（上游是 scrollToRow(CURRENT)，不是跳首行）"
+    );
+    assert!(!open, "提交后浮层要收");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-goto-column").is_none(),
+        "收掉后遮罩不应再渲染"
+    );
+}
+
+/// 【第 75 批】跳列失败要**留在浮层里**说原因（DBeaver 弹错后不关对话框）：
+/// 未知列名、序号越界都不收浮层，错误行照常渲染出来。
+#[gpui_kit::test]
+fn an_unknown_column_keeps_the_overlay_open_with_the_reason(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    cx.update(|window, app| panel.update(app, |p, cx| p.open_goto_column(window, cx)));
+    cx.update(|window, app| {
+        panel.update(app, |p, cx| p.set_goto_column_text_for_test("nope", window, cx));
+    });
+    cx.update(|window, app| panel.update(app, |p, cx| p.submit_goto_column(window, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(
+        cx.update(|_w, app| panel.read(app).goto_column_for_test(app)),
+        "失败不能顺手关掉浮层"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-goto-column-error").is_some(),
+        "错误行要渲染出来"
+    );
+
+    // 改成合法序号再提交：这次成功并收浮层
+    cx.update(|window, app| {
+        panel.update(app, |p, cx| p.set_goto_column_text_for_test("2", window, cx));
+    });
+    cx.update(|window, app| panel.update(app, |p, cx| p.submit_goto_column(window, cx)));
+    assert!(!cx.update(|_w, app| panel.read(app).goto_column_for_test(app)));
+}

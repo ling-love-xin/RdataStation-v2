@@ -136,6 +136,146 @@ impl ResultPanel {
             .into_any_element()
     }
 
+    /// 【第 75 批】「跳转到列」浮层（DBeaver `CMD_GO_TO_COLUMN` → `askForColumnToGo`，
+    /// `ResultSetHandlerMain:526-534 / 762-849`；标题文案取自 `bundle_zh.properties:252-253`
+    /// 「跳转到列」）。
+    ///
+    /// **有意差异**（三处，都是为了本仓输入组件的能力边界）：
+    /// 1. 上游是 `InputDialog`（模态窗口），本仓做成面板内遮罩卡片——与 SQL 预览 /
+    ///    筛选设置 / 取全部确认同一范式（理由见 `render_filter_settings` 注释）；
+    /// 2. 上游预填当前属性名且默认全选，本仓把当前列名放 placeholder（`InputState`
+    ///    没有 `select_all`，预填后敲字会拼成误值）；
+    /// 3. 上游带后缀匹配的内容补全（`ContentAssistUtils.installContentProposal`，
+    ///    `:836-845`），本仓 `InputState` 无补全通道——留待输入组件补齐。
+    ///
+    /// 提交路径与 Enter 同一条终点：这里只入队 `SubmitGotoColumn`，宿主拿 window 后调
+    /// `ResultPanel::submit_goto_column`（解析 / 报错 / 焦点回收都在那边）。
+    pub(crate) fn render_goto_column(&self, cx: &App) -> AnyElement {
+        let theme = cx.theme();
+        let esc_queue = self.queue.clone();
+        let close_queue = self.queue.clone();
+        let cancel_queue = self.queue.clone();
+        let submit_queue = self.queue.clone();
+        let columns = self.grid.read(cx).delegate().columns().len();
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(theme.colors.overlay)
+            .debug_selector(|| "editor-result-goto-column".to_string())
+            .on_key_down(move |event, _window, app| {
+                if event.keystroke.key == "escape" {
+                    esc_queue.request(ResultRequest::CloseGotoColumn, app);
+                }
+            })
+            .child(
+                div()
+                    .relative()
+                    .flex_col()
+                    .w(px(ui::RESULT_GOTO_COLUMN_WIDTH * 16.0))
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.colors.border)
+                    .bg(theme.colors.background)
+                    .overflow_hidden()
+                    .debug_selector(|| "editor-result-goto-column-card".to_string())
+                    // 标题行：「跳转到列」+ ✕
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .justify_between()
+                            .px_3()
+                            .py_2()
+                            .border_b(ui::HAIRLINE)
+                            .border_color(theme.colors.border)
+                            .child(div().text_sm().child("跳转到列"))
+                            .child(
+                                Button::new("editor-result-goto-column-close")
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::X)
+                                    .debug_selector(|| "editor-result-goto-column-close".to_string())
+                                    .tooltip("关闭".to_string())
+                                    .on_click(move |_, _window, app| {
+                                        close_queue.request(ResultRequest::CloseGotoColumn, app);
+                                    }),
+                            ),
+                    )
+                    // 正文：输入框 + 错误行 + 口径提示
+                    .child(
+                        div()
+                            .v_flex()
+                            .gap_2()
+                            .px_3()
+                            .py_3()
+                            .debug_selector(|| "editor-result-goto-column-body".to_string())
+                            .child(
+                                gpui_kit::component::input::Input::new(&self.goto_column_input)
+                                    .with_size(gpui_kit::component::Size::Small),
+                            )
+                            .children(self.goto_column_error.as_ref().map(|error| {
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.colors.danger)
+                                    .debug_selector(|| {
+                                        "editor-result-goto-column-error".to_string()
+                                    })
+                                    .child(error.clone())
+                            }))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.colors.muted_foreground)
+                                    .child(SharedString::from(format!(
+                                        "共 {columns} 列；列名不区分大小写，也可输入从 1 起的序号。"
+                                    ))),
+                            ),
+                    )
+                    // 页脚：口径提示 + 取消 / 跳转
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .justify_between()
+                            .gap_2()
+                            .px_3()
+                            .py_3()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_xs()
+                                    .text_color(theme.colors.muted_foreground)
+                                    .child("跳转后保持当前行，只横向滚到该列。"),
+                            )
+                            .child(
+                                Button::new("editor-result-goto-column-cancel")
+                                    .ghost()
+                                    .small()
+                                    .label("取消")
+                                    .debug_selector(|| "editor-result-goto-column-cancel".to_string())
+                                    .on_click(move |_, _window, app| {
+                                        cancel_queue.request(ResultRequest::CloseGotoColumn, app);
+                                    }),
+                            )
+                            .child(
+                                Button::new("editor-result-goto-column-go")
+                                    .primary()
+                                    .small()
+                                    .label("跳转")
+                                    .debug_selector(|| "editor-result-goto-column-go".to_string())
+                                    .on_click(move |_, _window, app| {
+                                        submit_queue.request(ResultRequest::SubmitGotoColumn, app);
+                                    }),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
     /// 【第 72 批】「获取全部数据」确认浮层
     /// （DBeaver `CONFIRM_RS_FETCH_ALL`：`ConfirmationDialog.WARNING` + `QUESTION`，
     /// `ResultSetViewer.readAllData:4433-4440`）。

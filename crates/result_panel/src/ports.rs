@@ -248,6 +248,16 @@ pub enum ResultRequest {
     /// 【第 72 批】关掉「获取全部数据」确认浮层（取消 / Esc / ✕）：什么都不做，
     /// 只把 `fetch_all_confirm_open` 收回，**不动**已生效的结果集。
     CloseFetchAllConfirm,
+    /// 【第 75 批】`CTRL+SHIFT+G` 跳列（DBeaver `CMD_GO_TO_COLUMN` →
+    /// `askForColumnToGo`，`plugin.xml:1090`；`ResultSetHandlerMain:526-534`）。
+    ///
+    /// 键位那条不在这里：`HostPanel::on_goto_column` 直接调
+    /// `ResultPanel::open_goto_column`（要 window 交焦点，与 `CTRL+G` 的行号框同构）。
+    /// 下面两条是**浮层自己**的出口（render 只有 `&App`，拿不到 window）。
+    SubmitGotoColumn,
+    /// 【第 75 批】提交跳列（浮层「跳转」钮）：解析 + 跳转 + 收浮层 / 报错都在
+    /// `ResultPanel::submit_goto_column`（要 window 把焦点交回网格）。
+    CloseGotoColumn,
     /// 【分页】状态栏翻页（首页 / 上页 / 下页 / 末页）：**纯视图滚动**，不重查
     /// （下页到底且这份结果还有下一段时，宿主顺带发一次取下一段）
     GoPage(PageTarget),

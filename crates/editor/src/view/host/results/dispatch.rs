@@ -306,6 +306,15 @@ impl EditorHostPanel {
             }
             ResultRequest::GoPage(target) => self.go_page(target, cx),
             ResultRequest::GoRow(row) => self.go_row(row, cx),
+            // 【第 75 批】跳列浮层的两个出口（render 只有 `&App`，焦点回收要 window）：
+            // 提交 = 解析 + 跳 + 收浮层；关闭 = 只收浮层。键位那条不走这里
+            // （`on_goto_column` 直接调 `open_goto_column`，与 `CTRL+G` 同构）。
+            ResultRequest::SubmitGotoColumn => self
+                .result_panel
+                .update(cx, |p, cx| p.submit_goto_column(window, cx)),
+            ResultRequest::CloseGotoColumn => self
+                .result_panel
+                .update(cx, |p, cx| p.close_goto_column(window, cx)),
             // 【P2-1】值查看器 hex 翻页：页号是面板自持的纯视图态，宿主只把请求还回面板
             ResultRequest::HexPage(page) => {
                 self.result_panel

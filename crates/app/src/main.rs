@@ -421,6 +421,15 @@ fn run_app() {
                     editor::commands::RejectPendingChanges,
                     Some(editor::commands::RESULT_GRID_CONTEXT),
                 ),
+                // 【第 75 批】`CTRL+SHIFT+G` = `CMD_GO_TO_COLUMN` → `askForColumnToGo`
+                // （`plugin.xml:1090`；`ResultSetHandlerMain:526-534`）。与 `CTRL+G` 的
+                // 行号跳转成对：那条复用状态栏常驻行号框，这条开面板内浮层（列名 /
+                // 1 基序号二选一）。`ctrl-shift-g` 此前没有绑定，不覆写任何既有键。
+                KeyBinding::new(
+                    "ctrl-shift-g",
+                    editor::commands::GotoColumn,
+                    Some(editor::commands::RESULT_GRID_CONTEXT),
+                ),
                 // 【第 60 批】同一条 `Ctrl+反引号` 再绑到**面板层**上下文：文本态下网格
                 // 整块不渲染，网格 context 不在焦点路径上；焦点落在面板根时靠这条命中
                 // （两层同时匹配时 gpui 按 context 深度取更深的网格那条，不会切两次）。

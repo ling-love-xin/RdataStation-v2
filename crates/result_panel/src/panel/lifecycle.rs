@@ -187,10 +187,34 @@ impl ResultPanel {
             },
         );
 
+        // 【第 75 批】跳列浮层的输入框（DBeaver `askForColumnToGo` 的 `InputDialog` 文本框，
+        // `ResultSetHandlerMain:815-820`）：**常驻实体**。`InputState::new` 要 `&mut Window`，
+        // 只有构造期与事件路径拿得到（render 拿不到），所以不能「打开浮层时才建」。
+        let goto_column_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx);
+            state.set_placeholder("列名或序号（从 1 起）", window, cx);
+            state
+        });
+        // `PressEnter` 提交（解析 → 跳转 → 收浮层）；`Change` 只清掉上一轮的错误行，
+        // **不做即时跳转**——DBeaver 那边也是点 OK 才动作，输到一半的「ORD」不该乱跳。
+        let goto_column_sub = cx.subscribe_in(
+            &goto_column_input,
+            window,
+            |this, _state, event: &InputEvent, window, cx| match event {
+                InputEvent::PressEnter { .. } => this.submit_goto_column(window, cx),
+                InputEvent::Change => {
+                    if this.goto_column_error.is_some() {
+                        this.goto_column_error = None;
+                        cx.notify();
+                    }
+                }
+                _ => {}
+            },
+        );
+
         // 占位网格：编辑器构造真网格（含钩子）后经 `set_grids` 替换；占位仅保证
         // 构造后到接线前这段窗口里实体非空（渲染不会走到——还没 sync 过）
         let grid = result_grid::new_table_state(ResultGridDelegate::empty("尚未执行"), window, cx);
-
         // 【值查看器】JSON 展开树状态（`tree::Tree` 组件承载）：选中格变化时事件路径
         // `rebuild_value_tree` 解析 + `set_items` 重建；render 只摆 Tree，不解析 JSON
         let json_tree = cx.new(|cx| TreeState::new(cx));
@@ -259,6 +283,11 @@ impl ResultPanel {
             sql_dialog_title: None,
             // 【第 72 批】「获取全部数据」确认浮层出厂关（只在用户点了才开）
             fetch_all_confirm_open: false,
+            // 【第 75 批】跳列浮层出厂关；输入框是常驻实体（构造期建好，见上）
+            goto_column_open: false,
+            goto_column_input,
+            goto_column_error: None,
+            _goto_column_sub: Some(goto_column_sub),
             filter_expanded: false,
             // 【筛选条显隐】出厂显示（对齐 `DataEditorsPreferencesInitializer.java:67`）；
             // 宿主构造期用 `set_show_filter_panel` 注入用户偏好
