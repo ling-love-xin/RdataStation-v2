@@ -8,7 +8,7 @@ use gpui_kit::*;
 use super::delegate::ResultGridDelegate;
 use super::stats::{column_stats, stats_lines};
 use super::text::preview_of;
-use crate::ports::ResultRequest;
+use crate::ports::{Presentation, ResultRequest};
 use crate::rowset::RowRef;
 /// 【选中统计】状态行三项开关的种类（DBeaver layout 菜单三颗
 /// `ToggleSelectionStatAction`，`ResultSetViewer.java:3580-3588`）
@@ -117,6 +117,18 @@ pub enum ContextAction {
     /// 【选中统计】切换状态行三项开关之一（`on` = 点击后的目标态；
     /// DBeaver 的 `ToggleSelectionStatAction` 是勾选项，`ResultSetViewer.java:3580-3588`）
     ToggleSelectionStat { kind: SelectionStatKind, on: bool },
+    /// 【布局段·记录模式】开 / 关记录（转置）视图（对齐 DBeaver `ToggleModeAction`，
+    /// `ResultSetViewer.java:3550-3552`；动作 `actions/ToggleModeAction.java`，
+    /// 文案 `dialog_text_check_box_record` = 记录）。文本态不摆（DBeaver 的
+    /// `supportsRecordMode()` 门控，`:3550`）。
+    ToggleRecordMode,
+    /// 【布局段】切到**下一个**呈现方式（对齐 DBeaver `CMD_SWITCH_PRESENTATION`，
+    /// `ResultSetViewer.java:3553-3555`；循环逻辑 `switchPresentation():1161-1172`，
+    /// 命令名 `command.org.jkiss.dbeaver.core.resultset.switchPresentation.name` = 切换表示）
+    CyclePresentation,
+    /// 【布局段】显式切到某一档（对齐 DBeaver 给每个 presentation 摆的勾选项，
+    /// `ResultSetViewer.java:3558-3577`）
+    SetPresentation(Presentation),
 }
 /// 右键菜单里的一项
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,6 +188,11 @@ pub struct ContextTarget {
     pub selection_stat_rows: bool,
     pub selection_stat_columns: bool,
     pub selection_stat_cells: bool,
+    /// 【布局段】当前呈现方式（网格 / 文本）。面板态镜像进网格 delegate，
+    /// 菜单据此给「网格 / 文本」两项标勾选态（DBeaver 各 presentation 的 check box）
+    pub presentation: Presentation,
+    /// 【布局段】记录（转置）视图是否开着（= delegate 的 `transposed`）
+    pub record_mode: bool,
 }
 /// 行号槽（`#` 列）右键的项（**纯函数**）：DBeaver 的 `ROW_HEADER` 落点只挂「复制行号」
 /// （`ResultSetViewer.java:3162-3164`；handler `ResultSetHandlerMain.java:377-396`）。
@@ -354,10 +371,54 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             separator_before: false,
         });
     }
-    // 【DBeaver 对齐】选中统计三颗开关（`ResultSetViewer.java:3580-3588` 的 layout 菜单
-    // 最后一段）：本仓菜单是扁平结构（没有子菜单），三项直接摆在这一落点尾部；
-    // 「✓」前缀表示当前已开启（DBeaver 用 check box 表达同一件事）。
+    // 【DBeaver 对齐】右键菜单尾部两段（`ResultSetViewer.fillLayoutMenu:3549-3597` 的顺序）：
+    // 先呈现方式组（记录模式 / 切换表示 / 网格·文本勾选，`:3550-3577`），再选中统计三颗
+    // （`:3581-3587`）。本仓菜单是扁平结构（没有 layout 子菜单），两段直接平铺在尾部；
+    // 「✓」前缀表示当前已选中（DBeaver 用 check box 表达同一件事）。
+    items.extend(layout_presentation_menu_items(target));
     items.extend(selection_stat_menu_items(target));
+    items
+}
+
+/// 【DBeaver 对齐】右键 layout 段的「呈现方式」组（**纯函数**，`ResultSetViewer.java:3549-3578`）：
+///
+/// 顺序照 DBeaver：记录模式（`ToggleModeAction`，`:3550-3552`，仅 `supportsRecordMode()`）→
+/// 切换表示（`CMD_SWITCH_PRESENTATION`，`:3553-3555`）→ 各呈现方式的勾选项（`:3558-3577`）。
+///
+/// 本仓菜单扁平（没有 layout 子菜单），这一段平铺在数据格右键尾部、选中统计三颗之前；
+/// 组首项带分隔线，把它与上方命令隔开（DBeaver 的 presentation 段前面也是一条 separator）。
+pub fn layout_presentation_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
+    let mut items = Vec::new();
+    // 文本态没有「记录」语义（DBeaver 同样按 `activePresentationDescriptor.supportsRecordMode()`
+    // 决定摆不摆，`:3550`）——本仓用「不摆」表达，不引入菜单禁用态。
+    if target.presentation != Presentation::Text {
+        items.push(ContextMenuItem {
+            label: format!("{}记录", if target.record_mode { "✓ " } else { "" }),
+            action: ContextAction::ToggleRecordMode,
+            separator_before: true,
+        });
+    }
+    items.push(ContextMenuItem {
+        // DBeaver 只在 presentation 数 ≥2 时摆切换项（`canSwitchPresentation`）；
+        // 本仓恒有两档（网格 / 文本），所以恒摆
+        label: "切换表示".to_string(),
+        action: ContextAction::CyclePresentation,
+        separator_before: items.is_empty(),
+    });
+    for (presentation, label) in [(Presentation::Grid, "网格"), (Presentation::Text, "文本")] {
+        items.push(ContextMenuItem {
+            label: format!(
+                "{}{label}",
+                if target.presentation == presentation {
+                    "✓ "
+                } else {
+                    ""
+                }
+            ),
+            action: ContextAction::SetPresentation(presentation),
+            separator_before: false,
+        });
+    }
     items
 }
 
@@ -680,6 +741,9 @@ pub(crate) fn context_menu(
         selection_stat_rows: delegate.selection_stat_prefs.rows,
         selection_stat_columns: delegate.selection_stat_prefs.columns,
         selection_stat_cells: delegate.selection_stat_prefs.cells,
+        // 【布局段】呈现方式与记录模式（delegate 侧镜像 / 直读 transposed）
+        presentation: delegate.presentation_view(),
+        record_mode: delegate.transposed,
     };
     for item in context_menu_items(&target) {
         if item.separator_before {
@@ -921,6 +985,33 @@ pub(crate) fn context_menu(
                     menu = menu.item(PopupMenuItem::new(item.label).on_click(
                         move |_, _window, app| {
                             queue.request(ResultRequest::ToggleSelectionStat { kind, on }, app);
+                        },
+                    ));
+                }
+            }
+            // 【布局段】记录模式 / 切换表示 / 显式切档：全是**面板状态**（呈现方式由面板
+            // 决定、记录视图由面板转置），网格只交回请求；没有队列（独立网格）就不摆。
+            ContextAction::ToggleRecordMode => {
+                if let Some(queue) = delegate.action_queue.clone() {
+                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| queue.request(ResultRequest::ToggleTranspose, app),
+                    ));
+                }
+            }
+            ContextAction::CyclePresentation => {
+                if let Some(queue) = delegate.action_queue.clone() {
+                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| {
+                            queue.request(ResultRequest::CyclePresentation, app)
+                        },
+                    ));
+                }
+            }
+            ContextAction::SetPresentation(presentation) => {
+                if let Some(queue) = delegate.action_queue.clone() {
+                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| {
+                            queue.request(ResultRequest::SetPresentation(presentation), app)
                         },
                     ));
                 }

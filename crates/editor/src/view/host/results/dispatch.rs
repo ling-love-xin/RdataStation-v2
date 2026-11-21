@@ -386,6 +386,10 @@ impl EditorHostPanel {
                 self.result_panel
                     .update(cx, |p, cx| p.set_presentation(presentation, cx));
             }
+            // 【呈现·布局段】切到下一档（DBeaver `CMD_SWITCH_PRESENTATION`）：同为面板状态
+            ResultRequest::CyclePresentation => {
+                self.result_panel.update(cx, |p, cx| p.cycle_presentation(cx));
+            }
             // 【右栏】标签页切换（列浏览器 / 值详情 / 计算 / 分组）：纯面板状态
             ResultRequest::SetRightTab(tab) => {
                 self.result_panel

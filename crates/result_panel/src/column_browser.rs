@@ -243,6 +243,9 @@ impl ListDelegate for ColumnBrowserDelegate {
             selection_stat_rows: false,
             selection_stat_columns: false,
             selection_stat_cells: false,
+            // 列浏览器菜单同样不摆布局段（呈现方式组只在单元格右键）
+            presentation: delegate.presentation_view(),
+            record_mode: delegate.transposed,
         };
         let menu_items = result_grid::column_browser_menu_items(&target);
         // 【多选批量动作】对齐 DBeaver：多选动作挂在**清单右键菜单**上

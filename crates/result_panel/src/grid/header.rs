@@ -279,6 +279,9 @@ pub(crate) fn render_th(
         selection_stat_rows: false,
         selection_stat_columns: false,
         selection_stat_cells: false,
+        // 列头菜单同样不摆布局段（呈现方式组只在单元格右键）
+        presentation: delegate.presentation_view(),
+        record_mode: delegate.transposed,
     };
     let menu_items = column_menu_items(&column_menu_target);
     let copy_column_text = delegate.column_text(column);

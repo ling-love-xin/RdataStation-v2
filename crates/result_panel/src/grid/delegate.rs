@@ -13,6 +13,7 @@ use gpui_kit::*;
 
 use super::menu::column_distinct_values;
 use super::view_rows::TextFingerprint;
+use crate::ports::Presentation;
 use crate::rowset::{LocalRowSet, RowRef};
 use crate::store::ColumnType;
 use ::shared::FactFrame;
@@ -165,6 +166,9 @@ pub struct ResultGridDelegate {
     /// 菜单要标「✓ 已开启」，而偏好真值在面板：网格只读这份镜像。面板在构造 / 切换 /
     /// 设置页变更时同步过来（[`Self::set_selection_stat_prefs`]），不随 `set_data` 清空。
     pub(crate) selection_stat_prefs: crate::grid::SelectionStatPrefs,
+    /// 【布局段】呈现方式镜像（面板态；右键菜单给「网格 / 文本」标勾选态用）。
+    /// 与 `selection_stat_prefs` 同口径：视图偏好，不随 `set_data` 清。
+    pub(crate) presentation_view: Presentation,
     /// 【类型样式】全局偏好（数字格式 / NULL 占位 / 布尔映射 / 按族对齐与前景色）。
     /// 面板在 `set_data` 同一次同步里（或偏好变更时）同步过来；只影响渲染显示，
     /// 复制 / 导出 / 编辑仍用原始值。
@@ -423,6 +427,16 @@ impl ResultGridDelegate {
     /// 与 [`Self::set_show_column_comments`] 同口径：面板视图偏好，不随 `set_data` 清掉。
     pub fn set_selection_stat_prefs(&mut self, prefs: crate::grid::SelectionStatPrefs) {
         self.selection_stat_prefs = prefs;
+    }
+
+    /// 【布局段】面板同步呈现方式镜像（右键菜单给「网格 / 文本」标勾选态）。
+    pub fn set_presentation_view(&mut self, presentation: Presentation) {
+        self.presentation_view = presentation;
+    }
+
+    /// 【布局段】当前镜像的呈现方式（右键菜单构造 `ContextTarget` 时读）。
+    pub fn presentation_view(&self) -> Presentation {
+        self.presentation_view
     }
 
     /// 表头带该多高（`None` = 用组件默认，即 [`crate::ui::RESULT_TABLE_SIZE`] 档的行高 26px）。

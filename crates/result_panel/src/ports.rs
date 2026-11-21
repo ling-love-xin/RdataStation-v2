@@ -286,6 +286,10 @@ pub enum ResultRequest {
     /// 网格 / 文本两个入口（左栏按钮组、工具栏按钮）都要能精确切到目标，
     /// 翻转语义在「已在该呈现」时会把用户点反。
     SetPresentation(Presentation),
+    /// 【布局段】切到下一个呈现方式（对齐 DBeaver `CMD_SWITCH_PRESENTATION`：
+    /// `ResultSetViewer.switchPresentation():1161-1172` 在 `availablePresentations` 里循环；
+    /// 本仓两档：网格 ⇄ 文本）。记录（转置）状态不参与循环（DBeaver 亦然）。
+    CyclePresentation,
     /// 右栏标签页切换（列浏览器 / 值详情 / 计算 / 分组；对齐 DBeaver 右侧 metadata /
     /// valueviewer / aggregate / grouping 同栏页签体系）
     SetRightTab(RightTab),
@@ -746,6 +750,17 @@ pub enum Presentation {
     Grid,
     /// 文本视图：当前结果（可见列 + 可见行）渲染为 TSV 纯文本，可选中复制
     Text,
+}
+
+impl Presentation {
+    /// 【布局段】循环里的下一档（对齐 DBeaver `ResultSetViewer.switchPresentation():1161-1172`
+    /// 在 `availablePresentations` 里取下一个）：本仓两档，网格 ⇄ 文本。
+    pub fn next(self) -> Presentation {
+        match self {
+            Presentation::Grid => Presentation::Text,
+            Presentation::Text => Presentation::Grid,
+        }
+    }
 }
 
 /// 结果面板右侧辅助栏的标签页（对齐 DBeaver `resultset/panel/` 右侧面板组：

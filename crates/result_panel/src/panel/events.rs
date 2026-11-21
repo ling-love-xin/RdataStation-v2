@@ -418,7 +418,20 @@ impl ResultPanel {
     /// （用户选的是「怎么看结果」，不是某份结果的属性）。
     pub fn set_presentation(&mut self, presentation: Presentation, cx: &mut Context<Self>) {
         self.presentation = presentation;
+        // 【布局段】网格侧镜像同步：右键菜单给「网格 / 文本」标勾选态要读它
+        self.grid.update(cx, |state, _cx| {
+            state.delegate_mut().set_presentation_view(presentation);
+        });
         cx.notify();
+    }
+
+    /// 【布局段】切到下一个呈现方式（对齐 DBeaver `ResultSetViewer.switchPresentation():1161-1172`
+    /// 的循环语义）：本仓两档，网格 ⇄ 文本。
+    ///
+    /// 记录（转置）视图不参与循环——DBeaver 的记录模式是 spreadsheet presentation 内部的
+    /// 开关，不在 `availablePresentations` 列表里。
+    pub fn cycle_presentation(&mut self, cx: &mut Context<Self>) {
+        self.set_presentation(self.presentation.next(), cx);
     }
 
     /// 【右栏】标签页切换（列浏览器 / 值详情 / 计算 / 分组 / 引用 / 执行SQL）。

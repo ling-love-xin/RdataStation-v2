@@ -13,14 +13,15 @@ use crate::grid::status::{
 use crate::grid::status::{FIRST_PAGER_ACTION, FIRST_SYSTEM_ACTION};
 use crate::grid::text::{cell_matches, find_in_cell, preview_of};
 use crate::grid::view_rows::compare_cells;
-use crate::ports::FindCriteria;
+use crate::ports::{FindCriteria, Presentation};
 use gpui_kit::ImageFormat;
 use crate::grid::{
     CELL_DISPLAY_LIMIT, ContextAction, ContextTarget, GridSelection, MAX_SINGLE_SEGMENT_ROWS,
     ResultGridDelegate, ResultMatch, ResultStatus, ResultToolbar, SelectionStatKind,
     SelectionStatPrefs, WINDOW_FETCH_NOTICE, column_browser_menu_items, column_distinct_values,
     column_menu_items, column_stats, column_stats_from_values, context_menu_items, duration_text,
-    fetch_more_hint, format_cell_text, group_by_values, row_number_menu_items,
+    fetch_more_hint, format_cell_text, group_by_values, layout_presentation_menu_items,
+    row_number_menu_items,
     selection_stat_menu_items, selection_statistics, stats_lines, status_action_placeholders,
     status_segments, thousands, truncated_hint, truncation_notice, validate_edit_value,
     window_fetch_active,
@@ -106,6 +107,9 @@ fn target(value: &str, name: &str, column: usize) -> ContextTarget {
         selection_stat_rows: false,
         selection_stat_columns: false,
         selection_stat_cells: false,
+        // 【布局段】默认网格态、记录模式关（面板出厂态）
+        presentation: Presentation::Grid,
+        record_mode: false,
     }
 }
 
@@ -345,6 +349,12 @@ fn context_menu_offers_filter_copy_and_freeze() {
             "冻结「name」",
             "隐藏「name」",
             "列统计「name」",
+            // 【布局段】呈现方式组（记录 / 切换表示 / 网格·文本）+ 选中统计三颗，
+            // 两段顺序照 `ResultSetViewer.fillLayoutMenu:3549-3597`（本仓无子菜单，见 §9.33）
+            "记录",
+            "切换表示",
+            "✓ 网格",
+            "文本",
             // 【选中统计】layout 段三颗开关平铺在右键尾部（本仓无子菜单，见 §9.32）
             "显示选定的行数",
             "显示选定的列数",
@@ -576,11 +586,12 @@ fn context_menu_only_offers_insight_when_available() {
         }
     );
     assert!(with[ix].separator_before, "它自成一段，前面要有分隔线");
-    // 【选中统计】layout 段是右键最后一段：洞察段之后只剩三颗统计开关
+    // 【布局段 / 选中统计】layout 段是右键最后一段：洞察项之后只剩呈现方式组 4 项
+    // 与三颗统计开关（顺序照 `fillLayoutMenu:3549-3597`）；`ix` 自身也算在内
     assert_eq!(
         with.len() - ix,
-        4,
-        "洞察段之后应只剩三颗选中统计开关：{:?}",
+        8,
+        "洞察项起算应只剩它自己 + 呈现方式组 4 项 + 三颗统计开关：{:?}",
         with[ix..].iter().map(|i| i.label.as_str()).collect::<Vec<_>>()
     );
 }
@@ -1534,6 +1545,9 @@ fn column_menu_is_the_column_level_subset() {
         selection_stat_rows: false,
         selection_stat_columns: false,
         selection_stat_cells: false,
+        // 列头菜单用例不摆布局段（呈现方式组只在单元格右键），字段填出厂态即可
+        presentation: Presentation::Grid,
+        record_mode: false,
     };
     let items = column_menu_items(&target);
     let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
@@ -1581,6 +1595,9 @@ fn column_menu_ends_with_the_four_filter_commands() {
         selection_stat_rows: false,
         selection_stat_columns: false,
         selection_stat_cells: false,
+        // 列头菜单用例不摆布局段（呈现方式组只在单元格右键），字段填出厂态即可
+        presentation: Presentation::Grid,
+        record_mode: false,
     };
     let items = column_menu_items(&target);
     let tail_start = items.len() - 4;
@@ -1781,6 +1798,9 @@ fn column_menu_shows_conditional_items() {
         selection_stat_rows: false,
         selection_stat_columns: false,
         selection_stat_cells: false,
+        // 列头菜单用例不摆布局段（呈现方式组只在单元格右键），字段填出厂态即可
+        presentation: Presentation::Grid,
+        record_mode: false,
     };
     let items = column_menu_items(&target);
     let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
@@ -1872,6 +1892,9 @@ fn column_menu_lists_distinct_values_and_clear_only_when_active() {
         selection_stat_rows: false,
         selection_stat_columns: false,
         selection_stat_cells: false,
+        // 列头菜单用例不摆布局段（呈现方式组只在单元格右键），字段填出厂态即可
+        presentation: Presentation::Grid,
+        record_mode: false,
     };
     let items = column_menu_items(&target);
     let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
@@ -4422,5 +4445,128 @@ fn status_row_shows_the_selection_stat_segment_only_when_it_has_text(
     assert!(
         vcx.debug_bounds("editor-result-selection-stat").is_none(),
         "三项全关时状态行不该摆统计段（出厂视觉应与 2026-10-28 三项口径一致）"
+    );
+}
+
+/// 【DBeaver 对齐】右键 layout 段的「呈现方式」组（`ResultSetViewer.java:3549-3578`）：
+/// 网格态 = 记录 / 切换表示 / ✓ 网格 / 文本；记录开着时带 `✓ ` 前缀（DBeaver 的
+/// `ToggleModeAction` 是 `AS_CHECK_BOX`）；文本态**不摆**「记录」（DBeaver 按
+/// `activePresentationDescriptor.supportsRecordMode()` 门控，`:3550`），此时首项变成
+/// 「切换表示」并接过组首的分隔线。
+#[test]
+fn layout_presentation_menu_items_follow_dbeaver_order() {
+    // ① 网格态、记录关
+    let grid_off = target("x", "id", 1);
+    let items = layout_presentation_menu_items(&grid_off);
+    let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+    assert_eq!(labels, vec!["记录", "切换表示", "✓ 网格", "文本"]);
+    assert_eq!(items[0].action, ContextAction::ToggleRecordMode);
+    assert_eq!(items[1].action, ContextAction::CyclePresentation);
+    assert_eq!(
+        items[2].action,
+        ContextAction::SetPresentation(Presentation::Grid)
+    );
+    assert_eq!(
+        items[3].action,
+        ContextAction::SetPresentation(Presentation::Text)
+    );
+    // 组首带分隔线（与上方命令隔开），其余不带
+    assert!(items[0].separator_before);
+    assert!(!items[1].separator_before);
+    assert!(!items[2].separator_before);
+    assert!(!items[3].separator_before);
+
+    // ② 记录开着：`✓ 记录`
+    let mut recording = target("x", "id", 1);
+    recording.record_mode = true;
+    let items = layout_presentation_menu_items(&recording);
+    assert_eq!(items[0].label, "✓ 记录");
+
+    // ③ 文本态：没有「记录」，勾选落在「文本」
+    let mut text = target("x", "id", 1);
+    text.presentation = Presentation::Text;
+    let items = layout_presentation_menu_items(&text);
+    let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+    assert_eq!(labels, vec!["切换表示", "网格", "✓ 文本"]);
+    assert!(
+        items[0].separator_before,
+        "文本态首项（切换表示）也要与上方命令隔开"
+    );
+    assert!(!items[1].separator_before);
+    assert!(!items[2].separator_before);
+}
+
+/// 【DBeaver 对齐】布局段在右键里的位置：整段排在选中统计三颗**之前**
+/// （`fillLayoutMenu` 里 presentation 段 `:3550-3577` 在前、统计段 `:3581-3587` 在后），
+/// 而选中统计仍是尾部三项；两段都排在持久化项之后。
+#[test]
+fn context_menu_puts_layout_group_before_selection_stats() {
+    let mut probe = target_with_table("1", "id", 0);
+    probe.persist = true;
+    let items = context_menu_items(&probe);
+    let tail: Vec<&str> = items[items.len() - 7..]
+        .iter()
+        .map(|i| i.label.as_str())
+        .collect();
+    assert_eq!(
+        tail,
+        vec![
+            "记录",
+            "切换表示",
+            "✓ 网格",
+            "文本",
+            "显示选定的行数",
+            "显示选定的列数",
+            "显示选定的单元格数",
+        ],
+        "布局段（4 项）应紧挨在选中统计三颗之前，且三统计仍是尾部三项"
+    );
+    // 两段各自的首项都带分隔线（DBeaver 两段之间也有一条 separator）
+    assert!(items[items.len() - 7].separator_before);
+    assert!(items[items.len() - 3].separator_before);
+    // 持久化项在这七项之前
+    let persist_at = items
+        .iter()
+        .position(|i| matches!(i.action, ContextAction::PersistResultSet))
+        .expect("可持久化落点应摆持久化项");
+    assert!(persist_at < items.len() - 7);
+
+    // 列头菜单不摆布局段（DBeaver layout 菜单只从表格右键进）
+    let column_items = column_menu_items(&probe);
+    assert!(
+        !column_items.iter().any(|i| matches!(
+            i.action,
+            ContextAction::ToggleRecordMode
+                | ContextAction::CyclePresentation
+                | ContextAction::SetPresentation(_)
+        )),
+        "列头菜单不该出现呈现方式组"
+    );
+}
+
+/// 【布局段】呈现方式循环 = 网格 ⇄ 文本（对齐 DBeaver `switchPresentation():1161-1172`
+/// 取 `availablePresentations` 的下一个）；delegate 侧镜像可被右键菜单读到，
+/// 且与 `selection_stat_prefs` 同口径——换结果（`set_data`）不清掉。
+#[test]
+fn presentation_cycles_between_grid_and_text_and_mirrors_into_delegate() {
+    assert_eq!(Presentation::Grid.next(), Presentation::Text);
+    assert_eq!(Presentation::Text.next(), Presentation::Grid);
+    // 两档时连按两次回到原点
+    assert_eq!(Presentation::Grid.next().next(), Presentation::Grid);
+
+    let mut grid = grid_with(&[&["1", "a"]]);
+    assert_eq!(
+        grid.presentation_view(),
+        Presentation::Grid,
+        "出厂态应为网格（Presentation::default）"
+    );
+    grid.set_presentation_view(Presentation::Text);
+    assert_eq!(grid.presentation_view(), Presentation::Text);
+    // 换一批结果：呈现方式是面板视图偏好，不随数据清掉
+    grid.set_data(vec!["id".into()], vec![vec!["2".into()]]);
+    assert_eq!(
+        grid.presentation_view(),
+        Presentation::Text,
+        "呈现方式镜像不该被 set_data 复位"
     );
 }
