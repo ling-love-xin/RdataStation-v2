@@ -423,11 +423,14 @@ fn context_menu_offers_filter_copy_and_freeze() {
         "filters 段（复制段之后）之前要有分隔线（DBeaver `fillContextMenu:3166`）"
     );
     assert!(
-        items[11].separator_before,
-        "排序段与上方行级动作段之间保留一条分隔线（本仓没有 DBeaver 的 navigate 子菜单，\
-         用它代替 `fillContextMenu:3217` 的 Separator）"
+        !items[11].separator_before,
+        "排序段紧跟 filters 段、首项不带分隔线（DBeaver order 子菜单在 filters 之后且内部无 \
+         Separator，`fillContextMenu:3179-3187` / `fillOrderingsMenu:3939-3946`）"
     );
-    assert!(!items[13].separator_before, "冻结与排序同组");
+    assert!(
+        items[13].separator_before,
+        "列级视图段（冻结起）与上方行级动作段之间要有一条分隔线（DBeaver `:3219` 的 Separator）"
+    );
     assert_eq!(items[13].action, ContextAction::ToggleFreeze(1));
     assert_eq!(
         items[14].action,
@@ -485,7 +488,8 @@ fn context_menu_offers_insert_only_when_table_is_known() {
 /// 【#28-B3】行级动作（新增 / 复制 / 删除一行）的菜单闸口：
 /// - 只读结果集（`!editable`）整组不摆；
 /// - 已标记删除的底层行三项全不摆；
-/// - 可编辑且未删时三项都摆，独立分组（新增项带分隔线），排在复制段之后、排序段之前；
+/// - 可编辑且未删时三项都摆，独立分组（新增项带分隔线），排在**排序段之后**
+///   （DBeaver 段序 filters → order → navigate → edit，`fillContextMenu:3169-3218`）；
 /// - 动作携带视图行号（与复制整行同口径，不是列下标）。
 #[test]
 fn context_menu_row_actions_gate_on_editable_and_deleted() {
@@ -527,7 +531,8 @@ fn context_menu_row_actions_gate_on_editable_and_deleted() {
     assert!(!duplicate.separator_before, "复制 / 删除与新增同组");
     assert!(!delete.separator_before, "复制 / 删除与新增同组");
 
-    // 分组位置：复制段（CopyRowJson / CopyRowInsert）之后、排序段（SortDown）之前
+    // 分组位置：复制段（CopyRowJson / CopyRowInsert）之后、**排序段之后**
+    // （DBeaver 的 order 子菜单在 filters 之后、edit 之前，`:3179-3218`）
     let row_action_indexes = [insert, duplicate, delete]
         .iter()
         .map(|item| {
@@ -538,7 +543,6 @@ fn context_menu_row_actions_gate_on_editable_and_deleted() {
         .collect::<Option<Vec<_>>>()
         .expect("三项都在菜单里");
     let first_row_action = *row_action_indexes.iter().min().unwrap();
-    let last_row_action = *row_action_indexes.iter().max().unwrap();
     let last_copy = items
         .iter()
         .rposition(|item| {
@@ -554,8 +558,18 @@ fn context_menu_row_actions_gate_on_editable_and_deleted() {
         .iter()
         .position(|item| matches!(item.action, ContextAction::SortDown { .. }))
         .expect("排序段至少有一项");
-    assert!(last_copy < first_row_action, "行级动作排在复制段之后");
-    assert!(last_row_action < first_sort, "行级动作排在排序段之前");
+    let last_sort = items
+        .iter()
+        .rposition(|item| matches!(
+            item.action,
+            ContextAction::SortDown { .. } | ContextAction::ClearSort
+        ))
+        .expect("排序段至少有一项");
+    assert!(last_copy < first_sort, "排序段排在复制段之后");
+    assert!(
+        last_sort < first_row_action,
+        "行级动作排在排序段之后（DBeaver edit 子菜单在 order 之后，`:3197-3218`）"
+    );
 
     // 已删除：三项全不摆
     let mut deleted = target("orders", "name", 1);
@@ -4715,4 +4729,73 @@ fn data_cell_context_menu_also_offers_the_filter_settings_group() {
         .filter(|item| item.action == ContextAction::SaveFilterSetting)
         .count();
     assert_eq!(column_saves, 1, "列头菜单同样只摆一份");
+}
+
+/// 【DBeaver 对齐】数据格右键的**段序**照 `ResultSetViewer.fillContextMenu:3166-3219`：
+/// 复制段 → filters（`:3169-3177`）→ order（`:3179-3187`）→ edit 行级动作（`:3197-3218`）
+/// → 列级视图段（冻结 / 隐藏 / 统计，`:3219` 之后）→ …（尾部仍由 layout 三段收尾）。
+///
+/// 本仓没有 navigate 子菜单（`:3189-3195`），也不做子菜单（扁平口径），所以只钉相对顺序。
+#[test]
+fn context_menu_sections_follow_fill_context_menu_order() {
+    let mut editable = target("orders", "name", 1);
+    editable.editable = true;
+    let items = context_menu_items(&editable);
+    let index = |action: ContextAction| {
+        items
+            .iter()
+            .position(|item| item.action == action)
+            .unwrap_or_else(|| panic!("菜单里没有 {action:?}"))
+    };
+
+    let last_copy = items
+        .iter()
+        .rposition(|item| {
+            matches!(
+                item.action,
+                ContextAction::CopyRow(_)
+                    | ContextAction::CopyRowJson(_)
+                    | ContextAction::CopyRowInsert(_)
+            )
+        })
+        .expect("复制段至少有一项");
+    let save_filter = index(ContextAction::SaveFilterSetting);
+    let first_sort = items
+        .iter()
+        .position(|item| matches!(item.action, ContextAction::SortDown { .. }))
+        .expect("排序段至少有一项");
+    let last_sort = items
+        .iter()
+        .rposition(|item| matches!(item.action, ContextAction::SortDown { .. }))
+        .expect("排序段至少有一项");
+    let insert_row = index(ContextAction::InsertRowBelow(0));
+    let delete_row = index(ContextAction::DeleteRow(0));
+    let freeze = index(ContextAction::ToggleFreeze(1));
+
+    assert!(last_copy < save_filter, "filters 段在复制段之后（`:3166-3177`）");
+    assert!(save_filter < first_sort, "order 段在 filters 之后（`:3179-3187`）");
+    assert!(
+        last_sort < insert_row && last_sort < delete_row,
+        "edit 行级动作在 order 之后（`:3197-3218`）"
+    );
+    assert!(
+        delete_row < freeze,
+        "列级视图段（冻结起）在行级动作之后（`:3219` 的 Separator + `:3237` view 子菜单）"
+    );
+
+    // 分隔线：filters 首项、edit 首项、视图段首项各一条；order 内部与 filters→order 之间没有
+    let save_item = &items[save_filter];
+    assert!(save_item.separator_before, "filters 段前一条 Separator（`:3166`）");
+    assert!(
+        !items[first_sort].separator_before,
+        "order 段紧跟 filters，无前导分隔线（两个子菜单相邻）"
+    );
+    assert!(
+        items[insert_row].separator_before,
+        "edit 段前一条 Separator（`:3217`）"
+    );
+    assert!(
+        items[freeze].separator_before,
+        "视图段前一条 Separator（`:3219`）"
+    );
 }

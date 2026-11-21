@@ -280,9 +280,38 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
     }
     // 【DBeaver 对齐】`fillContextMenu:3166-3177`：复制段之后先一条 Separator，再挂 filters
     // 子菜单（对 DATA / COLUMN_HEADER / ROW_HEADER 三个落点都摆）；本仓菜单扁平，把
-    // `fillFiltersMenu` 的四项设置直接平铺在这里——位置在排序段之前（与 DBeaver 段序一致）。
+    // `fillFiltersMenu` 的四项设置直接平铺在这里。
     items.extend(filter_settings_menu_items());
-    // 【#28-B3】行级动作独立分组（对齐 DBeaver 行操作段）：新增 · 复制 · 删除一行。
+    // 【DBeaver 对齐】排序段（order 子菜单，`fillContextMenu:3179-3187`）：紧接 filters 之后、
+    // 行级动作之前。DBeaver 的 `fillOrderingsMenu:3939-3946` 内部只有 ASC / DESC / NONE 三项、
+    // 彼此无分隔线，所以本仓这三项同组、首项也不带分隔线。
+    items.push(ContextMenuItem {
+        label: format!("按「{column_name}」升序（下发源库）"),
+        action: ContextAction::SortDown {
+            column: column_name.to_string(),
+            descending: false,
+        },
+        separator_before: false,
+    });
+    items.push(ContextMenuItem {
+        label: format!("按「{column_name}」降序（下发源库）"),
+        action: ContextAction::SortDown {
+            column: column_name.to_string(),
+            descending: true,
+        },
+        separator_before: false,
+    });
+    // 【排序】当前正按此列排时补「取消排序」（DBeaver 排序子菜单的 NONE 项，同组无分隔线）
+    if target.sort_active {
+        items.push(ContextMenuItem {
+            label: format!("取消排序「{column_name}」"),
+            action: ContextAction::ClearSort,
+            separator_before: false,
+        });
+    }
+    // 【#28-B3】行级动作独立分组（对齐 DBeaver 行操作段 edit 子菜单，`fillContextMenu:3197-3215`）：
+    // 新增 · 复制 · 删除一行。DBeaver 在 edit 子菜单之前先 `add(new Separator())`（`:3217`），
+    // 本仓同样给整组一条前导分隔线。
     // 只读结果集（`!editable`）整组不摆；已标记删除的底层行不再摆复制 / 删除——
     // 新增空行也一并收起（被删行区段不再产生新的叠加动作）。动作只改本地叠加层，
     // 不下发 INSERT / DELETE。
@@ -303,30 +332,9 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             separator_before: false,
         });
     }
-    items.push(ContextMenuItem {
-        label: format!("按「{column_name}」升序（下发源库）"),
-        action: ContextAction::SortDown {
-            column: column_name.to_string(),
-            descending: false,
-        },
-        separator_before: true,
-    });
-    items.push(ContextMenuItem {
-        label: format!("按「{column_name}」降序（下发源库）"),
-        action: ContextAction::SortDown {
-            column: column_name.to_string(),
-            descending: true,
-        },
-        separator_before: false,
-    });
-    // 【排序】当前正按此列排时补「取消排序」（DBeaver 排序子菜单的 NONE 项）
-    if target.sort_active {
-        items.push(ContextMenuItem {
-            label: format!("取消排序「{column_name}」"),
-            action: ContextAction::ClearSort,
-            separator_before: true,
-        });
-    }
+    // 【DBeaver 对齐】列级视图动作段（冻结 / 隐藏 / 统计）：对应 DBeaver 在 edit 之后
+    // `add(new Separator())`（`:3219`）再挂的 view 子菜单（`:3237-3243`），所以本仓整组
+    // 带一条前导分隔线。
     items.push(ContextMenuItem {
         label: if target.frozen {
             "取消冻结此列".to_string()
@@ -334,7 +342,7 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             format!("冻结「{column_name}」")
         },
         action: ContextAction::ToggleFreeze(target.column),
-        separator_before: false,
+        separator_before: true,
     });
     items.push(ContextMenuItem {
         label: format!("隐藏「{column_name}」"),
