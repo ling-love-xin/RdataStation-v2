@@ -8,6 +8,7 @@ use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::separator::Separator;
 use gpui_kit::component::table::{DataTable, TableState};
 use gpui_kit::component::toolbar::Toolbar;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -405,12 +406,13 @@ pub fn render_toolbar(
                         .flatten()
                         .collect();
                     if !contents.is_empty() && !actions.is_empty() {
+                        // 组间竖分隔线用标准 `Separator::vertical()`（gpui-kit-dev skill
+                        // 的容器层表格禁止手搓 `div().w_px().bg(..)`）；1px × 24px 保持
+                        // 既有尺码，颜色默认取 `theme.colors.border`。
                         contents.push(
-                            div()
+                            Separator::vertical()
                                 .w(ui::HAIRLINE)
                                 .h(rems(1.5))
-                                .flex_none()
-                                .bg(theme.colors.border)
                                 .into_any_element(),
                         );
                     }

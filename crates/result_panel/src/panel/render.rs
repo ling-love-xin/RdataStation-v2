@@ -10,6 +10,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, Textarea};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::separator::Separator;
 use gpui_kit::component::toolbar::ToolbarGroup;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -359,6 +360,39 @@ impl ResultPanel {
                             }),
                     )
             })
+            // 【筛选历史】DBeaver `filterComposite` 的第 5 列是 `HistoryPanel`
+            // （`ResultSetFilterPanel.java:174/214`）：一个下拉箭头，点开是历史筛选表
+            // `createFilterHistoryPanel`（`:1207`），选中一条即回到那个口径。
+            // 列序上它紧跟「执行」列（`ExecutePanel`，`:209`），**在 `filterToolbar`
+            // 之前**——也就是先于擦除 / 筛选设置 / 后退 / 前进那一排 ToolItem。
+            // 2026-11-21 从「筛选设置之后」移回这里（此前顺序与 DBeaver 相反）。
+            // 空历史不摆入口（DBeaver 列常在，但点了只有一张空表；本仓口径是「能力没有就不摆」）。
+            .when(!self.filter_expanded && !self.filter_history.is_empty(), |row| {
+                let items: Vec<String> = self.filter_history.to_vec();
+                let queue = self.queue.clone();
+                row.child(
+                    Button::new("editor-result-filter-history")
+                        .ghost()
+                        .xsmall()
+                        .icon(IconName::ChevronDown)
+                        .debug_selector(|| "editor-result-filter-history".to_string())
+                        .tooltip("历史筛选（选中一条即回到那个口径）")
+                        .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
+                            let mut menu = menu;
+                            for text in items.iter() {
+                                let label = text.clone();
+                                let text = text.clone();
+                                let queue = queue.clone();
+                                menu = menu.item(PopupMenuItem::new(label).on_click(
+                                    move |_, _window, app| {
+                                        queue.request(ResultRequest::ApplyFilter(text.clone()), app);
+                                    },
+                                ));
+                            }
+                            menu
+                        }),
+                )
+            })
             // 【2026-11-18 结构对齐】清除钮改成 DBeaver 的口径：**常驻 + 空词禁用**
             // （`filtersClearButton` 建出来就 `setEnabled(false)`，`:319-327`；有筛选后才
             // 由 `enablePanelControls` 打开，`:449-454`）。此前是「有词才出现」，位置会
@@ -464,36 +498,6 @@ impl ResultPanel {
                         menu
                     })
             })
-            // 【筛选历史】DBeaver 筛选条的第 5 列是 `HistoryPanel`（`ResultSetFilterPanel.java:214`）：
-            // 一个下拉箭头，点开是历史筛选表 `createFilterHistoryPanel`（`:1207`），选中一条
-            // 即回到那个口径。本仓用组件的 `DropdownMenu`（按钮 + 弹出菜单，自带锚点/外点关闭）。
-            // 空历史不摆入口（DBeaver 列常在，但点了只有一张空表；本仓口径是「能力没有就不摆」）。
-            .when(!self.filter_expanded && !self.filter_history.is_empty(), |row| {
-                let items: Vec<String> = self.filter_history.to_vec();
-                let queue = self.queue.clone();
-                row.child(
-                    Button::new("editor-result-filter-history")
-                        .ghost()
-                        .xsmall()
-                        .icon(IconName::ChevronDown)
-                        .debug_selector(|| "editor-result-filter-history".to_string())
-                        .tooltip("历史筛选（选中一条即回到那个口径）")
-                        .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
-                            let mut menu = menu;
-                            for text in items.iter() {
-                                let label = text.clone();
-                                let text = text.clone();
-                                let queue = queue.clone();
-                                menu = menu.item(PopupMenuItem::new(label).on_click(
-                                    move |_, _window, app| {
-                                        queue.request(ResultRequest::ApplyFilter(text.clone()), app);
-                                    },
-                                ));
-                            }
-                            menu
-                        }),
-                )
-            })
             // 【状态历史】后退 / 前进：对齐 DBeaver 的一对 `SWT.DROP_DOWN` 按钮
             // `historyBackButton` / `historyForwardButton`（`ResultSetFilterPanel.java:343-351`）。
             // 语义（`ResultSetViewer.java`）：历史项 = 一份「需要重查的状态」，后退 / 前进
@@ -574,6 +578,29 @@ impl ResultPanel {
                             }
                             menu
                         }),
+                )
+            })
+            // 【结构对齐】后退 / 前进组与查找钮之间补一条竖分隔线：
+            // DBeaver 在这个位置插 `UIUtils.createToolBarSeparator(filterToolbar, SWT.NONE)`
+            // （`ResultSetFilterPanel.java:354`），把「筛选 / 历史」与「查找」分成两组。
+            // 用标准 `Separator::vertical()`（gpui-kit-dev skill 的容器层表格禁止手搓分隔线），
+            // 宽 1px / 高 24px 与右段 Toolbar 的组间线同档。展开态不摆：那时
+            // clear / settings / history / back / forward 全收起，线条两侧没有可分的两组。
+            .when(!self.filter_expanded, |row| {
+                row.child(
+                    // 壳只承载 debug 观测锚点与固定高度：20px 与同排按钮同档
+                    // （DBeaver 的 separator 在 ToolBar 内也是按钮高），高于它会把
+                    // 筛选区外框从 24px 撑到 28px（已由 `rendered_ui_elements_survive` 钉住）。
+                    div()
+                        .h(rems(1.25))
+                        .flex_none()
+                        .debug_selector(|| "editor-result-filter-history-sep".to_string())
+                        .child(
+                            Separator::vertical()
+                                .w(ui::HAIRLINE)
+                                .h_full()
+                                .into_any_element(),
+                        ),
                 )
             })
             // 【结果内查找】查找栏开关：DBeaver 筛选条工具条上的 `openFindReplaceButton`

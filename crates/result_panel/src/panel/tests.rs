@@ -930,6 +930,30 @@ fn rendered_ui_elements_survive(cx: &mut gpui_kit::TestAppContext) {
         "有历史后应出现历史下拉按钮"
     );
 
+    // 1.7) 【列序对齐 2026-11-21】`HistoryPanel` 在 DBeaver 是 `filterComposite` 的
+    //      第 5 列（紧跟 `ExecutePanel`，`ResultSetFilterPanel.java:174/209/214`），
+    //      即位于擦除 / 筛选设置 / 后退 / 前进那一排 `filterToolbar` 的**左侧**。
+    //      用水平坐标钉死顺序（纯结构断言，不涉及目视）：运行 < 历史 < 筛选设置；
+    //      另钉后退 / 前进与查找之间那条竖分隔线（`:354`）真的画出来。
+    let x_of = |id: &'static str, cx: &mut gpui_kit::VisualTestContext| -> f32 {
+        let bounds = cx
+            .debug_bounds(id)
+            .unwrap_or_else(|| panic!("{id} 应带 debug_selector 才量得到"));
+        f32::from(bounds.origin.x)
+    };
+    let run_x = x_of("editor-result-filter-run", cx);
+    let history_x = x_of("editor-result-filter-history", cx);
+    let settings_x = x_of("editor-result-filter-settings", cx);
+    assert!(
+        run_x < history_x && history_x < settings_x,
+        "筛选条列序应为 运行({run_x}) < 历史({history_x}) < 筛选设置({settings_x})，\
+         对齐 DBeaver 的 5 列 GridLayout（HistoryPanel 在 ExecutePanel 之后、filterToolbar 之前）"
+    );
+    assert!(
+        visible("editor-result-filter-history-sep", cx),
+        "后退/前进与查找之间应有竖分隔线（DBeaver ResultSetFilterPanel.java:354）"
+    );
+
     // 2) 展开筛选条：两列按钮（左=收起 / 右=运行）+ 多行输入框随条出现
     cx.update(|_, app| panel.update(app, |p, cx| p.toggle_filter_expand(cx)));
     cx.update(|window, cx| window.draw(cx).clear(cx));
