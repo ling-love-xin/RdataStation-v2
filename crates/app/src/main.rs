@@ -385,6 +385,22 @@ fn run_app() {
                     editor::commands::CopyRowValuesFromBelow,
                     Some(editor::commands::RESULT_GRID_CONTEXT),
                 ),
+                // 【第 70 批】取数与跳转（`plugin.xml:1069` / `:1091`，context 都是
+                // `...resultset.focused`）：
+                // `CTRL+ALT+N` = `CMD_FETCH_PAGE` → `readNextSegment()`（取下一段，
+                // 与状态栏「获取数据」钮同一条路）；`CTRL+G` = `CMD_GO_TO_ROW` →
+                // `GotoLineDialog`（本仓落到状态栏那口常驻行号框，`ENTER` 后焦点回网格）。
+                // 两条都只挂网格 context：`ctrl-g` 在本仓此前没有绑定，不覆写任何既有键。
+                KeyBinding::new(
+                    "ctrl-alt-n",
+                    editor::commands::FetchNextSegment,
+                    Some(editor::commands::RESULT_GRID_CONTEXT),
+                ),
+                KeyBinding::new(
+                    "ctrl-g",
+                    editor::commands::FocusRowJump,
+                    Some(editor::commands::RESULT_GRID_CONTEXT),
+                ),
                 // 【第 60 批】同一条 `Ctrl+反引号` 再绑到**面板层**上下文：文本态下网格
                 // 整块不渲染，网格 context 不在焦点路径上；焦点落在面板根时靠这条命中
                 // （两层同时匹配时 gpui 按 context 深度取更深的网格那条，不会切两次）。

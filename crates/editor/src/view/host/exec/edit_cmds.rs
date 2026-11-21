@@ -7,7 +7,7 @@ use crate::changes::CellChange;
 use crate::commands::{
     CommitResultChanges, CopyGridSelection, CopyRowValuesFromAbove, CopyRowValuesFromBelow,
     CycleResultPresentation, DeleteResultRow, DuplicateResultRow, EnterCellEdit, ExecuteSql,
-    InsertResultRow, RedoResultEdit, UndoResultEdit,
+    FetchNextSegment, FocusRowJump, InsertResultRow, RedoResultEdit, UndoResultEdit,
 };
 
 use super::*;
@@ -190,6 +190,45 @@ impl EditorHostPanel {
         cx: &mut Context<Self>,
     ) {
         self.copy_row_values_from(false, cx);
+    }
+
+    /// 【第 70 批】结果网格 `CTRL+ALT+N`：取下一段
+    /// （DBeaver `CMD_FETCH_PAGE` → `readNextSegment()`，`plugin.xml:1069`）。
+    ///
+    /// 与状态栏「获取数据」钮同一条路（`ResultRequest::FetchMore`）：判定全在
+    /// `fetch_more` 里（没 SQL / 已经取完 / 执行器不支持 / 正在取），每条都留可读原因，
+    /// 所以这里只转一次请求，不再复制一套门控。
+    ///
+    /// 与 `ALT+INSERT` 的差别：这条**不要求**有当前行（取数跟选中无关）。
+    pub(crate) fn on_fetch_next_segment(
+        &mut self,
+        _: &FetchNextSegment,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.result_panel
+            .update(cx, |panel, cx| panel.request_next_segment(cx));
+    }
+
+    /// 【第 70 批】结果网格 `CTRL+G`：行号跳转
+    /// （DBeaver `CMD_GO_TO_ROW` → `GotoLineDialog`，`plugin.xml:1091`）。
+    ///
+    /// 本仓不弹对话框：把状态栏那口常驻行号框回填当前行号并聚焦，敲 `ENTER`
+    /// 后焦点交回网格（见 `ResultPanel::row_jump_focus` 的说明）。
+    pub(crate) fn on_focus_row_jump(
+        &mut self,
+        _: &FocusRowJump,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let target = self
+            .result_panel
+            .update(cx, |panel, cx| panel.row_jump_focus(window, cx));
+        let Some(target) = target else {
+            self.set_message(Some("这份结果还没有行可跳；先执行查询".to_string()), cx);
+            return;
+        };
+        window.focus(&target, cx);
     }
 
     /// 邻行复制的共用段：门控 + 越界 / 已删 / 无写入 三种「按了但没改」的提示。

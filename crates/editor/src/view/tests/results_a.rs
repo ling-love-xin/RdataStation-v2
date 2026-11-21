@@ -916,3 +916,67 @@ fn a_finished_result_does_not_ask_for_more(cx: &mut TestAppContext) {
     wait_for_all_pending(cx, &panel);
     assert!(!wants(cx), "第二段没拿满 → 到底了");
 }
+
+/// 【第 70 批】`CTRL+ALT+N` = 取下一段（DBeaver `CMD_FETCH_PAGE` → `readNextSegment()`，
+/// `plugin.xml:1069`，context = `...resultset.focused`）。
+///
+/// 与状态栏「获取数据」钮**同一条路**（`ResultRequest::FetchMore`）：断言落在
+/// 执行器真的被要了「已经拿到的行数之后那一段」以及行数翻倍上。
+///
+/// 这条用例的前提是**按键前后都不 draw**：渲染路径自己也会在「可见范围靠近末尾」时
+/// 触发 `delegate.load_more`（见 `rendering_a_short_result_asks_for_more_by_itself`），
+/// 一 draw 就分不清请求是谁发的。所以先断言「按键前 `asked` 为空」，把这个前提钉死；
+/// 哪天 `simulate_keystrokes` 开始顺带渲染，这一句会先失败提醒改用例。
+#[gpui_kit::test]
+fn the_fetch_page_key_asks_for_the_next_segment(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id, asked) = shared_with_segment_runner("select n from t");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(
+        cx,
+        &panel,
+        "select n from t",
+        execution::ResultPlacement::Replace,
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
+        2,
+        "首段两行"
+    );
+    let status = cx
+        .update(|_window, cx| panel.read(cx).result_status_for_test(cx))
+        .expect("有网格就有状态行");
+    assert!(status.has_more, "拿满了 → 还有下一段");
+    assert!(
+        asked.lock().expect("锁").is_empty(),
+        "按键前不该有取段请求（一半靠这条证明请求真是键位发的）"
+    );
+
+    // 焦点交给网格：键位只挂在 `RESULT_GRID_CONTEXT` 上
+    let grid_focus = cx.update(|_window, app| {
+        use gpui_kit::Focusable as _;
+        panel.read(app).grid_for_test().read(app).focus_handle(app)
+    });
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+
+    cx.simulate_keystrokes("ctrl-alt-n");
+    cx.run_until_parked();
+    wait_for_all_pending(cx, &panel);
+
+    assert_eq!(
+        asked.lock().expect("锁").as_slice(),
+        [(2, execution::SEGMENT_ROWS)],
+        "键位要的正是「已经拿到的行数」之后那一段（与「获取数据」钮同一条路），而且只发一次"
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
+        4,
+        "两段接起来"
+    );
+    let status = cx
+        .update(|_window, cx| panel.read(cx).result_status_for_test(cx))
+        .expect("还有状态行");
+    assert!(!status.has_more, "最后一段没拿满 → 到底了");
+    assert_eq!(shared.results().set_count(&id), 1, "取下一段不新开结果集");
+}

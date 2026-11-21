@@ -502,6 +502,49 @@ impl ResultPanel {
         }
     }
 
+    /// 【第 70 批】`CTRL+ALT+N` 的取数入口：取下一段
+    /// （DBeaver `CMD_FETCH_PAGE` → `readNextSegment()`，`plugin.xml:1069`）。
+    ///
+    /// 与状态栏「获取数据」钮**完全同一条路**：只把 [`crate::ports::ResultRequest::FetchMore`]
+    /// 入队，剩下的判定（没 SQL / 已经取完 / 执行器不支持 / 正在取）全在宿主
+    /// `fetch_more` 里——那边每条分支都留可读原因，键位这边不必再写一遍。
+    /// DBeaver 在无更多数据时是静默 `return`（`ResultSetViewer:4384`），本仓键位层
+    /// 统一走「不可用留提示」（第 69 批口径），所以这里也不额外拦。
+    pub fn request_next_segment(&mut self, cx: &mut Context<Self>) {
+        self.queue.request(crate::ports::ResultRequest::FetchMore, cx);
+    }
+
+    /// 【第 70 批】`CTRL+G` 的行号跳转入口：把那口行号输入框准备好并返回焦点句柄
+    /// （DBeaver `CMD_GO_TO_ROW` → `GotoLineDialog`，`plugin.xml:1091`）。
+    ///
+    /// 本仓没有「弹一个输入框」这一层：状态栏中段本来就常驻一口可编辑输入框
+    /// （`row_count_input`，订阅 `InputEvent::Change` 即时入队 `GoRow`，见构造期的
+    /// `_row_count_sub`）。所以键位的职责只是照 DBeaver 的**行为**做三件事：
+    /// 1. 让用户知道当前在哪一行；2. 把焦点交进去（宿主 `window.focus`，面板层拿不到
+    /// window）；3. 用户敲完 `ENTER` 时焦点交回网格（见 `_row_count_sub` 的 `PressEnter` 分支）。
+    ///
+    /// **位置信息放 placeholder，不预填进 value**：DBeaver 的 `InputDialog` 预填当前行号
+    /// 且默认全选（`ResultSetHandlerMain:506` + `InputDialog` 的 Text），敲第一下就覆盖；
+    /// 但 gpui-kit 的 `InputState` 对外只暴露 `value` / `focus_handle`（`input/state.rs:325/335`），
+    /// **没有 `select_all`**——预填之后用户再敲数字会追加成 `22` 这种误跳。所以这里清空
+    /// value、把当前行号写进 placeholder：位置照样看得见，输入也不会被拼错。
+    ///
+    /// `status` 为 `None`（还没执行过）时没有可跳的行，返回 `None` 让宿主留提示。
+    pub fn row_jump_focus(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<FocusHandle> {
+        // 当前行（1 基）；没选中行时按 DBeaver 的口径从第 1 行起（`getCurrentRow() == null`
+        // → `initialValue` 取 1）
+        let current = self.status.as_ref()?.selected_row.unwrap_or(1);
+        self.row_count_input.update(cx, |state, inner| {
+            state.set_value("", window, inner);
+            state.set_placeholder(current.to_string(), window, inner);
+        });
+        Some(self.row_count_input.read(cx).focus_handle(cx))
+    }
+
     /// 【右栏】标签页切换（列浏览器 / 值详情 / 计算 / 分组 / 引用 / 执行SQL）。
     /// 右栏收起时切页签会自动展开（DBeaver 口径：右缘竖条点图标即展开对应面板）。
     /// 目标页若已被关闭，会先按规范序重新启用它（点得到就等于开得回来）。

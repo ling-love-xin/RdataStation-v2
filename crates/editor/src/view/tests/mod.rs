@@ -127,6 +127,17 @@ fn bind_editor_keys(cx: &mut TestAppContext) {
                 crate::commands::CopyRowValuesFromBelow,
                 Some(crate::commands::RESULT_GRID_CONTEXT),
             ),
+            // 【第 70 批】取数与跳转（与生产同一份注册，`plugin.xml:1069/1091`）
+            KeyBinding::new(
+                "ctrl-alt-n",
+                crate::commands::FetchNextSegment,
+                Some(crate::commands::RESULT_GRID_CONTEXT),
+            ),
+            KeyBinding::new(
+                "ctrl-g",
+                crate::commands::FocusRowJump,
+                Some(crate::commands::RESULT_GRID_CONTEXT),
+            ),
         ]);
     });
 }

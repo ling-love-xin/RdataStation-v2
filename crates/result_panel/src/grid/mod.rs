@@ -107,6 +107,15 @@ actions!(
         CopyRowValuesFromAbove,
         /// 【第 69 批】`CTRL+ALT+D`：把下一行的值填进当前行（`CMD_ROW_COPY_FROM_BELOW`，`:1078`）
         CopyRowValuesFromBelow,
+        /// 【第 70 批】`CTRL+ALT+N`：取下一段（`CMD_FETCH_PAGE` → `readNextSegment()`，
+        /// `plugin.xml:1069`）。与状态栏「获取数据」钮同一条路（`ResultRequest::FetchMore`）。
+        FetchNextSegment,
+        /// 【第 70 批】`CTRL+G`：行号跳转（`CMD_GO_TO_ROW` → `GotoLineDialog`，`:1091`）。
+        ///
+        /// DBeaver 那边是弹输入框；本仓状态栏本来就有一口常驻行号输入框
+        /// （`row_count_input`，`InputEvent::Change` 即时跳），所以键位的职责是
+        /// **把那口框准备好并聚焦**，不另造一个弹窗。
+        FocusRowJump,
     ]
 );
 

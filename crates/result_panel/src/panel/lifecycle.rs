@@ -158,10 +158,20 @@ impl ResultPanel {
         // 【P1-2】行号跳转订阅：`InputState::set_value` 程序化回填**不发**事件
         // （宿主 sync 时每帧刷新行数文案不会把自己再触发一遍），所以只有用户真敲键
         // 才入队；非数字 / 0 静默忽略（中段一直在编辑，边敲边报错太吵）。
+        //
+        // 【第 70 批】`ENTER` 分支：`CTRL+G` 把焦点挪进这口框（`ResultPanel::row_jump_focus`），
+        // 敲完回车要把焦点交回网格——否则焦点留在状态栏，网格键位（行级增删、
+        // `CTRL+S` 提交）全部失效，用户得再点一下表格才能继续。DBeaver 的对话框
+        // OK 之后同样是「回到结果集」（`ResultSetHandlerMain:519-522`）。
         let row_count_sub = cx.subscribe_in(
             &row_count_input,
             window,
-            |this, state, event: &InputEvent, _window, cx| {
+            |this, state, event: &InputEvent, window, cx| {
+                if let InputEvent::PressEnter { .. } = event {
+                    let target = this.grid.read(cx).focus_handle(cx);
+                    window.focus(&target, cx);
+                    return;
+                }
                 if !matches!(event, InputEvent::Change) {
                     return;
                 }

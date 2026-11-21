@@ -1603,6 +1603,72 @@ fn row_keys_copy_values_from_adjacent_rows(cx: &mut TestAppContext) {
     );
 }
 
+/// 【第 70 批】`CTRL+G` = 行号跳转（DBeaver `CMD_GO_TO_ROW` → `GotoLineDialog`，
+/// `plugin.xml:1091`，context = `...resultset.focused`）。
+///
+/// 本仓不弹对话框：键位把状态栏那口常驻行号框准备好（清空 value、placeholder 写当前
+/// 行号）并把焦点交进去；用户敲数字即跳（`InputEvent::Change` → `GoRow`）；
+/// `ENTER` 把焦点交回网格。
+///
+/// 断言分两段，各自钉住一环：
+/// 1. 敲 `2` 之后当前行变 2 —— 说明焦点真的进了输入框（否则 `2` 落在网格上，
+///    `DataTable` 不认数字键，`GoRow` 根本入不了队）；
+/// 2. `ENTER` 之后 `ALT+INSERT` 能新增本地行 —— 说明焦点回到了网格、`RESULT_GRID_CONTEXT`
+///    重新在焦点路径上（否则键位全哑）。
+#[gpui_kit::test]
+fn the_goto_row_key_prepares_the_row_input_and_enter_returns_to_the_grid(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id) = edit_ready_shared("select * from orders");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_orders_result(cx, &panel);
+    let result_panel = cx.update(|_window, cx| panel.read(cx).result_panel.clone());
+
+    // 焦点交给网格（行号跳转的键位挂在 `RESULT_GRID_CONTEXT` 上）
+    let grid_focus = cx.update(|_window, app| {
+        use gpui_kit::Focusable as _;
+        panel.read(app).grid_for_test().read(app).focus_handle(app)
+    });
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+
+    // 先停在第 1 行（1 基）
+    cx.update(|_window, cx| {
+        result_panel.update(cx, |panel, cx| panel.set_selected_row(Some(1), cx))
+    });
+    cx.simulate_keystrokes("ctrl-g");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 焦点已在行号框：敲 `2` 立刻跳到第 2 行
+    cx.simulate_keystrokes("2");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(
+        cx.update(|_window, cx| result_panel
+            .read(cx)
+            .status()
+            .and_then(|status| status.selected_row)),
+        Some(2),
+        "CTRL+G 之后敲行号要真的跳过去（证明焦点进了输入框）"
+    );
+
+    // ENTER：焦点交回网格 → 网格键位恢复
+    cx.simulate_keystrokes("enter");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.simulate_keystrokes("alt-insert");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(
+        shared
+            .results()
+            .local_rows(&id, 0)
+            .map(|set| set.local_count())
+            .unwrap_or(0),
+        1,
+        "ENTER 之后焦点回到网格：ALT+INSERT 应生效（否则焦点还留在状态栏输入框）"
+    );
+}
+
 /// 【第 59 批】`Ctrl+反引号` = 切换表示（DBeaver `CMD_SWITCH_PRESENTATION`，
 /// `plugin.xml:1059`；本仓两档：网格 ⇄ 文本）。
 #[gpui_kit::test]

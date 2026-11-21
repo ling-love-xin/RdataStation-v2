@@ -64,9 +64,13 @@ pub use result_panel::grid::RESULT_GRID_CONTEXT;
 /// 【第 69 批】行级键位组（都只挂网格 context）：`ALT+INSERT` 新增行 / `CTRL+ALT+INSERT`
 /// 复制行 / `ALT+DELETE` 删除行（`plugin.xml:1073/1075/1079`）、`CTRL+D` / `CTRL+ALT+D`
 /// 邻行复制（`:1077/1078`）。
+///
+/// 【第 70 批】取数与跳转：`CTRL+ALT+N` 取下一段（`CMD_FETCH_PAGE`，`:1069`）、
+/// `CTRL+G` 行号跳转（`CMD_GO_TO_ROW`，`:1091`）。
 pub use result_panel::grid::{
     CommitResultChanges, CopyRowValuesFromAbove, CopyRowValuesFromBelow, CycleResultPresentation,
-    DeleteResultRow, DuplicateResultRow, EnterCellEdit, InsertResultRow,
+    DeleteResultRow, DuplicateResultRow, EnterCellEdit, FetchNextSegment, FocusRowJump,
+    InsertResultRow,
 };
 
 /// 【第 60 批】结果**面板**的 key context（`RESULT_GRID_CONTEXT` 的父层）。
