@@ -7099,6 +7099,74 @@ DBeaver 结果集状态栏能显示「行数 / 列数 / 单元格数」三种选
   editor `cargo check` `Finished`（0 warning）、`rds-editor --lib` **800 passed（1 ignored）**、
   `rds-ui-guard` **4 passed**。
 
+### 9.33 右键 layout 段的「呈现方式」组（对齐 DBeaver `fillLayoutMenu` 的 presentation 段，2026-11-21）
+
+DBeaver 的结果集右键在 `MENU_ID_LAYOUT` 子菜单里有一整段「呈现方式」：记录模式开关、切换表示、
+以及每个呈现方式的勾选项（`fillLayoutMenu` 的前段）。本批把这组按同一顺序平铺进本仓的扁平右键
+菜单，位置紧挨在 §9.32 的三颗选中统计**之前**（顺序与 DBeaver 一致）。
+
+#### 9.33.1 dbeaver-ref 取证（现源实读）
+
+| 事实 | 位置 | 内容 |
+| --- | --- | --- |
+| 段顺序 | `ResultSetViewer.java:3549-3597` | `ToggleModeAction`（`:3550-3552`）→ `CMD_SWITCH_PRESENTATION`（`:3553-3555`）→ 各 presentation 勾选（`:3558-3577`）→ 分隔 + 三颗统计（`:3580-3588`）→ `ToggleFilterPanelAction`（`:3589-3592`）→ zoom（`:3594-3596`） |
+| 记录模式门控 | `ResultSetViewer.java:3550` | 仅当 `activePresentationDescriptor.supportsRecordMode()` 才摆 |
+| 记录模式动作 | `actions/ToggleModeAction.java` | `CMD_TOGGLE_MODE`、`AS_CHECK_BOX`、`isChecked() = isRecordMode()`、`run() = toggleMode()` |
+| 切换表示 | `ResultSetViewer.java:1161-1172` | `switchPresentation()` 在 `availablePresentations` 里取**下一档**；只有一档时不动作 |
+| 显式切档 | `ResultSetViewer.java:1174-1195` | `switchPresentation(pd)` 先 `canShowPresentation` 再切，并同步竖条选中 |
+| 命令文案 | `OSGI-INF/l10n/bundle_zh.properties:147` | 「切换表示」（快捷键 Ctrl + 反引号键，`plugin.xml:1059`） |
+| 呈现方式文案 | 同文件 `:226-229` | 「网格」/「文本」+ 描述（`%presentation.spreadsheet.label` / `%presentation.plaintext.label`） |
+| 记录文案 | `ResultSetMessages_zh.properties:378` | 「记录」 |
+| 贡献点 | `plugin.xml:101-124` | presentation 扩展点（DBeaver 可插多档） |
+
+#### 9.33.2 本仓落地
+
+**纯函数层（`grid/menu.rs`）**：
+
+- `ContextAction` 加 `ToggleRecordMode` / `CyclePresentation` / `SetPresentation(Presentation)`；
+- `ContextTarget` 加 `presentation: Presentation` 与 `record_mode: bool`（右键落点要把当前两态都说清）；
+- 新纯函数 `layout_presentation_menu_items(target)`：记录（仅非文本态）→ 切换表示 → 网格 / 文本
+  勾选项；组首带 `separator_before`（把整段与上方命令隔开）；
+- `context_menu_items` 在三颗统计之前 `extend` 该组；`context_menu` 三个新分支经 `action_queue`
+  分别发 `ToggleTranspose` / `CyclePresentation` / `SetPresentation(..)`（没有队列的独立网格不摆）。
+
+**状态与转发**：
+
+- `grid/delegate.rs`：`presentation_view: Presentation`（view 偏好，**不随 `set_data` 清**）+
+  `set_presentation_view` / `presentation_view`；
+- `ports.rs`：`ResultRequest::CyclePresentation`；`Presentation::next()`（网格 ⇄ 文本）；
+- `panel/events.rs`：`set_presentation` 里同步网格镜像；新增 `cycle_presentation`（走 `presentation.next()`）；
+- `editor/.../results/dispatch.rs`：`CyclePresentation` → `panel.cycle_presentation(cx)`；
+- 两处 `ContextTarget` 字面量补字段：`column_browser.rs`（列浏览器清单）、`grid/header.rs`（列头箭头菜单）
+  ——两处都**不摆**这一段（DBeaver 的 layout 菜单只从表格右键进），字段只为结构完整，填 delegate 现值。
+
+#### 9.33.3 口径差异（有意）
+
+1. **菜单形状**：本仓无子菜单，整段平铺在数据格右键尾部（与 §9.32 三颗统计同处），顺序与 DBeaver 一致。
+2. **「切换表示」恒摆**：DBeaver 在可切换档位 ≥2 时才摆；本仓恒有两档（网格 / 文本），所以恒摆。
+3. **文本态不摆「记录」**：DBeaver 按 `supportsRecordMode()` 门控；本仓用「不摆」表达，不引入禁用项。
+4. **勾选态用 `✓ ` 前缀**：DBeaver 用 check box；本仓菜单项文本前缀，与三颗统计同口径。
+5. **快捷键未接**：DBeaver 用 Ctrl + 反引号键切换表示；本仓本批只做菜单入口（本仓尚未有结果面板级快捷键层）。
+6. **双轨保留**：「记录（转置）」仍是独立状态（`transposed`），不在 `Presentation` 两档循环里
+   ——DBeaver 的记录模式也属于 spreadsheet presentation 内部，不在 `availablePresentations` 列表。
+7. **zoom（`ALT+0` / `ALT+9`）不做**：取证 `ResultSetHandlerMain.java:602-614` + `createFontDescriptor`
+   （`:696-702`）后确认它只改结果集字体高度 ±1pt、运行时不持久——纯目视改动，归入「目视统一处理」，
+   本批不碰。
+
+#### 9.33.4 用例与门禁
+
+- `layout_presentation_menu_items_follow_dbeaver_order`（纯函数）：网格态 4 项顺序与动作、记录开关的
+  `✓ ` 前缀、文本态不摆「记录」且首项接过分隔线、勾选落位。
+- `context_menu_puts_layout_group_before_selection_stats`（纯函数）：右键尾部 7 项 = 呈现方式组 4 项 +
+  三颗统计，两段首项各带分隔线，持久化项在其之前，列头菜单不含这一段。
+- `presentation_cycles_between_grid_and_text_and_mirrors_into_delegate`（纯函数）：`Presentation::next()`
+  两档循环、delegate 镜像可读、`set_data` 不清镜像。
+- 既有用例随之更新：`context_menu_offers_filter_copy_and_freeze`（期望列表补 4 项）、
+  `context_menu_only_offers_insight_when_available`（洞察之后由 4 项变 8 项，含自身）。
+- **门禁**：`rds-result-panel` **385 passed**（382 + 3）、editor `cargo check` `Finished`（0 warning）、
+  `rds-editor --lib` **800 passed（1 ignored）**、`rds-ui-guard` **4 passed**。本批未动 `crates/settings`，
+  不重跑其测试。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

@@ -2388,6 +2388,29 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   （0 warning）、editor lib **800 passed（1 ignored）**、ui-guard **4 passed**。
 
 
+### 2.101 右键 layout 段「呈现方式」组的接手要点（2026-11-21）
+
+- 这一组是**面板状态**，网格不持有权威值：菜单只把「当前是什么」写进 `ContextTarget`
+  （`presentation` / `record_mode`），点击后一律发 `ResultRequest`（`ToggleTranspose` /
+  `CyclePresentation` / `SetPresentation(..)`），由面板改自己的 `presentation` 与 `transposed`。
+- 改菜单文本前先看 `grid/menu.rs`：`layout_presentation_menu_items(target)`（纯函数，别在
+  `context_menu` 里手写项）+ `context_menu_items` 里的 `extend` 顺序（**先呈现方式组、后三颗
+  选中统计**，照 `ResultSetViewer.fillLayoutMenu:3549-3597`）。
+- 勾选态读的是 delegate 镜像 `presentation_view()`：面板 `set_presentation` 是唯一同步点
+  （`panel/events.rs`），竖条三颗按钮与右键走同一条队列，所以镜像不会漂。镜像与 `selection_stat_prefs`
+  同口径，**不随 `set_data` 清**（新结果沿用当前呈现方式）。
+- 文本态没有「记录」项（DBeaver 按 `supportsRecordMode()` 门控，`:3550`）；不要为了「菜单永不缺项」
+  去补一个禁用项。
+- 加 `ContextTarget` 字段的老坑复现：`grid/tests.rs` 的 `target()` helper + 四处全字段字面量要补，
+  带 `..target.clone()` 的位置**不能**补；`column_browser.rs` / `grid/header.rs` 两处列级菜单落点
+  也要补（它们不摆这一段，只为结构完整）。
+- `Presentation::next()`（`ports.rs`）就是「切换表示」的循环语义，两档网格 ⇄ 文本；**记录（转置）
+  不在这个循环里**（与 DBeaver 一致：记录模式属于 spreadsheet presentation 内部）。
+- zoom（ALT+0 / ALT+9）已取证判为纯目视（只改字体高度 ±1pt、不持久），归入「目视统一处理」，
+  别再当功能项捡回来。
+- 门禁基线：result_panel **385 passed**（+3 例）、editor check `Finished`（0 warning）、
+  editor lib **800 passed（1 ignored）**、ui-guard **4 passed**；本批未动 settings。
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。
