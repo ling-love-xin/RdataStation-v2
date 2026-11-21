@@ -2876,6 +2876,40 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   无确认弹窗，绑键前先决定是否补确认；`CTRL+BACKSPACE`（`setDefault`）随 `SET_NULL`/
   `SET_DEFAULT` 一起仍未建模。
 
+### 2.120 行级键位组（2026-11-22）
+
+- **行级动作的两个入口现在都读同一段**：`ResultPanel::row_target_state(cx)` →
+  `grid::row_target_state(editable, selected_row, row_deleted)`。状态栏三钮与
+  `ALT+INSERT` / `CTRL+ALT+INSERT` / `ALT+DELETE` / `CTRL+D` / `CTRL+ALT+D`
+  五个 handler 全走它；**别再把 render 里那套式子复制一份到宿主**（第 64 批的原式
+  已删，复制回去就是两套算法）。
+- **`status.selected_row` 才是行级口径**，`selection_pos`（当前格）是格级口径
+  （第 66 批 §2.117）。行级键位不能用 `selection_pos` 折行——那会把「停在行号槽」
+  与「整行选中」混起来。
+- **行级动作后 `selected_row` 会丢**：`sync_result_view` 构造 status 时写
+  `selected_row: None`（`host/results/grid.rs:169`）。表现是：插一行后状态栏不再记
+  「已选第 N 行」、三钮同时变灰，再按 `CTRL+ALT+INSERT` 会提示「先选中一行」。
+  这是既有口径，**用例里每次按键前要重新 `set_selected_row(Some(n))`**，
+  否则第二条键必然假失败（本批踩过一次）。
+- **测试里怎么选中行**：`panel.read(cx).result_panel` 是 `pub(crate)` 字段
+  （`host/mod.rs:341`），拿它 `.update(cx, |p, cx| p.set_selected_row(Some(1), cx))`
+  ——这是事件路径同一个函数，不要直接改 `status` 字段。
+  `EditorHostPanel` 本身**没有** `set_selected_row` / `row_target_state`（那是面板的）。
+- **邻行复制的门控顺序**：只读 → 无当前行 → 目标行已删 → 源行越界 → 写 0 格。
+  `ResultPanel::adjacent_row_view(row, above, cx)` 回答「源行在不在」，
+  不自己碰 `grid.read()`。
+- **键位串**：`alt-insert` / `ctrl-alt-insert` / `alt-delete` / `ctrl-d` / `ctrl-alt-d`
+  在 gpui 里都能解析（`simulate_keystrokes` 实跑通过）。`ctrl-d` 在本仓
+  `editor` context **没有**既有绑定，无覆写冲突。
+- **没接的两条**：`SHIFT+ALT+INSERT`（add.before）、`CTRL+SHIFT+ALT+INSERT`
+  （copy.before）——本仓本地行固定落末尾（#28-B3），这两条会退化成与不带 SHIFT
+  相同，属于「有意差异」，不要当缺口反复补。
+- **门禁基线（第 69 批后）**：result_panel **408 passed**（+1）、editor lib
+  **810 passed（1 ignored）**（+2）、ui-guard **4 passed**、
+  `cargo check --workspace --all-targets` Finished。
+- **只摘 main.rs 本线 hunk**：`.rds/tmp/stage-main-hunk-r129.py`（锚在第 68 批
+  `ctrl-s` 那条 KeyBinding 之后；同样从工作区逐字摘块 + `update-index`）。
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。

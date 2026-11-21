@@ -8500,6 +8500,99 @@ KeyBinding::new(
 - `ESC`（`cell.reset`）不接（§9.51.3 末段）；`CTRL+BACKSPACE`（`cell.setDefault`）随
   `SET_NULL`/`SET_DEFAULT` 一起仍未做（§9.50.5）。
 
+### 9.52 第 69 批：行级键位组（`ALT+INSERT` / `CTRL+ALT+INSERT` / `ALT+DELETE` / `CTRL+D` / `CTRL+ALT+D`）
+
+#### 9.52.1 缺口
+
+行级增删复制（新增 / 复制 / 删除）只有状态栏三钮与右键两个鼠标入口，键盘上一条都没有。
+DBeaver 有整套：`plugin.xml:1073/1075/1079`（增删复制）+ `:1077/1078`（邻行填充）。
+
+#### 9.52.2 DBeaver 依据
+
+- 键位表（`plugin.xml:1056-1095`，context 全部是 `...resultset.focused`）：
+
+  | 键 | 命令 | 行号 |
+  | --- | --- | --- |
+  | `ALT+INSERT` | `row.add` | `:1073` |
+  | `SHIFT+ALT+INSERT` | `row.add.before` | `:1074` |
+  | `CTRL+ALT+INSERT` | `row.copy` | `:1075` |
+  | `CTRL+SHIFT+ALT+INSERT` | `row.copy.before` | `:1076` |
+  | `CTRL+D` | `row.copy.from.above` | `:1077` |
+  | `CTRL+ALT+D` | `row.copy.from.below` | `:1078` |
+  | `ALT+DELETE` | `row.delete` | `:1079` |
+
+- handler 分支（`ResultSetHandlerMain`）：
+  - `CMD_ROW_ADD` / `CMD_ROW_COPY`（`:217-231`）共用一段：`copy` 由动作 id 区分，
+    落点由偏好 `RS_EDIT_NEW_ROWS_AFTER` 与 SHIFT 决定（`AFTER_SELECTION` / `BEFORE_SELECTION`），
+    然后 `rsv.addNewRow(placement, copy, true)`。
+  - `CMD_ROW_DELETE`（`:251-256`）：`UIUtils.asyncExec(rsv::deleteSelectedRows)`。
+  - `CMD_ROW_COPY_FROM_ABOVE` / `_BELOW`（`:246-249`）：`rsv.copyRowValues(above, true)`。
+- 可用态：命令定义本身**没有** `enabledWhen`（`plugin.xml` 的 command 元素只有
+  name / description / categoryId），使能经由 `ResultSetPropertyTester` 的
+  `add` / `copy` / `delete` 三分支（`:137-157`）——与第 64 批 `row_action_state` 同源。
+  菜单里这五项都是无条件 add（`fillContextMenu:3208-3215`），可用性靠 enabled 表达。
+- 邻行复制的边界：`ResultSetViewer.copyRowValues:5083-5093`——单行分区时源行是
+  `partitionStart ± 1`，越界 `break`（静默），多行分区时取分区首/末行。
+
+#### 9.52.3 落地
+
+**面板侧（单一判据）**：`RowTargetState { row, row_deleted, actions }` +
+纯函数 `row_target_state(editable, selected_row, row_deleted)`（`grid/menu.rs`）。
+`ResultPanel::row_target_state(cx)` 把「状态行 1 基当前行折 0 基 + 网格镜像的行删除态」
+喂进去——状态栏三钮与五个键位 handler 都读它，**不再各算一套**（`panel/render.rs`
+里原来那段式子已删）。
+
+**动作**（`grid/mod.rs` 的 `actions!`，都只挂 `RESULT_GRID_CONTEXT`）：
+`InsertResultRow` / `DuplicateResultRow` / `DeleteResultRow` /
+`CopyRowValuesFromAbove` / `CopyRowValuesFromBelow`。
+
+**宿主 handler**（`exec/edit_cmds.rs`）与三钮同源：
+
+| 键 | 门控 | 链路 |
+| --- | --- | --- |
+| `ALT+INSERT` | `actions.add`（= 可编辑；**不要求当前行**） | `insert_local_row(target.row)` |
+| `CTRL+ALT+INSERT` | `actions.add` + 有当前行 | `duplicate_local_row(row)` |
+| `ALT+DELETE` | `actions.delete` | `delete_local_row(row)` |
+| `CTRL+D` / `CTRL+ALT+D` | `actions.add` + 有当前行 + 目标行未删 + 相邻行存在 | `copy_row_values_from_adjacent(row, above)` |
+
+**键位没有「灰」这一态**，所以四类「按了但没改」都写状态栏（不静默吞键）：
+只读结果集 / 没有当前行 / 行已标记删除 / 相邻行越界（首行没有上一行、末行没有下一行）。
+邻行复制写出 0 格（值相同 / 目标不可改写）也留一句。
+
+**落点差异（有意）**：DBeaver 的新增行落点由偏好 + SHIFT 决定，可在选中行前后；
+本仓本地行区段**固定在末尾**（#28-B3 口径），`insert_local_row` 的 `anchor` 只作
+历史元信息留档。所以 `SHIFT+ALT+INSERT`（add.before）与 `CTRL+SHIFT+ALT+INSERT`
+（copy.before）**没有可映射的落点，本批不接**——不是为了省事，是这两条命令在本仓
+语义下会退化成与不带 SHIFT 完全一样。
+
+#### 9.52.4 验证
+
+- `row_target_state_packs_row_and_actions_for_the_keyboard`（纯函数，四组真值）：
+  有行 / 无行 / 已删行 / 只读。
+- `row_keys_insert_duplicate_and_delete_the_selected_row`（窗口用例）：
+  `ALT+INSERT` → 本地行 1；`sync` 后当前行被清（既有口径，用例里断言这一点）；
+  重选行 → `CTRL+ALT+INSERT` → 本地行 2；重选行 → `ALT+DELETE` → 删除标记 1；
+  再按 `ALT+DELETE` → 仍 1（不重复入栈）+ 状态栏含「已标记删除」。
+- `row_keys_copy_values_from_adjacent_rows`（窗口用例）：首行 `CTRL+D` →
+  状态栏含「上面没有可复制的行」且变更集 0 条；第 2 行 `CTRL+D` → 变更集出现待提交。
+- 门禁：panel **408 passed**（§9.51 后 407，+1）、editor **810 passed（1 ignored）**
+  （808 → +2）、ui-guard **4 passed**、`cargo check --workspace --all-targets` Finished
+  （并行线 `rds-notification` 2 条 never-used warning）。
+
+#### 9.52.5 遗留
+
+- **`sync_result_view` 会清掉 `status.selected_row`**（`host/results/grid.rs:169`
+  的 `selected_row: None`）：行级动作后状态行不再记「已选第 N 行」，三钮同时变灰。
+  这是既有口径（三钮一直如此），**本批不改**；要改得单独做「sync 保留选中态」，
+  涉及组件 `TableState` 的选中镜像，另开一批。
+- `SHIFT+ALT+INSERT` / `CTRL+SHIFT+ALT+INSERT`（新增/复制到选中行之前）不接：
+  本仓本地行固定落末尾，没有可映射的落点（§9.52.3 末段）。
+- `CTRL+D` / `CTRL+ALT+D` 的**多行连续分区语义**未接：DBeaver 按
+  `groupConsecutiveRows` 分区，每区取首/末行当源（`:5071-5089`）；本仓只有单行
+  currentRow（`status.selected_row`），多选区不在本仓模型里。
+- 只读结果集上 DBeaver 的 `add` 仍可能因偏好 / 通道差异而亮（本仓一律灰）——
+  与第 64 批的「有意收紧一档」同一条，不重复记。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
