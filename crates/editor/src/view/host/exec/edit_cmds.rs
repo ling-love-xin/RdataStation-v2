@@ -5,8 +5,8 @@
 
 use crate::changes::CellChange;
 use crate::commands::{
-    CopyGridSelection, CycleResultPresentation, EnterCellEdit, ExecuteSql, RedoResultEdit,
-    UndoResultEdit,
+    CommitResultChanges, CopyGridSelection, CycleResultPresentation, EnterCellEdit, ExecuteSql,
+    RedoResultEdit, UndoResultEdit,
 };
 
 use super::*;
@@ -88,6 +88,23 @@ impl EditorHostPanel {
             .update(cx, |panel, cx| panel.cycle_presentation(cx));
         let target = self.result_panel.read(cx).presentation_focus_target(cx);
         window.focus(&target, cx);
+    }
+
+    /// 【第 68 批】结果网格 `Ctrl+S`：提交当前结果集的待提交变更
+    /// （DBeaver `CMD_APPLY_CHANGES`，`plugin.xml:1082`；文案另见 `bundle_zh:69-70`）。
+    ///
+    /// 与结果工具栏「提交 N 处」钮、右键同一段（`commit_pending_from_ui` → 四道复核 +
+    /// 失败落顶部提示），键位只是第三个入口，链路不另开。
+    /// 同一个键在 `editor` context 是「保存文档」：焦点在网格时 `RESULT_GRID_CONTEXT`
+    /// 更深、先命中（与 `database-nav` 的 `NavCommitStaged` 同模式）。
+    pub(crate) fn on_commit_result_changes(
+        &mut self,
+        _: &CommitResultChanges,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        tracing::info!(doc = %self.document, "【探针】on_commit_result_changes：结果网格提交（Ctrl+S）");
+        self.commit_pending_from_ui(cx);
     }
 
     /// 【撤销】撤销一步结果编辑：格子恢复「上一步的值」（DBeaver 粒度 = 每格编辑一步）。

@@ -319,6 +319,17 @@ impl EditorHostPanel {
         self.commit_in_flight.is_some()
     }
 
+    /// 【第 68 批】「提交待提交变更」的 UI 入口：被拦时把可读原因落到顶部提示。
+    ///
+    /// 三处共用同一段（工具栏钮 / 右键 / `Ctrl+S` 键位），都经
+    /// [`Self::submit_pending_changes`] 的四道复核；这里只负责把 `Err` 变成可见提示，
+    /// 避免各入口各写一遍展示逻辑（行为漂移）。
+    pub(crate) fn commit_pending_from_ui(&mut self, cx: &mut Context<Self>) {
+        if let Err(reason) = self.submit_pending_changes(cx) {
+            self.set_message(Some(reason), cx);
+        }
+    }
+
     /// 【T2a-7】丢弃全部**待提交**变更（回滚：DBeaver 提交/回滚对的「回滚」侧）
     ///
     /// 清掉变更集里的 Pending 项（Committed 已落库、Conflict 是证据，都保留），

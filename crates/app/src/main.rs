@@ -346,6 +346,15 @@ fn run_app() {
                     editor::commands::CycleResultPresentation,
                     Some(editor::commands::RESULT_GRID_CONTEXT),
                 ),
+                // 【第 68 批】结果网格的 `Ctrl+S` = 提交待提交变更
+                // （DBeaver `CMD_APPLY_CHANGES`，`plugin.xml:1082`）。同一个键在 `editor`
+                // context 是「保存文档」：网格这层更深，焦点在网格时先命中
+                // （`database-nav` 的 `NavCommitStaged` 已在用这个模式）。
+                KeyBinding::new(
+                    "ctrl-s",
+                    editor::commands::CommitResultChanges,
+                    Some(editor::commands::RESULT_GRID_CONTEXT),
+                ),
                 // 【第 60 批】同一条 `Ctrl+反引号` 再绑到**面板层**上下文：文本态下网格
                 // 整块不渲染，网格 context 不在焦点路径上；焦点落在面板根时靠这条命中
                 // （两层同时匹配时 gpui 按 context 深度取更深的网格那条，不会切两次）。

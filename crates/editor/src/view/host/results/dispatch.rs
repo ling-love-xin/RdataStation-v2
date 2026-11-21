@@ -127,11 +127,7 @@ impl EditorHostPanel {
                     .update(cx, |p, cx| p.set_filter_value_dispatch(&value, cx));
                 self.pushdown_filter(cx);
             }
-            ResultRequest::CommitPending => {
-                if let Err(reason) = self.submit_pending_changes(cx) {
-                    self.set_message(Some(reason), cx);
-                }
-            }
+            ResultRequest::CommitPending => self.commit_pending_from_ui(cx),
             ResultRequest::RollbackPending => self.discard_pending_changes(cx),
             ResultRequest::Analysis { sql } => self.run_analysis(sql, cx),
             ResultRequest::AnalysisCustom => self.request_custom_analysis_via_window(cx),

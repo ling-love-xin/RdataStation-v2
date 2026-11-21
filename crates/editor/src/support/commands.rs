@@ -57,7 +57,10 @@ pub use result_panel::grid::RESULT_GRID_CONTEXT;
 
 /// 【第 59 批】结果网格键位动作（定义随结果面板，键位在 `crates/app` 注册）：
 /// `ENTER` → 行内编辑、`Ctrl+反引号` → 切换表示。与 [`RESULT_GRID_CONTEXT`] 配对。
-pub use result_panel::grid::{CycleResultPresentation, EnterCellEdit};
+///
+/// 【第 68 批】再加 `Ctrl+S` → 提交待提交变更（DBeaver `CMD_APPLY_CHANGES`，
+/// `plugin.xml:1082`）：同一个键在 `editor` context 是保存文档，网格里换成提交。
+pub use result_panel::grid::{CommitResultChanges, CycleResultPresentation, EnterCellEdit};
 
 /// 【第 60 批】结果**面板**的 key context（`RESULT_GRID_CONTEXT` 的父层）。
 ///

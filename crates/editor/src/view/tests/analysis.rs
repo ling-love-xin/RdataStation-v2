@@ -1374,6 +1374,81 @@ fn enter_key_on_the_grid_enters_cell_editing(cx: &mut TestAppContext) {
     );
 }
 
+/// 【第 68 批】结果网格 `Ctrl+S` = 提交待提交变更（DBeaver `CMD_APPLY_CHANGES`，
+/// `plugin.xml:1082`；键位 context = `RESULT_GRID_CONTEXT`）。
+///
+/// 三件事一起守：① 网格里的 `Ctrl+S` **不再**走 `editor` context 的「保存文档」；
+/// ② 提交走的是与工具栏钮同一段（`commit_pending_from_ui` → 四道复核 → 在途）；
+/// ③ 没有待提交时按键不静默吞掉——顶部提示说清原因。
+#[gpui_kit::test]
+fn ctrl_s_on_the_grid_commits_pending_changes(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id) = commit_ready_shared(
+        "select * from orders",
+        Ok(CommitReport {
+            committed: 2,
+            skipped: 0,
+            per_statement: vec![1, 1],
+            conflicts: vec![],
+        }),
+    );
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_orders_result(cx, &panel);
+
+    // 焦点交给网格（`DataTable` 自己 `track_focus`）——按键才落在 `RESULT_GRID_CONTEXT`
+    let grid_focus = cx.update(|_window, app| {
+        use gpui_kit::Focusable as _;
+        panel.read(app).grid_for_test().read(app).focus_handle(app)
+    });
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+
+    // 先把「没有待提交」这一段走掉：按键仍在、但不是静默无反应
+    cx.simulate_keystrokes("ctrl-s");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).commit_in_flight_for_test().is_none()),
+        "没有待提交变更时不发起提交"
+    );
+    assert!(
+        cx.update(|_window, cx| panel
+            .read(cx)
+            .message
+            .as_deref()
+            .is_some_and(|m| m.contains("没有待提交"))),
+        "被拦时要留下可读原因（状态栏提示，不是静默无反应）"
+    );
+
+    // 预置两条待提交（与第 66 批提交用例同一造法：行 0 列 1、行 1 列 1 = name 列）
+    seed_cell_change(&shared, &id, 0, 1, "alice", "alice2");
+    seed_cell_change(&shared, &id, 1, 1, "bob", "bob2");
+    cx.update(|_window, cx| panel.update(cx, |host, cx| host.sync_result_view(cx)));
+
+    cx.simulate_keystrokes("ctrl-s");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).commit_in_flight_for_test().is_some()),
+        "网格里按 Ctrl+S 应发起提交（与工具栏「提交 N 处」同一段）"
+    );
+
+    // 回执回来：待提交清空（提交成功）
+    wait_commit_done(cx, &panel);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(
+        shared
+            .results()
+            .change_set(&id, 0)
+            .map(|changes| changes.pending_count()),
+        Some(0),
+        "提交成功后没有待提交变更"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-commit-group").is_none(),
+        "按钮组随之消失"
+    );
+}
+
 /// 【第 59 批】`Ctrl+反引号` = 切换表示（DBeaver `CMD_SWITCH_PRESENTATION`，
 /// `plugin.xml:1059`；本仓两档：网格 ⇄ 文本）。
 #[gpui_kit::test]

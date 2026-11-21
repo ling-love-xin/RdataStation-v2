@@ -94,6 +94,13 @@ fn bind_editor_keys(cx: &mut TestAppContext) {
                 crate::commands::CycleResultPresentation,
                 Some(crate::commands::RESULT_PANEL_CONTEXT),
             ),
+            // 【第 68 批】结果网格 `Ctrl+S` = 提交待提交变更（与生产同一份注册；
+            // 上面那条 `ctrl-s` 是 `editor` context 的「保存文档」，网格这层更深）
+            KeyBinding::new(
+                "ctrl-s",
+                crate::commands::CommitResultChanges,
+                Some(crate::commands::RESULT_GRID_CONTEXT),
+            ),
         ]);
     });
 }

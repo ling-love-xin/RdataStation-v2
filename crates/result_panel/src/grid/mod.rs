@@ -82,7 +82,7 @@ pub(crate) mod view_rows;
 // 编辑区 / SQL 编辑器不受影响）。对应 DBeaver 的
 // `org.jkiss.dbeaver.ui.context.resultset.focused`：
 // `plugin.xml:1071/1072` 的 `SHIFT+ENTER`（外部值编辑器）/ `ENTER`（内嵌编辑）、
-// `:1059` 的 `Ctrl+反引号`（切换表示）。
+// `:1059` 的 `Ctrl+反引号`（切换表示）、`:1082` 的 `Ctrl+S`（提交变更）。
 use gpui_kit::actions;
 
 actions!(
@@ -92,6 +92,11 @@ actions!(
         EnterCellEdit,
         /// `Ctrl+反引号`：切到下一个呈现（`CMD_SWITCH_PRESENTATION`，`plugin.xml:1059`）
         CycleResultPresentation,
+        /// `Ctrl+S`：提交当前结果集的待提交变更（`CMD_APPLY_CHANGES`，`plugin.xml:1082`）。
+        ///
+        /// 同一个 `Ctrl+S` 在 `editor` context 是保存文档、在 `database-nav` 是提交暂存
+        /// （`crates/app/src/main.rs:407` 有先例）：焦点在结果网格时这一层更深、先命中。
+        CommitResultChanges,
     ]
 );
 

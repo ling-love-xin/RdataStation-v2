@@ -149,6 +149,10 @@ impl Render for EditorHostPanel {
             // 同一套 `RESULT_GRID_CONTEXT`，编辑框内 `ENTER` 被输入内核先吃掉
             .on_action(cx.listener(Self::on_enter_cell_edit))
             .on_action(cx.listener(Self::on_cycle_result_presentation))
+            // 【第 68 批】网格里的 `Ctrl+S` 提交待提交变更（`CMD_APPLY_CHANGES`，
+            // `plugin.xml:1082`）：`editor` context 的 `Ctrl+S` 是保存文档，
+            // 网格这层更深、先命中（与 `database-nav` 的提交暂存同模式）
+            .on_action(cx.listener(Self::on_commit_result_changes))
             // 【书签】`Ctrl+Shift+B` 切换 / `F8` 下一 / `Shift+F8` 上一（键位在 crates/app 注册）
             .on_action(cx.listener(Self::on_toggle_bookmark))
             .on_action(cx.listener(Self::on_next_bookmark))
