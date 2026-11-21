@@ -488,15 +488,16 @@ fn context_menu_offers_insert_only_when_table_is_known() {
     assert!(!insert.separator_before, "与复制组同组（紧跟整行 JSON 后）");
 }
 
-/// 【#28-B3】行级动作（新增 / 复制 / 删除一行）的菜单闸口：
+/// 【#28-B3】行级动作（新增 / 复制 / 删除一行 + 第 55 批的「从上一行 / 下一行复制」）的菜单闸口：
 /// - 只读结果集（`!editable`）整组不摆；
-/// - 已标记删除的底层行三项全不摆；
-/// - 可编辑且未删时三项都摆，独立分组（新增项带分隔线），排在**排序段之后**
+/// - 已标记删除的底层行五项全不摆；
+/// - 可编辑且未删时五项都摆：前三项一组（新增项带分隔线）、后两项同组（首项带分隔线，
+///   对应 DBeaver `fillContextMenu:3212` 的段内 Separator），整体排在**排序段之后**
 ///   （DBeaver 段序 filters → order → navigate → edit，`fillContextMenu:3169-3218`）；
 /// - 动作携带视图行号（与复制整行同口径，不是列下标）。
 #[test]
 fn context_menu_row_actions_gate_on_editable_and_deleted() {
-    // 只读：三项都不摆
+    // 只读：五项都不摆
     let read_only = context_menu_items(&target("orders", "name", 1));
     assert!(
         !read_only.iter().any(|item| matches!(
@@ -504,11 +505,12 @@ fn context_menu_row_actions_gate_on_editable_and_deleted() {
             ContextAction::InsertRowBelow(_)
                 | ContextAction::DuplicateRow(_)
                 | ContextAction::DeleteRow(_)
+                | ContextAction::CopyRowValuesFrom { .. }
         )),
         "只读结果集不摆行级动作"
     );
 
-    // 可编辑、未删：三项都摆
+    // 可编辑、未删：五项都摆
     let mut editable = target("orders", "name", 1);
     editable.editable = true;
     let items = context_menu_items(&editable);
@@ -524,19 +526,47 @@ fn context_menu_row_actions_gate_on_editable_and_deleted() {
         .iter()
         .find(|item| matches!(item.action, ContextAction::DeleteRow(_)))
         .expect("可编辑结果集要摆删除行");
+    let from_above = items
+        .iter()
+        .find(|item| matches!(item.action, ContextAction::CopyRowValuesFrom { above: true, .. }))
+        .expect("可编辑结果集要摆「从上一行复制」");
+    let from_below = items
+        .iter()
+        .find(|item| matches!(item.action, ContextAction::CopyRowValuesFrom { above: false, .. }))
+        .expect("可编辑结果集要摆「从下一行复制」");
     assert_eq!(insert.action, ContextAction::InsertRowBelow(0));
     assert_eq!(duplicate.action, ContextAction::DuplicateRow(0));
     assert_eq!(delete.action, ContextAction::DeleteRow(0));
+    assert_eq!(
+        from_above.action,
+        ContextAction::CopyRowValuesFrom {
+            row: 0,
+            above: true
+        }
+    );
+    assert_eq!(
+        from_below.action,
+        ContextAction::CopyRowValuesFrom {
+            row: 0,
+            above: false
+        }
+    );
     assert!(
         insert.separator_before,
         "行级动作独立分组，新增项前带分隔线"
     );
     assert!(!duplicate.separator_before, "复制 / 删除与新增同组");
     assert!(!delete.separator_before, "复制 / 删除与新增同组");
+    assert!(
+        from_above.separator_before,
+        "「从上一行复制」前一条段内分隔线（DBeaver `fillContextMenu:3212`），
+         把「改行本身」与「借用邻行的值」两组分开"
+    );
+    assert!(!from_below.separator_before, "两个邻行复制项同组");
 
     // 分组位置：复制段（CopyRowJson / CopyRowInsert）之后、**排序段之后**
     // （DBeaver 的 order 子菜单在 filters 之后、edit 之前，`:3179-3218`）
-    let row_action_indexes = [insert, duplicate, delete]
+    let row_action_indexes = [insert, duplicate, delete, from_above, from_below]
         .iter()
         .map(|item| {
             items
@@ -544,7 +574,7 @@ fn context_menu_row_actions_gate_on_editable_and_deleted() {
                 .position(|candidate| candidate.action == item.action)
         })
         .collect::<Option<Vec<_>>>()
-        .expect("三项都在菜单里");
+        .expect("五项都在菜单里");
     let first_row_action = *row_action_indexes.iter().min().unwrap();
     let last_copy = items
         .iter()
@@ -573,8 +603,14 @@ fn context_menu_row_actions_gate_on_editable_and_deleted() {
         last_sort < first_row_action,
         "行级动作排在排序段之后（DBeaver edit 子菜单在 order 之后，`:3197-3218`）"
     );
+    // 邻行复制两项在「删除此行」之后（DBeaver `:3211` DELETE → `:3212` Separator → `:3213-3214`）
+    let delete_index = row_action_indexes[2];
+    assert!(
+        delete_index < row_action_indexes[3] && row_action_indexes[3] < row_action_indexes[4],
+        "「从上一行复制 / 从下一行复制」紧跟「删除此行」之后"
+    );
 
-    // 已删除：三项全不摆
+    // 已删除：五项全不摆
     let mut deleted = target("orders", "name", 1);
     deleted.editable = true;
     deleted.is_deleted = true;
@@ -585,6 +621,7 @@ fn context_menu_row_actions_gate_on_editable_and_deleted() {
             ContextAction::InsertRowBelow(_)
                 | ContextAction::DuplicateRow(_)
                 | ContextAction::DeleteRow(_)
+                | ContextAction::CopyRowValuesFrom { .. }
         )),
         "已删除行不再摆行级动作"
     );

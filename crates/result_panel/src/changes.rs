@@ -94,6 +94,17 @@ impl ChangeSet {
         is_new
     }
 
+    /// 某格当前在集合里的那一条（`None` = 这格没改过）
+    ///
+    /// 【第 55 批】「从上一行 / 下一行复制」要判断「这一格现在显示的是什么」再决定
+    /// 要不要写：集合里有这条时展示值是 `edited`，否则是库里原值。同一格只留最新一条，
+    /// 所以最多命中一项。
+    pub fn peek(&self, row: usize, column: usize) -> Option<&CellChange> {
+        self.cells
+            .iter()
+            .find(|change| change.row == row && change.column == column)
+    }
+
     /// 移除一格（撤销未提交的编辑）；返回是否真的移除了
     pub fn remove(&mut self, row: usize, column: usize) -> bool {
         let before = self.cells.len();
@@ -171,6 +182,36 @@ impl ChangeSet {
             .map(|change| (change.row, change.column))
             .collect()
     }
+}
+
+/// 【第 55 批】「从上一行 / 下一行复制」：算出把 `source_cells` 的值写进 `target_row` 要动哪几格
+///
+/// 对齐 DBeaver `ResultSetViewer.copyRowValues:5062-5156`（逐属性 `updateValue`）：
+/// - `changes` 里已有的格：**展示值**是那条 `edited`（已改过的格再复制一次，不能把中间值
+///   当成库里原值），而要写的 `original` 仍取 `target_cells[column]`；
+/// - 展示值本来就等于源行值的格**不写**（写进去也是同一条无意义变更）；
+/// - 两边列数不等时按短的那边算（缺列 / 缺行由驱动给出，形状不可全信）。
+pub fn row_copy_changes(
+    target_row: usize,
+    target_cells: &[String],
+    source_cells: &[String],
+    changes: &ChangeSet,
+) -> Vec<CellChange> {
+    let columns = target_cells.len().min(source_cells.len());
+    let mut writes = Vec::new();
+    for column in 0..columns {
+        let original = target_cells[column].clone();
+        let shown = changes
+            .peek(target_row, column)
+            .map(|change| change.edited.clone())
+            .unwrap_or_else(|| original.clone());
+        let edited = source_cells[column].clone();
+        if edited == shown {
+            continue;
+        }
+        writes.push(CellChange::pending(target_row, column, original, edited));
+    }
+    writes
 }
 
 /// 编辑历史（撤销 / 重做栈）：记录每一步单元格编辑（DBeaver 粒度 = 每格一次编辑一步）
@@ -491,6 +532,64 @@ mod tests {
         let by_row = BTreeMap::new();
         let err = commit_updates_rows("t", &key, &columns, &rows, &by_row).unwrap_err();
         assert!(err.contains("没有待提交的变更"));
+    }
+
+    #[test]
+    fn change_set_peek_reports_the_latest_edit_of_one_cell() {
+        let mut set = ChangeSet::new();
+        assert!(set.peek(0, 1).is_none(), "没改过的格 peek 为空");
+        set.upsert(change(0, 1, "a", "b"));
+        assert_eq!(set.peek(0, 1).map(|c| c.edited.as_str()), Some("b"));
+        // 同格再改只留最新一条：peek 读到的也是最新
+        set.upsert(change(0, 1, "a", "c"));
+        assert_eq!(set.peek(0, 1).map(|c| c.edited.as_str()), Some("c"));
+        assert_eq!(
+            set.peek(0, 1).map(|c| c.original.as_str()),
+            Some("a"),
+            "原值仍是库里那一份（改两次不会把中间值当原值）"
+        );
+        assert!(set.peek(0, 2).is_none(), "别的格不受影响");
+        set.remove(0, 1);
+        assert!(set.peek(0, 1).is_none(), "撤销这一格后 peek 归空");
+    }
+
+    /// 【第 55 批】「从上一行 / 下一行复制」的落点：已改过的格保留库里原值、
+    /// 值本来就一样的格不写；两边列数不等时按短的算。
+    #[test]
+    fn row_copy_changes_skips_equal_cells_and_keeps_db_originals() {
+        let target = vec!["1".to_string(), "王".to_string(), "10".to_string()];
+        let source = vec!["2".to_string(), "王".to_string(), "20".to_string()];
+        // 第一格已经改过：库里 1 → 展示 5
+        let mut set = ChangeSet::new();
+        set.upsert(change(0, 0, "1", "5"));
+        let writes = row_copy_changes(0, &target, &source, &set);
+        assert_eq!(writes.len(), 2, "第 2 格 王==王 不写");
+        assert_eq!(
+            (
+                writes[0].column,
+                writes[0].original.as_str(),
+                writes[0].edited.as_str()
+            ),
+            (0, "1", "2"),
+            "已改过的格：展示值是 5，但原值仍是库里那份 1"
+        );
+        assert_eq!(
+            (
+                writes[1].column,
+                writes[1].original.as_str(),
+                writes[1].edited.as_str()
+            ),
+            (2, "10", "20")
+        );
+    }
+
+    #[test]
+    fn row_copy_changes_uses_the_shorter_row() {
+        let target = vec!["a".to_string()];
+        let source = vec!["b".to_string(), "c".to_string()];
+        let writes = row_copy_changes(0, &target, &source, &ChangeSet::new());
+        assert_eq!(writes.len(), 1, "列数不齐时只写两边都有的那一格");
+        assert_eq!(writes[0].edited, "b");
     }
 
     #[test]

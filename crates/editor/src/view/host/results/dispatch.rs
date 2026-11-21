@@ -509,6 +509,10 @@ impl EditorHostPanel {
             }
             ResultRequest::DuplicateRow(view) => self.duplicate_local_row(view, cx),
             ResultRequest::DeleteRow(view) => self.delete_local_row(view, cx),
+            // 【第 55 批】「从上一行 / 下一行复制」：逐格改写现有行（不是插新行）
+            ResultRequest::CopyRowValuesFrom { row, above } => {
+                self.copy_row_values_from_adjacent(row, above, cx);
+            }
             // 组合撤销 / 重做：格级栈优先，空走行级栈（两个栈互不混栈）
             ResultRequest::UndoAction => self.undo_row_action(cx),
             ResultRequest::RedoAction => self.redo_row_action(cx),

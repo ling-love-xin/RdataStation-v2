@@ -83,6 +83,9 @@ pub enum ContextAction {
     DuplicateRow(usize),
     /// 【#28-B3】删除该行（视图行号；底层行打删除标记，本地行移出叠加层）
     DeleteRow(usize),
+    /// 【第 55 批】把相邻行的值复制到**这一行**（对齐 DBeaver `CMD_ROW_COPY_FROM_ABOVE` /
+    /// `_BELOW`，`fillContextMenu:3213-3214`）：逐格改写现有行，不插新行
+    CopyRowValuesFrom { row: usize, above: bool },
     /// 【列浏览器】复制选中列的**列名**（对齐 DBeaver 元数据面板清单右键
     /// `meta_data_panel_action_copy_column_text`：多选时逐行拼、换行分隔）。
     ///
@@ -332,6 +335,27 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
         items.push(ContextMenuItem {
             label: "删除此行".to_string(),
             action: ContextAction::DeleteRow(target.row),
+            separator_before: false,
+        });
+        // 【第 55 批】DBeaver 在 ADD / COPY / DELETE 之后又一条 Separator（`fillContextMenu:3212`），
+        // 再接「从上一行复制 / 从下一行复制」两个命令（`:3213-3214`）——本仓扁平化后
+        // 就是行级动作段内的一条分隔线，把「改行本身」与「借用邻行的值」两组分开。
+        // 文案照 bundle_zh 的 name（`:128` / `:130`），不加「值到当前行」（那是 description）。
+        // 越界由宿主判定（纯函数看不到视图行数）：源行不存在 = 点击无动作，与 DBeaver 一致。
+        items.push(ContextMenuItem {
+            label: "从上一行复制".to_string(),
+            action: ContextAction::CopyRowValuesFrom {
+                row: target.row,
+                above: true,
+            },
+            separator_before: true,
+        });
+        items.push(ContextMenuItem {
+            label: "从下一行复制".to_string(),
+            action: ContextAction::CopyRowValuesFrom {
+                row: target.row,
+                above: false,
+            },
             separator_before: false,
         });
     }
@@ -1036,6 +1060,20 @@ pub(crate) fn context_menu(
                     menu = menu.item(PopupMenuItem::new(item.label).on_click(
                         move |_, _window, app| {
                             hook(crate::ports::ResultRequest::DeleteRow(row), app);
+                        },
+                    ));
+                }
+            }
+            // 【第 55 批】「从上一行 / 下一行复制」：逐格改写现有行，走同一条行级动作钩子
+            // 交回宿主（底层行落变更集、本地行落快照）；没接钩子的只读网格不摆。
+            ContextAction::CopyRowValuesFrom { row, above } => {
+                if let Some(hook) = delegate.on_row_action.clone() {
+                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| {
+                            hook(
+                                crate::ports::ResultRequest::CopyRowValuesFrom { row, above },
+                                app,
+                            );
                         },
                     ));
                 }

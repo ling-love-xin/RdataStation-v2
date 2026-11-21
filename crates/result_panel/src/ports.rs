@@ -322,6 +322,15 @@ pub enum ResultRequest {
     DuplicateRow(usize),
     /// 【#28-B3】删除指定视图行：底层行只打删除标记（可撤销恢复）；本地行直接移出叠加层。
     DeleteRow(usize),
+    /// 【第 55 批】把**相邻行**的值复制到当前行（对齐 DBeaver
+    /// `CMD_ROW_COPY_FROM_ABOVE` / `_BELOW`，`IResultSetCommands.java:45-46` →
+    /// `ResultSetHandlerMain:246-249` → `ResultSetViewer.copyRowValues:5062-5156`）。
+    ///
+    /// 与 [`Self::DuplicateRow`] 的差别：那条是**新增**一条本地行，这条是**逐格改写
+    /// 现有行**——底层行走变更集（可撤销、可提交），本地行走快照。`row` = 目标视图行，
+    /// `above` = 源行在上一行（`false` 为下一行）。源行越界时宿主静默不动作
+    /// （DBeaver 在 `:5091-5093` 也是 `break`）。
+    CopyRowValuesFrom { row: usize, above: bool },
     /// 【#28-B3】撤销（组合语义：格级 `EditHistory` 非空先走格级，栈空再走行级 `RowHistory`）
     UndoAction,
     /// 【#28-B3】重做（组合语义与 [`Self::UndoAction`] 对称）

@@ -3,6 +3,7 @@
 //! 自 view/host/exec.rs 拆分（2026-10-29 Step 10）：按能力域切分 `impl EditorHostPanel`。
 //! 跨域互调经 `pub(crate)` 方法；本文件不得出现新的逻辑。
 
+use result_panel::changes::{row_copy_changes, CellChange};
 use result_panel::rowset::{LocalRow, RowOp, RowRef};
 
 use super::*;
@@ -135,6 +136,123 @@ impl EditorHostPanel {
         if applied {
             self.sync_result_view(cx);
         }
+    }
+
+    /// 【第 55 批】把**相邻行**的值复制到当前行（对齐 DBeaver `copyRowValues:5062-5156`，
+    /// 菜单命令 `CMD_ROW_COPY_FROM_ABOVE` / `_BELOW`）。
+    ///
+    /// 与 [`Self::duplicate_local_row`] 的区别：那条**新增**一条本地行；这条逐格**改写
+    /// 现有行**——底层行走变更集（原值取库里那一份，故可撤销、可提交），本地行走快照
+    /// （不进变更集 / 撤销栈，与本地行格编辑同口径）。
+    ///
+    /// 门控：源行越界、目标行被标记删除、列数为 0 都静默不动作（DBeaver 在 `:5091-5093`
+    /// 也是 `break`）。要写哪几格由纯函数 [`row_copy_changes`] 算（已改过的格保留库里原值、
+    /// 值本来就一样的格不写）。返回真正写进的格数。
+    pub(crate) fn copy_row_values_from_adjacent(
+        &mut self,
+        target_view: usize,
+        above: bool,
+        cx: &mut Context<Self>,
+    ) -> usize {
+        let document = self.document.clone();
+        // 目标 / 源行身份先从网格真值翻译成 RowRef（store 闭包内不能再借 grid 实体）
+        let target_ref = self.grid.read(cx).delegate().reference_of(target_view);
+        // 源视图行：上一行 = target - 1（首行没有），下一行 = target + 1（末行 reference_of 给 None）
+        let source_view = if above {
+            target_view.checked_sub(1)
+        } else {
+            target_view.checked_add(1)
+        };
+        let source_ref = source_view.and_then(|view| self.grid.read(cx).delegate().reference_of(view));
+        let (Some(target_ref), Some(source_ref)) = (target_ref, source_ref) else {
+            return 0;
+        };
+        if source_view == Some(target_view) {
+            return 0;
+        }
+        let written = self.shared.update_results(|store| {
+            let active = store.active_index(&document).unwrap_or(0);
+            let columns = store.active(&document).map(|entry| entry.columns.len()).unwrap_or(0);
+            // 源行 cells 快照（数据列序；底层行取 rows，本地行取快照）
+            let source_cells: Vec<String> = match source_ref {
+                RowRef::Data(ix) => store
+                    .active(&document)
+                    .and_then(|entry| entry.rows.get(ix))
+                    .cloned()
+                    .unwrap_or_default(),
+                RowRef::Local(id) => store
+                    .local_rows(&document, active)
+                    .and_then(|set| set.local_row(id))
+                    .map(|row| row.cells.clone())
+                    .unwrap_or_default(),
+            };
+            if columns == 0 || source_cells.is_empty() {
+                return 0;
+            }
+            match target_ref {
+                RowRef::Data(ix) => {
+                    // 被标记删除的底层行不再改值（撤销删除后才恢复，与行级动作同一门控）
+                    if store
+                        .local_rows(&document, active)
+                        .is_some_and(|set| set.is_deleted(ix))
+                    {
+                        return 0;
+                    }
+                    let target_cells: Vec<String> = store
+                        .active(&document)
+                        .and_then(|entry| entry.rows.get(ix))
+                        .cloned()
+                        .unwrap_or_default();
+                    // 要写哪几格由纯函数算（`changes::row_copy_changes` 带用例）：已改过的格
+                    // 展示值取集合里的 `edited`、原值仍取库里那份；值本来就一样的格不写。
+                    let writes: Vec<CellChange> = store
+                        .change_set(&document, active)
+                        .map(|changes| {
+                            row_copy_changes(ix, &target_cells, &source_cells, changes)
+                        })
+                        .unwrap_or_default();
+                    if writes.is_empty() {
+                        return 0;
+                    }
+                    store.mutate_change_set(&document, active, |changes| {
+                        for change in &writes {
+                            changes.upsert(change.clone());
+                        }
+                    });
+                    let count = writes.len();
+                    store.mutate_history(&document, active, |history| {
+                        for change in writes {
+                            history.push(change);
+                        }
+                    });
+                    count
+                }
+                RowRef::Local(id) => {
+                    // 本地行：只写回快照，不进变更集 / 撤销栈（#28-B4 拍板口径）
+                    let mut count = 0;
+                    store.mutate_local_rows(&document, active, |set| {
+                        let Some(row) = set.local_row_mut(id) else {
+                            return;
+                        };
+                        for column in 0..columns.min(source_cells.len()) {
+                            let Some(cell) = row.cells.get_mut(column) else {
+                                continue;
+                            };
+                            let edited = source_cells[column].clone();
+                            if *cell != edited {
+                                *cell = edited;
+                                count += 1;
+                            }
+                        }
+                    });
+                    count
+                }
+            }
+        });
+        if written > 0 {
+            self.sync_result_view(cx);
+        }
+        written
     }
 
     /// 【#28-B3】组合撤销：格级 `EditHistory` 非空先走格级（现有 [`Self::undo_result_edit`]），
