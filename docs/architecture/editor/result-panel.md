@@ -7430,6 +7430,66 @@ DBeaver 的右键在复制段之后先放一条 Separator，再挂 `filters` 子
   （0 warning）、`rds-editor --lib` **800 passed（1 ignored）**、`rds-ui-guard` **4 passed**。
   本批未动 `crates/settings`，不重跑其测试。
 
+### 9.38 edit 段补「从上一行 / 下一行复制」（对齐 DBeaver `CMD_ROW_COPY_FROM_ABOVE/_BELOW`，2026-11-21）
+
+§9.36 登记过「edit 段只有三行动作，DBeaver 另有从上行 / 下行复制」。本批把这两项补上，
+并把「逐格改写现有行」与既有的「新增一条本地行」彻底分开。
+
+#### 9.38.1 dbeaver-ref 取证（现源实读）
+
+| 位置 | 内容 |
+| --- | --- |
+| `plugin.xml:264-265` | 命令 id `org.jkiss.dbeaver.core.resultset.row.copy.from.above` / `…below` |
+| `plugin.xml:736` / `:744` | handler = `ResultSetHandlerMain` |
+| `bundle_zh.properties:127-130` | name「从上一行复制」/「从下一行复制」，description「…值复制到当前行」 |
+| `plugin.xml:1077-1078` | 键位 `CTRL+D` / `CTRL+ALT+D`（contextId `…resultset.focused`） |
+| `fillContextMenu:3207-3215` | `Separator` → ADD / COPY / DELETE → `Separator`(`:3212`) → COPY_FROM_ABOVE(`:3213`) / `_BELOW`(`:3214`) |
+| `ResultSetHandlerMain:246-249` | 两条命令都落 `rsv.copyRowValues(above, true)` |
+| `copyRowValues:5062-5156` | 选中行按**连续分区**分组；单行分区取相邻行（`:5085`）、多行分区取首/末行（`:5088`）；越界 `break`（`:5091-5093`）；逐属性 `updateValue`（`:5125-5147`），跳过伪列 / 自动生成列（`:5126`） |
+| `plugin.xml:972-993` | 这两项只出现在 `menu:edit`（编辑菜单）扩展，**没有工具栏按钮** |
+
+结论：这是**改写现有行**的命令（值写进当前行），不是插新行——与本仓 `DuplicateRow`（插一条
+本地行）语义相反，必须分成两条通道。
+
+#### 9.38.2 本仓落地
+
+- `ports.rs`：新增 `ResultRequest::CopyRowValuesFrom { row, above }`（`row` = 目标视图行）。
+- `grid/menu.rs`：新增 `ContextAction::CopyRowValuesFrom { row, above }`；`context_menu_items`
+  的行级段在「删除此行」之后追加两项，首项 `separator_before: true`（对应 `:3212` 的段内
+  Separator），文案照 bundle_zh 的 name。门控与其余行级动作同一份（`editable && !is_deleted`）。
+- `grid/menu.rs::context_menu()`：两项都走既有 `on_row_action` 钩子（与新增 / 复制 / 删除同一通道），
+  没接钩子的只读网格不摆。
+- `changes.rs`：新增纯函数 `row_copy_changes(target_row, target_cells, source_cells, changes)`
+  ——已改过的格**展示值**取 `ChangeSet::peek().edited`、要写的 `original` 仍取库里那一份；
+  展示值本来就等于源行值的格不写；两边列数不等按短的算。配套新增 `ChangeSet::peek`。
+- `editor/src/view/host/exec/row_ops.rs`：`copy_row_values_from_adjacent`——
+  源行 = target ∓ 1（越界 / 目标行被标记删除 / 列数为 0 都静默返回 0，对齐 `:5091-5093` 的
+  `break`）；底层行按纯函数结果 upsert 变更集 + 逐格入 `EditHistory`（可撤销、可提交）；
+  本地行只写回快照（不进变更集 / 撤销栈，与 #28-B4 同口径）；有写入才 `sync_result_view`。
+- `dispatch.rs`：`ResultRequest::CopyRowValuesFrom` 分支。
+
+#### 9.38.3 口径差异（有意 / 结构性）
+
+1. **多行选中分区复制未做**：DBeaver 按连续分区（单行取邻行、多行取首/末），本仓右键落点
+   只有**一个视图行**，所以本批是「单行」口径；多选区语义要等右键 target 携带选区范围再谈。
+2. **伪列 / 自动生成列没有对应物**：本仓结果集没有该模型，逐列即可。
+3. **键位未接**：`CTRL+D` / `CTRL+ALT+D` 需要结果面板级键位层（与 §9.37.3 第 3 条同一缺口）。
+4. **工具栏不加按钮**：DBeaver 这两项只在编辑菜单 / 右键（`plugin.xml:972-993`），本仓照此。
+5. **两项恒摆**：纯函数看不到视图行数，越界由宿主判（点击后无动作）。首行点「从上一行复制」、
+   末行点「从下一行复制」都是空操作，与 DBeaver `break` 的表现一致。
+
+#### 9.38.4 用例与门禁
+
+- 新增 `row_copy_changes_skips_equal_cells_and_keeps_db_originals`、`row_copy_changes_uses_the_shorter_row`
+  （纯函数）、`change_set_peek_reports_the_latest_edit_of_one_cell`（变更集）。
+- 扩写 `context_menu_row_actions_gate_on_editable_and_deleted`：只读 / 已删整组（现五项）收起、
+  「从上一行复制」带段内分隔线、两项紧跟「删除此行」之后。
+- **门禁**：`rds-result-panel` **394 passed**（391 + 3）、editor `cargo check` `Finished`
+  （0 warning）、`rds-editor --lib` **800 passed（1 ignored）**、`rds-ui-guard` **4 passed**。
+- **未覆盖（登记）**：editor 侧 `copy_row_values_from_adjacent` 的 store 编排（变更集 / 历史 /
+  本地快照三条落点）没有行为级用例——editor crate 目前没有可构造 `EditorHostPanel` 的测试设施，
+  与 `insert_local_row` / `duplicate_local_row` 同一状况；"写哪几格"由纯函数用例覆盖。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

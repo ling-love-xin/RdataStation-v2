@@ -2508,6 +2508,28 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 门禁基线（第 54 批后）：result_panel **391 passed**、editor check `Finished`（0 warning）、
   editor lib **800 passed（1 ignored）**、ui-guard **4 passed**；本批未动 settings。
 
+### 2.106 「从上一行 / 下一行复制」的接手要点（2026-11-21）
+
+- **两条通道别混**：`DuplicateRow` 是「**新增**一条本地行」（插行）；`CopyRowValuesFrom`
+  是「逐格**改写现有行**」（DBeaver `copyRowValues:5062-5156`）。用户报「点复制后多了一行」
+  大概率是把这两条接错了。
+- 写哪几格**只有一处口径**：`crates/result_panel/src/changes.rs::row_copy_changes`
+  ——已改过的格展示值取 `ChangeSet::peek().edited`、原值取库里那一份；值相同的格不写；
+  列数按短的。编辑器侧的循环不要自己再推导一遍（会与撤销栈对不上）。
+- 宿主侧落点（`editor/src/view/host/exec/row_ops.rs::copy_row_values_from_adjacent`）：
+  底层行 → `mutate_change_set` + `mutate_history`；本地行 → `mutate_local_rows`（**不进**
+  变更集 / 撤销栈）；有写入才 `sync_result_view`。改这里时注意 `store.change_set(...)` 的
+  不可变借用必须先结束再 `mutate_change_set`（本批按「取值 → 计算 writes → 再 mutate」的顺序写）。
+- 门控：源行越界 / 目标行被标记删除 / 列数为 0 静默返回 0。菜单两项**恒摆**（纯函数拿不到
+  视图行数），首行 / 末行点不到邻行是空操作——这是有意与 DBeaver `break` 对齐，不要改成「灰掉」。
+- 未做（§9.38.3 已登记）：多选区连续分区复制（本仓右键只有一个视图行）、伪列 / 自动生成列
+  跳过（无该模型）、`CTRL+D` / `CTRL+ALT+D` 键位（无面板级键位层）、工具栏按钮（DBeaver 也没有）。
+- 用例：`row_copy_changes_*`（纯函数）、`change_set_peek_*`、
+  `context_menu_row_actions_gate_on_editable_and_deleted`（现五项 + 段内分隔线 + 顺序）。
+  **editor 侧 store 编排无行为用例**（无 host 面板测试设施，与 `insert_local_row` 同状况）。
+- 门禁基线（第 55 批后）：result_panel **394 passed**、editor check `Finished`（0 warning）、
+  editor lib **800 passed（1 ignored）**、ui-guard **4 passed**；本批未动 settings。
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。
