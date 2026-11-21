@@ -340,6 +340,17 @@ pub enum ResultRequest {
     /// `col` 是**组件列**（含行号槽，数据格从 1 起）：右键 `ContextTarget::column` 是
     /// 折算了行号槽的数据列下标，出菜单时 +1（见 `menu.rs` 的 `EditCell` 分派）。
     BeginEditCellAt { row: usize, col: usize },
+    /// 【第 67 批】把指定格**重置为数据原值**（对齐 DBeaver `CMD_CELL_RESET`，
+    /// `ResultSetViewer.fillEditMenu:3536` → `resetCellValue` →
+    /// `ResultSetModel.resetCellValue:571-590`）。
+    ///
+    /// DBeaver 一个命令两支：行被标删 → 行状态回 `STATE_NORMAL`；否则 `row.isChanged(attr)`
+    /// → 把该格回写成 `row.getChange(attr)`。本仓同样两支：底层行已删 → `unmark_deleted`；
+    /// 否则从变更集移除这一格（网格显示自动回落到 `entry.rows` 的数据原值）。
+    ///
+    /// `col` 是**组件列**（含行号槽，数据格从 1 起），与 [`Self::BeginEditCellAt`] 同口径；
+    /// 宿主再折回数据列下标（`local_rows` / `ChangeSet` 都按数据列）。
+    ResetCell { row: usize, col: usize },
     /// 【第 55 批】把**相邻行**的值复制到当前行（对齐 DBeaver
     /// `CMD_ROW_COPY_FROM_ABOVE` / `_BELOW`，`IResultSetCommands.java:45-46` →
     /// `ResultSetHandlerMain:246-249` → `ResultSetViewer.copyRowValues:5062-5156`）。

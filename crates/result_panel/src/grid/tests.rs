@@ -23,7 +23,8 @@ use crate::grid::{
     column_menu_items, column_stats, column_stats_from_values, context_menu_items, duration_text,
     fetch_more_hint, filter_panel_menu_item, filter_settings_menu_items, filters_menu_items,
     format_cell_text,
-    group_by_values, layout_presentation_menu_items, row_action_state, row_number_menu_items,
+    group_by_values, layout_presentation_menu_items, reset_cell_applicable, row_action_state,
+    row_number_menu_items,
     selection_stat_menu_items, selection_statistics, stats_lines, status_action_placeholders,
     status_segments, thousands, truncated_hint, truncation_notice, validate_edit_value,
     window_fetch_active,
@@ -105,6 +106,7 @@ fn target(value: &str, name: &str, column: usize) -> ContextTarget {
         // 默认只读：既有菜单断言不摆行级三项；可编辑用例在测试里显式覆盖
         editable: false,
         is_deleted: false,
+        cell_changed: false,
         // 【选中统计】三项开关默认全关（出厂态，`DataEditorsPreferencesInitializer.java:86-88`）
         selection_stat_rows: false,
         selection_stat_columns: false,
@@ -707,8 +709,9 @@ fn context_menu_edit_cell_leads_the_edit_group() {
         "新增行前的分隔线 = DBeaver `:3208` 的段内 Separator"
     );
 
-    // 【第 65 批】已删除行：项仍在，但灰着（本仓没有 `CMD_CELL_RESET` 恢复通道，
-    // `begin_edit` 直接拒绝已删行；DBeaver 那边这两条是分开的，见 §9.48）
+    // 【第 65 批】已删除行：项仍在，但灰着（`begin_edit` 直接拒绝已删行；
+    // 第 67 批起旁边会多出「重置单元格」这条恢复通道，见
+    // `reset_cell_item_appears_only_when_dirty_or_deleted`）
     let mut deleted = target("orders", "name", 1);
     deleted.editable = true;
     deleted.is_deleted = true;
@@ -734,6 +737,83 @@ fn context_menu_edit_cell_leads_the_edit_group() {
                 | ContextAction::CopyRowValuesFrom { .. }
         )),
         "记录视图是只读呈现（PlainTextPresentation 不实现 IResultSetEditor），编辑段整段不摆"
+    );
+}
+
+/// 【第 67 批】`reset_cell_applicable` 的真值表。对齐 DBeaver `fillEditMenu:3536` 的门控
+/// `row.getState() == STATE_REMOVED || row.isChanged(attr)`：
+/// 只有「行已删」或「这一格改过」时才摆这一项。
+#[test]
+fn reset_cell_applicable_follows_the_dbeaver_gate() {
+    // 未删未改：不摆（DBeaver `if` 不成立 → 菜单里没有这一项）
+    assert!(!reset_cell_applicable(false, false));
+    // 行已删：摆（重置 = 撤销删除标记，`resetCellValue:572-575`）
+    assert!(reset_cell_applicable(true, false));
+    // 这一格改过：摆（重置 = 按 `getChange` 回写原值，`:577-589`）
+    assert!(reset_cell_applicable(false, true));
+    // 行已删且格也改过：摆（第一支优先，行恢复后再谈格）
+    assert!(reset_cell_applicable(true, true));
+}
+
+/// 【第 67 批】右键「重置单元格」是**条件出现**，不是灰项——这与第 65 批「项在、灰掉」
+/// 的口径**有意不同**：DBeaver `fillEditMenu:3536` 是把 `CMD_CELL_RESET` 放进 `if`
+/// 里条件 add，不成立时菜单里根本没有这一项，用户看不到「本来有东西」。本仓照抄，
+/// 所以 `reset_cell_applicable` 为假时**不 push** 任何项（见 `menu.rs` 的 edit 段）。
+#[test]
+fn reset_cell_item_appears_only_when_dirty_or_deleted() {
+    // 干净的可编辑行：没有「重置单元格」
+    let mut clean = target("orders", "name", 1);
+    clean.editable = true;
+    let clean_items = context_menu_items(&clean);
+    assert!(
+        !clean_items
+            .iter()
+            .any(|item| matches!(item.action, ContextAction::ResetCell { .. })),
+        "未删未改的格不摆「重置单元格」（条件 add，不是灰项）"
+    );
+
+    // 这一格改过：摆，且**紧跟**「修改单元格」（DBeaver `:3536` 在 ROW_EDIT 之后、
+    // `:3208` Separator 之前，同组无分隔线）
+    let mut dirty = target("orders", "name", 1);
+    dirty.editable = true;
+    dirty.cell_changed = true;
+    let dirty_items = context_menu_items(&dirty);
+    let edit_pos = dirty_items
+        .iter()
+        .position(|item| matches!(item.action, ContextAction::EditCell { .. }))
+        .expect("可编辑结果集要摆「修改单元格」");
+    let reset = dirty_items
+        .get(edit_pos + 1)
+        .expect("「修改单元格」后面要有「重置单元格」");
+    assert_eq!(
+        reset.action,
+        ContextAction::ResetCell { row: 0, column: 1 },
+        "落点与「修改单元格」同一格（`column` 是数据列下标，出菜单时 +1）"
+    );
+    assert_eq!(reset.label, "重置单元格", "文案对仗「修改单元格」（§9.24 口径）");
+    assert!(!reset.separator_before, "与「修改单元格」同组，不插分隔线");
+    assert!(!reset.disabled, "条件成立的项就是可点的");
+
+    // 行已删（格没改）：也摆——这是「撤销这一行的删除」的入口
+    let mut deleted = target("orders", "name", 1);
+    deleted.editable = true;
+    deleted.is_deleted = true;
+    let deleted_items = context_menu_items(&deleted);
+    let reset = deleted_items
+        .iter()
+        .find(|item| matches!(item.action, ContextAction::ResetCell { .. }))
+        .expect("已删行要摆「重置单元格」");
+    assert!(!reset.disabled, "已删行的「重置单元格」可点（它正是恢复通道）");
+
+    // 记录视图（只读呈现）：编辑段整段不摆，自然也没有重置
+    let mut record = target("orders", "name", 1);
+    record.editable = true;
+    record.record_mode = true;
+    assert!(
+        !context_menu_items(&record)
+            .iter()
+            .any(|item| matches!(item.action, ContextAction::ResetCell { .. })),
+        "记录视图不摆「重置单元格」"
     );
 }
 
@@ -1763,6 +1843,7 @@ fn column_menu_is_the_column_level_subset() {
         row_ref: RowRef::default(),
         editable: true,
         is_deleted: false,
+        cell_changed: false,
         selection_stat_rows: false,
         selection_stat_columns: false,
         selection_stat_cells: false,
@@ -1814,6 +1895,7 @@ fn column_menu_ends_with_the_four_filter_commands() {
         row_ref: RowRef::default(),
         editable: true,
         is_deleted: false,
+        cell_changed: false,
         selection_stat_rows: false,
         selection_stat_columns: false,
         selection_stat_cells: false,
@@ -2018,6 +2100,7 @@ fn column_menu_shows_conditional_items() {
         row_ref: RowRef::default(),
         editable: true,
         is_deleted: false,
+        cell_changed: false,
         selection_stat_rows: false,
         selection_stat_columns: false,
         selection_stat_cells: false,
@@ -2113,6 +2196,7 @@ fn column_menu_lists_distinct_values_and_clear_only_when_active() {
         row_ref: RowRef::default(),
         editable: true,
         is_deleted: false,
+        cell_changed: false,
         selection_stat_rows: false,
         selection_stat_columns: false,
         selection_stat_cells: false,

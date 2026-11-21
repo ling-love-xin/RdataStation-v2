@@ -275,6 +275,8 @@ pub(crate) fn render_th(
         row_ref: RowRef::default(),
         editable: delegate.editable,
         is_deleted: false,
+        // 【第 67 批】列头落点没有「这一格」：重置单元格只在单元格右键（`context_menu_items`）
+        cell_changed: false,
         // 列头菜单不摆选中统计三颗（它们只在单元格右键的 layout 段）
         selection_stat_rows: false,
         selection_stat_columns: false,

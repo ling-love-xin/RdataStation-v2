@@ -1202,6 +1202,130 @@ fn begin_edit_cell_at_request_enters_inline_editing_without_a_selection(
     );
 }
 
+/// 【第 67 批】右键「重置单元格」的整链（第二支）：`ResetCell` 请求 → 宿主从变更集
+/// 移掉这一格 → 网格镜像的脏点跟着消失。
+///
+/// 对齐 DBeaver `ResultSetModel.resetCellValue:577-589`：`isChanged(attr)` 时按
+/// `getChange` 的原始值回写。本仓的显示值本来就从 `entry.rows` 取，变更集里没这条
+/// 之后自动回落，所以「检查变更集为空 + 网格脏点消失」就是这条链的验收口径。
+#[gpui_kit::test]
+fn reset_cell_request_reverts_a_cell_change(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id) = edit_ready_shared("select * from orders");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_orders_result(cx, &panel);
+
+    // 预置：第 0 行第 1 个数据列改过（变更集一条待提交）
+    seed_cell_change(&shared, &id, 0, 1, "alice", "alice2");
+    cx.update(|_window, cx| panel.update(cx, |host, cx| host.sync_result_view(cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-commit-group").is_some(),
+        "预置脏格：待提交按钮组出现（网格镜像已带上这一格）"
+    );
+
+    // 右键「重置单元格」：组件列 2 → 内部折成数据列 1
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.dispatch_result_request(
+                result_panel::ports::ResultRequest::ResetCell { row: 0, col: 2 },
+                window,
+                cx,
+            );
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(
+        shared
+            .results()
+            .change_set(&id, 0)
+            .map_or(true, |changes| changes.peek(0, 1).is_none()),
+        "重置后变更集里这一格要消失（显示回落数据原值）"
+    );
+    assert_eq!(
+        shared.results().change_set(&id, 0).map(|c| c.pending_count()),
+        Some(0),
+        "没有别的待提交格，计数归零"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-commit-group").is_none(),
+        "重置后没有待提交变更，按钮组应消失（网格镜像的脏点也跟着消失）"
+    );
+}
+
+/// 【第 67 批】右键「重置单元格」的整链（第一支）：行已被标记删除 → 重置 = **撤销删除**，
+/// 这一格不动。
+///
+/// 对齐 DBeaver `ResultSetModel.resetCellValue:572-575`（`STATE_REMOVED` →
+/// `setState(STATE_NORMAL)` 后 `return`）。顺序有意：行恢复优先，格后处理。
+#[gpui_kit::test]
+fn reset_cell_request_restores_a_marked_row(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id) = edit_ready_shared("select * from orders");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_orders_result(cx, &panel);
+
+    // 预置：第 0 行标了删除 + 这一格也改过（两支同时成立，看第一支优先）
+    shared.update_results(|store| {
+        store.mutate_local_rows(&id, 0, |set| set.mark_deleted(0));
+    });
+    seed_cell_change(&shared, &id, 0, 1, "alice", "alice2");
+    cx.update(|_window, cx| panel.update(cx, |host, cx| host.sync_result_view(cx)));
+    assert!(
+        cx.update(|_window, cx| {
+            panel
+                .read(cx)
+                .grid_for_test()
+                .read(cx)
+                .delegate()
+                .is_deleted_row(0)
+        }),
+        "预置已删行：网格镜像里第 0 行是删除态"
+    );
+
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.dispatch_result_request(
+                result_panel::ports::ResultRequest::ResetCell { row: 0, col: 2 },
+                window,
+                cx,
+            );
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(
+        !shared
+            .results()
+            .local_rows(&id, 0)
+            .is_some_and(|set| set.is_deleted(0)),
+        "重置撤销了删除标记（行回正常态）"
+    );
+    assert!(
+        cx.update(|_window, cx| {
+            !panel
+                .read(cx)
+                .grid_for_test()
+                .read(cx)
+                .delegate()
+                .is_deleted_row(0)
+        }),
+        "网格镜像的删除态同步清掉"
+    );
+    assert!(
+        shared
+            .results()
+            .change_set(&id, 0)
+            .is_some_and(|changes| changes.peek(0, 1).is_some()),
+        "第一支 return：这一格的变更不动（行恢复优先）"
+    );
+}
+
 /// 【第 59 批】结果网格 `ENTER` = 行内编辑（DBeaver `CMD_ROW_EDIT_INLINE`，
 /// `plugin.xml:1072`；键位 context = `RESULT_GRID_CONTEXT`）。
 ///

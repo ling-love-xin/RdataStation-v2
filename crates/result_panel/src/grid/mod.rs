@@ -106,7 +106,7 @@ pub use menu::{
     ContextAction, ContextMenuItem, ContextTarget, RowActionState, SelectionStatKind,
     column_browser_menu_items, column_distinct_values, column_menu_items, context_menu_items,
     filter_panel_menu_item, filter_settings_menu_items, filters_menu_items,
-    layout_presentation_menu_items, row_action_state, row_number_menu_items,
+    layout_presentation_menu_items, reset_cell_applicable, row_action_state, row_number_menu_items,
     selection_stat_menu_items,
 };
 pub use stats::{

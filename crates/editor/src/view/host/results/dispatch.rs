@@ -524,6 +524,9 @@ impl EditorHostPanel {
             }
             ResultRequest::DuplicateRow(view) => self.duplicate_local_row(view, cx),
             ResultRequest::DeleteRow(view) => self.delete_local_row(view, cx),
+            // 【第 67 批】右键「重置单元格」：两支（行已删 → 撤销删除；否则 → 清掉这一格的
+            // 变更，显示回落数据原值），见 `reset_result_cell`
+            ResultRequest::ResetCell { row, col } => self.reset_result_cell(row, col, cx),
             // 【第 57 批】状态栏「修改」钮：进入行内编辑（与双击同一条事件链路）
             ResultRequest::BeginEditCell => {
                 self.result_panel.update(cx, |p, cx| p.begin_edit_cell(cx));

@@ -78,6 +78,20 @@ pub fn row_action_state(
     }
 }
 
+/// 【第 67 批】「重置单元格」这一项现在摆不摆（对齐 DBeaver
+/// `fillEditMenu:3536` 的门控：`row.getState() == STATE_REMOVED || row.isChanged(attr)`）。
+///
+/// **与 `add` / `copy` / `delete` 的表达方式不同**：那三条在 DBeaver 是「无条件 add +
+/// `setEnabled(false)`」（`fillContextMenu:3209-3211`，本仓第 65 批跟上成灰项）；
+/// 这一条是 `if` 包裹的**条件 add**——不成立时菜单里根本没有这一项，用户看不到
+/// 「这里本来有东西」。所以本仓也不给它置灰，直接按本函数决定摆不摆，别按 §9.48
+/// 的口径统一成灰项。
+///
+/// 成立的两支：行被标记删除（重置 = 撤销删除）或这一格改过（重置 = 回写数据原值）。
+pub fn reset_cell_applicable(row_deleted: bool, cell_changed: bool) -> bool {
+    row_deleted || cell_changed
+}
+
 /// 右键菜单的动作（界面按它决定点击后干什么）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContextAction {
@@ -139,6 +153,14 @@ pub enum ContextAction {
     /// 的区别：那条读网格选中格，这条用右键定位——右键的格与选中格可以不同。
     /// 落点走内嵌编辑（本仓无外部值编辑器通道）。
     EditCell { row: usize, column: usize },
+    /// 【第 67 批】把**右键落点这一格**重置为数据原值（`row` = 视图行，`column` = 数据列）。
+    ///
+    /// 对齐 DBeaver `CMD_CELL_RESET`（`fillEditMenu:3536`，handler 见
+    /// `ResultSetViewer.resetCellValue` → `ResultSetModel.resetCellValue:571-590`）：
+    /// 那边一个命令承载两件事——行被标删时把行状态恢复 `STATE_NORMAL`，否则把这一格
+    /// 回写成 `row.getChange(attr)` 的原始值。本仓同样两支：行已删 → 撤销删除标记；
+    /// 否则 → 从变更集移除这一格（网格显示自动回到数据原值）。
+    ResetCell { row: usize, column: usize },
     /// 【列浏览器】复制选中列的**列名**（对齐 DBeaver 元数据面板清单右键
     /// `meta_data_panel_action_copy_column_text`：多选时逐行拼、换行分隔）。
     ///
@@ -254,6 +276,12 @@ pub struct ContextTarget {
     pub editable: bool,
     /// 【#28-B3】目标底层行是否已被标记删除（被删行不摆复制 / 删除行级动作）
     pub is_deleted: bool,
+    /// 【第 67 批】这一格当前有没有**待提交的修改**（`true` → 菜单摆「重置单元格」）。
+    ///
+    /// 来源与 `is_deleted` 同层：网格镜像的脏格集合（[`ResultGridDelegate::is_dirty`]，
+    /// 内部把视图行 → 数据行、组件列 → 数据列）。DBeaver 对应 `row.isChanged(attr)`
+    /// （`fillEditMenu:3536`）。
+    pub cell_changed: bool,
     /// 【选中统计】三项开关当前值（右键菜单项据此标勾选态；
     /// 对齐 DBeaver `ToggleSelectionStatAction` 的 `isChecked`）
     pub selection_stat_rows: bool,
@@ -424,6 +452,22 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             separator_before: true,
             disabled: target.is_deleted,
         });
+        // 【第 67 批】「重置单元格」紧跟其后（DBeaver `fillEditMenu:3536` 就在
+        // ROW_EDIT / ROW_EDIT_INLINE 之后、行级 add/copy/delete 之前，同组无分隔线）。
+        // DBeaver 这一项是**条件出现**（`STATE_REMOVED || isChanged(attr)`），不是灰项：
+        // 不成立时菜单里根本没有它，所以这里也不 push 一个 disabled 项。
+        // 文本按「修改单元格」的动词短语对仗（`bundle_zh` 的 name 是「重置单元格更改」）。
+        if reset_cell_applicable(target.is_deleted, target.cell_changed) {
+            items.push(ContextMenuItem {
+                label: "重置单元格".to_string(),
+                action: ContextAction::ResetCell {
+                    row: target.row,
+                    column: target.column,
+                },
+                separator_before: false,
+                disabled: false,
+            });
+        }
         items.push(ContextMenuItem {
             label: "在下方插入新行".to_string(),
             action: ContextAction::InsertRowBelow(target.row),
@@ -989,6 +1033,8 @@ pub(crate) fn context_menu(
         row_ref: delegate.row_ref(row).unwrap_or(RowRef::default()),
         editable: delegate.editable,
         is_deleted: delegate.is_deleted_row(row),
+        // 【第 67 批】这一格改过没有：网格镜像的脏格集合（视图行 + 组件列 → 数据行列）
+        cell_changed: delegate.is_dirty(row, col),
         // 【选中统计】三项开关当前值（菜单标「✓」用；镜像是面板同步进来的）
         selection_stat_rows: delegate.selection_stat_prefs.rows,
         selection_stat_columns: delegate.selection_stat_prefs.columns,
@@ -1199,6 +1245,23 @@ pub(crate) fn context_menu(
                     menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                         move |_, _window, app| {
                             hook(crate::ports::ResultRequest::BeginEditCellAt { row, col }, app);
+                        },
+                    ));
+                }
+            }
+            // 【第 67 批】「重置单元格」：网格不持变更集真值（那是 store 的权威），
+            // 打包成请求交回宿主分派——宿主据此决定两支（行已删 → 撤销删除；
+            // 否则 → 从变更集移除这一格）。没接钩子的只读网格里这一项已被
+            // `reset_cell_applicable` 挡住（只读结果集 `is_deleted` / `cell_changed`
+            // 不会成立），这里兜底忽略。
+            ContextAction::ResetCell { row, column } => {
+                if let Some(hook) = delegate.on_row_action.clone() {
+                    // `column` 是数据列下标（`ContextTarget::column` 已折掉行号槽），
+                    // 请求里的 `col` 是组件列 ⇒ 出菜单时 +1（与 `EditCell` 同法）
+                    let col = column + 1;
+                    menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| {
+                            hook(crate::ports::ResultRequest::ResetCell { row, col }, app);
                         },
                     ));
                 }

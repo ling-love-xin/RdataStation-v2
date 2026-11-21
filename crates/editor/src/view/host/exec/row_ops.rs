@@ -138,6 +138,57 @@ impl EditorHostPanel {
         }
     }
 
+    /// 【第 67 批】把某一格**重置为数据原值**（对齐 DBeaver `CMD_CELL_RESET`，
+    /// `ResultSetViewer.fillEditMenu:3536` → `ResultSetModel.resetCellValue:571-590`）。
+    ///
+    /// 两支与 DBeaver 同序：
+    /// 1. 底层行已被标记删除 → 撤销删除标记（行回正常态），这一格不动；
+    /// 2. 否则从变更集移除这一格 —— 网格的显示值本来就从 `entry.rows` 取，
+    ///    变更集里没这条之后就自动回落成数据原值，不需要额外写回。
+    ///
+    /// **不碰撤销栈**：DBeaver 的 `resetCellValue` 也是直接改行状态 / 回写值，不走 undo
+    /// context。本仓照此，所以撤销栈里那条 `DeleteData` 还在（之后按「撤销」会再跑一次
+    /// `unmark_deleted`，对未删行是幂等的）。
+    ///
+    /// 本地行的格值落在快照里、不进变更集（#28-B4 口径），没有「重置这一格」这件事，
+    /// 静默不动作。`col` 是**组件列**（含行号槽，数据格从 1 起），与面板的
+    /// `begin_edit_cell_at` 同口径。
+    pub(crate) fn reset_result_cell(&mut self, view: usize, col: usize, cx: &mut Context<Self>) {
+        // 行号槽不是数据格（与 `begin_edit_cell_at` 面板侧同一条门控）
+        let Some(column) = col.checked_sub(1) else {
+            return;
+        };
+        let document = self.document.clone();
+        let Some(reference) = self.grid.read(cx).delegate().reference_of(view) else {
+            return;
+        };
+        let applied = self.shared.update_results(|store| {
+            let active = store.active_index(&document).unwrap_or(0);
+            match reference {
+                RowRef::Data(ix) => {
+                    if store
+                        .local_rows(&document, active)
+                        .is_some_and(|set| set.is_deleted(ix))
+                    {
+                        store.mutate_local_rows(&document, active, |set| {
+                            set.unmark_deleted(ix);
+                        });
+                        return true;
+                    }
+                    let mut reset = false;
+                    store.mutate_change_set(&document, active, |changes| {
+                        reset = changes.remove(ix, column);
+                    });
+                    reset
+                }
+                RowRef::Local(_) => false,
+            }
+        });
+        if applied {
+            self.sync_result_view(cx);
+        }
+    }
+
     /// 【第 55 批】把**相邻行**的值复制到当前行（对齐 DBeaver `copyRowValues:5062-5156`，
     /// 菜单命令 `CMD_ROW_COPY_FROM_ABOVE` / `_BELOW`）。
     ///

@@ -239,6 +239,8 @@ impl ListDelegate for ColumnBrowserDelegate {
             row_ref: crate::rowset::RowRef::default(),
             editable: false,
             is_deleted: false,
+            // 【第 67 批】列浏览器没有「这一格」：重置单元格只在单元格右键
+            cell_changed: false,
             // 列浏览器菜单不摆选中统计三颗（它们只在单元格右键的 layout 段）
             selection_stat_rows: false,
             selection_stat_columns: false,
