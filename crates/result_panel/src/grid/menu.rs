@@ -33,20 +33,28 @@ impl SelectionStatKind {
         }
     }
 }
-/// 【第 64 批】行级三钮的可用态（DBeaver `ResultSetPropertyTester.PROP_EDITABLE` 的三个
-/// 行级 `expectedValue` 分支，`ResultSetPropertyTester.java:137-158`）。
+/// 【第 64 批 / 第 65 批更正】行级三钮的可用态（DBeaver
+/// `ResultSetPropertyTester.PROP_EDITABLE` 的三个行级 `expectedValue` 分支，
+/// `ResultSetPropertyTester.java:137-158`）。
 ///
 /// | 字段 | DBeaver 条件 | 本仓条件 |
 /// | --- | --- | --- |
 /// | `add` | `rsv.isInsertable()`（`:137-138`，**不**要求 currentRow） | `editable` |
 /// | `copy` | `currentRow != null && rsv.isInsertable()`（`:139-141`） | `editable && has_current_row` |
-/// | `delete` | `currentRow != null && (isDeletable` 或 `行是 STATE_ADDED)`（`:142-157`） | `editable && has_current_row && !row_deleted` |
+/// | `delete` | `currentRow != null`，然后 `isDeletable()` 为真即 **true**；否则看 insertable + 行状态（`:142-157`） | `editable && has_current_row && !row_deleted` |
+///
+/// **更正（第 65 批复核）**：`"delete"` 分支在 `isDeletable()` 为真时**直接返回 true**，
+/// 不看 `currentRow.getState()`——也就是说已标记删除（`STATE_REMOVED`）的行上，DBeaver 的
+/// 删除钮**仍然是亮的**；`deleteSelectedRows` 的门控（`ResultSetViewer.java:5198-5200`）
+/// 同样只在 `!isDeletable()` 时才看 `STATE_ADDED`。第 64 批把本仓的「已删行置灰」写成
+/// 「与 DBeaver 同向」是**误归因**（见 §9.48.1）。
 ///
 /// 本仓没有 `isDeletable` 能力位（`editable` 已是通道 / 项目 / 只读 / 行标识的合一投影，
-/// 见 `editor::exec::editability`），所以 `delete` 退化成「可编辑 + 行没被标记删除」：
-/// 已删行上再点删除是空操作（宿主 `delete_local_row` 对已删底层行直接返回），置灰就是
-/// 为了不让人点了没反应。本地新增行（`RowRef::Local`）的删除 = 移出叠加层，
-/// `row_deleted` 恒 false ⇒ 照常可用，与 DBeaver 的 `STATE_ADDED` 分支同向。
+/// 见 `editor::exec::editability`），所以 `delete` 退化为「可编辑 + 有当前行 + 行没被标记
+/// 删除」：已删行上再点删除是空操作（宿主 `delete_local_row` 对已删底层行直接返回
+/// `false`，不重复入撤销栈），置灰是为了不让人点了没反应，**属本仓有意收紧一档**，
+/// 不是对齐 DBeaver。本地新增行（`RowRef::Local`）的删除 = 移出叠加层，
+/// `row_deleted` 恒 false ⇒ 照常可用。
 ///
 /// 与 [`can_edit_cell`] 的分工：那个管「编辑某一格」（`PROP_EDITABLE` 的 `edit` / `inline`
 /// 分支），这个管「行级增删复制」（`add` / `copy` / `delete` 分支）。两者都只是 UI 侧的
@@ -191,6 +199,15 @@ pub struct ContextMenuItem {
     pub action: ContextAction,
     /// 这项前面要不要加一条分隔线
     pub separator_before: bool,
+    /// 【第 65 批】不可用项**仍在菜单里**、只是置灰（不是整项收掉）。
+    ///
+    /// DBeaver 的右键 `add` / `copy` / `delete` 条件不满足时不会从菜单消失，而是
+    /// `setEnabled(false)` 灰在那里：`ResultSetPropertyTester.java:137-158` 只回答「能不能用」，
+    /// 菜单项由 `fillContextMenu:3209-3211` 无条件 add。本仓此前没有这个维度，只能用「不摆」
+    /// 表达不可用，用户看不到「这里本来有东西、只是现在不能用」。
+    /// 渲染侧走 `gpui_kit::component::menu::PopupMenuItem::disabled`（vendor
+    /// `menu/popup_menu.rs:159-171` 是 builder，`:1343-1351` 用 `when(!disabled, …)` 断掉点击）。
+    pub disabled: bool,
 }
 /// 右键落点：菜单项要回答的「这是哪一格、这一列的处境」（[`context_menu_items`] 的输入）
 ///
@@ -262,6 +279,7 @@ pub fn row_number_menu_items(row_number: &str) -> Vec<ContextMenuItem> {
         label: format!("复制行号「{row_number}」"),
         action: ContextAction::CopyRowNumber(row_number.to_string()),
         separator_before: false,
+        disabled: false,
     }]
 }
 /// 右键菜单的项（**纯函数**：有什么、叫什么都在这里定，界面只负责画）
@@ -284,16 +302,19 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             label: "查看完整值…".to_string(),
             action: ContextAction::PreviewValue(value.to_string()),
             separator_before: false,
+            disabled: false,
         },
         ContextMenuItem {
             label: format!("按值筛选「{preview}」"),
             action: ContextAction::FilterByValue(value.to_string()),
             separator_before: false,
+            disabled: false,
         },
         ContextMenuItem {
             label: "复制此值".to_string(),
             action: ContextAction::CopyValue(value.to_string()),
             separator_before: false,
+            disabled: false,
         },
         ContextMenuItem {
             // 【A9】值 JSON：`NULL` → `null`，其余 JSON 字符串（与「复制此值」平行，
@@ -301,23 +322,27 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             label: "复制此值为 JSON".to_string(),
             action: ContextAction::CopyValueJson(value.to_string()),
             separator_before: false,
+            disabled: false,
         },
         ContextMenuItem {
             // 个数写明：这一列拷走多少得让用户心里有数（与 mock 预览同一句文案）
             label: format!("复制此列（{} 个取值）", target.rows),
             action: ContextAction::CopyColumn(target.column),
             separator_before: false,
+            disabled: false,
         },
         ContextMenuItem {
             label: "复制整行（TSV）".to_string(),
             action: ContextAction::CopyRow(target.row),
             separator_before: false,
+            disabled: false,
         },
         ContextMenuItem {
             // 【A9】行 JSON：单对象（列名 → 值，`NULL` → `null`），与导出 JSON 档同口径
             label: "复制整行为 JSON".to_string(),
             action: ContextAction::CopyRowJson(target.row),
             separator_before: false,
+            disabled: false,
         },
     ];
     // 【A9】表名猜得到才摆 INSERT：猜不到宁可没有（照着一个不存在的表去插，
@@ -327,6 +352,7 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             label: format!("复制整行为 INSERT（{table}）"),
             action: ContextAction::CopyRowInsert(target.row),
             separator_before: false,
+            disabled: false,
         });
     }
     // 【DBeaver 对齐】`fillContextMenu:3166-3177`：复制段之后先一条 Separator，再挂 filters
@@ -343,6 +369,7 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             descending: false,
         },
         separator_before: false,
+        disabled: false,
     });
     items.push(ContextMenuItem {
         label: format!("按「{column_name}」降序（下发源库）"),
@@ -351,6 +378,7 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             descending: true,
         },
         separator_before: false,
+        disabled: false,
     });
     // 【排序】当前正按此列排时补「取消排序」（DBeaver 排序子菜单的 NONE 项，同组无分隔线）
     if target.sort_active {
@@ -358,20 +386,22 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             label: format!("取消排序「{column_name}」"),
             action: ContextAction::ClearSort,
             separator_before: false,
+            disabled: false,
         });
     }
     // 【#28-B3】行级动作独立分组（对齐 DBeaver 行操作段 edit 子菜单，`fillContextMenu:3197-3215`）：
     // 新增 · 复制 · 删除一行。DBeaver 在 edit 子菜单之前先 `add(new Separator())`（`:3217`），
-    // 本仓同样给整组一条前导分隔线。
-    // 只读结果集（`!editable`）整组不摆；已标记删除的底层行不再摆复制 / 删除——
-    // 新增空行也一并收起（被删行区段不再产生新的叠加动作）。动作只改本地叠加层，
-    // 不下发 INSERT / DELETE。
+    // 本仓同样给整组一条前导分隔线。动作只改本地叠加层，不下发 INSERT / DELETE。
     //
     // 【第 62 批】可编辑 / 记录视图这两条不再手写，统一走 [`can_edit_cell`]
-    // （对齐 DBeaver `PROP_EDITABLE` 的三条条件，见该函数注释）。`is_deleted` 是本仓
-    // 独有的第四个维度：DBeaver 的 `STATE_REMOVED` 只影响 `CMD_CELL_RESET`（`fillEditMenu:3536`），
-    // 不影响编辑项；本仓 `begin_edit` 直接拒绝已删行，所以整段一起收起（§9.44.3）。
-    if can_edit_cell(target.editable, target.record_mode, true) && !target.is_deleted {
+    // （对齐 DBeaver `PROP_EDITABLE` 的三条条件，见该函数注释）。
+    //
+    // 【第 65 批】段前提去掉 `&& !target.is_deleted`：DBeaver 的菜单项是**无条件 add、
+    // 再 setEnabled**（`fillContextMenu:3209-3211`），所以已删行上这一段照样在菜单里，
+    // 只是里面对已删行不成立的那几项灰掉。本仓现在也有了 `disabled` 维度（见
+    // [`ContextMenuItem::disabled`]），不再用「整段收起」表达不可用。
+    let row_actions = row_action_state(target.editable, true, target.is_deleted);
+    if can_edit_cell(target.editable, target.record_mode, true) {
         // 【第 61 批】edit 段首「修改单元格」：对齐 DBeaver `fillEditMenu:3518-3525`——
         // 子菜单内最先摆 `CMD_ROW_EDIT` / `CMD_ROW_EDIT_INLINE`（门控 `valueController != null`
         // 且 `!isReadOnly()`），之后 `:3208` 再来一条 Separator 才接行级的 add/copy/delete。
@@ -379,6 +409,12 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
         // 文案沿用状态栏那颗（「修改单元格」，§9.24）而不照 `bundle_zh` 的「内嵌编辑」，
         // 免得同一条链路在界面上有两个名字。
         // 行号槽落点不进本函数（`context_menu:786` 早退），所以这里 `column` 一定是数据列。
+        //
+        // 【第 65 批】已删行上灰掉：DBeaver 的 `"edit"` 分支同样不看行状态
+        // （`ResultSetPropertyTester.java:127-136` 只看 `getCurrentAttribute()` 与
+        // `IResultSetEditor`），但它有 `CMD_CELL_RESET`（`fillEditMenu:3536`）把
+        // `STATE_REMOVED` 行恢复成 `STATE_NORMAL`（`ResultSetModel.java:572-577`）——本仓
+        // 没有那条通道，`begin_edit` 直接拒绝已删行，所以这一项灰着并说明原因（§9.48）。
         items.push(ContextMenuItem {
             label: "修改单元格".to_string(),
             action: ContextAction::EditCell {
@@ -386,22 +422,26 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
                 column: target.column,
             },
             separator_before: true,
+            disabled: target.is_deleted,
         });
         items.push(ContextMenuItem {
             label: "在下方插入新行".to_string(),
             action: ContextAction::InsertRowBelow(target.row),
             // 组内第二条分隔线：对应 DBeaver `line 3208` 的 `editMenu.add(new Separator())`
             separator_before: true,
+            disabled: !row_actions.add,
         });
         items.push(ContextMenuItem {
             label: "复制此行".to_string(),
             action: ContextAction::DuplicateRow(target.row),
             separator_before: false,
+            disabled: !row_actions.copy,
         });
         items.push(ContextMenuItem {
             label: "删除此行".to_string(),
             action: ContextAction::DeleteRow(target.row),
             separator_before: false,
+            disabled: !row_actions.delete,
         });
         // 【第 55 批】DBeaver 在 ADD / COPY / DELETE 之后又一条 Separator（`fillContextMenu:3212`），
         // 再接「从上一行复制 / 从下一行复制」两个命令（`:3213-3214`）——本仓扁平化后
@@ -415,6 +455,7 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
                 above: true,
             },
             separator_before: true,
+            disabled: false,
         });
         items.push(ContextMenuItem {
             label: "从下一行复制".to_string(),
@@ -423,6 +464,7 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
                 above: false,
             },
             separator_before: false,
+            disabled: false,
         });
     }
     // 【DBeaver 对齐】列级视图动作段（冻结 / 隐藏 / 统计）：对应 DBeaver 在 edit 之后
@@ -436,11 +478,13 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
         },
         action: ContextAction::ToggleFreeze(target.column),
         separator_before: true,
+        disabled: false,
     });
     items.push(ContextMenuItem {
         label: format!("隐藏「{column_name}」"),
         action: ContextAction::HideColumn(target.column),
         separator_before: false,
+        disabled: false,
     });
     items.push(ContextMenuItem {
         label: format!("列统计「{column_name}」"),
@@ -448,12 +492,14 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             column: target.column,
         },
         separator_before: false,
+        disabled: false,
     });
     if target.hidden_columns > 0 {
         items.push(ContextMenuItem {
             label: "显示全部列".to_string(),
             action: ContextAction::ShowAllColumns,
             separator_before: false,
+            disabled: false,
         });
     }
     if target.insight {
@@ -463,6 +509,7 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
                 column: column_name.to_string(),
             },
             separator_before: true,
+            disabled: false,
         });
     }
     // 【结果集二次分析】整表入口：与「洞察此列」同组（都是进洞察），范围是整份结果
@@ -471,6 +518,7 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             label: format!("分析这份结果集…（{} 行）", target.rows),
             action: ContextAction::AnalyzeResultSet,
             separator_before: !target.insight,
+            disabled: false,
         });
     }
     // 【结果集持久化】同一份结果的另一个去向（临时 → 持久），紧跟「分析」
@@ -479,6 +527,7 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             label: format!("持久化为项目表（{} 行）", target.rows),
             action: ContextAction::PersistResultSet,
             separator_before: false,
+            disabled: false,
         });
     }
     // 【DBeaver 对齐】右键菜单尾部三段（`ResultSetViewer.fillLayoutMenu:3549-3597` 的顺序）：
@@ -508,6 +557,7 @@ pub fn layout_presentation_menu_items(target: &ContextTarget) -> Vec<ContextMenu
             label: format!("{}记录", if target.record_mode { "✓ " } else { "" }),
             action: ContextAction::ToggleRecordMode,
             separator_before: true,
+            disabled: false,
         });
     }
     items.push(ContextMenuItem {
@@ -516,6 +566,7 @@ pub fn layout_presentation_menu_items(target: &ContextTarget) -> Vec<ContextMenu
         label: "切换表示".to_string(),
         action: ContextAction::CyclePresentation,
         separator_before: items.is_empty(),
+        disabled: false,
     });
     for (presentation, label) in [(Presentation::Grid, "网格"), (Presentation::Text, "文本")] {
         items.push(ContextMenuItem {
@@ -529,6 +580,7 @@ pub fn layout_presentation_menu_items(target: &ContextTarget) -> Vec<ContextMenu
             ),
             action: ContextAction::SetPresentation(presentation),
             separator_before: false,
+            disabled: false,
         });
     }
     items
@@ -553,6 +605,7 @@ pub fn filter_panel_menu_item(target: &ContextTarget) -> ContextMenuItem {
             open: !target.show_filter_panel,
         },
         separator_before: true,
+        disabled: false,
     }
 }
 
@@ -572,6 +625,7 @@ pub fn selection_stat_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem>
             label: format!("{}显示选定的{}", if on { "✓ " } else { "" }, kind.noun()),
             action: ContextAction::ToggleSelectionStat { kind, on: !on },
             separator_before: ix == 0,
+            disabled: false,
         })
         .collect()
 }
@@ -587,6 +641,7 @@ pub fn filters_menu_items() -> Vec<ContextMenuItem> {
         label: "在结果中查找…".to_string(),
         action: ContextAction::OpenFind,
         separator_before: true,
+        disabled: false,
     }];
     items.extend(filter_settings_menu_items());
     items
@@ -609,21 +664,25 @@ pub fn filter_settings_menu_items() -> Vec<ContextMenuItem> {
             label: "保存过滤器设置".to_string(),
             action: ContextAction::SaveFilterSetting,
             separator_before: true,
+            disabled: false,
         },
         ContextMenuItem {
             label: "重置过滤器设置".to_string(),
             action: ContextAction::ResetFilterSetting,
             separator_before: false,
+            disabled: false,
         },
         ContextMenuItem {
             label: "删除所有过滤 / 排序".to_string(),
             action: ContextAction::ClearAllFilters,
             separator_before: false,
+            disabled: false,
         },
         ContextMenuItem {
             label: "编辑筛选设置…".to_string(),
             action: ContextAction::OpenFilterSettings,
             separator_before: false,
+            disabled: false,
         },
     ]
 }
@@ -643,6 +702,7 @@ pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
                 descending: false,
             },
             separator_before: false,
+            disabled: false,
         },
         ContextMenuItem {
             label: format!("按「{column_name}」降序（下发源库）"),
@@ -651,6 +711,7 @@ pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
                 descending: true,
             },
             separator_before: false,
+            disabled: false,
         },
     ];
     // 【排序】当前正按此列排时补「取消排序」（本地回原顺序，不下发重查）
@@ -659,6 +720,7 @@ pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             label: format!("取消排序「{column_name}」"),
             action: ContextAction::ClearSort,
             separator_before: true,
+            disabled: false,
         });
     }
     // 【筛选】列级筛选段（DBeaver 列头筛选）：值列表 + 清除项。
@@ -675,6 +737,7 @@ pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
                 value: value.clone(),
             },
             separator_before: false,
+            disabled: false,
         })
         .collect::<Vec<_>>();
     if !values.is_empty() {
@@ -687,6 +750,7 @@ pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
                 column: target.column,
             },
             separator_before: true,
+            disabled: false,
         });
     }
     items.extend(values);
@@ -698,11 +762,13 @@ pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
         label: format!("复制列名「{column_name}」"),
         action: ContextAction::CopyColumnName,
         separator_before: false,
+        disabled: false,
     });
     items.push(ContextMenuItem {
         label: format!("复制此列（{} 个取值）", target.rows),
         action: ContextAction::CopyColumn(target.column),
         separator_before: false,
+        disabled: false,
     });
     items.push(ContextMenuItem {
         label: if target.frozen {
@@ -712,11 +778,13 @@ pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
         },
         action: ContextAction::ToggleFreeze(target.column),
         separator_before: false,
+        disabled: false,
     });
     items.push(ContextMenuItem {
         label: format!("隐藏「{column_name}」"),
         action: ContextAction::HideColumn(target.column),
         separator_before: false,
+        disabled: false,
     });
     items.push(ContextMenuItem {
         label: format!("列统计「{column_name}」"),
@@ -724,12 +792,14 @@ pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             column: target.column,
         },
         separator_before: false,
+        disabled: false,
     });
     if target.hidden_columns > 0 {
         items.push(ContextMenuItem {
             label: "显示全部列".to_string(),
             action: ContextAction::ShowAllColumns,
             separator_before: false,
+            disabled: false,
         });
     }
     if target.insight {
@@ -739,6 +809,7 @@ pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
                 column: column_name.to_string(),
             },
             separator_before: true,
+            disabled: false,
         });
     }
     // 【DBeaver 对齐】`fillFiltersMenu` 整组（`ResultSetViewer.java:3864-3933`）：
@@ -763,11 +834,13 @@ pub fn column_browser_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem>
             label: "复制列名".to_string(),
             action: ContextAction::CopyColumnNames,
             separator_before: false,
+            disabled: false,
         },
         ContextMenuItem {
             label: format!("复制此列（{} 个取值）", target.rows),
             action: ContextAction::CopyColumn(target.column),
             separator_before: false,
+            disabled: false,
         },
         ContextMenuItem {
             label: if target.frozen {
@@ -777,11 +850,13 @@ pub fn column_browser_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem>
             },
             action: ContextAction::ToggleFreeze(target.column),
             separator_before: false,
+            disabled: false,
         },
         ContextMenuItem {
             label: format!("隐藏「{column_name}」"),
             action: ContextAction::HideColumn(target.column),
             separator_before: false,
+            disabled: false,
         },
         ContextMenuItem {
             label: format!("列统计「{column_name}」"),
@@ -789,6 +864,7 @@ pub fn column_browser_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem>
                 column: target.column,
             },
             separator_before: false,
+            disabled: false,
         },
     ];
     if target.sort_active {
@@ -796,6 +872,7 @@ pub fn column_browser_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem>
             label: format!("取消排序「{column_name}」"),
             action: ContextAction::ClearSort,
             separator_before: true,
+            disabled: false,
         });
     }
     if target.hidden_columns > 0 {
@@ -803,6 +880,7 @@ pub fn column_browser_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem>
             label: "显示全部列".to_string(),
             action: ContextAction::ShowAllColumns,
             separator_before: false,
+            disabled: false,
         });
     }
     items
@@ -822,6 +900,16 @@ pub fn column_distinct_values(rows: &[Vec<String>], column: usize, limit: usize)
         }
     }
     seen
+}
+/// 【第 65 批】把 [`ContextMenuItem::disabled`] 落到 gpui 的菜单项上。
+///
+/// 单独抽出来是因为 [`context_menu`] 里有三十多处 add 点（每个 [`ContextAction`] 分支各一），
+/// 逐处写 `.disabled(..)` 既容易漏、后续加分支时也容易忘；统一走这里，新分支只要写成
+/// `shade(menu, item.disabled, …)` 就自动带上灰态。
+/// vendor 侧：`PopupMenuItem::disabled` 是 builder（`menu/popup_menu.rs:159-171`），渲染时
+/// `when(!disabled, …)` 会把 `on_click` 断掉（`:1343-1351`）——灰项点不动，但仍在列表里。
+fn shade(menu: PopupMenu, disabled: bool, el: PopupMenuItem) -> PopupMenu {
+    menu.item(el.disabled(disabled))
 }
 /// 【B14】右键菜单：按值筛选 / 复制（此值 / 此列 / 整行）/ 冻结此列（原型 §5.5 的右键入口）
 ///
@@ -857,7 +945,7 @@ pub(crate) fn context_menu(
                 menu = menu.separator();
             }
             if let ContextAction::CopyRowNumber(text) = item.action {
-                menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                     move |_, _window, app| {
                         app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
                     },
@@ -922,7 +1010,7 @@ pub(crate) fn context_menu(
                     // 分支内克隆副本给闭包（外部的 column_name 后续分支还要用）；
                     // 闭包是 Fn（可多次调用）：取值必须 clone，不能 move 捕获
                     let column_name = column_name.clone();
-                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                         move |_, _window, app| {
                             hook(value.clone(), column_name.clone(), column, row, app)
                         },
@@ -932,7 +1020,7 @@ pub(crate) fn context_menu(
             ContextAction::FilterByValue(needle) => {
                 // 没接钩子就不摆这一项（能力没有就不给入口）
                 if let Some(hook) = delegate.on_filter_value.clone() {
-                    menu = menu.item(
+                    menu = shade(menu, item.disabled, 
                         PopupMenuItem::new(item.label)
                             .on_click(move |_, _window, app| hook(&needle, app)),
                     );
@@ -941,14 +1029,14 @@ pub(crate) fn context_menu(
             ContextAction::SortDown { column, descending } => {
                 // 与「按值筛选」同口径：没接钩子就不摆这一项
                 if let Some(hook) = delegate.on_sort_down.clone() {
-                    menu = menu.item(
+                    menu = shade(menu, item.disabled, 
                         PopupMenuItem::new(item.label)
                             .on_click(move |_, _window, app| hook(&column, descending, app)),
                     );
                 }
             }
             ContextAction::CopyValue(copied) => {
-                menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                     move |_, _window, app| {
                         app.write_to_clipboard(ClipboardItem::new_string(copied.clone()));
                     },
@@ -957,7 +1045,7 @@ pub(crate) fn context_menu(
             ContextAction::CopyValueJson(copied) => {
                 // 【A9】值 JSON 在菜单构造时拼好（`NULL` → null；与导出档同口径）
                 let text = crate::export::value_to_json(&copied);
-                menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                     move |_, _window, app| {
                         app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
                     },
@@ -966,7 +1054,7 @@ pub(crate) fn context_menu(
             ContextAction::CopyRowJson(row) => {
                 // 【A9】整行 JSON（视图行序，与「复制整行（TSV）」同口径）
                 let text = delegate.row_json_text(row);
-                menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                     move |_, _window, app| {
                         app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
                     },
@@ -975,7 +1063,7 @@ pub(crate) fn context_menu(
             ContextAction::CopyRowInsert(row) => {
                 // 【A9】整行 INSERT（表名已由面板同步；拼好的语句带上）
                 let text = delegate.row_insert_text(row);
-                menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                     move |_, _window, app| {
                         app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
                     },
@@ -985,7 +1073,7 @@ pub(crate) fn context_menu(
                 // 文案先拼好再交给点击回调：菜单项活到的比这一次 `context_menu` 调用长，
                 // 而“当时那一列是什么”只有现在知道。取值走**视图行序**（看着的才是拷走的）
                 let text = delegate.column_text(column);
-                menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                     move |_, _window, app| {
                         app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
                     },
@@ -994,7 +1082,7 @@ pub(crate) fn context_menu(
             ContextAction::CopyRow(row) => {
                 // 同上：拼好的 TSV 带上（整行 = 各列制表符分隔，粘进表格直接分列）
                 let text = delegate.row_text(row);
-                menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                     move |_, _window, app| {
                         app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
                     },
@@ -1006,7 +1094,7 @@ pub(crate) fn context_menu(
                 // 【列布局落盘】改完交回「该存了」：宿主那边先取面板快照再存会话
                 let table = cx.entity().clone();
                 let queue = delegate.action_queue.clone();
-                menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                     move |_, _window, app| {
                         table.update(app, |state, cx| {
                             state.delegate_mut().toggle_freeze(column);
@@ -1021,7 +1109,7 @@ pub(crate) fn context_menu(
             ContextAction::AnalyzeResultSet => {
                 // 同「洞察此列」：没接钩子（宿主没接二次分析出口）就不摆这一项
                 if let Some(hook) = delegate.on_analyze_result_set.clone() {
-                    menu = menu.item(
+                    menu = shade(menu, item.disabled, 
                         PopupMenuItem::new(item.label)
                             .on_click(move |_, _window, app| hook(app)),
                     );
@@ -1030,7 +1118,7 @@ pub(crate) fn context_menu(
             ContextAction::PersistResultSet => {
                 // 同上：宿主没接持久化出口（未打开项目等情况）就不摆这一项
                 if let Some(hook) = delegate.on_persist_result_set.clone() {
-                    menu = menu.item(
+                    menu = shade(menu, item.disabled, 
                         PopupMenuItem::new(item.label)
                             .on_click(move |_, _window, app| hook(app)),
                     );
@@ -1039,7 +1127,7 @@ pub(crate) fn context_menu(
             ContextAction::InsightColumn { column } => {
                 // 同「按值筛选」：没接钩子（宿主没接洞察端口）就不摆这一项
                 if let Some(hook) = delegate.on_insight_column.clone() {
-                    menu = menu.item(
+                    menu = shade(menu, item.disabled, 
                         PopupMenuItem::new(item.label)
                             .on_click(move |_, _window, app| hook(&column, app)),
                     );
@@ -1050,7 +1138,7 @@ pub(crate) fn context_menu(
                 if let Some(hook) = delegate.on_column_stats.clone() {
                     let name = delegate.columns.get(column).cloned().unwrap_or_default();
                     let text = stats_lines(&column_stats(&delegate.rows, column)).join("\n");
-                    menu = menu.item(
+                    menu = shade(menu, item.disabled, 
                         PopupMenuItem::new(item.label)
                             .on_click(move |_, _window, app| hook(name.clone(), text.clone(), app)),
                     );
@@ -1062,7 +1150,7 @@ pub(crate) fn context_menu(
                 // 【列布局落盘】改完交回「该存了」（口径同冻结）
                 let table = cx.entity().clone();
                 let queue = delegate.action_queue.clone();
-                menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                     move |_, _window, app| {
                         table.update(app, |state, cx| {
                             state.delegate_mut().hide_column(column);
@@ -1077,7 +1165,7 @@ pub(crate) fn context_menu(
             ContextAction::ShowAllColumns => {
                 let table = cx.entity().clone();
                 let queue = delegate.action_queue.clone();
-                menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                     move |_, _window, app| {
                         table.update(app, |state, cx| {
                             state.delegate_mut().show_all_columns();
@@ -1092,7 +1180,7 @@ pub(crate) fn context_menu(
             ContextAction::ClearSort => {
                 // 取消排序 = 本地回原顺序（与列头菜单同一条路，不下发源库重查）
                 let table = cx.entity().clone();
-                menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                     move |_, _window, app| {
                         table.update(app, |state, cx| {
                             state.delegate_mut().clear_sort();
@@ -1108,7 +1196,7 @@ pub(crate) fn context_menu(
             ContextAction::EditCell { row, column } => {
                 if let Some(hook) = delegate.on_row_action.clone() {
                     let col = column + 1;
-                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                         move |_, _window, app| {
                             hook(crate::ports::ResultRequest::BeginEditCellAt { row, col }, app);
                         },
@@ -1119,7 +1207,7 @@ pub(crate) fn context_menu(
             // 没接钩子（只读结果集）时菜单项已被 `context_menu_items` 收起，这里兜底忽略。
             ContextAction::InsertRowBelow(row) => {
                 if let Some(hook) = delegate.on_row_action.clone() {
-                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                         move |_, _window, app| {
                             hook(crate::ports::ResultRequest::InsertRowBelow(Some(row)), app);
                         },
@@ -1128,7 +1216,7 @@ pub(crate) fn context_menu(
             }
             ContextAction::DuplicateRow(row) => {
                 if let Some(hook) = delegate.on_row_action.clone() {
-                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                         move |_, _window, app| {
                             hook(crate::ports::ResultRequest::DuplicateRow(row), app);
                         },
@@ -1137,7 +1225,7 @@ pub(crate) fn context_menu(
             }
             ContextAction::DeleteRow(row) => {
                 if let Some(hook) = delegate.on_row_action.clone() {
-                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                         move |_, _window, app| {
                             hook(crate::ports::ResultRequest::DeleteRow(row), app);
                         },
@@ -1148,7 +1236,7 @@ pub(crate) fn context_menu(
             // 交回宿主（底层行落变更集、本地行落快照）；没接钩子的只读网格不摆。
             ContextAction::CopyRowValuesFrom { row, above } => {
                 if let Some(hook) = delegate.on_row_action.clone() {
-                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                         move |_, _window, app| {
                             hook(
                                 crate::ports::ResultRequest::CopyRowValuesFrom { row, above },
@@ -1165,7 +1253,7 @@ pub(crate) fn context_menu(
             // CHECK 型开关 `ToggleFind` 的语义分开，见 `ports.rs` 两变体的注释）。
             ContextAction::OpenFind => {
                 if let Some(queue) = delegate.action_queue.clone() {
-                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                         move |_, _window, app| {
                             queue.request(ResultRequest::OpenFind, app);
                         },
@@ -1179,7 +1267,7 @@ pub(crate) fn context_menu(
             // 交回面板（与列头菜单 `grid/header.rs` 发同一组请求）。
             ContextAction::SaveFilterSetting => {
                 if let Some(queue) = delegate.action_queue.clone() {
-                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                         move |_, _window, app| {
                             queue.request(ResultRequest::SaveFilterSetting, app);
                         },
@@ -1188,7 +1276,7 @@ pub(crate) fn context_menu(
             }
             ContextAction::ResetFilterSetting => {
                 if let Some(queue) = delegate.action_queue.clone() {
-                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                         move |_, _window, app| {
                             queue.request(ResultRequest::ResetFilterSetting, app);
                         },
@@ -1197,7 +1285,7 @@ pub(crate) fn context_menu(
             }
             ContextAction::ClearAllFilters => {
                 if let Some(queue) = delegate.action_queue.clone() {
-                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                         move |_, _window, app| {
                             queue.request(ResultRequest::ClearFilterAndOrdering, app);
                         },
@@ -1206,7 +1294,7 @@ pub(crate) fn context_menu(
             }
             ContextAction::OpenFilterSettings => {
                 if let Some(queue) = delegate.action_queue.clone() {
-                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                         move |_, _window, app| {
                             queue.request(ResultRequest::OpenFilterSettings, app);
                         },
@@ -1223,7 +1311,7 @@ pub(crate) fn context_menu(
             // 宿主改面板状态 + 落盘偏好 → 状态行重画。没有行动队列（独立网格）就不摆。
             ContextAction::ToggleSelectionStat { kind, on } => {
                 if let Some(queue) = delegate.action_queue.clone() {
-                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                         move |_, _window, app| {
                             queue.request(ResultRequest::ToggleSelectionStat { kind, on }, app);
                         },
@@ -1234,14 +1322,14 @@ pub(crate) fn context_menu(
             // 决定、记录视图由面板转置），网格只交回请求；没有队列（独立网格）就不摆。
             ContextAction::ToggleRecordMode => {
                 if let Some(queue) = delegate.action_queue.clone() {
-                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                         move |_, _window, app| queue.request(ResultRequest::ToggleTranspose, app),
                     ));
                 }
             }
             ContextAction::CyclePresentation => {
                 if let Some(queue) = delegate.action_queue.clone() {
-                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                         move |_, _window, app| {
                             queue.request(ResultRequest::CyclePresentation, app)
                         },
@@ -1250,7 +1338,7 @@ pub(crate) fn context_menu(
             }
             ContextAction::SetPresentation(presentation) => {
                 if let Some(queue) = delegate.action_queue.clone() {
-                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                         move |_, _window, app| {
                             queue.request(ResultRequest::SetPresentation(presentation), app)
                         },
@@ -1260,7 +1348,7 @@ pub(crate) fn context_menu(
             // 【布局段·筛选条】显隐同样是面板态：网格只交回请求，面板收掉展开态后重画
             ContextAction::ToggleFilterPanel { open } => {
                 if let Some(queue) = delegate.action_queue.clone() {
-                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    menu = shade(menu, item.disabled, PopupMenuItem::new(item.label).on_click(
                         move |_, _window, app| {
                             queue.request(ResultRequest::ToggleFilterPanel { open }, app)
                         },

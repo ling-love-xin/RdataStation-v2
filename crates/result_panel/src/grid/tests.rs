@@ -612,21 +612,50 @@ fn context_menu_row_actions_gate_on_editable_and_deleted() {
         "「从上一行复制 / 从下一行复制」紧跟「删除此行」之后"
     );
 
-    // 已删除：五项全不摆
+    // 【第 65 批】已删除行：DBeaver 是「项在、灰掉」而不是整段收起
+    // （`fillContextMenu:3209-3211` 无条件 add，能不能点由 `PROP_EDITABLE` 决定）。
+    // 五项都仍在菜单里，只有「删除此行」因本仓收紧（已删行再删是空操作）而 disabled。
     let mut deleted = target("orders", "name", 1);
     deleted.editable = true;
     deleted.is_deleted = true;
     let deleted_items = context_menu_items(&deleted);
-    assert!(
-        !deleted_items.iter().any(|item| matches!(
-            item.action,
-            ContextAction::InsertRowBelow(_)
-                | ContextAction::DuplicateRow(_)
-                | ContextAction::DeleteRow(_)
-                | ContextAction::CopyRowValuesFrom { .. }
-        )),
-        "已删除行不再摆行级动作"
-    );
+    let row_level = deleted_items
+        .iter()
+        .filter(|item| {
+            matches!(
+                item.action,
+                ContextAction::InsertRowBelow(_)
+                    | ContextAction::DuplicateRow(_)
+                    | ContextAction::DeleteRow(_)
+                    | ContextAction::CopyRowValuesFrom { .. }
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(row_level.len(), 5, "已删行上行级五项仍在菜单里");
+    for item in &row_level {
+        if matches!(item.action, ContextAction::DeleteRow(_)) {
+            assert!(item.disabled, "已删行的「删除此行」置灰（本仓收紧，§9.48）");
+        } else {
+            assert!(!item.disabled, "「{}」在已删行上仍可用", item.label);
+        }
+    }
+}
+
+/// 【第 65 批】`ContextMenuItem::disabled` 是**新增维度**：默认一律可用，只有明确判出
+/// 「这一项对当前落点不成立」时才灰。这条用例守住默认值——新加菜单项若忘了写 disabled，
+/// 编译会报（结构体字面量必填），但若有人为了过编译随手填 `true`，这里会炸。
+#[test]
+fn context_menu_items_are_enabled_unless_explicitly_shaded() {
+    let mut editable = target("orders", "name", 1);
+    editable.editable = true;
+    let items = context_menu_items(&editable);
+    for item in &items {
+        assert!(
+            !item.disabled,
+            "可编辑未删行的右键菜单里不应有灰项：{}",
+            item.label
+        );
+    }
 }
 
 /// 【第 61 批】右键「修改单元格」：对齐 DBeaver `fillEditMenu:3518-3525`——edit 子菜单里
@@ -635,7 +664,7 @@ fn context_menu_row_actions_gate_on_editable_and_deleted() {
 ///
 /// 本仓扁平化后的对应形态：`EditCell` 是 edit 段**首项**且在「在下方插入新行」之前，
 /// 这两项各自带前导分隔线（第一条开段、第二条是 DBeaver 那条段内 Separator）。
-/// 只读 / 已删行整段不摆（与行级动作同一道门）。
+/// 只读 / 记录视图整段不摆；已删行整段**仍在**，只是「修改单元格」灰着（第 65 批）。
 #[test]
 fn context_menu_edit_cell_leads_the_edit_group() {
     // 只读：没有「修改单元格」
@@ -678,16 +707,17 @@ fn context_menu_edit_cell_leads_the_edit_group() {
         "新增行前的分隔线 = DBeaver `:3208` 的段内 Separator"
     );
 
-    // 已删除行：整段不摆
+    // 【第 65 批】已删除行：项仍在，但灰着（本仓没有 `CMD_CELL_RESET` 恢复通道，
+    // `begin_edit` 直接拒绝已删行；DBeaver 那边这两条是分开的，见 §9.48）
     let mut deleted = target("orders", "name", 1);
     deleted.editable = true;
     deleted.is_deleted = true;
-    assert!(
-        !context_menu_items(&deleted)
-            .iter()
-            .any(|item| matches!(item.action, ContextAction::EditCell { .. })),
-        "已标记删除的行不摆「修改单元格」"
-    );
+    let deleted_items = context_menu_items(&deleted);
+    let edit = deleted_items
+        .iter()
+        .position(|item| matches!(item.action, ContextAction::EditCell { .. }))
+        .expect("已删行仍摆「修改单元格」（DBeaver 无条件 add，靠 enabled 判）");
+    assert!(deleted_items[edit].disabled, "已删行的「修改单元格」置灰");
 
     // 【第 62 批】记录（整行）视图：`record_view` 这条并入统一判据后，整段编辑项都不摆
     let mut record = target("orders", "name", 1);
