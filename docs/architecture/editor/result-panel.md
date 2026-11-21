@@ -7652,7 +7652,8 @@ toolbar 只剩 `filtersCustomButton` + `openFindReplaceButton`。
 2. **label 沿用「修改单元格」**：DBeaver 中文是「编辑单元格」（`bundle_zh.properties:137`）；
    本仓 `StatusCommand::EditRow` 的 label 是 §9.24 定的「修改单元格」，本批不改
    （改它要连带 `status_config_items` 的设置项文案）。
-3. **没有 `SHIFT+ENTER` 外部编辑键位**：本仓无外部编辑器，不接 `:1071`。
+3. **没有 `SHIFT+ENTER` 外部编辑键位**：本仓无外部编辑器，不接 `:1071`（对应内嵌那条
+   `ENTER`（`:1072`）已由 §9.42 接上）。
 4. **右键 edit 段不摆「编辑单元格」**：DBeaver 的 `menu:edit` 里两项都摆（`:972-978`）。本仓右键
    edit 段现为「插入行(下方) / 复制行 / 删除行 / 从上一行复制 / 从下一行复制」，不加编辑项——
    双击本身就是内嵌编辑，菜单再加一项是重复入口；且本仓 `BeginEditCell` 读的是**网格选中格**，
@@ -7732,8 +7733,9 @@ toolbar 只剩 `filtersCustomButton` + `openFindReplaceButton`。
 **有意差异（3 条）**：
 
 1. **DBeaver 由 property tester 统一驱动所有入口**（状态条 item、编辑菜单项、快捷键、右键项
-   共享同一套 enablement）；本仓只在状态条这颗钮上判——因为本仓没有其它入口
-   （菜单项与键位都未接，§9.40.3 第 3 / 4 条）。
+   共享同一套 enablement）；本仓只在状态条这颗钮上判——键位已由 §9.42 接上（`ENTER` /
+   `Ctrl+反引号`），但**菜单项仍未接**（§9.40.3 第 3 / 4 条），所以 enablement 的共享面
+   仍是不完整的。
 2. **没有「属性级只读」判定**：本仓没有列级只读模型（列的可编辑性只有面板级 `editable`），
    inline 的第三条（属性本身可写）落不了。
 3. **`"edit"` 与 `"inline"` 两条口径合并成一条**：本仓只有 inline 链路，所以门控比 DBeaver
@@ -7751,6 +7753,99 @@ toolbar 只剩 `filtersCustomButton` + `openFindReplaceButton`。
   `ResultStatus { total_rows: 2, ..Default::default() }`（`show_status` 需要 status / 执行信息之一）。
 - **门禁**：`rds-result-panel` **396 passed**、editor `cargo check` `Finished`（0 warning）、
   `rds-editor --lib` **801 passed（1 ignored）**、`rds-ui-guard` **4 passed**。
+  本批未动 `crates/settings`，不重跑其测试。
+
+### 9.42 结果网格键位层：`ENTER` 进入内联编辑、`Ctrl+反引号` 切换表示（2026-11-21）
+
+§9.40 / §9.41 让「修改」钮可用，但键盘侧一直是空的——`ENTER` / `Ctrl+反引号` 在网格上
+什么也不做。本批把这两条 DBeaver 键位接上。
+
+#### 9.42.1 dbeaver-ref 取证（现源实读）
+
+| 位置 | 内容 |
+| --- | --- |
+| `plugin.xml:1071` | `SHIFT+ENTER` → `resultset.row.edit`（外部值编辑器） |
+| `plugin.xml:1072` | `ENTER` → `resultset.row.edit.inline`（内嵌编辑） |
+| `plugin.xml:1059` | `Ctrl+反引号` → `resultset.switch.presentation` |
+| `plugin.xml:258-259` | 上述两条命令的 `<command>` 定义 |
+| `plugin.xml:687` / `:695` | `resultset.row.edit.inline` / `switchPresentation` 均挂 `ResultSetHandlerMain` |
+| `ResultSetHandlerMain.java:212-216` | `CMD_ROW_EDIT_INLINE` → `openValueEditor(true)`；`CMD_ROW_EDIT` → `openValueEditor(false)` |
+| `plugin.xml:972-978` | 这两条键位同时以菜单项出现在编辑菜单里 |
+| `bundle_zh.properties:134-137` | `row.edit` = 「编辑单元格」/ `row.edit.inline` = 「内嵌编辑」 |
+
+本仓只有内嵌一条通道（无外部值编辑器，§9.40.3 第 1 条），所以只接 `ENTER`，
+`SHIFT+ENTER` 不接。
+
+#### 9.42.2 本仓落地
+
+键位基础设施**本批之前就已存在**，批内只补了两颗 action：
+
+| 位置 | 作用 |
+| --- | --- |
+| `grid/delegate.rs:30` | `pub const RESULT_GRID_CONTEXT = "editor-result-grid"`（既有） |
+| `grid/status.rs:593-616` | 网格容器 `div().debug_selector("editor-result-grid").key_context(RESULT_GRID_CONTEXT)`（既有） |
+| `grid/mod.rs` | 新增 `use gpui_kit::actions;` + `actions!(result_panel, [EnterCellEdit, CycleResultPresentation]);` |
+| `editor/support/commands.rs` | `pub use result_panel::grid::{CycleResultPresentation, EnterCellEdit};` |
+| `editor/view/host/exec/edit_cmds.rs` | `on_enter_cell_edit` → `panel.begin_edit_cell(cx)`；`on_cycle_result_presentation` → `panel.cycle_presentation(cx)` |
+| `editor/view/host/render.rs` | `.on_action(cx.listener(Self::on_enter_cell_edit))` / `…on_cycle_result_presentation`，与 undo/redo 同链 |
+| `crates/app/src/main.rs` | `KeyBinding::new("enter", EnterCellEdit, Some(RESULT_GRID_CONTEXT))` / `("ctrl-\`", CycleResultPresentation, …)` |
+| `editor/view/tests/mod.rs` | `bind_editor_keys` 同步重绑这两条（否则端到端用例按键无 handler） |
+
+两个 handler 都是**转调面板既有方法**，不新增状态机：
+
+- `ENTER` → `begin_edit_cell`（`events.rs:307-331`），与双击、状态栏「修改」钮同一条链
+  （读 `grid.selected_cell()`，组件列 0 早退，否则 emit `TableEvent::DoubleClickedCell`）。
+- `Ctrl+反引号` → `cycle_presentation`（`events.rs:472-474`），即 `set_presentation(当前.next())`，
+  与左缘竖条 / 表示切换同一条链。
+
+**为什么 `ENTER` 不会被别的东西先吃掉**（两处实测）：
+
+1. `vendor/gpui-component/src/table/data_table.rs:16-31` 的 `init` 只绑
+   escape / 方向键 / home / end / pageup / pagedown / tab / shift-tab，**没有 enter**；
+   表格 context 是 `"DataTable"`，与我们的 `RESULT_GRID_CONTEXT` 不冲突。
+2. 进入编辑后，编辑框在焦点路径内层，`vendor/gpui-base/src/input/base/state.rs:229-277`
+   在 `"Input"` 上绑了 `enter`（提交）⇒ 编辑态再按 `ENTER` 走输入内核，不会重复触发我们的 action。
+
+#### 9.42.3 已对上 / 有意差异
+
+**已对上（3 条）**：
+
+1. `ENTER` 进内嵌编辑，与双击 / 状态栏「修改」同一入口（`CMD_ROW_EDIT_INLINE` 语义）。
+2. `Ctrl+反引号` 循环切换表示（本仓两档 `Grid ⇄ Text`，DBeaver 多档走 registry 顺序）。
+3. 两条键位都挂在**网格上下文**上，而不是全局——与 DBeaver 把键位挂在 resultset 视图上同构。
+
+**有意差异（3 条）**：
+
+1. **文本态盲区**：`Presentation::Text` 时网格根本不渲染，`RESULT_GRID_CONTEXT` 不在焦点路径上
+   ⇒ 从文本态按 `Ctrl+反引号` 切不回网格。DBeaver 的 `CMD_SWITCH_PRESENTATION` 在
+   resultset focused context 上全局可用。本仓要补就得给面板根元素也挂一份 key_context +
+   同名 action（面板层 `render(&self, cx: &App)` 挂不了 `on_action`，得落在 editor 宿主）。
+2. **`SHIFT+ENTER`（外部值编辑器）不接**：本仓无「值编辑器 + 写回」通道（`ports.rs:214-215`
+   明写只读预览），§9.40.3 第 1 条已登记偏离。
+3. **只在键位上补，不补菜单项**：DBeaver `plugin.xml:972-978` 在编辑菜单里也挂了这两项；
+   本仓右键编辑段目前只有复制类项（§9.40.3 第 4 条候选），本批不动。
+
+#### 9.42.4 用例与门禁
+
+两条都是 **editor 端到端**（真按键走完 keybinding → `on_action` → 面板 → 宿主），
+落在 `editor/src/view/tests/analysis.rs` 末尾：
+
+1. `enter_key_on_the_grid_enters_cell_editing`：跑 SQL → 选中 `(0, 2)` →
+   **把焦点交给网格**（`panel.grid_for_test().read(app).focus_handle(app)`，
+   `TableState` 实现 `Focusable`）→ `simulate_keystrokes("enter")` → 断言
+   `delegate().editing().is_some()`。焦点这一步是本批的关键：焦点在面板或编辑器上时
+   按键不落 `RESULT_GRID_CONTEXT` 的 dispatch path，action 不会触发。
+2. `ctrl_backtick_on_the_grid_cycles_presentation`：同骨架，读
+   `result_panel_for_test().read(app).presentation()` 前后值，断言 `after != before`
+   且 `after == before.next()`。
+
+`Presentation` 字段在面板里是 `pub(crate)`，editor crate 读不到，必须走访问器
+`Panel::presentation(&self)`（`events.rs:1997`，`pub`）。
+
+- **踩坑**：`actions!` 宏要用 `use gpui_kit::actions;` 引入才可见；宏前的说明写成 `///`
+  会触发 `unused_doc_comment`（改成 `//`）。
+- **门禁**：`rds-result-panel` **396 passed**、editor `cargo check` `Finished`（0 warning）、
+  `rds-editor --lib` **803 passed（1 ignored，较上一批 +2）**、`rds-ui-guard` **4 passed**。
   本批未动 `crates/settings`，不重跑其测试。
 
 ## 8. 协作纪律

@@ -2598,10 +2598,37 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   ——钉 `assert_ne!(.., Some(true))` 而不是 `assert_eq!(.., Some(false))`。
 - **为什么比 DBeaver 严**：那边状态条那颗是 `"edit"`（只要当前行），本仓落 inline 链路
   （§9.40.2），所以还要求「有选中数据格」。要放松就先改落点，别只改这一个 bool。
-- 未做：属性级只读（本仓无列级只读模型）、面板级键位层（`ENTER` 内嵌编辑 / `Ctrl+反引号`）、
-  其它行级钮是否也按格判（新增 / 复制 / 删除目前只按选中行）。
+- 未做：属性级只读（本仓无列级只读模型）、其它行级钮是否也按格判（新增 / 复制 / 删除目前
+  只按选中行）。面板级键位层（`ENTER` 内嵌编辑 / `Ctrl+反引号`）已由 §2.110 交付。
 - 门禁基线（第 58 批后）：result_panel **396 passed**、editor check `Finished`（0 warning）、
   editor lib **801 passed（1 ignored）**、ui-guard **4 passed**；本批未动 settings。
+
+### 2.110 结果网格键位层的接手要点（2026-11-21）
+
+- **键位基础设施早就在**，别再新建 context：`grid/delegate.rs:30` 的
+  `RESULT_GRID_CONTEXT = "editor-result-grid"`，挂在 `grid/status.rs:593-616` 的网格容器上。
+  新键位只要 action 定义在 `grid/mod.rs`、handler 挂 editor 宿主的 `.on_action`、
+  再到 `crates/app/src/main.rs` + `tests/mod.rs::bind_editor_keys` 各注册一次即可。
+- **action 定义要看宏可见性**：`actions!(result_panel, [Name]);` 需要先
+  `use gpui_kit::actions;`；宏前若写 `///` 说明会报 `unused_doc_comment`（写 `//`）。
+- **handler 只转调面板方法**，别在 editor 里再写一套状态机：
+  `ENTER` → `panel.begin_edit_cell(cx)`（同双击 / 状态栏「修改」），
+  `Ctrl+反引号` → `panel.cycle_presentation(cx)`（同左缘竖条切换）。
+- **端到端用例必须把焦点交给网格**：
+  `panel.read(app).grid_for_test().read(app).focus_handle(app)`（`TableState` 实现 `Focusable`），
+  再 `window.focus(&handle, cx)`。焦点留在面板/编辑器上时按键不落 `RESULT_GRID_CONTEXT`，
+  action 不触发，用例会「按键没反应」。
+- **为什么 `ENTER` 安全**：vendor `DataTable::init`（`table/data_table.rs:16-31`）没绑 enter；
+  编辑态的 `ENTER` 由 `vendor/gpui-base/src/input/base/state.rs:229-277` 的 `"Input"` context 先吃（提交）。
+  以后若要改表格的 enter 绑定，先回来确认这条不会重复进编辑。
+- **已知盲区（未做，需拍板）**：文本态（`Presentation::Text`）下网格不渲染，
+  `Ctrl+反引号` 切不回网格 —— DBeaver 的 `CMD_SWITCH_PRESENTATION` 在 resultset focused
+  context 上全局可用。补齐方式：给面板根元素再挂一份 key_context + 同名 action（面板
+  `render(&self, cx: &App)` 挂不了 `on_action`，得落在 editor 宿主）。
+- **未做**：`SHIFT+ENTER`（外部值编辑器，本仓无写回通道，§9.40.3 第 1 条）；
+  编辑菜单/右键里的对应菜单项（DBeaver `plugin.xml:972-978`，本仓 §9.40.3 第 4 条候选）。
+- 门禁基线（第 59 批后）：result_panel **396 passed**、editor check `Finished`（0 warning）、
+  editor lib **803 passed（1 ignored）**、ui-guard **4 passed**；本批未动 settings。
 
 ## 3. 并行线协作纪律（工作区现状）
 
