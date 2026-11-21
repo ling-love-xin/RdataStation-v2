@@ -7,7 +7,8 @@ use crate::changes::CellChange;
 use crate::commands::{
     CommitResultChanges, CopyGridSelection, CopyRowValuesFromAbove, CopyRowValuesFromBelow,
     CycleResultPresentation, DeleteResultRow, DuplicateResultRow, EnterCellEdit, ExecuteSql,
-    FetchAllData, FetchNextSegment, FocusRowJump, InsertResultRow, RedoResultEdit, UndoResultEdit,
+    FetchAllData, FetchNextSegment, FocusRowJump, InsertResultRow, RedoResultEdit,
+    RejectPendingChanges, UndoResultEdit,
 };
 
 use super::*;
@@ -224,6 +225,23 @@ impl EditorHostPanel {
     ) {
         self.result_panel
             .update(cx, |panel, cx| panel.request_fetch_all(cx));
+    }
+
+    /// 【第 74 批】结果网格 `CTRL+R`：撤销全部未提交变更
+    /// （DBeaver `CMD_REJECT_CHANGES` → `rejectChanges()`，`plugin.xml:1083`；
+    /// `ResultSetHandlerMain:313-314`）。
+    ///
+    /// 与工具栏「回滚」钮同一条路（`ResultRequest::RollbackPending`）。不像 `CTRL+S`
+    /// 那样要求可编辑：回滚只是丢本地改动、不写源库，只读结果集上按下去也只会得到
+    /// 「没有可撤销的变更」（那条提示在 `discard_pending_changes` 里，与钮共用）。
+    pub(crate) fn on_reject_pending_changes(
+        &mut self,
+        _: &RejectPendingChanges,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.result_panel
+            .update(cx, |panel, cx| panel.request_rollback_pending(cx));
     }
 
     /// 【第 70 批】结果网格 `CTRL+G`：行号跳转

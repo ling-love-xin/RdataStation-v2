@@ -144,6 +144,12 @@ fn bind_editor_keys(cx: &mut TestAppContext) {
                 crate::commands::FetchAllData,
                 Some(crate::commands::RESULT_GRID_CONTEXT),
             ),
+            // 【第 74 批】撤销未提交变更（`CMD_REJECT_CHANGES`，`plugin.xml:1083`）
+            KeyBinding::new(
+                "ctrl-r",
+                crate::commands::RejectPendingChanges,
+                Some(crate::commands::RESULT_GRID_CONTEXT),
+            ),
         ]);
     });
 }

@@ -1743,3 +1743,79 @@ fn ctrl_backtick_returns_from_the_text_presentation(cx: &mut TestAppContext) {
         "文本态下 `Ctrl+反引号` 应切回网格（面板层键位上下文）"
     );
 }
+
+/// 【第 74 批】`CTRL+R` = 撤销全部未提交变更
+/// （DBeaver `CMD_REJECT_CHANGES` → `rejectChanges()`，`plugin.xml:1083`；
+/// `ResultSetHandlerMain:313-314`）。
+///
+/// 钉三件事：
+/// 1. 没有待提交时按键**不静默**：DBeaver 那边 `!isDirty()` 直接 return
+///    （`ResultSetViewer:4787-4789`），本仓键位层口径是「不可用留提示」（第 69 批）；
+/// 2. 有待提交时真的清空，并说「已撤销」；
+/// 3. 冲突项保留（是证据）——键位与工具栏「回滚」钮同走 `discard_pending_changes`，
+///    键位不另写一套判定。
+#[gpui_kit::test]
+fn the_reject_key_discards_pending_but_keeps_conflicts(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = commit_ready_shared("select * from orders", Ok(CommitReport::default()));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_orders_result(cx, &panel);
+
+    // 焦点交给网格：`ctrl-r` 只挂在 `RESULT_GRID_CONTEXT` 上
+    let grid_focus = cx.update(|_window, app| {
+        panel.read(app).grid_for_test().read(app).focus_handle(app)
+    });
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+
+    // ① 什么都没改时按键：只留一句提示，状态不动
+    assert_eq!(
+        shared
+            .results()
+            .change_set(&id, 0)
+            .map(|changes| changes.pending_count()),
+        Some(0),
+        "前置：没有待提交"
+    );
+    cx.simulate_keystrokes("ctrl-r");
+    cx.run_until_parked();
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .unwrap_or_default();
+    assert!(
+        message.contains("没有可撤销的变更"),
+        "键位不可用要留提示（第 69 批口径），实际是：{message}"
+    );
+
+    // ② 预置 1 条待提交 + 1 条冲突（冲突模拟提交回执留下的证据）
+    seed_cell_change(&shared, &id, 0, 1, "alice", "alice2");
+    shared.update_results(|store| {
+        store.mutate_change_set(&id, 0, |changes| {
+            changes.upsert(crate::changes::CellChange::pending(1, 1, "bob", "bob2"));
+            changes.mark_conflict(1, 1);
+        });
+    });
+    assert_eq!(
+        shared
+            .results()
+            .change_set(&id, 0)
+            .map(|changes| changes.pending_count()),
+        Some(1),
+        "预置：待提交 1 条 + 冲突 1 条"
+    );
+
+    cx.simulate_keystrokes("ctrl-r");
+    cx.run_until_parked();
+
+    let store = shared.results();
+    let set = store.change_set(&id, 0).expect("变更集在");
+    assert_eq!(set.pending_count(), 0, "键位要真的清空待提交");
+    assert_eq!(set.conflicts(), vec![(1, 1)], "冲突是证据，回滚不抹掉");
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .unwrap_or_default();
+    assert!(
+        message.contains("已撤销未提交的变更"),
+        "清完要说一句，实际是：{message}"
+    );
+}

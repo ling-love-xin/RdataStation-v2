@@ -70,10 +70,12 @@ pub use result_panel::grid::RESULT_GRID_CONTEXT;
 ///
 /// 【第 72 批】`CTRL+SHIFT+=` 取全部行（`CMD_FETCH_ALL`，`:1070`）：先经确认浮层，
 /// 确认过才开跑。
+///
+/// 【第 74 批】`CTRL+R` 撤销全部未提交变更（`CMD_REJECT_CHANGES`，`:1083`）。
 pub use result_panel::grid::{
     CommitResultChanges, CopyRowValuesFromAbove, CopyRowValuesFromBelow, CycleResultPresentation,
     DeleteResultRow, DuplicateResultRow, EnterCellEdit, FetchAllData, FetchNextSegment,
-    FocusRowJump, InsertResultRow,
+    FocusRowJump, InsertResultRow, RejectPendingChanges,
 };
 
 /// 【第 60 批】结果**面板**的 key context（`RESULT_GRID_CONTEXT` 的父层）。

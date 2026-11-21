@@ -524,6 +524,17 @@ impl ResultPanel {
             .request(crate::ports::ResultRequest::AskFetchAll, cx);
     }
 
+    /// 【第 74 批】`CTRL+R` 的「撤销未提交变更」入口（DBeaver `CMD_REJECT_CHANGES`
+    /// → `rejectChanges()`，`plugin.xml:1083`；`ResultSetHandlerMain:313-314`）。
+    ///
+    /// 与工具栏那颗「回滚」钮同一条路：只入队 [`crate::ports::ResultRequest::RollbackPending`]。
+    /// 判定（有没有待提交 / 清完怎么提示）在宿主 `discard_pending_changes`，
+    /// 这里不复制第二套真值表。
+    pub fn request_rollback_pending(&mut self, cx: &mut Context<Self>) {
+        self.queue
+            .request(crate::ports::ResultRequest::RollbackPending, cx);
+    }
+
     /// 【第 70 批】`CTRL+G` 的行号跳转入口：把那口行号输入框准备好并返回焦点句柄
     /// （DBeaver `CMD_GO_TO_ROW` → `GotoLineDialog`，`plugin.xml:1091`）。
     ///

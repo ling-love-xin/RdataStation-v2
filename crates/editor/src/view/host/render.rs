@@ -169,6 +169,9 @@ impl Render for EditorHostPanel {
             // 【第 72 批】`CTRL+SHIFT+=` 取全部行（`CMD_FETCH_ALL`，`plugin.xml:1070`）：
             // 先过确认浮层，确认过才开跑（DBeaver `CONFIRM_RS_FETCH_ALL`）
             .on_action(cx.listener(Self::on_fetch_all_data))
+            // 【第 74 批】`CTRL+R` 撤销全部未提交变更（`CMD_REJECT_CHANGES`，`:1083`）：
+            // 与工具栏「回滚」钮同一条路；无待提交时只说一句（不静默吞键）
+            .on_action(cx.listener(Self::on_reject_pending_changes))
             // 【书签】`Ctrl+Shift+B` 切换 / `F8` 下一 / `Shift+F8` 上一（键位在 crates/app 注册）
             .on_action(cx.listener(Self::on_toggle_bookmark))
             .on_action(cx.listener(Self::on_next_bookmark))

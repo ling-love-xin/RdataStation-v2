@@ -411,6 +411,16 @@ fn run_app() {
                     editor::commands::FetchAllData,
                     Some(editor::commands::RESULT_GRID_CONTEXT),
                 ),
+                // 【第 74 批】`CTRL+R` = `CMD_REJECT_CHANGES` → `rejectChanges()`
+                // （`plugin.xml:1083`；`ResultSetHandlerMain:313-314`）。DBeaver 在
+                // `!isDirty()` 时静默 return（`ResultSetViewer:4787-4789`），本仓键位层
+                // 留一句「没有可撤销的变更」（第 69 批口径）。回滚不写源库，所以不绑
+                // `editable` 前置（与 `ctrl-s` 提交不同）。
+                KeyBinding::new(
+                    "ctrl-r",
+                    editor::commands::RejectPendingChanges,
+                    Some(editor::commands::RESULT_GRID_CONTEXT),
+                ),
                 // 【第 60 批】同一条 `Ctrl+反引号` 再绑到**面板层**上下文：文本态下网格
                 // 整块不渲染，网格 context 不在焦点路径上；焦点落在面板根时靠这条命中
                 // （两层同时匹配时 gpui 按 context 深度取更深的网格那条，不会切两次）。

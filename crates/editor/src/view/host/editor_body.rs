@@ -336,13 +336,28 @@ impl EditorHostPanel {
     /// 网格的脏格底色随 [`Self::sync_result_view`] 的投影一起消失。
     pub(crate) fn discard_pending_changes(&mut self, cx: &mut Context<Self>) {
         let index = self.result_panel.read(cx).active();
-        let changed = self.shared.update_results(|store| {
+        // 【第 74 批】先数一遍再动手：`mutate_change_set` 的返回值只表示「变更集在」
+        // （`store/store.rs:522-536`，闭包执行完恒 true），`discard_pending` 自己返回 `()`。
+        // 拿那个 bool 当「撤销掉了东西」用会得到死分支——键位接上之前没人踩到，
+        // 因为钮只在 `pending_changes > 0` 时才摆。
+        let pending = self
+            .shared
+            .results()
+            .change_set(&self.document, index)
+            .map(|changes| changes.pending_count())
+            .unwrap_or(0);
+        if pending == 0 {
+            // DBeaver 在 `!isDirty()` 时静默 return（`ResultSetViewer:4787-4789`）。
+            // 本仓钮只在有待提交时才摆（`panel/render.rs` 的 `pending_changes > 0`），
+            // 所以这条分支实际只有键位会走到——键位层口径是「不可用留提示」（第 69 批）。
+            self.set_message(Some("没有可撤销的变更".to_string()), cx);
+            return;
+        }
+        self.shared.update_results(|store| {
             store.mutate_change_set(&self.document, index, |changes| changes.discard_pending())
         });
-        if changed {
-            self.sync_result_view(cx);
-            self.set_message(Some("已撤销未提交的变更".to_string()), cx);
-        }
+        self.sync_result_view(cx);
+        self.set_message(Some("已撤销未提交的变更".to_string()), cx);
     }
 
     #[cfg(any(test, feature = "test-support"))]

@@ -124,6 +124,13 @@ actions!(
         /// 与状态栏「获取全部数据」钮同一条入口：只送 `ResultRequest::AskFetchAll`
         /// （先确认），判定与真执行都在宿主侧。
         FetchAllData,
+        /// 【第 74 批】`CTRL+R`：撤销全部未提交变更（`CMD_REJECT_CHANGES`
+        /// → `rejectChanges()`，`plugin.xml:1083`）。
+        ///
+        /// 与工具栏那颗「回滚」钮同一条路（`ResultRequest::RollbackPending`）：
+        /// 钮只在有待提交时摆（`panel/render.rs` 的 `pending_changes > 0`），
+        /// 无待提交时键位留一句提示（第 69 批口径，DBeaver 那边是静默 return）。
+        RejectPendingChanges,
     ]
 );
 
