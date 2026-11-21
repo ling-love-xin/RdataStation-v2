@@ -2976,6 +2976,25 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   改这个值时同步改 `result-panel.md` §9.54.5。
 - **门禁基线（第 71 批后）**：editor lib **814 passed（1 ignored）**（812 → +2）。
 
+### 2.123 「取全部」先确认 + `CTRL+SHIFT+=`（2026-11-22）
+
+- **入口三分，别退回去**：钮与键位只发 `AskFetchAll`，`FetchAll` 只由浮层「继续」发。
+  谁会想把钮直接接回 `FetchAll`，先想清楚「点按钮不确认、按键要确认」这个矛盾。
+- **判定在宿主**：`ask` 的四道前置（取全部在跑 / 取段在途 / 有执行错误 / 没有下一段）
+  读的是 `ResultEntry` 的真值；面板只有 `status.has_more`，别在面板里再造一份。
+- **`FetchAll` 分支先收浮层（幂等）再 `fetch_all`**：顺序反了会让浮层在取数期间盖着结果。
+- **`fetching_more` 是短结果自动补齐的并发源**：第 71 批只在「取全部 → 取段」方向做了
+  互斥，本批补上反向。`fetch_all` 与 `ask_fetch_all` 都必须先看它，否则同一个
+  `offset` 会被提交两次（用例里表现为 `asked` 重复 `(2, …)`）。
+- **写「取全部」的用例要掐渲染旁路**：2 行 + `has_more` 的结果一重绘就自动取下一段
+  （`rendering_a_short_result_asks_for_more_by_itself` 是有意行为）。用例里
+  `state.delegate_mut().set_has_more(false)` 只关 delegate，store 仍真，
+  于是「该不该弹」与「有没有自动取」分得开。
+- **浮层不开输入框就不需要 `&mut Window`**：`open_fetch_all_confirm` / `close_...`
+  都是 `&mut Context` 签名，与 SQL 预览一致；别为了对称硬塞窗口参数。
+- **门禁基线（第 72 批后）**：editor lib **817 passed（1 ignored）**、
+  panel **409 passed**、ui-guard **4 passed**。改到这几处时同步改 `result-panel.md` §9.55.6。
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。

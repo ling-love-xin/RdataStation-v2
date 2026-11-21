@@ -8777,6 +8777,119 @@ DBeaver 那边没有上限（它同步阻塞、用户能取消）；本仓异步
   会互相打乱 offset——第 72 批与确认弹窗一起收口。
 - 上限 100 段是自定值，不是 DBeaver 口径；若将来加了「取消取数」入口，可重新评估。
 
+### 9.55 第 72 批：`CTRL+SHIFT+=` 取全部 + `CONFIRM_RS_FETCH_ALL` 确认浮层
+
+#### 9.55.1 缺口
+
+第 71 批让「获取全部数据」真的循环了，但**按下去没有任何预警**：DBeaver 在
+`readAllData` 里第一件事就是确认对话框，本仓直接开跑——一份 10 万行的结果会被
+一次性抓进内存，用户点之前毫不知情。同时 `CTRL+SHIFT+=`（`fetch.all`）一直没绑。
+
+#### 9.55.2 DBeaver 依据
+
+- 键位：`plugin.xml:1070` `CMD_FETCH_ALL`（context `...resultset.focused`）。
+- 行为：`ResultSetHandlerMain.java:204-206` `CMD_FETCH_ALL` → `rsv.readAllData()`。
+- `ResultSetViewer.readAllData:4426-4459` 五步：
+  1. `verifyQuerySafety()`（`:4427`）；
+  2. `!dataReceiver.isHasMoreData()` → 静默 return（`:4430-4432`）；
+  3. `ConfirmationDialog.confirmAction(shell, WARNING, CONFIRM_RS_FETCH_ALL, QUESTION)`
+     ≠ YES → return（`:4433-4440`）；
+  4. `checkForChanges()`（`:4441`）；
+  5. `runDataPump(...)`（`:4445-4460`）。
+- 偏好项：`ResultSetPreferences.java:113` `CONFIRM_RS_FETCH_ALL = "fetch_all_rows"`；
+  定义在 `plugin.xml:1353-1356`（title / description / message 三条资源键）。
+- 文案（`OSGI-INF/l10n/bundle_zh.properties:161-162`）：
+  - 标题「读取所有行」；
+  - 正文「读取结果集中的所有行会**会**花费大量时间和内存。确定要获取所有行吗？」
+    （上游原文有重复字「会会」，本仓写作「会花费」，见 §9.55.4）。
+
+#### 9.55.3 落地：入口三分
+
+| 请求 | 谁发 | 谁处理 |
+| --- | --- | --- |
+| `ResultRequest::AskFetchAll` | 状态栏「获取全部数据」钮、`CTRL+SHIFT+=` | 宿主 `ask_fetch_all`：判完再决定弹不弹 |
+| `ResultRequest::FetchAll` | 只有确认浮层的「继续」 | 宿主先收浮层，再 `fetch_all`（真循环） |
+| `ResultRequest::CloseFetchAllConfirm` | 取消 / Esc / ✕ | 面板 `close_fetch_all_confirm`（只收标志） |
+
+**为什么判定放宿主**：「还有没有下一段 / 有没有执行错误」的真值在结果条目
+（`ResultEntry::can_fetch_more`，`error.is_none() && has_more`），面板只投影
+`status.has_more`，拿不到 error。`ask_fetch_all` 的四个前置：
+
+1. `fetching_all` 在跑 → 「正在取全部数据（已取 N 段），稍等」；
+2. `fetching_more` 在途 → 「正在取下一段，等它回来再取全部」；
+3. `entry.error` 有值 → 「这份结果执行出错了；修好再试取全部」（与「取完了」分开说）；
+4. `!entry.has_more` → 「这份结果已经取完了（共 N 行）」（对齐 DBeaver `:4430` 的
+   静默 return，但本仓键位层留提示，第 69 批口径）。
+
+**按钮也改了口**：`panel/render.rs` 的 `fetch_all` 钮第 71 批发的是 `FetchAll`（直接开跑），
+本批改成 `AskFetchAll`——与键位同一条入口，否则「点按钮不确认、按键要确认」自相矛盾。
+
+#### 9.55.4 确认浮层
+
+范式与 SQL 预览 / 筛选设置一致：面板内 `absolute().inset_0()` 遮罩 +
+居中卡片（`dialog.rs::render_fetch_all_confirm`），**不是**窗口级 `AlertDialog`
+（理由同 `render_filter_settings` 的注释：面板 render 拿不到 `&mut Window`）。
+
+- 状态：`ResultPanel.fetch_all_confirm_open`（`panel/data.rs`，出厂 false，
+  `panel/lifecycle.rs` 初始化）；
+- 打开 / 关闭都是 `pub fn`（`panel/events.rs`），开关幂等；
+- 渲染挂在面板根的最后（与另外两层浮层同侧），整段 `then()` 条件渲染；
+- 宽度 `ui::RESULT_FETCH_ALL_CONFIRM_WIDTH = 28.0`（448px）：比筛选设置（35rem）
+  还窄一档——DBeaver 那边是系统确认框，本来就不宽。
+
+**有意差异**：
+- 正文把上游的「会会花费」修成「会花费」（重复字是笔误，照抄没意义）；
+- 多一句「当前已取 N 行，新抓到的行会接在后面」：DBeaver 只说「会花时间和内存」，
+  用户点之前其实不知道规模；
+- 页脚提示「取数期间切换结果集会取消这次取全部」（对应 `advance_fetch_all` 的
+  切结果集即停）。
+
+**没做的**：偏好项 `fetch_all_rows` 没建模——当前**每次必问**，不能像 DBeaver
+那样「问过一次就不再问」。要接得先补「结果集偏好」的设置页下发链路
+（§9.32.3 / §9.34.3 记的是同一个缺口）。
+
+#### 9.55.5 顺手补的互斥：`fetch_all` 侧也要查 `fetching_more`
+
+第 71 批只做了「取全部 / 导出」方向（取全部在跑时拒绝取段、拒绝导出），反向没做：
+`fetching_more` 在途时点「取全部」，`submit_segment` 拿的 `offset` 是「已抓到的行数」，
+在途那一段还没回填 → 同一个 offset 被两个请求各提交一次，行重复。
+
+这是本批写用例时撞出来的真缺口（测试里表现为 `asked` 里出现两条同样的 `(2, …)`）。
+补在第 72 批：`fetch_all` 与 `ask_fetch_all` 都先判 `fetching_more`，各自给一句
+「等它回来」。DBeaver 的对应机制是 `nextSegmentReadingBlocked`
+（`ResultSetViewer:4384` 的第三道 return），粒度比本仓粗，但意图一致。
+
+#### 9.55.6 验证
+
+| 用例 | 钉住什么 |
+| --- | --- |
+| `the_fetch_all_key_asks_before_it_starts`（editor） | 键位命中（`ctrl-shift-=`）+ 只弹确认、一行没取 |
+| `confirming_the_prompt_starts_the_fetch_all`（editor） | 「继续」之后真的跨轮取到没有下一段，且浮层被收掉 |
+| `the_fetch_all_key_after_the_end_only_says_so`（editor） | 到底时按键**不弹**浮层，只留提示 |
+| `fetch_all_confirm_renders_only_while_open`（panel） | 遮罩 / 卡片 / 正文 / 两颗按钮随开关整段出现与消失 |
+
+**editor 三条为什么要掐「渲染自动补齐」**：短结果（2 行 + `has_more`）一重绘，
+网格的 `load_more` 就会自己取下一段（`rendering_a_short_result_asks_for_more_by_itself`
+钉的就是这个**有意**行为）；而打开浮层必然让面板重绘。用例里调
+`delegate_mut().set_has_more(false)` 只关 delegate 侧（store 里仍是真，所以
+`ask_fetch_all` 照样该弹），把那条旁路摘掉，观察的就只剩「键位 → 确认 → 真取」。
+
+键名说明：`ctrl-shift-=` 写的是**物理键** `=`（shift 下打出 `+`）。gpui 的匹配是
+「修饰位相等 + 规范化键名相等」（`gpui-pre-0.3.11/src/platform/keystroke.rs:112`），
+`KeyBinding::new` 的 `=` 与平台事件的 `=` 同一份键名，所以不用写 `+`。
+
+门禁（第 72 批）：pair check `Finished` 无 warning；editor lib
+**817 passed（1 ignored）**（814 → +3）；panel **409 passed**（408 → +1）；
+ui-guard **4 passed**；workspace check `Finished`
+（2 warning 全来自并行线 `rds-notification`）。
+
+#### 9.55.7 遗留
+
+- 偏好项 `CONFIRM_RS_FETCH_ALL` 未建模（每次必弹）；
+- 导出**启动侧**仍未反查 `fetching_all`（§9.54.5 记的同一项）；
+- 短结果上「取全部」意义有限（自动补齐会先把它取完），本批不改自动补齐行为；
+- `CTRL+SHIFT+=` 在文本呈现态（无网格焦点）不生效——与 `CTRL+ALT+N` 同一口径。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
