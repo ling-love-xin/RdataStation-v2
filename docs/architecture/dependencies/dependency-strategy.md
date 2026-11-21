@@ -140,6 +140,12 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 
 （驱动层（`rusqlite` / `sqlx` / `mysql_async`）、连接层（`russh`）已升到可用的最新版；SQL 引擎与 UI 家族的上游新版本见上表。）
 
+> 上表"最新可用"口径截至 2026-11-07。**2026-11-22 的复查结论见
+> `docs/architecture/dependencies/core-packages-2026-11-22-upgrade-assessment.md`**：
+> `gpui-kit` 已发 `0.9.1` / `0.10.0`（连带 `gpui-fast` `0.1.17`、`gpui-pre` `0.3.12`）、
+> `sqlglot-rust` 到 `0.11.2`、`duckdb` 2.0 线到 `1.20001.0`。该文给出逐包的升/不升判断、
+> 前置条件，以及 `rustls-webpki` `0.103.15` → `0.103.17` 的 CVE 侧发现。
+
 ### 4.1 并入主线（2026-11-08）
 
 分支 `chore/deps-patch-batch-2026-11` rebase 到 main（`a569df57` 一次、`5675df1e` 又一次——
