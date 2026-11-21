@@ -2705,12 +2705,27 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   别把它当第二套规则去加白名单。
 - **新增入口时**：先问「它有没有当前属性 / 能不能在记录视图里用」，再决定传参；
   `has_current_cell` 的说法是「组件列 > 0」，不是「选中了行」。
-- **既有 flake 的处置**：`ports::editor_completion` 的 4 条在默认并发下会踩
-  `wait_until` 3s deadline（`editor_completion.rs:1574-1592`）。跑门禁用
-  `cargo test -p rds-editor --lib -- --test-threads=1`（805 全过）；要根治就单独一刀
-  放宽 deadline，别混进功能批。
+- **既有 flake 已修（第 63 批，见 §2.114）**：`ports::editor_completion` 的 4 条在默认并发下
+  会踩 `wait_until` 的 3s deadline（`editor_completion.rs:1574-1592`），已放宽到 10s；
+  现在门禁直接跑默认并发，不用再 `--test-threads=1`。
 - 门禁基线（第 62 批后）：result_panel **401 passed**、editor check `Finished`（0 warning）、
   editor lib **805 passed（1 ignored，单线程）**、ui-guard **4 passed**；本批未动 settings。
+
+### 2.114 editor_completion 等待上限的接手要点（2026-11-21）
+
+- **跑门禁用默认并发**：`cargo test -p rds-editor --lib`（805 / 1 ignored）。此前那 4 条
+  completion 用例在并发下超时的问题已修（`WAIT_DEADLINE` 10s），不需要再加
+  `--test-threads=1`。
+- **超时上限的位置**：`crates/editor/src/ports/editor_completion.rs` 的
+  `mod tests` 辅助区，`const WAIT_DEADLINE: Duration = Duration::from_secs(10);`，
+  `wait_until` 紧接其后。断言文案带 `{WAIT_DEADLINE:?}`，别再写死「3s」。
+- **为什么是 10s**：正常路径条件几十毫秒成立（整组 13 条 0.9~1.3s），10s 只用来把
+  「并发饿死」与「真卡死」分开。**不要**用「重跑到过」当结论；连续跑 3 次仍绿才算验证。
+- **若 10s 也不够**：先确认该条件是否真有界（现为「后台落笔某字段」，有界），再提高阈值或
+  改为信号量；别加全局串行依赖。
+- 门禁基线（第 63 批后）：result_panel **401 passed**、editor lib **805 passed（1 ignored，
+  默认并发）**、ui-guard **4 passed**、check Finished（并行线 `rds-notification` 有 2 条
+  never-used warning，与本线无关）。
 
 ## 3. 并行线协作纪律（工作区现状）
 

@@ -8088,7 +8088,50 @@ pub fn can_edit_cell(editable: bool, record_view: bool, has_current_cell: bool) 
 - **已知 flake（非本批回归）**：`ports::editor_completion::tests::*` 在**默认并发**下有 4 条
   会踩 `wait_until` 的 3s deadline（`editor_completion.rs:1574-1592`，后台线程落笔慢）；
   `--test-threads=1` 全量 805 全过、单 filter 13 条全过。门禁数字取单线程结果。
-  修法是放宽该 deadline（测试侧一行）或给该模块加串行执行——**另开一刀**，别混进功能批。
+  **已由第 63 批修好（放宽到 10s），见 §9.46。**
+
+### 9.46 第 63 批：`editor_completion` 后台落笔的等待上限（3s → 10s）
+
+#### 9.46.1 现象与定位
+
+`ports::editor_completion` 的 4 条用例（`an_empty_cache_submits_one_warm_introspection` /
+`a_hit_cache_clears_the_warm_marker` / `column_annotations_resolve_single_table_select` /
+`an_expired_entry_reloads_with_a_new_generation`）在 `cargo test --lib` **默认并发**下随机失败，
+失败点固定在 `wait_until`（`editor_completion.rs:1574-1592`）：
+
+```rust
+assert!(std::time::Instant::now() < deadline, "后台线程未在 3s 内{what}");
+```
+
+`schedule_load` 用 `thread::spawn` 起后台线程落笔（`loaded` / `warm_submitted` 写回），
+测试靠 20ms 轮询等它。并发时线程池被其它 crate 的测试占满，落笔被饿到 3s 之外 ⇒ 断言炸。
+**与业务逻辑无关**：单 filter 跑、`--test-threads=1` 全量跑都全过。
+
+#### 9.46.2 本仓落地
+
+- 把 deadline 提为 `const WAIT_DEADLINE: Duration = Duration::from_secs(10);`（放在 `mod tests`
+  的辅助函数区，`wait_until` 紧接其后）；
+- 断言文案改成 `"后台线程超时（{WAIT_DEADLINE:?}）未{what}"`，超时阈值不再写死在文案里；
+- 只动测试辅助，`schedule_load` / `loaded` / `warm_submitted` 的生产逻辑一行未改。
+
+为什么是 10s 而不是加串行：正常路径条件几十毫秒就成立（整组 13 条 0.9~1.3s 跑完），
+10s 只是把「并发饿死」与「真卡死」分开，对本地与 CI 都是零代价；加 `--test-threads` 或
+串行依赖会给所有使用者加约束。
+
+#### 9.46.3 验证
+
+- 默认并发全量 `cargo test -p rds-editor --lib` **连跑 3 次**：均 `805 passed（1 ignored）`；
+- 单 filter `ports::editor_completion::tests::` 13 条全过（0.9~1.3s）；
+- 门禁其余项：result_panel 401、ui-guard 4、`cargo check --workspace --all-targets` Finished。
+
+> `check` 的 2 条 warning（`write_history_at` / `write_history` never used）来自**并行线**
+> `rds-notification` 的未提交改动，与本批无关，未处理。
+
+#### 9.46.4 遗留
+
+- 若将来机器/CI 更慢导致 10s 也不够，先确认 `wait_until` 的每个条件是否**真有界**
+  （都是「后台落笔某个字段」，有界），再考虑提高到 30s 或改成「收到信号量」；
+  **不要**用「重跑到过」当结论。
 
 ## 8. 协作纪律
 
