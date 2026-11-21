@@ -1866,6 +1866,90 @@ fn edit_row_button_is_disabled_in_record_view(cx: &mut gpui_kit::TestAppContext)
     );
 }
 
+/// 【第 64 批】状态栏「删除」钮要看行状态：已标记删除的底层行上再删是宿主侧空操作，
+/// 钮要置灰并说明原因（DBeaver `PROP_EDITABLE` 的 `"delete"` 分支，
+/// `ResultSetPropertyTester.java:142-157`）。撤销删除后恢复可用。
+///
+/// 走 `row_action_state` 的真实接线（不是单独测纯函数）：`status.selected_row` 是 1 基，
+/// `mark_deleted(1)` 标的是底层行 1，无筛选无排序时 即视图行 1 ⇒ 选中第 2 行即命中。
+#[gpui_kit::test]
+fn delete_row_button_is_disabled_on_a_deleted_row(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{ElementId, SharedString};
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    let grid = cx.update(|_, app| panel.read(app).grid.clone());
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.editable = true;
+            p.status = Some(crate::grid::status::ResultStatus {
+                total_rows: 2,
+                selected_row: Some(2),
+                ..Default::default()
+            });
+            cx.notify();
+        })
+    });
+    // 两行底层数据 + 把第 2 行（底层行 1）标记删除
+    cx.update(|_, app| {
+        grid.update(app, |state, cx| {
+            state
+                .delegate_mut()
+                .set_data(vec!["id".to_string()], vec![vec!["1".to_string()], vec!["2".to_string()]]);
+            let mut local = crate::rowset::LocalRowSet::new();
+            local.mark_deleted(1);
+            state.delegate_mut().set_local_snapshot(Some(local));
+            state.refresh(cx);
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let disabled_state = |cx: &mut gpui_kit::VisualTestContext| -> Option<Option<bool>> {
+        cx.update(|window, _| {
+            window
+                .try_find(ElementId::Name(SharedString::from(
+                    "editor-result-delete-row".to_string(),
+                )))
+                .map(|snap| snap.disabled())
+        })
+    };
+
+    assert_eq!(
+        disabled_state(cx).expect("可编辑结果集应注入「删除」真钮"),
+        Some(true),
+        "已标记删除的行上「删除」应置灰（再删是空操作）"
+    );
+
+    // 复制仍可用：DBeaver 的 "copy" 只管 currentRow + insertable，不看行状态
+    let duplicate_disabled = cx.update(|window, _| {
+        window
+            .try_find(ElementId::Name(SharedString::from(
+                "editor-result-duplicate-row".to_string(),
+            )))
+            .map(|snap| snap.disabled())
+    });
+    assert_ne!(
+        duplicate_disabled.expect("「复制」钮应在位"),
+        Some(true),
+        "已删行的「复制」不受影响"
+    );
+
+    // 撤销删除（清空叠加层）：回到可用
+    cx.update(|_, app| {
+        grid.update(app, |state, cx| {
+            state.delegate_mut().set_local_snapshot(None);
+            state.refresh(cx);
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_ne!(
+        disabled_state(cx).expect("「删除」钮仍应在位"),
+        Some(true),
+        "撤销删除后「删除」应恢复可用"
+    );
+}
+
 /// 【工具栏配置】状态栏命令项的默认可见性对齐 DBeaver `plugin.xml:1381-1397`：
 /// `undo` / `redo` 两项 `defaultVisibility="false"`（取下一段是有意偏离，常显），
 /// 其余 `true`；配置菜单把它们勾回来后应真的重新出现（否则隐藏 = 永久失去入口）。

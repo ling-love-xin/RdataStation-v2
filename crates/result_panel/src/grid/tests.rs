@@ -23,7 +23,7 @@ use crate::grid::{
     column_menu_items, column_stats, column_stats_from_values, context_menu_items, duration_text,
     fetch_more_hint, filter_panel_menu_item, filter_settings_menu_items, filters_menu_items,
     format_cell_text,
-    group_by_values, layout_presentation_menu_items, row_number_menu_items,
+    group_by_values, layout_presentation_menu_items, row_action_state, row_number_menu_items,
     selection_stat_menu_items, selection_statistics, stats_lines, status_action_placeholders,
     status_segments, thousands, truncated_hint, truncation_notice, validate_edit_value,
     window_fetch_active,
@@ -705,6 +705,31 @@ fn context_menu_edit_cell_leads_the_edit_group() {
         )),
         "记录视图是只读呈现（PlainTextPresentation 不实现 IResultSetEditor），编辑段整段不摆"
     );
+}
+
+/// 【第 64 批】行级三钮可用态的真值表（DBeaver `PROP_EDITABLE` 的 `add` / `copy` / `delete`
+/// 三个分支，`ResultSetPropertyTester.java:137-158`）。与 `can_edit_cell` 的分工：
+/// 那条管「编辑某一格」，这条管「行级增删复制」。
+#[test]
+fn row_action_state_follows_the_dbeaver_branches() {
+    // 只读结果集：三钮全灰
+    let read_only = row_action_state(false, true, false);
+    assert!(!read_only.add && !read_only.copy && !read_only.delete);
+
+    // 可编辑但没有当前行：只有「新增」可用（DBeaver 的 "add" 不要求 currentRow）
+    let empty = row_action_state(true, false, false);
+    assert!(empty.add);
+    assert!(!empty.copy, "「复制」要 currentRow");
+    assert!(!empty.delete, "「删除」要 currentRow");
+
+    // 可编辑 + 有当前行 + 行未删：三钮全可用
+    let row = row_action_state(true, true, false);
+    assert!(row.add && row.copy && row.delete);
+
+    // 已删行：新增 / 复制仍可用，删除灰（再删是宿主侧空操作）
+    let deleted = row_action_state(true, true, true);
+    assert!(deleted.add && deleted.copy);
+    assert!(!deleted.delete, "已标记删除的行不能再删");
 }
 
 /// 【第 62 批】编辑门控的真值表：三条条件（可编辑 / 非记录视图 / 有当前属性）必须同时成立。

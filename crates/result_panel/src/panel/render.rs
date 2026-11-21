@@ -859,6 +859,17 @@ impl ResultPanel {
             .as_ref()
             .and_then(|status| status.selected_row)
             .map(|row| row.saturating_sub(1));
+        // 【第 64 批】行级三钮的可用态统一走 [`crate::grid::row_action_state`]
+        // （DBeaver `PROP_EDITABLE` 的 `add` / `copy` / `delete` 三个分支）。`delete` 还要
+        // 看这一行有没有被标记删除：已删行上再点删除是宿主侧空操作，置灰就是为了不让人
+        // 点了没反应（本地新增行不是底层行，`is_deleted_row` 恒 false，照常可删）。
+        let row_deleted = selected_view_row
+            .is_some_and(|row| self.grid.read(cx).delegate().is_deleted_row(row));
+        let row_actions = crate::grid::row_action_state(
+            self.editable,
+            selected_view_row.is_some(),
+            row_deleted,
+        );
         // 【第 57 批·状态栏「修改」钮接线】DBeaver 状态条 `row.edit` 默认可见
         // （`plugin.xml:1386`），handler `CMD_ROW_EDIT` → `openValueEditor(false)`
         // （`ResultSetHandlerMain.java:207-211`，外部值编辑器）。本仓没有「值编辑器 + 写回」
@@ -913,6 +924,7 @@ impl ResultPanel {
                 .small()
                 .icon(IconName::Plus)
                 .tooltip("在下方插入新行")
+                .disabled(!row_actions.add)
                 .debug_selector(|| "editor-result-insert-row".to_string())
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::InsertRowBelow(anchor), app);
@@ -927,7 +939,7 @@ impl ResultPanel {
                 .small()
                 .icon(IconName::CopyPlus)
                 .tooltip("复制此行")
-                .disabled(row.is_none())
+                .disabled(!row_actions.copy)
                 .debug_selector(|| "editor-result-duplicate-row".to_string())
                 .on_click(move |_, _window, app| {
                     if let Some(row) = row {
@@ -943,8 +955,13 @@ impl ResultPanel {
                 .ghost()
                 .small()
                 .icon(IconName::Trash)
-                .tooltip("删除此行")
-                .disabled(row.is_none())
+                // 已删行上删除是空操作，灰掉并说清原因（撤销删除后才恢复）
+                .tooltip(if row_deleted {
+                    "这一行已标记删除；撤销删除后才能再删"
+                } else {
+                    "删除此行"
+                })
+                .disabled(!row_actions.delete)
                 .debug_selector(|| "editor-result-delete-row".to_string())
                 .on_click(move |_, _window, app| {
                     if let Some(row) = row {

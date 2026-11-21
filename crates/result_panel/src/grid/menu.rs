@@ -33,6 +33,43 @@ impl SelectionStatKind {
         }
     }
 }
+/// 【第 64 批】行级三钮的可用态（DBeaver `ResultSetPropertyTester.PROP_EDITABLE` 的三个
+/// 行级 `expectedValue` 分支，`ResultSetPropertyTester.java:137-158`）。
+///
+/// | 字段 | DBeaver 条件 | 本仓条件 |
+/// | --- | --- | --- |
+/// | `add` | `rsv.isInsertable()`（`:137-138`，**不**要求 currentRow） | `editable` |
+/// | `copy` | `currentRow != null && rsv.isInsertable()`（`:139-141`） | `editable && has_current_row` |
+/// | `delete` | `currentRow != null && (isDeletable` 或 `行是 STATE_ADDED)`（`:142-157`） | `editable && has_current_row && !row_deleted` |
+///
+/// 本仓没有 `isDeletable` 能力位（`editable` 已是通道 / 项目 / 只读 / 行标识的合一投影，
+/// 见 `editor::exec::editability`），所以 `delete` 退化成「可编辑 + 行没被标记删除」：
+/// 已删行上再点删除是空操作（宿主 `delete_local_row` 对已删底层行直接返回），置灰就是
+/// 为了不让人点了没反应。本地新增行（`RowRef::Local`）的删除 = 移出叠加层，
+/// `row_deleted` 恒 false ⇒ 照常可用，与 DBeaver 的 `STATE_ADDED` 分支同向。
+///
+/// 与 [`can_edit_cell`] 的分工：那个管「编辑某一格」（`PROP_EDITABLE` 的 `edit` / `inline`
+/// 分支），这个管「行级增删复制」（`add` / `copy` / `delete` 分支）。两者都只是 UI 侧的
+/// 投影，权威判据仍在宿主（`insert_local_row` / `delete_local_row` / `duplicate_local_row`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RowActionState {
+    pub add: bool,
+    pub copy: bool,
+    pub delete: bool,
+}
+
+pub fn row_action_state(
+    editable: bool,
+    has_current_row: bool,
+    row_deleted: bool,
+) -> RowActionState {
+    RowActionState {
+        add: editable,
+        copy: editable && has_current_row,
+        delete: editable && has_current_row && !row_deleted,
+    }
+}
+
 /// 右键菜单的动作（界面按它决定点击后干什么）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContextAction {
