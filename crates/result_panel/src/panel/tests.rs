@@ -1942,7 +1942,13 @@ fn delete_row_button_is_disabled_on_a_deleted_row(cx: &mut gpui_kit::TestAppCont
             state.refresh(cx);
         });
     });
-    cx.update(|window, cx| window.draw(cx).clear(cx));
+    // gpui-fast 0.1.17 起未被失效的保留子树会在 `window.draw` 时被原样重放，
+    // 不再重跑 render/paint（见 vendor/gpui-component/src/lib.rs 的 `test_redraw`），
+    // 所以测试要断言"状态变更后的渲染结果"必须先 `window.refresh()` 强制一帧。
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
     assert_ne!(
         disabled_state(cx).expect("「删除」钮仍应在位"),
         Some(true),
@@ -2463,7 +2469,12 @@ fn right_panel_pages_share_the_toolbar_shape(cx: &mut gpui_kit::TestAppContext) 
             p.result_sql = Some("select id, amount from t where amount > 100".to_string())
         })
     });
-    cx.update(|window, cx| window.draw(cx).clear(cx));
+    // 同上：`result_sql` 是直接改字段（没有走 setter 的 notify），
+    // 保留子树不会自己失效，必须 refresh 才会重新 render。
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
     assert!(
         visible("editor-result-sql-preview", cx),
         "有 SQL 时筛选框第 1 格应渲染「显示 SQL」入口"

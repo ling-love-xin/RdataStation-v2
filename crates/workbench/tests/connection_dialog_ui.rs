@@ -186,7 +186,13 @@ fn result_line_levels_and_detail_entry(cx: &mut TestAppContext) {
             "已保存：生产 PG（分组未同步：项目库不可写）",
         ));
     });
-    cx.update(|window, cx| window.draw(cx).clear(cx));
+    // gpui-fast 0.1.17 起，保留子树未被失效时 `window.draw` 只重放不重算；
+    // 本用例直接改 `dialog.result` / `result_expanded`（不经过 notify），
+    // 断言渲染结果前必须 refresh。
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
     assert_eq!(
         cx.update(|_, _cx| dialog.result_level()),
         Some(ResultLevel::Warning),
@@ -200,13 +206,19 @@ fn result_line_levels_and_detail_entry(cx: &mut TestAppContext) {
         *dialog.result.borrow_mut() =
             Some(ResultLine::new(ResultLevel::Error, long.clone()).with_detail(long.clone()));
     });
-    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
     assert!(visible(cx, "conn-result-toggle"), "长错误应提供展开入口");
     assert!(visible(cx, "conn-result-copy"), "长错误应提供复制入口");
     assert!(!visible(cx, "conn-result-detail"), "未展开时不渲染详情正文");
 
     // 3) 展开态：详情正文节点出现。
     cx.update(|_, _cx| dialog.result_expanded.set(true));
-    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
     assert!(visible(cx, "conn-result-detail"), "展开后应渲染详情正文");
 }

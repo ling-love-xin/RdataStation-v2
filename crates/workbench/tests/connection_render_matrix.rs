@@ -374,6 +374,9 @@ fn settle_reveal(cx: &mut VisualTestContext) {
         cx.update(|window, cx| {
             cx.background_executor()
                 .advance_clock(std::time::Duration::from_millis(16));
+            // gpui-fast 0.1.17：保留子树未被失效时 `window.draw` 只重放不重算，
+            // 揭示动画会停在首帧；必须 refresh 才能每帧推进 spring。
+            window.refresh();
             window.draw(cx).clear(cx);
         });
     }
