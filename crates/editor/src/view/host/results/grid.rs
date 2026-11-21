@@ -173,6 +173,11 @@ impl EditorHostPanel {
                             .truncated
                             .then(|| result_grid::truncated_hint(entry.row_count())),
                         has_more: entry.can_fetch_more(),
+                        // 【选中统计】sync 时不带选中：三项计数由 `SelectCell` / `SelectRow` /
+                        // `ClearSelection` 事件增量写入（同 `selected_row` 的口径）
+                        selected_rows: 0,
+                        selected_columns: 0,
+                        selected_cells: 0,
                     }),
                 // 【B6】失败才谈得上定位：把「哪条 SQL + 什么错误」一起带出去
                 entry.and_then(|entry| {

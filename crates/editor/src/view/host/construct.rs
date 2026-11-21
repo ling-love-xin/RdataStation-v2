@@ -200,6 +200,13 @@ impl EditorHostPanel {
                 let hidden_status_commands = result_panel::ports::StatusCommand::parse_hidden_list(
                     &settings.result_panel.hidden_status_commands,
                 );
+                // 【选中统计】状态行三项开关（对齐 DBeaver `resultset.show.selected.*`）：
+                // 同样先拷贝（借用不能跨到 `&mut cx`）。
+                let selection_stat_prefs = result_panel::grid::SelectionStatPrefs {
+                    rows: settings.result_panel.selection_stat_rows,
+                    columns: settings.result_panel.selection_stat_columns,
+                    cells: settings.result_panel.selection_stat_cells,
+                };
                 if on {
                     panel.set_show_column_comments(true, cx);
                 }
@@ -210,6 +217,8 @@ impl EditorHostPanel {
                 panel.set_right_sidebar_width_px(sidebar_width as f32, cx);
                 // 状态栏命令显隐：用户上次在 ▾ 菜单里勾掉的那几项
                 panel.set_hidden_status_commands(hidden_status_commands, cx);
+                // 【选中统计】状态行三项开关（出厂全关；用户在右键 layout 段或设置页打开）
+                panel.set_selection_stat_prefs(selection_stat_prefs, cx);
                 // 【R6】段大小：给自己上次设的值（框里也显示它，不然只看得到占位 1000）
                 panel.set_segment_rows_initial(segment_rows.max(1) as usize, window, cx);
                 // 【计算页持久化】用户上次启用的统计项（空串 = 九项全停用，页内给「点 ＋ 添加」提示）
@@ -249,6 +258,9 @@ impl EditorHostPanel {
                         let text = grid.read(cx).delegate().cell_text(*row, *col, cx);
                         result_panel.update(cx, |panel, cx| {
                             panel.set_selected_cell(Some(Self::clip_cell_preview(&text)), cx);
+                            // 【选中统计】格选中 = 1 行 / 1 列 / 1 格
+                            // （对齐 DBeaver `SelectionExt` 对单格 region 的计数）
+                            panel.set_selected_counts(1, 1, 1, cx);
                             // 【侧栏】右侧辅助栏（值详情 / 列浏览器）要位置：选中格的原生事件就带着
                             // window 同步列浏览器 List 内部选中高亮（网格反推路径）
                             panel.set_selection_pos(Some((*row, *col)), window, cx);
@@ -271,6 +283,11 @@ impl EditorHostPanel {
                         });
                         result_panel.update(cx, |panel, cx| {
                             panel.set_selected_cell(None, cx);
+                            // 【选中统计】整行选中 = 1 行，列数 / 格数 = 整行覆盖的可见列数
+                            // （对齐 DBeaver 行 region 的 `getSelectedColumnCount` / `CellCount`）
+                            let visible_columns =
+                                grid.read(cx).delegate().visible_column_count();
+                            panel.set_selected_counts(1, visible_columns, visible_columns, cx);
                             // 【侧栏】选整行不投影单格值详情
                             panel.set_selection_pos(None, window, cx);
                         });
@@ -281,6 +298,9 @@ impl EditorHostPanel {
                         grid.update(cx, |state, _cx| state.delegate_mut().set_selected_row(None));
                         result_panel.update(cx, |panel, cx| {
                             panel.set_selected_cell(None, cx);
+                            // 【选中统计】清选 → 三项归零（DBeaver 无选中时 `selectionExt == null`
+                            // 三项都记 0，`ResultSetStatListener.java:80-90`）
+                            panel.set_selected_counts(0, 0, 0, cx);
                             panel.set_selection_pos(None, window, cx);
                         });
                         None

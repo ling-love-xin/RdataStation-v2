@@ -233,6 +233,9 @@ impl ResultPanel {
                 .into_iter()
                 .filter(|command| !command.default_visible())
                 .collect(),
+            // 【选中统计】出厂三项全关（对齐 DBeaver `DataEditorsPreferencesInitializer:86-88`）；
+            // 宿主构造期用 `set_selection_stat_prefs` 注入用户偏好
+            selection_stat_prefs: crate::grid::SelectionStatPrefs::default(),
             edge_bar_visible: true,
             left_sidebar_epoch: 0,
             right_sidebar_epoch: 0,

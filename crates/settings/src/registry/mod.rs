@@ -217,6 +217,12 @@ pub enum Slot {
     ResultPanelSelectOnModifierClick,
     /// 列宽是否跨会话持久化（关闭则只在当前会话内记忆）。
     ResultPanelPersistColumnWidths,
+    /// 【DBeaver 对齐】状态栏显示「选定的行数」（`resultset.show.selected.rows`，出厂关）。
+    ResultPanelSelectionStatRows,
+    /// 【DBeaver 对齐】状态栏显示「选定的列数」（`resultset.show.selected.columns`，出厂关）。
+    ResultPanelSelectionStatColumns,
+    /// 【DBeaver 对齐】状态栏显示「选定的单元格数」（`resultset.show.selected.cells`，出厂关）。
+    ResultPanelSelectionStatCells,
     /// 【R5 对齐 DBeaver `setWeights`】结果集右栏（页签侧栏）宽度（px，192~640）。
     ResultPanelSidebarWidth,
     /// 【R6 对齐 DBeaver `resultSetSize`】「取下一段」一次多少行（下限 1）。
@@ -350,6 +356,9 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "result_panel.loop_selection" => Slot::ResultPanelLoopSelection,
         "result_panel.select_on_modifier_click" => Slot::ResultPanelSelectOnModifierClick,
         "result_panel.persist_column_widths" => Slot::ResultPanelPersistColumnWidths,
+        "result_panel.selection_stat_rows" => Slot::ResultPanelSelectionStatRows,
+        "result_panel.selection_stat_columns" => Slot::ResultPanelSelectionStatColumns,
+        "result_panel.selection_stat_cells" => Slot::ResultPanelSelectionStatCells,
         "result_panel.sidebar_width" => Slot::ResultPanelSidebarWidth,
         "result_panel.segment_rows" => Slot::ResultPanelSegmentRows,
         "result_panel.hidden_status_commands" => Slot::ResultPanelHiddenStatusCommands,
@@ -461,7 +470,10 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::ResultPanelShowTypeBadge
         | Slot::ResultPanelLoopSelection
         | Slot::ResultPanelSelectOnModifierClick
-        | Slot::ResultPanelPersistColumnWidths => KindTag::Bool,
+        | Slot::ResultPanelPersistColumnWidths
+        | Slot::ResultPanelSelectionStatRows
+        | Slot::ResultPanelSelectionStatColumns
+        | Slot::ResultPanelSelectionStatCells => KindTag::Bool,
         Slot::ResultPanelSidebarWidth | Slot::ResultPanelSegmentRows => KindTag::Number,
         // 自由文本（逗号分隔的命令 id）：面板末端 ▾ 菜单与设置页都可写。
         Slot::ResultPanelHiddenStatusCommands => KindTag::Text,

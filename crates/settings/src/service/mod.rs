@@ -191,6 +191,16 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::ResultPanelPersistColumnWidths => {
             SettingValue::Bool(settings.result_panel.persist_column_widths)
         }
+        // 【抽取统计】状态栏三项选中计数（DBeaver `resultset.show.selected.*`，出厂全关）
+        Slot::ResultPanelSelectionStatRows => {
+            SettingValue::Bool(settings.result_panel.selection_stat_rows)
+        }
+        Slot::ResultPanelSelectionStatColumns => {
+            SettingValue::Bool(settings.result_panel.selection_stat_columns)
+        }
+        Slot::ResultPanelSelectionStatCells => {
+            SettingValue::Bool(settings.result_panel.selection_stat_cells)
+        }
         // 【R5】结果集右栏宽度（px）
         Slot::ResultPanelSidebarWidth => {
             SettingValue::Number(settings.result_panel.sidebar_width as f64)
@@ -438,6 +448,9 @@ impl SettingsService {
             | Slot::ResultPanelGroupDuplicatesOnly
             | Slot::ResultPanelOpenTabs
             | Slot::ResultPanelPersistColumnWidths
+            | Slot::ResultPanelSelectionStatRows
+            | Slot::ResultPanelSelectionStatColumns
+            | Slot::ResultPanelSelectionStatCells
             | Slot::ResultPanelNumberFormat
             | Slot::ResultPanelNullPlaceholder
             | Slot::ResultPanelBoolDisplay

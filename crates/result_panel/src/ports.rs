@@ -350,6 +350,15 @@ pub enum ResultRequest {
     CancelRename,
     /// 【B1】面板级临时开关：列头直接显示注释（覆盖全局偏好）
     SetShowColumnComments { open: bool },
+    /// 【选中统计】切换状态行三项开关之一（数据格右键的 layout 段，
+    /// 对齐 `ResultSetViewer.java:3580-3588` 的 `ToggleSelectionStatAction`）。
+    ///
+    /// 状态行由面板画，网格只能把意图交回；面板改本地态后，宿主再把三项一起落盘
+    /// （[`crate::ports::ResultActionQueue`] 的常规分工：面板推、宿主存）。
+    ToggleSelectionStat {
+        kind: crate::grid::SelectionStatKind,
+        on: bool,
+    },
 
     // 【R2 计算页对齐 DBeaver Calc】`AggregateColumnsPanel` 的函数集与口径都是可变的
     // （`+:365` / `-:418` / `Reset:438` / `GroupByColumns:333` / `ValueTypeToggle:348`），

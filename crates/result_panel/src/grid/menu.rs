@@ -10,6 +10,28 @@ use super::stats::{column_stats, stats_lines};
 use super::text::preview_of;
 use crate::ports::ResultRequest;
 use crate::rowset::RowRef;
+/// 【选中统计】状态行三项开关的种类（DBeaver layout 菜单三颗
+/// `ToggleSelectionStatAction`，`ResultSetViewer.java:3580-3588`）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionStatKind {
+    /// `resultset.show.selected.rows`
+    Rows,
+    /// `resultset.show.selected.columns`
+    Columns,
+    /// `resultset.show.selected.cells`
+    Cells,
+}
+
+impl SelectionStatKind {
+    /// 菜单文案里的量词（对齐 `ResultSetMessages_zh.properties:125/127/129`）
+    pub fn noun(self) -> &'static str {
+        match self {
+            SelectionStatKind::Rows => "行数",
+            SelectionStatKind::Columns => "列数",
+            SelectionStatKind::Cells => "单元格数",
+        }
+    }
+}
 /// 右键菜单的动作（界面按它决定点击后干什么）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContextAction {
@@ -92,6 +114,9 @@ pub enum ContextAction {
     /// 载荷是显示行号文本（`delegate.cell(row, 0)` 现算的 `row + 1`）：本仓行号槽只按
     /// 单行右键（没有多选集合），直接拷这一行的号，不做配置对话框。
     CopyRowNumber(String),
+    /// 【选中统计】切换状态行三项开关之一（`on` = 点击后的目标态；
+    /// DBeaver 的 `ToggleSelectionStatAction` 是勾选项，`ResultSetViewer.java:3580-3588`）
+    ToggleSelectionStat { kind: SelectionStatKind, on: bool },
 }
 /// 右键菜单里的一项
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,6 +171,11 @@ pub struct ContextTarget {
     pub editable: bool,
     /// 【#28-B3】目标底层行是否已被标记删除（被删行不摆复制 / 删除行级动作）
     pub is_deleted: bool,
+    /// 【选中统计】三项开关当前值（右键菜单项据此标勾选态；
+    /// 对齐 DBeaver `ToggleSelectionStatAction` 的 `isChecked`）
+    pub selection_stat_rows: bool,
+    pub selection_stat_columns: bool,
+    pub selection_stat_cells: bool,
 }
 /// 行号槽（`#` 列）右键的项（**纯函数**）：DBeaver 的 `ROW_HEADER` 落点只挂「复制行号」
 /// （`ResultSetViewer.java:3162-3164`；handler `ResultSetHandlerMain.java:377-396`）。
@@ -324,7 +354,31 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             separator_before: false,
         });
     }
+    // 【DBeaver 对齐】选中统计三颗开关（`ResultSetViewer.java:3580-3588` 的 layout 菜单
+    // 最后一段）：本仓菜单是扁平结构（没有子菜单），三项直接摆在这一落点尾部；
+    // 「✓」前缀表示当前已开启（DBeaver 用 check box 表达同一件事）。
+    items.extend(selection_stat_menu_items(target));
     items
+}
+
+/// 【DBeaver 对齐】选中统计三项开关（**纯函数**，`ResultSetViewer.java:3580-3588`）：
+/// 顺序固定 行 → 列 → 单元格，文案照中文包
+/// `controls_resultset_viewer_action_show_selected_{row,column,cell}_count`
+/// （`ResultSetMessages_zh.properties:125/127/129`）；`on` 载荷是点击后的**目标态**。
+pub fn selection_stat_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
+    let trio = [
+        (SelectionStatKind::Rows, target.selection_stat_rows),
+        (SelectionStatKind::Columns, target.selection_stat_columns),
+        (SelectionStatKind::Cells, target.selection_stat_cells),
+    ];
+    trio.into_iter()
+        .enumerate()
+        .map(|(ix, (kind, on))| ContextMenuItem {
+            label: format!("{}显示选定的{}", if on { "✓ " } else { "" }, kind.noun()),
+            action: ContextAction::ToggleSelectionStat { kind, on: !on },
+            separator_before: ix == 0,
+        })
+        .collect()
 }
 /// 列头下拉菜单的项（**纯函数**；DBeaver 列头箭头菜单 = 右键菜单的列级子集）：
 /// 排序升/降 · 复制此列 · 冻结/取消冻结 · 隐藏此列 · 显示全部列 · 列统计 · 洞察此列。
@@ -622,6 +676,10 @@ pub(crate) fn context_menu(
         row_ref: delegate.row_ref(row).unwrap_or(RowRef::default()),
         editable: delegate.editable,
         is_deleted: delegate.is_deleted_row(row),
+        // 【选中统计】三项开关当前值（菜单标「✓」用；镜像是面板同步进来的）
+        selection_stat_rows: delegate.selection_stat_prefs.rows,
+        selection_stat_columns: delegate.selection_stat_prefs.columns,
+        selection_stat_cells: delegate.selection_stat_prefs.cells,
     };
     for item in context_menu_items(&target) {
         if item.separator_before {
@@ -856,6 +914,17 @@ pub(crate) fn context_menu(
             ContextAction::CopyColumnName => {}
             // 行号槽的「复制行号」走本函数开头的独立早退路径，这里只做穷尽占位
             ContextAction::CopyRowNumber(_) => {}
+            // 【选中统计】三项开关是**面板状态**（状态行由面板画），网格只把意图交回宿主：
+            // 宿主改面板状态 + 落盘偏好 → 状态行重画。没有行动队列（独立网格）就不摆。
+            ContextAction::ToggleSelectionStat { kind, on } => {
+                if let Some(queue) = delegate.action_queue.clone() {
+                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| {
+                            queue.request(ResultRequest::ToggleSelectionStat { kind, on }, app);
+                        },
+                    ));
+                }
+            }
         }
     }
     menu

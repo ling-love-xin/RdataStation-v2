@@ -79,6 +79,38 @@ pub(crate) fn apply_slot(
             }
             persist(&cx.global::<Settings>().clone());
         }
+        // 【选中统计】状态栏三项（DBeaver `resultset.show.selected.rows/columns/cells`）：
+        // 三条独立偏好，Immediate——面板下次 sync / 设置页切换后立即重画状态行。
+        Slot::ResultPanelSelectionStatRows => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            {
+                let settings = cx.global_mut::<Settings>();
+                settings.result_panel.selection_stat_rows = on;
+            }
+            persist(&cx.global::<Settings>().clone());
+        }
+        Slot::ResultPanelSelectionStatColumns => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            {
+                let settings = cx.global_mut::<Settings>();
+                settings.result_panel.selection_stat_columns = on;
+            }
+            persist(&cx.global::<Settings>().clone());
+        }
+        Slot::ResultPanelSelectionStatCells => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            {
+                let settings = cx.global_mut::<Settings>();
+                settings.result_panel.selection_stat_cells = on;
+            }
+            persist(&cx.global::<Settings>().clone());
+        }
         Slot::ResultPanelSegmentRows => {
             // 【R6】一段行数：数值项，`< 1` 直接拒绝（对齐
             // `ResultSetPreferences.MIN_SEGMENT_SIZE = 1`；面板侧输入框已按同口径过滤，
@@ -535,6 +567,35 @@ impl crate::service::SettingsService {
         {
             let settings = cx.global_mut::<Settings>();
             settings.result_panel.group_duplicates_only = on;
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
+    /// 【选中统计】一次写状态栏三项开关（右键菜单三项切换后由宿主落盘）。
+    ///
+    /// 合并成一次调用：改一个开关不该触发三次写盘。三项与现值全同则不写。
+    pub fn set_result_panel_selection_stats(
+        rows: bool,
+        columns: bool,
+        cells: bool,
+        cx: &mut App,
+    ) {
+        let current = {
+            let s = cx.global::<Settings>();
+            (
+                s.result_panel.selection_stat_rows,
+                s.result_panel.selection_stat_columns,
+                s.result_panel.selection_stat_cells,
+            )
+        };
+        if current == (rows, columns, cells) {
+            return;
+        }
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.result_panel.selection_stat_rows = rows;
+            settings.result_panel.selection_stat_columns = columns;
+            settings.result_panel.selection_stat_cells = cells;
         }
         persist(&cx.global::<Settings>().clone());
     }

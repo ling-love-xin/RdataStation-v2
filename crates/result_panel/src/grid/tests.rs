@@ -7,7 +7,9 @@ use crate::grid::cell::{
 };
 use crate::grid::header::header_tooltip_lines;
 use crate::grid::stats::{distinct_count, fmt_grouped, fmt_stat_num, median_of, mode_of, text_minmax};
-use crate::grid::status::{format_integer_cell, render_toolbar};
+use crate::grid::status::{
+    ResultControls, format_integer_cell, render_status_row, render_toolbar,
+};
 use crate::grid::status::{FIRST_PAGER_ACTION, FIRST_SYSTEM_ACTION};
 use crate::grid::text::{cell_matches, find_in_cell, preview_of};
 use crate::grid::view_rows::compare_cells;
@@ -15,11 +17,13 @@ use crate::ports::FindCriteria;
 use gpui_kit::ImageFormat;
 use crate::grid::{
     CELL_DISPLAY_LIMIT, ContextAction, ContextTarget, GridSelection, MAX_SINGLE_SEGMENT_ROWS,
-    ResultGridDelegate, ResultMatch, ResultStatus, ResultToolbar, WINDOW_FETCH_NOTICE,
-    column_browser_menu_items, column_distinct_values, column_menu_items, column_stats,
-    column_stats_from_values, context_menu_items, duration_text, fetch_more_hint, format_cell_text,
-    group_by_values, row_number_menu_items, stats_lines, status_action_placeholders, status_segments,
-    thousands, truncated_hint, truncation_notice, validate_edit_value, window_fetch_active,
+    ResultGridDelegate, ResultMatch, ResultStatus, ResultToolbar, SelectionStatKind,
+    SelectionStatPrefs, WINDOW_FETCH_NOTICE, column_browser_menu_items, column_distinct_values,
+    column_menu_items, column_stats, column_stats_from_values, context_menu_items, duration_text,
+    fetch_more_hint, format_cell_text, group_by_values, row_number_menu_items,
+    selection_stat_menu_items, selection_statistics, stats_lines, status_action_placeholders,
+    status_segments, thousands, truncated_hint, truncation_notice, validate_edit_value,
+    window_fetch_active,
 };
 use crate::rowset::{LocalRow, LocalRowSet, RowRef};
 use crate::store::{ColumnKind, ColumnType};
@@ -98,6 +102,10 @@ fn target(value: &str, name: &str, column: usize) -> ContextTarget {
         // 默认只读：既有菜单断言不摆行级三项；可编辑用例在测试里显式覆盖
         editable: false,
         is_deleted: false,
+        // 【选中统计】三项开关默认全关（出厂态，`DataEditorsPreferencesInitializer.java:86-88`）
+        selection_stat_rows: false,
+        selection_stat_columns: false,
+        selection_stat_cells: false,
     }
 }
 
@@ -337,6 +345,10 @@ fn context_menu_offers_filter_copy_and_freeze() {
             "冻结「name」",
             "隐藏「name」",
             "列统计「name」",
+            // 【选中统计】layout 段三颗开关平铺在右键尾部（本仓无子菜单，见 §9.32）
+            "显示选定的行数",
+            "显示选定的列数",
+            "显示选定的单元格数",
         ]
     );
     assert_eq!(
@@ -552,15 +564,25 @@ fn context_menu_only_offers_insight_when_available() {
     let mut with = target("orders", "name", 1);
     with.insight = true;
     let with = context_menu_items(&with);
-    let last = with.last().expect("至少有一项");
-    assert_eq!(last.label, "洞察「name」这一列");
+    let ix = with
+        .iter()
+        .position(|item| matches!(item.action, ContextAction::InsightColumn { .. }))
+        .expect("可洞察时应摆「洞察此列」");
+    assert_eq!(with[ix].label, "洞察「name」这一列");
     assert_eq!(
-        last.action,
+        with[ix].action,
         ContextAction::InsightColumn {
             column: "name".to_string()
         }
     );
-    assert!(last.separator_before, "它自成一段，前面要有分隔线");
+    assert!(with[ix].separator_before, "它自成一段，前面要有分隔线");
+    // 【选中统计】layout 段是右键最后一段：洞察段之后只剩三颗统计开关
+    assert_eq!(
+        with.len() - ix,
+        4,
+        "洞察段之后应只剩三颗选中统计开关：{:?}",
+        with[ix..].iter().map(|i| i.label.as_str()).collect::<Vec<_>>()
+    );
 }
 
 /// 值预览：空白折叠 + 截断（长值不该把菜单撑开）
@@ -1330,6 +1352,10 @@ fn status_segments_report_total_and_selection() {
         selected_cell: None,
         truncated_hint: None,
         has_more: false,
+        // 【选中统计】没选中时三项计数为 0（`ResultSetStatListener.java:80-90` 同口径）
+        selected_rows: 0,
+        selected_columns: 0,
+        selected_cells: 0,
     };
     assert_eq!(
         status_segments(&idle),
@@ -1352,6 +1378,9 @@ fn a_partial_result_shows_a_plus_after_the_count() {
         selected_cell: None,
         truncated_hint: None,
         has_more: true,
+        selected_rows: 0,
+        selected_columns: 0,
+        selected_cells: 0,
     };
     assert_eq!(status_segments(&partial).0, "共 1,000+ 行");
 }
@@ -1367,6 +1396,9 @@ fn status_fetch_and_truncation_hints_follow_state_combination() {
         selected_cell: None,
         truncated_hint: None,
         has_more: false,
+        selected_rows: 0,
+        selected_columns: 0,
+        selected_cells: 0,
     };
     assert_eq!(fetch_more_hint(&done), None);
     assert_eq!(truncation_notice(&done), None);
@@ -1499,6 +1531,9 @@ fn column_menu_is_the_column_level_subset() {
         row_ref: RowRef::default(),
         editable: true,
         is_deleted: false,
+        selection_stat_rows: false,
+        selection_stat_columns: false,
+        selection_stat_cells: false,
     };
     let items = column_menu_items(&target);
     let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
@@ -1543,6 +1578,9 @@ fn column_menu_ends_with_the_four_filter_commands() {
         row_ref: RowRef::default(),
         editable: true,
         is_deleted: false,
+        selection_stat_rows: false,
+        selection_stat_columns: false,
+        selection_stat_cells: false,
     };
     let items = column_menu_items(&target);
     let tail_start = items.len() - 4;
@@ -1740,6 +1778,9 @@ fn column_menu_shows_conditional_items() {
         row_ref: RowRef::default(),
         editable: true,
         is_deleted: false,
+        selection_stat_rows: false,
+        selection_stat_columns: false,
+        selection_stat_cells: false,
     };
     let items = column_menu_items(&target);
     let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
@@ -1828,6 +1869,9 @@ fn column_menu_lists_distinct_values_and_clear_only_when_active() {
         row_ref: RowRef::default(),
         editable: true,
         is_deleted: false,
+        selection_stat_rows: false,
+        selection_stat_columns: false,
+        selection_stat_cells: false,
     };
     let items = column_menu_items(&target);
     let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
@@ -4103,5 +4147,280 @@ fn status_command_ids_round_trip_and_parse_the_persisted_list() {
     assert_eq!(
         StatusCommand::parse_hidden_list(&StatusCommand::hidden_list_text(&sample)),
         sample
+    );
+}
+// ============================ 【第 49 批】选中统计三项 ============================
+// DBeaver 取证：`ResultSetViewer.java:3580-3588`（`fillLayoutMenu` 里的三颗
+// `ToggleSelectionStatAction`）、`ResultSetStatListener.java:34-95`（100ms 防抖后按三项
+// 偏好用 `StringJoiner(", ")` 拼）、`ResultSetMessages_zh.properties:633-637`
+// （`行数: {0}` / `列数: {0}` / `单元格数: {0}`，半角冒号 + 空格）。
+// 本仓差异：不做防抖（事件由组件批量发）、菜单扁平无子菜单（三颗平铺在右键尾部）。
+
+/// 【DBeaver 对齐】状态行统计段纯函数：只拼启用项、顺序固定 行 → 列 → 单元格、
+/// 项间 `", "`（`StringJoiner(", ")`），文案照中文包；三项全关 → 空串（状态行不摆）。
+///
+/// 0 也照样拼：DBeaver 在没有选中 region 时三项都记 0 并仍加入 joiner
+/// （`ResultSetStatListener.java:80-90`），不是「没选中就整段消失」——整段消失只由
+/// 三项偏好全关决定。
+#[test]
+fn selection_statistics_joins_enabled_items_in_fixed_order() {
+    let status = ResultStatus {
+        total_rows: 2,
+        selected_rows: 2,
+        selected_columns: 3,
+        selected_cells: 6,
+        ..ResultStatus::default()
+    };
+
+    // 出厂态：三项全关 → 空串（用户 2026-10-28「状态栏只显示内存 / 耗时 / 条数」不受影响）
+    assert_eq!(
+        selection_statistics(&status, SelectionStatPrefs::default()),
+        ""
+    );
+
+    // 单项：只拼这一项，不带分隔符
+    assert_eq!(
+        selection_statistics(
+            &status,
+            SelectionStatPrefs {
+                rows: true,
+                ..SelectionStatPrefs::default()
+            }
+        ),
+        "行数: 2"
+    );
+
+    // 全开：顺序固定 行 → 列 → 单元格（不被结构体字段顺序或 push 顺序带偏）
+    assert_eq!(
+        selection_statistics(
+            &status,
+            SelectionStatPrefs {
+                rows: true,
+                columns: true,
+                cells: true,
+            }
+        ),
+        "行数: 2, 列数: 3, 单元格数: 6"
+    );
+
+    // 只开后两项：仍按 列 → 单元格
+    assert_eq!(
+        selection_statistics(
+            &status,
+            SelectionStatPrefs {
+                rows: false,
+                columns: true,
+                cells: true,
+            }
+        ),
+        "列数: 3, 单元格数: 6"
+    );
+
+    // 没选中（三项计数 0）：开启的项照样摆 0
+    assert_eq!(
+        selection_statistics(
+            &ResultStatus::default(),
+            SelectionStatPrefs {
+                rows: true,
+                columns: true,
+                cells: true,
+            }
+        ),
+        "行数: 0, 列数: 0, 单元格数: 0"
+    );
+
+    // 千分位走本仓统一的 `thousands`（与状态行其它计数同口径）
+    assert_eq!(
+        selection_statistics(
+            &ResultStatus {
+                selected_rows: 1234,
+                ..ResultStatus::default()
+            },
+            SelectionStatPrefs {
+                rows: true,
+                ..SelectionStatPrefs::default()
+            }
+        ),
+        "行数: 1,234"
+    );
+}
+
+/// 【DBeaver 对齐】右键 layout 段三颗开关：顺序固定 行 / 列 / 单元格，文案照中文包
+/// （`ResultSetMessages_zh.properties:125/127/129` = 显示选定的行数 / 列数 / 单元格数），
+/// 已开项带 `✓ ` 前缀（DBeaver 用 check box 表达同一件事），载荷 `on` 是点击后的目标态。
+#[test]
+fn selection_stat_menu_items_flag_current_state_and_flip_on_click() {
+    let off = target("x", "id", 1);
+    let items = selection_stat_menu_items(&off);
+    assert_eq!(items.len(), 3);
+    let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        vec!["显示选定的行数", "显示选定的列数", "显示选定的单元格数"]
+    );
+    // 首项前带分隔线（DBeaver layout 段与上方命令之间有一条 separator），其余不带
+    assert!(items[0].separator_before);
+    assert!(!items[1].separator_before);
+    assert!(!items[2].separator_before);
+    // 当前全关：点一下就是「打开」
+    for (item, kind) in items.iter().zip([
+        SelectionStatKind::Rows,
+        SelectionStatKind::Columns,
+        SelectionStatKind::Cells,
+    ]) {
+        assert_eq!(
+            item.action,
+            ContextAction::ToggleSelectionStat { kind, on: true }
+        );
+    }
+
+    // 已开的项带 `✓ ` 前缀，载荷是「关闭」
+    let mut on = target("x", "id", 1);
+    on.selection_stat_columns = true;
+    on.selection_stat_cells = true;
+    let items = selection_stat_menu_items(&on);
+    assert_eq!(items[0].label, "显示选定的行数");
+    assert_eq!(items[1].label, "✓ 显示选定的列数");
+    assert_eq!(items[2].label, "✓ 显示选定的单元格数");
+    assert_eq!(
+        items[1].action,
+        ContextAction::ToggleSelectionStat {
+            kind: SelectionStatKind::Columns,
+            on: false
+        }
+    );
+    assert_eq!(
+        items[2].action,
+        ContextAction::ToggleSelectionStat {
+            kind: SelectionStatKind::Cells,
+            on: false
+        }
+    );
+}
+
+/// 【DBeaver 对齐】三颗开关的落点是数据格右键的**尾部**（`fillLayoutMenu` 挂在右键子菜单
+/// `MENU_ID_LAYOUT`，`ResultSetViewer.java:3265-3270`）：本仓菜单扁平，所以它们排在这一落点
+/// 的最后三项；列头箭头菜单 / 列浏览器清单不摆（DBeaver 的 layout 菜单只从表格右键进）。
+#[test]
+fn selection_stats_sit_at_the_context_menu_tail_and_not_in_column_menus() {
+    let mut target = target_with_table("1", "id", 0);
+    target.persist = true;
+    let items = context_menu_items(&target);
+    let tail: Vec<&str> = items[items.len() - 3..]
+        .iter()
+        .map(|i| i.label.as_str())
+        .collect();
+    assert_eq!(
+        tail,
+        vec!["显示选定的行数", "显示选定的列数", "显示选定的单元格数"],
+        "三颗选中统计开关应排在数据格右键的最末三项（本仓 layout 段平铺在尾部）"
+    );
+    // 持久化项仍在这三颗之前（layout 段是右键最后一段，不是插在中间）
+    let persist_at = items
+        .iter()
+        .position(|i| matches!(i.action, ContextAction::PersistResultSet))
+        .expect("可持久化落点应摆持久化项");
+    assert!(persist_at < items.len() - 3);
+
+    // 列头菜单不摆（它走另一条路径：DBeaver 列头箭头菜单里没有 layout 段）
+    let column_target = target_with_table("1", "id", 0);
+    let column_items = column_menu_items(&column_target);
+    assert!(
+        !column_items
+            .iter()
+            .any(|i| matches!(i.action, ContextAction::ToggleSelectionStat { .. })),
+        "列头菜单不该出现选中统计开关"
+    );
+}
+
+/// 只为把状态行真正渲染进窗口的探针（几何必须来自真实布局，不能手算）
+struct StatusRowHarness {
+    selection_stat: Option<String>,
+}
+
+impl gpui_kit::Render for StatusRowHarness {
+    fn render(
+        &mut self,
+        _window: &mut gpui_kit::Window,
+        cx: &mut gpui_kit::Context<Self>,
+    ) -> impl gpui_kit::IntoElement {
+        let status = ResultStatus {
+            total_rows: 2,
+            selected_rows: 1,
+            selected_columns: 1,
+            selected_cells: 1,
+            ..ResultStatus::default()
+        };
+        render_status_row(
+            Some(&status),
+            ResultControls::default(),
+            None,
+            None,
+            self.selection_stat.clone(),
+            Some(12),
+            None,
+            None,
+            Some("内存 1 KB".to_string()),
+            None,
+            &std::collections::BTreeSet::new(),
+            None,
+            None,
+            cx,
+        )
+    }
+}
+
+/// 【选中统计 2026-11-21】状态行统计段只在有文本时出现，且排在「计算行数」钮之后、
+/// 右段「内存 / 耗时 / 条数」之前（对齐 DBeaver `selectionStatLabel` 紧跟 `rowCountLabel`，
+/// `ResultSetViewer.java:2182-2184`）。
+///
+/// 纯函数只管拼文案；这条钉的是**渲染接线**——面板传了文本、状态行却没摆（或摆到右段里
+/// 去），文案再对也看不见 / 位置错。段有值 / 无值两条都在这里钉。
+#[gpui_kit::test]
+fn status_row_shows_the_selection_stat_segment_only_when_it_has_text(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+
+    // ① 有文本：段在，占一定宽度
+    let (_, vcx) = cx.add_window_view(|_window, _cx| StatusRowHarness {
+        selection_stat: Some("行数: 1, 列数: 1, 单元格数: 1".to_string()),
+    });
+    for _ in 0..2 {
+        vcx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+    }
+    let shown = vcx
+        .debug_bounds("editor-result-selection-stat")
+        .expect("面板传了统计文本，状态行却没摆这一段");
+    assert!(
+        shown.size.width > gpui_kit::px(0.),
+        "统计段宽度为 0（被 flex 挤没了）：{:?}",
+        shown
+    );
+    // 位置：在状态行右侧元信息（flex_1 占满 + ml_auto）**之前**，所以不能跑到最右端
+    let bar = vcx
+        .debug_bounds("editor-result-status-row")
+        .expect("状态行应有 debug 几何");
+    assert!(
+        shown.left() < bar.right(),
+        "统计段落在状态行之外：seg={:?} bar={:?}",
+        shown,
+        bar
+    );
+
+    // ② 无文本（三项全关 / 全空串）：段不存在
+    let (_, vcx) = cx.add_window_view(|_window, _cx| StatusRowHarness {
+        selection_stat: None,
+    });
+    for _ in 0..2 {
+        vcx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+    }
+    assert!(
+        vcx.debug_bounds("editor-result-selection-stat").is_none(),
+        "三项全关时状态行不该摆统计段（出厂视觉应与 2026-10-28 三项口径一致）"
     );
 }

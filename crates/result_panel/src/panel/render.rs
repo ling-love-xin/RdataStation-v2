@@ -1427,11 +1427,18 @@ impl ResultPanel {
         };
 
         let status_row = show_status.then(|| {
+            // 【选中统计】三项开关决定的统计段（纯函数算；全关 / 空串 → None，不摆）
+            let selection_stat = self
+                .status
+                .as_ref()
+                .map(|status| result_grid::selection_statistics(status, self.selection_stat_prefs))
+                .filter(|text| !text.is_empty());
             result_grid::render_status_row(
                 self.status.as_ref(),
                 status_controls,
                 self.status.as_ref().and(Some(&self.row_count_input)),
                 Some(&self.segment_input),
+                selection_stat,
                 elapsed_ms,
                 Some(left_switch),
                 // 【2026-10-28 微调】右侧开关回状态栏右端（三态：收起 / 窄展开 / 宽展开）

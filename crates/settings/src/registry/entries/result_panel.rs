@@ -329,6 +329,66 @@ pub fn entries() -> Vec<SettingSpec> {
             disabled: false,
         },
         SettingSpec {
+            // 【DBeaver 对齐】选中统计三项（`ResultSetViewer.java:3580-3588` 的 layout 菜单三颗
+            // `ToggleSelectionStatAction`；偏好键 `resultset.show.selected.rows/columns/cells`，
+            // `ResultSetPreferences.java:64-66`；出厂全关 `DataEditorsPreferencesInitializer.java:86-88`）。
+            // 文案与 DBeaver 中文包一致（`ResultSetMessages_zh.properties:125/127/129`）。
+            key: "result_panel.selection_stat_rows",
+            section: "result_panel",
+            section_label: "结果集面板",
+            group: "layout",
+            group_label: Some("布局"),
+            label: "状态栏显示选定的行数",
+            hint: "开启后状态行在「已选第 N 行」旁显示「行数: N」（DBeaver 状态栏的选中统计段）；\
+                 出厂关闭，数据格右键同项可临时切换",
+            hint_inline: true,
+            kind: SettingKind::Bool,
+            presets: &[],
+            default_json: "false",
+            effect: SettingEffect::Immediate,
+            entry: SettingEntry::Page,
+            consumer: "crates/result_panel/src/grid/status.rs::selection_statistics（状态行拼装）\
+                      / crates/result_panel/src/panel/events.rs::set_selection_stat_prefs（偏好注入）",
+            composite: false,
+            disabled: false,
+        },
+        SettingSpec {
+            key: "result_panel.selection_stat_columns",
+            section: "result_panel",
+            section_label: "结果集面板",
+            group: "layout",
+            group_label: Some("布局"),
+            label: "状态栏显示选定的列数",
+            hint: "开启后状态行显示「列数: N」；本轮态下整行选中时等于可见列数",
+            hint_inline: true,
+            kind: SettingKind::Bool,
+            presets: &[],
+            default_json: "false",
+            effect: SettingEffect::Immediate,
+            entry: SettingEntry::Page,
+            consumer: "crates/result_panel/src/grid/status.rs::selection_statistics",
+            composite: false,
+            disabled: false,
+        },
+        SettingSpec {
+            key: "result_panel.selection_stat_cells",
+            section: "result_panel",
+            section_label: "结果集面板",
+            group: "layout",
+            group_label: Some("布局"),
+            label: "状态栏显示选定的单元格数",
+            hint: "开启后状态行显示「单元格数: N」；本轮态下整行选中时等于可见列数",
+            hint_inline: true,
+            kind: SettingKind::Bool,
+            presets: &[],
+            default_json: "false",
+            effect: SettingEffect::Immediate,
+            entry: SettingEntry::Page,
+            consumer: "crates/result_panel/src/grid/status.rs::selection_statistics",
+            composite: false,
+            disabled: false,
+        },
+        SettingSpec {
             // 【R5 对齐 DBeaver `viewerSash.setWeights`】右栏（页签侧栏）宽度：
             // DBeaver 的 `panelRatio` 按展示类型存千分比、跨结果集共用（`ResultSetViewer.java:1021-1033`
             // / `:1250-1268`）；本仓右栏是行内固定宽元素，改存 px（差异与理由见 model 注释）。

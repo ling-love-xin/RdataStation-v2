@@ -84,8 +84,9 @@ pub use delegate::{
 };
 pub use edit::validate_edit_value;
 pub use menu::{
-    ContextAction, ContextMenuItem, ContextTarget, column_browser_menu_items,
+    ContextAction, ContextMenuItem, ContextTarget, SelectionStatKind, column_browser_menu_items,
     column_distinct_values, column_menu_items, context_menu_items, row_number_menu_items,
+    selection_stat_menu_items,
 };
 pub use stats::{
     ColumnStats, column_stats, column_stats_from_values, group_by_values, stats_from_fact,
@@ -93,8 +94,9 @@ pub use stats::{
 };
 pub use status::{
     MAX_SINGLE_SEGMENT_ROWS, ResultControls, ResultPane, ResultStatus, ResultToolbar,
-    WINDOW_FETCH_NOTICE, bytes_text, duration_text, fetch_more_hint, new_table_state, render,
-    render_status_row, render_toolbar, status_action_placeholders, status_config_items,
-    status_segments, thousands, truncated_hint, truncation_notice, window_fetch_active,
+    SelectionStatPrefs, WINDOW_FETCH_NOTICE, bytes_text, duration_text, fetch_more_hint,
+    new_table_state, render, render_status_row, render_toolbar, selection_statistics,
+    status_action_placeholders, status_config_items, status_segments, thousands, truncated_hint,
+    truncation_notice, window_fetch_active,
 };
 pub use text::{GridSelection, ResultMatch};

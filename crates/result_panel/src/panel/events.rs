@@ -1990,6 +1990,71 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【选中统计】选中计数增量更新（`TableEvent::SelectCell/SelectRow/ClearSelection`
+    /// 事件路径调用；计数由编辑器算好传入——整行选中时列数 / 格数 = 可见列数）。
+    ///
+    /// 与 `set_selected_row` 同路：sync 会全量覆写 status，这里只补事件之间的增量。
+    pub fn set_selected_counts(
+        &mut self,
+        rows: usize,
+        columns: usize,
+        cells: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(status) = self.status.as_mut() {
+            status.selected_rows = rows;
+            status.selected_columns = columns;
+            status.selected_cells = cells;
+        }
+        cx.notify();
+    }
+
+    /// 【选中统计】注入三项开关（宿主构造期读偏好 / 设置页切换后同步）。
+    /// 同时把镜像同步进网格 delegate（右键菜单的「✓」态读它）。
+    pub fn set_selection_stat_prefs(
+        &mut self,
+        prefs: crate::grid::SelectionStatPrefs,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selection_stat_prefs == prefs {
+            return;
+        }
+        self.selection_stat_prefs = prefs;
+        self.grid
+            .update(cx, |state, _cx| state.delegate_mut().set_selection_stat_prefs(prefs));
+        cx.notify();
+    }
+
+    /// 【选中统计】当前三项开关（宿主落盘时读走）。
+    pub fn selection_stat_prefs(&self) -> crate::grid::SelectionStatPrefs {
+        self.selection_stat_prefs
+    }
+
+    /// 【选中统计】切换三项之一（数据格右键 layout 段经队列回调；对齐 DBeaver
+    /// `ToggleSelectionStatAction.run` 的「改偏好 + 重算统计」两步）。
+    pub fn toggle_selection_stat(
+        &mut self,
+        kind: crate::grid::SelectionStatKind,
+        on: bool,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::grid::SelectionStatKind;
+        let target = match kind {
+            SelectionStatKind::Rows => &mut self.selection_stat_prefs.rows,
+            SelectionStatKind::Columns => &mut self.selection_stat_prefs.columns,
+            SelectionStatKind::Cells => &mut self.selection_stat_prefs.cells,
+        };
+        if *target == on {
+            return;
+        }
+        *target = on;
+        // 网格镜像同步：菜单下次打开要标对「✓」
+        let prefs = self.selection_stat_prefs;
+        self.grid
+            .update(cx, |state, _cx| state.delegate_mut().set_selection_stat_prefs(prefs));
+        cx.notify();
+    }
+
     /// 顶部提示行增量写入（编辑被拦等一次性提示；sync 会全量覆写 notice）
     pub fn set_notice(&mut self, text: Option<String>, cx: &mut Context<Self>) {
         self.notice = text;

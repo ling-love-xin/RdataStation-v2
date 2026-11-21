@@ -239,6 +239,10 @@ impl ListDelegate for ColumnBrowserDelegate {
             row_ref: crate::rowset::RowRef::default(),
             editable: false,
             is_deleted: false,
+            // 列浏览器菜单不摆选中统计三颗（它们只在单元格右键的 layout 段）
+            selection_stat_rows: false,
+            selection_stat_columns: false,
+            selection_stat_cells: false,
         };
         let menu_items = result_grid::column_browser_menu_items(&target);
         // 【多选批量动作】对齐 DBeaver：多选动作挂在**清单右键菜单**上

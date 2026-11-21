@@ -275,6 +275,10 @@ pub(crate) fn render_th(
         row_ref: RowRef::default(),
         editable: delegate.editable,
         is_deleted: false,
+        // 列头菜单不摆选中统计三颗（它们只在单元格右键的 layout 段）
+        selection_stat_rows: false,
+        selection_stat_columns: false,
+        selection_stat_cells: false,
     };
     let menu_items = column_menu_items(&column_menu_target);
     let copy_column_text = delegate.column_text(column);

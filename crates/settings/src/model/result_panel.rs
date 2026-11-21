@@ -26,6 +26,16 @@ pub struct ResultPanel {
     /// 【DBeaver 对齐】列宽是否跨会话持久化（关闭则只在当前会话内记忆）。
     #[serde(default = "default_true")]
     pub persist_column_widths: bool,
+    /// 【DBeaver 对齐】状态栏是否显示「选定的行数」（`resultset.show.selected.rows`，
+    /// 出厂 `false`：DBeaver `DataEditorsPreferencesInitializer` 三颗全关）。
+    #[serde(default)]
+    pub selection_stat_rows: bool,
+    /// 【DBeaver 对齐】状态栏是否显示「选定的列数」（`resultset.show.selected.columns`）。
+    #[serde(default)]
+    pub selection_stat_columns: bool,
+    /// 【DBeaver 对齐】状态栏是否显示「选定的单元格数」（`resultset.show.selected.cells`）。
+    #[serde(default)]
+    pub selection_stat_cells: bool,
     /// 【R5 对齐 DBeaver `viewerSash.setWeights`】结果集右栏（页签侧栏）宽度，单位 px
     /// （基准字号 16px 下的像素；实际按界面字号同比例缩放）。
     ///
@@ -151,6 +161,10 @@ impl Default for ResultPanel {
             loop_selection: true,
             select_on_modifier_click: true,
             persist_column_widths: true,
+            // 选中统计三项出厂全关（对齐 DBeaver `DataEditorsPreferencesInitializer:86-88`）
+            selection_stat_rows: false,
+            selection_stat_columns: false,
+            selection_stat_cells: false,
             // 右栏宽度出厂值 = `result_panel::ui::RESULT_SIDEBAR_RIGHT_WIDTH`（20rem @16px）
             sidebar_width: default_result_sidebar_width(),
             segment_rows: default_result_segment_rows(),

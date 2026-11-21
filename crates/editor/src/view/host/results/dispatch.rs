@@ -577,6 +577,13 @@ impl EditorHostPanel {
                 self.result_panel
                     .update(cx, |p, cx| p.set_show_column_comments(open, cx));
             }
+            // 【选中统计】数据格右键 layout 段切换三项之一：面板改本地态（状态行重画），
+            // 随后宿主把三项一起落盘（与「计算页统计项」同一条分工：面板推、宿主存）
+            ResultRequest::ToggleSelectionStat { kind, on } => {
+                self.result_panel
+                    .update(cx, |p, cx| p.toggle_selection_stat(kind, on, cx));
+                self.persist_result_selection_stats(cx);
+            }
             // 【R2 计算页】函数集增删 / 复位 / 口径切换：面板本地视图状态（不影响取数），
             // 宿主只转发（与 SetRightTab 同口径）。**启用集要落盘**（对齐 DBeaver
             // `AggregateColumnsPanel.saveSettings` 记住 `enabledFunctions`）：三条改动路径
@@ -646,6 +653,20 @@ impl EditorHostPanel {
     pub(crate) fn persist_result_stats_items(&mut self, cx: &mut Context<Self>) {
         let ids = self.result_panel.read(cx).stats_items_ids();
         settings::SettingsService::set_result_panel_stats_items(&ids, cx);
+    }
+
+    /// 【选中统计】把面板当前的三项开关写回全局偏好
+    /// （对齐 DBeaver `ToggleSelectionStatAction.run` 改 `resultset.show.selected.*`）。
+    ///
+    /// 三项一次写：改一个开关不该触发三次写盘；面板已把值改稳，宿主只读走交设置服务。
+    pub(crate) fn persist_result_selection_stats(&mut self, cx: &mut Context<Self>) {
+        let prefs = self.result_panel.read(cx).selection_stat_prefs();
+        settings::SettingsService::set_result_panel_selection_stats(
+            prefs.rows,
+            prefs.columns,
+            prefs.cells,
+            cx,
+        );
     }
 
     /// 【分组页持久化】把面板当前的排序口径写回全局偏好

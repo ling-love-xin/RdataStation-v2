@@ -239,6 +239,10 @@ pub struct ResultPanel {
     /// `defaultVisibility`：撤销 / 重做 / 取下一段默认隐藏，其余默认显示）。
     /// 纯视图状态（不落盘）；状态行末端的配置菜单可逐项勾回。
     pub(crate) hidden_status_commands: std::collections::BTreeSet<crate::ports::StatusCommand>,
+    /// 【选中统计】状态行三项开关（对齐 DBeaver `resultset.show.selected.*`，出厂全关）。
+    /// 由宿主构造期注入偏好，之后数据格右键的 layout 段可逐项切换；状态行
+    /// `selection_statistics` 纯函数按它决定拼哪几项。
+    pub(crate) selection_stat_prefs: crate::grid::SelectionStatPrefs,
     /// 【2026-10-28 微调】右缘竖条可见性——右侧开关**三态**（比左侧多一个展开态）：
     /// `(edge_bar_visible, show_value_sidebar)` = (false,false)=收起 / (true,false)=窄展开
     /// （只显右缘竖条图标条）/ (true,true)=宽展开（竖条 + 右栏内容）。不变量：宽展开 ⟹

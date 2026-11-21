@@ -107,6 +107,43 @@ pub struct ResultStatus {
     pub truncated_hint: Option<String>,
     /// 【B5b】还能取下一段吗（`true` 时总行数显示成 `1,000+`，并摆「取下一段」）
     pub has_more: bool,
+    /// 【选中统计】选中的行数（DBeaver `IResultSetSelectionExt.getSelectedRowCount`；
+    /// 本仓单区域选中：行选中 / 格选中都算 1 行，未选中 0）
+    pub selected_rows: usize,
+    /// 【选中统计】选中的列数（本仓：格选中 1；整行选中 = 可见列数）
+    pub selected_columns: usize,
+    /// 【选中统计】选中的单元格数（本仓：格选中 1；整行选中 = 可见列数）
+    pub selected_cells: usize,
+}
+
+/// 【DBeaver 对齐】状态行选中统计的三项开关
+/// （`resultset.show.selected.rows/columns/cells`，`ResultSetPreferences.java:64-66`；
+/// 出厂全关，见 `DataEditorsPreferencesInitializer.java:86-88`）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SelectionStatPrefs {
+    pub rows: bool,
+    pub columns: bool,
+    pub cells: bool,
+}
+
+/// 状态行选中统计段（**纯函数**；对齐 `ResultSetStatListener.java:80-92`）。
+///
+/// 只拼启用的项，顺序固定 行 → 列 → 单元格，项间 `", "`（DBeaver `StringJoiner(", ")`）；
+/// 文案照中文包 `行数: {0}` / `列数: {0}` / `单元格数: {0}`
+/// （`ResultSetMessages_zh.properties:633-637`，注意是半角冒号 + 空格）。
+/// 三项全关 → 空串：状态行不摆这一段（出厂状态，与用户 2026-10-28「只显示三项」口径一致）。
+pub fn selection_statistics(status: &ResultStatus, prefs: SelectionStatPrefs) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if prefs.rows {
+        parts.push(format!("行数: {}", thousands(status.selected_rows)));
+    }
+    if prefs.columns {
+        parts.push(format!("列数: {}", thousands(status.selected_columns)));
+    }
+    if prefs.cells {
+        parts.push(format!("单元格数: {}", thousands(status.selected_cells)));
+    }
+    parts.join(", ")
 }
 
 /// 状态行左右两段（纯函数；截断提示单独渲染——它是警告，要另一种颜色）
@@ -597,6 +634,10 @@ pub fn render_status_row(
     // 【R6 段大小】「一段」行数输入框（对齐 DBeaver `resultSetSize` Text；
     // `None` = 不摆，只读文案位照旧）
     segment_input: Option<&gpui::Entity<gpui_kit::component::input::InputState>>,
+    // 【选中统计】状态行选中统计段（面板用 `selection_statistics` 纯函数算好传入；
+    // `None` = 三项全关或空串，不摆）。位置对齐 DBeaver `selectionStatLabel`
+    // （`ResultSetViewer.java:2182-2184`，紧跟 `rowCountLabel` 之后）。
+    selection_stat: Option<String>,
     elapsed_ms: Option<u64>,
     left_switch: Option<AnyElement>,
     right_switch: Option<AnyElement>,
@@ -842,6 +883,17 @@ pub fn render_status_row(
         // 中段·「计算行数」（对齐 DBeaver `resultSetSize` 之后那颗 `rowCountLabel`：
         // 点一下对原 SQL 跑 `count(*)`，算完把总数就地显示在这颗钮上）
         .children(controls.count_rows)
+        // 中段·选中统计（对齐 DBeaver `selectionStatLabel`：`rowCountLabel` 之后紧邻；
+        // 文本由 `selection_statistics` 按三项开关拼好，全关时这里不摆）
+        .when_some(selection_stat, |row, text| {
+            row.child(
+                div()
+                    .flex_none()
+                    .truncate()
+                    .debug_selector(|| "editor-result-selection-stat".to_string())
+                    .child(SharedString::from(text)),
+            )
+        })
         // 右·元信息（【状态栏三项】只显示 内存 / 查询时间 / 查询条数，其它不显示；
         // 右段弹性收缩 + 每项 truncate：宽度不足时截断而非重叠/溢出）
         .child(
