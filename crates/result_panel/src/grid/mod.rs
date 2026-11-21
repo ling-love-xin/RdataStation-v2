@@ -101,7 +101,7 @@ pub use delegate::{
     CommitEditHook, CommitLocalEditHook, FilterValueHook, InsightColumnHook, LoadMoreHook,
     PreviewValueHook, RESULT_GRID_CONTEXT, ResultGridDelegate, RowActionHook, SortDownHook,
 };
-pub use edit::validate_edit_value;
+pub use edit::{can_edit_cell, validate_edit_value};
 pub use menu::{
     ContextAction, ContextMenuItem, ContextTarget, SelectionStatKind, column_browser_menu_items,
     column_distinct_values, column_menu_items, context_menu_items, filter_panel_menu_item,

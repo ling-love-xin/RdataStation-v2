@@ -18,7 +18,8 @@ use gpui_kit::ImageFormat;
 use crate::grid::{
     CELL_DISPLAY_LIMIT, ContextAction, ContextTarget, GridSelection, MAX_SINGLE_SEGMENT_ROWS,
     ResultGridDelegate, ResultMatch, ResultStatus, ResultToolbar, SelectionStatKind,
-    SelectionStatPrefs, WINDOW_FETCH_NOTICE, column_browser_menu_items, column_distinct_values,
+    SelectionStatPrefs, WINDOW_FETCH_NOTICE, can_edit_cell, column_browser_menu_items,
+    column_distinct_values,
     column_menu_items, column_stats, column_stats_from_values, context_menu_items, duration_text,
     fetch_more_hint, filter_panel_menu_item, filter_settings_menu_items, filters_menu_items,
     format_cell_text,
@@ -687,6 +688,40 @@ fn context_menu_edit_cell_leads_the_edit_group() {
             .any(|item| matches!(item.action, ContextAction::EditCell { .. })),
         "已标记删除的行不摆「修改单元格」"
     );
+
+    // 【第 62 批】记录（整行）视图：`record_view` 这条并入统一判据后，整段编辑项都不摆
+    let mut record = target("orders", "name", 1);
+    record.editable = true;
+    record.record_mode = true;
+    let record_items = context_menu_items(&record);
+    assert!(
+        !record_items.iter().any(|item| matches!(
+            item.action,
+            ContextAction::EditCell { .. }
+                | ContextAction::InsertRowBelow(_)
+                | ContextAction::DuplicateRow(_)
+                | ContextAction::DeleteRow(_)
+                | ContextAction::CopyRowValuesFrom { .. }
+        )),
+        "记录视图是只读呈现（PlainTextPresentation 不实现 IResultSetEditor），编辑段整段不摆"
+    );
+}
+
+/// 【第 62 批】编辑门控的真值表：三条条件（可编辑 / 非记录视图 / 有当前属性）必须同时成立。
+/// 这是 DBeaver `ResultSetPropertyTester.PROP_EDITABLE` 的投影，状态栏「修改」钮与右键
+/// 「修改单元格」共用它（两条入口分别在上下的测试里断言）。
+#[test]
+fn can_edit_cell_requires_all_three_conditions() {
+    assert!(!can_edit_cell(false, false, true), "只读结果集不能编辑");
+    assert!(
+        !can_edit_cell(true, true, true),
+        "记录视图是实现不了 IResultSetEditor 的呈现（PlainTextPresentation.java:63）"
+    );
+    assert!(
+        !can_edit_cell(true, false, false),
+        "没有当前属性（未选中 / 停在行号槽）"
+    );
+    assert!(can_edit_cell(true, false, true), "三条都满足才可编辑");
 }
 
 /// 【M8】「洞察此列」只在**能洞察**时出现（宿主接了端口 + 这份结果可取样）：

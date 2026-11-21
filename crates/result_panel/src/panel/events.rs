@@ -332,7 +332,11 @@ impl ResultPanel {
     /// 行号槽与非数据位置直接忽略。其余门控（通道 / 项目 / 键列 / 只读）由
     /// `DoubleClickedCell` 的宿主订阅再判一次，与双击完全同路。
     pub fn begin_edit_cell_at(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
-        if col == 0 {
+        // 【第 62 批】行号槽（组件列 0）与记录（整行 / 转置）视图都不发——
+        // 对应 [`crate::grid::can_edit_cell`] 的 `has_current_cell` / `record_view` 两条；
+        // 那边 `editable` 这条**有意不在面板层判**：只读结果集要让宿主的 `cell_editable`
+        // 报 `Err(EditGate)` 在顶部说明原因（`host/construct.rs:340-354`），提前拦会吞掉提示。
+        if col == 0 || self.transposed {
             return;
         }
         self.grid

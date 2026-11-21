@@ -883,7 +883,10 @@ impl ResultPanel {
             let queue = self.queue.clone();
             let transposed = self.transposed;
             let picked = self.selection_pos.is_some_and(|(_, col)| col > 0);
-            let disabled = transposed || !picked;
+            // 【第 62 批】可用态统一走 [`crate::grid::can_edit_cell`]（与右键「修改单元格」
+            // 同一式子；`PROP_EDITABLE` 的三条条件，见该函数注释）。闭包只在 `self.editable`
+            // 为真时构造，所以这里的 `editable` 恒真——写进去是为了让这条式子就是全部条件。
+            let disabled = !crate::grid::can_edit_cell(self.editable, transposed, picked);
             Button::new("editor-result-edit-cell")
                 .ghost()
                 .small()

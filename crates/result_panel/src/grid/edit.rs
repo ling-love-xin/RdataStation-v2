@@ -18,6 +18,32 @@ use super::delegate::{
 use crate::rowset::RowRef;
 use crate::store::ColumnKind;
 use workbench_shell::product_tokens;
+
+/// 【第 62 批】面板态「能不能编辑这一格」的统一预判。
+///
+/// 对齐 DBeaver `ResultSetPropertyTester.PROP_EDITABLE` 在 `"edit"` / `"inline"` 两条命令上的
+/// 三条条件（`ResultSetPropertyTester.java:120-136`）：
+///
+/// | DBeaver | 本仓参数 |
+/// | --- | --- |
+/// | `getActivePresentation() instanceof IResultSetEditor` | `!record_view`（记录视图是 `PlainTextPresentation` 变体，**不实现** `IResultSetEditor`，`PlainTextPresentation.java:63`） |
+/// | `getCurrentAttribute() != null` | `has_current_cell`（选中 / 右键的**组件列** > 0；组件列 0 是行号槽） |
+/// | 面板级可编辑（`isReadOnly()` 等） | `editable`（宿主用 `editor::exec::editability::result_editable` 算好同步过来，已含 通道 / 项目 / 文档只读 / 连接只读 / 行标识） |
+///
+/// **它不是第二套规则**：权威判据仍在下游——`ResultGridDelegate::begin_edit`（转置 / 可编辑 /
+/// 编辑中 / 行号槽 / 已删行）与 editor 宿主的 `cell_editable`（通道 等）。这条式子只是那两层
+/// 判据在 UI 侧的**同一投影**，用途是「别让入口点了静默落空」（DBeaver 那边 property tester
+/// 起的就是这个作用）。
+///
+/// 三处入口的用法（**别各写一份**）：
+/// - 状态栏「修改」钮：`!can_edit_cell(self.editable, self.transposed, picked)` → 置灰；
+/// - 右键「修改单元格」：`can_edit_cell(target.editable, target.record_mode, true)`；
+/// - 网格 `ENTER`：**不**用这条式子判 `editable`（宿主要拿 `cell_editable` 的
+///   `Err(EditGate)` 在顶部展示原因，提前拦会吞掉提示），只判 `transposed`。
+pub fn can_edit_cell(editable: bool, record_view: bool, has_current_cell: bool) -> bool {
+    editable && !record_view && has_current_cell
+}
+
 impl ResultGridDelegate {
     // ---------- 【T2a-4】单元格编辑 ----------
 

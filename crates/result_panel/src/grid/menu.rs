@@ -6,6 +6,7 @@ use gpui_kit::component::table::TableState;
 use gpui_kit::*;
 
 use super::delegate::ResultGridDelegate;
+use super::edit::can_edit_cell;
 use super::stats::{column_stats, stats_lines};
 use super::text::preview_of;
 use crate::ports::{Presentation, ResultRequest};
@@ -328,7 +329,12 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
     // 只读结果集（`!editable`）整组不摆；已标记删除的底层行不再摆复制 / 删除——
     // 新增空行也一并收起（被删行区段不再产生新的叠加动作）。动作只改本地叠加层，
     // 不下发 INSERT / DELETE。
-    if target.editable && !target.is_deleted {
+    //
+    // 【第 62 批】可编辑 / 记录视图这两条不再手写，统一走 [`can_edit_cell`]
+    // （对齐 DBeaver `PROP_EDITABLE` 的三条条件，见该函数注释）。`is_deleted` 是本仓
+    // 独有的第四个维度：DBeaver 的 `STATE_REMOVED` 只影响 `CMD_CELL_RESET`（`fillEditMenu:3536`），
+    // 不影响编辑项；本仓 `begin_edit` 直接拒绝已删行，所以整段一起收起（§9.44.3）。
+    if can_edit_cell(target.editable, target.record_mode, true) && !target.is_deleted {
         // 【第 61 批】edit 段首「修改单元格」：对齐 DBeaver `fillEditMenu:3518-3525`——
         // 子菜单内最先摆 `CMD_ROW_EDIT` / `CMD_ROW_EDIT_INLINE`（门控 `valueController != null`
         // 且 `!isReadOnly()`），之后 `:3208` 再来一条 Separator 才接行级的 add/copy/delete。

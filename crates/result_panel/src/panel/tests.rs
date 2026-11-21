@@ -1764,6 +1764,29 @@ fn begin_edit_cell_at_uses_the_given_cell_instead_of_the_selection(
     );
 }
 
+/// 【第 62 批】记录（整行 / 转置）视图下不再 emit（对齐 [`crate::grid::can_edit_cell`] 的
+/// `record_view`）：那边状态栏钮是灰的、右键编辑段整段不摆，键位 / 右键请求也不该再把
+/// `DoubleClickedCell` 发出去（delegate 的 `begin_edit` 同样拒绝转置，这里只是提前）。
+#[gpui_kit::test]
+fn begin_edit_cell_at_is_ignored_in_record_view(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|_, app| {
+        panel.update(app, |p, _cx| {
+            p.transposed = true;
+            p.selection_pos = Some((9, 9));
+        });
+    });
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.begin_edit_cell_at(0, 2, cx));
+    });
+    assert_eq!(
+        cx.update(|_, app| panel.read(app).selection_pos),
+        Some((9, 9)),
+        "记录视图只读，不该 emit（哨兵保持不变）"
+    );
+}
+
 /// 【第 58 批】「修改」钮的可用态照 DBeaver `PROP_EDITABLE` 的 `"inline"` 分支：
 /// 要求 `presentation instanceof IResultSetEditor` **且** `getCurrentAttribute() != null`
 /// （`ResultSetPropertyTester.java:127-133`）。记录模式是 `PlainTextPresentation` 的变体、
