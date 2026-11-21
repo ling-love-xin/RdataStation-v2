@@ -207,6 +207,9 @@ impl EditorHostPanel {
                     columns: settings.result_panel.selection_stat_columns,
                     cells: settings.result_panel.selection_stat_cells,
                 };
+                // 【筛选条显隐】对齐 DBeaver `resultset.show.filterPanel`（出厂 true）：
+                // 同样先拷贝（借用不能跨到 `&mut cx`）。
+                let show_filter_panel = settings.result_panel.show_filter_panel;
                 if on {
                     panel.set_show_column_comments(true, cx);
                 }
@@ -219,6 +222,8 @@ impl EditorHostPanel {
                 panel.set_hidden_status_commands(hidden_status_commands, cx);
                 // 【选中统计】状态行三项开关（出厂全关；用户在右键 layout 段或设置页打开）
                 panel.set_selection_stat_prefs(selection_stat_prefs, cx);
+                // 【筛选条显隐】用户上次收起了筛选条就保持收起（右键 layout 段可开回来）
+                panel.set_show_filter_panel(show_filter_panel, cx);
                 // 【R6】段大小：给自己上次设的值（框里也显示它，不然只看得到占位 1000）
                 panel.set_segment_rows_initial(segment_rows.max(1) as usize, window, cx);
                 // 【计算页持久化】用户上次启用的统计项（空串 = 九项全停用，页内给「点 ＋ 添加」提示）

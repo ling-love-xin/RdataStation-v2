@@ -389,6 +389,31 @@ pub fn entries() -> Vec<SettingSpec> {
             disabled: false,
         },
         SettingSpec {
+            // 【DBeaver 对齐】筛选条显隐（`ResultSetPreferences.RESULT_SET_SHOW_FILTER_PANEL`
+            // = `resultset.show.filterPanel`，`:53`；出厂 true
+            // `DataEditorsPreferencesInitializer.java:67`；右键 layout 段
+            // `ToggleFilterPanelAction`，`ResultSetViewer.java:3589-3592`；文案
+            // `ResultSetMessages_zh.properties:131` = 显示过滤器面板）。
+            key: "result_panel.show_filter_panel",
+            section: "result_panel",
+            section_label: "结果集面板",
+            group: "layout",
+            group_label: Some("布局"),
+            label: "显示过滤器面板",
+            hint: "关闭后工具栏左段整条筛选区（筛选输入 / 运行 / 清除 / 筛选设置 / 历史 / \
+                  后退前进 / 结果内查找）不渲染；回开入口是数据格右键的「显示过滤器面板」",
+            hint_inline: true,
+            kind: SettingKind::Bool,
+            presets: &[],
+            default_json: "true",
+            effect: SettingEffect::Immediate,
+            entry: SettingEntry::Page,
+            consumer: "crates/result_panel/src/panel/render.rs::render（筛选条整条显隐）\
+                      / crates/editor/src/view/host/construct.rs（构造期注入）",
+            composite: false,
+            disabled: false,
+        },
+        SettingSpec {
             // 【R5 对齐 DBeaver `viewerSash.setWeights`】右栏（页签侧栏）宽度：
             // DBeaver 的 `panelRatio` 按展示类型存千分比、跨结果集共用（`ResultSetViewer.java:1021-1033`
             // / `:1250-1268`）；本仓右栏是行内固定宽元素，改存 px（差异与理由见 model 注释）。

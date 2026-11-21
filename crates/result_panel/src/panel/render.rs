@@ -1026,7 +1026,10 @@ impl ResultPanel {
             Some(button.into_any_element())
         };
         let controls = result_grid::ResultControls {
-            filter: Some(filter),
+            // 【筛选条显隐】对齐 DBeaver `resultset.show.filterPanel`：关掉时整条不摆
+            // （`updateFilterPanelVisibility:2002-2012` 对 `ResultSetFilterPanel` 整块
+            // `setVisible`；本仓筛选条就是 `render_toolbar` 的左段 `filter` 实参）
+            filter: self.show_filter_panel.then_some(filter),
             value_sidebar: None,
             compare,
             commit,
@@ -1475,8 +1478,9 @@ impl ResultPanel {
             // 第二行：工具栏（跨全宽）
             .child(toolbar_el)
             // 【1.2】筛选展开条：点击筛选组展开按钮后，工具栏下方顶宽输入框 + ▶ + ✕
+            // 【筛选条显隐】整条关掉时展开条一并收起（展开条是筛选区的延伸）
             .children(
-                self.filter_expanded
+                (self.show_filter_panel && self.filter_expanded)
                     .then(|| self.render_filter_expand_bar(cx)),
             )
             // 【结果内查找】查找栏（工具栏下方一行；与展开条互斥场景由调用方口径定：

@@ -588,6 +588,14 @@ impl EditorHostPanel {
                     .update(cx, |p, cx| p.toggle_selection_stat(kind, on, cx));
                 self.persist_result_selection_stats(cx);
             }
+            // 【筛选条显隐】数据格右键 layout 段的「显示过滤器面板」（DBeaver
+            // `ToggleFilterPanelAction.run:5434-5441`：改偏好 → setVisible）：面板收掉
+            // 展开态并重画，宿主随后落盘（与选中统计同一分工）。
+            ResultRequest::ToggleFilterPanel { open } => {
+                self.result_panel
+                    .update(cx, |p, cx| p.toggle_filter_panel(open, cx));
+                self.persist_result_show_filter_panel(cx);
+            }
             // 【R2 计算页】函数集增删 / 复位 / 口径切换：面板本地视图状态（不影响取数），
             // 宿主只转发（与 SetRightTab 同口径）。**启用集要落盘**（对齐 DBeaver
             // `AggregateColumnsPanel.saveSettings` 记住 `enabledFunctions`）：三条改动路径
@@ -671,6 +679,13 @@ impl EditorHostPanel {
             prefs.cells,
             cx,
         );
+    }
+
+    /// 【筛选条显隐】把面板当前的显隐写回全局偏好
+    /// （对齐 DBeaver `ToggleFilterPanelAction.run:5436-5439` 改 `resultset.show.filterPanel`）。
+    pub(crate) fn persist_result_show_filter_panel(&mut self, cx: &mut Context<Self>) {
+        let show = self.result_panel.read(cx).show_filter_panel();
+        settings::SettingsService::set_result_panel_show_filter_panel(show, cx);
     }
 
     /// 【分组页持久化】把面板当前的排序口径写回全局偏好

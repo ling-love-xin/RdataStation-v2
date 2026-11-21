@@ -290,6 +290,10 @@ pub enum ResultRequest {
     /// `ResultSetViewer.switchPresentation():1161-1172` 在 `availablePresentations` 里循环；
     /// 本仓两档：网格 ⇄ 文本）。记录（转置）状态不参与循环（DBeaver 亦然）。
     CyclePresentation,
+    /// 【布局段】显示 / 隐藏筛选条（对齐 DBeaver `ToggleFilterPanelAction`，
+    /// `ResultSetViewer.java:3589-3592` / `:5420-5442`；偏好 `resultset.show.filterPanel`）：
+    /// `open` 是点击后的目标态，落到面板 `show_filter_panel` 并写回设置。
+    ToggleFilterPanel { open: bool },
     /// 右栏标签页切换（列浏览器 / 值详情 / 计算 / 分组；对齐 DBeaver 右侧 metadata /
     /// valueviewer / aggregate / grouping 同栏页签体系）
     SetRightTab(RightTab),

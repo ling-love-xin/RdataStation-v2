@@ -129,6 +129,9 @@ pub enum ContextAction {
     /// 【布局段】显式切到某一档（对齐 DBeaver 给每个 presentation 摆的勾选项，
     /// `ResultSetViewer.java:3558-3577`）
     SetPresentation(Presentation),
+    /// 【布局段·筛选条】显示 / 隐藏整条筛选区（对齐 DBeaver `ToggleFilterPanelAction`，
+    /// `ResultSetViewer.java:3589-3592`；`open` = 点击后的目标态）
+    ToggleFilterPanel { open: bool },
 }
 /// 右键菜单里的一项
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -193,6 +196,8 @@ pub struct ContextTarget {
     pub presentation: Presentation,
     /// 【布局段】记录（转置）视图是否开着（= delegate 的 `transposed`）
     pub record_mode: bool,
+    /// 【布局段】筛选条当前是否显示（DBeaver `resultset.show.filterPanel` 的勾选态）
+    pub show_filter_panel: bool,
 }
 /// 行号槽（`#` 列）右键的项（**纯函数**）：DBeaver 的 `ROW_HEADER` 落点只挂「复制行号」
 /// （`ResultSetViewer.java:3162-3164`；handler `ResultSetHandlerMain.java:377-396`）。
@@ -371,12 +376,14 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             separator_before: false,
         });
     }
-    // 【DBeaver 对齐】右键菜单尾部两段（`ResultSetViewer.fillLayoutMenu:3549-3597` 的顺序）：
-    // 先呈现方式组（记录模式 / 切换表示 / 网格·文本勾选，`:3550-3577`），再选中统计三颗
-    // （`:3581-3587`）。本仓菜单是扁平结构（没有 layout 子菜单），两段直接平铺在尾部；
-    // 「✓」前缀表示当前已选中（DBeaver 用 check box 表达同一件事）。
+    // 【DBeaver 对齐】右键菜单尾部三段（`ResultSetViewer.fillLayoutMenu:3549-3597` 的顺序）：
+    // 呈现方式组（记录模式 / 切换表示 / 网格·文本勾选，`:3550-3577`）→ 选中统计三颗
+    // （`:3580-3588`）→ 筛选条显隐（`:3589-3592`，中间还隔着一条 `Separator`，
+    // 所以该项自带 `separator_before`）。本仓菜单是扁平结构（没有 layout 子菜单），
+    // 三段直接平铺在尾部；「✓」前缀表示当前已选中（DBeaver 用 check box 表达同一件事）。
     items.extend(layout_presentation_menu_items(target));
     items.extend(selection_stat_menu_items(target));
+    items.push(filter_panel_menu_item(target));
     items
 }
 
@@ -420,6 +427,28 @@ pub fn layout_presentation_menu_items(target: &ContextTarget) -> Vec<ContextMenu
         });
     }
     items
+}
+
+/// 【DBeaver 对齐】右键布局段的「显示过滤器面板」项（**纯函数**，
+/// `ResultSetViewer.fillLayoutMenu:3589-3592` 的 `ToggleFilterPanelAction`）：
+///
+/// 文案照中文包 `controls_resultset_viewer_action_show_filter_panel`
+/// （`ResultSetMessages_zh.properties:131` = 「显示过滤器面板」）；DBeaver 是
+/// `AS_CHECK_BOX`，`isChecked()` 直接读偏好 `resultset.show.filterPanel`
+/// （`:5429-5431`），本仓用 `✓ ` 前缀 + `open` 载荷表达同一件事。
+///
+/// 位置：统计三颗**之后**，且带分隔线（DBeaver 在这项前面先 `add(new Separator())`）。
+pub fn filter_panel_menu_item(target: &ContextTarget) -> ContextMenuItem {
+    ContextMenuItem {
+        label: format!(
+            "{}显示过滤器面板",
+            if target.show_filter_panel { "✓ " } else { "" }
+        ),
+        action: ContextAction::ToggleFilterPanel {
+            open: !target.show_filter_panel,
+        },
+        separator_before: true,
+    }
 }
 
 /// 【DBeaver 对齐】选中统计三项开关（**纯函数**，`ResultSetViewer.java:3580-3588`）：
@@ -744,6 +773,8 @@ pub(crate) fn context_menu(
         // 【布局段】呈现方式与记录模式（delegate 侧镜像 / 直读 transposed）
         presentation: delegate.presentation_view(),
         record_mode: delegate.transposed,
+        // 【布局段】筛选条显隐（delegate 侧镜像；反向布尔见字段注释）
+        show_filter_panel: delegate.show_filter_panel(),
     };
     for item in context_menu_items(&target) {
         if item.separator_before {
@@ -1012,6 +1043,16 @@ pub(crate) fn context_menu(
                     menu = menu.item(PopupMenuItem::new(item.label).on_click(
                         move |_, _window, app| {
                             queue.request(ResultRequest::SetPresentation(presentation), app)
+                        },
+                    ));
+                }
+            }
+            // 【布局段·筛选条】显隐同样是面板态：网格只交回请求，面板收掉展开态后重画
+            ContextAction::ToggleFilterPanel { open } => {
+                if let Some(queue) = delegate.action_queue.clone() {
+                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| {
+                            queue.request(ResultRequest::ToggleFilterPanel { open }, app)
                         },
                     ));
                 }

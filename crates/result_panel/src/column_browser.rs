@@ -246,6 +246,8 @@ impl ListDelegate for ColumnBrowserDelegate {
             // 列浏览器菜单同样不摆布局段（呈现方式组只在单元格右键）
             presentation: delegate.presentation_view(),
             record_mode: delegate.transposed,
+            // 同上：筛选条显隐项也不在列浏览器菜单里
+            show_filter_panel: delegate.show_filter_panel(),
         };
         let menu_items = result_grid::column_browser_menu_items(&target);
         // 【多选批量动作】对齐 DBeaver：多选动作挂在**清单右键菜单**上

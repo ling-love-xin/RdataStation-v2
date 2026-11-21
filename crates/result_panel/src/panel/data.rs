@@ -229,6 +229,14 @@ pub struct ResultPanel {
     /// 【1.2】筛选框展开态：点击筛选组展开按钮后，工具栏下方出现顶宽筛选条
     /// （输入框全宽 + ▶ 运行 + ✕ 清除 + wrapped SQL 预览）。默认收起。
     pub(crate) filter_expanded: bool,
+    /// 【DBeaver 对齐 `resultset.show.filterPanel`】工具栏左段整条筛选区是否渲染
+    /// （SQL 预览 / 展开 / 输入 / 运行 / 清除 / 筛选设置 / 历史 / 后退前进 / 查找）。
+    ///
+    /// 等价于 DBeaver 对 `ResultSetFilterPanel` 整块的 `setVisible`
+    /// （`ResultSetViewer.updateFilterPanelVisibility:2002-2012`）。出厂 `true`
+    /// （`DataEditorsPreferencesInitializer.java:67`）；宿主构造期注入偏好，
+    /// 之后数据格右键 layout 段的「显示过滤器面板」可切换并落盘。
+    pub(crate) show_filter_panel: bool,
     /// 【侧栏】左侧栏（网格 / 文本 / 记录竖条）开关；默认开（对齐 DBeaver 左缘
     /// 竖条常驻），状态栏左端开关可收起（完全收起 = 不占宽度）。
     pub(crate) show_left_sidebar: bool,

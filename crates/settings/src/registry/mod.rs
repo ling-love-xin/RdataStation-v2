@@ -223,6 +223,8 @@ pub enum Slot {
     ResultPanelSelectionStatColumns,
     /// 【DBeaver 对齐】状态栏显示「选定的单元格数」（`resultset.show.selected.cells`，出厂关）。
     ResultPanelSelectionStatCells,
+    /// 【DBeaver 对齐 `resultset.show.filterPanel`】是否显示筛选条（出厂开）。
+    ResultPanelShowFilterPanel,
     /// 【R5 对齐 DBeaver `setWeights`】结果集右栏（页签侧栏）宽度（px，192~640）。
     ResultPanelSidebarWidth,
     /// 【R6 对齐 DBeaver `resultSetSize`】「取下一段」一次多少行（下限 1）。
@@ -359,6 +361,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "result_panel.selection_stat_rows" => Slot::ResultPanelSelectionStatRows,
         "result_panel.selection_stat_columns" => Slot::ResultPanelSelectionStatColumns,
         "result_panel.selection_stat_cells" => Slot::ResultPanelSelectionStatCells,
+        "result_panel.show_filter_panel" => Slot::ResultPanelShowFilterPanel,
         "result_panel.sidebar_width" => Slot::ResultPanelSidebarWidth,
         "result_panel.segment_rows" => Slot::ResultPanelSegmentRows,
         "result_panel.hidden_status_commands" => Slot::ResultPanelHiddenStatusCommands,
@@ -473,7 +476,8 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         | Slot::ResultPanelPersistColumnWidths
         | Slot::ResultPanelSelectionStatRows
         | Slot::ResultPanelSelectionStatColumns
-        | Slot::ResultPanelSelectionStatCells => KindTag::Bool,
+        | Slot::ResultPanelSelectionStatCells
+        | Slot::ResultPanelShowFilterPanel => KindTag::Bool,
         Slot::ResultPanelSidebarWidth | Slot::ResultPanelSegmentRows => KindTag::Number,
         // 自由文本（逗号分隔的命令 id）：面板末端 ▾ 菜单与设置页都可写。
         Slot::ResultPanelHiddenStatusCommands => KindTag::Text,

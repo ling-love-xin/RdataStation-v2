@@ -20,8 +20,8 @@ use crate::grid::{
     ResultGridDelegate, ResultMatch, ResultStatus, ResultToolbar, SelectionStatKind,
     SelectionStatPrefs, WINDOW_FETCH_NOTICE, column_browser_menu_items, column_distinct_values,
     column_menu_items, column_stats, column_stats_from_values, context_menu_items, duration_text,
-    fetch_more_hint, format_cell_text, group_by_values, layout_presentation_menu_items,
-    row_number_menu_items,
+    fetch_more_hint, filter_panel_menu_item, format_cell_text, group_by_values,
+    layout_presentation_menu_items, row_number_menu_items,
     selection_stat_menu_items, selection_statistics, stats_lines, status_action_placeholders,
     status_segments, thousands, truncated_hint, truncation_notice, validate_edit_value,
     window_fetch_active,
@@ -107,9 +107,10 @@ fn target(value: &str, name: &str, column: usize) -> ContextTarget {
         selection_stat_rows: false,
         selection_stat_columns: false,
         selection_stat_cells: false,
-        // 【布局段】默认网格态、记录模式关（面板出厂态）
+        // 【布局段】默认网格态、记录模式关（面板出厂态）；筛选条出厂显示
         presentation: Presentation::Grid,
         record_mode: false,
+        show_filter_panel: true,
     }
 }
 
@@ -359,6 +360,8 @@ fn context_menu_offers_filter_copy_and_freeze() {
             "显示选定的行数",
             "显示选定的列数",
             "显示选定的单元格数",
+            // 【筛选条显隐】统计三颗之后（DBeaver `fillLayoutMenu:3589-3592`，见 §9.34）
+            "✓ 显示过滤器面板",
         ]
     );
     assert_eq!(
@@ -586,12 +589,13 @@ fn context_menu_only_offers_insight_when_available() {
         }
     );
     assert!(with[ix].separator_before, "它自成一段，前面要有分隔线");
-    // 【布局段 / 选中统计】layout 段是右键最后一段：洞察项之后只剩呈现方式组 4 项
-    // 与三颗统计开关（顺序照 `fillLayoutMenu:3549-3597`）；`ix` 自身也算在内
+    // 【布局段 / 选中统计 / 筛选条】layout 段是右键最后一段：洞察项之后只剩呈现方式组
+    // 4 项、三颗统计开关、筛选条显隐 1 项（顺序照 `fillLayoutMenu:3549-3597`）；
+    // `ix` 自身也算在内
     assert_eq!(
         with.len() - ix,
-        8,
-        "洞察项起算应只剩它自己 + 呈现方式组 4 项 + 三颗统计开关：{:?}",
+        9,
+        "洞察项起算应只剩它自己 + 呈现方式组 4 项 + 三颗统计 + 筛选条显隐：{:?}",
         with[ix..].iter().map(|i| i.label.as_str()).collect::<Vec<_>>()
     );
 }
@@ -1548,6 +1552,7 @@ fn column_menu_is_the_column_level_subset() {
         // 列头菜单用例不摆布局段（呈现方式组只在单元格右键），字段填出厂态即可
         presentation: Presentation::Grid,
         record_mode: false,
+        show_filter_panel: true,
     };
     let items = column_menu_items(&target);
     let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
@@ -1598,6 +1603,7 @@ fn column_menu_ends_with_the_four_filter_commands() {
         // 列头菜单用例不摆布局段（呈现方式组只在单元格右键），字段填出厂态即可
         presentation: Presentation::Grid,
         record_mode: false,
+        show_filter_panel: true,
     };
     let items = column_menu_items(&target);
     let tail_start = items.len() - 4;
@@ -1801,6 +1807,7 @@ fn column_menu_shows_conditional_items() {
         // 列头菜单用例不摆布局段（呈现方式组只在单元格右键），字段填出厂态即可
         presentation: Presentation::Grid,
         record_mode: false,
+        show_filter_panel: true,
     };
     let items = column_menu_items(&target);
     let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
@@ -1895,6 +1902,7 @@ fn column_menu_lists_distinct_values_and_clear_only_when_active() {
         // 列头菜单用例不摆布局段（呈现方式组只在单元格右键），字段填出厂态即可
         presentation: Presentation::Grid,
         record_mode: false,
+        show_filter_panel: true,
     };
     let items = column_menu_items(&target);
     let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
@@ -4322,28 +4330,35 @@ fn selection_stat_menu_items_flag_current_state_and_flip_on_click() {
 }
 
 /// 【DBeaver 对齐】三颗开关的落点是数据格右键的**尾部**（`fillLayoutMenu` 挂在右键子菜单
-/// `MENU_ID_LAYOUT`，`ResultSetViewer.java:3265-3270`）：本仓菜单扁平，所以它们排在这一落点
-/// 的最后三项；列头箭头菜单 / 列浏览器清单不摆（DBeaver 的 layout 菜单只从表格右键进）。
+/// `MENU_ID_LAYOUT`，`ResultSetViewer.java:3265-3270`）：本仓菜单扁平，所以它们紧排在这一落点
+/// 的最后一段；而 DBeaver 在统计三颗之后还有「显示过滤器面板」（`fillLayoutMenu:3589-3592`），
+/// 故这三颗是**倒数第 2～4 位**、筛选条显隐是最末项。
+/// 列头箭头菜单 / 列浏览器清单不摆（DBeaver 的 layout 菜单只从表格右键进）。
 #[test]
 fn selection_stats_sit_at_the_context_menu_tail_and_not_in_column_menus() {
     let mut target = target_with_table("1", "id", 0);
     target.persist = true;
     let items = context_menu_items(&target);
-    let tail: Vec<&str> = items[items.len() - 3..]
+    let tail: Vec<&str> = items[items.len() - 4..]
         .iter()
         .map(|i| i.label.as_str())
         .collect();
     assert_eq!(
         tail,
-        vec!["显示选定的行数", "显示选定的列数", "显示选定的单元格数"],
-        "三颗选中统计开关应排在数据格右键的最末三项（本仓 layout 段平铺在尾部）"
+        vec![
+            "显示选定的行数",
+            "显示选定的列数",
+            "显示选定的单元格数",
+            "✓ 显示过滤器面板",
+        ],
+        "三颗选中统计开关应紧贴右键末尾（其后再跟过滤器面板开关）"
     );
-    // 持久化项仍在这三颗之前（layout 段是右键最后一段，不是插在中间）
+    // 持久化项仍在这四项之前（layout 段是右键最后一段，不是插在中间）
     let persist_at = items
         .iter()
         .position(|i| matches!(i.action, ContextAction::PersistResultSet))
         .expect("可持久化落点应摆持久化项");
-    assert!(persist_at < items.len() - 3);
+    assert!(persist_at < items.len() - 4);
 
     // 列头菜单不摆（它走另一条路径：DBeaver 列头箭头菜单里没有 layout 段）
     let column_target = target_with_table("1", "id", 0);
@@ -4497,14 +4512,14 @@ fn layout_presentation_menu_items_follow_dbeaver_order() {
 }
 
 /// 【DBeaver 对齐】布局段在右键里的位置：整段排在选中统计三颗**之前**
-/// （`fillLayoutMenu` 里 presentation 段 `:3550-3577` 在前、统计段 `:3581-3587` 在后），
-/// 而选中统计仍是尾部三项；两段都排在持久化项之后。
+/// （`fillLayoutMenu` 里 presentation 段 `:3550-3577` 在前、统计段 `:3581-3587` 在后、
+/// 筛选条显隐 `:3589-3592` 在后），而筛选条显隐是尾部最后一项；四段都排在持久化项之后。
 #[test]
 fn context_menu_puts_layout_group_before_selection_stats() {
     let mut probe = target_with_table("1", "id", 0);
     probe.persist = true;
     let items = context_menu_items(&probe);
-    let tail: Vec<&str> = items[items.len() - 7..]
+    let tail: Vec<&str> = items[items.len() - 8..]
         .iter()
         .map(|i| i.label.as_str())
         .collect();
@@ -4518,18 +4533,20 @@ fn context_menu_puts_layout_group_before_selection_stats() {
             "显示选定的行数",
             "显示选定的列数",
             "显示选定的单元格数",
+            "✓ 显示过滤器面板",
         ],
-        "布局段（4 项）应紧挨在选中统计三颗之前，且三统计仍是尾部三项"
+        "布局段（4 项）应紧挨在选中统计三颗之前，筛选条显隐排在最后"
     );
-    // 两段各自的首项都带分隔线（DBeaver 两段之间也有一条 separator）
-    assert!(items[items.len() - 7].separator_before);
-    assert!(items[items.len() - 3].separator_before);
-    // 持久化项在这七项之前
+    // 三段各自的首项都带分隔线（DBeaver 段与段之间都有 separator）
+    assert!(items[items.len() - 8].separator_before);
+    assert!(items[items.len() - 4].separator_before);
+    assert!(items[items.len() - 1].separator_before);
+    // 持久化项在这八项之前
     let persist_at = items
         .iter()
         .position(|i| matches!(i.action, ContextAction::PersistResultSet))
         .expect("可持久化落点应摆持久化项");
-    assert!(persist_at < items.len() - 7);
+    assert!(persist_at < items.len() - 8);
 
     // 列头菜单不摆布局段（DBeaver layout 菜单只从表格右键进）
     let column_items = column_menu_items(&probe);
@@ -4539,8 +4556,9 @@ fn context_menu_puts_layout_group_before_selection_stats() {
             ContextAction::ToggleRecordMode
                 | ContextAction::CyclePresentation
                 | ContextAction::SetPresentation(_)
+                | ContextAction::ToggleFilterPanel { .. }
         )),
-        "列头菜单不该出现呈现方式组"
+        "列头菜单不该出现呈现方式组 / 筛选条显隐"
     );
 }
 
@@ -4569,4 +4587,48 @@ fn presentation_cycles_between_grid_and_text_and_mirrors_into_delegate() {
         Presentation::Text,
         "呈现方式镜像不该被 set_data 复位"
     );
+}
+
+/// 【DBeaver 对齐】「显示过滤器面板」项（`ResultSetViewer.fillLayoutMenu:3589-3592` 的
+/// `ToggleFilterPanelAction`）：文案照中文包 `ResultSetMessages_zh.properties:131`；
+/// 显示中带 `✓ ` 前缀、`open` 载荷取反（DBeaver `AS_CHECK_BOX` + `isChecked()` 读偏好）；
+/// 该项恒带分隔线（DBeaver 在它前面先 `add(new Separator())`）。
+#[test]
+fn filter_panel_menu_item_flags_visibility_and_flips_on_click() {
+    let shown = target("x", "id", 1);
+    let item = filter_panel_menu_item(&shown);
+    assert_eq!(item.label, "✓ 显示过滤器面板");
+    assert_eq!(item.action, ContextAction::ToggleFilterPanel { open: false });
+    assert!(item.separator_before, "DBeaver 在这项前面有一条 Separator");
+
+    let mut hidden = target("x", "id", 1);
+    hidden.show_filter_panel = false;
+    let item = filter_panel_menu_item(&hidden);
+    assert_eq!(item.label, "显示过滤器面板");
+    assert_eq!(item.action, ContextAction::ToggleFilterPanel { open: true });
+    assert!(item.separator_before);
+}
+
+/// 【筛选条显隐】delegate 侧镜像：出厂「显示」、`set_show_filter_panel` 可翻转、
+/// 换结果（`set_data`）不清（与 `selection_stat_prefs` / `presentation_view` 同口径）。
+///
+/// 内部存的是**反向**布尔（`filter_panel_hidden`），因为 `ResultGridDelegate` 走
+/// `derive(Default)`，而出厂语义是「显示」——这条用例同时钉住默认值落在正确一侧。
+#[test]
+fn delegate_mirrors_filter_panel_visibility_and_defaults_to_shown() {
+    let mut grid = grid_with(&[&["1", "a"]]);
+    assert!(
+        grid.show_filter_panel(),
+        "出厂应显示筛选条（DBeaver `DataEditorsPreferencesInitializer.java:67` 默认 true）"
+    );
+    grid.set_show_filter_panel(false);
+    assert!(!grid.show_filter_panel());
+    // 换一批结果：显隐是面板视图偏好，不随数据清掉
+    grid.set_data(vec!["id".into()], vec![vec!["2".into()]]);
+    assert!(
+        !grid.show_filter_panel(),
+        "筛选条显隐镜像不该被 set_data 复位"
+    );
+    grid.set_show_filter_panel(true);
+    assert!(grid.show_filter_panel());
 }

@@ -2068,6 +2068,35 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【筛选条显隐】注入偏好（宿主构造期调用；与 `set_selection_stat_prefs` 同口径）。
+    pub fn set_show_filter_panel(&mut self, show: bool, cx: &mut Context<Self>) {
+        if self.show_filter_panel == show {
+            return;
+        }
+        self.show_filter_panel = show;
+        self.grid.update(cx, |state, _cx| {
+            state.delegate_mut().set_show_filter_panel(show);
+        });
+        cx.notify();
+    }
+
+    /// 【筛选条显隐】当前是否显示筛选条（宿主落盘设置时读它）。
+    pub fn show_filter_panel(&self) -> bool {
+        self.show_filter_panel
+    }
+
+    /// 【筛选条显隐】切换（数据格右键 layout 段经队列回调；对齐 DBeaver
+    /// `ToggleFilterPanelAction.run:5434-5441` 的「改偏好 + setVisible」两步）。
+    ///
+    /// 收起筛选条时顺带收掉展开态：展开条是筛选区的延伸，整条都不显示时不该留一条
+    /// 顶宽输入框在外面（DBeaver 整块 setVisible 也把内部展开区一起藏掉）。
+    pub fn toggle_filter_panel(&mut self, open: bool, cx: &mut Context<Self>) {
+        if !open {
+            self.filter_expanded = false;
+        }
+        self.set_show_filter_panel(open, cx);
+    }
+
     /// 顶部提示行增量写入（编辑被拦等一次性提示；sync 会全量覆写 notice）
     pub fn set_notice(&mut self, text: Option<String>, cx: &mut Context<Self>) {
         self.notice = text;

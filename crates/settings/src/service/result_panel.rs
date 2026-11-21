@@ -111,6 +111,18 @@ pub(crate) fn apply_slot(
             }
             persist(&cx.global::<Settings>().clone());
         }
+        // 【筛选条显隐】DBeaver `resultset.show.filterPanel`（出厂开）：
+        // 设置页切换后立即生效（面板下次 render 读自身态；见 §9.34 差异第 4 条）。
+        Slot::ResultPanelShowFilterPanel => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            {
+                let settings = cx.global_mut::<Settings>();
+                settings.result_panel.show_filter_panel = on;
+            }
+            persist(&cx.global::<Settings>().clone());
+        }
         Slot::ResultPanelSegmentRows => {
             // 【R6】一段行数：数值项，`< 1` 直接拒绝（对齐
             // `ResultSetPreferences.MIN_SEGMENT_SIZE = 1`；面板侧输入框已按同口径过滤，
@@ -596,6 +608,20 @@ impl crate::service::SettingsService {
             settings.result_panel.selection_stat_rows = rows;
             settings.result_panel.selection_stat_columns = columns;
             settings.result_panel.selection_stat_cells = cells;
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
+    /// 【筛选条显隐】写「显示过滤器面板」偏好（右键 layout 段切换后由宿主落盘）。
+    ///
+    /// 与现值相同则不写盘。
+    pub fn set_result_panel_show_filter_panel(on: bool, cx: &mut App) {
+        if cx.global::<Settings>().result_panel.show_filter_panel == on {
+            return;
+        }
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.result_panel.show_filter_panel = on;
         }
         persist(&cx.global::<Settings>().clone());
     }

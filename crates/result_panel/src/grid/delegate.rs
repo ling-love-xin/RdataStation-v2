@@ -169,6 +169,12 @@ pub struct ResultGridDelegate {
     /// 【布局段】呈现方式镜像（面板态；右键菜单给「网格 / 文本」标勾选态用）。
     /// 与 `selection_stat_prefs` 同口径：视图偏好，不随 `set_data` 清。
     pub(crate) presentation_view: Presentation,
+    /// 【布局段】筛选条是否被**隐藏**（面板态镜像；右键菜单的「✓ 显示过滤器面板」读它）。
+    ///
+    /// 存反向布尔是因为本结构体 `derive(Default)`：出厂语义是「显示」
+    /// （`DataEditorsPreferencesInitializer.java:67` 默认 true），而 `bool` 的
+    /// `Default` 只能给 `false`；存「隐藏」正好让默认值落在正确的一侧。
+    pub(crate) filter_panel_hidden: bool,
     /// 【类型样式】全局偏好（数字格式 / NULL 占位 / 布尔映射 / 按族对齐与前景色）。
     /// 面板在 `set_data` 同一次同步里（或偏好变更时）同步过来；只影响渲染显示，
     /// 复制 / 导出 / 编辑仍用原始值。
@@ -437,6 +443,16 @@ impl ResultGridDelegate {
     /// 【布局段】当前镜像的呈现方式（右键菜单构造 `ContextTarget` 时读）。
     pub fn presentation_view(&self) -> Presentation {
         self.presentation_view
+    }
+
+    /// 【布局段】同步「筛选条显隐」镜像（面板态；右键菜单标勾选态用）。
+    pub fn set_show_filter_panel(&mut self, show: bool) {
+        self.filter_panel_hidden = !show;
+    }
+
+    /// 【布局段】当前镜像的筛选条显隐（`true` = 显示）。
+    pub fn show_filter_panel(&self) -> bool {
+        !self.filter_panel_hidden
     }
 
     /// 表头带该多高（`None` = 用组件默认，即 [`crate::ui::RESULT_TABLE_SIZE`] 档的行高 26px）。

@@ -243,6 +243,9 @@ impl ResultPanel {
             sql_textarea: None,
             sql_dialog_title: None,
             filter_expanded: false,
+            // 【筛选条显隐】出厂显示（对齐 `DataEditorsPreferencesInitializer.java:67`）；
+            // 宿主构造期用 `set_show_filter_panel` 注入用户偏好
+            show_filter_panel: true,
             selection_pos: None,
             // 【P2-1】值查看器 hex 页号（纯视图态，换选中格复位）
             hex_page: 0,

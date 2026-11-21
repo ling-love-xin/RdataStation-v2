@@ -201,6 +201,10 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::ResultPanelSelectionStatCells => {
             SettingValue::Bool(settings.result_panel.selection_stat_cells)
         }
+        // 【筛选条显隐】DBeaver `resultset.show.filterPanel`（出厂开）
+        Slot::ResultPanelShowFilterPanel => {
+            SettingValue::Bool(settings.result_panel.show_filter_panel)
+        }
         // 【R5】结果集右栏宽度（px）
         Slot::ResultPanelSidebarWidth => {
             SettingValue::Number(settings.result_panel.sidebar_width as f64)
@@ -473,7 +477,8 @@ impl SettingsService {
             | Slot::ResultPanelFontText
             | Slot::ResultPanelFontTemporal
             | Slot::ResultPanelFontBool
-            | Slot::ResultPanelFontBlob => result_panel::apply_slot(slot, value, window, cx),
+            | Slot::ResultPanelFontBlob
+            | Slot::ResultPanelShowFilterPanel => result_panel::apply_slot(slot, value, window, cx),
             Slot::LayoutLocked | Slot::LayoutLeftSidebarWidth | Slot::LayoutRightSidebarWidth => {
                 layout::apply_slot(slot, value, window, cx)
             }

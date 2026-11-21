@@ -282,6 +282,8 @@ pub(crate) fn render_th(
         // 列头菜单同样不摆布局段（呈现方式组只在单元格右键）
         presentation: delegate.presentation_view(),
         record_mode: delegate.transposed,
+        // 同上：筛选条显隐项也不在列头菜单里
+        show_filter_panel: delegate.show_filter_panel(),
     };
     let menu_items = column_menu_items(&column_menu_target);
     let copy_column_text = delegate.column_text(column);

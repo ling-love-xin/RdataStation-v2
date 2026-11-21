@@ -36,6 +36,16 @@ pub struct ResultPanel {
     /// 【DBeaver 对齐】状态栏是否显示「选定的单元格数」（`resultset.show.selected.cells`）。
     #[serde(default)]
     pub selection_stat_cells: bool,
+    /// 【DBeaver 对齐 `resultset.show.filterPanel`】是否显示筛选条（默认 `true`，
+    /// `DataEditorsPreferencesInitializer.java:67` 出厂即为 true）。
+    ///
+    /// 作用对象是工具栏左段**整条筛选区**（SQL 预览 / 展开 / 输入 / 运行 / 清除 /
+    /// 筛选设置 / 历史 / 后退前进 / 结果内查找），等价于 DBeaver 的 `ResultSetFilterPanel`
+    /// 整块 setVisible（`ResultSetViewer.updateFilterPanelVisibility:2002-2012`）。
+    /// 关掉后回开的入口只剩右键 layout 段的「显示过滤器面板」（DBeaver 同：
+    /// `fillLayoutMenu:3589-3592` 的 `ToggleFilterPanelAction`）。
+    #[serde(default = "default_true")]
+    pub show_filter_panel: bool,
     /// 【R5 对齐 DBeaver `viewerSash.setWeights`】结果集右栏（页签侧栏）宽度，单位 px
     /// （基准字号 16px 下的像素；实际按界面字号同比例缩放）。
     ///
@@ -165,6 +175,8 @@ impl Default for ResultPanel {
             selection_stat_rows: false,
             selection_stat_columns: false,
             selection_stat_cells: false,
+            // 筛选条出厂显示（对齐 `DataEditorsPreferencesInitializer.java:67`）
+            show_filter_panel: true,
             // 右栏宽度出厂值 = `result_panel::ui::RESULT_SIDEBAR_RIGHT_WIDTH`（20rem @16px）
             sidebar_width: default_result_sidebar_width(),
             segment_rows: default_result_segment_rows(),
