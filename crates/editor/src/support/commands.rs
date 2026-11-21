@@ -58,3 +58,10 @@ pub use result_panel::grid::RESULT_GRID_CONTEXT;
 /// 【第 59 批】结果网格键位动作（定义随结果面板，键位在 `crates/app` 注册）：
 /// `ENTER` → 行内编辑、`Ctrl+反引号` → 切换表示。与 [`RESULT_GRID_CONTEXT`] 配对。
 pub use result_panel::grid::{CycleResultPresentation, EnterCellEdit};
+
+/// 【第 60 批】结果**面板**的 key context（`RESULT_GRID_CONTEXT` 的父层）。
+///
+/// 只用于面板级键位：文本态下网格整块不渲染，网格 context 不在焦点路径上，
+/// `Ctrl+反引号` 得靠这一层命中。命令本身与网格层同一条（`CycleResultPresentation`），
+/// 两层都绑时 gpui 按 context 深度取更深的网格那条，不会重复触发。
+pub use result_panel::panel::RESULT_PANEL_CONTEXT;

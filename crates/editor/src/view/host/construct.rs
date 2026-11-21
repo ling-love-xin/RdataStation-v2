@@ -242,8 +242,8 @@ impl EditorHostPanel {
         // 面板 notify → 本宿主观察回调 drain 分派回动作方法。gpui 的通知延迟到事务
         // 边界派发（app.rs notify → pending_effects），回调执行时面板已不在 update 中，
         // 不会「cannot update while already being updated」。
-        let result_panel_sub = cx.observe_in(&result_panel, window, |this, _panel, _window, cx| {
-            this.drain_result_actions(cx);
+        let result_panel_sub = cx.observe_in(&result_panel, window, |this, _panel, window, cx| {
+            this.drain_result_actions(window, cx);
         });
         // 行选中 → 状态行那一段（⑦ 的“已选第 N 行”）要重画（表格自己不通知宿主）
         let grid_sub = cx.subscribe_in(

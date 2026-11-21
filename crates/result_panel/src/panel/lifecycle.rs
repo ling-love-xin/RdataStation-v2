@@ -185,6 +185,10 @@ impl ResultPanel {
         // `rebuild_value_tree` 解析 + `set_items` 重建；render 只摆 Tree，不解析 JSON
         let json_tree = cx.new(|cx| TreeState::new(cx));
 
+        // 【第 60 批】面板根焦点句柄：文本态（网格不渲染）时焦点落到这里，
+        // 保证面板级键位（`Ctrl+反引号`）仍有 dispatch path（见 `panel::RESULT_PANEL_CONTEXT`）
+        let focus_handle = cx.focus_handle();
+
         // 【列浏览器】清单 List（kit 组件承载：搜索框 / 键盘导航 / 滚动条内置）：
         // delegate 只持投影，数据由 `sync` 灌入；占位网格句柄先借用，`set_grids`
         // 替换网格后 `sync` 会重灌（构造后到接线前不会渲染，见 grid 占位注释）
@@ -210,6 +214,7 @@ impl ResultPanel {
         ));
 
         Self {
+            focus_handle,
             grid,
             json_tree,
             compare_grid: None,

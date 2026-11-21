@@ -1234,3 +1234,47 @@ fn ctrl_backtick_on_the_grid_cycles_presentation(cx: &mut TestAppContext) {
     assert_ne!(before, after, "`Ctrl+反引号` 应切到下一个呈现");
     assert_eq!(after, before.next(), "循环语义：当前档的 `next()`");
 }
+
+/// 【第 60 批】文本态下 `Ctrl+反引号` 能切回网格（面板层键位上下文）。
+///
+/// 这是第 59 批登记的盲区：文本态下网格整块不渲染，`RESULT_GRID_CONTEXT` 不在焦点
+/// 路径上（焦点退化到窗口根），`Ctrl+反引号` 什么也不做。本批的修法 = 面板根挂
+/// `RESULT_PANEL_CONTEXT` + 切呈现后由宿主把焦点移交过去（`presentation_focus_target`）。
+#[gpui_kit::test]
+fn ctrl_backtick_returns_from_the_text_presentation(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id) = edit_ready_shared("select * from orders");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let handle = cx.update(|_window, cx| panel.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&handle, cx));
+    cx.simulate_keystrokes("ctrl-enter");
+    wait_for_result(cx, &panel);
+
+    let results = cx.update(|_window, app| panel.read(app).result_panel_for_test());
+
+    // 第一次：网格 → 文本（焦点在网格上，由宿主切完后移交到面板根）
+    let grid_focus = cx.update(|_window, app| {
+        use gpui_kit::Focusable as _;
+        panel.read(app).grid_for_test().read(app).focus_handle(app)
+    });
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+    cx.simulate_keystrokes("ctrl-`");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(
+        cx.update(|_window, app| results.read(app).presentation()),
+        result_panel::ports::Presentation::Text,
+        "第一次 `Ctrl+反引号` 应切到文本态"
+    );
+
+    // 第二次：网格已不在树里，焦点在面板根 —— 面板层上下文必须接住
+    cx.simulate_keystrokes("ctrl-`");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(
+        cx.update(|_window, app| results.read(app).presentation()),
+        result_panel::ports::Presentation::Grid,
+        "文本态下 `Ctrl+反引号` 应切回网格（面板层键位上下文）"
+    );
+}

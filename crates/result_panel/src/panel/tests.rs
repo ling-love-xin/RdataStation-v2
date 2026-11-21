@@ -5340,3 +5340,36 @@ fn open_find_is_idempotent_and_never_closes(cx: &mut gpui_kit::TestAppContext) {
     assert!(!after_toggle.0, "`toggle_find` 仍是开关语义");
     assert_eq!(after_toggle.1, after_first.1, "关闭时保留查找词");
 }
+
+/// 【第 60 批】切呈现后的焦点目标随呈现变化：文本态 → 面板根，网格态 → 网格。
+///
+/// 钉住的是「文本态不该指回网格」（网格那时不在渲染树里，焦点交过去等于丢焦点），
+/// 端到端行为见 editor 侧 `ctrl_backtick_returns_from_the_text_presentation`。
+#[gpui_kit::test]
+fn presentation_focus_target_follows_the_presentation(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::Focusable as _;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    let panel_handle = cx.update(|_w, app| panel.read(app).focus_handle.clone());
+    let grid = cx.update(|_w, app| panel.read(app).grid.clone());
+    let grid_handle = cx.update(|_w, app| grid.read(app).focus_handle(app));
+    assert_ne!(
+        panel_handle, grid_handle,
+        "面板根与网格必须是两个不同的焦点句柄（否则文本态没有独立落点）"
+    );
+
+    // 出厂 = 网格态 → 目标应是网格
+    let grid_target = cx.update(|_w, app| panel.read(app).presentation_focus_target(app));
+    assert_eq!(grid_target, grid_handle, "网格态应把焦点交给网格");
+
+    // 切到文本态 → 目标应是面板根
+    cx.update(|_window, cx| {
+        panel.update(cx, |p, cx| {
+            p.set_presentation(crate::ports::Presentation::Text, cx);
+        });
+    });
+    let text_target = cx.update(|_w, app| panel.read(app).presentation_focus_target(app));
+    assert_eq!(text_target, panel_handle, "文本态应把焦点交给面板根");
+}

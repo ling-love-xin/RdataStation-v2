@@ -1540,6 +1540,9 @@ impl ResultPanel {
             .h_full()
             .min_h_0()
             .debug_selector(|| "editor-result-root".to_string())
+            // 【第 60 批】面板级键位上下文 + 焦点落点（文本态下网格不渲染时仍能切表示）
+            .key_context(super::RESULT_PANEL_CONTEXT)
+            .track_focus(&self.focus_handle)
             .when(resizing_right_sidebar, |el| {
                 // 手柄拖拽只由左键发起，所以松手也只听左键
                 el.on_mouse_up(MouseButton::Left, move |_, _window, app| {

@@ -68,25 +68,26 @@ impl EditorHostPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        tracing::info!(doc = %self.document, "【探针】on_enter_cell_edit：结果网格进入行内编辑（Enter）");
         self.result_panel
             .update(cx, |panel, cx| panel.begin_edit_cell(cx));
     }
 
     /// 【第 59 批】结果网格 `Ctrl+反引号`：切到下一个呈现
     /// （DBeaver `CMD_SWITCH_PRESENTATION`，`plugin.xml:1059`）。
+    ///
+    /// 【第 60 批】两层 context（网格 / 面板）共用这一个 handler：焦点在网格时由网格那条
+    /// 命中，焦点在面板（文本态）时由面板那条命中。切完要**移交焦点**（面板层拿不到
+    /// window，见 `ResultPanel::presentation_focus_target` 的说明）。
     pub(crate) fn on_cycle_result_presentation(
         &mut self,
         _: &CycleResultPresentation,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        tracing::info!(
-            doc = %self.document,
-            "【探针】on_cycle_result_presentation：结果网格切换表示（Ctrl+反引号）"
-        );
         self.result_panel
             .update(cx, |panel, cx| panel.cycle_presentation(cx));
+        let target = self.result_panel.read(cx).presentation_focus_target(cx);
+        window.focus(&target, cx);
     }
 
     /// 【撤销】撤销一步结果编辑：格子恢复「上一步的值」（DBeaver 粒度 = 每格编辑一步）。

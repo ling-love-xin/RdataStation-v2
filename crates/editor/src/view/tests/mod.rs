@@ -88,6 +88,12 @@ fn bind_editor_keys(cx: &mut TestAppContext) {
                 crate::commands::CycleResultPresentation,
                 Some(crate::commands::RESULT_GRID_CONTEXT),
             ),
+            // 【第 60 批】同一条键再绑面板层上下文（文本态下网格不在焦点路径上）
+            KeyBinding::new(
+                "ctrl-`",
+                crate::commands::CycleResultPresentation,
+                Some(crate::commands::RESULT_PANEL_CONTEXT),
+            ),
         ]);
     });
 }

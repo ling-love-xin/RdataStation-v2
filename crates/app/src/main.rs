@@ -346,6 +346,14 @@ fn run_app() {
                     editor::commands::CycleResultPresentation,
                     Some(editor::commands::RESULT_GRID_CONTEXT),
                 ),
+                // 【第 60 批】同一条 `Ctrl+反引号` 再绑到**面板层**上下文：文本态下网格
+                // 整块不渲染，网格 context 不在焦点路径上；焦点落在面板根时靠这条命中
+                // （两层同时匹配时 gpui 按 context 深度取更深的网格那条，不会切两次）。
+                KeyBinding::new(
+                    "ctrl-`",
+                    editor::commands::CycleResultPresentation,
+                    Some(editor::commands::RESULT_PANEL_CONTEXT),
+                ),
                 // M8 洞察：`Ctrl+Shift+R` = 重算当前目标的画像。键位绑在 `insight` context 上
                 // （面板根元素的 `key_context`），只有焦点在洞察面板内才生效，
                 // 不抢其它面板的同名键。

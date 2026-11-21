@@ -6,6 +6,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::input::{InputState, TextareaState};
 use gpui_kit::component::table::{TableDelegate as _, TableEvent, TableState};
+use gpui_kit::Focusable as _;
 use gpui_kit::*;
 
 // 【B5】事实帧只读句柄随网格投影进 delegate（列式统计 / 原生数值排序交互派生时读取）
@@ -471,6 +472,20 @@ impl ResultPanel {
     /// 开关，不在 `availablePresentations` 列表里。
     pub fn cycle_presentation(&mut self, cx: &mut Context<Self>) {
         self.set_presentation(self.presentation.next(), cx);
+    }
+
+    /// 【第 60 批】切换呈现后的**焦点目标**：文本态 → 面板根句柄；网格态 → 网格自身句柄。
+    ///
+    /// 文本态下网格整块不渲染，原焦点元素消失后 gpui 的 dispatch 退化到窗口根，
+    /// 面板的 `RESULT_PANEL_CONTEXT` 不再在焦点路径上（`Ctrl+反引号` 就切不回来）；
+    /// 网格态则要保证 `ENTER` 落在 `RESULT_GRID_CONTEXT` 上。宿主在切完后用
+    /// `window.focus(&panel.read(cx).presentation_focus_target(cx), cx)` 移交
+    /// （面板层拿不到 window：`render` 是 `&App`、事件方法用 `Context<Self>`）。
+    pub fn presentation_focus_target(&self, cx: &App) -> FocusHandle {
+        match self.presentation {
+            Presentation::Text => self.focus_handle.clone(),
+            Presentation::Grid => self.grid.read(cx).focus_handle(cx),
+        }
     }
 
     /// 【右栏】标签页切换（列浏览器 / 值详情 / 计算 / 分组 / 引用 / 执行SQL）。

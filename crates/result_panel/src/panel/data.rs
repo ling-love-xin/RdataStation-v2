@@ -192,6 +192,9 @@ pub struct ResultSyncInput {
 
 /// 结果面板实体
 pub struct ResultPanel {
+    /// 【第 60 批】面板根焦点句柄：挂在根元素的 `track_focus` 上，作为文本态（网格不渲染、
+    /// 焦点元素消失）时的焦点落点，让面板级键位（`Ctrl+反引号`）仍有 dispatch path。
+    pub(crate) focus_handle: FocusHandle,
     /// 主网格（编辑器构造期创建并注入钩子，面板只持有并渲染 / 投影）
     pub(crate) grid: Entity<TableState<ResultGridDelegate>>,
     /// 对比栏网格（对比模式才渲染；数据由编辑器 `sync_compare_grid` 拷入）

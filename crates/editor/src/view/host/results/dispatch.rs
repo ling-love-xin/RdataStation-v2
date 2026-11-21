@@ -9,11 +9,13 @@ use result_panel::ports::{ResultRequest, RightTab};
 impl EditorHostPanel {
     /// 处理中可能**再入队**（如 `SetPushdown` 打开且有词 → 面板入队 `PushdownFilter`），
     /// 所以循环 drain 直到队列空——新请求落进下一轮，同一次事件里一并消化。
-    pub(crate) fn drain_result_actions(&mut self, cx: &mut Context<Self>) {
+    ///
+    /// 【第 60 批】带 `window`：切表示要移交焦点（面板层拿不到 window）。
+    pub(crate) fn drain_result_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mut pending = self.result_action_queue.drain();
         while !pending.is_empty() {
             for request in std::mem::take(&mut pending) {
-                self.dispatch_result_request(request, cx);
+                self.dispatch_result_request(request, window, cx);
             }
             pending = self.result_action_queue.drain();
         }
@@ -39,10 +41,19 @@ impl EditorHostPanel {
         }
     }
 
+    /// 【第 60 批】切呈现后移交焦点：目标由面板按当前呈现给出（文本态 → 面板根，
+    /// 网格态 → 网格）。面板层拿不到 window（`render` 是 `&App`、事件方法用
+    /// `Context<Self>`），所以这一步落在宿主这侧。
+    fn focus_after_presentation_switch(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let target = self.result_panel.read(cx).presentation_focus_target(cx);
+        window.focus(&target, cx);
+    }
+
     /// 单条结果动作的分派（语义与渲染区删除前的按钮回调一一对应）
     pub(crate) fn dispatch_result_request(
         &mut self,
         request: ResultRequest,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match request {
@@ -383,14 +394,18 @@ impl EditorHostPanel {
                     .update(cx, |panel, cx| panel.snapshot_column_layout(cx));
                 self.result_panel.update(cx, |_, cx| cx.notify());
             }
-            // 【呈现】显示方式（网格 / 文本）：纯面板状态，宿主只转发
+            // 【呈现】显示方式（网格 / 文本）：纯面板状态，宿主只转发。
+            // 【第 60 批】切完移交焦点：文本态下网格卸载、焦点会退化到窗口根，
+            // 面板级 `Ctrl+反引号` 就切不回来（目标句柄见 `presentation_focus_target`）。
             ResultRequest::SetPresentation(presentation) => {
                 self.result_panel
                     .update(cx, |p, cx| p.set_presentation(presentation, cx));
+                self.focus_after_presentation_switch(window, cx);
             }
             // 【呈现·布局段】切到下一档（DBeaver `CMD_SWITCH_PRESENTATION`）：同为面板状态
             ResultRequest::CyclePresentation => {
                 self.result_panel.update(cx, |p, cx| p.cycle_presentation(cx));
+                self.focus_after_presentation_switch(window, cx);
             }
             // 【右栏】标签页切换（列浏览器 / 值详情 / 计算 / 分组）：纯面板状态
             ResultRequest::SetRightTab(tab) => {

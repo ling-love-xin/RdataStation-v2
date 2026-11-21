@@ -366,12 +366,12 @@ fn pushdown_re_runs_on_the_source_as_a_new_result_set(cx: &mut TestAppContext) {
     run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
     assert_eq!(shared.results().set_count(&id), 1, "先是本地那一份");
 
-    cx.update(|_window, cx| {
+    cx.update(|window, cx| {
         panel.update(cx, |panel, cx| {
             panel.set_filter_for_test("orders", cx);
             panel.set_pushdown(true, cx);
             // Dock 化：开关翻转只入队 PushdownFilter，drain 才真正重查（对齐生产事件路径）
-            panel.drain_result_actions(cx);
+            panel.drain_result_actions(window, cx);
         });
     });
     wait_for_all_pending(cx, &panel);
@@ -494,12 +494,12 @@ fn refreshing_a_filtered_result_keeps_its_shape(cx: &mut TestAppContext) {
     let (panel, cx) = open_panel(cx, &shared, &id);
 
     run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
-    cx.update(|_window, cx| {
+    cx.update(|window, cx| {
         panel.update(cx, |panel, cx| {
             panel.set_filter_for_test("orders", cx);
             panel.set_pushdown(true, cx);
             // Dock 化：开关翻转只入队 PushdownFilter，drain 才真正重查（对齐生产事件路径）
-            panel.drain_result_actions(cx);
+            panel.drain_result_actions(window, cx);
         });
     });
     wait_for_all_pending(cx, &panel);
@@ -577,12 +577,12 @@ fn pushdown_without_support_says_so(cx: &mut TestAppContext) {
     let (panel, cx) = open_panel(cx, &shared, &id);
 
     run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
-    cx.update(|_window, cx| {
+    cx.update(|window, cx| {
         panel.update(cx, |panel, cx| {
             panel.set_filter_for_test("a", cx);
             panel.set_pushdown(true, cx);
             // Dock 化：开关翻转只入队 PushdownFilter，drain 才真正重查（对齐生产事件路径）
-            panel.drain_result_actions(cx);
+            panel.drain_result_actions(window, cx);
         });
     });
     wait_for_all_pending(cx, &panel);
