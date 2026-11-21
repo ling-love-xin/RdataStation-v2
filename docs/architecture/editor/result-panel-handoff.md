@@ -2550,6 +2550,36 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 门禁基线（第 56 批后）：result_panel **394 passed**、editor check `Finished`（0 warning）、
   editor lib **800 passed（1 ignored）**、ui-guard **4 passed**；本批未动 settings。
 
+### 2.108 状态栏「修改单元格」钮的接手要点（2026-11-21）
+
+- **一颗钮、一条事件**：`editor-result-edit-cell`（`panel/render.rs`）只发
+  `ResultRequest::BeginEditCell`；面板 `begin_edit_cell` 读 `grid.selected_cell()` 后
+  **emit `TableEvent::DoubleClickedCell(row, col)`**。也就是说它与双击是**同一条链路**，
+  不是另一套编辑入口。改行为请改宿主的 `DoubleClickedCell` 订阅（`host/construct.rs:325-339`），
+  不要在这里另写门控——两套判定一定会分叉。
+- **组件列 0 是行号槽**：`begin_edit_cell` 判 `col == 0` 直接 return；宿主侧同样做
+  `col.saturating_sub(1)`（`construct.rs:337`）。把手动改列偏移的话两处必须一起改。
+- **`ResultControls` 有三处书写，加字段必同步**：`panel/render.rs` 的
+  （1）全字段字面量、（2）**全字段解构（无 `..`，漏加即 E0027）**、（3）`..Default::default()`。
+  本批新增 `edit_row: Option<AnyElement>` 时三处都动了。
+- **占位号是 `placeholders[4]`**：`grid/status.rs:220` 的 Pencil 占位描述本就写着
+  「修改选中格（双击单元格进入编辑）」——本批把占位换成真钮，文案与行为终于对上。
+  只读结果集不注入真钮 → 回退该占位，布局不跳。
+- **为什么不是外部值编辑器**：DBeaver 状态条 `row.edit` 是 `openValueEditor(false)`
+  （`ResultSetHandlerMain.java:207-211`），双击/回车才是 `inline`（`:212-216`、键位
+  `plugin.xml:1071/1072`）。本仓无「值编辑器 + 写回」通道（`ports.rs:214-215`），只能落内嵌这一族，
+  这是 §9.40.3 记的第 1 条有意差异。
+- **未做**：`SHIFT+ENTER` 外部编辑键位；右键 edit 段的「编辑单元格」项（`BeginEditCell` 读的是
+  选中格，菜单 target 是右键格，语义不同）；状态条默认可见集里 `fetch.page`（本仓有意常显）与
+  `undo`/`redo`（本仓默认隐藏，已对上）之外的其余差异。
+- 用例：`begin_edit_cell_emits_the_double_click_only_for_data_cells`（窗口，哨兵 `selection_pos`
+  抹掉 `SelectCell` 副作用）、`analysis.rs::begin_edit_cell_request_enters_inline_editing`
+  （端到端：真跑 SQL → 选中 → 面板入口 → `delegate().editing()`）。窗口用例必须先
+  `cx.update(gpui_kit::init)`；`VisualTestContext` 里取 `Entity::read` 要
+  `cx.update(|_window, app| panel.read(app).…)`。
+- 门禁基线（第 57 批后）：result_panel **395 passed**、editor check `Finished`（0 warning）、
+  editor lib **801 passed（1 ignored）**、ui-guard **4 passed**；本批未动 settings。
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。

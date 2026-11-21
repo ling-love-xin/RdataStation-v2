@@ -7584,6 +7584,99 @@ toolbar 只剩 `filtersCustomButton` + `openFindReplaceButton`。
   editor `cargo check` `Finished`（0 warning）、`rds-editor --lib` **800 passed（1 ignored）**、
   `rds-ui-guard` **4 passed**。本批未动 `crates/settings`，不重跑其测试。
 
+### 9.40 状态栏「修改单元格」钮接线（对齐 DBeaver `resultsetViewer.bottom` 的 `row.edit`，2026-11-21）
+
+§9.39 把重心移回工具栏后，§9.39.3 第 6 条登记的「状态条默认可见集差异」是下一批候选。本批先落其中的
+`row.edit`：那是唯一「DBeaver 默认可见、本仓有占位却没接线」的钮——占位钮在，点下去没反应。
+
+#### 9.40.1 dbeaver-ref 取证（现源实读）
+
+| 位置 | 内容 |
+| --- | --- |
+| `plugin.xml:1380-1397` | `toolBar key="resultsetViewer.bottom"` 的默认可见集 |
+| `:1386` | `<item commandId="…resultset.row.edit" defaultVisibility="true"/>`——**默认可见**，紧接 `:1387` row.add |
+| `:1384-1385` | `edit.undo` / `edit.redo` 默认 `false` |
+| `:1394` | `fetch.page` 默认 `false` |
+| `plugin.xml:258-259` | 两个命令定义：`resultset.row.edit` / `resultset.row.edit.inline` |
+| `:687/:695` | 两个命令共用一个 handler：`ResultSetHandlerMain` |
+| `ResultSetHandlerMain.java:207-211` | `CMD_ROW_EDIT` → `rse.openValueEditor(false)`：**外部对话框 / 编辑器** |
+| `ResultSetHandlerMain.java:212-216` | `CMD_ROW_EDIT_INLINE` → `rse.openValueEditor(true)`：**内嵌编辑器** |
+| `plugin.xml:1071` | `SHIFT+ENTER` → `row.edit`（外部） |
+| `plugin.xml:1072` | `ENTER` → `row.edit.inline`（内嵌） |
+| `plugin.xml:972-978` | 编辑菜单 `menu:edit?after=data` 里两项**都摆**（`visibleWhen checkEnabled`） |
+| `bundle_zh.properties:134-137` | `row.edit` = 「编辑单元格」，描述「在单独的对话框/编辑器中编辑单元格」；`row.edit.inline` = 「内嵌编辑」 |
+
+**关键读法**：状态条那颗是**外部值编辑器**（`false`），双击 / 回车进入的是**内嵌**（`true`）。
+在 DBeaver 里这是两条命令、两个入口，不是同一个按钮的两种行为。
+
+#### 9.40.2 本仓落点与语义裁定
+
+本仓**没有**「值编辑器 + 写回」通道（`ports.rs:214-215` 已明写「只读预览、无写回通道」），
+`CMD_ROW_EDIT` 无处落。选 `CMD_ROW_EDIT_INLINE` 的同一条链路：**面板 emit
+`TableEvent::DoubleClickedCell(组件行, 组件列)`，与双击完全同路。**
+
+| 文件 | 落点 |
+| --- | --- |
+| `result_panel/src/ports.rs` | `ResultRequest::BeginEditCell`（紧跟 `DeleteRow(usize)` 之后） |
+| `result_panel/src/panel/events.rs` | `pub fn begin_edit_cell(&mut self, cx)`：读 `grid.selected_cell()`；`None` 或组件列 `0` 直接 return；否则 `grid.update(cx, \|_s, cx\| cx.emit(TableEvent::DoubleClickedCell(row, col)))` |
+| `result_panel/src/grid/status.rs` | `ResultControls` 新增 `edit_row: Option<AnyElement>`（`insert_row` 之前）；`EditRow` 分支改为 `controls.edit_row.unwrap_or_else(\|\| placeholder_btn(placeholders[4]))` |
+| `result_panel/src/panel/render.rs` | `self.editable.then(\|\| Button::new("editor-result-edit-cell") …)`；`ResultControls` 三处书写（全字段字面量 / **全字段解构** / `..Default::default()`）全部补 `edit_row` |
+| `editor/src/view/host/results/dispatch.rs` | `ResultRequest::BeginEditCell => self.result_panel.update(cx, \|p, cx\| p.begin_edit_cell(cx))` |
+
+三条裁定：
+
+1. **门控不在面板侧重复**。`begin_edit_cell` 只判「有没有选中格」与「是不是行号槽」；通道 / 项目 /
+   键列 / 只读由 editor 宿主的 `DoubleClickedCell` 订阅再判一次（`host/construct.rs:325-339`，
+   那里的 `col.saturating_sub(1)` 同时证明组件列 0 是行号槽）。这保证「修改」钮与双击**永不出现两套判定**。
+2. **不加 `col == 0` 之外的猜测**。`selected_cell()` 只在 cell 选择模式返回 `Some`；整行模式 / 未选中
+   → `None` → 静默返回（等价于 DBeaver 那边命令 enabled 由选中态算）。
+3. **只读结果集仍摆禁用占位**。`edit_row` 为 `None` 时回退 `placeholder_btn(placeholders[4])`，
+   与 insert / duplicate / delete 同口径，布局不跳。
+
+#### 9.40.3 已对上 / 有意差异
+
+**已对上（4 条）**：
+
+1. **位置**：write 段首（`grid/status.rs:728-736`），在「新增行」之前——对应 `plugin.xml:1386`
+   在 `:1387` row.add 之前。
+2. **默认可见**：`StatusCommand::default_visible` 只隐藏 `Undo` / `Redo`（`ports.rs:930-939`），
+   `EditRow` 常摆——与 `:1386` `defaultVisibility="true"` 一致。
+3. **只读门控**：DBeaver 要 `presentation instanceof IResultSetEditor`（`:208`）才开编辑器；
+   本仓由 `self.editable` 决定注入真钮还是占位。
+4. **无选中不做**：两边都不许在「没定位到格」时打开编辑器。
+
+**有意差异（4 条，勿当 bug 修）**：
+
+1. **落点是行内编辑，不是外部值编辑器**：本仓无「值编辑器 + 写回」通道，`row.edit` 改走
+   `row.edit.inline` 的链路。tooltip 写「修改当前选中单元格（进入行内编辑）」，避免让人以为会弹对话框。
+2. **label 沿用「修改单元格」**：DBeaver 中文是「编辑单元格」（`bundle_zh.properties:137`）；
+   本仓 `StatusCommand::EditRow` 的 label 是 §9.24 定的「修改单元格」，本批不改
+   （改它要连带 `status_config_items` 的设置项文案）。
+3. **没有 `SHIFT+ENTER` 外部编辑键位**：本仓无外部编辑器，不接 `:1071`。
+4. **右键 edit 段不摆「编辑单元格」**：DBeaver 的 `menu:edit` 里两项都摆（`:972-978`）。本仓右键
+   edit 段现为「插入行(下方) / 复制行 / 删除行 / 从上一行复制 / 从下一行复制」，不加编辑项——
+   双击本身就是内嵌编辑，菜单再加一项是重复入口；且本仓 `BeginEditCell` 读的是**网格选中格**，
+   右键菜单的 target 是**右键定位的格**，两者语义不同，要摆得另开一个带 `(row, col)` 的请求。
+   **登记为候选，不擅自加。**
+
+#### 9.40.4 用例与门禁
+
+- 新增窗口用例 `panel/tests.rs::begin_edit_cell_emits_the_double_click_only_for_data_cells`
+  （在 `panel_harness` 之后）：首行 `cx.update(gpui_kit::init)`（首跑缺它直接 panic
+  `no state of type gpui_theme::Theme exists`）；用哨兵 `p.selection_pos = Some((9, 9))` 抹掉
+  `set_selected_cell` 自带的 `SelectCell` 副作用，再断言数据格 `(0, 2)` → 收到 `DoubleClickedCell`
+  且 `selection_pos = Some((0, 2))`，行号槽 `(0, 0)` → 保持 `(9, 9)`（一次都没 emit）。
+- 新增端到端用例 `editor/src/view/tests/analysis.rs::begin_edit_cell_request_enters_inline_editing`：
+  真跑一次 `select * from orders` → `set_selected_cell(0, 2)` → 调面板 `begin_edit_cell` → `draw()`
+  → 断言 `delegate().editing().is_some()`。这条补的是鼠标事件链之外的一环：
+  `cell_edit_enters_on_double_click_and_commits_on_enter` 直接 `cx.emit` 打事件，只验宿主订阅；
+  这条从**面板的入口方法**走，验「修改」钮的落点确实通到宿主。
+  **期间踩坑**：`panel.read(cx)` 的 `cx` 必须是 `&App`，在 `VisualTestContext` 里要写成
+  `cx.update(|_window, app| panel.read(app).…)`（否则 E0308）。
+- **门禁**：`rds-result-panel` **395 passed**（并列首跑 394 passed / 1 failed，即缺 `gpui_kit::init` 那条）、
+  editor `cargo check` `Finished`（0 warning）、`rds-editor --lib` **801 passed（1 ignored）**、
+  `rds-ui-guard` **4 passed**。本批未动 `crates/settings`，不重跑其测试。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
