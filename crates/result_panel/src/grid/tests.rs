@@ -20,8 +20,8 @@ use crate::grid::{
     ResultGridDelegate, ResultMatch, ResultStatus, ResultToolbar, SelectionStatKind,
     SelectionStatPrefs, WINDOW_FETCH_NOTICE, column_browser_menu_items, column_distinct_values,
     column_menu_items, column_stats, column_stats_from_values, context_menu_items, duration_text,
-    fetch_more_hint, filter_panel_menu_item, format_cell_text, group_by_values,
-    layout_presentation_menu_items, row_number_menu_items,
+    fetch_more_hint, filter_panel_menu_item, filter_settings_menu_items, format_cell_text,
+    group_by_values, layout_presentation_menu_items, row_number_menu_items,
     selection_stat_menu_items, selection_statistics, stats_lines, status_action_placeholders,
     status_segments, thousands, truncated_hint, truncation_notice, validate_edit_value,
     window_fetch_active,
@@ -345,6 +345,12 @@ fn context_menu_offers_filter_copy_and_freeze() {
             "复制此列（2 个取值）",
             "复制整行（TSV）",
             "复制整行为 JSON",
+            // 【DBeaver 对齐】`fillContextMenu:3166-3177` 复制段之后挂 filters 子菜单，
+            // 本仓扁平化后 = `fillFiltersMenu` 尾部四项（见 §9.35）
+            "保存过滤器设置",
+            "重置过滤器设置",
+            "删除所有过滤 / 排序",
+            "编辑筛选设置…",
             "按「name」升序（下发源库）",
             "按「name」降序（下发源库）",
             "冻结「name」",
@@ -399,14 +405,14 @@ fn context_menu_offers_filter_copy_and_freeze() {
         "【A9】整行 JSON（单对象，与导出 JSON 档同口径）"
     );
     assert_eq!(
-        items[7].action,
+        items[11].action,
         ContextAction::SortDown {
             column: "name".to_string(),
             descending: false
         }
     );
     assert_eq!(
-        items[8].action,
+        items[12].action,
         ContextAction::SortDown {
             column: "name".to_string(),
             descending: true
@@ -414,17 +420,22 @@ fn context_menu_offers_filter_copy_and_freeze() {
     );
     assert!(
         items[7].separator_before,
-        "“对整份结果的操作”那组前面要有分隔线"
+        "filters 段（复制段之后）之前要有分隔线（DBeaver `fillContextMenu:3166`）"
     );
-    assert!(!items[9].separator_before, "冻结与排序同组");
-    assert_eq!(items[9].action, ContextAction::ToggleFreeze(1));
+    assert!(
+        items[11].separator_before,
+        "排序段与上方行级动作段之间保留一条分隔线（本仓没有 DBeaver 的 navigate 子菜单，\
+         用它代替 `fillContextMenu:3217` 的 Separator）"
+    );
+    assert!(!items[13].separator_before, "冻结与排序同组");
+    assert_eq!(items[13].action, ContextAction::ToggleFreeze(1));
     assert_eq!(
-        items[10].action,
+        items[14].action,
         ContextAction::HideColumn(1),
         "【P2】隐藏此列跟在冻结后（都是列级动作）"
     );
     assert_eq!(
-        items[11].action,
+        items[15].action,
         ContextAction::ColumnStats { column: 1 },
         "【P2-3】列统计与隐藏同组"
     );
@@ -438,14 +449,14 @@ fn context_menu_offers_filter_copy_and_freeze() {
     let mut done = target.clone();
     done.frozen = true;
     let items = context_menu_items(&done);
-    assert_eq!(items[9].label, "取消冻结此列", "已冻结时给的是反向动作");
+    assert_eq!(items[13].label, "取消冻结此列", "已冻结时给的是反向动作");
 
     // 【P2】隐藏了列才出现「显示全部列」
     let mut hidden = target.clone();
     hidden.hidden_columns = 2;
     let items = context_menu_items(&hidden);
     assert_eq!(
-        items[12].action,
+        items[16].action,
         ContextAction::ShowAllColumns,
         "隐藏非空时给恢复入口（排在「列统计」之后）"
     );
@@ -4631,4 +4642,77 @@ fn delegate_mirrors_filter_panel_visibility_and_defaults_to_shown() {
     );
     grid.set_show_filter_panel(true);
     assert!(grid.show_filter_panel());
+}
+
+/// 【DBeaver 对齐】filters 子菜单不只属于列头：`fillContextMenu:3169-3177` 对
+/// DATA / COLUMN_HEADER / ROW_HEADER 三个落点都挂 filtersMenu（无落点门控），所以
+/// `fillFiltersMenu` 尾部四项（`:3926-3932`）在数据格右键也摆。位置照 `fillContextMenu`：
+/// 复制段之后（`:3166` 先一条 Separator）、排序段之前（order 子菜单在 filters 之后，`:3179-3187`）。
+#[test]
+fn data_cell_context_menu_also_offers_the_filter_settings_group() {
+    let target = target("orders", "name", 1);
+    let items = context_menu_items(&target);
+
+    // 四项的文案 / 动作 / 分隔线口径只在 `filter_settings_menu_items` 一处定义
+    let expected = filter_settings_menu_items();
+    assert_eq!(expected.len(), 4, "filters 段固定四项");
+    assert!(
+        expected[0].separator_before,
+        "四项前有一条 Separator（DBeaver `:3166` 先 `add(new Separator())` 再挂 filtersMenu）"
+    );
+    assert!(
+        expected[1..].iter().all(|item| !item.separator_before),
+        "四项内部不再插分隔线（DBeaver 是一条 Separator 后四连摆）"
+    );
+
+    let start = items
+        .iter()
+        .position(|item| item.action == ContextAction::SaveFilterSetting)
+        .expect("数据格右键要摆 filters 段");
+    let group: Vec<&str> = items[start..start + 4]
+        .iter()
+        .map(|item| item.label.as_str())
+        .collect();
+    assert_eq!(
+        group,
+        vec![
+            "保存过滤器设置",
+            "重置过滤器设置",
+            "删除所有过滤 / 排序",
+            "编辑筛选设置…",
+        ]
+    );
+
+    // 位置：复制段之后、排序段之前
+    let last_copy = items
+        .iter()
+        .rposition(|item| {
+            matches!(
+                item.action,
+                ContextAction::CopyRow(_)
+                    | ContextAction::CopyRowJson(_)
+                    | ContextAction::CopyRowInsert(_)
+            )
+        })
+        .expect("复制段至少有一项");
+    let first_sort = items
+        .iter()
+        .position(|item| matches!(item.action, ContextAction::SortDown { .. }))
+        .expect("排序段至少有一项");
+    assert!(
+        last_copy < start,
+        "filters 段排在复制段之后（DBeaver `:3166-3177`）"
+    );
+    assert!(
+        start + 3 < first_sort,
+        "filters 段排在排序段之前（DBeaver order 子菜单在 filters 之后，`:3179-3187`）"
+    );
+
+    // 列头菜单仍只摆一份（两处共用同一纯函数，不允许任一处重复 extend）
+    let column_items = column_menu_items(&target);
+    let column_saves = column_items
+        .iter()
+        .filter(|item| item.action == ContextAction::SaveFilterSetting)
+        .count();
+    assert_eq!(column_saves, 1, "列头菜单同样只摆一份");
 }

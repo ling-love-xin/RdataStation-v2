@@ -278,6 +278,10 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             separator_before: false,
         });
     }
+    // 【DBeaver 对齐】`fillContextMenu:3166-3177`：复制段之后先一条 Separator，再挂 filters
+    // 子菜单（对 DATA / COLUMN_HEADER / ROW_HEADER 三个落点都摆）；本仓菜单扁平，把
+    // `fillFiltersMenu` 的四项设置直接平铺在这里——位置在排序段之前（与 DBeaver 段序一致）。
+    items.extend(filter_settings_menu_items());
     // 【#28-B3】行级动作独立分组（对齐 DBeaver 行操作段）：新增 · 复制 · 删除一行。
     // 只读结果集（`!editable`）整组不摆；已标记删除的底层行不再摆复制 / 删除——
     // 新增空行也一并收起（被删行区段不再产生新的叠加动作）。动作只改本地叠加层，
@@ -475,6 +479,42 @@ pub fn selection_stat_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem>
 /// 值与行相关的动作（预览 / 按值筛选 / 复制值 / 复制整行）只属于右键——它们依赖
 /// “当前格”，列头没有当前格。条件与右键同口径（hidden>0 才摆「显示全部列」、
 /// insight 才摆「洞察此列」）。
+/// 【DBeaver 对齐】`fillFiltersMenu` 尾部四项（**纯函数**，`ResultSetViewer.java:3926-3932`）：
+/// 一条 Separator 之后连摆「保存过滤器设置 / 重置过滤器设置 / 删除所有过滤·排序 /
+/// 编辑筛选设置」。
+///
+/// 门控差异：DBeaver 只在容器是 `DBSEntity` 时摆前两项（`:3927-3930`）；本仓存档键是
+/// **结果 SQL**（§9.26.4 第 1 条），不存在「非实体容器」这一层——join / 计算列结果同样能存能取，
+/// 故四项恒摆。清空与编辑设置 DBeaver 侧也恒摆（`:3931-3932`）。
+///
+/// 落点：DBeaver 的 filters 子菜单挂在 `fillContextMenu:3169-3177`，对
+/// DATA / COLUMN_HEADER / ROW_HEADER **三个落点都摆**（该方法无落点门控）；本仓菜单扁平，
+/// 数据格右键与列头菜单共用这四项（段位置照 `fillContextMenu`：复制段之后、排序段之前）。
+pub fn filter_settings_menu_items() -> Vec<ContextMenuItem> {
+    vec![
+        ContextMenuItem {
+            label: "保存过滤器设置".to_string(),
+            action: ContextAction::SaveFilterSetting,
+            separator_before: true,
+        },
+        ContextMenuItem {
+            label: "重置过滤器设置".to_string(),
+            action: ContextAction::ResetFilterSetting,
+            separator_before: false,
+        },
+        ContextMenuItem {
+            label: "删除所有过滤 / 排序".to_string(),
+            action: ContextAction::ClearAllFilters,
+            separator_before: false,
+        },
+        ContextMenuItem {
+            label: "编辑筛选设置…".to_string(),
+            action: ContextAction::OpenFilterSettings,
+            separator_before: false,
+        },
+    ]
+}
+
 pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
     let column_name = target.column_name.as_str();
     let mut items = vec![
@@ -584,32 +624,9 @@ pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
         });
     }
     // 【DBeaver 对齐】`fillFiltersMenu` 尾部四项（`ResultSetViewer.java:3926-3932`）：
-    // Separator → (DBSEntity) 保存 / 重置 → 删除所有过滤 / 排序 → 编辑筛选设置。
-    //
-    // 门控差异：DBeaver 只在 `getDataContainer() instanceof DBSEntity` 时摆保存 / 重置
-    // （`:3927-3930`），本仓存档键是**结果 SQL**（§9.26.4 第 1 条），不存在「非实体容器」
-    // 这一层——join / 计算列结果同样能存能取，故四项恒摆。清空与编辑设置 DBeaver 侧
-    // 也恒摆（`:3931-3932`）。
-    items.push(ContextMenuItem {
-        label: "保存过滤器设置".to_string(),
-        action: ContextAction::SaveFilterSetting,
-        separator_before: true,
-    });
-    items.push(ContextMenuItem {
-        label: "重置过滤器设置".to_string(),
-        action: ContextAction::ResetFilterSetting,
-        separator_before: false,
-    });
-    items.push(ContextMenuItem {
-        label: "删除所有过滤 / 排序".to_string(),
-        action: ContextAction::ClearAllFilters,
-        separator_before: false,
-    });
-    items.push(ContextMenuItem {
-        label: "编辑筛选设置…".to_string(),
-        action: ContextAction::OpenFilterSettings,
-        separator_before: false,
-    });
+    // 与数据格右键共用同一组（DBeaver 的 filters 子菜单对三个落点都摆，见
+    // `fillContextMenu:3169-3177`），文案 / 顺序 / 分隔线口径只在 `filter_settings_menu_items` 一处。
+    items.extend(filter_settings_menu_items());
     items
 }
 /// 左栏「列浏览器」清单行右键菜单的项（**纯函数**；对齐 DBeaver 元数据面板清单右键口径：
@@ -997,12 +1014,47 @@ pub(crate) fn context_menu(
             }
             // 列级筛选只属于列头菜单（右键的「按值筛选」是全局词）：右键收到即忽略
             ContextAction::FilterColumnValue { .. } | ContextAction::ClearColumnFilter { .. } => {}
-            // 筛选段尾部四项（保存 / 重置 / 全清 / 编辑筛选设置）只属于列头菜单：
-            // 它们要按「当前结果的筛选状态」动手，右键的落点是单个单元格，语义不对
-            ContextAction::SaveFilterSetting
-            | ContextAction::ResetFilterSetting
-            | ContextAction::ClearAllFilters
-            | ContextAction::OpenFilterSettings => {}
+            // 【DBeaver 对齐】筛选段尾部四项（`fillFiltersMenu:3926-3932`）：DBeaver 的
+            // filters 子菜单对 DATA / COLUMN_HEADER / ROW_HEADER 三个落点都摆
+            // （`fillContextMenu:3169-3177` 无落点门控），所以数据格右键同样摆这四项——
+            // 它们按「当前结果的筛选状态」动手，与落点在哪个单元格无关。四项都只把意图
+            // 交回面板（与列头菜单 `grid/header.rs` 发同一组请求）。
+            ContextAction::SaveFilterSetting => {
+                if let Some(queue) = delegate.action_queue.clone() {
+                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| {
+                            queue.request(ResultRequest::SaveFilterSetting, app);
+                        },
+                    ));
+                }
+            }
+            ContextAction::ResetFilterSetting => {
+                if let Some(queue) = delegate.action_queue.clone() {
+                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| {
+                            queue.request(ResultRequest::ResetFilterSetting, app);
+                        },
+                    ));
+                }
+            }
+            ContextAction::ClearAllFilters => {
+                if let Some(queue) = delegate.action_queue.clone() {
+                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| {
+                            queue.request(ResultRequest::ClearFilterAndOrdering, app);
+                        },
+                    ));
+                }
+            }
+            ContextAction::OpenFilterSettings => {
+                if let Some(queue) = delegate.action_queue.clone() {
+                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| {
+                            queue.request(ResultRequest::OpenFilterSettings, app);
+                        },
+                    ));
+                }
+            }
             // 「复制列名」只属于列浏览器清单（它要多选集合，网格右键没有这个概念）
             ContextAction::CopyColumnNames => {}
             // 列头的「复制列名」也只属于列头：右键的「复制此列」复制的是**取值**，不是名字
