@@ -3010,6 +3010,22 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - **门禁基线（第 73 批后）**：editor lib **819 passed（1 ignored）**、
   panel **409 passed**、ui-guard **4 passed**。改到这几处时同步改 `result-panel.md` §9.56.4。
 
+### 2.125 `CTRL+R` 撤销未提交变更（2026-11-22，第 74 批）
+
+- **`mutate_change_set` 的返回值不是「有变化」**：它在找到槽位、执行完闭包后一律返回
+  `true`（`store/store.rs:522-536`），`ChangeSet::discard_pending` 返回 `()`。
+  判断「撤销掉没有」要自己读 `pending_count()`。
+- **有条件的钮会掩盖死分支**：`discard_pending_changes` 的 `else` 分支因为钮只在
+  `pending_changes > 0` 时摆而永远跑不到，接键位才暴露。以后给「条件渲染的钮」加键位，
+  先问一句「无数据时这条路径能不能走到」。
+- **回滚不要求 `editable`**：它不写源库，只丢本地改动。`CTRL+S`（提交）才要求。
+- **键位只转请求，不带判定**：`request_rollback_pending` 只入队 `RollbackPending`，
+  清什么、怎么提示都在 `discard_pending_changes`（钮与键位共用）。
+- **DBeaver 的 `undoRedoManager.clear()` 无对应物**：本仓没有结果编辑的 undo 栈。
+  别为了「对齐」去造一个。
+- **门禁基线（第 74 批后）**：editor lib **820 passed（1 ignored）**、
+  panel **409 passed**、ui-guard **4 passed**。改到这几处时同步改 `result-panel.md` §9.57.6。
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。

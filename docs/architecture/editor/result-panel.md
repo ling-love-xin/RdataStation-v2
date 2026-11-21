@@ -8968,6 +8968,100 @@ ui-guard **4 passed**；workspace check `Finished`
   （`ResultSetJobDataRead.java:182-197` 读 `RESULT_SET_CANCEL_TIMEOUT`，偏好项在
   `ResultSetPreferences.java:46`），本仓执行通道没有中断能力，要做另开批次。
 
+### 9.57 第 74 批：`CTRL+R` 撤销未提交变更（`CMD_REJECT_CHANGES`）
+
+#### 9.57.1 缺口
+
+`plugin.xml:1083` 的 `CTRL+R` 是 `rejectChanges`，本仓工具栏一直摆着「回滚」钮
+（`panel/render.rs` 的 `editor-result-discard`）但没绑键：能点不能按。§9.55/§9.56 两批
+把取数类键位补完之后，提交/回滚这一对里只剩它是空的（`CTRL+S` 提交在第 68 批已绑）。
+
+#### 9.57.2 DBeaver 依据
+
+- 键位：`plugin.xml:1083` `CTRL+R`（context `...resultset.focused`）。
+- 命令：`IResultSetCommands.java:53` `CMD_REJECT_CHANGES =
+  "org.jkiss.dbeaver.core.resultset.rejectChanges"`。
+- handler：`ResultSetHandlerMain.java:313-314` → `rsv.rejectChanges()`。
+- `ResultSetViewer.rejectChanges:4785-4804`：
+  1. `!isDirty()` → **静默 return**（`:4787-4789`）；
+  2. `getActivePresentation().rejectChanges()`（`:4790`）；
+  3. `createDataPersister(true).rejectChanges()`（`:4795`）；
+  4. `undoRedoManager.clear()`（`:4796`）；
+  5. 行集合空了就把当前行/选中行一并清掉（`:4797-4800`）。
+- `ResultSetPersister.rejectChanges:372-392`：逐格把值还原成旧值 + `row.clearChanges()`。
+
+#### 9.57.3 落地
+
+| 层 | 东西 |
+| --- | --- |
+| action | `result_panel::grid::RejectPendingChanges`（`grid/mod.rs`，与既有一组键位动作同处） |
+| 面板入口 | `ResultPanel::request_rollback_pending`（`panel/events.rs`）：只入队 `ResultRequest::RollbackPending` |
+| 宿主处理器 | `EditorHostPanel::on_reject_pending_changes`（`exec/edit_cmds.rs`）：转一次请求，不带判定 |
+| 键位 | `ctrl-r` → `RESULT_GRID_CONTEXT`（`crates/app/src/main.rs` + 测试里的 `bind_editor_keys`） |
+
+**不另写判定**：回滚的行为（清什么、留什么）在 `discard_pending_changes`
+（`host/editor_body.rs`），钮与键位共用同一段；键位只多一层「不可用留提示」。
+
+**不要求 `editable`**：回滚只丢本地改动、不写源库，只读结果集上按下去也只是得到
+「没有可撤销的变更」。这一点与 `CTRL+S`（提交）刻意不同——那条要求可编辑。
+
+#### 9.57.4 顺手修的缺陷：`discard_pending_changes` 的原判据是死分支
+
+原实现：
+
+```rust
+let changed = self.shared.update_results(|store| {
+    store.mutate_change_set(&self.document, index, |changes| changes.discard_pending())
+});
+if changed { /* 已撤销 */ } else { /* 没有可撤销 */ }
+```
+
+`mutate_change_set` 返回的是「**变更集在不在**」（`store/store.rs:522-536`：找到槽位就
+执行闭包再 `true`），`ChangeSet::discard_pending` 自己返回 `()`（`changes.rs:126-129`）。
+所以 `changed` 与「撤销掉了东西」毫无关系，`else` 分支只有在「连变更集都没有」时才可能
+走到。
+
+**为什么一直没暴露**：工具栏那颗钮只在 `pending_changes > 0` 时才摆（`render.rs:697`），
+按下去必然有东西可撤销。键位才第一次把「0 条」变成可达状态——用例一跑就撞上了
+（首跑失败：期望「没有可撤销的变更」，实得「已撤销未提交的变更」）。
+
+修法：先读 `change_set(...).pending_count()` 再决定提示，然后无条件执行
+`discard_pending()`（0 条时它是 no-op）。
+
+#### 9.57.5 有意差异
+
+- DBeaver 还 `undoRedoManager.clear()`（`:4796`）：本仓没有**结果编辑**的 undo 栈
+  （undo/redo 是文本内核的，`UndoResultEdit`/`RedoResultEdit` 走的是编辑器历史），
+  所以这一步无对应物，不做。
+- DBeaver `!isDirty()` 静默 return；本仓键位留一句「没有可撤销的变更」（第 69 批口径）。
+- DBeaver 回滚后若行集合空了会清当前行（`:4797-4800`）；本仓清的是待提交项、行本身
+  还在，不需要这一步。
+
+#### 9.57.6 验证
+
+用例 `the_reject_key_discards_pending_but_keeps_conflicts`（editor，`view/tests/analysis.rs`）
+一条走两态：
+
+1. 无待提交时按 `ctrl-r` → 提示「没有可撤销的变更」，变更集不动；
+2. 预置 1 条待提交 + 1 条冲突后再按 → `pending_count == 0`、`conflicts == [(1, 1)]`
+   （冲突是证据，不抹掉），提示「已撤销未提交的变更」。
+
+焦点必须先交给网格（`ctrl-r` 只挂 `RESULT_GRID_CONTEXT`）——`run_orders_result` 结束时
+焦点在面板根，直接发键不会命中。
+
+门禁（第 74 批）：pair check `Finished` 无 warning；editor lib **820 passed（1 ignored）**
+（819 → +1）；panel **409 passed**；ui-guard **4 passed**；workspace check `Finished`
+（2 warning 全来自并行线 `rds-notification`）。
+
+#### 9.57.7 遗留
+
+- `CTRL+R` 在文本呈现态（无网格焦点）不生效——与 `CTRL+ALT+N` / `CTRL+SHIFT+=` 同口径；
+- 取全部 / 导出 / 提交进行中时按 `CTRL+R` 没有额外互斥：回滚只动本地变更集，
+  与那几条在途动作不共享 offset 或文件，不需要；
+- `SHIFT+ENTER`（外部值编辑器）、`ESC`（`cell.reset`）、`CTRL+BACKSPACE`
+  （`CMD_CELL_SET_DEFAULT`）、`CTRL+ALT+C` / `CTRL+ALT+R`（选列 / 选行）、
+  `ALT+SHIFT+ARROW`（移列）仍未接，见 §9.48.5 的清单。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
