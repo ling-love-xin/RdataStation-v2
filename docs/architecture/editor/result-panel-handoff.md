@@ -2411,6 +2411,31 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 门禁基线：result_panel **385 passed**（+3 例）、editor check `Finished`（0 warning）、
   editor lib **800 passed（1 ignored）**、ui-guard **4 passed**；本批未动 settings。
 
+### 2.102 右键 layout 段「显示过滤器面板」的接手要点（2026-11-21）
+
+- 这一项 = DBeaver `ToggleFilterPanelAction`（`ResultSetViewer.java:3589-3592` / `:5420-5442`）：
+  勾选控制**整条筛选区**显隐，偏好落 `resultset.show.filterPanel`（出厂 true）。本仓偏好键
+  `result_panel.show_filter_panel`（`Slot::ResultPanelShowFilterPanel`）。
+- 「整条筛选区」在本仓就是 `panel/render.rs` 里那个 `filter` 容器（`filter: self.show_filter_panel
+  .then_some(filter)`）；**不是** `filter_expanded`（那是「输入框爬到工具栏下方顶宽」的展开态）。
+  改渲染前先把这两件事分清，别把展开条当整条。
+- 关掉时同时把 `filter_expanded` 收为 false（`toggle_filter_panel(open == false)` 里做），避免回开时
+  停在展开态；**不**连带关 `pushdown`（`:607`）/ `comments`（`:624`）两个独立开关。
+- 网格侧镜像存的是**反向布尔** `filter_panel_hidden`（`grid/delegate.rs`）：`ResultGridDelegate` 走
+  `derive(Default)`，而出厂语义是「显示」，反向存才能让默认 `false` 落在正确一侧。别把它改成
+  `show_filter_panel: bool` 正向字段——那样默认会变成「隐藏」。
+- 菜单只读镜像（`ContextTarget::show_filter_panel`）并发 `ResultRequest::ToggleFilterPanel { open }`；
+  面板改自身态后由宿主 `persist_result_show_filter_panel` 落盘（读面板当前值，不读网格）。
+- 两处列级菜单落点（`column_browser.rs` / `grid/header.rs`）要继续补这个字段但不摆该项；`grid/tests.rs`
+  的 `target()` helper + 全字段字面量同样要补（老坑）。
+- 有意差异（写进 `result-panel.md` §9.34.3）：设置页改偏好只在**下次构造面板**生效（无跨面板广播，
+  与 §9.32.3 第 4 条同一条缺口）；菜单项恒摆（本仓无 `FEATURE_FILTERS` 能力位）；隐藏后无额外常驻入口
+  （回开入口只在右键该项，与 DBeaver 同）。
+- 门禁基线（第 51 批后）：result_panel **387 passed**、settings **45 passed**、editor check
+  `Finished`（0 warning）、editor lib **800 passed（1 ignored）**、ui-guard **4 passed**。
+- 工作区提醒：2026-11-21 打开时 `crates/notification/src/{core,service}.rs` 有**并行线**大改
+  （通知中心历史/图标/合并窗口），**不随本线提交**；提交前一律按文件列表 add，不用 `git add -A`。
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。

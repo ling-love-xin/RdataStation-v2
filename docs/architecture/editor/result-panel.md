@@ -7159,6 +7159,7 @@ DBeaver 的结果集右键在 `MENU_ID_LAYOUT` 子菜单里有一整段「呈现
   `✓ ` 前缀、文本态不摆「记录」且首项接过分隔线、勾选落位。
 - `context_menu_puts_layout_group_before_selection_stats`（纯函数）：右键尾部 7 项 = 呈现方式组 4 项 +
   三颗统计，两段首项各带分隔线，持久化项在其之前，列头菜单不含这一段。
+  （第 51 批加了过滤器面板项后该断言扩为 8 项，见 §9.34.4。）
 - `presentation_cycles_between_grid_and_text_and_mirrors_into_delegate`（纯函数）：`Presentation::next()`
   两档循环、delegate 镜像可读、`set_data` 不清镜像。
 - 既有用例随之更新：`context_menu_offers_filter_copy_and_freeze`（期望列表补 4 项）、
@@ -7166,6 +7167,98 @@ DBeaver 的结果集右键在 `MENU_ID_LAYOUT` 子菜单里有一整段「呈现
 - **门禁**：`rds-result-panel` **385 passed**（382 + 3）、editor `cargo check` `Finished`（0 warning）、
   `rds-editor --lib` **800 passed（1 ignored）**、`rds-ui-guard` **4 passed**。本批未动 `crates/settings`，
   不重跑其测试。
+
+### 9.34 右键 layout 段的「显示过滤器面板」（对齐 DBeaver `ToggleFilterPanelAction`，2026-11-21）
+
+DBeaver 的 layout 菜单在「呈现方式」组与三颗选中统计之后还有一项 `ToggleFilterPanelAction`
+——勾选控制的是结果集面板**顶部整条筛选区**是否可见，偏好落 `resultset.show.filterPanel`。
+本批把这一整块的显隐接进本仓（偏好 + 右键入口 + 面板渲染 + 网格镜像），位置沿用 DBeaver
+的顺序：三颗统计之后、菜单最末。
+
+#### 9.34.1 dbeaver-ref 取证（现源实读）
+
+| 事实 | 位置 | 内容 |
+| --- | --- | --- |
+| 显隐计算 | `ResultSetViewer.updateFilterPanelVisibility:2002-2012` | `!(activePresentation instanceof StatisticsPresentation) && prefs.getBoolean(RESULT_SET_SHOW_FILTER_PANEL)` → `UIUtils.setControlVisible(filtersPanelComposite, …)` + `mainPanel.layout(true, true)` |
+| 菜单项 | `ResultSetViewer.fillLayoutMenu:3589-3592` | `if ((decoratorFeatures & FEATURE_FILTERS) != 0) { layoutMenu.add(new Separator()); layoutMenu.add(new ToggleFilterPanelAction(this)); }` |
+| 动作实现 | `ResultSetViewer.ToggleFilterPanelAction:5420-5442` | `super(ResultSetMessages.controls_resultset_viewer_action_show_filter_panel, Action.AS_CHECK_BOX)`；`isChecked()` 读偏好（`:5429-5431`）；`run()` 翻转偏好 → `PrefUtils.savePreferenceStore` → `updateFilterPanelVisibility()` |
+| 偏好键 | `ResultSetPreferences.java:53` | `resultset.show.filterPanel` |
+| 出厂默认 | `DataEditorsPreferencesInitializer.java:67` | `true` |
+| 设置页 | `PrefPageResultSetPresentation.java:93/142/166/187/202` | checkbox（`DataEditorsMessages.*label_show_filter_panel`） |
+| 文案 | `ResultSetMessages_zh.properties:131` | 「显示过滤器面板」 |
+| 偏好监听 | `ResultSetViewer.java:545` | property change 直接 `updateFilterPanelVisibility()`（设置页改即实时） |
+| 筛选面板几何 | `createFilterPanel():1971-1992`（挂载 `:311-318`） | 整行 `GridData`（`FILL_HORIZONTAL` + `horizontalSpan = numColumns`），内部 = `ResultSetFilterPanel`（显示 SQL 钮 / 展开 / 文本框 / 运行 / 清除 / 自定义 / 历史 / 导航 / 查找） |
+| 装饰器能力位 | `IResultSetDecorator.java:31` | `FEATURE_FILTERS = 1`（`QueryResultsDecorator.java:28` 含） |
+
+#### 9.34.2 本仓落地
+
+**偏好层（`crates/settings`）**：
+
+- `model/result_panel.rs`：`#[serde(default = "default_true")] pub show_filter_panel: bool`，
+  `Default` 里 `true`（出厂显示）；
+- `registry/mod.rs`：`Slot::ResultPanelShowFilterPanel`、键 `result_panel.show_filter_panel`、
+  `KindTag::Bool`；
+- `registry/entries/result_panel.rs`：`SettingSpec`（section `result_panel` / group `layout` /
+  label「显示过滤器面板」/ `default_json: "true"` / `SettingEffect::Immediate` / `SettingEntry::Page`）；
+- `service/mod.rs`：`value_by_key` 分支 + `apply_slot` 转发到 `result_panel::apply_slot`；
+- `service/result_panel.rs`：`apply_slot` 新分支（写偏好 + 落盘）与 `set_result_panel_show_filter_panel`
+  （同值不写盘）。
+
+**面板态（`crates/result_panel`）**：
+
+- `panel/data.rs`：`show_filter_panel: bool`；`panel/lifecycle.rs`：构造默认 `true`；
+- `panel/events.rs`：`set_show_filter_panel(show, cx)`（同值 early-return + 同步网格镜像 + `notify`）、
+  `show_filter_panel()`、`toggle_filter_panel(open, cx)`（`open == false` 时先收 `filter_expanded`）；
+- `panel/render.rs`：`ResultControls { filter: self.show_filter_panel.then_some(filter) }`——本仓的
+  `filter` 容器（`:260` 起，含显示 SQL chip / 展开 / 多行输入 / 运行 / 清除 / 筛选设置 / 历史 /
+  后退前进 / 结果内查找）就是 DBeaver `ResultSetFilterPanel` 的整条等价物，关掉即整条不摆；
+  展开条条件同步为 `(self.show_filter_panel && self.filter_expanded)`。
+
+**网格镜像与右键（`crates/result_panel`）**：
+
+- `grid/delegate.rs`：`filter_panel_hidden: bool`（**反向存**，`derive(Default)` 的 `false` 正好 =
+  出厂「显示」）+ `set_show_filter_panel` / `show_filter_panel()`；
+- `grid/menu.rs`：`ContextTarget` 加 `show_filter_panel: bool`；`ContextAction::ToggleFilterPanel { open }`；
+  纯函数 `filter_panel_menu_item(target)`（`✓ ` 前缀 + `open` 取反 + 恒带分隔线）；
+  `context_menu_items` 在统计三颗之后 `push` 该项；`context_menu` 经 `action_queue` 发
+  `ResultRequest::ToggleFilterPanel { open }`；
+- `grid/mod.rs` re-export；`ports.rs` 新 `ResultRequest` 变体；
+- `column_browser.rs` / `grid/header.rs`：两处 `ContextTarget` 字面量补字段（这两处**不摆**该项）。
+
+**宿主（`crates/editor`）**：
+
+- `view/host/construct.rs`：构造期从 settings 拷贝并 `panel.set_show_filter_panel(...)`（借用不能跨
+  `&mut cx`，与 `selection_stat_prefs` 同一写法）；
+- `view/host/results/dispatch.rs`：`ToggleFilterPanel` → `panel.toggle_filter_panel(open)` +
+  `persist_result_show_filter_panel`（读面板当前态 → `SettingsService::set_result_panel_show_filter_panel`）。
+
+#### 9.34.3 口径差异（有意）
+
+1. **偏好不是实时广播**：本仓设置页改 `result_panel.show_filter_panel` 只在**下次构造面板**时读到；
+   面板内切换（右键）是立即生效 + 落盘。DBeaver 有偏好监听（`ResultSetViewer.java:545`）实时
+   `updateFilterPanelVisibility`——与 §9.32.3 第 4 条同一条管线缺口，登记为后续「设置页实时下发」一并解决。
+2. **菜单项恒摆**：DBeaver 按 `decoratorFeatures & FEATURE_FILTERS` 门控（`:3589`）；本仓网格恒支持
+   筛选，没有等价能力位，故恒摆（与 §9.33.3 第 2 条同口径：不做禁用项）。
+3. **隐藏即整条消失，无独立常驻入口**：DBeaver 的入口也只有 layout 菜单项 + 设置页；本仓同（回开
+   入口 = 数据格右键的「显示过滤器面板」）。隐藏后工具栏左段整体不渲染，右侧按钮组按既有 `justify`
+   靠右——这是容器既有行为，不是本批新增差异。
+4. **隐藏时顺带收掉展开态**：DBeaver 对整块 `setVisible(false)` 时内部展开区一并不可见；本仓把
+   `filter_expanded` 置 `false`，避免回开时意外停在展开态。
+5. **不连带关 pushdown / comments**：`pushdown`（`:607`）与 `comments`（`:624`）是独立开关，
+   DBeaver 亦然（`FilterPanel` 显隐不影响类型 / 注释偏好）。
+
+#### 9.34.4 用例与门禁
+
+- `filter_panel_menu_item_flags_visibility_and_flips_on_click`（纯函数）：显示态 `✓ 显示过滤器面板`
+  + `open: false` + 带分隔线；隐藏态文案无前缀 + `open: true`。
+- `delegate_mirrors_filter_panel_visibility_and_defaults_to_shown`（纯函数）：delegate 出厂 `true`、
+  可翻转、`set_data` 不复位（反向布尔默认值的钉桩）。
+- 既有用例随之更新：`selection_stats_sit_at_the_context_menu_tail_and_not_in_column_menus`
+  由「尾部 3 项」改为「尾部 4 项（三统计 + 过滤器面板）」，`context_menu_puts_layout_group_before_selection_stats`
+  由 7 项改为 8 项（并断言三条分隔线）；两处列头菜单排除断言补 `ToggleFilterPanel`。
+- **门禁**：`rds-result-panel` **387 passed**（385 + 2）、`rds-settings` **45 passed**、
+  editor `cargo check` `Finished`（0 warning）、`rds-editor --lib` **800 passed（1 ignored）**、
+  `rds-ui-guard` **4 passed**。
 
 ## 8. 协作纪律
 
