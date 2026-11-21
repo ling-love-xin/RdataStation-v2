@@ -2451,9 +2451,10 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 点击路径：`grid/menu.rs` 的 `context_menu()` 四个分支发 `ResultRequest`（保存 / 重置 /
   `ClearFilterAndOrdering` / `OpenFilterSettings`），与 `grid/header.rs:476-514` 同一组请求；
   没有 `action_queue` 的独立网格不摆（沿用既有写法）。
-- 暂不做的三项（§9.35.3 已登记）：`EDIT_FIND_AND_REPLACE`（本仓 `ToggleFind` 是开关态，
-  菜单要命令语义，需单独一批）；按操作符过滤组与 `FilterResetAttributeAction`（本仓没有列级
-  约束模型，筛选是一条 SQL 过滤串）；`CMD_FILTER_MENU_DISTINCT` 同属该组。
+- 暂不做的三项（§9.35.3 已登记）：`EDIT_FIND_AND_REPLACE` 中的一条**已在第 54 批落地**
+  为菜单首项「在结果中查找…」（命令语义 `ResultRequest::OpenFind`，见 §2.105）；按操作符过滤组与
+  `FilterResetAttributeAction`（本仓没有列级约束模型，筛选是一条 SQL 过滤串）；`CMD_FILTER_MENU_DISTINCT`
+  同属该组。
 - 门禁基线（第 52 批后）：result_panel **388 passed**、editor check `Finished`（0 warning）、
   editor lib **800 passed（1 ignored）**、ui-guard **4 passed**；本批未动 settings。
 
@@ -2479,6 +2480,32 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   并 exit 101——看起来像编译错误，其实是磁盘满。先 `Get-PSDrive D` 看 `Free`，
   `target\debug\incremental` 曾占 75 GB（纯缓存，可删）。清理前需用户确认，不要自行删除。
 - 门禁基线（第 53 批后）：result_panel **389 passed**、editor check `Finished`（0 warning）、
+  editor lib **800 passed（1 ignored）**、ui-guard **4 passed**；本批未动 settings。
+
+### 2.105 filters 段首「在结果中查找…」的接手要点（2026-11-21）
+
+- **整组口径只有一处**：`grid/menu.rs::filters_menu_items()`（纯函数）= 首项查找命令 +
+  `filter_settings_menu_items()` 四项。数据格右键（`context_menu_items`）与列头菜单
+  （`column_menu_items`）都只 `extend` 它；再手写 push 会让文案 / 分隔线漂。
+- **两个请求不要合并**：`ResultRequest::ToggleFind` 是工具栏那颗 CHECK 开关（再按关闭）；
+  `ResultRequest::OpenFind` 是菜单命令（只开不关，已开只聚焦）。用 `ToggleFind` 顶替菜单项会
+  出现「点菜单把已开的查找栏关掉」这种明显不对的行为——`open_find_is_idempotent_and_never_closes`
+  就是钉这个的。
+- 面板侧入口是 `ResultPanel::open_find(window, cx)`（幂等）；宿主侧是
+  `EditorHostPanel::open_find_via_window`（与 `toggle_find_via_window` 同一窗口转手写法）。
+- **文案是自定的**：DBeaver 用平台命令 `EDIT_FIND_AND_REPLACE`（「查找/替换」，文案在平台
+  bundle 里，`dbeaver-ref` 未随包提供）；本仓结果集只读、无替换，故取「在结果中查找…」。
+  若日后要改成「查找/替换」，只改 `filters_menu_items` 一处。
+- 分隔线：查找项 `separator_before: true`（`fillContextMenu:3166`）；四项首项也是 `true`
+  （`fillFiltersMenu:3926`）→ 扁平平铺后是「段前一条 + 组前一条」，别把其中一条删掉。
+- 未做（§9.37.3 已登记）：`CMD_FILTER_MENU_DISTINCT` / 按操作符生成的条件项 /
+  `FilterResetAttributeAction`（无列级约束模型）；`EDIT_FIND_AND_REPLACE` 的快捷键（本仓
+  结果面板暂无键位层）。
+- 用例：`filters_group_starts_with_the_find_command`（纯函数，5 项 + 两条线 + 两落点）、
+  `open_find_is_idempotent_and_never_closes`（窗口）；改首项时同步
+  `context_menu_offers_filter_copy_and_freeze` 的标签数组与下标（当前 `items[7]` 是查找项，
+  `items[14]` 冻结、`items[17]` 显示全部列）。
+- 门禁基线（第 54 批后）：result_panel **391 passed**、editor check `Finished`（0 warning）、
   editor lib **800 passed（1 ignored）**、ui-guard **4 passed**；本批未动 settings。
 
 ## 3. 并行线协作纪律（工作区现状）

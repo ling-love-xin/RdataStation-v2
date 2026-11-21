@@ -7373,6 +7373,63 @@ DBeaver 的右键在复制段之后先放一条 Separator，再挂 `filters` 子
   （0 warning）、`rds-editor --lib` **800 passed（1 ignored）**、`rds-ui-guard` **4 passed**。
   本批未动 `crates/settings`，不重跑其测试。
 
+### 9.37 数据格右键 filters 段首补「在结果中查找…」（对齐 DBeaver `EDIT_FIND_AND_REPLACE`，2026-11-21）
+
+§9.35 补的 filters 段只有四项设置，但 DBeaver 该子菜单的**第一项其实是查找命令**
+（`fillFiltersMenu:3869`）。本批把这项补上，并把语义与工具栏那颗**开关**分开。
+
+#### 9.37.1 dbeaver-ref 取证（现源实读）
+
+| 位置 | 内容 | 结论 |
+| --- | --- | --- |
+| `fillFiltersMenu:3864-3933` | `:3869` 首项 `EDIT_FIND_AND_REPLACE` | 菜单项是 Eclipse 平台**命令** |
+| `ResultSetFilterPanel.java:356-385` | `openFindReplaceButton`（`SWT.CHECK`，`UIIcon.FIND_REPLACE`） | 工具栏那颗是**开关**，再按关闭 |
+| `fillContextMenu:3166` | filters 子菜单前的 Separator | 查找项自带前导线 |
+| `fillFiltersMenu:3926` | 四项设置前的 Separator | 与查找项之间还有一条线 |
+
+中文文案：`EDIT_FIND_AND_REPLACE` 属平台通用命令，其 bundle 文案（「查找/替换」）不在
+`dbeaver-ref` 内（本仓只 vendor 了数据编辑器插件），故文案本仓自定。
+
+#### 9.37.2 本仓落地
+
+- `ports.rs`：新增 `ResultRequest::OpenFind`，与既有 `ToggleFind` 并列，并在两处注释里写明
+  差别只在「已开时」——`ToggleFind` 是 CHECK 型开关（再按关闭），`OpenFind` 是命令（只开不关）。
+- `panel/events.rs`：新增 `ResultPanel::open_find`（幂等）：未开则 `find_open = true` + `cx.notify()`，
+  随后把焦点交给查找框；**已开时只聚焦、不反关**，查找词与「只显示匹配行」口径都不动。
+- `grid/menu.rs`：
+  - 新增 `ContextAction::OpenFind`；
+  - 新增纯函数 `filters_menu_items()` = 首项「在结果中查找…」（`separator_before: true`）
+    + `extend(filter_settings_menu_items())`（四项，其首项自带一条线）；
+  - `context_menu_items` 与 `column_menu_items` 两处都由「直接 extend 四项」改为
+    `extend(filters_menu_items())`——文案 / 顺序 / 分隔线口径从此只有一处；
+  - `context_menu()` 新增 `OpenFind` 分支，发 `ResultRequest::OpenFind`。
+- `grid/header.rs`：列头菜单同样新增 `OpenFind` 分支（DBeaver 三个落点都摆，见 `:3169-3177`）。
+- `editor/src/view/host/results/dispatch.rs`：`ResultRequest::OpenFind` 分支 +
+  `open_find_via_window`（与 `toggle_find_via_window` 同一窗口转手口径）。
+
+#### 9.37.3 口径差异（有意 / 结构性）
+
+1. **文案自定「在结果中查找…」**：平台命令是「查找/替换」，而结果集只读、没有替换这一半，
+   照抄会把不存在的动作写进菜单。
+2. **中间几组不做**：`CMD_FILTER_MENU_DISTINCT`、按操作符生成的条件项、
+   `FilterResetAttributeAction` 都不做——本仓筛选是一条手写 SQL 过滤串，没有「列级约束」模型
+   （与 §9.35.3 第 4 条同一结论）。
+3. **快捷键未接**：平台命令通常有 `Ctrl+F` 级键位；本仓结果面板暂无键位层，菜单只做动作。
+4. **两小组之间保留一条线**：查找项（`:3166`）与四项（`:3926`）各带前导线，
+   扁平化后就是「段前一条 + 组前一条」，与 DBeaver 的两级结构一致。
+
+#### 9.37.4 用例与门禁
+
+- 新增 `filters_group_starts_with_the_find_command`（纯函数）：整组 5 项、首项文案与动作、
+  首项与四项首项各一条分隔线、四项内部无线；并确认数据格右键与列头菜单都摆这项。
+- 新增 `open_find_is_idempotent_and_never_closes`（窗口用例）：`open_find` → 再 `open_find` 仍开且
+  词不动 → 只有 `toggle_find` 才会关且关闭仍保留词。
+- 既有用例更新：`context_menu_offers_filter_copy_and_freeze`（标签数组插入首项、下标整体后移 1，
+  含末尾「显示全部列」`items[16]` → `items[17]`）。
+- **门禁**：`rds-result-panel` **391 passed**（389 + 2）、editor `cargo check` `Finished`
+  （0 warning）、`rds-editor --lib` **800 passed（1 ignored）**、`rds-ui-guard` **4 passed**。
+  本批未动 `crates/settings`，不重跑其测试。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
