@@ -2530,6 +2530,26 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 门禁基线（第 55 批后）：result_panel **394 passed**、editor check `Finished`（0 warning）、
   editor lib **800 passed（1 ignored）**、ui-guard **4 passed**；本批未动 settings。
 
+### 2.107 筛选条列序与组间分隔线的接手要点（2026-11-21）
+
+- **列序只有一处口径**：`crates/result_panel/src/panel/render.rs` 里 `let filter = div()` 的 `.child` 链。
+  当前顺序 `显示 SQL → 展开 → 文本 → 运行 → 历史 → 擦除 → 筛选设置 → 后退 → 前进 → ｜ → 查找`。
+  历史（`editor-result-filter-history`）**必须紧跟运行**：DBeaver 的 `HistoryPanel` 是 `filterComposite`
+  第 5 列（`ResultSetFilterPanel.java:174/214`），在 `filterToolbar` 之前；曾经摆在「筛选设置之后」是错的。
+  改顺序只挪 `.when(...)` 块，别动 `.when` 条件（`!filter_expanded && !filter_history.is_empty()`）。
+- **分隔线的壳高是硬约束**：`editor-result-filter-history-sep` 是观测壳（`Separator` 没有
+  `debug_selector`），壳 `.h(rems(1.25))`（20px）。改成 24px 会把筛选区外框从 24px 撑到 28px，
+  `rendered_ui_elements_survive` 的「外框 24px」断言立刻红（本批已踩一次）。
+- **分隔线一律用 `Separator::vertical()`**：筛选条这条（`render.rs`）与右段 Toolbar 那条
+  （`grid/status.rs::render_toolbar`）都是标准组件，不要再写 `div().w(ui::HAIRLINE).bg(..)`。
+- **展开态不摆这条线**：展开后 clear / settings / history / back / forward 全收起，线两侧没有可分的两组。
+- **对账表在 §9.39.3**：十一条「已对上」+ 六条「有意差异」，其中最后一条（状态条默认可见集：
+  缺 `row.edit`、`fetch.page`/`undo`/`redo` 本仓常摆而 DBeaver 默认隐藏）是**下一批候选**，不要当 bug 直接改。
+- 用例：`rendered_ui_elements_survive` 的 1.7 段（x 坐标列序 + 分隔线可见）。
+  读几何一律用 `debug_bounds(id)`；`Button` 的 `debug_selector` 会注册 debug bounds。
+- 门禁基线（第 56 批后）：result_panel **394 passed**、editor check `Finished`（0 warning）、
+  editor lib **800 passed（1 ignored）**、ui-guard **4 passed**；本批未动 settings。
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。

@@ -7490,6 +7490,100 @@ DBeaver 的右键在复制段之后先放一条 Separator，再挂 `filters` 子
   本地快照三条落点）没有行为级用例——editor crate 目前没有可构造 `EditorHostPanel` 的测试设施，
   与 `insert_local_row` / `duplicate_local_row` 同一状况；"写哪几格"由纯函数用例覆盖。
 
+### 9.39 筛选条列序与组间分隔线（对齐 DBeaver `ResultSetFilterPanel` 的 5 列 + ToolItem 排，2026-11-21）
+
+§9.37 / §9.38 只动了右键菜单。本批把重心移回**工具栏**：拿 DBeaver 筛选条的控件清单与本仓
+`panel/render.rs` 的 `editor-result-*` 钮逐项对账，落地其中两处结构差异。
+
+#### 9.39.1 dbeaver-ref 取证（现源实读）
+
+**布局两段**：`ResultSetFilterPanel.java:163-166` 是外层 `GridLayout(2)`（margin 3），
+第 1 列 `filterComposite`、第 2 列 `filterToolbar`。
+
+| 位置 | 内容 |
+| --- | --- |
+| `:174` | `filterComposite` = `GridLayout(compactMode ? 4 : 5)`，margin 2、h/v spacing 0 |
+| `:184` | 第 1 列 `ActiveObjectPanel`（对象图标 + 固定文案「显示 SQL」，zh `ResultSetMessages_zh.properties:746`） |
+| `:186` | 第 2 列 `FilterExpandPanel`（展开 / 收起，图标 `FIT_WINDOW` / `ORIGINAL_SIZE`，`:1287-1290`） |
+| `:192` | 第 3 列 `filtersTextViewer`（`SWT.MULTI`，常态 1 行高 20px） |
+| `:209` | 第 4 列 `ExecutePanel`（执行） |
+| `:214` | 第 5 列 `HistoryPanel`（历史筛选下拉，表见 `createFilterHistoryPanel:1207`） |
+| `:315-317` | `filterToolbar = new ToolBar(this, SWT.HORIZONTAL \| SWT.RIGHT)`（外层第 2 列，靠右） |
+
+**`filterToolbar` 上的 ToolItem（顺序即创建顺序）**：
+
+| 位置 | 控件 | 形态 / 初值 |
+| --- | --- | --- |
+| `:319-327` | `filtersClearButton` | `UIIcon.ERASE` + `SWT.DROP_DOWN`，初值 **disabled**，`EraseItemListener`；tooltip 取 `CMD_FILTER_CLEAR_SETTING` 的命令描述 |
+| `:330-338` | `filtersCustomButton` | `UIIcon.FILTER` + `SWT.DROP_DOWN`，**恒 enabled**，`CustomFilterListener(compactMode)` |
+| `:343-346` | `historyBackButton` | `UIIcon.RS_BACK` + `SWT.DROP_DOWN`，初值 disabled，`HistoryMenuListener(…, true)` |
+| `:348-351` | `historyForwardButton` | `UIIcon.RS_FORWARD` + `SWT.DROP_DOWN`，初值 disabled，`HistoryMenuListener(…, false)` |
+| `:354` | **竖分隔线** | `UIUtils.createToolBarSeparator(filterToolbar, SWT.NONE)` |
+| `:356-385` | `openFindReplaceButton` | `UIIcon.FIND_REPLACE` + `SWT.CHECK`；`:363` 按 `getSelection()` 开 / 关 overlay |
+
+配套：`:419-424` `setFindReplaceButtonSelection`（overlay 开合状态回写按钮选中态）；
+`:449-473` `enablePanelControls` 刷新 clear / back / forward 的 enabled；
+`compactMode` 下 `:318` / `:342` 不建 clear / back / forward（expand 与 execute 也不建，见 `:186` / `:209`），
+toolbar 只剩 `filtersCustomButton` + `openFindReplaceButton`。
+
+#### 9.39.2 本仓落地
+
+1. **`filter-history` 移到「运行」之后**：DBeaver 的 `HistoryPanel` 是 `filterComposite` 第 5 列，
+   紧贴 `ExecutePanel`，在 `filterToolbar`（擦除 / 设置 / 后退 / 前进）**之前**。本仓此前把它摆在
+   「筛选设置之后」，与那边列序相反。现在顺序是
+   `显示 SQL → 展开 → 文本 → 运行 → 历史 → 擦除 → 筛选设置 → 后退 → 前进 → ｜ → 查找`。
+2. **后退 / 前进与查找之间补竖分隔线**（`:354`）：`editor-result-filter-history-sep`，
+   标准 `Separator::vertical()`（1px × 20px，与同排按钮同高）。展开态不摆——那时
+   clear / settings / history / back / forward 全收起，线条两侧没有可分的两组。
+3. **顺带去掉一处手搓分隔线**：`grid/status.rs::render_toolbar` 右段（下发源库 / 注释 ↔ 对比 / 提交 / 分析 / 复制）
+   原来用 `div().w(ui::HAIRLINE).bg(theme.colors.border)`，按 gpui-kit-dev skill 的容器层表格换成
+   `Separator::vertical()`（仍是 1px × 24px）。筛选条那条（第 2 点）也走同一组件，两处口径一致。
+
+#### 9.39.3 对账结论
+
+**已逐项对上**（本仓 `panel/render.rs` 的 debug selector ↔ DBeaver 控件）：
+
+| DBeaver | 本仓 | 备注 |
+| --- | --- | --- |
+| `ActiveObjectPanel` | `editor-result-sql-preview`（`sql_chip`） | 固定文案「显示 SQL」+ 对象图标，点击弹全文 |
+| `FilterExpandPanel` | `editor-result-filter-expand` | `.selected()` 表达 CHECK 按下态 |
+| `filtersTextViewer` | `Textarea`（`filter_input`） | 20px 单行高 |
+| `ExecutePanel` | `editor-result-filter-run` | 独立列，不在文本框 suffix |
+| `HistoryPanel` | `editor-result-filter-history` | 空历史不摆（见差异 3） |
+| `filtersClearButton` | `editor-result-filter-clear` + `-erase`（DropdownButton） | 主点击 = 删除所有过滤 / 排序 |
+| `filtersCustomButton` | `editor-result-filter-settings` + `-settings-menu` | 主点击开筛选设置浮层 |
+| `historyBackButton` | `editor-result-history-back`（DropdownButton） | 主体退一格 + caret 弹全部可达状态 |
+| `historyForwardButton` | `editor-result-history-forward` | 同上 |
+| `:354` 分隔线 | `editor-result-filter-history-sep` | 本批新增 |
+| `openFindReplaceButton` | `editor-result-find-toggle` | `.selected()/.toggled()` 表达 CHECK |
+
+**有意差异（不改，勿当 bug 修）**：
+
+1. **没有 `compactMode`**：DBeaver 为窄宿主把 clear / back / forward / expand / execute 整组收掉；
+   本仓只做完整面板，不建紧凑形态。
+2. **clear 的 tooltip 文案**：那边取 `CMD_FILTER_CLEAR_SETTING` 的命令描述，本仓写「删除所有过滤 / 排序」；
+   主点击动作等价（`ResultSetViewer.java:1549-1551` 落 `clearDataFilter(true)`）。
+3. **空历史不摆入口**：DBeaver 的 `HistoryPanel` 列常在（点开是空表）；本仓沿用「能力没有就不摆」。
+4. **本仓独有钮**：`pushdown`（下发源库）、`show-comments`（列注释）在筛选行尾；`compare` / `commit` /
+   `analysis` / `copy` 在右段 Toolbar。DBeaver 这些能力不在筛选条上（下发源库是「内置过滤器」族，
+   列注释在列浏览器弹层里）。
+5. **展开态口径不同**：本仓展开后 clear / settings / history / back / forward 收起、只留 expand + find + 右段；
+   DBeaver `togglePanelExpand:1320-1327` 只改文本框高度，`filterToolbar` 整排仍在。本仓为既有口径，本批不改。
+6. **状态条默认可见集差异（登记下批）**：`plugin.xml:1380-1397` 的 `resultsetViewer.bottom` 默认可见
+   含 `row.edit`（编辑当前行），本仓无该钮；`fetch.page` / `undo` / `redo` 在那边默认隐藏
+   （`defaultVisibility="false"`），本仓常摆。这是下一批的候选。
+
+#### 9.39.4 用例与门禁
+
+- 扩写 `rendered_ui_elements_survive`（窗口用例，`panel/tests.rs` 的 1.7 段）：
+  用 `debug_bounds().origin.x` 钉列序 **运行 < 历史 < 筛选设置**，并断言
+  `editor-result-filter-history-sep` 可见。纯结构断言，不读像素宽度 / 颜色。
+- **期间修正**：分隔线壳初版给 `h(rems(1.5))`（24px），把筛选区外框从 24px 撑成 28px，
+  被既有「外框 24px」断言拦下；改为 `h(rems(1.25))`（20px，与同排按钮同档）后恢复。
+- **门禁**：`rds-result-panel` **394 passed**（本批未新增测试函数，只扩写既有用例）、
+  editor `cargo check` `Finished`（0 warning）、`rds-editor --lib` **800 passed（1 ignored）**、
+  `rds-ui-guard` **4 passed**。本批未动 `crates/settings`，不重跑其测试。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
