@@ -85,6 +85,13 @@ pub enum ContextAction {
     ClearAllFilters,
     /// 【列头菜单·筛选段尾部】打开筛选设置浮层（`CMD_FILTER_EDIT_SETTINGS`，`:3932`）
     OpenFilterSettings,
+    /// 【行号槽】复制这一行的**显示行号**（对齐 DBeaver `ROW_HEADER` 落点的
+    /// `CMD_COPY_ROW_NAMES`，`ResultSetViewer.java:3162-3164`；handler
+    /// `ResultSetHandlerMain.java:377-396` 取 `getVisualNumber() + 1`，多行时弹配置对话框）。
+    ///
+    /// 载荷是显示行号文本（`delegate.cell(row, 0)` 现算的 `row + 1`）：本仓行号槽只按
+    /// 单行右键（没有多选集合），直接拷这一行的号，不做配置对话框。
+    CopyRowNumber(String),
 }
 /// 右键菜单里的一项
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,6 +146,20 @@ pub struct ContextTarget {
     pub editable: bool,
     /// 【#28-B3】目标底层行是否已被标记删除（被删行不摆复制 / 删除行级动作）
     pub is_deleted: bool,
+}
+/// 行号槽（`#` 列）右键的项（**纯函数**）：DBeaver 的 `ROW_HEADER` 落点只挂「复制行号」
+/// （`ResultSetViewer.java:3162-3164`；handler `ResultSetHandlerMain.java:377-396`）。
+/// 本仓同口径：行号不是数据，列级动作（筛选 / 排序 / 冻结 / 统计）对它都不成立，
+/// 所以这个落点只有这一项。
+///
+/// 文案把要拷的号写进去（`复制行号「3」`）：一眼能核对是不是那一行，
+/// 与列头「复制列名「…」」同一写法。
+pub fn row_number_menu_items(row_number: &str) -> Vec<ContextMenuItem> {
+    vec![ContextMenuItem {
+        label: format!("复制行号「{row_number}」"),
+        action: ContextAction::CopyRowNumber(row_number.to_string()),
+        separator_before: false,
+    }]
 }
 /// 右键菜单的项（**纯函数**：有什么、叫什么都在这里定，界面只负责画）
 ///
@@ -543,7 +564,27 @@ pub(crate) fn context_menu(
     let Some((row, col)) = delegate.context_cell else {
         return menu;
     };
-    if ResultGridDelegate::is_row_number(col) || row >= delegate.view_len() {
+    if row >= delegate.view_len() {
+        return menu;
+    }
+    // 【DBeaver 对齐】行号槽落点只给「复制行号」（`ROW_HEADER` → `CMD_COPY_ROW_NAMES`，
+    // `ResultSetViewer.java:3162-3164`）：行号不是数据，列级动作对它不成立。这里是独立的
+    // 早退路径，不进 [`context_menu_items`]——那个纯函数回答的是「这一格数据能干什么」。
+    if ResultGridDelegate::is_row_number(col) {
+        let number = delegate.cell(row, col);
+        let mut menu = menu;
+        for item in row_number_menu_items(&number) {
+            if item.separator_before {
+                menu = menu.separator();
+            }
+            if let ContextAction::CopyRowNumber(text) = item.action {
+                menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                    move |_, _window, app| {
+                        app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                    },
+                ));
+            }
+        }
         return menu;
     }
     let column = delegate.data_column(col - 1);
@@ -813,6 +854,8 @@ pub(crate) fn context_menu(
             ContextAction::CopyColumnNames => {}
             // 列头的「复制列名」也只属于列头：右键的「复制此列」复制的是**取值**，不是名字
             ContextAction::CopyColumnName => {}
+            // 行号槽的「复制行号」走本函数开头的独立早退路径，这里只做穷尽占位
+            ContextAction::CopyRowNumber(_) => {}
         }
     }
     menu

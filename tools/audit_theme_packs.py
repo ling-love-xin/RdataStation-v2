@@ -38,7 +38,8 @@ hl_names = ta.hl_names
 PRODUCT_KEYS = [
     "activity_bar.background", "activity_bar.active_border", "activity_bar.icon.active",
     "activity_bar.icon.inactive", "title_bar.slot.background", "quick_open.group.header",
-    "search.match.background", "staged.drop", "result.odd_row.background",
+    "search.match.background", "staged.drop",
+    # 斑马行不设产品槽（2026-11-21 定案 A：跟随主题 `table.even`）
     "result.cell.modified.background", "result.cell.error.background",
     "result.local_row_background", "result.header.border",
 ]

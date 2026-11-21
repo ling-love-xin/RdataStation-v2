@@ -175,7 +175,6 @@ mod tests {
                     map.quick_open_group_header.is_some(),
                     map.search_match_background.is_some(),
                     map.staged_drop.is_some(),
-                    map.result_odd_row_background.is_some(),
                     map.result_cell_modified_background.is_some(),
                     map.result_cell_error_background.is_some(),
                     map.result_local_row_background.is_some(),
@@ -183,8 +182,8 @@ mod tests {
                 ];
                 assert_eq!(
                     defined.iter().filter(|x| **x).count(),
-                    13,
-                    "包 {id} {mode} 产品角色不是 13 个"
+                    12,
+                    "包 {id} {mode} 产品角色不是 12 个"
                 );
             }
             packs += 1;

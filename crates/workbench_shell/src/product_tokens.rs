@@ -44,9 +44,6 @@ pub struct TokenMap {
     pub staged_drop: Option<String>,
     #[serde(rename = "result.local_row_background")]
     pub result_local_row_background: Option<String>,
-    /// 【结果集配色槽】奇数行（斑马纹）背景，对齐 DBeaver `cell.odd.background`。
-    #[serde(rename = "result.odd_row.background")]
-    pub result_odd_row_background: Option<String>,
     /// 【结果集配色槽】脏格（已改动未提交）背景，对齐 DBeaver `cell.modified.background`。
     #[serde(rename = "result.cell.modified.background")]
     pub result_cell_modified_background: Option<String>,
@@ -70,8 +67,6 @@ pub struct ProductTokens {
     pub search_match_background: Option<Hsla>,
     pub staged_drop: Option<Hsla>,
     pub result_local_row_background: Option<Hsla>,
-    /// 【结果集配色槽】奇数行（斑马纹）背景。
-    pub result_odd_row_background: Option<Hsla>,
     /// 【结果集配色槽】脏格（已改动未提交）背景。
     pub result_cell_modified_background: Option<Hsla>,
     /// 【结果集配色槽】冲突格（提交未写进去）背景。
@@ -93,7 +88,6 @@ impl ProductTokens {
             search_match_background: parse(&map.search_match_background),
             staged_drop: parse(&map.staged_drop),
             result_local_row_background: parse(&map.result_local_row_background),
-            result_odd_row_background: parse(&map.result_odd_row_background),
             result_cell_modified_background: parse(&map.result_cell_modified_background),
             result_cell_error_background: parse(&map.result_cell_error_background),
             result_header_border: parse(&map.result_header_border),
@@ -155,16 +149,6 @@ impl ProductTokens {
     pub fn result_local_row_background(&self, theme: &Theme) -> Hsla {
         self.result_local_row_background
             .unwrap_or(theme.colors.accent)
-    }
-
-    /// 【结果集配色槽】奇数行的斑马纹底色（DBeaver `cell.odd.background` 同角色）。
-    ///
-    /// 由结果集自己在行容器（`render_tr`）上铺：组件库的 `.stripe(true)` 取的是主题
-    /// `tokens.table_even`（全局表格共用），这一槽让结果集单独对齐 DBeaver 的极浅底。
-    /// 资产缺失回退组件库同款 `tokens.table_even`（观感退回现状，不 panic）。
-    pub fn result_odd_row_background(&self, theme: &Theme) -> Hsla {
-        self.result_odd_row_background
-            .unwrap_or_else(|| theme.tokens.table_even.into())
     }
 
     /// 【结果集配色槽】脏格（已改动、未提交）的底色（DBeaver `cell.modified.background`）。
@@ -266,25 +250,24 @@ mod tests {
         assert!(dark.staged_drop.is_none());
     }
 
-    /// 【结果集配色槽】三个新角色能解析、缺失时访问器回退旧口径（资产不全是常态）。
+    /// 【结果集配色槽】两个角色能解析、缺失时访问器回退旧口径（资产不全是常态）。
+    ///
+    /// 斑马行不再有产品槽（2026-11-21 定案 A：斑马底色跟随主题 `table.even`）。
     #[test]
     fn parses_result_color_slots_and_falls_back() {
         let json = r##"{
             "light": {
-                "result.odd_row.background": "#EBF5FF",
                 "result.cell.modified.background": "#FFE4B5",
                 "result.cell.error.background": "#FF80FF"
             },
-            "dark": { "result.odd_row.background": "#1C2129" }
+            "dark": {}
         }"##;
         let file: ProductTokenFile = serde_json::from_str(json).expect("解析");
         let light = ProductTokens::from_map(&file.light);
-        assert!(light.result_odd_row_background.is_some());
         assert!(light.result_cell_modified_background.is_some());
         assert!(light.result_cell_error_background.is_some());
 
         let dark = ProductTokens::from_map(&file.dark);
-        assert!(dark.result_odd_row_background.is_some());
         // 缺失角色保持 None：访问器回退（见各访问器的 unwrap_or_else 分支）。
         assert!(dark.result_cell_modified_background.is_none());
         assert!(dark.result_cell_error_background.is_none());

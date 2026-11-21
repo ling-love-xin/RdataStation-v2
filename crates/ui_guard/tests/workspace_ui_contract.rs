@@ -110,8 +110,8 @@ const PRODUCT_ROLES: &[&str] = &[
     "search.match.background",
     "staged.drop",
     "result.local_row_background",
-    // 【结果集配色槽】对齐 DBeaver 结果集 colorDefinition 的三个槽
-    "result.odd_row.background",
+    // 【结果集配色槽】对齐 DBeaver 结果集 colorDefinition 的两个高亮槽
+    //（斑马行不设产品槽：2026-11-21 定案 A，斑马底色跟随主题 `table_even`）
     "result.cell.modified.background",
     "result.cell.error.background",
     // 表头分隔线：DBeaver 明暗两套强度不同（浅色系统阴影色 / 深色 css 明确 #696969），

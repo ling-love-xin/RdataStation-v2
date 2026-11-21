@@ -85,7 +85,7 @@ pub use delegate::{
 pub use edit::validate_edit_value;
 pub use menu::{
     ContextAction, ContextMenuItem, ContextTarget, column_browser_menu_items,
-    column_distinct_values, column_menu_items, context_menu_items,
+    column_distinct_values, column_menu_items, context_menu_items, row_number_menu_items,
 };
 pub use stats::{
     ColumnStats, column_stats, column_stats_from_values, group_by_values, stats_from_fact,

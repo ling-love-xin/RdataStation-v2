@@ -18,8 +18,8 @@ use crate::grid::{
     ResultGridDelegate, ResultMatch, ResultStatus, ResultToolbar, WINDOW_FETCH_NOTICE,
     column_browser_menu_items, column_distinct_values, column_menu_items, column_stats,
     column_stats_from_values, context_menu_items, duration_text, fetch_more_hint, format_cell_text,
-    group_by_values, stats_lines, status_action_placeholders, status_segments, thousands,
-    truncated_hint, truncation_notice, validate_edit_value, window_fetch_active,
+    group_by_values, row_number_menu_items, stats_lines, status_action_placeholders, status_segments,
+    thousands, truncated_hint, truncation_notice, validate_edit_value, window_fetch_active,
 };
 use crate::rowset::{LocalRow, LocalRowSet, RowRef};
 use crate::store::{ColumnKind, ColumnType};
@@ -1779,6 +1779,27 @@ fn column_menu_offers_copying_the_column_name() {
     assert!(!ctx
         .iter()
         .any(|i| matches!(i.action, ContextAction::CopyColumnName)));
+}
+
+/// 【DBeaver 对齐】行号槽右键只有「复制行号」（`ROW_HEADER` → `CMD_COPY_ROW_NAMES`，
+/// `ResultSetViewer.java:3162-3164`；handler `ResultSetHandlerMain.java:377-396` 取
+/// `getVisualNumber() + 1`）：文案带要拷的号、载荷就是那串显示行号；
+/// 行号不是数据，数据列的动作（筛选 / 排序 / 冻结 / 统计）在这里一个都不摆。
+#[test]
+fn row_number_menu_offers_copying_the_visible_row_number() {
+    let items = row_number_menu_items("3");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].label, "复制行号「3」");
+    assert!(!items[0].separator_before);
+    assert_eq!(
+        items[0].action,
+        ContextAction::CopyRowNumber("3".to_string())
+    );
+    // 单元格右键的纯函数不产出这一项（它只属于行号落点）
+    let ctx = context_menu_items(&target("v", "status", 1));
+    assert!(!ctx
+        .iter()
+        .any(|i| matches!(i.action, ContextAction::CopyRowNumber(_))));
 }
 
 /// 列头菜单筛选段：值列表（去重取值，按出现顺序）平铺成「按值筛选「值」」项，

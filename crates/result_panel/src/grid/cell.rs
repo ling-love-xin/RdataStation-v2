@@ -281,7 +281,9 @@ pub(crate) fn render_td(
         // （`GridColumnRenderer.java:84-87`）。本仓「当前行」= 整行选中行（行模式下
         // `selected_row` 唯一非空），所以判据与铺色共用同一个来源。
         let is_focused_row = delegate.row_number_is_bold(row_ix);
+        let table = cx.entity().clone();
         return div()
+            .id(("editor-result-rowno-cell", row_ix))
             // 内距 6px（DBeaver `GridCellRenderer.LEFT/RIGHT_MARGIN = 6`）；
             // 列的组件层内距已置零（`table_impl::cell_paddings`），这里才是唯一一层
             .px(crate::ui::RESULT_CELL_PADDING_X)
@@ -298,6 +300,15 @@ pub(crate) fn render_td(
             .when(is_deleted, |cell| cell.line_through())
             // 用例按它量行高（`.id()` 不登记坐标）：这是「表格密度」那条口径的回归哨兵
             .debug_selector(move || format!("editor-result-rowno-{row_ix}"))
+            // 【DBeaver 对齐】行号格右键要能弹「复制行号」：组件只认**最近一次右键的
+            // 单元格**（`delegate.context_cell`），数据格在 `on_mouse_down(Right)` 里记，
+            // 行号格同样记一笔（列传 0 = 行号槽）。不记的话点行号格会沿用上一个数据格
+            // 的落点，弹出那一格的菜单。
+            .on_mouse_down(MouseButton::Right, move |_, _window, app| {
+                table.update(app, |state, _cx| {
+                    state.delegate_mut().set_context_cell(Some((row_ix, 0)));
+                });
+            })
             .child(SharedString::from(text))
             .into_any_element();
     }

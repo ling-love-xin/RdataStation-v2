@@ -323,7 +323,7 @@ def build_pack(scheme):
             "quick_open.group.header": e["quick"],
             "search.match.background": e["search"],
             "staged.drop": e["danger"],
-            "result.odd_row.background": e["odd"],
+            # 斑马行不落产品槽（2026-11-21 定案 A：斑马底色跟随主题 `table.even`）。
             "result.cell.modified.background": e["modified"],
             "result.cell.error.background": e["error_cell"],
             "result.local_row_background": e["local_row"],
