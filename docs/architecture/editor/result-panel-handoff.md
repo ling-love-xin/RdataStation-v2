@@ -2756,6 +2756,31 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - **仍未接**：状态栏「修改」钮不感知已删行；`SET_NULL` / `SET_DEFAULT` / `CELL_RESET` 无对应语义；
   列级只读缺失。
 
+### 2.116 右键菜单「灰项」的接手要点（2026-11-21）
+
+- **`ContextMenuItem` 多了必填字段 `disabled: bool`**（`grid/menu.rs`，56 处字面量已按默认 `false`
+  补齐）。新加菜单项时编译器会逼你写，**默认必须给 `false`**：守卫用例
+  `context_menu_items_are_enabled_unless_explicitly_shaded` 会在「可编辑未删行出现灰项」时炸。
+- **渲染只能走 `shade(menu, item.disabled, …)`**：`context_menu` 里 33 处 add 点已统一。
+  若有人写回 `menu = menu.item(...)`，**编译不报错**，但灰态静默丢失——这是本批最容易踩的坑。
+  `shade` 就是 `menu.item(el.disabled(disabled))` 的薄封装（vendor `menu/popup_menu.rs:159-171`）。
+- **§9.47 的 delete 归因已更正**：DBeaver `"delete"` 分支在 `isDeletable()` 为真时**直接返回
+  true**，不看 `STATE_REMOVED`（`ResultSetPropertyTester.java:142-157`）；
+  `deleteSelectedRows:5198-5200` 也不因此拒删。本仓的「已删行删除钮置灰」是**有意收紧**
+  （`delete_local_row` 对已删底层行 `return false`，点了没动静），不要再写成「与 DBeaver 同向」。
+- **右键 edit 段的现行口径**：段前提只有 `can_edit_cell(target.editable, target.record_mode, true)`；
+  段内五项逐项 `disabled`（修改单元格 ← `target.is_deleted`；插入 ← `!add`；复制 ← `!copy`；
+  删除 ← `!delete`；邻行复制恒亮）。`row_actions` 在段外用
+  `row_action_state(target.editable, true, target.is_deleted)` 先算（右键必有一行）。
+- **`row_action_state` 三参数不能删 `row_deleted`**：工具栏 delete 钮与右键 delete 项都靠它收紧。
+- **菜单灰项的视觉归组件主题**：headless 只锁「`disabled` 布尔 + 编译级接线」，看不到实际灰底/
+  灰字；目视统一时一并看。
+- 门禁基线（第 65 批后）：result_panel **404 passed**、editor lib **805 passed（1 ignored，
+  默认并发）**、ui-guard **4 passed**、check Finished（并行线 `rds-notification` 2 条
+  never-used warning，与本线无关）。
+- **未做**：`filters` / 布局段仍用「不摆」表达不可用，是否统一成灰项要逐段对照 DBeaver 的
+  `setEnabled` 调用点，别一次性铺开。
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。

@@ -8194,6 +8194,83 @@ assert!(std::time::Instant::now() < deadline, "后台线程未在 3s 内{what}")
   单格撤销语义，见 §9.44.5）；
 - 属性级只读模型（列级可编辑性）缺失，`getAttributeReadOnlyStatus` 那条落不了。
 
+### 9.48 第 65 批：`ContextMenuItem::disabled`（灰项）+ 更正 9.47 的 delete 归因
+
+#### 9.48.1 更正：DBeaver 的 `"delete"` 分支不看行状态
+
+§9.47.2 把 `ResultSetPropertyTester.java:142-157` 概括成「`delete` 先看 `isDeletable`，再看
+行状态」，§9.47.3 据此写了「已删行置灰…与 DBeaver 的 `STATE_ADDED` 同向」——**归因错了**。
+逐行读原文（`:142-157`）：
+
+```
+} else if ("delete".equals(expectedValue)) {
+    ResultSetRow currentRow = rsv.getCurrentRow();
+    if (currentRow == null) return false;
+    if (rsv.isDeletable()) return true;          // ← 到这里就结束了
+    if (!rsv.isInsertable()) return false;
+    if (rsv.isRecordMode()) return currentRow.getState() == STATE_ADDED;
+    …对选中行全部 STATE_ADDED 的判定…
+}
+```
+
+`isDeletable()` 为真时**直接返回 true**，行状态（含 `STATE_REMOVED`）不参与。再对照执行侧：
+`ResultSetViewer.deleteSelectedRows`（`:5184-5218`）的门控是
+`if (!isDeletable() && (!isInsertable() || 任一选中行 state != STATE_ADDED)) return;`
+——同样只在「不可删」时才看行状态；`ResultSetModel.deleteRow`（`:931-937`）对非
+`STATE_ADDED` 行一律 `setState(STATE_REMOVED)` + `changesCount++`（幂等重设）。
+
+结论：**DBeaver 里已删行的删除钮仍是亮的**，点下去界面也不变（`rowsRemoved == 0`，
+只是 changesCount 多加一次，属它自己的瑕疵）。本仓第 64 批的「已删行置灰」是**有意收紧**
+（`delete_local_row` 对已删底层行直接 `return false`，不入撤销栈；点了不会有任何动静，
+灰掉至少能说明原因），**不是对齐**。本批把注释与文档如实改写，不改变已交付的行为。
+
+#### 9.48.2 新能力：`ContextMenuItem::disabled`
+
+- DBeaver 的右键 `add` / `copy` / `delete` 是**无条件 add、由 `PROP_EDITABLE` 决定 enabled**
+  （`fillContextMenu:3209-3211`）；本仓此前只能用「不摆」表达不可用，用户看不出
+  「这里本来有东西、只是现在不能用」。
+- `grid/menu.rs` 的 `ContextMenuItem` 新增 `pub disabled: bool`，字段注释写明 vendor 依据；
+  56 处字面量按默认 `false` 补齐。
+- 渲染侧新增单点接线 `fn shade(menu, disabled, el) -> PopupMenu { menu.item(el.disabled(disabled)) }`，
+  `context_menu` 里 33 处 add 点统一改成 `shade(menu, item.disabled, …)`——新加分支只要照这个写法，
+  灰态就自动生效（vendor `menu/popup_menu.rs:159-171` 是 builder，`:1343-1351` 用
+  `when(!disabled, …)` 断掉 `on_click`）。
+
+#### 9.48.3 右键 edit 段：由「整段收起」改为「项在、灰掉」
+
+段前提从 `can_edit_cell(…) && !target.is_deleted` 收成 `can_edit_cell(…)`，段内五项逐项判：
+
+- 「修改单元格」`disabled = target.is_deleted`。依据：本仓 `begin_edit` 拒绝已删行，
+  而 DBeaver 有 `CMD_CELL_RESET`（`fillEditMenu:3536`）把 `STATE_REMOVED` 行恢复成
+  `STATE_NORMAL`（`ResultSetModel.resetCellValue`，`:572-577`）——本仓没有那条通道，
+  所以「灰 + 不可用」是唯一自洽形态（§9.44.3 的既有决定）。
+- 「在下方插入新行」`disabled = !row_actions.add`（= `!editable`，段前提已保证 ⇒ 恒亮）；
+- 「复制此行」`disabled = !row_actions.copy`（`editable && has_current_row`；右键必有行 ⇒ 恒亮）；
+- 「删除此行」`disabled = !row_actions.delete`（额外要求行未标删 ⇒ 已删行灰，同 9.48.1 的收紧）；
+- 「从上一行 / 下一行复制」仍恒亮（越界由宿主判定，DBeaver 同）。
+
+`row_actions` 在段外先算：`row_action_state(target.editable, true, target.is_deleted)`——
+右键落点必是一行，`has_current_row` 恒 true。
+
+#### 9.48.4 验证
+
+- 改口径的两条旧用例：`context_menu_row_actions_gate_on_editable_and_deleted`（已删行五项
+  仍在，只有 `DeleteRow` 灰）、`context_menu_edit_cell_leads_the_edit_group`（已删行
+  `EditCell` 仍在但灰）。
+- 新增 `context_menu_items_are_enabled_unless_explicitly_shaded`：可编辑未删行上**没有任何
+  灰项**——守卫 disabled 字段的默认值，防止新加项为了过编译随手填 `true`。
+- 门禁：panel **404 passed**、editor **805 passed（1 ignored）**、ui-guard **4 passed**、
+  `cargo check --workspace --all-targets` Finished（仅并行线 2 条 never-used warning）。
+
+#### 9.48.5 遗留
+
+- `disabled` 目前只被行级段用到；`filters` / 布局段等仍用「不摆」表达不可用，是否统一成灰项
+  需逐段对照 DBeaver 的 `setEnabled` 调用点（未做，避免一次性铺开）。
+- 菜单灰项的**视觉**（前景色/悬停）由组件主题决定，headless 只锁数据层（`disabled` 布尔）与
+  编译级接线（`PopupMenuItem::disabled` 存在）。
+- 9.47.5 的三条遗留仍在（状态栏「修改」钮不感知已删行、`SET_NULL`/`SET_DEFAULT`/`CELL_RESET`、
+  列级只读模型）。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
