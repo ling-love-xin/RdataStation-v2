@@ -1112,3 +1112,46 @@ fn indent_reset_changes_document_and_renders(cx: &mut TestAppContext) {
     assert_eq!(shared.document_tab_size(&id), 4, "切制表符保留空格宽度");
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
+
+/// 【第 57 批】状态栏「修改」钮的整链：面板 `begin_edit_cell` 读取选中格后
+/// emit `TableEvent::DoubleClickedCell`，editor 宿主的订阅（`host/construct.rs:325`）
+/// 应当像双击那样真的进入行内编辑。
+///
+/// 与 `cell_edit_enters_on_double_click_and_commits_on_enter` 的差别：那条直接用
+/// `cx.emit` 打事件（只验订阅），这条从**面板的入口方法**走（验「修改」钮的落点）。
+#[gpui_kit::test]
+fn begin_edit_cell_request_enters_inline_editing(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id) = edit_ready_shared("select * from orders");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let handle = cx.update(|_window, cx| panel.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&handle, cx));
+    cx.simulate_keystrokes("ctrl-enter");
+    wait_for_result(cx, &panel);
+
+    // 选中 (0, 2)：组件列 2 = 第 1 个数据列（列 0 是行号槽）
+    cx.update(|_window, cx| {
+        panel.read(cx).grid_for_test().update(cx, |state, cx| {
+            state.set_selected_cell(0, 2, cx);
+        });
+    });
+    let results = cx.update(|_window, app| panel.read(app).result_panel_for_test());
+    cx.update(|_window, cx| results.update(cx, |p, cx| p.begin_edit_cell(cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(
+        cx.update(|_window, cx| {
+            panel
+                .read(cx)
+                .grid_for_test()
+                .read(cx)
+                .delegate()
+                .editing()
+                .is_some()
+        }),
+        "「修改」钮应进入行内编辑（与双击同一链路）"
+    );
+}

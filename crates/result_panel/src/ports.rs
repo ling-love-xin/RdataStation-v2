@@ -322,6 +322,15 @@ pub enum ResultRequest {
     DuplicateRow(usize),
     /// 【#28-B3】删除指定视图行：底层行只打删除标记（可撤销恢复）；本地行直接移出叠加层。
     DeleteRow(usize),
+    /// 【第 57 批】修改当前选中单元格（对齐 DBeaver 状态条 `row.edit`，
+    /// `plugin.xml:1386` 默认可见；`CMD_ROW_EDIT` → `openValueEditor(false)`，
+    /// `ResultSetHandlerMain.java:207-211`）。
+    ///
+    /// 本仓没有「外部值编辑器 + 写回」通道，落点改用同族命令
+    /// `CMD_ROW_EDIT_INLINE`（`openValueEditor(true)`）的同一条链路：面板 emit
+    /// `TableEvent::DoubleClickedCell`，与双击完全同路（门控在 editor 侧再判一次）。
+    /// 无选中格 / 选中行号槽（组件列 0）时不动作。
+    BeginEditCell,
     /// 【第 55 批】把**相邻行**的值复制到当前行（对齐 DBeaver
     /// `CMD_ROW_COPY_FROM_ABOVE` / `_BELOW`，`IResultSetCommands.java:45-46` →
     /// `ResultSetHandlerMain:246-249` → `ResultSetViewer.copyRowValues:5062-5156`）。

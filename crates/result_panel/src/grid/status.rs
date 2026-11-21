@@ -269,6 +269,9 @@ pub struct ResultControls {
     pub next_page: Option<AnyElement>,
     /// 【分页】末页（滚到已抓到的最后一行；同上）
     pub last_page: Option<AnyElement>,
+    /// 【第 57 批】修改当前选中单元格（DBeaver 状态条 `row.edit`；面板注入：只读结果集
+    /// 不注入 → 回退禁用占位钮）
+    pub edit_row: Option<AnyElement>,
     /// 【#28-B3】新增行（面板注入；只读结果集不注入 → 回退禁用占位钮）
     pub insert_row: Option<AnyElement>,
     /// 【#28-B3】复制当前选中行为本地行（同上）
@@ -724,7 +727,13 @@ pub fn render_status_row(
     }
     let mut write_row: Vec<AnyElement> = Vec::new();
     if shown(StatusCommand::EditRow) {
-        write_row.push(placeholder_btn(placeholders[4])); // 修改（Pencil，禁用占位）
+        // 【第 57 批】「修改」钮接线：面板注入真钮（进入行内编辑），
+        // 只读结果集不注入时回退禁用占位（布局不跳）
+        write_row.push(
+            controls
+                .edit_row
+                .unwrap_or_else(|| placeholder_btn(placeholders[4])),
+        );
     }
     if shown(StatusCommand::InsertRow) {
         write_row.push(

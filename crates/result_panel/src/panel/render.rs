@@ -859,6 +859,27 @@ impl ResultPanel {
             .as_ref()
             .and_then(|status| status.selected_row)
             .map(|row| row.saturating_sub(1));
+        // 【第 57 批·状态栏「修改」钮接线】DBeaver 状态条 `row.edit` 默认可见
+        // （`plugin.xml:1386`），handler `CMD_ROW_EDIT` → `openValueEditor(false)`
+        // （`ResultSetHandlerMain.java:207-211`，外部值编辑器）。本仓没有「值编辑器 + 写回」
+        // 通道，落点沿用本仓既有口径（`grid/status.rs:220` 的占位文案就是
+        // 「修改选中格（双击单元格进入编辑）」）——走同族 `CMD_ROW_EDIT_INLINE`
+        // （`openValueEditor(true)`）的同一条链路：只发 `BeginEditCell`，
+        // 面板 emit `TableEvent::DoubleClickedCell`，与双击完全同路。
+        // 只读结果集不给（与行级动作同一门控 `self.editable`）。
+        let edit_row = self.editable.then(|| {
+            let queue = self.queue.clone();
+            Button::new("editor-result-edit-cell")
+                .ghost()
+                .small()
+                .icon(IconName::Pencil)
+                .tooltip("修改当前选中单元格（进入行内编辑）")
+                .debug_selector(|| "editor-result-edit-cell".to_string())
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::BeginEditCell, app);
+                })
+                .into_any_element()
+        });
         let insert_row = self.editable.then(|| {
             let queue = self.queue.clone();
             let anchor = selected_view_row;
@@ -1070,6 +1091,7 @@ impl ResultPanel {
             prev_page,
             next_page,
             last_page,
+            edit_row,
             insert_row,
             duplicate_row,
             delete_row,
@@ -1097,6 +1119,7 @@ impl ResultPanel {
             prev_page,
             next_page,
             last_page,
+            edit_row,
             insert_row,
             duplicate_row,
             delete_row,
@@ -1115,6 +1138,7 @@ impl ResultPanel {
             prev_page,
             next_page,
             last_page,
+            edit_row,
             insert_row,
             duplicate_row,
             delete_row,

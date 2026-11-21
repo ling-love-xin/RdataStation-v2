@@ -1688,6 +1688,45 @@ fn panel_harness<'a>(
     (panel, vcx)
 }
 
+/// 【第 57 批】状态栏「修改」钮走的是双击同一条事件链：选中数据格后
+/// `begin_edit_cell` emit `TableEvent::DoubleClickedCell`（面板自己的订阅
+/// 把 `selection_pos` 对齐到该格）；停在行号槽（组件列 0）时什么都不发。
+///
+/// 断言前先用哨兵值抹掉 `set_selected_cell` 自带的 `SelectCell` 副作用，
+/// 否则「事件到底发没发」会被上面那次选中掩盖。
+#[gpui_kit::test]
+fn begin_edit_cell_emits_the_double_click_only_for_data_cells(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    let grid = cx.update(|_, app| panel.read(app).grid.clone());
+
+    // 组件列 2 = 第 2 个数据列（组件列 0 是行号槽，数据格从 1 起）
+    cx.update(|_, app| {
+        grid.update(app, |state, cx| state.set_selected_cell(0, 2, cx));
+    });
+    cx.update(|_, app| panel.update(app, |p, _cx| p.selection_pos = Some((9, 9))));
+    cx.update(|_, app| panel.update(app, |p, cx| p.begin_edit_cell(cx)));
+    assert_eq!(
+        cx.update(|_, app| panel.read(app).selection_pos),
+        Some((0, 2)),
+        "数据格上「修改」应走 DoubleClickedCell 订阅（面板侧记下该格）"
+    );
+
+    // 行号槽：选中 (0, 0) 后再打一次哨兵，「修改」不该把哨兵覆盖掉
+    cx.update(|_, app| {
+        grid.update(app, |state, cx| state.set_selected_cell(0, 0, cx));
+    });
+    cx.update(|_, app| panel.update(app, |p, _cx| p.selection_pos = Some((9, 9))));
+    cx.update(|_, app| panel.update(app, |p, cx| p.begin_edit_cell(cx)));
+    assert_eq!(
+        cx.update(|_, app| panel.read(app).selection_pos),
+        Some((9, 9)),
+        "行号槽（组件列 0）不是数据格，「修改」不该 emit"
+    );
+}
+
 /// 【工具栏配置】状态栏命令项的默认可见性对齐 DBeaver `plugin.xml:1381-1397`：
 /// `undo` / `redo` 两项 `defaultVisibility="false"`（取下一段是有意偏离，常显），
 /// 其余 `true`；配置菜单把它们勾回来后应真的重新出现（否则隐藏 = 永久失去入口）。

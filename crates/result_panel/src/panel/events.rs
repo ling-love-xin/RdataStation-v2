@@ -5,7 +5,7 @@ use std::sync::Arc;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::input::{InputState, TextareaState};
-use gpui_kit::component::table::{TableDelegate as _, TableState};
+use gpui_kit::component::table::{TableDelegate as _, TableEvent, TableState};
 use gpui_kit::*;
 
 // 【B5】事实帧只读句柄随网格投影进 delegate（列式统计 / 原生数值排序交互派生时读取）
@@ -302,6 +302,30 @@ impl ResultPanel {
     /// 【结果内查找】只读快照（渲染「N 个匹配」与当前命中序号）
     pub fn find_state(&self) -> (bool, &str, usize) {
         (self.find_open, self.find_query.as_str(), self.find_hits)
+    }
+
+    /// 【状态栏·修改单元格】把「修改」钮转成**双击同一事件**：
+    /// `TableEvent::DoubleClickedCell(组件行, 组件列)`。
+    ///
+    /// 语义：DBeaver 状态条的 `row.edit`（`CMD_ROW_EDIT`）打开外部值编辑器
+    /// （`ResultSetHandlerMain.java:207-211` 的 `openValueEditor(false)`），本仓没有
+    /// 「值编辑器 + 写回」通道，改用同族 `CMD_ROW_EDIT_INLINE`（`openValueEditor(true)`）
+    /// 的就地编辑链路——事件由 editor 宿主订阅后进入行内编辑，门控（通道 / 项目 /
+    /// 键列 / 只读）在那边再判一次（`host/construct.rs:325-339`）。
+    ///
+    /// 组件列 0 是行号槽（数据格从 1 起，见 `construct.rs:337` 的 `col.saturating_sub(1)`），
+    /// 停在行号槽时什么都不做；没有选中格（整行模式 / 未选中）也不做。
+    pub fn begin_edit_cell(&mut self, cx: &mut Context<Self>) {
+        let Some((row, col)) = self.grid.read(cx).selected_cell() else {
+            return;
+        };
+        if col == 0 {
+            return;
+        }
+        // 面板侧不用手动记选区：`DoubleClickedCell` 的订阅在 lifecycle 里，
+        // emit 之后面板自己会收到并把 `selection_pos` 对齐。
+        self.grid
+            .update(cx, |_state, cx| cx.emit(TableEvent::DoubleClickedCell(row, col)));
     }
 
     /// 【B15】应用筛选的公共实现；`requeue=false` 时不触发「下发源库」重查入队

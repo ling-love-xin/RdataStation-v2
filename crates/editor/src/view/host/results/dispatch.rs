@@ -509,6 +509,10 @@ impl EditorHostPanel {
             }
             ResultRequest::DuplicateRow(view) => self.duplicate_local_row(view, cx),
             ResultRequest::DeleteRow(view) => self.delete_local_row(view, cx),
+            // 【第 57 批】状态栏「修改」钮：进入行内编辑（与双击同一条事件链路）
+            ResultRequest::BeginEditCell => {
+                self.result_panel.update(cx, |p, cx| p.begin_edit_cell(cx));
+            }
             // 【第 55 批】「从上一行 / 下一行复制」：逐格改写现有行（不是插新行）
             ResultRequest::CopyRowValuesFrom { row, above } => {
                 self.copy_row_values_from_adjacent(row, above, cx);
