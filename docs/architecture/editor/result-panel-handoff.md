@@ -3064,6 +3064,23 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   本仓无驱动侧默认值通道。
 - 未决：`SelectRow` 事件路径要不要统一写 `status.selected_row`（本批只补键位路径）。
 
+### 2.128 切筛选焦点（2026-11-22，第 77 批）
+
+- 键位：`CTRL+ALT+SHIFT+T` → `result_panel::grid::SwitchFilterFocus`
+  （`plugin.xml:1058`；`ResultSetHandlerMain:179-181` → `ResultSetViewer.switchFilterFocus():689-701`），
+  **挂 `RESULT_PANEL_CONTEXT`**（上游 context 就是 `...ui.context.resultset`，不是 `.focused`）
+  ——若绑网格层，焦点在筛选框时「切回来」那一半按不到。
+- 落点：`ResultPanel::switch_filter_focus(window, cx) -> bool` + 公共 `filter_focus_handle(cx)`；
+  判据 `window.focused(cx) == Some(filter)`（贴 `isFocusControl()` 的精确语义）；交回走
+  `presentation_focus_target`（网格态回网格、文本态回面板根）。
+- 收起 / 没有筛选面板 → 返回 `false`，宿主留提示（上游静默 return，本仓按第 69 批口径）。
+- 无结果时面板整块不渲染（`host/render.rs:221/241`），键位不命中、焦点不动——与上游
+  `enabledWhen` 要求 `resultset.part` 一致。
+- 用例：panel 2 条（双向往返 / 收起时不动作）；editor 2 条（键位全链往返 / 无结果 inert）。
+- 门禁：pair `Finished` 无 warning；panel **416**（+2）；ui-guard 4；editor lib **831 passed**
+  （1 ignored；825 → +6，其中 +2 本批、+4 来自并行线同期补的用例）；workspace `Finished`。
+- 记档：`TableState` 没有 `focus_handle` 方法，窗口用例必须 `use gpui_kit::Focusable as _;`。
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。

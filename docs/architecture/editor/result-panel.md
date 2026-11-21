@@ -9296,6 +9296,104 @@ workspace check `Finished`（2 warning 全来自 `rds-notification`）。
 - **鼠标整行选中**（`SelectRow` 事件路径）仍不写状态行——本批只补键位路径。要不要在事件路径
   统一补，待拍板（会改变既有「鼠标整行选中不点亮行级动作」的观感）。
 
+### 9.60 第 77 批：`CTRL+ALT+SHIFT+T` 焦点在筛选框与结果呈现之间双向切换（`CMD_FOCUS_FILTER`）
+
+#### 9.60.1 缺口
+
+`plugin.xml:1058` 的 `CTRL+ALT+SHIFT+T`（`org.jkiss.dbeaver.core.resultset.focus.filter`）一直没接。
+它补的是一个很具体的空档：**筛选框和结果区之间没有一键来回的路**——想改筛选词要拿鼠标点输入框，
+改完想回网格看结果又要点一次网格。DBeaver 用一个双向开关解决这件事。
+
+#### 9.60.2 DBeaver 依据
+
+- 键位：`plugin.xml:1058` `CTRL+ALT+SHIFT+T` → `org.jkiss.dbeaver.core.resultset.focus.filter`，
+  context 是 `org.jkiss.dbeaver.ui.context.resultset`——**不是** `...resultset.focused`。
+- 命令定义 `plugin.xml:249`；handler 绑在 `ResultSetHandlerMain`（`plugin.xml:545`，
+  `enabledWhen` = `org.jkiss.dbeaver.core.ui.resultset.part`）；右键「导航」段 `:1009-1017` 也挂它。
+- 常量 `IResultSetCommands.java:30` `CMD_FOCUS_FILTER`；分发 `ResultSetHandlerMain.java:179-181`
+  → `rsv.switchFilterFocus()`。
+- 实现 `ResultSetViewer.java:689-701`：
+
+  ```java
+  if (filtersPanel == null) return;                       // 没筛选面板：静默
+  if (filtersPanel.getEditControl().isFocusControl())     // 焦点**精确**在筛选框上
+      activePresentation.getControl().setFocus();         // → 交回当前呈现
+  else
+      filtersPanel.getEditControl().setFocus();           // → 交到筛选框
+  ```
+
+  即：**双向**；判据是精确 focus，不是「后代里有焦点」。
+
+#### 9.60.3 落点
+
+- `result_panel`：`actions!` 加 `SwitchFilterFocus`（注释写明这是**面板级**命令）；
+  `ResultPanel::switch_filter_focus(&mut self, window, cx) -> bool`；
+  公共 `filter_focus_handle(&self, cx) -> FocusHandle`（`filter_input.read(cx).focus_handle(cx)`），
+  判据与窗口用例共用同一口。
+- 判据用 `window.focused(cx) == Some(filter.clone())`：对应上游 `isFocusControl()` 的精确语义；
+  `contains_focused` 会把筛选框**后代**也算进来，口径更松，不用。
+- 「交回」落点跟第 60 批一致走 `presentation_focus_target(cx)`：网格态回网格、文本态回面板根
+  （文本态下网格不在渲染树上，直接把焦点塞给它等于丢掉）。
+- 筛选区收起（`show_filter_panel == false`）或没有筛选面板时返回 `false`；宿主
+  `on_switch_filter_focus` 见 `false` 留一句提示。上游此处静默 `return`，本仓按第 69 批口径
+  「不可用一律留提示」——键位没有「灰」这一态。
+
+#### 9.60.4 键位挂哪层 context（本批最要紧的一处判断）
+
+挂**面板层** `editor-result-panel` 而不是网格层 `...resultset.focused`：
+
+- 上游这一条的 context 本来就是 `...resultset`（整个结果集部件），不是 `.focused` 变体；
+- 更实际的理由：**焦点已经在筛选框里时也要能命中**。若按网格层绑，`「切回来」`那一半
+  （此时焦点在筛选框、网格 context 不在焦点路径上）按不到——双向就成了单向。
+
+#### 9.60.5 没有结果时
+
+结果区在本仓是**有内容才渲染**（`crates/editor/src/view/host/render.rs:221/241`，
+`result_has_content` 为假时整个 `ResultPanel` 子树不进树）。所以：
+
+- 无结果 + 焦点在编辑器 → `editor-result-panel` 上下文不在焦点路径上 → 键位**不命中**、焦点不动；
+- 这与上游 `enabledWhen` 要求 `resultset.part` 存在完全一致：没有结果集部件时这条命令本来
+  就是禁用的。上游 `switchFilterFocus` 自己只判 `filtersPanel`、不看有没有数据，差别只在
+  「部件存不存在」，本仓由「面板渲不渲染」自然承担。
+
+#### 9.60.6 用例
+
+panel（`panel/tests.rs`）：
+
+- `switching_the_filter_focus_goes_both_ways`：先把焦点给网格 → 第一次切进筛选框 →
+  第二次切回网格（用 `filter_focus_handle` 与网格 handle 依次比对 `window.focused`）；
+- `switching_the_filter_focus_does_nothing_when_the_filter_area_is_collapsed`：
+  `show_filter_panel = false` → 返回 `false`。
+
+editor（`view/tests/results_a.rs`）：
+
+- `the_filter_focus_key_moves_between_the_filter_box_and_the_grid`：`bind_editor_keys` → 打开面板
+  → 执行 → 焦点给网格 → 两次 `ctrl-alt-shift-t`，断言焦点先筛选框、后网格；
+- `the_filter_focus_key_is_inert_without_a_result`：无结果时按键，焦点不动（并先断言
+  `has_content() == false` 守前提）。
+
+两处窗口用例都要 `use gpui_kit::Focusable as _;`：`TableState` 自身没有 `focus_handle` 方法，
+只有引入 `Focusable` trait 才调得到（组件库 0.9 口径）。
+
+#### 9.60.7 门禁（第 77 批，最终实测）
+
+- `cargo check -p rds-editor -p rds-result-panel --all-targets`：`Finished`，无 warning；
+- `cargo test -p rds-result-panel -p rds-ui-guard`：panel **416 passed**（414 → +2）、
+  ui-guard **4 passed**；
+- `cargo test -p rds-editor --lib`：**831 passed（1 ignored）**（825 → +6；其中本批 +2，
+  另 +4 是 SQL 格式化并行线同期补的用例——**本批未提交任何格式化线文件**）；
+- `cargo check --workspace --all-targets`：`Finished`（2 warning 全来自并行线的 `rds-notification`）。
+
+检查期两次失败都出在**用例代码**，不在实现：第一次是 panel 用例缺 `use gpui_kit::Focusable as _;`
+（E0599）+ editor 第二条多一个同名 import（unused）；第二次是「无结果也能进筛选框」那条
+断言不成立——事实上面板在无结果时不渲染（见 §9.60.5），用例改成「无结果时 inert」。
+
+#### 9.60.8 遗留 / 有意差异
+
+- 提示文案「筛选区已收起：在工具栏里打开「显示过滤器面板」后再按」是否定稿，待拍板；
+- 四个浮层（SQL 预览 / 取全部确认 / 筛选设置 / 跳列）的 Esc 关闭仍无窗口用例（§9.58.8 已记）；
+- 筛选条隐藏后工具栏左段整体消失、没有常驻入口这一点仍未解——本批的 `false` + 提示算一条新依据。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
