@@ -8016,7 +8016,7 @@ toolbar 只剩 `filtersCustomButton` + `openFindReplaceButton`。
 
 | 入口 | 位置 | 原式子 |
 | --- | --- | --- |
-| 状态栏「修改」钮 | `panel/render.rs:885` | `disabled = transposed \|\| !(col > 0)` |
+| 状态栏「修改」钮 | `panel/render.rs:885` | `disabled = transposed` 或 `!(col > 0)` |
 | 右键「修改单元格」 | `grid/menu.rs` edit 段 | `editable && !is_deleted` |
 | 网格 `ENTER` | `panel/events.rs::begin_edit_cell_at` | `col == 0` 早退 |
 
@@ -8050,7 +8050,7 @@ pub fn can_edit_cell(editable: bool, record_view: bool, has_current_cell: bool) 
 | --- | --- | --- |
 | 状态栏钮 | `(self.editable, self.transposed, picked)` → `disabled = !…` | 闭包内 `editable` 恒真（只读结果集走占位），写进去是为了让这条式子就是全部条件 |
 | 右键编辑段 | `(target.editable, target.record_mode, true)` + `!target.is_deleted` | 右键 target 天然带格坐标 ⇒ `has_current_cell` 恒真；`is_deleted` 是本仓第 4 个维度，见 §9.44.3 |
-| 网格 `ENTER` | 只判 `col == 0 \|\| self.transposed` | **有意不判 `editable`**：宿主要拿 `cell_editable` 的 `Err(EditGate)` 在顶部展示原因（`host/construct.rs:340-354`），提前拦会吞掉提示 |
+| 网格 `ENTER` | 只在 `col == 0` 或 `self.transposed` 时早退 | **有意不判 `editable`**：宿主要拿 `cell_editable` 的 `Err(EditGate)` 在顶部展示原因（`host/construct.rs:340-354`），提前拦会吞掉提示 |
 
 `editable` 的来源：宿主在同步数据时算 `editor::exec::editability::result_editable(...)`
 （`host/results/grid.rs:211-223`），即 `self.editable` 已含 通道 / 项目 / 文档只读 / 连接只读 /
