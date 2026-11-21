@@ -132,6 +132,9 @@ pub enum ContextAction {
     /// 【布局段·筛选条】显示 / 隐藏整条筛选区（对齐 DBeaver `ToggleFilterPanelAction`，
     /// `ResultSetViewer.java:3589-3592`；`open` = 点击后的目标态）
     ToggleFilterPanel { open: bool },
+    /// 【filters 段首】「在结果中查找…」（对齐 DBeaver `EDIT_FIND_AND_REPLACE`，
+    /// `ResultSetViewer.fillFiltersMenu:3869`）：命令语义，打开查找栏并聚焦，已开不反关。
+    OpenFind,
 }
 /// 右键菜单里的一项
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -280,8 +283,8 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
     }
     // 【DBeaver 对齐】`fillContextMenu:3166-3177`：复制段之后先一条 Separator，再挂 filters
     // 子菜单（对 DATA / COLUMN_HEADER / ROW_HEADER 三个落点都摆）；本仓菜单扁平，把
-    // `fillFiltersMenu` 的四项设置直接平铺在这里。
-    items.extend(filter_settings_menu_items());
+    // `fillFiltersMenu` 的「在结果中查找…」+ 四项设置直接平铺在这里。
+    items.extend(filters_menu_items());
     // 【DBeaver 对齐】排序段（order 子菜单，`fillContextMenu:3179-3187`）：紧接 filters 之后、
     // 行级动作之前。DBeaver 的 `fillOrderingsMenu:3939-3946` 内部只有 ASC / DESC / NONE 三项、
     // 彼此无分隔线，所以本仓这三项同组、首项也不带分隔线。
@@ -482,11 +485,23 @@ pub fn selection_stat_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem>
         })
         .collect()
 }
-/// 列头下拉菜单的项（**纯函数**；DBeaver 列头箭头菜单 = 右键菜单的列级子集）：
-/// 排序升/降 · 复制此列 · 冻结/取消冻结 · 隐藏此列 · 显示全部列 · 列统计 · 洞察此列。
-/// 值与行相关的动作（预览 / 按值筛选 / 复制值 / 复制整行）只属于右键——它们依赖
-/// “当前格”，列头没有当前格。条件与右键同口径（hidden>0 才摆「显示全部列」、
-/// insight 才摆「洞察此列」）。
+/// 【DBeaver 对齐】filters 子菜单的整组（**纯函数**，`ResultSetViewer.fillFiltersMenu:3864-3933`）：
+/// 首项「在结果中查找…」（`EDIT_FIND_AND_REPLACE`，`:3869`），随后是本仓能落地的四项设置
+/// （[`filter_settings_menu_items`]）。DBeaver 中间还有「按不同值过滤 / 按操作符过滤 /
+/// 清除本列条件」几组，本仓没有列级约束模型，不做（见 `result-panel.md` §9.35.3 / §9.37.3）。
+///
+/// 分隔线：本项自带 `separator_before`（filters 段与上方复制段隔开，`:3166`）；
+/// 四项那一组也自带一条（`:3926` 的 Separator），所以两小组之间仍有线。
+pub fn filters_menu_items() -> Vec<ContextMenuItem> {
+    let mut items = vec![ContextMenuItem {
+        label: "在结果中查找…".to_string(),
+        action: ContextAction::OpenFind,
+        separator_before: true,
+    }];
+    items.extend(filter_settings_menu_items());
+    items
+}
+
 /// 【DBeaver 对齐】`fillFiltersMenu` 尾部四项（**纯函数**，`ResultSetViewer.java:3926-3932`）：
 /// 一条 Separator 之后连摆「保存过滤器设置 / 重置过滤器设置 / 删除所有过滤·排序 /
 /// 编辑筛选设置」。
@@ -523,6 +538,11 @@ pub fn filter_settings_menu_items() -> Vec<ContextMenuItem> {
     ]
 }
 
+/// 列头下拉菜单的项（**纯函数**；DBeaver 列头箭头菜单 = 右键菜单的列级子集）：
+/// 排序升/降 · 复制此列 · 冻结/取消冻结 · 隐藏此列 · 显示全部列 · 列统计 · 洞察此列。
+/// 值与行相关的动作（预览 / 按值筛选 / 复制值 / 复制整行）只属于右键——它们依赖
+/// “当前格”，列头没有当前格。条件与右键同口径（hidden>0 才摆「显示全部列」、
+/// insight 才摆「洞察此列」）。
 pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
     let column_name = target.column_name.as_str();
     let mut items = vec![
@@ -631,10 +651,10 @@ pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             separator_before: true,
         });
     }
-    // 【DBeaver 对齐】`fillFiltersMenu` 尾部四项（`ResultSetViewer.java:3926-3932`）：
+    // 【DBeaver 对齐】`fillFiltersMenu` 整组（`ResultSetViewer.java:3864-3933`）：
     // 与数据格右键共用同一组（DBeaver 的 filters 子菜单对三个落点都摆，见
-    // `fillContextMenu:3169-3177`），文案 / 顺序 / 分隔线口径只在 `filter_settings_menu_items` 一处。
-    items.extend(filter_settings_menu_items());
+    // `fillContextMenu:3169-3177`），文案 / 顺序 / 分隔线口径只在 `filters_menu_items` 一处。
+    items.extend(filters_menu_items());
     items
 }
 /// 左栏「列浏览器」清单行右键菜单的项（**纯函数**；对齐 DBeaver 元数据面板清单右键口径：
@@ -1022,6 +1042,18 @@ pub(crate) fn context_menu(
             }
             // 列级筛选只属于列头菜单（右键的「按值筛选」是全局词）：右键收到即忽略
             ContextAction::FilterColumnValue { .. } | ContextAction::ClearColumnFilter { .. } => {}
+            // 【filters 段首】「在结果中查找…」= DBeaver `EDIT_FIND_AND_REPLACE` 命令
+            // （`fillFiltersMenu:3869`）：只打开并聚焦查找栏，已开不反关（与工具栏那颗
+            // CHECK 型开关 `ToggleFind` 的语义分开，见 `ports.rs` 两变体的注释）。
+            ContextAction::OpenFind => {
+                if let Some(queue) = delegate.action_queue.clone() {
+                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| {
+                            queue.request(ResultRequest::OpenFind, app);
+                        },
+                    ));
+                }
+            }
             // 【DBeaver 对齐】筛选段尾部四项（`fillFiltersMenu:3926-3932`）：DBeaver 的
             // filters 子菜单对 DATA / COLUMN_HEADER / ROW_HEADER 三个落点都摆
             // （`fillContextMenu:3169-3177` 无落点门控），所以数据格右键同样摆这四项——

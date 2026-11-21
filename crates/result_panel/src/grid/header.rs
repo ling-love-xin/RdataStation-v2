@@ -470,6 +470,17 @@ pub(crate) fn render_th(
                                         },
                                     ));
                                 }
+                                // 【filters 段首】「在结果中查找…」：命令语义（只开不关），
+                                // 与数据格右键同一组请求（`fillFiltersMenu:3869`）
+                                ContextAction::OpenFind => {
+                                    if let Some(queue) = filter_queue.clone() {
+                                        menu = menu.item(PopupMenuItem::new(label).on_click(
+                                            move |_, _window, app| {
+                                                queue.request(ResultRequest::OpenFind, app);
+                                            },
+                                        ));
+                                    }
+                                }
                                 // 【DBeaver 对齐】`fillFiltersMenu` 尾部四项
                                 // （`ResultSetViewer.java:3926-3932`）：保存 / 重置筛选设置、
                                 // 删除所有过滤 / 排序、编辑筛选设置——全部转交面板执行

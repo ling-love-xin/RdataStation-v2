@@ -60,6 +60,8 @@ impl EditorHostPanel {
             }
             ResultRequest::ApplyFilter(value) => self.apply_filter_via_window(value, cx),
             ResultRequest::ToggleFind => self.toggle_find_via_window(cx),
+            // 【结果内查找·命令语义】右键 filters 段首的「在结果中查找…」：只开不关
+            ResultRequest::OpenFind => self.open_find_via_window(cx),
             ResultRequest::FindNext => self
                 .result_panel
                 .update(cx, |p, cx| p.find_step(true, cx)),
@@ -754,6 +756,15 @@ impl EditorHostPanel {
         let panel = self.result_panel.clone();
         let _ = self.window.update(cx, |_panel, window, app| {
             panel.update(app, |p, cx| p.toggle_find(window, cx));
+        });
+    }
+
+    /// 【结果内查找·命令语义】打开并聚焦查找栏（幂等）：与 `toggle_find_via_window`
+    /// 同一条窗口转手口径，只是面板侧走 `open_find` 而不是 `toggle_find`。
+    pub(crate) fn open_find_via_window(&mut self, cx: &mut Context<Self>) {
+        let panel = self.result_panel.clone();
+        let _ = self.window.update(cx, |_panel, window, app| {
+            panel.update(app, |p, cx| p.open_find(window, cx));
         });
     }
 

@@ -5161,5 +5161,40 @@ fn clearing_all_filters_drops_ordering_but_keeps_hidden_columns(
     );
     assert!(after.5, "delegate 侧隐藏态也还在");
 }
+/// 【结果内查找·命令语义】右键 filters 段首的「在结果中查找…」走 `open_find`，
+/// 它是幂等的：未开则开；**已开时不关**（工具栏那颗 CHECK 型 `toggle_find` 才负责关闭）。
+/// 两条入口共用同一份面板态，故这里对照着验：打开 → 再 open 仍开 → toggle 才关。
+#[gpui_kit::test]
+fn open_find_is_idempotent_and_never_closes(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
 
+    // 1) 第一次 open：打开
+    cx.update(|window, cx| panel.update(cx, |p, cx| p.open_find(window, cx)));
+    let after_first = cx.update(|_window, app| {
+        let (open, query, hits) = panel.read(app).find_state();
+        (open, query.to_string(), hits)
+    });
+    assert!(after_first.0, "未开时 `open_find` 应把查找栏打开");
 
+    // 2) 再 open 一次：仍然开着（命令不该反关已开的查找栏）
+    cx.update(|window, cx| panel.update(cx, |p, cx| p.open_find(window, cx)));
+    let after_second = cx.update(|_window, app| {
+        let (open, query, hits) = panel.read(app).find_state();
+        (open, query.to_string(), hits)
+    });
+    assert!(
+        after_second.0,
+        "已开时 `open_find` 必须保持打开（命令语义，不是开关）"
+    );
+    assert_eq!(after_second.1, after_first.1, "`open_find` 不动查找词");
+
+    // 3) 对照：工具栏那颗 toggle 才是开关，会把已开的关掉且保留词
+    cx.update(|window, cx| panel.update(cx, |p, cx| p.toggle_find(window, cx)));
+    let after_toggle = cx.update(|_window, app| {
+        let (open, query, hits) = panel.read(app).find_state();
+        (open, query.to_string(), hits)
+    });
+    assert!(!after_toggle.0, "`toggle_find` 仍是开关语义");
+    assert_eq!(after_toggle.1, after_first.1, "关闭时保留查找词");
+}

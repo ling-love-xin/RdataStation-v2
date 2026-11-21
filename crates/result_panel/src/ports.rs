@@ -77,6 +77,13 @@ pub enum ResultRequest {
     /// `openFindReplaceButton`，`ResultSetFilterPanel.java:356`）。打开时要 `&mut Window`
     /// 把焦点交给查找框，故同样走宿主的窗口转手。
     ToggleFind,
+    /// 【结果内查找·命令语义】打开查找栏并把焦点交给查找框（**幂等**：已开则只聚焦，不关）。
+    ///
+    /// 与 [`Self::ToggleFind`] 的区别只在「已开时」：工具栏那颗是 CHECK 型开关（再按关闭，
+    /// `ResultSetFilterPanel.java:356-385`）；而右键 filters 段首的「在结果中查找…」是
+    /// DBeaver 的 `EDIT_FIND_AND_REPLACE` **命令**（`ResultSetViewer.fillFiltersMenu:3869`），
+    /// 命令不该把已经打开的查找栏反关掉。
+    OpenFind,
     /// 【结果内查找】下一处匹配（回车同效）
     FindNext,
     /// 【结果内查找】上一处匹配

@@ -20,7 +20,8 @@ use crate::grid::{
     ResultGridDelegate, ResultMatch, ResultStatus, ResultToolbar, SelectionStatKind,
     SelectionStatPrefs, WINDOW_FETCH_NOTICE, column_browser_menu_items, column_distinct_values,
     column_menu_items, column_stats, column_stats_from_values, context_menu_items, duration_text,
-    fetch_more_hint, filter_panel_menu_item, filter_settings_menu_items, format_cell_text,
+    fetch_more_hint, filter_panel_menu_item, filter_settings_menu_items, filters_menu_items,
+    format_cell_text,
     group_by_values, layout_presentation_menu_items, row_number_menu_items,
     selection_stat_menu_items, selection_statistics, stats_lines, status_action_placeholders,
     status_segments, thousands, truncated_hint, truncation_notice, validate_edit_value,
@@ -346,7 +347,8 @@ fn context_menu_offers_filter_copy_and_freeze() {
             "复制整行（TSV）",
             "复制整行为 JSON",
             // 【DBeaver 对齐】`fillContextMenu:3166-3177` 复制段之后挂 filters 子菜单，
-            // 本仓扁平化后 = `fillFiltersMenu` 尾部四项（见 §9.35）
+            // 本仓扁平化后 = `fillFiltersMenu:3864-3933` 的整组（首项查找 + 四项设置，见 §9.37）
+            "在结果中查找…",
             "保存过滤器设置",
             "重置过滤器设置",
             "删除所有过滤 / 排序",
@@ -404,15 +406,16 @@ fn context_menu_offers_filter_copy_and_freeze() {
         ContextAction::CopyRowJson(0),
         "【A9】整行 JSON（单对象，与导出 JSON 档同口径）"
     );
+    assert_eq!(items[7].action, ContextAction::OpenFind);
     assert_eq!(
-        items[11].action,
+        items[12].action,
         ContextAction::SortDown {
             column: "name".to_string(),
             descending: false
         }
     );
     assert_eq!(
-        items[12].action,
+        items[13].action,
         ContextAction::SortDown {
             column: "name".to_string(),
             descending: true
@@ -420,25 +423,25 @@ fn context_menu_offers_filter_copy_and_freeze() {
     );
     assert!(
         items[7].separator_before,
-        "filters 段（复制段之后）之前要有分隔线（DBeaver `fillContextMenu:3166`）"
+        "filters 段（首项 = 在结果中查找…）之前要有分隔线（DBeaver `fillContextMenu:3166`）"
     );
     assert!(
-        !items[11].separator_before,
+        !items[12].separator_before,
         "排序段紧跟 filters 段、首项不带分隔线（DBeaver order 子菜单在 filters 之后且内部无 \
          Separator，`fillContextMenu:3179-3187` / `fillOrderingsMenu:3939-3946`）"
     );
     assert!(
-        items[13].separator_before,
+        items[14].separator_before,
         "列级视图段（冻结起）与上方行级动作段之间要有一条分隔线（DBeaver `:3219` 的 Separator）"
     );
-    assert_eq!(items[13].action, ContextAction::ToggleFreeze(1));
+    assert_eq!(items[14].action, ContextAction::ToggleFreeze(1));
     assert_eq!(
-        items[14].action,
+        items[15].action,
         ContextAction::HideColumn(1),
         "【P2】隐藏此列跟在冻结后（都是列级动作）"
     );
     assert_eq!(
-        items[15].action,
+        items[16].action,
         ContextAction::ColumnStats { column: 1 },
         "【P2-3】列统计与隐藏同组"
     );
@@ -452,14 +455,14 @@ fn context_menu_offers_filter_copy_and_freeze() {
     let mut done = target.clone();
     done.frozen = true;
     let items = context_menu_items(&done);
-    assert_eq!(items[13].label, "取消冻结此列", "已冻结时给的是反向动作");
+    assert_eq!(items[14].label, "取消冻结此列", "已冻结时给的是反向动作");
 
     // 【P2】隐藏了列才出现「显示全部列」
     let mut hidden = target.clone();
     hidden.hidden_columns = 2;
     let items = context_menu_items(&hidden);
     assert_eq!(
-        items[16].action,
+        items[17].action,
         ContextAction::ShowAllColumns,
         "隐藏非空时给恢复入口（排在「列统计」之后）"
     );
@@ -4797,5 +4800,41 @@ fn context_menu_sections_follow_fill_context_menu_order() {
     assert!(
         items[freeze].separator_before,
         "视图段前一条 Separator（`:3219`）"
+    );
+}
+/// 【DBeaver 对齐】filters 整组的首项是「在结果中查找…」（`fillFiltersMenu:3869` 的
+/// `EDIT_FIND_AND_REPLACE`）：命令态，动作是 `OpenFind`（只开不关）；随后是四项设置，
+/// 四条设置项那一组自带 `separator_before`（`:3926` 的 Separator），所以两小组之间有线。
+#[test]
+fn filters_group_starts_with_the_find_command() {
+    let items = filters_menu_items();
+    assert_eq!(items.len(), 5, "查找 + 四项设置");
+    assert_eq!(items[0].label, "在结果中查找…");
+    assert_eq!(items[0].action, ContextAction::OpenFind);
+    assert!(items[0].separator_before, "整段前一条分隔线（`:3166`）");
+    assert_eq!(items[1].label, "保存过滤器设置");
+    assert!(
+        items[1].separator_before,
+        "四条设置项前还有一条分隔线（`:3926` 的 Separator）"
+    );
+    assert!(
+        items[2..].iter().all(|item| !item.separator_before),
+        "四条设置项内部不再插分隔线"
+    );
+
+    // 两处落点（数据格右键 / 列头菜单）的首项都是查找命令
+    let target = target("orders", "name", 1);
+    let data_items = context_menu_items(&target);
+    let first_filter = data_items
+        .iter()
+        .position(|item| item.action == ContextAction::OpenFind)
+        .expect("数据格右键要摆查找命令");
+    assert_eq!(data_items[first_filter].label, "在结果中查找…");
+    let column_items = column_menu_items(&target);
+    assert!(
+        column_items
+            .iter()
+            .any(|item| item.action == ContextAction::OpenFind),
+        "列头菜单同样要摆（DBeaver filtersMenu 对三个落点都挂）"
     );
 }

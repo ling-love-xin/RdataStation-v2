@@ -141,6 +141,21 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【结果内查找·命令语义】打开查找栏并聚焦（**幂等**，已开不关）
+    ///
+    /// 工具栏那颗是 CHECK 型开关（[`Self::toggle_find`]）；右键 filters 段首的
+    /// 「在结果中查找…」对齐 DBeaver 的 `EDIT_FIND_AND_REPLACE` 命令
+    /// （`ResultSetViewer.fillFiltersMenu:3869`）——命令只负责「把查找栏叫出来」，
+    /// 已打开时应聚焦而不是反关。查找词与口径一概不动（与 `toggle_find` 同口径）。
+    pub fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.find_open {
+            self.find_open = true;
+            cx.notify();
+        }
+        let input = self.find_input.clone();
+        input.update(cx, |state, cx| state.focus(window, cx));
+    }
+
     /// 「只显示匹配行」开关（查找栏上的勾选框）
     ///
     /// 对齐 DBeaver 的 `selectAllButton`（`SWT.CHECK`，`ResultsetFindReplaceOverlay:107-135`）：
