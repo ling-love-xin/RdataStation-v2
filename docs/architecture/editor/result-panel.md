@@ -9062,6 +9062,122 @@ if changed { /* 已撤销 */ } else { /* 没有可撤销 */ }
   （`CMD_CELL_SET_DEFAULT`）、`CTRL+ALT+C` / `CTRL+ALT+R`（选列 / 选行）、
   `ALT+SHIFT+ARROW`（移列）仍未接，见 §9.48.5 的清单。
 
+### 9.58 第 75 批：`CTRL+SHIFT+G` 跳转到列（`CMD_GO_TO_COLUMN`）
+
+#### 9.58.1 缺口
+
+`plugin.xml:1090` 的 `CTRL+SHIFT+G` 是 `CMD_GO_TO_COLUMN`，本仓一直没绑。列浏览器里
+「双击定位」只把网格滚到**首行**（`locate_column`），键盘上没有「去哪一列」的入口。
+`CTRL+G`（行号跳转）在第 70 批落地，这一条是它成对的另一半。
+
+#### 9.58.2 DBeaver 依据
+
+- 键位：`plugin.xml:1090` `CTRL+SHIFT+G`（context `...resultset.focused`）；右键「导航」段
+  也挂这两条（`ResultSetViewer:3620-3621` navigateMenu）。
+- 命令：`IResultSetCommands.java:71` `CMD_GO_TO_COLUMN =
+  "org.jkiss.dbeaver.core.resultset.grid.gotoColumn"`。
+- handler：`ResultSetHandlerMain.java:526-534` → `askForColumnToGo(...)`，成功则
+  `setCurrentAttribute(target)` + `scrollToRow(CURRENT)`（**纵向**滚回当前行，不是跳首行）。
+- `ResultSetHandlerMain.askForColumnToGo:762-849`：
+  1. `attrsByName` 用 `name.toUpperCase()` 建映射（`put`：重名后到覆盖）；
+  2. 先按**名字**查；查不到再 `parseInt`，合法范围 `1..=attributes.length` 后取
+     `attributes[index-1]`；
+  3. 都不中 → `"Unknown column name"`；
+  4. 初值 = 当前属性名（`initialValue = currentAttribute.getName()`）；
+  5. 输入框带内容补全（`ContentAssistUtils.installContentProposal`：后缀匹配 + 前缀优先）。
+- 文案：`bundle_zh.properties:252-255`「跳转到列」/「跳转到指定列」。
+
+#### 9.58.3 入口形态：面板内浮层 vs 复用状态栏行号框
+
+两种落法的代价都摆过：
+
+| 方案 | 代价 |
+| --- | --- |
+| A 把状态栏那口 `row_count_input` 扩成行列双输入 | 中段只有一格宽（`RESULT_ROW_COUNT_BOX_WIDTH`），塞两个框要么改布局常量，要么和「行号即时跳」打架——那口的 `Change` 是**边打边跳**，列名不能边打边跳 |
+| B 面板内浮层 + 常驻 `InputState` | 多一组字段 / 订阅 / 一个遮罩层；但语义干净（Enter 提交、Esc 关），且与「取全部确认」「筛选设置」同一套范式 |
+
+选 B。`InputState::new` 要 `&mut Window`，所以输入框在**构造期**建好
+（`goto_column_input`），打开时只回填 placeholder + 交焦点——同 `row_count_input` 的做法。
+
+#### 9.58.4 落地
+
+| 层 | 东西 |
+| --- | --- |
+| action | `result_panel::grid::GotoColumn` |
+| 宿主处理器 | `EditorHostPanel::on_goto_column`（`exec/edit_cmds.rs`）：直接调 `ResultPanel::open_goto_column`；没列可跳留提示（与 `CTRL+G` 的 `on_focus_row_jump` 同构） |
+| 面板打开 | `ResultPanel::open_goto_column`：清 value / 错误 → 当前列名进 placeholder → `window.focus` 交给输入框 |
+| 面板提交 | `ResultPanel::submit_goto_column`：解析 → 命中跳 + 收浮层 + 焦点回网格；未命中把原因留在浮层（**不关**） |
+| 面板关闭 | `ResultPanel::close_goto_column`：收开关 + 焦点回网格 |
+| 端口 | `ResultRequest::SubmitGotoColumn` / `CloseGotoColumn`（浮层钮与 Esc 只有 `&App`，拿不到 window） |
+| 渲染 | `panel/dialog.rs::render_goto_column` + `panel/render.rs` 第四层浮层；宽度 `ui::RESULT_GOTO_COLUMN_WIDTH = 24.0` |
+| 键位 | `ctrl-shift-g` → `RESULT_GRID_CONTEXT`（`app/main.rs` + 测试 `bind_editor_keys`） |
+
+解析是纯函数 `goto_column_target(&self, input, cx) -> Result<usize, String>`：先名字
+（`eq_ignore_ascii_case`）→ 再 1 基序号 `1..=列数` → 不然「未知列名：…」。
+
+Enter 与浮层「跳转」钮同一终点：前者在面板订阅里有 window，直接调 `submit_goto_column`；
+后者经端口回宿主 `dispatch_result_request` 再调同一个方法。
+
+#### 9.58.5 列映射与顺手修的两处 off-by-one
+
+`set_selected_cell` / `set_selected_col` 收的是**组件列**（0 是行号槽，与
+`grid/table_impl.rs` 的 `data_column(col_ix - 1)` 同一口径），而 `delegate.view_column(data_col)`
+返回**显示列**（0 基数据区）。所以正确落点是 `view_col + 1`。
+
+顺手发现两处既有调用少加了这 1：
+
+- `ResultPanel::select_column`（列浏览器单击）：`set_selected_col(view_col)` → 网格列高亮
+  左移一格，选第 1 列时整列选中落在行号槽上；
+- `ResultPanel::locate_column`（列浏览器双击）：`set_selected_cell(0, view_col)` → 同样左移。
+
+两处都改成 `view_col + 1`。既有用例不受影响
+（`group_move_buttons_queue_the_request_for_the_selected_column` 只读 `selected_col`
+这个**数据列序**字段，与组件列无关）。
+
+#### 9.58.6 有意差异
+
+- 上游是 `InputDialog`（模态窗口），本仓是面板内遮罩卡片（与 SQL 预览 / 筛选设置 / 取全部确认同范式）。
+- 上游预填当前属性名且默认全选；本仓放 placeholder（`InputState` 无 `select_all`，预填会拼串，与第 70 批行号框同一条理由）。
+- 上游带内容补全；本仓 `InputState` 无补全通道。
+- 重名：上游 `put` 后到覆盖，本仓取**第一个**（列序稳定，跳转结果可预期）。
+- 隐藏列：上游没有隐藏列这层；本仓命中的列若在显示序里隐藏（`view_column` 返回 `None`），
+  报「已隐藏，先在列浏览器里取消隐藏」，不做「跳过去顺手取消隐藏」。
+- 「未知列名」文案中文化并带上输入值（上游只有一句 `Unknown column name`，不细分越界 / 打错）。
+- `locate_column`（列浏览器双击）仍落**首行**，`goto_column` 落**当前行**：前者是清单定位的
+  既有行为，本批不动，只修列号。
+
+#### 9.58.7 验证
+
+panel（`panel/tests.rs`）：
+
+- `goto_column_target_matches_its_name_then_its_one_based_index`：名字 / 大小写 / 两端空白 /
+  1 基序号 / 越界 / 未知 / 空；
+- `the_goto_column_overlay_jumps_and_keeps_the_current_row`：开 → 遮罩与「跳转」钮挂上 →
+  输「amount」提交 → `selected_cell == Some((1, 2))`（行保持 1、组件列 2）→ 浮层收掉；
+- `an_unknown_column_keeps_the_overlay_open_with_the_reason`：未知列名不关浮层、错误行渲染；
+  改成合法序号再提交成功。
+
+editor（`view/tests/results_a.rs`）：
+
+- `the_goto_column_key_opens_the_overlay_and_selects_the_named_column`：`ctrl-shift-g` → 浮层真挂到
+  渲染树（`dialog_button_rendered`）→ 输「note」→ 走浮层端口 `SubmitGotoColumn` →
+  `selected_cell == Some((0, 2))`；
+- `the_goto_column_key_without_a_result_only_says_so`：没有结果时提示「还没有列可跳」。这条
+  **直接调 action 方法**而不是 `simulate_keystrokes`——没有结果时结果区整块不渲染、网格不在
+  焦点路径上，键位走不到。
+
+门禁（第 75 批）：pair check `Finished` 无 warning；editor lib **822 passed（1 ignored）**
+（820 → +2）；panel **412 passed**（409 → +3）；ui-guard **4 passed**；workspace check
+`Finished`（2 warning 全来自并行线 `rds-notification`）。
+
+#### 9.58.8 遗留
+
+- 文本呈现态（无网格焦点）不生效——与同行号跳转同口径；
+- 内容补全 / 预填全选两项等 `InputState` 能力补齐再谈（不是本批的取舍）；
+- 列浏览器双击仍落首行（见 §9.58.6）；
+- `SHIFT+ENTER`、`ESC`（`cell.reset`）、`CTRL+BACKSPACE`、`CTRL+ALT+C` / `CTRL+ALT+R`、
+  `ALT+SHIFT+ARROW` 仍未接，见 §9.48.5。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

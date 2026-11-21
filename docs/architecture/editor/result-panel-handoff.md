@@ -3026,6 +3026,23 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - **门禁基线（第 74 批后）**：editor lib **820 passed（1 ignored）**、
   panel **409 passed**、ui-guard **4 passed**。改到这几处时同步改 `result-panel.md` §9.57.6。
 
+### 2.126 跳转到列（2026-11-22，第 75 批）
+
+- 键位：`CTRL+SHIFT+G` → `result_panel::grid::GotoColumn`（`plugin.xml:1090`），挂
+  `RESULT_GRID_CONTEXT`，生产注册在 `crates/app/src/main.rs`、测试注册在 `bind_editor_keys`。
+- 形态：面板内浮层（`goto_column_open` + 常驻 `goto_column_input`），不另开窗口。输入框在
+  **构造期**建（`InputState::new` 要 `&mut Window`），打开时回填 placeholder + 交焦点。
+- 解析（`ResultPanel::goto_column_target`）：名字（`eq_ignore_ascii_case`，重名取第一个）
+  → 1 基序号 `1..=列数` → 否则「未知列名」。命中但被隐藏 → 「已隐藏」。
+- 落点：`set_selected_cell(当前行, view_col + 1)` —— 组件列 0 是行号槽；**行保持不动**
+  （DBeaver `scrollToRow(CURRENT)`）。`selected_col` 一并写。
+- 顺手修：`select_column` / `locate_column` 原来直接喂 `view_col`（少 1），网格列高亮左移一格；
+  已改 `view_col + 1`。
+- 用例：panel 3 条（解析 / 开-跳-保持行 / 失败不关浮层）；editor 2 条（键位全链 / 无结果提示）。
+- 门禁：editor 822、panel 412、ui-guard 4、workspace `Finished`（2 warning 来自通知并行线）。
+- 差异：无内容补全、不预填不全选（`InputState` 无 `select_all`）、隐藏列不自动取消隐藏、
+  未知列名文案中文化。
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。
