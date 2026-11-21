@@ -8339,7 +8339,90 @@ tooltip 因此多一态（四态）：记录视图 → 没选数据格 → 已�
 - 「撤销删除」在 UI 上只有组合撤销（`undo_row_action`，格级栈优先、空再走行级），状态栏
   `undo` / `redo` 两颗默认隐藏（DBeaver `plugin.xml:1381-1397` 同为 false）——用户要先在
   配置菜单里勾出来才点得到。是否给它们接可用态（栈空时灰）另议。
-- `SET_NULL` / `SET_DEFAULT` / `CELL_RESET` 与列级只读模型仍未做（§9.47.5）。
+- `SET_NULL` / `SET_DEFAULT` 与列级只读模型仍未做（§9.47.5）；`CELL_RESET` 本批已补
+  （§9.50），撤销删除自此有了单格入口。
+
+### 9.50 第 67 批：右键「重置单元格」（`CMD_CELL_RESET`）
+
+#### 9.50.1 缺口
+
+§9.49 把「修改」钮在已删行上灰掉，但**没有任何恢复通道**：已删行只能靠状态栏 `undo`
+（默认隐藏）或再点一次「删除」后的组合撤销来回退。DBeaver 不是这样——它有一条
+`CMD_CELL_RESET`，在**编辑菜单**里条件出现，按行 / 格两种状态各给一个动作。
+
+#### 9.50.2 DBeaver 依据
+
+- 命令注册：`plugin.xml:1081` 把 `ESC` 挂到 `cell.reset`；文案在 `bundle_zh.properties:57-58`：
+  name「重置单元格更改」/ description「将单元格重置为原始值」。
+- 菜单：`ResultSetViewer.fillEditMenu:3518-3547`。段内顺序是 `CMD_ROW_EDIT` /
+  `CMD_ROW_EDIT_INLINE`（`valueController != null && !isReadOnly()`）→ `CMD_CELL_SET_NULL` /
+  `CMD_CELL_SET_DEFAULT`（属性可写时）→ **`if (row.getState() == STATE_REMOVED ||
+  row.isChanged(attr)) add(CMD_CELL_RESET)`**。注意这条是 **`if` 包裹的条件 add**，
+  不成立时菜单里**根本没有这一项**；而同一段里的 `add` / `copy` / `delete` 是无条件 add +
+  `setEnabled(false)`（「项在、灰掉」）。两种表达在 DBeaver 里并存，本仓分别照抄。
+- 行为：`ResultSetModel.resetCellValue:571-590` ——
+
+  ```java
+  if (row.getState() == STATE_REMOVED) { row.setState(STATE_NORMAL); return; }
+  if (row.isChanged(attr)) { row.setAttributeValue(attr, row.getChange(attr).getOldValue()); }
+  ```
+
+  支路顺序固定：**行已删优先**（恢复行，这一格不动），否则按 `getChange` 的旧值回写。
+  两条都不走 undo context。
+
+#### 9.50.3 落地
+
+面板侧（`grid/menu.rs`）：
+
+- `ContextAction::ResetCell { row, column }`；`ContextTarget` 加 `pub cell_changed: bool`。
+- 纯函数 `reset_cell_applicable(row_deleted, cell_changed)`（`row_deleted || cell_changed`），
+  注释写明「条件 add ≠ 灰项」。菜单构造点用 `delegate.is_dirty(row, col)` 取 `cell_changed`
+  ——`is_dirty` 的入参是 `(视图行, 组件列)`，构造 target 时 `col` 本来就是组件列
+  （`ContextTarget::column` 存的是数据列，两者差 1，见下）。
+- edit 段在「修改单元格」push 之后按条件 push「重置单元格」（`separator_before: false`，
+  与前面那个同组，对应 DBeaver 里它位于 ROW_EDIT 之后、`:3208` Separator 之前）。
+- 分派：`ContextAction::ResetCell` → `ResultRequest::ResetCell { row, col }`，
+  `col = target.column + 1`（`target.column` 是数据列下标，请求里按组件列口径传，
+  与 `EditCell` / `BeginEditCellAt` 同法）。
+
+宿主侧（`crates/editor/src/view/host/exec/row_ops.rs::reset_result_cell`）：
+
+```rust
+let Some(column) = col.checked_sub(1) else { return; };   // 行号槽不是数据格
+store.mutate_local_rows(&document, active, |set| { set.unmark_deleted(ix); }); // 支路 1
+store.mutate_change_set(&document, active, |changes| { reset = changes.remove(ix, column); }); // 支路 2
+```
+
+- **显示回落是天然的**：网格取显示值本来就从 `entry.rows` 读，再把变更集套上去；变更集里没
+  这条之后就自动是数据原值，不需要像 DBeaver 那样显式 `setAttributeValue`。
+- **不碰撤销栈**（与 DBeaver 同）：`DeleteData` 那条还留在 `RowHistory` 里，之后再按「撤销」
+  会再跑一次 `unmark_deleted`——对未删行幂等，不会出双份副作用。
+  是否顺手把栈里的 `DeleteData` 清掉，见 §9.50.5。
+- 本地行的格值落在快照、不进变更集（#28-B4 口径），没有「重置这一格」，静默不动作。
+
+#### 9.50.4 验证
+
+- `reset_cell_applicable_follows_the_dbeaver_gate`（纯函数，四组真值）。
+- `reset_cell_item_appears_only_when_dirty_or_deleted`（菜单项，四段）：干净可编辑行**没有**这项；
+  改过的格**有**且紧跟「修改单元格」（`ResetCell{row:0,column:1}`、无前导分隔线、可点）；
+  已删行**有**且可点（它正是恢复入口）；记录视图整段不摆。
+- `reset_cell_request_reverts_a_cell_change`（editor 行为）：预置一条待提交 → 「待提交按钮组」
+  可见 → 分派 `ResetCell{row:0,col:2}` → 变更集里这一格消失、`pending_count() == 0`、
+  按钮组消失。
+- `reset_cell_request_restores_a_marked_row`（editor 行为）：行标删 + 格也脏（两支同时成立）→
+  重置后 `is_deleted(0) == false`、网格镜像同步、**这一格的变更仍在**（第一支 return）。
+- 门禁：panel **407 passed**（§9.49 后 405，+2）、editor **807 passed（1 ignored）**（805 → +2）、
+  ui-guard **4 passed**、`cargo check --workspace --all-targets` Finished。
+
+#### 9.50.5 遗留
+
+- 文案自定「重置单元格」（对仗「修改单元格」，§9.24 口径），未照 `bundle_zh` 的
+  「重置单元格更改」；与第 61 批「修改单元格」同一类自定，等用户表决。
+- `ESC` 键（`plugin.xml:1081`）**未接**：面板现有一批键处理，先要查清 `ESC` 在结果面板里
+  是否已被占用（收编辑 / 关弹层），再决定要不要挂 `cell.reset`。
+- `CMD_CELL_SET_NULL` / `CMD_CELL_SET_DEFAULT` 仍未做：本仓 `CellChange` 只承载字符串，
+  NULL / 默认值语义还没建模，`CTRL+BACKSPACE` 未接。
+- 是否把 `RowHistory` 里的 `DeleteData` 一并清掉（让「重置删除」不占撤销栈），待用户拍板。
 
 ## 8. 协作纪律
 

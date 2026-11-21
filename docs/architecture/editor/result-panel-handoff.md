@@ -2805,6 +2805,40 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 门禁基线（第 66 批后）：result_panel **405 passed**、editor lib **805 passed（1 ignored）**、
   ui-guard **4 passed**、check Finished（并行线 `rds-notification` 2 条 never-used warning）。
 
+### 2.118 右键「重置单元格」（`CMD_CELL_RESET`）（2026-11-21）
+
+- **条件 add ≠ 灰项**：DBeaver `fillEditMenu:3536` 是 `if (row.getState() == STATE_REMOVED ||
+  row.isChanged(attr)) add(CMD_CELL_RESET);` —— **不成立时菜单里没有这一项**，与同段
+  `add`/`copy`/`delete` 的「无条件 add + `setEnabled(false)`」是两种表达。本仓两条都照抄：
+  行级三钮 + 「修改单元格」是灰项（§9.48），「重置单元格」是条件出现（§9.50）。
+  写这一项时**不要**顺手改成灰项——那会与 DBeaver 相反。
+- **判据全在 `ContextTarget` 里**：新字段 `cell_changed`，构造点取
+  `delegate.is_dirty(row, col)`。`is_dirty(视图行, 组件列)`、`ContextTarget::column` 是
+  **数据列** —— 构造时 `col` 就是组件列（别先折），出请求时才 `column + 1`。
+  这是本批最容易写错的一处（首版漏了 `+1`，会静默操作到左一格）。
+- **两支顺序固定**：`reset_result_cell` 先查 `is_deleted(ix)` → `unmark_deleted` 并 return；
+  否则 `changes.remove(ix, column)`。反了就会出现「行还在删除态、格却已经清了」。
+  DBeaver `ResultSetModel.resetCellValue:571-590` 同序。
+- **显示回落天然**：网格显示值 = `entry.rows` 叠加变更集，移掉那一条即回原值，
+  不需要显式回写（DBeaver 那边要 `setAttributeValue`，因为它的 cell value 是持久的）。
+- **不碰撤销栈**：`RowHistory` 里的 `DeleteData` 保留，之后按撤销会重跑 `unmark_deleted`
+  （未删行幂等）。这与 DBeaver 不走 undo context 同向；若将来要清栈，先想清楚
+  `undo_row_action` / `redo_row_action` 的组合语义。
+- **本地行不参与**：本地行格值在快照里、不进变更集（#28-B4），`RowRef::Local` 直接 false。
+- **用例断言改用可见物**：`is_dirty` / `dirty` 是 `pub(crate)`，editor 测试跨 crate 读不到
+  （编译报 E0624）。改用**「待提交按钮组」`editor-result-commit-group` 的可见性**：
+  预置脏格后 `is_some()`、重置后 `is_none()`（比读内部字段更贴用户所见）。
+  行删除态可用 `delegate().is_deleted_row(0)`（那是 `pub`）。
+- **门禁基线（第 67 批后）**：result_panel **407 passed**（+2）、editor lib
+  **807 passed（1 ignored）**（+2）、ui-guard **4 passed**、check Finished。
+- **磁盘判断更正**：§2.117 的「D 盘只剩 ~40MB」是 `Get-Volume` 行渲染错位的误读；
+  `Get-Volume` 实测 **86.72 GB 空闲**。真正的原因见 §2.117 的 `StorageFull` 段（机制未查透），
+  处置仍是：跑 editor 全量前清掉 `.rds/tmp` 下 `rds-test-root-*` / `rds_editor_tier_*` /
+  `rds_gtest_*` / `rds_svc_it_*`（本批清掉一个 `rds-test-root-*`，864 MB，之后一次通过）。
+- **本批未做**：`ESC`（`plugin.xml:1081`）未接；`SET_NULL` / `SET_DEFAULT` 仍未建模；
+  「重置」是否连带清 `RowHistory` 的 `DeleteData` 待拍板；文案「重置单元格」是自定
+  （`bundle_zh` 是「重置单元格更改」）。
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。
