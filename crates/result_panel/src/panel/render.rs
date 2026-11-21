@@ -866,14 +866,36 @@ impl ResultPanel {
         // 「修改选中格（双击单元格进入编辑）」）——走同族 `CMD_ROW_EDIT_INLINE`
         // （`openValueEditor(true)`）的同一条链路：只发 `BeginEditCell`，
         // 面板 emit `TableEvent::DoubleClickedCell`，与双击完全同路。
-        // 只读结果集不给（与行级动作同一门控 `self.editable`）。
+        // 只读结果集不给（与行级动作同一门控 `self.editable`）；记录视图给但置灰（见下）。
+        // 【第 58 批·记录视图门控】DBeaver 的 `PROP_EDITABLE` 对 `row.edit` / `row.edit.inline`
+        // 都要求 `getActivePresentation() instanceof IResultSetEditor` 且当前属性非空
+        // （`ResultSetPropertyTester.java:127-131`）；记录模式是 `PlainTextPresentation` 的变体
+        // （`PlainTextPresentation.java:63` 只实现 `IResultSetDisplayFormatProvider` / `DBPAdaptable`，
+        // **不实现** `IResultSetEditor`）⇒ 那边记录模式下这颗钮是**置灰**，不是「可点但没效果」。
+        // 本仓记录视图（转置）本来就只读（`grid/edit.rs:113-120` 的 `begin_edit` 直接拒），
+        // 所以跟着置灰，别让点击静默落空。
+        //
+        // 同一段里 `"inline"` 分支还要 `getCurrentAttribute() != null`（`:132-133`）：没有当前
+        // 属性时内嵌编辑关闭。本仓「修改」钮落的就是 inline 链路（第 57 批），所以没有选中格 /
+        // 停在行号槽（组件列 0）时同样置灰——`selection_pos` 由 `SelectCell` / `ClearSelection`
+        // 事件维护（`lifecycle.rs:365-410`，两条都 `cx.notify()`），灰态跟随选中实时更新。
         let edit_row = self.editable.then(|| {
             let queue = self.queue.clone();
+            let transposed = self.transposed;
+            let picked = self.selection_pos.is_some_and(|(_, col)| col > 0);
+            let disabled = transposed || !picked;
             Button::new("editor-result-edit-cell")
                 .ghost()
                 .small()
                 .icon(IconName::Pencil)
-                .tooltip("修改当前选中单元格（进入行内编辑）")
+                .disabled(disabled)
+                .tooltip(if transposed {
+                    "记录视图是只读的：切回网格视图后可编辑单元格"
+                } else if !picked {
+                    "先在网格里选中一个数据单元格"
+                } else {
+                    "修改当前选中单元格（进入行内编辑）"
+                })
                 .debug_selector(|| "editor-result-edit-cell".to_string())
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::BeginEditCell, app);

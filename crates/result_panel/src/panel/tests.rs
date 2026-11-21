@@ -1727,6 +1727,85 @@ fn begin_edit_cell_emits_the_double_click_only_for_data_cells(
     );
 }
 
+/// 【第 58 批】「修改」钮的可用态照 DBeaver `PROP_EDITABLE` 的 `"inline"` 分支：
+/// 要求 `presentation instanceof IResultSetEditor` **且** `getCurrentAttribute() != null`
+/// （`ResultSetPropertyTester.java:127-133`）。记录模式是 `PlainTextPresentation` 的变体、
+/// **不实现** `IResultSetEditor`（`PlainTextPresentation.java:63`）⇒ 那边记录模式下置灰。
+/// 本仓的对应状态：记录视图（转置，只读）→ 灰；没选中格 / 停在行号槽 → 灰（无当前属性）。
+#[gpui_kit::test]
+fn edit_row_button_is_disabled_in_record_view(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{ElementId, SharedString};
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    let grid = cx.update(|_, app| panel.read(app).grid.clone());
+    // 真钮只在可编辑结果集注入（`panel_harness` 默认只读，这里把它打开）；
+    // 另外要有状态行，状态栏的钮才在树里（`show_status` 需要 status / 执行信息之一）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.editable = true;
+            p.status = Some(crate::grid::status::ResultStatus {
+                total_rows: 2,
+                ..Default::default()
+            });
+            cx.notify();
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let disabled_state = |cx: &mut gpui_kit::VisualTestContext| -> Option<Option<bool>> {
+        cx.update(|window, _| {
+            window
+                .try_find(ElementId::Name(SharedString::from(
+                    "editor-result-edit-cell".to_string(),
+                )))
+                .map(|snap| snap.disabled())
+        })
+    };
+
+    // 1) 一个格都没选：没有「当前属性」，inline 语义关闭
+    assert_eq!(
+        disabled_state(cx).expect("可编辑结果集应注入「修改」真钮"),
+        Some(true),
+        "没选中格时「修改」应置灰（inline 需要当前属性）"
+    );
+
+    // 2) 选中数据格：可用（实测口径：可用态不暴露 a11y disabled 位，只有禁用才写 `Some(true)`）
+    cx.update(|_, app| {
+        grid.update(app, |state, cx| state.set_selected_cell(0, 2, cx));
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_ne!(
+        disabled_state(cx).expect("选中后「修改」钮仍应在位"),
+        Some(true),
+        "选中数据格后「修改」应可用"
+    );
+
+    // 3) 停在行号槽（组件列 0）：不是数据格，回到置灰
+    cx.update(|_, app| {
+        grid.update(app, |state, cx| state.set_selected_cell(0, 0, cx));
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(
+        disabled_state(cx).expect("行号槽上「修改」钮仍应在位"),
+        Some(true),
+        "行号槽不是数据格，「修改」应置灰"
+    );
+
+    // 4) 记录视图（即使选中的是数据格）：只读视图，置灰
+    cx.update(|_, app| {
+        grid.update(app, |state, cx| state.set_selected_cell(0, 2, cx));
+    });
+    cx.update(|_, app| panel.update(app, |p, cx| p.toggle_transpose(cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(
+        disabled_state(cx).expect("记录视图下「修改」钮仍要在位（只置灰，不消失）"),
+        Some(true),
+        "记录视图只读：钮要置灰，而不是可点后静默落空"
+    );
+}
+
 /// 【工具栏配置】状态栏命令项的默认可见性对齐 DBeaver `plugin.xml:1381-1397`：
 /// `undo` / `redo` 两项 `defaultVisibility="false"`（取下一段是有意偏离，常显），
 /// 其余 `true`；配置菜单把它们勾回来后应真的重新出现（否则隐藏 = 永久失去入口）。
