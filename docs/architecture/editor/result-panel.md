@@ -9279,15 +9279,13 @@ editor（`view/tests/results_a.rs`）：
 - `the_select_column_and_row_keys_without_a_result_only_say_so`：没有结果时两条各留一句提示
   （直接调 action 方法，同第 75 批口径）。
 
-门禁（第 76 批）：pair check `Finished` 无 warning；panel **414 passed**（412 → +2）；
-ui-guard **4 passed**；workspace check `Finished`（2 warning 全来自 `rds-notification`）；
-editor 本批 3 条全绿。
+门禁（第 76 批，最终实测）：pair check `Finished` 无 warning；panel **414 passed**
+（412 → +2）；ui-guard **4 passed**；editor lib **825 passed（1 ignored）**（822 → +3）；
+workspace check `Finished`（2 warning 全来自 `rds-notification`）。
 
-⚠️ **editor 全量本批不绿，原因不在本批**：`support::format` / `view::tests::format` 共 6 条失败，
-由并行线 `crates/sql` 给 `FormatOptions` 新增 `line_width` / `clause_style` / `new_line_kind` /
-`ignore_*_comment_text` 引起——引擎默认值变了、设置侧 `SqlFormat` 还没有对应旋钮。为让检查跑通，
-`crates/editor/src/support/format.rs` 临时补了 `..FormatOptions::default()`（**不进本批提交**，
-真实映射归格式化线）。全量数字仍对得上：819 passed + 6 failed + 1 ignored = 826 = 基线 823 + 本批 3。
+检查期一度有 6 条格式化用例红（`support::format` / `view::tests::format`）：并行线当时只把
+`FormatOptions` 与引擎改了，设置侧 / 编辑器映射还没跟上。到本批收尾前那条线已补齐映射并同步
+改了用例断言，最终与本节一起转绿（825 = 822 + 3）。**本批未提交任何格式化线文件。**
 
 #### 9.59.8 遗留
 

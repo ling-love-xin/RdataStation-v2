@@ -3056,10 +3056,10 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 为什么选行要写状态行：`row_target_state` 只读 `status.selected_row`，而 `SelectRow`
   事件路径不写 → 只铺色不带状态时，行级三钮 / 邻行复制 / 「修改」钮仍全灰。
 - 用例：panel 2 条（列映射 / 行 + 状态行）；editor 3 条（两键全链 / 无结果提示）。
-- 门禁：pair `Finished`；panel 414；ui-guard 4；workspace `Finished`（2 warning 来自通知线）；
-  editor 本批 3 条绿。**editor 全量 6 条格式化失败来自 `crates/sql` 并行线**
-  （`FormatOptions` 新增 5 字段、`support/format.rs` 未同步最后一手），已临时补
-  `..Default::default()` 让检查能跑，**该文件不进本批提交**。
+- 门禁（最终实测）：pair `Finished`；panel 414；ui-guard 4；editor lib **825 passed**
+  （1 ignored）；workspace `Finished`（2 warning 来自通知线）。检查期曾有 6 条格式化用例红，
+  起因是并行线只改了 `FormatOptions` / 引擎、映射未跟上；那条线收尾前已补齐并转绿，
+  **本批未提交任何格式化线文件**。
 - 记档不实现：`CTRL+BACKSPACE`（`cell.setDefault`）要 `DBDValueDefaultGenerator` + 会话，
   本仓无驱动侧默认值通道。
 - 未决：`SelectRow` 事件路径要不要统一写 `status.selected_row`（本批只补键位路径）。
