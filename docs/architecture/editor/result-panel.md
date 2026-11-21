@@ -6992,6 +6992,113 @@ DBeaver 的列头右键是有的（`:3151-3161`），本批补上。
 - DBeaver `ROW_HEADER` 落点在「复制行号」之后还有过滤 / 排序 / 导航 / 编辑 / 面板 / 视图
   各通用子菜单；本仓只做第一条（行号落点没有数据列语义，那些子菜单挂上去也点不动）。
 
+### 9.32 状态行选中统计三项（对齐 DBeaver `layoutMenu` 的 `ToggleSelectionStatAction`，2026-11-21）
+
+DBeaver 结果集状态栏能显示「行数 / 列数 / 单元格数」三种选中计数，三颗开关默认全关。
+本批把这条链路做全：偏好 → 菜单 → 面板态 → 状态行渲染 → 落盘。
+
+#### 9.32.1 dbeaver-ref 取证（现源实读）
+
+| 事实 | 位置 | 内容 |
+| --- | --- | --- |
+| 三颗开关 | `ResultSetViewer.java:3580-3588` | `fillLayoutMenu` 里 `attr != null` 时加 `ToggleSelectionStatAction`（`RESULT_SET_SHOW_SEL_ROWS/COLUMNS/CELLS`） |
+| 开关落点 | `ResultSetViewer.java:3265-3270` | `layoutMenu` 挂在**右键菜单**的子菜单 `MENU_ID_LAYOUT`，不在工具栏 |
+| 文案（开关） | `ResultSetMessages_zh.properties:125/127/129` | 显示选定的行数 / 列数 / 单元格数 |
+| 文案（状态行） | 同文件 `:633-637` | `行数: {0}` / `列数: {0}` / `单元格数: {0}`（半角冒号 + 空格） |
+| 拼段逻辑 | `ResultSetStatListener.java:34-95` | 选中变化后 100ms `UIJob` 防抖 → 按三项偏好逐项加入 `StringJoiner(", ")`；无选中 region 时三项记 0 |
+| 偏好键 | `ResultSetPreferences.java:64-66` | `resultset.show.selected.rows` / `.columns` / `.cells` |
+| 出厂默认 | `DataEditorsPreferencesInitializer.java:86-88` | 三项全 `false` |
+| 改偏好的动作 | `actions/ToggleSelectionStatAction.java` | `ToggleConnectionPreferenceAction` 子类：`run()` 改**平台级**偏好店后 `fireResultSetSelectionChange` |
+| 标签位置 | `ResultSetViewer.java:2182-2184` | `selectionStatLabel` 在 statusBar 内、紧跟 `rowCountLabel` 之后；空态 `setText(" ")` |
+| 文本更新 | `ResultSetViewer.java:4469-4482` | `setSelectionStatistics`：文本相同跳过、空则置空格 |
+
+#### 9.32.2 本仓落地
+
+**偏好层（`crates/settings`，五处）**：
+
+- `ResultPanel`（`model/result_panel.rs`）新增 `selection_stat_rows/columns/cells: bool`
+  （`#[serde(default)]`，Default 全 `false`）；
+- registry：`Slot::ResultPanelSelectionStatRows/Columns/Cells`、key
+  `result_panel.selection_stat_rows/columns/cells`、`KindTag::Bool`、
+  `SettingSpec group = layout`（`SettingEffect::Immediate`）；
+- `SettingsService`：get 三条 + apply 分发 + `apply_slot` 三分支 +
+  便捷函数 `set_result_panel_selection_stats(rows, columns, cells, cx)`（三项一次写盘，全同则跳过）。
+
+**纯函数层（`grid/status.rs`）**：
+
+- `ResultStatus` 加 `selected_rows/selected_columns/selected_cells: usize`；
+- `SelectionStatPrefs { rows, columns, cells }`；
+- `selection_statistics(&ResultStatus, SelectionStatPrefs) -> String`：只拼启用项、顺序固定
+  **行 → 列 → 单元格**、`", "` 连接、走 `thousands` 千分位、三项全关返回空串；
+- `render_status_row` 新增实参 `selection_stat: Option<String>`（位置在 `segment_input` 之后），
+  渲染段紧跟 `controls.count_rows`（「计算行数」钮）之后、右段「内存 / 耗时 / 条数」之前，
+  `debug_selector = "editor-result-selection-stat"`、`flex_none + truncate`。
+
+位置对齐 `selectionStatLabel` 紧跟 `rowCountLabel` 的那条事实。
+
+**菜单层（`grid/menu.rs`）**：
+
+- `SelectionStatKind { Rows, Columns, Cells }` + `noun()`（行数 / 列数 / 单元格数）；
+- `ContextAction::ToggleSelectionStat { kind, on }`（`on` = 点击后的**目标态**）；
+- `ContextTarget` 加 `selection_stat_rows/columns/cells`（菜单据此标勾选态）；
+- 纯函数 `selection_stat_menu_items(&ContextTarget)`：顺序固定三项、已开项带 `✓ ` 前缀、
+  首项 `separator_before: true`、载荷 `on: !on`；
+- `context_menu_items` 尾部 `items.extend(selection_stat_menu_items(target))`；`context_menu` 对
+  `ToggleSelectionStat` 经 `delegate.action_queue` 发 `ResultRequest::ToggleSelectionStat`。
+
+**请求与面板态（`crates/result_panel`）**：
+
+- `ResultRequest::ToggleSelectionStat { kind, on }`（`ports.rs`）；
+- `ResultPanel` 加 `selection_stat_prefs` 字段；`panel/events.rs` 四个方法：
+  `set_selected_counts(rows, columns, cells, cx)`、`set_selection_stat_prefs(prefs, cx)`、
+  `selection_stat_prefs()`、`toggle_selection_stat(kind, on, cx)`；
+  偏好相关两个方法都**同步 delegate 镜像**（`delegate.set_selection_stat_prefs`），右键菜单下次打开才标对勾；
+- 网格 `ResultGridDelegate` 加 `selection_stat_prefs` 镜像字段 + `set_selection_stat_prefs`；
+  可见列数直接用既有 `view_rows.rs::visible_column_count()`（未新造重复方法）。
+
+**宿主层（`crates/editor`）**：
+
+- `view/host/construct.rs`：构造期从 `settings.result_panel` 拷 `SelectionStatPrefs`
+  并 `panel.set_selection_stat_prefs(...)`；`SelectCell` → `set_selected_counts(1, 1, 1, cx)`；
+  `SelectRow` → `set_selected_counts(1, visible_columns, visible_columns, cx)`
+  （`visible_columns` 在闭包内 `grid.read(cx).delegate().visible_column_count()`）；
+  `ClearSelection` → `set_selected_counts(0, 0, 0, cx)`；
+- `view/host/results/grid.rs`：`ResultStatus` 字面量补三项 `0`（sync 不带选中，同 `selected_row` 口径）；
+- `view/host/results/dispatch.rs`：`ToggleSelectionStat` 分支 → 面板 toggle 后
+  调 `persist_result_selection_stats`（读面板当前三项 → `SettingsService::set_result_panel_selection_stats`）。
+
+#### 9.32.3 口径差异（有意）
+
+1. **菜单形状**：本仓右键菜单扁平无子菜单，三颗开关**平铺在数据格右键尾部**（DBeaver 在
+   `layoutMenu` 子菜单里）。位置语义保留（最后一段），形状不同。
+2. **不做 100ms 防抖**：DBeaver 用 `UIJob.schedule(100)` 合并连续选中变化；本仓选中事件由表格组件
+   一条一条派发、面板只在 `set_selected_counts` 里改三个计数，不存在连续重排成本，不加延时。
+3. **计数来源是单区域选中**：格选中 = 1 行 / 1 列 / 1 格；整行选中 = 1 行 / 可见列数 / 可见列数；
+   清选 = 0 / 0 / 0。本仓没有 DBeaver 的 `IResultSetSelectionExt` 多 region 集合，后续若引入区域多选，
+   这三个数要改成集合口径（登记在册）。
+4. **偏好立即生效的范围**：右键改 → 面板立即重画 + 落盘；设置页改只有**下次构造面板**才读到
+   （与既有的 `result_panel.hidden_status_commands` 同一条管线，不做跨面板广播）。DBeaver 是全局
+   偏好店 + 事件广播，实时生效。登记为后续若做「设置页实时下发」时一并解决。
+5. **状态行空态**：DBeaver 空态 `setText(" ")`（留一个空格撑宽，稳住右侧布局）；本仓三项全关时
+   **整段不渲染**（`None` 不摆），出厂视觉与 2026-10-28「状态栏只显示内存 / 耗时 / 条数」一致。
+   单项开启但计数为 0 时照常显示 `行数: 0`（与 DBeaver joiner 行为一致）。
+
+#### 9.32.4 用例与门禁
+
+- `selection_statistics_joins_enabled_items_in_fixed_order`（纯函数）：全关空串、单项、三项顺序、
+  只开后两项、计数 0 照拼、千分位。
+- `selection_stat_menu_items_flag_current_state_and_flip_on_click`（纯函数）：三项文案与顺序、
+  首项分隔线、`on` 取反、已开项 `✓ ` 前缀。
+- `selection_stats_sit_at_the_context_menu_tail_and_not_in_column_menus`（纯函数）：数据格右键末三项
+  必是这三颗、持久化项在其之前、列头菜单不含这三项。
+- `status_row_shows_the_selection_stat_segment_only_when_it_has_text`（窗口用例）：真实布局下
+  有文本时段存在且落在状态行内、无文本时 `debug_bounds` 为空。
+- 既有用例随之更新：`context_menu_offers_filter_copy_and_freeze`（期望列表补三项）、
+  `context_menu_only_offers_insight_when_available`（「洞察」不再是最后一项，改为断言其后只剩三项）。
+- **门禁**：`rds-result-panel` **382 passed**（378 + 4）、`rds-settings` **45 passed**、
+  editor `cargo check` `Finished`（0 warning）、`rds-editor --lib` **800 passed（1 ignored）**、
+  `rds-ui-guard` **4 passed**。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

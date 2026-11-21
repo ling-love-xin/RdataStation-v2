@@ -2363,6 +2363,29 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   别改成 `Replace`（那会把用户正在看的结果冲掉）。
 - 未做：多行选中（DBeaver 会拼 `IN`）、跨 schema 目标表（`referenced_table` 只有驱动原话的表名）、
   按列类型反序列化值（现在是结果集文本直出）。
+### 2.100 状态行选中统计三项的接手要点（2026-11-21）
+
+- 链路方向：**偏好 → 构造期注入 → 事件写计数 → 状态行纯函数拼文案 → 渲染段**；开关改动反向走
+  **右键菜单 → `ResultRequest::ToggleSelectionStat` → 面板 `toggle_selection_stat` → 宿主
+  `persist_result_selection_stats` 落盘**。面板是唯一权威态，网格 delegate 只持镜像（右键菜单的
+  「✓」读镜像）。
+- 改这一片必须先看 `crates/result_panel/src/grid/status.rs`：`SelectionStatPrefs`、
+  `selection_statistics`（纯函数，顺序 行→列→单元格、`", "`、`thousands`）、`render_status_row`
+  的 `selection_stat: Option<String>` 实参（位置在 `segment_input` 之后、`elapsed_ms` 之前——
+  **加参数时别插错位**，上一批就插进过 doc 注释里）。
+- 计数口径：格选中 `1/1/1`、整行选中 `1/可见列数/可见列数`、清选 `0/0/0`。可见列数用
+  `ResultGridDelegate::visible_column_count()`（**已存在于 `grid/view_rows.rs:36`**，别再在
+  `delegate.rs` 里新造一个同名方法——本批踩过 `E0034` 二义性）。
+- 给 `ResultStatus` 加字段会打破三处**全字段字面量**（`grid/tests.rs` 的 idle / partial / done，
+  以及 `editor/src/view/host/results/grid.rs:158` 的 sync 投影）；新增字段时一起补，否则
+  `E0063` 会从三处测试和一处宿主同时冒出来。
+- `ContextTarget` 加字段同理：`grid/tests.rs` 的 `target()` helper 与五处字面量要补；带
+  `..target.clone()` 的结构体更新语法**不能**再补字段（会把它插到 spread 后面直接语法错误）。
+- 偏好只在**构造期**读（`construct.rs` 的 settings 借用块）：设置页改三项要下次构造面板才生效，
+  与 `result_panel.hidden_status_commands` 同一管线；右键改则立即生效并落盘。这段差异写在
+  `result-panel.md §9.32.3` 第 4 条，不要误当成 bug 去加跨面板广播。
+- 门禁基线：result_panel **382 passed**（+4 例）、settings **45 passed**、editor check `Finished`
+  （0 warning）、editor lib **800 passed（1 ignored）**、ui-guard **4 passed**。
 
 
 ## 3. 并行线协作纪律（工作区现状）
