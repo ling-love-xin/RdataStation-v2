@@ -2965,7 +2965,7 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   `dispatch` 的注释与实现不符就是这种双写的后果。
 - **两道互斥门控**：`fetch_more` 与 `fetch_all` 入口都判「正在取全部」和「导出在跑」。
   导出侧不用改：`advance_pending_export` 自己 `execute(Segment)`，不经过 `fetch_more`。
-  但导出**启动**时反查 `fetching_all` 还没加（§9.54.5），第 72 批收口。
+  导出**启动**时反查 `fetching_all` 是第 73 批补的（§9.56.2），别以为已经在了。
 - **`fetching_all` 与 `fetching_more` 不是一回事**：前者跨多轮（回填时才推进），
   后者只在「提交到回填之间」为真。别用 `fetching_more` 当取全部的防重入判据。
 - **切结果集必须停**：`FetchAllProgress.set` 记发起时的 `active()`，每轮比对；
@@ -2994,6 +2994,21 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   都是 `&mut Context` 签名，与 SQL 预览一致；别为了对称硬塞窗口参数。
 - **门禁基线（第 72 批后）**：editor lib **817 passed（1 ignored）**、
   panel **409 passed**、ui-guard **4 passed**。改到这几处时同步改 `result-panel.md` §9.55.6。
+
+### 2.124 互斥矩阵闭合（2026-11-22，第 73 批）
+
+- **加取数类入口前先查矩阵**：`result-panel.md` §9.56.3 那张表是权威。入口 × 在途状态
+  每一格都要么「拒」要么「让出」，别留空。
+- **`start_export` 的 `fetching_all` 判在 `is_executing()` 之前**。段与段之间
+  `is_executing()` 会短暂为 false（回填那一下），那个窗口放过去就是落半截文件；
+  而且提示要说清是「本仓在续段」而不是「通道被占用」。
+- **`ask_fetch_all` 的 `pending_export` 判在 `fetching_more` 之前**：导出抓全量也会置
+  `fetching_more`，顺序反了提示就变成「正在取下一段」，看不出是谁在取。
+- **别用 `export_pending_for_test()` 验 `pending_export`**：它读的是 `export_pending`
+  （DuckDB 导出回执计数，`host/format.rs:316-324`）。抓全量的在途证据用取段请求序列
+  （测试里的 `asked`）。
+- **门禁基线（第 73 批后）**：editor lib **819 passed（1 ignored）**、
+  panel **409 passed**、ui-guard **4 passed**。改到这几处时同步改 `result-panel.md` §9.56.4。
 
 ## 3. 并行线协作纪律（工作区现状）
 

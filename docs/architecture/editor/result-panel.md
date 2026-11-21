@@ -8886,9 +8886,87 @@ ui-guard **4 passed**；workspace check `Finished`
 #### 9.55.7 遗留
 
 - 偏好项 `CONFIRM_RS_FETCH_ALL` 未建模（每次必弹）；
-- 导出**启动侧**仍未反查 `fetching_all`（§9.54.5 记的同一项）；
+- 导出**启动侧**现已反查 `fetching_all`（第 73 批闭合，见 §9.56.2）；
 - 短结果上「取全部」意义有限（自动补齐会先把它取完），本批不改自动补齐行为；
 - `CTRL+SHIFT+=` 在文本呈现态（无网格焦点）不生效——与 `CTRL+ALT+N` 同一口径。
+
+### 9.56 第 73 批：取全部 / 导出互斥矩阵闭合
+
+#### 9.56.1 缺口
+
+第 71 批定了「取全部期间拒绝取段、拒绝导出」，第 72 批补上反向（`fetch_all` /
+`ask_fetch_all` 都先判 `fetching_more`）。但**导出入口**那一侧始终没有反查
+`fetching_all`——第 72 批的 §9.55.7 就记着这条遗留。
+
+为什么是真缺口，而不是「反正 `is_executing()` 会拦住」：
+
+1. **段与段之间通道是空闲的**。取全部是「提交一段 → 回填 → 再提交」，回填那一刻
+   `pending == 0`、`is_executing()` 会短暂为 false。这个窗口里点导出，`start_export`
+   会认为通道空闲，直接 `write_export`——落到盘上的是**半截结果**。
+2. **两条都是 `Append` 取段，各算各的 offset**（都取「已抓到的行数」），一起跑就会
+   重复抓同一段，行重复。
+
+第二个缺口是上一批留下的不对称：`ask_fetch_all` 判了 `fetching_all` 与 `fetching_more`，
+唯独没判 `pending_export`。导出抓全量期间按「取全部」，浮层照样弹出，用户点「继续」
+才被 `fetch_all` 的 `pending_export` 判定拒——白走一趟。
+
+#### 9.56.2 落地
+
+两处都只加判定，不改行为：
+
+| 位置 | 新判据 | 文案 |
+| --- | --- | --- |
+| `results/export.rs::start_export` | `fetching_all` 为 Some | 「正在取全部数据（已取 N 段），等它结束再导出」 |
+| `results/copy.rs::ask_fetch_all` | `pending_export` 为 Some | 「导出正在取数，先等它结束」 |
+
+**判据顺序是有意的，两处都别乱挪**：
+
+- `start_export` 里 `fetching_all` 判在 `is_executing()` **之前**。反过来的话用户只看到
+  「执行中，稍候再导出」——听起来像等一下就好，实际取全部可能还要跑很久；而且
+  「通道被别的文档占着」与「本仓自己在续段」是两件事，提示该说清是谁。
+- `ask_fetch_all` 里 `pending_export` 判在 `fetching_more` **之前**。导出抓全量期间也会
+  置 `fetching_more`，先说它的话提示会变成「正在取下一段」，用户不知道那段其实是
+  自己刚点的导出在跑。
+
+#### 9.56.3 互斥矩阵（本批后完整）
+
+| 入口 | `fetching_all` | `fetching_more` | `pending_export` |
+| --- | --- | --- | --- |
+| `fetch_more`（取下一段） | 拒（§9.54） | —（自己就是发起方） | 拒（§9.54） |
+| `ask_fetch_all`（钮 / 键位） | 拒（§9.55） | 拒（§9.55.5） | 拒（**本批**） |
+| `fetch_all`（浮层「继续」） | 拒（§9.55） | 拒（§9.55.5） | 拒（§9.54） |
+| `advance_fetch_all`（回填推进） | —（自己是持有方） | —（回填即清） | 让出（§9.54） |
+| `start_export`（导出入口） | 拒（**本批**） | 由 `is_executing` 覆盖 | —（自己就是发起方） |
+| `advance_pending_export`（导出推进） | 让出（§9.54） | — | —（自己是持有方） |
+
+「让出」= 静默放弃自己那条循环。「拒」= 留一句可读提示。矩阵里没有空格了；
+以后再加取数类入口，先在这张表上找自己那一行。
+
+#### 9.56.4 验证
+
+| 用例 | 钉住什么 |
+| --- | --- |
+| `exporting_while_fetching_all_is_refused`（editor） | 取全部在跑时导出**连路径都不问**，提示说清是谁占着通道；收尾确认 6 行取完、导出没留状态 |
+| `asking_for_all_while_the_export_is_fetching_says_so`（editor） | 导出抓全量时按键**不弹浮层**，提示是「导出正在取数」而不是「正在取下一段」 |
+
+两条用例都用 `asked`（取段请求序列）当证据：
+
+- 第一条：起取全部后不发导出，`picked` 为空（导出没走到选路径那一步）；收尾
+  `asked == [(2, SEGMENT_ROWS), (4, SEGMENT_ROWS)]`，证明这次导出没打断取全部。
+- 第二条：导出抓全量后 `asked == [(2, SEGMENT_ROWS)]`（前置：导出自己占着取段），
+  收尾 `asked == [(2, …), (4, …)]`（导出跨轮抓完、取全部一次都没发）。
+
+**踩坑**：别拿 `export_pending_for_test()` 当 `pending_export` 的证据——它读的是
+`export_pending`，那是「还没回执的 DuckDB 导出数」（`format.rs:316-324`），与
+「导出正在抓全量」的 `pending_export` 是两件事。首跑就栽在这上面（断言 `1`，实得 `0`）。
+
+#### 9.56.5 遗留
+
+- 偏好项 `CONFIRM_RS_FETCH_ALL` 仍未建模（每次必弹，§9.55.7 的同一项）；
+- 短结果上「取全部」意义有限（渲染自动补齐会先取完），行为不改；
+- 取全部没有「取消」：本仓只能等它跑完或切结果集。DBeaver 侧是「任务被取消 + 超时兜底」
+  （`ResultSetJobDataRead.java:182-197` 读 `RESULT_SET_CANCEL_TIMEOUT`，偏好项在
+  `ResultSetPreferences.java:46`），本仓执行通道没有中断能力，要做另开批次。
 
 ## 8. 协作纪律
 
