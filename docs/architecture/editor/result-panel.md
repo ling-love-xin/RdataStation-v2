@@ -9394,6 +9394,118 @@ editor（`view/tests/results_a.rs`）：
 - 四个浮层（SQL 预览 / 取全部确认 / 筛选设置 / 跳列）的 Esc 关闭仍无窗口用例（§9.58.8 已记）；
 - 筛选条隐藏后工具栏左段整体消失、没有常驻入口这一点仍未解——本批的 `false` + 提示算一条新依据。
 
+### 9.61 第 78 批：`ALT+SHIFT+H` / `ALT+SHIFT+T` 隐藏当前列 / 显示全部隐藏列（`CMD_HIDE_COLUMNS` / `CMD_SHOW_COLUMNS`）
+
+#### 9.61.1 缺口
+
+列显隐在结果集里早就有入口（列头菜单、列浏览器眼睛钮、筛选设置「全部显示 / 全部不显示」），
+但**键盘上一条都按不到**：`plugin.xml:1096/1097` 这两条一直没绑。它们属于「结果集侧栏 /
+列」这条线，代价也最小——底层能力（`set_columns_hidden` / `show_all_columns` /
+`is_hidden_column` / `hidden_count`）第 P2-3 批就已齐备，缺的只是命令入口与键位。
+
+#### 9.61.2 DBeaver 依据
+
+- 键位：`plugin.xml:1096` `ALT+SHIFT+H` → `org.jkiss.dbeaver.core.resultset.grid.hideColumns`；
+  `:1097` `ALT+SHIFT+T` → `...grid.showColumns`。两条的 contextId 都是
+  **`org.jkiss.dbeaver.ui.context.resultset`**（整块面板），不是 `...resultset.focused`；
+  schemeId 是 `org.jkiss.dbeaver.keyboardOnlyKeyScheme`（键盘可达性方案）。
+- 命令定义 `plugin.xml:327/328`；handler `:472/475` 绑
+  `...resultset.spreadsheet.SpreadsheetCommandHandler`。
+- 实现 `SpreadsheetCommandHandler.java:174-194`（隐藏）：
+
+  ```java
+  List<IGridColumn> selectedColumns = spreadsheet.getSpreadsheet().getColumnSelection();
+  GridPos focusPos = spreadsheet.getSpreadsheet().getFocusPos();
+  if (selectedColumns.size() == 1 && focusPos.col >= 0) {
+      selectedColumns = Collections.singletonList(getColumn(focusPos.col));   // 退化成焦点列
+  }
+  if (selectedColumns.size() >= model.getVisibleAttributeCount()) {
+      UIUtils.showMessageBox(..., hide_columns_error_title, hide_columnss_error_text, SWT.ERROR);
+  } else {
+      for (col : selectedColumns) model.setAttributeVisibility(attr, false);
+      spreadsheet.refreshData(true, false, true);
+  }
+  ```
+
+- 实现 `:195-212`（显示）：遍历 `model.getDataFilter().getConstraints()`，把
+  `!ac.isVisible() && attribute instanceof DBDAttributeBinding && isVisibleByDefault(attr)`
+  的列全部 `setAttributeVisibility(attr, true)`，再刷新。
+- 两条都**不**改选区：刷新后焦点列仍停在原 `col` 位（只是那个位置现在指着邻列）。
+
+#### 9.61.3 落点
+
+- `ResultPanel::hide_current_column(window, cx) -> Result<(), String>`：
+  取 `selection_pos` 的组件列（0 = 行号槽，拒绝）→ `data_column_checked(col - 1)` 换算数据列
+  → 判「已隐藏 / 只剩 1 列」→ `set_columns_hidden(vec![col], true, cx)`（内部 `snapshot_column_layout`
+  照旧推落库）。三类原因各一句，宿主直接 `set_message`。
+- `ResultPanel::show_hidden_columns(window, cx) -> bool`：`hidden_count() == 0` → `false`
+  （宿主说「现在没有隐藏的列」）；否则 `show_all_columns(cx)`。
+- 本仓没有「选中 1 列则退化成焦点列」这一步——单区域选区本身就是一格，等价。
+
+#### 9.61.4 藏完 / 显完把当前格重投影一次
+
+隐藏列会让视图列位整体左移，`selection_pos` 存的是**组件列位**，不重投影的话它会指向另一列
+（值详情、右栏选中列全都跟着错）。
+
+- 列位仍有效（`col_ix <= 新可见列数`）→ `set_selection_pos(Some((row, col_ix)))` 重新投影：
+  位置不动、指向后面那一列，`selected_col` 同步（与上游「焦点列停在原位」同口径）；
+- 列位越界（藏掉的是最右一列）→ 清选，不让 `selection_pos` 指着空气。
+
+显示回来时同理重投影一次（列位不变、指向的列变了）。
+
+#### 9.61.5 键位挂面板层
+
+与第 77 批同一判断依据：上游这两条的 contextId 是 `...ui.context.resultset`，所以本仓挂
+`editor-result-panel`，焦点在筛选框 / 侧栏 / 面板根时都能按到。若按网格层绑，焦点一进筛选框
+这两条就失灵——而「藏一列之后想改筛选词」正是常见连招。
+
+#### 9.61.6 有意差异
+
+- **默认可见性概念缺失**：上游 `showColumns` 只恢复 `isVisibleByDefault` 的列（驱动侧默认隐藏的
+  辅助列保持隐藏）。本仓隐藏清单只有「用户藏起来的」一种来源，`show_all_columns` 全恢复正好
+  等价；将来若引入驱动侧默认隐藏，这一条要跟着改。
+- **全隐**：上游允许把列全藏光（只是弹框拦「选中列 >= 可见列数」），筛选设置对话框里的
+  「全部不显示」还能藏到 0；本仓 `hide_column` 的底线是「至少留 1 列」（藏空表格没意义），
+  本次键位同样守这条线（§9.54 已记）。
+- **ERROR 模态框 → 状态栏一句话**：上游弹 `SWT.ERROR` 框；本仓走第 69 批「键位不可用要说话」
+  口径，不打断操作。
+- **多列一次藏**：上游一次可藏多列（`getColumnSelection()`）；本仓一次只藏当前一列（单区域选区
+  的等价表达）。
+
+#### 9.61.7 用例
+
+panel（`panel/tests.rs`）：
+
+- `hiding_the_current_column_takes_it_out_of_the_view`：`set_data` 扩成三列后选中中间列（组件列 2）
+  → 藏 → 可见列 3→2、`hidden_count() == 1`、`is_hidden_column(1)` 真、`selection_pos` 仍是
+  `Some((0, 2))`、`selected_col` 变 `Some(2)`（重投影分支）；
+- `hiding_the_last_visible_column_is_refused`：先藏到只剩一列 → 再藏 → 返回 Err，原因含
+  「最后一列」，可见列仍是 1。
+
+editor（`view/tests/results_a.rs`）：
+
+- `the_hide_and_show_column_keys_round_trip`：没有隐藏列时 `alt-shift-t` 只留提示 →
+  `alt-shift-h` 把 `note` 藏掉（`column_hidden() == ["note"]`）→ `alt-shift-t` 放回来。
+
+用例初版踩过一次：用两列 harness 断言「当前格停在原列位」，实际藏掉的是最右一列 → 列位越界
+走清选分支。代码本身没错，改用三列场景测真正要测的那条分支（§9.61.8 记）。
+
+#### 9.61.8 门禁（第 78 批，最终实测）
+
+- `cargo check -p rds-editor -p rds-result-panel --all-targets`：`Finished`，无 warning；
+- `cargo test -p rds-result-panel -p rds-ui-guard`：panel **418 passed**（416 → +2）、
+  ui-guard **4 passed**；
+- `cargo test -p rds-editor --lib`：**832 passed（1 ignored）**（831 → +1）；
+- `cargo check --workspace --all-targets`：`Finished`（2 warning 全来自并行线的 `rds-notification`）。
+
+#### 9.61.9 遗留
+
+- `ALT+SHIFT+C`（`copyColumnNames`，`:1095`）、`SHIFT+F11`（`showColumnContextMenu`，`:1098`）、
+  `F11` / `CTRL+F11`（`filterMenu` / `filterMenu.distinct`，`:1061/1062`）仍未接；
+- `ALT+SHIFT+ARROW`（移列，`:1092/1093` → `SpreadsheetCommandHandler:132-173`）未接：本仓
+  `move_display_column` 可直接复用，但 `ALT+SHIFT+←/→` 与输入框的按词移动同键，需先定焦点口径；
+- 多列一次藏 / 显（§9.61.6 第 4 条）。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

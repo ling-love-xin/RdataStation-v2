@@ -3081,6 +3081,24 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   （1 ignored；825 → +6，其中 +2 本批、+4 来自并行线同期补的用例）；workspace `Finished`。
 - 记档：`TableState` 没有 `focus_handle` 方法，窗口用例必须 `use gpui_kit::Focusable as _;`。
 
+### 2.129 隐藏 / 显示列（2026-11-22，第 78 批）
+
+- 键位：`ALT+SHIFT+H` → `HideCurrentColumn`、`ALT+SHIFT+T` → `ShowHiddenColumns`
+  （`plugin.xml:1096/1097`；`SpreadsheetCommandHandler:174-194` / `:195-212`），
+  挂 `RESULT_PANEL_CONTEXT`（上游 contextId 是整块 `...ui.context.resultset`）。
+- 落点：`hide_current_column(window, cx) -> Result<(), String>`（当前列 = `selection_pos` 的组件列
+  换算数据列；拒绝：无当前格 / 行号槽 / 已隐藏 / 只剩一列）、`show_hidden_columns(window, cx) -> bool`
+  （`hidden_count() == 0` → false）。
+- 关键点：藏 / 显之后把当前格**按同一视觉列位重投影**（`set_selection_pos`），列位越界则清选——
+  否则 `selection_pos` / `selected_col` 会指向别的列。
+- 有意差异：无「默认可见列」概念（`show_all_columns` 全恢复等价）、不允许全隐（留 1 列）、
+  ERROR 框 → 状态栏一句话、一次只藏一列。
+- 用例：panel 2 条（三列场景藏中间列 + 重投影 / 只剩一列被拒）；editor 1 条（提示 → 藏 → 放回）。
+- 门禁：pair `Finished` 无 warning；panel **418**（+2）；ui-guard 4；editor lib **832 passed**
+  （1 ignored）；workspace `Finished`（2 warning 来自通知线）。
+- 记档：用例初版用两列 harness 断言「停在原列位」，实际走的是越界清选分支——改成三列场景，
+  代码未改。
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - **共享文件的提交姿势**（第 77 批踩过，务必照做）：`git commit --only <paths>` /
