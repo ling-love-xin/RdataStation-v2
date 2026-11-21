@@ -68,6 +68,19 @@ pub(crate) struct PendingExport {
     set: usize,
 }
 
+/// 【第 71 批】「取全部」（DBeaver `readAllData`）的在途状态
+///
+/// 与 [`PendingExport`] 同一套理由：取全部是**多轮取段**，每段回来再判一次要不要继续。
+/// `set` 是发起时选中的结果集下标——取段是 `Append` 落位，接到**当前选中**那份上，
+/// 中途切了结果集就必须停（否则会往另一份结果的尾巴上接行）。
+pub(crate) struct FetchAllProgress {
+    /// 发起时的结果集下标（`ResultPanel::active()`）
+    pub(crate) set: usize,
+    /// 已提交的段数（含首段）。兜住「源库一直说有下一段」的无限循环，
+    /// 上限见 `view::host::results::copy::FETCH_ALL_MAX_SEGMENTS`
+    pub(crate) segments: usize,
+}
+
 /// 【T2a-6】一次批量提交的在途状态（回执回来前暂存）
 ///
 /// 为什么索引要**在生成时存下来**：执行器的回执只按语句顺序报影响行数
@@ -379,6 +392,12 @@ pub struct EditorHostPanel {
     pub(crate) pending_export: Option<PendingExport>,
     /// 【B5b】正在取下一段（滚动到底自动加载的防重入真值；同步给网格 delegate）
     pub(crate) fetching_more: bool,
+    /// 【第 71 批】正在「取全部」（`None` = 没有取全部在跑）
+    ///
+    /// 与 `fetching_more` 分家的理由：取全部是**跨多轮**的意图，而 `fetching_more`
+    /// 只在「这一轮提交到回填之间」为真（回填时就清）。取全部期间不许再单独取段，
+    /// 否则同一个 offset 会被提交两次、行重复。
+    pub(crate) fetching_all: Option<FetchAllProgress>,
     /// 【B14】结果网格里**最近一次选中**（`Ctrl+C` 复制谁）
     ///
     /// 组件没给“当前是选格还是选行”的访问器，而它的 `selected_cell()` / `selected_row()`

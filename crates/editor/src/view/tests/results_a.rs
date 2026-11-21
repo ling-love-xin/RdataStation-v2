@@ -14,7 +14,8 @@ use super::MoreUnsupportedRunner;
 use super::dialogs::dialog_button_rendered;
 use super::{
     bind_editor_keys, open_panel, run_statement, shared_with_runner, shared_with_segment_runner,
-    shared_with_sized_runner, shared_with_toolbar_runner, wait_for_all_pending,
+    shared_with_sized_runner, shared_with_three_segment_runner, shared_with_toolbar_runner,
+    wait_for_all_pending,
 };
 
 // ===== B5：结果工具栏（复制 / 刷新 / 影响行数 / 截断 / 分栏）=====
@@ -979,4 +980,115 @@ fn the_fetch_page_key_asks_for_the_next_segment(cx: &mut TestAppContext) {
         .expect("还有状态行");
     assert!(!status.has_more, "最后一段没拿满 → 到底了");
     assert_eq!(shared.results().set_count(&id), 1, "取下一段不新开结果集");
+}
+
+/// 【第 71 批】「获取全部数据」= 一直取到没有下一段（DBeaver `readAllData:4426-4459`）
+///
+/// 第 70 批之前 `dispatch` 的 `FetchAll` 分支只调一次 `fetch_more`，注释承诺的循环没实现
+/// （钮叫「获取全部数据」，实际只取一段）。这条用**三段** runner 钉住「真的循环」：
+/// 取全部要发两次 `fetch_next`（offset 2 → 4），而「取下一段」只发一次
+/// （对照见上面 `the_fetch_page_key_asks_for_the_next_segment`）。
+#[gpui_kit::test]
+fn fetching_all_keeps_fetching_until_there_is_no_more(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, asked) = shared_with_three_segment_runner("select n from t");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(
+        cx,
+        &panel,
+        "select n from t",
+        execution::ResultPlacement::Replace,
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
+        2,
+        "首段两行"
+    );
+    assert!(
+        asked.lock().expect("锁").is_empty(),
+        "取全部之前不该有取段请求（与渲染路径分开：这条不 draw）"
+    );
+
+    // 与状态栏那颗钮同一条入队路径（`ResultRequest::FetchAll` → `dispatch` → `fetch_all`）
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.result_action_queue
+                .request(result_panel::ports::ResultRequest::FetchAll, cx);
+            host.drain_result_actions(window, cx);
+        });
+    });
+    wait_for_all_pending(cx, &panel);
+
+    assert_eq!(
+        asked.lock().expect("锁").as_slice(),
+        [(2, execution::SEGMENT_ROWS), (4, execution::SEGMENT_ROWS)],
+        "取全部要跨轮：每一轮的 offset 都得是「已经拿到的行数」"
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
+        6,
+        "三段接起来"
+    );
+    let status = cx
+        .update(|_window, cx| panel.read(cx).result_status_for_test(cx))
+        .expect("还有状态行");
+    assert!(!status.has_more, "最后一段没拿满 → 到底了");
+    assert_eq!(shared.results().set_count(&id), 1, "取全部不新开结果集");
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .unwrap_or_default();
+    assert!(
+        message.contains("已取全部 6 行"),
+        "收口要如实说一句（拿到多少行），实际是：{message}"
+    );
+}
+
+/// 【第 71 批】已经取完时再按「获取全部数据」：只给一句提示，不再发取段请求
+///
+/// 门控与「取下一段」同源（都走 `submit_segment` 的 `can_fetch_more` 判定），
+/// 不是为取全部另写一条真值表。
+#[gpui_kit::test]
+fn asking_for_all_after_the_end_only_says_so(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, asked) = shared_with_segment_runner("select n from t");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(
+        cx,
+        &panel,
+        "select n from t",
+        execution::ResultPlacement::Replace,
+    );
+    // 先取一段：两段 runner 的第二段没拿满 → 到底
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.result_action_queue
+                .request(result_panel::ports::ResultRequest::FetchMore, cx);
+            host.drain_result_actions(window, cx);
+        });
+    });
+    wait_for_all_pending(cx, &panel);
+    let taken = asked.lock().expect("锁").len();
+    assert_eq!(taken, 1, "先取了一段");
+
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.result_action_queue
+                .request(result_panel::ports::ResultRequest::FetchAll, cx);
+            host.drain_result_actions(window, cx);
+        });
+    });
+    wait_for_all_pending(cx, &panel);
+
+    assert_eq!(
+        asked.lock().expect("锁").len(),
+        taken,
+        "已经到底：不该再发取段请求"
+    );
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .unwrap_or_default();
+    assert!(
+        message.contains("这份结果已经取完了"),
+        "要如实说「已经取完」，实际是：{message}"
+    );
 }

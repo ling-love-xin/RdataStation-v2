@@ -286,12 +286,11 @@ impl EditorHostPanel {
             // 【计算行数】状态行那颗钮：对原 SQL 跑 count(*)，数字就地回填到钮上
             ResultRequest::CountRows => self.count_result_rows(cx),
             ResultRequest::FetchMore => self.fetch_more(cx),
-            ResultRequest::FetchAll => {
-                // 【DBeaver 对齐】取全部行：循环 fetch_more 直到没有下一段
-                // （当前 fetch_more 是单次取下一段，FetchAll 是循环取全量；
-                //  实现方式：调用 fetch_more 的循环版本，直到 has_more = false）
-                self.fetch_more(cx);
-            }
+            // 【第 71 批 · DBeaver 对齐】取全部行：`readAllData:4426-4459` 是
+            // 「一直取到 `isHasMoreData()` 为假」。本仓执行是异步的，循环拆成
+            // 发起（`fetch_all`）+ 每段回填后推进（`advance_fetch_all`，在 `pump.rs`）。
+            // 第 70 批之前这里只调一次 `fetch_more`，注释承诺与实现不符，本批补齐。
+            ResultRequest::FetchAll => self.fetch_all(cx),
             ResultRequest::GoPage(target) => self.go_page(target, cx),
             ResultRequest::GoRow(row) => self.go_row(row, cx),
             // 【P2-1】值查看器 hex 翻页：页号是面板自持的纯视图态，宿主只把请求还回面板

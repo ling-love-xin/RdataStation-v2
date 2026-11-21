@@ -699,6 +699,7 @@ impl EditorHostPanel {
             csv_active: false,
             pending_export: None,
             fetching_more: false,
+            fetching_all: None,
             result_selection: None,
             exec_pump: RefCell::new(None),
             scanner: crate::scan::Scanner::new(),
