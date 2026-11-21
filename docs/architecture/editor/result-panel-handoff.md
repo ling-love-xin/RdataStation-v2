@@ -2570,8 +2570,9 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   `plugin.xml:1071/1072`）。本仓无「值编辑器 + 写回」通道（`ports.rs:214-215`），只能落内嵌这一族，
   这是 §9.40.3 记的第 1 条有意差异。
 - **未做**：`SHIFT+ENTER` 外部编辑键位；右键 edit 段的「编辑单元格」项（`BeginEditCell` 读的是
-  选中格，菜单 target 是右键格，语义不同）；状态条默认可见集里 `fetch.page`（本仓有意常显）与
-  `undo`/`redo`（本仓默认隐藏，已对上）之外的其余差异。
+  选中格，菜单 target 是右键格，语义不同）；**记录（整行）模式下这颗钮静默无动作**
+  （`selected_cell()` 只在 cell 选择模式返回 `Some`，不要拿 `selected_row` 兜底猜列，会改错格）；
+  状态条默认可见集里 `fetch.page`（本仓有意常显）与 `undo`/`redo`（本仓默认隐藏，已对上）之外的其余差异。
 - 用例：`begin_edit_cell_emits_the_double_click_only_for_data_cells`（窗口，哨兵 `selection_pos`
   抹掉 `SelectCell` 副作用）、`analysis.rs::begin_edit_cell_request_enters_inline_editing`
   （端到端：真跑 SQL → 选中 → 面板入口 → `delegate().editing()`）。窗口用例必须先
