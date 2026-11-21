@@ -8173,8 +8173,11 @@ assert!(std::time::Instant::now() < deadline, "后台线程未在 3s 内{what}")
   `self.grid.read(cx).delegate().is_deleted_row(row)` 得 `row_deleted`，再算 `row_actions`；
   三颗钮的 `.disabled(...)` 分别改接 `!row_actions.add / !row_actions.copy / !row_actions.delete`；
   「删除」钮 tooltip 两态——已删行显示「这一行已标记删除；撤销删除后才能再删」。
-- 本地新增行（`RowRef::Local`）在 `is_deleted_row` 里恒 false（不是底层行），因此照常可删，
-  语义与 DBeaver 的 `STATE_ADDED` 行同向。
+- 本地新增行（`RowRef::Local`）在 `is_deleted_row` 里恒 false（不是底层行），因此照常可删。
+
+> **更正（第 65 批）**：本节 9.47.2 / 9.47.3 对 DBeaver `"delete"` 分支的概括有误——
+> `isDeletable()` 为真时它直接返回 true、不看行状态，所以 DBeaver 里已删行的删除钮**仍亮**；
+> 本仓的置灰是**有意收紧**，不是「同向」。依据与逐行原文见 §9.48.1，行为未改。
 
 #### 9.47.4 验证
 
