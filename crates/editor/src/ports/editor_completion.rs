@@ -1567,13 +1567,21 @@ mod tests {
 
 
 
+    /// 后台线程落笔的等待上限（【第 63 批】由 3s 放宽）。
+    ///
+    /// 原值 3s：单跑时毫秒级就落笔；但 `cargo test --lib` 默认按核数并行（本机还要与
+    /// 其它 crate 的测试抢 CPU），`thread::spawn` 的落笔实测会被饿到 3s 之外——第 62 批
+    /// 门禁每次随机 2~4 条踩超时（`--test-threads=1` 全过）。10s 对正常路径零代价
+    /// （条件一般几十毫秒就成立），只把「并发饿死」与「真卡死」分开。
+    const WAIT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+
     /// 轮询等到后台线程落笔（`schedule_load` 是 `thread::spawn`，无句柄可 join；
 
     /// 落笔点是 `loaded` / `warm_submitted` 的写回）。
 
     fn wait_until(cond: impl Fn() -> bool, what: &str) {
 
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let deadline = std::time::Instant::now() + WAIT_DEADLINE;
 
         while !cond() {
 
@@ -1581,7 +1589,7 @@ mod tests {
 
                 std::time::Instant::now() < deadline,
 
-                "后台线程未在 3s 内{what}"
+                "后台线程超时（{WAIT_DEADLINE:?}）未{what}"
 
             );
 
