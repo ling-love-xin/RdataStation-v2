@@ -7814,16 +7814,15 @@ toolbar 只剩 `filtersCustomButton` + `openFindReplaceButton`。
 2. `Ctrl+反引号` 循环切换表示（本仓两档 `Grid ⇄ Text`，DBeaver 多档走 registry 顺序）。
 3. 两条键位都挂在**网格上下文**上，而不是全局——与 DBeaver 把键位挂在 resultset 视图上同构。
 
-**有意差异（3 条）**：
+**有意差异（2 条）**：
 
-1. **文本态盲区**：`Presentation::Text` 时网格根本不渲染，`RESULT_GRID_CONTEXT` 不在焦点路径上
-   ⇒ 从文本态按 `Ctrl+反引号` 切不回网格。DBeaver 的 `CMD_SWITCH_PRESENTATION` 在
-   resultset focused context 上全局可用。本仓要补就得给面板根元素也挂一份 key_context +
-   同名 action（面板层 `render(&self, cx: &App)` 挂不了 `on_action`，得落在 editor 宿主）。
-2. **`SHIFT+ENTER`（外部值编辑器）不接**：本仓无「值编辑器 + 写回」通道（`ports.rs:214-215`
+1. **`SHIFT+ENTER`（外部值编辑器）不接**：本仓无「值编辑器 + 写回」通道（`ports.rs:214-215`
    明写只读预览），§9.40.3 第 1 条已登记偏离。
-3. **只在键位上补，不补菜单项**：DBeaver `plugin.xml:972-978` 在编辑菜单里也挂了这两项；
+2. **只在键位上补，不补菜单项**：DBeaver `plugin.xml:972-978` 在编辑菜单里也挂了这两项；
    本仓右键编辑段目前只有复制类项（§9.40.3 第 4 条候选），本批不动。
+
+> **原文记的「文本态盲区」（`Presentation::Text` 时网格不渲染 ⇒ `Ctrl+反引号` 切不回网格）
+> 已由第 60 批解决，见 §9.43。**
 
 #### 9.42.4 用例与门禁
 
@@ -7846,6 +7845,78 @@ toolbar 只剩 `filtersCustomButton` + `openFindReplaceButton`。
   会触发 `unused_doc_comment`（改成 `//`）。
 - **门禁**：`rds-result-panel` **396 passed**、editor `cargo check` `Finished`（0 warning）、
   `rds-editor --lib` **803 passed（1 ignored，较上一批 +2）**、`rds-ui-guard` **4 passed**。
+  本批未动 `crates/settings`，不重跑其测试。
+
+### 9.43 文本态下的表示切换：面板级 key context + 焦点移交（2026-11-21）
+
+§9.42 把 `Ctrl+反引号` 绑在网格 context 上，文本态（网格整块不渲染）按它什么也不做。
+本批补上面板层键位上下文，并把「切换后焦点去哪」做成显式语义。
+
+#### 9.43.1 根因（gpui 侧事实，源码实测）
+
+| 位置（gpui-fast-0.1.13） | 事实 |
+| --- | --- |
+| `window.rs:6361-6362` | `dispatch_key_event` 先取 `focus_node_id_in_rendered_frame(self.focus)` 再算 dispatch path |
+| `window.rs:6818-6826` | 焦点元素不在渲染帧时 `unwrap_or_else(root_node_id)` ⇒ 路径退化成窗口根，`context_stack()` 里再没有网格 context |
+| `keymap.rs:274-280` | `binding_enabled` 用 `predicate.depth_of(contexts)` 给每条 binding 算匹配深度 |
+| `keymap.rs:393-414` | `test_depth_precedence`：同一键两条 binding（`pane` / `editor`）都匹配时返回**两条**，深的在前 |
+| `window.rs:6500-6514` | 逐条 binding 尝试，第一条被 handler 接住即 `return` ⇒ 只执行最深那条，不会切两次 |
+| `entity_map.rs:610` | `Entity::update_in` 要求 `C: VisualContext` |
+| `gpui.rs:275-307` | `VisualContext` 只有 `WindowContext` / `AsyncWindowContext` 实现 —— **`Context<T>` 不是**（首跑 E0277） |
+| `window.rs:2651` | `Window::focus(&mut self, handle: &FocusHandle, cx: &mut App)` |
+| `window.rs:654` | `FocusHandle: PartialEq`（用例可断言目标句柄） |
+
+两条结论：
+
+1. 面板内 `Context<Self>` 拿不到 window，**焦点移交只能落在宿主**（`.on_action` handler 与
+   `observe_in` 回调都带 `window`）。
+2. 同一键绑两层 context 是安全的：深度优先、只执行最深那条。
+
+#### 9.43.2 本仓落地
+
+| 位置 | 改动 |
+| --- | --- |
+| `panel/mod.rs` | 新增 `pub const RESULT_PANEL_CONTEXT = "editor-result-panel"` |
+| `panel/data.rs` | `ResultPanel::focus_handle: FocusHandle`（面板根焦点落点） |
+| `panel/lifecycle.rs` | `new` 里 `cx.focus_handle()` 建句柄并进字面量 |
+| `panel/render.rs` | 根元素（`editor-result-root`）加 `.key_context(RESULT_PANEL_CONTEXT)` + `.track_focus(&focus_handle)` |
+| `panel/events.rs` | `presentation_focus_target(&self, cx) -> FocusHandle`：文本态 → 面板根，网格态 → 网格 |
+| `editor/support/commands.rs` | `pub use result_panel::panel::RESULT_PANEL_CONTEXT` |
+| `editor/.../edit_cmds.rs` | `on_cycle_result_presentation` 切完 `window.focus(&target, cx)` |
+| `editor/.../results/dispatch.rs` | `drain_result_actions` / `dispatch_result_request` 补 `window`；新增 `focus_after_presentation_switch` |
+| `editor/.../construct.rs`、`tests/results_b.rs` | `drain_result_actions` 调用点补 window |
+| `crates/app/src/main.rs`、`editor/tests/mod.rs` | 同一条 `ctrl-\`` 追加面板层注册 |
+
+面板根的 `track_focus` **不带 `tab_stop`**：它只是焦点落点（切换后接住焦点），不参与 Tab 顺序，
+避免把「面板根」变成键盘遍历的一个停靠点。
+
+#### 9.43.3 已对上 / 有意差异
+
+**已对上（3 条）**：
+
+1. 焦点在结果集内任意位置（网格 / 文本 / 各栏页签）都能切表示 —— 面板根是父层 context。
+2. 文本态能切回网格，对应 DBeaver `CMD_SWITCH_PRESENTATION` 在 resultset focused context 上全局可用。
+3. 切回网格后 `ENTER` 立刻可用（焦点移交到网格，落 `RESULT_GRID_CONTEXT`）。
+
+**有意差异（2 条）**：
+
+1. **焦点移交是显式语义**：DBeaver 切 presentation 时由 presenter 重建控件、焦点自然落进新控件；
+   本仓显式 `window.focus(target)`。副作用：从右栏页签 / 筛选框里按 `Ctrl+反引号`，焦点会被
+   移走（切回网格时落在网格上，而不是回到原输入框）。
+2. **`Ctrl+反引号` 只在面板子树内生效**：焦点在 SQL 编辑区或其它面板时不切结果集
+   （与 DBeaver 要求 resultset focused 的口径一致；本仓靠面板 context 自然限定）。
+
+#### 9.43.4 用例与门禁
+
+- editor 端到端 `ctrl_backtick_returns_from_the_text_presentation`：网格 → `Ctrl+反引号` →
+  断言 `Text` → 再按 → 断言 `Grid`（第二次按键时网格已卸载，实际走的就是面板层 context）。
+- 面板窗口 `presentation_focus_target_follows_the_presentation`：先断言面板根与网格是
+  **两个不同**句柄，再断言网格态目标 = 网格、文本态目标 = 面板根。
+- **踩坑**：`Entity::update_in` 不能用于 `&mut Context<T>`（E0277，见 9.43.1 第 3 行）；
+  `drain_result_actions` 加 window 后，测试里 `panel.update(cx, |p, cx| p.drain_result_actions(window, cx))`
+  要从外层 `cx.update(|window, cx| …)` 捕获 window。
+- **门禁**：`rds-result-panel` **397 passed**、editor `cargo check` `Finished`（0 warning）、
+  `rds-editor --lib` **804 passed（1 ignored，较上一批 +1）**、`rds-ui-guard` **4 passed**。
   本批未动 `crates/settings`，不重跑其测试。
 
 ## 8. 协作纪律

@@ -2621,14 +2621,38 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - **为什么 `ENTER` 安全**：vendor `DataTable::init`（`table/data_table.rs:16-31`）没绑 enter；
   编辑态的 `ENTER` 由 `vendor/gpui-base/src/input/base/state.rs:229-277` 的 `"Input"` context 先吃（提交）。
   以后若要改表格的 enter 绑定，先回来确认这条不会重复进编辑。
-- **已知盲区（未做，需拍板）**：文本态（`Presentation::Text`）下网格不渲染，
-  `Ctrl+反引号` 切不回网格 —— DBeaver 的 `CMD_SWITCH_PRESENTATION` 在 resultset focused
-  context 上全局可用。补齐方式：给面板根元素再挂一份 key_context + 同名 action（面板
-  `render(&self, cx: &App)` 挂不了 `on_action`，得落在 editor 宿主）。
+- **文本态盲区已解决（第 60 批，见 §2.111）**：面板根 `editor-result-root` 挂了
+  `RESULT_PANEL_CONTEXT` + `track_focus`，切呈现后宿主把焦点移交到
+  `ResultPanel::presentation_focus_target(cx)` 给出的句柄。
 - **未做**：`SHIFT+ENTER`（外部值编辑器，本仓无写回通道，§9.40.3 第 1 条）；
   编辑菜单/右键里的对应菜单项（DBeaver `plugin.xml:972-978`，本仓 §9.40.3 第 4 条候选）。
 - 门禁基线（第 59 批后）：result_panel **396 passed**、editor check `Finished`（0 warning）、
   editor lib **803 passed（1 ignored）**、ui-guard **4 passed**；本批未动 settings。
+
+### 2.111 面板级键位上下文与焦点移交的接手要点（2026-11-21）
+
+- **两层 context 是父子关系**：`RESULT_PANEL_CONTEXT = "editor-result-panel"`（面板根）⊃
+  `RESULT_GRID_CONTEXT = "editor-result-grid"`（网格容器）。同一键绑两层是安全的：
+  gpui 按 context 深度取更深的网格那条，只执行一条（不会切两次）。
+- **别在面板层做焦点移交**：面板 `render` 是 `&App`（挂不了 `on_action`），事件方法用
+  `Context<Self>`（不是 `VisualContext`，`Entity::update_in` 会 E0277）。移交必须在宿主侧，
+  用 `.on_action` handler 的 `window` 或 `observe_in` 回调的 window。
+- **唯一移交入口**：`ResultPanel::presentation_focus_target(&self, cx) -> FocusHandle`
+  —— 文本态 → 面板根 `focus_handle`，网格态 → 网格 `TableState` 的 `focus_handle`。
+  宿主切完 presentation 后调 `window.focus(&target, cx)`（见 `focus_after_presentation_switch`）。
+- **`drain_result_actions` / `dispatch_result_request` 带 window**：点击路径（左缘竖条 /
+  右键 layout 段）也走这两条，所以 window 一路透传；新增调用点记得补参数
+  （测试里从外层 `cx.update(|window, cx| …)` 捕获）。
+- **面板根的 `track_focus` 不带 `tab_stop`**：它只是焦点落点，不参与 Tab 顺序。别顺手加，
+  否则 Tab 遍历会多停一站。
+- **面板侧用例的取句柄写法**：面板**没有** `grid_for_test()`（那是 editor 宿主的）；测试里
+  直接读 `pub(crate)` 字段：`panel.read(app).grid.clone()` / `panel.read(app).focus_handle.clone()`，
+  再 `grid.read(app).focus_handle(app)`（`Focusable` trait，`FocusHandle: PartialEq` 可断言）。
+  该 `tests.rs` 的 `#[gpui_kit::test]` 签名写全路径 `cx: &mut gpui_kit::TestAppContext`。
+- **已知行为**：从右栏页签 / 筛选框里按 `Ctrl+反引号`，焦点会被移走（切回网格时落网格、
+  切到文本时落面板根）。这是显式移交的结果，不是 bug。
+- 门禁基线（第 60 批后）：result_panel **397 passed**、editor check `Finished`（0 warning）、
+  editor lib **804 passed（1 ignored）**、ui-guard **4 passed**；本批未动 settings。
 
 ## 3. 并行线协作纪律（工作区现状）
 
