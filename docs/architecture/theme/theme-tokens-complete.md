@@ -188,20 +188,24 @@ gpui-kit 固定语义面装不下的产品角色，仍走独立资产，代码�
 | `search.match.background` | `#FFF3C4` | `#4A3F00` |
 | `staged.drop` | `#B91C1C` | `#F87171` |
 | `result.local_row_background` | `#E4FFB5` | `#2A3A1E` |
-| `result.odd_row.background` | `#EBF5FF` | `#1C2129` |
+| ~~`result.odd_row.background`~~ | ~~`#EBF5FF`~~ | ~~`#1C2129`~~ |
 | `result.cell.modified.background` | `#FFE4B5` | `#3A3120` |
 | `result.cell.error.background` | `#FF80FF` | `#4A2131` |
 
-**结果集四槽的取值来源（DBeaver 结果集 colorDefinition，逐条实读 `plugin.xml:1166-1207`）**：
+> **2026-11-21 订正**：斑马行不再有产品槽（用户拍板 A 方案：斑马底色跟随主题
+> `table.even`，由表格组件 `.stripe(true)` 统一提供）。上面那行保留删除线是历史记录，
+> 现资产里已无此键；详见 `result-panel.md` §9.31。
+
+**结果集高亮槽的取值来源（DBeaver 结果集 colorDefinition，逐条实读 `plugin.xml:1166-1207`）**：
 
 | 产品角色 | DBeaver 对应 id（前缀 `org.jkiss.dbeaver.sql.resultset.color.`） | 默认值 |
 | --- | --- | --- |
-| `result.odd_row.background` | `cell.odd.background` | 235, 245, 255 |
+| ~~`result.odd_row.background`~~ | `cell.odd.background` | 235, 245, 255（**不照抄**，斑马跟随主题） |
 | `result.local_row_background` | `cell.new.background` | 228, 255, 181 |
 | `result.cell.modified.background` | `cell.modified.background` | 255, 228, 181 |
 | `result.cell.error.background` | `cell.error.background` | 255, 128, 255 |
 
-浅色四槽取 DBeaver 原值。**深色一套是推导值**：DBeaver 该批 colorDefinition 只有一套浅色值，深色主题 css（`e4-dark-data-editor.css`）实测零覆盖，故按深色背景等亮度比推导（非照抄），结论已登记为待用户确认的取舍（见 `result-panel.md` §8.33）。
+浅色三槽取 DBeaver 原值。**深色一套是推导值**：DBeaver 该批 colorDefinition 只有一套浅色值，深色主题 css（`e4-dark-data-editor.css`）实测零覆盖，故按深色背景等亮度比推导（非照抄），结论已登记为待用户确认的取舍（见 `result-panel.md` §8.33）。
 
 **结果集工具栏的 chrome 底色不新增产品角色**：直接复用固定语义面的 `tab_bar.background`（`#F8F8F8` / `#181818`），让工具栏与上方结果集标签条同底、连成一条 chrome 带。语义对应 DBeaver 的「非活动标签 / widget 背景」层（`UIStyles.getDefaultWidgetBackground()` = 主题 `INACTIVE_TAB_BG_START` → 回退系统 `COLOR_WIDGET_BACKGROUND`），与网格的列表底（`getDefaultTextBackground()` → `COLOR_LIST_BACKGROUND`，白）分层；取证与取舍见 `result-panel.md` §8.34。
 

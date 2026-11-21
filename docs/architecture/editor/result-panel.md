@@ -6861,8 +6861,9 @@ DBeaver 的列头右键是有的（`:3151-3161`），本批补上。
 - **不做多列配置对话框**：DBeaver 在 `attrs.size() > 1` 时弹对话框配分隔符（`:351-357`）。
   本仓列头菜单天然只针对一列，没有多选语义，所以不摆这一层；多列复制的入口在列浏览器
   （`CopyColumnNames`，已支持多选）。
-- **「复制行号」（`CMD_COPY_ROW_NAMES`）不做**：本仓没有行头菜单（行号槽 `#` 不挂右键），
+- ~~**「复制行号」（`CMD_COPY_ROW_NAMES`）不做**~~：本仓没有行头菜单（行号槽 `#` 不挂右键），
   这条命令在本仓没有落点，不在册。
+  **2026-11-21 订正**：已补（见 §9.31.2）——行号槽现在挂右键，落点只给「复制行号」。
 
 #### 9.30.4 用例与门禁
 
@@ -6871,6 +6872,113 @@ DBeaver 的列头右键是有的（`:3151-3161`），本批补上。
   「复制此列」之前；单元格右键**不摆**（DBeaver 的 DATA 落点只有 `EDIT_COPY`，即复制取值）。
 - **门禁**：`rds-result-panel` **376 passed**（+1）、editor check `Finished`、
   `rds-editor` **800 passed**（1 ignored）、`rds-ui-guard` **4 passed**。
+
+### 9.31 斑马线 A 方案 + 行号槽「复制行号」（2026-11-21）
+
+两件事同批：① 斑马线定案（用户拍板 **A 方案**：跟随主题，产品资产不再单独指定）；
+② 行号槽补右键「复制行号」（§9.30.3 原登记「不做」，本批落地并订正该条）。
+
+#### 9.31.1 斑马线：A 方案的取证与改法
+
+**用户拍板**：A —— 斑马底色跟着主题走。B 方案（由 `theme.colors.background` 混强调色
+派生）作废，不再保留讨论。
+
+**改前的链路（现源实读，不是推测）**：
+
+| 环节 | 位置 | 事实 |
+| --- | --- | --- |
+| 本仓开条带 | `crates/result_panel/src/grid/status.rs:566-569` | `DataTable::new(state).stripe(true)` |
+| delegate 再铺一层 | `crates/result_panel/src/grid/table_impl.rs::render_tr` | 奇数行 `bg(product_tokens::get(cx).result_odd_row_background(theme))`，偶数行裸 `tr` |
+| 组件条带判据 | `vendor/gpui-component/src/table/state.rs:2246` | `is_stripe_row = options.stripe && row_ix % 2 != 0`——**奇数行**，与 delegate 分支同一行 |
+| 组件上色 | 同上 `:2277` | `.when(is_stripe_row, …, bg(cx.theme().tokens.table_even))` |
+| 样式回灌 | 同上 `:2258` / `:2278` | 先 `let style = tr.style().clone()`，后 `.refine_style(&style)` → delegate 在 `render_tr` 设的 bg **会赢** |
+| 填充行 | 同上 `:2537-2544` | 假行（表格空白区）同样按 `is_stripe_row` 铺 `table_even` |
+
+结论：条带本来就在（组件 `.stripe(true)` 按奇数行铺 `table_even`），本仓再叠一层产品槽，
+**两个来源说同一件事**——用户看到的 `#EBF5FF` 是产品槽赢过 `table_even` 的结果。
+
+**A 方案落地 = 删掉那个产品槽**（连字段一起删，不留死槽）：
+
+- 9 份资产各删 light/dark 两处 `"result.odd_row.background"`：主资产
+  `assets/themes/product-tokens.json` + `assets/themes/packs/{coral-graphite,forest-teal,
+  ink-oled,mopin,qinghua,slate-azure,warm-umber,zhusha}/product-tokens.json`。主资产
+  `$comment` 同步改写（「斑马行不设产品槽」+ 深色由「四槽」改「三槽」）。
+- `crates/workbench_shell/src/product_tokens.rs`：删 `TokenMap.result_odd_row_background`、
+  `ProductTokens.result_odd_row_background`、`from_map` 对应行、访问器
+  `result_odd_row_background()`；单测 `parses_result_color_slots_and_falls_back` 收窄到两槽
+  （斑马不再有角色；`dark` 用空对象断言「缺失 = None」）。
+- `crates/result_panel/src/grid/table_impl.rs::render_tr`：奇数行改
+  `tr.bg(theme.tokens.table_even)`——与组件 stripe 同值同源；显式再铺一遍是为了留住
+  `editor-result-row-odd` 哨兵（用例坐实 delegate 的 `render_tr` 真被调用，否则分支静默失效）。
+- `crates/ui_guard/tests/workspace_ui_contract.rs`：`PRODUCT_ROLES` 删该键。该校验是**单向**的
+  （只拦「资产里出现未声明键」），删键不会失败；删声明是为了让白名单与 `ProductTokens`
+  字段继续一一对应。
+- `crates/app/src/theme_pack.rs::every_shipped_pack_loads`：产品角色计数 **13 → 12**。
+- 工具脚本同步（不改的话，下次重跑生成器会把键加回来）：
+  `tools/gen_theme_packs.py` 删 `"result.odd_row.background": e["odd"]` 生成行；
+  `tools/audit_theme_packs.py` 从 `PRODUCT_KEYS` 删该键。
+
+**结果**：斑马线 = 主题 `table_even`；换主题包（深色或 8 套配色）斑马自动跟着变，不再需要
+每包填一份色值。DBeaver 那颗结果集专属的 `cell.odd.background`（默认 235,245,255）
+**有意不照抄**（它在 DBeaver 里是「结果集单独可调色」的槽；本仓既然不做结果集专属配色面，
+留槽只会制造第二个来源）。
+
+**有意不改**：
+
+- `docs/architecture/theme/palette-candidates/*-product-tokens.json`：历史候选快照，是当时
+  方案对比的取证材料，不追改（否则「当时选了什么」就查不清了）。
+- `tools/gen_palette_options.py` 里的 `odd` 候选调色板维度：候选方案对比材料，与产品槽已解耦。
+
+#### 9.31.2 行号槽「复制行号」
+
+**dbeaver-ref 口径（现源实读）**：
+
+| 事实 | 行 | 含义 |
+| --- | --- | --- |
+| 落点 | `ResultSetViewer.java:3162-3164` | `menuLocation == ROW_HEADER` 时挂 `CMD_COPY_ROW_NAMES` |
+| 实现 | `ResultSetHandlerMain.java:377-396` | 取 `getVisualNumber() + 1`；多行时弹配置对话框；`ResultSetUtils.copyToClipboard` |
+| 文案 | `bundle_zh.properties:99-102` | 「复制行号」（英文 `Copy row number(s)`） |
+
+**本仓落点**：
+
+- `grid/menu.rs`：`ContextAction` 新增 **`CopyRowNumber(String)`**（载荷 = 显示行号文本）；
+  新纯函数 `row_number_menu_items(&str)` 产出唯一一项「复制行号「3」」（`separator_before: false`）；
+  `context_menu` 把原先的 `is_row_number(col)` ⇒ 空菜单早退拆成两段——先判
+  `row >= view_len()` 仍空，再对行号列单独产菜单。行号菜单**不进** `context_menu_items`：
+  那个纯函数回答的是「这一格数据能干什么」，行号不是数据。
+- `grid/cell.rs`：行号格补 `.id(("editor-result-rowno-cell", row_ix))` +
+  `on_mouse_down(MouseButton::Right)` → `set_context_cell(Some((row_ix, 0)))`。组件只认
+  **最近一次右键的单元格**（数据格在同一个 handler 里记，行号格原先不记）；不补这一笔，
+  点行号格会沿用上一个数据格的落点、弹出那一格的菜单。
+- 复制内容 = `delegate.cell(row, 0)` 现算的 `row + 1`（`grid/text.rs::cell` 对行号列的返回值，
+  `text.rs:22-29`），与 DBeaver `getVisualNumber() + 1` 同一口径（显示号从 1 起）。
+
+**口径差异（有意）**：
+
+- **不做多行配置对话框**：本仓行号槽只按单行右键（整行选中是单一 `selected_row`，无多选集合）。
+  DBeaver 的多行入口来自它的行头多选；本仓多选复制走单元格区域选择那一套。
+- **行号是视图行号**：`row + 1` 按当前视图行序（筛选 / 排序之后）算。DBeaver 的
+  `getVisualNumber()` 也是视觉行号，但它在分页模式带结果集偏移；本仓「获取下一段」是同一
+  视图里追加（行号连续）。若将来引入「换页替换」模式，这里要重新核对偏移——登记在册。
+
+#### 9.31.3 用例与门禁
+
+- `row_number_menu_offers_copying_the_visible_row_number`（纯函数）：唯一一项、文案
+  `复制行号「3」`、无前置分隔线、载荷 `CopyRowNumber("3")`；并断言单元格右键的
+  `context_menu_items` **不产出**这一项。
+- **门禁**：`rds-result-panel` **377 passed**（+1）、`rds-workbench-shell` **14 passed**、
+  `rds-app --bins every_shipped_pack_loads` **1 passed**、editor check `Finished`、
+  `rds-editor` **800 passed**（1 ignored）、`rds-ui-guard` **4 passed**。
+  （editor 测试本轮首次跑出编译期 `memory allocation failed`（16GB 机器链接阶段 OOM），
+  以 `CARGO_PROFILE_TEST_DEBUG=line-tables-only` 重跑通过；该变量只影响符号表，不改用例行为。）
+
+#### 9.31.4 仍未对齐（本批登记）
+
+- 行号槽右键的**交互链路**（真右键 → `context_cell` 记上 → 组件弹菜单）没有窗口用例覆盖：
+  当前测试设施没有「模拟右键点击」的入口，只能实机验证。菜单形态（纯函数）已锁死；渲染侧
+  `on_mouse_down` 与数据格同一写法，风险面集中在「组件是否把右键派发到行号格」。
+- DBeaver `ROW_HEADER` 落点在「复制行号」之后还有过滤 / 排序 / 导航 / 编辑 / 面板 / 视图
+  各通用子菜单；本仓只做第一条（行号落点没有数据列语义，那些子菜单挂上去也点不动）。
 
 ## 8. 协作纪律
 

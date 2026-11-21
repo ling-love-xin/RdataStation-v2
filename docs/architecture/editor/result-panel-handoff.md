@@ -1291,10 +1291,44 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   「复制列名「列名」」；`header.rs` 分支直接写剪贴板（列名闭包外已算好）。
 - 与列浏览器的 `CopyColumnNames` 分开：那个拷多选集合、换行分隔；列头这个是单列名。
 - 两条有意差异：复制**裸名**（本仓网格不持有方言，DBeaver 走 `getQuotedIdentifier`）；
-  不做多列配置对话框（列头菜单天然单列）。「复制行号」（`CMD_COPY_ROW_NAMES`）本仓没有
-  行头菜单，无落点，不在册。
+  不做多列配置对话框（列头菜单天然单列）。~~「复制行号」（`CMD_COPY_ROW_NAMES`）本仓没有
+  行头菜单，无落点，不在册。~~ **2026-11-21 订正**：已补（见下段），行号槽现在挂右键。
 - 门禁：panel **376**（+1）/ editor check `Finished` / editor **800**（1 ignored）/
   ui-guard **4 passed**。
+
+**2026-11-21 更新（斑马线 A 方案 + 行号槽「复制行号」，全文见 `result-panel.md §9.31`）**：
+
+- **斑马线定案 A（用户拍板：跟随主题）**。改前是「两个来源说同一件事」：组件
+  `.stripe(true)` 已按奇数行铺主题 `tokens.table_even`（`vendor/gpui-component/src/table/state.rs:2246`、
+  `:2277`），delegate 的 `render_tr` 又叠一层产品槽 `result.odd_row.background`；组件在
+  `:2258` 取 `tr.style()`、`:2278` `.refine_style` 重放 → delegate 的 bg 赢，所以看到的是
+  DBeaver 那颗 `#EBF5FF` 而不是主题色。**A 方案 = 删掉产品槽**：9 份资产
+  （主资产 + 8 个主题包，各 light/dark 两处）删 `result.odd_row.background`；
+  `workbench_shell::product_tokens` 删 `TokenMap` / `ProductTokens` 字段、`from_map` 行、
+  访问器；`grid/table_impl.rs::render_tr` 奇数行改取 `theme.tokens.table_even`
+  （与组件同值同源，显式再铺一遍是为了留 `editor-result-row-odd` 哨兵）。
+- 连带：`ui_guard` 的 `PRODUCT_ROLES` 删该键（该校验单向：只拦「资产里有未声明键」，
+  删键不会失败；删声明是为保持与结构体字段一一对应）；`crates/app/src/theme_pack.rs`
+  的 `every_shipped_pack_loads` 产品角色计数 **13 → 12**；工具脚本同步
+  （`tools/gen_theme_packs.py` 删该键生成行、`tools/audit_theme_packs.py` 从 `PRODUCT_KEYS` 删），
+  否则下次重跑生成器会把键加回来。
+- **不改**：`docs/architecture/theme/palette-candidates/*-product-tokens.json`（历史候选快照，
+  是当时方案的取证材料）；`tools/gen_palette_options.py` 的 `odd` 候选调色板维度。
+- **行号槽「复制行号」**（DBeaver `ROW_HEADER` → `CMD_COPY_ROW_NAMES`，
+  `ResultSetViewer.java:3162-3164`；handler `ResultSetHandlerMain.java:377-396`）：
+  `ContextAction::CopyRowNumber(String)`（载荷 = 显示行号）+ 纯函数
+  `row_number_menu_items` 产出唯一一项「复制行号「3」」；`context_menu` 把原来的
+  「行号列 ⇒ 空菜单」早退拆开，行号列单独产菜单（不进 `context_menu_items`）。
+  `grid/cell.rs` 行号格补 `.id(...)` + `on_mouse_down(Right)` 记
+  `set_context_cell(Some((row_ix, 0)))`——不补这一笔，点行号格会沿用上一个数据格的落点。
+- **仍在册**：行号槽右键的交互链路（真右键 → 记落点 → 弹菜单）**没有窗口用例**：当前
+  测试设施没有模拟右键的入口，只能实机验证；菜单形态（纯函数）已锁死。DBeaver
+  `ROW_HEADER` 落点后续的过滤 / 排序 / 导航等通用子菜单未做（行号落点没有数据列语义）。
+  行号是**视图行号**（`row + 1`，按当前视图行序）；若将来引入「换页替换」模式，需重新核对偏移。
+- 门禁：panel **377**（+1）/ workbench-shell **14** / app（`every_shipped_pack_loads`）
+  **1 passed** / editor check `Finished` / editor **800**（1 ignored）/ ui-guard **4 passed**。
+  （editor 首跑撞上编译期 `memory allocation failed`，用 `CARGO_PROFILE_TEST_DEBUG=line-tables-only`
+  重跑通过——只降符号表，不改用例行为。）
 
 ### 2.52 筛选条「状态历史」后退 / 前进（2026-11-18 已实现主体）
 

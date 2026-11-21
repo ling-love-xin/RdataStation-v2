@@ -833,7 +833,7 @@
 | `accent_hover` / `accent_active` | `primary.hover.background` / `primary.active.background`（按钮同名键同理） | 由主色向黑/白混合派生 |
 | 语义四色 | `success.*` / `warning.*` / `danger.*` / `info.*`（含按钮同名前缀） | `.on` → `*.foreground` |
 | `chart.*` | `chart.1`–`chart.5` / `chart.bullish` / `chart.bearish` / `chart.grid` | 系列色与涨跌色分离 |
-| `odd` / `modified` / `error_cell` / `local_row` | 产品 token `result.odd_row.background` 等 4 槽 | 结果集高亮槽 |
+| `odd` / `modified` / `error_cell` / `local_row` | 产品 token `result.cell.modified.background` 等 3 槽（**`odd` 自 2026-11-21 起不落资产**：斑马跟随主题 `table.even`） | 结果集高亮槽 |
 | `search` / `quick` | 产品 token `search.match.background` / `quick_open.group.header` | 命中底 / 分组头 |
 | `overlay` | `overlay` | 模态遮罩 + Quick Open 遮罩共用（无 scrim 键） |
 
