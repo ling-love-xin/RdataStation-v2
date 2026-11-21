@@ -9175,6 +9175,13 @@ editor（`view/tests/results_a.rs`）：
 - 文本呈现态（无网格焦点）不生效——与同行号跳转同口径；
 - 内容补全 / 预填全选两项等 `InputState` 能力补齐再谈（不是本批的取舍）；
 - 列浏览器双击仍落首行（见 §9.58.6）；
+- **Esc 关闭依赖事件冒泡**：`InputState` 的 `clean_on_escape` 默认 **false**
+  （`gpui-base/input/base/state.rs:1099`），单光标 / 单选区时 Esc 走到 `cx.propagate()`
+  （`:2607`），遮罩的 `on_key_down` 才收得到；多选区 / 行内补全途中会被输入内核先吃掉
+  （`:2577-2600`）——这与「输入框里 Esc 先清自己的态」一致，不算缺陷。
+  **本批没有加 Esc 的窗口用例**：既有四个浮层（SQL 预览 / 取全部确认 / 筛选设置 / 跳列）
+  共用同一套 handler，`panel/tests.rs` 里也只有列浏览器搜索框那条 Esc 用例
+  （`column_browser_filter_clears_on_escape`），补测留待统一处理；
 - `SHIFT+ENTER`、`ESC`（`cell.reset`）、`CTRL+BACKSPACE`、`CTRL+ALT+C` / `CTRL+ALT+R`、
   `ALT+SHIFT+ARROW` 仍未接，见 §9.48.5。
 

@@ -3042,6 +3042,9 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 门禁：editor 822、panel 412、ui-guard 4、workspace `Finished`（2 warning 来自通知并行线）。
 - 差异：无内容补全、不预填不全选（`InputState` 无 `select_all`）、隐藏列不自动取消隐藏、
   未知列名文案中文化。
+- Esc：`InputState::clean_on_escape` 默认 false（`gpui-base/input/base/state.rs:1099`），
+  单光标时走 `cx.propagate()`（`:2607`）→ 遮罩的 `on_key_down` 收得到；**无窗口用例**
+  （四个浮层同口径都缺）。
 
 ## 3. 并行线协作纪律（工作区现状）
 
