@@ -6877,6 +6877,7 @@ DBeaver 的列头右键是有的（`:3151-3161`），本批补上。
 
 两件事同批：① 斑马线定案（用户拍板 **A 方案**：跟随主题，产品资产不再单独指定）；
 ② 行号槽补右键「复制行号」（§9.30.3 原登记「不做」，本批落地并订正该条）。
+第 48 批（同日）补上②的**交互链路窗口用例**，口径与取证见 §9.31.3 / §9.31.4 的订正段。
 
 #### 9.31.1 斑马线：A 方案的取证与改法
 
@@ -6966,17 +6967,28 @@ DBeaver 的列头右键是有的（`:3151-3161`），本批补上。
 - `row_number_menu_offers_copying_the_visible_row_number`（纯函数）：唯一一项、文案
   `复制行号「3」`、无前置分隔线、载荷 `CopyRowNumber("3")`；并断言单元格右键的
   `context_menu_items` **不产出**这一项。
-- **门禁**：`rds-result-panel` **377 passed**（+1）、`rds-workbench-shell` **14 passed**、
-  `rds-app --bins every_shipped_pack_loads` **1 passed**、editor check `Finished`、
+- `right_clicking_the_row_number_cell_records_it_as_the_menu_target`（窗口用例，2026-11-21 补）：
+  真实窗口渲染两帧后取 `editor-result-rowno-0` 的 `debug_bounds` 中心，先
+  `simulate_mouse_move` 再 `simulate_mouse_down`（均为 `MouseButton::Right`），断言 delegate 的
+  `context_cell == Some((0, 0))`。
+- **门禁**：`rds-result-panel` **378 passed**（第 47 批 +1、本批 +1）、editor check `Finished`、
   `rds-editor` **800 passed**（1 ignored）、`rds-ui-guard` **4 passed**。
-  （editor 测试本轮首次跑出编译期 `memory allocation failed`（16GB 机器链接阶段 OOM），
-  以 `CARGO_PROFILE_TEST_DEBUG=line-tables-only` 重跑通过；该变量只影响符号表，不改用例行为。）
+  （第 47 批 editor 测试首次跑出编译期 `memory allocation failed`（16GB 机器链接阶段 OOM），
+  当时以 `CARGO_PROFILE_TEST_DEBUG=line-tables-only` 重跑通过；该变量只影响符号表，不改用例行为。
+  本批只动 `#[cfg(test)]` 内容，同 profile 增量跑，未再触发。）
 
 #### 9.31.4 仍未对齐（本批登记）
 
-- 行号槽右键的**交互链路**（真右键 → `context_cell` 记上 → 组件弹菜单）没有窗口用例覆盖：
-  当前测试设施没有「模拟右键点击」的入口，只能实机验证。菜单形态（纯函数）已锁死；渲染侧
-  `on_mouse_down` 与数据格同一写法，风险面集中在「组件是否把右键派发到行号格」。
+- ~~行号槽右键的**交互链路**（真右键 → `context_cell` 记上 → 组件弹菜单）没有窗口用例覆盖：
+  当前测试设施没有「模拟右键点击」的入口，只能实机验证。~~ —— **2026-11-21 订正：有入口**。
+  gpui 0.9（`gpui-pre-0.3.11`，`gpui_kit` 门面 `pub use ::gpui::*`）的 `VisualTestContext`
+  就带 `simulate_mouse_move(position, button: impl Into<Option<MouseButton>>, modifiers)`、
+  `simulate_mouse_down(position, button, modifiers)`、`simulate_mouse_up(...)` 三个 helper
+  （`gpui-pre-0.3.11/src/app/test_context.rs:935-977`），`button` 直接收 `MouseButton::Right`；
+  `TestAppContext` 侧另有一套无 button 参数的版本（同文件 `:413-461`）。上一批之所以判成「没入口」，
+  是只看了 vendor 内自测手搓的 `cx.simulate_event(MouseDownEvent{..})`（`vendor/gpui-base/src/number_input.rs:450-456`），
+  没往 `gpui-pre` 的测试支持里查。**教训**：查测试设施要查 `gpui-pre-*` registry 源码，
+  不能只查 `vendor/` 里的使用现场。
 - DBeaver `ROW_HEADER` 落点在「复制行号」之后还有过滤 / 排序 / 导航 / 编辑 / 面板 / 视图
   各通用子菜单；本仓只做第一条（行号落点没有数据列语义，那些子菜单挂上去也点不动）。
 

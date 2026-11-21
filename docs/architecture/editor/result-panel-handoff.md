@@ -1321,14 +1321,19 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   「行号列 ⇒ 空菜单」早退拆开，行号列单独产菜单（不进 `context_menu_items`）。
   `grid/cell.rs` 行号格补 `.id(...)` + `on_mouse_down(Right)` 记
   `set_context_cell(Some((row_ix, 0)))`——不补这一笔，点行号格会沿用上一个数据格的落点。
-- **仍在册**：行号槽右键的交互链路（真右键 → 记落点 → 弹菜单）**没有窗口用例**：当前
-  测试设施没有模拟右键的入口，只能实机验证；菜单形态（纯函数）已锁死。DBeaver
-  `ROW_HEADER` 落点后续的过滤 / 排序 / 导航等通用子菜单未做（行号落点没有数据列语义）。
+- ~~**仍在册**：行号槽右键的交互链路（真右键 → 记落点 → 弹菜单）**没有窗口用例**：当前
+  测试设施没有模拟右键的入口，只能实机验证；菜单形态（纯函数）已锁死。~~ —— **2026-11-21
+  已补窗口用例**：`right_clicking_the_row_number_cell_records_it_as_the_menu_target`（渲染两帧 →
+  取 `editor-result-rowno-0` 的 `debug_bounds` 中心 → `simulate_mouse_move` + `simulate_mouse_down`
+  均传 `MouseButton::Right` → 断言 `context_cell == Some((0, 0))`）。入口来自 `VisualTestContext`
+  的 `simulate_mouse_move/simulate_mouse_down/simulate_mouse_up`（`gpui-pre-0.3.11/src/app/test_context.rs:935-977`），
+  不是 `MouseDownEvent` 手搓。上一批判成「没入口」是只查了 `vendor/` 使用现场、没查 `gpui-pre` 测试支持。
+  DBeaver `ROW_HEADER` 落点后续的过滤 / 排序 / 导航等通用子菜单未做（行号落点没有数据列语义）。
   行号是**视图行号**（`row + 1`，按当前视图行序）；若将来引入「换页替换」模式，需重新核对偏移。
-- 门禁：panel **377**（+1）/ workbench-shell **14** / app（`every_shipped_pack_loads`）
-  **1 passed** / editor check `Finished` / editor **800**（1 ignored）/ ui-guard **4 passed**。
-  （editor 首跑撞上编译期 `memory allocation failed`，用 `CARGO_PROFILE_TEST_DEBUG=line-tables-only`
-  重跑通过——只降符号表，不改用例行为。）
+- 门禁：panel **378**（第 47 批 +1、本批 +1）/ editor check `Finished` / editor **800**
+  （1 ignored）/ ui-guard **4 passed**。（第 47 批 editor 首跑撞上编译期 `memory allocation failed`，
+  用 `CARGO_PROFILE_TEST_DEBUG=line-tables-only` 重跑通过——只降符号表，不改用例行为；本批只动
+  `#[cfg(test)]`，同 profile 增量跑未复现。）
 
 ### 2.52 筛选条「状态历史」后退 / 前进（2026-11-18 已实现主体）
 
