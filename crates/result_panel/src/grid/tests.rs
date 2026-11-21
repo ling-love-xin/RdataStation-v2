@@ -3901,6 +3901,57 @@ fn cells_stretch_to_the_column_boundary_for_grid_lines(cx: &mut gpui_kit::TestAp
     );
 }
 
+/// 【行号槽右键 2026-11-21】右键行号格必须把它自己记成菜单目标（`context_cell`）。
+///
+/// 组件的右键派发只认 delegate 上**最近一次**落点（`grid/menu.rs::context_menu` 读
+/// `delegate.context_cell`），行号列若不挂自己的 `on_mouse_down(Right)`，右键行号槽
+/// 会沿用上一个数据格的落点——菜单回头去摆那一列的内容，功能却叫「复制行号」。
+///
+/// 这条钉的是**交互链路**（真事件 → 元素回调 → delegate 状态）；菜单形态由
+/// `row_number_menu_offers_copying_the_visible_row_number` 钉，两者互补：
+/// 形态对了但链路没接，屏幕上依然是空动作。
+#[gpui_kit::test]
+fn right_clicking_the_row_number_cell_records_it_as_the_menu_target(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use gpui_kit::{MouseButton, Modifiers};
+
+    cx.update(gpui_kit::init);
+    let (harness, vcx) = cx.add_window_view(|window, cx| HeaderHarness {
+        state: cx.new(|cx| gpui_kit::component::table::TableState::new(grid(), window, cx)),
+    });
+
+    // 首帧只排位置，几何第二帧才稳定（配 retained 渲染内核尤其）
+    for _ in 0..2 {
+        vcx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+    }
+
+    let rowno = vcx
+        .debug_bounds("editor-result-rowno-0")
+        .expect("行号格应有 debug 几何");
+
+    // 先移动再按下：命中测试读窗口记录的最近一次指针位置，不先 move 时按下可能落在
+    // 上一个指针位置（用例里是原点）。
+    vcx.simulate_mouse_move(rowno.center(), MouseButton::Right, Modifiers::default());
+    vcx.simulate_mouse_down(rowno.center(), MouseButton::Right, Modifiers::default());
+
+    let recorded = vcx.update(|_window, cx| {
+        harness
+            .read(cx)
+            .state
+            .read(cx)
+            .delegate()
+            .context_cell
+    });
+    assert_eq!(
+        recorded,
+        Some((0, 0)),
+        "右键行号格没记成菜单目标（行号列 0 / 行号槽列传 0）：菜单会沿用上一个数据格的落点"
+    );
+}
+
 /// 只为把工具栏真正渲染进窗口的探针视图（几何必须来自真实布局）
 struct ToolbarHarness;
 
