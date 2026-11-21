@@ -401,6 +401,16 @@ fn run_app() {
                     editor::commands::FocusRowJump,
                     Some(editor::commands::RESULT_GRID_CONTEXT),
                 ),
+                // 【第 72 批】`CTRL+SHIFT+=` = `CMD_FETCH_ALL` → `readAllData()`
+                // （`plugin.xml:1070`）。DBeaver 点下去先过 `CONFIRM_RS_FETCH_ALL` 确认
+                // （`ResultSetViewer:4433-4440`），本仓同序：键只送 `AskFetchAll`，
+                // 弹确认浮层 → 用户点「继续」才真取。键名写物理键 `=`（shift 下打出 `+`，
+                // gpui 的 `Keystroke` 比的是规范化键名 + 修饰位，`platform/keystroke.rs:112`）。
+                KeyBinding::new(
+                    "ctrl-shift-=",
+                    editor::commands::FetchAllData,
+                    Some(editor::commands::RESULT_GRID_CONTEXT),
+                ),
                 // 【第 60 批】同一条 `Ctrl+反引号` 再绑到**面板层**上下文：文本态下网格
                 // 整块不渲染，网格 context 不在焦点路径上；焦点落在面板根时靠这条命中
                 // （两层同时匹配时 gpui 按 context 深度取更深的网格那条，不会切两次）。

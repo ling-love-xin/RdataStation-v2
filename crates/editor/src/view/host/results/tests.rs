@@ -39,6 +39,11 @@ impl EditorHostPanel {
         self.result_panel.read(cx).status().cloned()
     }
 
+    /// 【第 72 批】「获取全部数据」确认浮层是否开着（断言「真的先问了」）
+    pub fn fetch_all_confirm_for_test(&self, cx: &App) -> bool {
+        self.result_panel.read(cx).fetch_all_confirm_state()
+    }
+
     /// 测试用：当前呈现方式（网格 / 文本）——验证左竖条按钮真实点击链路
     pub fn presentation_for_test(&self, cx: &App) -> result_panel::ports::Presentation {
         self.result_panel.read(cx).presentation()

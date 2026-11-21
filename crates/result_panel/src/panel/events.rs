@@ -514,6 +514,16 @@ impl ResultPanel {
         self.queue.request(crate::ports::ResultRequest::FetchMore, cx);
     }
 
+    /// 【第 72 批】`CTRL+SHIFT+=` 的取全部入口（DBeaver `fetch.all`，`plugin.xml:1070`）
+    ///
+    /// 与状态栏「获取全部数据」钮**同一条路**：只送 [`crate::ports::ResultRequest::AskFetchAll`]
+    /// （先问一声），不在这里直接开跑——DBeaver 点 `fetch.all` 也是先过
+    /// `ConfirmationDialog`。弹不弹、要不要弹由宿主判（看 `can_fetch_more`）。
+    pub fn request_fetch_all(&mut self, cx: &mut Context<Self>) {
+        self.queue
+            .request(crate::ports::ResultRequest::AskFetchAll, cx);
+    }
+
     /// 【第 70 批】`CTRL+G` 的行号跳转入口：把那口行号输入框准备好并返回焦点句柄
     /// （DBeaver `CMD_GO_TO_ROW` → `GotoLineDialog`，`plugin.xml:1091`）。
     ///
@@ -1034,6 +1044,37 @@ impl ResultPanel {
         self.sql_dialog_open = false;
         self.sql_dialog_title = None;
         cx.notify();
+    }
+
+    /// 【第 72 批】打开「获取全部数据」确认浮层
+    /// （DBeaver `CONFIRM_RS_FETCH_ALL`，`ResultSetViewer.readAllData:4433-4440`）。
+    ///
+    /// **弹不弹由宿主判**：宿主先看结果条目 `can_fetch_more`（无下一段 / 有执行错误
+    /// 都直接回一句提示，不打扰用户，对齐 DBeaver `:4430` 的静默 `return`），确认要
+    /// 问才调这里。所以本方法只置标志，不再做一遍判定——两处真值表迟早会分叉。
+    ///
+    /// 不开 `filter_settings_open` 那类「回填输入框 + 交焦点」的活：浮层只有两颗
+    /// 按钮，没有输入源，`&mut Window` 不是必需品（与 SQL 预览同一签名）。
+    pub fn open_fetch_all_confirm(&mut self, cx: &mut Context<Self>) {
+        if self.fetch_all_confirm_open {
+            return;
+        }
+        self.fetch_all_confirm_open = true;
+        cx.notify();
+    }
+
+    /// 【第 72 批】关掉确认浮层（取消 / Esc / ✕）：只收标志，不动结果集
+    pub fn close_fetch_all_confirm(&mut self, cx: &mut Context<Self>) {
+        if !self.fetch_all_confirm_open {
+            return;
+        }
+        self.fetch_all_confirm_open = false;
+        cx.notify();
+    }
+
+    /// 【第 72 批】确认浮层是否开着（供宿主派发与测试断言「真弹了」）
+    pub fn fetch_all_confirm_state(&self) -> bool {
+        self.fetch_all_confirm_open
     }
 
     /// 【对齐 DBeaver Metadata 面板「Generate DDL」】按当前结果集的列生成建表 DDL，

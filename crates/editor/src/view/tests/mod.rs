@@ -138,6 +138,12 @@ fn bind_editor_keys(cx: &mut TestAppContext) {
                 crate::commands::FocusRowJump,
                 Some(crate::commands::RESULT_GRID_CONTEXT),
             ),
+            // 【第 72 批】取全部行（`CMD_FETCH_ALL`，`plugin.xml:1070`）
+            KeyBinding::new(
+                "ctrl-shift-=",
+                crate::commands::FetchAllData,
+                Some(crate::commands::RESULT_GRID_CONTEXT),
+            ),
         ]);
     });
 }

@@ -130,6 +130,51 @@ impl EditorHostPanel {
         self.submit_segment(cx);
     }
 
+    /// 【第 72 批】「取全部」先问一声（DBeaver `readAllData` 的确认环节，`:4433-4440`）
+    ///
+    /// 按钮与 `CTRL+SHIFT+=` 都先落到这里。判定只做一份，因为「还有没有下一段 /
+    /// 有没有执行错误」的真值在结果条目（`ResultEntry::can_fetch_more`）；DBeaver 也是
+    /// 先 `!isHasMoreData()` 静默 return、再弹确认（`:4430-4432`）。
+    ///
+    /// 两种「不弹」的提示分开说：执行出错时错因比「取完了」更该讲，别让用户误以为
+    /// 数据已经取干净了。
+    pub(crate) fn ask_fetch_all(&mut self, cx: &mut Context<Self>) {
+        if let Some(progress) = self.fetching_all.as_ref() {
+            let segments = progress.segments;
+            self.set_message(
+                Some(format!("正在取全部数据（已取 {segments} 段），稍等")),
+                cx,
+            );
+            return;
+        }
+        // 取下一段还在途：这会儿问「要不要取全部」没有意义——`fetch_all` 用的 offset
+        // 是「已抓到的行数」，在途那一段还没回来，一问一答之间行数就变了
+        if self.fetching_more {
+            self.set_message(Some("正在取下一段，等它回来再取全部".to_string()), cx);
+            return;
+        }
+        let (has_error, has_more, rows) = match self.shared.results_active(&self.document) {
+            Some(entry) => (entry.error.is_some(), entry.has_more, entry.row_count()),
+            None => {
+                self.set_message(Some("这份结果没有可取的数据".to_string()), cx);
+                return;
+            }
+        };
+        if has_error {
+            self.set_message(
+                Some("这份结果执行出错了；修好再试取全部".to_string()),
+                cx,
+            );
+            return;
+        }
+        if !has_more {
+            self.set_message(Some(format!("这份结果已经取完了（共 {rows} 行）")), cx);
+            return;
+        }
+        self.result_panel
+            .update(cx, |panel, cx| panel.open_fetch_all_confirm(cx));
+    }
+
     /// 【第 71 批】「取全部数据」（DBeaver `readAllData:4426-4459`）
     ///
     /// DBeaver 那边是 `while (isHasMoreData()) readNextSegment()` 的一个循环；本仓的执行
@@ -144,6 +189,14 @@ impl EditorHostPanel {
                 Some(format!("正在取全部数据（已取 {} 段）", progress.segments)),
                 cx,
             );
+            return;
+        }
+        // 【第 72 批】取下一段还在途时不许开「取全部」：`submit_segment` 的 offset
+        // 取「已抓到的行数」，在途那一段还没回填 —— 两条会拿同一个 offset 各提交一次，
+        // 行重复。第 71 批只在「取全部 / 导出」方向上做了互斥，这一条是反向补口
+        // （DBeaver 用 `nextSegmentReadingBlocked` 挡同一件事，`ResultSetViewer:4384`）。
+        if self.fetching_more {
+            self.set_message(Some("正在取下一段，等它回来再取全部".to_string()), cx);
             return;
         }
         if self.pending_export.is_some() {

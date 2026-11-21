@@ -10,7 +10,7 @@ use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::separator::Separator;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::toolbar::Toolbar;
-use gpui_kit::component::{ActiveTheme as _, Sizable as _};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::*;
 
 // 【B5】事实帧只读句柄随网格投影进 delegate（列式统计 / 原生数值排序交互派生时读取）
@@ -131,6 +131,160 @@ impl ResultPanel {
                                         .into_any_element()
                                 }),
                         ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// 【第 72 批】「获取全部数据」确认浮层
+    /// （DBeaver `CONFIRM_RS_FETCH_ALL`：`ConfirmationDialog.WARNING` + `QUESTION`，
+    /// `ResultSetViewer.readAllData:4433-4440`）。
+    ///
+    /// 文案取自 `bundle_zh.properties:161-162`：
+    /// - 标题「读取所有行」；
+    /// - 正文「读取结果集中的所有行会会花费大量时间和内存。确定要获取所有行吗？」
+    ///
+    /// **有意差异**：中文包原文是「会**会**花费」（重复字，上游笔误），本仓写作
+    /// 「会花费」。第二段另加一句本仓事实：当前已取多少行——DBeaver 只说「会花时间
+    /// 和内存」，用户点下去前其实不知道规模；这里把已抓行数摆出来（0 行也有意义）。
+    ///
+    /// 与 SQL 预览 / 筛选设置同一范式：面板内 absolute 遮罩，不是窗口级 dialog。
+    pub(crate) fn render_fetch_all_confirm(&self, cx: &App) -> AnyElement {
+        let theme = cx.theme();
+        let esc_queue = self.queue.clone();
+        let close_queue = self.queue.clone();
+        let close_queue2 = self.queue.clone();
+        let go_queue = self.queue.clone();
+        let rows = self.status.as_ref().map(|status| status.total_rows);
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(theme.colors.overlay)
+            .debug_selector(|| "editor-result-fetch-all-confirm".to_string())
+            .on_key_down(move |event, _window, app| {
+                if event.keystroke.key == "escape" {
+                    esc_queue.request(ResultRequest::CloseFetchAllConfirm, app);
+                }
+            })
+            .child(
+                div()
+                    .relative()
+                    .flex_col()
+                    .w(px(ui::RESULT_FETCH_ALL_CONFIRM_WIDTH * 16.0))
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.colors.border)
+                    .bg(theme.colors.background)
+                    .overflow_hidden()
+                    .debug_selector(|| "editor-result-fetch-all-confirm-card".to_string())
+                    // 标题行：警告图标 + 「读取所有行」+ ✕
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .justify_between()
+                            .px_3()
+                            .py_2()
+                            .border_b(ui::HAIRLINE)
+                            .border_color(theme.colors.border)
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .min_w_0()
+                                    .child(
+                                        Icon::new(IconName::TriangleAlert)
+                                            .text_color(theme.colors.warning),
+                                    )
+                                    .child(div().text_sm().child("读取所有行")),
+                            )
+                            .child(
+                                Button::new("editor-result-fetch-all-confirm-close")
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::X)
+                                    .debug_selector(|| {
+                                        "editor-result-fetch-all-confirm-close".to_string()
+                                    })
+                                    .tooltip("关闭".to_string())
+                                    .on_click(move |_, _window, app| {
+                                        close_queue
+                                            .request(ResultRequest::CloseFetchAllConfirm, app);
+                                    }),
+                            ),
+                    )
+                    // 正文：两段（警告 + 问句），再补一行本仓事实
+                    .child(
+                        div()
+                            .v_flex()
+                            .gap_2()
+                            .px_3()
+                            .py_3()
+                            .debug_selector(|| {
+                                "editor-result-fetch-all-confirm-body".to_string()
+                            })
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .child("读取结果集中的所有行会花费大量时间和内存。"),
+                            )
+                            .child(div().text_sm().child("确定要获取所有行吗？"))
+                            .children(rows.map(|rows| {
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.colors.muted_foreground)
+                                    .debug_selector(|| {
+                                        "editor-result-fetch-all-confirm-rows".to_string()
+                                    })
+                                    .child(SharedString::from(format!(
+                                        "当前已取 {rows} 行，新抓到的行会接在后面。"
+                                    )))
+                            })),
+                    )
+                    // 页脚：提示 + 取消 / 继续
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .justify_between()
+                            .gap_2()
+                            .px_3()
+                            .py_3()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_xs()
+                                    .text_color(theme.colors.muted_foreground)
+                                    .child("取数期间切换结果集会取消这次取全部。"),
+                            )
+                            .child(
+                                Button::new("editor-result-fetch-all-cancel")
+                                    .ghost()
+                                    .small()
+                                    .label("取消")
+                                    .debug_selector(|| {
+                                        "editor-result-fetch-all-cancel".to_string()
+                                    })
+                                    .on_click(move |_, _window, app| {
+                                        close_queue2
+                                            .request(ResultRequest::CloseFetchAllConfirm, app);
+                                    }),
+                            )
+                            .child(
+                                Button::new("editor-result-fetch-all-go")
+                                    .primary()
+                                    .small()
+                                    .label("继续")
+                                    .debug_selector(|| "editor-result-fetch-all-go".to_string())
+                                    .on_click(move |_, _window, app| {
+                                        go_queue.request(ResultRequest::FetchAll, app);
+                                    }),
+                            ),
                     ),
             )
             .into_any_element()

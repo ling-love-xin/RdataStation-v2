@@ -67,10 +67,13 @@ pub use result_panel::grid::RESULT_GRID_CONTEXT;
 ///
 /// 【第 70 批】取数与跳转：`CTRL+ALT+N` 取下一段（`CMD_FETCH_PAGE`，`:1069`）、
 /// `CTRL+G` 行号跳转（`CMD_GO_TO_ROW`，`:1091`）。
+///
+/// 【第 72 批】`CTRL+SHIFT+=` 取全部行（`CMD_FETCH_ALL`，`:1070`）：先经确认浮层，
+/// 确认过才开跑。
 pub use result_panel::grid::{
     CommitResultChanges, CopyRowValuesFromAbove, CopyRowValuesFromBelow, CycleResultPresentation,
-    DeleteResultRow, DuplicateResultRow, EnterCellEdit, FetchNextSegment, FocusRowJump,
-    InsertResultRow,
+    DeleteResultRow, DuplicateResultRow, EnterCellEdit, FetchAllData, FetchNextSegment,
+    FocusRowJump, InsertResultRow,
 };
 
 /// 【第 60 批】结果**面板**的 key context（`RESULT_GRID_CONTEXT` 的父层）。

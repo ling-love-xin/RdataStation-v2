@@ -257,6 +257,8 @@ impl ResultPanel {
             sql_dialog_open: false,
             sql_textarea: None,
             sql_dialog_title: None,
+            // 【第 72 批】「获取全部数据」确认浮层出厂关（只在用户点了才开）
+            fetch_all_confirm_open: false,
             filter_expanded: false,
             // 【筛选条显隐】出厂显示（对齐 `DataEditorsPreferencesInitializer.java:67`）；
             // 宿主构造期用 `set_show_filter_panel` 注入用户偏好

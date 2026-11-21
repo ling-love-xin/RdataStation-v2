@@ -1092,3 +1092,188 @@ fn asking_for_all_after_the_end_only_says_so(cx: &mut TestAppContext) {
         "要如实说「已经取完」，实际是：{message}"
     );
 }
+
+/// 【第 72 批】`CTRL+SHIFT+=` = 取全部行（DBeaver `CMD_FETCH_ALL` → `readAllData()`，
+/// `plugin.xml:1070`），但**先问一声**：`CONFIRM_RS_FETCH_ALL`
+/// （`ResultSetViewer.readAllData:4433-4440`）。
+///
+/// 这条钉两件事：
+/// 1. 键位真的命中（`ctrl-shift-=` 里 `=` 是物理键名，shift 下打出的是 `+`，
+///    gpui 比的是规范化键名 + 修饰位，`platform/keystroke.rs:112`）；
+/// 2. 命中的结果只是**弹确认**，一行都没取——第 71 批之前键位与按钮是直接开跑的。
+#[gpui_kit::test]
+fn the_fetch_all_key_asks_before_it_starts(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id, asked) = shared_with_three_segment_runner("select n from t");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(
+        cx,
+        &panel,
+        "select n from t",
+        execution::ResultPlacement::Replace,
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
+        2,
+        "首段两行"
+    );
+    // 掐掉「渲染自动补齐」这条旁路：短结果一重绘就会自己取下一段
+    // （`rendering_a_short_result_asks_for_more_by_itself` 钉的就是这个**有意**行为），
+    // 但浮层一打开面板就要重绘，那条旁路会把「键位 → 确认」这条链路淹掉。
+    // 只关 delegate 侧：store 里的 `has_more` 仍为真，所以 `ask_fetch_all` 照样该弹。
+    let grid = cx.update(|_window, app| panel.read(app).grid_for_test());
+    cx.update(|_window, cx| {
+        grid.update(cx, |state, cx| {
+            state.delegate_mut().set_has_more(false);
+            cx.notify();
+        });
+    });
+    assert!(
+        asked.lock().expect("锁").is_empty(),
+        "按键前不该有取段请求（与渲染路径分开：这条不 draw）"
+    );
+    assert!(
+        !cx.update(|_window, cx| panel.read(cx).fetch_all_confirm_for_test(cx)),
+        "出厂不弹"
+    );
+
+    // 焦点交给网格：键位只挂在 `RESULT_GRID_CONTEXT` 上
+    let grid_focus = cx.update(|_window, app| {
+        use gpui_kit::Focusable as _;
+        panel.read(app).grid_for_test().read(app).focus_handle(app)
+    });
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+
+    cx.simulate_keystrokes("ctrl-shift-=");
+    cx.run_until_parked();
+
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).fetch_all_confirm_for_test(cx)),
+        "键位要先把确认浮层打开（DBeaver 也是先 CONFIRM_RS_FETCH_ALL）"
+    );
+    assert!(
+        asked.lock().expect("锁").is_empty(),
+        "确认之前一行都不该取：键位不是「开跑」而是「先问」"
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
+        2,
+        "行数保持首段"
+    );
+}
+
+/// 【第 72 批】确认之后才真跑：`FetchAll`（浮层「继续」发的就是它）走完三段循环，
+/// 顺手把浮层收掉。
+#[gpui_kit::test]
+fn confirming_the_prompt_starts_the_fetch_all(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id, asked) = shared_with_three_segment_runner("select n from t");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(
+        cx,
+        &panel,
+        "select n from t",
+        execution::ResultPlacement::Replace,
+    );
+
+    // 先按键把确认浮层打开（与上一条同一条入队路径）
+    let grid = cx.update(|_window, app| panel.read(app).grid_for_test());
+    cx.update(|_window, cx| {
+        grid.update(cx, |state, cx| {
+            state.delegate_mut().set_has_more(false);
+            cx.notify();
+        });
+    });
+    let grid_focus = cx.update(|_window, app| {
+        use gpui_kit::Focusable as _;
+        panel.read(app).grid_for_test().read(app).focus_handle(app)
+    });
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+    cx.simulate_keystrokes("ctrl-shift-=");
+    cx.run_until_parked();
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).fetch_all_confirm_for_test(cx)),
+        "前置：浮层已开"
+    );
+
+    // 浮层「继续」与这里同一条队列请求
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.result_action_queue
+                .request(result_panel::ports::ResultRequest::FetchAll, cx);
+            host.drain_result_actions(window, cx);
+        });
+    });
+    wait_for_all_pending(cx, &panel);
+
+    assert_eq!(
+        asked.lock().expect("锁").as_slice(),
+        [(2, execution::SEGMENT_ROWS), (4, execution::SEGMENT_ROWS)],
+        "确认后真的要跨轮取到没有下一段"
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
+        6,
+        "三段接起来"
+    );
+    assert!(
+        !cx.update(|_window, cx| panel.read(cx).fetch_all_confirm_for_test(cx)),
+        "真跑起来要先把浮层收掉（不然遮罩盖着结果）"
+    );
+}
+
+/// 【第 72 批】已经取完时按 `CTRL+SHIFT+=`：**不弹浮层**，只给一句提示
+///
+/// 对齐 DBeaver：`readAllData` 第一件事是 `!isHasMoreData()` → 静默 return
+/// （`:4430-4432`）；本仓键位层统一「不可用留提示」，所以这里说一句而不是什么都不做。
+#[gpui_kit::test]
+fn the_fetch_all_key_after_the_end_only_says_so(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id, asked) = shared_with_segment_runner("select n from t");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(
+        cx,
+        &panel,
+        "select n from t",
+        execution::ResultPlacement::Replace,
+    );
+    // 先取一段：两段 runner 的第二段没拿满 → 到底
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.result_action_queue
+                .request(result_panel::ports::ResultRequest::FetchMore, cx);
+            host.drain_result_actions(window, cx);
+        });
+    });
+    wait_for_all_pending(cx, &panel);
+    let taken = asked.lock().expect("锁").len();
+    assert_eq!(taken, 1, "先取了一段");
+
+    let grid_focus = cx.update(|_window, app| {
+        use gpui_kit::Focusable as _;
+        panel.read(app).grid_for_test().read(app).focus_handle(app)
+    });
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+    cx.simulate_keystrokes("ctrl-shift-=");
+    cx.run_until_parked();
+
+    assert!(
+        !cx.update(|_window, cx| panel.read(cx).fetch_all_confirm_for_test(cx)),
+        "已经到底：不该弹确认（问了也没有下一段可取）"
+    );
+    assert_eq!(
+        asked.lock().expect("锁").len(),
+        taken,
+        "不该再发取段请求"
+    );
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .unwrap_or_default();
+    assert!(
+        message.contains("这份结果已经取完了"),
+        "键位不可用要留提示（第 69 批口径），实际是：{message}"
+    );
+}

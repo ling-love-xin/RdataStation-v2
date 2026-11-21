@@ -166,6 +166,9 @@ impl Render for EditorHostPanel {
             // `CTRL+G` 行号跳转（聚焦状态栏那口常驻行号框，`ENTER` 后焦点回网格）
             .on_action(cx.listener(Self::on_fetch_next_segment))
             .on_action(cx.listener(Self::on_focus_row_jump))
+            // 【第 72 批】`CTRL+SHIFT+=` 取全部行（`CMD_FETCH_ALL`，`plugin.xml:1070`）：
+            // 先过确认浮层，确认过才开跑（DBeaver `CONFIRM_RS_FETCH_ALL`）
+            .on_action(cx.listener(Self::on_fetch_all_data))
             // 【书签】`Ctrl+Shift+B` 切换 / `F8` 下一 / `Shift+F8` 上一（键位在 crates/app 注册）
             .on_action(cx.listener(Self::on_toggle_bookmark))
             .on_action(cx.listener(Self::on_next_bookmark))

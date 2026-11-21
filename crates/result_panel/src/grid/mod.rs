@@ -116,6 +116,14 @@ actions!(
         /// （`row_count_input`，`InputEvent::Change` 即时跳），所以键位的职责是
         /// **把那口框准备好并聚焦**，不另造一个弹窗。
         FocusRowJump,
+        /// 【第 72 批】`CTRL+SHIFT+=`：取全部行（`CMD_FETCH_ALL` → `readAllData()`，
+        /// `plugin.xml:1070`）。
+        ///
+        /// 键名写的是物理键 `=`（shift 下打出 `+`，但 gpui 的 `Keystroke` 比的是
+        /// 规范化后的键名 + 修饰位，`platform/keystroke.rs:112`）。
+        /// 与状态栏「获取全部数据」钮同一条入口：只送 `ResultRequest::AskFetchAll`
+        /// （先确认），判定与真执行都在宿主侧。
+        FetchAllData,
     ]
 );
 

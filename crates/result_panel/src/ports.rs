@@ -231,7 +231,23 @@ pub enum ResultRequest {
     /// 算回来的数字经 `ResultPanel::set_row_count_notice` 就地显示，**不开新结果集**
     CountRows,
     /// 取全部行（DBeaver 对齐：抓全量数据）
+    ///
+    /// 【第 72 批】这一条是**真执行**，不再是按钮的第一跳：按钮与 `CTRL+SHIFT+=`
+    /// 都先走 [`Self::AskFetchAll`]，用户在确认浮层点「继续」才落到这里。DBeaver
+    /// 同款顺序（`ResultSetViewer.readAllData:4426-4459`：先 `!isHasMoreData()` 静默
+    /// 返回，再 `CONFIRM_RS_FETCH_ALL` 确认，确认过了才 `runDataPump`）。
     FetchAll,
+    /// 【第 72 批】「获取全部数据」先问一声（DBeaver `readAllData` 的第一件事是
+    /// `ConfirmationDialog.confirmAction(..., ResultSetPreferences.CONFIRM_RS_FETCH_ALL, ...)`，
+    /// `:4433-4440`；文案见 `bundle_zh.properties:161-162`）。
+    ///
+    /// 面板只把**意图**送出去，不自己判：要不要弹取决于「结果条目还有没有下一段 +
+    /// 有没有执行错误」，那套判定在宿主（`ResultEntry::can_fetch_more`）。宿主决定
+    /// 弹浮层（`ResultPanel::open_fetch_all_confirm`）还是直接回一句「已经取完了」。
+    AskFetchAll,
+    /// 【第 72 批】关掉「获取全部数据」确认浮层（取消 / Esc / ✕）：什么都不做，
+    /// 只把 `fetch_all_confirm_open` 收回，**不动**已生效的结果集。
+    CloseFetchAllConfirm,
     /// 【分页】状态栏翻页（首页 / 上页 / 下页 / 末页）：**纯视图滚动**，不重查
     /// （下页到底且这份结果还有下一段时，宿主顺带发一次取下一段）
     GoPage(PageTarget),

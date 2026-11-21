@@ -229,6 +229,14 @@ pub struct ResultPanel {
     /// 有的值为「生成 DDL」这类复用同一浮层的场景（对齐 DBeaver 用 `ViewSQLDialog`
     /// 展示生成结果的做法，`MetaDataPanel.java:203-215` → `SQLGeneratorHandlerResultSetDDL`）。
     pub(crate) sql_dialog_title: Option<gpui_kit::SharedString>,
+    /// 【第 72 批】「获取全部数据」确认浮层开关（DBeaver
+    /// `CONFIRM_RS_FETCH_ALL`，`ResultSetViewer.readAllData:4433-4440`）。
+    ///
+    /// 与 `sql_dialog_open` / `filter_settings_open` 同一范式：面板内 absolute 遮罩 +
+    /// 居中卡片，不是窗口级 dialog（理由见 `dialog.rs::render_filter_settings` 的注释）。
+    /// 打开由宿主决定（判完「还有没有下一段」才来调 `open_fetch_all_confirm`），
+    /// 面板只负责呈现与收口。
+    pub(crate) fetch_all_confirm_open: bool,
     /// 【1.2】筛选框展开态：点击筛选组展开按钮后，工具栏下方出现顶宽筛选条
     /// （输入框全宽 + ▶ 运行 + ✕ 清除 + wrapped SQL 预览）。默认收起。
     pub(crate) filter_expanded: bool,

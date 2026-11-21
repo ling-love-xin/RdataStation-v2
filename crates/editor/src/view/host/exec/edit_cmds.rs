@@ -7,7 +7,7 @@ use crate::changes::CellChange;
 use crate::commands::{
     CommitResultChanges, CopyGridSelection, CopyRowValuesFromAbove, CopyRowValuesFromBelow,
     CycleResultPresentation, DeleteResultRow, DuplicateResultRow, EnterCellEdit, ExecuteSql,
-    FetchNextSegment, FocusRowJump, InsertResultRow, RedoResultEdit, UndoResultEdit,
+    FetchAllData, FetchNextSegment, FocusRowJump, InsertResultRow, RedoResultEdit, UndoResultEdit,
 };
 
 use super::*;
@@ -208,6 +208,22 @@ impl EditorHostPanel {
     ) {
         self.result_panel
             .update(cx, |panel, cx| panel.request_next_segment(cx));
+    }
+
+    /// 【第 72 批】结果网格 `CTRL+SHIFT+=`：取全部行
+    /// （DBeaver `CMD_FETCH_ALL` → `readAllData()`，`plugin.xml:1070`）。
+    ///
+    /// 与状态栏「获取全部数据」钮同一条入口（`ResultRequest::AskFetchAll`）：DBeaver
+    /// 那边点下去先是 `CONFIRM_RS_FETCH_ALL` 确认（`ResultSetViewer:4433-4440`），
+    /// 确认过才真取。所以这条键**不直接开跑**，弹不弹由宿主判（`ask_fetch_all`）。
+    pub(crate) fn on_fetch_all_data(
+        &mut self,
+        _: &FetchAllData,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.result_panel
+            .update(cx, |panel, cx| panel.request_fetch_all(cx));
     }
 
     /// 【第 70 批】结果网格 `CTRL+G`：行号跳转

@@ -1000,6 +1000,52 @@ fn rendered_ui_elements_survive(cx: &mut gpui_kit::TestAppContext) {
     );
 }
 
+/// 【第 72 批】「获取全部数据」确认浮层（DBeaver `CONFIRM_RS_FETCH_ALL`）：
+/// 只有 `fetch_all_confirm_open` 为真时整段才挂——遮罩 / 卡片 / 正文 / 两颗按钮
+/// 一起出现、一起消失，不留半截。
+///
+/// 断言走 `debug_bounds`（整段是 `then()` 条件渲染，没挂就等于取不到），
+/// 不点按钮（headless 下按钮点击走的是同一份队列，键位侧已有用例钉入口）。
+#[gpui_kit::test]
+fn fetch_all_confirm_renders_only_while_open(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let visible = |id: &'static str, cx: &mut gpui_kit::VisualTestContext| -> bool {
+        cx.debug_bounds(id).is_some()
+    };
+    assert!(!visible("editor-result-fetch-all-confirm", cx), "出厂不弹");
+    assert!(
+        !cx.update(|_w, app| panel.read(app).fetch_all_confirm_state()),
+        "状态行也不该是开着的"
+    );
+
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.open_fetch_all_confirm(cx));
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    for id in [
+        "editor-result-fetch-all-confirm",
+        "editor-result-fetch-all-confirm-card",
+        "editor-result-fetch-all-confirm-body",
+        "editor-result-fetch-all-cancel",
+        "editor-result-fetch-all-go",
+    ] {
+        assert!(visible(id, cx), "浮层元素 {id} 应渲染（回退检查）");
+    }
+
+    // 取消 / Esc / ✕ 三路都落到同一个方法
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.close_fetch_all_confirm(cx));
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        !visible("editor-result-fetch-all-confirm", cx),
+        "关掉后遮罩要整段消失"
+    );
+}
+
 /// 【R2】计算页真渲染（不只跑纯函数）：面板工具条三件 / 两列表头 / 六行统计（含行尾 ×）
 /// 都要真画出来；行高 20px、工具条 28px。
 ///
