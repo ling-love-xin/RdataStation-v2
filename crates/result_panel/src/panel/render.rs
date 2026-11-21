@@ -893,11 +893,24 @@ impl ResultPanel {
         let edit_row = self.editable.then(|| {
             let queue = self.queue.clone();
             let transposed = self.transposed;
-            let picked = self.selection_pos.is_some_and(|(_, col)| col > 0);
-            // 【第 62 批】可用态统一走 [`crate::grid::can_edit_cell`]（与右键「修改单元格」
-            // 同一式子；`PROP_EDITABLE` 的三条条件，见该函数注释）。闭包只在 `self.editable`
-            // 为真时构造，所以这里的 `editable` 恒真——写进去是为了让这条式子就是全部条件。
-            let disabled = !crate::grid::can_edit_cell(self.editable, transposed, picked);
+            // 「修改」钮看的是**当前格**（DBeaver `getCurrentAttribute()`，`PROP_EDITABLE` 的
+            // `inline` 分支 `:132-133`），所以「有没有数据格」与「这一行是否已删」都取
+            // `selection_pos`——不取 `status.selected_row`（那是行级动作的 `currentRow`，
+            // 两件不同的事，见 §9.49）。
+            let selected = self.selection_pos;
+            let picked = selected.is_some_and(|(_, col)| col > 0);
+            let cell_deleted = selected
+                .is_some_and(|(row, _)| self.grid.read(cx).delegate().is_deleted_row(row));
+            // 【第 62 批】呈现 + 属性这两条走 [`crate::grid::can_edit_cell`]（与右键
+            // 「修改单元格」同一式子；`PROP_EDITABLE` 的三条条件，见该函数注释）。
+            //
+            // 【第 66 批】再叠一条行状态：已标记删除的行上灰掉，与右键 edit 段的
+            // 「修改单元格」同一个口径（那边是 `disabled: target.is_deleted`）。DBeaver 的
+            // `"edit"` 分支本身不看行状态（`:127-136`），但它有 `CMD_CELL_RESET` 把
+            // `STATE_REMOVED` 恢复成 `STATE_NORMAL`（`ResultSetModel.resetCellValue:572-577`）；
+            // 本仓没有那条通道，`begin_edit` 直接拒绝已删行，所以只能灰（§9.49）。
+            let disabled =
+                !crate::grid::can_edit_cell(self.editable, transposed, picked) || cell_deleted;
             Button::new("editor-result-edit-cell")
                 .ghost()
                 .small()
@@ -907,6 +920,8 @@ impl ResultPanel {
                     "记录视图是只读的：切回网格视图后可编辑单元格"
                 } else if !picked {
                     "先在网格里选中一个数据单元格"
+                } else if cell_deleted {
+                    "这一行已标记删除；撤销删除后才能修改"
                 } else {
                     "修改当前选中单元格（进入行内编辑）"
                 })

@@ -1950,6 +1950,94 @@ fn delete_row_button_is_disabled_on_a_deleted_row(cx: &mut gpui_kit::TestAppCont
     );
 }
 
+/// 【第 66 批】状态栏「修改」钮也要看行状态：已标记删除的行上灰掉，与右键 edit 段的
+/// 「修改单元格」同一个口径（那边 `disabled: target.is_deleted`）。撤销删除后恢复。
+///
+/// 与第 58 批的记录视图用例分工：那条守「呈现 + 当前属性」，这条只补「行状态」这一维
+/// ——所以选中格必须是**数据格**（组件列 > 0），否则灰的原因是「没当前属性」而不是「已删行」。
+#[gpui_kit::test]
+fn edit_row_button_is_disabled_on_a_deleted_row(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{ElementId, SharedString};
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    let grid = cx.update(|_, app| panel.read(app).grid.clone());
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.editable = true;
+            p.status = Some(crate::grid::status::ResultStatus {
+                total_rows: 2,
+                selected_row: Some(2),
+                ..Default::default()
+            });
+            cx.notify();
+        })
+    });
+    // 两行底层数据 + 把第 2 行（底层行 1）标记删除
+    cx.update(|_, app| {
+        grid.update(app, |state, cx| {
+            state.delegate_mut().set_data(
+                vec!["id".to_string()],
+                vec![vec!["1".to_string()], vec!["2".to_string()]],
+            );
+            let mut local = crate::rowset::LocalRowSet::new();
+            local.mark_deleted(1);
+            state.delegate_mut().set_local_snapshot(Some(local));
+            state.refresh(cx);
+        });
+    });
+    // 选中已删行上的数据格（视图行 1、组件列 2 ⇒ 数据列 1）
+    cx.update(|_, app| {
+        grid.update(app, |state, cx| state.set_selected_cell(1, 2, cx));
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let disabled_state = |cx: &mut gpui_kit::VisualTestContext| -> Option<Option<bool>> {
+        cx.update(|window, _| {
+            window
+                .try_find(ElementId::Name(SharedString::from(
+                    "editor-result-edit-cell".to_string(),
+                )))
+                .map(|snap| snap.disabled())
+        })
+    };
+
+    assert_eq!(
+        disabled_state(cx).expect("可编辑结果集应注入「修改」真钮"),
+        Some(true),
+        "已标记删除的行上「修改」应置灰（begin_edit 拒绝已删行）"
+    );
+
+    // 换选未删行上的数据格：恢复可用
+    cx.update(|_, app| {
+        grid.update(app, |state, cx| state.set_selected_cell(0, 2, cx));
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_ne!(
+        disabled_state(cx).expect("「修改」钮仍应在位"),
+        Some(true),
+        "未删行的数据格上「修改」应可用"
+    );
+
+    // 撤销删除（清空叠加层）后再选回那一行：恢复可用
+    cx.update(|_, app| {
+        grid.update(app, |state, cx| {
+            state.delegate_mut().set_local_snapshot(None);
+            state.refresh(cx);
+        });
+    });
+    cx.update(|_, app| {
+        grid.update(app, |state, cx| state.set_selected_cell(1, 2, cx));
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_ne!(
+        disabled_state(cx).expect("「修改」钮仍应在位"),
+        Some(true),
+        "撤销删除后该行可编辑"
+    );
+}
+
 /// 【工具栏配置】状态栏命令项的默认可见性对齐 DBeaver `plugin.xml:1381-1397`：
 /// `undo` / `redo` 两项 `defaultVisibility="false"`（取下一段是有意偏离，常显），
 /// 其余 `true`；配置菜单把它们勾回来后应真的重新出现（否则隐藏 = 永久失去入口）。
