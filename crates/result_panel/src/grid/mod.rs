@@ -84,7 +84,10 @@ pub(crate) mod view_rows;
 // `plugin.xml:1071/1072` 的 `SHIFT+ENTER`（外部值编辑器）/ `ENTER`（内嵌编辑）、
 // `:1059` 的 `Ctrl+反引号`（切换表示）、`:1082` 的 `Ctrl+S`（提交变更）、
 // `:1083` 的 `Ctrl+R`（撤销未提交变更）、`:1090` 的 `Ctrl+Shift+G`（跳转到列）、
-// `:1088` / `:1089` 的 `Ctrl+Alt+C` / `Ctrl+Alt+R`（选列 / 选行）。
+// `:1088` / `:1089` 的 `Ctrl+Alt+C` / `Ctrl+Alt+R`（选列 / 选行）、
+// `:1058` 的 `Ctrl+Alt+Shift+T`（焦点在筛选框与结果呈现之间双向切换；
+// DBeaver 的 `resultset.focus.filter` 用的是 `...ui.context.resultset` 而不是
+// `...focused`，所以这一条与上面几条不同：键位挂在 `editor-result-panel` 上下文上）。
 use gpui_kit::actions;
 
 actions!(
@@ -146,6 +149,13 @@ actions!(
         /// 【第 76 批】`CTRL+ALT+R`：把当前格所在的**整行**选中
         /// （`CMD_SELECT_ROWS` → `SpreadsheetCommandHandler:119-131`）。
         SelectCurrentRow,
+        /// 【第 77 批】`CTRL+ALT+SHIFT+T`：焦点在「筛选框」与「结果呈现」之间来回切
+        /// （`CMD_FOCUS_FILTER` → `ResultSetViewer.switchFilterFocus()`，`plugin.xml:1058`）。
+        ///
+        /// 这是**面板级**命令：键位挂 [`RESULT_PANEL_CONTEXT`](crate::panel::RESULT_PANEL_CONTEXT)
+        /// （上游同一条也绑 `...context.resultset`，不是 `...resultset.focused`），
+        /// 否则焦点已经在筛选框里时按不到「切回来」那一半。
+        SwitchFilterFocus,
     ]
 );
 

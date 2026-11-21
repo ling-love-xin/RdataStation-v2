@@ -77,11 +77,14 @@ pub use result_panel::grid::RESULT_GRID_CONTEXT;
 ///
 /// 【第 76 批】`CTRL+ALT+C` / `CTRL+ALT+R` 选中当前格所在的整列 / 整行
 /// （`CMD_SELECT_COLUMNS` / `CMD_SELECT_ROWS`，`:1088/1089`）。
+///
+/// 【第 77 批】`CTRL+ALT+SHIFT+T` 焦点在筛选框与结果呈现之间来回切
+/// （`CMD_FOCUS_FILTER`，`:1058`）。
 pub use result_panel::grid::{
     CommitResultChanges, CopyRowValuesFromAbove, CopyRowValuesFromBelow, CycleResultPresentation,
     DeleteResultRow, DuplicateResultRow, EnterCellEdit, FetchAllData, FetchNextSegment,
     FocusRowJump, GotoColumn, InsertResultRow, RejectPendingChanges, SelectCurrentColumn,
-    SelectCurrentRow,
+    SelectCurrentRow, SwitchFilterFocus,
 };
 
 /// 【第 60 批】结果**面板**的 key context（`RESULT_GRID_CONTEXT` 的父层）。

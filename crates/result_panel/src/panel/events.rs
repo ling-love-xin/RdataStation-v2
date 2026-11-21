@@ -2177,6 +2177,39 @@ impl ResultPanel {
         true
     }
 
+    /// 【第 77 批】`CTRL+ALT+SHIFT+T`：焦点在「筛选框」与「结果呈现」之间来回切
+    /// （DBeaver `CMD_FOCUS_FILTER` → `ResultSetViewer.switchFilterFocus()`，
+    /// `plugin.xml:1058`；`ResultSetHandlerMain:179-181`）。
+    ///
+    /// 上游是**双向**的（`ResultSetViewer.java:689-701`）：筛选框已有焦点 → 交回当前
+    /// 呈现控件；否则交到筛选框。`filtersPanel == null` 时上游静默 return，本仓在
+    /// 筛选区没摆（`show_filter_panel == false`）或没有结果时返回 `false`，让宿主留提示
+    /// （键位没有「灰」这一态，第 69 批口径）。
+    ///
+    /// 「交回」落点跟第 60 批一致：走 [`Self::presentation_focus_target`]——网格态回网格，
+    /// 文本态回面板根（文本态下网格不在渲染树上，直接把焦点塞给它的 handle 等于丢掉）。
+    pub fn switch_filter_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.show_filter_panel {
+            return false;
+        }
+        let filter = self.filter_focus_handle(cx);
+        // 上游判据是 `filtersPanel.getEditControl().isFocusControl()`（精确落在筛选框上），
+        // 对应 gpui 的 `window.focused`——比 `contains_focused` 更贴：后者把后代也算进来。
+        if window.focused(cx) == Some(filter.clone()) {
+            let back = self.presentation_focus_target(cx);
+            window.focus(&back, cx);
+        } else {
+            window.focus(&filter, cx);
+        }
+        true
+    }
+
+    /// 【第 77 批】筛选框的焦点句柄（`switch_filter_focus` 的内部判据；宿主窗口用例
+    /// 也用它比对「焦点现在在哪」——`filter_input` 本身是 crate 内字段）
+    pub fn filter_focus_handle(&self, cx: &App) -> FocusHandle {
+        self.filter_input.read(cx).focus_handle(cx)
+    }
+
     /// 【列浏览器】清单双击定位：网格滚到该列首行并选中（列不可见 = 隐藏列，不动作）。
     pub fn locate_column(&mut self, data_col: usize, cx: &mut Context<Self>) {
         self.selected_col = Some(data_col);

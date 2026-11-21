@@ -5880,3 +5880,58 @@ fn select_row_marks_the_row_and_the_status_line(cx: &mut gpui_kit::TestAppContex
     cx.update(|_w, app| panel.update(app, |p, _cx| p.selection_pos = None));
     assert!(!cx.update(|_w, app| panel.update(app, |p, cx| p.select_current_row(cx))));
 }
+
+/// 【第 77 批】`CTRL+ALT+SHIFT+T` 双向往返（DBeaver
+/// `ResultSetViewer.switchFilterFocus:689-701`）：网格焦点 → 筛选框；再按 → 回网格
+/// （网格态走 `presentation_focus_target`）。
+#[gpui_kit::test]
+fn switching_the_filter_focus_goes_both_ways(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::Focusable as _;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    let (grid_handle, filter_handle) = cx.update(|_w, app| {
+        let grid = panel.read(app).grid.read(app).focus_handle(app);
+        let filter = panel.read(app).filter_focus_handle(app);
+        (grid, filter)
+    });
+
+    cx.update(|window, cx| window.focus(&grid_handle, cx));
+    assert!(
+        cx.update(|window, app| panel.update(app, |p, cx| p.switch_filter_focus(window, cx))),
+        "筛选区在摆着，切换要成立"
+    );
+    assert_eq!(
+        cx.update(|window, app| window.focused(app)),
+        Some(filter_handle.clone()),
+        "第一次按：焦点进筛选框"
+    );
+
+    assert!(
+        cx.update(|window, app| panel.update(app, |p, cx| p.switch_filter_focus(window, cx))),
+        "第二次按也要成立"
+    );
+    assert_eq!(
+        cx.update(|window, app| window.focused(app)),
+        Some(grid_handle),
+        "第二次按：焦点交回呈现（网格态 = 网格）"
+    );
+}
+
+/// 【第 77 批】筛选区收起（`show_filter_panel == false`，对应上游 `setVisible(false)`）：
+/// 不动作、返回 false（宿主留提示）。上游在 `filtersPanel == null` 时静默 return，
+/// 本仓键位没有「灰」这一态，所以由宿主说话。
+#[gpui_kit::test]
+fn switching_the_filter_focus_does_nothing_when_the_filter_area_is_collapsed(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|_w, app| panel.update(app, |p, _cx| p.show_filter_panel = false));
+
+    assert!(
+        !cx.update(|window, app| panel.update(app, |p, cx| p.switch_filter_focus(window, cx))),
+        "筛选区收起时不切焦点"
+    );
+}

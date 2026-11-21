@@ -167,6 +167,13 @@ fn bind_editor_keys(cx: &mut TestAppContext) {
                 crate::commands::SelectCurrentRow,
                 Some(crate::commands::RESULT_GRID_CONTEXT),
             ),
+            // 【第 77 批】焦点在筛选框与结果呈现之间来回切（`CMD_FOCUS_FILTER`，`:1058`；
+            // 面板层 context，与生产注册同口径）
+            KeyBinding::new(
+                "ctrl-alt-shift-t",
+                crate::commands::SwitchFilterFocus,
+                Some(crate::commands::RESULT_PANEL_CONTEXT),
+            ),
         ]);
     });
 }

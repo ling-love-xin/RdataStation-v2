@@ -179,6 +179,9 @@ impl Render for EditorHostPanel {
             // （`CMD_SELECT_COLUMNS` / `CMD_SELECT_ROWS`，`:1088/1089`）
             .on_action(cx.listener(Self::on_select_current_column))
             .on_action(cx.listener(Self::on_select_current_row))
+            // 【第 77 批】`CTRL+ALT+SHIFT+T` 焦点在筛选框与结果呈现之间来回切
+            // （`CMD_FOCUS_FILTER`，`:1058`；键位挂面板 context，见命令定义）
+            .on_action(cx.listener(Self::on_switch_filter_focus))
             // 【书签】`Ctrl+Shift+B` 切换 / `F8` 下一 / `Shift+F8` 上一（键位在 crates/app 注册）
             .on_action(cx.listener(Self::on_toggle_bookmark))
             .on_action(cx.listener(Self::on_next_bookmark))

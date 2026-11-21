@@ -1617,3 +1617,69 @@ fn the_select_column_and_row_keys_without_a_result_only_say_so(cx: &mut TestAppC
         "选行不可用要留提示，实际是：{message}"
     );
 }
+
+/// 【第 77 批】`CTRL+ALT+SHIFT+T` 全链：键位（面板 context）→ 焦点进筛选框 →
+/// 再按一次焦点回网格（DBeaver `switchFilterFocus` 的双向语义）。
+#[gpui_kit::test]
+fn the_filter_focus_key_moves_between_the_filter_box_and_the_grid(cx: &mut TestAppContext) {
+    use gpui_kit::Focusable as _;
+
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+
+    let grid = cx.update(|_window, app| panel.read(app).grid_for_test());
+    let grid_focus = cx.update(|_window, app| grid.read(app).focus_handle(app));
+    let filter_focus = cx.update(|_w, app| panel.read(app).result_panel.read(app).filter_focus_handle(app));
+
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+    cx.simulate_keystrokes("ctrl-alt-shift-t");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert_eq!(
+        cx.update(|window, cx| window.focused(cx)),
+        Some(filter_focus.clone()),
+        "第一次按：焦点进筛选框"
+    );
+
+    cx.simulate_keystrokes("ctrl-alt-shift-t");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(
+        cx.update(|window, cx| window.focused(cx)),
+        Some(grid_focus),
+        "第二次按（焦点在筛选框里）：交回网格"
+    );
+}
+
+/// 【第 77 批】还没有结果集时按 `CTRL+ALT+SHIFT+T`：
+///
+/// 结果区在本仓是**有内容才渲染**（`host/render.rs:221/241` 的 `result_has_content`），
+/// 所以无结果时面板子树根本不在树上，`editor-result-panel` 上下文也不在焦点路径里
+/// ——键位不命中、焦点不动。这与上游口径一致：`resultset.focus.filter` 的
+/// `enabledWhen` 要求 `resultset.part` 存在（命令定义 `plugin.xml:249`、handler
+/// `plugin.xml:545`），没有结果集时这条命令就是禁用的。上游
+/// `switchFilterFocus:689-701` 自己只判 `filtersPanel`，不看有没有数据；差别只在
+/// “部件存不存在”，本仓由「面板渲不渲染」自然承担。
+#[gpui_kit::test]
+fn the_filter_focus_key_is_inert_without_a_result(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    assert!(
+        !cx.update(|_w, app| panel.read(app).result_panel.read(app).has_content()),
+        "这条用例的前提是还没有结果"
+    );
+
+    let before = cx.update(|window, cx| window.focused(cx));
+    cx.simulate_keystrokes("ctrl-alt-shift-t");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(
+        cx.update(|window, cx| window.focused(cx)),
+        before,
+        "没有结果时焦点不动（与上游 enabledWhen 一致）"
+    );
+}

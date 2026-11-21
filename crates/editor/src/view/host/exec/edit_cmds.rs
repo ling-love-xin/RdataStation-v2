@@ -8,7 +8,7 @@ use crate::commands::{
     CommitResultChanges, CopyGridSelection, CopyRowValuesFromAbove, CopyRowValuesFromBelow,
     CycleResultPresentation, DeleteResultRow, DuplicateResultRow, EnterCellEdit, ExecuteSql,
     FetchAllData, FetchNextSegment, FocusRowJump, GotoColumn, InsertResultRow, RedoResultEdit,
-    RejectPendingChanges, SelectCurrentColumn, SelectCurrentRow, UndoResultEdit,
+    RejectPendingChanges, SelectCurrentColumn, SelectCurrentRow, SwitchFilterFocus, UndoResultEdit,
 };
 
 use super::*;
@@ -283,6 +283,30 @@ impl EditorHostPanel {
             .update(cx, |panel, cx| panel.open_goto_column(window, cx));
         if !opened {
             self.set_message(Some("这份结果还没有列可跳；先执行查询".to_string()), cx);
+        }
+    }
+
+    /// 【第 77 批】`CTRL+ALT+SHIFT+T`：焦点在「筛选框」与「结果呈现」之间来回切
+    /// （DBeaver `CMD_FOCUS_FILTER` → `ResultSetViewer.switchFilterFocus()`，
+    /// `plugin.xml:1058`；`ResultSetHandlerMain:179-181`）。
+    ///
+    /// 键位挂 `RESULT_PANEL_CONTEXT`（上游同一条也绑 `...context.resultset`，不是
+    /// `...focused` 变体）——焦点已经在筛选框里时也必须命中，否则「切回来」那一半按不到。
+    /// 筛选区收起时留一句提示。
+    pub(crate) fn on_switch_filter_focus(
+        &mut self,
+        _: &SwitchFilterFocus,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let switched = self
+            .result_panel
+            .update(cx, |panel, cx| panel.switch_filter_focus(window, cx));
+        if !switched {
+            self.set_message(
+                Some("筛选区已收起：在工具栏里打开「显示过滤器面板」后再按".to_string()),
+                cx,
+            );
         }
     }
 

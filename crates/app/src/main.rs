@@ -446,6 +446,17 @@ fn run_app() {
                     editor::commands::SelectCurrentRow,
                     Some(editor::commands::RESULT_GRID_CONTEXT),
                 ),
+                // 【第 77 批】`CTRL+ALT+SHIFT+T` = `CMD_FOCUS_FILTER` →
+                // `ResultSetViewer.switchFilterFocus()`（`plugin.xml:1058`；
+                // `ResultSetHandlerMain:179-181`）。双向：筛选框有焦点就交回呈现，否则交到
+                // 筛选框。**挂面板层 context**（上游同一条也绑 `...resultset` 而不是
+                // `...resultset.focused`）——焦点已经在筛选框里时也要能命中，否则「切回来」
+                // 那一半按不到。
+                KeyBinding::new(
+                    "ctrl-alt-shift-t",
+                    editor::commands::SwitchFilterFocus,
+                    Some(editor::commands::RESULT_PANEL_CONTEXT),
+                ),
                 // 【第 60 批】同一条 `Ctrl+反引号` 再绑到**面板层**上下文：文本态下网格
                 // 整块不渲染，网格 context 不在焦点路径上；焦点落在面板根时靠这条命中
                 // （两层同时匹配时 gpui 按 context 深度取更深的网格那条，不会切两次）。
