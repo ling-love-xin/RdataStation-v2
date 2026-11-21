@@ -2624,8 +2624,8 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - **文本态盲区已解决（第 60 批，见 §2.111）**：面板根 `editor-result-root` 挂了
   `RESULT_PANEL_CONTEXT` + `track_focus`，切呈现后宿主把焦点移交到
   `ResultPanel::presentation_focus_target(cx)` 给出的句柄。
-- **未做**：`SHIFT+ENTER`（外部值编辑器，本仓无写回通道，§9.40.3 第 1 条）；
-  编辑菜单/右键里的对应菜单项（DBeaver `plugin.xml:972-978`，本仓 §9.40.3 第 4 条候选）。
+- **未做**：`SHIFT+ENTER`（外部值编辑器，本仓无写回通道，§9.40.3 第 1 条）。
+  编辑菜单/右键里的编辑项**已由第 61 批补上（见 §2.112）**。
 - 门禁基线（第 59 批后）：result_panel **396 passed**、editor check `Finished`（0 warning）、
   editor lib **803 passed（1 ignored）**、ui-guard **4 passed**；本批未动 settings。
 
@@ -2653,6 +2653,37 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   切到文本时落面板根）。这是显式移交的结果，不是 bug。
 - 门禁基线（第 60 批后）：result_panel **397 passed**、editor check `Finished`（0 warning）、
   editor lib **804 passed（1 ignored）**、ui-guard **4 passed**；本批未动 settings。
+
+### 2.112 右键「修改单元格」的接手要点（2026-11-21）
+
+- **两条入口别合并**：`begin_edit_cell(cx)` 读**网格选中格**（状态栏「修改」钮、`ENTER`），
+  `begin_edit_cell_at(row, col, cx)` 用**给定格**（右键）。右键不改选区，右键的格与选中格
+  可以不同——合并回一条会变成「右键 A 格、实际编辑 B 格」。
+- **坐标折算在哪**：`ContextTarget::column` 是**数据列下标**（已折算掉行号槽，`menu.rs`
+  的 `let column = delegate.data_column(col - 1)`），`DoubleClickedCell` 要的是**组件列**
+  （数据格从 1 起）。折算点只有一处——`ContextAction::EditCell` 分派里 `let col = column + 1;`
+  别在面板侧再折一次（会变成数据格从 2 起）。
+- **请求仍走行级队列**：`delegate.on_row_action` 钩子（与 `InsertRowBelow` / `DuplicateRow` /
+  `CopyRowValuesFrom` 同一份），`editor` 侧在 `dispatch_result_request` 分支里转调面板方法。
+  不要为它单开一条 action 通道。
+- **菜单文案统一口径**：沿用状态栏那颗的「修改单元格」（§9.24），不照 `bundle_zh` 的
+  「内嵌编辑」。要改就两处一起改（状态条 label + 菜单项 label）。
+- **段位与分隔线**：它是 edit 段首项且 `separator_before: true`（开段）；「在下方插入新行」
+  也保留 `separator_before: true`，因此那条线现在承担 DBeaver `:3208` 的**段内** Separator。
+  以后在 edit 段里插新项，注意别把这两条线的语义搞混。
+- **用例三层**：纯函数 `context_menu_edit_cell_leads_the_edit_group`（门控 / 坐标 / 段位）、
+  面板 `begin_edit_cell_at_uses_the_given_cell_instead_of_the_selection`（落点优先于选区）、
+  editor 端到端 `begin_edit_cell_at_request_enters_inline_editing_without_a_selection`
+  （**不设选区**也能进编辑，这是本批与第 57 批用例的关键差别）。
+- **别用选中格去断言**：端到端用例刻意不设选区；若先 `set_selected_cell` 再发请求，用例就
+  退化成第 57 批那条、验不出落点独立性。
+- **全量并发下的既有 flake**：`ports::editor_completion::tests::*`（3 条，warm-introspection
+  竞态）偶发失败；单跑 `ports::editor_completion::tests::` 13 条全过、全量重跑也全过。
+  遇到先重跑，别当成本批回归。
+- **未做**：`CMD_CELL_SET_NULL` / `CMD_CELL_SET_DEFAULT` / `CMD_CELL_RESET`（本仓无 NULL /
+  默认值 / 单格撤销语义，§9.44.3 第 3 条）。
+- 门禁基线（第 61 批后）：result_panel **399 passed**、editor check `Finished`（0 warning）、
+  editor lib **805 passed（1 ignored）**、ui-guard **4 passed**；本批未动 settings。
 
 ## 3. 并行线协作纪律（工作区现状）
 

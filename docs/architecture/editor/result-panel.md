@@ -7645,7 +7645,7 @@ toolbar 只剩 `filtersCustomButton` + `openFindReplaceButton`。
    本仓由 `self.editable` 决定注入真钮还是占位。
 4. **无选中不做**：两边都不许在「没定位到格」时打开编辑器。
 
-**有意差异（4 条，勿当 bug 修）**：
+**有意差异（5 条，勿当 bug 修）**：
 
 1. **落点是行内编辑，不是外部值编辑器**：本仓无「值编辑器 + 写回」通道，`row.edit` 改走
    `row.edit.inline` 的链路。tooltip 写「修改当前选中单元格（进入行内编辑）」，避免让人以为会弹对话框。
@@ -7654,11 +7654,11 @@ toolbar 只剩 `filtersCustomButton` + `openFindReplaceButton`。
    （改它要连带 `status_config_items` 的设置项文案）。
 3. **没有 `SHIFT+ENTER` 外部编辑键位**：本仓无外部编辑器，不接 `:1071`（对应内嵌那条
    `ENTER`（`:1072`）已由 §9.42 接上）。
-4. **右键 edit 段不摆「编辑单元格」**：DBeaver 的 `menu:edit` 里两项都摆（`:972-978`）。本仓右键
-   edit 段现为「插入行(下方) / 复制行 / 删除行 / 从上一行复制 / 从下一行复制」，不加编辑项——
-   双击本身就是内嵌编辑，菜单再加一项是重复入口；且本仓 `BeginEditCell` 读的是**网格选中格**，
-   右键菜单的 target 是**右键定位的格**，两者语义不同，要摆得另开一个带 `(row, col)` 的请求。
-   **登记为候选，不擅自加。**
+4. **右键 edit 段此前不摆「编辑单元格」**（DBeaver 的 `menu:edit` 里两项都摆，`:972-978`）：
+   **已由第 61 批补齐，见 §9.44**——颗菜单项在 edit 段首，走新增的
+   `ResultRequest::BeginEditCellAt { row, col }`（右键 target 的**数据列下标** +1 折成
+   **组件列**），与状态栏那颗「读选中格」的入口分开：右键不会改选区，右键的格与选中格
+   可以不同。
 5. **记录（整行）模式下的可用态（第 58 批已补齐）**：第 57 批刚落线时这颗钮在记录视图里是
    「可点但静默落空」；第 58 批按 DBeaver `PROP_EDITABLE` 改成**置灰**——记录模式是
    `PlainTextPresentation` 的变体、不实现 `IResultSetEditor`（`PlainTextPresentation.java:63`），
@@ -7733,9 +7733,10 @@ toolbar 只剩 `filtersCustomButton` + `openFindReplaceButton`。
 **有意差异（3 条）**：
 
 1. **DBeaver 由 property tester 统一驱动所有入口**（状态条 item、编辑菜单项、快捷键、右键项
-   共享同一套 enablement）；本仓只在状态条这颗钮上判——键位已由 §9.42 接上（`ENTER` /
-   `Ctrl+反引号`），但**菜单项仍未接**（§9.40.3 第 3 / 4 条），所以 enablement 的共享面
-   仍是不完整的。
+   共享同一套 enablement）；本仓分三处各自判：状态条那颗（选中格 + 可编辑 + 非记录视图，
+   §9.41）、键位（`ENTER`，§9.42）、右键项（`editable && !is_deleted`，§9.44 —— 右键 target
+   天然带格坐标，所以不需要再判「有没有当前属性」）。规则相同但实现分家，改一处不自动同步
+   另两处。
 2. **没有「属性级只读」判定**：本仓没有列级只读模型（列的可编辑性只有面板级 `editable`），
    inline 的第三条（属性本身可写）落不了。
 3. **`"edit"` 与 `"inline"` 两条口径合并成一条**：本仓只有 inline 链路，所以门控比 DBeaver
@@ -7819,7 +7820,8 @@ toolbar 只剩 `filtersCustomButton` + `openFindReplaceButton`。
 1. **`SHIFT+ENTER`（外部值编辑器）不接**：本仓无「值编辑器 + 写回」通道（`ports.rs:214-215`
    明写只读预览），§9.40.3 第 1 条已登记偏离。
 2. **只在键位上补，不补菜单项**：DBeaver `plugin.xml:972-978` 在编辑菜单里也挂了这两项；
-   本仓右键编辑段目前只有复制类项（§9.40.3 第 4 条候选），本批不动。
+   本批（§9.42）时右键编辑段只有复制类项。**菜单侧已由第 61 批补上「修改单元格」（§9.44）**，
+   「切换表示」仍未进右键菜单（本仓把它留在工具栏 + 键位）。
 
 > **原文记的「文本态盲区」（`Presentation::Text` 时网格不渲染 ⇒ `Ctrl+反引号` 切不回网格）
 > 已由第 60 批解决，见 §9.43。**
@@ -7918,6 +7920,92 @@ toolbar 只剩 `filtersCustomButton` + `openFindReplaceButton`。
 - **门禁**：`rds-result-panel` **397 passed**、editor `cargo check` `Finished`（0 warning）、
   `rds-editor --lib` **804 passed（1 ignored，较上一批 +1）**、`rds-ui-guard` **4 passed**。
   本批未动 `crates/settings`，不重跑其测试。
+
+### 9.44 第 61 批：右键 edit 段补「修改单元格」（右键落点 vs 选中格）
+
+§9.40 把状态栏「修改」钮接上线、§9.42 补了 `ENTER`，但右键菜单的 edit 段一直不摆编辑项
+（§9.40.3 第 4 条登记为候选）。本批按 DBeaver `fillEditMenu` 补齐，同时把「按选中格」与
+「按右键落点」拆成两条入口。
+
+#### 9.44.1 dbeaver-ref 取证（现源实读）
+
+`ResultSetViewer.java:3518-3547` 的 `fillEditMenu(menu, attr, row, valueController)`：
+
+| 行 | 内容 |
+| --- | --- |
+| `:3519-3522` | 门控：`valueController != null`（右键落在单元格上）**且** `!valueController.isReadOnly()`，否则直接 return |
+| `:3524` | `CMD_ROW_EDIT` → `ResultSetHandlerMain.java:207-211` 的 `openValueEditor(false)`（外部值编辑器） |
+| `:3525` | `CMD_ROW_EDIT_INLINE` → `:212-216` 的 `openValueEditor(true)`（内嵌） |
+| `:3526-3528` | `CMD_CELL_SET_NULL`（当前值非空且 `!attr.isRequired()`） |
+| `:3529-3534` | `CMD_CELL_SET_DEFAULT`（值处理器是 `DBDValueDefaultGenerator` 时有） |
+| `:3536-3538` | 行处于 `STATE_REMOVED` 或该属性已改过 → 追加 `CMD_CELL_RESET` |
+
+调用点在 `:3197-3219`：先造 `editMenu`（`MENU_ID_EDIT`），`row != null` 时调 `fillEditMenu`；
+之后 `:3208` `editMenu.add(new Separator())` 才接 `CMD_ROW_ADD` / `CMD_ROW_COPY` /
+`CMD_ROW_DELETE`（`:3209-3211`），`:3212` 再一条 Separator 接 `CMD_ROW_COPY_FROM_ABOVE` /
+`_BELOW`（`:3213-3214`）。整组在 `:3217` 的 Separator 之前收尾。
+
+⇒ **编辑项在 edit 子菜单最前，行级三项在它之后、隔一条 Separator。**
+
+#### 9.44.2 本仓落地
+
+本仓没有「外部值编辑器 + 写回」通道（`ports.rs` 只读预览），只接 `_INLINE` 那条：
+
+1. **`ports.rs`**：在 `BeginEditCell`（状态栏，读选中格）之后新增
+   `ResultRequest::BeginEditCellAt { row, col }`。`col` 是**组件列**（含行号槽，数据格从 1 起）。
+2. **`grid/menu.rs`**：
+   - `ContextAction::EditCell { row, column }`，`column` 仍是**数据列下标**（`ContextTarget`
+     的口径，已折算掉行号槽）；
+   - edit 段（`if target.editable && !target.is_deleted`）**首项**摆「修改单元格」，
+     `separator_before: true`（开段线）；原来的「在下方插入新行」保留 `separator_before: true`，
+     于是它前面的线变成 DBeaver `:3208` 的那条段内 Separator；
+   - 分派时 `col = column + 1` 折算成组件列，仍走 `delegate.on_row_action` 钩子（与行级动作
+     同一份队列），未接钩子的只读网格兜底忽略。
+3. **`panel/events.rs`**：新增 `begin_edit_cell_at(row, col, cx)`——`col == 0`（行号槽）早退，
+   其余 emit `TableEvent::DoubleClickedCell(row, col)`；`begin_edit_cell` 改为先读
+   `grid.selected_cell()` 再转调它（单一实现）。
+4. **`editor/.../results/dispatch.rs`**：`BeginEditCellAt { row, col }` 分支 →
+   `panel.begin_edit_cell_at`。门控（通道 / 项目 / 键列 / 只读）依旧由 `DoubleClickedCell`
+   的宿主订阅再判一次，与双击完全同路。
+
+行号槽右键有独立早退路径（`menu.rs` 的 `row_number_menu_items`，只摆「复制行号」），
+转置视图整体早退 ⇒ 新项天然只出现在数据格、非转置时。
+
+#### 9.44.3 已对上 / 有意差异
+
+**已对上（3 条）**：
+
+1. **位置**：编辑项在 edit 段**最前**，行级 ADD/COPY/DELETE 在它之后，且两者之间有一条
+   分隔线（对应 `:3208`）。
+2. **门控**：只读结果集、已标记删除的行都不摆（对应 `!isReadOnly()`；`STATE_REMOVED` 那侧
+   本仓表现为整段收起）。
+3. **落点是右键那一格**：`fillEditMenu` 的 `valueController` 就是右键所在单元格的处理器，
+   本仓 `ContextAction::EditCell` 携带 `(row, column)` 并折算成组件列。
+
+**有意差异（3 条，勿当 bug 修）**：
+
+1. **只接 inline 一条**：`CMD_ROW_EDIT`（外部值编辑器）无落点，同 §9.40.3 第 1 条。
+2. **文案沿用「修改单元格」**：DBeaver `bundle_zh.properties` 里 `row.edit.inline` 是
+   「内嵌编辑」，本仓与状态栏那颗统一叫「修改单元格」，免得同一条链路两个名字（§9.24）。
+3. **`CMD_CELL_SET_NULL` / `SET_DEFAULT` / `CELL_RESET` 不摆**：本仓是本地叠加层编辑，
+   没有 NULL / 默认值 / 单格撤销语义，三项落不了（登记为缺口，不臆造实现）。
+
+#### 9.44.4 用例与门禁
+
+- 纯函数 `grid/tests.rs::context_menu_edit_cell_leads_the_edit_group`：只读不摆、已删不摆、
+  可编辑时坐标为 `(row 0, column 1)`、文案、`separator_before`、在「在下方插入新行」之前，
+  且新增项那条线也仍是 `true`（= 段内第二条）。
+- 面板窗口 `panel/tests.rs::begin_edit_cell_at_uses_the_given_cell_instead_of_the_selection`：
+  选中 `(0, 1)` 但请求 `(1, 3)` → `selection_pos` 变 `(1, 3)`；请求 `(0, 0)` → 哨兵不被覆盖。
+- editor 端到端 `analysis.rs::begin_edit_cell_at_request_enters_inline_editing_without_a_selection`：
+  跑 SQL 后**不设选区**，直接 `dispatch_result_request(BeginEditCellAt { row: 0, col: 2 })`
+  → 断言 `delegate().editing().is_some()`（证明落点不依赖选区）。
+- **门禁**：`rds-result-panel` **399 passed（+2）**、`cargo check --workspace --all-targets`
+  `Finished`（0 warning）、`rds-editor --lib` **805 passed（1 ignored，+1）**、
+  `rds-ui-guard` **4 passed**。本批未动 `crates/settings`。
+- **踩坑**：`ports::editor_completion::tests::*` 在全量并发下有 3 条偶发失败
+  （warm-introspection 竞态），单独跑 `ports::editor_completion::tests::` 13 条全过、
+  全量重跑也全过 —— 与本批改动无关的既有不稳定用例，重跑即可判定。
 
 ## 8. 协作纪律
 
