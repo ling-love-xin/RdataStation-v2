@@ -24,7 +24,7 @@ use super::events::{
 };
 use crate::error_card::{self};
 use crate::export;
-use crate::grid::{self as result_grid, ResultToolbar};
+use crate::grid::{self as result_grid, ResultToolbar, RowTargetState};
 use crate::ports::{FindOption, PageTarget, Presentation, ResultRequest};
 use crate::script_card::{self};
 use crate::sets::{self as result_sets};
@@ -853,23 +853,13 @@ impl ResultPanel {
 
         // 【#28-B3】状态栏行级动作钮：新增 / 复制 / 删除一行。只读结果集（`!editable`）
         // 不注入，回退 grid.rs 的禁用占位钮；复制 / 删除必须有选中行才可用。
-        // 选中行号取状态行 1 基记录（格选中与行选中都记行；0 基交给宿主翻译身份）。
-        let selected_view_row = self
-            .status
-            .as_ref()
-            .and_then(|status| status.selected_row)
-            .map(|row| row.saturating_sub(1));
-        // 【第 64 批】行级三钮的可用态统一走 [`crate::grid::row_action_state`]
-        // （DBeaver `PROP_EDITABLE` 的 `add` / `copy` / `delete` 三个分支）。`delete` 还要
-        // 看这一行有没有被标记删除：已删行上再点删除是宿主侧空操作，置灰就是为了不让人
-        // 点了没反应（本地新增行不是底层行，`is_deleted_row` 恒 false，照常可删）。
-        let row_deleted = selected_view_row
-            .is_some_and(|row| self.grid.read(cx).delegate().is_deleted_row(row));
-        let row_actions = crate::grid::row_action_state(
-            self.editable,
-            selected_view_row.is_some(),
+        // 【第 69 批】选中行号 / 行删除态 / 可用态统一走 [`ResultPanel::row_target_state`]
+        // （键盘入口问同一段，见 §9.52）：三钮与键位不会再各算一套。
+        let RowTargetState {
+            row: selected_view_row,
             row_deleted,
-        );
+            actions: row_actions,
+        } = self.row_target_state(cx);
         // 【第 57 批·状态栏「修改」钮接线】DBeaver 状态条 `row.edit` 默认可见
         // （`plugin.xml:1386`），handler `CMD_ROW_EDIT` → `openValueEditor(false)`
         // （`ResultSetHandlerMain.java:207-211`，外部值编辑器）。本仓没有「值编辑器 + 写回」

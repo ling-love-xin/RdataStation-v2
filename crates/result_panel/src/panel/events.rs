@@ -17,7 +17,7 @@ use crate::error_card::ErrorCard;
 use crate::grid::cell::{
     ViewerMode, classify_value, hex_to_bytes, image_format_of, json_tree_items,
 };
-use crate::grid::{ResultGridDelegate, ResultStatus, ResultToolbar};
+use crate::grid::{ResultGridDelegate, ResultStatus, ResultToolbar, RowTargetState};
 use crate::ports::{
     FindOption, GroupSort, Presentation, ResultRequest, RightTab, StatsItem, StatsMode,
 };
@@ -2020,6 +2020,37 @@ impl ResultPanel {
     /// 状态行投影（只有网格时才给）
     pub fn status(&self) -> Option<&ResultStatus> {
         self.status.as_ref()
+    }
+
+    /// 【第 69 批】行级动作的目标与可用态（单一实现）
+    ///
+    /// 状态栏三钮与键盘入口（`ALT+INSERT` / `CTRL+ALT+INSERT` / `ALT+DELETE` /
+    /// `CTRL+D` / `CTRL+ALT+D`）都调这一个：当前行取状态行 1 基记录折 0 基，行删除态
+    /// 读网格委托的镜像，可用态走纯函数 [`crate::grid::row_target_state`]。
+    /// `render` 是纯读路径，宿主 handler 也只需要 `&App`，两边不会各自算一套。
+    pub fn row_target_state(&self, cx: &App) -> RowTargetState {
+        let selected_view_row = self
+            .status
+            .as_ref()
+            .and_then(|status| status.selected_row)
+            .map(|row| row.saturating_sub(1));
+        let row_deleted = selected_view_row
+            .is_some_and(|row| self.grid.read(cx).delegate().is_deleted_row(row));
+        crate::grid::row_target_state(self.editable, selected_view_row, row_deleted)
+    }
+
+    /// 【第 69 批】邻行复制的源行（视图坐标；`None` = 越界，没有可复制的行）
+    ///
+    /// 与宿主 `copy_row_values_from_adjacent` 的「源行越界静默不动作」同一判据，
+    /// 但宿主需要区分提示文案（首行没有上一行 / 末行没有下一行），所以先把源行
+    /// 翻译成网格真值再回答。
+    pub fn adjacent_row_view(&self, row: usize, above: bool, cx: &App) -> Option<usize> {
+        let source = if above {
+            row.checked_sub(1)
+        } else {
+            row.checked_add(1)
+        };
+        source.filter(|view| self.grid.read(cx).delegate().reference_of(*view).is_some())
     }
 
     /// 当前呈现方式（网格 / 文本）——供测试断言左竖条按钮点击链路

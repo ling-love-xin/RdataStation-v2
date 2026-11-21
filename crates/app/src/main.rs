@@ -355,6 +355,36 @@ fn run_app() {
                     editor::commands::CommitResultChanges,
                     Some(editor::commands::RESULT_GRID_CONTEXT),
                 ),
+                // 【第 69 批】行级键位组（DBeaver `plugin.xml:1073/1075/1079/1077/1078`，
+                // context 都是 `...resultset.focused`）：
+                // `ALT+INSERT` 新增行 / `CTRL+ALT+INSERT` 复制行 / `ALT+DELETE` 删除行 /
+                // `CTRL+D` 上一行填当前行 / `CTRL+ALT+D` 下一行填当前行。
+                // 只读 / 无当前行 / 已删行 / 越界时由宿主留状态栏提示，不静默吞键。
+                KeyBinding::new(
+                    "alt-insert",
+                    editor::commands::InsertResultRow,
+                    Some(editor::commands::RESULT_GRID_CONTEXT),
+                ),
+                KeyBinding::new(
+                    "ctrl-alt-insert",
+                    editor::commands::DuplicateResultRow,
+                    Some(editor::commands::RESULT_GRID_CONTEXT),
+                ),
+                KeyBinding::new(
+                    "alt-delete",
+                    editor::commands::DeleteResultRow,
+                    Some(editor::commands::RESULT_GRID_CONTEXT),
+                ),
+                KeyBinding::new(
+                    "ctrl-d",
+                    editor::commands::CopyRowValuesFromAbove,
+                    Some(editor::commands::RESULT_GRID_CONTEXT),
+                ),
+                KeyBinding::new(
+                    "ctrl-alt-d",
+                    editor::commands::CopyRowValuesFromBelow,
+                    Some(editor::commands::RESULT_GRID_CONTEXT),
+                ),
                 // 【第 60 批】同一条 `Ctrl+反引号` 再绑到**面板层**上下文：文本态下网格
                 // 整块不渲染，网格 context 不在焦点路径上；焦点落在面板根时靠这条命中
                 // （两层同时匹配时 gpui 按 context 深度取更深的网格那条，不会切两次）。

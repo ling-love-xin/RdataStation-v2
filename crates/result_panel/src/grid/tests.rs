@@ -24,7 +24,7 @@ use crate::grid::{
     fetch_more_hint, filter_panel_menu_item, filter_settings_menu_items, filters_menu_items,
     format_cell_text,
     group_by_values, layout_presentation_menu_items, reset_cell_applicable, row_action_state,
-    row_number_menu_items,
+    row_number_menu_items, row_target_state,
     selection_stat_menu_items, selection_statistics, stats_lines, status_action_placeholders,
     status_segments, thousands, truncated_hint, truncation_notice, validate_edit_value,
     window_fetch_active,
@@ -840,6 +840,33 @@ fn row_action_state_follows_the_dbeaver_branches() {
     let deleted = row_action_state(true, true, true);
     assert!(deleted.add && deleted.copy);
     assert!(!deleted.delete, "已标记删除的行不能再删");
+}
+
+/// 【第 69 批】行级键盘目标：把「1 基当前行折 0 基 + 行删除态 + 可用态」收成一个真值表。
+/// 布局三钮与五个键位入口都读它（`ResultPanel::row_target_state`）。
+#[test]
+fn row_target_state_packs_row_and_actions_for_the_keyboard() {
+    // 可编辑 + 有当前行 2（1 基）→ 0 基 1，三组都可用
+    let target = row_target_state(true, Some(1), false);
+    assert_eq!(target.row, Some(1));
+    assert!(!target.row_deleted);
+    assert!(target.actions.add && target.actions.copy && target.actions.delete);
+
+    // 没有当前行：`row` 为空，「新增」仍可用（DBeaver `add` 不要求 currentRow）
+    let target = row_target_state(true, None, false);
+    assert_eq!(target.row, None);
+    assert!(target.actions.add);
+    assert!(!target.actions.copy && !target.actions.delete);
+
+    // 已删行：`row_deleted` 为真，「删除」不可用
+    let target = row_target_state(true, Some(0), true);
+    assert!(target.row_deleted);
+    assert!(!target.actions.delete);
+
+    // 只读结果集：三组全不可用，行号照旧透出（文案要区分「没选中」与「只读」）
+    let target = row_target_state(false, Some(0), false);
+    assert_eq!(target.row, Some(0));
+    assert!(!target.actions.add && !target.actions.copy && !target.actions.delete);
 }
 
 /// 【第 62 批】编辑门控的真值表：三条条件（可编辑 / 非记录视图 / 有当前属性）必须同时成立。

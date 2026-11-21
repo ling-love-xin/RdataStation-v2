@@ -60,7 +60,14 @@ pub use result_panel::grid::RESULT_GRID_CONTEXT;
 ///
 /// 【第 68 批】再加 `Ctrl+S` → 提交待提交变更（DBeaver `CMD_APPLY_CHANGES`，
 /// `plugin.xml:1082`）：同一个键在 `editor` context 是保存文档，网格里换成提交。
-pub use result_panel::grid::{CommitResultChanges, CycleResultPresentation, EnterCellEdit};
+///
+/// 【第 69 批】行级键位组（都只挂网格 context）：`ALT+INSERT` 新增行 / `CTRL+ALT+INSERT`
+/// 复制行 / `ALT+DELETE` 删除行（`plugin.xml:1073/1075/1079`）、`CTRL+D` / `CTRL+ALT+D`
+/// 邻行复制（`:1077/1078`）。
+pub use result_panel::grid::{
+    CommitResultChanges, CopyRowValuesFromAbove, CopyRowValuesFromBelow, CycleResultPresentation,
+    DeleteResultRow, DuplicateResultRow, EnterCellEdit, InsertResultRow,
+};
 
 /// 【第 60 批】结果**面板**的 key context（`RESULT_GRID_CONTEXT` 的父层）。
 ///

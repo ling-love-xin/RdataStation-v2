@@ -5,8 +5,9 @@
 
 use crate::changes::CellChange;
 use crate::commands::{
-    CommitResultChanges, CopyGridSelection, CycleResultPresentation, EnterCellEdit, ExecuteSql,
-    RedoResultEdit, UndoResultEdit,
+    CommitResultChanges, CopyGridSelection, CopyRowValuesFromAbove, CopyRowValuesFromBelow,
+    CycleResultPresentation, DeleteResultRow, DuplicateResultRow, EnterCellEdit, ExecuteSql,
+    InsertResultRow, RedoResultEdit, UndoResultEdit,
 };
 
 use super::*;
@@ -105,6 +106,135 @@ impl EditorHostPanel {
     ) {
         tracing::info!(doc = %self.document, "【探针】on_commit_result_changes：结果网格提交（Ctrl+S）");
         self.commit_pending_from_ui(cx);
+    }
+
+    /// 【第 69 批】行级键位组：状态栏三钮的键盘入口
+    /// （DBeaver `plugin.xml:1073/1075/1079`，context 都是 `...resultset.focused`）。
+    ///
+    /// 键位没有「灰」这一态，所以四件事都要在**不可用时留状态栏提示**，
+    /// 不静默吞键：只读结果集 / 没有当前行 / 行已标记删除 / 相邻行越界。
+    /// 链路上与工具栏三钮同源（`insert_local_row` / `duplicate_local_row` /
+    /// `delete_local_row` / `copy_row_values_from_adjacent`），键位只是多一个入口。
+    pub(crate) fn on_insert_result_row(
+        &mut self,
+        _: &InsertResultRow,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let target = self.result_panel.read(cx).row_target_state(cx);
+        if !target.actions.add {
+            self.set_message(Some("结果集是只读的：不能插入行".to_string()), cx);
+            return;
+        }
+        self.insert_local_row(target.row, cx);
+    }
+
+    pub(crate) fn on_duplicate_result_row(
+        &mut self,
+        _: &DuplicateResultRow,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let target = self.result_panel.read(cx).row_target_state(cx);
+        if !target.actions.add {
+            self.set_message(Some("结果集是只读的：不能复制行".to_string()), cx);
+            return;
+        }
+        let Some(row) = target.row else {
+            self.set_message(Some("先在网格里选中一行再复制".to_string()), cx);
+            return;
+        };
+        self.duplicate_local_row(row, cx);
+    }
+
+    pub(crate) fn on_delete_result_row(
+        &mut self,
+        _: &DeleteResultRow,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let target = self.result_panel.read(cx).row_target_state(cx);
+        if !target.actions.add {
+            self.set_message(Some("结果集是只读的：不能删除行".to_string()), cx);
+            return;
+        }
+        let Some(row) = target.row else {
+            self.set_message(Some("先在网格里选中一行再删除".to_string()), cx);
+            return;
+        };
+        if target.row_deleted {
+            self.set_message(
+                Some("这一行已标记删除；撤销删除后才能再删".to_string()),
+                cx,
+            );
+            return;
+        }
+        self.delete_local_row(row, cx);
+    }
+
+    /// `CTRL+D`：把上一行的值填进当前行（`CMD_ROW_COPY_FROM_ABOVE`，`plugin.xml:1077`）
+    pub(crate) fn on_copy_row_values_from_above(
+        &mut self,
+        _: &CopyRowValuesFromAbove,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.copy_row_values_from(true, cx);
+    }
+
+    /// `CTRL+ALT+D`：把下一行的值填进当前行（`CMD_ROW_COPY_FROM_BELOW`，`plugin.xml:1078`）
+    pub(crate) fn on_copy_row_values_from_below(
+        &mut self,
+        _: &CopyRowValuesFromBelow,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.copy_row_values_from(false, cx);
+    }
+
+    /// 邻行复制的共用段：门控 + 越界 / 已删 / 无写入 三种「按了但没改」的提示。
+    fn copy_row_values_from(&mut self, above: bool, cx: &mut Context<Self>) {
+        let target = self.result_panel.read(cx).row_target_state(cx);
+        if !target.actions.add {
+            self.set_message(Some("结果集是只读的：不能改写行值".to_string()), cx);
+            return;
+        }
+        let Some(row) = target.row else {
+            self.set_message(Some("先在网格里选中一行再复制".to_string()), cx);
+            return;
+        };
+        if target.row_deleted {
+            self.set_message(
+                Some("这一行已标记删除；撤销删除后才能复制值".to_string()),
+                cx,
+            );
+            return;
+        }
+        if self
+            .result_panel
+            .read(cx)
+            .adjacent_row_view(row, above, cx)
+            .is_none()
+        {
+            self.set_message(
+                Some(
+                    if above {
+                        "当前行已是首行，上面没有可复制的行"
+                    } else {
+                        "当前行已是末行，下面没有可复制的行"
+                    }
+                    .to_string(),
+                ),
+                cx,
+            );
+            return;
+        }
+        if self.copy_row_values_from_adjacent(row, above, cx) == 0 {
+            self.set_message(
+                Some("相邻行没有可写入的值（相同，或这一行不可改写）".to_string()),
+                cx,
+            );
+        }
     }
 
     /// 【撤销】撤销一步结果编辑：格子恢复「上一步的值」（DBeaver 粒度 = 每格编辑一步）。

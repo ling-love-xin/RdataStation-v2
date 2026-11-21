@@ -97,6 +97,16 @@ actions!(
         /// 同一个 `Ctrl+S` 在 `editor` context 是保存文档、在 `database-nav` 是提交暂存
         /// （`crates/app/src/main.rs:407` 有先例）：焦点在结果网格时这一层更深、先命中。
         CommitResultChanges,
+        /// 【第 69 批】`ALT+INSERT`：在选中行之后新增一条空行（`CMD_ROW_ADD`，`plugin.xml:1073`）
+        InsertResultRow,
+        /// 【第 69 批】`CTRL+ALT+INSERT`：复制选中行为一条新行（`CMD_ROW_COPY`，`:1075`）
+        DuplicateResultRow,
+        /// 【第 69 批】`ALT+DELETE`：删除选中行（`CMD_ROW_DELETE`，`:1079`）
+        DeleteResultRow,
+        /// 【第 69 批】`CTRL+D`：把上一行的值填进当前行（`CMD_ROW_COPY_FROM_ABOVE`，`:1077`）
+        CopyRowValuesFromAbove,
+        /// 【第 69 批】`CTRL+ALT+D`：把下一行的值填进当前行（`CMD_ROW_COPY_FROM_BELOW`，`:1078`）
+        CopyRowValuesFromBelow,
     ]
 );
 
@@ -108,11 +118,11 @@ pub use delegate::{
 };
 pub use edit::{can_edit_cell, validate_edit_value};
 pub use menu::{
-    ContextAction, ContextMenuItem, ContextTarget, RowActionState, SelectionStatKind,
+    ContextAction, ContextMenuItem, ContextTarget, RowActionState, RowTargetState, SelectionStatKind,
     column_browser_menu_items, column_distinct_values, column_menu_items, context_menu_items,
     filter_panel_menu_item, filter_settings_menu_items, filters_menu_items,
     layout_presentation_menu_items, reset_cell_applicable, row_action_state, row_number_menu_items,
-    selection_stat_menu_items,
+    row_target_state, selection_stat_menu_items,
 };
 pub use stats::{
     ColumnStats, column_stats, column_stats_from_values, group_by_values, stats_from_fact,

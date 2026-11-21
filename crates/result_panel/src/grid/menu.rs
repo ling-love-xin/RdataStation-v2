@@ -78,6 +78,36 @@ pub fn row_action_state(
     }
 }
 
+/// 【第 69 批】行级键盘动作的目标：当前行（0 基视图行）+ 行级可用态。
+///
+/// 键盘入口（`ALT+INSERT` / `CTRL+ALT+INSERT` / `ALT+DELETE` / `CTRL+D` /
+/// `CTRL+ALT+D`）由宿主 handler 先问这个结构，不可用时留状态栏提示——键位没有
+/// 「灰」这一态，静默无反应会让用户以为坏了。
+///
+/// `row` 取状态行的 1 基当前行折成 0 基（与工具栏三钮同一来源、同一算法，
+/// 面板 `row_target_state(cx)` 是唯一实现，`render` 与 handler 都调它）。
+/// `row_deleted` 只在有当前行时才可能为真。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RowTargetState {
+    /// 0 基视图行；`None` = 没有当前行
+    pub row: Option<usize>,
+    /// 这一行是否已被标记删除（本地行恒 false）
+    pub row_deleted: bool,
+    pub actions: RowActionState,
+}
+
+pub fn row_target_state(
+    editable: bool,
+    selected_row: Option<usize>,
+    row_deleted: bool,
+) -> RowTargetState {
+    RowTargetState {
+        row: selected_row,
+        row_deleted: selected_row.is_some() && row_deleted,
+        actions: row_action_state(editable, selected_row.is_some(), row_deleted),
+    }
+}
+
 /// 【第 67 批】「重置单元格」这一项现在摆不摆（对齐 DBeaver
 /// `fillEditMenu:3536` 的门控：`row.getState() == STATE_REMOVED || row.isChanged(attr)`）。
 ///

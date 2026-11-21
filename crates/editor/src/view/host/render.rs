@@ -153,6 +153,14 @@ impl Render for EditorHostPanel {
             // `plugin.xml:1082`）：`editor` context 的 `Ctrl+S` 是保存文档，
             // 网格这层更深、先命中（与 `database-nav` 的提交暂存同模式）
             .on_action(cx.listener(Self::on_commit_result_changes))
+            // 【第 69 批】网格里的行级键位组（`plugin.xml:1073/1075/1079/1077/1078`）：
+            // `ALT+INSERT` 新增 / `CTRL+ALT+INSERT` 复制行 / `ALT+DELETE` 删除行 /
+            // `CTRL+D` 与 `CTRL+ALT+D` 邻行复制。与工具栏三钮同一段宿主方法
+            .on_action(cx.listener(Self::on_insert_result_row))
+            .on_action(cx.listener(Self::on_duplicate_result_row))
+            .on_action(cx.listener(Self::on_delete_result_row))
+            .on_action(cx.listener(Self::on_copy_row_values_from_above))
+            .on_action(cx.listener(Self::on_copy_row_values_from_below))
             // 【书签】`Ctrl+Shift+B` 切换 / `F8` 下一 / `Shift+F8` 上一（键位在 crates/app 注册）
             .on_action(cx.listener(Self::on_toggle_bookmark))
             .on_action(cx.listener(Self::on_next_bookmark))

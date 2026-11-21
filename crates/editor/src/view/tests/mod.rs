@@ -101,6 +101,32 @@ fn bind_editor_keys(cx: &mut TestAppContext) {
                 crate::commands::CommitResultChanges,
                 Some(crate::commands::RESULT_GRID_CONTEXT),
             ),
+            // 【第 69 批】结果网格行级键位组（与生产同一份注册，`plugin.xml:1073/1075/1079/1077/1078`）
+            KeyBinding::new(
+                "alt-insert",
+                crate::commands::InsertResultRow,
+                Some(crate::commands::RESULT_GRID_CONTEXT),
+            ),
+            KeyBinding::new(
+                "ctrl-alt-insert",
+                crate::commands::DuplicateResultRow,
+                Some(crate::commands::RESULT_GRID_CONTEXT),
+            ),
+            KeyBinding::new(
+                "alt-delete",
+                crate::commands::DeleteResultRow,
+                Some(crate::commands::RESULT_GRID_CONTEXT),
+            ),
+            KeyBinding::new(
+                "ctrl-d",
+                crate::commands::CopyRowValuesFromAbove,
+                Some(crate::commands::RESULT_GRID_CONTEXT),
+            ),
+            KeyBinding::new(
+                "ctrl-alt-d",
+                crate::commands::CopyRowValuesFromBelow,
+                Some(crate::commands::RESULT_GRID_CONTEXT),
+            ),
         ]);
     });
 }

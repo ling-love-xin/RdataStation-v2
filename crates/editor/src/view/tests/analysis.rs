@@ -1449,6 +1449,160 @@ fn ctrl_s_on_the_grid_commits_pending_changes(cx: &mut TestAppContext) {
     );
 }
 
+/// 【第 69 批】行级键位：`ALT+INSERT` 新增 / `CTRL+ALT+INSERT` 复制 / `ALT+DELETE` 删除
+/// （DBeaver `plugin.xml:1073/1075/1079`，context 都是 `...resultset.focused`）。
+///
+/// 三条都与状态栏三钮同源（`insert_local_row` / `duplicate_local_row` /
+/// `delete_local_row`）：键盘只是多一个入口，断言落在共享状态上；已删行再按删除
+/// 要有可读原因（键位没有灰态）。
+#[gpui_kit::test]
+fn row_keys_insert_duplicate_and_delete_the_selected_row(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id) = edit_ready_shared("select * from orders");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_orders_result(cx, &panel);
+    // 面板子实体（行级选中态与可用态都在它身上：`set_selected_row` / `row_target_state`）
+    let result_panel = cx.update(|_window, cx| panel.read(cx).result_panel.clone());
+
+    // 焦点交给网格（`DataTable` 自己 `track_focus`），按键才落在 `RESULT_GRID_CONTEXT`
+    let grid_focus = cx.update(|_window, app| {
+        use gpui_kit::Focusable as _;
+        panel.read(app).grid_for_test().read(app).focus_handle(app)
+    });
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+
+    // 整行选中第 1 行（1 基 → 视图行 0）：行级动作要 currentRow
+    //（`status.selected_row` 是唯一口径，与状态栏三钮同源）
+    cx.update(|_window, cx| {
+        result_panel.update(cx, |panel, cx| panel.set_selected_row(Some(1), cx))
+    });
+    assert_eq!(
+        cx.update(|_window, cx| result_panel.read(cx).row_target_state(cx).row),
+        Some(0),
+        "行级键位的目标行要能从状态行折出来（1 基 → 0 基）"
+    );
+
+    let local_count = |_: &mut VisualTestContext| {
+        shared
+            .results()
+            .local_rows(&id, 0)
+            .map(|set| set.local_count())
+            .unwrap_or(0)
+    };
+    let deleted_count = |_: &mut VisualTestContext| {
+        shared
+            .results()
+            .local_rows(&id, 0)
+            .map(|set| set.deleted_count())
+            .unwrap_or(0)
+    };
+
+    // ALT+INSERT：追加一条本地空行
+    cx.simulate_keystrokes("alt-insert");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(local_count(cx), 1, "ALT+INSERT 应新增一条本地行");
+    // 既有口径：行级动作走 `sync_result_view`，它把 `status.selected_row` 重置为 None
+    //（选中态由 `SelectRow` 事件增量补）。所以后面的键前要重新选行——真实用户也
+    // 是这样：插入后组件重建数据，状态行不再记「已选第 N 行」。
+    assert_eq!(
+        cx.update(|_window, cx| result_panel.read(cx).row_target_state(cx).row),
+        None,
+        "sync 会清掉当前行（既有口径，见 §9.52.5）"
+    );
+
+    // CTRL+ALT+INSERT：复制选中行 → 又一条本地行
+    cx.update(|_window, cx| {
+        result_panel.update(cx, |panel, cx| panel.set_selected_row(Some(1), cx))
+    });
+    cx.simulate_keystrokes("ctrl-alt-insert");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(local_count(cx), 2, "CTRL+ALT+INSERT 应复制出一条本地行");
+
+    // ALT+DELETE：底层行打删除标记
+    cx.update(|_window, cx| {
+        result_panel.update(cx, |panel, cx| panel.set_selected_row(Some(1), cx))
+    });
+    cx.simulate_keystrokes("alt-delete");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(deleted_count(cx), 1, "ALT+DELETE 应标记删除选中行");
+
+    // 已删行再按删除：不重复入栈，且留可读原因
+    cx.update(|_window, cx| {
+        result_panel.update(cx, |panel, cx| panel.set_selected_row(Some(1), cx))
+    });
+    cx.simulate_keystrokes("alt-delete");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(deleted_count(cx), 1, "已删行再删是空操作，不重复入栈");
+    assert!(
+        cx.update(|_window, cx| panel
+            .read(cx)
+            .message
+            .as_deref()
+            .is_some_and(|m| m.contains("已标记删除"))),
+        "已删行上按删除要留状态栏原因（键位没有灰态）"
+    );
+}
+
+/// 【第 69 批】`CTRL+D` / `CTRL+ALT+D` 邻行复制（DBeaver `plugin.xml:1077/1078`）。
+///
+/// 两支：越界留提示（不静默吞键）；越界之外把相邻行的值逐格写进当前行
+/// （底层行走变更集 → 待提交计数增加，可撤销可提交）。
+#[gpui_kit::test]
+fn row_keys_copy_values_from_adjacent_rows(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id) = edit_ready_shared("select * from orders");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_orders_result(cx, &panel);
+    let result_panel = cx.update(|_window, cx| panel.read(cx).result_panel.clone());
+
+    let grid_focus = cx.update(|_window, app| {
+        use gpui_kit::Focusable as _;
+        panel.read(app).grid_for_test().read(app).focus_handle(app)
+    });
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+
+    // 首行（视图行 0）按 CTRL+D：上面没有行 → 提示，且不动数据
+    cx.update(|_window, cx| {
+        result_panel.update(cx, |panel, cx| panel.set_selected_row(Some(1), cx))
+    });
+    cx.simulate_keystrokes("ctrl-d");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.update(|_window, cx| panel
+            .read(cx)
+            .message
+            .as_deref()
+            .is_some_and(|m| m.contains("上面没有可复制的行"))),
+        "首行按 CTRL+D 要留可读原因"
+    );
+    assert_eq!(
+        shared
+            .results()
+            .change_set(&id, 0)
+            .map(|changes| changes.pending_count()),
+        Some(0),
+        "越界不该写任何格"
+    );
+
+    // 第 2 行（视图行 1）按 CTRL+D：把第 1 行的值填进来 → 变更集出现待提交
+    cx.update(|_window, cx| {
+        result_panel.update(cx, |panel, cx| panel.set_selected_row(Some(2), cx))
+    });
+    cx.simulate_keystrokes("ctrl-d");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        shared
+            .results()
+            .change_set(&id, 0)
+            .is_some_and(|changes| changes.pending_count() > 0),
+        "CTRL+D 应把上一行的值写进当前行（走变更集）"
+    );
+}
+
 /// 【第 59 批】`Ctrl+反引号` = 切换表示（DBeaver `CMD_SWITCH_PRESENTATION`，
 /// `plugin.xml:1059`；本仓两档：网格 ⇄ 文本）。
 #[gpui_kit::test]
