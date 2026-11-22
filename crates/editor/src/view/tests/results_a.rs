@@ -1801,3 +1801,64 @@ fn alt_shift_c_copies_the_column_names(cx: &mut TestAppContext) {
     assert_eq!(clipboard(cx).as_deref(), Some("n"), "隐藏列不进全量");
     assert!(message(cx).contains("已复制列名"), "实际是：{}", message(cx));
 }
+
+/// 【第 80 批】`ALT+SHIFT+F` 打开筛选设置浮层（`CMD_FILTER_EDIT_SETTINGS`，
+/// `plugin.xml:1094`；handler `:570` → `ResultSetHandlerMain:546-549` →
+/// `ResultSetViewer.showFilterSettingsDialog()` `:644-646`，直接开对话框、不判条件）。
+///
+/// 同时钉住两条现状事实：
+/// 1) 焦点在浮层的排序输入框里按 `ESC` **关不掉**浮层——`escape` 先命中输入框自己的
+///    key binding（`gpui-base/src/input/base/state.rs:277`），`clean_on_escape == false`
+///    时它 `cx.propagate()`（`:2607`）继续找**上层绑定的同名 action**，而浮层根接的是
+///    `on_key_down`（不是 binding），所以收不到。这是既有结构（四个浮层同病），不是本批回归；
+///    修法要给浮层遮罩挂 `key_context` + 上层 `escape` binding，留待单独一批验证后做。
+/// 2) 关浮层的可用路径是标题栏那颗 ✕（`editor-result-filter-settings-close`）。
+#[gpui_kit::test]
+fn alt_shift_f_opens_the_filter_settings_overlay(cx: &mut TestAppContext) {
+    use gpui_kit::Focusable as _;
+
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+
+    let grid = cx.update(|_window, app| panel.read(app).grid_for_test());
+    let grid_focus = cx.update(|_window, app| grid.read(app).focus_handle(app));
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-filter-settings-card").is_none(),
+        "前提：还没打开"
+    );
+
+    cx.simulate_keystrokes("alt-shift-f");
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-filter-settings-card").is_some(),
+        "按一下就要把浮层摆出来"
+    );
+
+    // 现状：焦点被交给排序框，`ESC` 被输入框消费，浮层留着（缺口记档，不在这里断言成缺陷）
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-filter-settings-card").is_some(),
+        "焦点在输入框时 ESC 关不掉？现状就是关不掉——若这里变了，说明有人接上了"
+    );
+
+    // ✕：真正可用的关闭路径（入队 CloseFilterSettings，宿主 drain 后收起）
+    let close = cx
+        .debug_bounds("editor-result-filter-settings-close")
+        .expect("关闭钮要画出来");
+    cx.simulate_click(close.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-filter-settings-card").is_none(),
+        "点 ✕ 之后浮层收起"
+    );
+}

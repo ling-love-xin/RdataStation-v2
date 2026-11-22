@@ -192,6 +192,12 @@ fn bind_editor_keys(cx: &mut TestAppContext) {
                 crate::commands::CopyColumnNames,
                 Some(crate::commands::RESULT_PANEL_CONTEXT),
             ),
+            // 【第 80 批】筛选设置（`CMD_FILTER_EDIT_SETTINGS`，`:1094`；面板层 context）
+            KeyBinding::new(
+                "alt-shift-f",
+                crate::commands::OpenFilterSettings,
+                Some(crate::commands::RESULT_PANEL_CONTEXT),
+            ),
         ]);
     });
 }

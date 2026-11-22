@@ -8,7 +8,7 @@ use crate::commands::{
     CommitResultChanges, CopyColumnNames, CopyGridSelection, CopyRowValuesFromAbove,
     CopyRowValuesFromBelow, CycleResultPresentation, DeleteResultRow, DuplicateResultRow,
     EnterCellEdit, ExecuteSql, FetchAllData, FetchNextSegment, FocusRowJump, GotoColumn,
-    HideCurrentColumn, InsertResultRow, RedoResultEdit, RejectPendingChanges,
+    HideCurrentColumn, InsertResultRow, OpenFilterSettings, RedoResultEdit, RejectPendingChanges,
     SelectCurrentColumn, SelectCurrentRow, ShowHiddenColumns, SwitchFilterFocus, UndoResultEdit,
 };
 
@@ -369,6 +369,25 @@ impl EditorHostPanel {
     /// 【第 78 批】`ALT+SHIFT+T`：把所有隐藏列显示回来
     /// （DBeaver `CMD_SHOW_COLUMNS`，`plugin.xml:1097`；
     /// `SpreadsheetCommandHandler:195-212`）。
+    /// 【第 80 批】`ALT+SHIFT+F`：打开筛选设置浮层
+    /// （DBeaver `CMD_FILTER_EDIT_SETTINGS`，`plugin.xml:1094`；handler `:570` →
+    /// `ResultSetHandlerMain:546-549` → `ResultSetViewer.showFilterSettingsDialog()`
+    /// `:644-646` = `new FilterSettingsDialog(viewer).open()`）。
+    ///
+    /// 上游这条命令**不判任何条件**，键位与筛选条那颗 FILTER 钮
+    /// （`ResultSetFilterPanel:330-338`）落到同一个对话框；本仓同口径：直接开面板内浮层，
+    /// 不额外查「有没有结果」（没有结果时面板子树不渲染，键位自然不命中——与第 77/78 批一致）。
+    /// 打开本身就是可见反馈，所以**不留 message**（上游也不出声）。
+    pub(crate) fn on_open_filter_settings(
+        &mut self,
+        _: &OpenFilterSettings,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.result_panel
+            .update(cx, |panel, cx| panel.open_filter_settings(window, cx));
+    }
+
     /// 【第 79 批】`ALT+SHIFT+C`：复制列名
     /// （DBeaver `CMD_COPY_COLUMN_NAMES`，`plugin.xml:1095`；`ResultSetHandlerMain:333-375`）。
     ///

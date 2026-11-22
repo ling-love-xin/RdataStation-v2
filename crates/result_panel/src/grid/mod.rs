@@ -87,7 +87,8 @@ pub(crate) mod view_rows;
 // `:1088` / `:1089` 的 `Ctrl+Alt+C` / `Ctrl+Alt+R`（选列 / 选行）、
 // `:1058` 的 `Ctrl+Alt+Shift+T`（焦点在筛选框与结果呈现之间双向切换；
 // `:1096` / `:1097` 的 `Alt+Shift+H` / `Alt+Shift+T`（隐藏当前列 / 显示全部隐藏列）、
-// `:1095` 的 `Alt+Shift+C`（复制列名）。
+// `:1095` 的 `Alt+Shift+C`（复制列名）、
+// `:1094` 的 `Alt+Shift+F`（筛选设置）。
 // 后三条在上游都挂 `...ui.context.resultset`（整块面板）而不是 `...resultset.focused`，
 // 所以与上面几条不同：键位挂 `editor-result-panel` 上下文。
 use gpui_kit::actions;
@@ -172,6 +173,14 @@ actions!(
         ///
         /// 面板级命令（上游 contextId 同样是整块 `...ui.context.resultset`）。
         CopyColumnNames,
+        /// 【第 80 批】`ALT+SHIFT+F`：打开筛选设置（`CMD_FILTER_EDIT_SETTINGS`，
+        /// `plugin.xml:1094`；handler `:570` → `ResultSetHandlerMain:546-549` →
+        /// `ResultSetViewer.showFilterSettingsDialog()`，`:644-646` = 直接开对话框、无前置判断）。
+        ///
+        /// 面板级命令（上游 contextId 同样是整块 `...ui.context.resultset`）。浮层本身
+        /// 与它那三个鼠标入口早已就位（工具栏菜单「编辑筛选设置」/ 列头右键 / 筛选条
+        /// 自定义钮），这条只是键盘入口。
+        OpenFilterSettings,
     ]
 );
 
