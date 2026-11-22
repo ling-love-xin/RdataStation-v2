@@ -3099,6 +3099,24 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 记档：用例初版用两列 harness 断言「停在原列位」，实际走的是越界清选分支——改成三列场景，
   代码未改。
 
+### 2.130 复制列名（2026-11-22，第 79 批）
+
+- 键位：`ALT+SHIFT+C` → `CopyColumnNames`（`plugin.xml:1095`；命令定义 `:313`、handler `:439`、
+  实现 `ResultSetHandlerMain:333-375`），挂 `RESULT_PANEL_CONTEXT`（上游 contextId 整块
+  `...ui.context.resultset`）。
+- 落点：`ResultPanel::copy_column_names(cx) -> Result<usize, String>`（`panel/events.rs`）——
+  判据两级：当前格所在列（`data_column_checked` 校验仍可见）→ 全部可见列（数据序、跳过隐藏）；
+  `\t` 拼接，空则 `Err`。宿主 `on_copy_column_names` 给回执（「已复制列名」/「已复制 N 个列名（TSV）」）。
+- 关键取舍：**右栏 `selected_col` 不参与判据**。上游只认表格选区；而本仓「清选保持清单当前选中」
+  会让 `selected_col` 停在隐藏列上（实测 `(None, Some(1))`），读它会把隐藏列名拷出来。
+- 有意差异：不弹「复制配置」对话框（固定 `\t`）、不加标识符引号（无方言通道）、
+  空列表 → 状态栏一句话（上游空串照拷）、复制完留回执（上游静默）。
+- 用例：panel 2 条（两级判据 + 隐藏列跳过 / 空列被拒）、editor 1 条（选中列 → 藏列 → 全量）；
+  另补第 78 批越界分支 1 条（藏最右列 → 清 `selection_pos`）。
+- 门禁：pair `Finished` 无 warning；panel **421**（+3）；ui-guard 4；editor lib **833 passed**
+  （1 ignored）；workspace `Finished`（2 warning 来自通知线）。
+- 记档：`ALT+SHIFT+C` 原本在 §9.61.9 遗留清单里；本批接上，§9.61.9 与 §9.61.4 的措辞一并按实测收紧。
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - **共享文件的提交姿势**（第 77 批踩过，务必照做）：`git commit --only <paths>` /

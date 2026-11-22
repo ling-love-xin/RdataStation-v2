@@ -9449,7 +9449,8 @@ editor（`view/tests/results_a.rs`）：
 
 - 列位仍有效（`col_ix <= 新可见列数`）→ `set_selection_pos(Some((row, col_ix)))` 重新投影：
   位置不动、指向后面那一列，`selected_col` 同步（与上游「焦点列停在原位」同口径）；
-- 列位越界（藏掉的是最右一列）→ 清选，不让 `selection_pos` 指着空气。
+- 列位越界（藏掉的是最右一列）→ 清 `selection_pos`，不让它指着空气。右栏 `selected_col`
+  按「清选保持清单当前选中」的既有口径保留原值（第 79 批实测，见 §9.62.7）。
 
 显示回来时同理重投影一次（列位不变、指向的列变了）。
 
@@ -9500,11 +9501,113 @@ editor（`view/tests/results_a.rs`）：
 
 #### 9.61.9 遗留
 
-- `ALT+SHIFT+C`（`copyColumnNames`，`:1095`）、`SHIFT+F11`（`showColumnContextMenu`，`:1098`）、
-  `F11` / `CTRL+F11`（`filterMenu` / `filterMenu.distinct`，`:1061/1062`）仍未接；
+- `SHIFT+F11`（`showColumnContextMenu`，`:1098`）、`F11` / `CTRL+F11`（`filterMenu` /
+  `filterMenu.distinct`，`:1061/1062`）仍未接（`ALT+SHIFT+C` 由第 79 批接上，见 §9.62）；
 - `ALT+SHIFT+ARROW`（移列，`:1092/1093` → `SpreadsheetCommandHandler:132-173`）未接：本仓
   `move_display_column` 可直接复用，但 `ALT+SHIFT+←/→` 与输入框的按词移动同键，需先定焦点口径；
 - 多列一次藏 / 显（§9.61.6 第 4 条）。
+
+### 9.62 第 79 批：`ALT+SHIFT+C` 复制列名（`CMD_COPY_COLUMN_NAMES`）
+
+#### 9.62.1 缺口
+
+「复制列名」**不是新能力**：列头菜单首项「复制列名「X」」（`grid/menu.rs:831-840`，
+`ContextAction::CopyColumnName`）、列浏览器多选「复制列名」（换行分隔，
+`ContextAction::CopyColumnNames`）都已存在。缺的只是**键盘入口**——`plugin.xml:1095`
+那条 `ALT+SHIFT+C` 一直空着，而它正落在「结果集侧栏 / 列」这条线上。
+
+#### 9.62.2 DBeaver 依据
+
+- 键位 `plugin.xml:1095`：`ALT+SHIFT+C` → `org.jkiss.dbeaver.core.resultset.grid.copyColumnNames`；
+  contextId 是整块 **`...ui.context.resultset`**，keyboardOnlyKeyScheme。
+- 命令定义 `:313`；handler `:439` → `...handler.ResultSetHandlerMain`；实现 `:333-375`：
+  - `:335` 读参数 `columns`（右键指定列名）；`:337-338`
+    `attrs = selection.isEmpty() ? model.getVisibleAttributes() : selection.getSelectedAttributes()`；
+  - `:350-357` `ResultSetCopySettings` **无参构造**（`columnDelimiter == null`）；
+    **仅 `attrs.size() > 1` 时**弹 `CopyConfigDialog("CopyGridNamesOptionsDialog")`，取消 `return null`；
+  - `:359-372` 逐列拼：非首项先 append `settings.getColumnDelimiter()`（单列首轮 `buffer` 为空，
+    `null` 不触发）；名字取 `attr.getLabel()`，空则 `getName()`；有数据源时套
+    `DBUtils.getQuotedIdentifier`（贴进 SQL 是带引号的标识符）；
+  - `:374` `ResultSetUtils.copyToClipboard(buffer.toString())`：**无提示**、**无空文本分支**（空串照拷）。
+- 复制配置框默认值来自 `ResultSetHandlerCopySpecial:124-141`（`columnDelimiter="\t"`、
+  `rowDelimiter="\n"`、`quoteString="\""`，并从 dialogSettings 记忆上次），`:154` 列分隔三选项
+  `{"\t",";",","}`。
+- 右键挂点 `ResultSetViewer.java:3154`（`fillContextMenu` 的 CopyAs 段）、
+  `ResultSetHandlerCopyAs.java:271-275`（CopyAs 第二项）。
+
+#### 9.62.3 判据收窄：只认表格选区
+
+上游 `rsv.getSelection()` 是**结果表格**的列选区；右栏那份列选中属于另一个部件
+（`meta_data_panel_action_copy_column_text`）。所以本仓只做两级：
+
+1. 当前格所在列（且该列**仍可见**：`data_column_checked(col - 1)` 为真）；
+2. 全部可见列（数据序，`is_hidden_column` 跳过）。
+
+**不读 `selected_col`**。它是右栏清单的当前选中，而「清选 / 选行时保持清单当前选中」是既有口径
+（`set_selection_pos` 注释）；把它当候选会把**已被藏掉的列**也拷进来——本批用例实测踩到：
+藏掉最右列后 `selection_pos` 被清、`selected_col` 仍是隐藏列，复制出的是隐藏列名。
+
+#### 9.62.4 落点
+
+- `grid/mod.rs`：`actions!` 增 `CopyColumnNames`（面板级命令，注释对齐 `:1095`），顶部键位注释补一条；
+- `panel/events.rs`：`pub fn copy_column_names(&mut self, cx) -> Result<usize, String>`：
+  按 §9.62.3 取列 → `\t` 连起来 → `cx.write_to_clipboard(ClipboardItem::new_string(..))`；
+  一列都没有 → `Err("这份结果没有可复制的列")`；
+- `editor`：`support/commands.rs` re-export；`view/host/exec/edit_cmds.rs::on_copy_column_names`
+  （1 个 →「已复制列名」，N 个 →「已复制 N 个列名（TSV）」，Err 直接转状态栏）；
+  `view/host/render.rs` `.on_action`；`view/tests/mod.rs` bind；
+- `crates/app/src/main.rs`：键位挂 `editor-result-panel`（与第 78 批同口径：上游 contextId 是整块面板）。
+
+#### 9.62.5 有意差异
+
+- **不弹「复制配置」对话框**：列分隔固定 `\t`（上游多列时弹框、默认也是 `\t`，单列不弹）；
+  行分隔 / 引号那套配置随目视与偏好类后处理统一做。
+- **不加标识符引号**：`DBUtils.getQuotedIdentifier` 需要数据源方言，本仓没有这条通道；
+  `columns()` 给的就是显示名。
+- **空列表 → 状态栏一句话**：上游空串照拷；本仓按「键位不可用要说话」（§9.54）拒绝执行，
+  也不用空串盖掉用户剪贴板里原有的内容。
+- **复制完留回执**：上游静默；本仓状态栏给一句（键位要可感知）。
+
+#### 9.62.6 用例
+
+panel（`panel/tests.rs`）：
+
+- `copying_column_names_uses_the_current_cell_then_every_visible_column`：无当前格 → `"id\tamount"`；
+  当前格在 `amount` → `"amount"`（单列不加分隔符）；把 `amount` 藏掉 → 回到全量 `"id"`；
+- `copying_column_names_is_refused_without_columns`：网格清空 → `Err`，原因含「没有可复制的列」；
+- `hiding_the_rightmost_column_clears_the_current_cell`：补第 78 批的越界分支——藏掉最右一列后
+  `selection_pos == None`。
+
+editor（`view/tests/results_a.rs`）：
+
+- `alt_shift_c_copies_the_column_names`：选中 `note` 那格 → 剪贴板 `"note"`、状态栏「已复制列名」；
+  `alt-shift-h` 把 `note` 藏掉（用例同时断言 `column_hidden() == ["note"]`）→ 再按 `alt-shift-c`
+  得 `"n"`（隐藏列不进全量）。
+
+#### 9.62.7 实测修正（§9.61.4 的措辞太满）
+
+第 78 批写的「列位越界 → 清选，不让 `selection_pos` / `selected_col` 指向别的列」与实测不符：
+`hide_current_column` 越界分支只调 `set_selection_pos(None)`，而 `selected_col` 按
+「清选保持清单当前选中」的口径**不动**（panel 用例实测 `(None, Some(1))`——被藏掉的那列）。
+§9.61.4 已按实测收紧，本批的复制判据也因此不读 `selected_col`（§9.62.3）。
+
+#### 9.62.8 门禁（第 79 批，最终实测）
+
+- `cargo check -p rds-editor -p rds-result-panel --all-targets`：`Finished`，无 warning；
+- `cargo test -p rds-result-panel -p rds-ui-guard`：panel **421 passed**（418 → +3）、
+  ui-guard **4 passed**；
+- `cargo test -p rds-editor --lib`：**833 passed（1 ignored）**（832 → +1）；
+- `cargo check --workspace --all-targets`：`Finished`（2 warning 全来自并行线的 `rds-notification`）。
+
+#### 9.62.9 遗留
+
+- `SHIFT+F11`（`showColumnContextMenu`，`:1098`）、`F11` / `CTRL+F11`
+  （`filterMenu` / `filterMenu.distinct`，`:1061/1062`）仍未接；
+- `ALT+SHIFT+F`（`filterSettings`，`:1094`）未接——本仓筛选设置浮层（`filter_settings_state` /
+  `render_filter_settings`）已就位，可直接接；
+- `ALT+SHIFT+ARROW`（移列）：`move_display_column` 可复用，但与输入框按词移动同键，需先定焦点口径；
+- 「复制配置」对话框（列 / 行分隔、引号，含 dialogSettings 记忆）未做（§9.62.5）；
+- 多列一次复制只在列浏览器多选入口存在，键位这条与 DBeaver 一样走「当前格 → 全量」。
 
 ## 8. 协作纪律
 
