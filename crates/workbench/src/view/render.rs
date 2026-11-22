@@ -344,7 +344,7 @@ impl Render for WorkbenchView {
             })
             .child(self.render_title_bar(window, cx))
             .child(middle)
-            .child(self.render_status_bar(cx));
+            .child(self.render_status_bar(window, cx));
 
         if let Some(qo) = quick_open {
             root = root.child(qo);

@@ -16,6 +16,8 @@ gpui-kit.workspace = true
 # Round 19：工作台视图（首个可交互骨架）
 workbench.workspace = true
 settings.workspace = true
+# 通知：启动期要设应用标识（Windows 系统通知的前提），退出前要把历史落盘
+notification.workspace = true
 # A10：编辑器的动作（Ctrl+S / Ctrl+/ / Ctrl+W）在 app 层统一绑键，需要它的 Action 类型
 editor.workspace = true
 # M8：洞察的重算动作（Ctrl+Shift+R，`insight` key context）同上

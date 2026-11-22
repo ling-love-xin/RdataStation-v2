@@ -44,6 +44,14 @@ use workbench::WorkbenchView;
 mod assets;
 mod theme_pack;
 
+/// 应用标识（系统通知的身份）
+///
+/// Windows 上没有这一步，`Notification::in_app_and_system()` 的系统通知会被**静默丢弃**
+/// （gpui 文档：必须在开窗前、首次推送通知前调用一次）。macOS 侧需要打包成 .app 才生效。
+const APP_IDENTIFIER: &str = "com.rdatastation.rds";
+/// 系统通知里显示的应用名
+const APP_NAME: &str = "RdataStation";
+
 fn main() {
     // 0. Windows 控制台输出代码页切到 UTF-8（cp65001）：tracing stderr / eprintln! 的
     //    中文日志不再按系统 ANSI（cp936）渲染成乱码（文件与库层本就是 UTF-8，不受影响）。
@@ -203,6 +211,9 @@ fn run_app() {
             // 不等这一下，关窗口前最后 1 秒的记录就没了。
             // `Subscription` **一 drop 就退订**（gpui 语义），所以必须 forget —— 钩子要活到进程结束。
             std::mem::forget(cx.on_app_quit(|_cx| async {
+                // 通知历史是节流落盘的（空闲 500ms 才写），退出时补一次，
+                // 否则最后一批通知会随进程一起丢掉。
+                notification::flush_now();
                 let _ = engine::flush_logs().await;
             }));
 
@@ -211,6 +222,9 @@ fn run_app() {
             init_global_system();
 
             gpui_kit::init(cx);
+
+            // 系统通知身份：必须早于任何窗口与任何通知推送（Windows 上缺它 = 系统通知静默失效）。
+            cx.set_app_identity(APP_IDENTIFIER, APP_NAME);
 
             // 1. 设置：加载 <RDS_HOME>/config/settings.json 为 global。
             SettingsService::init(cx);
@@ -457,6 +471,7 @@ fn run_app() {
                     editor::commands::SwitchFilterFocus,
                     Some(editor::commands::RESULT_PANEL_CONTEXT),
                 ),
+
                 // 【第 78 批】`ALT+SHIFT+H` / `ALT+SHIFT+T` = `CMD_HIDE_COLUMNS` /
                 // `CMD_SHOW_COLUMNS`（`plugin.xml:1096/1097`；
                 // `SpreadsheetCommandHandler:174-194 / 195-212`）。上游这两条挂的是整块面板的

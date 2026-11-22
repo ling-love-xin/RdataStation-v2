@@ -277,7 +277,14 @@ impl WorkbenchView {
 
     // ===== 状态栏 =====
 
-    pub(super) fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_status_bar(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        // 【通知】铃铛要拿 window 才能建视图实体（面板浮层需要它）——
+        // 同样必须在 `cx.theme()` 之前算：那一步把 cx 借出去了（gpui-kit-dev 的借用约定）。
+        let notification_bell = notification::bell(window, cx);
         // 【LSP】语言服务指示 + 管理器浮层（未接端口 = 空元素）——
         // 必须在 `cx.theme()` 之前算：那一步把 cx 借出去了（gpui-kit-dev 的借用约定）。
         let lsp_item = self.lsp_status_item(cx);
@@ -384,7 +391,7 @@ impl WorkbenchView {
                     .children(mock_chip)
                     .child(div().child(format!("连接：{selected}")))
                     .child(lsp_item)
-                    .child(notification::notification_bell(cx))
+                    .child(notification_bell)
                     .child(lock_toggle)
                     .child(right_toggle),
             )

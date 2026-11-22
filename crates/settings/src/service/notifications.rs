@@ -24,6 +24,15 @@ pub(crate) fn apply_slot(
             }
             SettingsService::set_notify_success_autohide_secs(n as u32, cx);
         }
+        Slot::NotificationInfoAutohideSecs => {
+            let Some(n) = value.as_number() else {
+                return false;
+            };
+            if !(0.0..=3600.0).contains(&n) {
+                return false;
+            }
+            SettingsService::set_notify_info_autohide_secs(n as u32, cx);
+        }
         Slot::NotificationWarningAutohideSecs => {
             let Some(n) = value.as_number() else {
                 return false;
@@ -33,11 +42,15 @@ pub(crate) fn apply_slot(
             }
             SettingsService::set_notify_warning_autohide_secs(n as u32, cx);
         }
-        Slot::NotificationErrorAutohide => {
-            let Some(on) = value.as_bool() else {
+        Slot::NotificationErrorAutohideSecs => {
+            let Some(n) = value.as_number() else {
                 return false;
             };
-            SettingsService::set_notify_error_autohide(on, cx);
+            // 与成功/警告同一档位上限：只认 0–3600 秒，手改坏时拒绝，不猜。
+            if !(0.0..=3600.0).contains(&n) {
+                return false;
+            }
+            SettingsService::set_notify_error_autohide_secs(n as u32, cx);
         }
         Slot::NotificationMergeWindowSecs => {
             let Some(n) = value.as_number() else {
@@ -72,11 +85,17 @@ pub(crate) fn apply_slot(
             };
             SettingsService::set_notify_info_to_system(on, cx);
         }
-        Slot::NotificationDoNotDisturb => {
+        Slot::NotificationSilentInApp => {
             let Some(on) = value.as_bool() else {
                 return false;
             };
-            SettingsService::set_notify_do_not_disturb(on, cx);
+            SettingsService::set_notify_silent_in_app(on, cx);
+        }
+        Slot::NotificationSilentSystem => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_notify_silent_system(on, cx);
         }
         _ => return false,
     }
@@ -84,11 +103,20 @@ pub(crate) fn apply_slot(
 }
 
 impl SettingsService {
-    /// 设置并持久化成功/信息类通知自动消失秒数（0 = 不自动消失）。
+    /// 设置并持久化成功类通知自动消失秒数（0 = 不自动消失）。
     pub fn set_notify_success_autohide_secs(secs: u32, cx: &mut App) {
         {
             let settings = cx.global_mut::<Settings>();
             settings.notifications.success_autohide_secs = secs.clamp(0, 3600);
+        }
+        persist(&cx.global::<Settings>().clone());
+        cx.refresh_windows();
+    }
+    /// 设置并持久化信息类通知自动消失秒数（0 = 不自动消失）。
+    pub fn set_notify_info_autohide_secs(secs: u32, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.notifications.info_autohide_secs = secs.clamp(0, 3600);
         }
         persist(&cx.global::<Settings>().clone());
         cx.refresh_windows();
@@ -102,11 +130,11 @@ impl SettingsService {
         persist(&cx.global::<Settings>().clone());
         cx.refresh_windows();
     }
-    /// 设置并持久化错误类通知是否自动消失（默认关闭，必须手动关闭错误通知）。
-    pub fn set_notify_error_autohide(on: bool, cx: &mut App) {
+    /// 设置并持久化错误类通知自动消失秒数（0 = 不自动消失）。
+    pub fn set_notify_error_autohide_secs(secs: u32, cx: &mut App) {
         {
             let settings = cx.global_mut::<Settings>();
-            settings.notifications.error_autohide = on;
+            settings.notifications.error_autohide_secs = secs.clamp(0, 3600);
         }
         persist(&cx.global::<Settings>().clone());
         cx.refresh_windows();
@@ -156,11 +184,20 @@ impl SettingsService {
         persist(&cx.global::<Settings>().clone());
         cx.refresh_windows();
     }
-    /// 设置并持久化勿扰模式（开启后通知只进历史，不弹出）。
-    pub fn set_notify_do_not_disturb(on: bool, cx: &mut App) {
+    /// 设置并持久化「静音 in-app 通知」（历史照记，系统通知仍按类型开关）。
+    pub fn set_notify_silent_in_app(on: bool, cx: &mut App) {
         {
             let settings = cx.global_mut::<Settings>();
-            settings.notifications.do_not_disturb = on;
+            settings.notifications.silent_in_app = on;
+        }
+        persist(&cx.global::<Settings>().clone());
+        cx.refresh_windows();
+    }
+    /// 设置并持久化「静音系统通知」（in-app 弹出仍按类型与时长）。
+    pub fn set_notify_silent_system(on: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.notifications.silent_system = on;
         }
         persist(&cx.global::<Settings>().clone());
         cx.refresh_windows();
