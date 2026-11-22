@@ -366,9 +366,6 @@ impl EditorHostPanel {
         }
     }
 
-    /// 【第 78 批】`ALT+SHIFT+T`：把所有隐藏列显示回来
-    /// （DBeaver `CMD_SHOW_COLUMNS`，`plugin.xml:1097`；
-    /// `SpreadsheetCommandHandler:195-212`）。
     /// 【第 80 批】`ALT+SHIFT+F`：打开筛选设置浮层
     /// （DBeaver `CMD_FILTER_EDIT_SETTINGS`，`plugin.xml:1094`；handler `:570` →
     /// `ResultSetHandlerMain:546-549` → `ResultSetViewer.showFilterSettingsDialog()`
@@ -408,6 +405,9 @@ impl EditorHostPanel {
         }
     }
 
+    /// 【第 78 批】`ALT+SHIFT+T`：把所有隐藏列显示回来
+    /// （DBeaver `CMD_SHOW_COLUMNS`，`plugin.xml:1097`；
+    /// `SpreadsheetCommandHandler:195-212`）。
     pub(crate) fn on_show_hidden_columns(
         &mut self,
         _: &ShowHiddenColumns,

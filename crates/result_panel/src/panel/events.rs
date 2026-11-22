@@ -1333,6 +1333,35 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【第 81 批】`ESC` 收起当前打开的浮层：一次只关**最上面**那个（`render` 的最后挂载
+    /// 顺序 = 绘制顺序：SQL 预览 → 筛选设置 → 取全部确认 → 跳列），返回是否真关掉了。
+    ///
+    /// 四个浮层实际互斥（`open_fetch_all_confirm` 只在刚点过「取全部」时出现、跳列只在
+    /// 键位按下的那一刻出现），但这里仍按叠放次序逐个判，不假设互斥——日后若允许
+    /// 叠开（例如筛选设置里再开跳列），先收最上层也不会把下层一起带走。
+    ///
+    /// 关闭动作复用各浮层自己的出口（`close_goto_column` 自身要 window），这里只补一件事：
+    /// **关完把焦点交回呈现焦点目标**（网格态 → 网格、文本态 → 面板根）。浮层里的输入框
+    /// 随浮层一起消失，焦点留在它上面时 `dispatch_path` 会退化成 root——上下文栈变空，
+    /// 面板层所有键位（再按一次 `ALT+SHIFT+F`、`CTRL+SHIFT+G`…）全按不出来，
+    /// 实测见 `escape_dismisses_every_result_overlay` 之后那条「再开一次」断言。
+    pub fn dismiss_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let target = self.presentation_focus_target(cx);
+        if self.goto_column_open {
+            self.close_goto_column(window, cx);
+        } else if self.fetch_all_confirm_open {
+            self.close_fetch_all_confirm(cx);
+        } else if self.filter_settings_open {
+            self.close_filter_settings(cx);
+        } else if self.sql_dialog_open {
+            self.close_sql_dialog(cx);
+        } else {
+            return false;
+        }
+        window.focus(&target, cx);
+        true
+    }
+
     /// 【筛选设置】切换页签（`FilterSettingsTab`：列约束 / 自定义）
     pub fn set_filter_settings_tab(
         &mut self,

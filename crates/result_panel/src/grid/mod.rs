@@ -91,6 +91,14 @@ pub(crate) mod view_rows;
 // `:1094` 的 `Alt+Shift+F`（筛选设置）。
 // 后三条在上游都挂 `...ui.context.resultset`（整块面板）而不是 `...resultset.focused`，
 // 所以与上面几条不同：键位挂 `editor-result-panel` 上下文。
+//
+// 【第 81 批】另有**一条不是上游键位**的：`ESC` 关结果集浮层。上游 `ESC` 是
+// `cell.reset`（`plugin.xml:1081`），本仓没有那条语义（网格的 `ESC` 留给组件），
+// 浮层则按模态惯例一律 ESC 收起。它**不在这里的 `actions!` 里、也不是 keymap 键位**：
+// 焦点一旦落进浮层里的 `InputState`，`Window::context_stack()` 会退化成空（实测 `[]`），
+// 带 context 的 binding 一条都匹配不到（连 `Ctrl+Shift+G` 都按不出来），所以入口放在
+// app 级 keystroke interceptor（`ResultPanel::new` 的 `intercept_keystrokes`）；
+// 关哪个浮层由面板按当前打开状态自己判（`ResultPanel::dismiss_overlay`）。
 use gpui_kit::actions;
 
 actions!(

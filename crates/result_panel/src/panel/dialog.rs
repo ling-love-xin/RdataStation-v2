@@ -22,7 +22,6 @@ use crate::ui;
 impl ResultPanel {
     pub(crate) fn render_sql_dialog(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
-        let close_queue = self.queue.clone();
         let close_queue2 = self.queue.clone();
         div()
             .absolute()
@@ -37,11 +36,9 @@ impl ResultPanel {
             // 无点击关闭（kit Div 无 on_click，交互走 ✕ 按钮 / Esc）
             .bg(theme.colors.overlay)
             .debug_selector(|| "editor-result-sql-dialog".to_string())
-            .on_key_down(move |event, _window, app| {
-                if event.keystroke.key == "escape" {
-                    close_queue.request(ResultRequest::CloseSqlDialog, app);
-                }
-            })
+            // 【第 81 批】`ESC` 收起统一由面板根的 `DismissOverlay` 收口：原来这里的
+            // `on_key_down` 在焦点落进浮层输入框后永远收不到（`ESC` 被 input 自己的
+            // binding 抢走，propagate 只找下一条 binding），已删。
             .child(
                 div()
                     .relative()
@@ -152,7 +149,6 @@ impl ResultPanel {
     /// `ResultPanel::submit_goto_column`（解析 / 报错 / 焦点回收都在那边）。
     pub(crate) fn render_goto_column(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
-        let esc_queue = self.queue.clone();
         let close_queue = self.queue.clone();
         let cancel_queue = self.queue.clone();
         let submit_queue = self.queue.clone();
@@ -165,11 +161,7 @@ impl ResultPanel {
             .justify_center()
             .bg(theme.colors.overlay)
             .debug_selector(|| "editor-result-goto-column".to_string())
-            .on_key_down(move |event, _window, app| {
-                if event.keystroke.key == "escape" {
-                    esc_queue.request(ResultRequest::CloseGotoColumn, app);
-                }
-            })
+            // 【第 81 批】`ESC` 收起统一由面板根的 `DismissOverlay` 收口（原 `on_key_down` 已删）
             .child(
                 div()
                     .relative()
@@ -291,7 +283,6 @@ impl ResultPanel {
     /// 与 SQL 预览 / 筛选设置同一范式：面板内 absolute 遮罩，不是窗口级 dialog。
     pub(crate) fn render_fetch_all_confirm(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
-        let esc_queue = self.queue.clone();
         let close_queue = self.queue.clone();
         let close_queue2 = self.queue.clone();
         let go_queue = self.queue.clone();
@@ -304,11 +295,7 @@ impl ResultPanel {
             .justify_center()
             .bg(theme.colors.overlay)
             .debug_selector(|| "editor-result-fetch-all-confirm".to_string())
-            .on_key_down(move |event, _window, app| {
-                if event.keystroke.key == "escape" {
-                    esc_queue.request(ResultRequest::CloseFetchAllConfirm, app);
-                }
-            })
+            // 【第 81 批】`ESC` 收起统一由面板根的 `DismissOverlay` 收口（原 `on_key_down` 已删）
             .child(
                 div()
                     .relative()
@@ -446,7 +433,6 @@ impl ResultPanel {
         let theme = cx.theme();
         let close_queue = self.queue.clone();
         let close_queue2 = self.queue.clone();
-        let esc_queue = self.queue.clone();
         let apply_queue = self.queue.clone();
         let order = self.filter_order_input.clone();
         // WHERE 摘要：当前筛选文本（空则提示去哪填）
@@ -462,11 +448,7 @@ impl ResultPanel {
             .justify_center()
             .bg(theme.colors.overlay)
             .debug_selector(|| "editor-result-filter-settings".to_string())
-            .on_key_down(move |event, _window, app| {
-                if event.keystroke.key == "escape" {
-                    esc_queue.request(ResultRequest::CloseFilterSettings, app);
-                }
-            })
+            // 【第 81 批】`ESC` 收起统一由面板根的 `DismissOverlay` 收口（原 `on_key_down` 已删）
             .child(
                 div()
                     .relative()

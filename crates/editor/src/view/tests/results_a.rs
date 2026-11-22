@@ -1806,13 +1806,9 @@ fn alt_shift_c_copies_the_column_names(cx: &mut TestAppContext) {
 /// `plugin.xml:1094`；handler `:570` → `ResultSetHandlerMain:546-549` →
 /// `ResultSetViewer.showFilterSettingsDialog()` `:644-646`，直接开对话框、不判条件）。
 ///
-/// 同时钉住两条现状事实：
-/// 1) 焦点在浮层的排序输入框里按 `ESC` **关不掉**浮层——`escape` 先命中输入框自己的
-///    key binding（`gpui-base/src/input/base/state.rs:277`），`clean_on_escape == false`
-///    时它 `cx.propagate()`（`:2607`）继续找**上层绑定的同名 action**，而浮层根接的是
-///    `on_key_down`（不是 binding），所以收不到。这是既有结构（四个浮层同病），不是本批回归；
-///    修法要给浮层遮罩挂 `key_context` + 上层 `escape` binding，留待单独一批验证后做。
-/// 2) 关浮层的可用路径是标题栏那颗 ✕（`editor-result-filter-settings-close`）。
+/// 【第 81 批】`ESC` 收起这条浮层，焦点在排序输入框里也成立（原理见
+/// `escape_dismisses_every_result_overlay` 的说明）；鼠标路径是标题栏那颗 ✕
+/// （`editor-result-filter-settings-close`），两条出口都只入队 `CloseFilterSettings`。
 #[gpui_kit::test]
 fn alt_shift_f_opens_the_filter_settings_overlay(cx: &mut TestAppContext) {
     use gpui_kit::Focusable as _;
@@ -1841,16 +1837,20 @@ fn alt_shift_f_opens_the_filter_settings_overlay(cx: &mut TestAppContext) {
         "按一下就要把浮层摆出来"
     );
 
-    // 现状：焦点被交给排序框，`ESC` 被输入框消费，浮层留着（缺口记档，不在这里断言成缺陷）
+    // 【第 81 批】`ESC` 收起：焦点在排序框里也成立——`input` 自己的 `escape` binding
+    // 命中后 `cx.propagate()`，面板层的 `DismissOverlay` 接住并冒泡到面板根
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(
-        cx.debug_bounds("editor-result-filter-settings-card").is_some(),
-        "焦点在输入框时 ESC 关不掉？现状就是关不掉——若这里变了，说明有人接上了"
+        cx.debug_bounds("editor-result-filter-settings-card").is_none(),
+        "焦点在排序框时 ESC 也要收起浮层"
     );
 
-    // ✕：真正可用的关闭路径（入队 CloseFilterSettings，宿主 drain 后收起）
+    // 再开一次，用 ✕ 关（键位与鼠标各一条出口，落点都是 CloseFilterSettings）
+    cx.simulate_keystrokes("alt-shift-f");
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
     let close = cx
         .debug_bounds("editor-result-filter-settings-close")
         .expect("关闭钮要画出来");
@@ -1860,5 +1860,108 @@ fn alt_shift_f_opens_the_filter_settings_overlay(cx: &mut TestAppContext) {
     assert!(
         cx.debug_bounds("editor-result-filter-settings-card").is_none(),
         "点 ✕ 之后浮层收起"
+    );
+}
+
+/// 【第 81 批】`ESC` 收起四个结果集浮层（SQL 预览 / 取全部确认 / 筛选设置 / 跳列）。
+///
+/// **为什么既不是键位、也不是遮罩的 `on_key_down`**：三条通道实测都不可用。
+/// ① 遮罩 `on_key_down`：`ESC` 落到焦点节点后要先过 binding 与 action 派发，
+/// `on_key_down` 排在它们之后（`gpui-pre-0.3.11/src/window.rs:6493` 在 binding 循环
+/// 之后），焦点在输入框里时压根走不到；② 任何带 context 的 binding（网格层 / 面板层）：
+/// 焦点一旦交给 `InputState`，`Window::context_stack()` 退化成空（本用例实测 `[]`，
+/// 对照网格焦点是 `[Root, editor, editor-result-panel, editor-result-grid, DataTable]`），
+/// 连面板层已绑好的 `Ctrl+Shift+G` 也匹配不到；③ 全局（`context: None`）binding 能命中，
+/// 但会先截走网格内联编辑与侧栏那批靠 `on_key_down` 收 `ESC` 的处理（`grid/edit.rs`）。
+/// 唯一不依赖焦点 / context 的通道是 app 级 keystroke interceptor
+/// （`ResultPanel::new` 的 `intercept_keystrokes`，`window.rs:6335-6352` 在 binding 之前跑）。
+/// 它只在真有浮层开着时才 `stop_propagation()`，无浮层时让路。
+///
+/// 本仓 `ESC` 不是 DBeaver 的 `cell.reset`（`plugin.xml:1081`）：网格的 `ESC` 保留组件
+/// 语义，只有浮层按模态惯例收起，关哪一个由 `ResultPanel::dismiss_overlay` 判。
+#[gpui_kit::test]
+fn escape_dismisses_every_result_overlay(cx: &mut TestAppContext) {
+    use gpui_kit::Focusable as _;
+
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+
+    let grid = cx.update(|_window, app| panel.read(app).grid_for_test());
+    let grid_focus = cx.update(|_window, app| grid.read(app).focus_handle(app));
+    // ① 筛选设置：焦点被交给排序输入框（`open_filter_settings` 里 `state.focus`）
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+    cx.simulate_keystrokes("alt-shift-f");
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-filter-settings-card").is_some(),
+        "前提：筛选设置浮层开着"
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-filter-settings-card").is_none(),
+        "焦点在排序框时 ESC 也要收起筛选设置浮层"
+    );
+
+    // ② 跳列：焦点被交给跳列输入框
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+    cx.simulate_keystrokes("ctrl-shift-g");
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-goto-column-card").is_some(),
+        "前提：跳列浮层开着"
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-goto-column-card").is_none(),
+        "焦点在跳列输入框时 ESC 也要收起浮层"
+    );
+
+    // ③ SQL 预览：没有输入框焦点（打开时不移交焦点），焦点仍在网格——
+    //    这条证明面板层键位不依赖浮层内部焦点
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.result_panel
+                .update(cx, |p, cx| p.open_sql_dialog(window, cx));
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-sql-dialog-card").is_some(),
+        "前提：SQL 预览浮层开着"
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-sql-dialog-card").is_none(),
+        "焦点不在浮层里时 ESC 也要收起 SQL 预览"
+    );
+
+    // ④ 取全部确认：同样没有输入源，焦点留在网格
+    cx.update(|_window, cx| {
+        panel.update(cx, |host, cx| {
+            host.result_panel.update(cx, |p, cx| p.open_fetch_all_confirm(cx));
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-fetch-all-confirm-card").is_some(),
+        "前提：取全部确认浮层开着"
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-fetch-all-confirm-card").is_none(),
+        "ESC 要收起取全部确认浮层"
     );
 }
