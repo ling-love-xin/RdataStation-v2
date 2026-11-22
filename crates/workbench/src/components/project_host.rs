@@ -131,6 +131,16 @@ pub fn build_host(
     .with_on_opened(on_opened)
     .with_on_closed(on_closed)
     .with_connections(default_connection_options(shared))
+    // 构建标识由宿主提供：project crate 不依赖 workbench / 应用版本。
+    // 打开项目时写进 `ProjectConfig.extensions`（`rds.build_tag`），只写不展示。
+    .with_build_tag(Rc::new(|| crate::version::info().tag()))
+    // 新建项目的「位置」记忆：读上次父目录，成功后写回设置。
+    .with_create_location(
+        Rc::new(|cx: &App| settings::SettingsService::project_last_create_location(cx)),
+        Rc::new(|path: &str, cx: &mut App| {
+            settings::SettingsService::set_project_last_create_location(path, cx)
+        }),
+    )
 }
 
 /// 默认连接的候选来源（U3）：把工作台当前的连接列表（全局 + 当前项目）投影成
