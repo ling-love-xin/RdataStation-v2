@@ -86,7 +86,8 @@ pub(crate) mod view_rows;
 // `:1083` 的 `Ctrl+R`（撤销未提交变更）、`:1090` 的 `Ctrl+Shift+G`（跳转到列）、
 // `:1088` / `:1089` 的 `Ctrl+Alt+C` / `Ctrl+Alt+R`（选列 / 选行）、
 // `:1058` 的 `Ctrl+Alt+Shift+T`（焦点在筛选框与结果呈现之间双向切换；
-// `:1096` / `:1097` 的 `Alt+Shift+H` / `Alt+Shift+T`（隐藏当前列 / 显示全部隐藏列）。
+// `:1096` / `:1097` 的 `Alt+Shift+H` / `Alt+Shift+T`（隐藏当前列 / 显示全部隐藏列）、
+// `:1095` 的 `Alt+Shift+C`（复制列名）。
 // 后三条在上游都挂 `...ui.context.resultset`（整块面板）而不是 `...resultset.focused`，
 // 所以与上面几条不同：键位挂 `editor-result-panel` 上下文。
 use gpui_kit::actions;
@@ -166,6 +167,11 @@ actions!(
         /// 【第 78 批】`ALT+SHIFT+T`：把所有隐藏列显示回来
         /// （`CMD_SHOW_COLUMNS` → `SpreadsheetCommandHandler:195-212`，`plugin.xml:1097`）。
         ShowHiddenColumns,
+        /// 【第 79 批】`ALT+SHIFT+C`：复制列名（`CMD_COPY_COLUMN_NAMES`，`plugin.xml:1095`；
+        /// `ResultSetHandlerMain:333-375`）。
+        ///
+        /// 面板级命令（上游 contextId 同样是整块 `...ui.context.resultset`）。
+        CopyColumnNames,
     ]
 );
 

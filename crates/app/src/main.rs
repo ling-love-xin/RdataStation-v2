@@ -471,6 +471,14 @@ fn run_app() {
                     editor::commands::ShowHiddenColumns,
                     Some(editor::commands::RESULT_PANEL_CONTEXT),
                 ),
+                // 【第 79 批】`ALT+SHIFT+C` = `CMD_COPY_COLUMN_NAMES`（`plugin.xml:1095`；
+                // `ResultSetHandlerMain:333-375`）。上游同样挂整块面板的
+                // `...ui.context.resultset`，这里跟第 78 批一样挂面板层。
+                KeyBinding::new(
+                    "alt-shift-c",
+                    editor::commands::CopyColumnNames,
+                    Some(editor::commands::RESULT_PANEL_CONTEXT),
+                ),
                 // 【第 60 批】同一条 `Ctrl+反引号` 再绑到**面板层**上下文：文本态下网格
                 // 整块不渲染，网格 context 不在焦点路径上；焦点落在面板根时靠这条命中
                 // （两层同时匹配时 gpui 按 context 深度取更深的网格那条，不会切两次）。

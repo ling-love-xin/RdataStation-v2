@@ -5,11 +5,11 @@
 
 use crate::changes::CellChange;
 use crate::commands::{
-    CommitResultChanges, CopyGridSelection, CopyRowValuesFromAbove, CopyRowValuesFromBelow,
-    CycleResultPresentation, DeleteResultRow, DuplicateResultRow, EnterCellEdit, ExecuteSql,
-    FetchAllData, FetchNextSegment, FocusRowJump, GotoColumn, HideCurrentColumn, InsertResultRow,
-    RedoResultEdit, RejectPendingChanges, SelectCurrentColumn, SelectCurrentRow, ShowHiddenColumns,
-    SwitchFilterFocus, UndoResultEdit,
+    CommitResultChanges, CopyColumnNames, CopyGridSelection, CopyRowValuesFromAbove,
+    CopyRowValuesFromBelow, CycleResultPresentation, DeleteResultRow, DuplicateResultRow,
+    EnterCellEdit, ExecuteSql, FetchAllData, FetchNextSegment, FocusRowJump, GotoColumn,
+    HideCurrentColumn, InsertResultRow, RedoResultEdit, RejectPendingChanges,
+    SelectCurrentColumn, SelectCurrentRow, ShowHiddenColumns, SwitchFilterFocus, UndoResultEdit,
 };
 
 use super::*;
@@ -369,6 +369,26 @@ impl EditorHostPanel {
     /// 【第 78 批】`ALT+SHIFT+T`：把所有隐藏列显示回来
     /// （DBeaver `CMD_SHOW_COLUMNS`，`plugin.xml:1097`；
     /// `SpreadsheetCommandHandler:195-212`）。
+    /// 【第 79 批】`ALT+SHIFT+C`：复制列名
+    /// （DBeaver `CMD_COPY_COLUMN_NAMES`，`plugin.xml:1095`；`ResultSetHandlerMain:333-375`）。
+    ///
+    /// 上游复制完不出声；本仓按既有复制口径留一句「已复制 N 个列名」（键位要说话）。
+    pub(crate) fn on_copy_column_names(
+        &mut self,
+        _: &CopyColumnNames,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let result = self
+            .result_panel
+            .update(cx, |panel, cx| panel.copy_column_names(cx));
+        match result {
+            Ok(1) => self.set_message(Some("已复制列名".to_string()), cx),
+            Ok(count) => self.set_message(Some(format!("已复制 {count} 个列名（TSV）")), cx),
+            Err(reason) => self.set_message(Some(reason), cx),
+        }
+    }
+
     pub(crate) fn on_show_hidden_columns(
         &mut self,
         _: &ShowHiddenColumns,

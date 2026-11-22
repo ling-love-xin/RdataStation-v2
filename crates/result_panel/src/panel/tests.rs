@@ -6023,3 +6023,97 @@ fn hiding_the_last_visible_column_is_refused(cx: &mut gpui_kit::TestAppContext) 
         "底线守住：仍有一列可见"
     );
 }
+
+/// 【第 79 批】`ALT+SHIFT+C` 复制列名（DBeaver `CMD_COPY_COLUMN_NAMES`，
+/// `plugin.xml:1095`；`ResultSetHandlerMain:333-375`）。
+///
+/// 上游列集合只有两级：表格选区为空 → `getVisibleAttributes()`（全部可见列）；
+/// 否则用选中的列。本仓单区域选区的等价 = 当前格所在列 → 全部可见列（跳过隐藏）。
+/// 右栏的列选中不参与（上游那是另一个部件），所以 harness 预置的 `selected_col`
+/// 在这里不起作用。
+#[gpui_kit::test]
+fn copying_column_names_uses_the_current_cell_then_every_visible_column(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    let clipboard = |cx: &mut gpui_kit::VisualTestContext| {
+        cx.update(|_w, app| app.read_from_clipboard().and_then(|item| item.text()))
+    };
+
+    // ① 没有当前格：全部可见列（数据序，Tab 分隔）
+    assert_eq!(
+        cx.update(|_w, app| panel.read(app).selection_pos),
+        None,
+        "前提：harness 出厂没有当前格"
+    );
+    let count = cx.update(|_w, app| panel.update(app, |p, cx| p.copy_column_names(cx)));
+    assert_eq!(count, Ok(2), "两列都可见");
+    assert_eq!(clipboard(cx).as_deref(), Some("id\tamount"), "Tab 分隔");
+
+    // ② 当前格所在列盖过全量（组件列 2 = 数据列 1 = `amount`）
+    cx.update(|window, app| {
+        let grid = panel.read(app).grid.clone();
+        grid.update(app, |state, cx| state.set_selected_cell(0, 2, cx));
+        panel.update(app, |p, cx| p.set_selection_pos(Some((0, 2)), window, cx));
+    });
+    let count = cx.update(|_w, app| panel.update(app, |p, cx| p.copy_column_names(cx)));
+    assert_eq!(count, Ok(1), "只拷这一列");
+    assert_eq!(clipboard(cx).as_deref(), Some("amount"), "单列不加分隔符");
+
+    // ③ 那一列被藏掉 → 当前格不在可见列上，退回全部可见列
+    cx.update(|_w, app| panel.update(app, |p, cx| p.set_columns_hidden(vec![1], true, cx)));
+    let count = cx.update(|_w, app| panel.update(app, |p, cx| p.copy_column_names(cx)));
+    assert_eq!(count, Ok(1), "只剩一列可见");
+    assert_eq!(clipboard(cx).as_deref(), Some("id"), "隐藏的那列不拷");
+}
+
+/// 【第 79 批】上游没有「空文本」这种特判：`buffer` 为空时 `copyToClipboard("")` 照拷。
+/// 本仓把「一列都没有」当不可执行（键位要说话），不拿空串盖掉用户剪贴板。
+#[gpui_kit::test]
+fn copying_column_names_is_refused_without_columns(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|_w, app| {
+        let grid = panel.read(app).grid.clone();
+        grid.update(app, |state, cx| {
+            state.delegate_mut().set_data(Vec::new(), Vec::new());
+            state.refresh(cx);
+        });
+    });
+    let result = cx.update(|_w, app| panel.update(app, |p, cx| p.copy_column_names(cx)));
+    let reason = result.err().unwrap_or_default();
+    assert!(
+        reason.contains("没有可复制的列"),
+        "要说明原因，实际是：{reason}"
+    );
+}
+
+/// 【第 78 批 · 越界分支】藏掉**最右一列**时当前格的列位越界 → 清 `selection_pos`
+/// （78 批那条三列用例只覆盖了「中间列、同列位重投影」这一支）。
+/// 右栏 `selected_col` 按既有口径「清选保持清单当前选中」，这里一并把这条口径钉住。
+#[gpui_kit::test]
+fn hiding_the_rightmost_column_clears_the_current_cell(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    let grid = cx.update(|_w, app| panel.read(app).grid.clone());
+
+    // 组件列 2 = 数据列 1（`amount`，右端）
+    cx.update(|_w, app| grid.update(app, |state, cx| state.set_selected_cell(0, 2, cx)));
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_w, app| panel.read(app).selection_pos),
+        Some((0, 2)),
+        "前提：当前格在最右一列"
+    );
+
+    let result = cx.update(|window, app| {
+        panel.update(app, |p, cx| p.hide_current_column(window, cx))
+    });
+    assert!(result.is_ok(), "可以藏：{result:?}");
+    cx.run_until_parked();
+
+    let selection_pos = cx.update(|_w, app| panel.read(app).selection_pos);
+    assert_eq!(selection_pos, None, "越界清选：不让格指着空气");
+}

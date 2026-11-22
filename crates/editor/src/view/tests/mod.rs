@@ -186,6 +186,12 @@ fn bind_editor_keys(cx: &mut TestAppContext) {
                 crate::commands::ShowHiddenColumns,
                 Some(crate::commands::RESULT_PANEL_CONTEXT),
             ),
+            // 【第 79 批】复制列名（`CMD_COPY_COLUMN_NAMES`，`:1095`；面板层 context）
+            KeyBinding::new(
+                "alt-shift-c",
+                crate::commands::CopyColumnNames,
+                Some(crate::commands::RESULT_PANEL_CONTEXT),
+            ),
         ]);
     });
 }

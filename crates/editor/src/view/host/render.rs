@@ -186,6 +186,8 @@ impl Render for EditorHostPanel {
             // （`CMD_HIDE_COLUMNS` / `CMD_SHOW_COLUMNS`，`:1096/1097`）
             .on_action(cx.listener(Self::on_hide_current_column))
             .on_action(cx.listener(Self::on_show_hidden_columns))
+            // 【第 79 批】`ALT+SHIFT+C` 复制列名（`CMD_COPY_COLUMN_NAMES`，`:1095`）
+            .on_action(cx.listener(Self::on_copy_column_names))
             // 【书签】`Ctrl+Shift+B` 切换 / `F8` 下一 / `Shift+F8` 上一（键位在 crates/app 注册）
             .on_action(cx.listener(Self::on_toggle_bookmark))
             .on_action(cx.listener(Self::on_next_bookmark))

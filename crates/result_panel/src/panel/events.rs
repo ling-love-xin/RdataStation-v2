@@ -2283,6 +2283,47 @@ impl ResultPanel {
         true
     }
 
+    /// 【第 79 批】`ALT+SHIFT+C`：复制列名
+    /// （DBeaver `CMD_COPY_COLUMN_NAMES`，`plugin.xml:1095`；
+    /// `ResultSetHandlerMain.java:333-375`）。
+    ///
+    /// 上游的列集合：`rsv.getSelection()` 为空 → `getModel().getVisibleAttributes()`
+    /// （**全部可见列**）；否则用选中的列。上游只认**表格选区**，右栏那份列选中是另一个
+    /// 部件（`meta_data_panel_action_copy_column_text`），所以本仓的等价只有两级：
+    /// 当前格所在列（且该列仍然可见）→ 全部可见列（数据序，跳过隐藏）。
+    ///
+    /// 分隔符：上游多列走「复制配置」对话框，默认 `\t`（`ResultSetHandlerCopySpecial:129`），
+    /// 单列不弹；本仓固定 `\t`，不弹对话框（目视类后处理统一做）。
+    ///
+    /// 名字：上游取 `attr.getLabel()`（空则 `getName()`），且有数据源时套
+    /// `DBUtils.getQuotedIdentifier`（贴进 SQL 就是带引号的标识符）；本仓 `columns()`
+    /// 就是显示名、也没有数据源方言通道，所以**不加引号**（有意差异）。
+    pub fn copy_column_names(&mut self, cx: &mut Context<Self>) -> Result<usize, String> {
+        let picked: Vec<String> = {
+            let delegate = self.grid.read(cx).delegate();
+            let names = delegate.columns();
+            let from_cell = self
+                .selection_pos
+                .filter(|(_, col_ix)| *col_ix > 0)
+                .and_then(|(_, col_ix)| delegate.data_column_checked(col_ix - 1));
+            match from_cell {
+                Some(col) => names.get(col).cloned().into_iter().collect(),
+                None => names
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| !delegate.is_hidden_column(*index))
+                    .map(|(_, name)| name.clone())
+                    .collect(),
+            }
+        };
+        if picked.is_empty() {
+            return Err("这份结果没有可复制的列".to_string());
+        }
+        let count = picked.len();
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(picked.join("\t")));
+        Ok(count)
+    }
+
     /// 【第 77 批】筛选框的焦点句柄（`switch_filter_focus` 的内部判据；宿主窗口用例
     /// 也用它比对「焦点现在在哪」——`filter_input` 本身是 crate 内字段）
     pub fn filter_focus_handle(&self, cx: &App) -> FocusHandle {

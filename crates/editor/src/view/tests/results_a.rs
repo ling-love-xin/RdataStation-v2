@@ -1749,3 +1749,55 @@ fn the_hide_and_show_column_keys_round_trip(cx: &mut TestAppContext) {
         "所有隐藏列都回来了"
     );
 }
+
+/// 【第 79 批】`ALT+SHIFT+C` 复制列名全链（`CMD_COPY_COLUMN_NAMES`，`plugin.xml:1095`；
+/// `ResultSetHandlerMain:333-375`）：选中某格 → 拷那一列；藏掉当前列（清选后）
+/// → 退化成全部可见列，隐藏的列不出现。
+#[gpui_kit::test]
+fn alt_shift_c_copies_the_column_names(cx: &mut TestAppContext) {
+    use gpui_kit::Focusable as _;
+
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+
+    let grid = cx.update(|_window, app| panel.read(app).grid_for_test());
+    // 组件列 2 = 数据列 1（`note`）
+    cx.update(|_window, app| grid.update(app, |state, cx| state.set_selected_cell(0, 2, cx)));
+    let grid_focus = cx.update(|_window, app| grid.read(app).focus_handle(app));
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+
+    let clipboard = |cx: &mut VisualTestContext| {
+        cx.update(|_window, app| app.read_from_clipboard().and_then(|item| item.text()))
+    };
+    let message = |cx: &mut VisualTestContext| {
+        cx.update(|_window, cx| panel.read(cx).message.clone())
+            .unwrap_or_default()
+    };
+
+    // 当前格在 `note`：只拷那一列，不加分隔符
+    cx.simulate_keystrokes("alt-shift-c");
+    cx.run_until_parked();
+    assert_eq!(clipboard(cx).as_deref(), Some("note"), "当前格所在列");
+    assert!(message(cx).contains("已复制列名"), "实际是：{}", message(cx));
+
+    // 藏掉 `note`（当前格在最右列 → 越界清选），再按就是全部可见列
+    cx.simulate_keystrokes("alt-shift-h");
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_w, app| panel.read(app).result_panel.read(app).column_hidden()),
+        vec!["note".to_string()],
+        "前提：这一列真的藏了"
+    );
+    // 藏掉最右一列时 `hide_current_column` 会清选（面板层用例
+    // `hiding_the_rightmost_column_clears_the_current_cell` 钉住；面板字段不跨 crate 暴露），
+    // 于是下面这一按走的是「全部可见列」那条路。
+
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+    cx.simulate_keystrokes("alt-shift-c");
+    cx.run_until_parked();
+    assert_eq!(clipboard(cx).as_deref(), Some("n"), "隐藏列不进全量");
+    assert!(message(cx).contains("已复制列名"), "实际是：{}", message(cx));
+}
