@@ -5,10 +5,16 @@ description: RdataStation v2 架构硬约束：crate 依赖方向、模块归属
 
 # RdataStation v2 架构约束
 
-> **版本勘误（2026-11-16）**：本仓库 vendor 锁定的 **gpui-kit / gpui-base / gpui-component 均为 0.9.0**
-> （`Cargo.lock` 实测）。下文出现的 `0.7.1` / `0.8.1` 是当时逐项实测留下的记录，**不是当前版本**；
-> 组件是否存在、签名与行为一律以 `vendor/` 下 0.9.0 源码为准，本 skill 与 vendor 冲突时改 skill。
-> 已知 0.9.0 口径差异：`component::IconName` 只是保留的旧子集，完整 Lucide 目录在 `gpui_kit::assets::IconName`
+> **版本勘误（2026-11-22 更新）**：本仓库 vendor 锁定的 **gpui-kit / gpui-base / gpui-component 已升到 0.10.0**
+> （`gpui-fast` 0.1.17、`gpui-pre` 0.3.12；`Cargo.lock` 实测）。下文出现的 `0.6.1` / `0.7.x` / `0.8.x` / `0.9.x`
+> 都是当时逐项实测留下的记录，**不是当前版本**；组件是否存在、签名与行为一律以 `vendor/` 下 0.10.0 源码为准，
+> 本 skill 与 vendor 冲突时改 skill。
+>
+> 0.9.x → 0.10.0 必记两条：① `ThemeConfigColors` 键数 140 → **141**（新增 `list.highlight.foreground`），
+> 改主题资产前先跑 `python tools/gen_theme_keys.py`，`crates/ui_guard/tests/workspace_ui_contract.rs` 守卫常量同步 141；
+> ② 未被失效的保留子树在 `window.draw` 时被**原样重放**（不重跑 `render`/`paint`），改完状态要断渲染必须先 `window.refresh()`。
+> 差异全量见 `docs/architecture/dependencies/core-packages-2026-11-22-upgrade-assessment.md` §2 / §11。
+> 另：`component::IconName` 仍只是保留的旧子集，完整 Lucide 目录在 `gpui_kit::assets::IconName`
 > （`Icon::new` 两种都收，经 `impl<T: IconNamed> From<T> for Icon`）。
 
 
@@ -46,7 +52,7 @@ workbench_shell ───► gpui-kit / paths（外壳 crate：不得依赖任�
 
 | 层 | 内容 | 来源 | 消费方式 |
 | --- | --- | --- | --- |
-| 组件 / 主题 | `gpui-kit` 0.7.1（TabBar / Switch / Input / List / Button / Dock / …，68 个组件模块，2026-10-11 实测 0.7.1 `lib.rs`） | 本地 vendor（`vendor/gpui-component/`，0.7.1 + tab_panel patch） | `gpui_kit::*` / `gpui_kit::component::*` / `gpui_kit::base::*`（API 与差异见 `gpui-kit-dev` skill、`docs/architecture/ui/gpui-kit-0.7-migration.md`） |
+| 组件 / 主题 | `gpui-kit` **0.10.0**（TabBar / Switch / Input / List / Button / Dock / …；0.7.1 时为 68 个组件模块，0.9.0→0.10.0 顶层模块 54 → **55**，只新增 `grid_layout`、0 删除，另 29 个子模块目录含 `component_traits` / `element_ext` 这类非组件工具模块） | 本地 vendor（`vendor/gpui-component/`、`vendor/gpui-base/`，**0.10.0 + 项目私有 patch**） | `gpui_kit::*` / `gpui_kit::component::*` / `gpui_kit::base::*`（API 与差异见 `gpui-kit-dev` skill、`docs/architecture/dependencies/core-packages-2026-11-22-upgrade-assessment.md`） |
 | 产品语义层 | `workbench_shell`：`ui.rs` 尺寸常量（`workbench_shell::ui::*`）、`product_tokens` 语义色、`tree` 行级原语（`active_bar` / `disclosure_icon` / `indent_spacer` / `RowHeight`） | 外壳 crate（**不得依赖任何特性 crate**） | Feature 直接 `workbench_shell::ui::*` 等；workbench 内沿用 `crate::ui::*` 重导 |
 | 业务视图 | 各 Feature 自己的 view / model / service / command | 所在 Feature crate | 由 workbench 装配，**Feature 不反向依赖 workbench 的 `panels/` / `components/` / `view.rs`** |
 

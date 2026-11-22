@@ -29,7 +29,10 @@ description: RdataStation 工作台五段布局实现规格：标题栏/左右�
 - 激活图标 2px 侧条 + 亮色（activity_bar 语义 token，见 rds-theme skill）
 - 点击行为：该侧收起 → 展开并切换；展开且非当前 → 切换 panel；展开且当前 → 收起（toggle）
 
-## 边栏三模式（Dock API，gpui-kit 0.7.1）
+## 边栏三模式（Dock API）
+
+> 装配口径在 gpui-kit 0.7.1 定下；**当前 vendor 0.10.0** 下 `set_dock` / `toggle_dock` / `set_dock_size` 仍在用且编译通过
+> （本次升级 `cargo check --workspace` 全绿）。0.10.0 的差异集中在 gutter / 折叠区与帧语义，未动这条 Dock 装配。
 
 | 模式 | API |
 | --- | --- |

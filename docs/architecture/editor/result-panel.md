@@ -1,7 +1,7 @@
 # 结果集表格模块（rds-result-panel）架构设计
 
 > 状态：已落地（2026-10-23）。本会话范围：独立 crate + 并排对比；状态栏合并是另一会话任务。
-> 技术栈：Rust + GPUI-kit 0.8.0（vendor 权威源）；API 一律查 `vendor/gpui-component/src/`。
+> 技术栈：Rust + **GPUI-kit 0.10.0**（vendor 权威源，2026-11-22 由 0.9.0 升级，`gpui-fast` 0.1.17）；API 一律查 `vendor/gpui-component/src/`。下文出现的 `0.8.0` / `0.9.0` 属当时锁定版本的历史记录；0.10.0 的帧语义（`window.refresh()` 后才有新帧）与 141 主题键见 `docs/architecture/dependencies/core-packages-2026-11-22-upgrade-assessment.md` §11。
 
 ## 1. 目标
 

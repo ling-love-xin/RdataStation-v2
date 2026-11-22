@@ -1,15 +1,23 @@
 ---
 name: gpui-kit-dev
-description: GPUI-kit 视图开发规范：依赖只向下、主题取色零裸色值、render 权威同步点、事件/Action 模式、布局与滚动陷阱、组件选型（禁止手搓）、动效（禁止手搓 request_animation_frame）、API 查证路径与常用组件 API、简体中文注释约定。API 细节以 0.7.1 实测为准；当前 vendor 为 0.9.0（0.8.x 升级与差异见 `docs/architecture/ui/gpui-kit-0.8.0-upgrade-report.md` §9）。编写或修改任何 GPUI 视图、元素、组件代码时使用。
+description: GPUI-kit 视图开发规范：依赖只向下、主题取色零裸色值、render 权威同步点、事件/Action 模式、布局与滚动陷阱、组件选型（禁止手搓）、动效（禁止手搓 request_animation_frame）、API 查证路径与常用组件 API、简体中文注释约定。组件清单/尺寸档位按 0.7.1 实测，**API 与行为以当前 vendor 0.10.0 为准**（0.9.x → 0.10.0 的差异见 `docs/architecture/dependencies/core-packages-2026-11-22-upgrade-assessment.md` §2 与 §11）。编写或修改任何 GPUI 视图、元素、组件代码时使用。
 ---
 
-# GPUI-kit 视图开发规范（历史实测 0.7.1；当前 vendor 0.9.0）
+# GPUI-kit 视图开发规范（组件清单按 0.7.1 实测；当前 vendor 0.10.0）
 
-> **版本勘误（2026-11-16）**：本仓库 vendor 锁定的 **gpui-kit / gpui-base / gpui-component 均为 0.9.0**
-> （`Cargo.lock` 实测）。下文出现的 `0.7.1` / `0.8.1` 是当时逐项实测留下的记录，**不是当前版本**；
-> 组件是否存在、签名与行为一律以 `vendor/` 下 0.9.0 源码为准，本 skill 与 vendor 冲突时改 skill。
-> 已知 0.9.0 口径差异：`component::IconName` 只是保留的旧子集，完整 Lucide 目录在 `gpui_kit::assets::IconName`
-> （`Icon::new` 两种都收，经 `impl<T: IconNamed> From<T> for Icon`）。
+> **版本勘误（2026-11-22 更新）**：本仓库 vendor 锁定的 **gpui-kit / gpui-base / gpui-component 已升到 0.10.0**
+> （`gpui-fast` 0.1.17、`gpui-pre` 0.3.12；`Cargo.lock` 实测，隔离分支 `upgrade/core-2026-11-22`）。
+> 下文出现的 `0.6.1` / `0.7.0` / `0.7.1` / `0.8.x` / `0.9.x` 都是当时逐项实测的历史记录，**不是当前版本**；
+> 组件是否存在、签名与行为一律以 `vendor/` 下 0.10.0 源码为准，本 skill 与 vendor 冲突时改 skill。
+>
+> 0.9.x → 0.10.0 的四条口径差异（本次升级实测）：
+> 1. **`ThemeConfigColors` 键数 140 → 141**，新增键 **`list.highlight.foreground`**（列表高亮前景色）。改主题资产/守卫常量前先 `python tools/gen_theme_keys.py` 重建 `assets/themes/theme-keys.json`，`crates/ui_guard/tests/workspace_ui_contract.rs` 的守卫常量同步为 141。
+> 2. **未被失效的保留子树在 `window.draw` 时被原样重放**（0.10.0 + gpui-fast 0.1.17 起），不再重跑 `render`/`paint`。改完状态直接 `window.draw` 会读到**上一帧**；断言渲染结果必须 `window.refresh()` 再 draw（上游同一口径见 `vendor/gpui-component/src/lib.rs::test_redraw`）。
+> 3. `vendor/gpui-base/src/tabs.rs` 依赖 `Entity`，重打 patch 时别漏这个导入（本次三方合并踩过）。
+> 4. `component::IconName` 仍是保留的旧子集，完整 Lucide 目录在 `gpui_kit::assets::IconName`
+>    （`Icon::new` 两种都收，经 `impl<T: IconNamed> From<T> for Icon`）。
+>
+> 更细的差异与验证矩阵见 `docs/architecture/dependencies/core-packages-2026-11-22-upgrade-assessment.md` §2、§11。
 
 
 ## 依赖与导入
@@ -99,7 +107,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 
 | 用途 | 模块 |
 | --- | --- |
-| 布局与容器 | `dock`、`resizable`、`scroll`、`virtual_list`（`VirtualList` / `v_virtual_list` / `h_virtual_list`）、`sidebar`、`title_bar`、`status_bar`、`group_box`、`separator`、`root`、`styled`、`global_state`（`GlobalState` 全局状态容器，re-export 自 gpui-base；本仓 `ProductTokenSet: Global` 即此模式）、`window_border`（`WindowBorder` / `window_border()` / `window_paddings`，窗口边框容器） |
+| 布局与容器 | `dock`、`resizable`、`scroll`、`virtual_list`（`VirtualList` / `v_virtual_list` / `h_virtual_list`）、`sidebar`、`title_bar`、`status_bar`、`group_box`、`separator`、`root`、`grid_layout`（**0.10.0 新增**：表格式布局控件，`gpui_kit::base::grid_layout` 的低层布局 + 组件侧封装）、`styled`、`global_state`（`GlobalState` 全局状态容器，re-export 自 gpui-base；本仓 `ProductTokenSet: Global` 即此模式）、`window_border`（`WindowBorder` / `window_border()` / `window_paddings`，窗口边框容器） |
 | 按钮与动作 | `button`（`Button` / `ButtonVariants` / 图标按钮）、`link`、`kbd`、`clipboard`、`tooltip`、`hover_card`、`menu`（`PopupMenu` / `DropdownMenu` / `DropdownButton`）、`native_menu`、`command`、`history`、`toolbar`（0.7 新增） |
 | 输入与表单 | `input`（编辑器内核 + `Input` / `InputState`）、`select`、`combobox`、`searchable_list`、`checkbox`、`radio`、`switch`、`slider`、`rating`、`color_picker`、`stepper`、`form`、`questionnaire`（0.7 新增）、`speech`（0.7.1 新增：语音识别输入，`SpeechButton` / `Microphone`） |
 | 数据展示 | `list`（`List` / `ListState` / `ListDelegate`）、`table`、`tree`、`tag`、`badge`、`avatar`、`breadcrumb`、`pagination`、`description_list`（`DescriptionList` + `DescriptionItem{label,value,span}`，只读 label/value 列表，DBeaver 属性检查器风格）、`label`、`marker`、`plot`、`chart`、`carousel`（0.7 新增） |
@@ -113,7 +121,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 >
 > 勘误（2026-10-28）：**`inspector` 是 gpui 内置的元素调试器**（Ctrl+Shift+I 的 `DivInspector` / `render_inspector`，供开发期检查元素树），**不是"属性检查器面板"容器**——做 DBeaver 风格属性面板用 `description_list::DescriptionList` 或自绘网格，不要误解 `inspector` 的用途。
 
-- **先查再写**：不确定某个控件库里有不有时，`grep -n "^pub mod" <vendor>/gpui-component/src/lib.rs`（vendor 即 0.8.1 权威），再读那个模块的 `pub fn`。本仓曾多次出现「库没有 X」的错误结论（Tabs / Switch / TabBar 已作废）。
+- **先查再写**：不确定某个控件库里有不有时，`grep -n "^pub mod" <vendor>/gpui-component/src/lib.rs`（vendor 即**当前 0.10.0**权威：54 → **55** 个顶层模块，0.9.0→0.10.0 只新增 `grid_layout`、0 删除），再读那个模块的 `pub fn`。本仓曾多次出现「库没有 X」的错误结论（Tabs / Switch / TabBar 已作废）。
 - **弹层 / 提示 / 进度 / 加载骨架 / 旋转指示器也都是现成的**：`popover` / `tooltip` / `hover_card` / `dialog` / `sheet` / `notification` / `progress` / `skeleton` / `shimmer` / `spinner`——它们自带**入场动效**（fade / slide / spring），不要自己再包一层。
 - **容器选型速查（2026-10-28 增补）**：看到"手搓容器"先对号——空态 → `empty::Empty`；label/值只读列表 → `description_list::DescriptionList`；表单（label + 控件 + 列网格 + footer）→ `form::{Form, Field}`（`horizontal()`/`vertical()`/`columns(n)`/`label_width(px)`）；带标题的分组框 → `group_box::GroupBox`；多折叠组 → `accordion::Accordion`（`multiple(true)` 可同时展开）；单折叠块 → `collapsible::Collapsible`；全局状态容器 → `global_state::GlobalState`；窗口边框 → `window_border::WindowBorder`；代码 diff 展示 → `diff::DiffState`（0.8.1）。
 
@@ -169,6 +177,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 - **点击用 kit 的测试 API，不要手算坐标**：`gpui_kit::test::TestWindowExt` 提供 `find` / `try_find` / `click` / `click_at` / `hover` / `scroll` / `drag_to` / `press` / `input`（与 `ElementSnapshot` 快照）。它自己先 `render_frame` → 取观测快照的 bounds → 发鼠标移动 → 命中测试，比 `debug_bounds` + `point(x, y)` 可靠；代价是目标元素必须带 `.id(...)` **加 `.test_support()`**（`Element::id()` 为 `None` 的组件——如 `Button` 这类 `RenderOnce`——观察不了，给它套一层带 id 的 `div`）。`snapshot.focused()` 会 panic，除非该元素是以 `.test_support().track_focus(&handle)` 观察的。
 - **`find` 比 `debug_bounds` 强在哪**：`visible()` 能区分「不在元素树里」（`try_find` → `None`）与「在树里但被裁 / 隐藏 / 透明」——`debug_bounds` 只回答后者之外的一半（隐藏元素也登记），所以“展开后才出现”这类断言以前其实是弱断言；`find` 取不到时 panic 信息里带**已登记路径**（id 拼错一眼可见）；`ElementSnapshot` 还带 a11y 事实（`role` / `label` / `selected` / `checked` / `disabled` / `value`，取决于组件有没有写 a11y info）。两个实测例外：① 组件 `Scrollable`（`overflow_y_scrollbar`）渲染时会把**内层元素的 id 换成 `(caller, "content")`**（`scrollable.rs` 的 `self.element.id(content_id)`），那个元素的 id 进不了观测（继续用 `debug_selector`）；② `dialog-layer` 是上游 gpui-component 的 debug_selector。
 - **首帧 ≠ 稳定帧**：对话框内容会在头几帧继续长高（实测第 5 帧才稳定），拿首帧当几何基线做前后对比会得到偏差；先空出几帧再量（推时钟的 spring 帮助函数同理）。
+- **改完状态要 `window.refresh()` 再 draw（0.10.0 / gpui-fast 0.1.17 起）**：未被失效的保留子树在 `window.draw` 时被**原样重放**，不重跑 `render`/`paint`。只改字段、只 `notify` delegate 之后直接 draw，读到的是**上一帧**，用例会假红/假绿。口径：`cx.update(|window, _| window.refresh());` 再 `window.draw(cx).clear(cx)`，并在注释里写明这是帧语义而非放宽断言。参考 `crates/result_panel/src/panel/tests.rs`、`connection_render_matrix::settle_reveal`、`crates/database/src/nav_view/tests.rs::redraw`。
 - **headless 下鼠标点击到不了对话框层**：`Root::render_dialog_layer` 的内容走 deferred 子树，实测同样结构的行在**普通窗口**里一点就中、放进对话框就中不了（本仓已有两处同款注记：`analytics_resource/tests/dialog_window.rs`、`editor/src/view/tests.rs`）。所以对话框用例的口径是：**断言层真渲染 + 直接调提交函数**（与按钮回调同一函数）；想要“真点击”就把控件抽到**不带对话框**的窗口用例里钉（例：`connection_dialog/helpers.rs::tests::header_interaction`）。
 - **组件内 spring 在 headless 下不会自己走**：`spring` 取 `background_executor().now()`，要“推时钟 + 出帧”成对做（`cx.background_executor().advance_clock(Duration::from_millis(16))` + `window.draw(cx).clear(cx)`，循环到收敛）；只 `draw` 不推时钟，让步永远停在原处（断言高度永远等不到变化）。
 
@@ -231,10 +240,10 @@ element.with_animation(
 
 ## 查 API（版本对齐，必读）
 
-- **权威源（首选）是本地 vendor 0.8.1 源码**：`vendor/gpui-component/src/`（与 `Cargo.lock` 解析一致；gpui-kit 0.8.0 起本项目 vendor `gpui-component`/`gpui-base`（当前 0.8.1），含项目私有 patch：gpui-base `state.rs` 游标/列块 + gpui-component `dock/mod.rs` DockSkin tab_bar 配置，见升级报告 §3）。不确定 API 时 `grep -rn "pub fn xxx" <vendor>/gpui-component/src/`，或直接读 `src/` 对应文件。
-- **0.8.1 已知 API 变化**（gpui-pre 0.3.10）：`Modifiers::secondary()` 需 `&App` 参数（原无参）；纯函数（无 cx）里用编译期平台等价判断（mac = `platform`，其余 = `control`），见 `crates/analytics_resource/src/resource_view.rs::classify_click`。
+- **权威源（首选）是本地 vendor 源码**：`vendor/gpui-component/src/` 与 `vendor/gpui-base/src/`（与 `Cargo.lock` 解析一致；**当前 0.10.0**，含项目私有 patch：gpui-base `state.rs` 游标/列块 + gpui-component `dock/mod.rs` DockSkin tab_bar 配置 + `tab_panel.rs` 的 `title_suffix` 接线，重打过程见 `docs/architecture/dependencies/core-packages-2026-11-22-upgrade-assessment.md` §11.3）。不确定 API 时 `grep -rn "pub fn xxx" <vendor>/gpui-component/src/`，或直接读 `src/` 对应文件。
+- **0.8.1 起的 API 变化（gpui-pre 0.3.10+，当前 0.3.12）**：`Modifiers::secondary()` 需 `&App` 参数（原无参）；纯函数（无 cx）里用编译期平台等价判断（mac = `platform`，其余 = `control`），见 `crates/analytics_resource/src/resource_view.rs::classify_click`。
 - **次选 crates.io 0.8.0 解包源码**：`D:/Dev/Rust/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda/gpui-kit-0.8.0/`、同目录下 `gpui-base-0.8.0/`、`gpui-component-0.8.0/`、`gpui-kit-assets-0.8.0/`。
-- **本 skill 的组件清单 / 尺寸档位 / 行为描述按 0.7.1 实测**（2026-10-11）；0.8.0 差异（TabBar `track_scroll`/`menu`/`max_width`、TabVariant Folder、ScrollableMask::vertical_wheel、TabReveal、Dock tab_panel 原生接线等）见 `docs/architecture/ui/gpui-kit-0.8.0-upgrade-report.md` §7；若本 skill 与 vendor 0.8.0 冲突，以 vendor 为准并回写本 skill。
-- 本地 `D:\ABDM\Compressed\gpui-kit-main\gpui-kit-main` 是 main 分支快照，不是 0.8.0：与锁定版本仍有文件差异。它只用于读 `skills/`（coding-guides / design-guides）与 `docs/` 等**规范类内容**；**禁止**拿它的函数签名 / 组件清单当 0.8.0 的 API 依据。
+- **本 skill 的组件清单 / 尺寸档位 / 行为描述按 0.7.1 实测**（2026-10-11）；0.8.0 差异（TabBar `track_scroll`/`menu`/`max_width`、TabVariant Folder、ScrollableMask::vertical_wheel、TabReveal、Dock tab_panel 原生接线等）见 `docs/architecture/ui/gpui-kit-0.8.0-upgrade-report.md` §7；**0.10.0 差异见 `docs/architecture/dependencies/core-packages-2026-11-22-upgrade-assessment.md` §2 / §11**；若本 skill 与 vendor 冲突，以 vendor 为准并回写本 skill。
+- 本地 `D:\ABDM\Compressed\gpui-kit-main\gpui-kit-main` 是 main 分支快照，不是锁定版本：与 vendor 仍有文件差异。它只用于读 `skills/`（coding-guides / design-guides）与 `docs/` 等**规范类内容**；**禁止**拿它的函数签名 / 组件清单当锁定版本的 API 依据。
 - 上游设计规范（选组件、版式、文案、动效）看本地包的 `skills/gpui-kit-design-guides/references/design-guides.md` 与 `skills/gpui-kit/references/coding-guides.md`（规范性文件，优先于任何示例代码）。
 - 找不到 API 时：宁可在该组件源码里找等价能力，也不要凭 React / CSS / 旧版 GPUI 经验“推断”一个方法名。

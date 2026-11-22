@@ -2,7 +2,7 @@
 
 > 对应原型：`prototype/plugin-manager.html`（双承载：左 Dock 紧凑管理行 + 中央整页）。
 > 本文只记 Rust 落地：**文件职责、数据所有权、入口与中央 tab 接线、尺寸/契约、测试与已知缺口**。
-> 视觉与尺寸权威仍是 `../ui/`、`../theme/`；组件选型与 API 以本地 vendor `0.9.0` 为准。
+> 视觉与尺寸权威仍是 `../ui/`、`../theme/`；组件选型与 API 以本地 vendor **`0.10.0`** 为准（`vendor/gpui-base` + `vendor/gpui-component`，2026-11-22 升级）。
 
 ---
 

@@ -2,9 +2,9 @@
 
 ## GPUI-kit 查询必须用本地 MCP 索引（禁止联网）
 
-本工作区对 gpui-kit（当前 vendor 为 `0.9.0`，即 `GPUI-kit 0.9.x`）的组件/API 查询有**强制约束**：
+本工作区对 gpui-kit（当前 vendor 为 **`0.10.0`**，即 `GPUI-kit 0.10.x`；2026-11-22 由 0.9.0 升级，差异见 `docs/architecture/dependencies/core-packages-2026-11-22-upgrade-assessment.md` §2/§11）的组件/API 查询有**强制约束**：
 
-1. **查询 gpui-kit 一律走本地 MCP 索引**，不得使用 `fetch` / 浏览器 / 任何联网方式查询 gpui-kit 组件用法。GPUI-kit 全部源码（0.7.1/0.7.2/0.7.3/0.8.0）已本地索引，权威性高于任何在线文档。
+1. **查询 gpui-kit 一律走本地 MCP 索引**，不得使用 `fetch` / 浏览器 / 任何联网方式查询 gpui-kit 组件用法。GPUI-kit 全部源码（0.7.1/0.7.2/0.7.3/0.8.0）已本地索引，权威性高于任何在线文档；**索引未覆盖 0.9.x / 0.10.0 时，以 `vendor/gpui-base`、`vendor/gpui-component` 源码为准**（这两份是 0.10.0 发布包 + 项目私有 patch，与 `Cargo.lock` 一致）。
 2. 可用的 MCP 工具（按场景选用）：
    - `gpuikit_search_graph` / `gpuikit_search_code`：按名字/关键词找符号
    - `gpuikit_get_code_snippet`：读符号源码（含邻居/大纲）

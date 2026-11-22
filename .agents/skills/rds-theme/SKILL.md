@@ -5,14 +5,20 @@ description: RdataStation 主题系统：明暗配色 token 对照、产品语�
 
 # RdataStation 主题系统
 
-> **版本勘误（2026-11-16）**：本仓库 vendor 锁定的 **gpui-kit / gpui-base / gpui-component 均为 0.9.0**
-> （`Cargo.lock` 实测）。下文出现的 `0.7.1` / `0.8.1` 是当时逐项实测留下的记录，**不是当前版本**；
-> 组件是否存在、签名与行为一律以 `vendor/` 下 0.9.0 源码为准，本 skill 与 vendor 冲突时改 skill。
-> 已知 0.9.0 口径差异：`component::IconName` 只是保留的旧子集，完整 Lucide 目录在 `gpui_kit::assets::IconName`
+> **版本勘误（2026-11-22 更新）**：本仓库 vendor 锁定的 **gpui-kit / gpui-base / gpui-component 已升到 0.10.0**
+> （`gpui-fast` 0.1.17、`gpui-pre` 0.3.12；`Cargo.lock` 实测）。下文出现的 `0.6.1` / `0.7.x` / `0.8.x` / `0.9.x`
+> 都是当时逐项实测留下的记录，**不是当前版本**；组件是否存在、签名与行为一律以 `vendor/` 下 0.10.0 源码为准，
+> 本 skill 与 vendor 冲突时改 skill。
+>
+> 0.9.x → 0.10.0 必记两条：① `ThemeConfigColors` 键数 140 → **141**（新增 `list.highlight.foreground`），
+> 改主题资产前先跑 `python tools/gen_theme_keys.py`，`crates/ui_guard/tests/workspace_ui_contract.rs` 守卫常量同步 141；
+> ② 未被失效的保留子树在 `window.draw` 时被**原样重放**（不重跑 `render`/`paint`），改完状态要断渲染必须先 `window.refresh()`。
+> 差异全量见 `docs/architecture/dependencies/core-packages-2026-11-22-upgrade-assessment.md` §2 / §11。
+> 另：`component::IconName` 仍只是保留的旧子集，完整 Lucide 目录在 `gpui_kit::assets::IconName`
 > （`Icon::new` 两种都收，经 `impl<T: IconNamed> From<T> for Icon`）。
 
 
-设计文档：`docs/architecture/theme/theme-design.md`（设计意图）；**色值权威来源：`docs/architecture/theme/theme-tokens-complete.md`（140/140 全量色板，冲突以它为准）**；色卡预览：`docs/architecture/theme/theme-preview.html`。
+设计文档：`docs/architecture/theme/theme-design.md`（设计意图）；**色值权威来源：`docs/architecture/theme/theme-tokens-complete.md`（明暗各 140 个已配 token / schema 现有 141 键，冲突以它为准）**；色卡预览：`docs/architecture/theme/theme-preview.html`。
 
 ## 布局灰度分层（核心骨架）
 
@@ -34,7 +40,7 @@ description: RdataStation 主题系统：明暗配色 token 对照、产品语�
 
 ## 取色规则（硬约束）
 
-- 标准字段：`theme.colors.<字段>`（`title_bar` / `title_bar_border` / `sidebar` / `sidebar_accent` / `border` / `background` / `popover` / `overlay` / `primary` 等，字段名对齐 gpui-kit 0.7.1 `ThemeColor`——0.6.1 → 0.7.0 字段集无变化（2026-10-02 实测）、0.7.0 → 0.7.1 亦无变化（141 字段逐项对比，2026-10-11 实测））
+- 标准字段：`theme.colors.<字段>`（`title_bar` / `title_bar_border` / `sidebar` / `sidebar_accent` / `border` / `background` / `popover` / `overlay` / `primary` 等，字段名对齐 gpui-kit `ThemeConfigColors`——0.6.1 → 0.7.0 字段集无变化（2026-10-02 实测）、0.7.0 → 0.7.1 亦无变化（2026-10-11 实测）；**当前 0.10.0 为 141 键**，0.9.x → 0.10.0 新增 `list.highlight.foreground`）
 - 无专用字段的产品角色 → 产品语义 token（代码零裸色值）：
 
 | 产品角色 | Dark | Light | 消费方 |
@@ -87,7 +93,7 @@ settings::product_tokens::get(cx).search_match_background(cx.theme())
 
 - 新增颜色一律先确认主题 JSON 已定义，代码零 hex
 - 明暗切换后对照 `theme-preview.html` 核对：文字对比度（≥ 4.5:1）、选中态、hover、Quick Open 弹层
-- **改色后跑** `python tools/theme_audit.py`：校验 140/140 覆盖、对比度（**含 product-tokens 的 9 个产品角色**）、`clamp_alpha` 合规（选中态 α 超 0.2 会被 schema 静默压缩，表现为"选中看不见"）
+- **改色后跑** `python tools/theme_audit.py`：校验 schema 全部键覆盖（0.10.0 起 **141 键**，当前 `assets/themes/rds-theme.json` 缺 `list.highlight.foreground`，会报「已定义 140 / 141」）、对比度（**含 product-tokens 的 9 个产品角色**）、`clamp_alpha` 合规（选中态 α 超 0.2 会被 schema 静默压缩，表现为"选中看不见"）
 - **改任何 crate 的视图代码后跑** `cargo test -p rds-ui-guard`：全工作区守门（25 个 crate，不只 workbench/insight）。口径是「冻结基线、只拦新增」——存量命中登记在 `BASELINE` 里（多为 `ui.rs` 的合法常量定义），**命中数上升即失败**，新增豁免必须同步上调基线并写明理由
 - **gpui-kit 升级后跑** `python tools/gen_theme_keys.py`：重建 `assets/themes/theme-keys.json`（启动期键名白名单）。键名写错是静默失败（无 `deny_unknown_fields`），未知键会让该 token 回退默认蓝主题
 - `overlay` 是**一键两用**（模态遮罩 + Quick Open 遮罩，无 `scrim` 键可拆档），改它前先看色板 §4.1

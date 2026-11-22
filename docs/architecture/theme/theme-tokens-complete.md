@@ -1,8 +1,19 @@
 # RdataStation 全量主题色板（RDS Light / RDS Dark）
 
-> 状态：**已落地** · 资产 `assets/themes/rds-theme.json`（明暗各 140/140 token）· 校验脚本 `tools/theme_audit.py` · 预览页生成 `tools/gen_theme_preview.py`
-> 技术栈：gpui-kit 0.8.1，字段名与 JSON 键名逐项对齐 `vendor/gpui-component/src/theme/schema.rs::ThemeConfigColors`（140 个可配键）
+> 状态：**已落地** · 资产 `assets/themes/rds-theme.json`（明暗各 140 个已配 token / schema 现有 141 键）· 校验脚本 `tools/theme_audit.py` · 预览页生成 `tools/gen_theme_preview.py`
+> 技术栈：**gpui-kit 0.10.0**（2026-11-22 由 0.9.x 升级），字段名与 JSON 键名逐项对齐 `vendor/gpui-component/src/theme/schema.rs::ThemeConfigColors`
 > 本文件是**色值权威来源**；`theme-design.md` 保留设计意图说明，凡与本文件冲突以本文件为准。
+
+> **2026-11-22 勘误（gpui-kit 0.10.0 升级）**：`ThemeConfigColors` 键数 **140 → 141**，
+> 新增键 **`list.highlight.foreground`**（列表高亮行的前景色）。实测 `python tools/theme_audit.py`：
+> `[schema] 可配键总数: 141`，RDS Light / RDS Dark 均「已定义 140 / 141，缺失 1：`list.highlight.foreground`，未知键 0」。
+>
+> 因此：
+> - 下文所有「140/140」「140 键」表述的真实含义是**当时 schema 的全部键**，现在等价于「141 键中的 140 个」；
+> - `assets/themes/theme-keys.json` 已由 `python tools/gen_theme_keys.py` 重建为 **141 键**（启动期键名白名单），
+>   `crates/ui_guard/tests/workspace_ui_contract.rs` 的守卫常量同步为 141；
+> - `assets/themes/rds-theme.json` **没有**给第 141 键赋值 —— 未赋值即走上游默认色。要不要为 RDS Light/Dark 各配一个值，
+>   属设计决策（会改变列表高亮的观感），登记在 `docs/architecture/dependencies/core-packages-2026-11-22-upgrade-assessment.md` §11.6-2 / §11.7-4。
 
 ---
 

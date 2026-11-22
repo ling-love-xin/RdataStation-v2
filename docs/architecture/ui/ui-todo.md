@@ -63,3 +63,21 @@
 （`bookmarks_project_into_gutter_markers`、`gutter_click_toggles_bookmark_and_shift_opens_note`、
 `bookmark_hover_note_setting_off_strips_note`），折叠候选回灌也已绿
 （`folding_candidates_are_fed_after_the_gutter_restored`）。
+
+## 六、待人工目视验收（gpui-kit 0.10.0 并入后，2026-11-22）
+
+> 背景：`upgrade/core-2026-11-22` 把 gpui-kit 家族升到 0.10.0（`gpui-fast` 0.1.17）。
+> 自动化侧见 `docs/architecture/dependencies/core-packages-2026-11-22-upgrade-assessment.md` §11.5；
+> 下面 5 项**只有肉眼能判**，尤其第 2 项是「0.10.0 让 `min_w` 不再在横向滚动容器里撑出溢出」这个**行为差异**，
+> 对应的契约用例已故意 `#[ignore]`（`tree_vertical_wheel_does_not_drift_the_horizontal_shell`），
+> 结果决定是「改断言接受新语义」还是「换装配手段保住横滚」。
+>
+> 跑法：`target\debug\rds-app.exe` 起应用，先走编辑器（书签 / 折叠），再把导航树面板拖到很窄。
+
+| 状态 | 编号 | 检查项 | 通过判据 | 关联证据 |
+|---|---|---|---|---|
+| ⬜ | W-1 | 导航树面板拖窄后能否横滚 | 面板拖到 ~320px：右对齐列是否还能横向滚动看到；若无横向滚动条出现，记下"接受新语义" | §11.6-4、`nav_view::tests::tree_vertical_wheel_does_not_drift_the_horizontal_shell`（`#[ignore]`） |
+| ⬜ | W-2 | gutter 书签图标与折叠箭头重叠时的 z 序 | 同一行既有书签又有折叠箭头：两者都不被遮，点击热区不互抢 | `element.rs::paint_gutter_markers`（在 `paint_fold_icons` 之后） |
+| ⬜ | W-3 | 折叠行占位符与书签列的行高对齐 | 折叠行占位符（`FoldPlaceholderRenderer`）与书签列同时出现时，行高一致、不出现 1px 错位 | 上游 0.10.0 新增折叠占位渲染 |
+| ⬜ | W-4 | `list.highlight.foreground` 未配值的观感 | 列表高亮行前景色走上游默认色，RDS Light/Dark 下都读得清、不与选中底色打架 | `python tools/theme_audit.py` 报「已定义 140 / 141」；§11.6-2 |
+| ⬜ | W-5 | 0.10.0 后编辑器光标 / 选区无回归 | 中文输入法组字、双击/三击选词、列块选择（我们私有 patch 的 `select_columnar_block`）表现与 0.9.0 一致 | §11.7、`vendor/gpui-base` patch 三方合并结果 |

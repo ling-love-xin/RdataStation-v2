@@ -368,3 +368,149 @@ git branch -D upgrade/core-2026-11-22
 
 注意：隔离 worktree 内的 `third_party/duckdb/1.5.6/`、`target/`、`.rds/tmp/` 都是 gitignore 目录，
 删除 worktree 时它们同时消失，不会影响主工作区。
+
+---
+
+## 12. 合流记录（2026-11-22 晚，`upgrade/core-2026-11-22` → `main`）
+
+### 12.1 合流前 main 又前进了 17 个提交
+
+`main` 从 §11 验证时的 `96a6893f` 走到 **`02a51b40`**（17 个提交），期间又动了几处与升级面相邻的地方：
+
+| 方向 | 提交（节选） | 与本升级的关系 |
+| --- | --- | --- |
+| 结果面板第 76–81 批 | `3ae1c3a3` 选列/选行、`70a266cb` 切焦点、`fd407034` 隐藏/显示列、`c074ff56` 复制列名、`2788795e` 筛选设置、`6dfdbf5c` ESC 收起浮层 | 走的是 `gpui-base` 的 keystroke / Tab 装配，**0.10.0 的帧语义改动会波及这些新用例** |
+| 通知中心重做 | `1fab7d89`（相对时间 / 节流落盘 / 替换式合并 / 单条已读） | 与升级面无关，但引入了 `crates/notification` 803 行新代码 |
+| SQL 排版引擎 | `51b18592` 换 `lax-sql 0.3.0`（设置项 12 项） | **直接撞在 `Cargo.toml` 上**（本轮唯一冲突点）；语义仍走 `sqlglot-rust` |
+| 文档 | 第 76–81 批文档 + `docs/architecture/sql/...` 新增 | 与本文 §11 记录共存 |
+
+### 12.2 合并过程与唯一冲突
+
+`git merge main`：271 个文件差异，**唯一冲突 `Cargo.toml`**（`crates/result_panel/src/panel/tests.rs` 自动合并成功）。
+
+冲突内容与解决口径：
+
+```
+HEAD(分支) sqlglot-rust = "=0.11.2"
+main        sqlglot-rust = "=0.11.1"
+main      + lax-sql      = "=0.3.0"   （SQL 排版引擎，lossless）
+main      + dprint-core  = "=0.67.4"  （lax 的配置类型直接引用它的 NewLineKind）
+```
+
+取「**保留 0.11.2（§5 已实测通过）+ 并入 main 的三个新依赖**」。理由：`sqlglot-rust` 与 `lax-sql` 职责不重叠
+（语义 vs 排版，见 `crates/sql/src/formatter.rs` 头部），没有版本耦合，两边的收益可以叠加。
+
+`Cargo.lock` 由 git 自动合并后，再用 `cargo metadata --format-version 1 --no-deps` 让它定型（本次 lock 变动 41 增 / 7 删）。
+合并提交 **`41622794`**。
+
+### 12.3 版本落点（合流后 `Cargo.lock` 实测）
+
+| 包 | 版本 | 相对 main |
+| --- | --- | --- |
+| `gpui-kit` / `gpui-base` / `gpui-component` / `gpui-kit-assets` | **0.10.0** | ↑ 0.9.0 |
+| `gpui-fast` | **0.1.17** | ↑ 0.1.13 |
+| `gpui-pre` | **0.3.12** | ↑ 0.3.11 |
+| `sqlglot-rust` | **0.11.2** | ↑ 0.11.1 |
+| `lax-sql` / `dprint-core` | **0.3.0** / 0.67.4 | 与 main 一致（未动） |
+| `rustls-webpki` | **0.103.17** | ↑ 0.103.15 |
+| `duckdb` / `libduckdb-sys` | **1.10506.1**（DuckDB 1.5.6） | 未动（按 §4 结论） |
+| `arrow` | **58.4.0** | 未动（按 §4 结论） |
+
+### 12.4 合流后验证
+
+| 验证项 | 命令 | 结果 |
+| --- | --- | --- |
+| 全工作区编译 | `cargo check --workspace -j 1`（`RUST_MIN_STACK=1GB`、`CARGO_INCREMENTAL=0`） | ✅ 4m25s，**0 error / 3 warning**（3 条都是 main 侧 `rds-notification` 的 `write_history*` dead_code，不是升级引入） |
+| 全量测试 | `cargo test --workspace -j 1 --no-fail-fast` | 见下方「测试结果」 |
+
+**测试结果**：`cargo test --workspace -j 1 --no-fail-fast` → **155 个 test target 全 ok、0 failed、
+4617 passed / 35 ignored**（含本文 §11.6-4 那条故意 `#[ignore]` 的导航树横滚用例，其余 ignored 为既有/上游 ignore）。
+与 §11.8 合流前的「155 target 全绿」一致：main 新增的 17 个提交（结果面板第 76–81 批 + 通知中心重做 + `lax-sql`）**在 0.10.0 上同样全绿**，
+0.10.0 的保留帧语义没有打到这批新用例。日志 `.rds/tmp/test_merged2.log`（gitignore）。
+
+### 12.5 本次一并同步的文档与 skill（清单）
+
+代码改了就必须把「当前事实」一起改，否则下一个人（或下一次的我）会按旧口径干活。本次同步范围：
+
+| 文件 | 改了什么 |
+| --- | --- |
+| 本文 | 新增 §12（合流记录）、§13（DuckDB 2.0 切换时间表） |
+| `README.md` | 技术栈表 4 行：UI `0.8.1 → 0.10.0`、分析引擎 `1.5.5 → 1.5.6`（crate `1.10505.0 → 1.10506.1`）、SQL 工具链 `sqlglot-rust 0.10.33 → 0.11.2` + 补 `lax-sql 0.3.0` |
+| `docs/architecture/dependencies/dependency-strategy.md` | R4 例外表：`gpui-kit` 0.10.0、`sqlglot-rust` 0.11.2、**新增 `lax-sql` 行**、`arrow` 行补「DuckDB 2.0 线要 arrow 60」；待办表 4 行；§3 之后补「2026-11-22 执行结果」 |
+| `docs/architecture/theme/theme-tokens-complete.md` | 顶部状态行 + **新增 2026-11-22 勘误段**：141 键、资产缺 `list.highlight.foreground`、`theme-keys.json` 已 141、资产未配值属设计决策 |
+| `docs/architecture/ui/theme-spec.md` | 顶部「基于 gpui-kit 0.8.1」→ 0.10.0 + 141 键 |
+| `docs/architecture/theme/theme-design.md` | 技术栈行 → 0.10.0（设计意图仍标注 0.7.1 时代定下） |
+| `docs/architecture/layout/layout-design.md` | 技术栈行 → 当前 0.10.0（布局决策标注 0.7.1 时代定下） |
+| `docs/architecture/plugin/plugin-manager-ui.md` | 「vendor 0.9.0 为准」→ 0.10.0 |
+| `docs/architecture/ui/ui-todo.md` | **新增 §六**：0.10.0 的 5 项目视验收（W-1~W-5），含导航树横滚那条待定案项 |
+| `docs/architecture/editor/result-panel.md` | 技术栈行 `0.8.0 → 0.10.0`（并指向 §11 的帧语义） |
+| `docs/architecture/README.md` | 索引补登本文（`dependencies/` 段）—— 注意该文件同时被用户 WIP 改过，合流时需人工核对这一行 |
+| `AGENTS.md` | 「当前 vendor 0.9.0」→ **0.10.0**；并补「MCP 索引未覆盖 0.9.x/0.10.0 时以 vendor 源码为准」 |
+| `.agents/skills/gpui-kit-dev/SKILL.md` | frontmatter description、标题、勘误块（含 0.10.0 四条口径）、「查 API」权威源段、组件选型表**补 0.10.0 新增模块 `grid_layout`**、测试段新增「改完状态要 `window.refresh()` 再 draw」 |
+| `.agents/skills/rds-architecture/SKILL.md` | 勘误块；分层表 gpui-kit 行（0.10.0 + vendor 实测 55 顶层模块 / 29 子目录） |
+| `.agents/skills/rds-design/SKILL.md` | 勘误块 |
+| `.agents/skills/rds-theme/SKILL.md` | 勘误块；「140/140 全量色板」→「140 已配 / 141 键」；`theme_audit.py` 口径改 141；`ThemeColor` 行补 141 键 |
+| `.agents/skills/rds-ui-spec/SKILL.md` | 勘误块；组件规格总表标题加「0.10.0 未逐项复核」免责与回写口径 |
+| `.agents/skills/rds-layout/SKILL.md` | 边栏三模式标题去掉版本号，补「0.10.0 下 `set_dock` / `toggle_dock` / `set_dock_size` 仍在用且编译通过」 |
+
+**有意不改的**：`docs/architecture/**` 里大量「技术栈：gpui-kit 0.7.1」的原型/开发计划文档 —— 那是**当时锁定版本的事实陈述**，
+改成 0.10.0 会让历史记录失真。统一口径是：这类文档只作为历史决策依据读，**当前版本一律以 `README.md` 技术栈表、
+`dependency-strategy.md` R4 表、`AGENTS.md` 与 `Cargo.lock` 为准**，版本差异看本文 §11。
+
+### 12.6 main 工作区的 24 项未提交改动（合流的前置条件）
+
+`main` 工作区当时有用户自己的 **24 项**未提交改动（19 项 `M` + 5 项 `??`，含 `crates/project` / `crates/settings` /
+`crates/sql` / `crates/workbench` 的版本徽章特性与文档），其中 **5 个文件**与本次合流的改动面重叠：
+
+`crates/settings/src/registry/mod.rs`、`crates/settings/src/service/mod.rs`、`crates/workbench/src/view/actions.rs`、
+`docs/architecture/README.md`、`docs/architecture/settings/settings-architecture.md`。
+
+这 5 个文件在 main 上被改过、在分支上也被改过（分支侧是 gpui-kit 0.10.0 带来的装配与注册表调整）。
+处置口径：**不合流就不丢**；要合流必须先让 main 干净 —— `git stash push -u`（带唯一 tag）→ `merge --ff-only`
+（分支已包含 main 全部提交，故可快进）→ `stash pop`；`pop` 若冲突就**立刻停下并保留 stash**，不丢用户 WIP。
+
+---
+
+## 13. DuckDB 2.0 的切换时间表（2026-11-22 结论）
+
+用户问「什么时候能升 DuckDB 2.0」。结论：**不建议现在切，目标窗口 2027 Q1，硬 deadline 2027-03**。
+
+### 13.1 三条决定时间的硬约束
+
+1. **1.5 LTS 支持到 2027-03**（1.4 LTS 已于 2026-11-17 EOL），官方迁移页同时写明「mission-critical 工作负载建议等后续 patch」。
+2. **依赖死锁**：`duckdb 1.20001.0`（DuckDB 2.0.1，2026-11-20）把 `arrow ^60` 写成**非可选**依赖；我们现在的
+   `duckdb 1.10506.1` 要 `arrow ^58`（caret 即 `>=58,<59`）。**只能一步到位，不存在先升 arrow 再升 duckdb 的路径。**
+3. **存储格式单向**：2.0 默认 storage version **69**，2.0 之前读不了 2.0 写出的库；我们有一个持久库
+   `analytics.duckdb`（`DuckDBManager` 独占写连接），还有用户自己的 `.duckdb` 文件要 `ATTACH`。
+
+### 13.2 arrow 58 → 60 的实际成本（已核实，比预想低）
+
+| 核对项 | 结论 | 依据 |
+| --- | --- | --- |
+| 引用面 | 26 个 `.rs` / 116 处 / 18 条符号路径（`RecordBatch` 16、`DataType` 13、`StringArray` 10…） | `probe_arrow_surface.py` |
+| 符号存在性 | `StringArray` / `LargeStringArray` / `BooleanArray` / `Int64Array` / `Date32Array` / `Decimal128Array` / `ListArray` / `compute::cast` / `ipc::reader·writer` **全部仍在** | 解包 `arrow-60.2.0` / `arrow-array-60.2.0` / `arrow-schema-60.2.0` 逐项 grep |
+| 枚举变体 | `DataType` **41 → 41**、`TimeUnit` 4 → 4、`IntervalUnit` 3 → 3，**零增删** | 两份 `arrow-schema` Cargo 包体枚举体解析比对 |
+| default features | 58 与 60 均为 `["csv","ipc","json"]`，`ipc` 仍默认开启 | 两侧 `Cargo.toml` `[features]` |
+| 剩余风险 | arrow 60「移除长期废弃 API + `From<Vec<_>>` → `TryFrom`」是否命中我们的 116 处，**只能靠一次 `cargo check` 定论**（约 15 分钟） | arrow-rs 60.0.0 公告 |
+
+### 13.3 2.0 的破坏面（与本项目用法绑定）
+
+- 语义级、**静默改结果**：`~` / `!~` 变部分正则匹配、阶乘 `!` 绑定更紧、`X'…'` / `B'…'` 改产 `BLOB` / `BITSTRING`。
+- 运行期才炸：整数除零 / 取模 `//` `%` 由返 NULL 改**报错**、`MERGE INTO` 多源匹配报错、事务内任何错误直接中止事务。
+- 类型系统：未类型化 `NULL` 现在保持 `NULL` 类型（`CREATE TABLE … AS SELECT NULL AS x` 建出 "NULL" 列）。
+- 生态：**C API v2「尚未稳定」**、ICU 移出核心构建（时区/日历/排序改由 `icu` 扩展承担）。
+- 与本项目耦合最紧的两条：`analytics.duckdb` 的存储版本、以及 `ATTACH … (TYPE mysql|postgres|sqlite|duckdb)` 联邦加速用到的扩展。
+
+### 13.4 建议路线（带闸门）
+
+- **P0（现在～12 月中，不动版本号）**：① 定 `analytics.duckdb` 的存储策略（`storage_compatibility_version` / `ATTACH … STORAGE_VERSION`
+  保 v1.5.6 可读，或改内存库 + 关闭导出）；② 把上面 13.3 写成 SQL 回归清单并接到 `insight` / EDA / 结果面板的分析 SQL 上；
+  ③ 内核管理器加「DuckDB 版本能力探测」，2.0 专属语法按版本开关；④ 建 A/B 基准集。
+- **P1（12 月中～1 月，隔离分支，不合并）**：换 `libduckdb 1.20001.0`（`tools/fetch-duckdb.sh`）+ arrow 60，只跑
+  `rds-engine` / `rds-mock` / `rds-sql` / `rds-insight`，产出「编译错误数 / 测试红数 / 基准对比」三张表。
+- **P2（2027-01～03，正式切换）**：闸门 = 2.0.x 修到 **.3** 且无新回归 + P1 三张表全绿 + 基准收益达阈值 + 回退方案就绪。
+  过闸就切；过不了就停在 1.5 LTS，但 2027-03 之后是**无补丁裸奔**，届时必须做决定。
+
+**口径声明**：本节的收益部分全部来自官方发布说明，**没有任何本项目 A/B 数据**。在跑出基准之前，不许对外宣称
+「2.0 让我们的分析更快」。另一方面，`VARIANT` / 嵌套 schema / `CONNECT`（quack 服务端）属**功能型**收益，
+应单独立项评估，不应捆绑在「内核升级」里一起做。

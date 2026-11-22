@@ -31,10 +31,11 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 
 | 依赖 | 约束 | 原因 |
 | --- | --- | --- |
-| `gpui-kit` | `0.9.0` + `features = ["gpui-fast"]` | 与 gpui 版本强绑定：`gpui-kit` / `gpui-base` / `gpui-component` / `gpui-kit-assets` **必须同版本**（门面与内部错配会出问题），随 GPUI-kit 发布节奏整套升（当前 0.9.0，2026-11-08 由 0.8.1 升入，见 `docs/architecture/ui/gpui-kit-0.9.0-upgrade-report.md`、`docs/architecture/ui/gpui-kit-0.8.0-upgrade-report.md` 与 `docs/architecture/dependencies/duckdb-2.0-gpui-kit-0.8.1-upgrade-assessment.md`；`gpui-base` / `gpui-component` 两个包走 `vendor/` 私有 patch，见根 `Cargo.toml` `[patch.crates-io]`）。写法是 caret 约束，实际生效版本看 `Cargo.lock`。`gpui-fast` 是**换渲染内核**而非开关：`gpui-fast*` 与 `gpui-pre*` 两套核心同编；`gpui-fast` 自身不嵌 Windows manifest，本项目由 `gpui-pre` 的默认 `windows-manifest` 提供（不要在应用侧再嵌，见 §4 的 0.9.0 记录） |
+| `gpui-kit` | `0.10.0` + `features = ["gpui-fast"]` | 与 gpui 版本强绑定：`gpui-kit` / `gpui-base` / `gpui-component` / `gpui-kit-assets` **必须同版本**（门面与内部错配会出问题），随 GPUI-kit 发布节奏整套升（当前 **0.10.0**，2026-11-22 由 0.9.0 升入，见 `docs/architecture/dependencies/core-packages-2026-11-22-upgrade-assessment.md` §11；历史线见 `docs/architecture/ui/gpui-kit-0.9.0-upgrade-report.md`、`docs/architecture/ui/gpui-kit-0.8.0-upgrade-report.md`；`gpui-base` / `gpui-component` 两个包走 `vendor/` 私有 patch，见根 `Cargo.toml` `[patch.crates-io]`）。写法是 caret 约束，实际生效版本看 `Cargo.lock`。`gpui-fast` 是**换渲染内核**而非开关：`gpui-fast*` 与 `gpui-pre*` 两套核心同编；`gpui-fast` 自身不嵌 Windows manifest，本项目由 `gpui-pre` 的默认 `windows-manifest` 提供（不要在应用侧再嵌，见 §4 的 0.9.0 记录） |
 | `specta` | `=2.0.0-rc.25` | rc 阶段，11 个 crate 共用；升级需同步核对类型生成链路 |
-| `sqlglot-rust` | `=0.11.1` | SQL 转译/生成行为对版本敏感（业务关键，见 §5），升级需跑 SQL 回归（0.10.29 → 0.10.33 于 2026-10-24，修「单条转译静默截断」；0.10.33 → 0.11.1 于 2026-11-08，代码仅 2 处补 CTAS 字段） |
-| `arrow` | `58.4.0` | 主版本跟随 `duckdb`：两端之间传 `RecordBatch`，必须是同一 arrow，不能单独升 |
+| `sqlglot-rust` | `=0.11.2` | SQL 转译/生成行为对版本敏感（业务关键，见 §5），升级需跑 SQL 回归（0.10.29 → 0.10.33 于 2026-10-24，修「单条转译静默截断」；0.10.33 → 0.11.1 于 2026-11-08，代码仅 2 处补 CTAS 字段；0.11.1 → **0.11.2** 于 2026-11-22） |
+| `lax-sql` | `=0.3.0` | SQL **排版**引擎（lossless：只调空白，永不拒绝输入），与 `sqlglot-rust` 分工见 `crates/sql/src/formatter.rs` 头部；精确锁定是因为排版输出稳定是设置页预览一致性与幂等测试的前提。配置类型直接引用 `dprint-core` 的 `NewLineKind`，故连带 `=0.67.4` |
+| `arrow` | `58.4.0` | 主版本跟随 `duckdb`：两端之间传 `RecordBatch`，必须是同一 arrow，不能单独升（`duckdb 1.20001.0` 起其 `arrow ^60` 是非可选依赖，升 2.0 线必须与 arrow 60 同批，见 `core-packages-2026-11-22-upgrade-assessment.md` §4） |
 
 ## 2. 升级流程
 
@@ -133,10 +134,10 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 
 | 依赖 | 当前 | 最新可用（2026-11-07 核实） | 代码使用点 | 备注 |
 | --- | --- | --- | --- | --- |
-| `duckdb` | `=1.10506.1`（DuckDB 1.5.6） | ✅ 已升（2026-11-08）；2.0 线 `1.20000.1` 暂缓 | `crates/engine`（`DUCKDB_LIB_DIR` 动态链接） | 1.5 线内 patch 升完，`arrow` 仍 58.4.0 未动；**必须 `=` 精确锁定**（caret 会被解析到 `1.20000.1` 并强拉 `arrow 60`）；2.0 线要 `arrow ^60` 且有存储格式单向兼容，见 `duckdb-2.0-gpui-kit-0.8.1-upgrade-assessment.md`，继续暂缓 |
-| `arrow` | 58.4.0 | 60.1.0 | — | **不可单独升**，须与 `duckdb` 同步（见 R4）；只有上 DuckDB 2.0 线才需要 60 |
-| `gpui-kit` | 0.9.0 + `features = ["gpui-fast"]` | ✅ 已升（2026-11-08） | UI 全仓 | 编译全绿（含开 fast 后）；剩运行时回归与滚动性能基线，见 `gpui-kit-0.9.0-upgrade-report.md` §7 |
-| `sqlglot-rust` | `=0.11.1` | ✅ 已升（2026-11-08） | `crates/sql` | 跨 0.10 → 0.11，代码仅 2 处补 CTAS 新字段；`cargo test -p rds-sql` 与基线逐项一致，见 `sqlglot-rust-0.11.1-upgrade-report.md` |
+| `duckdb` | `=1.10506.1`（DuckDB 1.5.6） | ✅ 已升（2026-11-08）；2.0 线已到 `1.20001.0`（DuckDB 2.0.1，2026-11-20），**暂缓** | `crates/engine`（`DUCKDB_LIB_DIR` 动态链接） | 1.5 线内 patch 升完，`arrow` 仍 58.4.0 未动；**必须 `=` 精确锁定**（caret 会被解析到 `1.20001.0` 并强拉 `arrow 60`）；2.0 线要 `arrow ^60` 且有存储格式单向兼容（默认 storage version 69，旧版读不了），见 `core-packages-2026-11-22-upgrade-assessment.md` §4 与 §13 的切换时间表 |
+| `arrow` | 58.4.0 | 60.2.0 | — | **不可单独升**，须与 `duckdb` 同步（见 R4）；只有上 DuckDB 2.0 线才需要 60。已核对：58→60 我们的 116 处引用符号全在、`DataType` 41 个变体零增删、default features 未变 |
+| `gpui-kit` | `0.10.0` + `features = ["gpui-fast"]` | ✅ 已升（2026-11-22，隔离分支 `upgrade/core-2026-11-22`） | UI 全仓 | `cargo check --workspace` 0 error；`cargo test --workspace` 155 target 全 ok / 4617 passed / 0 failed；剩目视验收与 clippy，见 `core-packages-2026-11-22-upgrade-assessment.md` §11 / §12 |
+| `sqlglot-rust` | `=0.11.2` | ✅ 已升（2026-11-22） | `crates/sql` | 与 `lax-sql 0.3.0` 同批（语义走 sqlglot、排版走 lax）；854 条 SQL 用例与基线一致，见 `core-packages-2026-11-22-upgrade-assessment.md` §5 / §11.5 |
 
 （驱动层（`rusqlite` / `sqlx` / `mysql_async`）、连接层（`russh`）已升到可用的最新版；SQL 引擎与 UI 家族的上游新版本见上表。）
 
@@ -145,6 +146,11 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 > `gpui-kit` 已发 `0.9.1` / `0.10.0`（连带 `gpui-fast` `0.1.17`、`gpui-pre` `0.3.12`）、
 > `sqlglot-rust` 到 `0.11.2`、`duckdb` 2.0 线到 `1.20001.0`。该文给出逐包的升/不升判断、
 > 前置条件，以及 `rustls-webpki` `0.103.15` → `0.103.17` 的 CVE 侧发现。
+>
+> **执行结果（2026-11-22）**：`gpui-kit` 家族已升 0.10.0、`sqlglot-rust` 0.11.2、`rustls-webpki` 0.103.17；
+> `duckdb` / `arrow` 按该文 §4 结论**不动**（DuckDB 2.0 线要 `arrow ^60` 且存储格式单向兼容，
+> 切换窗口与前置条件见该文 §13）。升级在隔离 worktree（`RdataStation-v2-core-1122`）完成，
+> 全程记录见该文 §11，合流记录见 §12。
 
 ### 4.1 并入主线（2026-11-08）
 

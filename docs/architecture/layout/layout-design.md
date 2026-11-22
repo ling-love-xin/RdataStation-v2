@@ -1,7 +1,7 @@
 # RdataStation v2 布局实现方案
 
 > 状态：已与用户确认（v5 示意）· 关联文件：`docs/architecture/layout/layout-proposal.html`
-> 技术栈：gpui-kit 0.7.1（聚合包：`gpui_kit::*` = gpui-pre / `gpui_kit::base` = gpui-base / `gpui_kit::component` = gpui-component / `gpui_kit::assets`）
+> 技术栈：gpui-kit（聚合包：`gpui_kit::*` = gpui-pre / `gpui_kit::base` = gpui-base / `gpui_kit::component` = gpui-component / `gpui_kit::assets`）。**本文的五段布局与 Dock 装配决策在 0.7.1 时代定下；当前 vendor 为 0.10.0**（2026-11-22 升级，`window.refresh()` 帧语义与 141 主题键见 `docs/architecture/dependencies/core-packages-2026-11-22-upgrade-assessment.md` §11）。下文的 `0.7.1` / `0.9.x` 属当时实测记录。
 > 范围：`crates/workbench` 布局重构 + `crates/settings` 拆分（设置入口归属），不含各 Feature panel 的业务内容（占位先行）
 
 ## 1. 布局总览

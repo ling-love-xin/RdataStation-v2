@@ -99,6 +99,7 @@
 | `mock/mock-showcase.md` | Mock 数据生成**一页看懂（可贴版）** | 关键数字 / 三个高光（不读数据也能像真的 · 生成≠写入 · 护栏在生成前）/ 四个剧本（联调表 · 压测大表 · 多表关系 · 像真的）/ 六阶段与四条出口（mermaid）/ 目录 143 变体 15 分类 / 两处排版 / 关系与多表 / 工作日历 / 三条硬约束与不做的事 / 架构（mermaid，依赖只向下）/ 质量与证据（190+37+5+4+2 与 workbench 12+11+1）|
 | `mock/mock-showcase.html` | Mock 数据生成**一页看懂（视觉版）** | 同一套内容的卡片化排版 + 首屏窗口线框（单表生成 / 多表场景可切）+ 吸顶导航 + 明暗切换；自包含可离线打开，与原型页 / 编辑器宣传页同一套设计语言 |
 | `dependencies/dependency-strategy.md` | 依赖治理 | 版本唯一入口 / 升级流程 / 编译时间手段 / 跨大版本待办 |
+| `dependencies/core-packages-2026-11-22-upgrade-assessment.md` | **核心包升级评估与实测（当前口径）** | §1 结论摘要 / §2-§6 逐包判断（gpui-kit 0.10.0 · gpui-fast · duckdb 2.0 暂缓 · sqlglot 0.11.2 · rustls-webpki）/ §7 执行顺序 / §9 取证命令 / §10 对结果集面板的影响 / **§11 隔离分支实测（编译阶梯 · 验证矩阵 · `window.refresh()` 帧语义 · 141 主题键）/ §12 合流记录与文档-skill 同步清单 / §13 DuckDB 2.0 切换时间表** |
 | `dependencies/duckdb-linking.md` | DuckDB 内核动态链接 | 为什么不再 `bundled`（编译时间 / 内存 / 体积）/ 库的落位（`third_party/duckdb/<版本>`，gitignore）/ 取库脚本 / 运行时 dll 拷贝 / 升级步骤与排错 / **§9 `target/` 体积治理（60 GB 提醒 + `--clean`）** |
 | `release/release-pipeline.md` | 发布流水线 | 打 `v*` 标签 → 四平台云端构建 → 打包（exe + DuckDB 动态库 + `assets/`）→ Release Assets：触发与产物矩阵 / 包内结构与「谁会去读它」/ 维护者操作步骤 / 平台限制（未签名、无 AppImage）/ 设计取舍 / 故障排查 / **PR 与 main 的编译门禁（§9）** / 实现位置映射 |
 | `federation/README.md` | 联邦查询**模块入口** | **先读这个**：一句话定位（多源挂进同一条 DuckDB 会话的只读跨源查询）/ 特点速览（只读硬边界 · 联邦 = 连接上的挂载状态 · 主源语义 · 三层策略 · 扩展显式管理 · 状态如实）/ 边界（含不做 ODBC / 不做 ADBC 主干）/ 代码地图 / 改前必守 10 条 / 测试命令 / 文档地图 |

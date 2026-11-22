@@ -5,10 +5,16 @@ description: RdataStation UI 尺寸与颜色约束：rem 尺寸常量（crates/w
 
 # RdataStation UI 规范
 
-> **版本勘误（2026-11-16）**：本仓库 vendor 锁定的 **gpui-kit / gpui-base / gpui-component 均为 0.9.0**
-> （`Cargo.lock` 实测）。下文出现的 `0.7.1` / `0.8.1` 是当时逐项实测留下的记录，**不是当前版本**；
-> 组件是否存在、签名与行为一律以 `vendor/` 下 0.9.0 源码为准，本 skill 与 vendor 冲突时改 skill。
-> 已知 0.9.0 口径差异：`component::IconName` 只是保留的旧子集，完整 Lucide 目录在 `gpui_kit::assets::IconName`
+> **版本勘误（2026-11-22 更新）**：本仓库 vendor 锁定的 **gpui-kit / gpui-base / gpui-component 已升到 0.10.0**
+> （`gpui-fast` 0.1.17、`gpui-pre` 0.3.12；`Cargo.lock` 实测）。下文出现的 `0.6.1` / `0.7.x` / `0.8.x` / `0.9.x`
+> 都是当时逐项实测留下的记录，**不是当前版本**；组件是否存在、签名与行为一律以 `vendor/` 下 0.10.0 源码为准，
+> 本 skill 与 vendor 冲突时改 skill。
+>
+> 0.9.x → 0.10.0 必记两条：① `ThemeConfigColors` 键数 140 → **141**（新增 `list.highlight.foreground`），
+> 改主题资产前先跑 `python tools/gen_theme_keys.py`，`crates/ui_guard/tests/workspace_ui_contract.rs` 守卫常量同步 141；
+> ② 未被失效的保留子树在 `window.draw` 时被**原样重放**（不重跑 `render`/`paint`），改完状态要断渲染必须先 `window.refresh()`。
+> 差异全量见 `docs/architecture/dependencies/core-packages-2026-11-22-upgrade-assessment.md` §2 / §11。
+> 另：`component::IconName` 仍只是保留的旧子集，完整 Lucide 目录在 `gpui_kit::assets::IconName`
 > （`Icon::new` 两种都收，经 `impl<T: IconNamed> From<T> for Icon`）。
 
 
@@ -107,9 +113,12 @@ div().border_b(ui::HAIRLINE)
 
 完整规格表见 `docs/architecture/ui/ui-design-spec.md`。
 
-## 组件规格总表（上游标准组件 · 0.7.1 源码实测）
+## 组件规格总表（上游标准组件 · 0.7.1 源码实测；0.10.0 未逐项复核）
 
-下表是 gpui-kit 0.7.1 标准组件的尺寸档位，全部实测自 vendor 源码（非估计）。
+下表是 gpui-kit **0.7.1** 标准组件的尺寸档位，全部实测自 vendor 源码（非估计）。
+**0.10.0（2026-11-22 升级）尚未对本表逐行重测**：遇到与 vendor 不一致的档位，以 `vendor/gpui-component/src/` 当前源码为准并回写本表
+（0.10.0 的已知变动集中在 gutter / 折叠区、`list.highlight.foreground`、保留帧语义，见
+`docs/architecture/dependencies/core-packages-2026-11-22-upgrade-assessment.md` §11）。
 写视图时**优先用组件的 `Size` API / 档位方法**（`h_8()`、`px_2()`、`text_sm()`、`size_8()`），
 像素值仅作 @16px rem 核对；同一组件内字号、图标、内距、命中区随 Size 一起变。
 
