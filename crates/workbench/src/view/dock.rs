@@ -520,6 +520,9 @@ impl WorkbenchView {
             .occlude()
             .child(lang_switch);
 
+        // 版本信息入口不在标题栏：标题栏已有主题/语言/快速布局 + 三个窗口按钮，
+        // 再塞一个 Info 会挤。入口改到状态栏右端常驻标识（见 `view::actions`）。
+
         // 三栏布局：左右 flex_1 占位对称，Quick Open 严格居中；
         // 右侧窗口控制按钮（─ □ ✕）由 TitleBar 自带渲染，无需自绘。
         TitleBar::new()

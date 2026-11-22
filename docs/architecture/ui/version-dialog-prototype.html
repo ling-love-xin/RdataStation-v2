@@ -1,0 +1,570 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>版本标识 · 弹窗与入口原型</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23BC5340'/%3E%3Cpath d='M9 11h14M9 16h12M9 21h14' stroke='%23fff' stroke-width='2.4' fill='none'/%3E%3C/svg%3E">
+<style>
+:root{
+  --canvas:#EBEBEB; --canvas-ink:#4A4A4A; --dot:#C9C9C9;
+  --bg:#FFFFFF; --fg:#333333; --border:#D4D4D4; --border-soft:#E7E7E7;
+  --primary:#BC5340; --primary-fg:#FFFFFF; --primary-hover:#A8452F;
+  --title:#F8F8F8; --status:#F3F3F3; --sidebar:#F8F8F8; --sidebar-fg:#616161;
+  --muted:#6E6E6E; --muted-bg:#F3F3F3; --group:#F5F5F5; --hover:#F0F0F0;
+  --label-bg:#F5F5F5; --label-fg:#616161;
+  --success:#15803D; --danger:#B91C1C; --warning:#A16207; --info:#1D4ED8;
+  --overlay:rgba(0,0,0,.45); --shadow:0 12px 28px rgba(0,0,0,.18);
+  --radius:6px; --radius-sm:4px;
+  --mono:"Cascadia Mono","Consolas","SF Mono",monospace;
+  --sans:"Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI","PingFang SC",sans-serif;
+}
+html[data-theme="dark"]{
+  --canvas:#0C0C0C; --canvas-ink:#8A8A8A; --dot:#242424;
+  --bg:#1F1F1F; --fg:#CCCCCC; --border:#3C3C3C; --border-soft:#2B2B2B;
+  --primary:#E8846F; --primary-fg:#1E1E1E; --primary-hover:#F5A188;
+  --title:#181818; --status:#181818; --sidebar:#181818; --sidebar-fg:#CCCCCC;
+  --muted:#8A8A8A; --muted-bg:#3A3D41; --group:#171717; --hover:#2A2D2E;
+  --label-bg:#252526; --label-fg:#969696;
+  --success:#89D185; --danger:#F14C4C; --warning:#E3B341; --info:#75BEFF;
+  --overlay:rgba(0,0,0,.55); --shadow:0 14px 34px rgba(0,0,0,.55);
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{
+  background:var(--canvas); color:var(--canvas-ink); font-family:var(--sans);
+  font-size:13px; -webkit-font-smoothing:antialiased;
+}
+/* ============ 原型控制条（不属于应用 UI） ============ */
+.bar{
+  display:flex; align-items:center; gap:6px; padding:10px 14px; flex-wrap:wrap;
+  border-bottom:1px solid rgba(128,128,128,.18);
+}
+.bar .label{font-size:11px; letter-spacing:.06em; opacity:.6; margin-right:2px}
+.seg{display:flex; border:1px solid rgba(128,128,128,.32); border-radius:var(--radius-sm); overflow:hidden}
+.seg button{
+  font:inherit; font-size:12px; padding:5px 11px; border:0; cursor:pointer;
+  background:transparent; color:inherit;
+}
+.seg button+button{border-left:1px solid rgba(128,128,128,.22)}
+.seg button[aria-pressed="true"]{background:var(--primary); color:var(--primary-fg)}
+.seg button:hover[aria-pressed="false"]{background:rgba(128,128,128,.14)}
+.ghost{
+  font:inherit; font-size:12px; padding:5px 11px; cursor:pointer;
+  border:1px solid rgba(128,128,128,.32); border-radius:var(--radius-sm);
+  background:transparent; color:inherit;
+}
+.ghost:hover{background:rgba(128,128,128,.14)}
+.bar .note{margin-left:auto; font-size:11px; opacity:.55}
+
+/* ============ 舞台与缩放 ============ */
+.stage{display:flex; justify-content:center; padding:18px 12px 26px; overflow:hidden}
+.app{
+  width:1160px; height:700px; flex:none; transform-origin:top center;
+  background:var(--bg); color:var(--fg); border:1px solid var(--border);
+  border-radius:8px; overflow:hidden; box-shadow:var(--shadow);
+  display:flex; flex-direction:column; position:relative;
+}
+
+/* ---------- 标题栏 ---------- */
+.titlebar{
+  height:34px; flex:none; display:flex; align-items:center; gap:8px;
+  padding-left:10px; background:var(--title); border-bottom:1px solid var(--border);
+}
+.logo{width:18px;height:18px;flex:none}
+.appname{font-size:12px; font-weight:600; letter-spacing:.01em}
+.proj{font-size:11px; color:var(--muted); margin-left:2px}
+.qopen{
+  flex:1; max-width:300px; margin:0 auto; height:22px; display:flex; align-items:center;
+  gap:6px; padding:0 8px; border:1px solid var(--border); border-radius:var(--radius-sm);
+  color:var(--muted); font-size:11px; background:var(--bg);
+}
+.qopen .kbd{margin-left:auto}
+.tb-actions{display:flex; align-items:center; gap:2px; margin-left:auto; padding-right:4px}
+.iconbtn{
+  width:26px;height:24px;display:grid;place-items:center;border:0;background:transparent;
+  color:var(--fg); cursor:pointer; border-radius:var(--radius-sm); position:relative;
+}
+.iconbtn:hover{background:var(--hover)}
+.iconbtn svg{width:15px;height:15px;stroke:currentColor;stroke-width:1.6;fill:none}
+.wincontrols{display:flex; gap:0; margin-left:4px}
+.wincontrols .iconbtn{width:34px;height:34px;border-radius:0}
+.wincontrols .iconbtn:hover{background:var(--hover)}
+.wc-close:hover{background:#E81123; color:#fff}
+/* 入口高亮 */
+.pin{position:absolute; border:2px solid var(--primary); border-radius:5px; pointer-events:none}
+body[data-view="v3"] .pin-a{inset:-3px -3px -3px -3px}
+body[data-view="v3"] .pin-b{inset:-3px -6px}
+
+/* ---------- 主体 ---------- */
+.main{flex:1; display:flex; min-height:0}
+.sidebar{
+  width:206px; flex:none; background:var(--sidebar); color:var(--sidebar-fg);
+  border-right:1px solid var(--border-soft); padding:8px 0; font-size:12px;
+}
+.side-title{font-size:10px; letter-spacing:.08em; padding:2px 12px 6px; color:var(--muted)}
+.side-row{display:flex; align-items:center; gap:7px; padding:5px 12px}
+.side-row svg{width:13px;height:13px;stroke:currentColor;stroke-width:1.6;fill:none;flex:none}
+.side-row.active{background:var(--hover); color:var(--fg)}
+.side-sub{padding-left:31px; color:var(--muted)}
+.content{flex:1; display:flex; flex-direction:column; min-width:0}
+.tabstrip{
+  height:30px; flex:none; display:flex; align-items:stretch; gap:0;
+  background:var(--title); border-bottom:1px solid var(--border); font-size:12px;
+}
+.tabstrip .tab{
+  display:flex; align-items:center; gap:6px; padding:0 12px; color:var(--muted);
+  border-right:1px solid var(--border-soft);
+}
+.tabstrip .tab.on{background:var(--bg); color:var(--fg); border-bottom:1px solid var(--bg); margin-bottom:-1px}
+.editor{
+  flex:1; padding:12px 16px; font-family:var(--mono); font-size:12.5px; line-height:1.6;
+  color:var(--fg); overflow:hidden;
+}
+.editor .ln{color:var(--muted); display:inline-block; width:22px; text-align:right; margin-right:12px}
+.grid{
+  height:150px; flex:none; border-top:1px solid var(--border); font-size:11px;
+  display:flex; flex-direction:column; background:var(--bg);
+}
+.grid .gridhead{display:flex; background:var(--group); border-bottom:1px solid var(--border)}
+.grid .gridhead span{padding:4px 10px; color:var(--muted); border-right:1px solid var(--border)}
+.grid .gridbody{flex:1; overflow:hidden}
+.grid .r{display:flex; border-bottom:1px solid var(--border-soft); padding:3px 0}
+.grid .r:nth-child(even){background:var(--title)}
+.grid .r span{width:130px; padding:0 10px; color:var(--fg); font-family:var(--mono)}
+
+/* ---------- 状态栏 ---------- */
+.statusbar{
+  height:26px; flex:none; display:flex; align-items:center; gap:12px; padding:0 10px;
+  background:var(--primary); color:var(--primary-fg); font-size:11px;
+}
+.statusbar .sp{margin-left:auto}
+.statusbar .chip{display:flex;align-items:center;gap:5px}
+.statusbar svg{width:12px;height:12px;stroke:currentColor;stroke-width:1.7;fill:none}
+/* 版本标识（方案 B 的落点） */
+.verchip{
+  font-family:var(--mono); font-size:11px; letter-spacing:.01em;
+  background:rgba(255,255,255,.16); color:inherit; border:0; border-radius:3px;
+  padding:2px 7px; cursor:pointer; position:relative;
+}
+.verchip:hover{background:rgba(255,255,255,.28)}
+
+/* ============ 弹窗 ============ */
+.overlay{position:absolute; inset:0; background:var(--overlay); display:flex; align-items:flex-start; justify-content:center; padding-top:56px}
+.dialog{
+  background:var(--bg); border:1px solid var(--border); border-radius:var(--radius);
+  box-shadow:var(--shadow); display:flex; flex-direction:column; overflow:hidden;
+}
+.dlg-head{
+  display:flex; align-items:center; gap:8px; padding:14px 16px 10px;
+}
+.dlg-title{font-size:13px; font-weight:600}
+.dlg-head .spacer{margin-left:auto}
+.dlg-body{padding:0 16px; overflow:hidden; flex:1; min-height:0}
+.dlg-foot{display:flex; align-items:center; gap:8px; padding:12px 16px 14px}
+.dlg-foot .spacer{margin-left:auto}
+.btn{
+  font:inherit; font-size:12px; height:28px; padding:0 12px; cursor:pointer;
+  border-radius:var(--radius-sm); border:1px solid var(--border);
+  background:var(--group); color:var(--fg); display:inline-flex; align-items:center; gap:6px;
+}
+.btn:hover{background:var(--hover)}
+.btn svg{width:13px;height:13px;stroke:currentColor;stroke-width:1.7;fill:none}
+.btn-primary{background:var(--primary); border-color:var(--primary); color:var(--primary-fg)}
+.btn-primary:hover{background:var(--primary-hover); border-color:var(--primary-hover)}
+.btn-ghost{background:transparent; border-color:transparent; width:28px; padding:0; justify-content:center}
+.btn-ghost:hover{background:var(--hover)}
+
+/* --- 现状版（近似当前代码渲染） --- */
+.d448{width:448px; max-height:620px}
+.tagline{font-size:15px; padding:2px 0 4px; font-family:var(--mono)}
+.warnline{font-size:11px; color:var(--warning); padding:2px 0 8px; line-height:1.55}
+/* DescriptionList vertical：每项 = 灰底 label 行 + 值行 */
+.dl{border:1px solid var(--border); border-radius:var(--radius); overflow:hidden}
+.dl-row{border-bottom:1px solid var(--border)}
+.dl-row:last-child{border-bottom:0}
+.dl-v .dl-label{
+  background:var(--label-bg); color:var(--label-fg); font-size:12px;
+  padding:4px 8px; border-bottom:1px solid var(--border);
+}
+.dl-v .dl-val{padding:4px 8px; font-size:12px}
+.dl-h{display:flex}
+.dl-h>.dl-label{
+  width:120px; flex:none; background:var(--label-bg); color:var(--label-fg);
+  font-size:12px; padding:5px 8px; border-right:1px solid var(--border);
+}
+.dl-h>.dl-val{flex:1; padding:5px 8px; font-size:12px; min-width:0; overflow-wrap:anywhere}
+.hint{font-size:11px; color:var(--muted); line-height:1.6; padding:10px 0 2px}
+.scrollfade{position:relative}
+.scrollfade:after{
+  content:""; position:absolute; left:0; right:0; bottom:0; height:26px;
+  background:linear-gradient(to bottom, transparent, var(--bg));
+}
+
+/* --- 建议版 --- */
+.d560{width:560px}
+.tagrow{display:flex; align-items:center; gap:8px; padding:0 0 10px}
+.tag{
+  font-size:12px; line-height:1.25; padding:4px 10px; border-radius:var(--radius);
+  border:1px solid var(--success); color:var(--success); background:transparent;
+}
+.tag.dirty{border-color:var(--danger); color:var(--danger)}
+.tag.clean{border-color:var(--success); color:var(--success)}
+.tagline2{font-family:var(--mono); font-size:15px}
+/* Alert（近似 gpui-kit：icon + 标题 + 正文，色底 4%、同色描边 30%） */
+.alert{
+  display:flex; gap:10px; align-items:flex-start; padding:10px 14px;
+  border:1px solid color-mix(in srgb, var(--warning) 30%, transparent);
+  background:color-mix(in srgb, var(--warning) 6%, transparent);
+  border-radius:var(--radius); color:var(--warning); font-size:12px; margin-bottom:10px;
+}
+.alert svg{width:14px;height:14px;stroke:currentColor;stroke-width:1.7;fill:none;flex:none;margin-top:1px}
+.alert .at{font-weight:600; display:block; margin-bottom:2px}
+.alert .am{line-height:1.5}
+.sep{display:flex; align-items:center; gap:8px; margin:12px 0 6px; color:var(--muted); font-size:10px; letter-spacing:.08em}
+.sep:before,.sep:after{content:""; height:1px; flex:1; background:var(--border)}
+.q{position:relative; display:inline-flex; width:14px; height:14px; align-items:center; justify-content:center;
+  border-radius:50%; border:1px solid var(--border); color:var(--muted); font-size:10px; cursor:help; margin-left:4px; flex:none}
+.pop{
+  display:none; position:absolute; left:0; top:22px; z-index:5; width:280px;
+  background:var(--bg); border:1px solid var(--border); border-radius:var(--radius);
+  box-shadow:var(--shadow); padding:10px 12px; font-size:11.5px; line-height:1.6; color:var(--fg);
+}
+.q:hover .pop{display:block}
+.toast{
+  position:absolute; left:50%; bottom:22px; transform:translateX(-50%);
+  background:var(--fg); color:var(--bg); font-size:11.5px; padding:6px 12px; border-radius:var(--radius-sm);
+  opacity:0; transition:opacity .18s; pointer-events:none;
+}
+.toast.on{opacity:.94}
+
+/* --- 入口对比（v3） --- */
+.anno{
+  position:absolute; font-family:var(--mono); font-size:10.5px; letter-spacing:.04em;
+  background:var(--primary); color:var(--primary-fg); padding:1px 5px; border-radius:3px;
+}
+.legend{
+  position:absolute; left:14px; bottom:14px; display:flex; gap:10px; align-items:center;
+  background:var(--bg); border:1px solid var(--border); border-radius:var(--radius);
+  padding:9px 12px; font-size:11.5px; box-shadow:var(--shadow);
+}
+.legend b{font-weight:600}
+
+/* --- 启动页（v4） --- */
+.splash{
+  width:430px; background:var(--bg); border:1px solid var(--border); border-radius:8px;
+  box-shadow:var(--shadow); padding:22px 24px 20px; position:relative;
+}
+.splash .st{display:flex; align-items:center; gap:12px}
+.splash .st svg{width:34px;height:34px}
+.splash .nm{font-size:17px; font-weight:600; letter-spacing:.01em}
+.splash .vt{font-family:var(--mono); font-size:11.5px; color:var(--muted); margin-top:2px}
+.steps{margin:18px 0 14px; display:flex; flex-direction:column; gap:8px}
+.step{display:flex; align-items:center; gap:9px; font-size:12px; color:var(--muted)}
+.step .dot{width:14px;height:14px;border-radius:50%;display:grid;place-items:center;flex:none}
+.step .dot svg{width:11px;height:11px;stroke:currentColor;stroke-width:2;fill:none}
+.step span{padding-bottom:1px; border-bottom:1px dotted transparent}
+.step.done{color:var(--fg)}
+.step.done .dot{border:1px solid var(--success); color:var(--success)}
+.step.run{color:var(--fg)}
+.step.run .dot{border:1px solid var(--primary); color:var(--primary)}
+.bar-prog{height:3px; background:var(--muted-bg); border-radius:2px; overflow:hidden; margin-bottom:14px}
+.bar-prog i{display:block; height:100%; width:62%; background:var(--primary)}
+.splash .last{display:flex; align-items:center; gap:6px; font-size:11.5px; color:var(--muted); border-top:1px solid var(--border-soft); padding-top:10px}
+.splash .last svg{width:12px;height:12px;stroke:currentColor;stroke-width:1.6;fill:none}
+/* 视图切换 */
+body[data-view="v1"] .v2,body[data-view="v1"] .v3,body[data-view="v1"] .v4{display:none}
+body[data-view="v2"] .v1,body[data-view="v2"] .v3,body[data-view="v2"] .v4{display:none}
+body[data-view="v3"] .v1,body[data-view="v3"] .v2,body[data-view="v3"] .v4{display:none}
+body[data-view="v4"] .v1,body[data-view="v4"] .v2,body[data-view="v4"] .v3{display:none}
+body[data-view="v3"] .overlay{display:none}
+body[data-view="v4"] .overlay{display:none}
+body[data-view="v4"] .main{opacity:.25; filter:blur(1px)}
+body[data-view="v4"] .titlebar{opacity:.3}
+body[data-view="v4"] .statusbar{opacity:.3}
+@media (max-width:760px){
+  .bar{padding:8px 10px}
+  .bar .note{display:none}
+}
+</style>
+</head>
+<body data-view="v1">
+
+<div class="bar">
+  <span class="label">视图</span>
+  <div class="seg" id="views">
+    <button data-v="v1" aria-pressed="true">现状</button>
+    <button data-v="v2" aria-pressed="false">建议版</button>
+    <button data-v="v3" aria-pressed="false">入口位置</button>
+    <button data-v="v4" aria-pressed="false">启动页</button>
+  </div>
+  <button class="ghost" id="themeBtn">明 / 暗</button>
+  <span class="note">配色取 assets/themes/rds-theme.json · 组件结构按 vendor 0.9.0 源码近似</span>
+</div>
+
+<div class="stage" id="stage">
+  <div class="app" id="app">
+
+    <!-- 标题栏 -->
+    <div class="titlebar">
+      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+        <path d="M16 3.2 27.2 9v14L16 28.8 4.8 23V9Z" fill="none" stroke="#BC5340" stroke-width="1.6"/>
+        <path d="M11 13.5h10M11 10.5h4M11 19.5h4M11 16.5h10" stroke="#BC5340" stroke-width="1.4" fill="none" opacity=".55"/>
+      </svg>
+      <span class="appname">RdataStation</span>
+      <span class="proj">RdataStation-v2</span>
+      <div class="qopen">
+        <svg viewBox="0 0 24 24" style="width:12px;height:12px;stroke:currentColor;stroke-width:1.7;fill:none"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></svg>
+        搜索对象或命令
+        <span class="kbd">Ctrl+P</span>
+      </div>
+      <div class="tb-actions">
+        <button class="iconbtn" title="切换明暗主题 (Ctrl+Shift+L)">
+          <svg viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"/></svg>
+        </button>
+        <button class="iconbtn" title="界面语言">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.6 3 2.6 14 0 17M12 3.5c-2.6 3-2.6 14 0 17"/></svg>
+        </button>
+        <button class="iconbtn" title="版本信息" id="tbInfoA">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8h.01M11 11.5h1v5"/></svg>
+        </button>
+        <button class="iconbtn" title="快速布局">
+          <svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="16" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/></svg>
+        </button>
+        <div class="wincontrols">
+          <button class="iconbtn" aria-label="最小化"><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
+          <button class="iconbtn" aria-label="最大化"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></svg></button>
+          <button class="iconbtn wc-close" aria-label="关闭"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 主体 -->
+    <div class="main">
+      <div class="sidebar">
+        <div class="side-title">数据源</div>
+        <div class="side-row"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v6c0 1.7 3 3 7 3s7-1.3 7-3V6"/><path d="M5 12v6c0 1.7 3 3 7 3s7-1.3 7-3v-6"/></svg>本地 · DuckDB</div>
+        <div class="side-row side-sub">main.sales</div>
+        <div class="side-row side-sub">main.orders</div>
+        <div class="side-row active"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16"/></svg>PG · 分析库</div>
+        <div class="side-row side-sub">public.metrics</div>
+        <div class="side-row"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>草稿箱</div>
+      </div>
+      <div class="content">
+        <div class="tabstrip">
+          <div class="tab on"><svg viewBox="0 0 24 24" style="width:12px;height:12px;stroke:currentColor;stroke-width:1.6;fill:none"><path d="M9 4h11M9 12h11M9 20h11M4 4l1.5 1.5L4 7M4 12l1.5 1.5L4 15"/></svg>query.sql</div>
+          <div class="tab">format_preview.sql</div>
+        </div>
+        <div class="editor">
+          <div><span class="ln">1</span>select region, sum(amount) as total</div>
+          <div><span class="ln">2</span>from sales</div>
+          <div><span class="ln">3</span>where created_at &gt;= date '2026-01-01'</div>
+          <div><span class="ln">4</span>group by region</div>
+          <div><span class="ln">5</span>order by total desc;</div>
+        </div>
+        <div class="grid">
+          <div class="gridhead"><span>region</span><span>total</span><span>rows</span></div>
+          <div class="gridbody">
+            <div class="r"><span>华东</span><span>128,400</span><span>1,204</span></div>
+            <div class="r"><span>华南</span><span>96,210</span><span>988</span></div>
+            <div class="r"><span>华北</span><span>71,530</span><span>702</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 状态栏 -->
+    <div class="statusbar">
+      <div class="chip"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="16" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/></svg>数据库导航</div>
+      <div class="sp"></div>
+      <div class="chip">连接：PG · 分析库</div>
+      <div class="chip">LSP 就绪</div>
+      <div class="chip"><svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 0 1 12 0v5l2 3H4l2-3Z"/><path d="M10 19a2 2 0 0 0 4 0"/></svg></div>
+      <button class="verchip" id="statusVer" title="点击查看版本详情">0.2.11+932554dc-dirty</button>
+    </div>
+
+    <!-- ================= 弹窗：现状（近似当前代码） ================= -->
+    <div class="overlay v1" id="ov1">
+      <div class="dialog d448">
+        <div class="dlg-head">
+          <span class="dlg-title">关于 RdataStation</span>
+          <span class="spacer"></span>
+          <button class="btn btn-ghost" aria-label="关闭" data-close="ov1"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <div class="dlg-body scrollfade">
+          <div class="tagline">0.2.11+932554dc-dirty</div>
+          <div class="warnline">工作树有未提交改动：这个构建不对应任何一次提交，据此得出的验证结论必须标注 -dirty。</div>
+          <div class="dl dl-v">
+            <div class="dl-row"><div class="dl-label">版本标识</div><div class="dl-val">0.2.11+932554dc-dirty</div></div>
+            <div class="dl-row"><div class="dl-label">版本号</div><div class="dl-val">0.2.11</div></div>
+            <div class="dl-row"><div class="dl-label">提交</div><div class="dl-val">932554dc（main）</div></div>
+            <div class="dl-row"><div class="dl-label">工作树</div><div class="dl-val">有未提交改动（与上面提交不完全一致）</div></div>
+            <div class="dl-row"><div class="dl-label">提交时间</div><div class="dl-val">2026-11-22 16:16:41 +08:00</div></div>
+            <div class="dl-row"><div class="dl-label">构建档</div><div class="dl-val">debug</div></div>
+            <div class="dl-row"><div class="dl-label">目标平台</div><div class="dl-val">x86_64-pc-windows-msvc</div></div>
+            <div class="dl-row"><div class="dl-label">SQL 排版引擎</div><div class="dl-val">lax-sql 0.3.0</div></div>
+            <div class="dl-row"><div class="dl-label">UI 组件库</div><div class="dl-val">gpui-kit 0.9.0</div></div>
+          </div>
+          <div class="hint">核对只要看两行：「提交」和「工作树」。脏树说明二进制里混着未提交的改动，不能当作某次提交的产物。</div>
+        </div>
+        <div class="dlg-foot">
+          <button class="btn btn-ghost" title="复制版本信息"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="1.5"/><path d="M15 9V6a1.5 1.5 0 0 0-1.5-1.5H5.5A1.5 1.5 0 0 0 4 6v8.5A1.5 1.5 0 0 0 5.5 16H9"/></svg></button>
+          <span class="spacer"></span>
+          <button class="btn" data-close="ov1">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 弹窗：建议版 ================= -->
+    <div class="overlay v2" id="ov2">
+      <div class="dialog d560">
+        <div class="dlg-head">
+          <span class="dlg-title">关于 RdataStation</span>
+          <span class="spacer"></span>
+          <button class="btn btn-ghost" aria-label="关闭" data-close="ov2"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <div class="dlg-body">
+          <div class="tagrow">
+            <span class="tagline2">0.2.11+932554dc</span>
+            <span class="tag dirty">DIRTY</span>
+          </div>
+          <div class="alert">
+            <svg viewBox="0 0 24 24"><path d="M12 3.5 21 20H3Z"/><path d="M12 9v5M12 16.5h.01"/></svg>
+            <div>
+              <b class="at">工作树有未提交改动</b>
+              <span class="am">这个构建不对应任何一次提交。据此得出的验证结论必须标注 -dirty，或重新编译后再验。</span>
+            </div>
+          </div>
+          <div class="dl dl-h">
+            <div class="dl-row"><div class="dl-label">版本标识</div><div class="dl-val">0.2.11+932554dc-dirty</div></div>
+            <div class="dl-row"><div class="dl-label">版本号</div><div class="dl-val">0.2.11</div></div>
+            <div class="dl-row"><div class="dl-label">提交</div><div class="dl-val">932554dc · main</div></div>
+            <div class="dl-row"><div class="dl-label">工作树</div><div class="dl-val">有未提交改动 <span class="q">?<span class="pop">取自编译时的 <code>git status --porcelain</code>：非空即 dirty，未跟踪文件也算。它报的是编译那一刻的状态——改完文件没重编，这里仍是旧值。</span></span></div></div>
+            <div class="dl-row"><div class="dl-label">提交时间</div><div class="dl-val">2026-11-22 16:16:41 +08:00</div></div>
+          </div>
+          <div class="sep">构建与依赖</div>
+          <div class="dl dl-h">
+            <div class="dl-row"><div class="dl-label">构建档</div><div class="dl-val">debug</div></div>
+            <div class="dl-row"><div class="dl-label">目标平台</div><div class="dl-val">x86_64-pc-windows-msvc</div></div>
+            <div class="dl-row"><div class="dl-label">SQL 排版引擎</div><div class="dl-val">lax-sql 0.3.0</div></div>
+            <div class="dl-row"><div class="dl-label">UI 组件库</div><div class="dl-val">gpui-kit 0.9.0</div></div>
+          </div>
+          <div class="hint">核对只需两行：提交、工作树。要贴给别人或记进验证记录，用下面的「复制版本信息」。</div>
+        </div>
+        <div class="dlg-foot">
+          <button class="btn btn-primary" id="copy2"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="1.5"/><path d="M15 9V6a1.5 1.5 0 0 0-1.5-1.5H5.5A1.5 1.5 0 0 0 4 6v8.5A1.5 1.5 0 0 0 5.5 16H9"/></svg>复制版本信息</button>
+          <span class="spacer"></span>
+          <button class="btn" data-close="ov2">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 入口位置标注 ================= -->
+    <div class="v3">
+      <div class="pin pin-a" style="left:auto;right:196px;top:5px;width:24px;height:24px"></div>
+      <div class="anno" style="right:176px;top:38px">A · 标题栏图标</div>
+      <div class="pin pin-b" style="right:6px;bottom:2px;width:158px;height:22px"></div>
+      <div class="anno" style="right:6px;bottom:30px">B · 状态栏标识</div>
+      <div class="legend">
+        <b>A</b> 标题栏第 4 个图标 <span style="opacity:.6">·</span> 与主题/语言/布局争位，信息密度高但挤
+        <span style="opacity:.6">|</span>
+        <b>B</b> 状态栏右端常驻 <span style="opacity:.6">·</span> 本来就该是"应用状态"，且每次验证都能看到
+      </div>
+    </div>
+
+    <!-- ================= 启动页 ================= -->
+    <div class="v4" style="position:absolute;inset:0;display:grid;place-items:center">
+      <div class="splash">
+        <div class="st">
+          <svg viewBox="0 0 32 32" aria-hidden="true">
+            <path d="M16 3.2 27.2 9v14L16 28.8 4.8 23V9Z" fill="none" stroke="#BC5340" stroke-width="1.6"/>
+            <path d="M11 13.5h10M11 10.5h4M11 19.5h4M11 16.5h10" stroke="#BC5340" stroke-width="1.4" fill="none" opacity=".55"/>
+          </svg>
+          <div>
+            <div class="nm">RdataStation</div>
+            <div class="vt">0.2.11+932554dc-dirty · debug</div>
+          </div>
+        </div>
+        <div class="steps">
+          <div class="step done"><span class="dot"><svg viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg></span>临时目录与数据根</div>
+          <div class="step done"><span class="dot"><svg viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg></span>设置服务 · 主题包</div>
+          <div class="step run"><span class="dot"><svg viewBox="0 0 24 24"><path d="M12 5v7M12 12l4 4"/></svg></span>全局库迁移 · 连接池</div>
+          <div class="step"><span class="dot"></span>打开主窗口</div>
+        </div>
+        <div class="bar-prog"><i></i></div>
+        <div class="last">
+          <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 10h16"/></svg>
+          上次项目 · RdataStation-v2
+        </div>
+      </div>
+    </div>
+
+    <div class="toast" id="toast">已复制版本信息</div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const app = document.getElementById('app');
+  const stage = document.getElementById('stage');
+  const toast = document.getElementById('toast');
+
+  // 舞台缩放：按容器宽度等比缩，避免小屏横向滚动
+  function fit(){
+    const w = stage.clientWidth - 24;
+    const s = Math.min(1, Math.max(.35, w / 1160));
+    app.style.transform = 'scale(' + s + ')';
+    stage.style.height = (700 * s + 44) + 'px';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+
+  // 视图切换
+  const views = document.getElementById('views');
+  views.addEventListener('click', function(e){
+    const b = e.target.closest('button[data-v]');
+    if(!b) return;
+    document.body.dataset.view = b.dataset.v;
+    [...views.querySelectorAll('button')].forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  });
+
+  // 明暗
+  document.getElementById('themeBtn').addEventListener('click', function(){
+    const html = document.documentElement;
+    html.dataset.theme = html.dataset.theme === 'dark' ? 'light' : 'dark';
+  });
+
+  // 关闭弹窗（不是死路：点入口可重开）
+  document.addEventListener('click', function(e){
+    const closer = e.target.closest('[data-close]');
+    if(closer){
+      document.getElementById(closer.dataset.close).style.display = 'none';
+      return;
+    }
+    if(e.target.closest('#tbInfoA') || e.target.closest('#statusVer')){
+      const id = document.body.dataset.view === 'v2' ? 'ov2' : 'ov1';
+      document.getElementById(id).style.display = 'flex';
+    }
+  });
+
+  // 复制（真实写剪贴板，失败时也给反馈）
+  document.getElementById('copy2').addEventListener('click', function(){
+    const text = [
+      'RdataStation 0.2.11+932554dc-dirty',
+      'commit   932554dc (main)',
+      'dirty    yes',
+      'time     2026-11-22 16:16:41 +08:00',
+      'profile  debug',
+      'target   x86_64-pc-windows-msvc',
+      'lax-sql  0.3.0',
+      'gpui-kit 0.9.0'
+    ].join('\n');
+    const done = function(){ toast.classList.add('on'); setTimeout(()=>toast.classList.remove('on'), 1600); };
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(done, done);
+    } else { done(); }
+  });
+})();
+</script>
+</body>
+</html>

@@ -366,6 +366,32 @@ impl WorkbenchView {
             },
         );
 
+        // 版本标识（真机验证第一眼）。样式与 `status.rs::sb_toggle` 同款
+        // （同样的圆角/hover/前景色/图标尺寸），差别只在它需要 `window` 才能开对话框，
+        // 而 `sb_toggle` 的签名只有 `&mut App`——故此处内联构造，不额外改公共签名。
+        // 放最右端：应用级、低频信息，不抢连接/LSP 的位置。
+        let version_chip = {
+            use gpui_kit::component::Icon as KitIcon;
+            let fg = theme.colors.primary_foreground;
+            let hover = theme.colors.primary_active;
+            div()
+                .id("version-chip")
+                .flex_none()
+                .h_flex()
+                .items_center()
+                .gap_1()
+                .px_1()
+                .rounded_sm()
+                .cursor_pointer()
+                .text_color(fg)
+                .hover(move |s| s.bg(hover))
+                .child(KitIcon::new(IconName::Info).size_3p5())
+                .child(div().child(crate::version::info().tag()))
+                .on_click(|_, window, app| {
+                    crate::components::version_dialog::open_version_dialog(window, app)
+                })
+        };
+
         // 状态栏背景品牌珊瑚色（theme.colors.primary 派生，见 theme-design §5.4），文字取配对前景色。
         StatusBar::new()
             .bg(theme.colors.primary)
@@ -393,7 +419,8 @@ impl WorkbenchView {
                     .child(lsp_item)
                     .child(notification_bell)
                     .child(lock_toggle)
-                    .child(right_toggle),
+                    .child(right_toggle)
+                    .child(version_chip),
             )
     }
 }

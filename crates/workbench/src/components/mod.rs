@@ -29,4 +29,6 @@ pub mod source_picker;
 pub mod tag_assign_dialog;
 pub mod tag_manager_dialog;
 pub mod type_short_map_dialog;
+/// 版本信息对话框（真机验证前核对提交 / 工作树，数据见 `crate::version`）
+pub mod version_dialog;
 pub mod visible_databases_dialog;

@@ -47,6 +47,7 @@
 | `connection/connection-dialog-prototype.html` | 连接模块原型（交互稿） | RDS Light/Dark 双主题新增连接对话框示意（可交互） |
 | `connection/connection-dev-plan.md` | 连接模块开发方案 | Phase A/B/C 任务 / 文件落点 / 测试场景 / 风险 |
 | `ui/ui-design-spec.md` | UI 设计规范 | 三层约束（主题 token / 尺寸常量 / 组件规格）、rem 基准常量表 |
+| `ui/version-badge.md` | 版本标识与「关于」弹窗 | 真机验证防「验错对象」：标识格式（`0.2.11+932554dc-dirty`）· 8 个 `RDS_BUILD_*` 注入字段 · `version.rs` API · 弹窗结构与状态栏入口 · 刷新时机（只有重编才更新）· 4 条局限 · 三来源核对口径 |
 | `connection/connection-dialog-architecture.md` | 连接模块架构与数据流 | 分层与依赖 / 概念模型（数据库类型 vs 驱动实现、作用域、三类引用、Secret、暂存草稿）/ 状态所有权与对话框层挂载 / 五条数据流（打开·保存·暂存状态机·运行时连接）/ 快捷键 / 决策取舍 / 测试策略 / 数据字典与迁移 / 降级矩阵 / 性能·可观测·安全 / 成熟度评估 / **已知问题与后续项（§14，权威待办清单）** / **数据来源审计（§15，零 UI 造数据）** |
 | `connection/connection-user-guide.md` | 连接模块使用指南 | 入口 / 界面导览 / 典型流程（新建·编辑·连续编辑·标签分组）/ Tab 速览 / 快捷键 / 草稿与安全 / FAQ 排查 / USIT 验收清单 |
 | `database/README.md` | 数据源管理 / 数据库导航**模块入口** | **先读这个**：特点提炼（产品行为 / 数据与缓存 / 架构约束 / 工程与文档）/ 边界 / 代码地图 / 改前必守约束 / 测试与验证命令 / 文档地图 / 下一步 |

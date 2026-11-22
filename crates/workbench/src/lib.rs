@@ -20,6 +20,8 @@ pub mod services;
 // 这里重导保持 `crate::ui::*` / `rds_workbench::ui::*` 路径不变。
 pub use workbench_shell::ui;
 pub mod unlock;
+/// 版本标识（构建期注入、运行时只读；见 `build.rs` 与 `components::version_dialog`）
+pub mod version;
 pub mod view;
 
 // 重新导出服务层（与 v1 core/mod.rs 顶层 re-export 对齐）
