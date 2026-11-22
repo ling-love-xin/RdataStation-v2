@@ -189,6 +189,15 @@ actions!(
         /// 与它那三个鼠标入口早已就位（工具栏菜单「编辑筛选设置」/ 列头右键 / 筛选条
         /// 自定义钮），这条只是键盘入口。
         OpenFilterSettings,
+        /// 【第 82 批】`F7` / `CTRL+7`：右侧辅助栏整组收起 / 展开
+        /// （`CMD_TOGGLE_PANELS`，`plugin.xml:1084/1085`；handler `:167-169` →
+        /// `ResultSetViewer.showPanels(!isPanelsVisible(), true, true)`，`:1478-1518`）。
+        ///
+        /// 面板级命令（上游 contextId 同样是整块 `...ui.context.resultset`，不是
+        /// `...resultset.focused`）：焦点在网格或筛选框里都按得到。本仓等价鼠标入口是
+        /// 右缘竖条顶部那颗 `panelsButton`（`editor-result-edge-panels` →
+        /// `ResultRequest::SetPanelsVisible(!panels_visible)`），这条键位落同一份状态。
+        TogglePanels,
     ]
 );
 

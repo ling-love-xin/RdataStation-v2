@@ -198,6 +198,18 @@ fn bind_editor_keys(cx: &mut TestAppContext) {
                 crate::commands::OpenFilterSettings,
                 Some(crate::commands::RESULT_PANEL_CONTEXT),
             ),
+            // 【第 82 批】右侧辅助栏总开关（`CMD_TOGGLE_PANELS`，`:1084/1085`；
+            // 面板层 context，与生产注册同口径）
+            KeyBinding::new(
+                "f7",
+                crate::commands::TogglePanels,
+                Some(crate::commands::RESULT_PANEL_CONTEXT),
+            ),
+            KeyBinding::new(
+                "ctrl-7",
+                crate::commands::TogglePanels,
+                Some(crate::commands::RESULT_PANEL_CONTEXT),
+            ),
         ]);
     });
 }

@@ -502,6 +502,21 @@ fn run_app() {
                     editor::commands::OpenFilterSettings,
                     Some(editor::commands::RESULT_PANEL_CONTEXT),
                 ),
+                // 【第 82 批】`F7` / `CTRL+7` = `CMD_TOGGLE_PANELS`
+                // （`plugin.xml:1084/1085`；`ResultSetHandlerMain:167-169` →
+                // `ResultSetViewer.showPanels(!isPanelsVisible(), true, true)`）。
+                // 上游 contextId 同样是整块 `...ui.context.resultset`，这里跟第 78-80 批
+                // 一样挂面板层——焦点在网格或筛选框里都按得到。
+                KeyBinding::new(
+                    "f7",
+                    editor::commands::TogglePanels,
+                    Some(editor::commands::RESULT_PANEL_CONTEXT),
+                ),
+                KeyBinding::new(
+                    "ctrl-7",
+                    editor::commands::TogglePanels,
+                    Some(editor::commands::RESULT_PANEL_CONTEXT),
+                ),
                 // 【第 60 批】同一条 `Ctrl+反引号` 再绑到**面板层**上下文：文本态下网格
                 // 整块不渲染，网格 context 不在焦点路径上；焦点落在面板根时靠这条命中
                 // （两层同时匹配时 gpui 按 context 深度取更深的网格那条，不会切两次）。

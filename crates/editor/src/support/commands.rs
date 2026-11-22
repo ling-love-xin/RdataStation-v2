@@ -87,12 +87,14 @@ pub use result_panel::grid::RESULT_GRID_CONTEXT;
 /// 【第 79 批】`ALT+SHIFT+C` 复制列名（`CMD_COPY_COLUMN_NAMES`，`:1095`）。
 ///
 /// 【第 80 批】`ALT+SHIFT+F` 打开筛选设置（`CMD_FILTER_EDIT_SETTINGS`，`:1094`）。
+///
+/// 【第 82 批】`F7` / `CTRL+7` 右侧辅助栏总开关（`CMD_TOGGLE_PANELS`，`:1084/1085`）。
 pub use result_panel::grid::{
     CommitResultChanges, CopyColumnNames, CopyRowValuesFromAbove, CopyRowValuesFromBelow,
     CycleResultPresentation, DeleteResultRow, DuplicateResultRow, EnterCellEdit, FetchAllData,
     FetchNextSegment, FocusRowJump, GotoColumn, HideCurrentColumn, InsertResultRow,
     OpenFilterSettings, RejectPendingChanges, SelectCurrentColumn, SelectCurrentRow,
-    ShowHiddenColumns, SwitchFilterFocus,
+    ShowHiddenColumns, SwitchFilterFocus, TogglePanels,
 };
 
 /// 【第 60 批】结果**面板**的 key context（`RESULT_GRID_CONTEXT` 的父层）。

@@ -9,7 +9,8 @@ use crate::commands::{
     CopyRowValuesFromBelow, CycleResultPresentation, DeleteResultRow, DuplicateResultRow,
     EnterCellEdit, ExecuteSql, FetchAllData, FetchNextSegment, FocusRowJump, GotoColumn,
     HideCurrentColumn, InsertResultRow, OpenFilterSettings, RedoResultEdit, RejectPendingChanges,
-    SelectCurrentColumn, SelectCurrentRow, ShowHiddenColumns, SwitchFilterFocus, UndoResultEdit,
+    SelectCurrentColumn, SelectCurrentRow, ShowHiddenColumns, SwitchFilterFocus, TogglePanels,
+    UndoResultEdit,
 };
 
 use super::*;
@@ -383,6 +384,26 @@ impl EditorHostPanel {
     ) {
         self.result_panel
             .update(cx, |panel, cx| panel.open_filter_settings(window, cx));
+    }
+
+    /// 【第 82 批】`F7` / `CTRL+7`：右侧辅助栏整组收起 / 展开
+    /// （DBeaver `CMD_TOGGLE_PANELS`，`plugin.xml:1084/1085`；handler `:167-169` →
+    /// `ResultSetViewer.showPanels(!isPanelsVisible(), true, true)`，`:1478-1518`）。
+    ///
+    /// 上游那条先判 `show == isPanelsVisible()` 就直接 return（无变化不动），本仓
+    /// `set_panels_visible` 自己就带这层判据；`showDefaults=true` 对应本仓「关空过之后
+    /// 补回默认页集合」（`restore_default_tabs_when_empty`，`events.rs:1581-1586`）。
+    /// 面板总能收起或展开，没有「不可用」分支，也不留 message（上游同样不出声）。
+    pub(crate) fn on_toggle_panels(
+        &mut self,
+        _: &TogglePanels,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.result_panel.update(cx, |panel, cx| {
+            let visible = panel.panels_visible();
+            panel.set_panels_visible(!visible, cx);
+        });
     }
 
     /// 【第 79 批】`ALT+SHIFT+C`：复制列名

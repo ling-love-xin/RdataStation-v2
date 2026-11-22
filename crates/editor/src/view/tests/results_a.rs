@@ -1965,3 +1965,65 @@ fn escape_dismisses_every_result_overlay(cx: &mut TestAppContext) {
         "ESC 要收起取全部确认浮层"
     );
 }
+
+/// 【第 82 批】`F7` / `CTRL+7`：右侧辅助栏整组收起 / 展开
+/// （DBeaver `CMD_TOGGLE_PANELS`，`plugin.xml:1084/1085`；`ResultSetHandlerMain:167-169`
+/// → `ResultSetViewer.showPanels(!isPanelsVisible(), true, true)`，`:1478-1518`）。
+///
+/// 断言分三层：① 权威状态 `panels_visible()`（= 右缘竖条与右栏内容都在）；
+/// ② 右栏内容真的没了 / 回来了（`editor-result-right-tabs` 只在 `show_value_sidebar`
+/// 为真时才挂进树，收起后取不到 bounds）；③ 两条键位落同一个动作——`F7` 收，
+/// `CTRL+7` 再放。本仓鼠标等价入口是竖条顶部那颗 `panelsButton`
+/// （`editor-result-edge-panels` → `ResultRequest::SetPanelsVisible`），同一份状态。
+#[gpui_kit::test]
+fn f7_and_ctrl_7_toggle_the_result_panels(cx: &mut TestAppContext) {
+    use gpui_kit::Focusable as _;
+
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+
+    let grid = cx.update(|_window, app| panel.read(app).grid_for_test());
+    let grid_focus = cx.update(|_window, app| grid.read(app).focus_handle(app));
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+
+    let panels_visible = |cx: &mut VisualTestContext| {
+        cx.update(|_w, app| {
+            panel
+                .read(app)
+                .result_panel
+                .read(app)
+                .panels_visible()
+        })
+    };
+
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(panels_visible(cx), "前提：出厂是展开的");
+    assert!(
+        cx.debug_bounds("editor-result-right-tabs").is_some(),
+        "前提：右栏内容摆着"
+    );
+
+    // `F7`：整组收起（右缘竖条与右栏内容一起消失）
+    cx.simulate_keystrokes("f7");
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(!panels_visible(cx), "F7 之后面板收起");
+    assert!(
+        cx.debug_bounds("editor-result-right-tabs").is_none(),
+        "右栏内容要跟着消失"
+    );
+
+    // `CTRL+7`：同一条动作反向（展开时顺带补回默认页集合）
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+    cx.simulate_keystrokes("ctrl-7");
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(panels_visible(cx), "CTRL+7 之后面板展开");
+    assert!(
+        cx.debug_bounds("editor-result-right-tabs").is_some(),
+        "右栏内容要回来"
+    );
+}

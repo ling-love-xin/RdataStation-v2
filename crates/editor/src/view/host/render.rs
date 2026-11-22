@@ -190,6 +190,8 @@ impl Render for EditorHostPanel {
             .on_action(cx.listener(Self::on_copy_column_names))
             // 【第 80 批】`ALT+SHIFT+F` 打开筛选设置（`CMD_FILTER_EDIT_SETTINGS`，`:1094`）
             .on_action(cx.listener(Self::on_open_filter_settings))
+            // 【第 82 批】`F7` / `CTRL+7` 右侧辅助栏总开关（`CMD_TOGGLE_PANELS`，`:1084/1085`）
+            .on_action(cx.listener(Self::on_toggle_panels))
             // 【书签】`Ctrl+Shift+B` 切换 / `F8` 下一 / `Shift+F8` 上一（键位在 crates/app 注册）
             .on_action(cx.listener(Self::on_toggle_bookmark))
             .on_action(cx.listener(Self::on_next_bookmark))
