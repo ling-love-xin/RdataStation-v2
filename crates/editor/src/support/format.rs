@@ -4,7 +4,8 @@
 //!
 //! 格式化有三个容易出错的地方，而它们**都能在没有窗口的情况下穷举**：
 //!
-//! 1. **格式化什么**：有选区就只格式化选区（用户指着那段），没选区才整篇；
+//! 1. **格式化什么**：有选区就格式化选区——选区先**吸附到完整语句**边界（与 DataGrip /
+//!    VS Code 一致：用户指着 `where x=1` 也是想排包含它的那条 `SELECT`），没选区才整篇；
 //! 2. **哪几条没动**：引擎是逐条格式化的（[`engine::sql::SqlEngine::format_report`]），
 //!    解析不了的语句**逐字保留**——这个数量必须能报给用户（“按了没反应”不可接受）；
 //! 3. **光标去哪**：整篇格式化会重排每一行，光标得按「第几条语句里的第几个字节」
@@ -22,14 +23,22 @@ use std::ops::Range;
 
 use engine::sql::{FormatOptions, SqlDialect, SqlEngine, split_statements};
 
-/// 【格式化设置页】`SqlFormat` 落盘值 → [`FormatOptions`]（纯函数；设置异常回退
-/// sqlglot 原生，不猜：未知档位 → 原样/空格/尾随，越界数值 → 夹回档位区间）。
+/// 【格式化设置页】`SqlFormat` 落盘值 → [`FormatOptions`]（纯函数；设置异常回退引擎默认，
+/// 不猜：未知档位走默认档，越界数值夹回合法区间）。
 ///
 /// 两个消费方共用同一份口径：编辑器格式化（Ctrl+Shift+F / 保存时格式化，经
 /// `view/host/format.rs::format_options`）与设置页实时预览（app 装配经
 /// `settings::install_sql_format_preview` 注入）——改映射只动这里，两边永远一致。
+///
+/// 十二个旋钮里只有 `keyword_case` 与 `normalize_operators` 不走 lax 的排版能力：
+/// 前者用 sqlglot 词法器判定大小写（lax 词表只有 85 个通用词），后者是本项目自己的
+/// 后处理（lax 明确不规范化 token 间距），见 `crates/sql/src/formatter.rs` 模块头。
 pub fn options_from_settings(prefs: &settings::model::SqlFormat) -> FormatOptions {
-    use engine::sql::{CommaStyle, IndentChar, KeywordCase};
+    use engine::sql::{ClauseStyle, CommaStyle, IndentChar, KeywordCase, NewLineKind};
+    // 忽略标记为空会匹配任何注释（等于"全篇不排版"）。设置层已拒绝空值，
+    // 这里兜住"配置文件被手工改坏"的情况：回退引擎默认标记，不用空串。
+    let node_mark = prefs.ignore_node_comment_text.trim();
+    let file_mark = prefs.ignore_file_comment_text.trim();
     FormatOptions {
         keyword_case: match prefs.keyword_case.as_str() {
             "upper" => KeywordCase::Uppercase,
@@ -42,12 +51,34 @@ pub fn options_from_settings(prefs: &settings::model::SqlFormat) -> FormatOption
             IndentChar::Space
         },
         indent_width: prefs.indent_width.clamp(2, 8) as u8,
+        line_width: prefs.line_width.clamp(40, 200) as u16,
+        clause_style: if prefs.clause_style == "fill" {
+            ClauseStyle::Fill
+        } else {
+            ClauseStyle::Expanded
+        },
         comma_style: if prefs.comma_style == "leading" {
             CommaStyle::Leading
         } else {
             CommaStyle::Trailing
         },
+        new_line_kind: match prefs.new_line_kind.as_str() {
+            "lf" => NewLineKind::Lf,
+            "crlf" => NewLineKind::Crlf,
+            _ => NewLineKind::Auto,
+        },
+        ignore_node_comment_text: if node_mark.is_empty() {
+            FormatOptions::default().ignore_node_comment_text
+        } else {
+            node_mark.to_string()
+        },
+        ignore_file_comment_text: if file_mark.is_empty() {
+            FormatOptions::default().ignore_file_comment_text
+        } else {
+            file_mark.to_string()
+        },
         blank_lines_between: prefs.blank_lines_between.clamp(0, 2) as u8,
+        normalize_operators: prefs.normalize_operators,
     }
 }
 
@@ -121,10 +152,14 @@ pub fn dialect_of_known(db_type: &str) -> Option<SqlDialect> {
 
 /// 规划一次格式化
 ///
-/// `selection` 是当前选区（无选区时 `start == end`）。有选区**只格式化选区**：
+/// `selection` 是当前选区（无选区时 `start == end`）。有选区时**只动这一片**：
 /// 用户选了一段就是想只动那一段，顺手把整篇重排是越权。
 ///
-/// `options` 是格式化选项（关键字大小写 / 缩进宽度），由设置注入；默认等于 sqlglot 原生。
+/// 选区会先**吸附到完整语句**边界（见 [`expand_to_statements`]）：只选 `where x=1`
+/// 时排的是包含它的那条语句。原因是排版引擎（`lax-sql`）只负责「把给它的这段排好」，
+/// 它不知道语句边界；裸片段排出来会缺上下文，观感也不稳。
+///
+/// `options` 是格式化选项（行宽 / 缩进 / 子句风格 / 关键字大小写…），由设置注入。
 pub fn plan(
     text: &str,
     selection: Range<usize>,
@@ -133,7 +168,7 @@ pub fn plan(
 ) -> FormatPlan {
     let has_selection = selection.end > selection.start;
     if has_selection {
-        let clamped = clamp_range(text, selection);
+        let clamped = expand_to_statements(text, clamp_range(text, selection));
         let slice = &text[clamped.clone()];
         let report = SqlEngine::format_report(slice, dialect, options);
         let mut out = String::with_capacity(text.len());
@@ -163,11 +198,39 @@ pub fn plan(
 }
 
 /// 选区钳制（选区可能来自内核，理论上不会越界；越界也不能 panic）
+///
+/// **只做边界钳制**：不判断选区是否切断字符串 / 注释 / 半个 token。那是
+/// [`expand_to_statements`] 的职责——它把边界推到语句首尾，绝大多数“半截”随之消失。
 pub(crate) fn clamp_range(text: &str, range: Range<usize>) -> Range<usize> {
     let len = text.len();
     let start = range.start.min(len);
     let end = range.end.min(len).max(start);
     start..end
+}
+
+/// 选区吸附：把落在语句内部的选区扩到**完整语句**边界
+///
+/// 规则：与选区**相交**的所有语句首尾相接（选到两句的中间就两句一起排）。
+/// 没有相交时原样返回——选区落在语句之间的空白或纯注释区，那是用户真的只想选空白，
+/// 替他扩大没有意义。
+///
+/// 用 `split_statements` 而不是自算：它已经处理好引号双写、`$$ … $$`、块注释与
+/// 未闭合引号（见 `rds-sql/src/split.rs` 模块头），且保证区间落在字符边界上。
+pub(crate) fn expand_to_statements(text: &str, range: Range<usize>) -> Range<usize> {
+    if range.end <= range.start {
+        return range;
+    }
+    let mut hit: Option<Range<usize>> = None;
+    for span in split_statements(text) {
+        // 相交（区间左闭右开）：`span.end` 不含分隔分号，所以“只选了分号”不会吸附
+        if span.start < range.end && range.start < span.end {
+            hit = Some(match hit {
+                Some(prev) => prev.start.min(span.start)..prev.end.max(span.end),
+                None => span.start..span.end,
+            });
+        }
+    }
+    hit.unwrap_or(range)
 }
 
 /// 把光标从旧文本映射到新文本
@@ -194,7 +257,7 @@ pub fn map_offset(old: &str, new: &str, offset: usize) -> usize {
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
-    use super::{dialect_of, dialect_of_known, map_offset, plan};
+    use super::{dialect_of, dialect_of_known, expand_to_statements, map_offset, plan};
     use engine::sql::{FormatOptions, SqlDialect};
 
     #[test]
@@ -238,24 +301,114 @@ mod tests {
             "选区外的内容不该被碰：{:?}",
             plan.text
         );
-        // 选区内部被格式化了（关键字大写、换行排开）——具体排版是 sqlglot 的事，
-        // 这里只断言“真的重排了”与关键片段还在
+        // 选区内部被排版（lax 只调空白，不碰大小写：原文小写就保持小写）
         let selected = plan.selection.clone().expect("有选区");
         let formatted = &plan.text[selected.clone()];
-        assert!(formatted.contains("SELECT"), "{formatted:?}");
-        assert!(formatted.contains("FROM"), "{formatted:?}");
-        assert!(formatted.contains("WHERE"), "{formatted:?}");
+        // 选区吸附到语句起点，而 `split_statements` 把**语句前的注释**算作该语句的一部分
+        // （`rds-sql/src/split.rs` 模块头“注释归属”），所以选区首行是那条注释。
+        // 注释文本一字未改 —— lax 只动空白，`apply_options` 也不碰注释区间。
         assert!(
-            formatted.contains('\n'),
-            "格式化就该把语句排开（不是原样一长行）：{formatted:?}"
+            formatted.starts_with("-- 这段别动"),
+            "语句前导注释随语句一起吸附：{formatted:?}"
+        );
+        assert!(
+            formatted.ends_with("select\n  a,\n  b\nfrom\n  t\nwhere\n  x=1"),
+            "选区应被排版成子句分段：{formatted:?}"
         );
         // 格式化之后那一段仍然被选中（用户能接着改）
         assert!(
-            plan.text[selected].starts_with("SELECT"),
+            plan.text[selected].contains("select\n  a,"),
             "格式化结果应当保持选中"
         );
         assert_eq!(plan.formatted, 1);
         assert_eq!(plan.kept_verbatim, 0);
+    }
+
+    /// 选区吸附：只选了语句内部的一小段，排的是**整条语句**（DataGrip / VS Code 口径）
+    #[test]
+    fn a_selection_inside_a_statement_expands_to_the_whole_statement() {
+        let text = "select 1;\nselect a,b from t where x=1;\nselect 3;\n";
+        // 只选 `select a,b`（第二条语句的前半截）
+        let start = text.find("select a,b").expect("选区在");
+        let plan = plan(
+            text,
+            start..start + "select a,b".len(),
+            SqlDialect::Ansi,
+            FormatOptions::default(),
+        );
+        // 第一条、第三条逐字不动（没被顺手重排）
+        assert!(
+            plan.text.starts_with("select 1;\n"),
+            "选区外的第一条不该被碰：{:?}",
+            plan.text
+        );
+        assert!(
+            plan.text.ends_with("select 3;\n"),
+            "选区外的第三条不该被碰：{:?}",
+            plan.text
+        );
+        // 第二条被**整条**排版：`from` / `where` 都落到独行（只排前半截做不到这点）
+        assert!(
+            plan.text
+                .contains("select\n  a,\n  b\nfrom\n  t\nwhere\n  x=1"),
+            "应当排的是整条语句：{:?}",
+            plan.text
+        );
+        assert_eq!(plan.formatted, 1, "只有一条语句被排：{:?}", plan.text);
+    }
+
+    /// 选区跨两条语句 → 两条一起吸附（首尾相接），第三条不碰
+    #[test]
+    fn a_selection_spanning_two_statements_expands_to_both() {
+        let text = "select 1;\nselect a,b from t where x=1;\nselect c,d from u;\n";
+        let start = text.find("where x=1").expect("选区在");
+        let end = text.find("from u").expect("选区在") + "from u".len();
+        let plan = plan(text, start..end, SqlDialect::Ansi, FormatOptions::default());
+        assert!(
+            plan.text.starts_with("select 1;\n"),
+            "第一条不在选区里，不该被碰：{:?}",
+            plan.text
+        );
+        assert!(
+            plan.text
+                .contains("select\n  a,\n  b\nfrom\n  t\nwhere\n  x=1"),
+            "第二条应当被整条排版：{:?}",
+            plan.text
+        );
+        assert!(
+            plan.text.contains("select\n  c,\n  d\nfrom\n  u"),
+            "第三条应当被整条排版：{:?}",
+            plan.text
+        );
+        assert_eq!(plan.formatted, 2, "两条语句被排：{:?}", plan.text);
+    }
+
+    /// 选区落在语句之间的空白 → **不吸附**（用户真的只选了空白）
+    #[test]
+    fn a_selection_in_the_gap_between_statements_is_not_expanded() {
+        let text = "select 1;\n\nselect 2;\n";
+        let gap = text.find("\n\n").expect("有空行") + 1;
+        assert_eq!(expand_to_statements(text, gap..gap + 1), gap..gap + 1);
+        // 落到空白 → 排版不动任何东西（整篇等于原文）
+        let plan = plan(
+            text,
+            gap..gap + 1,
+            SqlDialect::Ansi,
+            FormatOptions::default(),
+        );
+        assert!(!plan.changes(text), "选区是空白，不该改动：{:?}", plan.text);
+    }
+
+    /// 区间吸附本身：相交取首尾、不相交原样返回
+    #[test]
+    fn expand_takes_the_outermost_touching_statements() {
+        let text = "select 1;\nselect 2;\n";
+        // 完全在第一条内 → 第一条（不含分号，`end` 是分号前）
+        assert_eq!(expand_to_statements(text, 3..4), 0..8);
+        // 跨两条 → 合到首尾
+        assert_eq!(expand_to_statements(text, 3..12), 0..18);
+        // 只选分号 → 不与任何语句相交 → 原样
+        assert_eq!(expand_to_statements(text, 8..9), 8..9);
     }
 
     #[test]
@@ -269,7 +422,7 @@ mod tests {
             SqlDialect::Ansi,
             FormatOptions::default(),
         );
-        assert!(plan.text.contains("SELECT\n  1;"), "{:?}", plan.text);
+        assert!(plan.text.contains("select\n  1;"), "{:?}", plan.text);
         assert!(plan.selection.is_none(), "整篇格式化不选中任何东西");
         // 光标还在第二条语句的区间内
         let spans = engine::sql::split_statements(&plan.text);
@@ -282,15 +435,24 @@ mod tests {
         );
     }
 
+    /// **行为变化**：没写完的尾句也会被排版（lax 永不拒绝输入），不再有“解析失败保留”
+    ///
+    /// 旧实现用 sqlglot 解析，第二句缺右括号就整条跳过并计数；现在两句都会过一遍排版，
+    /// `kept_verbatim` 只留作引擎内部异常时的兜底（正常输入恒 0）。
     #[test]
-    fn unparseable_statements_are_kept_and_counted() {
+    fn incomplete_tail_is_typeset_instead_of_skipped() {
         let text = "select 1;\nselect (\n";
         let plan = plan(text, 0..0, SqlDialect::Ansi, FormatOptions::default());
-        assert_eq!(plan.formatted, 1);
-        assert_eq!(plan.kept_verbatim, 1, "没写完的那句要如实报出来");
+        assert_eq!(plan.formatted, 2, "两句都会过排版：{:?}", plan.text);
+        assert_eq!(
+            plan.kept_verbatim, 0,
+            "不再有“解析失败保留”：{:?}",
+            plan.text
+        );
+        assert!(plan.changes(text), "整篇应当被重排：{:?}", plan.text);
         assert!(
-            plan.text.contains("select (\nselect") || plan.text.contains("select ("),
-            "{:?}",
+            plan.text.contains('('),
+            "未写完的内容不能丢：{:?}",
             plan.text
         );
     }

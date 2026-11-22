@@ -1,11 +1,15 @@
-//! SQL 格式化设置项登记（2026-11-19 自 editor 域「SQL 格式化」分组迁出成独立节并扩全）。
+//! SQL 格式化设置项登记。
 //!
-//! 六个旋钮都作用在**格式化输出**上（编辑器 Ctrl+Shift+F / 保存时自动格式化 / 设置页
+//! 十二 个旋钮都作用在**格式化输出**上（编辑器 Ctrl+Shift+F / 保存时自动格式化 / 设置页
 //! 预览共用同一份 `FormatOptions`），`SettingEffect::Immediate`：下次格式化即生效
 //! （消费方在格式化时拉取，见 `crates/editor/src/view/host/format.rs::format_options`）。
 //!
-//! 格言：**方言不在设置里**——格式化自动跟随文档绑定的连接（引号风格 / 保留字 /
-//! 函数名按方言输出），未绑定连接时按 ANSI；这条口径写在首行 hint 里，用户能在页面上读到。
+//! 格言：**排版不方言化**——排版引擎是 lax-sql（lossless，只调空白），它的 tokenizer
+//! 不接受方言；方言只用于转译与语义分析。所以本节没有方言设置项（旧的"跟随绑定连接出
+//! 引号风格 / 保留字"口径已作废）。
+//!
+//! 唯一不映射到 lax 的是 `keyword_case`：lax 的关键字表只有 85 个通用词，本项目改用
+//! sqlglot 词法器（200+ 变体、跨方言并集）判定后自己改写。
 use crate::registry::{SettingEffect, SettingEntry, SettingKind, SettingSpec};
 
 /// 本域全部登记项（`registry::registry()` 惰性合并，顺序 = 登记顺序 = 页面行序）。
@@ -18,7 +22,7 @@ pub fn entries() -> Vec<SettingSpec> {
             group: "sql_format",
             group_label: None,
             label: "关键字大小写",
-            hint: "格式化后关键字统一大小写（只改关键字，字符串与注释内容不动）；格式化按文档绑定连接的方言生效，未绑定连接时按 ANSI",
+            hint: "格式化后关键字统一大小写（只改关键字，字符串与注释内容不动）；判定走 sqlglot 词法器（跨方言 200+ 关键字变体），不经排版引擎的通用词表",
             hint_inline: true,
             kind: SettingKind::Enum(&[
                 ("preserve", "保持原样"),
@@ -58,7 +62,7 @@ pub fn entries() -> Vec<SettingSpec> {
             group: "sql_format",
             group_label: None,
             label: "缩进宽度",
-            hint: "空格缩进时的行首缩进空格数（2 = sqlglot 原生；选 Tab 缩进时此项不参与）",
+            hint: "空格缩进时的行首缩进空格数（选 Tab 缩进时此项不参与）",
             hint_inline: true,
             kind: SettingKind::Number,
             presets: &[(2, "2 空格（默认）"), (4, "4 空格"), (8, "8 空格")],
@@ -76,7 +80,7 @@ pub fn entries() -> Vec<SettingSpec> {
             group: "sql_format",
             group_label: None,
             label: "逗号风格",
-            hint: "SELECT 项列表的逗号位置：尾随（col1, 换行 col2，sqlglot 原生）或前导（col1 换行 , col2）；只迁移行尾逗号，字符串与注释里的逗号不动",
+            hint: "SELECT 项列表的逗号位置：尾随（col1, 换行 col2）或前导（col1 换行 , col2）；只迁移行尾逗号，字符串与注释里的逗号不动。注意前导与排版引擎的折行方向相反，同一段反复格式化可能来回迁移（不承诺幂等）",
             hint_inline: true,
             kind: SettingKind::Enum(&[("trailing", "尾随（默认）"), ("leading", "前导")]),
             presets: &[],
@@ -105,6 +109,101 @@ pub fn entries() -> Vec<SettingSpec> {
             composite: false,
             disabled: false,
         },
+        // ---- 2026-11-22：排版换 lax 后释放的五项 ----
+        SettingSpec {
+            key: "sql_format.line_width",
+            section: "sql_format",
+            section_label: "SQL 格式化",
+            group: "sql_format",
+            group_label: None,
+            label: "行宽",
+            hint: "一行最多多少列（超宽才折行）；默认 120 与 dprint 推荐值一致，SQL 想更紧凑可调 80 / 100",
+            hint_inline: true,
+            kind: SettingKind::Number,
+            presets: &[(80, "80"), (100, "100"), (120, "120（默认）")],
+            default_json: "120",
+            effect: SettingEffect::Immediate,
+            entry: SettingEntry::Page,
+            consumer: "crates/editor/src/support/format.rs::options_from_settings（落盘值 → FormatOptions，编辑器与预览共用）",
+            composite: false,
+            disabled: false,
+        },
+        SettingSpec {
+            key: "sql_format.clause_style",
+            section: "sql_format",
+            section_label: "SQL 格式化",
+            group: "sql_format",
+            group_label: None,
+            label: "子句布局",
+            hint: "展开：每个子句关键字独占一行、子句体缩进其下、逗号分隔项一行一项（DataGrip 观感，默认）；紧凑：子句内按行宽打包，超出才折行",
+            hint_inline: true,
+            kind: SettingKind::Enum(&[("fill", "紧凑"), ("expanded", "展开（默认）")]),
+            presets: &[],
+            default_json: "\"expanded\"",
+            effect: SettingEffect::Immediate,
+            entry: SettingEntry::Page,
+            consumer: "crates/editor/src/support/format.rs::options_from_settings（落盘值 → FormatOptions，编辑器与预览共用）",
+            composite: false,
+            disabled: false,
+        },
+        SettingSpec {
+            key: "sql_format.new_line_kind",
+            section: "sql_format",
+            section_label: "SQL 格式化",
+            group: "sql_format",
+            group_label: None,
+            label: "换行符",
+            hint: "跟随原文（默认，按整篇多数换行决定，不改你的文件风格）；LF / CRLF 强制统一。语句体与语句之间的换行始终一致，不会混排",
+            hint_inline: true,
+            kind: SettingKind::Enum(&[
+                ("auto", "跟随原文（默认）"),
+                ("lf", "LF"),
+                ("crlf", "CRLF"),
+            ]),
+            presets: &[],
+            default_json: "\"auto\"",
+            effect: SettingEffect::Immediate,
+            entry: SettingEntry::Page,
+            consumer: "crates/editor/src/support/format.rs::options_from_settings（落盘值 → FormatOptions，编辑器与预览共用）",
+            composite: false,
+            disabled: false,
+        },
+        SettingSpec {
+            key: "sql_format.ignore_node_comment_text",
+            section: "sql_format",
+            section_label: "SQL 格式化",
+            group: "sql_format",
+            group_label: None,
+            label: "节点忽略标记",
+            hint: "注释里出现这段文字时，该语法节点原样保留、不参与排版；标记必须独占一行、紧贴在要保护的那条语句上方（写在语句行尾不生效，且只作用于紧跟的第一条）。留空会匹配任何注释、等于全篇不排版，所以不允许留空",
+            hint_inline: true,
+            kind: SettingKind::Text,
+            presets: &[],
+            default_json: "\"dprint-ignore\"",
+            effect: SettingEffect::Immediate,
+            entry: SettingEntry::Page,
+            consumer: "crates/editor/src/support/format.rs::options_from_settings（落盘值 → FormatOptions，编辑器与预览共用）",
+            composite: false,
+            disabled: false,
+        },
+        SettingSpec {
+            key: "sql_format.ignore_file_comment_text",
+            section: "sql_format",
+            section_label: "SQL 格式化",
+            group: "sql_format",
+            group_label: None,
+            label: "整篇忽略标记",
+            hint: "文件开头注释里出现这段文字时，整篇不排版（保留原样）；同样不允许留空",
+            hint_inline: true,
+            kind: SettingKind::Text,
+            presets: &[],
+            default_json: "\"dprint-ignore-file\"",
+            effect: SettingEffect::Immediate,
+            entry: SettingEntry::Page,
+            consumer: "crates/editor/src/support/format.rs::options_from_settings（落盘值 → FormatOptions，编辑器与预览共用）",
+            composite: false,
+            disabled: false,
+        },
         SettingSpec {
             key: "sql_format.format_on_save",
             section: "sql_format",
@@ -112,7 +211,7 @@ pub fn entries() -> Vec<SettingSpec> {
             group: "sql_format",
             group_label: None,
             label: "保存时自动格式化",
-            hint: "Ctrl+S 落盘前先格式化（解析不了的语句原样保留）；仅 SQL / 通用模式生效",
+            hint: "Ctrl+S 落盘前先格式化（排版引擎不拒绝任何输入，正在写的半截语句也会被排版）；仅 SQL / 通用模式生效",
             hint_inline: true,
             kind: SettingKind::Bool,
             presets: &[],
@@ -120,6 +219,25 @@ pub fn entries() -> Vec<SettingSpec> {
             effect: SettingEffect::Immediate,
             entry: SettingEntry::Page,
             consumer: "crates/editor/src/view/host/format.rs::format_on_save_enabled（Ctrl+S 保存流程先 format_document 再落盘）",
+            composite: false,
+            disabled: false,
+        },
+        // ---- 2026-11-22 第三轮：运算符间距（不属于 lax，属本项目后处理）----
+        SettingSpec {
+            key: "sql_format.normalize_operators",
+            section: "sql_format",
+            section_label: "SQL 格式化",
+            group: "sql_format",
+            group_label: None,
+            label: "运算符两侧补空格",
+            hint: "把 `a=1` 补成 `a = 1`（= <> != <= >= < > + - * / % ||）；一元与通配形态不动（-1、count(*)、select *、t.*），`::` / `->` / `->>` / `#>` / `@` 不动；只补不删，已有空格与换行保持原样",
+            hint_inline: false,
+            kind: SettingKind::Bool,
+            presets: &[],
+            default_json: "false",
+            effect: SettingEffect::Immediate,
+            entry: SettingEntry::Page,
+            consumer: "crates/editor/src/support/format.rs::options_from_settings（落盘值 → FormatOptions，编辑器与预览共用）",
             composite: false,
             disabled: false,
         },

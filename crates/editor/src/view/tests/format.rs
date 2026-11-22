@@ -92,7 +92,8 @@ fn ctrl_shift_f_formats_the_document_and_reports_the_count(cx: &mut TestAppConte
     cx.simulate_keystrokes("ctrl-shift-f");
 
     let text = cx.update(|_window, cx| panel.read(cx).text_for_test(cx));
-    assert!(text.contains("FROM"), "关键字应当大写：{text:?}");
+    // 关键字大小写默认「保持原样」，所以断言的是**排版结构**而不是大写
+    assert!(text.contains("from\n  t"), "子句应当分段：{text:?}");
     assert!(text.contains('\n'), "格式化后应当分行：{text:?}");
     // 文档内容跟着走（否则保存下去的还是旧文本）
     assert_eq!(
@@ -106,26 +107,24 @@ fn ctrl_shift_f_formats_the_document_and_reports_the_count(cx: &mut TestAppConte
     assert!(message.contains("已格式化 1 条语句"), "{message}");
 }
 
-/// 没写完的语句**原样保留**，并在状态栏里如实报出来（不是“失败”，也不是悄悄丢掉）
+/// **行为变化**：没写完的尾句也会被排版，并在状态栏里如实报条数（不再有“解析不了”）
 #[gpui_kit::test]
-fn a_half_written_statement_is_kept_verbatim_and_reported(cx: &mut TestAppContext) {
+fn a_half_written_statement_is_still_typeset(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
-    // 第二句缺右括号：解析不了——用户正打到一半就按了格式化
+    // 第二句缺右括号：用户正打到一半就按了格式化
     let (shared, id) = shared_with_document(r"D:\sql\half.sql", "select a,b from t;\nselect (1");
     let (panel, cx) = open_panel(cx, &shared, &id);
 
     cx.update(|window, cx| panel.update(cx, |panel, cx| panel.format_document(window, cx)));
 
     let text = cx.update(|_window, cx| panel.read(cx).text_for_test(cx));
-    assert!(
-        text.ends_with("select (1"),
-        "解析不了的语句要一个字节不动：{text:?}"
-    );
-    assert!(text.contains("FROM"), "能格式化的那句照常排：{text:?}");
+    // 排版引擎不拒绝输入：能排的第一句被排开，半截的那句也过了一遍（内容不丢）
+    assert!(text.contains("from\n  t"), "第一句照常排：{text:?}");
+    assert!(text.contains("(1"), "半截语句的内容一个字节都不能丢：{text:?}");
     let message = cx
         .update(|_window, cx| panel.read(cx).message.clone())
-        .expect("要说清楚哪条没动");
-    assert!(message.contains("解析不了"), "{message}");
+        .expect("格式化要有回执");
+    assert!(message.contains("已格式化 2 条语句"), "{message}");
 }
 
 /// 有选区只格式化选区：**选区外一个字节不动**（别顺手把用户的草稿也排了）
@@ -143,8 +142,8 @@ fn formatting_a_selection_leaves_the_rest_untouched(cx: &mut TestAppContext) {
     cx.update(|window, cx| panel.update(cx, |panel, cx| panel.format_document(window, cx)));
 
     let text = cx.update(|_window, cx| panel.read(cx).text_for_test(cx));
-    assert!(text.contains("SELECT"), "选中的那句要排版：{text:?}");
-    assert!(text.contains("FROM"), "选中的那句要排版：{text:?}");
+    assert!(text.contains("select\n  a,"), "选中的那句要排版：{text:?}");
+    assert!(text.contains("from\n  t"), "选中的那句要排版：{text:?}");
     assert!(
         text.contains("-- 下面是草稿"),
         "选区外的注释不得被动：{text:?}"

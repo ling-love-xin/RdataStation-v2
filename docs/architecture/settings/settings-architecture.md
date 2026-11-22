@@ -155,12 +155,17 @@ graph TD
 | `sql_analysis.semantic_diagnostics` | SQL 分析 | bool | `true` | 即时 | `crates/editor/src/language/language_service/face_diag.rs`（关掉只跑词法层诊断）；偏好经装配层 `settings::install_sql_analysis_sink` → `rds_sql::analysis::set_prefs` | 设置页 | ✅ 已落地（2026-11-08） |
 | `sql_analysis.predicate_pushdown` | SQL 分析 | bool | `true` | 即时 | `crates/editor/src/language/language_service/face_actions.rs`（关掉不摆「把 WHERE 下推进子查询」这条代码动作） | 设置页 | ✅ 已落地（2026-11-08） |
 | `sql_analysis.hover_scope` | SQL 分析 | bool | `true` | 即时 | `crates/editor/src/lsp/sql_hover.rs`（关掉悬停不再补「来源：a、b」一行） | 设置页 | ✅ 已落地（2026-11-08） |
-| `sql_format.keyword_case` | SQL 格式化 | enum `preserve`/`upper`/`lower` | `preserve` | 即时（下次格式化） | `crates/editor/src/view/host/format.rs::format_options`（经 `editor::support::format::options_from_settings` 映射；设置页预览共用同一映射） | 设置页（节首实时预览） | ✅ 已落地（2026-11-19，自 `editor.format_*` 迁出并扩全） |
-| `sql_format.indent_char` | SQL 格式化 | enum `space`/`tab` | `space` | 即时（下次格式化） | 同上（Tab = 每级一个制表符，宽度档不参与） | 设置页 | ✅ 已落地（2026-11-19） |
-| `sql_format.indent_width` | SQL 格式化 | i64（2/4/8，仅空格缩进时生效） | `2` | 即时（下次格式化） | 同上 | 设置页 | ✅ 已落地（2026-11-19） |
-| `sql_format.comma_style` | SQL 格式化 | enum `trailing`/`leading` | `trailing` | 即时（下次格式化） | 同上（前导 = 行尾逗号迁到下一行内容前；字符串/注释内逗号不动） | 设置页 | ✅ 已落地（2026-11-19） |
-| `sql_format.blank_lines_between` | SQL 格式化 | i64（0/1/2） | `1` | 即时（下次格式化） | 同上 | 设置页 | ✅ 已落地（2026-11-19） |
-| `sql_format.format_on_save` | SQL 格式化 | bool | `false` | 即时 | `crates/editor/src/view/host/format.rs::format_on_save_enabled`（Ctrl+S 保存流程先 format_document 再落盘） | 设置页 | ✅ 已落地（2026-11-19） |
+| `sql_format.keyword_case` | SQL 格式化 | enum `preserve`/`upper`/`lower` | `preserve` | 即时（下次格式化） | `crates/editor/src/view/host/format.rs::format_options`（经 `editor::support::format::options_from_settings` 映射；设置页预览共用同一映射）；**唯一不走排版引擎的一项**：判定用 `crates/sql/src/highlight.rs` 的 sqlglot 词法器（200+ 关键字变体），lax 侧恒传 `Preserve` | 设置页（节首实时预览） | ✅ 已落地（2026-11-19；2026-11-22 排版换 lax 后改为词法器驱动） |
+| `sql_format.indent_char` | SQL 格式化 | enum `space`/`tab` | `space` | 即时（下次格式化） | 同上（映射到 lax `useTabs`；Tab = 每级一个制表符，宽度档不参与） | 设置页 | ✅ 已落地（2026-11-19；2026-11-22 起由 lax 直接排，不再行首重排） |
+| `sql_format.indent_width` | SQL 格式化 | i64（2/4/8，仅空格缩进时生效） | `2` | 即时（下次格式化） | 同上（映射到 lax `indentWidth`） | 设置页 | ✅ 已落地（2026-11-19） |
+| `sql_format.comma_style` | SQL 格式化 | enum `trailing`/`leading` | `trailing` | 即时（下次格式化） | 同上（前导 = 行尾逗号迁到下一行内容前；字符串/注释内逗号不动）。**lax 无此开关**，仍由本项目的行级后处理实现 | 设置页 | ✅ 已落地（2026-11-19） |
+| `sql_format.blank_lines_between` | SQL 格式化 | i64（0/1/2） | `1` | 即时（下次格式化） | 同上（由语句间隔规整负责，与 lax 不冲突） | 设置页 | ✅ 已落地（2026-11-19） |
+| `sql_format.line_width` | SQL 格式化 | i64（40–200） | `120` | 即时（下次格式化） | 同上（映射到 lax `lineWidth`；默认 120 = dprint 推荐值） | 设置页 | ✅ 已落地（2026-11-22，换 lax 时释放） |
+| `sql_format.clause_style` | SQL 格式化 | enum `fill`/`expanded` | `expanded` | 即时（下次格式化） | 同上（映射到 lax `clauseStyle`；`expanded` = 一行一项，DataGrip 观感） | 设置页 | ✅ 已落地（2026-11-22） |
+| `sql_format.new_line_kind` | SQL 格式化 | enum `auto`/`lf`/`crlf` | `auto` | 即时（下次格式化） | 同上（映射到 lax `newLineKind`；`auto` 由 `crates/sql` 按整篇多数换行解析，保证语句体与语句间隔同源，不混排） | 设置页 | ✅ 已落地（2026-11-22） |
+| `sql_format.ignore_node_comment_text` | SQL 格式化 | 文本（非空 / ≤64 / 无换行） | `dprint-ignore` | 即时（下次格式化） | 同上（映射到 lax `ignoreNodeCommentText`）；**空值会匹配任何注释、等于全篇不排版，`apply_slot` 拒绝空值** | 设置页 | ✅ 已落地（2026-11-22） |
+| `sql_format.ignore_file_comment_text` | SQL 格式化 | 文本（同上约束） | `dprint-ignore-file` | 即时（下次格式化） | 同上（映射到 lax `ignoreFileCommentText`） | 设置页 | ✅ 已落地（2026-11-22） |
+| `sql_format.format_on_save` | SQL 格式化 | bool | `false` | 即时 | `crates/editor/src/view/host/format.rs::format_on_save_enabled`（Ctrl+S 保存流程先 format_document 再落盘）；注意排版引擎不拒绝输入，**半截语句也会被排版** | 设置页 | ✅ 已落地（2026-11-19） |
 | `resources.keep_versions` | 分析资产 | i32（`0` = 只留元数据；`-1` = 全留） | `5` | 下次归档 | `analytics_resource/src/service.rs`（现为常量 `DEFAULT_KEEP_VERSIONS`） | 设置页 | ⬜ 待 M6 P2.4 接线 |
 
 > 命名约定：JSON 字段一律 **snake_case**（与现有 `theme_mode` / `source_short_code` / `sort_mode` 一致）。M6 文档里写的 `resources.keepVersions` 是同一项的早期命名，**已于 2026-09-18 落地为 `resources.keep_versions`**（M6 侧同步改口）。

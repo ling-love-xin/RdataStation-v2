@@ -20,10 +20,11 @@ impl EditorHostPanel {
     ///
     /// 计划（格式化哪一段 / 光标去哪 / 有几条没动）由纯函数 [`crate::format::plan`] 算；
     /// 这里只做三件事：**只读拒绝**、落一次**可撤销**的替换（`replace_all` 保留撤销历史）、
-    /// 把结果如实说给用户（“改了 N 条” / “M 条解析不了，原样保留”）。
-    /// 【格式化设置页】六旋钮（关键字大小写 / 缩进字符与宽度 / 逗号风格 / 语句间空行）
-    /// 从 `sql_format` 域读取；映射与回退口径跟设置页实时预览共用同一份纯函数
-    /// （[`crate::format::options_from_settings`]），两边永远一致。
+    /// 把结果如实说给用户（“改了 N 条”）。
+    /// 【排版换 lax】不拒绝任何输入（含选区的半截片段），所以“解析不了、原样保留”这条
+    /// 常见路径已经不存在了；`kept_verbatim` 只剩引擎内部异常时的兜底，措辞保持中性。
+    /// 【格式化设置页】十一个旋钮从 `sql_format` 域读取；映射与回退口径跟设置页实时预览
+    /// 共用同一份纯函数（[`crate::format::options_from_settings`]），两边永远一致。
     ///
     /// `cx` 借了 `Context`（Deref 到 `App`），读设置是只读，放这里安全。
     fn format_options(cx: &mut Context<Self>) -> engine::sql::FormatOptions {
@@ -51,12 +52,9 @@ impl EditorHostPanel {
         let plan = format::plan(&text, selection, dialect, options);
 
         if !plan.changes(&text) {
-            // 没改动也要说清楚是“本来就是格式化好的”还是“解析不了”——两者感受完全不同
+            // 没改动也要说清楚：本来就是格式化好的，还是引擎跳过了某几条
             let message = if plan.kept_verbatim > 0 {
-                format!(
-                    "{} 条语句解析不了（可能是还没写完），已原样保留；其余本来就是格式化好的",
-                    plan.kept_verbatim
-                )
+                format!("{} 条语句未能排版，已原样保留", plan.kept_verbatim)
             } else {
                 "已经是格式化后的样子".to_string()
             };
@@ -74,7 +72,7 @@ impl EditorHostPanel {
         // 内核的 Change 事件会把内容写回服务层（脏状态跟着变），这里只补一句结果
         let mut message = format!("已格式化 {} 条语句", plan.formatted);
         if plan.kept_verbatim > 0 {
-            message.push_str(&format!("；{} 条解析不了，原样保留", plan.kept_verbatim));
+            message.push_str(&format!("；{} 条未能排版，原样保留", plan.kept_verbatim));
         }
         self.set_message(Some(message), cx);
     }

@@ -97,6 +97,57 @@ pub(crate) fn apply_slot(
             };
             SettingsService::set_sql_format_on_save(on, cx);
         }
+        Slot::SqlFormatLineWidth => {
+            let Some(n) = value.as_number() else {
+                return false;
+            };
+            // 40 以下等于一行放不下一个短 SELECT，200 以上等于不折行；区间外拒绝，不夹取。
+            if !(40.0..=200.0).contains(&n) {
+                return false;
+            }
+            SettingsService::set_sql_format_line_width(n as i64, cx);
+        }
+        Slot::SqlFormatClauseStyle => {
+            let Some(v) = value.as_text() else {
+                return false;
+            };
+            if !(v == "fill" || v == "expanded") {
+                return false;
+            }
+            SettingsService::set_sql_format_clause_style(v, cx);
+        }
+        Slot::SqlFormatNewLineKind => {
+            let Some(v) = value.as_text() else {
+                return false;
+            };
+            if !(v == "auto" || v == "lf" || v == "crlf") {
+                return false;
+            }
+            SettingsService::set_sql_format_new_line_kind(v, cx);
+        }
+        Slot::SqlFormatIgnoreNodeText | Slot::SqlFormatIgnoreFileText => {
+            let Some(v) = value.as_text() else {
+                return false;
+            };
+            // 标记文本会被拿去和注释正文做 `contains` 判断：
+            // **空串会匹配任何注释**（等于"全篇都不排版"），所以必须拒绝；
+            // 含换行的标记在单行注释里永远匹配不上，同样拒绝。
+            let trimmed = v.trim();
+            if trimmed.is_empty() || trimmed.len() > 64 || trimmed.contains(['\n', '\r']) {
+                return false;
+            }
+            if slot == Slot::SqlFormatIgnoreNodeText {
+                SettingsService::set_sql_format_ignore_node_text(trimmed, cx);
+            } else {
+                SettingsService::set_sql_format_ignore_file_text(trimmed, cx);
+            }
+        }
+        Slot::SqlFormatNormalizeOperators => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_sql_format_normalize_operators(on, cx);
+        }
         _ => return false,
     }
     true
@@ -158,6 +209,60 @@ impl SettingsService {
         {
             let settings = cx.global_mut::<Settings>();
             settings.sql_format.format_on_save = on;
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
+    /// 设置并持久化行宽。
+    pub fn set_sql_format_line_width(v: i64, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.sql_format.line_width = v;
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
+    /// 设置并持久化子句布局（`fill` / `expanded`）。
+    pub fn set_sql_format_clause_style(v: &str, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.sql_format.clause_style = v.to_string();
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
+    /// 设置并持久化换行符（`auto` / `lf` / `crlf`）。
+    pub fn set_sql_format_new_line_kind(v: &str, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.sql_format.new_line_kind = v.to_string();
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
+    /// 设置并持久化节点级忽略标记（已由 `apply_slot` 校验非空）。
+    pub fn set_sql_format_ignore_node_text(v: &str, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.sql_format.ignore_node_comment_text = v.to_string();
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
+    /// 设置并持久化文件级忽略标记（已由 `apply_slot` 校验非空）。
+    pub fn set_sql_format_ignore_file_text(v: &str, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.sql_format.ignore_file_comment_text = v.to_string();
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
+    /// 设置并持久化「运算符两侧补空格」开关（默认关；只补不删）。
+    pub fn set_sql_format_normalize_operators(on: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.sql_format.normalize_operators = on;
         }
         persist(&cx.global::<Settings>().clone());
     }

@@ -36,17 +36,28 @@ pub struct ScriptRewrite {
 ///
 /// `rewrite` 收一条语句的原文，返回改写后的文本；返回 `None` 表示这一条改写不了
 /// （解析失败 / 未写完），调用方（这里）会把它逐字保留。
-pub fn rewrite_statements(
-    sql: &str,
-    rewrite: impl FnMut(&str) -> Option<String>,
-) -> ScriptRewrite {
+pub fn rewrite_statements(sql: &str, rewrite: impl FnMut(&str) -> Option<String>) -> ScriptRewrite {
     rewrite_statements_with_gap(sql, 1, rewrite)
 }
 
 /// 逐条改写脚本，语句间空行数可配（0 = 语句紧挨 `;\n`；N = `;` + (N+1) 个换行）
+///
+/// 换行符固定 `\n`。需要跟随原文 / 强制 CRLF 的调用方用
+/// [`rewrite_statements_with_gap_nl`]——**语句之间的空白也必须和语句体内的换行同一种**，
+/// 否则同一篇文本里会同时出现 `\r\n` 与 `\n`（Windows 上观感是"半截文件"）。
 pub fn rewrite_statements_with_gap(
     sql: &str,
     blank_lines: u8,
+    rewrite: impl FnMut(&str) -> Option<String>,
+) -> ScriptRewrite {
+    rewrite_statements_with_gap_nl(sql, blank_lines, "\n", rewrite)
+}
+
+/// 同 [`rewrite_statements_with_gap`]，但可指定换行符（`"\n"` / `"\r\n"`）
+pub fn rewrite_statements_with_gap_nl(
+    sql: &str,
+    blank_lines: u8,
+    newline: &str,
     mut rewrite: impl FnMut(&str) -> Option<String>,
 ) -> ScriptRewrite {
     let spans = split_statements(sql);
@@ -57,7 +68,7 @@ pub fn rewrite_statements_with_gap(
             kept_verbatim: 0,
         };
     }
-    let separator = format!(";{}", "\n".repeat(blank_lines as usize + 1));
+    let separator = format!(";{}", newline.repeat(blank_lines as usize + 1));
 
     let mut out = String::with_capacity(sql.len() + sql.len() / 8);
     let mut cursor = 0usize;
@@ -86,7 +97,7 @@ pub fn rewrite_statements_with_gap(
         cursor = span.end;
     }
     // 尾部（最后一句之后的分号 / 空白 / 注释）
-    out.push_str(&normalize_tail(&sql[cursor..]));
+    out.push_str(&normalize_tail(&sql[cursor..], newline));
 
     ScriptRewrite {
         text: out,
@@ -112,12 +123,12 @@ fn normalize_gap(gap: &str, is_first: bool, separator: &str) -> String {
 }
 
 /// 尾部：空白规整成单个换行；有注释就原样
-fn normalize_tail(tail: &str) -> String {
+fn normalize_tail(tail: &str, newline: &str) -> String {
     if tail.trim().is_empty() {
         return if tail.is_empty() {
             String::new()
         } else {
-            "\n".to_string()
+            newline.to_string()
         };
     }
     tail.to_string()
@@ -172,11 +183,13 @@ mod tests {
     fn gap_is_configurable() {
         use super::rewrite_statements_with_gap;
         // 0 空行：`;` + 单换行
-        let compact = rewrite_statements_with_gap("select 1; select 2;", 0, |body| Some(body.to_string()));
+        let compact =
+            rewrite_statements_with_gap("select 1; select 2;", 0, |body| Some(body.to_string()));
         assert!(compact.text.contains(";\nselect"), "{:?}", compact.text);
         assert!(!compact.text.contains(";\n\n"), "{:?}", compact.text);
         // 2 空行：`;` + 三个换行
-        let airy = rewrite_statements_with_gap("select 1; select 2;", 2, |body| Some(body.to_string()));
+        let airy =
+            rewrite_statements_with_gap("select 1; select 2;", 2, |body| Some(body.to_string()));
         assert!(airy.text.contains(";\n\n\nselect"), "{:?}", airy.text);
     }
 }

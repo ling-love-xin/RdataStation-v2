@@ -52,10 +52,11 @@ pub use builder::QualifiedTable;
 pub use engine::{AlterOperation, ColumnDefInfo, DdlInfo, SqlDialect, SqlEngine, SqlStatementType};
 pub use explain::explain_sql;
 pub use filter::{
-    Rewrite, rewrite_with_filter, rewrite_with_order, rewrite_with_where,
-    rewrite_with_where_order,
+    Rewrite, rewrite_with_filter, rewrite_with_order, rewrite_with_where, rewrite_with_where_order,
 };
-pub use formatter::{CommaStyle, FormatOptions, FormatReport, IndentChar, KeywordCase};
+pub use formatter::{
+    ClauseStyle, CommaStyle, FormatOptions, FormatReport, IndentChar, KeywordCase, NewLineKind,
+};
 pub use function_manual::{MANUAL, ManualCategory, ManualEntry, search_manual};
 pub use functions::{
     FunctionSignature, ParamInfo, builtin_signatures, catalog_query, parameter_query,
