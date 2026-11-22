@@ -172,6 +172,8 @@ impl WorkbenchView {
             _editor_status_subs: Vec::new(),
             scratchpad_meta_pump: None,
             persist_pump: None,
+            data_objects_pump: None,
+            data_objects_sig: None,
             catalog_pump: None,
             editor_completion,
             lsp,

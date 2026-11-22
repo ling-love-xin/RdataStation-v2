@@ -297,6 +297,12 @@ pub struct Shared {
     ///
     /// 存 key 而不是行号：清单会随刷新重排，行号一做增删就错位（同 `ElementId` 业务键的道理）。
     pub data_object_picked: Rc<RefCell<Vec<String>>>,
+    /// 数据对象清单的**版本号**：任何让清单过期的动作都递增一次（连接连上 / 断开、
+    /// 查询产出结果集、加源、切项目、资产增删），面板在 render 里比对后 `defer_in` 重取。
+    ///
+    /// 为什么用单调计数而不是让面板订阅各个来源：来源太散（引擎侧的结果集、编辑器侧的
+    /// 落库、资产面板的快照推送各有自己的回调），一个计数是它们唯一共同的最小接口。
+    pub data_objects_epoch: Rc<Cell<u64>>,
     pub notice: Rc<RefCell<Option<String>>>,
     /// 导航元数据缓存失效戳：宿主 / 项目宿主 / Mock 宿主只递增（`invalidate_nav_cache`），
     /// 缓存数据本身由 `EditorPanel` 自持——外部不再直接读写别家的缓存。
@@ -461,6 +467,7 @@ impl Shared {
             loaded_files: Rc::new(RefCell::new(Vec::new())),
             data_object_assets: Rc::new(RefCell::new(Vec::new())),
             data_object_picked: Rc::new(RefCell::new(Vec::new())),
+            data_objects_epoch: Rc::new(Cell::new(0)),
             notice: Rc::new(RefCell::new(notice)),
             nav_cache_epoch: Rc::new(Cell::new(0)),
             nav_panel: Rc::new(RefCell::new(None)),
@@ -615,6 +622,17 @@ impl Shared {
             .set(self.nav_cache_epoch.get().wrapping_add(1));
     }
 
+    /// 声明「数据对象清单过期了」：只递增版本号 + 请宿主重绘，**不碰清单内容**。
+    ///
+    /// 与 [`Self::invalidate_nav_cache`] 同一套路（只发信号，重取由持有缓存的一方做）。
+    /// 调用点都是清单的**生产者**——连接态变化、结果集落库/物化、加源、切项目、资产增删。
+    /// 不在这里顺手 refresh：面板可能没建、也可能没显示，那会让每次导航动作都白查三个库。
+    pub fn mark_data_objects_dirty(&self, cx: &mut App) {
+        self.data_objects_epoch
+            .set(self.data_objects_epoch.get().wrapping_add(1));
+        self.notify_host(cx);
+    }
+
     /// 请求在中央编辑器里打开一条查询（导航「在 SQL 编辑器中打开 / 查看数据 / 生成 SQL」
     /// 与拖拽共用）。
     ///
@@ -657,6 +675,15 @@ impl Shared {
         if let Some(bridge) = self.resources_bridge.borrow().clone() {
             (*bridge.refresh)(cx);
         }
+        // 资产是数据对象清单的一段（面板 refresh 时从资产面板的已载行翻译）：
+        // 换版本 / 新归档 / 回滚都会走这里，所以在这里一并声明「清单过期」。
+        //
+        // **只递增版本号，不 notify_host**：`build_resources_panel` 在侧栏构造期
+        // （`init_workspace`，即宿主 render 内）就会调到这里，此刻 `notify_host` 会
+        // 重入 `WorkbenchView::update` → panic（cannot update … while already being updated）。
+        // 版本号在下一帧 render 比对时生效，那一帧本来就会来。
+        self.data_objects_epoch
+            .set(self.data_objects_epoch.get().wrapping_add(1));
     }
 
     /// 投递草稿箱内容搜索结果（走 `Shared::scratchpad_search` 全局状态；`None` = 清空）。
@@ -1097,6 +1124,8 @@ impl ConnectionDialogHost for Shared {
     fn apply_saved_connections(&self, items: Vec<ConnectionItem>, notice: String, cx: &mut App) {
         *self.connections.borrow_mut() = items;
         self.refresh_mock_connections(cx);
+        // 连接清册换了（新建 / 删除 / 导入）：源库表段的连接行跟着变，清单必须重取
+        self.mark_data_objects_dirty(cx);
         // 治理（2026-10-30）：连接清册提示统一走 say（写 notice + notify_host + info 日志）。
         self.say(notice, cx);
     }

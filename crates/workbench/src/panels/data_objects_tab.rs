@@ -61,6 +61,13 @@ impl PanelNote {
     }
 }
 
+/// 一次源行列举的结果：两类源的形状不同——已挂载的源给带限定名规则的 `MountedTable`
+/// （叶子只复制名），源库连接给翻好的 [`data_objects::Object`]（叶子可选、可取样）。
+enum SourceKids {
+    Mounted(Vec<engine::duckdb::accel::MountedTable>),
+    Connection(Vec<data_objects::Object>),
+}
+
 pub struct DataObjectsTab {
     shared: Shared,
     focus_handle: FocusHandle,
@@ -82,10 +89,18 @@ pub struct DataObjectsTab {
     /// 源行展开出的表 / 视图清单（键 = 源行 key；`Arc` 让 render 只引用不拷贝）。
     /// 列举走引擎（事件路径写入），渲染纯读
     source_children: HashMap<String, Arc<Vec<engine::duckdb::accel::MountedTable>>>,
+    /// **源库连接**展开出的表（键 = `conn:{conn_id}`）。与上一条分开存：
+    /// 那一条是「已挂进 DuckDB 的源」的目录行（`MountedTable` 带限定名规则），
+    /// 这一条是连接层的 `TableCandidate` 翻成的 Object（可选用、可取样，形状不同）
+    conn_children: HashMap<String, Arc<Vec<data_objects::Object>>>,
+    /// 清单版本号（`Shared::data_objects_epoch`）上次同步到的值：变了就重取，
+    /// 让面板跟上「连接变化 / 查询产出结果集 / 加源 / 切项目」
+    seen_epoch: u64,
 }
 
 impl DataObjectsTab {
     pub fn new(shared: Shared, cx: &mut Context<Self>) -> Self {
+        let shared_epoch = shared.data_objects_epoch.get();
         let mut tab = Self {
             shared,
             focus_handle: cx.focus_handle(),
@@ -97,6 +112,10 @@ impl DataObjectsTab {
             collapsed: Vec::new(),
             expanded_sources: HashSet::new(),
             source_children: HashMap::new(),
+            conn_children: HashMap::new(),
+            // 初值故意落后于 Shared（`refresh` 里会同步成当前值）：构造那次刷新已经取过，
+            // 不能让「首次 render 又发现 epoch 变了」再白重取一遍
+            seen_epoch: shared_epoch,
         };
         tab.refresh(cx);
         tab
@@ -202,6 +221,8 @@ impl DataObjectsTab {
     /// 尾部的 `refresh_resources`，注释点名就是为本面板预载的），项目切换与资产增删也都会
     /// 推新快照——所以这里**永远有行可读**，不需要自己开连接查库（那是两套真相）。
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        // 同步版本号：这次取的就是当前现实，下一次 render 不该再判「脏了」
+        self.seen_epoch = self.shared.data_objects_epoch.get();
         let mut collected = data_objects::collect(&self.shared);
         // 内存读数与会话统计都在这里取：render 每帧跑，不能在里面查库。
         // `None` 不算失败——上限没设、pragma 不支持都是正常形态，界面显示「—」。
@@ -249,18 +270,42 @@ impl DataObjectsTab {
         let outcome = match data_objects::source_ref(key) {
             Some(data_objects::SourceRef::Federated { owner, alias }) => {
                 engine::duckdb::federation::session::list_tables_for(&owner, &alias)
+                    .map(SourceKids::Mounted)
             }
             Some(data_objects::SourceRef::Accel { conn_id }) => {
-                engine::duckdb::accel::list_tables_for(&conn_id)
+                engine::duckdb::accel::list_tables_for(&conn_id).map(SourceKids::Mounted)
             }
             Some(data_objects::SourceRef::FileView { alias }) => {
-                engine::duckdb::file_view::list_tables_global(&alias)
+                engine::duckdb::file_view::list_tables_global(&alias).map(SourceKids::Mounted)
+            }
+            // 源库连接：逐层 introspect（catalog → schema → 表），只在展开时发生。
+            // 表名翻成 Object 行：叶子要能「选用」（取样走连接下推）与显示所在 schema
+            Some(data_objects::SourceRef::Connection { conn_id }) => {
+                crate::components::source_picker::list_connection_tables(&self.shared, &conn_id)
+                    .map(|tables| {
+                        SourceKids::Connection(
+                            tables
+                                .iter()
+                                .map(|table| {
+                                    data_objects::source_table_object(
+                                        &conn_id,
+                                        &table.catalog,
+                                        &table.schema,
+                                        &table.name,
+                                    )
+                                })
+                                .collect(),
+                        )
+                    })
             }
             None => return,
         };
         match outcome {
-            Ok(tables) => {
+            Ok(SourceKids::Mounted(tables)) => {
                 self.source_children.insert(key.to_string(), Arc::new(tables));
+            }
+            Ok(SourceKids::Connection(objects)) => {
+                self.conn_children.insert(key.to_string(), Arc::new(objects));
             }
             Err(reason) if announce => {
                 self.note = Some(PanelNote::error(reason));
@@ -293,17 +338,12 @@ impl DataObjectsTab {
     }
 
     /// 勾 / 取消一个对象进工作集（存 `key`，不存行号：列表会重排）。
+    ///
+    /// **多选**（2026-11-22 改回）：工作集是「本次分析要用的对象」的集合，一次只留一个
+    /// 会让软上限（`PICKED_SOFT_LIMIT`）与底部提示变成死代码，也没法表达「这几张表一起看」。
+    /// 增删语义在 `data_objects::toggle_in_place`（纯函数，有单测钉住计数真的会长）。
     fn toggle_picked(&mut self, key: &str, cx: &mut Context<Self>) {
-        let mut picked = self.shared.data_object_picked.borrow_mut();
-        // 面板只承载**一个**对象：多源在洞察面板里按「+」加。这里若允许攒多选，
-        // 同一个对象会从两处各进一次来源，反而要用户去收拾重复。
-        if picked.len() == 1 && picked[0] == *key {
-            picked.clear();
-        } else {
-            picked.clear();
-            picked.push(key.to_string());
-        }
-        drop(picked);
+        data_objects::toggle_in_place(&mut self.shared.data_object_picked.borrow_mut(), key);
         cx.notify();
     }
 
@@ -388,13 +428,13 @@ impl DataObjectsTab {
 
         let search_row = div().px_3().pb_2().child(Input::new(&search).small());
 
-        // 两条口径先写清楚：省得每行都要解释“为什么只有一版”“洞察产物在哪”
+        // 三条口径先写清楚：省得每行都要解释“为什么只有一版”“洞察产物在哪”“源库表为什么没铺满”
         let hint = div()
             .text_xs()
             .text_color(colors.muted_foreground)
             .px_3()
             .pb_2()
-            .child("每组只显示最新版本；洞察产物 tmp_i_ 不进本清单");
+            .child("每组只显示最新版本；洞察产物 tmp_i_ 不进本清单；源库表要展开连接才列（远端内省有代价）");
 
         // 分组 chips：四段全展开太长，先收窄到一段再看（2026-11-18 合并后 5 个 chip）
         let mut chips = div()
@@ -407,6 +447,7 @@ impl DataObjectsTab {
         let mut entries: Vec<(Option<Group>, String)> = vec![(None, "全部".to_string())];
         for group in [
             Group::MountedSources,
+            Group::SourceTables,
             Group::PersistentTables,
             Group::Files,
             Group::TemporaryTables,
@@ -447,10 +488,23 @@ impl DataObjectsTab {
         );
         let mut selected_row = div().h_flex().items_center().flex_wrap().gap_1();
         for key in picked.iter() {
+            // 名字要能显示：主清单里有的直接取；源库表叶子只在展开时存在（`conn_children`），
+            // 折叠后也得显示得出来——最后按身份反解表名兜底，绝不把 `srctable:C_1|…` 露给用户
             let name = all
                 .iter()
                 .find(|object| &object.key == key)
                 .map(|object| object.name.clone())
+                .or_else(|| {
+                    self.conn_children
+                        .values()
+                        .flat_map(|leaves| leaves.iter())
+                        .find(|leaf| &leaf.key == key)
+                        .map(|leaf| leaf.name.clone())
+                })
+                .or_else(|| {
+                    data_objects::source_table_parts(key)
+                        .map(|(_, _, _, table)| table.to_string())
+                })
                 .unwrap_or_else(|| key.clone());
             let key_for_remove = key.clone();
             let entity_for_remove = entity.clone();
@@ -475,16 +529,27 @@ impl DataObjectsTab {
             );
         }
         tray = tray.child(selected_row);
-        // 原型 07 的 tray 尾巴：先说清多处来源怎么加，再把主按钮放这儿——
-        // 头部那排按钮是“对这面板做什么”，这里才是“拿这堆对象去做什么”
+        // 原型 07 的 tray 尾巴：先说清这批对象会被怎么用，再把主按钮放这儿——
+        // 头部那排按钮是“对这面板做什么”，这里才是“拿这堆对象去做什么”。
+        // 多选（2026-11-22）后必须说清口径：洞察**每源各取一份样本**，不做跨源 join，
+        // 所以「选 3 个」不等于「3 个合成一张表」，用户不该靠自己猜。
         tray = tray.child(
             div()
                 .text_xs()
                 .text_color(colors.muted_foreground)
-                .child("要多个来源，进洞察后用「+」再加"),
+                .child(match picked.len() {
+                    0 | 1 => "洞察只取这一个对象；想看别的就再点「选用」，各取各的样本".to_string(),
+                    count => format!("已选 {count} 个：洞察会为每个对象各取一份样本，不跨源 join"),
+                }),
         );
         let shared_for_tray = self.shared.clone();
         let entity_for_tray = entity.clone();
+        // 按钮文案跟着选中个数走：选 1 个说「此对象」，选多个说清是「这 N 个」，
+        // 免得用户以为多选会被合成一张表（洞察是多源各取一份样本）
+        let analyze_label = match picked.len() {
+            0 | 1 => "洞察此对象".to_string(),
+            count => format!("洞察这 {count} 个对象"),
+        };
         tray = tray.child(
             div()
                 .h_flex()
@@ -492,7 +557,7 @@ impl DataObjectsTab {
                 .gap_2()
                 .child(
                     Button::new("data-objects-analyze")
-                        .label("洞察此对象")
+                        .label(analyze_label.clone())
                         .on_click(move |_, _, cx| {
                             // 副作用只在事件路径做：转换是纯函数，开洞察在宿主
                             let objects = shared_for_tray.data_objects.borrow().clone();
@@ -504,26 +569,63 @@ impl DataObjectsTab {
                                 .borrow()
                                 .as_ref()
                                 .map(|p| p.root.join("resources"));
-                            let (sources, skipped) = data_objects::analysis_sources(
-                                &objects,
-                                &picked,
-                                &assets,
-                                resources_dir.as_deref(),
-                            );
+                            let (sources, skipped) = {
+                                // 源库表（`srctable:`）先在宿主里转：取样 SQL 要按驱动方言拼，
+                                // 那份知识在 `Shared::insight_sample_sql`（纯函数拿不到连接驱动）
+                                let mut sources: Vec<insight::SampleSource> = Vec::new();
+                                let mut rest: Vec<String> = Vec::new();
+                                for key in &picked {
+                                    match data_objects::source_table_parts(key) {
+                                        Some((conn, catalog, schema, table)) => {
+                                            let sql = shared_for_tray.insight_sample_sql(
+                                                conn,
+                                                &[catalog, schema, table],
+                                            );
+                                            let label = [catalog, schema, table]
+                                                .into_iter()
+                                                .filter(|part| !part.is_empty())
+                                                .collect::<Vec<_>>()
+                                                .join(".");
+                                            let source = insight::SampleSource::new(
+                                                conn.to_string(),
+                                                sql,
+                                                label,
+                                            );
+                                            if !sources.contains(&source) {
+                                                sources.push(source);
+                                            }
+                                        }
+                                        None => rest.push(key.clone()),
+                                    }
+                                }
+                                let (mut more, skipped) = data_objects::analysis_sources(
+                                    &objects,
+                                    &rest,
+                                    &assets,
+                                    resources_dir.as_deref(),
+                                );
+                                sources.append(&mut more);
+                                (sources, skipped)
+                            };
                             if sources.is_empty() {
                                 // 选的全是转不了的类型：别开一个空洞察面板，
-                                // 但也不能一声不响——点了没反应是最难查的那种
+                                // 但也不能一声不响——把**是哪几个、为什么**说出来
                                 entity_for_tray.update(cx, |tab, cx| {
-                                    tab.note = Some(PanelNote::error(
-                                        "选中的对象都转不进洞察：只有可分析的库表 / 文件进得去",
-                                    ));
+                                    tab.note = Some(PanelNote::error(format!(
+                                        "选中的对象都转不进洞察：{}",
+                                        skipped.join("；")
+                                    )));
                                     cx.notify();
                                 });
                                 return;
                             }
                             let label = match skipped.is_empty() {
                                 true => format!("{} 个来源", sources.len()),
-                                false => format!("{} 个来源（{} 未包含）", sources.len(), skipped.len()),
+                                false => format!(
+                                    "{} 个来源（未包含：{}）",
+                                    sources.len(),
+                                    skipped.join("、")
+                                ),
                             };
                             shared_for_tray.open_insight_source_tables(sources, label, cx);
                             entity_for_tray.update(cx, |_, cx| cx.notify());
@@ -669,8 +771,9 @@ impl DataObjectsTab {
                 colors.danger
             };
             let is_picked = picked.iter().any(|k| k == &object.key);
-            // 只有能用的对象能进工作集：失效行点进去只会在分析时炸
-            let pick_button = if object.can_analyze() {
+            // 只有能用的对象能进工作集：失效行点进去只会在分析时炸；
+            // 连接行（`conn:`）也不行——它是表的位置，不是数据对象（见 `Object::can_pick`）
+            let pick_button = if object.can_pick() {
                 let key = object.key.clone();
                 let entity = entity.clone();
                 Some(
@@ -773,13 +876,18 @@ impl DataObjectsTab {
                     }),
                 )
             };
-            // 源行可展开（联邦可用源 / 加速源）：行首给展开指示，与段头 chevron 同一习惯。
-            // 失败的联邦源展不开（没有表清单可列），该段内留同宽空位对齐
-            let source_expandable = object.group == Group::MountedSources
+            // 源行可展开（联邦源 / 加速源 / 文件库 / 源库连接）：行首给展开指示，
+            // 与段头 chevron 同一习惯。失败的联邦源展不开（没有表清单可列），
+            // 该段内留同宽空位对齐
+            let in_source_group = matches!(
+                object.group,
+                Group::MountedSources | Group::SourceTables
+            );
+            let source_expandable = in_source_group
                 && object.can_analyze()
                 && data_objects::source_ref(&object.key).is_some();
             let expanded_now = self.expanded_sources.contains(&object.key);
-            let disclosure = if object.group == Group::MountedSources {
+            let disclosure = if in_source_group {
                 Some(if source_expandable {
                     let key = object.key.clone();
                     let entity = entity.clone();
@@ -921,36 +1029,76 @@ impl DataObjectsTab {
             // 展开着的源行：把叶子（表 / 视图）画在它下面。清单没到（刷新竞态 /
             // 列举失败）就不画——下一次事件会补上，宁可少一拍也不画猜的
             if expanded_now {
-                match self.source_children.get(&object.key) {
-                    Some(children) if !children.is_empty() => {
-                        for table in children.iter() {
-                            list =
-                                list.child(source_leaf_row(&object.key, table, &entity, cx));
+                if object.group == Group::SourceTables {
+                    // 源库表：叶子是**可选用**的对象（取样走连接下推，不搬数据）
+                    match self.conn_children.get(&object.key) {
+                        Some(children) if !children.is_empty() => {
+                            for leaf in children.iter() {
+                                let leaf_picked = picked.iter().any(|key| key == &leaf.key);
+                                list = list.child(source_table_leaf_row(
+                                    leaf,
+                                    leaf_picked,
+                                    &entity,
+                                    cx,
+                                ));
+                            }
                         }
+                        Some(_) => {
+                    list = list.child(
+                        div()
+                            .id(SharedString::from(format!(
+                                "data-object-leaf-empty-{}",
+                                object.key
+                            )))
+                            .h_flex()
+                            .items_center()
+                            .gap_2()
+                            .px_3()
+                            .py_1()
+                            .child(tree::indent_spacer(ui::TREE_INDENT, 1))
+                            .child(tree::disclosure_slot())
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(colors.muted_foreground)
+                                    .child("这个连接里没有可列的表 / 视图（目录为空或没有权限）"),
+                            ),
+                    );
+                        }
+                        None => {}
                     }
-                    Some(_) => {
-                        list = list.child(
-                            div()
-                                .id(SharedString::from(format!(
-                                    "data-object-leaf-empty-{}",
-                                    object.key
-                                )))
-                                .h_flex()
-                                .items_center()
-                                .gap_2()
-                                .px_3()
-                                .py_1()
-                                .child(tree::indent_spacer(ui::TREE_INDENT, 1))
-                                .child(tree::disclosure_slot())
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(colors.muted_foreground)
-                                        .child("没有可列的表（挂载成功但目录为空）"),
-                                ),
-                        );
+                } else {
+                    match self.source_children.get(&object.key) {
+                        Some(children) if !children.is_empty() => {
+                            for table in children.iter() {
+                                list =
+                                    list.child(source_leaf_row(&object.key, table, &entity, cx));
+                            }
+                        }
+                        Some(_) => {
+                            list = list.child(
+                                div()
+                                    .id(SharedString::from(format!(
+                                        "data-object-leaf-empty-{}",
+                                        object.key
+                                    )))
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .px_3()
+                                    .py_1()
+                                    .child(tree::indent_spacer(ui::TREE_INDENT, 1))
+                                    .child(tree::disclosure_slot())
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(colors.muted_foreground)
+                                            .child("没有可列的表（挂载成功但目录为空）"),
+                                    ),
+                            );
+                        }
+                        None => {}
                     }
-                    None => {}
                 }
             }
         }
@@ -1136,6 +1284,73 @@ fn source_leaf_row(
     .into_any_element()
 }
 
+/// 源库表的叶子行：缩进 + 图标 + 表名 + 所在 catalog / schema + 「选用」。
+///
+/// 与 [`source_leaf_row`]（已挂载源的叶子）的区别就是**能选用**：已挂载源的表在各自的
+/// 专用连接上，取样要等公共入口；而源库表本来就有连接 id，取样直接连接下推
+/// （SQL 由 `Shared::insight_sample_sql` 按驱动方言拼），所以这一档能用。
+fn source_table_leaf_row(
+    leaf: &data_objects::Object,
+    picked: bool,
+    entity: &Entity<DataObjectsTab>,
+    cx: &App,
+) -> AnyElement {
+    let colors = cx.theme().colors;
+    let muted = colors.muted_foreground;
+    let leaf_id = SharedString::from(format!("data-object-srctable-{}", leaf.key));
+    let key_for_click = leaf.key.clone();
+    let entity_for_click = entity.clone();
+    div()
+        .id(leaf_id.clone())
+        .h_flex()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .py_1()
+        .border_b_1()
+        .border_color(colors.border)
+        .hover(|s| s.bg(colors.list_hover))
+        .child(tree::indent_spacer(ui::TREE_INDENT, 1))
+        .child(tree::disclosure_slot())
+        .child(
+            Icon::new(gpui_kit::assets::IconName::Table)
+                .xsmall()
+                .text_color(muted),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_xs()
+                .text_color(colors.foreground)
+                .overflow_hidden()
+                .text_ellipsis()
+                .child(leaf.name.clone()),
+        )
+        .child(
+            div()
+                .flex_none()
+                .text_xs()
+                .text_color(muted)
+                .child(leaf.note.clone()),
+        )
+        .child(
+            Button::new(SharedString::from(format!(
+                "data-object-srctable-pick-{}",
+                leaf.key
+            )))
+            .ghost()
+            .xsmall()
+            .toggled(picked)
+            .label(if picked { "已选" } else { "选用" })
+            .on_click(move |_, _, cx| {
+                let key = key_for_click.clone();
+                entity_for_click.update(cx, |tab, cx| tab.toggle_picked(&key, cx));
+            }),
+        )
+        .into_any_element()
+}
+
 impl EventEmitter<BasePanelEvent> for DataObjectsTab {}
 
 impl Focusable for DataObjectsTab {
@@ -1146,6 +1361,16 @@ impl Focusable for DataObjectsTab {
 
 impl Render for DataObjectsTab {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 清单过期信号：render 只做**比对**（纯读一个计数），重取用 `defer_in` 排到帧后
+        // （事件路径）。不能在这里直接 `refresh`：`collect` 有读盘与查库，渲染期做 I/O
+        // 是 gpui-kit-dev 明令禁止的（`panels/editor.rs` 的连接详情卡就是登记的反例）。
+        //
+        // 先记下版本号再排刷新：这样「改了但这一帧没重取完」不会每帧重排一次。
+        let epoch = self.shared.data_objects_epoch.get();
+        if epoch != self.seen_epoch {
+            self.seen_epoch = epoch;
+            cx.defer_in(window, |tab, _window, cx| tab.refresh(cx));
+        }
         self.render_body(window, cx)
     }
 }

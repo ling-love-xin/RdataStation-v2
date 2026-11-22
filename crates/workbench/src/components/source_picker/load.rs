@@ -57,6 +57,58 @@ fn query_schemas(conn_id: &str, catalog: &str, project_root: Option<PathBuf>) ->
     })
 }
 
+/// 某 catalog / schema 下能分析的表与视图（**异步内核**：错误原话往上抛）。
+///
+/// 深度规则与导航一致：schema 为空串 = 该驱动无独立 schema 层，类别文件夹直接挂 catalog
+/// 下；否则先展开 Schema 节点拿类别文件夹，再取表 / 视图节点。
+async fn tables_under(
+    svc: &NavigatorService,
+    conn_id: &str,
+    catalog: &str,
+    schema: &str,
+) -> Result<Vec<super::TableCandidate>, String> {
+    let path = if schema.is_empty() {
+        NavPath::Catalog {
+            catalog: catalog.to_string(),
+        }
+    } else {
+        NavPath::Schema {
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+        }
+    };
+    svc.load_children(conn_id, &path, None, false)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut out = Vec::new();
+    // 类别文件夹展开取表 / 视图节点（folder 路径的 schema 与展开路径一致）。
+    // 某一类取不到不算失败（视图文件夹在部分驱动上就是空的），所以这里吞掉单类的错
+    for folder in [NavFolder::Tables, NavFolder::Views] {
+        let folder_path = NavPath::Folder {
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            folder,
+        };
+        let Ok(children) = svc
+            .load_children(conn_id, &folder_path, None, false)
+            .await
+        else {
+            continue;
+        };
+        for node in children {
+            let is_table = matches!(node.kind, NavNodeKind::Table { .. } | NavNodeKind::View);
+            if is_table {
+                out.push(super::TableCandidate {
+                    name: node.name.clone(),
+                    catalog: catalog.to_string(),
+                    schema: schema.to_string(),
+                });
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// 同步查某 schema 下的表（含视图；对齐导航「类别文件夹 → Tables/Views」模型）。
 ///
 /// `schema` 为空串 = 无独立 schema 层：catalog 直接承载类别文件夹。
@@ -71,43 +123,48 @@ fn query_tables(
         Ok(rt) => rt,
         Err(_) => return Vec::new(),
     };
-    let mut out = Vec::new();
-    // 有 schema 层：先展开 Schema 节点拿类别文件夹；无则 catalog 直接承载。
-    let path = if schema.is_empty() {
-        NavPath::Catalog {
-            catalog: catalog.to_string(),
-        }
-    } else {
-        NavPath::Schema {
-            catalog: catalog.to_string(),
-            schema: schema.to_string(),
-        }
-    };
-    let Ok(_) = rt.block_on(async { svc.load_children(conn_id, &path, None, false).await }) else {
-        return out;
-    };
-    // 类别文件夹展开取表 / 视图节点（folder 路径的 schema 与展开路径一致）
-    for folder in [NavFolder::Tables, NavFolder::Views] {
-        let folder_path = NavPath::Folder {
-            catalog: catalog.to_string(),
-            schema: schema.to_string(),
-            folder,
-        };
-        let children =
-            rt.block_on(async { svc.load_children(conn_id, &folder_path, None, false).await });
-        let Ok(children) = children else { continue };
-        for node in children {
-            let is_table = matches!(node.kind, NavNodeKind::Table { .. } | NavNodeKind::View);
-            if is_table {
-                out.push(super::TableCandidate {
-                    name: node.name.clone(),
-                    catalog: catalog.to_string(),
-                    schema: schema.to_string(),
-                });
+    rt.block_on(tables_under(&svc, conn_id, catalog, schema))
+        .unwrap_or_default()
+}
+
+/// 一条连接里**所有**能分析的表 / 视图（catalog / schema 折平成一个清单）。
+///
+/// 供右侧「数据对象」面板的「源库表」段懒加载用（2026-11-22）：面板展开某个连接才调，
+/// 不预先枚举——逐层 introspect 在远端库上是秒级开销。
+///
+/// **错误往上抛**：展开失败必须说出原因（权限 / 网络 / 扩展缺失），
+/// 返回空清单会让人以为「这个库里真的没有表」。
+pub(crate) fn list_connection_tables(
+    shared: &Shared,
+    conn_id: &str,
+) -> Result<Vec<super::TableCandidate>, String> {
+    let project_root = shared.project.borrow().as_ref().map(|p| p.root.clone());
+    let svc = navigator(project_root);
+    let rt = tokio::runtime::Runtime::new().map_err(|error| format!("起不了异步运行时：{error}"))?;
+    rt.block_on(async {
+        let catalogs = svc
+            .list_all_catalogs(conn_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut out = Vec::new();
+        for catalog in catalogs {
+            let schemas = svc
+                .list_all_schemas(conn_id, &catalog)
+                .await
+                .map_err(|error| error.to_string())?;
+            if schemas.is_empty() {
+                out.extend(tables_under(&svc, conn_id, &catalog, "").await?);
+            } else {
+                for schema in schemas {
+                    out.extend(tables_under(&svc, conn_id, &catalog, &schema).await?);
+                }
             }
         }
-    }
-    out
+        out.sort_by(|a, b| {
+            (&a.catalog, &a.schema, &a.name).cmp(&(&b.catalog, &b.schema, &b.name))
+        });
+        Ok(out)
+    })
 }
 
 /// 草稿箱里 duckdb 支持格式的文件（相对路径 + 绝对路径，按相对路径排序）。

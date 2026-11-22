@@ -142,7 +142,9 @@ fn confirm(shared: &Shared, state: &Rc<RefCell<PickerState>>, window: &mut Windo
     // 与面板 refresh 同一步：写缓存，下一帧就带上「已加载」那几行
     let collected = data_objects::collect(shared);
     *shared.data_objects.borrow_mut() = data_objects::objects(&collected);
-    shared.notify_host(cx);
+    // 递增清单版本号（顺带请宿主重绘）：别的读这份清单的地方（面板 defer 路径、
+    // 工作集提示）据此知道「该重取了」，不靠这一处自己逐个通知
+    shared.mark_data_objects_dirty(cx);
 
     // 纯文件线：关窗（行已出现在面板里，那就是回执）。
     // 带连接标记：**留窗给回执**——标记的源要等下一次联邦执行才进清单，

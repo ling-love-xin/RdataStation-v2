@@ -140,6 +140,11 @@ pub struct WorkbenchView {
     scratchpad_meta_pump: Option<Task<()>>,
     /// 结果集落库回执泵（0.5 s 一拍；取走 worker 的落库结果并回状态栏。句柄必须被持有）。
     persist_pump: Option<Task<()>>,
+    /// 数据对象清单的指纹泵（1 s 一拍；只比廉价特征，变了才请面板重取）。
+    /// 句柄必须被持有，drop 即停。
+    data_objects_pump: Option<Task<()>>,
+    /// 上一次算出的清单指纹：`None` = 还没建立基线（首次不比、不通知）。
+    data_objects_sig: Option<DataObjectsSignature>,
     /// 【#54 B】语义诊断目录快照注入泵（1 s 一拍；句柄必须被持有，drop 即停）。
     /// 复用 [`editor_completion`] 的 L1 目录：补全端口实例由本字段持有，
     /// 泵每拍读「活动文档绑定连接 → 推快照」（见 `services/editor_catalog.rs`）。
@@ -167,3 +172,5 @@ mod workspace;
 
 pub(crate) use status::restore_snapshot;
 pub use status::{lsp_status_chip, toggle_hidden_mode};
+/// 清单指纹：泵与面板之间只传递「会不会过期」，不传导内容
+pub(crate) use workspace::DataObjectsSignature;

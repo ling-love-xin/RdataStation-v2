@@ -243,6 +243,8 @@ fn refresh_after_open(shared: &Shared, cx: &mut App) {
     let has = !shared.connections.borrow().is_empty();
     shared.selected.set(if has { Some(0) } else { None });
     shared.invalidate_nav_cache();
+    // 换项目 = 分析库整份换掉、连接清册整份换掉 → 数据对象清单必然过期
+    shared.mark_data_objects_dirty(cx);
     // M7：上面的 `clear_mock_temp_tables` 先跑的，那时连接清册还是**上一个项目**的
     // （作用域含旧项目的 `P_` / `GP_`）；清册换掉后再让 Mock 面板从新的清册派生一次，
     // 否则「导入结构」的候选会挂着旧项目的连接。

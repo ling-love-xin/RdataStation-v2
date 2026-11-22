@@ -127,6 +127,13 @@ impl State {
 pub enum Group {
     /// 联邦会话 / 本地加速会话里已挂上的源（ATTACH 进来的库）
     MountedSources,
+    /// 源库表：连接里**还没进 DuckDB**的表（下推查询，数据留在源库）。
+    ///
+    /// 这一段是 2026-11-22 补的：此前面板只覆盖「已进 DuckDB 的东西」，于是
+    /// 「我想分析 A 库的 orders」还得回左侧导航树找——面板当不成公共选择器。
+    /// 连接行由 `Shared::connections` 直接来（零 I/O），**表清单只在展开时懒加载**：
+    /// 逐层 introspect 很贵，面板一打开就查所有连接是不可接受的。
+    SourceTables,
     /// 持久表：项目分析库（自建 / `res_` 落库 / 资产·表型）与全局分析库（`G_`）
     PersistentTables,
     /// 文件：已加载进 DuckDB 的文件视图（外部文件 / 手动加入的草稿）与资产·文件型
@@ -141,6 +148,7 @@ impl Group {
     pub fn title(self) -> &'static str {
         match self {
             Self::MountedSources => "已挂载的源",
+            Self::SourceTables => "源库表",
             Self::PersistentTables => "持久表",
             Self::Files => "文件",
             Self::TemporaryTables => "临时表",
@@ -151,9 +159,10 @@ impl Group {
     pub fn order(self) -> u8 {
         match self {
             Self::MountedSources => 0,
-            Self::PersistentTables => 1,
-            Self::Files => 2,
-            Self::TemporaryTables => 3,
+            Self::SourceTables => 1,
+            Self::PersistentTables => 2,
+            Self::Files => 3,
+            Self::TemporaryTables => 4,
         }
     }
 }
@@ -183,7 +192,10 @@ impl Group {
     pub fn icon(self) -> gpui_kit::assets::IconName {
         use gpui_kit::assets::IconName;
         match self {
-            Self::MountedSources => IconName::Database,
+            // 「已挂载的源」是一组挂进来的库（联邦 / 加速 / 文件库），用聚合形状；
+            // 单条源库连接本身就是一台库，用 Database，两段扫一眼能分开
+            Self::MountedSources => IconName::Boxes,
+            Self::SourceTables => IconName::Database,
             Self::PersistentTables => IconName::Table,
             Self::Files => IconName::FileSpreadsheet,
             Self::TemporaryTables => IconName::Clock,
@@ -211,6 +223,15 @@ impl Object {
     pub fn can_analyze(&self) -> bool {
         self.state.is_usable()
     }
+
+    /// 能不能进工作集（= 能不能作为「一个来源」递给洞察）。
+    ///
+    /// 与 [`Self::can_analyze`] 的差别在**一级行**：源库连接（`conn:`）本身不是数据对象，
+    /// 它是「表的位置」——选一个连接进工作集只会得到一条转不了的来源。
+    /// 能选的是它下面展开出来的表（`srctable:`）。
+    pub fn can_pick(&self) -> bool {
+        self.can_analyze() && !self.key.starts_with("conn:")
+    }
 }
 
 /// 联邦会话里的一条源（面板「本次会话」段用）。
@@ -223,6 +244,18 @@ pub struct SessionSource {
     pub note: String,
     /// 挂载失败的原话（引擎侧不翻译，界面也不改写）
     pub failed: Option<String>,
+}
+
+/// 源库连接（「源库表」段的一级行）。
+///
+/// 只带**展示信息**：表清单要逐层 introspect，属于面板展开时的懒加载，
+/// 取数时不该顺手查一遍（打开面板就查所有连接 = 卡在 introspect 上）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnRow {
+    pub id: String,
+    pub name: String,
+    /// 驱动 · 主机（可空段略去）
+    pub note: String,
 }
 
 /// 资产清单里的一行（只读，只给最新版本）。
@@ -242,10 +275,10 @@ pub struct AssetRow {
 
 /// 一次取数的结果（面板与对话框共用）。
 ///
-/// 连接不在这里列：连接的表要逐层 introspect，属于面板自己的懒加载；
-/// 这里只带**连接数量**给分组标题用。
+/// 连接行只带展示信息（表清单由面板展开时懒加载，见 [`ConnRow`]）。
 pub struct Collected {
-    pub conn_count: usize,
+    /// 已连接的源库连接（`connected` 为真的那些）
+    pub connections: Vec<ConnRow>,
     pub analysis_tables: Vec<String>,
     pub global_tables: Vec<String>,
     pub result_sets: Vec<String>,
@@ -265,7 +298,7 @@ impl Collected {
     /// 只填连接数的小构造（测试与「只想知道有几条连接」的调用方用）。
     pub fn empty() -> Self {
         Self {
-            conn_count: 0,
+            connections: Vec::new(),
             analysis_tables: Vec::new(),
             global_tables: Vec::new(),
             result_sets: Vec::new(),
@@ -315,6 +348,23 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             state: State::Ready,
             group: Group::MountedSources,
             pill: "加速",
+            version: None,
+        });
+    }
+
+    // 源库连接行：一级行 = 一条**已连接**的连接（零 I/O，直接来自宿主快照）。
+    // 表清单不在这里——展开某个连接时才 introspect（面板 `load_source_children`），
+    // 打开面板就查所有连接是不可接受的（N 个连接 × 3 层同步查询）
+    for conn in &collected.connections {
+        out.push(Object {
+            key: format!("conn:{}", conn.id),
+            name: conn.name.clone(),
+            note: conn.note.clone(),
+            channel: Channel::Source,
+            life: Life::External,
+            state: State::Ready,
+            group: Group::SourceTables,
+            pill: "连接",
             version: None,
         });
     }
@@ -462,6 +512,21 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
 /// 用户仍可继续加——拦下来等于替他决定要不要等。
 pub const PICKED_SOFT_LIMIT: usize = 8;
 
+/// 工作集增删（**纯函数**）：再点一次同一个对象 = 移除，否则追加。
+///
+/// 抽出来是因为它是「多选」的唯一判据：面板回调只负责借用与通知，序列语义在这里
+/// 用测试钉住（软上限提示按 `len()` 生效，判据写错会让提示链整体变成死代码）。
+///
+/// 顺序按**加入先后**保留：tray 与洞察来源顺序都读它，重排会让用户认不出自己刚加的那个。
+pub fn toggle_in_place(picked: &mut Vec<String>, key: &str) {
+    match picked.iter().position(|item| item == key) {
+        Some(index) => {
+            picked.remove(index);
+        }
+        None => picked.push(key.to_string()),
+    }
+}
+
 /// 超过软上限时的提示（`None` = 没超，不提示）
 pub fn picked_limit_note(count: usize) -> Option<String> {
     (count > PICKED_SOFT_LIMIT).then(|| {
@@ -549,8 +614,8 @@ pub fn session_actions(key: &str, state: &State) -> Vec<SessionAction> {
 
 /// 源行展开时要去的连接（**纯函数**：面板据此分派「去哪列举表」）。
 ///
-/// 两类源行可展开：联邦源（`session:{owner}:{alias}`）与本地加速源（`accel:{conn_id}`）；
-/// 其它 key 一律 `None`——表 / 文件 / 资产行没有下一层。
+/// 三类源行可展开：联邦源（`session:{owner}:{alias}`）、本地加速源（`accel:{conn_id}`）、
+/// 源库连接（`conn:{conn_id}`）；其它 key 一律 `None`——表 / 文件 / 资产行没有下一层。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceRef {
     /// 联邦会话里的源（owner = 会话主人，alias = 挂载别名）
@@ -559,6 +624,8 @@ pub enum SourceRef {
     Accel { conn_id: String },
     /// ATTACH 进进程单例的数据库文件（alias = 挂载别名）
     FileView { alias: String },
+    /// **还没进 DuckDB** 的源库连接：展开要逐层 introspect（catalog → schema → 表）
+    Connection { conn_id: String },
 }
 
 /// 从行 key 解出 [`SourceRef`]（与 `session_actions` 同一套 `rsplit_once` 口径：
@@ -566,6 +633,11 @@ pub enum SourceRef {
 pub fn source_ref(key: &str) -> Option<SourceRef> {
     if let Some(conn_id) = key.strip_prefix("accel:") {
         return (!conn_id.is_empty()).then(|| SourceRef::Accel {
+            conn_id: conn_id.to_string(),
+        });
+    }
+    if let Some(conn_id) = key.strip_prefix("conn:") {
+        return (!conn_id.is_empty()).then(|| SourceRef::Connection {
             conn_id: conn_id.to_string(),
         });
     }
@@ -581,6 +653,53 @@ pub fn source_ref(key: &str) -> Option<SourceRef> {
         owner: owner.to_string(),
         alias: alias.to_string(),
     })
+}
+
+/// 源库表（连接里的表）的身份：`srctable:{conn}|{catalog}|{schema}|{table}`。
+///
+/// 为什么分隔符用 `|` 不用 `:`：`key.split_once(':')` 只有一处（前缀）、余下四段里
+/// catalog / schema / table 都可能含冒号，用 `|` 让「段数」与「段内容」互不干扰。
+pub fn source_table_key(conn: &str, catalog: &str, schema: &str, table: &str) -> String {
+    format!("srctable:{conn}|{catalog}|{schema}|{table}")
+}
+
+/// 反解 [`source_table_key`]：`None` = 不是源库表身份（或缺段）。
+pub fn source_table_parts(key: &str) -> Option<(&str, &str, &str, &str)> {
+    let rest = key.strip_prefix("srctable:")?;
+    let mut parts = rest.split('|');
+    let conn = parts.next()?;
+    let catalog = parts.next()?;
+    let schema = parts.next()?;
+    let table = parts.next()?;
+    // 多出来的 `|` = 段数不对（表名里带 `|` 会走到这里）：宁可不认，也不猜
+    if parts.next().is_some() || conn.is_empty() || table.is_empty() {
+        return None;
+    }
+    Some((conn, catalog, schema, table))
+}
+
+/// 源库表叶子行（展开某个连接后按表清单逐条造）：`note` 写所在 catalog / schema。
+pub fn source_table_object(conn: &str, catalog: &str, schema: &str, table: &str) -> Object {
+    let scope = [catalog, schema]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(".");
+    Object {
+        key: source_table_key(conn, catalog, schema, table),
+        name: table.to_string(),
+        note: if scope.is_empty() {
+            "源库表".to_string()
+        } else {
+            scope
+        },
+        channel: Channel::Source,
+        life: Life::External,
+        state: State::Ready,
+        group: Group::SourceTables,
+        pill: "源库",
+        version: None,
+    }
 }
 
 /// 已选对象 → 洞察取样来源（面板「分析已选」的取数口径，**纯函数**）。
@@ -694,12 +813,22 @@ pub fn persist_label(table: &str) -> String {
 /// `refresh_resources`），项目切换与资产增删都会推新——面板 refresh 时从它的 `view_rows`
 /// 翻译即可，取数只有这一份（这里不另开连接查库，避免两套真相）。
 pub fn collect(shared: &Shared) -> Collected {
-    let conn_count = shared
+    // 连接行只取**已连接**的：没连上的连接列举不出表，列出来就是个点了没反应的入口。
+    // 这里零 I/O（连接清单是宿主快照），表清单交给展开时懒加载
+    let connections: Vec<ConnRow> = shared
         .connections
         .borrow()
         .iter()
-        .filter(|c| c.connected)
-        .count();
+        .filter(|item| item.connected)
+        .map(|item| ConnRow {
+            id: item.id.clone(),
+            name: item.name.clone(),
+            note: match item.host.as_deref().filter(|host| !host.is_empty()) {
+                Some(host) => format!("{} · {}", item.driver, host),
+                None => item.driver.clone(),
+            },
+        })
+        .collect();
     let project = shared.project.borrow().clone();
     let analysis_tables = project
         .as_ref()
@@ -761,7 +890,7 @@ pub fn collect(shared: &Shared) -> Collected {
     };
 
     Collected {
-        conn_count,
+        connections,
         analysis_tables,
         global_tables,
         result_sets,
@@ -777,13 +906,17 @@ pub fn collect(shared: &Shared) -> Collected {
 mod tests {
     // 刻意不用 `use super::*`：会把 gpui 的 `test` 属性宏带进作用域。
     use super::{
-        AssetRow, Channel, Collected, Group, Life, Object, SessionSource, State,
+        AssetRow, Channel, Collected, ConnRow, Group, Life, Object, SessionSource, State,
         objects,
     };
 
     fn sample() -> Collected {
         Collected {
-            conn_count: 14,
+            connections: vec![ConnRow {
+                id: "C_mysql_9".into(),
+                name: "订单库".into(),
+                note: "MySQL · 10.0.0.8".into(),
+            }],
             analysis_tables: vec![
                 "res_订单明细_20261115103000".into(),
                 "数据修复".into(),
@@ -1165,9 +1298,56 @@ mod tests {
                 alias: "f_warehouse".into()
             })
         );
+        assert_eq!(
+            super::source_ref("conn:C_mysql_9"),
+            Some(super::SourceRef::Connection {
+                conn_id: "C_mysql_9".into()
+            }),
+            "源库连接必须可展开（这一层是懒加载表的入口）"
+        );
+        assert_eq!(super::source_ref("conn:"), None, "空 id 不是连接");
         assert_eq!(super::source_ref("project:orders"), None);
         assert_eq!(super::source_ref("result:tmp_q_1"), None);
         assert_eq!(super::source_ref("accel:"), None, "空 id 不是源");
+    }
+
+    /// 「源库表」段：连接行零 I/O 进清单，能展开；叶子身份用 `|` 分段，
+    /// 且反解必须还原（叶子的取样 / 选用全靠这一对函数）。
+    #[test]
+    fn source_connections_are_listed_and_table_keys_round_trip() {
+        let rows = objects(&sample());
+        let conn = rows
+            .iter()
+            .find(|o| o.key == "conn:C_mysql_9")
+            .expect("已连接的连接要有一行");
+        assert_eq!(conn.group, Group::SourceTables);
+        assert_eq!(conn.pill, "连接");
+        assert_eq!(conn.channel, Channel::Source, "读法是连接下推");
+        assert_eq!(conn.life, Life::External, "表在源库上，不在我们管的库里");
+        assert!(conn.note.contains("MySQL"), "副标题要写驱动：{}", conn.note);
+
+        // 叶子：`note` 写所在 catalog / schema，身份能反解回四段
+        let leaf = super::source_table_object("C_mysql_9", "shop", "sales", "orders");
+        assert_eq!(leaf.group, Group::SourceTables);
+        assert_eq!(leaf.pill, "源库");
+        assert_eq!(leaf.name, "orders");
+        assert_eq!(leaf.note, "shop.sales");
+        assert_eq!(
+            super::source_table_parts(&leaf.key),
+            Some(("C_mysql_9", "shop", "sales", "orders"))
+        );
+        // 段里带冒号也不影响反解（分隔符是 `|` 的理由）
+        let odd = super::source_table_object("C_1", "db:main", "", "v:tmp");
+        assert_eq!(
+            super::source_table_parts(&odd.key),
+            Some(("C_1", "db:main", "", "v:tmp")),
+            "带冒号的表名必须能还原：{}",
+            odd.key
+        );
+        // 缺段 / 段数不对一律不认（宁可跳过，也不猜一个别的表）
+        assert_eq!(super::source_table_parts("srctable:C_1|shop"), None);
+        assert_eq!(super::source_table_parts("srctable:C_1|a|b|c|d"), None);
+        assert_eq!(super::source_table_parts("project:orders"), None);
     }
 
     /// 软上限：8 个不提示，第 9 个才提示；提示里不出现「不能」。
@@ -1178,6 +1358,37 @@ mod tests {
         assert!(note.contains('9'), "{note}");
         assert!(note.contains("8"), "要说清分界在哪：{note}");
         assert!(note.contains("仍可继续加"), "软上限不是硬拦：{note}");
+    }
+
+    /// 工作集是**多选**：再点同一个对象 = 移除；反复点不能重复计入。
+    ///
+    /// 单选实现（先 `clear()` 再 push）会让 `picked_limit_note` 永远拿不到 >8 的计数，
+    /// 提示链整体变成死代码——这条测试就是钉住「计数真的会长」。
+    #[test]
+    fn picking_toggles_and_accumulates_across_objects() {
+        let mut picked: Vec<String> = Vec::new();
+        super::toggle_in_place(&mut picked, "project:orders");
+        super::toggle_in_place(&mut picked, "global:orders");
+        super::toggle_in_place(&mut picked, "result:tmp_q_1");
+        assert_eq!(
+            picked,
+            vec!["project:orders", "global:orders", "result:tmp_q_1"],
+            "按加入先后累积，不重排"
+        );
+
+        // 再点一次第二个 = 只移除它，其余保持原序
+        super::toggle_in_place(&mut picked, "global:orders");
+        assert_eq!(picked, vec!["project:orders", "result:tmp_q_1"]);
+
+        // 攒到 9 个时提示必须真的出现（单选实现这里恒为 None）
+        for index in 0..9 {
+            super::toggle_in_place(&mut picked, &format!("project:t{index}"));
+        }
+        assert!(
+            super::picked_limit_note(picked.len()).is_some(),
+            "多选攒到 9 个要触发软上限提示：{}",
+            picked.len()
+        );
     }
 
     /// 会话行动作：可用的行给三个，失败的行不给「设为主源」。

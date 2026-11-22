@@ -1489,6 +1489,8 @@ fn shared_fields_are_whitelisted() {
         "data_object_assets",
         "data_object_picked",
         "data_objects",
+        // 数据对象清单过期信号（2026-11-22）：面板自己持缓存，宿主只发「脏了」的版本号。
+        "data_objects_epoch",
         "detail_version",
         "driver_catalog",
         "editor_bridge",

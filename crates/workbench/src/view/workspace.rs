@@ -5,6 +5,100 @@
 use super::*;
 // 宿主能力 trait：取当前项目快照（`Shared::current_project` 是本 trait 的方法）。
 use connection_dialog::host::ConnectionDialogHost as _;
+
+/// 数据对象清单的**指纹**：任一维变化都说明清单可能过期。
+///
+/// 刻意只放「便宜且稳定」的维度：比较在后台泵里做，取两个计数 + 读几份内存快照，
+/// 不含任何读盘 / 打开库文件（那些留给面板自己 refresh 时做一次）。
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct DataObjectsSignature {
+    /// 进程单例里的结果集（`tmp_q_`）个数
+    result_sets: usize,
+    /// 洞察样本（`tmp_i_`）个数（不进清单，但会随「留到项目库」变持久表）
+    insight_samples: usize,
+    /// 「加源」加载过的文件视图个数
+    loaded_files: usize,
+    /// 已连接的连接个数（源库表段的行数）
+    connected: usize,
+    /// 资产行个数
+    assets: usize,
+    /// 项目根（切项目 = 分析库整个换一份）
+    project: Option<String>,
+}
+
+impl WorkbenchView {
+    /// 清单一共能在哪些地方过期：把**当前现实**拍成一个指纹（主线程，纯读内存）。
+    fn data_objects_signature(&self, engine_counts: (usize, usize)) -> DataObjectsSignature {
+        let shared = &self.shared;
+        DataObjectsSignature {
+            result_sets: engine_counts.0,
+            insight_samples: engine_counts.1,
+            loaded_files: shared.loaded_files.borrow().len(),
+            connected: shared
+                .connections
+                .borrow()
+                .iter()
+                .filter(|item| item.connected)
+                .count(),
+            assets: shared.data_object_assets.borrow().len(),
+            project: shared
+                .project
+                .borrow()
+                .as_ref()
+                .map(|project| project.root.to_string_lossy().to_string()),
+        }
+    }
+
+    /// 数据对象清单的**指纹泵**（装配期一次）。
+    ///
+    /// 为什么必须有：清单的三类变化发生在工作台**拿不到回调**的地方——`tmp_q_` 由引擎建表
+    /// （编辑器只拿到表名）、连接态由导航侧改、资产由资产面板推快照。生产者散在五处以上，
+    /// 逐个埋点必漏；这里比一个廉价指纹，变了只发「清单过期」信号（`data_objects_epoch`），
+    /// **重取仍由面板自己做**（面板可能没开、也不该被宿主代劳）。
+    ///
+    /// 取两个计数在**后台线程**：`list_result_sets` 要拿进程 DuckDB 的锁，长查询期间会被
+    /// 拦住——挡后台线程可以，挡 UI 线程不行（与 `persist_pump` 同一条纪律）。
+    pub(super) fn ensure_data_objects_pump(&mut self, cx: &mut Context<Self>) {
+        if self.data_objects_pump.is_some() {
+            return;
+        }
+        let weak = cx.entity().downgrade();
+        let executor = cx.background_executor().clone();
+        let task = cx.spawn(async move |_this, cx| {
+            loop {
+                executor.timer(std::time::Duration::from_millis(1000)).await;
+                // 后台线程：两次 information_schema 查询（内存库，毫秒级）
+                let counts = (
+                    engine::analysis::result_set::list_result_sets()
+                        .map(|sets| sets.len())
+                        .unwrap_or_default(),
+                    engine::analysis::result_set::list_insight_samples()
+                        .map(|sets| sets.len())
+                        .unwrap_or_default(),
+                );
+                let alive = weak
+                    .update(cx, |this, cx| {
+                        let signature = this.data_objects_signature(counts);
+                        if this.data_objects_sig.as_ref() == Some(&signature) {
+                            return;
+                        }
+                        // 首次只记基线：面板构造时已经取过一次，不该再白刷一遍
+                        let baseline_missing = this.data_objects_sig.is_none();
+                        this.data_objects_sig = Some(signature);
+                        if !baseline_missing {
+                            this.shared.mark_data_objects_dirty(cx);
+                        }
+                    })
+                    .is_ok();
+                if !alive {
+                    return;
+                }
+            }
+        });
+        self.data_objects_pump = Some(task);
+    }
+}
+
 impl WorkbenchView {
     /// 启动「结果集落库回执」泵（装配期一次）。
     ///
@@ -437,6 +531,8 @@ impl WorkbenchView {
         self.ensure_catalog_pump(cx);
         // 结果集落库回执（0.5 s 一拍；worker 槽 → 状态栏）。
         self.ensure_persist_pump(cx);
+        // 数据对象清单的指纹（1 s 一拍；变了才请面板重取，见 `ensure_data_objects_pump`）。
+        self.ensure_data_objects_pump(cx);
 
         // 宿主重绘桥再挂一层：除宿主自身，编辑区也要跟上。
         //
