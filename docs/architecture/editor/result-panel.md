@@ -9603,11 +9603,93 @@ editor（`view/tests/results_a.rs`）：
 
 - `SHIFT+F11`（`showColumnContextMenu`，`:1098`）、`F11` / `CTRL+F11`
   （`filterMenu` / `filterMenu.distinct`，`:1061/1062`）仍未接；
-- `ALT+SHIFT+F`（`filterSettings`，`:1094`）未接——本仓筛选设置浮层（`filter_settings_state` /
-  `render_filter_settings`）已就位，可直接接；
+- `ALT+SHIFT+F`（`filterSettings`，`:1094`）已由第 80 批接上（见 §9.63）；
 - `ALT+SHIFT+ARROW`（移列）：`move_display_column` 可复用，但与输入框按词移动同键，需先定焦点口径；
 - 「复制配置」对话框（列 / 行分隔、引号，含 dialogSettings 记忆）未做（§9.62.5）；
 - 多列一次复制只在列浏览器多选入口存在，键位这条与 DBeaver 一样走「当前格 → 全量」。
+
+### 9.63 第 80 批：`ALT+SHIFT+F` 打开筛选设置（`CMD_FILTER_EDIT_SETTINGS`）
+
+#### 9.63.1 缺口
+
+筛选设置浮层（`editor-result-filter-settings`，自第 1.2 批起就有）**三个鼠标入口**都在：
+工具栏筛选菜单里的「编辑筛选设置」（`panel/render.rs:486`）、列头右键
+（`grid/header.rs:519-523` / `grid/menu.rs:757`）、筛选条自定义钮；键盘上却一条也按不到
+——`plugin.xml:1094` 的 `ALT+SHIFT+F` 一直空着。它正是「筛选条」这一行（工具栏那层）的最后一块缺口。
+
+#### 9.63.2 DBeaver 依据
+
+- 键位 `plugin.xml:1094`：`ALT+SHIFT+F` → `org.jkiss.dbeaver.core.resultset.filterSettings`；
+  contextId 整块 **`...ui.context.resultset`**，keyboardOnlyKeyScheme。
+- 命令定义 `:333`；handler `:570` → `...handler.ResultSetHandlerMain`；
+  实现 `:546-549`：`case CMD_FILTER_EDIT_SETTINGS: rsv.showFilterSettingsDialog()`。
+- `ResultSetViewer.java:644-646`：`showFilterSettingsDialog()` = `new FilterSettingsDialog(this).open()`
+  ——**不判任何条件**（没有「有没有结果集」「筛不筛选过」之类前置），也不弹提示。
+- 同一命令的鼠标入口旁证：筛选条 `filtersCustomButton`（`ResultSetFilterPanel.java:330-338`，
+  FILTER 图标 + `SWT.DROP_DOWN`，主点击开对话框）、它的下拉首项（`:1563-1564`）、
+  右键 filters 子菜单末项（`ResultSetViewer.java:3932`）。三者与键位落到同一个对话框。
+
+#### 9.63.3 落点
+
+- `grid/mod.rs`：`actions!` 增 `OpenFilterSettings`（面板级，注释对齐 `:1094`），顶部键位注释补一条；
+- `editor`：`support/commands.rs` re-export；`view/host/exec/edit_cmds.rs::on_open_filter_settings`
+  **直接调** `panel.open_filter_settings(window, cx)`（不入队列——键位就在宿主里，队列那条留给
+  工具栏 / 右键那几个请求入口，两处落同一个面板方法）；`view/host/render.rs` `.on_action`；
+  `view/tests/mod.rs` bind；`crates/app/src/main.rs` 键位挂 `RESULT_PANEL_CONTEXT`。
+- 不判条件、不留 message：打开浮层本身就是可见反馈（与上游「静默 open」一致，也与第 78/79 批
+  「键位有结果才命中」同一机制——没有结果时面板子树不渲染，键位自然不命中）。
+
+#### 9.63.4 有意差异（沿用既有口径）
+
+- **模态对话框 → 面板内浮层**：上游是 SWT `StatusDialog`；本仓是面板内 absolute 遮罩 + 卡片
+  （自 1.2 批起的既有落法，`dialog.rs::render_filter_settings` 注释里记过理由）。
+- **打开时把焦点交给排序输入框**：本仓浮层的 WHERE 一栏由筛选框本体承担，浮层里只有「自定义排序」
+  一个输入，所以打开即聚焦它（上游对话框由 SWT 决定初始焦点）。
+
+#### 9.63.5 用例
+
+editor（`view/tests/results_a.rs`）：
+
+- `alt_shift_f_opens_the_filter_settings_overlay`：按键后浮层卡片进元素树 →（现状）焦点在排序框里按
+  `ESC` 浮层**仍在** → 点标题栏 ✕ 收起。
+
+#### 9.63.6 门禁（第 80 批，最终实测）
+
+- `cargo check -p rds-editor -p rds-result-panel --all-targets`：`Finished`，无 warning；
+- `cargo test -p rds-result-panel -p rds-ui-guard`：panel **421 passed**（不变）、ui-guard **4 passed**；
+- `cargo test -p rds-editor --lib`：**834 passed（1 ignored）**（833 → +1）；
+- `cargo check --workspace --all-targets`：**本次未能通过，原因在并行线、不在本批**——
+  `crates/workbench/src/components/version_dialog.rs` 是未跟踪新文件（HEAD 里没有，`components/mod.rs`
+  已 `pub mod version_dialog;`），它有 3 处编译错（`cx.theme()` 缺 `gpui_kit::gpui_component::ActiveTheme`
+  导入、`Div::v_flex` ×2），`rds-workbench` 因此 `could not compile`。本批只动
+  `result_panel` / `editor` / `crates/app`（键位），前三条已覆盖；等并行线把那个文件修好后再复查一次
+  整包（见 §9.63.8）。
+
+#### 9.63.7 实测发现：焦点在输入框里时 `ESC` 关不掉浮层（四个浮层同病）
+
+这不是本批引入的，是**结构性的**，机理已查清：
+
+1. `gpui-base` 的输入组件在自己的 context 上绑了 `escape` → `Escape` action
+   （`vendor/gpui-base/src/input/base/state.rs:277`）；焦点在输入框时这条先命中。
+2. `InputState::escape` 在 `clean_on_escape == false` 时走 `cx.propagate()`（`:2607`）——
+   它把 action 往**上层的 key binding 匹配**继续传，而不是往上层的 `on_key_down` 事件传。
+3. 浮层根接的是 `on_key_down`（`panel/dialog.rs:465-469`），不是 key binding，所以永远收不到。
+   于是「打开浮层 → 直接按 Esc」没有反应；可用路径是标题栏 ✕。
+
+要真正接上，得给浮层遮罩挂 `key_context` 并在 app 注册 `escape` → 关闭动作的 binding
+（这样 input 的 `propagate` 能继续命中它）。没在本批做：它牵动四个浮层（SQL 预览 / 取全部确认 /
+筛选设置 / 跳列）与 app 键位表，属于单独一批的工作量；本批已把现状钉进用例
+（`alt_shift_f_opens_the_filter_settings_overlay` 里那条「ESC 后浮层仍在」），谁能接上谁改断言。
+
+#### 9.63.8 遗留
+
+- `SHIFT+F11`（`showColumnContextMenu`，`:1098`）、`F11` / `CTRL+F11`
+  （`filterMenu` / `filterMenu.distinct`，`:1061/1062`）仍未接；
+- `ALT+SHIFT+ARROW`（移列）：`move_display_column` 可复用，但与输入框按词移动同键，需先定焦点口径；
+- 浮层 `ESC` 关闭（§9.63.7，四个浮层）；
+- 整包门禁复查：等并行线把未跟踪的 `crates/workbench/src/components/version_dialog.rs` 修好
+  （§9.63.6 记的 3 处编译错），再跑一次 `cargo check --workspace --all-targets`；
+- 「复制配置」对话框（§9.62.5）。
 
 ## 8. 协作纪律
 

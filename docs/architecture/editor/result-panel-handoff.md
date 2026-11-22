@@ -3117,6 +3117,25 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   （1 ignored）；workspace `Finished`（2 warning 来自通知线）。
 - 记档：`ALT+SHIFT+C` 原本在 §9.61.9 遗留清单里；本批接上，§9.61.9 与 §9.61.4 的措辞一并按实测收紧。
 
+### 2.131 筛选设置键位（2026-11-22，第 80 批）
+
+- 键位：`ALT+SHIFT+F` → `OpenFilterSettings`（`plugin.xml:1094`；命令 `:333`、handler `:570`、
+  实现 `ResultSetHandlerMain:546-549` → `ResultSetViewer.showFilterSettingsDialog()` `:644-646`
+  = 直接开对话框、不判条件），挂 `RESULT_PANEL_CONTEXT`。
+- 落点：`actions!` 增 `OpenFilterSettings`；宿主 `on_open_filter_settings` **直接调**
+  `panel.open_filter_settings(window, cx)`（不入队列；队列那条留给工具栏 / 右键那三个鼠标入口）。
+  不留 message（打开本身是可见反馈）。
+- 实测缺口（结构性，非本批引入）：焦点在浮层的排序输入框里按 `ESC` 关不掉浮层 ——
+  `escape` 先命中输入框 binding（`gpui-base/src/input/base/state.rs:277`），`clean_on_escape == false`
+  时走 `cx.propagate()`（`:2607`）只往上找**上层 binding**，而浮层根接的是 `on_key_down`
+  （`panel/dialog.rs:465-469`），接不到。修法 = 浮层遮罩挂 `key_context` + app 注册 escape binding，
+  留待单独一批；现状已钉进用例。
+- 用例：editor 1 条（打开 → ESC 仍在 → 点 ✕ 收起）。
+- 门禁：pair `Finished` 无 warning；panel **421**（不变）；ui-guard 4；editor lib **834 passed**
+  （1 ignored）；`check --workspace --all-targets` **被并行线阻塞**（未跟踪的
+  `crates/workbench/src/components/version_dialog.rs` 有 3 处编译错：缺 `ActiveTheme` 导入、
+  `Div::v_flex` ×2）——本批改动 crate 由前三条覆盖，待并行线修好后复查整包。
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - **共享文件的提交姿势**（第 77 批踩过，务必照做）：`git commit --only <paths>` /
