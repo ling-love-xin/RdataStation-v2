@@ -1,9 +1,48 @@
 # 结果集表格模块（rds-result-panel）现状盘点与遗留清单（交接快照）
 
-> 本文档是**独立会话交接快照**（2026-10-28 整理，2026-10-28 更新清理），给接手「结果集模块」的新会话直接使用。
-> 模块长线设计见 [`result-panel.md`](./result-panel.md)（§1-§8 架构 / §8.17-8.20 迭代记录）；
+> 本文档是**独立会话交接快照**（2026-10-28 建，2026-11-23 整理），给接手「结果集模块」的新会话直接使用。
+> 模块长线设计见 [`result-panel.md`](./result-panel.md)（§0 速查 / §1-§7 架构 / §8-§9 逐批流水 / §20 有意差异 / §21 遗留 / §22 协作纪律）；
 > 模块 backlog 与编辑器线共享见 [`editor-backlog.md`](./editor-backlog.md)。
-> 本文档只负责：**当前状态 / 未完成点 / 并行线协作约束 / 接手指引**，内容自包含。
+> 本文档只负责：**当前状态 / 未完成点 / 并行线协作约束 / 接手指引**，内容自包含。**先读 §0 速查**。
+
+---
+
+## 0. 速查（接手先读，2026-11-23 整理）
+
+### 0.1 三份权威源各管一段
+
+| 来源 | 管什么 | 什么时候看 |
+| --- | --- | --- |
+| 代码（`crates/result_panel` + `crates/editor/src/view/host/results`） | 唯一事实源 | 任何结论先代码实证，文档只做索引 |
+| [`result-panel.md`](./result-panel.md) | 设计 + 逐批流水 | 要「为什么这么做」、查某一批、查键位与右栏页 |
+| 本文 | 现状快照 / 未完成点 / 并行线约束 / 接手指引 | 要「现在做到哪、下一步动谁」 |
+
+### 0.2 当前锁定状态
+
+- 版本 **0.2.12**（workspace `Cargo.toml` 统一版本，各 crate 走 `version.workspace = true`，`ui_guard` 独立 0.1.0）；
+- GPUI-kit **0.10.0**（`gpui-pre` 0.3.12）；API 疑义一律查 `vendor/gpui-base` / `vendor/gpui-component` 源码，禁联网查；
+- 结果集线已推进到**第 83 批**（上游 `CTRL+ALT+F2..F6` 五条 `togglePanel` 接通，落 `ResultPanel::toggle_right_tab`）；
+- 键位 **31 条**（网格 18 / 面板 13）；总表在 `result-panel.md` §0.1，本文不重复维护；
+- 右栏六页 `Browser / Value / Stats / Group / Reference / ExecSql`；顺序、落盘 id、逐页内容见 §0.2；
+- 门禁基线：`rds-editor` **837 passed（1 ignored）**、`rds-result-panel` **421 passed**、ui-guard 4 项过 3 项（失败项 = 并行线未跟踪 `version_dialog.rs` 裸 px，非本线）、`cargo check --workspace --all-targets` 0 error。
+
+### 0.3 本文六节怎么用
+
+| 节 | 内容 | 典型问题 |
+| --- | --- | --- |
+| §1 模块现状 | 形态与边界、已交付能力、验证基线 | 「模块长什么样、依赖朝向」 |
+| §2 未完成 / 遗留点 | §2.1–§2.134 按批次的流水记录 | 「第 N 批改了什么」 |
+| §3 并行线协作纪律 | 哪些目录归并行线、提交时如何摘 hunk | 「这个文件能不能动」 |
+| §4 接手指引 | 新会话建议顺序 | 「从哪开始」 |
+| §5 常用锚点 | 文件 + 符号 + 行号 | 「改这个功能看哪」 |
+| §6 文件地图 | `crates/result_panel/src` 目录结构 | 「代码在哪」 |
+
+未完成项的**汇总视图**不在本文，在 `result-panel.md` §21（按「等模型 / 等外部条件 / 待用户拍板」分档）。
+
+### 0.4 本文的引用口径
+
+- `§2.x` / `§3.x` / `§5` / `§6` 指**本文档自身**的小节；
+- `§8.x` / `§9.xx` 一律指 **`result-panel.md`** 的流水小节，本文不复写其内容（避免双份漂移）。
 
 ---
 
@@ -11,7 +50,7 @@
 
 ### 1.1 形态与边界
 
-- **Crate**：`crates/result_panel`（15 个源文件，见 §6 文件地图），版本 0.2.4。
+- **Crate**：`crates/result_panel`（43 个 `.rs` 源文件，见 §6 文件地图），版本 0.2.12（workspace 统一版本）。
 - **形态**：结果面板 = **编辑器宿主内嵌**（`crates/editor/src/view/host.rs` 的 `v_resizable` 分栏，`bfcc94b6`），
   **全局底部 dock 已取消**——`result_dock.rs` 薄壳 / `sync_result_dock` / `RESULT_DOCK_HEIGHT` 已于 2026-10-28 清理移除
   （详见 §2.5 清理记录）。结果区仅当面板 `has_content()` 时渲染下半区，无内容时不占位。
@@ -3255,12 +3294,13 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - `store/`：`store.rs` `ResultStore`（按文档分槽，多结果集 sets(document) + TabBar 标签；事实档 A2 未接线）+ `entry.rs` / `fact.rs`。
 - `export/`：`mod.rs` 门面 + `formats.rs` / `encode.rs` / `table_name.rs`（editor 侧 `pub use result_panel::export::*` 通配，全 pub 面保持）。
 
-## 6. 文件地图（crates/result_panel/src，2026-10-29 目录拆分后）
+## 6. 文件地图（`crates/result_panel/src`，43 个 `.rs`，2026-11-23 核过）
 
-顶层单文件：`lib.rs` / `ports.rs`（请求 + 队列）/ `rowset.rs` / `sets.rs`（结果集标签条）/ `status.rs` / `ui.rs`（尺寸常量）/ `analysis.rs` / `changes.rs` / `column_browser.rs`（列浏览器 List 委托）/ `error_card.rs` / `script_card.rs`。
+顶层单文件：`lib.rs` / `ports.rs`（请求 + 队列）/ `rowset.rs` / `sets.rs`（结果集标签条）/ `status.rs` / `ui.rs`（尺寸常量）/ `analysis.rs` / `changes.rs` / `column_browser.rs`（列浏览器 List 委托）/ `ddl.rs`（按结果集列生成建表 DDL）/
+`references.rs`（「引用」页模型 + 约束→引用键映射）/ `error_card.rs` / `script_card.rs`。
 
 拆分目录（2026-10-29 一批完成，原巨型单文件按域切分；**trait impl 不可分块**处统一「顶层自由函数 + impl 薄转发」、跨文件私有方法 / struct 字段以 `pub(crate)` 暴露；`panel.rs` 无标准 `Render` trait impl（自定义 `render(&self, cx)`，host 手动调）故普通 impl 可切多块）：
 - `store/`（原 `store.rs`）：`mod.rs` + `entry.rs` + `fact.rs` + `store.rs`
 - `export/`（原 `export.rs`）：`mod.rs` + `formats.rs` + `encode.rs` + `table_name.rs`
-- `grid/`（原 `grid.rs`，6556 行）：`mod.rs` + `delegate.rs` + `view_rows.rs` + `edit.rs` + `text.rs` + `menu.rs` + `stats.rs` + `cell.rs` + `header.rs` + `table_impl.rs` + `status.rs` + `tests.rs`
+- `grid/`（原 `grid.rs`，6556 行，13 块）：`mod.rs` + `delegate.rs` + `view_rows.rs` + `edit.rs` + `text.rs` + `menu.rs` + `stats.rs` + `cell.rs` + `header.rs` + `table_impl.rs` + `status.rs` + `fit.rs`（列宽自适应，双击列头分隔线）+ `tests.rs`
 - `panel/`（原 `panel.rs`，3338 行）：`mod.rs` + `data.rs` + `lifecycle.rs` + `render.rs` + `events.rs` + `sidebars.rs` + `dialog.rs` + `tabs.rs` + `tests.rs`
