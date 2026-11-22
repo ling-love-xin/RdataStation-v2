@@ -1,6 +1,6 @@
 # 项目管理模块 · 数据字典
 
-> 状态：**2026-10-01 首版**。字段来源：`crates/engine/migrations/` 迁移 SQL + `crates/project/src/models.rs`。
+> 状态：**2026-10-01 首版；2026-11-22 校对路径**。字段来源：`crates/store/migrations/`（`project_meta/` + `global/`；引擎侧 `crates/engine/migrations/` 已随 rds-store 抽取迁走，`engine::persistence` 仅为重导出）+ `crates/project/src/models.rs`。
 > 本文是 `.RSmeta` 目录树、`project.db` / `global.db` 表结构、`project.json` schema 的**唯一集中说明**；
 > 改表结构时请同步本文，并保持与 `project-wiring-matrix.md` 的接线状态一致。
 
@@ -17,7 +17,8 @@
     ├── project.lock                # 实例锁（OS 字节锁，进程崩溃自动释放）
     ├── project.lock.owner          # 锁占用者信息（pid / 时间；与锁文件分离，见 lock.rs 注释）
     ├── config/
-    │   └── settings.json           # 项目配置（ProjectConfig：默认连接等；就地读写 update_config）
+    │   └── settings.json           # 项目配置（ProjectConfig：默认连接 / extensions 自由槽；
+    │                               #   就地读写 update_config；extensions.rds.build_tag 记最近打开的构建标识）
     ├── queries/                    # SQL 文件目录（预留）
     └── project_metadata/           # 连接元数据缓存目录（每连接一个 .db；⚠️ 归属待定，见 wiring-matrix）
 ```

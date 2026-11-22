@@ -1,7 +1,10 @@
 # 项目管理模块 · 原型设计（项目生命周期 · CRUD）
 
-> 状态：**已实现**（原型 v2；代码见 `project-dev-plan.md` §0） · 关联文件：`project-prototype.html`（可交互原型）、`project-dev-plan.md`（开发方案）
-> 技术栈：gpui-kit 0.7.1（五段布局见 `layout/layout-design.md`，Tauri 差异：标题栏挖空项目槽）
+> 状态：**已实现；2026-11-22 按 `crates/project/src/ui.rs` 逐条核对过一遍**。
+> 本文是**设计与取舍的唯一口径**；`project-prototype.html` 是 2026-09-11 的**设计稿**，
+> 其中卡片、新建对话框等已与当前实现有出入——差异集中在 **§13 落地核对**，两处不一致时以 §13 为准。
+> 关联文件：`project-prototype.html`（可交互设计稿）、`project-dev-plan.md`（开发方案与进度）
+> 技术栈：gpui-kit **0.10.0**（`vendor/gpui-component` / `vendor/gpui-base` 均为 0.10.0；2026-11-22 由 0.9.0 升级，见 `docs/architecture/dependencies/core-packages-2026-11-22-upgrade-assessment.md`）
 > 前置：v1 蓝本 `v1/backend/src/commands/project_commands.rs`（创建/打开/校验/重命名/删除/最近项目）；v2 后端 `crates/project`（`ProjectStore` / `ProjectManager` / `models.rs`）与 P0 会话 `workbench/src/services/project_session.rs` 已就绪
 > 关联文档：`overview.md`（M1 双层数据架构）、`connection/connection-dev-plan.md`（作用域 `G_/P_/GP_`）、`scratchpad/scratchpad-prototype-design.md`（草稿箱根 = 项目目录）
 >
@@ -15,7 +18,7 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 
 - **不存在「多项目并列打开」的工作台**——切换项目 = 关闭当前项目 + 打开目标项目（同一窗口内完成，编辑区状态重置）。
 - **不支持多窗口打开同一个项目**——打开项目时在 `.RSmeta/` 下获取**项目锁**（`project.lock`，记录 pid/时间），已被占用时默认拒绝，但提供**逃生口**（只读打开 / 仍要打开，见 §8）；进程退出/关闭项目时释放，陈旧锁按 pid 存活检测回收。
-- **切换 / 关闭前拦截未保存草稿**——编辑区存在脏缓冲区时，先弹「保存 / 不保存 / 取消」，取消则中止切换。
+- **切换 / 关闭前拦截未保存草稿**——编辑区存在脏缓冲区时，先弹「取消 / 放弃更改并继续 / 保存并继续」，取消则中止切换。
 - **项目名册状态需持久化**——固定（pin）与排序方式跨会话保留（见 §2.2 R5/R8），落全局库。
 
 项目管理 UI 因此不是左 Dock 的一个 panel，而是**窗口级状态**（无项目 → 选择器，覆盖中央区，保留五段外壳）**加**标题栏项目槽上的弹层（有项目 → 项目菜单 / 设置）。
@@ -30,7 +33,7 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
     ├── project.json               # 项目配置（可迁移 JSON）
     ├── analytics.duckdb           # 项目分析库（DuckDB）
     ├── project.lock               # 项目锁（防同项目多实例）
-    ├── config/                    # 连接配置等
+    ├── config/settings.json       # ProjectConfig：settings / default_connection_id / extensions（含 rds.build_tag）
     ├── queries/                   # SQL 文件
     └── project_metadata/          # 每个连接一个元数据 .db（introspection 缓存）
 ```
@@ -39,7 +42,7 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 
 ## 2. 项目 CRUD 全览（本模块主线）
 
-> 统一收口在 `ProjectService`；后端能力来自 `crates/project` + `engine/persistence/global_db.rs`。全局库是**项目名册**（recent/all/removed），`.RSmeta` 是**项目本体**——二者需保持同步。
+> 统一收口在 `ProjectService`；后端能力来自 `crates/project` + 名册库 `crates/store/src/persistence/global_db.rs`（`engine::persistence::global_db` 是重导出薄壳，实现已迁至 `rds-store`）。全局库是**项目名册**（recent/all/removed），`.RSmeta` 是**项目本体**——二者需保持同步。
 
 ### 2.1 Create（创建）
 
@@ -47,7 +50,7 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 | --- | --- | --- | --- |
 | C1 | **新建空项目** | 选择器「＋ 新建项目」→ §6 对话框 | `ProjectStore::create` + `save_project_info*`；建 `.RSmeta` 并迁移 `project.db` / `analytics.duckdb` |
 | C2 | **从现有目录创建 / 导入** | 选择器「🗀 打开文件夹…」 | 含 `.RSmeta` → 直接登记并打开；空目录 → 询问「在此创建项目」；非空非项目 → **阻止** |
-| C3 | **从示例项目开始**（首版必需） | 选择器快速开始 | 复制内置示例（含 `.RSmeta` 与示例草稿）后登记并打开 |
+| C3 | **从示例项目开始** | 选择器「从示例项目开始」 | 固定路径 `sample_project_dir()`：已是有效项目则直接打开；否则按 `CreateProjectInput::new("示例项目", path).with_sample_drafts(true)` 创建，再写一份 `welcome.sql`（写草稿失败不阻断打开） |
 
 创建校验：名称非空、≤64 字、不含 `\ / : * ? " < > |`；目标目录可写；冲突按上表分支。
 
@@ -56,35 +59,35 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 | # | 操作 | 入口 | 语义 / 后端 |
 | --- | --- | --- | --- |
 | R1 | **启动会话解析** | 应用启动 | `RDS_PROJECT_PATH` → 全局库最近项目（路径仍存在）→ 空态（`resolve()`） |
-| R2 | **最近项目列表** | 选择器「最近」 | `get_recent_projects(limit)`，过滤 `removed_at IS NULL`；**固定项置顶**，其余按 `last_opened_at` 倒序 |
+| R2 | **最近项目列表** | 选择器「最近」 | `get_recent_projects(limit)`：`removed_at IS NULL` **且** `last_opened_at` 非空（从未打开过的不进最近），`ORDER BY is_pinned DESC, last_opened_at DESC` |
 | R3 | **全部项目列表** | 选择器「全部」 | `get_all_projects`（过滤 `removed_at IS NULL`） |
-| R4 | **搜索 / 过滤** | 选择器顶部输入 | 按名称 / 路径子串过滤（大小写不敏感）；状态筛选（Active/Syncing/Archived/Offline） |
+| R4 | **搜索 / 过滤** | 选择器顶部输入 + `状态：<当前>` 下拉 | 输入框按**名称 / 描述 / 路径**子串过滤（大小写不敏感）；另支持 facet 语法 `状态:<active\|archived\|offline\|syncing\|全部>`、`固定:<是\|否>`、`锁:<是\|否>`，与状态下拉**叠加（AND）**；状态下拉候选固定为「全部 / Active / Archived / Offline / Syncing」，属临时视图状态、**不持久化** |
 | R5 | **排序** | 选择器排序菜单 | 最近打开 / 名称 / 创建时间；**排序方式持久化**（`settings` 通用设置 `projects.sort_mode`） |
 | R6 | **打开项目** | 卡片 / `open_by_path` / `open_by_id` | 校验 `.RSmeta` → 获取项目锁 → `open_project*` → 更新 `last_opened_at` → 写会话 |
 | R7 | **元信息读取** | 卡片 / 设置 | `ProjectInfo` + 路径有效性 + `check_project_missing_drivers` |
-| R8 | **固定 / 取消固定** | 卡片 `📌` / `…` | 写 `project_info.is_pinned`（+ `pinned_at`），固定项在最近/全部置顶；**跨会话保留** |
+| R8 | **固定 / 取消固定** | 卡片 `Star` 星标 / `⋯` | 写 `project_info.is_pinned`（+ `pinned_at`），固定项在最近/全部置顶；**跨会话保留** |
 | R9 | **已移除项目找回** | 选择器「已移除」视图 | `list_removed_projects`（`removed_at` 非空）→「恢复」清空 `removed_at` 并回到名册 |
 
-> 失效路径（磁盘已移走）：卡片降为**失效态**，仅保留「移出列表」，不报裸错误。
+> 失效路径（磁盘已移走）：卡片降为**失效态**，菜单由「在资源管理器中显示 / 删除数据…」换成「重新定位…」（`card_menu_entries` 的路径分支），保留 打开 / 固定·取消固定 / 移出列表；不报裸错误。
 
 ### 2.3 Update（更新）
 
 | # | 操作 | 入口 | 语义 / 后端 |
 | --- | --- | --- | --- |
-| U1 | **重命名** | 项目菜单 / 设置 / 卡片 `…` | 仅改**显示名**（`name`）：`update_project_info` + 同步 `project.json`/`project.db` + 标题栏即时更新；**不改磁盘目录名**（移动目录超出范围，见 §12） |
+| U1 | **重命名** | 项目菜单「重命名…」/ 设置「基本信息」 | 仅改**显示名**（`name`）：`update_project_info` + 同步 `project.json`/`project.db` + 标题栏即时更新；**不改磁盘目录名**（移动目录超出范围，见 §12） |
 | U2 | **编辑描述** | 设置 · 概览 | 同 U1 管道（`description`） |
 | U3 | **默认连接** | 设置 · 默认项 | 写 `ProjectConfig.default_connection_id` → `save_config` |
 | U4 | **归档 / 取消归档** | 项目菜单 / 设置 · 危险区 | `ProjectStatus::Active ↔ Archived`；归档不删除，仍在名册 |
 | U5 | **重新定位** | 失效卡片 | 指向新目录：校验 `.RSmeta` → 改全局库 `path` + `save_info` |
-| U6 | **固定状态** | 卡片 `📌` | 见 R8，属名册属性更新（跨会话） |
+| U6 | **固定状态** | 卡片 `Star` 星标 | 见 R8，属名册属性更新（跨会话） |
 | U7 | **重命名后同步** | — | 名册 / `.RSmeta` / 会话三处一致由服务保证（单一写入入口） |
 
 ### 2.4 Delete（删除）
 
 | # | 操作 | 入口 | 语义 / 后端 | 可逆 |
 | --- | --- | --- | --- | --- |
-| D1 | **移出名册**（软删） | 卡片 `✕` / `…` | 置 `project_info.removed_at = now`，**保留磁盘**；从最近/全部隐藏（可经 R9 找回） | 可找回（R9） |
-| D2 | **删除磁盘数据**（硬删） | 设置 · 危险区 | 删除 `{project}/.RSmeta` 及项目文件（`delete_project_disk` 语义）；**输入项目名二次确认**；先释放项目锁；随后从全局库移除登记 | 不可逆 |
+| D1 | **移出名册**（软删） | 卡片 `⋯`（或右键）→「移出列表」 | 置 `project_info.removed_at = now`，**保留磁盘**；从最近/全部隐藏（可经 R9 找回）。路径失效的卡片走 `forget`（直接清名册记录，不可找回） | 可找回（R9） |
+| D2 | **删除磁盘数据**（硬删） | 卡片 `⋯` →「删除数据…」/ 设置 · 危险区「删除数据…」 | 删除 `{project}/.RSmeta` 及项目文件（`delete_project_disk` 语义）；**输入项目名二次确认**；先释放项目锁；随后从全局库移除登记 | 不可逆 |
 | D3 | **删除前置校验** | — | 若为当前项目 → 先关闭（走未保存拦截）；确认文案展示将删除的绝对路径 | — |
 
 > 归档（U4）≠ 删除；软删（D1）≠ 硬删（D2）。三者入口分开，避免误操作。
@@ -94,7 +97,7 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 | 态 | 条件 | 主视图 | 标题栏项目槽 |
 | --- | --- | --- | --- |
 | **无项目** | 会话解析为空且未被用户关闭 | 项目选择器（覆盖中央区） | 显示「未打开项目」占位 |
-| **有项目** | 会话存在 | 正常五段工作台 | 显示项目名 + 状态点，点击弹**项目菜单** |
+| **有项目** | 会话存在 | 正常五段工作台 | 显示 `Folder` 图标 + 「项目」+ 项目名（**无状态点**）；点击项目槽弹**项目菜单** |
 | **切换/关闭中** | 未保存拦截 / 锁竞争 / 加载 | 选择器（带加载态）或拦截对话框 | 加载指示 |
 
 **关键帧（状态迁移）**：
@@ -121,29 +124,38 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 ┌──────────────────────────────────────────────────────────────┐
 │  [R] RdataStation        [最近][全部][已移除]      [◐ 主题]    │
 ├───────────────────────────────────┬──────────────────────────┤
-│  ⌕ 搜索项目        排序: 最近打开 ▾ │  [＋ 新建项目]  主按钮    │
-│  📌 营销分析            ◉ Active   │  [🗀 打开文件夹] 次按钮    │
-│  ┌──────────────────────────────┐ │  [◫ 从示例项目开始]        │
+│ [搜索名称 / 描述 / 路径…] 状态：全部▾ 排序：最近打开▾ │ [＋ 新建项目]  主按钮 │
+│  ★ 营销分析  active   打开 ⋯       │  [📂 打开文件夹…] 次按钮  │
+│  ┌──────────────────────────────┐ │  [⧉ 从示例项目开始]        │
 │  │ D:\work\marketing            │ │                          │
-│  │ 2 小时前 · 12 连接 · 3 版本   │ │  ── 快速开始 ──           │
+│  │ 最后打开：2 小时前 · 状态：active │ │  ── 快速开始 ──           │
 │  └──────────────────────────────┘ │  · 新建空项目            │
 │  ┌──────────────────────────────┐ │  · 从示例项目开始        │
-│  │ 风控看板   ⚠ 缺失 1 个驱动    │ │  · 打开现有目录（.RSmeta）│
+│  │ 风控看板   ⚠ 缺失驱动：sqlite  │ │  · 打开现有目录（.RSmeta）│
 │  │ …                            │ │                          │
 │  └──────────────────────────────┘ │                          │
 │  （空态 / 无匹配态 / 已移除列表）   │                          │
 └───────────────────────────────────┴──────────────────────────┘
 ```
 
-顶部三个视图 Tab：**最近**（R2）/ **全部**（R3）/ **已移除**（R9）。排序方式（R5）跨会话保留。
+顶部三个视图 Tab：**最近**（R2）/ **全部**（R3）/ **已移除**（R9）。搜索框旁边是 `状态：<当前>` 与 `排序：<当前>` 两个下拉按钮（**不是**一个下拉），排序方式（R5）跨会话保留。
 
 ### 4.2 最近项目卡片
 
-展示：**固定标记**（📌，R8）、**项目名**、**状态徽标**（Active/Syncing/Archived/Offline）、**路径**（等宽、中间省略）、**元信息**（最后打开相对时间 · 连接数 · 版本数）、**缺失驱动警告**。
+**当前实现（2026-11-22 核对，`ui.rs` 卡片渲染 + `meta_line`）**：
 
-- 悬停行内操作：打开、固定/取消固定（R8）、在资源管理器中显示、重命名（U1）、移出列表（D1）、`…` 菜单（含删除磁盘数据 D2）。
-- 双击/回车 = 打开；↑↓ 移动选择。
-- 有效期与失效态（§2.2 R7）视觉区分；固定项置顶并有分隔。
+| 层 | 内容 |
+| --- | --- |
+| 第一行 | 项目名（`text_sm` 中等字重）+ 状态**纯文本**（按状态着色，不是徽标）+ 固定项星标（`Star`，`primary` 色）+ 右侧 `打开` / `⋯` 两个操作 |
+| 路径行 | `text_xs` 弱化色，**完整路径原文**（不省略中段） |
+| 描述行 | 有描述才显示（`text_xs` + `text_ellipsis`） |
+| 元信息行 | `最后打开：{相对时间或"从未打开"} · 状态：{status}` |
+| 附加警示 | 路径失效 → `⚠ 路径已失效，可能已移动或删除`；缺失驱动 → `⚠ 缺失驱动：a、b`；被占用 → `● 已在另一实例打开` |
+
+- 卡片**不显示**连接数 / 版本数（`ProjectSummary` 没有这两个字段；版本数在 `ProjectInfo.version_count`，但未进卡片）。
+- 悬停操作：`打开`、`⋯`（右键同源 `card_menu_entries`：打开 / 固定·取消固定 / 在资源管理器中显示 / 移出列表 / 删除数据…；路径失效时「在资源管理器中显示」「删除数据…」换成「重新定位…」；「已移除」视图只有 打开 / 固定 / 恢复）——**不含「重命名」**（改名走项目菜单 / 设置「基本信息」）。
+- 双击/回车 = 打开；↑↓ 移动选择；固定项置顶（排序第一键是 `is_pinned`，见 `sort_items`）。
+- 失效态与缺失驱动都在卡片内加一行警示，不弹裸错误。
 
 ### 4.3 空态与边界态
 
@@ -160,73 +172,83 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 ## 5. 标题栏项目槽与项目菜单（有项目态）
 
 ```
-[项目] 营销分析 ●        ← 名称 + 状态点（警告=缺失驱动/归档；正常=无点/成功点）
+[📁] 项目 营销分析        ← 文件夹图标 + 「项目」 + 名称（实测：没有状态点）
 ```
 
-点击弹出**项目菜单**（`popover` token）：
+点击弹出**项目菜单**（`popover` token），条目来自 `project::ui::project_menu_entries(read_only)`（**非只读 6 项；只读时顶部多一条置灰说明，共 7 项**，顺序如下）：
 
 ```
 ┌────────────────────────────┐
-│ 切换项目…            Ctrl+⇧P│
-│ 项目设置…                    │
-│ 重命名…                      │
+│ 只读模式：写操作不可用      │  ← 仅只读打开时出现，禁用态
+│ ──────────────────────────  │
+│ 切换项目…                  │
+│ 项目设置…                  │
+│ 重命名…                    │  ← 只读时禁用
 │ 在资源管理器中显示           │
 │ ──────────────────────────  │
-│ 归档项目                     │
+│ 归档 / 取消归档             │  ← 只读时禁用
 │ ──────────────────────────  │
-│ 关闭项目                     │
+│ 关闭项目                    │
 └────────────────────────────┘
 ```
 
-> 提升/引用**不在此菜单**（范围外，见 §12）。缺失驱动时菜单顶部加一条黄色警告行，点击进入项目设置 → 依赖自检。固定/取消固定为选择器卡片级操作，不进标题栏菜单。
+> 菜单项**不显示快捷键**（`PopupMenuItem` 只有 label + icon + 禁用态）；但快捷键本身仍在：`Ctrl+Shift+P` = 切换项目、`Ctrl+Shift+W` = 关闭项目（`crates/app/src/main.rs` 的 `KeyBinding::new("ctrl-shift-p", SwitchProject, Some("workbench"))` 与 `"ctrl-shift-w"`，context `"workbench"`）。“切换项目…”与“关闭项目”在实现上是同一条回头路（关当前 + 回选择器），“重命名…”是“项目设置…”的直达别名。提升/引用**不在此菜单**（范围外，见 §12）。固定/取消固定为选择器卡片级操作，不进标题栏菜单。缺失驱动只在**卡片**上以 `⚠ 缺失驱动：…` 一行展示，菜单里没有警告行。
 
 ## 6. 新建项目对话框（Create）
 
-模态（`Dialog`），宽度约 560px：
+**当前实现（2026-11-22 核对，`ui.rs::open_create_dialog` / `submit_create`）**：模态 `Dialog`，
+不设宽 → 用组件默认 **448px**（不是早期设计稿写的 560）。
 
-| 字段 | 控件 | 校验 |
+| 字段 | 控件 | 校验（行内即时提示，判据与提交同源） |
 | --- | --- | --- |
-| 项目名称 | 单行输入（必填，聚焦） | 非空、≤64 字、不含 `\ / : * ? " < > \|` |
-| 位置 | 目录选择 + 预览 `位置/名称` | 目录可写；目标不存在则创建 |
-| 描述 | 多行（可选，≤200 字） | — |
-| 默认连接 | 下拉（可空；来源系统级连接） | — |
-| 初始化分析库 | 复选（默认开） | — |
-| 创建示例草稿 | 复选（默认关） | — |
+| 项目名称 `*` | 单行 `Input` | `service::validate_project_name`：非空、≤64 字、不含 `\ / : * ? " < > \|`；名称未填时不提示（避免开框即红） |
+| 位置 `*` | 目录输入 + 浏览按钮（系统目录选择器） | `location_hint`：空 → 「请选择项目位置」；不存在 → 「位置不存在：…」；目标已是项目 → 「该目标目录已是项目，请直接打开」；目标非空 → 「目标目录非空，请换一个名称或选择空目录」；**名称不合法时整行不提示**（目标路径还不成立，且含分隔符的名称会把 `join` 拼成子路径判出错误结论） |
+| 目标预览 | 静态文本 | `目标：{位置}/{名称}`，**位置非空且名称合法**后才显示真实路径，否则退回占位文案 |
+| 描述（可选） | 单行 `Input` | — |
 
-**冲突处理**（对齐 v1 `create_and_save_project`）：
+- **没有**「默认连接」「初始化分析库」「创建示例草稿」复选——这三项只存在于设计稿；分析库恒建（`ProjectStore::create`），示例草稿只在「从示例项目开始」那条路径写入（`create_sample`）。
+- **位置默认值**＝上次成功新建用的父目录（`settings.projects.last_create_location`），没记过才回退用户主目录；创建成功后写回（`submit_create` 的成功分支）。
+- 底部只有 `取消` / `创建项目`（`Primary`）。按钮**不置灰**：先按下，失败时把原因写进提交错误行。
+
+**提交期冲突处理**（`service::create` → `inspect_target`）：
 
 | 场景 | 行为 |
 | --- | --- |
-| 目标目录已是有效项目（含 `.RSmeta`） | 提示「该目录已是项目」→「打开现有项目」（R6） |
-| 目标目录存在但非空、且非项目 | **阻止创建**：「目录非空，请选择空目录」 |
-| 目标目录为空 | 正常创建 |
+| 目标目录已是有效项目（含 `.RSmeta`） | 报错「该目录已是项目，请直接打开」 |
+| 目标目录存在但非空、且非项目 | 报错「目录非空，请选择空目录」 |
+| 目标目录为空 / 不存在 | 正常创建（目录不存在则连同 `.RSmeta` 一起建） |
 
-底部：`取消` / `创建项目`（校验未过时禁用）。创建过程显示进度（建目录 → 迁移 → 写全局库 → 驱动自检）。
+- 空目录这条在「打开现有目录」路径上另有分支：先弹确认「在空目录创建项目？」（原型 C2）。
+- **「打开现有项目」对话框（2026-11-22 补齐）**：单字段「项目目录（含 .RSmeta）」+ 浏览按钮，宽 448px；行内提示与 `submit_open_folder` 同源（空 / 不存在 / 非空且非项目当场报红；**空目录不报错**，按下「打开」才问是否在此创建），因此用户选完目录就能看到判断，不必先点按钮被拒。见 `project-user-guide.md` §4.3。
+- 创建即打开：成功后直接走统一 `open_path`（取锁、刷新连接/导航），不另开一步。
 
 ## 7. 项目设置视图（Read / Update / Delete）
 
-从项目菜单进入，占用中央编辑区（Tab，可关闭）。左侧分节导航 + 右侧内容：
+**当前实现（2026-11-22 核对，`ui.rs::render_settings` 一带）**：从项目菜单进入后是**覆盖式面板**
+（`ui.settings_open` 为真时渲染），不是"中央编辑区 Tab"；内部为**单栏纵向分节**（7 节）：
 
 | 分节 | 内容 | 数据来源 |
 | --- | --- | --- |
-| 概览 | 名称 / 描述（内联编辑，U1/U2）、状态、创建/更新/最后打开时间 | `ProjectInfo` |
-| 存储 | 项目根路径（复制 / 显示位置）、`.RSmeta` 结构树（含大小）、**「打开 .RSmeta」按钮** | `ProjectPath` + `fs::metadata` |
-| 默认项 | 默认连接（U3） | `ProjectConfig.default_connection_id` |
-| 版本 | 版本链只读列表（`Version` / `Versioned`，父/子、时间、说明） | 项目 `project.db` |
-| 依赖自检 | 缺失驱动列表 + 复制安装指引 / 忽略 | `check_project_missing_drivers` |
-| 危险区 | 归档/取消归档（U4）、移出名册（D1）、**删除磁盘数据（D2，输入项目名确认）** | `GlobalDatabaseManager` |
+| 概览 | 四项只读 kv：名称 / 路径 / 描述 / 状态（「可写」或「只读」） | `SettingsSnapshot`（事件路径取一次） |
+| 基本信息 | 名称输入（**仅改显示名**）+ 描述输入 + 「保存项目信息」按钮 | `save_project_info`：校验名 → `service::update_meta` → 改 `session.name`（标题栏槽随之变）→ notice「已保存项目信息」→ 刷新选择器与快照 |
+| 默认项 | 默认连接（U3）：下拉 + 说明「新建查询 / 打开项目时的预选连接；不设则用系统当前连接」 | `ProjectConfig.default_connection_id` |
+| 存储（.RSmeta） | 只读结构树：树头 `.RSmeta/ · 合计 {human_size}`，每行「缩进 + 图标 + 名称 + 大小 + 复制路径」（点击 toast「已复制路径：…」）+ 说明 +「打开 `.RSmeta`」 | `meta_tree_rows`（`fs::metadata` 快照） |
+| 依赖 | 缺失驱动列表与处理 | `check_project_missing_drivers` |
+| 版本 | 手动快照台账（只读列表）+ 消息输入 +「创建版本快照」 | `project.db` 的 `project_versions` |
+| 危险区 | 归档/取消归档（U4）、移出名册（D1）、删除磁盘数据（D2，输入项目名确认） | `GlobalDatabaseManager` |
 
-- 名称/描述改动即时反映到标题栏槽。
-- 存储结构树只读；「打开 .RSmeta」用系统文件管理器打开该目录（排障用，工具提示注明会暴露内部结构）。
+- 名称/描述不是即输即改：点「保存项目信息」后写名册并把 `session.name` 同步给标题栏槽。
+- 存储结构树只读；「打开 `.RSmeta`」用系统文件管理器打开（排障用）。
+- 只读打开时，写类入口按 `read_only_blocked` 禁用（U2 描述、归档、默认连接等）。
 
 ## 8. 未保存拦截与锁竞争
 
 | 场景 | 行为 |
 | --- | --- |
-| 切换/关闭项目且编辑区有脏缓冲区 | 弹「保存 / 不保存 / 取消」；取消则中止；「保存」写回草稿后继续 |
-| 打开被本项目其他实例锁定的项目 | 弹三项：**只读打开 / 仍要打开 / 取消**（逃生口） |
-| ↳ 只读打开 | 打开项目但不获取写锁，进入只读模式（编辑/执行写操作受限，状态栏标注「只读」） |
-| ↳ 仍要打开 | 强制接管：仅当旧锁判定为陈旧时允许；接管后重写锁文件 |
+| 切换/关闭项目且编辑区有脏缓冲区 | 弹 `Dialog`「未保存的草稿」，三按钮 **取消 / 放弃更改并继续 / 保存并继续**（`open_unsaved_dialog`）；取消则中止，「保存并继续」写回草稿文件后继续 |
+| 打开被本项目其他实例锁定的项目 | 弹 `Dialog`「项目「{name}」已在另一实例打开」，正文给出持有者 pid，三按钮 **取消 / 仍要打开 / 只读打开**（`open_lock_busy_dialog`） |
+| ↳ 只读打开 | 打开项目但不获取写锁，进入只读模式（写操作按钮禁用，`ui.notice` 标「只读打开：该项目已被另一实例占用」，状态栏标注「只读」） |
+| ↳ 仍要打开 | 清除锁文件后重新抢锁（仅在确认对方已退出 / 陈旧锁时使用） |
 | 陈旧锁（持有进程已退出） | 按 pid 存活检测自动回收，不阻塞打开 |
 | 关闭项目 | 释放锁 → 会话置空 → 回选择器 |
 
@@ -239,10 +261,10 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 | 打开路径缺 `.RSmeta` | 拦截；`.rdata-station` 旧结构尝试迁移 |
 | 打开最近项目但路径已移走 | 失效态，不崩溃 |
 | 打开被锁项目 | 三项选择（只读/仍要/取消）；只读模式有明确标注 |
-| 项目名非法字符 | 内联错误，创建/重命名按钮禁用 |
+| 项目名非法字符 | 行内提示（`location_hint` 之外由 `validate_project_name` 给出）；提交按钮**不置灰**，按下后再报错 |
 | 重命名 | 仅改显示名，磁盘目录不变；三处（名册/.RSmeta/会话）一致 |
 | 固定 / 排序持久化 | 重启后固定项仍置顶、排序方式保持 |
-| 缺失驱动 | 标题栏状态点 + 卡片/设置警告；不阻塞打开 |
+| 缺失驱动 | 卡片上 `⚠ 缺失驱动：{列表}` 一行 + 设置 · 依赖节；不阻塞打开 |
 | 切换项目 | 编辑区重置；草稿箱/连接/导航全部指向新根，无跨项目串数据 |
 | 软删 vs 硬删 | 软删可从「已移除」找回；硬删输入项目名确认后方可执行 |
 
@@ -253,7 +275,7 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 | 选择器底 / 卡片 | `background` / `sidebar.background`，卡片边 `border`，悬停 `list.hover.background` |
 | 卡片选中 | `list.active.background` + 左边条 `list.active.border` |
 | 主按钮 / 次按钮 | `primary.background`+`primary.foreground` / `background`+`input.border` |
-| 状态徽标 | Active→`success`，Syncing→`info`，Archived→`muted.foreground`，Offline→`warning`；缺失驱动→`warning` |
+| 状态文字 | active→`success`，syncing→`info`，archived→`muted.foreground`，offline→`warning`；缺失驱动 / 路径失效→`warning` |
 | 固定 / 只读标记 | `muted.foreground`（弱化）；只读态状态栏用 `warning` |
 | 标题栏项目槽 | `title_bar.slot.background`（产品语义角色，见主题方案 §5.4） |
 | 项目菜单 / 对话框 | `popover.background`+`popover.foreground`，危险项 `danger` |
@@ -267,14 +289,14 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 
 | 组成 | 类型/位置 |
 | --- | --- |
-| 项目管理 UI（选择器 / 菜单 / 对话框 / 设置） | `crates/project/src/ui.rs`（视图与 model/service 同 crate；选择器与设置由宿主渲染为受控 overlay，菜单为语义 `Button::dropdown_menu` + `PopupMenu`，对话框为 `Dialog` / `AlertDialog`） |
+| 项目管理 UI（选择器 / 菜单 / 对话框 / 设置） | `crates/project/src/ui.rs`（视图与 model/service 同 crate）。选择器 = `render_picker`（挂载在 `crates/workbench/src/panels/project_picker.rs:132`）；设置 = `render_settings`（覆盖式面板，挂载在 `crates/workbench/src/view/render.rs:362`）；菜单 = 语义 `Button::dropdown_menu` + `PopupMenu`；对话框 = `Dialog` / `AlertDialog` |
 | 项目服务编排（列表 / 创建 / 打开 / 关闭 / 更新 / 删除 / 找回 / 版本） | `crates/project/src/service.rs` |
 | 项目视图 ↔ 宿主桥（重绘 / 编辑区 / 排序偏好 / 打开后刷新） | `crates/workbench/src/components/project_host.rs`（`ProjectUiHost` 注入） |
 | 会话解析（env → 最近 → 空态） | `crates/workbench/src/services/project_session.rs` |
 | 标题栏项目槽 + 项目菜单 | `crates/workbench/src/view/dock.rs`（`render_title_bar`；菜单规格 / 内容由 `project::ui::project_menu_entries` / `build_project_menu` 提供） |
-| 会话与刷新信号 | `crates/workbench/src/panels/`（`Shared`；`project` 字段类型为 `project::ui::OpenProject`） |
+| 会话与刷新信号 | `crates/workbench/src/panels/shared.rs:314`（`Shared.project: Rc<RefCell<Option<project::ui::OpenProject>>>`） |
 | 项目锁（OS 文件锁 + 占用者信息） | `crates/project/src/lock.rs`（`.RSmeta/project.lock` / `project.lock.owner`） |
-| 名册持久化（固定 / 软删） | `crates/engine/src/persistence/global_db.rs` + 迁移 `crates/engine/migrations/global/019_add_project_ui_state.sql` |
+| 名册持久化（固定 / 软删） | `crates/store/src/persistence/global_db.rs`（`project_info` 表：`is_pinned` / `pinned_at` / `removed_at`）+ 迁移 `crates/store/migrations/global/019_add_project_ui_state.sql`；`engine::persistence::global_db` 仅为重导出 |
 | 动作 / 快捷键 | `crates/workbench/src/commands.rs`（`SwitchProject` / `CloseProject`；project crate 不再有 commands 文件） |
 | 依赖接线 | 根 `Cargo.toml`（`project` 别名）+ `crates/workbench/Cargo.toml` |
 
@@ -293,7 +315,7 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 **已确认（v2）**：
 
 1. 选择器覆盖中央区，保留五段外壳。
-2. 切换/关闭拦截未保存草稿（保存/不保存/取消）。
+2. 切换/关闭拦截未保存草稿（取消 / 放弃更改并继续 / 保存并继续）。
 3. 不支持同一项目多窗口；被锁项目给「只读打开 / 仍要打开」逃生口。
 4. 提升/引用移出本模块范围。
 5. 删除磁盘数据输入项目名二次确认。
@@ -301,3 +323,39 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 7. 「从示例项目开始」首版必需。
 8. 固定与排序方式持久化到全局库 / 设置。
 9. 软删提供「已移除项目」找回入口。
+
+## 13. 落地核对（2026-11-22）
+
+以 `crates/project/src/ui.rs` 为准，对设计稿逐条核对后修正的差异。**两处不一致时以本节为准**：
+
+> 证据列只记**符号名**，不记行号：行号随每次编辑漂移（2026-11-22 复核时表内的 `main.rs` / `ui.rs` 行号已全部失效），故本表统一按符号查。
+
+| # | 设计稿（`project-prototype.html`，2026-09-11） | 当前实现 | 证据 |
+| --- | --- | --- | --- |
+| 1 | gpui-kit 0.7.1 | gpui-kit **0.10.0**（2026-11-22 由 0.9.0 升级） | `Cargo.toml` 的 `gpui-kit = { version = "0.10.0", features = ["gpui-fast"] }`；`vendor/gpui-component` / `vendor/gpui-base` 的 `Cargo.toml` 均为 0.10.0 |
+| 2 | 卡片状态是徽标（Active/Syncing/…） | 状态为**纯文本**，按状态着色 | 卡片首行 `item.status` + `status_color` |
+| 3 | 固定标记 📌 | `Star` 图标 + `primary` 色 | `Icon::new(IconName::Star)` |
+| 4 | 元信息「最后打开 · 连接数 · 版本数」 | 只有 `最后打开：… · 状态：…` | `meta_line`；`ProjectSummary` 无连接数/版本数字段 |
+| 5 | 路径「等宽、中间省略」 | `text_xs` 弱化色，**完整路径原文** | 卡片路径行 |
+| 6 | 行内操作 📂 / ✕ | `打开` + `⋯`（右键菜单同源） | `card_menu_entries` |
+| 7 | 新建对话框宽 560 | 组件默认 **448**（未显式设宽） | `open_create_dialog` 无 `.w()`；`dialog.rs` 默认 448 |
+| 8 | 新建对话框含默认连接 / 初始化分析库 / 创建示例草稿 | **没有**这三项；只有名称、位置、目标预览、描述 | 同左 |
+| 9 | 「校验未过时创建按钮禁用」 | 按钮**不置灰**；改为行内即时提示 + 提交后报错 | `submit_create` / `location_hint` |
+| 10 | 项目设置为「中央编辑区 Tab」、6 节 | **覆盖式面板**、**7 节**（多「基本信息」；「依赖自检」实际叫「依赖」） | `ui.settings_open`；7 处 `section(theme, …)` |
+| 11 | 「版本」= `Version` 版本链 | 实际是**手动快照台账**（`project_versions` 一行一条 message，不承载内容） | `service::list_versions` / `create_version`；`models.rs` 对 `Versioned` 的「未接入」标注 |
+| 12 | 标题栏项目槽带状态点（`●`，警告=缺失驱动/归档） | 槽内是 `Folder` 图标 + 「项目」+ 名称，**没有状态点** | `view/dock.rs::render_title_bar`（`Button::new("project-slot")` + `CatalogIcon::Folder`） |
+| 13 | 项目菜单 6 项，「切换项目…」带 `Ctrl+⇧P`，顶部一条缺失驱动黄色警告行 | **项数一致（非只读 6 项）**：切换项目…/项目设置…/重命名…/在资源管理器中显示/──/归档 / 取消归档/──/关闭项目；只读时顶部多插一条置灰说明「只读模式：写操作不可用」（共 7 项）；菜单**不显示快捷键**、**无缺失驱动警告行**（快捷键本身仍在：`crates/app/src/main.rs` 的两条 `KeyBinding` 分别绑 `Ctrl+Shift+P` / `Ctrl+Shift+W`） | `ui.rs::project_menu_entries` / `ui.rs::build_project_menu` |
+| 14 | 未保存拦截按钮「保存 / 不保存 / 取消」 | 「取消 / 放弃更改并继续 / 保存并继续」（标题「未保存的草稿」） | `ui.rs::open_unsaved_dialog` |
+| 15 | 锁对话框按钮顺序「取消 / 只读打开 / 仍要打开」 | 标题「项目「{name}」已在另一实例打开」、正文给 pid，按钮「取消 / 仍要打开 / 只读打开」 | `ui.rs::open_lock_busy_dialog` |
+| 16 | 选择器顶部只有一个「排序: 最近打开 ▾」 | 搜索框（placeholder 含 facet 说明）+ `状态：<当前>` + `排序：<当前>` 两个下拉 | `ui.rs::render_picker`（搜索行 / 两个下拉在 `render_picker` 内组装）；`ui.rs::StatusFilter` |
+| 17 | 空态带「新建项目 / 打开文件夹」按钮 | `Empty` 组件只有图标 + 标题 + 描述，**不带按钮**；标题随 Tab 变化，未就绪时显示「加载中…」 | `ui.rs::empty_state` |
+| 18 | 名册持久化在 `crates/engine/src/persistence/global_db.rs` | 实现已迁至 **`crates/store`（rds-store）**，`engine::persistence` 只是重导出薄壳；迁移脚本同在 `crates/store/migrations/global/` | `crates/engine/src/persistence/mod.rs`（`pub use rds_store::persistence::*`） |
+
+本次（2026-11-22）新增、设计稿里没有的三项：
+
+- **行内即时校验**：名称/位置在输入时给出错误，判据与提交同源（`validate_project_name` / `inspect_target`）。
+- **位置记忆**：默认位置取 `settings.projects.last_create_location`（登记为 `SettingEntry::Module`，不上设置页）。
+- **构建标识落项目**：每次非只读打开把 `version::info().tag()` 写进 `.RSmeta/config/settings.json` → `extensions.rds.build_tag`，**只写不展示**（避免与这里的「版本」概念混淆）。
+
+**本轮核对范围**：§2 CRUD 全览（R4 搜索 facet、D1/D2 入口）、§3 三态与项目槽、§4 布局与卡片、§5 项目菜单、§6 新建对话框、§7 设置视图、§8 未保存拦截与锁、§9 校验清单、§10 token 名（抽查 `vendor/gpui-component/src/theme/schema.rs`：`list_hover` / `list_active` / `list_active_border` / `description_list.label.*` / `muted_foreground` 均存在；`title_bar.slot.background` 属产品 token）、§11 落点表中的文件路径（逐条 `Test-Path` 核对，已修正 `crates/store` 两处），均已与 `crates/project/src/ui.rs` / `crates/workbench/src/view/dock.rs` 对照修正。
+**仍未逐条比对**：§10 只核到 token 名存在、未核每个组件实际取色调用（值以 `assets/themes/rds-theme.json` 为准，见 `theme/theme-design.md`）；§11 表内的组件选型描述（组件名以 `vendor/gpui-component` 0.10.0 源码为准，未逐行核到每个 view 文件）；§12 范围外。涉及实现细节时以 `project-wiring-matrix.md` 与源码为准，不要引用本文当接口文档。

@@ -1,6 +1,7 @@
 # 项目管理模块 · 接线矩阵
 
 > 状态：**2026-10-01 首版**（对照 `crates/project` 源码逐方法核实，`cargo check -p rds-project` 零告警）
+> **2026-11-22 复核**：行数按当前源码实测更新；补记本次三项新增的接线落点（`BUILD_TAG_KEY` 写盘、`location_hint` 行内校验、`last_create_location` 记忆——后两项的持久化在 `rds-settings`，不在本 crate）；复核“零调用”结论仍成立（`has_recent_available` 仍只被集成测试断言，`*_connection_metadata` 仍只被 store 自身与其单测调用）。同轮 clippy 清理后本 crate 告警 22 → 2（余 `OpenOutcome` 的 `large_enum_variant`、`dialog_footer_three` 的 8 参数，均为有意取舍，见 view-architecture §8）。
 > 口径：与根仓 `docs/architecture/data-layer-wiring-matrix.md` 同族——把「文档声称」与「代码实测」分开，
 > 逐方法标接线状态，防止「预留超前」产生的死代码继续累积。
 > 本文是**唯一接线台账**；改 `crates/project` 实现后请同步本表。
@@ -15,13 +16,13 @@
 
 ## 总览
 
-| 文件 | 代码量 | 接线健康度 |
+| 文件 | 代码量（2026-11-22 实测） | 接线健康度 |
 | --- | --- | --- |
-| `service.rs` | 555 → ~590 行 | ✅ 全部已接线（本项目真实入口） |
-| `lock.rs` | 174 行 | ✅ 全部已接线 |
-| `store.rs` | 880 → ~860 行 | ⚠️ 核心已接线；**死代码已清（ProjectManager / to_project / stub），剩 1 组归属待定**（见下） |
-| `models.rs` | 339 行 | ⚠️ 域模型已接线，**含 1 组预留**（版本化） |
-| `ui.rs` + `ui/tests.rs` | 2617 + 1020 行 | ✅ 全部已接线（有窗口测试锚定） |
+| `service.rs` | 716 行 | ✅ 全部已接线（本项目真实入口） |
+| `lock.rs` | 200 行 | ✅ 全部已接线 |
+| `store.rs` | 948 行 | ⚠️ 核心已接线；**死代码已清（ProjectManager / to_project / stub），剩 1 组归属待定**（见下）；新增 `BUILD_TAG_KEY` 写盘分支 |
+| `models.rs` | 389 行 | ⚠️ 域模型已接线，**含 1 组预留**（版本化） |
+| `ui.rs` + `ui/tests.rs` | 3029 + 1411 行（测试 38 项：24 窗口 + 14 纯函数） | ✅ 全部已接线（有窗口测试锚定） |
 
 ## 逐方法
 
@@ -99,7 +100,16 @@
 
 ### `ui.rs` + `ui/tests.rs`（✅ 全部已接线）
 
-选择器 / 标题栏菜单 / 项目设置 / 语义对话框 / 宿主桥 `ProjectUiHost`，均有窗口测试锚定（`ui/tests.rs` 29 项）。
+选择器 / 标题栏菜单 / 项目设置 / 语义对话框 / 宿主桥 `ProjectUiHost`，均有窗口测试锚定（`ui/tests.rs` 38 项：24 窗口 + 14 纯函数）。
+
+2026-11-22 新增接线（均已接线、有生产调用方）：
+
+| 组成 | 状态 | 说明 |
+| --- | --- | --- |
+| `store::BUILD_TAG_KEY` + `apply_opened` 写盘 | ✅ | 非只读打开时把 `version::info().tag()` 写进 `config/settings.json` 的 `extensions.rds.build_tag`；值未变跳过写盘，失败只 `tracing::warn!`（由 workbench 注入 `.with_build_tag`）。⚠️ **无单测**：写盘在 `apply_opened` 事件路径、依赖全局库，目前只由 `cargo test -p rds-project` 冒烟兜底 |
+| `location_hint(location, name)` | ✅ | 新建对话框行内提示纯函数，判据与 `inspect_target` 同源；单测 `location_hint_matches_create_preconditions` 覆盖六分支，窗口测试 `create_dialog_inline_hint_updates_while_typing` 证明键入后提示同帧出现 |
+| `folder_hint(path)` | ✅ | 「打开现有项目」对话框行内提示纯函数，**文案逐字复用 `submit_open_folder`**；空目录不报错（提交时才问是否在此创建）；单测 `folder_hint_matches_open_preconditions`（五分支）+ 窗口测试 `open_folder_dialog_hint_flags_non_project_dir`（换路径后提示出现 / 消失） |
+| 位置记忆 `last_create_location` | ✅ | 读 / 写经 `ProjectUiHost.last_create_location` / `save_create_location` 注入；持久化在 `rds-settings`（`projects.last_create_location`，`SettingEntry::Module`，不上设置页） |
 
 ## 处置建议（按成本从低到高）
 

@@ -228,7 +228,7 @@ button{font-family:inherit;cursor:pointer;}
     <div class="logo">R</div>
     <div>
       <h1>项目管理 · 原型</h1>
-      <div class="sub">一实例一项目 · 增删改查（CRUD）· 未保存拦截 · 项目锁</div>
+      <div class="sub">一实例一项目 · 增删改查（CRUD）· 未保存拦截 · 项目锁 · <b>设计稿：与当前实现的差异见 <code>project-prototype-design.md</code> §13</b></div>
     </div>
   </div>
   <div class="head-actions">
@@ -250,9 +250,9 @@ button{font-family:inherit;cursor:pointer;}
         <div class="cutout" id="slot-empty">
           <span class="lbl">项目</span><span class="nm" style="color:var(--muted)">未打开项目</span>
         </div>
-        <!-- 有项目态 -->
+        <!-- 有项目态：实测为 Folder 图标 + 「项目」 + 名称，没有状态点 -->
         <div class="cutout clickable hidden" id="slot-project">
-          <span class="lbl">项目</span><span class="nm">营销分析</span><span class="dot warn"></span>
+          <span class="lbl">项目</span><span class="nm">营销分析</span>
         </div>
       </div>
       <div class="tb-center">
@@ -260,15 +260,14 @@ button{font-family:inherit;cursor:pointer;}
       </div>
       <div class="tb-right"><div class="wc">─</div><div class="wc">□</div><div class="wc close">✕</div></div>
 
-      <!-- 项目菜单（有项目态） -->
+      <!-- 项目菜单（有项目态）：条目来自 project_menu_entries —— 非只读 6 项；只读时顶部多一条置灰说明「只读模式：写操作不可用」（共 7 项） -->
       <div class="menu hidden" id="project-menu">
-        <div class="alert">⚠ 缺失 1 个驱动（sqlite）· 点此处理</div>
-        <div class="mi">切换项目…<span class="shortcut">Ctrl+⇧P</span></div>
+        <div class="mi">切换项目…</div>
         <div class="mi">项目设置…</div>
         <div class="mi">重命名…</div>
         <div class="mi">在资源管理器中显示</div>
         <div class="sep"></div>
-        <div class="mi">归档项目</div>
+        <div class="mi">归档 / 取消归档</div>
         <div class="sep"></div>
         <div class="mi">关闭项目</div>
       </div>
@@ -301,47 +300,50 @@ button{font-family:inherit;cursor:pointer;}
               <button class="pt on">最近</button><button class="pt">全部</button><button class="pt">已移除</button>
               <span class="count">4 个项目</span>
             </div>
-            <div class="pk-search">
-              <div class="inp" style="color:var(--muted)">⌕ 搜索项目名称或路径</div>
-              <div class="sort">最近打开 ▾</div>
+            <div class="pk-search" style="flex-wrap:wrap">
+              <div class="inp" style="color:var(--muted)">搜索名称 / 描述 / 路径（可用 状态:archived 固定:是 锁:否）</div>
+              <div class="sort">状态：全部 ▾</div>
+              <div class="sort">排序：最近打开 ▾</div>
             </div>
             <div class="recents">
               <div class="rcp sel">
-                <div class="r1"><span style="color:var(--active-border)">📌</span><span class="nm">营销分析</span><span class="badge ok">Active</span>
-                  <span class="acts"><span>📂</span><span>✕</span></span></div>
+                <div class="r1"><span class="nm">营销分析</span><span style="font-size:11px;color:#15803D">active</span><span style="color:#BC5340">★</span>
+                  <span class="acts"><span>打开</span><span>⋯</span></span></div>
                 <div class="path">D:\work\marketing</div>
-                <div class="r3"><span>2 小时前</span><span>·</span><span>12 连接</span><span>·</span><span>3 版本</span></div>
+                <div class="r3">季度营销数据分析</div>
+                <div class="r3">最后打开：2 小时前 · 状态：active</div>
               </div>
               <div class="rcp warn">
-                <div class="r1"><span class="nm">风控看板</span><span class="badge warn">Active</span>
-                  <span class="acts"><span>📂</span><span>✕</span></span></div>
+                <div class="r1"><span class="nm">风控看板</span><span style="font-size:11px;color:#15803D">active</span>
+                  <span class="acts"><span>打开</span><span>⋯</span></span></div>
                 <div class="path">D:\work\risk-board</div>
-                <div class="r3"><span>昨天</span><span>·</span><span>5 连接</span></div>
+                <div class="r3">最后打开：昨天 · 状态：active</div>
                 <div class="warnline">⚠ 缺失驱动：sqlite</div>
               </div>
               <div class="rcp">
-                <div class="r1"><span class="nm">年度报表</span><span class="badge info">Syncing</span>
-                  <span class="acts"><span>📂</span><span>✕</span></span></div>
+                <div class="r1"><span class="nm">年度报表</span><span style="font-size:11px;color:#1D4ED8">syncing</span>
+                  <span class="acts"><span>打开</span><span>⋯</span></span></div>
                 <div class="path">D:\work\annual-report</div>
-                <div class="r3"><span>3 天前</span><span>·</span><span>2 连接</span></div>
+                <div class="r3">最后打开：3 天前 · 状态：syncing</div>
               </div>
               <div class="rcp dead">
-                <div class="r1"><span class="nm">旧实验</span><span class="badge mut">路径失效</span>
-                  <span class="acts"><span>✕</span></span></div>
+                <div class="r1"><span class="nm">旧实验</span><span style="font-size:11px;color:#6E6E6E">offline</span>
+                  <span class="acts"><span>打开</span><span>⋯</span></span></div>
                 <div class="path">E:\archived\exp-2019</div>
-                <div class="r3"><span>1 年前</span></div>
+                <div class="r3">最后打开：1 年前 · 状态：offline</div>
+                <div class="warnline">⚠ 路径已失效，可能已移动或删除</div>
               </div>
             </div>
           </div>
           <div class="pk-right">
             <button class="btn-p">＋ 新建项目</button>
-            <button class="btn-s">🗀 打开文件夹…</button>
-            <button class="btn-s">▦ 从示例项目开始</button>
+            <button class="btn-s">打开文件夹…</button>
+            <button class="btn-s">从示例项目开始</button>
             <div class="hint-title">快速开始</div>
             <div class="hint-list">
-              <div>· <b>新建空项目</b></div>
-              <div>· 从<b>示例项目</b>开始</div>
-              <div>· 打开现有目录（含 <b>.RSmeta</b>）</div>
+              <div>· 新建空项目</div>
+              <div>· 从示例项目开始</div>
+              <div>· 打开现有目录（.RSmeta）</div>
             </div>
             <div class="note info" style="margin-top:auto">每个实例同一时间只打开一个项目。切换项目会关闭当前项目并重置编辑区。</div>
           </div>
@@ -372,52 +374,66 @@ button{font-family:inherit;cursor:pointer;}
 <!-- ── 状态示意 ── -->
 <div class="states">
   <div class="state">
-    <h4>新建项目对话框 <span class="tag">模态</span></h4>
+    <h4>新建项目对话框 <span class="tag">模态 · 448px</span></h4>
     <div class="dlg">
       <div class="dlg-title">新建项目<span class="x">✕</span></div>
       <div class="dlg-body">
         <div class="field"><label>项目名称 <span class="req">*</span></label><div class="inp focus">营销分析</div></div>
-        <div class="field"><label>位置</label><div class="inp mono">D:\work</div><div class="preview">将创建：D:\work\营销分析</div></div>
+        <div class="field"><label>位置 <span class="req">*</span></label><div class="inp mono">D:\work</div><div class="preview">目标：D:\work\营销分析</div></div>
         <div class="field"><label>描述（可选）</label><div class="inp" style="color:var(--muted)">季度营销数据分析…</div></div>
-        <div class="row2">
-          <div class="field"><label>默认连接</label><div class="inp" style="color:var(--muted)">本地 MySQL</div></div>
-        </div>
-        <div class="chk"><span class="box">✓</span>初始化分析库（analytics.duckdb）</div>
-        <div class="chk"><span class="box off">✓</span>创建示例草稿</div>
+        <div class="note" style="margin-top:6px">当前版本仅支持本地目录；DuckLake 远程项目待后续版本。</div>
       </div>
       <div class="dlg-foot"><button class="btn-s">取消</button><button class="btn-p">创建项目</button></div>
     </div>
-    <div class="hint">校验：名称非空且无 <code>\ / : * ? " &lt; &gt; |</code>；目标目录非空且非项目 → 阻止；已是项目 → 提示打开现有项目。</div>
+    <div class="dlg" style="margin-top:12px">
+      <div class="dlg-title">新建项目 · 行内校验示例（名称非法）<span class="x">✕</span></div>
+      <div class="dlg-body">
+        <div class="field"><label>项目名称 <span class="req">*</span></label><div class="inp">a/b</div><div style="font-size:11px;color:var(--danger);margin-top:5px">项目名称不能包含 \ / : * ? " &lt; &gt; |</div></div>
+        <div class="field"><label>位置 <span class="req">*</span></label><div class="inp mono">D:\work\已占用目录</div><div class="preview">目标：填写位置与名称后在此预览</div><div style="font-size:11px;color:var(--muted);margin-top:5px">名称还不合法，位置行不判目录、也不报错（目标路径还不成立，避免 join 拼出子路径）</div></div>
+      </div>
+      <div class="dlg-foot"><button class="btn-s">取消</button><button class="btn-p">创建项目</button></div>
+    </div>
+    <div class="dlg" style="margin-top:12px">
+      <div class="dlg-title">新建项目 · 行内校验示例（名称合法、目标非空）<span class="x">✕</span></div>
+      <div class="dlg-body">
+        <div class="field"><label>项目名称 <span class="req">*</span></label><div class="inp">newproj</div></div>
+        <div class="field"><label>位置 <span class="req">*</span></label><div class="inp mono">D:\work\已占用目录</div><div class="preview">目标：D:\work\已占用目录\newproj</div><div style="font-size:11px;color:var(--danger);margin-top:5px">目标目录非空，请换一个名称或选择空目录</div></div>
+      </div>
+      <div class="dlg-foot"><button class="btn-s">取消</button><button class="btn-p">创建项目</button></div>
+    </div>
+    <div class="hint">校验判据与提交同源（<code>validate_project_name</code> / <code>inspect_target</code>）：名称非空且 ≤64 字、不含 <code>\ / : * ? " &lt; &gt; |</code>；位置空 / 不存在 / 目标已是项目 / 目标非空各给一行提示，<b>名称不合法时位置行整行不提示</b>（目标路径还不成立）。按钮<b>不置灰</b>，按下后失败再报错。位置默认取上次成功新建的父目录（<code>settings.projects.last_create_location</code>）。</div>
   </div>
 
   <div class="state">
-    <h4>项目设置 <span class="tag">中央 Tab</span></h4>
+    <h4>项目设置 <span class="tag">覆盖式面板 · 单栏 7 节</span></h4>
     <div class="settings">
       <div class="set-nav">
-        <div class="ni on">概览</div><div class="ni">存储</div><div class="ni">默认项</div>
-        <div class="ni">依赖自检</div><div class="ni danger">危险区</div>
+        <div class="ni on">概览</div><div class="ni">基本信息</div><div class="ni">默认项</div>
+        <div class="ni">存储（.RSmeta）</div><div class="ni">依赖</div><div class="ni">版本</div><div class="ni danger">危险区</div>
       </div>
       <div class="set-body">
         <div class="kv">
           <div class="k">名称</div><div class="v">营销分析</div>
-          <div class="k">状态</div><div class="v"><span class="badge ok">Active</span></div>
-          <div class="k">创建时间</div><div class="v">2026-08-20 10:12</div>
-          <div class="k">最后打开</div><div class="v">2 小时前</div>
+          <div class="k">路径</div><div class="v">D:\work\marketing</div>
+          <div class="k">描述</div><div class="v">季度营销数据分析</div>
+          <div class="k">状态</div><div class="v">可写</div>
         </div>
-        <div class="sec-title">存储</div>
+        <div class="sec-title">存储（.RSmeta）<span style="font-weight:400;text-transform:none;letter-spacing:0"> · 树头显示「合计」，每行行尾带「复制路径」</span></div>
         <div class="tree">
-          <div><span class="f">.RSmeta/</span></div>
-          <div>&nbsp;&nbsp;├─ project.db <span class="sz">412 KB</span></div>
-          <div>&nbsp;&nbsp;├─ analytics.duckdb <span class="sz">18.2 MB</span></div>
-          <div>&nbsp;&nbsp;├─ project.json <span class="sz">1.4 KB</span></div>
-          <div>&nbsp;&nbsp;├─ project.lock <span class="sz">32 B</span></div>
-          <div>&nbsp;&nbsp;└─ project_metadata/ <span class="sz">6 文件</span></div>
+          <div><span class="f">.RSmeta/</span> · 合计 19.0 MB</div>
+          <div>&nbsp;&nbsp;├─ project.db <span class="sz">412 KB</span> 复制路径</div>
+          <div>&nbsp;&nbsp;├─ analytics.duckdb <span class="sz">18.2 MB</span> 复制路径</div>
+          <div>&nbsp;&nbsp;├─ project.json <span class="sz">1.4 KB</span> 复制路径</div>
+          <div>&nbsp;&nbsp;├─ project.lock <span class="sz">32 B</span> 复制路径</div>
+          <div>&nbsp;&nbsp;├─ config/settings.json <span class="sz">1.1 KB</span> 复制路径</div>
+          <div>&nbsp;&nbsp;└─ project_metadata/ <span class="sz">6 文件</span> 复制路径</div>
         </div>
-        <div style="margin-top:8px;display:flex;gap:8px"><button class="btn-s" style="padding:5px 10px;font-size:11px">🗀 打开 .RSmeta</button><button class="btn-s" style="padding:5px 10px;font-size:11px">复制路径</button></div>
-        <div class="note warn">⚠ 依赖自检：缺失驱动 <b>sqlite</b>。相关数据源将不可用。</div>
+        <div style="margin-top:8px;font-size:11px;color:var(--muted)">只读的结构视图；「打开 .RSmeta」会用系统文件管理器暴露内部结构（仅排障用）。</div>
+        <div style="margin-top:8px;display:flex;gap:8px"><button class="btn-s" style="padding:5px 10px;font-size:11px">打开 .RSmeta</button><button class="btn-s" style="padding:5px 10px;font-size:11px">刷新列表与结构树</button></div>
+        <div class="note warn">⚠ 依赖：缺失驱动 <b>sqlite</b>。相关数据源将不可用。</div>
       </div>
     </div>
-    <div class="hint">名称/描述改动即时反映到标题栏项目槽；存储结构树只读；删除磁盘数据需输入项目名二次确认。</div>
+    <div class="hint">设置是覆盖式面板、单栏 7 节（概览 / 基本信息 / 默认项 / 存储（.RSmeta）/ 依赖 / 版本 / 危险区）。名称与描述在「基本信息」节编辑、点「保存项目信息」落盘（仅改显示名）；存储结构树只读；删除磁盘数据需输入项目名二次确认。</div>
   </div>
 
   <div class="state">
@@ -434,16 +450,15 @@ button{font-family:inherit;cursor:pointer;}
     <div class="dlg">
       <div class="dlg-title">未保存的草稿<span class="x">✕</span></div>
       <div class="dlg-body">
-        <div style="font-size:12px;line-height:1.8">切换 / 关闭项目前，以下草稿尚未保存：</div>
-        <div class="tree" style="margin-top:9px"><div>sales_orders.sql</div><div>temp_query.sql</div></div>
+        <div style="font-size:12px;line-height:1.8">编辑区存在未保存的 SQL 草稿。「保存并继续」会另存为项目草稿文件，「放弃更改」则直接执行切换 / 关闭 / 所选项目操作。</div>
       </div>
-      <div class="dlg-foot"><button class="btn-s">取消</button><button class="btn-s">不保存</button><button class="btn-p">全部保存</button></div>
+      <div class="dlg-foot"><button class="btn-s">取消</button><button class="btn-s">放弃更改并继续</button><button class="btn-p">保存并继续</button></div>
     </div>
     <div class="note warn">项目锁：打开时在 <code>.RSmeta/project.lock</code> 记 pid；同项目多实例被拒，陈旧锁按 pid 存活回收。</div>
     <div class="dlg" style="margin-top:10px">
-      <div class="dlg-title">项目已在另一实例打开<span class="x">✕</span></div>
-      <div class="dlg-body"><div style="font-size:12px;line-height:1.7">D:\work\marketing 正被其他实例占用（pid 18244）。</div></div>
-      <div class="dlg-foot"><button class="btn-s">取消</button><button class="btn-s">只读打开</button><button class="btn-p">仍要打开</button></div>
+      <div class="dlg-title">项目「营销分析」已在另一实例打开<span class="x">✕</span></div>
+      <div class="dlg-body"><div style="font-size:12px;line-height:1.7">另一进程（pid 18244）持有写锁。可只读打开；仅在确认对方已退出时，才选择「仍要打开」。若该进程已经退出（比如上次崩溃 / 断电留下的陈旧锁），锁会被系统自动释放，此时选「仍要打开」即可接管。</div></div>
+      <div class="dlg-foot"><button class="btn-s">取消</button><button class="btn-p">仍要打开</button><button class="btn-s">只读打开</button></div>
     </div>
   </div>
 
@@ -451,10 +466,10 @@ button{font-family:inherit;cursor:pointer;}
     <h4>最近项目 · 空态 / 失效态 <span class="tag">边界</span></h4>
     <div class="empty-c" style="padding:18px 8px">
       <div class="big">◍</div>
-      <div class="t">还没有项目</div>
+      <div class="t">还没有最近项目</div>
       <div class="d">新建一个项目，或打开包含 .RSmeta 的现有目录。</div>
-      <div style="display:flex;gap:9px;margin-top:4px"><button class="btn-p">＋ 新建项目</button><button class="btn-s">🗀 打开文件夹</button></div>
     </div>
+    <div class="hint">空态是 <code>Empty</code> 组件（Inbox 图标 + 标题 + 描述），<b>不带按钮</b>——动作在右侧按钮区。标题随 Tab 变化：最近「还没有最近项目」/ 全部「还没有项目」/ 已移除「没有已移除的项目」；数据未就绪时标题显示「加载中…」。</div>
     <div class="note danger">全局库未初始化或路径失效时给出明确文案与「重试 / 移出列表」，不暴露裸错误串。</div>
   </div>
 </div>
@@ -468,9 +483,9 @@ button{font-family:inherit;cursor:pointer;}
     <div class="chip"><span class="sw" style="background:var(--accent)"></span><span class="name">list.active.background（选中卡片）</span></div>
     <div class="chip"><span class="sw" style="background:var(--active-border)"></span><span class="name">list.active.border（选中条）</span></div>
     <div class="chip"><span class="sw" style="background:var(--primary)"></span><span class="name">primary（主按钮）</span></div>
-    <div class="chip"><span class="sw" style="background:var(--success)"></span><span class="name">success（Active 徽标）</span></div>
-    <div class="chip"><span class="sw" style="background:var(--info)"></span><span class="name">info（Syncing 徽标）</span></div>
-    <div class="chip"><span class="sw" style="background:var(--warning)"></span><span class="name">warning（缺失驱动 / Offline）</span></div>
+    <div class="chip"><span class="sw" style="background:var(--success)"></span><span class="name">success（active 状态文字）</span></div>
+    <div class="chip"><span class="sw" style="background:var(--info)"></span><span class="name">info（syncing 状态文字 / 占用提示）</span></div>
+    <div class="chip"><span class="sw" style="background:var(--warning)"></span><span class="name">warning（路径失效 / 缺失驱动 / offline）</span></div>
     <div class="chip"><span class="sw" style="background:var(--danger)"></span><span class="name">danger（危险区）</span></div>
     <div class="chip"><span class="sw" style="background:var(--popover-bg)"></span><span class="name">popover（项目菜单）</span></div>
     <div class="chip"><span class="sw" style="background:var(--titlebar)"></span><span class="name">title_bar（标题栏）</span></div>
@@ -479,7 +494,8 @@ button{font-family:inherit;cursor:pointer;}
 </div>
 
 <div class="foot">
-  窗口外壳沿用五段布局（<code>layout/layout-design.md</code>）；本页可切换「无项目 · 选择器 / 有项目 · 项目菜单」两屏。色值仅供示意，落地一律取主题语义 token（<code>theme/theme-design.md</code>）。
+  窗口外壳沿用五段布局（<code>layout/layout-design.md</code>）；本页可切换「无项目 · 选择器 / 有项目 · 项目菜单」两屏。色值仅供示意，落地一律取主题语义 token（<code>theme/theme-design.md</code>）。<br>
+  本文件是 2026-09-11 的<b>设计稿</b>；卡片、新建对话框、项目设置等已按 2026-11-22 代码核对更新，剩余差异与未核对项见 <code>project-prototype-design.md</code> §13。状态色现在是纯文本着色（不再用徽标），元信息只有「最后打开 · 状态」。
 </div>
 
 <script>

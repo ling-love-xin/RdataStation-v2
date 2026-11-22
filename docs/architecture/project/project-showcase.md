@@ -328,12 +328,13 @@ flowchart TD
 | **跨模块回归** | 名册端到端（创建登记 → 固定置顶 → 软删隐藏 → 已移除找回）与磁盘集成（`.RSmeta` / 实例锁 / 默认连接）各有一组集成测试 |
 
 ```
-cargo test -p rds-project -j 2
-  lib                 43 通过（20 项窗口测试 + 9 项纯函数 + 存储 / 锁 / 模型内部用例）
+cargo test -p rds-project -j 1        # 2026-11-22 实测
+  lib                 50 通过（24 项窗口测试 + 14 项纯函数 + 存储 / 锁 / 模型内部用例）
   project_registry     1 通过（名册端到端）
-  project_store        4 通过（磁盘 .RSmeta · 实例锁 · 默认连接）
-cargo test -p rds-workbench --lib -j 2   → 110 通过
-cargo check --workspace --all-targets    → 零告警
+  project_service_lifecycle 5 通过（打开关闭与只读锁 · 归档与改名 · 软删移出删盘 · 重定位 · 版本快照）
+  project_store        3 通过（.RSmeta 创建与读回 · 默认连接 · 实例锁独占与复用）
+cargo test -p rds-workbench --lib -j 2   → 110 通过（2026-09 基线，未随本项目复核）
+cargo check -p rds-project --all-targets → 零告警（workspace 级沿用 2026-09 基线）
 ```
 
 > 使用侧验收清单见 [`project-user-guide.md`](project-user-guide.md) §9；
@@ -348,7 +349,7 @@ cargo check --workspace --all-targets    → 零告警
 | --- | --- |
 | 项目的**生命周期与名册**：创建 / 打开 / 只读 / 切换 / 关闭 / 改名 / 描述 / 默认连接 / 归档 / 移出 / 找回 / 硬删 / 重定位 | **连接的新建与编辑**（连接对话框属连接模块，这里只记「默认连接」这一个偏好） |
 | 选择器（最近 / 全部 / 已移除 · 搜索 facet · 状态筛选 · 排序 · 固定） | **SQL 执行 / Mock 生成 / 洞察本体**（各自模块；这里只提供入口与项目归属） |
-| 项目设置（概览 / 基本信息 / 默认项 / `.RSmeta` 结构树 / 依赖自检 / 版本快照 / 危险区） | **移动或另存项目目录**（改名不动目录，移动不在本期） |
+| 项目设置（概览 / 基本信息 / 默认项 / `.RSmeta` 结构树 / 依赖 / 版本快照 / 危险区） | **移动或另存项目目录**（改名不动目录，移动不在本期） |
 | 未保存草稿拦截、实例锁与逃生口 | **版本恢复与对比**（只做快照台账，恢复未列） |
 | 示例项目（离线可开工） | **DuckLake 远程项目**（`ProjectPath::Remote` 仅模型层预留，UI 不接受 URL） |
 |  | 提升 / 引用（promote / snapshot，原型已列范围为不做） |
@@ -377,5 +378,5 @@ cargo check --workspace --all-targets    → 零告警
 
 ---
 
-> 快照：2026-09-19 · 对应 `cargo test -p rds-project -j 2` 全绿（lib 43 / 集成 5）与
-> `cargo check --workspace --all-targets` 零告警。数字会过期，口径在测试与文档里。
+> 快照：2026-11-22 · 对应 `cargo test -p rds-project -j 1` 全绿（lib 50 / 集成 9）与
+> `cargo check -p rds-project --all-targets` 零告警（workspace 级零告警沿用 2026-09 基线）。数字会过期，口径在测试与文档里。

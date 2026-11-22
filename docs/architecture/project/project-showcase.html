@@ -538,7 +538,7 @@ kbd{font-family:Consolas,monospace;font-size:11.3px;border:1px solid var(--borde
       <div class="kpi"><div class="n">3<small> 道门</small></div><div class="l">危险操作</div><div class="d">可见性门（只读置灰）→ 确认门（输入项目名）→ 范围门（只删 .RSmeta）</div></div>
       <div class="kpi"><div class="n">2<small> 处记录</small></div><div class="l">名册与本体分离</div><div class="d">全局库管「找得到」，.RSmeta 管「用得对」；改名不动磁盘目录名</div></div>
       <div class="kpi"><div class="n">0<small> 次 I/O</small></div><div class="l">render 期纪律</div><div class="d">结构树 / 描述 / 缺失驱动 / 默认连接在事件路径取一次存快照，渲染只读快照</div></div>
-      <div class="kpi"><div class="n">43<small> 项</small></div><div class="l">模块测试</div><div class="d">20 项窗口测试 + 9 项纯函数 + 名册端到端 1 + 磁盘与锁 4；workbench 侧 110 全绿</div></div>
+      <div class="kpi"><div class="n">59<small> 项</small></div><div class="l">模块测试</div><div class="d">lib 50（24 项窗口测试 + 14 项纯函数 + 存储 / 锁 / 模型内部用例）+ 集成 9（名册 1 · 生命周期 5 · 存储 3）；workbench 侧 110 为 2026-09 基线</div></div>
     </div>
   </div>
 
@@ -750,7 +750,7 @@ kbd{font-family:Consolas,monospace;font-size:11.3px;border:1px solid var(--borde
       <div class="card">
         <h4><span class="ico">①</span>可见性：写命令置灰</h4>
         <ul>
-          <li>卡片菜单 6 项按分支置灰；标题栏菜单顶部插一条置灰说明「只读模式：写操作不可用」</li>
+          <li>卡片菜单按分支 3～5 项（打开 / 固定·取消固定 / 在资源管理器中显示 / 移出列表 / 删除数据…；路径失效改「重新定位…」，已移除只有「恢复」），写命令置灰；标题栏菜单顶部插一条置灰说明「只读模式：写操作不可用」</li>
           <li>设置面板：名称 / 描述输入框、保存、默认连接、创建版本快照、危险区三件套全部禁用</li>
           <li>头部常显「只读（写操作已禁用）」</li>
         </ul>
@@ -825,12 +825,13 @@ kbd{font-family:Consolas,monospace;font-size:11.3px;border:1px solid var(--borde
       <tr><td><b>契约与规范</b></td><td>视图零裸色值（一律 <span class="mono">cx.theme().colors.*</span>）；尺寸走 rem 常量；不用通配导入（会撞 gpui 的 <span class="mono">test</span> 宏）；对话框按栈语义关闭</td></tr>
       <tr><td><b>跨模块回归</b></td><td>名册端到端（创建登记 → 固定置顶 → 软删隐藏 → 已移除找回）与磁盘集成（<span class="mono">.RSmeta</span> / 实例锁 / 默认连接）各有一组集成测试</td></tr>
     </table>
-    <pre>cargo test -p rds-project -j 2
-  lib                 43 通过（20 项窗口测试 + 9 项纯函数 + 存储 / 锁 / 模型内部用例）
-  project_registry     1 通过（名册端到端）
-  project_store        4 通过（磁盘 .RSmeta · 实例锁 · 默认连接）
-cargo test -p rds-workbench --lib -j 2   → 110 通过
-cargo check --workspace --all-targets    → 零告警</pre>
+    <pre>cargo test -p rds-project -j 1
+  lib                       50 通过（24 项窗口测试 + 14 项纯函数 + 存储 / 锁 / 模型内部用例）
+  project_registry           1 通过（名册端到端：创建 → 固定 → 软删 → 找回）
+  project_service_lifecycle  5 通过（打开关闭与只读锁 · 归档与改名 · 软删移出删盘 · 重定位 · 版本快照）
+  project_store              3 通过（.RSmeta 创建与读回 · 默认连接 · 实例锁独占与复用）
+cargo test -p rds-workbench --lib -j 2   → 110 通过（2026-09 基线，本轮未复核）
+cargo check -p rds-project --all-targets → 零告警（2026-11-22 实测）</pre>
   </section>
 
   <!-- ══ 13 ══ -->
@@ -842,7 +843,7 @@ cargo check --workspace --all-targets    → 零告警</pre>
         <td><b>连接的新建与编辑</b>（连接对话框属连接模块，这里只记「默认连接」这一个偏好）</td></tr>
       <tr><td>选择器：最近 / 全部 / 已移除 · 搜索 facet · 状态筛选 · 排序 · 固定</td>
         <td><b>SQL 执行 / Mock 生成 / 洞察本体</b>（各自模块；这里只提供入口与项目归属）</td></tr>
-      <tr><td>项目设置：概览 / 基本信息 / 默认项 / .RSmeta 结构树 / 依赖自检 / 版本快照 / 危险区</td>
+      <tr><td>项目设置：概览 / 基本信息 / 默认项 / .RSmeta 结构树 / 依赖 / 版本快照 / 危险区</td>
         <td><b>移动或另存项目目录</b>（改名不动目录，移动不在本期）</td></tr>
       <tr><td>未保存草稿拦截、实例锁与逃生口、示例项目</td>
         <td><b>版本恢复与对比</b>（只做快照台账）、<b>DuckLake 远程项目</b>（模型层预留，UI 不接受 URL）</td></tr>
@@ -851,7 +852,7 @@ cargo check --workspace --all-targets    → 零告警</pre>
       <tr><th style="width:34%">已知待办</th><th>说明</th></tr>
       <tr><td>~~窗口退出路径的草稿兜底~~</td><td>✅ 已做（2026-09-19）：点 ✕ / <kbd>Alt+F4</kbd> 时每份打开文档的会话落库（存了再走，不拦人）</td></tr>
       <tr><td>执行 SQL 的只读拦截测试</td><td>项目侧只读拦截已有窗口测试；editor 侧执行路径未测 <span class="badge plan">E5</span></td></tr>
-      <tr><td>菜单快捷键展示</td><td><span class="mono">PopupMenuItem</span> / <span class="mono">DropdownButton</span> 在 gpui-kit 0.6.1 没有 shortcut 槽位，等组件支持 <span class="badge plan">C2</span></td></tr>
+      <tr><td>菜单快捷键展示</td><td><span class="mono">PopupMenuItem</span> / <span class="mono">DropdownButton</span> 在 gpui-kit 0.6.1 没有 shortcut 槽位；<b>0.7.0 起已支持</b>（挂 action + 注册 key binding 自动渲染），待实施 <span class="badge plan">C2</span></td></tr>
     </table>
   </section>
 
@@ -872,8 +873,8 @@ cargo check --workspace --all-targets    → 零告警</pre>
   </section>
 
   <div class="foot">
-    <b>快照</b>：2026-09-19 · 对应 <span class="mono">cargo test -p rds-project -j 2</span> 全绿（lib 43 / 集成 5）与
-    <span class="mono">cargo check --workspace --all-targets</span> 零告警。<br>
+    <b>快照</b>：2026-11-22 · 对应 <span class="mono">cargo test -p rds-project -j 1</span> 全绿（lib 50 / 集成 9）与
+    <span class="mono">cargo check -p rds-project --all-targets</span> 零告警（workspace 级零告警沿用 2026-09 基线）。<br>
     数字会过期，口径在测试与文档里：<a href="project-dev-plan.md">开发方案</a> ·
     <a href="project-view-architecture.md">视图架构</a> ·
     <a href="project-user-guide.md">使用手册</a> ·

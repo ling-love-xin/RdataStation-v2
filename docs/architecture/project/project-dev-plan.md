@@ -1,16 +1,17 @@
 # 项目管理模块 · 开发方案（P0 + Phase A/B/C）
 
-> 状态：**已实现（Phase A/B 主体 + Phase C1/C2 + C1/C4/B1 + B2/B3 + A1 + C3/C5 + E1/E4）**（2026-09-19，`cargo check -p rds-project -p rds-workbench --all-targets` 零告警；project 43 lib（含 20 项窗口测试 + 9 项纯函数）+ 1 名册集成 + 4 存储集成全绿） · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）、`project-view-architecture.md`（视图架构与测试）、`project-user-guide.md`（使用手册）
+> 状态：**已实现（Phase A/B 主体 + Phase C1/C2 + C1/C4/B1 + B2/B3 + A1 + C3/C5 + E1/E4）**（2026-09-19，`cargo check -p rds-project -p rds-workbench --all-targets` 零告警；project 43 lib（含 20 项窗口测试 + 9 项纯函数）+ 1 名册集成 + 4 存储集成全绿）。**2026-11-22 实测**：lib 50（含 24 窗口 + 14 纯函数）+ 名册集成 1 + 生命周期集成 5 + 存储集成 3，全绿。 · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）、`project-view-architecture.md`（视图架构与测试）、`project-user-guide.md`（使用手册）
 > 前置：v1 行为蓝本 `v1/backend/src/commands/project_commands.rs`；v2 后端已迁移（`crates/project`：`store.rs` / `models.rs`；P0 会话 `workbench/src/services/project_session.rs`）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：项目**增删改查与生命周期**。**提升/引用（promote/snapshot）不在本模块**（另立设计，见原型 §12）。
+> **路径注记（2026-11-22）**：`crates/engine/migrations/` 与 `crates/engine/src/persistence/global_db.rs` 已随 rds-store 抽取迁至 **`crates/store/migrations/`** / **`crates/store/src/persistence/global_db.rs`**（`engine::persistence` 只剩 `pub use rds_store::persistence::*` 的薄壳）。下文历史条目保留当时的写法，**实际以新路径为准**。
 
 ### 已确认决策（2026-09-11）
 
 | # | 决策 |
 | --- | --- |
 | 1 | 选择器**覆盖中央区**，保留五段外壳（活动栏/状态栏可见） |
-| 2 | 切换/关闭项目时**拦截未保存草稿**（保存 / 不保存 / 取消） |
+| 2 | 切换/关闭项目时**拦截未保存草稿**（保存 / 不保存 / 取消；**现实现按钮**：取消 / 放弃更改并继续 / 保存并继续） |
 | 3 | **不支持多窗口打开同一个项目**（`.RSmeta/project.lock`），被锁项目给**只读打开 / 仍要打开**逃生口 |
 | 4 | **提升/引用不属于项目管理**，本期不做（占位保留或移除） |
 | 5 | 删除磁盘数据需**输入项目名**二次确认 |
@@ -24,6 +25,15 @@
 | 13 | 描述编辑（U2）与状态筛选（R4）纳入本期；**默认连接（U3）后端未实现**（`service` 无 config 读写），待另立 |
 
 ## 0. 进度记录（最近在前）
+
+### 2026-11-22 — 新建对话框行内校验 / 位置记忆 / 构建标识落项目
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| **行内校验** | 新建项目对话框的名称与位置字段加了**即时提示**（名称空/超 64 字/含 `\ / : * ? " < > \|`；位置空/不存在/目标已是项目/目标非空），判据与提交路径同源（`service::validate_project_name`、`service::inspect_target`），不会出现「界面说可以、点创建被拒」；名称未填时不报位置状态（避免开框即红） | `crates/project/src/ui.rs`（`location_hint` / `open_create_dialog`） |
+| **位置记忆** | 新建时默认位置改为「**上次成功新建用的父目录**」，没记过才回退用户主目录（`USERPROFILE`/`HOME`）；创建成功后写回设置 | `settings::Projects::last_create_location`（`#[serde(default)]`，**不在设置页登记**）；`service/projects.rs` 两个访问器；`ProjectUiHost::with_create_location` |
+| **构建标识** | 打开项目时把当前构建标识写进 `ProjectConfig.extensions` 的 `rds.build_tag`（值未变则跳过写盘，**只读打开不写**）；**只写不展示**——项目里已有「资产版本链」（`Version`/`version_count`/`list_versions`），界面再出现一个「版本」会被误读成它 | `crates/project/src/store.rs`（`BUILD_TAG_KEY`）、`ui.rs::apply_opened`；宿主注入 `crates/workbench/src/components/project_host.rs` |
+| 依赖方向 | `project` crate 仍不依赖 `workbench`/`settings`：构建标识、位置记忆都是宿主通过 `ProjectUiHost` 注入的闭包 | 同左 |
 
 ### 2026-10-03 — DuckDB v2.0 升级评估 / 三期 DuckLake 对齐 / duckdb IO 锁根因
 
@@ -98,7 +108,7 @@
 
 | 项 | 内容 | 落点 |
 | --- | --- | --- |
-| C1 只读禁用态 | 只读打开时写命令**可见但置灰**（不再只靠点击后拒绝）：卡片 `⋯` 菜单 6 项按分支 `disabled`；设置面板的名称 / 描述输入、保存项目信息、创建版本快照、危险区三件套全部置灰；标题栏项目菜单顶部插一条置灰说明「只读模式：写操作不可用」。拦截层（`read_only_blocked`）保留——禁用态是「点不动」，拦截是「点了也没用」，两道都要有 | `crates/project/src/ui.rs` |
+| C1 只读禁用态 | 只读打开时写命令**可见但置灰**（不再只靠点击后拒绝）：卡片 `⋯` 菜单按分支 3～5 项（打开 / 固定·取消固定 / 在资源管理器中显示 / 移出列表 / 删除数据…；路径失效时改为「重新定位…」，已移除视图只有「恢复」），写命令按 `disabled`；设置面板的名称 / 描述输入、保存项目信息、创建版本快照、危险区三件套全部置灰；标题栏项目菜单顶部插一条置灰说明「只读模式：写操作不可用」。拦截层（`read_only_blocked`）保留——禁用态是「点不动」，拦截是「点了也没用」，两道都要有 | `crates/project/src/ui.rs` |
 | C4 键盘可达 | 选择器 Tab（最近 / 全部 / 已移除）、状态筛选、排序由自绘可点 div 改语义 `Button`（自带 `track_focus` + `tab_stop`，Enter/Space 可激活）；id 固定为 `picker-status` / `picker-sort`（不再拼筛选键，换 id 会丢焦点）；设置面板「关闭」同样改 `Button` | 同上 |
 | B1 危险区三件套 | 设置·危险区补「归档 / 取消归档」「移出列表」「删除数据…」（`danger` 变体 + 输入项目名二次确认），与菜单 / 卡片同一批动作函数（`toggle_archive` / `soft_remove_current` / `open_delete_dialog_for_current`） | 同上 |
 | 菜单改语义下拉 | 标题栏项目菜单从 `Popover` + 自绘内容改为 `Button::dropdown_menu`（方向键导航 / Escape / 焦点恢复由组件负责）；菜单**规格**抽成纯函数 `project_menu_entries(read_only)`，渲染只按 id 挂事件；删掉宿主里的 `menu_open` 状态（`ProjectUiState` 少一个可写字段，组件内部状态才是权威） | `crates/project/src/ui.rs`、`crates/workbench/src/view.rs` |
@@ -352,7 +362,7 @@
 
 - 每阶段：`cargo check -p rds-project -p rds-workbench -p rds-app --all-targets` 零告警 + 对应测试
   （`crates/project/tests/` 集成测试 + `crates/project/src/ui/tests.rs` 窗口测试）
-- 常用：`cargo test -p rds-project -j 2`（lib 43 + 名册集成 1 + 存储集成 4）
+- 常用：`cargo test -p rds-project -j 1`（2026-11-22 实测：lib 50 + 名册集成 1 + 生命周期集成 5 + 存储集成 3）
 - 迁移：`cargo test -p rds-engine`（迁移套件）+ 手工核对旧库升级
 - UI：`cargo run -p rds-app` 手动走通 §4 清单（先用 `RDS_PROJECT_PATH` 验证有项目态，再清空验证选择器）
 - 主题：明暗切换核对 token（`docs/architecture/theme/theme-preview.html` 为基准）

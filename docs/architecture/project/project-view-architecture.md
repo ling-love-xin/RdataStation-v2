@@ -18,17 +18,32 @@ A3 把视图整体迁入 `crates/project/src/ui.rs`，并把「宿主能力」�
 ## 2. 契约：`ProjectUiHost`
 
 ```rust
+// 六个「闭包桥」字段各自的类型别名（紧邻 ProjectUiHost 定义，`pub` 可见以便宿主写签名）
+pub type SortSaver = Rc<dyn Fn(ProjectSort, &mut App)>;
+pub type HostAction = Rc<dyn Fn(&mut App)>;
+pub type ConnectionProvider = Rc<dyn Fn(&App) -> Vec<ConnectionOption>>;
+pub type BuildTagProvider = Rc<dyn Fn() -> String>;
+pub type CreateLocationGetter = Rc<dyn Fn(&App) -> Option<String>>;
+pub type CreateLocationSaver = Rc<dyn Fn(&str, &mut App)>;
+
 pub struct ProjectUiHost {
     pub state: Rc<RefCell<ProjectUiState>>,          // 选择器 / 菜单 / 设置 / 对话框错误 / 锁 / 只读 / 世代
     pub session: Rc<RefCell<Option<OpenProject>>>,   // 当前项目（根 + 名），与宿主 Shared.project 同源
     pub notifier: Rc<dyn ProjectUiNotifier>,         // 重绘宿主视图
     pub editor: Rc<dyn ProjectEditorBridge>,         // 未保存草稿判定 / 内容 / 清空 / 清脏
-    pub save_sort: Rc<dyn Fn(ProjectSort, &mut App)>,// 排序偏好持久化
-    pub on_opened: Rc<dyn Fn(&mut App)>,             // 打开项目后的宿主刷新
+    pub save_sort: SortSaver,                        // 排序偏好持久化
+    pub on_opened: HostAction,                       // 打开项目后的宿主刷新
+    pub on_closed: HostAction,                       // 关闭项目后的宿主清理（#21）
+    pub connections: ConnectionProvider,             // 默认连接候选（U3）
+    pub build_tag: Option<BuildTagProvider>,         // 当前构建标识；None = 不记 rds.build_tag
+    pub last_create_location: CreateLocationGetter,  // 上次新建父目录
+    pub save_create_location: CreateLocationSaver,   // 记住本次新建父目录
 }
 ```
 
-构造用 `ProjectUiHost::new(state, session, notifier)` + `with_editor` / `with_sort_saver` / `with_on_opened`（`#[non_exhaustive]`，字段不对外展开）。
+闭包字段抽成类型别名（而不是写在字段上）的原因：`ProjectUiHost` 的字段类型原本各是一条完整的 `Rc<dyn Fn…>`，clippy 的 `type_complexity` 会在每个字段报一次；抽别名后字段只出现名字，`with_*` 签名也跟着统一。构造方式不变——`Rc::new(闭包)` 交给字段时仍按字段类型做 unsized coercion，宿主侧不用改。
+
+构造用 `ProjectUiHost::new(state, session, notifier)` + `with_editor` / `with_sort_saver` / `with_on_opened` / `with_on_closed` / `with_connections` / `with_build_tag` / `with_create_location(get, save)`（`#[non_exhaustive]`，字段不对外展开）。未注入时全部退化为 no-op（`build_tag = None`、`last_create_location` 恒 `None`）。
 
 三个桥 trait 只描述行为，不描述宿主类型：
 
@@ -74,6 +89,7 @@ graph LR
 | render | `render_picker` / `render_settings` 只读 state 并返回元素；标题栏菜单用 `build_project_menu` 产 `PopupMenu`（宿主 `Button::dropdown_menu` 只负责下拉宿主） | `WorkbenchView::render` |
 | 事件回调 | 动作函数（打开 / 关闭 / 增删改查 / 对话框提交）做 I/O 并 `host.notify` | 各处 `on_click` / `on_action` |
 | 对话框 | 由 `window.open_dialog` / `open_alert_dialog` 承载；关闭时机由提交结果决定 | 事件上下文 |
+| 对话框内容（builder 闭包） | builder 是**每帧重跑的渲染闭包**（vendor 契约：cheap and idempotent），因此只读 state + 输入框；唯一的 I/O（`location_hint` / `folder_hint` 的目录探测）按「位置 / 名称 / 路径」做**局部 memo**——统一走 `ui::memo_hint`（单测 `memo_hint_recomputes_only_when_key_changes` 锁住"同 key 不重算 / 换 key 必重算 / None 也缓存"） | `ui.rs::open_create_dialog` / `ui.rs::open_folder_dialog` |
 
 ## 4. 对话框关闭时机（栈语义）
 
@@ -105,7 +121,7 @@ graph LR
 
 ## 6. 窗口测试方案
 
-位置：`crates/project/src/ui/tests.rs`（`#[cfg(test)] mod tests;`），29 项测试（20 项 GPUI headless 窗口测试 + 9 项纯函数测试）。
+位置：`crates/project/src/ui/tests.rs`（`#[cfg(test)] mod tests;`），**38 项测试（24 项 GPUI headless 窗口测试 + 14 项纯函数测试）**（2026-11-22 实测）。
 
 ### 骨架
 
@@ -132,6 +148,9 @@ graph LR
 | `cards_and_menus_construct_for_all_states` | 8 / 6：卡片三分支（活跃 / 失效重定位 / 已移除恢复 + 固定）与更多菜单 |
 | `browse_fills_location_from_system_picker` | 1：浏览目录 → 回填位置输入框（并断言选择器选项为「仅目录 / 单选」） |
 | `browse_cancel_keeps_location` | 1：取消选择器 → 位置输入框保持原值 |
+| `create_dialog_inline_hint_updates_while_typing` | 1 / 行内校验：对话框 builder 是渲染闭包，键入非法名 / 不存在位置后**同一帧**就画出提示（`debug_selector` + `debug_bounds` 断言，防止"校验要等下一次无关重绘"） |
+| `open_folder_dialog_hint_flags_non_project_dir` | 1 / 行内校验：打开现有项目时非空非项目目录立刻报红，换成空目录提示消失（同时验证 memo 随路径重算） |
+| `memo_hint_recomputes_only_when_key_changes` | 行内校验：渲染期目录探测 memo 的语义（同 key 不重算 / 换 key 必重算 / `None` 结果同样缓存）（纯函数，计数断言） |
 | `empty_dir_prompts_create_in_place` | 2：空目录 → 询问式创建（不直接当项目打开） |
 | `save_project_info_rejects_invalid_name` | 5：改名校验（非法字符 / 空） |
 | `read_only_blocks_project_info_save` | 11 / C1：只读下写命令被拦（写 notice、不改会话）且设置面板仍可开 |
@@ -175,15 +194,26 @@ graph LR
 | 卡片命令（`⋯` 下拉与右键菜单） | `crates/project/src/ui.rs`（`card_menu_entries` 规格 + `card_menu` 渲染 + `attach_card_menu_handler`） |
 | 搜索 facet（`状态:` / `固定:` / `锁:`） | `crates/project/src/ui.rs`（`parse_search` → `visible_items`；口径对齐 database 导航面板） |
 | 默认连接候选来源（全局 + 项目连接） | `crates/workbench/src/components/project_host.rs`（`default_connection_options` → `with_connections`） |
-| 位置字段（系统目录选择器 / 目标预览） | `crates/project/src/ui.rs`（`pick_directory` / `directory_row` / `target_preview`） |
+| 位置字段（系统目录选择器 / 目标预览 / 行内校验） | `crates/project/src/ui.rs`（`pick_directory` / `directory_row` / `target_preview` / `location_hint`） |
+| 位置记忆（默认新建父目录的读 / 写） | `crates/project/src/ui.rs`（`open_create_dialog` 读 `(host.last_create_location)`、`submit_create` 成功分支调 `(host.save_create_location)`）；宿主侧 `crates/workbench/src/components/project_host.rs`（`with_create_location`，接 `SettingsService::{project_last_create_location, set_project_last_create_location}`） |
+| 构建标识落项目（只写不展示） | `crates/project/src/ui.rs`（`apply_opened` → `update_config` 写 `extensions.rds.build_tag`，键 `store::BUILD_TAG_KEY`）；宿主侧 `project_host.rs`（`with_build_tag(Rc::new(\|\| crate::version::info().tag()))`） |
+| 窗口测试 38 项（24 窗口 + 14 纯函数） | `crates/project/src/ui/tests.rs` |
 
 ## 8. 验证方式
 
 ```bash
 cargo check --workspace --all-targets          # 零告警
 cargo test --workspace -j 2                    # 全量（-j 2 硬性要求）
-cargo test -p rds-project --lib -j 2           # 只跑项目 crate（43 项，迭代快）
+cargo test -p rds-project -j 1           # 只跑项目 crate（lib 50 项，2026-11-22 实测）
 cargo build -p rds-app -j 2                    # codegen 验证（check ≠ 能出机器码）
+cargo clippy -p rds-project --all-targets -j 1 # 2026-11-22 实测 2 条，见下
 ```
+
+`cargo clippy` 不是仓库门禁（门禁是 `cargo check` 零告警），本 crate 2026-11-22 从 22 条清到 2 条；余下两条**有意不修**：
+
+| 告警 | 位置 | 为什么不改 |
+| --- | --- | --- |
+| `large_enum_variant`（640B vs 16B） | `service.rs` 的 `OpenOutcome` | 改 `Opened(Box<OpenedProject>)` 会把装箱成本推给 workbench 的每个调用点，属跨 crate 的 API 变更；当前只有「打开一次」这一条低频路径，栈上多 640B 无所谓 |
+| `too_many_arguments`（8/7） | `ui.rs::dialog_footer_three` | 参数是「三个按钮的 id / 文案 / 回调」的平行三元组，抽结构体只是把参数搬进字段，对读者没有增益；函数体只有一处 `DialogFooter` 组装 |
 
 注意：`cargo test --workspace` **必须带 `-j 2`**（并行链接重型 crate 会耗尽内存（DuckDB 已改动态链接），见 `.cargo/config.toml` 的 `test-all` 别名）。
