@@ -852,9 +852,11 @@ impl EditorHostPanel {
         *self.kernel_pump.borrow_mut() = Some(task);
     }
 
-    /// 【#17】取走内核事件并落到当前运行的单元：
-    /// 流式输出实时上屏（Display / Stream 追加），ExecuteReply 收口（成功置 Done /
-    /// 失败置 Error），Failed 给原因
+    /// 【#17】取走内核事件并落到当前运行的单元
+    ///
+    /// **规则不在这里**：归属过滤 / stderr 前缀 / mime 分发 / 收口都在
+    /// [`crate::notebook::orchestrate::apply_events`]（纯函数，可无 GPUI 单测）。
+    /// 本方法只做四件事：会话作废判定 → 调规则 → 回写单元 → 队列推进 / notify。
     fn drain_kernel_events(&mut self, _cx: &mut Context<Self>) {
         let Some(run) = self.kernel_running.clone() else {
             return;
@@ -879,68 +881,22 @@ impl EditorHostPanel {
             self.shared.set_notebook_cells(&self.document, state.cells);
             return;
         }
-        let mut finished = false;
-        let mut failed_reason: Option<String> = None;
-        for envelope in events {
-            // 【R8】归属过滤：会话级事件（Failed / Status）无 parent，照常处理；
-            // 有归属但不是本次执行的 = 上一单元迟到的事件，丢弃 ——
-            // 既不能混进本单元输出，也不能用它的 ExecuteReply 把本单元提前收口
-            if let Some(id) = envelope.msg_id.as_ref() {
-                if id != &run.msg_id {
-                    continue;
-                }
-            }
-            match envelope.event {
-                rds_kernel::KernelEvent::Display(media) => {
-                    // mime bundle → 原生输出（图片 / 表格 / markdown / 文本）
-                    let outputs = crate::media::media_to_outputs(&media);
-                    cell.outputs.extend(outputs);
-                }
-                rds_kernel::KernelEvent::Stream { name, text } => {
-                    // stdout 无前缀；stderr 带标记（如实反映来源）
-                    if name == "stderr" {
-                        cell.outputs
-                            .push(crate::cell::Output::Text(format!("stderr: {text}")));
-                    } else {
-                        cell.outputs.push(crate::cell::Output::Text(text));
-                    }
-                }
-                rds_kernel::KernelEvent::ExecuteReply { status, .. } => {
-                    finished = true;
-                    if status != "ok" {
-                        failed_reason = Some("内核返回执行失败".to_string());
-                    }
-                }
-                rds_kernel::KernelEvent::Error { ename, evalue, .. } => {
-                    cell.outputs
-                        .push(crate::cell::Output::Error(format!("{ename}: {evalue}")));
-                }
-                rds_kernel::KernelEvent::Status(_) => {}
-                rds_kernel::KernelEvent::Failed(reason) => {
-                    finished = true;
-                    failed_reason = Some(reason);
-                }
-            }
-        }
-        if finished {
+        // 【R6】业务规则（归属过滤 / stderr 前缀 / mime 分发 / 收口 / 失败原因）
+        // 全部在 notebook/orchestrate.rs 的纯函数里：可在无窗口环境单测
+        let applied = crate::notebook::orchestrate::apply_events(
+            cell,
+            crate::notebook::orchestrate::ExecutionTag {
+                msg_id: &run.msg_id,
+            },
+            events.iter(),
+        );
+        if applied.finished {
             self.kernel_running = None;
-            if let Some(reason) = failed_reason {
-                cell.state = crate::cell::CellState::Error;
-                if !cell
-                    .outputs
-                    .iter()
-                    .any(|o| matches!(o, crate::cell::Output::Error(_)))
-                {
-                    cell.outputs.push(crate::cell::Output::Error(reason));
-                }
-            } else {
-                cell.state = crate::cell::CellState::Done;
-            }
         }
         self.shared.set_notebook_cells(&self.document, state.cells);
         // 【2d-笔记级】全部运行队列推进：这个内核单元收口（ExecuteReply / Failed），
         // 接下一个（advance 内部守卫：队列空 / 还有单元在跑就不动）
-        if finished {
+        if applied.finished {
             self.advance_notebook_queue(_cx);
         }
     }

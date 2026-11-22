@@ -1,4 +1,4 @@
-//! 分析模式数据层：单元 + 会话 + 内核端口 + mime 分发
+//! 分析模式数据层：单元 + 会话 + 内核端口 + mime 分发 + 事件收口规则
 //!
 //! 视图在 `view/analysis.rs`；状态持有在 `EditorShared` 的笔记本持有器（每文档一份）。
 
@@ -8,5 +8,7 @@ pub mod cell;
 pub mod kernel;
 /// 【#14】Jupyter mime bundle → 原生输出的纯函数分发器
 pub mod media;
+/// 【R6】内核事件收口规则（归属过滤 / stderr 前缀 / 分发 / 收口）：纯函数，无 gpui
+pub mod orchestrate;
 /// 【2d】分析会话（绑定连接 / 环境 / 上次用过的内核；切换 → 输出全 stale）
 pub mod session;
