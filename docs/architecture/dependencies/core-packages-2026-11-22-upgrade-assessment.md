@@ -469,6 +469,22 @@ main      + dprint-core  = "=0.67.4"  （lax 的配置类型直接引用它的 N
 处置口径：**不合流就不丢**；要合流必须先让 main 干净 —— `git stash push -u`（带唯一 tag）→ `merge --ff-only`
 （分支已包含 main 全部提交，故可快进）→ `stash pop`；`pop` 若冲突就**立刻停下并保留 stash**，不丢用户 WIP。
 
+### 12.7 实际执行（2026-11-22 18:0x）
+
+| 步骤 | 命令 | 结果 |
+| --- | --- | --- |
+| 备份 WIP | `git diff > .rds/tmp/wip_backup_main.diff` + 复制 5 个未跟踪文件到 `.rds/tmp/` | ✅ diff 91,203 B；5 个文件各一份副本 |
+| 暂存 WIP | `git stash push -u -m wip-2026-11-22-version-badge` | ✅ 工作区变干净（`git status` 空） |
+| 快进合流 | `git merge --ff-only upgrade/core-2026-11-22`（`02a51b40 → 5fa9ff53`） | ✅ Fast-forward，**242 文件 / +19362 −2043**，无 merge commit |
+| 恢复 WIP | `git stash pop` | ✅ **无冲突**；WIP 27 项（22 `M` + 5 `??`）与暂存前清单**逐项一致**；stash 已自动 drop |
+
+要点：因为分支先在 worktree 里把 main 的 17 个提交合完了（`41622794`），main 侧就是**纯快进**，
+所以「分支改动 + 用户 WIP」这两份改动**从未在同一份工作区里同时被 git 改写**，冲突面为 0。
+这也是 §11.9 那条「先合 main 进分支、再让 main 快进」流程的实际价值。
+
+**当前状态**：`main` = `5fa9ff53`（含 0.10.0 + 全部文档/skill 同步），工作区是用户的 27 项 WIP（未提交）；
+`origin/main` **仍未推送**（按既定口径，本地先行）。隔离 worktree 与 `upgrade/core-2026-11-22` 分支保留，与 main 同指针，可作回退锚点。
+
 ---
 
 ## 13. DuckDB 2.0 的切换时间表（2026-11-22 结论）
