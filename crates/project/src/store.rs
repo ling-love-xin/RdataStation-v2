@@ -35,6 +35,15 @@ const ANALYTICS_DB_NAME: &str = "analytics.duckdb";
 /// 连接元数据目录名称
 const PROJECT_METADATA_DIR_NAME: &str = "project_metadata";
 
+/// `ProjectConfig.extensions` 里记录「最近一次打开本项目的构建标识」的键。
+///
+/// 走自由扩展槽（`.RSmeta/config/settings.json` 的 `extensions`）：
+/// 不新增 `ProjectInfo` 字段、不需要 `project.json` 的旧文件兼容处理、也不需要
+/// `project.db` 迁移。**只写不展示**——项目里已有一套「资产版本链」
+/// （`Version` / `version_count` / `list_versions`），界面上再出现一个「版本」
+/// 会被当成后者。
+pub const BUILD_TAG_KEY: &str = "rds.build_tag";
+
 /// 项目存储
 ///
 /// 管理单个项目的持久化操作

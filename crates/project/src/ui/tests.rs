@@ -27,13 +27,13 @@ use super::{
     ProjectMenuEntry, ProjectSort, ProjectUiHost, ProjectUiNotifier, ProjectUiState,
     SettingsSnapshot, StatusFilter, advance_pending, build_project_menu, card_description,
     card_menu_entries, confirm_delete, create_version_action, default_connection_label, do_close,
-    load_settings_snapshot, meta_tree_rows, more_menu, open_create_dialog, open_delete_dialog,
-    open_folder_dialog, open_lock_busy_dialog, parse_search, pick_directory, prepare_unsaved,
-    project_card, project_menu_entries, render_picker, render_settings, request_close,
-    request_create_project, request_open, request_open_folder, save_project_info,
-    set_default_connection, set_sort, set_status_filter, set_tab, snapshot_description,
-    sort_menu_entries, status_filter_menu_entries, submit_create, submit_open_folder,
-    toggle_archive, visible_items,
+    folder_hint, load_settings_snapshot, location_hint, memo_hint, meta_tree_rows, more_menu,
+    open_create_dialog, open_delete_dialog, open_folder_dialog, open_lock_busy_dialog,
+    parse_search, pick_directory, prepare_unsaved, project_card, project_menu_entries,
+    render_picker, render_settings, request_close, request_create_project, request_open,
+    request_open_folder, save_project_info, set_default_connection, set_sort, set_status_filter,
+    set_tab, snapshot_description, sort_menu_entries, status_filter_menu_entries, submit_create,
+    submit_open_folder, toggle_archive, visible_items,
 };
 use crate::service::ProjectSummary;
 
@@ -1204,4 +1204,208 @@ fn sort_menu_specs_order_and_check() {
             .all(|s| s.checked == (s.sort == ProjectSort::LastOpened)),
         "仅当前项勾选"
     );
+}
+
+/// 新建对话框的行内提示必须**随键入即时出现**，不能等下一次别的事件把对话框重绘。
+#[gpui_kit::test]
+fn create_dialog_inline_hint_updates_while_typing(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = Rc::new(Recorder::default());
+    let host = test_host(&rec);
+
+    let (host, inputs, cx) = open_harness(cx, host);
+    cx.update(|window, cx| open_create_dialog(&host, &inputs, window, cx));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(
+        cx.debug_bounds("create-name-hint").is_none(),
+        "开框时名称还空，不该报红"
+    );
+    assert!(
+        cx.debug_bounds("create-location-hint").is_none(),
+        "开框时位置是默认主目录，不该报红"
+    );
+
+    // 键入非法名（含路径分隔符）→ 名称提示应当立刻画出来。
+    cx.update(|window, cx| {
+        inputs
+            .create_name
+            .update(cx, |s, cx| s.insert("a/b", window, cx));
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("create-name-hint").is_some(),
+        "键入非法名后提示要立刻出现"
+    );
+
+    // 键入一个不存在的位置 → 位置提示应当立刻画出来（这条会走目录探测）。
+    cx.update(|window, cx| {
+        inputs
+            .create_location
+            .update(cx, |s, cx| s.insert("C:\\rds_hint_不存在_", window, cx));
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("create-location-hint").is_some(),
+        "位置不存在时提示要立刻出现"
+    );
+}
+
+/// 新建对话框「位置」的行内提示：六个分支，判据与 `service::create` 同源。
+#[test]
+fn location_hint_matches_create_preconditions() {
+    let root = temp_root("create-hint");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("建父目录");
+
+    // 1) 位置为空 → 先报必填，不看名称
+    assert_eq!(location_hint("   ", ""), Some("请选择项目位置".to_string()));
+
+    // 2) 位置不存在 → 提示里带上具体路径
+    let missing = root.join("不存在目录");
+    let hint = location_hint(&missing.to_string_lossy(), "新项目").expect("应提示");
+    assert!(hint.starts_with("位置不存在："), "实际提示：{hint}");
+
+    // 3) 名称没填 → 不预判目录状态（否则一打开对话框就红一片）
+    assert_eq!(location_hint(&root.to_string_lossy(), ""), None);
+
+    // 4) 目标已是项目 → 引导改走「打开」
+    let existing = root.join("已存在项目");
+    std::fs::create_dir_all(existing.join(crate::service::RS_META_DIR_NAME)).expect("建 .RSmeta");
+    assert_eq!(
+        location_hint(&root.to_string_lossy(), "已存在项目"),
+        Some("该目标目录已是项目，请直接打开".to_string())
+    );
+
+    // 5) 目标非空且非项目 → 换名字或换空目录
+    let non_empty = root.join("非空目录");
+    std::fs::create_dir_all(&non_empty).expect("建非空目录");
+    std::fs::write(non_empty.join("keep.txt"), b"x").expect("写文件");
+    assert_eq!(
+        location_hint(&root.to_string_lossy(), "非空目录"),
+        Some("目标目录非空，请换一个名称或选择空目录".to_string())
+    );
+
+    // 6) 名称不合法（空 / 含分隔符）→ 目标路径还不成立，不预判（名称行自己会报错）
+    assert_eq!(location_hint(&root.to_string_lossy(), "a/b"), None);
+    assert_eq!(location_hint(&root.to_string_lossy(), "a\\b"), None);
+    assert_eq!(
+        location_hint(&root.to_string_lossy(), "x".repeat(65).as_str()),
+        None
+    );
+
+    // 7) 空目录 / 目标尚不存在 → 无提示，交给提交
+    std::fs::create_dir_all(root.join("空目录")).expect("建空目录");
+    assert_eq!(location_hint(&root.to_string_lossy(), "空目录"), None);
+    assert_eq!(location_hint(&root.to_string_lossy(), "全新名字"), None);
+}
+
+/// 「打开现有项目」的行内提示：五分支，文案与 `submit_open_folder` 逐字一致。
+#[test]
+fn folder_hint_matches_open_preconditions() {
+    let root = temp_root("open-hint");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("建父目录");
+
+    // 1) 空 → 必填（与提交时同一句）
+    assert_eq!(folder_hint("  "), Some("请输入项目目录".to_string()));
+
+    // 2) 不存在 → 带上具体路径
+    let missing = root.join("不存在目录");
+    let hint = folder_hint(&missing.to_string_lossy()).expect("应提示");
+    assert!(hint.starts_with("目录不存在："), "实际提示：{hint}");
+
+    // 3) 非空且无 .RSmeta → 说清为什么打不开
+    let non_empty = root.join("非空目录");
+    std::fs::create_dir_all(&non_empty).expect("建非空目录");
+    std::fs::write(non_empty.join("keep.txt"), b"x").expect("写文件");
+    assert_eq!(
+        folder_hint(&non_empty.to_string_lossy()),
+        Some("目录不是项目（缺少 .RSmeta），且非空，无法作为项目打开".to_string())
+    );
+
+    // 4) 空目录 → 不提示（提交时会问「在空目录创建项目？」）
+    let empty = root.join("空目录");
+    std::fs::create_dir_all(&empty).expect("建空目录");
+    assert_eq!(folder_hint(&empty.to_string_lossy()), None);
+
+    // 5) 已是项目 → 不提示（直接可开）
+    let existing = root.join("已存在项目");
+    std::fs::create_dir_all(existing.join(crate::service::RS_META_DIR_NAME)).expect("建 .RSmeta");
+    assert_eq!(folder_hint(&existing.to_string_lossy()), None);
+}
+
+/// 「打开现有项目」的提示要随路径变化重算：非空非项目报红，换成空目录立刻变干净。
+#[gpui_kit::test]
+fn open_folder_dialog_hint_flags_non_project_dir(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = Rc::new(Recorder::default());
+    let host = test_host(&rec);
+    let root = temp_root("open-hint-live");
+    let non_empty = root.join("非空目录");
+    std::fs::create_dir_all(&non_empty).expect("建非空目录");
+    std::fs::write(non_empty.join("keep.txt"), b"x").expect("写文件");
+    let empty = root.join("空目录");
+    std::fs::create_dir_all(&empty).expect("建空目录");
+
+    let (host, inputs, cx) = open_harness(cx, host);
+    cx.update(|window, cx| open_folder_dialog(&host, &inputs, window, cx));
+
+    let set_location = |cx: &mut VisualTestContext, path: &std::path::Path| {
+        let value = path.to_string_lossy().to_string();
+        cx.update(|window, cx| {
+            inputs
+                .create_location
+                .update(cx, |s, cx| s.set_value(value, window, cx));
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    };
+
+    set_location(cx, &non_empty);
+    assert!(
+        cx.debug_bounds("open-folder-hint").is_some(),
+        "非空非项目目录要立刻提示"
+    );
+
+    // 换成空目录：memo 必须跟着路径重算，提示要消失。
+    set_location(cx, &empty);
+    assert!(
+        cx.debug_bounds("open-folder-hint").is_none(),
+        "空目录不该报错（提交时会问是否在此创建）"
+    );
+}
+
+/// `memo_hint` 只在 key 变化时重算：渲染闭包每帧读提示，不能每帧碰磁盘。
+#[test]
+fn memo_hint_recomputes_only_when_key_changes() {
+    let cell: RefCell<Option<(String, Option<String>)>> = RefCell::new(None);
+    let calls = std::cell::Cell::new(0usize);
+    let get = |key: &str| {
+        memo_hint(&cell, key.to_string(), || {
+            calls.set(calls.get() + 1);
+            Some(format!("提示 {key}"))
+        })
+    };
+
+    assert_eq!(get("a").as_deref(), Some("提示 a"));
+    assert_eq!(calls.get(), 1, "首次必然计算");
+
+    assert_eq!(get("a").as_deref(), Some("提示 a"));
+    assert_eq!(calls.get(), 1, "同 key 不重算（这是每帧路径）");
+
+    assert_eq!(get("b").as_deref(), Some("提示 b"));
+    assert_eq!(calls.get(), 2, "换 key 必须重算");
+
+    // 无提示也是可缓存的结果：key 不变时不应反复探测。
+    let cell2: RefCell<Option<(String, Option<String>)>> = RefCell::new(None);
+    let calls2 = std::cell::Cell::new(0usize);
+    let get2 = |key: &str| {
+        memo_hint(&cell2, key.to_string(), || {
+            calls2.set(calls2.get() + 1);
+            None
+        })
+    };
+    assert_eq!(get2("ok"), None);
+    assert_eq!(get2("ok"), None);
+    assert_eq!(calls2.get(), 1, "None 结果同样缓存");
 }

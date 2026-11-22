@@ -346,7 +346,7 @@ pub fn open(root: &Path) -> Result<OpenOutcome, String> {
 
     // 抢锁：被占用则交回调用方决定（只读 / 仍要 / 取消）。
     match ProjectLock::acquire(root).map_err(|e| format!("获取项目锁失败: {e}"))? {
-        AcquireOutcome::Busy(info) => return Ok(OpenOutcome::Busy(info)),
+        AcquireOutcome::Busy(info) => Ok(OpenOutcome::Busy(info)),
         AcquireOutcome::Acquired(lock) => {
             let opened = load_and_register(root, Some(lock), false)?;
             Ok(OpenOutcome::Opened(opened))
@@ -370,12 +370,12 @@ fn load_and_register(
 ) -> Result<OpenedProject, String> {
     let mut store = ProjectStore::load(root).map_err(|e| format!("加载项目失败: {e}"))?;
     // 只读模式下不写 project.json。
-    if !read_only {
-        if let Err(e) = store.update_info(|info| {
+    if !read_only
+        && let Err(e) = store.update_info(|info| {
             info.last_opened_at = Some(chrono::Utc::now());
-        }) {
-            tracing::warn!("更新项目最后打开时间失败: {e}");
-        }
+        })
+    {
+        tracing::warn!("更新项目最后打开时间失败: {e}");
     }
 
     let info = store.info().clone();
@@ -480,7 +480,7 @@ pub fn set_archived(id: &str, root: &Path, archived: bool) -> Result<(), String>
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
     runtime
-        .block_on(manager.save_project_info_smart(&id, &name, None, &path_str, status, None))
+        .block_on(manager.save_project_info_smart(id, &name, None, &path_str, status, None))
         .map_err(|e| format!("更新归档状态失败: {e}"))?;
     Ok(())
 }

@@ -7,12 +7,19 @@ pub struct Projects {
     /// 项目列表排序方式（`last_opened` / `name` / `created`）。
     #[serde(default = "default_project_sort")]
     pub sort_mode: String,
+    /// 上次新建项目时选择的**父目录**（空串 = 没记过，回退用户主目录）。
+    ///
+    /// 只在新建成功后由宿主写入；**不在设置页展示**（`SettingEntry::Module`，属会话便利记忆，
+    /// 不是用户可调项）。
+    #[serde(default)]
+    pub last_create_location: String,
 }
 
 impl Default for Projects {
     fn default() -> Self {
         Self {
             sort_mode: default_project_sort(),
+            last_create_location: String::new(),
         }
     }
 }

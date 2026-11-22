@@ -20,6 +20,13 @@ pub(crate) fn apply_slot(
             };
             SettingsService::set_project_sort_mode(text, cx);
         }
+        // 内部记忆：页面不显示，唯一写入方是新建项目对话框的成功分支。
+        Slot::ProjectLastCreateLocation => {
+            let Some(text) = value.as_text() else {
+                return false;
+            };
+            SettingsService::set_project_last_create_location(text, cx);
+        }
         _ => return false,
     }
     true
@@ -35,6 +42,36 @@ impl SettingsService {
         {
             let settings = cx.global_mut::<Settings>();
             settings.projects.sort_mode = mode.to_string();
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
+    }
+
+    /// 上次新建项目用的父目录（新建对话框的默认「位置」）。
+    ///
+    /// 空串 = 没记过 → `None`（调用方回退用户主目录）。
+    pub fn project_last_create_location(cx: &App) -> Option<String> {
+        let path = cx
+            .global::<Settings>()
+            .projects
+            .last_create_location
+            .trim()
+            .to_string();
+        (!path.is_empty()).then_some(path)
+    }
+
+    /// 记住本次新建用的父目录（创建成功后调用；空串视为清除）。
+    ///
+    /// 值未变时不重复写盘——与 `project` crate 记录构建标识的口径一致，
+    /// 免得每次新建都无谓改一次 settings.json 的 mtime。
+    pub fn set_project_last_create_location(path: &str, cx: &mut App) {
+        let next = path.trim().to_string();
+        {
+            let settings = cx.global_mut::<Settings>();
+            if settings.projects.last_create_location == next {
+                return;
+            }
+            settings.projects.last_create_location = next;
         }
         let settings = cx.global::<Settings>().clone();
         persist(&settings);

@@ -175,6 +175,8 @@ pub enum Slot {
     ConnectTimeoutMs,
     LanDisableTls,
     ProjectSortMode,
+    /// 上次新建项目用的父目录（内部记忆：只走操作现场，不上设置页）。
+    ProjectLastCreateLocation,
     LogMinLevel,
     StartupDefaultLeftPanel,
     /// 草稿箱工具栏布局（复合值：按钮稳定标识 → { visible, side }；读写走 ⋯ 菜单）。
@@ -349,6 +351,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "connection_defaults.connect_timeout_ms" => Slot::ConnectTimeoutMs,
         "connection_defaults.lan_disable_tls" => Slot::LanDisableTls,
         "projects.sort_mode" => Slot::ProjectSortMode,
+        "projects.last_create_location" => Slot::ProjectLastCreateLocation,
         "logging.min_level" => Slot::LogMinLevel,
         "startup.default_left_panel" => Slot::StartupDefaultLeftPanel,
         "scratchpad.toolbar" => Slot::ScratchpadToolbar,
@@ -479,6 +482,8 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         | Slot::NavigatorAutoConnectStartup => KindTag::Bool,
         Slot::LanDisableTls => KindTag::BoolPair,
         Slot::ProjectSortMode => KindTag::Enum,
+        // 内部记忆（上次新建用的父目录）：读写走新建项目对话框，不上设置页。
+        Slot::ProjectLastCreateLocation => KindTag::Text,
         Slot::LogMinLevel => KindTag::Enum,
         Slot::StartupDefaultLeftPanel => KindTag::Enum,
         // 复合值（工具栏按钮布局）：没有页面写入路径，读写走草稿箱 ⋯ 菜单。

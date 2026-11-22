@@ -12,7 +12,7 @@
 //! 语义见 `docs/architecture/project/project-prototype-design.md`。
 
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gpui_kit::base::StyledExt;
@@ -395,6 +395,21 @@ impl ProjectEditorBridge for () {
 }
 
 /// 宿主注入的能力集合：项目视图的全部外部依赖都从这里取，
+/// 宿主桥回调类型（等价于原来的 `Rc<dyn Fn…>`，抽成别名只为可读性与签名统一）。
+pub type SortSaver = Rc<dyn Fn(ProjectSort, &mut App)>;
+/// 宿主侧「打开 / 关闭后的刷新」回调。
+pub type HostAction = Rc<dyn Fn(&mut App)>;
+/// 默认连接候选来源。
+pub type ConnectionProvider = Rc<dyn Fn(&App) -> Vec<ConnectionOption>>;
+/// 当前构建标识来源。
+pub type BuildTagProvider = Rc<dyn Fn() -> String>;
+/// 「上次新建用的父目录」读取。
+pub type CreateLocationGetter = Rc<dyn Fn(&App) -> Option<String>>;
+/// 「上次新建用的父目录」写入。
+pub type CreateLocationSaver = Rc<dyn Fn(&str, &mut App)>;
+
+/// 宿主桥：视图只从这里取能力，不直接依赖 workbench / 设置服务。
+///
 /// `project` crate 因而不依赖 workbench 与 settings。
 #[derive(Clone)]
 #[non_exhaustive]
@@ -408,13 +423,22 @@ pub struct ProjectUiHost {
     /// 编辑区桥。
     pub editor: Rc<dyn ProjectEditorBridge>,
     /// 排序偏好持久化（宿主接设置服务）。
-    pub save_sort: Rc<dyn Fn(ProjectSort, &mut App)>,
+    pub save_sort: SortSaver,
     /// 打开项目后的宿主刷新（连接列表 / 导航缓存 / 结果归属）。
-    pub on_opened: Rc<dyn Fn(&mut App)>,
+    pub on_opened: HostAction,
     /// 关闭项目后的宿主清理（#21：连接列表按无项目作用域刷新，清掉残留 P_/GP_）。
-    pub on_closed: Rc<dyn Fn(&mut App)>,
+    pub on_closed: HostAction,
     /// 默认连接的候选来源（U3）：宿主接连接列表，project crate 只读结果。
-    pub connections: Rc<dyn Fn(&App) -> Vec<ConnectionOption>>,
+    pub connections: ConnectionProvider,
+    /// 当前构建标识（宿主接应用版本）。
+    ///
+    /// `None` = 未注入：打开项目时不记录 `rds.build_tag`（测试与无版本场景走这条）。
+    /// project crate 不知道应用版本，值只能由宿主给。
+    pub build_tag: Option<BuildTagProvider>,
+    /// 上次新建项目用的父目录（宿主接设置服务）；`None` = 回退用户主目录。
+    pub last_create_location: CreateLocationGetter,
+    /// 记住本次新建用的父目录（创建成功后调用）。
+    pub save_create_location: CreateLocationSaver,
 }
 
 impl ProjectUiHost {
@@ -433,6 +457,9 @@ impl ProjectUiHost {
             on_opened: Rc::new(|_| {}),
             on_closed: Rc::new(|_| {}),
             connections: Rc::new(|_| Vec::new()),
+            build_tag: None,
+            last_create_location: Rc::new(|_| None),
+            save_create_location: Rc::new(|_, _| {}),
         }
     }
 
@@ -441,28 +468,42 @@ impl ProjectUiHost {
         self
     }
 
-    pub fn with_sort_saver(mut self, save_sort: Rc<dyn Fn(ProjectSort, &mut App)>) -> Self {
+    pub fn with_sort_saver(mut self, save_sort: SortSaver) -> Self {
         self.save_sort = save_sort;
         self
     }
 
-    pub fn with_on_opened(mut self, on_opened: Rc<dyn Fn(&mut App)>) -> Self {
+    pub fn with_on_opened(mut self, on_opened: HostAction) -> Self {
         self.on_opened = on_opened;
         self
     }
 
     /// 注入关闭项目后的宿主清理回调（#21：`do_close` 末尾触发）。
-    pub fn with_on_closed(mut self, on_closed: Rc<dyn Fn(&mut App)>) -> Self {
+    pub fn with_on_closed(mut self, on_closed: HostAction) -> Self {
         self.on_closed = on_closed;
         self
     }
 
     /// 注入默认连接候选来源（U3）；不注入时下拉里只有「不设默认」。
-    pub fn with_connections(
-        mut self,
-        connections: Rc<dyn Fn(&App) -> Vec<ConnectionOption>>,
-    ) -> Self {
+    pub fn with_connections(mut self, connections: ConnectionProvider) -> Self {
         self.connections = connections;
+        self
+    }
+
+    /// 注入当前构建标识（打开项目时写进 `ProjectConfig.extensions`，只写不展示）。
+    pub fn with_build_tag(mut self, build_tag: BuildTagProvider) -> Self {
+        self.build_tag = Some(build_tag);
+        self
+    }
+
+    /// 注入「上次新建用的父目录」读写（宿主接设置服务）。
+    pub fn with_create_location(
+        mut self,
+        get: CreateLocationGetter,
+        save: CreateLocationSaver,
+    ) -> Self {
+        self.last_create_location = get;
+        self.save_create_location = save;
         self
     }
 
@@ -498,6 +539,7 @@ pub struct ConnectionOption {
 }
 
 /// 项目 UI 状态（挂在宿主共享状态与 [`ProjectUiHost`] 上）。
+#[derive(Default)]
 #[non_exhaustive]
 pub struct ProjectUiState {
     pub picker: PickerState,
@@ -512,21 +554,6 @@ pub struct ProjectUiState {
     pub notice: Option<String>,
     /// 设置面板的磁盘 / 名册快照（B2 / B3；事件路径填充，render 纯读）。
     pub settings: SettingsSnapshot,
-}
-
-impl Default for ProjectUiState {
-    fn default() -> Self {
-        Self {
-            picker: PickerState::default(),
-            settings_open: false,
-            dialog_error: None,
-            lock: None,
-            read_only: false,
-            epoch: 0,
-            notice: None,
-            settings: SettingsSnapshot::default(),
-        }
-    }
 }
 
 /// 项目相关输入实体（由宿主懒创建并持有）。
@@ -620,7 +647,7 @@ fn sort_items(items: &mut [ProjectSummary], sort: ProjectSort) {
 
 /// 切换 Tab 并刷新。
 pub fn set_tab(host: &ProjectUiHost, tab: PickerTab, cx: &mut App) {
-    tracing::info!(tab = %tab.key(), "【探针】项目选择器切换 Tab");
+    tracing::debug!(tab = %tab.key(), "项目选择器切换 Tab");
     host.state.borrow_mut().picker.tab = tab;
     refresh_picker(host, cx);
 }
@@ -698,10 +725,39 @@ fn directory_row(target: &Entity<InputState>, browse_id: &'static str) -> Div {
         )
 }
 
+/// 「位置」字段的行内提示（判据与 `submit_create` → `service::create` 完全同源）。
+///
+/// - 位置为空 → 必填提示；
+/// - 位置不存在 → 说清哪个路径；
+/// - 名称还不合法（空 / 超长 / 含 `\ / : * ? " < > |`）→ 目标路径还不成立，不预判目录状态
+///   （否则一打开对话框就红一片，且含分隔符的名称会把 `join` 拼成子路径、判出错误结论）；
+/// - 目标已是项目 / 目标非空 → 直接说清该怎么改（前者应改走「打开」）。
+fn location_hint(location: &str, name: &str) -> Option<String> {
+    let location = location.trim();
+    if location.is_empty() {
+        return Some("请选择项目位置".to_string());
+    }
+    let root = PathBuf::from(location);
+    if !root.exists() {
+        return Some(format!("位置不存在：{}", root.display()));
+    }
+    let name = name.trim();
+    if project_service::validate_project_name(name).is_err() {
+        return None;
+    }
+    match project_service::inspect_target(&root.join(name)) {
+        TargetDirState::ExistingProject => Some("该目标目录已是项目，请直接打开".to_string()),
+        TargetDirState::NonEmpty => Some("目标目录非空，请换一个名称或选择空目录".to_string()),
+        TargetDirState::Missing | TargetDirState::Empty => None,
+    }
+}
+
 /// 新建项目的目标路径预览（原型要求展示 `位置/名称`）。
 fn target_preview(theme: &gpui_kit::component::Theme, location: &str, name: &str) -> Div {
     let (location, name) = (location.trim(), name.trim());
-    let text = if location.is_empty() || name.is_empty() {
+    // 名称不合法（含分隔符等）时 `join` 会拼出可信度为零的路径，宁可退回占位文案。
+    let name_ok = project_service::validate_project_name(name).is_ok();
+    let text = if location.is_empty() || !name_ok {
         "目标：填写位置与名称后在此预览".to_string()
     } else {
         format!("目标：{}", PathBuf::from(location).join(name).display())
@@ -710,6 +766,53 @@ fn target_preview(theme: &gpui_kit::component::Theme, location: &str, name: &str
         .text_xs()
         .text_color(theme.colors.muted_foreground)
         .child(text)
+}
+
+/// 「打开现有项目」对话框的行内提示（判据与 `submit_open_folder` 同源，文案直接复用）。
+///
+/// - 位置为空 → 必填；
+/// - 目录不存在 → 说清哪个路径；
+/// - 非空且无 `.RSmeta` → 说明为什么打不开；
+/// - 空目录 → **不提示**（提交时会问「在空目录创建项目？」，不是错误）；
+/// - 已是项目 → 不提示（可以打开）。
+fn folder_hint(path: &str) -> Option<String> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Some("请输入项目目录".to_string());
+    }
+    let path = PathBuf::from(path);
+    match project_service::inspect_target(&path) {
+        TargetDirState::Missing => Some(format!("目录不存在：{}", path.display())),
+        TargetDirState::NonEmpty => {
+            Some("目录不是项目（缺少 .RSmeta），且非空，无法作为项目打开".to_string())
+        }
+        TargetDirState::Empty | TargetDirState::ExistingProject => None,
+    }
+}
+
+/// 渲染期提示缓存（`memo_hint` 的载体）：`Rc` 让每帧重跑的闭包共享，`RefCell` 供渲染期写回。
+type HintCache<K> = Rc<RefCell<Option<(K, Option<String>)>>>;
+
+/// 渲染闭包里的「目录探测」memo：key 不变就复用上次结果。
+///
+/// `open_dialog` 的 builder 是每帧重跑的渲染闭包，而 `location_hint` / `folder_hint` 要
+/// `exists()` + `read_dir`；把探测结果按输入快照缓存，只有输入变化才真的碰磁盘。
+fn memo_hint<K: PartialEq>(
+    cell: &RefCell<Option<(K, Option<String>)>>,
+    key: K,
+    compute: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    let stale = match cell.borrow().as_ref() {
+        Some((cached, _)) => cached != &key,
+        None => true,
+    };
+    if stale {
+        let hint = compute();
+        *cell.borrow_mut() = Some((key, hint.clone()));
+        hint
+    } else {
+        cell.borrow().as_ref().and_then(|(_, hint)| hint.clone())
+    }
 }
 
 /// 对话框底部按钮组（右对齐）：取消 + 主操作。
@@ -781,9 +884,11 @@ pub fn open_create_dialog(
     inputs
         .create_name
         .update(cx, |s, cx| s.set_value("", window, cx));
+    // 位置默认取「上次新建用的父目录」；没记过才回退用户主目录。
+    let initial_location = (host.last_create_location)(cx).unwrap_or_else(default_location);
     inputs
         .create_location
-        .update(cx, |s, cx| s.set_value(default_location(), window, cx));
+        .update(cx, |s, cx| s.set_value(initial_location, window, cx));
     inputs
         .create_desc
         .update(cx, |s, cx| s.set_value("", window, cx));
@@ -791,11 +896,22 @@ pub fn open_create_dialog(
 
     let host = host.clone();
     let inputs = inputs.clone();
+    // 行内提示缓存：builder 每帧重跑，`location_hint` 要探测目录（I/O），交给 `memo_hint`
+    // 只在「位置 / 名称」变化时重算一次。
+    let hint_cache: HintCache<(String, String)> = Rc::new(RefCell::new(None));
     window.open_dialog(cx, move |dialog, _window, cx| {
         let theme = cx.theme();
         let error = host.state.borrow().dialog_error.clone();
         let location = inputs.create_location.read(cx).value().to_string();
         let name = inputs.create_name.read(cx).value().to_string();
+        // 行内提示：与 `submit_create` 同一判据（都用 service 的函数），
+        // 不会出现「界面说可以、点创建被拒」。名称没填时不提示（不红一片）。
+        let name_hint = (!name.trim().is_empty())
+            .then(|| project_service::validate_project_name(&name).err())
+            .flatten();
+        let location_hint = memo_hint(&hint_cache, (location.clone(), name.clone()), || {
+            location_hint(&location, &name)
+        });
         dialog
             .title("新建项目")
             .child(
@@ -804,8 +920,20 @@ pub fn open_create_dialog(
                     .gap_2()
                     .child(label(theme, "项目名称 *"))
                     .child(Input::new(&inputs.create_name))
+                    .when_some(name_hint, |d, hint| {
+                        d.child(
+                            dialog_error_line(theme, &hint)
+                                .debug_selector(|| "create-name-hint".into()),
+                        )
+                    })
                     .child(label(theme, "位置 *"))
                     .child(directory_row(&inputs.create_location, "create-browse"))
+                    .when_some(location_hint, |d, hint| {
+                        d.child(
+                            dialog_error_line(theme, &hint)
+                                .debug_selector(|| "create-location-hint".into()),
+                        )
+                    })
                     .child(target_preview(theme, &location, &name))
                     .child(label(theme, "描述（可选）"))
                     .child(Input::new(&inputs.create_desc))
@@ -861,9 +989,13 @@ pub fn open_folder_dialog(
 
     let host = host.clone();
     let inputs = inputs.clone();
+    // 与新建对话框同理：builder 每帧重跑，目录探测交给 `memo_hint` 按「路径」缓存。
+    let hint_cache: HintCache<String> = Rc::new(RefCell::new(None));
     window.open_dialog(cx, move |dialog, _window, cx| {
         let theme = cx.theme();
         let error = host.state.borrow().dialog_error.clone();
+        let path = inputs.create_location.read(cx).value().to_string();
+        let hint = memo_hint(&hint_cache, path.clone(), || folder_hint(&path));
         dialog
             .title("打开现有项目")
             .child(
@@ -872,6 +1004,12 @@ pub fn open_folder_dialog(
                     .gap_2()
                     .child(label(theme, "项目目录（含 .RSmeta）"))
                     .child(directory_row(&inputs.create_location, "of-browse"))
+                    .when_some(hint, |d, h| {
+                        d.child(
+                            dialog_error_line(theme, &h)
+                                .debug_selector(|| "open-folder-hint".into()),
+                        )
+                    })
                     .when_some(error, |d, e| d.child(dialog_error_line(theme, &e))),
             )
             .footer(dialog_footer(
@@ -930,6 +1068,8 @@ pub fn submit_create(
     let input = project_service::CreateProjectInput::new(name, path).with_description(description);
     match project_service::create(input) {
         Ok(summary) => {
+            // 记住这次选的父目录，下次新建默认带出来（失败只是回退主目录，不阻断）。
+            (host.save_create_location)(&location, cx);
             // 创建成功后直接打开（走统一打开路径，取得锁）。
             open_path(host, &summary.path, window, cx);
             true
@@ -1044,7 +1184,7 @@ fn sample_project_dir() -> PathBuf {
 /// 从示例项目开始（内置最小示例：示例 SQL 草稿）。
 pub fn create_sample(host: &ProjectUiHost, window: &mut Window, cx: &mut App) {
     let path = sample_project_dir();
-    tracing::info!(path = %path.display(), "【探针】项目选择器「从示例项目开始」触发");
+    tracing::debug!(path = %path.display(), "项目选择器「从示例项目开始」触发");
     if !project_service::is_valid_project(&path) {
         let input = project_service::CreateProjectInput::new("示例项目", path.clone())
             .with_description(Some("RdataStation 内置示例".to_string()))
@@ -1064,17 +1204,22 @@ pub fn create_sample(host: &ProjectUiHost, window: &mut Window, cx: &mut App) {
 }
 
 /// 打开项目（含未保存拦截 + 锁占用分支）。
-pub fn request_open(host: &ProjectUiHost, path: &PathBuf, window: &mut Window, cx: &mut App) {
+pub fn request_open(host: &ProjectUiHost, path: &Path, window: &mut Window, cx: &mut App) {
     if host.editor.is_dirty() {
-        open_unsaved_dialog(host, PendingAction::OpenPath(path.clone()), window, cx);
+        open_unsaved_dialog(
+            host,
+            PendingAction::OpenPath(path.to_path_buf()),
+            window,
+            cx,
+        );
         return;
     }
     open_path(host, path, window, cx);
 }
 
 /// 直接打开（不再拦截）。
-pub fn open_path(host: &ProjectUiHost, path: &PathBuf, window: &mut Window, cx: &mut App) {
-    tracing::info!(path = %path.display(), "【探针】项目选择器 open_path 打开项目");
+pub fn open_path(host: &ProjectUiHost, path: &Path, window: &mut Window, cx: &mut App) {
+    tracing::debug!(path = %path.display(), "项目选择器 open_path 打开项目");
     match project_service::open(path) {
         Ok(OpenOutcome::Opened(opened)) => apply_opened(host, opened, cx),
         Ok(OpenOutcome::Busy(info)) => {
@@ -1082,7 +1227,7 @@ pub fn open_path(host: &ProjectUiHost, path: &PathBuf, window: &mut Window, cx: 
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| "项目".to_string());
-            open_lock_busy_dialog(host, name, path.clone(), info.pid, window, cx);
+            open_lock_busy_dialog(host, name, path.to_path_buf(), info.pid, window, cx);
         }
         Err(e) => {
             host.state.borrow_mut().picker.error = Some(e);
@@ -1189,7 +1334,7 @@ pub fn open_unsaved_dialog(
 }
 
 /// 只读打开（逃生口）。
-pub fn open_read_only(host: &ProjectUiHost, path: &PathBuf, cx: &mut App) {
+pub fn open_read_only(host: &ProjectUiHost, path: &Path, cx: &mut App) {
     match project_service::open_read_only(path) {
         Ok(opened) => apply_opened(host, opened, cx),
         Err(e) => {
@@ -1201,8 +1346,38 @@ pub fn open_read_only(host: &ProjectUiHost, path: &PathBuf, cx: &mut App) {
 
 /// 应用打开结果：写会话 + 持锁 + 自增世代 + 交宿主刷新。
 fn apply_opened(host: &ProjectUiHost, opened: project_service::OpenedProject, cx: &mut App) {
-    let (store, lock, read_only, summary) = opened.into_parts();
-    // store 目前仅用于确认加载成功；会话只保留根与名（与既有 P0 会话一致）。
+    let (mut store, lock, read_only, summary) = opened.into_parts();
+
+    // 记录「本项目最近由哪个构建打开」——只写不展示（原因见 `BUILD_TAG_KEY` 的文档）。
+    // 用打开时已加载好的 store，不额外读盘；值未变则跳过写盘，免得每次打开都改
+    // settings.json 的 mtime。只读打开绝不写盘（那也是别人的项目目录）。
+    if !read_only && let Some(tag_of) = &host.build_tag {
+        let tag = tag_of();
+        let unchanged = store
+            .load_config()
+            .ok()
+            .and_then(|config| {
+                config
+                    .extensions
+                    .get(crate::store::BUILD_TAG_KEY)
+                    .and_then(|value| value.as_str())
+                    .map(|current| current == tag)
+            })
+            .unwrap_or(false);
+        if !unchanged
+            && let Err(e) = store.update_config(|config| {
+                config.extensions.insert(
+                    crate::store::BUILD_TAG_KEY.to_string(),
+                    serde_json::Value::String(tag),
+                );
+            })
+        {
+            // 配置写不进去不影响会话，记一行即可。
+            tracing::warn!("记录打开构建失败: {e}");
+        }
+    }
+
+    // store 用于确认加载成功并记录构建标识；会话只保留根与名（与既有 P0 会话一致）。
     drop(store);
 
     host.set_current(Some(OpenProject::new(
@@ -2623,10 +2798,8 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
     }
     let (name, root) = {
         let p = host.session.borrow();
-        match p.as_ref() {
-            Some(s) => (s.name.clone(), s.root.clone()),
-            None => return None,
-        }
+        let s = p.as_ref()?;
+        (s.name.clone(), s.root.clone())
     };
     let theme = cx.theme();
     // 快照在事件路径填充（打开设置 / 刷新 / 保存），render 只读：`.RSmeta` 目录遍历与

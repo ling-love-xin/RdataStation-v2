@@ -161,10 +161,10 @@ fn write_owner(path: &Path) {
         pid: std::process::id(),
         acquired_at: Utc::now(),
     };
-    if let Ok(json) = serde_json::to_string(&info) {
-        if let Ok(mut f) = File::create(path) {
-            let _ = writeln!(f, "{json}");
-        }
+    if let Ok(json) = serde_json::to_string(&info)
+        && let Ok(mut f) = File::create(path)
+    {
+        let _ = writeln!(f, "{json}");
     }
 }
 

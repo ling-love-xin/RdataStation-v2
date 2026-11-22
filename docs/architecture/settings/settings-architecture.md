@@ -145,6 +145,7 @@ graph TD
 | `navigator.property_panel_width` | 数据源导航 | f32（rem） | `24.5` | 即时 | `panels/editor.rs::EditorPanel`（关闭面板时落盘） | 模块内（拖拽） | ✅ 已落地 |
 | `navigator.filters` | 数据源导航 | struct（4 个 `Option<String>`） | 全空 | 即时 | `panels/mod.rs::SidebarPanel::new` + `database/src/nav_view.rs::write_nav_filters` | 模块内（chips / 筛选 ▾） | ✅ 已落地（作用域见 §14 Q1） |
 | `projects.sort_mode` | 项目 | enum `last_opened`/`name`/`created` | `last_opened` | 下次操作 | `view.rs::WorkbenchView::new`（读）+ `components/project_host.rs`（写） | 两者 | ✅ 已落地（页面行待落地） |
+| `projects.last_create_location` | 项目 | Text（父目录路径；空串 = 没记过） | `""` | 下次新建 | `project/src/ui.rs::open_create_dialog`（读）+ `submit_create`（写）；宿主注入见 `components/project_host.rs` | 模块内（不上页） | ✅ 已落地（2026-11-22） |
 | `connection_defaults.connect_timeout_ms` | 连接默认值 | u64（ms） | `15000` | 下次操作 | `workbench/services/connection_service.rs::connect_with_type` | 设置页 | ✅ 已落地 |
 | `connection_defaults.lan_disable_tls` | 连接默认值 | bool | `true` | 下次操作 | `connection_service.rs::apply_lan_tls_default` | 设置页 | ✅ 已落地 |
 | `resources.keep_versions` | 资产库 | i64（份数；`-1` = 全留、`0` = 只留元数据） | `5` | 下次操作 | `workbench/src/components/resource_host.rs` + `panels/resources.rs`（主线程读→`KeepVersions::from_setting`）→ `services/resource_jobs.rs::open_service` → `analytics_resource::ArchiveService::with_keep_versions` | 设置页 | ✅ 已落地（2026-09-18）|

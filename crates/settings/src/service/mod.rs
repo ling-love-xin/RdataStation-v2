@@ -142,6 +142,10 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         }
         Slot::LanDisableTls => SettingValue::Bool(settings.connection_defaults.lan_disable_tls),
         Slot::ProjectSortMode => SettingValue::Text(settings.projects.sort_mode.clone()),
+        // 内部记忆（上次新建用的父目录）：空串表示「没记过」。
+        Slot::ProjectLastCreateLocation => {
+            SettingValue::Text(settings.projects.last_create_location.clone())
+        }
         Slot::LogMinLevel => SettingValue::Text(settings.logging.min_level.as_str().to_string()),
         Slot::StartupDefaultLeftPanel => {
             SettingValue::Text(settings.startup.default_left_panel.clone())
@@ -440,7 +444,9 @@ impl SettingsService {
             Slot::ConnectTimeoutMs | Slot::LanDisableTls => {
                 connection::apply_slot(slot, value, window, cx)
             }
-            Slot::ProjectSortMode => projects::apply_slot(slot, value, window, cx),
+            Slot::ProjectSortMode | Slot::ProjectLastCreateLocation => {
+                projects::apply_slot(slot, value, window, cx)
+            }
             Slot::LogMinLevel => logging::apply_slot(slot, value, window, cx),
             Slot::StartupDefaultLeftPanel => startup::apply_slot(slot, value, window, cx),
             Slot::ScratchpadGroupMaxH | Slot::ScratchpadToolbar => {

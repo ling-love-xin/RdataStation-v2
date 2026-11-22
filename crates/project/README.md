@@ -99,7 +99,7 @@
 
 ### 尚未开发（待办）
 
-剩余项集中在 `docs/architecture/project/project-dev-plan.md` §8：窗口退出路径的草稿兜底（E3，跨 editor /app crate）、执行 SQL 的只读拦截测试（E5）、菜单快捷键（C2，组件无 shortcut 槽位，暂缓）。
+剩余项集中在 `docs/architecture/project/project-dev-plan.md` §8：窗口退出路径的草稿兜底（E3，跨 editor /app crate）、执行 SQL 的只读拦截测试（E5）、菜单快捷键（C2：gpui-kit 0.10.0 的 `PopupMenuItem` 已有 `action` 槽位、`render_key_binding` 会按 `action_context` 解析键位，但 project crate 不依赖 workbench，需宿主先注入 action 工厂，暂缓）。
 
 ## 代码落点
 
@@ -112,7 +112,7 @@
 | `src/lock.rs`               | 实例锁：OS 文件锁 + `project.lock.owner` 占用者信息                                                                                                                   |
 | `src/service.rs`            | 编排：列表 / 创建 / 打开（含只读）/ 关闭 / 重命名 / 固定 / 归档 / 软删 / 恢复 / 硬删 / 移出 / 重定位 / 默认连接读写 / 版本台账；进程级复用 tokio 运行时（P0.3）                            |
 | `src/ui.rs`                 | 视图：选择器、标题栏菜单内容、项目设置、语义对话框、`ProjectUiHost` 宿主桥                                                                                                             |
-| `src/ui/tests.rs`           | 29 项 `ui` 测试（20 项 GPUI headless 窗口测试 + 9 项纯函数测试：选择器 /facet 解析 / 状态筛选 / 设置快照与结构树 / 默认连接 / 对话框 / 拦截 / 排序 / 浏览目录 / 空目录询问 / 卡片与描述 / 卡片与标题栏菜单规格 / 只读拦截 / 键盘激活） |
+| `src/ui/tests.rs`           | 38 项 `ui` 测试（24 项 GPUI headless 窗口测试 + 14 项纯函数测试：选择器 /facet 解析 / 状态筛选 / 设置快照与结构树 / 默认连接 / 对话框 / 拦截 / 排序 / 浏览目录 / 空目录询问 / 卡片与描述 / 卡片与标题栏菜单规格 / 只读拦截 / 键盘激活 / 行内校验与提示 memo） |
 | `tests/project_registry.rs` | 名册端到端集成：创建登记 → 固定置顶 → 软删隐藏（磁盘保留）→ 已移除找回（注入临时全局库）                                                                                                          |
 | `tests/project_store.rs`    | 磁盘 `.RSmeta` / 实例锁 / 默认连接（U3）集成                                                                                                                           |
 
@@ -144,7 +144,7 @@
 
 
 ```
-cargo test -p rds-project -j 2          # lib（43，含 20 项窗口测试）+ 集成（1 名册 + 4 存储）
+cargo test -p rds-project -j 1          # 2026-11-22 实测：lib 50（24 窗口 + 14 纯函数）+ 集成（1 名册 + 5 生命周期 + 3 存储）
 ```
 
 
