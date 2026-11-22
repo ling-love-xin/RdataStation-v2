@@ -229,6 +229,13 @@ zip = "0.6.6"
 # SQL 编辑器核心解析/转译：业务关键依赖，精确锁定
 # （接入点唯一，见 crates/sql/；升大版本前先跑 SQL 回归）
 sqlglot-rust = "=0.11.2"
+# SQL 排版引擎（lossless：只调空白，永不拒绝输入）。与 sqlglot 的分工见
+# crates/sql/src/formatter.rs 头部：语义走 sqlglot，排版走 lax。
+# 精确锁定：排版输出稳定是设置页预览一致性与幂等测试的前提。
+lax-sql = "=0.3.0"
+# lax 的配置类型直接引用 dprint-core 的 `NewLineKind`（`Configuration.new_line_kind`），
+# 构造瓶颈绕不开；只取类型，不启用它的 async/communication/process 可选 feature。
+dprint-core = "=0.67.4"
 
 # 系统文件对话框（打开 / 另存为）：编辑器与工作台共用，仅 workbench 直接依赖
 rfd = "0.17"

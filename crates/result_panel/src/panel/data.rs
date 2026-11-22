@@ -498,6 +498,9 @@ pub struct ResultPanel {
     /// 【B15】筛选框订阅句柄（`InputEvent::Change` → 防抖 → 应用筛选）。
     /// **必须持有**：早先写成 `let _ = filter_sub;` 当场丢弃，边打边筛从未生效。
     pub(crate) _filter_sub: Option<Subscription>,
+    /// 【第 81 批】`ESC` 关结果集浮层的 app 级 keystroke interceptor 句柄。
+    /// **必须持有**：句柄一丢就解订（与 `_filter_sub` 是同一个坑）。
+    pub(crate) _esc_sub: Subscription,
 
     // ── 【筛选设置】自定义条件 / 排序浮层（DBeaver `filtersCustomButton` → FilterSettingsDialog）
     /// 浮层是否打开（`false` = 不渲染这层遮罩）

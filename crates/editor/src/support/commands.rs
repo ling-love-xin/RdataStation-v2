@@ -74,10 +74,25 @@ pub use result_panel::grid::RESULT_GRID_CONTEXT;
 /// 【第 74 批】`CTRL+R` 撤销全部未提交变更（`CMD_REJECT_CHANGES`，`:1083`）。
 ///
 /// 【第 75 批】`CTRL+SHIFT+G` 跳转到列（`CMD_GO_TO_COLUMN`，`:1090`）。
+///
+/// 【第 76 批】`CTRL+ALT+C` / `CTRL+ALT+R` 选中当前格所在的整列 / 整行
+/// （`CMD_SELECT_COLUMNS` / `CMD_SELECT_ROWS`，`:1088/1089`）。
+///
+/// 【第 77 批】`CTRL+ALT+SHIFT+T` 焦点在筛选框与结果呈现之间来回切
+/// （`CMD_FOCUS_FILTER`，`:1058`）。
+///
+/// 【第 78 批】`ALT+SHIFT+H` / `ALT+SHIFT+T` 隐藏当前列 / 显示全部隐藏列
+/// （`CMD_HIDE_COLUMNS` / `CMD_SHOW_COLUMNS`，`:1096/1097`）。
+///
+/// 【第 79 批】`ALT+SHIFT+C` 复制列名（`CMD_COPY_COLUMN_NAMES`，`:1095`）。
+///
+/// 【第 80 批】`ALT+SHIFT+F` 打开筛选设置（`CMD_FILTER_EDIT_SETTINGS`，`:1094`）。
 pub use result_panel::grid::{
-    CommitResultChanges, CopyRowValuesFromAbove, CopyRowValuesFromBelow, CycleResultPresentation,
-    DeleteResultRow, DuplicateResultRow, EnterCellEdit, FetchAllData, FetchNextSegment,
-    FocusRowJump, GotoColumn, InsertResultRow, RejectPendingChanges,
+    CommitResultChanges, CopyColumnNames, CopyRowValuesFromAbove, CopyRowValuesFromBelow,
+    CycleResultPresentation, DeleteResultRow, DuplicateResultRow, EnterCellEdit, FetchAllData,
+    FetchNextSegment, FocusRowJump, GotoColumn, HideCurrentColumn, InsertResultRow,
+    OpenFilterSettings, RejectPendingChanges, SelectCurrentColumn, SelectCurrentRow,
+    ShowHiddenColumns, SwitchFilterFocus,
 };
 
 /// 【第 60 批】结果**面板**的 key context（`RESULT_GRID_CONTEXT` 的父层）。

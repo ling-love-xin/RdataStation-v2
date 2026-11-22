@@ -98,13 +98,13 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 
 ## 十、SQL 格式化增强（2026-10-28，优先级高）——已实施（本线提交）
 
-**现状（已盘点）**：主链路完整——工具栏「格式化」按钮 → `format_document`（选区感知，只格式化选区）→ `format::plan` → 引擎 `formatter.rs`（sqlglot `generate_pretty` AST 排版，多语句安全：切分→逐条格式化→原位回填，一条失败不影响其它条；前导注释保留；解析失败原样返回并报条数）。
+**现状（已盘点）**：主链路完整——工具栏「格式化」按钮 → `format_document`（选区感知，只格式化选区）→ `format::plan` → `crates/sql/src/formatter.rs`（多语句安全：切分→逐条排版→原位回填，一条失败不影响其它条）。**排版引擎 2026-11-22 已从 sqlglot `generate_pretty` 换成 `lax-sql`**（lossless，只调空白、不拒绝输入），详见 `../sql/sql-language-service-architecture.md`；本节的引擎相关表述以该文档为准，以下是当轮（2026-10-28）的历史记录。
 
 **已落地（2026-10-28）**：
 1. **格式化选项**：`engine/sql/formatter.rs` 新增 `KeywordCase{Preserve,Uppercase,Lowercase}` + `FormatOptions{keyword_case,indent_width}`（Default = preserve / 2）；`format_with_report` / `format_single` 签名加 options。**安全后处理**：关键字大小写复用 `highlight_spans` 的 `TokenClass::Keyword` 区间改写（字符串/注释/标识符天然不碰）；缩进宽度逐行重排行首 2 空格倍数（行首落入 String/Comment 保护区间的行不碰）。**kept_verbatim 逐字保留语义高于选项**。
 2. **设置入口**：`settings` 三个新项——`editor.format_keyword_case`（Enum：preserve/upper/lower）、`editor.format_indent_width`（Number：2/4/8 预设）、`editor.format_on_save`（Bool 默认关）；model / lib / registry 全接线，设置页按 registry 自动渲染。
 3. **保存时自动格式化**：`host.rs::on_save`（Ctrl+S）开头按 `format_on_save` 开关先格式化再落盘；`Self::format_options(cx)` 异常档位回退 preserve/2 不猜。
-4. **边界**：尾随注释会被 sqlglot 生成器丢弃（模块头已知边界，测试用前导注释）；行宽重排 sqlglot-rust 不支持（不做，已记录）。
+4. **边界（当轮）**：~~尾随注释会被 sqlglot 生成器丢弃~~、~~行宽重排 sqlglot-rust 不支持~~ —— 两条 **2026-11-22 随换 `lax-sql` 一并消解**（尾随注释保真、`lineWidth` 生效）。
 
 **测试**：formatter 12 单测全绿（含关键字只改关键字、前导注释不改写、缩进含保护区不碰）；settings 契约除存量 `fold_open_keywords` 登记怪癖（Enum(&[]) 空候选 + 文本默认值）外全绿。
 
@@ -112,6 +112,59 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 1. ~~无格式化选项~~ → 已实现 A/B（关键字大小写 + 缩进宽度）
 2. ~~设置模块无格式化项~~ → 已登记三设置项（section editor / group "format"）
 3. ~~保存时自动格式化~~ → 已实现 C（format_on_save 开关）
+
+**2026-11-22 第二轮（排版换引擎，本线已提交）**：
+1. **排版引擎换成 `lax-sql 0.3.0`**（dprint 生态 lossless formatter）：只调空白、**永不拒绝输入**
+   → 行内 / 尾随 / 关键字之间的注释全部保真，**选区里的半截片段真正能排版**（此前的选区格式化
+   被 sqlglot 解析门槛卡死，等于从未生效）。
+2. **设置项 6 → 11**：新增 `line_width`（默认 120）/ `clause_style`（`expanded`）/ `new_line_kind`
+   （`auto`）/ `ignore_node_comment_text` / `ignore_file_comment_text`，把 lax 的 `Configuration`
+   能力全部释放到设置页；`keyword_case` 仍走 sqlglot 词法器（lax 词表只有 85 个通用词）。
+3. **修掉换行符混排**：`rewrite.rs` 的 gap 规整原本硬编码 `\n`，与 lax 的 body 换行不一致；
+   新增 `rewrite_statements_with_gap_nl`，`formatter` 按**整篇多数换行**算出具体换行符同时喂两边。
+4. **保真兜底**：注释标记数 + 逗号数 + 行注释内逗号数三项签名比对，不一致整篇回退原文
+   （实测 `select a -- 注释\n, b` 会被 lax 排成 `a -- 注释,`，逗号被行注释吞掉 → 必须拦）。
+5. **行为变化（已知代价）**：不再有"解析不了、原样保留"，半截/无效片段也会被重排
+   （`NOT VALID SQL` → `NOT\n  VALID SQL`）；`FormatReport.kept_verbatim` 退化为兜底计数。
+6. **选区吸附到完整语句**：`support/format.rs::expand_to_statements` —— 与选区**相交**的语句
+   首尾相接（跨两条就两条一起排），只落在语句之间空白时不吸；`clamp_range` 仍只做边界钳制。
+   同时核证 **lax 没有 range API**（`lib.rs` 只导出整篇 `format_text`，`generation` 私有），
+   所以"选中某段能格式化"始终是应用层切 slice 的功劳，不是引擎能力。
+
+**2026-11-22 第三轮（运算符间距，带设置项）**：
+1. **新设置项 `sql_format.normalize_operators`**（`label` = "运算符两侧补空格"），12 项里的第 12 项，
+   **默认关**。它**不是** lax 能力（lax 只调结构性空白），是本地 token 后处理。
+2. **规则**：白名单 13 项 `= <> != <= >= < > + - * / % ||`；`- + *` 按**前一个 token** 判一元/通配
+   （无前 token / Keyword / Operator / `(` `[` `,` `.`）；只补不删（`a  =  1` 原样）。
+3. **落点**：`formatter.rs::apply_options` 第 3 步（关键字大小写 → 逗号迁移 → 运算符），
+   因前两步改过长度，执行前**重新取 `highlight_spans`**，字符从后往前插入。
+4. **实测依据**（`probe_operator_tokens`，写规则之前先跑）：`<>` `!=` `<=` `>=` `||` `::` `->` `->>` `#>`
+   `#>>` 各是一个 token；`@@version` 是两个 `@`；`count(*)` 的 `*` 前是 `(`、`select *` 前是 Keyword、
+   `t.*` 前是 `.`；`select !a, ~a from t` **词法失败 → span 为空 → 后处理全部静默跳过**（已记入
+   `../sql/sql-language-service-architecture.md` §7 #8）。
+5. **测试**：3 条（15 条用例的形态矩阵、幂等、开关经整条 lax 链路生效）；`rds-sql` lib **226**、
+   `rds-editor` lib **832**、`rds-settings` lib **47** 全绿。
+
+**2026-11-22 第四轮（真实语料对拍，修两处非幂等）**：
+1. **语料**：`crates/store/migrations` 的 **85 个**手写 DDL 迁移（CRLF、中文注释、事务、引号、索引、
+   触发器），按 default / ops-on / all-on 三组 options 各跑"排两轮是否一致 + 保真签名"。
+2. **缺陷一（上游）**：`lax 0.3.0` 行注释把行尾 `\r` 当注释文本，CRLF 输入每轮多一个 `\r`
+   （修复前三组分别 **68 / 68 / 67**，85 个文件）。直连 lax 复现（无注释 / 块注释正常），sqlglot
+   的行注释 span 不含 `\r` 给了判据 → 新增 `strip_line_comment_cr`，在喂给 lax **之前**删掉那个
+   `\r`；修复后 `default` 0。
+3. **缺陷二（我们自己）**：补空格把行撑过 `line_width`，第二轮的 lax 再折行（`\r` 修完后 ops-on
+   仍剩 1 个 `011`）→ `format_single` 加不动点迭代（最多 2 轮，仅在 `affects_text()` 且
+   `comma_style == Trailing` 时执行；首版无条件迭代把 `all-on` 从 1 恶化到 35，因 `leading`
+   与 lax 折行方向相反）。
+4. **最终数据**：`default` 0 / `ops-on` 0 / `all-on` 1（`005` 的 `leading` 固有摆动，不承诺幂等）；
+   `sig_fail` 三组恒 0。新增 2 条永久测试（`crlf_line_comments_do_not_accumulate_cr`、
+   `real_migration_fragment_is_idempotent`）。
+5. **`dprint-ignore` 实测**：独立行生效、行尾不生效、块注释独立行也生效、只作用于紧跟的第一条
+   （详见 `../sql/sql-language-service-architecture.md` §7.2）。
+6. **设置页 hint 落文案**：节点忽略标记 / 整篇忽略标记两项写明"独占一行、紧贴语句上方（行尾不生效）"；
+   逗号风格补"前导不承诺幂等"。
+7. **复跑**：`rds-sql` lib **232** + 集成 **10**、`rds-editor --lib format` **33**、`rds-settings` lib **47**
+   全绿；`cargo check` 三包零 error / 零 warning；`rustfmt --check` clean。
 
 ## 十一、高亮 token 自定义（2026-10-28 记录在案，优先级低于格式化）
 
@@ -1319,7 +1372,7 @@ SQL 词法源保持「补全能力开着」的门控，Python 的语言服务诊
 | 函数手册的官方文档 URL | workbench 按「引擎 + 函数名」生成 | 需真实环境验证后定口径（§九） |
 | hover 补列类型 | `annotate_types` 多数表达式返回 `Unknown` | 依赖 sqlglot 语义层，暂不做（§九） |
 | 补全候选被截断时界面未标注 | `language/completion.rs:93`（字段有、界面没摆） | 现有候选表远未触发上限；留着给状态栏/诊断用 |
-| 尾随注释在格式化后丢失 | §十 边界 | sqlglot 生成器行为，已记录 |
+| 尾随注释在格式化后丢失 | 已过时（2026-11-22 换 lax 后不再丢） | 旧引擎 `generate_pretty` 的行为；现由 §十 第四轮对拍守着（`sig_fail` 恒 0） |
 | 未闭合字符串时签名帮助可能误弹 | §八 A 方案边界 | 补上闭合引号即正确 |
 | 不可见字符「替换符号」渲染 | §六：内核 `RangeDecorationStyle` 仅 `Fill`/`Frame`，无 replacement 字形 | ⛔ 不硬做，等内核能力 |
 | 单元诊断只画波浪线、不做跳转 | §15.15 未覆盖 3 | 位置就在单元里眼前，跳转需求未出现 |

@@ -5,10 +5,11 @@
 
 use crate::changes::CellChange;
 use crate::commands::{
-    CommitResultChanges, CopyGridSelection, CopyRowValuesFromAbove, CopyRowValuesFromBelow,
-    CycleResultPresentation, DeleteResultRow, DuplicateResultRow, EnterCellEdit, ExecuteSql,
-    FetchAllData, FetchNextSegment, FocusRowJump, GotoColumn, InsertResultRow, RedoResultEdit,
-    RejectPendingChanges, UndoResultEdit,
+    CommitResultChanges, CopyColumnNames, CopyGridSelection, CopyRowValuesFromAbove,
+    CopyRowValuesFromBelow, CycleResultPresentation, DeleteResultRow, DuplicateResultRow,
+    EnterCellEdit, ExecuteSql, FetchAllData, FetchNextSegment, FocusRowJump, GotoColumn,
+    HideCurrentColumn, InsertResultRow, OpenFilterSettings, RedoResultEdit, RejectPendingChanges,
+    SelectCurrentColumn, SelectCurrentRow, ShowHiddenColumns, SwitchFilterFocus, UndoResultEdit,
 };
 
 use super::*;
@@ -283,6 +284,141 @@ impl EditorHostPanel {
             .update(cx, |panel, cx| panel.open_goto_column(window, cx));
         if !opened {
             self.set_message(Some("这份结果还没有列可跳；先执行查询".to_string()), cx);
+        }
+    }
+
+    /// 【第 77 批】`CTRL+ALT+SHIFT+T`：焦点在「筛选框」与「结果呈现」之间来回切
+    /// （DBeaver `CMD_FOCUS_FILTER` → `ResultSetViewer.switchFilterFocus()`，
+    /// `plugin.xml:1058`；`ResultSetHandlerMain:179-181`）。
+    ///
+    /// 键位挂 `RESULT_PANEL_CONTEXT`（上游同一条也绑 `...context.resultset`，不是
+    /// `...focused` 变体）——焦点已经在筛选框里时也必须命中，否则「切回来」那一半按不到。
+    /// 筛选区收起时留一句提示。
+    pub(crate) fn on_switch_filter_focus(
+        &mut self,
+        _: &SwitchFilterFocus,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let switched = self
+            .result_panel
+            .update(cx, |panel, cx| panel.switch_filter_focus(window, cx));
+        if !switched {
+            self.set_message(
+                Some("筛选区已收起：在工具栏里打开「显示过滤器面板」后再按".to_string()),
+                cx,
+            );
+        }
+    }
+
+    /// 【第 76 批】结果网格 `CTRL+ALT+C`：选中当前格所在的整列
+    /// （DBeaver `CMD_SELECT_COLUMNS`，`plugin.xml:1088`；
+    /// `SpreadsheetCommandHandler:106-118`）。
+    ///
+    /// 没有当前格 / 当前格在行号槽时留一句提示（第 69 批「键位不可用要说话」口径）。
+    pub(crate) fn on_select_current_column(
+        &mut self,
+        _: &SelectCurrentColumn,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let selected = self
+            .result_panel
+            .update(cx, |panel, cx| panel.select_current_column(cx));
+        if !selected {
+            self.set_message(Some("先在网格里选中一个数据格再选列".to_string()), cx);
+        }
+    }
+
+    /// 【第 76 批】结果网格 `CTRL+ALT+R`：选中当前格所在的整行
+    /// （DBeaver `CMD_SELECT_ROWS`，`plugin.xml:1089`；
+    /// `SpreadsheetCommandHandler:119-131`）。
+    pub(crate) fn on_select_current_row(
+        &mut self,
+        _: &SelectCurrentRow,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let selected = self
+            .result_panel
+            .update(cx, |panel, cx| panel.select_current_row(cx));
+        if !selected {
+            self.set_message(Some("先在网格里选中一个数据格再选行".to_string()), cx);
+        }
+    }
+
+    /// 【第 78 批】`ALT+SHIFT+H`：隐藏当前格所在的列
+    /// （DBeaver `CMD_HIDE_COLUMNS`，`plugin.xml:1096`；
+    /// `SpreadsheetCommandHandler:174-194`）。
+    ///
+    /// 上游在「选中列 >= 可见列总数」时弹 ERROR 框；本仓走状态栏一句话（第 69 批口径）。
+    pub(crate) fn on_hide_current_column(
+        &mut self,
+        _: &HideCurrentColumn,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let result = self
+            .result_panel
+            .update(cx, |panel, cx| panel.hide_current_column(window, cx));
+        if let Err(reason) = result {
+            self.set_message(Some(reason), cx);
+        }
+    }
+
+    /// 【第 80 批】`ALT+SHIFT+F`：打开筛选设置浮层
+    /// （DBeaver `CMD_FILTER_EDIT_SETTINGS`，`plugin.xml:1094`；handler `:570` →
+    /// `ResultSetHandlerMain:546-549` → `ResultSetViewer.showFilterSettingsDialog()`
+    /// `:644-646` = `new FilterSettingsDialog(viewer).open()`）。
+    ///
+    /// 上游这条命令**不判任何条件**，键位与筛选条那颗 FILTER 钮
+    /// （`ResultSetFilterPanel:330-338`）落到同一个对话框；本仓同口径：直接开面板内浮层，
+    /// 不额外查「有没有结果」（没有结果时面板子树不渲染，键位自然不命中——与第 77/78 批一致）。
+    /// 打开本身就是可见反馈，所以**不留 message**（上游也不出声）。
+    pub(crate) fn on_open_filter_settings(
+        &mut self,
+        _: &OpenFilterSettings,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.result_panel
+            .update(cx, |panel, cx| panel.open_filter_settings(window, cx));
+    }
+
+    /// 【第 79 批】`ALT+SHIFT+C`：复制列名
+    /// （DBeaver `CMD_COPY_COLUMN_NAMES`，`plugin.xml:1095`；`ResultSetHandlerMain:333-375`）。
+    ///
+    /// 上游复制完不出声；本仓按既有复制口径留一句「已复制 N 个列名」（键位要说话）。
+    pub(crate) fn on_copy_column_names(
+        &mut self,
+        _: &CopyColumnNames,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let result = self
+            .result_panel
+            .update(cx, |panel, cx| panel.copy_column_names(cx));
+        match result {
+            Ok(1) => self.set_message(Some("已复制列名".to_string()), cx),
+            Ok(count) => self.set_message(Some(format!("已复制 {count} 个列名（TSV）")), cx),
+            Err(reason) => self.set_message(Some(reason), cx),
+        }
+    }
+
+    /// 【第 78 批】`ALT+SHIFT+T`：把所有隐藏列显示回来
+    /// （DBeaver `CMD_SHOW_COLUMNS`，`plugin.xml:1097`；
+    /// `SpreadsheetCommandHandler:195-212`）。
+    pub(crate) fn on_show_hidden_columns(
+        &mut self,
+        _: &ShowHiddenColumns,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let shown = self
+            .result_panel
+            .update(cx, |panel, cx| panel.show_hidden_columns(window, cx));
+        if !shown {
+            self.set_message(Some("现在没有隐藏的列".to_string()), cx);
         }
     }
 

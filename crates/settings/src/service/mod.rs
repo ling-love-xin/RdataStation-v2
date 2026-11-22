@@ -177,6 +177,22 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
             SettingValue::Number(settings.sql_format.blank_lines_between as f64)
         }
         Slot::SqlFormatOnSave => SettingValue::Bool(settings.sql_format.format_on_save),
+        Slot::SqlFormatLineWidth => SettingValue::Number(settings.sql_format.line_width as f64),
+        Slot::SqlFormatClauseStyle => {
+            SettingValue::Text(settings.sql_format.clause_style.clone())
+        }
+        Slot::SqlFormatNewLineKind => {
+            SettingValue::Text(settings.sql_format.new_line_kind.clone())
+        }
+        Slot::SqlFormatIgnoreNodeText => {
+            SettingValue::Text(settings.sql_format.ignore_node_comment_text.clone())
+        }
+        Slot::SqlFormatIgnoreFileText => {
+            SettingValue::Text(settings.sql_format.ignore_file_comment_text.clone())
+        }
+        Slot::SqlFormatNormalizeOperators => {
+            SettingValue::Bool(settings.sql_format.normalize_operators)
+        }
         Slot::ResultPanelFactStorage => {
             SettingValue::Text(settings.result_panel.fact_storage.as_str().to_string())
         }
@@ -313,11 +329,14 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::NotificationSuccessAutohideSecs => {
             SettingValue::Number(settings.notifications.success_autohide_secs as f64)
         }
+        Slot::NotificationInfoAutohideSecs => {
+            SettingValue::Number(settings.notifications.info_autohide_secs as f64)
+        }
         Slot::NotificationWarningAutohideSecs => {
             SettingValue::Number(settings.notifications.warning_autohide_secs as f64)
         }
-        Slot::NotificationErrorAutohide => {
-            SettingValue::Bool(settings.notifications.error_autohide)
+        Slot::NotificationErrorAutohideSecs => {
+            SettingValue::Number(settings.notifications.error_autohide_secs as f64)
         }
         Slot::NotificationMergeWindowSecs => {
             SettingValue::Number(settings.notifications.merge_window_secs as f64)
@@ -332,7 +351,8 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
             SettingValue::Bool(settings.notifications.success_to_system)
         }
         Slot::NotificationInfoToSystem => SettingValue::Bool(settings.notifications.info_to_system),
-        Slot::NotificationDoNotDisturb => SettingValue::Bool(settings.notifications.do_not_disturb),
+        Slot::NotificationSilentInApp => SettingValue::Bool(settings.notifications.silent_in_app),
+        Slot::NotificationSilentSystem => SettingValue::Bool(settings.notifications.silent_system),
     })
 }
 
@@ -438,7 +458,13 @@ impl SettingsService {
             | Slot::SqlFormatIndentWidth
             | Slot::SqlFormatCommaStyle
             | Slot::SqlFormatBlankLines
-            | Slot::SqlFormatOnSave => sql_format::apply_slot(slot, value, window, cx),
+            | Slot::SqlFormatOnSave
+            | Slot::SqlFormatLineWidth
+            | Slot::SqlFormatClauseStyle
+            | Slot::SqlFormatNewLineKind
+            | Slot::SqlFormatIgnoreNodeText
+            | Slot::SqlFormatIgnoreFileText
+            | Slot::SqlFormatNormalizeOperators => sql_format::apply_slot(slot, value, window, cx),
             Slot::ResultPanelFactStorage
             | Slot::ResultPanelShowColumnComments
             | Slot::ResultPanelShowTypeBadge
@@ -483,14 +509,16 @@ impl SettingsService {
                 layout::apply_slot(slot, value, window, cx)
             }
             Slot::NotificationSuccessAutohideSecs
+            | Slot::NotificationInfoAutohideSecs
             | Slot::NotificationWarningAutohideSecs
-            | Slot::NotificationErrorAutohide
+            | Slot::NotificationErrorAutohideSecs
             | Slot::NotificationMergeWindowSecs
             | Slot::NotificationErrorToSystem
             | Slot::NotificationWarningToSystem
             | Slot::NotificationSuccessToSystem
             | Slot::NotificationInfoToSystem
-            | Slot::NotificationDoNotDisturb => notifications::apply_slot(slot, value, window, cx),
+            | Slot::NotificationSilentInApp
+            | Slot::NotificationSilentSystem => notifications::apply_slot(slot, value, window, cx),
         }
     }
 }

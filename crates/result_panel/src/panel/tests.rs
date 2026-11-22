@@ -5777,3 +5777,354 @@ fn an_unknown_column_keeps_the_overlay_open_with_the_reason(
     cx.update(|window, app| panel.update(app, |p, cx| p.submit_goto_column(window, cx)));
     assert!(!cx.update(|_w, app| panel.read(app).goto_column_for_test(app)));
 }
+
+/// 【第 76 批】`CTRL+ALT+C` 选列（DBeaver `CMD_SELECT_COLUMNS`，
+/// `SpreadsheetCommandHandler:106-118`）：当前格所在的**整列**选中，
+/// 组件列 = 显示列 + 1（0 是行号槽）；行号槽里的格不算数据列。
+///
+/// 上游是把「选中列 × 所有行」拼成单元格集合（多区域），本仓选区是单区域的，
+/// 等价表达取组件整列选中——口径差异记在 `result-panel.md` §9.59.2。
+#[gpui_kit::test]
+fn select_column_goes_to_the_column_under_the_current_cell(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    let grid = cx.update(|_w, app| panel.read(app).grid.clone());
+
+    // 当前格 = (行 0, 组件列 1) → 数据列 0
+    cx.update(|_w, app| grid.update(app, |state, cx| state.set_selected_cell(0, 1, cx)));
+    assert!(
+        cx.update(|_w, app| panel.update(app, |p, cx| p.select_current_column(cx))),
+        "有当前数据格时选列要成立"
+    );
+    let (component_col, data_col) = cx.update(|_w, app| {
+        (
+            grid.read(app).selected_col(),
+            panel.read(app).selected_col,
+        )
+    });
+    assert_eq!(
+        component_col,
+        Some(1),
+        "组件整列选中落在显示列 0 上（0 是行号槽，不能左移）"
+    );
+    assert_eq!(data_col, Some(0), "右栏列浏览器跟到数据列 0");
+
+    // 移到第 2 个数据列（组件列 2）→ 数据列 1
+    cx.update(|_w, app| grid.update(app, |state, cx| state.set_selected_cell(1, 2, cx)));
+    assert!(
+        cx.update(|_w, app| panel.update(app, |p, cx| p.select_current_column(cx))),
+        "换到第 2 列后照样成立"
+    );
+    let (component_col, data_col) = cx.update(|_w, app| {
+        (
+            grid.read(app).selected_col(),
+            panel.read(app).selected_col,
+        )
+    });
+    assert_eq!(component_col, Some(2));
+    assert_eq!(data_col, Some(1));
+
+    // 行号槽（组件列 0）没有数据列可跟
+    cx.update(|_w, app| grid.update(app, |state, cx| state.set_selected_cell(0, 0, cx)));
+    assert!(
+        !cx.update(|_w, app| panel.update(app, |p, cx| p.select_current_column(cx))),
+        "行号槽不当作数据列（宿主据此留提示）"
+    );
+
+    // 没有当前格
+    cx.update(|_w, app| panel.update(app, |p, _cx| p.selection_pos = None));
+    assert!(!cx.update(|_w, app| panel.update(app, |p, cx| p.select_current_column(cx))));
+}
+
+/// 【第 76 批】`CTRL+ALT+R` 选行（DBeaver `CMD_SELECT_ROWS`，
+/// `SpreadsheetCommandHandler:119-131`）：组件整行选中 + 状态行那口「已选第 N 行」
+/// 同步写（1 基）——行级三钮 / 「修改」钮都读 `status.selected_row`，不写的话
+/// 按完键位它们仍全是灰的。
+#[gpui_kit::test]
+fn select_row_marks_the_row_and_the_status_line(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // harness 出厂没有状态行；先装一条（set_selected_row 只写既有的 status）
+    cx.update(|_w, app| {
+        panel.update(app, |p, _cx| {
+            p.status = Some(crate::grid::ResultStatus {
+                total_rows: 2,
+                selected_row: None,
+                selected_cell: None,
+                truncated_hint: None,
+                has_more: false,
+                selected_rows: 0,
+                selected_columns: 0,
+                selected_cells: 0,
+            });
+        });
+    });
+    let grid = cx.update(|_w, app| panel.read(app).grid.clone());
+
+    // 当前格 = (行 1, 组件列 1)
+    cx.update(|_w, app| grid.update(app, |state, cx| state.set_selected_cell(1, 1, cx)));
+    assert!(
+        cx.update(|_w, app| panel.update(app, |p, cx| p.select_current_row(cx))),
+        "有当前格时选行要成立"
+    );
+    let (component_row, status_row) = cx.update(|_w, app| {
+        (
+            grid.read(app).selected_row(),
+            panel.read(app).status.as_ref().and_then(|s| s.selected_row),
+        )
+    });
+    assert_eq!(component_row, Some(1), "组件整行选中（delegate 据此铺色）");
+    assert_eq!(
+        status_row,
+        Some(2),
+        "状态行写 1 基行号（`row_target_state` 靠它把行级动作解开）"
+    );
+
+    // 行级门控真的跟着打开（harness 出厂只读，先打开可编辑）
+    cx.update(|_w, app| panel.update(app, |p, _cx| p.editable = true));
+    let target = cx.update(|_w, app| panel.read(app).row_target_state(app));
+    assert_eq!(target.row, Some(1), "0 基视图行");
+    assert!(target.actions.copy && target.actions.delete, "整行选中后行级三钮可用");
+
+    // 没有当前格
+    cx.update(|_w, app| panel.update(app, |p, _cx| p.selection_pos = None));
+    assert!(!cx.update(|_w, app| panel.update(app, |p, cx| p.select_current_row(cx))));
+}
+
+/// 【第 77 批】`CTRL+ALT+SHIFT+T` 双向往返（DBeaver
+/// `ResultSetViewer.switchFilterFocus:689-701`）：网格焦点 → 筛选框；再按 → 回网格
+/// （网格态走 `presentation_focus_target`）。
+#[gpui_kit::test]
+fn switching_the_filter_focus_goes_both_ways(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::Focusable as _;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    let (grid_handle, filter_handle) = cx.update(|_w, app| {
+        let grid = panel.read(app).grid.read(app).focus_handle(app);
+        let filter = panel.read(app).filter_focus_handle(app);
+        (grid, filter)
+    });
+
+    cx.update(|window, cx| window.focus(&grid_handle, cx));
+    assert!(
+        cx.update(|window, app| panel.update(app, |p, cx| p.switch_filter_focus(window, cx))),
+        "筛选区在摆着，切换要成立"
+    );
+    assert_eq!(
+        cx.update(|window, app| window.focused(app)),
+        Some(filter_handle.clone()),
+        "第一次按：焦点进筛选框"
+    );
+
+    assert!(
+        cx.update(|window, app| panel.update(app, |p, cx| p.switch_filter_focus(window, cx))),
+        "第二次按也要成立"
+    );
+    assert_eq!(
+        cx.update(|window, app| window.focused(app)),
+        Some(grid_handle),
+        "第二次按：焦点交回呈现（网格态 = 网格）"
+    );
+}
+
+/// 【第 77 批】筛选区收起（`show_filter_panel == false`，对应上游 `setVisible(false)`）：
+/// 不动作、返回 false（宿主留提示）。上游在 `filtersPanel == null` 时静默 return，
+/// 本仓键位没有「灰」这一态，所以由宿主说话。
+#[gpui_kit::test]
+fn switching_the_filter_focus_does_nothing_when_the_filter_area_is_collapsed(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|_w, app| panel.update(app, |p, _cx| p.show_filter_panel = false));
+
+    assert!(
+        !cx.update(|window, app| panel.update(app, |p, cx| p.switch_filter_focus(window, cx))),
+        "筛选区收起时不切焦点"
+    );
+}
+
+/// 【第 78 批】`ALT+SHIFT+H` 隐藏当前列（DBeaver `CMD_HIDE_COLUMNS`，
+/// `SpreadsheetCommandHandler:174-194`）：当前格所在的数据列进隐藏清单、可见列少一列；
+/// 当前格按同一视觉列位重投影（指向后面那一列，而不是被藏掉的那一列）。
+#[gpui_kit::test]
+fn hiding_the_current_column_takes_it_out_of_the_view(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    let grid = cx.update(|_w, app| panel.read(app).grid.clone());
+
+    // harness 出厂两列，这里扩成三列，才能藏「中间一列」——只剩两列时藏右端那一列
+    // 会让组件列位越界（那条分支由代码清选，见 `hide_current_column` 的说明）
+    cx.update(|_w, app| {
+        grid.update(app, |state, cx| {
+            state.delegate_mut().set_data(
+                vec!["a".to_string(), "b".to_string(), "c".to_string()],
+                vec![vec!["1".to_string(), "2".to_string(), "3".to_string()]],
+            );
+            state.refresh(cx);
+        })
+    });
+
+    // 组件列 2 = 数据列 1（`b`）
+    cx.update(|_w, app| grid.update(app, |state, cx| state.set_selected_cell(0, 2, cx)));
+    assert_eq!(
+        cx.update(|_w, app| panel.read(app).grid.read(app).delegate().visible_column_count()),
+        3,
+        "三列都可见"
+    );
+
+    let result = cx.update(|window, app| {
+        panel.update(app, |p, cx| p.hide_current_column(window, cx))
+    });
+    assert!(result.is_ok(), "有当前列且不止一列时可隐藏：{result:?}");
+
+    let after = cx.update(|_w, app| {
+        let delegate = panel.read(app).grid.read(app).delegate();
+        (
+            delegate.visible_column_count(),
+            delegate.hidden_count(),
+            delegate.is_hidden_column(1),
+            panel.read(app).selection_pos,
+            panel.read(app).selected_col,
+        )
+    });
+    assert_eq!(after.0, 2, "可见列少一列");
+    assert_eq!(after.1, 1, "隐藏清单只有这一列");
+    assert!(after.2, "藏掉的是数据列 1（b）");
+    assert_eq!(
+        after.3,
+        Some((0, 2)),
+        "当前格停在原视觉列位（此时指向 c），不是被藏掉的 b"
+    );
+    assert_eq!(after.4, Some(2), "右栏选中列跟着投影到 c");
+}
+
+/// 【第 78 批】只剩一列时再藏被拒：上游 `selectedColumns.size() >=
+/// model.getVisibleAttributeCount()` 就弹 ERROR 框（`SpreadsheetCommandHandler:182-186`），
+/// 本仓等价判据 = 可见列只剩 1 列，理由交宿主说。
+#[gpui_kit::test]
+fn hiding_the_last_visible_column_is_refused(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 先把 amount 藏掉，只剩 id
+    cx.update(|_w, app| panel.update(app, |p, cx| p.set_columns_hidden(vec![1], true, cx)));
+    assert_eq!(
+        cx.update(|_w, app| panel.read(app).grid.read(app).delegate().visible_column_count()),
+        1,
+        "先藏到只剩一列"
+    );
+
+    // 组件列 1 = 剩下的数据列 0（id）
+    cx.update(|_w, app| {
+        let grid = panel.read(app).grid.clone();
+        grid.update(app, |state, cx| state.set_selected_cell(0, 1, cx))
+    });
+    let result = cx.update(|window, app| {
+        panel.update(app, |p, cx| p.hide_current_column(window, cx))
+    });
+    let reason = result.err().unwrap_or_default();
+    assert!(reason.contains("最后一列"), "要说明原因，实际是：{reason}");
+    assert_eq!(
+        cx.update(|_w, app| panel.read(app).grid.read(app).delegate().visible_column_count()),
+        1,
+        "底线守住：仍有一列可见"
+    );
+}
+
+/// 【第 79 批】`ALT+SHIFT+C` 复制列名（DBeaver `CMD_COPY_COLUMN_NAMES`，
+/// `plugin.xml:1095`；`ResultSetHandlerMain:333-375`）。
+///
+/// 上游列集合只有两级：表格选区为空 → `getVisibleAttributes()`（全部可见列）；
+/// 否则用选中的列。本仓单区域选区的等价 = 当前格所在列 → 全部可见列（跳过隐藏）。
+/// 右栏的列选中不参与（上游那是另一个部件），所以 harness 预置的 `selected_col`
+/// 在这里不起作用。
+#[gpui_kit::test]
+fn copying_column_names_uses_the_current_cell_then_every_visible_column(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    let clipboard = |cx: &mut gpui_kit::VisualTestContext| {
+        cx.update(|_w, app| app.read_from_clipboard().and_then(|item| item.text()))
+    };
+
+    // ① 没有当前格：全部可见列（数据序，Tab 分隔）
+    assert_eq!(
+        cx.update(|_w, app| panel.read(app).selection_pos),
+        None,
+        "前提：harness 出厂没有当前格"
+    );
+    let count = cx.update(|_w, app| panel.update(app, |p, cx| p.copy_column_names(cx)));
+    assert_eq!(count, Ok(2), "两列都可见");
+    assert_eq!(clipboard(cx).as_deref(), Some("id\tamount"), "Tab 分隔");
+
+    // ② 当前格所在列盖过全量（组件列 2 = 数据列 1 = `amount`）
+    cx.update(|window, app| {
+        let grid = panel.read(app).grid.clone();
+        grid.update(app, |state, cx| state.set_selected_cell(0, 2, cx));
+        panel.update(app, |p, cx| p.set_selection_pos(Some((0, 2)), window, cx));
+    });
+    let count = cx.update(|_w, app| panel.update(app, |p, cx| p.copy_column_names(cx)));
+    assert_eq!(count, Ok(1), "只拷这一列");
+    assert_eq!(clipboard(cx).as_deref(), Some("amount"), "单列不加分隔符");
+
+    // ③ 那一列被藏掉 → 当前格不在可见列上，退回全部可见列
+    cx.update(|_w, app| panel.update(app, |p, cx| p.set_columns_hidden(vec![1], true, cx)));
+    let count = cx.update(|_w, app| panel.update(app, |p, cx| p.copy_column_names(cx)));
+    assert_eq!(count, Ok(1), "只剩一列可见");
+    assert_eq!(clipboard(cx).as_deref(), Some("id"), "隐藏的那列不拷");
+}
+
+/// 【第 79 批】上游没有「空文本」这种特判：`buffer` 为空时 `copyToClipboard("")` 照拷。
+/// 本仓把「一列都没有」当不可执行（键位要说话），不拿空串盖掉用户剪贴板。
+#[gpui_kit::test]
+fn copying_column_names_is_refused_without_columns(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|_w, app| {
+        let grid = panel.read(app).grid.clone();
+        grid.update(app, |state, cx| {
+            state.delegate_mut().set_data(Vec::new(), Vec::new());
+            state.refresh(cx);
+        });
+    });
+    let result = cx.update(|_w, app| panel.update(app, |p, cx| p.copy_column_names(cx)));
+    let reason = result.err().unwrap_or_default();
+    assert!(
+        reason.contains("没有可复制的列"),
+        "要说明原因，实际是：{reason}"
+    );
+}
+
+/// 【第 78 批 · 越界分支】藏掉**最右一列**时当前格的列位越界 → 清 `selection_pos`
+/// （78 批那条三列用例只覆盖了「中间列、同列位重投影」这一支）。
+/// 右栏 `selected_col` 按既有口径「清选保持清单当前选中」，这里一并把这条口径钉住。
+#[gpui_kit::test]
+fn hiding_the_rightmost_column_clears_the_current_cell(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    let grid = cx.update(|_w, app| panel.read(app).grid.clone());
+
+    // 组件列 2 = 数据列 1（`amount`，右端）
+    cx.update(|_w, app| grid.update(app, |state, cx| state.set_selected_cell(0, 2, cx)));
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_w, app| panel.read(app).selection_pos),
+        Some((0, 2)),
+        "前提：当前格在最右一列"
+    );
+
+    let result = cx.update(|window, app| {
+        panel.update(app, |p, cx| p.hide_current_column(window, cx))
+    });
+    assert!(result.is_ok(), "可以藏：{result:?}");
+    cx.run_until_parked();
+
+    let selection_pos = cx.update(|_w, app| panel.read(app).selection_pos);
+    assert_eq!(selection_pos, None, "越界清选：不让格指着空气");
+}

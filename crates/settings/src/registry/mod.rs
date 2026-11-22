@@ -204,6 +204,18 @@ pub enum Slot {
     SqlFormatBlankLines,
     /// 保存时自动格式化 SQL（默认关）。
     SqlFormatOnSave,
+    /// 【2026-11-22】行宽（超宽折行；默认 120 = dprint 推荐，lax `lineWidth`）。
+    SqlFormatLineWidth,
+    /// 子句布局（`"fill"` 子句内按行宽打包 / `"expanded"` 一行一项；lax `clauseStyle`）。
+    SqlFormatClauseStyle,
+    /// 换行符（`"auto"` 跟随原文多数换行 / `"lf"` / `"crlf"`；lax `newLineKind`）。
+    SqlFormatNewLineKind,
+    /// 节点级忽略标记文本（命中该注释的节点不排版；lax `ignoreNodeCommentText`）。
+    SqlFormatIgnoreNodeText,
+    /// 文件级忽略标记文本（整篇命中则不排版；lax `ignoreFileCommentText`）。
+    SqlFormatIgnoreFileText,
+    /// 【2026-11-22 第三轮】运算符两侧补空格（`a=1` → `a = 1`；默认关）。
+    SqlFormatNormalizeOperators,
     /// 结果集事实档载体偏好（auto / memory / table；分流纯函数在 `shared::fact`，
     /// 触发物化路径 B 批接通消费）。
     ResultPanelFactStorage,
@@ -277,14 +289,16 @@ pub enum Slot {
     /// 右侧侧边栏宽度（默认 300px；render 时同步到 DockArea::set_dock_size）。
     LayoutRightSidebarWidth,
     NotificationSuccessAutohideSecs,
+    NotificationInfoAutohideSecs,
     NotificationWarningAutohideSecs,
-    NotificationErrorAutohide,
+    NotificationErrorAutohideSecs,
     NotificationMergeWindowSecs,
     NotificationErrorToSystem,
     NotificationWarningToSystem,
     NotificationSuccessToSystem,
     NotificationInfoToSystem,
-    NotificationDoNotDisturb,
+    NotificationSilentInApp,
+    NotificationSilentSystem,
 }
 
 /// key → 槽位（登记项都必须有槽位；由契约测试保证）。
@@ -352,6 +366,12 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "sql_format.comma_style" => Slot::SqlFormatCommaStyle,
         "sql_format.blank_lines_between" => Slot::SqlFormatBlankLines,
         "sql_format.format_on_save" => Slot::SqlFormatOnSave,
+        "sql_format.line_width" => Slot::SqlFormatLineWidth,
+        "sql_format.clause_style" => Slot::SqlFormatClauseStyle,
+        "sql_format.new_line_kind" => Slot::SqlFormatNewLineKind,
+        "sql_format.ignore_node_comment_text" => Slot::SqlFormatIgnoreNodeText,
+        "sql_format.ignore_file_comment_text" => Slot::SqlFormatIgnoreFileText,
+        "sql_format.normalize_operators" => Slot::SqlFormatNormalizeOperators,
         "result_panel.fact_storage" => Slot::ResultPanelFactStorage,
         "result_panel.show_column_comments" => Slot::ResultPanelShowColumnComments,
         "result_panel.show_type_badge" => Slot::ResultPanelShowTypeBadge,
@@ -396,14 +416,16 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "layout.left_sidebar_width" => Slot::LayoutLeftSidebarWidth,
         "layout.right_sidebar_width" => Slot::LayoutRightSidebarWidth,
         "notifications.success_autohide_secs" => Slot::NotificationSuccessAutohideSecs,
+        "notifications.info_autohide_secs" => Slot::NotificationInfoAutohideSecs,
         "notifications.warning_autohide_secs" => Slot::NotificationWarningAutohideSecs,
-        "notifications.error_autohide" => Slot::NotificationErrorAutohide,
+        "notifications.error_autohide_secs" => Slot::NotificationErrorAutohideSecs,
         "notifications.merge_window_secs" => Slot::NotificationMergeWindowSecs,
         "notifications.error_to_system" => Slot::NotificationErrorToSystem,
         "notifications.warning_to_system" => Slot::NotificationWarningToSystem,
         "notifications.success_to_system" => Slot::NotificationSuccessToSystem,
         "notifications.info_to_system" => Slot::NotificationInfoToSystem,
-        "notifications.do_not_disturb" => Slot::NotificationDoNotDisturb,
+        "notifications.silent_in_app" => Slot::NotificationSilentInApp,
+        "notifications.silent_system" => Slot::NotificationSilentSystem,
         _ => return None,
     })
 }
@@ -515,25 +537,35 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         | Slot::ResultPanelFontBlob => KindTag::Enum,
         Slot::LayoutLocked => KindTag::Bool,
         Slot::LayoutLeftSidebarWidth | Slot::LayoutRightSidebarWidth => KindTag::Number,
-        // 【通知】三个秒数（0 = 不自动消失 / 不合并）是数值，其余（自动消失、
-        // 推送到系统、勿扰）都是布尔。
+        // 【通知】四种秒数（0 = 不自动消失 / 不合并）都是数值；推送到系统与
+        // 两个静音开关是布尔。
         Slot::NotificationSuccessAutohideSecs
+        | Slot::NotificationInfoAutohideSecs
         | Slot::NotificationWarningAutohideSecs
+        | Slot::NotificationErrorAutohideSecs
         | Slot::NotificationMergeWindowSecs => KindTag::Number,
-        Slot::NotificationErrorAutohide
-        | Slot::NotificationErrorToSystem
+        Slot::NotificationErrorToSystem
         | Slot::NotificationWarningToSystem
         | Slot::NotificationSuccessToSystem
         | Slot::NotificationInfoToSystem
-        | Slot::NotificationDoNotDisturb => KindTag::Bool,
+        | Slot::NotificationSilentInApp
+        | Slot::NotificationSilentSystem => KindTag::Bool,
         // 【2026-11-19】SQL 格式化独立节（六旋钮，原 editor.format_* 三键迁出）：
         // 关键字大小写 / 缩进字符 / 逗号风格是枚举，缩进宽度 / 语句间空行是数值，
         // 保存时格式化是布尔。
+        // 【2026-11-22】排版换 lax 后补五项：子句布局 / 换行符是枚举，行宽是数值，
+        // 两个忽略标记是自由文本。
         Slot::SqlFormatKeywordCase
         | Slot::SqlFormatIndentChar
-        | Slot::SqlFormatCommaStyle => KindTag::Enum,
-        Slot::SqlFormatIndentWidth | Slot::SqlFormatBlankLines => KindTag::Number,
+        | Slot::SqlFormatCommaStyle
+        | Slot::SqlFormatClauseStyle
+        | Slot::SqlFormatNewLineKind => KindTag::Enum,
+        Slot::SqlFormatIndentWidth
+        | Slot::SqlFormatBlankLines
+        | Slot::SqlFormatLineWidth => KindTag::Number,
         Slot::SqlFormatOnSave => KindTag::Bool,
+        Slot::SqlFormatNormalizeOperators => KindTag::Bool,
+        Slot::SqlFormatIgnoreNodeText | Slot::SqlFormatIgnoreFileText => KindTag::Text,
     }
 }
 

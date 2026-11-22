@@ -9185,6 +9185,619 @@ editor（`view/tests/results_a.rs`）：
 - `SHIFT+ENTER`、`ESC`（`cell.reset`）、`CTRL+BACKSPACE`、`CTRL+ALT+C` / `CTRL+ALT+R`、
   `ALT+SHIFT+ARROW` 仍未接，见 §9.48.5。
 
+### 9.59 第 76 批：`CTRL+ALT+C` / `CTRL+ALT+R` 选列 / 选行（`CMD_SELECT_COLUMNS` / `CMD_SELECT_ROWS`）
+
+#### 9.59.1 缺口
+
+`plugin.xml:1088/1089` 两条键位一直没绑。更要紧的是**行为缺口**：网格「整行选中」
+（`TableEvent::SelectRow`）那条事件路径只镜像 delegate 的铺色，不写状态行
+`status.selected_row`；而第 64 / 69 批的行级三钮、邻行复制、「修改」钮**全都读那口**
+（`row_target_state → status.selected_row`），所以整行选中之后这些动作仍然全灰，
+用户看不出「行已经选中了」。本批给这条路径补键位入口，并顺手把状态那口补齐。
+
+`CTRL+BACKSPACE`（`CMD_CELL_SET_DEFAULT`）同族，但语义是**驱动侧默认值**
+（`ResultSetHandlerMain:258-296` → `DBDValueDefaultGenerator.generateDefaultValue(session, valueType)`，
+需开 `DBCSession`），本仓没有驱动侧默认值生成通道，**结构性不可行**，只记档不实现
+（与第 67 批「重置单元格」同一口径）。
+
+#### 9.59.2 DBeaver 依据
+
+- 键位：`plugin.xml:1088` `CTRL+ALT+C` → `org.jkiss.dbeaver.core.resultset.grid.selectColumn`；
+  `:1089` `CTRL+ALT+R` → `...grid.selectRow`（context `...resultset.focused`）。
+- 这两个 action **不进** `ResultSetHandlerMain`，在
+  `plugins/org.jkiss.dbeaver.ui.editors.data/src/org/jkiss/dbeaver/ui/controls/resultset/spreadsheet/SpreadsheetCommandHandler.java`：
+  - `:55/56` 常量 `CMD_SELECT_COLUMNS` / `CMD_SELECT_ROWS`；
+  - `:106-118` 选列 = 取 `getColumnSelection()` 的每一列 × `0..rowsCount` 组成 `GridPos` 集合 →
+    `s.selectCells(cellsToSelect)` → `resetFocus()` → `setFocusColumn(focusPos.col)`（**焦点列保留**）；
+  - `:119-131` 选行 = 对称（每一行 × `0..columnsCount`），末尾 `setFocusItem(focusPos.row)`（**焦点行保留**）。
+- 本质：把「已选列 / 行」**扩成整列 / 整行的单元格集合**，焦点格复位但焦点列 / 行不丢。
+
+#### 9.59.3 落点：单区域选区的等价表达
+
+本仓组件选区是单区域三态（`SelectionMode::{Cell, Row, Column}`，
+`vendor/gpui-component/src/table/state.rs:536/589`），没有上游那种任意多单元格集合。
+所以对齐取等价表达：
+
+| DBeaver | 本仓 |
+| --- | --- |
+| 选中列 × 所有行 → 单元格集合 | 组件**整列选中**（`set_selected_col(view_col + 1)`） |
+| 选中行 × 所有列 → 单元格集合 | 组件**整行选中**（`set_selected_row(view_row)`）+ 状态行写 1 基行号 |
+
+多区域 / 多选的连续分区语义本批仍不做（§9.48.5 记档的另一条）。
+
+#### 9.59.4 落地
+
+| 层 | 东西 |
+| --- | --- |
+| action | `result_panel::grid::SelectCurrentColumn` / `SelectCurrentRow` |
+| 面板 | `ResultPanel::select_current_column(cx) -> bool`：取 `selection_pos` 的组件列（0 是行号槽，**不选**）→ `delegate.data_column_checked(col - 1)` → 复用既有 `select_column(data_col)` |
+| 面板 | `ResultPanel::select_current_row(cx) -> bool`：取 `selection_pos` 的视图行 → `grid.set_selected_row(row)` + `set_selected_row(Some(row + 1))`（写 1 基状态行） |
+| 宿主 | `EditorHostPanel::on_select_current_column` / `on_select_current_row`（`exec/edit_cmds.rs`）：返回 `false` 留提示（「先在网格里选中一个数据格再选列 / 选行」） |
+| 渲染 | `view/host/render.rs` 两条 `.on_action` |
+| 键位 | `ctrl-alt-c` / `ctrl-alt-r` → `RESULT_GRID_CONTEXT`（`app/main.rs` + 测试 `bind_editor_keys`）；两个键此前都空着（既有 ctrl-alt 只有 d / n / insert） |
+
+`grid/mod.rs` 顶部键位注释同时补了 `:1088/:1089/:1090` 三行（`:1090` 是第 75 批漏记的一条）。
+
+#### 9.59.5 选行为什么要写状态行
+
+`SelectRow` 事件路径（`panel/lifecycle.rs::handle_grid_event`）只镜像 delegate 铺色，
+不写 `status.selected_row`；而 `row_target_state`（`panel/events.rs`）**只认**
+`status.selected_row`（`saturating_sub(1)` 折视图行）。所以：
+
+- 只调组件 `set_selected_row` → 网格整行铺色、行级三钮仍灰、`ALT+DELETE` / `CTRL+D` 仍报
+  「先在网格里选中一行」——视觉上已经「选中了一行」，动作却不可用；
+- 补写 `status.selected_row(row + 1)` → 三钮 / 邻行复制 / 「修改」钮当场可用。
+
+既有缺口照旧：`sync_result_view` 会全量覆写 status（`selected_row: None`），取段 / 刷新
+之后状态行不再记「已选第 N 行」。本批不改那条（§9.48.5 已记档），只保证**按键当下**成立。
+
+#### 9.59.6 有意差异
+
+- 上游是「多区域单元格集合」，本仓是单区域整列 / 整行选中（见 §9.59.3）。
+- 上游 `resetFocus()` 之后焦点格无值；本仓 `selection_pos` 保留原格——行级动作的行判据
+  （第 66 批「修改」钮取 `selection_pos`）不会因为选行 / 选列而丢。
+- 行号槽里的格（组件列 0）按 `CTRL+ALT+C` 不算列：不选行号槽，留提示。
+- 选列会一并写 `selected_col`（数据列序），右栏列浏览器跟着高亮——既有行为，本批沿用。
+- 文本呈现态（网格不在焦点路径）不生效，与 `CTRL+R` / `CTRL+SHIFT+G` 同口径。
+
+#### 9.59.7 验证
+
+panel（`panel/tests.rs`）：
+
+- `select_column_goes_to_the_column_under_the_current_cell`：第 1 个数据列 → 组件列 1 / 数据列 0；
+  第 2 个 → 组件列 2 / 数据列 1；行号槽不选；无当前格不动作；
+- `select_row_marks_the_row_and_the_status_line`：整行选中 + 状态行 `Some(2)`；打开 `editable`
+  后 `row_target_state` 的 `copy` / `delete` 都为真；无当前格不动作
+  （harness 出厂没有 `status`，用例先装一条——`set_selected_row` 只写既有的 status）。
+
+editor（`view/tests/results_a.rs`）：
+
+- `the_select_column_key_selects_the_whole_column`：`ctrl-alt-c` → `selected_col() == Some(2)`
+  （当前格在「note」，钉「不左移到行号槽」）；
+- `the_select_row_key_selects_the_whole_row_and_marks_the_status_line`：`ctrl-alt-r` →
+  `selected_row() == Some(0)`、`status().selected_row == Some(1)`；
+- `the_select_column_and_row_keys_without_a_result_only_say_so`：没有结果时两条各留一句提示
+  （直接调 action 方法，同第 75 批口径）。
+
+门禁（第 76 批，最终实测）：pair check `Finished` 无 warning；panel **414 passed**
+（412 → +2）；ui-guard **4 passed**；editor lib **825 passed（1 ignored）**（822 → +3）；
+workspace check `Finished`（2 warning 全来自 `rds-notification`）。
+
+检查期一度有 6 条格式化用例红（`support::format` / `view::tests::format`）：并行线当时只把
+`FormatOptions` 与引擎改了，设置侧 / 编辑器映射还没跟上。到本批收尾前那条线已补齐映射并同步
+改了用例断言，最终与本节一起转绿（825 = 822 + 3）。**本批未提交任何格式化线文件。**
+
+#### 9.59.8 遗留
+
+- 多区域 / 多选的单元格集合（§9.59.3）；
+- `CTRL+BACKSPACE`（`cell.setDefault`）结构性不可行，见 §9.59.1；
+- 选列不服务行号槽（有意差异）；
+- `sync_result_view` 清 `selected_row` 的既有缺口未动；
+- **鼠标整行选中**（`SelectRow` 事件路径）仍不写状态行——本批只补键位路径。要不要在事件路径
+  统一补，待拍板（会改变既有「鼠标整行选中不点亮行级动作」的观感）。
+
+### 9.60 第 77 批：`CTRL+ALT+SHIFT+T` 焦点在筛选框与结果呈现之间双向切换（`CMD_FOCUS_FILTER`）
+
+#### 9.60.1 缺口
+
+`plugin.xml:1058` 的 `CTRL+ALT+SHIFT+T`（`org.jkiss.dbeaver.core.resultset.focus.filter`）一直没接。
+它补的是一个很具体的空档：**筛选框和结果区之间没有一键来回的路**——想改筛选词要拿鼠标点输入框，
+改完想回网格看结果又要点一次网格。DBeaver 用一个双向开关解决这件事。
+
+#### 9.60.2 DBeaver 依据
+
+- 键位：`plugin.xml:1058` `CTRL+ALT+SHIFT+T` → `org.jkiss.dbeaver.core.resultset.focus.filter`，
+  context 是 `org.jkiss.dbeaver.ui.context.resultset`——**不是** `...resultset.focused`。
+- 命令定义 `plugin.xml:249`；handler 绑在 `ResultSetHandlerMain`（`plugin.xml:545`，
+  `enabledWhen` = `org.jkiss.dbeaver.core.ui.resultset.part`）；右键「导航」段 `:1009-1017` 也挂它。
+- 常量 `IResultSetCommands.java:30` `CMD_FOCUS_FILTER`；分发 `ResultSetHandlerMain.java:179-181`
+  → `rsv.switchFilterFocus()`。
+- 实现 `ResultSetViewer.java:689-701`：
+
+  ```java
+  if (filtersPanel == null) return;                       // 没筛选面板：静默
+  if (filtersPanel.getEditControl().isFocusControl())     // 焦点**精确**在筛选框上
+      activePresentation.getControl().setFocus();         // → 交回当前呈现
+  else
+      filtersPanel.getEditControl().setFocus();           // → 交到筛选框
+  ```
+
+  即：**双向**；判据是精确 focus，不是「后代里有焦点」。
+
+#### 9.60.3 落点
+
+- `result_panel`：`actions!` 加 `SwitchFilterFocus`（注释写明这是**面板级**命令）；
+  `ResultPanel::switch_filter_focus(&mut self, window, cx) -> bool`；
+  公共 `filter_focus_handle(&self, cx) -> FocusHandle`（`filter_input.read(cx).focus_handle(cx)`），
+  判据与窗口用例共用同一口。
+- 判据用 `window.focused(cx) == Some(filter.clone())`：对应上游 `isFocusControl()` 的精确语义；
+  `contains_focused` 会把筛选框**后代**也算进来，口径更松，不用。
+- 「交回」落点跟第 60 批一致走 `presentation_focus_target(cx)`：网格态回网格、文本态回面板根
+  （文本态下网格不在渲染树上，直接把焦点塞给它等于丢掉）。
+- 筛选区收起（`show_filter_panel == false`）或没有筛选面板时返回 `false`；宿主
+  `on_switch_filter_focus` 见 `false` 留一句提示。上游此处静默 `return`，本仓按第 69 批口径
+  「不可用一律留提示」——键位没有「灰」这一态。
+
+#### 9.60.4 键位挂哪层 context（本批最要紧的一处判断）
+
+挂**面板层** `editor-result-panel` 而不是网格层 `...resultset.focused`：
+
+- 上游这一条的 context 本来就是 `...resultset`（整个结果集部件），不是 `.focused` 变体；
+- 更实际的理由：**焦点已经在筛选框里时也要能命中**。若按网格层绑，`「切回来」`那一半
+  （此时焦点在筛选框、网格 context 不在焦点路径上）按不到——双向就成了单向。
+
+#### 9.60.5 没有结果时
+
+结果区在本仓是**有内容才渲染**（`crates/editor/src/view/host/render.rs:221/241`，
+`result_has_content` 为假时整个 `ResultPanel` 子树不进树）。所以：
+
+- 无结果 + 焦点在编辑器 → `editor-result-panel` 上下文不在焦点路径上 → 键位**不命中**、焦点不动；
+- 这与上游 `enabledWhen` 要求 `resultset.part` 存在完全一致：没有结果集部件时这条命令本来
+  就是禁用的。上游 `switchFilterFocus` 自己只判 `filtersPanel`、不看有没有数据，差别只在
+  「部件存不存在」，本仓由「面板渲不渲染」自然承担。
+
+#### 9.60.6 用例
+
+panel（`panel/tests.rs`）：
+
+- `switching_the_filter_focus_goes_both_ways`：先把焦点给网格 → 第一次切进筛选框 →
+  第二次切回网格（用 `filter_focus_handle` 与网格 handle 依次比对 `window.focused`）；
+- `switching_the_filter_focus_does_nothing_when_the_filter_area_is_collapsed`：
+  `show_filter_panel = false` → 返回 `false`。
+
+editor（`view/tests/results_a.rs`）：
+
+- `the_filter_focus_key_moves_between_the_filter_box_and_the_grid`：`bind_editor_keys` → 打开面板
+  → 执行 → 焦点给网格 → 两次 `ctrl-alt-shift-t`，断言焦点先筛选框、后网格；
+- `the_filter_focus_key_is_inert_without_a_result`：无结果时按键，焦点不动（并先断言
+  `has_content() == false` 守前提）。
+
+两处窗口用例都要 `use gpui_kit::Focusable as _;`：`TableState` 自身没有 `focus_handle` 方法，
+只有引入 `Focusable` trait 才调得到（组件库 0.9 口径）。
+
+#### 9.60.7 门禁（第 77 批，最终实测）
+
+- `cargo check -p rds-editor -p rds-result-panel --all-targets`：`Finished`，无 warning；
+- `cargo test -p rds-result-panel -p rds-ui-guard`：panel **416 passed**（414 → +2）、
+  ui-guard **4 passed**；
+- `cargo test -p rds-editor --lib`：**831 passed（1 ignored）**（825 → +6；其中本批 +2，
+  另 +4 是 SQL 格式化并行线同期补的用例——**本批未提交任何格式化线文件**）；
+- `cargo check --workspace --all-targets`：`Finished`（2 warning 全来自并行线的 `rds-notification`）。
+
+检查期两次失败都出在**用例代码**，不在实现：第一次是 panel 用例缺 `use gpui_kit::Focusable as _;`
+（E0599）+ editor 第二条多一个同名 import（unused）；第二次是「无结果也能进筛选框」那条
+断言不成立——事实上面板在无结果时不渲染（见 §9.60.5），用例改成「无结果时 inert」。
+
+#### 9.60.8 遗留 / 有意差异
+
+- 提示文案「筛选区已收起：在工具栏里打开「显示过滤器面板」后再按」是否定稿，待拍板；
+- 四个浮层（SQL 预览 / 取全部确认 / 筛选设置 / 跳列）的 Esc 关闭仍无窗口用例（§9.58.8 已记）；
+- 筛选条隐藏后工具栏左段整体消失、没有常驻入口这一点仍未解——本批的 `false` + 提示算一条新依据。
+
+### 9.61 第 78 批：`ALT+SHIFT+H` / `ALT+SHIFT+T` 隐藏当前列 / 显示全部隐藏列（`CMD_HIDE_COLUMNS` / `CMD_SHOW_COLUMNS`）
+
+#### 9.61.1 缺口
+
+列显隐在结果集里早就有入口（列头菜单、列浏览器眼睛钮、筛选设置「全部显示 / 全部不显示」），
+但**键盘上一条都按不到**：`plugin.xml:1096/1097` 这两条一直没绑。它们属于「结果集侧栏 /
+列」这条线，代价也最小——底层能力（`set_columns_hidden` / `show_all_columns` /
+`is_hidden_column` / `hidden_count`）第 P2-3 批就已齐备，缺的只是命令入口与键位。
+
+#### 9.61.2 DBeaver 依据
+
+- 键位：`plugin.xml:1096` `ALT+SHIFT+H` → `org.jkiss.dbeaver.core.resultset.grid.hideColumns`；
+  `:1097` `ALT+SHIFT+T` → `...grid.showColumns`。两条的 contextId 都是
+  **`org.jkiss.dbeaver.ui.context.resultset`**（整块面板），不是 `...resultset.focused`；
+  schemeId 是 `org.jkiss.dbeaver.keyboardOnlyKeyScheme`（键盘可达性方案）。
+- 命令定义 `plugin.xml:327/328`；handler `:472/475` 绑
+  `...resultset.spreadsheet.SpreadsheetCommandHandler`。
+- 实现 `SpreadsheetCommandHandler.java:174-194`（隐藏）：
+
+  ```java
+  List<IGridColumn> selectedColumns = spreadsheet.getSpreadsheet().getColumnSelection();
+  GridPos focusPos = spreadsheet.getSpreadsheet().getFocusPos();
+  if (selectedColumns.size() == 1 && focusPos.col >= 0) {
+      selectedColumns = Collections.singletonList(getColumn(focusPos.col));   // 退化成焦点列
+  }
+  if (selectedColumns.size() >= model.getVisibleAttributeCount()) {
+      UIUtils.showMessageBox(..., hide_columns_error_title, hide_columnss_error_text, SWT.ERROR);
+  } else {
+      for (col : selectedColumns) model.setAttributeVisibility(attr, false);
+      spreadsheet.refreshData(true, false, true);
+  }
+  ```
+
+- 实现 `:195-212`（显示）：遍历 `model.getDataFilter().getConstraints()`，把
+  `!ac.isVisible() && attribute instanceof DBDAttributeBinding && isVisibleByDefault(attr)`
+  的列全部 `setAttributeVisibility(attr, true)`，再刷新。
+- 两条都**不**改选区：刷新后焦点列仍停在原 `col` 位（只是那个位置现在指着邻列）。
+
+#### 9.61.3 落点
+
+- `ResultPanel::hide_current_column(window, cx) -> Result<(), String>`：
+  取 `selection_pos` 的组件列（0 = 行号槽，拒绝）→ `data_column_checked(col - 1)` 换算数据列
+  → 判「已隐藏 / 只剩 1 列」→ `set_columns_hidden(vec![col], true, cx)`（内部 `snapshot_column_layout`
+  照旧推落库）。三类原因各一句，宿主直接 `set_message`。
+- `ResultPanel::show_hidden_columns(window, cx) -> bool`：`hidden_count() == 0` → `false`
+  （宿主说「现在没有隐藏的列」）；否则 `show_all_columns(cx)`。
+- 本仓没有「选中 1 列则退化成焦点列」这一步——单区域选区本身就是一格，等价。
+
+#### 9.61.4 藏完 / 显完把当前格重投影一次
+
+隐藏列会让视图列位整体左移，`selection_pos` 存的是**组件列位**，不重投影的话它会指向另一列
+（值详情、右栏选中列全都跟着错）。
+
+- 列位仍有效（`col_ix <= 新可见列数`）→ `set_selection_pos(Some((row, col_ix)))` 重新投影：
+  位置不动、指向后面那一列，`selected_col` 同步（与上游「焦点列停在原位」同口径）；
+- 列位越界（藏掉的是最右一列）→ 清 `selection_pos`，不让它指着空气。右栏 `selected_col`
+  按「清选保持清单当前选中」的既有口径保留原值（第 79 批实测，见 §9.62.7）。
+
+显示回来时同理重投影一次（列位不变、指向的列变了）。
+
+#### 9.61.5 键位挂面板层
+
+与第 77 批同一判断依据：上游这两条的 contextId 是 `...ui.context.resultset`，所以本仓挂
+`editor-result-panel`，焦点在筛选框 / 侧栏 / 面板根时都能按到。若按网格层绑，焦点一进筛选框
+这两条就失灵——而「藏一列之后想改筛选词」正是常见连招。
+
+#### 9.61.6 有意差异
+
+- **默认可见性概念缺失**：上游 `showColumns` 只恢复 `isVisibleByDefault` 的列（驱动侧默认隐藏的
+  辅助列保持隐藏）。本仓隐藏清单只有「用户藏起来的」一种来源，`show_all_columns` 全恢复正好
+  等价；将来若引入驱动侧默认隐藏，这一条要跟着改。
+- **全隐**：上游允许把列全藏光（只是弹框拦「选中列 >= 可见列数」），筛选设置对话框里的
+  「全部不显示」还能藏到 0；本仓 `hide_column` 的底线是「至少留 1 列」（藏空表格没意义），
+  本次键位同样守这条线（§9.54 已记）。
+- **ERROR 模态框 → 状态栏一句话**：上游弹 `SWT.ERROR` 框；本仓走第 69 批「键位不可用要说话」
+  口径，不打断操作。
+- **多列一次藏**：上游一次可藏多列（`getColumnSelection()`）；本仓一次只藏当前一列（单区域选区
+  的等价表达）。
+
+#### 9.61.7 用例
+
+panel（`panel/tests.rs`）：
+
+- `hiding_the_current_column_takes_it_out_of_the_view`：`set_data` 扩成三列后选中中间列（组件列 2）
+  → 藏 → 可见列 3→2、`hidden_count() == 1`、`is_hidden_column(1)` 真、`selection_pos` 仍是
+  `Some((0, 2))`、`selected_col` 变 `Some(2)`（重投影分支）；
+- `hiding_the_last_visible_column_is_refused`：先藏到只剩一列 → 再藏 → 返回 Err，原因含
+  「最后一列」，可见列仍是 1。
+
+editor（`view/tests/results_a.rs`）：
+
+- `the_hide_and_show_column_keys_round_trip`：没有隐藏列时 `alt-shift-t` 只留提示 →
+  `alt-shift-h` 把 `note` 藏掉（`column_hidden() == ["note"]`）→ `alt-shift-t` 放回来。
+
+用例初版踩过一次：用两列 harness 断言「当前格停在原列位」，实际藏掉的是最右一列 → 列位越界
+走清选分支。代码本身没错，改用三列场景测真正要测的那条分支（§9.61.8 记）。
+
+#### 9.61.8 门禁（第 78 批，最终实测）
+
+- `cargo check -p rds-editor -p rds-result-panel --all-targets`：`Finished`，无 warning；
+- `cargo test -p rds-result-panel -p rds-ui-guard`：panel **418 passed**（416 → +2）、
+  ui-guard **4 passed**；
+- `cargo test -p rds-editor --lib`：**832 passed（1 ignored）**（831 → +1）；
+- `cargo check --workspace --all-targets`：`Finished`（2 warning 全来自并行线的 `rds-notification`）。
+
+#### 9.61.9 遗留
+
+- `SHIFT+F11`（`showColumnContextMenu`，`:1098`）、`F11` / `CTRL+F11`（`filterMenu` /
+  `filterMenu.distinct`，`:1061/1062`）仍未接（`ALT+SHIFT+C` 由第 79 批接上，见 §9.62）；
+- `ALT+SHIFT+ARROW`（移列，`:1092/1093` → `SpreadsheetCommandHandler:132-173`）未接：本仓
+  `move_display_column` 可直接复用，但 `ALT+SHIFT+←/→` 与输入框的按词移动同键，需先定焦点口径；
+- 多列一次藏 / 显（§9.61.6 第 4 条）。
+
+### 9.62 第 79 批：`ALT+SHIFT+C` 复制列名（`CMD_COPY_COLUMN_NAMES`）
+
+#### 9.62.1 缺口
+
+「复制列名」**不是新能力**：列头菜单首项「复制列名「X」」（`grid/menu.rs:831-840`，
+`ContextAction::CopyColumnName`）、列浏览器多选「复制列名」（换行分隔，
+`ContextAction::CopyColumnNames`）都已存在。缺的只是**键盘入口**——`plugin.xml:1095`
+那条 `ALT+SHIFT+C` 一直空着，而它正落在「结果集侧栏 / 列」这条线上。
+
+#### 9.62.2 DBeaver 依据
+
+- 键位 `plugin.xml:1095`：`ALT+SHIFT+C` → `org.jkiss.dbeaver.core.resultset.grid.copyColumnNames`；
+  contextId 是整块 **`...ui.context.resultset`**，keyboardOnlyKeyScheme。
+- 命令定义 `:313`；handler `:439` → `...handler.ResultSetHandlerMain`；实现 `:333-375`：
+  - `:335` 读参数 `columns`（右键指定列名）；`:337-338`
+    `attrs = selection.isEmpty() ? model.getVisibleAttributes() : selection.getSelectedAttributes()`；
+  - `:350-357` `ResultSetCopySettings` **无参构造**（`columnDelimiter == null`）；
+    **仅 `attrs.size() > 1` 时**弹 `CopyConfigDialog("CopyGridNamesOptionsDialog")`，取消 `return null`；
+  - `:359-372` 逐列拼：非首项先 append `settings.getColumnDelimiter()`（单列首轮 `buffer` 为空，
+    `null` 不触发）；名字取 `attr.getLabel()`，空则 `getName()`；有数据源时套
+    `DBUtils.getQuotedIdentifier`（贴进 SQL 是带引号的标识符）；
+  - `:374` `ResultSetUtils.copyToClipboard(buffer.toString())`：**无提示**、**无空文本分支**（空串照拷）。
+- 复制配置框默认值来自 `ResultSetHandlerCopySpecial:124-141`（`columnDelimiter="\t"`、
+  `rowDelimiter="\n"`、`quoteString="\""`，并从 dialogSettings 记忆上次），`:154` 列分隔三选项
+  `{"\t",";",","}`。
+- 右键挂点 `ResultSetViewer.java:3154`（`fillContextMenu` 的 CopyAs 段）、
+  `ResultSetHandlerCopyAs.java:271-275`（CopyAs 第二项）。
+
+#### 9.62.3 判据收窄：只认表格选区
+
+上游 `rsv.getSelection()` 是**结果表格**的列选区；右栏那份列选中属于另一个部件
+（`meta_data_panel_action_copy_column_text`）。所以本仓只做两级：
+
+1. 当前格所在列（且该列**仍可见**：`data_column_checked(col - 1)` 为真）；
+2. 全部可见列（数据序，`is_hidden_column` 跳过）。
+
+**不读 `selected_col`**。它是右栏清单的当前选中，而「清选 / 选行时保持清单当前选中」是既有口径
+（`set_selection_pos` 注释）；把它当候选会把**已被藏掉的列**也拷进来——本批用例实测踩到：
+藏掉最右列后 `selection_pos` 被清、`selected_col` 仍是隐藏列，复制出的是隐藏列名。
+
+#### 9.62.4 落点
+
+- `grid/mod.rs`：`actions!` 增 `CopyColumnNames`（面板级命令，注释对齐 `:1095`），顶部键位注释补一条；
+- `panel/events.rs`：`pub fn copy_column_names(&mut self, cx) -> Result<usize, String>`：
+  按 §9.62.3 取列 → `\t` 连起来 → `cx.write_to_clipboard(ClipboardItem::new_string(..))`；
+  一列都没有 → `Err("这份结果没有可复制的列")`；
+- `editor`：`support/commands.rs` re-export；`view/host/exec/edit_cmds.rs::on_copy_column_names`
+  （1 个 →「已复制列名」，N 个 →「已复制 N 个列名（TSV）」，Err 直接转状态栏）；
+  `view/host/render.rs` `.on_action`；`view/tests/mod.rs` bind；
+- `crates/app/src/main.rs`：键位挂 `editor-result-panel`（与第 78 批同口径：上游 contextId 是整块面板）。
+
+#### 9.62.5 有意差异
+
+- **不弹「复制配置」对话框**：列分隔固定 `\t`（上游多列时弹框、默认也是 `\t`，单列不弹）；
+  行分隔 / 引号那套配置随目视与偏好类后处理统一做。
+- **不加标识符引号**：`DBUtils.getQuotedIdentifier` 需要数据源方言，本仓没有这条通道；
+  `columns()` 给的就是显示名。
+- **空列表 → 状态栏一句话**：上游空串照拷；本仓按「键位不可用要说话」（§9.54）拒绝执行，
+  也不用空串盖掉用户剪贴板里原有的内容。
+- **复制完留回执**：上游静默；本仓状态栏给一句（键位要可感知）。
+
+#### 9.62.6 用例
+
+panel（`panel/tests.rs`）：
+
+- `copying_column_names_uses_the_current_cell_then_every_visible_column`：无当前格 → `"id\tamount"`；
+  当前格在 `amount` → `"amount"`（单列不加分隔符）；把 `amount` 藏掉 → 回到全量 `"id"`；
+- `copying_column_names_is_refused_without_columns`：网格清空 → `Err`，原因含「没有可复制的列」；
+- `hiding_the_rightmost_column_clears_the_current_cell`：补第 78 批的越界分支——藏掉最右一列后
+  `selection_pos == None`。
+
+editor（`view/tests/results_a.rs`）：
+
+- `alt_shift_c_copies_the_column_names`：选中 `note` 那格 → 剪贴板 `"note"`、状态栏「已复制列名」；
+  `alt-shift-h` 把 `note` 藏掉（用例同时断言 `column_hidden() == ["note"]`）→ 再按 `alt-shift-c`
+  得 `"n"`（隐藏列不进全量）。
+
+#### 9.62.7 实测修正（§9.61.4 的措辞太满）
+
+第 78 批写的「列位越界 → 清选，不让 `selection_pos` / `selected_col` 指向别的列」与实测不符：
+`hide_current_column` 越界分支只调 `set_selection_pos(None)`，而 `selected_col` 按
+「清选保持清单当前选中」的口径**不动**（panel 用例实测 `(None, Some(1))`——被藏掉的那列）。
+§9.61.4 已按实测收紧，本批的复制判据也因此不读 `selected_col`（§9.62.3）。
+
+#### 9.62.8 门禁（第 79 批，最终实测）
+
+- `cargo check -p rds-editor -p rds-result-panel --all-targets`：`Finished`，无 warning；
+- `cargo test -p rds-result-panel -p rds-ui-guard`：panel **421 passed**（418 → +3）、
+  ui-guard **4 passed**；
+- `cargo test -p rds-editor --lib`：**833 passed（1 ignored）**（832 → +1）；
+- `cargo check --workspace --all-targets`：`Finished`（2 warning 全来自并行线的 `rds-notification`）。
+
+#### 9.62.9 遗留
+
+- `SHIFT+F11`（`showColumnContextMenu`，`:1098`）、`F11` / `CTRL+F11`
+  （`filterMenu` / `filterMenu.distinct`，`:1061/1062`）仍未接；
+- `ALT+SHIFT+F`（`filterSettings`，`:1094`）已由第 80 批接上（见 §9.63）；
+- `ALT+SHIFT+ARROW`（移列）：`move_display_column` 可复用，但与输入框按词移动同键，需先定焦点口径；
+- 「复制配置」对话框（列 / 行分隔、引号，含 dialogSettings 记忆）未做（§9.62.5）；
+- 多列一次复制只在列浏览器多选入口存在，键位这条与 DBeaver 一样走「当前格 → 全量」。
+
+### 9.63 第 80 批：`ALT+SHIFT+F` 打开筛选设置（`CMD_FILTER_EDIT_SETTINGS`）
+
+#### 9.63.1 缺口
+
+筛选设置浮层（`editor-result-filter-settings`，自第 1.2 批起就有）**三个鼠标入口**都在：
+工具栏筛选菜单里的「编辑筛选设置」（`panel/render.rs:486`）、列头右键
+（`grid/header.rs:519-523` / `grid/menu.rs:757`）、筛选条自定义钮；键盘上却一条也按不到
+——`plugin.xml:1094` 的 `ALT+SHIFT+F` 一直空着。它正是「筛选条」这一行（工具栏那层）的最后一块缺口。
+
+#### 9.63.2 DBeaver 依据
+
+- 键位 `plugin.xml:1094`：`ALT+SHIFT+F` → `org.jkiss.dbeaver.core.resultset.filterSettings`；
+  contextId 整块 **`...ui.context.resultset`**，keyboardOnlyKeyScheme。
+- 命令定义 `:333`；handler `:570` → `...handler.ResultSetHandlerMain`；
+  实现 `:546-549`：`case CMD_FILTER_EDIT_SETTINGS: rsv.showFilterSettingsDialog()`。
+- `ResultSetViewer.java:644-646`：`showFilterSettingsDialog()` = `new FilterSettingsDialog(this).open()`
+  ——**不判任何条件**（没有「有没有结果集」「筛不筛选过」之类前置），也不弹提示。
+- 同一命令的鼠标入口旁证：筛选条 `filtersCustomButton`（`ResultSetFilterPanel.java:330-338`，
+  FILTER 图标 + `SWT.DROP_DOWN`，主点击开对话框）、它的下拉首项（`:1563-1564`）、
+  右键 filters 子菜单末项（`ResultSetViewer.java:3932`）。三者与键位落到同一个对话框。
+
+#### 9.63.3 落点
+
+- `grid/mod.rs`：`actions!` 增 `OpenFilterSettings`（面板级，注释对齐 `:1094`），顶部键位注释补一条；
+- `editor`：`support/commands.rs` re-export；`view/host/exec/edit_cmds.rs::on_open_filter_settings`
+  **直接调** `panel.open_filter_settings(window, cx)`（不入队列——键位就在宿主里，队列那条留给
+  工具栏 / 右键那几个请求入口，两处落同一个面板方法）；`view/host/render.rs` `.on_action`；
+  `view/tests/mod.rs` bind；`crates/app/src/main.rs` 键位挂 `RESULT_PANEL_CONTEXT`。
+- 不判条件、不留 message：打开浮层本身就是可见反馈（与上游「静默 open」一致，也与第 78/79 批
+  「键位有结果才命中」同一机制——没有结果时面板子树不渲染，键位自然不命中）。
+
+#### 9.63.4 有意差异（沿用既有口径）
+
+- **模态对话框 → 面板内浮层**：上游是 SWT `StatusDialog`；本仓是面板内 absolute 遮罩 + 卡片
+  （自 1.2 批起的既有落法，`dialog.rs::render_filter_settings` 注释里记过理由）。
+- **打开时把焦点交给排序输入框**：本仓浮层的 WHERE 一栏由筛选框本体承担，浮层里只有「自定义排序」
+  一个输入，所以打开即聚焦它（上游对话框由 SWT 决定初始焦点）。
+
+#### 9.63.5 用例
+
+editor（`view/tests/results_a.rs`）：
+
+- `alt_shift_f_opens_the_filter_settings_overlay`：按键后浮层卡片进元素树 →（现状）焦点在排序框里按
+  `ESC` 浮层**仍在** → 点标题栏 ✕ 收起。
+
+#### 9.63.6 门禁（第 80 批，最终实测）
+
+- `cargo check -p rds-editor -p rds-result-panel --all-targets`：`Finished`，无 warning；
+- `cargo test -p rds-result-panel -p rds-ui-guard`：panel **421 passed**（不变）、ui-guard **4 passed**；
+- `cargo test -p rds-editor --lib`：**834 passed（1 ignored）**（833 → +1）；
+- `cargo check --workspace --all-targets`：**本次未能通过，原因在并行线、不在本批**——
+  `crates/workbench/src/components/version_dialog.rs` 是未跟踪新文件（HEAD 里没有，`components/mod.rs`
+  已 `pub mod version_dialog;`），它有 3 处编译错（`cx.theme()` 缺 `gpui_kit::gpui_component::ActiveTheme`
+  导入、`Div::v_flex` ×2），`rds-workbench` 因此 `could not compile`。本批只动
+  `result_panel` / `editor` / `crates/app`（键位），前三条已覆盖；等并行线把那个文件修好后再复查一次
+  整包（见 §9.63.8）。
+
+#### 9.63.7 实测发现：焦点在输入框里时 `ESC` 关不掉浮层（四个浮层同病）
+
+这不是本批引入的，是**结构性的**，机理已查清：
+
+1. `gpui-base` 的输入组件在自己的 context 上绑了 `escape` → `Escape` action
+   （`vendor/gpui-base/src/input/base/state.rs:277`）；焦点在输入框时这条先命中。
+2. `InputState::escape` 在 `clean_on_escape == false` 时走 `cx.propagate()`（`:2607`）——
+   它把 action 往**上层的 key binding 匹配**继续传，而不是往上层的 `on_key_down` 事件传。
+3. 浮层根接的是 `on_key_down`（`panel/dialog.rs:465-469`），不是 key binding，所以永远收不到。
+   于是「打开浮层 → 直接按 Esc」没有反应；可用路径是标题栏 ✕。
+
+要真正接上，得给浮层遮罩挂 `key_context` 并在 app 注册 `escape` → 关闭动作的 binding
+（这样 input 的 `propagate` 能继续命中它）。没在本批做：它牵动四个浮层（SQL 预览 / 取全部确认 /
+筛选设置 / 跳列）与 app 键位表，属于单独一批的工作量；本批已把现状钉进用例
+（`alt_shift_f_opens_the_filter_settings_overlay` 里那条「ESC 后浮层仍在」），谁能接上谁改断言。
+
+#### 9.63.5 / 9.63.7 的结论已被第 81 批推翻
+
+上面 §9.63.5 写的「焦点在排序框里按 `ESC` 浮层仍在」与 §9.63.7 推的机理（「输入框
+binding 命中了、`propagate` 只会往上找 binding」）**都不是实测结论**：真实情况是焦点
+进入 `InputState` 后上下文栈直接变空，输入框的 `escape` binding 同样没命中。以 §9.64.3
+的表格为准。
+
+#### 9.63.8 遗留
+
+- `SHIFT+F11`（`showColumnContextMenu`，`:1098`）、`F11` / `CTRL+F11`
+  （`filterMenu` / `filterMenu.distinct`，`:1061/1062`）仍未接；
+- `ALT+SHIFT+ARROW`（移列）：`move_display_column` 可复用，但与输入框按词移动同键，需先定焦点口径；
+- 浮层 `ESC` 关闭（§9.63.7，四个浮层）；
+- 整包门禁复查：等并行线把未跟踪的 `crates/workbench/src/components/version_dialog.rs` 修好
+  （§9.63.6 记的 3 处编译错），再跑一次 `cargo check --workspace --all-targets`；
+- 「复制配置」对话框（§9.62.5）。
+
+### 9.64 第 81 批：`ESC` 收起四个结果集浮层（app 级 keystroke interceptor）
+
+#### 9.64.1 缺口
+
+§9.63.7 记过的结构性问题：浮层开着时按 `ESC` 没反应，四个浮层（SQL 预览 / 取全部确认 /
+筛选设置 / 跳列）同病，唯一出口是各自的标题栏 ✕。本批把它接上。
+
+#### 9.64.2 DBeaver 依据
+
+- `plugin.xml:1081`：`ESC` = `org.jkiss.dbeaver.core.resultset.cell.reset`（**不是关浮层**）。
+- 上游的浮层是**模态 SWT 对话框**（`new FilterSettingsDialog(this).open()`、
+  `MessageDialog`），`ESC` 由平台自己关；本仓浮层是面板内 `absolute` 遮罩、不抢焦点，
+  所以「`ESC` 收起」属**本仓惯例**，不是照抄来的键位。
+
+#### 9.64.3 三条通道实测（本批的关键结论）
+
+`Window::context_stack()`（`gpui-pre-0.3.11/src/window.rs:6997`，与 dispatch 用的是同一套
+`dispatch_path` → `node.context`）在用例里直接打了两次：
+
+| 焦点位置 | `context_stack()` |
+| --- | --- |
+| 网格（`DataTable`） | `[Root, editor, editor-result-panel, editor-result-grid, DataTable]` |
+| 浮层里的排序输入框（`InputState`） | `[]`（空） |
+
+空栈的后果是**所有带 context 的 binding 一条都匹配不到**——不只是 `ESC`，那一刻连面板层
+已绑好的 `CTRL+SHIFT+G` 都按不出来（用例里先按 `ctrl-shift-g` 断言「跳列卡片出现」，实测失败）。
+根因在 `focus_node_id_in_rendered_frame`（`:6730-6738`）：`InputState` 的焦点 id 不在
+`rendered_frame.dispatch_tree` 里时，`dispatch_path` 退化成 root，`filter_map` 之后就是空。
+
+于是三条候选通道全部否掉：
+
+1. **遮罩 `on_key_down`**（原实现）：`on_key_down` 派发排在 binding / action 之后
+   （`:6493`），`ESC` 先走 action 派发，焦点在输入框里时走不到；
+2. **任何带 context 的 binding**（网格层 / 面板层 / 给遮罩另开 context）：栈为空，匹配不到；
+3. **全局（`context: None`）binding**：能命中，但会截走网格内联编辑取消（`grid/edit.rs:414`）
+   与侧栏 / 设置页那批靠 `on_key_down` 收 `ESC` 的处理（binding 命中即
+   `return`，`finish_dispatch_key_event` 不再跑）——会砸掉既有行为。
+
+唯一不依赖焦点 / context 的是 **app 级 keystroke interceptor**
+（`Context::intercept_keystrokes`，`app.rs:2723-2736`）：它在 binding 之前跑
+（`window.rs:6335-6352`），且与焦点无关。
+
+#### 9.64.4 落点
+
+- `panel/lifecycle.rs::new`：`let _esc_sub = cx.intercept_keystrokes(...)`——
+  只认「无修饰的 `escape`」，`dismiss_overlay` 返回 `true` 才 `cx.stop_propagation()`
+  （无浮层时完全让路，上面第 3 条那些 `on_key_down` 语义不受影响）；
+- `panel/data.rs`：新增 `_esc_sub: Subscription`（**必须持有**，掉了就解订，与 `_filter_sub` 同坑）；
+- `panel/events.rs::dismiss_overlay`：按叠放次序（跳列 → 取全部确认 → 筛选设置 → SQL 预览）
+  复用各浮层自己的 `close_*`；**关完把焦点交回** `presentation_focus_target`
+  （网格态 → 网格、文本态 → 面板根）——不交回的话，焦点停在已消失的输入框上，
+  之后所有面板键位都按不出来（第 80 批用例「再按一次 `ALT+SHIFT+F`」就红在这里）；
+- `panel/dialog.rs`：四个遮罩上原来那四条 `on_key_down`（判 `escape` 收浮层）**删除**——
+  按上面 §9.64.3 第 1 条，它们在有焦点时从未生效，是无用代码；
+- **撤掉**中途走过的两条方案：`actions!` 里的 `DismissOverlay`、`ResultRequest::DismissOverlay`、
+  面板层 `escape` 键位（app 与测试各一条）、面板根 `.on_action`、四个遮罩的
+  `RESULT_OVERLAY_CONTEXT`。理由同 §9.64.3，留着等于留一条按不出来的键位。
+
+#### 9.64.5 有意差异
+
+- **不是 DBeaver 键位**：上游 `ESC` 是 `cell.reset`（`:1081`），本仓网格的 `ESC` 保留组件语义，
+  只有浮层按模态惯例收起；关哪一个由面板按打开状态判，不区分。
+- **入口不是 keymap**：本仓这一条走 interceptor（键位表里看不到、设置页也不会列）；
+  代价是它不可重绑，换来的是「焦点在哪都能关」。
+- 无浮层时 `ESC` 行为完全不变（interceptor 直接返回、不 `stop_propagation`）。
+
+#### 9.64.6 用例
+
+editor（`view/tests/results_a.rs`）：
+
+- `escape_dismisses_every_result_overlay`（新）：四段，① 筛选设置（焦点在排序框，`alt-shift-f` 打开）
+  ② 跳列（焦点在跳列输入框，`ctrl-shift-g` 打开）③ SQL 预览（`open_sql_dialog`，焦点留在网格）
+  ④ 取全部确认（`open_fetch_all_confirm`，无输入源）；每段 `escape` 后断言对应卡片从元素树消失。
+- `alt_shift_f_opens_the_filter_settings_overlay`（第 80 批那条改写）：`ESC` 断言从「浮层仍在」
+  改成「应收起」，随后重开一次再走 ✕ 路径（两条出口都验）。
+
+#### 9.64.7 门禁（第 81 批，最终实测）
+
+- `cargo check -p rds-editor -p rds-result-panel --all-targets`：`Finished`，**无 warning**；
+- `cargo test -p rds-result-panel`：**421 passed**（不变）；
+- `cargo test -p rds-editor --lib`：**835 passed（1 ignored）**（834 → +1）；
+- `cargo test -p rds-ui-guard`：3 passed / **1 failed**，失败项 `no_new_hardcoded_color_or_pixel`
+  报的是**并行线的未跟踪文件** `crates/workbench/src/components/version_dialog.rs`
+  （「未登记的新文件出现裸色值 0 / 裸 px 1」），与本批无关；
+- `cargo check --workspace --all-targets`：**仍被并行线阻塞**——除上述 `version_dialog.rs`，
+  这次还多出 `crates/settings/src/registry/entries/projects.rs:49`「unclosed delimiter」
+  （`crates/settings/*` 有 5 个文件正处于并行线未提交编辑中）。本批改动只落在
+  `result_panel` / `editor`（前三道已覆盖），待并行线收尾后复查整包。
+
+#### 9.64.8 遗留
+
+- 鼠标路径的 ✕ 关闭（`CloseFilterSettings` / `CloseSqlDialog` / `CloseFetchAllConfirm` 三条）
+  **没有**交回焦点（它们只收 `cx`，没有 window）：点 ✕ 之后焦点仍停在已消失的输入框上，
+  面板键位要等用户点一下网格才恢复。本批只修了 `ESC` 这条（`dismiss_overlay` 有 window）；
+- 焦点在浮层输入框时**所有** context binding 都不可用（§9.64.3 的 `[]`）——这是框架层
+  （`InputState` 焦点未进 dispatch tree）现象，影响的不止 `ESC`（`CTRL+SHIFT+G`、
+  `ALT+SHIFT+F` 等在输入框里按同样无效）。本批只保证 `ESC` 一条可用，其余留待单独立项；
+- 其余同 §9.63.8（`SHIFT+F11` / `F11` / `CTRL+F11` 未接、`ALT+SHIFT+ARROW` 焦点口径未定、
+  「复制配置」对话框未做、整包门禁待并行线）。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

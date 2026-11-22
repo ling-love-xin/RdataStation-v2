@@ -82,7 +82,23 @@ pub(crate) mod view_rows;
 // 编辑区 / SQL 编辑器不受影响）。对应 DBeaver 的
 // `org.jkiss.dbeaver.ui.context.resultset.focused`：
 // `plugin.xml:1071/1072` 的 `SHIFT+ENTER`（外部值编辑器）/ `ENTER`（内嵌编辑）、
-// `:1059` 的 `Ctrl+反引号`（切换表示）、`:1082` 的 `Ctrl+S`（提交变更）。
+// `:1059` 的 `Ctrl+反引号`（切换表示）、`:1082` 的 `Ctrl+S`（提交变更）、
+// `:1083` 的 `Ctrl+R`（撤销未提交变更）、`:1090` 的 `Ctrl+Shift+G`（跳转到列）、
+// `:1088` / `:1089` 的 `Ctrl+Alt+C` / `Ctrl+Alt+R`（选列 / 选行）、
+// `:1058` 的 `Ctrl+Alt+Shift+T`（焦点在筛选框与结果呈现之间双向切换；
+// `:1096` / `:1097` 的 `Alt+Shift+H` / `Alt+Shift+T`（隐藏当前列 / 显示全部隐藏列）、
+// `:1095` 的 `Alt+Shift+C`（复制列名）、
+// `:1094` 的 `Alt+Shift+F`（筛选设置）。
+// 后三条在上游都挂 `...ui.context.resultset`（整块面板）而不是 `...resultset.focused`，
+// 所以与上面几条不同：键位挂 `editor-result-panel` 上下文。
+//
+// 【第 81 批】另有**一条不是上游键位**的：`ESC` 关结果集浮层。上游 `ESC` 是
+// `cell.reset`（`plugin.xml:1081`），本仓没有那条语义（网格的 `ESC` 留给组件），
+// 浮层则按模态惯例一律 ESC 收起。它**不在这里的 `actions!` 里、也不是 keymap 键位**：
+// 焦点一旦落进浮层里的 `InputState`，`Window::context_stack()` 会退化成空（实测 `[]`），
+// 带 context 的 binding 一条都匹配不到（连 `Ctrl+Shift+G` 都按不出来），所以入口放在
+// app 级 keystroke interceptor（`ResultPanel::new` 的 `intercept_keystrokes`）；
+// 关哪个浮层由面板按当前打开状态自己判（`ResultPanel::dismiss_overlay`）。
 use gpui_kit::actions;
 
 actions!(
@@ -138,6 +154,41 @@ actions!(
         /// （`goto_column_open`）——只送 `ResultRequest::AskGotoColumn`，
         /// 开不开由宿主判（没有列可跳时留提示）。
         GotoColumn,
+        /// 【第 76 批】`CTRL+ALT+C`：把当前格所在的**整列**选中
+        /// （`CMD_SELECT_COLUMNS` → `SpreadsheetCommandHandler:106-118`）。
+        SelectCurrentColumn,
+        /// 【第 76 批】`CTRL+ALT+R`：把当前格所在的**整行**选中
+        /// （`CMD_SELECT_ROWS` → `SpreadsheetCommandHandler:119-131`）。
+        SelectCurrentRow,
+        /// 【第 77 批】`CTRL+ALT+SHIFT+T`：焦点在「筛选框」与「结果呈现」之间来回切
+        /// （`CMD_FOCUS_FILTER` → `ResultSetViewer.switchFilterFocus()`，`plugin.xml:1058`）。
+        ///
+        /// 这是**面板级**命令：键位挂 [`RESULT_PANEL_CONTEXT`](crate::panel::RESULT_PANEL_CONTEXT)
+        /// （上游同一条也绑 `...context.resultset`，不是 `...resultset.focused`），
+        /// 否则焦点已经在筛选框里时按不到「切回来」那一半。
+        SwitchFilterFocus,
+        /// 【第 78 批】`ALT+SHIFT+H`：隐藏当前格所在的列
+        /// （`CMD_HIDE_COLUMNS` → `SpreadsheetCommandHandler:174-194`，`plugin.xml:1096`）。
+        ///
+        /// 面板级命令（上游同样挂 `...context.resultset`）：焦点在筛选框 / 侧栏里也能按到，
+        /// 判据只看「当前格在哪一列」。
+        HideCurrentColumn,
+        /// 【第 78 批】`ALT+SHIFT+T`：把所有隐藏列显示回来
+        /// （`CMD_SHOW_COLUMNS` → `SpreadsheetCommandHandler:195-212`，`plugin.xml:1097`）。
+        ShowHiddenColumns,
+        /// 【第 79 批】`ALT+SHIFT+C`：复制列名（`CMD_COPY_COLUMN_NAMES`，`plugin.xml:1095`；
+        /// `ResultSetHandlerMain:333-375`）。
+        ///
+        /// 面板级命令（上游 contextId 同样是整块 `...ui.context.resultset`）。
+        CopyColumnNames,
+        /// 【第 80 批】`ALT+SHIFT+F`：打开筛选设置（`CMD_FILTER_EDIT_SETTINGS`，
+        /// `plugin.xml:1094`；handler `:570` → `ResultSetHandlerMain:546-549` →
+        /// `ResultSetViewer.showFilterSettingsDialog()`，`:644-646` = 直接开对话框、无前置判断）。
+        ///
+        /// 面板级命令（上游 contextId 同样是整块 `...ui.context.resultset`）。浮层本身
+        /// 与它那三个鼠标入口早已就位（工具栏菜单「编辑筛选设置」/ 列头右键 / 筛选条
+        /// 自定义钮），这条只是键盘入口。
+        OpenFilterSettings,
     ]
 );
 

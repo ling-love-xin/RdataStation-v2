@@ -2,9 +2,13 @@
 name = "rds-sql"
 version.workspace = true
 edition.workspace = true
-description = "RdataStation v2 SQL 语言服务 crate：sqlglot-rust 唯一接入点（解析/切分/高亮/格式化/转译/语义/参数绑定）+ 脚本词法器"
+description = "RdataStation v2 SQL 语言服务 crate：唯一接入点（语义走 sqlglot，排版走 lax）——解析/切分/高亮/格式化/转译/语义/参数绑定 + 脚本词法器"
 
 [dependencies]
 sqlglot-rust.workspace = true
+# 排版引擎：lossless（只调空白、永不拒绝输入），与 sqlglot 的分工见 src/formatter.rs 头部
+lax-sql.workspace = true
+# lax 的 `Configuration.new_line_kind` 是 dprint-core 的类型，构造时绕不开
+dprint-core.workspace = true
 serde.workspace = true
 tracing.workspace = true

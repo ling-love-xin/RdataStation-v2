@@ -1333,6 +1333,35 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【第 81 批】`ESC` 收起当前打开的浮层：一次只关**最上面**那个（`render` 的最后挂载
+    /// 顺序 = 绘制顺序：SQL 预览 → 筛选设置 → 取全部确认 → 跳列），返回是否真关掉了。
+    ///
+    /// 四个浮层实际互斥（`open_fetch_all_confirm` 只在刚点过「取全部」时出现、跳列只在
+    /// 键位按下的那一刻出现），但这里仍按叠放次序逐个判，不假设互斥——日后若允许
+    /// 叠开（例如筛选设置里再开跳列），先收最上层也不会把下层一起带走。
+    ///
+    /// 关闭动作复用各浮层自己的出口（`close_goto_column` 自身要 window），这里只补一件事：
+    /// **关完把焦点交回呈现焦点目标**（网格态 → 网格、文本态 → 面板根）。浮层里的输入框
+    /// 随浮层一起消失，焦点留在它上面时 `dispatch_path` 会退化成 root——上下文栈变空，
+    /// 面板层所有键位（再按一次 `ALT+SHIFT+F`、`CTRL+SHIFT+G`…）全按不出来，
+    /// 实测见 `escape_dismisses_every_result_overlay` 之后那条「再开一次」断言。
+    pub fn dismiss_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let target = self.presentation_focus_target(cx);
+        if self.goto_column_open {
+            self.close_goto_column(window, cx);
+        } else if self.fetch_all_confirm_open {
+            self.close_fetch_all_confirm(cx);
+        } else if self.filter_settings_open {
+            self.close_filter_settings(cx);
+        } else if self.sql_dialog_open {
+            self.close_sql_dialog(cx);
+        } else {
+            return false;
+        }
+        window.focus(&target, cx);
+        true
+    }
+
     /// 【筛选设置】切换页签（`FilterSettingsTab`：列约束 / 自定义）
     pub fn set_filter_settings_tab(
         &mut self,
@@ -2132,6 +2161,202 @@ impl ResultPanel {
             state.refresh(cx);
         });
         cx.notify();
+    }
+
+    /// 【第 76 批】`CTRL+ALT+C` 选中当前格所在的整列
+    /// （DBeaver `CMD_SELECT_COLUMNS`，`SpreadsheetCommandHandler.java:106-118`：
+    /// 把选中列的所有行选成单元格，焦点格复位但焦点列保留）。
+    ///
+    /// 本仓选区是单区域的（组件只有 Row / Column / Cell 三态），等价表达 = **整列选中**；
+    /// 当前格在行号槽 / 没有当前格时返回 `false`（宿主补提示）。
+    pub fn select_current_column(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some((_row, col_ix)) = self.selection_pos else {
+            return false;
+        };
+        // 组件列 0 是行号槽（`table_impl.rs` 的 `data_column(col_ix - 1)` 口径）
+        if col_ix == 0 {
+            return false;
+        }
+        let data_col = self
+            .grid
+            .read(cx)
+            .delegate()
+            .data_column_checked(col_ix - 1);
+        let Some(data_col) = data_col else {
+            return false;
+        };
+        self.select_column(data_col, cx);
+        true
+    }
+
+    /// 【第 76 批】`CTRL+ALT+R` 选中当前格所在的整行
+    /// （DBeaver `CMD_SELECT_ROWS`，`SpreadsheetCommandHandler.java:119-131`：
+    /// 把选中行的所有列选成单元格，焦点格复位但焦点行保留）。
+    ///
+    /// 本仓等价表达 = 组件整行选中（`set_selected_row`，delegate 据此整行铺色）；
+    /// 同时把状态行那口「已选第 N 行」写进去（1 基）——行级三钮 / 「修改」钮都读
+    /// `status.selected_row`（`row_target_state`），不写的话按完键位仍全是灰的。
+    pub fn select_current_row(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some((row, _col)) = self.selection_pos else {
+            return false;
+        };
+        let grid = self.grid.clone();
+        grid.update(cx, |state, cx| state.set_selected_row(row, cx));
+        self.set_selected_row(Some(row + 1), cx);
+        true
+    }
+
+    /// 【第 78 批】`ALT+SHIFT+H`：隐藏当前格所在的列
+    /// （DBeaver `CMD_HIDE_COLUMNS`，`plugin.xml:1096`；
+    /// `SpreadsheetCommandHandler.java:174-194`）。
+    ///
+    /// 上游取 `getColumnSelection()`，只选中 1 列时退化成焦点列；本仓是单区域选区，
+    /// 等价表达 = **当前格所在的数据列**。
+    ///
+    /// 底线同上游：上游「选中列数 >= 可见列总数」就弹 ERROR 框（表格不能 hide 成空），
+    /// 本仓一次只藏一列，等价判据是「可见列只剩 1 列」。delegate 的 `hide_column`
+    /// 自己也把着这条底线——这里先判一遍，只为让宿主说得出原因（而不是点了没反应）。
+    ///
+    /// 藏完把当前格**在同一视觉列位**上重投影一次：视图列号没变，但那个位置现在
+    /// 指着后面那一列（DBeaver 刷新后焦点列也停在原位）；藏掉的是最右一列时列位
+    /// 越界，直接清选，别让 `selection_pos` 指着空气。
+    pub fn hide_current_column(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let Some((row, col_ix)) = self.selection_pos else {
+            return Err("先在网格里选中一个数据格再隐藏列".to_string());
+        };
+        if col_ix == 0 {
+            return Err("行号槽不是数据列；先选中一个数据格".to_string());
+        }
+        let data_col = self
+            .grid
+            .read(cx)
+            .delegate()
+            .data_column_checked(col_ix - 1);
+        let Some(data_col) = data_col else {
+            return Err("当前格不在可见列上；先选中一个数据格".to_string());
+        };
+        let (visible, already_hidden) = {
+            let delegate = self.grid.read(cx).delegate();
+            (
+                delegate.visible_column_count(),
+                delegate.is_hidden_column(data_col),
+            )
+        };
+        if already_hidden {
+            return Err("这一列已经隐藏了".to_string());
+        }
+        if visible <= 1 {
+            return Err("不能隐藏最后一列：结果集至少要留一列".to_string());
+        }
+        self.set_columns_hidden(vec![data_col], true, cx);
+        let visible_after = self.grid.read(cx).delegate().visible_column_count();
+        if col_ix <= visible_after {
+            self.set_selection_pos(Some((row, col_ix)), window, cx);
+        } else {
+            self.set_selection_pos(None, window, cx);
+        }
+        Ok(())
+    }
+
+    /// 【第 78 批】`ALT+SHIFT+T`：把所有隐藏列显示回来
+    /// （DBeaver `CMD_SHOW_COLUMNS`，`plugin.xml:1097`；
+    /// `SpreadsheetCommandHandler.java:195-212`：遍历列约束，把「不可见且默认可见」
+    /// 的列全部恢复）。
+    ///
+    /// 本仓的隐藏清单只有「用户藏起来的」这一种来源（没有驱动侧默认隐藏列的概念），
+    /// 所以 [`Self::show_all_columns`] 正好等价于上游那道 `isVisibleByDefault` 过滤
+    /// ——差异记在 `result-panel.md §9.61.6`。恢复后同样把当前格重新投影一次
+    /// （列位不变、指向的列变了，右栏的选中列高亮要跟着改）。
+    ///
+    /// 本来就没有隐藏列时返回 `false`（宿主提示一句，而不是毫无反应）。
+    pub fn show_hidden_columns(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let hidden = self.grid.read(cx).delegate().hidden_count();
+        if hidden == 0 {
+            return false;
+        }
+        self.show_all_columns(cx);
+        if let Some(pos) = self.selection_pos {
+            self.set_selection_pos(Some(pos), window, cx);
+        }
+        true
+    }
+
+    /// 【第 77 批】`CTRL+ALT+SHIFT+T`：焦点在「筛选框」与「结果呈现」之间来回切
+    /// （DBeaver `CMD_FOCUS_FILTER` → `ResultSetViewer.switchFilterFocus()`，
+    /// `plugin.xml:1058`；`ResultSetHandlerMain:179-181`）。
+    ///
+    /// 上游是**双向**的（`ResultSetViewer.java:689-701`）：筛选框已有焦点 → 交回当前
+    /// 呈现控件；否则交到筛选框。`filtersPanel == null` 时上游静默 return，本仓在
+    /// 筛选区没摆（`show_filter_panel == false`）或没有结果时返回 `false`，让宿主留提示
+    /// （键位没有「灰」这一态，第 69 批口径）。
+    ///
+    /// 「交回」落点跟第 60 批一致：走 [`Self::presentation_focus_target`]——网格态回网格，
+    /// 文本态回面板根（文本态下网格不在渲染树上，直接把焦点塞给它的 handle 等于丢掉）。
+    pub fn switch_filter_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.show_filter_panel {
+            return false;
+        }
+        let filter = self.filter_focus_handle(cx);
+        // 上游判据是 `filtersPanel.getEditControl().isFocusControl()`（精确落在筛选框上），
+        // 对应 gpui 的 `window.focused`——比 `contains_focused` 更贴：后者把后代也算进来。
+        if window.focused(cx) == Some(filter.clone()) {
+            let back = self.presentation_focus_target(cx);
+            window.focus(&back, cx);
+        } else {
+            window.focus(&filter, cx);
+        }
+        true
+    }
+
+    /// 【第 79 批】`ALT+SHIFT+C`：复制列名
+    /// （DBeaver `CMD_COPY_COLUMN_NAMES`，`plugin.xml:1095`；
+    /// `ResultSetHandlerMain.java:333-375`）。
+    ///
+    /// 上游的列集合：`rsv.getSelection()` 为空 → `getModel().getVisibleAttributes()`
+    /// （**全部可见列**）；否则用选中的列。上游只认**表格选区**，右栏那份列选中是另一个
+    /// 部件（`meta_data_panel_action_copy_column_text`），所以本仓的等价只有两级：
+    /// 当前格所在列（且该列仍然可见）→ 全部可见列（数据序，跳过隐藏）。
+    ///
+    /// 分隔符：上游多列走「复制配置」对话框，默认 `\t`（`ResultSetHandlerCopySpecial:129`），
+    /// 单列不弹；本仓固定 `\t`，不弹对话框（目视类后处理统一做）。
+    ///
+    /// 名字：上游取 `attr.getLabel()`（空则 `getName()`），且有数据源时套
+    /// `DBUtils.getQuotedIdentifier`（贴进 SQL 就是带引号的标识符）；本仓 `columns()`
+    /// 就是显示名、也没有数据源方言通道，所以**不加引号**（有意差异）。
+    pub fn copy_column_names(&mut self, cx: &mut Context<Self>) -> Result<usize, String> {
+        let picked: Vec<String> = {
+            let delegate = self.grid.read(cx).delegate();
+            let names = delegate.columns();
+            let from_cell = self
+                .selection_pos
+                .filter(|(_, col_ix)| *col_ix > 0)
+                .and_then(|(_, col_ix)| delegate.data_column_checked(col_ix - 1));
+            match from_cell {
+                Some(col) => names.get(col).cloned().into_iter().collect(),
+                None => names
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| !delegate.is_hidden_column(*index))
+                    .map(|(_, name)| name.clone())
+                    .collect(),
+            }
+        };
+        if picked.is_empty() {
+            return Err("这份结果没有可复制的列".to_string());
+        }
+        let count = picked.len();
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(picked.join("\t")));
+        Ok(count)
+    }
+
+    /// 【第 77 批】筛选框的焦点句柄（`switch_filter_focus` 的内部判据；宿主窗口用例
+    /// 也用它比对「焦点现在在哪」——`filter_input` 本身是 crate 内字段）
+    pub fn filter_focus_handle(&self, cx: &App) -> FocusHandle {
+        self.filter_input.read(cx).focus_handle(cx)
     }
 
     /// 【列浏览器】清单双击定位：网格滚到该列首行并选中（列不可见 = 隐藏列，不动作）。

@@ -497,63 +497,69 @@ fn probe_transpile_multi_statement() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// 9. 格式化对注释的保真度（架构 §12 #3 的实证，走生产路径）
+// 9. 格式化对注释的保真度（走生产路径 SqlEngine::format）
+//
+// 【2026-11-22 排版换引擎】`SqlEngine::format` 的排版已从 sqlglot `generate_pretty`
+// 换成 lax-sql（lossless，只调空白）。所以本探针的断言从"解析失败是否原样返回"
+// 改为"注释是否一字不少"——"解析失败原样返回"这条路径已经不存在了。
+//
+// 下方「块注释位置与可解析性」保留 sqlglot 的实证，它是当初决定换引擎的依据：
+// 行内 / 尾随 / 关键字之间的注释让 sqlglot 整条解析失败，而这些位置在真实 SQL 里很常见。
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]
 fn probe_format_comment_fidelity() {
-    banner("9. 格式化注释保真度（生产路径 SqlEngine::format；架构 §12 #3 实证）");
+    banner("9. 格式化注释保真度（生产路径 SqlEngine::format；排版引擎 = lax-sql）");
 
-    // （用例, 期望格式化后仍可解析）——解析失败的用例断言的是“原样返回”。
-    // 已知库边界：sqlglot 只容忍「语句前」的注释，行内 / 尾随注释一律解析失败（见下方位置实证）。
+    // （用例, 输入, 期望输出里仍能找到的注释正文；None = 该输入本身没有注释）
     let cases = [
         (
             "前导注释",
             "-- 报表口径说明\nselect a, b from t where x = 1",
-            true,
+            Some("报表口径说明"),
         ),
-        // 表达式中间的块注释 sqlglot 解析不了（见下方「块注释位置与可解析性」实证）：
-        // 该输入自身即不可解析，故此处断言的是「原样返回」，不是「可再解析」。
         (
-            "行内注释（库不支持，原样返回）",
+            "行内块注释（sqlglot 时代解析失败）",
             "select a, /* 保留? */ b from t",
-            false,
+            Some("保留?"),
         ),
-        // 尾随行注释同样解析失败（UnexpectedToken Eof）：见下方位置实证。
         (
-            "尾随注释（库不支持，原样返回）",
+            "尾随行注释（sqlglot 时代解析失败）",
             "select a from t -- 尾注释",
-            false,
+            Some("尾注释"),
         ),
-        ("多语句", "select 1; select 2;", true),
-        ("解析失败", "select from where", false),
+        ("关键字之间的注释", "select /* c */ a from t", Some("c")),
+        (
+            "多语句中途注释",
+            "select 1; -- 中间\nselect 2;",
+            Some("中间"),
+        ),
+        ("无效语句（无注释）", "select from where", None),
     ];
 
-    for (label, sql, expect_parseable) in cases {
+    for (label, sql, expected_comment) in cases {
         let out = SqlEngine::format(sql, SqlDialect::Mysql);
         let marks_in = comment_marks(sql);
         let marks_out = comment_marks(&out);
         println!("\n--- {label} ---");
-        println!("  输入：{sql}");
-        println!("  输出：{out}");
+        println!("  输入：{sql:?}");
+        println!("  输出：{out:?}");
         println!("  注释标记数：{marks_in} → {marks_out}");
 
-        if expect_parseable {
-            let reparsed = parse_statements_with_comments(&out, Dialect::Mysql);
+        // 保真底线：排版只动空白，注释标记数必须守恒（`crates/sql` 里还有一层兜底：
+        // 不守恒就整篇回退原文）。
+        assert_eq!(marks_in, marks_out, "注释标记数必须守恒：{label}");
+        if let Some(needle) = expected_comment {
             assert!(
-                reparsed.is_ok(),
-                "格式化输出必须可再次解析：{out}\n  再解析错误：{:?}\n  输入自身可解析：{}",
-                reparsed.as_ref().err(),
-                parse_statements_with_comments(sql, Dialect::Mysql).is_ok()
+                out.contains(needle),
+                "{label}：注释正文「{needle}」不能丢，输出是 {out:?}"
             );
-        } else {
-            assert_eq!(out, sql, "解析失败时应**原样返回**，不得改写用户内容");
         }
     }
 
-    // 边界实证：块注释出现在哪些位置会被解析器拒绍？
-    // 决定编辑器侧「格式化/分析失败」的提示范围，以及案例表里 expect_parseable 该取何值。
-    println!("\n--- 块注释位置与可解析性 ---");
+    // 边界实证：块注释出现在哪些位置会让 **sqlglot** 解析失败？
+    // 保留这段是给"为什么不用 generate_pretty 排版"留证据；与当前排版无关。
+    println!("\n--- 块注释位置与 sqlglot 可解析性（换引擎的依据）---");
     for (label, sql) in [
         ("语句开头", "/* c */ select a from t"),
         ("选择列表中间", "select a, /* c */ b from t"),
@@ -574,18 +580,20 @@ fn probe_format_comment_fidelity() {
         );
     }
 
-    // `#` 注释的方言改写：MySQL 目标 vs 非 MySQL 目标
+    // 【排版不方言化】`#` 注释：sqlglot 的生成器会按目标方言把 `#` 改成 `--`（方言差异），
+    // lax 不做方言改写 —— 所以 MySQL / Postgres 两个目标下输出必须**一字不差**。
     let hash = "# 口径\nselect a from t";
-    println!("\n--- `#` 注释的方言改写 ---");
-    println!("  输入：{hash}");
-    println!(
-        "  目标 MySQL   ：{}",
-        SqlEngine::format(hash, SqlDialect::Mysql)
+    let to_mysql = SqlEngine::format(hash, SqlDialect::Mysql);
+    let to_pg = SqlEngine::format(hash, SqlDialect::Postgres);
+    println!("\n--- `#` 注释（排版不按方言）---");
+    println!("  输入：{hash:?}");
+    println!("  目标 MySQL   ：{to_mysql:?}");
+    println!("  目标 Postgres：{to_pg:?}");
+    assert_eq!(
+        to_mysql, to_pg,
+        "排版应方言无关（`#` 不得因目标方言被改写）"
     );
-    println!(
-        "  目标 Postgres：{}",
-        SqlEngine::format(hash, SqlDialect::Postgres)
-    );
+    assert!(to_mysql.contains('#'), "`#` 注释不能被吞：{to_mysql:?}");
 }
 
 /// 注释标记计数（行注释 / 块注释 / MySQL `#`）

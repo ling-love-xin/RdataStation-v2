@@ -159,6 +159,18 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 | `rds-search`             | **5**（新 crate）                | —                                                                                                                             | **5**    | —      |
 | **合计**                   | **2499**                      | **409**                                                                                                                       | **2908** | **44** |
 
+> **2026-11-22 局部复测（SQL 排版换 `lax-sql`，非全量）**：上表仍是 2026-10-15 全量快照，**未**据此改写；本轮只重跑了受影响的包，实测为 ——
+> `rds-sql` lib **222** + 集成 `sqlglot_capabilities` **10** = **232**（该包不在上表列示范围内）；`rds-settings` lib **47**（上表 29）；`rds-editor` lib **825** + `offline_baseline` **5** = **830**（上表 622 + 5）。
+> 同轮 `cargo check --workspace --all-targets -j 2` = 0 error。全仓 `test-all` / `clippy-all` 未在本轮重跑，§0 的总数口径不变。
+>
+> **2026-11-22 第三轮复测（运算符间距 + 第 12 项设置）**：`rds-sql` lib **226**（+4：3 条运算符测试 + 1 条 `probe_operator_tokens`）；
+> `rds-editor` lib **832**（format 相关 33）；`rds-settings` lib **47**；`cargo check -p rds-sql -p rds-settings -p rds-editor` 零 error。
+> **2026-11-22 第四轮复测（真实语料对拍 + 两处幂等修复）**：`rds-sql` lib **232** + 集成 **10** = **242**（226 + 2 条永久幂等测试 + 4 个语料/CRLF 探针）；
+> `rds-editor --lib format` **33** 通过（本轮只动 `crates/sql` 与设置项 hint，format 链路无回归，整包未复跑）；
+> `rds-settings` lib **47**（hint 文案改动后复跑）；`cargo check -p rds-sql -p rds-settings -p rds-editor` 零 error / 零 warning；
+> `rustfmt --edition 2024 --check crates/sql/src/formatter.rs` clean。
+> 同上，上表总数口径不变。
+
 > **口径注（重要）**
 >
 > ：合计里的 

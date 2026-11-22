@@ -144,12 +144,14 @@ fn page_description(section: &str) -> Option<&'static str> {
         "layout" => Some("主窗口布局锁定与侧边栏宽度"),
         "logging" => Some("日志级别与动作入口"),
         "navigator" => Some("对象树显示（标签 / 徽标 / 筛选）与自动连接"),
-        "notifications" => Some("通知自动消失与同类合并"),
+        "notifications" => Some("自动消失、同类合并与弹出 / 系统通知开关"),
         "projects" => Some("项目列表排序"),
         "resources" => Some("资源库历史保留、排序与分组"),
         "result_panel" => Some("结果集网格的值呈现（对齐 / 着色 / 数据与显示）"),
         "scratchpad" => Some("便签工具栏与分区高度"),
-        "sql_format" => Some("SQL 格式化输出风格（Ctrl+Shift+F 与保存时格式化共用）；方言自动跟随文档绑定的连接"),
+        "sql_format" => Some(
+            "SQL 格式化输出风格（Ctrl+Shift+F 与保存时格式化共用）；排版只调空白、不按方言（方言只用于转译与语义分析）",
+        ),
         "startup" => Some("启动时显示的模块"),
         _ => None,
     }

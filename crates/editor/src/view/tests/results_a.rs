@@ -1515,3 +1515,453 @@ fn the_goto_column_key_without_a_result_only_says_so(cx: &mut TestAppContext) {
         "键位不可用要留提示，实际是：{message}"
     );
 }
+
+/// 【第 76 批】`CTRL+ALT+C` 选列全链：键位 → 面板方法 → 组件整列选中。
+///
+/// 当前格放在「note」（第 2 个数据列 → 组件列 2）上，用例钉「选列不会左移到行号槽」
+/// （`set_selected_col` 收组件列，0 是行号槽）。
+#[gpui_kit::test]
+fn the_select_column_key_selects_the_whole_column(cx: &mut TestAppContext) {
+    use gpui_kit::Focusable as _;
+
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+
+    let grid = cx.update(|_window, app| panel.read(app).grid_for_test());
+    cx.update(|_window, app| grid.update(app, |state, cx| state.set_selected_cell(0, 2, cx)));
+
+    let grid_focus = cx.update(|_window, app| grid.read(app).focus_handle(app));
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+    cx.simulate_keystrokes("ctrl-alt-c");
+    cx.run_until_parked();
+
+    assert_eq!(
+        cx.update(|_window, app| grid.read(app).selected_col()),
+        Some(2),
+        "「note」整列选中（组件列 2，不是行号槽也不是 id）"
+    );
+}
+
+/// 【第 76 批】`CTRL+ALT+R` 选行全链：键位 → 组件整行选中 + 状态行写 1 基行号。
+/// 状态那口正是 `row_target_state` 的输入，行级三钮 / 邻行复制都靠它。
+#[gpui_kit::test]
+fn the_select_row_key_selects_the_whole_row_and_marks_the_status_line(cx: &mut TestAppContext) {
+    use gpui_kit::Focusable as _;
+
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+
+    let grid = cx.update(|_window, app| panel.read(app).grid_for_test());
+    cx.update(|_window, app| grid.update(app, |state, cx| state.set_selected_cell(0, 1, cx)));
+
+    let grid_focus = cx.update(|_window, app| grid.read(app).focus_handle(app));
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+    cx.simulate_keystrokes("ctrl-alt-r");
+    cx.run_until_parked();
+
+    let (component_row, status_row) = cx.update(|_window, app| {
+        let status_row = panel
+            .read(app)
+            .result_panel
+            .read(app)
+            .status()
+            .and_then(|s| s.selected_row);
+        (grid.read(app).selected_row(), status_row)
+    });
+    assert_eq!(component_row, Some(0), "整行选中");
+    assert_eq!(status_row, Some(1), "状态行写 1 基行号（行级动作读这口）");
+}
+
+/// 【第 76 批】还没有结果时按 `CTRL+ALT+C` / `CTRL+ALT+R`：不动作，各留一句提示
+/// （与第 75 批跳列同口径：键位没有「灰」这一态，不可用要说出来）。
+///
+/// 没有结果时网格不在焦点路径上，直接调 action 的处理方法。
+#[gpui_kit::test]
+fn the_select_column_and_row_keys_without_a_result_only_say_so(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.on_select_current_column(&crate::commands::SelectCurrentColumn, window, cx);
+        });
+    });
+    cx.run_until_parked();
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .unwrap_or_default();
+    assert!(
+        message.contains("选列"),
+        "选列不可用要留提示，实际是：{message}"
+    );
+
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.on_select_current_row(&crate::commands::SelectCurrentRow, window, cx);
+        });
+    });
+    cx.run_until_parked();
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .unwrap_or_default();
+    assert!(
+        message.contains("选行"),
+        "选行不可用要留提示，实际是：{message}"
+    );
+}
+
+/// 【第 77 批】`CTRL+ALT+SHIFT+T` 全链：键位（面板 context）→ 焦点进筛选框 →
+/// 再按一次焦点回网格（DBeaver `switchFilterFocus` 的双向语义）。
+#[gpui_kit::test]
+fn the_filter_focus_key_moves_between_the_filter_box_and_the_grid(cx: &mut TestAppContext) {
+    use gpui_kit::Focusable as _;
+
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+
+    let grid = cx.update(|_window, app| panel.read(app).grid_for_test());
+    let grid_focus = cx.update(|_window, app| grid.read(app).focus_handle(app));
+    let filter_focus = cx.update(|_w, app| panel.read(app).result_panel.read(app).filter_focus_handle(app));
+
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+    cx.simulate_keystrokes("ctrl-alt-shift-t");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert_eq!(
+        cx.update(|window, cx| window.focused(cx)),
+        Some(filter_focus.clone()),
+        "第一次按：焦点进筛选框"
+    );
+
+    cx.simulate_keystrokes("ctrl-alt-shift-t");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(
+        cx.update(|window, cx| window.focused(cx)),
+        Some(grid_focus),
+        "第二次按（焦点在筛选框里）：交回网格"
+    );
+}
+
+/// 【第 77 批】还没有结果集时按 `CTRL+ALT+SHIFT+T`：
+///
+/// 结果区在本仓是**有内容才渲染**（`host/render.rs:221/241` 的 `result_has_content`），
+/// 所以无结果时面板子树根本不在树上，`editor-result-panel` 上下文也不在焦点路径里
+/// ——键位不命中、焦点不动。这与上游口径一致：`resultset.focus.filter` 的
+/// `enabledWhen` 要求 `resultset.part` 存在（命令定义 `plugin.xml:249`、handler
+/// `plugin.xml:545`），没有结果集时这条命令就是禁用的。上游
+/// `switchFilterFocus:689-701` 自己只判 `filtersPanel`，不看有没有数据；差别只在
+/// “部件存不存在”，本仓由「面板渲不渲染」自然承担。
+#[gpui_kit::test]
+fn the_filter_focus_key_is_inert_without_a_result(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    assert!(
+        !cx.update(|_w, app| panel.read(app).result_panel.read(app).has_content()),
+        "这条用例的前提是还没有结果"
+    );
+
+    let before = cx.update(|window, cx| window.focused(cx));
+    cx.simulate_keystrokes("ctrl-alt-shift-t");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(
+        cx.update(|window, cx| window.focused(cx)),
+        before,
+        "没有结果时焦点不动（与上游 enabledWhen 一致）"
+    );
+}
+
+/// 【第 78 批】`ALT+SHIFT+H` / `ALT+SHIFT+T` 全链（`CMD_HIDE_COLUMNS` /
+/// `CMD_SHOW_COLUMNS`，`plugin.xml:1096/1097`；`SpreadsheetCommandHandler:174-212`）：
+/// 没有隐藏列时按「显示」只留提示 → 按「隐藏」把当前列藏掉 → 再按「显示」放回来。
+#[gpui_kit::test]
+fn the_hide_and_show_column_keys_round_trip(cx: &mut TestAppContext) {
+    use gpui_kit::Focusable as _;
+
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+
+    let grid = cx.update(|_window, app| panel.read(app).grid_for_test());
+    // 组件列 2 = 数据列 1（`note`）
+    cx.update(|_window, app| grid.update(app, |state, cx| state.set_selected_cell(0, 2, cx)));
+    let grid_focus = cx.update(|_window, app| grid.read(app).focus_handle(app));
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+
+    // 本来没有隐藏列 → `ALT+SHIFT+T` 只留一句提示
+    cx.simulate_keystrokes("alt-shift-t");
+    cx.run_until_parked();
+    assert!(
+        cx.update(|_w, app| panel
+            .read(app)
+            .result_panel
+            .read(app)
+            .column_hidden()
+            .is_empty()),
+        "没有隐藏列时什么也不变"
+    );
+    let message = cx
+        .update(|_w, cx| panel.read(cx).message.clone())
+        .unwrap_or_default();
+    assert!(
+        message.contains("没有隐藏的列"),
+        "要说出来，实际是：{message}"
+    );
+
+    // `ALT+SHIFT+H`：藏掉当前列
+    cx.simulate_keystrokes("alt-shift-h");
+    cx.run_until_parked();
+    let hidden = cx.update(|_w, app| {
+        panel
+            .read(app)
+            .result_panel
+            .read(app)
+            .column_hidden()
+    });
+    assert_eq!(hidden, vec!["note".to_string()], "当前列进隐藏清单");
+
+    // 焦点在网格里；`ALT+SHIFT+T` 把隐藏列放回来
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+    cx.simulate_keystrokes("alt-shift-t");
+    cx.run_until_parked();
+    assert!(
+        cx.update(|_w, app| panel
+            .read(app)
+            .result_panel
+            .read(app)
+            .column_hidden()
+            .is_empty()),
+        "所有隐藏列都回来了"
+    );
+}
+
+/// 【第 79 批】`ALT+SHIFT+C` 复制列名全链（`CMD_COPY_COLUMN_NAMES`，`plugin.xml:1095`；
+/// `ResultSetHandlerMain:333-375`）：选中某格 → 拷那一列；藏掉当前列（清选后）
+/// → 退化成全部可见列，隐藏的列不出现。
+#[gpui_kit::test]
+fn alt_shift_c_copies_the_column_names(cx: &mut TestAppContext) {
+    use gpui_kit::Focusable as _;
+
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+
+    let grid = cx.update(|_window, app| panel.read(app).grid_for_test());
+    // 组件列 2 = 数据列 1（`note`）
+    cx.update(|_window, app| grid.update(app, |state, cx| state.set_selected_cell(0, 2, cx)));
+    let grid_focus = cx.update(|_window, app| grid.read(app).focus_handle(app));
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+
+    let clipboard = |cx: &mut VisualTestContext| {
+        cx.update(|_window, app| app.read_from_clipboard().and_then(|item| item.text()))
+    };
+    let message = |cx: &mut VisualTestContext| {
+        cx.update(|_window, cx| panel.read(cx).message.clone())
+            .unwrap_or_default()
+    };
+
+    // 当前格在 `note`：只拷那一列，不加分隔符
+    cx.simulate_keystrokes("alt-shift-c");
+    cx.run_until_parked();
+    assert_eq!(clipboard(cx).as_deref(), Some("note"), "当前格所在列");
+    assert!(message(cx).contains("已复制列名"), "实际是：{}", message(cx));
+
+    // 藏掉 `note`（当前格在最右列 → 越界清选），再按就是全部可见列
+    cx.simulate_keystrokes("alt-shift-h");
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_w, app| panel.read(app).result_panel.read(app).column_hidden()),
+        vec!["note".to_string()],
+        "前提：这一列真的藏了"
+    );
+    // 藏掉最右一列时 `hide_current_column` 会清选（面板层用例
+    // `hiding_the_rightmost_column_clears_the_current_cell` 钉住；面板字段不跨 crate 暴露），
+    // 于是下面这一按走的是「全部可见列」那条路。
+
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+    cx.simulate_keystrokes("alt-shift-c");
+    cx.run_until_parked();
+    assert_eq!(clipboard(cx).as_deref(), Some("n"), "隐藏列不进全量");
+    assert!(message(cx).contains("已复制列名"), "实际是：{}", message(cx));
+}
+
+/// 【第 80 批】`ALT+SHIFT+F` 打开筛选设置浮层（`CMD_FILTER_EDIT_SETTINGS`，
+/// `plugin.xml:1094`；handler `:570` → `ResultSetHandlerMain:546-549` →
+/// `ResultSetViewer.showFilterSettingsDialog()` `:644-646`，直接开对话框、不判条件）。
+///
+/// 【第 81 批】`ESC` 收起这条浮层，焦点在排序输入框里也成立（原理见
+/// `escape_dismisses_every_result_overlay` 的说明）；鼠标路径是标题栏那颗 ✕
+/// （`editor-result-filter-settings-close`），两条出口都只入队 `CloseFilterSettings`。
+#[gpui_kit::test]
+fn alt_shift_f_opens_the_filter_settings_overlay(cx: &mut TestAppContext) {
+    use gpui_kit::Focusable as _;
+
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+
+    let grid = cx.update(|_window, app| panel.read(app).grid_for_test());
+    let grid_focus = cx.update(|_window, app| grid.read(app).focus_handle(app));
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-filter-settings-card").is_none(),
+        "前提：还没打开"
+    );
+
+    cx.simulate_keystrokes("alt-shift-f");
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-filter-settings-card").is_some(),
+        "按一下就要把浮层摆出来"
+    );
+
+    // 【第 81 批】`ESC` 收起：焦点在排序框里也成立——`input` 自己的 `escape` binding
+    // 命中后 `cx.propagate()`，面板层的 `DismissOverlay` 接住并冒泡到面板根
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-filter-settings-card").is_none(),
+        "焦点在排序框时 ESC 也要收起浮层"
+    );
+
+    // 再开一次，用 ✕ 关（键位与鼠标各一条出口，落点都是 CloseFilterSettings）
+    cx.simulate_keystrokes("alt-shift-f");
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let close = cx
+        .debug_bounds("editor-result-filter-settings-close")
+        .expect("关闭钮要画出来");
+    cx.simulate_click(close.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-filter-settings-card").is_none(),
+        "点 ✕ 之后浮层收起"
+    );
+}
+
+/// 【第 81 批】`ESC` 收起四个结果集浮层（SQL 预览 / 取全部确认 / 筛选设置 / 跳列）。
+///
+/// **为什么既不是键位、也不是遮罩的 `on_key_down`**：三条通道实测都不可用。
+/// ① 遮罩 `on_key_down`：`ESC` 落到焦点节点后要先过 binding 与 action 派发，
+/// `on_key_down` 排在它们之后（`gpui-pre-0.3.11/src/window.rs:6493` 在 binding 循环
+/// 之后），焦点在输入框里时压根走不到；② 任何带 context 的 binding（网格层 / 面板层）：
+/// 焦点一旦交给 `InputState`，`Window::context_stack()` 退化成空（本用例实测 `[]`，
+/// 对照网格焦点是 `[Root, editor, editor-result-panel, editor-result-grid, DataTable]`），
+/// 连面板层已绑好的 `Ctrl+Shift+G` 也匹配不到；③ 全局（`context: None`）binding 能命中，
+/// 但会先截走网格内联编辑与侧栏那批靠 `on_key_down` 收 `ESC` 的处理（`grid/edit.rs`）。
+/// 唯一不依赖焦点 / context 的通道是 app 级 keystroke interceptor
+/// （`ResultPanel::new` 的 `intercept_keystrokes`，`window.rs:6335-6352` 在 binding 之前跑）。
+/// 它只在真有浮层开着时才 `stop_propagation()`，无浮层时让路。
+///
+/// 本仓 `ESC` 不是 DBeaver 的 `cell.reset`（`plugin.xml:1081`）：网格的 `ESC` 保留组件
+/// 语义，只有浮层按模态惯例收起，关哪一个由 `ResultPanel::dismiss_overlay` 判。
+#[gpui_kit::test]
+fn escape_dismisses_every_result_overlay(cx: &mut TestAppContext) {
+    use gpui_kit::Focusable as _;
+
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+
+    let grid = cx.update(|_window, app| panel.read(app).grid_for_test());
+    let grid_focus = cx.update(|_window, app| grid.read(app).focus_handle(app));
+    // ① 筛选设置：焦点被交给排序输入框（`open_filter_settings` 里 `state.focus`）
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+    cx.simulate_keystrokes("alt-shift-f");
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-filter-settings-card").is_some(),
+        "前提：筛选设置浮层开着"
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-filter-settings-card").is_none(),
+        "焦点在排序框时 ESC 也要收起筛选设置浮层"
+    );
+
+    // ② 跳列：焦点被交给跳列输入框
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+    cx.simulate_keystrokes("ctrl-shift-g");
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-goto-column-card").is_some(),
+        "前提：跳列浮层开着"
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-goto-column-card").is_none(),
+        "焦点在跳列输入框时 ESC 也要收起浮层"
+    );
+
+    // ③ SQL 预览：没有输入框焦点（打开时不移交焦点），焦点仍在网格——
+    //    这条证明面板层键位不依赖浮层内部焦点
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.result_panel
+                .update(cx, |p, cx| p.open_sql_dialog(window, cx));
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-sql-dialog-card").is_some(),
+        "前提：SQL 预览浮层开着"
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-sql-dialog-card").is_none(),
+        "焦点不在浮层里时 ESC 也要收起 SQL 预览"
+    );
+
+    // ④ 取全部确认：同样没有输入源，焦点留在网格
+    cx.update(|_window, cx| {
+        panel.update(cx, |host, cx| {
+            host.result_panel.update(cx, |p, cx| p.open_fetch_all_confirm(cx));
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-fetch-all-confirm-card").is_some(),
+        "前提：取全部确认浮层开着"
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-fetch-all-confirm-card").is_none(),
+        "ESC 要收起取全部确认浮层"
+    );
+}

@@ -247,6 +247,32 @@ impl ResultPanel {
             },
         ));
 
+        // 【第 81 批】`ESC` 收起结果集浮层：走 app 级 keystroke interceptor，**不是**键位。
+        //
+        // 实测（`escape_dismisses_every_result_overlay`）：焦点一旦交给浮层里的 `InputState`，
+        // `Window::context_stack()` 就退化成空（`dispatch_path` 落到 root），带 context 的
+        // binding 一条都匹配不到——那一刻连 `Ctrl+Shift+G` 都按不出来。interceptor 跑在
+        // binding 之前且与焦点无关（`gpui-pre-0.3.11/src/window.rs:6335-6352`），四个浮层
+        // （包括没有输入框、打开时不移交焦点的 SQL 预览 / 取全部确认）都在这里一并收口。
+        //
+        // 只在「真有浮层开着」时才 `stop_propagation()`：无浮层时完全让路，网格内联编辑的
+        // `ESC` 取消（`grid/edit.rs`）、侧栏 / 设置页那些 `on_key_down` 语义都不受影响。
+        let esc_panel = cx.weak_entity();
+        let _esc_sub = cx.intercept_keystrokes(move |event, window, cx| {
+            let Some(panel) = esc_panel.upgrade() else {
+                return;
+            };
+            if event.keystroke.key != "escape"
+                || event.keystroke.modifiers.number_of_modifiers() != 0
+            {
+                return;
+            }
+            let handled = panel.update(cx, |this, cx| this.dismiss_overlay(window, cx));
+            if handled {
+                cx.stop_propagation();
+            }
+        });
+
         Self {
             focus_handle,
             grid,
@@ -316,6 +342,8 @@ impl ResultPanel {
             _grid_sub,
             // 【B15】筛选框订阅（边打边筛的唯一入口）
             _filter_sub,
+            // 【第 81 批】`ESC` 关浮层的 interceptor（见上）
+            _esc_sub,
             // 【结果内查找】查找栏状态（会话级；`find_at` 存视图列（含 `#` 槽））
             find_open: false,
             find_input,

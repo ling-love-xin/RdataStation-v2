@@ -3046,8 +3046,129 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   单光标时走 `cx.propagate()`（`:2607`）→ 遮罩的 `on_key_down` 收得到；**无窗口用例**
   （四个浮层同口径都缺）。
 
+### 2.127 选列 / 选行（2026-11-22，第 76 批）
+
+- 键位：`CTRL+ALT+C` / `CTRL+ALT+R` → `result_panel::grid::SelectCurrentColumn` /
+  `SelectCurrentRow`（`plugin.xml:1088/1089`；`SpreadsheetCommandHandler:106-131`），挂
+  `RESULT_GRID_CONTEXT`，注册在 `crates/app/src/main.rs` + `bind_editor_keys`。
+- 落点：单选区的等价表达——选列 = `select_column(data_column(col - 1))`（组件列 0 是行号槽，
+  按下去不选、留提示）；选行 = 组件 `set_selected_row(row)` + 状态行 `Some(row + 1)`。
+- 为什么选行要写状态行：`row_target_state` 只读 `status.selected_row`，而 `SelectRow`
+  事件路径不写 → 只铺色不带状态时，行级三钮 / 邻行复制 / 「修改」钮仍全灰。
+- 用例：panel 2 条（列映射 / 行 + 状态行）；editor 3 条（两键全链 / 无结果提示）。
+- 门禁（最终实测）：pair `Finished`；panel 414；ui-guard 4；editor lib **825 passed**
+  （1 ignored）；workspace `Finished`（2 warning 来自通知线）。检查期曾有 6 条格式化用例红，
+  起因是并行线只改了 `FormatOptions` / 引擎、映射未跟上；那条线收尾前已补齐并转绿，
+  **本批未提交任何格式化线文件**。
+- 记档不实现：`CTRL+BACKSPACE`（`cell.setDefault`）要 `DBDValueDefaultGenerator` + 会话，
+  本仓无驱动侧默认值通道。
+- 未决：`SelectRow` 事件路径要不要统一写 `status.selected_row`（本批只补键位路径）。
+
+### 2.128 切筛选焦点（2026-11-22，第 77 批）
+
+- 键位：`CTRL+ALT+SHIFT+T` → `result_panel::grid::SwitchFilterFocus`
+  （`plugin.xml:1058`；`ResultSetHandlerMain:179-181` → `ResultSetViewer.switchFilterFocus():689-701`），
+  **挂 `RESULT_PANEL_CONTEXT`**（上游 context 就是 `...ui.context.resultset`，不是 `.focused`）
+  ——若绑网格层，焦点在筛选框时「切回来」那一半按不到。
+- 落点：`ResultPanel::switch_filter_focus(window, cx) -> bool` + 公共 `filter_focus_handle(cx)`；
+  判据 `window.focused(cx) == Some(filter)`（贴 `isFocusControl()` 的精确语义）；交回走
+  `presentation_focus_target`（网格态回网格、文本态回面板根）。
+- 收起 / 没有筛选面板 → 返回 `false`，宿主留提示（上游静默 return，本仓按第 69 批口径）。
+- 无结果时面板整块不渲染（`host/render.rs:221/241`），键位不命中、焦点不动——与上游
+  `enabledWhen` 要求 `resultset.part` 一致。
+- 用例：panel 2 条（双向往返 / 收起时不动作）；editor 2 条（键位全链往返 / 无结果 inert）。
+- 门禁：pair `Finished` 无 warning；panel **416**（+2）；ui-guard 4；editor lib **831 passed**
+  （1 ignored；825 → +6，其中 +2 本批、+4 来自并行线同期补的用例）；workspace `Finished`。
+- 记档：`TableState` 没有 `focus_handle` 方法，窗口用例必须 `use gpui_kit::Focusable as _;`。
+
+### 2.129 隐藏 / 显示列（2026-11-22，第 78 批）
+
+- 键位：`ALT+SHIFT+H` → `HideCurrentColumn`、`ALT+SHIFT+T` → `ShowHiddenColumns`
+  （`plugin.xml:1096/1097`；`SpreadsheetCommandHandler:174-194` / `:195-212`），
+  挂 `RESULT_PANEL_CONTEXT`（上游 contextId 是整块 `...ui.context.resultset`）。
+- 落点：`hide_current_column(window, cx) -> Result<(), String>`（当前列 = `selection_pos` 的组件列
+  换算数据列；拒绝：无当前格 / 行号槽 / 已隐藏 / 只剩一列）、`show_hidden_columns(window, cx) -> bool`
+  （`hidden_count() == 0` → false）。
+- 关键点：藏 / 显之后把当前格**按同一视觉列位重投影**（`set_selection_pos`），列位越界则清
+  `selection_pos`（右栏 `selected_col` 按「清选保持清单当前选中」保留，第 79 批实测见 §2.130）。
+- 有意差异：无「默认可见列」概念（`show_all_columns` 全恢复等价）、不允许全隐（留 1 列）、
+  ERROR 框 → 状态栏一句话、一次只藏一列。
+- 用例：panel 2 条（三列场景藏中间列 + 重投影 / 只剩一列被拒）；editor 1 条（提示 → 藏 → 放回）。
+- 门禁：pair `Finished` 无 warning；panel **418**（+2）；ui-guard 4；editor lib **832 passed**
+  （1 ignored）；workspace `Finished`（2 warning 来自通知线）。
+- 记档：用例初版用两列 harness 断言「停在原列位」，实际走的是越界清选分支——改成三列场景，
+  代码未改。
+
+### 2.130 复制列名（2026-11-22，第 79 批）
+
+- 键位：`ALT+SHIFT+C` → `CopyColumnNames`（`plugin.xml:1095`；命令定义 `:313`、handler `:439`、
+  实现 `ResultSetHandlerMain:333-375`），挂 `RESULT_PANEL_CONTEXT`（上游 contextId 整块
+  `...ui.context.resultset`）。
+- 落点：`ResultPanel::copy_column_names(cx) -> Result<usize, String>`（`panel/events.rs`）——
+  判据两级：当前格所在列（`data_column_checked` 校验仍可见）→ 全部可见列（数据序、跳过隐藏）；
+  `\t` 拼接，空则 `Err`。宿主 `on_copy_column_names` 给回执（「已复制列名」/「已复制 N 个列名（TSV）」）。
+- 关键取舍：**右栏 `selected_col` 不参与判据**。上游只认表格选区；而本仓「清选保持清单当前选中」
+  会让 `selected_col` 停在隐藏列上（实测 `(None, Some(1))`），读它会把隐藏列名拷出来。
+- 有意差异：不弹「复制配置」对话框（固定 `\t`）、不加标识符引号（无方言通道）、
+  空列表 → 状态栏一句话（上游空串照拷）、复制完留回执（上游静默）。
+- 用例：panel 2 条（两级判据 + 隐藏列跳过 / 空列被拒）、editor 1 条（选中列 → 藏列 → 全量）；
+  另补第 78 批越界分支 1 条（藏最右列 → 清 `selection_pos`）。
+- 门禁：pair `Finished` 无 warning；panel **421**（+3）；ui-guard 4；editor lib **833 passed**
+  （1 ignored）；workspace `Finished`（2 warning 来自通知线）。
+- 记档：`ALT+SHIFT+C` 原本在 §9.61.9 遗留清单里；本批接上，§9.61.9 与 §9.61.4 的措辞一并按实测收紧。
+
+### 2.131 筛选设置键位（2026-11-22，第 80 批）
+
+- 键位：`ALT+SHIFT+F` → `OpenFilterSettings`（`plugin.xml:1094`；命令 `:333`、handler `:570`、
+  实现 `ResultSetHandlerMain:546-549` → `ResultSetViewer.showFilterSettingsDialog()` `:644-646`
+  = 直接开对话框、不判条件），挂 `RESULT_PANEL_CONTEXT`。
+- 落点：`actions!` 增 `OpenFilterSettings`；宿主 `on_open_filter_settings` **直接调**
+  `panel.open_filter_settings(window, cx)`（不入队列；队列那条留给工具栏 / 右键那三个鼠标入口）。
+  不留 message（打开本身是可见反馈）。
+- 实测缺口（结构性，非本批引入）：焦点在浮层的排序输入框里按 `ESC` 关不掉浮层 ——
+  `escape` 先命中输入框 binding（`gpui-base/src/input/base/state.rs:277`），`clean_on_escape == false`
+  时走 `cx.propagate()`（`:2607`）只往上找**上层 binding**，而浮层根接的是 `on_key_down`
+  （`panel/dialog.rs:465-469`），接不到。修法 = 浮层遮罩挂 `key_context` + app 注册 escape binding，
+  留待单独一批；现状已钉进用例。
+- 用例：editor 1 条（打开 → ESC 仍在 → 点 ✕ 收起）。
+- 门禁：pair `Finished` 无 warning；panel **421**（不变）；ui-guard 4；editor lib **834 passed**
+  （1 ignored）；`check --workspace --all-targets` **被并行线阻塞**（未跟踪的
+  `crates/workbench/src/components/version_dialog.rs` 有 3 处编译错：缺 `ActiveTheme` 导入、
+  `Div::v_flex` ×2）——本批改动 crate 由前三条覆盖，待并行线修好后复查整包。
+
+### 2.132 浮层 `ESC` 收起（2026-11-22，第 81 批）
+
+- 入口**不是键位**：`ResultPanel::new` 里 `cx.intercept_keystrokes`（app 级，binding 之前跑，
+  与焦点无关）。实测依据是 `Window::context_stack()`：焦点在网格 =
+  `[Root, editor, editor-result-panel, editor-result-grid, DataTable]`，焦点在浮层 `InputState` =
+  **`[]`**（空栈 ⇒ 带 context 的 binding 全不匹配，连 `CTRL+SHIFT+G` 都按不出来）。
+  因此「给遮罩挂 context」「挂面板层 binding」「全局 binding」三条都被否掉（全局那条会截走
+  `grid/edit.rs` 的内联编辑取消）。
+- `dismiss_overlay(window, cx)`：按叠放次序复用 `close_*`，**关完 `window.focus(&target)` 交回
+  `presentation_focus_target`**（不交回则焦点停在已消失的输入框，后续面板键位全废）；
+  interceptor 只在返回 `true` 时 `cx.stop_propagation()`，无浮层时零影响。
+- 删掉的东西：四个遮罩的 `on_key_down`（从未生效的旧实现）、`actions!::DismissOverlay`、
+  `ResultRequest::DismissOverlay`、面板层 `escape` 键位（`crates/app` 与测试各一条）、
+  面板根 `.on_action`、`RESULT_OVERLAY_CONTEXT`（中途方案，已撤）。
+- 用例：`escape_dismisses_every_result_overlay`（四段：筛选设置 / 跳列 / SQL 预览 / 取全部确认）；
+  第 80 批 `alt_shift_f_opens_the_filter_settings_overlay` 的 ESC 断言改成「应收起」。
+- 门禁：pair `Finished` 无 warning；panel **421**；editor lib **835 passed**（1 ignored）；
+  ui-guard 3/4（失败项报的是并行线未跟踪的 `version_dialog.rs` 裸 px）；整包被并行线阻塞
+  （`version_dialog.rs` 3 处编译错 + `crates/settings/src/registry/entries/projects.rs:49`
+  unclosed delimiter）。
+- 遗留：三条鼠标 ✕ 出口（`CloseFilterSettings` / `CloseSqlDialog` / `CloseFetchAllConfirm`）
+  没有 window、不交回焦点；「输入框焦点下所有 context binding 失效」属框架层现象，
+  本批只接了 `ESC` 一条。
+
 ## 3. 并行线协作纪律（工作区现状）
 
+- **共享文件的提交姿势**（第 77 批踩过，务必照做）：`git commit --only <paths>` /
+  `git commit -F msg -- <paths>` 提交的是**工作区内容**，会绕过刚用 `hash-object -w` +
+  `update-index --cacheinfo` 摘好的那个 blob。所以顺序必须是：摘 blob →
+  `update-index --cacheinfo` → `git add` 本线其余文件 → **不带 paths 的** `git commit -F msg`。
+  第 77 批第一次提交用了 `--only`，把 `crates/app/src/main.rs` 里的通知线 3 个 hunk 一起带进了
+  本线提交（25 行而不是 11 行）；发现后用 `git reset --soft HEAD~2` + `git reset` 重做，
+  工作区未受影响、通知线改动仍在未提交状态。
 - 只 add 本线文件；`Cargo.lock` / vendor patch / `crates/insight/*` / `plugin/*` / `crates/app/src/main.rs` / `workbench/src/components/insight_actions.rs` / README 等并行线文件一律不随本线提交。
 - 当前未提交（并行线在动，改前先 `git status` 确认归属）：
   - 本线混合：`result_panel/src/{store/, export/, grid/, panel/}`（2026-10-29 拆分目录）/ `ports.rs` / `host.rs` / `settings/*` / `workbench/src/view.rs` / `panels/mod.rs` / `tests/ui_contract.rs` / `workbench_shell/src/ui.rs`

@@ -44,6 +44,14 @@ use workbench::WorkbenchView;
 mod assets;
 mod theme_pack;
 
+/// 应用标识（系统通知的身份）
+///
+/// Windows 上没有这一步，`Notification::in_app_and_system()` 的系统通知会被**静默丢弃**
+/// （gpui 文档：必须在开窗前、首次推送通知前调用一次）。macOS 侧需要打包成 .app 才生效。
+const APP_IDENTIFIER: &str = "com.rdatastation.rds";
+/// 系统通知里显示的应用名
+const APP_NAME: &str = "RdataStation";
+
 fn main() {
     // 0. Windows 控制台输出代码页切到 UTF-8（cp65001）：tracing stderr / eprintln! 的
     //    中文日志不再按系统 ANSI（cp936）渲染成乱码（文件与库层本就是 UTF-8，不受影响）。
@@ -203,6 +211,9 @@ fn run_app() {
             // 不等这一下，关窗口前最后 1 秒的记录就没了。
             // `Subscription` **一 drop 就退订**（gpui 语义），所以必须 forget —— 钩子要活到进程结束。
             std::mem::forget(cx.on_app_quit(|_cx| async {
+                // 通知历史是节流落盘的（空闲 500ms 才写），退出时补一次，
+                // 否则最后一批通知会随进程一起丢掉。
+                notification::flush_now();
                 let _ = engine::flush_logs().await;
             }));
 
@@ -211,6 +222,9 @@ fn run_app() {
             init_global_system();
 
             gpui_kit::init(cx);
+
+            // 系统通知身份：必须早于任何窗口与任何通知推送（Windows 上缺它 = 系统通知静默失效）。
+            cx.set_app_identity(APP_IDENTIFIER, APP_NAME);
 
             // 1. 设置：加载 <RDS_HOME>/config/settings.json 为 global。
             SettingsService::init(cx);
@@ -429,6 +443,64 @@ fn run_app() {
                     "ctrl-shift-g",
                     editor::commands::GotoColumn,
                     Some(editor::commands::RESULT_GRID_CONTEXT),
+                ),
+                // 【第 76 批】`CTRL+ALT+C` / `CTRL+ALT+R` = `CMD_SELECT_COLUMNS` /
+                // `CMD_SELECT_ROWS`（`plugin.xml:1088/1089`；两个 action 都在
+                // `SpreadsheetCommandHandler:106-131`，不进 `ResultSetHandlerMain`）。
+                // 语义是「把当前格所在的整列 / 整行选成单元格」；本仓单区域选区，等价表达
+                // 取组件整列 / 整行选中。两个键此前都没绑定（已占的 ctrl-alt 只有 d / n /
+                // insert），不覆写任何既有键。
+                KeyBinding::new(
+                    "ctrl-alt-c",
+                    editor::commands::SelectCurrentColumn,
+                    Some(editor::commands::RESULT_GRID_CONTEXT),
+                ),
+                KeyBinding::new(
+                    "ctrl-alt-r",
+                    editor::commands::SelectCurrentRow,
+                    Some(editor::commands::RESULT_GRID_CONTEXT),
+                ),
+                // 【第 77 批】`CTRL+ALT+SHIFT+T` = `CMD_FOCUS_FILTER` →
+                // `ResultSetViewer.switchFilterFocus()`（`plugin.xml:1058`；
+                // `ResultSetHandlerMain:179-181`）。双向：筛选框有焦点就交回呈现，否则交到
+                // 筛选框。**挂面板层 context**（上游同一条也绑 `...resultset` 而不是
+                // `...resultset.focused`）——焦点已经在筛选框里时也要能命中，否则「切回来」
+                // 那一半按不到。
+                KeyBinding::new(
+                    "ctrl-alt-shift-t",
+                    editor::commands::SwitchFilterFocus,
+                    Some(editor::commands::RESULT_PANEL_CONTEXT),
+                ),
+
+                // 【第 78 批】`ALT+SHIFT+H` / `ALT+SHIFT+T` = `CMD_HIDE_COLUMNS` /
+                // `CMD_SHOW_COLUMNS`（`plugin.xml:1096/1097`；
+                // `SpreadsheetCommandHandler:174-194 / 195-212`）。上游这两条挂的是整块面板的
+                // `...ui.context.resultset`，这里同口径挂面板层——焦点在筛选框或侧栏里也能按到。
+                KeyBinding::new(
+                    "alt-shift-h",
+                    editor::commands::HideCurrentColumn,
+                    Some(editor::commands::RESULT_PANEL_CONTEXT),
+                ),
+                KeyBinding::new(
+                    "alt-shift-t",
+                    editor::commands::ShowHiddenColumns,
+                    Some(editor::commands::RESULT_PANEL_CONTEXT),
+                ),
+                // 【第 79 批】`ALT+SHIFT+C` = `CMD_COPY_COLUMN_NAMES`（`plugin.xml:1095`；
+                // `ResultSetHandlerMain:333-375`）。上游同样挂整块面板的
+                // `...ui.context.resultset`，这里跟第 78 批一样挂面板层。
+                KeyBinding::new(
+                    "alt-shift-c",
+                    editor::commands::CopyColumnNames,
+                    Some(editor::commands::RESULT_PANEL_CONTEXT),
+                ),
+                // 【第 80 批】`ALT+SHIFT+F` = `CMD_FILTER_EDIT_SETTINGS`（`plugin.xml:1094`；
+                // `ResultSetHandlerMain:546-549` → `showFilterSettingsDialog()`）。上游同样挂
+                // 整块面板的 `...ui.context.resultset`，这里跟第 78/79 批一样挂面板层。
+                KeyBinding::new(
+                    "alt-shift-f",
+                    editor::commands::OpenFilterSettings,
+                    Some(editor::commands::RESULT_PANEL_CONTEXT),
                 ),
                 // 【第 60 批】同一条 `Ctrl+反引号` 再绑到**面板层**上下文：文本态下网格
                 // 整块不渲染，网格 context 不在焦点路径上；焦点落在面板根时靠这条命中

@@ -156,6 +156,48 @@ fn bind_editor_keys(cx: &mut TestAppContext) {
                 crate::commands::GotoColumn,
                 Some(crate::commands::RESULT_GRID_CONTEXT),
             ),
+            // 【第 76 批】选列 / 选行（`CMD_SELECT_COLUMNS` / `CMD_SELECT_ROWS`，`:1088/1089`）
+            KeyBinding::new(
+                "ctrl-alt-c",
+                crate::commands::SelectCurrentColumn,
+                Some(crate::commands::RESULT_GRID_CONTEXT),
+            ),
+            KeyBinding::new(
+                "ctrl-alt-r",
+                crate::commands::SelectCurrentRow,
+                Some(crate::commands::RESULT_GRID_CONTEXT),
+            ),
+            // 【第 77 批】焦点在筛选框与结果呈现之间来回切（`CMD_FOCUS_FILTER`，`:1058`；
+            // 面板层 context，与生产注册同口径）
+            KeyBinding::new(
+                "ctrl-alt-shift-t",
+                crate::commands::SwitchFilterFocus,
+                Some(crate::commands::RESULT_PANEL_CONTEXT),
+            ),
+            // 【第 78 批】隐藏当前列 / 显示全部隐藏列（`CMD_HIDE_COLUMNS` /
+            // `CMD_SHOW_COLUMNS`，`:1096/1097`；面板层 context，与生产注册同口径）
+            KeyBinding::new(
+                "alt-shift-h",
+                crate::commands::HideCurrentColumn,
+                Some(crate::commands::RESULT_PANEL_CONTEXT),
+            ),
+            KeyBinding::new(
+                "alt-shift-t",
+                crate::commands::ShowHiddenColumns,
+                Some(crate::commands::RESULT_PANEL_CONTEXT),
+            ),
+            // 【第 79 批】复制列名（`CMD_COPY_COLUMN_NAMES`，`:1095`；面板层 context）
+            KeyBinding::new(
+                "alt-shift-c",
+                crate::commands::CopyColumnNames,
+                Some(crate::commands::RESULT_PANEL_CONTEXT),
+            ),
+            // 【第 80 批】筛选设置（`CMD_FILTER_EDIT_SETTINGS`，`:1094`；面板层 context）
+            KeyBinding::new(
+                "alt-shift-f",
+                crate::commands::OpenFilterSettings,
+                Some(crate::commands::RESULT_PANEL_CONTEXT),
+            ),
         ]);
     });
 }

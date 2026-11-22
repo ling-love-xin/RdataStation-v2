@@ -480,7 +480,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 
 | # | 问题 | 证据 | 影响 | 修法 |
 | --- | --- | --- | --- | --- |
-| 1 | ~~**格式化输出是 Rust Debug 打印**~~ **已修（2026-09-15，P0.3；2026-09-18 加区间回填）** | `engine/src/sql/formatter.rs` 改用 sqlglot-rust 的 `generate_pretty`（**B10 起 `format_with_report` 先拿 `sql/split.rs` 的语句区间、逐条格式化后回填原位**——区间外的注释 / 空行 / 半句一个字节不动），**无新增依赖**；回归测试从“非空”升级为“不是 Debug 打印 / 结果可再次解析 / 多语句不丢句 / 解析失败原样返回 / 前导注释不丢 / 报告口径” | — | 残留：含行内 / 尾随注释的语句**不被格式化**（原样返回，生成器能力边界，见 §12 #3）；编辑器侧已如实报“N 条解析不了，原样保留” |
+| 1 | ~~**格式化输出是 Rust Debug 打印**~~ **已修（2026-09-15，P0.3；2026-09-18 加区间回填）** | `engine/src/sql/formatter.rs` 改用 sqlglot-rust 的 `generate_pretty`（**B10 起 `format_with_report` 先拿 `sql/split.rs` 的语句区间、逐条格式化后回填原位**——区间外的注释 / 空行 / 半句一个字节不动），**无新增依赖**；回归测试从“非空”升级为“不是 Debug 打印 / 结果可再次解析 / 多语句不丢句 / 解析失败原样返回 / 前导注释不丢 / 报告口径” | — | 残留：~~含行内 / 尾随注释的语句**不被格式化**~~ **2026-11-22 已消**：排版引擎换 `lax-sql`（lossless，只调空白、不拒绝输入），行内 / 尾随 / 关键字之间的注释全部保真，选区里的半截片段也能排；见 `sql/sql-language-service-architecture.md` |
 | 2 | ~~**语句切分朴素 `;` 切分**~~ **已修（2026-09-15，P0.4）** | 词法级状态机落在 `engine/src/sql/split.rs`（26 项表驱动测试）；`sql_parser_service::split_sql` 改为委托 | — | — |
 | 3 | **事务状态是桩**：`get_transaction_status` 恒 `false`；`begin/commit/rollback` 无会话跟踪 | `engine/src/services/sql_service.rs` | 事务 UI 无从驱动。**P0.2 三组探针已实证（2026-09-15）**：顺序执行下四库亲和 + `ROLLBACK` 均真实生效；**并发下 MySQL/PG 会换物理连接**（临时表“消失”）；MySQL 的 `BEGIN` 已改走文本协议可用 | 状态机 + **per-session 独占连接**一并做（并发是常态，不能靠池的顺序巧合）；否则事务在“后台执行 + 用户操作”并发时会静默失效 |
 | 4 | ~~**历史字段失真**~~ **已修（2026-09-15，P0.5）** | `SqlHistoryEntry` + `save_sql_history(_into)`：耗时/成功/失败原因/行数均真实，失败也留痕（4 项单测） | — | — |
@@ -528,7 +528,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 
 | 层 | 目标 | 落点 |
 | --- | --- | --- |
-| 纯函数单测（最高价值） | 语句切分（各方言字面量/注释/`$$` 块/占位符/未闭合/行号，表驱动，✅ `engine/src/sql/split.rs`）· **词法高亮**（类别/引号包入/多字节边界/未闭合降级，✅ `engine/src/sql/highlight.rs`）· 格式化（非 Debug 打印/可再解析/多语句/失败原样返回，✅ `formatter.rs`）· 模式判定表（✅ `crates/editor/src/mode.rs`）· 能力表（✅ `model.rs`）· 执行目标解析（选区优先）· 错误位置解析（多家驱动格式）· 补全上下文判定与排序 | `crates/engine/src/sql/*.rs`、`crates/editor/src/{mode,model,execution,completion}.rs` |
+| 纯函数单测（最高价值） | 语句切分（各方言字面量/注释/`$$` 块/占位符/未闭合/行号，表驱动，✅ `engine/src/sql/split.rs` → 现落 `crates/sql/src/split.rs`）· **词法高亮**（类别/引号包入/多字节边界/未闭合降级，✅ `crates/sql/src/highlight.rs`）· 格式化（非 Debug 打印/可再解析/多语句/**半截片段也排版**/选区**吸附整条**，✅ `crates/sql/src/formatter.rs` + `crates/editor/src/support/format.rs`）· 模式判定表（✅ `crates/editor/src/mode.rs`）· 能力表（✅ `model.rs`）· 执行目标解析（选区优先）· 错误位置解析（多家驱动格式）· 补全上下文判定与排序 | `crates/sql/src/*.rs`、`crates/editor/src/{mode,model,execution,completion}.rs`、`crates/editor/src/support/format.rs` |
 | 服务层集成 | 打开→执行→结果入库→历史写入（**断言耗时/成功/行数真实**）· 结果上限淘汰 · 连接归属校验 · 模式切换矩阵（含确认分支）· 保存与脏状态 | `crates/editor/tests/`（临时目录注入模式，参考 `query_history.rs` 的 `*_at(dir)`） |
 | 契约测试 | 视图层零裸色/零裸 `px(`（扩展现有 `crates/workbench/tests/ui_contract.rs` 扫描范围到 `crates/editor/src`）· 尺寸常量引用 | 现有 `ui_contract` 扩展 |
 | 窗口（headless） | 三模式渲染不 panic · 执行按钮 → 结果区出现 · 模式切换确认流 · 关闭脏文档拦截 · **走生产入口**（参考 `dialog_host_layer.rs` 的教训） | `crates/editor/tests/`（`#[gpui_kit::test]`） |
@@ -555,7 +555,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | 筛选下发 / DuckDB 分析 | `crates/editor/src/execution.rs`（`ExecTarget::{Filtered,Analysis}`）+ `engine/src/services/execution_service.rs`（`re_execute_with_filter` / `execute_duckdb_analysis`）；分析侧另见 ✅ B15：`crates/editor/src/analysis.rs`（纯模型 + 预置菜单 + 桥接口径）+ `view/host.rs::{run_analysis,request_custom_analysis}` + `view/dialogs.rs::open_analysis_sql`（自定义 SQL）+ `view/results/grid.rs`（工具栏入口）+ `workbench/src/services/editor_exec.rs::analyze` |
 | 导出（D25） | ✅ B7：文本三档 `crates/editor/src/export.rs`（纯函数编码）+ `view/host.rs::write_export`（同步写）；**Parquet / XLSX** 走 `export::ExportFormat::is_duckdb_backed` → `execution::{DuckDbExportRequest,ExportNote}` + `ExecQueue::{request_duckdb_export,drain_export_notes}`（**一次性线程 + 回执**，不占执行位）→ `workbench/src/services/editor_exec.rs::export_via_duckdb` → `engine::services::execution_service::export_rows_via_duckdb`（临时表 → `COPY … TO …` → 必收）；真机台账 `engine/tests/duckdb_export_probe.rs` |
 | D7 语句切分 | ~~`crates/editor/src/split.rs`~~ → **`crates/engine/src/sql/split.rs`**（✅ P0.4 已完成；`SqlEngine::split_statements` + `sql_parser_service::split_sql` 委托） |
-| D8 格式化 | `engine/src/sql/formatter.rs`（✅ P0.3 已改用 `generate_pretty` + 往返解析回归；✅ B10 起 `format_with_report` **按语句区间原位回填**、区间外字节不动）+ 编辑器侧计划 `crates/editor/src/format.rs`（选段优先 / 光标映射 / `changes` 口径） |
+| D8 格式化 | `crates/sql/src/formatter.rs`（✅ P0.3 `generate_pretty` → ✅ B10 按语句区间原位回填 → **✅ 2026-11-22 排版换 `lax-sql`**：lossless、不拒绝输入、注释保真、选区片段可排；语义半边仍走 sqlglot）+ 编辑器侧 `crates/editor/src/support/format.rs`（选段优先 / 光标映射 / `changes` 口径；`options_from_settings` 是设置 → `FormatOptions` 的唯一映射点） |
 | D8b 方言转译 | `engine/src/sql/transpiler.rs`（✅ B10：`transpile_with_report` **先切分再逐条转译**——0.10.29 及以前整篇接口会静默丢语句，0.10.33 起已报错，生产路径仍不走单条接口）+ `engine/src/sql/script.rs`（格式化与转译共用的脚本骨架）+ `crates/editor/src/translate.rs`（目标表 / `targets_for` / 选区优先的 `plan`） |
 | D8c 执行计划 | `engine/src/sql/explain.rs`（✅ B10：`explain_sql` 按方言生成前缀；SQL Server / Oracle 如实返回 `None`）+ `EditorHostPanel::explain_current`（**按通道取方言**：源库档源库的、加速 / 联邦档 DuckDB 的；结果落新结果集并贴「执行计划」标题） |
 | D9 历史字段 | `engine/src/persistence/history_store.rs::save_sql_history` + `engine/src/services/sql_service.rs::execute` |
@@ -683,7 +683,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | GPUI 测试台 | headless 下 `debug_bounds` 坐标与鼠标命中**对不上** → 对话框按钮不做「真点击」，改断言渲染 + 驱动落地入口 | §12 #29 |
 | GPUI 平台 · `rfd` | 同步文件对话框**阻塞 UI 线程**（模态期间事件循环停摆）→ 1a 接受；改异步只动那两个函数 + 加「回来时文档是否还在」的竞态处理 | §12 #30 |
 | sqlglot | 整篇 `transpile` 对脚本**静默丢第二条及以后**（0.10.29 及以前；**0.10.33 起已改为报错**；单条接口只吃单条）→ 一律「先切分再逐条 + 原位回填」 | §12 #19 |
-| sqlglot | 含**行内 / 尾随注释**的语句解析失败即**原样返回**（不格式化）；非 MySQL 目标的 `#` 注记会被改写成 `--` | §12 #3 |
+| sqlglot | **排版已不再依赖它**（2026-11-22 换 `lax-sql`，lossless、不拒绝输入）；但 sqlglot 仍承担**语义**（转译 / 分析 / 高亮），所以它「行内 / 尾随注释整条解析失败」的边界**仍约束转译与分析**，只是不再让格式化"按了没反应" | §12 #3 |
 | sqlglot | `Token::position` 是**字符**下标（非字节）→ 区间换算必须走「字符 → 字节」 | §12 #20 |
 | sqlglot | `qualify_columns` 只部分限定、`unnest_subqueries` 改用 `INNER JOIN + DISTINCT`（NULL 语义不等价）—— 两处都**不采用** | `editor-dev-plan.md` §0 2026-09-15（探针实跑：台账结论落地） |
 | duckdb-rs 1.10505 | `column_name` / `schema()` / `column_count` 必须在**执行之后**取 | §12 #31 |
