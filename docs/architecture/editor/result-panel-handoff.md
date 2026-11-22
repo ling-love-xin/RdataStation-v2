@@ -3160,6 +3160,28 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   没有 window、不交回焦点；「输入框焦点下所有 context binding 失效」属框架层现象，
   本批只接了 `ESC` 一条。
 
+### 2.133 面板总开关 `F7` / `CTRL+7`（2026-11-22，第 82 批）
+
+- 上游：`plugin.xml:1084/1085`（`CTRL+7` / `F7` → `...grid.togglePreview`，contextId 为整块
+  `...ui.context.resultset`）→ `ResultSetHandlerMain:167-169`
+  `showPanels(!isPanelsVisible(), true, true)` → `ResultSetViewer:1478-1518`。
+- 落点：`actions!` 增 `TogglePanels`；宿主 `on_toggle_panels` 只做
+  `set_panels_visible(!panels_visible(), cx)`（判据、补默认页、复位最大化都在
+  `events.rs::set_panels_visible` 里）；键位 `f7` / `ctrl-7` 挂 `RESULT_PANEL_CONTEXT`。
+- 与既有两条鼠标入口同状态：状态栏右端三态循环、竖条顶部 `panelsButton`
+  （`SetPanelsVisible(!panels_visible)`）。`F7` 是二态，不复制三态。
+- 有意差异：**不落盘**（上游 `saveSettings=true`；本仓无 `panelsVisible` 偏好项，
+  且 `crates/settings` 在并行线手里）；**`CTRL+SHIFT+7`（`activatePreview`）不接**
+  （右栏六页无 focus handle，焦点交接没有回退位）。
+- 用例：`f7_and_ctrl_7_toggle_the_result_panels`（真态 + `editor-result-right-tabs` 存在性）。
+- 门禁：4 条 `check`（panel lib / editor lib / panel all-targets / editor tests）全 `Finished`
+  且 0 warning；editor **836 passed**（1 ignored，+1）；panel **421**；ui-guard 3/4
+  （并行线 `version_dialog.rs` 裸 px，老账）；`check --workspace --all-targets` **Finished**
+  （6m46s，0 error；6 条 warning 均在并行线 crate）。
+- 环境事故记录：并行线同时编译共享 `target` 时 rustc 曾 `STATUS_STACK_BUFFER_OVERRUN`，
+  截断 `libserde-*.rmeta` 导致后续全部 `E0786`，`cargo clean -p serde` 后恢复。
+- 遗留：`CTRL+SHIFT+7`、面板可见性不跨会话。
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - **共享文件的提交姿势**（第 77 批踩过，务必照做）：`git commit --only <paths>` /
@@ -3174,6 +3196,11 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   - 本线混合：`result_panel/src/{store/, export/, grid/, panel/}`（2026-10-29 拆分目录）/ `ports.rs` / `host.rs` / `settings/*` / `workbench/src/view.rs` / `panels/mod.rs` / `tests/ui_contract.rs` / `workbench_shell/src/ui.rs`
   - 并行线：`database/src/nav_view/rows.rs`、`editor/src/{session.rs, view/dialogs.rs, encoding_dialog.rs, function_manual.rs, indent_dialog.rs, invisible_dialog.rs, tests.rs}`、`engine/src/persistence/workbench_context_store.rs`、`scratchpad/chrome.rs`、`workbench/src/{notification.rs, panels/editor.rs, quick_open/delegate.rs, services/editor_session.rs}`、`workbench_shell/src/ui.rs`、`.agents/skills/rds-design/`、`docs/architecture/{settings/settings-architecture.md, ui/design-spec.md, ui/theme-spec.md}` 等
 - 注释 / commit 信息一律简体中文（`feat:` / `fix:` / `refactor:` 前缀）。
+- **commit 消息文件必须无 BOM**（第 82 批踩到；历史批次标题前的 `\ufeff` 同源）：
+  `Set-Content -Encoding utf8` 在这台机器上写出的仍是**带 BOM** 的 UTF-8，
+  `git commit -F <file>` 会把 `\ufeff` 直接吃进标题的第一个字符。一律用 python
+  `io.open(path, "w", encoding="utf-8", newline="\n")` 写消息文件；提交后
+  `git log -1 --format=%B` 的首字节断言 `!= b"\xef\xbb\xbf"`。
 - 过程产物（日志 / 临时脚本）落 `.rds/tmp/` 或 `tools/_archive/`，不入库、不留工作目录。
 - 未确定的 API / 设计决策先查 vendor（`vendor/gpui-component/src/`、`vendor/gpui-base/src/`，0.8.x 权威）或本地 MCP，禁止联网 / 凭记忆猜；不确定的交互口径先列出来问用户。
 

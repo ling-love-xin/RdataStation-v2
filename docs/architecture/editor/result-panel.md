@@ -9798,6 +9798,104 @@ editor（`view/tests/results_a.rs`）：
 - 其余同 §9.63.8（`SHIFT+F11` / `F11` / `CTRL+F11` 未接、`ALT+SHIFT+ARROW` 焦点口径未定、
   「复制配置」对话框未做、整包门禁待并行线）。
 
+### 9.65 第 82 批：`F7` / `CTRL+7` 面板总开关（`CMD_TOGGLE_PANELS`）
+
+#### 9.65.1 缺口
+
+右侧辅助栏（列浏览器 / 值详情 / 计算 / 分组 / 引用 / 执行SQL）此前只有鼠标通道：
+状态栏右端的三态循环开关（`ToggleValueSidebar`）与右缘竖条顶部那颗 `panelsButton`
+（`SetPanelsVisible(!panels_visible)`）。上游有一对键位 `F7` / `CTRL+7` 做同一件事，本仓没有。
+
+#### 9.65.2 DBeaver 依据
+
+- `plugin.xml:1084`：`CTRL+7` → `org.jkiss.dbeaver.core.resultset.grid.togglePreview`；
+  `:1085`：`F7` → 同一条；contextId 均为整块 `org.jkiss.dbeaver.ui.context.resultset`
+  （**不是** `...resultset.focused`），scheme 为 defaultAccelerator；
+  `:1086`：`CTRL+SHIFT+7` → `...grid.activatePreview`（另一条命令，见 §9.65.5）。
+- handler `ResultSetHandlerMain:167-169`：`rsv.showPanels(!rsv.isPanelsVisible(), true, true)`。
+- `ResultSetViewer:1474-1476`：`isPanelsVisible()` = `viewerSash.getMaximizedControl() == null`
+  （sash 未最大化 ⇔ 面板可见）。
+- `ResultSetViewer:1478-1518` `showPanels(show, showDefaults, saveSettings)`：
+  `!supportsPanels() || show == isPanelsVisible()` 直接 return；隐藏时置
+  `setMaximizedControl(children[0])`（网格占满）并记「焦点是否在面板里」，在的话交回
+  presentation；显示时 `showDefaults` 补默认页、`showAttribute(currentAttribute)`；
+  末尾 `panelsVisible = show`、`saveSettings` 落盘、`updatePanelsButtons()`。
+- `ResultSetViewer:1520-1530` `togglePanelsFocus()`（`activatePreview` 的落点）：
+  焦点在面板 → 交回网格，否则交给面板当前页控件。
+
+#### 9.65.3 落点
+
+- `crates/result_panel/src/grid/mod.rs`：`actions!` 加 `TogglePanels`（面板级命令，
+  与第 77-80 批同口径）；
+- `crates/editor/src/support/commands.rs`：re-export；
+- `crates/editor/src/view/host/exec/edit_cmds.rs::on_toggle_panels`：
+  `panel.set_panels_visible(!panel.panels_visible(), cx)`——上方两条判据都在
+  `set_panels_visible` 里（`events.rs:1578-1596`），宿主侧不重复判；
+- `crates/editor/src/view/host/render.rs`：`.on_action(cx.listener(Self::on_toggle_panels))`；
+- 键位（`crates/app/src/main.rs`，`RESULT_PANEL_CONTEXT`）：`"f7"` 与 `"ctrl-7"` 各一条，
+  与测试键位（`view/tests/mod.rs::bind_editor_keys`）同口径。
+
+#### 9.65.4 与既有两条鼠标入口的关系
+
+| 入口 | 状态机 | 落到 |
+| --- | --- | --- |
+| 状态栏右端开关（`ToggleValueSidebar`） | 三态循环：收起 → 窄展开（只显竖条）→ 宽展开 → 收起 | `next_right_edge_state` |
+| 右缘竖条顶部 `panelsButton` | 二态：`!panels_visible` | `SetPanelsVisible` |
+| **本批 `F7` / `CTRL+7`** | 二态：`!panels_visible`（同上） | `SetPanelsVisible` |
+
+三条改的是同一份状态（`edge_bar_visible` + `show_value_sidebar`），不新建字段。
+`show=true` 走 `restore_default_tabs_when_empty()`，对应上游 `showDefaults=true`；
+收起时复位 `panel_maximized`（上游共用同一份 sash 可见性，关掉面板不可能还停在最大化）。
+
+#### 9.65.5 有意差异
+
+- **不落盘**：上游 `saveSettings=true` 把 `panelsVisible` 写进 presentation settings
+  （跨会话记忆）。本仓偏好只登记了 `result_panel.sidebar_width` 一项，面板可见性仍在重启后
+  回到出厂展开态。理由：新增偏好项要动 `crates/settings` 的 model / registry / service 三处，
+  该 crate 当前在并行线手里（§9.64.7），超出本批范围。
+- **`CTRL+SHIFT+7`（`activatePreview`）不接**：它要「焦点在网格与右栏之间来回移交」，
+  而本仓右栏六页都没有独立焦点落点（无 focus handle），`presentation_focus_target`
+  只会给网格 / 面板根。硬接只能做到「单向把焦点丢给面板根」，没有可回退的位置，
+  反而不如不接。留作右栏焦点体系立项后一并处理。
+- `F7` 在筛选框里按也生效（面板级 context，上游同口径）。
+
+#### 9.65.6 用例
+
+`view/tests/results_a.rs::f7_and_ctrl_7_toggle_the_result_panels`（新）：
+
+1. 出厂 `panels_visible() == true` 且 `editor-result-right-tabs` 有 bounds（前提）；
+2. `f7` → `panels_visible() == false`，`editor-result-right-tabs` 取不到 bounds
+   （右栏内容只在 `show_value_sidebar` 为真时挂进树，收起来是硬证据）；
+3. `ctrl-7` → `panels_visible() == true`，页签条回来。
+
+#### 9.65.7 门禁（第 82 批，最终实测）
+
+- `cargo check -p rds-result-panel --lib`：`Finished`，0 error / 0 warning；
+- `cargo check -p rds-editor --lib`：`Finished`，0 error / 0 warning；
+- `cargo check -p rds-result-panel --all-targets`：`Finished`，0 error / 0 warning；
+- `cargo check -p rds-editor --tests`：`Finished`，0 error / 0 warning；
+- `cargo test -p rds-editor --lib`：**836 passed（1 ignored）**（835 → +1，即本批新用例）；
+- `cargo test -p rds-result-panel --lib`：**421 passed**（不变）；
+- `cargo test -p rds-ui-guard`：3 passed / **1 failed**，失败项仍是
+  `no_new_hardcoded_color_or_pixel`，报并行线未跟踪文件
+  `crates/workbench/src/components/version_dialog.rs`（裸色值 0 / 裸 px 1），与本批无关；
+- `cargo check --workspace --all-targets`：**Finished**（6m46s），0 error；6 条 warning
+  全部落在并行线 crate（`rds-notification` 两个未使用函数、rds-project 两处
+  `does not need to be mutable`），`result_panel` / `editor` 零 warning。
+
+> 过程中遇到一次环境事故：首轮 `check -p rds-editor --all-targets` 时 rustc 以
+> `STATUS_STACK_BUFFER_OVERRUN` 崩掉，留下截断的 `libserde-*.rmeta`，之后所有编译报
+> `E0786 found invalid metadata files for crate serde`。处理是 `cargo clean -p serde`
+> 后重编（与代码无关，属并行线同时编译同一 `target` 目录时的内存压力）。
+
+#### 9.65.8 遗留
+
+- `CTRL+SHIFT+7`（`activatePreview` = `togglePanelsFocus`）未接，卡在右栏无焦点落点；
+- 面板可见性不跨会话（§9.65.5）；
+- 其余同 §9.64.8：`SHIFT+F11` / `F11` / `CTRL+F11` 未接、`ALT+SHIFT+ARROW` 焦点口径未定、
+  三条鼠标 ✕ 出口不交回焦点、「输入框焦点下 context binding 全失效」属框架层、
+  「复制配置」对话框未做。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
