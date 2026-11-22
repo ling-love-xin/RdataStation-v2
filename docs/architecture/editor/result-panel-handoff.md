@@ -3136,6 +3136,30 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   `crates/workbench/src/components/version_dialog.rs` 有 3 处编译错：缺 `ActiveTheme` 导入、
   `Div::v_flex` ×2）——本批改动 crate 由前三条覆盖，待并行线修好后复查整包。
 
+### 2.132 浮层 `ESC` 收起（2026-11-22，第 81 批）
+
+- 入口**不是键位**：`ResultPanel::new` 里 `cx.intercept_keystrokes`（app 级，binding 之前跑，
+  与焦点无关）。实测依据是 `Window::context_stack()`：焦点在网格 =
+  `[Root, editor, editor-result-panel, editor-result-grid, DataTable]`，焦点在浮层 `InputState` =
+  **`[]`**（空栈 ⇒ 带 context 的 binding 全不匹配，连 `CTRL+SHIFT+G` 都按不出来）。
+  因此「给遮罩挂 context」「挂面板层 binding」「全局 binding」三条都被否掉（全局那条会截走
+  `grid/edit.rs` 的内联编辑取消）。
+- `dismiss_overlay(window, cx)`：按叠放次序复用 `close_*`，**关完 `window.focus(&target)` 交回
+  `presentation_focus_target`**（不交回则焦点停在已消失的输入框，后续面板键位全废）；
+  interceptor 只在返回 `true` 时 `cx.stop_propagation()`，无浮层时零影响。
+- 删掉的东西：四个遮罩的 `on_key_down`（从未生效的旧实现）、`actions!::DismissOverlay`、
+  `ResultRequest::DismissOverlay`、面板层 `escape` 键位（`crates/app` 与测试各一条）、
+  面板根 `.on_action`、`RESULT_OVERLAY_CONTEXT`（中途方案，已撤）。
+- 用例：`escape_dismisses_every_result_overlay`（四段：筛选设置 / 跳列 / SQL 预览 / 取全部确认）；
+  第 80 批 `alt_shift_f_opens_the_filter_settings_overlay` 的 ESC 断言改成「应收起」。
+- 门禁：pair `Finished` 无 warning；panel **421**；editor lib **835 passed**（1 ignored）；
+  ui-guard 3/4（失败项报的是并行线未跟踪的 `version_dialog.rs` 裸 px）；整包被并行线阻塞
+  （`version_dialog.rs` 3 处编译错 + `crates/settings/src/registry/entries/projects.rs:49`
+  unclosed delimiter）。
+- 遗留：三条鼠标 ✕ 出口（`CloseFilterSettings` / `CloseSqlDialog` / `CloseFetchAllConfirm`）
+  没有 window、不交回焦点；「输入框焦点下所有 context binding 失效」属框架层现象，
+  本批只接了 `ESC` 一条。
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - **共享文件的提交姿势**（第 77 批踩过，务必照做）：`git commit --only <paths>` /

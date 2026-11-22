@@ -9681,6 +9681,13 @@ editor（`view/tests/results_a.rs`）：
 筛选设置 / 跳列）与 app 键位表，属于单独一批的工作量；本批已把现状钉进用例
 （`alt_shift_f_opens_the_filter_settings_overlay` 里那条「ESC 后浮层仍在」），谁能接上谁改断言。
 
+#### 9.63.5 / 9.63.7 的结论已被第 81 批推翻
+
+上面 §9.63.5 写的「焦点在排序框里按 `ESC` 浮层仍在」与 §9.63.7 推的机理（「输入框
+binding 命中了、`propagate` 只会往上找 binding」）**都不是实测结论**：真实情况是焦点
+进入 `InputState` 后上下文栈直接变空，输入框的 `escape` binding 同样没命中。以 §9.64.3
+的表格为准。
+
 #### 9.63.8 遗留
 
 - `SHIFT+F11`（`showColumnContextMenu`，`:1098`）、`F11` / `CTRL+F11`
@@ -9690,6 +9697,106 @@ editor（`view/tests/results_a.rs`）：
 - 整包门禁复查：等并行线把未跟踪的 `crates/workbench/src/components/version_dialog.rs` 修好
   （§9.63.6 记的 3 处编译错），再跑一次 `cargo check --workspace --all-targets`；
 - 「复制配置」对话框（§9.62.5）。
+
+### 9.64 第 81 批：`ESC` 收起四个结果集浮层（app 级 keystroke interceptor）
+
+#### 9.64.1 缺口
+
+§9.63.7 记过的结构性问题：浮层开着时按 `ESC` 没反应，四个浮层（SQL 预览 / 取全部确认 /
+筛选设置 / 跳列）同病，唯一出口是各自的标题栏 ✕。本批把它接上。
+
+#### 9.64.2 DBeaver 依据
+
+- `plugin.xml:1081`：`ESC` = `org.jkiss.dbeaver.core.resultset.cell.reset`（**不是关浮层**）。
+- 上游的浮层是**模态 SWT 对话框**（`new FilterSettingsDialog(this).open()`、
+  `MessageDialog`），`ESC` 由平台自己关；本仓浮层是面板内 `absolute` 遮罩、不抢焦点，
+  所以「`ESC` 收起」属**本仓惯例**，不是照抄来的键位。
+
+#### 9.64.3 三条通道实测（本批的关键结论）
+
+`Window::context_stack()`（`gpui-pre-0.3.11/src/window.rs:6997`，与 dispatch 用的是同一套
+`dispatch_path` → `node.context`）在用例里直接打了两次：
+
+| 焦点位置 | `context_stack()` |
+| --- | --- |
+| 网格（`DataTable`） | `[Root, editor, editor-result-panel, editor-result-grid, DataTable]` |
+| 浮层里的排序输入框（`InputState`） | `[]`（空） |
+
+空栈的后果是**所有带 context 的 binding 一条都匹配不到**——不只是 `ESC`，那一刻连面板层
+已绑好的 `CTRL+SHIFT+G` 都按不出来（用例里先按 `ctrl-shift-g` 断言「跳列卡片出现」，实测失败）。
+根因在 `focus_node_id_in_rendered_frame`（`:6730-6738`）：`InputState` 的焦点 id 不在
+`rendered_frame.dispatch_tree` 里时，`dispatch_path` 退化成 root，`filter_map` 之后就是空。
+
+于是三条候选通道全部否掉：
+
+1. **遮罩 `on_key_down`**（原实现）：`on_key_down` 派发排在 binding / action 之后
+   （`:6493`），`ESC` 先走 action 派发，焦点在输入框里时走不到；
+2. **任何带 context 的 binding**（网格层 / 面板层 / 给遮罩另开 context）：栈为空，匹配不到；
+3. **全局（`context: None`）binding**：能命中，但会截走网格内联编辑取消（`grid/edit.rs:414`）
+   与侧栏 / 设置页那批靠 `on_key_down` 收 `ESC` 的处理（binding 命中即
+   `return`，`finish_dispatch_key_event` 不再跑）——会砸掉既有行为。
+
+唯一不依赖焦点 / context 的是 **app 级 keystroke interceptor**
+（`Context::intercept_keystrokes`，`app.rs:2723-2736`）：它在 binding 之前跑
+（`window.rs:6335-6352`），且与焦点无关。
+
+#### 9.64.4 落点
+
+- `panel/lifecycle.rs::new`：`let _esc_sub = cx.intercept_keystrokes(...)`——
+  只认「无修饰的 `escape`」，`dismiss_overlay` 返回 `true` 才 `cx.stop_propagation()`
+  （无浮层时完全让路，上面第 3 条那些 `on_key_down` 语义不受影响）；
+- `panel/data.rs`：新增 `_esc_sub: Subscription`（**必须持有**，掉了就解订，与 `_filter_sub` 同坑）；
+- `panel/events.rs::dismiss_overlay`：按叠放次序（跳列 → 取全部确认 → 筛选设置 → SQL 预览）
+  复用各浮层自己的 `close_*`；**关完把焦点交回** `presentation_focus_target`
+  （网格态 → 网格、文本态 → 面板根）——不交回的话，焦点停在已消失的输入框上，
+  之后所有面板键位都按不出来（第 80 批用例「再按一次 `ALT+SHIFT+F`」就红在这里）；
+- `panel/dialog.rs`：四个遮罩上原来那四条 `on_key_down`（判 `escape` 收浮层）**删除**——
+  按上面 §9.64.3 第 1 条，它们在有焦点时从未生效，是无用代码；
+- **撤掉**中途走过的两条方案：`actions!` 里的 `DismissOverlay`、`ResultRequest::DismissOverlay`、
+  面板层 `escape` 键位（app 与测试各一条）、面板根 `.on_action`、四个遮罩的
+  `RESULT_OVERLAY_CONTEXT`。理由同 §9.64.3，留着等于留一条按不出来的键位。
+
+#### 9.64.5 有意差异
+
+- **不是 DBeaver 键位**：上游 `ESC` 是 `cell.reset`（`:1081`），本仓网格的 `ESC` 保留组件语义，
+  只有浮层按模态惯例收起；关哪一个由面板按打开状态判，不区分。
+- **入口不是 keymap**：本仓这一条走 interceptor（键位表里看不到、设置页也不会列）；
+  代价是它不可重绑，换来的是「焦点在哪都能关」。
+- 无浮层时 `ESC` 行为完全不变（interceptor 直接返回、不 `stop_propagation`）。
+
+#### 9.64.6 用例
+
+editor（`view/tests/results_a.rs`）：
+
+- `escape_dismisses_every_result_overlay`（新）：四段，① 筛选设置（焦点在排序框，`alt-shift-f` 打开）
+  ② 跳列（焦点在跳列输入框，`ctrl-shift-g` 打开）③ SQL 预览（`open_sql_dialog`，焦点留在网格）
+  ④ 取全部确认（`open_fetch_all_confirm`，无输入源）；每段 `escape` 后断言对应卡片从元素树消失。
+- `alt_shift_f_opens_the_filter_settings_overlay`（第 80 批那条改写）：`ESC` 断言从「浮层仍在」
+  改成「应收起」，随后重开一次再走 ✕ 路径（两条出口都验）。
+
+#### 9.64.7 门禁（第 81 批，最终实测）
+
+- `cargo check -p rds-editor -p rds-result-panel --all-targets`：`Finished`，**无 warning**；
+- `cargo test -p rds-result-panel`：**421 passed**（不变）；
+- `cargo test -p rds-editor --lib`：**835 passed（1 ignored）**（834 → +1）；
+- `cargo test -p rds-ui-guard`：3 passed / **1 failed**，失败项 `no_new_hardcoded_color_or_pixel`
+  报的是**并行线的未跟踪文件** `crates/workbench/src/components/version_dialog.rs`
+  （「未登记的新文件出现裸色值 0 / 裸 px 1」），与本批无关；
+- `cargo check --workspace --all-targets`：**仍被并行线阻塞**——除上述 `version_dialog.rs`，
+  这次还多出 `crates/settings/src/registry/entries/projects.rs:49`「unclosed delimiter」
+  （`crates/settings/*` 有 5 个文件正处于并行线未提交编辑中）。本批改动只落在
+  `result_panel` / `editor`（前三道已覆盖），待并行线收尾后复查整包。
+
+#### 9.64.8 遗留
+
+- 鼠标路径的 ✕ 关闭（`CloseFilterSettings` / `CloseSqlDialog` / `CloseFetchAllConfirm` 三条）
+  **没有**交回焦点（它们只收 `cx`，没有 window）：点 ✕ 之后焦点仍停在已消失的输入框上，
+  面板键位要等用户点一下网格才恢复。本批只修了 `ESC` 这条（`dismiss_overlay` 有 window）；
+- 焦点在浮层输入框时**所有** context binding 都不可用（§9.64.3 的 `[]`）——这是框架层
+  （`InputState` 焦点未进 dispatch tree）现象，影响的不止 `ESC`（`CTRL+SHIFT+G`、
+  `ALT+SHIFT+F` 等在输入框里按同样无效）。本批只保证 `ESC` 一条可用，其余留待单独立项；
+- 其余同 §9.63.8（`SHIFT+F11` / `F11` / `CTRL+F11` 未接、`ALT+SHIFT+ARROW` 焦点口径未定、
+  「复制配置」对话框未做、整包门禁待并行线）。
 
 ## 8. 协作纪律
 
