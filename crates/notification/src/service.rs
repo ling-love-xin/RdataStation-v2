@@ -293,8 +293,8 @@ fn load_history() -> HistoryStore {
 /// 调用方据此决定要不要把 `dirty` 标回去重试。
 ///
 /// **本函数不做并发保护**：两个调用方同时进来会互相覆盖 `.tmp`，
-/// 甚至把对方写了一半的内容 rename 成正式文件。所有生产路径都经
-/// [`write_history_at`]（持 [`WRITE_LOCK`]）或 [`flush_snapshot`]；本函数只被它们调用。
+/// 甚至把对方写了一半的内容 rename 成正式文件。生产路径只有 [`flush_snapshot`]
+/// （持 [`WRITE_LOCK`]）；测试侧的并发写用例经 [`write_history_at`] 走同一把锁。
 fn write_at(path: &Path, records: &[NotificationRecord]) -> bool {
     let Some(dir) = path.parent() else {
         tracing::warn!("通知历史路径没有父目录，跳过落盘");
@@ -329,12 +329,15 @@ fn write_at(path: &Path, records: &[NotificationRecord]) -> bool {
 ///
 /// 这是**唯一带并发保护的写路径**。生产侧 [`flush_snapshot`] 走同一把锁但要在锁内重读
 /// store，故不复用本函数；并发测试直接调它来验证「拿同一把锁就不会写出坏文件」。
+/// 只有测试在用，所以 `cfg(test)`——留在 lib 目标里就是一个没人调的 dead_code。
+#[cfg(test)]
 fn write_history_at(path: &Path, records: &[NotificationRecord]) -> bool {
     let _write = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     write_at(path, records)
 }
 
-/// 落盘到 `history_path()`
+/// 落盘到 `history_path()`（测试专用，见 [`write_history_at`]）
+#[cfg(test)]
 fn write_history(records: &[NotificationRecord]) -> bool {
     write_history_at(&history_path(), records)
 }
