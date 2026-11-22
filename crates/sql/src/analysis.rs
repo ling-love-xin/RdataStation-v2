@@ -37,8 +37,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use sqlglot_rust::ast::{DataType, SelectItem, Statement, TableRef};
-use sqlglot_rust::schema::MappingSchema;
 use sqlglot_rust::optimizer::scope_analysis::Source;
+use sqlglot_rust::schema::MappingSchema;
 use sqlglot_rust::{
     AstNode, ChangeAction, Dialect, LineageConfig, LineageNode, Scope, annotate_types, build_scope,
     diff_sql, format_time_dialect, generate, parse, plan, pushdown_predicates,
@@ -373,7 +373,8 @@ pub fn lineage_of_column(
         trim_qualifiers: true,
         sources: Default::default(),
     };
-    let graph = sqlglot_rust::lineage_sql(column, sql, &schema, &config).map_err(|e| e.to_string())?;
+    let graph =
+        sqlglot_rust::lineage_sql(column, sql, &schema, &config).map_err(|e| e.to_string())?;
     let mut steps = Vec::new();
     collect_lineage(&graph.node, &mut steps);
     Ok(steps)
@@ -453,7 +454,10 @@ fn node_text(node: &sqlglot_rust::AstNode) -> String {
         AstNode::Expr(expr) => generate(&Statement::Expression(expr.clone()), Dialect::Ansi),
         AstNode::SelectItem(item) => match item {
             SelectItem::Expr { expr, alias, .. } => match alias {
-                Some(alias) => format!("{} AS {alias}", generate(&Statement::Expression(expr.clone()), Dialect::Ansi)),
+                Some(alias) => format!(
+                    "{} AS {alias}",
+                    generate(&Statement::Expression(expr.clone()), Dialect::Ansi)
+                ),
                 None => generate(&Statement::Expression(expr.clone()), Dialect::Ansi),
             },
             SelectItem::Wildcard => "*".to_string(),

@@ -36,10 +36,7 @@ fn scope_report_does_not_need_catalog() {
     let report = scope_report("SELECT id FROM orders", SqlDialect::Ansi).expect("解析应成功");
     assert_eq!(report.sources.len(), 1, "单表 FROM 只有一个来源");
     assert!(
-        report
-            .columns
-            .iter()
-            .any(|c| c == "id" || c == "orders.id"),
+        report.columns.iter().any(|c| c == "id" || c == "orders.id"),
         "列引用应被记录：{:?}",
         report.columns
     );
@@ -92,9 +89,7 @@ fn lineage_traces_output_column_to_base_column() {
     assert!(!steps.is_empty(), "应有血缘节点");
     assert_eq!(steps[0].name, "total", "第一跳是输出列：{steps:?}");
     assert!(
-        steps
-            .iter()
-            .any(|s| s.name.contains("amount")),
+        steps.iter().any(|s| s.name.contains("amount")),
         "应追到基列 amount：{steps:?}"
     );
 }
@@ -129,7 +124,10 @@ fn pushdown_moves_predicate_into_derived_table() {
         SqlDialect::Ansi,
     )
     .expect("改写应成功");
-    assert!(sql.to_uppercase().contains("SELECT"), "应仍是可执行 SQL：{sql}");
+    assert!(
+        sql.to_uppercase().contains("SELECT"),
+        "应仍是可执行 SQL：{sql}"
+    );
 }
 
 #[test]
@@ -141,8 +139,8 @@ fn plan_summary_reports_steps() {
 
 #[test]
 fn plan_rejects_ddl() {
-    let error = plan_summary("CREATE TABLE t (id INT)", SqlDialect::Ansi)
-        .expect_err("DDL 上游明确不支持");
+    let error =
+        plan_summary("CREATE TABLE t (id INT)", SqlDialect::Ansi).expect_err("DDL 上游明确不支持");
     assert!(
         error.contains("Planner") || error.contains("not support"),
         "错误应透传上游口径：{error}"

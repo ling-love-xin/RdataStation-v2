@@ -90,9 +90,7 @@ pub fn rewrite_with_where_order(
     if condition.is_empty() {
         return Err("筛选条件为空，没什么可重查的".to_string());
     }
-    let custom_order = order_by
-        .map(str::trim)
-        .filter(|order| !order.is_empty());
+    let custom_order = order_by.map(str::trim).filter(|order| !order.is_empty());
 
     let clauses = top_level_clauses(original);
     let body_end = clauses.body_end(original.len());
@@ -577,13 +575,20 @@ mod tests {
     #[test]
     fn where_and_filter_paths_agree_on_the_wrapping_shape() {
         // 两条路只差条件生成：别名 / 子查询 / 去 LIMIT 都要一致
-        let by_where =
-            rewrite_with_where("SELECT * FROM t LIMIT 3", "id = 1").expect("能改写");
+        let by_where = rewrite_with_where("SELECT * FROM t LIMIT 3", "id = 1").expect("能改写");
         let by_filter = rewrite_with_filter("SELECT * FROM t LIMIT 3", &columns(), "x", "TEXT")
             .expect("能改写");
         assert_eq!(by_where.dropped_limit, by_filter.dropped_limit);
-        assert!(by_where.sql.starts_with("SELECT * FROM (\nSELECT * FROM t\n) AS rds_filtered"));
-        assert!(by_filter.sql.starts_with("SELECT * FROM (\nSELECT * FROM t\n) AS rds_filtered"));
+        assert!(
+            by_where
+                .sql
+                .starts_with("SELECT * FROM (\nSELECT * FROM t\n) AS rds_filtered")
+        );
+        assert!(
+            by_filter
+                .sql
+                .starts_with("SELECT * FROM (\nSELECT * FROM t\n) AS rds_filtered")
+        );
         assert!(by_where.sql.contains("WHERE id = 1"), "{}", by_where.sql);
         assert!(!by_filter.sql.contains("WHERE id = 1"), "{}", by_filter.sql);
     }
