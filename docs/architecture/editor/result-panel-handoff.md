@@ -3182,6 +3182,38 @@ panel **267 passed** / guard **4**（基线 21 生效）。
   截断 `libserde-*.rmeta` 导致后续全部 `E0786`，`cargo clean -p serde` 后恢复。
 - 遗留：`CTRL+SHIFT+7`、面板可见性不跨会话。
 
+### 2.134 右栏单页开关 `CTRL+ALT+F2..F6`（2026-11-22，第 83 批）
+
+- 上游：`plugin.xml:1099-1113` 五条 `...grid.togglePanel` + `panelId`（`value-view` /
+  `results-references` / `results-metadata` / `results-grouping` / `column-aggregate`；
+  contextId 整块 `...ui.context.resultset`、scheme 键盘专用表）→ 命令定义 `:280-287`、
+  handler 绑定 `:416-418`、实现 `handler/ResultSetHandlerTogglePanel.java:46-81`
+  （`isPanelsVisible() && isPanelVisible(id)` 为真 → `closePanel(id)`，否则
+  `activatePanel(id, true, true)`）。
+- 落点：`actions!` 增五条零参 action（`ToggleValuePanel` / `ToggleReferencePanel` /
+  `ToggleBrowserPanel` / `ToggleGroupPanel` / `ToggleStatsPanel`）；宿主共用段
+  `dispatch_toggle_panel` 一律转 `ResultRequest::ToggleRightTab(tab)`（不新建面板方法：
+  `ResultPanel::toggle_right_tab` 与 `dispatch.rs:445-461` 早已完整接线，含页集合落盘与
+  引用页读外键）；键位 `ctrl-alt-f2..f6` 挂 `RESULT_PANEL_CONTEXT`。
+- 顺带：`events.rs:750` 新增 `pub fn right_tab()` 只读访问器（`right_tab` 字段是 `pub(crate)`，
+  用例断言「切到该页」需要它）。
+- 与上游的差异：**不把焦点交给面板控件**（`activatePanel` 的 `panel.setFocus()`）——
+  右栏六页无 `FocusHandle`，与第 82 批 `CTRL+SHIFT+7` 同一卡点；`CTRL+SHIFT+F2..F6`
+  （`activatePanel` 那组）同理不接；`RightTab::ExecSql` 是自有页，不接键位；
+  `results-metadata` 映射到 `Browser`（`ports.rs:846` / `events.rs:3002` 都这样记）。
+- 顺带修两处既有问题：① `persist_result_open_tabs`（`dispatch.rs:762`）在缺 `Settings`
+  全局时 panic（headless/用例直接崩在 `gpui-fast app.rs:2657`），加 `has_global` 守卫
+  （`dispatch.rs:769`），同时避免用例真写 `settings.json`；② `notebook/orchestrate.rs:243`
+  测试里的 `let applied =` 未使用（`check --all-targets` 唯一一条本 crate warning），
+  改 `let _ =`。
+- 用例：`ctrl_alt_f2_to_f6_toggle_the_right_panels`（关该页 / 再开并切过去 / 关当前页落到
+  规范序下一页 / 五个页逐页核对 / 引用页开关 / `f7` 收起后按单页键 → 展开+启用+切换）。
+- 门禁：三 crate `--all-targets` **0 error**；editor **837 passed**（1 ignored，+1）；
+  panel **421**；ui-guard 3/4（并行线 `version_dialog.rs` 裸 px，老账）；
+  `check --workspace --all-targets` **Finished** 0 error（23m24s，前半程等并行线释放
+  `target` 锁）。
+- 遗留：焦点交给面板、`CTRL+SHIFT+F2..F6` —— 都等右栏焦点体系。
+
 ## 3. 并行线协作纪律（工作区现状）
 
 - **共享文件的提交姿势**（第 77 批踩过，务必照做）：`git commit --only <paths>` /

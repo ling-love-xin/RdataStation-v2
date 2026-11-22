@@ -9896,6 +9896,167 @@ editor（`view/tests/results_a.rs`）：
   三条鼠标 ✕ 出口不交回焦点、「输入框焦点下 context binding 全失效」属框架层、
   「复制配置」对话框未做。
 
+### 9.66 第 83 批：`CTRL+ALT+F2..F6` 五条右栏单页开关（`CMD_TOGGLE_PANEL`）
+
+#### 9.66.1 缺口
+
+右栏六个页签（列浏览器 / 值详情 / 计算 / 分组 / 引用 / 执行SQL）此前只有鼠标通道：页签行尾的
+✕（`ResultRequest::CloseRightTab`）、视图菜单的勾选项、右缘竖条的逐页按钮
+（`ResultRequest::ToggleRightTab`）。上游把「开关某一页」做成一整组键盘命令
+（`CTRL+ALT+F2..F6` 各对应一页），本仓一条都没有。
+
+#### 9.66.2 DBeaver 依据
+
+键位（`plugin.xml`，contextId 全是整块 `org.jkiss.dbeaver.ui.context.resultset`，
+scheme `org.jkiss.dbeaver.keyboardOnlyKeyScheme`）：
+
+| 键位 | 行号 | 命令 | `panelId` | 上游页 |
+| --- | --- | --- | --- | --- |
+| `CTRL+ALT+F2` | `:1099-1101` | `...grid.togglePanel` | `value-view` | 值详情 |
+| `CTRL+ALT+F3` | `:1102-1104` | 同上 | `results-references` | 引用 |
+| `CTRL+ALT+F4` | `:1105-1107` | 同上 | `results-metadata` | 元数据（列浏览器） |
+| `CTRL+ALT+F5` | `:1108-1110` | 同上 | `results-grouping` | 分组 |
+| `CTRL+ALT+F6` | `:1111-1113` | 同上 | `column-aggregate` | 聚合计算 |
+
+命令定义 `:280-287`：`togglePanel` + 必填参数 `commandParameter id="panelId"`（取值域由
+`ResultSetHandlerTogglePanel$PanelIdParameterValues` 提供，`:105-116`，正是上表五个 id）；
+handler 绑定 `:416-418`（`enabledWhen ...ui.resultset.part`）；中文名
+`bundle_zh.properties:108-110`「显示/隐藏结果面板」「显示/隐藏一些特定的结果面板」「面板名称」。
+
+`ResultSetHandlerTogglePanel`：
+- `:46-62` `execute`：`panelId` 为 null 直接 return，否则 `toggleResultsPanel(context, panelId)`；
+- `:64-69` `toggleResultsPanel`：`isVisible = viewer.isPanelsVisible() && viewer.isPanelVisible(id)`；
+- `:71-81` `showResultsPanel`：可见 → `rsv.closePanel(id)`；不可见 →
+  `rsv.activatePanel(id, true, true)` + `DataEditorFeatures.RESULT_SET_PANEL_OPEN.use(...)`
+  （本仓无 feature 计数概念）；
+- `:84-103` `updateElement`：只改菜单勾选态与文案，不参与开关。
+
+`ResultSetViewer` 侧三条分支：
+- `isPanelVisible(id)` `:1532-1534` = `getPresentationSettings().enabledPanelIds.contains(id)`
+  ⇔ 本仓 `open_tabs` 的成员资格；
+- `closePanel(id)` `:1536-1542` = 找到 tab → `dispose()` + `removePanel(id)`（只摘这一页）；
+- `activatePanel(id, setActive, showPanels)` `:1287-1330`：① `showPanels && !isPanelsVisible()`
+  → `showPanels(true, false, false)`（整栏收起时先展开，且不落盘）；② 有现成 PanelInfo+tab
+  → `setActive` 则 `panelFolder.setSelection(tab)` + `activePanelId = id`；③ `showPanels` 为真
+  → `panelInfo.panel.setFocus()`（把键盘焦点交给面板控件）；④ 没有 tab 则按 descriptor 新建。
+
+#### 9.66.3 落点
+
+- `crates/result_panel/src/grid/mod.rs:209-222`：`actions!` 追加五条零参 action
+  `ToggleValuePanel` / `ToggleReferencePanel` / `ToggleBrowserPanel` / `ToggleGroupPanel` /
+  `ToggleStatsPanel`；
+- `crates/editor/src/support/commands.rs`：五条 re-export；
+- `crates/result_panel/src/panel/events.rs:750`：新增只读访问器
+  `pub fn right_tab(&self) -> RightTab`（字段本是 `pub(crate)`，跨 crate 读不到；用例要断言
+  「打开即切到该页」只能靠它，与 `open_tabs()` 对称）；
+- `crates/editor/src/view/host/exec/edit_cmds.rs:420-477`：共用段
+  `dispatch_toggle_panel(tab, window, cx)` → `self.dispatch_result_request(
+  ResultRequest::ToggleRightTab(tab), window, cx)`，五条 `on_toggle_*` 各转一次；
+- `crates/editor/src/view/host/render.rs:197-201`：五条 `.on_action`；
+- `crates/app/src/main.rs:528-552`：`ctrl-alt-f2..f6` 五条 KeyBinding，挂
+  `RESULT_PANEL_CONTEXT`；
+- `crates/editor/src/view/tests/mod.rs`：测试侧同口径五条。
+
+**为什么不新建面板方法**：`ResultPanel::toggle_right_tab`（`events.rs:815`）第 24 批就已实现，
+语义与上游 `toggleResultsPanel` 一致（`panels_visible() && open_tabs.contains(tab)` 为真 →
+`close_right_tab`）；`ResultRequest::ToggleRightTab` 在 `dispatch.rs:445-461` 也已完整接线
+（含 `persist_result_open_tabs` 与「切到引用页时读外键」）。本批只是给这条现成链路补键盘入口。
+
+**与上游三条分支的对照**：
+
+| 上游分支 | 上游行为 | 本仓行为 |
+| --- | --- | --- |
+| 关（`:64-69` 判真） | `closePanel(id)`：摘掉这一页 | `close_right_tab`：从 `open_tabs` 移除；关空则整栏收起（`set_panels_visible(false)`）；关的是当前页则落到 `neighbor_after_close` |
+| 开 + 整栏收起（`:1291-1293`） | `showPanels(true,false,false)`：展开整栏、不落盘 | `set_right_tab` 在 `!show_value_sidebar` 时置 `edge_bar_visible` / `show_value_sidebar = true` / `right_sidebar_epoch + 1` |
+| 开 + 有现成页（`:1301-1303`） | `setSelection(tab)` + `activePanelId = id` | `right_tab = tab` |
+| 开 + `showPanels` 真（`:1304-1306`） | `panelInfo.panel.setFocus()`：焦点交给面板控件 | **不接**（右栏六页无 focus handle，见 §9.66.5） |
+| 开 + 无页（`:1287` 起新建分支） | 按 descriptor 新建页签 | `open_right_tab_only` 按 `right_tabs()` 规范序插回 |
+| 落盘 | `activatePanel` / `closePanel` 后由 `savePresentationSettings` 存 `enabledPanelIds` | `dispatch_result_request` 里 `persist_result_open_tabs`（写 `result_panel.open_tabs` 偏好） |
+
+**gpui 侧为什么不照抄「一条命令 + 参数」**：`Action` 在 gpui-pre 0.3.12 是手写 trait
+（`action.rs:118-146`：`boxed_clone` / `partial_eq` / `name` / `name_for_type` / `build`），
+带参 action 的 `build` 要走 `serde_json` 反序列化，还得给 `RightTab` 补 `Deserialize`。
+五条零参 action 表达同样语义，代码量与出错面都更小。
+
+#### 9.66.4 顺带修的两处既有问题
+
+**（1）落盘入口缺全局时 panic。** `persist_result_open_tabs`（`dispatch.rs:762`）此前无条件调
+`settings::SettingsService::set_result_panel_open_tabs`，后者内部 `cx.global::<Settings>()`
+（`settings/src/service/result_panel.rs:637`）在没有该全局时直接 panic。生产路径 `rds-app`
+启动即注册全局，线上从不触发；但 headless（`TestAppContext`）没有这个全局，本批用例第一次
+按下 `CTRL+ALT+F2` 即撞上：
+
+```
+panicked at gpui-fast-0.1.17/src/app.rs:2657: no state of type rds_settings::model::Settings exists
+```
+
+修法是在入口加 `if !cx.has_global::<settings::model::Settings>() { return; }`
+（`dispatch.rs:769`），与同文件 `clear_filter_via_window` 的「缺窗口就静默跳过」同一口径；
+顺带避免用例把 `settings.json` 真写进用户目录。
+
+**（2）notebook 测试里的死变量。** `crates/editor/src/notebook/orchestrate.rs:243`
+（`error_reply_without_error_event_appends_reason`）的 `let applied = apply_events(...)`
+只断言了 `c.state` / `c.outputs`、没用返回值，`check --all-targets` 报
+`unused variable: applied`（本 crate 当时唯一一条 warning，与本批主题无关的既有老账）。
+改成 `let _ = apply_events(...)` 并注明「返回值由下面的用例覆盖」。
+
+#### 9.66.5 有意差异
+
+- **不把焦点交给面板控件**（上游 `activatePanel` 的 `panel.setFocus()`）：右栏六页目前都没有
+  `FocusHandle`，与第 82 批 `CTRL+SHIFT+7`（`activatePreview`）卡在同一处；等「右栏焦点体系」
+  （六页各给 focus handle + 交接规则）立起来再补。
+- **不接 `CTRL+SHIFT+F2..F6`**：上游这一组走 `activatePanel`（只激活、不改可见性），
+  属「焦点/激活」语义，同样等焦点体系。
+- **`RightTab::ExecSql`（执行SQL 页）不接键位**：本仓自有页，上游五个 `panelId` 里没有对应项。
+- **`results-metadata` → `RightTab::Browser`**：本仓列浏览器即 metadata 面板
+  （`ports.rs:846` 注释：「列浏览器：搜索框 + 列清单 + 底部元数据明细…… 对齐 DBeaver
+  metadata 面板」；`events.rs:3002` 也把 `results-metadata` 记为「ResultSet metadata
+  description」）。
+- **不额外判 `enabledWhen`（`...ui.resultset.part`）**：五条 action 挂在 `RESULT_PANEL_CONTEXT`
+  （面板根），没有结果集时按不动，与上游 `enabledWhen` 等效。
+
+#### 9.66.6 用例
+
+`view/tests/results_a.rs::ctrl_alt_f2_to_f6_toggle_the_right_panels`（新，`:2045` 起）：
+
+1. 前提：出厂 `open_tabs` = 六页全开（`Browser / Value / Stats / Group / Reference / ExecSql`）、
+   当前页 = 列浏览器；
+2. `ctrl-alt-f2` → 值详情从那集合里摘掉，整栏仍在、当前页不动（关的不是当前页）；
+3. 再按 `ctrl-alt-f2` → 按规范序插回、当前页切到值详情；
+4. 再按一次（此时值详情正是当前页）→ 集合摘掉、当前页落到规范序下一页（计算页）；
+5. 开回来；`ctrl-alt-f4` 关列浏览器、`ctrl-alt-f5` 关分组、`ctrl-alt-f6` 关计算，
+   逐页核对集合；
+6. `ctrl-alt-f3` 连按两次 → 关掉再开回引用页并切过去（覆盖「切到引用页会读外键」那条链路）；
+7. `f7` 收起整栏后按 `ctrl-alt-f4` → 整栏展开、列浏览器（此前已关）重新启用、当前页切到它、
+   `editor-result-right-tabs` 回到树里（覆盖 `activatePanel` 的 `showPanels` 分支）。
+
+#### 9.66.7 门禁（第 83 批，实测）
+
+- `cargo check -p rds-result-panel -p rds-editor -p rds-app --all-targets`：`Finished`（3m53s），
+  0 error；warning 仅并行线 `rds-notification` 的 2 条未使用函数（+1 条 summary），本批三个
+  crate 零 warning。§9.66.4 两处修完复跑同一条：`Finished`（2m52s），**0 error**，
+  warning 仍是 `rds-notification` 那 3 行（`unused variable: applied` 已消失）；
+- `cargo test -p rds-editor`：**837 passed（1 ignored）**（836 → +1，即本批新用例）；
+- `cargo test -p rds-result-panel`：**421 passed**（不变）；
+- `cargo test -p rds-ui-guard`：3 passed / **1 failed**，失败项仍是
+  `no_new_hardcoded_color_or_pixel` 报并行线未跟踪文件
+  `crates/workbench/src/components/version_dialog.rs`（裸色值 0 / 裸 px 1），与本批无关
+  （该 crate 依赖极轻，为绕开并行线的编译锁，本轮用独立 `CARGO_TARGET_DIR` 跑的，14.85s）；
+- `cargo check --workspace --all-targets`：`Finished`（23m24s，前半程停在
+  `Blocking waiting for file lock on build directory` 等并行线释放 `target`），**0 error**；
+  5 行 warning = `rds-notification` 两条 `dead_code` + 其 summary + `rds-editor (lib test)`
+  的 `unused variable: applied`（即 §9.66.4（2），本轮已修）+ 其 summary。该次全量跑在修
+  `applied` 之前，修完以三 crate 复跑为准（0 error，本线零 warning）。
+
+> 环境说明：并行线多条 `cargo` 进程长期持有 `target` 的 build 锁，本轮两次门禁都先停在
+> `Blocking waiting for file lock on build directory`，只能排队等释放。ui-guard 改用独立
+> target 目录，就是为了不再排这条队。
+
+#### 9.66.8 遗留
+
+- 「打开单页时把焦点交给该页」与 `CTRL+SHIFT+F2..F6` 一起等右栏焦点体系；
+- 其余同 §9.65.8 / §9.64.8。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
