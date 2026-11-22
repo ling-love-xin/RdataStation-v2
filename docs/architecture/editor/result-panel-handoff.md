@@ -3089,8 +3089,8 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - 落点：`hide_current_column(window, cx) -> Result<(), String>`（当前列 = `selection_pos` 的组件列
   换算数据列；拒绝：无当前格 / 行号槽 / 已隐藏 / 只剩一列）、`show_hidden_columns(window, cx) -> bool`
   （`hidden_count() == 0` → false）。
-- 关键点：藏 / 显之后把当前格**按同一视觉列位重投影**（`set_selection_pos`），列位越界则清选——
-  否则 `selection_pos` / `selected_col` 会指向别的列。
+- 关键点：藏 / 显之后把当前格**按同一视觉列位重投影**（`set_selection_pos`），列位越界则清
+  `selection_pos`（右栏 `selected_col` 按「清选保持清单当前选中」保留，第 79 批实测见 §2.130）。
 - 有意差异：无「默认可见列」概念（`show_all_columns` 全恢复等价）、不允许全隐（留 1 列）、
   ERROR 框 → 状态栏一句话、一次只藏一列。
 - 用例：panel 2 条（三列场景藏中间列 + 重投影 / 只剩一列被拒）；editor 1 条（提示 → 藏 → 放回）。
