@@ -210,6 +210,33 @@ fn bind_editor_keys(cx: &mut TestAppContext) {
                 crate::commands::TogglePanels,
                 Some(crate::commands::RESULT_PANEL_CONTEXT),
             ),
+            // 【第 83 批】五个右栏单页开关（`CMD_TOGGLE_PANEL` + `panelId`，
+            // `plugin.xml:1099-1113`；面板层 context，与生产注册同口径）
+            KeyBinding::new(
+                "ctrl-alt-f2",
+                crate::commands::ToggleValuePanel,
+                Some(crate::commands::RESULT_PANEL_CONTEXT),
+            ),
+            KeyBinding::new(
+                "ctrl-alt-f3",
+                crate::commands::ToggleReferencePanel,
+                Some(crate::commands::RESULT_PANEL_CONTEXT),
+            ),
+            KeyBinding::new(
+                "ctrl-alt-f4",
+                crate::commands::ToggleBrowserPanel,
+                Some(crate::commands::RESULT_PANEL_CONTEXT),
+            ),
+            KeyBinding::new(
+                "ctrl-alt-f5",
+                crate::commands::ToggleGroupPanel,
+                Some(crate::commands::RESULT_PANEL_CONTEXT),
+            ),
+            KeyBinding::new(
+                "ctrl-alt-f6",
+                crate::commands::ToggleStatsPanel,
+                Some(crate::commands::RESULT_PANEL_CONTEXT),
+            ),
         ]);
     });
 }

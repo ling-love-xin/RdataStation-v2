@@ -198,6 +198,30 @@ actions!(
         /// 右缘竖条顶部那颗 `panelsButton`（`editor-result-edge-panels` →
         /// `ResultRequest::SetPanelsVisible(!panels_visible)`），这条键位落同一份状态。
         TogglePanels,
+        /// 【第 83 批】`CTRL+ALT+F2`：显示 / 隐藏「值详情」页
+        /// （`CMD_TOGGLE_PANEL` + `panelId=value-view`，`plugin.xml:1099-1101`；
+        /// handler `ResultSetHandlerTogglePanel:64-81`：可见则 `closePanel(id)`，
+        /// 否则 `activatePanel(id, true, true)`）。
+        ///
+        /// 面板级命令（上游 contextId 是整块 `...ui.context.resultset`）。面板侧
+        /// `toggle_right_tab` 早已实现（第 24 批，竖条 / 视图菜单共用），这条只是键盘入口，
+        /// 走 `ResultRequest::ToggleRightTab`，连页集合落盘与引用页刷新一并复用。
+        ToggleValuePanel,
+        /// 【第 83 批】`CTRL+ALT+F3`：显示 / 隐藏「引用」页（`panelId=results-references`，
+        /// `plugin.xml:1102-1104`）
+        ToggleReferencePanel,
+        /// 【第 83 批】`CTRL+ALT+F4`：显示 / 隐藏「列浏览器」页——上游这一页叫
+        /// `results-metadata`（`plugin.xml:1105-1107`），本仓列浏览器即 metadata 面板
+        /// （`ports.rs:846` 的注释：「列浏览器：搜索框 + 列清单 + 底部元数据明细……
+        /// 对齐 DBeaver metadata 面板」；`events.rs:3002` 也把 `results-metadata` 记为
+        /// 「ResultSet metadata description」）
+        ToggleBrowserPanel,
+        /// 【第 83 批】`CTRL+ALT+F5`：显示 / 隐藏「分组」页（`panelId=results-grouping`，
+        /// `plugin.xml:1108-1110`）
+        ToggleGroupPanel,
+        /// 【第 83 批】`CTRL+ALT+F6`：显示 / 隐藏「计算」页（上游 `panelId=column-aggregate`，
+        /// `plugin.xml:1111-1113`）
+        ToggleStatsPanel,
     ]
 );
 

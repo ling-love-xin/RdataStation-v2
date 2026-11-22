@@ -745,6 +745,12 @@ impl ResultPanel {
         &self.open_tabs
     }
 
+    /// 【右栏】当前页签（只读）。`toggle_right_tab` 返回的 `bool` 只说「切没切」，
+    /// 具体落到哪一页要读这个值（宿主用例与后续键位判定用）。
+    pub fn right_tab(&self) -> RightTab {
+        self.right_tab
+    }
+
     /// 【右栏】注入已启用的页集合（宿主在创建后按偏好 `result_panel.open_tabs` 调用）。
     ///
     /// 入参按**规范序**归一：只收已知页、重复丢弃、顺序按 [`RightTab::ALL`]；

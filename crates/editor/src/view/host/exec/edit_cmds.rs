@@ -9,11 +9,13 @@ use crate::commands::{
     CopyRowValuesFromBelow, CycleResultPresentation, DeleteResultRow, DuplicateResultRow,
     EnterCellEdit, ExecuteSql, FetchAllData, FetchNextSegment, FocusRowJump, GotoColumn,
     HideCurrentColumn, InsertResultRow, OpenFilterSettings, RedoResultEdit, RejectPendingChanges,
-    SelectCurrentColumn, SelectCurrentRow, ShowHiddenColumns, SwitchFilterFocus, TogglePanels,
-    UndoResultEdit,
+    SelectCurrentColumn, SelectCurrentRow, ShowHiddenColumns, SwitchFilterFocus,
+    ToggleBrowserPanel, ToggleGroupPanel, TogglePanels, ToggleReferencePanel, ToggleStatsPanel,
+    ToggleValuePanel, UndoResultEdit,
 };
 
 use super::*;
+use result_panel::ports::{ResultRequest, RightTab};
 
 impl EditorHostPanel {
     /// `Ctrl+Enter`：执行（选区优先 → 光标所在语句）
@@ -404,6 +406,74 @@ impl EditorHostPanel {
             let visible = panel.panels_visible();
             panel.set_panels_visible(!visible, cx);
         });
+    }
+
+    /// 【第 83 批】`CTRL+ALT+F2..F6` 五个右栏单页开关的共用段。
+    ///
+    /// 上游是**一条命令 + `panelId` 参数**（`CMD_TOGGLE_PANEL`，`plugin.xml:1099-1113`）；
+    /// gpui 的 `Action` 是手写 trait（`gpui-pre-0.3.12/src/action.rs:118-146`，`build` 要
+    /// `serde_json` 反序列化），带参 action 要额外实现五个方法还得给 `RightTab` 加
+    /// `Deserialize`，所以本仓按「一页一个零参 action」落，语义不变。
+    ///
+    /// 一律交给 `ResultRequest::ToggleRightTab`：页集合落盘（`persist_result_open_tabs`）与
+    /// 「切到引用页时读外键」都在 `dispatch_result_request` 那一段，绕过去就少这两步。
+    fn dispatch_toggle_panel(
+        &mut self,
+        tab: RightTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_result_request(ResultRequest::ToggleRightTab(tab), window, cx);
+    }
+
+    /// 【第 83 批】`CTRL+ALT+F2`：值详情页（`panelId=value-view`，`plugin.xml:1099-1101`）
+    pub(crate) fn on_toggle_value_panel(
+        &mut self,
+        _: &ToggleValuePanel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_toggle_panel(RightTab::Value, window, cx);
+    }
+
+    /// 【第 83 批】`CTRL+ALT+F3`：引用页（`panelId=results-references`，`:1102-1104`）
+    pub(crate) fn on_toggle_reference_panel(
+        &mut self,
+        _: &ToggleReferencePanel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_toggle_panel(RightTab::Reference, window, cx);
+    }
+
+    /// 【第 83 批】`CTRL+ALT+F4`：列浏览器页（上游 `panelId=results-metadata`，`:1105-1107`）
+    pub(crate) fn on_toggle_browser_panel(
+        &mut self,
+        _: &ToggleBrowserPanel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_toggle_panel(RightTab::Browser, window, cx);
+    }
+
+    /// 【第 83 批】`CTRL+ALT+F5`：分组页（`panelId=results-grouping`，`:1108-1110`）
+    pub(crate) fn on_toggle_group_panel(
+        &mut self,
+        _: &ToggleGroupPanel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_toggle_panel(RightTab::Group, window, cx);
+    }
+
+    /// 【第 83 批】`CTRL+ALT+F6`：计算页（上游 `panelId=column-aggregate`，`:1111-1113`）
+    pub(crate) fn on_toggle_stats_panel(
+        &mut self,
+        _: &ToggleStatsPanel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_toggle_panel(RightTab::Stats, window, cx);
     }
 
     /// 【第 79 批】`ALT+SHIFT+C`：复制列名

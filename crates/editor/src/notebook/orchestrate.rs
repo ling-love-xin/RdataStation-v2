@@ -240,7 +240,9 @@ mod tests {
     #[test]
     fn error_reply_without_error_event_appends_reason() {
         let mut c = cell();
-        let applied = apply_events(
+        // 返回值不看，只看副作用（状态与输出）：这条用例的落点是「没有 Error 事件时
+        // 也要补一条原因」，`ExecutionResult` 里的字段由下面的用例覆盖。
+        let _ = apply_events(
             &mut c,
             ExecutionTag { msg_id: "e" },
             &[reply(Some("e"), "error")],

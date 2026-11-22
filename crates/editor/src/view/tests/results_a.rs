@@ -2027,3 +2027,176 @@ fn f7_and_ctrl_7_toggle_the_result_panels(cx: &mut TestAppContext) {
         "右栏内容要回来"
     );
 }
+
+/// 【第 83 批】`CTRL+ALT+F2..F6`：五个右栏单页开关
+/// （DBeaver `CMD_TOGGLE_PANEL` + `panelId = value-view / results-references /
+/// results-metadata / results-grouping / column-aggregate`，`plugin.xml:1099-1113`；
+/// handler `ResultSetHandlerTogglePanel:64-81`：`isVisible = isPanelsVisible() &&
+/// isPanelVisible(id)`，真 → `closePanel(id)`（只摘掉这一页），假 →
+/// `activatePanel(id, true, true)`（整栏收起时顺带展开，并切到该页）。
+///
+/// 断言口径照上游那两个分支：
+/// ① 出厂六页全开 → `CTRL+ALT+F2`（值详情）先**关掉那一页**，整栏仍在、页签少一页；
+/// ② 同一键再按 → 重新启用并切到该页；
+/// ③ 关掉**当前页** → 当前页落到规范序里的下一页；
+/// ④ 整栏收起（`F7`）之后按任一页 → 展开并切到该页（`activatePanel` 的 `showPanels` 分支），
+///    顺带把之前关掉的页重新启用。
+#[gpui_kit::test]
+fn ctrl_alt_f2_to_f6_toggle_the_right_panels(cx: &mut TestAppContext) {
+    use gpui_kit::Focusable as _;
+    use result_panel::ports::RightTab;
+
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+
+    let grid = cx.update(|_window, app| panel.read(app).grid_for_test());
+    let grid_focus = cx.update(|_window, app| grid.read(app).focus_handle(app));
+    cx.update(|window, cx| window.focus(&grid_focus, cx));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let tabs = |cx: &mut VisualTestContext| {
+        cx.update(|_w, app| {
+            panel
+                .read(app)
+                .result_panel
+                .read(app)
+                .open_tabs()
+                .to_vec()
+        })
+    };
+    let active = |cx: &mut VisualTestContext| {
+        cx.update(|_w, app| panel.read(app).result_panel.read(app).right_tab())
+    };
+    let visible = |cx: &mut VisualTestContext| {
+        cx.update(|_w, app| {
+            panel
+                .read(app)
+                .result_panel
+                .read(app)
+                .panels_visible()
+        })
+    };
+
+    // 前提：出厂六页全开、当前页是列浏览器（`RightTab::ALL` 首项）
+    assert_eq!(
+        tabs(cx),
+        vec![
+            RightTab::Browser,
+            RightTab::Value,
+            RightTab::Stats,
+            RightTab::Group,
+            RightTab::Reference,
+            RightTab::ExecSql,
+        ],
+        "前提：出厂六页全开"
+    );
+    assert_eq!(active(cx), RightTab::Browser, "前提：出厂当前页是列浏览器");
+
+    // ① `CTRL+ALT+F2`（value-view）→ 关掉值详情页；关的不是当前页，当前页不动
+    cx.simulate_keystrokes("ctrl-alt-f2");
+    cx.run_until_parked();
+    assert!(
+        !tabs(cx).contains(&RightTab::Value),
+        "CTRL+ALT+F2 首按应把这页从集合里摘掉"
+    );
+    assert!(visible(cx), "还剩别的页，整栏不该收起");
+    assert_eq!(active(cx), RightTab::Browser, "关的不是当前页，当前页不动");
+
+    // ② 同一键再按 → 重新启用（按规范序插回列浏览器之后）并切到该页
+    cx.simulate_keystrokes("ctrl-alt-f2");
+    cx.run_until_parked();
+    assert_eq!(
+        tabs(cx),
+        vec![
+            RightTab::Browser,
+            RightTab::Value,
+            RightTab::Stats,
+            RightTab::Group,
+            RightTab::Reference,
+            RightTab::ExecSql,
+        ],
+        "再按一次应把值详情按规范序插回"
+    );
+    assert_eq!(active(cx), RightTab::Value, "打开即切到该页");
+
+    // ③ 关掉**当前页**（此时当前页就是值详情）→ 落到规范序里的下一页（计算）
+    cx.simulate_keystrokes("ctrl-alt-f2");
+    cx.run_until_parked();
+    assert!(!tabs(cx).contains(&RightTab::Value));
+    assert_eq!(active(cx), RightTab::Stats, "关当前页应落到规范序里的下一页");
+
+    // 再把值详情开回来（此刻它的规范序前驱列浏览器仍在，插回原位）
+    cx.simulate_keystrokes("ctrl-alt-f2");
+    cx.run_until_parked();
+    assert_eq!(
+        tabs(cx),
+        vec![
+            RightTab::Browser,
+            RightTab::Value,
+            RightTab::Stats,
+            RightTab::Group,
+            RightTab::Reference,
+            RightTab::ExecSql,
+        ]
+    );
+    assert_eq!(active(cx), RightTab::Value);
+
+    // `CTRL+ALT+F4`（results-metadata = 列浏览器）→ 关掉列浏览器（非当前页）
+    cx.simulate_keystrokes("ctrl-alt-f4");
+    cx.run_until_parked();
+    assert!(
+        !tabs(cx).contains(&RightTab::Browser),
+        "CTRL+ALT+F4 应关掉列浏览器页"
+    );
+    assert_eq!(active(cx), RightTab::Value);
+
+    // `CTRL+ALT+F5`（results-grouping）→ 关掉分组页
+    cx.simulate_keystrokes("ctrl-alt-f5");
+    cx.run_until_parked();
+    assert!(!tabs(cx).contains(&RightTab::Group), "CTRL+ALT+F5 应关掉分组页");
+
+    // `CTRL+ALT+F6`（column-aggregate）→ 关掉计算页
+    cx.simulate_keystrokes("ctrl-alt-f6");
+    cx.run_until_parked();
+    assert!(!tabs(cx).contains(&RightTab::Stats), "CTRL+ALT+F6 应关掉计算页");
+    assert_eq!(
+        tabs(cx),
+        vec![RightTab::Value, RightTab::Reference, RightTab::ExecSql]
+    );
+
+    // `CTRL+ALT+F3`（results-references）→ 关掉引用页；再按一次 → 开回来并切过去
+    cx.simulate_keystrokes("ctrl-alt-f3");
+    cx.run_until_parked();
+    assert!(
+        !tabs(cx).contains(&RightTab::Reference),
+        "CTRL+ALT+F3 应关掉引用页"
+    );
+    assert_eq!(tabs(cx), vec![RightTab::Value, RightTab::ExecSql]);
+    cx.simulate_keystrokes("ctrl-alt-f3");
+    cx.run_until_parked();
+    assert!(tabs(cx).contains(&RightTab::Reference), "再按应开回引用页");
+    assert_eq!(active(cx), RightTab::Reference, "打开即切到引用页");
+
+    // ④ 整栏收起（`F7`）之后按 `CTRL+ALT+F4`：即使列浏览器此前被关掉，
+    //    也要「展开 + 重新启用 + 切到该页」（`activatePanel(id, true, true)` 分支）
+    cx.simulate_keystrokes("f7");
+    cx.run_until_parked();
+    assert!(!visible(cx), "前提：F7 之后整栏收起");
+
+    cx.simulate_keystrokes("ctrl-alt-f4");
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(visible(cx), "收起态按单页键应把整栏展开");
+    assert!(
+        tabs(cx).contains(&RightTab::Browser),
+        "被关掉的页也应重新启用"
+    );
+    assert_eq!(active(cx), RightTab::Browser, "展开后切到该页");
+    assert!(
+        cx.debug_bounds("editor-result-right-tabs").is_some(),
+        "右栏内容要跟着回来"
+    );
+}

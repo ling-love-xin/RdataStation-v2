@@ -517,6 +517,39 @@ fn run_app() {
                     editor::commands::TogglePanels,
                     Some(editor::commands::RESULT_PANEL_CONTEXT),
                 ),
+                // 【第 83 批】`CTRL+ALT+F2..F6` = `CMD_TOGGLE_PANEL` + `panelId`
+                // （`plugin.xml:1099-1113`；handler `ResultSetHandlerTogglePanel:64-81`：
+                // 该页可见 → `closePanel`，否则 `activatePanel(id, true, true)`）。
+                // 五条都是同一命令加不同 `panelId`；gpui 侧改为五条零参 action（见
+                // `edit_cmds.rs::dispatch_toggle_panel` 的取舍说明）。上游 contextId 仍是整块
+                // `...ui.context.resultset`，故与第 78-82 批一样挂面板层。
+                // 顺序照上游：F2 值详情、F3 引用、F4 列浏览器（metadata）、F5 分组、F6 计算。
+                // `CTRL+SHIFT+F2..F6`（`activatePanel` 那组键位）不在本批范围，见文档「遗留」。
+                KeyBinding::new(
+                    "ctrl-alt-f2",
+                    editor::commands::ToggleValuePanel,
+                    Some(editor::commands::RESULT_PANEL_CONTEXT),
+                ),
+                KeyBinding::new(
+                    "ctrl-alt-f3",
+                    editor::commands::ToggleReferencePanel,
+                    Some(editor::commands::RESULT_PANEL_CONTEXT),
+                ),
+                KeyBinding::new(
+                    "ctrl-alt-f4",
+                    editor::commands::ToggleBrowserPanel,
+                    Some(editor::commands::RESULT_PANEL_CONTEXT),
+                ),
+                KeyBinding::new(
+                    "ctrl-alt-f5",
+                    editor::commands::ToggleGroupPanel,
+                    Some(editor::commands::RESULT_PANEL_CONTEXT),
+                ),
+                KeyBinding::new(
+                    "ctrl-alt-f6",
+                    editor::commands::ToggleStatsPanel,
+                    Some(editor::commands::RESULT_PANEL_CONTEXT),
+                ),
                 // 【第 60 批】同一条 `Ctrl+反引号` 再绑到**面板层**上下文：文本态下网格
                 // 整块不渲染，网格 context 不在焦点路径上；焦点落在面板根时靠这条命中
                 // （两层同时匹配时 gpui 按 context 深度取更深的网格那条，不会切两次）。

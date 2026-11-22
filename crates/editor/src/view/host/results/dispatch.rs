@@ -759,7 +759,16 @@ impl EditorHostPanel {
     ///
     /// 两条改动路径（页签条行尾 × / 视图菜单勾选项）生效后各回写一次；面板已把集合
     /// 归成规范序，宿主只负责拼成 id 串交给设置服务（同值不写盘由设置侧判定）。
+    ///
+    /// 没有 `Settings` 全局时静默跳过：headless（用例里的 `TestAppContext`）不装这个
+    /// 全局，而 `SettingsService::set_result_panel_open_tabs` 内部 `cx.global::<Settings>()`
+    /// 会直接 panic，且它拿到全局后还会真写用户目录的 `settings.json`——用例不该有这种
+    /// 副作用。生产路径 `rds-app` 启动即注册该全局，所以这一步永远走得通。同文件的
+    /// 窗口转手入口（[`Self::clear_filter_via_window`]）也是「缺句柄就静默跳过」的口径。
     pub(crate) fn persist_result_open_tabs(&mut self, cx: &mut Context<Self>) {
+        if !cx.has_global::<settings::model::Settings>() {
+            return;
+        }
         let ids = self
             .result_panel
             .read(cx)

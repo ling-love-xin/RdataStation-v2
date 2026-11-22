@@ -89,12 +89,16 @@ pub use result_panel::grid::RESULT_GRID_CONTEXT;
 /// 【第 80 批】`ALT+SHIFT+F` 打开筛选设置（`CMD_FILTER_EDIT_SETTINGS`，`:1094`）。
 ///
 /// 【第 82 批】`F7` / `CTRL+7` 右侧辅助栏总开关（`CMD_TOGGLE_PANELS`，`:1084/1085`）。
+///
+/// 【第 83 批】`CTRL+ALT+F2..F6` 五个右栏单页开关（`CMD_TOGGLE_PANEL` + `panelId`，
+/// `plugin.xml:1099-1113`）。
 pub use result_panel::grid::{
     CommitResultChanges, CopyColumnNames, CopyRowValuesFromAbove, CopyRowValuesFromBelow,
     CycleResultPresentation, DeleteResultRow, DuplicateResultRow, EnterCellEdit, FetchAllData,
     FetchNextSegment, FocusRowJump, GotoColumn, HideCurrentColumn, InsertResultRow,
     OpenFilterSettings, RejectPendingChanges, SelectCurrentColumn, SelectCurrentRow,
-    ShowHiddenColumns, SwitchFilterFocus, TogglePanels,
+    ShowHiddenColumns, SwitchFilterFocus, ToggleBrowserPanel, ToggleGroupPanel, TogglePanels,
+    ToggleReferencePanel, ToggleStatsPanel, ToggleValuePanel,
 };
 
 /// 【第 60 批】结果**面板**的 key context（`RESULT_GRID_CONTEXT` 的父层）。

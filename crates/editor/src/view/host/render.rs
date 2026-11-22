@@ -192,6 +192,13 @@ impl Render for EditorHostPanel {
             .on_action(cx.listener(Self::on_open_filter_settings))
             // 【第 82 批】`F7` / `CTRL+7` 右侧辅助栏总开关（`CMD_TOGGLE_PANELS`，`:1084/1085`）
             .on_action(cx.listener(Self::on_toggle_panels))
+            // 【第 83 批】`CTRL+ALT+F2..F6` 五个右栏单页开关
+            // （`CMD_TOGGLE_PANEL` + `panelId`，`:1099-1113`）
+            .on_action(cx.listener(Self::on_toggle_value_panel))
+            .on_action(cx.listener(Self::on_toggle_reference_panel))
+            .on_action(cx.listener(Self::on_toggle_browser_panel))
+            .on_action(cx.listener(Self::on_toggle_group_panel))
+            .on_action(cx.listener(Self::on_toggle_stats_panel))
             // 【书签】`Ctrl+Shift+B` 切换 / `F8` 下一 / `Shift+F8` 上一（键位在 crates/app 注册）
             .on_action(cx.listener(Self::on_toggle_bookmark))
             .on_action(cx.listener(Self::on_next_bookmark))
