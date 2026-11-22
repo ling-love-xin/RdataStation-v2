@@ -1,5 +1,7 @@
 # 发布说明（Release Notes）
 
+> 按版本的变更索引（面向读者的一句话条目）见 [`../CHANGELOG.md`](../CHANGELOG.md)；本目录只管「一次发布」的正文。
+
 GitHub Releases 页面上的正文由仓库**手写**，不用「自动生成的 compare 链接」。
 原因：本仓库是单人直推 `main`，GitHub 的自动生成器只汇总 PR 与 issue，这里没有 PR，
 生成出来的正文只有一个 `**Full Changelog**` 链接——用户点开看不到任何「这次更新了什么」。
