@@ -157,8 +157,10 @@ pub struct KernelEntry {
     /// 真内核会话（进程 + ZMQ 四通道；命令经它发出）
     pub session: rds_kernel::KernelSession,
     /// spawn 后立即取走的唯一事件流（持续 poll；`take_events` 每次都会换新通道，
-    /// 但取走之后 session 内部那个就作废了——这里只持有最初那个）
-    pub events: tokio::sync::mpsc::UnboundedReceiver<rds_kernel::KernelEvent>,
+    /// 但取走之后 session 内部那个就作废了——这里只持有最初那个）。
+    /// 事件带归属（`KernelEventEnvelope.msg_id`）：R8——只接受本次执行的输出，
+    /// 上一单元迟到的事件不得混入。
+    pub events: tokio::sync::mpsc::UnboundedReceiver<rds_kernel::KernelEventEnvelope>,
     /// 启动该内核用的解释器可执行路径（指示器回显；来自注册表 spec，见 [`crate::kernel`]）
     pub python: std::path::PathBuf,
 }

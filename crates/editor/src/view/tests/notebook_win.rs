@@ -767,15 +767,21 @@ fn python_cell_runs_via_real_kernel_and_dispatches_media(cx: &mut TestAppContext
     shared
         .ensure_kernel("python3", &python.to_string_lossy())
         .expect("内核启动（RDS_KERNEL_PYTHON 是否指向带 ipykernel 的解释器？）");
-    shared.kernel_execute("python3", "1 + 1").expect("提交执行");
+    let msg_id = shared
+        .kernel_execute("python3", "1 + 1")
+        .expect("提交执行");
 
     // 轮询事件直到 ExecuteReply（真时钟；内核回执通常 <2s）
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     let mut outputs: Vec<crate::cell::Output> = Vec::new();
     let mut status: Option<String> = None;
     loop {
-        for event in shared.kernel_drain("python3") {
-            match event {
+        for envelope in shared.kernel_drain("python3") {
+            // 【R8】带归属的事件必须属于本次 execute_request
+            if let Some(id) = envelope.msg_id.as_ref() {
+                assert_eq!(id, &msg_id, "事件归属错误：应属于本次执行");
+            }
+            match envelope.event {
                 rds_kernel::KernelEvent::Display(media) => {
                     outputs.extend(crate::media::media_to_outputs(&media));
                 }

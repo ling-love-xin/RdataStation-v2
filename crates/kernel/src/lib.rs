@@ -20,4 +20,4 @@ pub mod session;
 pub use registry::{
     KernelInterruptMode, KernelLanguage, KernelLaunch, KernelSpec, detect_kernels,
 };
-pub use session::{KernelEvent, KernelSession, KernelStatus};
+pub use session::{KernelEvent, KernelEventEnvelope, KernelSession, KernelStatus};

@@ -87,10 +87,37 @@ pub enum KernelEvent {
     Failed(String),
 }
 
+/// 一条事件 + 它所属的 `execute_request` 的 msg_id。
+///
+/// **为什么要有归属标记**：iopub 与 shell 是两条独立 socket，事件到达顺序不保证
+/// 与「哪次执行」对齐。没有归属时，上一单元迟到的 `stream` / `display` 会被当成本
+/// 单元的输出，迟到的 `execute_reply` 还会把本单元**提前收口**。
+///
+/// 会话级事件（`Status(Starting/Stopped)` / 通道失败 `Failed`）没有 parent，`msg_id = None`，
+/// 消费方应无条件接受。
+#[derive(Debug, Clone)]
+pub struct KernelEventEnvelope {
+    pub msg_id: Option<String>,
+    pub event: KernelEvent,
+}
+
+impl KernelEventEnvelope {
+    /// 会话级事件（无归属）
+    pub fn session(event: KernelEvent) -> Self {
+        Self { msg_id: None, event }
+    }
+
+    /// 归属某次执行的回复 / 输出
+    pub fn for_execution(msg_id: Option<String>, event: KernelEvent) -> Self {
+        Self { msg_id, event }
+    }
+}
+
 /// 发给内核线程的命令（单命令队列，串行执行）
 #[derive(Debug)]
 enum Command {
-    Execute(String),
+    /// `msg_id` 由本层生成并写进 `execute_request` 的 header，供事件归属对账
+    Execute { code: String, msg_id: String },
     Interrupt,
     Shutdown,
 }
@@ -101,7 +128,7 @@ enum Command {
 /// 非 Clone：一个会话对应一个内核进程 / 一套事件流。
 pub struct KernelSession {
     commands: mpsc::UnboundedSender<Command>,
-    events: mpsc::UnboundedReceiver<KernelEvent>,
+    events: mpsc::UnboundedReceiver<KernelEventEnvelope>,
 }
 
 impl KernelSession {
@@ -166,13 +193,22 @@ impl KernelSession {
     }
 
     /// 取走事件接收端（只能取一次；UI 侧挂 mpsc 轮询消费）
-    pub fn take_events(&mut self) -> mpsc::UnboundedReceiver<KernelEvent> {
+    pub fn take_events(&mut self) -> mpsc::UnboundedReceiver<KernelEventEnvelope> {
         std::mem::replace(&mut self.events, mpsc::unbounded_channel().1)
     }
 
     /// 执行一段代码（排到单命令队列；结果经事件流回传）
-    pub fn execute(&self, code: String) {
-        let _ = self.commands.send(Command::Execute(code));
+    ///
+    /// 返回本次执行的 `msg_id`：调用方存下它，消费事件时只接受
+    /// `KernelEventEnvelope.msg_id == Some(本 id)` 的输出与 `ExecuteReply`。
+    /// 这样上一单元迟到的事件不会被误算进本单元，也不会把本单元提前收口。
+    pub fn execute(&self, code: String) -> String {
+        let msg_id = format!("rds-exec-{}", uuid::Uuid::new_v4().simple());
+        let _ = self.commands.send(Command::Execute {
+            code,
+            msg_id: msg_id.clone(),
+        });
+        msg_id
     }
 
     /// 中断当前执行（走 control 通道的 InterruptRequest）
@@ -195,7 +231,7 @@ impl Drop for KernelSession {
 /// 启动成功后回传给 `spawn` 的组装件（线程内还留着 iopub/shell/control 跑事件循环）
 struct LaunchParts {
     commands: mpsc::UnboundedSender<Command>,
-    events: mpsc::UnboundedReceiver<KernelEvent>,
+    events: mpsc::UnboundedReceiver<KernelEventEnvelope>,
 }
 
 /// 内核启动全流程（tokio 线程内）：端口 → 进程 → 握手 → 交还控制端 → 事件循环
@@ -292,8 +328,10 @@ async fn run_kernel_launch(
     match launched {
         Ok((_info, conn_file, child, iopub, shell, control)) => {
             let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<Command>();
-            let (ev_tx, ev_rx) = mpsc::unbounded_channel::<KernelEvent>();
-            let _ = ev_tx.send(KernelEvent::Status(KernelStatus::Starting));
+            let (ev_tx, ev_rx) = mpsc::unbounded_channel::<KernelEventEnvelope>();
+            let _ = ev_tx.send(KernelEventEnvelope::session(KernelEvent::Status(
+                KernelStatus::Starting,
+            )));
             // 启动成功 → 交还命令端与事件端
             let _ = ready.send(Ok(LaunchParts {
                 commands: cmd_tx,
@@ -315,7 +353,7 @@ async fn run_kernel_launch(
 /// 退出条件：收到 Shutdown / 任一路通道错误。
 async fn event_loop(
     mut cmd_rx: mpsc::UnboundedReceiver<Command>,
-    ev_tx: mpsc::UnboundedSender<KernelEvent>,
+    ev_tx: mpsc::UnboundedSender<KernelEventEnvelope>,
     mut iopub: ClientIoPubConnection,
     mut shell: ClientShellConnection,
     mut control: ClientControlConnection,
@@ -330,7 +368,7 @@ async fn event_loop(
                     break; // 发送端全部 drop = 会话结束
                 };
                 match cmd {
-                    Command::Execute(code) => {
+                    Command::Execute { code, msg_id } => {
                         let req = ExecuteRequest {
                             code,
                             silent: false,
@@ -339,16 +377,23 @@ async fn event_loop(
                             allow_stdin: false,
                             stop_on_error: true,
                         };
-                        let msg: JupyterMessage = req.into();
+                        let mut msg: JupyterMessage = req.into();
+                        // 本层生成的 msg_id 覆盖 `from()` 的随机 id：
+                        // 内核回传的消息 parent_header 即此 id，消费方据此归属事件
+                        msg.header.msg_id = msg_id;
                         if let Err(e) = shell.send(msg).await {
-                            let _ = ev_tx.send(KernelEvent::Failed(format!("发送执行请求失败：{e}")));
+                            let _ = ev_tx.send(KernelEventEnvelope::session(
+                                KernelEvent::Failed(format!("发送执行请求失败：{e}")),
+                            ));
                             break;
                         }
                     }
                     Command::Interrupt => {
                         let msg: JupyterMessage = InterruptRequest {}.into();
                         if let Err(e) = control.send(msg).await {
-                            let _ = ev_tx.send(KernelEvent::Failed(format!("发送中断请求失败：{e}")));
+                            let _ = ev_tx.send(KernelEventEnvelope::session(
+                                KernelEvent::Failed(format!("发送中断请求失败：{e}")),
+                            ));
                             break;
                         }
                     }
@@ -362,40 +407,64 @@ async fn event_loop(
             // iopub：内核广播（status / stream / display / error）
             msg = iopub.read() => {
                 match msg {
-                    Ok(msg) => match msg.content {
-                        JupyterMessageContent::Status(s) => {
-                            let status = match s.execution_state {
-                                ExecutionState::Idle => KernelStatus::Idle,
-                                ExecutionState::Busy => KernelStatus::Busy,
-                                ExecutionState::Starting => KernelStatus::Starting,
-                                _ => KernelStatus::Starting,
-                            };
-                            let _ = ev_tx.send(KernelEvent::Status(status));
+                    Ok(msg) => {
+                        // 归属：iopub 消息的 parent_header 指向触发它的 execute_request
+                        let parent = msg.parent_header.as_ref().map(|h| h.msg_id.clone());
+                        match msg.content {
+                            JupyterMessageContent::Status(s) => {
+                                let status = match s.execution_state {
+                                    ExecutionState::Idle => KernelStatus::Idle,
+                                    ExecutionState::Busy => KernelStatus::Busy,
+                                    ExecutionState::Starting => KernelStatus::Starting,
+                                    _ => KernelStatus::Starting,
+                                };
+                                let _ = ev_tx.send(KernelEventEnvelope::for_execution(
+                                    parent.clone(),
+                                    KernelEvent::Status(status),
+                                ));
+                            }
+                            JupyterMessageContent::StreamContent(s) => {
+                                let name = match s.name {
+                                    jupyter_protocol::messaging::Stdio::Stdout => "stdout",
+                                    jupyter_protocol::messaging::Stdio::Stderr => "stderr",
+                                };
+                                let _ = ev_tx.send(KernelEventEnvelope::for_execution(
+                                    parent.clone(),
+                                    KernelEvent::Stream { name: name.to_string(), text: s.text },
+                                ));
+                            }
+                            JupyterMessageContent::DisplayData(d) => {
+                                let _ = ev_tx.send(KernelEventEnvelope::for_execution(
+                                    parent.clone(),
+                                    KernelEvent::Display(d.data),
+                                ));
+                            }
+                            JupyterMessageContent::UpdateDisplayData(d) => {
+                                let _ = ev_tx.send(KernelEventEnvelope::for_execution(
+                                    parent.clone(),
+                                    KernelEvent::Display(d.data),
+                                ));
+                            }
+                            JupyterMessageContent::ExecuteResult(r) => {
+                                let _ = ev_tx.send(KernelEventEnvelope::for_execution(
+                                    parent.clone(),
+                                    KernelEvent::Display(r.data),
+                                ));
+                            }
+                            JupyterMessageContent::ErrorOutput(e) => {
+                                let _ = ev_tx.send(KernelEventEnvelope::for_execution(
+                                    parent.clone(),
+                                    KernelEvent::Error { ename: e.ename, evalue: e.evalue, traceback: e.traceback },
+                                ));
+                            }
+                            JupyterMessageContent::IoPubWelcome(_) => { /* 已握手，忽略后续 */ }
+                            _ => { /* execute_input / comm 等：本版本不消费 */ }
                         }
-                        JupyterMessageContent::StreamContent(s) => {
-                            let name = match s.name {
-                                jupyter_protocol::messaging::Stdio::Stdout => "stdout",
-                                jupyter_protocol::messaging::Stdio::Stderr => "stderr",
-                            };
-                            let _ = ev_tx.send(KernelEvent::Stream { name: name.to_string(), text: s.text });
-                        }
-                        JupyterMessageContent::DisplayData(d) => {
-                            let _ = ev_tx.send(KernelEvent::Display(d.data));
-                        }
-                        JupyterMessageContent::UpdateDisplayData(d) => {
-                            let _ = ev_tx.send(KernelEvent::Display(d.data));
-                        }
-                        JupyterMessageContent::ExecuteResult(r) => {
-                            let _ = ev_tx.send(KernelEvent::Display(r.data));
-                        }
-                        JupyterMessageContent::ErrorOutput(e) => {
-                            let _ = ev_tx.send(KernelEvent::Error { ename: e.ename, evalue: e.evalue, traceback: e.traceback });
-                        }
-                        JupyterMessageContent::IoPubWelcome(_) => { /* 已握手，忽略后续 */ }
-                        _ => { /* execute_input / comm 等：本版本不消费 */ }
                     },
                     Err(e) => {
-                        let _ = ev_tx.send(KernelEvent::Failed(format!("iopub 通道错误：{e}")));
+                        let _ = ev_tx.send(KernelEventEnvelope::session(
+                            KernelEvent::Failed(format!("iopub 通道错误：{e}")),
+                        ));
                         break;
                     }
                 }
@@ -403,22 +472,30 @@ async fn event_loop(
             // shell：执行回复（到达 = 本次执行完成）
             msg = shell.read() => {
                 match msg {
-                    Ok(msg) => match msg.content {
-                        JupyterMessageContent::ExecuteReply(r) => {
-                            let status = match r.status {
-                                ReplyStatus::Ok => "ok",
-                                ReplyStatus::Error => "error",
-                                ReplyStatus::Aborted => "abort",
-                            };
-                            let _ = ev_tx.send(KernelEvent::ExecuteReply {
-                                status: status.to_string(),
-                                execution_count: Some(r.execution_count.value() as i64),
-                            });
+                    Ok(msg) => {
+                        let parent = msg.parent_header.as_ref().map(|h| h.msg_id.clone());
+                        match msg.content {
+                            JupyterMessageContent::ExecuteReply(r) => {
+                                let status = match r.status {
+                                    ReplyStatus::Ok => "ok",
+                                    ReplyStatus::Error => "error",
+                                    ReplyStatus::Aborted => "abort",
+                                };
+                                let _ = ev_tx.send(KernelEventEnvelope::for_execution(
+                                    parent,
+                                    KernelEvent::ExecuteReply {
+                                        status: status.to_string(),
+                                        execution_count: Some(r.execution_count.value() as i64),
+                                    },
+                                ));
+                            }
+                            _ => { /* interrupt_reply / kernel_info_reply 等：忽略 */ }
                         }
-                        _ => { /* interrupt_reply / kernel_info_reply 等：忽略 */ }
                     },
                     Err(e) => {
-                        let _ = ev_tx.send(KernelEvent::Failed(format!("shell 通道错误：{e}")));
+                        let _ = ev_tx.send(KernelEventEnvelope::session(
+                            KernelEvent::Failed(format!("shell 通道错误：{e}")),
+                        ));
                         break;
                     }
                 }
@@ -426,7 +503,9 @@ async fn event_loop(
         }
     }
 
-    let _ = ev_tx.send(KernelEvent::Status(KernelStatus::Stopped));
+    let _ = ev_tx.send(KernelEventEnvelope::session(KernelEvent::Status(
+        KernelStatus::Stopped,
+    )));
     // 内核进程兜底清理（正常关闭时已自行退出；异常时强杀）
     let _ = child.kill();
     let _ = child.wait();
@@ -512,7 +591,7 @@ mod tests {
         let mut session = KernelSession::spawn(Path::new(&python))
             .unwrap_or_else(|e| panic!("启动内核失败（python={python}）：{e:#}"));
         let mut events = session.take_events();
-        session.execute("print('hello-kernel')".to_string());
+        let msg_id = session.execute("print('hello-kernel')".to_string());
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         let mut saw_stdout = false;
@@ -525,18 +604,26 @@ mod tests {
             // UnboundedReceiver 无带超时的同步读；失败路径会先收到 Failed 事件再 break，
             // 因此阻塞等待是安全的（外层 deadline 兜底防内核挂死）
             match events.blocking_recv() {
-                Some(KernelEvent::Stream { text, .. }) => {
-                    if text.contains("hello-kernel") {
-                        saw_stdout = true;
+                Some(env) => {
+                    // R8 归属断言：带归属的事件必须属于本次 execute_request
+                    if let Some(id) = env.msg_id.as_ref() {
+                        assert_eq!(id, &msg_id, "事件归属错误：应属于本次执行");
+                    }
+                    match env.event {
+                        KernelEvent::Stream { text, .. } => {
+                            if text.contains("hello-kernel") {
+                                saw_stdout = true;
+                            }
+                        }
+                        KernelEvent::ExecuteReply { status, .. } => {
+                            assert_eq!(status, "ok", "执行应成功返回");
+                            saw_reply = true;
+                        }
+                        KernelEvent::Failed(reason) => panic!("内核通道失败：{reason}"),
+                        KernelEvent::Error { evalue, .. } => panic!("执行出错：{evalue}"),
+                        _ => {}
                     }
                 }
-                Some(KernelEvent::ExecuteReply { status, .. }) => {
-                    assert_eq!(status, "ok", "执行应成功返回");
-                    saw_reply = true;
-                }
-                Some(KernelEvent::Failed(reason)) => panic!("内核通道失败：{reason}"),
-                Some(KernelEvent::Error { evalue, .. }) => panic!("执行出错：{evalue}"),
-                Some(_) => {}
                 None => panic!("事件通道断开"),
             }
             if saw_stdout && saw_reply {
@@ -557,27 +644,36 @@ mod tests {
         let mut events = session.take_events();
 
         // 第一段：`1+1` 的 execute_result 应带 text/plain
-        session.execute("1+1".to_string());
+        let msg_id_plain = session.execute("1+1".to_string());
         let mut saw_plain = false;
         let mut saw_ok_reply = false;
         loop {
             match events.blocking_recv() {
-                Some(KernelEvent::Display(media)) => {
-                    let plain = media
-                        .content
-                        .iter()
-                        .any(|m| matches!(m, jupyter_protocol::MediaType::Plain(_)));
-                    if plain {
-                        saw_plain = true;
+                Some(env) => {
+                    if let Some(id) = env.msg_id.as_ref() {
+                        assert_eq!(id, &msg_id_plain, "第一段事件应归属 `1+1` 的 execute_request");
+                    }
+                    match env.event {
+                        KernelEvent::Display(media) => {
+                            let plain = media
+                                .content
+                                .iter()
+                                .any(|m| matches!(m, jupyter_protocol::MediaType::Plain(_)));
+                            if plain {
+                                saw_plain = true;
+                            }
+                        }
+                        KernelEvent::ExecuteReply { status, .. } => {
+                            assert_eq!(status, "ok");
+                            saw_ok_reply = true;
+                        }
+                        KernelEvent::Failed(reason) => panic!("内核通道失败：{reason}"),
+                        KernelEvent::Error { evalue, .. } => {
+                            panic!("`1+1` 不应报错：{evalue}")
+                        }
+                        _ => {}
                     }
                 }
-                Some(KernelEvent::ExecuteReply { status, .. }) => {
-                    assert_eq!(status, "ok");
-                    saw_ok_reply = true;
-                }
-                Some(KernelEvent::Failed(reason)) => panic!("内核通道失败：{reason}"),
-                Some(KernelEvent::Error { evalue, .. }) => panic!("`1+1` 不应报错：{evalue}"),
-                Some(_) => {}
                 None => panic!("事件通道断开"),
             }
             if saw_plain && saw_ok_reply {
@@ -586,22 +682,33 @@ mod tests {
         }
 
         // 第二段：抛异常 → Error 事件 + error 回复
-        session.execute("raise ValueError('boom')".to_string());
+        let msg_id_error = session.execute("raise ValueError('boom')".to_string());
+        assert_ne!(
+            msg_id_error, msg_id_plain,
+            "每次 execute 的 msg_id 必须唯一（否则归属对账失效）"
+        );
         let mut saw_error = false;
         let mut saw_err_reply = false;
         loop {
             match events.blocking_recv() {
-                Some(KernelEvent::Error { ename, evalue, .. }) => {
-                    assert_eq!(ename, "ValueError");
-                    assert!(evalue.contains("boom"));
-                    saw_error = true;
+                Some(env) => {
+                    if let Some(id) = env.msg_id.as_ref() {
+                        assert_eq!(id, &msg_id_error, "第二段事件应归属抛异常那次执行");
+                    }
+                    match env.event {
+                        KernelEvent::Error { ename, evalue, .. } => {
+                            assert_eq!(ename, "ValueError");
+                            assert!(evalue.contains("boom"));
+                            saw_error = true;
+                        }
+                        KernelEvent::ExecuteReply { status, .. } => {
+                            assert_eq!(status, "error");
+                            saw_err_reply = true;
+                        }
+                        KernelEvent::Failed(reason) => panic!("内核通道失败：{reason}"),
+                        _ => {}
+                    }
                 }
-                Some(KernelEvent::ExecuteReply { status, .. }) => {
-                    assert_eq!(status, "error");
-                    saw_err_reply = true;
-                }
-                Some(KernelEvent::Failed(reason)) => panic!("内核通道失败：{reason}"),
-                Some(_) => {}
                 None => panic!("事件通道断开"),
             }
             if saw_error && saw_err_reply {

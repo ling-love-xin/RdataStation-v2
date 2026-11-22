@@ -191,6 +191,8 @@ pub(crate) struct KernelRun {
     cell_id: String,
     /// 目标会话 id（切换会话后回执到了不落）
     session_id: String,
+    /// 【R8】本次 `execute_request` 的 msg_id：事件归属对账，只认这个 id 的输出与收口
+    msg_id: String,
 }
 
 /// 编辑器文档状态栏快照：全局状态栏「活动文档上下文段」的只读数据源。

@@ -792,23 +792,28 @@ impl EditorHostPanel {
         }
         let code = cell.body.clone();
         cell.mark_running();
+        self.shared.set_notebook_cells(&self.document, state.cells);
+        // 【R8】先提交、拿到本次执行的 msg_id，再登记 kernel_running：
+        // 事件归属对账依赖这个 id，提交失败就不登记（避免空等一个不存在的执行）
+        let msg_id = match self.shared.kernel_execute(&kernel_id, &code) {
+            Ok(id) => id,
+            Err(reason) => {
+                let mut state = self.notebook_state();
+                if let Some(cell) = state.cell_mut(cell_id) {
+                    cell.state = crate::cell::CellState::Idle;
+                    cell.outputs.clear();
+                }
+                self.shared.set_notebook_cells(&self.document, state.cells);
+                self.set_message(Some(reason), cx);
+                return;
+            }
+        };
         self.kernel_running = Some(KernelRun {
             kernel_id: kernel_id.clone(),
             cell_id: cell_id.to_string(),
             session_id: session_id.to_string(),
+            msg_id,
         });
-        self.shared.set_notebook_cells(&self.document, state.cells);
-        if let Err(reason) = self.shared.kernel_execute(&kernel_id, &code) {
-            self.kernel_running = None;
-            let mut state = self.notebook_state();
-            if let Some(cell) = state.cell_mut(cell_id) {
-                cell.state = crate::cell::CellState::Idle;
-                cell.outputs.clear();
-            }
-            self.shared.set_notebook_cells(&self.document, state.cells);
-            self.set_message(Some(reason), cx);
-            return;
-        }
         // 执行提交成功 → 回写会话默认（“上次用过的内核”）
         self.shared
             .set_session_default_kernel(&self.document, Some(kernel_id));
@@ -876,8 +881,16 @@ impl EditorHostPanel {
         }
         let mut finished = false;
         let mut failed_reason: Option<String> = None;
-        for event in events {
-            match event {
+        for envelope in events {
+            // 【R8】归属过滤：会话级事件（Failed / Status）无 parent，照常处理；
+            // 有归属但不是本次执行的 = 上一单元迟到的事件，丢弃 ——
+            // 既不能混进本单元输出，也不能用它的 ExecuteReply 把本单元提前收口
+            if let Some(id) = envelope.msg_id.as_ref() {
+                if id != &run.msg_id {
+                    continue;
+                }
+            }
+            match envelope.event {
                 rds_kernel::KernelEvent::Display(media) => {
                     // mime bundle → 原生输出（图片 / 表格 / markdown / 文本）
                     let outputs = crate::media::media_to_outputs(&media);

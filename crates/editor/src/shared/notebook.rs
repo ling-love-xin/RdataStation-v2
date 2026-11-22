@@ -126,17 +126,18 @@ impl EditorShared {
     }
 
     /// 【#17】向某内核提交一段代码（排到单命令队列；结果经事件流回传）
-    pub fn kernel_execute(&self, kernel_id: &str, code: &str) -> Result<(), String> {
+    ///
+    /// 返回本次执行的 `msg_id`：调用方必须存下它，消费事件时按它归属（R8）。
+    pub fn kernel_execute(&self, kernel_id: &str, code: &str) -> Result<String, String> {
         let kernels = self.kernels.borrow();
         let Some(entry) = kernels.get(kernel_id) else {
             return Err(format!("内核 {kernel_id} 未启动"));
         };
-        entry.session.execute(code.to_string());
-        Ok(())
+        Ok(entry.session.execute(code.to_string()))
     }
 
     /// 【#17】非阻塞取走某内核当前积压的事件（UI 线程轮询；`try_recv` 不等待）
-    pub fn kernel_drain(&self, kernel_id: &str) -> Vec<rds_kernel::KernelEvent> {
+    pub fn kernel_drain(&self, kernel_id: &str) -> Vec<rds_kernel::KernelEventEnvelope> {
         let mut kernels = self.kernels.borrow_mut();
         let Some(entry) = kernels.get_mut(kernel_id) else {
             return Vec::new();
