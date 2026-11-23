@@ -84,7 +84,7 @@ impl super::super::super::InsightWorkspacePanel {
                                     .xsmall()
                                     .icon(AssetsIconName::Braces)
                                     .label("SQL")
-                                    .tooltip("在 SQL 编辑器中查看该规则的代入语句（不执行）")
+                                    .tooltip(tr("在 SQL 编辑器中查看该规则的代入语句（不执行）"))
                                     .on_click({
                                         let sql = brief.sql.clone();
                                         let title = format!("规则 {} · {}", brief.id, col.name);

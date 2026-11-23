@@ -457,7 +457,7 @@ impl InsightView {
                 div()
                     .text_xs()
                     .text_color(colors.muted_foreground)
-                    .child("两表没有类型兼容的同名列，无法做值重叠对比"),
+                    .child(tr("两表没有类型兼容的同名列，无法做值重叠对比")),
             );
             return body;
         }
@@ -494,7 +494,7 @@ impl InsightView {
                 .pt_1()
                 .text_xs()
                 .text_color(colors.muted_foreground)
-                .child("百分比 = 重叠值占该表去重值域的比例"),
+                .child(tr("百分比 = 重叠值占该表去重值域的比例")),
         )
     }
 }

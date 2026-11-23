@@ -33,7 +33,7 @@ impl super::InsightWorkspacePanel {
                     div()
                         .text_xs()
                         .text_color(colors.muted_foreground)
-                        .child("先在导航树或结果列表上打开一张表的洞察，之后它才会出现在这里"),
+                        .child(tr("先在导航树或结果列表上打开一张表的洞察，之后它才会出现在这里")),
                 );
         }
 
@@ -114,7 +114,7 @@ impl super::InsightWorkspacePanel {
                                 div()
                                     .text_xs()
                                     .text_color(colors.muted_foreground)
-                                    .child("候选 = 已进入洞察的目标；聚合会话内已完成的画像摘要，不重新取数（D64 阶段②）。"),
+                                    .child(tr("候选 = 已进入洞察的目标；聚合会话内已完成的画像摘要，不重新取数（D64 阶段②）。")),
                             )
                             .child(compare_table_scroll(
                                 ui::INSIGHT_WS_CANDIDATE_MIN_WIDTH,
@@ -379,7 +379,7 @@ impl super::InsightWorkspacePanel {
                                 div()
                                     .text_xs()
                                     .text_color(colors.muted_foreground)
-                                    .child("并排对比：**指标为行、每张勾选表为一列**（原型 .cmp-table）。行数 / 列数 / 检查器命中 / 缺失率 / 唯一率 / 值得关注列数——全为事实指标，无评级（评级归归档后的资产库）。点表头可打开该表洞察工作页。"),
+                                    .child(tr("并排对比：**指标为行、每张勾选表为一列**（原型 .cmp-table）。行数 / 列数 / 检查器命中 / 缺失率 / 唯一率 / 值得关注列数——全为事实指标，无评级（评级归归档后的资产库）。点表头可打开该表洞察工作页。")),
                             )
                             .child(compare_table_scroll(
                                 // 列数随勾选表数变化 → 最小可读宽只能在运行时按表数算

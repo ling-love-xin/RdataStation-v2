@@ -75,7 +75,7 @@ impl InsightView {
                                     .ghost()
                                     .xsmall()
                                     .label(tr("导出 ▾"))
-                                    .tooltip("把这份报告存成文件（导出的是你看到的这份结论）")
+                                    .tooltip(tr("把这份报告存成文件（导出的是你看到的这份结论）"))
                                     .dropdown_menu({
                                         let entity = entity.clone();
                                         move |menu, _window, _cx| {

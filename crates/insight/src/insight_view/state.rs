@@ -743,7 +743,7 @@ impl InsightView {
                     div()
                         .text_xs()
                         .text_color(theme.colors.muted_foreground)
-                        .child("正文与版本链一并删除，不可撤销。"),
+                        .child(tr("正文与版本链一并删除，不可撤销。")),
                 );
             // 空的时候不摆一行「当前：」——那是没话找话
             if !current.is_empty() {

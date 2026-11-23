@@ -31,7 +31,7 @@ impl super::InsightWorkspacePanel {
                         div()
                             .text_xs()
                             .text_color(colors.muted_foreground)
-                            .child("样本不可用（临时表为空或已过期）"),
+                            .child(tr("样本不可用（临时表为空或已过期）")),
                     ),
             );
         };
@@ -43,7 +43,7 @@ impl super::InsightWorkspacePanel {
                 div()
                     .text_xs()
                     .text_color(colors.muted_foreground)
-                    .child("表为空，没有可展示的样本行"),
+                    .child(tr("表为空，没有可展示的样本行")),
             );
         }
         // 列头
@@ -247,7 +247,7 @@ impl super::InsightWorkspacePanel {
                             .xsmall()
                             .icon(CatalogIcon::ListFilter)
                             .label(format!("列 {sel_len}/{}", columns.len()))
-                            .tooltip("选择要看的列（200+ 列时建议缩到几个字段）"),
+                            .tooltip(tr("选择要看的列（200+ 列时建议缩到几个字段）")),
                     )
                     .content(move |_state, _window, cx| {
                         let colors = cx.theme().colors;
@@ -515,7 +515,7 @@ impl super::InsightWorkspacePanel {
                 div()
                     .text_xs()
                     .text_color(colors.muted_foreground)
-                    .child("列画像 · 右键结果表中的列可查看"),
+                    .child(tr("列画像 · 右键结果表中的列可查看")),
             )
     }
 }

@@ -183,7 +183,7 @@ impl super::InsightWorkspacePanel {
                             .min_w_0()
                             .text_xs()
                             .text_color(colors.muted_foreground)
-                            .child("当前视图基于确认窗口生成的表；调整数据量 / 列 / 过滤请重新探查"),
+                            .child(tr("当前视图基于确认窗口生成的表；调整数据量 / 列 / 过滤请重新探查")),
                     )
                     .child({
                         let entity = entity.clone();
@@ -192,7 +192,7 @@ impl super::InsightWorkspacePanel {
                             .xsmall()
                             .icon(IconName::RotateCw)
                             .label(tr("重新探查"))
-                            .tooltip("复用上次探查配置（可改数据量 / 列 / 过滤），确认后重新取数并级联重评估")
+                            .tooltip(tr("复用上次探查配置（可改数据量 / 列 / 过滤），确认后重新取数并级联重评估"))
                             .on_click(move |_, _, app| {
                                 entity.update(app, |panel, cx| {
                                     panel.view.update(cx, |view, cx| {

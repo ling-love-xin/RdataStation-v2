@@ -16,7 +16,7 @@ impl super::super::super::InsightWorkspacePanel {
             return div()
                 .text_xs()
                 .text_color(colors.muted_foreground)
-                .child("该列无检查器属性（未评估全表）");
+                .child(tr("该列无检查器属性（未评估全表）"));
         }
         let hits = checker
             .iter()

@@ -352,7 +352,7 @@ impl RulesView {
         if self.search_input.is_some() {
             return;
         }
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索规则名 / id / 分类"));
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("搜索规则名 / id / 分类")));
         let sub = cx.subscribe_in(
             &input,
             window,
@@ -389,7 +389,7 @@ impl RulesView {
                 .small()
                 .icon(IconName::Plus)
                 .label(tr("新建项目规则"))
-                .tooltip("在 .RSmeta/insight-rules/ 建目录与模板文件并打开")
+                .tooltip(tr("在 .RSmeta/insight-rules/ 建目录与模板文件并打开"))
                 .on_click({
                     let entity = entity.clone();
                     move |_, _, app| {
@@ -405,7 +405,7 @@ impl RulesView {
                 .small()
                 .icon(IconName::RotateCw)
                 .label(tr("重新加载"))
-                .tooltip("丢弃缓存并按三层重建规则集（目录监听的兜底与排障入口）")
+                .tooltip(tr("丢弃缓存并按三层重建规则集（目录监听的兜底与排障入口）"))
                 .on_click({
                     let entity = entity.clone();
                     move |_, _, app| entity.update(app, |view, cx| view.request_reload(cx))
@@ -727,7 +727,7 @@ fn empty_group_hint(group: &RuleGroupView, entity: &Entity<RulesView>, theme: &T
             } else {
                 "创建目录并新建规则"
             })
-            .tooltip("目录尚不存在；创建后会写一份模板规则并打开")
+            .tooltip(tr("目录尚不存在；创建后会写一份模板规则并打开"))
             .on_click({
                 let entity = entity.clone();
                 move |_, _, app| entity.update(app, |view, cx| view.request_create_rule(scope, cx))

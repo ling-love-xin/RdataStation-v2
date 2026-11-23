@@ -49,7 +49,7 @@ impl InsightView {
                             .small()
                             .ghost()
                             .label(tr("取消"))
-                            .tooltip("停止评估：已完成列保留，未完成列灰态可补算")
+                            .tooltip(tr("停止评估：已完成列保留，未完成列灰态可补算"))
                             .on_click({
                                 let entity = entity.clone();
                                 move |_, _, app| {
@@ -73,7 +73,7 @@ impl InsightView {
                             "评估全表"
                         })
                         .disabled(evaluating || profile.columns.is_empty())
-                        .tooltip("逐列串行统计（避免撞后端并发上限），进度会一列列回填")
+                        .tooltip(tr("逐列串行统计（避免撞后端并发上限），进度会一列列回填"))
                         .on_click({
                             let entity = entity.clone();
                             move |_, _, app| {
@@ -155,7 +155,7 @@ impl InsightView {
             div()
                 .text_xs()
                 .text_color(colors.muted_foreground)
-                .child("行数与缺失率基于全量统计；样本值为前 5 行，直方图至少 10 行"),
+                .child(tr("行数与缺失率基于全量统计；样本值为前 5 行，直方图至少 10 行")),
         )
     }
 }

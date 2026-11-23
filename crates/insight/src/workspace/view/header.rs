@@ -153,7 +153,7 @@ impl InsightView {
                     div()
                         .text_xs()
                         .text_color(theme.colors.muted_foreground)
-                        .child("未打开项目：画像可用，规则管理与快照不可用"),
+                        .child(tr("未打开项目：画像可用，规则管理与快照不可用")),
                 ),
         )
     }

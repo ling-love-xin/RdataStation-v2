@@ -214,7 +214,7 @@ impl ProbeDialogBody {
         let filter_state = window.use_keyed_state(
             SharedString::from("insight-probe-filter"),
             cx,
-            |window, cx| InputState::new(window, cx).placeholder("如 status = 'active'"),
+            |window, cx| InputState::new(window, cx).placeholder(tr("如 status = 'active'")),
         );
         if dialog.filter != filter_state.read(cx).value() {
             filter_state.update(cx, |state, cx| {
@@ -500,7 +500,7 @@ impl ProbeDialogBody {
                         div()
                             .text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT))
                             .text_color(theme.colors.muted_foreground)
-                            .child("正在获取列清单…（获取失败时按全部列探查）"),
+                            .child(tr("正在获取列清单…（获取失败时按全部列探查）")),
                     )
                 } else {
                     // 列候选清单：**定高滚动**（`ui::INSIGHT_PROBE_COL_LIST_MAX_HEIGHT`）。
@@ -555,7 +555,7 @@ impl ProbeDialogBody {
                 div()
                     .text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT))
                     .text_color(theme.colors.muted_foreground)
-                    .child("条件包在源查询内层，先过滤再取样。"),
+                    .child(tr("条件包在源查询内层，先过滤再取样。")),
             )
             .child(Separator::horizontal())
             // —— 规模预估 ——

@@ -110,7 +110,7 @@ impl super::InsightWorkspacePanel {
             .ghost()
             .icon(IconName::FileText)
             .label(tr("导出"))
-            .tooltip("导出画像报告（Markdown）")
+            .tooltip(tr("导出画像报告（Markdown）"))
             .disabled(!matches!(
                 *self.view.read(cx).state(),
                 InsightPanelState::Data
