@@ -1648,3 +1648,54 @@ Label「筛选：」在左、`Text(SWT.BORDER|SWT.SEARCH|SWT.ICON_CANCEL)` 在�
 | `cargo test -p rds-editor --lib run_grouping_query` | 1 passed（新用例） |
 
 日志：`.rds/tmp/d14a-test.txt`、`d14-check.txt`、`d14-test-rp.txt`、`d14-test-sql.txt`、`d14-test-ed.txt`、`d14-test-ed2.txt`、`d14-test-group.txt`、`d14-test-rp2.txt`。
+## 29. D10 前置取证：矩形单元格选区（网格）
+
+### 29.1 DBeaver 的选区模型（源码行号）
+
+| 事实 | 出处 |
+| --- | --- |
+| 选区真值 = 一组 `GridPos{col,row}` + 锚点 `focusColumn/focusItem` | `LightGrid.java:1590-1662`（`setSelection` 三个重载都收敛到 `selectCells`）、`:4251-4259`（`selectCells` = 逐格 `addToCellSelection` + `updateSelectionCache`） |
+| 普通点击只移动锚点（`focusColumn/focusItem = 点到的格`）；后文再补选区 | `LightGrid.java:3152-3170` |
+| **Shift 点击 / 拖拽 = 以锚点与终点为对角的矩形**：`updateCellSelection(newCells, stateMask, dragging, …)` 的 `shift` 分支先 `getSelectionRange` 归一化行列边界，再用「外层行、内层列」双循环逐格加入 | `LightGrid.java:2674-2790`、`:4448-4486`（`getSelectionRange`：列序与行序各自交换成 from≤to） |
+| 拖拽行（行头起拖）：整行区间 | `LightGrid.java:3567-3589`、`:4424-4440`（`getCells(startRow, endRow, …)`） |
+| 拖拽列（列头起拖）：整列 | `LightGrid.java:3591-3626`、`:4378-4395`（`getCells(col, …)` = 该列所有行） |
+| 行头单击 = 整行；列头单击 = 整列；左上角 = 全选 | `LightGrid.java:3127-3137`、`:3174-3184`、`:4261-4263` |
+| `shiftSelectionAnchorColumn/Item` 只在 Shift 期间有效，非 Shift 时清空 | `LightGrid.java:2699-2702`、`:2727-2728` |
+| Shift+Ctrl = 在当前选区基础上**并集**（`selectedCellsBeforeRangeSelect` 恢复后叠加） | `LightGrid.java:2718-2735` |
+
+一句话：DBeaver 的矩形选区是**加法模型**（Set + 锚点 + 修饰键语义），不是「一个 Range 对象」。
+
+### 29.2 本仓现状与卡点（已核实）
+
+| 事实 | 出处 |
+| --- | --- |
+| 组件层的选区只有三值：`None` / `Row(usize)` / `Column(usize)` / `Cell(usize,usize)`——**没有矩形 / 多格** | `vendor/gpui-component/src/table/state.rs:64-74` |
+| 单格选中的 API 是 `set_selected_cell(row, col)` / `selected_cell()`，只承载一格 | `vendor/gpui-component/src/table/state.rs:618-649`（另 `set_selection(TableSelection)` `:655`） |
+| 组件向外发的选区事件 `TableEvent::SelectCell(usize, usize)` **不带修饰键**，也没有 range 变体 | `vendor/gpui-component/src/table/state.rs:76-125`（`:91`、`:98`、`:120`） |
+| 网格当前的「选中」有两份：delegate 的整行 `selected_row`（`selected_view_row()` 读）与面板的 `selection_pos: Option<(usize, usize)>` | `crates/result_panel/src/grid/delegate.rs:326-333`、`crates/result_panel/src/panel/*`（`selection_pos`） |
+| delegate 可以**自绘每个单元格**（`render_td(row_ix, col_ix, …) -> impl IntoElement`），所以高亮不必依赖组件 | `vendor/gpui-component/src/table/delegate.rs:134-141` |
+
+结论（这就是上一轮把它列为「前置工程」的原因）：**矩形选区的状态模型可以在 delegate 里自建，但「Shift + 点击 / 正文拖拽」这两个入口在组件层没有出口**——组件只发不带修饰键的单格事件，delegate 也拿不到鼠标。
+
+### 29.3 下一刀范围（按此推进，不需要再拍板）
+
+1. **vendor 增量增强（只加不改）**：给组件补一个带修饰键的单元格事件（形如
+   `TableEvent::CellClicked { row, col, modifiers }`），在现有 cell 点击处按 `ClickEvent.modifiers`
+   发；`TableEvent::SelectCell` 的既有语义与既有消费者全部不动（本仓 `ResultPanel::handle_grid_event`
+   等多处 `match` 只新增分支）。
+2. **delegate 侧模型**：`ResultGridDelegate` 增 `cell_anchor` + `cell_range`（与 DBeaver 的
+   `focusColumn/focusItem` + `selectedCells` 同构；先做「单个矩形」，不做 Shift+Ctrl 并集），
+   提供 `in_cell_range(row, col)` 给 `render_td` 画高亮（用主题 `list.active` / `accent` 档色，
+   不写裸值）。
+3. **交互**：普通点击 = 单格 + 锚点；`Shift` 点击 = 锚点→终点矩形；正文按住拖 = 持续更新矩形
+   （拖期间只用已落定的行/列，不做自动滚动，先与 DBeaver 的「滚动是 `showItem/showColumn`
+   附带」解耦，自动滚动留作后续）。
+4. **计算页接入**（D11/D12/D13）：选区非空时「按列分组」取选区覆盖的列、「−」移除选中函数、
+   工具条补两项——这一步落地后 §25.3 的 D10–D13 一起归零。
+
+风险与边界（写明，不在实现时静默扩张）：
+
+- vendor 改动必须**只增事件、不改既有事件与既有布局**，`git diff -- vendor/` 只允许出现在
+  `table/state.rs`（事件枚举 + 发射点）与必要的 `table/table.rs` 点击处理。
+- 「自动滚动 / 键盘 Shift+方向键扩选 / Shift+Ctrl 并集」本轮不做（DBeaver 有，但属第二批）。
+- 高亮颜色走 `cx.theme().colors`，不写裸值。
