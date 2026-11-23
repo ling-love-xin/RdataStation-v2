@@ -11,7 +11,6 @@ use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, Textarea};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::separator::Separator;
-use gpui_kit::component::toolbar::ToolbarGroup;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -93,6 +92,8 @@ impl ResultPanel {
             let queue_pin = self.queue.clone();
             let queue_close = self.queue.clone();
             let queue_move = self.queue.clone();
+            let queue_compare = self.queue.clone();
+            let grid_analyze = self.grid.clone();
             let actions = result_sets::TabActions {
                 // 「⋯」按钮：进入重命名态（事件路径；request 立即通知面板 → 宿主 drain）
                 on_rename: Some(std::rc::Rc::new(move |index, _w, app| {
@@ -108,6 +109,17 @@ impl ResultPanel {
                 // 【DBeaver 对齐】拖拽重排：把拖起的第 from 份搬到第 to 位
                 on_reorder: Some(std::rc::Rc::new(move |from, to, _w, app| {
                     queue_move.request(ResultRequest::MoveSet { from, to }, app);
+                })),
+                // 【T8 标签右键】分析：取委托里的 hook 执行（与网格右键同一入口，进 08 对话框）
+                on_analyze: Some(std::rc::Rc::new(move |_index, _w, app| {
+                    let hook = grid_analyze.read(app).delegate().on_analyze_result_set.clone();
+                    if let Some(hook) = hook {
+                        hook(app);
+                    }
+                })),
+                // 【T8 标签右键】并排对比：把点中的那份设为对比对象
+                on_compare: Some(std::rc::Rc::new(move |index, app| {
+                    queue_compare.request(ResultRequest::SelectCompare(index), app);
                 })),
             };
             result_sets::render(
@@ -623,129 +635,16 @@ impl ResultPanel {
             })
             .into_any_element();
 
-        // 【B15】「下发源库」开关：开着时应用筛选会重查（拼 WHERE 到原查询）
-        // 【DBeaver 对齐 2026-11-08】不再用 `Switch`：DBeaver 那条筛选条上的等价物是带
-        // 按下态的 CHECK `ToolItem`，不是开关。这里改为图标 toggle + tooltip，
-        // 保住「按下即开」的可读性，又不让一个开关占掉一整段文字宽度。
-        // （注：那个 CHECK 项其实是查找钮 `openFindReplaceButton`，`:356`；下发源库在本仓
-        //   是独立能力，样式照它取，位置留在筛选行尾。）
-        // 【2026-11-20】按下态改由 `Selectable::selected` 给（0.9.0 的 `toggled` 只写 a11y），
-        // 否则 CHECK 语义只剩 a11y、肉眼分辨不出开着还是关着。
-        let pushdown = {
-            let queue = self.queue.clone();
-            let checked = self.pushdown;
-            Button::new("editor-result-pushdown")
-                .ghost()
-                .xsmall()
-                .selected(checked)
-                .toggled(checked)
-                .icon(IconName::DatabaseZap)
-                .tooltip("下发源库：开着时应用筛选会拼 WHERE 重查源库")
-                .debug_selector(|| "editor-result-pushdown".to_string())
-                .on_click(move |_, _window, app| {
-                    queue.request(ResultRequest::SetPushdown { open: !checked }, app);
-                })
-                .into_any_element()
-        };
-        // 列注释开关（对齐 DBeaver：列浏览器里显示列注释）
-        let comments = {
-            let queue = self.queue.clone();
-            let checked = self.show_column_comments;
-            Button::new("editor-result-show-comments")
-                .ghost()
-                .xsmall()
-                .selected(checked)
-                .toggled(checked)
-                .icon(IconName::FileText)
-                .tooltip("显示列注释（列头第二行）")
-                .debug_selector(|| "editor-result-show-comments".to_string())
-                .on_click(move |_, _window, app| {
-                    queue.request(
-                        ResultRequest::SetShowColumnComments { open: !checked },
-                        app,
-                    );
-                })
-                .into_any_element()
-        };
+        // 【T1 工具栏收口 2026-11-24】「下发源库」删除（基线 §13.4：执行通道非源库时
+        // 拼 WHERE 重查没有语义，筛选本身就是在 SQL 上包一层 where）；列注释开关
+        // 迁到结果集设置（DBeaver 对应项是「列头附加内容」三档，§14.2）。
 
-        // 【右缘竖条】右侧辅助栏开合开关已移到最右缘竖条顶部（`render_right_edge_bar`，
-        // 单入口；2026-10-28 落地），状态栏右端不再挂右栏开关，`ResultControls.value_sidebar`
-        // 与 `render_status_row.right_switch` 均传 `None`。
-
-        // 【并排对比】工具栏开关：两份以上结果才摆（一份结果没有可比的；对比栏
-        // 数据只读，编辑 / 取段 / 洞察等动作仍只作用于主栏）
-        let compare = (self.tabs.len() >= 2).then(|| {
-            let queue = self.queue.clone();
-            Button::new("editor-result-compare")
-                .ghost()
-                .xsmall()
-                .selected(self.compare_mode)
-                .toggled(self.compare_mode)
-                .icon(IconName::Columns2)
-                .tooltip("并排对比")
-                .debug_selector(|| "editor-result-compare".to_string())
-                .on_click(move |_, _window, app| {
-                    queue.request(ResultRequest::ToggleCompareMode, app);
-                })
-                .into_any_element()
-        });
-
-        // 【T2a-7】批量提交/回滚对（参考 DBeaver）：有**待提交**变更才摆；提交中置灰
-        // 【DBeaver 对齐 2026-11-08】去掉文字标签改图标 + tooltip（计数进 tooltip）：
-        // DBeaver 那条工具条上没有带文字标签的按钮；待提交条数只在有变更时才存在，
-        // 悬停一眼能看到确数，不再用文字撑宽度。
-        let commit = (self.pending_changes > 0).then(|| {
-            let queue = self.queue.clone();
-            let submitting = self.committing;
-            let pending = self.pending_changes;
-            let commit_btn = Button::new("editor-result-commit")
-                .ghost()
-                .xsmall()
-                .debug_selector(|| "editor-result-commit".to_string())
-                .disabled(submitting)
-                .icon(IconName::Save)
-                .tooltip(format!("提交 {pending} 项变更到源库"))
-                .on_click(move |_, _window, app| {
-                    queue.request(ResultRequest::CommitPending, app);
-                });
-            let queue = self.queue.clone();
-            let discard = Button::new("editor-result-discard")
-                .ghost()
-                .xsmall()
-                .debug_selector(|| "editor-result-discard".to_string())
-                .icon(IconName::RotateCcw)
-                .tooltip("撤销全部未提交变更（回滚本地改动）")
-                .on_click(move |_, _window, app| {
-                    queue.request(ResultRequest::RollbackPending, app);
-                });
-            // 提交/撤销成对：2026-10-28 从手搓 `div().h_flex().gap_1()` 迁
-            // `toolbar::ToolbarGroup`（组件统一化 §3 容器层反例修复）。外层无样式观测壳
-            // div（仅 debug_selector 锚点）：ToolbarGroup 是 RenderOnce 无 debug_selector，
-            // 测试靠壳锚点断言“按钮组在不在”（观测专用，不承载任何布局/交互语义）
-            div()
-                .debug_selector(|| "editor-result-commit-group".to_string())
-                .child(
-                    ToolbarGroup::new("editor-result-commit-group")
-                        .child(commit_btn)
-                        .child(discard),
-                )
-                .into_any_element()
-        });
-
-        // 动作：有网格才摆复制（没东西可复制就不摆）；有 SQL 就摆重跑（原位刷新）
-        let copy = self.result_can_copy.then(|| {
-            let queue = self.queue.clone();
-            Button::new("editor-result-copy")
-                .ghost()
-                .xsmall()
-                .debug_selector(|| "editor-result-copy".to_string())
-                .icon(IconName::Copy)
-                .tooltip("复制整份结果为 TSV（含表头）")
-                .on_click(move |_, _window, app| {
-                    queue.request(ResultRequest::CopyTsv, app);
-                })
-                .into_any_element()
-        });
+        // 【T1 工具栏收口 2026-11-24】并排对比 / 批量提交撤销 / 复制整份结果 三处按钮
+        // 全部退出工具栏：对比 → 结果集标签页右键（§12.2、§21.1）；提交撤销 → 状态栏
+        // Commit/Reject 段与 ctrl-s（§10.1）；复制 → ctrl-c（§10.1，DBeaver 同键位）。
+        // 【T2a-7 / T1 收口】批量提交撤销对已退出工具栏，改由状态栏 Commit/Reject 段承担。
+        //
+        // 【复制】已退出工具栏，改由 ctrl-c（DBeaver 同键位）。
         let refresh = (self.result_sql.is_some() && !self.result_is_analysis).then(|| {
             let queue = self.queue.clone();
             Button::new("editor-result-refresh")
@@ -1059,44 +958,8 @@ impl ResultPanel {
                 .into_any_element()
         });
 
-        // 【B15】分析：对选中那份结果的**已抓行**跑聚合 SQL（本地 DuckDB）。
-        // 菜单项由编辑器投影（`AnalysisItem`）给出；没网格就不摆。
-        let analysis = (!self.analysis_items.is_empty()).then(|| {
-            let queue = self.queue.clone();
-            let items = self.analysis_items.clone();
-            DropdownButton::new("editor-result-analysis")
-                .xsmall()
-                .button(
-                    Button::new("editor-result-analysis-btn")
-                        .ghost()
-                        .xsmall()
-                        .debug_selector(|| "editor-result-analysis".to_string())
-                        .icon(IconName::Sigma)
-                        .tooltip("分析当前结果（对已抓行跑聚合）"),
-                )
-                .dropdown_menu(move |menu, _window, _app| {
-                    let mut menu = menu;
-                    for item in items.iter() {
-                        let queue = queue.clone();
-                        let sql = item.sql.clone();
-                        menu = menu.item(PopupMenuItem::new(item.label.clone()).on_click(
-                            move |_, _window, app| {
-                                let sql = sql.clone();
-                                queue.request(ResultRequest::Analysis { sql }, app);
-                            },
-                        ));
-                    }
-                    let queue = queue.clone();
-                    menu.separator().item(
-                        PopupMenuItem::new(crate::analysis::CUSTOM_LABEL).on_click(
-                            move |_, _window, app| {
-                                queue.request(ResultRequest::AnalysisCustom, app);
-                            },
-                        ),
-                    )
-                })
-                .into_any_element()
-        });
+        // 【T1 工具栏收口 2026-11-24】预置聚合下拉已退出工具栏：统一入口是结果集标签页
+        // 右键「分析这份结果集…」（进 08 对话框，§13.2）；预置聚合项的去留见 Q19。
 
         // 【计算行数】状态行中段那颗钮（DBeaver `rowCountLabel:2155-2180`：
         // `ActiveStatusMessage` + `UIIcon.COMPILE`，`isActionEnabled = hasData()`
@@ -1129,10 +992,10 @@ impl ResultPanel {
             // `setVisible`；本仓筛选条就是 `render_toolbar` 的左段 `filter` 实参）
             filter: self.show_filter_panel.then_some(filter),
             value_sidebar: None,
-            compare,
-            commit,
-            analysis,
-            copy,
+            compare: None,
+            commit: None,
+            analysis: None,
+            copy: None,
             export,
             refresh,
             more,
@@ -1157,10 +1020,10 @@ impl ResultPanel {
         let result_grid::ResultControls {
             filter,
             value_sidebar: _,
-            compare,
-            commit,
-            analysis,
-            copy,
+            compare: _,
+            commit: _,
+            analysis: _,
+            copy: _,
             export,
             refresh,
             more,
@@ -1201,16 +1064,7 @@ impl ResultPanel {
         };
         // 工具栏：右栏开关已移状态栏右端，这里不再摆（None）；导出/刷新已移状态栏
         // SQL 入口已并入筛选框第 1 格（「显示 SQL」，见上方 `sql_chip`），工具栏左段不再单摆
-        let toolbar_el = result_grid::render_toolbar(
-            filter,
-            Some(pushdown),
-            Some(comments),
-            compare,
-            commit,
-            analysis,
-            copy,
-            cx,
-        );
+        let toolbar_el = result_grid::render_toolbar(filter, cx);
         // 状态栏右段耗时取自工具栏投影；先取出再移动 `toolbar` 进 pane
         let elapsed_ms = toolbar.elapsed_ms;
         // 【状态栏三项】右段只显示 内存 / 查询时间 / 查询条数（用户口径 2026-10-28）。

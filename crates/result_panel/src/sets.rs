@@ -10,6 +10,7 @@ use std::rc::Rc;
 
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, Size};
 use gpui_kit::*;
@@ -47,6 +48,11 @@ pub struct TabActions {
     /// 【DBeaver 对齐】标签拖拽重排：`(被拖的下标, 落点下标)`
     /// （`None` = 标签不可拖，对比栏就是这种）
     pub on_reorder: Option<Rc<dyn Fn(usize, usize, &mut Window, &mut App) + 'static>>,
+    /// 【T8 标签右键】「分析这份结果集…」：宿主侧开 08 对话框
+    /// （只有当前激活的那份可分析——分析对象是网格里这份结果）
+    pub on_analyze: Option<Rc<dyn Fn(usize, &mut Window, &mut App) + 'static>>,
+    /// 【T8 标签右键】「并排对比 · <标签>」：把第 index 份设为对比对象
+    pub on_compare: Option<Rc<dyn Fn(usize, &mut App) + 'static>>,
 }
 
 /// 一个结果集标签的展示数据（**纯计算**：渲染路径不临时算这些）
@@ -150,21 +156,8 @@ pub fn render(
                         .bg(danger),
                 );
             }
-            // 【C1】后缀末尾追加「⋯」小按钮：点击进重命名态（compare 栏 actions 全 None 时不画）
-            if let Some(on_rename) = actions.on_rename.clone() {
-                let idx = index;
-                suffix = suffix.child(
-                    Button::new(SharedString::from(format!(
-                        "editor-result-tab-rename-{index}"
-                    )))
-                    .ghost()
-                    .small()
-                    .icon(IconName::Ellipsis)
-                    .debug_selector(|| format!("editor-result-tab-rename-{index}"))
-                    .tooltip("重命名结果集".to_string())
-                    .on_click(move |_e, w, cx| on_rename(idx, w, cx)),
-                );
-            }
+            // 【T8 2026-11-24】「⋯」重命名按钮已移除：标签上只留关闭 ×，
+            // 重命名 / 钉住 / 分析 / 对比全部进右键菜单（对齐 DBeaver 的单关闭钮形态）。
             // 【DBeaver 对齐】后缀最右端是关闭按钮（对应它的 `resultsTab.setShowClose(true)`）。
             // 钉住的结果集同样可关：钉住挡的是自动淘汰，不是用户主动关。
             if let Some(on_close) = actions.on_close.clone() {
@@ -195,21 +188,13 @@ pub fn render(
                         .with_size(Size::Small),
                 );
             if entry_tab.pinned {
-                let pin_click = actions.on_toggle_pin.clone();
-                let pin_button = Button::new(SharedString::from(format!(
-                    "editor-result-tab-unpin-{index}"
-                )))
-                .ghost()
-                .small()
-                .icon(Icon::default().data(PIN_ICON_SVG));
-                let pin_button = match pin_click {
-                    Some(on_toggle_pin) => {
-                        let idx = index;
-                        pin_button.on_click(move |_e, _w, cx| on_toggle_pin(idx, cx))
-                    }
-                    None => pin_button,
-                };
-                prefix = prefix.child(pin_button);
+                // 【T8 2026-11-24】钉住改为**静态指示**（对齐你的定稿：钉住状态要能一眼看到，
+                // 但点击入口收进右键菜单）：不再包 Button，只画不可点的图钉图标。
+                prefix = prefix.child(
+                    div()
+                        .debug_selector(|| format!("editor-result-tab-pin-{index}"))
+                        .child(Icon::default().data(PIN_ICON_SVG).with_size(Size::Small)),
+                );
             }
             let mut tab_el = Tab::new()
                 .label(SharedString::from(entry_tab.label.clone()))
@@ -219,6 +204,69 @@ pub fn render(
             if !entry_tab.sql.is_empty() {
                 tab_el = tab_el.tooltip(SharedString::from(entry_tab.sql.clone()));
             }
+            // 【T8 2026-11-24】标签右键菜单：标签上只剩关闭 ×，其余动作都在这里。
+            // 扁平结构（不套子菜单）：分析在上面（只有当前激活那份可分析），
+            // 中间是「并排对比 · <其它结果标签>」逐项，下面是重命名 / 钉住 / 关闭。
+            let menu_actions = actions.clone();
+            let others: Vec<(usize, String)> = tabs
+                .iter()
+                .enumerate()
+                .filter(|(other, _)| *other != index)
+                .map(|(other, tab)| (other, tab.label.clone()))
+                .collect();
+            let is_active = index == active;
+            let pinned_here = entry_tab.pinned;
+            // 【上游优先】`Tab` 自己就带 `on_context_menu` 构建器（vendor 私有 patch，
+            // `tab.rs:733`），传进来的是**已建好的** `PopupMenu`，返回它即可——菜单项全是扁平的，
+            // 不需要 `&mut Context<PopupMenu>`（子菜单那条路跨 crate 不可达，见 §21）。
+            // 用这条路的另一个好处：`Tab` 仍是 `Tab`，能直接进 `TabBar::children`
+            // （`children` 只吃 `Into<Tab>`，`.context_menu()` 会把它变成别的元素类型）。
+            let tab_el = tab_el.on_context_menu(move |mut menu, _window, _cx| {
+                if is_active {
+                    if let Some(on_analyze) = menu_actions.on_analyze.clone() {
+                        menu = menu.item(
+                            PopupMenuItem::new("分析这份结果集…").on_click(move |_, w, a| {
+                                on_analyze(index, w, a);
+                            }),
+                        );
+                    }
+                }
+                if let Some(on_compare) = menu_actions.on_compare.clone() {
+                    if !others.is_empty() {
+                        menu = menu.separator();
+                        for (other_index, label) in others.iter().cloned() {
+                            let on_compare = on_compare.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(format!("并排对比 · {label}")).on_click(
+                                    move |_, _, a| {
+                                        on_compare(other_index, a);
+                                    },
+                                ),
+                            );
+                        }
+                    }
+                }
+                menu = menu.separator();
+                if let Some(on_rename) = menu_actions.on_rename.clone() {
+                    menu = menu.item(PopupMenuItem::new("重命名…").on_click(move |_, w, a| {
+                        on_rename(index, w, a);
+                    }));
+                }
+                if let Some(on_toggle_pin) = menu_actions.on_toggle_pin.clone() {
+                    let label = if pinned_here { "取消钉住" } else { "钉住" };
+                    menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, a| {
+                        on_toggle_pin(index, a);
+                    }));
+                }
+                if let Some(on_close) = menu_actions.on_close.clone() {
+                    menu = menu.separator().item(
+                        PopupMenuItem::new("关闭").on_click(move |_, _, a| {
+                            on_close(index, a);
+                        }),
+                    );
+                }
+                menu
+            });
             tab_el
         })
         .collect();

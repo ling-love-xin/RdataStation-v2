@@ -4078,9 +4078,10 @@ fn find_bar_criteria_buttons_queue_their_option(cx: &mut gpui_kit::TestAppContex
     assert!(cx.update(|_, app| panel.read(app).find_criteria.regex));
 }
 
-/// 【工具栏 2026-11-20】CHECK 型按钮的「点一次就翻转面板态」：筛选展开 / 查找 /
-/// 下发源库 / 列注释四颗都是 DBeaver 的 CHECK `ToolItem`
-/// （`openFindReplaceButton:356`、`FilterExpandPanel`、`filtersClearButton` 同族），
+/// 【工具栏 2026-11-20 / 收口 2026-11-24】CHECK 型按钮的「点一次就翻转面板态」：
+/// 筛选栏只剩筛选展开 / 查找两颗（下发源库已删、列注释已迁结果集设置，见基线 §21.3），
+/// 二者都是 DBeaver 的 CHECK `ToolItem`
+/// （`openFindReplaceButton:356`、`FilterExpandPanel` 同族），
 /// 点一下只改面板态、由 `sync` 回写；按下态视觉走 `Selectable::selected`
 /// （属于目视验收项，见 `result-panel.md §9.23`）。
 #[gpui_kit::test]
@@ -4091,13 +4092,8 @@ fn toolbar_check_buttons_flip_their_panel_state(cx: &mut gpui_kit::TestAppContex
     let (panel, cx) = panel_harness(cx);
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
-    // 四颗探针都在（缺一颗说明工具栏结构漂了）
-    for id in [
-        "editor-result-filter-expand",
-        "editor-result-find-toggle",
-        "editor-result-pushdown",
-        "editor-result-show-comments",
-    ] {
+    // 两颗探针都在（缺一颗说明筛选栏结构漂了）
+    for id in ["editor-result-filter-expand", "editor-result-find-toggle"] {
         assert!(
             cx.debug_bounds(id).is_some(),
             "工具栏应有 {id}（CHECK 型按钮）"
@@ -4116,27 +4112,7 @@ fn toolbar_check_buttons_flip_their_panel_state(cx: &mut gpui_kit::TestAppContex
         cx.update(|window, cx| window.draw(cx).clear(cx));
     };
 
-    // 列注释：默认关 → 点一下入队「开」
-    click("editor-result-show-comments", cx);
-    let queued = cx.update(|_, app| panel.read(app).queue.drain());
-    assert!(
-        queued.iter().any(|request| matches!(
-            request,
-            ResultRequest::SetShowColumnComments { open: true }
-        )),
-        "列注释按钮应入队「开」：{queued:?}"
-    );
-
-    // 下发源库：默认关 → 点一下入队「开」
-    click("editor-result-pushdown", cx);
-    let queued = cx.update(|_, app| panel.read(app).queue.drain());
-    assert!(
-        queued.iter().any(|request| matches!(
-            request,
-            ResultRequest::SetPushdown { open: true }
-        )),
-        "下发源库按钮应入队「开」：{queued:?}"
-    );
+    // （下发源库 / 列注释两颗已在 T1 收口移除，对应的点击断言一并删除）
 
     // 筛选展开：默认收 → 点一下入队展开
     click("editor-result-filter-expand", cx);

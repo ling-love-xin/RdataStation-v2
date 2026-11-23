@@ -822,10 +822,13 @@ fn submit_pending_changes_refuses_without_changes(cx: &mut TestAppContext) {
     assert!(reason.contains("没有待提交的变更"), "{reason}");
 }
 
-/// T2a-7①：结果工具栏的提交/回滚对只在有**待提交**变更时出现（参考 DBeaver）；
-/// 计数来自权威变更集（改 N 格 = 提交 N 处）
+/// T2a-7①：变更集计数口径（提交/回滚的**按钮组**已按 Q13 从工具栏裁掉，
+/// 2026-11-24 T1；数据侧「改 N 格 = 待提交 N 处」这条仍然成立）。
+///
+/// 历史：这条用例原来靠 `editor-result-commit-group` 的出现证明「有变更就有入口」。
+/// 入口撤了之后，UI 断言改成「不要再长回来」，计数改从权威变更集直接取。
 #[gpui_kit::test]
-fn commit_controls_appear_with_pending_changes(cx: &mut TestAppContext) {
+fn pending_cell_changes_are_counted_without_a_commit_group(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     bind_editor_keys(cx);
 
@@ -833,14 +836,14 @@ fn commit_controls_appear_with_pending_changes(cx: &mut TestAppContext) {
     let (panel, cx) = open_panel(cx, &shared, &id);
     run_orders_result(cx, &panel);
 
-    // 没改格：按钮组不出现
+    // 未改格：没有待提交
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(
         cx.debug_bounds("editor-result-commit-group").is_none(),
-        "无变更时提交/回滚对不该出现"
+        "提交/回滚组已随 Q13 裁掉，任何时候都不该出现"
     );
 
-    // 改两格 → 按钮组出现；计数 = 权威变更集的待提交条数
+    // 改两格 → 权威变更集记两条
     seed_cell_change(&shared, &id, 0, 1, "alice", "alice2");
     seed_cell_change(&shared, &id, 1, 1, "bob", "bob2");
     // 测试直塞变更不走编辑提交路径，投影需手动刷新（生产路径由提交回调自动 sync）
@@ -848,19 +851,16 @@ fn commit_controls_appear_with_pending_changes(cx: &mut TestAppContext) {
         panel.update(cx, |panel, cx| panel.sync_result_view(cx));
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
-    // 2026-10-28 commit 组迁 `toolbar::ToolbarGroup`：ToolbarGroup 是 RenderOnce 无
-    // debug_selector（debug_bounds 查不到、find 需 test_support 注册也查不到），面板在
-    // 组件外层挂了无样式观测壳 div（debug_selector 锚点），断言仍走 debug_bounds
     assert!(
-        cx.debug_bounds("editor-result-commit-group").is_some(),
-        "有待提交变更时提交/回滚对应出现"
+        cx.debug_bounds("editor-result-commit-group").is_none(),
+        "改格也不会让工具栏长回提交组（入口在状态栏那套占位里，尚未接线）"
     );
     let count = shared
         .results()
         .change_set(&id, 0)
         .expect("变更集在")
         .pending_count();
-    assert_eq!(count, 2, "按钮计数来源应为权威变更集的待提交条数");
+    assert_eq!(count, 2, "计数来源应为权威变更集的待提交条数");
 }
 
 /// T2a-7②：提交请求被接受（在途）后，提交中再提交被拦（按钮置灰的行为侧）；
@@ -1221,9 +1221,12 @@ fn reset_cell_request_reverts_a_cell_change(cx: &mut TestAppContext) {
     seed_cell_change(&shared, &id, 0, 1, "alice", "alice2");
     cx.update(|_window, cx| panel.update(cx, |host, cx| host.sync_result_view(cx)));
     cx.update(|window, cx| window.draw(cx).clear(cx));
-    assert!(
-        cx.debug_bounds("editor-result-commit-group").is_some(),
-        "预置脏格：待提交按钮组出现（网格镜像已带上这一格）"
+    // 【T1 2026-11-24】原来这里靠 `editor-result-commit-group` 出现来证明脏格进了镜像；
+    // 提交组已按 Q13 裁掉，改从权威变更集确认预置生效（同一份数据，UI 不再承载证据）。
+    assert_eq!(
+        shared.results().change_set(&id, 0).map(|c| c.pending_count()),
+        Some(1),
+        "预置脏格：变更集里应有一条待提交"
     );
 
     // 右键「重置单元格」：组件列 2 → 内部折成数据列 1

@@ -4364,8 +4364,8 @@ impl gpui_kit::Render for ToolbarHarness {
         _window: &mut gpui_kit::Window,
         cx: &mut gpui_kit::Context<Self>,
     ) -> impl gpui_kit::IntoElement {
-        // 走生产路径：左右两段都留空，量的就是容器自己写死的高与底色
-        render_toolbar(None, None, None, None, None, None, None, cx)
+        // 走生产路径：左段留空（右段已在 T1 收口移除），量的就是容器自己写死的高与底色
+        render_toolbar(None, cx)
     }
 }
 

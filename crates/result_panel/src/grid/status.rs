@@ -8,9 +8,7 @@ use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::separator::Separator;
 use gpui_kit::component::table::{DataTable, TableState};
-use gpui_kit::component::toolbar::Toolbar;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -319,16 +317,7 @@ pub struct ResultPane {
 /// - 执行信息（行数/耗时/失败/血缘/连接…）**不在工具栏**：移入状态栏（见
 ///   `render_status_row` 的 `memory` / `affected_rows` 参数）——用户口径：执行信息归结果集状态栏
 /// - 导出 / 刷新同样移入状态栏（左动作组系统段），工具栏不再摆
-pub fn render_toolbar(
-    filter: Option<AnyElement>,
-    pushdown: Option<AnyElement>,
-    comments: Option<AnyElement>,
-    compare: Option<AnyElement>,
-    commit: Option<AnyElement>,
-    analysis: Option<AnyElement>,
-    copy: Option<AnyElement>,
-    cx: &App,
-) -> AnyElement {
+pub fn render_toolbar(filter: Option<AnyElement>, cx: &App) -> AnyElement {
     let theme = cx.theme();
     let muted = theme.colors.muted_foreground;
     div()
@@ -378,51 +367,9 @@ pub fn render_toolbar(
                 // `panel/render.rs` 的 `sql_chip`）
                 .children(filter),
         )
-        .child(
-            // 右段：纯按钮序列 → Toolbar 组件（统一容器 + a11y 语义；contents 槽收
-            // AnyElement，按钮统一 ghost/xsmall 档（与筛选区同为 20px）；顺序照原型 §2.4 右段：
-            // ⌕ 筛选（左段）· 下发源库 / 注释（图标 toggle）· ⧉ 对比 · 提交/撤销 ·
-            // Σ 分析 ▾ · 复制；导出 ▾ / ⟳ 刷新已移状态栏系统段）
-            //
-            // 【DBeaver 对齐 2026-11-08】组间补一条竖分隔线：DBeaver 的筛选条用
-            // `UIUtils.createToolBarSeparator`（`ResultSetFilterPanel.java:354`）把
-            // 「筛选/开关」与「其它动作」分开，视觉上不靠间距硬撑。这里同样只用
-            // 1px 线（`ui::HAIRLINE`）+ 24px 高（在 30px 行里上下各留 3px，比撑满
-            // 更接近 DBeaver 的观感）；只有两组都非空时才插，避免空段留一条孤线。
-            Toolbar::new("editor-result-toolbar-actions")
-                .xsmall()
-                // 【DBeaver 对齐 2026-11-08】组件 XSmall 档自带 `p_1`（上下左右各 8px，见
-                // vendor `toolbar.rs:253`），会把工具栏那 3px 外边距整个吃掉——右端图标距
-                // 面板边缘变成 11px，DBeaver 只有 3px（`ResultSetFilterPanel.java:165`
-                // 的 `marginWidth = 3`，右列 ToolBar 本身没有内边距）。
-                // `refine_style` 在 `p_1` 之后执行（`toolbar.rs:253-257`），外部 `.p_0()`
-                // 的 `padding: Some(..)` 会覆盖它；高度由 `min_h_7`(28) 托底（30px 行里放得下），
-                // 按钮本身 20px 居中。
-                .p_0()
-                .contents({
-                    let mut contents: Vec<AnyElement> = [pushdown, comments]
-                        .into_iter()
-                        .flatten()
-                        .collect();
-                    let actions: Vec<AnyElement> = [compare, commit, analysis, copy]
-                        .into_iter()
-                        .flatten()
-                        .collect();
-                    if !contents.is_empty() && !actions.is_empty() {
-                        // 组间竖分隔线用标准 `Separator::vertical()`（gpui-kit-dev skill
-                        // 的容器层表格禁止手搓 `div().w_px().bg(..)`）；1px × 24px 保持
-                        // 既有尺码，颜色默认取 `theme.colors.border`。
-                        contents.push(
-                            Separator::vertical()
-                                .w(ui::HAIRLINE)
-                                .h(rems(1.5))
-                                .into_any_element(),
-                        );
-                    }
-                    contents.extend(actions);
-                    contents
-                }),
-        )
+        // 【T1 工具栏收口 2026-11-24】右段整段移除：DBeaver 筛选栏只有左段复合体
+        // （`ResultSetFilterPanel.java:180-214` 内层 5 格），动作项全在底部状态条。
+        // 本仓对比/分析入口迁到结果集标签页右键（基线文档 §21.1），列注释迁到结果集设置（§14.2）。
         .into_any_element()
 }
 
