@@ -379,6 +379,7 @@ fn version_row(version: i32, is_current: bool, has_copy: bool) -> VersionRow {
         size_label: "1.2 KB".to_string(),
         hash_short: "0123456789ab".to_string(),
         has_copy,
+        is_table: false,
         delta_label: if version > 1 {
             format!("较 v{} 大小+0.2 KB · 指纹已变", version - 1)
         } else {

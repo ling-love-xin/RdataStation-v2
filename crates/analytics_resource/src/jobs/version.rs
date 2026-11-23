@@ -82,17 +82,25 @@ pub(crate) async fn load_versions(job: &VersionsJob) -> Result<VersionRows, Stri
         .version_copies(&job.resource_id)
         .await
         .map_err(|e| format!("读取历史副本失败：{e}"))?;
-    let payload_ok = current
-        .file_rel_path
-        .as_deref()
-        .map(|rel| {
-            service
-                .payload()
-                .resolve(rel)
-                .map(|path| path.is_file())
-                .unwrap_or(false)
-        })
-        .unwrap_or(false);
+    // 表型资产的本体是项目分析库里的一张表（不是文件）：没有 `file_rel_path`，
+    // 不能因为“路径为空”就把当前版本标成「副本缺失」。
+    let payload_ok = if crate::ArchiveKind::resolve(&current.kind, current.analytics_table.as_deref())
+        == crate::ArchiveKind::AnalyticsTable
+    {
+        true
+    } else {
+        current
+            .file_rel_path
+            .as_deref()
+            .map(|rel| {
+                service
+                    .payload()
+                    .resolve(rel)
+                    .map(|path| path.is_file())
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false)
+    };
 
     // 履历事件与版本行一起在工作线程上取（渲染期零 I/O）。
     // 老库没有事件表时不能让整个对话框打不开：履历为空仍可看版本，只是没有动作记录。
@@ -276,7 +284,7 @@ pub(crate) async fn run_version_action(job: &VersionActionJob) -> OpOutcome {
                     ),
                 },
                 Ok(_) => OpOutcome::VersionActionDone {
-                    note: format!("「{}」v{version} 的内容与当前一致，无需还原", job.name),
+                    note: format!("「{}」已经指向 v{version} 的内容，无需还原", job.name),
                 },
                 Err(error) => OpOutcome::Failed {
                     action: "还原版本",

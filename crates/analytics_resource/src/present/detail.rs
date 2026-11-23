@@ -157,6 +157,9 @@ fn detail_version_timeline(
         // 当前版本的“副本”就是本体：本体缺位时这一版也还原不了（`resources/` 下没有它）。
         has_copy: status != ArchiveStatus::Missing,
     });
+    // 表型资产没有副本文件，可回退与否看快照里有没记本体表名（回退 = 改指旧表）。
+    let is_table = crate::ArchiveKind::resolve(&resource.kind, resource.analytics_table.as_deref())
+        == crate::ArchiveKind::AnalyticsTable;
     for version in versions.iter().take(DETAIL_RECENT_VERSIONS) {
         let snapshot = serde_json::from_value::<AnalyticsResource>(version.snapshot.clone()).ok();
         nodes.push(TimelineNode {
@@ -170,7 +173,11 @@ fn detail_version_timeline(
             is_current: false,
             // 没问到副本清单时按“还在”呈现（`None` = 不知道，不是“没有”）：
             // 误报“副本已裁剪”比漏报更糟——用户会以为能还原的版本不能还原。
-            has_copy: copies.map_or(true, |copies| copies.contains(&version.version)),
+            has_copy: if is_table {
+                crate::table_asset::snapshot_table(&version.snapshot).is_some()
+            } else {
+                copies.map_or(true, |copies| copies.contains(&version.version))
+            },
         });
     }
     // 版本表按新在前给，但别依赖它：时间线必须严格降序（差异文案是“较 vN-1”）。
@@ -199,6 +206,7 @@ fn detail_version_timeline(
                 })
                 .unwrap_or_default(),
             has_copy: node.has_copy,
+            is_table,
         })
         .collect()
 }

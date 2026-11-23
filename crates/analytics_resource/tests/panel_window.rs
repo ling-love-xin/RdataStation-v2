@@ -1739,6 +1739,7 @@ fn detail_version_timeline_puts_current_first(cx: &mut TestAppContext) {
                 hash_short: "9f3a2c7b1e04".to_string(),
                 delta_label: "较 v2 大小+120 B · 指纹已变".to_string(),
                 has_copy: true,
+                is_table: false,
             },
             DetailVersionLine {
                 version: 2,
@@ -1748,6 +1749,7 @@ fn detail_version_timeline_puts_current_first(cx: &mut TestAppContext) {
                 hash_short: "2c8e10d4aa91".to_string(),
                 delta_label: String::new(),
                 has_copy: true,
+                is_table: false,
             },
             DetailVersionLine {
                 version: 1,
@@ -1758,6 +1760,7 @@ fn detail_version_timeline_puts_current_first(cx: &mut TestAppContext) {
                 delta_label: String::new(),
                 // 副本被保留策略裁掉：行内要标「副本已裁剪」，节点本身也点得开（只看不改）。
                 has_copy: false,
+                is_table: false,
             },
         ];
         move |_window, _cx| DetailHarness {
@@ -1821,6 +1824,7 @@ fn detail_version_card_follows_the_selected_version(cx: &mut TestAppContext) {
                 hash_short: "9f3a2c7b1e04".to_string(),
                 delta_label: "较 v2 大小+120 B · 指纹已变".to_string(),
                 has_copy: true,
+                is_table: false,
             },
             DetailVersionLine {
                 version: 1,
@@ -1830,6 +1834,7 @@ fn detail_version_card_follows_the_selected_version(cx: &mut TestAppContext) {
                 hash_short: "77aa0f12bc33".to_string(),
                 delta_label: String::new(),
                 has_copy: false,
+                is_table: false,
             },
         ];
         detail

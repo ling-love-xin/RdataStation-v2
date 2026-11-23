@@ -18,9 +18,9 @@ use std::sync::Arc;
 use sha2::{Digest as _, Sha256};
 
 use engine::persistence::ProjectSqlitePool;
-use shared::error::{CommonError, CoreError};
+use shared::error::{CommonError, CoreError, StorageError};
 
-use crate::model::{ArchiveBinding, ArchiveKind, NewArchiveInput, PayloadMode};
+use crate::model::{ArchiveBinding, ArchiveKind, NewArchiveInput, PayloadMode, TimelineEventKind};
 use crate::{AnalyticsResource, AnalyticsResourceStore};
 
 /// 项目库位置（与 `engine::migration` 的建库位置同一处）。
@@ -61,7 +61,9 @@ impl TableAssetOutcome {
 /// 表型资产的「内容」就是那张表；一版一张表，表名即版本身份。不用文件字节指纹、
 /// 也不用定义指纹（`definition_sql` 对表型是空的）——拿文件口径去套，只会让
 /// 「内容已变」误报。
-fn table_fingerprint(table: &str) -> String {
+///
+/// 回退也用它：把表名指回旧表后，指纹自然跟着旧表名，不需要真去比数据。
+pub(crate) fn table_fingerprint(table: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"analytics_table:");
     hasher.update(table.as_bytes());
@@ -89,16 +91,15 @@ pub async fn register(
 
     match store.latest_alive_by_name(&name).await? {
         Some(row) => {
-            // 同名再升级：旧版本的表名进快照，登记行改指新表。
-            let snapshot = serde_json::json!({
-                "kind": ArchiveKind::AnalyticsTable.as_db_str(),
-                "analytics_table": row.analytics_table,
-                "content_hash": row.content_hash,
-                "row_count": row.row_count,
-                "column_count": row.column_count,
-                "superseded": true,
-            })
-            .to_string();
+            // 同名再升级：旧版本整行进快照（与文件型同一形态），登记行改指新表。
+            // 存整行而不是只存表名：版本历史/详情都按 `AnalyticsResource` 解析快照，
+            // 只存表名会让历史版本行显示成"没内容"，回退也读不出该指哪张表。
+            let snapshot = serde_json::to_string(&row).map_err(|error| {
+                CoreError::storage(StorageError::Serialization {
+                    format: "JSON".to_string(),
+                    reason: error.to_string(),
+                })
+            })?;
             let detail = format!("升级结果集，本体改指 {table}");
             let resource = store
                 .append_table_version(
@@ -107,6 +108,7 @@ pub async fn register(
                     &table,
                     &snapshot,
                     &content_hash,
+                    TimelineEventKind::Updated,
                     Some(&detail),
                 )
                 .await?;
@@ -143,6 +145,23 @@ pub async fn register(
             Ok(outcome(resource, false))
         }
     }
+}
+
+/// 从版本快照里取本体表名（回退要靠它）。
+///
+/// 两种写法都要认：新写法是整行 `AnalyticsResource` 序列化；2026-11-23 之前那条
+/// 短快照只记了 `{"analytics_table": ...}`，老数据不能因为换了形态就回退不了。
+pub(crate) fn snapshot_table(snapshot: &serde_json::Value) -> Option<String> {
+    if let Ok(record) = serde_json::from_value::<AnalyticsResource>(snapshot.clone()) {
+        if let Some(table) = record.analytics_table.filter(|table| !table.is_empty()) {
+            return Some(table);
+        }
+    }
+    snapshot
+        .get("analytics_table")
+        .and_then(|value| value.as_str())
+        .filter(|table| !table.is_empty())
+        .map(str::to_string)
 }
 
 /// 宿主入口：按项目根打开项目库后登记。

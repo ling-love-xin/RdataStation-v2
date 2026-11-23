@@ -144,7 +144,11 @@ pub(super) fn version_line(
                         .w(rems(ui::VERSION_COL_COPY))
                         .flex_none()
                         .text_ellipsis()
-                        .child(if row.has_copy {
+                        .child(if row.is_table {
+                            // 表型资产没有副本文件：这一列只能说清“本体是什么”，
+                            // 别按副本口径写「副本缺失」。
+                            div().text_color(muted).child("项目表")
+                        } else if row.has_copy {
                             div().text_color(muted).child("在位")
                         } else {
                             div().text_color(danger).child("副本缺失")
@@ -261,11 +265,16 @@ pub(super) fn action_bar(
     let can_act = !row.is_current && row.has_copy && !busy && !read_only;
     // 对比是**只读查看**（不写库，只读项目也能看），只要求"这一版内容还在"；
     // 文本类型与大小上限由宿主在取数线程挡（对话框不查文件系统）。
-    let can_diff = !row.is_current && row.has_copy && !busy;
+    // 表型资产没有本体文件，文本对比无从谈起——直接不给这个按钮。
+    let can_diff = !row.is_current && row.has_copy && !row.is_table && !busy;
+    // 取回 / 删副本都基于 `resources/` 下的本体副本，表型资产没有。
+    let can_checkout = can_act && !row.is_table;
     let hint = if read_only {
         "项目处于只读模式：还原 / 取回 / 删副本都是写操作"
     } else if row.is_current {
         "这是当前版本（本体上的内容）：取回请用详情面板的「取回（检出）…」"
+    } else if row.is_table {
+        "表型资产没有内容副本：回退 = 把本体指回这一版的表（两张表都在，不删数据）"
     } else if !row.has_copy {
         "该版本只留了元数据（内容副本已被保留策略裁剪），不能还原或取回"
     } else {
@@ -354,6 +363,8 @@ pub(super) fn action_bar(
                         .debug_selector(|| "version-restore".to_string())
                         .label(if row.is_current {
                             "当前版本".to_string()
+                        } else if row.is_table {
+                            format!("回退到 v{}（生成 v{}）", row.version, row.version + 1)
                         } else {
                             format!("还原为当前版本（生成 v{}）", row.version + 1)
                         })
@@ -366,7 +377,7 @@ pub(super) fn action_bar(
                         .small()
                         .debug_selector(|| "version-checkout".to_string())
                         .label("取回该版本为草稿")
-                        .disabled(!can_act)
+                        .disabled(!can_checkout)
                         .on_click(checkout),
                 )
                 .child(
@@ -375,7 +386,7 @@ pub(super) fn action_bar(
                         .small()
                         .debug_selector(|| "version-delete-copy".to_string())
                         .label("删除内容副本")
-                        .disabled(!can_act)
+                        .disabled(!can_checkout)
                         .on_click(delete),
                 ),
         )

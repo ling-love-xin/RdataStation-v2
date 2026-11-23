@@ -313,7 +313,8 @@ fn render_timeline_node(
         colors.muted_foreground
     };
     // 副本被裁过：版本行还在，但“还原它”做不到。明说比让用户点一下失败强。
-    let meta = match (line.size_label.is_empty(), line.has_copy) {
+    // 表型资产没有副本这回事（回退只改指向），一律按“可回退”呈现。
+    let meta = match (line.size_label.is_empty(), line.has_copy || line.is_table) {
         (true, true) => line.time_label.clone(),
         (true, false) => format!("{} · 副本已裁剪", line.time_label),
         (false, true) => format!("{} · {}", line.time_label, line.size_label),
@@ -406,8 +407,10 @@ fn render_timeline_card(line: &DetailVersionLine, cx: &App) -> AnyElement {
         list = list.item("变更", line.delta_label.clone(), 1);
     }
     list = list.item(
-        "内容副本",
-        if line.has_copy {
+        if line.is_table { "本体" } else { "内容副本" },
+        if line.is_table {
+            "项目分析库里的表，可回退"
+        } else if line.has_copy {
             "在位，可还原"
         } else {
             "已裁剪，只剩登记"
@@ -448,7 +451,9 @@ fn render_timeline_card(line: &DetailVersionLine, cx: &App) -> AnyElement {
         div()
             .text_xs()
             .text_color(colors.muted_foreground)
-            .child(if line.has_copy {
+            .child(if line.is_table {
+                "要回退到这一版，用下面的「查看全部…」"
+            } else if line.has_copy {
                 "要还原或对比，用下面的「查看全部…」"
             } else {
                 "内容副本已被保留策略裁掉，只能看登记信息"

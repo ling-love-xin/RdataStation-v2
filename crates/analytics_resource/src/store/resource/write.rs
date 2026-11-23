@@ -183,6 +183,7 @@ impl AnalyticsResourceStore {
         analytics_table: &str,
         snapshot: &str,
         content_hash: &str,
+        event_kind: TimelineEventKind,
         detail: Option<&str>,
     ) -> Result<AnalyticsResource, CoreError> {
         let conn = self.get_conn().await?;
@@ -211,7 +212,7 @@ impl AnalyticsResourceStore {
                 inner,
                 id,
                 Some(old_version + 1),
-                TimelineEventKind::Rearchived,
+                event_kind,
                 detail,
                 Some(content_hash),
             )

@@ -8,6 +8,7 @@ fn row(version: i32, is_current: bool) -> VersionRow {
         size_label: "1.2 KB".to_string(),
         hash_short: "0123456789ab".to_string(),
         has_copy: true,
+        is_table: false,
         delta_label: String::new(),
     }
 }

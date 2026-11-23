@@ -40,6 +40,10 @@ pub fn build_version_rows(
         is_current: true,
         has_copy: payload_ok,
     }];
+    // 表型资产没有副本文件：它能不能回退，取决于**快照里记没记本体表名**
+    // （回退 = 把表名指回旧表，表还在项目库里，不需要副本）。
+    let is_table = crate::ArchiveKind::resolve(&current.kind, current.analytics_table.as_deref())
+        == crate::ArchiveKind::AnalyticsTable;
     for version in versions {
         // 快照是当时那条资源记录的序列化；字段结构随迁移演进，解析不出来不算错。
         let snapshot = serde_json::from_value::<AnalyticsResource>(version.snapshot.clone()).ok();
@@ -51,7 +55,11 @@ pub fn build_version_rows(
                 .and_then(|record| record.content_hash.clone()),
             time: version.created_at,
             is_current: false,
-            has_copy: copies.contains(&version.version),
+            has_copy: if is_table {
+                crate::table_asset::snapshot_table(&version.snapshot).is_some()
+            } else {
+                copies.contains(&version.version)
+            },
         });
     }
     candidates.sort_unstable_by(|a, b| b.version.cmp(&a.version));
@@ -66,6 +74,7 @@ pub fn build_version_rows(
             size_label: format_size(candidate.size),
             hash_short: crate::detail_view::short_hash(candidate.hash.as_deref()),
             has_copy: candidate.has_copy,
+            is_table,
             // 与**上一版**（版本号 -1）比：列表里它的下一行（降序）。
             delta_label: candidates
                 .get(index + 1)
