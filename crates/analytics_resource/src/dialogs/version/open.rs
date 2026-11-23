@@ -1,5 +1,6 @@
 //! 版本对话框：打开入口与行/动作条的装配。
 
+use shared::i18n::tr;
 use super::*;
 use super::render::{action_bar, header_line, timeline_section, version_line, version_rail};
 
@@ -142,7 +143,7 @@ pub fn open_version_dialog_with(
                         .with_variant(ButtonVariant::Secondary)
                         .small()
                         .debug_selector(|| "version-close".to_string())
-                        .label("关闭")
+                        .label(tr("关闭"))
                         .on_click(|_, window, cx| window.close_dialog(cx)),
                 ),
             )

@@ -6,6 +6,7 @@
 //! 标签条只有一份结果时不画（一份结果不需要切换器）：这条取舍在宿主
 //! （`EditorHostPanel::render`），因为“结果区该出现哪些区块”属面板判断。
 
+use shared::i18n::tr;
 use std::rc::Rc;
 
 use gpui_kit::base::StyledExt as _;
@@ -170,7 +171,7 @@ pub fn render(
                     .small()
                     .icon(IconName::Close)
                     .debug_selector(|| format!("editor-result-tab-close-{index}"))
-                    .tooltip("关闭这个结果集".to_string())
+                    .tooltip(tr("关闭这个结果集").to_string())
                     .on_click(move |_e, _w, cx| on_close(idx, cx)),
                 );
             }

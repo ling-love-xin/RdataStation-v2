@@ -7,6 +7,7 @@
 //! 可见性：搬出的项加 `pub(super)`（= 在 `crate::nav_view` 及其子孙模块可见），
 //! 根模块用 `use self::primitives::*;` 收回来，**调用点一字未改**。
 
+use shared::i18n::tr;
 use super::*;
 use crate::nav::capability::NavOp;
 use crate::nav::family_profile;
@@ -1326,7 +1327,7 @@ pub(super) fn nav_error_row_at(text: &str, color: Hsla, action: Hsla, indent: f3
                 .text_color(color)
                 .child(text.to_string()),
         )
-        .child(div().flex_none().text_color(action).child("重试"))
+        .child(div().flex_none().text_color(action).child(tr("重试")))
 }
 
 /// 这次展开是不是「重试」：该节点上次失败，且手里还没有它的子节点。

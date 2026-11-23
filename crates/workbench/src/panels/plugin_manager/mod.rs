@@ -12,6 +12,7 @@
 //! 贡献点计数与后台动作。本面板通过 `Entity<PluginPanel>` 的只读快照 + 动作
 //! 转发复用同一条链路，避免「管理页和左栏各刷一份、各自过期」。
 
+use shared::i18n::tr;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -152,7 +153,7 @@ impl PluginManagerPanel {
             return input.clone();
         }
         let input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("搜索插件名称 / ID / 描述…"));
+            cx.new(|cx| InputState::new(window, cx).placeholder(tr("搜索插件名称 / ID / 描述…")));
         let query = self.query.clone();
         let sub = cx.subscribe_in(
             &input,
@@ -256,7 +257,7 @@ impl ComponentPanel for PluginManagerPanel {
             .items_center()
             .gap_1()
             .child(crate::view::LeftPanel::Plugin.icon())
-            .child("插件管理")
+            .child(tr("插件管理"))
     }
 }
 

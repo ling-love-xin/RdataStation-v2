@@ -7,6 +7,7 @@
 //! 取数在后台线程做（见 `services/overview.rs` 的模块注释），这里拿到的只是快照；
 //! 快照为 `None` 表示首帧还没回填，卡片显示「…」。
 
+use shared::i18n::tr;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{Sizable as _, Theme};
@@ -34,20 +35,20 @@ pub(crate) fn render_overview_cards(
                 .text_sm()
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.colors.foreground)
-                .child("业务数据概览"),
+                .child(tr("业务数据概览")),
         )
         .child(
             div()
                 .text_xs()
                 .text_color(theme.colors.muted_foreground)
-                .child("本机实时读数：连接、项目元数据、洞察画像、分析库"),
+                .child(tr("本机实时读数：连接、项目元数据、洞察画像、分析库")),
         )
         .child(div().flex_1())
         .child(
             Button::new("overview-refresh")
                 .ghost()
                 .small()
-                .label("刷新")
+                .label(tr("刷新"))
                 .on_click(move |_, window, app| on_refresh(window, app)),
         );
 

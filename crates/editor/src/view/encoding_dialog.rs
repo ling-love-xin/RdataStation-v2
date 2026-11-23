@@ -7,6 +7,7 @@
 //! 返回 `Entity<ListState<EncodingDelegate>>`：测试经 delegate 直接驱动 `confirm`
 //! （headless 点击到不了对话框层，沿用项目既有口径，见 skill 窗口测试一节）。
 
+use shared::i18n::tr;
 use std::rc::Rc;
 
 use gpui_kit::assets::IconName;
@@ -98,7 +99,7 @@ impl ListDelegate for EncodingDelegate {
             .py_6()
             .text_xs()
             .text_color(theme.colors.muted_foreground)
-            .child("（无可用编码）")
+            .child(tr("（无可用编码）"))
             .into_any_element()
     }
 
@@ -165,11 +166,11 @@ pub fn open_encoding_dialog(
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("选择操作（搜索编码 / 回车确认 / Esc 关闭）"),
+                    .child(tr("选择操作（搜索编码 / 回车确认 / Esc 关闭）")),
             )
             .child(List::new(&list));
         dialog
-            .title("编码")
+            .title(tr("编码"))
             .w(theme.font_size * ui::ENCODING_DIALOG_WIDTH)
             .child(body)
     });

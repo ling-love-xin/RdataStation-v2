@@ -1,3 +1,4 @@
+use shared::i18n::tr;
 use super::*;
 
 impl PropertyHostPanel {
@@ -27,11 +28,11 @@ impl PropertyHostPanel {
             .bg(theme.colors.sidebar)
             .child(self.card_header("数据", None, theme));
         let Some(data) = props.data.as_ref() else {
-            body = body.child(div().text_xs().text_color(muted).child("（未加载）"));
+            body = body.child(div().text_xs().text_color(muted).child(tr("（未加载）")));
             return body;
         };
         if data.columns.is_empty() {
-            body = body.child(div().text_xs().text_color(muted).child("（无）"));
+            body = body.child(div().text_xs().text_color(muted).child(tr("（无）")));
             return body;
         }
 
@@ -160,14 +161,14 @@ impl PropertyHostPanel {
             .text_color(muted)
             .child(div().child(total_text));
         if !data.is_ordered {
-            footer = footer.child(div().child("（本页无定义顺序）"));
+            footer = footer.child(div().child(tr("（本页无定义顺序）")));
         }
         if current_offset > 0 {
             let entity = entity.clone();
             let current = current.clone();
             footer = footer.child(
                 Button::new("data-prev")
-                    .label("‹ 上一页")
+                    .label(tr("‹ 上一页"))
                     .with_size(Size::Small)
                     .on_click(move |_, _, app| {
                         let new_offset = current_offset.saturating_sub(current_limit);
@@ -184,7 +185,7 @@ impl PropertyHostPanel {
             let current = current.clone();
             footer = footer.child(
                 Button::new("data-next")
-                    .label("下一页 ›")
+                    .label(tr("下一页 ›"))
                     .with_size(Size::Small)
                     .on_click(move |_, _, app| {
                         entity.update(app, |this, cx| {

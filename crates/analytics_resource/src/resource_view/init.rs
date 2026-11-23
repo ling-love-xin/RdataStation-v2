@@ -1,5 +1,6 @@
 //! 面板构造：宿主、搜索框与列表的惰性装配。
 
+use shared::i18n::tr;
 use super::*;
 
 impl ResourcesPanel {
@@ -35,7 +36,7 @@ impl ResourcesPanel {
         if self.search_input.is_some() {
             return;
         }
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索存档"));
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("搜索存档")));
         // 用户真在打字的那条路径：输入变化 → 条件更新 → 重算可见行。
         //
         // 注意：`InputState::set_value` **不会**发 `InputEvent::Change`（gpui-component 内部注释明说），

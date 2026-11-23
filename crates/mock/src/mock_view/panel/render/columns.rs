@@ -1,5 +1,6 @@
 //! 列区渲染：批量起手按钮 / 加列按钮 / 表清单列行。
 
+use shared::i18n::tr;
 use super::*;
 
 impl MockPanel {
@@ -42,7 +43,7 @@ impl MockPanel {
                         for preset in items {
                             let entity = entity.clone();
                             let id = preset.id;
-                            menu = menu.item(PopupMenuItem::new(preset.label).on_click(
+                            menu = menu.item(PopupMenuItem::new(tr(preset.label)).on_click(
                                 move |_, _, app| {
                                     let Some(preset) = preset_by_id(id) else {
                                         return;

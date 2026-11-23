@@ -6,6 +6,7 @@
 //! 对比方向固定为「选中 → 最新」：最新一版不可点（没有更新的版本可比）。行上的方向标记
 //! **不预设好坏**（方向 ≠ 好坏：空值率升就是坏，行数升通常不是）。
 
+use shared::i18n::tr;
 use gpui_kit::base::{Disableable as _, StyledExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::description_list::{DescriptionItem, DescriptionList, DescriptionText};
@@ -210,7 +211,7 @@ impl InsightView {
                     .ghost()
                     .xsmall()
                     .icon(IconName::Close)
-                    .tooltip("关掉对比")
+                    .tooltip(tr("关掉对比"))
                     .on_click({
                         let entity = entity.clone();
                         move |_, _, app| entity.update(app, |view, cx| view.dismiss_diff(cx))

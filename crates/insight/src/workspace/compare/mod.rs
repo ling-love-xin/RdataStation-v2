@@ -1,5 +1,6 @@
 //! 多表对比域渲染：候选勾选 / 运行中 / 结果表。
 
+use shared::i18n::tr;
 use super::*;
 
 mod table;
@@ -26,13 +27,13 @@ impl super::InsightWorkspacePanel {
                     div()
                         .text_sm()
                         .text_color(colors.muted_foreground)
-                        .child("还没有可对比的目标"),
+                        .child(tr("还没有可对比的目标")),
                 )
                 .child(
                     div()
                         .text_xs()
                         .text_color(colors.muted_foreground)
-                        .child("先在导航树或结果列表上打开一张表的洞察，之后它才会出现在这里"),
+                        .child(tr("先在导航树或结果列表上打开一张表的洞察，之后它才会出现在这里")),
                 );
         }
 
@@ -73,7 +74,7 @@ impl super::InsightWorkspacePanel {
                         div()
                             .text_sm()
                             .font_weight(FontWeight::MEDIUM)
-                            .child("多表洞察对比"),
+                            .child(tr("多表洞察对比")),
                     )
                     .child(
                         div()
@@ -87,7 +88,7 @@ impl super::InsightWorkspacePanel {
                             .primary()
                             .small()
                             .icon(IconName::Play)
-                            .label("开始对比")
+                            .label(tr("开始对比"))
                             .disabled(self.compare_selected.is_empty())
                             .on_click({
                                 let entity = entity.clone();
@@ -113,7 +114,7 @@ impl super::InsightWorkspacePanel {
                                 div()
                                     .text_xs()
                                     .text_color(colors.muted_foreground)
-                                    .child("候选 = 已进入洞察的目标；聚合会话内已完成的画像摘要，不重新取数（D64 阶段②）。"),
+                                    .child(tr("候选 = 已进入洞察的目标；聚合会话内已完成的画像摘要，不重新取数（D64 阶段②）。")),
                             )
                             .child(compare_table_scroll(
                                 ui::INSIGHT_WS_CANDIDATE_MIN_WIDTH,
@@ -242,7 +243,7 @@ impl super::InsightWorkspacePanel {
                         div()
                             .text_sm()
                             .font_weight(FontWeight::MEDIUM)
-                            .child("多表洞察对比"),
+                            .child(tr("多表洞察对比")),
                     )
                     .child(div().flex_1())
                     .child(
@@ -339,7 +340,7 @@ impl super::InsightWorkspacePanel {
                         div()
                             .text_sm()
                             .font_weight(FontWeight::MEDIUM)
-                            .child("多表洞察对比"),
+                            .child(tr("多表洞察对比")),
                     )
                     .child(
                         div()
@@ -353,7 +354,7 @@ impl super::InsightWorkspacePanel {
                             .ghost()
                             .small()
                             .icon(IconName::RotateCw)
-                            .label("重新对比")
+                            .label(tr("重新对比"))
                             .on_click({
                                 let entity = entity.clone();
                                 move |_, _, app| {
@@ -378,7 +379,7 @@ impl super::InsightWorkspacePanel {
                                 div()
                                     .text_xs()
                                     .text_color(colors.muted_foreground)
-                                    .child("并排对比：**指标为行、每张勾选表为一列**（原型 .cmp-table）。行数 / 列数 / 检查器命中 / 缺失率 / 唯一率 / 值得关注列数——全为事实指标，无评级（评级归归档后的资产库）。点表头可打开该表洞察工作页。"),
+                                    .child(tr("并排对比：**指标为行、每张勾选表为一列**（原型 .cmp-table）。行数 / 列数 / 检查器命中 / 缺失率 / 唯一率 / 值得关注列数——全为事实指标，无评级（评级归归档后的资产库）。点表头可打开该表洞察工作页。")),
                             )
                             .child(compare_table_scroll(
                                 // 列数随勾选表数变化 → 最小可读宽只能在运行时按表数算
@@ -394,7 +395,7 @@ impl super::InsightWorkspacePanel {
                                         div()
                                             .w(rems(ui::INSIGHT_WS_METRIC_LABEL_WIDTH))
                                             .flex_none()
-                                            .child("指标"),
+                                            .child(tr("指标")),
                                     )
                                     .children(selected.iter().map(|entry| {
                                         div()

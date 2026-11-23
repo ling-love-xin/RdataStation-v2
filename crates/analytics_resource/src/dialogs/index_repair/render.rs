@@ -1,5 +1,6 @@
 //! 索引修复对话框的渲染件：问题条目行。
 
+use shared::i18n::tr;
 use super::*;
 
 /// 一行待修复项：标题 / 副文案 / （指纹对照）+ 行内动作。
@@ -80,7 +81,7 @@ pub(super) fn repair_line(
                 Button::new(("repair-adopt", index))
                     .small()
                     .debug_selector(move || format!("repair-adopt-{index}"))
-                    .label("补登为存档")
+                    .label(tr("补登为存档"))
                     .disabled(!can_write)
                     .on_click(dispatch),
             );
@@ -110,7 +111,7 @@ pub(super) fn repair_line(
                     .ghost()
                     .small()
                     .debug_selector(move || format!("repair-restore-{index}"))
-                    .label("从回收站还原")
+                    .label(tr("从回收站还原"))
                     .disabled(!can_write)
                     .on_click(restore),
             );
@@ -128,7 +129,7 @@ pub(super) fn repair_line(
                         let on_action = on_action.clone();
                         let resource_id = resource_id.clone();
                         alert
-                            .title("删除这条登记记录？")
+                            .title(tr("删除这条登记记录？"))
                             .description(
                                 "本体已经不存在，删掉记录后这个存档就彻底没了（不含回收站）。",
                             )
@@ -153,7 +154,7 @@ pub(super) fn repair_line(
                     .ghost()
                     .small()
                     .debug_selector(move || format!("repair-delete-{index}"))
-                    .label("删除记录")
+                    .label(tr("删除记录"))
                     .disabled(!can_write)
                     .on_click(dispatch),
             );
@@ -193,7 +194,7 @@ pub(super) fn repair_line(
                     Button::new(("repair-accept", index))
                         .small()
                         .debug_selector(move || format!("repair-accept-{index}"))
-                        .label("接受当前内容")
+                        .label(tr("接受当前内容"))
                         .disabled(!can_write)
                         .on_click(accept),
                 )
@@ -203,7 +204,7 @@ pub(super) fn repair_line(
                         .ghost()
                         .small()
                         .debug_selector(move || format!("repair-versions-{index}"))
-                        .label("打开版本历史…")
+                        .label(tr("打开版本历史…"))
                         .on_click(open_versions),
                 );
         }

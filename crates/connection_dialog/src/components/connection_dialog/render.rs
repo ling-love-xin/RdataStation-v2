@@ -1626,7 +1626,7 @@ fn side_panel_ui<H: 'static>(p: SidePanel<'_, H>) -> impl IntoElement {
                 Button::new("install-drivers-btn")
                     .ghost()
                     .label(tr("安装驱动"))
-                    .tooltip("打开插件管理页：安装并启用驱动插件后，这些类型即可选用")
+                    .tooltip(tr("打开插件管理页：安装并启用驱动插件后，这些类型即可选用"))
                     .on_click({
                         let shared = shared.clone();
                         let result = result.clone();
@@ -1725,7 +1725,7 @@ fn side_panel_ui<H: 'static>(p: SidePanel<'_, H>) -> impl IntoElement {
                                         .ghost()
                                         .label(tr("导出"))
                                         .with_size(Size::XSmall)
-                                        .tooltip("导出未保存草稿为模板 JSON（写入剪贴板）")
+                                        .tooltip(tr("导出未保存草稿为模板 JSON（写入剪贴板）"))
                                         .on_click({
                                             let state = state.clone();
                                             let entity = entity.clone();
@@ -1762,7 +1762,7 @@ fn side_panel_ui<H: 'static>(p: SidePanel<'_, H>) -> impl IntoElement {
                                         .ghost()
                                         .label(tr("导入"))
                                         .with_size(Size::XSmall)
-                                        .tooltip("从剪贴板导入模板 JSON（追加为草稿，密码请补填）")
+                                        .tooltip(tr("从剪贴板导入模板 JSON（追加为草稿，密码请补填）"))
                                         .on_click({
                                             let state = state.clone();
                                             let entity = entity.clone();
@@ -1799,7 +1799,7 @@ fn side_panel_ui<H: 'static>(p: SidePanel<'_, H>) -> impl IntoElement {
                                         .icon(IconName::Plus)
                                         .label(tr("添加"))
                                         .with_size(Size::XSmall)
-                                        .tooltip("新增一条空草稿（连续配置多个连接）")
+                                        .tooltip(tr("新增一条空草稿（连续配置多个连接）"))
                                         .on_click({
                                             let state = state.clone();
                                             let shared = shared.clone();
@@ -2050,7 +2050,7 @@ fn driver_props_panel_ui<H: 'static>(
         let list = known
             .iter()
             .take(8)
-            .map(|k| format!("{}（{}）", k.key, k.label))
+            .map(|k| format!("{}（{}）", k.key, tr(k.label)))
             .collect::<Vec<_>>()
             .join(" · ");
         format!("该驱动常用键：{list}")
@@ -2262,7 +2262,7 @@ fn network_tab_ui(
             div()
                 .text_xs()
                 .text_color(theme.colors.info)
-                .child("已引用网络档案 · 连接时生效（改档案一处全量生效）"),
+                .child(tr("已引用网络档案 · 连接时生效（改档案一处全量生效）")),
         );
     } else {
         content = content.child(hint_line(
@@ -2900,7 +2900,7 @@ fn general_tab_ui<H: 'static>(p: GeneralTab<'_, H>, cx: &App) -> Div {
                         .ghost()
                         .label(tr("从剪贴板导入 URI"))
                         .disabled(form_disabled)
-                        .tooltip("把剪贴板里的整条连接串解析成主机 / 端口 / 数据库")
+                        .tooltip(tr("把剪贴板里的整条连接串解析成主机 / 端口 / 数据库"))
                         .on_click({
                             let entity = entity.clone();
                             let host_input = host_input.clone();

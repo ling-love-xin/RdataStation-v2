@@ -1,5 +1,6 @@
 //! 回收站对话框：打开入口与列表装配。
 
+use shared::i18n::tr;
 use super::*;
 use super::render::{header_line, trash_line};
 
@@ -79,7 +80,7 @@ pub fn open_trash_dialog_with(
                     .py_2()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("回收站是空的"),
+                    .child(tr("回收站是空的")),
             );
         } else {
             let mut list = div().v_flex().w_full();
@@ -140,7 +141,7 @@ pub fn open_trash_dialog_with(
                     let on_action = on_action.clone();
                     alert
                         .confirm()
-                        .title("清空资产库的回收站？")
+                        .title(tr("清空资产库的回收站？"))
                         .description(format!(
                             "将彻底删除资产库的 {count} 项（本体不再保留，不可恢复）；\
                              其他模块共用的条目不会被删。"
@@ -163,7 +164,7 @@ pub fn open_trash_dialog_with(
         };
 
         dialog
-            .title("回收站")
+            .title(tr("回收站"))
             .w(cx.theme().font_size * ui::TRASH_DIALOG_WIDTH)
             .child(body)
             .footer(
@@ -173,7 +174,7 @@ pub fn open_trash_dialog_with(
                             .with_variant(ButtonVariant::Danger)
                             .small()
                             .debug_selector(|| "trash-empty".to_string())
-                            .label("清空回收站")
+                            .label(tr("清空回收站"))
                             .disabled(!can_write || rows.is_empty())
                             .on_click(empty_dispatch),
                     )
@@ -182,7 +183,7 @@ pub fn open_trash_dialog_with(
                             .with_variant(ButtonVariant::Secondary)
                             .small()
                             .debug_selector(|| "trash-close".to_string())
-                            .label("关闭")
+                            .label(tr("关闭"))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     ),
             )

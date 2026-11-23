@@ -1,5 +1,6 @@
 //! 单表出口渲染：落库 / 追加 / 草稿箱 / 另存为 + 就地反馈。
 
+use shared::i18n::tr;
 use super::*;
 
 impl MockPanel {
@@ -53,7 +54,7 @@ impl MockPanel {
             .dropdown_menu(move |menu, _window, _cx| {
                 let mut menu = menu;
                 if tables.is_empty() {
-                    return menu.item(PopupMenuItem::new("（项目分析库暂无表）").disabled(true));
+                    return menu.item(PopupMenuItem::new(tr("（项目分析库暂无表）")).disabled(true));
                 }
                 for name in tables.iter() {
                     let table = name.clone();

@@ -16,6 +16,7 @@
 //! 做列值重叠排查，T19）、**归档**（画像快照 → 资产库，T20）。关系 / 归档
 //! 都以洞察临时表名为 SQL 前提，条目未取样（`temp_table = None`）时按钮置灰。
 
+use shared::i18n::tr;
 use gpui_kit::base::{Disableable as _, StyledExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
@@ -57,7 +58,7 @@ impl InsightView {
                             .text_xs()
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(colors.foreground)
-                            .child("已洞察表"),
+                            .child(tr("已洞察表")),
                     )
                     .child(
                         div()
@@ -71,7 +72,7 @@ impl InsightView {
                     .child(
                         Switch::new("insight-set-multi")
                             .checked(self.set_multi)
-                            .label("多选")
+                            .label(tr("多选"))
                             .on_click({
                                 let entity = entity.clone();
                                 move |_, _, app| {
@@ -102,7 +103,7 @@ impl InsightView {
                             Empty::new().header(
                                 EmptyHeader::new()
                                     .title(EmptyTitle::new()
-                                        .child("还没有进入过洞察的表"))
+                                        .child(tr("还没有进入过洞察的表")))
                                     .description(EmptyDescription::new().child(
                                         "导航树右键「查看洞察」、草稿箱 / 分析存档「查看洞察」都能开始；进入过的表在这里可对比 / 关系排查 / 归档",
                                     )),
@@ -134,7 +135,7 @@ impl InsightView {
                             Button::new("insight-set-quality-compare")
                                 .secondary()
                                 .xsmall()
-                                .label("质量对比")
+                                .label(tr("质量对比"))
                                 .on_click({
                                     let entity = entity.clone();
                                     move |_, _, app| {
@@ -342,7 +343,7 @@ impl InsightView {
             InsightSetKind::ResultSet => Tag::warning(),
             InsightSetKind::File => Tag::secondary(),
         };
-        badge.outline().xsmall().flex_none().child(kind.label())
+        badge.outline().xsmall().flex_none().child(tr(kind.label()))
     }
 
     /// 行操作按钮（对比 / 关系 / 归档）：key 与实体在闭包外克隆，避免借用冲突。
@@ -403,13 +404,13 @@ impl InsightView {
                             .flex_1()
                             .text_xs()
                             .text_color(colors.foreground)
-                            .child("关系排查"),
+                            .child(tr("关系排查")),
                     )
                     .child(
                         Button::new("insight-overlap-dismiss")
                             .ghost()
                             .xsmall()
-                            .label("收起")
+                            .label(tr("收起"))
                             .on_click({
                                 let entity = entity.clone();
                                 move |_, _, app| {
@@ -424,7 +425,7 @@ impl InsightView {
                     div()
                         .text_xs()
                         .text_color(colors.muted_foreground)
-                        .child("正在对比列值重叠…"),
+                        .child(tr("正在对比列值重叠…")),
                 ),
             );
         } else if let Some(notice) = &self.overlap_notice {
@@ -456,7 +457,7 @@ impl InsightView {
                 div()
                     .text_xs()
                     .text_color(colors.muted_foreground)
-                    .child("两表没有类型兼容的同名列，无法做值重叠对比"),
+                    .child(tr("两表没有类型兼容的同名列，无法做值重叠对比")),
             );
             return body;
         }
@@ -493,7 +494,7 @@ impl InsightView {
                 .pt_1()
                 .text_xs()
                 .text_color(colors.muted_foreground)
-                .child("百分比 = 重叠值占该表去重值域的比例"),
+                .child(tr("百分比 = 重叠值占该表去重值域的比例")),
         )
     }
 }

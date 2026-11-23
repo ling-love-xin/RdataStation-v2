@@ -1,5 +1,6 @@
 //! 标签对话框：列表、三态勾选、新建与批量应用。
 
+use shared::i18n::tr;
 use super::*;
 
 pub fn open_tag_dialog(
@@ -78,7 +79,7 @@ pub fn open_tag_dialog(
                     .py_2()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("还没有任何标签——在下面输入一个名字即可新建"),
+                    .child(tr("还没有任何标签——在下面输入一个名字即可新建")),
             );
         }
         for option in options.iter() {
@@ -167,7 +168,7 @@ pub fn open_tag_dialog(
                                 .flex_none()
                                 .text_xs()
                                 .text_color(theme.colors.warning)
-                                .child("部分"),
+                                .child(tr("部分")),
                         )
                     })
                     .child(
@@ -238,7 +239,7 @@ pub fn open_tag_dialog(
                         Button::new("tag-create")
                             .small()
                             .debug_selector(|| "tag-create".to_string())
-                            .label("新建并打上")
+                            .label(tr("新建并打上"))
                             .disabled(!can_create)
                             .on_click({
                                 let dispatch_create = dispatch_create.clone();
@@ -301,7 +302,7 @@ pub fn open_tag_dialog(
                             .with_variant(ButtonVariant::Secondary)
                             .small()
                             .debug_selector(|| "tag-close".to_string())
-                            .label("取消")
+                            .label(tr("取消"))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
                     .child(

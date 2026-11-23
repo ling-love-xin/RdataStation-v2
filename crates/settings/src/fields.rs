@@ -9,6 +9,7 @@
 //! 依赖只向下：只依赖 `settings` 自身 + gpui-kit，不引 engine / 对话框。
 //! `render` 是纯读路径；写入只经 `bridge::write_scalar`（唯一写入路径）。
 
+use shared::i18n::tr;
 use std::rc::Rc;
 
 use gpui_kit::base::Disableable as _;
@@ -88,13 +89,15 @@ pub fn value_item(
                     .py_1()
                     .text_xs()
                     .text_color(cx.theme().colors.muted_foreground)
-                    .child("该能力已预留，尚未启用")
+                    .child(tr("该能力已预留，尚未启用"))
             })
             .into_any_element()
         } else if spec.hint_inline {
             body.into_any_element()
         } else {
-            let hint = spec.hint;
+            // 登记表里存中文原文（registry 是 OnceLock 固化，不能在那里翻译）；
+            // 显示名与悬停说明在这里按当前语言取。
+            let hint = tr(spec.hint);
             HoverCard::new(ElementId::Name(SharedString::from(spec.key)))
                 .trigger(body)
                 .content(move |_, _window, cx| {
@@ -115,15 +118,15 @@ pub fn value_item(
         },
     );
 
-    let mut item = SettingItem::new(spec.label, field)
+    let mut item = SettingItem::new(tr(spec.label), field)
         .disabled(spec.disabled)
         .keywords([
             SharedString::from(spec.key),
-            SharedString::from(spec.section_label),
+            SharedString::from(tr(spec.section_label)),
         ]);
     // 只有行内说明的才给组件 `.description`；悬停提示的由上面的 HoverCard 承担。
     if spec.hint_inline {
-        item = item.description(spec.hint);
+        item = item.description(tr(spec.hint));
     }
     item
 }
@@ -397,10 +400,10 @@ pub fn type_style_matrix(host: &SettingsHost, notify: &Rc<dyn Fn(&mut App)>) -> 
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(theme.colors.muted_foreground)
             .child(div().w(rems(4.)).flex_none())
-            .child(div().w(rems(9.)).flex_none().child("对齐"))
-            .child(div().w(rems(10.)).flex_none().child("着色"))
-            .child(div().w(rems(10.)).flex_none().child("背景"))
-            .child(div().w(rems(9.)).flex_none().child("字体"));
+            .child(div().w(rems(9.)).flex_none().child(tr("对齐")))
+            .child(div().w(rems(10.)).flex_none().child(tr("着色")))
+            .child(div().w(rems(10.)).flex_none().child(tr("背景")))
+            .child(div().w(rems(9.)).flex_none().child(tr("字体")));
         let mut body = div().v_flex();
         for (align_key, color_key, bg_key, font_key, name) in ROWS {
             body = body.child(
@@ -769,7 +772,7 @@ fn render_control(
             let host_changed = host_changed.clone();
             let key = spec.key;
             let state = window.use_keyed_state(key, cx, move |window, cx| {
-                let mut state = InputState::new(window, cx).placeholder(spec.hint);
+                let mut state = InputState::new(window, cx).placeholder(tr(spec.hint));
                 state.set_value(current.clone(), window, cx);
                 // init 的 `cx` 是输入框实体的 `Context`：订阅自身 `Change`，
                 // listener 的 `Context<T>` Deref 到 `App`，可直接写设置。
@@ -859,8 +862,8 @@ fn tab_bar_preview(cx: &App) -> Div {
         .child(
             TabBar::new("tab-preview")
                 .with_variant(variant)
-                .child(Tab::new().label("查询1").selected(true))
-                .child(Tab::new().label("查询2"))
-                .child(Tab::new().label("长标签名示例")),
+                .child(Tab::new().label(tr("查询1")).selected(true))
+                .child(Tab::new().label(tr("查询2")))
+                .child(Tab::new().label(tr("长标签名示例"))),
         )
 }

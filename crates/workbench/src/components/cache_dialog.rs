@@ -5,6 +5,7 @@
 //!
 //! 入口两处：设置面板「数据源导航 → 缓存管理…」与数据源导航面板头 `⋯` 菜单。
 
+use shared::i18n::tr;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -144,7 +145,7 @@ pub fn open_cache_dialog(window: &mut Window, cx: &mut App, shared: &Shared) {
                 .w_full()
                 .gap_2()
                 .text_xs()
-                .child(div().flex_1().child("元数据缓存"))
+                .child(div().flex_1().child(tr("元数据缓存")))
                 .child(
                     div()
                         .text_color(theme.colors.muted_foreground)
@@ -156,7 +157,7 @@ pub fn open_cache_dialog(window: &mut Window, cx: &mut App, shared: &Shared) {
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("暂无连接缓存。"),
+                    .child(tr("暂无连接缓存。")),
             );
         } else {
             for e in list.iter() {
@@ -189,7 +190,7 @@ pub fn open_cache_dialog(window: &mut Window, cx: &mut App, shared: &Shared) {
                                 ))))
                                 .ghost()
                                 .small()
-                                .label("清理")
+                                .label(tr("清理"))
                                 .disabled(!e.exists)
                                 .on_click({
                                     let shared = shared_build.clone();
@@ -217,7 +218,7 @@ pub fn open_cache_dialog(window: &mut Window, cx: &mut App, shared: &Shared) {
             .iter()
             .filter(|e| e.scope == CacheScope::Global)
             .count();
-        body = body.child(Separator::horizontal().label("孤儿缓存"));
+        body = body.child(Separator::horizontal().label(tr("孤儿缓存")));
         body = body.child(
             div()
                 .h_flex()
@@ -232,7 +233,7 @@ pub fn open_cache_dialog(window: &mut Window, cx: &mut App, shared: &Shared) {
                     Button::new("cache-clear-orphans")
                         .ghost()
                         .small()
-                        .label("清理孤儿")
+                        .label(tr("清理孤儿"))
                         .disabled(orphan_global == 0)
                         .on_click({
                             let shared = shared_build.clone();
@@ -256,7 +257,7 @@ pub fn open_cache_dialog(window: &mut Window, cx: &mut App, shared: &Shared) {
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("暂无孤儿缓存。"),
+                    .child(tr("暂无孤儿缓存。")),
             );
         } else {
             for e in orphan_list.iter() {
@@ -298,20 +299,20 @@ pub fn open_cache_dialog(window: &mut Window, cx: &mut App, shared: &Shared) {
         }
 
         dialog
-            .title("缓存管理")
+            .title(tr("缓存管理"))
             .child(standard_dialog_body(body))
             .child(
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("缓存默认不随断开 / 删除连接清除；仅此处显式清理。"),
+                    .child(tr("缓存默认不随断开 / 删除连接清除；仅此处显式清理。")),
             )
             .footer(
                 DialogFooter::new()
                     .child(
                         Button::new("cache-clear-all")
                             .with_variant(ButtonVariant::Danger)
-                            .label("清理全部")
+                            .label(tr("清理全部"))
                             .on_click({
                                 let shared = shared_build.clone();
                                 let entries = entries_build.clone();
@@ -340,7 +341,7 @@ pub fn open_cache_dialog(window: &mut Window, cx: &mut App, shared: &Shared) {
                     )
                     .child(
                         Button::new("cache-close")
-                            .label("关闭")
+                            .label(tr("关闭"))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     ),
             )

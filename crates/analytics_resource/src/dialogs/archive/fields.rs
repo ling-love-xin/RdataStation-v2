@@ -1,5 +1,6 @@
 //! 归档表单的字段件：只读块、分组选择、模式选择、标签与提示。
 
+use shared::i18n::tr;
 use super::*;
 
 /// 只读信息区：来源 / 落点或源位置 / 来源连接。
@@ -76,9 +77,9 @@ pub(super) fn group_picker(group_id: &Rc<std::cell::RefCell<Option<String>>>, gr
         .dropdown_menu({
             let target = group_id.clone();
             move |menu, _window, _cx| {
-                let mut menu = menu.item(PopupMenuItem::label("分组"));
+                let mut menu = menu.item(PopupMenuItem::label(tr("分组")));
                 let target_none = target.clone();
-                menu = menu.item(PopupMenuItem::new("未分组").checked(is_none).on_click(
+                menu = menu.item(PopupMenuItem::new(tr("未分组")).checked(is_none).on_click(
                     move |_, window, _cx| {
                         *target_none.borrow_mut() = None;
                         window.refresh();

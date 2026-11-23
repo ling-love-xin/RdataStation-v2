@@ -142,7 +142,7 @@ pub fn menu_entries(snapshot: Option<&SourcesSnapshot>) -> Vec<SourceMenuEntry> 
     }
 
     entries.push(SourceMenuEntry::Action {
-        label: "重新挂载全部源（刷新表清单）".to_string(),
+        label: shared::i18n::tr("重新挂载全部源（刷新表清单）").to_string(),
         action: crate::execution::SourceAction::RefreshAll,
     });
     for row in snapshot.sources.iter().filter(|row| row.state.is_ready()) {

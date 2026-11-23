@@ -1,5 +1,6 @@
 //! 页签域（`panel/` 第六块）：值详情 / 统计 / 分组 / 引用 / 执行 SQL 各右栏页签。
 
+use shared::i18n::tr;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt as _;
@@ -306,7 +307,7 @@ impl ResultPanel {
                 .xsmall()
                 .debug_selector(|| "editor-result-value-copy".to_string())
                 .icon(IconName::Copy)
-                .tooltip("复制当前单元格的值")
+                .tooltip(tr("复制当前单元格的值"))
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::CopyValue, app);
                 })
@@ -809,7 +810,7 @@ impl ResultPanel {
             .ghost()
             .xsmall()
             .icon(IconName::Menu)
-            .tooltip("视图菜单（切换面板 / 显示与布局）")
+            .tooltip(tr("视图菜单（切换面板 / 显示与布局）"))
             .debug_selector(move || menu_id.clone());
         DropdownButton::new(format!("{debug_id}-view-menu-anchor"))
             .button(button)
@@ -918,7 +919,7 @@ impl ResultPanel {
                 .ghost()
                 .xsmall()
                 .icon(IconName::Plus)
-                .tooltip("九项统计都已启用")
+                .tooltip(tr("九项统计都已启用"))
                 .disabled(true)
                 .into_any_element()
         } else {
@@ -931,7 +932,7 @@ impl ResultPanel {
                         .xsmall()
                         .debug_selector(|| "editor-result-stat-add".to_string())
                         .icon(IconName::Plus)
-                        .tooltip("添加统计项"),
+                        .tooltip(tr("添加统计项")),
                 )
                 .dropdown_menu(move |menu, _window, _app| {
                     let mut menu = menu;
@@ -954,7 +955,7 @@ impl ResultPanel {
                 .xsmall()
                 .debug_selector(|| "editor-result-stat-reset".to_string())
                 .icon(IconName::RotateCcw)
-                .tooltip("恢复默认统计项（对齐 DBeaver 默认集：非空 + 去重计数）")
+                .tooltip(tr("恢复默认统计项（对齐 DBeaver 默认集：非空 + 去重计数）"))
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::ResetStatsItems, app);
                 })
@@ -972,7 +973,7 @@ impl ResultPanel {
                 .label(if text_mode { "字符串" } else { "数值" })
                 .selected(text_mode)
                 .toggled(text_mode)
-                .tooltip("聚合口径：数值时最小/最大值按数值比较；字符串时按字典序（文本列也给极值）")
+                .tooltip(tr("聚合口径：数值时最小/最大值按数值比较；字符串时按字典序（文本列也给极值）"))
                 .on_click(move |_, _window, app| {
                     queue.request(
                         ResultRequest::SetStatsMode(if text_mode {
@@ -1172,7 +1173,7 @@ impl ResultPanel {
                         .xsmall()
                         .debug_selector(|| "editor-result-group-columns".to_string())
                         .icon(IconName::Table2)
-                        .label("列"),
+                        .label(tr("列")),
                 )
                 .dropdown_menu(move |menu, _window, _app| {
                     let mut menu = menu;
@@ -1205,7 +1206,7 @@ impl ResultPanel {
                 .xsmall()
                 .debug_selector(|| "editor-result-group-sort".to_string())
                 .label(self.group_sort.label())
-                .tooltip("切换分组结果的排序口径".to_string())
+                .tooltip(tr("切换分组结果的排序口径").to_string())
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::SetGroupSort(next), app);
                 })
@@ -1219,12 +1220,12 @@ impl ResultPanel {
                 .ghost()
                 .xsmall()
                 .debug_selector(|| "editor-result-group-dup".to_string())
-                .label("仅重复")
+                .label(tr("仅重复"))
                 .selected(duplicates_on)
                 .toggled(duplicates_on)
                 // DBeaver `controls_resultset_grouping_show_duplicates_only`
                 // = "Show duplicates only (COUNT > 1)"
-                .tooltip("仅显示重复分组（COUNT > 1）".to_string())
+                .tooltip(tr("仅显示重复分组（COUNT > 1）").to_string())
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::SetGroupDuplicatesOnly(!duplicates_on), app);
                 })
@@ -1270,7 +1271,7 @@ impl ResultPanel {
                 .debug_selector(|| "editor-result-group-remove".to_string())
                 .icon(IconName::CircleMinus)
                 .disabled(!enabled)
-                .tooltip("移除分组列".to_string())
+                .tooltip(tr("移除分组列").to_string())
                 .on_click(move |_, _window, app| {
                     // 复用勾选语义：已在集合里 → 移除（与下拉取消勾选同一路径）
                     queue.request(ResultRequest::ToggleGroupColumn(column), app);
@@ -1289,7 +1290,7 @@ impl ResultPanel {
                 .debug_selector(|| "editor-result-group-clear".to_string())
                 .icon(IconName::CircleX)
                 .disabled(!enabled)
-                .tooltip("清空分组列".to_string())
+                .tooltip(tr("清空分组列").to_string())
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::ClearGroupColumns, app);
                 })
@@ -1480,7 +1481,7 @@ impl ResultPanel {
                     .ghost()
                     .xsmall()
                     .label(label)
-                    .tooltip("选择引用键（本表外键）".to_string())
+                    .tooltip(tr("选择引用键（本表外键）").to_string())
                     .debug_selector(|| "editor-result-reference-keys".to_string()),
             )
             .menu_accessibility_label("引用键")
@@ -1514,8 +1515,8 @@ impl ResultPanel {
             .ghost()
             .xsmall()
             .icon(IconName::Rows3)
-            .label("查看引用行")
-            .tooltip("按当前行的外键值查询目标表（另开一份结果集）".to_string())
+            .label(tr("查看引用行"))
+            .tooltip(tr("按当前行的外键值查询目标表（另开一份结果集）").to_string())
             .debug_selector(|| "editor-result-reference-rows".to_string())
             .disabled(rows_sql.is_none())
             .on_click(move |_, _window, app| {
@@ -1536,8 +1537,8 @@ impl ResultPanel {
             .ghost()
             .xsmall()
             .icon(IconName::Table)
-            .label("打开目标对象")
-            .tooltip("在导航树里定位该外键的目标表".to_string())
+            .label(tr("打开目标对象"))
+            .tooltip(tr("在导航树里定位该外键的目标表").to_string())
             .debug_selector(|| "editor-result-reference-open".to_string())
             .disabled(target.is_none())
             .on_click(move |_, _window, app| {

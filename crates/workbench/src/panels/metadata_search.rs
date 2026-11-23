@@ -20,6 +20,7 @@
 //! 「定位」按钮（判据 `database::nav_view::search_hit_locatable`，与导航结果行同一处）
 //! → `Shared::request_reveal` 在导航树中定位。
 
+use shared::i18n::tr;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -252,13 +253,13 @@ impl Render for MetadataSearchHostPanel {
                         .text_sm()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(fg)
-                        .child("搜索"),
+                        .child(tr("搜索")),
                 )
                 .child(
                     div()
                         .text_xs()
                         .text_color(muted)
-                        .child("在顶部搜索框输入关键词回车，结果会显示在这里"),
+                        .child(tr("在顶部搜索框输入关键词回车，结果会显示在这里")),
                 );
         };
 
@@ -266,7 +267,7 @@ impl Render for MetadataSearchHostPanel {
         // 输入框懒建：首次取当前 query 为初值，之后为用户自主编辑区（不跟随任何入口）。
         if self.panel_input.is_none() {
             let input = cx.new(|cx| {
-                let mut state = InputState::new(window, cx).placeholder("搜索元数据");
+                let mut state = InputState::new(window, cx).placeholder(tr("搜索元数据"));
                 if !search.query.is_empty() {
                     state.set_value(search.query.clone(), window, cx);
                 }
@@ -367,7 +368,7 @@ impl Render for MetadataSearchHostPanel {
                     .ghost()
                     .small()
                     .icon(IconName::EllipsisVertical)
-                    .tooltip("列表菜单：切换视图布局 / 导出结果（后续）")
+                    .tooltip(tr("列表菜单：切换视图布局 / 导出结果（后续）"))
                     .on_click(|_, _, _| {}),
             );
 
@@ -592,7 +593,7 @@ fn render_metadata_search_pane(
                     Button::new(format!("md-locate-{conn_id}-{row_ix}"))
                         .ghost()
                         .xsmall()
-                        .label("定位")
+                        .label(tr("定位"))
                         .on_click(move |_, _, app| {
                             app.stop_propagation();
                             locate_hit(hit_for_locate.clone(), app);
@@ -648,8 +649,8 @@ fn render_footer(
             Button::new("md-clear")
                 .ghost()
                 .small()
-                .label("关闭")
-                .tooltip("关闭结果（保留标签页）")
+                .label(tr("关闭"))
+                .tooltip(tr("关闭结果（保留标签页）"))
                 .on_click(clear),
         )
 }

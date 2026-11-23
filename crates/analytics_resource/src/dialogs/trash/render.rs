@@ -1,5 +1,6 @@
 //! 回收站对话框的渲染件：表头与条目行。
 
+use shared::i18n::tr;
 use super::*;
 
 /// 表头（列名与下面各行的列宽一一对应）。
@@ -15,15 +16,15 @@ pub(super) fn header_line(theme: &Theme) -> Div {
         .border_color(theme.colors.border)
         .text_xs()
         .text_color(theme.colors.muted_foreground)
-        .child(div().w(rems(ui::TRASH_COL_NAME)).flex_none().child("名称"))
-        .child(div().flex_1().min_w_0().child("原位置"))
+        .child(div().w(rems(ui::TRASH_COL_NAME)).flex_none().child(tr("名称")))
+        .child(div().flex_1().min_w_0().child(tr("原位置")))
         .child(
             div()
                 .w(rems(ui::TRASH_COL_TIME))
                 .flex_none()
-                .child("删除时间"),
+                .child(tr("删除时间")),
         )
-        .child(div().w(rems(ui::TRASH_COL_SIZE)).flex_none().child("大小"))
+        .child(div().w(rems(ui::TRASH_COL_SIZE)).flex_none().child(tr("大小")))
         .child(div().w(rems(ui::TRASH_COL_ACTION)).flex_none().child(""))
 }
 
@@ -186,7 +187,7 @@ pub(super) fn trash_line(
                         .ghost()
                         .small()
                         .debug_selector(move || format!("trash-restore-{index}"))
-                        .label("还原")
+                        .label(tr("还原"))
                         .disabled(!can_write)
                         .on_click(restore),
                 )
@@ -195,7 +196,7 @@ pub(super) fn trash_line(
                         .ghost()
                         .small()
                         .debug_selector(move || format!("trash-purge-{index}"))
-                        .label("永久删除")
+                        .label(tr("永久删除"))
                         .disabled(!can_write)
                         .on_click(purge),
                 ),

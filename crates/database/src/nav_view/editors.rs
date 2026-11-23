@@ -6,6 +6,7 @@
 //! 标签编辑器不在行内：2026-11-08 撤掉连接行尾 `+` / `✎` 后，行内标签面板失去入口，
 //! 整条链路已删除；打标签走右键「打标签…」Popover（对象级勾选）。
 
+use shared::i18n::tr;
 use super::*;
 
 impl NavView {
@@ -49,7 +50,7 @@ impl NavView {
             .border_1()
             .border_color(border)
             .bg(bg)
-            .child(div().flex_none().text_xs().text_color(muted).child("归组"));
+            .child(div().flex_none().text_xs().text_color(muted).child(tr("归组")));
 
         for group in &groups {
             let checked = membership.iter().any(|g| g == &group.id);
@@ -114,7 +115,7 @@ impl NavView {
                 .ghost()
                 .xsmall()
                 .icon(Icon::empty().path("icons/plus.svg").text_color(accent))
-                .label("新建分组")
+                .label(tr("新建分组"))
                 .text_color(accent)
                 .on_click({
                     let entity = cx.entity();
@@ -183,7 +184,7 @@ impl NavView {
                     .flex_none()
                     .text_xs()
                     .text_color(muted)
-                    .child("复制为模板（不带密码；回车提交）"),
+                    .child(tr("复制为模板（不带密码；回车提交）")),
             );
         if let Some(input) = &self.nav_copy_input {
             panel = panel.child(Input::new(input));
@@ -193,7 +194,7 @@ impl NavView {
                 Button::new("nav-copy-cancel")
                     .ghost()
                     .small()
-                    .label("取消")
+                    .label(tr("取消"))
                     .on_click(move |_, _, app| {
                         entity.update(app, |this, cx| this.cancel_copy_connection(cx));
                     }),
@@ -287,7 +288,7 @@ impl NavView {
             Ok(()) => {
                 self.reload_nav_org();
                 self.host
-                    .notice("分组已删除（成员连接保留）".to_string(), cx);
+                    .notice(tr("分组已删除（成员连接保留）").to_string(), cx);
             }
             Err(e) => self.host.notice(format!("删除分组失败: {e}"), cx),
         }

@@ -2,6 +2,7 @@
 //!
 //! 自 host/mod.rs 拆分（2026-10-29 Step 5）：`impl EditorHostPanel` 尾部与 trait 实现按职责迁出，mod.rs 收敛为核心状态与调度。
 //!
+use shared::i18n::tr;
 use super::*;
 
 impl Render for EditorHostPanel {
@@ -427,7 +428,7 @@ pub(crate) fn render_editor_status_bar(
             .label(eol.label())
             .w(rems(ui::EOL_SLOT_WIDTH))
             .flex_none()
-            .tooltip("换行符（点击切换 LF / CRLF）")
+            .tooltip(tr("换行符（点击切换 LF / CRLF）"))
             .on_click(move |_, _window, app| {
                 let next = match eol {
                     crate::encoding::LineEnding::Lf => crate::encoding::LineEnding::Crlf,
@@ -448,7 +449,7 @@ pub(crate) fn render_editor_status_bar(
             .small()
             .debug_selector(|| "editor-encoding".to_string())
             .label(current.short_label())
-            .tooltip("编码（点击选择）")
+            .tooltip(tr("编码（点击选择）"))
             .on_click(move |_, window, app| {
                 let entity = entity.clone();
                 crate::view::encoding_dialog::open_encoding_dialog(
@@ -478,7 +479,7 @@ pub(crate) fn render_editor_status_bar(
             } else {
                 format!("空格: {current_tab}")
             })
-            .tooltip("缩进设置（点击打开）")
+            .tooltip(tr("缩进设置（点击打开）"))
             .on_click(move |_, window, app| {
                 let entity = entity.clone();
                 let hard = hard_tabs;
@@ -533,7 +534,7 @@ pub(crate) fn render_editor_status_bar(
             .debug_selector(|| "editor-invisible".to_string())
             .label("¶")
             .toggled(show_invisible)
-            .tooltip("不可见字符标注（点击自定义：零宽 / 特殊空格 / 双向控制 / 控制字符）")
+            .tooltip(tr("不可见字符标注（点击自定义：零宽 / 特殊空格 / 双向控制 / 控制字符）"))
             .on_click(move |_, window, app| {
                 let entity = entity.clone();
                 let current_mask = mask;
@@ -560,7 +561,7 @@ pub(crate) fn render_editor_status_bar(
             .debug_selector(|| "editor-whitespace".to_string())
             .label("␣")
             .toggled(show_ws)
-            .tooltip("显示空白字符（空格 · / 制表符 →）")
+            .tooltip(tr("显示空白字符（空格 · / 制表符 →）"))
             .on_click(move |_, window, app| {
                 let entity = entity.clone();
                 let next = !show_ws;
@@ -603,7 +604,7 @@ pub(crate) fn render_editor_status_bar(
             .ghost()
             .small()
             .debug_selector(|| "editor-interrupt".to_string())
-            .label("■ 中断")
+            .label(tr("■ 中断"))
             .on_click(move |_, _window, app| {
                 entity.update(app, |panel, cx| panel.interrupt(cx));
             })
@@ -779,12 +780,12 @@ pub(crate) fn render_conn_slots(
         .dropdown_menu(move |menu, _window, _cx| {
             let mut menu = menu;
             if !has_port {
-                return menu.item(PopupMenuItem::new("（未接入连接列表）").disabled(true));
+                return menu.item(PopupMenuItem::new(tr("（未接入连接列表）")).disabled(true));
             }
             let follow_entity = conn_entity.clone();
             let unbound = bound.is_none();
             menu = menu.item(
-                PopupMenuItem::new("跟随当前连接")
+                PopupMenuItem::new(tr("跟随当前连接"))
                     .checked(unbound)
                     .on_click(move |_, _window, app| {
                         follow_entity.update(app, |panel, cx| {
@@ -801,7 +802,7 @@ pub(crate) fn render_conn_slots(
                 .map(|o| (format!("{}·{}", o.short, o.name), o.id.clone()))
                 .collect();
             if online_conns.is_empty() {
-                return menu.item(PopupMenuItem::new("（暂无在线连接）").disabled(true));
+                return menu.item(PopupMenuItem::new(tr("（暂无在线连接）")).disabled(true));
             }
             for (label, id) in &online_conns {
                 let entity = conn_entity.clone();
@@ -873,7 +874,7 @@ pub(crate) fn render_conn_slots(
             .dropdown_menu(move |menu, _window, _cx| {
                 let mut menu = menu;
                 if schemas_menu.is_empty() {
-                    return menu.item(PopupMenuItem::new("（暂无可切 Schema）").disabled(true));
+                    return menu.item(PopupMenuItem::new(tr("（暂无可切 Schema）")).disabled(true));
                 }
                 for item in &schemas_menu {
                     let entity = entity.clone();
@@ -892,7 +893,7 @@ pub(crate) fn render_conn_slots(
                 let entity = entity.clone();
                 let using_default = current_schema.is_none();
                 menu = menu.item(
-                    PopupMenuItem::new("使用连接默认")
+                    PopupMenuItem::new(tr("使用连接默认"))
                         .checked(using_default)
                         .on_click(move |_, _window, app| {
                             entity.update(app, |panel, cx| panel.set_schema(None, cx));

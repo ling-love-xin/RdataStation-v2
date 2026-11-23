@@ -1,6 +1,7 @@
 //! 项目设置：磁盘 / 名册 / 版本台账快照（`SettingsSnapshot` 与 `load_settings_snapshot`）
 //! 与设置面板渲染（含版本台账的行内两段式删除）。
 
+use shared::i18n::tr;
 use super::*;
 
 // ==================== 设置面板的磁盘 / 名册快照（B2 / B3） ====================
@@ -230,7 +231,7 @@ pub fn render_current_settings(
         div()
             .text_xs()
             .text_color(theme.colors.success)
-            .child("依赖自检：未发现缺失驱动")
+            .child(tr("依赖自检：未发现缺失驱动"))
     } else {
         div()
             .text_xs()
@@ -262,7 +263,7 @@ pub fn render_current_settings(
                             div()
                                 .text_xs()
                                 .text_color(theme.colors.warning)
-                                .child("只读（写操作已禁用）"),
+                                .child(tr("只读（写操作已禁用）")),
                         )
                     }),
             )
@@ -298,7 +299,7 @@ pub fn render_current_settings(
                         Button::new("proj-info-save")
                             .secondary()
                             .disabled(read_only)
-                            .label("保存项目信息")
+                            .label(tr("保存项目信息"))
                             .on_click(move |_, window, app| {
                                 save_project_info(&host_rename, &inputs_rename, window, app)
                             }),
@@ -333,7 +334,7 @@ pub fn render_current_settings(
                         Button::new("proj-open-meta")
                             .secondary()
                             .icon(IconName::FolderOpen)
-                            .label("打开 .RSmeta")
+                            .label(tr("打开 .RSmeta"))
                             .on_click(move |_, _, _| reveal_in_explorer(&host_reveal)),
                     )
                     .child(section(theme, "依赖"))
@@ -353,7 +354,7 @@ pub fn render_current_settings(
                                 Button::new("proj-version-add")
                                     .secondary()
                                     .disabled(read_only)
-                                    .label("创建版本快照")
+                                    .label(tr("创建版本快照"))
                                     .on_click(move |_, window, app| {
                                         create_version_action(
                                             &host_version,
@@ -373,7 +374,7 @@ pub fn render_current_settings(
                                 Button::new("proj-archive")
                                     .secondary()
                                     .disabled(read_only)
-                                    .label("归档 / 取消归档")
+                                    .label(tr("归档 / 取消归档"))
                                     .on_click(move |_, window, app| {
                                         toggle_archive(&host_archive, window, app)
                                     }),
@@ -382,7 +383,7 @@ pub fn render_current_settings(
                                 Button::new("proj-remove")
                                     .secondary()
                                     .disabled(read_only)
-                                    .label("移出列表")
+                                    .label(tr("移出列表"))
                                     .on_click(move |_, _, app| {
                                         soft_remove_current(&host_remove, app)
                                     }),
@@ -391,7 +392,7 @@ pub fn render_current_settings(
                                 Button::new("proj-delete")
                                     .danger()
                                     .disabled(read_only)
-                                    .label("删除数据…")
+                                    .label(tr("删除数据…"))
                                     .on_click(move |_, window, app| {
                                         open_delete_dialog_for_current(
                                             &host_delete,
@@ -405,7 +406,7 @@ pub fn render_current_settings(
                     .child(
                         Button::new("proj-reload")
                             .secondary()
-                            .label("刷新列表与结构树")
+                            .label(tr("刷新列表与结构树"))
                             .on_click(move |_, _, app| {
                                 refresh_picker(&host_reload, app);
                                 load_settings_snapshot(&host_reload, app);
@@ -542,7 +543,7 @@ pub(super) fn default_connection_picker(
         .dropdown_caret(true)
         .dropdown_menu(move |menu, _window, _cx| {
             let mut menu = menu.item(
-                PopupMenuItem::new("（不设默认）")
+                PopupMenuItem::new(tr("（不设默认）"))
                     .checked(current_for_menu.is_none())
                     .disabled(current_for_menu.is_none())
                     .on_click({
@@ -608,7 +609,7 @@ pub(super) fn versions_view(
         list = list.child(
             div()
                 .text_color(theme.colors.muted_foreground)
-                .child("暂无版本记录"),
+                .child(tr("暂无版本记录")),
         );
     } else {
         for v in &snapshot.versions {
@@ -638,7 +639,7 @@ pub(super) fn versions_view(
                         Button::new(format!("ver-del-confirm-{id_confirm}"))
                             .danger()
                             .small()
-                            .label("确认删除")
+                            .label(tr("确认删除"))
                             .on_click(move |_, window, app| {
                                 confirm_version_delete(&host_confirm, &id_confirm, window, app)
                             }),
@@ -647,7 +648,7 @@ pub(super) fn versions_view(
                         Button::new(format!("ver-del-cancel-{id_cancel}"))
                             .ghost()
                             .small()
-                            .label("取消")
+                            .label(tr("取消"))
                             .on_click(move |_, _, app| cancel_version_delete(&host_cancel, app)),
                     );
             } else {
@@ -658,7 +659,7 @@ pub(super) fn versions_view(
                         .ghost()
                         .small()
                         .disabled(state.read_only)
-                        .label("删除")
+                        .label(tr("删除"))
                         .on_click(move |_, _, app| {
                             request_version_delete(&host_request, &id_request, app)
                         }),

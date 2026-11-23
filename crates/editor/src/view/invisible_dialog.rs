@@ -7,6 +7,7 @@
 //! 双栏语义（对应用户要求「哪些符号可以显示、哪些不用显示」）：左栏开关决定**是否标注**
 //! 该类字符；右栏列出该类具体收录的符号。掩码 = bit0-3（零宽 / 特殊空格 / 双向 / 控制）。
 
+use shared::i18n::tr;
 use std::rc::Rc;
 
 use gpui_kit::base::StyledExt as _;
@@ -85,7 +86,7 @@ pub fn open_invisible_dialog(
                 div()
                     .text_xs()
                     .text_color(muted)
-                    .child("符号明细（收录范围）"),
+                    .child(tr("符号明细（收录范围）")),
             )
             .children(hidden::all_categories().into_iter().map(|cat| {
                 let (name, _) = category_meta(cat);
@@ -119,7 +120,7 @@ pub fn open_invisible_dialog(
             .child(left)
             .child(right);
         let width = theme.font_size * ui::INVISIBLE_DIALOG_WIDTH;
-        dialog.title("不可见字符").w(width).child(body)
+        dialog.title(tr("不可见字符")).w(width).child(body)
     });
 
     state

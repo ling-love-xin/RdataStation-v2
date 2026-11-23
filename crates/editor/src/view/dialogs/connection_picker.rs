@@ -1,5 +1,6 @@
 //! 连接选择器（工具栏「连接名称」点击弹窗）。
 
+use shared::i18n::tr;
 use super::*;
 
 // ==== 连接选择器（工具栏「连接名称」点击弹窗；2026-10-27）====
@@ -88,7 +89,7 @@ impl ListDelegate for ConnectionPickerDelegate {
                                 div()
                                     .text_xs()
                                     .text_color(theme.colors.muted_foreground)
-                                    .child("未连接"),
+                                    .child(tr("未连接")),
                             )
                         }),
                 ),
@@ -107,7 +108,7 @@ impl ListDelegate for ConnectionPickerDelegate {
             .py_6()
             .text_xs()
             .text_color(theme.colors.muted_foreground)
-            .child("（无可用连接）")
+            .child(tr("（无可用连接）"))
             .into_any_element()
     }
 
@@ -171,7 +172,7 @@ pub fn open_connection_picker(
         let only = list.clone();
         let check = Checkbox::new("conn-picker-only-connected")
             .checked(list.read(cx).delegate().only_connected)
-            .label("仅显示连接的数据库")
+            .label(tr("仅显示连接的数据库"))
             .on_click(move |checked, _window, cx| {
                 only.update(cx, |list, cx| {
                     list.delegate_mut().only_connected = *checked;
@@ -186,12 +187,12 @@ pub fn open_connection_picker(
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("选择要绑定到本文档的连接（回车 / 点击确认，Esc 关闭）"),
+                    .child(tr("选择要绑定到本文档的连接（回车 / 点击确认，Esc 关闭）")),
             )
             .child(List::new(&list).max_h(rems(ui::PICKER_LIST_MAX_HEIGHT)))
             .child(check);
         dialog
-            .title("选择数据源")
+            .title(tr("选择数据源"))
             .w(theme.font_size * ui::ENCODING_DIALOG_WIDTH)
             .child(body)
     });

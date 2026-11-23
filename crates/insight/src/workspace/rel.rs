@@ -1,5 +1,6 @@
 //! 关联性域渲染：数值相关 / 分类关联 / 值重叠 + 多列规则触发。
 
+use shared::i18n::tr;
 use super::*;
 
 impl super::InsightWorkspacePanel {
@@ -21,7 +22,7 @@ impl super::InsightWorkspacePanel {
         let tabs = TabBar::new("insight-ws-rel-tabs")
             .segmented()
             .selected_index(current)
-            .children(RelTab::ALL.iter().map(|t| Tab::new().label(t.label())))
+            .children(RelTab::ALL.iter().map(|t| Tab::new().label(tr(t.label()))))
             .on_click({
                 let entity = entity.clone();
                 move |index, _, app| {
@@ -55,7 +56,7 @@ impl super::InsightWorkspacePanel {
                             div()
                                 .text_xs()
                                 .text_color(colors.muted_foreground)
-                                .child("结果展示在右栏集合卡的关系区（T19 关系引擎，同名列类型族过滤）"),
+                                .child(tr("结果展示在右栏集合卡的关系区（T19 关系引擎，同名列类型族过滤）")),
                         ),
                 )
             }
@@ -128,7 +129,7 @@ impl super::InsightWorkspacePanel {
                                     .xsmall()
                                     .icon(CatalogIcon::ListFilter)
                                     .label(format!("列对 {}/{}", selected.len(), numeric.len()))
-                                    .tooltip("选 2 个以上数值列算相关"),
+                                    .tooltip(tr("选 2 个以上数值列算相关")),
                             )
                             .content(move |_state, _window, cx| {
                                 let colors = cx.theme().colors;
@@ -189,7 +190,7 @@ impl super::InsightWorkspacePanel {
                             .xsmall()
                             .icon(CatalogIcon::Sigma)
                             .label(rule_name)
-                            .tooltip("相关方法（DuckDB 原生可算的统计量）")
+                            .tooltip(tr("相关方法（DuckDB 原生可算的统计量）"))
                             .dropdown_menu(move |menu, _, _| {
                                 let mut menu = menu;
                                 for r in rules.iter().filter(|r| {
@@ -218,7 +219,7 @@ impl super::InsightWorkspacePanel {
                             .ghost()
                             .xsmall()
                             .icon(IconName::Play)
-                            .label("计算")
+                            .label(tr("计算"))
                             .disabled(!can_run)
                             .tooltip(if selected.len() < 2 {
                                 "至少选 2 个数值列"
@@ -269,7 +270,7 @@ impl super::InsightWorkspacePanel {
                         div()
                             .text_xs()
                             .text_color(colors.muted_foreground)
-                            .child("多列规则清单未加载：点「计算」会先请求清单（需已进入多列视图）"),
+                            .child(tr("多列规则清单未加载：点「计算」会先请求清单（需已进入多列视图）")),
                     )
                 },
             )
@@ -325,7 +326,7 @@ impl super::InsightWorkspacePanel {
                                     .xsmall()
                                     .icon(CatalogIcon::ListFilter)
                                     .label(format!("列对 {}/{}", selected.len(), text_cols.len()))
-                                    .tooltip("选 2 个文本/分类列算关联"),
+                                    .tooltip(tr("选 2 个文本/分类列算关联")),
                             )
                             .content(move |_state, _window, cx| {
                                 let colors = cx.theme().colors;
@@ -381,14 +382,14 @@ impl super::InsightWorkspacePanel {
                         div()
                             .text_xs()
                             .text_color(colors.muted_foreground)
-                            .child("Cramér's V（卡方独立性）"),
+                            .child(tr("Cramér's V（卡方独立性）")),
                     )
                     .child(
                         Button::new("insight-ws-assoc-run")
                             .ghost()
                             .xsmall()
                             .icon(IconName::Play)
-                            .label("计算")
+                            .label(tr("计算"))
                             .disabled(!can_run)
                             .tooltip(if selected.len() < 2 {
                                 "至少选 2 个文本/分类列"
@@ -449,7 +450,7 @@ impl super::InsightWorkspacePanel {
                         div()
                             .text_xs()
                             .text_color(colors.muted_foreground)
-                            .child("多列规则清单未加载：点「计算」会先请求清单（需已进入多列视图）"),
+                            .child(tr("多列规则清单未加载：点「计算」会先请求清单（需已进入多列视图）")),
                     )
                 },
             )

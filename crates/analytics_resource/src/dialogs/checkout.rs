@@ -8,6 +8,7 @@
 //! 2. **改完会怎样**：提示"修改后再归档将生成 v{version+1}"，让"取回 → 改 → 再归档"这条
 //!    闭环在用户点下去之前就是已知的（否则取回会被当成"下载一份"）。
 
+use shared::i18n::tr;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -112,7 +113,7 @@ pub fn build_inputs(
     cx: &mut App,
     seed: &CheckoutDialogSeed,
 ) -> CheckoutDialogInputs {
-    let file_name = cx.new(|cx| InputState::new(window, cx).placeholder("工作副本文件名"));
+    let file_name = cx.new(|cx| InputState::new(window, cx).placeholder(tr("工作副本文件名")));
     let value = seed.file_name.clone();
     file_name.update(cx, |state, cx| state.set_value(value, window, cx));
     CheckoutDialogInputs {
@@ -177,7 +178,7 @@ pub fn open_checkout_dialog_with(
         let submit_for_ok = submit.clone();
 
         dialog
-            .title("取回（检出）")
+            .title(tr("取回（检出）"))
             .w(cx.theme().font_size * ui::CHECKOUT_DIALOG_WIDTH)
             .child(
                 div()
@@ -209,7 +210,7 @@ pub fn open_checkout_dialog_with(
                     )
                     .child(
                         Checkbox::new("checkout-dialog-open")
-                            .label("取回后打开")
+                            .label(tr("取回后打开"))
                             .checked(checked)
                             .on_click(move |checked, _window, _cx| toggled.set(*checked)),
                     )
@@ -225,7 +226,7 @@ pub fn open_checkout_dialog_with(
                             .with_variant(ButtonVariant::Secondary)
                             .small()
                             .debug_selector(|| "checkout-dialog-cancel".to_string())
-                            .label("取消")
+                            .label(tr("取消"))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
                     .child(
@@ -233,7 +234,7 @@ pub fn open_checkout_dialog_with(
                             .with_variant(ButtonVariant::Primary)
                             .small()
                             .debug_selector(|| "checkout-dialog-ok".to_string())
-                            .label("取回")
+                            .label(tr("取回"))
                             .on_click(move |_, window, cx| {
                                 if !submit_for_button(cx) {
                                     return;

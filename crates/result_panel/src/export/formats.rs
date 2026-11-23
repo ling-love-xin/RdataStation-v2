@@ -247,7 +247,7 @@ pub fn menu_items_for(
     group(&mut items, ExportScope::Fetched);
     if has_more {
         items.push(ExportMenuItem {
-            label: "抓全量后导出（会重跑查询）".to_string(),
+            label: shared::i18n::tr("抓全量后导出（会重跑查询）").to_string(),
             action: None,
             separator_before: true,
         });

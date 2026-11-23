@@ -7,6 +7,7 @@
 //! 后者是宿主层职责（对话框层挂在 `WorkbenchView::render`），因此本模块是长期归属，
 //! 不是过渡文件。
 
+use shared::i18n::tr;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -346,13 +347,13 @@ impl Render for EditorPanel {
                             .text_lg()
                             .font_weight(FontWeight::BOLD)
                             .text_color(theme.colors.foreground)
-                            .child("数据源连接"),
+                            .child(tr("数据源连接")),
                     )
                     .child(
                         div()
                             .text_xs()
                             .text_color(theme.colors.muted_foreground)
-                            .child("选中连接查看真实元数据；本地加速（DuckDB Secret）将在连接建立后自动注册"),
+                            .child(tr("选中连接查看真实元数据；本地加速（DuckDB Secret）将在连接建立后自动注册")),
                     ),
             );
 
@@ -464,7 +465,7 @@ impl Render for EditorPanel {
                                     .danger()
                                     .outline()
                                     .small()
-                                    .label("删除连接")
+                                    .label(tr("删除连接"))
                                     .on_click(move |_, _, app| {
                                         // 项目作用域删除需要当前项目根（未打开项目时传 None）。
                                         let project_root = shared
@@ -500,7 +501,7 @@ impl Render for EditorPanel {
                     )
                     .child(
                         div().v_flex().gap_1().mt_2().pt_2()
-                            .child(div().text_sm().font_weight(FontWeight::MEDIUM).child("数据库导航（DuckDB 分析库）")),
+                            .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(tr("数据库导航（DuckDB 分析库）"))),
                     ),
             );
         }
@@ -515,7 +516,7 @@ impl Render for EditorPanel {
                         div()
                             .text_xs()
                             .text_color(theme.colors.muted_foreground)
-                            .child("分析库暂无表——运行 seed_demo 或导入数据"),
+                            .child(tr("分析库暂无表——运行 seed_demo 或导入数据")),
                     );
                 } else {
                     for table in nav.iter() {
@@ -575,7 +576,7 @@ impl Render for EditorPanel {
                 div()
                     .text_sm()
                     .font_weight(FontWeight::MEDIUM)
-                    .child("Mock 数据（生成测试数据）"),
+                    .child(tr("Mock 数据（生成测试数据）")),
             ),
         );
 
@@ -603,7 +604,7 @@ impl Render for EditorPanel {
         content = content.child(
             Button::new("mock-generate-btn")
                 .primary()
-                .label("生成 Mock")
+                .label(tr("生成 Mock"))
                 .on_click({
                     let shared = self.shared.clone();
                     move |_, _, app| {
@@ -617,7 +618,7 @@ impl Render for EditorPanel {
             Button::new("new-connection")
                 .primary()
                 .icon(IconName::Plus)
-                .label("新建连接")
+                .label(tr("新建连接"))
                 .on_click({
                     let entity = entity.clone();
                     move |_, window, app| {
@@ -685,7 +686,7 @@ impl ComponentPanel for EditorPanel {
                 div()
                     .text_sm()
                     .font_weight(FontWeight::MEDIUM)
-                    .child("工作台"),
+                    .child(tr("工作台")),
             )
     }
 }

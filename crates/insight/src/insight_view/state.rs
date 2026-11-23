@@ -1,3 +1,4 @@
+use shared::i18n::tr;
 use super::*;
 
 impl InsightView {
@@ -742,7 +743,7 @@ impl InsightView {
                     div()
                         .text_xs()
                         .text_color(theme.colors.muted_foreground)
-                        .child("正文与版本链一并删除，不可撤销。"),
+                        .child(tr("正文与版本链一并删除，不可撤销。")),
                 );
             // 空的时候不摆一行「当前：」——那是没话找话
             if !current.is_empty() {
@@ -754,13 +755,13 @@ impl InsightView {
                 );
             }
             dialog
-                .title("清理旧快照")
+                .title(tr("清理旧快照"))
                 .child(body)
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text("清理")
                         .ok_variant(ButtonVariant::Danger)
-                        .cancel_text("取消")
+                        .cancel_text(tr("取消"))
                         .show_cancel(true),
                 )
                 .on_ok({

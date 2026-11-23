@@ -12,6 +12,7 @@
 //! 返回 `Entity<ListState<ManualDelegate>>`：测试可直接驱动 delegate 的
 //! `perform_search` / `confirm`（headless 点击到不了对话框层，沿用项目既有口径）。
 
+use shared::i18n::tr;
 use std::rc::Rc;
 
 use gpui_kit::base::StyledExt as _;
@@ -60,7 +61,7 @@ impl ListDelegate for ManualDelegate {
             .child(
                 div()
                     .flex_none()
-                    .font_family("monospace")
+                    .font_family(theme.mono_font_family.clone())
                     .text_sm()
                     .text_color(theme.colors.foreground)
                     .child(entry.name),
@@ -121,9 +122,9 @@ impl ListDelegate for ManualDelegate {
             .child(
                 div()
                     .text_color(theme.colors.foreground)
-                    .child("无匹配函数"),
+                    .child(tr("无匹配函数")),
             )
-            .child("试试输入函数名（substr）或中文语义（截取 / 日期）")
+            .child(tr("试试输入函数名（substr）或中文语义（截取 / 日期）"))
             .into_any_element()
     }
 
@@ -200,11 +201,11 @@ pub fn open_function_manual(
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("输入函数名或中文语义，回车插入函数名"),
+                    .child(tr("输入函数名或中文语义，回车插入函数名")),
             )
             .child(List::new(&list));
         dialog
-            .title("函数手册")
+            .title(tr("函数手册"))
             .w(theme.font_size * ui::FUNCTION_MANUAL_DIALOG_WIDTH)
             .child(body)
     });

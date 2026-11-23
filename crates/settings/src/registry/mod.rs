@@ -19,6 +19,7 @@
 #[cfg(test)]
 use serde_json::Value;
 mod entries;
+use shared::i18n::tr;
 use std::sync::OnceLock;
 
 /// 设置项的取值形状（决定页面用什么控件，也是"值语义"的唯一声明）。
@@ -692,6 +693,9 @@ pub fn spec(key: &str) -> Option<&'static SettingSpec> {
 }
 
 /// 节清单（按登记顺序去重）——页面的分节导航直接用它，顺序不由视图另定。
+///
+/// 登记表存的是中文原文（`REGISTRY` 是 `OnceLock` 固化，那里翻译会把语言冻结在首次
+/// 访问时），显示名统一在这里按当前语言取。
 pub fn sections() -> Vec<(&'static str, &'static str)> {
     // 只返回**上页**的节：导航只列出有实际内容的分节页面。
     // 纯 Module 节（如草稿箱，其设置全在面板本地菜单/拖拽 handle 上）不进导航，
@@ -699,7 +703,7 @@ pub fn sections() -> Vec<(&'static str, &'static str)> {
     let mut out: Vec<(&'static str, &'static str)> = Vec::new();
     for s in page_rows() {
         if !out.iter().any(|(id, _)| *id == s.section) {
-            out.push((s.section, s.section_label));
+            out.push((s.section, tr(s.section_label)));
         }
     }
     out
@@ -710,7 +714,7 @@ pub fn section_label(id: &str) -> Option<&'static str> {
     registry()
         .iter()
         .find(|s| s.section == id)
-        .map(|s| s.section_label)
+        .map(|s| tr(s.section_label))
 }
 
 /// 一个节内的子分组（按登记顺序去重）：页面按它生成分组卡片，侧栏据它生成两级导航。
@@ -722,7 +726,7 @@ pub fn page_groups(section: &str) -> Vec<(&'static str, Option<&'static str>)> {
     let mut out: Vec<(&'static str, Option<&'static str>)> = Vec::new();
     for s in page_rows() {
         if s.section == section && !out.iter().any(|(id, _)| *id == s.group) {
-            out.push((s.group, s.group_label));
+            out.push((s.group, s.group_label.map(tr)));
         }
     }
     out

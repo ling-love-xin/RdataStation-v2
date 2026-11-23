@@ -296,7 +296,8 @@ impl SettingsService {
         });
     }
     /// 设置并持久化界面语言，即时生效：更新 global → 写 settings.json →
-    /// 同步 `shared::i18n` 全局语言（`tr()` 查表基准）→ 刷新所有窗口（全 UI 文案即时切换）。
+    /// 同步 `shared::i18n` 全局语言（`tr()` 查表基准）→ 同步组件库内置文案 →
+    /// 刷新所有窗口（全 UI 文案即时切换）。
     pub fn set_locale(code: &str, _window: Option<&mut gpui_kit::Window>, cx: &mut App) {
         let locale = shared::i18n::Locale::from_code(code);
         {
@@ -306,6 +307,30 @@ impl SettingsService {
         let settings = cx.global::<Settings>().clone();
         persist(&settings);
         shared::i18n::set_locale(locale);
+        // 组件库自带文案（Dialog 的确认/取消、Select 占位、Pagination、Empty、Diff…）走
+        // rust-i18n 的全局 locale，和我们自己的 `shared::i18n` 是两套：不同步的话组件文案
+        // 会一直停在 fallback `en`（中文界面里蹦出 Cancel / No data）。映射见
+        // `Locale::component_code`（存储码 `zh` ≠ 组件库语言键 `zh-CN`）。
+        gpui_kit::component::set_locale(locale.component_code());
         cx.refresh_windows();
+    }
+}
+
+#[cfg(test)]
+mod locale_link_tests {
+    use shared::i18n::Locale;
+
+    /// 组件库（rust-i18n）接受映射后的语言码，且读回来一致。
+    ///
+    /// 只钉「接线通路」：组件库的 `set_locale` 是全局 atomic，喂错码（如 `zh`）不会报错、
+    /// 只会静默回退 `en`，所以这里显式断言喂进去的码就是读回来的码。
+    #[test]
+    fn component_locale_accepts_mapped_code() {
+        for locale in [Locale::Zh, Locale::En] {
+            gpui_kit::component::set_locale(locale.component_code());
+            assert_eq!(&*gpui_kit::component::locale(), locale.component_code());
+        }
+        // 复位到中文：本 crate 只有这一处碰组件库 locale，复位是为了不给后续用例留状态。
+        gpui_kit::component::set_locale(Locale::Zh.component_code());
     }
 }

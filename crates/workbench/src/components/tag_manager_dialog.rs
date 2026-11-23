@@ -15,6 +15,7 @@
 //! 与缓存管理对话框同一约定：数据就地重算（`Rc<RefCell<_>>`）+ `shared.notify_host(app)`
 //! （宿主重绘重建对话框层），操作失败在对话框内给一条可读错误（不静默吞噬）。
 
+use shared::i18n::tr;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -156,7 +157,7 @@ fn open_tag_rename_dialog(
     row: &TagRow,
 ) {
     let root = shared.project_root();
-    let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("标签名称"));
+    let name_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("标签名称")));
     if !row.name.trim().is_empty() {
         let value = row.name.clone();
         name_input.update(cx, |s, cx| s.set_value(value, window, cx));
@@ -201,7 +202,7 @@ fn open_tag_rename_dialog(
         let submit_ok = submit_for_frame.clone();
         let submit_key = submit_for_frame.clone();
         dialog
-            .title("重命名标签")
+            .title(tr("重命名标签"))
             .child(
                 div()
                     .v_flex()
@@ -211,7 +212,7 @@ fn open_tag_rename_dialog(
                         div()
                             .text_xs()
                             .text_color(theme.colors.muted_foreground)
-                            .child("改名后，所有引用该标签的连接 / 资源 / 草稿自动跟随（按标签定义 id 关联）。"),
+                            .child(tr("改名后，所有引用该标签的连接 / 资源 / 草稿自动跟随（按标签定义 id 关联）。")),
                     )
                     .child(Input::new(&name_input))
                     .when(name_empty, |el| {
@@ -219,7 +220,7 @@ fn open_tag_rename_dialog(
                             div()
                                 .text_xs()
                                 .text_color(theme.colors.danger)
-                                .child("标签名称不能为空"),
+                                .child(tr("标签名称不能为空")),
                         )
                     }),
             )
@@ -228,12 +229,12 @@ fn open_tag_rename_dialog(
                     .child(
                         Button::new("tag-mgr-rename-cancel")
                             .ghost()
-                            .label("取消")
+                            .label(tr("取消"))
                             .on_click(move |_, window, cx| window.close_dialog(cx)),
                     )
                     .child(
                         Button::new("tag-mgr-rename-ok")
-                            .label("保存")
+                            .label(tr("保存"))
                             .on_click(move |_, window, cx| {
                                 if submit_ok(cx) {
                                     window.close_dialog(cx);
@@ -285,7 +286,7 @@ fn confirm_cleanup(
         let shared = shared.clone();
         alert
             .confirm()
-            .title("清理空标签")
+            .title(tr("清理空标签"))
             .description(format!(
                 "确定清理 {n} 个没有任何对象引用的标签？{preview}（软删除：已打标的对象不受影响，同名标签可重新创建。）",
                 n = empty.len(),
@@ -343,7 +344,7 @@ fn confirm_delete_tag(
         let shared = shared.clone();
         alert
             .confirm()
-            .title("删除标签")
+            .title(tr("删除标签"))
             .description(format!(
                 "确定删除标签「{tag_name}」？软删除：已打标的对象不受影响，同名标签可重新创建。"
             ))
@@ -382,7 +383,7 @@ pub fn open_tag_manager_dialog(window: &mut Window, cx: &mut App, shared: &Share
     let error_build = error.clone();
     let shared_build = shared.clone();
     // 新建标签输入框
-    let new_input = cx.new(|cx| InputState::new(window, cx).placeholder("新标签名称"));
+    let new_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("新标签名称")));
     let new_input_build = new_input.clone();
 
     window.open_sheet(cx, move |sheet, _window, cx| {
@@ -423,7 +424,7 @@ pub fn open_tag_manager_dialog(window: &mut Window, cx: &mut App, shared: &Share
                     Button::new("tag-mgr-create")
                         .ghost()
                         .small()
-                        .label("新建")
+                        .label(tr("新建"))
                         .disabled(new_empty)
                         .on_click({
                             let rows = rows_build.clone();
@@ -458,7 +459,7 @@ pub fn open_tag_manager_dialog(window: &mut Window, cx: &mut App, shared: &Share
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("暂无标签。可在连接行 / 资源 / 草稿上新建。"),
+                    .child(tr("暂无标签。可在连接行 / 资源 / 草稿上新建。")),
             );
         } else {
             for r in list.iter() {
@@ -499,7 +500,7 @@ pub fn open_tag_manager_dialog(window: &mut Window, cx: &mut App, shared: &Share
                             ))))
                             .ghost()
                             .small()
-                            .label("重命名")
+                            .label(tr("重命名"))
                             .on_click({
                                 let rows = rows_build.clone();
                                 let error = error_build.clone();
@@ -529,7 +530,7 @@ pub fn open_tag_manager_dialog(window: &mut Window, cx: &mut App, shared: &Share
                             ))))
                             .ghost()
                             .small()
-                            .label("删除")
+                            .label(tr("删除"))
                             .danger()
                             .on_click({
                                 let rows = rows_build.clone();
@@ -586,10 +587,10 @@ pub fn open_tag_manager_dialog(window: &mut Window, cx: &mut App, shared: &Share
                     div()
                         .text_xs()
                         .text_color(theme.colors.muted_foreground)
-                        .child("空标签 = 没有被任何连接 / 资源 / 草稿引用的标签定义"),
+                        .child(tr("空标签 = 没有被任何连接 / 资源 / 草稿引用的标签定义")),
                 ),
         );
 
-        sheet.title("管理标签").size(px(420.)).child(body)
+        sheet.title(tr("管理标签")).size(px(420.)).child(body)
     });
 }

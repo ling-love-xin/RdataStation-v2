@@ -8619,6 +8619,7 @@ dependencies = [
  "gpui-kit",
  "rds-paths",
  "rds-settings",
+ "rds-shared",
  "serde",
  "serde_json",
  "tracing",

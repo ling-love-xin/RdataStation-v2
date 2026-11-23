@@ -1,5 +1,6 @@
 //! 渲染域（`panel/` 第二块）：主 `render` 组装（投影状态 → 元素树根）。
 
+use shared::i18n::tr;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt as _;
@@ -57,7 +58,7 @@ impl ResultPanel {
                     .ghost()
                     .small()
                     .debug_selector(|| "editor-result-error-copy".to_string())
-                    .label("复制")
+                    .label(tr("复制"))
                     .on_click(move |_, _window, app| {
                         queue.request(ResultRequest::CopyError, app);
                     })
@@ -263,8 +264,8 @@ impl ResultPanel {
                 .xsmall()
                 .debug_selector(|| "editor-result-sql-preview".to_string())
                 .icon(IconName::Table2)
-                .label("显示 SQL")
-                .tooltip("点击查看完整 SQL（弹出窗口）")
+                .label(tr("显示 SQL"))
+                .tooltip(tr("点击查看完整 SQL（弹出窗口）"))
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::OpenSqlDialog, app);
                 })
@@ -366,7 +367,7 @@ impl ResultPanel {
                             .xsmall()
                             .icon(IconName::Play)
                             .debug_selector(|| "editor-result-filter-run".to_string())
-                            .tooltip("用 select * from (原SQL) where 词 重查（替换当前结果集）")
+                            .tooltip(tr("用 select * from (原SQL) where 词 重查（替换当前结果集）"))
                             .on_click(move |_, _window, app| {
                                 run_queue.request(ResultRequest::RunFilterAsQuery, app);
                             }),
@@ -388,7 +389,7 @@ impl ResultPanel {
                         .xsmall()
                         .icon(IconName::ChevronDown)
                         .debug_selector(|| "editor-result-filter-history".to_string())
-                        .tooltip("历史筛选（选中一条即回到那个口径）")
+                        .tooltip(tr("历史筛选（选中一条即回到那个口径）"))
                         .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
                             let mut menu = menu;
                             for text in items.iter() {
@@ -428,7 +429,7 @@ impl ResultPanel {
                     .xsmall()
                     .debug_selector(|| "editor-result-filter-clear".to_string())
                     .label("✕")
-                    .tooltip("删除所有过滤 / 排序")
+                    .tooltip(tr("删除所有过滤 / 排序"))
                     .on_click(move |_, _window, app| {
                         clear_queue.request(ResultRequest::ClearFilterAndOrdering, app);
                     });
@@ -441,7 +442,7 @@ impl ResultPanel {
                         .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
                             let mut menu = menu;
                             if labels.is_empty() {
-                                return menu.item(PopupMenuItem::new("暂无可清除项").disabled(true));
+                                return menu.item(PopupMenuItem::new(tr("暂无可清除项")).disabled(true));
                             }
                             for label in labels.iter() {
                                 let label = *label;
@@ -484,7 +485,7 @@ impl ResultPanel {
                     .xsmall()
                     .icon(IconName::Funnel)
                     .debug_selector(|| "editor-result-filter-settings".to_string())
-                    .tooltip("筛选设置（自定义条件与排序）")
+                    .tooltip(tr("筛选设置（自定义条件与排序）"))
                     .on_click(move |_, _window, app| {
                         settings_queue.request(ResultRequest::OpenFilterSettings, app);
                     });
@@ -628,7 +629,7 @@ impl ResultPanel {
                     .toggled(self.find_open)
                     .icon(IconName::Search)
                     .debug_selector(|| "editor-result-find-toggle".to_string())
-                    .tooltip("在结果里查找（回车 = 下一处）")
+                    .tooltip(tr("在结果里查找（回车 = 下一处）"))
                     .on_click(move |_, _window, app| {
                         find_queue.request(ResultRequest::ToggleFind, app);
                     })
@@ -651,7 +652,7 @@ impl ResultPanel {
                 .ghost()
                 .xsmall()
                 .debug_selector(|| "editor-result-refresh".to_string())
-                .label("⟳ 刷新")
+                .label(tr("⟳ 刷新"))
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::Refresh, app);
                 })
@@ -668,8 +669,8 @@ impl ResultPanel {
                     .ghost()
                     .small()
                     .debug_selector(|| "editor-result-more".to_string())
-                    .label("获取数据")
-                    .tooltip("获取下一段数据")
+                    .label(tr("获取数据"))
+                    .tooltip(tr("获取下一段数据"))
                     .on_click(move |_, _window, app| {
                         queue.request(ResultRequest::FetchMore, app);
                     })
@@ -689,8 +690,8 @@ impl ResultPanel {
                     .ghost()
                     .small()
                     .debug_selector(|| "editor-result-fetch-all".to_string())
-                    .label("获取全部数据")
-                    .tooltip("一次性抓取全部行")
+                    .label(tr("获取全部数据"))
+                    .tooltip(tr("一次性抓取全部行"))
                     .on_click(move |_, _window, app| {
                         queue.request(ResultRequest::AskFetchAll, app);
                     })
@@ -830,7 +831,7 @@ impl ResultPanel {
                 .ghost()
                 .small()
                 .icon(IconName::Plus)
-                .tooltip("在下方插入新行")
+                .tooltip(tr("在下方插入新行"))
                 .disabled(!row_actions.add)
                 .debug_selector(|| "editor-result-insert-row".to_string())
                 .on_click(move |_, _window, app| {
@@ -845,7 +846,7 @@ impl ResultPanel {
                 .ghost()
                 .small()
                 .icon(IconName::CopyPlus)
-                .tooltip("复制此行")
+                .tooltip(tr("复制此行"))
                 .disabled(!row_actions.copy)
                 .debug_selector(|| "editor-result-duplicate-row".to_string())
                 .on_click(move |_, _window, app| {
@@ -885,7 +886,7 @@ impl ResultPanel {
                 .ghost()
                 .small()
                 .icon(IconName::Undo2)
-                .tooltip("撤销")
+                .tooltip(tr("撤销"))
                 .disabled(!self.can_undo)
                 .debug_selector(|| "editor-result-undo".to_string())
                 .on_click(move |_, _window, app| {
@@ -899,7 +900,7 @@ impl ResultPanel {
                 .ghost()
                 .small()
                 .icon(IconName::Redo2)
-                .tooltip("重做")
+                .tooltip(tr("重做"))
                 .disabled(!self.can_redo)
                 .debug_selector(|| "editor-result-redo".to_string())
                 .on_click(move |_, _window, app| {
@@ -920,7 +921,7 @@ impl ResultPanel {
                         .ghost()
                         .small()
                         .debug_selector(|| "editor-result-export".to_string())
-                        .label("⤓ 导出"),
+                        .label(tr("⤓ 导出")),
                 )
                 .dropdown_menu(move |menu, _window, _app| {
                     let mut menu = menu;
@@ -1338,7 +1339,7 @@ impl ResultPanel {
                             .ghost()
                             .xsmall()
                             .icon(IconName::Settings2)
-                            .tooltip("工具栏配置（勾选要显示的命令）")
+                            .tooltip(tr("工具栏配置（勾选要显示的命令）"))
                             .debug_selector(|| "editor-result-status-config".to_string()),
                     )
                     .menu_accessibility_label("工具栏配置")
@@ -1379,7 +1380,7 @@ impl ResultPanel {
                     .ghost()
                     .small()
                     .icon(IconName::Settings)
-                    .tooltip("结果集设置")
+                    .tooltip(tr("结果集设置"))
                     .debug_selector(|| "editor-result-status-preferences".to_string())
                     .on_click(move |_, _window, app| {
                         queue.request(ResultRequest::OpenResultPanelSettings, app);
@@ -1582,7 +1583,7 @@ impl ResultPanel {
                             "editor-result-find-only",
                         )))
                         .checked(only_on)
-                        .label("仅显示匹配")
+                        .label(tr("仅显示匹配"))
                         .accessibility_label("只显示匹配行")
                         .on_click(move |_checked, _window, app| {
                             only_queue.request(ResultRequest::SetFindFilterOnly(!only_on), app);
@@ -1602,7 +1603,7 @@ impl ResultPanel {
                     .icon(IconName::ChevronUp)
                     .disabled(nav_disabled)
                     .debug_selector(|| "editor-result-find-prev".to_string())
-                    .tooltip("上一处匹配")
+                    .tooltip(tr("上一处匹配"))
                     .on_click(move |_, _window, app| {
                         prev_queue.request(ResultRequest::FindPrev, app);
                     }),
@@ -1614,7 +1615,7 @@ impl ResultPanel {
                     .icon(IconName::ChevronDown)
                     .disabled(nav_disabled)
                     .debug_selector(|| "editor-result-find-next".to_string())
-                    .tooltip("下一处匹配（回车同效）")
+                    .tooltip(tr("下一处匹配（回车同效）"))
                     .on_click(move |_, _window, app| {
                         next_queue.request(ResultRequest::FindNext, app);
                     }),
@@ -1626,7 +1627,7 @@ impl ResultPanel {
                     // 与筛选行清除钮同一符号，读作「关掉这一行」
                     .label("✕")
                     .debug_selector(|| "editor-result-find-close".to_string())
-                    .tooltip("关闭查找栏")
+                    .tooltip(tr("关闭查找栏"))
                     .on_click(move |_, _window, app| {
                         close_queue.request(ResultRequest::CloseFind, app);
                     }),

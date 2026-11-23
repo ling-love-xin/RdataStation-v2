@@ -23,6 +23,7 @@
 //! 菜单**只摆真能跑、且结果可预期**的项：计数、逐列分组计数。更复杂的需求属于“自己写 SQL”
 //! （切片二的自定义分析 SQL），而不是在这里猜用户想算什么。
 
+use shared::i18n::tr;
 use crate::store::ResultEntry;
 use ::shared::{FactFrame, StoragePref};
 use std::sync::Arc;
@@ -137,7 +138,7 @@ pub fn menu_items(entry: &ResultEntry) -> Vec<AnalysisItem> {
         return Vec::new();
     }
     let mut items = vec![AnalysisItem {
-        label: "计数行数".to_string(),
+        label: tr("计数行数").to_string(),
         // 与自定义输入框的模板同一条（只有一处字面量，不会两边写歪）
         sql: CUSTOM_DEFAULT_SQL.to_string(),
     }];
@@ -277,7 +278,7 @@ mod tests {
         let small = request_for_item(
             &entry(&["id"], &[&["1"], &["2"]]),
             &AnalysisItem {
-                label: "计数行数".to_string(),
+                label: tr("计数行数").to_string(),
                 sql: "SELECT count(*) FROM {table}".to_string(),
             },
             None,

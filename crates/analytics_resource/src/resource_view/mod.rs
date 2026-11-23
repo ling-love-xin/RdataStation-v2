@@ -21,6 +21,7 @@
 //! **未落地（下一批，已在开发方案留档）**：详情属性面板接入、五个对话框、Action 与快捷键
 //! （`Ctrl+F` 聚焦 / `Esc` 清空 / 行漫游在 Action 批）、行内 hover 动作（原型 §2.3 的 hover 版，
 //! 随详情面板批）、批量多选。
+use shared::i18n::tr;
 
 pub(crate) use std::cell::Cell;
 pub(crate) use std::rc::Rc;
@@ -376,7 +377,7 @@ impl BasePanel for ResourcesPanel {
 
 impl ComponentPanel for ResourcesPanel {
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div().text_sm().child("资产库")
+        div().text_sm().child(tr("资产库"))
     }
 }
 

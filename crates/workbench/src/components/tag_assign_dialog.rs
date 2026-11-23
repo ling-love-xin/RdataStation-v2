@@ -4,6 +4,7 @@
 //! - 列出全部标签定义（checkbox 勾选当前连接已有标签）
 //! - 确认后覆盖式 set_tags
 
+use shared::i18n::tr;
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
@@ -61,7 +62,7 @@ pub fn open_tag_assign_dialog(window: &mut Window, cx: &mut App, shared: &Shared
             div()
                 .text_xs()
                 .text_color(theme.colors.muted_foreground)
-                .child("为连接勾选标签："),
+                .child(tr("为连接勾选标签：")),
         );
 
         if tags.is_empty() {
@@ -69,7 +70,7 @@ pub fn open_tag_assign_dialog(window: &mut Window, cx: &mut App, shared: &Shared
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("暂无标签定义。可在连接行 / 资源 / 草稿上新建。"),
+                    .child(tr("暂无标签定义。可在连接行 / 资源 / 草稿上新建。")),
             );
         } else {
             for (i, name) in tags.iter().enumerate() {
@@ -103,7 +104,7 @@ pub fn open_tag_assign_dialog(window: &mut Window, cx: &mut App, shared: &Shared
         body = body.child(
             div().h_flex().justify_end().gap_2().child(
                 Button::new(ElementId::Name("tag-assign-confirm".into()))
-                    .label("确认")
+                    .label(tr("确认"))
                     .on_click({
                         let checked = checked.clone();
                         let tags = tags.clone();
@@ -130,6 +131,6 @@ pub fn open_tag_assign_dialog(window: &mut Window, cx: &mut App, shared: &Shared
             ),
         );
 
-        sheet.title("打标签").size(px(320.)).child(body)
+        sheet.title(tr("打标签")).size(px(320.)).child(body)
     });
 }

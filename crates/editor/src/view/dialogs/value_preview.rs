@@ -1,5 +1,6 @@
 //! 值查看器：看全一个值（等宽、保留换行、可滚动可复制）。
 
+use shared::i18n::tr;
 use super::*;
 
 /// 【遗留 #7】值查看器：右键「查看完整值」弹的模态层
@@ -43,7 +44,7 @@ pub fn open_value_preview(
                     .border_color(theme.colors.border)
                     .rounded_md()
                     .p_3()
-                    .font_family("monospace")
+                    .font_family(theme.mono_font_family.clone())
                     .text_sm()
                     // 测试可观测：值内容区（窗口级验收断言「值真的渲染在弹层里」）
                     .debug_selector(|| "editor-dialog-editor-value-preview-body".to_string())
@@ -57,7 +58,7 @@ pub fn open_value_preview(
             .with_variant(ButtonVariant::Primary)
             .small()
             .debug_selector(|| "editor-dialog-editor-value-preview-copy".to_string())
-            .label("复制")
+            .label(tr("复制"))
             .on_click({
                 let on_copy = on_copy.clone();
                 move |_, _window, cx| on_copy(cx)
@@ -70,7 +71,7 @@ pub fn open_value_preview(
         );
 
         dialog
-            .title("查看值")
+            .title(tr("查看值"))
             .child(body)
             .footer(DialogFooter::new().child(copy).child(close))
     });

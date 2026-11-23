@@ -5,6 +5,7 @@
 //!
 //! 结果与失败提示同屏：一次失败不该把表单和已有结果一起收走（那是用户在填的东西）。
 
+use shared::i18n::tr;
 use gpui_kit::base::{Disableable as _, StyledExt as _};
 use gpui_kit::component::button::Button;
 use gpui_kit::component::checkbox::Checkbox;
@@ -81,7 +82,7 @@ impl InsightView {
                         "执行分析"
                     })
                     .disabled(!self.multi_ready() || self.multi_running)
-                    .tooltip("按选中顺序把列对位到规则的 col1 / col2 …")
+                    .tooltip(tr("按选中顺序把列对位到规则的 col1 / col2 …"))
                     .on_click({
                         let entity = entity.clone();
                         move |_, _, app| entity.update(app, |view, cx| view.run_multi(cx))
@@ -110,7 +111,7 @@ impl InsightView {
                     div()
                         .text_xs()
                         .text_color(colors.muted_foreground)
-                        .child("选好列与规则后点「执行分析」"),
+                        .child(tr("选好列与规则后点「执行分析」")),
                 );
             }
             Some(result) if result.is_empty() => {

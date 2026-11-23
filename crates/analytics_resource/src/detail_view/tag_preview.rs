@@ -1,5 +1,6 @@
 //! 标签分区、别名行与内容预览分区。
 
+use shared::i18n::tr;
 use super::*;
 
 /// 标签分区：chips（每个带 ×）+ 「＋ 标签」。
@@ -17,7 +18,7 @@ pub(crate) fn render_tag_section(detail: &ArchiveDetail, actions: Option<&Detail
 
     let mut chips = div().h_flex().w_full().flex_wrap().items_center().gap_1();
     if detail.tags.is_empty() {
-        chips = chips.child(div().text_xs().text_color(muted).child("（还没有标签）"));
+        chips = chips.child(div().text_xs().text_color(muted).child(tr("（还没有标签）")));
     }
     for chip in &detail.tags {
         let mut line = Tag::secondary()
@@ -44,7 +45,7 @@ pub(crate) fn render_tag_section(detail: &ArchiveDetail, actions: Option<&Detail
                         })
                         .label("×")
                         .text_color(muted)
-                        .tooltip("从这个存档上摘掉这个标签")
+                        .tooltip(tr("从这个存档上摘掉这个标签"))
                         .on_click(move |_, window, cx| {
                             host.request_remove_tag(&detail, &tag_id, window, cx)
                         }),
@@ -64,7 +65,7 @@ pub(crate) fn render_tag_section(detail: &ArchiveDetail, actions: Option<&Detail
                 .ghost()
                 .xsmall()
                 .debug_selector(|| "archive-detail-add-tag".to_string())
-                .label("＋ 标签")
+                .label(tr("＋ 标签"))
                 .disabled(!can_edit)
                 .on_click(move |_, window, cx| {
                     // 详情面板永远是**一元**：批量走列表的多选 + 右键菜单。
@@ -95,7 +96,7 @@ pub(crate) fn render_tag_section(detail: &ArchiveDetail, actions: Option<&Detail
                 .text_xs()
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(muted)
-                .child("标签"),
+                .child(tr("标签")),
         )
         .child(chips)
 }
@@ -125,7 +126,7 @@ pub(crate) fn name_link(detail: &ArchiveDetail, actions: Option<&DetailActions>,
             .debug_selector(|| "archive-detail-rename".to_string())
             .label(detail.name.clone())
             .text_color(foreground)
-            .tooltip("重命名显示名（与 `F2` 同一条路；文件名与路径不变）")
+            .tooltip(tr("重命名显示名（与 `F2` 同一条路；文件名与路径不变）"))
             .on_click(move |_, window, cx| host.request_rename(&id, window, cx)),
     )
 }
@@ -155,7 +156,7 @@ pub(crate) fn alias_line(
             .debug_selector(|| "archive-detail-alias".to_string())
             .label(label)
             .text_color(muted)
-            .tooltip("编辑别名（留空 = 清除）")
+            .tooltip(tr("编辑别名（留空 = 清除）"))
             .on_click(move |_, window, cx| host.request_edit_alias(&id, window, cx)),
     )
 }

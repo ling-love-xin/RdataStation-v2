@@ -1,5 +1,6 @@
 //! 列卡「质量」区：检查器命中汇总 + 四态列表。
 
+use shared::i18n::tr;
 use super::super::*;
 
 impl super::super::super::InsightWorkspacePanel {
@@ -15,7 +16,7 @@ impl super::super::super::InsightWorkspacePanel {
             return div()
                 .text_xs()
                 .text_color(colors.muted_foreground)
-                .child("该列无检查器属性（未评估全表）");
+                .child(tr("该列无检查器属性（未评估全表）"));
         }
         let hits = checker
             .iter()
@@ -61,7 +62,7 @@ impl super::super::super::InsightWorkspacePanel {
             return div()
                 .text_xs()
                 .text_color(colors.muted_foreground)
-                .child("该列无检查器属性");
+                .child(tr("该列无检查器属性"));
         }
         let mut rows = div().v_flex().w_full().gap_1();
         // 未命中前置（YData Warnings 语义：问题一眼看到）；其余保持原序

@@ -9,6 +9,8 @@ use gpui_kit::component::chart::BarChart;
 use gpui_kit::component::{Icon, IconName, Sizable as _, Size, Theme};
 use gpui_kit::*;
 
+use shared::i18n::tr_dyn;
+
 use super::muted_line;
 use crate::insight_view::{ColumnSection, InsightView};
 use crate::model::{
@@ -91,7 +93,7 @@ fn stat_row(row: &StatRow, theme: &Theme) -> Div {
                 .w(rems(4.5))
                 .text_xs()
                 .text_color(colors.muted_foreground)
-                .child(row.label.to_string()),
+                .child(tr_dyn(&row.label).to_string()),
         )
         .child(
             div()

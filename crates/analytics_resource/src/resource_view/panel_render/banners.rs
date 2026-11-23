@@ -1,5 +1,6 @@
 //! 提示条：通知、索引问题、撤销归档与状态栏。
 
+use shared::i18n::tr;
 use super::*;
 
 impl ResourcesPanel {
@@ -66,9 +67,9 @@ impl ResourcesPanel {
                     .ghost()
                     .xsmall()
                     .debug_selector(|| "archive-undo".to_string())
-                    .label("撤销")
+                    .label(tr("撤销"))
                     .text_color(primary)
-                    .tooltip("把这条存档退回归档前的位置")
+                    .tooltip(tr("把这条存档退回归档前的位置"))
                     .on_click(move |_, window, cx| host.request_undo_archive(&token, window, cx)),
             )
     }
@@ -118,7 +119,7 @@ impl ResourcesPanel {
                     Button::new("index-repair")
                         .ghost()
                         .xsmall()
-                        .label("修复…")
+                        .label(tr("修复…"))
                         .on_click(move |_, window, cx| host.request_index_repair(window, cx)),
                 )
             })

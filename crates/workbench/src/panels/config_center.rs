@@ -6,6 +6,7 @@
 //!
 //! 页面**首次打开时才建**（建页要查一次库拉三域列表）：工作台初始化不为此付一次 DB 往返。
 
+use shared::i18n::tr;
 use std::rc::Rc;
 
 use gpui_kit::base::StyledExt as _;
@@ -102,13 +103,13 @@ impl Render for ConfigCenterPanel {
                 .child(
                     div()
                         .text_sm()
-                        .child("配置中心尚未打开任何域：从连接对话框的「管理」入口进入。"),
+                        .child(tr("配置中心尚未打开任何域：从连接对话框的「管理」入口进入。")),
                 )
                 .child(
                     div()
                         .text_xs()
                         .text_color(theme.colors.muted_foreground)
-                        .child("认证档案 / 网络代理 / 环境策略三域共用本页。"),
+                        .child(tr("认证档案 / 网络代理 / 环境策略三域共用本页。")),
                 )
                 .into_any_element();
         };
@@ -146,7 +147,7 @@ impl ComponentPanel for ConfigCenterPanel {
             .items_center()
             .gap_1()
             .child(Icon::new(IconName::Settings))
-            .child("配置中心")
+            .child(tr("配置中心"))
     }
 }
 

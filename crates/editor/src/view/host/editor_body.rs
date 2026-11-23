@@ -5,6 +5,7 @@
 //!
 //! 拆分纪律：只移动方法体与注释，不改动任何行为；本文件不得出现新的逻辑。
 
+use shared::i18n::tr;
 use gpui_kit::base::text::TextView;
 use gpui_kit::component::input::Editor;
 // #48 编辑器常规设置（行号开关即时 / 新文档默认缩进·换行·编码）：settings 不依赖 editor，方向合法
@@ -134,7 +135,7 @@ impl EditorHostPanel {
                     .text_sm()
                     .italic()
                     .text_color(muted)
-                    .child("写入模式 · 直接输入开始编写"),
+                    .child(tr("写入模式 · 直接输入开始编写")),
             )
             .into_any_element()
     }

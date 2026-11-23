@@ -1,5 +1,6 @@
 //! EDA 主域渲染：报告 Tab（列分布 / 缺失矩阵）与列卡各分区。
 
+use shared::i18n::tr;
 use super::*;
 // 完整 Lucide 图标目录在 `gpui_kit::assets::IconName`（component 版只是保留子集，
 // 没有 Braces）；别名避免与 `super::*` 带来的 component 版同名冲突
@@ -17,7 +18,7 @@ impl super::InsightWorkspacePanel {
         let tabs = TabBar::new("insight-ws-eda-tabs")
             .underline()
             .selected_index(current)
-            .children(EdaTab::ALL.iter().map(|t| Tab::new().label(t.label())))
+            .children(EdaTab::ALL.iter().map(|t| Tab::new().label(tr(t.label()))))
             .on_click({
                 let entity = entity.clone();
                 move |index, _, app| {
@@ -182,7 +183,7 @@ impl super::InsightWorkspacePanel {
                             .min_w_0()
                             .text_xs()
                             .text_color(colors.muted_foreground)
-                            .child("当前视图基于确认窗口生成的表；调整数据量 / 列 / 过滤请重新探查"),
+                            .child(tr("当前视图基于确认窗口生成的表；调整数据量 / 列 / 过滤请重新探查")),
                     )
                     .child({
                         let entity = entity.clone();
@@ -190,8 +191,8 @@ impl super::InsightWorkspacePanel {
                             .ghost()
                             .xsmall()
                             .icon(IconName::RotateCw)
-                            .label("重新探查")
-                            .tooltip("复用上次探查配置（可改数据量 / 列 / 过滤），确认后重新取数并级联重评估")
+                            .label(tr("重新探查"))
+                            .tooltip(tr("复用上次探查配置（可改数据量 / 列 / 过滤），确认后重新取数并级联重评估"))
                             .on_click(move |_, _, app| {
                                 entity.update(app, |panel, cx| {
                                     panel.view.update(cx, |view, cx| {

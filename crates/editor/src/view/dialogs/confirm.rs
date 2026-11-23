@@ -1,5 +1,6 @@
 //! 关闭与保存的确认对话框：关闭三态、保存失败、模式切换代价。
 
+use shared::i18n::tr;
 use super::*;
 
 /// 关闭脏文档时用户的选择（三态）
@@ -52,7 +53,7 @@ pub fn open_close_confirm(
                 div()
                     .text_xs()
                     .text_color(muted)
-                    .child("保存后关闭，或不保存直接丢弃这次改动。"),
+                    .child(tr("保存后关闭，或不保存直接丢弃这次改动。")),
             );
 
         let cancel = action_button("editor-close-cancel", "取消", ButtonVariant::Ghost, {
@@ -72,7 +73,7 @@ pub fn open_close_confirm(
         });
 
         dialog
-            .title("关闭前确认")
+            .title(tr("关闭前确认"))
             .child(body)
             // 自绘 footer 会关掉组件库的默认“确定 / 取消”按钮（footer 与 button_props 互斥）
             .footer(DialogFooter::new().child(cancel).child(discard).child(save))
@@ -158,7 +159,7 @@ pub fn open_save_failure_confirm(
                 div()
                     .text_xs()
                     .text_color(muted)
-                    .child("文档仍处于未保存状态（改动不会丢失）。"),
+                    .child(tr("文档仍处于未保存状态（改动不会丢失）。")),
             );
 
         let cancel = action_button("editor-save-cancel", "取消保存", ButtonVariant::Ghost, {
@@ -174,7 +175,7 @@ pub fn open_save_failure_confirm(
             move |window, cx| on_choice(SaveFailureChoice::Retry, window, cx)
         });
 
-        dialog.title("保存失败").child(body).footer(
+        dialog.title(tr("保存失败")).child(body).footer(
             DialogFooter::new()
                 .child(cancel)
                 .child(save_as)

@@ -4,6 +4,7 @@
 //! 连接名称前的 `[简称]` 与徽标缩写共用这张表；弹窗里不展示驱动（driver）概念，
 //! 只维护 类型 + 简称 两列。保存走 `SettingsService::set_type_short_map`（持久化 + 刷新）。
 
+use shared::i18n::tr;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -58,7 +59,7 @@ pub fn open_type_short_map_dialog(window: &mut Window, cx: &mut App) {
                         .get(t)
                         .cloned()
                         .unwrap_or_else(|| SettingsService::type_short(t, cx));
-                    let input = cx.new(|cx| InputState::new(window, cx).placeholder("简称"));
+                    let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("简称")));
                     input.update(cx, |state, ctx| state.set_value(&value, window, ctx));
                     rows_borrow.push((t.clone(), input));
                 }
@@ -77,12 +78,12 @@ pub fn open_type_short_map_dialog(window: &mut Window, cx: &mut App) {
                     div()
                         .flex_1()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child("数据库类型 → 简称"),
+                        .child(tr("数据库类型 → 简称")),
                 )
                 .child(
                     div()
                         .text_color(theme.colors.muted_foreground)
-                        .child("连接名称 `[简称]` 与徽标缩写共用"),
+                        .child(tr("连接名称 `[简称]` 与徽标缩写共用")),
                 ),
         );
         // 表头。
@@ -94,8 +95,8 @@ pub fn open_type_short_map_dialog(window: &mut Window, cx: &mut App) {
                 .gap_2()
                 .px_1()
                 .text_color(theme.colors.muted_foreground)
-                .child(div().flex_1().child("类型"))
-                .child(div().w(rems(14.)).child("简称")),
+                .child(div().flex_1().child(tr("类型")))
+                .child(div().w(rems(14.)).child(tr("简称"))),
         );
         // 行：类型名（只读）+ 简称输入。
         {
@@ -125,11 +126,11 @@ pub fn open_type_short_map_dialog(window: &mut Window, cx: &mut App) {
 
         let rows_primary = rows.clone();
         dialog
-            .title("类型简称映射")
+            .title(tr("类型简称映射"))
             .child(standard_dialog_body(body))
             .footer(
                 DialogFooter::new()
-                    .child(Button::new("type-short-map-save").label("保存").on_click(
+                    .child(Button::new("type-short-map-save").label(tr("保存")).on_click(
                         move |_, window, cx| {
                             let map = {
                                 let rows = rows_primary.borrow();
@@ -148,7 +149,7 @@ pub fn open_type_short_map_dialog(window: &mut Window, cx: &mut App) {
                     .child(
                         Button::new("type-short-map-reset")
                             .ghost()
-                            .label("恢复默认")
+                            .label(tr("恢复默认"))
                             .on_click({
                                 let rows = rows.clone();
                                 move |_, window, cx| {
@@ -168,7 +169,7 @@ pub fn open_type_short_map_dialog(window: &mut Window, cx: &mut App) {
                     .child(
                         Button::new("type-short-map-cancel")
                             .ghost()
-                            .label("关闭")
+                            .label(tr("关闭"))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     ),
             )

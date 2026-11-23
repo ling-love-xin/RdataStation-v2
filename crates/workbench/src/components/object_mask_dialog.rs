@@ -8,6 +8,7 @@
 //! 对话框不读导航树（纯 settings 读写）；保存后由调用方刷新树 / 搜索命中区
 //! （本对话框不持有导航视图句柄，刷新动作留在打开它的菜单回调里）。
 
+use shared::i18n::tr;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -146,7 +147,7 @@ pub fn open_object_mask_dialog(
                 div().h_flex().items_center().gap_2().child(
                     Switch::new("object-mask-use-regex")
                         .checked(*use_regex.borrow())
-                        .label("按正则匹配")
+                        .label(tr("按正则匹配"))
                         .on_click({
                             let use_regex = use_regex.clone();
                             let include_input = include_input.clone();
@@ -173,7 +174,7 @@ pub fn open_object_mask_dialog(
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("规则只作用于对象名（表 / 视图 / 例程 / 序列 / 触发器），不影响库 / schema 层级。"),
+                    .child(tr("规则只作用于对象名（表 / 视图 / 例程 / 序列 / 触发器），不影响库 / schema 层级。")),
             );
         dialog
             .title(title.clone())
@@ -183,7 +184,7 @@ pub fn open_object_mask_dialog(
                     .child(
                         Button::new("object-mask-clear")
                             .secondary()
-                            .label("清空")
+                            .label(tr("清空"))
                             .on_click(move |_, window, cx| {
                                 if clear_ok(cx) {
                                     window.close_dialog(cx);
@@ -193,13 +194,13 @@ pub fn open_object_mask_dialog(
                     .child(
                         Button::new("object-mask-cancel")
                             .secondary()
-                            .label("取消")
+                            .label(tr("取消"))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
                     .child(
                         Button::new("object-mask-ok")
                             .primary()
-                            .label("保存")
+                            .label(tr("保存"))
                             .on_click(move |_, window, cx| {
                                 if save_ok(cx) {
                                     window.close_dialog(cx);

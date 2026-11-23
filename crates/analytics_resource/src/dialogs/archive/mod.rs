@@ -10,6 +10,7 @@
 //!    `PayloadStore::resolve` 的越界拒绝（模块硬约束 2 的入口守卫必须留在服务层）；
 //! 2. **冲突不静默覆盖**：目标已被占用时，宿主在**开窗前**查好"改名后的落点"并作为
 //!    [`ArchiveConflict`] 传进来，对话框原样摆出——用户看到的是确定的行为，不是"可能会重命名"。
+use shared::i18n::tr;
 
 pub(crate) use std::rc::Rc;
 
@@ -178,28 +179,28 @@ pub fn build_inputs(
     cx: &mut App,
     seed: &ArchiveDialogSeed,
 ) -> ArchiveDialogInputs {
-    let name = cx.new(|cx| InputState::new(window, cx).placeholder("显示名"));
+    let name = cx.new(|cx| InputState::new(window, cx).placeholder(tr("显示名")));
     // 预填走 `set_value`：它**不发** `InputEvent::Change`，而本对话框的校验是每帧从值推导，
     // 因此无需额外同步条件（这正是选"推导"而非"标志位"的收益）。
     let name_value = seed.name.clone();
     name.update(cx, |state, cx| state.set_value(name_value, window, cx));
 
     // 标签预填 = 归档继承（草稿条目标签名）；同样走 `set_value`（不发 Change，校验仍从值推导）。
-    let tags = cx.new(|cx| InputState::new(window, cx).placeholder("标签，逗号分隔（可空）"));
+    let tags = cx.new(|cx| InputState::new(window, cx).placeholder(tr("标签，逗号分隔（可空）")));
     if !seed.initial_tags.is_empty() {
         let tags_value = seed.initial_tags.join(", ");
         tags.update(cx, |state, cx| state.set_value(tags_value, window, cx));
     }
-    let alias = cx.new(|cx| InputState::new(window, cx).placeholder("别名（可空）"));
-    let keep_versions = cx.new(|cx| InputState::new(window, cx).placeholder("跟随设置（-1 全留）"));
+    let alias = cx.new(|cx| InputState::new(window, cx).placeholder(tr("别名（可空）")));
+    let keep_versions = cx.new(|cx| InputState::new(window, cx).placeholder(tr("跟随设置（-1 全留）")));
 
-    let assertion_metric = cx.new(|cx| InputState::new(window, cx).placeholder("指标名（选填）"));
+    let assertion_metric = cx.new(|cx| InputState::new(window, cx).placeholder(tr("指标名（选填）")));
     let assertion_definition =
-        cx.new(|cx| InputState::new(window, cx).placeholder("口径定义（选填）"));
+        cx.new(|cx| InputState::new(window, cx).placeholder(tr("口径定义（选填）")));
     let assertion_window =
-        cx.new(|cx| InputState::new(window, cx).placeholder("业务时间窗，如 2026Q3"));
+        cx.new(|cx| InputState::new(window, cx).placeholder(tr("业务时间窗，如 2026Q3")));
     let assertion_conclusion =
-        cx.new(|cx| InputState::new(window, cx).placeholder("一句话结论（选填）"));
+        cx.new(|cx| InputState::new(window, cx).placeholder(tr("一句话结论（选填）")));
     // 取回后再归档：把上一次的口径带回来，用户只需改变化的那几项。
     if let Some(existing) = &seed.assertion {
         for (entity, value) in [

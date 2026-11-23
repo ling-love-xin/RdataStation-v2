@@ -7,6 +7,7 @@
 //! 「已定位」/ 搜索命中）与它们的高度估算，是全文件最大的一块；与面板外壳（`chrome.rs`）
 //! 分开后，改行样式不必跨过整个面板的脚手架。
 
+use shared::i18n::tr;
 use super::StagedOp;
 use super::*;
 use crate::nav::action_registry;
@@ -387,7 +388,7 @@ impl NavView {
         if !ungrouped.is_empty() || (!groups.is_empty() && shown > 0) {
             rows.push(NavRow::GroupHeader {
                 id: GROUP_UNGROUPED.to_string(),
-                name: "未分组".to_string(),
+                name: tr("未分组").to_string(),
                 count: ungrouped.len(),
                 connected: ungrouped
                     .iter()
@@ -847,7 +848,7 @@ impl NavView {
                                 }
                                 if pending == 0 {
                                     this.host
-                                        .notice("该分组连接均已就绪，无需重复连接".to_string(), cx);
+                                        .notice(tr("该分组连接均已就绪，无需重复连接").to_string(), cx);
                                 }
                             });
                         }
@@ -895,7 +896,7 @@ impl NavView {
                                     }
                                 }
                                 if pending == 0 {
-                                    this.host.notice("该分组没有已连接的连接".to_string(), cx);
+                                    this.host.notice(tr("该分组没有已连接的连接").to_string(), cx);
                                 }
                             });
                         }
@@ -964,7 +965,7 @@ impl NavView {
                 let gname = gname.clone();
                 move |menu, _window, _cx| {
                     if is_ungrouped {
-                        return menu.item(PopupMenuItem::new("新建分组").on_click({
+                        return menu.item(PopupMenuItem::new(tr("新建分组")).on_click({
                             let entity = entity.clone();
                             let host = host.clone();
                             let seed = GroupFormSeed::for_new(default_group_name.clone());
@@ -993,7 +994,7 @@ impl NavView {
                     let e_del = entity.clone();
                     let gid_del = gid.clone();
                     let gname_del = gname.clone();
-                    menu.item(PopupMenuItem::new("重命名分组").on_click(move |_, _, app| {
+                    menu.item(PopupMenuItem::new(tr("重命名分组")).on_click(move |_, _, app| {
                         let gid = gid_rename.clone();
                         e_rename.update(app, |this, cx| {
                             this.nav.borrow_mut().group_rename_for = Some(gid.clone());
@@ -1001,7 +1002,7 @@ impl NavView {
                         });
                     }))
                     // 名称 + 描述一次编辑（行内重命名只改名称，这里补上描述）。
-                    .item(PopupMenuItem::new("编辑分组…").on_click({
+                    .item(PopupMenuItem::new(tr("编辑分组…")).on_click({
                         let host = host.clone();
                         move |_, window, app| {
                             let e = e_desc.clone();
@@ -1018,7 +1019,7 @@ impl NavView {
                             );
                         }
                     }))
-                    .item(PopupMenuItem::new("新建分组").on_click({
+                    .item(PopupMenuItem::new(tr("新建分组")).on_click({
                         let host = host.clone();
                         move |_, window, app| {
                             let e = e_new.clone();
@@ -1037,7 +1038,7 @@ impl NavView {
                     }))
                     .separator()
                     // 分组排序：拖拽是主路径，这两项是键盘 / 无鼠标时的替代（边界置灰）。
-                    .item(PopupMenuItem::new("上移分组").disabled(!can_up).on_click({
+                    .item(PopupMenuItem::new(tr("上移分组")).disabled(!can_up).on_click({
                         let e = entity.clone();
                         let gid = gid.clone();
                         move |_, _, app| {
@@ -1046,7 +1047,7 @@ impl NavView {
                         }
                     }))
                     .item(
-                        PopupMenuItem::new("下移分组")
+                        PopupMenuItem::new(tr("下移分组"))
                             .disabled(!can_down)
                             .on_click({
                                 let e = entity.clone();
@@ -1059,7 +1060,7 @@ impl NavView {
                     )
                     .separator()
                     .item(
-                        PopupMenuItem::new("删除分组").on_click(move |_, window, app| {
+                        PopupMenuItem::new(tr("删除分组")).on_click(move |_, window, app| {
                             let entity = e_del.clone();
                             let gid = gid_del.clone();
                             let gname = gname_del.clone();
@@ -1068,7 +1069,7 @@ impl NavView {
                                 let gid = gid.clone();
                                 alert
                                     .confirm()
-                                    .title("删除分组")
+                                    .title(tr("删除分组"))
                                     .description(format!(
                                         "确定删除分组「{gname}」？成员连接与缓存不会被删除。"
                                     ))
@@ -1256,7 +1257,7 @@ impl NavView {
         let source_text = if self.host.source_short_code(cx) {
             source.code().to_string()
         } else {
-            source.label().to_string()
+            tr(source.label()).to_string()
         };
         let filter = self.nav.borrow().filter.to_lowercase();
         let match_bg = product_tokens::get(cx).search_match_background(cx.theme());
@@ -1887,7 +1888,7 @@ impl NavView {
                                         });
                                     }),
                             )
-                            .item(PopupMenuItem::new("测试连接").on_click({
+                            .item(PopupMenuItem::new(tr("测试连接")).on_click({
                                 let e = entity.clone();
                                 let cid = conn_id.clone();
                                 let root = root.clone();
@@ -1907,7 +1908,7 @@ impl NavView {
                                     e.update(app, |this, cx| this.ensure_nav_pump(cx));
                                 }
                             }))
-                            .item(PopupMenuItem::new("编辑连接…").on_click({
+                            .item(PopupMenuItem::new(tr("编辑连接…")).on_click({
                                 let cid_edit2 = cid_edit.clone();
                                 let e_edit2 = e_edit.clone();
                                 move |_, window, app| {
@@ -1917,7 +1918,7 @@ impl NavView {
                                     });
                                 }
                             }))
-                            .item(PopupMenuItem::new("打标签…").on_click({
+                            .item(PopupMenuItem::new(tr("打标签…")).on_click({
                                 let cid_tag = cid_edit.clone();
                                 let e_tag = e_edit.clone();
                                 move |_, window, app| {
@@ -1931,7 +1932,7 @@ impl NavView {
                                 // S4-③ 能力门控（blanco 参照）：可见性弹框要**同步查库**（打开时
                                 // 逐 catalog 取 schema），未连接时点开必超时——禁用而非隐藏，
                                 // 保持菜单结构稳定（DBeaver 同款：不可用项置灰）。
-                                PopupMenuItem::new("数据库可见性…")
+                                PopupMenuItem::new(tr("数据库可见性…"))
                                     .disabled(!is_connected)
                                     .on_click(move |_, window, app| {
                                         let cid = cid_vis.clone();
@@ -1942,14 +1943,14 @@ impl NavView {
                             .item(
                                 // B-1 对象名过滤器：**本地配置动作**（不回源库），断连也可
                                 // 编辑缓存对象规则——与「数据库可见性…」不同，不置灰。
-                                PopupMenuItem::new("对象名过滤器…").on_click(move |_, window, app| {
+                                PopupMenuItem::new(tr("对象名过滤器…")).on_click(move |_, window, app| {
                                     let cid = cid_mask.clone();
                                     let host_mask = host_mask.clone();
                                     host_mask.open_object_mask_dialog(Some(&cid), window, app);
                                 }),
                             )
                             .separator()
-                            .item(PopupMenuItem::new("查看属性").on_click(move |_, window, app| {
+                            .item(PopupMenuItem::new(tr("查看属性")).on_click(move |_, window, app| {
                                 let prop = prop_own.clone();
                                 let label = label_prop.clone();
                                 let drv = drv_prop.clone();
@@ -1969,7 +1970,7 @@ impl NavView {
                                 });
                             }))
                             .item(
-                                PopupMenuItem::new("移动到分组…").on_click(move |_, _, app| {
+                                PopupMenuItem::new(tr("移动到分组…")).on_click(move |_, _, app| {
                                     let cid = cid_org.clone();
                                     e_org.update(app, |this, cx| {
                                         this.nav.borrow_mut().group_picker_for =
@@ -1988,7 +1989,7 @@ impl NavView {
                             let explicit = menu_primary_explicit;
                             menu = menu.submenu("设为主组", window, cx, move |m, _w, _c| {
                                 let mut m = m.item(
-                                    PopupMenuItem::new("自动（按分组排序）")
+                                    PopupMenuItem::new(tr("自动（按分组排序）"))
                                         .checked(!explicit)
                                         .on_click({
                                             let e = e_p.clone();
@@ -2044,7 +2045,7 @@ impl NavView {
                             let e = entity.clone();
                             let cid = conn_id.clone();
                             menu = menu.separator().item(
-                                PopupMenuItem::new("复制连接（模板）…").on_click(
+                                PopupMenuItem::new(tr("复制连接（模板）…")).on_click(
                                     move |_, _, app| {
                                         let cid = cid.clone();
                                         e.update(app, |this, cx| {
@@ -2061,7 +2062,7 @@ impl NavView {
                             let cid = conn_id.clone();
                             let name = conn_name.clone();
                             menu = menu.item(
-                                PopupMenuItem::new("共享至项目").on_click(move |_, _, app| {
+                                PopupMenuItem::new(tr("共享至项目")).on_click(move |_, _, app| {
                                     let cid = cid.clone();
                                     let name = name.clone();
                                     e.update(app, |this, cx| {
@@ -2075,7 +2076,7 @@ impl NavView {
                             let cid = conn_id.clone();
                             let name = conn_name.clone();
                             menu = menu.item(
-                                PopupMenuItem::new("取消共享").on_click(move |_, _, app| {
+                                PopupMenuItem::new(tr("取消共享")).on_click(move |_, _, app| {
                                     let cid = cid.clone();
                                     let name = name.clone();
                                     e.update(app, |this, cx| {
@@ -2089,7 +2090,7 @@ impl NavView {
                             let cid = conn_id.clone();
                             let name = conn_name.clone();
                             menu = menu.separator().item(
-                                PopupMenuItem::new("删除连接").on_click(move |_, window, app| {
+                                PopupMenuItem::new(tr("删除连接")).on_click(move |_, window, app| {
                                     let e = e.clone();
                                     let cid = cid.clone();
                                     let name = name.clone();
@@ -2101,7 +2102,7 @@ impl NavView {
                                         let name_for_ok = name.clone();
                                         alert
                                             .confirm()
-                                            .title("删除连接")
+                                            .title(tr("删除连接"))
                                             .description(format!(
                                                 "确定删除连接「{name}」？元数据缓存会保留（可在「缓存管理」清理）。"
                                             ))
@@ -2123,14 +2124,14 @@ impl NavView {
                                 }),
                             );
                         }
-                        menu.item(PopupMenuItem::new("复制名称").on_click(move |_, _, app| {
+                        menu.item(PopupMenuItem::new(tr("复制名称")).on_click(move |_, _, app| {
                             let name = name_copy.clone();
                             app.write_to_clipboard(ClipboardItem::new_string(name.clone()));
                             host_copy.notice(format!("已复制：{name}"), app);
                             e_copy.update(app, |_, cx| cx.notify());
                         }))
                         .item(
-                            PopupMenuItem::new("刷新元数据")
+                            PopupMenuItem::new(tr("刷新元数据"))
                                 // S4-N4：断连无元数据可刷，置灰（本地配置类动作不置灰）。
                                 .disabled(!super::nav_conn_menu_enabled(
                                     NavActionId::RefreshProps,
@@ -2148,7 +2149,7 @@ impl NavView {
                         // 通用模块入口（与连接状态无关）：SQL 编辑器 / 洞察。
                         // Mock 只针对表 / 视图，见 `render_nav_node` 的对象菜单。
                         .separator()
-                        .item(PopupMenuItem::new("在 SQL 编辑器中打开").on_click({
+                        .item(PopupMenuItem::new(tr("在 SQL 编辑器中打开")).on_click({
                             // `host` 是上层块里的局部（`self` 不能进 'static 闭包）
                             let host = host.clone();
                             let cid = conn_id.clone();
@@ -2162,7 +2163,7 @@ impl NavView {
                                 }, app);
                                                             }
                         }))
-                        .item(PopupMenuItem::new("查看洞察").on_click({
+                        .item(PopupMenuItem::new(tr("查看洞察")).on_click({
                             let e = entity.clone();
                             move |_, _, app| {
                                 e.update(app, |this, cx| {
@@ -2584,7 +2585,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                     .flex_none()
                     .text_xs()
                     .text_color(staged_drop)
-                    .child("待删除"),
+                    .child(tr("待删除")),
             );
         }
         // 需求④ 分区/继承 / ≈N / 大小徽标（Table 专用槽）随总开关整体显隐；
@@ -2782,7 +2783,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                                 let e = entity.clone();
                                 let label0 = conn_label.clone();
                                 let drv0 = driver.clone();
-                                PopupMenuItem::new(d.label)
+                                PopupMenuItem::new(tr(d.label))
                                     .disabled(!entry.enabled)
                                     .on_click(move |_, window, app| {
                                         let prop = prop0.clone();
@@ -2808,7 +2809,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                                 let sql = format!("SELECT * FROM {q} LIMIT 200;");
                                 let host_sql = host.clone();
                                 let cid_view = conn_id.clone();
-                                PopupMenuItem::new(d.label)
+                                PopupMenuItem::new(tr(d.label))
                                     .disabled(!entry.enabled)
                                     .on_click(move |_, _, app| {
                                         // B11：打开一份绑定该连接的查询并**自动执行**
@@ -2827,7 +2828,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                                 let host = host.clone();
                                 let cid = conn_id.clone();
                                 Some(
-                                    PopupMenuItem::new(d.label)
+                                    PopupMenuItem::new(tr(d.label))
                                         .disabled(!entry.enabled)
                                         .on_click(move |_, _, app| {
                                             // B11：只入队，宿主开文档并聚焦
@@ -2849,7 +2850,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                                 let table = data_target.clone();
                                 let schema = insight_schema.clone();
                                 Some(
-                                    PopupMenuItem::new(d.label)
+                                    PopupMenuItem::new(tr(d.label))
                                         .disabled(!entry.enabled)
                                         .on_click(move |_, _, app| {
                                             // Fn 闭包不能移动捕获变量：克隆后进入分支
@@ -2921,7 +2922,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                                             m
                                         });
                                     Some(
-                                        PopupMenuItem::submenu(d.label, sub_entity)
+                                        PopupMenuItem::submenu(tr(d.label), sub_entity)
                                             .disabled(!entry.enabled),
                                     )
                                 }
@@ -2929,7 +2930,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                             },
                             NavActionId::MockData => data_target.clone().map(|request| {
                                 let e = entity.clone();
-                                PopupMenuItem::new(d.label)
+                                PopupMenuItem::new(tr(d.label))
                                     .disabled(!entry.enabled)
                                     .on_click(move |_, _, app| {
                                         let request = request.clone();
@@ -2943,7 +2944,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                                 let host_copy = host.clone();
                                 let name_copy = dname.clone();
                                 Some(
-                                    PopupMenuItem::new(d.label)
+                                    PopupMenuItem::new(tr(d.label))
                                         .disabled(!entry.enabled)
                                         .on_click(move |_, _, app| {
                                             let name = name_copy.clone();
@@ -2958,7 +2959,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                             NavActionId::CopyQualified => qualified.clone().map(|q| {
                                 let e = entity.clone();
                                 let host_copy = host.clone();
-                                PopupMenuItem::new(d.label)
+                                PopupMenuItem::new(tr(d.label))
                                     .disabled(!entry.enabled)
                                     .on_click(move |_, _, app| {
                                         let q = q.clone();
@@ -2973,7 +2974,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                                 let e = entity.clone();
                                 let cid = conn_id.clone();
                                 let key = nkey.clone();
-                                PopupMenuItem::new(d.label)
+                                PopupMenuItem::new(tr(d.label))
                                     .disabled(!entry.enabled)
                                     .on_click(move |_, _, app| {
                                         let cid = cid.clone();
@@ -3538,7 +3539,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                 Button::new(format!("nav-locate-{id}"))
                     .ghost()
                     .xsmall()
-                    .label("定位")
+                    .label(tr("定位"))
                     .text_color(pri)
                     .on_click(move |_, _, app| {
                         // 行本身的单击是「看属性」：点「定位」不该同时把属性面板也推出来。

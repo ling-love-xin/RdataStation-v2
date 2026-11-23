@@ -1,5 +1,6 @@
 //! 预览表格委托：预览结果集的列 / 行 / 排序 / 右键菜单。
 
+use shared::i18n::tr;
 use super::*;
 
 pub(crate) struct PreviewTableDelegate {
@@ -375,7 +376,7 @@ impl TableDelegate for PreviewTableDelegate {
         }
         if let Some(value) = self.context_text(row_ix) {
             menu = menu.item(
-                PopupMenuItem::new("复制此值").on_click(move |_, _window, app| {
+                PopupMenuItem::new(tr("复制此值")).on_click(move |_, _window, app| {
                     app.write_to_clipboard(gpui_kit::ClipboardItem::new_string(value.clone()));
                 }),
             );
@@ -393,7 +394,7 @@ impl TableDelegate for PreviewTableDelegate {
         }
         let row_text = self.row_text(row_ix);
         if !row_text.is_empty() {
-            menu = menu.item(PopupMenuItem::new("复制整行（TSV）").on_click(
+            menu = menu.item(PopupMenuItem::new(tr("复制整行（TSV）")).on_click(
                 move |_, _window, app| {
                     app.write_to_clipboard(gpui_kit::ClipboardItem::new_string(row_text.clone()));
                 },

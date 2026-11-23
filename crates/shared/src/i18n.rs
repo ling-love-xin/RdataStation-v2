@@ -47,6 +47,18 @@ impl Locale {
             _ => Locale::Zh,
         }
     }
+
+    /// 组件库（`gpui-kit` 内的 rust-i18n）认的语言码。
+    ///
+    /// 与 [`Locale::code`] 分开是必须的：存储码是 `zh` / `en`，而组件库
+    /// `locales/ui.yml` 的语言块是 **`zh-CN`** —— 直接把 `zh` 透传过去命中不到，
+    /// rust-i18n 会静默回退到 `en`（组件内置文案仍是英文，且不报错）。
+    pub fn component_code(self) -> &'static str {
+        match self {
+            Locale::Zh => "zh-CN",
+            Locale::En => "en",
+        }
+    }
 }
 
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -98,6 +110,22 @@ pub fn tr(zh: &'static str) -> &'static str {
     zh
 }
 
+/// 同 [`tr`]，但允许非 `'static` 的键（结构体里存的 `String`）。
+///
+/// 用途：模型 / 缓存里存的是**中文原文**（那里不能 `tr`，否则语言会被冻结在构造时），
+/// 到渲染出口再翻译：`Text::new(tr_dyn(&row.label))`。
+///
+/// 返回值生命周期取入参：En 模式下未登记项与中文模式都原样返回入参，命中则返回表里的
+/// `'static` 值（`'static` 满足任何入参生命周期）。
+pub fn tr_dyn(zh: &str) -> &str {
+    if current() == Locale::En {
+        if let Some(en) = EN.get(zh) {
+            return *en;
+        }
+    }
+    zh
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,6 +169,17 @@ mod tests {
         assert_eq!(current(), Locale::Zh);
         set_locale(Locale::En);
         assert_eq!(current(), Locale::En);
+    }
+
+    /// 存储码 ≠ 组件库语言码：`appearance.locale` 存 `zh`，而组件库 `ui.yml` 的语言块是
+    /// `zh-CN`。谁把 `code()` 直接透传给 rust-i18n，组件文案就会静默回退英文——这条钉住映射。
+    #[test]
+    fn component_locale_code_differs_from_storage_code() {
+        assert_eq!(Locale::Zh.code(), "zh");
+        assert_eq!(Locale::Zh.component_code(), "zh-CN");
+        assert_ne!(Locale::Zh.code(), Locale::Zh.component_code());
+        assert_eq!(Locale::En.code(), "en");
+        assert_eq!(Locale::En.component_code(), "en");
     }
 
     /// 目录化完整性：zh / en 键集合完全一致（漏译、误植键、多余键都会让本测试失败）。
@@ -194,5 +233,18 @@ mod tests {
         assert_eq!(tr("连接"), "Connection");
         assert_eq!(tr("测试连接"), "Test Connection");
         set_locale(Locale::Zh);
+    }
+
+    /// `tr_dyn` 与 `tr` 同表：静态字面量与 `String` 键结果一致；未登记项回退入参。
+    #[test]
+    fn tr_dyn_matches_tr() {
+        let _guard = LOCALE_TEST_LOCK.lock().unwrap();
+        set_locale(Locale::En);
+        let owned = String::from("数据源");
+        assert_eq!(tr_dyn(&owned), "Data Sources");
+        assert_eq!(tr_dyn("数据源"), tr("数据源"));
+        assert_eq!(tr_dyn(&String::from("未登记词")), "未登记词");
+        set_locale(Locale::Zh);
+        assert_eq!(tr_dyn(&owned), "数据源");
     }
 }

@@ -1,5 +1,6 @@
 //! 字段区渲染：列编辑区的字段行。
 
+use shared::i18n::tr;
 use super::*;
 
 impl MockDetailView {
@@ -22,7 +23,7 @@ impl MockDetailView {
             return div()
                 .text_xs()
                 .text_color(muted)
-                .child("暂无列：在这张 tab 里点「导入结构」或「＋ 加列」开始造表。")
+                .child(tr("暂无列：在这张 tab 里点「导入结构」或「＋ 加列」开始造表。"))
                 .into_any_element();
         }
         let columns = {
@@ -33,7 +34,7 @@ impl MockDetailView {
             return div()
                 .text_xs()
                 .text_color(muted)
-                .child("没有匹配的列——清空「筛选列」看全部（匹配列名与生成器名）。")
+                .child(tr("没有匹配的列——清空「筛选列」看全部（匹配列名与生成器名）。"))
                 .into_any_element();
         }
 
@@ -56,7 +57,7 @@ impl MockDetailView {
                         .find(|ug| ug.id == *user_id)
                         .map(|ug| ug.name.clone())
                 })
-                .unwrap_or_else(|| spec.label.to_string());
+                .unwrap_or_else(|| tr(spec.label).to_string());
             let unique = if column.def.unique { "唯一 · " } else { "" };
             let null_percent = (column.def.nullable_ratio * 100.0).round() as i64;
             let detail = if summary.is_empty() {
@@ -275,7 +276,7 @@ impl MockDetailView {
                             )
                             .xsmall()
                             .dropdown_caret(true)
-                            .tooltip("打开列编辑：选生成器 + 调参数（同一处改完再应用）")
+                            .tooltip(tr("打开列编辑：选生成器 + 调参数（同一处改完再应用）"))
                             .tooltip_show_delay(TOOLTIP_DELAY)
                             .on_click(move |_, window, app| {
                                 entity.update(app, |view, cx| {

@@ -1,5 +1,6 @@
 // ==================== 场景/关系 ====================
 
+use shared::i18n::tr;
 use super::*;
 
 impl MockPanel {
@@ -432,11 +433,11 @@ impl MockPanel {
         self.error = None;
         let name_input = self
             .edit_name_input
-            .get_or_insert_with(|| cx.new(|cx| InputState::new(window, cx).placeholder("表名")))
+            .get_or_insert_with(|| cx.new(|cx| InputState::new(window, cx).placeholder(tr("表名"))))
             .clone();
         let rows_input = self
             .edit_rows_input
-            .get_or_insert_with(|| cx.new(|cx| InputState::new(window, cx).placeholder("行数")))
+            .get_or_insert_with(|| cx.new(|cx| InputState::new(window, cx).placeholder(tr("行数"))))
             .clone();
         name_input.update(cx, |state, cx| {
             state.set_value(current.name.clone(), window, cx)
@@ -471,7 +472,7 @@ impl MockPanel {
             }
             let cancel_panel = panel.clone();
             let ok_panel = panel.clone();
-            dialog.title("编辑表").child(body).footer(
+            dialog.title(tr("编辑表")).child(body).footer(
                 DialogFooter::new()
                     .child(
                         button("mock-table-cancel", "取消", ActionKind::Soft).on_click(
@@ -746,7 +747,7 @@ impl MockPanel {
 
             let cancel_panel = panel.clone();
             let ok_panel = panel.clone();
-            dialog.title("加表间关系").child(body).footer(
+            dialog.title(tr("加表间关系")).child(body).footer(
                 DialogFooter::new()
                     .child(
                         button("mock-relation-cancel", "取消", ActionKind::Soft).on_click(
@@ -835,7 +836,7 @@ impl MockPanel {
                             };
                             message = format!(
                                 "已加关系 {child_table}.{child_column} → {}",
-                                domain.label()
+                                shared::i18n::tr_dyn(&domain.label())
                             );
                         }
                     }

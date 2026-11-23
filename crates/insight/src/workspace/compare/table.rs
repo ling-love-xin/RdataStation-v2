@@ -1,5 +1,6 @@
 //! 对比表自由函数：滚动容器 / 指标行 / 行原语 / 表头。
 
+use shared::i18n::tr;
 use super::*;
 
 pub(crate) fn compare_table_scroll(
@@ -180,30 +181,30 @@ pub(crate) fn compare_table_header(theme: &Theme) -> Div {
             div()
                 .flex_1()
                 .min_w(rems(ui::INSIGHT_WS_TABLE_COL_MIN_WIDTH))
-                .child("表"),
+                .child(tr("表")),
         )
         .child(
             div()
                 .w(rems(ui::INSIGHT_WS_SOURCE_WIDTH))
                 .flex_none()
-                .child("数据源"),
+                .child(tr("数据源")),
         )
         .child(
             div()
                 .w(rems(ui::INSIGHT_WS_NUM_WIDTH))
                 .flex_none()
-                .child("行数"),
+                .child(tr("行数")),
         )
         .child(
             div()
                 .w(rems(ui::INSIGHT_WS_NUM_WIDTH))
                 .flex_none()
-                .child("列数"),
+                .child(tr("列数")),
         )
         .child(
             div()
                 .w(rems(ui::INSIGHT_WS_STATUS_WIDTH))
                 .flex_none()
-                .child("状态"),
+                .child(tr("状态")),
         )
 }

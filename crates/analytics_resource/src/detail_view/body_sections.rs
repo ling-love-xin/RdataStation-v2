@@ -1,5 +1,6 @@
 //! 分区表：基本信息 / 指纹 / 组织…（含版本分区的「查看全部…」入口）。
 
+use shared::i18n::tr;
 use super::*;
 
 pub(super) fn render_body_sections(
@@ -51,7 +52,7 @@ pub(super) fn render_body_sections(
                         Button::new("archive-detail-copy-hash")
                             .ghost()
                             .xsmall()
-                            .label("复制")
+                            .label(tr("复制"))
                             .text_color(muted)
                             // 带结构指纹的行口径与普通文件不一样（定义 + 结构，行数不算）：
                             // 说明就挂在指纹那一行的按钮上——那里正是用户会问“这串是什么”的地方。
@@ -88,9 +89,9 @@ pub(super) fn render_body_sections(
                         Button::new("archive-detail-copy-table")
                             .ghost()
                             .xsmall()
-                            .label("复制")
+                            .label(tr("复制"))
                             .text_color(muted)
-                            .tooltip("复制表名（拿去写 SQL 时不用回列表）")
+                            .tooltip(tr("复制表名（拿去写 SQL 时不用回列表）"))
                             .on_click(move |_, _window, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(table.clone()))
                             }),
@@ -114,9 +115,9 @@ pub(super) fn render_body_sections(
                     Button::new("archive-detail-copy-payload-path")
                         .ghost()
                         .xsmall()
-                        .label("复制")
+                        .label(tr("复制"))
                         .text_color(muted)
-                        .tooltip("复制相对项目根的路径")
+                        .tooltip(tr("复制相对项目根的路径"))
                         .on_click(move |_, _window, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(path.clone()))
                         }),
@@ -129,9 +130,9 @@ pub(super) fn render_body_sections(
                         Button::new("archive-detail-reveal-payload")
                             .ghost()
                             .xsmall()
-                            .label("显示")
+                            .label(tr("显示"))
                             .text_color(muted)
-                            .tooltip("在系统文件管理器里定位本体")
+                            .tooltip(tr("在系统文件管理器里定位本体"))
                             .on_click(move |_, window, cx| {
                                 host.request_reveal(&detail, window, cx)
                             }),
@@ -189,7 +190,7 @@ pub(super) fn render_body_sections(
         // 「基本信息」整块只读（改内容只能走「取回」）：标题右侧标一句，
         // 免得用户对着这些行找编辑入口（原型 `.sect-h .lock`）。
         if is_basic_section {
-            title_row = title_row.child(div().text_xs().text_color(colors.warning).child("只读"));
+            title_row = title_row.child(div().text_xs().text_color(colors.warning).child(tr("只读")));
         }
         let mut section = div().v_flex().w_full().gap_1().child(title_row).child(kv_list);
         // 版本区的**时间线**（原型 §3.1 的「历史」那几行细化成节点）：当前版本在最前，
@@ -217,7 +218,7 @@ pub(super) fn render_body_sections(
                         .ghost()
                         .xsmall()
                         .debug_selector(|| "archive-detail-versions".to_string())
-                        .label("查看全部…")
+                        .label(tr("查看全部…"))
                         .on_click(move |_, window, cx| {
                             host.request_version_history(&resource_id, window, cx)
                         }),
@@ -362,7 +363,7 @@ fn render_timeline_node(
                 .flex_none()
                 .text_xs()
                 .text_color(colors.primary)
-                .child("当前"),
+                .child(tr("当前")),
         )
     } else {
         row
@@ -440,9 +441,9 @@ fn render_timeline_card(line: &DetailVersionLine, cx: &App) -> AnyElement {
                 .text_color(colors.foreground)
                 .child(format!("v{}", line.version))
                 .child(if line.is_current {
-                    div().text_color(colors.primary).child("当前版本")
+                    div().text_color(colors.primary).child(tr("当前版本"))
                 } else {
-                    div().text_color(colors.muted_foreground).child("历史版本")
+                    div().text_color(colors.muted_foreground).child(tr("历史版本"))
                 }),
         )
         .child(list);
@@ -522,9 +523,9 @@ fn render_definition_block(sql: &str, cx: &App) -> Div {
                     Button::new("archive-detail-copy-definition")
                         .ghost()
                         .xsmall()
-                        .label("复制")
+                        .label(tr("复制"))
                         .text_color(muted)
-                        .tooltip("复制完整定义（面板里只摆得下前几行）")
+                        .tooltip(tr("复制完整定义（面板里只摆得下前几行）"))
                         .on_click(move |_, _window, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()))
                         }),
@@ -558,7 +559,7 @@ fn render_move_to_group(detail: &ArchiveDetail, actions: &DetailActions) -> impl
             // （标题写在按钮上就够了，菜单里不再摆一行不可点的标题。）
             // 单选时当前项置灰：点了也不会变（与右键子菜单同一口径）。
             menu = menu.item(
-                PopupMenuItem::new("未分组")
+                PopupMenuItem::new(tr("未分组"))
                     .checked(single && current.is_none())
                     .disabled(single && current.is_none())
                     .on_click({
@@ -584,7 +585,7 @@ fn render_move_to_group(detail: &ArchiveDetail, actions: &DetailActions) -> impl
                 );
             }
             menu.separator()
-                .item(PopupMenuItem::new("新建分组…").on_click({
+                .item(PopupMenuItem::new(tr("新建分组…")).on_click({
                     let host = host.clone();
                     move |_, window, cx| host.request_create_group(window, cx)
                 }))

@@ -1,6 +1,7 @@
 //! 动作编排：打开 / 关闭 / 创建 / 重定位 / 删除 / 移出 / 归档 / 项目信息 / 默认连接，
 //! 以及选择器的加载与筛选动作。
 
+use shared::i18n::tr;
 use super::*;
 
 /// 从示例项目开始（内置最小示例：示例 SQL 草稿）。
@@ -157,7 +158,7 @@ pub fn open_unsaved_dialog(
         let pending_save = pending.clone();
         alert
             .icon(Icon::new(IconName::TriangleAlert).text_color(theme.colors.warning))
-            .title("未保存的草稿")
+            .title(tr("未保存的草稿"))
             .description(
                 "编辑区存在未保存的 SQL 草稿。「保存并继续」会另存为项目草稿文件，「放弃更改」则直接执行切换 / 关闭 / 所选项目操作。",
             )

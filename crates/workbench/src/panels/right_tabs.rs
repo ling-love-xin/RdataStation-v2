@@ -4,6 +4,7 @@
 //! 自持视图（`InsightView` / `MockPanel` / `HistoryView` / `render_detail`），
 //! 本文件只做薄壳 + 面板协议。`set_active` 把活动栏高亮同步回 `Shared::active_right`。
 
+use shared::i18n::tr;
 use gpui_kit::EventEmitter;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
@@ -386,13 +387,13 @@ impl ArchivePanel {
                     .items_center()
                     .justify_center()
                     .gap_2()
-                    .child(div().text_sm().text_color(muted).child("未选中存档"))
+                    .child(div().text_sm().text_color(muted).child(tr("未选中存档")))
                     .child(
                         div()
                             .px_4()
                             .text_xs()
                             .text_color(muted)
-                            .child("在左侧「资产库」选中一行，这里显示它的归档凭证"),
+                            .child(tr("在左侧「资产库」选中一行，这里显示它的归档凭证")),
                     )
             }
         }

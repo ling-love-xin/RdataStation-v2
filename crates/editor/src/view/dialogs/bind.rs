@@ -1,5 +1,6 @@
 //! 参数绑定表单（B16：`实名` → 弹参数 → 字面替换后执行）。
 
+use shared::i18n::tr;
 use super::*;
 
 /// 【B16】参数绑定表单（DBeaver 式 `:name` → 弹参数 → 字面替换后执行）
@@ -56,7 +57,7 @@ pub fn open_bind_dialog(
         let run = Button::new("editor-bind-run")
             .with_variant(ButtonVariant::Primary)
             .small()
-            .label("执行")
+            .label(tr("执行"))
             .debug_selector(|| "editor-bind-run".to_string())
             .on_click({
                 let on_run = on_run.clone();
@@ -74,7 +75,7 @@ pub fn open_bind_dialog(
         let cancel = Button::new("editor-bind-cancel")
             .with_variant(ButtonVariant::Ghost)
             .small()
-            .label("取消")
+            .label(tr("取消"))
             .debug_selector(|| "editor-bind-cancel".to_string())
             .on_click({
                 let on_cancel = on_cancel.clone();
@@ -85,7 +86,7 @@ pub fn open_bind_dialog(
             });
 
         dialog
-            .title("参数")
+            .title(tr("参数"))
             .child(body)
             .footer(DialogFooter::new().child(cancel).child(run))
     });

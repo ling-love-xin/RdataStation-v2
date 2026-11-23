@@ -38,7 +38,7 @@ pub fn open_unlock_window(cx: &mut App, on_unlocked: Rc<dyn Fn(&mut App)>) {
             cx,
         ))),
         titlebar: Some(TitlebarOptions {
-            title: Some("RdataStation · 主密码".into()),
+            title: Some(tr("RdataStation · 主密码").to_string().into()),
             ..Default::default()
         }),
         ..Default::default()

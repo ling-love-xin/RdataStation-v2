@@ -1,5 +1,6 @@
 //! 对话框：保存模板 + 导入源库结构。
 
+use shared::i18n::tr;
 use super::*;
 
 impl MockPanel {
@@ -16,7 +17,7 @@ impl MockPanel {
         }
         let name = self
             .template_name
-            .get_or_insert_with(|| cx.new(|cx| InputState::new(window, cx).placeholder("模板名")))
+            .get_or_insert_with(|| cx.new(|cx| InputState::new(window, cx).placeholder(tr("模板名"))))
             .clone();
         let suggestion = format!("{} 配置", self.draft.table_name.trim());
         name.update(cx, |state, cx| state.set_value(suggestion, window, cx));
@@ -38,7 +39,7 @@ impl MockPanel {
                 .child(form_line(theme, "模板名", &name));
             let panel_save = panel.clone();
             let input = name.clone();
-            dialog.title("保存为模板").child(body).footer(
+            dialog.title(tr("保存为模板")).child(body).footer(
                 DialogFooter::new()
                     .child(
                         button("mock-template-dialog-cancel", "取消", ActionKind::Soft).on_click(
@@ -79,17 +80,17 @@ impl MockPanel {
             .and_then(|id| self.sources.iter().find(|s| s.conn_id == id).cloned());
         let catalog = self
             .import_catalog
-            .get_or_insert_with(|| cx.new(|cx| InputState::new(window, cx).placeholder("数据库")))
+            .get_or_insert_with(|| cx.new(|cx| InputState::new(window, cx).placeholder(tr("数据库"))))
             .clone();
         let schema = self
             .import_schema
             .get_or_insert_with(|| {
-                cx.new(|cx| InputState::new(window, cx).placeholder("schema（可留空）"))
+                cx.new(|cx| InputState::new(window, cx).placeholder(tr("schema（可留空）")))
             })
             .clone();
         let table = self
             .import_table
-            .get_or_insert_with(|| cx.new(|cx| InputState::new(window, cx).placeholder("表名")))
+            .get_or_insert_with(|| cx.new(|cx| InputState::new(window, cx).placeholder(tr("表名"))))
             .clone();
         if let Some(source) = panel_match.as_ref() {
             let (catalog_value, schema_value, table_value) = (
@@ -136,7 +137,7 @@ impl MockPanel {
                 .dropdown_menu(move |menu, _window, _cx| {
                     let mut menu = menu;
                     if sources.is_empty() {
-                        return menu.item(PopupMenuItem::new("（暂无数据源）").disabled(true));
+                        return menu.item(PopupMenuItem::new(tr("（暂无数据源）")).disabled(true));
                     }
                     for candidate in sources.iter() {
                         let source = candidate.clone();
@@ -165,7 +166,7 @@ impl MockPanel {
 
             let panel_ok = panel.clone();
             let selected_ok = selected.clone();
-            dialog.title("导入源库结构").child(body).footer(
+            dialog.title(tr("导入源库结构")).child(body).footer(
                 DialogFooter::new()
                     .child(
                         button("mock-import-cancel", "取消", ActionKind::Soft).on_click(

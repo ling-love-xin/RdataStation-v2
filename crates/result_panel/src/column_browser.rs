@@ -30,6 +30,7 @@
 //! 会覆盖 item 的 `.selected()`），面板侧 `selected_col` 只作为「选中了哪个数据列」的
 //! 语义权威（明细 / 计算分组兜底 / 网格反推），两处通过 host 事件路径同步。
 
+use shared::i18n::tr;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::IndexPath;
@@ -506,7 +507,7 @@ impl ListDelegate for ColumnBrowserDelegate {
             .px_2()
             .text_xs()
             .text_color(cx.theme().muted_foreground)
-            .child("无匹配列")
+            .child(tr("无匹配列"))
             .into_any_element()
     }
 }

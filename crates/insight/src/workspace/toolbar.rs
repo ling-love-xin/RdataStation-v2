@@ -1,5 +1,6 @@
 //! 中间工作页工具栏（刷新 / 取样↔全量 / 导出 + 目标切换 + 内存占用读数）。
 
+use shared::i18n::tr;
 use super::*;
 use crate::insight_view::InsightScope;
 
@@ -53,8 +54,8 @@ impl super::InsightWorkspacePanel {
         let refresh_btn = Button::new("insight-ws-refresh")
             .ghost()
             .icon(IconName::RotateCw)
-            .label("刷新")
-            .tooltip("重算当前画像")
+            .label(tr("刷新"))
+            .tooltip(tr("重算当前画像"))
             .on_click({
                 let entity = entity.clone();
                 move |_, _, app| {
@@ -108,8 +109,8 @@ impl super::InsightWorkspacePanel {
         let export_btn = Button::new("insight-ws-export")
             .ghost()
             .icon(IconName::FileText)
-            .label("导出")
-            .tooltip("导出画像报告（Markdown）")
+            .label(tr("导出"))
+            .tooltip(tr("导出画像报告（Markdown）"))
             .disabled(!matches!(
                 *self.view.read(cx).state(),
                 InsightPanelState::Data
@@ -197,7 +198,7 @@ impl super::InsightWorkspacePanel {
                         }
                         let open_compare = entity_owned.clone();
                         menu.item(
-                            PopupMenuItem::new("打开多表对比…").on_click(move |_, _, app| {
+                            PopupMenuItem::new(tr("打开多表对比…")).on_click(move |_, _, app| {
                                 open_compare.update(app, |panel, cx| {
                                     panel.set_mode(WorkspaceMode::Compare, cx);
                                 });
@@ -224,7 +225,7 @@ impl super::InsightWorkspacePanel {
                 .px_2()
                 .text_xs()
                 .text_color(colors.muted_foreground)
-                .child("内存 —");
+                .child(tr("内存 —"));
         };
         let used_mb = stats.database_bytes.unwrap_or(0) / (1024 * 1024);
         let limit_mb = stats.limit_bytes / (1024 * 1024);

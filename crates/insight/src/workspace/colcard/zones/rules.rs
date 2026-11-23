@@ -1,5 +1,6 @@
 //! 列卡「规则」区：规则摘要列表 + 载入按钮 + SQL 查看入口。
 
+use shared::i18n::tr;
 use super::super::*;
 use gpui_kit::assets::IconName as AssetsIconName;
 use gpui_kit::component::IconName;
@@ -33,7 +34,7 @@ impl super::super::super::InsightWorkspacePanel {
                     .ghost()
                     .xsmall()
                     .icon(IconName::RefreshCw)
-                    .label("载入规则摘要")
+                    .label(tr("载入规则摘要"))
                     .on_click(move |_, _, app| {
                         entity.update(app, |panel, cx| {
                             panel.ensure_col_rules(&name, kind, cx);
@@ -83,7 +84,7 @@ impl super::super::super::InsightWorkspacePanel {
                                     .xsmall()
                                     .icon(AssetsIconName::Braces)
                                     .label("SQL")
-                                    .tooltip("在 SQL 编辑器中查看该规则的代入语句（不执行）")
+                                    .tooltip(tr("在 SQL 编辑器中查看该规则的代入语句（不执行）"))
                                     .on_click({
                                         let sql = brief.sql.clone();
                                         let title = format!("规则 {} · {}", brief.id, col.name);

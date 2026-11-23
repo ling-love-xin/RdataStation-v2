@@ -1,5 +1,6 @@
 //! 样本域渲染：样本区 / 字段选择 / 取样进度 / 列画像宽版。
 
+use shared::i18n::tr;
 use super::*;
 
 impl super::InsightWorkspacePanel {
@@ -30,7 +31,7 @@ impl super::InsightWorkspacePanel {
                         div()
                             .text_xs()
                             .text_color(colors.muted_foreground)
-                            .child("样本不可用（临时表为空或已过期）"),
+                            .child(tr("样本不可用（临时表为空或已过期）")),
                     ),
             );
         };
@@ -42,7 +43,7 @@ impl super::InsightWorkspacePanel {
                 div()
                     .text_xs()
                     .text_color(colors.muted_foreground)
-                    .child("表为空，没有可展示的样本行"),
+                    .child(tr("表为空，没有可展示的样本行")),
             );
         }
         // 列头
@@ -138,7 +139,7 @@ impl super::InsightWorkspacePanel {
         let search_state = window.use_keyed_state(
             SharedString::from("insight-ws-col-search"),
             cx,
-            |window, cx| InputState::new(window, cx).placeholder("搜索列名"),
+            |window, cx| InputState::new(window, cx).placeholder(tr("搜索列名")),
         );
         if self.col_search_subs.borrow().is_empty() {
             let sub = cx.subscribe_in(
@@ -159,7 +160,7 @@ impl super::InsightWorkspacePanel {
         let picker_search_state = window.use_keyed_state(
             SharedString::from("insight-ws-picker-search"),
             cx,
-            |window, cx| InputState::new(window, cx).placeholder("筛选列名"),
+            |window, cx| InputState::new(window, cx).placeholder(tr("筛选列名")),
         );
         if self.picker_search_subs.borrow().is_empty() {
             let sub = cx.subscribe_in(
@@ -203,7 +204,7 @@ impl super::InsightWorkspacePanel {
                     .xsmall()
                     .icon(CatalogIcon::ListFilter)
                     .label(kind_label)
-                    .tooltip("按类型族筛选列")
+                    .tooltip(tr("按类型族筛选列"))
                     .dropdown_menu(move |menu, _, _| {
                         let mut menu = menu;
                         for (label, kind) in &kind_items {
@@ -246,7 +247,7 @@ impl super::InsightWorkspacePanel {
                             .xsmall()
                             .icon(CatalogIcon::ListFilter)
                             .label(format!("列 {sel_len}/{}", columns.len()))
-                            .tooltip("选择要看的列（200+ 列时建议缩到几个字段）"),
+                            .tooltip(tr("选择要看的列（200+ 列时建议缩到几个字段）")),
                     )
                     .content(move |_state, _window, cx| {
                         let colors = cx.theme().colors;
@@ -273,7 +274,7 @@ impl super::InsightWorkspacePanel {
                                             .ghost()
                                             .xsmall()
                                             .disabled(all_sel)
-                                            .label("全选")
+                                            .label(tr("全选"))
                                             .on_click(move |_, _, app| {
                                                 all_entity.update(app, |panel, cx| {
                                                     panel.sel_cols.clear();
@@ -285,7 +286,7 @@ impl super::InsightWorkspacePanel {
                                         Button::new("insight-ws-col-none")
                                             .ghost()
                                             .xsmall()
-                                            .label("反选")
+                                            .label(tr("反选"))
                                             .on_click(move |_, _, app| {
                                                 none_entity.update(app, |panel, cx| {
                                                     // 显式清单 = 全集 − 当前（结果为空时退回全选语义，
@@ -333,7 +334,7 @@ impl super::InsightWorkspacePanel {
                                 div()
                                     .text_xs()
                                     .text_color(colors.muted_foreground)
-                                    .child("没有匹配的列"),
+                                    .child(tr("没有匹配的列")),
                             );
                         }
                         for name in filtered {
@@ -444,7 +445,7 @@ impl super::InsightWorkspacePanel {
                         div()
                             .text_sm()
                             .text_color(colors.foreground)
-                            .child("洞察分析中"),
+                            .child(tr("洞察分析中")),
                     )
                     .child(
                         div().text_xs().text_color(colors.muted_foreground).child(
@@ -514,7 +515,7 @@ impl super::InsightWorkspacePanel {
                 div()
                     .text_xs()
                     .text_color(colors.muted_foreground)
-                    .child("列画像 · 右键结果表中的列可查看"),
+                    .child(tr("列画像 · 右键结果表中的列可查看")),
             )
     }
 }

@@ -15,6 +15,7 @@
 //! 「缓存管理…」「查看日志…」等是**动作行**（不是设置项：没有 key / 默认值 / 生效方式），
 //! 由 `skeleton.rs` 按节硬编码，副作用经宿主桥 `SettingsHost` 回调。
 
+use shared::i18n::tr;
 use std::rc::Rc;
 
 use gpui_kit::base::StyledExt;
@@ -155,7 +156,7 @@ impl SettingsPage {
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.colors.foreground)
                     .child(Icon::new(IconName::Settings).size_4())
-                    .child("设置"),
+                    .child(tr("设置")),
             )
     }
 
@@ -280,7 +281,7 @@ mod tests {
         host.projects_panel = Some(Rc::new(|_window, cx: &mut gpui_kit::App| {
             gpui_kit::div()
                 .w_full()
-                .child("项目列表占位")
+                .child(tr("项目列表占位"))
                 .text_color(cx.theme().colors.foreground)
                 .into_any_element()
         }));

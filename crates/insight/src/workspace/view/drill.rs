@@ -15,6 +15,7 @@
 //! 与中间工作页是 D65 双栏单源：完整列卡 / 关联 / 缺失 / 样本由中间页 EDA 承担，
 //! 右栏因窄（280px）只做**集合 + 摘要级下钻**，本视图不重复取数（只读 `data`）。
 
+use shared::i18n::tr;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::description_list::DescriptionList;
 use gpui_kit::component::progress::ProgressCircle;
@@ -156,7 +157,7 @@ impl InsightView {
                 div()
                     .text_xs()
                     .text_color(colors.muted_foreground)
-                    .child("当前目标下钻"),
+                    .child(tr("当前目标下钻")),
             )
             .child(
                 div()
@@ -179,7 +180,7 @@ impl InsightView {
                             .outline()
                             .xsmall()
                             .flex_none()
-                            .child(self.scope.label()),
+                            .child(tr(self.scope.label())),
                     ),
             )
             .when_some(target.detail(), |this, detail| {
@@ -259,7 +260,7 @@ fn drill_table_summary(
                         .text_xs()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(colors.foreground)
-                        .child("摘要"),
+                        .child(tr("摘要")),
                 )
                 .child(div().flex_1())
                 .child(div().text_xs().text_color(ring_color).child(match quality {
@@ -338,7 +339,7 @@ fn drill_table_columns(profile: &TableProfileView, theme: &Theme, inline_icon: P
                         .text_xs()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(colors.foreground)
-                        .child("表画像"),
+                        .child(tr("表画像")),
                 )
                 .child(div().flex_1())
                 .child(
@@ -441,7 +442,7 @@ fn drill_column_summary(profile: &ColumnProfileView, theme: &Theme, inline_icon:
                         div()
                             .text_xs()
                             .text_color(colors.warning)
-                            .child("空值率偏高，建议评估该列"),
+                            .child(tr("空值率偏高，建议评估该列")),
                     ),
             )
         })
@@ -470,14 +471,14 @@ fn drill_schema_summary(
                         .text_xs()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(colors.foreground)
-                        .child("结构摘要"),
+                        .child(tr("结构摘要")),
                 )
                 .child(div().flex_1())
                 .child(
                     div()
                         .text_xs()
                         .text_color(grade_color)
-                        .child(report.grade.label()),
+                        .child(tr(report.grade.label())),
                 ),
         )
         .child(
@@ -527,7 +528,7 @@ fn drill_multi_summary(view: &MultiColumnView, theme: &Theme, inline_icon: Pixel
                         .text_xs()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(colors.foreground)
-                        .child("参与列"),
+                        .child(tr("参与列")),
                 )
                 .child(div().flex_1())
                 .child(
@@ -588,14 +589,14 @@ fn agg_placeholder(theme: &Theme) -> impl IntoElement {
                         .text_xs()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(colors.foreground)
-                        .child("多列聚合统计"),
+                        .child(tr("多列聚合统计")),
                 )
                 .child(div().flex_1())
                 .child(
                     div()
                         .text_xs()
                         .text_color(colors.muted_foreground)
-                        .child("后续实现"),
+                        .child(tr("后续实现")),
                 ),
         )
         .child(muted_line(

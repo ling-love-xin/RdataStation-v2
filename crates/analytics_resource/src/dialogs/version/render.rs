@@ -1,5 +1,6 @@
 //! 版本对话框的渲染件：版本轨道、表头、版本行、动作条。
 
+use shared::i18n::tr;
 use super::*;
 
 /// 横排轨道最多摆多少个节点（再多就糊成一团，尾部提示“更早 N 版见下表”）。
@@ -23,32 +24,32 @@ pub(super) fn header_line(theme: &Theme) -> Div {
             div()
                 .w(rems(ui::VERSION_COL_VERSION))
                 .flex_none()
-                .child("版本"),
+                .child(tr("版本")),
         )
         .child(
             div()
                 .w(rems(ui::VERSION_COL_TIME))
                 .flex_none()
-                .child("时间"),
+                .child(tr("时间")),
         )
         .child(
             div()
                 .w(rems(ui::VERSION_COL_SIZE))
                 .flex_none()
-                .child("大小"),
+                .child(tr("大小")),
         )
         .child(
             div()
                 .w(rems(ui::VERSION_COL_HASH))
                 .flex_none()
-                .child("指纹"),
+                .child(tr("指纹")),
         )
-        .child(div().flex_1().min_w_0().child("变化"))
+        .child(div().flex_1().min_w_0().child(tr("变化")))
         .child(
             div()
                 .w(rems(ui::VERSION_COL_COPY))
                 .flex_none()
-                .child("副本"),
+                .child(tr("副本")),
         )
 }
 
@@ -104,7 +105,7 @@ pub(super) fn version_line(
                         .gap_1()
                         .child(div().text_color(foreground).child(format!("v{version}")))
                         .when(row.is_current, |cell| {
-                            cell.child(div().text_color(success).child("当前"))
+                            cell.child(div().text_color(success).child(tr("当前")))
                         }),
                 )
                 .child(
@@ -147,11 +148,11 @@ pub(super) fn version_line(
                         .child(if row.is_table {
                             // 表型资产没有副本文件：这一列只能说清“本体是什么”，
                             // 别按副本口径写「副本缺失」。
-                            div().text_color(muted).child("项目表")
+                            div().text_color(muted).child(tr("项目表"))
                         } else if row.has_copy {
-                            div().text_color(muted).child("在位")
+                            div().text_color(muted).child(tr("在位"))
                         } else {
-                            div().text_color(danger).child("副本缺失")
+                            div().text_color(danger).child(tr("副本缺失"))
                         }),
                 ),
         )
@@ -363,8 +364,8 @@ pub(super) fn action_bar(
                         .ghost()
                         .small()
                         .debug_selector(|| "version-diff".to_string())
-                        .label("与当前版本对比…")
-                        .tooltip("打开文本 diff 查看器，看这一版和当前版本差在哪（只读）")
+                        .label(tr("与当前版本对比…"))
+                        .tooltip(tr("打开文本 diff 查看器，看这一版和当前版本差在哪（只读）"))
                         .disabled(!can_diff)
                         .on_click(diff),
                 )
@@ -397,7 +398,7 @@ pub(super) fn action_bar(
                         .ghost()
                         .small()
                         .debug_selector(|| "version-checkout".to_string())
-                        .label("取回该版本为草稿")
+                        .label(tr("取回该版本为草稿"))
                         .disabled(!can_checkout)
                         .on_click(checkout),
                 )
@@ -406,7 +407,7 @@ pub(super) fn action_bar(
                         .ghost()
                         .small()
                         .debug_selector(|| "version-delete-copy".to_string())
-                        .label("删除内容副本")
+                        .label(tr("删除内容副本"))
                         .disabled(!can_checkout)
                         .on_click(delete),
                 ),
@@ -443,7 +444,7 @@ pub(super) fn timeline_section(theme: &Theme, rows: &[crate::model::TimelineRow]
                     div()
                         .text_xs()
                         .text_color(theme.colors.foreground)
-                        .child("资产履历"),
+                        .child(tr("资产履历")),
                 )
                 .child(
                     div()

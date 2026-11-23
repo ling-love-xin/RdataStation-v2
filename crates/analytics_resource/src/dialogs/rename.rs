@@ -7,6 +7,7 @@
 //! 纪律与另几个对话框一致：**输入实体在开窗前建好**（builder 是 `Fn`）、
 //! **校验从输入值推导**（每帧重算，改回去提示自然消失）、执行一律回宿主。
 
+use shared::i18n::tr;
 use std::rc::Rc;
 
 use gpui_kit::base::{Disableable as _, StyledExt};
@@ -184,7 +185,7 @@ pub fn open_rename_dialog(
                             .with_variant(ButtonVariant::Secondary)
                             .small()
                             .debug_selector(|| "archive-rename-cancel".to_string())
-                            .label("取消")
+                            .label(tr("取消"))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
                     .child(
@@ -192,7 +193,7 @@ pub fn open_rename_dialog(
                             .with_variant(ButtonVariant::Primary)
                             .small()
                             .debug_selector(|| "archive-rename-ok".to_string())
-                            .label("保存")
+                            .label(tr("保存"))
                             .disabled(!can_submit)
                             .on_click({
                                 let submit = submit.clone();

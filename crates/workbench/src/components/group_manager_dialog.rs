@@ -10,6 +10,7 @@
 //! 与缓存管理对话框同一约定：数据就地重算（`Rc<RefCell<_>>`）+ `shared.notify_host(app)`
 //! （宿主重绘重建对话框层），操作失败在对话框内给一条可读错误（不静默吞噬）。
 
+use shared::i18n::tr;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -113,7 +114,7 @@ pub fn open_group_manager_dialog(window: &mut Window, cx: &mut App, shared: &Sha
                 .w_full()
                 .gap_2()
                 .text_xs()
-                .child(div().flex_1().child("分组"))
+                .child(div().flex_1().child(tr("分组")))
                 .child(
                     div()
                         .text_color(theme.colors.muted_foreground)
@@ -133,7 +134,7 @@ pub fn open_group_manager_dialog(window: &mut Window, cx: &mut App, shared: &Sha
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("暂无分组。右键连接可新建分组。"),
+                    .child(tr("暂无分组。右键连接可新建分组。")),
             );
         } else {
             for r in list.iter() {
@@ -167,7 +168,7 @@ pub fn open_group_manager_dialog(window: &mut Window, cx: &mut App, shared: &Sha
                             ))))
                             .ghost()
                             .small()
-                            .label("重命名")
+                            .label(tr("重命名"))
                             .on_click({
                                 let rid = rid.clone();
                                 let rname = rname.clone();
@@ -215,7 +216,7 @@ pub fn open_group_manager_dialog(window: &mut Window, cx: &mut App, shared: &Sha
                             ))))
                             .ghost()
                             .small()
-                            .label("合并到…")
+                            .label(tr("合并到…"))
                             .dropdown_menu({
                                 let rows = rows_build.clone();
                                 let error = error_build.clone();
@@ -265,7 +266,7 @@ pub fn open_group_manager_dialog(window: &mut Window, cx: &mut App, shared: &Sha
                                     let shared = shared.clone();
                                     let root = root.clone();
                                     built.item(
-                                        PopupMenuItem::new("未分组").on_click(move |_, window, app| {
+                                        PopupMenuItem::new(tr("未分组")).on_click(move |_, window, app| {
                                             confirm_merge(
                                                 window,
                                                 app,
@@ -290,7 +291,7 @@ pub fn open_group_manager_dialog(window: &mut Window, cx: &mut App, shared: &Sha
                             ))))
                             .ghost()
                             .small()
-                            .label("删除")
+                            .label(tr("删除"))
                             .on_click({
                                 let rid = rid.clone();
                                 let rname = rname.clone();
@@ -316,7 +317,7 @@ pub fn open_group_manager_dialog(window: &mut Window, cx: &mut App, shared: &Sha
                                         let root2 = root_v.clone();
                                         alert
                                             .confirm()
-                                            .title("删除分组")
+                                            .title(tr("删除分组"))
                                             .description(format!(
                                                 "确定删除分组「{rname2}」？成员连接与缓存不会被删除，将回到未分组。"
                                             ))
@@ -355,14 +356,14 @@ pub fn open_group_manager_dialog(window: &mut Window, cx: &mut App, shared: &Sha
         }
 
         sheet
-            .title("管理分组")
+            .title(tr("管理分组"))
             .size(px(420.))
             .child(body)
             .child(
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("合并会把源组全部成员并入目标组；删除只移除分组结构。"),
+                    .child(tr("合并会把源组全部成员并入目标组；删除只移除分组结构。")),
             )
     });
 }
@@ -397,7 +398,7 @@ fn confirm_merge(
         let root = root.clone();
         alert
             .confirm()
-            .title("合并分组")
+            .title(tr("合并分组"))
             .description(format!(
                 "把「{source_name}」的全部成员并入「{target_name}」？合并后「{source_name}」分组将删除，成员的主组归属跟随目标分组。"
             ))

@@ -1,5 +1,6 @@
 //! 列编辑收集：从对话框控件读取列配置。
 
+use shared::i18n::tr;
 use super::*;
 
 impl MockDetailView {
@@ -142,11 +143,11 @@ impl MockDetailView {
         window.open_alert_dialog(cx, move |alert, _window, _cx| {
             let view_for_ok = view.clone();
             alert
-                .title("放弃未应用的修改？")
+                .title(tr("放弃未应用的修改？"))
                 .description("列编辑有未应用修改，取消后这些修改将丢失。")
                 .show_cancel(true)
                 .ok_text("放弃修改")
-                .cancel_text("继续编辑")
+                .cancel_text(tr("继续编辑"))
                 .on_ok(move |_, window, cx| {
                     view_for_ok.update(cx, |view, _cx| view.draft = None);
                     window.close_dialog(cx); // 关闭确认框自身

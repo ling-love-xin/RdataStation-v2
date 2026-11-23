@@ -1,6 +1,7 @@
 // ==================== 尺寸常量（`crate::ui`：结构尺寸单一来源） ====================
 
 // 继承父模块（mock_view）的全部 use 绑定
+use shared::i18n::tr;
 use super::*;
 
 // 行数 / 种子 / 参数输入宽、预览格宽等七个结构尺寸已登记到 `crates/mock/src/ui.rs`
@@ -409,7 +410,7 @@ pub(crate) fn summarize_params(config: &GeneratorConfig) -> String {
                 other => other.to_string(),
             },
         };
-        parts.push(format!("{} {}", field.label, text));
+        parts.push(format!("{} {}", tr(field.label), text));
     }
     parts.join(" · ")
 }

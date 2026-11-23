@@ -1,5 +1,6 @@
 //! 精调层表单：自定义生成器的创建/编辑对话框渲染。
 
+use shared::i18n::tr;
 use super::*;
 
 /// 精调层表单：名称 + 类型（锁定/可选）+ 业务组（锁定/可选）+ 基础生成器 + 参数区 + 样例。
@@ -37,7 +38,7 @@ pub(crate) fn render_create(
                     Select::new(type_state)
                         .menu_width(ui::GENERATOR_MENU_WIDTH)
                         .menu_max_h(ui::GENERATOR_MENU_MAX_HEIGHT)
-                        .placeholder("选择产出类型…")
+                        .placeholder(tr("选择产出类型…"))
                         .accessibility_label("产出类型"),
                 ))
             } else {
@@ -54,7 +55,7 @@ pub(crate) fn render_create(
                 div()
                     .text_xs()
                     .text_color(theme.colors.foreground)
-                    .child(c.label()),
+                    .child(tr(c.label())),
             )),
         ),
         None => {
@@ -65,7 +66,7 @@ pub(crate) fn render_create(
                     Select::new(category_state)
                         .menu_width(ui::GENERATOR_MENU_WIDTH)
                         .menu_max_h(ui::GENERATOR_MENU_MAX_HEIGHT)
-                        .placeholder("选择业务组（可不选）")
+                        .placeholder(tr("选择业务组（可不选）"))
                         .accessibility_label("业务组"),
                 ))
             } else {
@@ -88,7 +89,7 @@ pub(crate) fn render_create(
                         .min_w_0()
                         .text_xs()
                         .text_color(theme.colors.muted_foreground)
-                        .child("基础生成器"),
+                        .child(tr("基础生成器")),
                 )
                 .child(kv(
                     &theme,
@@ -96,7 +97,7 @@ pub(crate) fn render_create(
                     div()
                         .text_xs()
                         .text_color(theme.colors.foreground)
-                        .child(spec.label),
+                        .child(tr(spec.label)),
                 )),
         ),
         None => body.child(select_line(
@@ -105,7 +106,7 @@ pub(crate) fn render_create(
             Select::new(&draft.base_state)
                 .menu_width(ui::GENERATOR_MENU_WIDTH)
                 .menu_max_h(ui::GENERATOR_MENU_MAX_HEIGHT)
-                .placeholder("选择基础生成器…")
+                .placeholder(tr("选择基础生成器…"))
                 .accessibility_label("基础生成器"),
         )),
     };
@@ -150,7 +151,7 @@ pub(crate) fn render_create(
                                 fields
                                     .iter()
                                     .find(|f| f.key == param_key(param))
-                                    .map(|f| f.label.to_string())
+                                    .map(|f| tr(f.label).to_string())
                                     .unwrap_or_else(|| param_key(param).to_string())
                             };
                             let state = state.clone();

@@ -3,6 +3,7 @@
 //! 与渲染模块的边界：本模块几乎不画东西，只改状态并 `cx.notify()`；
 //! 渲染期只读的纪律（render 内不做 I/O）在 `chrome.rs` / `rows.rs` 的注释里。
 
+use shared::i18n::tr;
 use super::*;
 use super::{EnqueueOutcome, PreparedCommit, PreparedStaged, StagedOp};
 use crate::nav::capability::{NavOp, property_kind_to_object_kind};
@@ -2077,7 +2078,7 @@ impl NavView {
             // 刷新（fresh）：后台路径，让位用户手点（S2-①）。
             self.ensure_nav_loaded(conn_id, key, p, true, JobPriority::Background, cx);
         }
-        self.host.notice("已刷新元数据".to_string(), cx);
+        self.host.notice(tr("已刷新元数据").to_string(), cx);
         cx.notify();
     }
 
@@ -2119,7 +2120,7 @@ impl NavView {
                 cx,
             );
         }
-        self.host.notice("已刷新全部元数据".to_string(), cx);
+        self.host.notice(tr("已刷新全部元数据").to_string(), cx);
         cx.notify();
     }
 
@@ -2141,11 +2142,11 @@ impl NavView {
     pub(super) fn apply_staged_enqueue(&mut self, staged: StagedOp, cx: &mut Context<Self>) {
         let outcome = self.nav.borrow_mut().enqueue_staged(staged);
         match outcome {
-            EnqueueOutcome::Added => self.host.notice("已加入待提交清单".to_string(), cx),
+            EnqueueOutcome::Added => self.host.notice(tr("已加入待提交清单").to_string(), cx),
             EnqueueOutcome::Replaced => self
                 .host
-                .notice("已更新为待删除（替换原清空项）".to_string(), cx),
-            EnqueueOutcome::Ignored => self.host.notice("该对象已在待提交清单".to_string(), cx),
+                .notice(tr("已更新为待删除（替换原清空项）").to_string(), cx),
+            EnqueueOutcome::Ignored => self.host.notice(tr("该对象已在待提交清单").to_string(), cx),
         }
         cx.notify();
     }
@@ -2153,7 +2154,7 @@ impl NavView {
     /// 单项撤销：把指定节点从待提交集合移除（菜单「从待提交移除」，不弹确认）。
     pub(super) fn dismiss_staged_entry(&mut self, key: &str, cx: &mut Context<Self>) {
         self.nav.borrow_mut().dismiss_staged(key);
-        self.host.notice("已从待提交清单移除".to_string(), cx);
+        self.host.notice(tr("已从待提交清单移除").to_string(), cx);
         cx.notify();
     }
 
@@ -2162,11 +2163,11 @@ impl NavView {
     /// 空集合给一条中性提示，不弹对话框、不产生空操作通知噪音。
     pub(super) fn revert_staged(&mut self, cx: &mut Context<Self>) {
         if self.nav.borrow().staged_count() == 0 {
-            self.host.notice("待提交清单为空".to_string(), cx);
+            self.host.notice(tr("待提交清单为空").to_string(), cx);
             return;
         }
         self.nav.borrow_mut().clear_staged();
-        self.host.notice("已撤销全部待提交变更".to_string(), cx);
+        self.host.notice(tr("已撤销全部待提交变更").to_string(), cx);
         cx.notify();
     }
 
@@ -2182,23 +2183,23 @@ impl NavView {
         cx: &mut Context<Self>,
     ) -> Option<PreparedStaged> {
         let Some(item) = self.nav_selected() else {
-            self.host.notice("请先选择要操作的对象".to_string(), cx);
+            self.host.notice(tr("请先选择要操作的对象").to_string(), cx);
             return None;
         };
         let Some(prop) = item.property.clone() else {
-            self.host.notice("当前选中项不支持该操作".to_string(), cx);
+            self.host.notice(tr("当前选中项不支持该操作").to_string(), cx);
             return None;
         };
         let Some(kind) = property_kind_to_object_kind(prop.kind) else {
-            self.host.notice("当前选中项不支持该操作".to_string(), cx);
+            self.host.notice(tr("当前选中项不支持该操作").to_string(), cx);
             return None;
         };
         if !self.host.is_connected(&item.conn_id) {
-            self.host.notice("该操作需要先建立连接".to_string(), cx);
+            self.host.notice(tr("该操作需要先建立连接").to_string(), cx);
             return None;
         }
         if self.nav.borrow().staged_lookup(&item.key).is_some() {
-            self.host.notice("该对象已在待提交清单".to_string(), cx);
+            self.host.notice(tr("该对象已在待提交清单").to_string(), cx);
             return None;
         }
         let driver = self
@@ -2210,7 +2211,7 @@ impl NavView {
             .unwrap_or_default();
         let qualified = nav_qualified_name(&prop, &driver);
         let Some((title, description, ok_text)) = staged_dialog_copy(op, kind, &qualified) else {
-            self.host.notice("当前对象类型不支持该操作".to_string(), cx);
+            self.host.notice(tr("当前对象类型不支持该操作").to_string(), cx);
             return None;
         };
         let staged = StagedOp {
@@ -2242,14 +2243,14 @@ impl NavView {
     ) -> Option<PreparedCommit> {
         let plan = self.nav.borrow().commit_plan();
         if plan.is_empty() {
-            self.host.notice("待提交清单为空".to_string(), cx);
+            self.host.notice(tr("待提交清单为空").to_string(), cx);
             return None;
         }
         let total = plan.len();
         Some(PreparedCommit {
             plan,
             title: format!("提交 {total} 项变更"),
-            description: "以下操作提交后不可恢复，请逐项核对清单。".to_string(),
+            description: tr("以下操作提交后不可恢复，请逐项核对清单。").to_string(),
             ok_text: format!("提交 {total} 项变更"),
         })
     }
@@ -2265,7 +2266,7 @@ impl NavView {
         let plan = self.nav.borrow().commit_plan();
         tracing::info!(total = plan.len(), "【探针】commit_staged 提交待变更 DDL");
         if plan.is_empty() {
-            self.host.notice("待提交清单为空".to_string(), cx);
+            self.host.notice(tr("待提交清单为空").to_string(), cx);
             return;
         }
         let groups = NavViewState::group_by_conn(plan);

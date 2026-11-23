@@ -9,6 +9,7 @@
 //!
 //! 行数据与执行都在宿主（本文件不碰库、不认识 `AnalyticsResourceStore`）；宿主可在动作完成后
 //! 重取一次并 `set_options` / `set_selected` 换行，所以新建完不必关窗重开。
+use shared::i18n::tr;
 
 pub(crate) use std::cell::{Cell, RefCell};
 pub(crate) use std::rc::Rc;
@@ -322,7 +323,7 @@ pub fn open_tag_rename_dialog(
         );
 
         dialog
-            .title("重命名标签")
+            .title(tr("重命名标签"))
             .w(cx.theme().font_size * ui::TAG_DIALOG_WIDTH)
             .child(body)
             .footer(
@@ -332,7 +333,7 @@ pub fn open_tag_rename_dialog(
                             .with_variant(ButtonVariant::Secondary)
                             .small()
                             .debug_selector(|| "tag-rename-cancel".to_string())
-                            .label("取消")
+                            .label(tr("取消"))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
                     .child(
@@ -340,7 +341,7 @@ pub fn open_tag_rename_dialog(
                             .with_variant(ButtonVariant::Primary)
                             .small()
                             .debug_selector(|| "tag-rename-save".to_string())
-                            .label("保存")
+                            .label(tr("保存"))
                             .disabled(!can_save)
                             .on_click(move |_, window, cx| {
                                 confirm_for_button(window, cx);

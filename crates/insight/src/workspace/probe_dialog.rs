@@ -16,6 +16,7 @@
 //! （`probe_set_*`），输入框本身用 `use_keyed_state` 惰性创建（同 sample.rs 模式：
 //! 输入权威在 InputState，Change 订阅回写 dialog）。
 
+use shared::i18n::tr;
 use super::*;
 use crate::insight_view::{ProbeAmountMode, ProbeDialogState};
 use gpui_kit::component::button::Button;
@@ -63,13 +64,13 @@ impl ProbeDialogBody {
             .selected_index(Some(amount_index))
             .children([
                 Radio::new("insight-probe-amount-full")
-                    .label("全量")
+                    .label(tr("全量"))
                     .checked(amount_index == 0),
                 Radio::new("insight-probe-amount-rows")
-                    .label("行数")
+                    .label(tr("行数"))
                     .checked(amount_index == 1),
                 Radio::new("insight-probe-amount-pct")
-                    .label("百分比")
+                    .label(tr("百分比"))
                     .checked(amount_index == 2),
             ])
             .on_change({
@@ -95,10 +96,10 @@ impl ProbeDialogBody {
             .selected_index(Some(sample_index))
             .children([
                 Radio::new("insight-probe-sample-head")
-                    .label("顺序取前 N 行")
+                    .label(tr("顺序取前 N 行"))
                     .checked(sample_index == 0),
                 Radio::new("insight-probe-sample-reservoir")
-                    .label("均匀随机取样")
+                    .label(tr("均匀随机取样"))
                     .checked(sample_index == 1),
             ])
             .on_change({
@@ -117,10 +118,10 @@ impl ProbeDialogBody {
             .selected_index(Some(if columns_all { 0 } else { 1 }))
             .children([
                 Radio::new("insight-probe-cols-all")
-                    .label("全部列")
+                    .label(tr("全部列"))
                     .checked(columns_all),
                 Radio::new("insight-probe-cols-subset")
-                    .label("选择列")
+                    .label(tr("选择列"))
                     .checked(!columns_all),
             ])
             .on_change({
@@ -162,7 +163,7 @@ impl ProbeDialogBody {
         let row_state = window.use_keyed_state(
             SharedString::from("insight-probe-rows"),
             cx,
-            |window, cx| InputState::new(window, cx).placeholder("如 500"),
+            |window, cx| InputState::new(window, cx).placeholder(tr("如 500")),
         );
         if dialog.row_count != row_state.read(cx).value() {
             row_state.update(cx, |state, cx| {
@@ -187,7 +188,7 @@ impl ProbeDialogBody {
 
         let pct_state =
             window.use_keyed_state(SharedString::from("insight-probe-pct"), cx, |window, cx| {
-                InputState::new(window, cx).placeholder("如 5")
+                InputState::new(window, cx).placeholder(tr("如 5"))
             });
         if dialog.percent != pct_state.read(cx).value() {
             pct_state.update(cx, |state, cx| {
@@ -213,7 +214,7 @@ impl ProbeDialogBody {
         let filter_state = window.use_keyed_state(
             SharedString::from("insight-probe-filter"),
             cx,
-            |window, cx| InputState::new(window, cx).placeholder("如 status = 'active'"),
+            |window, cx| InputState::new(window, cx).placeholder(tr("如 status = 'active'")),
         );
         if dialog.filter != filter_state.read(cx).value() {
             filter_state.update(cx, |state, cx| {
@@ -238,7 +239,7 @@ impl ProbeDialogBody {
         let seed_state = window.use_keyed_state(
             SharedString::from("insight-probe-seed"),
             cx,
-            |window, cx| InputState::new(window, cx).placeholder("如 42（可留空）"),
+            |window, cx| InputState::new(window, cx).placeholder(tr("如 42（可留空）")),
         );
         if dialog.seed != seed_state.read(cx).value() {
             seed_state.update(cx, |state, cx| {
@@ -296,7 +297,7 @@ impl ProbeDialogBody {
         // 底部三按钮：取消 / 全量探查 / 探查（按当前配置）。
         // 取消：关窗不动作；全量探查：强制全量+全列直接确认；探查：按当前配置确认。
         let cancel_btn = Button::new("insight-probe-cancel")
-            .label("取消")
+            .label(tr("取消"))
             .ghost()
             .on_click({
                 let view = view.clone();
@@ -305,7 +306,7 @@ impl ProbeDialogBody {
                 }
             });
         let explore_all_btn = Button::new("insight-probe-all")
-            .label("全量探查")
+            .label(tr("全量探查"))
             .icon(gpui_kit::assets::IconName::Zap)
             .outline()
             .on_click({
@@ -360,7 +361,7 @@ impl ProbeDialogBody {
                         div()
                             .flex_none()
                             .text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT))
-                            .child("探查对象："),
+                            .child(tr("探查对象：")),
                     )
                     .child(
                         div()
@@ -410,7 +411,7 @@ impl ProbeDialogBody {
                             div()
                                 .flex_none()
                                 .text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT))
-                                .child("行数"),
+                                .child(tr("行数")),
                         )
                         .child(
                             div()
@@ -431,7 +432,7 @@ impl ProbeDialogBody {
                             div()
                                 .flex_none()
                                 .text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT))
-                                .child("百分比"),
+                                .child(tr("百分比")),
                         )
                         .child(
                             div()
@@ -473,7 +474,7 @@ impl ProbeDialogBody {
                                 div()
                                     .flex_none()
                                     .text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT))
-                                    .child("种子"),
+                                    .child(tr("种子")),
                             )
                             .child(
                                 div()
@@ -499,7 +500,7 @@ impl ProbeDialogBody {
                         div()
                             .text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT))
                             .text_color(theme.colors.muted_foreground)
-                            .child("正在获取列清单…（获取失败时按全部列探查）"),
+                            .child(tr("正在获取列清单…（获取失败时按全部列探查）")),
                     )
                 } else {
                     // 列候选清单：**定高滚动**（`ui::INSIGHT_PROBE_COL_LIST_MAX_HEIGHT`）。
@@ -554,7 +555,7 @@ impl ProbeDialogBody {
                 div()
                     .text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT))
                     .text_color(theme.colors.muted_foreground)
-                    .child("条件包在源查询内层，先过滤再取样。"),
+                    .child(tr("条件包在源查询内层，先过滤再取样。")),
             )
             .child(Separator::horizontal())
             // —— 规模预估 ——

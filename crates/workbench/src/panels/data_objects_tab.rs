@@ -13,6 +13,7 @@
 //! 前两个是场景 3 的两段，顺序不能颠倒：临时表在进程单例里（项目库打不开它），
 //! 所以先「升级为资产」拿到存档身份，才谈得上「升级到全局」并留下版本线索。
 
+use shared::i18n::tr;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::scroll::ScrollableElement as _;
@@ -514,7 +515,7 @@ impl DataObjectsTab {
         // 搜索框：`InputState` 要窗口才能建，面板 `new` 没有窗口，所以按 key 在渲染时惰性建
         // （同一 id 每次拿到的是同一个实体，输入内容不会因重渲染丢）
         let search = window.use_keyed_state("data-objects-search", cx, |window, cx| {
-            InputState::new(window, cx).placeholder("输入表名 / 文件名，直接定位")
+            InputState::new(window, cx).placeholder(tr("输入表名 / 文件名，直接定位"))
         });
         let query = search.read(cx).value().trim().to_lowercase();
 
@@ -577,7 +578,7 @@ impl DataObjectsTab {
                     .text_sm()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(colors.foreground)
-                    .child("数据对象"),
+                    .child(tr("数据对象")),
             )
             .child(
                 div()
@@ -596,7 +597,7 @@ impl DataObjectsTab {
                 let entity = entity.clone();
                 Button::new("data-objects-refresh")
                     .ghost()
-                    .label("刷新")
+                    .label(tr("刷新"))
                     .on_click(move |_, _, cx| {
                         entity.update(cx, |tab, cx| tab.refresh(cx));
                     })
@@ -610,7 +611,7 @@ impl DataObjectsTab {
             .text_color(colors.muted_foreground)
             .px_3()
             .pb_2()
-            .child("只有三段（源 / 表 / 文件）；资产只给最新版本；洞察产物 tmp_i_ 不进本清单；源要展开连接才列表，没挂载的源展不开");
+            .child(tr("只有三段（源 / 表 / 文件）；资产只给最新版本；洞察产物 tmp_i_ 不进本清单；源要展开连接才列表，没挂载的源展不开"));
 
         // 分组 chips：三个段各一个（业务身份是小标，不单独当筛选项）
         let mut chips = div()
@@ -811,7 +812,7 @@ impl DataObjectsTab {
                     let entity = entity.clone();
                     Button::new("data-objects-clear")
                         .ghost()
-                        .label("清空")
+                        .label(tr("清空"))
                         .on_click(move |_, _, cx| {
                             // 清空也要落盘：否则下次打开这份文档，刚清掉的那批又回来了
                             let entity = entity.clone();
@@ -862,7 +863,7 @@ impl DataObjectsTab {
                     el.child(
                         Button::new("data-objects-clear-temp")
                             .ghost()
-                            .label("清理临时对象")
+                            .label(tr("清理临时对象"))
                             .on_click(move |_, window, cx| {
                                 let entity = entity_for_clear.clone();
                                 // 删的是进程内存里的临时表：先问一句，别让人一抬手就没了
@@ -870,7 +871,7 @@ impl DataObjectsTab {
                                     let entity = entity.clone();
                                     alert
                                         .confirm()
-                                        .title("清理临时对象")
+                                        .title(tr("清理临时对象"))
                                         .description("将删掉清单里的临时表。它们在进程内存里，删了要重跑才有；想留就先「升级为资产」。确定继续？")
                                         .on_ok(move |_window, _cx, cx| {
                                             entity.update(cx, |tab, cx| {
@@ -1040,7 +1041,7 @@ impl DataObjectsTab {
                         object.key
                     )))
                     .ghost()
-                    .label("装扩展")
+                    .label(tr("装扩展"))
                     .on_click(move |_, window, cx| {
                         if !shared.show_plugin_manager(window, cx) {
                             entity.update(cx, |tab, cx| {
@@ -1207,7 +1208,7 @@ impl DataObjectsTab {
                                 let open = shared.clone();
                                 let open_ref = reference.clone();
                                 menu = menu.item(
-                                    PopupMenuItem::new("在编辑器打开").on_click(move |_, _, cx| {
+                                    PopupMenuItem::new(tr("在编辑器打开")).on_click(move |_, _, cx| {
                                         open.request_query(workbench_shell::model::QueryRequest {
                                             conn_id: None,
                                             sql: format!("SELECT * FROM {open_ref}"),
@@ -1220,7 +1221,7 @@ impl DataObjectsTab {
                                 let insight = shared.clone();
                                 let insight_table = table.clone();
                                 let insight_label = label.clone();
-                                menu = menu.item(PopupMenuItem::new("洞察（看数据）").on_click(
+                                menu = menu.item(PopupMenuItem::new(tr("洞察（看数据）")).on_click(
                                     move |_, _, cx| {
                                         crate::components::result_set_actions::open_insight_table(
                                             &insight,
@@ -1234,7 +1235,7 @@ impl DataObjectsTab {
                                 if in_project_analytics {
                                     let mock = shared.clone();
                                     let mock_table = table;
-                                    menu = menu.item(PopupMenuItem::new("作为 Mock 结构来源").on_click(
+                                    menu = menu.item(PopupMenuItem::new(tr("作为 Mock 结构来源")).on_click(
                                         move |_, _, cx| {
                                             crate::components::result_set_actions::open_mock_from_analytics(
                                                 &mock, &mock_table, cx,
@@ -1278,7 +1279,7 @@ impl DataObjectsTab {
                             if let Some(table) = register_target.clone() {
                                 let register = shared.clone();
                                 let register_label = label.clone();
-                                menu = menu.item(PopupMenuItem::new("登记为资产").on_click(
+                                menu = menu.item(PopupMenuItem::new(tr("登记为资产")).on_click(
                                     move |_, _, cx| {
                                         crate::components::result_set_actions::register_table_asset(
                                             &register,
@@ -1292,7 +1293,7 @@ impl DataObjectsTab {
                             // 临时表 / 结果集：写表 + 登记（写库走 worker，回执由工作台泵）
                             if let Some((table, table_label)) = persist_target.clone() {
                                 let persist = shared.clone();
-                                menu = menu.item(PopupMenuItem::new("升级为资产").on_click(
+                                menu = menu.item(PopupMenuItem::new(tr("升级为资产")).on_click(
                                     move |_, _, cx| {
                                         crate::components::result_set_actions::persist_to_project(
                                             &persist,
@@ -1517,7 +1518,7 @@ impl DataObjectsTab {
                                 div()
                                     .text_xs()
                                     .text_color(colors.muted_foreground)
-                                    .child("这个连接里没有可列的表 / 视图（目录为空或没有权限）"),
+                                    .child(tr("这个连接里没有可列的表 / 视图（目录为空或没有权限）")),
                             ),
                     );
                         }
@@ -1571,7 +1572,7 @@ impl DataObjectsTab {
                                         div()
                                             .text_xs()
                                             .text_color(colors.muted_foreground)
-                                            .child("没有可列的表（挂载成功但目录为空）"),
+                                            .child(tr("没有可列的表（挂载成功但目录为空）")),
                                     ),
                             );
                         }
@@ -1597,7 +1598,7 @@ impl DataObjectsTab {
                 Empty::new().header(
                     EmptyHeader::new()
                         .media(EmptyMedia::new())
-                        .title(EmptyTitle::new().child("还没有可用的数据对象"))
+                        .title(EmptyTitle::new().child(tr("还没有可用的数据对象")))
                         .description(EmptyDescription::new().child(
                             "先连一个数据源，或跑一次查询；能被 DuckDB 加载的文件也可以直接放进来。",
                         )),
@@ -1606,8 +1607,8 @@ impl DataObjectsTab {
                 .content(EmptyContent::new().child({
                     let shared = self.shared.clone();
                     Button::new("data-objects-empty-load")
-                        .label("加载文件到分析")
-                        .tooltip("按需加载：挂成视图读原文件，切项目即清")
+                        .label(tr("加载文件到分析"))
+                        .tooltip(tr("按需加载：挂成视图读原文件，切项目即清"))
                         .on_click(move |_, window, cx| {
                             crate::components::data_objects_load::open_load_files_dialog(
                                 &shared,
@@ -1622,7 +1623,7 @@ impl DataObjectsTab {
                     .header(
                         EmptyHeader::new()
                             .media(EmptyMedia::new())
-                            .title(EmptyTitle::new().child("这个条件下没有对象"))
+                            .title(EmptyTitle::new().child(tr("这个条件下没有对象")))
                             .description(EmptyDescription::new().child(
                                 "换个名字，或点「全部」看完整清单。",
                             )),
@@ -1633,7 +1634,7 @@ impl DataObjectsTab {
                         let search = search.clone();
                         Button::new("data-objects-empty-reset")
                             .ghost()
-                            .label("清条件看全部")
+                            .label(tr("清条件看全部"))
                             .on_click(move |_, window, cx| {
                                 search.update(cx, |state, cx| {
                                     state.set_value("", window, cx);
@@ -1817,7 +1818,7 @@ fn source_leaf_row(
         Button::new(SharedString::from(format!("data-object-leaf-copy-{leaf_id}")))
             .ghost()
             .xsmall()
-            .label("复制名")
+            .label(tr("复制名"))
             .on_click({
                 let qualified = qualified.clone();
                 let entity = entity.clone();
@@ -2001,8 +2002,8 @@ impl ComponentPanel for DataObjectsTab {
         Some(vec![
             Button::new("data-objects-add-source")
                 .ghost()
-                .label("加源")
-                .tooltip("按需加源：挂成视图读原文件，切项目即清")
+                .label(tr("加源"))
+                .tooltip(tr("按需加源：挂成视图读原文件，切项目即清"))
                 .on_click(cx.listener(|this, _, window, cx| {
                     crate::components::data_objects_load::open_load_files_dialog(
                         &this.shared,
@@ -2013,8 +2014,8 @@ impl ComponentPanel for DataObjectsTab {
                 })),
             Button::new("data-objects-add-source-snapshot")
                 .ghost()
-                .label("存快照")
-                .tooltip("把选中的文件在资源库里存一份只读副本，跟着项目走、带版本")
+                .label(tr("存快照"))
+                .tooltip(tr("把选中的文件在资源库里存一份只读副本，跟着项目走、带版本"))
                 .on_click(cx.listener(|this, _, window, cx| {
                     crate::components::data_objects_load::open_load_files_dialog(
                         &this.shared,

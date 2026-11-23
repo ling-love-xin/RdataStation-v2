@@ -9,6 +9,7 @@
 //! 失败保持打开 + 错误行）。数据就地重算（`Rc<RefCell<_>>`）+ `shared.notify_host(app)`，
 //! 与缓存管理 / 管理分组对话框同一约定。
 
+use shared::i18n::tr;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -63,7 +64,7 @@ pub fn open_save_view_dialog(window: &mut Window, cx: &mut App, filters: NavFilt
     };
     let preview = view_summary(&snapshot);
 
-    let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("视图名称"));
+    let name_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("视图名称")));
     let error = Rc::new(RefCell::new(None::<String>));
 
     let submit = {
@@ -116,20 +117,20 @@ pub fn open_save_view_dialog(window: &mut Window, cx: &mut App, filters: NavFilt
                 .child(preview.clone()),
         );
         dialog
-            .title("将当前筛选存为视图")
+            .title(tr("将当前筛选存为视图"))
             .child(standard_dialog_body(body))
             .footer(
                 DialogFooter::new()
                     .child(
                         Button::new("saved-view-cancel")
                             .secondary()
-                            .label("取消")
+                            .label(tr("取消"))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
                     .child(
                         Button::new("saved-view-ok")
                             .primary()
-                            .label("保存")
+                            .label(tr("保存"))
                             .on_click(move |_, window, cx| {
                                 if submit_ok(cx) {
                                     window.close_dialog(cx);
@@ -166,7 +167,7 @@ pub fn open_manage_views_dialog(window: &mut Window, cx: &mut App, shared: &Shar
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("暂无已保存视图。在导航面板 ⋯ 菜单「将当前筛选存为视图…」创建。"),
+                    .child(tr("暂无已保存视图。在导航面板 ⋯ 菜单「将当前筛选存为视图…」创建。")),
             );
         } else {
             for row in list.iter() {
@@ -198,7 +199,7 @@ pub fn open_manage_views_dialog(window: &mut Window, cx: &mut App, shared: &Shar
                             ))))
                             .ghost()
                             .small()
-                            .label("删除")
+                            .label(tr("删除"))
                             .on_click({
                                 let rname = rname.clone();
                                 let rows = rows_build.clone();
@@ -218,7 +219,7 @@ pub fn open_manage_views_dialog(window: &mut Window, cx: &mut App, shared: &Shar
                                         let shared2 = shared_v.clone();
                                         alert
                                             .confirm()
-                                            .title("删除视图")
+                                            .title(tr("删除视图"))
                                             .description(format!(
                                                 "确定删除已保存视图「{name2}」？当前筛选不受影响。"
                                             ))
@@ -253,14 +254,14 @@ pub fn open_manage_views_dialog(window: &mut Window, cx: &mut App, shared: &Shar
         }
 
         sheet
-            .title("管理视图")
+            .title(tr("管理视图"))
             .size(px(420.))
             .child(body)
             .child(
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("删除只移除视图定义，当前导航筛选不变。"),
+                    .child(tr("删除只移除视图定义，当前导航筛选不变。")),
             )
     });
 }

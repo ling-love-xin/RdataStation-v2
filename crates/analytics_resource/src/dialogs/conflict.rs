@@ -13,6 +13,7 @@
 //! 三查都会命中同名，但用户接下来要做的事不一样——撞在登记层是同名存档，撞在表层是库里已有同名表，
 //! 撞在文件层是 `resources/` 下已有同名原件。
 
+use shared::i18n::tr;
 use std::rc::Rc;
 
 use gpui_kit::base::{Disableable as _, StyledExt};
@@ -172,7 +173,7 @@ pub fn open_conflict_dialog(
         );
 
         dialog
-            .title("同名冲突")
+            .title(tr("同名冲突"))
             .w(cx.theme().font_size * ui::CONFLICT_DIALOG_WIDTH)
             .child(
                 div()
@@ -199,7 +200,7 @@ pub fn open_conflict_dialog(
                         div()
                             .text_xs()
                             .text_color(theme.colors.muted_foreground)
-                            .child("改用新名称"),
+                            .child(tr("改用新名称")),
                     )
                     .child(Input::new(&name_input))
                     .child(div().w_full().text_xs().text_color(hint_color).child(hint)),
@@ -211,7 +212,7 @@ pub fn open_conflict_dialog(
                             .with_variant(ButtonVariant::Secondary)
                             .small()
                             .debug_selector(|| "conflict-dialog-cancel".to_string())
-                            .label("取消")
+                            .label(tr("取消"))
                             .on_click(move |_, window, cx| {
                                 window.close_dialog(cx);
                             }),
@@ -221,7 +222,7 @@ pub fn open_conflict_dialog(
                             .with_variant(ButtonVariant::Danger)
                             .small()
                             .debug_selector(|| "conflict-dialog-overwrite".to_string())
-                            .label("覆盖")
+                            .label(tr("覆盖"))
                             .on_click(move |_, window, cx| {
                                 overwrite(window, cx);
                                 window.close_dialog(cx);
@@ -233,7 +234,7 @@ pub fn open_conflict_dialog(
                             .small()
                             .disabled(!can_rename)
                             .debug_selector(|| "conflict-dialog-rename".to_string())
-                            .label("改名")
+                            .label(tr("改名"))
                             .on_click({
                                 let rename = rename.clone();
                                 move |_, window, cx| {

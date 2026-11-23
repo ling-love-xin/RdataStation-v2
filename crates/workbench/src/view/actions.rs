@@ -2,6 +2,7 @@
 //!
 //! 自 `view.rs` 拆分（行为不变）。
 
+use shared::i18n::tr;
 use super::status::{mock_status_chip, render_lsp_manager, sb_toggle, toggle_sidebar_hidden};
 use super::*;
 impl WorkbenchView {
@@ -138,7 +139,7 @@ impl WorkbenchView {
                     .p_4()
                     .text_sm()
                     .text_color(cx.theme().colors.muted_foreground)
-                    .child("项目面板尚未装配（首次渲染后可用）")
+                    .child(tr("项目面板尚未装配（首次渲染后可用）"))
                     .into_any_element(),
             },
         );
@@ -348,7 +349,7 @@ impl WorkbenchView {
                     .xsmall()
                     .icon(icon)
                     .label(label)
-                    .tooltip("语言服务（LSP）"),
+                    .tooltip(tr("语言服务（LSP）")),
             )
             .content(move |_state, _window, cx| render_lsp_manager(&entity, cx))
             .into_any_element()

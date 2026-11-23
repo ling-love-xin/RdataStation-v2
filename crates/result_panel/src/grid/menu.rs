@@ -1,6 +1,7 @@
 //! 菜单域（`grid/` 第五块）：右键 / 列头 / 列浏览器三组菜单项（纯函数）+ 列去重
 //! 取值 + `TableDelegate::context_menu`（网格最近右键单元格 → 菜单动作回钩子）。
 
+use shared::i18n::tr;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::table::TableState;
 use gpui_kit::*;
@@ -357,7 +358,7 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
         ContextMenuItem {
             // 【遗留 #7】查看完整值：右键菜单里的「按值筛选「预览」」只给 24 字符截断，
             // 长值（JSON / 文本）要从这里真正看全
-            label: "查看完整值…".to_string(),
+            label: tr("查看完整值…").to_string(),
             action: ContextAction::PreviewValue(value.to_string()),
             separator_before: false,
             disabled: false,
@@ -369,7 +370,7 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             disabled: false,
         },
         ContextMenuItem {
-            label: "复制此值".to_string(),
+            label: tr("复制此值").to_string(),
             action: ContextAction::CopyValue(value.to_string()),
             separator_before: false,
             disabled: false,
@@ -377,7 +378,7 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
         ContextMenuItem {
             // 【A9】值 JSON：`NULL` → `null`，其余 JSON 字符串（与「复制此值」平行，
             // 口径在 export::value_to_json——同一个值两种格式不该两套转义）
-            label: "复制此值为 JSON".to_string(),
+            label: tr("复制此值为 JSON").to_string(),
             action: ContextAction::CopyValueJson(value.to_string()),
             separator_before: false,
             disabled: false,
@@ -390,14 +391,14 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             disabled: false,
         },
         ContextMenuItem {
-            label: "复制整行（TSV）".to_string(),
+            label: tr("复制整行（TSV）").to_string(),
             action: ContextAction::CopyRow(target.row),
             separator_before: false,
             disabled: false,
         },
         ContextMenuItem {
             // 【A9】行 JSON：单对象（列名 → 值，`NULL` → `null`），与导出 JSON 档同口径
-            label: "复制整行为 JSON".to_string(),
+            label: tr("复制整行为 JSON").to_string(),
             action: ContextAction::CopyRowJson(target.row),
             separator_before: false,
             disabled: false,
@@ -474,7 +475,7 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
         // `STATE_REMOVED` 行恢复成 `STATE_NORMAL`（`ResultSetModel.java:572-577`）——本仓
         // 没有那条通道，`begin_edit` 直接拒绝已删行，所以这一项灰着并说明原因（§9.48）。
         items.push(ContextMenuItem {
-            label: "修改单元格".to_string(),
+            label: tr("修改单元格").to_string(),
             action: ContextAction::EditCell {
                 row: target.row,
                 column: target.column,
@@ -489,7 +490,7 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
         // 文本按「修改单元格」的动词短语对仗（`bundle_zh` 的 name 是「重置单元格更改」）。
         if reset_cell_applicable(target.is_deleted, target.cell_changed) {
             items.push(ContextMenuItem {
-                label: "重置单元格".to_string(),
+                label: tr("重置单元格").to_string(),
                 action: ContextAction::ResetCell {
                     row: target.row,
                     column: target.column,
@@ -499,20 +500,20 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             });
         }
         items.push(ContextMenuItem {
-            label: "在下方插入新行".to_string(),
+            label: tr("在下方插入新行").to_string(),
             action: ContextAction::InsertRowBelow(target.row),
             // 组内第二条分隔线：对应 DBeaver `line 3208` 的 `editMenu.add(new Separator())`
             separator_before: true,
             disabled: !row_actions.add,
         });
         items.push(ContextMenuItem {
-            label: "复制此行".to_string(),
+            label: tr("复制此行").to_string(),
             action: ContextAction::DuplicateRow(target.row),
             separator_before: false,
             disabled: !row_actions.copy,
         });
         items.push(ContextMenuItem {
-            label: "删除此行".to_string(),
+            label: tr("删除此行").to_string(),
             action: ContextAction::DeleteRow(target.row),
             separator_before: false,
             disabled: !row_actions.delete,
@@ -523,7 +524,7 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
         // 文案照 bundle_zh 的 name（`:128` / `:130`），不加「值到当前行」（那是 description）。
         // 越界由宿主判定（纯函数看不到视图行数）：源行不存在 = 点击无动作，与 DBeaver 一致。
         items.push(ContextMenuItem {
-            label: "从上一行复制".to_string(),
+            label: tr("从上一行复制").to_string(),
             action: ContextAction::CopyRowValuesFrom {
                 row: target.row,
                 above: true,
@@ -532,7 +533,7 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             disabled: false,
         });
         items.push(ContextMenuItem {
-            label: "从下一行复制".to_string(),
+            label: tr("从下一行复制").to_string(),
             action: ContextAction::CopyRowValuesFrom {
                 row: target.row,
                 above: false,
@@ -570,7 +571,7 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
     });
     if target.hidden_columns > 0 {
         items.push(ContextMenuItem {
-            label: "显示全部列".to_string(),
+            label: tr("显示全部列").to_string(),
             action: ContextAction::ShowAllColumns,
             separator_before: false,
             disabled: false,
@@ -638,7 +639,7 @@ pub fn layout_presentation_menu_items(target: &ContextTarget) -> Vec<ContextMenu
     items.push(ContextMenuItem {
         // DBeaver 只在 presentation 数 ≥2 时摆切换项（`canSwitchPresentation`）；
         // 本仓恒有两档（网格 / 文本），所以恒摆
-        label: "切换表示".to_string(),
+        label: tr("切换表示").to_string(),
         action: ContextAction::CyclePresentation,
         separator_before: items.is_empty(),
         disabled: false,
@@ -713,7 +714,7 @@ pub fn selection_stat_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem>
 /// 四项那一组也自带一条（`:3926` 的 Separator），所以两小组之间仍有线。
 pub fn filters_menu_items() -> Vec<ContextMenuItem> {
     let mut items = vec![ContextMenuItem {
-        label: "在结果中查找…".to_string(),
+        label: tr("在结果中查找…").to_string(),
         action: ContextAction::OpenFind,
         separator_before: true,
         disabled: false,
@@ -736,25 +737,25 @@ pub fn filters_menu_items() -> Vec<ContextMenuItem> {
 pub fn filter_settings_menu_items() -> Vec<ContextMenuItem> {
     vec![
         ContextMenuItem {
-            label: "保存过滤器设置".to_string(),
+            label: tr("保存过滤器设置").to_string(),
             action: ContextAction::SaveFilterSetting,
             separator_before: true,
             disabled: false,
         },
         ContextMenuItem {
-            label: "重置过滤器设置".to_string(),
+            label: tr("重置过滤器设置").to_string(),
             action: ContextAction::ResetFilterSetting,
             separator_before: false,
             disabled: false,
         },
         ContextMenuItem {
-            label: "删除所有过滤 / 排序".to_string(),
+            label: tr("删除所有过滤 / 排序").to_string(),
             action: ContextAction::ClearAllFilters,
             separator_before: false,
             disabled: false,
         },
         ContextMenuItem {
-            label: "编辑筛选设置…".to_string(),
+            label: tr("编辑筛选设置…").to_string(),
             action: ContextAction::OpenFilterSettings,
             separator_before: false,
             disabled: false,
@@ -820,7 +821,7 @@ pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
     }
     if target.column_filter_active {
         values.push(ContextMenuItem {
-            label: "清除此列筛选".to_string(),
+            label: tr("清除此列筛选").to_string(),
             action: ContextAction::ClearColumnFilter {
                 column: target.column,
             },
@@ -871,7 +872,7 @@ pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
     });
     if target.hidden_columns > 0 {
         items.push(ContextMenuItem {
-            label: "显示全部列".to_string(),
+            label: tr("显示全部列").to_string(),
             action: ContextAction::ShowAllColumns,
             separator_before: false,
             disabled: false,
@@ -906,7 +907,7 @@ pub fn column_browser_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem>
         // 的 `meta_data_panel_action_copy_column_text`，文案 "Copy Column Names"）；
         // 多选时按选中集合逐行拼、换行分隔，本仓同口径。
         ContextMenuItem {
-            label: "复制列名".to_string(),
+            label: tr("复制列名").to_string(),
             action: ContextAction::CopyColumnNames,
             separator_before: false,
             disabled: false,
@@ -952,7 +953,7 @@ pub fn column_browser_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem>
     }
     if target.hidden_columns > 0 {
         items.push(ContextMenuItem {
-            label: "显示全部列".to_string(),
+            label: tr("显示全部列").to_string(),
             action: ContextAction::ShowAllColumns,
             separator_before: false,
             disabled: false,

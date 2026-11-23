@@ -1,5 +1,6 @@
 //! 书签弹窗：书签说明输入 + 书签管理器列表。
 
+use shared::i18n::tr;
 use super::*;
 
 // ═══ 书签弹窗（书签说明输入 + 书签管理器列表）═══
@@ -45,7 +46,7 @@ pub fn open_bookmark_note_dialog(
         let save = Button::new("editor-bookmark-note-save")
             .with_variant(ButtonVariant::Primary)
             .small()
-            .label("保存")
+            .label(tr("保存"))
             .debug_selector(|| "editor-dialog-editor-bookmark-note-save".to_string())
             .on_click({
                 let on_submit = on_submit.clone();
@@ -98,7 +99,7 @@ pub fn open_bookmark_manager(
     use gpui_kit::component::input::{Input, InputState};
 
     let kind = Rc::new(std::cell::Cell::new(BookmarkKind::All));
-    let input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索行号 / 说明 / #标签…"));
+    let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("搜索行号 / 说明 / #标签…")));
     let on_jump = Rc::new(on_jump);
     let on_edit = Rc::new(on_edit);
     let on_delete = Rc::new(on_delete);
@@ -159,9 +160,9 @@ pub fn open_bookmark_manager(
             .border_color(border)
             .text_xs()
             .text_color(muted)
-            .child(div().w_10().child("位置"))
-            .child(div().flex_1().child("标签"))
-            .child(div().w_16().child("操作"));
+            .child(div().w_10().child(tr("位置")))
+            .child(div().flex_1().child(tr("标签")))
+            .child(div().w_16().child(tr("操作")));
 
         let row_children = rows.iter().map(|b| {
             let line = b.line;
@@ -220,7 +221,7 @@ pub fn open_bookmark_manager(
                                 .ghost()
                                 .small()
                                 .icon(IconName::Pencil)
-                                .tooltip("编辑")
+                                .tooltip(tr("编辑"))
                                 .debug_selector(move || {
                                     format!("editor-dialog-editor-bookmark-edit-{line}").to_string()
                                 })
@@ -234,7 +235,7 @@ pub fn open_bookmark_manager(
                                 .ghost()
                                 .small()
                                 .icon(IconName::Trash)
-                                .tooltip("删除")
+                                .tooltip(tr("删除"))
                                 .debug_selector(move || {
                                     format!("editor-dialog-editor-bookmark-delete-{line}")
                                         .to_string()
@@ -256,7 +257,7 @@ pub fn open_bookmark_manager(
                 .flex()
                 .justify_center()
                 .debug_selector(|| "editor-dialog-editor-bookmark-empty".to_string())
-                .child("还没有书签 —— Ctrl+Shift+B 或右键「添加书签/说明…」")
+                .child(tr("还没有书签 —— Ctrl+Shift+B 或右键「添加书签/说明…」"))
         } else if rows.is_empty() {
             div()
                 .w_full()
@@ -266,7 +267,7 @@ pub fn open_bookmark_manager(
                 .flex()
                 .justify_center()
                 .debug_selector(|| "editor-dialog-editor-bookmark-empty".to_string())
-                .child("没有匹配的书签 —— 试试行号 / 说明 / #标签")
+                .child(tr("没有匹配的书签 —— 试试行号 / 说明 / #标签"))
         } else {
             div()
                 .v_flex()
@@ -281,7 +282,7 @@ pub fn open_bookmark_manager(
             move |_window, _cx| {}
         });
         dialog
-            .title("书签")
+            .title(tr("书签"))
             .child(body)
             .footer(DialogFooter::new().child(close))
     });

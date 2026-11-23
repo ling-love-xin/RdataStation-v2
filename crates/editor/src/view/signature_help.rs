@@ -18,6 +18,7 @@
 //! - UI：独立 Dialog（复用 `open_dialog` 基建），标题 = 函数签名，正文 = 参数表 +
 //!   当前参数高亮 + 中文描述。不做跟随光标的 Popover（要光标像素 + 滚动跟随，复杂度高）
 
+use shared::i18n::tr;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::{ActiveTheme, WindowExt as _};
 use gpui_kit::*;
@@ -199,10 +200,10 @@ pub fn open_signature_help(window: &mut Window, cx: &mut App, view: SignatureVie
             body
         };
         dialog
-            .title("签名帮助")
+            .title(tr("签名帮助"))
             .w(theme.font_size * ui::SIGNATURE_HELP_DIALOG_WIDTH)
             .child(body)
-            .footer(div().child("Esc 关闭 · 再次 Ctrl+Shift+Space 刷新"))
+            .footer(div().child(tr("Esc 关闭 · 再次 Ctrl+Shift+Space 刷新")))
     });
 }
 

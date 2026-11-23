@@ -1,5 +1,6 @@
 //! 标签行尾「⋯」菜单：重命名与删除。
 
+use shared::i18n::tr;
 use super::*;
 
 pub(super) fn tag_menu(
@@ -21,7 +22,7 @@ pub(super) fn tag_menu(
                             }
                             // 输入实体在开窗前建好（builder 是 `Fn`，见模块头注释）。
                             let input = cx.new(|cx| {
-                                InputState::new(window, cx).placeholder("标签名")
+                                InputState::new(window, cx).placeholder(tr("标签名"))
                             });
                             let value = tag_name.clone();
                             input.update(cx, |input, cx| input.set_value(value, window, cx));
@@ -85,11 +86,11 @@ pub(super) fn tag_menu(
                     };
                     let mut menu = menu;
                     menu = menu.item(
-                        PopupMenuItem::new("重命名…").on_click(rename_dispatch),
+                        PopupMenuItem::new(tr("重命名…")).on_click(rename_dispatch),
                     );
                     // 删除是危险项：排在后面，点进去还有一次带危险按钮的确认
                     menu = menu.item(
-                        PopupMenuItem::new("删除").on_click(delete_dispatch),
+                        PopupMenuItem::new(tr("删除")).on_click(delete_dispatch),
                     );
                     menu
                 }

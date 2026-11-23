@@ -9,6 +9,7 @@
 //! - 未注册 provider 的对象类型回退通用展示（fallback）。
 //! 视图形态为编辑区右侧停靠面板（`workbench/panels/editor.rs`）。
 
+use shared::i18n::{tr, tr_dyn};
 use crate::metadata_service::MetadataService;
 use crate::model::{NavSource, PropertyRef};
 use crate::property_providers::gates::MetadataGates;
@@ -84,11 +85,14 @@ fn qualify(ref_: &PropertyRef) -> String {
 }
 
 fn source_label(source: NavSource) -> String {
-    match source {
-        NavSource::Project => "项目 (P)".to_string(),
-        NavSource::Global => "全局 (G)".to_string(),
-        NavSource::Shared => "共享 (GP)".to_string(),
-    }
+    // 只在显示出口翻译：`PropertyTargetRef.source` 的下游消费者（各驱动 provider）都只把它
+    // 塞进属性行（`归属域` / `作用域`），不参与匹配或查询。
+    let zh = match source {
+        NavSource::Project => "项目 (P)",
+        NavSource::Global => "全局 (G)",
+        NavSource::Shared => "共享 (GP)",
+    };
+    tr_dyn(zh).to_string()
 }
 
 /// `PropertyRef` → 属性源目标引用（`property` crate 的轻量结构，不依赖本 crate）。
@@ -546,13 +550,13 @@ fn indexes_section(
 ) -> SectionOutcome {
     if let Some(reason) = gates.index_detail.reason() {
         return SectionOutcome {
-            label: "索引".to_string(),
+            label: tr("索引").to_string(),
             fill: SectionFill::Unavailable(reason.to_string()),
         };
     }
     match &indexes.error {
         Some(err) => SectionOutcome {
-            label: "索引".to_string(),
+            label: tr("索引").to_string(),
             fill: SectionFill::Unavailable(format!("索引取数失败：{err}")),
         },
         None => SectionOutcome {
@@ -569,13 +573,13 @@ fn constraints_section(
 ) -> SectionOutcome {
     if let Some(reason) = gates.constraint_detail.reason() {
         return SectionOutcome {
-            label: "约束".to_string(),
+            label: tr("约束").to_string(),
             fill: SectionFill::Unavailable(reason.to_string()),
         };
     }
     match &constraints.error {
         Some(err) => SectionOutcome {
-            label: "约束".to_string(),
+            label: tr("约束").to_string(),
             fill: SectionFill::Unavailable(format!("约束取数失败：{err}")),
         },
         None => SectionOutcome {
@@ -599,7 +603,7 @@ fn ddl_section(
     // 真拿到源版就显示（数据比声明更权威）。
     if let Some(text) = ddl_text.value.as_ref() {
         return Some(SectionOutcome {
-            label: "DDL（源版）".to_string(),
+            label: tr("DDL（源版）").to_string(),
             fill: SectionFill::Content(text_table("DDL", text)),
         });
     }
@@ -626,7 +630,7 @@ fn ddl_section(
             idx,
         );
         return Some(SectionOutcome {
-            label: "DDL（合成）".to_string(),
+            label: tr("DDL（合成）").to_string(),
             fill: SectionFill::Content(text_table("DDL", &composed)),
         });
     }

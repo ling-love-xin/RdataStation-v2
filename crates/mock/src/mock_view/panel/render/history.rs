@@ -1,5 +1,6 @@
 //! 生成历史段：最近若干次运行（重放 / 删除都在事件路径上交给后台）。
 
+use shared::i18n::tr;
 use super::*;
 
 impl MockPanel {
@@ -48,7 +49,7 @@ impl MockPanel {
                     .items_center()
                     .gap_1()
                     .child(Spinner::new().small())
-                    .child(div().text_xs().text_color(muted).child("读取中…")),
+                    .child(div().text_xs().text_color(muted).child(tr("读取中…"))),
             );
         }
         if self.history_loaded && self.history.is_empty() {
@@ -65,9 +66,9 @@ impl MockPanel {
                                             .size(rems(ui::PANEL_ICON_SIZE)),
                                     ),
                             )
-                            .title(EmptyTitle::new().child("还没有生成记录"))
+                            .title(EmptyTitle::new().child(tr("还没有生成记录")))
                             .description(
-                                EmptyDescription::new().child("跑一次生成后，记录会出现在这里"),
+                                EmptyDescription::new().child(tr("跑一次生成后，记录会出现在这里")),
                             ),
                     ),
                 );

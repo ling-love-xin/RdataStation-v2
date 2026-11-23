@@ -10,6 +10,8 @@
 //! （评级归归档后的资产库审计侧）。摘要**不触发取数**（`emit_request_for_tab` 对
 //! Overview 返回 `None`），只用已加载的载荷渲染。
 
+use shared::i18n::tr;
+use shared::i18n::tr_dyn;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::description_list::DescriptionList;
 use gpui_kit::component::progress::{Progress, ProgressCircle};
@@ -41,7 +43,7 @@ impl InsightView {
                 .target
                 .as_ref()
                 .and_then(|t| t.detail())
-                .unwrap_or_else(|| profile.source_label.into());
+                .unwrap_or_else(|| tr_dyn(&profile.source_label).to_string().into());
             return Some(
                 overview_table(profile, source, theme, inline_icon, ring_px).into_any_element(),
             );
@@ -216,7 +218,7 @@ fn overview_table(
                                 .text_xs()
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(colors.foreground)
-                                .child("检查器命中"),
+                                .child(tr("检查器命中")),
                         )
                         .child(div().flex_1())
                         .child(
@@ -347,7 +349,7 @@ fn overview_table(
                                 .text_xs()
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(colors.foreground)
-                                .child("事实提示"),
+                                .child(tr("事实提示")),
                         ),
                 )
                 .child(
@@ -366,7 +368,7 @@ fn overview_table(
                                 div()
                                     .text_xs()
                                     .text_color(colors.muted_foreground)
-                                    .child("· 评估全表后查看事实提示"),
+                                    .child(tr("· 评估全表后查看事实提示")),
                             )
                         }),
                 ),

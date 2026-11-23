@@ -1,5 +1,6 @@
 //! 表画像概览版式：报告头 / 五卡 / 类型分布 / 值得关注 / 主体分派。
 
+use shared::i18n::tr;
 use super::*;
 
 impl super::InsightWorkspacePanel {
@@ -169,7 +170,7 @@ impl super::InsightWorkspacePanel {
                     .border_color(colors.border)
                     .text_xs()
                     .text_color(colors.muted_foreground)
-                    .child("表画像"),
+                    .child(tr("表画像")),
             )
             .child(
                 div()
@@ -188,7 +189,7 @@ impl super::InsightWorkspacePanel {
                     } else {
                         colors.muted_foreground
                     })
-                    .child(scope.label()),
+                    .child(tr(scope.label())),
             )
             .child(div().flex_1().min_w_0())
     }
@@ -349,7 +350,7 @@ impl super::InsightWorkspacePanel {
                             .text_xs()
                             .text_ellipsis()
                             .text_color(colors.muted_foreground)
-                            .child(format!("{} {}", kind.label(), count)),
+                            .child(format!("{} {}", tr(kind.label()), count)),
                     ),
             );
         }
@@ -463,7 +464,7 @@ impl super::InsightWorkspacePanel {
                 div()
                     .text_xs()
                     .text_color(colors.muted_foreground)
-                    .child("未发现明显值得关注的列"),
+                    .child(tr("未发现明显值得关注的列")),
             );
         }
         panel_box(theme, "值得关注", format!("{added} 项"), lines)

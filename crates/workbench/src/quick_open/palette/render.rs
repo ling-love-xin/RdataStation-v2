@@ -1,5 +1,6 @@
 //! 浮层渲染：实体懒装配 + 遮罩 / 面板 / 键盘 Action 接线（render 即权威同步点）。
 
+use shared::i18n::tr;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::input::{Escape, Input, InputEvent, InputState, MoveDown, MoveUp};
@@ -20,7 +21,7 @@ impl QuickOpenPalette {
     pub(super) fn ensure_entities(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.input.is_none() {
             let input = cx.new(|cx| {
-                InputState::new(window, cx).placeholder("搜索对象、命令…（> 命令 · # 全文）")
+                InputState::new(window, cx).placeholder(tr("搜索对象、命令…（> 命令 · # 全文）"))
             });
             self._input_sub = Some(cx.subscribe_in(
                 &input,
@@ -164,7 +165,7 @@ impl Render for QuickOpenPalette {
                             .px_1()
                             .text_xs()
                             .text_color(theme.colors.muted_foreground)
-                            .child("↑↓ 选择 · ↵ 打开 · Shift+↵ 保留面板 · Esc 关闭")
+                            .child(tr("↑↓ 选择 · ↵ 打开 · Shift+↵ 保留面板 · Esc 关闭"))
                             .child(div().ml_auto().child(hint_right)),
                     ),
             )

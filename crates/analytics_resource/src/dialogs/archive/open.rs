@@ -1,5 +1,6 @@
 //! 归档对话框：打开入口与表单装配。
 
+use shared::i18n::tr;
 use super::*;
 use super::fields::{field_label, group_picker, hint_line, mode_picker, readonly_block};
 use gpui_kit::component::scroll::ScrollableElement as _;
@@ -146,7 +147,7 @@ pub fn open_archive_dialog_with(
                     .pt_1()
                     .border_t(ui::HAIRLINE)
                     .border_color(theme.colors.border)
-                    .child(div().text_xs().text_color(theme.colors.foreground).child("业务断言（选填）")),
+                    .child(div().text_xs().text_color(theme.colors.foreground).child(tr("业务断言（选填）"))),
             )
             .child(hint_line("写清口径，半年后才知道这个数是什么意思；取回后再归档会保留上次口径", theme.colors.muted_foreground))
             .child(field_label(theme, "指标名"))
@@ -161,7 +162,7 @@ pub fn open_archive_dialog_with(
             .overflow_y_scrollbar();
 
         dialog
-            .title("归档为存档")
+            .title(tr("归档为存档"))
             .w(cx.theme().font_size * ui::ARCHIVE_DIALOG_WIDTH)
             .child(
                 div()
@@ -187,7 +188,7 @@ pub fn open_archive_dialog_with(
                             .with_variant(ButtonVariant::Secondary)
                             .small()
                             .debug_selector(|| "archive-dialog-cancel".to_string())
-                            .label("取消")
+                            .label(tr("取消"))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
                     .child(

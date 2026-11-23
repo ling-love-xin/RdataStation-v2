@@ -123,6 +123,13 @@ Theme（主题）
 | 侧边栏背景 | `sidebar` |
 | 弹出层背景 | `popover` |
 
+### 3.4 字体族与字号（硬约束）
+
+- 字体族与字号**只由主题键决定**，代码里不写字面量：等宽内容用 `.font_family(theme.mono_font_family.clone())`，正文用 `theme.font_family`；字号来自 `font.size`（默认 16）/ `mono_font.size`（默认 13），`rems()` 的基准就是 `font.size`。
+- 主题 JSON 键：`font.family` / `font.size` / `mono_font.family` / `mono_font.size`（`assets/themes/rds-theme.json` 及各 pack）。
+- 族名兜底由组件库自动执行（主题或字体一变更就调 `theme/system_font.rs::resolve_default_font` 与 `theme/mono_font.rs::resolve_default_mono_font`）：`font.family = ".SystemUIFont"` 会被替换成 GPUI 实际解析到的已安装族名；等宽族缺失时 Windows 依次回退 `Cascadia Mono → Courier New → .SystemUIFont`（macOS `Monaco → Courier New`，Linux `Noto Sans Mono / Liberation Mono / Ubuntu Mono`）。**族名解析不到时 GPUI 在首帧布局 panic**（`Font::fallbacks` 救不了），所以写死 `"monospace"` 之类字面量等于绕过兜底。
+- 内置字体：gpui **不会**自动扫 `assets/fonts/`，必须显式 `cx.text_system().add_fonts(vec![bytes])`；项目当前零内置字体（CJK 单字重约 10–20 MB，属分发体积决策，暂不做）。
+
 ---
 
 ## 四、对比度标准

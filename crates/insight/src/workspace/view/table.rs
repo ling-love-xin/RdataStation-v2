@@ -4,6 +4,7 @@
 //! 「评估全表」逐列串行（避免撞后端并发上限），进度一列列回填；已经算出来的列明细
 //! 不清空（清空会让面板闪一下空白）。本视图只呈现事实统计，不合成质量总分或等级。
 
+use shared::i18n::tr;
 use gpui_kit::base::{Disableable as _, StyledExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{Icon, IconName, Sizable as _, Size, Theme};
@@ -47,8 +48,8 @@ impl InsightView {
                         Button::new("insight-eval-cancel")
                             .small()
                             .ghost()
-                            .label("取消")
-                            .tooltip("停止评估：已完成列保留，未完成列灰态可补算")
+                            .label(tr("取消"))
+                            .tooltip(tr("停止评估：已完成列保留，未完成列灰态可补算"))
                             .on_click({
                                 let entity = entity.clone();
                                 move |_, _, app| {
@@ -72,7 +73,7 @@ impl InsightView {
                             "评估全表"
                         })
                         .disabled(evaluating || profile.columns.is_empty())
-                        .tooltip("逐列串行统计（避免撞后端并发上限），进度会一列列回填")
+                        .tooltip(tr("逐列串行统计（避免撞后端并发上限），进度会一列列回填"))
                         .on_click({
                             let entity = entity.clone();
                             move |_, _, app| {
@@ -136,7 +137,7 @@ impl InsightView {
                 div()
                     .text_xs()
                     .text_color(colors.muted_foreground)
-                    .child("该临时表没有可见的列"),
+                    .child(tr("该临时表没有可见的列")),
             );
         }
         for column in &profile.columns {
@@ -154,7 +155,7 @@ impl InsightView {
             div()
                 .text_xs()
                 .text_color(colors.muted_foreground)
-                .child("行数与缺失率基于全量统计；样本值为前 5 行，直方图至少 10 行"),
+                .child(tr("行数与缺失率基于全量统计；样本值为前 5 行，直方图至少 10 行")),
         )
     }
 }
@@ -172,19 +173,19 @@ fn table_header_row(theme: &Theme) -> Div {
         .text_xs()
         .text_color(colors.muted_foreground)
         .child(div().w(rems(ui::INSIGHT_TABLE_INDEX_WIDTH)).child("#"))
-        .child(div().flex_1().min_w_0().child("列名"))
+        .child(div().flex_1().min_w_0().child(tr("列名")))
         .child(
             div()
                 .w(rems(ui::INSIGHT_TABLE_TYPE_WIDTH))
                 .text_ellipsis()
-                .child("类型"),
+                .child(tr("类型")),
         )
-        .child(div().w(rems(ui::INSIGHT_TABLE_FLAG_WIDTH)).child("可空"))
+        .child(div().w(rems(ui::INSIGHT_TABLE_FLAG_WIDTH)).child(tr("可空")))
         .child(
             div()
                 .w(rems(ui::INSIGHT_TABLE_NULL_RATE_WIDTH))
                 .text_ellipsis()
-                .child("缺失率"),
+                .child(tr("缺失率")),
         )
 }
 
@@ -235,7 +236,7 @@ fn table_column_row(
                     .ghost()
                     .xsmall()
                     .label(column.name.clone())
-                    .tooltip("看这一列的画像")
+                    .tooltip(tr("看这一列的画像"))
                     .on_click({
                         let entity = entity.clone();
                         let next = column.clone();

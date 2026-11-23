@@ -1,5 +1,6 @@
 //! 侧栏域（`panel/` 第四块）：文本视图 / 左缘竖条 / 列浏览器 / 右栏 / 右缘竖条 / 展开筛选条。
 
+use shared::i18n::tr;
 use std::time::Duration;
 
 use gpui_kit::assets::IconName;
@@ -57,7 +58,7 @@ impl ResultPanel {
                             .ghost()
                             .small()
                             .debug_selector(|| "editor-result-text-head-grid".to_string())
-                            .label("网格")
+                            .label(tr("网格"))
                             .on_click({
                                 let queue = queue.clone();
                                 move |_, _window, app| {
@@ -76,7 +77,7 @@ impl ResultPanel {
                             // 0.9.0 的 `toggled` 只写 a11y，样式必须走 `Selectable::selected`
                             .selected(true)
                             .toggled(true)
-                            .label("文本"),
+                            .label(tr("文本")),
                     ),
             )
             .child(
@@ -157,7 +158,7 @@ impl ResultPanel {
                 .small()
                 .icon(IconName::ChevronUp)
                 .debug_selector(|| "editor-result-bar-record-prev".to_string())
-                .tooltip("上一行")
+                .tooltip(tr("上一行"))
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::TransposePrev, app);
                 });
@@ -167,7 +168,7 @@ impl ResultPanel {
                 .small()
                 .icon(IconName::ChevronDown)
                 .debug_selector(|| "editor-result-bar-record-next".to_string())
-                .tooltip("下一行")
+                .tooltip(tr("下一行"))
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::TransposeNext, app);
                 });
@@ -333,8 +334,8 @@ impl ResultPanel {
             .border_b(ui::HAIRLINE)
             .text_xs()
             .text_color(muted)
-            .child(div().flex_1().min_w_0().child("列名"))
-            .child(div().flex_none().child("类型"))
+            .child(div().flex_1().min_w_0().child(tr("列名")))
+            .child(div().flex_none().child(tr("类型")))
             .child(div().flex_none().child(""))
             .into_any_element();
         // 【D2 对齐 2026-11-24】页顶过滤条 = DBeaver `MetaDataPanel.java:81-89` 的
@@ -426,8 +427,8 @@ impl ResultPanel {
             .ghost()
             .small()
             .icon(IconName::FileCode)
-            .label("生成 DDL")
-            .tooltip("按结果集列生成建表 DDL（对齐 DBeaver Metadata 面板的 Generate DDL）")
+            .label(tr("生成 DDL"))
+            .tooltip(tr("按结果集列生成建表 DDL（对齐 DBeaver Metadata 面板的 Generate DDL）"))
             .debug_selector(|| "editor-result-generate-ddl".to_string())
             .on_click(move |_, _window, app| {
                 ddl_queue.request(ResultRequest::GenerateResultSetDdl, app);
@@ -958,7 +959,7 @@ impl ResultPanel {
                             .xsmall()
                             .icon(IconName::Maximize2)
                             .debug_selector(|| "editor-result-filter-expand-toggle".to_string())
-                            .tooltip("收起筛选条（回到工具栏输入框）")
+                            .tooltip(tr("收起筛选条（回到工具栏输入框）"))
                             .on_click(move |_, _window, app| {
                                 collapse_queue.request(ResultRequest::ToggleFilterExpand, app);
                             }),
@@ -988,7 +989,7 @@ impl ResultPanel {
                             .xsmall()
                             .icon(IconName::Play)
                             .debug_selector(|| "editor-result-filter-expand-run".to_string())
-                            .tooltip("用 select * from (原SQL) where 词 重查（替换当前结果集）")
+                            .tooltip(tr("用 select * from (原SQL) where 词 重查（替换当前结果集）"))
                             .on_click(move |_, _window, app| {
                                 run_queue.request(ResultRequest::RunFilterAsQuery, app);
                             }),
@@ -1000,7 +1001,7 @@ impl ResultPanel {
                         .ghost()
                         .xsmall()
                         .debug_selector(|| "editor-result-filter-expand-clear".to_string())
-                        .label("✕ 清除")
+                        .label(tr("✕ 清除"))
                         .on_click(move |_, _window, app| {
                             clear_queue.request(ResultRequest::ClearFilter, app);
                         }),
@@ -1014,8 +1015,8 @@ impl ResultPanel {
                     .xsmall()
                     .icon(IconName::Minimize)
                     .debug_selector(|| "editor-result-filter-expand-collapse".to_string())
-                    .label("收起")
-                    .tooltip("回到工具栏输入框".to_string())
+                    .label(tr("收起"))
+                    .tooltip(tr("回到工具栏输入框").to_string())
                     .on_click(move |_, _window, app| {
                         collapse_queue2.request(ResultRequest::ToggleFilterExpand, app);
                     }),

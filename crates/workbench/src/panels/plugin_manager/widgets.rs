@@ -3,6 +3,7 @@
 //! 这里只做「状态 → 文案 / 筛选 / 统计 / 按钮」：不读窗口、不读主题，
 //! 渲染层负责把结果套上 `cx.theme().colors.*`。
 
+use shared::i18n::tr;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
@@ -642,8 +643,8 @@ pub(crate) fn plugin_action_buttons(
         Button::new(SharedString::from(format!("plugin-{scope}-{id}-retry")))
             .ghost()
             .with_size(Size::XSmall)
-            .label("重试")
-            .tooltip("重新解析清单并加载（修好清单或卸载冲突插件后使用）")
+            .label(tr("重试"))
+            .tooltip(tr("重新解析清单并加载（修好清单或卸载冲突插件后使用）"))
             .disabled(busy)
             .on_click({
                 let entity = entity.clone();
@@ -658,7 +659,7 @@ pub(crate) fn plugin_action_buttons(
         Button::new(SharedString::from(format!("plugin-{scope}-{id}-disable")))
             .ghost()
             .with_size(Size::XSmall)
-            .label("停用")
+            .label(tr("停用"))
             .tooltip(disable_hint.clone())
             .disabled(busy || disable_reason.is_some())
             .on_click({
@@ -674,8 +675,8 @@ pub(crate) fn plugin_action_buttons(
         Button::new(SharedString::from(format!("plugin-{scope}-{id}-enable")))
             .ghost()
             .with_size(Size::XSmall)
-            .label("启用")
-            .tooltip("启用并立即激活")
+            .label(tr("启用"))
+            .tooltip(tr("启用并立即激活"))
             .disabled(busy)
             .on_click({
                 let entity = entity.clone();
@@ -698,7 +699,7 @@ pub(crate) fn plugin_action_buttons(
     let uninstall = Button::new(SharedString::from(format!("plugin-{scope}-{id}-uninstall")))
         .ghost()
         .with_size(Size::XSmall)
-        .label("卸载")
+        .label(tr("卸载"))
         .tooltip(uninstall_hint)
         .disabled(busy || block_reason.is_some())
         .on_click({
@@ -712,10 +713,10 @@ pub(crate) fn plugin_action_buttons(
                     let id = id.clone();
                     alert
                         .confirm()
-                        .title("卸载插件")
+                        .title(tr("卸载插件"))
                         .description(SharedString::from(description.clone()))
                         .ok_text("卸载")
-                        .cancel_text("取消")
+                        .cancel_text(tr("取消"))
                         .ok_variant(ButtonVariant::Danger)
                         .on_ok(move |_window, _cx, cx| {
                             let _ = entity.update(cx, |panel, cx| {
@@ -771,7 +772,7 @@ pub(crate) fn plugin_file_buttons(
     )))
     .ghost()
     .with_size(Size::XSmall)
-    .label("目录")
+    .label(tr("目录"))
     .tooltip(SharedString::from(dir_hint))
     .disabled(dir_disabled)
     .on_click({
@@ -800,7 +801,7 @@ pub(crate) fn plugin_file_buttons(
     )))
     .ghost()
     .with_size(Size::XSmall)
-    .label("日志")
+    .label(tr("日志"))
     .tooltip(SharedString::from(log_hint))
     .disabled(!log_exists)
     .on_click({
@@ -829,8 +830,8 @@ pub(crate) fn plugin_file_buttons(
     )))
     .ghost()
     .with_size(Size::XSmall)
-    .label("复制诊断")
-    .tooltip("复制插件状态、驱动登记与日志路径，便于排查")
+    .label(tr("复制诊断"))
+    .tooltip(tr("复制插件状态、驱动登记与日志路径，便于排查"))
     .on_click({
         let entity = entity.clone();
         move |_, _window, app| {
@@ -852,8 +853,8 @@ pub(crate) fn plugin_file_buttons(
     )))
     .ghost()
     .with_size(Size::XSmall)
-    .label("重算校验")
-    .tooltip("按当前目录内容重写 checksums.json（换过 jar / 改过脚本、重启时被「哈希不符」拒了之后用）")
+    .label(tr("重算校验"))
+    .tooltip(tr("按当前目录内容重写 checksums.json（换过 jar / 改过脚本、重启时被「哈希不符」拒了之后用）"))
     .disabled(busy || !dir_usable)
     .on_click({
         let entity = entity.clone();
@@ -866,10 +867,10 @@ pub(crate) fn plugin_file_buttons(
                 let id = id.clone();
                 alert
                     .confirm()
-                    .title("重算完整性校验")
+                    .title(tr("重算完整性校验"))
                     .description(SharedString::from(description.clone()))
                     .ok_text("重算")
-                    .cancel_text("取消")
+                    .cancel_text(tr("取消"))
                     .on_ok(move |_window, _cx, cx| {
                         let _ = entity.update(cx, |panel, cx| {
                             panel.regenerate_checksums(id.clone(), cx);
@@ -898,8 +899,8 @@ pub(crate) fn select_button(
     Button::new(SharedString::from(format!("plugin-{scope}-{id}-select")))
         .ghost()
         .with_size(Size::XSmall)
-        .label("详情")
-        .tooltip("在右侧详情栏查看该插件")
+        .label(tr("详情"))
+        .tooltip(tr("在右侧详情栏查看该插件"))
         .on_click(move |_, window, app| {
             on_select(window, app);
             app.stop_propagation();
