@@ -461,6 +461,28 @@ impl ResultPanel {
         cx: &mut Context<Self>,
     ) {
         match event {
+            // 【D10】带修饰键的格点击（组件在 `SelectCell` **之前**发，见 vendor
+            // `table/state.rs::on_cell_click`）：Shift = 以锚点扩展成矩形
+            // （DBeaver `LightGrid.java:2718-2748`），无修饰键 = 单格重选。
+            //
+            // Ctrl 的「并集 / 反选」本仓没做（单矩形模型表达不了），按单格重选处理；
+            // 差异记在基线文档 §29 台账。
+            TableEvent::CellClicked {
+                row_ix,
+                col_ix,
+                modifiers,
+            } => {
+                let extend = modifiers.shift;
+                self.grid.update(cx, |state, cx| {
+                    let delegate = state.delegate_mut();
+                    delegate.click_cell(*row_ix, *col_ix, extend);
+                    // 【DBeaver 对齐】点单元格 = 不吃整行：DBeaver 的 `setSelection` 会清掉
+                    // 行区间（`LightGrid.java:2705-2717` 清空重填），本仓组件切到格模式后
+                    // `selected_row()` 只 filter 不落到 delegate 的镜像，旧整行色会一直亮着。
+                    delegate.set_selected_row(None);
+                    cx.notify();
+                });
+            }
             // 单击选格：值详情跟随点选（此前只接双击——「点击文字半天才出来」
             // 的根因之一）+ 重建 JSON 展开树（选中值是 JSON/数组时）
             TableEvent::SelectCell(row_ix, col_ix) => {
@@ -504,6 +526,8 @@ impl ResultPanel {
                 self.selected_col = None;
                 self.grid.update(cx, |state, cx| {
                     state.delegate_mut().set_selected_row(None);
+                    // 【D10】`Esc` 清选要连矩形一起撤（组件只清它自己那一个选中格）
+                    state.delegate_mut().clear_cell_range();
                     cx.notify();
                 });
                 self.rebuild_value_tree(window, cx);

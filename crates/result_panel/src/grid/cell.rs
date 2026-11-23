@@ -340,6 +340,12 @@ pub(crate) fn render_td(
     // 而 `.when` 的闭包捕获后与后面的多次借用打架。
     let dirty_bg = product_tokens::get(cx).result_cell_modified_background(theme);
     let conflict_bg = product_tokens::get(cx).result_cell_error_background(theme);
+    // 【D10】矩形选区：矩形里的格叠一层选中覆盖层，**焦点格除外**——组件自己会给
+    // 选中格画同槽覆盖层（vendor `table/state.rs` 的 `is_cell_selected`），再叠一层
+    // 半透明会比矩形内其他格深一档（DBeaver 里整块矩形是同一个色）。
+    let in_cell_range = delegate.in_cell_range(row_ix, col_ix);
+    let paints_range = in_cell_range && delegate.range_focus() != Some((row_ix, col_ix));
+    let range_bg = theme.tokens.table_active;
     let mut cell = div()
         // 悬停提示要求元素有 id：gpui 的**流式** `tooltip` 声明在
         // `StatefulInteractiveElement` 上（没 id 的裸 `div` 只有直调 `Interactivity` 的写法），
@@ -394,6 +400,21 @@ pub(crate) fn render_td(
         // 资产缺失回退旧口径 danger 16%
         .when(delegate.is_conflict(row_ix, col_ix), |cell| {
             cell.bg(conflict_bg)
+        })
+        // 【D10】矩形选区覆盖层（与组件画焦点格那层同构：绝对铺满 + 同槽半透明色）。
+        // 用覆盖层而不是 `.bg()`：类型样式底色 / 本地行底色 / 脏格色都要透出来——
+        // DBeaver 的选中也是叠在格子底色**之上**画的，不是替换底色。
+        .when(paints_range, |cell| {
+            cell.relative().child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .bg(range_bg)
+                    // 回归哨兵：颜色在 headless 下读不到，用它坐实「矩形内的非焦点格真的铺了」
+                    .debug_selector(move || {
+                        format!("editor-result-cell-in-range-{row_ix}-{col_ix}")
+                    }),
+            )
         })
         // 【类型感知】数字右对齐；其余左对齐
         .text_align(style.align)

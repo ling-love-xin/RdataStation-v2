@@ -14,10 +14,10 @@ use crate::{
 };
 use gpui::{
     AppContext, Axis, Bounds, ClickEvent, Context, Div, DragMoveEvent, ElementId, EventEmitter,
-    FocusHandle, Focusable, InteractiveElement, IntoElement, ListSizingBehavior, MouseButton,
-    MouseDownEvent, ParentElement, Pixels, Point, Render, ScrollStrategy, SharedString, Stateful,
-    StatefulInteractiveElement as _, Styled, Task, TextAlign, UniformListScrollHandle, Window, div,
-    prelude::FluentBuilder, px, uniform_list,
+    FocusHandle, Focusable, InteractiveElement, IntoElement, ListSizingBehavior, Modifiers,
+    MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render, ScrollStrategy, SharedString,
+    Stateful, StatefulInteractiveElement as _, Styled, Task, TextAlign, UniformListScrollHandle,
+    Window, div, prelude::FluentBuilder, px, uniform_list,
 };
 use rust_i18n::t;
 
@@ -89,6 +89,17 @@ pub enum TableEvent {
     ///
     /// This event is also emitted when navigating between cells using keyboard shortcuts.
     SelectCell(usize, usize),
+    /// A cell has been clicked, with the modifier keys held at the time.
+    ///
+    /// Emitted just before [`TableEvent::SelectCell`], from the same click. The
+    /// table's own selection stays single-cell; callers that need modifier
+    /// semantics (for example a rectangular cell range extended with `Shift`)
+    /// interpret `modifiers` themselves.
+    CellClicked {
+        row_ix: usize,
+        col_ix: usize,
+        modifiers: Modifiers,
+    },
     /// A cell has been double-clicked.
     ///
     /// Emitted when a cell is double-clicked in cell selection mode.
@@ -942,6 +953,15 @@ where
         }
 
         cx.stop_propagation();
+
+        // Publish the click with its modifier keys before any selection change:
+        // callers that model a cell *range* (而不是单格) 需要 Shift/Ctrl 才能
+        // 决定是「扩展」还是「重选」，而 `SelectCell` 不带修饰键。
+        cx.emit(TableEvent::CellClicked {
+            row_ix,
+            col_ix,
+            modifiers: e.modifiers(),
+        });
 
         let is_double_click = e.click_count() == 2;
 

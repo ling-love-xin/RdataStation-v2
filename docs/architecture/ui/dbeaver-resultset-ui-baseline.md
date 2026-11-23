@@ -1690,6 +1690,9 @@ Label「筛选：」在左、`Text(SWT.BORDER|SWT.SEARCH|SWT.ICON_CANCEL)` 在�
 3. **交互**：普通点击 = 单格 + 锚点；`Shift` 点击 = 锚点→终点矩形；正文按住拖 = 持续更新矩形
    （拖期间只用已落定的行/列，不做自动滚动，先与 DBeaver 的「滚动是 `showItem/showColumn`
    附带」解耦，自动滚动留作后续）。
+   **（2026-11-24 修订）** 本刀只落了点击两态；正文拖拽需要容器级几何换算
+   （`DragMoveEvent.bounds` + 行高 + 列宽累积 + 横向滚动偏移 + 固定列），风险面独立，
+   拆成第二批单独一刀，理由与现状见 §30.4 第 1 条。
 4. **计算页接入**（D11/D12/D13）：选区非空时「按列分组」取选区覆盖的列、「−」移除选中函数、
    工具条补两项——这一步落地后 §25.3 的 D10–D13 一起归零。
 
@@ -1699,3 +1702,63 @@ Label「筛选：」在左、`Text(SWT.BORDER|SWT.SEARCH|SWT.ICON_CANCEL)` 在�
   `table/state.rs`（事件枚举 + 发射点）与必要的 `table/table.rs` 点击处理。
 - 「自动滚动 / 键盘 Shift+方向键扩选 / Shift+Ctrl 并集」本轮不做（DBeaver 有，但属第二批）。
 - 高亮颜色走 `cx.theme().colors`，不写裸值。
+## 30. D10 落地：网格矩形单元格选区（点击档）
+
+### 30.1 vendor 的出口（为什么必须动 vendor）
+
+`TableEvent` 原先只有 `SelectCell(row, col)`：既不带修饰键、也没有 range 变体（§29.2 已核）。
+但点击处理本身是拿得到修饰键的——`TableState::on_cell_click` 的参数就是 `&ClickEvent`
+（`vendor/gpui-component/src/table/state.rs:932-939`），修饰键经 `ClickEvent::modifiers()` 取
+（实测是**方法**不是字段，`e.modifiers` 编译报 E0615）。所以出口从来不是「拿不到」，而是
+「没往外发」。
+
+### 30.2 vendor 改动（只增不改，2 处）
+
+| 位置 | 改动 |
+| --- | --- |
+| `vendor/gpui-component/src/table/state.rs` import 块 | 增 `Modifiers`（`ClickEvent::modifiers()` 的返回类型） |
+| 同文件 `TableEvent` 枚举 | 在 `SelectCell` 之后**新增** `CellClicked { row_ix, col_ix, modifiers }`，附文档注释说明「在 `SelectCell` 之前发、组件自己的选区仍是单格」 |
+| 同文件 `on_cell_click` | `cx.stop_propagation()` 之后、任何选区变更之前 `cx.emit(TableEvent::CellClicked { .. })` |
+
+`SelectCell` 的语义、时序（`set_selected_cell` 之后发）、既有消费者一行未动；本仓
+`ResultPanel::handle_grid_event` 与 editor 侧 `construct.rs` 的 `match` 都是新增分支
+（后者本就有 `_ =>` 兜底）。
+
+**升级重放提示**：这是 vendor 上的私有 patch 第 4 处（前 3 处见
+`docs/architecture/dependencies/core-packages-2026-11-22-upgrade-assessment.md` §11.3），
+下次升级 `gpui-component` 时必须一起重打；`git diff -- vendor/` 只应出现上面三行 + 注释。
+
+### 30.3 本仓改动
+
+| 文件 | 改动 |
+| --- | --- |
+| `crates/result_panel/src/grid/selection.rs`（新） | `CellRange{anchor, focus}`：`single` / `rows` / `cols` / `contains` / `rows_count` / `data_columns`（后者去掉行号槽，长度 = DBeaver 的 `getSelectedColumnCount`），带 3 个单测 |
+| `crates/result_panel/src/grid/mod.rs` | `mod selection` + `pub use selection::CellRange` |
+| `crates/result_panel/src/grid/delegate.rs` | 字段 `cell_range: Option<CellRange>`；方法 `click_cell(row, col, extend)`（普通=重立锚点、`extend`=只换焦点、无锚点时按普通处理）、`cell_range` / `in_cell_range` / `range_focus` / `selected_data_columns` / `clear_cell_range`；`set_data` 与 `clear` 里复位选区与整行镜像 |
+| `crates/result_panel/src/grid/cell.rs` | `render_td`：矩形内**非焦点格**叠绝对铺满的 `tokens.table_active` 覆盖层（与组件画焦点格那层同构），哨兵 `editor-result-cell-in-range-{row}-{col}` |
+| `crates/result_panel/src/panel/lifecycle.rs` | `handle_grid_event` 新增 `CellClicked` 分支：`modifiers.shift` → `click_cell(..., true)`；同时清 delegate 的 `selected_row`（DBeaver 点格会清行区间，`LightGrid.java:2705-2717`，本仓此前旧整行色会一直亮着）；`ClearSelection` 分支连矩形一起撤 |
+| `crates/result_panel/src/panel/tests.rs` | 新用例 `shift_click_extends_a_rectangular_cell_range_and_paints_it`：emit 生产事件 → 断言锚点/焦点、2×2、矩形内三格铺覆盖层、焦点格不叠第二层（`window.refresh()` 后再 draw，0.10.0 帧语义） |
+
+### 30.4 与 DBeaver 的差异明账（本刀未做，不静默）
+
+1. **正文拖拽选矩形**：DBeaver 按下后拖动即扩矩形（`:3565`）。本仓点击两态已覆盖「任意矩形」，
+   拖拽需要容器级几何（`DragMoveEvent.bounds` + 行高 + 列宽累积 + 横向滚动偏移 + 固定列），
+   单独立一刀。
+2. **Ctrl 并集 / 反选**：DBeaver 是往集合里加/减（`:2718-2735`）。单矩形模型表达不了，Ctrl 现按
+   「普通点击」处理（清选区重立锚点）。
+3. **选区边框**：DBeaver 的选中矩形有一圈边框（`cellActiveBorder`）。本刀只有底色 + 组件给焦点格
+   的边框。
+4. **状态行选中计数**：仍是单格口径（1/1/1）。编辑器 `construct.rs` 的 `set_selected_counts` 与
+   面板一处写入都要改成读选区规模，属独立小刀。
+5. **焦点格居中滚动**：组件的 `set_selected_cell` 每次都 `scroll_to_item(.., Center)`
+   （`state.rs:642-645`），DBeaver 只在不可见时滚动。既有行为，未动。
+
+### 30.5 验证
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo check -p rds-result-panel --tests` | 通过，**0 warning**（曾因 `CellRange` 可见性报 `private_interfaces`，已把模型提升为 `pub` 并 `pub use`） |
+| `cargo test -p rds-result-panel --lib` | 430 passed / 0 failed（原 426 + selection 3 + panel 1） |
+| `cargo test -p rds-editor` | 867 passed / 4 ignored；`tests/offline_baseline.rs` 5 passed |
+| `cargo check -p rds-mock --tests -p rds-workbench` | 通过（另两处使用 `DataTable` 的 crate 也吃到新事件变体） |
+| 新增用例点 | 事件链（`CellClicked` → 面板 → delegate）+ 渲染哨兵（三格有、焦点格无） |

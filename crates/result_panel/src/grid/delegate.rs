@@ -12,6 +12,7 @@ use gpui_kit::component::input::InputState;
 use gpui_kit::*;
 
 use super::menu::column_distinct_values;
+use super::selection::CellRange;
 use super::view_rows::TextFingerprint;
 use crate::ports::Presentation;
 use crate::rowset::{LocalRowSet, RowRef};
@@ -309,6 +310,16 @@ pub struct ResultGridDelegate {
     /// 所以这里镜像一个行号，由 `table_impl.rs` 的 `render_tr` 在行容器上铺一档与单元格
     /// 选中同槽的底色（`tokens.table_active`）。
     pub(crate) selected_row: Option<usize>,
+    /// 【D10】矩形单元格选区（视图坐标：行 = 视图行序，列 = 组件列下标，含行号槽）。
+    ///
+    /// 组件只记得**一个**选中格（`TableSelection::Cell`），它铺的高亮也只覆盖那一格
+    /// （vendor `table/state.rs` 的 `is_cell_selected` overlay）。矩形里其余的格由
+    /// `grid/cell.rs::render_td` 在这里铺同槽底色；焦点格跳过（组件 overlay 已经在画，
+    /// 两层半透明叠加会比别的格深一档）。
+    ///
+    /// DBeaver 的选区是 `Set<GridPos>` + 锚点（`LightGrid.java:1590-1662`、`:2674-2790`）；
+    /// 本仓只做「单个矩形」这一档，`anchor`/`focus` 就是全部真值（见 [`CellRange`]）。
+    pub(crate) cell_range: Option<CellRange>,
 }
 impl ResultGridDelegate {
     /// 空网格：只带一句空态说明
@@ -330,6 +341,58 @@ impl ResultGridDelegate {
     /// 【选中行】当前镜像的整行选中（视图行序）；`render_tr` 与用例读它。
     pub fn selected_view_row(&self) -> Option<usize> {
         self.selected_row
+    }
+
+    /// 【D10】一次单元格点击 → 更新矩形选区（DBeaver `updateCellSelection` 的点击档，
+    /// `LightGrid.java:2705-2748`）。
+    ///
+    /// - `extend == false`（无修饰键）：`selectedCells` 清空重填、锚点移到该格 → 单格选区；
+    /// - `extend == true`（Shift）：锚点不动，只换终点 → 两格为对角的矩形；
+    /// - 还没点过任何格时按普通点击处理（DBeaver 在锚点缺失时直接返回，本仓把
+    ///   「Shift 起手」当成普通点击，省得用户第一次按住 Shift 点什么都没有）。
+    ///
+    /// Ctrl（并集）本仓没做：DBeaver 是往集合里加/减（`:2718-2735`），单矩形模型表达不了，
+    /// 所以调用方在 Ctrl 时也传 `extend = false`（差异记在基线文档 §29 台账）。
+    pub fn click_cell(&mut self, row: usize, col: usize, extend: bool) {
+        if extend {
+            if let Some(range) = self.cell_range {
+                self.cell_range = Some(CellRange {
+                    anchor: range.anchor,
+                    focus: (row, col),
+                });
+                return;
+            }
+        }
+        self.cell_range = Some(CellRange::single((row, col)));
+    }
+
+    /// 【D10】当前选区（`None` = 还没选过任何格 / 已被清空）
+    pub fn cell_range(&self) -> Option<CellRange> {
+        self.cell_range
+    }
+
+    /// 【D10】该格是否在矩形里（`render_td` 铺色用）
+    pub fn in_cell_range(&self, row: usize, col: usize) -> bool {
+        self.cell_range
+            .is_some_and(|range| range.contains(row, col))
+    }
+
+    /// 【D10】焦点格 = 最近一次点到的格。组件 overlay 自己画它，delegate 不再重复铺色。
+    pub fn range_focus(&self) -> Option<(usize, usize)> {
+        self.cell_range.map(|range| range.focus)
+    }
+
+    /// 【D10】选区覆盖的数据列（视图列下标升序，已去掉行号槽）——计算页「按列分组」读它
+    /// （`AggregateColumnsPanel.java:231-249`）。
+    pub fn selected_data_columns(&self) -> Vec<usize> {
+        self.cell_range
+            .map(|range| range.data_columns())
+            .unwrap_or_default()
+    }
+
+    /// 【D10】清空选区（`TableEvent::ClearSelection` / 换结果集时调）
+    pub fn clear_cell_range(&mut self) {
+        self.cell_range = None;
     }
 
     /// 【结果集 #296】当前显示序（列名数组；数据序 = 没拖过）。面板在
@@ -365,6 +428,10 @@ impl ResultGridDelegate {
         };
         self.columns = columns;
         self.rows = rows;
+        // 【D10】换了一批数据，矩形选区的旧坐标不再指向同一批格（DBeaver 重新取数
+        // 也会清 `selectedCells`），连同整行镜像一起复位
+        self.cell_range = None;
+        self.selected_row = None;
         // 【结果集 #296】新结果 = 新一批列：显示序重置为数据序（恢复重排在面板层做——
         // set_data 前按持久化列名序重排 columns，这里以重排后的为准）
         self.display_order = self.columns.clone();
@@ -625,6 +692,10 @@ impl ResultGridDelegate {
         // 【P2-4】转置行身份复位（空结果里没有可竖排的行）
         self.transposed = false;
         self.transpose_row = RowRef::Data(0);
+        // 【D10】选区跟着作废：换结果集后旧坐标指向的是别的行（DBeaver 的
+        // `clearGrouping` / 重新取数都会把选区的 `selectedCells` 清掉）
+        self.cell_range = None;
+        self.selected_row = None;
     }
 
     /// 【B14】记下最近右键的单元格（由 `render_td` 上的右键处理调用）

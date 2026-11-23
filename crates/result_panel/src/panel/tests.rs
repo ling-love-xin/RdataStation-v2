@@ -6315,3 +6315,78 @@ fn hiding_the_rightmost_column_clears_the_current_cell(cx: &mut gpui_kit::TestAp
     let selection_pos = cx.update(|_w, app| panel.read(app).selection_pos);
     assert_eq!(selection_pos, None, "越界清选：不让格指着空气");
 }
+
+/// 【D10】Shift 点击 = 以锚点扩成矩形选区（DBeaver `LightGrid.java:2718-2748`）：
+/// 无修饰键的第一次点击立锚点，带 Shift 的第二次点击只换终点；矩形里**除焦点格**
+/// 之外的格叠一层选中覆盖层（焦点格由组件自己的 overlay 画，叠两层会深一档）。
+///
+/// 事件走生产入口（组件 `on_cell_click` 发 `CellClicked` 后再发 `SelectCell`），
+/// 这里直接 emit 同一对事件，覆盖「面板订阅 → delegate → render_td 哨兵」整条链。
+#[gpui_kit::test]
+fn shift_click_extends_a_rectangular_cell_range_and_paints_it(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use gpui_kit::Modifiers;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    let grid = cx.update(|_, app| panel.read(app).grid.clone());
+
+    let click = |row: usize, col: usize, shift: bool, cx: &mut gpui_kit::VisualTestContext| {
+        let modifiers = Modifiers {
+            shift,
+            ..Modifiers::default()
+        };
+        cx.update(|_, app| {
+            grid.update(app, |_, cx| {
+                cx.emit(gpui_kit::component::table::TableEvent::CellClicked {
+                    row_ix: row,
+                    col_ix: col,
+                    modifiers,
+                })
+            });
+        });
+        cx.run_until_parked();
+    };
+
+    // 第一次点 (0,1)（第 1 个数据列）：单格选区
+    click(0, 1, false, cx);
+    let range = cx.update(|_, app| {
+        grid.read(app).delegate().cell_range().expect("点过就有选区")
+    });
+    assert_eq!(range.anchor, (0, 1), "无修饰键点击立锚点");
+    assert_eq!(range.focus, (0, 1), "单格：焦点就是锚点");
+
+    // Shift 点 (1,2)：锚点不动，终点换到该格 → 2×2 矩形
+    click(1, 2, true, cx);
+    let range = cx.update(|_, app| {
+        grid.read(app).delegate().cell_range().expect("Shift 后仍有选区")
+    });
+    assert_eq!(range.anchor, (0, 1), "Shift 不移动锚点");
+    assert_eq!(range.focus, (1, 2), "Shift 只移动焦点");
+    assert_eq!(range.rows_count(), 2, "两格对角 = 2 行");
+    assert_eq!(range.data_columns(), vec![1, 2], "两格对角 = 2 个数据列");
+
+    // 帧语义（0.10.0 / gpui-fast 0.1.17）：只 notify 不重跑 render，必须先 refresh
+    cx.update(|window, _| window.refresh());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 矩形内除焦点格外都铺覆盖层（组件 overlay 只管焦点格 (1,2)）
+    // `debug_bounds` 只吃 `&'static str`，所以逐格写字面量
+    assert!(
+        cx.debug_bounds("editor-result-cell-in-range-0-1").is_some(),
+        "矩形内的 (0,1) 应铺选中覆盖层"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-cell-in-range-0-2").is_some(),
+        "矩形内的 (0,2) 应铺选中覆盖层"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-cell-in-range-1-1").is_some(),
+        "矩形内的 (1,1) 应铺选中覆盖层"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-cell-in-range-1-2").is_none(),
+        "焦点格由组件 overlay 画，delegate 不叠第二层"
+    );
+}
