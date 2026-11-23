@@ -189,4 +189,4 @@
 
 行数与测试（按 `\n` 口径实测，2026-11-24 覆盖层退役后）：`ui.rs` 675、`ui/host.rs` 83、`ui/actions.rs` 522、`ui/dialogs.rs` 862、`ui/picker.rs` 909、`ui/settings.rs` 785（合计 3756；原 `ui/hub.rs` 94 行已删）；`ui/tests.rs` 1817 行、**50 项**（31 窗口 + 19 纯函数），本 crate lib 共 64 项。
 
-验证：`cargo check -p rds-project --all-targets -j 1` 零告警；`cargo test -p rds-project -j 1` = 64 + 1 + 5 + 3 全过；`cargo clippy -p rds-project --all-targets -j 1` 无新增告警（基线两条仍在：`service.rs` 的 `OpenOutcome` 与 `ui/dialogs.rs::dialog_footer_three`，有意保留）；`cargo check -p rds-workbench --lib -j 1` 通过、`cargo test -p rds-workbench --lib -j 1` 192 项全过；`rustfmt --edition 2024 --check` 干净。
+验证：`cargo check -p rds-project --all-targets -j 1` 零告警；`cargo test -p rds-project -j 1` = 64 + 1 + 5 + 3 全过；`cargo clippy -p rds-project --all-targets -j 1` 无新增告警（基线两条仍在：`service.rs` 的 `OpenOutcome` 与 `ui/dialogs.rs::dialog_footer_three`，有意保留）；`cargo check -p rds-workbench --lib -j 1` 通过、`cargo test -p rds-workbench --lib -j 1` 193 项全过；`rustfmt --edition 2024 --check` 干净。
