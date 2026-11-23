@@ -503,6 +503,18 @@ impl EditorHostPanel {
         self.cell_error_marks.remove(id);
         // 【Markdown 预览】同一对收尾：预览状态不跨单元生命周期
         self.cell_markdown_preview.remove(id);
+        // 【R3】被删的单元正在等用户输入：输入行挂在单元卡片上（`when_some(.. filter cell_id)`），
+        // 单元一删就没有回送入口了，内核会永久阻塞在那一问上（界面表现为永远「运行中…」）。
+        // 所以撤等待态（顺带把焦点从隐藏的输入框上收回）并中断该单元的执行，原因如实报。
+        if self
+            .nb_pending
+            .as_ref()
+            .is_some_and(|pending| pending.cell_id == id)
+        {
+            self.set_notebook_pending(None, cx);
+            let _ = self.shared.cancel_for(&self.document);
+            self.set_message(Some("已中断：等待输入的单元被删除".to_string()), cx);
+        }
         cx.notify();
     }
 

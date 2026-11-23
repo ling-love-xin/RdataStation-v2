@@ -2174,3 +2174,56 @@ fn notebook_input_takes_focus_and_gives_it_back(cx: &mut TestAppContext) {
         "焦点应交回面板（此后键盘事件有归属）"
     );
 }
+
+/// 【R3】删掉正在等输入的单元：等待态必须撤掉，执行也必须中断
+///
+/// 行是挂在单元卡片上的（`when_some(pending.filter(|p| p.cell_id == cell.id))`）。单元一删，
+/// 行跟着消失，但内核仍然阻塞在那一问上——用户再也没有入口回送，这个内核从此永久卡在
+/// 「运行中…」。另外撤等待态还会把焦点从隐藏的输入框上收回来（见轮次 15）。
+#[gpui_kit::test]
+fn notebook_deleting_a_waiting_cell_drops_the_request(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    let id = shared
+        .open(OpenRequest::untitled("", EditorMode::Analysis))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_add_cell(&id, crate::cell::CellLanguage::Python, window, cx);
+        });
+    });
+    let cell_id = shared.notebook_cells(&id)[0].id.clone();
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_notebook_pending(
+                Some(crate::view::host::NotebookInputRequest {
+                    cell_id: cell_id.clone(),
+                    kernel_id: "no-such-kernel".to_string(),
+                    prompt: "name? ".to_string(),
+                    password: false,
+                }),
+                cx,
+            );
+        });
+    });
+    cx.run_until_parked();
+    assert!(panel.read_with(cx, |panel, _| panel.nb_pending.is_some()), "前提：已在等输入");
+
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_delete_cell(&id, &cell_id, window, cx);
+        });
+    });
+    cx.run_until_parked();
+
+    assert!(
+        panel.read_with(cx, |panel, _| panel.nb_pending.is_none()),
+        "单元都没了，等待态不能继续挂着（否则内核永久阻塞在那一问上）"
+    );
+    let row = |cx: &mut gpui_kit::VisualTestContext| cx.debug_bounds("editor-nb-input-row");
+    assert!(row(cx).is_none(), "单元删了，输入行也必须是 None");
+}
