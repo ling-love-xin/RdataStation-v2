@@ -432,6 +432,9 @@ fn input_row(
     div()
         .id("editor-nb-input-row")
         .test_support()
+        // 观测锚点：`debug_bounds` 按 `debug_selector` 找元素（`div` 只给 `.id()` 不够），
+        // 测试据此断言「等待态在 → 行画出来 / 撤掉 → 不画」
+        .debug_selector(|| "editor-nb-input-row".to_string())
         .w_full()
         .my_2()
         .px_3()

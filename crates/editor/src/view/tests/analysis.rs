@@ -2029,3 +2029,83 @@ fn notebook_input_never_carries_a_value_into_the_next_request(cx: &mut TestAppCo
         "中断后等待态要撤掉"
     );
 }
+
+/// 【R3】输入行的渲染：等待态在 → 行真的画出来；换到别的单元 / 撤掉 → 不画
+///
+/// 此前只钉了状态（`nb_pending`、`masked`、值），「行到底有没有被画出来」没有证据：
+/// `analysis.rs` 里那处 `when_some(pending_input.filter(|p| p.cell_id == cell.id))` 若被
+/// 删掉或条件写反，状态用例全绿，用户却什么都看不到、`input()` 永远停在「运行中…」。
+///
+/// 两个 GPUI 0.9 起的测试前提（都不是本用例的断言对象，但不做就直接查不到）：
+/// - 手动 `draw` 只重放保留帧，必须 `window.refresh()` 置脏才会重建面板；
+/// - `debug_bounds` 按 `debug_selector` 找元素（`div` 只给 `.id()` 查不到，故
+///   `input_row` 补了同名锚点）。
+#[gpui_kit::test]
+fn notebook_input_row_is_drawn_only_while_waiting(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    let id = shared
+        .open(OpenRequest::untitled("", EditorMode::Analysis))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_add_cell(&id, crate::cell::CellLanguage::Python, window, cx);
+        });
+    });
+    let cell_id = shared.notebook_cells(&id)[0].id.clone();
+    let draw = |cx: &mut gpui_kit::VisualTestContext| {
+        cx.update(|window, cx| {
+            panel.update(cx, |panel, cx| panel.sync_cell_editors(window, cx));
+            window.refresh();
+            window.draw(cx).clear(cx);
+        })
+    };
+    draw(cx);
+
+    let row = |cx: &mut gpui_kit::VisualTestContext| cx.debug_bounds("editor-nb-input-row");
+    assert!(
+        row(cx).is_none(),
+        "没有等待态时不该画输入行（画了会一直挂在已完成的卡片上）"
+    );
+
+    // 等待态挂到当前单元 → 行出现，且有实际尺寸
+    let request = |cell_id: &str| crate::view::host::NotebookInputRequest {
+        cell_id: cell_id.to_string(),
+        kernel_id: "python3".to_string(),
+        prompt: "name? ".to_string(),
+        password: false,
+    };
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_notebook_pending(Some(request(&cell_id)), cx);
+        });
+    });
+    draw(cx);
+    let bounds = row(cx).expect("等待态在时输入行必须画出来");
+    assert!(
+        bounds.size.width.as_f32() > 0.0 && bounds.size.height.as_f32() > 0.0,
+        "输入行要有实际尺寸：{bounds:?}"
+    );
+
+    // 请求指向别的单元 → 不画（行只跟在正在等的那个单元上）
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_notebook_pending(Some(request("another-cell")), cx);
+        });
+    });
+    draw(cx);
+    assert!(
+        row(cx).is_none(),
+        "等待态不在这个单元上时不该画行（否则会在错误的卡片上显示提示串）"
+    );
+
+    // 撤掉等待态 → 行消失
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.set_notebook_pending(None, cx));
+    });
+    draw(cx);
+    assert!(row(cx).is_none(), "收口 / 中断后输入行要撤掉");
+}
