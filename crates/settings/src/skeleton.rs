@@ -50,8 +50,9 @@ pub fn build(
         // 对齐 demo 的 General 页。
         let page_groups = registry::page_groups(section);
         let mut groups: Vec<SettingGroup> = Vec::new();
-        // 「项目」节：顶部先放宿主注入的项目列表（列表 / 切换 / 新建 / 管理都在这里，
-        // 不再占 Dock 中央 tab）。登记表不动（本节的「列表排序」行原样保留在下方）。
+        // 「项目」节：顶部先放宿主注入的项目列表，再放「当前项目设置」块
+        // （概览 / 重命名 / 默认连接 / 存储 / 版本 / 危险区都在这里，不再有主窗口
+        // 的项目设置浮层）。登记表不动（本节的「列表排序」行原样保留在最下方）。
         if section == "projects"
             && let Some(panel) = &host.projects_panel
         {
@@ -60,6 +61,18 @@ pub fn build(
                     .title("项目列表")
                     .description(
                         "选择、切换、新建与管理项目；点「打开」直接切到该项目（离开前会先拦截未保存草稿）",
+                    )
+                    .item(fields::panel_item(panel.clone())),
+            );
+        }
+        if section == "projects"
+            && let Some(panel) = &host.project_settings_panel
+        {
+            groups.push(
+                SettingGroup::new()
+                    .title("当前项目设置")
+                    .description(
+                        "作用于当前打开的项目：重命名 / 描述 / 默认连接 / 存储结构 / 依赖 / 版本快照 / 归档与删除",
                     )
                     .item(fields::panel_item(panel.clone())),
             );
@@ -172,7 +185,7 @@ fn page_description(section: &str) -> Option<&'static str> {
         "logging" => Some("日志级别与动作入口"),
         "navigator" => Some("对象树显示（标签 / 徽标 / 筛选）与自动连接"),
         "notifications" => Some("自动消失、同类合并与弹出 / 系统通知开关"),
-        "projects" => Some("项目列表（选择 / 切换 / 新建 / 管理）与列表排序"),
+        "projects" => Some("项目列表（选择 / 切换 / 新建 / 管理）、当前项目设置与列表排序"),
         "resources" => Some("资源库历史保留、排序与分组"),
         "result_panel" => Some("结果集网格的值呈现（对齐 / 着色 / 数据与显示）"),
         "scratchpad" => Some("便签工具栏与分区高度"),

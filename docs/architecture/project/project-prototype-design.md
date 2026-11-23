@@ -254,8 +254,10 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 
 ## 7. 项目设置视图（Read / Update / Delete）
 
-**当前实现（2026-11-22 核对，`ui.rs::render_settings` 一带）**：从项目菜单进入后是**覆盖式面板**
-（`ui.settings_open` 为真时渲染），不是"中央编辑区 Tab"；内部为**单栏纵向分节**（7 节）：
+**当前实现（2026-11-24 核对，`ui/settings.rs::render_current_settings`）**：不再有主窗口覆盖式面板——
+从项目菜单「项目设置…」/「重命名…」进来的是**全局设置窗口的「项目」页**（handler 预填名称与描述后
+走 `act_open_hub`）。该页有两块宿主注入内容：上面是项目列表（§4/§5），下面就是本节这个
+**「当前项目设置」块**——有会话就显示，无项目时整块不出现。块内为**单栏纵向分节**（7 节）：
 
 | 分节 | 内容 | 数据来源 |
 | --- | --- | --- |
@@ -270,6 +272,11 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 - 名称/描述不是即输即改：点「保存项目信息」后写名册并把 `session.name` 同步给标题栏槽。
 - 存储结构树只读；「打开 `.RSmeta`」用系统文件管理器打开（排障用）。
 - 只读打开时，写类入口按 `read_only_blocked` 禁用（U2 描述、归档、默认连接等）。
+- 快照（路径 / 描述 / 状态 / 结构树 / 依赖 / 版本）只在**事件路径**取：进入「项目」页时宿主调
+  `load_settings_snapshot`，保存 / 归档 / 建版本后各自刷新。未取到时块头提示「尚未读取项目信息」，
+  底部「刷新列表与结构树」一次性补齐——render 不读盘、不查库。
+- 块内没有「关闭」按钮（设置窗口自带 ✕ / `Esc`），标题是「当前项目设置 · {name}」；内容为流式
+  布局，随设置页整页滚动（不嵌套滚动）。
 
 ## 8. 未保存拦截与锁竞争
 
@@ -319,7 +326,7 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 
 | 组成 | 类型/位置 |
 | --- | --- |
-| 项目管理 UI（选择器 / 项目中心 / 菜单 / 对话框 / 设置） | `crates/project/src/ui.rs`（公共面：类型、`ProjectUiHost`、UI 状态与输入实体；视图与 model/service 同 crate）+ 五个子模块 `ui/{host,actions,dialogs,picker,settings}.rs`（`pub use` 重导出，`project::ui::*` 路径不变）。选择器 = `render_picker`（挂载在 `crates/workbench/src/panels/project_picker.rs` 的 `ProjectPickerPanel`，仅无项目态可见）；**项目中心** = 全局设置的「项目」页（列表由 workbench 注入 `render_picker`，`SettingsHost::projects_panel`；动作经 `HomeDispatch` 投回主窗口）；设置 = `render_settings`（覆盖式面板，当前项目详情）；菜单 = 语义 `Button::dropdown_menu` + `PopupMenu`；对话框 = `Dialog` / `AlertDialog` |
+| 项目管理 UI（选择器 / 项目中心 / 菜单 / 对话框 / 设置） | `crates/project/src/ui.rs`（公共面：类型、`ProjectUiHost`、UI 状态与输入实体；视图与 model/service 同 crate）+ 五个子模块 `ui/{host,actions,dialogs,picker,settings}.rs`（`pub use` 重导出，`project::ui::*` 路径不变）。选择器 = `render_picker`（挂载在 `crates/workbench/src/panels/project_picker.rs` 的 `ProjectPickerPanel`，仅无项目态可见）；**项目中心** = 全局设置的「项目」页（列表由 workbench 注入 `render_picker`，`SettingsHost::projects_panel`；动作经 `HomeDispatch` 投回主窗口）；**项目设置** = 同页的「当前项目设置」块（`render_current_settings`，`SettingsHost::project_settings_panel`，无项目时不出现）；菜单 = 语义 `Button::dropdown_menu` + `PopupMenu`；对话框 = `Dialog` / `AlertDialog` |
 | 项目服务编排（列表 / 创建 / 打开 / 关闭 / 更新 / 删除 / 找回 / 版本） | `crates/project/src/service.rs` |
 | 项目视图 ↔ 宿主桥（重绘 / 编辑区 / 排序偏好 / 打开后刷新） | `crates/workbench/src/components/project_host.rs`（`ProjectUiHost` 注入） |
 | 会话解析（env → 最近 → 空态） | `crates/workbench/src/services/project_session.rs` |
@@ -371,7 +378,7 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 | 7 | 新建对话框宽 560 | 组件默认 **448**（未显式设宽） | `open_create_dialog` 无 `.w()`；`dialog.rs` 默认 448 |
 | 8 | 新建对话框含默认连接 / 初始化分析库 / 创建示例草稿 | **没有**这三项；只有名称、位置、目标预览、描述 | 同左 |
 | 9 | 「校验未过时创建按钮禁用」 | 按钮**不置灰**；改为行内即时提示 + 提交后报错 | `submit_create` / `location_hint` |
-| 10 | 项目设置为「中央编辑区 Tab」、6 节 | **覆盖式面板**、**7 节**（多「基本信息」；「依赖自检」实际叫「依赖」） | `ui.settings_open`；7 处 `section(theme, …)` |
+| 10 | 项目设置为「中央编辑区 Tab」、6 节 | 全局设置「项目」页里的**「当前项目设置」块**、**7 节**（多「基本信息」；「依赖自检」实际叫「依赖」） | `ui/settings.rs::render_current_settings`；7 处 `section(theme, …)` |
 | 11 | 「版本」= `Version` 版本链 | 实际是**手动快照台账**（`project_versions` 一行一条 message，不承载内容），支持记录 / 列出 / 按 id 删除（行内两段式确认） | `service::{list_versions, create_version, delete_version}`；`models.rs` 对 `Versioned` 的「未接入」标注 |
 | 12 | 标题栏项目槽带状态点（`●`，警告=缺失驱动/归档） | 槽内是 `Folder` 图标 + 「项目」+ 名称，**没有状态点** | `view/dock.rs::render_title_bar`（`Button::new("project-slot")` + `CatalogIcon::Folder`） |
 | 13 | 项目菜单 6 项，「切换项目…」带 `Ctrl+⇧P`，顶部一条缺失驱动黄色警告行 | **8 项**（非只读）：「新建项目…」/「打开现有目录…」/──/「**项目中心…**」（原「切换项目…」）/「项目设置…」/「重命名…」/「在资源管理器中显示」/──/「归档 / 取消归档」/──/「关闭项目」；只读时顶部多插一条置灰说明（共 9 项），`new` / `open-folder` **保持可用**、`rename` / `archive` 置灰；菜单**不显示快捷键**、**无缺失驱动警告行**（快捷键本身仍在：`crates/app/src/main.rs` 的两条 `KeyBinding` 分别绑 `Ctrl+Shift+P`（打开项目中心）/ `Ctrl+Shift+W`（关闭项目）） | `ui/picker.rs::project_menu_entries` / `build_project_menu` |
@@ -403,6 +410,11 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 | 测试 50 → 50（31 窗口 + 19 纯函数；lib 64）：删 2 项覆盖层测试，加 3 项（入口委派宿主 / 未注入 no-op / 投递接管切换） | `ui/tests.rs`（`hub_entry_*`、`home_dispatch_takes_over_switch`、`current_marker_only_for_current_root`） |
 | 示例项目入口改走切换：`create_sample` 末尾由 `open_path` 改 `request_switch`（设置「项目」页里点「从示例项目开始」也不再盖锁） | `ui/actions.rs::create_sample` |
 | **只读判据收窄**：卡片与动作的只读拦截按**目标项目**判定——当前项目只读时，设置「项目」页里别的项目仍可固定 / 恢复 / 移出 / 删除；`read_only_blocked` 拆出 `write_blocked(host, target, …)`，`card_menu_entries` 第三参由「全局只读」改为「这张卡是否被拦」 | `ui/host.rs::write_blocked`、`ui/picker.rs::item_write_locked` / `card_menu_entries`、`ui/dialogs.rs::{toggle_pin, soft_remove, restore, forget, open_delete_dialog, confirm_delete}` |
+
+| **项目设置浮层退役**：`ProjectUiState` 8 → 7 字段（去掉 `settings_open`）；`render_settings` → `render_current_settings`（有会话就返回，不再判开关；去掉 `absolute`/`inset_0`/关闭按钮），成全局设置「项目」页第二块 | `crates/project/src/ui.rs`（`ProjectUiState`）、`ui/settings.rs::render_current_settings`、`ui/picker.rs`（`settings`/`rename` → `act_open_hub`，预填不丢弃） |
+| 设置侧新增第二注入槽 `SettingsHost::project_settings_panel`；「项目」节 = 「项目列表」+「当前项目设置」两个分组 | `crates/settings/src/{settings_page.rs,skeleton.rs}`、`crates/workbench/src/view/actions.rs`（进「项目」节时 `load_settings_snapshot`） |
+| 主窗口不再挂项目设置层（`render.rs` 的挂载段删除） | `crates/workbench/src/view/render.rs` |
+| 测试 50 → 50（lib 64）；settings 49 → 49 | `ui/tests.rs`、`crates/settings/src/settings_page.rs` 测试 |
 
 > 仍未做（与设计稿的既有差异，非本轮引入）：标题栏槽**无状态点**（#12）、空态**无按钮**（#17）、卡片缺连接数与版本数（#4）、路径中间省略（#5）、新建对话框宽 448（#7）与其三项复选框缺失（#8）、菜单不显示快捷键（#13 后半）。
 >

@@ -42,6 +42,13 @@ impl WorkbenchView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // 「项目」页里有两块宿主注入内容（列表 + 当前项目设置），都读同一份快照 /
+        // 名册：直接跳进来时先取一次快照（事件路径，render 不读盘）。
+        if section == Some("projects")
+            && let Some(host) = &self.project_host
+        {
+            project::ui::load_settings_snapshot(host, cx);
+        }
         // 存活检测 + 切节：窗口与页面实体都活着 → 只切节并返回；
         // 任一已死（窗口关掉后实体随之释放）→ 清句柄走重建。
         if let Some((handle, page)) = self.settings_window.clone() {
@@ -135,6 +142,35 @@ impl WorkbenchView {
                     .into_any_element(),
             },
         );
+        // 「项目」页的第二块：当前项目设置（概览 / 重命名 / 默认连接 / 存储 /
+        // 版本 / 危险区）。原来的主窗口项目设置浮层已退役，这一块就是它新的家；
+        // 没有打开项目时给一句占位（不画空壳设置项）。
+        let settings_host = self.project_host.clone();
+        let settings_inputs = self.project_inputs.clone();
+        let project_settings_panel: settings::settings_page::PanelRender = Rc::new(
+            move |_window, cx| match (&settings_host, &settings_inputs) {
+                (Some(host), Some(inputs)) => {
+                    project::ui::render_current_settings(host, inputs, cx)
+                        .map(|block| block.into_any_element())
+                        .unwrap_or_else(|| {
+                            div()
+                                .w_full()
+                                .p_2()
+                                .text_sm()
+                                .text_color(cx.theme().colors.muted_foreground)
+                                .child("当前没有打开的项目（在上面列表里「打开」一个）")
+                                .into_any_element()
+                        })
+                }
+                _ => div()
+                    .w_full()
+                    .p_2()
+                    .text_sm()
+                    .text_color(cx.theme().colors.muted_foreground)
+                    .child("项目面板尚未装配（首次渲染后可用）")
+                    .into_any_element(),
+            },
+        );
         let host = SettingsHost {
             on_open_cache,
             on_open_log_dir,
@@ -143,6 +179,7 @@ impl WorkbenchView {
             on_open_settings_json,
             on_settings_changed,
             projects_panel: Some(projects_panel),
+            project_settings_panel: Some(project_settings_panel),
         };
         // 独立窗口：`TitleBar::window_options()` 提供原生标题栏（拖拽 + 系统窗口控制），
         // 经 `cx.open_window` 挂到新窗口；窗口根由 `base::Root` 包一层（对话框层宿主）。

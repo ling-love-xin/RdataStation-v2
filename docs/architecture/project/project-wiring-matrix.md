@@ -10,7 +10,7 @@
 >
 > **2026-11-23 复核（遗留点清理第三、四刀）**：
 > ① **写动作加 toast 通道**：`save_project_info` / `toggle_archive` / `set_default_connection` / `create_version_action` 改走 `notify_success` / `notify_error`（`state.notice` + `window.push_notification` 双写）——此前只写 `state.notice`，而设置面板与标题栏菜单里不渲染它，用户点完没有反馈。
-> ② **删死字段** `ProjectUiState::epoch`（仅两处 `+= 1`，crate 内外零读点）；`ProjectUiState` 当时 **8 字段**（新增 `version_delete_confirm`）——2026-11-24 曾加 `hub_open` 到 9 字段，同日随覆盖层退役又回到 **8 字段**（见文末「项目中心迁入全局设置」）。
+> ② **删死字段** `ProjectUiState::epoch`（仅两处 `+= 1`，crate 内外零读点）；`ProjectUiState` 当时 **8 字段**（新增 `version_delete_confirm`）——2026-11-24 曾加 `hub_open` 到 9 字段，同日随覆盖层退役回到 **8 字段**，随后项目设置浮层再退役（删 `settings_open`）落到 **7 字段**（见文末「项目中心迁入全局设置」）。
 > ③ **新增版本台账删除**：`service::delete_version`（按 `project_versions.id` 删行，先把指向它的 `parent_id` 置空再删）；UI 侧 `versions_view` 行内「删除」两段式（`request_version_delete` → `confirm_version_delete` / `cancel_version_delete`），`SettingsSnapshot` 新增 `status`，概览「状态」改为「归档状态 · 读写状态」（`settings_status_text`）。
 > 本文是**唯一接线台账**；改 `crates/project` 实现后请同步本表。
 
@@ -30,8 +30,8 @@
 | `lock.rs` | 230 行 | ✅ 全部已接线 |
 | `store.rs` | 948 行 | ⚠️ 核心已接线；**死代码已清（ProjectManager / to_project / stub），剩 1 组归属待定**（见下）；新增 `BUILD_TAG_KEY` 写盘分支 |
 | `models.rs` | 371 行 | ⚠️ 域模型已接线，**含 1 组预留**（版本化） |
-| `ui.rs` + `ui/{host,actions,dialogs,picker,settings}.rs` | 675 + 83 + 522 + 862 + 909 + 785 行（合计 3756；`ui.rs` 只留公共面） | ✅ 全部已接线（有窗口测试锚定） |
-| `ui/tests.rs` | 1817 行（测试 50 项：31 窗口 + 19 纯函数） | ✅ 全部已接线 |
+| `ui.rs` + `ui/{host,actions,dialogs,picker,settings}.rs` | 675 + 83 + 520 + 862 + 911 + 778 行（合计 3829；`ui.rs` 只留公共面） | ✅ 全部已接线（有窗口测试锚定） |
+| `ui/tests.rs` | 1808 行（测试 50 项：31 窗口 + 19 纯函数） | ✅ 全部已接线 |
 
 ## 逐方法
 
@@ -151,7 +151,7 @@
 | `src/ui/actions.rs` | 396 | 打开 / 关闭 / 创建 / 重定位 / 删除 / 移出 / 归档 / 项目信息 / 默认连接 + 选择器加载与筛选动作 |
 | `src/ui/dialogs.rs` | 834 | 语义对话框、行内校验提示（`location_hint` / `folder_hint` / `target_preview` / `memo_hint`）、footer |
 | `src/ui/picker.rs` | 848 | 选择器渲染、卡片、卡片 `⋯`/右键菜单、标题栏项目菜单 |
-| `src/ui/settings.rs` | 785 | `SettingsSnapshot` / `load_settings_snapshot`、设置面板渲染（含版本台账两段式删除） |
+| `src/ui/settings.rs` | 778 | `SettingsSnapshot` / `load_settings_snapshot`、`render_current_settings`（「项目」页第二块；含版本台账两段式删除） |
 | `src/ui/tests.rs` | 1571 | 42 项测试（位置不变，`use super::{...}` 照旧可用） |
 
 拆分原则：
@@ -177,6 +177,8 @@
 | `wire_project_home(host, inputs, window, cx)` | `crates/workbench/src/view/workspace.rs` | `init_workspace` 里注入：`Switch` → `request_switch`、`CreateProject` → `request_create_project`、`OpenFolder` → `request_open_folder`、`Sample` → `create_sample`、`Close` → `request_close`，全部经 `AnyWindowHandle::update` 落在主窗口；`on_open_hub` → `open_settings_at(Some("projects"))` |
 | `SettingsHost::projects_panel` / `fields::panel_item` | `crates/settings/src/{settings_page.rs,fields.rs}` | 设置页的自定义内容通道；动作在 `open_settings_at` 里注入 `render_picker`（固定高度 `rems(30.0)`，内部滚动） |
 | `ProjectUiState` 去掉 `hub_open` | `ui.rs` | 回到 **8 字段**；`apply_opened` / `do_close` 不再复位 |
+| `ProjectUiState` 再去掉 `settings_open`（项目设置浮层退役） | `ui.rs` | **7 字段**；`apply_opened` / `do_close` 不再复位该开关；`render_settings` → `render_current_settings` |
+| `SettingsHost::project_settings_panel` | `crates/settings/src/settings_page.rs` | 「项目」节第二块；`open_settings_at` 注入 `render_current_settings`（无项目时占位文案）；进「项目」节时先 `load_settings_snapshot` |
 | `SwitchProject` 处理器 | `crates/workbench/src/view/render.rs` | `open_project_hub` → `open_settings_at(Some("projects"))`；`CloseProject` 仍 `request_close` |
 | `is_current_project(root, item)` | `ui/picker.rs` | 卡片「当前」`Tag` 的判据；纯函数单测 |
 | 右侧栏 `picker-new` / `picker-open` / `picker-sample` | `ui/picker.rs` | 改走 `act_create_project` / `act_open_folder` / `act_sample`（有项目时先拦截草稿） |
@@ -187,6 +189,6 @@
 | 卡片动作兜底守卫 | `ui/dialogs.rs::{toggle_pin, soft_remove, restore, forget, open_delete_dialog, confirm_delete}` | 各动作按**目标项目路径**调用 `write_blocked`（原来只有菜单置灰这一道）；`soft_remove` / `restore` / `forget` 入参由 `id` 改 `&ProjectSummary` |
 | `create_sample` 末尾 | `ui/actions.rs` | `open_path` → `request_switch`（示例入口不再盖锁） |
 
-行数与测试（按 `\n` 口径实测，2026-11-24 覆盖层退役后）：`ui.rs` 675、`ui/host.rs` 83、`ui/actions.rs` 522、`ui/dialogs.rs` 862、`ui/picker.rs` 909、`ui/settings.rs` 785（合计 3756；原 `ui/hub.rs` 94 行已删）；`ui/tests.rs` 1817 行、**50 项**（31 窗口 + 19 纯函数），本 crate lib 共 64 项。
+行数与测试（按 `\n` 口径实测，2026-11-24 覆盖层退役与项目设置并入设置页后）：`ui.rs` 675、`ui/host.rs` 83、`ui/actions.rs` 520、`ui/dialogs.rs` 862、`ui/picker.rs` 911、`ui/settings.rs` 778（合计 3829；原 `ui/hub.rs` 94 行已删）；`ui/tests.rs` 1808 行、**50 项**（31 窗口 + 19 纯函数），本 crate lib 共 64 项。
 
 验证：`cargo check -p rds-project --all-targets -j 1` 零告警；`cargo test -p rds-project -j 1` = 64 + 1 + 5 + 3 全过；`cargo clippy -p rds-project --all-targets -j 1` 无新增告警（基线两条仍在：`service.rs` 的 `OpenOutcome` 与 `ui/dialogs.rs::dialog_footer_three`，有意保留）；`cargo check -p rds-workbench --lib -j 1` 通过、`cargo test -p rds-workbench --lib -j 1` 193 项全过；`rustfmt --edition 2024 --check` 干净。

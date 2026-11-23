@@ -102,7 +102,7 @@ graph LR
 | `ui/actions.rs` | 打开 / **切换（`request_switch` / `switch_now`）** / 关闭 / 创建 / 重定位 / 删除 / 移出 / 归档 / 项目信息 / 默认连接 + 选择器加载与筛选；**动作投递** `dispatch_home` + `act_create_project` / `act_open_folder` / `act_sample` / `act_switch` / `act_close` / `act_open_hub`（有宿主投递口就交出去、否则就地执行） |
 | `ui/dialogs.rs` | 语义对话框与行内校验提示（`location_hint` / `folder_hint` / `target_preview` / `memo_hint` / footer） |
 | `ui/picker.rs` | 选择器渲染、卡片（含「当前」标记）、卡片菜单（只读置灰由 `item_write_locked` 按卡片判定）、标题栏项目菜单（入口全部走 `act_*`） |
-| `ui/settings.rs` | `SettingsSnapshot` / `load_settings_snapshot` / `render_settings`（含版本台账删除） |
+| `ui/settings.rs` | `SettingsSnapshot` / `load_settings_snapshot` / `render_current_settings`（全局设置「项目」页的第二块；有会话才返回元素，含版本台账删除） |
 | `ui/tests.rs` | 50 项测试（`use super::{...}` 照旧） |
 
 约定：子模块之间不互相 `use`，一律 `use super::*` 取公共面词汇表（依赖方向单向）；跨模块使用的原私有条目提为 `pub(super)`——对 `ui` 及其后代可见、不进公共面；`project::ui::*` 的对外路径由 `ui.rs` 末尾的 `pub use ...::*` 保持不变。拆分逐字搬迁、未改逻辑。
@@ -112,11 +112,12 @@ graph LR
 | 时点 | 发生什么 | 在哪 |
 | --- | --- | --- |
 | 构造（`WorkbenchView::new(cx)`） | 装配 host；直读 `settings.json` 取排序；无项目时加载首屏列表 | 构造期（不在 render） |
-| render | `render_picker` / `render_settings` 只读 state 并返回元素；标题栏菜单用 `build_project_menu` 产 `PopupMenu`（宿主 `Button::dropdown_menu` 只负责下拉宿主） | `WorkbenchView::render` |
+| render | `render_picker` / `render_current_settings` 只读 state 并返回元素（后者只由设置页的注入面板调用，主窗口不再挂项目设置层）；标题栏菜单用 `build_project_menu` 产 `PopupMenu`（宿主 `Button::dropdown_menu` 只负责下拉宿主） | `WorkbenchView::render` |
 | 事件回调 | 动作函数（打开 / 关闭 / 增删改查 / 对话框提交）做 I/O 并 `host.notify` | 各处 `on_click` / `on_action` |
 | 对话框 | 由 `window.open_dialog` / `open_alert_dialog` 承载；关闭时机由提交结果决定 | 事件上下文 |
 | 对话框内容（builder 闭包） | builder 是**每帧重跑的渲染闭包**（vendor 契约：cheap and idempotent），因此只读 state + 输入框；唯一的 I/O（`location_hint` / `folder_hint` 的目录探测）按「位置 / 名称 / 路径」做**局部 memo**——统一走 `ui::memo_hint`（单测 `memo_hint_recomputes_only_when_key_changes` 锁住"同 key 不重算 / 换 key 必重算 / None 也缓存"） | `ui.rs::open_create_dialog` / `ui.rs::open_folder_dialog` |
 | 设置窗口里的项目列表 | 同一份 `render_picker`，作为 `SettingsHost::projects_panel`（`PanelRender`）每帧被设置页骨架调用：只读 state，不加载 / 不写；点击只投递 `HomeAction` 回主窗口 | `settings/src/skeleton.rs` 调面板；`crates/workbench/src/view/actions.rs::open_settings_at` 装配 |
+| 设置窗口里的当前项目设置 | `render_current_settings` 作为 `SettingsHost::project_settings_panel`（同类型别名）每帧被调用：有会话才返回块，无项目时宿主给一句占位；快照仍只在事件路径取（进「项目」节 / 保存 / 归档后） | 同上；快照取数在 `open_settings_at`（`section == Some("projects")`）与 `ui/actions.rs` 的保存 / 归档路径 |
 
 ## 4. 对话框关闭时机（栈语义）
 

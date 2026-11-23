@@ -49,12 +49,17 @@ pub struct SettingsHost {
     /// 任一设置项落盘后通知宿主（workbench 用它把新值装配到 DockSkin 等消费方；
     /// 设置项自身有副作用时走 setter，此回调只负责「外部消费方重应用」）。
     pub on_settings_changed: Rc<dyn Fn(&mut App)>,
-    /// 「项目」节顶部的整块内容渲染（宿主注入；`None` = 该节只有设置行）。
+    /// 「项目」节顶部的项目列表块（宿主注入；`None` = 该节只有设置行）。
     ///
     /// 为什么是注入而不是 import：项目列表要读 `ProjectUiHost` / `ProjectInputs`
     /// （属 `rds-project`），而本 crate「不得反向依赖特性 crate」（见 crate 根注释），
     /// 故沿用 `on_open_cache` 等回调的既有先例，由宿主提供整块 Element。
     pub projects_panel: Option<PanelRender>,
+    /// 「项目」节里的「当前项目设置」块（宿主注入；`None` = 该块不出现）。
+    ///
+    /// 与 `projects_panel` 分开放：两者数据来源不同（列表是名册，设置块是当前
+    /// 项目快照），宿主也要各自决定高度 / 占位（无项目时只画列表）。
+    pub project_settings_panel: Option<PanelRender>,
 }
 
 /// 设置页实体（宿主把本实体放在 overlay 层渲染）。
@@ -244,6 +249,7 @@ mod tests {
             on_open_settings_json: Rc::new(|_, _| {}),
             on_settings_changed: Rc::new(|_| {}),
             projects_panel: None,
+            project_settings_panel: None,
         }
     }
 
@@ -275,6 +281,13 @@ mod tests {
             gpui_kit::div()
                 .w_full()
                 .child("项目列表占位")
+                .text_color(cx.theme().colors.foreground)
+                .into_any_element()
+        }));
+        host.project_settings_panel = Some(Rc::new(|_window, cx: &mut gpui_kit::App| {
+            gpui_kit::div()
+                .w_full()
+                .child("当前项目设置占位")
                 .text_color(cx.theme().colors.foreground)
                 .into_any_element()
         }));

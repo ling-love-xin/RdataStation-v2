@@ -31,7 +31,7 @@ use super::{
     is_current_project, item_write_locked, load_settings_snapshot, location_hint, memo_hint,
     meta_line, meta_tree_rows, more_menu, open_create_dialog, open_delete_dialog,
     open_folder_dialog, open_lock_busy_dialog, parse_search, pick_directory, prepare_unsaved,
-    project_card, project_menu_entries, render_picker, render_settings, request_close,
+    project_card, project_menu_entries, render_current_settings, render_picker, request_close,
     request_create_project, request_open, request_open_folder, request_switch,
     request_version_delete, save_project_info, set_default_connection, set_sort, set_status_filter,
     set_tab, settings_status_text, snapshot_description, sort_menu_entries,
@@ -113,7 +113,8 @@ impl Render for Harness {
             body = body.child(render_picker(&self.host, &self.inputs, cx));
         }
         // 项目列表的两处落点改由宿主接：项目中心 = 全局设置的「项目」页。
-        if let Some(settings) = render_settings(&self.host, &self.inputs, cx) {
+        // 当前项目设置块（有会话才出现）也一并画。
+        if let Some(settings) = render_current_settings(&self.host, &self.inputs, cx) {
             body = body.child(settings);
         }
         // 标题栏项目菜单现在由 `Button::dropdown_menu` 承载（`build_project_menu` 只产出
@@ -203,17 +204,13 @@ fn settings_and_menu_render_for_open_project(cx: &mut TestAppContext) {
     let host = test_host(&rec);
     let root = temp_root("settings");
     host.set_current(Some(OpenProject::new(root.clone(), "测试项目")));
-    {
-        let mut state = host.state.borrow_mut();
-        state.settings_open = true;
-        state.read_only = true;
-    }
+    host.state.borrow_mut().read_only = true;
     let (host, inputs, cx) = open_harness(cx, host);
 
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
-    // 设置面板在窗口外也可构造，且只读状态来自宿主注入的 state。
-    let has_settings = cx.update(|_, cx| render_settings(&host, &inputs, cx).is_some());
+    // 设置块在窗口外也可构造，且只读状态来自宿主注入的 state。
+    let has_settings = cx.update(|_, cx| render_current_settings(&host, &inputs, cx).is_some());
     assert!(has_settings);
     assert!(host.state.borrow().read_only);
     let _ = std::fs::remove_dir_all(&root);
@@ -763,11 +760,7 @@ fn read_only_blocks_project_info_save(cx: &mut TestAppContext) {
     let rec = Rc::new(Recorder::default());
     let host = test_host(&rec);
     host.set_current(Some(OpenProject::new(temp_root("read-only"), "只读项目")));
-    {
-        let mut state = host.state.borrow_mut();
-        state.read_only = true;
-        state.settings_open = true;
-    }
+    host.state.borrow_mut().read_only = true;
     let (host, inputs, cx) = open_harness(cx, host);
 
     cx.update(|window, cx| {
@@ -790,8 +783,8 @@ fn read_only_blocks_project_info_save(cx: &mut TestAppContext) {
     );
     assert!(rec.notifies.get() > notifies_before, "拦截也要给出可见反馈");
 
-    // 只读是「不许写」，不是「不许看」：设置面板照样开得起来（写控件已置灰）。
-    assert!(cx.update(|_, cx| render_settings(&host, &inputs, cx).is_some()));
+    // 只读是「不许写」，不是「不许看」：设置块照样画得出来（写控件已置灰）。
+    assert!(cx.update(|_, cx| render_current_settings(&host, &inputs, cx).is_some()));
 }
 
 // ==================== B2/B3：描述展示与 `.RSmeta` 结构树 ====================
@@ -895,9 +888,8 @@ fn settings_meta_tree_comes_from_snapshot(cx: &mut TestAppContext) {
         );
     }
 
-    host.state.borrow_mut().settings_open = true;
     cx.update(|window, cx| window.draw(cx).clear(cx));
-    assert!(cx.update(|_, cx| render_settings(&host, &inputs, cx).is_some()));
+    assert!(cx.update(|_, cx| render_current_settings(&host, &inputs, cx).is_some()));
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -978,8 +970,7 @@ fn default_connection_write_respects_read_only(cx: &mut TestAppContext) {
         );
     }
 
-    // 面板（含选择器）在窗口里画得出来
-    host.state.borrow_mut().settings_open = true;
+    // 「项目」页里设置块与列表同屏画得出来
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
     // 只读：拦下、给提示、不动磁盘

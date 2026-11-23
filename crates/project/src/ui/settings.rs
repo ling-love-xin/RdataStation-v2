@@ -150,11 +150,19 @@ pub fn load_settings_snapshot(host: &ProjectUiHost, cx: &mut App) {
 
 // ==================== 项目设置 ====================
 
-/// 项目设置（覆盖中央区，Tab 式）。
-pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App) -> Option<Div> {
-    if !host.state.borrow().settings_open {
-        return None;
-    }
+/// 当前项目的设置块（全局设置「项目」页的第二块：概览 / 基本信息 / 默认项 /
+/// 存储 / 依赖 / 版本 / 危险区）。
+///
+/// 迁入设置页后不再自带覆盖层：没有「打开标志」，**有会话就显示**——设置页的
+/// 「项目」页就是项目设置的家；无项目时返回 `None`（该块整段不出现）。
+///
+/// 高度 / 滚动交给宿主注入的容器：这里是流式布局（不 `absolute`、不 `flex_1`），
+/// 内容长了由设置页整页滚动，避免嵌套滚动。
+pub fn render_current_settings(
+    host: &ProjectUiHost,
+    inputs: &ProjectInputs,
+    cx: &mut App,
+) -> Option<Div> {
     let (name, root) = {
         let p = host.session.borrow();
         let s = p.as_ref()?;
@@ -181,7 +189,7 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
             if ui.settings.loaded {
                 "（目录为空或不可读）"
             } else {
-                "正在读取…"
+                "未读取（点下方「刷新列表与结构树」）"
             },
         ));
     } else {
@@ -202,7 +210,6 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
             .children(meta_rows.iter().map(|row| meta_tree_row(row, theme)));
     }
 
-    let host_close = host.clone();
     let host_reveal = root.clone();
     let host_reload = host.clone();
     let inputs_rename = inputs.clone();
@@ -218,7 +225,7 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
         div()
             .text_xs()
             .text_color(theme.colors.muted_foreground)
-            .child("依赖自检：正在读取…")
+            .child("依赖自检：未读取（点下方「刷新列表与结构树」）")
     } else if ui.settings.missing_drivers.is_empty() {
         div()
             .text_xs()
@@ -236,24 +243,19 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
 
     Some(
         div()
-            .absolute()
-            .inset_0()
+            .w_full()
             .v_flex()
-            .bg(theme.colors.background)
+            .gap_3()
             .child(
                 div()
                     .h_flex()
                     .items_center()
                     .gap_2()
-                    .px_3()
-                    .py_2()
-                    .border_b_1()
-                    .border_color(theme.colors.border)
                     .child(
                         div()
                             .text_sm()
                             .font_weight(FontWeight::MEDIUM)
-                            .child(format!("项目设置 · {name}")),
+                            .child(format!("当前项目设置 · {name}")),
                     )
                     .when(read_only, |d| {
                         d.child(
@@ -262,29 +264,20 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
                                 .text_color(theme.colors.warning)
                                 .child("只读（写操作已禁用）"),
                         )
-                    })
-                    .child(
-                        div().ml_auto().child(
-                            Button::new("proj-settings-close")
-                                .ghost()
-                                .small()
-                                .label("关闭")
-                                .on_click(move |_, _, app| {
-                                    host_close.state.borrow_mut().settings_open = false;
-                                    host_close.notify(app);
-                                }),
-                        ),
-                    ),
+                    }),
             )
+            .when(!ui.settings.loaded, |d| {
+                d.child(
+                    div().text_xs().text_color(theme.colors.muted_foreground).child(
+                        "尚未读取项目信息：点下方「刷新列表与结构树」读取路径、描述、存储与版本。",
+                    ),
+                )
+            })
             .child(
                 div()
+                    .w_full()
                     .v_flex()
                     .gap_3()
-                    .p_4()
-                    // 结构树 / 版本列表可以很长：滚动区在自己身上（不要拖到整个面板）
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scrollbar()
                     .child(section(theme, "概览"))
                     .child(
                         div()
@@ -607,7 +600,7 @@ pub(super) fn versions_view(
         list = list.child(
             div()
                 .text_color(theme.colors.muted_foreground)
-                .child("正在读取…"),
+                .child("未读取（点下方「刷新列表与结构树」）"),
         );
     } else if let Some(e) = &snapshot.versions_error {
         list = list.child(div().text_color(theme.colors.warning).child(e.clone()));

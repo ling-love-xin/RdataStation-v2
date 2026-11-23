@@ -253,7 +253,6 @@ pub(super) fn apply_opened(
         let mut ui = host.state.borrow_mut();
         ui.lock = lock;
         ui.read_only = read_only;
-        ui.settings_open = false;
         ui.dialog_error = None;
         ui.notice = read_only.then(|| "只读打开：该项目已被另一实例占用".to_string());
         ui.picker.error = None;
@@ -409,7 +408,6 @@ pub fn do_close(host: &ProjectUiHost, cx: &mut App) {
     {
         let mut ui = host.state.borrow_mut();
         ui.read_only = false;
-        ui.settings_open = false;
         ui.dialog_error = None;
         ui.notice = None;
     }

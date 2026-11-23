@@ -863,7 +863,9 @@ pub(super) fn attach_project_menu_handler(
             let host = host.clone();
             item.on_click(move |_, window, app| act_close(&host, window, app))
         }
-        // 「重命名…」是「项目设置…」的直达别名：同一个面板，焦点本来就落在改名输入上。
+        // 「项目设置…」/「重命名…」：同一个面板，都在全局设置的「项目」页
+        // （上面是列表、下面是当前项目设置）。预填名称与描述后跳过去；焦点不跨窗口
+        // 硬抢——用户在设置窗口里自己点输入框（内容已备好）。
         "settings" | "rename" => {
             let host = host.clone();
             let inputs = inputs.clone();
@@ -884,9 +886,9 @@ pub(super) fn attach_project_menu_handler(
                 inputs
                     .description
                     .update(app, |s, cx| s.set_value(description, window, cx));
-                host.state.borrow_mut().settings_open = true;
-                // 设置面板要显示磁盘结构树与描述：在事件路径取快照（render 不做 I/O）。
+                // 设置页要显示磁盘结构树与描述：在事件路径取快照（render 不做 I/O）。
                 load_settings_snapshot(&host, app);
+                act_open_hub(&host, window, app)
             })
         }
         "reveal" => {

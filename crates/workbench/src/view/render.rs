@@ -348,19 +348,9 @@ impl Render for WorkbenchView {
         if let Some(info) = scratchpad_info {
             root = root.child(info);
         }
-        // M1：项目设置浮层（菜单 / 对话框已改由 Popover 与语义 Dialog 承载，不在此渲染）。
-        // 项目列表（选择 / 切换 / 新建 / 管理）不在主窗口盖层：无项目时是中央「项目」
-        // tab，有项目时在全局设置的「项目」页（`open_settings_at(Some("projects"))`）。
-        if self.shared.project.borrow().is_some() {
-            let host = self.project_host().clone();
-            let inputs = self
-                .project_inputs
-                .clone()
-                .expect("project inputs initialized");
-            if let Some(settings) = project::ui::render_settings(&host, &inputs, cx) {
-                root = root.child(settings);
-            }
-        }
+        // M1：项目设置不再有主窗口浮层——它与项目列表一起挂在全局设置的
+        // 「项目」页（`open_settings_at(Some("projects"))`，见 `view/actions.rs`）。
+        // 主窗口只有无项目时的中央「项目」tab（Dock 里的选择器面板）。
         // 对话框层：gpui-kit 0.7.1 的 Root 已自动挂载 dialog 层（WindowState::dialog_layer），
         // 连接对话框与项目对话框不再需要手动渲染。
         // 全局通知系统（NotificationList）：懒初始化并挂载到渲染树。

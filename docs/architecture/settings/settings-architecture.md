@@ -89,7 +89,7 @@ graph TD
 | 视图随 crate | 设置页是 `settings` 的视图（`settings_page.rs`，窗口根 + `TitleBar` 标题栏）；宿主 `workbench` 只做**窗口装配**（`open_settings`：`cx.open_window(TitleBar::window_options())` + 存活检测）与回调注入 |
 | **其他 Feature 不直接依赖 `settings`** | 现状：只有 `app` 与 `workbench` 依赖它（`Cargo.toml` 可查）。Feature 间不做横向依赖（`overview.md`），偏好由**宿主读设置后作为参数 / 宿主桥注入**（与 `MockHost`、`ProjectUiHost` 同例）。例：M6 的 `keepVersions` 由 workbench 读设置后传给 `analytics_resource` 的归档调用 |
 | 为什么缓存管理不在本 crate | 缓存对话框要 engine（`rusqlite` / 元数据缓存清理）→ 引入 engine 会把数据库依赖拖进视图 crate；继续由宿主的 `on_open_cache` 回调承接 |
-| 宿主桥 | `SettingsHost { on_open_cache, on_open_log_dir, on_open_log_view, on_open_type_short_map, on_open_settings_json, on_settings_changed, projects_panel }`——宿主提供副作用，crate 只表达意图；`projects_panel` 是**内容注入**（宿主给一块自渲染面板，见 §3.1）；窗口关闭由系统标题栏 ✕ / 页内 `Esc` 触发（`window.remove_window()`），宿主无需 `on_close`；`on_open_settings_json` 是「配置文件」入口（Q3，见 §3） |
+| 宿主桥 | `SettingsHost { on_open_cache, on_open_log_dir, on_open_log_view, on_open_type_short_map, on_open_settings_json, on_settings_changed, projects_panel, project_settings_panel }`——宿主提供副作用，crate 只表达意图；两个 `*_panel` 是**内容注入**（宿主给一块自渲染面板，见 §3.1）；窗口关闭由系统标题栏 ✕ / 页内 `Esc` 触发（`window.remove_window()`），宿主无需 `on_close`；`on_open_settings_json` 是「配置文件」入口（Q3，见 §3） |
 
 **crate 现状**（目录拆分后，域垂直切片）：`lib.rs`（薄骨架：mod 声明 + re-export + tests）/ `persistence.rs`（`config_dir` / `settings_path` / `load_settings`（含旧 `editor.format_*` → `sql_format.*` 的 JSON 键迁移）/ `save_settings` / `last_save_error` / `connection_defaults` 进程级快照）/ `model/`（`mod.rs` 聚合 `Settings` + 跨域枚举 + 15 个按域 struct 文件）/ `registry/`（`mod.rs` 登记表 + `Slot` 分发表 + `presets` + 契约测试 + `entries/` 15 个按域登记文件）/ `service/`（`mod.rs` 骨架：`SettingsService` 的 `init/get/snapshot/apply_by_key` + `value_by_key` + 主题 helper + `install_*_sink` 出口（含 `install_sql_format_preview` 预览出口）+ 15 个按域 `apply_slot` / `impl SettingsService` 文件）/ `ui/`（`settings_page.rs` 独立窗口根（`TitleBar` + `Esc` 关窗）+ `fields.rs` 字段适配 + `skeleton.rs` 骨架 + `bridge.rs` 值桥）/ `commands.rs`（Action：`OpenSettings` / `CloseSettings` / `FocusSettingsSearch`）；**产品语义 token 已迁至 `workbench_shell::product_tokens`**（本 crate 重导，见 §13 K6）。
 
@@ -104,15 +104,16 @@ graph TD
 | 组件 | 作用 |
 | --- | --- |
 | `pub type PanelRender = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>` | 宿主提供的一整块面板渲染闭包（`settings_page.rs`） |
-| `SettingsHost::projects_panel: Option<PanelRender>` | 唯一的注入槽；`None` = 该节不放面板 |
+| `SettingsHost::projects_panel: Option<PanelRender>` | 项目列表注入槽；`None` = 该节不放面板 |
+| `SettingsHost::project_settings_panel: Option<PanelRender>` | 第二个注入槽（2026-11-24 同日加）：当前项目设置块。与列表分开放，因为两者数据源不同（列表读名册、设置块读当前项目快照），宿主也要各自决定有无与占位 |
 | `fields::panel_item(render) -> SettingItem` | 把面板包成 `SettingItem::render(...)`，并 `.on_reset(\|_\| false, \|_,_\| {})` —— 面板内容不参与页面级 reset-all |
-| `skeleton::build(host, notify, initial_section, section_seq)` | `projects` 节最前面插一个「项目列表」分组（title + description + `panel_item`），原有「列表排序」行照旧在下方 |
+| `skeleton::build(host, notify, initial_section, section_seq)` | `projects` 节最前面插「项目列表」分组，接着插「当前项目设置」分组（两个 title + description + `panel_item`），原有「列表排序」行照旧在下方 |
 
 约定与边界（这是本 crate 的通用规则，不只服务项目页）：
 
 - **只有宿主能注入，crate 不反向依赖特性 crate**（`settings` 不依赖 `project`；面板的具体内容与语义全在宿主侧）。
-- 面板是**每帧重跑的渲染闭包**，与对话框 builder 同约束：只读状态，不做 I/O；需要索引 / 遍历的显示内容由宿主在事件路径取好后缓存。
-- 面板若用 `size_full()` 布局，**注入方要给它一个确定高度**（项目页传 `div().h(rems(30.0)).w_full().child(panel)`，内部滚动才生效）；否则自适应高度的卡片里会塌成 0。
+- 面板是**每帧重跑的渲染闭包**，与对话框 builder 同约束：只读状态，不做 I/O；需要索引 / 遍历的显示内容由宿主在事件路径取好后缓存。（项目页的具体做法：`open_settings_at` 在 `section == Some("projects")` 时先调 `project::ui::load_settings_snapshot`；快照未取到时面板只显示「尚未读取」提示，由用户的「刷新列表与结构树」补齐。）
+- 面板若用 `size_full()` 布局，**注入方要给它一个确定高度**（项目页列表传 `div().h(rems(30.0)).w_full().child(panel)`，内部滚动才生效）；否则自适应高度的卡片里会塌成 0。**流式布局（如当前项目设置块）则不必给高度**——内容随设置页整页滚动，反而不要嵌套滚动。
 - 新增注入槽时按 §7.1 准入五条想一遍：它是「设置在页面上的呈现」还是「某个特性模块自己的界面」？后者只在它**必须是全应用唯一入口**时才考虑挂进来。
 
 ### 3.2 运行期切节：`section_seq`
@@ -170,7 +171,7 @@ vendor 的 `Settings` 把选中页存在 `window.use_keyed_state(Settings::id)` 
 | `navigator.show_scope` | 数据源导航 | bool | `true` | 即时 | `database/src/nav_view.rs::render_connection_row` | 两者 | ✅ 已落地 |
 | `navigator.property_panel_width` | 数据源导航 | f32（rem） | `24.5` | 即时 | `panels/editor.rs::EditorPanel`（关闭面板时落盘） | 模块内（拖拽） | ✅ 已落地 |
 | `navigator.filters` | 数据源导航 | struct（4 个 `Option<String>`） | 全空 | 即时 | `panels/mod.rs::SidebarPanel::new` + `database/src/nav_view.rs::write_nav_filters` | 模块内（chips / 筛选 ▾） | ✅ 已落地（作用域见 §14 Q1） |
-| `projects.sort_mode` | 项目 | enum `last_opened`/`name`/`created` | `last_opened` | 下次操作 | `view.rs::WorkbenchView::new`（读）+ `components/project_host.rs`（写） | 两者 | ✅ 已落地（设置页「项目」节有该行；同节上方是宿主注入的项目列表面板，见 §3.1） |
+| `projects.sort_mode` | 项目 | enum `last_opened`/`name`/`created` | `last_opened` | 下次操作 | `view.rs::WorkbenchView::new`（读）+ `components/project_host.rs`（写） | 两者 | ✅ 已落地（设置页「项目」节有该行；同节上方是宿主注入的项目列表与当前项目设置两块面板，见 §3.1） |
 | `projects.last_create_location` | 项目 | Text（父目录路径；空串 = 没记过） | `""` | 下次新建 | `project/src/ui.rs::open_create_dialog`（读）+ `submit_create`（写）；宿主注入见 `components/project_host.rs` | 模块内（不上页） | ✅ 已落地（2026-11-22） |
 | `connection_defaults.connect_timeout_ms` | 连接默认值 | u64（ms） | `15000` | 下次操作 | `workbench/services/connection_service.rs::connect_with_type` | 设置页 | ✅ 已落地 |
 | `connection_defaults.lan_disable_tls` | 连接默认值 | bool | `true` | 下次操作 | `connection_service.rs::apply_lan_tls_default` | 设置页 | ✅ 已落地 |

@@ -1,6 +1,6 @@
 # 项目管理模块 · 开发方案（P0 + Phase A/B/C）
 
-> 状态：**已实现（Phase A/B 主体 + Phase C1/C2 + C1/C4/B1 + B2/B3 + A1 + C3/C5 + E1/E4）**（2026-09-19，`cargo check -p rds-project -p rds-workbench --all-targets` 零告警；project 43 lib（含 20 项窗口测试 + 9 项纯函数）+ 1 名册集成 + 4 存储集成全绿）。**2026-11-22 实测**：lib 50（含 24 窗口 + 14 纯函数）+ 名册集成 1 + 生命周期集成 5 + 存储集成 3，全绿。**2026-11-23 实测**：lib 55（`ui/tests.rs` 42 项 = 25 窗口 + 17 纯函数）+ 1 + 5 + 3，全绿；`ui.rs` 已拆为公共面 + 五个子模块。**2026-11-24 实测**：lib 61（`ui/tests.rs` 48 项 = 30 窗口 + 18 纯函数）+ 1 + 5 + 3，全绿（同日子模块一度增至六个，新增 `ui/hub.rs`）。**2026-11-24 收尾实测**：lib 63（`ui/tests.rs` 50 项 = 31 窗口 + 19 纯函数）+ 1 + 5 + 3，全绿。**2026-11-24 项目中心迁入全局设置后实测**：lib 64（`ui/tests.rs` 50 项 = 31 窗口 + 19 纯函数）+ 1 + 5 + 3，全绿；`ui/hub.rs` 已删，子模块回到五个。 · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）、`project-view-architecture.md`（视图架构与测试）、`project-user-guide.md`（使用手册）
+> 状态：**已实现（Phase A/B 主体 + Phase C1/C2 + C1/C4/B1 + B2/B3 + A1 + C3/C5 + E1/E4）**（2026-09-19，`cargo check -p rds-project -p rds-workbench --all-targets` 零告警；project 43 lib（含 20 项窗口测试 + 9 项纯函数）+ 1 名册集成 + 4 存储集成全绿）。**2026-11-22 实测**：lib 50（含 24 窗口 + 14 纯函数）+ 名册集成 1 + 生命周期集成 5 + 存储集成 3，全绿。**2026-11-23 实测**：lib 55（`ui/tests.rs` 42 项 = 25 窗口 + 17 纯函数）+ 1 + 5 + 3，全绿；`ui.rs` 已拆为公共面 + 五个子模块。**2026-11-24 实测**：lib 61（`ui/tests.rs` 48 项 = 30 窗口 + 18 纯函数）+ 1 + 5 + 3，全绿（同日子模块一度增至六个，新增 `ui/hub.rs`）。**2026-11-24 收尾实测**：lib 63（`ui/tests.rs` 50 项 = 31 窗口 + 19 纯函数）+ 1 + 5 + 3，全绿。**2026-11-24 项目中心迁入全局设置后实测**：lib 64（`ui/tests.rs` 50 项 = 31 窗口 + 19 纯函数）+ 1 + 5 + 3，全绿；`ui/hub.rs` 已删，子模块回到五个。**2026-11-24 项目设置并入同页后实测**：同 64 / 50（`ProjectUiState` 由 8 字段降到 7）。 · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）、`project-view-architecture.md`（视图架构与测试）、`project-user-guide.md`（使用手册）
 > 前置：v1 行为蓝本 `v1/backend/src/commands/project_commands.rs`；v2 后端已迁移（`crates/project`：`store.rs` / `models.rs`；P0 会话 `workbench/src/services/project_session.rs`）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：项目**增删改查与生命周期**。**提升/引用（promote/snapshot）不在本模块**（另立设计，见原型 §12）。
@@ -25,6 +25,21 @@
 | 13 | 描述编辑（U2）与状态筛选（R4）纳入本期；**默认连接（U3）后端未实现**（`service` 无 config 读写），待另立 |
 
 ## 0. 进度记录（最近在前）
+
+### 2026-11-24 — 项目设置并入同一页（第四刀）
+
+项目设置（概览 / 重命名 / 默认连接 / `.RSmeta` 结构树 / 依赖 / 版本 / 危险区）原是从项目菜单打开的**主窗口浮层**；用户判断它与项目列表一样该住在设置页，于是同日收掉最后一块项目专属盖层。
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 浮层退役 | `ProjectUiState.settings_open` 删除（**8 → 7 字段**）；`apply_opened` / `do_close` 不再复位它 | `crates/project/src/ui.rs`、`ui/actions.rs` |
+| 渲染改名 | `render_settings` → `render_current_settings`：判断条件由 `settings_open` 改为「有会话才返回」；去掉 `absolute().inset_0()`、整块背景与「关闭」按钮，标题改「当前项目设置 · {name}」，内容改流式（去掉 `flex_1` / 内部滚动，随设置页整页滚动） | `ui/settings.rs` |
+| 入口 | 菜单「项目设置…」/「重命名…」：预填名称与描述 + `load_settings_snapshot`（事件路径）后走 `act_open_hub`；不再跨窗口硬抢焦点 | `ui/picker.rs` |
+| 设置侧 | 第二个注入槽 `SettingsHost::project_settings_panel`；`projects` 节 = 「项目列表」+「当前项目设置」两个分组 | `crates/settings/src/{settings_page.rs,skeleton.rs}` |
+| 宿主装配 | `open_settings_at` 注入 `render_current_settings`（无项目时占位「当前没有打开的项目」）；进入「项目」节时先 `load_settings_snapshot`；主窗口 `render.rs` 的项目设置挂载段删除 | `crates/workbench/src/view/{actions.rs,render.rs}` |
+| 快照未取的兜底 | 块头提示「尚未读取项目信息：点下方『刷新列表与结构树』」；结构树 / 依赖 / 版本三处「正在读取…」改为「未读取（点下方…）」——不假装在后台读 | `ui/settings.rs` |
+| 验证 | project：`check --all-targets` 零告警、`test --lib` **64 项**全过（50 项测试未增删，只改断言入口）；settings：`check --all-targets` 零告警、`test` **49 项**全过。workbench 全目标 `check` 被工作区他人未提交的 `result_panel` 改动挡住（错误在 `panel/sidebars.rs` 的 `Div::on_click`，与本刀无关），未计入 | `—` |
+| 已知取舍 | ① 首次进入「项目」节而未取快照时显示提示，需点一次「刷新列表与结构树」（不自动后台取，render 不做 I/O）；② 菜单「重命名…」不再自动聚焦输入框（跨窗口取焦点不可靠），名称与描述已预填；③ 设置块无固定高度，内容长时整页滚动 | §13.1 |
 
 ### 2026-11-24 — 项目中心从覆盖层迁入全局设置「项目」页（三刀）
 

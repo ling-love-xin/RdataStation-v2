@@ -1,10 +1,23 @@
 # 设置（应用级）· 开发方案
 
-> 状态：**P0/P1a 已完成（2026-09-16），P1b 起待排；2026-09-18 接了 M6 的 `resources.keep_versions`（P4.1）；2026-11-24 加了内容注入通道与运行期切节（服务项目中心，见 §0）**
+> 状态：**P0/P1a 已完成（2026-09-16），P1b 起待排；2026-09-18 接了 M6 的 `resources.keep_versions`（P4.1）；2026-11-24 加了内容注入通道与运行期切节（服务项目中心，见 §0），同日再加第二个注入槽（当前项目设置）**
 > 关联：`settings-architecture.md`（准入与作用域裁决）、`settings-prototype-design.md`（页面形态）、`settings-crate-design.md`（crate 沿革）
 > 基线：`cargo test -p rds-settings` → **49 项全绿、零告警**（2026-11-24 实测）；`cargo check -p rds-workbench --all-targets` → 见 §5
 
 ## 0. 进度记录（最近在前）
+
+### 2026-11-24（同日续）— 第二个注入槽：当前项目设置
+
+项目设置（概览 / 重命名 / 默认连接 / `.RSmeta` 结构树 / 依赖 / 版本 / 危险区）原先是从项目菜单打开的主窗口浮层；用户判断它和项目列表一样该住在设置页，于是同日再加一个注入槽——设置页的「项目」节现在有两块宿主内容。
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 第二个注入槽 | `SettingsHost::project_settings_panel: Option<PanelRender>`（与 `projects_panel` 分开：列表读名册、设置块读当前项目快照，有无与占位各自决定） | `src/settings_page.rs` |
+| 骨架 | `projects` 节前部依次插「项目列表」「当前项目设置」两个分组（都走 `fields::panel_item`，不参与 reset-all）；`page_description("projects")` 改为「项目列表（选择 / 切换 / 新建 / 管理）、当前项目设置与列表排序」 | `src/skeleton.rs` |
+| 面板内容 | 宿主注入 `project::ui::render_current_settings`（有会话才返回块；无项目时占位「当前没有打开的项目」）。快照仍只在事件路径取：`open_settings_at` 里 `section == Some("projects")` 时先 `load_settings_snapshot`，保存 / 归档 / 建版本后各自刷新 | `crates/workbench/src/view/actions.rs`、`crates/project/src/ui/settings.rs` |
+| 测试 | **49 → 49**（`select_section_rekeys_skeleton_and_renders` 同时注入两块占位，连画两帧不 panic） | `src/settings_page.rs`（测试模块） |
+| 验证 | `cargo check -p rds-settings --all-targets -j 1` 零告警；`cargo test -p rds-settings -j 1` **49 项全绿** | §5 |
+| 已知取舍 | 流式面板（设置块）不给固定高度，随设置页整页滚动；首次进节而未取快照时块头提示「尚未读取项目信息」，由底部「刷新列表与结构树」补齐（不是自动后台取，避免 render 期 I/O） | `settings-architecture.md` §3.1 |
 
 ### 2026-11-24 — 内容注入通道 + 运行期切节（服务项目中心）
 

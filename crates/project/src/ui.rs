@@ -596,7 +596,6 @@ pub struct ConnectionOption {
 #[non_exhaustive]
 pub struct ProjectUiState {
     pub picker: PickerState,
-    pub settings_open: bool,
     /// 当前对话框的校验错误：对话框 builder 每帧读取，提交失败时写入并重绘。
     pub dialog_error: Option<String>,
     /// 当前持有的项目写锁（只读打开时为 `None`）。
@@ -606,6 +605,7 @@ pub struct ProjectUiState {
     pub version_delete_confirm: Option<String>,
     pub notice: Option<String>,
     /// 设置面板的磁盘 / 名册快照（B2 / B3；事件路径填充，render 纯读）。
+    /// 「项目」页的「当前项目设置」块按它渲染，未取时显示「未读取」。
     pub settings: SettingsSnapshot,
 }
 

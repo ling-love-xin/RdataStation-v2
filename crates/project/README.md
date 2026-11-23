@@ -25,6 +25,7 @@
 * 刻意**不支持多窗口打开同一个项目**；打开时被拒的项目给「只读打开 / 仍要打开」逃生口。
 
 * 「切换项目」= 在**全局设置窗口的「项目」页**（项目中心）里选目标：先释放当前项目（还锁 + 清连接作用域）再打开，不要求先关项目；无项目时选择器覆盖中央区（保留五段外壳），有项目时中央区不再留项目列表副本。
+* 「项目设置」= 同一页的第二块（`render_current_settings`，有项目才出现）：概览 / 重命名与描述 / 默认连接 / `.RSmeta` 结构树 / 依赖 / 版本快照 / 归档与删除。主窗口不再挂项目设置浮层（`settings_open` 已删）。
 
 * 设置页里的点击经 `HomeDispatch` 投回**主窗口**执行：`HomeAction::{Switch, CreateProject, OpenFolder, Sample, Close}` 由宿主翻译成 `request_switch` / `request_create_project` / `request_open_folder` / `create_sample` / `request_close`（都要窗口，所以投递闭包捕获 `window_handle` 再 `AnyWindowHandle::update`）；未注入投递口时就地执行（单测与无宿主场景行为不变）。
 
