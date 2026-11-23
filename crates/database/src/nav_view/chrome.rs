@@ -1128,7 +1128,7 @@ impl NavView {
                         body = body.child(
                             div()
                                 .text_color(muted)
-                                .child("常用样例（点击填入搜索框）："),
+                                .child(tr("常用样例（点击填入搜索框）：")),
                         );
                         let samples = [
                             ("^user", "前缀匹配（以 user 开头）"),
@@ -1170,7 +1170,7 @@ impl NavView {
                         body = body.child(
                             div()
                                 .text_color(muted)
-                                .child("语法速查：^ 开头 · $ 结尾 · .* 任意字符 · | 或 · () 分组"),
+                                .child(tr("语法速查：^ 开头 · $ 结尾 · .* 任意字符 · | 或 · () 分组")),
                         );
                         body
                     }
@@ -1312,7 +1312,7 @@ impl NavView {
                 .disabled(true)
                 .label(tr("定义"))
                 .text_color(muted)
-                .tooltip("待内省采集：视图 / 例程定义批量采集链路接通后启用");
+                .tooltip(tr("待内省采集：视图 / 例程定义批量采集链路接通后启用"));
             let _ = include_definitions;
 
             // 匹配模式按钮移到筛选弹层里（不占搜索行）
@@ -1675,7 +1675,7 @@ impl NavView {
             .bg(hover_bg)
             .text_color(muted)
             .label(format!("{total} 连接 · {online} 在线"))
-            .tooltip("点击管理各连接：在线排前，行尾可连接 / 断开");
+            .tooltip(tr("点击管理各连接：在线排前，行尾可连接 / 断开"));
         Some(
             Popover::new("nav-conn-summary-popover")
                 .trigger(trigger)
@@ -2032,7 +2032,7 @@ impl NavView {
                         .title(EmptyTitle::new().child(tr("还没有数据源")))
                         .description(
                             EmptyDescription::new()
-                                .child("当前项目与全局库均无连接。点击下方「新建连接」开始。"),
+                                .child(tr("当前项目与全局库均无连接。点击下方「新建连接」开始。")),
                         ),
                 )
                 .content(

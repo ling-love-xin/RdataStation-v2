@@ -1389,5 +1389,13 @@
   "把这条存档退回归档前的位置": "Move this archive back to where it was before archiving",
   "源已变更，快照失效：当前源文件与归档时的指纹不一致。": "The source changed and the snapshot is stale: the current source file doesn't match the fingerprint recorded at archiving time.",
   "重命名显示名（与 `F2` 同一条路；文件名与路径不变）": "Rename the display name (same path as `F2`; file name and path stay unchanged)",
-  "打开文本 diff 查看器，看这一版和当前版本差在哪（只读）": "Open the text diff viewer to see how this version differs from the current one (read-only)"
+  "打开文本 diff 查看器，看这一版和当前版本差在哪（只读）": "Open the text diff viewer to see how this version differs from the current one (read-only)",
+  "查看数据（LIMIT 200）": "View data (LIMIT 200)",
+  "以下操作提交后不可恢复，请逐项核对清单。": "These operations cannot be undone once committed; check each item in the list.",
+  "常用样例（点击填入搜索框）：": "Common examples (click to fill the search box):",
+  "点击管理各连接：在线排前，行尾可连接 / 断开": "Click to manage connections: online first, connect / disconnect at the row end",
+  "复制为模板（不带密码；回车提交）": "Copy as template (without password; Enter submits)",
+  "语法速查：^ 开头 · $ 结尾 · .* 任意字符 · | 或 · () 分组": "Syntax cheat sheet: ^ start · $ end · .* any characters · | or · () grouping",
+  "待内省采集：视图 / 例程定义批量采集链路接通后启用": "Introspection pending: enabled once bulk collection of view / routine definitions is wired up",
+  "当前项目与全局库均无连接。点击下方「新建连接」开始。": "No connections in this project or the global library. Click 'New connection' below to start."
 }

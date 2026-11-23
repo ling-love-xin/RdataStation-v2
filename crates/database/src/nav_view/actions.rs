@@ -2250,7 +2250,7 @@ impl NavView {
         Some(PreparedCommit {
             plan,
             title: format!("提交 {total} 项变更"),
-            description: "以下操作提交后不可恢复，请逐项核对清单。".to_string(),
+            description: tr("以下操作提交后不可恢复，请逐项核对清单。").to_string(),
             ok_text: format!("提交 {total} 项变更"),
         })
     }

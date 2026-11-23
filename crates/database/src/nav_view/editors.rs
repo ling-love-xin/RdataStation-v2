@@ -184,7 +184,7 @@ impl NavView {
                     .flex_none()
                     .text_xs()
                     .text_color(muted)
-                    .child("复制为模板（不带密码；回车提交）"),
+                    .child(tr("复制为模板（不带密码；回车提交）")),
             );
         if let Some(input) = &self.nav_copy_input {
             panel = panel.child(Input::new(input));
