@@ -5,6 +5,7 @@
 //! 在 render / 事件期接到 global，本节只负责把登记表排进骨架。
 //! 侧栏导航 / 搜索过滤 / 页面级 reset-all 由 gpui-kit `setting` 组件自带。
 
+use shared::i18n::tr;
 use std::rc::Rc;
 
 use gpui_kit::App;
@@ -57,7 +58,7 @@ pub fn build(
         {
             groups.push(
                 SettingGroup::new()
-                    .title("项目列表")
+                    .title(tr("项目列表"))
                     .description(
                         "选择、切换、新建与管理项目；点「打开」直接切到该项目（离开前会先拦截未保存草稿）",
                     )
@@ -72,7 +73,7 @@ pub fn build(
             // 「着色」「背景色」「字体样式」组随之跳过——矩阵已覆盖全部 15 项。
             if section == "result_panel" && *gid == "align" {
                 let mut group = SettingGroup::new()
-                    .title("类型样式")
+                    .title(tr("类型样式"))
                     .description("按数据族（数字 / 文本 / 时间 / 布尔 / BLOB）统一配置结果集网格的对齐、着色、背景与字体");
                 group = group.item(fields::type_style_matrix(host, notify));
                 groups.push(group);
@@ -108,7 +109,7 @@ pub fn build(
         // 归入独立的「操作」分组（与设置项分开，不参与 reset-all）。
         let actions = action_rows(section, host);
         if !actions.is_empty() {
-            groups.push(SettingGroup::new().title("操作").items(actions));
+            groups.push(SettingGroup::new().title(tr("操作")).items(actions));
         }
         let mut page = SettingPage::new(section_label).groups(groups);
         // 页面级一句总览（登记表 label 归纳；分组 description 是组内细节）。
@@ -124,7 +125,7 @@ pub fn build(
                     .ghost()
                     .small()
                     .icon(IconName::FileText)
-                    .label("配置文件")
+                    .label(tr("配置文件"))
                     .tooltip("打开 settings.json（默认 JSON 编辑器）")
                     .on_click({
                         let on_open = on_open.clone();
