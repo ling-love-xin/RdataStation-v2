@@ -336,7 +336,7 @@ cargo test -p rds-project -j 1        # 2026-11-24 实测
   project_service_lifecycle 5 通过（打开关闭与只读锁 · 归档与改名 · 软删移出删盘 · 重定位 · 版本快照）
   project_store        3 通过（.RSmeta 创建与读回 · 默认连接 · 实例锁独占与复用）
 cargo test -p rds-settings -j 1          → 49 通过（设置页：分组骨架 + 项目页注入 + 切节）
-cargo test -p rds-workbench --lib -j 1   → 193 通过（含宿主注入与窗口接线）
+cargo test -p rds-workbench --lib -j 1   → 194 通过（含宿主注入与窗口接线；③ 刀时 193，`e5d07590` 加 1 项）
 cargo check -p rds-project --all-targets → 零告警（workspace 级沿用 2026-09 基线）
 ```
 
