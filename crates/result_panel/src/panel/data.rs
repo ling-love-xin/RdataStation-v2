@@ -339,9 +339,20 @@ pub struct ResultPanel {
     /// `confirm(secondary)`），面板存一份用于标题行「已选 N 列」与批量按钮。
     pub(crate) multi_selected: Vec<usize>,
     /// 【列浏览器】清单 List 实体（kit `list::{ListState, ListDelegate}` 承载；
-    /// 选中高亮由 List 内部 `selected_index` 管理，搜索框也在 List 内置里——
-    /// 面板不再自持搜索输入框 / 搜索词，见 [`crate::column_browser`]）
+    /// 选中高亮由 List 内部 `selected_index` 管理）。
+    ///
+    /// 【搜索框外置】DBeaver 的过滤框不在表里，而是页顶 `filterPanel` 的一格
+    /// （`MetaDataPanel.java:81-89`：`GridLayout(2 列)` = Label「筛选：」+ `Text`），
+    /// 所以本仓 `List` 不再开内置搜索（`searchable(false)`），改用面板自持的
+    /// [`Self::browser_filter_input`] 驱动 `ListState::set_query`。原口径「搜索框在内置里」
+    /// 是 §25 取证时的形态，D2 对齐后作废。
     pub(crate) browser_list: Entity<ListState<ColumnBrowserDelegate>>,
+    /// 【列浏览器·筛选框】页顶 `filterPanel` 的输入框（常驻实体：`InputState::new` 需要
+    /// `&mut Window`，构造期建好）。`InputEvent::Change` → `browser_list.set_query`，
+    /// `Esc` → 清空（对齐 `MetaDataPanel.java:87-98` 的 KeyListener）。
+    pub(crate) browser_filter_input: Entity<InputState>,
+    /// 上述筛选框的订阅（只持有；`Change` → `set_query`）
+    pub(crate) _browser_filter_sub: Option<Subscription>,
     /// 【呈现】显示方式（DBeaver 左栏「显示方式」）：网格 / 文本。面板级持续——
     /// 切结果集不重置（用户选择的是「怎么看结果」，不是某份结果的属性）。
     pub(crate) presentation: Presentation,

@@ -223,17 +223,38 @@ impl ResultPanel {
         // 保证面板级键位（`Ctrl+反引号`）仍有 dispatch path（见 `panel::RESULT_PANEL_CONTEXT`）
         let focus_handle = cx.focus_handle();
 
-        // 【列浏览器】清单 List（kit 组件承载：搜索框 / 键盘导航 / 滚动条内置）：
+        // 【列浏览器】清单 List（kit 组件承载：键盘导航 / 滚动条内置；
+        // 搜索框按 DBeaver 的形态外置到页顶 filterPanel，见下）：
         // delegate 只持投影，数据由 `sync` 灌入；占位网格句柄先借用，`set_grids`
         // 替换网格后 `sync` 会重灌（构造后到接线前不会渲染，见 grid 占位注释）
+        // 【列浏览器·筛选框外置】DBeaver 的过滤框是页顶 `filterPanel` 里的一格
+        // （`MetaDataPanel.java:81-89`：`GridLayout(2 列)` = Label「筛选：」+ `Text`），
+        // 不在表格内部；所以 List 关掉内置搜索，改由面板自持的
+        // `browser_filter_input` 驱动 `ListState::set_query`（`set_query` 内部会直接
+        // 起一次搜索，不依赖 `searchable`）。
         let browser_list = cx.new(|cx| {
             ListState::new(
                 ColumnBrowserDelegate::new(queue.clone(), grid.clone()),
                 window,
                 cx,
             )
-            .searchable(true)
+            .searchable(false)
         });
+        let browser_filter_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("筛选列名 / 类型 / 注释…")
+        });
+        let _browser_filter_sub = Some(cx.subscribe_in(
+            &browser_filter_input,
+            window,
+            |this, input: &Entity<InputState>, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let text = input.read(cx).value().to_string();
+                    this.browser_list.update(cx, |list, cx| {
+                        list.set_query(&text, window, cx);
+                    });
+                }
+            },
+        ));
 
         // 【网格事件订阅】构造时先挂在占位网格上（`set_grids` 换网格后由它重挂）。
         // 句柄必须存进 `Self`：只在 `new` 里 `let _sub` 会在构造返回时解订，
@@ -334,6 +355,8 @@ impl ResultPanel {
             // 【P2-3】多选集合镜像（delegate 经 `ColumnSelectionChanged` 回传）
             multi_selected: Vec::new(),
             browser_list,
+            browser_filter_input,
+            _browser_filter_sub,
             row_count_input,
             _row_count_sub: Some(row_count_sub),
             segment_input,

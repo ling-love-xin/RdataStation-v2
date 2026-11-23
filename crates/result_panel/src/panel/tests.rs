@@ -328,10 +328,11 @@ fn browser_filter_no_match_returns_empty() {
 /// `Text(SWT.BORDER|SWT.SEARCH|SWT.ICON_CANCEL)` + KeyListener
 /// （`e.character == SWT.ESC → filterTextBox.setText("")`，随后 `refresh(true)` 重算）。
 ///
-/// 本仓过滤框由 kit `List` 内置（`searchable`），`ListState` 不暴露内部 `InputState`，
-/// 但暴露 `set_query`（会顺带触发一次搜索）。kit `Input` 不消费 Esc（见
-/// `panel/render.rs` 重命名条的同款注释），所以按键会冒泡到列表外层的
-/// `on_key_down` 容器 —— 在那里清空。
+/// 本仓过滤框是页顶 `filterPanel` 里那一格（DBeaver 的过滤框也不在表内，
+/// `MetaDataPanel.java:81-89`），由面板自持的 `browser_filter_input` 驱动
+/// `ListState::set_query`（`set_query` 会顺带起一次搜索）。kit `Input` 不消费 Esc（见
+/// `panel/render.rs` 重命名条的同款注释），所以按键会冒泡到列浏览器页根容器 ——
+/// 在那里同时清输入框与查询词。
 #[gpui_kit::test]
 fn column_browser_filter_clears_on_escape(cx: &mut gpui_kit::TestAppContext) {
     cx.update(gpui_kit::init);
@@ -381,6 +382,61 @@ fn column_browser_filter_clears_on_escape(cx: &mut gpui_kit::TestAppContext) {
         list.read_with(cx, |list, _| list.delegate().matched().len()),
         2,
         "清空后回到全量清单"
+    );
+}
+
+/// 【D2 对齐 2026-11-24】列浏览器页顶过滤条：DBeaver 的过滤框在页顶 `filterPanel`
+/// （`MetaDataPanel.java:81-89`：`GridLayout(2 列)` = Label「筛选：」+ `Text`），
+/// **不在表内**。本仓把搜索框从 kit `List` 内置挪到页顶，由面板自持的
+/// `browser_filter_input` → `ListState::set_query` 驱动。本条钉两件事：
+/// (a) 页顶过滤条真的渲染（不是只加了字段）；(b) 真敲键能穿透到 delegate
+/// （订阅句柄没被丢，`InputEvent::Change` 这条链还活着）。
+#[gpui_kit::test]
+fn the_top_filter_bar_drives_the_column_list(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.set_right_tab(RightTab::Browser, cx);
+            let list = p.browser_list.clone();
+            list.update(cx, |list, cx| {
+                list.delegate_mut().set_data(
+                    vec!["id".to_string(), "amount".to_string()],
+                    vec!["INTEGER".to_string(), "DECIMAL".to_string()],
+                    vec![false, false],
+                    vec![None, None],
+                );
+                cx.notify();
+            });
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(
+        cx.debug_bounds("editor-result-col-browser-filter").is_some(),
+        "列浏览器页顶必须有 DBeaver 的 filterPanel（「筛选：」+ 搜索框）"
+    );
+
+    // 焦点交给页顶过滤框 → 真敲键（程序化 `set_value` 不发 `Change`，测不到订阅）
+    let filter_input = panel.read_with(cx, |p, _| p.browser_filter_input.clone());
+    cx.update(|window, cx| {
+        filter_input.update(cx, |state, cx| state.focus(window, cx));
+    });
+    cx.simulate_keystrokes("amount");
+    // 0.10.0 帧语义：只改状态直接 draw 会读到上一帧（见 gpui-kit-dev「首帧 ≠ 稳定帧」）
+    cx.update(|window, _| window.refresh());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let list = panel.read_with(cx, |p, _| p.browser_list.clone());
+    assert_eq!(
+        list.read_with(cx, |list, _| list.delegate().query().to_string()),
+        "amount",
+        "页顶过滤框的字没到 List：`InputEvent::Change` 订阅没挂上"
+    );
+    assert_eq!(
+        list.read_with(cx, |list, _| list.delegate().matched().len()),
+        1,
+        "只命中 amount 一列"
     );
 }
 

@@ -11,7 +11,7 @@ use gpui_kit::base::StyledExt as _;
 use gpui_kit::base::animation::{EffectTransition, ease_in_out_cubic};
 use gpui_kit::component::Selectable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::input::Textarea;
+use gpui_kit::component::input::{Input, Textarea};
 use gpui_kit::component::list::List;
 use gpui_kit::component::resizable::{HandleEdge, resize_handle};
 use gpui_kit::component::scroll::ScrollableElement as _;
@@ -337,34 +337,57 @@ impl ResultPanel {
             .child(div().flex_none().child("类型"))
             .child(div().flex_none().child(""))
             .into_any_element();
-        let list_body: AnyElement = {
-            // 【过滤框 ESC 清空】对齐 `MetaDataPanel.java:87-98`：过滤框是
-            // `Text(SWT.BORDER | SWT.SEARCH | SWT.ICON_CANCEL)`，并挂了 KeyListener——
-            // `e.character == SWT.ESC → filterTextBox.setText("")`（清空后 `refresh(true)` 重算）。
-            // kit `Input` 不消费 Enter/Esc（见 `panel/render.rs` 的重命名条同款处理），
-            // 按键沿 Bubble 冒泡到这个容器；`ListState::set_query` 会顺带触发一次搜索。
-            let browser_for_keys = browser.clone();
-            div()
-                .flex_1()
-                .min_h_0()
-                .debug_selector(|| "editor-result-col-browser-list".to_string())
-                .on_key_down(move |event: &KeyDownEvent, window, app| {
-                    if event.keystroke.key == "escape" {
-                        browser_for_keys.update(app, |list, cx| {
-                            list.set_query("", &mut *window, cx);
-                        });
-                    }
-                })
-                .child(
-                    List::new(&browser)
-                        .with_size(Size::Small)
-                        .search_placeholder("搜索列名 / 类型 / 注释…")
-                        .scrollbar_visible(true)
-                        .flex_1()
-                        .min_h_0(),
-                )
-                .into_any_element()
-        };
+        // 【D2 对齐 2026-11-24】页顶过滤条 = DBeaver `MetaDataPanel.java:81-89` 的
+        // `filterPanel`：`GridLayout(2 列)`，「筛选：」Label 在左、`Text` 搜索框在右；
+        // 匹配口径只有列名/类型/注释的包含匹配（`:178-183`，本仓
+        // `filter_browser_columns` 同口径）。搜索框的 `SWT.ICON_CANCEL` 用
+        // `cleanable(true)` 承担（清除钮是 kit 自带的，不自绘）。
+        //
+        // 【过滤框 ESC 清空】对齐 `MetaDataPanel.java:87-98`：过滤框是
+        // `Text(SWT.BORDER | SWT.SEARCH | SWT.ICON_CANCEL)` + KeyListener——
+        // `e.character == SWT.ESC → filterTextBox.setText("")`（清空后 `refresh(true)` 重算）。
+        // kit `Input` 不消费 Esc（见 `panel/render.rs` 的重命名条同款处理），按键沿
+        // Bubble 冒泡到本页根容器。注意 `set_value` 程序化写入**不发** `InputEvent::Change`
+        // （`gpui-base` 的 `input/base/state.rs` 临时关 `emit_events`），所以清空后必须
+        // 显式 `set_query("")`，不能指望订阅替我们跑一次搜索。
+        let filter_for_esc = self.browser_filter_input.clone();
+        let browser_for_esc = self.browser_list.clone();
+        let filter_panel: AnyElement = div()
+            .h_flex()
+            .items_center()
+            .gap_x_2()
+            .px_3()
+            .py_1()
+            .border_b(ui::HAIRLINE)
+            .debug_selector(|| "editor-result-col-browser-filter".to_string())
+            .child(
+                div()
+                    .flex_none()
+                    .text_xs()
+                    .text_color(muted)
+                    .child("筛选："),
+            )
+            .child(
+                Input::new(&self.browser_filter_input)
+                    .xsmall()
+                    .cleanable(true)
+                    .flex_1()
+                    .min_w_0(),
+            )
+            .into_any_element();
+
+        let list_body: AnyElement = div()
+            .flex_1()
+            .min_h_0()
+            .debug_selector(|| "editor-result-col-browser-list".to_string())
+            .child(
+                List::new(&browser)
+                    .with_size(Size::Small)
+                    .scrollbar_visible(true)
+                    .flex_1()
+                    .min_h_0(),
+            )
+            .into_any_element();
 
         let detail_body: AnyElement = match detail {
             Some((title, items)) => div()
@@ -431,6 +454,18 @@ impl ResultPanel {
                 super::events::page_needs_separator(RightTab::Browser),
                 cx,
             ))
+            .child(filter_panel)
+            .on_key_down(move |event: &KeyDownEvent, window, app| {
+                if event.keystroke.key != "escape" {
+                    return;
+                }
+                filter_for_esc.update(app, |input, cx| {
+                    input.set_value("", &mut *window, cx);
+                });
+                browser_for_esc.update(app, |list, cx| {
+                    list.set_query("", &mut *window, cx);
+                });
+            })
             .child(table_head)
             .child(list_body)
             .child(

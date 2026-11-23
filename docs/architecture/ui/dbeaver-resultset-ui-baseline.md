@@ -1521,3 +1521,72 @@ T1 按 Q13 裁掉的六个工具栏构造里，有两处的**入口至今没有�
    既有问题（非本轮引入），未修，记在这里。
 4. **§25 差异表 D1–D16 仍未拍板的部分**：元数据页 Tree vs List（D1）、筛选标签（D2）、
    元数据页 DDL 工具条项（D5）、计算页多单元格选区（D10/D11/D13）、分组页是否改「内嵌结果集」（D14）。
+
+## 27 差异表结算与 D2 落地（2026-11-24 续）
+
+用户口径（本轮明确）：**凡 DBeaver 有明确实现的差异项，不再回头拍板，直接按源码做**；
+只有「DBeaver 那侧也没实现」或「本仓缺前端/数据前提」才回来说明。本节按这条口径
+逐条结算 §25.3，并记录已落地的第一刀（D2）。
+
+### 27.1 D1–D16 结算
+
+| # | 结算 | 依据 |
+| --- | --- | --- |
+| D1 | **数据前提缺口，不是形态选择** | DBeaver 用 Tree 的价值在**嵌套属性**（`MetaDataPanel.java:219-230` 的 `getNestedBindings` 递归取子绑定，`:315` 载入后 `expandToLevel(2)`）。本仓 `ColumnAnnotation`（`crates/workbench_shell/src/model.rs:331`）只有 7 个平字段，没有任何子属性/嵌套来源；换成 Tree 只能把平表画成一层节点——收益 0，还要丢行尾眼睛与内置搜索。真正的对齐前提是「注解能表达 struct/list 的子字段」，属驱动/元数据能力，不是 UI 形态。留在待办，等数据侧能给出嵌套再换。 |
+| D2 | **已做**（见 27.2） | `MetaDataPanel.java:81-89`（`GridLayout(2 列)` = Label「筛选：」+ `Text`）、`:87-98`（Esc 清空）、`:178-183`（只按列名/类型/注释包含匹配）。 |
+| D3 | 保留差异 | 本仓把注释放在右栏明细键值区，比 DBeaver 的额外列信息更全（`MetaDataPanel.java:291-302`）。 |
+| D4 | 已对齐 | 不可见列置灰斜体（`MetaDataPanel.java:283-289`）。 |
+| D5 | **已完成（§25.3 该行已过期）** | 页内工具条的唯一一项就是「生成 DDL」（`editor-result-generate-ddl`），走 `crates/result_panel/src/ddl.rs::create_table_ddl` + SQL 预览浮层，与 `MetaDataPanel.java:203-215` 的 `generate.ddl.by.resultSet` 同口径（生成**新表** DDL，不是来源表）。该行是施工前取证留下的旧状态。 |
+| D6 | 已对齐（待实机确认反向联动） | `MetaDataPanel.java:104-134`。 |
+| D7 | 保留差异，单独立项 | 写回结果集要动编辑/提交内核（`SaveValueAction`，`ValueViewerPanel.java:409-428` 的只读判断），不属 UI 对齐。 |
+| D8/D9 | 已对齐 | 空态两行 + 工具条下分隔线（`ValueViewerPanel.java:89-106`、`:171-173`）。 |
+| D10 | **受前端能力约束，独立工程** | DBeaver 的输入是**多单元格选区**（`AggregateColumnsPanel.java:203-208` 的 `model.getCellValue`）。本仓网格只有整行选中与单格当前值，没有矩形选区/选区集合——要真对齐必须先有选区模型（选区状态 + 拖选/Shift 选 + 渲染高亮 + 事件）。这是前置工程，不是二选一的形态题。 |
+| D11 | 随 D10 | 「按列分组」要求 Tree 有顶层列节点（`:231-249`），而节点的来源就是多选集合。 |
+| D12 | 随 D10 | 「移除函数 = 选中 Tree 行按 −」要求行选中模型（`:322-331`）；本仓现用行尾 ×，等 D10 落地后统一。 |
+| D13 | 随 D10/D11 | 工具条 6 项里缺的「移除」「分组」两项都以选区/行选中为前提，剩下的项已就位（＋ / Reset / 口径）。 |
+| D14 | **按 DBeaver 做，独立一刀** | 分组页结果区是第二个完整 `ResultSetViewer`（`GroupingResultsContainer.java:64-70`）；本仓已有「下发 `GROUP BY` 重查」路径（§8.8），差的是把重查结果装进内嵌结果集面板，而不是本地计数列表。不需要拍板。 |
+| D15 | 已按既有口径置灰 | 引用页正文占位（§26）；live 实现（`render_reference_tab_live`）保留待接线。 |
+| D16 | 已做 | 删除「执行SQL」页（§26）。 |
+
+**结论**：§25.3 里名义上标着「需拍板」的四项，按 DBeaver 口径只有两种归宿——
+D2 已直接做掉、D5 本来就已经做了、D14 排进独立一刀；
+D1 属于数据前提缺口、D10/D11/D12/D13 属于网格选区这一前置工程。
+没有一项是真的「两种做法都对、要人拍」的。
+
+### 27.2 D2 落地：列浏览器页顶过滤条
+
+DBeaver 的过滤框**不在表内**，是页顶 `filterPanel` 的一格（`GridLayout(2 列)`，
+Label「筛选：」在左、`Text(SWT.BORDER|SWT.SEARCH|SWT.ICON_CANCEL)` 在右）。
+此前本仓把搜索放在 kit `List` 的内置搜索里，形态上少了「筛选：」这一列。
+
+| 文件 | 改动 |
+| --- | --- |
+| `crates/result_panel/src/panel/data.rs` | 新增 `browser_filter_input: Entity<InputState>` 与 `_browser_filter_sub: Option<Subscription>`；`browser_list` 的注释改为「搜索框外置」口径 |
+| `crates/result_panel/src/panel/lifecycle.rs` | `ListState` 改 `.searchable(false)`（内置搜索关闭）；构造期建 `InputState`（placeholder「筛选列名 / 类型 / 注释…」）；`subscribe_in` 的 `InputEvent::Change` → `browser_list.set_query`（`set_query` 内部直接起一次搜索，不依赖 `searchable`，见 `vendor/gpui-component/src/list/list.rs:240`） |
+| `crates/result_panel/src/panel/sidebars.rs` | 页顶新增 `editor-result-col-browser-filter` 行（「筛选：」+ `Input::new(...).xsmall().cleanable(true)`，`cleanable` 承担 ICON_CANCEL）；Esc 清空从 List 容器上移到整页根容器，同时清输入框与查询词（`set_value` 程序化写入**不发** `Change`，所以必须显式 `set_query("")`）；List 去掉 `search_placeholder` |
+| `crates/result_panel/src/panel/tests.rs` | 新增 `the_top_filter_bar_drives_the_column_list`（真窗口：断言过滤条渲染 + 真敲键穿透到 delegate）；`column_browser_filter_clears_on_escape` 的注释改为外置口径（行为不变，仍绿） |
+
+验证：
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo check -p rds-result-panel --all-targets` | exit 0，0 error 0 warning（3m44s） |
+| `cargo test -p rds-result-panel --lib browser` | **15 passed**（含新用例） |
+| `cargo test -p rds-result-panel --lib` | **423 passed / 0 failed**（原 422 + 1 新） |
+
+日志：`.rds/tmp/d2-check.txt`、`d2-test-browser.txt`、`d2-test-all.txt`。
+
+**仍未做（明账）**：过滤条的**视觉**（行高/内距）未做像素级比对——本仓用 `Input.xsmall`
+（20px）配 `py_1` + 一条 HAIRLINE；DBeaver 的 `filterPanel` 是 `GridLayout(2 列)` 默认
+间距、行高随 Text（约 20px）与 Label 的行高。目视验收按既有约定由用户手动做，这里不做截图。
+
+### 27.3 后续队列（不再拍板，按此推进）
+
+1. **D14 分组页内嵌结果集**（独立一刀）：把 `GroupingResultsContainer` 的形态落成
+   「重查结果装进内嵌结果集面板」，复用现有 `RunFilterAsQuery` 那套下发路径。
+2. **D10 网格单元格选区**（前置工程）：选区状态模型 → 拖选/Shift 选 → 渲染高亮 →
+   计算页接入多选输入。落地后 D11（按列分组）、D12（− 移除）、D13（工具条补两项）一起收。
+3. **D1 元数据页 Tree**：等 `ColumnAnnotation` 能表达嵌套子属性（驱动 struct/list）再做，
+   在此之前换 Tree 只是形式主义。
+4. 引用页 live 接线（§26.5-1）、洞察确认后的点击级回归（§26.5-2）、筛选 `preview` 的
+   字节切片 panic（§26.5-3）仍按 §26.5 挂着。
