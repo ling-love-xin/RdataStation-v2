@@ -110,6 +110,22 @@ pub fn tr(zh: &'static str) -> &'static str {
     zh
 }
 
+/// 同 [`tr`]，但允许非 `'static` 的键（结构体里存的 `String`）。
+///
+/// 用途：模型 / 缓存里存的是**中文原文**（那里不能 `tr`，否则语言会被冻结在构造时），
+/// 到渲染出口再翻译：`Text::new(tr_dyn(&row.label))`。
+///
+/// 返回值生命周期取入参：En 模式下未登记项与中文模式都原样返回入参，命中则返回表里的
+/// `'static` 值（`'static` 满足任何入参生命周期）。
+pub fn tr_dyn(zh: &str) -> &str {
+    if current() == Locale::En {
+        if let Some(en) = EN.get(zh) {
+            return *en;
+        }
+    }
+    zh
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,5 +233,18 @@ mod tests {
         assert_eq!(tr("连接"), "Connection");
         assert_eq!(tr("测试连接"), "Test Connection");
         set_locale(Locale::Zh);
+    }
+
+    /// `tr_dyn` 与 `tr` 同表：静态字面量与 `String` 键结果一致；未登记项回退入参。
+    #[test]
+    fn tr_dyn_matches_tr() {
+        let _guard = LOCALE_TEST_LOCK.lock().unwrap();
+        set_locale(Locale::En);
+        let owned = String::from("数据源");
+        assert_eq!(tr_dyn(&owned), "Data Sources");
+        assert_eq!(tr_dyn("数据源"), tr("数据源"));
+        assert_eq!(tr_dyn(&String::from("未登记词")), "未登记词");
+        set_locale(Locale::Zh);
+        assert_eq!(tr_dyn(&owned), "数据源");
     }
 }
