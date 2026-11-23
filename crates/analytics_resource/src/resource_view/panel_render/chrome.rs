@@ -1,5 +1,6 @@
 //! 面板头与工具条：搜索、筛选、排序与命令按钮。
 
+use shared::i18n::tr;
 use super::*;
 
 impl ResourcesPanel {
@@ -43,7 +44,7 @@ impl ResourcesPanel {
                             .text_sm()
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(foreground)
-                            .child("资产库"),
+                            .child(tr("资产库")),
                     ),
             )
             .child(
@@ -64,13 +65,13 @@ impl ResourcesPanel {
                                 move |menu, _window, _cx| {
                                     let drafts_host = host.clone();
                                     let file_host = host.clone();
-                                    menu.item(PopupMenuItem::new("从草稿箱归档…").on_click(
+                                    menu.item(PopupMenuItem::new(tr("从草稿箱归档…")).on_click(
                                         move |_, window, cx| {
                                             drafts_host.request_archive_from_drafts(window, cx)
                                         },
                                     ))
                                     .item(
-                                        PopupMenuItem::new("从本地文件归档…").on_click(
+                                        PopupMenuItem::new(tr("从本地文件归档…")).on_click(
                                             move |_, window, cx| {
                                                 file_host.request_archive_from_file(window, cx)
                                             },
@@ -138,7 +139,7 @@ impl ResourcesPanel {
             .dropdown_menu({
                 let panel = panel.clone();
                 move |menu, _window, _cx| {
-                    let mut menu = menu.item(PopupMenuItem::label("实例"));
+                    let mut menu = menu.item(PopupMenuItem::label(tr("实例")));
                     for candidate in [
                         InstanceFilter::All,
                         InstanceFilter::Project,
@@ -169,7 +170,7 @@ impl ResourcesPanel {
                 let panel = panel.clone();
                 let dictionary = self.snapshot.tags.clone();
                 move |menu, _window, _cx| {
-                    let mut menu = menu.item(PopupMenuItem::label("种类"));
+                    let mut menu = menu.item(PopupMenuItem::label(tr("种类")));
                     // 只摆两档（`MENU`）：引用档没有新写入点，摆它只会让人以为还能归档引用；
                     // 历史引用行仍照常显示尾部徽标，只是不能拿它当筛选项。
                     for kind in ArchiveKind::MENU {
@@ -185,7 +186,7 @@ impl ResourcesPanel {
                     }
                     // 标签组：一个标签都没有时不摆（空菜单节只会占地方）。
                     if !dictionary.is_empty() {
-                        menu = menu.separator().item(PopupMenuItem::label("标签"));
+                        menu = menu.separator().item(PopupMenuItem::label(tr("标签")));
                         for option in &dictionary {
                             let target = panel.clone();
                             let is_checked = tags.iter().any(|id| id == &option.id);
@@ -202,7 +203,7 @@ impl ResourcesPanel {
                         }
                     }
                     menu.separator().item(
-                        PopupMenuItem::new("只看需处理")
+                        PopupMenuItem::new(tr("只看需处理"))
                             .checked(only_issues)
                             .on_click({
                                 let target = panel.clone();
@@ -223,7 +224,7 @@ impl ResourcesPanel {
             .dropdown_menu({
                 let panel = panel.clone();
                 move |menu, _window, _cx| {
-                    let mut menu = menu.item(PopupMenuItem::label("排序"));
+                    let mut menu = menu.item(PopupMenuItem::label(tr("排序")));
                     for candidate in SortField::ALL {
                         let target = panel.clone();
                         let is_current = candidate == field;

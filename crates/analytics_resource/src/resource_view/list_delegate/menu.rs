@@ -1,5 +1,6 @@
 //! 存档行右键菜单：动作清单、置灰判据与「移动到分组」子菜单。
 
+use shared::i18n::tr;
 use gpui_kit::component::menu::PopupMenu;
 use crate::model::TagTarget;
 
@@ -68,7 +69,7 @@ pub(super) fn build(
 
                         let mut menu = menu;
                         menu = menu.item(
-                            PopupMenuItem::new("打开（只读）")
+                            PopupMenuItem::new(tr("打开（只读）"))
                                 .disabled(!can_open)
                                 .on_click({
                                     let host = host.clone();
@@ -85,7 +86,7 @@ pub(super) fn build(
                         // 全局行本体在全局 DuckDB，项目侧动作全置灰，分发是唯一可用动作；
                         // 判据（全局行 / 本体在位 / 单选 / 项目非只读）在 `can_distribute`。
                         menu = menu.item(
-                            PopupMenuItem::new("分发到本项目…")
+                            PopupMenuItem::new(tr("分发到本项目…"))
                                 .disabled(!can_distribute)
                                 .on_click({
                                     let host = host.clone();
@@ -96,7 +97,7 @@ pub(super) fn build(
                                 }),
                         );
                         menu = menu.item(
-                            PopupMenuItem::new("查看统计")
+                            PopupMenuItem::new(tr("查看统计"))
                                 .disabled(!can_stats || multi_count > 1)
                                 .on_click({
                                     let host = host.clone();
@@ -113,7 +114,7 @@ pub(super) fn build(
                         // 全局行必须挡（否则把全局表再来一次升级）；分析表型存档由宿主侧再挡一层
                         // （其升级依赖分析表读取路径，M8 后续批次接）。
                         menu = menu.item(
-                            PopupMenuItem::new("升级到全局…")
+                            PopupMenuItem::new(tr("升级到全局…"))
                                 .disabled(!can_promote)
                                 .on_click({
                                     let host = host.clone();
@@ -126,7 +127,7 @@ pub(super) fn build(
                                 }),
                         );
                         menu = menu.item(
-                            PopupMenuItem::new("取回（检出）…")
+                            PopupMenuItem::new(tr("取回（检出）…"))
                                 .disabled(!can_checkout)
                                 .on_click({
                                     let host = host.clone();
@@ -139,7 +140,7 @@ pub(super) fn build(
                                 }),
                         );
                         menu = menu.item(
-                            PopupMenuItem::new("版本历史…")
+                            PopupMenuItem::new(tr("版本历史…"))
                                 .disabled(!can_versions)
                                 .on_click({
                                     let host = host.clone();
@@ -152,7 +153,7 @@ pub(super) fn build(
                         // 「重命名…」：只改**显示名**（文件名 / 路径不动，原型 §1 原则 2）；
                         // 判据（单选 / 项目非只读 / 项目行）在 `can_rename`——与 `F2` 同一份。
                         menu = menu.item(
-                            PopupMenuItem::new("重命名…")
+                            PopupMenuItem::new(tr("重命名…"))
                                 .disabled(!can_rename)
                                 .on_click({
                                     let host = host.clone();
@@ -162,7 +163,7 @@ pub(super) fn build(
                         );
                         // 破坏性项用分隔线隔离；其上的两项是"本体在哪儿"的日常动作（原型 §3.2）。
                         menu = menu.item(
-                            PopupMenuItem::new("复制路径")
+                            PopupMenuItem::new(tr("复制路径"))
                                 .disabled(!can_open)
                                 .on_click({
                                     let host = host.clone();
@@ -175,7 +176,7 @@ pub(super) fn build(
                                 }),
                         );
                         menu = menu.item(
-                            PopupMenuItem::new("在系统中显示")
+                            PopupMenuItem::new(tr("在系统中显示"))
                                 .disabled(!can_open)
                                 .on_click({
                                     let host = host.clone();
@@ -214,7 +215,7 @@ pub(super) fn build(
                                     let mut menu = menu;
                                     // 「未分组」：当前已在未分组时置灰（点了也是白点）。
                                     menu = menu.item(
-                                        PopupMenuItem::new("未分组")
+                                        PopupMenuItem::new(tr("未分组"))
                                             .checked(current.is_none())
                                             .disabled(current.is_none())
                                             .on_click({
@@ -250,7 +251,7 @@ pub(super) fn build(
                                         );
                                     }
                                     menu.separator()
-                                        .item(PopupMenuItem::new("新建分组…").on_click({
+                                        .item(PopupMenuItem::new(tr("新建分组…")).on_click({
                                             let host = host.clone();
                                             move |_, window, cx| {
                                                 host.request_create_group(window, cx)

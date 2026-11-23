@@ -1,5 +1,6 @@
 //! 分组与重命名动作。
 
+use shared::i18n::tr;
 use super::*;
 
 pub(super) fn request_create_group(host: &ResourceHost, window: &mut Window, cx: &mut App) {
@@ -15,7 +16,7 @@ pub(super) fn request_create_group(host: &ResourceHost, window: &mut Window, cx:
         let read_only = host.read_only();
         // 输入实体在开窗前建好（builder 是 `Fn`，每帧重建）。
         let input = cx.new(|cx| {
-            gpui_kit::component::input::InputState::new(window, cx).placeholder("分组名")
+            gpui_kit::component::input::InputState::new(window, cx).placeholder(tr("分组名"))
         });
         open_group_name_dialog(
             window,
@@ -52,7 +53,7 @@ pub(super) fn request_rename_group(host: &ResourceHost, folder_id: &str, window:
         let read_only = host.read_only();
         let folder_id = folder_id.to_string();
         let input = cx.new(|cx| {
-            gpui_kit::component::input::InputState::new(window, cx).placeholder("分组名")
+            gpui_kit::component::input::InputState::new(window, cx).placeholder(tr("分组名"))
         });
         input.update(cx, |input, cx| input.set_value(current, window, cx));
         open_group_name_dialog(

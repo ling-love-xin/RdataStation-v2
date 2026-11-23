@@ -1,5 +1,6 @@
 //! 详情头部：种类图标、可编辑名称、别名、版本与强度徽标。
 
+use shared::i18n::tr;
 use super::*;
 
 /// 头部标题条（原型 `.dhead`）：**不随内容滚动**。
@@ -98,7 +99,7 @@ pub(super) fn render_head_subline(
             div()
                 .text_xs()
                 .text_color(cx.theme().colors.danger)
-                .child("本体缺失"),
+                .child(tr("本体缺失")),
         );
         empty = false;
     }

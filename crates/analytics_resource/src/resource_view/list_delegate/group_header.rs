@@ -1,5 +1,6 @@
 //! 分组头：色条、展开指示、名称、计数与分组自身的菜单。
 
+use shared::i18n::tr;
 use super::*;
 
 pub(super) fn render_group_header(
@@ -119,7 +120,7 @@ pub(super) fn render_group_header(
             let is_default = default_group.as_deref() == Some(key);
             let panel_for_default = panel.clone();
             head.context_menu(move |menu, _window, _cx| {
-                menu.item(PopupMenuItem::new("重命名…").on_click({
+                menu.item(PopupMenuItem::new(tr("重命名…")).on_click({
                     let host = host.clone();
                     let folder_id = folder_id.clone();
                     move |_, window, cx| host.request_rename_group(&folder_id, window, cx)
@@ -138,13 +139,13 @@ pub(super) fn render_group_header(
                         }
                     }),
                 )
-                .item(PopupMenuItem::new("删除分组").on_click({
+                .item(PopupMenuItem::new(tr("删除分组")).on_click({
                     let host = host.clone();
                     let folder_id = folder_id.clone();
                     move |_, window, cx| host.request_delete_group(&folder_id, window, cx)
                 }))
                 .separator()
-                .item(PopupMenuItem::new("新建分组…").on_click({
+                .item(PopupMenuItem::new(tr("新建分组…")).on_click({
                     let host = host.clone();
                     move |_, window, cx| host.request_create_group(window, cx)
                 }))

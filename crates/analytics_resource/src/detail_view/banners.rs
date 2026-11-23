@@ -1,5 +1,6 @@
 //! 异常提示条与「源已变更」条（都不进索引状态统计）。
 
+use shared::i18n::tr;
 use super::*;
 
 pub(super) fn render_banners(
@@ -91,7 +92,7 @@ pub(super) fn render_banners(
                         Button::new("archive-stale-accept")
                             .ghost()
                             .xsmall()
-                            .label("接受当前内容")
+                            .label(tr("接受当前内容"))
                             .on_click(move |_, window, cx| {
                                 host_for_accept.accept_reference_current(
                                     &detail_for_accept,
@@ -105,7 +106,7 @@ pub(super) fn render_banners(
                     Button::new("archive-stale-history")
                         .ghost()
                         .xsmall()
-                        .label("从历史还原")
+                        .label(tr("从历史还原"))
                         .on_click(move |_, window, cx| {
                             host_for_history.request_version_history(
                                 &detail_for_history.id,

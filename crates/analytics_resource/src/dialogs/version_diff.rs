@@ -6,6 +6,7 @@
 //! **只读**：不提供任何还原 / 取回 / 编辑入口（文本编辑归编辑器，这里是"查看差异"）——
 //! 与版本历史对话框"不做行级 diff（diff 归编辑器）"的决策不冲突：编辑器负责改，`Diff` 负责看。
 
+use shared::i18n::tr;
 use std::rc::Rc;
 
 use gpui_kit::base::StyledExt;
@@ -95,7 +96,7 @@ pub fn open_version_diff_dialog(
                             .small()
                             .toggled(is_unified)
                             .debug_selector(|| "diff-mode-unified".to_string())
-                            .label("统一")
+                            .label(tr("统一"))
                             .on_click(move |_, window, cx| {
                                 state_for_unified.update(cx, |state, cx| {
                                     state.set_mode(DiffMode::Unified, cx);
@@ -109,7 +110,7 @@ pub fn open_version_diff_dialog(
                             .small()
                             .toggled(!is_unified)
                             .debug_selector(|| "diff-mode-split".to_string())
-                            .label("并排")
+                            .label(tr("并排"))
                             .on_click(move |_, window, cx| {
                                 state_for_split.update(cx, |state, cx| {
                                     state.set_mode(DiffMode::Split, cx);
@@ -143,7 +144,7 @@ pub fn open_version_diff_dialog(
                         .with_variant(ButtonVariant::Secondary)
                         .small()
                         .debug_selector(|| "diff-close".to_string())
-                        .label("关闭")
+                        .label(tr("关闭"))
                         .on_click(|_, window, cx| window.close_dialog(cx)),
                 ),
             )

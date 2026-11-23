@@ -1,5 +1,6 @@
 //! 动作区：全局行只给「分发到本项目」；项目行给打开 / 取回 / 危险区。
 
+use shared::i18n::tr;
 use super::*;
 
 /// 全局行的分发按钮：`(是否可点, 按钮下方那句说明)`。
@@ -58,7 +59,7 @@ pub(super) fn render_actions(
                         div().h_flex().w_full().gap_2().child(
                             Button::new("archive-detail-distribute")
                                 .ghost()
-                                .label("分发到本项目…")
+                                .label(tr("分发到本项目…"))
                                 .disabled(!can_distribute)
                                 .on_click(move |_, window, cx| {
                                     host.request_distribute_from_global(
@@ -121,7 +122,7 @@ pub(super) fn render_actions(
                             .child(
                                 Button::new("archive-detail-open")
                                     .ghost()
-                                    .label("打开（只读）")
+                                    .label(tr("打开（只读）"))
                                     .disabled(!can_open)
                                     .on_click({
                                         let host = host.clone();
@@ -132,7 +133,7 @@ pub(super) fn render_actions(
                             .child(
                                 Button::new("archive-detail-checkout")
                                     .ghost()
-                                    .label("取回（检出）…")
+                                    .label(tr("取回（检出）…"))
                                     .disabled(!can_checkout)
                                     .on_click({
                                         let host = host.clone();
@@ -158,12 +159,12 @@ pub(super) fn render_actions(
                                     .text_xs()
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(tone_color.danger)
-                                    .child("危险区"),
+                                    .child(tr("危险区")),
                             )
                             .child(
                                 Button::new("archive-detail-delete")
                                     .with_variant(ButtonVariant::Danger)
-                                    .label("移入回收站")
+                                    .label(tr("移入回收站"))
                                     .disabled(!can_delete)
                                     .on_click({
                                         let host = host.clone();

@@ -1,5 +1,6 @@
 //! 索引修复对话框：打开入口与分组列表装配。
 
+use shared::i18n::tr;
 use super::*;
 use super::render::repair_line;
 
@@ -146,7 +147,7 @@ pub fn open_index_repair_dialog_with(
         }
 
         dialog
-            .title("索引修复")
+            .title(tr("索引修复"))
             .w(cx.theme().font_size * ui::REPAIR_DIALOG_WIDTH)
             .child(body)
             .footer(
@@ -155,7 +156,7 @@ pub fn open_index_repair_dialog_with(
                         .with_variant(ButtonVariant::Secondary)
                         .small()
                         .debug_selector(|| "repair-close".to_string())
-                        .label("关闭")
+                        .label(tr("关闭"))
                         .on_click(|_, window, cx| window.close_dialog(cx)),
                 ),
             )

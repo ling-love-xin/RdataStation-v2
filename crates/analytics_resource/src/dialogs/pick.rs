@@ -10,6 +10,7 @@
 //! - **选多个** → 批量入队，显示名取文件名去扩展名、来源连接各自带出。
 //!   列表里没有那么多位置让用户逐个改名——与其摆一个假的批量编辑，不如说清批量用的是默认名。
 
+use shared::i18n::tr;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -195,7 +196,7 @@ pub fn open_draft_pick_dialog_with(
         }
 
         dialog
-            .title("从草稿箱归档")
+            .title(tr("从草稿箱归档"))
             .w(cx.theme().font_size * ui::PICK_DIALOG_WIDTH)
             .child(
                 div()
@@ -220,7 +221,7 @@ pub fn open_draft_pick_dialog_with(
                             )
                             .child(
                                 Checkbox::new("draft-pick-all")
-                                    .label("全选")
+                                    .label(tr("全选"))
                                     .checked(all_selected)
                                     .on_click(toggle_all),
                             ),
@@ -244,7 +245,7 @@ pub fn open_draft_pick_dialog_with(
                             .with_variant(ButtonVariant::Secondary)
                             .small()
                             .debug_selector(|| "draft-pick-cancel".to_string())
-                            .label("取消")
+                            .label(tr("取消"))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
                     .child(

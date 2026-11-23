@@ -1,5 +1,6 @@
 //! 列表区与空态：列表、加载骨架、空库、无匹配。
 
+use shared::i18n::tr;
 use super::*;
 
 impl ResourcesPanel {
@@ -82,7 +83,7 @@ impl ResourcesPanel {
                         Button::new("archive-for-empty")
                             .primary()
                             .debug_selector(|| "archive-empty-action".to_string())
-                            .label("从草稿箱归档…")
+                            .label(tr("从草稿箱归档…"))
                             .disabled(read_only)
                             .on_click(move |_, window, cx| {
                                 host_for_drafts.request_archive_from_drafts(window, cx)
@@ -91,7 +92,7 @@ impl ResourcesPanel {
                     .child(
                         Button::new("archive-for-empty-file")
                             .secondary()
-                            .label("从本地文件归档…")
+                            .label(tr("从本地文件归档…"))
                             .disabled(read_only)
                             .on_click(move |_, window, cx| {
                                 host_for_file.request_archive_from_file(window, cx)
@@ -112,7 +113,7 @@ impl ResourcesPanel {
         Empty::new()
             .header(
                 EmptyHeader::new()
-                    .title(EmptyTitle::new().child("没有匹配的存档"))
+                    .title(EmptyTitle::new().child(tr("没有匹配的存档")))
                     .description(
                         EmptyDescription::new().child(filter::no_match_hint(&self.filter.query)),
                     ),
@@ -121,7 +122,7 @@ impl ResourcesPanel {
                 EmptyContent::new().child(
                     Button::new("archive-clear-filter")
                         .ghost()
-                        .label("清空筛选")
+                        .label(tr("清空筛选"))
                         .on_click(move |_, window, app| {
                             panel.update(app, |panel, cx| panel.clear_filter(window, cx));
                         }),

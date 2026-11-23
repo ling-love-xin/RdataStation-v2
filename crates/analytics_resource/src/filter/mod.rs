@@ -6,6 +6,7 @@
 //! 面板的空态判定依赖 [`ResourcesFilter::is_empty`]：
 //! **空筛选 + 无行 = "还没有任何存档"**（引导归档）；**非空筛选 + 无行 = "没有匹配的存档"**（引导清筛选）。
 
+use shared::i18n::tr;
 use crate::model::{ArchiveKind, ArchiveStatus};
 use crate::resource_view::{ArchiveRow, GroupOption};
 
@@ -73,7 +74,7 @@ pub fn build_visible_items(
     let mut items = Vec::with_capacity(rows.len() + groups.len() + 2);
     items.push(VisibleItem::GroupHeader {
         key: GROUP_ALL.to_string(),
-        label: "全部分组".to_string(),
+        label: tr("全部分组").to_string(),
         count: rows.len(),
         depth: 0,
         collapsed: collapsed.contains(GROUP_ALL),
@@ -85,7 +86,7 @@ pub fn build_visible_items(
     let ungrouped_collapsed = collapsed.contains(GROUP_UNGROUPED);
     items.push(VisibleItem::GroupHeader {
         key: GROUP_UNGROUPED.to_string(),
-        label: "未分组".to_string(),
+        label: tr("未分组").to_string(),
         count: ungrouped_count,
         depth: 1,
         collapsed: ungrouped_collapsed,
