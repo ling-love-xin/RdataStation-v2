@@ -196,6 +196,12 @@ pub struct Object {
     pub pill: &'static str,
     /// 资产的最新版本（其它类型为 None）
     pub version: Option<u32>,
+    /// 这一行在 SQL 里怎么引用（**带双引号的实际标识符**，铁律 G 第 30 条）。
+    ///
+    /// 只给"已经在分析实例里可见"的对象（`tmp_q_` / `analytics.main` 表 / `f_*`）；
+    /// 源库表、联邦源要带连接上下文才拼得出，这里给 `None`——宁可空着，也不给一个
+    /// 抄下去就跑不通的引用名。
+    pub sql_ref: Option<String>,
 }
 
 impl Group {
@@ -371,6 +377,8 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             group: Group::MountedSources,
             pill: "源",
             version: None,
+            // 联邦源的表引用是 `<别名>.<schema>.<表>`，只给别名不算引用名
+            sql_ref: None,
         });
     }
 
@@ -387,6 +395,8 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             group: Group::MountedSources,
             pill: "加速",
             version: None,
+            // 加速档的表要切到该档才能引用，行上不给可直接抄的名字
+            sql_ref: None,
         });
     }
 
@@ -404,6 +414,8 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             group: Group::SourceTables,
             pill: "连接",
             version: None,
+            // 连接本身不是数据对象：它下面展开的表才拼得出引用名
+            sql_ref: None,
         });
     }
 
@@ -439,9 +451,13 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             group: Group::UnregisteredTables,
             pill: "结果集落库",
             version: None,
+            // 项目分析库挂在分析实例上，表名裸名可见（与「登记为资产」同一口径）
+            sql_ref: Some(sql_ident(&name)),
         });
     }
     for name in own {
+        // 引用名先算：`name` 会在结构体里被 move 掉
+        let sql_ref = Some(sql_ident(&name));
         out.push(Object {
             key: format!("project:{name}"),
             name,
@@ -452,6 +468,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             group: Group::UnregisteredTables,
             pill: "项目自建",
             version: None,
+            sql_ref,
         });
     }
 
@@ -504,6 +521,8 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             },
             pill: "资产",
             version: Some(asset.version),
+            // 表型资产才有 SQL 引用（文件型本体是 `resources/` 下的副本，不是库里的表）
+            sql_ref: asset.analytics_table.as_deref().map(sql_ident),
         });
     }
 
@@ -518,6 +537,8 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             group: Group::UnregisteredTables,
             pill: "全局",
             version: None,
+            // 全局分析库同样挂在分析实例上，裸名可见
+            sql_ref: Some(sql_ident(&name)),
         });
     }
 
@@ -532,6 +553,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             group: Group::TemporaryTables,
             pill: "结果集",
             version: None,
+            sql_ref: Some(sql_ident(&name)),
         });
     }
 
@@ -566,6 +588,8 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             },
             pill: if is_database { "文件库" } else { "已加载" },
             version: None,
+            // 文件视图是 `f_*` 裸名；库文件是 catalog，引用要 `别名.schema.表`，不在这里编
+            sql_ref: (!is_database).then(|| sql_ident(alias)),
         });
     }
 
@@ -766,6 +790,9 @@ pub fn source_table_object(conn: &str, catalog: &str, schema: &str, table: &str)
         group: Group::SourceTables,
         pill: "源库",
         version: None,
+        // 源库表要在这条连接上查（`SELECT … FROM <catalog>.<schema>.<表>`），
+        // 引用名必须带连接上下文，不是这里能给的一句话
+        sql_ref: None,
     }
 }
 
@@ -872,6 +899,12 @@ pub fn can_archive_snapshot(object: &Object) -> bool {
 /// `fileview:` 行背后的视图别名（用来回查它的绝对路径）。
 pub fn fileview_alias(key: &str) -> Option<&str> {
     key.strip_prefix("fileview:")
+}
+
+/// SQL 标识符的转义口径（与 `result_set_actions::select_sql_for_table` 同一规则：
+/// 表名可能带引号，`tmp_i_` 的描述段来自用户）。
+pub fn sql_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
 }
 
 /// 这一行能不能「存到项目分析库」。
@@ -1284,6 +1317,48 @@ mod tests {
         // 资产行不在这条动作里：它们已经是快照/按需的既成事实，没有再折一次的道理
         let asset = rows.iter().find(|o| o.key == "asset:arp_demo").unwrap();
         assert!(!can_archive_snapshot(asset));
+    }
+
+    /// 行上的 `sql_ref` 只在「分析实例里裸名可见」的对象上给值：
+    /// 结果集 / 项目库表 / 全局库表 / 表型资产 / `f_*` 视图有；源库表、联邦源、加速源、
+    /// 文件库（catalog）没有（要带连接上下文才拼得出，宁可空着也不给错的）。
+    #[test]
+    fn sql_references_only_cover_bare_name_objects() {
+        let mut c = sample();
+        c.loaded_files = vec![
+            ("f_orders".into(), "D:/data/orders.csv".into()),
+            ("f_warehouse".into(), "D:/data/warehouse.duckdb".into()),
+        ];
+        c.assets.push(AssetRow {
+            name: "客户画像".into(),
+            version: 1,
+            detail: String::new(),
+            payload_rel_path: None,
+            resource_id: "arp_2".into(),
+            analytics_table: Some("res_客户画像_1".into()),
+        });
+        let rows = objects(&c);
+        let by = |key: &str| rows.iter().find(|o| o.key == key).unwrap();
+        for key in [
+            "fileview:f_orders",
+            "asset:arp_2",
+            "asset:arp_demo",
+        ] {
+            if key == "asset:arp_demo" {
+                // 文件型资产没有 SQL 引用（本体是 `resources/` 下的副本）
+                assert_eq!(by(key).sql_ref, None, "{key}");
+                continue;
+            }
+            assert!(by(key).sql_ref.is_some(), "{key} 应当有引用名");
+        }
+        // 库文件是 catalog：`别名.schema.表` 才查得到，行上不给
+        assert_eq!(by("fileview:f_warehouse").sql_ref, None);
+        // 源库连接行、结果集都按各自口径
+        assert_eq!(by("conn:C_mysql_9").sql_ref, None);
+        assert!(by("result:q_1")
+            .sql_ref
+            .as_deref()
+            .is_some_and(|s| s.starts_with('"')));
     }
 
     /// 临时对象是会话级：失效时仍留在清单里，但不再给「分析」动作。

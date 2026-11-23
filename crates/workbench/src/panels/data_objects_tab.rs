@@ -1041,6 +1041,34 @@ impl DataObjectsTab {
             // 铁律 D 组第 16 条：加源的外部文件默认「按需」（`f_*` 视图读原文件）；
             // 想固定就给这条「归档为快照」——归档后资产自己进文件段（`asset:` 行），
             // 加源那份视图不删（用户可能还要按需读原文件，清场口在切项目时统一收）。
+            // 铁律 E 组的最小一条：把这一行的**实际引用名**带进编辑器。
+            // 只有 `sql_ref` 有值的行才给（源库表 / 联邦源要带连接上下文，这里给不出来
+            // 就不给按钮——宁可没有，也不给一个抄下去跑不通的 SQL）。
+            let open_editor_button = object
+                .sql_ref
+                .clone()
+                .filter(|_| object.can_analyze())
+                .map(|reference| {
+                    let shared = self.shared.clone();
+                    Button::new(SharedString::from(format!(
+                        "data-object-editor-{}",
+                        object.key
+                    )))
+                    .ghost()
+                    .label("查")
+                    .tooltip(format!(
+                        "在 SQL 编辑器里打开：SELECT * FROM {reference}"
+                    ))
+                    .on_click(move |_, _, cx| {
+                        shared.request_query(workbench_shell::model::QueryRequest {
+                            // 走分析通道的对象都在进程单例里，不绑连接（跟随当前活动连接）
+                            conn_id: None,
+                            sql: format!("SELECT * FROM {reference}"),
+                            run: false,
+                        });
+                        shared.notify_host(cx);
+                    })
+                });
             let archive_button = if data_objects::can_archive_snapshot(object) {
                 data_objects::fileview_alias(&object.key).map(|alias| {
                     let alias = alias.to_string();
@@ -1242,6 +1270,7 @@ impl DataObjectsTab {
                     )
                     .children(pick_button)
                     .children(install_button)
+                    .children(open_editor_button)
                     .children(archive_button)
                     .children(persist_button)
                     .children(register_button)
