@@ -821,6 +821,59 @@ fn python_cell_runs_via_real_kernel_and_dispatches_media(cx: &mut TestAppContext
     shared.kernel_shutdown("python3");
 }
 
+/// 等泵把等待态送进面板（30s 上限）：`(提示串, 是否密码, 单元 id, 内核 id)`
+fn wait_pending_input(
+    cx: &mut gpui_kit::VisualTestContext,
+    panel: &gpui_kit::Entity<crate::view::host::EditorHostPanel>,
+) -> Option<(String, bool, String, String)> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        cx.run_until_parked();
+        let pending = cx.update(|_window, cx| {
+            panel.read(cx).nb_pending.as_ref().map(|request| {
+                (
+                    request.prompt.clone(),
+                    request.password,
+                    request.cell_id.clone(),
+                    request.kernel_id.clone(),
+                )
+            })
+        });
+        if pending.is_some() {
+            return pending;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "30s 内没等到输入请求：泵没把 `InputRequest` 送进面板（消息栏：{:?}）",
+            cx.update(|_window, cx| panel.read(cx).message.clone())
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// 等单元收口（30s 上限），返回最终输出
+fn wait_cell_settled(
+    cx: &mut gpui_kit::VisualTestContext,
+    shared: &EditorShared,
+    id: &crate::model::DocumentId,
+) -> Vec<crate::cell::Output> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        cx.run_until_parked();
+        let cells = shared.notebook_cells(id);
+        if cells[0].state == crate::cell::CellState::Done {
+            return cells[0].outputs.clone();
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "30s 没收口（状态 {:?}，输出 {:?}）",
+            cells[0].state,
+            cells[0].outputs
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 /// 【R3】输入整链（panel 层）：真内核 → 泵（唤醒）→ `drain_kernel_events` → 等待态 →
 /// 回送端口 → 内核继续跑完、单元收口
 ///
@@ -828,6 +881,9 @@ fn python_cell_runs_via_real_kernel_and_dispatches_media(cx: &mut TestAppContext
 /// `msg_id`，提取逻辑有 `orchestrate::pending_input` 的无 GPUI 单测，但「事件真被泵
 /// 送进面板、面板据此置等待态、回送后执行继续」没有任何用例。泵若不起 / 不唤醒 /
 /// 不 drain，这条等不到提示串，必红。
+///
+/// 两相：普通 `input()`（不遮挡，提交后清空）与 `getpass()`（遮挡，`password=true`
+/// 已由 kernel 层 `getpass_reports_password_flag` 在真内核上取证）。
 #[gpui_kit::test]
 #[ignore = "需要本机 ipykernel（RDS_KERNEL_PYTHON 指向对应解释器）"]
 fn notebook_input_round_trips_through_the_pump(cx: &mut TestAppContext) {
@@ -883,6 +939,30 @@ fn notebook_input_round_trips_through_the_pump(cx: &mut TestAppContext) {
         window.draw(cx).clear(cx);
     });
 
+    // 输入框当前遮挡态（`InputState::is_masked` 在 `presentation()` 上）
+    let masked = |cx: &mut gpui_kit::VisualTestContext| {
+        cx.update(|_window, cx| {
+            panel.read(cx).nb_input.read(cx).presentation().is_masked()
+        })
+    };
+    // 把值敲进输入框再从框里读出来提交——与「发送」按钮 / 回车同一条路径
+    let send = |cx: &mut gpui_kit::VisualTestContext, value: &str| {
+        cx.update(|window, cx| {
+            let input = panel.read(cx).nb_input.clone();
+            input.update(cx, |state, cx| {
+                state.set_value(value.to_string(), window, cx);
+            });
+        });
+        cx.update(|_window, cx| {
+            panel.update(cx, |panel, cx| {
+                let value = panel.nb_input.read(cx).value().to_string();
+                panel.submit_notebook_input(value, cx);
+            });
+        });
+    };
+
+    // ---------- 相一：普通 `input()` ----------
+
     // 跑这个单元：controller 启动序列 → 提交拿 msg_id → 起泵
     cx.update(|_window, cx| {
         panel.update(cx, |panel, cx| panel.notebook_run_cell(&id, &cell_id, cx));
@@ -896,73 +976,51 @@ fn notebook_input_round_trips_through_the_pump(cx: &mut TestAppContext) {
         "提交成功要标 Running（消息栏：{message:?}）"
     );
 
-    // 等泵把 `InputRequest` 送进面板（真时钟：内核线程写入 → notify → 泵 drain）
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let mut pending = None;
-    while pending.is_none() {
-        cx.run_until_parked();
-        pending = cx.update(|_window, cx| {
-            panel.read(cx).nb_pending.as_ref().map(|request| {
-                (
-                    request.prompt.clone(),
-                    request.password,
-                    request.cell_id.clone(),
-                    request.kernel_id.clone(),
-                )
-            })
-        });
-        if pending.is_some() {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "30s 内没等到输入请求：泵没把 `InputRequest` 送进面板（消息栏：{:?}）",
-            cx.update(|_window, cx| panel.read(cx).message.clone())
-        );
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    let (prompt, password, on_cell, on_kernel) = pending.expect("等到了");
+    let (prompt, password, on_cell, on_kernel) =
+        wait_pending_input(cx, &panel).expect("等到了输入请求");
     assert_eq!(prompt, "name? ", "提示串要原样（前端照此画输入行）");
     assert!(!password, "`input()` 不是密码输入");
     assert_eq!(on_cell, cell_id, "等待态要挂在正在跑的那个单元上");
     assert_eq!(on_kernel, "python3", "回送要打到本次执行的内核");
+    assert!(!masked(cx), "普通请求不遮挡");
 
-    // 回送：与「发送」按钮同一条路径
-    cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| {
-            panel.submit_notebook_input("doubao".to_string(), cx);
-        });
-    });
-
-    // 内核拿到 REPLY 后继续跑完 → stdout + ExecuteReply 收口
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
-        cx.run_until_parked();
-        let cells = shared.notebook_cells(&id);
-        if cells[0].state == crate::cell::CellState::Done {
-            let printed = cells[0]
-                .outputs
-                .iter()
-                .any(|o| matches!(o, crate::cell::Output::Text(t) if t.contains("got=doubao")));
-            assert!(
-                printed,
-                "回送的值要真的进了内核：{:?}",
-                cells[0].outputs
-            );
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "回送后 30s 没收口（状态 {:?}，输出 {:?}）",
-            cells[0].state,
-            cells[0].outputs
-        );
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
+    send(cx, "doubao");
+    let outputs = wait_cell_settled(cx, &shared, &id);
+    let printed = outputs
+        .iter()
+        .any(|o| matches!(o, crate::cell::Output::Text(t) if t.contains("got=doubao")));
+    assert!(printed, "回送的值要真的进了内核：{outputs:?}");
 
     // 收口即撤等待态（否则输入行会留在已完成的卡片上）
     let still_pending = cx.update(|_window, cx| panel.read(cx).nb_pending.is_some());
     assert!(!still_pending, "收口后等待态要撤掉");
+
+    // 提交成功后清空：`set_value` 走 `cx.defer` + 窗口，这里回读状态（外观另说）
+    cx.run_until_parked();
+    let leftover = cx.update(|_window, cx| panel.read(cx).nb_input.read(cx).value().to_string());
+    assert!(leftover.is_empty(), "提交后输入框要清空（残留：{leftover:?}）");
+
+    // ---------- 相二：`getpass()`（同一内核、同一单元，换正文再跑） ----------
+
+    let mut cells = shared.notebook_cells(&id);
+    cells[0].body = "import getpass\nprint('pw=' + getpass.getpass('pw? '))".to_string();
+    shared.set_notebook_cells(&id, cells);
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.notebook_run_cell(&id, &cell_id, cx));
+    });
+    let (prompt, password, _, _) =
+        wait_pending_input(cx, &panel).expect("`getpass()` 也要出等待态");
+    assert!(prompt.contains("pw?"), "提示串要原样：{prompt:?}");
+    assert!(password, "`getpass()` 必须是密码请求");
+    assert!(masked(cx), "密码请求要遮挡回显");
+
+    send(cx, "doubao");
+    let outputs = wait_cell_settled(cx, &shared, &id);
+    let printed = outputs
+        .iter()
+        .any(|o| matches!(o, crate::cell::Output::Text(t) if t.contains("pw=doubao")));
+    assert!(printed, "`getpass()` 的值也要真的进内核：{outputs:?}");
+    assert!(!masked(cx), "收口后不得继续遮挡（否则下一条普通请求会延续遮挡）");
 
     shared.kernel_shutdown("python3");
 }

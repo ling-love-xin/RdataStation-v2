@@ -1869,3 +1869,70 @@ fn notebook_input_enter_submits_to_kernel_port(cx: &mut TestAppContext) {
     assert!(message.contains("未启动"), "实际是：{message}");
     assert!(!pending, "一条 input_request 只回一次：等待态要被取走");
 }
+
+/// 【R3】等待态与遮挡态成对：密码请求 → 输入框遮挡；换普通请求 → 还原；回送后 → 还原
+///
+/// 区分性：若登记等待态时忘了同步遮挡（或只在设「遮挡」时不还原），第二条断言
+/// （普通请求不遮挡）与第三条（回送后不遮挡）必红——那正是「上一条 `getpass()` 之后
+/// 的下一条 `input()` 继续遮挡」这个错误的形状。
+#[gpui_kit::test]
+fn notebook_input_masks_password_requests_only(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    let id = shared
+        .open(OpenRequest::untitled("", EditorMode::Analysis))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    let request = |prompt: &str, password: bool| crate::view::host::NotebookInputRequest {
+        cell_id: "c1".to_string(),
+        kernel_id: "no-such-kernel".to_string(),
+        prompt: prompt.to_string(),
+        password,
+    };
+    let masked = |cx: &mut gpui_kit::VisualTestContext| {
+        cx.update(|_window, cx| {
+            panel
+                .read(cx)
+                .nb_input
+                .read(cx)
+                .presentation()
+                .is_masked()
+        })
+    };
+
+    // ① 密码请求 → 遮挡（`getpass()` 的回显不能明文）
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_notebook_pending(Some(request("Password: ", true)), cx);
+        });
+    });
+    cx.run_until_parked();
+    assert!(masked(cx), "密码请求要遮挡回显");
+
+    // ② 换成普通 `input()` → 还原（否则下一条请求会继续遮挡）
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_notebook_pending(Some(request("name? ", false)), cx);
+        });
+    });
+    cx.run_until_parked();
+    assert!(!masked(cx), "普通请求不得遮挡");
+
+    // ③ 再设密码请求，回送一次（内核不存在 → 失败路径）→ 遮挡要还原
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_notebook_pending(Some(request("Password: ", true)), cx);
+        });
+    });
+    cx.run_until_parked();
+    assert!(masked(cx), "回到密码请求要重新遮挡");
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.submit_notebook_input("secret".to_string(), cx);
+        });
+    });
+    cx.run_until_parked();
+    assert!(!masked(cx), "回送后（输入行撤掉）不得继续遮挡");
+}
