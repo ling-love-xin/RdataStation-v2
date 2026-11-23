@@ -113,8 +113,7 @@ pub struct DataObjectsTab {
     /// 每个源已经翻过几页叶子（键 = 源行 key）：`None` / 没记录 = 第一页。
     /// 见 [`LEAF_PAGE_SIZE`] 与 [`leaf_shown`]——叶子多了只画一页，点「显示更多」才加。
     leaf_pages: HashMap<String, usize>,
-    /// 导出格式（工具栏可切）：只允许 csv / parquet / json（铁律第 25 条）
-    export_format: engine::duckdb::export::ExportFormat,
+    /// 导出格式不在这里：它是「这一次导出」的属性，活在导出窗口里（见 `components/export_dialog.rs`）
     /// 上次同步到的活动文档 key（`None` = 还没对上 / 没有文档）。
     /// 与 `Shared::working_set.current` 比对：不同就说明用户切了文档，工作集要换那一份
     active_doc_key: Option<String>,
@@ -155,8 +154,6 @@ impl DataObjectsTab {
             conn_children: HashMap::new(),
             loading_sources: HashSet::new(),
             leaf_pages: HashMap::new(),
-            // 默认 csv：与查询导出同一习惯，且是唯一人人能打开的格式
-            export_format: engine::duckdb::export::ExportFormat::Csv,
             active_doc_key,
             seen_document_epoch,
             // `None` = 还没读过盘：构造那次 `refresh` 会按当前项目根读一遍
@@ -1163,7 +1160,7 @@ impl DataObjectsTab {
                     // `context_menu` 会换掉元素类型（不再有样式方法），所以必须挂在链尾。
                     .context_menu({
                         use crate::components::file_actions::{
-                            ExportDest, archive_file_as_snapshot, bare_table_name, export_table_to,
+                            archive_file_as_snapshot, bare_table_name,
                         };
                         let shared = self.shared.clone();
                         let sql_ref = object.sql_ref.clone();
@@ -1176,9 +1173,11 @@ impl DataObjectsTab {
                         let label = object.name.clone();
                         let alias = data_objects::fileview_alias(&object.key).map(str::to_string);
                         let usable = object.can_analyze();
-                        let format = self.export_format;
                         let register_target = register_target.clone();
                         let persist_target = persist_target.clone();
+                        // 属性窗口要整行快照：必须先克隆到闭包外。`object` 是借来的引用，
+                        // 在菜单闭包里 `object.clone()` 只会克隆那个引用，闭包就不满足 'static
+                        let props_object = (*object).clone();
                         move |menu, _window, _cx| {
                             let mut menu = menu;
                             if let Some(reference) = sql_ref.clone().filter(|_| usable) {
@@ -1221,28 +1220,33 @@ impl DataObjectsTab {
                                         },
                                     ));
                                 }
+                                // 导出 / 存草稿：同一张窗口，两个入口各带一档目的地
                                 let export = shared.clone();
                                 let export_ref = reference.clone();
-                                menu = menu.item(PopupMenuItem::new("导出（全局）").on_click(
-                                    move |_, _, cx| {
-                                        export_table_to(
-                                            &export,
-                                            &export_ref,
-                                            ExportDest::Global,
-                                            format,
+                                let export_label = label.clone();
+                                menu = menu.item(PopupMenuItem::new("导出…").on_click(
+                                    move |_, window, cx| {
+                                        crate::components::export_dialog::open_export_dialog(
+                                            export.clone(),
+                                            export_label.clone(),
+                                            export_ref.clone(),
+                                            crate::components::export_dialog::ExportKind::Global,
+                                            window,
                                             cx,
                                         );
                                     },
                                 ));
                                 let draft = shared.clone();
                                 let draft_ref = reference;
-                                menu = menu.item(PopupMenuItem::new("存到草稿").on_click(
-                                    move |_, _, cx| {
-                                        export_table_to(
-                                            &draft,
-                                            &draft_ref,
-                                            ExportDest::Scratchpad,
-                                            format,
+                                let draft_label = label.clone();
+                                menu = menu.item(PopupMenuItem::new("存到草稿…").on_click(
+                                    move |_, window, cx| {
+                                        crate::components::export_dialog::open_export_dialog(
+                                            draft.clone(),
+                                            draft_label.clone(),
+                                            draft_ref.clone(),
+                                            crate::components::export_dialog::ExportKind::Scratchpad,
+                                            window,
                                             cx,
                                         );
                                     },
@@ -1296,6 +1300,32 @@ impl DataObjectsTab {
                                                 cx,
                                             ),
                                         }
+                                    },
+                                ));
+                            }
+                            // 属性：这一行到底是哪个东西（身份键 / 通道 / 寿命 / 列结构）
+                            // 与「复制引用名」一起放在菜单尾部：都是"看/抄"，不是"动数据"
+                            let props_row = props_object.clone();
+                            let props = shared.clone();
+                            menu = menu.item(PopupMenuItem::new("属性…").on_click(
+                                move |_, window, cx| {
+                                    crate::components::object_props::open_object_props(
+                                        props.clone(),
+                                        props_row.clone(),
+                                        window,
+                                        cx,
+                                    );
+                                },
+                            ));
+                            // 引用名只认 `sql_ref`（源库表 / 文件库行本来就没有可抄的名字）
+                            if let Some(reference) = sql_ref.clone().filter(|r| !r.trim().is_empty()) {
+                                let copy = shared.clone();
+                                menu = menu.item(PopupMenuItem::new("复制引用名").on_click(
+                                    move |_, _window, cx| {
+                                        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                                            reference.clone(),
+                                        ));
+                                        copy.say(format!("已复制引用名：{reference}"), cx);
                                     },
                                 ));
                             }
@@ -1552,7 +1582,7 @@ impl DataObjectsTab {
                 )
             })
             // 工作集软上限：只提示代价，不拦（拦下来等于替用户决定要不要等）
-            .when_some(data_objects::picked_limit_note(picked.len()), |el, note| {
+            .when_some(data_objects::picked_limit_note(picked.len()), move |el, note| {
                 el.child(
                     div()
                         .px_3()
@@ -1873,6 +1903,7 @@ impl ComponentPanel for DataObjectsTab {
     ) -> Option<Vec<Button>> {
         // 「加源」是面板唯一往外接数据的入口：只接能直接读的文件，库表由连接下推。
         // 两档 scope（铁律 B 组第 6 条）在工具栏上就是两个按钮：按需（视图）/ 快照（存副本）。
+        // 导出格式**不在这里**：它是「这一次导出」的属性，问在导出窗口里（2026-11-24 拍板）。
         Some(vec![
             Button::new("data-objects-add-source")
                 .ghost()
@@ -1897,24 +1928,6 @@ impl ComponentPanel for DataObjectsTab {
                         window,
                         cx,
                     );
-                })),
-            // 导出格式：只在这三种里轮（铁律第 25 条），点一下换下一个
-            Button::new("data-objects-export-format")
-                .ghost()
-                .label(match self.export_format {
-                    engine::duckdb::export::ExportFormat::Csv => "格式 CSV",
-                    engine::duckdb::export::ExportFormat::Parquet => "格式 Parquet",
-                    engine::duckdb::export::ExportFormat::Json => "格式 JSON",
-                })
-                .tooltip("导出 / 存草稿用的格式：csv → parquet → json 轮换")
-                .on_click(cx.listener(|this, _, _window, cx| {
-                    use engine::duckdb::export::ExportFormat;
-                    this.export_format = match this.export_format {
-                        ExportFormat::Csv => ExportFormat::Parquet,
-                        ExportFormat::Parquet => ExportFormat::Json,
-                        ExportFormat::Json => ExportFormat::Csv,
-                    };
-                    cx.notify();
                 })),
         ])
     }

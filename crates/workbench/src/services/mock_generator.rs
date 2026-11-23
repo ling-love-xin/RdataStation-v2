@@ -716,6 +716,28 @@ pub fn import_columns_from_analytics(
         .collect()
 }
 
+/// 面板「属性」窗口用：项目分析库里某表的列结构（`(列名, 类型, 可空)`）。
+///
+/// 与 [`import_columns_from_analytics`] 同一条只读路径，但**不做** Generator 映射——
+/// 属性窗口只回答"有哪些列"，不生成 Mock 结构。
+pub fn table_columns_in_analytics(
+    project_root: Option<&Path>,
+    table: &str,
+) -> Result<Vec<(String, String, bool)>, String> {
+    if table.trim().is_empty() {
+        return Err("表名为空".to_string());
+    }
+    let path = analysis_db_path(project_root).ok_or_else(|| {
+        "未打开项目：列结构要读项目分析库（{项目}/.RSmeta/analytics.duckdb）".to_string()
+    })?;
+    let config = duckdb::Config::default()
+        .access_mode(duckdb::AccessMode::ReadOnly)
+        .map_err(|e| format!("打开分析库失败: {e}"))?;
+    let conn = duckdb::Connection::open_with_flags(&path, config)
+        .map_err(|e| format!("打开分析库失败: {e}（可能正被别的操作占用）"))?;
+    analytics_columns(&conn, table)
+}
+
 /// 分析库里某表的列 `(列名, 类型, 可空)`，按 `ordinal_position` 排序。
 ///
 /// 抽成 `pub(crate)` 是为了让测试能钉住「读出来的列序与类型就是库里那份」，

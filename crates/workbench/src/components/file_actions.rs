@@ -49,6 +49,55 @@ pub fn bare_table_name(sql_ref: &str) -> String {
     inner.replace("\"\"", "\"")
 }
 
+/// 把一行对象按 SQL 引用名写到**指定文件**（导出窗口的自定义目录用）。
+///
+/// 与 [`export_table_to`] 共用同一条写盘路径，只是落点由调用方给全（含扩展名）。
+/// 返回是否写成：调用方据此决定关不关窗。
+pub fn export_table_to_path(
+    shared: &Shared,
+    sql_ref: &str,
+    path: &Path,
+    verb: &str,
+    cx: &mut App,
+) -> bool {
+    let table = bare_table_name(sql_ref);
+    if table.trim().is_empty() {
+        shared.say_error(format!("{verb}：目标表名为空"), cx);
+        return false;
+    }
+    let Some(path_text) = path.to_str() else {
+        shared.say_error(format!("{verb}：路径含非 UTF-8 字符"), cx);
+        return false;
+    };
+    match engine::duckdb::export::export_table_global(&table, path_text) {
+        Ok(_) => {
+            shared.say(format!("{verb}：{}", path.display()), cx);
+            true
+        }
+        Err(error) => {
+            shared.say_error(format!("{verb}：{error}"), cx);
+            false
+        }
+    }
+}
+
+/// 文件名只留安全字符（表名里可能有引号 / 空格 / 中文）。
+///
+/// 导出窗口的「文件名」预填与 [`export_table_to`] 的默认名共用这一份口径：
+/// 两处各写一个清洗规则，早晚会一个留中文一个折成下划线。
+pub fn export_file_stem(table: &str) -> String {
+    table
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 /// 把一行对象（按它的 SQL 引用名）导出到 `dest`，格式由 `format` 定（csv / parquet / json）。
 ///
 /// 两个目的地 + 三种格式 = 铁律第 24/25 条的完整口径；引擎侧三种都能写，
@@ -83,26 +132,12 @@ pub fn export_table_to(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    // 文件名只留安全字符：表名里可能有引号 / 空格 / 中文
-    let stem: String = table
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '_' || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let path = dir.join(format!("{stem}_{secs}.{}", format.extension()));
-    let Some(path_text) = path.to_str() else {
-        shared.say_error(format!("{}：路径含非 UTF-8 字符", dest.verb()), cx);
-        return;
-    };
-    match engine::duckdb::export::export_table_global(&table, path_text) {
-        Ok(_) => shared.say(format!("{}：{}", dest.verb(), path.display()), cx),
-        Err(error) => shared.say_error(format!("{}：{error}", dest.verb()), cx),
-    }
+    let path = dir.join(format!(
+        "{}_{secs}.{}",
+        export_file_stem(&table),
+        format.extension()
+    ));
+    let _ = export_table_to_path(shared, sql_ref, &path, dest.verb(), cx);
 }
 
 /// 外部文件归档成快照时，副本在 `resources/` 下的落点与显示名。
@@ -167,7 +202,7 @@ pub fn archive_file_as_snapshot(shared: &Shared, path: &str, cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use super::{bare_table_name, snapshot_placement};
+    use super::{bare_table_name, export_file_stem, snapshot_placement};
 
     /// 引用名（`"表名"`）→ 裸表名：引号要脱掉，里面的 `""` 要还原（否则导出另一张表）
     #[test]
@@ -190,5 +225,15 @@ mod tests {
             Some(("files/经营月报.xlsx".to_string(), "经营月报".to_string()))
         );
         assert_eq!(snapshot_placement(""), None);
+    }
+
+    /// 导出文件名只留安全字符：引号 / 空格 / 点折成下划线，中文与 `-` `_` 保留
+    /// （导出窗口预填与默认名共用这一份，两处写两套规则早晚一个留中文一个全折）
+    #[test]
+    fn export_stem_keeps_letters_digits_and_underscores() {
+        assert_eq!(export_file_stem("\"tmp_q_orders\""), "_tmp_q_orders_");
+        assert_eq!(export_file_stem("odd name.csv"), "odd_name_csv");
+        assert_eq!(export_file_stem("经营月报-2026"), "经营月报-2026");
+        assert_eq!(export_file_stem(""), "");
     }
 }

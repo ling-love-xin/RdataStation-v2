@@ -13,6 +13,8 @@ pub mod dialog_helpers;
 pub mod editor_host;
 /// 数据对象文件段的动作宿主（外部文件 → 归档成快照，铁律 D 组）
 pub mod file_actions;
+/// 数据对象「导出」窗口（目的地 / 格式 / 文件名一次问清；格式不再是工具栏状态）
+pub mod export_dialog;
 pub mod group_form_dialog;
 pub mod group_manager_dialog;
 pub mod insight_actions;
@@ -20,6 +22,8 @@ pub mod insight_new_dialog;
 pub mod log_dialog;
 pub mod mock_host;
 pub mod nav_host;
+/// 数据对象「属性」窗口（身份键 / 通道 / 寿命 / 列结构；右键入口）
+pub mod object_props;
 pub mod object_mask_dialog;
 pub mod project_host;
 pub mod resource_host;
