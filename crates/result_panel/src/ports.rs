@@ -114,7 +114,7 @@ pub enum ResultRequest {
     /// 下发源库开关翻转后的重查（开着时应用筛选会重查数据库）
     PushdownFilter { value: String },
     /// 【1.2】筛选框运行按钮：用 `select * from (原SQL) where 词` **替换**当前结果集
-    /// 重查（词取面板实时筛选词）；生成 SQL 写入面板 `exec_sql`（右栏 ExecSql 页签展示）
+    /// 重查（词取面板实时筛选词）；生成 SQL 写入面板 `exec_sql`（展示在筛选栏展开区）
     RunFilterAsQuery,
     /// 【1.2】筛选框展开 / 收起（点击展开按钮后出现顶宽筛选条）
     ToggleFilterExpand,
@@ -199,8 +199,15 @@ pub enum ResultRequest {
     OpenSqlDialog,
     /// 【2026-10-28 微调】关闭 SQL 预览弹窗（Dialog 关闭按钮 / 遮罩点击触发）
     CloseSqlDialog,
-    /// 【1.2】复制「执行SQL」页签里的 wrapped SQL（筛选框运行生成的）
+    /// 【1.2】复制筛选栏展开区里那句「已执行的 SQL」（原「执行SQL」页签的复制钮，
+    /// 页签删除后迁到展开条上）
     CopyExecSql,
+    /// 【洞察心智提醒】列头右键「洞察此列」→ **先经宿主弹确认框**，确认后才真正开洞察。
+    ///
+    /// 为什么绕一圈：网格列头钩子只拿到 `&mut App`（没有 window，开不了对话框），
+    /// 而「数据会被取样写进分析库临时表」这句话必须**在动作发生前**说清（避免用户点了
+    /// 以后不知道数据去哪了）。所以钩子把请求入队，由宿主在 `dispatch`（有 window）里弹框。
+    RequestInsightColumn(String),
     /// 【R1】复制当前选中单元格的值（值详情页工具条的复制钮；无选中格时为空操作）
     CopyValue,
     /// 【保存值】把当前选中格的值存成文件。
@@ -858,20 +865,21 @@ pub enum RightTab {
     Group,
     /// 引用：外键引用查看（选中列被哪些表引用，对齐 DBeaver 引用页签；backlog 空态）
     Reference,
-    /// 【1.2】执行 SQL：筛选框运行后生成的 wrapped SQL（`select * from (原SQL) where …`）
-    /// 原文展示（只读 + 复制）。执行完成后自动切到此页签。
-    ExecSql,
 }
 
 impl RightTab {
     /// 全部页（规范序 = 页签条 / 竖条 / 视图菜单的渲染序）。
-    pub const ALL: [RightTab; 6] = [
+    ///
+    /// 【2026-11-24 收口为五页】对齐 DBeaver `availablePanels`（`ResultSetViewer.java:1003-1080`）
+    /// 的五个右栏面板：metadata / valueviewer / aggregate / grouping / references。
+    /// 本仓原有第六页「执行SQL」（`ExecSql`）在 DBeaver 里**没有对应面板**，按拍板删除；
+    /// 它承载的 wrapped SQL 改为显示在筛选栏展开区（见 `sidebars.rs::render_filter_expand_bar`）。
+    pub const ALL: [RightTab; 5] = [
         RightTab::Browser,
         RightTab::Value,
         RightTab::Stats,
         RightTab::Group,
         RightTab::Reference,
-        RightTab::ExecSql,
     ];
 
     /// 落盘用的稳定 id（`result_panel.open_tabs` 偏好键；对齐 DBeaver
@@ -883,7 +891,6 @@ impl RightTab {
             Self::Stats => "stats",
             Self::Group => "group",
             Self::Reference => "reference",
-            Self::ExecSql => "execsql",
         }
     }
 

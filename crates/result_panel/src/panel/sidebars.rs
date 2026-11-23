@@ -561,7 +561,6 @@ impl ResultPanel {
             RightTab::Stats => self.render_stats_tab(cx),
             RightTab::Group => self.render_group_tab(cx),
             RightTab::Reference => self.render_reference_tab(cx),
-            RightTab::ExecSql => self.render_exec_sql_tab(cx),
         };
         // 【页签关闭】关闭入口已改到**每个页签内侧的 ×**（见上面 `Tab::suffix`）——
         // 行尾那颗「关当前页」的按钮已移除：DBeaver 的关闭按钮属于页签本身
@@ -593,7 +592,7 @@ impl ResultPanel {
             // 长列表不产生滚动（外层 `overflow_hidden` 直接把底部裁掉）、空态不垂直居中、
             // 切页时内容起点在「24 / 28 / 0」三种头高之间跳（列浏览器用临时 24px 标题行、
             // 值/计算/分组/执行SQL 用 28px 页内工具条、引用页没有头）。改成列后，
-            // 六页统一为「24px 页签条 + 28px 页内工具条 + 剩余内容」，切页不再跳动。
+            // 五页统一为「24px 页签条 + 28px 页内工具条 + 剩余内容」，切页不再跳动。
             .v_flex()
             .overflow_hidden()
             .bg(theme.colors.sidebar)
@@ -824,8 +823,57 @@ impl ResultPanel {
         // （`engine::sql::rewrite_with_where`：包 `rds_filtered` / 去顶层 LIMIT /
         // ORDER BY 外提）。此前这里自己拼 `select * from (…) as _q where …`，
         // 别名与 LIMIT 处理都和真正执行的那句不一致——预览说的不是要跑的那句。
+        // 【2026-11-24 SQL 并入筛选栏】「执行SQL」页签删除后，点 ▶ 真正跑过的那句
+        // （`exec_sql`，宿主在重查前写入）常驻这里：一行截断文本（点开即全文）+ 复制钮。
+        // 与下面 `preview` 的分工：executed 是**已经跑过**的那句（只在真正执行后出现）；
+        // preview 是**将要跑**的拼装预览（词一变就变）。两者同时显示会像两条互相矛盾的 SQL，
+        // 所以 executed 存在时就不再画 preview。
+        let exec_sql_text = self.exec_sql.clone();
+        let executed: Option<AnyElement> = exec_sql_text.as_ref().map(|sql| {
+            let open_queue = self.queue.clone();
+            let copy_queue = self.queue.clone();
+            let text: SharedString = if sql.chars().count() > 80 {
+                let head: String = sql.chars().take(80).collect();
+                format!("{head}…").into()
+            } else {
+                sql.clone().into()
+            };
+            div()
+                .h_flex()
+                .items_center()
+                .gap_1()
+                .min_w_0()
+                .flex_none()
+                .debug_selector(|| "editor-result-filter-executed-sql".to_string())
+                .child(
+                    // kit 的 `Div` 没有 `on_click`（点击载体改用 ghost Button：同样紧凑、
+                    // 且自带 hover / tooltip，不用为一行文本引交互元素包装）
+                    Button::new("editor-result-filter-executed-sql-open")
+                        .ghost()
+                        .xsmall()
+                        .debug_selector(|| "editor-result-filter-executed-sql-open".to_string())
+                        .label(text)
+                        .tooltip("查看本次重查用的完整 SQL")
+                        .on_click(move |_, _window, app| {
+                            open_queue.request(ResultRequest::OpenSqlDialog, app);
+                        }),
+                )
+                .child(
+                    Button::new("editor-result-filter-executed-sql-copy")
+                        .ghost()
+                        .xsmall()
+                        .debug_selector(|| "editor-result-filter-executed-sql-copy".to_string())
+                        .icon(IconName::Copy)
+                        .tooltip("复制本次重查用的 SQL")
+                        .on_click(move |_, _window, app| {
+                            copy_queue.request(ResultRequest::CopyExecSql, app);
+                        }),
+                )
+                .into_any_element()
+        });
         let preview =
-            (!self.filter_text.trim().is_empty() && self.result_sql.is_some()).then(|| {
+            (executed.is_none() && !self.filter_text.trim().is_empty() && self.result_sql.is_some())
+                .then(|| {
                 let sql = self.result_sql.clone().unwrap_or_default();
                 let word = self.filter_text.trim();
                 let wrapped = engine::sql::rewrite_with_where(&sql, word)
@@ -923,6 +971,7 @@ impl ResultPanel {
                         }),
                 )
             })
+            .children(executed)
             .children(preview)
             .child(
                 Button::new("editor-result-filter-expand-collapse")

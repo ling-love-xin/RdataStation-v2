@@ -230,7 +230,7 @@ impl EditorHostPanel {
                 panel.set_stats_items_initial(&stats_items, cx);
                 // 【分组页持久化】用户上次的分组排序口径与「仅重复」开关
                 panel.set_group_prefs_initial(&group_sort, group_duplicates_only, cx);
-                // 【右栏页签持久化】用户上次启用的页（空 / 全未知 id → 保持出厂六页全开）
+                // 【右栏页签持久化】用户上次启用的页（空 / 全未知 id → 保持出厂五页全开）
                 panel.set_open_tabs_initial(&open_tabs, cx);
             }
             panel
@@ -562,8 +562,16 @@ impl EditorHostPanel {
                         .set_insight_column_hook(std::rc::Rc::new(
                             move |column: &str, app: &mut App| {
                                 let column = column.to_string();
-                                _ = insight_weak
-                                    .update(app, |panel, cx| panel.insight_column(&column, cx));
+                                // 【2026-11-24 心智提醒】不再直接调宿主端口：钩子这里没有 window
+                                // （开不了确认框），先把请求投进结果动作队列；宿主 dispatch 里
+                                // 弹「数据会进入分析库临时表」确认，确认后才走 `panel.insight_column`。
+                                _ = insight_weak.update(app, |host, cx| {
+                                    host.result_action_queue
+                                        .push(result_panel::ports::ResultRequest::RequestInsightColumn(
+                                            column,
+                                        ));
+                                    host.result_panel.update(cx, |_, cx| cx.notify());
+                                });
                             },
                         ));
                 }

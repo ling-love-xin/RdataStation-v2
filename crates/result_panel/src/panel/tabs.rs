@@ -238,7 +238,7 @@ impl ResultPanel {
         let theme = cx.theme();
         let muted = theme.colors.muted_foreground;
         let Some((row, col)) = self.selection_pos else {
-            // 空态也保留页内工具条（六页同形，见 `empty_page`）；
+            // 空态也保留页内工具条（五页同形，见 `empty_page`）；
             // 值页正文是**两行**（DBeaver `ValueViewerPanel` 的空态形态，见 [`value_empty_lines`]）
             return self.empty_page_lines(
                 RightTab::Value,
@@ -620,7 +620,7 @@ impl ResultPanel {
         let grid = self.grid.read(cx);
         let delegate = grid.delegate();
         let Some(data_col) = self.inspect_column(delegate) else {
-            // 空态也保留页内工具条（六页同形，见 `empty_page`）
+            // 空态也保留页内工具条（五页同形，见 `empty_page`）
             return self.empty_page(
                 RightTab::Stats,
                 "editor-result-stats-toolbar",
@@ -790,7 +790,7 @@ impl ResultPanel {
     /// `ResultSetViewer.java:1590-1614`：那边 `addPanel` 给**每个面板**的面板工具条右端都挂
     /// 一颗 `IMG_LCL_VIEW_MENU` 按钮，点开是 `fillPanelsMenu()`（`:1559-1588`）的菜单）。
     ///
-    /// 菜单 = 六页勾选项（`STYLE_CHECK`，当前页为勾选态）→ 分隔 → 面板最大化 → 分隔 →
+    /// 菜单 = 五页勾选项（`STYLE_CHECK`，当前页为勾选态）→ 分隔 → 面板最大化 → 分隔 →
     /// 面板总开关 → 布局方向（段位照 `fillPanelsMenu:1559-1588`；`CMD_ACTIVATE_PANELS`
     /// 本仓无端口、按「能力没有就不摆」不列）。条目清单与文案分别由纯函数
     /// `panel_view_menu_items` / `panel_view_item_label` 定
@@ -1408,6 +1408,24 @@ impl ResultPanel {
             .into_any_element()
     }
 
+    /// 【引用】外键引用查看页签 —— **当前口径：置灰占位**（2026-11-24 拍板 Q36-A）。
+    ///
+    /// 页签位置保留（五页齐全、序号与 DBeaver 一致），正文只摆一句说明；
+    /// 原因：DBeaver 这一页的价值在于「下拉下面嵌一整份 `ResultSetViewer` 显示引用行」
+    /// （`ReferencesResultsContainer.java`），本仓这一半还没接线，只给键下拉会让用户以为
+    /// 引用能力已就绪。原「键下拉 + 打开目标对象 + 列映射」的实现在
+    /// [`Self::render_reference_tab_live`] 里原样保留（`references` 状态机、宿主取数、
+    /// 单元测试都留着），接线后把这个入口换回去即可，不用重写。
+    pub(crate) fn render_reference_tab(&self, cx: &App) -> AnyElement {
+        self.empty_page(
+            RightTab::Reference,
+            "editor-result-reference-toolbar",
+            "引用",
+            "外键引用页暂未接入：引用行要按 DBeaver 那样内嵌结果集显示，接入前保留页签位置",
+            cx,
+        )
+    }
+
     /// 【引用】外键引用查看页签（对齐 DBeaver `ReferencesPanel` + `ReferencesResultsContainer`）
     ///
     /// 形：28px 页内工具条（标题「引用」，`contributeActions` 那边是空实现 ⇒ 本页也无动作）
@@ -1419,8 +1437,9 @@ impl ResultPanel {
     ///
     /// 与 DBeaver 的**已知差异**：那边下拉下面嵌一整份 `ResultSetViewer` 显示引用行，
     /// 本仓首版只到「键 + 列映射」（引用行按 `result-panel-references-plan.md` 的
-    /// `B′` 方案另开结果集，尚未接线）。
-    pub(crate) fn render_reference_tab(&self, cx: &App) -> AnyElement {
+    /// `B′` 方案另开结果集，尚未接线）。**入口当前被上面的占位挡住**（置灰口径）。
+    #[allow(dead_code)]
+    pub(crate) fn render_reference_tab_live(&self, cx: &App) -> AnyElement {
         let body: AnyElement = match &self.references {
             crate::references::ReferencesState::NotLoaded => {
                 self.sidebar_empty("切到本页时读取外键引用", cx)
@@ -1592,63 +1611,9 @@ impl ResultPanel {
             .into_any_element()
     }
 
-    /// 【1.2】「执行SQL」页签：筛选框运行后生成的 wrapped SQL 原文（只读 + 复制）。
-    ///
-    /// 【2026-11-17 对齐】空态也保留页内工具条（此前空态直接返回居中文字，
-    /// 切页时正文起点比其它页高 28px），只是没有可复制的文本时不摆复制钮。
-    pub(crate) fn render_exec_sql_tab(&self, cx: &App) -> AnyElement {
-        let theme = cx.theme();
-        // 【R1】页内工具条：左「生成的 SQL」、右复制（原先是在 `p_2` 里自绘的一行标题）
-        let copy: Option<AnyElement> = self.exec_sql.as_ref().map(|_| {
-            let copy_queue = self.queue.clone();
-            Button::new("editor-result-exec-sql-copy")
-                .ghost()
-                .xsmall()
-                .debug_selector(|| "editor-result-exec-sql-copy".to_string())
-                .icon(IconName::Copy)
-                .label("复制")
-                .tooltip("复制生成的 SQL".to_string())
-                .on_click(move |_, _window, app| {
-                    copy_queue.request(ResultRequest::CopyExecSql, app);
-                })
-                .into_any_element()
-        });
-        let body: AnyElement = match self.exec_sql.clone() {
-            Some(sql) => div()
-                .flex_1()
-                .min_h_0()
-                .m_2()
-                .overflow_y_scrollbar()
-                .bg(theme.colors.background)
-                .rounded_md()
-                .p_2()
-                .text_xs()
-                .text_color(theme.colors.foreground)
-                .child(SharedString::from(sql))
-                .into_any_element(),
-            None => {
-                self.sidebar_empty("在工具栏筛选框输入词并点 ▶ 运行，生成 SQL 会显示在这里", cx)
-            }
-        };
-        div()
-            .flex_1()
-            .min_h_0()
-            .v_flex()
-            .debug_selector(|| "editor-result-exec-sql-tab".to_string())
-            .child(self.panel_toolbar(
-                "editor-result-exec-sql-toolbar",
-                SharedString::from("生成的 SQL"),
-                copy.into_iter().collect(),
-                page_needs_separator(RightTab::ExecSql),
-                cx,
-            ))
-            .child(body)
-            .into_any_element()
-    }
-
     /// 【侧栏】「28px 页内工具条 + 空态正文」的整页骨架。
     ///
-    /// 右栏六页统一形态：页签条 24px + 页内工具条 28px + 正文吃满剩余高。
+    /// 右栏五页统一形态：页签条 24px + 页内工具条 28px + 正文吃满剩余高。
     /// 空态也保留工具条——否则切页时正文起点会比其它页高 28px（2026-11-17 对齐）。
     fn empty_page(
         &self,
@@ -1793,7 +1758,7 @@ pub(crate) fn arrange_groups(
 }
 
 /// 【右栏】页签下标 → 枚举（TabBar 回调用；与 `RightTab` 定义顺序一致——
-/// Browser=0 / Value=1 / Stats=2 / Group=3 / Reference=4 / ExecSql=5，
+/// Browser=0 / Value=1 / Stats=2 / Group=3 / Reference=4，
 /// 对齐 DBeaver 右侧页签顺序）
 ///
 /// 【2026-11-18】顺序与映射已收成单一来源 `events::right_tabs`（页签条 / 视图菜单 /

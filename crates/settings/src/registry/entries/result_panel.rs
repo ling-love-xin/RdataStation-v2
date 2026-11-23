@@ -285,15 +285,15 @@ pub fn entries() -> Vec<SettingSpec> {
             group: "interaction",
             group_label: Some("选择与操作"),
             label: "右栏启用的页",
-            hint: "右栏页签条上启用了哪些页，逗号分隔 id（出厂六页全开 \
-                 `browser,value,stats,group,reference,execsql`）。\
+            hint: "右栏页签条上启用了哪些页，逗号分隔 id（出厂五页全开 \
+                 `browser,value,stats,group,reference`）。\
                  页签条行尾 × 关一页、视图菜单勾一项改的都是这份状态；\
                  顺序无关（读的时候按规范序归一），未知 id 被忽略，\
                  空串按出厂处理（对齐 DBeaver `activateDefaultPanels` 把空集合补成默认）",
             hint_inline: true,
             kind: SettingKind::Text,
             presets: &[],
-            default_json: "\"browser,value,stats,group,reference,execsql\"",
+            default_json: "\"browser,value,stats,group,reference\"",
             effect: SettingEffect::NextUse,
             entry: SettingEntry::Page,
             consumer: "crates/editor/src/view/host/construct.rs（面板创建时注入已启用集合）\

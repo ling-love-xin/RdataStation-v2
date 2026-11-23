@@ -1092,3 +1092,50 @@ fn bookmark_manager_shows_empty_state_when_no_bookmarks(cx: &mut TestAppContext)
         "空态文案要在"
     );
 }
+
+/// 【洞察心智提醒】列头右键「洞察此列」→ 先弹确认框，**未确认前不碰洞察端口**
+/// （2026-11-24 拍板 Q37-A：数据会进分析库临时表，这件事必须在动作前说清）。
+///
+/// 钩子那一按只把请求入队（钩子没有 window，开不了对话框）；这里直接投同一份
+/// `ResultRequest::RequestInsightColumn`，验的是宿主 dispatch 那一段：
+/// 弹层真渲染 + 两个按钮都在 + 端口没被调用。
+#[gpui_kit::test]
+fn insight_column_asks_before_touching_the_analysis_library(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = super::shared_with_sized_runner("select rows=3");
+
+    // 端口 = 「真正去开洞察」的那一步：确认前不该被调到
+    let reached = Rc::new(std::cell::Cell::new(false));
+    let flag = reached.clone();
+    shared.attach_insight_column(Rc::new(
+        move |_request: crate::shared::InsightColumnRequest, _cx: &mut gpui_kit::App| {
+            flag.set(true);
+        },
+    ));
+
+    let (harness, cx) = dialog_harness(cx, &shared, &id, "editor-insight-confirm");
+    let panel = cx.update(|_window, cx| harness.read(cx).panels[0].clone());
+    cx.update(|window, cx| {
+        panel.update(cx, |host, cx| {
+            host.dispatch_result_request(
+                result_panel::ports::ResultRequest::RequestInsightColumn("amount".to_string()),
+                window,
+                cx,
+            );
+        });
+    });
+
+    assert!(
+        cx.update(|window, cx| window.has_active_dialog(cx)),
+        "点洞察要先弹确认框（不直接进面板）"
+    );
+    assert!(
+        dialog_button_rendered(cx, "editor-dialog-insight-confirm")
+            && dialog_button_rendered(cx, "editor-dialog-insight-cancel"),
+        "确认 / 取消两个按钮都要在"
+    );
+    assert!(
+        !reached.get(),
+        "未确认前不得进入洞察（此刻数据还没进分析库临时表）"
+    );
+}

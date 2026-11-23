@@ -100,8 +100,8 @@ pub struct ResultPanel {
     #[serde(default)]
     pub group_duplicates_only: bool,
     /// 【右栏页签持久化，对齐 DBeaver `PresentationSettings.enabledPanelIds`】右栏启用了哪些页，
-    /// 逗号分隔的稳定 id（`browser,value,stats,group,reference,execsql`，顺序无关——
-    /// 读的时候按规范序归一）。空串 = 「没写过」→ 出厂六页全开（DBeaver
+    /// 逗号分隔的稳定 id（`browser,value,stats,group,reference`，顺序无关——
+    /// 读的时候按规范序归一）。空串 = 「没写过」→ 出厂五页全开（DBeaver
     /// `activateDefaultPanels:1396-1400` 同样把空集合补成默认面板）。
     /// 未知 id 在面板侧丢弃（id ↔ 页对应见 `result_panel::ports::RightTab::id`）。
     /// 作用域 = 全局一份（DBeaver 是随工作区/演示设置存，本仓沿用结果集偏好的全局口径）。
@@ -337,10 +337,12 @@ fn default_result_group_sort() -> String {
     "value".to_string()
 }
 
-/// 右栏启用页的出厂值：六页全开（规范序）。
+/// 右栏启用页的出厂值：五页全开（规范序）。
 ///
 /// 对齐 DBeaver：内置面板都注册在 `availablePanels` 里，`activateDefaultPanels:1396-1400`
-/// 会把 `enabledPanelIds` 补成默认集合——本仓的默认集合就是六页全开。
+/// 会把 `enabledPanelIds` 补成默认集合——本仓的默认集合就是五页全开。
+/// 【2026-11-24】原第六页 `execsql`（本仓独有的「执行SQL」页）已删除，见
+/// `rds-result-panel` 的 `RightTab::ALL` 注释与基线文档 §25。
 fn default_result_open_tabs() -> String {
-    "browser,value,stats,group,reference,execsql".to_string()
+    "browser,value,stats,group,reference".to_string()
 }

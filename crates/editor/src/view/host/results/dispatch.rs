@@ -4,7 +4,7 @@
 //! 跨域互调经 `pub(crate)` 方法；字段在 mod.rs 统一 `pub(crate)`。
 
 use super::super::*;
-use result_panel::ports::{ResultRequest, RightTab};
+use result_panel::ports::ResultRequest;
 
 impl EditorHostPanel {
     /// 处理中可能**再入队**（如 `SetPushdown` 打开且有词 → 面板入队 `PushdownFilter`），
@@ -428,14 +428,12 @@ impl EditorHostPanel {
             ResultRequest::SetRightTab(tab) => {
                 self.result_panel
                     .update(cx, |p, cx| p.set_right_tab(tab, cx));
-                // 【引用页】切到该页签即读外键（DBeaver `activatePanel` → `refresh(false)`
-                // 每次激活都刷新，`ReferencesPanel.java:133-136`）：面板置 `Loading` +
-                // 入队 `LoadReferences`，真正的元数据查询在本文件的 `load_references` 里
-                // 走后台任务（UI 线程不 await）。
-                if tab == RightTab::Reference {
-                    self.result_panel
-                        .update(cx, |p, cx| p.begin_references_load(cx));
-                }
+                // 【引用页 · 已置灰 2026-11-24】原实现在切到该页时置 `Loading` + 入队
+                // `LoadReferences`（对齐 `ReferencesPanel.java:133-136` 的 `refresh(false)`）。
+                // 该页当前是占位（结果集面板 §25 / Q36-A：引用行要内嵌结果集才成立），
+                // 取回来也看不到，所以这里不再触发——省掉一次白跑的元数据查询。
+                // 接线时把下面这段恢复即可（`begin_references_load` 与 `load_references` 都还在）：
+                //   if tab == RightTab::Reference { p.begin_references_load(cx); }
             }
             // 【右栏】面板开/关语义（右缘竖条图标 / 视图菜单页项）：该页**开着且整栏可见**就
             // 关掉这一页，否则打开并切到该页。对齐 DBeaver `ResultSetHandlerTogglePanel`
@@ -454,10 +452,7 @@ impl EditorHostPanel {
                 if switched || changed {
                     self.persist_result_open_tabs(cx);
                 }
-                if switched && tab == RightTab::Reference {
-                    self.result_panel
-                        .update(cx, |p, cx| p.begin_references_load(cx));
-                }
+                // 【引用页 · 已置灰】切到该页不触发取数（理由同 `SetRightTab` 分支）
             }
             // 【右栏】关掉这一页（其余页保留）：纯面板状态，宿主只转发。
             // 对齐 DBeaver `CTabItem(panelFolder, SWT.CLOSE)` + `enabledPanelIds` 移除语义。
@@ -481,14 +476,23 @@ impl EditorHostPanel {
                     .update(cx, |p, cx| p.open_right_tab(tab, cx));
                 // 【右栏页签持久化】重开一页同样落盘（与 × 的移除共用同一份集合）
                 self.persist_result_open_tabs(cx);
-                if tab == RightTab::Reference {
-                    self.result_panel
-                        .update(cx, |p, cx| p.begin_references_load(cx));
-                }
+                // 【引用页 · 已置灰】切到该页不触发取数（理由同 `SetRightTab` 分支）
             }
             // 【值详情页】在外部程序中打开当前值（临时文件 + 系统默认程序）
             ResultRequest::OpenValueExternally => {
                 self.open_selected_value_externally(cx);
+            }
+            // 【洞察心智提醒 2026-11-24】列头右键「洞察此列」先确认再动手（拍板 Q37-A）。
+            //
+            // 钩子侧只有 `&mut App`（开不了对话框），所以那一按只是把请求入队到这里；
+            // 这里握着 window，先把「数据会取样进分析库临时表」说清，确认后才走原路径
+            // （[`Self::insight_column`] → 宿主端口 → 洞察面板）。取消 = 什么都不做。
+            ResultRequest::RequestInsightColumn(column) => {
+                let entity = cx.entity();
+                let for_confirm = column.clone();
+                dialogs::open_insight_confirm(window, cx, for_confirm.clone(), move |_window, cx| {
+                    entity.update(cx, |panel, cx| panel.insight_column(&for_confirm, cx));
+                });
             }
             // 【引用页】宿主侧取外键（面板只交 schema / 表 / 可见列）
             ResultRequest::LoadReferences {

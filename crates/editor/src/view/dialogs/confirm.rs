@@ -79,6 +79,58 @@ pub fn open_close_confirm(
     });
 }
 
+/// 洞察入口确认（“数据会被取样写进分析库的临时表”）——2026-11-24 拍板 Q37-A。
+///
+/// 为什么值得挡一下：洞察不是「再跑一遍查询看看」，它**会在分析库里建一张临时表**、
+/// 把这份结果的行走样取样写进去（结果集侧 `create_duckdb_temp_table`，见
+/// `crates/editor/src/ports/result_service.rs:13-18` 的交界说明）。源库那边什么都不会变，
+/// 但分析库里多出一张表——这件事必须在按下去之前说清，否则用户不知道数据去了哪。
+pub fn open_insight_confirm(
+    window: &mut Window,
+    cx: &mut App,
+    column: impl Into<SharedString>,
+    on_confirm: impl Fn(&mut Window, &mut App) + 'static,
+) {
+    let column = column.into();
+    let on_confirm = Rc::new(on_confirm);
+
+    window.open_dialog(cx, move |dialog, _window, cx| {
+        let muted = cx.theme().colors.muted_foreground;
+
+        let body = div()
+            .v_flex()
+            .w_full()
+            .gap_2()
+            .text_sm()
+            .child(SharedString::from(format!("要洞察「{column}」这一列。")))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(
+                        "洞察会在分析库里建一张临时表：这份结果的行会被取样写进去再分析，\
+                         源库不受影响。确认后打开右侧洞察面板。",
+                    ),
+            );
+
+        let cancel = action_button(
+            "insight-cancel",
+            "取消",
+            ButtonVariant::Ghost,
+            move |_window, _cx| {},
+        );
+        let confirm = action_button("insight-confirm", "进入洞察", ButtonVariant::Primary, {
+            let on_confirm = on_confirm.clone();
+            move |window, cx| on_confirm(window, cx)
+        });
+
+        dialog
+            .title("进入洞察")
+            .child(body)
+            .footer(DialogFooter::new().child(cancel).child(confirm))
+    });
+}
+
 /// 保存失败后的二次确认（原因必须显示出来：用户要能据此决定重试还是换路径）
 pub fn open_save_failure_confirm(
     window: &mut Window,

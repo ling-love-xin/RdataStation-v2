@@ -754,7 +754,7 @@ impl ResultPanel {
     /// 【右栏】注入已启用的页集合（宿主在创建后按偏好 `result_panel.open_tabs` 调用）。
     ///
     /// 入参按**规范序**归一：只收已知页、重复丢弃、顺序按 [`RightTab::ALL`]；
-    /// 结果为空 = 「偏好里没写过 / 被关空」→ 保持现状（出厂六页全开），对齐 DBeaver
+    /// 结果为空 = 「偏好里没写过 / 被关空」→ 保持现状（出厂五页全开），对齐 DBeaver
     /// `activateDefaultPanels:1396-1400`（先把空的 id 清掉再补默认面板，所以空集在那边
     /// 也等于「恢复默认」）。当前页不在新集合里时落到集合第一页。
     pub fn set_open_tabs_initial(&mut self, tabs: &[RightTab], cx: &mut Context<Self>) {
@@ -1556,15 +1556,14 @@ impl ResultPanel {
         }
     }
 
-    /// 【1.2】筛选框运行后宿主写入 wrapped SQL（执行完成后），并切到「执行SQL」页签    /// （右栏收起时自动展开——用户要在右侧栏看到执行 SQL）
+    /// 【1.2】筛选框运行后宿主写入 wrapped SQL（执行完成后）。
+    ///
+    /// 【2026-11-24 页签收口】原实现会切到「执行SQL」页签、并在右栏收起时强制展开；
+    /// 该页签已删（DBeaver 右栏五面板里没有对应物），SQL 改为常驻**筛选栏展开区**
+    /// （`sidebars.rs::render_filter_expand_bar`：点 ▶ 生成的那句就显示在那里，可弹全文 / 复制）。
+    /// 因此这里只存文本、不切页、也不再强开右栏。
     pub fn set_exec_sql(&mut self, sql: Option<String>, cx: &mut Context<Self>) {
         self.exec_sql = sql;
-        self.right_tab = RightTab::ExecSql;
-        if !self.show_value_sidebar {
-            self.edge_bar_visible = true;
-            self.show_value_sidebar = true;
-            self.right_sidebar_epoch = self.right_sidebar_epoch.wrapping_add(1);
-        }
         cx.notify();
     }
 
@@ -1573,7 +1572,7 @@ impl ResultPanel {
     /// 对齐 `ResultSetViewer.showPanels:1478-1518`：展开路径带 `showDefaults=true`，
     /// 于是 `:1493-1496` 先 `activateDefaultPanels(getPresentationSettings())` 再放开 sash——
     /// 「面板被关光过一次」不会让页签夹继续空着，重新显示一定有页可显示。
-    /// 本仓默认集合 = 出厂六页（`right_tabs()`；宿主注入的偏好集合走
+    /// 本仓默认集合 = 出厂五页（`right_tabs()`；宿主注入的偏好集合走
     /// `set_open_tabs_initial`）。**只在空集时补**，非空的自定义集合原样保留。
     fn restore_default_tabs_when_empty(&mut self) {
         if !self.open_tabs.is_empty() {
@@ -2845,7 +2844,7 @@ impl ResultPanel {
 /// 生成（`:1559-1588`）：全部面板的 CHECK 条目 → 分隔 → `CMD_TOGGLE_MAXIMIZE` →
 /// `CMD_ACTIVATE_PANELS` → 分隔 → `CMD_TOGGLE_PANELS`（面板总开关）→ `CMD_TOGGLE_LAYOUT`。
 ///
-/// 顺序照 `fillPanelsMenu`（`ResultSetViewer.java:1559-1588`）：六页 → 分隔 →
+/// 顺序照 `fillPanelsMenu`（`ResultSetViewer.java:1559-1588`）：五页 → 分隔 →
 /// `CMD_TOGGLE_MAXIMIZE` → `CMD_ACTIVATE_PANELS` → 分隔 → `CMD_TOGGLE_PANELS` → `CMD_TOGGLE_LAYOUT`。
 ///
 /// 本仓口径「能力没有就不摆」：`ACTIVATE_PANELS`（把焦点交给面板）还没有落地端口，故不列
@@ -2889,19 +2888,18 @@ pub(crate) fn saved_filter_applies(
     sql.trim() == saved.sql.trim()
 }
 
-/// 右栏六页的**规范顺序**（页签条的左右顺序 / 索引映射 / 视图菜单条目共用一份）。
+/// 右栏五页的**规范顺序**（页签条的左右顺序 / 索引映射 / 视图菜单条目共用一份）。
 ///
 /// 对齐 DBeaver 的 `CTabFolder panelFolder`（`ResultSetViewer.java:1430-1478`）：右栏是**一个**
-/// 页签夹，六页都作为页签常驻在里面（`addPanel` 里 `new CTabItem(panelFolder, SWT.CLOSE)`），
-/// 点页签即 `setActivePanel`；顺序就是 `availablePanels` 的注册顺序。
-pub(crate) fn right_tabs() -> [RightTab; 6] {
+/// 页签夹，五页都作为页签常驻在里面（`addPanel` 里 `new CTabItem(panelFolder, SWT.CLOSE)`），
+/// 点页签即 `setActivePanel`；顺序就是 `availablePanels` 的注册顺序（`:1003-1080`）。
+pub(crate) fn right_tabs() -> [RightTab; 5] {
     [
         RightTab::Browser,
         RightTab::Value,
         RightTab::Stats,
         RightTab::Group,
         RightTab::Reference,
-        RightTab::ExecSql,
     ]
 }
 
@@ -2940,7 +2938,6 @@ pub(crate) fn tab_close_selector(tab: RightTab) -> &'static str {
         RightTab::Stats => "editor-result-right-tab-close-stats",
         RightTab::Group => "editor-result-right-tab-close-group",
         RightTab::Reference => "editor-result-right-tab-close-reference",
-        RightTab::ExecSql => "editor-result-right-tab-close-execsql",
     }
 }
 
@@ -2969,7 +2966,7 @@ pub(crate) fn neighbor_after_close(remaining: &[RightTab], closed: RightTab) -> 
 }
 
 /// 「视图菜单」条目清单（顺序照 `fillPanelsMenu:1559-1588`）：
-/// 六页 → 分隔 → 最大化 → 分隔 → 面板总开关 → 布局方向
+/// 五页 → 分隔 → 最大化 → 分隔 → 面板总开关 → 布局方向
 pub(crate) fn panel_view_menu_items() -> Vec<PanelViewItem> {
     let mut items: Vec<PanelViewItem> = right_tabs()
         .into_iter()
@@ -2994,7 +2991,6 @@ pub(crate) fn right_tab_label(tab: RightTab) -> &'static str {
         RightTab::Stats => "计算",
         RightTab::Group => "分组",
         RightTab::Reference => "引用",
-        RightTab::ExecSql => "执行SQL",
     }
 }
 
@@ -3006,19 +3002,17 @@ pub(crate) fn right_tab_icon(tab: RightTab) -> IconName {
         RightTab::Stats => IconName::Sigma,
         RightTab::Group => IconName::Funnel,
         RightTab::Reference => IconName::Link,
-        RightTab::ExecSql => IconName::Braces,
     }
 }
 
 /// 右栏页签的**提示文案**（对齐 DBeaver `addPanel` 里
 /// `panelTab.setToolTipText(panelDescriptor.getDescription())`，`ResultSetViewer.java:1361`）。
 ///
-/// 前五条按 `OSGI-INF/l10n/bundle.properties:15-24` 的 `panel.*.description` 逐条译：
+/// 五条按 `OSGI-INF/l10n/bundle.properties:15-24` 的 `panel.*.description` 逐条译：
 /// `value-view` = Results cell value viewer、`column-aggregate` = Result cells calculations
 /// (SUM, MAX, AVG, etc)、`results-metadata` = ResultSet metadata description、
 /// `results-grouping` = Results grouping (GROUP BY)、
 /// `results-references` = One or more rows referencing current row(-s)。
-/// 「执行SQL」是本仓独有页（DBeaver 无对应面板），按本仓实能做描述。
 pub(crate) fn right_tab_description(tab: RightTab) -> &'static str {
     match tab {
         RightTab::Browser => "结果集元数据说明（列清单 / 类型 / 注释，可筛可搜索）",
@@ -3026,7 +3020,6 @@ pub(crate) fn right_tab_description(tab: RightTab) -> &'static str {
         RightTab::Stats => "结果单元格计算（非空 / NULL / 最小 / 最大 / 均值 / 合计）",
         RightTab::Group => "结果分组（按选中列做 GROUP BY 计数）",
         RightTab::Reference => "引用当前行的其他行（外键清单 / 查看引用行）",
-        RightTab::ExecSql => "面板内 SQL 草稿与执行入口",
     }
 }
 

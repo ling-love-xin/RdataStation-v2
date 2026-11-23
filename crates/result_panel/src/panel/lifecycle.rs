@@ -364,8 +364,8 @@ impl ResultPanel {
             filter_backfill: None,
             presentation: Presentation::Grid,
             right_tab: RightTab::Browser,
-            // 出厂 = 六页全开（DBeaver `activateDefaultPanels` 会补默认面板；
-            // 本仓的六页一直可用，初值取规范序全集）
+            // 出厂 = 五页全开（DBeaver `activateDefaultPanels` 会补默认面板；
+            // 本仓的五页一直可用，初值取规范序全集）
             open_tabs: super::events::right_tabs().to_vec(),
             // 【引用页】清单未读（切到该页签时宿主才去取外键）、没有选中键
             references: crate::references::ReferencesState::NotLoaded,

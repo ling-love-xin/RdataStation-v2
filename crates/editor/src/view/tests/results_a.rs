@@ -22,7 +22,11 @@ use super::{
 
 // ===== B5：结果工具栏（复制 / 刷新 / 影响行数 / 截断 / 分栏）=====
 
-/// 有网格就有复制，剪贴板里是与网格一致的 TSV
+/// 剪贴板链条（B5）：把网格那份 TSV 放进剪贴板。
+///
+/// 【T1 2026-11-24】工具栏上的复制钮已按 Q13 裁掉（对齐 DBeaver：它也没有顶部工具栏，
+/// 复制在状态栏 / 快捷键那一支）。能力本身留在 `copy_active_result`，这里只验
+/// 「调它 = 剪贴板拿到与网格一致的 TSV」，并顺手守住「按钮不要再长回工具栏」。
 #[gpui_kit::test]
 fn copying_the_active_result_puts_tsv_on_the_clipboard(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -31,8 +35,8 @@ fn copying_the_active_result_puts_tsv_on_the_clipboard(cx: &mut TestAppContext) 
 
     run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
     assert!(
-        dialog_button_rendered(cx, "editor-result-copy"),
-        "有网格就该有复制入口"
+        !dialog_button_rendered(cx, "editor-result-copy"),
+        "复制钮已从工具栏裁掉（Q13）：入口走状态栏 / 快捷键那一支"
     );
 
     cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.copy_active_result(cx)));
@@ -167,7 +171,7 @@ fn refreshing_reruns_the_selected_result_in_place(cx: &mut TestAppContext) {
     );
 }
 
-/// 写语句：工具栏报影响行数，且不摆复制（没有网格）
+/// 写语句：报影响行数，且不摆复制（没有网格）
 #[gpui_kit::test]
 fn a_write_statement_reports_affected_rows_and_offers_no_copy(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -2036,7 +2040,7 @@ fn f7_and_ctrl_7_toggle_the_result_panels(cx: &mut TestAppContext) {
 /// `activatePanel(id, true, true)`（整栏收起时顺带展开，并切到该页）。
 ///
 /// 断言口径照上游那两个分支：
-/// ① 出厂六页全开 → `CTRL+ALT+F2`（值详情）先**关掉那一页**，整栏仍在、页签少一页；
+/// ① 出厂五页全开 → `CTRL+ALT+F2`（值详情）先**关掉那一页**，整栏仍在、页签少一页；
 /// ② 同一键再按 → 重新启用并切到该页；
 /// ③ 关掉**当前页** → 当前页落到规范序里的下一页；
 /// ④ 整栏收起（`F7`）之后按任一页 → 展开并切到该页（`activatePanel` 的 `showPanels` 分支），
@@ -2080,7 +2084,7 @@ fn ctrl_alt_f2_to_f6_toggle_the_right_panels(cx: &mut TestAppContext) {
         })
     };
 
-    // 前提：出厂六页全开、当前页是列浏览器（`RightTab::ALL` 首项）
+    // 前提：出厂五页全开、当前页是列浏览器（`RightTab::ALL` 首项）
     assert_eq!(
         tabs(cx),
         vec![
@@ -2089,9 +2093,8 @@ fn ctrl_alt_f2_to_f6_toggle_the_right_panels(cx: &mut TestAppContext) {
             RightTab::Stats,
             RightTab::Group,
             RightTab::Reference,
-            RightTab::ExecSql,
         ],
-        "前提：出厂六页全开"
+        "前提：出厂五页全开"
     );
     assert_eq!(active(cx), RightTab::Browser, "前提：出厂当前页是列浏览器");
 
@@ -2116,7 +2119,6 @@ fn ctrl_alt_f2_to_f6_toggle_the_right_panels(cx: &mut TestAppContext) {
             RightTab::Stats,
             RightTab::Group,
             RightTab::Reference,
-            RightTab::ExecSql,
         ],
         "再按一次应把值详情按规范序插回"
     );
@@ -2139,7 +2141,6 @@ fn ctrl_alt_f2_to_f6_toggle_the_right_panels(cx: &mut TestAppContext) {
             RightTab::Stats,
             RightTab::Group,
             RightTab::Reference,
-            RightTab::ExecSql,
         ]
     );
     assert_eq!(active(cx), RightTab::Value);
@@ -2164,7 +2165,7 @@ fn ctrl_alt_f2_to_f6_toggle_the_right_panels(cx: &mut TestAppContext) {
     assert!(!tabs(cx).contains(&RightTab::Stats), "CTRL+ALT+F6 应关掉计算页");
     assert_eq!(
         tabs(cx),
-        vec![RightTab::Value, RightTab::Reference, RightTab::ExecSql]
+        vec![RightTab::Value, RightTab::Reference]
     );
 
     // `CTRL+ALT+F3`（results-references）→ 关掉引用页；再按一次 → 开回来并切过去
@@ -2174,7 +2175,7 @@ fn ctrl_alt_f2_to_f6_toggle_the_right_panels(cx: &mut TestAppContext) {
         !tabs(cx).contains(&RightTab::Reference),
         "CTRL+ALT+F3 应关掉引用页"
     );
-    assert_eq!(tabs(cx), vec![RightTab::Value, RightTab::ExecSql]);
+    assert_eq!(tabs(cx), vec![RightTab::Value]);
     cx.simulate_keystrokes("ctrl-alt-f3");
     cx.run_until_parked();
     assert!(tabs(cx).contains(&RightTab::Reference), "再按应开回引用页");

@@ -254,7 +254,7 @@ pub enum Slot {
     /// 重复分组（组内行数 > 1，默认 false）。
     ResultPanelGroupDuplicatesOnly,
     /// 【右栏页签持久化，对齐 DBeaver `PresentationSettings.enabledPanelIds`】右栏启用了哪些页
-    /// （逗号分隔 id；空 = 没写过 → 六页全开）。
+    /// （逗号分隔 id；空 = 没写过 → 五页全开）。
     ResultPanelOpenTabs,
     /// 【类型样式】数字显示格式（raw / grouped / fixed2 / scientific）。
     ResultPanelNumberFormat,

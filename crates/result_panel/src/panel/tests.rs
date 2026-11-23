@@ -385,11 +385,11 @@ fn column_browser_filter_clears_on_escape(cx: &mut gpui_kit::TestAppContext) {
 }
 
 /// 页签顺序 / 下标映射（`events::right_tabs` 单一来源）：全集下
-/// 0=列浏览器（默认）/ 1=值详情 / 2=计算 / 3=分组 / 4=引用 / 5=执行SQL，越界回落默认页；
+/// 0=列浏览器（默认）/ 1=值详情 / 2=计算 / 3=分组 / 4=引用，越界回落默认页；
 /// 反查（枚举 → 下标）与之互逆，页签条 `selected_index` 与点击回调用的是同一份换算
 /// （`strip_index` / `tab_at_strip_index`，作用在「当前已启用集合」上）。
 #[test]
-fn right_tab_index_maps_to_the_six_panel_tabs() {
+fn right_tab_index_maps_to_the_five_panel_tabs() {
     use super::events::{right_tabs, strip_index, tab_at_strip_index};
 
     let all = right_tabs();
@@ -398,7 +398,6 @@ fn right_tab_index_maps_to_the_six_panel_tabs() {
     assert_eq!(tab_at_strip_index(&all, 2), RightTab::Stats);
     assert_eq!(tab_at_strip_index(&all, 3), RightTab::Group);
     assert_eq!(tab_at_strip_index(&all, 4), RightTab::Reference);
-    assert_eq!(tab_at_strip_index(&all, 5), RightTab::ExecSql);
     assert_eq!(tab_at_strip_index(&all, 99), RightTab::Browser);
 
     // 互逆：每个页签既是自己的下标对应的枚举，下标也唯一
@@ -430,15 +429,15 @@ fn close_right_tab_drops_one_page_and_reopen_restores_order(
         all.iter().copied().filter(|t| *t != RightTab::Stats).collect();
     assert_eq!(neighbor_after_close(&without_stats, RightTab::Stats), RightTab::Group);
     let only_tail = [RightTab::Browser, RightTab::Value];
-    assert_eq!(neighbor_after_close(&only_tail, RightTab::ExecSql), RightTab::Value);
+    assert_eq!(neighbor_after_close(&only_tail, RightTab::Reference), RightTab::Value);
 
-    // 面板态：出厂六页全开
+    // 面板态：出厂五页全开
     cx.update(gpui_kit::init);
     let (panel, cx) = panel_harness(cx);
     assert_eq!(
         panel.read_with(cx, |p, _| p.open_tabs().to_vec()),
         right_tabs().to_vec(),
-        "出厂应是六页全开"
+        "出厂应是五页全开"
     );
 
     // 关「计算」页（当前页是列浏览器 → 当前页不变，只少一项）
@@ -446,7 +445,7 @@ fn close_right_tab_drops_one_page_and_reopen_restores_order(
         panel.update(app, |p, cx| p.close_right_tab(RightTab::Stats, cx))
     });
     let open = panel.read_with(cx, |p, _| p.open_tabs().to_vec());
-    assert_eq!(open.len(), 5);
+    assert_eq!(open.len(), 4);
     assert!(!open.contains(&RightTab::Stats));
     assert_eq!(
         panel.read_with(cx, |p, _| p.right_tab),
@@ -475,7 +474,6 @@ fn close_right_tab_drops_one_page_and_reopen_restores_order(
             RightTab::Value,
             RightTab::Stats,
             RightTab::Reference,
-            RightTab::ExecSql
         ],
         "重开应按规范序插回原位"
     );
@@ -543,12 +541,12 @@ fn toggling_the_sidebar_keeps_a_custom_tab_set(cx: &mut gpui_kit::TestAppContext
     cx.update(gpui_kit::init);
     let (panel, cx) = panel_harness(cx);
 
-    // 关掉「列浏览器」→ 五页
+    // 关掉「列浏览器」→ 四页
     cx.update(|_, app| {
         panel.update(app, |p, cx| p.close_right_tab(RightTab::Browser, cx))
     });
     let custom = panel.read_with(cx, |p, _| p.open_tabs().to_vec());
-    assert_eq!(custom.len(), 5);
+    assert_eq!(custom.len(), 4);
 
     // 状态栏三态开关：宽展开 → 收起 → 窄展开 → 宽展开（每次都经过收起再回来）
     cx.update(|_, app| panel.update(app, |p, cx| p.toggle_value_sidebar(cx)));
@@ -1420,7 +1418,7 @@ fn clear_group_columns_drops_explicit_selection(cx: &mut gpui_kit::TestAppContex
 }
 
 /// 【值页空态】形态对齐 DBeaver `ValueViewerPanel.createContents:89-106`：空态是**两行**
-/// （选值提示 + 收起面板提示），且页内工具条仍在（六页同形）。
+/// （选值提示 + 收起面板提示），且页内工具条仍在（五页同形）。
 #[gpui_kit::test]
 fn value_page_empty_state_shows_two_hint_lines_with_toolbar(
     cx: &mut gpui_kit::TestAppContext,
@@ -1453,7 +1451,7 @@ fn value_page_empty_state_shows_two_hint_lines_with_toolbar(
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(
         cx.debug_bounds("editor-result-value-toolbar").is_some(),
-        "值页空态也要保留页内工具条（六页同形）"
+        "值页空态也要保留页内工具条（五页同形）"
     );
     assert!(
         cx.debug_bounds("editor-result-empty-page").is_some(),
@@ -1550,7 +1548,7 @@ fn panel_toolbar_puts_actions_left_and_view_menu_right(
     cx.update(gpui_kit::init);
     let (panel, cx) = panel_harness(cx);
 
-    // 纯函数层：六页里只有值详情页需要那条水平分隔线
+    // 纯函数层：五页里只有值详情页需要那条水平分隔线
     {
         use super::events::{page_needs_separator, right_tabs};
         let flagged: Vec<RightTab> = right_tabs()
@@ -2447,20 +2445,8 @@ fn right_panel_pages_share_the_toolbar_shape(cx: &mut gpui_kit::TestAppContext) 
         assert!(visible(id, cx), "分组页元素 {id} 应渲染可见");
     }
 
-    // 3) 执行SQL：工具条 + 复制
-    cx.update(|_, app| {
-        panel.update(app, |p, cx| {
-            p.exec_sql = Some("select 1 as n".to_string());
-            p.set_right_tab(RightTab::ExecSql, cx);
-        })
-    });
-    cx.update(|window, cx| window.draw(cx).clear(cx));
-    for id in [
-        "editor-result-exec-sql-toolbar",
-        "editor-result-exec-sql-copy",
-    ] {
-        assert!(visible(id, cx), "执行SQL页元素 {id} 应渲染可见");
-    }
+    // 3) 原「执行SQL」页已删除（DBeaver 右栏无该面板）：那句 SQL 改由筛选栏展开区承载，
+    //    形态断言见 `executed_sql_shows_in_the_filter_expand_bar`。
 
     // 4) 引用：此前整页只有空态、没有工具条 → 切到本页正文会顶到页签条下方
     cx.update(|_, app| {
@@ -2477,7 +2463,7 @@ fn right_panel_pages_share_the_toolbar_shape(cx: &mut gpui_kit::TestAppContext) 
         "引用页工具条应与其它页同高 28px，实际 {reference_toolbar_h}px"
     );
 
-    // 5) 空态也保留工具条：六页同形（此前空态直接返回居中文字，比其它页高 28px）
+    // 5) 空态也保留工具条：五页同形（此前空态直接返回居中文字，比其它页高 28px）
     cx.update(|_, app| {
         panel.update(app, |p, cx| {
             p.selection_pos = None;
@@ -2893,7 +2879,7 @@ fn edge_bar_tooltip_reports_the_toggle_action() {
 fn right_tab_ids_round_trip() {
     use crate::ports::RightTab;
 
-    assert_eq!(RightTab::ALL.len(), 6);
+    assert_eq!(RightTab::ALL.len(), 5);
     for (index, tab) in RightTab::ALL.into_iter().enumerate() {
         assert_eq!(RightTab::parse(tab.id()), Some(tab), "{} 的 id 应可回读", tab.id());
         // 规范序与 id 表逐项对齐（顺序变了说明两边有一处没同步）
@@ -2904,7 +2890,7 @@ fn right_tab_ids_round_trip() {
     assert_eq!(RightTab::parse(""), None);
 }
 
-/// 【右栏页签持久化】偏好注入：按规范序归一、去重、未知丢弃；空集合保持出厂六页全开；
+/// 【右栏页签持久化】偏好注入：按规范序归一、去重、未知丢弃；空集合保持出厂五页全开；
 /// 当前页落在被关掉的页上时改落到集合第一页。
 #[gpui_kit::test]
 fn open_tabs_initial_normalizes_and_keeps_defaults(cx: &mut gpui_kit::TestAppContext) {
@@ -2928,7 +2914,7 @@ fn open_tabs_initial_normalizes_and_keeps_defaults(cx: &mut gpui_kit::TestAppCon
         "应去重并按规范序排"
     );
 
-    // 空集合 / 全未知：保持现状（出厂六页全开，对齐 activateDefaultPanels 的补默认）
+    // 空集合 / 全未知：保持现状（出厂五页全开，对齐 activateDefaultPanels 的补默认）
     cx.update(|_, app| panel.update(app, |p, cx| p.set_open_tabs_initial(&[], cx)));
     assert_eq!(panel.read_with(cx, |p, _| p.open_tabs().to_vec()).len(), 2);
 
@@ -2936,13 +2922,13 @@ fn open_tabs_initial_normalizes_and_keeps_defaults(cx: &mut gpui_kit::TestAppCon
     cx.update(|_, app| {
         panel.update(app, |p, cx| {
             p.set_right_tab(RightTab::Stats, cx);
-            p.set_open_tabs_initial(&[RightTab::Value, RightTab::ExecSql], cx);
+            p.set_open_tabs_initial(&[RightTab::Value, RightTab::Reference], cx);
         })
     });
     assert_eq!(panel.read_with(cx, |p, _| p.right_tab), RightTab::Value);
     assert_eq!(
         panel.read_with(cx, |p, _| p.open_tabs().to_vec()),
-        vec![RightTab::Value, RightTab::ExecSql]
+        vec![RightTab::Value, RightTab::Reference]
     );
 }
 
@@ -3057,7 +3043,7 @@ fn right_tab_close_button_closes_only_that_page(cx: &mut gpui_kit::TestAppContex
     );
 }
 
-/// 【页签条】六页的 × 选择器必须互不相同（共用 id 会让 `debug_bounds` 只命中第一个，
+/// 【页签条】五页的 × 选择器必须互不相同（共用 id 会让 `debug_bounds` 只命中第一个，
 /// 并且重复 id 在 a11y 上有已知风险）。
 #[test]
 fn right_tab_close_selectors_are_distinct() {
@@ -3069,7 +3055,6 @@ fn right_tab_close_selectors_are_distinct() {
         RightTab::Stats,
         RightTab::Group,
         RightTab::Reference,
-        RightTab::ExecSql,
     ]
     .into_iter()
     .map(super::events::tab_close_selector)
@@ -3120,6 +3105,36 @@ fn closing_the_last_edge_tab_collapses_the_bar(cx: &mut gpui_kit::TestAppContext
     assert!(switched);
     assert!(cx.update(|_, app| panel.read(app).panels_visible()));
     assert_eq!(cx.update(|_, app| panel.read(app).right_tab), RightTab::Stats);
+}
+
+/// 【页签重排 2026-11-24】`move_right_tab` 只搬 `open_tabs` 的元素顺序
+/// （对齐 DBeaver `TabFolderReorder(panelFolder)`，`ResultSetViewer.java:360`）。
+/// 下标是**页签条位置**；当前页与集合大小都不该被重排影响。
+#[gpui_kit::test]
+fn moving_a_right_tab_reorders_only_the_strip(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    let before = panel.read_with(cx, |p, _| p.open_tabs().to_vec());
+    assert_eq!(before.len(), 5, "默认五页全开");
+
+    // 把第 3 个（下标 2）拖到最左（0）
+    let moved = before[2];
+    cx.update(|_, app| panel.update(app, |p, cx| p.move_right_tab(2, 0, cx)));
+    let mut expected = before.clone();
+    expected.remove(2);
+    expected.insert(0, moved);
+    assert_eq!(panel.read_with(cx, |p, _| p.open_tabs().to_vec()), expected);
+
+    // 当前页不被重排影响；越界 = no-op
+    let current_before = cx.update(|_, app| panel.read(app).right_tab);
+    cx.update(|_, app| panel.update(app, |p, cx| p.move_right_tab(0, 9, cx)));
+    assert_eq!(cx.update(|_, app| panel.read(app).right_tab), current_before);
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.open_tabs().len()),
+        5,
+        "越界请求不得改变集合大小"
+    );
 }
 
 /// 【右缘竖条】点已被 × 关掉的页 = 先重新启用它再切过去（竖条列的是全集）。
@@ -3390,7 +3405,7 @@ fn stats_copy_all_text_joins_function_equals_value() {
     assert_eq!(stats_copy_all_text(&[]), "");
 }
 
-/// 【页签提示】六页各有一条非空、互不重复的提示文案（对齐 DBeaver 面板描述：
+/// 【页签提示】五页各有一条非空、互不重复的提示文案（对齐 DBeaver 面板描述：
 /// 页签只有图标 + 短名，靠 tooltip 说清这页做什么）。
 #[test]
 fn right_tab_descriptions_are_distinct_and_non_empty() {
@@ -3406,7 +3421,7 @@ fn right_tab_descriptions_are_distinct_and_non_empty() {
         );
         seen.push(description);
     }
-    assert_eq!(seen.len(), 6, "六页各一条提示");
+    assert_eq!(seen.len(), 5, "五页各一条提示");
 }
 
 /// 【值页动作可用性】「保存值到文件」的判据（对齐 DBeaver `!content.isNull()` 才贡献
@@ -4493,7 +4508,7 @@ fn history_buttons_sit_in_the_filter_row_and_gate_on_position(cx: &mut gpui_kit:
 /// 不列），其余每一项都有真请求落点。
 ///
 /// 这里钉三件事：① 菜单条目顺序（纯函数）；② 条目文案随状态报「点了会做什么」；
-/// ③ 六页的页内工具条都真的挂上了这颗按钮（`PopupMenu` 内部不可读，形态断言走纯函数）。
+/// ③ 五页的页内工具条都真的挂上了这颗按钮（`PopupMenu` 内部不可读，形态断言走纯函数）。
 #[gpui_kit::test]
 fn right_panel_view_menu_lists_pages_then_the_two_toggles(cx: &mut gpui_kit::TestAppContext) {
     use gpui_kit::test::TestWindowExt as _;
@@ -4501,7 +4516,7 @@ fn right_panel_view_menu_lists_pages_then_the_two_toggles(cx: &mut gpui_kit::Tes
 
     cx.update(gpui_kit::init);
 
-    // ① 条目顺序：六页 → 分隔 → 最大化 → 分隔 → 面板总开关 → 布局方向
+    // ① 条目顺序：五页 → 分隔 → 最大化 → 分隔 → 面板总开关 → 布局方向
     //    （对齐 DBeaver `fillPanelsMenu:1559-1588` 的两条分隔线段位）
     let items = super::events::panel_view_menu_items();
     let pages: Vec<RightTab> = items
@@ -4519,16 +4534,15 @@ fn right_panel_view_menu_lists_pages_then_the_two_toggles(cx: &mut gpui_kit::Tes
             RightTab::Stats,
             RightTab::Group,
             RightTab::Reference,
-            RightTab::ExecSql,
         ],
         "面板勾选项的顺序应与竖条 / 页签同一份（列浏览器在前）"
     );
-    assert_eq!(items.len(), 11, "六页 + 分隔 + 最大化 + 分隔 + 面板开关 + 布局方向");
-    assert_eq!(items[6], super::events::PanelViewItem::Separator);
-    assert_eq!(items[7], super::events::PanelViewItem::MaximizeToggle);
-    assert_eq!(items[8], super::events::PanelViewItem::Separator);
-    assert_eq!(items[9], super::events::PanelViewItem::PanelsToggle);
-    assert_eq!(items[10], super::events::PanelViewItem::LayoutToggle);
+    assert_eq!(items.len(), 10, "五页 + 分隔 + 最大化 + 分隔 + 面板开关 + 布局方向");
+    assert_eq!(items[5], super::events::PanelViewItem::Separator);
+    assert_eq!(items[6], super::events::PanelViewItem::MaximizeToggle);
+    assert_eq!(items[7], super::events::PanelViewItem::Separator);
+    assert_eq!(items[8], super::events::PanelViewItem::PanelsToggle);
+    assert_eq!(items[9], super::events::PanelViewItem::LayoutToggle);
     // 没有激活面板（`CMD_ACTIVATE_PANELS`）：本仓没有端口，不摆点了没反应的条目
     assert!(
         items
@@ -4574,7 +4588,7 @@ fn right_panel_view_menu_lists_pages_then_the_two_toggles(cx: &mut gpui_kit::Tes
     );
     assert_eq!(label(maximize, true, false, true), "还原结果网格");
 
-    // ③ 六页的页内工具条都挂上了视图菜单（id = `<页工具条 id>-view-menu`）
+    // ③ 五页的页内工具条都挂上了视图菜单（id = `<页工具条 id>-view-menu`）
     let (panel, cx) = panel_harness(cx);
     for (tab, toolbar_id) in [
         (RightTab::Browser, "editor-result-browser-toolbar"),
@@ -4582,7 +4596,6 @@ fn right_panel_view_menu_lists_pages_then_the_two_toggles(cx: &mut gpui_kit::Tes
         (RightTab::Stats, "editor-result-stats-toolbar"),
         (RightTab::Group, "editor-result-group-toolbar"),
         (RightTab::Reference, "editor-result-reference-toolbar"),
-        (RightTab::ExecSql, "editor-result-exec-sql-toolbar"),
     ] {
         cx.update(|_, app| panel.update(app, |p, cx| p.set_right_tab(tab, cx)));
         cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -4595,25 +4608,25 @@ fn right_panel_view_menu_lists_pages_then_the_two_toggles(cx: &mut gpui_kit::Tes
     }
 }
 
-/// 【2026-11-18 侧栏结构对齐】右栏页签条**列出全部六页**且点页签即切页：
+/// 【2026-11-18 侧栏结构对齐】右栏页签条**列出全部五页**且点页签即切页：
 /// DBeaver 的右栏是一个 `CTabFolder panelFolder`（`ResultSetViewer.java:1430-1478`），
-/// 六页都作为页签常驻其中（`addPanel` 里 `new CTabItem(panelFolder, SWT.CLOSE)`），
+/// 五页都作为页签常驻其中（`addPanel` 里 `new CTabItem(panelFolder, SWT.CLOSE)`），
 /// 点页签走 `setActivePanel`。此前本仓横条只显示当前页、`on_click` 是空实现（点了没反应）。
 ///
-/// 断言走**真实像素点击**：把当前页切到最后一个（执行SQL），再点页签行最左侧，
-/// 必须切回第一个（列浏览器）——既证明六个页签真的排在这一行里，也证明点击真接了线。
+/// 断言走**真实像素点击**：把当前页切到最后一个（引用），再点页签行最左侧，
+/// 必须切回第一个（列浏览器）——既证明五个页签真的排在这一行里，也证明点击真接了线。
 #[gpui_kit::test]
 fn right_panel_tab_strip_lists_all_panels_and_click_switches(cx: &mut gpui_kit::TestAppContext) {
     cx.update(gpui_kit::init);
     let (panel, cx) = panel_harness(cx);
 
-    // 当前页 = 执行SQL（最后一个页签）
-    cx.update(|_, app| panel.update(app, |p, cx| p.set_right_tab(RightTab::ExecSql, cx)));
+    // 当前页 = 引用（最后一个页签）
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_right_tab(RightTab::Reference, cx)));
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert_eq!(
         cx.update(|_, app| panel.read(app).right_tab),
-        RightTab::ExecSql,
-        "先把当前页切到执行SQL"
+        RightTab::Reference,
+        "先把当前页切到引用"
     );
 
     let bar = cx
@@ -5161,7 +5174,8 @@ fn reference_tab_requests_metadata_and_renders_the_key_list(cx: &mut gpui_kit::T
         other => panic!("应入队 LoadReferences，实际 {other:?}"),
     }
 
-    // 回填一条键并把右栏切到引用页：下拉与「打开目标对象」都要在元素树里
+    // 回填一条键并把右栏切到引用页：该页当前**置灰**（Q36-A），只摆占位说明，
+    // 键下拉与「打开目标对象」都不出现（原形态留在 `render_reference_tab_live` 里）
     cx.update(|_window, app| {
         panel.update(app, |p, cx| {
             p.set_references(
@@ -5178,12 +5192,16 @@ fn reference_tab_requests_metadata_and_renders_the_key_list(cx: &mut gpui_kit::T
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(
-        cx.debug_bounds("editor-result-reference-keys").is_some(),
-        "有键时该渲染只读键下拉"
+        cx.debug_bounds("editor-result-reference-toolbar").is_some(),
+        "置灰也要保留页内工具条（五页同形）"
     );
     assert!(
-        cx.debug_bounds("editor-result-reference-open").is_some(),
-        "有键时该渲染「打开目标对象」"
+        cx.debug_bounds("editor-result-reference-keys").is_none(),
+        "置灰口径：不再渲染只读键下拉"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-reference-open").is_none(),
+        "置灰口径：不再渲染「打开目标对象」"
     );
 }
 
@@ -5267,12 +5285,18 @@ fn reference_rows_use_the_selected_row_values(cx: &mut gpui_kit::TestAppContext)
         other => panic!("应入队 OpenReferenceRows，实际 {other:?}"),
     }
 
-    // 页面上也要有这张票（render 路径与上面同一个函数算可用性）
+    // 页面上：引用页**当前是置灰占位**（2026-11-24 拍板 Q36-A）——页内工具条照旧，
+    // 但正文不画这张票。数据侧（上面 `reference_rows_sql` / `OpenReferenceRows`）
+    // 与 `render_reference_tab_live` 都留着，接线后把占位换回去即可。
     cx.update(|_window, app| panel.update(app, |p, cx| p.set_right_tab(RightTab::Reference, cx)));
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(
-        cx.debug_bounds("editor-result-reference-rows").is_some(),
-        "有键且选中行时该渲染「查看引用行」"
+        cx.debug_bounds("editor-result-reference-toolbar").is_some(),
+        "占位页也要有页内工具条（页签位置保留）"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-reference-rows").is_none(),
+        "置灰期间不渲染「查看引用行」这张票"
     );
 }
 
