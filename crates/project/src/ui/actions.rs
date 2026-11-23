@@ -22,7 +22,9 @@ pub fn create_sample(host: &ProjectUiHost, window: &mut Window, cx: &mut App) {
             "-- RdataStation 示例项目\n-- 在此编写并执行 SQL。\nSELECT 1 AS hello;\n",
         );
     }
-    open_path(host, &path, window, cx);
+    // 走切换语义：无当前项目时等价 request_open，有当前项目时先释放（还锁 + 刷新连接
+    // 作用域）再打开——示例项目按钮在项目中心里同样可见，不能把新锁盖到旧会话上。
+    request_switch(host, &path, window, cx);
 }
 
 /// 打开项目（含未保存拦截 + 锁占用分支）。

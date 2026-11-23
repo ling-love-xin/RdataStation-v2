@@ -36,7 +36,7 @@
 | ② 项目中心覆盖层 | `ui/hub.rs`（`open_project_hub` / `close_project_hub` / `render_project_hub`，body 复用 `render_picker`）；当前项目卡片打「当前」`Tag`（`is_current_project`）；`Ctrl+Shift+P` 由 `request_close` 改 `open_project_hub`，覆盖层挂在 `render_settings` 之前；`ProjectUiState` 加 `hub_open`（8 → 9 字段） | `816c0bf6` |
 | ③ 文档同步 | 原型 §5（8/9 项菜单 + 新增 §5.1 项目中心）、§11（六个子模块 + `ui/hub.rs` 落点）、§13（#13 更新 + 新增 §13.1）、本文、`project-user-guide.md`（§2 / §3.3 / §3.4 项目中心 / §4.5 / §6 / §9）、`README.md`（测试 38 → 48）、接线矩阵（新函数行 + 9 字段 + 行数） | 本提交 |
 | 验证 | `cargo check -p rds-project --all-targets -j 1` 零告警；`cargo test -p rds-project -j 1` = **61 lib**（`ui/tests.rs` 48 = 30 窗口 + 18 纯函数）+ 1 + 5 + 3 全过；`cargo clippy -p rds-project --all-targets -j 1` 仍 2 条基线；`cargo check -p rds-workbench --lib -j 1` 通过；`rustfmt --edition 2024 --check` 干净 | — |
-| 遗留 | 菜单「新建项目…」的真实用处依赖「有项目时新建」这条路径（本轮已接通）；§13 剩余 7 条产品差异仍待逐项拍板，与本轮无关 | §13.1 |
+| 遗留 | 项目中心两件：①**跨项目写命令的只读误拦**——`read_only_blocked` 用当前项目的只读态，卡片 `⋯`（固定 / 归档 / 移出 / 恢复 / 删除）其实作用在别项目，当前项目只读时被误置灰，修法见原型 §13.1；②项目中心是否最终升级为 Dock 常驻 tab（当前覆盖层方案已认可）。另：§13 剩余 7 条产品差异（#4 / #5 / #7 / #8 / #12 / #13 后半 / #17）仍待逐项拍板 | §13.1 |
 
 ### 2026-11-23 — 遗留点清理（五刀：反馈通道 / 文档对齐 / 死字段与状态 / 版本删除 / 结构拆分）
 

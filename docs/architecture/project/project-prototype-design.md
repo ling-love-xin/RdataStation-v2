@@ -393,5 +393,8 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 | `Ctrl+Shift+P` 由 `request_close` 改为 `open_project_hub`，与 `Ctrl+Shift+W` 分工 | `crates/workbench/src/view/render.rs`（`SwitchProject` 处理器）；覆盖层挂在 `render_settings` 之前 |
 | `ProjectUiState` 8 → 9 字段（加 `hub_open`）；`apply_opened` / `do_close` 复位 | `ui.rs`、`ui/actions.rs` |
 | 测试 42 → 48（30 窗口 + 18 纯函数；lib 61） | `ui/tests.rs`（`project_hub_*`、`current_marker_only_for_current_root`） |
+| 示例项目入口改走切换：`create_sample` 末尾由 `open_path` 改 `request_switch`（项目中心里点「从示例项目开始」也不再盖锁） | `ui/actions.rs::create_sample` |
 
 > 仍未做（与设计稿的既有差异，非本轮引入）：标题栏槽**无状态点**（#12）、空态**无按钮**（#17）、卡片缺连接数与版本数（#4）、路径中间省略（#5）、新建对话框宽 448（#7）与其三项复选框缺失（#8）、菜单不显示快捷键（#13 后半）。
+>
+> **已知缺口（本轮随项目中心暴露，未修）**：只读判定 `ui/host.rs::read_only_blocked` 用的是**当前项目**的 `state.read_only`，而项目中心的卡片 `⋯`（固定 / 归档 / 移出列表 / 恢复 / 删除数据）作用在**别的项目**上——当前项目以只读打开时，这些跨项目命令会被同一条守卫置灰并拦下（属误拦）。修法是把判据改成「作用于当前项目才拦」，涉及 `card_menu_entries(item, tab, read_only)` 的入参语义与各动作的守卫分工，留作单独一刀。
