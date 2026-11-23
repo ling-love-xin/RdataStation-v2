@@ -217,6 +217,25 @@ fn clear_result_temp_tables() {
     }
 }
 
+/// 项目切换时的**加源文件视图**清理（铁律 F 组：`f_*` 也得走清场口）。
+///
+/// 加源的文件是挂在**进程单例**上的视图（`f_*`），钉着绝对路径：换项目后这些路径
+/// 指向上一项目的文件，留着就是拿旧项目的文件算新项目的数。与结果集 / mock 两条
+/// 同一纪律——**非阻塞**，拿不到锁留到下次切项目再清。
+///
+/// 只清视图，**不动 ATTACH 进来的库文件**（那是「源」的另一种形态，该不该留由源的
+/// 作用域决定，见 `file_view::clear_file_views`）。
+fn clear_file_views(shared: &Shared) {
+    // 清单也得清：`loaded_files` 是面板自己记的一份登记（实例上删了视图它不会自己少）
+    shared.loaded_files.borrow_mut().clear();
+    match engine::duckdb::file_view::try_clear_file_views_global() {
+        Some(0) => {}
+        Some(count) => tracing::info!("[project] 切项目清掉 {count} 个加源文件视图"),
+        // 拿不到锁：清单已清（面板不再摆上一项目的行），实例上的视图留到下次切项目再清
+        None => tracing::info!("[project] 加源文件视图留待下次切项目清理（内存库锁被占）"),
+    }
+}
+
 /// 打开项目后的宿主刷新：连接列表、选中项、导航缓存与结果归属都归零，
 /// 避免残留上一项目的数据。
 fn refresh_after_open(shared: &Shared, cx: &mut App) {
@@ -232,6 +251,9 @@ fn refresh_after_open(shared: &Shared, cx: &mut App) {
 
     // D54 清场口：结果集临时表（`tmp_q_`）同一理由清掉（链路未接时是空操作）。
     clear_result_temp_tables();
+
+    // 铁律 F 组：加源的文件视图（`f_*`）也钉着上一项目的路径，一并清掉。
+    clear_file_views(shared);
 
     let (conns, notice) =
         crate::services::workspace_loader::load_connections_for_scope(root.as_deref());
@@ -255,7 +277,7 @@ fn refresh_after_open(shared: &Shared, cx: &mut App) {
 mod tests {
     // 显式列举依赖（不要 `use super::*`：父模块的 `use gpui_kit::*` 会跟着进来，
     // `#[gpui_kit::test]` 展开出的裸 `#[test]` 会解析到它自己，无限递归）
-    use super::{Shared, clear_mock_temp_tables, clear_result_temp_tables};
+    use super::{Shared, clear_file_views, clear_mock_temp_tables, clear_result_temp_tables};
     use gpui_kit::TestAppContext;
     use mock::mock_view::{MockColumnSpec, MockRunOptions, MockTableConfig};
     use mock::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale};
@@ -358,5 +380,50 @@ mod tests {
             cleared,
             "切项目后不应再有结果集临时表（D54 清场口）：{table}"
         );
+    }
+
+    /// 视图还在不在（拿不到内存库锁就当作“还在”，让重试循环继续等）
+    fn file_view_alive(alias: &str) -> bool {
+        match engine::duckdb::DuckDBManager::global().try_lock() {
+            Ok(conn) => conn
+                .execute_batch(&format!("SELECT count(*) FROM \"{alias}\""))
+                .is_ok(),
+            Err(_) => true,
+        }
+    }
+
+    /// 项目切换：加源文件视图（`f_*`）跟着清，面板登记也一并清空（铁律 F 组）。
+    ///
+    /// 清理是**非阻塞**的（见 `clear_file_views`），所以按生产语义重试几拍——
+    /// 一次不成就断言失败的话，测的是锁竞争而不是清场口。
+    #[gpui_kit::test]
+    fn project_switch_clears_file_views(_cx: &mut TestAppContext) {
+        let dir = std::env::temp_dir().join(format!("rds_switch_files_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("建目录");
+        let csv = dir.join("orders.csv");
+        std::fs::write(&csv, "id,name\n1,a\n").expect("写 csv");
+        let path = csv.to_str().expect("路径").to_string();
+
+        let shared = Shared::with_connections(Vec::new(), None);
+        let alias = engine::duckdb::file_view::load_file_global(&path).expect("加载");
+        // 面板登记与实例视图是两份：这里模拟“加源之后”的状态
+        shared
+            .loaded_files
+            .borrow_mut()
+            .push((alias.clone(), path.clone()));
+        assert!(file_view_alive(&alias), "前置条件：视图应当已建好");
+
+        let mut cleared = false;
+        for _ in 0..100 {
+            clear_file_views(&shared);
+            if !file_view_alive(&alias) {
+                cleared = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(cleared, "切项目后不应再有加源文件视图：{alias}");
+        assert!(shared.loaded_files.borrow().is_empty(), "面板登记也该清空");
     }
 }

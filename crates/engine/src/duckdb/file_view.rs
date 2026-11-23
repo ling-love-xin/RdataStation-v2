@@ -52,6 +52,58 @@ pub fn load_file(conn: &Connection, path: &str) -> Result<String, CoreError> {
     Ok(alias)
 }
 
+/// 清掉连接上全部**文件视图**（`f_*`），返回清掉的个数。
+///
+/// 只认 `main` schema 里**当前库**的 `VIEW`：挂载进来的数据库文件是 **catalog**
+/// （`ATTACH`，见 [`load_database`]），不在这个清单里——那是「源」，切项目时该不该留
+/// 由源的作用域决定（铁律 B 组），不是这里的事。所以这条只回答"加源进来的文件还在不在"。
+///
+/// 用途：项目切换清场（铁律 F 组）。`f_*` 视图钉着上一项目的文件路径，换项目还留着
+/// 就是拿旧项目的文件算新项目的数。
+pub fn clear_file_views(conn: &Connection) -> Result<usize, CoreError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT table_name FROM information_schema.tables \
+             WHERE table_type = 'VIEW' AND table_schema = 'main' \
+               AND table_catalog = current_database() AND table_name LIKE 'f\\_%' ESCAPE '\\'",
+        )
+        .map_err(|error| {
+            CoreError::common(CommonError::General(format!("列文件视图失败：{error}")))
+        })?;
+    let names: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| {
+            CoreError::common(CommonError::General(format!("列文件视图失败：{error}")))
+        })?
+        .filter_map(Result::ok)
+        .collect();
+    let mut cleared = 0;
+    for name in names {
+        let quoted = name.replace('"', "\"\"");
+        // 单条失败不该挡住其余视图（一张坏了不能连坐整个清场口），记一笔继续
+        match conn.execute_batch(&format!("DROP VIEW IF EXISTS \"{quoted}\"")) {
+            Ok(()) => cleared += 1,
+            Err(error) => tracing::warn!("[duckdb] 删文件视图 {name} 失败: {error}"),
+        }
+    }
+    Ok(cleared)
+}
+
+/// 在**进程单例**上清文件视图，**非阻塞**（`None` = 锁被占，留给下一次）。
+///
+/// 切项目在 UI 线程上跑，后台任务可能正持着内存库连接；排队等锁 = 界面假死到那个
+/// 任务结束（与 mock / 结果集两条清场口同一纪律）。
+pub fn try_clear_file_views_global() -> Option<usize> {
+    let guard = crate::duckdb::manager::DuckDBManager::global().try_lock().ok()?;
+    match clear_file_views(&guard) {
+        Ok(count) => Some(count),
+        Err(error) => {
+            tracing::warn!("[duckdb] 清文件视图失败: {error}");
+            None
+        }
+    }
+}
+
 /// 在进程单例上加载（事件路径调用：首次读文件会有 I/O）
 pub fn load_file_global(path: &str) -> Result<String, CoreError> {
     let conn = crate::duckdb::manager::DuckDBManager::global()
@@ -139,7 +191,7 @@ pub fn list_tables_global(
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
-    use super::{alias_for, is_database_file, load_database, load_database_global, load_file, list_tables_global};
+    use super::{alias_for, clear_file_views, is_database_file, load_database, load_database_global, load_file, list_tables_global};
     use std::path::PathBuf;
 
     fn workdir(tag: &str) -> PathBuf {
@@ -167,6 +219,38 @@ mod tests {
         // 视图建好了就能查：查不存在会报错，这里只看“不报错”
         conn.execute_batch("SELECT count(*) FROM f_orders")
             .expect("视图应能查");
+    }
+
+    /// 清文件视图：删掉 `f_*`，**不动** ATTACH 进来的库文件（铁律 F 组清场口）。
+    ///
+    /// 两件事一次钉住：视图真被删（再查报错）、库文件仍是 catalog 仍可查。
+    #[test]
+    fn clearing_file_views_drops_views_but_spares_attached_catalogs() {
+        let dir = workdir("clear");
+        let csv = dir.join("orders.csv");
+        std::fs::write(&csv, "id,name\n1,a\n").expect("写 csv");
+        let dbfile = dir.join("warehouse.duckdb");
+        {
+            let conn = duckdb::Connection::open(&dbfile).expect("建源库文件");
+            conn.execute_batch("CREATE TABLE facts AS SELECT i AS id FROM range(3) AS r(i)")
+                .expect("建表");
+        }
+
+        let conn = duckdb::Connection::open_in_memory().expect("内存库");
+        let view = load_file(&conn, csv.to_str().expect("路径")).expect("加载");
+        let catalog = load_database(&conn, dbfile.to_str().expect("路径")).expect("挂载");
+        assert_eq!(clear_file_views(&conn).expect("清视图"), 1);
+        assert!(
+            conn.execute_batch(&format!("SELECT count(*) FROM \"{view}\"")).is_err(),
+            "文件视图应当已删：{view}"
+        );
+        assert!(
+            conn.execute_batch(&format!("SELECT count(*) FROM \"{catalog}\".main.facts"))
+                .is_ok(),
+            "库文件是源，不该被这次清场带走：{catalog}"
+        );
+        // 幂等：没有视图可清时就是 0，不报错
+        assert_eq!(clear_file_views(&conn).expect("再清"), 0);
     }
 
     /// 库文件按扩展分流：duckdb / sqlite 是库（ATTACH），csv 是数据（视图）
