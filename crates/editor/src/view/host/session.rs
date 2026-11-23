@@ -206,8 +206,8 @@ impl EditorHostPanel {
                 None => Some("会话 默认会话".to_string()),
             };
             let kernel = self
-                .kernel_running
-                .as_ref()
+                .notebook_ctrl
+                .current()
                 .map(|run| format!("内核 {}", run.kernel_id));
             let units = Some({
                 let total = notebook.cells.len();

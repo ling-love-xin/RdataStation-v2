@@ -181,19 +181,8 @@ impl EditMode {
     }
 }
 
-/// 一份文档的编辑面板
-/// 【#17】一次进行中的内核单元执行（同一时间最多一个）
-#[derive(Clone)]
-pub(crate) struct KernelRun {
-    /// 目标内核（`ExecutionSource::Kernel` 指定，否则语言默认 id）
-    kernel_id: String,
-    /// 目标单元 id（事件回执按它回填输出）
-    cell_id: String,
-    /// 目标会话 id（切换会话后回执到了不落）
-    session_id: String,
-    /// 【R8】本次 `execute_request` 的 msg_id：事件归属对账，只认这个 id 的输出与收口
-    msg_id: String,
-}
+// 【R1】`KernelRun` 已迁到 `crate::notebook::controller`（编排账本，可无 GPUI 单测）；
+// 本文件不再定义。视图侧状态统一由 `notebook_ctrl` 记账。
 
 /// 编辑器文档状态栏快照：全局状态栏「活动文档上下文段」的只读数据源。
 ///
@@ -438,15 +427,13 @@ pub struct EditorHostPanel {
     pub(crate) cell_markdown_preview: std::collections::HashSet<String>,
     /// 结果轮询任务句柄（空闲即退出；句柄存活到下一次提交）
     pub(crate) exec_pump: RefCell<Option<Task<()>>>,
-    /// 【#17】正在跑的内核单元（同一时间最多一个，与 `has_running` 防并发一致）
-    pub(crate) kernel_running: Option<KernelRun>,
+    /// 【R1】分析模式编排账本（「全部运行」串行队列 + 内核执行归属）。
+    ///
+    /// 队列推进 / 收口判定 / 会话作废都在 `crate::notebook::controller`（零 GPUI、可单测）；
+    /// 本字段只是这个面板的持有位，视图按它的返回值做 UI 动作。
+    pub(crate) notebook_ctrl: crate::notebook::controller::NotebookController,
     /// 【#17】内核事件轮询任务句柄（空闲即退出）
     pub(crate) kernel_pump: RefCell<Option<Task<()>>>,
-    /// 【2d-笔记级】「全部运行」队列（待跑单元 id；空 = 没排队）。
-    ///
-    /// 执行队列一次只跑一个（`ExecQueue` busy 检查），所以全部运行是**串行队列**：
-    /// 入队全部可执行单元，跑完一个（SQL 回执 / 内核收口）自动提交下一个。
-    pub(crate) notebook_pending: Vec<String>,
     /// 内容回写订阅：句柄即生命周期（释放即取消）
     pub(crate) _editor_sub: Option<Subscription>,
     /// 网格事件订阅（行选中 → 状态行的“已选第 N 行”要跟着变）

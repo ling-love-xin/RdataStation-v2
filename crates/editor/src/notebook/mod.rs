@@ -4,6 +4,8 @@
 
 /// 【2d】单元模型（Cell / Output / 状态机）与 `.rdsnote` 落盘形状（v2）
 pub mod cell;
+/// 【R1】编排账本（全部运行队列 + 内核执行归属）：零 GPUI，视图只按返回值做 UI 动作
+pub mod controller;
 /// 【#20】内核注册表端口（宿主注入）与 `resolve_kernel` 解析纯函数
 pub mod kernel;
 /// 【#14】Jupyter mime bundle → 原生输出的纯函数分发器

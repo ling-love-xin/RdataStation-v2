@@ -690,17 +690,14 @@ impl EditorHostPanel {
     /// 跑完一个（SQL 回执 / 内核收口）由 [`Self::advance_notebook_queue`] 自动提交下一个。
     /// 有单元在跑 → 拒绝；Markdown 备注 / 空单元不入队。
     pub(crate) fn notebook_run_all(&mut self, cx: &mut Context<Self>) {
-        if self.notebook_state().has_running() || !self.notebook_pending.is_empty() {
+        if self.notebook_state().has_running() || !self.notebook_ctrl.pending().is_empty() {
             self.set_message(Some("已有单元在执行中".to_string()), cx);
             return;
         }
         let cells = self.notebook_state().cells;
-        self.notebook_pending = cells
-            .iter()
-            .filter(|cell| cell.language.is_executable() && !cell.body.trim().is_empty())
-            .map(|cell| cell.id.clone())
-            .collect();
-        if self.notebook_pending.is_empty() {
+        // 【R1】入队筛选（可执行语言 + 正文非空）在 controller；这里只按结果提示
+        let enqueued = self.notebook_ctrl.enqueue_all(&cells);
+        if enqueued == 0 {
             self.set_message(
                 Some("没有可执行的单元（可执行单元要有代码）".to_string()),
                 cx,
@@ -715,12 +712,12 @@ impl EditorHostPanel {
     /// 守卫（防两个收口点重复推进）：队列空 / 还有单元在跑 → 不动。
     /// 队列走完 = 全部运行完成（消息位清掉，不打扰）。
     fn advance_notebook_queue(&mut self, cx: &mut Context<Self>) {
-        if self.notebook_pending.is_empty() || self.notebook_state().has_running() {
+        // 【R1】守卫（队列空 / 还有单元在跑 → 不动）与出队都在 controller；
+        // 取到的 id 交给单发入口（它自己 mark_running + 提交，此时无 running 不会自锁）
+        let has_running = self.notebook_state().has_running();
+        let Some(next) = self.notebook_ctrl.next_to_run(has_running) else {
             return;
-        }
-        let next = self.notebook_pending.remove(0);
-        // 复用的是单发入口（notebook_run_cell）：它自己会 mark_running + 提交；
-        // 此时无 running（上面守卫），不会自锁
+        };
         let document = self.document.clone();
         self.notebook_run_cell(&document, &next, cx);
     }
@@ -728,7 +725,7 @@ impl EditorHostPanel {
     /// 【2d-笔记级】重启：关闭当前**活跃**内核（下次执行自动重拉）。
     ///
     /// 空 = 没起过内核 → 提示无需重启；正在跑的内核单元也会被一并停掉
-    /// （`kernel_running` 作废，回执不再回填）。
+    /// （controller 账本作废，回执不再回填）。
     pub(crate) fn notebook_restart_kernel(&mut self, cx: &mut Context<Self>) {
         let active = self.shared.active_kernel_ids();
         if active.is_empty() {
@@ -739,9 +736,9 @@ impl EditorHostPanel {
             self.shared.kernel_shutdown(id);
         }
         // 正在跑的内核单元：作废运行标记（内核已关，回执不会再回来）
-        self.kernel_running = None;
+        self.notebook_ctrl.finish();
         // 「全部运行」队列一并作废：当前单元被中断，后续单元不该继续自动跑
-        self.notebook_pending.clear();
+        self.notebook_ctrl.clear();
         self.set_message(Some(format!("已重启 {} 个内核", active.len())), cx);
         cx.notify();
     }
@@ -793,7 +790,7 @@ impl EditorHostPanel {
         let code = cell.body.clone();
         cell.mark_running();
         self.shared.set_notebook_cells(&self.document, state.cells);
-        // 【R8】先提交、拿到本次执行的 msg_id，再登记 kernel_running：
+        // 【R8】先提交、拿到本次执行的 msg_id，再登记 controller 账本：
         // 事件归属对账依赖这个 id，提交失败就不登记（避免空等一个不存在的执行）
         let msg_id = match self.shared.kernel_execute(&kernel_id, &code) {
             Ok(id) => id,
@@ -808,12 +805,13 @@ impl EditorHostPanel {
                 return;
             }
         };
-        self.kernel_running = Some(KernelRun {
-            kernel_id: kernel_id.clone(),
-            cell_id: cell_id.to_string(),
-            session_id: session_id.to_string(),
-            msg_id,
-        });
+        self.notebook_ctrl
+            .begin(crate::notebook::controller::KernelRun {
+                kernel_id: kernel_id.clone(),
+                cell_id: cell_id.to_string(),
+                session_id: session_id.to_string(),
+                msg_id,
+            });
         // 执行提交成功 → 回写会话默认（“上次用过的内核”）
         self.shared
             .set_session_default_kernel(&self.document, Some(kernel_id));
@@ -836,12 +834,12 @@ impl EditorHostPanel {
                 executor.timer(std::time::Duration::from_millis(60)).await;
                 let keep_going = weak
                     .update(cx, |this, cx| {
-                        let before = this.kernel_running.is_some();
+                        let before = this.notebook_ctrl.current().is_some();
                         this.drain_kernel_events(cx);
                         if before {
                             cx.notify();
                         }
-                        this.kernel_running.is_some()
+                        this.notebook_ctrl.current().is_some()
                     })
                     .unwrap_or(false);
                 if !keep_going {
@@ -858,7 +856,8 @@ impl EditorHostPanel {
     /// [`crate::notebook::orchestrate::apply_events`]（纯函数，可无 GPUI 单测）。
     /// 本方法只做四件事：会话作废判定 → 调规则 → 回写单元 → 队列推进 / notify。
     fn drain_kernel_events(&mut self, _cx: &mut Context<Self>) {
-        let Some(run) = self.kernel_running.clone() else {
+        // 【R1】进行中的执行从 controller 账本取（账本只由 controller 增删）
+        let Some(run) = self.notebook_ctrl.current().cloned() else {
             return;
         };
         let events = self.shared.kernel_drain(&run.kernel_id);
@@ -870,12 +869,12 @@ impl EditorHostPanel {
         let session_id = state.session.id.clone();
         let Some(cell) = state.cell_mut(&run.cell_id) else {
             // 单元没了：执行作废（不再等回执）
-            self.kernel_running = None;
+            self.notebook_ctrl.finish();
             return;
         };
         // 会话已切换：回执不落，执行作废
         if session_id != run.session_id {
-            self.kernel_running = None;
+            self.notebook_ctrl.abort_on_session_switch();
             cell.state = crate::cell::CellState::Idle;
             cell.outputs.clear();
             self.shared.set_notebook_cells(&self.document, state.cells);
@@ -891,7 +890,7 @@ impl EditorHostPanel {
             events.iter(),
         );
         if applied.finished {
-            self.kernel_running = None;
+            self.notebook_ctrl.finish();
         }
         self.shared.set_notebook_cells(&self.document, state.cells);
         // 【2d-笔记级】全部运行队列推进：这个内核单元收口（ExecuteReply / Failed），
