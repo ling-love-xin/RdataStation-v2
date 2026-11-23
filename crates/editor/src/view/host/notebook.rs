@@ -30,6 +30,35 @@ pub(crate) struct CellLsp {
     pub providers_installed: bool,
 }
 
+/// 【R1 切片 B】把 `EditorShared` 适配成 controller 的 `KernelHost`（只在视图层存在）
+///
+/// controller 只声明契约，真实实现委托 shared —— 这样内核启动序列可以脱离 GPUI，
+/// 用假 host 单测（见 `notebook/controller.rs` 的 `tests`）。
+struct SharedKernelHost<'a>(&'a crate::shared::EditorShared);
+
+impl crate::notebook::controller::KernelHost for SharedKernelHost<'_> {
+    fn resolve_kernel(
+        &self,
+        document: &DocumentId,
+        source: Option<&crate::cell::ExecutionSource>,
+        language: crate::cell::CellLanguage,
+    ) -> Result<rds_kernel::KernelSpec, String> {
+        self.0.resolve_kernel_for(document, source, language)
+    }
+
+    fn ensure_kernel(&self, spec: &rds_kernel::KernelSpec) -> Result<(), String> {
+        self.0.ensure_kernel_spec(spec)
+    }
+
+    fn execute(&self, kernel_id: &str, code: &str) -> Result<String, String> {
+        self.0.kernel_execute(kernel_id, code)
+    }
+
+    fn set_default_kernel(&self, document: &DocumentId, kernel_id: Option<String>) {
+        self.0.set_session_default_kernel(document, kernel_id);
+    }
+}
+
 impl EditorHostPanel {
     /// 【遗留 #10】把笔记本现有单元的编辑器实例补齐（面板进 Dock / 测试入口调用；
     /// 渲染期只读不建实体，创建一律走事件路径——构造期建会重入 panic）
@@ -743,80 +772,40 @@ impl EditorHostPanel {
         cx.notify();
     }
 
-    /// 【#17 → #20】跑一个内核单元（Python / R / Julia）：
-    /// 解析实际内核（显式指定 > 会话默认 > 注册表第一个可用）→ 启动（复用）内核 →
-    /// 标记 Running → 提交代码 → 内核泵轮询事件回填输出；成功后把内核回写为
-    /// 会话默认（“上次用过的内核”）。
+    /// 【#17 → #20】跑一个内核单元（Python / R / Julia）。
     ///
-    /// 与 SQL 分支分开读 shared（`notebook_run_cell` 里不保留对 state 的借用再调这里）
+    /// 【R1 切片 B】启动序列（空检查 → 解析实际内核 → 启动/复用 → 标记 Running →
+    /// 提交代码拿 msg_id → 登记账本 → 回写「上次用过的内核」）全部在
+    /// [`crate::notebook::controller::NotebookController::start_kernel_cell`]；
+    /// 本方法只按返回的 [`crate::notebook::controller::KernelStart`] 做 UI 收尾。
     fn run_kernel_cell(&mut self, session_id: &str, cell_id: &str, cx: &mut Context<Self>) {
         let mut state = self.notebook_state();
         let Some(cell) = state.cell_mut(cell_id) else {
             return;
         };
-        if cell.body.trim().is_empty() {
-            self.set_message(
-                Some(format!(
-                    "这个 {} 单元是空的，没有可执行的代码",
-                    cell.language.label()
-                )),
-                cx,
-            );
-            return;
-        }
-        // 实际内核：执行源指定优先，否则会话默认 / 注册表第一个可用（#20 注册表路由）
-        let source = cell.execution_source.clone();
-        let language = cell.language;
-        // 解析到**条目本身**（而不是先拿 id 再回查）：启动要用 kernelspec 的 argv 模板，
-        // 回查会把 `launch` 丢掉，只剩一条可执行路径（R / Julia 就走不起来了）
-        let spec = match self
-            .shared
-            .resolve_kernel_for(&self.document, source.as_ref(), language)
-        {
-            Ok(spec) => spec,
-            Err(reason) => {
-                self.set_message(Some(reason), cx);
-                return;
-            }
-        };
-        let kernel_id = spec.id.clone();
-        if let Err(reason) = self.shared.ensure_kernel_spec(&spec) {
-            self.set_message(
-                Some(format!("内核 {} 启动失败：{reason}", spec.display_name)),
-                cx,
-            );
-            return;
-        }
-        let code = cell.body.clone();
-        cell.mark_running();
-        self.shared.set_notebook_cells(&self.document, state.cells);
-        // 【R8】先提交、拿到本次执行的 msg_id，再登记 controller 账本：
-        // 事件归属对账依赖这个 id，提交失败就不登记（避免空等一个不存在的执行）
-        let msg_id = match self.shared.kernel_execute(&kernel_id, &code) {
-            Ok(id) => id,
-            Err(reason) => {
-                let mut state = self.notebook_state();
-                if let Some(cell) = state.cell_mut(cell_id) {
-                    cell.state = crate::cell::CellState::Idle;
-                    cell.outputs.clear();
-                }
+        let host = SharedKernelHost(&self.shared);
+        let start = self
+            .notebook_ctrl
+            .start_kernel_cell(&host, &self.document, cell, session_id);
+        match start {
+            crate::notebook::controller::KernelStart::Started(_) => {
+                // `mark_running` 已在 controller 里做过：这里只回写 + 起泵
                 self.shared.set_notebook_cells(&self.document, state.cells);
-                self.set_message(Some(reason), cx);
-                return;
+                self.set_message(None, cx);
+                self.ensure_kernel_pump(cx);
             }
-        };
-        self.notebook_ctrl
-            .begin(crate::notebook::controller::KernelRun {
-                kernel_id: kernel_id.clone(),
-                cell_id: cell_id.to_string(),
-                session_id: session_id.to_string(),
-                msg_id,
-            });
-        // 执行提交成功 → 回写会话默认（“上次用过的内核”）
-        self.shared
-            .set_session_default_kernel(&self.document, Some(kernel_id));
-        self.set_message(None, cx);
-        self.ensure_kernel_pump(cx);
+            crate::notebook::controller::KernelStart::Rejected { reason, reset_cell } => {
+                if reset_cell {
+                    // 提交失败前已 mark_running：把 Running 标回去（不假装在跑）
+                    if let Some(cell) = state.cell_mut(cell_id) {
+                        cell.state = crate::cell::CellState::Idle;
+                        cell.outputs.clear();
+                    }
+                    self.shared.set_notebook_cells(&self.document, state.cells);
+                }
+                self.set_message(Some(reason), cx);
+            }
+        }
     }
 
     /// 【#17】内核事件泵：60ms 一拍轮询当前内核单元的事件，回填输出直到 ExecuteReply /

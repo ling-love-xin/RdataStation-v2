@@ -10,7 +10,9 @@
 //! - 同一时间最多一个内核单元执行（[`KernelRun`]），与 `NotebookState::has_running`
 //!   的防并发口径一致；两个收口点（SQL 回执 / 内核收口）都经同一个守卫推进。
 
-use crate::cell::Cell;
+use crate::cell::{Cell, CellLanguage, ExecutionSource};
+use crate::model::DocumentId;
+use rds_kernel::KernelSpec;
 
 /// 一次进行中的内核单元执行（原 `view/host/mod.rs::KernelRun`，字段仍为四个）
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,12 +93,108 @@ impl NotebookController {
     pub fn abort_on_session_switch(&mut self) -> Option<KernelRun> {
         self.kernel_run.take()
     }
+
+    /// 【切片 B】跑一个内核单元：空检查 → 解析内核 → 启动（复用）→ 标记 Running →
+    /// 提交代码（拿 msg_id）→ 登记账本 → 回写「上次用过的内核」。
+    ///
+    /// 外部依赖全部经 [`KernelHost`] 注入（视图用 `EditorShared` 实现），这里不碰
+    /// `Context` / 不写 cells 表 / 不弹提示。视图只按 [`KernelStart`] 做 UI 收尾：
+    ///
+    /// - `Started`：把单元状态回写（`mark_running` 已做过）+ `set_message(None)` + 起泵
+    /// - `Rejected { reset_cell: false }`：单元**未被改动**，只需提示
+    /// - `Rejected { reset_cell: true }`：`execute` 失败前已 `mark_running`，需复位 Idle + 清输出
+    pub fn start_kernel_cell(
+        &mut self,
+        host: &dyn KernelHost,
+        document: &DocumentId,
+        cell: &mut Cell,
+        session_id: &str,
+    ) -> KernelStart {
+        if cell.body.trim().is_empty() {
+            return KernelStart::Rejected {
+                reason: format!(
+                    "这个 {} 单元是空的，没有可执行的代码",
+                    cell.language.label()
+                ),
+                reset_cell: false,
+            };
+        }
+        let source = cell.execution_source.clone();
+        let language = cell.language;
+        let spec = match host.resolve_kernel(document, source.as_ref(), language) {
+            Ok(spec) => spec,
+            Err(reason) => {
+                return KernelStart::Rejected {
+                    reason,
+                    reset_cell: false,
+                };
+            }
+        };
+        let kernel_id = spec.id.clone();
+        if let Err(reason) = host.ensure_kernel(&spec) {
+            return KernelStart::Rejected {
+                reason: format!("内核 {} 启动失败：{reason}", spec.display_name),
+                reset_cell: false,
+            };
+        }
+        let code = cell.body.clone();
+        cell.mark_running();
+        // 【R8】先提交、拿到 msg_id 再登记账本：提交失败就不登记（避免空等一个不存在的执行）
+        let msg_id = match host.execute(&kernel_id, &code) {
+            Ok(id) => id,
+            Err(reason) => {
+                return KernelStart::Rejected {
+                    reason,
+                    reset_cell: true,
+                };
+            }
+        };
+        let run = KernelRun {
+            kernel_id: kernel_id.clone(),
+            cell_id: cell.id.clone(),
+            session_id: session_id.to_string(),
+            msg_id,
+        };
+        self.begin(run.clone());
+        // 执行提交成功 → 回写会话默认（“上次用过的内核”）
+        host.set_default_kernel(document, Some(kernel_id));
+        KernelStart::Started(run)
+    }
+}
+
+/// 【切片 B】内核启动序列的外部依赖（由视图用 `EditorShared` 实现，controller 只声明契约）
+pub trait KernelHost {
+    /// 解析实际内核：显式指定 > 会话默认（上次用过的）> 注册表第一个可用
+    fn resolve_kernel(
+        &self,
+        document: &DocumentId,
+        source: Option<&ExecutionSource>,
+        language: CellLanguage,
+    ) -> Result<KernelSpec, String>;
+
+    /// 启动（或复用）该内核
+    fn ensure_kernel(&self, spec: &KernelSpec) -> Result<(), String>;
+
+    /// 提交代码，返回本次执行的 `msg_id`（事件归属对账靠它）
+    fn execute(&self, kernel_id: &str, code: &str) -> Result<String, String>;
+
+    /// 回写会话默认内核
+    fn set_default_kernel(&self, document: &DocumentId, kernel_id: Option<String>);
+}
+
+/// 【切片 B】启动序列的结果（视图按它决定提示 / 回写 / 起泵）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KernelStart {
+    /// 已提交：账本已登记，默认内核已回写
+    Started(KernelRun),
+    /// 被拒：`reset_cell` 为真表示单元已被标记 Running，调用方必须复位
+    Rejected { reason: String, reset_cell: bool },
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cell::{Cell, CellLanguage};
+    use crate::cell::CellState;
 
     fn run(cell_id: &str) -> KernelRun {
         KernelRun {
@@ -188,5 +286,154 @@ mod tests {
         assert!(!ctrl.is_idle());
         ctrl.finish();
         assert!(ctrl.is_idle());
+    }
+
+    // ==== 切片 B：内核启动序列（假 host，不碰 shared / 不碰 GPUI） ====
+
+    fn spec() -> KernelSpec {
+        KernelSpec {
+            id: "python".to_string(),
+            display_name: "Python 3".to_string(),
+            language: rds_kernel::KernelLanguage::Python,
+            command: "python".to_string(),
+            ready: true,
+            note: None,
+            launch: rds_kernel::KernelLaunch::ipykernel("python"),
+        }
+    }
+
+    struct FakeHost {
+        resolved: Result<KernelSpec, String>,
+        ensured: Result<(), String>,
+        executed: Result<String, String>,
+        executes: std::cell::RefCell<Vec<(String, String)>>,
+        defaults: std::cell::RefCell<Vec<Option<String>>>,
+    }
+
+    impl FakeHost {
+        fn ok() -> Self {
+            Self {
+                resolved: Ok(spec()),
+                ensured: Ok(()),
+                executed: Ok("rds-exec-1".to_string()),
+                executes: std::cell::RefCell::new(Vec::new()),
+                defaults: std::cell::RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl KernelHost for FakeHost {
+        fn resolve_kernel(
+            &self,
+            _document: &DocumentId,
+            _source: Option<&ExecutionSource>,
+            _language: CellLanguage,
+        ) -> Result<KernelSpec, String> {
+            self.resolved.clone()
+        }
+
+        fn ensure_kernel(&self, _spec: &KernelSpec) -> Result<(), String> {
+            self.ensured.clone()
+        }
+
+        fn execute(&self, kernel_id: &str, code: &str) -> Result<String, String> {
+            self.executes
+                .borrow_mut()
+                .push((kernel_id.to_string(), code.to_string()));
+            self.executed.clone()
+        }
+
+        fn set_default_kernel(&self, _document: &DocumentId, kernel_id: Option<String>) {
+            self.defaults.borrow_mut().push(kernel_id);
+        }
+    }
+
+    #[test]
+    fn empty_body_rejects_without_reset() {
+        let host = FakeHost::ok();
+        let doc = DocumentId::new("doc");
+        let mut cell = Cell::new("a", CellLanguage::Python, "   ");
+        let mut ctrl = NotebookController::default();
+        match ctrl.start_kernel_cell(&host, &doc, &mut cell, "s1") {
+            KernelStart::Rejected { reason, reset_cell } => {
+                assert!(!reset_cell, "空单元没被 mark_running，不该要求复位");
+                assert!(reason.contains("是空的"), "提示应说明为空：{reason}");
+            }
+            KernelStart::Started(_) => panic!("空单元不该启动"),
+        }
+        assert!(ctrl.current().is_none());
+        assert_eq!(cell.state, CellState::Idle);
+        assert!(host.executes.borrow().is_empty(), "不该提交任何代码");
+    }
+
+    #[test]
+    fn resolve_failure_rejects_without_reset() {
+        let mut host = FakeHost::ok();
+        host.resolved = Err("没有可用的 Python 内核".to_string());
+        let doc = DocumentId::new("doc");
+        let mut cell = Cell::new("a", CellLanguage::Python, "print(1)");
+        let mut ctrl = NotebookController::default();
+        match ctrl.start_kernel_cell(&host, &doc, &mut cell, "s1") {
+            KernelStart::Rejected { reason, reset_cell } => {
+                assert!(!reset_cell);
+                assert_eq!(reason, "没有可用的 Python 内核", "解析失败原因原样上报");
+            }
+            KernelStart::Started(_) => panic!("解析失败不该启动"),
+        }
+        assert_eq!(cell.state, CellState::Idle);
+        assert!(host.executes.borrow().is_empty());
+        assert!(host.defaults.borrow().is_empty());
+    }
+
+    #[test]
+    fn execute_failure_asks_for_reset_and_writes_no_accounting() {
+        let mut host = FakeHost::ok();
+        host.executed = Err("内核 python 未启动".to_string());
+        let doc = DocumentId::new("doc");
+        let mut cell = Cell::new("a", CellLanguage::Python, "print(1)");
+        let mut ctrl = NotebookController::default();
+        match ctrl.start_kernel_cell(&host, &doc, &mut cell, "s1") {
+            KernelStart::Rejected { reason, reset_cell } => {
+                // 区分性证明：execute 前已 mark_running，若不要求复位，单元会永远停「执行中」
+                assert!(reset_cell, "提交失败必须让调用方复位");
+                assert!(reason.contains("未启动"), "{reason}");
+            }
+            KernelStart::Started(_) => panic!("提交失败不该启动"),
+        }
+        assert!(ctrl.current().is_none(), "提交失败不得登记账本");
+        assert_eq!(
+            cell.state,
+            CellState::Running,
+            "controller 不代劳复位：复位是调用方按 reset_cell 做的"
+        );
+        assert!(host.defaults.borrow().is_empty(), "失败不得回写默认内核");
+    }
+
+    #[test]
+    fn started_registers_run_and_writes_default_kernel() {
+        let host = FakeHost::ok();
+        let doc = DocumentId::new("doc");
+        let mut cell = Cell::new("a", CellLanguage::Python, "print(1)");
+        let mut ctrl = NotebookController::default();
+        match ctrl.start_kernel_cell(&host, &doc, &mut cell, "s1") {
+            KernelStart::Started(run) => {
+                assert_eq!(run.kernel_id, "python");
+                assert_eq!(run.cell_id, "a");
+                assert_eq!(run.session_id, "s1");
+                assert_eq!(run.msg_id, "rds-exec-1");
+            }
+            KernelStart::Rejected { reason, .. } => panic!("不该被拒：{reason}"),
+        }
+        assert!(ctrl.current().is_some(), "启动成功必须登记账本");
+        assert_eq!(cell.state, CellState::Running, "controller 负责 mark_running");
+        assert_eq!(
+            host.executes.borrow().as_slice(),
+            &[("python".to_string(), "print(1)".to_string())]
+        );
+        assert_eq!(
+            host.defaults.borrow().as_slice(),
+            &[Some("python".to_string())],
+            "成功后回写「上次用过的内核」"
+        );
     }
 }
