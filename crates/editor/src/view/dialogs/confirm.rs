@@ -1,5 +1,6 @@
 //! 关闭与保存的确认对话框：关闭三态、保存失败、模式切换代价。
 
+use shared::i18n::tr;
 use super::*;
 
 /// 关闭脏文档时用户的选择（三态）
@@ -72,7 +73,7 @@ pub fn open_close_confirm(
         });
 
         dialog
-            .title("关闭前确认")
+            .title(tr("关闭前确认"))
             .child(body)
             // 自绘 footer 会关掉组件库的默认“确定 / 取消”按钮（footer 与 button_props 互斥）
             .footer(DialogFooter::new().child(cancel).child(discard).child(save))
@@ -122,7 +123,7 @@ pub fn open_save_failure_confirm(
             move |window, cx| on_choice(SaveFailureChoice::Retry, window, cx)
         });
 
-        dialog.title("保存失败").child(body).footer(
+        dialog.title(tr("保存失败")).child(body).footer(
             DialogFooter::new()
                 .child(cancel)
                 .child(save_as)

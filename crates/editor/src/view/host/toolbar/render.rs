@@ -3,6 +3,7 @@
 //! 自 host/toolbar.rs 拆分（2026-10-29 Step 8）：按能力域切分 `impl EditorHostPanel` 方法块。
 //! 跨域互调经 `pub(crate)` 方法；字段在 mod.rs 统一 `pub(crate)`。
 
+use shared::i18n::tr;
 use super::super::*;
 use crate::channel::ExecChannel;
 use crate::execution::ExecMenuKind;
@@ -91,7 +92,7 @@ impl EditorHostPanel {
                 .ghost()
                 .small()
                 .icon(IconName::Bookmark)
-                .tooltip("书签")
+                .tooltip(tr("书签"))
                 .debug_selector(|| "editor-bookmarks".to_string())
                 .on_click({
                     let toolbar_entity = toolbar_entity.clone();
@@ -115,7 +116,7 @@ impl EditorHostPanel {
                         .ghost()
                         .small()
                         .icon(IconName::BookMarked)
-                        .tooltip("函数手册")
+                        .tooltip(tr("函数手册"))
                         .debug_selector(|| "editor-function-manual".to_string())
                         .on_click({
                             let toolbar_entity = toolbar_entity.clone();
@@ -242,7 +243,7 @@ impl EditorHostPanel {
                             .ghost()
                             .small()
                             .icon(IconName::ChevronLeft)
-                            .tooltip("向左滚动工具栏")
+                            .tooltip(tr("向左滚动工具栏"))
                             .bg(arrow_bg.opacity(0.9))
                             .on_click(move |_, _, _| {
                                 let cur = handle.offset().x;
@@ -271,7 +272,7 @@ impl EditorHostPanel {
                             .ghost()
                             .small()
                             .icon(IconName::ChevronRight)
-                            .tooltip("向右滚动工具栏")
+                            .tooltip(tr("向右滚动工具栏"))
                             .bg(arrow_bg.opacity(0.9))
                             .on_click(move |_, _, _| {
                                 let cur = handle.offset().x;
@@ -334,12 +335,12 @@ impl EditorHostPanel {
             .small()
             .debug_selector(|| "editor-notebook-session".to_string())
             .icon(IconName::Globe)
-            .tooltip("会话连接")
+            .tooltip(tr("会话连接"))
             .label(format!("{label} ▾"))
             .dropdown_menu(move |menu, _window, _cx| {
                 let mut menu = menu;
                 // 第一项：跟随当前活动连接（默认态）
-                let follow = PopupMenuItem::new("跟随当前活动连接")
+                let follow = PopupMenuItem::new(tr("跟随当前活动连接"))
                     .checked(current.is_none())
                     .on_click({
                         let entity = entity.clone();
@@ -380,7 +381,7 @@ impl EditorHostPanel {
             .small()
             .debug_selector(|| "editor-notebook-run-all".to_string())
             .icon(IconName::Play)
-            .tooltip("全部运行")
+            .tooltip(tr("全部运行"))
             .on_click(move |_, _window, app| {
                 entity.update(app, |panel, cx| panel.notebook_run_all(cx));
             })
@@ -397,7 +398,7 @@ impl EditorHostPanel {
             .small()
             .debug_selector(|| "editor-notebook-restart".to_string())
             .icon(IconName::RefreshCw)
-            .tooltip("重启内核")
+            .tooltip(tr("重启内核"))
             .on_click(move |_, _window, app| {
                 entity.update(app, |panel, cx| panel.notebook_restart_kernel(cx));
             })

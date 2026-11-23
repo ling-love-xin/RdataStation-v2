@@ -4,6 +4,7 @@
 //! 用户点头才跑。确认框不给「少改几行」这类选项——收窄影响面是用户改 SQL 的事。
 //! 事实（环境名 / 语句种类 / 摘要）来自引擎 `policy_guard::DmlConfirm`，视图不自己解析 SQL。
 
+use shared::i18n::tr;
 use super::*;
 
 /// 确认框：环境名 + 语句种类 + SQL 摘要 + 「取消」/「执行」
@@ -59,7 +60,7 @@ pub fn open_dml_confirm(
         let cancel = Button::new("editor-dml-cancel")
             .with_variant(ButtonVariant::Ghost)
             .small()
-            .label("取消")
+            .label(tr("取消"))
             .debug_selector(|| "editor-dml-cancel".to_string())
             .on_click({
                 let on_cancel = on_cancel.clone();
@@ -71,7 +72,7 @@ pub fn open_dml_confirm(
         let run = Button::new("editor-dml-run")
             .with_variant(ButtonVariant::Danger)
             .small()
-            .label("执行")
+            .label(tr("执行"))
             .debug_selector(|| "editor-dml-run".to_string())
             .on_click({
                 let on_run = on_run.clone();

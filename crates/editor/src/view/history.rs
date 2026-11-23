@@ -12,6 +12,7 @@
 //!
 //! 删除 / 清空 / 搜索是自己发起的，直接在动作里重载。
 
+use shared::i18n::tr;
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -401,7 +402,7 @@ impl Render for HistoryView {
                     .ghost()
                     .small()
                     .debug_selector(|| "history-clear".to_string())
-                    .label("清空")
+                    .label(tr("清空"))
                     .on_click(move |_, _window, app| {
                         entity.update(app, |view, cx| view.clear_all(cx));
                     })
@@ -417,9 +418,9 @@ impl Render for HistoryView {
             let entity = cx.entity();
             TabBar::new("history-success-filter")
                 .segmented()
-                .child(Tab::new().label("全部"))
-                .child(Tab::new().label("成功"))
-                .child(Tab::new().label("失败"))
+                .child(Tab::new().label(tr("全部")))
+                .child(Tab::new().label(tr("成功")))
+                .child(Tab::new().label(tr("失败")))
                 .selected_index(success_ix)
                 .on_click(move |ix, _, app| {
                     let filter = match ix {
@@ -442,7 +443,7 @@ impl Render for HistoryView {
                 .small()
                 .label(db_label)
                 .dropdown_menu(move |menu, _, _| {
-                    let mut menu = menu.item(PopupMenuItem::new("全部库").on_click({
+                    let mut menu = menu.item(PopupMenuItem::new(tr("全部库")).on_click({
                         let entity = entity.clone();
                         move |_, _, app| {
                             entity.update(app, |view, cx| view.set_db_filter(None, cx));
@@ -474,7 +475,7 @@ impl Render for HistoryView {
                 .small()
                 .label(driver_label)
                 .dropdown_menu(move |menu, _, _| {
-                    let mut menu = menu.item(PopupMenuItem::new("全部驱动").on_click({
+                    let mut menu = menu.item(PopupMenuItem::new(tr("全部驱动")).on_click({
                         let entity = entity.clone();
                         move |_, _, app| {
                             entity.update(app, |view, cx| view.set_driver_filter(None, cx));
@@ -544,7 +545,7 @@ impl Render for HistoryView {
                         Button::new(("history-remove", index))
                             .ghost()
                             .small()
-                            .label("删除")
+                            .label(tr("删除"))
                             .on_click(move |_, _window, app| {
                                 entity.update(app, |view, cx| view.remove_at(index, cx));
                             })
@@ -561,14 +562,14 @@ impl Render for HistoryView {
                         }
                     })
                     .context_menu(move |menu, _, _| {
-                        menu.item(PopupMenuItem::new("复制 SQL").on_click({
+                        menu.item(PopupMenuItem::new(tr("复制 SQL")).on_click({
                             let sql = sql.clone();
                             // 0.8.0 起写剪贴板在 `App` 上（`Window::write_to_clipboard` 已移除）
                             move |_, _window, app| {
                                 app.write_to_clipboard(ClipboardItem::new_string(sql.clone()));
                             }
                         }))
-                        .item(PopupMenuItem::new("删除该条").on_click({
+                        .item(PopupMenuItem::new(tr("删除该条")).on_click({
                             let entity = entity.clone();
                             move |_, _window, app| {
                                 entity.update(app, |view, cx| view.remove_at(index, cx));
@@ -605,7 +606,7 @@ impl Render for HistoryView {
             Button::new("history-load-more")
                 .ghost()
                 .small()
-                .label("加载更多")
+                .label(tr("加载更多"))
                 .on_click(move |_, _window, app| {
                     entity.update(app, |view, cx| view.load_more(cx));
                 })

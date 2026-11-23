@@ -7,6 +7,7 @@
 
 // #48 编辑器常规设置（行号开关即时 / 新文档默认缩进·换行·编码）：settings 不依赖 editor，方向合法
 
+use shared::i18n::tr;
 use crate::execution::{self, ExecTarget};
 // 【下移】结果放置 / 下发原料定义已随结果存储搬到 rds-result-panel（经 crate::store 重导出）
 use crate::store::ResultPlacement;
@@ -64,7 +65,7 @@ impl EditorHostPanel {
                     menu = menu.separator();
                 }
                 let manage_entity = entity.clone();
-                let manage = PopupMenuItem::new("管理环境…").on_click(move |_, window, app| {
+                let manage = PopupMenuItem::new(tr("管理环境…")).on_click(move |_, window, app| {
                     manage_entity.update(app, |panel, cx| {
                         panel.open_manage_environments(window, cx);
                     });
@@ -84,7 +85,7 @@ impl EditorHostPanel {
         Button::new("editor-run-script")
             .small()
             .debug_selector(|| "editor-run-script".to_string())
-            .label("▶ 运行")
+            .label(tr("▶ 运行"))
             .when(!enabled, |b| b.disabled(true))
             .on_click(move |_, _window, app| {
                 entity.update(app, |panel, cx| panel.run_script(cx));

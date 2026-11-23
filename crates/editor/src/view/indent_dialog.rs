@@ -10,6 +10,7 @@
 //! `detect_indent_from_content` / `convert_indent` / `trim_trailing_whitespace`）。
 //! headless 口径：断言纯函数（`indent_entries`）+ 直调 confirm 分发，点击到不了对话框层。
 
+use shared::i18n::tr;
 use std::rc::Rc;
 
 use gpui_kit::assets::IconName;
@@ -187,7 +188,7 @@ impl ListDelegate for IndentDelegate {
             .py_6()
             .text_xs()
             .text_color(theme.colors.muted_foreground)
-            .child("（无匹配项）")
+            .child(tr("（无匹配项）"))
             .into_any_element()
     }
 
@@ -273,7 +274,7 @@ pub fn open_indent_dialog(
             )
             .child(List::new(&list));
         dialog
-            .title("缩进")
+            .title(tr("缩进"))
             .w(theme.font_size * ui::INDENT_DIALOG_WIDTH)
             .child(body)
     });
@@ -302,7 +303,7 @@ pub fn open_tab_size_dialog(
         let run = Button::new("editor-tabsize-confirm")
             .with_variant(ButtonVariant::Primary)
             .small()
-            .label("确定")
+            .label(tr("确定"))
             .on_click({
                 let on_confirm = on_confirm.clone();
                 let input = input_entity.clone();
@@ -332,7 +333,7 @@ pub fn open_tab_size_dialog(
             .child(Input::new(&input_entity))
             .child(div().h_flex().justify_end().child(run));
         dialog
-            .title("更改制表符显示大小")
+            .title(tr("更改制表符显示大小"))
             .w(theme.font_size * ui::TAB_SIZE_DIALOG_WIDTH)
             .child(body)
     });

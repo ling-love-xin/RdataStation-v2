@@ -4,6 +4,7 @@
 //! 而是「这次要扫多少」的交代——用户唯一的干预是改 SQL / 收窄源清单，不是让我们替他砍行。
 //! 正文由纯函数 [`crate::support::sources::federated_confirm_note`] 生成（视图只负责画）。
 
+use shared::i18n::tr;
 use super::*;
 
 /// 确认框：正文 + 「取消」/「执行」
@@ -39,7 +40,7 @@ pub fn open_federated_confirm(
         let cancel = Button::new("editor-federated-cancel")
             .with_variant(ButtonVariant::Ghost)
             .small()
-            .label("取消")
+            .label(tr("取消"))
             .debug_selector(|| "editor-federated-cancel".to_string())
             .on_click({
                 let on_cancel = on_cancel.clone();
@@ -51,7 +52,7 @@ pub fn open_federated_confirm(
         let run = Button::new("editor-federated-run")
             .with_variant(ButtonVariant::Primary)
             .small()
-            .label("执行")
+            .label(tr("执行"))
             .debug_selector(|| "editor-federated-run".to_string())
             .on_click({
                 let on_run = on_run.clone();
@@ -62,7 +63,7 @@ pub fn open_federated_confirm(
             });
 
         dialog
-            .title("执行联邦查询？")
+            .title(tr("执行联邦查询？"))
             .child(body)
             .footer(DialogFooter::new().child(cancel).child(run))
     });

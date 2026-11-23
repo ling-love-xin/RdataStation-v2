@@ -12,6 +12,7 @@
 //! 名字能进表名，但临时表名的尺子只留 ASCII（`temp_table::sanitize_description`），
 //! 中文会被折成下划线——所以正文里必须把这条说白，不能让用户以为框里写的中文会原样成为表名。
 
+use shared::i18n::tr;
 use gpui_kit::component::input::{Input, InputState};
 
 use super::*;
@@ -48,7 +49,7 @@ pub fn open_result_analyze(
     // 需要输入，所以状态是 InputState 实体（它自己管光标 / 键盘 / 重绘）
     let state = cx.new(|cx| {
         InputState::new(window, cx)
-            .placeholder("给这份结果集起个名字")
+            .placeholder(tr("给这份结果集起个名字"))
             .default_value(facts.label.clone())
     });
     let on_run = Rc::new(on_run);
@@ -124,7 +125,7 @@ pub fn open_result_analyze(
         );
 
         dialog
-            .title("分析这份结果集")
+            .title(tr("分析这份结果集"))
             .child(body)
             .footer(DialogFooter::new().child(cancel).child(keep).child(temp))
     });

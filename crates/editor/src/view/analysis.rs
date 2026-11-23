@@ -18,6 +18,7 @@
 //! （`drain_cell_notes`）落回执。零裸 px / 零裸色值：尺寸走 [`crate::ui`] 常量 + Tailwind
 //! 尺度，取色走 `cx.theme().colors.*`。
 
+use shared::i18n::tr;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::base::text::TextView;
@@ -180,7 +181,7 @@ fn empty_state(cx: &App, document: &DocumentId, entity: PanelEntity) -> impl Int
         Button::new("editor-nb-empty-sql")
             .small()
             .debug_selector(|| "editor-nb-empty-sql".to_string())
-            .label("＋ SQL 单元")
+            .label(tr("＋ SQL 单元"))
             .on_click(move |_, window, app| {
                 entity.update(app, |panel, cx| {
                     panel.notebook_add_cell(&document, CellLanguage::Sql, window, cx);
@@ -194,7 +195,7 @@ fn empty_state(cx: &App, document: &DocumentId, entity: PanelEntity) -> impl Int
             .with_variant(ButtonVariant::Secondary)
             .small()
             .debug_selector(|| "editor-nb-empty-python".to_string())
-            .label("＋ Python 单元")
+            .label(tr("＋ Python 单元"))
             .on_click(move |_, window, app| {
                 entity.update(app, |panel, cx| {
                     panel.notebook_add_cell(&document, CellLanguage::Python, window, cx);
@@ -208,7 +209,7 @@ fn empty_state(cx: &App, document: &DocumentId, entity: PanelEntity) -> impl Int
             .with_variant(ButtonVariant::Secondary)
             .small()
             .debug_selector(|| "editor-nb-empty-text".to_string())
-            .label("＋ 文本单元")
+            .label(tr("＋ 文本单元"))
             .on_click(move |_, window, app| {
                 entity.update(app, |panel, cx| {
                     panel.notebook_add_cell(&document, CellLanguage::Markdown, window, cx);
@@ -236,7 +237,7 @@ fn empty_state(cx: &App, document: &DocumentId, entity: PanelEntity) -> impl Int
                     div()
                         .text_sm()
                         .text_color(theme.colors.foreground)
-                        .child("分析笔记"),
+                        .child(tr("分析笔记")),
                 )
                 .child(
                     div()
@@ -464,7 +465,7 @@ fn input_row(
         .child(
             Button::new("editor-nb-input-send")
                 .small()
-                .label("发送")
+                .label(tr("发送"))
                 .on_click(move |_, _window, cx| {
                     let value = send_input.read(cx).value().to_string();
                     send_entity.update(cx, |this, cx| this.submit_notebook_input(value, cx));
@@ -961,7 +962,7 @@ fn menu_button(cell: &Cell, document: &DocumentId, entity: &PanelEntity) -> impl
         .dropdown_menu(move |menu, _window, _cx| {
             // 动作全部转发给面板；`PopupMenuItem` 闭包是 `Fn`，每项先克隆句柄
             let menu = menu;
-            let up = PopupMenuItem::new("上移").on_click({
+            let up = PopupMenuItem::new(tr("上移")).on_click({
                 let entity = entity.clone();
                 let document = document.clone();
                 let id = id.clone();
@@ -971,7 +972,7 @@ fn menu_button(cell: &Cell, document: &DocumentId, entity: &PanelEntity) -> impl
                     });
                 }
             });
-            let down = PopupMenuItem::new("下移").on_click({
+            let down = PopupMenuItem::new(tr("下移")).on_click({
                 let entity = entity.clone();
                 let document = document.clone();
                 let id = id.clone();
@@ -981,7 +982,7 @@ fn menu_button(cell: &Cell, document: &DocumentId, entity: &PanelEntity) -> impl
                     });
                 }
             });
-            let duplicate = PopupMenuItem::new("复制单元").on_click({
+            let duplicate = PopupMenuItem::new(tr("复制单元")).on_click({
                 let entity = entity.clone();
                 let document = document.clone();
                 let id = id.clone();
@@ -1006,7 +1007,7 @@ fn menu_button(cell: &Cell, document: &DocumentId, entity: &PanelEntity) -> impl
                     });
                 }
             });
-            let delete = PopupMenuItem::new("删除单元").on_click({
+            let delete = PopupMenuItem::new(tr("删除单元")).on_click({
                 let entity = entity.clone();
                 let document = document.clone();
                 let id = id.clone();

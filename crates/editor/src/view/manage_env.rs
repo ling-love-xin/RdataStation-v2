@@ -22,6 +22,7 @@
 //! 删除成功后要回调 `on_delete(id)`：宿主据此清掉「文档里正选中这条环境」的绑定
 //! （否则选择器会显示一条已不存在的 id）。新增 / 更新不碰文档绑定，不回调。
 
+use shared::i18n::tr;
 use std::rc::Rc;
 
 use gpui_kit::base::StyledExt as _;
@@ -231,7 +232,7 @@ pub fn open_manage_environments(
                     .with_variant(ButtonVariant::Secondary)
                     .small()
                     .debug_selector(|| "editor-env-manage-close".to_string())
-                    .label("关闭")
+                    .label(tr("关闭"))
                     .on_click(|_, window, cx| window.close_dialog(cx)),
             ),
             ManageMode::Editing { .. } => {
@@ -239,7 +240,7 @@ pub fn open_manage_environments(
                     .with_variant(ButtonVariant::Ghost)
                     .small()
                     .debug_selector(|| "editor-env-form-cancel".to_string())
-                    .label("取消")
+                    .label(tr("取消"))
                     .on_click({
                         let state = dialog_state.clone();
                         move |_, _window, cx| {
@@ -250,7 +251,7 @@ pub fn open_manage_environments(
                     .with_variant(ButtonVariant::Primary)
                     .small()
                     .debug_selector(|| "editor-env-form-save".to_string())
-                    .label("保存")
+                    .label(tr("保存"))
                     .on_click({
                         let state = dialog_state.clone();
                         move |_, window, cx| {
@@ -262,7 +263,7 @@ pub fn open_manage_environments(
         };
 
         dialog
-            .title("管理环境")
+            .title(tr("管理环境"))
             .w(cx.theme().font_size * ui::MANAGE_ENV_DIALOG_WIDTH)
             .child(body)
             .footer(footer)
@@ -300,7 +301,7 @@ fn list_view(cx: &App, state: &Entity<ManageEnvState>) -> Div {
                     .with_variant(ButtonVariant::Secondary)
                     .small()
                     .debug_selector(|| "editor-env-add".to_string())
-                    .label("新增环境")
+                    .label(tr("新增环境"))
                     .on_click({
                         let state = state.clone();
                         move |_, window, cx| {
@@ -366,30 +367,30 @@ fn header_line(theme: &Theme) -> Div {
         .border_color(theme.colors.border)
         .text_xs()
         .text_color(theme.colors.muted_foreground)
-        .child(div().flex_1().min_w_0().child("名称"))
+        .child(div().flex_1().min_w_0().child(tr("名称")))
         .child(
             div()
                 .w(rems(ui::MANAGE_ENV_COL_KIND))
                 .flex_none()
-                .child("类型"),
+                .child(tr("类型")),
         )
         .child(
             div()
                 .w(rems(ui::MANAGE_ENV_COL_COMMAND))
                 .flex_none()
-                .child("命令"),
+                .child(tr("命令")),
         )
         .child(
             div()
                 .w(rems(ui::MANAGE_ENV_COL_ARGS))
                 .flex_none()
-                .child("参数"),
+                .child(tr("参数")),
         )
         .child(
             div()
                 .w(rems(ui::MANAGE_ENV_COL_VERSION))
                 .flex_none()
-                .child("版本"),
+                .child(tr("版本")),
         )
         .child(
             div()
@@ -431,7 +432,7 @@ fn env_line(
             .with_variant(ButtonVariant::Ghost)
             .xsmall()
             .debug_selector(move || format!("editor-env-edit-{id_debug}"))
-            .label("编辑")
+            .label(tr("编辑"))
             .on_click(move |_, window, cx| {
                 let state = state.clone();
                 state.update(cx, |s, cx| s.begin_edit(&id, window, cx));
@@ -445,7 +446,7 @@ fn env_line(
             .with_variant(ButtonVariant::Ghost)
             .xsmall()
             .debug_selector(move || format!("editor-env-delete-{id_debug}"))
-            .label("删除")
+            .label(tr("删除"))
             .on_click(move |_, window, cx| {
                 let state = state.clone();
                 state.update(cx, |s, cx| s.delete(&id, window, cx));
@@ -480,7 +481,7 @@ fn env_line(
                             .flex_none()
                             .text_xs()
                             .text_color(muted)
-                            .child("· 系统"),
+                            .child(tr("· 系统")),
                     )
                 }),
         )
@@ -559,7 +560,7 @@ fn form_view(cx: &App, state: &Entity<ManageEnvState>) -> Div {
                     .w(rems(ui::MANAGE_ENV_FORM_LABEL))
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("类型"),
+                    .child(tr("类型")),
             )
             .child(kind_selector(state.clone(), kind)),
     );
