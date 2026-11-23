@@ -212,7 +212,7 @@ fn open_tag_rename_dialog(
                         div()
                             .text_xs()
                             .text_color(theme.colors.muted_foreground)
-                            .child("改名后，所有引用该标签的连接 / 资源 / 草稿自动跟随（按标签定义 id 关联）。"),
+                            .child(tr("改名后，所有引用该标签的连接 / 资源 / 草稿自动跟随（按标签定义 id 关联）。")),
                     )
                     .child(Input::new(&name_input))
                     .when(name_empty, |el| {
@@ -459,7 +459,7 @@ pub fn open_tag_manager_dialog(window: &mut Window, cx: &mut App, shared: &Share
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("暂无标签。可在连接行 / 资源 / 草稿上新建。"),
+                    .child(tr("暂无标签。可在连接行 / 资源 / 草稿上新建。")),
             );
         } else {
             for r in list.iter() {
@@ -587,7 +587,7 @@ pub fn open_tag_manager_dialog(window: &mut Window, cx: &mut App, shared: &Share
                     div()
                         .text_xs()
                         .text_color(theme.colors.muted_foreground)
-                        .child("空标签 = 没有被任何连接 / 资源 / 草稿引用的标签定义"),
+                        .child(tr("空标签 = 没有被任何连接 / 资源 / 草稿引用的标签定义")),
                 ),
         );
 

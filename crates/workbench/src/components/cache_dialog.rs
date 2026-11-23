@@ -305,7 +305,7 @@ pub fn open_cache_dialog(window: &mut Window, cx: &mut App, shared: &Shared) {
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("缓存默认不随断开 / 删除连接清除；仅此处显式清理。"),
+                    .child(tr("缓存默认不随断开 / 删除连接清除；仅此处显式清理。")),
             )
             .footer(
                 DialogFooter::new()

@@ -153,7 +153,7 @@ impl PluginManagerPanel {
             return input.clone();
         }
         let input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("搜索插件名称 / ID / 描述…"));
+            cx.new(|cx| InputState::new(window, cx).placeholder(tr("搜索插件名称 / ID / 描述…")));
         let query = self.query.clone();
         let sub = cx.subscribe_in(
             &input,

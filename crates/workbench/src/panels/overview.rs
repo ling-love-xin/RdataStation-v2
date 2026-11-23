@@ -41,7 +41,7 @@ pub(crate) fn render_overview_cards(
             div()
                 .text_xs()
                 .text_color(theme.colors.muted_foreground)
-                .child("本机实时读数：连接、项目元数据、洞察画像、分析库"),
+                .child(tr("本机实时读数：连接、项目元数据、洞察画像、分析库")),
         )
         .child(div().flex_1())
         .child(

@@ -104,7 +104,7 @@ impl ListDelegate for PluginListDelegate {
                 .ghost()
                 .with_size(Size::XSmall)
                 .label(tr("重试"))
-                .tooltip("重新解析清单并加载（修好清单或卸载冲突插件后使用）")
+                .tooltip(tr("重新解析清单并加载（修好清单或卸载冲突插件后使用）"))
                 .disabled(busy)
                 .on_click(move |_, _window, app| {
                     let _ = entity.update(app, |this, cx| this.retry_plugin(action_id.clone(), cx));
@@ -115,7 +115,7 @@ impl ListDelegate for PluginListDelegate {
                 .ghost()
                 .with_size(Size::XSmall)
                 .label(tr("停用"))
-                .tooltip("停用后本会话立即停止运行（进程停用），下次启动不再激活")
+                .tooltip(tr("停用后本会话立即停止运行（进程停用），下次启动不再激活"))
                 .disabled(busy)
                 .on_click(move |_, _window, app| {
                     let _ = entity.update(app, |this, cx| {
@@ -148,7 +148,7 @@ impl ListDelegate for PluginListDelegate {
             .ghost()
             .with_size(Size::XSmall)
             .label(tr("卸载"))
-            .tooltip("从磁盘删除该插件（保留 plugin-data 用户数据）")
+            .tooltip(tr("从磁盘删除该插件（保留 plugin-data 用户数据）"))
             .disabled(busy)
             .on_click(move |_, window, app| {
                 let entity = uninstall_entity.clone();

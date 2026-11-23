@@ -103,13 +103,13 @@ impl Render for ConfigCenterPanel {
                 .child(
                     div()
                         .text_sm()
-                        .child("配置中心尚未打开任何域：从连接对话框的「管理」入口进入。"),
+                        .child(tr("配置中心尚未打开任何域：从连接对话框的「管理」入口进入。")),
                 )
                 .child(
                     div()
                         .text_xs()
                         .text_color(theme.colors.muted_foreground)
-                        .child("认证档案 / 网络代理 / 环境策略三域共用本页。"),
+                        .child(tr("认证档案 / 网络代理 / 环境策略三域共用本页。")),
                 )
                 .into_any_element();
         };

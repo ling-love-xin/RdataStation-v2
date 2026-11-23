@@ -81,13 +81,13 @@ impl Render for ProjectPickerPanel {
                     .text_lg()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.colors.foreground)
-                    .child("欢迎使用 RdataStation"),
+                    .child(tr("欢迎使用 RdataStation")),
             )
             .child(
                 div()
                     .text_sm()
                     .text_color(theme.colors.muted_foreground)
-                    .child("新建连接、打开项目，或从最近使用继续"),
+                    .child(tr("新建连接、打开项目，或从最近使用继续")),
             )
             .child(
                 div()

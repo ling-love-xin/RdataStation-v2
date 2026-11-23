@@ -174,7 +174,7 @@ pub fn open_object_mask_dialog(
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("规则只作用于对象名（表 / 视图 / 例程 / 序列 / 触发器），不影响库 / schema 层级。"),
+                    .child(tr("规则只作用于对象名（表 / 视图 / 例程 / 序列 / 触发器），不影响库 / schema 层级。")),
             );
         dialog
             .title(title.clone())

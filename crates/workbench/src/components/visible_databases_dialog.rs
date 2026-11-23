@@ -109,7 +109,7 @@ pub fn open_visible_databases_dialog(
                 div()
                     .text_xs()
                     .text_color(muted)
-                    .child("候选清单查询失败：连接未连接或元数据不可用。"),
+                    .child(tr("候选清单查询失败：连接未连接或元数据不可用。")),
             );
         }
         for (catalog, schemas) in s.entries.iter() {
@@ -237,7 +237,7 @@ pub fn open_visible_databases_dialog(
                 div()
                     .text_xs()
                     .text_color(muted)
-                    .child("取消勾选 = 树里隐藏（含系统对象）；确定后立即生效并重载该连接。"),
+                    .child(tr("取消勾选 = 树里隐藏（含系统对象）；确定后立即生效并重载该连接。")),
             )
             .footer(
                 DialogFooter::new()

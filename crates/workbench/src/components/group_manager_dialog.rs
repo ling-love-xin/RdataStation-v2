@@ -134,7 +134,7 @@ pub fn open_group_manager_dialog(window: &mut Window, cx: &mut App, shared: &Sha
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("暂无分组。右键连接可新建分组。"),
+                    .child(tr("暂无分组。右键连接可新建分组。")),
             );
         } else {
             for r in list.iter() {
@@ -266,7 +266,7 @@ pub fn open_group_manager_dialog(window: &mut Window, cx: &mut App, shared: &Sha
                                     let shared = shared.clone();
                                     let root = root.clone();
                                     built.item(
-                                        PopupMenuItem::new("未分组").on_click(move |_, window, app| {
+                                        PopupMenuItem::new(tr("未分组")).on_click(move |_, window, app| {
                                             confirm_merge(
                                                 window,
                                                 app,
@@ -363,7 +363,7 @@ pub fn open_group_manager_dialog(window: &mut Window, cx: &mut App, shared: &Sha
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("合并会把源组全部成员并入目标组；删除只移除分组结构。"),
+                    .child(tr("合并会把源组全部成员并入目标组；删除只移除分组结构。")),
             )
     });
 }

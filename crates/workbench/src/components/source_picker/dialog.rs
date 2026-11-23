@@ -768,7 +768,7 @@ pub fn open_source_picker(
     }
 
     let search =
-        cx.new(|cx| InputState::new(window, cx).placeholder("搜索表 / 视图 / 文件（Ctrl+F）"));
+        cx.new(|cx| InputState::new(window, cx).placeholder(tr("搜索表 / 视图 / 文件（Ctrl+F）")));
     let shell = cx.new(|cx| {
         PickerShell::new(
             state.clone(),

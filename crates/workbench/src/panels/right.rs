@@ -224,7 +224,7 @@ impl RightSidebarPanel {
                     .px_4()
                     .text_xs()
                     .text_color(muted)
-                    .child("在左侧「资产库」选中一行，这里显示它的归档凭证"),
+                    .child(tr("在左侧「资产库」选中一行，这里显示它的归档凭证")),
             )
     }
 

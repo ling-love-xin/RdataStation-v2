@@ -167,7 +167,7 @@ pub fn open_manage_views_dialog(window: &mut Window, cx: &mut App, shared: &Shar
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("暂无已保存视图。在导航面板 ⋯ 菜单「将当前筛选存为视图…」创建。"),
+                    .child(tr("暂无已保存视图。在导航面板 ⋯ 菜单「将当前筛选存为视图…」创建。")),
             );
         } else {
             for row in list.iter() {
@@ -261,7 +261,7 @@ pub fn open_manage_views_dialog(window: &mut Window, cx: &mut App, shared: &Shar
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("删除只移除视图定义，当前导航筛选不变。"),
+                    .child(tr("删除只移除视图定义，当前导航筛选不变。")),
             )
     });
 }

@@ -70,7 +70,7 @@ pub fn open_tag_assign_dialog(window: &mut Window, cx: &mut App, shared: &Shared
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("暂无标签定义。可在连接行 / 资源 / 草稿上新建。"),
+                    .child(tr("暂无标签定义。可在连接行 / 资源 / 草稿上新建。")),
             );
         } else {
             for (i, name) in tags.iter().enumerate() {

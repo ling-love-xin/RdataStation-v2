@@ -644,7 +644,7 @@ pub(crate) fn plugin_action_buttons(
             .ghost()
             .with_size(Size::XSmall)
             .label(tr("重试"))
-            .tooltip("重新解析清单并加载（修好清单或卸载冲突插件后使用）")
+            .tooltip(tr("重新解析清单并加载（修好清单或卸载冲突插件后使用）"))
             .disabled(busy)
             .on_click({
                 let entity = entity.clone();
@@ -831,7 +831,7 @@ pub(crate) fn plugin_file_buttons(
     .ghost()
     .with_size(Size::XSmall)
     .label(tr("复制诊断"))
-    .tooltip("复制插件状态、驱动登记与日志路径，便于排查")
+    .tooltip(tr("复制插件状态、驱动登记与日志路径，便于排查"))
     .on_click({
         let entity = entity.clone();
         move |_, _window, app| {
@@ -854,7 +854,7 @@ pub(crate) fn plugin_file_buttons(
     .ghost()
     .with_size(Size::XSmall)
     .label(tr("重算校验"))
-    .tooltip("按当前目录内容重写 checksums.json（换过 jar / 改过脚本、重启时被「哈希不符」拒了之后用）")
+    .tooltip(tr("按当前目录内容重写 checksums.json（换过 jar / 改过脚本、重启时被「哈希不符」拒了之后用）"))
     .disabled(busy || !dir_usable)
     .on_click({
         let entity = entity.clone();

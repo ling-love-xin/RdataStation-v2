@@ -259,7 +259,7 @@ impl Render for MetadataSearchHostPanel {
                     div()
                         .text_xs()
                         .text_color(muted)
-                        .child("在顶部搜索框输入关键词回车，结果会显示在这里"),
+                        .child(tr("在顶部搜索框输入关键词回车，结果会显示在这里")),
                 );
         };
 
@@ -368,7 +368,7 @@ impl Render for MetadataSearchHostPanel {
                     .ghost()
                     .small()
                     .icon(IconName::EllipsisVertical)
-                    .tooltip("列表菜单：切换视图布局 / 导出结果（后续）")
+                    .tooltip(tr("列表菜单：切换视图布局 / 导出结果（后续）"))
                     .on_click(|_, _, _| {}),
             );
 

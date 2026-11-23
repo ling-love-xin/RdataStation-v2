@@ -241,7 +241,7 @@ pub(super) fn render_extensions(
                     format!("引擎扩展（{count}）")
                 }))
                 .with_size(Size::XSmall)
-                .tooltip("分析引擎用的 DuckDB 扩展（不是连接里的 DuckDB 数据库）")
+                .tooltip(tr("分析引擎用的 DuckDB 扩展（不是连接里的 DuckDB 数据库）"))
                 .on_click({
                     let manager = manager.clone();
                     move |_, _, app| {
@@ -260,7 +260,7 @@ pub(super) fn render_extensions(
                 .ghost()
                 .icon(IconName::RefreshCw)
                 .with_size(Size::XSmall)
-                .tooltip("重新对照：登记表 / DuckDB 自报 / 磁盘")
+                .tooltip(tr("重新对照：登记表 / DuckDB 自报 / 磁盘"))
                 .on_click({
                     let manager = manager.clone();
                     move |_, _, app| {
@@ -438,7 +438,7 @@ fn render_extension_row(
                     .ghost()
                     .label(tr("登记"))
                     .with_size(Size::XSmall)
-                    .tooltip("承认这个文件就是我要的：登记进表并记下指纹")
+                    .tooltip(tr("承认这个文件就是我要的：登记进表并记下指纹"))
                     .on_click(move |_, _, app| {
                         let name = adopt_name.clone();
                         let _ = adopt_manager.update(app, |this, cx| {

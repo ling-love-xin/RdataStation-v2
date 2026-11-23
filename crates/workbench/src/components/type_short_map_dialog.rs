@@ -83,7 +83,7 @@ pub fn open_type_short_map_dialog(window: &mut Window, cx: &mut App) {
                 .child(
                     div()
                         .text_color(theme.colors.muted_foreground)
-                        .child("连接名称 `[简称]` 与徽标缩写共用"),
+                        .child(tr("连接名称 `[简称]` 与徽标缩写共用")),
                 ),
         );
         // 表头。

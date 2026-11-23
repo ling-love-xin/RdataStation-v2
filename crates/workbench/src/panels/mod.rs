@@ -449,7 +449,7 @@ impl SidebarPanel {
                     .pr_2()
                     .text_xs()
                     .text_color(fg)
-                    .child("· 插件市场（下一轮接入）"),
+                    .child(tr("· 插件市场（下一轮接入）")),
             )
     }
 }

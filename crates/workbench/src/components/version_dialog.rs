@@ -121,7 +121,7 @@ pub fn open_version_dialog(window: &mut Window, cx: &mut App) {
             .on_click(|_, window, cx| window.close_dialog(cx));
 
         dialog
-            .title("关于 RdataStation")
+            .title(tr("关于 RdataStation"))
             .w(px(560.))
             .child(standard_dialog_body(body))
             .footer(standard_dialog_footer(copy, Some(close)))

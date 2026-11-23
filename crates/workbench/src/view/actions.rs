@@ -132,7 +132,7 @@ impl WorkbenchView {
                     .p_4()
                     .text_sm()
                     .text_color(cx.theme().colors.muted_foreground)
-                    .child("项目面板尚未装配（首次渲染后可用）")
+                    .child(tr("项目面板尚未装配（首次渲染后可用）"))
                     .into_any_element(),
             },
         );

@@ -2,7 +2,8 @@
 //!
 //! 自 `view.rs` 拆分（行为不变）。
 
-use shared::i18n::{tr, Locale};
+use shared::i18n::tr;
+use shared::i18n::Locale;
 use super::*;
 impl WorkbenchView {
     /// 真面板化装配：只挂**已打开过**的模块 tab（`Shared::left_open_panels`）。
@@ -486,7 +487,7 @@ impl WorkbenchView {
         let theme_toggle = Button::new("theme-toggle")
             .ghost()
             .icon(Icon::new(theme_icon).size_3p5())
-            .tooltip("切换明暗主题 (Ctrl+Shift+L)")
+            .tooltip(tr("切换明暗主题 (Ctrl+Shift+L)"))
             .on_click(|_, window, app| {
                 SettingsService::toggle_theme_mode(Some(window), app);
             });
@@ -664,7 +665,7 @@ impl WorkbenchView {
                         menu = menu.item(PopupMenuItem::separator());
                         let shared = shared.clone();
                         let entity = entity.clone();
-                        menu = menu.item(PopupMenuItem::new("隐藏侧边栏").on_click({
+                        menu = menu.item(PopupMenuItem::new(tr("隐藏侧边栏")).on_click({
                             let shared = shared.clone();
                             let entity = entity.clone();
                             move |_, _, app| {
@@ -672,7 +673,7 @@ impl WorkbenchView {
                                 entity.update(app, |_, cx| cx.notify());
                             }
                         }));
-                        menu.item(PopupMenuItem::new("收起侧边栏").on_click({
+                        menu.item(PopupMenuItem::new(tr("收起侧边栏")).on_click({
                             let shared = shared.clone();
                             let entity = entity.clone();
                             move |_, _, app| {
@@ -749,7 +750,7 @@ impl WorkbenchView {
                         menu = menu.item(PopupMenuItem::separator());
                         let shared = shared.clone();
                         let entity = entity.clone();
-                        menu = menu.item(PopupMenuItem::new("隐藏侧边栏").on_click({
+                        menu = menu.item(PopupMenuItem::new(tr("隐藏侧边栏")).on_click({
                             let shared = shared.clone();
                             let entity = entity.clone();
                             move |_, _, app| {
@@ -757,7 +758,7 @@ impl WorkbenchView {
                                 entity.update(app, |_, cx| cx.notify());
                             }
                         }));
-                        menu.item(PopupMenuItem::new("收起侧边栏").on_click({
+                        menu.item(PopupMenuItem::new(tr("收起侧边栏")).on_click({
                             let shared = shared.clone();
                             let entity = entity.clone();
                             move |_, _, app| {

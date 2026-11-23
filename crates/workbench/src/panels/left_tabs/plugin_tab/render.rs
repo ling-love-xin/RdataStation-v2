@@ -25,7 +25,7 @@ impl Render for PluginPanel {
             .ghost()
             .icon(IconName::Settings)
             .with_size(Size::XSmall)
-            .tooltip("打开插件管理页（搜索、筛选、详情与安装）")
+            .tooltip(tr("打开插件管理页（搜索、筛选、详情与安装）"))
             .on_click(move |_, window, cx| {
                 manager_shared.show_plugin_manager(window, cx);
             });
@@ -41,7 +41,7 @@ impl Render for PluginPanel {
                 .ghost()
                 .label(format!("重载 {pending}"))
                 .with_size(Size::XSmall)
-                .tooltip("插件文件已变更，重载后生效（会停掉所有插件再重新激活）")
+                .tooltip(tr("插件文件已变更，重载后生效（会停掉所有插件再重新激活）"))
                 .on_click(move |_, _window, cx| {
                     let _ = reload_entity.update(cx, |this, cx| this.reload_plugins(cx));
                 })
@@ -57,7 +57,7 @@ impl Render for PluginPanel {
             .label(tr("安装插件"))
             .with_size(Size::XSmall)
             .disabled(busy)
-            .tooltip("从 .zip / .tar.gz 插件包安装")
+            .tooltip(tr("从 .zip / .tar.gz 插件包安装"))
             .on_click(move |_, _window, cx| {
                 let _ = install_file_entity.update(cx, |this, cx| this.pick_package_file(cx));
             });
@@ -67,7 +67,7 @@ impl Render for PluginPanel {
             .label(tr("从目录"))
             .with_size(Size::XSmall)
             .disabled(busy)
-            .tooltip("从本地插件目录（含 plugin.toml）导入")
+            .tooltip(tr("从本地插件目录（含 plugin.toml）导入"))
             .on_click(move |_, _window, cx| {
                 let _ = install_dir_entity.update(cx, |this, cx| this.pick_package_dir(cx));
             });

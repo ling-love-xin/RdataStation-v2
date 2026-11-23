@@ -72,7 +72,7 @@ impl PluginManagerPanel {
                     div()
                         .text_xs()
                         .text_color(theme.colors.muted_foreground)
-                        .child("卡片的「详情」按钮会把插件放到这里。"),
+                        .child(tr("卡片的「详情」按钮会把插件放到这里。")),
                 );
         };
 
@@ -208,7 +208,7 @@ impl PluginManagerPanel {
                                 div()
                                     .text_xs()
                                     .text_color(theme.colors.muted_foreground)
-                                    .child("此插件没有声明数据库驱动。"),
+                                    .child(tr("此插件没有声明数据库驱动。")),
                             );
                         } else {
                             block = block
@@ -280,7 +280,7 @@ impl PluginManagerPanel {
                                     div()
                                         .text_xs()
                                         .text_color(theme.colors.muted_foreground)
-                                        .child("「已登记」表示 global.db 的 drivers 表已有此行（连接对话框下拉可见）；「未登记」时先看上方运行状态与失败原因。"),
+                                        .child(tr("「已登记」表示 global.db 的 drivers 表已有此行（连接对话框下拉可见）；「未登记」时先看上方运行状态与失败原因。")),
                                 );
                         }
                         block
@@ -359,7 +359,7 @@ impl PluginManagerPanel {
                             None => div()
                                 .text_xs()
                                 .text_color(theme.colors.muted_foreground)
-                                .child("未查询（全局库未初始化，停用 / 卸载前无法前置检查）。")
+                                .child(tr("未查询（全局库未初始化，停用 / 卸载前无法前置检查）。"))
                                 .into_any_element(),
                             Some([]) => div()
                                 .text_xs()
@@ -403,7 +403,7 @@ impl PluginManagerPanel {
                                     div()
                                         .text_xs()
                                         .text_color(theme.colors.muted_foreground)
-                                        .child("停用会让它们立即失效；卸载前需先卸载依赖它的插件。"),
+                                        .child(tr("停用会让它们立即失效；卸载前需先卸载依赖它的插件。")),
                                 )
                             },
                         ),
@@ -480,7 +480,7 @@ impl PluginManagerPanel {
                             div()
                                 .text_xs()
                                 .text_color(theme.colors.warning)
-                                .child("会接收数据库密码（仅用于建立连接）。"),
+                                .child(tr("会接收数据库密码（仅用于建立连接）。")),
                         )
                     })
                     .when(!permissions.host.is_empty(), |section| {
@@ -488,7 +488,7 @@ impl PluginManagerPanel {
                             div()
                                 .text_xs()
                                 .text_color(theme.colors.muted_foreground)
-                                .child("Host API 默认拒绝：声明只表示申请，不等于已放行。"),
+                                .child(tr("Host API 默认拒绝：声明只表示申请，不等于已放行。")),
                         )
                     })
             })
@@ -557,7 +557,7 @@ impl PluginManagerPanel {
                         div()
                             .text_xs()
                             .text_color(theme.colors.muted_foreground)
-                            .child("卸载会从磁盘删除插件目录，但保留 plugin-data 下的用户数据。"),
+                            .child(tr("卸载会从磁盘删除插件目录，但保留 plugin-data 下的用户数据。")),
                     ),
             );
 

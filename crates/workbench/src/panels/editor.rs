@@ -353,7 +353,7 @@ impl Render for EditorPanel {
                         div()
                             .text_xs()
                             .text_color(theme.colors.muted_foreground)
-                            .child("选中连接查看真实元数据；本地加速（DuckDB Secret）将在连接建立后自动注册"),
+                            .child(tr("选中连接查看真实元数据；本地加速（DuckDB Secret）将在连接建立后自动注册")),
                     ),
             );
 
@@ -501,7 +501,7 @@ impl Render for EditorPanel {
                     )
                     .child(
                         div().v_flex().gap_1().mt_2().pt_2()
-                            .child(div().text_sm().font_weight(FontWeight::MEDIUM).child("数据库导航（DuckDB 分析库）")),
+                            .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(tr("数据库导航（DuckDB 分析库）"))),
                     ),
             );
         }
@@ -516,7 +516,7 @@ impl Render for EditorPanel {
                         div()
                             .text_xs()
                             .text_color(theme.colors.muted_foreground)
-                            .child("分析库暂无表——运行 seed_demo 或导入数据"),
+                            .child(tr("分析库暂无表——运行 seed_demo 或导入数据")),
                     );
                 } else {
                     for table in nav.iter() {
@@ -576,7 +576,7 @@ impl Render for EditorPanel {
                 div()
                     .text_sm()
                     .font_weight(FontWeight::MEDIUM)
-                    .child("Mock 数据（生成测试数据）"),
+                    .child(tr("Mock 数据（生成测试数据）")),
             ),
         );
 

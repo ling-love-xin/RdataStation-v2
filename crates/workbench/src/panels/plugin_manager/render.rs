@@ -52,7 +52,7 @@ impl PluginManagerPanel {
                             div()
                                 .text_xs()
                                 .text_color(theme.colors.muted_foreground)
-                                .child("本地已安装 · 所有操作立即生效"),
+                                .child(tr("本地已安装 · 所有操作立即生效")),
                         ),
                 ),
             )
@@ -86,7 +86,7 @@ impl PluginManagerPanel {
                     .ghost()
                     .icon(IconName::RefreshCw)
                     .with_size(Size::Small)
-                    .tooltip("重新同步驱动登记并读取插件清单")
+                    .tooltip(tr("重新同步驱动登记并读取插件清单"))
                     .on_click({
                         let manager = cx.entity();
                         move |_, _, app| {
@@ -133,7 +133,7 @@ impl PluginManagerPanel {
                         stats.disabled
                     )))
                     .with_size(Size::XSmall)
-                    .tooltip("启用并激活当前所有已停用的插件")
+                    .tooltip(tr("启用并激活当前所有已停用的插件"))
                     .disabled(busy || stats.disabled == 0)
                     .on_click({
                         let manager = cx.entity();
@@ -154,7 +154,7 @@ impl PluginManagerPanel {
                         stats.error
                     )))
                     .with_size(Size::XSmall)
-                    .tooltip("重新解析清单并加载所有出错插件；结果仍失败时保留原因")
+                    .tooltip(tr("重新解析清单并加载所有出错插件；结果仍失败时保留原因"))
                     .disabled(busy)
                     .on_click({
                         let manager = cx.entity();
@@ -175,7 +175,7 @@ impl PluginManagerPanel {
                         stats.enabled
                     )))
                     .with_size(Size::XSmall)
-                    .tooltip("停用当前所有已启用插件（会先确认）")
+                    .tooltip(tr("停用当前所有已启用插件（会先确认）"))
                     .disabled(busy || stats.enabled == 0)
                     .on_click({
                         let manager = cx.entity();
@@ -283,7 +283,7 @@ impl PluginManagerPanel {
                         format!("登记明细（{}）", registry_rows.len())
                     }))
                     .with_size(Size::XSmall)
-                    .tooltip("按驱动 id 查看每个插件在 drivers 表的真实登记状态")
+                    .tooltip(tr("按驱动 id 查看每个插件在 drivers 表的真实登记状态"))
                     .on_click({
                         let manager = cx.entity();
                         move |_, _, app| {
@@ -440,7 +440,7 @@ impl PluginManagerPanel {
                         format!("操作记录（{ops_count}）")
                     }))
                     .with_size(Size::XSmall)
-                    .tooltip("安装 / 启停 / 卸载 / 重载 / 缺驱动被拒等动作的留痕")
+                    .tooltip(tr("安装 / 启停 / 卸载 / 重载 / 缺驱动被拒等动作的留痕"))
                     .on_click({
                         let manager = cx.entity();
                         move |_, _, app| {
@@ -451,7 +451,7 @@ impl PluginManagerPanel {
             .child(
                 div()
                     .text_color(theme.colors.muted_foreground)
-                    .child("留痕只为可查，失败原因原样保留")
+                    .child(tr("留痕只为可查，失败原因原样保留"))
             )
             .child(div().flex_1());
 
@@ -507,7 +507,7 @@ impl PluginManagerPanel {
                         "导出 JSON".to_string()
                     }))
                     .with_size(Size::XSmall)
-                    .tooltip("把最近 1000 条留痕写成 JSON（排障用），落到全局目录的 exports/")
+                    .tooltip(tr("把最近 1000 条留痕写成 JSON（排障用），落到全局目录的 exports/"))
                     .on_click({
                         let manager = cx.entity();
                         move |_, _, app| {

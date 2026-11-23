@@ -182,7 +182,7 @@ pub(super) fn render_lsp_manager(entity: &Entity<WorkbenchView>, cx: &mut App) -
             div()
                 .text_xs()
                 .text_color(muted)
-                .child("无面板使用，稍后会自动停止"),
+                .child(tr("无面板使用，稍后会自动停止")),
         );
     }
 
