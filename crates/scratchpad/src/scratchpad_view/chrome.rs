@@ -154,7 +154,7 @@ impl ScratchpadView {
                             .ghost()
                             .small()
                             .icon(IconName::Search)
-                            .tooltip("搜索文件（按文件名过滤目录树）")
+                            .tooltip(tr("搜索文件（按文件名过滤目录树）"))
                             .on_click(run_file_filter),
                     );
             } else {
@@ -170,7 +170,7 @@ impl ScratchpadView {
                     .ghost()
                     .small()
                     .icon(Icon::empty().path("icons/tag.svg"))
-                    .tooltip("按标签筛选（可叠加文件名过滤）")
+                    .tooltip(tr("按标签筛选（可叠加文件名过滤）"))
                     .dropdown_menu(move |menu, _, _| {
                         let tags = tag_menu_tags.clone();
                         let current = tag_menu_current.clone();
@@ -731,7 +731,7 @@ impl ScratchpadView {
                                 .ghost()
                                 .small()
                                 .icon(Icon::empty().path("icons/rotate-ccw.svg"))
-                                .tooltip("重新链接引用（原路径失效）")
+                                .tooltip(tr("重新链接引用（原路径失效）"))
                                 .on_click(relink),
                         )
                     })
@@ -1049,7 +1049,7 @@ impl ScratchpadView {
             .ghost()
             .small()
             .icon(Icon::empty().path("icons/ellipsis-vertical.svg"))
-            .tooltip("更多设置（显示/隐藏/左右位置/拖拽排序）")
+            .tooltip(tr("更多设置（显示/隐藏/左右位置/拖拽排序）"))
             .dropdown_menu(move |menu, _, _| {
                 let entity = more_entity.clone();
                 let cfg = menu_cfg.clone();
@@ -1598,7 +1598,7 @@ impl ScratchpadView {
                     .ghost()
                     .small()
                     .icon(IconName::ArrowLeft)
-                    .tooltip("返回文件树（退出搜索状态）")
+                    .tooltip(tr("返回文件树（退出搜索状态）"))
                     .on_click(close_panel),
             )
             .child(
@@ -1630,7 +1630,7 @@ impl ScratchpadView {
                     .ghost()
                     .small()
                     .icon(IconName::Search)
-                    .tooltip("新建编辑器查询（打开「搜索 query」独立 Tab）")
+                    .tooltip(tr("新建编辑器查询（打开「搜索 query」独立 Tab）"))
                     .on_click(open_in_editor_tab),
             )
             .child(
@@ -1698,14 +1698,14 @@ impl ScratchpadView {
                 .small()
                 .label("ab")
                 .toggled(search_word)
-                .tooltip("全字匹配（ab 开关：仅匹配完整单词）")
+                .tooltip(tr("全字匹配（ab 开关：仅匹配完整单词）"))
                 .on_click(toggle_word);
             let reg_btn = Button::new("sp-regex")
                 .ghost()
                 .small()
                 .label(".*")
                 .toggled(search_regex)
-                .tooltip("使用正则表达式（如 \\d+ 匹配数字；关掉则按纯文本匹配）")
+                .tooltip(tr("使用正则表达式（如 \\d+ 匹配数字；关掉则按纯文本匹配）"))
                 .on_click(toggle_regex);
             let case_btn = Button::new("sp-case")
                 .ghost()
@@ -1786,7 +1786,7 @@ impl ScratchpadView {
                     .small()
                     .label("AB")
                     .toggled(replace_case)
-                    .tooltip("保留大小写（已接入：替换时保持命中词的原有大小写格式，如全大写/首字母大写/全小写）")
+                    .tooltip(tr("保留大小写（已接入：替换时保持命中词的原有大小写格式，如全大写/首字母大写/全小写）"))
                     .on_click(toggle_replace_case);
             replace_row = replace_row.child(
                 div().flex_1().min_w_0().child(
@@ -1806,7 +1806,7 @@ impl ScratchpadView {
             Button::new("sp-replace-all")
                 .small()
                 .icon(IconName::Replace)
-                .tooltip("全部替换（替换输入框内按 Enter 等效）")
+                .tooltip(tr("全部替换（替换输入框内按 Enter 等效）"))
                 .disabled(!replace_filled)
                 .on_click(replace_all),
         );
@@ -1867,7 +1867,7 @@ impl ScratchpadView {
                             .ghost()
                             .small()
                             .icon(IconName::Settings2)
-                            .tooltip("编辑包含文件规则（glob）")
+                            .tooltip(tr("编辑包含文件规则（glob）"))
                             .on_click(hint_include.clone()),
                     )
                     .child(
@@ -1895,7 +1895,7 @@ impl ScratchpadView {
                             .ghost()
                             .small()
                             .icon(IconName::Settings)
-                            .tooltip("设置排除文件规则（glob）")
+                            .tooltip(tr("设置排除文件规则（glob）"))
                             .on_click(hint_exclude),
                     );
             }
@@ -1929,7 +1929,7 @@ impl ScratchpadView {
                         .text_xs()
                         .text_color(muted)
                         .px_1()
-                        .child("样例：*.sql, src/**/include（留空搜索全部文件）"),
+                        .child(tr("样例：*.sql, src/**/include（留空搜索全部文件）")),
                 );
             }
             if exclude_focused {
@@ -1938,7 +1938,7 @@ impl ScratchpadView {
                         .text_xs()
                         .text_color(muted)
                         .px_1()
-                        .child("样例：*.log, .git/, target/（留空不排除）"),
+                        .child(tr("样例：*.log, .git/, target/（留空不排除）")),
                 );
             }
         }
@@ -2367,7 +2367,7 @@ impl ScratchpadView {
                                 .py_1()
                                 .text_xs()
                                 .text_color(theme.colors.muted_foreground)
-                                .child("还没有标签——在下面输入一个名字即可新建"),
+                                .child(tr("还没有标签——在下面输入一个名字即可新建")),
                         );
                     }
                     for tag in &tags {

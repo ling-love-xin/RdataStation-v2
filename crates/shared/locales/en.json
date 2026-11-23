@@ -1397,5 +1397,20 @@
   "复制为模板（不带密码；回车提交）": "Copy as template (without password; Enter submits)",
   "语法速查：^ 开头 · $ 结尾 · .* 任意字符 · | 或 · () 分组": "Syntax cheat sheet: ^ start · $ end · .* any characters · | or · () grouping",
   "待内省采集：视图 / 例程定义批量采集链路接通后启用": "Introspection pending: enabled once bulk collection of view / routine definitions is wired up",
-  "当前项目与全局库均无连接。点击下方「新建连接」开始。": "No connections in this project or the global library. Click 'New connection' below to start."
+  "当前项目与全局库均无连接。点击下方「新建连接」开始。": "No connections in this project or the global library. Click 'New connection' below to start.",
+  "搜索文件（按文件名过滤目录树）": "Search files (filters the tree by file name)",
+  "按标签筛选（可叠加文件名过滤）": "Filter by tag (combines with the file-name filter)",
+  "重新链接引用（原路径失效）": "Re-link the reference (original path is broken)",
+  "更多设置（显示/隐藏/左右位置/拖拽排序）": "More settings (show/hide, left/right position, drag to reorder)",
+  "返回文件树（退出搜索状态）": "Back to the file tree (leaves search mode)",
+  "全字匹配（ab 开关：仅匹配完整单词）": "Match whole word (ab toggle: complete words only)",
+  "全部替换（替换输入框内按 Enter 等效）": "Replace all (same as pressing Enter in the replace box)",
+  "编辑包含文件规则（glob）": "Edit the include-file rule (glob)",
+  "设置排除文件规则（glob）": "Set the exclude-file rule (glob)",
+  "还没有标签——在下面输入一个名字即可新建": "No tags yet — type a name below to create one",
+  "新建编辑器查询（打开「搜索 query」独立 Tab）": "New editor query (opens a separate 'search query' tab)",
+  "使用正则表达式（如 \\\\d+ 匹配数字；关掉则按纯文本匹配）": "Use a regular expression (e.g. \\\\d+ matches digits; off = plain-text matching)",
+  "保留大小写（已接入：替换时保持命中词的原有大小写格式，如全大写/首字母大写/全小写）": "Preserve case (active: replacements keep the matched word's original casing, e.g. ALL CAPS / Capitalized / lowercase)",
+  "样例：*.sql, src/**/include（留空搜索全部文件）": "Example: *.sql, src/**/include (empty = search all files)",
+  "样例：*.log, .git/, target/（留空不排除）": "Example: *.log, .git/, target/ (empty = exclude nothing)"
 }
