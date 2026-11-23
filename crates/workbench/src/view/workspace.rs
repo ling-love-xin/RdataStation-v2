@@ -138,6 +138,55 @@ impl WorkbenchView {
         });
         self.source_kids_pump = Some(task);
     }
+
+    /// 启动「活动文档跟踪」泵（装配期一次，0.3 s 一拍）。
+    ///
+    /// 为什么要有个泵：工作集是**按文档**记的，而面板只拿到 `Shared`——活动文档的真相在
+    /// `EditorService`（`EditorHostPanel::set_active` 会 `activate` 它）。切标签不产生事件，
+    /// 所以这里只做一件极便宜的事：比对一个 id（`active_id()` 是一次 `RefCell` 读，
+    /// 不查库不读盘；每拍的成本与「什么都不做」同量级）。
+    ///
+    /// 变了才 `notify`：面板在 render 里比对版本号，再用 `defer_in` 做换工作集（那一步要读盘）。
+    pub(super) fn ensure_document_pump(&mut self, cx: &mut Context<Self>) {
+        if self.document_pump.is_some() {
+            return;
+        }
+        let weak = cx.entity().downgrade();
+        let executor = cx.background_executor().clone();
+        let task = cx.spawn(async move |_this, cx| {
+            loop {
+                executor.timer(std::time::Duration::from_millis(300)).await;
+                let alive = weak
+                    .update(cx, |this, cx| {
+                        let active = this
+                            .editor_service
+                            .service()
+                            .active_id()
+                            .map(|id| id.as_str().to_string());
+                        let shared = this.shared.clone();
+                        let changed = {
+                            let mut working_set = shared.working_set.borrow_mut();
+                            if working_set.current == active {
+                                false
+                            } else {
+                                // 版本号同一次写：面板只认版本号（不用自己再比一次 current）
+                                working_set.current = active;
+                                working_set.epoch = working_set.epoch.wrapping_add(1);
+                                true
+                            }
+                        };
+                        if changed {
+                            cx.notify();
+                        }
+                    })
+                    .is_ok();
+                if !alive {
+                    return;
+                }
+            }
+        });
+        self.document_pump = Some(task);
+    }
 }
 
 impl WorkbenchView {
@@ -576,6 +625,8 @@ impl WorkbenchView {
         self.ensure_data_objects_pump(cx);
         // 源行展开列举的回执（0.3 s 一拍；worker 线程的结果写回面板缓存）。
         self.ensure_source_kids_pump(cx);
+        // 活动文档跟踪（0.3 s 一拍；切了文档就让数据对象面板换工作集）。
+        self.ensure_document_pump(cx);
 
         // 宿主重绘桥再挂一层：除宿主自身，编辑区也要跟上。
         //

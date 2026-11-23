@@ -1542,6 +1542,9 @@ fn shared_fields_are_whitelisted() {
         "trash_dialog",
         "version_dialog",
         "version_diff_dialog",
+        // 数据对象工作集的「按文档」账本（2026-11-23）：宿主泵写 current / epoch，
+        // 面板据此换那一份并落盘到 `{项目}/.RSmeta/workbench/working_set.json`。
+        "working_set",
     ];
     assert_eq!(
         found, expected,

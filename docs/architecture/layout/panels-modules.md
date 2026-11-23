@@ -61,6 +61,7 @@
 | `data_objects` / `data_object_assets` / `data_object_picked` | data_objects 面板 ↔ 宿主 | 数据对象清单缓存（面板刷新写、render 只读）+ 已选身份；宿主「分析已选」读后转 `SampleSource`（2026-11-16 补登记） |
 | `data_objects_epoch` | 宿主各方写（`mark_data_objects_dirty`）→ data_objects 面板 render 读 | 清单**过期信号**：只递增版本号，面板自己在 `cx.defer_in` 里按号重取，render 期间不 I/O。触发面 = 后台指纹泵（1 s 比对结果集/样本/加载文件/连接/资产/项目）+ 加载文件落地、切项目、连接清册替换、资源刷新（`refresh_resources` 只递增、**不** `notify_host`——它在侧栏构造期被调，重入宿主 update 会 panic）。**不进快照**（进程内失效戳，2026-11-22 补登记） |
 | `loaded_files` | data_objects 面板写 → 清单收集读 | 「加源 → 加载文件」落地后的登记（`f_<alias>` 别名与源路径），用来区分「已经进过分析的文件」与「项目里但没加载的文件」（2026-11-16 补登记） |
+| `working_set` | 宿主泵写 `current` / `epoch` → data_objects 面板读 | 数据对象工作集的**按文档账本**：活动文档是谁（`EditorService::active_id`）、切了几版、每份文档各勾了哪些 `Object::key`。泵 0.3 s 只做一次 id 比对；面板在 render 里比版本号、用 `defer_in` 换工作集（要读 / 写盘）。落点 `{项目}/.RSmeta/workbench/working_set.json`，未命名文档不落盘（`doc-7` 这种运行时序号重启后指向另一份空白文档）。**不进快照**（2026-11-23 补登记） |
 | `detail_version` | 右栏 / 归档 tab 写（本面板内）→ 同面板 render 读 | 详情「版本时间线」选中的那一版（资产 id + 版本号；按 id 配对，换资产自动失效）。**不进快照**：选中是窗口级 UI 状态，进快照会让点一下节点就重建整份快照（2026-11-17 补登记） |
 
 共 20 个字段跨模块。它们**没有类型级保护**：任何模块都能写任何字段，改一处语义不会有编译错误，

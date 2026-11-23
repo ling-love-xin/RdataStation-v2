@@ -53,5 +53,7 @@ pub mod scratchpad_meta;
 pub use connection_dialog::services::secret_integration;
 /// 源行展开的列举通道（worker 线程 + 结果队列 + UI 泵；见模块头）
 pub mod source_kids_jobs;
+/// 数据对象「工作集」的按文档落盘（`{项目}/.RSmeta/workbench/working_set.json`）
+pub mod working_set;
 
 pub use connection_dialog::services::workspace_loader;

@@ -148,6 +148,10 @@ pub struct WorkbenchView {
     /// 源行展开列举的回执泵（0.3 s 一拍；把 worker 的结果写回面板缓存）。
     /// 句柄必须被持有，drop 即停。
     source_kids_pump: Option<Task<()>>,
+    /// 活动文档跟踪泵（0.3 s 一拍；只读 `active_id` 比对，不查库不读盘）。
+    /// 变了就写 `Shared::working_set.current` 并 bump 版本号——数据对象面板据此换工作集。
+    /// 句柄必须被持有，drop 即停。
+    document_pump: Option<Task<()>>,
     /// 【#54 B】语义诊断目录快照注入泵（1 s 一拍；句柄必须被持有，drop 即停）。
     /// 复用 [`editor_completion`] 的 L1 目录：补全端口实例由本字段持有，
     /// 泵每拍读「活动文档绑定连接 → 推快照」（见 `services/editor_catalog.rs`）。

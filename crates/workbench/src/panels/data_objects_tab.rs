@@ -113,6 +113,13 @@ pub struct DataObjectsTab {
     /// 每个源已经翻过几页叶子（键 = 源行 key）：`None` / 没记录 = 第一页。
     /// 见 [`LEAF_PAGE_SIZE`] 与 [`leaf_shown`]——叶子多了只画一页，点「显示更多」才加。
     leaf_pages: HashMap<String, usize>,
+    /// 上次同步到的活动文档 key（`None` = 还没对上 / 没有文档）。
+    /// 与 `Shared::working_set.current` 比对：不同就说明用户切了文档，工作集要换那一份
+    active_doc_key: Option<String>,
+    /// 上次同步到的切文档版本号（与 `data_objects_epoch` 同一手法：计数变了才动）
+    seen_document_epoch: u64,
+    /// 上次落盘 / 读盘用的项目根：切项目要先把旧项目那份存掉再读新的（见 `follow_active_document`）
+    working_set_root: Option<std::path::PathBuf>,
     /// 清单版本号（`Shared::data_objects_epoch`）上次同步到的值：变了就重取，
     /// 让面板跟上「连接变化 / 查询产出结果集 / 加源 / 切项目」
     seen_epoch: u64,
@@ -128,6 +135,10 @@ pub struct DataObjectsTab {
 impl DataObjectsTab {
     pub fn new(shared: Shared, cx: &mut Context<Self>) -> Self {
         let shared_epoch = shared.data_objects_epoch.get();
+        let (active_doc_key, seen_document_epoch) = {
+            let working_set = shared.working_set.borrow();
+            (working_set.current.clone(), working_set.epoch)
+        };
         let mut tab = Self {
             shared,
             focus_handle: cx.focus_handle(),
@@ -142,6 +153,10 @@ impl DataObjectsTab {
             conn_children: HashMap::new(),
             loading_sources: HashSet::new(),
             leaf_pages: HashMap::new(),
+            active_doc_key,
+            seen_document_epoch,
+            // `None` = 还没读过盘：构造那次 `refresh` 会按当前项目根读一遍
+            working_set_root: None,
             // 初值故意落后于 Shared（`refresh` 里会同步成当前值）：构造那次刷新已经取过，
             // 不能让「首次 render 又发现 epoch 变了」再白重取一遍
             seen_epoch: shared_epoch,
@@ -272,6 +287,9 @@ impl DataObjectsTab {
         *self.shared.data_objects.borrow_mut() = data_objects::objects(&collected);
         // 清单换了：可见行缓存跟着作废（否则面板会一直画上一次的那份行）
         self.rows_cache = None;
+        // 项目 / 活动文档可能一起变了（切项目的动作也会 bump 清单版本号）：
+        // 工作集账本在这里对齐，别等到渲染里发现
+        self.follow_active_document(cx);
         // 展开着的源行：清单重取一遍（会话可能被重建，旧清单会骗人）。
         // 刷新是例行动作，失败不刷提示——真正的展开点击才把原因亮出来。
         // 取数在 worker 线程（`source_kids_jobs`），回执由宿主泵写回，这里只提交
@@ -384,7 +402,98 @@ impl DataObjectsTab {
     /// 增删语义在 `data_objects::toggle_in_place`（纯函数，有单测钉住计数真的会长）。
     fn toggle_picked(&mut self, key: &str, cx: &mut Context<Self>) {
         data_objects::toggle_in_place(&mut self.shared.data_object_picked.borrow_mut(), key);
+        // 工作集跟文档走、并且落盘：勾一下就要留下（下次打开这份文档还认得）
+        self.save_working_set();
         cx.notify();
+    }
+
+    /// 工作集落在哪个项目根下（`None` = 没项目 → 只在内存里，不落盘）
+    fn working_set_root_now(&self) -> Option<std::path::PathBuf> {
+        self.shared.project.borrow().as_ref().map(|p| p.root.clone())
+    }
+
+    /// 把「活动文档的当前选择」回存进账本。
+    ///
+    /// 为什么账本不是唯一真相：活动那一份就摆在 `data_object_picked` 里（渲染每帧都要读它），
+    /// 账本只在「切文档 / 落盘」这两个时刻需要它是最新的——所以那两个时刻先回存，别的一律不动。
+    fn flush_active_picks(&self) {
+        let Some(key) = self.active_doc_key.clone() else {
+            return;
+        };
+        let picks = self.shared.data_object_picked.borrow().clone();
+        self.shared
+            .working_set
+            .borrow_mut()
+            .by_document
+            .insert(key, picks);
+    }
+
+    /// 落盘（一份小 JSON，事件路径同步写；失败只说一句日志，不打断操作）
+    fn save_working_set(&self) {
+        let root = self.working_set_root_now();
+        let Some(root) = root else {
+            return;
+        };
+        self.flush_active_picks();
+        let sets = self.shared.working_set.borrow().by_document.clone();
+        if let Err(error) = crate::services::working_set::save(Some(&root), &sets) {
+            tracing::warn!(%error, "保存数据对象工作集失败");
+        }
+    }
+
+    /// 跟上「项目」和「活动文档」（**事件路径**：会读 / 写盘，不能放渲染里）。
+    ///
+    /// 两件事合成一个入口，因为它们的顺序有依赖：换项目要先存旧项目那份、再读新项目那份，
+    /// 之后才谈得上「新项目里当前文档勾了什么」。
+    pub(crate) fn follow_active_document(&mut self, cx: &mut Context<Self>) {
+        // ① 换项目 / 头一次：工作集是项目内的文件，换项目必须换账本
+        let root = self.working_set_root_now();
+        if root != self.working_set_root {
+            self.flush_active_picks();
+            if let Some(old) = self.working_set_root.clone() {
+                let sets = self.shared.working_set.borrow().by_document.clone();
+                if let Err(error) = crate::services::working_set::save(Some(&old), &sets) {
+                    tracing::warn!(%error, "切项目时保存工作集失败");
+                }
+            }
+            let loaded = crate::services::working_set::load(root.as_deref());
+            {
+                let mut working_set = self.shared.working_set.borrow_mut();
+                working_set.by_document = loaded;
+                working_set.epoch = working_set.epoch.wrapping_add(1);
+            }
+            self.working_set_root = root;
+            // 旧项目里勾的表 key 在新项目里没有意义：清掉，下面 ② 按新账本重取
+            self.active_doc_key = None;
+            *self.shared.data_object_picked.borrow_mut() = Vec::new();
+        }
+
+        // ② 活动文档变了：把自己这份回存，再换成新文档那一份
+        let (epoch, current) = {
+            let working_set = self.shared.working_set.borrow();
+            (working_set.epoch, working_set.current.clone())
+        };
+        if epoch != self.seen_document_epoch || current != self.active_doc_key {
+            self.seen_document_epoch = epoch;
+            if current != self.active_doc_key {
+                self.flush_active_picks();
+                let picks = current
+                    .as_ref()
+                    .and_then(|key| {
+                        self.shared
+                            .working_set
+                            .borrow()
+                            .by_document
+                            .get(key)
+                            .cloned()
+                    })
+                    .unwrap_or_default();
+                *self.shared.data_object_picked.borrow_mut() = picks;
+                self.active_doc_key = current;
+                self.save_working_set();
+            }
+            cx.notify();
+        }
     }
 
     fn render_body(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
@@ -688,15 +797,18 @@ impl DataObjectsTab {
                 )
                 .child(div().flex_1())
                 .child({
-                    let shared = self.shared.clone();
                     let entity = entity.clone();
                     Button::new("data-objects-clear")
                         .ghost()
                         .label("清空")
                         .on_click(move |_, _, cx| {
-                            shared.data_object_picked.borrow_mut().clear();
-                            // 回调拿到的是 `&mut App`：通知要落到本面板实体上，不能裸调
-                            entity.update(cx, |_, cx| cx.notify());
+                            // 清空也要落盘：否则下次打开这份文档，刚清掉的那批又回来了
+                            let entity = entity.clone();
+                            entity.update(cx, |tab, cx| {
+                                tab.shared.data_object_picked.borrow_mut().clear();
+                                tab.save_working_set();
+                                cx.notify();
+                            });
                         })
                 }),
         );
@@ -1545,6 +1657,12 @@ impl Render for DataObjectsTab {
             // 不靠下一帧的 refresh 才跟上
             self.rows_cache = None;
             cx.defer_in(window, |tab, _window, cx| tab.refresh(cx));
+        }
+        // 切文档信号：同样只比对计数，换工作集用 `defer_in` 排到帧后（那一步要读 / 写盘）
+        let document_epoch = self.shared.working_set.borrow().epoch;
+        if document_epoch != self.seen_document_epoch {
+            self.seen_document_epoch = document_epoch;
+            cx.defer_in(window, |tab, _window, cx| tab.follow_active_document(cx));
         }
         self.render_body(window, cx)
     }

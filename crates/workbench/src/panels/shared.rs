@@ -256,6 +256,21 @@ pub fn search_option_button(
     btn.on_click(on_click)
 }
 
+/// 数据对象工作集的「按文档」账本（见 `services::working_set`）。
+///
+/// 为什么要一个结构而不是三个字段：活动文档 / 版本号 / 各文档那一份，是**同一件事的三面**，
+/// 分开存就得靠调用方自己保证「改了 current 一定也 bump epoch」；装在一起少一类错。
+#[derive(Default)]
+pub struct WorkingSet {
+    /// 当前活动文档的 key（宿主泵写入；`None` = 没有活动文档）
+    pub current: Option<String>,
+    /// 切文档的版本号：面板比对后把自己那份换掉（与 `data_objects_epoch` 同一手法）
+    pub epoch: u64,
+    /// 各文档的工作集（key = 文档 key，值 = `Object::key` 列表）。
+    /// 活动那一份的权威副本仍在 `data_object_picked`（面板读它，省一层间接）
+    pub by_document: std::collections::BTreeMap<String, Vec<String>>,
+}
+
 /// 面板与工作台共享的状态。
 #[derive(Clone)]
 pub struct Shared {
@@ -297,6 +312,9 @@ pub struct Shared {
     ///
     /// 存 key 而不是行号：清单会随刷新重排，行号一做增删就错位（同 `ElementId` 业务键的道理）。
     pub data_object_picked: Rc<RefCell<Vec<String>>>,
+    /// 工作集的「按文档」账本：活动文档是谁、切了几版、每份文档各勾了什么。
+    /// 由宿主泵更新 `current` / `epoch`，面板据此换掉自己那一份并落盘（见 `services::working_set`）。
+    pub working_set: Rc<RefCell<WorkingSet>>,
     /// 数据对象清单的**版本号**：任何让清单过期的动作都递增一次（连接连上 / 断开、
     /// 查询产出结果集、加源、切项目、资产增删），面板在 render 里比对后 `defer_in` 重取。
     ///
@@ -468,6 +486,7 @@ impl Shared {
             data_object_assets: Rc::new(RefCell::new(Vec::new())),
             data_object_picked: Rc::new(RefCell::new(Vec::new())),
             data_objects_epoch: Rc::new(Cell::new(0)),
+            working_set: Rc::new(RefCell::new(WorkingSet::default())),
             notice: Rc::new(RefCell::new(notice)),
             nav_cache_epoch: Rc::new(Cell::new(0)),
             nav_panel: Rc::new(RefCell::new(None)),

@@ -175,6 +175,7 @@ impl WorkbenchView {
             data_objects_pump: None,
             data_objects_sig: None,
             source_kids_pump: None,
+            document_pump: None,
             catalog_pump: None,
             editor_completion,
             lsp,
