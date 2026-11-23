@@ -1590,3 +1590,61 @@ Label「筛选：」在左、`Text(SWT.BORDER|SWT.SEARCH|SWT.ICON_CANCEL)` 在�
    在此之前换 Tree 只是形式主义。
 4. 引用页 live 接线（§26.5-1）、洞察确认后的点击级回归（§26.5-2）、筛选 `preview` 的
    字节切片 panic（§26.5-3）仍按 §26.5 挂着。
+## 28. D14 落地：分组页改成 DBeaver 的内嵌结果集形态
+
+### 28.1 取证（源码行号）
+
+| 事实 | 出处 |
+| --- | --- |
+| 分组页（`GroupingPanel`）只有一个占位件，容器懒建（`FillLayout`） | `GroupingPanel.java:64-65`、`:78-102` |
+| 页被激活即 `refresh(false)`，元数据变了才 `clearGrouping()`，否则 `rebuildGrouping()` | `GroupingPanel.java:122-127`、`:139-157` |
+| 工具条顺序：`DefaultSorting`（文字按钮）→ `DuplicatesOnly` → SEP → `EditColumns` → `DeleteColumn` → SEP → `ClearGrouping` → SEP → 扩展动作 | `GroupingPanel.java:164-176`、`:178-184` |
+| `isDirty` = 分组属性非空；`loadSettings` / `saveSettings` 是空实现（分组键不进面板设置） | `GroupingPanel.java:105-107`、`:114-120` |
+| 真骨架：容器里**内嵌一个完整 `ResultSetViewer`**（覆写 `refreshWithFilter` 记 currentFilter）+ `GroupingColumnsContainer` + 默认函数 `COUNT(*)` | `GroupingResultsContainer.java:61-73`、`:64-70`、`:75-89` |
+| `clearGrouping` 只清内嵌那份的 data / filter / history | `GroupingResultsContainer.java:198-209` |
+| `rebuildGrouping`：取原查询文本 → 生成 groupingQuery → 写内嵌 viewer → 按 `RS_GROUPING_DEFAULT_SORTING` 用函数别名排序 → 列集空则 `showEmptyPresentation` | `GroupingResultsContainer.java:211-272`、`:231-232`、`:237-246`、`:249-265`、`:223-226` |
+| 改写形状：非实体容器 + 支持子查询 → 包一层 `SELECT <attr…>, <func> AS <alias> FROM (\n<原查询>\n) src`，再追加 `GROUP BY <attr…>`；`showDuplicatesOnly` 追加 `HAVING … > 1`；别名规则 `COUNT(*)` → `count` | `SQLGroupingQueryGenerator.java:113-131`、`:166-172`、`:174-184`、`:189-222` |
+
+### 28.2 本仓落地（改动表）
+
+| 文件 | 改动 |
+| --- | --- |
+| `crates/sql/src/filter.rs` | 新增 `pub fn rewrite_with_grouping(original, columns, duplicates_only) -> Result<Rewrite, String>`：生成 `SELECT <keys>, COUNT(*) AS count\nFROM (\n<body 去顶层 LIMIT/ORDER BY>\n) AS src\nGROUP BY <keys>`，`duplicates_only` 追加 `\nHAVING COUNT(*) > 1`；新增 4 个单测 |
+| `crates/sql/src/lib.rs` | re-export `rewrite_with_grouping` |
+| `crates/result_panel/src/store/entry.rs` | `ResultPlacement` 新增 `Grouping` 变体（语义：只进分组页内嵌结果集，不进标签条） |
+| `crates/result_panel/src/store/store.rs` | `push` 函数开头拦截 `Grouping`（不建槽、不动选中）；新增单测 `grouping_results_never_take_a_slot` |
+| `crates/result_panel/src/panel/data.rs` | `ResultPanel` 新增 `group_grid`（页内嵌结果集）、`group_query`（最近分组 SQL）、`group_snapshot`（原始投影，供排序口径就地重排） |
+| `crates/result_panel/src/panel/lifecycle.rs` | `set_grids` 增加第三个网格参数；新增 `set_group_projection` / `clear_group_projection` / `write_group_grid` / `group_key_names` / `group_query`；构造期初始化新字段 |
+| `crates/result_panel/src/panel/events.rs` | `set_group_sort` 改为「已灌过数据就就地重排」（对齐 DBeaver viewer 侧排序，不改 SQL、不重查） |
+| `crates/result_panel/src/panel/tabs.rs` | `render_group_tab` 正文从「本地计数列表」换成页内嵌网格（`result_grid::render`，选择器 `editor-result-group-pane` / `editor-result-group-grid`）；工具条最左新增「运行」（`editor-result-group-run`）作为执行侧 rebuild 触发点；`layout` 顺序仍照 `fillToolBar`；新增纯函数 `arrange_group_rows`；`arrange_groups` / `group_table_header` 保留并标 `#[allow(dead_code)]` |
+| `crates/result_panel/src/grid/status.rs` | `ResultPane` 新增 `pane_selector` / `grid_selector`（默认主栏名），手写 `Default`；`render` 用它们——同一面板里第二、第三个结果区不再撞选择器 |
+| `crates/result_panel/src/panel/render.rs` | 对比栏显式用 `editor-result-compare-grid-pane` / `editor-result-compare-grid` |
+| `crates/result_panel/src/ports.rs` | 新增 `ResultRequest::RunGroupingQuery { columns, duplicates_only }` |
+| `crates/editor/src/view/host/results/filter.rs` | 新增 `run_grouping_query`（取当前结果 SQL → 改写 → 以 `ResultPlacement::Grouping` 递交；空列集只回提示） |
+| `crates/editor/src/view/host/results/dispatch.rs` | 分派 `RunGroupingQuery`；`SetGroupDuplicatesOnly` 之后若已查过且有分组键则自动重查（对齐 `DuplicatesOnlyAction` 即改即查） |
+| `crates/editor/src/view/host/exec/pump.rs` | 回执循环新增 `Grouping` 落点：成功写 `set_group_projection`、失败写 `clear_group_projection`，随后 `continue`（不做主键探测 / 注释回填 / 在途标题） |
+| `crates/editor/src/view/host/construct.rs` | 构造期建第三个 `TableState`（`group_grid`）并随 `set_grids` 注入 |
+| `crates/result_panel/src/panel/tests.rs` | 新增 `the_group_tab_runs_and_shows_a_embedded_result_set`（真窗口：点「运行」→ 断言请求形状 → 注入投影 → 断言页内网格出现、主网格不变）；新增 `group_rows_arrange_by_value_or_count_on_the_client`；`group_tab_shows_a_header_row_with_count_star` 的渲染断言改为「运行按钮在」 |
+| `crates/editor/src/view/tests/results_b.rs` | 新增 `run_grouping_query_wraps_group_by_and_never_takes_a_tab`（空列集不递交 / 改写形状 / 标签条不多一份 / 面板记住分组 SQL） |
+
+### 28.3 与 DBeaver 的差异（明账）
+
+1. **触发器**：DBeaver 没有独立「运行」按钮（rebuild 由工具条各动作与 `activatePanel` 内部触发）。本仓执行在宿主侧、面板拿不到执行器，所以需要一个显式触发点；位置同理放在工具条最左（最右会被右栏窄宽度裁出可视区，点击落不到）。
+2. **切页不自动重查**：DBeaver 的 `activatePanel` 会 `refresh(false)` 重建。本仓不在切页时自动发查询（避免只是切页就打出 SQL），首查由「运行」发起；`onlyDuplicates` 切换在已查过时自动重查（这一点对齐）。
+3. **「编辑列」形态**：DBeaver 是 `GroupingConfigDialog` 的多列编辑表格，本仓是勾选式下拉 + 上移/下移/移除（能力等价，键盘可达）。
+4. **`HAVING` 写法**：DBeaver 在方言支持别名时用函数别名（`:177-183`），本仓不知道方言，统一 `HAVING COUNT(*) > 1`（语义等价、所有方言合法）。
+5. **函数集**：DBeaver 可编辑（COUNT / SUM / AVG / MIN / MAX…），本仓固定 `COUNT(*)`（与既有本地分组口径一致），函数集扩展属后续。
+6. **`aggregateAsStrings` 之类**：分组页没有这些开关，未涉及。
+7. **未做像素级目视比对**：页内网格复用主网格的 `DataTable`（同档密度 `RESULT_TABLE_SIZE`），未单独量分组页内嵌 viewer 的行高/表头高。目视验收按既有约定由用户手动做。
+
+### 28.4 验证
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo check -p rds-result-panel -p rds-editor --all-targets` | exit 0，0 error 0 warning |
+| `cargo test -p rds-sql --lib` | **236 passed / 0 failed**（含 4 个新的分组改写用例） |
+| `cargo test -p rds-result-panel --lib` | **426 passed / 0 failed**（原 423 + `the_group_tab_runs_and_shows_a_embedded_result_set` + `grouping_results_never_take_a_slot` + `group_rows_arrange_by_value_or_count_on_the_client`；`group_tab_shows_a_header_row_with_count_star` 的渲染断言改写后仍绿） |
+| `cargo test -p rds-editor --lib` | **866 passed / 0 failed / 4 ignored** |
+| `cargo test -p rds-editor --lib run_grouping_query` | 1 passed（新用例） |
+
+日志：`.rds/tmp/d14a-test.txt`、`d14-check.txt`、`d14-test-rp.txt`、`d14-test-sql.txt`、`d14-test-ed.txt`、`d14-test-ed2.txt`、`d14-test-group.txt`、`d14-test-rp2.txt`。

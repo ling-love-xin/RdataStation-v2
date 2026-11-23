@@ -21,6 +21,15 @@ pub enum ResultPlacement {
     ///
     /// 接的前提是列形状一致（同一份结果的下一段）；形状变了就当一份新结果落下。
     Append,
+    /// 【D14】分组页的 `GROUP BY` 重查结果：落**分组页的内嵌结果集**，不进结果标签条。
+    ///
+    /// 对齐 DBeaver `GroupingResultsContainer`：那一页里嵌着一整个 `ResultSetViewer`
+    /// （`GroupingResultsContainer.java:61-73`，`:64-70` 覆写 `refreshWithFilter` 记
+    /// currentFilter），分组查询的结果只喂这个内嵌 viewer；主 viewer 与结果标签条
+    /// 一概不动（`clearGrouping:198-209` 也只清内嵌那份的 data / filter）。
+    /// 所以这一档在 [`crate::store::ResultStore::push`] 里**不入槽位**——由回执泵
+    /// 直接写进面板的分组网格。
+    Grouping,
 }
 
 /// 【A2】一份结果的「形成方式」原料（刷新 ⟳ 时按它重查，保持用户看到的形态）

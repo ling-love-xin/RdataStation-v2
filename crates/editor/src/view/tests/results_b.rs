@@ -252,6 +252,96 @@ fn run_filter_as_query_rewraps_and_replaces_the_result(cx: &mut TestAppContext) 
     );
 }
 
+// ===== D14：分组页重查（页内嵌结果集） =====
+
+/// 【D14】分组页「运行」：改写形状 + 落点是 `Grouping`（**不进结果标签条**）。
+///
+/// 对齐 DBeaver `GroupingResultsContainer.rebuildGrouping:211-272`：分组查询的产物
+/// 只喂内嵌 viewer（`:249-265`），主结果集与标签条不动。这里钉三件事：
+/// 空列集不发起、改写形状（子查询 `AS src` + `GROUP BY` + `COUNT(*) AS count`）、
+/// 回执后标签条仍是原来那一份而页内网格拿到了结果。
+#[gpui_kit::test]
+fn run_grouping_query_wraps_group_by_and_never_takes_a_tab(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, seen, _connections) =
+        shared_with_runner("select id, name from t limit 10", EditorMode::Sql);
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(
+        cx,
+        &panel,
+        "select id, name from t limit 10",
+        execution::ResultPlacement::Replace,
+    );
+    assert_eq!(result_tabs(cx, &panel).len(), 1, "先有一份结果");
+
+    // 1) 空列集：只回提示，不递交
+    let seen_before = seen.lock().expect("锁").len();
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.run_grouping_query(Vec::new(), false, cx)
+        })
+    });
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("回执");
+    assert!(
+        message.contains("先选一个分组列"),
+        "空分组列应提示而不是重查：{message}"
+    );
+    assert_eq!(
+        seen.lock().expect("锁").len(),
+        seen_before,
+        "空分组列不该递交执行器"
+    );
+
+    // 2) 有分组列：按子查询形状改写并递交
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.run_grouping_query(vec!["name".to_string()], true, cx)
+        })
+    });
+    wait_for_all_pending(cx, &panel);
+
+    let rewritten = seen
+        .lock()
+        .expect("锁")
+        .last()
+        .cloned()
+        .expect("运行后应有一条递交");
+    assert!(
+        rewritten.contains("AS src") && rewritten.contains("GROUP BY"),
+        "改写真要包一层子查询再 GROUP BY：{rewritten}"
+    );
+    assert!(
+        rewritten.contains("COUNT(*) AS count"),
+        "函数列按 DBeaver 的别名规则取 count：{rewritten}"
+    );
+    assert!(
+        rewritten.contains("HAVING COUNT(*) > 1"),
+        "「仅重复」要落成 HAVING：{rewritten}"
+    );
+    assert!(
+        !rewritten.to_lowercase().contains("limit"),
+        "顶层 LIMIT 必须去掉，否则只统计被截断的那几行：{rewritten}"
+    );
+
+    // 3) 落点是分组页的内嵌结果集：标签条不多一份
+    assert_eq!(
+        result_tabs(cx, &panel).len(),
+        1,
+        "分组结果不进结果标签条（DBeaver 只动内嵌 viewer）"
+    );
+    assert!(
+        cx.update(|_window, cx| panel
+            .read(cx)
+            .result_panel
+            .read(cx)
+            .group_query()
+            .is_some()),
+        "分组 SQL 应记在面板上（页内嵌结果集的说明位）"
+    );
+}
+
 // ===== B14：下发源库 =====
 
 /// 假执行器（B14）：记下发筛选收到的原料，并回一条**带提示**的结果

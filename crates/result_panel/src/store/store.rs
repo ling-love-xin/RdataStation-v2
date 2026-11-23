@@ -139,6 +139,13 @@ impl ResultStore {
         fact: Option<Arc<FactFrame>>,
     ) {
         let document = entry.document.clone();
+        // 【D14】分组页的内嵌结果集：不进槽位、不碰结果标签条（见变体注释与
+        // `GroupingResultsContainer.clearGrouping:198-209`）。回执泵在调用 `push` 之前
+        // 就把这一档截走写进面板的分组网格；走到这里说明是直写调用的误用，按「不动」
+        // 处理——顺带不建空槽（否则一份文档会凭空多出一个空槽位）。
+        if placement == ResultPlacement::Grouping {
+            return;
+        }
         let slot = match self
             .documents
             .iter_mut()
@@ -198,6 +205,9 @@ impl ResultStore {
                     slot.active = 0;
                 }
             }
+            // 【D14】分组页的内嵌结果集：函数开头已拦截（不入槽位）；此处保留分支只为
+            // 让 `match` 穷尽——真的走到这里也不该动槽位。
+            ResultPlacement::Grouping => {}
         }
         evict_oldest(slot);
     }
@@ -722,6 +732,45 @@ mod tests {
         store
             .active(&DocumentId::new(document))
             .map(|entry| entry.sql.clone())
+    }
+
+    /// 【D14】分组页的内嵌结果集：`Grouping` 档**不占槽位**，也不凭空建空槽
+    /// （对齐 `GroupingResultsContainer.clearGrouping:198-209`：只清内嵌 viewer）。
+    #[test]
+    fn grouping_results_never_take_a_slot() {
+        let mut store = ResultStore::new();
+        store.push(
+            entry("doc-1", "select 1", 1),
+            ResultPlacement::Replace,
+            None,
+        );
+        // 一份未执行过的文档也没有空槽可建
+        store.push(
+            entry("doc-2", "select count(*)", 2),
+            ResultPlacement::Grouping,
+            None,
+        );
+        store.push(
+            entry("doc-1", "select tag, count(*) from t group by tag", 3),
+            ResultPlacement::Grouping,
+            None,
+        );
+
+        assert_eq!(
+            store.set_count(&DocumentId::new("doc-1")),
+            1,
+            "分组结果不该在结果标签条上多出一份"
+        );
+        assert_eq!(
+            active_sql(&store, "doc-1"),
+            Some("select 1".to_string()),
+            "主结果集仍是原来那份"
+        );
+        assert_eq!(
+            store.set_count(&DocumentId::new("doc-2")),
+            0,
+            "分组结果不该凭空建槽"
+        );
     }
 
     #[test]

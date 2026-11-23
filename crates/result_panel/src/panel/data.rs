@@ -388,6 +388,23 @@ pub struct ResultPanel {
     pub(crate) group_sort: GroupSort,
     /// 【R3 分组页】仅重复：只保留行数 > 1 的分组
     pub(crate) group_duplicates_only: bool,
+    /// 【D14 分组页】页内嵌的结果集（对齐 DBeaver `GroupingResultsContainer.java:61-73`：
+    /// 那一页里嵌着一整个 `ResultSetViewer`）。宿主在构造期建好交进来（与对比栏网格
+    /// 同一条 [`Self::set_grids`] 通道），回执泵按 [`crate::store::ResultPlacement::Grouping`]
+    /// 把 `GROUP BY` 重查的结果写进它——**不进结果标签条**，主结果集不受影响。
+    pub(crate) group_grid: Option<Entity<TableState<ResultGridDelegate>>>,
+    /// 【D14 分组页】最近一次下发成功的分组 SQL（`rewrite_with_grouping` 的产物）。
+    /// 页内工具条把它挂成 tooltip / 供「复制语句」用；空 = 这一页还没查过。
+    pub(crate) group_query: Option<String>,
+    /// 【D14 分组页】页内嵌结果集的原始投影（列名 / 行 / 类型 / 注释）。
+    /// 排序口径切换时据此重排重灌，不必再发一次查询（对齐 DBeaver
+    /// `rebuildGrouping:249-265` 的 viewer 侧排序）。
+    pub(crate) group_snapshot: Option<(
+        Vec<String>,
+        Vec<Vec<String>>,
+        Vec<Option<crate::store::ColumnType>>,
+        Vec<Option<workbench_shell::model::ColumnAnnotation>>,
+    )>,
     /// 【并排对比】对比栏的投影（编辑器 `sync_compare_grid` 时经
     /// [`Self::set_compare_projection`] 写入；render 期只读）
     pub(crate) compare_active: usize,

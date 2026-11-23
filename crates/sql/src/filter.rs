@@ -191,6 +191,64 @@ pub fn rewrite_with_order(
     Ok(Rewrite { sql, dropped_limit })
 }
 
+/// 分组页的重查改写（对齐 DBeaver `SQLGroupingQueryGenerator.generateGroupingQuery`）
+///
+/// DBeaver 在「容器不是实体 + 方言支持子查询」时走包一层子查询的分支
+/// （`SQLGroupingQueryGenerator.java:113-131`），再由 `:166-172` 追加 `GROUP BY`、
+/// `:174-184` 追加 `HAVING`，形状是：
+///
+/// ```sql
+/// SELECT <分组列…>, COUNT(*) as count FROM (
+/// <原查询>
+/// ) src
+/// GROUP BY <分组列…>
+/// [HAVING count > 1]
+/// ```
+///
+/// 本仓的两处取舍（都写在测试里）：
+/// - **`HAVING` 用 `COUNT(*) > 1`，不写列别名**：DBeaver 只在 `dialect.supportsAliasInHaving()`
+///   为真时才用别名（`:177-183`），本层不知道目标方言；`COUNT(*) > 1` 在所有方言里都合法，
+///   语义完全相同。
+/// - **函数集固定 `COUNT(*)`**：DBeaver 的分组函数集可由用户编辑
+///   （`GroupingColumnsContainer`），本仓这一页只有计数（与本地分组 `group_by_columns_for`
+///   同口径）。函数列别名按 DBeaver 的 `makeGroupFunctionAlias("COUNT(*)")` 规则取
+///   ——去括号符号、转小写（`:189-222`）→ `count`。
+///
+/// 顶层 `LIMIT` / `ORDER BY` 与其它下发一致：`LIMIT` 必须去掉（否则分组只统计被截断的那几行）；
+/// 顶层 `ORDER BY` 对分组结果没有意义（顺序由 `GROUP BY` 自己的语义决定），一并留在子查询外。
+pub fn rewrite_with_grouping(
+    original: &str,
+    columns: &[String],
+    duplicates_only: bool,
+) -> Result<Rewrite, String> {
+    if original.trim().is_empty() {
+        return Err("没有可重查的查询".to_string());
+    }
+    if columns.is_empty() {
+        return Err("没有分组列，无从分组".to_string());
+    }
+
+    let clauses = top_level_clauses(original);
+    let body_end = clauses.body_end(original.len());
+    let body = original[..body_end].trim_end();
+    let dropped_limit = clauses.limit_text(original);
+
+    // 分组键在 SELECT 列表与 GROUP BY 里出现两次，必须用同一份文本（引号口径一致）
+    let keys = columns
+        .iter()
+        .map(|column| quote_ident(column))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let mut sql =
+        format!("SELECT {keys}, COUNT(*) AS count\nFROM (\n{body}\n) AS src\nGROUP BY {keys}");
+    if duplicates_only {
+        sql.push_str("\nHAVING COUNT(*) > 1");
+    }
+
+    Ok(Rewrite { sql, dropped_limit })
+}
+
 /// 顶层（括号外）子句的位置
 struct TopLevelClauses {
     /// 顶层 ORDER BY 起点（字节）
@@ -331,8 +389,8 @@ fn quote_ident(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        rewrite_with_filter, rewrite_with_order, rewrite_with_where, rewrite_with_where_order,
-        top_level_clauses,
+        rewrite_with_filter, rewrite_with_grouping, rewrite_with_order, rewrite_with_where,
+        rewrite_with_where_order, top_level_clauses,
     };
 
     fn columns() -> Vec<String> {
@@ -490,6 +548,85 @@ mod tests {
             "{}",
             rewritten.sql
         );
+    }
+
+    #[test]
+    fn a_grouping_query_wraps_the_source_and_counts() {
+        // 对齐 `SQLGroupingQueryGenerator.java:113-131` + `:166-172`
+        let rewritten = rewrite_with_grouping(
+            "SELECT id, tag FROM t",
+            &["tag".to_string(), "id".to_string()],
+            false,
+        )
+        .expect("能改写");
+        assert_eq!(
+            rewritten.sql,
+            "SELECT tag, id, COUNT(*) AS count\nFROM (\nSELECT id, tag FROM t\n) AS src\n\
+             GROUP BY tag, id"
+        );
+        assert_eq!(rewritten.dropped_limit, None);
+    }
+
+    #[test]
+    fn grouping_duplicates_only_adds_the_having() {
+        // `:174-184`：仅重复 = `HAVING … > 1`；本仓用 `COUNT(*)`（方言无关，见函数注释）
+        let rewritten =
+            rewrite_with_grouping("SELECT * FROM t", &["tag".to_string()], true).expect("能改写");
+        assert!(
+            rewritten.sql.ends_with("GROUP BY tag\nHAVING COUNT(*) > 1"),
+            "{}",
+            rewritten.sql
+        );
+        let plain =
+            rewrite_with_grouping("SELECT * FROM t", &["tag".to_string()], false).expect("能改写");
+        assert!(
+            !plain.sql.contains("HAVING"),
+            "不带仅重复时不该有 HAVING：{}",
+            plain.sql
+        );
+    }
+
+    #[test]
+    fn grouping_drops_the_top_level_limit_and_order_by() {
+        let rewritten = rewrite_with_grouping(
+            "SELECT * FROM t ORDER BY created_at DESC LIMIT 20",
+            &["tag".to_string()],
+            false,
+        )
+        .expect("能改写");
+        assert!(
+            !rewritten.sql.contains("LIMIT"),
+            "分组不能只统计被截断的行：{}",
+            rewritten.sql
+        );
+        assert!(
+            !rewritten.sql.contains("ORDER BY"),
+            "分组顺序由 GROUP BY 语义决定，原 ORDER BY 不搬进来：{}",
+            rewritten.sql
+        );
+        assert_eq!(rewritten.dropped_limit.as_deref(), Some("LIMIT 20"));
+    }
+
+    #[test]
+    fn grouping_quotes_awkward_columns_and_refuses_empty_inputs() {
+        let rewritten =
+            rewrite_with_grouping("SELECT 1 AS x", &["weird name".to_string()], false)
+                .expect("能改写");
+        assert!(
+            rewritten
+                .sql
+                .starts_with("SELECT \"weird name\", COUNT(*) AS count"),
+            "{}",
+            rewritten.sql
+        );
+        assert!(
+            rewritten.sql.ends_with("GROUP BY \"weird name\""),
+            "SELECT 与 GROUP BY 要同一份引号口径：{}",
+            rewritten.sql
+        );
+
+        assert!(rewrite_with_grouping("", &["a".to_string()], false).is_err());
+        assert!(rewrite_with_grouping("SELECT 1", &[], false).is_err());
     }
 
     #[test]

@@ -1101,6 +1101,7 @@ impl ResultPanel {
                 tabs: None,
                 notice: self.notice.clone(),
                 row_count_input: None,
+                ..Default::default()
             },
             cx,
         )
@@ -1264,6 +1265,9 @@ impl ResultPanel {
                         tabs: compare_tabs,
                         notice: None,
                         row_count_input: None,
+                        // 对比栏是同一面板里的第二个结果区：换名，避免与主栏撞选择器
+                        pane_selector: "editor-result-compare-grid-pane",
+                        grid_selector: "editor-result-compare-grid",
                     },
                     cx,
                 )

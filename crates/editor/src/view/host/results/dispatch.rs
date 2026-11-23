@@ -702,10 +702,33 @@ impl EditorHostPanel {
                 self.result_panel
                     .update(cx, |p, cx| p.set_group_duplicates_only(on, cx));
                 self.persist_result_group_duplicates_only(cx);
+                // 【D14】对齐 DBeaver `DuplicatesOnlyAction`：改完即 `refresh(true)` 重建
+                // groupingQuery（`GroupingPanel.refresh:139-157` → `rebuildGrouping`），
+                // 不要求用户再点一次运行。只在已经查过、且有分组键时补一次，免得
+                // 开个开关就凭空发查询（那一页还是空态时由「运行」负责首查）。
+                let already_ran = self
+                    .result_panel
+                    .read(cx)
+                    .group_query()
+                    .is_some();
+                if already_ran {
+                    let columns = self.result_panel.read(cx).group_key_names(cx);
+                    if !columns.is_empty() {
+                        self.run_grouping_query(columns, on, cx);
+                    }
+                }
             }
             ResultRequest::ClearGroupColumns => {
                 self.result_panel
                     .update(cx, |p, cx| p.clear_group_columns(cx));
+            }
+            // 【D14】分组页重查：生成 `GROUP BY` 查询下发，结果落分组页的内嵌结果集
+            // （`ResultPlacement::Grouping`，见 `run_grouping_query`）
+            ResultRequest::RunGroupingQuery {
+                columns,
+                duplicates_only,
+            } => {
+                self.run_grouping_query(columns, duplicates_only, cx);
             }
         }
     }

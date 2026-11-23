@@ -25,6 +25,7 @@ use crate::grid::cell::{
     HEX_DUMP_BYTES_PER_LINE, ViewerMode, classify_value, hex_lines, hex_to_bytes,
 };
 use crate::grid::stats::{ColumnStats, distinct_count, fmt_grouped, median_of, mode_of, text_minmax};
+use crate::grid::{self as result_grid};
 use crate::ports::{
     GroupSort, ResultActionQueue, ResultRequest, RightTab, StatsItem, StatsMode, ValuePayload,
 };
@@ -1110,18 +1111,25 @@ impl ResultPanel {
     /// 【R3】分组键列 = 工具条下拉里勾选的列集合（空 = 网格选中格优先、清单选中列兜底）；
     /// 支持多列组合、排序口径（按值 / 按计数）与「仅重复」筛选。大表口径是下发
     /// GROUP BY 重查（见 §8.8），本地页只服务中小结果集的即时分组。
+    /// 【右栏】分组页（DBeaver「分组」）——**页内嵌结果集**。
+    ///
+    /// 对齐 DBeaver `GroupingResultsContainer.java:61-73`：那一页里嵌着一整个
+    /// `ResultSetViewer`（`:64-70` 覆写 `refreshWithFilter` 记 currentFilter），
+    /// 分组结果只喂这个内嵌 viewer；主结果集与标签条一概不动。所以这一页的正文
+    /// 就是 [`Self::group_grid`]（宿主构造期建好、回执泵按
+    /// [`crate::store::ResultPlacement::Grouping`] 写入），本函数只负责画。
+    ///
+    /// 触发执行的是工具条最右的「重查」：DBeaver 没有这个独立按钮，它的 rebuild 由
+    /// 各动作内部触发（`GroupingPanel.refresh(true)` → `rebuildGrouping`，
+    /// `GroupingResultsContainer:211-272`）；本仓的执行在宿主侧，面板拿不到执行器，
+    /// 只能把意图经队列交出去，所以需要一个显式触发点。
     pub(crate) fn render_group_tab(&self, cx: &App) -> AnyElement {
-        let theme = cx.theme();
-        let muted = theme.colors.muted_foreground;
         let grid = self.grid.read(cx);
         let delegate = grid.delegate();
 
-        // 【R3】分组键列：显式选择的列集合优先（顺序即拼接顺序）；集合空 = 退回当前选中列
-        //
-        // 【2026-11-17 对齐】没有分组键时不再整页早退回空态——页内工具条（尤其分组列
-        // 下拉）必须常驻，否则这一页在「还没选列」时连选列的入口都没有了。
-        // 空态只替换正文，与 DBeaver 的 `GroupingPanel` 常驻工具条同一口径
-        // （`GroupingPanel.fillToolBar:164-176`）。
+        // 分组键列：显式选择的列集合优先（顺序即 GROUP BY 列序 = 嵌套层级）；
+        // 集合空 = 退回当前选中列（与 DBeaver「无键 = 空态」不同，本仓这一档是
+        // 便利默认，清空动作仍照 `ClearGroupingAction` 的可用条件）
         let cols: Vec<usize> = if self.group_columns.is_empty() {
             self.inspect_column(delegate).into_iter().collect()
         } else {
@@ -1131,12 +1139,6 @@ impl ResultPanel {
                 .filter(|column| *column < delegate.columns().len())
                 .collect()
         };
-        let mut groups = if cols.is_empty() {
-            Vec::new()
-        } else {
-            delegate.group_by_columns_for(&cols)
-        };
-        arrange_groups(&mut groups, self.group_sort, self.group_duplicates_only);
         let names: Vec<String> = cols
             .iter()
             .map(|column| {
@@ -1147,10 +1149,11 @@ impl ResultPanel {
                     .unwrap_or_else(|| "列".to_string())
             })
             .collect();
-        let title = if cols.is_empty() {
-            "分组".to_string()
+        let has_keys = !names.is_empty();
+        let title = if has_keys {
+            format!("按 {} 分组", names.join(" + "))
         } else {
-            format!("按 {} 分组 · {} 组", names.join(" + "), groups.len())
+            "分组".to_string()
         };
 
         // 动作一：分组列下拉（勾选式多选；隐藏列不进分组键）
@@ -1293,88 +1296,51 @@ impl ResultPanel {
                 .into_any_element()
         };
 
-        // 正文：列头（每个分组键一列 + 函数列）+ 分组行。
-        //
-        // 【对齐】DBeaver 的分组结果是**表**而不是文本行：`GroupingResultsContainer`
-        // 用 `GroupingColumnsContainer` 装配「属性列 + 函数列」
-        // （`rebuildGrouping:240-270` 的 `addAttribute` / `addFunction`），
-        // 默认函数表达式 = `COUNT(*)`（`getDefaultFunction:75-80`：`FUNCTION_COUNT + "(" +
-        // (dataSource == null ? COLUMN_ASTERISK : 方言默认分组属性) + ")"`）。
-        // 所以正文按「键列各一格 + 计数列一格」排，表头写列名与 `COUNT(*)`。
-        let header = group_table_header(&names);
-        let header_len = header.len();
-        let header_el: Option<AnyElement> = (!cols.is_empty()).then(|| {
-            div()
-                .h_flex()
-                .items_center()
-                .gap_1()
-                .px_2()
-                .h_5()
-                .flex_none()
-                .border_b(ui::HAIRLINE)
-                .border_color(theme.colors.border)
-                .debug_selector(|| "editor-result-group-header".to_string())
-                .children(header.into_iter().enumerate().map(|(index, text)| {
-                    let mut cell = div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_ellipsis()
-                        .child(SharedString::from(text));
-                    // 末列是函数列（COUNT(*)）：数值列右对齐，与网格里的数字列同侧
-                    if index + 1 == header_len {
-                        cell = cell.text_right();
-                    }
-                    cell.into_any_element()
-                }))
+        // 动作：重查（本仓的 rebuild 触发点，见函数注释）
+        let run_button = {
+            let queue = self.queue.clone();
+            let columns = names.clone();
+            let duplicates_only = self.group_duplicates_only;
+            Button::new("editor-result-group-run")
+                .ghost()
+                .xsmall()
+                .debug_selector(|| "editor-result-group-run".to_string())
+                .icon(IconName::Play)
+                .disabled(!has_keys)
+                .tooltip("按分组列重查（GROUP BY 结果落本页，不动主结果集）".to_string())
+                .on_click(move |_, _window, app| {
+                    queue.request(
+                        ResultRequest::RunGroupingQuery {
+                            columns: columns.clone(),
+                            duplicates_only,
+                        },
+                        app,
+                    );
+                })
                 .into_any_element()
-        });
-        let rows_el: Vec<AnyElement> = groups
-            .iter()
-            .map(|(values, count)| {
-                let mut row = div()
-                    .h_flex()
-                    .items_center()
-                    .gap_1()
-                    .px_2()
-                    .h_6()
-                    .text_xs()
-                    .children(values.iter().map(|value| {
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_ellipsis()
-                            .child(SharedString::from(value.clone()))
-                            .into_any_element()
-                    }));
-                row = row.child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_right()
-                        .text_color(muted)
-                        .child(SharedString::from(count.to_string()))
-                        .into_any_element(),
-                );
-                row.into_any_element()
-            })
-            .collect();
-        // 正文：有分组键时是表头 + 分组行，否则是「还没选列」空态（工具条常驻，见上）
-        let body: AnyElement = if cols.is_empty() {
-            self.sidebar_empty("选中一个数据列查看分组", cx)
-        } else {
-            div()
-                .flex_1()
-                .min_h_0()
-                .v_flex()
-                .children(header_el)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_y_scrollbar()
-                        .children(rows_el),
-                )
-                .into_any_element()
+        };
+
+        // 正文：页内嵌结果集（对齐 `GroupingResultsContainer` 里那个 `ResultSetViewer`）。
+        // 有分组键且有结果行 → 网格；否则空态（工具条常驻，见 DBeaver `fillToolBar`）。
+        // 网格选择器换名（`editor-result-group-pane` / `editor-result-group-grid`）：
+        // 主结果区同在一个面板里，同名会让 `debug_bounds` 拿到先渲染的那个。
+        let has_rows = self
+            .group_grid
+            .as_ref()
+            .is_some_and(|grid| grid.read(cx).delegate().view_total() > 0);
+        let body: AnyElement = match (has_keys, self.group_grid.as_ref()) {
+            (true, Some(group_grid)) if has_rows => result_grid::render(
+                group_grid,
+                result_grid::ResultPane {
+                    pane_selector: "editor-result-group-pane",
+                    grid_selector: "editor-result-group-grid",
+                    ..Default::default()
+                },
+                cx,
+            )
+            .into_any_element(),
+            (true, _) => self.sidebar_empty("点工具条最左的「运行」按分组列重查", cx),
+            (false, _) => self.sidebar_empty("选中一个数据列查看分组", cx),
         };
         div()
             .flex_1()
@@ -1386,10 +1352,14 @@ impl ResultPanel {
                 SharedString::from(title),
                 // 顺序与分隔照 `GroupingPanel.fillToolBar:164-176`：
                 // `DefaultSorting` → `DuplicatesOnly` → SEP → `EditColumns` → `DeleteColumn`
-                // → SEP → `ClearGrouping` → SEP → 扩展动作（本仓无扩展点，不摆）。
+                // → SEP → `ClearGrouping` → SEP → 扩展动作（本仓无扩展点）。
+                // 前面多一个「运行」：它是本仓执行侧的 rebuild 触发点（见函数注释），
+                // 放最左是因为右栏窄、最右的位置会被裁出可视区（点击落不到）。
                 // 「编辑列」在那边是 `GroupingConfigDialog`（多列编辑表格），本仓用勾选式下拉
                 // 承载同一件事（列清单 + 勾选状态，能力等价、形态更轻）。
                 vec![
+                    run_button,
+                    Separator::vertical().into_any_element(),
                     sort_button,
                     duplicates_button,
                     Separator::vertical().into_any_element(),
@@ -1725,21 +1695,50 @@ pub(crate) fn value_can_save_to_file(col_ix: usize, raw: Option<&str>) -> bool {
 
 /// 【分组页表头】分组结果表的列头：每个分组键一列 + 末尾函数列 `COUNT(*)`。
 ///
-/// 对齐 DBeaver：分组结果是**表**（`GroupingResultsContainer` 的
-/// `GroupingColumnsContainer` 装配属性列 + 函数列），默认函数表达式由
-/// `getDefaultFunction:75-80` 拼成 `COUNT(<方言默认分组属性>)`，无数据源时用 `*`。
-/// 本仓本地分组固定只有一个计数函数（`group_by_columns_for` 返回 `(键, 计数)`），
-/// 所以表头恒为「键列名… + COUNT(*)」。
+/// 【D14 起不再由分组页调用】分组页正文已换成页内嵌结果集（列头由网格自己画，
+/// 列名来自查询列 —— 也就是 SQL 里 `<键…>, COUNT(*) AS count` 那份）。
+/// 函数保留给纯函数用例（`arrange_groups` / `group_table_header` 的排序口径仍是
+/// 本地即时分组算法的口径说明），并作为「本地分组 = 键列 + 一个计数函数」的
+/// 文档化落点；不删是为了不丢用例与口径。
+#[allow(dead_code)]
 pub(crate) fn group_table_header(names: &[String]) -> Vec<String> {
     let mut header: Vec<String> = names.to_vec();
     header.push("COUNT(*)".to_string());
     header
 }
 
+/// 【D14 分组页】对**页内嵌结果集的行**按排序口径客户端排序（纯函数，便于单测）。
+///
+/// 对齐 DBeaver `GroupingResultsContainer.rebuildGrouping:249-265`：那边取下
+/// `RS_GROUPING_DEFAULT_SORTING` 后对分组结果**在 viewer 里排序**（不动 SQL）；
+/// 本仓同一性质——行进网格前按末列（函数列 `count`）或键列排，SQL 里不写 ORDER BY。
+/// 行形状 = `<分组键…>, <函数列>`，所以末列是计数。
+pub(crate) fn arrange_group_rows(rows: &mut Vec<Vec<String>>, sort: GroupSort) {
+    let count_of = |row: &Vec<String>| {
+        row.last()
+            .and_then(|cell| cell.parse::<i64>().ok())
+            .unwrap_or(0)
+    };
+    let keys_of = |row: &Vec<String>| row[..row.len().saturating_sub(1)].to_vec();
+    match sort {
+        // 不排序 = 数据源给的顺序（DBeaver `RS_GROUPING_DEFAULT_SORTING=""`：不设排序）
+        GroupSort::None => {}
+        GroupSort::Value => rows.sort_by(|a, b| keys_of(a).cmp(&keys_of(b))),
+        GroupSort::CountDesc => rows.sort_by(|a, b| {
+            count_of(b)
+                .cmp(&count_of(a))
+                .then_with(|| keys_of(a).cmp(&keys_of(b)))
+        }),
+    }
+}
+
 /// 【R3 分组页】分组结果排序 + 「仅重复」筛选（纯函数，便于单测）。
 ///
-/// 先过滤再排序（避免为要丢掉的组白排）；`CountDesc` 同数按值序兜底，
-/// 保证同一份数据每次渲染顺序一致（否则 UI 会随统计重算跳动）。
+/// 【D14 起不再由分组页调用】这一页现在执行 `GROUP BY` 重查、结果进页内嵌结果集，
+/// 「仅重复」由 SQL 的 `HAVING COUNT(*) > 1` 表达（`rewrite_with_grouping`），
+/// 排序由数据源的 `GROUP BY` 顺序表达。函数保留：它仍是本地即时分组算法的口径
+/// （见 `group_by_columns_for`）与那批纯函数用例的被测目标。
+#[allow(dead_code)]
 pub(crate) fn arrange_groups(
     groups: &mut Vec<(Vec<String>, usize)>,
     sort: GroupSort,

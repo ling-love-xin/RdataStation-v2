@@ -287,7 +287,6 @@ pub struct ResultControls {
 }
 
 /// 结果区一次要画的东西（面板一次读齐；`render` 只负责画）
-#[derive(Default)]
 pub struct ResultPane {
     pub toolbar: ResultToolbar,
     /// 结果状态行（只有网格时才给；失败 / 写语句不给）
@@ -301,6 +300,27 @@ pub struct ResultPane {
     pub notice: Option<String>,
     /// 【DBeaver 对齐】中段行数输入框（行号跳转；`None` = 摆只读文案）
     pub row_count_input: Option<gpui::Entity<gpui_kit::component::input::InputState>>,
+    /// 外层选择器（默认 `editor-result-pane`）。同一面板里出现第二个结果区时
+    /// （分区页的内嵌结果集）必须换名，否则测试用的 `debug_bounds` 会拿到先渲染的那个。
+    pub pane_selector: &'static str,
+    /// 网格层选择器（默认 `editor-result-grid`），理由同上
+    pub grid_selector: &'static str,
+}
+
+impl Default for ResultPane {
+    fn default() -> Self {
+        Self {
+            toolbar: ResultToolbar::default(),
+            status: None,
+            controls: ResultControls::default(),
+            card: None,
+            tabs: None,
+            notice: None,
+            row_count_input: None,
+            pane_selector: "editor-result-pane",
+            grid_selector: "editor-result-grid",
+        }
+    }
 }
 
 /// 【DBeaver 对齐】渲染工具栏（横跨整个顶部）
@@ -495,6 +515,8 @@ pub fn render(
         card,
         tabs,
         notice,
+        pane_selector,
+        grid_selector,
         // 工具栏 / 状态行 / 行数框已抽到面板级（render_toolbar / render_status_row），
         // 状态动作按钮只由 render_status_row 消费（面板级按值传入），pane 内不再读
         ..
@@ -508,7 +530,7 @@ pub fn render(
         .h_full()
         .min_h_0()
         // 测试按选择器断言“结果区在不在、多高”：分栏是结构，不是装饰
-        .debug_selector(|| "editor-result-pane".to_string())
+        .debug_selector(move || pane_selector.to_string())
         // 表头带高度：只有「注释开关开启」（表头两行）时才由 delegate 给覆盖值 40px；
         // 单行表头返回 `None`，走组件默认 26px（见 `ResultGridDelegate::header_row_height`）
         // ⑤ 结果集标签条（原型里在工具栏上面）
@@ -541,7 +563,7 @@ pub fn render(
                 div()
                     .flex_1()
                     .min_h_0()
-                    .debug_selector(|| "editor-result-grid".to_string())
+                    .debug_selector(move || grid_selector.to_string())
                     // 【B14】`Ctrl+C` 的上下文只挂这一层（键位在 `crates/app` 注册）：
                     // 焦点在网格里时它才在 dispatch path 上，编辑区里按 `Ctrl+C`
                     // 仍是内核的文本复制。焦点本身不用我们管——组件的 `DataTable`

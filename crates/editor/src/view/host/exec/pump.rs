@@ -306,6 +306,38 @@ impl EditorHostPanel {
                 fresh_notice = Some(notice);
             }
             let placement = outcome.placement;
+            // 【D14】分组页的内嵌结果集：只写面板的分组网格，**不进 store、不动主结果集
+            // 与标签条**（对齐 `GroupingResultsContainer.rebuildGrouping:249-265`：
+            // 只动 `groupingViewer`）。所以这里不做主键探测 / 注释回填 / 在途标题——
+            // 那些都是主结果集语义。
+            if placement == ResultPlacement::Grouping {
+                let (entry, _) = entry_from(outcome);
+                let sql = entry.sql.clone();
+                let panel = self.result_panel.clone();
+                let failed = entry.failed();
+                if failed {
+                    let reason = entry.error.clone().unwrap_or_default();
+                    panel.update(cx, |p, cx| {
+                        p.clear_group_projection(
+                            &format!("分组重查失败：{reason}"),
+                            Some(sql),
+                            cx,
+                        )
+                    });
+                } else {
+                    panel.update(cx, |p, cx| {
+                        p.set_group_projection(
+                            entry.columns,
+                            entry.rows,
+                            entry.column_types,
+                            entry.column_annotations,
+                            sql,
+                            cx,
+                        )
+                    });
+                }
+                continue;
+            }
             // 【B10】在途标题按位弹出
             let title = self.pending_labels.pop_front().flatten();
             // 【B4】物化回执信号先取出（`entry_from` 会消费 `outcome`，之后不能再读）；

@@ -1120,11 +1120,21 @@ impl ResultPanel {
     }
 
     /// 【R3 分组页】切换分组结果排序口径（按值 / 按计数）
+    ///
+    /// 【D14】页内嵌结果集已灌过数据就**就地重排**：对齐 DBeaver
+    /// `rebuildGrouping:249-265` 的 viewer 侧排序（改排序不改 SQL、也不重查）。
+    /// 没灌过就只记口径，等「运行」首查时按它排。
     pub fn set_group_sort(&mut self, sort: GroupSort, cx: &mut Context<Self>) {
         if self.group_sort == sort {
             return;
         }
         self.group_sort = sort;
+        if let Some(mut snapshot) = self.group_snapshot.clone() {
+            super::tabs::arrange_group_rows(&mut snapshot.1, sort);
+            self.group_snapshot = Some(snapshot.clone());
+            let (columns, rows, types, annotations) = snapshot;
+            self.write_group_grid(columns, rows, types, annotations, cx);
+        }
         cx.notify();
     }
 

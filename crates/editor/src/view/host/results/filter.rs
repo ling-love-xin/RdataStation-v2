@@ -115,6 +115,57 @@ impl EditorHostPanel {
         }
     }
 
+    /// 【D14 分组页】按分组键下发 `GROUP BY` 重查，结果落**分组页的内嵌结果集**。
+    ///
+    /// 对齐 DBeaver `GroupingResultsContainer.rebuildGrouping:211-272`：
+    /// - `:231-232` 取原查询文本（`currentFilter`），`:237-246` 交
+    ///   `SQLGroupingQueryGenerator` 生成 groupingQuery；
+    /// - 结果只写内嵌 `ResultSetViewer`（`:249-265` 只动 `groupingViewer`），
+    ///   主结果集与结果标签条一概不动 —— 本仓用 [`ResultPlacement::Grouping`] 表达，
+    ///   回执泵按这一档写进面板的分组网格（`set_group_projection`），不进 store。
+    ///
+    /// 改写形状见 [`engine::sql::rewrite_with_grouping`]（子查询包一层 + `GROUP BY` +
+    /// `HAVING COUNT(*) > 1`）。列集为空 = 没有分组键，直接不跑（DBeaver `:223-226`
+    /// 同一条件走 `showEmptyPresentation`）。
+    pub(crate) fn run_grouping_query(
+        &mut self,
+        columns: Vec<String>,
+        duplicates_only: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if columns.is_empty() {
+            self.set_message(Some("先选一个分组列再重查".to_string()), cx);
+            return;
+        }
+        let Some(entry) = self
+            .shared
+            .results_active(&self.document)
+            .filter(ResultEntry::has_grid)
+        else {
+            self.set_message(Some("没有可分组的结果集".to_string()), cx);
+            return;
+        };
+        let original = entry.sql.clone();
+        match engine::sql::rewrite_with_grouping(&original, &columns, duplicates_only) {
+            Ok(rewritten) => {
+                // 去掉过 LIMIT 要说出来（与其它重查同一口径）
+                self.pending_result_notice = rewritten.dropped_limit.clone().map(|limit| {
+                    format!("已去掉原查询的 {limit}（分组统计要覆盖全部行）")
+                });
+                self.execute(
+                    ExecTarget::Statement(rewritten.sql),
+                    ResultPlacement::Grouping,
+                    cx,
+                );
+                if self.message.is_some() {
+                    self.pending_result_notice = None;
+                }
+            }
+            // 改写失败（空查询 / 空列集）不进执行队列：原因摆在状态栏
+            Err(reason) => self.set_message(Some(reason), cx),
+        }
+    }
+
     /// 【B15】下发源库：把当前筛选词交给执行器拼 `WHERE` 重查（结果落**新结果集**）
     pub(crate) fn pushdown_filter(&mut self, cx: &mut Context<Self>) {
         let Some(entry) = self

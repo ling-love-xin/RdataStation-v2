@@ -479,6 +479,18 @@ pub enum ResultRequest {
     /// 且只有分组列非空时才可用）。本仓清空后回落到「当前选中列兜底」，DBeaver 是回到
     /// 空态（见 result-panel.md §8.49）
     ClearGroupColumns,
+    /// 【D14 分组页】按当前分组键下发 `GROUP BY` 重查，结果落**分组页的内嵌结果集**
+    /// （对齐 DBeaver `GroupingResultsContainer.rebuildGrouping:211-272`：生成
+    /// groupingQuery 写进内嵌 `ResultSetViewer` 的 data filter，主结果集不动）。
+    ///
+    /// 面板把「分组列名（按层级顺序）+ 仅重复开关」交给宿主；改写 SQL 与执行都在
+    /// 宿主侧（[`crate::ports`] 不认识 engine，见 `GenerateResultSetDdl` 同款理由）。
+    RunGroupingQuery {
+        /// 分组键列名（顺序 = GROUP BY 的列序 = 嵌套层级）
+        columns: Vec<String>,
+        /// 仅重复：`HAVING COUNT(*) > 1`（对齐 `SQLGroupingQueryGenerator:174-184`）
+        duplicates_only: bool,
+    },
     /// 【引用页】取当前结果集来源表的外键约束（对齐 DBeaver `ReferencesResultsContainer`
     /// 的键清单加载 `refreshReferenceKeyList`）。面板交出「schema / 表 / 可见列」，
     /// 宿主在后台任务里走 `MetadataService::list_constraints`（**不在 UI 线程 await**），

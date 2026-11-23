@@ -162,13 +162,27 @@ impl EditorHostPanel {
         // 只在对比模式渲染；数据经 `sync_compare_grid` 从 ResultStore 拷入。
         let compare_grid =
             result_grid::new_table_state(ResultGridDelegate::empty("未选择对比结果"), window, cx);
+        // 【D14 分组页】页内嵌结果集（对齐 `GroupingResultsContainer` 里那个
+        // `ResultSetViewer`）：同处建成，数据由回执泵按 `ResultPlacement::Grouping`
+        // 直接写进 delegate（`set_group_projection`），不进 ResultStore、不进标签条。
+        let group_grid = result_grid::new_table_state(
+            ResultGridDelegate::empty("设好分组列后点工具条最左的「运行」重查"),
+            window,
+            cx,
+        );
 
         // Dock 化接线：面板实体 + 动作队列（渲染期 push / 事件路径 drain 分派）。
         // 网格经 `set_grids` 注入**同一实体**——编辑器动作与面板渲染读写同一份 TableState。
         let result_action_queue = ResultActionQueue::new();
         let result_panel = cx.new(|cx| {
             let mut panel = ResultPanel::new(window, cx, result_action_queue.clone());
-            panel.set_grids(grid.clone(), Some(compare_grid.clone()), window, cx);
+            panel.set_grids(
+                grid.clone(),
+                Some(compare_grid.clone()),
+                Some(group_grid.clone()),
+                window,
+                cx,
+            );
             // 【B2】全局偏好 `result_panel.show_column_comments` 启动时同步到面板（面板级临时开关
             // 覆盖此默认值；用户在面板工具栏切换后不再回写全局——全局只控"默认开不开"）
             if let Some(settings) = cx.try_global::<settings::model::Settings>() {

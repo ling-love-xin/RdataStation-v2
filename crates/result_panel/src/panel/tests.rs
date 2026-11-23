@@ -1147,7 +1147,7 @@ fn stats_tab_renders_toolbar_header_and_rows(cx: &mut gpui_kit::TestAppContext) 
         let grid: Entity<TableState<crate::grid::ResultGridDelegate>> =
             cx.new(|cx| TableState::new(delegate, window, cx));
         panel.update(cx, |p, cx| {
-            p.set_grids(grid, None, window, cx);
+            p.set_grids(grid, None, None, window, cx);
             // 列浏览器清单选中第 2 列（amount）→ 计算页作用列
             p.selected_col = Some(1);
             // 本用例要验「六行都画得出来」，出厂默认只有一项 → 先置全六项
@@ -1296,8 +1296,54 @@ fn arrange_groups_sorts_and_filters() {
     assert_eq!(multi[0].0, vec!["a".to_string(), "1".to_string()]);
 }
 
-/// 【分组页表头】分组结果按表排：每个分组键一列，末列是函数列 `COUNT(*)`
+/// 【D14 分组页】页内嵌结果集的行按排序口径**在客户端**排（不动 SQL）。
+///
+/// 对齐 DBeaver `GroupingResultsContainer.rebuildGrouping:249-265`：
+/// 取 `RS_GROUPING_DEFAULT_SORTING` 后对分组结果在 viewer 里排序。
+#[test]
+fn group_rows_arrange_by_value_or_count_on_the_client() {
+    use super::tabs::arrange_group_rows;
+
+    let mut rows = vec![
+        vec!["b".to_string(), "1".to_string()],
+        vec!["a".to_string(), "3".to_string()],
+        vec!["c".to_string(), "2".to_string()],
+    ];
+
+    // 按值：键列字典序（末列计数不参与比较）
+    arrange_group_rows(&mut rows, GroupSort::Value);
+    assert_eq!(
+        rows,
+        vec![
+            vec!["a".to_string(), "3".to_string()],
+            vec!["b".to_string(), "1".to_string()],
+            vec!["c".to_string(), "2".to_string()],
+        ]
+    );
+
+    // 按计数降序：同数按值兜底，保证同一份数据每次顺序一致
+    arrange_group_rows(&mut rows, GroupSort::CountDesc);
+    assert_eq!(
+        rows,
+        vec![
+            vec!["a".to_string(), "3".to_string()],
+            vec!["c".to_string(), "2".to_string()],
+            vec!["b".to_string(), "1".to_string()],
+        ]
+    );
+
+    // 不排序：原样（数据源给的顺序）
+    let before = rows.clone();
+    arrange_group_rows(&mut rows, GroupSort::None);
+    assert_eq!(rows, before, "不排序就不该动顺序");
+}
+
+/// 【分组页表头】分组结果的列头形状：每个分组键一列，末列是函数列 `COUNT(*)`
 /// （对齐 DBeaver `GroupingResultsContainer` 的属性列 + 函数列 + `getDefaultFunction`）。
+///
+/// 【D14 起】分组页正文改成**页内嵌结果集**（列头由网格按查询列画），所以渲染断言
+/// 从「页内表头行」改成「工具条的重查按钮在」——那一页现在靠它触发 `GROUP BY` 重查。
+/// 纯函数部分（键列 + 末列 COUNT(*) 的形状）保留，它仍是本地分组算法的口径。
 #[gpui_kit::test]
 fn group_tab_shows_a_header_row_with_count_star(
     cx: &mut gpui_kit::TestAppContext,
@@ -1315,7 +1361,7 @@ fn group_tab_shows_a_header_row_with_count_star(
     let single = group_table_header(&["id".to_string()]);
     assert_eq!(single, vec!["id".to_string(), "COUNT(*)".to_string()]);
 
-    // 渲染：显式选一个分组键 → 表头行挂上
+    // 渲染：显式选一个分组键 → 分组页常驻工具条，且「重查」按钮在（D14）
     cx.update(gpui_kit::init);
     let (panel, cx) = panel_harness(cx);
     cx.update(|_, app| {
@@ -1326,8 +1372,85 @@ fn group_tab_shows_a_header_row_with_count_star(
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(
-        cx.debug_bounds("editor-result-group-header").is_some(),
-        "有分组键时分组页应渲染表头行（editor-result-group-header）"
+        cx.debug_bounds("editor-result-group-run").is_some(),
+        "分组页应常驻「重查」按钮（editor-result-group-run）"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-group-toolbar").is_some(),
+        "分组页应常驻工具条"
+    );
+}
+
+/// 【D14 分组页】页内嵌结果集：工具条「运行」按钮把 GROUP BY 重查请求交出去；
+/// 结果写进页内网格后，正文换成网格（**不是**页内的本地计数列表）。
+///
+/// 对齐 DBeaver `GroupingResultsContainer`：那一页里嵌着一整个 `ResultSetViewer`
+/// （`:61-73`），分组结果只喂它（`rebuildGrouping:249-265`）。
+#[gpui_kit::test]
+fn the_group_tab_runs_and_shows_a_embedded_result_set(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ports::ResultRequest;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.toggle_group_column(1, cx);
+            p.set_right_tab(RightTab::Group, cx);
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // ① 正文还是空态（还没重查过）→ 「运行」按钮在，点它把请求入队
+    let run = cx
+        .debug_bounds("editor-result-group-run")
+        .expect("分组页应有「运行」（重查）按钮");
+    let point = gpui_kit::point(
+        run.origin.x + run.size.width / 2.,
+        run.origin.y + run.size.height / 2.,
+    );
+    cx.simulate_click(point, gpui_kit::Modifiers::default());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let queued = cx.update(|_, app| panel.read(app).queue.drain());
+    assert!(
+        queued.iter().any(|request| matches!(
+            request,
+            ResultRequest::RunGroupingQuery { columns, duplicates_only: false }
+                if columns == &vec!["amount".to_string()]
+        )),
+        "「运行」应以「当前分组键列名 + 仅重复开关」入队：{queued:?}"
+    );
+
+    // ② 回执落进页内网格（宿主侧 `set_group_projection`）→ 正文显示网格
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.set_group_projection(
+                vec!["amount".to_string(), "count".to_string()],
+                vec![
+                    vec!["1".to_string(), "2".to_string()],
+                    vec!["NULL".to_string(), "1".to_string()],
+                ],
+                vec![None, None],
+                vec![None, None],
+                "SELECT amount, COUNT(*) AS count FROM src GROUP BY amount".to_string(),
+                cx,
+            );
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-group-grid").is_some(),
+        "有分组结果后，分组页正文应换成页内嵌结果集（editor-result-group-grid）"
+    );
+
+    // ③ 主网格不受影响（分组结果写的是页内网格，不是主结果区）
+    let main_rows = cx.update(|_, app| panel.read(app).grid.read(app).delegate().view_total());
+    assert_eq!(main_rows, 2, "主网格仍是原来那 2 行（分组结果没写进去）");
+    // 最近一次分组 SQL 也记下了（工具条 tooltip / 复制语句的落点）
+    assert!(
+        cx.update(|_, app| panel.read(app).group_query.is_some()),
+        "重查成功后应记下分组 SQL"
     );
 }
 
@@ -1776,8 +1899,16 @@ fn panel_harness<'a>(
         );
         let grid: Entity<TableState<crate::grid::ResultGridDelegate>> =
             cx.new(|cx| TableState::new(delegate, window, cx));
+        // 【D14】分组页的内嵌结果集（生产里由编辑器构造期建成并 `set_grids` 交进来）
+        let group_grid: Entity<TableState<crate::grid::ResultGridDelegate>> = cx.new(|cx| {
+            TableState::new(
+                crate::grid::ResultGridDelegate::empty("尚未分组重查"),
+                window,
+                cx,
+            )
+        });
         panel.update(cx, |p, cx| {
-            p.set_grids(grid, None, window, cx);
+            p.set_grids(grid, None, Some(group_grid), window, cx);
             p.selected_col = Some(1);
         });
         *slot_in.borrow_mut() = Some(panel.clone());

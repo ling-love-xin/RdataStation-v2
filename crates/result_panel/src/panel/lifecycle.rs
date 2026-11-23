@@ -400,6 +400,10 @@ impl ResultPanel {
             group_columns: Vec::new(),
             group_sort: crate::ports::GroupSort::Value,
             group_duplicates_only: false,
+            // 【D14 分组页】内嵌结果集与最近分组 SQL：构造期无网格（宿主 `set_grids` 交进来）
+            group_grid: None,
+            group_query: None,
+            group_snapshot: None,
             // 【R5 可拖分栏】右栏宽度默认档（拖拽后可改，开合动画以它为满宽）
             right_sidebar_width: px(crate::ui::RESULT_SIDEBAR_RIGHT_WIDTH * 16.0),
             right_sidebar_dragging: false,
@@ -533,11 +537,13 @@ impl ResultPanel {
         &mut self,
         grid: Entity<TableState<ResultGridDelegate>>,
         compare_grid: Option<Entity<TableState<ResultGridDelegate>>>,
+        group_grid: Option<Entity<TableState<ResultGridDelegate>>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.grid = grid;
         self.compare_grid = compare_grid;
+        self.group_grid = group_grid;
         // 【列布局落盘】把动作队列注入两个网格：列头菜单 / 列头右键的隐藏、冻结是在
         // UI 回调里直接改 delegate 的，改完经队列交回宿主——宿主先取面板快照再存会话。
         let queue = self.queue.clone();
@@ -546,7 +552,11 @@ impl ResultPanel {
             state.delegate_mut().set_action_queue(queue.clone())
         });
         if let Some(compare) = self.compare_grid.clone() {
-            compare.update(cx, |state, _cx| state.delegate_mut().set_action_queue(queue));
+            compare.update(cx, |state, _cx| state.delegate_mut().set_action_queue(queue.clone()));
+        }
+        // 【D14 分组页】内嵌结果集同样接动作队列：它也要列头菜单 / 隐藏 / 冻结
+        if let Some(group) = self.group_grid.clone() {
+            group.update(cx, |state, _cx| state.delegate_mut().set_action_queue(queue));
         }
         // 【订阅重挂】把网格事件订阅换到新网格上（旧句柄随赋值解订，不留两条）
         let grid = self.grid.clone();
@@ -557,6 +567,102 @@ impl ResultPanel {
                 this.handle_grid_event(event, window, cx);
             },
         ));
+    }
+
+    /// 【D14 分组页】把 `GROUP BY` 重查的结果写进页内嵌结果集（宿主回执泵调用）
+    ///
+    /// 对齐 DBeaver：分组结果的载体是内嵌 viewer 的 data/filter
+    /// （`GroupingResultsContainer.rebuildGrouping:249-265` 只动 `groupingViewer`），
+    /// 所以这里只碰 `group_grid`，不碰主网格、不进结果标签条。
+    /// 与对比栏同口径——只读：分组结果是查询产物，编辑 / 取段 / 洞察的语义都不在这一页。
+    pub fn set_group_projection(
+        &mut self,
+        columns: Vec<String>,
+        mut rows: Vec<Vec<String>>,
+        types: Vec<Option<crate::store::ColumnType>>,
+        annotations: Vec<Option<workbench_shell::model::ColumnAnnotation>>,
+        sql: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.group_query = Some(sql);
+        // 排序口径在客户端生效（DBeaver `rebuildGrouping:249-265` 也是 viewer 侧排序）
+        super::tabs::arrange_group_rows(&mut rows, self.group_sort);
+        // 留一份原始投影：排序口径切换时据此重排重灌，不必再发一次查询
+        self.group_snapshot = Some((
+            columns.clone(),
+            rows.clone(),
+            types.clone(),
+            annotations.clone(),
+        ));
+        self.write_group_grid(columns, rows, types, annotations, cx);
+    }
+
+    /// 【D14 分组页】把一份投影真正写进页内网格（[`Self::set_group_projection`] 与
+    /// 排序口径切换共用；只读、不进 store）
+    pub(crate) fn write_group_grid(
+        &mut self,
+        columns: Vec<String>,
+        rows: Vec<Vec<String>>,
+        types: Vec<Option<crate::store::ColumnType>>,
+        annotations: Vec<Option<workbench_shell::model::ColumnAnnotation>>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(grid) = self.group_grid.clone() else {
+            return;
+        };
+        grid.update(cx, |state, cx| {
+            state.delegate_mut().set_data(columns, rows);
+            state.delegate_mut().set_column_types(types);
+            state.delegate_mut().set_column_annotations(annotations);
+            state.delegate_mut().set_editable(false);
+            state.delegate_mut().set_has_more(false);
+            state.delegate_mut().set_loading_more(false);
+            state.delegate_mut().set_insight_available(false);
+            state.refresh(cx);
+        });
+        cx.notify();
+    }
+
+    /// 【D14 分组页】当前分组键的列名（顺序 = `GROUP BY` 列序 = 层级）。
+    ///
+    /// 与 `render_group_tab` 同一份口径：显式集合优先、空集合退当前选中列、隐藏列照收
+    /// （DBeaver 的分组键来自列清单本身，隐藏只影响网格显示）。
+    pub fn group_key_names(&self, cx: &App) -> Vec<String> {
+        let delegate = self.grid.read(cx).delegate();
+        let cols: Vec<usize> = if self.group_columns.is_empty() {
+            self.inspect_column(delegate).into_iter().collect()
+        } else {
+            self.group_columns
+                .iter()
+                .copied()
+                .filter(|column| *column < delegate.columns().len())
+                .collect()
+        };
+        cols.iter()
+            .filter_map(|column| delegate.columns().get(*column).cloned())
+            .collect()
+    }
+
+    /// 【D14 分组页】最近一次下发成功的分组 SQL（空 = 这一页还没查过）。
+    ///
+    /// 公开只读访问器：页内工具条用它做「已查过的是哪条语句」的说明位，
+    /// 宿主侧的用例也读它（`group_query` 字段本身是私有的）。
+    pub fn group_query(&self) -> Option<&str> {
+        self.group_query.as_deref()
+    }
+
+    /// 【D14 分组页】分组查询失败：内嵌结果集清空并摆原因（不清主网格）
+    pub fn clear_group_projection(&mut self, reason: &str, sql: Option<String>, cx: &mut Context<Self>) {
+        self.group_query = sql;
+        self.group_snapshot = None;
+        let Some(grid) = self.group_grid.clone() else {
+            return;
+        };
+        grid.update(cx, |state, cx| {
+            state.delegate_mut().clear(reason);
+            state.refresh(cx);
+        });
+        cx.notify();
     }
 
     /// 对比栏投影（编辑器 `sync_compare_grid` 时调用；与主栏投影同口径，只读）
