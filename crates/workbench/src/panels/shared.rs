@@ -1104,6 +1104,26 @@ impl Shared {
             panel.update(cx, |panel, cx| panel.preset_from_source(source, cx));
         }
     }
+
+    /// 打开 Mock 面板并用**现成的列结构**预填（数据对象面板「作为 Mock 结构来源」）。
+    ///
+    /// 与 [`Self::open_mock_panel`] 的分工：那条按**源库表**定向（要 `conn_id` 去内省）；
+    /// 这条的列由调用方就地读好（项目分析库里的表没有连接可填）。
+    pub fn open_mock_panel_with_columns(
+        &self,
+        table: String,
+        columns: Vec<mock::mock_view::MockColumnSpec>,
+        origin: &str,
+        cx: &mut App,
+    ) {
+        self.open_right_panel(RightPanel::Mock, cx);
+        let panel = self.mock_panel.borrow().clone();
+        if let Some(panel) = panel.and_then(|weak| weak.upgrade()) {
+            panel.update(cx, |panel, cx| {
+                panel.preset_from_columns(table, columns, origin, cx);
+            });
+        }
+    }
 }
 
 /// 连接对话框宿主能力实现（`rds-connection-dialog` 的 `ConnectionDialogHost`）。

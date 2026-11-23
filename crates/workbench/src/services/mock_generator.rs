@@ -628,41 +628,158 @@ fn map_details(
         .iter()
         .enumerate()
         .map(|(index, detail)| {
-            let data_type = parse_data_type(&detail.data_type).map_err(|e| {
-                format!(
-                    "列「{}」的类型「{}」不合法：{e}",
-                    detail.name, detail.data_type
-                )
-            })?;
-            let mapped = MockEngine::map_column(&detail.name, &detail.data_type).ok();
-            let (generator, confidence, sample_value) = match mapped {
-                Some(response) => (
-                    response.generator,
-                    response.confidence,
-                    response.sample_value,
-                ),
-                // 映射失败（理论上不会）：退到类型兜底，置信度标 low
-                None => (
-                    GeneratorConfig::RandomInt { min: 0, max: 10000 },
-                    "low".to_string(),
-                    String::new(),
-                ),
-            };
-            Ok(MockColumnSpec {
-                id: index as u64 + 1,
-                def: ColumnDef {
-                    name: detail.name.clone(),
-                    data_type,
-                    generator,
-                    nullable_ratio: if detail.nullable { 0.1 } else { 0.0 },
-                    unique: detail.is_primary_key,
-                    dependency: None,
-                },
-                confidence,
-                sample_value,
-                // 从库表推断出来的列没有「用户点中的自定义生成器」身份
-                user_generator: None,
-            })
+            map_column(
+                index,
+                &detail.name,
+                &detail.data_type,
+                detail.nullable,
+                detail.is_primary_key,
+            )
         })
         .collect()
 }
+
+/// 单列的「类型 → 生成器」映射（列结构映射的**唯一实现**）。
+///
+/// 抽出来的原因：列来源不止驱动内省一条——项目分析库里的表直接从
+/// `information_schema.columns` 读（见 [`import_columns_from_analytics`]），
+/// 两条路必须给出同一份 [`MockColumnSpec`]，否则同一个列会因入口不同而生成规则不同。
+fn map_column(
+    index: usize,
+    name: &str,
+    data_type: &str,
+    nullable: bool,
+    primary_key: bool,
+) -> Result<MockColumnSpec, String> {
+    let parsed = parse_data_type(data_type)
+        .map_err(|e| format!("列「{name}」的类型「{data_type}」不合法：{e}"))?;
+    let mapped = MockEngine::map_column(name, data_type).ok();
+    let (generator, confidence, sample_value) = match mapped {
+        Some(response) => (
+            response.generator,
+            response.confidence,
+            response.sample_value,
+        ),
+        // 映射失败（理论上不会）：退到类型兜底，置信度标 low
+        None => (
+            GeneratorConfig::RandomInt { min: 0, max: 10000 },
+            "low".to_string(),
+            String::new(),
+        ),
+    };
+    Ok(MockColumnSpec {
+        id: index as u64 + 1,
+        def: ColumnDef {
+            name: name.to_string(),
+            data_type: parsed,
+            generator,
+            nullable_ratio: if nullable { 0.1 } else { 0.0 },
+            unique: primary_key,
+            dependency: None,
+        },
+        confidence,
+        sample_value,
+        // 从库表推断出来的列没有「用户点中的自定义生成器」身份
+        user_generator: None,
+    })
+}
+
+/// 从**项目分析库**里的表读列结构（数据对象面板的「作为 Mock 结构来源」）。
+///
+/// 为什么不走 [`import_columns`]：那条路要 `conn_id`（它查的是**源库**的表）。
+/// 数据对象面板里的表（项目自建 / 结果集落库 / 表型资产）是**本项目分析库**里的表，
+/// 没有连接可填，只能就地读 `information_schema.columns`（与
+/// `persist_jobs::count_columns` 同一张视图；`DESCRIBE` 在本仓拿不到结果集）。
+///
+/// 只读打开：仅取结构，不能因为看一眼 schema 就把库锁住或写脏。
+pub fn import_columns_from_analytics(
+    project_root: Option<&Path>,
+    table: &str,
+) -> Result<Vec<MockColumnSpec>, String> {
+    if table.trim().is_empty() {
+        return Err("表名为空".to_string());
+    }
+    let path = analysis_db_path(project_root).ok_or_else(|| {
+        "未打开项目：这张表的列结构要读项目分析库（{项目}/.RSmeta/analytics.duckdb）".to_string()
+    })?;
+    let config = duckdb::Config::default()
+        .access_mode(duckdb::AccessMode::ReadOnly)
+        .map_err(|e| format!("打开分析库失败: {e}"))?;
+    let conn = duckdb::Connection::open_with_flags(&path, config)
+        .map_err(|e| format!("打开分析库失败: {e}（可能正被别的操作占用）"))?;
+    analytics_columns(&conn, table)?
+        .into_iter()
+        .enumerate()
+        .map(|(index, (name, data_type, nullable))| {
+            map_column(index, &name, &data_type, nullable, false)
+        })
+        .collect()
+}
+
+/// 分析库里某表的列 `(列名, 类型, 可空)`，按 `ordinal_position` 排序。
+///
+/// 抽成 `pub(crate)` 是为了让测试能钉住「读出来的列序与类型就是库里那份」，
+/// 不必启动整个面板。
+pub(crate) fn analytics_columns(
+    conn: &duckdb::Connection,
+    table: &str,
+) -> Result<Vec<(String, String, bool)>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT column_name, data_type, is_nullable \
+             FROM information_schema.columns \
+             WHERE table_name = ?1 AND table_schema = 'main' \
+             ORDER BY ordinal_position",
+        )
+        .map_err(|e| format!("读取列结构失败: {e}"))?;
+    let rows = stmt
+        .query_map(duckdb::params![table], |row| {
+            let nullable: String = row.get(2)?;
+            Ok((row.get(0)?, row.get(1)?, nullable.eq_ignore_ascii_case("YES")))
+        })
+        .map_err(|e| format!("读取列结构失败: {e}"))?;
+    let columns: Vec<_> = rows.filter_map(Result::ok).collect();
+    if columns.is_empty() {
+        return Err(format!(
+            "表「{table}」不在项目分析库里（临时结果集只存在于内存，表型资产要最新版本还在库里）"
+        ));
+    }
+    Ok(columns)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::analytics_columns;
+
+    /// 读列结构这条新路必须与「库里那份」一致：列序（`ordinal_position`）、类型、可空。
+    /// 表不在库里时要有可读原因——不能静默给空列表（面板会拿空草稿当成功）。
+    #[test]
+    fn analytics_columns_read_order_types_and_nullability() {
+        let dir = std::env::temp_dir().join(format!("rds-mock-schema-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("建临时目录");
+        let path = dir.join("analytics.duckdb");
+        let _ = std::fs::remove_file(&path);
+
+        let conn = duckdb::Connection::open(&path).expect("建分析库");
+        conn.execute_batch(
+            "CREATE TABLE res_x (id INTEGER NOT NULL, name VARCHAR, price DOUBLE)",
+        )
+        .expect("建表");
+
+        let columns = analytics_columns(&conn, "res_x").expect("读列结构");
+        let names: Vec<&str> = columns.iter().map(|c| c.0.as_str()).collect();
+        assert_eq!(names, vec!["id", "name", "price"]);
+        assert_eq!(columns[1].1, "VARCHAR");
+        // NOT NULL 的列不能被当成可空（否则 mock 会往里灌 NULL）
+        assert!(!columns[0].2, "id 是 NOT NULL");
+        assert!(columns[1].2, "name 可空");
+
+        let missing = analytics_columns(&conn, "no_such_table");
+        assert!(missing.is_err(), "不在库里的表必须报错，不能给空列表");
+
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+

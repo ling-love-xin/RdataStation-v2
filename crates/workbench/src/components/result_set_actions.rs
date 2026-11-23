@@ -15,6 +15,35 @@ use insight::SampleSource;
 
 use crate::panels::Shared;
 
+/// 面板行「洞察」：把这张表当取样来源（与结果集右键「再分析」同一出口）。
+///
+/// `table` 传**裸表名**（不带引号）；引号与转义由 [`select_sql_for_table`] 统一负责。
+pub fn open_insight_table(shared: &Shared, table: &str, label: &str, cx: &mut App) {
+    analyze_table(shared, table, label, cx);
+}
+
+/// 面板行「作为 Mock 结构来源」：**只出结构**，不碰数据。
+///
+/// 铁律 E 组：「mock 只出 schema」。这里只读项目分析库的
+/// `information_schema.columns`（见 [`crate::services::mock_generator::import_columns_from_analytics`]），
+/// 不预览、不抽行；列拿到就预填 Mock 草稿，生成多少行由用户在 Mock 面板决定。
+pub fn open_mock_from_analytics(shared: &Shared, table: &str, cx: &mut App) {
+    if table.trim().is_empty() {
+        shared.say_error("Mock 结构：目标表名为空", cx);
+        return;
+    }
+    let root = shared.project_root();
+    match crate::services::mock_generator::import_columns_from_analytics(root.as_deref(), table) {
+        Ok(columns) => shared.open_mock_panel_with_columns(
+            table.to_string(),
+            columns,
+            &format!("项目分析库 {table}"),
+            cx,
+        ),
+        Err(error) => shared.say_error(format!("Mock 结构：{error}"), cx),
+    }
+}
+
 /// 把表名拼成取样 SQL：表名走**双引号转义**（表名可能带引号，`tmp_i_` 的描述段来自用户）。
 ///
 /// 这与 `engine::duckdb::temp_table::quote_ident` 同一规则，但那是 `pub(crate)`，

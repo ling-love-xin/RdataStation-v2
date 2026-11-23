@@ -1330,16 +1330,24 @@ impl DataObjectsTab {
                     // `context_menu` 会换掉元素类型（不再有样式方法），所以必须挂在链尾。
                     .context_menu({
                         use crate::components::file_actions::{
-                            ExportDest, archive_file_as_snapshot, export_table_to,
+                            ExportDest, archive_file_as_snapshot, bare_table_name, export_table_to,
                         };
                         let shared = self.shared.clone();
                         let sql_ref = object.sql_ref.clone();
+                        // 只有「项目分析库里的表」能当 Mock 的结构来源：临时结果集只活在内存，
+                        // 全局库是另一个文件（都不在这条读列的路上，见 `open_mock_from_analytics`）
+                        let in_project_analytics = matches!(
+                            object.key.split(':').next(),
+                            Some("persistent" | "project" | "asset")
+                        );
+                        let label = object.name.clone();
                         let alias = data_objects::fileview_alias(&object.key).map(str::to_string);
                         let usable = object.can_analyze();
                         let format = self.export_format;
                         move |menu, _window, _cx| {
                             let mut menu = menu;
                             if let Some(reference) = sql_ref.clone().filter(|_| usable) {
+                                let table = bare_table_name(&reference);
                                 let open = shared.clone();
                                 let open_ref = reference.clone();
                                 menu = menu.item(
@@ -1352,6 +1360,32 @@ impl DataObjectsTab {
                                         open.notify_host(cx);
                                     }),
                                 );
+                                // 洞察：看**数据**（取样 → 表探查），与结果集右键同一出口
+                                let insight = shared.clone();
+                                let insight_table = table.clone();
+                                let insight_label = label.clone();
+                                menu = menu.item(PopupMenuItem::new("洞察（看数据）").on_click(
+                                    move |_, _, cx| {
+                                        crate::components::result_set_actions::open_insight_table(
+                                            &insight,
+                                            &insight_table,
+                                            &insight_label,
+                                            cx,
+                                        );
+                                    },
+                                ));
+                                // Mock：只出**结构**（铁律 E 组），不预览、不抽行
+                                if in_project_analytics {
+                                    let mock = shared.clone();
+                                    let mock_table = table;
+                                    menu = menu.item(PopupMenuItem::new("作为 Mock 结构来源").on_click(
+                                        move |_, _, cx| {
+                                            crate::components::result_set_actions::open_mock_from_analytics(
+                                                &mock, &mock_table, cx,
+                                            );
+                                        },
+                                    ));
+                                }
                                 let export = shared.clone();
                                 let export_ref = reference.clone();
                                 menu = menu.item(PopupMenuItem::new("导出（全局）").on_click(

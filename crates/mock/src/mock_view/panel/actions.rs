@@ -91,30 +91,48 @@ impl MockPanel {
     ///
     /// 这正是 v1 的主路径（源库结构 → 造新数据），不再依赖「分析库已有同名表」。
     pub fn preset_from_source(&mut self, request: SchemaRequest, cx: &mut Context<Self>) {
-        self.draft.table_name = request.table.clone();
-        self.set_table_pending(request.table.clone());
         match self.host.import_columns(&request) {
             Ok(columns) => {
-                self.draft.columns = columns;
-                self.next_id = self.draft.columns.iter().map(|c| c.id).max().unwrap_or(0) + 1;
-                self.results.clear();
-                self.current = 0;
-                self.landed = None;
-                self.error = None;
-                self.outcome = Some(format!(
-                    "已从 {}.{}.{} 导入 {} 列",
-                    request.catalog,
-                    request.schema,
-                    request.table,
-                    self.draft.columns.len()
-                ));
+                let origin = format!(
+                    "{}.{}.{}",
+                    request.catalog, request.schema, request.table
+                );
+                self.preset_from_columns(request.table, columns, &origin, cx);
             }
             Err(e) => {
+                self.draft.table_name = request.table.clone();
+                self.set_table_pending(request.table.clone());
                 self.outcome = None;
                 self.landed = None;
                 self.error = Some(e);
+                cx.notify();
             }
         }
+    }
+
+    /// 用**一份现成的列结构**预填草稿（数据对象面板「作为 Mock 结构来源」）。
+    ///
+    /// 与 [`Self::preset_from_source`] 的分工：那条走 `host.import_columns`（源库内省）；
+    /// 这条的列已经由调用方读好——项目分析库里的表没有"连接"可填，
+    /// 只能就地读 `information_schema`（见 `workbench::services::mock_generator`）。
+    /// 预填动作本体（目标表名 / 列 / 结果清空 / 提示语）只此一处，两条入口不各写一遍。
+    pub fn preset_from_columns(
+        &mut self,
+        table: String,
+        columns: Vec<MockColumnSpec>,
+        origin: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let count = columns.len();
+        self.draft.table_name = table.clone();
+        self.set_table_pending(table);
+        self.draft.columns = columns;
+        self.next_id = self.draft.columns.iter().map(|c| c.id).max().unwrap_or(0) + 1;
+        self.results.clear();
+        self.current = 0;
+        self.landed = None;
+        self.error = None;
+        self.outcome = Some(format!("已从 {origin} 导入 {count} 列"));
         cx.notify();
     }
 
