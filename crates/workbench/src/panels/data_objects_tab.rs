@@ -1006,6 +1006,38 @@ impl DataObjectsTab {
                     }),
                 )
             };
+            // 铁律 C 组第 9/10 条：「库表（未登记）」段的表可以就地补一个资产身份。
+            // 只写登记行（不搬数据、不涨版本），与「升级为资产」是两个动作。
+            let register_button = {
+                let raw = object
+                    .key
+                    .strip_prefix("persistent:")
+                    .or_else(|| object.key.strip_prefix("project:"))
+                    .map(str::to_string);
+                match raw {
+                    Some(table) if object.group == data_objects::Group::UnregisteredTables => {
+                        let shared = self.shared.clone();
+                        let entity = entity.clone();
+                        let label = object.name.clone();
+                        Some(
+                            Button::new(SharedString::from(format!(
+                                "data-object-register-{}",
+                                object.key
+                            )))
+                            .ghost()
+                            .label("登记为资产")
+                            .tooltip("给项目分析库里这张已有的表补一个资产身份：只写登记，不搬数据")
+                            .on_click(move |_, _, cx| {
+                                crate::components::result_set_actions::register_table_asset(
+                                    &shared, &table, &label, cx,
+                                );
+                                entity.update(cx, |_, cx| cx.notify());
+                            }),
+                        )
+                    }
+                    _ => None,
+                }
+            };
             // 资产行才给「升级到全局」：那一行已经有存档身份，升上去能回指上游。
             // 临时表 / 项目自建表先「升级为资产」——没有登记就没有身份，硬升会丢线索。
             // 结果集 / 洞察产物已经在进程单例里：落库就是整表搬一份。
@@ -1174,6 +1206,7 @@ impl DataObjectsTab {
                     .children(pick_button)
                     .children(install_button)
                     .children(persist_button)
+                    .children(register_button)
                     .children(session_button),
             );
             if session_open {

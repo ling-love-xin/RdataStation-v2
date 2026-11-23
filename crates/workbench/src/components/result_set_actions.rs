@@ -33,6 +33,30 @@ pub fn analyze_table(shared: &Shared, table: &str, label: &str, cx: &mut App) {
     shared.open_insight_source_table(source, label.to_string(), cx);
 }
 
+/// 给项目分析库里**已经存在**的表补一个资产身份（数据对象面板「登记为资产」）。
+///
+/// 与 [`persist_to_project`] 的分工：那个是"搬数据 + 登记"（升级）；这个是"只写登记行"，
+/// 不搬、不涨版本。已经在库里、只是没身份的表走这条。
+pub fn register_table_asset(shared: &Shared, table: &str, label: &str, cx: &mut App) {
+    if table.trim().is_empty() {
+        shared.say_error("登记为资产：目标表名为空", cx);
+        return;
+    }
+    let Some(root) = shared.project_root() else {
+        shared.say_error("登记为资产需要打开项目", cx);
+        return;
+    };
+    let request = crate::services::persist_jobs::RegisterRequest {
+        project_root: root,
+        label: label.to_string(),
+        table: table.to_string(),
+    };
+    match crate::services::persist_jobs::submit_register(request) {
+        Ok(()) => shared.say(format!("正在把「{label}」登记为资产…"), cx),
+        Err(error) => shared.say_error(format!("登记为资产失败：{error}"), cx),
+    }
+}
+
 /// 把这份结果**持久化**成项目分析库里的表（`res_<描述>_<时间戳>`）。
 ///
 /// 与 [`analyze_table`] 的分工：那个把 `tmp_q_` 当取样来源（临时、随 TTL 走），

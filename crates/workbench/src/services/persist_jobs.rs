@@ -300,6 +300,103 @@ fn open_project_manager(
     }
     Err(format!("{last}；请稍后重试（同一时间只允许一个项目库写连接）"))
 }
+// ---------------------------------------------------------------------------
+// 「登记为资产」通道（数据对象面板：给项目分析库里已有的表补身份）
+//
+// 与落库通道分开排一条队列：两者语义不同（落库是搬数据 + 登记，登记只写一行元数据），
+// 混在一个请求类型里会让"失败要不要回滚表"这类判断跟着变复杂。共用同一套形态
+// （worker 线程 + 单槽 + UI 泵取），所以回执仍在状态栏、仍不在事件路径上写库。
+// ---------------------------------------------------------------------------
+
+/// 一次「登记为资产」请求
+#[derive(Debug, Clone)]
+pub struct RegisterRequest {
+    pub project_root: PathBuf,
+    /// 显示名（不带 `res_` 前缀；同一张表已有资产时以原资产名为准）
+    pub label: String,
+    /// 本体表名（项目分析库里那张表）
+    pub table: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum RegisterOutcome {
+    Done { notice: String },
+    Failed { label: String, reason: String },
+}
+
+struct RegisterShared {
+    tx: Sender<RegisterRequest>,
+    outcome: Mutex<Option<RegisterOutcome>>,
+}
+
+static REGISTER_JOBS: OnceLock<RegisterShared> = OnceLock::new();
+
+fn register_shared() -> &'static RegisterShared {
+    REGISTER_JOBS.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<RegisterRequest>();
+        std::thread::Builder::new()
+            .name("rds-register-asset".to_string())
+            .stack_size(8 * 1024 * 1024)
+            .spawn(move || {
+                for request in rx {
+                    let outcome = match register_existing_table(&request) {
+                        Ok(notice) => RegisterOutcome::Done { notice },
+                        Err(reason) => RegisterOutcome::Failed {
+                            label: request.label.clone(),
+                            reason,
+                        },
+                    };
+                    if let Ok(mut slot) = register_shared().outcome.lock() {
+                        *slot = Some(outcome);
+                    }
+                }
+            })
+            .expect("failed to spawn register-asset worker");
+        RegisterShared {
+            tx,
+            outcome: Mutex::new(None),
+        }
+    })
+}
+
+/// 提交一次登记（立即返回；结果由 UI 泵取 [`take_register_outcome`] 取走）
+pub fn submit_register(request: RegisterRequest) -> Result<(), String> {
+    if request.table.trim().is_empty() {
+        return Err("登记为资产需要本体表名".to_string());
+    }
+    register_shared()
+        .tx
+        .send(request)
+        .map_err(|e| format!("登记任务入队失败: {e}"))
+}
+
+pub fn take_register_outcome() -> Option<RegisterOutcome> {
+    register_shared()
+        .outcome
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take())
+}
+
+/// 同步登记（worker 与用例共用）：自建 runtime 跑 `register_existing_at`。
+fn register_existing_table(request: &RegisterRequest) -> Result<String, String> {
+    let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("无法启动异步运行时: {e}"))?;
+    let asset = analytics_resource::table_asset::TableAssetRequest {
+        name: request.label.clone(),
+        analytics_table: request.table.clone(),
+        // 表已在库里，行列数这里不另查（查要开连接，收益只是详情里多两个数字）
+        row_count: None,
+        column_count: None,
+    };
+    let outcome = runtime
+        .block_on(analytics_resource::table_asset::register_existing_at(
+            &request.project_root,
+            asset,
+        ))
+        .map_err(|error| error.to_string())?;
+    Ok(outcome.notice())
+}
+
 #[cfg(test)]
 mod tests {
     use super::PersistRequest;

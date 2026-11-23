@@ -209,11 +209,11 @@ impl WorkbenchView {
                 executor.timer(std::time::Duration::from_millis(500)).await;
                 let alive = weak
                     .update(cx, |this, cx| {
-                        let Some(outcome) = crate::services::persist_jobs::take_outcome() else {
-                            return;
-                        };
-                        use crate::services::persist_jobs::PersistOutcome;
-                        match outcome {
+                        // 先取落库回执（没有就跳过），再取登记回执：两条通道各自排空，
+                        // 共用同一拍，避免为每个动作再起一个泵。
+                        if let Some(outcome) = crate::services::persist_jobs::take_outcome() {
+                            use crate::services::persist_jobs::PersistOutcome;
+                            match outcome {
                             PersistOutcome::Done { table, rows, columns, label, asset } => {
                                 // 两件事分开报：表写成是事实，资产登记上没上是另一件事。
                                 // 登记失败不回滚表（数据是用户的），提示里必须说清半截状态。
@@ -254,6 +254,25 @@ impl WorkbenchView {
                             PersistOutcome::Failed { label, reason } => this
                                 .shared
                                 .say_error(format!("「{label}」持久化失败：{reason}"), cx),
+                            }
+                        }
+                        // 「登记为资产」回执：只写登记行，成功后资产清单要多一行，
+                        // 与落库同一条理由（面板缓存不会自己变）。
+                        if let Some(outcome) =
+                            crate::services::persist_jobs::take_register_outcome()
+                        {
+                            use crate::services::persist_jobs::RegisterOutcome;
+                            match outcome {
+                                RegisterOutcome::Done { notice } => {
+                                    this.shared.say(notice, cx);
+                                    if let Some(tab) = this.right_data_objects_tab.clone() {
+                                        tab.update(cx, |tab, cx| tab.refresh(cx));
+                                    }
+                                }
+                                RegisterOutcome::Failed { label, reason } => this
+                                    .shared
+                                    .say_error(format!("「{label}」登记资产失败：{reason}"), cx),
+                            }
                         }
                     })
                     .is_ok();

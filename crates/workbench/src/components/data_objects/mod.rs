@@ -134,6 +134,13 @@ pub enum Group {
     /// 连接行由 `Shared::connections` 直接来（零 I/O），**表清单只在展开时懒加载**：
     /// 逐层 introspect 很贵，面板一打开就查所有连接是不可接受的。
     SourceTables,
+    /// 库表（未登记）：项目分析库里看得见、但**还没有资产身份**的表（自建 / 结果集落库 / 全局）。
+    ///
+    /// 铁律 C 组第 8/9 条（`docs/architecture/layout/data-objects-invariants.md`）：
+    /// 表段只显示资产当前版本；未登记的表既不能消失、也不能混进表段——它们留在源侧的
+    /// 库表视图里，要进表段必须右键「登记为资产」。段标题写「未登记」是为了让用户一眼
+    /// 知道"这些表还没有身份"，而不是以为它们不算数。
+    UnregisteredTables,
     /// 持久表：项目分析库（自建 / `res_` 落库 / 资产·表型）与全局分析库（`G_`）
     PersistentTables,
     /// 文件：已加载进 DuckDB 的文件视图（外部文件 / 手动加入的草稿）与资产·文件型
@@ -151,9 +158,10 @@ impl Group {
     /// chips 数组——加一段时只要漏改一处，排序与筛选就会各说各话。现在只留这一份：
     /// 排序直接用派生 `Ord`（声明顺序 = 段顺序），chips 遍历本常量，
     /// `groups_list_all_in_ord_order` 用例保证「常量顺序 = `Ord` 顺序」不被写歪。
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::MountedSources,
         Self::SourceTables,
+        Self::UnregisteredTables,
         Self::PersistentTables,
         Self::Files,
         Self::TemporaryTables,
@@ -163,7 +171,8 @@ impl Group {
         match self {
             Self::MountedSources => "已挂载的源",
             Self::SourceTables => "源库表",
-            Self::PersistentTables => "持久表",
+            Self::UnregisteredTables => "库表（未登记）",
+            Self::PersistentTables => "表（资产）",
             Self::Files => "文件",
             Self::TemporaryTables => "临时表",
         }
@@ -199,6 +208,8 @@ impl Group {
             // 单条源库连接本身就是一台库，用 Database，两段扫一眼能分开
             Self::MountedSources => IconName::Boxes,
             Self::SourceTables => IconName::Database,
+            // 未登记的表：形状仍是「库里的表」，用 Table 与已登记的表同形（差别在段与段名）
+            Self::UnregisteredTables => IconName::Table,
             Self::PersistentTables => IconName::Table,
             Self::Files => IconName::FileSpreadsheet,
             Self::TemporaryTables => IconName::Clock,
@@ -425,7 +436,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             channel: Channel::Local,
             life: Life::Project,
             state: State::Ready,
-            group: Group::PersistentTables,
+            group: Group::UnregisteredTables,
             pill: "结果集落库",
             version: None,
         });
@@ -434,11 +445,11 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
         out.push(Object {
             key: format!("project:{name}"),
             name,
-            note: "项目自建".to_string(),
+            note: "项目自建 · 未登记".to_string(),
             channel: Channel::Local,
             life: Life::Project,
             state: State::Ready,
-            group: Group::PersistentTables,
+            group: Group::UnregisteredTables,
             pill: "项目自建",
             version: None,
         });
@@ -486,11 +497,11 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
         out.push(Object {
             key: format!("global:{name}"),
             name: name.clone(),
-            note: "跨项目 · 只读".to_string(),
+            note: "跨项目 · 只读 · 全局资产".to_string(),
             channel: Channel::Local,
             life: Life::Project,
             state: State::Ready,
-            group: Group::PersistentTables,
+            group: Group::UnregisteredTables,
             pill: "全局",
             version: None,
         });
@@ -1054,17 +1065,17 @@ mod tests {
         assert_eq!(persistent.key, "persistent:res_订单明细_20261115103000");
 
         // 落库 / 自建 / 全局同在「持久表」段（2026-11-18 合并），行内标签负责说清是哪一类
-        assert_eq!(persistent.group, Group::PersistentTables);
+        assert_eq!(persistent.group, Group::UnregisteredTables);
         let own = rows
             .iter()
             .find(|o| o.key.starts_with("project:"))
             .unwrap();
-        assert_eq!(own.group, Group::PersistentTables);
+        assert_eq!(own.group, Group::UnregisteredTables);
         let global = rows
             .iter()
             .find(|o| o.key.starts_with("global:"))
             .unwrap();
-        assert_eq!(global.group, Group::PersistentTables);
+        assert_eq!(global.group, Group::UnregisteredTables);
         assert_eq!(own.name, "数据修复");
         assert_eq!(own.pill, "项目自建");
         assert_eq!(persistent.pill, "结果集落库");
