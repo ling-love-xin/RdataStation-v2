@@ -1412,5 +1412,11 @@
   "使用正则表达式（如 \\\\d+ 匹配数字；关掉则按纯文本匹配）": "Use a regular expression (e.g. \\\\d+ matches digits; off = plain-text matching)",
   "保留大小写（已接入：替换时保持命中词的原有大小写格式，如全大写/首字母大写/全小写）": "Preserve case (active: replacements keep the matched word's original casing, e.g. ALL CAPS / Capitalized / lowercase)",
   "样例：*.sql, src/**/include（留空搜索全部文件）": "Example: *.sql, src/**/include (empty = search all files)",
-  "样例：*.log, .git/, target/（留空不排除）": "Example: *.log, .git/, target/ (empty = exclude nothing)"
+  "样例：*.log, .git/, target/（留空不排除）": "Example: *.log, .git/, target/ (empty = exclude nothing)",
+  "· 打开现有目录（.RSmeta）": "· Open an existing directory (.RSmeta)",
+  "⚠ 路径已失效，可能已移动或删除": "⚠ Path is no longer valid; it may have been moved or deleted",
+  "当前版本仅支持本地目录；DuckLake 远程项目待后续版本。": "This version supports local directories only; DuckLake remote projects come in a later release.",
+  "搜索名称 / 描述 / 路径（可用 状态:archived 固定:是 锁:否）": "Search name / description / path (supports status:archived pinned:yes locked:no)",
+  "从历史里删除这一条（屏上已弹出的提示不受影响）": "Delete this entry from history (toasts already on screen are unaffected)",
+  "清空通知历史（屏上已弹出的提示不受影响），不可恢复": "Clear the notification history (toasts already on screen are unaffected); cannot be undone"
 }

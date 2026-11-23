@@ -242,7 +242,7 @@ pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App)
                 .child(div().font_weight(FontWeight::MEDIUM).child(tr("快速开始")))
                 .child(tr("· 新建空项目"))
                 .child(tr("· 从示例项目开始"))
-                .child("· 打开现有目录（.RSmeta）"),
+                .child(tr("· 打开现有目录（.RSmeta）")),
         );
 
     if let Some(notice) = &ui.notice {
@@ -422,7 +422,7 @@ pub(super) fn project_card(
             div()
                 .text_xs()
                 .text_color(theme.colors.warning)
-                .child("⚠ 路径已失效，可能已移动或删除"),
+                .child(tr("⚠ 路径已失效，可能已移动或删除")),
         );
     } else if !item.missing_drivers.is_empty() {
         card = card.child(

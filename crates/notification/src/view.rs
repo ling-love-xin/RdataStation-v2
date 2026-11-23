@@ -323,7 +323,7 @@ fn notify_actions(entity: &Entity<NotificationBell>, unread: usize, empty: bool)
                 .ghost()
                 .xsmall()
                 .label(tr("清空"))
-                .tooltip("清空通知历史（屏上已弹出的提示不受影响），不可恢复")
+                .tooltip(tr("清空通知历史（屏上已弹出的提示不受影响），不可恢复"))
                 .disabled(empty)
                 .on_click(move |_, _, app| {
                     service::clear_history();
@@ -438,7 +438,7 @@ fn notification_row(
                     .ghost()
                     .xsmall()
                     .icon(gpui_kit::assets::IconName::X)
-                    .tooltip("从历史里删除这一条（屏上已弹出的提示不受影响）")
+                    .tooltip(tr("从历史里删除这一条（屏上已弹出的提示不受影响）"))
                     .on_click(move |_, _, app| {
                         if service::remove(&id) {
                             bell.update(app, |_, cx| cx.notify());

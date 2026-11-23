@@ -11,6 +11,7 @@
 //!
 //! 语义见 `docs/architecture/project/project-prototype-design.md`。
 
+use shared::i18n::tr;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -631,7 +632,7 @@ impl ProjectInputs {
         Self {
             search: cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder("搜索名称 / 描述 / 路径（可用 状态:archived 固定:是 锁:否）")
+                    .placeholder(tr("搜索名称 / 描述 / 路径（可用 状态:archived 固定:是 锁:否）"))
             }),
             create_name: cx.new(|cx| InputState::new(window, cx)),
             create_location: cx.new(|cx| InputState::new(window, cx)),

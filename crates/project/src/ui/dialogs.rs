@@ -286,7 +286,7 @@ pub fn open_create_dialog(
                         div()
                             .text_xs()
                             .text_color(theme.colors.muted_foreground)
-                            .child("当前版本仅支持本地目录；DuckLake 远程项目待后续版本。"),
+                            .child(tr("当前版本仅支持本地目录；DuckLake 远程项目待后续版本。")),
                     )
                     .when_some(error, |d, e| d.child(dialog_error_line(theme, &e))),
             )
