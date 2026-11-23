@@ -296,6 +296,80 @@ pub fn unmount_file_database(shared: &Shared, path_text: &str, cx: &mut App) {
     }
 }
 
+/// 用资产某一历史版本的内容做一次分析（版本对话框「用 vN 分析…」）。
+///
+/// 铁律 D17：历史版本**不平铺进数据对象清单**，要看旧数就走这个二级入口。
+/// 三件事必须守住：
+/// 1. **只读**：读的是 `.RSmeta/resources/versions/<id>/<N>/` 下的副本，本体与版本行都不动；
+/// 2. **不覆盖当前版本**：副本与原文件同名，`alias_for` 会算出同一个 `f_*`，所以这里
+///    用 `f_<stem>_v<N>` 的显式别名（`load_file_as_global` / `load_database_as_global`），
+///    当前版本那行原样留着；
+/// 3. 挂进进程单例（会话级），面板的「已加载」行据此多一行，切项目随 `f_*` 一起清掉。
+pub fn analyze_asset_version(
+    shared: &Shared,
+    resource_id: &str,
+    name: &str,
+    version: i32,
+    cx: &mut App,
+) {
+    let Some(root) = shared.project_root() else {
+        shared.say_error("还没有打开项目".to_string(), cx);
+        return;
+    };
+    let rt = match crate::services::nav_runtime::bridge_runtime() {
+        Ok(rt) => rt,
+        Err(error) => {
+            shared.say_error(format!("异步运行时不可用：{error}"), cx);
+            return;
+        }
+    };
+    let copy = match rt.block_on(analytics_resource::version_copy_file(root, resource_id, version)) {
+        Ok(copy) => copy,
+        Err(error) => {
+            shared.say_error(format!("读历史副本失败：{error}"), cx);
+            return;
+        }
+    };
+    let Some(path) = copy else {
+        shared.say_error(
+            format!("「{name}」v{version} 没有内容副本（可能已被保留策略裁剪）"),
+            cx,
+        );
+        return;
+    };
+    let Some(path_text) = path.to_str() else {
+        shared.say_error("历史副本路径里有非 UTF-8 字符，无法分析".to_string(), cx);
+        return;
+    };
+
+    // 数据库文件（`.duckdb` / `.sqlite`）走 ATTACH（与挂载同一口径）；其余走文件视图。
+    let alias = format!(
+        "{}_v{version}",
+        engine::duckdb::file_view::alias_for(path_text)
+    );
+    let outcome = if engine::duckdb::file_view::is_database_file(path_text) {
+        engine::duckdb::file_view::load_database_as_global(path_text, &alias)
+    } else {
+        engine::duckdb::file_view::load_file_as_global(path_text, &alias)
+    };
+    match outcome {
+        Ok(()) => {
+            let mut list = shared.loaded_files.borrow_mut();
+            list.retain(|(seen, _)| seen != &alias);
+            list.push((alias.clone(), path_text.to_string()));
+            drop(list);
+            let collected = data_objects::collect(shared);
+            *shared.data_objects.borrow_mut() = data_objects::objects(&collected);
+            shared.mark_data_objects_dirty(cx);
+            shared.say(
+                format!("已用「{name}」v{version} 分析：{alias}（本体与版本都没动）"),
+                cx,
+            );
+        }
+        Err(error) => shared.say_error(format!("用 v{version} 分析失败：{error}"), cx),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::LoadScope;

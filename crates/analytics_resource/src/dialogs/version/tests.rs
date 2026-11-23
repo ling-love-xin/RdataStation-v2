@@ -45,4 +45,6 @@ fn action_carries_its_version() {
     assert_eq!(VersionAction::Restore { version: 3 }.version(), 3);
     assert_eq!(VersionAction::CheckoutDraft { version: 1 }.version(), 1);
     assert_eq!(VersionAction::DeleteCopy { version: 7 }.version(), 7);
+    assert_eq!(VersionAction::Diff { version: 2 }.version(), 2);
+    assert_eq!(VersionAction::Analyze { version: 4 }.version(), 4);
 }

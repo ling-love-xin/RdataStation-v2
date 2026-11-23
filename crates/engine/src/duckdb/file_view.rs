@@ -112,6 +112,26 @@ pub fn load_file_global(path: &str) -> Result<String, CoreError> {
     load_file(&conn, path)
 }
 
+/// 用**指定别名**把文件挂成视图（历史版本「用 vN 分析」用）。
+///
+/// 为什么要单独一个入口：历史副本与原文件同名，`alias_for` 会算出同一个视图名，
+/// 直接 `load_file` 就把**当前版本**的视图覆盖掉了（用户会以为自己看的是当前版本）。
+/// 调用方给全别名（`f_<stem>_v<N>`），覆盖语义与 [`load_file`] 相同。
+pub fn load_file_as(conn: &Connection, path: &str, alias: &str) -> Result<(), CoreError> {
+    let sql = crate::duckdb::federation::session::file_view_sql(path, alias)
+        .map_err(|error| CoreError::common(CommonError::General(error)))?;
+    conn.execute_batch(&sql)
+        .map_err(|error| CoreError::common(CommonError::General(format!("加载文件失败：{error}"))))
+}
+
+/// 在进程单例上用指定别名建视图（事件路径调用：首次读文件会有 I/O）
+pub fn load_file_as_global(path: &str, alias: &str) -> Result<(), CoreError> {
+    let conn = crate::duckdb::manager::DuckDBManager::global()
+        .lock()
+        .map_err(|_| CoreError::common(CommonError::General("内存库连接锁被污染".to_string())))?;
+    load_file_as(&conn, path, alias)
+}
+
 /// 是不是**数据库文件**（`.duckdb` / `.sqlite`）：这类不走 reader 建视图，走
 /// [`load_database`] `ATTACH` 挂成 catalog——表在库里，挂进来就能按
 /// `别名.schema.表` 引用（2026-11-18 用户拍板：库文件走 ATTACH）。
@@ -133,11 +153,22 @@ pub fn is_database_file(path: &str) -> bool {
 /// - 只读挂载与联邦源同一纪律：文件是外部的，不从这条连接写它。
 pub fn load_database(conn: &Connection, path: &str) -> Result<String, CoreError> {
     let alias = alias_for(path);
+    load_database_as(conn, path, &alias)?;
+    Ok(alias)
+}
+
+/// 用**指定别名**挂载数据库文件（历史版本「用 vN 分析」用）。
+///
+/// 与 [`load_file_as`] 同一理由：历史副本与原库同名，自动别名会撞上**当前版本**的
+/// catalog，`ATTACH` 前的同名清理会顺手把当前版本卸掉。别名由调用方给全。
+pub fn load_database_as(conn: &Connection, path: &str, alias: &str) -> Result<(), CoreError> {
     let is_sqlite = std::path::Path::new(path)
         .extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| {
-            ext.eq_ignore_ascii_case("sqlite") || ext.eq_ignore_ascii_case("sqlite3") || ext.eq_ignore_ascii_case("db")
+            ext.eq_ignore_ascii_case("sqlite")
+                || ext.eq_ignore_ascii_case("sqlite3")
+                || ext.eq_ignore_ascii_case("db")
         });
     if is_sqlite {
         // 装扩展在 mount_lock 内做（INSTALL 写扩展目录，并发会撞文件——与联邦同规）
@@ -160,7 +191,15 @@ pub fn load_database(conn: &Connection, path: &str) -> Result<String, CoreError>
     conn.execute_batch(&sql).map_err(|error| {
         CoreError::common(CommonError::General(format!("挂载数据库文件失败：{error}")))
     })?;
-    Ok(alias)
+    Ok(())
+}
+
+/// 在进程单例上用指定别名挂载数据库文件（事件路径调用）
+pub fn load_database_as_global(path: &str, alias: &str) -> Result<(), CoreError> {
+    let conn = crate::duckdb::manager::DuckDBManager::global()
+        .lock()
+        .map_err(|_| CoreError::common(CommonError::General("内存库连接锁被污染".to_string())))?;
+    load_database_as(&conn, path, alias)
 }
 
 /// 在进程单例上挂载数据库文件（事件路径调用）
@@ -213,7 +252,10 @@ pub fn list_tables_global(
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
-    use super::{alias_for, clear_file_views, detach_database, is_database_file, load_database, load_database_global, load_file, list_tables_global};
+    use super::{
+        alias_for, clear_file_views, detach_database, is_database_file, load_database,
+        load_database_global, load_file, load_file_as, list_tables_global,
+    };
     use std::path::PathBuf;
 
     fn workdir(tag: &str) -> PathBuf {
@@ -341,6 +383,31 @@ mod tests {
         let again = detach_database(&conn, &alias).expect_err("重复卸载要报错");
         assert!(format!("{again}").contains(&alias), "{again}");
 
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 历史版本「用 vN 分析」的别名纪律：副本与原文件同名，靠显式别名并列成两行，
+    /// 谁也不能把谁顶掉（`alias_for` 自动别名会算出同一个名字）。
+    #[test]
+    fn an_explicit_alias_keeps_the_current_view_alive() {
+        let dir = workdir("alias_two_views");
+        let source = dir.join("dau.csv");
+        std::fs::write(&source, "day,users\n1,10\n2,20\n").expect("写源文件");
+        let version_dir = dir.join("versions").join("3");
+        std::fs::create_dir_all(&version_dir).expect("建版本目录");
+        let copy = version_dir.join("dau.csv");
+        std::fs::copy(&source, &copy).expect("复制副本");
+
+        let conn = duckdb::Connection::open_in_memory().expect("内存库");
+        let current = load_file(&conn, source.to_str().expect("路径")).expect("当前版本视图");
+        assert_eq!(current, "f_dau");
+        load_file_as(&conn, copy.to_str().expect("路径"), "f_dau_v3").expect("历史版本视图");
+
+        // 两行并存：当前版本还在，历史版本也挂了（内容一样，验的是"都在"）
+        conn.execute_batch(&format!("SELECT count(*) FROM \"{current}\""))
+            .expect("当前版本视图还在");
+        conn.execute_batch("SELECT count(*) FROM \"f_dau_v3\"")
+            .expect("历史版本视图也挂了");
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -55,16 +55,22 @@ pub enum VersionAction {
     DeleteCopy { version: i32 },
     /// 与当前版本对比（只读查看，不入动作回执、不写库；文本 diff 查看器 `version_diff`）。
     Diff { version: i32 },
+    /// 用这一版的内容做一次分析（只读查看：把该版本副本挂成分析视图，本体与版本都不动）。
+    ///
+    /// 铁律 D17：历史版本不进数据对象清单平铺，要看旧数据就走这个二级入口。
+    /// 表型资产没有内容副本，不存在这个动作。
+    Analyze { version: i32 },
 }
 
 impl VersionAction {
-    /// 版本号（四种动作都要它）。
+    /// 版本号（五种动作都要它）。
     pub fn version(self) -> i32 {
         match self {
             Self::Restore { version }
             | Self::CheckoutDraft { version }
             | Self::DeleteCopy { version }
-            | Self::Diff { version } => version,
+            | Self::Diff { version }
+            | Self::Analyze { version } => version,
         }
     }
 }

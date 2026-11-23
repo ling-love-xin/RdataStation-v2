@@ -275,6 +275,11 @@ pub(crate) async fn run_version_action(job: &VersionActionJob) -> OpOutcome {
         VersionAction::Diff { .. } => {
             unreachable!("diff 不走版本动作执行（对比在宿主已分流）")
         }
+        // 「用 vN 分析」同理：是只读查看，宿主要先取副本路径再挂视图，
+        // 在 `request_version_action` 已分流，不会送到这里。
+        VersionAction::Analyze { .. } => {
+            unreachable!("analyze 不走版本动作执行（宿主已分流）")
+        }
         VersionAction::Restore { version } => {
             match service.restore_version(&job.resource_id, version).await {
                 Ok(outcome) if outcome.created_new_version => OpOutcome::VersionActionDone {

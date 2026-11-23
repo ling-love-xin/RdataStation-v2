@@ -105,6 +105,14 @@ impl SidebarPanel {
             self.ensure_resources_pump(cx);
             return;
         }
+        // 「用 vN 分析」也是**只读查看**：把历史副本挂成分析视图（本体与版本都不动），
+        // 所以同样不拒只读、不入动作回执、不开忙态。
+        if let VersionAction::Analyze { version } = action {
+            crate::components::data_objects_load::analyze_asset_version(
+                &self.shared, resource_id, name, version, cx,
+            );
+            return;
+        }
         if read_only {
             self.finish_version_action("项目为只读模式，不能改版本".to_string(), cx);
             return;

@@ -267,18 +267,20 @@ pub(super) fn action_bar(
     // 文本类型与大小上限由宿主在取数线程挡（对话框不查文件系统）。
     // 表型资产没有本体文件，文本对比无从谈起——直接不给这个按钮。
     let can_diff = !row.is_current && row.has_copy && !row.is_table && !busy;
+    // 「用这一版分析」= 把历史副本挂成分析视图（只读查看：不写库、不动本体，只读项目也能用）。
+    let can_analyze = can_diff;
     // 取回 / 删副本都基于 `resources/` 下的本体副本，表型资产没有。
     let can_checkout = can_act && !row.is_table;
     let hint = if read_only {
-        "项目处于只读模式：还原 / 取回 / 删副本都是写操作"
+        "项目处于只读模式：还原 / 取回 / 删副本都是写操作；对比与「用 vN 分析」是查看，可以直接用"
     } else if row.is_current {
         "这是当前版本（本体上的内容）：取回请用详情面板的「取回（检出）…」"
     } else if row.is_table {
         "表型资产没有内容副本：回退 = 把本体指回这一版的表（两张表都在，不删数据）"
     } else if !row.has_copy {
-        "该版本只留了元数据（内容副本已被保留策略裁剪），不能还原或取回"
+        "该版本只留了元数据（内容副本已被保留策略裁剪），不能还原、取回或拿来分析"
     } else {
-        "还原 = 用这一版的内容生成新版本；取回 = 复制一份可写草稿（本体不动）"
+        "还原 = 用这一版的内容生成新版本；取回 = 复制一份可写草稿（本体不动）；分析 = 把这一版挂成视图看旧数（不动本体）"
     };
 
     let restore = {
@@ -307,6 +309,15 @@ pub(super) fn action_bar(
         move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
             state.set_selected(Some(version));
             on_action(VersionAction::Diff { version }, window, cx);
+        }
+    };
+    // 分析不置忙、不开回执：它只是把这一版挂成视图（与对比同属查看；版本对话框保持打开）。
+    let analyze = {
+        let state = state.clone();
+        let on_action = on_action.clone();
+        move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+            state.set_selected(Some(version));
+            on_action(VersionAction::Analyze { version }, window, cx);
         }
     };
     // 删副本不可恢复（不进回收站）：先过一个确认框，再交给宿主。
@@ -356,6 +367,16 @@ pub(super) fn action_bar(
                         .tooltip("打开文本 diff 查看器，看这一版和当前版本差在哪（只读）")
                         .disabled(!can_diff)
                         .on_click(diff),
+                )
+                .child(
+                    Button::new("version-analyze")
+                        .ghost()
+                        .small()
+                        .debug_selector(|| "version-analyze".to_string())
+                        .label(format!("用 v{version} 分析…"))
+                        .tooltip("把这一版的内容副本挂成分析视图（只读：本体与版本都不动）")
+                        .disabled(!can_analyze)
+                        .on_click(analyze),
                 )
                 .child(
                     Button::new("version-restore")
