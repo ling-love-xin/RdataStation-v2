@@ -52,7 +52,8 @@ pub fn bare_table_name(sql_ref: &str) -> String {
 /// 把一行对象按 SQL 引用名写到**指定文件**（导出窗口的自定义目录用）。
 ///
 /// 与 [`export_table_to`] 共用同一条写盘路径，只是落点由调用方给全（含扩展名）。
-/// 返回是否写成：调用方据此决定关不关窗。
+/// 写盘**不在 UI 线程**（铁律 E 组第 25 条）：校验完就交给 [`export_jobs`] 的后台线程，
+/// 结果由宿主回执泵经状态栏说出。返回是否**已入队**——窗口据此关不关。
 pub fn export_table_to_path(
     shared: &Shared,
     sql_ref: &str,
@@ -65,20 +66,13 @@ pub fn export_table_to_path(
         shared.say_error(format!("{verb}：目标表名为空"), cx);
         return false;
     }
-    let Some(path_text) = path.to_str() else {
+    if path.to_str().is_none() {
         shared.say_error(format!("{verb}：路径含非 UTF-8 字符"), cx);
         return false;
-    };
-    match engine::duckdb::export::export_table_global(&table, path_text) {
-        Ok(_) => {
-            shared.say(format!("{verb}：{}", path.display()), cx);
-            true
-        }
-        Err(error) => {
-            shared.say_error(format!("{verb}：{error}"), cx);
-            false
-        }
     }
+    crate::services::export_jobs::start(table, path.to_path_buf(), verb.to_string());
+    shared.say(format!("{verb}：正在后台写 {}", path.display()), cx);
+    true
 }
 
 /// 文件名只留安全字符（表名里可能有引号 / 空格 / 中文）。

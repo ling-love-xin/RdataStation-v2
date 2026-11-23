@@ -20,6 +20,8 @@
 pub use connection_dialog::services::connection_service;
 pub use connection_dialog::services::data_source_service;
 pub mod db_navigator;
+/// 数据对象「导出 / 存到草稿」的写盘通道（worker 线程 + 回执队列 + UI 泵；铁律 E 组第 25 条）
+pub mod export_jobs;
 pub use connection_dialog::services::driver_service;
 pub use editor::ports::editor_catalog;
 pub use editor::ports::editor_channels;

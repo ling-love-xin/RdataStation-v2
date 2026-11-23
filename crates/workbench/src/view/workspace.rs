@@ -117,6 +117,15 @@ impl WorkbenchView {
                 executor.timer(std::time::Duration::from_millis(300)).await;
                 let alive = weak
                     .update(cx, |this, cx| {
+                        // 导出回执（铁律 E 组第 25 条）：写盘在后台线程，结果在这里进状态栏。
+                        // 与展开回执同拍取，免得再养一口循环。
+                        for outcome in crate::services::export_jobs::take_outcomes() {
+                            if outcome.ok {
+                                this.shared.say(outcome.note, cx);
+                            } else {
+                                this.shared.say_error(outcome.note, cx);
+                            }
+                        }
                         // 先取空再逐个写回：写回会 notify，不能让回执在锁里跑渲染
                         let outcomes = crate::services::source_kids_jobs::take_outcomes();
                         if outcomes.is_empty() {

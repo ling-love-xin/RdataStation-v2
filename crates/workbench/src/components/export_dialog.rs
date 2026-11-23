@@ -10,7 +10,9 @@
 //! - `{项目}/scratchpad/`（草稿）：只在本项目，之后可升级为资产；
 //! - 指定目录：写磁盘任意位置，不进资源管理。
 //!
-//! 写盘仍走同一条引擎通道（`COPY … TO`），回执进状态栏——窗口只负责收参数。
+//! 写盘**不在 UI 线程**（铁律 E 组第 25 条）：确认后只入队
+//! （`services::export_jobs`），窗口立刻关掉、状态栏先说「正在后台写」；
+//! 写完（或失败）由宿主回执泵再说一次。窗口只负责收参数，不当进度条。
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -189,7 +191,7 @@ pub fn open_export_dialog(
                         div()
                             .text_xs()
                             .text_color(theme.colors.muted_foreground)
-                            .child("只收 csv / parquet / json；写盘走引擎通道，回执进状态栏。"),
+                            .child("只收 csv / parquet / json；写盘在后台线程，结果进状态栏（大表不卡窗口）。"),
                     )
                     .child(field_label(theme, format!("文件名（自动加 .{}）", format.extension())))
                     .child(Input::new(&file_input))
