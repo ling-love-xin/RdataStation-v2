@@ -2013,4 +2013,19 @@ fn notebook_input_never_carries_a_value_into_the_next_request(cx: &mut TestAppCo
         "新请求要清掉上一条的值，否则密码会明文漏到下一条提示里"
     );
     assert!(!masked(cx), "普通请求不遮挡");
+
+    // 撤销等待态（中断 / 收口）也要当场清值，不留到下一请求才清
+    cx.update(|window, cx| {
+        let input = panel.read(cx).nb_input.clone();
+        input.update(cx, |state, cx| state.set_value("half-typed".to_string(), window, cx));
+    });
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.notebook_cancel_run(cx));
+    });
+    cx.run_until_parked();
+    assert!(value(cx).is_empty(), "撤销等待态后不得把半截输入留在状态里");
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).nb_pending.is_none()),
+        "中断后等待态要撤掉"
+    );
 }

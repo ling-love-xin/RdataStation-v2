@@ -980,12 +980,11 @@ impl EditorHostPanel {
         cx: &mut Context<Self>,
     ) {
         let masked = request.as_ref().is_some_and(|request| request.password);
-        // 新请求从空开始：上一条的值（可能是 `getpass()` 的密码）不能漏进这一条——
-        // 等待态取走后值还留在 `InputBaseState` 里，下一条请求就会把同一段文本重新显示
-        // 出来，而遮挡是随请求走的，一个密码请求的遗留值会在下一条普通请求里变成明文。
-        if request.is_some() {
-            self.clear_notebook_input(cx);
-        }
+        // 登记与撤销都清空：值（可能是 `getpass()` 的密码）不能跨请求存在——
+        // 等待态取走后值还留在 `InputBaseState` 里的话，下一条请求会把同一段文本重新
+        // 显示出来，而遮挡是随请求走的，密码请求的遗留值会在普通请求里变成明文；
+        // 撤销时（中断 / 收口）也一样，没必要让它留在内存里等下一请求再清。
+        self.clear_notebook_input(cx);
         self.nb_pending = request;
         self.sync_notebook_input_masked(masked, cx);
     }
