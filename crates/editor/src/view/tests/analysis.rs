@@ -1819,3 +1819,53 @@ fn the_reject_key_discards_pending_but_keeps_conflicts(cx: &mut TestAppContext) 
         "清完要说一句，实际是：{message}"
     );
 }
+
+// ---------- 【R3】内核输入行：回车提交 ----------
+
+/// 回车必须真的走到提交路径：订阅若没接上、或被 drop（句柄没随面板存活），
+/// 等待态不会被取走，这条必红。
+///
+/// 内核故意给一个不存在的 id：回送必然失败，失败原因落到消息栏——这就是
+/// 「回车 → `submit_notebook_input` → `shared.kernel_input`」整条链通了的证据。
+#[gpui_kit::test]
+fn notebook_input_enter_submits_to_kernel_port(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    let id = shared
+        .open(OpenRequest::untitled("", EditorMode::Analysis))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    // 预设一条等待态（等价于 pump 刚收到 `InputRequest`）
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, _cx| {
+            panel.nb_pending = Some(crate::view::host::NotebookInputRequest {
+                cell_id: "c1".to_string(),
+                kernel_id: "no-such-kernel".to_string(),
+                prompt: "name? ".to_string(),
+                password: false,
+            });
+        });
+    });
+
+    // 在面板 update 之外 emit：订阅回调要借面板本身，面板正被 update 时 emit 会重入
+    let input = cx.update(|_window, cx| panel.read(cx).nb_input.clone());
+    cx.update(|_window, cx| {
+        input.update(cx, |_state, cx| {
+            cx.emit(gpui_kit::component::input::InputEvent::PressEnter {
+                secondary: false,
+                shift: false,
+            });
+        });
+    });
+    cx.run_until_parked();
+
+    let (message, pending) = cx.update(|_window, cx| {
+        let panel = panel.read(cx);
+        (panel.message.clone(), panel.nb_pending.is_some())
+    });
+    let message = message.expect("回送失败要留一句原因（说明回车真的走到了提交路径）");
+    assert!(message.contains("未启动"), "实际是：{message}");
+    assert!(!pending, "一条 input_request 只回一次：等待态要被取走");
+}
