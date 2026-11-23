@@ -33,17 +33,53 @@ const LOAD_KINDS: &[SourceKind] = &[
     SourceKind::Scratchpad,
 ];
 
+/// 加源的两档 scope（铁律 B 组第 6 条）。
+///
+/// - `Session`：会话级——`f_*` 视图挂进程单例、不物化，切项目清掉（按需读原文件）。
+/// - `Snapshot`：项目级——走归档 `copy` 存一份只读副本，生成资产、跟着项目走、带版本。
+///
+/// 这两档对**文件**而言是两种落点（视图 vs 副本）；对**库表**是同一件事（把所属连接
+/// 标记成联邦源，那条本身就是按项目持久），所以库表在两档下行为一致。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadScope {
+    Session,
+    Snapshot,
+}
+
+impl LoadScope {
+    fn title(self) -> &'static str {
+        match self {
+            // 标题里就写明落点：不写的话两档在一堆复选框里长得一样
+            LoadScope::Session => "增加分析源（按需 · 本次会话）",
+            LoadScope::Snapshot => "增加分析源（快照 · 存进项目）",
+        }
+    }
+
+    /// 给回执用的落点说法（用户得知道"切项目之后还在不在"）。
+    pub fn hint(self) -> &'static str {
+        match self {
+            LoadScope::Session => "按需读原文件，切项目即清",
+            LoadScope::Snapshot => "已存成快照，跟着项目走、只读带版本",
+        }
+    }
+}
+
 /// 打开「加源」对话框（面板工具栏按钮的出口）
-pub fn open_load_files_dialog(shared: &Shared, window: &mut Window, cx: &mut App) {
+pub fn open_load_files_dialog(
+    shared: &Shared,
+    scope: LoadScope,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let config = PickerConfig {
-        title: "增加分析源",
+        title: scope.title(),
         kinds: LOAD_KINDS,
         confirm_prefix: "加源",
         multi: true,
     };
     let strategy: ConfirmStrategy = Rc::new(
-        |shared: &Shared, state: &Rc<RefCell<PickerState>>, window: &mut Window, cx: &mut App| {
-            confirm(shared, state, window, cx);
+        move |shared: &Shared, state: &Rc<RefCell<PickerState>>, window: &mut Window, cx: &mut App| {
+            confirm(shared, scope, state, window, cx);
         },
     );
     source_picker::open_source_picker(shared, config, strategy, window, cx);
@@ -51,7 +87,13 @@ pub fn open_load_files_dialog(shared: &Shared, window: &mut Window, cx: &mut App
 
 /// 确认：文件逐项建视图、库表汇总成连接标记；任一失败就停下回显
 /// （成功的已经生效，重建会覆盖同名视图，无害）。
-fn confirm(shared: &Shared, state: &Rc<RefCell<PickerState>>, window: &mut Window, cx: &mut App) {
+fn confirm(
+    shared: &Shared,
+    scope: LoadScope,
+    state: &Rc<RefCell<PickerState>>,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let picks = state.borrow().picked_all();
     if picks.is_empty() {
         state.borrow_mut().set_note(Some("先选一个对象".to_string()));
@@ -110,6 +152,12 @@ fn confirm(shared: &Shared, state: &Rc<RefCell<PickerState>>, window: &mut Windo
             failed.push(format!("{shown}：路径含非 UTF-8 字符"));
             continue;
         };
+        // 项目级：存副本 = 走归档，不进视图（铁律第 6 条 + 第 16 条）
+        if scope == LoadScope::Snapshot {
+            crate::components::file_actions::archive_file_as_snapshot(shared, text, cx);
+            notes.push(format!("{shown} → 快照（{}）", LoadScope::Snapshot.hint()));
+            continue;
+        }
         // 库文件（.duckdb / .sqlite）挂成 catalog（ATTACH,只读,可展开列表）;
         // 数据文件建成 `f_` 视图——同一个登记结构,面板按路径扩展分派形态
         let loaded = if engine::duckdb::file_view::is_database_file(text) {
@@ -147,9 +195,11 @@ fn confirm(shared: &Shared, state: &Rc<RefCell<PickerState>>, window: &mut Windo
     shared.mark_data_objects_dirty(cx);
 
     // 纯文件线：关窗（行已出现在面板里，那就是回执）。
-    // 带连接标记：**留窗给回执**——标记的源要等下一次联邦执行才进清单，
-    // 静默关窗会让「点了没反应」与「标记成功了」不可分辨
-    if marked == 0 {
+    // 下列两种**留窗**：
+    // - 带连接标记：标记的源要等下一次联邦执行才进清单，静默关窗会让「点了没反应」与
+    //   「标记成功了」不可分辨；
+    // - 快照档：归档是后台任务，此刻面板里还没有新行，关窗同样等于没回执。
+    if marked == 0 && scope == LoadScope::Session {
         drop(notes);
         window.close_dialog(cx);
     } else {
@@ -197,4 +247,20 @@ fn mark_connections(shared: &Shared, conn_ids: &[String]) -> Result<Vec<String>,
         ));
     }
     Ok(names)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LoadScope;
+
+    /// 两档 scope 的说法必须点明「切项目之后还在不在」——这是用户做选择的唯一依据。
+    #[test]
+    fn scope_hints_name_the_lifetime() {
+        assert!(LoadScope::Session.hint().contains("切项目即清"));
+        assert!(LoadScope::Snapshot.hint().contains("跟着项目"));
+        // 两档标题也不能一样（列出同一批文件却不说落点，等于让用户猜）
+        assert_ne!(LoadScope::Session.title(), LoadScope::Snapshot.title());
+        assert!(LoadScope::Snapshot.title().contains("快照"));
+        assert!(LoadScope::Session.title().contains("按需"));
+    }
 }

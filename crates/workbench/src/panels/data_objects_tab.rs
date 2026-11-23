@@ -1418,9 +1418,13 @@ impl DataObjectsTab {
                     let shared = self.shared.clone();
                     Button::new("data-objects-empty-load")
                         .label("加载文件到分析")
+                        .tooltip("按需加载：挂成视图读原文件，切项目即清")
                         .on_click(move |_, window, cx| {
                             crate::components::data_objects_load::open_load_files_dialog(
-                                &shared, window, cx,
+                                &shared,
+                                crate::components::data_objects_load::LoadScope::Session,
+                                window,
+                                cx,
                             );
                         })
                 }))
@@ -1794,17 +1798,34 @@ impl ComponentPanel for DataObjectsTab {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Vec<Button>> {
-        // 「加源」是面板唯一往外接数据的入口：只接能直接读的文件，库表由连接下推
-        Some(vec![Button::new("data-objects-add-source")
-            .ghost()
-            .label("加源")
-            .on_click(cx.listener(|this, _, window, cx| {
-                crate::components::data_objects_load::open_load_files_dialog(
-                    &this.shared,
-                    window,
-                    cx,
-                );
-            }))])
+        // 「加源」是面板唯一往外接数据的入口：只接能直接读的文件，库表由连接下推。
+        // 两档 scope（铁律 B 组第 6 条）在工具栏上就是两个按钮：按需（视图）/ 快照（存副本）。
+        Some(vec![
+            Button::new("data-objects-add-source")
+                .ghost()
+                .label("加源")
+                .tooltip("按需加源：挂成视图读原文件，切项目即清")
+                .on_click(cx.listener(|this, _, window, cx| {
+                    crate::components::data_objects_load::open_load_files_dialog(
+                        &this.shared,
+                        crate::components::data_objects_load::LoadScope::Session,
+                        window,
+                        cx,
+                    );
+                })),
+            Button::new("data-objects-add-source-snapshot")
+                .ghost()
+                .label("存快照")
+                .tooltip("把选中的文件在资源库里存一份只读副本，跟着项目走、带版本")
+                .on_click(cx.listener(|this, _, window, cx| {
+                    crate::components::data_objects_load::open_load_files_dialog(
+                        &this.shared,
+                        crate::components::data_objects_load::LoadScope::Snapshot,
+                        window,
+                        cx,
+                    );
+                })),
+        ])
     }
 
     fn dropdown_menu(
