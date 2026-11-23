@@ -9,12 +9,19 @@ use crate::model::TimelineEventKind;
 
 impl AnalyticsResourceStore {
     /// 在**调用方连接**上插入一条归档行（供事务内复用）。
+    ///
+    /// `analytics_table` 只在**表型资产**上给值（本体是项目分析库里的一张持久表）；
+    /// 文件型传 `None`。它是表型的权威判据（库层 `kind` 仍折回 `analysis`，见迁移 031）。
     fn insert_archive_on(
         inner: &rusqlite::Connection,
         input: &NewArchiveInput,
         id: &str,
         now: &str,
+        analytics_table: Option<&str>,
     ) -> Result<(), CoreError> {
+        // 表型资产没有 `resources/` 下的本体文件：空路径写 NULL，不写空串
+        // （空串会让"按路径找本体"的旧逻辑把它当成一个存在的相对路径）。
+        let file_rel_path = Some(input.file_rel_path.as_str()).filter(|rel| !rel.is_empty());
         inner
             .execute(
                 r#"
@@ -24,8 +31,8 @@ impl AnalyticsResourceStore {
                 created_at, updated_at,
                 kind, content_hash, file_rel_path, readonly,
                 promoted_from, source_connection_id, source_table, definition_sql, archived_at,
-                payload_mode, source_path, structured
-            ) VALUES (?, ?, ?, ?, '{}', ?, ?, ?, ?, 1, NULL, NULL, NULL, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+                payload_mode, source_path, structured, analytics_table
+            ) VALUES (?, ?, ?, ?, '{}', ?, ?, ?, ?, 1, NULL, NULL, NULL, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
                 rusqlite::params![
                     id,
@@ -42,7 +49,7 @@ impl AnalyticsResourceStore {
                     // 真实档位由 `analytics_table` 列承载，读取面走 `ArchiveKind::resolve`。
                     input.kind.db_write_str(),
                     &input.content_hash,
-                    &input.file_rel_path,
+                    file_rel_path,
                     &input.binding.promoted_from,
                     &input.binding.source_connection_id,
                     &input.binding.source_table,
@@ -51,6 +58,7 @@ impl AnalyticsResourceStore {
                     input.payload_mode.as_db_str(),
                     &input.source_path,
                     i32::from(input.structured),
+                    analytics_table,
                 ],
             )
             .map_err(|e| persistence_err("insert", e))?;
@@ -71,7 +79,7 @@ impl AnalyticsResourceStore {
         let conn = self.get_conn().await?;
         let id = format!("ar_{}", uuid::Uuid::new_v4().simple());
         let now = Utc::now().to_rfc3339();
-        Self::insert_archive_on(conn.inner()?, &input, &id, &now)?;
+        Self::insert_archive_on(conn.inner()?, &input, &id, &now, None)?;
         self.get_resource_by_id(&id).await
     }
 
@@ -93,7 +101,7 @@ impl AnalyticsResourceStore {
             .execute_batch("BEGIN IMMEDIATE")
             .map_err(|e| persistence_err("begin_immediate", e))?;
         let result = (|| -> Result<(), CoreError> {
-            Self::insert_archive_on(inner, &input, &id, &now)?;
+            Self::insert_archive_on(inner, &input, &id, &now, None)?;
             Self::record_event_on(
                 inner,
                 &id,
@@ -115,6 +123,111 @@ impl AnalyticsResourceStore {
             }
         }
         self.get_resource_by_id(&id).await
+    }
+
+    /// 表型资产的**首次登记**：登记行 + 履历事件同一事务（与首次归档同一条纪律）。
+    ///
+    /// 与 [`Self::insert_archive_with_event`] 的唯一区别是本体：表型资产没有 `resources/`
+    /// 下的文件，本体是项目分析库里的一张持久表，因此 `analytics_table` 必须有值——
+    /// 它是表型的权威判据（`ArchiveKind::resolve` 靠它，库层 `kind` 仍折回 `analysis`）。
+    ///
+    /// 调用方（`crate::table_asset`）负责先把这个表写进项目分析库；本方法只登记。
+    pub async fn insert_table_archive_with_event(
+        &self,
+        input: NewArchiveInput,
+        analytics_table: &str,
+        detail: Option<&str>,
+    ) -> Result<AnalyticsResource, CoreError> {
+        let conn = self.get_conn().await?;
+        let inner = conn.inner()?;
+        let id = format!("ar_{}", uuid::Uuid::new_v4().simple());
+        let now = Utc::now().to_rfc3339();
+
+        inner
+            .execute_batch("BEGIN IMMEDIATE")
+            .map_err(|e| persistence_err("begin_immediate", e))?;
+        let result = (|| -> Result<(), CoreError> {
+            Self::insert_archive_on(inner, &input, &id, &now, Some(analytics_table))?;
+            Self::record_event_on(
+                inner,
+                &id,
+                Some(1),
+                TimelineEventKind::Archived,
+                detail,
+                Some(&input.content_hash),
+            )
+        })();
+        match result {
+            Ok(()) => {
+                inner
+                    .execute_batch("COMMIT")
+                    .map_err(|e| persistence_err("commit", e))?;
+            }
+            Err(error) => {
+                let _ = inner.execute_batch("ROLLBACK");
+                return Err(error);
+            }
+        }
+        self.get_resource_by_id(&id).await
+    }
+
+    /// 表型资产的**同名新版本**：写前快照 + 本体表名改指向 + 版本 +1 + 履历事件，同一事务。
+    ///
+    /// 「一版一张表」：一次升级在分析库里多一张 `res_<描述>_<时间戳>`，登记行只保留
+    /// **当前版本那张表的表名**，旧表名留在版本快照里（回退 = 把快照里的表名指回来，
+    /// 两张表都在、没被覆盖或删除）。
+    pub async fn append_table_version(
+        &self,
+        id: &str,
+        old_version: i32,
+        analytics_table: &str,
+        snapshot: &str,
+        content_hash: &str,
+        detail: Option<&str>,
+    ) -> Result<AnalyticsResource, CoreError> {
+        let conn = self.get_conn().await?;
+        let inner = conn.inner()?;
+        let now = Utc::now().to_rfc3339();
+        inner
+            .execute_batch("BEGIN IMMEDIATE")
+            .map_err(|e| persistence_err("begin_immediate", e))?;
+        let result = (|| -> Result<(), CoreError> {
+            let snapshot_id = Self::save_resource_version_on(inner, id, old_version, snapshot)?;
+            let affected = inner
+                .execute(
+                    r#"
+                    UPDATE analytics_resources
+                    SET analytics_table = ?, content_hash = ?, version = version + 1,
+                        parent_version_id = ?, updated_at = ?
+                    WHERE id = ? AND deleted_at IS NULL
+                    "#,
+                    rusqlite::params![analytics_table, content_hash, snapshot_id, &now, id],
+                )
+                .map_err(|e| persistence_err("append_table_version", e))?;
+            if affected == 0 {
+                return Err(persistence_err("append_table_version", "存档不存在或已删除"));
+            }
+            Self::record_event_on(
+                inner,
+                id,
+                Some(old_version + 1),
+                TimelineEventKind::Rearchived,
+                detail,
+                Some(content_hash),
+            )
+        })();
+        match result {
+            Ok(()) => {
+                inner
+                    .execute_batch("COMMIT")
+                    .map_err(|e| persistence_err("commit", e))?;
+            }
+            Err(error) => {
+                let _ = inner.execute_batch("ROLLBACK");
+                return Err(error);
+            }
+        }
+        self.get_resource_by_id(id).await
     }
 
     /// 改**显示名**（原型 §3.2：行右键「重命名…」/ `F2`）。

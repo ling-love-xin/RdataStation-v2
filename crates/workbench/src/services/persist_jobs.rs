@@ -39,7 +39,17 @@ pub struct PersistRequest {
 /// 落库结果（UI 泵取走后提示）
 #[derive(Debug, Clone)]
 pub enum PersistOutcome {
-    Done { table: String, rows: u64, label: String },
+    Done {
+        table: String,
+        rows: u64,
+        columns: Option<i32>,
+        label: String,
+        /// 升级成资产的回执（`Ok` = 已登记；`Err` = 表写成了但没登记上，原因给人看）。
+        ///
+        /// 表写完才谈得上登记：登记失败**不回滚表**（数据是用户的，不能因为索引没落上就丢），
+        /// 所以这里把两件事分开报，由宿主提示成「表已落、资产没登记上」。
+        asset: Result<analytics_resource::table_asset::TableAssetOutcome, String>,
+    },
     Failed { label: String, reason: String },
     /// 刚物化出临时表（不写库）：让 UI 刷新一次清单并留一句痕
     Materialized { table: String, rows: u64, label: String },
@@ -69,11 +79,25 @@ fn shared() -> &'static Shared {
                         &request.source_table,
                         &request.description,
                     ) {
-                        Ok((table, rows)) => PersistOutcome::Done {
-                            table,
-                            rows,
-                            label: request.label.clone(),
-                        },
+                        Ok((table, rows, columns)) => {
+                            // 写表成功 → 立刻登记成资产（同一线程上顺手做，不回 UI 线程）。
+                            // 口径：升级 = 写成项目分析库的持久表 + 登记成表型资产，
+                            // 只写表不登记就会出现「库里有表、资产列表里没有」的半截状态。
+                            let asset = register_table_asset(
+                                &request.project_root,
+                                &request.label,
+                                &table,
+                                rows,
+                                columns,
+                            );
+                            PersistOutcome::Done {
+                                table,
+                                rows,
+                                columns,
+                                label: request.label.clone(),
+                                asset,
+                            }
+                        }
                         Err(reason) => PersistOutcome::Failed {
                             label: request.label.clone(),
                             reason,
@@ -147,7 +171,7 @@ pub fn persist_result_table(
     project_root: &Path,
     source_table: &str,
     description: &str,
-) -> Result<(String, u64), String> {
+) -> Result<(String, u64, Option<i32>), String> {
     let table = persistent_table_name(description);
     let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("无法启动异步运行时: {e}"))?;
     let manager = open_project_manager(&runtime, project_root)?;
@@ -189,11 +213,57 @@ pub fn persist_result_table(
         }
     })?;
 
+    // 列数就地量一次：此刻项目写连接还在手里，另开一次纯属浪费。
+    // 量不到就给 `None`（详情宁可不显示列数，也不显示猜的数）。
+    let columns = count_columns(dest, &table);
+
     drop(slot);
     drop(guard);
     drop(source);
     drop(manager);
-    Ok((table, result))
+    Ok((table, result, columns))
+}
+
+/// 列数：走 `information_schema.columns`（`DESCRIBE` 在本仓实测拿不到结果集，
+/// 见 `a_result_table_lands_in_the_project_analytics_db` 的核对段也走同一张视图）。
+fn count_columns(conn: &duckdb::Connection, table: &str) -> Option<i32> {
+    let count: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM information_schema.columns \
+             WHERE table_name = ?1 AND table_schema = 'main'",
+            duckdb::params![table],
+            |row| row.get(0),
+        )
+        .ok()?;
+    i32::try_from(count).ok().filter(|count| *count > 0)
+}
+
+/// 登记成表型资产（升级闭环的后半段）。
+///
+/// 单独一个 runtime：本函数在 worker 线程（普通 std 线程）上跑，
+/// `persist_result_table` 的 runtime 已随它返回而散；再建一个短命 runtime 比把两段
+/// 塞进同一个 async 作用域更简单，也不构成嵌套。
+fn register_table_asset(
+    project_root: &Path,
+    label: &str,
+    table: &str,
+    rows: u64,
+    columns: Option<i32>,
+) -> Result<analytics_resource::table_asset::TableAssetOutcome, String> {
+    let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("无法启动异步运行时: {e}"))?;
+    let request = analytics_resource::table_asset::TableAssetRequest {
+        // 显示名用结果集的展示名（「结果 3」），不把 `res_` 前缀带进资产名
+        name: label.to_string(),
+        analytics_table: table.to_string(),
+        row_count: Some(i32::try_from(rows).unwrap_or(i32::MAX)),
+        column_count: columns,
+    };
+    runtime
+        .block_on(analytics_resource::table_asset::register_at(
+            project_root,
+            request,
+        ))
+        .map_err(|error| error.to_string())
 }
 
 /// 打开项目库，**对并发窗口做短重试**。

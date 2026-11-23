@@ -214,11 +214,27 @@ impl WorkbenchView {
                         };
                         use crate::services::persist_jobs::PersistOutcome;
                         match outcome {
-                            PersistOutcome::Done { table, rows, label } => {
-                                this.shared.say(
-                                    format!("已把「{label}」（{rows} 行）持久化为项目表 {table}"),
-                                    cx,
-                                );
+                            PersistOutcome::Done { table, rows, columns, label, asset } => {
+                                // 两件事分开报：表写成是事实，资产登记上没上是另一件事。
+                                // 登记失败不回滚表（数据是用户的），提示里必须说清半截状态。
+                                match asset {
+                                    Ok(asset) => this.shared.say(
+                                        format!(
+                                            "{}（项目分析库 {table}，{rows} 行{})",
+                                            asset.notice(),
+                                            columns
+                                                .map(|count| format!("，{count} 列"))
+                                                .unwrap_or_default()
+                                        ),
+                                        cx,
+                                    ),
+                                    Err(reason) => this.shared.say_error(
+                                        format!(
+                                            "「{label}」已写成项目表 {table}，但没登记成资产：{reason}"
+                                        ),
+                                        cx,
+                                    ),
+                                }
                                 // 落库改了项目分析库的表清单：数据对象面板的那份缓存不会自己变，
                                 // 不重取的话「存为表」之后清单里看不见新表。
                                 if let Some(tab) = this.right_data_objects_tab.clone() {

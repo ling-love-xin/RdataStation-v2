@@ -42,9 +42,10 @@ fn a_result_table_lands_in_the_project_analytics_db() {
         .expect("源表");
     }
 
-    let (table, rows) = persist_result_table(&root, "tmp_q_probe", "结果集 探查")
+    let (table, rows, columns) = persist_result_table(&root, "tmp_q_probe", "结果集 探查")
         .expect("落成项目持久表");
     assert_eq!(rows, 1, "一行应原样过去");
+    assert_eq!(columns, Some(2), "列数应量出来（amount + biz_date）");
     assert!(
         table.starts_with("res_"),
         "落库表名走持久口径（不是 tmp_ 族）：{table}"
@@ -95,6 +96,77 @@ fn a_result_table_lands_in_the_project_analytics_db() {
             "撞名的失败原因要可读：{reason}"
         );
     }
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 升级闭环（验收第 1 条）：表落进项目分析库**之后**，资产行也登记出来。
+///
+/// 钉住三件事：显示名不带 `res_` 前缀、`analytics_table` 非空（`resolve` 认得出是表型）、
+/// 版本从 1 起——这正是「临时表 / 结果集 → 升级成资产」缺了半个身子的那一段。
+#[test]
+fn an_upgrade_registers_a_table_kind_asset_row() {
+    let root = temp_root("asset");
+
+    // 项目元数据库（资产登记的归处）先按生产口径迁移到位：生产由应用启动做，
+    // 测试里必须显式做一次，否则只是个空 SQLite（登记会报 no such table）。
+    engine::migration::MigrationManager::new()
+        .migrate(
+            &root.join(".RSmeta").join("project.db"),
+            engine::migration::MigrationType::ProjectMeta,
+        )
+        .expect("项目元数据库迁移");
+
+    {
+        let singleton = DuckDbService::get_or_create_duckdb().expect("内存单例");
+        let conn = singleton.lock().expect("单例锁");
+        conn.execute_batch(
+            "CREATE OR REPLACE TABLE tmp_q_asset AS \
+             SELECT CAST(12.3400 AS DECIMAL(10,4)) AS amount, DATE '2026-11-15' AS biz_date",
+        )
+        .expect("源表");
+    }
+
+    let (table, rows, columns) =
+        persist_result_table(&root, "tmp_q_asset", "结果 3").expect("落成项目持久表");
+    assert_eq!(rows, 1);
+
+    // 登记也自建 runtime 并 block_on（同一个 `#[test]`，不是 async 上下文）
+    let runtime = tokio::runtime::Runtime::new().expect("登记用 runtime");
+    let asset = runtime
+        .block_on(analytics_resource::table_asset::register_at(
+            &root,
+            analytics_resource::table_asset::TableAssetRequest {
+                name: "结果 3".to_string(),
+                analytics_table: table.clone(),
+                row_count: Some(i32::try_from(rows).unwrap_or(i32::MAX)),
+                column_count: columns,
+            },
+        ))
+        .expect("登记成表型资产");
+
+    assert_eq!(asset.version, 1, "首次升级就是 v1");
+    assert_eq!(asset.name, "结果 3", "资产名不带 res_ 前缀");
+
+    // 读回来核对档位：`analytics_table` 列才是权威判据
+    let pool = std::sync::Arc::new(
+        runtime
+            .block_on(engine::persistence::ProjectSqlitePool::new(
+                root.join(".RSmeta").join("project.db"),
+                2,
+            ))
+            .expect("项目元数据库连接池"),
+    );
+    let store = analytics_resource::AnalyticsResourceStore::new(pool);
+    let row = runtime
+        .block_on(store.get_resource_by_id(&asset.resource_id))
+        .expect("资产行读得回来");
+    assert_eq!(
+        analytics_resource::ArchiveKind::resolve(&row.kind, row.analytics_table.as_deref()),
+        analytics_resource::ArchiveKind::AnalyticsTable,
+        "表型资产（不是文件型）"
+    );
+    assert_eq!(row.analytics_table.as_deref(), Some(table.as_str()));
 
     let _ = std::fs::remove_dir_all(&root);
 }

@@ -44,6 +44,32 @@ impl AnalyticsResourceStore {
         Ok(out)
     }
 
+    /// 同名链上的**当前行**（未删除的最新一版；`None` = 这个名字还没有资产）。
+    ///
+    /// 「升级为资产」靠它判断是首次登记还是接续同名链的版本（`table_asset`）；
+    /// 与 `list_alive_resources` 的去重口径一致：只看未删除行。
+    pub async fn latest_alive_by_name(
+        &self,
+        name: &str,
+    ) -> Result<Option<AnalyticsResource>, CoreError> {
+        let conn = self.get_conn().await?;
+        let sql = format!(
+            "SELECT {RESOURCE_COLUMNS} FROM analytics_resources \
+             WHERE name = ?1 AND deleted_at IS NULL ORDER BY version DESC LIMIT 1"
+        );
+        let mut stmt = conn
+            .inner()?
+            .prepare(&sql)
+            .map_err(|e| persistence_err("select", e))?;
+        let mut rows = stmt
+            .query_map(rusqlite::params![name], map_resource_row)
+            .map_err(|e| persistence_err("select", e))?;
+        match rows.next() {
+            Some(row) => Ok(Some(row.map_err(|e| persistence_err("select", e))?)),
+            None => Ok(None),
+        }
+    }
+
     /// 单连接版本的读取：供"读 → 写"必须在同一事务内完成的路径复用。
     ///
     /// v1 的 `update_resource` 先占一条连接，调 `get_resource_by_id` 又占一条，存快照再占一条

@@ -43,6 +43,7 @@ pub(crate) mod ui;
 pub mod global;
 pub(crate) mod view_model;
 pub mod resource_host;
+pub mod table_asset;
 
 pub use indexer::{IndexIssue, IndexRepair, IndexScanReport};
 pub use model::*;
