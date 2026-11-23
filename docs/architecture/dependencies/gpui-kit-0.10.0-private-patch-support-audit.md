@@ -11,15 +11,18 @@
    纯净包全部为 0 命中（`set_gutter_markers` / `GutterMarkerKind` / `GutterMarkerClick` / `collapse_cursors` /
    `select_columnar_block` / `take_last_edit_delta` / `TabReorder` / `on_reorder` / `register_syntax_context_provider` /
    `tab_bar_max_width` / `tab_bar_variant` / `Notification::timeout` 均是）。
-3. **补丁仍全部在手，且绝大部分在生效**：vendor 内 12 个源文件、70 个 hunk、`+1165 −48` 都在；
-   项目侧有实际调用点（下表 §3），只有 3 处是死代码/仅测试调用。
+3. **补丁仍全部在手，且绝大部分在生效**：vendor 内 12 个源文件、70 个 hunk、`+1165 −48`（核查时口径）都在；
+   项目侧有实际调用点（下表 §3），只有 2 处属仅测试调用（另 1 处零调用已在本轮删除，见 §7）。
 4. **唯一有"官方等价入口"的是自定义语法上下文**——但它是 **0.9.0 就有**的 `LanguageProvider` +
    `set_language_provider`，不是这次 0.10.0 升级带来的；而且完全替代有代价（见 §2 B-1）。
-5. 另有 **2 处上游本来就有等价公开 API**，我们的对应小补丁属"非必需"（`Tab` 右键菜单、多光标 public 包装），
-   可以撤，撤法见 §2。
+5. 多光标/列选择那组 public 包装里，**零调用的 `add_cursor_above_line` 本轮已删**；`add_cursor_below_line` /
+   `select_columnar_block` 只被测试调用，**保留**（两者都没有等价公开入口，撤要以重写列编辑用例为代价，见 §2 C）。
+6. **"`Tab` 右键菜单改用上游 `ContextMenuExt`"这条不可行**（§2 A 末行、§7）：`TabBar::children` 只接受
+   `impl Into<Tab>`，`ContextMenu<Tab>` 既不是 `Tab` 也不是 `Into<Tab>`，套上就进不了标签条。
+7. 本轮已做的一处瘦身：删掉零调用的 `add_cursor_above_line`（commit `cec060ac`，vendor diff 3+/7−）。
 
 > 换句话说：**没有"升级后上游已经支持了、补丁可以整体退休"这回事**。能瘦身的只有少数几处，
-> 主体（书签列 / 折叠说明 / 悬停说明 / 折叠候选守卫 / 标签拖拽重排 / dock 标签栏配置 / 通知时长）必须继续靠 vendor patch；
+> 主体（书签列 / 折叠说明 / 悬停说明 / 折叠候选守卫 / 标签拖拽重排 / dock 标签栏配置 / 标签右键菜单 / 通知时长）必须继续靠 vendor patch；
 > 语法上下文虽可换官方入口，但要自己承接组件的别名与默认配置，工程上不划算。
 
 ## 1. 量化：补丁面实测
@@ -30,7 +33,7 @@
 | 文件 | +/− | hunk | 补丁内容要点 |
 |---|---:|---:|---|
 | `gpui-base/src/input/base/element.rs` | +527/−12 | 19 | gutter 书签列布局/绘制、折叠说明下划线、悬停说明气泡（300ms 延迟）、pin、点击上报、行号右移 |
-| `gpui-base/src/input/base/state.rs` | +289/−8 | 17 | `GutterMarker{Kind}` / `set_gutter_markers` / `GutterMarkerClick` / pin / hover 计时 / 列开关；多光标与列选择 public API；`LineDelta` 编辑行增量；折叠候选空守卫（2 处） |
+| `gpui-base/src/input/base/state.rs` | +285/−8 | 17 | `GutterMarker{Kind}` / `set_gutter_markers` / `GutterMarkerClick` / pin / hover 计时 / 列开关；多光标与列选择 public API；`LineDelta` 编辑行增量；折叠候选空守卫（2 处）；核查时为 +289/−8，删 `add_cursor_above_line` 后 +285/−8 |
 | `gpui-base/src/input/editor/display_map/display_map.rs` | +9/−0 | 1 | `has_fold_candidates()`（供空守卫判断） |
 | `gpui-base/src/tabs.rs` | +86/−5 | 6 | `TabReorder` / `TabDragGhost` / `Tab::on_reorder`（拖拽重排 + 拖拽浮层） |
 | `gpui-component/src/dock/mod.rs` | +26/−0 | 4 | `SkinShared` 新增 `tab_bar_max_width` / `tab_bar_variant` + `DockSkin::set_*` |
@@ -43,11 +46,14 @@
 | `gpui-component/src/tab/tab_bar.rs` | +19/−0 | 3 | `TabBar::on_reorder`（整条标签条下发到每个标签） |
 
 合计 **12 个源文件 / 70 hunk / +1165 −48**。另有 2 个 `Cargo.toml.orig` 是发布包打包产物差异（vendor 不带），
-不计入补丁。
+不计入补丁（它们会在 `--stat` 里各显示一行 deletion，base 侧 95 行、component 侧 271 行，别误当补丁）。
+
+> 2026-11-24 复核（删 `add_cursor_above_line` 之后）：hunk 仍是 70（`-- 2 个 Cargo.toml.orig` 后 base 44 + component 28 = 72），
+> 行数变为 **+1161 −48**（`state.rs` 由 +289/−8 → +285/−8，净 −4 行）。
 
 ## 2. 逐点判定
 
-### A. 上游没有、必须保留（11 项）
+### A. 上游没有、必须保留（14 项）
 
 | 补丁点 | 上游 0.10.0 实况（实测） | 判定 |
 |---|---|---|
@@ -64,24 +70,29 @@
 | `Tab::tooltip` | 组件库有 `ComponentTooltip`，但给元素挂载的 `ManagedTooltipExt` 是 **`pub(crate)`**，外部无法给 `Tab` 挂 tooltip | 保留 |
 | `Notification::timeout` | 上游写死 `Duration::from_secs(5)`；内层 `ToastOptions` 有 `timeout` 字段但 `Notification` 无 setter | 保留 |
 | 代码编辑器左内边距 0 | 上游写死 `min(px(6.))`，`Input` 无 padding builder | 保留（纯视觉口径） |
+| `Tab::on_context_menu`（**应用自建标签条**那半边） | 上游 `ContextMenuExt` 确实是 public（`menu/mod.rs:10`），`Tab` 也满足它的 bound；**但套上去就进不了标签条**：`TabBar::children` 签名是 `impl IntoIterator<Item = impl Into<Tab>>`（`vendor/gpui-component/src/tab/tab_bar.rs:178`），而 `ContextMenu<Tab>` 不是 `Tab`、也没有 `Into<Tab>` 通道（`ContextMenu<E>: IntoElement` 只在"能挂到任意元素上"这一层成立） | 保留（dock 内部同理；撤它需要给 `TabBar` 另开一条 `AnyElement` 子项入口＝再加补丁，或手搓标签条＝违规） |
 
-### B. 上游有等价入口/API，可评撤（3 项，附代价）
+### B. 上游有等价入口/API，可评撤（1 项，附代价）
+
+> **更正（2026-11-24 二次核查）**：本表原有 3 项，其中「`Tab::on_context_menu` 换 `ContextMenuExt`」一项
+> **判定错误**——首轮只验了 `ContextMenu<E>: IntoElement`（`context_menu.rs:114`），没验 `TabBar::children`
+> 的收口类型。`TabBar::children` 只吃 `impl Into<Tab>`（`tab_bar.rs:178`），`ContextMenu<Tab>` 进不去，
+> 故该项已移到 §2 A（必须保留）。多光标包装一项也从"可撤"降级为"仅测试用，见 §2 C"。
 
 | 补丁点 | 上游等价入口 | 撤的代价 |
 |---|---|---|
 | **自定义语法上下文注册表**（`input/mod.rs` re-export + `syntax_context.rs` 注册表） | `gpui_base::input::{LanguageProvider, set_language_provider}` —— **0.9.0 起就有**，`0.10.0` 只是继续沿用（两版都是 `1/1` 命中）。provider 的 `syntax_context_provider(name)` 正是我们要的钩子 | ① 全局**单** provider：组件 `init` 会装自己的 `ComponentLanguages`，应用再装会顶掉它，顺序敏感；② 组件的 `language_name()` 走 `LanguageRegistry::editing_language_name`，该方法 **`pub(crate)`**，别名归一（`pyi`→`python`、`JSON` 之类）拿不到，得自己维护；③ `text/json/python` 的默认 bracket / auto-closing / indent 配置也要自己重写一遍。→ **技术上可撤，工程上不划算**；若不撤，建议把这条补丁标成"上游有粗粒度入口、我们提供按语言细粒度注册" |
-| `Tab::on_context_menu`（应用自建标签条部分，`result_panel/sets.rs:219`） | `Tab` 实现了 `ParentElement + InteractiveElement + Styled`，`ContextMenuExt` 是 **public**（`menu/mod.rs:10` 导出），可直接 `tab.context_menu(|menu, window, cx| ..)` | 闭包签名从 `(PopupMenu, &mut Window, &mut App)` 改成 `(PopupMenu, &mut Window, &mut Context<PopupMenu>)`，返回值多一层 `ContextMenu<Tab>` 包装；**dock 内的标签仍要补丁**（那部分由 vendor 渲染，改不到） |
-| 多光标 public 包装 `add_cursor_above` / `add_cursor_below`（`pub(super)` → `pub`） | 上游动作 `AddCursorAbove` / `AddCursorBelow` 存在（快捷键已绑 `ctrl-alt-up/down`），只是没有公开方法 | 项目生产代码 **0 调用**（只有 `*_line` 包装被测试用到）；改动作派发即可撤 |
 
-### C. 死代码 / 仅测试调用（现在就能删）
+### C. 死代码 / 仅测试调用（本轮处置）
 
-| 符号 | 项目内调用 |
-|---|---|
-| `add_cursor_above_line` | **0 处**（生产与测试都没有） |
-| `add_cursor_below_line` | 3 处，全在测试（`view/host/results/tests.rs`、`view/tests/toolbar_custom.rs`） |
-| `select_columnar_block` | 5 处，全在测试（同上两个文件） |
+| 符号 | 项目内调用（2026-11-24 实测） | 处置 |
+|---|---|---|
+| `add_cursor_above_line` | **0 处**（生产与测试都没有；`crates/` + `vendor/` 全量 grep 只命中它自己的定义） | **已删**（commit `cec060ac`；`git show --stat` = 3+/7−；`cargo check -j 1 -p gpui-base` → `Finished`） |
+| `add_cursor_below_line` | 1 处真实调用（`crates/editor/src/view/host/results/tests.rs:201`）+ 1 处注释引用（`crates/editor/src/view/tests/toolbar_custom.rs:243`），都在测试 | **保留**：撤它要把用例改走 `add_cursor_below(&AddCursorBelow, &mut Window, cx)`，为删 5 行去改两个测试文件不划算；已在源码注释里标明"测试用薄封装" |
+| `select_columnar_block` | 5 处，全在测试，经 `panel.select_columnar_block_for_test(1, 28, cx)` 调用 | **保留**：它是 `build_columnar_selection`（`state.rs:2858`，`pub(super)`，入参 `pub(super) struct ColumnarPoint`，`state.rs:417`）对外的**唯一**出口；撤了只能在测试里模拟真实鼠标拖拽（`on_mouse_down`/`on_drag_move`）才能复现同一块选区 |
 
-> 这三条可以先删，或把测试改成动作派发后再删；删了能少 2 个 hunk 的公共 API 面。
+> 结论：C 类实际只清掉 1 项。另外两项不是"上游已支持"，而是**没有等价公开入口**，只服务于测试；
+> 保留的价值（可读的用例）大于删掉省下的 5 行。
 
 ## 3. 补丁是否仍生效（调用点证据）
 
@@ -95,7 +106,7 @@
 | `collapse_cursors` | `bookmarks.rs`、`construct.rs` |
 | `cursor_count` / `cursor_offsets` | 状态栏、会话、结果面板、构造等多处（27 / 7 处） |
 | `TabBar::on_reorder` | `result_panel/src/sets.rs`、`panel/sidebars.rs`、`panel/render.rs` |
-| `Tab::on_context_menu` | `result_panel/src/sets.rs` |
+| `Tab::on_context_menu` | `result_panel/src/sets.rs`（应用侧标签条）+ `vendor/gpui-component/src/dock/tab_panel.rs`（dock 内部标签；这份补丁不可能整体撤） |
 | `DockSkin::set_tab_bar_max_width` / `set_tab_bar_variant` | `crates/workbench/src/view/actions.rs` |
 | `register_syntax_context_provider` | `editor/src/lsp/language_config.rs`、`editor/src/lsp/sql_syntax_context.rs` |
 | `Notification::timeout` | `crates/notification/src/service.rs` |
@@ -140,7 +151,58 @@ python .rds\tmp\probe_patch_usage.py
 
 - **没有联网查上游仓库**（AGENTS.md：gpui-kit 一律走本地索引/本地源码）。因此结论只对本地可见的
   0.10.0 与 0.9.0 负责；若上游已发布更新版本而本地索引未同步，本结论不覆盖。
-- 未重新跑 `cargo check`（引用 11-22 升级评估与 11-23 门禁记录，不重复消耗 8 核/15.8GB 的构建窗口）。
+- 首轮核查时未重跑 `cargo check`（引用 11-22 升级评估与 11-23 门禁记录）；**本轮只补跑了
+  `cargo check -j 1 -p gpui-base`（`Finished ... 2m49s`）**，用于验证删 `add_cursor_above_line` 后
+  vendor 仍可编译；`gpui-component` 与 editor/kernel 门禁未重跑（另有并行会话占用构建目录）。
 - 未做 UI 点验：书签列的实际像素外观、悬停 300ms 体感、拖拽浮层观感仍属视觉验收范围。
 - `add_cursor_below_line` / `select_columnar_block` 的"仅测试调用"是按文本搜索统计的；若存在宏或
   间接调用（未发现），计数会偏低。
+
+## 7. 本轮瘦身执行结果（2026-11-24）
+
+### 7.1 已做
+
+| 动作 | 证据 |
+|---|---|
+| 删除 `vendor/gpui-base/src/input/base/state.rs::add_cursor_above_line`（含其 doc 两行；`add_cursor_below_line` 的 doc 改成不指向已删方法） | commit `cec060ac`；`git show --stat` = `1 file changed, 3 insertions(+), 7 deletions(-)`；`cargo check -j 1 -p gpui-base` → `Finished` |
+
+### 7.2 判定翻转：`Tab::on_context_menu` **不可撤**
+
+首轮把它放进了"可撤"，依据是 `ContextMenuExt` 是 public 且 `Tab: ParentElement + InteractiveElement + Styled`
+（`vendor/gpui-component/src/menu/context_menu.rs:17/23/43`，`ContextMenu<E>: IntoElement` 见 `:114`）。
+二次核查补上收口一侧后结论正好相反：
+
+- `TabBar::children(mut self, children: impl IntoIterator<Item = impl Into<Tab>>)`
+  （`vendor/gpui-component/src/tab/tab_bar.rs:178`）—— 标签条只收 `Into<Tab>`；
+- `ContextMenu<Tab>` 不是 `Tab`，也没有任何 `Into<Tab>` 的转换通道（只有 `IntoElement`），
+  所以 `tab.context_menu(...)` 之后**无法再交给 `TabBar`**；
+- 要在应用侧用它，只能给 `TabBar` 另开一条 `AnyElement` 子项入口（等于**新增** vendor 补丁），
+  或者不用 `TabBar` 手搓标签条（违反"禁手搓"）。
+- 另外 dock 内部（`dock/tab_panel.rs`）本来就用 `Tab::on_context_menu`，该补丁不可能整体退休。
+
+→ 因此 `result_panel/src/sets.rs` **本轮未改**（该文件当时还有并行会话未提交的 T8 改动，见 7.3）。
+
+### 7.3 未做与原因
+
+- `crates/result_panel/src/sets.rs` 保持原样：核查期间该工作区有另一会话的未提交改动（T8 标签右键菜单等，
+  约 40+ 文件 dirty），且该文件在 02:44 被对方重写过一次。按"绝不暂存他人并行改动"的纪律，本轮不碰应用侧文件。
+- `add_cursor_below_line` / `select_columnar_block` 保留（理由见 §2 C）。
+
+### 7.4 仓库坑：改 vendor 文件必须绕开 `core.autocrlf`
+
+本机 `core.autocrlf=true`，而本轮改的 `vendor/gpui-base/src/input/base/state.rs` 在仓库里是 **CRLF 的 blob**
+（`git cat-file` 数 CR 与 `git ls-files --eol` 实测；vendor 其它文件未逐个核，改之前先按同一手法确认）。
+直接用"读文本 → 改 → 写回 → `git add`"会触发两件事：工作区变成 LF、`git add` 的 clean filter 再把整个文件规范成
+LF 写进索引，`git show --stat` 就变成 `13885 insertions / 13885 deletions` 的假 diff
+（本轮踩了两次，均已 `git reset --mixed HEAD~1` 撤销重做）。正确姿势：
+
+```powershell
+# 1) 用字节级替换改文件（保持 CRLF 不变），例如 python 里按 "\r\n" 拼 old/new，count(old) 必须 == 1
+# 2) 绕过 filter 直接写 blob 与索引
+$sha = (git hash-object -w --no-filters vendor/gpui-base/src/input/base/state.rs)
+git update-index --cacheinfo "100644,$sha,vendor/gpui-base/src/input/base/state.rs"
+git commit -m "<msg>" -- vendor/gpui-base/src/input/base/state.rs
+git reset -q    # 让索引与 HEAD 同步，避免留下 "M " 悬挂态
+```
+
+改完后必须用 `git show --stat --oneline HEAD` 复核：行数应与逻辑改动等量，出现"上万行"就是又被 CRLF 坑了。
