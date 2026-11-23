@@ -1,6 +1,6 @@
 # 项目管理模块 · 开发方案（P0 + Phase A/B/C）
 
-> 状态：**已实现（Phase A/B 主体 + Phase C1/C2 + C1/C4/B1 + B2/B3 + A1 + C3/C5 + E1/E4）**（2026-09-19，`cargo check -p rds-project -p rds-workbench --all-targets` 零告警；project 43 lib（含 20 项窗口测试 + 9 项纯函数）+ 1 名册集成 + 4 存储集成全绿）。**2026-11-22 实测**：lib 50（含 24 窗口 + 14 纯函数）+ 名册集成 1 + 生命周期集成 5 + 存储集成 3，全绿。 · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）、`project-view-architecture.md`（视图架构与测试）、`project-user-guide.md`（使用手册）
+> 状态：**已实现（Phase A/B 主体 + Phase C1/C2 + C1/C4/B1 + B2/B3 + A1 + C3/C5 + E1/E4）**（2026-09-19，`cargo check -p rds-project -p rds-workbench --all-targets` 零告警；project 43 lib（含 20 项窗口测试 + 9 项纯函数）+ 1 名册集成 + 4 存储集成全绿）。**2026-11-22 实测**：lib 50（含 24 窗口 + 14 纯函数）+ 名册集成 1 + 生命周期集成 5 + 存储集成 3，全绿。**2026-11-23 实测**：lib 55（`ui/tests.rs` 42 项 = 25 窗口 + 17 纯函数）+ 1 + 5 + 3，全绿；`ui.rs` 已拆为公共面 + 五个子模块。 · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）、`project-view-architecture.md`（视图架构与测试）、`project-user-guide.md`（使用手册）
 > 前置：v1 行为蓝本 `v1/backend/src/commands/project_commands.rs`；v2 后端已迁移（`crates/project`：`store.rs` / `models.rs`；P0 会话 `workbench/src/services/project_session.rs`）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：项目**增删改查与生命周期**。**提升/引用（promote/snapshot）不在本模块**（另立设计，见原型 §12）。
@@ -25,6 +25,18 @@
 | 13 | 描述编辑（U2）与状态筛选（R4）纳入本期；**默认连接（U3）后端未实现**（`service` 无 config 读写），待另立 |
 
 ## 0. 进度记录（最近在前）
+
+### 2026-11-23 — 遗留点清理（五刀：反馈通道 / 文档对齐 / 死字段与状态 / 版本删除 / 结构拆分）
+
+| 项 | 内容 | 落点 / 提交 |
+| --- | --- | --- |
+| ① 写动作反馈 | 四个动作（保存项目信息 / 归档 / 改默认连接 / 创建版本）改走 `notify_success` / `notify_error` 双通道（`state.notice` + `window.push_notification`）：设置面板与标题栏菜单里不渲染 notice，之前点完看不到反馈 | `2f4b1919` |
+| ② 文档与 API 对齐 | 删 `ProjectPath::{sqlite_path, duckdb_path, config_dir, queries_dir}` 与 `Project::{sqlite_path, duckdb_path}`（v1 旧布局、生产零调用）；`meta_dir` 改走 `store::RS_META_DIR_NAME`；重写 `lib.rs` crate 文档、`Cargo.toml` description、README 删除入口口径、接线矩阵行数口径 | `b4ba4df2` |
+| ③ 死字段与状态文案 | 删 `ProjectUiState::epoch`（仅两处自增、零读点）；创建版本成功后清空备注框；新增 `status_label`（`active`→活跃…未知原样）让卡片状态显示中文；`meta_line` 不再重复状态 | `0f98f802` |
+| ④ 版本台账删除 | `service::delete_version`（按 `project_versions.id` 删行，先置空 `parent_id`）；`versions_view` 行内两段式删除；`SettingsSnapshot` 加 `status`，概览「状态」改为「归档状态 · 读写状态」 | `6756b434` |
+| ⑤ 结构拆分 | `ui.rs` 3486 行拆为公共面 + `ui/{host,actions,dialogs,picker,settings}.rs`；`pub use` 保持 `project::ui::*` 对外路径，行为不变 | `b71473aa` |
+| 验证 | 每刀单独提交并验证：`cargo check -p rds-project --all-targets -j 1` 零告警；`cargo test -p rds-project -j 1` = 55 + 1 + 5 + 3；clippy 仍 2 条基线；`cargo check -p rds-workbench --lib -j 1` 通过；`rustfmt --edition 2024 --check` 干净 | — |
+| 遗留 | `project-prototype-design.md` §13 剩余 7 条产品差异（#4 连接数/版本数、#5 路径中间省略、#7 对话框宽度、#8 新建对话框三项、#12 项目槽状态点、#13 菜单快捷键与缺失驱动行、#17 空态按钮）待逐项拍板 | §13 |
 
 ### 2026-11-22 — 新建对话框行内校验 / 位置记忆 / 构建标识落项目
 
