@@ -184,7 +184,7 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 │ ＋ 新建项目…               │  ← 作用于别的目录，只读时仍可用
 │ 🗀 打开现有目录…            │  ← 同上
 │ ──────────────────────────  │
-│ ← 项目中心…                │  ← 打开覆盖层，不关闭当前项目
+│ ← 项目中心…                │  ← 跳到全局设置的「项目」页，不关闭当前项目
 │ ⚙ 项目设置…                │
 │ ▤ 重命名…                  │  ← 只读时禁用
 │ ↗ 在资源管理器中显示         │
@@ -195,27 +195,34 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 └────────────────────────────┘
 ```
 
-> **两份菜单都覆盖「有项目时怎么进别的项目」**：`new` / `open-folder` 走 `request_create_project` / `request_open_folder`（有草稿先拦，确认后直达目标对话框，见 §8），`switch` 走 `open_project_hub`（覆盖层，见 §5.1）。菜单项**不显示快捷键**（`PopupMenuItem` 只有 label + icon + 禁用态）；快捷键：`Ctrl+Shift+P` = 打开项目中心、`Ctrl+Shift+W` = 关闭项目（`crates/app/src/main.rs` 的 `KeyBinding::new("ctrl-shift-p", SwitchProject, Some("workbench"))` 与 `"ctrl-shift-w"`，context `"workbench"`）。两者已彻底分工：`SwitchProject` **不再**等价于 `CloseProject`。`重命名…` 是 `项目设置…` 的直达别名。提升/引用**不在此菜单**（范围外，见 §12）。固定/取消固定为选择器卡片级操作，不进标题栏菜单。缺失驱动只在**卡片**上以 `⚠ 缺失驱动：…` 一行展示，菜单里没有警告行。
+> **两份菜单都覆盖「有项目时怎么进别的项目」**：`new` / `open-folder` 走 `act_create_project` / `act_open_folder`（有草稿先拦，确认后直达目标对话框，见 §8），`switch` 走 `act_open_hub`（跳到全局设置的「项目」页，见 §5.1）。菜单项**不显示快捷键**（`PopupMenuItem` 只有 label + icon + 禁用态）；快捷键：`Ctrl+Shift+P` = 打开项目中心（= 设置「项目」页）、`Ctrl+Shift+W` = 关闭项目（`crates/app/src/main.rs` 的 `KeyBinding::new("ctrl-shift-p", SwitchProject, Some("workbench"))` 与 `"ctrl-shift-w"`，context `"workbench"`）。两者已彻底分工：`SwitchProject` **不再**等价于 `CloseProject`。`重命名…` 是 `项目设置…` 的直达别名。提升/引用**不在此菜单**（范围外，见 §12）。固定/取消固定为选择器卡片级操作，不进标题栏菜单。缺失驱动只在**卡片**上以 `⚠ 缺失驱动：…` 一行展示，菜单里没有警告行。
 
-### 5.1 项目中心（覆盖层，有项目态）
+### 5.1 项目中心 = 全局设置的「项目」页（有项目态）
 
-「有项目时，别的项目在哪里管理」——答案是**覆盖层**，不是要求先关项目：
+「有项目时，别的项目在哪里管理」——答案是**全局设置窗口的「项目」页**，不是要求先关项目，也不再在 Dock / 覆盖层里另开一块：
 
 ```
+设置（独立窗口）
 ┌────────────────────────────────────────────────────────────┐
-│ 项目中心    当前：营销分析   点「打开」切换到该项目；…   [✕ 关闭] │
+│ 侧栏：[常规] [外观] … [项目] …                             │
 ├────────────────────────────────────────────────────────────┤
-│ （与选择器同一份列表：Tab / 搜索 facet / 状态 / 排序 / 卡片菜单）  │
+│ 项目列表   选择、切换、新建与管理项目；点「打开」直接切到该项目  │
+│  （与选择器同一份列表：Tab / 搜索 facet / 状态 / 排序 / 卡片菜单）  │
 │  营销分析  active 已固定 [当前]        [打开] [⋯]            │
 │  流量看板  archived                   [打开] [⋯]            │
+│                                        [新建项目] [打开文件夹…] [示例] │
+├────────────────────────────────────────────────────────────┤
+│ 列表排序   [最近打开 ▾]                                     │
 └────────────────────────────────────────────────────────────┘
 ```
 
-- **复用选择器**：`render_project_hub` 只加一条 header，body 直接挂 `render_picker`——列表、搜索、facet、排序、卡片右键/`⋯`、只读置灰**没有第二套实现**。
+- **复用选择器**：设置页只加一个分组卡片，内容直接由宿主注入 `render_picker`——列表、搜索、facet、排序、卡片右键/`⋯`、只读置灰**没有第二套实现**（`SettingsHost::projects_panel` + `fields::panel_item`）。
 - **当前标记**：卡片按「`item.path == host.root()`」打 `Tag::primary().child("当前")`（判据是纯函数 `is_current_project`）。
-- **切换语义**：卡片「打开」与 `⋯` 的「打开」都走 `request_switch`：无当前项目 → 等价 `request_open`；目标 == 当前根 → no-op；脏草稿 → `open_unsaved_dialog(..., PendingAction::SwitchTo(path))`；否则 `switch_now` = `do_close`（还锁 + `on_closed` 清连接作用域）→ `open_path`。**先释放再打开**，不把新锁盖在旧会话上。
-- **开关**：`Ctrl+Shift+P` / 菜单「项目中心…」→ `open_project_hub`（置 `hub_open` + `refresh_picker`）；右上「关闭」→ `close_project_hub`；项目打开成功（`apply_opened`）与关闭项目（`do_close`）都会复位 `hub_open`。
-- **为什么不做 Dock 常驻 tab**：常驻 tab 在每次打开项目后都占着中央区、与编辑器 tab 争位置；覆盖层「用的时候才出现」，且不动 Dock 装配。无项目态不需要它——中央区本来就是完整选择器。
+- **切换语义**：卡片「打开」与 `⋯` 的「打开」都走 `act_switch` → `request_switch`：无当前项目 → 等价 `request_open`；目标 == 当前根 → no-op；脏草稿 → `open_unsaved_dialog(..., PendingAction::SwitchTo(path))`；否则 `switch_now` = `do_close`（还锁 + `on_closed` 清连接作用域）→ `open_path`。**先释放再打开**，不把新锁盖在旧会话上。
+- **动作投回主窗口**：设置窗口里点这些入口，动作经 `ProjectUiHost::home`（`HomeDispatch`）投回主窗口执行——草稿拦截对话框、`do_close` 与 `open_path` 的副作用都属于主窗口；宿主未注入投递口时（单测 / 无宿主）就地执行，行为与拆分前一致。
+- **入口**：`Ctrl+Shift+P` / 标题栏菜单「项目中心…」/ 选择器菜单「项目中心…」→ `act_open_hub` → `open_settings_at(Some("projects"))`（窗口已开着则切节，不抢焦点）。
+- **为什么不做 Dock 常驻 tab / 覆盖层**：常驻 tab 在每次打开项目后都占着中央区、与编辑器 tab 争位置；覆盖层是新窗口之上又一层盖，与设置窗口互相遮挡。放进设置窗口后只有一个入口、一套列表；无项目态不需要它——中央区本来就是完整选择器。
+- **原型文件**：`project-prototype.html` **未改**（它本就没有画过项目中心，只画选择器 / 项目设置 / 逃生口），要视觉示意请以 `settings-prototype-design.md` 的「项目」节与本文本节为准。
 
 ## 6. 新建项目对话框（Create）
 
@@ -312,7 +319,7 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 
 | 组成 | 类型/位置 |
 | --- | --- |
-| 项目管理 UI（选择器 / 项目中心 / 菜单 / 对话框 / 设置） | `crates/project/src/ui.rs`（公共面：类型、`ProjectUiHost`、UI 状态与输入实体；视图与 model/service 同 crate）+ 六个子模块 `ui/{host,actions,dialogs,hub,picker,settings}.rs`（`pub use` 重导出，`project::ui::*` 路径不变）。选择器 = `render_picker`（挂载在 `crates/workbench/src/panels/project_picker.rs` 的 `ProjectPickerPanel`，仅无项目态可见）；**项目中心** = `render_project_hub`（覆盖层，挂载在 `crates/workbench/src/view/render.rs`，位于 `render_settings` **之前**，与设置面板同时打开时设置在上层）；设置 = `render_settings`（覆盖式面板）；菜单 = 语义 `Button::dropdown_menu` + `PopupMenu`；对话框 = `Dialog` / `AlertDialog` |
+| 项目管理 UI（选择器 / 项目中心 / 菜单 / 对话框 / 设置） | `crates/project/src/ui.rs`（公共面：类型、`ProjectUiHost`、UI 状态与输入实体；视图与 model/service 同 crate）+ 五个子模块 `ui/{host,actions,dialogs,picker,settings}.rs`（`pub use` 重导出，`project::ui::*` 路径不变）。选择器 = `render_picker`（挂载在 `crates/workbench/src/panels/project_picker.rs` 的 `ProjectPickerPanel`，仅无项目态可见）；**项目中心** = 全局设置的「项目」页（列表由 workbench 注入 `render_picker`，`SettingsHost::projects_panel`；动作经 `HomeDispatch` 投回主窗口）；设置 = `render_settings`（覆盖式面板，当前项目详情）；菜单 = 语义 `Button::dropdown_menu` + `PopupMenu`；对话框 = `Dialog` / `AlertDialog` |
 | 项目服务编排（列表 / 创建 / 打开 / 关闭 / 更新 / 删除 / 找回 / 版本） | `crates/project/src/service.rs` |
 | 项目视图 ↔ 宿主桥（重绘 / 编辑区 / 排序偏好 / 打开后刷新） | `crates/workbench/src/components/project_host.rs`（`ProjectUiHost` 注入） |
 | 会话解析（env → 最近 → 空态） | `crates/workbench/src/services/project_session.rs` |
@@ -389,13 +396,16 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 | --- | --- |
 | 菜单 6 → 8 项（+「新建项目…」/「打开现有目录…」，只读仍可用）；「切换项目…」→「项目中心…」 | `ui/picker.rs::project_menu_entries` / `attach_project_menu_handler`；期望值在 `ui/tests.rs::menu_spec_*` |
 | **真正的切换**：`PendingAction::SwitchTo`；`request_switch` 判三分（无当前 → `request_open`；同根 → no-op；脏草稿 → 拦截后 `switch_now`）；`switch_now` = `do_close` → `open_path` | `ui.rs`（`PendingAction`）、`ui/actions.rs`、`ui/dialogs.rs::advance_pending` |
-| **项目中心覆盖层**（不关当前项目也能浏览 / 管理别的项目）：`open_project_hub` / `close_project_hub` / `render_project_hub`，body 复用 `render_picker`；当前项目卡片打「当前」`Tag` | `ui/hub.rs`、`ui/picker.rs::is_current_project` / `project_card` |
-| `Ctrl+Shift+P` 由 `request_close` 改为 `open_project_hub`，与 `Ctrl+Shift+W` 分工 | `crates/workbench/src/view/render.rs`（`SwitchProject` 处理器）；覆盖层挂在 `render_settings` 之前 |
-| `ProjectUiState` 8 → 9 字段（加 `hub_open`）；`apply_opened` / `do_close` 复位 | `ui.rs`、`ui/actions.rs` |
-| 测试 42 → 50（31 窗口 + 19 纯函数；lib 63） | `ui/tests.rs`（`project_hub_*`、`current_marker_only_for_current_root`、`card_write_lock_applies_only_to_current_project`、`card_action_read_guard_follows_target_project`） |
-| 示例项目入口改走切换：`create_sample` 末尾由 `open_path` 改 `request_switch`（项目中心里点「从示例项目开始」也不再盖锁） | `ui/actions.rs::create_sample` |
-| **只读判据收窄**：卡片与动作的只读拦截按**目标项目**判定——当前项目只读时，项目中心里别的项目仍可固定 / 恢复 / 移出 / 删除；`read_only_blocked` 拆出 `write_blocked(host, target, …)`，`card_menu_entries` 第三参由「全局只读」改为「这张卡是否被拦」 | `ui/host.rs::write_blocked`、`ui/picker.rs::item_write_locked` / `card_menu_entries`、`ui/dialogs.rs::{toggle_pin, soft_remove, restore, forget, open_delete_dialog, confirm_delete}` |
+| **项目中心 = 全局设置的「项目」页**（不关当前项目也能浏览 / 管理别的项目）：列表由 workbench 注入 `render_picker`，套在「项目列表」分组卡片里；当前项目卡片打「当前」`Tag` | `settings/src/{settings_page.rs,skeleton.rs,fields.rs}`（`SettingsHost::projects_panel` / `fields::panel_item`）、`crates/workbench/src/view/actions.rs::open_settings_at`、`ui/picker.rs::is_current_project` / `project_card` |
+| **动作投回主窗口**：设置窗口里点「打开 / 新建 / 打开文件夹 / 示例 / 关闭」经 `HomeDispatch` 投回主窗口执行（对话框与 `do_close`/`open_path` 的副作用都属于主窗口）；未注入时就地执行 | `ui.rs`（`HomeAction` / `HomeDispatch` / `HubOpener` + `ProjectUiHost::{home,on_open_hub}`）、`ui/actions.rs::act_*`、`crates/workbench/src/view/workspace.rs::wire_project_home` |
+| `Ctrl+Shift+P` / 菜单「项目中心…」改为打开设置页的「项目」节（窗口已开着则切节，不抢焦点） | `crates/workbench/src/view/render.rs`（`SwitchProject` 处理器）、`ui/picker.rs::attach_project_menu_handler`（`switch` 分支 → `act_open_hub`） |
+| **覆盖层退役**：`ui/hub.rs` 删除（`open_project_hub` / `close_project_hub` / `render_project_hub`）；`ProjectUiState` 9 → 8 字段（去掉 `hub_open`） | `crates/project/src/ui/`（子模块回到五个）、`ui/actions.rs`（`apply_opened` / `do_close` 不再复位） |
+| 测试 50 → 50（31 窗口 + 19 纯函数；lib 64）：删 2 项覆盖层测试，加 3 项（入口委派宿主 / 未注入 no-op / 投递接管切换） | `ui/tests.rs`（`hub_entry_*`、`home_dispatch_takes_over_switch`、`current_marker_only_for_current_root`） |
+| 示例项目入口改走切换：`create_sample` 末尾由 `open_path` 改 `request_switch`（设置「项目」页里点「从示例项目开始」也不再盖锁） | `ui/actions.rs::create_sample` |
+| **只读判据收窄**：卡片与动作的只读拦截按**目标项目**判定——当前项目只读时，设置「项目」页里别的项目仍可固定 / 恢复 / 移出 / 删除；`read_only_blocked` 拆出 `write_blocked(host, target, …)`，`card_menu_entries` 第三参由「全局只读」改为「这张卡是否被拦」 | `ui/host.rs::write_blocked`、`ui/picker.rs::item_write_locked` / `card_menu_entries`、`ui/dialogs.rs::{toggle_pin, soft_remove, restore, forget, open_delete_dialog, confirm_delete}` |
 
 > 仍未做（与设计稿的既有差异，非本轮引入）：标题栏槽**无状态点**（#12）、空态**无按钮**（#17）、卡片缺连接数与版本数（#4）、路径中间省略（#5）、新建对话框宽 448（#7）与其三项复选框缺失（#8）、菜单不显示快捷键（#13 后半）。
 >
-> **只读判据已收窄（原「跨项目误拦」已修）**：只读锁保护的是**当前项目**自己的 `.RSmeta`；项目中心里别的项目不在锁的范围。判据落到 `ui/host.rs::write_blocked(host, target, …)`（`read_only_blocked` 是它的「目标=当前项目」薄包装），卡片侧用 `ui/picker.rs::item_write_locked` 决定置灰、`card_menu_entries(item, tab, locked)` 的第三参语义由「全局只读」改为「这张卡是否被拦」。于是当前项目只读时，别的项目的固定 / 恢复 / 移出列表 / 删除数据照常可用；当前项目自己的写命令（卡片与标题栏菜单）仍被置灰 + 动作内兜底，双保险不变。
+> **只读判据已收窄（原「跨项目误拦」已修）**：只读锁保护的是**当前项目**自己的 `.RSmeta`；设置「项目」页里别的项目不在锁的范围。判据落到 `ui/host.rs::write_blocked(host, target, …)`（`read_only_blocked` 是它的「目标=当前项目」薄包装），卡片侧用 `ui/picker.rs::item_write_locked` 决定置灰、`card_menu_entries(item, tab, locked)` 的第三参语义由「全局只读」改为「这张卡是否被拦」。于是当前项目只读时，别的项目的固定 / 恢复 / 移出列表 / 删除数据照常可用；当前项目自己的写命令（卡片与标题栏菜单）仍被置灰 + 动作内兜底，双保险不变。
+>
+> **迁入设置后已知取舍**（① 列表固定高度 `rems(30.0)`，因为 `render_picker` 根是 `size_full`、放进自适应卡片会塌成 0 且内部滚动失效；② 切节靠换 keyed-state id，搜索框内容与滚动位置会重置；③ 设置窗口若在首次 render 前被打开，列表位显示「尚未装配」占位；④ 设置页里点入口时若有未保存草稿，拦截对话框弹在**主窗口**）。机制细节见 `../settings/settings-architecture.md` §3.1 / §3.2。

@@ -1,6 +1,6 @@
 # 项目管理模块 · 开发方案（P0 + Phase A/B/C）
 
-> 状态：**已实现（Phase A/B 主体 + Phase C1/C2 + C1/C4/B1 + B2/B3 + A1 + C3/C5 + E1/E4）**（2026-09-19，`cargo check -p rds-project -p rds-workbench --all-targets` 零告警；project 43 lib（含 20 项窗口测试 + 9 项纯函数）+ 1 名册集成 + 4 存储集成全绿）。**2026-11-22 实测**：lib 50（含 24 窗口 + 14 纯函数）+ 名册集成 1 + 生命周期集成 5 + 存储集成 3，全绿。**2026-11-23 实测**：lib 55（`ui/tests.rs` 42 项 = 25 窗口 + 17 纯函数）+ 1 + 5 + 3，全绿；`ui.rs` 已拆为公共面 + 五个子模块。**2026-11-24 实测**：lib 61（`ui/tests.rs` 48 项 = 30 窗口 + 18 纯函数）+ 1 + 5 + 3，全绿；子模块增至六个（新增 `ui/hub.rs`）。**2026-11-24 收尾实测**：lib 63（`ui/tests.rs` 50 项 = 31 窗口 + 19 纯函数）+ 1 + 5 + 3，全绿。 · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）、`project-view-architecture.md`（视图架构与测试）、`project-user-guide.md`（使用手册）
+> 状态：**已实现（Phase A/B 主体 + Phase C1/C2 + C1/C4/B1 + B2/B3 + A1 + C3/C5 + E1/E4）**（2026-09-19，`cargo check -p rds-project -p rds-workbench --all-targets` 零告警；project 43 lib（含 20 项窗口测试 + 9 项纯函数）+ 1 名册集成 + 4 存储集成全绿）。**2026-11-22 实测**：lib 50（含 24 窗口 + 14 纯函数）+ 名册集成 1 + 生命周期集成 5 + 存储集成 3，全绿。**2026-11-23 实测**：lib 55（`ui/tests.rs` 42 项 = 25 窗口 + 17 纯函数）+ 1 + 5 + 3，全绿；`ui.rs` 已拆为公共面 + 五个子模块。**2026-11-24 实测**：lib 61（`ui/tests.rs` 48 项 = 30 窗口 + 18 纯函数）+ 1 + 5 + 3，全绿（同日子模块一度增至六个，新增 `ui/hub.rs`）。**2026-11-24 收尾实测**：lib 63（`ui/tests.rs` 50 项 = 31 窗口 + 19 纯函数）+ 1 + 5 + 3，全绿。**2026-11-24 项目中心迁入全局设置后实测**：lib 64（`ui/tests.rs` 50 项 = 31 窗口 + 19 纯函数）+ 1 + 5 + 3，全绿；`ui/hub.rs` 已删，子模块回到五个。 · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）、`project-view-architecture.md`（视图架构与测试）、`project-user-guide.md`（使用手册）
 > 前置：v1 行为蓝本 `v1/backend/src/commands/project_commands.rs`；v2 后端已迁移（`crates/project`：`store.rs` / `models.rs`；P0 会话 `workbench/src/services/project_session.rs`）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：项目**增删改查与生命周期**。**提升/引用（promote/snapshot）不在本模块**（另立设计，见原型 §12）。
@@ -26,7 +26,22 @@
 
 ## 0. 进度记录（最近在前）
 
-### 2026-11-24 — 项目管理入口补齐（四刀：菜单与切换 / 项目中心 / 文档 / 示例入口）+ 只读判据收窄
+### 2026-11-24 — 项目中心从覆盖层迁入全局设置「项目」页（三刀）
+
+用户判断（原话）：覆盖层不该再单独占一层——「我觉得还是直接放在全局设置哪里就好了，不需要在占用 dock」。最终方案（甲）：**列表挂在全局设置窗口的「项目」页；页里点「打开」投回主窗口执行切换，设置窗口不关**；无项目时中央「项目」tab（选择器）保持原样，仍是首屏唯一入口。
+
+| 项 | 内容 | 落点 / 提交 |
+| --- | --- | --- |
+| ⑥ 设置页通道 + 运行期切节 | `SettingsHost::projects_panel`（`Option<PanelRender>`）+ `settings::fields::panel_item`：把任意 `Fn(&mut Window,&mut App)->AnyElement` 装进一个不参与 reset-all 的分组卡片；`skeleton::build` 加 `section_seq`，keyed-state id 由 `rds-settings-{seq}` 生成（`SettingsState.selected_index` 只在 state 首建时读 `default_selected_index`，且类型 `pub(super)`、无公开设值 API → 只能换 id 重挂）；`SettingsPage::select_section` 改 `initial_section` + seq+1 + notify；workbench `settings_window` 由 `Option<AnyWindowHandle>` 改 `Option<(AnyWindowHandle, WeakEntity<SettingsPage>)>`，`open_settings_at` 已开窗口时切节而不是直接 return | `db7c7ae6` |
+| ⑦ 覆盖层退役 + 动作投回主窗口 | 删 `ui/hub.rs` 与 `ProjectUiState.hub_open`（9 → 8 字段）；新增 `HomeAction` / `HomeDispatch` / `HubOpener` 与 `ProjectUiHost::{home, on_open_hub}` 两个共享槽 + `with_home` / `with_hub_opener`；`ui/actions.rs` 新增 `dispatch_home` 与 `act_create_project` / `act_open_folder` / `act_sample` / `act_switch` / `act_close` / `act_open_hub`，选择器全部入口改调 `act_*`（未注入时就地执行）；workbench 在 `init_workspace` 注入（`wire_project_home`，捕获 `window_handle` + `AnyWindowHandle::update`）与 `on_open_hub → open_settings_at(Some("projects"))`；`open_settings_at` 注入 `render_picker`（固定高度 `rems(30.0)` + 内部滚动）；`SwitchProject` 处理器改向、覆盖层挂载删除 | `e0ce068f` |
+| ⑧ 文档同步 | 原型 §5.1（改写为「设置·项目页」并补动作投递、入口、为什么不再占 Dock）、§11 / §13.1 落点、使用手册 §2 / §3.3 / §3.4 / §3.6 / §4.4 / §4.5 / §5 / §6 / §9、视图架构 §2（宿主新增两槽的语义）/ §3（子模块表）/ §7、接线矩阵（新函数行 + 行数）、本文、两份 README（模块入口 + crate 入口）、`project-showcase.md`、`settings-architecture.md` | 本提交 |
+| 验证 | settings：`cargo check -p rds-settings --all-targets -j 1` 零告警、`cargo test -p rds-settings -j 1` **49 项**全过（新增 2 项：id 只随 seq 变、切节必须重挂骨架）、`cargo clippy` 干净；project：`check --all-targets` 零告警、`test` = **64 lib + 1 + 5 + 3**、`clippy --all-targets` 无新增告警；workbench：`check --lib` / `--all-targets` 通过、`test --lib` **192 项**全过、`clippy --lib` 干净；`rustfmt --check` 干净 | — |
+| 已知取舍 | ① 设置页列表高度固定 `rems(30.0)`：`render_picker` 根是 `size_full`，放进自适应高度的卡片会塌成 0 且内部滚动失效；② 切节代价是换 keyed-state id，搜索框内容与滚动位置会重置；③ `projects_panel` 在 `open_settings_at` 时捕获 `Option<ProjectUiHost>` / `Option<ProjectInputs>`，首次渲染前打开设置窗口会显示「尚未装配」占位；④ 设置页里点入口时若有未保存草稿，拦截对话框弹在**主窗口**（甲方案的自然结果） | §13.1 |
+| 遗留 | §13.1 剩余 7 条产品差异（#4 / #5 / #7 / #8 / #12 / #13 后半 / #17）仍待逐项拍板；`clippy -p rds-workbench --all-targets` 因工作区另一处未提交改动的变体改名而无法跑完（`--lib` 已通过） | §13.1 |
+
+### 2026-11-24 — 项目管理入口补齐（四刀：菜单与切换 / 项目中心覆盖层 / 文档 / 示例入口）+ 只读判据收窄
+
+> 本节 ②③ 描述的**覆盖层**随后在同一日被上一节（三刀）整体替换为「全局设置·项目页」，`ui/hub.rs` 已删除；①④⑤ 与切换 / 只读判据相关的接线仍然有效。
 
 起因：有项目时选择器整块从 Dock 消失（`ProjectPickerPanel::visible()` = 无会话），于是「有项目时怎么新建」「切换在哪」「别的项目怎么管理」三问都没有答案；`SwitchProject` 与 `CloseProject` 的实现又逐字相同。用户拍板路线 A：**覆盖式项目中心，允许不关当前项目就浏览 / 管理**。
 
@@ -38,7 +53,7 @@
 | ④ 示例入口走切换 | `create_sample` 末尾由 `open_path` 改 `request_switch`（项目中心里点「从示例项目开始」也不再盖锁） | `5abd2537` |
 | ⑤ 只读判据收窄 | 只读锁保护的是**当前项目**自己的 `.RSmeta`，项目中心里别的项目不在锁的范围。`ui/host.rs::read_only_blocked` 拆出 `write_blocked(host, target, …)`（前者=目标取当前项目的薄包装，6 处调用语义不变）；卡片侧新增 `item_write_locked`（= 只读且这张就是当前项目）供给 `card_menu_entries(item, tab, locked)` 置灰；卡片动作 `toggle_pin` / `soft_remove` / `restore` / `forget` / `open_delete_dialog` / `confirm_delete` 补目标项目兜底守卫（原来只靠菜单置灰） | 本提交 |
 | 验证 | `cargo check -p rds-project --all-targets -j 1` 零告警；`cargo test -p rds-project -j 1` = **63 lib**（`ui/tests.rs` 50 = 31 窗口 + 19 纯函数）+ 1 + 5 + 3 全过；`cargo clippy -p rds-project --all-targets -j 1` 仍 2 条基线（仅本 crate）；`cargo check -p rds-workbench --lib -j 1` 通过；`rustfmt --edition 2024 --check` 干净 | — |
-| 遗留 | 项目中心是否最终升级为 Dock 常驻 tab（当前覆盖层方案已认可）。另：§13 剩余 7 条产品差异（#4 / #5 / #7 / #8 / #12 / #13 后半 / #17）仍待逐项拍板 | §13.1 |
+| 遗留 | 覆盖层方案随后被用户否决（改为全局设置「项目」页，见上一节）。另：§13 剩余 7 条产品差异（#4 / #5 / #7 / #8 / #12 / #13 后半 / #17）仍待逐项拍板 | §13.1 |
 
 ### 2026-11-23 — 遗留点清理（五刀：反馈通道 / 文档对齐 / 死字段与状态 / 版本删除 / 结构拆分）
 
@@ -224,7 +239,7 @@
 
 | 项 | 内容 |
 | --- | --- |
-| edition 2024 | 根 `Cargo.toml` `edition = "2024"`；修复 2024 破坏性变更：`connector.rs` 隐式借用模式下的 `ref`/解引用模式（2 处）、`mock` crate 保留字 `gen` 标识符重命名、`view.rs` `.then(|| ...)` 闭包对 `cx` 的双重独占借用（改为显式 `if`）、`render_*_activity_bar` 返回 `Div` 以避开 RPIT 生命周期捕获 |
+| edition 2024 | 根 `Cargo.toml` `edition = "2024"`；修复 2024 破坏性变更：`connector.rs` 隐式借用模式下的 `ref`/解引用模式（2 处）、`mock` crate 保留字 `gen` 标识符重命名、`view.rs` `.then(\|\| ...)` 闭包对 `cx` 的双重独占借用（改为显式 `if`）、`render_*_activity_bar` 返回 `Div` 以避开 RPIT 生命周期捕获 |
 | 工程配置 | `.cargo/config.toml`：`[env] RUST_MIN_STACK`（workspace 全量 codegen 需更大 rustc 线程栈）、`DUCKDB_LIB_DIR`（DuckDB 改动态链接后库的位置，见 `duckdb-linking.md`）、`test-all` 别名固定 `-j 2`（并发链接重型 crate 会耗尽内存，导致 rustc `STATUS_STACK_BUFFER_OVERRUN` / `link.exe` LNK1102） |
 | B5（部分） | 项目菜单改用 `Popover` + ghost `Button` 触发（`render_menu_content` 只提供内容）；删除自绘绝对定位弹层 |
 | 验证 | `cargo test --workspace -j 2`：34 个测试目标全绿、**442 项通过 / 0 失败**；`cargo build -p rds-app -j 2` 通过 |
@@ -367,13 +382,14 @@
 | --- | --- |
 | 项目服务编排（列表 / 创建 / 打开 / 关闭 / 更新 / 删除 / 找回 / 版本） | `crates/project/src/service.rs`（feature crate 内，符合 GPUI-kit 指南「model/service/view 同 crate」） |
 | 会话解析（env → 最近 → 空态） | `crates/workbench/src/services/project_session.rs`（返回 `project::ui::OpenProject`） |
-| 项目选择器 / 项目中心 / 菜单 / 对话框 / 设置（UI） | `crates/project/src/ui.rs`（公共面）+ `ui/{host,actions,dialogs,hub,picker,settings}.rs`（视图与 model / service 同 crate；选择器与项目中心、设置由宿主渲染为受控 overlay，菜单为语义 `Button::dropdown_menu` + `PopupMenu`，对话框为 `Dialog` / `AlertDialog`） |
+| 项目选择器 / 项目中心 / 菜单 / 对话框 / 设置（UI） | `crates/project/src/ui.rs`（公共面）+ `ui/{host,actions,dialogs,picker,settings}.rs`（五个子模块；视图与 model / service 同 crate）。选择器与项目设置由宿主渲染为受控 overlay（项目设置浮层、选择器 = 无项目态中央 tab）；**项目中心 = 全局设置窗口的「项目」页**（列表由 workbench 注入 `render_picker`，动作经 `HomeDispatch` 投回主窗口）；菜单为语义 `Button::dropdown_menu` + `PopupMenu`，对话框为 `Dialog` / `AlertDialog`） |
+| 设置页宿主注入点 | `crates/settings/src/settings_page.rs`（`SettingsHost::projects_panel` / `SettingsPage::select_section`）、`settings/src/skeleton.rs`（`section_seq` → keyed-state id）、`settings/src/fields.rs`（`panel_item`） |
 | 项目视图 ↔ 宿主桥（重绘 / 编辑区 / 排序偏好 / 打开后刷新） | `crates/workbench/src/components/project_host.rs` |
 | 项目锁（OS 文件锁 + 占用者信息） | `crates/project/src/lock.rs`（`.RSmeta/project.lock` / `project.lock.owner`） |
 | 名册迁移（固定/软删字段） | `crates/engine/migrations/global/019_add_project_ui_state.sql`（新） |
 | 全局库项目 CRUD / 固定 / 已移除 | `crates/engine/src/persistence/global_db.rs` |
 | 排序方式偏好 | `crates/settings`（`projects.sort_mode`） |
-| 命令 / Action | `crates/workbench/src/commands.rs`（`SwitchProject`（= 打开项目中心）/ `CloseProject`（= 关闭项目）；project crate 不再有 commands 文件） |
+| 命令 / Action | `crates/workbench/src/commands.rs`（`SwitchProject`（= 打开设置窗口的「项目」页）/ `CloseProject`（= 关闭项目）；project crate 不再有 commands 文件） |
 | 标题栏项目槽 + 项目菜单 | `crates/workbench/src/view.rs`（`render_title_bar`；菜单规格 / 内容由 `project::ui::project_menu_entries` / `build_project_menu` 提供） |
 | 会话共享与刷新信号 | `crates/workbench/src/panels/`（`Shared`；`project` 字段类型为 `project::ui::OpenProject`） |
 | 存储 / 模型（不改表，只加列） | `crates/project/src/store.rs`（`update_config` 配置就地读写）/ `models.rs` |

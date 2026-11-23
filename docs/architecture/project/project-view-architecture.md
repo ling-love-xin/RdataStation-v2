@@ -26,6 +26,11 @@ pub type BuildTagProvider = Rc<dyn Fn() -> String>;
 pub type CreateLocationGetter = Rc<dyn Fn(&App) -> Option<String>>;
 pub type CreateLocationSaver = Rc<dyn Fn(&str, &mut App)>;
 
+// 项目中心的两个投递口（列表由宿主渲染在全局设置里，动作要回到主窗口执行）
+pub enum HomeAction { Switch(PathBuf), CreateProject, OpenFolder, Sample, Close }
+pub type HomeDispatch = Rc<dyn Fn(&ProjectUiHost, HomeAction, &mut App)>;  // 入参带 host，宿主侧不必自引用
+pub type HubOpener = Rc<dyn Fn(&mut Window, &mut App)>;
+
 pub struct ProjectUiHost {
     pub state: Rc<RefCell<ProjectUiState>>,          // 选择器 / 菜单 / 设置 / 对话框错误 / 锁 / 只读 / 版本删除确认
     pub session: Rc<RefCell<Option<OpenProject>>>,   // 当前项目（根 + 名），与宿主 Shared.project 同源
@@ -38,12 +43,18 @@ pub struct ProjectUiHost {
     pub build_tag: Option<BuildTagProvider>,         // 当前构建标识；None = 不记 rds.build_tag
     pub last_create_location: CreateLocationGetter,  // 上次新建父目录
     pub save_create_location: CreateLocationSaver,   // 记住本次新建父目录
+    pub home: Rc<RefCell<Option<HomeDispatch>>>,     // 设置「项目」页的动作投递口（None = 就地执行）
+    pub on_open_hub: Rc<RefCell<Option<HubOpener>>>, // 「项目中心…」→ 打开设置窗口「项目」页
 }
 ```
 
 闭包字段抽成类型别名（而不是写在字段上）的原因：`ProjectUiHost` 的字段类型原本各是一条完整的 `Rc<dyn Fn…>`，clippy 的 `type_complexity` 会在每个字段报一次；抽别名后字段只出现名字，`with_*` 签名也跟着统一。构造方式不变——`Rc::new(闭包)` 交给字段时仍按字段类型做 unsized coercion，宿主侧不用改。
 
-构造用 `ProjectUiHost::new(state, session, notifier)` + `with_editor` / `with_sort_saver` / `with_on_opened` / `with_on_closed` / `with_connections` / `with_build_tag` / `with_create_location(get, save)`（`#[non_exhaustive]`，字段不对外展开）。未注入时全部退化为 no-op（`build_tag = None`、`last_create_location` 恒 `None`）。
+构造用 `ProjectUiHost::new(state, session, notifier)` + `with_editor` / `with_sort_saver` / `with_on_opened` / `with_on_closed` / `with_connections` / `with_build_tag` / `with_create_location(get, save)`（`#[non_exhaustive]`，字段不对外展开）。未注入时全部退化为 no-op（`build_tag = None`、`last_create_location` 恒 `None`、`home` / `on_open_hub` 为 `None`）。
+
+`home` / `on_open_hub` 之所以是 `Rc<RefCell<Option<_>>>` 而非 `Option<Rc<…>>`：它们在 `init_workspace` 里注入，此时 `ProjectUiHost` 已经 clone 给了多个持有者（选择器面板、设置面板、workbench 字段），只能改槽内值、不能替换字段；`with_home` / `with_hub_opener` 取 `self`（非 `mut self`）就是为了让 builder 写法与其它 `with_*` 一致，又不破坏已 clone 出去的副本。
+
+**动作投递的语义**：`act_*`（`ui/actions.rs`）是选择器里全部入口的统一出口——有投递口就 `home(host, action, cx)` 交给宿主、没有就就地跑原逻辑（单测与无宿主场景行为不变）。宿主把 `Switch` 接到 `request_switch`、`CreateProject`/`OpenFolder` 接到 `request_create_project`/`request_open_folder`、`Sample` 接 `create_sample`、`Close` 接 `request_close`——都要 `&mut Window`，而 `App` 拿不到窗口，所以投递闭包在注入时捕获 `window.window_handle()`，在回调里用 `AnyWindowHandle::update` 取回主窗口再跑。这样设置窗口里的点击产生的一切副作用（拦截对话框、`do_close`、`open_path`）都落在**主窗口**上，设置窗口本身不关。
 
 三个桥 trait 只描述行为，不描述宿主类型：
 
@@ -81,17 +92,16 @@ graph LR
     end
 ```
 
-### 模块布局（2026-11-23 拆分）
+### 模块布局（2026-11-23 拆分；2026-11-24 覆盖层退役后回到五个）
 
-`ui.rs` 只留**公共面**（选择器/排序/筛选类型与纯函数、`ProjectUiHost`、`ProjectUiState`、`ProjectInputs`），实现按职责拆成六个子模块：
+`ui.rs` 只留**公共面**（选择器/排序/筛选类型与纯函数、`ProjectUiHost`、`ProjectUiState`、`ProjectInputs`、`PendingAction` 与 `HomeAction`），实现按职责拆成五个子模块（原第六个 `ui/hub.rs` 随项目中心迁入设置页删除）：
 
 | 文件 | 内容 |
 | --- | --- |
 | `ui/host.rs` | `write_blocked`（按**目标项目**判定的只读守卫）/ `read_only_blocked`（目标=当前项目）/ `notify_success` / `notify_error` / `current_summary` |
-| `ui/actions.rs` | 打开 / **切换（`request_switch` / `switch_now`）** / 关闭 / 创建 / 重定位 / 删除 / 移出 / 归档 / 项目信息 / 默认连接 + 选择器加载与筛选 |
+| `ui/actions.rs` | 打开 / **切换（`request_switch` / `switch_now`）** / 关闭 / 创建 / 重定位 / 删除 / 移出 / 归档 / 项目信息 / 默认连接 + 选择器加载与筛选；**动作投递** `dispatch_home` + `act_create_project` / `act_open_folder` / `act_sample` / `act_switch` / `act_close` / `act_open_hub`（有宿主投递口就交出去、否则就地执行） |
 | `ui/dialogs.rs` | 语义对话框与行内校验提示（`location_hint` / `folder_hint` / `target_preview` / `memo_hint` / footer） |
-| `ui/hub.rs` | **项目中心**覆盖层：`open_project_hub` / `close_project_hub` / `render_project_hub`（有项目时也能浏览别的项目） |
-| `ui/picker.rs` | 选择器渲染、卡片（含「当前」标记）、卡片菜单（只读置灰由 `item_write_locked` 按卡片判定）、标题栏项目菜单 |
+| `ui/picker.rs` | 选择器渲染、卡片（含「当前」标记）、卡片菜单（只读置灰由 `item_write_locked` 按卡片判定）、标题栏项目菜单（入口全部走 `act_*`） |
 | `ui/settings.rs` | `SettingsSnapshot` / `load_settings_snapshot` / `render_settings`（含版本台账删除） |
 | `ui/tests.rs` | 50 项测试（`use super::{...}` 照旧） |
 
@@ -106,6 +116,7 @@ graph LR
 | 事件回调 | 动作函数（打开 / 关闭 / 增删改查 / 对话框提交）做 I/O 并 `host.notify` | 各处 `on_click` / `on_action` |
 | 对话框 | 由 `window.open_dialog` / `open_alert_dialog` 承载；关闭时机由提交结果决定 | 事件上下文 |
 | 对话框内容（builder 闭包） | builder 是**每帧重跑的渲染闭包**（vendor 契约：cheap and idempotent），因此只读 state + 输入框；唯一的 I/O（`location_hint` / `folder_hint` 的目录探测）按「位置 / 名称 / 路径」做**局部 memo**——统一走 `ui::memo_hint`（单测 `memo_hint_recomputes_only_when_key_changes` 锁住"同 key 不重算 / 换 key 必重算 / None 也缓存"） | `ui.rs::open_create_dialog` / `ui.rs::open_folder_dialog` |
+| 设置窗口里的项目列表 | 同一份 `render_picker`，作为 `SettingsHost::projects_panel`（`PanelRender`）每帧被设置页骨架调用：只读 state，不加载 / 不写；点击只投递 `HomeAction` 回主窗口 | `settings/src/skeleton.rs` 调面板；`crates/workbench/src/view/actions.rs::open_settings_at` 装配 |
 
 ## 4. 对话框关闭时机（栈语义）
 
@@ -147,7 +158,7 @@ graph LR
 | `TestNotifier` / `TestEditor` | `ProjectUiHost` 的两个桥替身，零副作用 |
 | `test_host(&rec)` | 组装 host（state / session 与视图共享同一 `Rc`） |
 | `Harness` | 宿主视图替身：按状态渲染选择器 / 设置 / 菜单，并挂 `Root::render_dialog_layer` |
-| `open_harness(cx, host)` | `cx.add_window_view(|window, cx| Root::new(harness, window, cx))`，返回 host、输入实体与 `VisualTestContext` |
+| `open_harness(cx, host)` | `cx.add_window_view(\|window, cx\| Root::new(harness, window, cx))`，返回 host、输入实体与 `VisualTestContext` |
 
 ### 覆盖清单（对应 dev-plan §4 场景）
 
@@ -213,7 +224,7 @@ graph LR
 | 位置字段（系统目录选择器 / 目标预览 / 行内校验） | `crates/project/src/ui.rs`（`pick_directory` / `directory_row` / `target_preview` / `location_hint`） |
 | 位置记忆（默认新建父目录的读 / 写） | `crates/project/src/ui.rs`（`open_create_dialog` 读 `(host.last_create_location)`、`submit_create` 成功分支调 `(host.save_create_location)`）；宿主侧 `crates/workbench/src/components/project_host.rs`（`with_create_location`，接 `SettingsService::{project_last_create_location, set_project_last_create_location}`） |
 | 构建标识落项目（只写不展示） | `crates/project/src/ui.rs`（`apply_opened` → `update_config` 写 `extensions.rds.build_tag`，键 `store::BUILD_TAG_KEY`）；宿主侧 `project_host.rs`（`with_build_tag(Rc::new(\|\| crate::version::info().tag()))`） |
-| 项目中心（有项目态的项目列表 + 切换） | `crates/project/src/ui/hub.rs`（`open_project_hub` / `close_project_hub` / `render_project_hub`）；宿主侧 `crates/workbench/src/view/render.rs`（`SwitchProject` 处理器 + 覆盖层挂载，位于 `render_settings` 之前） |
+| 项目中心（有项目态的项目列表 + 切换） | 列表本体仍是 `render_picker`，由宿主渲染进**全局设置窗口**的「项目」节（`SettingsHost::projects_panel` + `settings::fields::panel_item`）；动作投递口 `ProjectUiHost::home` / `on_open_hub` 在 `crates/workbench/src/view/workspace.rs::wire_project_home` 注入，设置窗口侧的挂载与切节在 `crates/workbench/src/view/actions.rs::open_settings_at` |
 | 窗口测试 50 项（31 窗口 + 19 纯函数） | `crates/project/src/ui/tests.rs` |
 
 ## 8. 验证方式
@@ -221,7 +232,7 @@ graph LR
 ```bash
 cargo check --workspace --all-targets          # 零告警
 cargo test --workspace -j 2                    # 全量（-j 2 硬性要求）
-cargo test -p rds-project -j 1           # 只跑项目 crate（lib 50 项，2026-11-22 实测）
+cargo test -p rds-project -j 1           # 只跑项目 crate（lib 64 项，其中 `ui/tests.rs` 50 项；2026-11-24 实测）
 cargo build -p rds-app -j 2                    # codegen 验证（check ≠ 能出机器码）
 cargo clippy -p rds-project --all-targets -j 1 # 2026-11-22 实测 2 条，见下
 ```

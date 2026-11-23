@@ -1,10 +1,23 @@
 # 设置（应用级）· 开发方案
 
-> 状态：**P0/P1a 已完成（2026-09-16），P1b 起待排；2026-09-18 接了 M6 的 `resources.keep_versions`（P4.1）**
+> 状态：**P0/P1a 已完成（2026-09-16），P1b 起待排；2026-09-18 接了 M6 的 `resources.keep_versions`（P4.1）；2026-11-24 加了内容注入通道与运行期切节（服务项目中心，见 §0）**
 > 关联：`settings-architecture.md`（准入与作用域裁决）、`settings-prototype-design.md`（页面形态）、`settings-crate-design.md`（crate 沿革）
-> 基线：`cargo test -p rds-settings` → **10 项全绿、零告警**；`cargo check -p rds-workbench --all-targets` → 见 §5
+> 基线：`cargo test -p rds-settings` → **49 项全绿、零告警**（2026-11-24 实测）；`cargo check -p rds-workbench --all-targets` → 见 §5
 
 ## 0. 进度记录（最近在前）
+
+### 2026-11-24 — 内容注入通道 + 运行期切节（服务项目中心）
+
+项目中心（项目列表的选择 / 切换 / 新建 / 管理）原本是工作台上的覆盖层，用户判断不该再单独占一层，改为挂在全局设置的「项目」页——设置页因此第一次需要「不只是设置行」的内容。
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 内容注入 | `pub type PanelRender = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>`；`SettingsHost::projects_panel: Option<PanelRender>`；`fields::panel_item(render)` = `SettingItem::render` + `.on_reset(\|_\| false, …)`（面板不参与 reset-all）；`skeleton::build` 在 `projects` 节最前插「项目列表」分组，原「列表排序」行保留在下 | `src/{settings_page.rs,fields.rs,skeleton.rs}` |
+| 运行期切节 | `SettingsPage::select_section(Option<&'static str>, cx)` = 写 `initial_section` + `section_seq += 1` + notify；`skeleton::build(..., section_seq)` 用 `settings_id(seq) = "rds-settings-{seq}"` 生成 keyed-state id（vendor 的 `SettingsState.selected_index` 只在 state 首建时读默认值，且 `pub(super)`、无公开设值 API → 只能换 id 重挂） | 同上 |
+| 页面文案 | `page_description("projects")` 改为「项目列表（选择 / 切换 / 新建 / 管理）与列表排序」 | `src/skeleton.rs` |
+| 测试 | **47 → 49**：`settings_id_changes_only_with_the_section_counter`、`select_section_rekeys_skeleton_and_renders`（注入占位面板、连画两帧、连续两次切同一节都必须换 id） | `src/settings_page.rs`（测试模块） |
+| 验证 | `cargo check -p rds-settings --all-targets -j 1` 零告警；`cargo test -p rds-settings -j 1` **49 项全绿**；`cargo clippy -p rds-settings --all-targets -j 1` exit 0（修掉 collapsible_if 与冗余闭包） | §5 |
+| 已知取舍 | 切节换 id 会重置搜索框内容与滚动位置；面板若用 `size_full()`，注入方必须给确定高度（项目页给 `rems(30.0)`，否则卡片内塌成 0） | `settings-architecture.md` §3.1 / §3.2 |
 
 ### 2026-09-18 — M6 接线（再续）：`resources.collapsed_groups`
 

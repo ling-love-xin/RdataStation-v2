@@ -124,12 +124,13 @@
 | 连接默认值 | LAN 直连 TLS | `connection_defaults.lan_disable_tls` | segmented 关 TLS / 保留 TLS | 下次操作 | `connection_service.rs::apply_lan_tls_default` |
 | 资产库 | 历史内容保留 | `resources.keep_versions` | segmented 只留元数据 / 5 / 10 / 20 / 全部保留（**含 `-1` 哨兵**） | 下次操作 | `workbench/src/components/resource_host.rs` + `panels/resources.rs`（读设置 → `KeepVersions::from_setting`）→ `services/resource_jobs.rs::open_service` → `analytics_resource::ArchiveService::with_keep_versions` |
 | 资产库 | 默认排序 | `resources.default_sort` | segmented 名称 / 归档时间 / 更新时间 / 大小 / 版本号 | 下次操作 | `components/resource_host.rs::remember_sort`（写）+ `panels/resources.rs::build_resources_panel`（读）→ `analytics_resource::ResourcesPanel::set_sort`；面板内点排序 = 同一写入路径 |
+| 项目 | 项目列表（宿主注入面板） | —（内容区块） | 宿主渲染的整块面板（`SettingsHost::projects_panel`） | — | 项目中心：选择 / 切换 / 新建 / 管理项目；列表本体由 workbench 注入 `project::ui::render_picker`，动作经 `HomeDispatch` 投回主窗口（`settings-architecture.md` §3.1） |
 | 项目 | 列表排序 | `projects.sort_mode` | segmented 最近 / 名称 / 创建 | 下次操作 | `view.rs::WorkbenchView::new`（读）+ `components/project_host.rs`（写，双入口：选择器内循环按钮） |
 | 日志 | 日志级别 | `logging.min_level` | segmented 全部 / TRACE / DEBUG / INFO / WARN / ERROR | 即时 | `crates/app/src/main.rs`（启动取值）+ 装配层 sink → `engine::logging::reload_log_level` |
 | 日志 | 查看日志… | —（动作行） | `Button` | — | 宿主回调 → `components/log_dialog.rs`；说明行写「打开日志查看对话框」 |
 | 日志 | 打开日志目录 | —（动作行） | `Button` | — | 宿主回调 → `opener::open(paths::log_dir())` |
 
-> **当前是 5 节 8 行 + 3 动作行，这是准入规则的必然结果**：僵尸项被裁（架构 §7.2）、未接线的项不画（§6 待接）。页面框架的价值在于后续模块**按规则往里加**，而不是首版行数。
+> **当前是 5 节 8 行 + 3 动作行**（另有「项目」节一块宿主注入的内容面板，不算行），这是准入规则的必然结果：僵尸项被裁（架构 §7.2）、未接线的项不画（§6 待接）。页面框架的价值在于后续模块**按规则往里加**，而不是首版行数。`settings-prototype.html` 仍只画「列表排序」行，未画这块注入面板（实现已落地，见 `settings-architecture.md` §3.1）。
 
 ### 5.1 本期不设的节（及其理由）
 
@@ -197,12 +198,12 @@
 | 条目清单与分节 | `crates/settings/src/registry.rs` | 页面不得自排、自加 |
 | 设置项字段与默认值 | `crates/settings/src/model.rs` | 新增字段必先登记 |
 | 唯一写入路径 | `crates/settings/src/lib.rs::{apply_by_key, value_by_key}` | 页面不直接改 model |
-| 宿主桥 | `SettingsHost { on_close, on_open_cache }`（`settings_page.rs`） | 副作用由宿主实现 |
+| 宿主桥 | `SettingsHost { on_open_cache, on_open_log_dir, on_open_log_view, on_open_type_short_map, on_open_settings_json, on_settings_changed, projects_panel }`（`settings_page.rs`） | 副作用与内容区块都由宿主提供（`projects_panel` = `PanelRender`，见 `settings-architecture.md` §3.1） |
 | 设置页实体 | `crates/settings/src/settings_page.rs`（✅ 已实现；`settings_view.rs` 待退役） | `Entity<SettingsPage>`；分节 / 行 / 下拉全部由 `registry` 驱动 |
 | 分节导航 | 同上 | `List` + `ListDelegate`（hover / 选中 / 键盘由组件给）；稳定 id 用**节的 key**，不用下标 |
 | 分节与行清单 | `crates/settings/src/registry.rs`（`sections()` / `page_rows()`） | 页面**不得自排顺序、不得自加行**（登记表是权威） |
 | 行与控件 | 同上 | 只读 `SettingsService::get_*`；写只经 `SettingsService::set_*` |
-| 搜索框 | 同上 | `Input` + `InputState`（`cx.new(|cx| InputState::new(window, cx))`） |
+| 搜索框 | 同上 | `Input` + `InputState`（`cx.new(\|cx\| InputState::new(window, cx))`） |
 | 宿主 overlay | `crates/workbench/src/view.rs::render_settings_panel`（⬜ 待替换为 `SettingsPage::new(window, host, cx)`） | 互斥规则在宿主实现（§2.1） |
 | 缓存管理 | 宿主回调（现状 `on_open_cache`）→ `workbench/src/components/cache_dialog.rs` | 缓存 UI 依赖 engine，不进 `settings`（依赖只向下） |
 | 命令 | `settings/src/commands.rs`（`OpenSettings` 已有） | `ToggleThemeMode` 未接线，见 §11 |

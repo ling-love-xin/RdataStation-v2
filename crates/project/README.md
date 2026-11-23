@@ -24,7 +24,9 @@
 
 * 刻意**不支持多窗口打开同一个项目**；打开时被拒的项目给「只读打开 / 仍要打开」逃生口。
 
-* 「切换项目」= 在**项目中心**覆盖层里选目标：先释放当前项目（还锁 + 清连接作用域）再打开，不要求先关项目；无项目时选择器覆盖中央区（保留五段外壳）。
+* 「切换项目」= 在**全局设置窗口的「项目」页**（项目中心）里选目标：先释放当前项目（还锁 + 清连接作用域）再打开，不要求先关项目；无项目时选择器覆盖中央区（保留五段外壳），有项目时中央区不再留项目列表副本。
+
+* 设置页里的点击经 `HomeDispatch` 投回**主窗口**执行：`HomeAction::{Switch, CreateProject, OpenFolder, Sample, Close}` 由宿主翻译成 `request_switch` / `request_create_project` / `request_open_folder` / `create_sample` / `request_close`（都要窗口，所以投递闭包捕获 `window_handle` 再 `AnyWindowHandle::update`）；未注入投递口时就地执行（单测与无宿主场景行为不变）。
 
 ### 数据落点：名册与元数据分离，双写一致
 
@@ -115,14 +117,13 @@
 | `src/store.rs`              | `.RSmeta` 创建 / 加载 / 迁移；配置就地读写（`update_config`）；依赖自检；双真相源唯一写入入口（`save_info`）                                                             |
 | `src/lock.rs`               | 实例锁：OS 文件锁 + `project.lock.owner` 占用者信息                                                                                                                   |
 | `src/service.rs`            | 编排：列表 / 创建 / 打开（含只读）/ 关闭 / 重命名 / 固定 / 归档 / 软删 / 恢复 / 硬删 / 移出 / 重定位 / 默认连接读写 / 版本台账（记录与删除）；进程级复用 tokio 运行时（P0.3）                            |
-| `src/ui.rs`                 | 公共面：选择器 / 排序 / 筛选类型与纯函数、`ProjectUiHost` 宿主桥、UI 状态（9 字段，含 `hub_open`）与输入实体；末尾 `pub use` 六个子模块，`project::ui::*` 的对外路径不变                          |
+| `src/ui.rs`                 | 公共面：选择器 / 排序 / 筛选类型与纯函数、`ProjectUiHost` 宿主桥、UI 状态（8 字段）与输入实体、`PendingAction` 与 `HomeAction` / `HomeDispatch` / `HubOpener`；末尾 `pub use` 五个子模块，`project::ui::*` 的对外路径不变                          |
 | `src/ui/host.rs`             | 宿主桥辅助：只读守卫 `write_blocked`（按目标项目判定）/ `read_only_blocked`（目标=当前项目）、动作反馈双通道 `notify_success` / `notify_error`、当前项目名册反查 `current_summary`                                          |
-| `src/ui/actions.rs`          | 动作编排：打开 / **切换（`request_switch` / `switch_now`）** / 关闭 / 创建 / 重定位 / 删除 / 移出 / 归档 / 项目信息 / 默认连接，以及选择器的加载与筛选动作                                                             |
+| `src/ui/actions.rs`          | 动作编排：打开 / **切换（`request_switch` / `switch_now`）** / 关闭 / 创建 / 重定位 / 删除 / 移出 / 归档 / 项目信息 / 默认连接，选择器的加载与筛选动作，以及**动作投递** `dispatch_home` + `act_create_project` / `act_open_folder` / `act_sample` / `act_switch` / `act_close` / `act_open_hub`                                                             |
 | `src/ui/dialogs.rs`          | 语义对话框：新建 / 打开文件夹 / 空目录询问 / 锁占用 / 未保存拦截 / 重定位 / 删除数据；行内校验提示与其缓存                                                              |
-| `src/ui/hub.rs`              | **项目中心**覆盖层：`open_project_hub` / `close_project_hub` / `render_project_hub`（有项目时也能浏览 / 管理别的项目，body 复用 `render_picker`）                          |
-| `src/ui/picker.rs`           | 选择器渲染、卡片（含「当前」标记）、卡片 `⋯`/右键菜单、标题栏项目菜单（8 项 / 只读 9 项）；只读置灰按**卡片**判定（`item_write_locked`）                                                                                                                  |
+| `src/ui/picker.rs`           | 选择器渲染、卡片（含「当前」标记）、卡片 `⋯`/右键菜单、标题栏项目菜单（8 项 / 只读 9 项）；只读置灰按**卡片**判定（`item_write_locked`）；全部入口走 `act_*`                                                                                                                  |
 | `src/ui/settings.rs`        | 设置快照 `SettingsSnapshot` / `load_settings_snapshot` 与设置面板渲染（含版本台账行内两段式删除）                                                                       |
-| `src/ui/tests.rs`           | 50 项 `ui` 测试（31 项 GPUI headless 窗口测试 + 19 项纯函数测试：选择器 /facet 解析 / 状态筛选 / 设置快照与结构树 / 默认连接 / 对话框 / 拦截 / **切换与项目中心** / **只读只拦当前项目** / 排序 / 浏览目录 / 空目录询问 / 卡片与描述 / 卡片与标题栏菜单规格 / 只读拦截 / 键盘激活 / 行内校验与提示 memo / 状态文案与概览状态 / 版本台账删除） |
+| `src/ui/tests.rs`           | 50 项 `ui` 测试（31 项 GPUI headless 窗口测试 + 19 项纯函数测试：选择器 /facet 解析 / 状态筛选 / 设置快照与结构树 / 默认连接 / 对话框 / 拦截 / **切换与设置页入口** / **动作投递到宿主** / **只读只拦当前项目** / 排序 / 浏览目录 / 空目录询问 / 卡片与描述 / 卡片与标题栏菜单规格 / 只读拦截 / 键盘激活 / 行内校验与提示 memo / 状态文案与概览状态 / 版本台账删除） |
 | `tests/project_registry.rs` | 名册端到端集成：创建登记 → 固定置顶 → 软删隐藏（磁盘保留）→ 已移除找回（注入临时全局库）                                                                                                          |
 | `tests/project_store.rs`    | 磁盘 `.RSmeta` / 实例锁 / 默认连接（U3）集成                                                                                                                           |
 
@@ -154,7 +155,7 @@
 
 
 ```
-cargo test -p rds-project -j 1          # 2026-11-22 实测：lib 50（24 窗口 + 14 纯函数）+ 集成（1 名册 + 5 生命周期 + 3 存储）
+cargo test -p rds-project -j 1          # 2026-11-24 实测：lib 64（`ui/tests.rs` 50）+ 集成（1 名册 + 5 生命周期 + 3 存储）
 ```
 
 
