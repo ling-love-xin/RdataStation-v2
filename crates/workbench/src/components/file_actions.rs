@@ -49,11 +49,17 @@ pub fn bare_table_name(sql_ref: &str) -> String {
     inner.replace("\"\"", "\"")
 }
 
-/// 把一行对象（按它的 SQL 引用名）导出成 `.csv`，落到 `dest`。
+/// 把一行对象（按它的 SQL 引用名）导出到 `dest`，格式由 `format` 定（csv / parquet / json）。
 ///
-/// 界面这一刀先只给 csv；**导出只收 csv / parquet / json**（铁律第 25 条），
-/// 引擎侧三种都支持（`engine::duckdb::export`），格式选择是下一步的事。
-pub fn export_table_as_csv(shared: &Shared, sql_ref: &str, dest: ExportDest, cx: &mut App) {
+/// 两个目的地 + 三种格式 = 铁律第 24/25 条的完整口径；引擎侧三种都能写，
+/// 这里只负责定落点、拼文件名与回执。
+pub fn export_table_to(
+    shared: &Shared,
+    sql_ref: &str,
+    dest: ExportDest,
+    format: engine::duckdb::export::ExportFormat,
+    cx: &mut App,
+) {
     let table = bare_table_name(sql_ref);
     if table.trim().is_empty() {
         shared.say_error(format!("{}：目标表名为空", dest.verb()), cx);
@@ -88,7 +94,7 @@ pub fn export_table_as_csv(shared: &Shared, sql_ref: &str, dest: ExportDest, cx:
             }
         })
         .collect();
-    let path = dir.join(format!("{stem}_{secs}.csv"));
+    let path = dir.join(format!("{stem}_{secs}.{}", format.extension()));
     let Some(path_text) = path.to_str() else {
         shared.say_error(format!("{}：路径含非 UTF-8 字符", dest.verb()), cx);
         return;

@@ -113,6 +113,8 @@ pub struct DataObjectsTab {
     /// 每个源已经翻过几页叶子（键 = 源行 key）：`None` / 没记录 = 第一页。
     /// 见 [`LEAF_PAGE_SIZE`] 与 [`leaf_shown`]——叶子多了只画一页，点「显示更多」才加。
     leaf_pages: HashMap<String, usize>,
+    /// 导出格式（工具栏可切）：只允许 csv / parquet / json（铁律第 25 条）
+    export_format: engine::duckdb::export::ExportFormat,
     /// 上次同步到的活动文档 key（`None` = 还没对上 / 没有文档）。
     /// 与 `Shared::working_set.current` 比对：不同就说明用户切了文档，工作集要换那一份
     active_doc_key: Option<String>,
@@ -153,6 +155,8 @@ impl DataObjectsTab {
             conn_children: HashMap::new(),
             loading_sources: HashSet::new(),
             leaf_pages: HashMap::new(),
+            // 默认 csv：与查询导出同一习惯，且是唯一人人能打开的格式
+            export_format: engine::duckdb::export::ExportFormat::Csv,
             active_doc_key,
             seen_document_epoch,
             // `None` = 还没读过盘：构造那次 `refresh` 会按当前项目根读一遍
@@ -1052,6 +1056,7 @@ impl DataObjectsTab {
                 .map(|reference| {
                     use crate::components::file_actions::ExportDest;
                     let mut buttons = Vec::new();
+                    let format = self.export_format;
                     for (dest, id, label, tip) in [
                         (
                             ExportDest::Global,
@@ -1077,8 +1082,8 @@ impl DataObjectsTab {
                             .label(label)
                             .tooltip(tip)
                             .on_click(move |_, _, cx| {
-                                crate::components::file_actions::export_table_as_csv(
-                                    &shared, &reference, dest, cx,
+                                crate::components::file_actions::export_table_to(
+                                    &shared, &reference, dest, format, cx,
                                 );
                             }),
                         );
@@ -1899,6 +1904,24 @@ impl ComponentPanel for DataObjectsTab {
                         window,
                         cx,
                     );
+                })),
+            // 导出格式：只在这三种里轮（铁律第 25 条），点一下换下一个
+            Button::new("data-objects-export-format")
+                .ghost()
+                .label(match self.export_format {
+                    engine::duckdb::export::ExportFormat::Csv => "格式 CSV",
+                    engine::duckdb::export::ExportFormat::Parquet => "格式 Parquet",
+                    engine::duckdb::export::ExportFormat::Json => "格式 JSON",
+                })
+                .tooltip("导出 / 存草稿用的格式：csv → parquet → json 轮换")
+                .on_click(cx.listener(|this, _, _window, cx| {
+                    use engine::duckdb::export::ExportFormat;
+                    this.export_format = match this.export_format {
+                        ExportFormat::Csv => ExportFormat::Parquet,
+                        ExportFormat::Parquet => ExportFormat::Json,
+                        ExportFormat::Json => ExportFormat::Csv,
+                    };
+                    cx.notify();
                 })),
         ])
     }
