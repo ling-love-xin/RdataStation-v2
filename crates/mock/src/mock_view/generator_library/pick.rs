@@ -1,5 +1,6 @@
 //! 选中态计算：从状态里算出当前选中的生成器配置。
 
+use shared::i18n::tr;
 use super::*;
 
 /// 完全相同；`picked_user` 才说明「用户点的是列表里的哪一行」。
@@ -222,7 +223,7 @@ pub(crate) fn render_browse_pane(
         .child(
             TabBar::new("mock-lib-view")
                 .segmented()
-                .children([Tab::new().label("业务分类"), Tab::new().label("数据类型")])
+                .children([Tab::new().label(tr("业务分类")), Tab::new().label(tr("数据类型"))])
                 .selected_index(view_index)
                 .on_click(move |index, _window, app| {
                     state.update(app, |s, cx| {
@@ -295,7 +296,7 @@ pub(crate) fn render_history_chips(
             .overflow_hidden()
             .text_xs()
             .text_color(theme.colors.muted_foreground)
-            .child("本会话还没用过生成器")
+            .child(tr("本会话还没用过生成器"))
             .into_any_element();
     }
     let mut chips = div()
@@ -317,7 +318,7 @@ pub(crate) fn render_history_chips(
         chips = chips.child(
             button(chip_id, label, ActionKind::Quiet)
                 .xsmall()
-                .tooltip("最近使用：点击直接应用")
+                .tooltip(tr("最近使用：点击直接应用"))
                 .tooltip_show_delay(TOOLTIP_DELAY)
                 .on_click(move |_event, window, app| {
                     let (panel, writeback) = {

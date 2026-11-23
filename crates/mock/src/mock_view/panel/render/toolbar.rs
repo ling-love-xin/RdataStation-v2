@@ -1,5 +1,6 @@
 //! 面板顶部工具栏：新增表 / 引用结构 / 新增场景 / 刷新。
 
+use shared::i18n::tr;
 use super::*;
 
 impl MockPanel {
@@ -42,8 +43,8 @@ impl MockPanel {
                 let mut menu = menu;
                 if sources.is_empty() {
                     let entity = entity.clone();
-                    menu = menu.item(PopupMenuItem::new("（暂无数据源）").disabled(true));
-                    return menu.item(PopupMenuItem::new("在对话框里选择连接…").on_click(
+                    menu = menu.item(PopupMenuItem::new(tr("（暂无数据源）")).disabled(true));
+                    return menu.item(PopupMenuItem::new(tr("在对话框里选择连接…")).on_click(
                         move |_, window, app| {
                             let entity = entity.clone();
                             entity.update(app, |panel, cx| {

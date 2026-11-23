@@ -1,6 +1,7 @@
 // ==================== 详情视图（中央 tab：字段 + 预览） ====================
 
 // 继承父模块（mock_view）的全部 use 绑定
+use shared::i18n::tr;
 use super::*;
 
 // 样例预览的固定种子：样例稳定可复现（与最终生成的随机种子无关，纯示意）
@@ -414,7 +415,7 @@ impl MockDetailView {
             div()
                 .text_xs()
                 .text_color(text_hint(&theme))
-                .child("它们是这次生成的产物；要改列请回表配置 tab 改完重新生成"),
+                .child(tr("它们是这次生成的产物；要改列请回表配置 tab 改完重新生成")),
         );
         for def in info.columns.iter() {
             let mut meta: Vec<String> = Vec::new();

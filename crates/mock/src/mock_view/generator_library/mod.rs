@@ -16,6 +16,7 @@
 //! （`spec_of` / `generate_cell` 编译期穷尽 match，运行时新算法不成立）。保存时把参数 patch 回
 //! 基础生成器的默认配置，产出 [`UserGenerator`]（硬属性 `data_type` + 可选 `category`，双向挂组）。
 
+use shared::i18n::tr;
 use std::collections::HashSet;
 
 use super::*;
@@ -218,7 +219,7 @@ pub(crate) fn create_library_state(
     window: &mut Window,
     cx: &mut App,
 ) -> Entity<GeneratorLibraryState> {
-    let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索定位生成器…"));
+    let search_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("搜索定位生成器…")));
     // 打开时就把「当前这一列用的生成器」所在分组展开：15 个组全收起时，用户得先猜
     // 它属于哪一类再展开，等于每次都要重新找一遍自己正在用的东西。
     // （不做滚动定位：`ScrollHandle` 只有顶部/底部滚动，没有按元素滚动，靠搜索框补）
@@ -524,7 +525,7 @@ pub(crate) fn render_smart_button(
         .child(
             button("mock-lib-smart", "智能推荐", ActionKind::Quiet)
                 .xsmall()
-                .tooltip("按列名与类型重推：回到推荐的生成器、参数与空值率")
+                .tooltip(tr("按列名与类型重推：回到推荐的生成器、参数与空值率"))
                 .tooltip_show_delay(TOOLTIP_DELAY)
                 .on_click(move |_event, window, app| {
                     let _ = detail.update(app, |view, cx| {
@@ -586,7 +587,7 @@ fn new_create_draft(
     let base_delegate = SearchableVec::new(base_items);
     let base_state = cx.new(|cx| SelectState::new(base_delegate, None, window, cx));
 
-    let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("生成器名（必填）"));
+    let name_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("生成器名（必填）")));
 
     let mut draft = CreateDraft {
         locked_type,

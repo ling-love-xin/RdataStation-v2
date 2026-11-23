@@ -1,5 +1,6 @@
 //! 字段区渲染：列编辑区的字段行。
 
+use shared::i18n::tr;
 use super::*;
 
 impl MockDetailView {
@@ -22,7 +23,7 @@ impl MockDetailView {
             return div()
                 .text_xs()
                 .text_color(muted)
-                .child("暂无列：在这张 tab 里点「导入结构」或「＋ 加列」开始造表。")
+                .child(tr("暂无列：在这张 tab 里点「导入结构」或「＋ 加列」开始造表。"))
                 .into_any_element();
         }
         let columns = {
@@ -33,7 +34,7 @@ impl MockDetailView {
             return div()
                 .text_xs()
                 .text_color(muted)
-                .child("没有匹配的列——清空「筛选列」看全部（匹配列名与生成器名）。")
+                .child(tr("没有匹配的列——清空「筛选列」看全部（匹配列名与生成器名）。"))
                 .into_any_element();
         }
 

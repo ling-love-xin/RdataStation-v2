@@ -1,6 +1,7 @@
 // ==================== 配置面板（右 Dock） ====================
 
 // 继承父模块（mock_view）的全部 use 绑定
+use shared::i18n::tr;
 use super::*;
 use crate::history as core_history;
 
@@ -675,11 +676,11 @@ impl MockPanel {
                 .map(|seed| seed.to_string())
                 .unwrap_or_default();
 
-            let table = cx.new(|cx| InputState::new(window, cx).placeholder("目标表名"));
+            let table = cx.new(|cx| InputState::new(window, cx).placeholder(tr("目标表名")));
             table.update(cx, |s, cx| s.set_value(initial_name, window, cx));
-            let rows = cx.new(|cx| InputState::new(window, cx).placeholder("行数"));
+            let rows = cx.new(|cx| InputState::new(window, cx).placeholder(tr("行数")));
             rows.update(cx, |s, cx| s.set_value(initial_rows, window, cx));
-            let seed = cx.new(|cx| InputState::new(window, cx).placeholder("随机种子"));
+            let seed = cx.new(|cx| InputState::new(window, cx).placeholder(tr("随机种子")));
             seed.update(cx, |s, cx| s.set_value(initial_seed, window, cx));
 
             let mut subs = Vec::new();
@@ -758,7 +759,7 @@ impl MockPanel {
         // S5：场景种子输入（只在场态渲染；随模板载入预填）
         if self.scenario.is_some() {
             if self.scenario_seed_input.is_none() {
-                let state = cx.new(|cx| InputState::new(window, cx).placeholder("场景种子"));
+                let state = cx.new(|cx| InputState::new(window, cx).placeholder(tr("场景种子")));
                 self.scenario_seed_input = Some(state);
             }
             if let (Some(pending), Some(input)) = (
@@ -773,7 +774,7 @@ impl MockPanel {
         }
         if !self.column_filters.contains_key(&id) {
             let state =
-                cx.new(|cx| InputState::new(window, cx).placeholder("筛选列（列名 / 生成器）"));
+                cx.new(|cx| InputState::new(window, cx).placeholder(tr("筛选列（列名 / 生成器）")));
             // 搜索词一变就重画：输入框自己会重绘，但列卡片是面板画的
             let sub = cx.subscribe(&state, |_panel, _input, ev: &InputEvent, cx| {
                 if matches!(ev, InputEvent::Change) {
@@ -785,7 +786,7 @@ impl MockPanel {
         }
         // 清单搜索框（工具栏下方 / 清单顶部；搜索词一变就重画，与 `column_filter` 同一订阅模式）
         if self.search_input.is_none() {
-            let state = cx.new(|cx| InputState::new(window, cx).placeholder("搜索表名"));
+            let state = cx.new(|cx| InputState::new(window, cx).placeholder(tr("搜索表名")));
             self.search_input = Some(state);
         }
     }

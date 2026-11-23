@@ -1,5 +1,6 @@
 //! 列编辑对话框：列名 / 类型 / 参数 / 空值率 / 唯一 / 恢复智能默认。
 
+use shared::i18n::tr;
 use super::*;
 
 impl MockDetailView {
@@ -24,7 +25,7 @@ impl MockDetailView {
         let list_width = px(self.panel.read(cx).column_list_px.clamp(ui::COLUMN_LIST_MIN, ui::COLUMN_LIST_MAX));
         let null_input = cx.new(|cx| InputState::new(window, cx).placeholder("0~100"));
         null_input.update(cx, |s, cx| s.set_value(null_initial.clone(), window, cx));
-        let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("列名"));
+        let name_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("列名")));
         name_input.update(cx, |s, cx| s.set_value(column.def.name.clone(), window, cx));
         // 打开时参数序列化快照（dirty 判定：输入框值逐一与初值比较）
         let original_params = generator_catalog::spec_of(&column.def.generator)
@@ -114,7 +115,7 @@ impl MockDetailView {
         window.open_dialog(cx, move |dialog, window, cx| {
             let theme = cx.theme().clone();
             let Some(draft) = view.read(cx).draft.as_ref() else {
-                return dialog.title("列编辑");
+                return dialog.title(tr("列编辑"));
             };
             let name_state = draft.name_input.clone();
             let null_state = draft.null_input.clone();
@@ -230,7 +231,7 @@ impl MockDetailView {
                             .min_w_0()
                             .text_xs()
                             .text_color(theme.colors.muted_foreground)
-                            .child("产出类型"),
+                            .child(tr("产出类型")),
                     )
                     .child({
                         let view = view.clone();
@@ -274,7 +275,7 @@ impl MockDetailView {
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("（后期支持）"),
+                    .child(tr("（后期支持）")),
             ));
             // 类型与生成器解耦的说明：改类型不自动换生成器（避免参数行与生成器不一致）；
             // 想按新类型重推生成器 → 点上方「智能推荐」（行 2 左块）
@@ -384,7 +385,7 @@ impl MockDetailView {
                                     .min_w_0()
                                     .text_xs()
                                     .text_color(theme.colors.muted_foreground)
-                                    .child("样例"),
+                                    .child(tr("样例")),
                             )
                             .child({
                                 let view = view.clone();
@@ -394,7 +395,7 @@ impl MockDetailView {
                                     ActionKind::Quiet,
                                 )
                                 .xsmall()
-                                .tooltip("按当前参数重新抽样（固定种子，结果可复现）")
+                                .tooltip(tr("按当前参数重新抽样（固定种子，结果可复现）"))
                                 .tooltip_show_delay(TOOLTIP_DELAY)
                                 .on_click(move |_, _window, app| {
                                     view.update(app, |view, cx| {
@@ -476,7 +477,7 @@ impl MockDetailView {
                                     div()
                                         .text_xs()
                                         .text_color(text_hint(&theme))
-                                        .child("列名"),
+                                        .child(tr("列名")),
                                 )
                                 .child(
                                     div()
@@ -526,7 +527,7 @@ impl MockDetailView {
                                 .flex_none()
                                 .text_xs()
                                 .text_color(theme.colors.muted_foreground)
-                                .child("历史"),
+                                .child(tr("历史")),
                         )
                         .child(if let Some(b) = browser.as_ref() {
                             crate::mock_view::generator_library::render_history_chips(
@@ -592,7 +593,7 @@ impl MockDetailView {
             let view_next = view.clone();
             let panel_apply = panel.clone();
             dialog
-                .title("列编辑")
+                .title(tr("列编辑"))
                 .width(ui::COLUMN_DIALOG_WIDTH)
                 .child(body)
                 // #6 ESC / 遮罩关闭拦截：有未应用修改 → 弹确认框并阻止本次关闭

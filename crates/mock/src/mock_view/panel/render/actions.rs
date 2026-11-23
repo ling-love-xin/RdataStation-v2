@@ -1,5 +1,6 @@
 //! 面板主体渲染：表清单 + 集合动作 + 出口 + 出口反馈。
 
+use shared::i18n::tr;
 use super::*;
 
 impl MockPanel {
@@ -138,7 +139,7 @@ impl MockPanel {
                             .text_xs()
                             .text_color(cx.theme().colors.muted_foreground)
                             .text_ellipsis()
-                            .child("场景结果一键导出（CSV）："),
+                            .child(tr("场景结果一键导出（CSV）：")),
                     )
                     .child(btn)
             } else {

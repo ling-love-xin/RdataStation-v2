@@ -1,5 +1,6 @@
 //! 浏览区行渲染：分组行、类型组行、生成器项行。
 
+use shared::i18n::tr;
 use super::*;
 
 /// 业务分组行：展开/收起按钮 + 行尾「＋」（键盘可达，`Button`）。
@@ -270,7 +271,7 @@ pub(crate) fn render_item_row(
             .child(
                 button(format!("lib-item-edit-{key}"), "编辑", ActionKind::Quiet)
                     .xsmall()
-                    .tooltip("重命名 / 修改参数")
+                    .tooltip(tr("重命名 / 修改参数"))
                     .tooltip_show_delay(TOOLTIP_DELAY)
                     .on_click(move |_event, window, app| {
                         let (panel, writeback, ug) = {

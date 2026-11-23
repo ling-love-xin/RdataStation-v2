@@ -1,5 +1,6 @@
 //! 动作行状态格 + 集合任务进度行 + 场景模板菜单 + 预览行数菜单。
 
+use shared::i18n::tr;
 use super::*;
 
 impl MockPanel {
@@ -205,7 +206,7 @@ impl MockPanel {
             .dropdown_menu(move |menu, _window, _cx| {
                 let mut menu = menu;
                 if templates.is_empty() {
-                    return menu.item(PopupMenuItem::new("（没有可用的场景模板）").disabled(true));
+                    return menu.item(PopupMenuItem::new(tr("（没有可用的场景模板）")).disabled(true));
                 }
                 for choice in templates.iter() {
                     let id = choice.id.clone();

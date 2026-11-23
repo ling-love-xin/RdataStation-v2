@@ -1,5 +1,6 @@
 // ==================== 列操作 ====================
 
+use shared::i18n::tr;
 use super::*;
 
 impl MockPanel {
@@ -184,7 +185,7 @@ impl MockPanel {
         let list = cx.new(|cx| ListState::new(delegate, window, cx).searchable(true));
         window.open_dialog(cx, move |dialog, _window, _cx| {
             dialog
-                .title("搜索生成器")
+                .title(tr("搜索生成器"))
                 .child(div().w_full().h(rems(ui::SEARCH_LIST_HEIGHT)).child(
                     List::new(&list).search_placeholder("按名称 / 中文标签 / 分类搜索（143 项）"),
                 ))

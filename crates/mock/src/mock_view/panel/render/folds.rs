@@ -1,5 +1,6 @@
 //! 底部折叠段：生成历史 + 用户模板（默认收起）。
 
+use shared::i18n::tr;
 use super::*;
 
 impl MockPanel {
@@ -117,9 +118,9 @@ impl MockPanel {
                                 .with_variant(EmptyMediaVariant::Icon)
                                 .child(Icon::new(IconName::Folder).size(rems(ui::PANEL_ICON_SIZE))),
                         )
-                        .title(EmptyTitle::new().child("还没有保存的模板"))
+                        .title(EmptyTitle::new().child(tr("还没有保存的模板")))
                         .description(
-                            EmptyDescription::new().child("把当前列配置存下来，下次一键套用"),
+                            EmptyDescription::new().child(tr("把当前列配置存下来，下次一键套用")),
                         ),
                 ),
             );
