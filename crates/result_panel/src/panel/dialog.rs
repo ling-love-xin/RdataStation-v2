@@ -242,7 +242,7 @@ impl ResultPanel {
                                     .min_w_0()
                                     .text_xs()
                                     .text_color(theme.colors.muted_foreground)
-                                    .child("跳转后保持当前行，只横向滚到该列。"),
+                                    .child(tr("跳转后保持当前行，只横向滚到该列。")),
                             )
                             .child(
                                 Button::new("editor-result-goto-column-cancel")
@@ -358,7 +358,7 @@ impl ResultPanel {
                             .child(
                                 div()
                                     .text_sm()
-                                    .child("读取结果集中的所有行会花费大量时间和内存。"),
+                                    .child(tr("读取结果集中的所有行会花费大量时间和内存。")),
                             )
                             .child(div().text_sm().child(tr("确定要获取所有行吗？")))
                             .children(rows.map(|rows| {
@@ -388,7 +388,7 @@ impl ResultPanel {
                                     .min_w_0()
                                     .text_xs()
                                     .text_color(theme.colors.muted_foreground)
-                                    .child("取数期间切换结果集会取消这次取全部。"),
+                                    .child(tr("取数期间切换结果集会取消这次取全部。")),
                             )
                             .child(
                                 Button::new("editor-result-fetch-all-cancel")
@@ -706,7 +706,7 @@ impl ResultPanel {
                     .ghost()
                     .xsmall()
                     .icon(IconName::EyeOff)
-                    .tooltip("全部不显示（至少保留一列可见）".to_string())
+                    .tooltip(tr("全部不显示（至少保留一列可见）").to_string())
                     .debug_selector(|| "editor-result-filter-settings-hide-all".to_string())
                     .on_click(move |_, _window, app| {
                         hide_all_queue.request(ResultRequest::ColumnsHideAll, app);
@@ -716,7 +716,7 @@ impl ResultPanel {
                     .ghost()
                     .xsmall()
                     .icon(IconName::RotateCcw)
-                    .tooltip("重置列布局（列序 + 显示全部 + 取消全部冻结）".to_string())
+                    .tooltip(tr("重置列布局（列序 + 显示全部 + 取消全部冻结）").to_string())
                     .debug_selector(|| "editor-result-filter-settings-reset".to_string())
                     .on_click(move |_, _window, app| {
                         reset_queue.request(ResultRequest::ColumnsResetLayout, app);
@@ -919,7 +919,7 @@ impl ResultPanel {
                         div()
                             .text_xs()
                             .text_color(theme.colors.muted_foreground)
-                            .child("WHERE 条件（在筛选框里编辑）"),
+                            .child(tr("WHERE 条件（在筛选框里编辑）")),
                     )
                     .child(
                         div()
@@ -945,7 +945,7 @@ impl ResultPanel {
                         div()
                             .text_xs()
                             .text_color(theme.colors.muted_foreground)
-                            .child("自定义排序（留空 = 沿用原查询的 ORDER BY）"),
+                            .child(tr("自定义排序（留空 = 沿用原查询的 ORDER BY）")),
                     )
                     .child(
                         div()

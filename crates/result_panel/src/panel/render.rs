@@ -253,7 +253,7 @@ impl ResultPanel {
                 .debug_selector(|| "editor-result-sql-preview".to_string())
                 .icon(IconName::Table2)
                 .label(tr("显示 SQL"))
-                .tooltip("点击查看完整 SQL（弹出窗口）")
+                .tooltip(tr("点击查看完整 SQL（弹出窗口）"))
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::OpenSqlDialog, app);
                 })
@@ -355,7 +355,7 @@ impl ResultPanel {
                             .xsmall()
                             .icon(IconName::Play)
                             .debug_selector(|| "editor-result-filter-run".to_string())
-                            .tooltip("用 select * from (原SQL) where 词 重查（替换当前结果集）")
+                            .tooltip(tr("用 select * from (原SQL) where 词 重查（替换当前结果集）"))
                             .on_click(move |_, _window, app| {
                                 run_queue.request(ResultRequest::RunFilterAsQuery, app);
                             }),
@@ -377,7 +377,7 @@ impl ResultPanel {
                         .xsmall()
                         .icon(IconName::ChevronDown)
                         .debug_selector(|| "editor-result-filter-history".to_string())
-                        .tooltip("历史筛选（选中一条即回到那个口径）")
+                        .tooltip(tr("历史筛选（选中一条即回到那个口径）"))
                         .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
                             let mut menu = menu;
                             for text in items.iter() {
@@ -473,7 +473,7 @@ impl ResultPanel {
                     .xsmall()
                     .icon(IconName::Funnel)
                     .debug_selector(|| "editor-result-filter-settings".to_string())
-                    .tooltip("筛选设置（自定义条件与排序）")
+                    .tooltip(tr("筛选设置（自定义条件与排序）"))
                     .on_click(move |_, _window, app| {
                         settings_queue.request(ResultRequest::OpenFilterSettings, app);
                     });
@@ -617,7 +617,7 @@ impl ResultPanel {
                     .toggled(self.find_open)
                     .icon(IconName::Search)
                     .debug_selector(|| "editor-result-find-toggle".to_string())
-                    .tooltip("在结果里查找（回车 = 下一处）")
+                    .tooltip(tr("在结果里查找（回车 = 下一处）"))
                     .on_click(move |_, _window, app| {
                         find_queue.request(ResultRequest::ToggleFind, app);
                     })
@@ -641,7 +641,7 @@ impl ResultPanel {
                 .selected(checked)
                 .toggled(checked)
                 .icon(IconName::DatabaseZap)
-                .tooltip("下发源库：开着时应用筛选会拼 WHERE 重查源库")
+                .tooltip(tr("下发源库：开着时应用筛选会拼 WHERE 重查源库"))
                 .debug_selector(|| "editor-result-pushdown".to_string())
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::SetPushdown { open: !checked }, app);
@@ -715,7 +715,7 @@ impl ResultPanel {
                 .xsmall()
                 .debug_selector(|| "editor-result-discard".to_string())
                 .icon(IconName::RotateCcw)
-                .tooltip("撤销全部未提交变更（回滚本地改动）")
+                .tooltip(tr("撤销全部未提交变更（回滚本地改动）"))
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::RollbackPending, app);
                 });
@@ -741,7 +741,7 @@ impl ResultPanel {
                 .xsmall()
                 .debug_selector(|| "editor-result-copy".to_string())
                 .icon(IconName::Copy)
-                .tooltip("复制整份结果为 TSV（含表头）")
+                .tooltip(tr("复制整份结果为 TSV（含表头）"))
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::CopyTsv, app);
                 })
@@ -1073,7 +1073,7 @@ impl ResultPanel {
                         .xsmall()
                         .debug_selector(|| "editor-result-analysis".to_string())
                         .icon(IconName::Sigma)
-                        .tooltip("分析当前结果（对已抓行跑聚合）"),
+                        .tooltip(tr("分析当前结果（对已抓行跑聚合）")),
                 )
                 .dropdown_menu(move |menu, _window, _app| {
                     let mut menu = menu;
@@ -1481,7 +1481,7 @@ impl ResultPanel {
                             .ghost()
                             .xsmall()
                             .icon(IconName::Settings2)
-                            .tooltip("工具栏配置（勾选要显示的命令）")
+                            .tooltip(tr("工具栏配置（勾选要显示的命令）"))
                             .debug_selector(|| "editor-result-status-config".to_string()),
                     )
                     .menu_accessibility_label("工具栏配置")

@@ -809,7 +809,7 @@ impl ResultPanel {
             .ghost()
             .xsmall()
             .icon(IconName::Menu)
-            .tooltip("视图菜单（切换面板 / 显示与布局）")
+            .tooltip(tr("视图菜单（切换面板 / 显示与布局）"))
             .debug_selector(move || menu_id.clone());
         DropdownButton::new(format!("{debug_id}-view-menu-anchor"))
             .button(button)
@@ -954,7 +954,7 @@ impl ResultPanel {
                 .xsmall()
                 .debug_selector(|| "editor-result-stat-reset".to_string())
                 .icon(IconName::RotateCcw)
-                .tooltip("恢复默认统计项（对齐 DBeaver 默认集：非空 + 去重计数）")
+                .tooltip(tr("恢复默认统计项（对齐 DBeaver 默认集：非空 + 去重计数）"))
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::ResetStatsItems, app);
                 })
@@ -972,7 +972,7 @@ impl ResultPanel {
                 .label(if text_mode { "字符串" } else { "数值" })
                 .selected(text_mode)
                 .toggled(text_mode)
-                .tooltip("聚合口径：数值时最小/最大值按数值比较；字符串时按字典序（文本列也给极值）")
+                .tooltip(tr("聚合口径：数值时最小/最大值按数值比较；字符串时按字典序（文本列也给极值）"))
                 .on_click(move |_, _window, app| {
                     queue.request(
                         ResultRequest::SetStatsMode(if text_mode {
@@ -1222,7 +1222,7 @@ impl ResultPanel {
                 .toggled(duplicates_on)
                 // DBeaver `controls_resultset_grouping_show_duplicates_only`
                 // = "Show duplicates only (COUNT > 1)"
-                .tooltip("仅显示重复分组（COUNT > 1）".to_string())
+                .tooltip(tr("仅显示重复分组（COUNT > 1）").to_string())
                 .on_click(move |_, _window, app| {
                     queue.request(ResultRequest::SetGroupDuplicatesOnly(!duplicates_on), app);
                 })
@@ -1527,7 +1527,7 @@ impl ResultPanel {
             .xsmall()
             .icon(IconName::Rows3)
             .label(tr("查看引用行"))
-            .tooltip("按当前行的外键值查询目标表（另开一份结果集）".to_string())
+            .tooltip(tr("按当前行的外键值查询目标表（另开一份结果集）").to_string())
             .debug_selector(|| "editor-result-reference-rows".to_string())
             .disabled(rows_sql.is_none())
             .on_click(move |_, _window, app| {
@@ -1549,7 +1549,7 @@ impl ResultPanel {
             .xsmall()
             .icon(IconName::Table)
             .label(tr("打开目标对象"))
-            .tooltip("在导航树里定位该外键的目标表".to_string())
+            .tooltip(tr("在导航树里定位该外键的目标表").to_string())
             .debug_selector(|| "editor-result-reference-open".to_string())
             .disabled(target.is_none())
             .on_click(move |_, _window, app| {
