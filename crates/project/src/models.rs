@@ -51,30 +51,16 @@ impl ProjectPath {
         }
     }
 
-    /// 获取项目元数据目录路径（本地项目）
+    /// 获取项目元数据目录路径（本地项目）。
+    ///
+    /// 目录名常量在 [`crate::store::RS_META_DIR_NAME`]——**路径约定只有那一处权威**。
+    /// 库文件路径请走 `ProjectStore::{meta_dir, project_db_path}`（与分析库
+    /// `analytics.duckdb` 同级），本类型不再自带一套推导：v1 的
+    /// `.RSmeta/meta/project.db`、`.RSmeta/analytics/data.duckdb`、`.RSmeta/queries`
+    /// 早已随扁平化布局废弃，留着只会把调用方带错。
     pub fn meta_dir(&self) -> Option<PathBuf> {
-        self.local_path().map(|p| p.join(".RSmeta"))
-    }
-
-    /// 获取 SQLite 元数据数据库路径
-    pub fn sqlite_path(&self) -> Option<PathBuf> {
-        self.meta_dir().map(|p| p.join("meta").join("project.db"))
-    }
-
-    /// 获取 DuckDB 分析数据库路径
-    pub fn duckdb_path(&self) -> Option<PathBuf> {
-        self.meta_dir()
-            .map(|p| p.join("analytics").join("data.duckdb"))
-    }
-
-    /// 获取配置目录路径
-    pub fn config_dir(&self) -> Option<PathBuf> {
-        self.meta_dir().map(|p| p.join("config"))
-    }
-
-    /// 获取 SQL 文件目录路径
-    pub fn queries_dir(&self) -> Option<PathBuf> {
-        self.meta_dir().map(|p| p.join("queries"))
+        self.local_path()
+            .map(|p| p.join(crate::store::RS_META_DIR_NAME))
     }
 }
 
@@ -318,16 +304,6 @@ impl Project {
     /// 获取项目元数据目录
     pub fn meta_dir(&self) -> Option<PathBuf> {
         self.info.path.meta_dir()
-    }
-
-    /// 获取 SQLite 数据库路径
-    pub fn sqlite_path(&self) -> Option<PathBuf> {
-        self.info.path.sqlite_path()
-    }
-
-    /// 获取 DuckDB 数据库路径
-    pub fn duckdb_path(&self) -> Option<PathBuf> {
-        self.info.path.duckdb_path()
     }
 
     /// 更新最后打开时间

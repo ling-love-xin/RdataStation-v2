@@ -2,7 +2,10 @@
 
 > 状态：**2026-10-01 首版**（对照 `crates/project` 源码逐方法核实，`cargo check -p rds-project` 零告警）
 > **2026-11-22 复核**：行数按当前源码实测更新；补记本次三项新增的接线落点（`BUILD_TAG_KEY` 写盘、`location_hint` 行内校验、`last_create_location` 记忆——后两项的持久化在 `rds-settings`，不在本 crate）；复核“零调用”结论仍成立（`has_recent_available` 仍只被集成测试断言，`*_connection_metadata` 仍只被 store 自身与其单测调用）。同轮 clippy 清理后本 crate 告警 22 → 2（余 `OpenOutcome` 的 `large_enum_variant`、`dialog_footer_three` 的 8 参数，均为有意取舍，见 view-architecture §8）。
-> 口径：与根仓 `docs/architecture/data-layer-wiring-matrix.md` 同族——把「文档声称」与「代码实测」分开，
+> **2026-11-23 复核（遗留点清理第一、二刀）**：
+> ① **行数口径更正**：上一版的 3029 / 200 / 389 是用 `Measure-Object -Line` 数的，该口径在 CRLF 文件上少算行；按 `\n` 字节数权威重算为 **`ui.rs` 3300、`lock.rs` 230、`models.rs` 395**（`58cd599f` 提交那一刻 `ui.rs` 就是 3300，不是后来长出来的）。
+> ② **`models.rs` 删掉 4 个自带路径推导**：`ProjectPath::{sqlite_path, duckdb_path, config_dir, queries_dir}` 与 `Project::{sqlite_path, duckdb_path}`——它们指向 v1 旧布局（`.RSmeta/meta/project.db`、`.RSmeta/analytics/data.duckdb`、`.RSmeta/queries`），与真实的扁平布局不符，且生产零调用。`ProjectPath::meta_dir` 保留，但改走 `store::RS_META_DIR_NAME` 常量，不再硬编码 `".RSmeta"`。
+> ③ 口径：与根仓 `docs/architecture/data-layer-wiring-matrix.md` 同族——把「文档声称」与「代码实测」分开，
 > 逐方法标接线状态，防止「预留超前」产生的死代码继续累积。
 > 本文是**唯一接线台账**；改 `crates/project` 实现后请同步本表。
 
@@ -16,13 +19,13 @@
 
 ## 总览
 
-| 文件 | 代码量（2026-11-22 实测） | 接线健康度 |
+| 文件 | 代码量（2026-11-23 实测，`\n` 计数） | 接线健康度 |
 | --- | --- | --- |
 | `service.rs` | 716 行 | ✅ 全部已接线（本项目真实入口） |
-| `lock.rs` | 200 行 | ✅ 全部已接线 |
+| `lock.rs` | 230 行 | ✅ 全部已接线 |
 | `store.rs` | 948 行 | ⚠️ 核心已接线；**死代码已清（ProjectManager / to_project / stub），剩 1 组归属待定**（见下）；新增 `BUILD_TAG_KEY` 写盘分支 |
-| `models.rs` | 389 行 | ⚠️ 域模型已接线，**含 1 组预留**（版本化） |
-| `ui.rs` + `ui/tests.rs` | 3029 + 1411 行（测试 38 项：24 窗口 + 14 纯函数） | ✅ 全部已接线（有窗口测试锚定） |
+| `models.rs` | 395 行 → 2026-11-23 删掉 4 个错误路径推导后更短 | ⚠️ 域模型已接线，**含 1 组预留**（版本化） |
+| `ui.rs` + `ui/tests.rs` | 3300 + 1411 行（测试 38 项：24 窗口 + 14 纯函数） | ✅ 全部已接线（有窗口测试锚定） |
 
 ## 逐方法
 
@@ -88,6 +91,14 @@
 | `Project` / `ProjectInfo` / `ProjectStatus` | ✅ | 核心项目模型 |
 | `ProjectPath::Local` | ✅ | 本地路径（当前唯一真实形态） |
 | `ProjectConfig` | ✅ | 配置（U3 默认连接） |
+
+**🔴 已删除（2026-11-23）**
+
+| 方法 | 状态 | 说明 |
+| --- | --- | --- |
+| ~~`ProjectPath::{sqlite_path, duckdb_path, config_dir, queries_dir}`~~ | ✅ 已删 | 指向 v1 旧布局（`.RSmeta/meta/project.db`、`.RSmeta/analytics/data.duckdb`、`.RSmeta/queries`），与真实扁平布局（`.RSmeta/{project.db, analytics.duckdb, config/, project_metadata/}`）不符，生产零调用 |
+| ~~`Project::{sqlite_path, duckdb_path}`~~ | ✅ 已删 | 只是转发上面那套错误推导；库文件路径的权威入口是 `ProjectStore::{meta_dir, project_db_path}` |
+| `ProjectPath::meta_dir` | ✅ 保留并改源 | 不再硬编码 `".RSmeta"`，改走 `store::RS_META_DIR_NAME`（单一来源） |
 
 **🟡 预留 / 未接业务**
 

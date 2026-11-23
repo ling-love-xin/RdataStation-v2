@@ -2,7 +2,7 @@
 name = "rds-project"
 version.workspace = true
 edition.workspace = true
-description = "M1 项目：双层数据架构（系统级共享 + 项目级物理隔离）、版本化"
+description = "M1 项目：名册 / .RSmeta 磁盘元数据 / 实例锁 / 选择器与设置视图"
 
 [dependencies]
 # 依赖键别名，使 v1 迁移代码中的 `engine::` / `shared::` 引用直接生效
@@ -13,7 +13,7 @@ paths.workspace = true
 
 # ===== UI（视图与 model/service 同 crate，见 GPUI-kit 编码指南）=====
 gpui-kit.workspace = true
-# 面板/控件尺寸常量与树行原语（ui.rs / tree 模块；shell 不依赖任何特性 crate，方向安全）
+# 面板/控件尺寸常量与树行原语（ui.rs 引用；shell 不依赖任何特性 crate，方向安全）
 workbench_shell.workspace = true
 
 # ===== 时间 =====

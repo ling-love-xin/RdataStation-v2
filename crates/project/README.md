@@ -33,7 +33,7 @@
 | 层        | 位置                   | 内容                                                                    |
 | -------- | -------------------- | --------------------------------------------------------------------- |
 | 名册（跨项目）  | 全局系统库 `project_info` | 名称 / 路径 / 状态 / `is_pinned` / `removed_at` / `last_opened_at`          |
-| 元数据（项目内） | 项目根 `.RSmeta/`       | `project.db`（SQLite）、`analytics.duckdb`、`project.json`、`project.lock` |
+| 元数据（项目内） | 项目根 `.RSmeta/`       | `project.json`（权威源）、`project.db`（SQLite 镜像 + 版本台账）、`analytics.duckdb`、`config/settings.json`、`project.lock`（+ `.owner`）、`project_metadata/` |
 
 目录名常量单一来源 `store::RS_META_DIR_NAME`。删除磁盘数据只删 `.RSmeta`，**用户文件保留**。
 
@@ -47,7 +47,7 @@
 
 * **未保存草稿拦截**：`request_open` / `request_close` / `request_create_project` / `request_open_folder` 统一进拦截对话框；确认后由 `PendingAction`（携带输入实体）**直达**目标对话框，不用回选择器再点一次。
 
-* **不可逆操作**（删磁盘数据）要求输入项目名二次确认，且按钮用 `danger` 变体；设置、项目菜单、卡片 `⋯` 三处入口共用同一批动作函数。
+* **不可逆操作**（删磁盘数据）要求输入项目名二次确认，且按钮用 `danger` 变体；入口是**两处**——设置・危险区与卡片 `⋯`/右键菜单，共用同一批动作函数（`open_delete_dialog` / `confirm_delete`）。标题栏项目菜单**不提供删除**（只有「归档 / 取消归档」），所以不是「三处入口」。
 
 ### 视图与 model /service 同 crate
 
