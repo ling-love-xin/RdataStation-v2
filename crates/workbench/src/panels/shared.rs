@@ -402,6 +402,9 @@ pub struct Shared {
     /// 与 `mock_panel` / `insight_panel` 同例：面板自带状态与视图
     /// （`analytics_resource::resource_view::ResourcesPanel`），宿主只持句柄。
     pub resources_panel: Rc<RefCell<Option<WeakEntity<ResourcesPanel>>>>,
+    /// 侧栏面板实体弱引用（数据对象面板要借它开资产版本历史：版本对话框的取数与
+    /// 轮询泵都在侧栏面板手里，面板自己不越权）。
+    pub sidebar_panel: Rc<RefCell<Option<WeakEntity<super::SidebarPanel>>>>,
     /// M6：资产库刷新端口（动作完成后由任意宿主侧位置触发刷新）。
     pub resources_bridge: Rc<RefCell<Option<ResourcesBridge>>>,
     /// M6：版本历史对话框的流转（取数 → 开窗 → 动作后刷新行；见 `VersionDialogFlow`）。
@@ -508,6 +511,7 @@ impl Shared {
             pending_insight_target: Rc::new(RefCell::new(None)),
             pending_insight_compare: Rc::new(RefCell::new(None)),
             resources_panel: Rc::new(RefCell::new(None)),
+            sidebar_panel: Rc::new(RefCell::new(None)),
             resources_bridge: Rc::new(RefCell::new(None)),
             version_dialog: Rc::new(RefCell::new(VersionDialogFlow::default())),
             version_diff_dialog: Rc::new(RefCell::new(VersionDiffDialogFlow::default())),

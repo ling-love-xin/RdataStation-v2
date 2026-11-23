@@ -1366,6 +1366,40 @@ impl DataObjectsTab {
                             // 属性：这一行到底是哪个东西（身份键 / 通道 / 寿命 / 列结构）
                             // 与「复制引用名」一起放在菜单尾部：都是"看/抄"，不是"动数据"
                             let props_row = props_object.clone();
+                            // 资产行：版本历史（还原 / 取回 / 「用 vN 分析」都在那个对话框里；
+                            // 历史版本本身**不进清单平铺**——铁律 D17 的二级入口就是这个门）
+                            if let Some(resource_id) = props_object
+                                .key
+                                .strip_prefix("asset:")
+                                .map(str::to_string)
+                            {
+                                let versions = shared.clone();
+                                menu = menu.item(PopupMenuItem::new("版本…").on_click(
+                                    move |_, _, cx| {
+                                        let panel = versions
+                                            .sidebar_panel
+                                            .borrow()
+                                            .as_ref()
+                                            .and_then(|weak| weak.upgrade());
+                                        let Some(panel) = panel else {
+                                            versions.say_error(
+                                                "资产库面板还没建好，稍后再试".to_string(),
+                                                cx,
+                                            );
+                                            return;
+                                        };
+                                        let id = resource_id.clone();
+                                        panel.update(cx, |panel, cx| {
+                                            panel.request_repair_action(
+                                                analytics_resource::dialogs::index_repair::RepairAction::OpenVersions {
+                                                    resource_id: id,
+                                                },
+                                                cx,
+                                            );
+                                        });
+                                    },
+                                ));
+                            }
                             let props = shared.clone();
                             menu = menu.item(PopupMenuItem::new("属性…").on_click(
                                 move |_, window, cx| {

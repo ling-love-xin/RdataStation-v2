@@ -614,6 +614,8 @@ impl WorkbenchView {
         *self.shared.right_open_panels.borrow_mut() = vec![self.shared.active_right.get()];
         let shared = self.shared.clone();
         let sidebar = cx.new(|cx| SidebarPanel::new(shared.clone(), &self.editor_service, cx));
+        // 数据对象面板要借侧栏开资产版本历史（版本对话框的取数与泵都在那边）
+        *self.shared.sidebar_panel.borrow_mut() = Some(sidebar.downgrade());
         let editor = cx.new(|cx| EditorPanel::new(shared.clone(), cx));
         let right_sidebar = cx.new(|cx| RightSidebarPanel::new(shared.clone(), window, cx));
         // 真面板化：左右 dock 各注册 4 个模块 tab（薄壳面板持有内层 crate 视图）。

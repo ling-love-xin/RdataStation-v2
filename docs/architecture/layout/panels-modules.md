@@ -67,9 +67,10 @@
 共 20 个字段跨模块。它们**没有类型级保护**：任何模块都能写任何字段，改一处语义不会有编译错误，
 只能靠约定与 review。
 
-> 另一类不在此列的字段是**宿主 ↔ 特性 crate 视图的实体弱句柄**（`mock_panel` / `mock_details` / `insight_panel` / `resources_panel` / `property_panel` / `plugin_manager`）：
+> 另一类不在此列的字段是**宿主 ↔ 特性 crate 视图的实体弱句柄**（`mock_panel` / `mock_details` / `insight_panel` / `resources_panel` / `sidebar_panel` / `property_panel` / `plugin_manager`）：
 > 它们只在 workbench 内部读写——特性 crate 拿到的是注入的宿主端口，根本不认识 `Shared`——用途是
 > "宿主转发渲染 / 取面板选中项"（例：M6 的存档详情读左栏选中项；状态栏读 Mock 面板的运行中任务——“面板被切走时任务还在跑”）。
+> `sidebar_panel` 是 2026-11-24 新增的同类弱句柄：数据对象面板借它开资产版本历史（取数与轮询泵在侧栏，面板只转发请求）。
 > `open_property` / `open_plugin_manager` / `open_mock_detail` / `open_config_center` 同列：中央 tab「已建则聚焦、未建则新建」的创建/聚焦通道（`open_config_center` 为配置中心页，2026-11-20 补登记）。
 > 注意 `plugin_manager` 是**强持有**（关 tab 后再次点击复用同一实体，搜索/筛选状态不丢），
 > `property_panel` 是弱句柄（关闭即释放，下次重建）。

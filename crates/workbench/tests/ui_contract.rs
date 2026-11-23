@@ -1538,6 +1538,9 @@ fn shared_fields_are_whitelisted() {
         "search_results_dismissed",
         "search_results_panel",
         "selected",
+        // 侧栏面板的弱句柄（2026-11-24）：数据对象面板据它开资产版本历史
+        // （版本对话框的取数与轮询泵都在侧栏面板手里）。只转发请求，不持状态。
+        "sidebar_panel",
         "tag_dialog",
         "trash_dialog",
         "version_dialog",
