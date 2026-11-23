@@ -1643,5 +1643,17 @@
   "包含用户、帖子、关注关系、点赞四张表，模拟社交平台数据": "Contains users, posts, follow relations and likes — social platform data",
   "包含公司、子公司、部门层级、项目、客户五张表，模拟集团企业数据": "Contains companies, subsidiaries, department hierarchy, projects and customers — enterprise group data",
   "从 0 张表开始的自定义多表生成：加表 / 加关系后一次生成。": "Custom multi-table generation starting from zero tables: add tables / relations, then generate in one go.",
-  "打开列编辑：选生成器 + 调参数（同一处改完再应用）": "Open column editing: pick a generator + tune parameters (edit in one place, then apply)"
+  "打开列编辑：选生成器 + 调参数（同一处改完再应用）": "Open column editing: pick a generator + tune parameters (edit in one place, then apply)",
+  "打开插件管理页：安装并启用驱动插件后，这些类型即可选用": "Open the plugin management page: install and enable the driver plugin and these types become selectable",
+  "把剪贴板里的整条连接串解析成主机 / 端口 / 数据库": "Parse the whole connection string from the clipboard into host / port / database",
+  "从剪贴板导入模板 JSON（追加为草稿，密码请补填）": "Import template JSON from the clipboard (appended as a draft; fill in the password)",
+  "已引用网络档案 · 连接时生效（改档案一处全量生效）": "Network profile referenced · applied on connect (editing the profile applies everywhere)",
+  "导出未保存草稿为模板 JSON（写入剪贴板）": "Export unsaved drafts as template JSON (copied to the clipboard)",
+  "启用 TCP keepalive（0/1）": "Enable TCP keepalive (0/1)",
+  "禁用 Nagle（true/false）": "Disable Nagle (true/false)",
+  "新增一条空草稿（连续配置多个连接）": "Add an empty draft (configure several connections in a row)",
+  "TCP keepalive（毫秒）": "TCP keepalive (ms)",
+  "keepalive 空闲（秒）": "Keepalive idle (seconds)",
+  "Unix socket 路径": "Unix socket path",
+  "优先 unix socket": "Prefer unix socket"
 }
