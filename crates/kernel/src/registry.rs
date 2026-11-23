@@ -289,37 +289,42 @@ fn push_unique(dirs: &mut Vec<PathBuf>, dir: PathBuf) {
 
 /// kernelspec 的搜索目录（顺序 = 优先级，同名先到先得）
 ///
-/// 与 Jupyter 的解析顺序对齐：**环境自己的 `<prefix>/share/jupyter` 最高**，
-/// 然后 `jupyter --paths --json` 报的 data 目录、`JUPYTER_PATH`（用户显式指定）、
-/// 用户级 `%APPDATA%\jupyter`、系统级 `%PROGRAMDATA%\jupyter`。
+/// 三档：**环境自己的 `<prefix>/share/jupyter` 最高** → `jupyter --paths --json`
+/// 报的 data 目录 → 库提供的标准目录清单。
 ///
-/// 注意：`jupyter-zmq-client` 的 `dirs::data_dirs()` **不含** `<prefix>/share/jupyter`
-/// （其源码里明确留着 TODO「Use the sys.prefix from python」），所以 venv 里装的
-/// kernelspec（`python -m ipykernel install --sys-prefix` 的产物）必须由这里补上，
-/// 否则「venv 装了 ipykernel 却看不见」。`jupyter` 命令是最通用的一条补齐方式：
-/// 它自己就知道所在环境的 `sys.prefix`。
+/// 关于第三档：`jupyter-zmq-client 3.x` 的 [`jupyter_zmq_client::dirs::data_dirs`]
+/// 已给出 `JUPYTER_PATH`、用户级（Windows `%APPDATA%\jupyter` / macOS
+/// `~/Library/Jupyter` / XDG `~/.local/share`）与系统级（Windows `%PROGRAMDATA%\jupyter` /
+/// `/usr/local/share/jupyter`、`/usr/share/jupyter`）三段，且是**同步公开函数**，
+/// 所以这里不再手写字面路径——取它的清单，跨平台自动对齐（含本机不会跑到的分支）。
+///
+/// 它**不含** `<prefix>/share/jupyter`（3.0.1 源码里仍留着 TODO「Use the sys.prefix
+/// from python」），而 venv 里装的 kernelspec（`python -m ipykernel install --sys-prefix`
+/// 的产物）恰好落在那里，所以这一档仍由我们自己补，且排最高优先级。
 fn kernelspec_data_dirs(prefixes: &[PathBuf]) -> Vec<PathBuf> {
+    merge_kernelspec_dirs(
+        prefixes,
+        jupyter_data_dirs(),
+        jupyter_zmq_client::dirs::data_dirs(),
+    )
+}
+
+/// 合并三档目录（纯函数，便于单测；不打外部命令）
+fn merge_kernelspec_dirs(
+    prefixes: &[PathBuf],
+    jupyter_dirs: Vec<PathBuf>,
+    upstream_dirs: Vec<PathBuf>,
+) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = Vec::new();
 
     for prefix in prefixes {
         push_unique(&mut dirs, prefix.join("share").join("jupyter"));
     }
-
-    for dir in jupyter_data_dirs() {
+    for dir in jupyter_dirs {
         push_unique(&mut dirs, dir);
     }
-
-    if let Some(path) = std::env::var_os("JUPYTER_PATH") {
-        for entry in std::env::split_paths(&path) {
-            push_unique(&mut dirs, entry);
-        }
-    }
-
-    if let Some(appdata) = std::env::var_os("APPDATA") {
-        push_unique(&mut dirs, PathBuf::from(appdata).join("jupyter"));
-    }
-    if let Some(program_data) = std::env::var_os("PROGRAMDATA") {
-        push_unique(&mut dirs, PathBuf::from(program_data).join("jupyter"));
+    for dir in upstream_dirs {
+        push_unique(&mut dirs, dir);
     }
 
     dirs
@@ -696,5 +701,56 @@ mod tests {
             .unwrap(),
         };
         assert!(spec_from_kernelspec(&found).is_none());
+    }
+
+    /// 目录合并顺序：环境前缀最高 → jupyter CLI 报的 → 上游标准清单
+    #[test]
+    fn merge_kernelspec_dirs_orders_env_prefix_first() {
+        let env_prefix = PathBuf::from("C:/env");
+        let from_jupyter = PathBuf::from("C:/from-jupyter");
+        let from_upstream = PathBuf::from("C:/from-upstream");
+        let dirs = merge_kernelspec_dirs(
+            &[env_prefix.clone()],
+            vec![from_jupyter.clone()],
+            vec![from_upstream.clone()],
+        );
+        assert_eq!(
+            dirs,
+            vec![
+                env_prefix.join("share").join("jupyter"),
+                from_jupyter,
+                from_upstream,
+            ]
+        );
+    }
+
+    /// 三档之间去重：同一目录只留一次，且保留最靠前的位置
+    #[test]
+    fn merge_kernelspec_dirs_dedups_across_sources() {
+        let env_prefix = PathBuf::from("C:/env");
+        let shared = env_prefix.join("share").join("jupyter");
+        let dirs = merge_kernelspec_dirs(
+            &[env_prefix],
+            vec![shared.clone()],
+            vec![shared.clone()],
+        );
+        assert_eq!(dirs, vec![shared]);
+    }
+
+    /// 区分性证明：目录清单真的取自上游 `dirs::data_dirs()`
+    ///
+    /// 若改回手写 `APPDATA` / `PROGRAMDATA`，Windows 上还能蒙对，但 macOS
+    ///（`~/Library/Jupyter`）与 Linux（XDG / `/usr/share/jupyter`）的用户级与系统级
+    /// 目录会整体缺失——这条断言在那些平台上必红。
+    #[test]
+    fn kernelspec_data_dirs_includes_upstream_standard_dirs() {
+        let upstream = jupyter_zmq_client::dirs::data_dirs();
+        if upstream.is_empty() {
+            return; // 本机缺少 APPDATA/PROGRAMDATA 等环境变量：环境事实，不是实现错误
+        }
+        let dirs = merge_kernelspec_dirs(&[], Vec::new(), upstream.clone());
+        for dir in &upstream {
+            assert!(dirs.contains(dir), "上游目录未进入清单：{dir:?}");
+        }
     }
 }
