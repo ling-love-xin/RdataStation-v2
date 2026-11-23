@@ -111,6 +111,30 @@ impl WorkbenchView {
                 host.update(app, |host, cx| host.apply_result_style(cx));
             }
         });
+        // 「项目」页的项目列表：设置层不依赖 project crate（依赖只向下），由这里
+        // 注入整块 Element。复用 `render_picker`（与中央「项目」tab 同一份 host /
+        // 输入实体 / 状态），故两处看到的是同一列表（排序、Tab、搜索框一致）。
+        // 动作已走 `project::ui::act_*`：在设置窗口点击会经 `HomeDispatch` 投回主窗口。
+        let projects_host = self.project_host.clone();
+        let projects_inputs = self.project_inputs.clone();
+        let projects_panel: settings::settings_page::PanelRender = Rc::new(
+            move |_window, cx| match (&projects_host, &projects_inputs) {
+                (Some(host), Some(inputs)) => div()
+                    // `render_picker` 根是 `size_full`：卡片内父高度是自适应的，
+                    // 不给确定高度列表会塌成 0（内部滚动也失效），故显式给一段高度。
+                    .h(rems(30.0))
+                    .w_full()
+                    .child(project::ui::render_picker(host, inputs, cx))
+                    .into_any_element(),
+                _ => div()
+                    .w_full()
+                    .p_4()
+                    .text_sm()
+                    .text_color(cx.theme().colors.muted_foreground)
+                    .child("项目面板尚未装配（首次渲染后可用）")
+                    .into_any_element(),
+            },
+        );
         let host = SettingsHost {
             on_open_cache,
             on_open_log_dir,
@@ -118,8 +142,7 @@ impl WorkbenchView {
             on_open_type_short_map,
             on_open_settings_json,
             on_settings_changed,
-            // 「项目」页的项目列表：第 ⑦ 刀由 project crate 注入（先留空通道）。
-            projects_panel: None,
+            projects_panel: Some(projects_panel),
         };
         // 独立窗口：`TitleBar::window_options()` 提供原生标题栏（拖拽 + 系统窗口控制），
         // 经 `cx.open_window` 挂到新窗口；窗口根由 `base::Root` 包一层（对话框层宿主）。

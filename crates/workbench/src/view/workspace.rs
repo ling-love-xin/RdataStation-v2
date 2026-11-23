@@ -732,6 +732,19 @@ impl WorkbenchView {
             .project_inputs
             .clone()
             .expect("project inputs initialized");
+        // 项目列表的第二落点（全局设置的「项目」页）要在这个窗口里完成动作：
+        // 设置窗口只负责展示，切换 / 新建 / 打开 / 示例 / 关闭一律投回主窗口
+        // （对话框与 `do_close`/`open_path` 的副作用都属于主窗口）。
+        let host_now = self.project_host().clone();
+        wire_project_home(&host_now, &inputs, window, cx);
+        // 「项目中心…」入口 = 打开设置窗口的「项目」页（已开则切节）。
+        let view_weak = cx.entity().downgrade();
+        let host_for_hub = host_now.clone();
+        *host_for_hub.on_open_hub.borrow_mut() = Some(Rc::new(move |window, cx| {
+            let _ = view_weak.update(cx, |view, cx| {
+                view.open_settings_at(Some("projects"), window, cx)
+            });
+        }));
         let picker_panel = cx.new(|cx| {
             crate::panels::ProjectPickerPanel::new(
                 shared.clone(),
@@ -1006,4 +1019,41 @@ impl WorkbenchView {
         };
         sidebar.update(cx, |panel, cx| panel.request_scratchpad_refresh(cx));
     }
+}
+
+/// 把「需要主窗口」的项目动作投递口接到本窗口（`init_workspace` 里调用一次）。
+///
+/// 项目列表有两处落点：无项目时主窗口中央「项目」tab，有项目时全局设置的
+/// 「项目」页。后者点「打开 / 新建 / 打开文件夹 / 示例 / 关闭」时，
+/// `project::ui::act_*` 会经此把动作投回主窗口——未保存草稿拦截对话框、
+/// `do_close`（关会话）与 `open_path`（重配 Dock / 导航）都必须在主窗口发生，
+/// 在设置窗口执行会挂错宿主。
+///
+/// `HomeDispatch` 的入参带调用方 host，因此这里不必再持一份 host 副本；
+/// 窗口用打开设置窗那一刻的 `AnyWindowHandle` 定位（主窗口关闭后投递失败即静默丢弃）。
+fn wire_project_home(
+    host: &project::ui::ProjectUiHost,
+    inputs: &project::ui::ProjectInputs,
+    window: &mut Window,
+    _cx: &mut Context<WorkbenchView>,
+) {
+    let main = window.window_handle();
+    let inputs = inputs.clone();
+    *host.home.borrow_mut() = Some(Rc::new(move |host_at_call, action, cx| {
+        let host = host_at_call.clone();
+        let inputs = inputs.clone();
+        let _ = main.update(cx, |_root, window, cx| match action {
+            project::ui::HomeAction::Switch(path) => {
+                project::ui::request_switch(&host, &path, window, cx)
+            }
+            project::ui::HomeAction::CreateProject => {
+                project::ui::request_create_project(&host, &inputs, window, cx)
+            }
+            project::ui::HomeAction::OpenFolder => {
+                project::ui::request_open_folder(&host, &inputs, window, cx)
+            }
+            project::ui::HomeAction::Sample => project::ui::create_sample(&host, window, cx),
+            project::ui::HomeAction::Close => project::ui::request_close(&host, window, cx),
+        });
+    }));
 }

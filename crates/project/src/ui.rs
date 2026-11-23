@@ -1,4 +1,4 @@
-//! 项目管理视图（M1）：选择器 / 标题栏项目菜单 / 项目设置 / 语义对话框。
+﻿//! 项目管理视图（M1）：选择器 / 标题栏项目菜单 / 项目设置 / 语义对话框。
 //!
 //! 本模块随 `project` crate 一同发布（GPUI-kit 指南：model / service / view 同 crate），
 //! 不依赖 workbench 与 settings——宿主（工作台）通过 [`ProjectUiHost`] 注入状态句柄、
@@ -412,6 +412,37 @@ pub type CreateLocationGetter = Rc<dyn Fn(&App) -> Option<String>>;
 /// 「上次新建用的父目录」写入。
 pub type CreateLocationSaver = Rc<dyn Fn(&str, &mut App)>;
 
+/// 需要**主窗口**才能完成的动作。
+///
+/// 项目列表现在既能挂在主窗口的中央 tab（无项目时），也能嵌进全局设置的
+/// 「项目」页（有项目时）。后者点击这些入口时，对话框（未保存草稿 / 只读 /
+/// 锁占用 / 新建 / 选目录）与切换副作用（`do_close` → 关会话、`open_path` →
+/// 重配 Dock）都应该发生在主窗口，故交给宿主投递。
+#[derive(Clone, Debug)]
+pub enum HomeAction {
+    /// 切到某个项目（未保存草稿时先弹拦截）。
+    Switch(PathBuf),
+    /// 新建项目（创建成功后自动切过去）。
+    CreateProject,
+    /// 打开现有目录（同上）。
+    OpenFolder,
+    /// 建示例项目（同上）。
+    Sample,
+    /// 关闭当前项目。
+    Close,
+}
+
+/// 动作投递口：`Some` 时 [`HomeAction`] 交给宿主**在主窗口**执行。
+///
+/// 入参带 `&ProjectUiHost`（调用方自身）——宿主实现里直接复用它调
+/// `request_switch` 等内置函数，不必再持一份 host 造成自引用。
+pub type HomeDispatch = Rc<dyn Fn(&ProjectUiHost, HomeAction, &mut App)>;
+
+/// 「项目中心」入口（= 全局设置的「项目」页）：标题栏菜单 / 选择器菜单点它跳过去。
+///
+/// 无 Dock 时代项目中心不再是一层覆盖，宿主把它接到设置窗口（窗口已开着则切节）。
+pub type HubOpener = Rc<dyn Fn(&mut Window, &mut App)>;
+
 /// 宿主桥：视图只从这里取能力，不直接依赖 workbench / 设置服务。
 ///
 /// `project` crate 因而不依赖 workbench 与 settings。
@@ -443,6 +474,10 @@ pub struct ProjectUiHost {
     pub last_create_location: CreateLocationGetter,
     /// 记住本次新建用的父目录（创建成功后调用）。
     pub save_create_location: CreateLocationSaver,
+    /// 需要主窗口的动作投递口（设置窗口里嵌列表时由宿主填；`None` = 就地执行）。
+    pub home: Rc<RefCell<Option<HomeDispatch>>>,
+    /// 「项目中心」（全局设置「项目」页）入口（宿主填；`None` = 未接，点了不动作）。
+    pub on_open_hub: Rc<RefCell<Option<HubOpener>>>,
 }
 
 impl ProjectUiHost {
@@ -464,7 +499,21 @@ impl ProjectUiHost {
             build_tag: None,
             last_create_location: Rc::new(|_| None),
             save_create_location: Rc::new(|_, _| {}),
+            home: Rc::new(RefCell::new(None)),
+            on_open_hub: Rc::new(RefCell::new(None)),
         }
+    }
+
+    /// 注入「需要主窗口的动作」投递口（设置窗口里嵌列表时用，见 [`HomeAction`]）。
+    pub fn with_home(self, home: HomeDispatch) -> Self {
+        *self.home.borrow_mut() = Some(home);
+        self
+    }
+
+    /// 注入「项目中心」入口（= 打开全局设置的「项目」页）。
+    pub fn with_hub_opener(self, opener: HubOpener) -> Self {
+        *self.on_open_hub.borrow_mut() = Some(opener);
+        self
     }
 
     pub fn with_editor(mut self, editor: Rc<dyn ProjectEditorBridge>) -> Self {
@@ -548,8 +597,6 @@ pub struct ConnectionOption {
 pub struct ProjectUiState {
     pub picker: PickerState,
     pub settings_open: bool,
-    /// 项目中心是否打开（有项目时也能浏览 / 管理其它项目的覆盖层）。
-    pub hub_open: bool,
     /// 当前对话框的校验错误：对话框 builder 每帧读取，提交失败时写入并重绘。
     pub dialog_error: Option<String>,
     /// 当前持有的项目写锁（只读打开时为 `None`）。
@@ -614,7 +661,6 @@ fn default_location() -> String {
 mod actions;
 mod dialogs;
 mod host;
-mod hub;
 mod picker;
 mod settings;
 
@@ -622,7 +668,6 @@ pub use actions::*;
 pub use dialogs::*;
 // `host` 里只有 crate 内辅助（只读守卫 / 反馈通道 / 名册反查），不对外导出
 use host::*;
-pub use hub::*;
 pub use picker::*;
 pub use settings::*;
 

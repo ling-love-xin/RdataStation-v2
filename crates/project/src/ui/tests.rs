@@ -1,4 +1,4 @@
-//! `ui` 模块的窗口级测试（GPUI headless 窗口）。
+﻿//! `ui` 模块的窗口级测试（GPUI headless 窗口）。
 //!
 //! 用真实窗口验证视图行为：选择器 / 设置 / 菜单内容渲染不 panic、语义对话框开得起来、
 //! 未保存拦截与校验走对分支、宿主回调（重绘 / 排序持久化）被调用。
@@ -23,15 +23,15 @@ use gpui_kit::{
 };
 
 use super::{
-    ConnectionOption, OpenProject, PendingAction, PickerTab, ProjectEditorBridge, ProjectInputs,
-    ProjectMenuEntry, ProjectSort, ProjectUiHost, ProjectUiNotifier, ProjectUiState,
-    SettingsSnapshot, StatusFilter, advance_pending, build_project_menu, cancel_version_delete,
-    card_description, card_menu_entries, close_project_hub, confirm_delete, confirm_version_delete,
-    create_version_action, default_connection_label, do_close, folder_hint, is_current_project,
-    item_write_locked, load_settings_snapshot, location_hint, memo_hint, meta_line, meta_tree_rows,
-    more_menu, open_create_dialog, open_delete_dialog, open_folder_dialog, open_lock_busy_dialog,
-    open_project_hub, parse_search, pick_directory, prepare_unsaved, project_card,
-    project_menu_entries, render_picker, render_project_hub, render_settings, request_close,
+    ConnectionOption, HomeAction, OpenProject, PendingAction, PickerTab, ProjectEditorBridge,
+    ProjectInputs, ProjectMenuEntry, ProjectSort, ProjectUiHost, ProjectUiNotifier, ProjectUiState,
+    SettingsSnapshot, StatusFilter, act_open_hub, act_switch, advance_pending, build_project_menu,
+    cancel_version_delete, card_description, card_menu_entries, confirm_delete,
+    confirm_version_delete, create_version_action, default_connection_label, do_close, folder_hint,
+    is_current_project, item_write_locked, load_settings_snapshot, location_hint, memo_hint,
+    meta_line, meta_tree_rows, more_menu, open_create_dialog, open_delete_dialog,
+    open_folder_dialog, open_lock_busy_dialog, parse_search, pick_directory, prepare_unsaved,
+    project_card, project_menu_entries, render_picker, render_settings, request_close,
     request_create_project, request_open, request_open_folder, request_switch,
     request_version_delete, save_project_info, set_default_connection, set_sort, set_status_filter,
     set_tab, settings_status_text, snapshot_description, sort_menu_entries,
@@ -49,6 +49,10 @@ struct Recorder {
     cleared: Cell<usize>,
     marked_clean: Cell<usize>,
     closed: Cell<usize>,
+    /// 「项目中心」入口被调用的次数（宿主注入的 opener）。
+    hub_opened: Cell<usize>,
+    /// 投回主窗口的动作记录（`HomeDispatch` 收到的 `HomeAction`）。
+    home_actions: RefCell<Vec<HomeAction>>,
 }
 
 struct TestNotifier(Rc<Recorder>);
@@ -108,10 +112,7 @@ impl Render for Harness {
         if self.host.current().is_none() {
             body = body.child(render_picker(&self.host, &self.inputs, cx));
         }
-        // 项目中心覆盖层先挂、设置面板后挂（与 workbench 的挂载顺序一致）。
-        if let Some(hub) = render_project_hub(&self.host, &self.inputs, cx) {
-            body = body.child(hub);
-        }
+        // 项目列表的两处落点改由宿主接：项目中心 = 全局设置的「项目」页。
         if let Some(settings) = render_settings(&self.host, &self.inputs, cx) {
             body = body.child(settings);
         }
@@ -462,57 +463,73 @@ fn request_switch_to_current_project_is_noop(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-// ==================== 项目中心：覆盖层 ====================
+// ==================== 项目中心：全局设置的「项目」页 ====================
 
-/// 有项目时也能开项目中心（不关闭当前项目），关闭后回到普通视图。
+/// 「项目中心…」不再盖覆盖层，而是交给宿主打开全局设置的「项目」页：
+/// 不关当前项目、不触发关闭回调，只调一次注入的入口。
 #[gpui_kit::test]
-fn project_hub_opens_without_closing_current_project(cx: &mut TestAppContext) {
+fn hub_entry_delegates_to_host_settings_page(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let rec = Rc::new(Recorder::default());
-    let host = test_host(&rec);
-    let root = temp_root("hub-open");
+    let mut host = test_host(&rec);
+    let root = temp_root("hub-entry");
     host.set_current(Some(OpenProject::new(root.clone(), "在用的项目")));
-    let (host, inputs, cx) = open_harness(cx, host);
+    let opened = rec.clone();
+    host = host.with_hub_opener(Rc::new(move |_window, _cx| {
+        opened.hub_opened.set(opened.hub_opened.get() + 1);
+    }));
+    let (host, _inputs, cx) = open_harness(cx, host);
 
-    assert!(
-        cx.update(|_, cx| render_project_hub(&host, &inputs, cx).is_none()),
-        "默认不开项目中心"
-    );
-
-    cx.update(|_, cx| open_project_hub(&host, cx));
-    assert!(host.state.borrow().hub_open, "打开后状态位应置真");
-    assert!(host.current().is_some(), "打开项目中心不该丢当前项目");
-    assert_eq!(rec.closed.get(), 0, "打开项目中心不该触发关闭回调");
-    assert!(rec.notifies.get() > 0, "打开应请求宿主重绘");
-    assert!(
-        cx.update(|_, cx| render_project_hub(&host, &inputs, cx).is_some()),
-        "有当前项目 + hub_open 时应渲染覆盖层"
-    );
-
-    cx.update(|_, cx| close_project_hub(&host, cx));
-    assert!(!host.state.borrow().hub_open);
-    assert!(
-        cx.update(|_, cx| render_project_hub(&host, &inputs, cx).is_none()),
-        "关闭后不再渲染"
-    );
-    assert!(host.current().is_some(), "关闭项目中心与项目本身无关");
+    cx.update(|window, cx| act_open_hub(&host, window, cx));
+    assert_eq!(rec.hub_opened.get(), 1, "入口应被调用一次");
+    assert!(host.current().is_some(), "跳设置页不该丢当前项目");
+    assert_eq!(rec.closed.get(), 0, "跳设置页不该触发关闭回调");
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// 无项目态不渲染覆盖层：中央「项目」tab 本身就是完整列表（两层列表只会打架）。
+/// 未注入入口时点了只记日志：菜单项仍在，但不能 panic 或误关项目。
 #[gpui_kit::test]
-fn project_hub_stays_none_without_current_project(cx: &mut TestAppContext) {
+fn hub_entry_without_host_is_a_no_op(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let rec = Rc::new(Recorder::default());
     let host = test_host(&rec);
-    let (host, inputs, cx) = open_harness(cx, host);
+    let (host, _inputs, cx) = open_harness(cx, host);
 
-    cx.update(|_, cx| open_project_hub(&host, cx));
-    assert!(host.state.borrow().hub_open);
+    cx.update(|window, cx| act_open_hub(&host, window, cx));
+    assert_eq!(rec.hub_opened.get(), 0);
+    assert_eq!(rec.closed.get(), 0);
+}
+
+/// 投递分流：宿主注入 `HomeDispatch` 后，切换动作交给宿主（**不在当前窗口执行**），
+/// 这正是设置窗口里嵌列表时的语义（切换副作用属于主窗口）。
+#[gpui_kit::test]
+fn home_dispatch_takes_over_switch(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = Rc::new(Recorder::default());
+    let mut host = test_host(&rec);
+    let root = temp_root("dispatch-switch");
+    host.set_current(Some(OpenProject::new(root.clone(), "在用的项目")));
+    let actions = rec.clone();
+    host = host.with_home(Rc::new(move |_host, action, _cx| {
+        actions.home_actions.borrow_mut().push(action);
+    }));
+    let (host, _inputs, cx) = open_harness(cx, host);
+
+    let target = root.join("目标项目");
+    cx.update(|window, cx| act_switch(&host, &target, window, cx));
+
+    let recorded = rec.home_actions.borrow().clone();
+    assert_eq!(recorded.len(), 1, "应当交给宿主投递");
+    match &recorded[0] {
+        HomeAction::Switch(path) => assert_eq!(path, &target),
+        other => panic!("投递的动作应为 Switch，实际 {other:?}"),
+    }
     assert!(
-        cx.update(|_, cx| render_project_hub(&host, &inputs, cx).is_none()),
-        "无当前项目时覆盖层应为 None（由选择器面板承载）"
+        host.current().is_some(),
+        "投递后当前项目不动（由主窗口处理）"
     );
+    assert_eq!(rec.closed.get(), 0, "投递路径不应就地关闭项目");
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 /// 「当前」标记判据：只有路径与当前根一致的那张卡片才带标记。

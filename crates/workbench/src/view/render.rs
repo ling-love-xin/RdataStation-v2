@@ -296,14 +296,12 @@ impl Render for WorkbenchView {
                     SettingsService::toggle_theme_mode(Some(window), cx);
                 }
             })
-            // M1：切换项目（= 打开项目中心覆盖层，不关闭当前项目）。
+            // M1：切换项目（= 打开全局设置的「项目」页；已开则切到该节，不关当前项目）。
             .on_action({
                 let entity = cx.entity();
-                move |_: &SwitchProject, _window, cx| {
+                move |_: &SwitchProject, window, cx| {
                     entity.update(cx, |this, cx| {
-                        tracing::info!("【探针】SwitchProject：打开项目中心覆盖层");
-                        let host = this.project_host().clone();
-                        project::ui::open_project_hub(&host, cx);
+                        this.open_settings_at(Some("projects"), window, cx);
                     });
                 }
             })
@@ -351,16 +349,14 @@ impl Render for WorkbenchView {
             root = root.child(info);
         }
         // M1：项目设置浮层（菜单 / 对话框已改由 Popover 与语义 Dialog 承载，不在此渲染）。
-        // 项目中心覆盖层先挂、设置面板后挂：两者同时打开时设置在项目中心之上。
+        // 项目列表（选择 / 切换 / 新建 / 管理）不在主窗口盖层：无项目时是中央「项目」
+        // tab，有项目时在全局设置的「项目」页（`open_settings_at(Some("projects"))`）。
         if self.shared.project.borrow().is_some() {
             let host = self.project_host().clone();
             let inputs = self
                 .project_inputs
                 .clone()
                 .expect("project inputs initialized");
-            if let Some(hub) = project::ui::render_project_hub(&host, &inputs, cx) {
-                root = root.child(hub);
-            }
             if let Some(settings) = project::ui::render_settings(&host, &inputs, cx) {
                 root = root.child(settings);
             }

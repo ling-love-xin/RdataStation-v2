@@ -210,9 +210,9 @@ pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App)
                 .primary()
                 .icon(IconName::Plus)
                 .label("新建项目")
-                // 走与标题栏菜单同一入口：有当前项目（项目中心）时先拦截未保存草稿。
+                // 走与标题栏菜单同一入口：嵌在设置窗口时投回主窗口（`act_*`）。
                 .on_click(move |_, window, app| {
-                    request_create_project(&host_new, &inputs_new, window, app);
+                    act_create_project(&host_new, &inputs_new, window, app);
                 }),
         )
         .child(
@@ -221,7 +221,7 @@ pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App)
                 .icon(IconName::FolderOpen)
                 .label("打开文件夹…")
                 .on_click(move |_, window, app| {
-                    request_open_folder(&host_open, &inputs_open, window, app);
+                    act_open_folder(&host_open, &inputs_open, window, app);
                 }),
         )
         .child(
@@ -229,7 +229,7 @@ pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App)
                 .secondary()
                 .icon(IconName::Copy)
                 .label("从示例项目开始")
-                .on_click(move |_, window, app| create_sample(&host_sample, window, app)),
+                .on_click(move |_, window, app| act_sample(&host_sample, window, app)),
         )
         .child(
             div()
@@ -336,7 +336,8 @@ pub(super) fn project_card(
     .small()
     .label("打开")
     // 已有项目打开时点卡片＝切换：先释放当前项目再打开目标（不覆盖会话与锁）。
-    .on_click(move |_, window, app| request_switch(&host_open, &path_open, window, app));
+    // 经 `act_switch`：嵌在设置窗口时投回主窗口（草稿拦截对话框属于主窗口）。
+    .on_click(move |_, window, app| act_switch(&host_open, &path_open, window, app));
 
     let more = more_menu(host, inputs, item, tab);
 
@@ -575,7 +576,7 @@ pub(super) fn attach_card_menu_handler(
         "open" => {
             let host = ProjectUiHost::clone(host);
             // 与卡片主按钮同路：已有当前项目时是「切换」，不是覆盖会话。
-            menu_item.on_click(move |_, window, app| request_switch(&host, &path, window, app))
+            menu_item.on_click(move |_, window, app| act_switch(&host, &path, window, app))
         }
         "pin" => {
             let host = ProjectUiHost::clone(host);
@@ -845,22 +846,22 @@ pub(super) fn attach_project_menu_handler(
         "new" => {
             let host = host.clone();
             let inputs = inputs.clone();
-            item.on_click(move |_, window, app| request_create_project(&host, &inputs, window, app))
+            item.on_click(move |_, window, app| act_create_project(&host, &inputs, window, app))
         }
         "open-folder" => {
             let host = host.clone();
             let inputs = inputs.clone();
-            item.on_click(move |_, window, app| request_open_folder(&host, &inputs, window, app))
+            item.on_click(move |_, window, app| act_open_folder(&host, &inputs, window, app))
         }
-        // 「项目中心…」：不关闭当前项目，只在上面盖一层列表（选中目标才切换）。
+        // 「项目中心…」：不关闭当前项目，跳到全局设置的「项目」页（选中目标才切换）。
         "switch" => {
             let host = host.clone();
-            item.on_click(move |_, _, app| open_project_hub(&host, app))
+            item.on_click(move |_, window, app| act_open_hub(&host, window, app))
         }
         // 「关闭项目」才是释放当前项目（回无项目态的选择器）。
         "close" => {
             let host = host.clone();
-            item.on_click(move |_, window, app| request_close(&host, window, app))
+            item.on_click(move |_, window, app| act_close(&host, window, app))
         }
         // 「重命名…」是「项目设置…」的直达别名：同一个面板，焦点本来就落在改名输入上。
         "settings" | "rename" => {

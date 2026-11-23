@@ -254,8 +254,6 @@ pub(super) fn apply_opened(
         ui.lock = lock;
         ui.read_only = read_only;
         ui.settings_open = false;
-        // 项目中心是「挑一个项目」的覆盖层：打开成功就没人再看它了。
-        ui.hub_open = false;
         ui.dialog_error = None;
         ui.notice = read_only.then(|| "只读打开：该项目已被另一实例占用".to_string());
         ui.picker.error = None;
@@ -313,6 +311,94 @@ pub fn request_close(host: &ProjectUiHost, window: &mut Window, cx: &mut App) {
     do_close(host, cx);
 }
 
+// ==================== 动作分流（原地执行 / 投回主窗口） ====================
+//
+// 项目列表有两处落点：无项目时主窗口中央「项目」tab，有项目时全局设置的
+// 「项目」页。后者在**设置窗口**里点击，但对话框（未保存草稿 / 只读 / 锁占用 /
+// 新建 / 选目录）与切换副作用（`do_close` → 关会话、`open_path` → 重配 Dock）
+// 都属于主窗口——所以宿主注入 `HomeDispatch` 时，这几个入口交给它投递；
+// 未注入（单测 / 无宿主）时就地执行，行为与拆分前一致。
+//
+// 选择器与菜单一律调这里的 `act_*`，不再直接调 `request_*`。
+
+/// 有投递口就投回主窗口；否则就地执行 `fallback`。
+fn dispatch_home(
+    host: &ProjectUiHost,
+    action: HomeAction,
+    window: &mut Window,
+    cx: &mut App,
+    fallback: impl FnOnce(&mut Window, &mut App),
+) {
+    match host.home.borrow().clone() {
+        Some(home) => home(host, action, cx),
+        None => fallback(window, cx),
+    }
+}
+
+/// 「＋ 新建项目…」入口（见 [`HomeAction::CreateProject`]）。
+pub fn act_create_project(
+    host: &ProjectUiHost,
+    inputs: &ProjectInputs,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let (host_in, inputs_in) = (host.clone(), inputs.clone());
+    dispatch_home(host, HomeAction::CreateProject, window, cx, |window, cx| {
+        request_create_project(&host_in, &inputs_in, window, cx)
+    });
+}
+
+/// 「打开现有目录…」入口（见 [`HomeAction::OpenFolder`]）。
+pub fn act_open_folder(
+    host: &ProjectUiHost,
+    inputs: &ProjectInputs,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let (host_in, inputs_in) = (host.clone(), inputs.clone());
+    dispatch_home(host, HomeAction::OpenFolder, window, cx, |window, cx| {
+        request_open_folder(&host_in, &inputs_in, window, cx)
+    });
+}
+
+/// 「从示例项目开始」入口（见 [`HomeAction::Sample`]）。
+pub fn act_sample(host: &ProjectUiHost, window: &mut Window, cx: &mut App) {
+    let host_in = host.clone();
+    dispatch_home(host, HomeAction::Sample, window, cx, |window, cx| {
+        create_sample(&host_in, window, cx)
+    });
+}
+
+/// 切到某项目（含未保存拦截；见 [`HomeAction::Switch`]）。
+pub fn act_switch(host: &ProjectUiHost, path: &Path, window: &mut Window, cx: &mut App) {
+    let (host_in, path_in) = (host.clone(), path.to_path_buf());
+    dispatch_home(
+        host,
+        HomeAction::Switch(path_in.clone()),
+        window,
+        cx,
+        |window, cx| request_switch(&host_in, &path_in, window, cx),
+    );
+}
+
+/// 关闭当前项目（见 [`HomeAction::Close`]）。
+pub fn act_close(host: &ProjectUiHost, window: &mut Window, cx: &mut App) {
+    let host_in = host.clone();
+    dispatch_home(host, HomeAction::Close, window, cx, |window, cx| {
+        request_close(&host_in, window, cx)
+    });
+}
+
+/// 「项目中心」入口：宿主把它接到全局设置的「项目」页（窗口已开着则切节）。
+///
+/// 未注入时记一条 debug 日志——菜单项仍在（用户能看到入口存在），点了不动作。
+pub fn act_open_hub(host: &ProjectUiHost, window: &mut Window, cx: &mut App) {
+    match host.on_open_hub.borrow().clone() {
+        Some(open) => open(window, cx),
+        None => tracing::debug!("项目中心入口未注入（宿主未接全局设置的项目页）"),
+    }
+}
+
 /// 执行关闭：释放锁 + 清会话 + 回选择器。
 pub fn do_close(host: &ProjectUiHost, cx: &mut App) {
     let lock = host.state.borrow_mut().lock.take();
@@ -324,8 +410,6 @@ pub fn do_close(host: &ProjectUiHost, cx: &mut App) {
         let mut ui = host.state.borrow_mut();
         ui.read_only = false;
         ui.settings_open = false;
-        // 关掉项目就回无项目态，中央「项目」tab 已是完整列表：覆盖层没有意义。
-        ui.hub_open = false;
         ui.dialog_error = None;
         ui.notice = None;
     }
