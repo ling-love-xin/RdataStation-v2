@@ -445,13 +445,9 @@ impl DataObjectsTab {
             .px_3()
             .pb_2();
         let mut entries: Vec<(Option<Group>, String)> = vec![(None, "全部".to_string())];
-        for group in [
-            Group::MountedSources,
-            Group::SourceTables,
-            Group::PersistentTables,
-            Group::Files,
-            Group::TemporaryTables,
-        ] {
+        // 段顺序只认 `Group::ALL`（唯一权威）：这里再抄一份列表，加段时漏改就会
+        // 「排序里有、筛选项里没有」
+        for group in Group::ALL {
             entries.push((Some(group), group.title().to_string()));
         }
         for (option, label) in entries {
@@ -987,7 +983,8 @@ impl DataObjectsTab {
                             .flex_none()
                             .min_w_10()
                             .text_color(state_color)
-                            .child(object.state.label()),
+                            // 能用 → 寿命（会不会自己消失）；不能用 → 原因（要动手解决什么）
+                            .child(object.availability_text()),
                     )
                     .children(pick_button)
                     .children(install_button)

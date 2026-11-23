@@ -145,6 +145,20 @@ pub enum Group {
 }
 
 impl Group {
+    /// 段的固定顺序（**唯一权威**）。
+    ///
+    /// 此前顺序有三份：枚举声明（`Ord` 派生）、`order()` 的 match、视图里手写的
+    /// chips 数组——加一段时只要漏改一处，排序与筛选就会各说各话。现在只留这一份：
+    /// 排序直接用派生 `Ord`（声明顺序 = 段顺序），chips 遍历本常量，
+    /// `groups_list_all_in_ord_order` 用例保证「常量顺序 = `Ord` 顺序」不被写歪。
+    pub const ALL: [Self; 5] = [
+        Self::MountedSources,
+        Self::SourceTables,
+        Self::PersistentTables,
+        Self::Files,
+        Self::TemporaryTables,
+    ];
+
     pub fn title(self) -> &'static str {
         match self {
             Self::MountedSources => "已挂载的源",
@@ -152,17 +166,6 @@ impl Group {
             Self::PersistentTables => "持久表",
             Self::Files => "文件",
             Self::TemporaryTables => "临时表",
-        }
-    }
-
-    /// 段落顺序由枚举自身给出（`Ord` 派生自上到下），避免视图里再排一次。
-    pub fn order(self) -> u8 {
-        match self {
-            Self::MountedSources => 0,
-            Self::SourceTables => 1,
-            Self::PersistentTables => 2,
-            Self::Files => 3,
-            Self::TemporaryTables => 4,
         }
     }
 }
@@ -205,8 +208,11 @@ impl Group {
 
 impl Object {
     /// 升序排序键：先分组、再名字（同名按身份兜底，保证稳定）。
-    pub fn sort_key(&self) -> (u8, String, String) {
-        (self.group.order(), self.name.clone(), self.key.clone())
+    ///
+    /// 分组维度直接用 [`Group`] 的派生 `Ord`（= 声明顺序）：不再经 `order() -> u8`
+    /// 转一道，免得「枚举加在哪」与「数字写几」各自为政。
+    pub fn sort_key(&self) -> (Group, String, String) {
+        (self.group, self.name.clone(), self.key.clone())
     }
 
     /// 行首图标（失效行改警告形状：不靠删除线也能看出它不能点）
@@ -231,6 +237,19 @@ impl Object {
     /// 能选的是它下面展开出来的表（`srctable:`）。
     pub fn can_pick(&self) -> bool {
         self.can_analyze() && !self.key.starts_with("conn:")
+    }
+
+    /// 状态列写什么：**能用时写寿命，不能用时写原因**。
+    ///
+    /// 正常行一律显示「可用」等于白占一列（每行都一样的信息量）；用户真正要判断的是
+    /// 「它会不会自己消失」（[`Life`]：外部 / 会话级 / 项目持久 / 受管）与
+    /// 「它现在为什么用不了」（[`State`] 的原因）。所以两件事共用同一格：
+    /// 可用 → 寿命；失效 / 失败 → 原话原因（那才是要动手解决的东西）。
+    pub fn availability_text(&self) -> String {
+        match self.state {
+            State::Ready => self.life.label().to_string(),
+            _ => self.state.label(),
+        }
     }
 }
 
@@ -279,7 +298,13 @@ pub struct AssetRow {
 pub struct Collected {
     /// 已连接的源库连接（`connected` 为真的那些）
     pub connections: Vec<ConnRow>,
+    /// 当前项目的分析库表清单。
+    ///
+    /// ⚠️ 只有 [`Self::project_open`] 为真时这份清单才是**权威全集**：没开项目时它必然是
+    /// 空的（没有库可查），此时不能拿它判「某张表不在了」——否则每个表型资产都会被误标失效。
     pub analysis_tables: Vec<String>,
+    /// 有没有打开项目（决定 `analysis_tables` 能不能当「表在不在」的判据）
+    pub project_open: bool,
     pub global_tables: Vec<String>,
     pub result_sets: Vec<String>,
     pub insight_samples: Vec<String>,
@@ -300,6 +325,8 @@ impl Collected {
         Self {
             connections: Vec::new(),
             analysis_tables: Vec::new(),
+            // 没开项目：`analysis_tables` 不是权威全集，别拿它判失效
+            project_open: false,
             global_tables: Vec::new(),
             result_sets: Vec::new(),
             insight_samples: Vec::new(),
@@ -421,6 +448,12 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
     // 表型本体在项目分析库里 → 持久表段；文件型本体在 `resources/` → 文件段。
     // pill 都是「资产」，行上标注只读 + 最新版本
     for asset in &collected.assets {
+        // 表型资产：存档登记还在，本体表却查不到了（表被删 / 换了项目）就是**真失效**。
+        // 判据只取项目分析库清单，且必须「项目开着」才算权威（没项目时清单必然空）。
+        let table_gone = match (asset.analytics_table.as_deref(), collected.project_open) {
+            (Some(table), true) => !collected.analysis_tables.iter().any(|name| name == table),
+            _ => false,
+        };
         out.push(Object {
             key: format!("asset:{}", asset.name),
             name: asset.name.clone(),
@@ -431,7 +464,11 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             },
             channel: Channel::Asset,
             life: Life::Managed,
-            state: State::Ready,
+            state: if table_gone {
+                State::Stale("分析库里的表已不在（被删或换了项目）")
+            } else {
+                State::Ready
+            },
             group: if asset.analytics_table.is_some() {
                 Group::PersistentTables
             } else {
@@ -830,6 +867,7 @@ pub fn collect(shared: &Shared) -> Collected {
         })
         .collect();
     let project = shared.project.borrow().clone();
+    let project_open = project.is_some();
     let analysis_tables = project
         .as_ref()
         .map(|p| {
@@ -892,6 +930,7 @@ pub fn collect(shared: &Shared) -> Collected {
     Collected {
         connections,
         analysis_tables,
+        project_open,
         global_tables,
         result_sets,
         insight_samples,
@@ -921,6 +960,8 @@ mod tests {
                 "res_订单明细_20261115103000".into(),
                 "数据修复".into(),
             ],
+            // sample 代表「项目开着」的常态：`analysis_tables` 是权威全集
+            project_open: true,
             global_tables: vec!["G_月度经营".into()],
             result_sets: vec!["tmp_q_结果_3".into()],
             insight_samples: vec!["tmp_i_orders_sample".into()],
@@ -960,17 +1001,39 @@ mod tests {
         }
     }
 
-    /// 分组顺序是「越靠上越正在用」：会话在最前，文件在最后。
+    /// 分组顺序是「越靠上越正在用」：会话在最前，临时表在最后。
     #[test]
     fn groups_follow_the_declared_order() {
         let rows = objects(&sample());
-        let orders: Vec<u8> = rows.iter().map(|o| o.group.order()).collect();
-        let mut sorted = orders.clone();
+        let groups: Vec<Group> = rows.iter().map(|o| o.group).collect();
+        let mut sorted = groups.clone();
         sorted.sort();
-        assert_eq!(orders, sorted, "行必须按分组顺序连续排列");
+        assert_eq!(groups, sorted, "行必须按分组顺序连续排列");
         assert_eq!(rows.first().map(|o| o.group), Some(Group::MountedSources));
         // 临时表排最后：它寿命最短，也最该被处理掉
         assert_eq!(rows.last().map(|o| o.group), Some(Group::TemporaryTables));
+    }
+
+    /// 段顺序的唯一权威 = `Group::ALL`，它必须与派生 `Ord`（声明顺序）完全一致。
+    ///
+    /// 视图的筛选 chips 直接遍历这个常量；一旦有人把新段插在声明中间却忘了改常量
+    /// （或反过来），排序（`Ord`）与筛选（`ALL`）就会各说各话——这条测试当场拦住。
+    #[test]
+    fn groups_list_all_in_ord_order() {
+        let all = Group::ALL;
+        // 一段不漏
+        for group in all {
+            assert_eq!(
+                Group::ALL.iter().filter(|item| **item == group).count(),
+                1,
+                "{} 在 ALL 里重复了",
+                group.title()
+            );
+        }
+        // 顺序与 Ord 一致（严格递增）
+        for pair in all.windows(2) {
+            assert!(pair[0] < pair[1], "{} 与 {} 的顺序与声明相反", pair[0].title(), pair[1].title());
+        }
     }
 
     /// `res_` 表换可读名；落库 / 自建 / 全局同在「持久表」段，行内标签区分。
@@ -1348,6 +1411,73 @@ mod tests {
         assert_eq!(super::source_table_parts("srctable:C_1|shop"), None);
         assert_eq!(super::source_table_parts("srctable:C_1|a|b|c|d"), None);
         assert_eq!(super::source_table_parts("project:orders"), None);
+    }
+
+    /// 状态列：**可用时写寿命**（`Life` 不是死字段），不可用时写原因。
+    #[test]
+    fn availability_column_shows_life_then_reason() {
+        let rows = objects(&sample());
+        for object in &rows {
+            let text = object.availability_text();
+            if object.can_analyze() {
+                assert_eq!(text, object.life.label(), "{} 可用时该写寿命", object.key);
+            } else {
+                assert_eq!(text, object.state.label(), "{} 不可用时该写原因", object.key);
+            }
+        }
+        // 四种寿命都要真出现过：文案里有，才算「参与渲染」
+        for expected in [
+            "外部",     // 源库连接 / 已加载文件
+            "会话级",   // 临时表 / 联邦源 / 加速源
+            "项目持久", // 分析库表
+            "受管",     // 资产
+        ] {
+            assert!(
+                rows.iter().any(|o| o.can_analyze() && o.life.label() == expected),
+                "sample 里没有「{expected}」的行，这条断言失去意义"
+            );
+        }
+    }
+
+    /// 表型资产的本体表从分析库里消失 = 真失效（`State::Stale` 的生产路径）。
+    #[test]
+    fn table_assets_go_stale_when_their_backing_table_disappears() {
+        let mut c = sample();
+        c.analysis_tables.push("arp_客户画像_v2".into());
+        c.assets.push(AssetRow {
+            name: "客户画像".into(),
+            version: 2,
+            detail: String::new(),
+            payload_rel_path: None,
+            resource_id: "arp_2".into(),
+            analytics_table: Some("arp_客户画像_v2".into()),
+        });
+        let rows = objects(&c);
+        let asset = rows.iter().find(|o| o.key == "asset:客户画像").unwrap();
+        assert!(asset.can_analyze(), "本体表在，资产就可用");
+
+        // 表没了（被删 / 换了项目）：行留着、标失效、不给动作
+        c.analysis_tables.retain(|name| name != "arp_客户画像_v2");
+        let rows = objects(&c);
+        let stale = rows.iter().find(|o| o.key == "asset:客户画像").unwrap();
+        assert!(
+            matches!(stale.state, State::Stale(_)),
+            "本体表不在了要标失效：{:?}",
+            stale.state
+        );
+        assert!(!stale.can_analyze());
+        assert!(!stale.can_pick(), "失效行不能进工作集");
+        assert!(
+            stale.availability_text().contains("已失效"),
+            "状态列要写出原因：{}",
+            stale.availability_text()
+        );
+
+        // 没开项目时分析库清单必然为空、不是权威全集：不能拿它判「表不在」
+        c.project_open = false;
+        let rows = objects(&c);
+        let asset = rows.iter().find(|o| o.key == "asset:客户画像").unwrap();
+        assert!(asset.can_analyze(), "没项目就无从判断，不该误标失效");
     }
 
     /// 软上限：8 个不提示，第 9 个才提示；提示里不出现「不能」。
