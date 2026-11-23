@@ -115,7 +115,12 @@
 | `src/store.rs`              | `.RSmeta` 创建 / 加载 / 迁移；配置就地读写（`update_config`）；依赖自检；双真相源唯一写入入口（`save_info`）                                                             |
 | `src/lock.rs`               | 实例锁：OS 文件锁 + `project.lock.owner` 占用者信息                                                                                                                   |
 | `src/service.rs`            | 编排：列表 / 创建 / 打开（含只读）/ 关闭 / 重命名 / 固定 / 归档 / 软删 / 恢复 / 硬删 / 移出 / 重定位 / 默认连接读写 / 版本台账（记录与删除）；进程级复用 tokio 运行时（P0.3）                            |
-| `src/ui.rs`                 | 视图：选择器、标题栏菜单内容、项目设置、语义对话框、`ProjectUiHost` 宿主桥                                                                                                             |
+| `src/ui.rs`                 | 公共面：选择器 / 排序 / 筛选类型与纯函数、`ProjectUiHost` 宿主桥、UI 状态与输入实体；末尾 `pub use` 五个子模块，`project::ui::*` 的对外路径不变                          |
+| `src/ui/host.rs`             | 宿主桥辅助：只读守卫 `read_only_blocked`、动作反馈双通道 `notify_success` / `notify_error`、当前项目名册反查 `current_summary`                                          |
+| `src/ui/actions.rs`          | 动作编排：打开 / 关闭 / 创建 / 重定位 / 删除 / 移出 / 归档 / 项目信息 / 默认连接，以及选择器的加载与筛选动作                                                             |
+| `src/ui/dialogs.rs`          | 语义对话框：新建 / 打开文件夹 / 空目录询问 / 锁占用 / 未保存拦截 / 重定位 / 删除数据；行内校验提示与其缓存                                                              |
+| `src/ui/picker.rs`           | 选择器渲染、卡片、卡片 `⋯`/右键菜单、标题栏项目菜单                                                                                                                  |
+| `src/ui/settings.rs`        | 设置快照 `SettingsSnapshot` / `load_settings_snapshot` 与设置面板渲染（含版本台账行内两段式删除）                                                                       |
 | `src/ui/tests.rs`           | 42 项 `ui` 测试（25 项 GPUI headless 窗口测试 + 17 项纯函数测试：选择器 /facet 解析 / 状态筛选 / 设置快照与结构树 / 默认连接 / 对话框 / 拦截 / 排序 / 浏览目录 / 空目录询问 / 卡片与描述 / 卡片与标题栏菜单规格 / 只读拦截 / 键盘激活 / 行内校验与提示 memo / 状态文案与概览状态 / 版本台账删除） |
 | `tests/project_registry.rs` | 名册端到端集成：创建登记 → 固定置顶 → 软删隐藏（磁盘保留）→ 已移除找回（注入临时全局库）                                                                                                          |
 | `tests/project_store.rs`    | 磁盘 `.RSmeta` / 实例锁 / 默认连接（U3）集成                                                                                                                           |

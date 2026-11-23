@@ -289,7 +289,7 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 
 | 组成 | 类型/位置 |
 | --- | --- |
-| 项目管理 UI（选择器 / 菜单 / 对话框 / 设置） | `crates/project/src/ui.rs`（视图与 model/service 同 crate）。选择器 = `render_picker`（挂载在 `crates/workbench/src/panels/project_picker.rs:132`）；设置 = `render_settings`（覆盖式面板，挂载在 `crates/workbench/src/view/render.rs:362`）；菜单 = 语义 `Button::dropdown_menu` + `PopupMenu`；对话框 = `Dialog` / `AlertDialog` |
+| 项目管理 UI（选择器 / 菜单 / 对话框 / 设置） | `crates/project/src/ui.rs`（公共面：类型、`ProjectUiHost`、UI 状态与输入实体；视图与 model/service 同 crate）+ 五个子模块 `ui/{host,actions,dialogs,picker,settings}.rs`（`pub use` 重导出，`project::ui::*` 路径不变）。选择器 = `render_picker`（挂载在 `crates/workbench/src/panels/project_picker.rs:132`）；设置 = `render_settings`（覆盖式面板，挂载在 `crates/workbench/src/view/render.rs:362`）；菜单 = 语义 `Button::dropdown_menu` + `PopupMenu`；对话框 = `Dialog` / `AlertDialog` |
 | 项目服务编排（列表 / 创建 / 打开 / 关闭 / 更新 / 删除 / 找回 / 版本） | `crates/project/src/service.rs` |
 | 项目视图 ↔ 宿主桥（重绘 / 编辑区 / 排序偏好 / 打开后刷新） | `crates/workbench/src/components/project_host.rs`（`ProjectUiHost` 注入） |
 | 会话解析（env → 最近 → 空态） | `crates/workbench/src/services/project_session.rs` |

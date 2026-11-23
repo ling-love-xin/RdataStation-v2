@@ -7,6 +7,7 @@
 > ② **`models.rs` 删掉 4 个自带路径推导**：`ProjectPath::{sqlite_path, duckdb_path, config_dir, queries_dir}` 与 `Project::{sqlite_path, duckdb_path}`——它们指向 v1 旧布局（`.RSmeta/meta/project.db`、`.RSmeta/analytics/data.duckdb`、`.RSmeta/queries`），与真实的扁平布局不符，且生产零调用。`ProjectPath::meta_dir` 保留，但改走 `store::RS_META_DIR_NAME` 常量，不再硬编码 `".RSmeta"`。
 > ③ 口径：与根仓 `docs/architecture/data-layer-wiring-matrix.md` 同族——把「文档声称」与「代码实测」分开，
 > 逐方法标接线状态，防止「预留超前」产生的死代码继续累积。
+>
 > **2026-11-23 复核（遗留点清理第三、四刀）**：
 > ① **写动作加 toast 通道**：`save_project_info` / `toggle_archive` / `set_default_connection` / `create_version_action` 改走 `notify_success` / `notify_error`（`state.notice` + `window.push_notification` 双写）——此前只写 `state.notice`，而设置面板与标题栏菜单里不渲染它，用户点完没有反馈。
 > ② **删死字段** `ProjectUiState::epoch`（仅两处 `+= 1`，crate 内外零读点）；`ProjectUiState` 现 **8 字段**（新增 `version_delete_confirm`）。
@@ -29,7 +30,8 @@
 | `lock.rs` | 230 行 | ✅ 全部已接线 |
 | `store.rs` | 948 行 | ⚠️ 核心已接线；**死代码已清（ProjectManager / to_project / stub），剩 1 组归属待定**（见下）；新增 `BUILD_TAG_KEY` 写盘分支 |
 | `models.rs` | 371 行 | ⚠️ 域模型已接线，**含 1 组预留**（版本化） |
-| `ui.rs` + `ui/tests.rs` | 3486 + 1571 行（测试 42 项：25 窗口 + 17 纯函数） | ✅ 全部已接线（有窗口测试锚定） |
+| `ui.rs` + `ui/{host,actions,dialogs,picker,settings}.rs` | 622 + 59 + 396 + 834 + 848 + 785 行（合计 3544；`ui.rs` 只留公共面） | ✅ 全部已接线（有窗口测试锚定） |
+| `ui/tests.rs` | 1571 行（测试 42 项：25 窗口 + 17 纯函数） | ✅ 全部已接线 |
 
 ## 逐方法
 
@@ -113,7 +115,7 @@
 | `calculate_checksum` | 🟡 | 仅被未接线的 `Versioned<T>` 用；`DefaultHasher` 非加密，若真做内容级版本化须换 `sha2` |
 | `ConnectionRef` / `QueryRef` / `Project::connections` / `Project::queries` / `add_connection` / `add_query` | 🟡 | 模型存在，但 `load_connections` / `load_queries` 是 stub，**读侧空转** |
 
-### `ui.rs` + `ui/tests.rs`（✅ 全部已接线）
+### `ui.rs` + 子模块（✅ 全部已接线）
 
 选择器 / 标题栏菜单 / 项目设置 / 语义对话框 / 宿主桥 `ProjectUiHost`，均有窗口测试锚定（`ui/tests.rs` 42 项：25 窗口 + 17 纯函数）。
 
@@ -137,3 +139,25 @@
    engine L2 缓存消费，或整体删除。
 3. **🟡 二选一**：版本化（`Versioned<T>` / checksum）——删除（维持「手动快照台账」）或真做内容级
    版本化并把 `DefaultHasher` 换成 `sha2`（DuckLake 三期可一并定）。
+
+## 2026-11-23 第五刀：`ui.rs` 结构拆分
+
+`ui.rs` 由 3486 行单文件拆为「公共面 + 五个子模块」，**行为不变**：
+
+| 文件 | 行数 | 职责 |
+| --- | --- | --- |
+| `src/ui.rs` | 622 | 公共面：选择器 / 排序 / 筛选类型与纯函数、`ProjectUiHost` 宿主桥、`ProjectUiState` / `ProjectInputs`；末尾 `mod` + `pub use` |
+| `src/ui/host.rs` | 59 | 只读守卫 `read_only_blocked`、反馈双通道 `notify_success` / `notify_error`、`current_summary` |
+| `src/ui/actions.rs` | 396 | 打开 / 关闭 / 创建 / 重定位 / 删除 / 移出 / 归档 / 项目信息 / 默认连接 + 选择器加载与筛选动作 |
+| `src/ui/dialogs.rs` | 834 | 语义对话框、行内校验提示（`location_hint` / `folder_hint` / `target_preview` / `memo_hint`）、footer |
+| `src/ui/picker.rs` | 848 | 选择器渲染、卡片、卡片 `⋯`/右键菜单、标题栏项目菜单 |
+| `src/ui/settings.rs` | 785 | `SettingsSnapshot` / `load_settings_snapshot`、设置面板渲染（含版本台账两段式删除） |
+| `src/ui/tests.rs` | 1571 | 42 项测试（位置不变，`use super::{...}` 照旧可用） |
+
+拆分原则：
+
+- 子模块之间**不互相 `use`**：一律 `use super::*` 拿公共面的词汇表，依赖方向单向（子模块 → 父模块）。
+- 跨模块使用的原私有条目提为 `pub(super)`：对 `ui` 及其后代可见、**不进公共面**；`project::ui::*` 的对外路径由 `ui.rs` 末尾 `pub use ...::*` 保持。
+- 逐字搬迁，未改任何逻辑（含注释）。
+
+验证（拆分后）：`cargo check -p rds-project --all-targets -j 1` 零告警；`cargo test -p rds-project -j 1` = 55 + 1 + 5 + 3（与拆分前同数）；`cargo clippy` 仍 2 条基线；`cargo check -p rds-workbench --lib -j 1` 通过（下游调用面不变）；`rustfmt --edition 2024 --check` 干净。

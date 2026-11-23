@@ -81,6 +81,21 @@ graph LR
     end
 ```
 
+### 模块布局（2026-11-23 拆分）
+
+`ui.rs` 只留**公共面**（选择器/排序/筛选类型与纯函数、`ProjectUiHost`、`ProjectUiState`、`ProjectInputs`），实现按职责拆成五个子模块：
+
+| 文件 | 内容 |
+| --- | --- |
+| `ui/host.rs` | `read_only_blocked` / `notify_success` / `notify_error` / `current_summary` |
+| `ui/actions.rs` | 打开 / 关闭 / 创建 / 重定位 / 删除 / 移出 / 归档 / 项目信息 / 默认连接 + 选择器加载与筛选 |
+| `ui/dialogs.rs` | 语义对话框与行内校验提示（`location_hint` / `folder_hint` / `target_preview` / `memo_hint` / footer） |
+| `ui/picker.rs` | 选择器渲染、卡片、卡片菜单、标题栏项目菜单 |
+| `ui/settings.rs` | `SettingsSnapshot` / `load_settings_snapshot` / `render_settings`（含版本台账删除） |
+| `ui/tests.rs` | 42 项测试（`use super::{...}` 照旧） |
+
+约定：子模块之间不互相 `use`，一律 `use super::*` 取公共面词汇表（依赖方向单向）；跨模块使用的原私有条目提为 `pub(super)`——对 `ui` 及其后代可见、不进公共面；`project::ui::*` 的对外路径由 `ui.rs` 末尾的 `pub use ...::*` 保持不变。拆分逐字搬迁、未改逻辑。
+
 ## 3. 生命周期与 I/O 位置
 
 | 时点 | 发生什么 | 在哪 |
