@@ -6,6 +6,7 @@
 //! 行高是**硬契约**：虚拟列表（`v_virtual_list`）按给定高度定义布局、不回写实测值，
 //! 所以 `scratchpad_row_height` 的估算与行渲染成对维护（估小会压行）。
 
+use shared::i18n::tr;
 use super::*;
 
 use content_search::view::hit_line;
@@ -323,7 +324,7 @@ impl ScratchpadView {
                         .ghost()
                         .small()
                         .icon(IconName::ExternalLink)
-                        .tooltip("打开位置")
+                        .tooltip(tr("打开位置"))
                         .on_click(open_location),
                 )
                 .child(
@@ -331,7 +332,7 @@ impl ScratchpadView {
                         .ghost()
                         .small()
                         .icon(Icon::empty().path("icons/pencil.svg"))
-                        .tooltip("重命名")
+                        .tooltip(tr("重命名"))
                         .on_click(rename),
                 )
                 .child(
@@ -339,7 +340,7 @@ impl ScratchpadView {
                         .ghost()
                         .small()
                         .icon(IconName::Close)
-                        .tooltip("删除")
+                        .tooltip(tr("删除"))
                         .on_click(delete),
                 );
         }
@@ -403,7 +404,7 @@ impl ScratchpadView {
                 let del_key = menu_key.clone();
                 let mut menu = menu;
                 if !is_folder {
-                    menu = menu.item(PopupMenuItem::new("打开").on_click(move |_, _, app| {
+                    menu = menu.item(PopupMenuItem::new(tr("打开")).on_click(move |_, _, app| {
                         open_doc_entity.update(app, |this, cx| {
                             this.request_open_scratchpad_file(open_doc_key.clone(), cx)
                         });
@@ -414,7 +415,7 @@ impl ScratchpadView {
                         let stats_key = menu_key.clone();
                         let stats_label = stats_label.clone();
                         menu =
-                            menu.item(PopupMenuItem::new("查看统计").on_click(move |_, _, app| {
+                            menu.item(PopupMenuItem::new(tr("查看统计")).on_click(move |_, _, app| {
                                 let entity = stats_entity.clone();
                                 let key = stats_key.clone();
                                 let label = stats_label.clone();
@@ -427,7 +428,7 @@ impl ScratchpadView {
                     // 只在宿主接过资产库时摆出来（`can_archive`），否则是一个点了没反应的入口。
                     if can_archive {
                         menu = menu.item(
-                            PopupMenuItem::new("归档为存档…").on_click(move |_, window, app| {
+                            PopupMenuItem::new(tr("归档为存档…")).on_click(move |_, window, app| {
                                 let entity = archive_entity.clone();
                                 let paths = archive_paths.clone();
                                 entity.update(app, |this, cx| {
@@ -444,7 +445,7 @@ impl ScratchpadView {
                 let reveal_key = menu_key.clone();
                 let open_sys_entity = menu_entity.clone();
                 let open_sys_key = menu_key.clone();
-                menu = menu.item(PopupMenuItem::new("在文件管理器中显示").on_click(
+                menu = menu.item(PopupMenuItem::new(tr("在文件管理器中显示")).on_click(
                     move |_, _, app| {
                         reveal_entity.update(app, |this, cx| {
                             this.reveal_scratchpad_location(reveal_key.clone(), cx)
@@ -453,7 +454,7 @@ impl ScratchpadView {
                 ));
                 if !is_folder {
                     // 「用系统应用打开」：只给文件（文件夹“打开”在资源管理器里就是定位）。
-                    menu = menu.item(PopupMenuItem::new("用系统应用打开").on_click(
+                    menu = menu.item(PopupMenuItem::new(tr("用系统应用打开")).on_click(
                         move |_, _, app| {
                             open_sys_entity.update(app, |this, cx| {
                                 this.open_scratchpad_location(open_sys_key.clone(), cx)
@@ -465,7 +466,7 @@ impl ScratchpadView {
                 // 树行 meta 只留大小；时间与「SQL 文件连接哪个数据库」都放这里）。
                 let info_entity = menu_entity.clone();
                 let info_key = menu_key.clone();
-                menu = menu.item(PopupMenuItem::new("属性").on_click(move |_, _, app| {
+                menu = menu.item(PopupMenuItem::new(tr("属性")).on_click(move |_, _, app| {
                     info_entity.update(app, |this, cx| {
                         this.show_scratchpad_file_info(info_key.clone(), cx)
                     });
@@ -475,7 +476,7 @@ impl ScratchpadView {
                     let tag_entity = menu_entity.clone();
                     let tag_rel = rel_for_tags.clone();
                     menu =
-                        menu.item(PopupMenuItem::new("标签…").on_click(move |_, window, app| {
+                        menu.item(PopupMenuItem::new(tr("标签…")).on_click(move |_, window, app| {
                             if !tag_rel.is_empty() {
                                 tag_entity.update(app, |this, cx| {
                                     this.open_tag_dialog(window, &tag_rel, cx)
@@ -485,7 +486,7 @@ impl ScratchpadView {
                 }
                 let menu = menu;
                 menu.item(
-                    PopupMenuItem::new("重命名").on_click(move |_, window, app| {
+                    PopupMenuItem::new(tr("重命名")).on_click(move |_, window, app| {
                         rename_entity.update(app, |this, cx| {
                             this.start_scratchpad_edit(
                                 ScratchpadEdit::Rename {
@@ -498,14 +499,14 @@ impl ScratchpadView {
                     }),
                 )
                 .separator()
-                .item(PopupMenuItem::new("剪切").on_click(move |_, _, app| {
+                .item(PopupMenuItem::new(tr("剪切")).on_click(move |_, _, app| {
                     cut_entity.update(app, |this, cx| {
                         this.scratchpad.borrow_mut().selected =
                             std::iter::once(cut_key.clone()).collect();
                         this.set_scratchpad_clipboard(ScratchpadClipboardMode::Cut, cx);
                     });
                 }))
-                .item(PopupMenuItem::new("复制").on_click(move |_, _, app| {
+                .item(PopupMenuItem::new(tr("复制")).on_click(move |_, _, app| {
                     copy_entity.update(app, |this, cx| {
                         this.scratchpad.borrow_mut().selected =
                             std::iter::once(copy_key.clone()).collect();
@@ -513,7 +514,7 @@ impl ScratchpadView {
                     });
                 }))
                 .separator()
-                .item(PopupMenuItem::new("删除").on_click(move |_, _, app| {
+                .item(PopupMenuItem::new(tr("删除")).on_click(move |_, _, app| {
                     del_entity.update(app, |this, cx| {
                         this.delete_scratchpad_entry(del_key.clone(), cx)
                     });
@@ -599,7 +600,7 @@ impl ScratchpadView {
                     .ghost()
                     .small()
                     .icon(IconName::Check)
-                    .tooltip("确认")
+                    .tooltip(tr("确认"))
                     .on_click(commit),
             )
             .child(
@@ -607,7 +608,7 @@ impl ScratchpadView {
                     .ghost()
                     .small()
                     .icon(IconName::Close)
-                    .tooltip("取消")
+                    .tooltip(tr("取消"))
                     .on_click(cancel),
             );
 
@@ -664,7 +665,7 @@ impl ScratchpadView {
                 .px_2()
                 .text_xs()
                 .text_color(muted)
-                .child("没有匹配的文件")
+                .child(tr("没有匹配的文件"))
                 .into_any_element();
         }
 
@@ -701,7 +702,7 @@ impl ScratchpadView {
                             .with_variant(EmptyMediaVariant::Icon)
                             .child(Icon::empty().path("icons/file-text.svg")),
                     )
-                    .title(EmptyTitle::new().child("草稿箱是空的"))
+                    .title(EmptyTitle::new().child(tr("草稿箱是空的")))
                     .description(
                         EmptyDescription::new().child(
                             "随手写点东西，或从外部导入文件\n草稿箱根 = 项目下的 scratchpad/；导入 = 复制，引用 = 链接",
@@ -718,19 +719,19 @@ impl ScratchpadView {
                             Button::new("sp-empty-new")
                                 .small()
                                 .primary()
-                                .label("＋ 新建")
+                                .label(tr("＋ 新建"))
                                 .on_click(new_file),
                         )
                         .child(
                             Button::new("sp-empty-folder")
                                 .small()
-                                .label("🗀 文件夹")
+                                .label(tr("🗀 文件夹"))
                                 .on_click(new_folder),
                         )
                         .child(
                             Button::new("sp-empty-import")
                                 .small()
-                                .label("⬇ 导入")
+                                .label(tr("⬇ 导入"))
                                 .on_click(import),
                         ),
                 ),
@@ -820,7 +821,7 @@ impl ScratchpadView {
                         .ghost()
                         .small()
                         .icon(IconName::Replace)
-                        .tooltip("替换该目录下全部匹配")
+                        .tooltip(tr("替换该目录下全部匹配"))
                         .on_click(replace_all),
                 )
                 .child(
@@ -828,7 +829,7 @@ impl ScratchpadView {
                         .ghost()
                         .small()
                         .icon(IconName::Close)
-                        .tooltip("收起该目录")
+                        .tooltip(tr("收起该目录"))
                         .on_click(toggle_dir.clone()),
                 );
             tree = tree.child(
@@ -906,7 +907,7 @@ impl ScratchpadView {
                             .ghost()
                             .small()
                             .icon(IconName::Replace)
-                            .tooltip("替换该文件内全部匹配")
+                            .tooltip(tr("替换该文件内全部匹配"))
                             .on_click(replace_file),
                     )
                     .child(
@@ -914,7 +915,7 @@ impl ScratchpadView {
                             .ghost()
                             .small()
                             .icon(IconName::Close)
-                            .tooltip("收起命中明细")
+                            .tooltip(tr("收起命中明细"))
                             .on_click(toggle_file.clone()),
                     );
                 tree = tree.child(

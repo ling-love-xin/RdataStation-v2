@@ -6,6 +6,7 @@
 //! [`content_search::view`]（用户点名 2026-10-10 抽 crate，命令面板可复用）；
 //! 草稿箱只负责把后端结果组装成 [`content_search::view::SearchView`]（见 `search_view_from_payload`）。
 
+use shared::i18n::tr;
 use super::*;
 
 use super::primitives::scratchpad_absolute_time;
@@ -121,7 +122,7 @@ pub fn render_scratchpad_diff_pane(
             Button::new("sp-diff-close")
                 .small()
                 .ghost()
-                .label("关闭")
+                .label(tr("关闭"))
                 .on_click(on_clear),
         );
 

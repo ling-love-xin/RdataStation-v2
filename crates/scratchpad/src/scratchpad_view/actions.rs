@@ -5,6 +5,7 @@
 //! 少数单次系统调用（新建 / 重命名 / 引用增删改，微秒~毫秒级）保持同步回填（判据见
 //! `scratchpad-architecture.md` §13.1 K1c）。
 
+use shared::i18n::tr;
 use super::*;
 
 impl ScratchpadView {
@@ -160,7 +161,7 @@ impl ScratchpadView {
                 .and_then(|c| c.diff.clone())
         };
         let Some(diff) = ready else {
-            self.host.notice("差异正在计算…".to_string(), cx);
+            self.host.notice(tr("差异正在计算…").to_string(), cx);
             return;
         };
         self.scratchpad.borrow_mut().shown_diff = Some(relative.clone());
@@ -179,7 +180,7 @@ impl ScratchpadView {
     /// `db_connection` 为后期「SQL 文件连接哪个数据库」预留（分析文件类型实现后填充）。
     pub(super) fn show_scratchpad_file_info(&mut self, relative: String, cx: &mut Context<Self>) {
         let Some(root) = self.host.project_root() else {
-            self.host.notice("未打开项目".to_string(), cx);
+            self.host.notice(tr("未打开项目").to_string(), cx);
             return;
         };
         let abs = root.join(crate::MODULE_DIR_NAME).join(&relative);
@@ -270,7 +271,7 @@ impl ScratchpadView {
                 if close {
                     self.host.show_diff(None, cx);
                 }
-                self.host.notice("已按磁盘内容重载".to_string(), cx);
+                self.host.notice(tr("已按磁盘内容重载").to_string(), cx);
                 cx.notify();
             }
             Err(e) => self.host.notice(format!("重载失败: {e}"), cx),
@@ -536,7 +537,7 @@ impl ScratchpadView {
                 scratchpad_jobs::OpResult::Import { outcome } => match outcome {
                     Ok(()) => {
                         reload = true;
-                        notice = Some("已导入所选文件".to_string());
+                        notice = Some(tr("已导入所选文件").to_string());
                     }
                     Err(e) => {
                         // 部分成功是可能的（逐个导入遇错即停），仍要刷新一次。
@@ -551,7 +552,7 @@ impl ScratchpadView {
                             // 剪切粘贴成功才收起剪贴板（与同步版语义一致）。
                             self.scratchpad.borrow_mut().clipboard = None;
                         }
-                        notice = Some("已粘贴".to_string());
+                        notice = Some(tr("已粘贴").to_string());
                     }
                     Err(e) => {
                         reload = true;
@@ -562,7 +563,7 @@ impl ScratchpadView {
                     Ok(()) => {
                         reload = true;
                         self.scratchpad.borrow_mut().trash_expanded = false;
-                        notice = Some("回收站已清空".to_string());
+                        notice = Some(tr("回收站已清空").to_string());
                     }
                     Err(e) => error = Some(format!("清空回收站失败: {e}")),
                 },
@@ -753,7 +754,7 @@ impl ScratchpadView {
         );
         let search_input = cx.new(|cx| {
             // #32/#5 初始（文件过滤）搜索框提示词：搜索文件名或文件夹名（与内容搜索态区分）。
-            InputState::new(window, cx).placeholder("搜索文件名或文件夹名")
+            InputState::new(window, cx).placeholder(tr("搜索文件名或文件夹名"))
         });
         let search_sub = cx.subscribe_in(
             &search_input,
@@ -767,7 +768,7 @@ impl ScratchpadView {
         );
         // #5 内容搜索查询输入：搜索面板打开后独立于文件过滤框，placeholder「搜索文件内容」。
         let content_search_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("搜索文件内容"));
+            cx.new(|cx| InputState::new(window, cx).placeholder(tr("搜索文件内容")));
         let content_search_sub = cx.subscribe_in(
             &content_search_input,
             window,
@@ -779,7 +780,7 @@ impl ScratchpadView {
         );
         // VSCode 搜索面板形态（2026-10-10 对齐）：替换输入在搜索框正下方，
         // 包含/排除文件 glob 输入在高级选项里（展开后显示）。
-        let replace_input = cx.new(|cx| InputState::new(window, cx).placeholder("替换"));
+        let replace_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("替换")));
         let replace_sub = cx.subscribe_in(
             &replace_input,
             window,
@@ -789,13 +790,13 @@ impl ScratchpadView {
                 _ => {}
             },
         );
-        let include_input = cx.new(|cx| InputState::new(window, cx).placeholder("包含的文件"));
-        let exclude_input = cx.new(|cx| InputState::new(window, cx).placeholder("排除的文件"));
+        let include_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("包含的文件")));
+        let exclude_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("排除的文件")));
         // 添加外部引用弹窗（2026-10-12 原型「弹窗输入路径+别名」对齐）：路径 + 别名两个输入框。
         let ref_path_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("外部文件或目录路径"));
+            cx.new(|cx| InputState::new(window, cx).placeholder(tr("外部文件或目录路径")));
         let ref_alias_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("别名（默认取名称）"));
+            cx.new(|cx| InputState::new(window, cx).placeholder(tr("别名（默认取名称）")));
         let mut view = self.scratchpad.borrow_mut();
         view.name_input = Some(name_input);
         view._name_sub = Some(name_sub);
@@ -825,11 +826,11 @@ impl ScratchpadView {
     ) {
         // 标签写项目库属写操作，只读模式拒绝。
         if self.host.read_only() {
-            self.host.notice("只读模式：不能修改标签".to_string(), cx);
+            self.host.notice(tr("只读模式：不能修改标签").to_string(), cx);
             return;
         }
         if self.scratchpad.borrow().tag_new_input.is_none() {
-            let input = cx.new(|cx| InputState::new(window, cx).placeholder("新标签名，点添加"));
+            let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("新标签名，点添加")));
             self.scratchpad.borrow_mut().tag_new_input = Some(input);
         }
         self.scratchpad.borrow_mut().tag_dialog = Some(rel_path.to_string());
@@ -932,7 +933,7 @@ impl ScratchpadView {
     ) {
         // M1：只读打开时禁止新建/重命名草稿。
         if self.host.read_only() {
-            self.host.notice("只读模式：不允许修改草稿".to_string(), cx);
+            self.host.notice(tr("只读模式：不允许修改草稿").to_string(), cx);
             cx.notify();
             return;
         }
@@ -1010,7 +1011,7 @@ impl ScratchpadView {
         };
         // M1：只读打开时禁止提交草稿修改。
         if self.host.read_only() {
-            self.host.notice("只读模式：不允许修改草稿".to_string(), cx);
+            self.host.notice(tr("只读模式：不允许修改草稿").to_string(), cx);
             cx.notify();
             return;
         }
@@ -1098,7 +1099,7 @@ impl ScratchpadView {
     pub(super) fn delete_scratchpad_selection(&mut self, cx: &mut Context<Self>) {
         // M1：只读打开时禁止删除草稿。
         if self.host.read_only() {
-            self.host.notice("只读模式：不允许删除草稿".to_string(), cx);
+            self.host.notice(tr("只读模式：不允许删除草稿").to_string(), cx);
             cx.notify();
             return;
         }
@@ -1226,7 +1227,7 @@ impl ScratchpadView {
     pub(super) fn paste_scratchpad_clipboard(&mut self, cx: &mut Context<Self>) {
         // M1：只读打开时禁止写入草稿。
         if self.host.read_only() {
-            self.host.notice("只读模式：不允许粘贴草稿".to_string(), cx);
+            self.host.notice(tr("只读模式：不允许粘贴草稿").to_string(), cx);
             cx.notify();
             return;
         }
@@ -1322,7 +1323,7 @@ impl ScratchpadView {
         cx: &mut Context<Self>,
     ) {
         if self.host.read_only() {
-            self.host.notice("只读模式：不允许修改引用".to_string(), cx);
+            self.host.notice(tr("只读模式：不允许修改引用").to_string(), cx);
             cx.notify();
             return;
         }
@@ -1683,7 +1684,7 @@ impl ScratchpadView {
     pub(super) fn replace_scratchpad_all(&mut self, cx: &mut Context<Self>) {
         if self.host.read_only() {
             self.host
-                .notice("只读模式：不允许替换草稿内容".to_string(), cx);
+                .notice(tr("只读模式：不允许替换草稿内容").to_string(), cx);
             cx.notify();
             return;
         }
@@ -1697,7 +1698,7 @@ impl ScratchpadView {
             return;
         };
         if replacement.is_empty() {
-            self.host.notice("请先输入替换内容".to_string(), cx);
+            self.host.notice(tr("请先输入替换内容").to_string(), cx);
             cx.notify();
             return;
         }
@@ -1766,7 +1767,7 @@ impl ScratchpadView {
     pub(super) fn replace_scratchpad_file(&mut self, file: &str, cx: &mut Context<Self>) {
         if self.host.read_only() {
             self.host
-                .notice("只读模式：不允许替换草稿内容".to_string(), cx);
+                .notice(tr("只读模式：不允许替换草稿内容").to_string(), cx);
             cx.notify();
             return;
         }
@@ -1780,7 +1781,7 @@ impl ScratchpadView {
             return;
         };
         if replacement.is_empty() {
-            self.host.notice("请先输入替换内容".to_string(), cx);
+            self.host.notice(tr("请先输入替换内容").to_string(), cx);
             cx.notify();
             return;
         }
@@ -1915,11 +1916,11 @@ impl ScratchpadView {
             )
         };
         if path.is_empty() {
-            self.host.notice("请填写外部文件或目录路径".to_string(), cx);
+            self.host.notice(tr("请填写外部文件或目录路径").to_string(), cx);
             return false;
         }
         if !std::path::Path::new(&path).exists() {
-            self.host.notice("路径不存在，请检查".to_string(), cx);
+            self.host.notice(tr("路径不存在，请检查").to_string(), cx);
             return false;
         }
         let alias = if alias.is_empty() {
@@ -1931,7 +1932,7 @@ impl ScratchpadView {
             alias
         };
         if alias.is_empty() {
-            self.host.notice("别名不能为空".to_string(), cx);
+            self.host.notice(tr("别名不能为空").to_string(), cx);
             return false;
         }
         match self.scratchpad_store() {
