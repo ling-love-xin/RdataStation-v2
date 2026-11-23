@@ -23,7 +23,7 @@ use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::empty::{
     Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle,
 };
-use gpui_kit::component::menu::PopupMenu;
+use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::Icon;
@@ -1325,7 +1325,85 @@ impl DataObjectsTab {
                     .children(archive_button)
                     .children(persist_button)
                     .children(register_button)
-                    .children(session_button),
+                    .children(session_button)
+                    // 铁律 E 组第 20 条：与其他模块的交互一律走右键。
+                    // `context_menu` 会换掉元素类型（不再有样式方法），所以必须挂在链尾。
+                    .context_menu({
+                        use crate::components::file_actions::{
+                            ExportDest, archive_file_as_snapshot, export_table_to,
+                        };
+                        let shared = self.shared.clone();
+                        let sql_ref = object.sql_ref.clone();
+                        let alias = data_objects::fileview_alias(&object.key).map(str::to_string);
+                        let usable = object.can_analyze();
+                        let format = self.export_format;
+                        move |menu, _window, _cx| {
+                            let mut menu = menu;
+                            if let Some(reference) = sql_ref.clone().filter(|_| usable) {
+                                let open = shared.clone();
+                                let open_ref = reference.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::new("在编辑器打开").on_click(move |_, _, cx| {
+                                        open.request_query(workbench_shell::model::QueryRequest {
+                                            conn_id: None,
+                                            sql: format!("SELECT * FROM {open_ref}"),
+                                            run: false,
+                                        });
+                                        open.notify_host(cx);
+                                    }),
+                                );
+                                let export = shared.clone();
+                                let export_ref = reference.clone();
+                                menu = menu.item(PopupMenuItem::new("导出（全局）").on_click(
+                                    move |_, _, cx| {
+                                        export_table_to(
+                                            &export,
+                                            &export_ref,
+                                            ExportDest::Global,
+                                            format,
+                                            cx,
+                                        );
+                                    },
+                                ));
+                                let draft = shared.clone();
+                                let draft_ref = reference;
+                                menu = menu.item(PopupMenuItem::new("存到草稿").on_click(
+                                    move |_, _, cx| {
+                                        export_table_to(
+                                            &draft,
+                                            &draft_ref,
+                                            ExportDest::Scratchpad,
+                                            format,
+                                            cx,
+                                        );
+                                    },
+                                ));
+                            }
+                            if let Some(alias) = alias.clone() {
+                                let snapshot = shared.clone();
+                                menu = menu.item(PopupMenuItem::new("归档为快照").on_click(
+                                    move |_, _, cx| {
+                                        let path = snapshot
+                                            .loaded_files
+                                            .borrow()
+                                            .iter()
+                                            .find(|(seen, _)| seen == &alias)
+                                            .map(|(_, path)| path.clone());
+                                        match path {
+                                            Some(path) => {
+                                                archive_file_as_snapshot(&snapshot, &path, cx)
+                                            }
+                                            None => snapshot.say_error(
+                                                format!("归档：找不到 {alias} 的路径"),
+                                                cx,
+                                            ),
+                                        }
+                                    },
+                                ));
+                            }
+                            menu
+                        }
+                    }),
             );
             if session_open {
                 let mut bar = div()
