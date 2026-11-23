@@ -49,6 +49,27 @@ pub struct Applied {
     pub accepted: usize,
 }
 
+/// 【R3】从一批事件里挑出**本次执行**的输入请求：`Some((prompt, password))`
+///
+/// 输入请求不是「输出」（不写 cells，见 [`apply_events`]），但视图要用它的提示串画
+/// 输入行、并把值回送给同一个内核，所以归属判据必须与 [`apply_events`] 一致：
+/// 上一单元迟到的 `input_request` 不算（否则提示会画到错的卡片上）。
+///
+/// 一批里有多条时取第一条——一次执行只会阻塞在一个请求上，后面出现的属异常路径。
+pub fn pending_input<'a, I>(tag: ExecutionTag<'_>, events: I) -> Option<(String, bool)>
+where
+    I: IntoIterator<Item = &'a KernelEventEnvelope>,
+{
+    events.into_iter().find_map(|envelope| {
+        match (&envelope.event, verdict(envelope, tag)) {
+            (KernelEvent::InputRequest { prompt, password }, Verdict::Accept) => {
+                Some((prompt.clone(), *password))
+            }
+            _ => None,
+        }
+    })
+}
+
 /// 把一批事件按到达顺序应用到单元
 ///
 /// 语义与抽出前逐条对齐（行为等价）：
@@ -311,5 +332,46 @@ mod tests {
         assert!(!applied.finished);
         assert_eq!(applied.accepted, 1);
         assert!(c.outputs.is_empty());
+    }
+
+    /// 【R3】输入请求的归属：本次执行的被摘出来；上一单元迟到的不算
+    /// （若丢掉归属判定，提示会画到错的卡片上，回送也会送进错的内核）
+    #[test]
+    fn pending_input_respects_execution_ownership() {
+        let request = |msg_id: Option<&str>, prompt: &str| {
+            env(
+                msg_id,
+                KernelEvent::InputRequest {
+                    prompt: prompt.to_string(),
+                    password: false,
+                },
+            )
+        };
+
+        // 本次执行：摘出来，提示串原样
+        let own = vec![request(Some("e"), "name? ")];
+        assert_eq!(
+            pending_input(ExecutionTag { msg_id: "e" }, &own),
+            Some(("name? ".to_string(), false))
+        );
+
+        // 上一单元迟到：不算
+        let foreign = vec![request(Some("old"), "上一单元的提示")];
+        assert_eq!(pending_input(ExecutionTag { msg_id: "e" }, &foreign), None);
+
+        // 一批里混着外来请求、普通输出与本次请求：取本次那条
+        let mixed = vec![
+            request(Some("old"), "旧提示"),
+            stream(Some("e"), "stdout", "先有输出"),
+            request(Some("e"), "新提示"),
+        ];
+        assert_eq!(
+            pending_input(ExecutionTag { msg_id: "e" }, &mixed),
+            Some(("新提示".to_string(), false))
+        );
+
+        // 没有请求：None（普通输出不该被当成等待态）
+        let none = vec![stream(Some("e"), "stdout", "只有输出")];
+        assert_eq!(pending_input(ExecutionTag { msg_id: "e" }, &none), None);
     }
 }

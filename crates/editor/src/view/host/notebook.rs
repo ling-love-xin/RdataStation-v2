@@ -888,24 +888,13 @@ impl EditorHostPanel {
         // 【R6】业务规则（归属过滤 / stderr 前缀 / mime 分发 / 收口 / 失败原因）
         // 全部在 notebook/orchestrate.rs 的纯函数里：可在无窗口环境单测
         // 【R3】输入请求先摘出来：它不是「输出」，不写 cells，由视图画输入行。
-        // 归属按与 apply_events 同一判据（verdict）——上一单元迟到的请求不算。
-        let input_request = events.iter().find_map(|envelope| {
-            match (
-                &envelope.event,
-                crate::notebook::orchestrate::verdict(
-                    envelope,
-                    crate::notebook::orchestrate::ExecutionTag {
-                        msg_id: &run.msg_id,
-                    },
-                ),
-            ) {
-                (
-                    rds_kernel::KernelEvent::InputRequest { prompt, password },
-                    crate::notebook::orchestrate::Verdict::Accept,
-                ) => Some((prompt.clone(), *password)),
-                _ => None,
-            }
-        });
+        // 归属判据在 `orchestrate::pending_input`（与 `apply_events` 同一口径，可无 GPUI 单测）
+        let input_request = crate::notebook::orchestrate::pending_input(
+            crate::notebook::orchestrate::ExecutionTag {
+                msg_id: &run.msg_id,
+            },
+            events.iter(),
+        );
         let applied = crate::notebook::orchestrate::apply_events(
             cell,
             crate::notebook::orchestrate::ExecutionTag {
