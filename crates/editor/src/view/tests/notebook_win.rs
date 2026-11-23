@@ -1120,3 +1120,112 @@ fn notebook_first_output_beats_the_escape_valve(cx: &mut TestAppContext) {
 
     shared.kernel_shutdown("python3");
 }
+
+/// 【R3】删掉正在等输入的单元 → 内核不再被那一问卡住，且能继续执行
+///
+/// 轮次 16 的单元用例只钉了面板侧（等待态撤掉、行撤掉）。这一步补的是另一半：阻塞真的
+/// 被解开了。
+///
+/// 平台分叉（都有证据）：ipykernel 在 Windows 上不发 SIGINT
+/// （`kernelbase.py` 的 `_send_interrupt_children`：`if os.name == "nt"` 直接返回），
+/// 所以面板在 Windows 上用**关闭内核**兜底（`request_interrupt` 的 windows 分支），
+/// 下次运行按需重启；其它平台发 `InterruptRequest`（kernel 侧
+/// `interrupt_unblocks_a_waiting_input` 已在真内核上取证）。
+///
+/// 判据与平台无关：删掉之后**新提交一次执行必须能跑完**。中断 / 关闭若没真正生效，内核
+/// 仍停在 `input()` 上，新执行排在它后面永远不会出结果（`wait_cell_settled` 上限 30s 会红）。
+#[gpui_kit::test]
+#[ignore = "需要本机 ipykernel（RDS_KERNEL_PYTHON 指向对应解释器）"]
+fn notebook_deleting_a_waiting_cell_interrupts_the_kernel(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    cx.executor().allow_parking();
+
+    let shared = EditorShared::new();
+    shared.attach_kernels(std::rc::Rc::new(OnePython(python_spec())));
+    let id = shared
+        .open(OpenRequest::untitled("", EditorMode::Analysis))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_add_cell(&id, crate::cell::CellLanguage::Python, window, cx);
+        });
+    });
+    let mut cells = shared.notebook_cells(&id);
+    let cell_id = cells[0].id.clone();
+    cells[0].body = "input('name? ')".to_string();
+    shared.set_notebook_cells(&id, cells);
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| panel.sync_cell_editors(window, cx));
+        window.draw(cx).clear(cx);
+    });
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.notebook_run_cell(&id, &cell_id, cx));
+    });
+    let (prompt, _, on_cell, _) = wait_pending_input(cx, &panel).expect("等到了输入请求");
+    assert_eq!(prompt, "name? ");
+    assert_eq!(on_cell, cell_id);
+    assert_eq!(
+        shared.notebook_cells(&id)[0].state,
+        crate::cell::CellState::Running,
+        "前提：单元在内核上阻塞着"
+    );
+
+    // 删单元：面板侧要立刻撤等待态、并在消息栏说明原因
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_delete_cell(&id, &cell_id, window, cx);
+        });
+    });
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).nb_pending.is_none()),
+        "删除后等待态必须撤掉"
+    );
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .unwrap_or_default();
+    assert!(
+        message.contains("已中断"),
+        "消息栏要如实说明中断原因：{message:?}"
+    );
+
+    // 1) 阻嗇被解开：内核若仍卡在 `input()`，下面这个新执行只会排在它后面永远不出结果。
+    // 注意不能直接 `shared.kernel_drain`：面板的泵（`ensure_kernel_pump`）会先取走事件，
+    // 所以判据只能落在「内核是否重新可执行」这个可观测结果上。
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_add_cell(&id, crate::cell::CellLanguage::Python, window, cx);
+        });
+    });
+    let new_cell = shared.notebook_cells(&id)[0].id.clone();
+    let mut cells = shared.notebook_cells(&id);
+    cells[0].body = "1 + 1".to_string();
+    shared.set_notebook_cells(&id, cells);
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| panel.sync_cell_editors(window, cx));
+        window.draw(cx).clear(cx);
+    });
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.notebook_run_cell(&id, &new_cell, cx));
+    });
+    assert_eq!(
+        shared.notebook_cells(&id)[0].state,
+        crate::cell::CellState::Running,
+        "删除那个单元后要能提交新执行（消息栏：{:?}）",
+        cx.update(|_window, cx| panel.read(cx).message.clone())
+    );
+    // `wait_cell_settled` 的上限是 30s：中断没抵达时内核永远停在 `input()`，这里必红
+    let outputs = wait_cell_settled(cx, &shared, &id);
+    assert!(
+        outputs
+            .iter()
+            .any(|o| matches!(o, crate::cell::Output::Text(t) if t.trim() == "2")),
+        "中断后内核必须还能跑出新结果（不是通道已废）：{outputs:?}，消息栏：{:?}",
+        cx.update(|_window, cx| panel.read(cx).message.clone())
+    );
+
+    shared.kernel_shutdown("python3");
+}

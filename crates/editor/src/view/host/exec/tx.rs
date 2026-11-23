@@ -117,7 +117,9 @@ impl EditorHostPanel {
     /// 同步只回绝“没在跑”；真正的中断在工作线程上做（端口实现允许阻塞）。
     /// 中断之后的剩余语句由通道标“已取消”（不是接着往下跑）。
     pub(crate) fn interrupt(&mut self, cx: &mut Context<Self>) {
-        match self.shared.cancel_for(&self.document) {
+        // 内核单元与 SQL 执行是两条通道（见 `request_interrupt` 的说明）：状态栏这一颗
+        // ■ 对两者都要有效，否则跑着的 Python 单元根本没有中断入口。
+        match self.request_interrupt() {
             Ok(()) => self.set_message(Some("已请求中断…".to_string()), cx),
             Err(reason) => self.set_message(Some(reason), cx),
         }

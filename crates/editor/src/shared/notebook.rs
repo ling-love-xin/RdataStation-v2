@@ -171,6 +171,20 @@ impl EditorShared {
         Ok(())
     }
 
+    /// 【R3】中断某内核上正在跑的那次执行（control 通道的 `InterruptRequest`）
+    ///
+    /// 与 [`Self::cancel_for`] 是两条路：后者走 SQL 执行队列（按连接取消），对内核单元无效
+    /// ——内置内核单元在跑时 SQL 队列里并没有作业，`cancel_for` 只会回「当前没有执行在运行」。
+    /// 内核这条只能按 `kernel_id` 找到会话再发中断。
+    pub fn kernel_interrupt(&self, kernel_id: &str) -> Result<(), String> {
+        let kernels = self.kernels.borrow();
+        let Some(entry) = kernels.get(kernel_id) else {
+            return Err(format!("内核 {kernel_id} 未启动"));
+        };
+        entry.session.interrupt();
+        Ok(())
+    }
+
     /// 【R2】取某内核的唤醒句柄（`Arc` clone；未启动 = None）
     pub fn kernel_wake(&self, kernel_id: &str) -> Option<std::sync::Arc<tokio::sync::Notify>> {
         self.kernels

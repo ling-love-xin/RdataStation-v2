@@ -512,7 +512,8 @@ impl EditorHostPanel {
             .is_some_and(|pending| pending.cell_id == id)
         {
             self.set_notebook_pending(None, cx);
-            let _ = self.shared.cancel_for(&self.document);
+            // 中断走真正在跑的那条通道（内核 → `InterruptRequest`；SQL → 按连接取消）
+            let _ = self.request_interrupt();
             self.set_message(Some("已中断：等待输入的单元被删除".to_string()), cx);
         }
         cx.notify();
@@ -1105,14 +1106,47 @@ impl EditorHostPanel {
         cx.active_window().or_else(|| cx.windows().first().copied())
     }
 
-    /// 中断单元执行（沿执行队列的取消；没在跑 = 如实回绝）
+    /// 中断单元执行（内核单元走 `InterruptRequest`，SQL 走执行队列的按连接取消；
+    /// 没在跑 = 如实回绝）
     pub(crate) fn notebook_cancel_run(&mut self, cx: &mut Context<Self>) {
         // 【R3】中断后不再等输入：输入行撤掉（迟到的 input_request 也不会再画）
         self.set_notebook_pending(None, cx);
-        match self.shared.cancel_for(&self.document) {
+        match self.request_interrupt() {
             Ok(()) => self.set_message(Some("已请求中断".to_string()), cx),
             Err(reason) => self.set_message(Some(reason), cx),
         }
+    }
+
+    /// 把「中断当前执行」发到真正在跑的那条通道上，返回可读结论
+    ///
+    /// 两条通道互不相通：内核单元在跑时 SQL 队列里没有作业（`cancel_for` 只会回
+    /// 「当前没有执行在运行」），反过来也一样。所以先按 controller 的账本判归属：
+    /// 有内核执行在册 → 中断内核；否则落到 SQL 的按连接取消。
+    ///
+    /// **Windows 特殊处理（有上游源码依据）**：ipykernel 在 Windows 上不发 SIGINT
+    /// （`.rds/tmp/kernel-venv/Lib/site-packages/ipykernel/kernelbase.py` 的
+    /// `_send_interrupt_children`：`if os.name == "nt": self.log.error("Interrupt message
+    /// not supported on Windows")`），所以 control 通道的 `InterruptRequest` 在 Windows
+    /// 上是空操作——真机实测也确认它既解不开 `input()` 阻塞、也打不断 `time.sleep`。
+    /// 唯一能解开阻塞的手段是关掉这个内核（下次运行按需重启，代价是变量丢失）。
+    pub(crate) fn request_interrupt(&mut self) -> Result<(), String> {
+        let Some(run) = self.notebook_ctrl.current().cloned() else {
+            return self.shared.cancel_for(&self.document);
+        };
+        if cfg!(windows) {
+            let reason =
+                "内核中断在 Windows 上不被 ipykernel 支持，已关闭该内核（下次运行会重新启动，变量会丢）";
+            self.shared.kernel_shutdown(&run.kernel_id);
+            self.notebook_ctrl.finish();
+            // 单元还画着的话必须复位：内核都关了，不能继续显示「执行中」
+            let mut state = self.notebook_state();
+            if let Some(cell) = state.cells.iter_mut().find(|cell| cell.id == run.cell_id) {
+                cell.mark_error(reason.to_string());
+            }
+            self.shared.set_notebook_cells(&self.document, state.cells);
+            return Err(reason.to_string());
+        }
+        self.shared.kernel_interrupt(&run.kernel_id)
     }
 
     /// 【2d】收单元执行的结论（主线程轮询取走）：按会话 + 单元 id 回填内联输出

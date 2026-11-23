@@ -1033,4 +1033,220 @@ mod tests {
         );
         session.shutdown();
     }
+
+    /// `InterruptRequest` 能否打断**正在跑的代码**（`time.sleep`），以及本平台定性
+    ///
+    /// 与 `interrupt_unblocks_a_waiting_input` 一起决定「中断」在本平台到底可用到什么程度：
+    /// 若两者都解不开，状态栏那颗 ■ 在内核单元上就是无效按钮，必须换实现（见结果记录）。
+    #[test]
+    #[ignore = "需要本机安装 ipykernel（RDS_KERNEL_PYTHON 指向对应解释器）"]
+    fn interrupt_breaks_a_sleeping_execution() {
+        let python = std::env::var("RDS_KERNEL_PYTHON").unwrap_or_else(|_| "python".to_string());
+        let mut session = KernelSession::spawn(Path::new(&python))
+            .unwrap_or_else(|e| panic!("启动内核失败（python={python}）：{e:#}"));
+        let mut events = session.take_events();
+
+        let msg_id = session.execute("import time; time.sleep(20)".to_string());
+        // 等执行真的开始跑（Status(Busy) 或首个事件），再发中断
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            while let Ok(env) = events.try_recv() {
+                if let Some(id) = env.msg_id.as_ref() {
+                    assert_eq!(id, &msg_id, "事件归属错误：应属于本次执行");
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "20s 没看到执行开始"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            break; // 让内核先跑起来，下面立刻发中断
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        session.interrupt();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut status: Option<String> = None;
+        let mut error: Option<String> = None;
+        let mut seen = 0usize;
+        while status.is_none() {
+            while let Ok(env) = events.try_recv() {
+                seen += 1;
+                match env.event {
+                    KernelEvent::Error { ename, evalue, .. } => {
+                        if let Some(id) = env.msg_id.as_ref() {
+                            assert_eq!(id, &msg_id, "错误事件应归属本次执行");
+                        }
+                        error = Some(format!("{ename}: {evalue}"));
+                    }
+                    KernelEvent::ExecuteReply { status: s, .. } => {
+                        if let Some(id) = env.msg_id.as_ref() {
+                            assert_eq!(id, &msg_id, "回执应归属本次执行");
+                        }
+                        status = Some(s);
+                    }
+                    KernelEvent::Failed(reason) => panic!("内核通道失败：{reason}"),
+                    _ => {}
+                }
+            }
+            if status.is_some() {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                // Windows：ipykernel 明确不发 SIGINT（kernelbase.py `_send_interrupt_children`），
+                // 控制通道中断在这里是空操作——本用例把这个平台限制钉成判据，而不是假装它能中断。
+                assert!(
+                    cfg!(windows),
+                    "10s 内中断无效（事件数 {seen}，错误：{error:?}）——非 Windows 平台不该出现"
+                );
+                println!("Windows：中断对运行中的代码无效（上游限制，已由面板改用关闭内核兜底）");
+                session.shutdown();
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let status = status.expect("已取到回执");
+        assert_ne!(status, "ok", "被中断的执行不能是 ok（实际 {status:?}）");
+        session.shutdown();
+    }
+
+    /// `InterruptRequest` 能否解开**阻塞在 `input()`** 的执行（「删掉等待单元」那条路径的内核侧前提）
+    ///
+    /// 面板在删除等待中的单元时会发中断（`InterruptRequest`）。若中断解不开阻塞，内核就一直
+    /// 停在那一问上，后续任何执行都排在它后面——界面上表现为「这个内核再也跑不动了」。
+    /// 判据分两步：被中断的那次要交出**非 ok** 的回执；之后同一会话还能正常跑出 `2`。
+    #[test]
+    #[ignore = "需要本机安装 ipykernel（RDS_KERNEL_PYTHON 指向对应解释器）"]
+    fn interrupt_unblocks_a_waiting_input() {
+        let python = std::env::var("RDS_KERNEL_PYTHON").unwrap_or_else(|_| "python".to_string());
+        let mut session = KernelSession::spawn(Path::new(&python))
+            .unwrap_or_else(|e| panic!("启动内核失败（python={python}）：{e:#}"));
+        let mut events = session.take_events();
+
+        // 第一段：执行停在 `input()` 上
+        let msg_id = session.execute("input('name? ')".to_string());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "30s 没等到输入请求"
+            );
+            let Some(env) = events.blocking_recv() else {
+                panic!("事件通道断开");
+            };
+            if let Some(id) = env.msg_id.as_ref() {
+                assert_eq!(id, &msg_id, "事件归属错误：应属于本次执行");
+            }
+            if let KernelEvent::InputRequest { prompt, .. } = env.event {
+                assert!(prompt.contains("name?"), "提示串要原样：{prompt:?}");
+                break;
+            }
+        }
+
+        // 中断：不发 InputReply，直接发 InterruptRequest
+        session.interrupt();
+
+        let mut status: Option<String> = None;
+        let mut error: Option<String> = None;
+        let mut seen: Vec<String> = Vec::new();
+        while status.is_none() {
+            while let Ok(env) = events.try_recv() {
+                seen.push(format!("{:?}", std::mem::discriminant(&env.event)));
+                match env.event {
+                    // 回执与错误必须属于本次 execute_request（R8 归属对账）
+                    KernelEvent::Error { ename, evalue, .. } => {
+                        if let Some(id) = env.msg_id.as_ref() {
+                            assert_eq!(id, &msg_id, "错误事件应归属本次执行");
+                        }
+                        error = Some(format!("{ename}: {evalue}"));
+                    }
+                    KernelEvent::ExecuteReply { status: s, .. } => {
+                        if let Some(id) = env.msg_id.as_ref() {
+                            assert_eq!(id, &msg_id, "回执应归属本次执行");
+                        }
+                        status = Some(s);
+                    }
+                    KernelEvent::Failed(reason) => panic!("内核通道失败：{reason}"),
+                    // `InterruptRequest` 走 control 通道，它自己也会带出事件（如 idle），
+                    // 那些事件的 `msg_id` 是**中断请求**的、不是本次执行的——这条不算串台
+                    _ => {}
+                }
+            }
+            if status.is_some() {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                // Windows：控制通道中断是空操作（上游 `_send_interrupt_children` 直接 return），
+                // 这里把「解不开」钉成判据；非 Windows 出现这种情况才是缺陷。
+                assert!(
+                    cfg!(windows),
+                    "中断后 30s 没收到回执（错误：{error:?}，期间事件：{seen:?}）——非 Windows 平台不该出现"
+                );
+                println!(
+                    "Windows：中断解不开阻塞中的 input()（上游限制）；面板侧已改用关闭内核兜底"
+                );
+                session.shutdown();
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let status = status.expect("已取到回执");
+        assert_ne!(
+            status, "ok",
+            "被中断的执行不能是 ok（实际 {status:?}，错误：{error:?}）"
+        );
+        assert!(
+            error.as_deref().is_some_and(|e| e.contains("KeyboardInterrupt")),
+            "阻塞中的 `input()` 被中断应报 KeyboardInterrupt（实际 {error:?}）"
+        );
+
+        // 第二段：同一内核仍然可用
+        let msg_id_after = session.execute("1 + 1".to_string());
+        assert_ne!(msg_id_after, msg_id, "每次 execute 的 msg_id 必须唯一");
+        let mut after_ok = false;
+        let mut saw_two = false;
+        let mut seen: Vec<String> = Vec::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            while let Ok(env) = events.try_recv() {
+                seen.push(format!("{:?}", std::mem::discriminant(&env.event)));
+                if let Some(id) = env.msg_id.as_ref() {
+                    assert_eq!(id, &msg_id_after, "第二段事件应归属新的执行");
+                }
+                match env.event {
+                    KernelEvent::Display(media) => {
+                        // `1 + 1` 的结果走 execute_result（text/plain "2"）
+                        if media.content.iter().any(|m| {
+                            matches!(m, jupyter_protocol::MediaType::Plain(text) if text.trim() == "2")
+                        }) {
+                            saw_two = true;
+                        }
+                    }
+                    KernelEvent::Stream { text, .. } => {
+                        if text.trim() == "2" {
+                            saw_two = true;
+                        }
+                    }
+                    KernelEvent::ExecuteReply { status, .. } => {
+                        assert_eq!(status, "ok", "中断后内核必须还能正常执行");
+                        after_ok = true;
+                    }
+                    KernelEvent::Failed(reason) => panic!("内核通道失败：{reason}"),
+                    KernelEvent::Error { evalue, .. } => {
+                        panic!("中断后执行不应报错：{evalue}")
+                    }
+                    _ => {}
+                }
+            }
+            if after_ok && saw_two {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "中断后 30s 没能再跑出 `2`（ok={after_ok} two={saw_two}，期间事件：{seen:?}）"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        session.shutdown();
+    }
 }
