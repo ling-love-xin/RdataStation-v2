@@ -455,7 +455,10 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             _ => false,
         };
         out.push(Object {
-            key: format!("asset:{}", asset.name),
+            // 身份用存档库的行 id（`resource_id`），不用名字：名字可改、可重名，
+            // 用它当身份会让两份同名资产在工作集里互相顶掉（选中一个等于选中两个），
+            // 改个名也会让「已选」凭空消失
+            key: format!("asset:{}", asset.resource_id),
             name: asset.name.clone(),
             // 只读 + 最新版本：两件事都写在副标题，避免用户以为能选旧版
             note: match asset.detail.is_empty() {
@@ -783,9 +786,11 @@ pub fn analysis_sources(
                     object.name.clone(),
                 ))
             }
-            // 资产：本体是 `resources/` 下的受管文件，读它 = 按扩展名交给 DuckDB 读
-            Some(("asset", name)) => {
-                let row = assets.iter().find(|a| a.name == *name);
+            // 资产：本体是 `resources/` 下的受管文件，读它 = 按扩展名交给 DuckDB 读。
+            // 身份段是 `resource_id`（见 `objects()` 里资产行的 key），按 id 找本体：
+            // 按名字找会在重名时拿错那一份
+            Some(("asset", id)) => {
+                let row = assets.iter().find(|a| a.resource_id == *id);
                 match (row.and_then(|r| r.payload_rel_path.as_ref()), resources_dir) {
                     (Some(rel), Some(dir)) => {
                         match SampleSource::duckdb_file(dir.join(rel), object.name.clone()) {
@@ -1085,12 +1090,57 @@ mod tests {
         // 表名只出现一次：资产行（不在「项目自建」里再列一遍）
         let hits: Vec<&Object> = rows
             .iter()
-            .filter(|o| o.name == "arp_客户画像_v2" || o.key == "asset:客户画像")
+            .filter(|o| o.name == "arp_客户画像_v2" || o.key == "asset:arp_2")
             .collect();
         assert_eq!(hits.len(), 1, "同一张表只该有一行：{hits:?}");
         assert_eq!(hits[0].pill, "资产", "归属由 M6 登记说了算：{hits:?}");
         // 自建表不受影响
         assert!(rows.iter().any(|o| o.key == "project:数据修复"));
+    }
+
+    /// 资产身份用 `resource_id`，不用名字。
+    ///
+    /// 名字可改、可重名：拿名字当 key 时两份同名资产会合成一个身份（选中一份等于
+    /// 两份都选中），取样还可能读到另一份的本体；改名则让「已选」凭空消失。
+    #[test]
+    fn asset_identity_is_the_resource_id_not_the_name() {
+        let mut c = sample();
+        c.assets = vec![
+            AssetRow {
+                name: "月度经营".into(),
+                version: 2,
+                detail: String::new(),
+                payload_rel_path: Some("assets/a.parquet".into()),
+                resource_id: "arp_a".into(),
+                analytics_table: None,
+            },
+            AssetRow {
+                name: "月度经营".into(),
+                version: 5,
+                detail: String::new(),
+                payload_rel_path: Some("assets/b.parquet".into()),
+                resource_id: "arp_b".into(),
+                analytics_table: None,
+            },
+        ];
+        let rows = objects(&c);
+        let assets: Vec<&Object> = rows.iter().filter(|o| o.pill == "资产").collect();
+        assert_eq!(assets.len(), 2, "同名两份资产必须各占一行：{assets:?}");
+        assert_eq!(assets[0].key, "asset:arp_a");
+        assert_eq!(assets[1].key, "asset:arp_b");
+        assert_ne!(assets[0].key, assets[1].key);
+
+        // 取样按身份找本体：选 arp_b 就得读 b 那份，不能按名字读成 a
+        let dir = std::env::temp_dir();
+        let picked = vec!["asset:arp_b".to_string()];
+        let (sources, skipped) =
+            super::analysis_sources(&rows, &picked, &c.assets, Some(dir.as_path()));
+        assert_eq!(sources.len(), 1, "{skipped:?}");
+        assert!(
+            sources[0].sql.contains("b.parquet"),
+            "按身份取本体：{}",
+            sources[0].sql
+        );
     }
 
     /// 资产行必须标出「最新版本」且只读，并且不给版本选择（模型层没有这个字段）。
@@ -1108,10 +1158,10 @@ mod tests {
             analytics_table: Some("arp_客户画像_v2".into()),
         });
         let rows = objects(&c);
-        let asset = rows.iter().find(|o| o.key == "asset:月度经营快照").unwrap();
+        let asset = rows.iter().find(|o| o.key == "asset:arp_demo").unwrap();
         // 文件型（本体在 resources/）→ 文件段
         assert_eq!(asset.group, Group::Files, "文件型资产按本体进文件段");
-        let table_asset = rows.iter().find(|o| o.key == "asset:客户画像").unwrap();
+        let table_asset = rows.iter().find(|o| o.key == "asset:arp_2").unwrap();
         // 表型（本体在项目分析库）→ 持久表段
         assert_eq!(table_asset.group, Group::PersistentTables, "表型资产按本体进持久表段");
         assert_eq!(asset.version, Some(3));
@@ -1201,7 +1251,7 @@ mod tests {
         let keys: Vec<&str> = rows.iter().map(|o| o.key.as_str()).collect();
         assert!(keys.contains(&"project:orders"));
         assert!(keys.contains(&"global:orders"));
-        assert!(keys.contains(&"asset:orders"));
+        assert!(keys.contains(&"asset:arp_orders"));
         assert!(keys.contains(&"result:orders"));
         let unique: std::collections::BTreeSet<&str> = keys.iter().copied().collect();
         assert_eq!(unique.len(), keys.len(), "身份必须全局唯一");
@@ -1219,7 +1269,7 @@ mod tests {
             "project:orders".to_string(),
             "global:G_月度经营".to_string(),
             "result:tmp_q_结果_3".to_string(),
-            "asset:月度经营快照".to_string(),
+            "asset:arp_demo".to_string(),
         ];
         let (sources, skipped) = super::analysis_sources(&rows, &picked, &c.assets, None);
 
@@ -1453,13 +1503,13 @@ mod tests {
             analytics_table: Some("arp_客户画像_v2".into()),
         });
         let rows = objects(&c);
-        let asset = rows.iter().find(|o| o.key == "asset:客户画像").unwrap();
+        let asset = rows.iter().find(|o| o.key == "asset:arp_2").unwrap();
         assert!(asset.can_analyze(), "本体表在，资产就可用");
 
         // 表没了（被删 / 换了项目）：行留着、标失效、不给动作
         c.analysis_tables.retain(|name| name != "arp_客户画像_v2");
         let rows = objects(&c);
-        let stale = rows.iter().find(|o| o.key == "asset:客户画像").unwrap();
+        let stale = rows.iter().find(|o| o.key == "asset:arp_2").unwrap();
         assert!(
             matches!(stale.state, State::Stale(_)),
             "本体表不在了要标失效：{:?}",
@@ -1476,7 +1526,7 @@ mod tests {
         // 没开项目时分析库清单必然为空、不是权威全集：不能拿它判「表不在」
         c.project_open = false;
         let rows = objects(&c);
-        let asset = rows.iter().find(|o| o.key == "asset:客户画像").unwrap();
+        let asset = rows.iter().find(|o| o.key == "asset:arp_2").unwrap();
         assert!(asset.can_analyze(), "没项目就无从判断，不该误标失效");
     }
 
@@ -1562,7 +1612,7 @@ mod tests {
         let dir = std::env::temp_dir();
         let (sources, skipped) = super::analysis_sources(
             &rows,
-            &["asset:月度经营快照".into()],
+            &["asset:arp_demo".into()],
             &c.assets,
             Some(dir.as_path()),
         );
@@ -1572,7 +1622,7 @@ mod tests {
         // 没路径（引用型 / 旧行）：不猜，如实跳过
         c.assets[0].payload_rel_path = None;
         let (sources, skipped) =
-            super::analysis_sources(&rows, &["asset:月度经营快照".into()], &c.assets, Some(dir.as_path()));
+            super::analysis_sources(&rows, &["asset:arp_demo".into()], &c.assets, Some(dir.as_path()));
         assert!(sources.is_empty(), "{sources:?}");
         assert_eq!(skipped.len(), 1);
         assert!(skipped[0].contains("资产"), "{skipped:?}");
