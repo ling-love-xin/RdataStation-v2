@@ -822,6 +822,9 @@ mod tests {
         let msg_id_plain = session.execute("1+1".to_string());
         let mut saw_plain = false;
         let mut saw_ok_reply = false;
+        // 收尾的 `status: idle` 也是带归属的事件：不等它到齐，第二段就会先读到这里，
+        // 被归属断言判成「串台」（实测）——产品没错，是这段没排空。
+        let mut saw_idle = false;
         loop {
             match events.blocking_recv() {
                 Some(env) => {
@@ -842,6 +845,7 @@ mod tests {
                             assert_eq!(status, "ok");
                             saw_ok_reply = true;
                         }
+                        KernelEvent::Status(KernelStatus::Idle) => saw_idle = true,
                         KernelEvent::Failed(reason) => panic!("内核通道失败：{reason}"),
                         KernelEvent::Error { evalue, .. } => {
                             panic!("`1+1` 不应报错：{evalue}")
@@ -851,7 +855,7 @@ mod tests {
                 }
                 None => panic!("事件通道断开"),
             }
-            if saw_plain && saw_ok_reply {
+            if saw_plain && saw_ok_reply && saw_idle {
                 break;
             }
         }
@@ -891,6 +895,77 @@ mod tests {
             }
         }
 
+        session.shutdown();
+    }
+
+    /// `input()` 端到端：内核请求输入 → 上报 `InputRequest` → `session.input` 回送 REPLY
+    /// → 单元正常收口，回送值进了 Python 变量。
+    ///
+    /// 这条钉住三件事：①`allow_stdin` 真的打开了（否则内核直接抛
+    /// `StdinNotImplementedError`，收不到请求）；②提示串原样带回来；③REPLY 被内核接受
+    /// （`got=doubao` 出现在 stdout 才算真的拿到值）。
+    ///
+    /// 默认跳过（依赖 ipykernel）；显式跑：
+    /// `cargo test -p rds-kernel -- --ignored --nocapture`，
+    /// python 路径经 `RDS_KERNEL_PYTHON` 指定。
+    #[test]
+    #[ignore = "需要本机安装 ipykernel（RDS_KERNEL_PYTHON 指向对应解释器）"]
+    fn input_request_is_replied_and_execution_completes() {
+        let python = std::env::var("RDS_KERNEL_PYTHON").unwrap_or_else(|_| "python".to_string());
+        let mut session = KernelSession::spawn(Path::new(&python))
+            .unwrap_or_else(|e| panic!("启动内核失败（python={python}）：{e:#}"));
+        let mut events = session.take_events();
+
+        // 内核阻塞在 `input()` 上，直到收到 REPLY 才会继续往下跑
+        let msg_id = session.execute("x = input('name? '); print('got=' + x)".to_string());
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut saw_prompt = false;
+        let mut saw_value = false;
+        let mut saw_reply = false;
+        loop {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "等待输入请求 / 回执超时（prompt={saw_prompt} value={saw_value} reply={saw_reply}）"
+            );
+            let Some(env) = events.blocking_recv() else {
+                panic!("事件通道断开");
+            };
+            // R8 归属：带归属的事件必须属于本次 execute_request
+            if let Some(id) = env.msg_id.as_ref() {
+                assert_eq!(id, &msg_id, "事件归属错误：应属于本次执行");
+            }
+            match env.event {
+                KernelEvent::InputRequest { prompt, password } => {
+                    assert!(
+                        prompt.contains("name?"),
+                        "提示串要原样带回来，实际是：{prompt:?}"
+                    );
+                    assert!(!password, "`input()` 不是密码请求");
+                    saw_prompt = true;
+                    // 回送到 stdin 通道（一条请求只回一次）
+                    session.input("doubao".to_string());
+                }
+                KernelEvent::Stream { text, .. } => {
+                    if text.contains("got=doubao") {
+                        saw_value = true;
+                    }
+                }
+                KernelEvent::ExecuteReply { status, .. } => {
+                    assert_eq!(status, "ok", "回送之后执行应成功收口");
+                    saw_reply = true;
+                }
+                KernelEvent::Failed(reason) => panic!("内核通道失败：{reason}"),
+                KernelEvent::Error { evalue, .. } => {
+                    panic!("`input()` 不应报错（说明 stdin 通道没通）：{evalue}")
+                }
+                _ => {}
+            }
+            if saw_value && saw_reply {
+                break;
+            }
+        }
+        assert!(saw_prompt, "必须先收到输入请求");
         session.shutdown();
     }
 }
