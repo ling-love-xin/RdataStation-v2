@@ -48,6 +48,22 @@ struct PanelNote {
     is_error: bool,
 }
 
+/// 一次画几张叶子（源行展开后的表 / 视图行）。
+///
+/// 与导航展开文件夹同一档（`ui::NAV_FOLDER_PAGE_SIZE`）：一个连接底下几百上千张表是常态，
+/// 全量铺在单层滚动容器里就是「每帧几百上千个元素」——gpui 照单全画，滚动就掉帧。
+/// 先画一页，底部一条「显示更多（还有 N 张）」，点一次加一页。
+const LEAF_PAGE_SIZE: usize = ui::NAV_FOLDER_PAGE_SIZE;
+
+/// 这个源当前该画几张叶子：`pages` 为空 = 还没点过「显示更多」（只画第一页）。
+///
+/// 只跟「已翻页数」有关，与清单长度无关——清单一换（刷新 / 换连接）就按现在的长度取小，
+/// 不留下「翻过的页数大于清单」这种越界态。
+fn leaf_shown(len: usize, pages: Option<usize>) -> usize {
+    let pages = pages.unwrap_or(1).max(1);
+    len.min(pages.saturating_mul(LEAF_PAGE_SIZE))
+}
+
 impl PanelNote {
     fn info(text: impl Into<String>) -> Self {
         Self {
@@ -94,6 +110,9 @@ pub struct DataObjectsTab {
     conn_children: HashMap<String, Arc<Vec<data_objects::Object>>>,
     /// 正在后台列举的源（键 = 源行 key）：同一源不重复提交，展开时画「正在列举」
     loading_sources: HashSet<String>,
+    /// 每个源已经翻过几页叶子（键 = 源行 key）：`None` / 没记录 = 第一页。
+    /// 见 [`LEAF_PAGE_SIZE`] 与 [`leaf_shown`]——叶子多了只画一页，点「显示更多」才加。
+    leaf_pages: HashMap<String, usize>,
     /// 清单版本号（`Shared::data_objects_epoch`）上次同步到的值：变了就重取，
     /// 让面板跟上「连接变化 / 查询产出结果集 / 加源 / 切项目」
     seen_epoch: u64,
@@ -122,6 +141,7 @@ impl DataObjectsTab {
             source_children: HashMap::new(),
             conn_children: HashMap::new(),
             loading_sources: HashSet::new(),
+            leaf_pages: HashMap::new(),
             // 初值故意落后于 Shared（`refresh` 里会同步成当前值）：构造那次刷新已经取过，
             // 不能让「首次 render 又发现 epoch 变了」再白重取一遍
             seen_epoch: shared_epoch,
@@ -272,6 +292,14 @@ impl DataObjectsTab {
             // 展开即提交后台列举：远端库逐层内省不占 UI 线程
             self.request_source_children(key, true);
         }
+        cx.notify();
+    }
+
+    /// 点「显示更多」：这个源多画一页叶子（见 [`LEAF_PAGE_SIZE`]）。
+    fn show_more_leaves(&mut self, key: &str, cx: &mut Context<Self>) {
+        let pages = self.leaf_pages.get(key).copied().unwrap_or(1);
+        self.leaf_pages
+            .insert(key.to_string(), pages.saturating_add(1));
         cx.notify();
     }
 
@@ -1074,11 +1102,25 @@ impl DataObjectsTab {
                     // 源库表：叶子是**可选用**的对象（取样走连接下推，不搬数据）
                     match self.conn_children.get(&object.key) {
                         Some(children) if !children.is_empty() => {
-                            for leaf in children.iter() {
+                            // 一次只画一页（见 `LEAF_PAGE_SIZE`）：上千张表的连接全量铺开，
+                            // 每帧要建上千个元素，滚动掉帧
+                            let shown = leaf_shown(
+                                children.len(),
+                                self.leaf_pages.get(&object.key).copied(),
+                            );
+                            for leaf in children.iter().take(shown) {
                                 let leaf_picked = picked_set.contains(leaf.key.as_str());
                                 list = list.child(source_table_leaf_row(
                                     leaf,
                                     leaf_picked,
+                                    &entity,
+                                    cx,
+                                ));
+                            }
+                            if shown < children.len() {
+                                list = list.child(leaf_more_row(
+                                    &object.key,
+                                    children.len() - shown,
                                     &entity,
                                     cx,
                                 ));
@@ -1120,9 +1162,22 @@ impl DataObjectsTab {
                 } else {
                     match self.source_children.get(&object.key) {
                         Some(children) if !children.is_empty() => {
-                            for table in children.iter() {
+                            // 同上：一页一页画，别把整个源的表一次铺进容器
+                            let shown = leaf_shown(
+                                children.len(),
+                                self.leaf_pages.get(&object.key).copied(),
+                            );
+                            for table in children.iter().take(shown) {
                                 list =
                                     list.child(source_leaf_row(&object.key, table, &entity, cx));
+                            }
+                            if shown < children.len() {
+                                list = list.child(leaf_more_row(
+                                    &object.key,
+                                    children.len() - shown,
+                                    &entity,
+                                    cx,
+                                ));
                             }
                         }
                         Some(_) => {
@@ -1263,6 +1318,46 @@ impl DataObjectsTab {
 ///
 /// 列举挪到后台线程之后，「点击展开到清单回来」之间有一段空档：什么都不画会让人
 /// 以为点了没反应（以前同步列举时这段空档短到看不见，现在必须说话）。
+/// 叶子的「显示更多」行：一页画满（[`LEAF_PAGE_SIZE`]）才出现，点一次加一页。
+///
+/// 与导航展开文件夹的「更多」行同一形态（同缩进、同页大小），不是新发明：
+/// 上千张表的连接全量铺开时，每帧要建上千个元素，滚动会掉帧。
+fn leaf_more_row(
+    parent_key: &str,
+    remaining: usize,
+    entity: &Entity<DataObjectsTab>,
+    cx: &App,
+) -> AnyElement {
+    let colors = cx.theme().colors;
+    let key = parent_key.to_string();
+    let entity = entity.clone();
+    div()
+        .id(SharedString::from(format!("data-object-leaf-more-{parent_key}")))
+        .h_flex()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .py_1()
+        .border_b_1()
+        .border_color(colors.border)
+        .hover(|s| s.bg(colors.list_hover))
+        .child(tree::indent_spacer(ui::TREE_INDENT, 1))
+        .child(tree::disclosure_slot())
+        .child(
+            Button::new(SharedString::from(format!(
+                "data-object-leaf-more-btn-{parent_key}"
+            )))
+            .ghost()
+            .xsmall()
+            .label(format!("显示更多（还有 {remaining} 张）"))
+            .on_click(move |_, _, cx| {
+                let key = key.clone();
+                entity.update(cx, |tab, cx| tab.show_more_leaves(&key, cx));
+            }),
+        )
+        .into_any_element()
+}
+
 fn leaf_notice_row(row_id: &str, text: &str, color: Hsla) -> AnyElement {
     div()
         .id(SharedString::from(row_id.to_string()))
@@ -1531,3 +1626,26 @@ impl ComponentPanel for DataObjectsTab {
         menu
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{LEAF_PAGE_SIZE, leaf_shown};
+
+    #[test]
+    fn leaves_start_with_one_page_and_grow_by_a_page() {
+        // 没点过「显示更多」：恰好一页
+        assert_eq!(leaf_shown(LEAF_PAGE_SIZE + 5, None), LEAF_PAGE_SIZE);
+        // 点过一次：两页（清单够两页时才画两页）
+        assert_eq!(
+            leaf_shown(LEAF_PAGE_SIZE * 2 + 5, Some(2)),
+            LEAF_PAGE_SIZE * 2
+        );
+        // 清单只有一页零几张时，第二页也只画到清单尾
+        assert_eq!(leaf_shown(LEAF_PAGE_SIZE + 5, Some(2)), LEAF_PAGE_SIZE + 5);
+        // 清单不够一页：全画（多翻的页数不会越界）
+        assert_eq!(leaf_shown(3, Some(9)), 3);
+        // 页数为 0 是异常值：按一页算，绝不能画 0 行（否则展开像没反应）
+        assert_eq!(leaf_shown(10, Some(0)), LEAF_PAGE_SIZE.min(10));
+    }
+}
+
