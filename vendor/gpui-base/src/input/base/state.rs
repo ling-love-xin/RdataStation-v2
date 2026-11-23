@@ -2755,13 +2755,9 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.add_cursor_vertical(1, cx);
     }
 
-    /// 【项目私有 patch】在活动光标上方插入一个同列光标（无 Window/action 版本，
-    /// 供外部调用方与测试使用）。
-    pub fn add_cursor_above_line(&mut self, cx: &mut Context<Self>) {
-        self.add_cursor_vertical(-1, cx);
-    }
-
-    /// 【项目私有 patch】见 `add_cursor_above_line`。
+    /// 【项目私有 patch】在活动光标下方插入一个同列光标（无 Window/action 版本，
+    /// 供外部调用方与测试使用；上游同能力的公开入口是 `AddCursorAbove`/`AddCursorBelow`
+    /// 动作，以及本文件内的 `add_cursor_above`/`add_cursor_below`）。
     pub fn add_cursor_below_line(&mut self, cx: &mut Context<Self>) {
         self.add_cursor_vertical(1, cx);
     }
