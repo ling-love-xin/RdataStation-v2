@@ -97,6 +97,47 @@ impl WorkbenchView {
         });
         self.data_objects_pump = Some(task);
     }
+
+    /// 源行展开列举的**回执泵**（装配期一次，0.3 s 一拍）。
+    ///
+    /// 列举本身在 worker 线程（[`crate::services::source_kids_jobs`]）：远端库的
+    /// catalog → schema → 表是网络往返，放 UI 线程上每展开一个源就顿一下。
+    /// 这里只做两件事：取走回执、写回面板缓存（面板可能已经收起/关闭，写回无害）。
+    ///
+    /// 节奏 0.3 s 而不是 1 s：展开是**用户刚点的**动作，「点了立刻看见表」是体感底线，
+    /// 一秒的空白会被读成「没反应」。无任务时整拍只是一次加锁读，代价可忽略。
+    pub(super) fn ensure_source_kids_pump(&mut self, cx: &mut Context<Self>) {
+        if self.source_kids_pump.is_some() {
+            return;
+        }
+        let weak = cx.entity().downgrade();
+        let executor = cx.background_executor().clone();
+        let task = cx.spawn(async move |_this, cx| {
+            loop {
+                executor.timer(std::time::Duration::from_millis(300)).await;
+                let alive = weak
+                    .update(cx, |this, cx| {
+                        // 先取空再逐个写回：写回会 notify，不能让回执在锁里跑渲染
+                        let outcomes = crate::services::source_kids_jobs::take_outcomes();
+                        if outcomes.is_empty() {
+                            return;
+                        }
+                        let Some(tab) = this.right_data_objects_tab.clone() else {
+                            // 面板还没建（从未打开过）：回执直接丢，展开态也不存在
+                            return;
+                        };
+                        for outcome in outcomes {
+                            tab.update(cx, |tab, cx| tab.apply_kids(outcome, cx));
+                        }
+                    })
+                    .is_ok();
+                if !alive {
+                    return;
+                }
+            }
+        });
+        self.source_kids_pump = Some(task);
+    }
 }
 
 impl WorkbenchView {
@@ -533,6 +574,8 @@ impl WorkbenchView {
         self.ensure_persist_pump(cx);
         // 数据对象清单的指纹（1 s 一拍；变了才请面板重取，见 `ensure_data_objects_pump`）。
         self.ensure_data_objects_pump(cx);
+        // 源行展开列举的回执（0.3 s 一拍；worker 线程的结果写回面板缓存）。
+        self.ensure_source_kids_pump(cx);
 
         // 宿主重绘桥再挂一层：除宿主自身，编辑区也要跟上。
         //

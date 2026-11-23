@@ -51,5 +51,7 @@ pub use analytics_resource::jobs as resource_jobs;
 pub use editor::ports::result_service;
 pub mod scratchpad_meta;
 pub use connection_dialog::services::secret_integration;
+/// 源行展开的列举通道（worker 线程 + 结果队列 + UI 泵；见模块头）
+pub mod source_kids_jobs;
 
 pub use connection_dialog::services::workspace_loader;

@@ -132,13 +132,16 @@ fn query_tables(
 /// 供右侧「数据对象」面板的「源库表」段懒加载用（2026-11-22）：面板展开某个连接才调，
 /// 不预先枚举——逐层 introspect 在远端库上是秒级开销。
 ///
+/// **只吃项目根，不吃 `Shared`**（2026-11-23）：这条列举现在跑在
+/// [`crate::services::source_kids_jobs`] 的 worker 线程上，`Shared` 是视图层 `Rc` 结构、
+/// 不能跨线程；项目根是列举唯一需要的宿主信息，由调用方在 UI 线程取出后传进来。
+///
 /// **错误往上抛**：展开失败必须说出原因（权限 / 网络 / 扩展缺失），
 /// 返回空清单会让人以为「这个库里真的没有表」。
-pub(crate) fn list_connection_tables(
-    shared: &Shared,
+pub(crate) fn list_connection_tables_in(
+    project_root: Option<PathBuf>,
     conn_id: &str,
 ) -> Result<Vec<super::TableCandidate>, String> {
-    let project_root = shared.project.borrow().as_ref().map(|p| p.root.clone());
     let svc = navigator(project_root);
     let rt = tokio::runtime::Runtime::new().map_err(|error| format!("起不了异步运行时：{error}"))?;
     rt.block_on(async {

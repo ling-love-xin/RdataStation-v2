@@ -66,7 +66,7 @@ pub use rows::{
     split_persistent_tables,
 };
 /// 取数（面板与对话框共用同一份 I/O，见 `components::data_objects`）
-pub(crate) use load::{analysis_tables_of, list_connection_tables};
+pub(crate) use load::{analysis_tables_of, list_connection_tables_in};
 pub use search::{rank, search, HitRank, SearchOutcome, SEARCH_LIMIT};
 pub use state::{TreeState, RECENT_CAP};
 

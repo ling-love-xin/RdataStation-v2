@@ -3,6 +3,9 @@
 //! 取数在**事件路径**（构造 / 刷新）跑一次并写进 `Shared::data_objects`，渲染只读缓存——
 //! `collect` 内含读盘与查库，放进 render 就是每帧 I/O（gpui-kit-dev 禁止）。
 //!
+//! 源行展开的枚举**另有后台通道**（[`crate::services::source_kids_jobs`]）：远端库逐层
+//! introspect 是网络往返，跑在 UI 线程上会让面板每秒顿一下；回执由宿主泵取回再写进缓存。
+//!
 //! 行上四类动作各管一段：勾选进工作集（`toggle_picked`）、会话行菜单（重挂 / 设主源 /
 //! 关会话）、结果集与洞察产物的「存为表」（进项目分析库的持久表，写库在 worker 线程）、
 //! 资产行的「升级」（表型存档 → 全局，搬表也在 worker 线程）。
@@ -61,12 +64,8 @@ impl PanelNote {
     }
 }
 
-/// 一次源行列举的结果：两类源的形状不同——已挂载的源给带限定名规则的 `MountedTable`
-/// （叶子只复制名），源库连接给翻好的 [`data_objects::Object`]（叶子可选、可取样）。
-enum SourceKids {
-    Mounted(Vec<engine::duckdb::accel::MountedTable>),
-    Connection(Vec<data_objects::Object>),
-}
+/// 展开后的叶子清单由 [`crate::services::source_kids_jobs`] 在 worker 线程取回
+use crate::services::source_kids_jobs::{self, Kids};
 
 pub struct DataObjectsTab {
     shared: Shared,
@@ -93,6 +92,8 @@ pub struct DataObjectsTab {
     /// 那一条是「已挂进 DuckDB 的源」的目录行（`MountedTable` 带限定名规则），
     /// 这一条是连接层的 `TableCandidate` 翻成的 Object（可选用、可取样，形状不同）
     conn_children: HashMap<String, Arc<Vec<data_objects::Object>>>,
+    /// 正在后台列举的源（键 = 源行 key）：同一源不重复提交，展开时画「正在列举」
+    loading_sources: HashSet<String>,
     /// 清单版本号（`Shared::data_objects_epoch`）上次同步到的值：变了就重取，
     /// 让面板跟上「连接变化 / 查询产出结果集 / 加源 / 切项目」
     seen_epoch: u64,
@@ -113,6 +114,7 @@ impl DataObjectsTab {
             expanded_sources: HashSet::new(),
             source_children: HashMap::new(),
             conn_children: HashMap::new(),
+            loading_sources: HashSet::new(),
             // 初值故意落后于 Shared（`refresh` 里会同步成当前值）：构造那次刷新已经取过，
             // 不能让「首次 render 又发现 epoch 变了」再白重取一遍
             seen_epoch: shared_epoch,
@@ -241,10 +243,11 @@ impl DataObjectsTab {
         *self.shared.data_object_assets.borrow_mut() = collected.assets.clone();
         *self.shared.data_objects.borrow_mut() = data_objects::objects(&collected);
         // 展开着的源行：清单重取一遍（会话可能被重建，旧清单会骗人）。
-        // 刷新是例行动作，失败不刷提示——真正的展开点击才把原因亮出来
+        // 刷新是例行动作，失败不刷提示——真正的展开点击才把原因亮出来。
+        // 取数在 worker 线程（`source_kids_jobs`），回执由宿主泵写回，这里只提交
         let expanded: Vec<String> = self.expanded_sources.iter().cloned().collect();
         for key in expanded {
-            self.load_source_children(&key, false);
+            self.request_source_children(&key, false);
         }
         cx.notify();
     }
@@ -256,62 +259,61 @@ impl DataObjectsTab {
             // 收起不清缓存：再展开立即可见，refresh 会让它跟上现实
         } else {
             self.expanded_sources.insert(key.to_string());
-            self.load_source_children(key, true);
+            // 展开即提交后台列举：远端库逐层内省不占 UI 线程
+            self.request_source_children(key, true);
         }
         cx.notify();
     }
 
-    /// 去引擎列举一个源里的表 / 视图（**事件路径**：查的是那条会话连接）。
+    /// 提交一次源行列举到 worker（立即返回，**不阻塞 UI**）。
     ///
-    /// `announce`：用户点击展开时失败要给提示（否则点了像没反应）；例行刷新
-    /// 的重取则静默跳过，避免每次刷新都弹一遍旧错误。重绘由**调用方**负责
-    /// （两个调用点各自 `cx.notify()`，这里不重复通知）。
-    fn load_source_children(&mut self, key: &str, announce: bool) {
-        let outcome = match data_objects::source_ref(key) {
-            Some(data_objects::SourceRef::Federated { owner, alias }) => {
-                engine::duckdb::federation::session::list_tables_for(&owner, &alias)
-                    .map(SourceKids::Mounted)
-            }
-            Some(data_objects::SourceRef::Accel { conn_id }) => {
-                engine::duckdb::accel::list_tables_for(&conn_id).map(SourceKids::Mounted)
-            }
-            Some(data_objects::SourceRef::FileView { alias }) => {
-                engine::duckdb::file_view::list_tables_global(&alias).map(SourceKids::Mounted)
-            }
-            // 源库连接：逐层 introspect（catalog → schema → 表），只在展开时发生。
-            // 表名翻成 Object 行：叶子要能「选用」（取样走连接下推）与显示所在 schema
-            Some(data_objects::SourceRef::Connection { conn_id }) => {
-                crate::components::source_picker::list_connection_tables(&self.shared, &conn_id)
-                    .map(|tables| {
-                        SourceKids::Connection(
-                            tables
-                                .iter()
-                                .map(|table| {
-                                    data_objects::source_table_object(
-                                        &conn_id,
-                                        &table.catalog,
-                                        &table.schema,
-                                        &table.name,
-                                    )
-                                })
-                                .collect(),
-                        )
-                    })
-            }
-            None => return,
+    /// `announce`：用户点击展开时失败要给提示（否则点了像没反应）；例行刷新的重取则静默，
+    /// 避免每秒弹一遍旧错误。重绘由调用方负责（这里不 `notify`）。
+    ///
+    /// 同一源已在列举中就不重复提交：刷新是 1s 一次的，展开中的源会被扫到很多次，
+    /// 每次都排队只会把 worker 压满、回执更晚。
+    fn request_source_children(&mut self, key: &str, announce: bool) {
+        if self.loading_sources.contains(key) {
+            return;
+        }
+        let Some(source) = data_objects::source_ref(key) else {
+            return;
         };
-        match outcome {
-            Ok(SourceKids::Mounted(tables)) => {
-                self.source_children.insert(key.to_string(), Arc::new(tables));
-            }
-            Ok(SourceKids::Connection(objects)) => {
-                self.conn_children.insert(key.to_string(), Arc::new(objects));
+        // 项目根是连接列举唯一需要的宿主信息（`Shared` 不能跨线程）
+        let project_root = self.shared.project.borrow().as_ref().map(|p| p.root.clone());
+        match source_kids_jobs::submit(key.to_string(), source, project_root, announce) {
+            Ok(()) => {
+                self.loading_sources.insert(key.to_string());
             }
             Err(reason) if announce => {
                 self.note = Some(PanelNote::error(reason));
             }
             Err(_) => {}
         }
+    }
+
+    /// 回执写回缓存（宿主泵调用）。`key` 仍然展开着才写——用户可能已经收起了。
+    pub(crate) fn apply_kids(
+        &mut self,
+        outcome: source_kids_jobs::Outcome,
+        cx: &mut Context<Self>,
+    ) {
+        self.loading_sources.remove(&outcome.key);
+        match outcome.result {
+            Ok(Kids::Mounted(tables)) => {
+                self.source_children
+                    .insert(outcome.key, Arc::new(tables));
+            }
+            Ok(Kids::Connection(objects)) => {
+                self.conn_children.insert(outcome.key, Arc::new(objects));
+            }
+            Err(reason) => {
+                if outcome.announce {
+                    self.note = Some(PanelNote::error(reason));
+                }
+            }
+        }
+        cx.notify();
     }
 
     /// 从资产面板的已载行取资产（只读；不触发任何加载）
@@ -1062,7 +1064,16 @@ impl DataObjectsTab {
                             ),
                     );
                         }
-                        None => {}
+                        // 后台列举还没回执：说一声在查（远端库要等网络往返）
+                        None => {
+                            if self.loading_sources.contains(&object.key) {
+                                list = list.child(leaf_notice_row(
+                                    &format!("data-object-leaf-loading-{}", object.key),
+                                    "正在列举这个连接里的表…",
+                                    colors.muted_foreground,
+                                ));
+                            }
+                        }
                     }
                 } else {
                     match self.source_children.get(&object.key) {
@@ -1094,7 +1105,16 @@ impl DataObjectsTab {
                                     ),
                             );
                         }
-                        None => {}
+                        // 后台列举还没回执：说一声在查
+                        None => {
+                            if self.loading_sources.contains(&object.key) {
+                                list = list.child(leaf_notice_row(
+                                    &format!("data-object-leaf-loading-{}", object.key),
+                                    "正在列举这个源里的表…",
+                                    colors.muted_foreground,
+                                ));
+                            }
+                        }
                     }
                 }
             }
@@ -1195,6 +1215,24 @@ impl DataObjectsTab {
                 )
             })
     }
+}
+
+/// 展开源的**状态行**（正在列举 / 空清单）：缩进与叶子对齐，只说明状态、不占交互。
+///
+/// 列举挪到后台线程之后，「点击展开到清单回来」之间有一段空档：什么都不画会让人
+/// 以为点了没反应（以前同步列举时这段空档短到看不见，现在必须说话）。
+fn leaf_notice_row(row_id: &str, text: &str, color: Hsla) -> AnyElement {
+    div()
+        .id(SharedString::from(row_id.to_string()))
+        .h_flex()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .py_1()
+        .child(tree::indent_spacer(ui::TREE_INDENT, 1))
+        .child(tree::disclosure_slot())
+        .child(div().text_xs().text_color(color).child(text.to_string()))
+        .into_any_element()
 }
 
 /// 源行展开出的表 / 视图叶子行：缩进 + 图标 + 名字 + 「复制名」。
