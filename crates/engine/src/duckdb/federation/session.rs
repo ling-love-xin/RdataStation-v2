@@ -536,6 +536,38 @@ struct CachedFederation {
 ///
 /// 只含源本身（conn_id / 别名 / 种类 / 连接串），**不含主源**：换主源是同一条会话上的
 /// `USE` 切换，不该把会话重建（那会把用户建的本地临时对象一起丢掉）。
+/// 脚本 / 文档类扩展名：**它们不是数据**（铁律 G 第 31 条）。
+///
+/// 与「DuckDB 读不了」分开说的原因：读不了是能力问题、会随扩展变得可读；
+/// 这些文件从来就不是数据源，说成「读不了」等于承诺了一个不该有的能力。
+fn is_non_data_extension(ext: &str) -> bool {
+    matches!(
+        ext,
+        "sql"
+            | "py"
+            | "rs"
+            | "ts"
+            | "tsx"
+            | "js"
+            | "jsx"
+            | "md"
+            | "markdown"
+            | "toml"
+            | "yaml"
+            | "yml"
+            | "sh"
+            | "bash"
+            | "ps1"
+            | "bat"
+            | "cmd"
+            | "ini"
+            | "cfg"
+            | "conf"
+            | "html"
+            | "css"
+    )
+}
+
 /// 外部文件 → 建视图的 SQL（按扩展名挑 DuckDB 的读取函数）
 ///
 /// 只认 DuckDB 能直接读的那几类。excel 要 `excel` 扩展（本机未实测装得上），
@@ -552,6 +584,14 @@ pub fn file_view_sql(path: &str, alias: &str) -> Result<String, String> {
         "json" | "jsonl" | "ndjson" => "read_json_auto",
         "xlsx" | "xls" => "read_excel",
         other => {
+            // 铁律 G 第 31 条：脚本 / 文档类文件要写「这类文件不是数据」，
+            // 不能表述成「能力缺失 / 读不了」——那不是引擎的短板，是它本来就不是数据
+            if is_non_data_extension(other) {
+                return Err(format!(
+                    "「.{other}」这类文件不是数据（脚本 / 文档文件不参与分析）：\
+                     数据文件请用 csv / parquet / json / excel"
+                ));
+            }
             return Err(format!(
                 "DuckDB 读不了 .{other}：只支持 csv / parquet / json / excel"
             ));
@@ -773,6 +813,25 @@ mod tests {
     use super::{FederatedSession, file_view_sql, write_refusal};
     use crate::duckdb::federation::registry::{FederatedSource, MountState, MountedSource};
     use std::sync::Arc;
+
+    /// 铁律 G 第 31 条：脚本 / 文档类文件只能说「不是数据」，不能说「读不了」。
+    /// 未知格式（如 `.arrow2`）仍按能力表述，因为那才是真的缺读取器。
+    #[test]
+    fn non_data_files_are_named_as_non_data_not_as_a_missing_reader() {
+        let script = file_view_sql("resources/analysis.sql", "f_analysis").unwrap_err();
+        assert!(
+            script.contains("不是数据"),
+            "脚本文件要说清不是数据，实际：{script}"
+        );
+        assert!(!script.contains("读不了"), "不许说成能力缺失：{script}");
+
+        let doc = file_view_sql("resources/notes.md", "f_notes").unwrap_err();
+        assert!(doc.contains("不是数据"), "{doc}");
+
+        // 真缺读取器的格式保持原口径（这不是「不是数据」，是引擎现在不认）
+        let unknown = file_view_sql("resources/sample.arrow2", "f_sample").unwrap_err();
+        assert!(unknown.contains("读不了"), "{unknown}");
+    }
 
     /// 会话开着也能再加源：面板「加源」就是这条路（不是重开会话，那会丢已挂的源）
     #[test]
