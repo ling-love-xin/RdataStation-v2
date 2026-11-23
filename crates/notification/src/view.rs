@@ -6,6 +6,7 @@
 //! 铃铛计数与列表，回调只有 `&mut App`，必须借宿主 entity 的 `cx.notify()` 才能刷新。
 //! 计数与内容一律从 `service` 现读，本视图不另存一份状态（避免两套口径）。
 
+use shared::i18n::tr;
 use gpui_kit::base::{Disableable as _, StyledExt};
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::badge::Badge;
@@ -236,7 +237,7 @@ fn center(entity: &Entity<NotificationBell>, cx: &mut App) -> AnyElement {
                         .items_center()
                         .gap_2()
                         .min_w_0()
-                        .child(div().text_sm().child("通知"))
+                        .child(div().text_sm().child(tr("通知")))
                         .child(div().text_xs().text_color(muted).child(summary)),
                 )
                 .child(notify_actions(entity, unread, records.is_empty())),
@@ -251,9 +252,9 @@ fn center(entity: &Entity<NotificationBell>, cx: &mut App) -> AnyElement {
                 .segmented()
                 .selected_index(filter.index())
                 .children([
-                    Tab::new().label("全部"),
-                    Tab::new().label("未读"),
-                    Tab::new().label("问题"),
+                    Tab::new().label(tr("全部")),
+                    Tab::new().label(tr("未读")),
+                    Tab::new().label(tr("问题")),
                 ])
                 .on_click(move |&index, _window, app| {
                     let next = Filter::from_index(index);
@@ -310,7 +311,7 @@ fn notify_actions(entity: &Entity<NotificationBell>, unread: usize, empty: bool)
             Button::new("notify-mark-all-read")
                 .ghost()
                 .xsmall()
-                .label("全部已读")
+                .label(tr("全部已读"))
                 .disabled(unread == 0)
                 .on_click(move |_, _, app| {
                     service::mark_all_read();
@@ -321,7 +322,7 @@ fn notify_actions(entity: &Entity<NotificationBell>, unread: usize, empty: bool)
             Button::new("notify-clear")
                 .ghost()
                 .xsmall()
-                .label("清空")
+                .label(tr("清空"))
                 .tooltip("清空通知历史（屏上已弹出的提示不受影响），不可恢复")
                 .disabled(empty)
                 .on_click(move |_, _, app| {
@@ -492,7 +493,7 @@ mod tests {
         NotificationRecord {
             id: "test".to_string(),
             type_,
-            title: "标题".to_string(),
+            title: tr("标题").to_string(),
             message: None,
             timestamp: "2026-01-01T00:00:00+08:00".to_string(),
             count: 1,

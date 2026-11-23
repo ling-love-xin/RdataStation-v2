@@ -17,6 +17,7 @@ tracing.workspace = true
 uuid.workspace = true
 settings.workspace = true
 paths.workspace = true
+shared.workspace = true
 
 [dev-dependencies]
 # 测试构建的数据根自动隔离（不写产品目录；见 data-paths.md §5）

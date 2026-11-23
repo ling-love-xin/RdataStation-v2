@@ -1041,5 +1041,9 @@
   "（不设默认）": "(No default)",
   "正在读取…": "Reading…",
   "暂无版本记录": "No version records yet",
-  "确认删除": "Confirm delete"
+  "确认删除": "Confirm delete",
+  "未读": "Unread",
+  "问题": "Issues",
+  "全部已读": "Mark all read",
+  "标题": "Title"
 }
