@@ -256,6 +256,24 @@ impl Object {
         self.can_analyze() && !self.key.starts_with("conn:")
     }
 
+    /// 行内小标（铁律 G 第 30 条）。
+    ///
+    /// 同一张表可能在源段与表段各出现一次：源段那条写 `库表`（它是源库里的表，
+    /// 数据还在源库），表段那条把版本写进小标（`资产 vN`，它读的是资产的最新版本）。
+    /// 用户不必回头读副标题，更不用靠名字猜这两行是不是同一张表。
+    ///
+    /// 其它行沿用 [`Object::pill`] 的业务身份（结果集 / 项目自建 / 全局…）——
+    /// 那些身份本身就是区分的依据，不再叠一层小标。
+    pub fn pill_text(&self) -> String {
+        match (self.group, self.version) {
+            // 源段的**叶子**（`srctable:`）才是「源库里的表」；源段的一级行是连接，
+            // 它本身不是数据对象，保持「源库」身份
+            (Group::SourceTables, _) if self.key.starts_with("srctable:") => "库表".to_string(),
+            (Group::PersistentTables, Some(version)) => format!("资产 v{version}"),
+            _ => self.pill.to_string(),
+        }
+    }
+
     /// 状态列写什么：**能用时写寿命，不能用时写原因**。
     ///
     /// 正常行一律显示「可用」等于白占一列（每行都一样的信息量）；用户真正要判断的是
@@ -1317,6 +1335,38 @@ mod tests {
         // 资产行不在这条动作里：它们已经是快照/按需的既成事实，没有再折一次的道理
         let asset = rows.iter().find(|o| o.key == "asset:arp_demo").unwrap();
         assert!(!can_archive_snapshot(asset));
+    }
+
+    /// 小标（铁律 G 第 30 条）：源段叶子写 `库表`，表段表型资产写 `资产 vN`，
+    /// 其余沿用业务身份。这三者的区分是**同表两段出现**时唯一不靠猜的依据。
+    #[test]
+    fn pills_distinguish_a_table_that_appears_in_both_groups() {
+        // 源段的叶子：数据还在源库，选它 = 从源库取样
+        let leaf = super::source_table_object("C_mysql_9", "orders_db", "public", "orders");
+        assert_eq!(leaf.pill_text(), "库表");
+        // 源段的一级行是连接，不是表：不能跟着写成「库表」
+        let conn = Object {
+            key: "conn:C_mysql_9".into(),
+            ..leaf.clone()
+        };
+        assert_eq!(conn.pill_text(), "源库");
+        // 表段：同样叫 orders 的那条读的是资产的最新版本
+        let asset = Object {
+            key: "asset:arp_1".into(),
+            name: "orders".into(),
+            group: Group::PersistentTables,
+            pill: "资产",
+            version: Some(4),
+            ..leaf.clone()
+        };
+        assert_eq!(asset.pill_text(), "资产 v4");
+        // 非表型资产（文件段）没有版本语义，沿用业务身份
+        let file_asset = Object {
+            group: Group::Files,
+            version: Some(1),
+            ..asset.clone()
+        };
+        assert_eq!(file_asset.pill_text(), "资产");
     }
 
     /// 行上的 `sql_ref` 只在「分析实例里裸名可见」的对象上给值：

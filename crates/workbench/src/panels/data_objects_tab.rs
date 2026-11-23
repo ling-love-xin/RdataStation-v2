@@ -1136,7 +1136,7 @@ impl DataObjectsTab {
                             ),
                     )
                     // 业务身份走标准 Tag：手写胶囊的圆角、内距、字号各写一遍就会漂
-                    .child(pill.child(object.pill))
+                    .child(pill.child(object.pill_text()))
                     .child(
                         div()
                             .text_xs()
@@ -1757,6 +1757,14 @@ fn source_table_leaf_row(
                 .text_xs()
                 .text_color(muted)
                 .child(leaf.note.clone()),
+        )
+        // 铁律 G 第 30 条：源段这条是**源库里的表**（数据还在源库），与表段里
+        // 同名的那条（资产最新版本）不是一回事，小标说清它属于哪一段。
+        .child(
+            Tag::secondary()
+                .rounded_full()
+                .flex_none()
+                .child(leaf.pill_text()),
         )
         .child(
             Button::new(SharedString::from(format!(
