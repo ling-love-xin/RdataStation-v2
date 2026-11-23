@@ -97,8 +97,9 @@ pub struct WorkbenchView {
     /// 本次打开待生效的浮层档位（`Default` = Ctrl+P，`Goto` = Ctrl+Shift+O）。
     pub(crate) quick_open_mode_pending: Mode,
     /// 设置页实体（首次打开时懒创建）。
-    /// 设置页独立窗口句柄（`None` = 未打开；窗口关闭后 `update` 返回 Err，据此判活）。
-    settings_window: Option<AnyWindowHandle>,
+    /// 设置页独立窗口句柄 + 页面实体（`None` = 未打开；窗口关闭后 `update` 返回
+    /// Err，据此判活）。存实体是为了「窗口已开着」时能切节（`open_settings_at`）。
+    settings_window: Option<(AnyWindowHandle, WeakEntity<SettingsPage>)>,
     /// M1 项目管理输入实体（懒创建）。
     project_inputs: Option<project::ui::ProjectInputs>,
     /// M1 项目选择器面板（中央 tab 组常驻 tab；强持有防 GC，见 `project_picker.rs`）。

@@ -23,12 +23,16 @@ use crate::settings_page::SettingsHost;
 /// `notify`：任一设置项写入后要通知页面实体重读的闭包（在 `SettingsPage::new`
 /// 里构造并传入）。
 /// `initial_section`：打开时定位到的节 id（`None` = 首页）；未知 id 落回首页。
+/// `section_seq`：运行期切节计数（`SettingsPage::select_section` 递增）。骨架的
+/// keyed-state id 由它拼出——组件的选中页只在 state 新建时读默认值，换 id 才能
+/// 让「窗口已开着再跳某一节」真正落过去（见 `settings_id`）。
 pub fn build(
     host: &SettingsHost,
     notify: &Rc<dyn Fn(&mut App)>,
     initial_section: Option<&str>,
+    section_seq: usize,
 ) -> Settings {
-    let mut settings = Settings::new("rds-settings")
+    let mut settings = Settings::new(settings_id(section_seq))
         // 分组卡片化：每个分组一个描边卡片（border + 圆角 + 内边距），
         // 与"无卡片平铺"相比分组边界更清楚，长节不显杂乱。
         .with_group_variant(GroupBoxVariant::Outline)
@@ -46,6 +50,20 @@ pub fn build(
         // 对齐 demo 的 General 页。
         let page_groups = registry::page_groups(section);
         let mut groups: Vec<SettingGroup> = Vec::new();
+        // 「项目」节：顶部先放宿主注入的项目列表（列表 / 切换 / 新建 / 管理都在这里，
+        // 不再占 Dock 中央 tab）。登记表不动（本节的「列表排序」行原样保留在下方）。
+        if section == "projects"
+            && let Some(panel) = &host.projects_panel
+        {
+            groups.push(
+                SettingGroup::new()
+                    .title("项目列表")
+                    .description(
+                        "选择、切换、新建与管理项目；点「打开」直接切到该项目（离开前会先拦截未保存草稿）",
+                    )
+                    .item(fields::panel_item(panel.clone())),
+            );
+        }
         for (gid, glabel) in &page_groups {
             // 结果集面板：把「对齐」「着色」「背景色」「字体样式」四个登记组合并
             // 成一个「类型样式」矩阵（20 个碎行 → 1 个表格元素，行 = 数据族，
@@ -119,6 +137,15 @@ pub fn build(
     settings
 }
 
+/// 骨架的 keyed-state id：随切节计数变化（`0` = 首开）。
+///
+/// gpui-kit `Setting` 把选中页 / 搜索框存进 `window.use_keyed_state(id)`，
+/// `default_selected_index` 只在 state 新建时读——id 不变就永远停在首次的页。
+/// 运行期切节靠换 id 生效（`SettingsPage::select_section` 递增计数）。
+pub(crate) fn settings_id(section_seq: usize) -> String {
+    format!("rds-settings-{section_seq}")
+}
+
 /// 节 id → 骨架里的页序号（`None` / 未知 id → 0 = 首页）。
 ///
 /// 侧栏导航由 gpui-kit `setting` 组件按 `SelectIndex { page_ix }` 选址，页面顺序与
@@ -145,7 +172,7 @@ fn page_description(section: &str) -> Option<&'static str> {
         "logging" => Some("日志级别与动作入口"),
         "navigator" => Some("对象树显示（标签 / 徽标 / 筛选）与自动连接"),
         "notifications" => Some("自动消失、同类合并与弹出 / 系统通知开关"),
-        "projects" => Some("项目列表排序"),
+        "projects" => Some("项目列表（选择 / 切换 / 新建 / 管理）与列表排序"),
         "resources" => Some("资源库历史保留、排序与分组"),
         "result_panel" => Some("结果集网格的值呈现（对齐 / 着色 / 数据与显示）"),
         "scratchpad" => Some("便签工具栏与分区高度"),
@@ -203,7 +230,7 @@ fn action_rows(
 
 #[cfg(test)]
 mod tests {
-    use super::page_index_for;
+    use super::{page_index_for, settings_id};
 
     /// 齿轮入口定位：`Some("result_panel")` 必须落在该节在导航里的真实序号上
     /// （不是硬编码 0，否则「从结果集进来」会落到首页）；未知 id / None 回首页。
@@ -217,5 +244,14 @@ mod tests {
         assert_eq!(page_index_for(Some("result_panel")), expected);
         assert_eq!(page_index_for(None), 0);
         assert_eq!(page_index_for(Some("no-such-section")), 0);
+    }
+
+    /// 切节靠换 keyed-state id：同一计数必须稳定（否则每帧重建丢用户选择），
+    /// 不同计数必须不同（否则「窗口已开着再跳某节」停在旧页）。
+    #[test]
+    fn settings_id_changes_only_with_the_section_counter() {
+        assert_eq!(settings_id(0), settings_id(0));
+        assert_ne!(settings_id(0), settings_id(1));
+        assert_ne!(settings_id(7), settings_id(8));
     }
 }

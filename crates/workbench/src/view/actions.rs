@@ -34,16 +34,22 @@ impl WorkbenchView {
     /// 打开设置窗口并定位到 `section`（`None` = 首页）。
     ///
     /// 用途：结果集状态行的齿轮（DBeaver `ConfigAction`）进来要直接落在「结果集」页，
-    /// 不让用户再在侧栏里翻一遍。窗口已存在时**不**抢焦点（保持原行为：用户自己切过去）。
+    /// 标题栏菜单「项目中心…」落在「项目」页。窗口已存在时**不**抢焦点（保持原行为：
+    /// 用户自己切过去），但会把页面切到请求的节（否则第二次点入口毫无反应）。
     pub(crate) fn open_settings_at(
         &mut self,
         section: Option<&'static str>,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // 窗口存活检测：已打开则直接返回（用户自己切过去）。
-        if let Some(handle) = self.settings_window {
-            if handle.update(cx, |_, _, _| {}).is_ok() {
+        // 存活检测 + 切节：窗口与页面实体都活着 → 只切节并返回；
+        // 任一已死（窗口关掉后实体随之释放）→ 清句柄走重建。
+        if let Some((handle, page)) = self.settings_window.clone() {
+            let window_alive = handle.update(cx, |_, _, _| {}).is_ok();
+            let page_alive = page
+                .update(cx, |page, cx| page.select_section(section, cx))
+                .is_ok();
+            if window_alive && page_alive {
                 return;
             }
             self.settings_window = None;
@@ -112,6 +118,8 @@ impl WorkbenchView {
             on_open_type_short_map,
             on_open_settings_json,
             on_settings_changed,
+            // 「项目」页的项目列表：第 ⑦ 刀由 project crate 注入（先留空通道）。
+            projects_panel: None,
         };
         // 独立窗口：`TitleBar::window_options()` 提供原生标题栏（拖拽 + 系统窗口控制），
         // 经 `cx.open_window` 挂到新窗口；窗口根由 `base::Root` 包一层（对话框层宿主）。
@@ -130,7 +138,18 @@ impl WorkbenchView {
                 cx.new(|cx| gpui_kit::base::Root::new(view, window, cx))
             })
             .expect("打开设置窗口");
-        self.settings_window = Some(handle.into());
+        // 页面实体与窗口句柄一起存（`open_window` 的根视图即上一步包的 `Root`）：
+        // 运行期切节的入口是页面实体，不是窗口句柄。
+        let page = handle
+            .update(cx, |root, _window, _cx| {
+                root.view()
+                    .clone()
+                    .downcast::<SettingsPage>()
+                    .expect("设置窗口根视图必须是 SettingsPage")
+                    .downgrade()
+            })
+            .expect("刚打开的设置窗口必须可更新");
+        self.settings_window = Some((handle.into(), page));
     }
 
     // ===== Quick Open（统一检索 / 命令面板）宿主装配 =====

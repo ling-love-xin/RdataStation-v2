@@ -27,7 +27,7 @@ use gpui_kit::*;
 use crate::SettingsService;
 use crate::bridge;
 use crate::registry::{SettingKind, SettingSpec, SettingValue};
-use crate::settings_page::SettingsHost;
+use crate::settings_page::{PanelRender, SettingsHost};
 
 /// 生成一个「值行」设置项（`Bool` / `BoolPair` / `Enum` / `Number`）。
 ///
@@ -174,6 +174,17 @@ pub fn action_row(
     })
     // 动作行永远不参与页面级 reset-all。
     .on_reset(|_| false, |_, _| {})
+}
+
+/// 宿主注入的整块内容（放在某个分组卡片里）。
+///
+/// 用途：把「不属于本 crate 的」业务视图（如项目列表，属 `rds-project`）嵌进
+/// 设置页，同时不让 settings 反向依赖特性 crate。渲染闭包每帧由组件调用一次，
+/// 必须保持**纯读**（读状态、构造元素），副作用仍走事件路径。
+pub fn panel_item(render: PanelRender) -> SettingItem {
+    SettingItem::render(move |_options, window, cx| render(window, cx))
+        // 整块内容不是设置项：永远不参与页面级 reset-all。
+        .on_reset(|_| false, |_, _| {})
 }
 
 /// 布局分节顶部：左右侧边栏宽度占比的预览示意图。

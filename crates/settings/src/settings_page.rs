@@ -27,6 +27,9 @@ use crate::skeleton;
 // 尺寸常量在**壳层**（单一来源）：workbench 侧经 `crate::ui` 重导，直接依赖 shell 的 crate 走此路径。
 use workbench_shell::ui;
 
+/// 宿主注入的整块内容渲染（窗口 + App → 任意元素）；见 `SettingsHost::projects_panel`。
+pub type PanelRender = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
+
 /// 宿主桥：页面的副作用由宿主提供。
 ///
 /// 页面**不**依赖 engine / 具体对话框（依赖只向下）：缓存对话框要 engine（rusqlite +
@@ -46,6 +49,12 @@ pub struct SettingsHost {
     /// 任一设置项落盘后通知宿主（workbench 用它把新值装配到 DockSkin 等消费方；
     /// 设置项自身有副作用时走 setter，此回调只负责「外部消费方重应用」）。
     pub on_settings_changed: Rc<dyn Fn(&mut App)>,
+    /// 「项目」节顶部的整块内容渲染（宿主注入；`None` = 该节只有设置行）。
+    ///
+    /// 为什么是注入而不是 import：项目列表要读 `ProjectUiHost` / `ProjectInputs`
+    /// （属 `rds-project`），而本 crate「不得反向依赖特性 crate」（见 crate 根注释），
+    /// 故沿用 `on_open_cache` 等回调的既有先例，由宿主提供整块 Element。
+    pub projects_panel: Option<PanelRender>,
 }
 
 /// 设置页实体（宿主把本实体放在 overlay 层渲染）。
@@ -55,6 +64,10 @@ pub struct SettingsPage {
     /// 从结果集齿轮进来直接落在「结果集」页（`PrefPageResultSetMain.PAGE_ID`），
     /// 不让用户再在侧栏里翻一遍（`ResultSetViewer.java:5402-5418`）。
     initial_section: Option<&'static str>,
+    /// 切节计数：`select_section` 每调用一次 +1，`skeleton::build` 用它拼骨架的
+    /// keyed-state id（见 `select_section` 的注释——跑着改 `initial_section`
+    /// 不生效，组件内部选中页只在 keyed state 新建时读默认值）。
+    section_seq: usize,
     /// 页面焦点句柄：`Esc` 关闭靠它路由（`key_context("settings")`）。
     focus_handle: FocusHandle,
     /// 首次渲染时把焦点接到页面上（一次性；否则刚打开时按 `Esc` 没反应）。
@@ -86,10 +99,35 @@ impl SettingsPage {
         Self {
             host,
             initial_section,
+            section_seq: 0,
             focus_handle: cx.focus_handle(),
             focus_pending: true,
             notify,
         }
+    }
+
+    /// 运行期切节（窗口已打开时由宿主调用，例如标题栏菜单「项目中心…」）。
+    ///
+    /// 为什么不是只改 `initial_section`：gpui-kit `Setting` 的选中页存在窗口的
+    /// keyed state 里（`vendor/gpui-component/src/setting/settings.rs` 的
+    /// `SettingsState.selected_index`），`default_selected_index` 只在 state 新建时
+    /// 生效。故每次切节把 `section_seq` +1，让 `skeleton::build` 换一个新 id，
+    /// state 随之新建并落在请求的节。代价：搜索框内容与滚动位置重置（从入口
+    /// 跳进来本来就是在找这一节，可接受）。
+    pub fn select_section(&mut self, section: Option<&'static str>, cx: &mut Context<Self>) {
+        self.initial_section = section;
+        self.section_seq = self.section_seq.wrapping_add(1);
+        cx.notify();
+    }
+
+    /// 当前请求的节 id（测试 / 宿主诊断用；纯读）。
+    pub fn requested_section(&self) -> Option<&'static str> {
+        self.initial_section
+    }
+
+    /// 切节计数（每次 `select_section` +1；骨架 id 由它拼，纯读）。
+    pub fn section_seq(&self) -> usize {
+        self.section_seq
     }
 
     // ===== 顶栏 / 底栏 =====
@@ -152,7 +190,12 @@ impl Render for SettingsPage {
                 ))
         });
         // 骨架构造（纯函数）：节 → 页，行 → 分组项；值读写经闭包接 global。
-        let skeleton = skeleton::build(&self.host, &self.notify, self.initial_section);
+        let skeleton = skeleton::build(
+            &self.host,
+            &self.notify,
+            self.initial_section,
+            self.section_seq,
+        );
         // 独立窗口根视图：尺寸由窗口决定（`TitleBar::window_options()`），
         // 背景铺满窗口；`Esc` 关闭窗口（等价 TitleBar 的 ✕）。
         div()
@@ -200,6 +243,7 @@ mod tests {
             on_open_type_short_map: Rc::new(|_, _| {}),
             on_open_settings_json: Rc::new(|_, _| {}),
             on_settings_changed: Rc::new(|_| {}),
+            projects_panel: None,
         }
     }
 
@@ -214,6 +258,41 @@ mod tests {
         cx.update(|cx| crate::SettingsService::init(cx));
         let (_, cx) = cx.add_window_view(|window, cx| SettingsPage::new(window, dummy_host(), cx));
         cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+
+    /// 运行期切节：`select_section` 递增计数（骨架据此换 keyed-state id），
+    /// 且换 key 后重画不 panic——含宿主注入的项目列表块（`projects_panel`）。
+    #[gpui_kit::test]
+    fn select_section_rekeys_skeleton_and_renders(cx: &mut TestAppContext) {
+        use gpui_kit::component::ActiveTheme as _;
+        use gpui_kit::{IntoElement as _, ParentElement as _, Styled as _};
+
+        cx.update(gpui_kit::init);
+        cx.update(crate::SettingsService::init);
+        let mut host = dummy_host();
+        host.projects_panel = Some(Rc::new(|_window, cx: &mut gpui_kit::App| {
+            gpui_kit::div()
+                .w_full()
+                .child("项目列表占位")
+                .text_color(cx.theme().colors.foreground)
+                .into_any_element()
+        }));
+        let (page, cx) = cx.add_window_view(|window, cx| SettingsPage::new(window, host, cx));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        // 首页 → 项目页：换 key 后组件按新默认值落在该节。
+        cx.update(|_, cx| page.update(cx, |page, cx| page.select_section(Some("projects"), cx)));
+        assert_eq!(
+            cx.update(|_, cx| page.read(cx).requested_section()),
+            Some("projects")
+        );
+        assert_eq!(cx.update(|_, cx| page.read(cx).section_seq()), 1);
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        // 再跳同一节也必须重建（否则组件内部仍停在上次手选的那页）。
+        cx.update(|_, cx| page.update(cx, |page, cx| page.select_section(Some("projects"), cx)));
+        assert_eq!(cx.update(|_, cx| page.read(cx).section_seq()), 2);
         cx.update(|window, cx| window.draw(cx).clear(cx));
     }
 }
