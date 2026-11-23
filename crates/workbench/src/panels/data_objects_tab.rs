@@ -1010,176 +1010,16 @@ impl DataObjectsTab {
                     }),
                 )
             };
-            // 铁律 C 组第 9/10 条：「库表（未登记）」段的表可以就地补一个资产身份。
-            // 只写登记行（不搬数据、不涨版本），与「升级为资产」是两个动作。
-            let register_button = {
-                let raw = object
-                    .key
-                    .strip_prefix("persistent:")
-                    .or_else(|| object.key.strip_prefix("project:"))
-                    .map(str::to_string);
-                match raw {
-                    Some(table) if object.group == data_objects::Group::UnregisteredTables => {
-                        let shared = self.shared.clone();
-                        let entity = entity.clone();
-                        let label = object.name.clone();
-                        Some(
-                            Button::new(SharedString::from(format!(
-                                "data-object-register-{}",
-                                object.key
-                            )))
-                            .ghost()
-                            .label("登记为资产")
-                            .tooltip("给项目分析库里这张已有的表补一个资产身份：只写登记，不搬数据")
-                            .on_click(move |_, _, cx| {
-                                crate::components::result_set_actions::register_table_asset(
-                                    &shared, &table, &label, cx,
-                                );
-                                entity.update(cx, |_, cx| cx.notify());
-                            }),
-                        )
-                    }
-                    _ => None,
-                }
-            };
-            // 铁律 D 组第 16 条：加源的外部文件默认「按需」（`f_*` 视图读原文件）；
-            // 想固定就给这条「归档为快照」——归档后资产自己进文件段（`asset:` 行），
-            // 加源那份视图不删（用户可能还要按需读原文件，清场口在切项目时统一收）。
-            //
-            // 铁律 E 组第 24/25 条：导出与「保存到草稿」是同一条通道的两个目的地
-            // （全局 `results/` vs 项目 `scratchpad/`），只收 csv / parquet / json。
-            // 界面这一刀先给 csv，格式选择随后接。
-            let export_buttons: Vec<Button> = object
-                .sql_ref
-                .clone()
-                .filter(|_| object.can_analyze())
-                .map(|reference| {
-                    use crate::components::file_actions::ExportDest;
-                    let mut buttons = Vec::new();
-                    let format = self.export_format;
-                    for (dest, id, label, tip) in [
-                        (
-                            ExportDest::Global,
-                            "export",
-                            "导出",
-                            "把这张表写成 CSV，落到全局 results/（系统资源管理那侧）",
-                        ),
-                        (
-                            ExportDest::Scratchpad,
-                            "scratchpad",
-                            "存草稿",
-                            "把这张表写成 CSV，落到本项目 scratchpad/（草稿箱那侧）",
-                        ),
-                    ] {
-                        let shared = self.shared.clone();
-                        let reference = reference.clone();
-                        buttons.push(
-                            Button::new(SharedString::from(format!(
-                                "data-object-{id}-{}",
-                                object.key
-                            )))
-                            .ghost()
-                            .label(label)
-                            .tooltip(tip)
-                            .on_click(move |_, _, cx| {
-                                crate::components::file_actions::export_table_to(
-                                    &shared, &reference, dest, format, cx,
-                                );
-                            }),
-                        );
-                    }
-                    buttons
-                })
-                .unwrap_or_default();
-            // 铁律 E 组的最小一条：把这一行的**实际引用名**带进编辑器。
-            // 只有 `sql_ref` 有值的行才给（源库表 / 联邦源要带连接上下文，这里给不出来
-            // 就不给按钮——宁可没有，也不给一个抄下去跑不通的 SQL）。
-            let open_editor_button = object
-                .sql_ref
-                .clone()
-                .filter(|_| object.can_analyze())
-                .map(|reference| {
-                    let shared = self.shared.clone();
-                    Button::new(SharedString::from(format!(
-                        "data-object-editor-{}",
-                        object.key
-                    )))
-                    .ghost()
-                    .label("查")
-                    .tooltip(format!(
-                        "在 SQL 编辑器里打开：SELECT * FROM {reference}"
-                    ))
-                    .on_click(move |_, _, cx| {
-                        shared.request_query(workbench_shell::model::QueryRequest {
-                            // 走分析通道的对象都在进程单例里，不绑连接（跟随当前活动连接）
-                            conn_id: None,
-                            sql: format!("SELECT * FROM {reference}"),
-                            run: false,
-                        });
-                        shared.notify_host(cx);
-                    })
-                });
-            let archive_button = if data_objects::can_archive_snapshot(object) {
-                data_objects::fileview_alias(&object.key).map(|alias| {
-                    let alias = alias.to_string();
-                    let shared = self.shared.clone();
-                    let entity = entity.clone();
-                    Button::new(SharedString::from(format!(
-                        "data-object-archive-snapshot-{}",
-                        object.key
-                    )))
-                    .ghost()
-                    .label("归档为快照")
-                    .tooltip("在资源库里留一份副本，之后按快照参与分析（只读、带版本）")
-                    .on_click(move |_, _, cx| {
-                        let path = shared
-                            .loaded_files
-                            .borrow()
-                            .iter()
-                            .find(|(seen, _)| seen == &alias)
-                            .map(|(_, path)| path.clone());
-                        match path {
-                            Some(path) => crate::components::file_actions::archive_file_as_snapshot(
-                                &shared, &path, cx,
-                            ),
-                            None => shared.say_error(
-                                format!("归档：找不到 {alias} 的路径（可能已被清理，重新加源即可）"),
-                                cx,
-                            ),
-                        }
-                        entity.update(cx, |_, cx| cx.notify());
-                    })
-                })
-            } else {
-                None
-            };
-            // 资产行才给「升级到全局」：那一行已经有存档身份，升上去能回指上游。
-            // 临时表 / 项目自建表先「升级为资产」——没有登记就没有身份，硬升会丢线索。
-            // 结果集 / 洞察产物已经在进程单例里：落库就是整表搬一份。
-            // 写库走 worker 线程（`services::persist_jobs`），这里只入队，回执由工作台泵到状态栏。
-            let persist_button = if data_objects::can_persist(object) {
-                let shared = self.shared.clone();
-                let entity = entity.clone();
-                let table = object.name.clone();
-                let label = data_objects::persist_label(&table);
-                Some(
-                    Button::new(SharedString::from(format!(
-                        "data-object-persist-{}",
-                        object.key
-                    )))
-                    .ghost()
-                    .label("升级为资产")
-                    .tooltip("把整份结果写成项目分析库的持久表，并登记成只读资产（带版本）")
-                    .on_click(move |_, _, cx| {
-                        crate::components::result_set_actions::persist_to_project(
-                            &shared, &table, &label, cx,
-                        );
-                        entity.update(cx, |_, cx| cx.notify());
-                    }),
-                )
-            } else {
-                None
-            };
+            // 铁律 C 组第 9/10 条：未登记段的表可就地补身份（只写登记行，不搬数据、不涨版本）；
+            // 「升级为资产」是另一件事（写表 + 登记）。两条都进右键，行上不再摆按钮。
+            let register_target = object
+                .key
+                .strip_prefix("persistent:")
+                .or_else(|| object.key.strip_prefix("project:"))
+                .filter(|_| object.group == data_objects::Group::UnregisteredTables)
+                .map(str::to_string);
+            let persist_target = data_objects::can_persist(object)
+                .then(|| (object.name.clone(), data_objects::persist_label(&object.name)));
             // 缺扩展的行：与其只标个警告，给一条能走的路（跳插件管理）
             let install_button = if object.can_analyze() {
                 None
@@ -1320,11 +1160,6 @@ impl DataObjectsTab {
                     )
                     .children(pick_button)
                     .children(install_button)
-                    .children(open_editor_button)
-                    .children(export_buttons)
-                    .children(archive_button)
-                    .children(persist_button)
-                    .children(register_button)
                     .children(session_button)
                     // 铁律 E 组第 20 条：与其他模块的交互一律走右键。
                     // `context_menu` 会换掉元素类型（不再有样式方法），所以必须挂在链尾。
@@ -1344,6 +1179,8 @@ impl DataObjectsTab {
                         let alias = data_objects::fileview_alias(&object.key).map(str::to_string);
                         let usable = object.can_analyze();
                         let format = self.export_format;
+                        let register_target = register_target.clone();
+                        let persist_target = persist_target.clone();
                         move |menu, _window, _cx| {
                             let mut menu = menu;
                             if let Some(reference) = sql_ref.clone().filter(|_| usable) {
@@ -1413,6 +1250,35 @@ impl DataObjectsTab {
                                     },
                                 ));
                             }
+                            // 未登记段的表：就地补身份（只写登记，不搬数据、不涨版本）
+                            if let Some(table) = register_target.clone() {
+                                let register = shared.clone();
+                                let register_label = label.clone();
+                                menu = menu.item(PopupMenuItem::new("登记为资产").on_click(
+                                    move |_, _, cx| {
+                                        crate::components::result_set_actions::register_table_asset(
+                                            &register,
+                                            &table,
+                                            &register_label,
+                                            cx,
+                                        );
+                                    },
+                                ));
+                            }
+                            // 临时表 / 结果集：写表 + 登记（写库走 worker，回执由工作台泵）
+                            if let Some((table, table_label)) = persist_target.clone() {
+                                let persist = shared.clone();
+                                menu = menu.item(PopupMenuItem::new("升级为资产").on_click(
+                                    move |_, _, cx| {
+                                        crate::components::result_set_actions::persist_to_project(
+                                            &persist,
+                                            &table,
+                                            &table_label,
+                                            cx,
+                                        );
+                                    },
+                                ));
+                            }
                             if let Some(alias) = alias.clone() {
                                 let snapshot = shared.clone();
                                 menu = menu.item(PopupMenuItem::new("归档为快照").on_click(
@@ -1433,6 +1299,12 @@ impl DataObjectsTab {
                                             ),
                                         }
                                     },
+                                ));
+                            }
+                            // 空菜单右键会像「没反应」：把可用性原因说出来，别让人以为界面坏了
+                            if menu.is_empty() {
+                                menu = menu.item(PopupMenuItem::new(
+                                    "没有可执行的交互（原因见这一行的状态列）",
                                 ));
                             }
                             menu

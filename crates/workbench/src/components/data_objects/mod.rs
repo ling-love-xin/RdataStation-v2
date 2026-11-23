@@ -1355,7 +1355,7 @@ mod tests {
         assert_eq!(by("fileview:f_warehouse").sql_ref, None);
         // 源库连接行、结果集都按各自口径
         assert_eq!(by("conn:C_mysql_9").sql_ref, None);
-        assert!(by("result:q_1")
+        assert!(by("result:tmp_q_结果_3")
             .sql_ref
             .as_deref()
             .is_some_and(|s| s.starts_with('"')));
