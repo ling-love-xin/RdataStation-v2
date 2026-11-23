@@ -459,6 +459,11 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
     // 表型本体在项目分析库里 → 持久表段；文件型本体在 `resources/` → 文件段。
     // pill 都是「资产」，行上标注只读 + 最新版本
     for asset in &collected.assets {
+        // 铁律 D 组第 14 条：非结构化文件（sql / py / md…）不是数据，不进文件段。
+        // 表型资产不受这条限制（本体是库里的表，不是文件）。
+        if asset.analytics_table.is_none() && !file_asset_is_analytic(asset) {
+            continue;
+        }
         // 表型资产：存档登记还在，本体表却查不到了（表被删 / 换了项目）就是**真失效**。
         // 判据只取项目分析库清单，且必须「项目开着」才算权威（没项目时清单必然空）。
         let table_gone = match (asset.analytics_table.as_deref(), collected.project_open) {
@@ -471,10 +476,19 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             // 改个名也会让「已选」凭空消失
             key: format!("asset:{}", asset.resource_id),
             name: asset.name.clone(),
-            // 只读 + 最新版本：两件事都写在副标题，避免用户以为能选旧版
-            note: match asset.detail.is_empty() {
-                true => format!("只读 · 最新 v{}", asset.version),
-                false => format!("只读 · 最新 v{} · {}", asset.version, asset.detail),
+            // 只读 + 最新版本：两件事都写在副标题，避免用户以为能选旧版。
+            // 文件型再补取数模式（铁律 D 组第 15 条）：有副本 = 快照，无副本 = 按需（读源位置）。
+            note: {
+                let mode = match asset.analytics_table.is_some() {
+                    // 表型没有「文件模式」这回事
+                    true => String::new(),
+                    false if asset.payload_rel_path.is_some() => " · 快照".to_string(),
+                    false => " · 按需".to_string(),
+                };
+                match asset.detail.is_empty() {
+                    true => format!("只读 · 最新 v{}{mode}", asset.version),
+                    false => format!("只读 · 最新 v{} · {}{mode}", asset.version, asset.detail),
+                }
             },
             channel: Channel::Asset,
             life: Life::Managed,
@@ -539,7 +553,9 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
         out.push(Object {
             key: format!("fileview:{alias}"),
             name: alias.clone(),
-            note: path.clone(),
+            // 加源进来的文件是 `f_*` 视图、**不物化**：文件改了下次查询跟着变，
+            // 所以标「按需」（铁律 D 组第 16 条）。想固定就归档成快照。
+            note: format!("按需 · {path}"),
             channel: Channel::File,
             life: Life::External,
             state: State::Ready,
@@ -829,6 +845,19 @@ pub fn analysis_sources(
     }
 
     (sources, skipped)
+}
+
+/// 文件型资产能不能当文件参与分析（铁律 D 组第 14 条）。
+///
+/// 判据与归档侧的 `structured` **同源**：`engine::duckdb::file_reader_function`
+/// （csv / parquet / excel / json 认得；sql / py / md 认不得）。有副本时按副本扩展名判；
+/// 引用型资产拿不到本体路径（`payload_rel_path = None`），这里**不猜**——保留并标
+/// 「按需」，让"读源位置"这条语义仍然可用，宁可多一行也不静默吞掉用户的东西。
+pub fn file_asset_is_analytic(asset: &AssetRow) -> bool {
+    match asset.payload_rel_path.as_deref() {
+        Some(rel) => engine::duckdb::file_reader_function(rel).is_some(),
+        None => true,
+    }
 }
 
 /// 这一行能不能「存到项目分析库」。
@@ -1177,10 +1206,46 @@ mod tests {
         assert_eq!(table_asset.group, Group::PersistentTables, "表型资产按本体进持久表段");
         assert_eq!(asset.version, Some(3));
         assert!(asset.note.contains("只读"));
+        // 有副本（`payload_rel_path` 有值）= 快照；表型没有文件模式这一说
+        assert!(asset.note.contains("快照"), "有副本的文件资产标快照：{}", asset.note);
+        assert!(
+            !table_asset.note.contains("快照") && !table_asset.note.contains("按需"),
+            "表型资产不该带文件模式：{}",
+            table_asset.note
+        );
         assert_eq!(asset.channel, Channel::Asset);
         assert_eq!(asset.life, Life::Managed);
         // 资产可以参与分析
         assert!(asset.can_analyze());
+    }
+
+    /// 铁律 D 组第 14 条：非结构化文件不是数据，不进文件段；引用型不猜、标「按需」。
+    #[test]
+    fn non_structured_files_stay_out_of_the_files_group() {
+        let mut c = sample();
+        c.assets.push(AssetRow {
+            name: "分析.sql".into(),
+            version: 1,
+            detail: String::new(),
+            payload_rel_path: Some("assets/分析.sql".into()),
+            resource_id: "arp_sql".into(),
+            analytics_table: None,
+        });
+        c.assets.push(AssetRow {
+            name: "外链.csv".into(),
+            version: 1,
+            detail: String::new(),
+            payload_rel_path: None,
+            resource_id: "arp_ref".into(),
+            analytics_table: None,
+        });
+        let rows = objects(&c);
+        assert!(
+            rows.iter().all(|o| o.key != "asset:arp_sql"),
+            "sql 资产不该出现在文件段"
+        );
+        let reference = rows.iter().find(|o| o.key == "asset:arp_ref").unwrap();
+        assert!(reference.note.contains("按需"), "引用型要标按需：{}", reference.note);
     }
 
     /// 临时对象是会话级：失效时仍留在清单里，但不再给「分析」动作。
