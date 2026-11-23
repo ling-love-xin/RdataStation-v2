@@ -11,6 +11,8 @@ pub use connection_dialog::components::connection_dialog;
 pub mod dialog_helpers;
 /// 编辑器宿主端口实现（P2-a：`editor::host::EditorHost` 的 workbench 侧实现）
 pub mod editor_host;
+/// 数据对象文件段的动作宿主（外部文件 → 归档成快照，铁律 D 组）
+pub mod file_actions;
 pub mod group_form_dialog;
 pub mod group_manager_dialog;
 pub mod insight_actions;

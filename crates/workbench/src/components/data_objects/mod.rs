@@ -860,6 +860,20 @@ pub fn file_asset_is_analytic(asset: &AssetRow) -> bool {
     }
 }
 
+/// 这一行是不是「加源进来的外部文件」（`f_*` 视图，按需读原文件）。
+///
+/// 只认 `fileview:` 前缀且落在文件段：库文件（`.duckdb/.sqlite`）虽然也叫 `f_*`，
+/// 但它在源段（catalog，不是视图），不该给「归档为快照」——那是把库文件当数据文件折一份，
+/// 语义不对。
+pub fn can_archive_snapshot(object: &Object) -> bool {
+    object.key.starts_with("fileview:") && object.group == Group::Files
+}
+
+/// `fileview:` 行背后的视图别名（用来回查它的绝对路径）。
+pub fn fileview_alias(key: &str) -> Option<&str> {
+    key.strip_prefix("fileview:")
+}
+
 /// 这一行能不能「存到项目分析库」。
 ///
 /// 只有**结果集**（`tmp_q_`，进程单例里的表）可以：落库就是整表搬一份，不需要重建。
@@ -991,7 +1005,7 @@ mod tests {
     // 刻意不用 `use super::*`：会把 gpui 的 `test` 属性宏带进作用域。
     use super::{
         AssetRow, Channel, Collected, ConnRow, Group, Life, Object, SessionSource, State,
-        objects,
+        can_archive_snapshot, fileview_alias, objects,
     };
 
     fn sample() -> Collected {
@@ -1246,6 +1260,30 @@ mod tests {
         );
         let reference = rows.iter().find(|o| o.key == "asset:arp_ref").unwrap();
         assert!(reference.note.contains("按需"), "引用型要标按需：{}", reference.note);
+    }
+
+    /// 只有文件段里的 `f_*` 视图给「归档为快照」；库文件在源段（catalog），不给。
+    #[test]
+    fn only_file_views_offer_a_snapshot() {
+        let mut c = sample();
+        c.loaded_files = vec![
+            ("f_orders".into(), "D:/data/orders.csv".into()),
+            ("f_warehouse".into(), "D:/data/warehouse.duckdb".into()),
+        ];
+        let rows = objects(&c);
+        let file = rows.iter().find(|o| o.key == "fileview:f_orders").unwrap();
+        assert_eq!(file.group, Group::Files);
+        assert!(can_archive_snapshot(file));
+        assert_eq!(fileview_alias(&file.key), Some("f_orders"));
+        let database = rows
+            .iter()
+            .find(|o| o.key == "fileview:f_warehouse")
+            .unwrap();
+        assert_eq!(database.group, Group::MountedSources);
+        assert!(!can_archive_snapshot(database), "库文件是源，不该折成快照");
+        // 资产行不在这条动作里：它们已经是快照/按需的既成事实，没有再折一次的道理
+        let asset = rows.iter().find(|o| o.key == "asset:arp_demo").unwrap();
+        assert!(!can_archive_snapshot(asset));
     }
 
     /// 临时对象是会话级：失效时仍留在清单里，但不再给「分析」动作。

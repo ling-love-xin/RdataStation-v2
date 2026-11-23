@@ -1038,6 +1038,43 @@ impl DataObjectsTab {
                     _ => None,
                 }
             };
+            // 铁律 D 组第 16 条：加源的外部文件默认「按需」（`f_*` 视图读原文件）；
+            // 想固定就给这条「归档为快照」——归档后资产自己进文件段（`asset:` 行），
+            // 加源那份视图不删（用户可能还要按需读原文件，清场口在切项目时统一收）。
+            let archive_button = if data_objects::can_archive_snapshot(object) {
+                data_objects::fileview_alias(&object.key).map(|alias| {
+                    let alias = alias.to_string();
+                    let shared = self.shared.clone();
+                    let entity = entity.clone();
+                    Button::new(SharedString::from(format!(
+                        "data-object-archive-snapshot-{}",
+                        object.key
+                    )))
+                    .ghost()
+                    .label("归档为快照")
+                    .tooltip("在资源库里留一份副本，之后按快照参与分析（只读、带版本）")
+                    .on_click(move |_, _, cx| {
+                        let path = shared
+                            .loaded_files
+                            .borrow()
+                            .iter()
+                            .find(|(seen, _)| seen == &alias)
+                            .map(|(_, path)| path.clone());
+                        match path {
+                            Some(path) => crate::components::file_actions::archive_file_as_snapshot(
+                                &shared, &path, cx,
+                            ),
+                            None => shared.say_error(
+                                format!("归档：找不到 {alias} 的路径（可能已被清理，重新加源即可）"),
+                                cx,
+                            ),
+                        }
+                        entity.update(cx, |_, cx| cx.notify());
+                    })
+                })
+            } else {
+                None
+            };
             // 资产行才给「升级到全局」：那一行已经有存档身份，升上去能回指上游。
             // 临时表 / 项目自建表先「升级为资产」——没有登记就没有身份，硬升会丢线索。
             // 结果集 / 洞察产物已经在进程单例里：落库就是整表搬一份。
@@ -1205,6 +1242,7 @@ impl DataObjectsTab {
                     )
                     .children(pick_button)
                     .children(install_button)
+                    .children(archive_button)
                     .children(persist_button)
                     .children(register_button)
                     .children(session_button),
