@@ -1020,8 +1020,9 @@ impl DataObjectsTab {
                 .map(str::to_string);
             let persist_target = data_objects::can_persist(object)
                 .then(|| (object.name.clone(), data_objects::persist_label(&object.name)));
-            // 缺扩展的行：与其只标个警告，给一条能走的路（跳插件管理）
-            let install_button = if object.can_analyze() {
+            // 缺扩展的行：与其只标个警告，给一条能走的路（跳插件管理）。
+            // 只给**会话源**（联邦挂载失败）——源库连接没连上不是缺扩展，给「装扩展」是误导
+            let install_button = if object.can_analyze() || !object.key.starts_with("session:") {
                 None
             } else {
                 let shared = self.shared.clone();

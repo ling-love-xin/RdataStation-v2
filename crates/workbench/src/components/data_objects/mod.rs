@@ -294,16 +294,22 @@ pub struct SessionSource {
     pub failed: Option<String>,
 }
 
-/// 源库连接（「源库表」段的一级行）。
+/// 源库连接（「源」段的一级行）。
 ///
 /// 只带**展示信息**：表清单要逐层 introspect，属于面板展开时的懒加载，
 /// 取数时不该顺手查一遍（打开面板就查所有连接 = 卡在 introspect 上）。
+///
+/// 收不收进面板由 `fed` 定（= 已注册成分析源，铁律 B 组第 4 条）：注册了但这一刻
+/// 没连上的库也照样列（行上写「未连接」，不给展开）；没注册的一律不列——
+/// 那是数据库导航栏的对象，不是分析源。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnRow {
     pub id: String,
     pub name: String,
     /// 驱动 · 主机（可空段略去）
     pub note: String,
+    /// 运行时是否已连上（连不上就没有表可列，行不可展开）
+    pub connected: bool,
 }
 
 /// 资产清单里的一行（只读，只给最新版本）。
@@ -412,17 +418,25 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
         });
     }
 
-    // 源库连接行：一级行 = 一条**已连接**的连接（零 I/O，直接来自宿主快照）。
+    // 源段的一级行 = 一条**已注册成分析源**的连接（`use_duckdb_fed`，零 I/O）。
     // 表清单不在这里——展开某个连接时才 introspect（面板 `load_source_children`），
-    // 打开面板就查所有连接是不可接受的（N 个连接 × 3 层同步查询）
+    // 打开面板就查所有连接是不可接受的（N 个连接 × 3 层同步查询）。
+    //
+    // 注册了但没连上的也要列（铁律 B 组第 4 条）：用户刚切了项目、或连接暂时断了，
+    // 源不会从清单里"蒸发"——行上写「未连接」，不给展开、不给选用。
     for conn in &collected.connections {
+        let connected = conn.connected;
         out.push(Object {
             key: format!("conn:{}", conn.id),
             name: conn.name.clone(),
             note: conn.note.clone(),
             channel: Channel::Source,
             life: Life::External,
-            state: State::Ready,
+            state: if connected {
+                State::Ready
+            } else {
+                State::Failed("未连接 · 连上后可展开选表".to_string())
+            },
             group: Group::Source,
             pill: "源连接",
             version: None,
@@ -954,13 +968,15 @@ pub fn persist_label(table: &str) -> String {
 /// `refresh_resources`），项目切换与资产增删都会推新——面板 refresh 时从它的 `view_rows`
 /// 翻译即可，取数只有这一份（这里不另开连接查库，避免两套真相）。
 pub fn collect(shared: &Shared) -> Collected {
-    // 连接行只取**已连接**的：没连上的连接列举不出表，列出来就是个点了没反应的入口。
+    // 源段只收**已注册成分析源**的连接（`use_duckdb_fed`）：没注册的是导航栏的对象，
+    // 不是分析源（铁律 B 组第 4 条）。注册过但没连上的仍进清单 —— 行上写「未连接」，
+    // 不给展开（没有表可列）。
     // 这里零 I/O（连接清单是宿主快照），表清单交给展开时懒加载
     let connections: Vec<ConnRow> = shared
         .connections
         .borrow()
         .iter()
-        .filter(|item| item.connected)
+        .filter(|item| item.use_duckdb_fed)
         .map(|item| ConnRow {
             id: item.id.clone(),
             name: item.name.clone(),
@@ -968,6 +984,7 @@ pub fn collect(shared: &Shared) -> Collected {
                 Some(host) => format!("{} · {}", item.driver, host),
                 None => item.driver.clone(),
             },
+            connected: item.connected,
         })
         .collect();
     let project = shared.project.borrow().clone();
@@ -1059,6 +1076,7 @@ mod tests {
                 id: "C_mysql_9".into(),
                 name: "订单库".into(),
                 note: "MySQL · 10.0.0.8".into(),
+                connected: true,
             }],
             analysis_tables: vec![
                 "res_订单明细_20261115103000".into(),
@@ -1730,6 +1748,28 @@ mod tests {
         assert_eq!(conn.channel, Channel::Source, "读法是连接下推");
         assert_eq!(conn.life, Life::External, "表在源库上，不在我们管的库里");
         assert!(conn.note.contains("MySQL"), "副标题要写驱动：{}", conn.note);
+
+        // 注册了但没连上的源：照样进清单，写「未连接」、不给展开也不给选用
+        let mut offline = sample();
+        offline.connections.push(ConnRow {
+            id: "C_dw_offline".into(),
+            name: "离线数仓".into(),
+            note: "PostgreSQL · 10.0.0.99".into(),
+            connected: false,
+        });
+        let rows = objects(&offline);
+        let down = rows
+            .iter()
+            .find(|o| o.key == "conn:C_dw_offline")
+            .expect("已注册的源即使没连上也要有一行");
+        assert_eq!(down.group, Group::Source);
+        assert!(!down.can_analyze(), "没连上不给动作");
+        assert!(!down.can_pick(), "没连上的连接不进工作集");
+        assert!(
+            down.availability_text().contains("未连接"),
+            "状态列要写清为什么：{}",
+            down.availability_text()
+        );
 
         // 叶子：`note` 写所在 catalog / schema，身份能反解回四段
         let leaf = super::source_table_object("C_mysql_9", "shop", "sales", "orders");
