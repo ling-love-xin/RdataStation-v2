@@ -597,15 +597,15 @@ impl DataObjectsTab {
 
         let search_row = div().px_3().pb_2().child(Input::new(&search).small());
 
-        // 三条口径先写清楚：省得每行都要解释“为什么只有一版”“洞察产物在哪”“源库表为什么没铺满”
+        // 三条口径先写清楚：省得每行都要解释"为什么只有一版""洞察产物在哪""为什么展不开"
         let hint = div()
             .text_xs()
             .text_color(colors.muted_foreground)
             .px_3()
             .pb_2()
-            .child("每组只显示最新版本；洞察产物 tmp_i_ 不进本清单；源库表要展开连接才列（远端内省有代价）");
+            .child("只有三段（源 / 表 / 文件）；资产只给最新版本；洞察产物 tmp_i_ 不进本清单；源要展开连接才列表，没挂载的源展不开");
 
-        // 分组 chips：四段全展开太长，先收窄到一段再看（2026-11-18 合并后 5 个 chip）
+        // 分组 chips：三个段各一个（业务身份是小标，不单独当筛选项）
         let mut chips = div()
             .h_flex()
             .items_center()
@@ -829,12 +829,14 @@ impl DataObjectsTab {
                     _ => format!("已挂 {mounted}/{total} 源 · {unmounted} 个未挂载"),
                 }
             });
+        // 临时对象现在落在「表」段（标「结果集」）：判据仍走 key 前缀，
+        // 别拿段判断——段只会说「这是表」，说不清该不该给「清理」这颗按钮
         let has_temp = self
             .shared
             .data_objects
             .borrow()
             .iter()
-            .any(|object| object.group == Group::TemporaryTables);
+            .any(data_objects::can_clear);
         let sess_row = (session_text.is_some() || has_temp).then(|| {
             let entity_for_clear = entity.clone();
             div()
@@ -978,11 +980,9 @@ impl DataObjectsTab {
             };
             // 会话行的动作（重挂 / 设主源 / 关会话）后端已有，界面不发明。
             // 原型是点开该行下方直接出动作条：比下拉菜单少一次移动，也看得见都有什么。
-            let session_actions = if object.group == Group::MountedSources {
-                data_objects::session_actions(&object.key, &object.state)
-            } else {
-                Vec::new()
-            };
+            // 判据由 `session_actions` 自己按 key 前缀决定（非会话键返回空），
+            // 不再靠段判断——会话源和源库连接同段了
+            let session_actions = data_objects::session_actions(&object.key, &object.state);
             let session_open = self.expanded_session.as_deref() == Some(object.key.as_str());
             let session_button = if session_actions.is_empty() {
                 None
@@ -1010,13 +1010,13 @@ impl DataObjectsTab {
                     }),
                 )
             };
-            // 铁律 C 组第 9/10 条：未登记段的表可就地补身份（只写登记行，不搬数据、不涨版本）；
-            // 「升级为资产」是另一件事（写表 + 登记）。两条都进右键，行上不再摆按钮。
+            // 铁律 C 组第 9/10 条：未登记的表（与资产同段）可就地补身份（只写登记行，
+            // 不搬数据、不涨版本）；「升级为资产」是另一件事（写表 + 登记）。两条都进右键，
+            // 行上不再摆按钮。判据就是 key 前缀：段只说明是表，不说明有没有身份
             let register_target = object
                 .key
                 .strip_prefix("persistent:")
                 .or_else(|| object.key.strip_prefix("project:"))
-                .filter(|_| object.group == data_objects::Group::UnregisteredTables)
                 .map(str::to_string);
             let persist_target = data_objects::can_persist(object)
                 .then(|| (object.name.clone(), data_objects::persist_label(&object.name)));
@@ -1045,12 +1045,9 @@ impl DataObjectsTab {
                 )
             };
             // 源行可展开（联邦源 / 加速源 / 文件库 / 源库连接）：行首给展开指示，
-            // 与段头 chevron 同一习惯。失败的联邦源展不开（没有表清单可列），
-            // 该段内留同宽空位对齐
-            let in_source_group = matches!(
-                object.group,
-                Group::MountedSources | Group::SourceTables
-            );
+            // 与段头 chevron 同一习惯。**没挂载的源不给展开**（铁律 B 组第 4 条）：
+            // 没有表可列，给了 chevron 只会点出一个空列表。失败的联邦源同理。
+            let in_source_group = object.group == Group::Source;
             let source_expandable = in_source_group
                 && object.can_analyze()
                 && data_objects::source_ref(&object.key).is_some();
@@ -1346,7 +1343,10 @@ impl DataObjectsTab {
             // 展开着的源行：把叶子（表 / 视图）画在它下面。清单没到（刷新竞态 /
             // 列举失败）就不画——下一次事件会补上，宁可少一拍也不画猜的
             if expanded_now {
-                if object.group == Group::SourceTables {
+                if matches!(
+                    data_objects::source_ref(&object.key),
+                    Some(data_objects::SourceRef::Connection { .. })
+                ) {
                     // 源库表：叶子是**可选用**的对象（取样走连接下推，不搬数据）
                     match self.conn_children.get(&object.key) {
                         Some(children) if !children.is_empty() => {

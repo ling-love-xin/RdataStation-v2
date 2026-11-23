@@ -119,36 +119,23 @@ impl State {
     }
 }
 
-/// 分组按**对象形态**排（2026-11-18 合并定稿，取代 2026-11-16 的五容器口径）：
-/// 段回答「这是什么形态的东西、怎么读」，业务身份（资产 / 项目 / 全局 / 自建 /
-/// 落库 / 结果集）全是行内 pill。合并掉的两段：本项目分析库 + 全局分析库 →
-/// 持久表（都是本机 DuckDB 文件库里的表，项目 vs 全局是标签不是形态）。
+/// 分组按**对象形态**排（2026-11-24 由六段并为**三段**：源 / 表 / 文件）：
+/// 段回答「这是什么形态的东西、怎么读」，业务身份（资产 / 未登记 / 结果集 / 全局 /
+/// 自建 / 落库 / 联邦 / 加速 / 文件库）全是行内小标。
+///
+/// 合并路径（取代 2026-11-18 的六段口径）：
+/// 已挂载的源 + 源库表 → 源；未登记 + 表（资产）+ 临时表 → 表；文件 → 文件。
+/// 段内次序不靠名字排序碰运气，由 [`Object::rank`] 定（正在用的在上）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Group {
-    /// 联邦会话 / 本地加速会话里已挂上的源（ATTACH 进来的库）
-    MountedSources,
-    /// 源库表：连接里**还没进 DuckDB**的表（下推查询，数据留在源库）。
-    ///
-    /// 这一段是 2026-11-22 补的：此前面板只覆盖「已进 DuckDB 的东西」，于是
-    /// 「我想分析 A 库的 orders」还得回左侧导航树找——面板当不成公共选择器。
-    /// 连接行由 `Shared::connections` 直接来（零 I/O），**表清单只在展开时懒加载**：
-    /// 逐层 introspect 很贵，面板一打开就查所有连接是不可接受的。
-    SourceTables,
-    /// 库表（未登记）：项目分析库里看得见、但**还没有资产身份**的表（自建 / 结果集落库 / 全局）。
-    ///
-    /// 铁律 C 组第 8/9 条（`docs/architecture/layout/data-objects-invariants.md`）：
-    /// 表段只显示资产当前版本；未登记的表既不能消失、也不能混进表段——它们留在源侧的
-    /// 库表视图里，要进表段必须右键「登记为资产」。段标题写「未登记」是为了让用户一眼
-    /// 知道"这些表还没有身份"，而不是以为它们不算数。
-    UnregisteredTables,
-    /// 持久表：项目分析库（自建 / `res_` 落库 / 资产·表型）与全局分析库（`G_`）
-    PersistentTables,
-    /// 文件：已加载进 DuckDB 的文件视图（外部文件 / 手动加入的草稿）与资产·文件型
-    /// （本体在 `resources/`，分析时按扩展名用 reader 函数读）。**未加载的草稿不在这里**——
-    /// 草稿不自动进面板，要「加源」手动加入（2026-11-18 口径）
-    Files,
-    /// 临时表（进程内存单例里的 `tmp_q_`）
-    TemporaryTables,
+    /// 源：连接（树根，可展开列表）、挂进 DuckDB 的库（联邦 / 加速 / 文件库）。
+    /// **未挂载的源不给展开**——没有表可列，行上只给「挂载」（铁律 B 组第 4 条）。
+    Source,
+    /// 表：库里现有的表，三种身份同段靠小标区分：资产当前版本（`资产 vN`）、
+    /// 未登记（`未登记` / `未登记 · 全局`）、临时结果集（`结果集 · 会话级`）。
+    Table,
+    /// 文件：结构化文件（`f_*` 视图与资产·文件型）。未加载的草稿不在这里。
+    File,
 }
 
 impl Group {
@@ -158,23 +145,13 @@ impl Group {
     /// chips 数组——加一段时只要漏改一处，排序与筛选就会各说各话。现在只留这一份：
     /// 排序直接用派生 `Ord`（声明顺序 = 段顺序），chips 遍历本常量，
     /// `groups_list_all_in_ord_order` 用例保证「常量顺序 = `Ord` 顺序」不被写歪。
-    pub const ALL: [Self; 6] = [
-        Self::MountedSources,
-        Self::SourceTables,
-        Self::UnregisteredTables,
-        Self::PersistentTables,
-        Self::Files,
-        Self::TemporaryTables,
-    ];
+    pub const ALL: [Self; 3] = [Self::Source, Self::Table, Self::File];
 
     pub fn title(self) -> &'static str {
         match self {
-            Self::MountedSources => "已挂载的源",
-            Self::SourceTables => "源库表",
-            Self::UnregisteredTables => "库表（未登记）",
-            Self::PersistentTables => "表（资产）",
-            Self::Files => "文件",
-            Self::TemporaryTables => "临时表",
+            Self::Source => "源",
+            Self::Table => "表",
+            Self::File => "文件",
         }
     }
 }
@@ -210,26 +187,45 @@ impl Group {
     pub fn icon(self) -> gpui_kit::assets::IconName {
         use gpui_kit::assets::IconName;
         match self {
-            // 「已挂载的源」是一组挂进来的库（联邦 / 加速 / 文件库），用聚合形状；
-            // 单条源库连接本身就是一台库，用 Database，两段扫一眼能分开
-            Self::MountedSources => IconName::Boxes,
-            Self::SourceTables => IconName::Database,
-            // 未登记的表：形状仍是「库里的表」，用 Table 与已登记的表同形（差别在段与段名）
-            Self::UnregisteredTables => IconName::Table,
-            Self::PersistentTables => IconName::Table,
-            Self::Files => IconName::FileSpreadsheet,
-            Self::TemporaryTables => IconName::Clock,
+            // 源是一个"库"（连接 / 挂载的库）：扫一眼与表、文件分开
+            Self::Source => IconName::Database,
+            Self::Table => IconName::Table,
+            Self::File => IconName::FileSpreadsheet,
         }
     }
 }
 
 impl Object {
-    /// 升序排序键：先分组、再名字（同名按身份兜底，保证稳定）。
+    /// 段内次序：同一段里「正在用的在上」。
+    ///
+    /// 三段之后同段混了多种身份（会话挂载 / 连接 / 资产 / 未登记 / 结果集），
+    /// 只按名字排会把会话挂的源和连接打散，用户就找不到"刚刚挂上的那个"。
+    /// 所以把段内次序写死在这里，`sort_key` 直接用；名字只在同档内比较。
+    pub fn rank(&self) -> u8 {
+        match self.group {
+            Group::Source => match self.key.split(':').next() {
+                Some("session") => 0,
+                Some("accel") => 1,
+                Some("fileview") => 2,
+                // 源库连接（`conn:`）：也没挂任何东西，排在已挂载的后面
+                _ => 3,
+            },
+            Group::Table => match self.key.split(':').next() {
+                Some("asset") => 0,
+                Some("persistent" | "project" | "global") => 1,
+                // 结果集（`result:`）：寿命最短，排最后
+                _ => 2,
+            },
+            Group::File => 0,
+        }
+    }
+
+    /// 升序排序键：先分组、再段内档、再名字（同名按身份兜底，保证稳定）。
     ///
     /// 分组维度直接用 [`Group`] 的派生 `Ord`（= 声明顺序）：不再经 `order() -> u8`
     /// 转一道，免得「枚举加在哪」与「数字写几」各自为政。
-    pub fn sort_key(&self) -> (Group, String, String) {
-        (self.group, self.name.clone(), self.key.clone())
+    pub fn sort_key(&self) -> (Group, u8, String, String) {
+        (self.group, self.rank(), self.name.clone(), self.key.clone())
     }
 
     /// 行首图标（失效行改警告形状：不靠删除线也能看出它不能点）
@@ -258,18 +254,16 @@ impl Object {
 
     /// 行内小标（铁律 G 第 30 条）。
     ///
-    /// 同一张表可能在源段与表段各出现一次：源段那条写 `库表`（它是源库里的表，
-    /// 数据还在源库），表段那条把版本写进小标（`资产 vN`，它读的是资产的最新版本）。
-    /// 用户不必回头读副标题，更不用靠名字猜这两行是不是同一张表。
-    ///
-    /// 其它行沿用 [`Object::pill`] 的业务身份（结果集 / 项目自建 / 全局…）——
-    /// 那些身份本身就是区分的依据，不再叠一层小标。
+    /// 三段之后同段混着多种身份，小标就是**唯一不靠名字猜**的依据：
+    /// 源段的叶子写 `库表`（数据还在源库），表段的表型资产把版本写进小标
+    /// （`资产 vN`，它读的是资产的最新版本），其余沿用 [`Object::pill`] 的业务身份
+    /// （`未登记` / `未登记 · 全局` / `结果集` / `联邦源` / `加速源` / `文件库` / `已加载`）。
     pub fn pill_text(&self) -> String {
         match (self.group, self.version) {
-            // 源段的**叶子**（`srctable:`）才是「源库里的表」；源段的一级行是连接，
-            // 它本身不是数据对象，保持「源库」身份
-            (Group::SourceTables, _) if self.key.starts_with("srctable:") => "库表".to_string(),
-            (Group::PersistentTables, Some(version)) => format!("资产 v{version}"),
+            // 源段的**叶子**（`srctable:`）才是「源库里的表」；源段的一级行是连接 /
+            // 挂载的库，它们本身不是数据对象，保持自己的身份
+            (Group::Source, _) if self.key.starts_with("srctable:") => "库表".to_string(),
+            (Group::Table, Some(version)) => format!("资产 v{version}"),
             _ => self.pill.to_string(),
         }
     }
@@ -392,8 +386,8 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
                 Some(reason) => State::Failed(reason.clone()),
                 None => State::Ready,
             },
-            group: Group::MountedSources,
-            pill: "源",
+            group: Group::Source,
+            pill: "联邦源",
             version: None,
             // 联邦源的表引用是 `<别名>.<schema>.<表>`，只给别名不算引用名
             sql_ref: None,
@@ -410,8 +404,8 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             channel: Channel::Accel,
             life: Life::Session,
             state: State::Ready,
-            group: Group::MountedSources,
-            pill: "加速",
+            group: Group::Source,
+            pill: "加速源",
             version: None,
             // 加速档的表要切到该档才能引用，行上不给可直接抄的名字
             sql_ref: None,
@@ -429,8 +423,8 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             channel: Channel::Source,
             life: Life::External,
             state: State::Ready,
-            group: Group::SourceTables,
-            pill: "连接",
+            group: Group::Source,
+            pill: "源连接",
             version: None,
             // 连接本身不是数据对象：它下面展开的表才拼得出引用名
             sql_ref: None,
@@ -466,8 +460,8 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             channel: Channel::Local,
             life: Life::Project,
             state: State::Ready,
-            group: Group::UnregisteredTables,
-            pill: "结果集落库",
+            group: Group::Table,
+            pill: "未登记",
             version: None,
             // 项目分析库挂在分析实例上，表名裸名可见（与「登记为资产」同一口径）
             sql_ref: Some(sql_ident(&name)),
@@ -483,8 +477,8 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             channel: Channel::Local,
             life: Life::Project,
             state: State::Ready,
-            group: Group::UnregisteredTables,
-            pill: "项目自建",
+            group: Group::Table,
+            pill: "未登记",
             version: None,
             sql_ref,
         });
@@ -533,9 +527,9 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
                 State::Ready
             },
             group: if asset.analytics_table.is_some() {
-                Group::PersistentTables
+                Group::Table
             } else {
-                Group::Files
+                Group::File
             },
             pill: "资产",
             version: Some(asset.version),
@@ -552,8 +546,8 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             channel: Channel::Local,
             life: Life::Project,
             state: State::Ready,
-            group: Group::UnregisteredTables,
-            pill: "全局",
+            group: Group::Table,
+            pill: "未登记 · 全局",
             version: None,
             // 全局分析库同样挂在分析实例上，裸名可见
             sql_ref: Some(sql_ident(&name)),
@@ -568,7 +562,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             channel: Channel::Process,
             life: Life::Session,
             state: State::Ready,
-            group: Group::TemporaryTables,
+            group: Group::Table,
             pill: "结果集",
             version: None,
             sql_ref: Some(sql_ident(&name)),
@@ -600,9 +594,9 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             life: Life::External,
             state: State::Ready,
             group: if is_database {
-                Group::MountedSources
+                Group::Source
             } else {
-                Group::Files
+                Group::File
             },
             pill: if is_database { "文件库" } else { "已加载" },
             version: None,
@@ -805,8 +799,8 @@ pub fn source_table_object(conn: &str, catalog: &str, schema: &str, table: &str)
         channel: Channel::Source,
         life: Life::External,
         state: State::Ready,
-        group: Group::SourceTables,
-        pill: "源库",
+        group: Group::Source,
+        pill: "库表",
         version: None,
         // 源库表要在这条连接上查（`SELECT … FROM <catalog>.<schema>.<表>`），
         // 引用名必须带连接上下文，不是这里能给的一句话
@@ -852,7 +846,7 @@ pub fn analysis_sources(
             )),
             // 已加载的**数据文件视图**也在单例上,同样能取样;库文件挂的是 catalog
             // (在 MountedSources 段),没有"整库取样"这回事,落到兜底分支老实说
-            Some(("fileview", alias)) if object.group == Group::Files => {
+            Some(("fileview", alias)) if object.group == Group::File => {
                 Some(SampleSource::on_duckdb(
                     format!("SELECT * FROM \"{alias}\""),
                     object.name.clone(),
@@ -911,7 +905,7 @@ pub fn file_asset_is_analytic(asset: &AssetRow) -> bool {
 /// 但它在源段（catalog，不是视图），不该给「归档为快照」——那是把库文件当数据文件折一份，
 /// 语义不对。
 pub fn can_archive_snapshot(object: &Object) -> bool {
-    object.key.starts_with("fileview:") && object.group == Group::Files
+    object.key.starts_with("fileview:") && object.group == Group::File
 }
 
 /// `fileview:` 行背后的视图别名（用来回查它的绝对路径）。
@@ -1111,7 +1105,7 @@ mod tests {
         }
     }
 
-    /// 分组顺序是「越靠上越正在用」：会话在最前，临时表在最后。
+    /// 分组顺序是「越靠上越正在用」：源在最前，文件在最后。
     #[test]
     fn groups_follow_the_declared_order() {
         let rows = objects(&sample());
@@ -1119,9 +1113,64 @@ mod tests {
         let mut sorted = groups.clone();
         sorted.sort();
         assert_eq!(groups, sorted, "行必须按分组顺序连续排列");
-        assert_eq!(rows.first().map(|o| o.group), Some(Group::MountedSources));
-        // 临时表排最后：它寿命最短，也最该被处理掉
-        assert_eq!(rows.last().map(|o| o.group), Some(Group::TemporaryTables));
+        // 源段在最前：会话挂载、连接、文件库都在这里
+        assert_eq!(rows.first().map(|o| o.group), Some(Group::Source));
+        // 文件段在最后
+        assert_eq!(rows.last().map(|o| o.group), Some(Group::File));
+        // 三段都要真出现过（并成三段后不许某段永远是空的）
+        for group in Group::ALL {
+            assert!(
+                rows.iter().any(|o| o.group == group),
+                "{} 段没有行，这条断言失去意义",
+                group.title()
+            );
+        }
+    }
+
+    /// 段内次序：源段会话挂载在最上、连接在最下；表段资产在未登记之前、结果集最后。
+    #[test]
+    fn rank_puts_the_objects_in_use_first_within_a_group() {
+        // 表型资产要真出现在 sample 里，才能验「表段从资产开始」——sample 默认只有
+        // 文件型资产（它在文件段），拿它当表段第一行会让断言变成假的
+        let mut c = sample();
+        c.analysis_tables.push("arp_客户画像_v2".into());
+        c.assets.push(AssetRow {
+            name: "客户画像".into(),
+            version: 2,
+            detail: String::new(),
+            payload_rel_path: None,
+            resource_id: "arp_2".into(),
+            analytics_table: Some("arp_客户画像_v2".into()),
+        });
+        let rows = objects(&c);
+        let ranks_of = |group: Group| {
+            rows.iter()
+                .filter(|o| o.group == group)
+                .map(|o| o.rank())
+                .collect::<Vec<_>>()
+        };
+        let mut source = ranks_of(Group::Source);
+        let sorted = source.clone();
+        source.sort();
+        assert_eq!(source, sorted, "源段内次序要被 rank 排好：{:?}", source);
+        // 段内第一档必须是会话挂载（正在用的那个），最后一档是连接
+        assert_eq!(source.first(), Some(&0), "会话挂载排第一档");
+        assert_eq!(source.last(), Some(&3), "源库连接排最后一档");
+
+        let mut table = ranks_of(Group::Table);
+        assert_eq!(table[0], 0, "表段从资产开始");
+        table.sort();
+        assert_eq!(
+            ranks_of(Group::Table),
+            table,
+            "表段内次序要被 rank 排好"
+        );
+        assert!(
+            rows.iter()
+                .find(|o| o.key.starts_with("result:"))
+                .is_some_and(|o| o.rank() == 2),
+            "结果集寿命最短，排表段最后"
+        );
     }
 
     /// 段顺序的唯一权威 = `Group::ALL`，它必须与派生 `Ord`（声明顺序）完全一致。
@@ -1146,9 +1195,9 @@ mod tests {
         }
     }
 
-    /// `res_` 表换可读名；落库 / 自建 / 全局同在「持久表」段，行内标签区分。
+    /// `res_` 表换可读名；落库 / 自建 / 全局同在「表」段，靠小标区分身份。
     #[test]
-    fn persistent_tables_are_split_from_project_owned_ones() {
+    fn unregistered_tables_share_the_table_group_and_carry_tags() {
         let rows = objects(&sample());
         let persistent = rows
             .iter()
@@ -1158,22 +1207,22 @@ mod tests {
         // 身份仍是原名：面板上改了显示，删除 / 分析仍按原名定位
         assert_eq!(persistent.key, "persistent:res_订单明细_20261115103000");
 
-        // 落库 / 自建 / 全局同在「持久表」段（2026-11-18 合并），行内标签负责说清是哪一类
-        assert_eq!(persistent.group, Group::UnregisteredTables);
+        // 落库 / 自建 / 全局同段（都是库里现有的表），小标负责说清是哪一类
+        assert_eq!(persistent.group, Group::Table);
         let own = rows
             .iter()
             .find(|o| o.key.starts_with("project:"))
             .unwrap();
-        assert_eq!(own.group, Group::UnregisteredTables);
+        assert_eq!(own.group, Group::Table);
         let global = rows
             .iter()
             .find(|o| o.key.starts_with("global:"))
             .unwrap();
-        assert_eq!(global.group, Group::UnregisteredTables);
+        assert_eq!(global.group, Group::Table);
         assert_eq!(own.name, "数据修复");
-        assert_eq!(own.pill, "项目自建");
-        assert_eq!(persistent.pill, "结果集落库");
-        assert_eq!(global.pill, "全局");
+        assert_eq!(own.pill, "未登记");
+        assert_eq!(persistent.pill, "未登记");
+        assert_eq!(global.pill, "未登记 · 全局");
     }
 
     /// 资产·表型只从资产行进：`information_schema` 会把它与自建表一起列出，
@@ -1265,10 +1314,10 @@ mod tests {
         let rows = objects(&c);
         let asset = rows.iter().find(|o| o.key == "asset:arp_demo").unwrap();
         // 文件型（本体在 resources/）→ 文件段
-        assert_eq!(asset.group, Group::Files, "文件型资产按本体进文件段");
+        assert_eq!(asset.group, Group::File, "文件型资产按本体进文件段");
         let table_asset = rows.iter().find(|o| o.key == "asset:arp_2").unwrap();
-        // 表型（本体在项目分析库）→ 持久表段
-        assert_eq!(table_asset.group, Group::PersistentTables, "表型资产按本体进持久表段");
+        // 表型（本体在项目分析库）→ 表段
+        assert_eq!(table_asset.group, Group::Table, "表型资产按本体进表段");
         assert_eq!(asset.version, Some(3));
         assert!(asset.note.contains("只读"));
         // 有副本（`payload_rel_path` 有值）= 快照；表型没有文件模式这一说
@@ -1323,14 +1372,14 @@ mod tests {
         ];
         let rows = objects(&c);
         let file = rows.iter().find(|o| o.key == "fileview:f_orders").unwrap();
-        assert_eq!(file.group, Group::Files);
+        assert_eq!(file.group, Group::File);
         assert!(can_archive_snapshot(file));
         assert_eq!(fileview_alias(&file.key), Some("f_orders"));
         let database = rows
             .iter()
             .find(|o| o.key == "fileview:f_warehouse")
             .unwrap();
-        assert_eq!(database.group, Group::MountedSources);
+        assert_eq!(database.group, Group::Source);
         assert!(!can_archive_snapshot(database), "库文件是源，不该折成快照");
         // 资产行不在这条动作里：它们已经是快照/按需的既成事实，没有再折一次的道理
         let asset = rows.iter().find(|o| o.key == "asset:arp_demo").unwrap();
@@ -1338,23 +1387,24 @@ mod tests {
     }
 
     /// 小标（铁律 G 第 30 条）：源段叶子写 `库表`，表段表型资产写 `资产 vN`，
-    /// 其余沿用业务身份。这三者的区分是**同表两段出现**时唯一不靠猜的依据。
+    /// 其余沿用业务身份。这些区分是**同表两段出现、同段多种身份**时唯一不靠猜的依据。
     #[test]
     fn pills_distinguish_a_table_that_appears_in_both_groups() {
         // 源段的叶子：数据还在源库，选它 = 从源库取样
         let leaf = super::source_table_object("C_mysql_9", "orders_db", "public", "orders");
         assert_eq!(leaf.pill_text(), "库表");
-        // 源段的一级行是连接，不是表：不能跟着写成「库表」
+        // 源段的一级行是连接，不是表：保持「源连接」身份
         let conn = Object {
             key: "conn:C_mysql_9".into(),
+            pill: "源连接",
             ..leaf.clone()
         };
-        assert_eq!(conn.pill_text(), "源库");
+        assert_eq!(conn.pill_text(), "源连接");
         // 表段：同样叫 orders 的那条读的是资产的最新版本
         let asset = Object {
             key: "asset:arp_1".into(),
             name: "orders".into(),
-            group: Group::PersistentTables,
+            group: Group::Table,
             pill: "资产",
             version: Some(4),
             ..leaf.clone()
@@ -1362,7 +1412,7 @@ mod tests {
         assert_eq!(asset.pill_text(), "资产 v4");
         // 非表型资产（文件段）没有版本语义，沿用业务身份
         let file_asset = Object {
-            group: Group::Files,
+            group: Group::File,
             version: Some(1),
             ..asset.clone()
         };
@@ -1415,7 +1465,9 @@ mod tests {
     #[test]
     fn session_objects_are_session_lived_and_stale_rows_are_not_analyzable() {
         let rows = objects(&sample());
-        let result = rows.iter().find(|o| o.group == Group::TemporaryTables).unwrap();
+        let result = rows.iter().find(|o| o.key.starts_with("result:")).unwrap();
+        assert_eq!(result.group, Group::Table, "临时表落在表段，不单独成段");
+        assert_eq!(result.pill_text(), "结果集");
         assert_eq!(result.life, Life::Session);
 
         let stale = Object {
@@ -1426,7 +1478,7 @@ mod tests {
         assert!(stale.state.label().contains("会话已重建"));
     }
 
-    /// 联邦源挂载失败：留在最上面的会话段，并把原因写在副标题。
+    /// 联邦源挂载失败：留在源段，并把原因写在副标题。
     #[test]
     fn failed_session_sources_stay_in_the_session_group_with_reason() {
         let rows = objects(&sample());
@@ -1434,7 +1486,8 @@ mod tests {
             .iter()
             .find(|o| matches!(o.state, State::Failed(_)))
             .unwrap();
-        assert_eq!(failed.group, Group::MountedSources);
+        assert_eq!(failed.group, Group::Source);
+        assert_eq!(failed.pill, "联邦源");
         assert_eq!(failed.note, "扩展未安装");
         assert!(!failed.can_analyze());
     }
@@ -1583,7 +1636,7 @@ mod tests {
             .iter()
             .find(|o| o.key == "fileview:f_warehouse")
             .expect("库文件要有行");
-        assert_eq!(db_file.group, Group::MountedSources, "ATTACH 的库是挂载的源");
+        assert_eq!(db_file.group, Group::Source, "ATTACH 的库是源");
         assert_eq!(db_file.pill, "文件库");
         assert!(
             super::source_ref(&db_file.key).is_some(),
@@ -1593,7 +1646,7 @@ mod tests {
             .iter()
             .find(|o| o.key == "fileview:f_sales")
             .expect("数据文件视图要有行");
-        assert_eq!(view.group, Group::Files);
+        assert_eq!(view.group, Group::File);
         assert_eq!(view.pill, "已加载");
 
         // 视图能转取样来源（它在单例上）；库文件 catalog 转不了，老实进跳过清单
@@ -1605,16 +1658,16 @@ mod tests {
         assert!(skipped[0].contains("文件库"), "{skipped:?}");
     }
 
-    /// 本地加速源进「已挂载的源」段：pill 区分「加速」，副标题把「要切通道」说清。
+    /// 本地加速源进源段：pill 区分「加速源」，副标题把「要切通道」说清。
     #[test]
-    fn accel_sources_join_the_mounted_group_with_their_own_pill() {
+    fn accel_sources_join_the_source_group_with_their_own_pill() {
         let rows = objects(&sample());
         let accel = rows
             .iter()
             .find(|o| o.key == "accel:C_mysql_9")
             .expect("加速源要有行");
-        assert_eq!(accel.group, Group::MountedSources);
-        assert_eq!(accel.pill, "加速");
+        assert_eq!(accel.group, Group::Source);
+        assert_eq!(accel.pill, "加速源");
         assert_eq!(accel.channel, Channel::Accel);
         assert_eq!(accel.life, Life::Session);
         assert!(accel.can_analyze(), "会话在就是挂上了");
@@ -1672,16 +1725,16 @@ mod tests {
             .iter()
             .find(|o| o.key == "conn:C_mysql_9")
             .expect("已连接的连接要有一行");
-        assert_eq!(conn.group, Group::SourceTables);
-        assert_eq!(conn.pill, "连接");
+        assert_eq!(conn.group, Group::Source);
+        assert_eq!(conn.pill, "源连接");
         assert_eq!(conn.channel, Channel::Source, "读法是连接下推");
         assert_eq!(conn.life, Life::External, "表在源库上，不在我们管的库里");
         assert!(conn.note.contains("MySQL"), "副标题要写驱动：{}", conn.note);
 
         // 叶子：`note` 写所在 catalog / schema，身份能反解回四段
         let leaf = super::source_table_object("C_mysql_9", "shop", "sales", "orders");
-        assert_eq!(leaf.group, Group::SourceTables);
-        assert_eq!(leaf.pill, "源库");
+        assert_eq!(leaf.group, Group::Source);
+        assert_eq!(leaf.pill, "库表");
         assert_eq!(leaf.name, "orders");
         assert_eq!(leaf.note, "shop.sales");
         assert_eq!(
