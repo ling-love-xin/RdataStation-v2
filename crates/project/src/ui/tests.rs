@@ -27,13 +27,13 @@ use super::{
     ProjectMenuEntry, ProjectSort, ProjectUiHost, ProjectUiNotifier, ProjectUiState,
     SettingsSnapshot, StatusFilter, advance_pending, build_project_menu, card_description,
     card_menu_entries, confirm_delete, create_version_action, default_connection_label, do_close,
-    folder_hint, load_settings_snapshot, location_hint, memo_hint, meta_tree_rows, more_menu,
-    open_create_dialog, open_delete_dialog, open_folder_dialog, open_lock_busy_dialog,
+    folder_hint, load_settings_snapshot, location_hint, memo_hint, meta_line, meta_tree_rows,
+    more_menu, open_create_dialog, open_delete_dialog, open_folder_dialog, open_lock_busy_dialog,
     parse_search, pick_directory, prepare_unsaved, project_card, project_menu_entries,
     render_picker, render_settings, request_close, request_create_project, request_open,
     request_open_folder, save_project_info, set_default_connection, set_sort, set_status_filter,
-    set_tab, snapshot_description, sort_menu_entries, status_filter_menu_entries, submit_create,
-    submit_open_folder, toggle_archive, visible_items,
+    set_tab, snapshot_description, sort_menu_entries, status_filter_menu_entries, status_label,
+    submit_create, submit_open_folder, toggle_archive, visible_items,
 };
 use crate::service::ProjectSummary;
 
@@ -1408,4 +1408,71 @@ fn memo_hint_recomputes_only_when_key_changes() {
     assert_eq!(get2("ok"), None);
     assert_eq!(get2("ok"), None);
     assert_eq!(calls2.get(), 1, "None 结果同样缓存");
+}
+
+/// 卡片状态文案：名册里的英文 key 一律翻成中文；认不出的**原样保留**（不悄悄吞成「活跃」）。
+#[test]
+fn status_labels_are_chinese_and_keep_unknown() {
+    assert_eq!(status_label("active"), "活跃");
+    assert_eq!(status_label("archived"), "已归档");
+    assert_eq!(status_label("syncing"), "同步中");
+    assert_eq!(status_label("offline"), "离线");
+    assert_eq!(status_label("weird"), "weird", "未知状态不吞掉");
+}
+
+/// 卡片元信息行只补「最后打开」：状态已在首行带色显示，不再重复一遍。
+#[test]
+fn meta_line_shows_only_last_opened() {
+    let mut item = summary("p-meta", "元信息项目", "archived");
+    assert_eq!(meta_line(&item), "最后打开：从未打开");
+
+    item.last_opened_at = Some("2026-11-23 01:00".to_string());
+    let line = meta_line(&item);
+    assert_eq!(line, "最后打开：2026-11-23 01:00");
+    assert!(!line.contains("状态"), "状态不重复展示：{line}");
+}
+
+/// 创建版本快照成功后要清空备注框：否则连点两次会写下两条一模一样的快照。
+#[gpui_kit::test]
+fn create_version_clears_note_after_success(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let root = temp_root("version-clear");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("建项目根");
+    // 只有项目目录：`ProjectStore::create` 不碰全局名册（只写项目内 .RSmeta）。
+    crate::ProjectStore::create("版本项目", &root).expect("建项目");
+
+    let rec = Rc::new(Recorder::default());
+    let host = test_host(&rec);
+    host.set_current(Some(OpenProject::new(root.clone(), "版本项目")));
+    let (host, inputs, cx) = open_harness(cx, host);
+
+    cx.update(|window, cx| {
+        inputs
+            .version_msg
+            .update(cx, |s, cx| s.set_value("第一次快照", window, cx));
+    });
+    cx.update(|window, cx| create_version_action(&host, &inputs, window, cx));
+
+    assert!(
+        host.state
+            .borrow()
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("已创建版本快照")),
+        "成功后要有反馈，实际：{:?}",
+        host.state.borrow().notice
+    );
+    assert_eq!(
+        cx.update(|_, cx| inputs.version_msg.read(cx).value().to_string()),
+        "",
+        "备注框应已清空"
+    );
+    assert_eq!(
+        crate::service::list_versions(&root).expect("列版本").len(),
+        1,
+        "只该写下一条快照"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
 }

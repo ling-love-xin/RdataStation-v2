@@ -549,8 +549,6 @@ pub struct ProjectUiState {
     /// 当前持有的项目写锁（只读打开时为 `None`）。
     pub lock: Option<crate::ProjectLock>,
     pub read_only: bool,
-    /// 项目世代：切换/关闭后自增，供各面板订阅重载。
-    pub epoch: u64,
     pub notice: Option<String>,
     /// 设置面板的磁盘 / 名册快照（B2 / B3；事件路径填充，render 纯读）。
     pub settings: SettingsSnapshot,
@@ -1389,7 +1387,6 @@ fn apply_opened(host: &ProjectUiHost, opened: project_service::OpenedProject, cx
         let mut ui = host.state.borrow_mut();
         ui.lock = lock;
         ui.read_only = read_only;
-        ui.epoch += 1;
         ui.settings_open = false;
         ui.dialog_error = None;
         ui.notice = read_only.then(|| "只读打开：该项目已被另一实例占用".to_string());
@@ -1458,7 +1455,6 @@ pub fn do_close(host: &ProjectUiHost, cx: &mut App) {
     {
         let mut ui = host.state.borrow_mut();
         ui.read_only = false;
-        ui.epoch += 1;
         ui.settings_open = false;
         ui.dialog_error = None;
         ui.notice = None;
@@ -2359,7 +2355,7 @@ fn project_card(
                     div()
                         .text_xs()
                         .text_color(status_color)
-                        .child(item.status.clone()),
+                        .child(status_label(&item.status).to_string()),
                 )
                 .when(item.is_pinned, |d| {
                     d.child(Icon::new(IconName::Star).text_color(theme.colors.primary))
@@ -2629,12 +2625,28 @@ pub fn card_description(item: &ProjectSummary) -> Option<String> {
         .map(str::to_string)
 }
 
+/// 名册状态值 → 界面文案。
+///
+/// 名册里存的是英文 key（`active` / `archived` / `syncing` / `offline`，见
+/// `service::status_key`），界面不能直出英文。**认不出的状态原样保留**：未知值
+/// 说明名册被别处写坏了，宁可显示原文也不要悄悄吞成「活跃」。
+pub fn status_label(status: &str) -> &str {
+    match status {
+        "active" => "活跃",
+        "archived" => "已归档",
+        "syncing" => "同步中",
+        "offline" => "离线",
+        other => other,
+    }
+}
+
 fn meta_line(item: &ProjectSummary) -> String {
     let last = item
         .last_opened_at
         .clone()
         .unwrap_or_else(|| "从未打开".to_string());
-    format!("最后打开：{} · 状态：{}", last, item.status)
+    // 状态已在卡片首行（带色）显示，这里只补最后打开时间，不再重复一遍。
+    format!("最后打开：{last}")
 }
 
 /// 选择器空态：语义 `Empty`（图标 + 标题 + 描述居中列），未加载时标题显示「加载中…」。
@@ -3332,6 +3344,10 @@ pub fn create_version_action(
                 ui.settings.versions = versions;
                 ui.settings.versions_error = versions_error;
             }
+            // 清掉备注：否则连点两次会写下两条一模一样的快照。
+            inputs
+                .version_msg
+                .update(cx, |s, cx| s.set_value("", window, cx));
             notify_success(host, window, cx, "已创建版本快照");
         }
         Err(e) => notify_error(host, window, cx, e),
