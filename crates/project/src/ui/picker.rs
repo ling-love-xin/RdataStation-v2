@@ -1,5 +1,6 @@
 //! 选择器与菜单：列表渲染、卡片、卡片 `⋯`/右键菜单、标题栏项目菜单。
 
+use shared::i18n::tr;
 use super::*;
 
 // ==================== 加载 / 刷新 ====================
@@ -180,7 +181,7 @@ pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App)
                 .py_8()
                 .text_xs()
                 .text_color(theme.colors.muted_foreground)
-                .child("无匹配项目"),
+                .child(tr("无匹配项目")),
         );
     } else {
         for item in &items {
@@ -209,7 +210,7 @@ pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App)
             Button::new("picker-new")
                 .primary()
                 .icon(IconName::Plus)
-                .label("新建项目")
+                .label(tr("新建项目"))
                 // 走与标题栏菜单同一入口：嵌在设置窗口时投回主窗口（`act_*`）。
                 .on_click(move |_, window, app| {
                     act_create_project(&host_new, &inputs_new, window, app);
@@ -219,7 +220,7 @@ pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App)
             Button::new("picker-open")
                 .secondary()
                 .icon(IconName::FolderOpen)
-                .label("打开文件夹…")
+                .label(tr("打开文件夹…"))
                 .on_click(move |_, window, app| {
                     act_open_folder(&host_open, &inputs_open, window, app);
                 }),
@@ -228,7 +229,7 @@ pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App)
             Button::new("picker-sample")
                 .secondary()
                 .icon(IconName::Copy)
-                .label("从示例项目开始")
+                .label(tr("从示例项目开始"))
                 .on_click(move |_, window, app| act_sample(&host_sample, window, app)),
         )
         .child(
@@ -238,9 +239,9 @@ pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App)
                 .gap_1()
                 .text_xs()
                 .text_color(theme.colors.muted_foreground)
-                .child(div().font_weight(FontWeight::MEDIUM).child("快速开始"))
-                .child("· 新建空项目")
-                .child("· 从示例项目开始")
+                .child(div().font_weight(FontWeight::MEDIUM).child(tr("快速开始")))
+                .child(tr("· 新建空项目"))
+                .child(tr("· 从示例项目开始"))
                 .child("· 打开现有目录（.RSmeta）"),
         );
 
@@ -270,7 +271,7 @@ pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App)
                             div()
                                 .text_sm()
                                 .font_weight(FontWeight::MEDIUM)
-                                .child("项目"),
+                                .child(tr("项目")),
                         )
                         .child(tabs)
                         .child(
@@ -334,7 +335,7 @@ pub(super) fn project_card(
         item.id
     ))))
     .small()
-    .label("打开")
+    .label(tr("打开"))
     // 已有项目打开时点卡片＝切换：先释放当前项目再打开目标（不覆盖会话与锁）。
     // 经 `act_switch`：嵌在设置窗口时投回主窗口（草稿拦截对话框属于主窗口）。
     .on_click(move |_, window, app| act_switch(&host_open, &path_open, window, app));
@@ -381,7 +382,7 @@ pub(super) fn project_card(
                 })
                 // 项目中心里标记「当前」：告诉用户这一条就是正在用的项目，
                 // 点它不会重开（`request_switch` 对同一路径直接返回）。
-                .when(is_current, |d| d.child(Tag::primary().child("当前")))
+                .when(is_current, |d| d.child(Tag::primary().child(tr("当前"))))
                 .child(
                     div().ml_auto().child(
                         div()
@@ -436,7 +437,7 @@ pub(super) fn project_card(
             div()
                 .text_xs()
                 .text_color(theme.colors.info)
-                .child("● 已在另一实例打开"),
+                .child(tr("● 已在另一实例打开")),
         );
     }
     // 右键菜单与 `⋯` 下拉同源（`card_menu_entries`）：右键一张卡片也能打开 / 固定 / 删除

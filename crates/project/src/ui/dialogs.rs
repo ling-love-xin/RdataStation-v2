@@ -3,6 +3,7 @@
 //! 校验提示（`location_hint` / `folder_hint` / `target_preview`）与其缓存（`memo_hint`）
 //! 也在这里：它们是对话框的行内提示，判据与提交同源。
 
+use shared::i18n::tr;
 use super::*;
 
 // ==================== 语义对话框 ====================
@@ -60,7 +61,7 @@ pub(super) fn directory_row(target: &Entity<InputState>, browse_id: &'static str
         .child(
             Button::new(browse_id)
                 .secondary()
-                .label("浏览…")
+                .label(tr("浏览…"))
                 .on_click(move |_, window, cx| pick_directory(picker_target.clone(), window, cx)),
         )
 }
@@ -175,7 +176,7 @@ pub(super) fn dialog_footer(
         .child(
             Button::new(cancel_id)
                 .secondary()
-                .label("取消")
+                .label(tr("取消"))
                 .on_click(move |_, window, cx| on_cancel(window, cx)),
         )
         .child(
@@ -201,7 +202,7 @@ pub(super) fn dialog_footer_three(
         .child(
             Button::new(cancel_id)
                 .secondary()
-                .label("取消")
+                .label(tr("取消"))
                 .on_click(move |_, window, cx| on_cancel(window, cx)),
         )
         .child(
@@ -257,7 +258,7 @@ pub fn open_create_dialog(
             location_hint(&location, &name)
         });
         dialog
-            .title("新建项目")
+            .title(tr("新建项目"))
             .child(
                 div()
                     .v_flex()
@@ -341,7 +342,7 @@ pub fn open_folder_dialog(
         let path = inputs.create_location.read(cx).value().to_string();
         let hint = memo_hint(&hint_cache, path.clone(), || folder_hint(&path));
         dialog
-            .title("打开现有项目")
+            .title(tr("打开现有项目"))
             .child(
                 div()
                     .v_flex()
@@ -482,7 +483,7 @@ pub fn open_empty_dir_dialog(
         let name_create = name.clone();
         alert
             .icon(Icon::new(IconName::FolderOpen).text_color(theme.colors.info))
-            .title("在空目录创建项目？")
+            .title(tr("在空目录创建项目？"))
             .description(format!(
                 "目录 {} 为空。确认后将在其中创建名为「{name}」的项目（建 .RSmeta 并打开）。",
                 path.display()
@@ -651,7 +652,7 @@ pub fn open_relocate_dialog(
         let theme = cx.theme();
         let error = host.state.borrow().dialog_error.clone();
         dialog
-            .title("重新定位项目")
+            .title(tr("重新定位项目"))
             .child(
                 div()
                     .v_flex()
@@ -746,7 +747,7 @@ pub fn open_delete_dialog(
         let theme = cx.theme();
         let error = host.state.borrow().dialog_error.clone();
         dialog
-            .title("删除项目数据")
+            .title(tr("删除项目数据"))
             .child(
                 div()
                     .v_flex()
