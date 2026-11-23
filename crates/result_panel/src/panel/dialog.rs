@@ -1,5 +1,6 @@
 //! 弹窗域（`panel/` 第五块）：SQL 预览弹出层（等效浮层 + kit Textarea）。
 
+use shared::i18n::tr;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt as _;
@@ -104,7 +105,7 @@ impl ResultPanel {
                                     .small()
                                     .icon(IconName::X)
                                     .debug_selector(|| "editor-result-sql-dialog-close".to_string())
-                                    .tooltip("关闭".to_string())
+                                    .tooltip(tr("关闭").to_string())
                                     .on_click(move |_, _window, app| {
                                         close_queue2.request(ResultRequest::CloseSqlDialog, app);
                                     }),
@@ -124,7 +125,7 @@ impl ResultPanel {
                                     div()
                                         .p_4()
                                         .text_color(theme.colors.muted_foreground)
-                                        .child("（无 SQL）")
+                                        .child(tr("（无 SQL）"))
                                         .into_any_element()
                                 }),
                         ),
@@ -183,14 +184,14 @@ impl ResultPanel {
                             .py_2()
                             .border_b(ui::HAIRLINE)
                             .border_color(theme.colors.border)
-                            .child(div().text_sm().child("跳转到列"))
+                            .child(div().text_sm().child(tr("跳转到列")))
                             .child(
                                 Button::new("editor-result-goto-column-close")
                                     .ghost()
                                     .small()
                                     .icon(IconName::X)
                                     .debug_selector(|| "editor-result-goto-column-close".to_string())
-                                    .tooltip("关闭".to_string())
+                                    .tooltip(tr("关闭").to_string())
                                     .on_click(move |_, _window, app| {
                                         close_queue.request(ResultRequest::CloseGotoColumn, app);
                                     }),
@@ -247,7 +248,7 @@ impl ResultPanel {
                                 Button::new("editor-result-goto-column-cancel")
                                     .ghost()
                                     .small()
-                                    .label("取消")
+                                    .label(tr("取消"))
                                     .debug_selector(|| "editor-result-goto-column-cancel".to_string())
                                     .on_click(move |_, _window, app| {
                                         cancel_queue.request(ResultRequest::CloseGotoColumn, app);
@@ -257,7 +258,7 @@ impl ResultPanel {
                                 Button::new("editor-result-goto-column-go")
                                     .primary()
                                     .small()
-                                    .label("跳转")
+                                    .label(tr("跳转"))
                                     .debug_selector(|| "editor-result-goto-column-go".to_string())
                                     .on_click(move |_, _window, app| {
                                         submit_queue.request(ResultRequest::SubmitGotoColumn, app);
@@ -327,7 +328,7 @@ impl ResultPanel {
                                         Icon::new(IconName::TriangleAlert)
                                             .text_color(theme.colors.warning),
                                     )
-                                    .child(div().text_sm().child("读取所有行")),
+                                    .child(div().text_sm().child(tr("读取所有行"))),
                             )
                             .child(
                                 Button::new("editor-result-fetch-all-confirm-close")
@@ -337,7 +338,7 @@ impl ResultPanel {
                                     .debug_selector(|| {
                                         "editor-result-fetch-all-confirm-close".to_string()
                                     })
-                                    .tooltip("关闭".to_string())
+                                    .tooltip(tr("关闭").to_string())
                                     .on_click(move |_, _window, app| {
                                         close_queue
                                             .request(ResultRequest::CloseFetchAllConfirm, app);
@@ -359,7 +360,7 @@ impl ResultPanel {
                                     .text_sm()
                                     .child("读取结果集中的所有行会花费大量时间和内存。"),
                             )
-                            .child(div().text_sm().child("确定要获取所有行吗？"))
+                            .child(div().text_sm().child(tr("确定要获取所有行吗？")))
                             .children(rows.map(|rows| {
                                 div()
                                     .text_xs()
@@ -393,7 +394,7 @@ impl ResultPanel {
                                 Button::new("editor-result-fetch-all-cancel")
                                     .ghost()
                                     .small()
-                                    .label("取消")
+                                    .label(tr("取消"))
                                     .debug_selector(|| {
                                         "editor-result-fetch-all-cancel".to_string()
                                     })
@@ -406,7 +407,7 @@ impl ResultPanel {
                                 Button::new("editor-result-fetch-all-go")
                                     .primary()
                                     .small()
-                                    .label("继续")
+                                    .label(tr("继续"))
                                     .debug_selector(|| "editor-result-fetch-all-go".to_string())
                                     .on_click(move |_, _window, app| {
                                         go_queue.request(ResultRequest::FetchAll, app);
@@ -470,7 +471,7 @@ impl ResultPanel {
                             .py_2()
                             .border_b(ui::HAIRLINE)
                             .border_color(theme.colors.border)
-                            .child(div().text_sm().child("筛选设置"))
+                            .child(div().text_sm().child(tr("筛选设置")))
                             .child(
                                 Button::new("editor-result-filter-settings-close")
                                     .ghost()
@@ -479,7 +480,7 @@ impl ResultPanel {
                                     .debug_selector(|| {
                                         "editor-result-filter-settings-close".to_string()
                                     })
-                                    .tooltip("关闭".to_string())
+                                    .tooltip(tr("关闭").to_string())
                                     .on_click(move |_, _window, app| {
                                         close_queue2.request(ResultRequest::CloseFilterSettings, app);
                                     }),
@@ -503,7 +504,7 @@ impl ResultPanel {
                                     .children([
                                         {
                                             let queue = tabs_queue.clone();
-                                            Tab::new().label("列约束").on_click(
+                                            Tab::new().label(tr("列约束")).on_click(
                                                 move |_, _window, app| {
                                                     queue.request(
                                                         ResultRequest::SetFilterSettingsTab(
@@ -516,7 +517,7 @@ impl ResultPanel {
                                         },
                                         {
                                             let queue = tabs_queue.clone();
-                                            Tab::new().label("自定义条件").on_click(
+                                            Tab::new().label(tr("自定义条件")).on_click(
                                                 move |_, _window, app| {
                                                     queue.request(
                                                         ResultRequest::SetFilterSettingsTab(
@@ -567,7 +568,7 @@ impl ResultPanel {
                                 Button::new("editor-result-filter-settings-cancel")
                                     .ghost()
                                     .small()
-                                    .label("取消")
+                                    .label(tr("取消"))
                                     .debug_selector(|| {
                                         "editor-result-filter-settings-cancel".to_string()
                                     })
@@ -579,7 +580,7 @@ impl ResultPanel {
                                 Button::new("editor-result-filter-settings-apply")
                                     .primary()
                                     .small()
-                                    .label("应用")
+                                    .label(tr("应用"))
                                     .disabled(self.filter_settings_tab != FilterSettingsTab::Custom)
                                     .debug_selector(|| {
                                         "editor-result-filter-settings-apply".to_string()
@@ -684,7 +685,7 @@ impl ResultPanel {
                     .ghost()
                     .xsmall()
                     .icon(IconName::ArrowUpAZ)
-                    .tooltip("按列名排序（A→Z）".to_string())
+                    .tooltip(tr("按列名排序（A→Z）").to_string())
                     .debug_selector(|| "editor-result-filter-settings-sort-name".to_string())
                     .on_click(move |_, _window, app| {
                         sort_queue.request(ResultRequest::SortColumnsByName, app);
@@ -695,7 +696,7 @@ impl ResultPanel {
                     .ghost()
                     .xsmall()
                     .icon(IconName::Eye)
-                    .tooltip("全部显示".to_string())
+                    .tooltip(tr("全部显示").to_string())
                     .debug_selector(|| "editor-result-filter-settings-show-all".to_string())
                     .on_click(move |_, _window, app| {
                         show_all_queue.request(ResultRequest::ColumnsShowAll, app);
