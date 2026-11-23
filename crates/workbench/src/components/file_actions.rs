@@ -134,9 +134,9 @@ pub fn export_table_to(
     let _ = export_table_to_path(shared, sql_ref, &path, dest.verb(), cx);
 }
 
-/// 外部文件归档成快照时，副本在 `resources/` 下的落点与显示名。
+/// 外部文件存为快照时，副本在 `resources/` 下的落点与显示名。
 ///
-/// 单独摘成纯函数：这两件事是「归档成快照」的全部口径（放哪、叫什么），
+/// 单独摘成纯函数：这两件事是「存为快照」的全部口径（放哪、叫什么），
 /// 不该等到 worker 跑起来才发现名字是空的。
 pub fn snapshot_placement(path: &str) -> Option<(String, String)> {
     let file_name = Path::new(path)
@@ -150,14 +150,14 @@ pub fn snapshot_placement(path: &str) -> Option<(String, String)> {
     Some((format!("files/{file_name}"), stem))
 }
 
-/// 把加源的外部文件归档成快照（`Copy`）：写副本 + 生成资产，只读带版本。
+/// 把加源的外部文件存为快照（`Copy`）：写副本 + 生成资产，只读带版本。
 pub fn archive_file_as_snapshot(shared: &Shared, path: &str, cx: &mut App) {
     let Some(root) = shared.project_root() else {
-        shared.say_error("归档：当前没有打开的项目", cx);
+        shared.say_error("存快照：当前没有打开的项目", cx);
         return;
     };
     let Some((rel_path, name)) = snapshot_placement(path) else {
-        shared.say_error("归档：这个文件没有可用的文件名", cx);
+        shared.say_error("存快照：这个文件没有可用的文件名", cx);
         return;
     };
     // 保留策略在主线程读好随闭包带入：worker 里拿不到 GPUI global 设置
@@ -190,7 +190,7 @@ pub fn archive_file_as_snapshot(shared: &Shared, path: &str, cx: &mut App) {
         true,
         None,
     );
-    shared.say(format!("正在把「{name}」归档为快照…"), cx);
+    shared.say(format!("正在把「{name}」存为快照…"), cx);
     shared.refresh_resources(cx);
 }
 

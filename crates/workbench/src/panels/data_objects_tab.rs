@@ -1305,7 +1305,7 @@ impl DataObjectsTab {
                             }
                             if let Some(alias) = alias.clone() {
                                 let snapshot = shared.clone();
-                                menu = menu.item(PopupMenuItem::new("归档为快照").on_click(
+                                menu = menu.item(PopupMenuItem::new("存为快照").on_click(
                                     move |_, _, cx| {
                                         let path = snapshot
                                             .loaded_files
@@ -1318,7 +1318,7 @@ impl DataObjectsTab {
                                                 archive_file_as_snapshot(&snapshot, &path, cx)
                                             }
                                             None => snapshot.say_error(
-                                                format!("归档：找不到 {alias} 的路径"),
+                                                format!("存快照：找不到 {alias} 的路径"),
                                                 cx,
                                             ),
                                         }
