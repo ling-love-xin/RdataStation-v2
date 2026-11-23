@@ -1320,7 +1320,7 @@ mod tests {
         assert_eq!(super::persist_label("orders"), "orders");
     }
 
-    /// 「存为表」与「清理」必须对称：都只认 `result:`——进 / 出两个动作同一口径，
+    /// 「升级为资产」与「清理」必须对称：都只认 `result:`——进 / 出两个动作同一口径，
     /// 谁单独放宽都会留下"能进不能出"或"能删不该删"的对象。
     #[test]
     fn persist_and_clear_share_the_same_prefix_rule() {

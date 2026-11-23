@@ -595,10 +595,11 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             disabled: false,
         });
     }
-    // 【结果集持久化】同一份结果的另一个去向（临时 → 持久），紧跟「分析」
+    // 【结果集持久化】同一份结果的另一个去向（临时 → 持久），紧跟「分析」。
+    // 文案用产品口径「升级为资产」：这一步不只是落一张表，还会登记成只读资产（带版本）。
     if target.persist {
         items.push(ContextMenuItem {
-            label: format!("持久化为项目表（{} 行）", target.rows),
+            label: format!("升级为资产（{} 行）", target.rows),
             action: ContextAction::PersistResultSet,
             separator_before: false,
             disabled: false,

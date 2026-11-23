@@ -2056,14 +2056,14 @@ fn context_menu_shows_analyze_result_set_only_when_available() {
     assert!(!analyze_item.separator_before);
 
     // 【结果集持久化】同一份结果的第二个去向：`persist` 才摆，文案带行数
-    assert!(!items.iter().any(|i| i.label.contains("持久化为项目表")));
+    assert!(!items.iter().any(|i| i.label.contains("升级为资产")));
     t.persist = true;
     let items = context_menu_items(&t);
     let persist_item = items
         .iter()
-        .find(|i| i.label.contains("持久化为项目表"))
+        .find(|i| i.label.contains("升级为资产"))
         .expect("有入口时要摆这一项");
-    assert_eq!(persist_item.label, "持久化为项目表（2 行）");
+    assert_eq!(persist_item.label, "升级为资产（2 行）");
     assert!(matches!(
         persist_item.action,
         ContextAction::PersistResultSet
@@ -2072,10 +2072,10 @@ fn context_menu_shows_analyze_result_set_only_when_available() {
     // 列头 / 清单菜单只做列级动作：整表入口不出现在这两处
     let head = column_menu_items(&t);
     assert!(!head.iter().any(|i| i.label.contains("分析这份结果集")));
-    assert!(!head.iter().any(|i| i.label.contains("持久化为项目表")));
+    assert!(!head.iter().any(|i| i.label.contains("升级为资产")));
     let browser = column_browser_menu_items(&t);
     assert!(!browser.iter().any(|i| i.label.contains("分析这份结果集")));
-    assert!(!browser.iter().any(|i| i.label.contains("持久化为项目表")));
+    assert!(!browser.iter().any(|i| i.label.contains("升级为资产")));
 }
 
 /// 清单菜单动作归属：本地动作直接映射到对应 `ContextAction`，列号不串位。

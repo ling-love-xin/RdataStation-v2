@@ -236,7 +236,7 @@ impl WorkbenchView {
                                     ),
                                 }
                                 // 落库改了项目分析库的表清单：数据对象面板的那份缓存不会自己变，
-                                // 不重取的话「存为表」之后清单里看不见新表。
+                                // 不重取的话「升级为资产」之后清单里看不见新表。
                                 if let Some(tab) = this.right_data_objects_tab.clone() {
                                     tab.update(cx, |tab, cx| tab.refresh(cx));
                                 }

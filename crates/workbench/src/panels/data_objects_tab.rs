@@ -7,11 +7,11 @@
 //! introspect 是网络往返，跑在 UI 线程上会让面板每秒顿一下；回执由宿主泵取回再写进缓存。
 //!
 //! 行上四类动作各管一段：勾选进工作集（`toggle_picked`）、会话行菜单（重挂 / 设主源 /
-//! 关会话）、结果集与洞察产物的「存为表」（进项目分析库的持久表，写库在 worker 线程）、
+//! 关会话）、结果集与洞察产物的「升级为资产」（进项目分析库的持久表，写库在 worker 线程）、
 //! 资产行的「升级」（表型存档 → 全局，搬表也在 worker 线程）。
 //!
 //! 前两个是场景 3 的两段，顺序不能颠倒：临时表在进程单例里（项目库打不开它），
-//! 所以先「存为表」拿到存档身份，才谈得上「升级到全局」并留下版本线索。
+//! 所以先「升级为资产」拿到存档身份，才谈得上「升级到全局」并留下版本线索。
 
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -168,7 +168,7 @@ impl DataObjectsTab {
 
     /// 删掉清单里的临时对象（进程内存里的临时表；删了要重跑才有）。
     ///
-    /// 范围与「存为表」对称（`can_clear` = `result:` 前缀）：Mock / 插件表同段但
+    /// 范围与「升级为资产」对称（`can_clear` = `result:` 前缀）：Mock / 插件表同段但
     /// 归各自模块管，不从这里删（删了它们模块的登记就指向空表）。
     /// 属于破坏性动作，调用前必须过确认框；这里只管执行与把失败原话留在面板上。
     fn clear_temp_objects(&mut self, cx: &mut Context<Self>) {
@@ -858,7 +858,7 @@ impl DataObjectsTab {
                                     alert
                                         .confirm()
                                         .title("清理临时对象")
-                                        .description("将删掉清单里的临时表。它们在进程内存里，删了要重跑才有；想留就先「存为表」。确定继续？")
+                                        .description("将删掉清单里的临时表。它们在进程内存里，删了要重跑才有；想留就先「升级为资产」。确定继续？")
                                         .on_ok(move |_window, _cx, cx| {
                                             entity.update(cx, |tab, cx| {
                                                 tab.clear_temp_objects(cx);
@@ -1007,7 +1007,7 @@ impl DataObjectsTab {
                 )
             };
             // 资产行才给「升级到全局」：那一行已经有存档身份，升上去能回指上游。
-            // 临时表 / 项目自建表先「存为表」——没有登记就没有身份，硬升会丢线索。
+            // 临时表 / 项目自建表先「升级为资产」——没有登记就没有身份，硬升会丢线索。
             // 结果集 / 洞察产物已经在进程单例里：落库就是整表搬一份。
             // 写库走 worker 线程（`services::persist_jobs`），这里只入队，回执由工作台泵到状态栏。
             let persist_button = if data_objects::can_persist(object) {
@@ -1021,7 +1021,8 @@ impl DataObjectsTab {
                         object.key
                     )))
                     .ghost()
-                    .label("存为表")
+                    .label("升级为资产")
+                    .tooltip("把整份结果写成项目分析库的持久表，并登记成只读资产（带版本）")
                     .on_click(move |_, _, cx| {
                         crate::components::result_set_actions::persist_to_project(
                             &shared, &table, &label, cx,

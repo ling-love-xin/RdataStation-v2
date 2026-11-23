@@ -167,7 +167,7 @@ pub(crate) fn snapshot_table(snapshot: &serde_json::Value) -> Option<String> {
 /// 宿主入口：按项目根打开项目库后登记。
 ///
 /// 项目库**必须已迁移**（生产由应用启动完成；测试用 `create_test_store` + `register`）。
-/// 这里不自行跑迁移：迁移会重建表，不该在用户点「存为表」的路径上发生。
+/// 这里不自行跑迁移：迁移会重建表，不该在用户点「升级为资产」的路径上发生。
 pub async fn register_at(
     project_root: &Path,
     request: TableAssetRequest,
