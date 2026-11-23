@@ -275,6 +275,27 @@ pub fn mount_file_database(shared: &Shared, path_text: &str, cx: &mut App) {
     }
 }
 
+/// 把一个**已挂载**的文件库卸下来（源段右键「卸载」）。
+///
+/// 与 [`mount_file_database`] 对称：只动挂载关系，不碰磁盘上的库文件；卸完把路径
+/// 从已加载清单里去掉，重取清单后 conn 行回到「未挂载」（不可展开、只给挂载）。
+pub fn unmount_file_database(shared: &Shared, path_text: &str, cx: &mut App) {
+    let alias = engine::duckdb::file_view::alias_for(path_text);
+    match engine::duckdb::file_view::detach_database_global(&alias) {
+        Ok(()) => {
+            shared
+                .loaded_files
+                .borrow_mut()
+                .retain(|(seen, _)| seen != &alias);
+            let collected = data_objects::collect(shared);
+            *shared.data_objects.borrow_mut() = data_objects::objects(&collected);
+            shared.mark_data_objects_dirty(cx);
+            shared.say(format!("已卸载 {alias}（磁盘上的文件没动）"), cx);
+        }
+        Err(error) => shared.say_error(format!("卸载失败：{error}"), cx),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::LoadScope;

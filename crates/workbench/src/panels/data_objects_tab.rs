@@ -116,6 +116,8 @@ pub struct DataObjectsTab {
     /// 导出格式不在这里：它是「这一次导出」的属性，活在导出窗口里（见 `components/export_dialog.rs`）
     /// 源段里「文件库还没挂」的行（行 key → 本体路径）：右键「挂载」用这一份
     unmounted_sources: Vec<(String, String)>,
+    /// 源段里「文件库已经挂上」的行（行 key → 本体路径）：右键「卸载 / 重新挂载」用这一份
+    mounted_sources: Vec<(String, String)>,
     /// 上次同步到的活动文档 key（`None` = 还没对上 / 没有文档）。
     /// 与 `Shared::working_set.current` 比对：不同就说明用户切了文档，工作集要换那一份
     active_doc_key: Option<String>,
@@ -157,6 +159,7 @@ impl DataObjectsTab {
             loading_sources: HashSet::new(),
             leaf_pages: HashMap::new(),
             unmounted_sources: Vec::new(),
+            mounted_sources: Vec::new(),
             active_doc_key,
             seen_document_epoch,
             // `None` = 还没读过盘：构造那次 `refresh` 会按当前项目根读一遍
@@ -287,6 +290,8 @@ impl DataObjectsTab {
         self.session = Some((mounted, collected.session_sources.len()));
         // 文件库源里「注册了但还没挂」的那几行：面板据此把 chevron 换空位、右键给「挂载」
         self.unmounted_sources = data_objects::unmounted_file_sources(&collected);
+        // 已挂的那几行：右键给「卸载 / 重新挂载」（同一份判据，反过来取）
+        self.mounted_sources = data_objects::mounted_file_sources(&collected);
         collected.assets = self.assets_from_panel(cx);
         // 资产行单独存一份：`Object` 只带名字与版本，构造来源还要本体路径
         *self.shared.data_object_assets.borrow_mut() = collected.assets.clone();
@@ -1189,6 +1194,12 @@ impl DataObjectsTab {
                             .iter()
                             .find(|(key, _)| key == &object.key)
                             .map(|(_, path)| path.clone());
+                        // 已挂上的那几行：卸载 / 重挂用同一条路径（判据与「未挂」互斥）
+                        let mounted_path = self
+                            .mounted_sources
+                            .iter()
+                            .find(|(key, _)| key == &object.key)
+                            .map(|(_, path)| path.clone());
                         move |menu, _window, _cx| {
                             let mut menu = menu;
                             if let Some(reference) = sql_ref.clone().filter(|_| usable) {
@@ -1324,6 +1335,30 @@ impl DataObjectsTab {
                                         );
                                         // 挂完清单会重排（conn 行的失效态消失、源段多出文件库行）：
                                         // 请宿主重绘，别等下一次事件
+                                        window.refresh();
+                                    },
+                                ));
+                            }
+                            // 已挂上的文件库：卸载 / 重挂（重挂 = 同一份描述再挂一次，表清单可能变）
+                            if let Some(path) = mounted_path.clone() {
+                                let unmount = shared.clone();
+                                let unmount_path = path.clone();
+                                menu = menu.item(PopupMenuItem::new("卸载").on_click(
+                                    move |_, window, cx| {
+                                        crate::components::data_objects_load::unmount_file_database(
+                                            &unmount,
+                                            &unmount_path,
+                                            cx,
+                                        );
+                                        window.refresh();
+                                    },
+                                ));
+                                let remount = shared.clone();
+                                menu = menu.item(PopupMenuItem::new("重新挂载").on_click(
+                                    move |_, window, cx| {
+                                        crate::components::data_objects_load::mount_file_database(
+                                            &remount, &path, cx,
+                                        );
                                         window.refresh();
                                     },
                                 ));

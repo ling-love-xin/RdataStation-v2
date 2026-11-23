@@ -995,6 +995,19 @@ fn same_file(left: &str, right: &str) -> bool {
 /// 挂没挂的判据只有一条：这个路径在不在 `loaded_files` 里（加源 / 挂载都会写这一份）。
 /// 没挂的源不可展开（铁律 B 组第 4 条）——面板据此把 chevron 换空位、只给「挂载」。
 pub fn unmounted_file_sources(collected: &Collected) -> Vec<(String, String)> {
+    file_source_rows(collected, false)
+}
+
+/// 已经挂进分析实例的文件库行：`(行 key, 本体路径)`（面板据此给「卸载 / 重新挂载」）。
+pub fn mounted_file_sources(collected: &Collected) -> Vec<(String, String)> {
+    file_source_rows(collected, true)
+}
+
+/// 文件库连接按挂载状态分组（`want_mounted` 选要哪一边）。
+///
+/// 两个对外函数共用这一份判据：卸载 / 挂载是同一件事的两种状态，若各写一套比较逻辑，
+/// 早晚出现「挂载里有、卸载里没有」的行——那行就永远卸不掉。
+fn file_source_rows(collected: &Collected, want_mounted: bool) -> Vec<(String, String)> {
     collected
         .connections
         .iter()
@@ -1004,7 +1017,7 @@ pub fn unmounted_file_sources(collected: &Collected) -> Vec<(String, String)> {
                 .loaded_files
                 .iter()
                 .any(|(_, seen)| same_file(seen, &path));
-            (!mounted).then(|| (format!("conn:{}", conn.id), path))
+            (mounted == want_mounted).then(|| (format!("conn:{}", conn.id), path))
         })
         .collect()
 }
@@ -2051,7 +2064,7 @@ mod tests {
 
 #[cfg(test)]
 mod temp_source_tests {
-    use super::{Collected, ConnRow, objects, temp_source_for, unmounted_file_sources};
+    use super::{Collected, ConnRow, mounted_file_sources, objects, temp_source_for, unmounted_file_sources};
 
     #[test]
     fn maps_prefixes_to_sources() {
@@ -2096,6 +2109,15 @@ mod temp_source_tests {
             .expect("文件库源要进源段");
         assert!(row.can_analyze(), "挂上之后要能展开");
         assert!(unmounted_file_sources(&c).is_empty());
+        // 反过来取：已挂清单里正好是这一行——卸载/重挂的菜单靠它出现，
+        // 两边判据互斥（同一行不该既算「未挂」又算「已挂」）
+        assert_eq!(
+            mounted_file_sources(&c),
+            vec![(
+                "conn:C_lite".to_string(),
+                "D:/data/销售.duckdb".to_string()
+            )]
+        );
 
         // 网络库没有本体路径：不进「未挂」清单，也不该被标未挂
         c.loaded_files.clear();

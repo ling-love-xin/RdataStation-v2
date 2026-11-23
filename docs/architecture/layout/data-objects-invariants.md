@@ -133,4 +133,7 @@
 - 2026-11-24：文件库源落地「挂载」入口（右键 → `file_view::load_database_global` → 写 `loaded_files`
   → 重取清单）。判据改为**本体路径在不在** `loaded_files`（`ConnRow` 补 `driver` / `database`）：
   没挂的行写「未挂载」、不可展开；挂上后该路径由连接行代表，不再单出「文件库」行。
+- 2026-11-24：与挂载对称的「卸载 / 重新挂载」落地（右键）：卸载 = `DETACH` catalog + 从
+  `loaded_files` 去掉该路径（**不碰磁盘文件**），conn 行回到「未挂载」；重挂 = 同一份描述再挂一次
+  （`ATTACH` 前先 `DETACH`，同名覆盖）。
 

@@ -171,6 +171,28 @@ pub fn load_database_global(path: &str) -> Result<String, CoreError> {
     load_database(&conn, path)
 }
 
+/// 把一个已挂载的 catalog 从连接上卸掉（`DETACH`）
+///
+/// 与 [`load_database`] 对称：卸载只动**挂载关系**，不碰磁盘上的库文件（只读挂载，
+/// 本来也不会写它）。别名要先 `USE memory` 再 `DETACH`——默认 catalog 不能卸。
+///
+/// 别名没挂上时 DuckDB 会报错，原话透出去（调用方要能分清"没挂"与"卸失败"）。
+pub fn detach_database(conn: &Connection, alias: &str) -> Result<(), CoreError> {
+    let quoted = alias.replace('"', "\"\"");
+    conn.execute_batch(&format!("USE memory; DETACH \"{quoted}\""))
+        .map_err(|error| {
+            CoreError::common(CommonError::General(format!("卸载「{alias}」失败：{error}")))
+        })
+}
+
+/// 在进程单例上卸载 catalog（事件路径调用）
+pub fn detach_database_global(alias: &str) -> Result<(), CoreError> {
+    let conn = crate::duckdb::manager::DuckDBManager::global()
+        .lock()
+        .map_err(|_| CoreError::common(CommonError::General("内存库连接锁被污染".to_string())))?;
+    detach_database(&conn, alias)
+}
+
 /// 列出**进程单例**上某个挂载别名（数据库文件）里的表 / 视图
 ///
 /// 与联邦 / 加速源同一份列举实现（`duckdb_tables()` / `duckdb_views()` 按别名过滤，
@@ -191,7 +213,7 @@ pub fn list_tables_global(
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
-    use super::{alias_for, clear_file_views, is_database_file, load_database, load_database_global, load_file, list_tables_global};
+    use super::{alias_for, clear_file_views, detach_database, is_database_file, load_database, load_database_global, load_file, list_tables_global};
     use std::path::PathBuf;
 
     fn workdir(tag: &str) -> PathBuf {
@@ -288,6 +310,37 @@ mod tests {
         let alias_again =
             load_database(&conn, second.to_str().expect("路径")).expect("重挂要能成");
         assert_eq!(alias_again, "f_warehouse", "别名稳定（覆盖语义）");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 卸载与挂载对称：卸掉之后限定名查不到，且**不碰磁盘**上的库文件（只读挂载）。
+    /// 别名没挂上时要把原因说清楚（不能静默当成功，面板会据此以为"已经卸了"）。
+    #[test]
+    fn detaching_a_catalog_removes_the_mount_but_keeps_the_file() {
+        let dir = workdir("detach");
+        let source = dir.join("warehouse.duckdb");
+        {
+            let conn = duckdb::Connection::open(&source).expect("建源库文件");
+            conn.execute_batch("CREATE TABLE facts AS SELECT i AS id FROM range(3) AS r(i)")
+                .expect("建表");
+        }
+        let conn = duckdb::Connection::open_in_memory().expect("内存库");
+        let alias = load_database(&conn, source.to_str().expect("路径")).expect("挂载");
+        conn.execute_batch(&format!("SELECT count(*) FROM \"{alias}\".main.facts"))
+            .expect("挂上后限定名可查");
+
+        detach_database(&conn, &alias).expect("卸载");
+        assert!(
+            conn.execute_batch(&format!("SELECT count(*) FROM \"{alias}\".main.facts"))
+                .is_err(),
+            "卸掉后不该还能按别名查：{alias}"
+        );
+        assert!(source.is_file(), "卸载不删磁盘上的库文件");
+
+        // 再卸一次：别名已不在，报错要带别名（面板据此说"没挂"）
+        let again = detach_database(&conn, &alias).expect_err("重复卸载要报错");
+        assert!(format!("{again}").contains(&alias), "{again}");
+
         let _ = std::fs::remove_dir_all(dir);
     }
 
