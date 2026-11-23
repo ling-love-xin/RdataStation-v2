@@ -126,6 +126,20 @@ H 的具体清单（都在 `crates/analytics_resource/src`）：
 单测在 `crates/analytics_resource/src/tests/table_asset.rs`，端到端在
 `crates/workbench/tests/persist_result_table.rs`。
 
+**2026-11-23 补的另一段**（`524592cb`，回退闭环）：表型资产原来点「还原」只会得到
+「该存档没有本体路径」——`service/checkout.rs::restore_version` 硬要 `file_rel_path`，
+版本行的 `has_copy` 又只按 `.RSmeta` 下的副本判，于是按钮永远灰着并写「副本已被裁剪」。
+
+现在的口径：
+
+- 回退 = 把 `analytics_table` 指回快照里那张旧表，版本接续 n+1，**不搬数据、不删新表**
+  （两张表都留在项目分析库里），所以回退之后还能再退回去；指纹相同就幂等不涨版本。
+- 版本快照改成**整行 `AnalyticsResource` 序列化**（原先那条短 JSON 解析不出表名，回退读不到目标）；
+  `table_asset::snapshot_table` 同时认新（整行）与老（`{"analytics_table":…}`）两种写法。
+- 版本行 / 详情行新增 `is_table`：表型只有「回退」一个动作，取回草稿、文本对比、删副本
+  都基于 `resources/` 下的本体文件，对表型直接隐藏而不是点了报错；「副本」列改显示「项目表」。
+- 履历事件参数化：升级记 `Updated`、回退记 `Restored`（原先两种动作都硬编码成 `Rearchived`）。
+
 **唯一残留债**：`kind` 列的 CHECK 仍只认 `file` / `analysis` / `table_ref`，所以
 `db_write_str` 把表型折回 `analysis`、读取靠 `resolve` 还原。迁移 031 的注释写清了为什么推迟
 （迁移执行器整包事务、表被 5 处外键引用）——要收口得安排一个事务外的重建窗口，不是顺手能做的事。
