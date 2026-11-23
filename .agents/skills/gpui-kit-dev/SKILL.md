@@ -148,6 +148,19 @@ use gpui_kit::prelude::FluentBuilder as _;
 - 状态文案按语义取色：成功 `success` / 失败 `danger` / 提示 `info`；同一个 `notice` 字段不要一律一个色（项目内已出现「失败用 info」「成功用 danger」两处反向误用）。
 - 不要用 `rgb(...)` / `hsla(...)` 造色（`settings_view.rs` 曾用裸 hex）；透明用 `transparent_black()`。
 
+## 字体（硬约束）
+
+- 等宽族一律 `theme.mono_font_family.clone()`，正文族用 `theme.font_family`。**禁止** `.font_family("monospace")` / `"Consolas"` 这类族名字面量：字面量绕过 `gpui-component` 的 `theme::mono_font::resolve_default_mono_font`（Windows 在默认等宽族缺失时按 `Cascadia Mono → Courier New → .SystemUIFont` 兜底），族名解析不到时 GPUI 在首帧布局直接 panic，`Font::fallbacks` 救不了。
+- 字体族与字号只由主题键决定：`font.size`（默认 16）/ `font.family` / `mono_font.size`（默认 13）/ `mono_font.family`，改 `assets/themes/*.json` 就全局生效。不要在代码里另写字号数值；结构尺寸用 `rems()`，它的基准就是 `font.size`。
+- `assets/fonts/` **不会**自动加载（gpui 不扫目录，项目当前零内置字体）。要内置字体必须显式 `cx.text_system().add_fonts(vec![bytes])`（`gpui-pre` 0.3.12 `src/text_system.rs:301`；会清字体缓存并 `font_generation += 1`）。
+
+## 本地化（两套 i18n，别混）
+
+- 自有文案走 `shared::i18n::tr("中文原文")`：key 就是中文原文，`locales/zh.json` + `en.json` 编译期 `include_str!` 内嵌、惰性解析。
+- 组件库自带文案（Dialog 的确认/取消、Select 占位、Empty、Pagination、Diff…）走 `gpui-component` 内建的 rust-i18n（`vendor/gpui-component/locales/ui.yml`，7 种语言），是**另一套全局状态**。唯一同步点是 `SettingsService::set_locale`（`crates/settings/src/service/appearance.rs`）：`gpui_kit::component::set_locale(locale.component_code())`；启动首帧（`app/src/main.rs`）与运行时切换共用该入口，别在别处再调一次。
+- **语言码必须映射**：存储码 `Locale::code()` 是 `zh`，组件库语言键是 `zh-CN`（`ui.yml` 的块名）。直接透传 `zh` 会被 rust-i18n 静默回退 `en` 且不报错——用 `Locale::component_code()`。
+- 新写交互控件不要把 `cancel_text` / 占位符留空指望“组件自动翻译成中文”：那属组件库文案，只有 locale 同步后才会切换（历史现象与背景见 `docs/architecture/ui/i18n.md`）。
+
 ## 注释约定
 
 - 注释与文档一律简体中文，说明非显而易见的意图、约束、取舍；不写复述代码的注释

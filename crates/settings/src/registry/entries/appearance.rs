@@ -79,7 +79,7 @@ pub fn entries() -> Vec<SettingSpec> {
             default_json: "\"zh\"",
             effect: SettingEffect::Immediate,
             entry: SettingEntry::Page,
-            consumer: "SettingsService::set_locale（同步 shared::i18n + refresh_windows）",
+            consumer: "SettingsService::set_locale（同步 shared::i18n + 组件库 locale（zh→zh-CN）+ refresh_windows）",
             composite: false,
             disabled: false,
         },
