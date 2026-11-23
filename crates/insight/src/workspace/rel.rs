@@ -22,7 +22,7 @@ impl super::InsightWorkspacePanel {
         let tabs = TabBar::new("insight-ws-rel-tabs")
             .segmented()
             .selected_index(current)
-            .children(RelTab::ALL.iter().map(|t| Tab::new().label(t.label())))
+            .children(RelTab::ALL.iter().map(|t| Tab::new().label(tr(t.label()))))
             .on_click({
                 let entity = entity.clone();
                 move |index, _, app| {

@@ -97,7 +97,7 @@ impl InsightWorkspacePanel {
                     ColumnKind::Unknown => ColorName::Gray,
                 })
                 .xsmall()
-                .child(col.kind.label()),
+                .child(tr(col.kind.label())),
             )
             .child(
                 div()

@@ -59,7 +59,7 @@ impl InsightView {
                                 div()
                                     .text_xs()
                                     .text_color(color)
-                                    .child(report.grade.label()),
+                                    .child(tr(report.grade.label())),
                             )
                             .child(div().flex_1().min_w_0().text_xs().text_ellipsis().child(
                                 format!(

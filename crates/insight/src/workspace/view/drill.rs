@@ -180,7 +180,7 @@ impl InsightView {
                             .outline()
                             .xsmall()
                             .flex_none()
-                            .child(self.scope.label()),
+                            .child(tr(self.scope.label())),
                     ),
             )
             .when_some(target.detail(), |this, detail| {
@@ -478,7 +478,7 @@ fn drill_schema_summary(
                     div()
                         .text_xs()
                         .text_color(grade_color)
-                        .child(report.grade.label()),
+                        .child(tr(report.grade.label())),
                 ),
         )
         .child(

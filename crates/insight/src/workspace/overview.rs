@@ -189,7 +189,7 @@ impl super::InsightWorkspacePanel {
                     } else {
                         colors.muted_foreground
                     })
-                    .child(scope.label()),
+                    .child(tr(scope.label())),
             )
             .child(div().flex_1().min_w_0())
     }
@@ -350,7 +350,7 @@ impl super::InsightWorkspacePanel {
                             .text_xs()
                             .text_ellipsis()
                             .text_color(colors.muted_foreground)
-                            .child(format!("{} {}", kind.label(), count)),
+                            .child(format!("{} {}", tr(kind.label()), count)),
                     ),
             );
         }

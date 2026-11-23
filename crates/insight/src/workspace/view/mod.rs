@@ -102,7 +102,7 @@ pub(crate) fn kind_badge(kind: ColumnKind) -> impl IntoElement {
         ColumnKind::Boolean => Tag::color(ColorName::Teal),
         ColumnKind::Unknown => Tag::color(ColorName::Gray),
     };
-    tag.outline().small().flex_none().child(kind.label())
+    tag.outline().small().flex_none().child(tr(kind.label()))
 }
 
 /// 等级 → 主题角色（四档取色；「较差」与「差」共用 danger）

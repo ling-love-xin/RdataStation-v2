@@ -343,7 +343,7 @@ impl InsightView {
             InsightSetKind::ResultSet => Tag::warning(),
             InsightSetKind::File => Tag::secondary(),
         };
-        badge.outline().xsmall().flex_none().child(kind.label())
+        badge.outline().xsmall().flex_none().child(tr(kind.label()))
     }
 
     /// 行操作按钮（对比 / 关系 / 归档）：key 与实体在闭包外克隆，避免借用冲突。

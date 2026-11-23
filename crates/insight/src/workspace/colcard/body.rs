@@ -110,7 +110,7 @@ impl super::super::InsightWorkspacePanel {
         )))
         .segmented()
         .selected_index(zone.index())
-        .children(ColZone::ALL.iter().map(|z| Tab::new().label(z.label())))
+        .children(ColZone::ALL.iter().map(|z| Tab::new().label(tr(z.label()))))
         .on_click({
             let entity = entity.clone();
             let name = col.name.clone();
