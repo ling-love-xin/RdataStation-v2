@@ -851,6 +851,32 @@ fn wait_pending_input(
     }
 }
 
+/// 注册表快照：只一个 ready 的 Python 内核（命令 = `RDS_KERNEL_PYTHON` 指向的解释器）
+struct OnePython(rds_kernel::KernelSpec);
+
+impl crate::kernel::KernelsPort for OnePython {
+    fn list(&self) -> Vec<rds_kernel::KernelSpec> {
+        vec![self.0.clone()]
+    }
+}
+
+/// 真机用例共用的 Python 内核描述（`RDS_KERNEL_PYTHON` 缺省时退回 `python`）
+fn python_spec() -> rds_kernel::KernelSpec {
+    let python = std::env::var_os("RDS_KERNEL_PYTHON")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("python"));
+    let command = python.to_string_lossy().to_string();
+    rds_kernel::KernelSpec {
+        id: "python3".to_string(),
+        display_name: "Python 3".to_string(),
+        language: rds_kernel::KernelLanguage::Python,
+        command: command.clone(),
+        ready: true,
+        note: None,
+        launch: rds_kernel::KernelLaunch::ipykernel(&command),
+    }
+}
+
 /// 等单元收口（30s 上限），返回最终输出
 fn wait_cell_settled(
     cx: &mut gpui_kit::VisualTestContext,
@@ -894,27 +920,7 @@ fn notebook_input_round_trips_through_the_pump(cx: &mut TestAppContext) {
     // 也不再因「有未完成任务」panic。这条用例验证的正是跨线程 push，故必须开。
     cx.executor().allow_parking();
 
-    /// 注册表快照：只一个 ready 的 Python 内核，命令 = `RDS_KERNEL_PYTHON` 指向的解释器
-    struct OnePython(rds_kernel::KernelSpec);
-    impl crate::kernel::KernelsPort for OnePython {
-        fn list(&self) -> Vec<rds_kernel::KernelSpec> {
-            vec![self.0.clone()]
-        }
-    }
-
-    let python = std::env::var_os("RDS_KERNEL_PYTHON")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("python"));
-    let command = python.to_string_lossy().to_string();
-    let spec = rds_kernel::KernelSpec {
-        id: "python3".to_string(),
-        display_name: "Python 3".to_string(),
-        language: rds_kernel::KernelLanguage::Python,
-        command: command.clone(),
-        ready: true,
-        note: None,
-        launch: rds_kernel::KernelLaunch::ipykernel(&command),
-    };
+    let spec = python_spec();
 
     let shared = EditorShared::new();
     shared.attach_kernels(std::rc::Rc::new(OnePython(spec)));
@@ -1021,6 +1027,96 @@ fn notebook_input_round_trips_through_the_pump(cx: &mut TestAppContext) {
         .any(|o| matches!(o, crate::cell::Output::Text(t) if t.contains("pw=doubao")));
     assert!(printed, "`getpass()` 的值也要真的进内核：{outputs:?}");
     assert!(!masked(cx), "收口后不得继续遮挡（否则下一条普通请求会延续遮挡）");
+
+    shared.kernel_shutdown("python3");
+}
+
+/// 【R2】首屏延迟：热内核上「提交 → 首个输出落进单元」必须远早于 2s 兜底
+///
+/// 泵的循环是 `drain → select!(notified(), timer(2s))`（`ensure_kernel_pump`）。
+/// `timer(2s)` 只是「唤醒线断了」时的逃生阀：正常情况下醒来的唯一原因是内核线程
+/// `Notify::notify_one`。所以这条断言是可判别的——真走兜底节拍必然 ≥ 2s，
+/// 唤醒线接上了则是几十毫秒级。若哪天 waker 没注册 / `kernel_wake` 取不到 / notify 丢，
+/// 本用例会红，而两相用例（30s 上限）照样绿：它只证明「最终能到」，不证明「没在等兜底」。
+///
+/// 计时只取**热跑**（第二个单元）：冷跑含内核启动（~1s），不属于泵的口径。
+#[gpui_kit::test]
+#[ignore = "需要本机 ipykernel（RDS_KERNEL_PYTHON 指向对应解释器）"]
+fn notebook_first_output_beats_the_escape_valve(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    // 真内核在自己的线程上唤醒泵（`Notify::notify_one` → waker → `schedule_local`），
+    // 测试调度器默认判其非确定性（见两相用例的说明）。
+    cx.executor().allow_parking();
+
+    let shared = EditorShared::new();
+    shared.attach_kernels(std::rc::Rc::new(OnePython(python_spec())));
+    let id = shared
+        .open(OpenRequest::untitled("", EditorMode::Analysis))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_add_cell(&id, crate::cell::CellLanguage::Python, window, cx);
+        });
+    });
+    let mut cells = shared.notebook_cells(&id);
+    let cell_id = cells[0].id.clone();
+    cells[0].body = "print('warm')".to_string();
+    shared.set_notebook_cells(&id, cells);
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| panel.sync_cell_editors(window, cx));
+        window.draw(cx).clear(cx);
+    });
+
+    // 冷跑：只为把内核拉起来，耗时不计（`mark_running` 会清空输出，热跑从空开始）
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.notebook_run_cell(&id, &cell_id, cx));
+    });
+    let outputs = wait_cell_settled(cx, &shared, &id);
+    let warm = outputs
+        .iter()
+        .any(|o| matches!(o, crate::cell::Output::Text(t) if t.contains("warm")));
+    assert!(warm, "冷跑要先出结果才谈得上热跑：{outputs:?}");
+
+    // 热跑：换正文，从提交那一刻计时到首个输出出现
+    let mut cells = shared.notebook_cells(&id);
+    cells[0].body = "print('ping')".to_string();
+    shared.set_notebook_cells(&id, cells);
+
+    let started = std::time::Instant::now();
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.notebook_run_cell(&id, &cell_id, cx));
+    });
+    let elapsed = loop {
+        cx.run_until_parked();
+        if !shared.notebook_cells(&id)[0].outputs.is_empty() {
+            break started.elapsed();
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "10s 内没有首个输出（状态 {:?}，消息栏：{:?}）",
+            shared.notebook_cells(&id)[0].state,
+            cx.update(|_window, cx| panel.read(cx).message.clone())
+        );
+        // 5ms 轮询：给「首个输出落地」一个独立于泵节拍的观测粒度
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    println!("热跑首屏延迟：{elapsed:?}");
+
+    // 兜底节拍是 2s：只要触发它，这个上限必红。留 1.5s 余量给本机抖动（实测见日志）。
+    assert!(
+        elapsed < std::time::Duration::from_millis(1500),
+        "首个输出等了 {elapsed:?}，落在 2s 兜底节拍的量级——唤醒线大概率断了"
+    );
+
+    // 收口也走唤醒（不是兜底）：整段热跑同样应远小于 2s
+    let outputs = wait_cell_settled(cx, &shared, &id);
+    let ping = outputs
+        .iter()
+        .any(|o| matches!(o, crate::cell::Output::Text(t) if t.contains("ping")));
+    assert!(ping, "热跑输出要落进单元：{outputs:?}");
 
     shared.kernel_shutdown("python3");
 }
