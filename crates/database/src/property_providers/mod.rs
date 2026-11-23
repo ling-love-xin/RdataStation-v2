@@ -16,6 +16,7 @@ pub mod mysql;
 pub mod pg;
 pub mod sqlite;
 
+use shared::i18n::tr;
 use property::{
     ObjectOverview, OverviewCard, OverviewStatus, PageId, PropertyRow, PropertySection,
     PropertyTable, PropertyTargetRef, PropertyValueKind, ProviderInput, ProviderRegistry,
@@ -624,7 +625,7 @@ pub(crate) fn stats_cards(input: &ProviderInput) -> Vec<OverviewCard> {
     let mut cards = Vec::new();
     if input.stats.column_count > 0 {
         cards.push(OverviewCard {
-            label: "列".to_string(),
+            label: tr("列").to_string(),
             value: input.stats.column_count.to_string(),
             unit: String::new(),
             delta: None,
@@ -632,7 +633,7 @@ pub(crate) fn stats_cards(input: &ProviderInput) -> Vec<OverviewCard> {
     }
     if input.stats.index_count > 0 {
         cards.push(OverviewCard {
-            label: "索引".to_string(),
+            label: tr("索引").to_string(),
             value: input.stats.index_count.to_string(),
             unit: String::new(),
             delta: None,
@@ -640,7 +641,7 @@ pub(crate) fn stats_cards(input: &ProviderInput) -> Vec<OverviewCard> {
     }
     if input.stats.constraint_count > 0 {
         cards.push(OverviewCard {
-            label: "约束".to_string(),
+            label: tr("约束").to_string(),
             value: input.stats.constraint_count.to_string(),
             unit: String::new(),
             delta: None,
@@ -648,7 +649,7 @@ pub(crate) fn stats_cards(input: &ProviderInput) -> Vec<OverviewCard> {
     }
     if let Some(rows) = input.stats.row_count {
         cards.push(OverviewCard {
-            label: "行数".to_string(),
+            label: tr("行数").to_string(),
             value: rows.to_string(),
             unit: String::new(),
             delta: None,

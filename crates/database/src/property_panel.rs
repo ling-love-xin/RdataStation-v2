@@ -9,6 +9,7 @@
 //! - 未注册 provider 的对象类型回退通用展示（fallback）。
 //! 视图形态为编辑区右侧停靠面板（`workbench/panels/editor.rs`）。
 
+use shared::i18n::tr;
 use crate::metadata_service::MetadataService;
 use crate::model::{NavSource, PropertyRef};
 use crate::property_providers::gates::MetadataGates;
@@ -546,13 +547,13 @@ fn indexes_section(
 ) -> SectionOutcome {
     if let Some(reason) = gates.index_detail.reason() {
         return SectionOutcome {
-            label: "索引".to_string(),
+            label: tr("索引").to_string(),
             fill: SectionFill::Unavailable(reason.to_string()),
         };
     }
     match &indexes.error {
         Some(err) => SectionOutcome {
-            label: "索引".to_string(),
+            label: tr("索引").to_string(),
             fill: SectionFill::Unavailable(format!("索引取数失败：{err}")),
         },
         None => SectionOutcome {
@@ -569,13 +570,13 @@ fn constraints_section(
 ) -> SectionOutcome {
     if let Some(reason) = gates.constraint_detail.reason() {
         return SectionOutcome {
-            label: "约束".to_string(),
+            label: tr("约束").to_string(),
             fill: SectionFill::Unavailable(reason.to_string()),
         };
     }
     match &constraints.error {
         Some(err) => SectionOutcome {
-            label: "约束".to_string(),
+            label: tr("约束").to_string(),
             fill: SectionFill::Unavailable(format!("约束取数失败：{err}")),
         },
         None => SectionOutcome {
@@ -599,7 +600,7 @@ fn ddl_section(
     // 真拿到源版就显示（数据比声明更权威）。
     if let Some(text) = ddl_text.value.as_ref() {
         return Some(SectionOutcome {
-            label: "DDL（源版）".to_string(),
+            label: tr("DDL（源版）").to_string(),
             fill: SectionFill::Content(text_table("DDL", text)),
         });
     }
@@ -626,7 +627,7 @@ fn ddl_section(
             idx,
         );
         return Some(SectionOutcome {
-            label: "DDL（合成）".to_string(),
+            label: tr("DDL（合成）").to_string(),
             fill: SectionFill::Content(text_table("DDL", &composed)),
         });
     }

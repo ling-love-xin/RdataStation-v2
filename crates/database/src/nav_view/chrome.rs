@@ -4,6 +4,7 @@
 //! 行高计算、以及**每一种行的渲染**（含搜索结果行）都在 `rows.rs`；
 //! 本模块只留结果区的**标题行**（“搜索中 / 无命中 / 共几条”）。
 
+use shared::i18n::tr;
 use super::PreparedStaged;
 use super::*;
 use crate::nav::capability::NavOp;
@@ -123,7 +124,7 @@ impl NavView {
                         .find(|c| c.id == *conn_id)
                         .map(|c| c.name.clone())
                         .unwrap_or_else(|| conn_id.clone());
-                    let input = cx.new(|cx| InputState::new(window, cx).placeholder("新连接名称"));
+                    let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("新连接名称")));
                     input.update(cx, |s, cx| s.set_value(format!("{base} 副本"), window, cx));
                     let sub = cx.subscribe_in(
                         &input,
@@ -159,7 +160,7 @@ impl NavView {
                         .find(|g| &g.id == group_id)
                         .map(|g| g.name.clone())
                         .unwrap_or_default();
-                    let input = cx.new(|cx| InputState::new(window, cx).placeholder("分组名"));
+                    let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("分组名")));
                     input.update(cx, |s, cx| s.set_value(name, window, cx));
                     let sub = cx.subscribe_in(
                         &input,
@@ -185,7 +186,7 @@ impl NavView {
         match &object_rename_for {
             Some(ctx) => {
                 if self.nav_rename_input.is_none() {
-                    let input = cx.new(|cx| InputState::new(window, cx).placeholder("新名称"));
+                    let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("新名称")));
                     input.update(cx, |s, cx| s.set_value(ctx.name.clone(), window, cx));
                     let sub = cx.subscribe_in(
                         &input,
@@ -269,7 +270,7 @@ impl NavView {
                             Button::new("nav-warm-cancel")
                                 .ghost()
                                 .small()
-                                .label("取消")
+                                .label(tr("取消"))
                                 .on_click(|_, _, _| nav_jobs::cancel_warm()),
                         )
                         .content(Separator::vertical())
@@ -406,7 +407,7 @@ impl NavView {
                                     }
                                     if pending == 0 {
                                         this.host
-                                            .notice("连接均已就绪，无需重复连接".to_string(), cx);
+                                            .notice(tr("连接均已就绪，无需重复连接").to_string(), cx);
                                     }
                                 } else {
                                     // 全部断开
@@ -419,7 +420,7 @@ impl NavView {
                                         }
                                     }
                                     if pending == 0 {
-                                        this.host.notice("没有已连接的连接".to_string(), cx);
+                                        this.host.notice(tr("没有已连接的连接").to_string(), cx);
                                     }
                                 }
                             });
@@ -572,7 +573,7 @@ impl NavView {
                         move |menu, window, cx| {
                             let e_refresh = entity.clone();
                             let host_cache = host_cache.clone();
-                            menu.item(PopupMenuItem::new("刷新全部元数据").on_click(
+                            menu.item(PopupMenuItem::new(tr("刷新全部元数据")).on_click(
                                 move |_, _, app| {
                                     e_refresh.update(app, |this, cx| this.refresh_all(cx));
                                 },
@@ -580,7 +581,7 @@ impl NavView {
                             .separator()
                             // === 显示组 ===
                             .item(
-                                PopupMenuItem::new("来源短码")
+                                PopupMenuItem::new(tr("来源短码"))
                                     .checked(source_short)
                                     .on_click({
                                         let host_short = host_short.clone();
@@ -590,7 +591,7 @@ impl NavView {
                                     }),
                             )
                             .item(
-                                PopupMenuItem::new("显示来源筛选行")
+                                PopupMenuItem::new(tr("显示来源筛选行"))
                                     .checked(show_chips)
                                     .on_click({
                                         let host = host_chips.clone();
@@ -600,7 +601,7 @@ impl NavView {
                                     }),
                             )
                             .item(
-                                PopupMenuItem::new("显示搜索行")
+                                PopupMenuItem::new(tr("显示搜索行"))
                                     .checked(show_search)
                                     .on_click({
                                         let host = host_search.clone();
@@ -610,7 +611,7 @@ impl NavView {
                                     }),
                             )
                             .item(
-                                PopupMenuItem::new("显示归属域")
+                                PopupMenuItem::new(tr("显示归属域"))
                                     .checked(show_scope)
                                     .on_click({
                                         let host_scope = host_scope.clone();
@@ -620,7 +621,7 @@ impl NavView {
                                     }),
                             )
                             .item(
-                                PopupMenuItem::new("显示标签").checked(show_tags).on_click({
+                                PopupMenuItem::new(tr("显示标签")).checked(show_tags).on_click({
                                     let host_tags = host_tags.clone();
                                     move |_, _, app| {
                                         host_tags.set_show_tags(!show_tags, app);
@@ -630,7 +631,7 @@ impl NavView {
                             .separator()
                             // === 表行统计组 ===
                             .item(
-                                PopupMenuItem::new("表行统计徽标")
+                                PopupMenuItem::new(tr("表行统计徽标"))
                                     .checked(show_inline_stats)
                                     .on_click({
                                         let host_stats = host_stats.clone();
@@ -640,7 +641,7 @@ impl NavView {
                                     }),
                             )
                             .item(
-                                PopupMenuItem::new("注释副标")
+                                PopupMenuItem::new(tr("注释副标"))
                                     .checked(show_inline_comment)
                                     .on_click({
                                         let host_comment = host_comment.clone();
@@ -650,7 +651,7 @@ impl NavView {
                                     }),
                             )
                             .item(
-                                PopupMenuItem::new("大小徽标")
+                                PopupMenuItem::new(tr("大小徽标"))
                                     .checked(show_inline_size)
                                     .on_click({
                                         let host_size = host_size.clone();
@@ -660,7 +661,7 @@ impl NavView {
                                     }),
                             )
                             .item(
-                                PopupMenuItem::new("行数估计")
+                                PopupMenuItem::new(tr("行数估计"))
                                     .checked(show_row_estimate)
                                     .on_click({
                                         let host_rowest = host_rowest.clone();
@@ -674,7 +675,7 @@ impl NavView {
                             .item(
                                 // 已保存视图（#10）：把当前四项 facet 存为命名视图 / 一键应用 /
                                 // 管理删除。只动 facet，不动搜索框。
-                                PopupMenuItem::new("将当前筛选存为视图…")
+                                PopupMenuItem::new(tr("将当前筛选存为视图…"))
                                     .disabled(filters_all_empty)
                                     .on_click({
                                         let host_save = host_views.clone();
@@ -691,7 +692,7 @@ impl NavView {
                                 move |m, _w, cx| {
                                     let views = host_views.saved_views(cx);
                                     if views.is_empty() {
-                                        m.item(PopupMenuItem::new("暂无已保存视图").disabled(true))
+                                        m.item(PopupMenuItem::new(tr("暂无已保存视图")).disabled(true))
                                     } else {
                                         let mut m = m;
                                         for v in views {
@@ -716,7 +717,7 @@ impl NavView {
                                 }
                             })
                             .item(
-                                PopupMenuItem::new("管理视图…").on_click({
+                                PopupMenuItem::new(tr("管理视图…")).on_click({
                                     let host_mgr = host_views.clone();
                                     move |_, window, app| {
                                         host_mgr.open_manage_views_dialog(window, app);
@@ -725,14 +726,14 @@ impl NavView {
                             )
                             .separator()
                             .item(
-                                PopupMenuItem::new("缓存管理…").on_click(move |_, window, app| {
+                                PopupMenuItem::new(tr("缓存管理…")).on_click(move |_, window, app| {
                                     host_cache.open_cache_dialog(window, app);
                                 }),
                             )
                             .item(
                                 // 管理分组覆盖层（#9 分组部分）：集中重命名 / 合并分组 / 删除，
                                 // 标签部分（清理空标签 / 批量打标）归 tag crate 会话。
-                                PopupMenuItem::new("管理分组…").on_click({
+                                PopupMenuItem::new(tr("管理分组…")).on_click({
                                     let host_groups = host_groups.clone();
                                     move |_, window, app| {
                                         host_groups.open_group_manager(window, app);
@@ -742,7 +743,7 @@ impl NavView {
                             .item(
                                 // 管理标签覆盖层（tag-system-spec §12 #3 标签侧）：
                                 // 批量重命名 / 清理空标签；标签定义跨模块共享（导航 / 资源 / 草稿）。
-                                PopupMenuItem::new("管理标签…").on_click({
+                                PopupMenuItem::new(tr("管理标签…")).on_click({
                                     let host_tags = host_groups.clone();
                                     move |_, window, app| {
                                         host_tags.open_tag_manager(window, app);
@@ -755,7 +756,7 @@ impl NavView {
                                 // 与连接行右键「删除连接」同一确认对话框 + 删除动作。
                                 // 无选中连接时禁用（`disabled` 是菜单自身语义，不用 danger
                                 // 文案区分可用性）。
-                                PopupMenuItem::new("删除当前连接")
+                                PopupMenuItem::new(tr("删除当前连接"))
                                     .disabled(del_conn.is_none())
                                     .on_click({
                                         let e = entity.clone();
@@ -770,7 +771,7 @@ impl NavView {
                                                 let cid = cid.clone();
                                                 alert
                                                     .confirm()
-                                                    .title("删除连接")
+                                                    .title(tr("删除连接"))
                                                     .description(format!(
                                                         "确定删除连接「{name}」？元数据缓存会保留（可在「缓存管理」清理）。"
                                                     ))
@@ -931,7 +932,7 @@ impl NavView {
                     let input_clear = input.clone();
                     let free_clear = free.clone();
                     let mut menu = menu.item(
-                        PopupMenuItem::new("清除筛选")
+                        PopupMenuItem::new(tr("清除筛选"))
                             .disabled(!filters_active)
                             .on_click(move |_, window, app| {
                                 if let Some(input) = &input_clear {
@@ -1032,7 +1033,7 @@ impl NavView {
                     // B-1 全局对象名过滤器入口（面板偏好，跨项目；空规则 = 不启用）。
                     let host_global = host_mask.clone();
                     menu = menu.separator();
-                    menu.item(PopupMenuItem::new("对象名过滤器（全局）…").on_click(
+                    menu.item(PopupMenuItem::new(tr("对象名过滤器（全局）…")).on_click(
                         move |_, window, app| {
                             host_global.open_object_mask_dialog(None, window, app);
                         },
@@ -1120,7 +1121,7 @@ impl NavView {
                                         "☐ 正则模式"
                                     },
                                 ))
-                                .child(div().text_color(muted).child("开启后搜索词按正则解析")),
+                                .child(div().text_color(muted).child(tr("开启后搜索词按正则解析"))),
                         );
                         body = body.child(div().h_px().w_full().bg(border));
                         // 常用样例
@@ -1212,7 +1213,7 @@ impl NavView {
                 .text_color(if connected_only { fg } else { muted })
                 .when(connected_only, |this| this.bg(selected_bg))
                 .when(!connected_only, move |s| s.hover(move |s| s.bg(hover_bg)))
-                .child("已连接")
+                .child(tr("已连接"))
                 .on_click(move |_, _, app| {
                     entity_conn.update(app, |this, cx| {
                         {
@@ -1238,7 +1239,7 @@ impl NavView {
                 .px_1p5()
                 .selected(prefix_active)
                 .toggled(prefix_active)
-                .label("前缀")
+                .label(tr("前缀"))
                 .bg(if prefix_active {
                     selected_bg
                 } else {
@@ -1261,7 +1262,7 @@ impl NavView {
                 .px_1p5()
                 .selected(contains_active)
                 .toggled(contains_active)
-                .label("包含")
+                .label(tr("包含"))
                 .bg(if contains_active {
                     selected_bg
                 } else {
@@ -1285,7 +1286,7 @@ impl NavView {
                 .px_1p5()
                 .selected(include_comments)
                 .toggled(include_comments)
-                .label("注释")
+                .label(tr("注释"))
                 .bg(if include_comments {
                     selected_bg
                 } else {
@@ -1309,7 +1310,7 @@ impl NavView {
                 .rounded_full()
                 .px_1p5()
                 .disabled(true)
-                .label("定义")
+                .label(tr("定义"))
                 .text_color(muted)
                 .tooltip("待内省采集：视图 / 例程定义批量采集链路接通后启用");
             let _ = include_definitions;
@@ -1860,7 +1861,7 @@ impl NavView {
         candidates: Vec<(String, String)>,
     ) -> PopupMenu {
         let mut menu = menu.item(
-            PopupMenuItem::new("全部")
+            PopupMenuItem::new(tr("全部"))
                 .checked(current.is_none())
                 .on_click({
                     let entity = entity.clone();
@@ -2028,7 +2029,7 @@ impl NavView {
                                 .with_variant(gpui_kit::component::empty::EmptyMediaVariant::Icon)
                                 .child(Icon::empty().path("icons/database.svg").text_color(muted)),
                         )
-                        .title(EmptyTitle::new().child("还没有数据源"))
+                        .title(EmptyTitle::new().child(tr("还没有数据源")))
                         .description(
                             EmptyDescription::new()
                                 .child("当前项目与全局库均无连接。点击下方「新建连接」开始。"),
@@ -2040,7 +2041,7 @@ impl NavView {
                             .primary()
                             .small()
                             .icon(IconName::Plus)
-                            .label("新建连接")
+                            .label(tr("新建连接"))
                             .on_click(move |_, window, app: &mut App| {
                                 host.new_connection(window, app);
                             }),
@@ -2065,7 +2066,7 @@ impl NavView {
                             .with_variant(gpui_kit::component::empty::EmptyMediaVariant::Icon)
                             .child(Icon::empty().path("icons/search.svg").text_color(muted)),
                     )
-                    .title(EmptyTitle::new().child("没有匹配的数据源"))
+                    .title(EmptyTitle::new().child(tr("没有匹配的数据源")))
                     .description(EmptyDescription::new().child(description)),
             )
             .content(
@@ -2073,7 +2074,7 @@ impl NavView {
                     Button::new("nav-empty-clear-filters")
                         .ghost()
                         .small()
-                        .label("清除筛选")
+                        .label(tr("清除筛选"))
                         .on_click(move |_, window, app: &mut App| {
                             // 搜索词与 facet 是两个独立入口，清就一起清：
                             // 只清一边，点完还是空列表。
