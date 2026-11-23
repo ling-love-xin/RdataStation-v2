@@ -161,6 +161,18 @@ use gpui_kit::prelude::FluentBuilder as _;
 - **语言码必须映射**：存储码 `Locale::code()` 是 `zh`，组件库语言键是 `zh-CN`（`ui.yml` 的块名）。直接透传 `zh` 会被 rust-i18n 静默回退 `en` 且不报错——用 `Locale::component_code()`。
 - 新写交互控件不要把 `cancel_text` / 占位符留空指望“组件自动翻译成中文”：那属组件库文案，只有 locale 同步后才会切换（历史现象与背景见 `docs/architecture/ui/i18n.md`）。
 
+### 写新 UI 时的翻译三条铁律（覆盖实战踩出来的）
+
+1. **常量 / 静态表不能就地 `tr`**：`const` / `static`（如 `settings::registry::REGISTRY`、`mock::generator_catalog::specs.rs`、
+   `driver::property_spec::DRIVERS`）里的中文是**数据原文**，常量上下文调不了 `tr` → 一律「表里存原文，只在渲染出口 `tr(...)`」。
+   静态表的 `label` 还可能被当**查找键 / 折叠状态键**（`generator_library/mod.rs` 的 `spec.label == picked`、
+   `expanded.insert(category.label().to_string())`）→ 方法体与表原文一律不动，只包纯显示位。
+2. **`tr` 只接 `&'static str`**：遇到返回 `String` 的 `label()` / `hint()` 用 `shared::i18n::tr_dyn(&x)`；`TitlebarOptions::title`
+   是 `Option<SharedString>` → `tr(..).to_string().into()`。
+3. **`Tab::new(..)` 第一个参数是 tab 标识不翻**；交互动作的实参（`picked_config(...)`、`DropdownItem` 值）不翻——
+   翻译只作用于 `.child/.label/.tooltip/.title/.placeholder/.text` 与 `Text::new` / `MenuItem::new` / `PopupMenuItem::{new,label}` 这类显示位。
+   纯数据模块没有 `use` 行时用全路径 `shared::i18n::tr(..)`；`mod shared;` 遮蔽同名 crate 的模块里用 `use ::shared::i18n::tr;`。
+
 ## 注释约定
 
 - 注释与文档一律简体中文，说明非显而易见的意图、约束、取舍；不写复述代码的注释
