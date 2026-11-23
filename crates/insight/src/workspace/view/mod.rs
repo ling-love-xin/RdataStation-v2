@@ -50,6 +50,7 @@ pub(crate) mod schema;
 pub(crate) mod set;
 pub(crate) mod table;
 
+use shared::i18n::tr;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ColorName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -277,7 +278,7 @@ pub(crate) fn error_block(
             Button::new("insight-retry")
                 .secondary()
                 .xsmall()
-                .label("重试")
+                .label(tr("重试"))
                 .on_click(move |_, _, app| {
                     entity.update(app, |view, cx| view.reload(cx));
                 }),

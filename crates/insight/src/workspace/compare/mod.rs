@@ -1,5 +1,6 @@
 //! 多表对比域渲染：候选勾选 / 运行中 / 结果表。
 
+use shared::i18n::tr;
 use super::*;
 
 mod table;
@@ -26,7 +27,7 @@ impl super::InsightWorkspacePanel {
                     div()
                         .text_sm()
                         .text_color(colors.muted_foreground)
-                        .child("还没有可对比的目标"),
+                        .child(tr("还没有可对比的目标")),
                 )
                 .child(
                     div()
@@ -73,7 +74,7 @@ impl super::InsightWorkspacePanel {
                         div()
                             .text_sm()
                             .font_weight(FontWeight::MEDIUM)
-                            .child("多表洞察对比"),
+                            .child(tr("多表洞察对比")),
                     )
                     .child(
                         div()
@@ -87,7 +88,7 @@ impl super::InsightWorkspacePanel {
                             .primary()
                             .small()
                             .icon(IconName::Play)
-                            .label("开始对比")
+                            .label(tr("开始对比"))
                             .disabled(self.compare_selected.is_empty())
                             .on_click({
                                 let entity = entity.clone();
@@ -242,7 +243,7 @@ impl super::InsightWorkspacePanel {
                         div()
                             .text_sm()
                             .font_weight(FontWeight::MEDIUM)
-                            .child("多表洞察对比"),
+                            .child(tr("多表洞察对比")),
                     )
                     .child(div().flex_1())
                     .child(
@@ -339,7 +340,7 @@ impl super::InsightWorkspacePanel {
                         div()
                             .text_sm()
                             .font_weight(FontWeight::MEDIUM)
-                            .child("多表洞察对比"),
+                            .child(tr("多表洞察对比")),
                     )
                     .child(
                         div()
@@ -353,7 +354,7 @@ impl super::InsightWorkspacePanel {
                             .ghost()
                             .small()
                             .icon(IconName::RotateCw)
-                            .label("重新对比")
+                            .label(tr("重新对比"))
                             .on_click({
                                 let entity = entity.clone();
                                 move |_, _, app| {
@@ -394,7 +395,7 @@ impl super::InsightWorkspacePanel {
                                         div()
                                             .w(rems(ui::INSIGHT_WS_METRIC_LABEL_WIDTH))
                                             .flex_none()
-                                            .child("指标"),
+                                            .child(tr("指标")),
                                     )
                                     .children(selected.iter().map(|entry| {
                                         div()

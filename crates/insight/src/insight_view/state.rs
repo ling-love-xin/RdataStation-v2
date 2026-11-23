@@ -1,3 +1,4 @@
+use shared::i18n::tr;
 use super::*;
 
 impl InsightView {
@@ -754,13 +755,13 @@ impl InsightView {
                 );
             }
             dialog
-                .title("清理旧快照")
+                .title(tr("清理旧快照"))
                 .child(body)
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text("清理")
                         .ok_variant(ButtonVariant::Danger)
-                        .cancel_text("取消")
+                        .cancel_text(tr("取消"))
                         .show_cancel(true),
                 )
                 .on_ok({

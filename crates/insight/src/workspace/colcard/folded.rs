@@ -5,6 +5,7 @@
 //! 真占比）——YData 折叠头一眼读全的关键；检查器未命中数直接亮在折叠行
 //! （YData 的行内告警对应物，数据来自已算好的 checker，零额外查询）。
 
+use shared::i18n::tr;
 use super::*;
 
 impl InsightWorkspacePanel {
@@ -144,7 +145,7 @@ impl InsightWorkspacePanel {
                 )
             })
             .when(col.interrupted, |this| {
-                this.child(Tag::color(ColorName::Amber).xsmall().child("未完成"))
+                this.child(Tag::color(ColorName::Amber).xsmall().child(tr("未完成")))
             })
             .child(div().flex_1().min_w_0())
     }

@@ -1,5 +1,6 @@
 //! 洞察模型 · 关联规则与多列视图（自 model.rs 拆分，纯位移）
 
+use shared::i18n::tr;
 use super::*;
 // ==================== 多列分析视图模型（Phase 3.2 / 3.3） ====================
 
@@ -137,7 +138,7 @@ impl MultiResultView {
                     .collect(),
             ),
             other => Self::Single(vec![KeyValueRow {
-                label: "结果".to_string(),
+                label: tr("结果").to_string(),
                 value: json_cell(other),
             }]),
         }

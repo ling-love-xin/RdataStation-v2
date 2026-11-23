@@ -1,5 +1,6 @@
 //! 列卡展开体：规则开关 + 警告块 + 五区 Tab + 当前区内容 + 检查器汇总 + SQL 入口。
 
+use shared::i18n::tr;
 use super::*;
 use gpui_kit::assets::IconName as AssetsIconName;
 use gpui_kit::component::switch::Switch;
@@ -29,7 +30,7 @@ impl super::super::InsightWorkspacePanel {
                         .copied()
                         .unwrap_or(false),
                 )
-                .label("只看规则属性")
+                .label(tr("只看规则属性"))
                 .on_click({
                     let entity = entity.clone();
                     let name = col.name.clone();
@@ -155,7 +156,7 @@ impl super::super::InsightWorkspacePanel {
                             .ghost()
                             .xsmall()
                             .icon(AssetsIconName::Braces)
-                            .label("在 SQL 编辑器中查看")
+                            .label(tr("在 SQL 编辑器中查看"))
                             .on_click(move |_, _, app| {
                                 entity.update(app, |panel, cx| {
                                     panel.insight_view().update(cx, |_view, cx| {

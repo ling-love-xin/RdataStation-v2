@@ -10,6 +10,7 @@
 //! （评级归归档后的资产库审计侧）。摘要**不触发取数**（`emit_request_for_tab` 对
 //! Overview 返回 `None`），只用已加载的载荷渲染。
 
+use shared::i18n::tr;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::description_list::DescriptionList;
 use gpui_kit::component::progress::{Progress, ProgressCircle};
@@ -216,7 +217,7 @@ fn overview_table(
                                 .text_xs()
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(colors.foreground)
-                                .child("检查器命中"),
+                                .child(tr("检查器命中")),
                         )
                         .child(div().flex_1())
                         .child(
@@ -347,7 +348,7 @@ fn overview_table(
                                 .text_xs()
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(colors.foreground)
-                                .child("事实提示"),
+                                .child(tr("事实提示")),
                         ),
                 )
                 .child(

@@ -1,5 +1,6 @@
 //! 关联性域渲染：数值相关 / 分类关联 / 值重叠 + 多列规则触发。
 
+use shared::i18n::tr;
 use super::*;
 
 impl super::InsightWorkspacePanel {
@@ -218,7 +219,7 @@ impl super::InsightWorkspacePanel {
                             .ghost()
                             .xsmall()
                             .icon(IconName::Play)
-                            .label("计算")
+                            .label(tr("计算"))
                             .disabled(!can_run)
                             .tooltip(if selected.len() < 2 {
                                 "至少选 2 个数值列"
@@ -388,7 +389,7 @@ impl super::InsightWorkspacePanel {
                             .ghost()
                             .xsmall()
                             .icon(IconName::Play)
-                            .label("计算")
+                            .label(tr("计算"))
                             .disabled(!can_run)
                             .tooltip(if selected.len() < 2 {
                                 "至少选 2 个文本/分类列"

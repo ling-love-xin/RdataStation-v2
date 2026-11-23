@@ -1,5 +1,6 @@
 //! 规则管理对话框 · 对话框视图（自 rule_view.rs 拆分，纯位移）
 
+use shared::i18n::tr;
 use super::*;
 // ==================== 对话框状态 ====================
 
@@ -187,7 +188,7 @@ impl RulesView {
             // 宽度取主题字号换算（常量保持 rem 倍率，视图不出现裸 px）
             let width = rems(ui::INSIGHT_RULES_DIALOG_WIDTH).to_pixels(window.rem_size());
             dialog
-                .title("洞察规则")
+                .title(tr("洞察规则"))
                 .w(width)
                 .child(body)
                 .overlay(true)
@@ -269,12 +270,12 @@ impl RulesView {
                     );
                 }
                 dialog
-                    .title("项目规则：是否加载")
+                    .title(tr("项目规则：是否加载"))
                     .child(body)
                     .button_props(
                         DialogButtonProps::default()
                             .ok_text("信任并加载")
-                            .cancel_text("不加载")
+                            .cancel_text(tr("不加载"))
                             .show_cancel(true),
                     )
                     .on_ok({
@@ -387,7 +388,7 @@ impl RulesView {
             Button::new("insight-rule-new")
                 .small()
                 .icon(IconName::Plus)
-                .label("新建项目规则")
+                .label(tr("新建项目规则"))
                 .tooltip("在 .RSmeta/insight-rules/ 建目录与模板文件并打开")
                 .on_click({
                     let entity = entity.clone();
@@ -403,7 +404,7 @@ impl RulesView {
                 .ghost()
                 .small()
                 .icon(IconName::RotateCw)
-                .label("重新加载")
+                .label(tr("重新加载"))
                 .tooltip("丢弃缓存并按三层重建规则集（目录监听的兜底与排障入口）")
                 .on_click({
                     let entity = entity.clone();
@@ -512,7 +513,7 @@ impl RulesView {
                 div()
                     .text_sm()
                     .text_color(colors.foreground)
-                    .child("规则索引读取失败"),
+                    .child(tr("规则索引读取失败")),
             )
             .child(
                 div()
@@ -523,7 +524,7 @@ impl RulesView {
             .child(
                 Button::new("insight-rule-retry")
                     .small()
-                    .label("重试")
+                    .label(tr("重试"))
                     .on_click({
                         let entity = entity.clone();
                         move |_, _, app| entity.update(app, |view, cx| view.request_reload(cx))
@@ -550,7 +551,7 @@ impl Render for RulesView {
                     div()
                         .text_sm()
                         .text_color(theme.colors.muted_foreground)
-                        .child("正在读取规则…"),
+                        .child(tr("正在读取规则…")),
                 )
                 .into_any_element(),
             _ => self.render_groups(&entity, theme).into_any_element(),
@@ -657,7 +658,7 @@ fn pending_banner(pending: &PendingRulesView, entity: &Entity<RulesView>, theme:
             Button::new("insight-rule-trust-decline")
                 .ghost()
                 .xsmall()
-                .label("不加载")
+                .label(tr("不加载"))
                 .on_click({
                     let entity = entity.clone();
                     move |_, _, app| entity.update(app, |view, cx| view.request_trust(false, cx))

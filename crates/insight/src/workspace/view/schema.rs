@@ -3,6 +3,7 @@
 //! 四个区**都渲染**（哪怕为空）：空区的意义是「检查过、没问题」，直接隐藏会让人以为
 //! 这项没做。健康条上的导出是**导出你看到的这份结论**（内容由面板算好，宿主只选路径写文件）。
 
+use shared::i18n::tr;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::accordion::Accordion;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -73,7 +74,7 @@ impl InsightView {
                                 Button::new("insight-schema-export")
                                     .ghost()
                                     .xsmall()
-                                    .label("导出 ▾")
+                                    .label(tr("导出 ▾"))
                                     .tooltip("把这份报告存成文件（导出的是你看到的这份结论）")
                                     .dropdown_menu({
                                         let entity = entity.clone();
@@ -222,7 +223,7 @@ fn schema_row(
                     .ghost()
                     .xsmall()
                     .label(table.clone())
-                    .tooltip("看这张表的表探查")
+                    .tooltip(tr("看这张表的表探查"))
                     .on_click({
                         let entity = entity.clone();
                         let table = table.clone();

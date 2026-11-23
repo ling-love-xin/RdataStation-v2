@@ -12,6 +12,7 @@
 //! - 用户口径：**导航树表行前不加勾选框**，对比候选 = 已打开过洞察的目标。
 //! - 本页只呈现事实统计与检查器命中，不合成质量总分 / 等级（评级归归档后的资产库）。
 
+use shared::i18n::tr;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -284,7 +285,7 @@ impl InsightWorkspacePanel {
                 window.open_dialog(cx, move |dialog, _window, _cx| {
                     use gpui_kit::component::dialog::DialogButtonProps;
                     dialog
-                        .title("探查确认")
+                        .title(tr("探查确认"))
                         .w(width)
                         // builder 是 `Fn`（可能多次调用）：实体经 clone 进树，
                         // 同一实体可在多个元素树渲染（render 每树各跑一次）

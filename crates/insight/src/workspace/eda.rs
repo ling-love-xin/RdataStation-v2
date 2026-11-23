@@ -1,5 +1,6 @@
 //! EDA 主域渲染：报告 Tab（列分布 / 缺失矩阵）与列卡各分区。
 
+use shared::i18n::tr;
 use super::*;
 // 完整 Lucide 图标目录在 `gpui_kit::assets::IconName`（component 版只是保留子集，
 // 没有 Braces）；别名避免与 `super::*` 带来的 component 版同名冲突
@@ -190,7 +191,7 @@ impl super::InsightWorkspacePanel {
                             .ghost()
                             .xsmall()
                             .icon(IconName::RotateCw)
-                            .label("重新探查")
+                            .label(tr("重新探查"))
                             .tooltip("复用上次探查配置（可改数据量 / 列 / 过滤），确认后重新取数并级联重评估")
                             .on_click(move |_, _, app| {
                                 entity.update(app, |panel, cx| {

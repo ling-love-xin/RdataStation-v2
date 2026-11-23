@@ -15,6 +15,7 @@
 //! 重算当前画像、scope 切换统一取样↔全量，见 `workspace/toolbar.rs`）。
 //! 两栏触发的是同一 `InsightView` 取数链，无状态分裂。
 
+use shared::i18n::tr;
 use gpui_kit::base::{Disableable as _, StyledExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::toolbar::Toolbar;
@@ -44,7 +45,7 @@ impl InsightView {
                     .flex_none()
                     .text_xs()
                     .text_color(colors.muted_foreground)
-                    .child("洞察"),
+                    .child(tr("洞察")),
             )
             .child(div().flex_1())
             // 右：操作按钮（对齐 EDA 原型 right-toolbar）。顺序 = 规则管理 →
@@ -74,7 +75,7 @@ impl InsightView {
                         Button::new("insight-refresh")
                             .ghost()
                             .icon(IconName::RotateCw)
-                            .tooltip("重算画像")
+                            .tooltip(tr("重算画像"))
                             .on_click({
                                 let entity = entity.clone();
                                 move |_, _, app| {
@@ -114,7 +115,7 @@ impl InsightView {
                         Button::new("insight-new")
                             .ghost()
                             .icon(IconName::Plus)
-                            .tooltip("新建洞察")
+                            .tooltip(tr("新建洞察"))
                             .on_click({
                                 let entity = entity.clone();
                                 move |_, _, app| {
