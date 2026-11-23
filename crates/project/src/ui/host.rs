@@ -2,15 +2,39 @@
 
 use super::*;
 
-/// 只读模式守卫：被拦截时写入提示并返回 `true`。
-pub(super) fn read_only_blocked(host: &ProjectUiHost, cx: &mut App, action: &str) -> bool {
-    if host.state.borrow().read_only {
-        host.state.borrow_mut().notice = Some(format!("只读模式：不允许{action}"));
-        host.notify(cx);
-        true
-    } else {
-        false
+/// 只读守卫的判据：**只拦「当前项目自身」的写操作**。
+///
+/// 只读是因为另一实例持有当前项目的 `.RSmeta` 写锁；它保护的是**当前项目**的磁盘与
+/// 配置，名册里别的项目不在这个锁的范围里——项目中心（覆盖层）里对别的项目固定 /
+/// 归档 / 移出 / 删除都该照常可做，不能被当前项目的只读态一并置灰。
+///
+/// `target` 是本次写操作真正作用的项目根；目标不明（`None`）时保守拦下。
+pub(super) fn write_blocked(
+    host: &ProjectUiHost,
+    target: Option<&Path>,
+    cx: &mut App,
+    action: &str,
+) -> bool {
+    if !host.state.borrow().read_only {
+        return false;
     }
+    let guarded = match (host.root(), target) {
+        (Some(root), Some(target)) => root.as_path() == target,
+        _ => true,
+    };
+    if !guarded {
+        return false;
+    }
+    host.state.borrow_mut().notice = Some(format!("只读模式：不允许{action}"));
+    host.notify(cx);
+    true
+}
+
+/// 当前项目自身的写操作（项目信息 / 归档 / 默认连接 / 版本台账）的只读守卫。
+///
+/// 被拦截时写入提示并返回 `true`。
+pub(super) fn read_only_blocked(host: &ProjectUiHost, cx: &mut App, action: &str) -> bool {
+    write_blocked(host, host.root().as_deref(), cx, action)
 }
 
 /// 动作成功反馈：`notice` 与 toast **两条通道都写**。

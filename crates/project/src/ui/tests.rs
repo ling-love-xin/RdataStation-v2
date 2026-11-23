@@ -28,15 +28,15 @@ use super::{
     SettingsSnapshot, StatusFilter, advance_pending, build_project_menu, cancel_version_delete,
     card_description, card_menu_entries, close_project_hub, confirm_delete, confirm_version_delete,
     create_version_action, default_connection_label, do_close, folder_hint, is_current_project,
-    load_settings_snapshot, location_hint, memo_hint, meta_line, meta_tree_rows, more_menu,
-    open_create_dialog, open_delete_dialog, open_folder_dialog, open_lock_busy_dialog,
+    item_write_locked, load_settings_snapshot, location_hint, memo_hint, meta_line, meta_tree_rows,
+    more_menu, open_create_dialog, open_delete_dialog, open_folder_dialog, open_lock_busy_dialog,
     open_project_hub, parse_search, pick_directory, prepare_unsaved, project_card,
     project_menu_entries, render_picker, render_project_hub, render_settings, request_close,
     request_create_project, request_open, request_open_folder, request_switch,
     request_version_delete, save_project_info, set_default_connection, set_sort, set_status_filter,
     set_tab, settings_status_text, snapshot_description, sort_menu_entries,
     status_filter_menu_entries, status_label, submit_create, submit_open_folder, switch_now,
-    toggle_archive, visible_items,
+    toggle_archive, toggle_pin, visible_items,
 };
 use crate::service::ProjectSummary;
 
@@ -1137,6 +1137,69 @@ fn card_menu_spec_branches_and_gates_read_only() {
 }
 
 // ==================== E1：只读拦截的其他路径 ====================
+
+/// E1/C3：卡片写命令的只读判据是**目标项目**，不是「一律只读」。
+///
+/// 只读锁保护的是当前项目自己的 `.RSmeta`；项目中心（覆盖层）里别的项目不在锁的范围，
+/// 固定 / 归档 / 移出 / 删除都该照常可用，不能被当前项目的只读态连坐。
+#[test]
+fn card_write_lock_applies_only_to_current_project() {
+    let rec = Rc::new(Recorder::default());
+    let host = test_host(&rec);
+    let current = summary("p-now", "当前项目", "active");
+
+    // 没有当前项目：名册里没有条目在锁的范围内，只读态不该拦
+    host.state.borrow_mut().read_only = true;
+    assert!(!item_write_locked(&host, &current), "无当前项目时不该拦");
+
+    // 当前项目自身：拦
+    host.set_current(Some(OpenProject::new(current.path.clone(), "当前项目")));
+    assert!(item_write_locked(&host, &current), "当前项目自身要拦");
+
+    // 别的项目：同一只读态下放行
+    let mut other = current.clone();
+    other.id = "p-other".to_string();
+    other.name = "别的项目".to_string();
+    other.path = PathBuf::from("C:/tmp/rds-other");
+    assert!(
+        !item_write_locked(&host, &other),
+        "别的项目不该被当前项目的只读态连坐"
+    );
+
+    // 非只读：一律不拦
+    host.state.borrow_mut().read_only = false;
+    assert!(!item_write_locked(&host, &current));
+}
+
+/// E1：卡片动作里的条底守卫与置灰同一判据——目标不是当前项目时照常执行。
+#[gpui_kit::test]
+fn card_action_read_guard_follows_target_project(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = Rc::new(Recorder::default());
+    let host = test_host(&rec);
+    let current = summary("p-now", "当前项目", "active");
+    host.set_current(Some(OpenProject::new(current.path.clone(), "当前项目")));
+    host.state.borrow_mut().read_only = true;
+    let (host, _inputs, cx) = open_harness(cx, host);
+
+    // 别的项目：动作放行（全局名册未初始化 → 写盘失败进 picker.error，但**不该**出现只读提示）
+    let mut other = current.clone();
+    other.id = "p-other".to_string();
+    other.path = PathBuf::from("C:/tmp/rds-other");
+    cx.update(|_, cx| toggle_pin(&host, &other, cx));
+    assert!(
+        host.state.borrow().notice.is_none(),
+        "别的项目不该被只读拦下，实际：{:?}",
+        host.state.borrow().notice
+    );
+
+    // 当前项目：动作被拦，给只读提示
+    cx.update(|_, cx| toggle_pin(&host, &current, cx));
+    assert_eq!(
+        host.state.borrow().notice.as_deref(),
+        Some("只读模式：不允许固定")
+    );
+}
 
 /// E1：只读不止挡「改项目信息」——归档与创建版本快照同样被拦（各自给提示）。
 #[gpui_kit::test]

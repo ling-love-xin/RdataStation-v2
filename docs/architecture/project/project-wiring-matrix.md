@@ -30,8 +30,8 @@
 | `lock.rs` | 230 行 | ✅ 全部已接线 |
 | `store.rs` | 948 行 | ⚠️ 核心已接线；**死代码已清（ProjectManager / to_project / stub），剩 1 组归属待定**（见下）；新增 `BUILD_TAG_KEY` 写盘分支 |
 | `models.rs` | 371 行 | ⚠️ 域模型已接线，**含 1 组预留**（版本化） |
-| `ui.rs` + `ui/{host,actions,dialogs,hub,picker,settings}.rs` | 630 + 59 + 436 + 836 + 94 + 897 + 785 行（合计 3737；`ui.rs` 只留公共面） | ✅ 全部已接线（有窗口测试锚定） |
-| `ui/tests.rs` | 1737 行（测试 48 项：30 窗口 + 18 纯函数） | ✅ 全部已接线 |
+| `ui.rs` + `ui/{host,actions,dialogs,hub,picker,settings}.rs` | 630 + 83 + 438 + 862 + 94 + 908 + 785 行（合计 3800；`ui.rs` 只留公共面） | ✅ 全部已接线（有窗口测试锚定） |
+| `ui/tests.rs` | 1800 行（测试 50 项：31 窗口 + 19 纯函数） | ✅ 全部已接线 |
 
 ## 逐方法
 
@@ -117,7 +117,7 @@
 
 ### `ui.rs` + 子模块（✅ 全部已接线）
 
-选择器 / 项目中心 / 标题栏菜单 / 项目设置 / 语义对话框 / 宿主桥 `ProjectUiHost`，均有窗口测试锚定（`ui/tests.rs` 48 项：30 窗口 + 18 纯函数）。
+选择器 / 项目中心 / 标题栏菜单 / 项目设置 / 语义对话框 / 宿主桥 `ProjectUiHost`，均有窗口测试锚定（`ui/tests.rs` 50 项：31 窗口 + 19 纯函数）。
 
 2026-11-22 新增接线（均已接线、有生产调用方）：
 
@@ -162,7 +162,7 @@
 
 验证（拆分后）：`cargo check -p rds-project --all-targets -j 1` 零告警；`cargo test -p rds-project -j 1` = 55 + 1 + 5 + 3（与拆分前同数）；`cargo clippy` 仍 2 条基线；`cargo check -p rds-workbench --lib -j 1` 通过（下游调用面不变）；`rustfmt --edition 2024 --check` 干净。
 
-## 2026-11-24 项目管理入口补齐（三刀）
+## 2026-11-24 项目管理入口补齐（四刀 + 只读判据收窄）
 
 「切换 / 创建 / 管理项目在哪里」此前没有完整入口：有项目时选择器整块从 Dock 消失，`SwitchProject` 又和 `CloseProject` 逐字相同。本轮补齐后的接线落点：
 
@@ -180,7 +180,12 @@
 | `SwitchProject` 处理器 | `crates/workbench/src/view/render.rs` | 由 `request_close` 改为 `open_project_hub`；`CloseProject` 仍 `request_close` |
 | 右侧栏 `picker-new` / `picker-open` | `ui/picker.rs` | 改走 `request_create_project` / `request_open_folder`（有项目时先拦截草稿） |
 | 菜单项「新建项目…」/「打开现有目录…」/「项目中心…」 | `ui/picker.rs::project_menu_entries` + `attach_project_menu_handler` | 8 项（只读 9 项）；`new` / `open-folder` 只读仍可用 |
+| `write_blocked(host, target, cx, action)` | `ui/host.rs` | 只读守卫的唯一判据：`read_only` **且** `target == 当前项目根`（`target=None` 保守拦）；`read_only_blocked` 是它的「目标=当前项目」包装，6 处旧调用（项目信息 / 归档 / 默认连接 / 版本删除×2 / 版本创建）语义不变 |
+| `item_write_locked(host, item)` | `ui/picker.rs` | 卡片置灰判据：`read_only && is_current_project(...)`；`card_menu`（`⋯` 与右键同源）用它算第三参 |
+| `card_menu_entries(item, tab, locked)` | `ui/picker.rs` | 第三参语义由「全局只读」改为「这张卡是否被拦」；调用方只有 `card_menu` |
+| 卡片动作兜底守卫 | `ui/dialogs.rs::{toggle_pin, soft_remove, restore, forget, open_delete_dialog, confirm_delete}` | 各动作按**目标项目路径**调用 `write_blocked`（原来只有菜单置灰这一道）；`soft_remove` / `restore` / `forget` 入参由 `id` 改 `&ProjectSummary` |
+| `create_sample` 末尾 | `ui/actions.rs` | `open_path` → `request_switch`（示例入口不再盖锁） |
 
-行数与测试（按 `\n` 口径实测）：`ui.rs` 630、`ui/host.rs` 59、`ui/actions.rs` 436、`ui/dialogs.rs` 836、`ui/hub.rs` 94、`ui/picker.rs` 897、`ui/settings.rs` 785（合计 3737）；`ui/tests.rs` 1737 行、**48 项**（30 窗口 + 18 纯函数），本 crate lib 共 61 项。
+行数与测试（按 `\n` 口径实测）：`ui.rs` 630、`ui/host.rs` 83、`ui/actions.rs` 438、`ui/dialogs.rs` 862、`ui/hub.rs` 94、`ui/picker.rs` 908、`ui/settings.rs` 785（合计 3800）；`ui/tests.rs` 1800 行、**50 项**（31 窗口 + 19 纯函数），本 crate lib 共 63 项。
 
-验证：`cargo check -p rds-project --all-targets -j 1` 零告警；`cargo test -p rds-project -j 1` = 61 + 1 + 5 + 3 全过；`cargo clippy -p rds-project --all-targets -j 1` 仍只有 2 条基线（`service.rs` 的 `OpenOutcome` 与 `ui/dialogs.rs::dialog_footer_three`，有意保留）；`cargo check -p rds-workbench --lib -j 1` 通过；`rustfmt --edition 2024 --check` 干净。
+验证：`cargo check -p rds-project --all-targets -j 1` 零告警；`cargo test -p rds-project -j 1` = 63 + 1 + 5 + 3 全过；`cargo clippy -p rds-project --all-targets -j 1` 仍只有 2 条基线（`service.rs` 的 `OpenOutcome` 与 `ui/dialogs.rs::dialog_footer_three`，有意保留）；`cargo check -p rds-workbench --lib -j 1` 通过；`rustfmt --edition 2024 --check` 干净。

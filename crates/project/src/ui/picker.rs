@@ -296,6 +296,14 @@ pub fn is_current_project(root: Option<&Path>, item: &ProjectSummary) -> bool {
     root.is_some_and(|root| root == item.path.as_path())
 }
 
+/// 这张卡片的写命令该不该被只读置灰。
+///
+/// 只读拦的是**当前项目自身**（另一实例持着它的写锁）；项目中心里别的项目照常可管理。
+/// 与 [`super::write_blocked`] 同一判据，UI 侧用它决定菜单项可用性，动作侧用它兜底。
+pub fn item_write_locked(host: &ProjectUiHost, item: &ProjectSummary) -> bool {
+    host.state.borrow().read_only && is_current_project(host.root().as_deref(), item)
+}
+
 /// 项目卡片：一个可见主操作（打开）+ 次要命令收进 `DropdownMenu`；同一批命令另有
 /// **右键菜单**（指南：作用于指针下对象的命令应当同时提供 `ContextMenu`）。
 ///
@@ -441,12 +449,15 @@ pub(super) fn project_card(
 
 /// 卡片命令菜单的规格：`⋯` 下拉与**右键菜单**共用一份（同一对象上的命令不该有两套口径）。
 ///
-/// 「打开」也列进来：卡片上它是可见主操作，右键菜单里则必须有——右键一张卡片最想做的事
+/// 「打开」也列进来：卡片上它是主操作，右键菜单里则必须有——右键一张卡片最想做的事
 /// 就是打开它，而右键菜单没有别的地方能提供这个命令。
+///
+/// `locked` = 这张卡片的写命令是否该被拦（由 [`item_write_locked`] 算：只读**且**这张就是
+/// 当前项目）。别的项目在项目中心里照常可固定 / 归档 / 移出 / 删除。
 pub fn card_menu_entries(
     item: &ProjectSummary,
     tab: PickerTab,
-    read_only: bool,
+    locked: bool,
 ) -> Vec<ProjectMenuEntry> {
     let mut entries = vec![ProjectMenuEntry {
         id: "open",
@@ -467,7 +478,7 @@ pub fn card_menu_entries(
         } else {
             IconName::Star
         },
-        enabled: !read_only,
+        enabled: !locked,
         separator_before: true,
     });
 
@@ -477,7 +488,7 @@ pub fn card_menu_entries(
             id: "restore",
             label: "恢复",
             icon: IconName::RotateCw,
-            enabled: !read_only,
+            enabled: !locked,
             separator_before: true,
         });
         return entries;
@@ -496,14 +507,14 @@ pub fn card_menu_entries(
             id: "remove",
             label: "移出列表",
             icon: IconName::Close,
-            enabled: !read_only,
+            enabled: !locked,
             separator_before: false,
         });
         entries.push(ProjectMenuEntry {
             id: "delete",
             label: "删除数据…",
             icon: IconName::Delete,
-            enabled: !read_only,
+            enabled: !locked,
             separator_before: true,
         });
     } else {
@@ -511,7 +522,7 @@ pub fn card_menu_entries(
             id: "relocate",
             label: "重新定位…",
             icon: IconName::RotateCw,
-            enabled: !read_only,
+            enabled: !locked,
             separator_before: true,
         });
         // 路径已失效：没什么可重定位的目标，移出 = 清掉名册记录（`forget`）
@@ -519,7 +530,7 @@ pub fn card_menu_entries(
             id: "remove",
             label: "移出列表",
             icon: IconName::Close,
-            enabled: !read_only,
+            enabled: !locked,
             separator_before: false,
         });
     }
@@ -534,12 +545,10 @@ pub(super) fn card_menu(
     item: &ProjectSummary,
     tab: PickerTab,
 ) -> PopupMenu {
-    let read_only = host.state.borrow().read_only;
+    // 只读只拦**当前项目自身**的卡片命令：项目中心里别的项目照常可管理。
+    let locked = item_write_locked(host, item);
     let mut menu = menu;
-    for (ix, entry) in card_menu_entries(item, tab, read_only)
-        .into_iter()
-        .enumerate()
-    {
+    for (ix, entry) in card_menu_entries(item, tab, locked).into_iter().enumerate() {
         if ix > 0 && entry.separator_before {
             menu = menu.separator();
         }
@@ -561,7 +570,6 @@ pub(super) fn attach_card_menu_handler(
     inputs: &ProjectInputs,
     item: &ProjectSummary,
 ) -> PopupMenuItem {
-    let item_id = item.id.clone();
     let path = item.path.clone();
     match id {
         "open" => {
@@ -576,17 +584,20 @@ pub(super) fn attach_card_menu_handler(
         }
         "restore" => {
             let host = ProjectUiHost::clone(host);
-            menu_item.on_click(move |_, _, app| restore(&host, &item_id, app))
+            let item = item.clone();
+            menu_item.on_click(move |_, _, app| restore(&host, &item, app))
         }
         "reveal" => menu_item.on_click(move |_, _, _| reveal_in_explorer(&path)),
         // 路径失效时「移出列表」是 forget（清名册记录），否则是 soft_remove（可找回）
         "remove" if !item.path_exists => {
             let host = ProjectUiHost::clone(host);
-            menu_item.on_click(move |_, _, app| forget(&host, &item_id, app))
+            let item = item.clone();
+            menu_item.on_click(move |_, _, app| forget(&host, &item, app))
         }
         "remove" => {
             let host = ProjectUiHost::clone(host);
-            menu_item.on_click(move |_, _, app| soft_remove(&host, &item_id, app))
+            let item = item.clone();
+            menu_item.on_click(move |_, _, app| soft_remove(&host, &item, app))
         }
         "delete" => {
             let host = ProjectUiHost::clone(host);

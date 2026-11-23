@@ -383,7 +383,7 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 **本轮核对范围**：§2 CRUD 全览（R4 搜索 facet、D1/D2 入口）、§3 三态与项目槽、§4 布局与卡片、§5 项目菜单、§6 新建对话框、§7 设置视图、§8 未保存拦截与锁、§9 校验清单、§10 token 名（抽查 `vendor/gpui-component/src/theme/schema.rs`：`list_hover` / `list_active` / `list_active_border` / `description_list.label.*` / `muted_foreground` 均存在；`title_bar.slot.background` 属产品 token）、§11 落点表中的文件路径（逐条 `Test-Path` 核对，已修正 `crates/store` 两处），均已与 `crates/project/src/ui.rs` / `crates/workbench/src/view/dock.rs` 对照修正。
 **仍未逐条比对**：§10 只核到 token 名存在、未核每个组件实际取色调用（值以 `assets/themes/rds-theme.json` 为准，见 `theme/theme-design.md`）；§11 表内的组件选型描述（组件名以 `vendor/gpui-component` 0.10.0 源码为准，未逐行核到每个 view 文件）；§12 范围外。涉及实现细节时以 `project-wiring-matrix.md` 与源码为准，不要引用本文当接口文档。
 
-### 13.1 2026-11-24 增量（项目管理入口：三刀）
+### 13.1 2026-11-24 增量（项目管理入口：四刀 + 只读判据收窄）
 
 | 改动 | 落点 |
 | --- | --- |
@@ -392,9 +392,10 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 | **项目中心覆盖层**（不关当前项目也能浏览 / 管理别的项目）：`open_project_hub` / `close_project_hub` / `render_project_hub`，body 复用 `render_picker`；当前项目卡片打「当前」`Tag` | `ui/hub.rs`、`ui/picker.rs::is_current_project` / `project_card` |
 | `Ctrl+Shift+P` 由 `request_close` 改为 `open_project_hub`，与 `Ctrl+Shift+W` 分工 | `crates/workbench/src/view/render.rs`（`SwitchProject` 处理器）；覆盖层挂在 `render_settings` 之前 |
 | `ProjectUiState` 8 → 9 字段（加 `hub_open`）；`apply_opened` / `do_close` 复位 | `ui.rs`、`ui/actions.rs` |
-| 测试 42 → 48（30 窗口 + 18 纯函数；lib 61） | `ui/tests.rs`（`project_hub_*`、`current_marker_only_for_current_root`） |
+| 测试 42 → 50（31 窗口 + 19 纯函数；lib 63） | `ui/tests.rs`（`project_hub_*`、`current_marker_only_for_current_root`、`card_write_lock_applies_only_to_current_project`、`card_action_read_guard_follows_target_project`） |
 | 示例项目入口改走切换：`create_sample` 末尾由 `open_path` 改 `request_switch`（项目中心里点「从示例项目开始」也不再盖锁） | `ui/actions.rs::create_sample` |
+| **只读判据收窄**：卡片与动作的只读拦截按**目标项目**判定——当前项目只读时，项目中心里别的项目仍可固定 / 恢复 / 移出 / 删除；`read_only_blocked` 拆出 `write_blocked(host, target, …)`，`card_menu_entries` 第三参由「全局只读」改为「这张卡是否被拦」 | `ui/host.rs::write_blocked`、`ui/picker.rs::item_write_locked` / `card_menu_entries`、`ui/dialogs.rs::{toggle_pin, soft_remove, restore, forget, open_delete_dialog, confirm_delete}` |
 
 > 仍未做（与设计稿的既有差异，非本轮引入）：标题栏槽**无状态点**（#12）、空态**无按钮**（#17）、卡片缺连接数与版本数（#4）、路径中间省略（#5）、新建对话框宽 448（#7）与其三项复选框缺失（#8）、菜单不显示快捷键（#13 后半）。
 >
-> **已知缺口（本轮随项目中心暴露，未修）**：只读判定 `ui/host.rs::read_only_blocked` 用的是**当前项目**的 `state.read_only`，而项目中心的卡片 `⋯`（固定 / 归档 / 移出列表 / 恢复 / 删除数据）作用在**别的项目**上——当前项目以只读打开时，这些跨项目命令会被同一条守卫置灰并拦下（属误拦）。修法是把判据改成「作用于当前项目才拦」，涉及 `card_menu_entries(item, tab, read_only)` 的入参语义与各动作的守卫分工，留作单独一刀。
+> **只读判据已收窄（原「跨项目误拦」已修）**：只读锁保护的是**当前项目**自己的 `.RSmeta`；项目中心里别的项目不在锁的范围。判据落到 `ui/host.rs::write_blocked(host, target, …)`（`read_only_blocked` 是它的「目标=当前项目」薄包装），卡片侧用 `ui/picker.rs::item_write_locked` 决定置灰、`card_menu_entries(item, tab, locked)` 的第三参语义由「全局只读」改为「这张卡是否被拦」。于是当前项目只读时，别的项目的固定 / 恢复 / 移出列表 / 删除数据照常可用；当前项目自己的写命令（卡片与标题栏菜单）仍被置灰 + 动作内兜底，双保险不变。

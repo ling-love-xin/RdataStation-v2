@@ -1,6 +1,6 @@
 # 项目管理模块 · 开发方案（P0 + Phase A/B/C）
 
-> 状态：**已实现（Phase A/B 主体 + Phase C1/C2 + C1/C4/B1 + B2/B3 + A1 + C3/C5 + E1/E4）**（2026-09-19，`cargo check -p rds-project -p rds-workbench --all-targets` 零告警；project 43 lib（含 20 项窗口测试 + 9 项纯函数）+ 1 名册集成 + 4 存储集成全绿）。**2026-11-22 实测**：lib 50（含 24 窗口 + 14 纯函数）+ 名册集成 1 + 生命周期集成 5 + 存储集成 3，全绿。**2026-11-23 实测**：lib 55（`ui/tests.rs` 42 项 = 25 窗口 + 17 纯函数）+ 1 + 5 + 3，全绿；`ui.rs` 已拆为公共面 + 五个子模块。**2026-11-24 实测**：lib 61（`ui/tests.rs` 48 项 = 30 窗口 + 18 纯函数）+ 1 + 5 + 3，全绿；子模块增至六个（新增 `ui/hub.rs`）。 · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）、`project-view-architecture.md`（视图架构与测试）、`project-user-guide.md`（使用手册）
+> 状态：**已实现（Phase A/B 主体 + Phase C1/C2 + C1/C4/B1 + B2/B3 + A1 + C3/C5 + E1/E4）**（2026-09-19，`cargo check -p rds-project -p rds-workbench --all-targets` 零告警；project 43 lib（含 20 项窗口测试 + 9 项纯函数）+ 1 名册集成 + 4 存储集成全绿）。**2026-11-22 实测**：lib 50（含 24 窗口 + 14 纯函数）+ 名册集成 1 + 生命周期集成 5 + 存储集成 3，全绿。**2026-11-23 实测**：lib 55（`ui/tests.rs` 42 项 = 25 窗口 + 17 纯函数）+ 1 + 5 + 3，全绿；`ui.rs` 已拆为公共面 + 五个子模块。**2026-11-24 实测**：lib 61（`ui/tests.rs` 48 项 = 30 窗口 + 18 纯函数）+ 1 + 5 + 3，全绿；子模块增至六个（新增 `ui/hub.rs`）。**2026-11-24 收尾实测**：lib 63（`ui/tests.rs` 50 项 = 31 窗口 + 19 纯函数）+ 1 + 5 + 3，全绿。 · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）、`project-view-architecture.md`（视图架构与测试）、`project-user-guide.md`（使用手册）
 > 前置：v1 行为蓝本 `v1/backend/src/commands/project_commands.rs`；v2 后端已迁移（`crates/project`：`store.rs` / `models.rs`；P0 会话 `workbench/src/services/project_session.rs`）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：项目**增删改查与生命周期**。**提升/引用（promote/snapshot）不在本模块**（另立设计，见原型 §12）。
@@ -26,7 +26,7 @@
 
 ## 0. 进度记录（最近在前）
 
-### 2026-11-24 — 项目管理入口补齐（三刀：菜单与切换 / 项目中心 / 文档）
+### 2026-11-24 — 项目管理入口补齐（四刀：菜单与切换 / 项目中心 / 文档 / 示例入口）+ 只读判据收窄
 
 起因：有项目时选择器整块从 Dock 消失（`ProjectPickerPanel::visible()` = 无会话），于是「有项目时怎么新建」「切换在哪」「别的项目怎么管理」三问都没有答案；`SwitchProject` 与 `CloseProject` 的实现又逐字相同。用户拍板路线 A：**覆盖式项目中心，允许不关当前项目就浏览 / 管理**。
 
@@ -34,9 +34,11 @@
 | --- | --- | --- |
 | ① 菜单补齐 + 真正的切换 | 标题栏菜单 6 → 8 项（新增「新建项目…」「打开现有目录…」，只读时仍可用；「切换项目…」后改名为「项目中心…」）；`PendingAction::SwitchTo` + `request_switch` / `switch_now`：先 `do_close`（还锁 + `on_closed`）再 `open_path`，同根 no-op，脏草稿拦截后直达 | `416df6df` |
 | ② 项目中心覆盖层 | `ui/hub.rs`（`open_project_hub` / `close_project_hub` / `render_project_hub`，body 复用 `render_picker`）；当前项目卡片打「当前」`Tag`（`is_current_project`）；`Ctrl+Shift+P` 由 `request_close` 改 `open_project_hub`，覆盖层挂在 `render_settings` 之前；`ProjectUiState` 加 `hub_open`（8 → 9 字段） | `816c0bf6` |
-| ③ 文档同步 | 原型 §5（8/9 项菜单 + 新增 §5.1 项目中心）、§11（六个子模块 + `ui/hub.rs` 落点）、§13（#13 更新 + 新增 §13.1）、本文、`project-user-guide.md`（§2 / §3.3 / §3.4 项目中心 / §4.5 / §6 / §9）、`README.md`（测试 38 → 48）、接线矩阵（新函数行 + 9 字段 + 行数） | 本提交 |
-| 验证 | `cargo check -p rds-project --all-targets -j 1` 零告警；`cargo test -p rds-project -j 1` = **61 lib**（`ui/tests.rs` 48 = 30 窗口 + 18 纯函数）+ 1 + 5 + 3 全过；`cargo clippy -p rds-project --all-targets -j 1` 仍 2 条基线；`cargo check -p rds-workbench --lib -j 1` 通过；`rustfmt --edition 2024 --check` 干净 | — |
-| 遗留 | 项目中心两件：①**跨项目写命令的只读误拦**——`read_only_blocked` 用当前项目的只读态，卡片 `⋯`（固定 / 归档 / 移出 / 恢复 / 删除）其实作用在别项目，当前项目只读时被误置灰，修法见原型 §13.1；②项目中心是否最终升级为 Dock 常驻 tab（当前覆盖层方案已认可）。另：§13 剩余 7 条产品差异（#4 / #5 / #7 / #8 / #12 / #13 后半 / #17）仍待逐项拍板 | §13.1 |
+| ③ 文档同步 | 原型 §5（8/9 项菜单 + 新增 §5.1 项目中心）、§11（六个子模块 + `ui/hub.rs` 落点）、§13（#13 更新 + 新增 §13.1）、本文、`project-user-guide.md`（§2 / §3.3 / §3.4 项目中心 / §4.5 / §6 / §9）、`README.md`（测试 38 → 48）、接线矩阵（新函数行 + 9 字段 + 行数） | `5973daed` |
+| ④ 示例入口走切换 | `create_sample` 末尾由 `open_path` 改 `request_switch`（项目中心里点「从示例项目开始」也不再盖锁） | `5abd2537` |
+| ⑤ 只读判据收窄 | 只读锁保护的是**当前项目**自己的 `.RSmeta`，项目中心里别的项目不在锁的范围。`ui/host.rs::read_only_blocked` 拆出 `write_blocked(host, target, …)`（前者=目标取当前项目的薄包装，6 处调用语义不变）；卡片侧新增 `item_write_locked`（= 只读且这张就是当前项目）供给 `card_menu_entries(item, tab, locked)` 置灰；卡片动作 `toggle_pin` / `soft_remove` / `restore` / `forget` / `open_delete_dialog` / `confirm_delete` 补目标项目兜底守卫（原来只靠菜单置灰） | 本提交 |
+| 验证 | `cargo check -p rds-project --all-targets -j 1` 零告警；`cargo test -p rds-project -j 1` = **63 lib**（`ui/tests.rs` 50 = 31 窗口 + 19 纯函数）+ 1 + 5 + 3 全过；`cargo clippy -p rds-project --all-targets -j 1` 仍 2 条基线（仅本 crate）；`cargo check -p rds-workbench --lib -j 1` 通过；`rustfmt --edition 2024 --check` 干净 | — |
+| 遗留 | 项目中心是否最终升级为 Dock 常驻 tab（当前覆盖层方案已认可）。另：§13 剩余 7 条产品差异（#4 / #5 / #7 / #8 / #12 / #13 后半 / #17）仍待逐项拍板 | §13.1 |
 
 ### 2026-11-23 — 遗留点清理（五刀：反馈通道 / 文档对齐 / 死字段与状态 / 版本删除 / 结构拆分）
 

@@ -579,7 +579,18 @@ pub(super) fn set_dialog_error(host: &ProjectUiHost, message: String, cx: &mut A
 }
 
 /// 固定 / 取消固定。
+///
+/// 卡片命令的只读拦截在动作里兜底（菜单置灰只是第一道）：拦不拦取决于**这张卡片**是不是
+/// 当前项目，别的项目在项目中心里照常可固定。
 pub fn toggle_pin(host: &ProjectUiHost, item: &ProjectSummary, cx: &mut App) {
+    let action = if item.is_pinned {
+        "取消固定"
+    } else {
+        "固定"
+    };
+    if write_blocked(host, Some(item.path.as_path()), cx, action) {
+        return;
+    }
     if let Err(e) = project_service::set_pinned(&item.id, !item.is_pinned) {
         host.state.borrow_mut().picker.error = Some(e);
     }
@@ -587,24 +598,33 @@ pub fn toggle_pin(host: &ProjectUiHost, item: &ProjectSummary, cx: &mut App) {
 }
 
 /// 软删（移出名册）。
-pub fn soft_remove(host: &ProjectUiHost, id: &str, cx: &mut App) {
-    if let Err(e) = project_service::soft_remove(id) {
+pub fn soft_remove(host: &ProjectUiHost, item: &ProjectSummary, cx: &mut App) {
+    if write_blocked(host, Some(item.path.as_path()), cx, "移出列表") {
+        return;
+    }
+    if let Err(e) = project_service::soft_remove(&item.id) {
         host.state.borrow_mut().picker.error = Some(e);
     }
     refresh_picker(host, cx);
 }
 
 /// 恢复已移除项目。
-pub fn restore(host: &ProjectUiHost, id: &str, cx: &mut App) {
-    if let Err(e) = project_service::restore(id) {
+pub fn restore(host: &ProjectUiHost, item: &ProjectSummary, cx: &mut App) {
+    if write_blocked(host, Some(item.path.as_path()), cx, "恢复") {
+        return;
+    }
+    if let Err(e) = project_service::restore(&item.id) {
         host.state.borrow_mut().picker.error = Some(e);
     }
     refresh_picker(host, cx);
 }
 
 /// 失效路径项目：移出名册（不动磁盘）。
-pub fn forget(host: &ProjectUiHost, id: &str, cx: &mut App) {
-    if let Err(e) = project_service::forget(id) {
+pub fn forget(host: &ProjectUiHost, item: &ProjectSummary, cx: &mut App) {
+    if write_blocked(host, Some(item.path.as_path()), cx, "移出列表") {
+        return;
+    }
+    if let Err(e) = project_service::forget(&item.id) {
         host.state.borrow_mut().picker.error = Some(e);
     }
     refresh_picker(host, cx);
@@ -709,6 +729,9 @@ pub fn open_delete_dialog(
     window: &mut Window,
     cx: &mut App,
 ) {
+    if write_blocked(host, Some(item.path.as_path()), cx, "删除数据") {
+        return;
+    }
     inputs
         .delete_confirm
         .update(cx, |s, cx| s.set_value("", window, cx));
@@ -796,6 +819,9 @@ pub fn confirm_delete(
         set_dialog_error(host, "输入的项目名不匹配".to_string(), cx);
         return false;
     }
+    if write_blocked(host, Some(root), cx, "删除数据") {
+        return false;
+    }
     // 若删除的是当前打开项目，先关闭以释放锁。
     let is_current = host.root().map(|r| r == root).unwrap_or(false);
     if is_current {
@@ -819,7 +845,7 @@ pub(super) fn soft_remove_current(host: &ProjectUiHost, cx: &mut App) {
     let Some(item) = current_summary(host) else {
         return;
     };
-    soft_remove(host, &item.id, cx);
+    soft_remove(host, &item, cx);
 }
 
 /// 打开当前项目的「删除数据」确认对话框（危险区入口）。

@@ -87,13 +87,13 @@ graph LR
 
 | 文件 | 内容 |
 | --- | --- |
-| `ui/host.rs` | `read_only_blocked` / `notify_success` / `notify_error` / `current_summary` |
+| `ui/host.rs` | `write_blocked`（按**目标项目**判定的只读守卫）/ `read_only_blocked`（目标=当前项目）/ `notify_success` / `notify_error` / `current_summary` |
 | `ui/actions.rs` | 打开 / **切换（`request_switch` / `switch_now`）** / 关闭 / 创建 / 重定位 / 删除 / 移出 / 归档 / 项目信息 / 默认连接 + 选择器加载与筛选 |
 | `ui/dialogs.rs` | 语义对话框与行内校验提示（`location_hint` / `folder_hint` / `target_preview` / `memo_hint` / footer） |
 | `ui/hub.rs` | **项目中心**覆盖层：`open_project_hub` / `close_project_hub` / `render_project_hub`（有项目时也能浏览别的项目） |
-| `ui/picker.rs` | 选择器渲染、卡片（含「当前」标记）、卡片菜单、标题栏项目菜单 |
+| `ui/picker.rs` | 选择器渲染、卡片（含「当前」标记）、卡片菜单（只读置灰由 `item_write_locked` 按卡片判定）、标题栏项目菜单 |
 | `ui/settings.rs` | `SettingsSnapshot` / `load_settings_snapshot` / `render_settings`（含版本台账删除） |
-| `ui/tests.rs` | 48 项测试（`use super::{...}` 照旧） |
+| `ui/tests.rs` | 50 项测试（`use super::{...}` 照旧） |
 
 约定：子模块之间不互相 `use`，一律 `use super::*` 取公共面词汇表（依赖方向单向）；跨模块使用的原私有条目提为 `pub(super)`——对 `ui` 及其后代可见、不进公共面；`project::ui::*` 的对外路径由 `ui.rs` 末尾的 `pub use ...::*` 保持不变。拆分逐字搬迁、未改逻辑。
 
@@ -137,7 +137,7 @@ graph LR
 
 ## 6. 窗口测试方案
 
-位置：`crates/project/src/ui/tests.rs`（`#[cfg(test)] mod tests;`），**48 项测试（30 项 GPUI headless 窗口测试 + 18 项纯函数测试）**（2026-11-24 实测）。
+位置：`crates/project/src/ui/tests.rs`（`#[cfg(test)] mod tests;`），**50 项测试（31 项 GPUI headless 窗口测试 + 19 项纯函数测试）**（2026-11-24 实测）。
 
 ### 骨架
 
@@ -214,7 +214,7 @@ graph LR
 | 位置记忆（默认新建父目录的读 / 写） | `crates/project/src/ui.rs`（`open_create_dialog` 读 `(host.last_create_location)`、`submit_create` 成功分支调 `(host.save_create_location)`）；宿主侧 `crates/workbench/src/components/project_host.rs`（`with_create_location`，接 `SettingsService::{project_last_create_location, set_project_last_create_location}`） |
 | 构建标识落项目（只写不展示） | `crates/project/src/ui.rs`（`apply_opened` → `update_config` 写 `extensions.rds.build_tag`，键 `store::BUILD_TAG_KEY`）；宿主侧 `project_host.rs`（`with_build_tag(Rc::new(\|\| crate::version::info().tag()))`） |
 | 项目中心（有项目态的项目列表 + 切换） | `crates/project/src/ui/hub.rs`（`open_project_hub` / `close_project_hub` / `render_project_hub`）；宿主侧 `crates/workbench/src/view/render.rs`（`SwitchProject` 处理器 + 覆盖层挂载，位于 `render_settings` 之前） |
-| 窗口测试 48 项（30 窗口 + 18 纯函数） | `crates/project/src/ui/tests.rs` |
+| 窗口测试 50 项（31 窗口 + 19 纯函数） | `crates/project/src/ui/tests.rs` |
 
 ## 8. 验证方式
 
