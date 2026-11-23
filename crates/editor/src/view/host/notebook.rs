@@ -968,9 +968,10 @@ impl EditorHostPanel {
         }
     }
 
-    /// 【R3】登记 / 撤掉等待态，并同步输入行的遮挡态
+    /// 【R3】登记 / 撤掉等待态：清掉上一条的值，并同步输入行的遮挡态
     ///
-    /// 两者的对应关系只写在这一个地方：等待态是密码请求 ⇔ 输入框遮挡。拆开写容易漏
+    /// 这四件事（等待态、值、遮挡、窗口）只写在 `set_notebook_pending` +
+    /// `sync_notebook_input_masked` 两处：等待态是密码请求 ⇔ 输入框遮挡。拆开写容易漏
     /// 「换下一条请求时还原遮挡」——上一条 `getpass()` 之后的下一条普通 `input()` 会
     /// 继续遮挡，而且只在运行时才看得出来。
     pub(crate) fn set_notebook_pending(
@@ -979,6 +980,12 @@ impl EditorHostPanel {
         cx: &mut Context<Self>,
     ) {
         let masked = request.as_ref().is_some_and(|request| request.password);
+        // 新请求从空开始：上一条的值（可能是 `getpass()` 的密码）不能漏进这一条——
+        // 等待态取走后值还留在 `InputBaseState` 里，下一条请求就会把同一段文本重新显示
+        // 出来，而遮挡是随请求走的，一个密码请求的遗留值会在下一条普通请求里变成明文。
+        if request.is_some() {
+            self.clear_notebook_input(cx);
+        }
         self.nb_pending = request;
         self.sync_notebook_input_masked(masked, cx);
     }
@@ -993,9 +1000,11 @@ impl EditorHostPanel {
         };
         // 行撤了就还原遮挡：否则下一次普通请求要先经过一条「还是遮挡」的中间态
         self.sync_notebook_input_masked(false, cx);
+        // 值也一并清掉（成败都清）：失败时行已经撤掉，用户既看不见这个值，它又会在
+        // 下一条请求里重新出现；失败原因走消息栏，不需要靠留着输入值来传达。
+        self.clear_notebook_input(cx);
         match self.shared.kernel_input(&request.kernel_id, value) {
             Ok(()) => {
-                self.clear_notebook_input(cx);
                 cx.notify();
             }
             Err(reason) => self.set_message(Some(reason), cx),

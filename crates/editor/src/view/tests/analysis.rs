@@ -1936,3 +1936,81 @@ fn notebook_input_masks_password_requests_only(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(!masked(cx), "回送后（输入行撤掉）不得继续遮挡");
 }
+
+/// 【R3】上一条请求的值不能漏进下一条输入行
+///
+/// 要防的具体事故：`getpass()` → 用户敲进密码 → 回送失败（内核已停）→ 等待态取走、
+/// 遮挡还原，但值留在 `InputBaseState` 里；下一条普通 `input()` 一登记，同一个输入框
+/// 就把那个密码**明文**显示出来。
+///
+/// 区分性：修之前第二条与第四条断言必红（值还在）；只修「回送失败也清空」而漏了
+/// 「新请求登记时清空」，第三条仍红（绕过回送直接注入的值会漏过去）。
+#[gpui_kit::test]
+fn notebook_input_never_carries_a_value_into_the_next_request(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    let id = shared
+        .open(OpenRequest::untitled("", EditorMode::Analysis))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    let request = |password: bool| crate::view::host::NotebookInputRequest {
+        cell_id: "c1".to_string(),
+        kernel_id: "no-such-kernel".to_string(),
+        prompt: if password { "Password: " } else { "name? " }.to_string(),
+        password,
+    };
+    let value = |cx: &mut gpui_kit::VisualTestContext| {
+        cx.update(|_window, cx| panel.read(cx).nb_input.read(cx).value().to_string())
+    };
+    let masked = |cx: &mut gpui_kit::VisualTestContext| {
+        cx.update(|_window, cx| {
+            panel
+                .read(cx)
+                .nb_input
+                .read(cx)
+                .presentation()
+                .is_masked()
+        })
+    };
+
+    // 密码请求 → 敲进一个密码 → 回送（内核不存在，走失败路径）
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_notebook_pending(Some(request(true)), cx);
+        });
+    });
+    cx.run_until_parked();
+    assert!(masked(cx), "密码请求要遮挡");
+    cx.update(|window, cx| {
+        let input = panel.read(cx).nb_input.clone();
+        input.update(cx, |state, cx| state.set_value("secret".to_string(), window, cx));
+    });
+    assert_eq!(value(cx), "secret");
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.submit_notebook_input("secret".to_string(), cx);
+        });
+    });
+    cx.run_until_parked();
+    assert!(value(cx).is_empty(), "回送后（含失败路径）不得把值留在状态里");
+    assert!(!masked(cx), "回送后遮挡要还原");
+
+    // 绕过回送直接把值灌进输入框，再登记一条普通请求：新请求必须从空开始
+    cx.update(|window, cx| {
+        let input = panel.read(cx).nb_input.clone();
+        input.update(cx, |state, cx| state.set_value("leftover".to_string(), window, cx));
+    });
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_notebook_pending(Some(request(false)), cx);
+        });
+    });
+    cx.run_until_parked();
+    assert!(
+        value(cx).is_empty(),
+        "新请求要清掉上一条的值，否则密码会明文漏到下一条提示里"
+    );
+    assert!(!masked(cx), "普通请求不遮挡");
+}
