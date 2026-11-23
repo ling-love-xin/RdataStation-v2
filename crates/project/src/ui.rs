@@ -1801,6 +1801,42 @@ fn read_only_blocked(host: &ProjectUiHost, cx: &mut App, action: &str) -> bool {
     }
 }
 
+/// 动作成功反馈：`notice` 与 toast **两条通道都写**。
+///
+/// `notice` 只在选择器里有一行提示（`render_picker`），设置面板与标题栏菜单里没有
+/// 它；只写状态等于用户看不到。toast 走 `window.push_notification`，与结构树「复制
+/// 路径」同一通道；`notice` 保留是为了让状态可断言、且回选择器后仍能看到。
+fn notify_success(
+    host: &ProjectUiHost,
+    window: &mut Window,
+    cx: &mut App,
+    message: impl Into<String>,
+) {
+    let message = message.into();
+    host.state.borrow_mut().notice = Some(message.clone());
+    window.push_notification(
+        gpui_kit::component::notification::Notification::success(message),
+        cx,
+    );
+    host.notify(cx);
+}
+
+/// 动作失败反馈：与 [`notify_success`] 同两条通道，toast 用 `error` 变体。
+fn notify_error(
+    host: &ProjectUiHost,
+    window: &mut Window,
+    cx: &mut App,
+    message: impl Into<String>,
+) {
+    let message = message.into();
+    host.state.borrow_mut().notice = Some(message.clone());
+    window.push_notification(
+        gpui_kit::component::notification::Notification::error(message),
+        cx,
+    );
+    host.notify(cx);
+}
+
 /// 当前项目在名册中的条目（会话只存根 / 名，其余信息按根反查）。
 fn current_summary(host: &ProjectUiHost) -> Option<ProjectSummary> {
     let root = host.root()?;
@@ -1813,7 +1849,12 @@ fn current_summary(host: &ProjectUiHost) -> Option<ProjectSummary> {
 /// 保存项目设置中的名称与描述（U1 + U2）。
 ///
 /// 会话只存根 / 名，描述与 id 经名册反查；空描述写入 `None`（与创建语义一致）。
-pub fn save_project_info(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App) {
+pub fn save_project_info(
+    host: &ProjectUiHost,
+    inputs: &ProjectInputs,
+    window: &mut Window,
+    cx: &mut App,
+) {
     if read_only_blocked(host, cx, "修改项目信息") {
         return;
     }
@@ -1821,8 +1862,7 @@ pub fn save_project_info(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut 
     let raw_desc = inputs.description.read(cx).value().trim().to_string();
     let description = (!raw_desc.is_empty()).then_some(raw_desc);
     if let Err(e) = project_service::validate_project_name(&name) {
-        host.state.borrow_mut().notice = Some(e);
-        host.notify(cx);
+        notify_error(host, window, cx, e);
         return;
     }
     // 通过名册查当前项目（会话只存根 / 名）。
@@ -1835,9 +1875,9 @@ pub fn save_project_info(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut 
             if let Some(session) = host.session.borrow_mut().as_mut() {
                 session.name = name;
             }
-            host.state.borrow_mut().notice = Some("已保存项目信息".to_string());
+            notify_success(host, window, cx, "已保存项目信息");
         }
-        Err(e) => host.state.borrow_mut().notice = Some(e),
+        Err(e) => notify_error(host, window, cx, e),
     }
     // 名册改名 / 描述变更后刷新列表与卡片，并更新设置面板快照（概览要显示新描述）。
     refresh_picker(host, cx);
@@ -1845,7 +1885,7 @@ pub fn save_project_info(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut 
 }
 
 /// 归档 / 取消归档当前项目。
-pub fn toggle_archive(host: &ProjectUiHost, cx: &mut App) {
+pub fn toggle_archive(host: &ProjectUiHost, window: &mut Window, cx: &mut App) {
     if read_only_blocked(host, cx, "归档") {
         return;
     }
@@ -1853,13 +1893,14 @@ pub fn toggle_archive(host: &ProjectUiHost, cx: &mut App) {
         return;
     };
     let archived = item.status == "archived";
-    if let Err(e) = project_service::set_archived(&item.id, &item.path, !archived) {
-        host.state.borrow_mut().notice = Some(e);
-    } else {
-        host.state.borrow_mut().notice = Some(format!(
-            "已{}项目",
-            if archived { "取消归档" } else { "归档" }
-        ));
+    match project_service::set_archived(&item.id, &item.path, !archived) {
+        Ok(()) => notify_success(
+            host,
+            window,
+            cx,
+            format!("已{}项目", if archived { "取消归档" } else { "归档" }),
+        ),
+        Err(e) => notify_error(host, window, cx, e),
     }
     host.notify(cx);
 }
@@ -1867,7 +1908,12 @@ pub fn toggle_archive(host: &ProjectUiHost, cx: &mut App) {
 /// 设置默认连接（U3）：`None` = 清除默认。
 ///
 /// 只动项目本体的 `settings.json`；不写名册（默认连接是项目内偏好）。
-pub fn set_default_connection(host: &ProjectUiHost, connection_id: Option<String>, cx: &mut App) {
+pub fn set_default_connection(
+    host: &ProjectUiHost,
+    connection_id: Option<String>,
+    window: &mut Window,
+    cx: &mut App,
+) {
     if read_only_blocked(host, cx, "修改默认连接") {
         return;
     }
@@ -1876,11 +1922,10 @@ pub fn set_default_connection(host: &ProjectUiHost, connection_id: Option<String
     };
     match project_service::save_default_connection(&root, connection_id.as_deref()) {
         Ok(()) => {
-            let mut state = host.state.borrow_mut();
-            state.settings.default_connection = connection_id;
-            state.notice = Some("已更新默认连接".to_string());
+            host.state.borrow_mut().settings.default_connection = connection_id;
+            notify_success(host, window, cx, "已更新默认连接");
         }
-        Err(e) => host.state.borrow_mut().notice = Some(e),
+        Err(e) => notify_error(host, window, cx, e),
     }
     host.notify(cx);
 }
@@ -2776,7 +2821,7 @@ fn attach_project_menu_handler(
         }
         "archive" => {
             let host = host.clone();
-            item.on_click(move |_, _, app| toggle_archive(&host, app))
+            item.on_click(move |_, window, app| toggle_archive(&host, window, app))
         }
         _ => item,
     }
@@ -2945,8 +2990,8 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
                             .secondary()
                             .disabled(read_only)
                             .label("保存项目信息")
-                            .on_click(move |_, _, app| {
-                                save_project_info(&host_rename, &inputs_rename, app)
+                            .on_click(move |_, window, app| {
+                                save_project_info(&host_rename, &inputs_rename, window, app)
                             }),
                     )
                     .child(section(theme, "默认项"))
@@ -3000,8 +3045,13 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
                                     .secondary()
                                     .disabled(read_only)
                                     .label("创建版本快照")
-                                    .on_click(move |_, _, app| {
-                                        create_version_action(&host_version, &inputs_version, app)
+                                    .on_click(move |_, window, app| {
+                                        create_version_action(
+                                            &host_version,
+                                            &inputs_version,
+                                            window,
+                                            app,
+                                        )
                                     }),
                             ),
                     )
@@ -3015,7 +3065,9 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
                                     .secondary()
                                     .disabled(read_only)
                                     .label("归档 / 取消归档")
-                                    .on_click(move |_, _, app| toggle_archive(&host_archive, app)),
+                                    .on_click(move |_, window, app| {
+                                        toggle_archive(&host_archive, window, app)
+                                    }),
                             )
                             .child(
                                 Button::new("proj-remove")
@@ -3176,7 +3228,7 @@ fn default_connection_picker(
                     .disabled(current_for_menu.is_none())
                     .on_click({
                         let host = host_clear.clone();
-                        move |_, _, app| set_default_connection(&host, None, app)
+                        move |_, window, app| set_default_connection(&host, None, window, app)
                     }),
             );
             // 记录值已不在候选里：摆一项“当前记录”并置灰，让用户看得见默认还在
@@ -3197,8 +3249,8 @@ fn default_connection_picker(
                         .icon(IconName::HardDrive)
                         .checked(is_current)
                         .disabled(is_current)
-                        .on_click(move |_, _, app| {
-                            set_default_connection(&host, Some(id.clone()), app)
+                        .on_click(move |_, window, app| {
+                            set_default_connection(&host, Some(id.clone()), window, app)
                         }),
                 );
             }
@@ -3254,7 +3306,12 @@ fn versions_view(snapshot: &SettingsSnapshot, theme: &gpui_kit::component::Theme
 }
 
 /// 创建版本快照（只读模式拦截）。
-pub fn create_version_action(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App) {
+pub fn create_version_action(
+    host: &ProjectUiHost,
+    inputs: &ProjectInputs,
+    window: &mut Window,
+    cx: &mut App,
+) {
     if read_only_blocked(host, cx, "创建版本") {
         return;
     }
@@ -3270,12 +3327,14 @@ pub fn create_version_action(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &
                 Ok(versions) => (versions, None),
                 Err(e) => (Vec::new(), Some(e)),
             };
-            let mut ui = host.state.borrow_mut();
-            ui.settings.versions = versions;
-            ui.settings.versions_error = versions_error;
-            ui.notice = Some("已创建版本快照".to_string());
+            {
+                let mut ui = host.state.borrow_mut();
+                ui.settings.versions = versions;
+                ui.settings.versions_error = versions_error;
+            }
+            notify_success(host, window, cx, "已创建版本快照");
         }
-        Err(e) => host.state.borrow_mut().notice = Some(e),
+        Err(e) => notify_error(host, window, cx, e),
     }
     host.notify(cx);
 }

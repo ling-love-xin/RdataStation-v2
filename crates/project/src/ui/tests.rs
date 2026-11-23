@@ -517,7 +517,7 @@ fn save_project_info_rejects_invalid_name(cx: &mut TestAppContext) {
             .rename
             .update(cx, |s, cx| s.set_value("非法/名称", window, cx));
     });
-    cx.update(|_, cx| save_project_info(&host, &inputs, cx));
+    cx.update(|window, cx| save_project_info(&host, &inputs, window, cx));
     let notice = host.state.borrow().notice.clone();
     assert!(
         notice.as_deref().is_some_and(|n| n.contains("不能包含")),
@@ -530,7 +530,7 @@ fn save_project_info_rejects_invalid_name(cx: &mut TestAppContext) {
             .rename
             .update(cx, |s, cx| s.set_value("", window, cx));
     });
-    cx.update(|_, cx| save_project_info(&host, &inputs, cx));
+    cx.update(|window, cx| save_project_info(&host, &inputs, window, cx));
     assert_eq!(
         host.state.borrow().notice.as_deref(),
         Some("项目名称不能为空")
@@ -602,7 +602,7 @@ fn read_only_blocks_project_info_save(cx: &mut TestAppContext) {
             .update(cx, |s, cx| s.set_value("改名尝试", window, cx));
     });
     let notifies_before = rec.notifies.get();
-    cx.update(|_, cx| save_project_info(&host, &inputs, cx));
+    cx.update(|window, cx| save_project_info(&host, &inputs, window, cx));
 
     let notice = host.state.borrow().notice.clone();
     assert!(
@@ -781,7 +781,7 @@ fn default_connection_write_respects_read_only(cx: &mut TestAppContext) {
         name: "分析库".to_string(),
     }];
 
-    cx.update(|_, cx| set_default_connection(&host, Some("G_a".to_string()), cx));
+    cx.update(|window, cx| set_default_connection(&host, Some("G_a".to_string()), window, cx));
     assert_eq!(
         crate::service::load_default_connection(&root).expect("读磁盘"),
         Some("G_a".to_string()),
@@ -810,7 +810,7 @@ fn default_connection_write_respects_read_only(cx: &mut TestAppContext) {
 
     // 只读：拦下、给提示、不动磁盘
     host.state.borrow_mut().read_only = true;
-    cx.update(|_, cx| set_default_connection(&host, Some("G_b".to_string()), cx));
+    cx.update(|window, cx| set_default_connection(&host, Some("G_b".to_string()), window, cx));
     assert!(
         host.state
             .borrow()
@@ -995,7 +995,7 @@ fn read_only_blocks_archive_and_version_snapshot(cx: &mut TestAppContext) {
     let (host, inputs, cx) = open_harness(cx, host);
 
     // 归档
-    cx.update(|_, cx| toggle_archive(&host, cx));
+    cx.update(|window, cx| toggle_archive(&host, window, cx));
     assert!(
         host.state
             .borrow()
@@ -1012,7 +1012,7 @@ fn read_only_blocks_archive_and_version_snapshot(cx: &mut TestAppContext) {
             .version_msg
             .update(cx, |s, cx| s.set_value("只读下的快照尝试", window, cx));
     });
-    cx.update(|_, cx| create_version_action(&host, &inputs, cx));
+    cx.update(|window, cx| create_version_action(&host, &inputs, window, cx));
     assert!(
         host.state
             .borrow()
