@@ -31,6 +31,8 @@ mod executor;
 mod explain;
 mod extension;
 pub mod extensions;
+/// 表 → 文件（`COPY … TO`）：导出与「保存到草稿」共用，只收 csv / parquet / json
+pub mod export;
 pub mod federation;
 pub mod file_view;
 mod manager;

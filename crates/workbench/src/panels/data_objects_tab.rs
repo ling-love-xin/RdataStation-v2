@@ -1041,6 +1041,51 @@ impl DataObjectsTab {
             // 铁律 D 组第 16 条：加源的外部文件默认「按需」（`f_*` 视图读原文件）；
             // 想固定就给这条「归档为快照」——归档后资产自己进文件段（`asset:` 行），
             // 加源那份视图不删（用户可能还要按需读原文件，清场口在切项目时统一收）。
+            //
+            // 铁律 E 组第 24/25 条：导出与「保存到草稿」是同一条通道的两个目的地
+            // （全局 `results/` vs 项目 `scratchpad/`），只收 csv / parquet / json。
+            // 界面这一刀先给 csv，格式选择随后接。
+            let export_buttons: Vec<Button> = object
+                .sql_ref
+                .clone()
+                .filter(|_| object.can_analyze())
+                .map(|reference| {
+                    use crate::components::file_actions::ExportDest;
+                    let mut buttons = Vec::new();
+                    for (dest, id, label, tip) in [
+                        (
+                            ExportDest::Global,
+                            "export",
+                            "导出",
+                            "把这张表写成 CSV，落到全局 results/（系统资源管理那侧）",
+                        ),
+                        (
+                            ExportDest::Scratchpad,
+                            "scratchpad",
+                            "存草稿",
+                            "把这张表写成 CSV，落到本项目 scratchpad/（草稿箱那侧）",
+                        ),
+                    ] {
+                        let shared = self.shared.clone();
+                        let reference = reference.clone();
+                        buttons.push(
+                            Button::new(SharedString::from(format!(
+                                "data-object-{id}-{}",
+                                object.key
+                            )))
+                            .ghost()
+                            .label(label)
+                            .tooltip(tip)
+                            .on_click(move |_, _, cx| {
+                                crate::components::file_actions::export_table_as_csv(
+                                    &shared, &reference, dest, cx,
+                                );
+                            }),
+                        );
+                    }
+                    buttons
+                })
+                .unwrap_or_default();
             // 铁律 E 组的最小一条：把这一行的**实际引用名**带进编辑器。
             // 只有 `sql_ref` 有值的行才给（源库表 / 联邦源要带连接上下文，这里给不出来
             // 就不给按钮——宁可没有，也不给一个抄下去跑不通的 SQL）。
@@ -1271,6 +1316,7 @@ impl DataObjectsTab {
                     .children(pick_button)
                     .children(install_button)
                     .children(open_editor_button)
+                    .children(export_buttons)
                     .children(archive_button)
                     .children(persist_button)
                     .children(register_button)

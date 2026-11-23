@@ -18,6 +18,87 @@ use gpui_kit::App;
 use crate::panels::Shared;
 use crate::services::resource_jobs;
 
+/// 导出的目的地（铁律 E 组第 24 条：导出与「保存到草稿」是同一条通道两个目的地）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportDest {
+    /// 系统资源管理：全局目录下的 `results/`
+    Global,
+    /// 项目子目录 `{项目}/scratchpad/`
+    Scratchpad,
+}
+
+impl ExportDest {
+    pub fn verb(self) -> &'static str {
+        match self {
+            ExportDest::Global => "导出",
+            ExportDest::Scratchpad => "存到草稿",
+        }
+    }
+}
+
+/// 引用名（`"表名"`，见 `data_objects::sql_ident`）→ 裸表名。
+///
+/// 表名本身可能带引号（`odd"name`）：标识符里的 `""` 必须还原成 `"`，
+/// 否则导出的是另一张（不存在的）表。
+pub fn bare_table_name(sql_ref: &str) -> String {
+    let trimmed = sql_ref.trim();
+    let inner = trimmed
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .unwrap_or(trimmed);
+    inner.replace("\"\"", "\"")
+}
+
+/// 把一行对象（按它的 SQL 引用名）导出成 `.csv`，落到 `dest`。
+///
+/// 界面这一刀先只给 csv；**导出只收 csv / parquet / json**（铁律第 25 条），
+/// 引擎侧三种都支持（`engine::duckdb::export`），格式选择是下一步的事。
+pub fn export_table_as_csv(shared: &Shared, sql_ref: &str, dest: ExportDest, cx: &mut App) {
+    let table = bare_table_name(sql_ref);
+    if table.trim().is_empty() {
+        shared.say_error(format!("{}：目标表名为空", dest.verb()), cx);
+        return;
+    }
+    let dir = match dest {
+        ExportDest::Global => crate::services::query_export::default_export_dir(),
+        ExportDest::Scratchpad => {
+            let Some(root) = shared.project_root() else {
+                shared.say_error("存到草稿：当前没有打开的项目", cx);
+                return;
+            };
+            root.join("scratchpad")
+        }
+    };
+    if let Err(error) = std::fs::create_dir_all(&dir) {
+        shared.say_error(format!("{}：创建目录失败（{error}）", dest.verb()), cx);
+        return;
+    }
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // 文件名只留安全字符：表名里可能有引号 / 空格 / 中文
+    let stem: String = table
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let path = dir.join(format!("{stem}_{secs}.csv"));
+    let Some(path_text) = path.to_str() else {
+        shared.say_error(format!("{}：路径含非 UTF-8 字符", dest.verb()), cx);
+        return;
+    };
+    match engine::duckdb::export::export_table_global(&table, path_text) {
+        Ok(_) => shared.say(format!("{}：{}", dest.verb(), path.display()), cx),
+        Err(error) => shared.say_error(format!("{}：{error}", dest.verb()), cx),
+    }
+}
+
 /// 外部文件归档成快照时，副本在 `resources/` 下的落点与显示名。
 ///
 /// 单独摘成纯函数：这两件事是「归档成快照」的全部口径（放哪、叫什么），
@@ -80,7 +161,16 @@ pub fn archive_file_as_snapshot(shared: &Shared, path: &str, cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use super::snapshot_placement;
+    use super::{bare_table_name, snapshot_placement};
+
+    /// 引用名（`"表名"`）→ 裸表名：引号要脱掉，里面的 `""` 要还原（否则导出另一张表）
+    #[test]
+    fn quoted_references_come_back_as_table_names() {
+        assert_eq!(bare_table_name("\"tmp_q_orders\""), "tmp_q_orders");
+        assert_eq!(bare_table_name("\"odd\"\"name\""), "odd\"name");
+        // 没引号的（不该出现，但别 panic）
+        assert_eq!(bare_table_name("plain"), "plain");
+    }
 
     #[test]
     fn placement_keeps_the_file_name_and_uses_the_stem_as_label() {
