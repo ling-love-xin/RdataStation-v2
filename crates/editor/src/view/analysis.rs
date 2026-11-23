@@ -448,7 +448,8 @@ fn input_row(
                 .text_sm()
                 .text_color(theme.colors.muted_foreground)
                 .child(if request.password {
-                    // `getpass()`：只说清在等密码，不做回显遮挡（输入框暂无遮挡配置）
+                    // `getpass()`：只说清在等密码；输入框的遮挡由面板按 `password` 同步
+                    // （`InputState::set_masked`，见 `sync_notebook_input_masked`）
                     "内核等待密码输入".to_string()
                 } else if request.prompt.is_empty() {
                     "内核等待输入".to_string()

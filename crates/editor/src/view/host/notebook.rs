@@ -858,7 +858,7 @@ impl EditorHostPanel {
     /// [`crate::notebook::orchestrate::apply_events`]（纯函数，可无 GPUI 单测）。
     /// 本方法只做四件事：会话作废判定 → 调规则 → 回写单元 → 队列推进。
     /// 返回 `true` = 本次改动了可见状态（调用方据此决定是否重绘）。
-    fn drain_kernel_events(&mut self, _cx: &mut Context<Self>) -> bool {
+    fn drain_kernel_events(&mut self, cx: &mut Context<Self>) -> bool {
         // 【R1】进行中的执行从 controller 账本取（账本只由 controller 增删）
         let Some(run) = self.notebook_ctrl.current().cloned() else {
             return false;
@@ -873,13 +873,13 @@ impl EditorHostPanel {
         let Some(cell) = state.cell_mut(&run.cell_id) else {
             // 单元没了：执行作废（不再等回执）
             self.notebook_ctrl.finish();
-            self.nb_pending = None;
+            self.set_notebook_pending(None, cx);
             return true;
         };
         // 会话已切换：回执不落，执行作废
         if session_id != run.session_id {
             self.notebook_ctrl.abort_on_session_switch();
-            self.nb_pending = None;
+            self.set_notebook_pending(None, cx);
             cell.state = crate::cell::CellState::Idle;
             cell.outputs.clear();
             self.shared.set_notebook_cells(&self.document, state.cells);
@@ -903,24 +903,28 @@ impl EditorHostPanel {
             events.iter(),
         );
         // 【R3】等待态跟这次执行走：收到请求就画输入行（值回送走 `submit_notebook_input`）；
-        // 执行收口（内核已拿到 REPLY 或已失败）就撤掉
+        // 执行收口（内核已拿到 REPLY 或已失败）就撤掉。遮挡态由 `set_notebook_pending`
+        // 一并同步（`getpass()` 的请求 `password = true` → 输入框遮挡）
         if let Some((prompt, password)) = input_request {
-            self.nb_pending = Some(crate::view::host::NotebookInputRequest {
-                cell_id: run.cell_id.clone(),
-                kernel_id: run.kernel_id.clone(),
-                prompt,
-                password,
-            });
+            self.set_notebook_pending(
+                Some(crate::view::host::NotebookInputRequest {
+                    cell_id: run.cell_id.clone(),
+                    kernel_id: run.kernel_id.clone(),
+                    prompt,
+                    password,
+                }),
+                cx,
+            );
         }
         if applied.finished {
             self.notebook_ctrl.finish();
-            self.nb_pending = None;
+            self.set_notebook_pending(None, cx);
         }
         self.shared.set_notebook_cells(&self.document, state.cells);
         // 【2d-笔记级】全部运行队列推进：这个内核单元收口（ExecuteReply / Failed），
         // 接下一个（advance 内部守卫：队列空 / 还有单元在跑就不动）
         if applied.finished {
-            self.advance_notebook_queue(_cx);
+            self.advance_notebook_queue(cx);
         }
         true
     }
@@ -964,6 +968,21 @@ impl EditorHostPanel {
         }
     }
 
+    /// 【R3】登记 / 撤掉等待态，并同步输入行的遮挡态
+    ///
+    /// 两者的对应关系只写在这一个地方：等待态是密码请求 ⇔ 输入框遮挡。拆开写容易漏
+    /// 「换下一条请求时还原遮挡」——上一条 `getpass()` 之后的下一条普通 `input()` 会
+    /// 继续遮挡，而且只在运行时才看得出来。
+    pub(crate) fn set_notebook_pending(
+        &mut self,
+        request: Option<crate::view::host::NotebookInputRequest>,
+        cx: &mut Context<Self>,
+    ) {
+        let masked = request.as_ref().is_some_and(|request| request.password);
+        self.nb_pending = request;
+        self.sync_notebook_input_masked(masked, cx);
+    }
+
     /// 【R3】回送内核输入（输入行的「发送」/ 回车）
     ///
     /// 先清等待态再回送：一条 `input_request` 只接受一次 REPLY（内核正阻塞在那次
@@ -972,6 +991,8 @@ impl EditorHostPanel {
         let Some(request) = self.nb_pending.take() else {
             return;
         };
+        // 行撤了就还原遮挡：否则下一次普通请求要先经过一条「还是遮挡」的中间态
+        self.sync_notebook_input_masked(false, cx);
         match self.shared.kernel_input(&request.kernel_id, value) {
             Ok(()) => {
                 self.clear_notebook_input(cx);
@@ -986,7 +1007,7 @@ impl EditorHostPanel {
     /// `InputState::set_value` 要 `&mut Window`，而这发生在事件回调栈里——推迟到本次
     /// update 结束后，按当前聚焦窗口执行（与通知服务取窗口同一做法）。
     fn clear_notebook_input(&self, cx: &mut Context<Self>) {
-        let Some(window) = cx.active_window() else {
+        let Some(window) = Self::notebook_input_window(cx) else {
             return;
         };
         let input = self.nb_input.clone();
@@ -999,10 +1020,42 @@ impl EditorHostPanel {
         });
     }
 
+    /// 【R3】同步输入行的遮挡态（`getpass()` 一类请求要遮挡回显）
+    ///
+    /// `InputState::set_masked(masked, _window, cx)` 的 window 参数内部并不使用，只是签名
+    /// 要；而等待态是在 `drain_kernel_events` 里登记的，那里只有 `Context`。所以推迟到本次
+    /// update 结束后按当前聚焦窗口执行（与 [`Self::clear_notebook_input`] 同一做法）。
+    /// 没有窗口（无窗口的纯逻辑测试）就不动，状态由下次有窗口的路径补上。
+    fn sync_notebook_input_masked(&self, masked: bool, cx: &mut Context<Self>) {
+        // 读取口是 `presentation()`（`is_masked()` 在 `InputPresentation` 上，不在 state 上）
+        if self.nb_input.read(cx).presentation().is_masked() == masked {
+            return;
+        }
+        let Some(window) = Self::notebook_input_window(cx) else {
+            return;
+        };
+        let input = self.nb_input.clone();
+        cx.defer(move |cx| {
+            let _ = window.update(cx, move |_, window, cx| {
+                input.update(cx, |state, cx| {
+                    state.set_masked(masked, window, cx);
+                });
+            });
+        });
+    }
+
+    /// 输入行改动（清空 / 遮挡）要的窗口句柄：当前聚焦窗口，没有就取第一个
+    ///
+    /// Dock 里的面板不一定持有聚焦窗口（测试窗口、全后台时也没有），取第一个窗口与
+    /// 通知服务的做法一致（`crates/notification/src/service.rs:613-619`）。
+    fn notebook_input_window(cx: &Context<Self>) -> Option<AnyWindowHandle> {
+        cx.active_window().or_else(|| cx.windows().first().copied())
+    }
+
     /// 中断单元执行（沿执行队列的取消；没在跑 = 如实回绝）
     pub(crate) fn notebook_cancel_run(&mut self, cx: &mut Context<Self>) {
         // 【R3】中断后不再等输入：输入行撤掉（迟到的 input_request 也不会再画）
-        self.nb_pending = None;
+        self.set_notebook_pending(None, cx);
         match self.shared.cancel_for(&self.document) {
             Ok(()) => self.set_message(Some("已请求中断".to_string()), cx),
             Err(reason) => self.set_message(Some(reason), cx),
