@@ -676,6 +676,11 @@ impl EditorHostPanel {
             running_since: None,
             notebook_ctrl: crate::notebook::controller::NotebookController::default(),
             kernel_pump: RefCell::new(None),
+            // 【R3】内核输入行：实体在构造时建（render 里不 `cx.new`），提示串按请求替换
+            nb_input: cx.new(|cx| {
+                gpui_kit::component::input::InputState::new(window, cx)
+            }),
+            nb_pending: None,
             autocommit: true,
             tx_open: false,
             tx_since: None,

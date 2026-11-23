@@ -100,6 +100,9 @@ where
                 applied.failure = Some(reason.clone());
             }
             KernelEvent::Status(_) => {}
+            KernelEvent::InputRequest { .. } => {
+                // 输入请求不是「输出」：不写 cells，由视图层渲染输入行（R3）
+            }
         }
     }
 
@@ -261,6 +264,42 @@ mod tests {
 
         assert!(applied.finished);
         assert_eq!(c.state, CellState::Error);
+    }
+
+    /// 【R3】输入请求不是「输出」：只登记等待态（视图画输入行），不写 cells、不收口。
+    /// 若有人把 `InputRequest` 当普通事件落进 `outputs`（或拿它收口），这条必红。
+    #[test]
+    fn input_request_does_not_touch_outputs_or_finish() {
+        let mut c = cell();
+        c.mark_running();
+        let request = || {
+            env(
+                Some("e"),
+                KernelEvent::InputRequest {
+                    prompt: "name? ".to_string(),
+                    password: true,
+                },
+            )
+        };
+
+        // 单条请求：单元仍在运行，等 REPLY 走完才收口
+        let applied = apply_events(&mut c, ExecutionTag { msg_id: "e" }, &[request()]);
+        assert!(!applied.finished, "请求本身不是收口信号");
+        assert_eq!(c.state, CellState::Running, "内核阻塞在等输入");
+        assert!(c.outputs.is_empty(), "请求不产生输出块");
+
+        // 同一批里夹着正常输出与回执：请求既不吞别人，也不改收口语义
+        let events = vec![
+            request(),
+            stream(Some("e"), "stdout", "prompt printed"),
+            reply(Some("e"), "ok"),
+        ];
+        let applied = apply_events(&mut c, ExecutionTag { msg_id: "e" }, &events);
+        assert_eq!(applied.accepted, 3);
+        assert_eq!(c.outputs.len(), 1);
+        assert_eq!(c.outputs[0], Output::Text("prompt printed".to_string()));
+        assert!(applied.finished, "收口来自 ExecuteReply，与 InputRequest 无关");
+        assert_eq!(c.state, CellState::Done);
     }
 
     #[test]

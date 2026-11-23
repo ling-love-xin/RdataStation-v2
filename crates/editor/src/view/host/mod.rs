@@ -259,6 +259,20 @@ pub enum EditorHostEvent {
 
 impl EventEmitter<EditorHostEvent> for EditorHostPanel {}
 
+/// 【R3】内核正在等待用户输入（Python `input()` / `getpass()`）时的一条请求
+///
+/// 只是「该给哪个单元画输入行」的最小信息：回送走 `shared.kernel_input`。
+pub(crate) struct NotebookInputRequest {
+    /// 等输入的是这个单元（输入行画在它的卡片里）
+    pub(crate) cell_id: String,
+    /// 输入要回送给这个内核
+    pub(crate) kernel_id: String,
+    /// 内核给的提示串（`input("提示> ")`）
+    pub(crate) prompt: String,
+    /// `getpass()` 请求：内容不外显（渲染时可以用遮挡样式）
+    pub(crate) password: bool,
+}
+
 pub struct EditorHostPanel {
     pub(crate) shared: EditorShared,
     pub(crate) document: DocumentId,
@@ -434,6 +448,10 @@ pub struct EditorHostPanel {
     pub(crate) notebook_ctrl: crate::notebook::controller::NotebookController,
     /// 【#17】内核事件轮询任务句柄（空闲即退出）
     pub(crate) kernel_pump: RefCell<Option<Task<()>>>,
+    /// 【R3】内核输入行实体（面板创建时建一次；render 纯读，不在这里 `cx.new`）
+    pub(crate) nb_input: Entity<gpui_kit::component::input::InputState>,
+    /// 【R3】当前等待输入的内核请求（`None` = 没有等待；收口 / 换会话即清）
+    pub(crate) nb_pending: Option<NotebookInputRequest>,
     /// 内容回写订阅：句柄即生命周期（释放即取消）
     pub(crate) _editor_sub: Option<Subscription>,
     /// 网格事件订阅（行选中 → 状态行的“已选第 N 行”要跟着变）

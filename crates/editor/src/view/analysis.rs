@@ -24,7 +24,7 @@ use gpui_kit::base::text::TextView;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
-use gpui_kit::component::input::{Editor, EditorState};
+use gpui_kit::component::input::{Editor, EditorState, Input, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow};
@@ -57,7 +57,9 @@ pub type PanelEntity = Entity<EditorHostPanel>;
 /// `connections` 是连接列表的内存快照（右下角执行源选择器的数据源；渲染路径可调）
 /// `kernels` 是内核注册表快照（执行源「内核」档的菜单数据源；渲染路径可调）
 /// `md_previews` 是面板持有的「Markdown 单元预览开」集合（键 = cell_id；render 纯读）
-pub fn render(
+/// `pending_input` 是内核正在等待的那条输入请求（`None` = 没有等待；见「内核输入行」）
+/// `input` 是面板建好的输入框实体（render 只引用，不创建、不 read 面板）
+pub(crate) fn render(
     cx: &App,
     state: &NotebookState,
     document: &DocumentId,
@@ -66,6 +68,8 @@ pub fn render(
     connections: &[ConnectionOption],
     kernels: &[rds_kernel::KernelSpec],
     md_previews: &std::collections::HashSet<String>,
+    pending_input: Option<&crate::view::host::NotebookInputRequest>,
+    input: &Entity<InputState>,
 ) -> impl IntoElement {
     let theme = cx.theme();
     if state.cells.is_empty() {
@@ -88,6 +92,8 @@ pub fn render(
             connections,
             kernels,
             md_previews,
+            pending_input,
+            input,
         ));
     }
     // 底部「＋ 插入单元」（列表尾追加；空态另有引导卡）
@@ -262,6 +268,8 @@ fn cell_card(
     connections: &[ConnectionOption],
     kernels: &[rds_kernel::KernelSpec],
     md_previews: &std::collections::HashSet<String>,
+    pending_input: Option<&crate::view::host::NotebookInputRequest>,
+    input: &Entity<InputState>,
 ) -> impl IntoElement {
     let badge = badge(theme, cell.language);
     // Markdown 单元没有 ▶ 运行（不可执行），那个位置换成「预览 / 编辑」切换；
@@ -391,6 +399,12 @@ fn cell_card(
         .when(!cell.outputs.is_empty(), |card| {
             card.child(output_section(theme, cell))
         })
+        // 【R3】内核输入行：只画在「内核正在等这个单元输入」的那张卡上。
+        // 没有这一行，`allow_stdin=true` 会让 `input()` 永远停在「运行中…」。
+        .when_some(
+            pending_input.filter(|p| p.cell_id == cell.id),
+            |card, request| card.child(input_row(theme, request, input, entity)),
+        )
         // 右下角指示器（对齐 VS Code Jupyter：语言 + 执行源，可点切换）
         .child(cell_footer(
             theme,
@@ -400,6 +414,58 @@ fn cell_card(
             connections,
             kernels,
         ))
+}
+
+/// 【R3】内核输入行：提示串 + 输入框 + 「发送」
+///
+/// Python 的 `input()` / `getpass()` 在**内核里阻塞**等 REPLY：视图不给回送入口，
+/// 单元就会永远停在「运行中…」。发送动作转发给面板方法
+/// `submit_notebook_input`（由它把值写进 stdin 通道并清掉等待态）。
+fn input_row(
+    theme: &gpui_kit::component::Theme,
+    request: &crate::view::host::NotebookInputRequest,
+    input: &Entity<InputState>,
+    entity: &PanelEntity,
+) -> impl IntoElement {
+    let send_entity = entity.clone();
+    let send_input = input.clone();
+    div()
+        .id("editor-nb-input-row")
+        .test_support()
+        .w_full()
+        .my_2()
+        .px_3()
+        .py_2()
+        .gap_2()
+        .h_flex()
+        .items_center()
+        .rounded_md()
+        .border_1()
+        .border_color(theme.colors.border)
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_sm()
+                .text_color(theme.colors.muted_foreground)
+                .child(if request.password {
+                    // `getpass()`：只说清在等密码，不做回显遮挡（输入框暂无遮挡配置）
+                    "内核等待密码输入".to_string()
+                } else if request.prompt.is_empty() {
+                    "内核等待输入".to_string()
+                } else {
+                    format!("内核等待输入：{}", request.prompt)
+                }),
+        )
+        .child(div().flex_1().min_w_0().child(Input::new(input)))
+        .child(
+            Button::new("editor-nb-input-send")
+                .small()
+                .label("发送")
+                .on_click(move |_, _window, cx| {
+                    let value = send_input.read(cx).value().to_string();
+                    send_entity.update(cx, |this, cx| this.submit_notebook_input(value, cx));
+                }),
+        )
 }
 
 /// 右下角指示器：语言标签 + 执行源（连接 / 内核）

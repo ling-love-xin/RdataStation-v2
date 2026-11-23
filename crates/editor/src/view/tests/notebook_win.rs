@@ -796,6 +796,8 @@ fn python_cell_runs_via_real_kernel_and_dispatches_media(cx: &mut TestAppContext
                 }
                 rds_kernel::KernelEvent::Failed(reason) => panic!("内核通道失败：{reason}"),
                 rds_kernel::KernelEvent::Status(_) => {}
+                // `1 + 1` 不请求输入：真收到说明内核行为异常，但这条用例只看输出与回执
+                rds_kernel::KernelEvent::InputRequest { .. } => {}
             }
         }
         if status.is_some() {

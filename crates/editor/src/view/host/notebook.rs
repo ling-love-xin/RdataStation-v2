@@ -873,11 +873,13 @@ impl EditorHostPanel {
         let Some(cell) = state.cell_mut(&run.cell_id) else {
             // 单元没了：执行作废（不再等回执）
             self.notebook_ctrl.finish();
+            self.nb_pending = None;
             return true;
         };
         // 会话已切换：回执不落，执行作废
         if session_id != run.session_id {
             self.notebook_ctrl.abort_on_session_switch();
+            self.nb_pending = None;
             cell.state = crate::cell::CellState::Idle;
             cell.outputs.clear();
             self.shared.set_notebook_cells(&self.document, state.cells);
@@ -885,6 +887,25 @@ impl EditorHostPanel {
         }
         // 【R6】业务规则（归属过滤 / stderr 前缀 / mime 分发 / 收口 / 失败原因）
         // 全部在 notebook/orchestrate.rs 的纯函数里：可在无窗口环境单测
+        // 【R3】输入请求先摘出来：它不是「输出」，不写 cells，由视图画输入行。
+        // 归属按与 apply_events 同一判据（verdict）——上一单元迟到的请求不算。
+        let input_request = events.iter().find_map(|envelope| {
+            match (
+                &envelope.event,
+                crate::notebook::orchestrate::verdict(
+                    envelope,
+                    crate::notebook::orchestrate::ExecutionTag {
+                        msg_id: &run.msg_id,
+                    },
+                ),
+            ) {
+                (
+                    rds_kernel::KernelEvent::InputRequest { prompt, password },
+                    crate::notebook::orchestrate::Verdict::Accept,
+                ) => Some((prompt.clone(), *password)),
+                _ => None,
+            }
+        });
         let applied = crate::notebook::orchestrate::apply_events(
             cell,
             crate::notebook::orchestrate::ExecutionTag {
@@ -892,8 +913,19 @@ impl EditorHostPanel {
             },
             events.iter(),
         );
+        // 【R3】等待态跟这次执行走：收到请求就画输入行（值回送走 `submit_notebook_input`）；
+        // 执行收口（内核已拿到 REPLY 或已失败）就撤掉
+        if let Some((prompt, password)) = input_request {
+            self.nb_pending = Some(crate::view::host::NotebookInputRequest {
+                cell_id: run.cell_id.clone(),
+                kernel_id: run.kernel_id.clone(),
+                prompt,
+                password,
+            });
+        }
         if applied.finished {
             self.notebook_ctrl.finish();
+            self.nb_pending = None;
         }
         self.shared.set_notebook_cells(&self.document, state.cells);
         // 【2d-笔记级】全部运行队列推进：这个内核单元收口（ExecuteReply / Failed），
@@ -928,8 +960,24 @@ impl EditorHostPanel {
         })
     }
 
+    /// 【R3】回送内核输入（输入行的「发送」）
+    ///
+    /// 先清等待态再回送：一条 `input_request` 只接受一次 REPLY（内核正阻塞在那次
+    /// 请求上），重复发送会串到下一个请求。回送失败（内核已停）如实报原因。
+    pub(crate) fn submit_notebook_input(&mut self, value: String, cx: &mut Context<Self>) {
+        let Some(request) = self.nb_pending.take() else {
+            return;
+        };
+        match self.shared.kernel_input(&request.kernel_id, value) {
+            Ok(()) => cx.notify(),
+            Err(reason) => self.set_message(Some(reason), cx),
+        }
+    }
+
     /// 中断单元执行（沿执行队列的取消；没在跑 = 如实回绝）
     pub(crate) fn notebook_cancel_run(&mut self, cx: &mut Context<Self>) {
+        // 【R3】中断后不再等输入：输入行撤掉（迟到的 input_request 也不会再画）
+        self.nb_pending = None;
         match self.shared.cancel_for(&self.document) {
             Ok(()) => self.set_message(Some("已请求中断".to_string()), cx),
             Err(reason) => self.set_message(Some(reason), cx),

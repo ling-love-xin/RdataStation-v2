@@ -103,6 +103,9 @@ impl EditorHostPanel {
             &connections,
             &kernels,
             &self.cell_markdown_preview,
+            // 【R3】内核输入行：等待态 + 输入框实体（render 只引用，不创建）
+            self.nb_pending.as_ref(),
+            &self.nb_input,
         )
         .into_any_element()
     }

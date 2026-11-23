@@ -26,15 +26,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result, bail};
 use jupyter_protocol::messaging::{
-    ExecuteRequest, InterruptRequest, JupyterMessage, JupyterMessageContent, ReplyStatus,
-    ShutdownRequest,
+    ExecuteRequest, Header, InputReply, InterruptRequest, JupyterMessage, JupyterMessageContent,
+    ReplyStatus, ShutdownRequest,
 };
 use jupyter_protocol::{ConnectionInfo, ExecutionState, Media, Transport};
 use jupyter_zmq_client::{
-    ClientControlConnection, ClientIoPubConnection, ClientShellConnection,
-    create_client_control_connection, create_client_iopub_connection,
-    create_client_shell_connection_with_identity, peek_ports, peer_identity_for_session,
-    wait_for_iopub_welcome,
+    ClientControlConnection, ClientIoPubConnection, ClientShellConnection, DealerRecvConnection,
+    DealerSendConnection, create_client_control_connection, create_client_iopub_connection,
+    create_client_shell_connection_with_identity, create_client_stdin_connection_with_identity,
+    peek_ports, peer_identity_for_session, wait_for_iopub_welcome,
 };
 use tokio::sync::mpsc;
 
@@ -86,6 +86,10 @@ pub enum KernelEvent {
     },
     /// 通道层失败（连接断开 / 协议错 / 内核崩溃）；此后会话不可用
     Failed(String),
+    /// 内核请求用户输入（stdin 通道；Python `input()` / `getpass()`）
+    ///
+    /// 消费方必须用 [`KernelSession::input`] 回送值，否则内核一直阻塞。
+    InputRequest { prompt: String, password: bool },
 }
 
 /// 一条事件 + 它所属的 `execute_request` 的 msg_id。
@@ -120,6 +124,8 @@ enum Command {
     /// `msg_id` 由本层生成并写进 `execute_request` 的 header，供事件归属对账
     Execute { code: String, msg_id: String },
     Interrupt,
+    /// 把用户输入回给内核（回应 `InputRequest`；由 stdin 通道写出）
+    Input { value: String },
     Shutdown,
 }
 
@@ -229,6 +235,13 @@ impl KernelSession {
         let _ = self.commands.send(Command::Interrupt);
     }
 
+    /// 回送用户输入（回应 [`KernelEvent::InputRequest`]；值经 stdin 通道写出）
+    ///
+    /// 非阻塞：只入命令队列，真正写 socket 在内核线程里。
+    pub fn input(&self, value: String) {
+        let _ = self.commands.send(Command::Input { value });
+    }
+
     /// 请求关闭内核（线程发 ShutdownRequest + kill 兜底）
     pub fn shutdown(&self) {
         let _ = self.commands.send(Command::Shutdown);
@@ -329,13 +342,29 @@ async fn run_kernel_launch(
             .await
             .context("连接 iopub 失败")?;
         let shell_identity = peer_identity_for_session(&session_id)?;
-        let shell =
-            create_client_shell_connection_with_identity(&info, &session_id, shell_identity)
-                .await
-                .context("连接 shell 失败")?;
+        let shell = create_client_shell_connection_with_identity(
+            &info,
+            &session_id,
+            shell_identity.clone(),
+        )
+        .await
+        .context("连接 shell 失败")?;
         let control = create_client_control_connection(&info, &session_id)
             .await
             .context("连接 control 失败")?;
+        // stdin：必须与 shell 共用同一个 PeerIdentity，内核才把 input_request 路由到本客户端。
+        // 拆成读写两半（读在 select 里、写在命令处理里，避免同一 socket 双重借用）。
+        // 连接失败不致命：降级为「不支持 input()」，execute 的 allow_stdin 会置 false。
+        let stdin = match create_client_stdin_connection_with_identity(
+            &info,
+            &session_id,
+            shell_identity,
+        )
+        .await
+        {
+            Ok(conn) => Some(conn.split()),
+            Err(_) => None,
+        };
 
         // 5. 等 iopub 握手（内核活着且订阅生效）；超时即判定启动失败
         match tokio::time::timeout(
@@ -357,12 +386,12 @@ async fn run_kernel_launch(
             }
         }
 
-        Ok::<_, anyhow::Error>((info, conn_file, child, iopub, shell, control))
+        Ok::<_, anyhow::Error>((info, conn_file, child, iopub, shell, control, stdin))
     }
     .await;
 
     match launched {
-        Ok((_info, conn_file, child, iopub, shell, control)) => {
+        Ok((_info, conn_file, child, iopub, shell, control, stdin)) => {
             let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<Command>();
             let (ev_tx, ev_rx) = mpsc::unbounded_channel::<KernelEventEnvelope>();
             let sink = EventSink::new(ev_tx, wake);
@@ -376,7 +405,7 @@ async fn run_kernel_launch(
             }));
             // 事件循环直接跑在 launch 的 tokio runtime 上（runtime 存活期 = 会话存活期；
             // 若这里提前返回，runtime drop 会把未完成任务 abort 掉，事件通道随之断开）
-            event_loop(cmd_rx, &sink, iopub, shell, control, child, conn_file).await;
+            event_loop(cmd_rx, &sink, iopub, shell, control, stdin, child, conn_file).await;
             Ok(())
         }
         Err(e) => {
@@ -386,17 +415,27 @@ async fn run_kernel_launch(
     }
 }
 
-/// 事件循环：命令（execute/interrupt/shutdown）× iopub × shell 三路 select。
+/// 事件循环：命令（execute/interrupt/input/shutdown）× iopub × shell × stdin 四路 select。
 /// 退出条件：收到 Shutdown / 任一路通道错误。
+#[allow(clippy::too_many_arguments)]
 async fn event_loop(
     mut cmd_rx: mpsc::UnboundedReceiver<Command>,
     sink: &EventSink,
     mut iopub: ClientIoPubConnection,
     mut shell: ClientShellConnection,
     mut control: ClientControlConnection,
+    stdin: Option<(DealerSendConnection, DealerRecvConnection)>,
     mut child: Child,
     conn_file: PathBuf,
 ) {
+    // stdin 拆两半：读半边进 select，写半边留给 Command::Input（同一 socket 不能双重借用）
+    let (mut stdin_send, mut stdin_recv) = match stdin {
+        Some((send, recv)) => (Some(send), Some(recv)),
+        None => (None, None),
+    };
+    // 最近一次 input_request 的 header：input_reply 的 parent_header 指回它
+    let mut pending_input: Option<Header> = None;
+    let stdin_enabled = stdin_recv.is_some();
     loop {
         tokio::select! {
             // 命令通道
@@ -411,7 +450,8 @@ async fn event_loop(
                             silent: false,
                             store_history: true,
                             user_expressions: None,
-                            allow_stdin: false,
+                            // 没有 stdin 通道时如实声明，避免内核等一个永不到来的输入
+                            allow_stdin: stdin_enabled,
                             stop_on_error: true,
                         };
                         let mut msg: JupyterMessage = req.into();
@@ -432,6 +472,29 @@ async fn event_loop(
                                 KernelEvent::Failed(format!("发送中断请求失败：{e}")),
                             ));
                             break;
+                        }
+                    }
+                    Command::Input { value } => {
+                        if let Some(conn) = stdin_send.as_mut() {
+                            let mut msg: JupyterMessage = InputReply {
+                                value,
+                                status: ReplyStatus::Ok,
+                                error: None,
+                            }
+                            .into();
+                            // input_reply 的 parent_header 必须指回 input_request
+                            msg.parent_header = pending_input.take();
+                            if let Err(e) = conn.send(msg).await {
+                                sink.send(KernelEventEnvelope::session(KernelEvent::Stream {
+                                    name: "stderr".to_string(),
+                                    text: format!("发送输入失败：{e}"),
+                                }));
+                            }
+                        } else {
+                            sink.send(KernelEventEnvelope::session(KernelEvent::Stream {
+                                name: "stderr".to_string(),
+                                text: "该内核未启用 stdin：输入无法送达".to_string(),
+                            }));
                         }
                     }
                     Command::Shutdown => {
@@ -537,6 +600,32 @@ async fn event_loop(
                     }
                 }
             }
+            // stdin：内核请求输入（Python input() / getpass()）
+            msg = read_stdin(&mut stdin_recv) => {
+                match msg {
+                    Ok(msg) => {
+                        let parent = msg.parent_header.as_ref().map(|h| h.msg_id.clone());
+                        if let JupyterMessageContent::InputRequest(r) = msg.content {
+                            pending_input = Some(msg.header.clone());
+                            sink.send(KernelEventEnvelope::for_execution(
+                                parent,
+                                KernelEvent::InputRequest {
+                                    prompt: r.prompt,
+                                    password: r.password,
+                                },
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        // 读失败只降级 stdin（不结束会话）：后续 input() 由内核侧自行报错
+                        stdin_recv = None;
+                        sink.send(KernelEventEnvelope::session(KernelEvent::Stream {
+                            name: "stderr".to_string(),
+                            text: format!("stdin 通道断开：{e}"),
+                        }));
+                    }
+                }
+            }
         }
     }
 
@@ -547,6 +636,16 @@ async fn event_loop(
     let _ = child.kill();
     let _ = child.wait();
     let _ = std::fs::remove_file(&conn_file);
+}
+
+/// 读 stdin 通道；无 stdin（或已降级）时该分支永不就绪（select 里的「挂空」）
+async fn read_stdin(
+    stdin: &mut Option<DealerRecvConnection>,
+) -> jupyter_zmq_client::Result<JupyterMessage> {
+    match stdin.as_mut() {
+        Some(conn) => conn.read().await,
+        None => std::future::pending::<jupyter_zmq_client::Result<JupyterMessage>>().await,
+    }
 }
 
 /// 生成会话 id（内核消息 header 的 session 字段，唯一即可）
