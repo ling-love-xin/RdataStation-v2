@@ -1,5 +1,6 @@
 //! 面板动作的内部助手：待办提示、项目根、草稿扫描、分组与别名解析。
 
+use shared::i18n::tr;
 use super::*;
 
 impl ResourceHost {
@@ -104,7 +105,7 @@ impl ResourceHost {
                     return None;
                 };
                 let Some(rel) = detail.payload_rel_path.as_deref() else {
-                    self.notice("资产库：这条存档没有登记本体路径（旧行）", cx);
+                    self.notice(tr("资产库：这条存档没有登记本体路径（旧行）"), cx);
                     return None;
                 };
                 match PayloadStore::new(root).resolve(rel) {
@@ -117,7 +118,7 @@ impl ResourceHost {
             }
             PayloadMode::Reference => {
                 let Some(source) = detail.source_path.as_deref() else {
-                    self.notice("资产库：引用型存档没有登记源路径（数据异常）", cx);
+                    self.notice(tr("资产库：引用型存档没有登记源路径（数据异常）"), cx);
                     return None;
                 };
                 // resolve_source 不读项目根（源在模块管辖目录之外）；空 root 只为满足构造签名。

@@ -79,7 +79,7 @@ pub fn open_tag_dialog(
                     .py_2()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("还没有任何标签——在下面输入一个名字即可新建"),
+                    .child(tr("还没有任何标签——在下面输入一个名字即可新建")),
             );
         }
         for option in options.iter() {

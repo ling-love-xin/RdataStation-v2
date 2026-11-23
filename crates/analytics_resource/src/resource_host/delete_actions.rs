@@ -1,5 +1,6 @@
 //! 删除与索引类动作：回收站、撤销、重建索引、打开资源目录。
 
+use shared::i18n::tr;
 use super::*;
 
 pub(super) fn request_delete(host: &ResourceHost, targets: &[DeleteTarget], window: &mut Window, cx: &mut App) {
@@ -8,7 +9,7 @@ pub(super) fn request_delete(host: &ResourceHost, targets: &[DeleteTarget], wind
             return;
         };
         if host.read_only() {
-            host.notice("资产库：项目为只读模式，不能移入回收站", cx);
+            host.notice(tr("资产库：项目为只读模式，不能移入回收站"), cx);
             return;
         }
         if targets.is_empty() {
@@ -90,7 +91,7 @@ pub(super) fn request_undo_archive(host: &ResourceHost, undo: &ArchiveUndo, _win
             return;
         };
         if host.read_only() {
-            host.notice("资产库：项目为只读模式，不能撤销", cx);
+            host.notice(tr("资产库：项目为只读模式，不能撤销"), cx);
             return;
         }
         // 凭据原样交给工作线程（面板只持有它，不认识服务层）。

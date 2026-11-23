@@ -126,7 +126,7 @@ pub(crate) fn name_link(detail: &ArchiveDetail, actions: Option<&DetailActions>,
             .debug_selector(|| "archive-detail-rename".to_string())
             .label(detail.name.clone())
             .text_color(foreground)
-            .tooltip("重命名显示名（与 `F2` 同一条路；文件名与路径不变）")
+            .tooltip(tr("重命名显示名（与 `F2` 同一条路；文件名与路径不变）"))
             .on_click(move |_, window, cx| host.request_rename(&id, window, cx)),
     )
 }
@@ -156,7 +156,7 @@ pub(crate) fn alias_line(
             .debug_selector(|| "archive-detail-alias".to_string())
             .label(label)
             .text_color(muted)
-            .tooltip("编辑别名（留空 = 清除）")
+            .tooltip(tr("编辑别名（留空 = 清除）"))
             .on_click(move |_, window, cx| host.request_edit_alias(&id, window, cx)),
     )
 }

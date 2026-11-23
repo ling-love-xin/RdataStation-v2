@@ -91,7 +91,7 @@ pub(super) fn render_body_sections(
                             .xsmall()
                             .label(tr("复制"))
                             .text_color(muted)
-                            .tooltip("复制表名（拿去写 SQL 时不用回列表）")
+                            .tooltip(tr("复制表名（拿去写 SQL 时不用回列表）"))
                             .on_click(move |_, _window, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(table.clone()))
                             }),
@@ -132,7 +132,7 @@ pub(super) fn render_body_sections(
                             .xsmall()
                             .label(tr("显示"))
                             .text_color(muted)
-                            .tooltip("在系统文件管理器里定位本体")
+                            .tooltip(tr("在系统文件管理器里定位本体"))
                             .on_click(move |_, window, cx| {
                                 host.request_reveal(&detail, window, cx)
                             }),
@@ -525,7 +525,7 @@ fn render_definition_block(sql: &str, cx: &App) -> Div {
                         .xsmall()
                         .label(tr("复制"))
                         .text_color(muted)
-                        .tooltip("复制完整定义（面板里只摆得下前几行）")
+                        .tooltip(tr("复制完整定义（面板里只摆得下前几行）"))
                         .on_click(move |_, _window, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()))
                         }),

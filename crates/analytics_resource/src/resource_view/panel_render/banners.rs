@@ -69,7 +69,7 @@ impl ResourcesPanel {
                     .debug_selector(|| "archive-undo".to_string())
                     .label(tr("撤销"))
                     .text_color(primary)
-                    .tooltip("把这条存档退回归档前的位置")
+                    .tooltip(tr("把这条存档退回归档前的位置"))
                     .on_click(move |_, window, cx| host.request_undo_archive(&token, window, cx)),
             )
     }

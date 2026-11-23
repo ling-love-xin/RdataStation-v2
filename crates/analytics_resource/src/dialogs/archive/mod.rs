@@ -198,7 +198,7 @@ pub fn build_inputs(
     let assertion_definition =
         cx.new(|cx| InputState::new(window, cx).placeholder(tr("口径定义（选填）")));
     let assertion_window =
-        cx.new(|cx| InputState::new(window, cx).placeholder("业务时间窗，如 2026Q3"));
+        cx.new(|cx| InputState::new(window, cx).placeholder(tr("业务时间窗，如 2026Q3")));
     let assertion_conclusion =
         cx.new(|cx| InputState::new(window, cx).placeholder(tr("一句话结论（选填）")));
     // 取回后再归档：把上一次的口径带回来，用户只需改变化的那几项。

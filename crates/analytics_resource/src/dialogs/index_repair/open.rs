@@ -70,7 +70,7 @@ pub fn open_index_repair_dialog_with(
                     .py_2()
                     .text_xs()
                     .text_color(theme.colors.success)
-                    .child("索引与本体一致：没有需要处理的问题"),
+                    .child(tr("索引与本体一致：没有需要处理的问题")),
             );
         } else {
             let mut groups = div().v_flex().w_full().gap_2();

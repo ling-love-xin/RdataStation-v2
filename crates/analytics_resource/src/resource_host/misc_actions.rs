@@ -1,5 +1,6 @@
 //! 排序/折叠记忆、回收站入口、标签编辑与刷新。
 
+use shared::i18n::tr;
 use super::*;
 
 pub(super) fn remember_sort(host: &ResourceHost, field: SortField, _order: SortOrder, cx: &mut App) {
@@ -65,7 +66,7 @@ pub(super) fn request_remove_tag(host: &ResourceHost, detail: &ArchiveDetail, ta
             return;
         };
         if host.read_only() {
-            host.notice("资产库：项目为只读模式，不能改标签", cx);
+            host.notice(tr("资产库：项目为只读模式，不能改标签"), cx);
             return;
         }
         // 作业在侧栏跑（回执与刷新同一条路）：去标签会改快照里的 chips 与筛选维，

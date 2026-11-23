@@ -85,7 +85,7 @@ pub(super) fn render_banners(
                 .child(
                     div()
                         .text_xs()
-                        .child("源已变更，快照失效：当前源文件与归档时的指纹不一致。"),
+                        .child(tr("源已变更，快照失效：当前源文件与归档时的指纹不一致。")),
                 )
                 .child(
                     div().h_flex().w_full().gap_2().child(

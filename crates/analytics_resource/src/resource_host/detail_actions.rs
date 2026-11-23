@@ -1,5 +1,6 @@
 //! 详情动作：打开、统计、取回、升级/分发、指纹核对、版本历史。
 
+use shared::i18n::tr;
 use super::*;
 
 /// 表型取数的唯一入口（双击打开与「查看统计」共用）。
@@ -10,7 +11,7 @@ use super::*;
 /// 项目分析库，表就在那里）。
 fn open_analytics_table(host: &ResourceHost, detail: &ArchiveDetail, cx: &mut App) {
     let Some(table) = detail.analytics_table.as_deref() else {
-        host.notice("资产库：这条表型资产没有登记表名，无法取样", cx);
+        host.notice(tr("资产库：这条表型资产没有登记表名，无法取样"), cx);
         return;
     };
     // 全局行的本体在**全局**分析库（另一个文件）：只能经短命会话挂 `rds_global`
@@ -127,7 +128,7 @@ pub(super) fn request_view_stats(host: &ResourceHost, detail: &ArchiveDetail, _w
                     detail.source_connection_id.as_deref(),
                     detail.source_table.as_deref(),
                 ) else {
-                    host.notice("资产库：这条引用没有来源连接或表名，无法取样", cx);
+                    host.notice(tr("资产库：这条引用没有来源连接或表名，无法取样"), cx);
                     return;
                 };
                 // 归档侧只存了一个 `schema.table` 字符串（见 `ArchiveBinding`），
@@ -151,7 +152,7 @@ pub(super) fn request_checkout(host: &ResourceHost, detail: &ArchiveDetail, wind
             return;
         };
         if host.read_only() {
-            host.notice("资产库：项目为只读模式，不能取回", cx);
+            host.notice(tr("资产库：项目为只读模式，不能取回"), cx);
             return;
         }
         // 目标目录 = 草稿箱模块目录（取回产出的是一份**草稿**；目录名取自 crate 常量，
@@ -190,7 +191,7 @@ pub(super) fn request_promote_to_global(host: &ResourceHost, detail: &ArchiveDet
             return;
         };
         if host.read_only() {
-            host.notice("资产库：项目为只读模式，不能升级到全局", cx);
+            host.notice(tr("资产库：项目为只读模式，不能升级到全局"), cx);
             return;
         }
         // 两种本体：文件（`resources/<rel>`）与分析库里的一张表（表型存档）。
@@ -274,7 +275,7 @@ pub(super) fn request_distribute_from_global(host: &ResourceHost, name: &str, _w
             return;
         };
         if host.read_only() {
-            host.notice("资产库：项目为只读模式，不能从全局分发", cx);
+            host.notice(tr("资产库：项目为只读模式，不能从全局分发"), cx);
             return;
         }
         // 分发 = 跨项目唯一法定路径（全局 → 当前项目）；目标重名由工作线程拦下回执。
@@ -294,11 +295,11 @@ pub(super) fn accept_reference_current(host: &ResourceHost, detail: &ArchiveDeta
             return;
         };
         if host.read_only() {
-            host.notice("资产库：项目为只读模式，不能接受当前内容", cx);
+            host.notice(tr("资产库：项目为只读模式，不能接受当前内容"), cx);
             return;
         }
         let Some(source) = detail.source_path.as_deref() else {
-            host.notice("资产库：引用型存档没有登记源路径（数据异常）", cx);
+            host.notice(tr("资产库：引用型存档没有登记源路径（数据异常）"), cx);
             return;
         };
         // 接受当前内容 = 以当前源绝对路径为基准再归档（reference 分支：旧源留版本副本，
@@ -325,7 +326,7 @@ pub(super) fn accept_reference_current(host: &ResourceHost, detail: &ArchiveDeta
         let keep_versions = host.backend.keep_versions(cx);
         resource_jobs::enqueue_archive(root, host.read_only(), request, keep_versions, false, None);
         host.backend.refresh_resources(cx);
-        host.notice("资产库：正在接受当前内容并生成新版本…", cx);
+        host.notice(tr("资产库：正在接受当前内容并生成新版本…"), cx);
 }
 
 pub(super) fn request_version_history(host: &ResourceHost, resource_id: &str, _window: &mut Window, cx: &mut App) {
@@ -336,5 +337,5 @@ pub(super) fn request_version_history(host: &ResourceHost, resource_id: &str, _w
             return;
         };
         resource_jobs::enqueue_versions(root, resource_id.to_string());
-        host.notice("资产库：正在读取版本历史…", cx);
+        host.notice(tr("资产库：正在读取版本历史…"), cx);
 }

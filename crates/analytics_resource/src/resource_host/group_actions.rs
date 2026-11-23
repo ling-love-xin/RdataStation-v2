@@ -9,7 +9,7 @@ pub(super) fn request_create_group(host: &ResourceHost, window: &mut Window, cx:
             return;
         };
         if host.read_only() {
-            host.notice("资产库：项目为只读模式，不能改分组", cx);
+            host.notice(tr("资产库：项目为只读模式，不能改分组"), cx);
             return;
         }
         let backend = host.backend.clone();
@@ -44,7 +44,7 @@ pub(super) fn request_rename_group(host: &ResourceHost, folder_id: &str, window:
             return;
         };
         if host.read_only() {
-            host.notice("资产库：项目为只读模式，不能改分组", cx);
+            host.notice(tr("资产库：项目为只读模式，不能改分组"), cx);
             return;
         }
         // 当前名字从面板快照取（分组字典就在里面）；取不到就空着让用户自己填。
@@ -87,7 +87,7 @@ pub(super) fn request_rename(host: &ResourceHost, resource_id: &str, window: &mu
             return;
         };
         if host.read_only() {
-            host.notice("资产库：项目为只读模式，不能改显示名", cx);
+            host.notice(tr("资产库：项目为只读模式，不能改显示名"), cx);
             return;
         }
         // 当前名字从面板快照取（与 `request_rename_group` 同一处取法）：取不到就让输入框空着。
@@ -133,7 +133,7 @@ pub(super) fn request_edit_alias(host: &ResourceHost, resource_id: &str, window:
             return;
         };
         if host.read_only() {
-            host.notice("资产库：项目为只读模式，不能改别名", cx);
+            host.notice(tr("资产库：项目为只读模式，不能改别名"), cx);
             return;
         }
         // 当前别名从**详情**取（头部就展示它）；取不到（面板还没收到这条详情）就当空的。
@@ -178,7 +178,7 @@ pub(super) fn request_delete_group(host: &ResourceHost, folder_id: &str, window:
             return;
         };
         if host.read_only() {
-            host.notice("资产库：项目为只读模式，不能改分组", cx);
+            host.notice(tr("资产库：项目为只读模式，不能改分组"), cx);
             return;
         }
         let name = host

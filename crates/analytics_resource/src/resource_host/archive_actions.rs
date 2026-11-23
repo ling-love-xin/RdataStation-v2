@@ -1,5 +1,6 @@
 //! 归档请求：草稿箱批量归档、草稿行点名归档与系统文件归档。
 
+use shared::i18n::tr;
 use super::*;
 use crate::dialogs::archive::ArchiveDialogResult;
 
@@ -9,14 +10,14 @@ pub(super) fn request_archive_from_drafts(host: &ResourceHost, window: &mut Wind
         return;
     };
     if host.read_only() {
-        host.notice("资产库：项目为只读模式，不能归档", cx);
+        host.notice(tr("资产库：项目为只读模式，不能归档"), cx);
         return;
     }
     let Some(candidates) = host.draft_candidates(cx) else {
         return;
     };
     if candidates.is_empty() {
-        host.notice("资产库：草稿箱里还没有可归档的文件", cx);
+        host.notice(tr("资产库：草稿箱里还没有可归档的文件"), cx);
         return;
     }
 
@@ -51,7 +52,7 @@ pub(super) fn request_archive_drafts(
         return;
     };
     if host.read_only() {
-        host.notice("资产库：项目为只读模式，不能归档", cx);
+        host.notice(tr("资产库：项目为只读模式，不能归档"), cx);
         return;
     }
     let Some(candidates) = host.draft_candidates(cx) else {
@@ -278,7 +279,7 @@ pub(super) fn request_archive_from_file(host: &ResourceHost, window: &mut Window
         return;
     };
     if host.read_only() {
-        host.notice("资产库：项目为只读模式，不能归档", cx);
+        host.notice(tr("资产库：项目为只读模式，不能归档"), cx);
         return;
     }
     // 来源：系统文件选择（事件路径上的模态框）。**取消不是错误**：不提示、不入队。
@@ -290,7 +291,7 @@ pub(super) fn request_archive_from_file(host: &ResourceHost, window: &mut Window
         .and_then(|name| name.to_str())
         .map(str::to_string)
     else {
-        host.notice("资产库：归档失败（文件名无法解析）", cx);
+        host.notice(tr("资产库：归档失败（文件名无法解析）"), cx);
         return;
     };
     let default_name = std::path::Path::new(&file_name)

@@ -354,7 +354,7 @@ pub(super) fn action_bar(
                         .small()
                         .debug_selector(|| "version-diff".to_string())
                         .label(tr("与当前版本对比…"))
-                        .tooltip("打开文本 diff 查看器，看这一版和当前版本差在哪（只读）")
+                        .tooltip(tr("打开文本 diff 查看器，看这一版和当前版本差在哪（只读）"))
                         .disabled(!can_diff)
                         .on_click(diff),
                 )
