@@ -124,7 +124,7 @@ impl ListDelegate for ManualDelegate {
                     .text_color(theme.colors.foreground)
                     .child(tr("无匹配函数")),
             )
-            .child("试试输入函数名（substr）或中文语义（截取 / 日期）")
+            .child(tr("试试输入函数名（substr）或中文语义（截取 / 日期）"))
             .into_any_element()
     }
 
@@ -201,7 +201,7 @@ pub fn open_function_manual(
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("输入函数名或中文语义，回车插入函数名"),
+                    .child(tr("输入函数名或中文语义，回车插入函数名")),
             )
             .child(List::new(&list));
         dialog

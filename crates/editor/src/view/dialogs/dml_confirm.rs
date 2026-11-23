@@ -45,7 +45,7 @@ pub fn open_dml_confirm(
                 div()
                     .text_xs()
                     .text_color(muted)
-                    .child("确认后本次提交放行；取消则不入队，数据库不会被改动。"),
+                    .child(tr("确认后本次提交放行；取消则不入队，数据库不会被改动。")),
             )
             .child(
                 div()

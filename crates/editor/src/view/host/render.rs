@@ -428,7 +428,7 @@ pub(crate) fn render_editor_status_bar(
             .label(eol.label())
             .w(rems(ui::EOL_SLOT_WIDTH))
             .flex_none()
-            .tooltip("换行符（点击切换 LF / CRLF）")
+            .tooltip(tr("换行符（点击切换 LF / CRLF）"))
             .on_click(move |_, _window, app| {
                 let next = match eol {
                     crate::encoding::LineEnding::Lf => crate::encoding::LineEnding::Crlf,
@@ -534,7 +534,7 @@ pub(crate) fn render_editor_status_bar(
             .debug_selector(|| "editor-invisible".to_string())
             .label("¶")
             .toggled(show_invisible)
-            .tooltip("不可见字符标注（点击自定义：零宽 / 特殊空格 / 双向控制 / 控制字符）")
+            .tooltip(tr("不可见字符标注（点击自定义：零宽 / 特殊空格 / 双向控制 / 控制字符）"))
             .on_click(move |_, window, app| {
                 let entity = entity.clone();
                 let current_mask = mask;
@@ -561,7 +561,7 @@ pub(crate) fn render_editor_status_bar(
             .debug_selector(|| "editor-whitespace".to_string())
             .label("␣")
             .toggled(show_ws)
-            .tooltip("显示空白字符（空格 · / 制表符 →）")
+            .tooltip(tr("显示空白字符（空格 · / 制表符 →）"))
             .on_click(move |_, window, app| {
                 let entity = entity.clone();
                 let next = !show_ws;
@@ -874,7 +874,7 @@ pub(crate) fn render_conn_slots(
             .dropdown_menu(move |menu, _window, _cx| {
                 let mut menu = menu;
                 if schemas_menu.is_empty() {
-                    return menu.item(PopupMenuItem::new("（暂无可切 Schema）").disabled(true));
+                    return menu.item(PopupMenuItem::new(tr("（暂无可切 Schema）")).disabled(true));
                 }
                 for item in &schemas_menu {
                     let entity = entity.clone();

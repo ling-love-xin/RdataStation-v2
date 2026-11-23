@@ -328,7 +328,7 @@ fn list_view(cx: &App, state: &Entity<ManageEnvState>) -> Div {
                 .py_2()
                 .text_xs()
                 .text_color(theme.colors.muted_foreground)
-                .child("没有环境。点「新增环境」配置一个解释器。"),
+                .child(tr("没有环境。点「新增环境」配置一个解释器。")),
         );
     } else {
         let mut list = div().v_flex().w_full();
@@ -570,7 +570,7 @@ fn form_view(cx: &App, state: &Entity<ManageEnvState>) -> Div {
             .w_full()
             .text_xs()
             .text_color(theme.colors.muted_foreground)
-            .child("参数：空格分隔（如 `-u --no-site`）；脚本代码经 stdin 传入，不走参数"),
+            .child(tr("参数：空格分隔（如 `-u --no-site`）；脚本代码经 stdin 传入，不走参数")),
     );
     body = body.child(Input::new(&args_input));
     if let Some(message) = message {

@@ -79,19 +79,19 @@ pub fn open_result_analyze(
                 div()
                     .text_xs()
                     .text_color(muted)
-                    .child("存为临时表：会话里可用，关项目即清，只能留在本项目。"),
+                    .child(tr("存为临时表：会话里可用，关项目即清，只能留在本项目。")),
             )
             .child(
                 div()
                     .text_xs()
                     .text_color(muted)
-                    .child("存入项目库：落到本项目分析库，可回溯版本；要进全局请到资产归档处升级。"),
+                    .child(tr("存入项目库：落到本项目分析库，可回溯版本；要进全局请到资产归档处升级。")),
             )
             .child(
                 div()
                     .text_xs()
                     .text_color(muted)
-                    .child("临时表名只保留 ASCII，中文会折成下划线；持久表名保留中文。"),
+                    .child(tr("临时表名只保留 ASCII，中文会折成下划线；持久表名保留中文。")),
             );
 
         let cancel = action_button("editor-result-analyze-cancel", "取消", ButtonVariant::Ghost, {

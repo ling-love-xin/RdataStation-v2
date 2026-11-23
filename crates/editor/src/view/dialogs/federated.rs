@@ -34,7 +34,7 @@ pub fn open_federated_confirm(
                 div()
                     .text_xs()
                     .text_color(muted)
-                    .child("取消只是不执行，不会改动任何一个源。"),
+                    .child(tr("取消只是不执行，不会改动任何一个源。")),
             );
 
         let cancel = Button::new("editor-federated-cancel")

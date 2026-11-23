@@ -53,7 +53,7 @@ pub fn open_close_confirm(
                 div()
                     .text_xs()
                     .text_color(muted)
-                    .child("保存后关闭，或不保存直接丢弃这次改动。"),
+                    .child(tr("保存后关闭，或不保存直接丢弃这次改动。")),
             );
 
         let cancel = action_button("editor-close-cancel", "取消", ButtonVariant::Ghost, {
@@ -107,7 +107,7 @@ pub fn open_save_failure_confirm(
                 div()
                     .text_xs()
                     .text_color(muted)
-                    .child("文档仍处于未保存状态（改动不会丢失）。"),
+                    .child(tr("文档仍处于未保存状态（改动不会丢失）。")),
             );
 
         let cancel = action_button("editor-save-cancel", "取消保存", ButtonVariant::Ghost, {

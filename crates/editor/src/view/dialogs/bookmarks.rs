@@ -99,7 +99,7 @@ pub fn open_bookmark_manager(
     use gpui_kit::component::input::{Input, InputState};
 
     let kind = Rc::new(std::cell::Cell::new(BookmarkKind::All));
-    let input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索行号 / 说明 / #标签…"));
+    let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("搜索行号 / 说明 / #标签…")));
     let on_jump = Rc::new(on_jump);
     let on_edit = Rc::new(on_edit);
     let on_delete = Rc::new(on_delete);
@@ -257,7 +257,7 @@ pub fn open_bookmark_manager(
                 .flex()
                 .justify_center()
                 .debug_selector(|| "editor-dialog-editor-bookmark-empty".to_string())
-                .child("还没有书签 —— Ctrl+Shift+B 或右键「添加书签/说明…」")
+                .child(tr("还没有书签 —— Ctrl+Shift+B 或右键「添加书签/说明…」"))
         } else if rows.is_empty() {
             div()
                 .w_full()
@@ -267,7 +267,7 @@ pub fn open_bookmark_manager(
                 .flex()
                 .justify_center()
                 .debug_selector(|| "editor-dialog-editor-bookmark-empty".to_string())
-                .child("没有匹配的书签 —— 试试行号 / 说明 / #标签")
+                .child(tr("没有匹配的书签 —— 试试行号 / 说明 / #标签"))
         } else {
             div()
                 .v_flex()

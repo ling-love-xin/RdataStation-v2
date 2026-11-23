@@ -270,7 +270,7 @@ pub fn open_indent_dialog(
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("选择操作（回车执行 / Esc 关闭）"),
+                    .child(tr("选择操作（回车执行 / Esc 关闭）")),
             )
             .child(List::new(&list));
         dialog
@@ -328,7 +328,7 @@ pub fn open_tab_size_dialog(
                 div()
                     .text_xs()
                     .text_color(muted)
-                    .child("制表符显示大小（1-32，空格数 / 制表符展开宽度）"),
+                    .child(tr("制表符显示大小（1-32，空格数 / 制表符展开宽度）")),
             )
             .child(Input::new(&input_entity))
             .child(div().h_flex().justify_end().child(run));

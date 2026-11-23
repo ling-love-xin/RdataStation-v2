@@ -203,7 +203,7 @@ pub fn open_signature_help(window: &mut Window, cx: &mut App, view: SignatureVie
             .title(tr("签名帮助"))
             .w(theme.font_size * ui::SIGNATURE_HELP_DIALOG_WIDTH)
             .child(body)
-            .footer(div().child("Esc 关闭 · 再次 Ctrl+Shift+Space 刷新"))
+            .footer(div().child(tr("Esc 关闭 · 再次 Ctrl+Shift+Space 刷新")))
     });
 }
 

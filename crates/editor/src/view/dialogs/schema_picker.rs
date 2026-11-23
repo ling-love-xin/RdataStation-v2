@@ -1,5 +1,6 @@
 //! 库 / Schema 选择器（工具栏「schema@库」点击弹窗）。
 
+use shared::i18n::tr;
 use super::*;
 
 // ==== 活跃 Database / Schema 选择器（工具栏「schema@库」点击弹窗；2026-10-27）====
@@ -204,7 +205,7 @@ pub fn open_schema_picker(
     window.open_dialog(cx, move |dialog, _window, cx| {
         let body = entity.read(cx).body(entity.clone(), _window, cx);
         let width = cx.theme().font_size * ui::SCHEMA_PICKER_DIALOG_WIDTH;
-        dialog.title("选择 Database/Schema").w(width).child(body)
+        dialog.title(tr("选择 Database/Schema")).w(width).child(body)
     });
     state
 }

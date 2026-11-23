@@ -518,7 +518,7 @@ impl EditorHostPanel {
             .small()
             .debug_selector(|| "editor-exec-run".to_string())
             .icon(crate::toolbar::ToolbarItemId::ExecRun.icon())
-            .tooltip("执行（Ctrl+Enter）")
+            .tooltip(tr("执行（Ctrl+Enter）"))
             .on_click(move |_, _window, app| {
                 entity.update(app, |panel, cx| panel.execute_preferring_selection(cx));
             })
@@ -532,7 +532,7 @@ impl EditorHostPanel {
             .small()
             .debug_selector(|| "editor-exec-all".to_string())
             .icon(crate::toolbar::ToolbarItemId::ExecAll.icon())
-            .tooltip("全部运行（Ctrl+Shift+Enter）")
+            .tooltip(tr("全部运行（Ctrl+Shift+Enter）"))
             .on_click(move |_, _window, app| {
                 entity.update(app, |panel, cx| panel.run_all(cx));
             })

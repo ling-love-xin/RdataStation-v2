@@ -243,7 +243,7 @@ fn empty_state(cx: &App, document: &DocumentId, entity: PanelEntity) -> impl Int
                     div()
                         .text_xs()
                         .text_color(muted)
-                        .child("笔记由「单元」组成：SQL / Python 单元可执行（结果内联），文本单元做备注。"),
+                        .child(tr("笔记由「单元」组成：SQL / Python 单元可执行（结果内联），文本单元做备注。")),
                 )
                 .child(
                     div()

@@ -2,6 +2,7 @@
 //!
 //! 自 language/language_service.rs 拆分（2026-10-29 Step 9）：按能力域切分。
 
+use shared::i18n::tr;
 use engine::sql::{HighlightSpan, SqlStatement, TokenClass, highlight_spans, split_statements};
 
 use super::*;
@@ -61,7 +62,7 @@ fn pushdown_action(
     }
     Some(CodeAction {
         id: PUSHDOWN_PREDICATES,
-        title: "把 WHERE 下推进子查询（改写当前语句）".to_string(),
+        title: tr("把 WHERE 下推进子查询（改写当前语句）").to_string(),
         edit: TextEdit {
             start: statement.start,
             end: statement.end,
@@ -151,7 +152,7 @@ fn add_where_action(
     }
     Some(CodeAction {
         id: ADD_WHERE,
-        title: "加上 WHERE 1 = 0（先不匹配任何行）".to_string(),
+        title: tr("加上 WHERE 1 = 0（先不匹配任何行）").to_string(),
         edit: TextEdit {
             start: insert_at,
             end: insert_at,
@@ -178,7 +179,7 @@ fn add_limit_action(sql: &str, spans: &[HighlightSpan], insert_at: usize) -> Opt
     safe_tail(sql, spans)?;
     Some(CodeAction {
         id: ADD_LIMIT,
-        title: "加上 LIMIT 100（先看前 100 行）".to_string(),
+        title: tr("加上 LIMIT 100（先看前 100 行）").to_string(),
         edit: TextEdit {
             start: insert_at,
             end: insert_at,

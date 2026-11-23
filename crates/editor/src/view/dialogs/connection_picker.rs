@@ -187,7 +187,7 @@ pub fn open_connection_picker(
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("选择要绑定到本文档的连接（回车 / 点击确认，Esc 关闭）"),
+                    .child(tr("选择要绑定到本文档的连接（回车 / 点击确认，Esc 关闭）")),
             )
             .child(List::new(&list).max_h(rems(ui::PICKER_LIST_MAX_HEIGHT)))
             .child(check);
