@@ -9,6 +9,7 @@
 //! - 有项目：`visible() = false`，Dock 渲染回退第一个可见 tab（编辑器）；
 //! - 不可关闭（`closable() = false`）——这是无项目时打开项目的持久入口。
 
+use shared::i18n::tr;
 use gpui_kit::EventEmitter;
 use gpui_kit::assets::IconName as CatalogIcon;
 use gpui_kit::base::StyledExt;
@@ -97,7 +98,7 @@ impl Render for ProjectPickerPanel {
                         Button::new("welcome-new-connection")
                             .primary()
                             .icon(IconName::Plus)
-                            .label("新建连接")
+                            .label(tr("新建连接"))
                             .on_click(move |_, window, app| {
                                 shared.new_connection(window, app);
                             }),
@@ -106,7 +107,7 @@ impl Render for ProjectPickerPanel {
                         Button::new("welcome-open-project")
                             .secondary()
                             .icon(IconName::FolderOpen)
-                            .label("打开项目")
+                            .label(tr("打开项目"))
                             .on_click(move |_, window, app| {
                                 project::ui::open_folder_dialog(
                                     &host_new,
@@ -120,7 +121,7 @@ impl Render for ProjectPickerPanel {
                         Button::new("welcome-recent")
                             .ghost()
                             .icon(CatalogIcon::Clock)
-                            .label("最近使用")
+                            .label(tr("最近使用"))
                             .on_click(move |_, _, app| {
                                 // 刷新最近列表并停留（TabBar 默认「最近」，重绘即回到最近项目）。
                                 project::ui::refresh_picker(&host_recent, app);
@@ -170,6 +171,6 @@ impl ComponentPanel for ProjectPickerPanel {
         div()
             .text_sm()
             .font_weight(FontWeight::MEDIUM)
-            .child("项目")
+            .child(tr("项目"))
     }
 }

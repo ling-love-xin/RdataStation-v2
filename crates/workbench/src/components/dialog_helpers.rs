@@ -21,6 +21,7 @@
 //! });
 //! ```
 
+use shared::i18n::tr;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_kit::component::dialog::{
@@ -100,12 +101,12 @@ where
     let message: SharedString = message.into();
     move |dialog, _window, _cx| {
         let cancel = Button::new("confirm-cancel")
-            .label("取消")
+            .label(tr("取消"))
             .on_click(|_, w, cx| w.close_dialog(cx));
 
         let confirm = Button::new("confirm-ok")
             .with_variant(ButtonVariant::Danger)
-            .label("确认")
+            .label(tr("确认"))
             .on_click({
                 let on_confirm = on_confirm.clone();
                 move |e, w, cx| {

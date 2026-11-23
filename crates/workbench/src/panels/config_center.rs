@@ -6,6 +6,7 @@
 //!
 //! 页面**首次打开时才建**（建页要查一次库拉三域列表）：工作台初始化不为此付一次 DB 往返。
 
+use shared::i18n::tr;
 use std::rc::Rc;
 
 use gpui_kit::base::StyledExt as _;
@@ -146,7 +147,7 @@ impl ComponentPanel for ConfigCenterPanel {
             .items_center()
             .gap_1()
             .child(Icon::new(IconName::Settings))
-            .child("配置中心")
+            .child(tr("配置中心"))
     }
 }
 

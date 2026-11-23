@@ -1,5 +1,6 @@
 //! 插件管理页右侧详情栏（基本信息 / 贡献点 / 运行状态 / 危险区）。
 
+use shared::i18n::tr;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -65,7 +66,7 @@ impl PluginManagerPanel {
                     div()
                         .text_sm()
                         .text_color(theme.colors.muted_foreground)
-                        .child("选择左侧卡片查看详情"),
+                        .child(tr("选择左侧卡片查看详情")),
                 )
                 .child(
                     div()
@@ -303,14 +304,14 @@ impl PluginManagerPanel {
                             div()
                                 .text_xs()
                                 .text_color(theme.colors.muted_foreground)
-                                .child("本插件依赖"),
+                                .child(tr("本插件依赖")),
                         )
                         .when(plugin.dependencies.is_empty(), |group| {
                             group.child(
                                 div()
                                     .text_xs()
                                     .text_color(theme.colors.muted_foreground)
-                                    .child("未声明依赖。"),
+                                    .child(tr("未声明依赖。")),
                             )
                         })
                         .when(!plugin.dependencies.is_empty(), |group| {
@@ -352,7 +353,7 @@ impl PluginManagerPanel {
                             div()
                                 .text_xs()
                                 .text_color(theme.colors.muted_foreground)
-                                .child("被其他插件依赖"),
+                                .child(tr("被其他插件依赖")),
                         )
                         .child(match plugin.dependents.as_deref() {
                             None => div()
@@ -363,7 +364,7 @@ impl PluginManagerPanel {
                             Some([]) => div()
                                 .text_xs()
                                 .text_color(theme.colors.muted_foreground)
-                                .child("没有其他插件依赖它。")
+                                .child(tr("没有其他插件依赖它。"))
                                 .into_any_element(),
                             Some(dependents) => div()
                                 .h_flex()
@@ -442,7 +443,7 @@ impl PluginManagerPanel {
                             div()
                                 .text_xs()
                                 .text_color(theme.colors.muted_foreground)
-                                .child("清单未声明权限。"),
+                                .child(tr("清单未声明权限。")),
                         )
                     })
                     .children(groups.into_iter().map(|(label, values)| {

@@ -1,5 +1,6 @@
 //! 插件管理页整页骨架：标题行 / 统计 / 反馈 / 筛选 / 滚动卡片区 / 右侧详情。
 
+use shared::i18n::tr;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::empty::{Empty, EmptyDescription, EmptyHeader, EmptyTitle};
@@ -45,7 +46,7 @@ impl PluginManagerPanel {
                             div()
                                 .text_sm()
                                 .font_weight(FontWeight::MEDIUM)
-                                .child("插件管理"),
+                                .child(tr("插件管理")),
                         )
                         .child(
                             div()
@@ -58,7 +59,7 @@ impl PluginManagerPanel {
             .content(div().flex_1())
             .child(
                 Button::new("plugin-manager-install-file")
-                    .label("安装插件")
+                    .label(tr("安装插件"))
                     .with_size(Size::Small)
                     .on_click({
                         let manager = cx.entity();
@@ -70,7 +71,7 @@ impl PluginManagerPanel {
             .child(
                 Button::new("plugin-manager-install-dir")
                     .ghost()
-                    .label("从目录导入")
+                    .label(tr("从目录导入"))
                     .with_size(Size::Small)
                     .on_click({
                         let manager = cx.entity();
@@ -185,13 +186,13 @@ impl PluginManagerPanel {
                                 let manager = manager.clone();
                                 alert
                                     .confirm()
-                                    .title("停用全部已启用插件")
+                                    .title(tr("停用全部已启用插件"))
                                     .description(SharedString::from(format!(
                                         "将停用 {count} 个已启用插件，驱动会立即从连接下拉中移除。\n\
                                          插件目录与 plugin-data 都会保留，可随时重新启用。"
                                     )))
                                     .ok_text("停用全部")
-                                    .cancel_text("取消")
+                                    .cancel_text(tr("取消"))
                                     .on_ok(move |_window, _cx, cx| {
                                         let _ = manager.update(cx, |this, cx| {
                                             this.set_all_plugins_enabled(false, cx)
@@ -219,7 +220,7 @@ impl PluginManagerPanel {
             .child(
                 div()
                     .text_color(theme.colors.muted_foreground)
-                    .child("驱动链路"),
+                    .child(tr("驱动链路")),
             );
         for (index, step) in chain.steps.iter().enumerate() {
             if index > 0 {
@@ -308,10 +309,10 @@ impl PluginManagerPanel {
                         .gap_3()
                         .py_1()
                         .text_color(theme.colors.muted_foreground)
-                        .child(div().flex_1().child("驱动"))
-                        .child(div().flex_1().child("显示名"))
-                        .child(div().flex_1().child("插件"))
-                        .child(div().flex_none().child("登记状态")),
+                        .child(div().flex_1().child(tr("驱动")))
+                        .child(div().flex_1().child(tr("显示名")))
+                        .child(div().flex_1().child(tr("插件")))
+                        .child(div().flex_none().child(tr("登记状态"))),
                 )
                 .children(registry_rows.iter().map(|row| {
                     let tone = match row.status {
@@ -367,9 +368,9 @@ impl PluginManagerPanel {
                                         row.plugin_id
                                     )))
                                     .ghost()
-                                    .label("查看")
+                                    .label(tr("查看"))
                                     .with_size(Size::XSmall)
-                                    .tooltip("在右侧打开该插件详情")
+                                    .tooltip(tr("在右侧打开该插件详情"))
                                     .on_click(
                                         move |_, _, app| {
                                             let id = plugin_id.clone();
@@ -389,7 +390,7 @@ impl PluginManagerPanel {
                                 .child(div().size_1p5().rounded_full().bg(tone))
                                 .child(row.status.label())
                                 .children(row.conflict.then(|| {
-                                    div().text_color(theme.colors.danger).child("· id 冲突")
+                                    div().text_color(theme.colors.danger).child(tr("· id 冲突"))
                                 })),
                         )
                 }))
@@ -487,7 +488,7 @@ impl PluginManagerPanel {
                     .ghost()
                     .icon(IconName::RefreshCw)
                     .with_size(Size::XSmall)
-                    .tooltip("重新读取最近的操作留痕")
+                    .tooltip(tr("重新读取最近的操作留痕"))
                     .on_click({
                         let manager = cx.entity();
                         move |_, _, app| {
@@ -545,7 +546,7 @@ impl PluginManagerPanel {
                 table = table.child(
                     div()
                         .text_color(theme.colors.muted_foreground)
-                        .child("正在读取操作记录…"),
+                        .child(tr("正在读取操作记录…")),
                 );
             } else if ops_snapshot.0.is_empty() {
                 table = table.child(
@@ -565,11 +566,11 @@ impl PluginManagerPanel {
                         .gap_3()
                         .py_1()
                         .text_color(theme.colors.muted_foreground)
-                        .child(div().w(rems(14.)).flex_none().child("时间"))
-                        .child(div().w(rems(7.)).flex_none().child("动作"))
-                        .child(div().w(rems(5.)).flex_none().child("结果"))
-                        .child(div().w(rems(18.)).flex_none().child("对象"))
-                        .child(div().flex_1().min_w_0().child("原因 / 说明")),
+                        .child(div().w(rems(14.)).flex_none().child(tr("时间")))
+                        .child(div().w(rems(7.)).flex_none().child(tr("动作")))
+                        .child(div().w(rems(5.)).flex_none().child(tr("结果")))
+                        .child(div().w(rems(18.)).flex_none().child(tr("对象")))
+                        .child(div().flex_1().min_w_0().child(tr("原因 / 说明"))),
                 );
                 for row in &ops_snapshot.0 {
                     let ok = row.operation.result == "ok";
@@ -691,7 +692,7 @@ impl PluginManagerPanel {
                 )
                 .child(
                     Button::new("plugin-manager-reload")
-                        .label("立即重载")
+                        .label(tr("立即重载"))
                         .with_size(Size::XSmall)
                         .on_click({
                             let manager = cx.entity();

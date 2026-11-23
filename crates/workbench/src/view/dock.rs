@@ -2,6 +2,7 @@
 //!
 //! 自 `view.rs` 拆分（行为不变）。
 
+use shared::i18n::{tr, Locale};
 use super::*;
 impl WorkbenchView {
     /// 真面板化装配：只挂**已打开过**的模块 tab（`Shared::left_open_panels`）。
@@ -442,7 +443,7 @@ impl WorkbenchView {
                         div()
                             .text_xs()
                             .text_color(theme.colors.muted_foreground)
-                            .child("项目"),
+                            .child(tr("项目")),
                     )
                     .child(
                         div()
@@ -499,18 +500,22 @@ impl WorkbenchView {
             .child(theme_toggle);
 
         // 语言切换入口：先做入口与写库，翻译覆盖是渐进的（`tr()` 逐处替换）。
+        // 落库必须用**存储码**（`Locale::code()` = zh / en）：此前这里传的是
+        // `zh-CN` / `en-US`，`Locale::from_code` 只认 `en`，点 English 实际落成中文。
         let lang_switch = Button::new("lang-switch")
             .ghost()
             .icon(Icon::new(CatalogIcon::Languages).size_3p5())
-            .tooltip("界面语言")
+            .tooltip(tr("界面语言"))
             .dropdown_menu(|menu, _, _| {
-                let mut menu = menu.item(PopupMenuItem::label("界面语言"));
+                let mut menu = menu.item(PopupMenuItem::label(tr("界面语言")));
                 menu = menu.item(PopupMenuItem::separator());
-                menu = menu.item(PopupMenuItem::new("简体中文").on_click(|_, window, app| {
-                    SettingsService::set_locale("zh-CN", Some(window), app);
-                }));
+                menu = menu.item(
+                    PopupMenuItem::new(tr("简体中文")).on_click(|_, window, app| {
+                        SettingsService::set_locale(Locale::Zh.code(), Some(window), app);
+                    }),
+                );
                 menu.item(PopupMenuItem::new("English").on_click(|_, window, app| {
-                    SettingsService::set_locale("en-US", Some(window), app);
+                    SettingsService::set_locale(Locale::En.code(), Some(window), app);
                 }))
             });
         let lang_switch = div()
@@ -566,7 +571,7 @@ impl WorkbenchView {
         Button::new("quick-layout")
             .ghost()
             .icon(IconName::LayoutDashboard)
-            .tooltip("快速布局")
+            .tooltip(tr("快速布局"))
             .dropdown_menu(move |menu, _, _| {
                 let mut menu = menu.item(PopupMenuItem::label("布局预设"));
                 menu = menu.item(PopupMenuItem::separator());

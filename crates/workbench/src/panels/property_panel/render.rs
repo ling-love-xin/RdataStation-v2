@@ -1,3 +1,4 @@
+use shared::i18n::tr;
 use super::*;
 
 impl PropertyHostPanel {
@@ -20,7 +21,7 @@ impl PropertyHostPanel {
                     Empty::new().header(
                         EmptyHeader::new()
                             .media(EmptyMedia::new())
-                            .title(EmptyTitle::new().child("还没有选中的对象"))
+                            .title(EmptyTitle::new().child(tr("还没有选中的对象")))
                             .description(EmptyDescription::new().child(
                                 "双击导航树里的连接 / 数据库 / 表，属性会开在中央标签页。",
                             )),
@@ -41,7 +42,7 @@ impl PropertyHostPanel {
         // 惰性创建顶部 filter 搜索框（DBeaver 属性面板右上角搜索）：首次渲染挂订阅，
         // Change 事件把输入值写回 self.filter → render 时过滤 rows / sections。
         if self.filter_input.borrow().is_none() {
-            let input = cx.new(|cx| InputState::new(window, cx).placeholder("过滤属性…"));
+            let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("过滤属性…")));
             let sub = cx.subscribe_in(
                 &input,
                 window,
@@ -80,7 +81,7 @@ impl PropertyHostPanel {
 
         let mut body = div().v_flex().w_full().gap_1();
         if st.loading {
-            body = body.child(div().text_xs().text_color(muted).child("加载中…"));
+            body = body.child(div().text_xs().text_color(muted).child(tr("加载中…")));
         }
         if let Some(err) = &st.error {
             body = body.child(
@@ -194,7 +195,7 @@ impl PropertyHostPanel {
                 )
                 .child(
                     Button::new("property-revert")
-                        .label("还原")
+                        .label(tr("还原"))
                         .with_size(Size::Small)
                         .on_click(move |_, _, cx| {
                             entity.update(cx, |panel, cx| panel.revert_dirty(cx));
@@ -202,7 +203,7 @@ impl PropertyHostPanel {
                 )
                 .child(
                     Button::new("property-apply")
-                        .label("应用")
+                        .label(tr("应用"))
                         .primary()
                         .with_size(Size::Small)
                         .on_click(move |_, _, cx| {

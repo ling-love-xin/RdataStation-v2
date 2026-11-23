@@ -8,6 +8,7 @@
 //! `open_dialog` 的 builder 只给 `&mut App`。抬成实体后订阅、焦点句柄、键盘回调
 //! 都有地方挂，`open_source_picker` 退化成「预载数据 + 装配 + 打开」。
 
+use shared::i18n::tr;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -632,7 +633,7 @@ impl Render for PickerShell {
                     div()
                         .text_xs()
                         .text_color(colors.muted_foreground)
-                        .child("最近使用"),
+                        .child(tr("最近使用")),
                 )
                 .child(recent_el);
         }
@@ -654,7 +655,7 @@ impl Render for PickerShell {
                 })
                 .child(
                     Button::new(ElementId::Name(SharedString::from("source-picker-cancel")))
-                        .label("取消")
+                        .label(tr("取消"))
                         .on_click(|_, window, cx| window.close_dialog(cx)),
                 )
                 .child(

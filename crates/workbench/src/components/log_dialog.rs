@@ -12,6 +12,7 @@
 //! 所以点级别是瞬时的、不重查库（`LogStore::query_logs` 的 `level` 是精确匹配，
 //! 拿它做门槛得查 5 次）。
 
+use shared::i18n::tr;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -197,7 +198,7 @@ fn fetch(state: Rc<RefCell<LogView>>, keyword: String, cx: &mut App) {
 /// 打开日志查看对话框（入口：设置页「日志 → 查看日志…」）。
 pub fn open_log_dialog(window: &mut Window, cx: &mut App) {
     let state: Rc<RefCell<LogView>> = Rc::new(RefCell::new(LogView::default()));
-    let keyword_input = cx.new(|cx| InputState::new(window, cx).placeholder("按消息 / 模块过滤…"));
+    let keyword_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("按消息 / 模块过滤…")));
     // 打开即取一次（最新 500 条、不过滤）：用户点开就想看到东西。
     fetch(state.clone(), String::new(), cx);
 
@@ -213,7 +214,7 @@ pub fn open_log_dialog(window: &mut Window, cx: &mut App) {
             div()
                 .flex_none()
                 .text_color(theme.colors.muted_foreground)
-                .child("级别 ≥"),
+                .child(tr("级别 ≥")),
         );
         for choice in LEVEL_CHOICES {
             let selected = view.threshold == choice;
@@ -239,7 +240,7 @@ pub fn open_log_dialog(window: &mut Window, cx: &mut App) {
         let input_refresh = input_build.clone();
         head =
             head.child(div().flex_1().min_w_0().child(Input::new(&input_build)))
-                .child(Button::new("log-refresh").small().label("刷新").on_click(
+                .child(Button::new("log-refresh").small().label(tr("刷新")).on_click(
                     move |_, _, app| {
                         // 关键字的读取点**只在这里**：输入框变化不重查库
                         // （订阅输入事件会变成每次击键重查，代价与收益不成比例）。
@@ -317,7 +318,7 @@ pub fn open_log_dialog(window: &mut Window, cx: &mut App) {
         }
 
         dialog
-            .title("日志")
+            .title(tr("日志"))
             .child(head)
             .child(standard_dialog_body(body))
             .child(
@@ -336,7 +337,7 @@ pub fn open_log_dialog(window: &mut Window, cx: &mut App) {
             )
             .footer(
                 DialogFooter::new()
-                    .child(Button::new("log-open-dir").label("打开日志目录").on_click(
+                    .child(Button::new("log-open-dir").label(tr("打开日志目录")).on_click(
                         |_, _, app| {
                             let dir = paths::log_dir();
                             if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -351,7 +352,7 @@ pub fn open_log_dialog(window: &mut Window, cx: &mut App) {
                     ))
                     .child(
                         Button::new("log-close")
-                            .label("关闭")
+                            .label(tr("关闭"))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     ),
             )

@@ -1,3 +1,4 @@
+use shared::i18n::tr;
 use super::*;
 
 impl PropertyHostPanel {
@@ -134,7 +135,7 @@ impl PropertyHostPanel {
                     .child(
                         div()
                             .w_full()
-                            .child(Select::new(&state).w_full().placeholder("选择…")),
+                            .child(Select::new(&state).w_full().placeholder(tr("选择…"))),
                     )
             }
             _ => {
@@ -166,7 +167,7 @@ impl PropertyHostPanel {
                                     .gap_2()
                                     .child(
                                         Button::new(format!("prop-save-{}", row.id))
-                                            .label("保存")
+                                            .label(tr("保存"))
                                             .with_size(Size::XSmall)
                                             .on_click(move |_, _, app| {
                                                 save_entity.update(app, |panel, cx| {
@@ -176,7 +177,7 @@ impl PropertyHostPanel {
                                     )
                                     .child(
                                         Button::new(format!("prop-cancel-{}", row.id))
-                                            .label("取消")
+                                            .label(tr("取消"))
                                             .with_size(Size::XSmall)
                                             .on_click(move |_, _, app| {
                                                 cancel_entity.update(app, |panel, cx| {
@@ -212,7 +213,7 @@ impl PropertyHostPanel {
                                 )
                                 .child(
                                     Button::new(format!("prop-edit-btn-{}", row.id))
-                                        .label("编辑")
+                                        .label(tr("编辑"))
                                         .with_size(Size::XSmall)
                                         .on_click(move |_, window, app| {
                                             entity.update(app, |panel, cx| {

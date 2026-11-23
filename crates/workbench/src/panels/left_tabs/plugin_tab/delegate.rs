@@ -1,3 +1,4 @@
+use shared::i18n::tr;
 use super::super::*;
 
 use super::panel::PluginPanel;
@@ -102,7 +103,7 @@ impl ListDelegate for PluginListDelegate {
             Button::new(SharedString::from(format!("plugin-{id}-retry")))
                 .ghost()
                 .with_size(Size::XSmall)
-                .label("重试")
+                .label(tr("重试"))
                 .tooltip("重新解析清单并加载（修好清单或卸载冲突插件后使用）")
                 .disabled(busy)
                 .on_click(move |_, _window, app| {
@@ -113,7 +114,7 @@ impl ListDelegate for PluginListDelegate {
             Button::new(SharedString::from(format!("plugin-{id}-disable")))
                 .ghost()
                 .with_size(Size::XSmall)
-                .label("停用")
+                .label(tr("停用"))
                 .tooltip("停用后本会话立即停止运行（进程停用），下次启动不再激活")
                 .disabled(busy)
                 .on_click(move |_, _window, app| {
@@ -126,8 +127,8 @@ impl ListDelegate for PluginListDelegate {
             Button::new(SharedString::from(format!("plugin-{id}-enable")))
                 .ghost()
                 .with_size(Size::XSmall)
-                .label("启用")
-                .tooltip("启用并立即激活")
+                .label(tr("启用"))
+                .tooltip(tr("启用并立即激活"))
                 .disabled(busy)
                 .on_click(move |_, _window, app| {
                     let _ = entity.update(app, |this, cx| {
@@ -146,7 +147,7 @@ impl ListDelegate for PluginListDelegate {
         let uninstall = Button::new(SharedString::from(format!("plugin-{id}-uninstall")))
             .ghost()
             .with_size(Size::XSmall)
-            .label("卸载")
+            .label(tr("卸载"))
             .tooltip("从磁盘删除该插件（保留 plugin-data 用户数据）")
             .disabled(busy)
             .on_click(move |_, window, app| {
@@ -158,10 +159,10 @@ impl ListDelegate for PluginListDelegate {
                     let id = id.clone();
                     alert
                         .confirm()
-                        .title("卸载插件")
+                        .title(tr("卸载插件"))
                         .description(SharedString::from(description.clone()))
                         .ok_text("卸载")
-                        .cancel_text("取消")
+                        .cancel_text(tr("取消"))
                         .ok_variant(ButtonVariant::Danger)
                         .on_ok(move |_window, _cx, cx| {
                             let _ = entity.update(cx, |this, cx| {
@@ -245,7 +246,7 @@ impl ListDelegate for PluginListDelegate {
             .py_1()
             .text_xs()
             .text_color(cx.theme().colors.muted_foreground)
-            .child("没有安装插件")
+            .child(tr("没有安装插件"))
     }
 
     fn set_selected_index(

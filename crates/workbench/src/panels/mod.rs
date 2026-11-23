@@ -14,6 +14,9 @@
 //! 面板只实现 GPUI 面板协议（base `Panel` + component `Panel`），不承载业务逻辑；
 //! 数据仍来自 `ConnectionItem::sample()`（占位），下一轮接 ConnectionService。
 
+// 本模块声明了 `mod shared;`（面板间共享状态），会把外部 crate 名 `shared` 遮蔽；
+// 取文案必须用绝对路径 `::shared::…`。
+use ::shared::i18n::tr;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -323,7 +326,7 @@ impl SidebarPanel {
         state.set_read_only(read_only);
         state.set_options(rows.seed.options.clone());
         let name_input = cx.new(|cx| {
-            gpui_kit::component::input::InputState::new(window, cx).placeholder("新建标签")
+            gpui_kit::component::input::InputState::new(window, cx).placeholder(tr("新建标签"))
         });
         {
             let mut flow = self.shared.tag_dialog.borrow_mut();
@@ -437,7 +440,7 @@ impl SidebarPanel {
                     .text_xs()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(fg)
-                    .child("插件"),
+                    .child(tr("插件")),
             )
             .child(
                 div()

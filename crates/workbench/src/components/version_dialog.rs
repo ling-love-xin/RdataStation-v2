@@ -16,6 +16,7 @@
 //!
 //! 入口：状态栏右端常驻标识（`view::actions::render_status_bar`）。
 
+use shared::i18n::tr;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
@@ -63,7 +64,7 @@ pub fn open_version_dialog(window: &mut Window, cx: &mut App) {
             "version-tree-dirty",
             "这个构建不对应任何一次提交。据此得出的验证结论必须标注 -dirty，或重新编译后再验。",
         )
-        .title("工作树有未提交改动");
+        .title(tr("工作树有未提交改动"));
 
         // 身份 5 项 + 构建 4 项：默认 horizontal 布局，一项一行。
         let mut identity = DescriptionList::new()
@@ -98,7 +99,7 @@ pub fn open_version_dialog(window: &mut Window, cx: &mut App) {
             .child(headline)
             .when(info.dirty == Some(true), |this| this.child(dirty_alert))
             .child(identity)
-            .child(Separator::horizontal_dashed().label("构建与依赖"))
+            .child(Separator::horizontal_dashed().label(tr("构建与依赖")))
             .child(build)
             .child(div().text_xs().text_color(colors.muted_foreground).child(
                 "核对只需两行：提交、工作树。要贴给别人或记进验证记录，点右下角「复制版本信息」。",
@@ -110,13 +111,13 @@ pub fn open_version_dialog(window: &mut Window, cx: &mut App) {
         let copy = Button::new("version-copy")
             .with_variant(ButtonVariant::Primary)
             .icon(IconName::Copy)
-            .label("复制版本信息")
+            .label(tr("复制版本信息"))
             .on_click(move |_, _window, app| {
                 app.write_to_clipboard(ClipboardItem::new_string(copy_text.to_string()));
             });
 
         let close = Button::new("version-close")
-            .label("关闭")
+            .label(tr("关闭"))
             .on_click(|_, window, cx| window.close_dialog(cx));
 
         dialog

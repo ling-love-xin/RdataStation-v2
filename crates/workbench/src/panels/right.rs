@@ -3,6 +3,7 @@
 //! 自 `panels.rs` 纯位移迁出（无语义改动）。Mock 与洞察的视图与状态分别由
 //! `mock` / `insight` crate 自持，本面板只负责构造期创建实体、注入宿主桥与登记句柄。
 
+use shared::i18n::tr;
 use gpui_kit::EventEmitter;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
@@ -217,7 +218,7 @@ impl RightSidebarPanel {
             .items_center()
             .justify_center()
             .gap_2()
-            .child(div().text_sm().text_color(muted).child("未选中存档"))
+            .child(div().text_sm().text_color(muted).child(tr("未选中存档")))
             .child(
                 div()
                     .px_4()
@@ -299,7 +300,7 @@ impl RightSidebarPanel {
                     .py_2()
                     .text_sm()
                     .text_color(fg)
-                    .child("数据对象"),
+                    .child(tr("数据对象")),
             )
             .child(list)
     }

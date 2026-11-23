@@ -1,3 +1,4 @@
+use shared::i18n::tr;
 use super::*;
 
 impl PropertyHostPanel {
@@ -324,7 +325,7 @@ impl PropertyHostPanel {
                         .flex_none()
                         .text_xs()
                         .text_color(muted)
-                        .child("不可用"),
+                        .child(tr("不可用")),
                 )
             })
             .child(
@@ -372,7 +373,7 @@ impl PropertyHostPanel {
                 .child(s.label.clone()),
         );
         if s.table.headers.is_empty() {
-            section = section.child(div().text_xs().text_color(muted).child("（无）"));
+            section = section.child(div().text_xs().text_color(muted).child(tr("（无）")));
             return section;
         }
         section = section.child(
@@ -486,7 +487,7 @@ impl PropertyHostPanel {
                     .child(
                         Clipboard::new(format!("property-copy-{}", s.label))
                             .value(copy_value)
-                            .tooltip("复制")
+                            .tooltip(tr("复制"))
                             .accessibility_label("复制属性文本"),
                     ),
             );

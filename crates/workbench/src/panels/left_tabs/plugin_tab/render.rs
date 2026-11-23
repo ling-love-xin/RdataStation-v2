@@ -1,3 +1,4 @@
+use shared::i18n::tr;
 use super::super::*;
 
 use super::delegate::PluginListDelegate;
@@ -12,7 +13,7 @@ impl Render for PluginPanel {
             .ghost()
             .icon(IconName::RefreshCw)
             .with_size(Size::XSmall)
-            .tooltip("刷新插件清单与驱动登记")
+            .tooltip(tr("刷新插件清单与驱动登记"))
             .on_click(move |_, _window, cx| {
                 let _ = entity.update(cx, |this, cx| this.refresh_driver_registration(cx));
             });
@@ -53,7 +54,7 @@ impl Render for PluginPanel {
         let install_file_entity = cx.entity();
         let install_file_btn = Button::new("plugin-install-package")
             .ghost()
-            .label("安装插件")
+            .label(tr("安装插件"))
             .with_size(Size::XSmall)
             .disabled(busy)
             .tooltip("从 .zip / .tar.gz 插件包安装")
@@ -63,7 +64,7 @@ impl Render for PluginPanel {
         let install_dir_entity = cx.entity();
         let install_dir_btn = Button::new("plugin-install-directory")
             .ghost()
-            .label("从目录")
+            .label(tr("从目录"))
             .with_size(Size::XSmall)
             .disabled(busy)
             .tooltip("从本地插件目录（含 plugin.toml）导入")
@@ -114,7 +115,7 @@ impl Render for PluginPanel {
                                 .with_variant(EmptyMediaVariant::Icon)
                                 .child(LeftPanel::Plugin.icon()),
                         )
-                        .title(EmptyTitle::new().child("还没有插件"))
+                        .title(EmptyTitle::new().child(tr("还没有插件")))
                         .description(EmptyDescription::new().child(
                             "「安装插件」装 .zip / .tar.gz 包；「从目录」导入含 plugin.toml 的本地目录",
                         )),
@@ -147,7 +148,7 @@ impl Render for PluginPanel {
                             .text_xs()
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(fg)
-                            .child("插件"),
+                            .child(tr("插件")),
                     )
                     .child(install_file_btn)
                     .child(install_dir_btn)

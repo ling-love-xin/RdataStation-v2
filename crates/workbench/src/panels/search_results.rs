@@ -12,6 +12,7 @@
 //! 不同 → 新建；旧 tab 保留创建时结果快照，不随新搜索变化）。面板内「关闭」→ 清空结果；
 //! tab ✕ 由 dock 的 Close 事件移除面板。
 
+use shared::i18n::tr;
 use std::rc::Rc;
 
 use scratchpad::ScratchpadSearchView;
@@ -123,7 +124,7 @@ impl Render for SearchResultsHostPanel {
                         .text_sm()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(fg)
-                        .child("搜索"),
+                        .child(tr("搜索")),
                 )
                 .child(
                     div()
@@ -138,7 +139,7 @@ impl Render for SearchResultsHostPanel {
         // Enter 发起独立查询（`scratchpad::jobs::enqueue_search` → 侧栏 pump → Shared 回填）。
         if self.panel_input.is_none() {
             let input = cx.new(|cx| {
-                let mut state = InputState::new(window, cx).placeholder("搜索");
+                let mut state = InputState::new(window, cx).placeholder(tr("搜索"));
                 if !search.query.is_empty() {
                     state.set_value(search.query.clone(), window, cx);
                 }

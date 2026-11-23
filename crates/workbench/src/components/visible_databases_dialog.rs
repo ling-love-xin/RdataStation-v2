@@ -14,6 +14,7 @@
 //! 能力边界（B 档，另会话立项）：DBeaver 的 include/exclude 双向 + 正则 mask + 全局过滤器
 //! 不在本弹框实现范围。
 
+use shared::i18n::tr;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -141,7 +142,7 @@ pub fn open_visible_databases_dialog(
                         }),
                     )
                     .child(if is_sys_cat {
-                        div().text_color(muted).child("系统库")
+                        div().text_color(muted).child(tr("系统库"))
                     } else {
                         div()
                     }),
@@ -181,7 +182,7 @@ pub fn open_visible_databases_dialog(
                             }),
                         )
                         .child(if is_sys_sch {
-                            div().text_color(muted).child("系统 schema")
+                            div().text_color(muted).child(tr("系统 schema"))
                         } else {
                             div()
                         }),
@@ -190,7 +191,7 @@ pub fn open_visible_databases_dialog(
         }
 
         dialog
-            .title("数据库可见性")
+            .title(tr("数据库可见性"))
             .child(
                 div()
                     .v_flex()
@@ -215,7 +216,7 @@ pub fn open_visible_databases_dialog(
                                     .items_center()
                                     .gap_2()
                                     .text_color(muted)
-                                    .child("显示系统对象")
+                                    .child(tr("显示系统对象"))
                                     .child(
                                         Switch::new("vis-show-system")
                                             .checked(s.show_system)
@@ -240,7 +241,7 @@ pub fn open_visible_databases_dialog(
             )
             .footer(
                 DialogFooter::new()
-                    .child(Button::new("vis-apply").label("确定").on_click({
+                    .child(Button::new("vis-apply").label(tr("确定")).on_click({
                         let state = state_build.clone();
                         let nav_view = nav_view.clone();
                         let cid = conn_id_build.clone();
@@ -266,7 +267,7 @@ pub fn open_visible_databases_dialog(
                     }))
                     .child(
                         Button::new("vis-cancel")
-                            .label("取消")
+                            .label(tr("取消"))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     ),
             )

@@ -6,6 +6,7 @@
 //! `Shared::quick_open` 是全应用一份的权威开关。
 //! 规格：`docs/architecture/quick_open/quick-open-prototype-design.md`。
 
+use shared::i18n::tr;
 use std::rc::Rc;
 
 use gpui_kit::base::StyledExt as _;
@@ -67,7 +68,7 @@ impl WorkbenchView {
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("搜索连接、命令…"),
+                    .child(tr("搜索连接、命令…")),
             )
             .child(
                 div()

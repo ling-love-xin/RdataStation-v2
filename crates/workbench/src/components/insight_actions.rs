@@ -8,6 +8,7 @@
 //! 回执一律走状态栏（`Shared::say`）：导出是「菜单一点、对话框一关」的动作，
 //! 结果说在状态栏够了，不往 280px 的面板里再塞一行提示。
 
+use shared::i18n::tr;
 use gpui_kit::{App, Context, Entity, Subscription, Window};
 // `open_alert_dialog` 是 WindowExt 提供的方法（gpui-component 的扩展 trait）
 use gpui_kit::component::WindowExt as _;
@@ -59,7 +60,7 @@ pub fn attach_dialogs<H: 'static>(
                     let panel = panel_weak_dialog.clone();
                     alert
                         .confirm()
-                        .title("全量统计")
+                        .title(tr("全量统计"))
                         .description(
                             "将对当前表进行全量统计：大表耗时较长，且表会完整导入分析引擎临时表（占用内存）。取样结果将被替换。确定继续？",
                         )

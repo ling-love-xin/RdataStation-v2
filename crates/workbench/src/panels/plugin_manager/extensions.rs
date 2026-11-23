@@ -10,6 +10,7 @@
 //! 先知道「用户本来想怎么办」，自动处理代价不对称。扩展目录里躺着一个没登记的文件
 //! 才是真正要当场决断的那个——`autoload_known_extensions = true` 下它已经有执行权。
 
+use shared::i18n::tr;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -272,7 +273,7 @@ pub(super) fn render_extensions(
         header = header.child(
             div()
                 .text_color(theme.colors.muted_foreground)
-                .child("读取中…"),
+                .child(tr("读取中…")),
         );
     }
     drop(board);
@@ -435,7 +436,7 @@ fn render_extension_row(
             row = row.child(
                 Button::new(SharedString::from(format!("ext-adopt-{}", entry.name)))
                     .ghost()
-                    .label("登记")
+                    .label(tr("登记"))
                     .with_size(Size::XSmall)
                     .tooltip("承认这个文件就是我要的：登记进表并记下指纹")
                     .on_click(move |_, _, app| {

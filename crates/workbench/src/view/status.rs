@@ -2,6 +2,7 @@
 //!
 //! 自 `view.rs` 拆分（行为不变）。
 
+use shared::i18n::tr;
 use super::*;
 
 /// 状态栏的 Mock 任务指示（有任务在跑时才给）：`◐ Mock 生成中 40%`（出口类任务给阶段名）
@@ -163,7 +164,7 @@ pub(super) fn render_lsp_manager(entity: &Entity<WorkbenchView>, cx: &mut App) -
             .items_center()
             .gap_2()
             .child(Icon::new(icon).size_3p5())
-            .child(div().text_sm().child("语言服务（LSP）")),
+            .child(div().text_sm().child(tr("语言服务（LSP）"))),
     );
     body = body.child(div().text_sm().child(label));
     body = body.child(
@@ -194,7 +195,7 @@ pub(super) fn render_lsp_manager(entity: &Entity<WorkbenchView>, cx: &mut App) -
             .child(
                 Button::new("lsp-manager-start")
                     .small()
-                    .label("启动")
+                    .label(tr("启动"))
                     .disabled(running)
                     .on_click(move |_, _, app| {
                         if let Some(lsp) = start_entity.read(app).lsp.clone() {
@@ -209,7 +210,7 @@ pub(super) fn render_lsp_manager(entity: &Entity<WorkbenchView>, cx: &mut App) -
             .child(
                 Button::new("lsp-manager-stop")
                     .small()
-                    .label("停止")
+                    .label(tr("停止"))
                     .disabled(!running)
                     .on_click(move |_, _, app| {
                         if let Some(lsp) = stop_entity.read(app).lsp.clone() {

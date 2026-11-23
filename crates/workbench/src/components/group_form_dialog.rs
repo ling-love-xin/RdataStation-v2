@@ -12,6 +12,7 @@
 //! 对话框归宿主，但初值类型 `GroupFormSeed` 定义在 `workbench_shell::model`
 //! （导航视图下沉后由 `database` 构造），此处重导保持旧路径。
 
+use shared::i18n::tr;
 use std::rc::Rc;
 
 use gpui_kit::base::StyledExt;
@@ -37,12 +38,12 @@ pub fn open_group_form_dialog(
     on_submit: impl Fn(Option<String>, String, Option<String>, &mut App) + 'static,
 ) {
     let editing = seed.id.is_some();
-    let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("分组名称"));
+    let name_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("分组名称")));
     if !seed.name.trim().is_empty() {
         let value = seed.name.clone();
         name_input.update(cx, |s, cx| s.set_value(value, window, cx));
     }
-    let desc_input = cx.new(|cx| InputState::new(window, cx).placeholder("描述（可选）"));
+    let desc_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("描述（可选）")));
     if let Some(desc) = seed.description.as_ref().filter(|d| !d.trim().is_empty()) {
         let value = desc.clone();
         desc_input.update(cx, |s, cx| s.set_value(value, window, cx));
@@ -101,7 +102,7 @@ pub fn open_group_form_dialog(
                     .child(
                         Button::new("group-form-cancel")
                             .secondary()
-                            .label("取消")
+                            .label(tr("取消"))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
                     .child(
