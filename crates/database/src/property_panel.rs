@@ -9,7 +9,7 @@
 //! - 未注册 provider 的对象类型回退通用展示（fallback）。
 //! 视图形态为编辑区右侧停靠面板（`workbench/panels/editor.rs`）。
 
-use shared::i18n::tr;
+use shared::i18n::{tr, tr_dyn};
 use crate::metadata_service::MetadataService;
 use crate::model::{NavSource, PropertyRef};
 use crate::property_providers::gates::MetadataGates;
@@ -85,11 +85,14 @@ fn qualify(ref_: &PropertyRef) -> String {
 }
 
 fn source_label(source: NavSource) -> String {
-    match source {
-        NavSource::Project => "项目 (P)".to_string(),
-        NavSource::Global => "全局 (G)".to_string(),
-        NavSource::Shared => "共享 (GP)".to_string(),
-    }
+    // 只在显示出口翻译：`PropertyTargetRef.source` 的下游消费者（各驱动 provider）都只把它
+    // 塞进属性行（`归属域` / `作用域`），不参与匹配或查询。
+    let zh = match source {
+        NavSource::Project => "项目 (P)",
+        NavSource::Global => "全局 (G)",
+        NavSource::Shared => "共享 (GP)",
+    };
+    tr_dyn(zh).to_string()
 }
 
 /// `PropertyRef` → 属性源目标引用（`property` crate 的轻量结构，不依赖本 crate）。

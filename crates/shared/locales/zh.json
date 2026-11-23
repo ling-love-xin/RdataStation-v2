@@ -1655,5 +1655,9 @@
   "TCP keepalive（毫秒）": "TCP keepalive（毫秒）",
   "keepalive 空闲（秒）": "keepalive 空闲（秒）",
   "Unix socket 路径": "Unix socket 路径",
-  "优先 unix socket": "优先 unix socket"
+  "优先 unix socket": "优先 unix socket",
+  "共享": "共享",
+  "项目 (P)": "项目 (P)",
+  "全局 (G)": "全局 (G)",
+  "共享 (GP)": "共享 (GP)"
 }

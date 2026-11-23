@@ -1257,7 +1257,7 @@ impl NavView {
         let source_text = if self.host.source_short_code(cx) {
             source.code().to_string()
         } else {
-            source.label().to_string()
+            tr(source.label()).to_string()
         };
         let filter = self.nav.borrow().filter.to_lowercase();
         let match_bg = product_tokens::get(cx).search_match_background(cx.theme());
