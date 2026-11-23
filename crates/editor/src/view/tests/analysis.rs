@@ -2109,3 +2109,68 @@ fn notebook_input_row_is_drawn_only_while_waiting(cx: &mut TestAppContext) {
     draw(cx);
     assert!(row(cx).is_none(), "收口 / 中断后输入行要撤掉");
 }
+
+/// 【R3】焦点交接：等待态出现 → 焦点进输入框；撤掉 → 焦点交回面板
+///
+/// 后半句比前半句更要紧：行撤掉后输入框不再绘制，焦点若还留在它身上，用户敲的字会全被
+/// 一个看不见的控件吞掉——表现就是「分析模式突然不能打字了」，而且只在运行时出现。
+#[gpui_kit::test]
+fn notebook_input_takes_focus_and_gives_it_back(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    let id = shared
+        .open(OpenRequest::untitled("", EditorMode::Analysis))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_add_cell(&id, crate::cell::CellLanguage::Python, window, cx);
+        });
+    });
+    let cell_id = shared.notebook_cells(&id)[0].id.clone();
+
+    let input_focus = cx.update(|_window, cx| panel.read(cx).nb_input.read(cx).focus_handle(cx).clone());
+    let panel_focus = cx.update(|_window, cx| panel.read(cx).focus_handle.clone());
+    let focused = |cx: &mut gpui_kit::VisualTestContext| cx.update(|window, cx| window.focused(cx));
+
+    // 等待态出现 → 焦点应该在输入框（用户可以直接打字，不用先点一下）
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_notebook_pending(
+                Some(crate::view::host::NotebookInputRequest {
+                    cell_id: cell_id.clone(),
+                    kernel_id: "no-such-kernel".to_string(),
+                    prompt: "name? ".to_string(),
+                    password: false,
+                }),
+                cx,
+            );
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        focused(cx).as_ref(),
+        Some(&input_focus),
+        "等待态出现后焦点要进输入框"
+    );
+
+    // 回送（内核不存在 → 失败路径）后行撤掉 → 焦点不能留在看不见的输入框上
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.submit_notebook_input("doubao".to_string(), cx);
+        });
+    });
+    cx.run_until_parked();
+    assert_ne!(
+        focused(cx).as_ref(),
+        Some(&input_focus),
+        "行撤掉后焦点不得留在隐藏的输入框上（按键会被吞掉）"
+    );
+    assert_eq!(
+        focused(cx).as_ref(),
+        Some(&panel_focus),
+        "焦点应交回面板（此后键盘事件有归属）"
+    );
+}

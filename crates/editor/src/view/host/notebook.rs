@@ -987,6 +987,8 @@ impl EditorHostPanel {
         self.clear_notebook_input(cx);
         self.nb_pending = request;
         self.sync_notebook_input_masked(masked, cx);
+        // 焦点随等待态走：登记时进输入框（不用先点一下才能打字），撤销时交回面板
+        self.sync_notebook_input_focus(cx);
     }
 
     /// 【R3】回送内核输入（输入行的「发送」/ 回车）
@@ -1002,6 +1004,8 @@ impl EditorHostPanel {
         // 值也一并清掉（成败都清）：失败时行已经撤掉，用户既看不见这个值，它又会在
         // 下一条请求里重新出现；失败原因走消息栏，不需要靠留着输入值来传达。
         self.clear_notebook_input(cx);
+        // 行撤掉后焦点不能留在它身上（见 `sync_notebook_input_focus` 的说明）
+        self.sync_notebook_input_focus(cx);
         match self.shared.kernel_input(&request.kernel_id, value) {
             Ok(()) => {
                 cx.notify();
@@ -1048,6 +1052,35 @@ impl EditorHostPanel {
                 input.update(cx, |state, cx| {
                     state.set_masked(masked, window, cx);
                 });
+            });
+        });
+    }
+
+    /// 【R3】焦点交接：等待态出现 → 焦点进输入框；等待态撤掉 → 焦点交回面板
+    ///
+    /// 撤掉那一半比登记那一半更要紧：行撤掉后输入框不再绘制，焦点若还留在它身上，用户
+    /// 敲的字会全被一个看不见的控件吞掉——表现就是「分析模式突然不能打字了」，而且只在
+    /// 运行时才出现。所以只在「焦点确实在输入框上」时才把它挪走，用户本来在别处打字就
+    /// 不动（例如等待态因收口而撤掉，而用户正点在单元正文里）。
+    ///
+    /// `focus` 要 `&mut Window`，等待态是在 `drain_kernel_events` 里登记的（只有
+    /// `Context`），与 [`Self::clear_notebook_input`] 同一做法：推迟到本次 update 结束后
+    /// 按当前聚焦窗口执行；没有窗口就不动。
+    fn sync_notebook_input_focus(&self, cx: &mut Context<Self>) {
+        let Some(window) = Self::notebook_input_window(cx) else {
+            return;
+        };
+        let acquire = self.nb_pending.is_some();
+        let input = self.nb_input.clone();
+        let panel_focus = self.focus_handle.clone();
+        cx.defer(move |cx| {
+            let _ = window.update(cx, move |_, window, cx| {
+                let input_focus = input.read(cx).focus_handle(cx).clone();
+                if acquire {
+                    window.focus(&input_focus, cx);
+                } else if window.focused(cx).is_some_and(|focused| focused == input_focus) {
+                    window.focus(&panel_focus, cx);
+                }
             });
         });
     }
