@@ -43,7 +43,7 @@ pub fn open_value_preview(
                     .border_color(theme.colors.border)
                     .rounded_md()
                     .p_3()
-                    .font_family("monospace")
+                    .font_family(theme.mono_font_family.clone())
                     .text_sm()
                     // 测试可观测：值内容区（窗口级验收断言「值真的渲染在弹层里」）
                     .debug_selector(|| "editor-dialog-editor-value-preview-body".to_string())

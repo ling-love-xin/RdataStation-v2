@@ -60,7 +60,7 @@ impl ListDelegate for ManualDelegate {
             .child(
                 div()
                     .flex_none()
-                    .font_family("monospace")
+                    .font_family(theme.mono_font_family.clone())
                     .text_sm()
                     .text_color(theme.colors.foreground)
                     .child(entry.name),

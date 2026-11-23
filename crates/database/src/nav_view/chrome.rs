@@ -1150,7 +1150,7 @@ impl NavView {
                                 .gap_2()
                                 .child(
                                     div()
-                                        .font_family("monospace")
+                                        .font_family(theme.mono_font_family.clone())
                                         .text_color(fg)
                                         .child(pattern.clone()),
                                 )
