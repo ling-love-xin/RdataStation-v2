@@ -960,7 +960,22 @@ impl EditorHostPanel {
         })
     }
 
-    /// 【R3】回送内核输入（输入行的「发送」）
+    /// 【R3】输入行事件：回车即提交（与「发送」按钮同一条路径）
+    ///
+    /// 订阅发生在面板构造期，故用无窗口版 `subscribe`（`subscribe_in` 要读面板状态，
+    /// 构造期面板未成形）；回调不需要 window：提交后清空推迟到窗口上下文（`cx.defer`）。
+    pub(crate) fn on_notebook_input_event(
+        &mut self,
+        event: &InputEvent,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(event, InputEvent::PressEnter { .. }) {
+            let value = self.nb_input.read(cx).value().to_string();
+            self.submit_notebook_input(value, cx);
+        }
+    }
+
+    /// 【R3】回送内核输入（输入行的「发送」/ 回车）
     ///
     /// 先清等待态再回送：一条 `input_request` 只接受一次 REPLY（内核正阻塞在那次
     /// 请求上），重复发送会串到下一个请求。回送失败（内核已停）如实报原因。
@@ -969,9 +984,30 @@ impl EditorHostPanel {
             return;
         };
         match self.shared.kernel_input(&request.kernel_id, value) {
-            Ok(()) => cx.notify(),
+            Ok(()) => {
+                self.clear_notebook_input(cx);
+                cx.notify();
+            }
             Err(reason) => self.set_message(Some(reason), cx),
         }
+    }
+
+    /// 【R3】清空输入行（提交成功后）
+    ///
+    /// `InputState::set_value` 要 `&mut Window`，而这发生在事件回调栈里——推迟到本次
+    /// update 结束后，按当前聚焦窗口执行（与通知服务取窗口同一做法）。
+    fn clear_notebook_input(&self, cx: &mut Context<Self>) {
+        let Some(window) = cx.active_window() else {
+            return;
+        };
+        let input = self.nb_input.clone();
+        cx.defer(move |cx| {
+            let _ = window.update(cx, move |_, window, cx| {
+                input.update(cx, |state, cx| {
+                    state.set_value(String::new(), window, cx);
+                });
+            });
+        });
     }
 
     /// 中断单元执行（沿执行队列的取消；没在跑 = 如实回绝）

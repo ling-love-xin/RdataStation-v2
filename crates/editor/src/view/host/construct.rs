@@ -643,6 +643,16 @@ impl EditorHostPanel {
             }
         }
 
+        // 【R3】内核输入行：实体与回车订阅。
+        // 订阅用无窗口版 `subscribe`：`subscribe_in` 要读面板取窗口状态，构造期面板尚未成形；
+        // 回调本身不需要 window（清空由 `cx.defer` 在窗口上下文里做）。
+        let nb_input = cx.new(|cx| {
+            gpui_kit::component::input::InputState::new(window, cx)
+        });
+        let nb_input_sub = cx.subscribe(&nb_input, |this, _input, event: &InputEvent, cx| {
+            this.on_notebook_input_event(event, cx);
+        });
+
         let mut panel = Self {
             shared,
             document,
@@ -676,11 +686,10 @@ impl EditorHostPanel {
             running_since: None,
             notebook_ctrl: crate::notebook::controller::NotebookController::default(),
             kernel_pump: RefCell::new(None),
-            // 【R3】内核输入行：实体在构造时建（render 里不 `cx.new`），提示串按请求替换
-            nb_input: cx.new(|cx| {
-                gpui_kit::component::input::InputState::new(window, cx)
-            }),
+            // 【R3】内核输入行：实体在上面建好并订阅，这里只持有
+            nb_input,
             nb_pending: None,
+            _nb_input_sub: Some(nb_input_sub),
             autocommit: true,
             tx_open: false,
             tx_since: None,

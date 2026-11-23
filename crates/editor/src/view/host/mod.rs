@@ -452,6 +452,10 @@ pub struct EditorHostPanel {
     pub(crate) nb_input: Entity<gpui_kit::component::input::InputState>,
     /// 【R3】当前等待输入的内核请求（`None` = 没有等待；收口 / 换会话即清）
     pub(crate) nb_pending: Option<NotebookInputRequest>,
+    /// 【R3】输入行的回车订阅（句柄即生命周期：释放即退订，必须随面板存活）
+    ///
+    /// 只在构造期写一次、之后不再读——读它就等于退订，所以下划线前缀是刻意的。
+    pub(crate) _nb_input_sub: Option<Subscription>,
     /// 内容回写订阅：句柄即生命周期（释放即取消）
     pub(crate) _editor_sub: Option<Subscription>,
     /// 网格事件订阅（行选中 → 状态行的“已选第 N 行”要跟着变）
