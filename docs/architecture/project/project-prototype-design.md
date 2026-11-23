@@ -229,12 +229,12 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 
 | 分节 | 内容 | 数据来源 |
 | --- | --- | --- |
-| 概览 | 四项只读 kv：名称 / 路径 / 描述 / 状态（「可写」或「只读」） | `SettingsSnapshot`（事件路径取一次） |
-| 基本信息 | 名称输入（**仅改显示名**）+ 描述输入 + 「保存项目信息」按钮 | `save_project_info`：校验名 → `service::update_meta` → 改 `session.name`（标题栏槽随之变）→ notice「已保存项目信息」→ 刷新选择器与快照 |
+| 概览 | 四项只读 kv：名称 / 路径 / 描述 / 状态（「活跃 / 已归档 / …」+「可写 / 只读」，如「已归档 · 可写」） | `SettingsSnapshot`（事件路径取一次；状态含名册 `status` 与本地读写态） |
+| 基本信息 | 名称输入（**仅改显示名**）+ 描述输入 + 「保存项目信息」按钮 | `save_project_info`：校验名 → `service::update_meta` → 改 `session.name`（标题栏槽随之变）→ toast「已保存项目信息」→ 刷新选择器与快照 |
 | 默认项 | 默认连接（U3）：下拉 + 说明「新建查询 / 打开项目时的预选连接；不设则用系统当前连接」 | `ProjectConfig.default_connection_id` |
 | 存储（.RSmeta） | 只读结构树：树头 `.RSmeta/ · 合计 {human_size}`，每行「缩进 + 图标 + 名称 + 大小 + 复制路径」（点击 toast「已复制路径：…」）+ 说明 +「打开 `.RSmeta`」 | `meta_tree_rows`（`fs::metadata` 快照） |
 | 依赖 | 缺失驱动列表与处理 | `check_project_missing_drivers` |
-| 版本 | 手动快照台账（只读列表）+ 消息输入 +「创建版本快照」 | `project.db` 的 `project_versions` |
+| 版本 | 手动快照台账列表（时间 + 说明，行尾「删除」两段式：先切「确认删除 / 取消」）+ 消息输入 +「创建版本快照」（成功后清空输入） | `project.db` 的 `project_versions`（`list_versions` / `create_version` / `delete_version`） |
 | 危险区 | 归档/取消归档（U4）、移出名册（D1）、删除磁盘数据（D2，输入项目名确认） | `GlobalDatabaseManager` |
 
 - 名称/描述不是即输即改：点「保存项目信息」后写名册并把 `session.name` 同步给标题栏槽。
@@ -333,16 +333,16 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 | # | 设计稿（`project-prototype.html`，2026-09-11） | 当前实现 | 证据 |
 | --- | --- | --- | --- |
 | 1 | gpui-kit 0.7.1 | gpui-kit **0.10.0**（2026-11-22 由 0.9.0 升级） | `Cargo.toml` 的 `gpui-kit = { version = "0.10.0", features = ["gpui-fast"] }`；`vendor/gpui-component` / `vendor/gpui-base` 的 `Cargo.toml` 均为 0.10.0 |
-| 2 | 卡片状态是徽标（Active/Syncing/…） | 状态为**纯文本**，按状态着色 | 卡片首行 `item.status` + `status_color` |
+| 2 | 卡片状态是徽标（Active/Syncing/…） | 状态为**纯文本**，按状态着色；文案经 `status_label` 由名册 key 翻成中文（`active`→活跃、`archived`→已归档…，未知值原样保留） | `project_card` + `status_label` |
 | 3 | 固定标记 📌 | `Star` 图标 + `primary` 色 | `Icon::new(IconName::Star)` |
-| 4 | 元信息「最后打开 · 连接数 · 版本数」 | 只有 `最后打开：… · 状态：…` | `meta_line`；`ProjectSummary` 无连接数/版本数字段 |
+| 4 | 元信息「最后打开 · 连接数 · 版本数」 | 只有「最后打开：…」（状态已在首行带色显示，不再重复一遍）；`ProjectSummary` 无连接数 / 版本数字段 | `meta_line` |
 | 5 | 路径「等宽、中间省略」 | `text_xs` 弱化色，**完整路径原文** | 卡片路径行 |
 | 6 | 行内操作 📂 / ✕ | `打开` + `⋯`（右键菜单同源） | `card_menu_entries` |
 | 7 | 新建对话框宽 560 | 组件默认 **448**（未显式设宽） | `open_create_dialog` 无 `.w()`；`dialog.rs` 默认 448 |
 | 8 | 新建对话框含默认连接 / 初始化分析库 / 创建示例草稿 | **没有**这三项；只有名称、位置、目标预览、描述 | 同左 |
 | 9 | 「校验未过时创建按钮禁用」 | 按钮**不置灰**；改为行内即时提示 + 提交后报错 | `submit_create` / `location_hint` |
 | 10 | 项目设置为「中央编辑区 Tab」、6 节 | **覆盖式面板**、**7 节**（多「基本信息」；「依赖自检」实际叫「依赖」） | `ui.settings_open`；7 处 `section(theme, …)` |
-| 11 | 「版本」= `Version` 版本链 | 实际是**手动快照台账**（`project_versions` 一行一条 message，不承载内容） | `service::list_versions` / `create_version`；`models.rs` 对 `Versioned` 的「未接入」标注 |
+| 11 | 「版本」= `Version` 版本链 | 实际是**手动快照台账**（`project_versions` 一行一条 message，不承载内容），支持记录 / 列出 / 按 id 删除（行内两段式确认） | `service::{list_versions, create_version, delete_version}`；`models.rs` 对 `Versioned` 的「未接入」标注 |
 | 12 | 标题栏项目槽带状态点（`●`，警告=缺失驱动/归档） | 槽内是 `Folder` 图标 + 「项目」+ 名称，**没有状态点** | `view/dock.rs::render_title_bar`（`Button::new("project-slot")` + `CatalogIcon::Folder`） |
 | 13 | 项目菜单 6 项，「切换项目…」带 `Ctrl+⇧P`，顶部一条缺失驱动黄色警告行 | **项数一致（非只读 6 项）**：切换项目…/项目设置…/重命名…/在资源管理器中显示/──/归档 / 取消归档/──/关闭项目；只读时顶部多插一条置灰说明「只读模式：写操作不可用」（共 7 项）；菜单**不显示快捷键**、**无缺失驱动警告行**（快捷键本身仍在：`crates/app/src/main.rs` 的两条 `KeyBinding` 分别绑 `Ctrl+Shift+P` / `Ctrl+Shift+W`） | `ui.rs::project_menu_entries` / `ui.rs::build_project_menu` |
 | 14 | 未保存拦截按钮「保存 / 不保存 / 取消」 | 「取消 / 放弃更改并继续 / 保存并继续」（标题「未保存的草稿」） | `ui.rs::open_unsaved_dialog` |

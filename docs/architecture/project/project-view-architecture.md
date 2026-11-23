@@ -27,7 +27,7 @@ pub type CreateLocationGetter = Rc<dyn Fn(&App) -> Option<String>>;
 pub type CreateLocationSaver = Rc<dyn Fn(&str, &mut App)>;
 
 pub struct ProjectUiHost {
-    pub state: Rc<RefCell<ProjectUiState>>,          // 选择器 / 菜单 / 设置 / 对话框错误 / 锁 / 只读 / 世代
+    pub state: Rc<RefCell<ProjectUiState>>,          // 选择器 / 菜单 / 设置 / 对话框错误 / 锁 / 只读 / 版本删除确认
     pub session: Rc<RefCell<Option<OpenProject>>>,   // 当前项目（根 + 名），与宿主 Shared.project 同源
     pub notifier: Rc<dyn ProjectUiNotifier>,         // 重绘宿主视图
     pub editor: Rc<dyn ProjectEditorBridge>,         // 未保存草稿判定 / 内容 / 清空 / 清脏
@@ -190,7 +190,7 @@ graph LR
 | 菜单规格（顺序 / 文案 / 可用性） | `crates/project/src/ui.rs`（`project_menu_entries` 纯函数 + `attach_project_menu_handler`） |
 | 窗口测试 | `crates/project/src/ui/tests.rs` |
 | 视图测试规范 | `.agents/skills/gpui-kit-dev/SKILL.md`（「窗口测试」一节） |
-| 设置面板的磁盘 / 名册 / 默认连接快照 | `crates/project/src/ui.rs`（`SettingsSnapshot` / `load_settings_snapshot` / `meta_tree_rows` / `set_default_connection`；事件路径填充，render 纯读） |
+| 设置面板的磁盘 / 名册 / 默认连接 / 版本台账快照 | `crates/project/src/ui.rs`（`SettingsSnapshot` / `load_settings_snapshot` / `meta_tree_rows` / `set_default_connection` / `versions_view`；事件路径填充，render 纯读） |
 | 卡片命令（`⋯` 下拉与右键菜单） | `crates/project/src/ui.rs`（`card_menu_entries` 规格 + `card_menu` 渲染 + `attach_card_menu_handler`） |
 | 搜索 facet（`状态:` / `固定:` / `锁:`） | `crates/project/src/ui.rs`（`parse_search` → `visible_items`；口径对齐 database 导航面板） |
 | 默认连接候选来源（全局 + 项目连接） | `crates/workbench/src/components/project_host.rs`（`default_connection_options` → `with_connections`） |

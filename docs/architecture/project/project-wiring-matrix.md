@@ -7,6 +7,10 @@
 > ② **`models.rs` 删掉 4 个自带路径推导**：`ProjectPath::{sqlite_path, duckdb_path, config_dir, queries_dir}` 与 `Project::{sqlite_path, duckdb_path}`——它们指向 v1 旧布局（`.RSmeta/meta/project.db`、`.RSmeta/analytics/data.duckdb`、`.RSmeta/queries`），与真实的扁平布局不符，且生产零调用。`ProjectPath::meta_dir` 保留，但改走 `store::RS_META_DIR_NAME` 常量，不再硬编码 `".RSmeta"`。
 > ③ 口径：与根仓 `docs/architecture/data-layer-wiring-matrix.md` 同族——把「文档声称」与「代码实测」分开，
 > 逐方法标接线状态，防止「预留超前」产生的死代码继续累积。
+> **2026-11-23 复核（遗留点清理第三、四刀）**：
+> ① **写动作加 toast 通道**：`save_project_info` / `toggle_archive` / `set_default_connection` / `create_version_action` 改走 `notify_success` / `notify_error`（`state.notice` + `window.push_notification` 双写）——此前只写 `state.notice`，而设置面板与标题栏菜单里不渲染它，用户点完没有反馈。
+> ② **删死字段** `ProjectUiState::epoch`（仅两处 `+= 1`，crate 内外零读点）；`ProjectUiState` 现 **8 字段**（新增 `version_delete_confirm`）。
+> ③ **新增版本台账删除**：`service::delete_version`（按 `project_versions.id` 删行，先把指向它的 `parent_id` 置空再删）；UI 侧 `versions_view` 行内「删除」两段式（`request_version_delete` → `confirm_version_delete` / `cancel_version_delete`），`SettingsSnapshot` 新增 `status`，概览「状态」改为「归档状态 · 读写状态」（`settings_status_text`）。
 > 本文是**唯一接线台账**；改 `crates/project` 实现后请同步本表。
 
 ## 图例
@@ -21,11 +25,11 @@
 
 | 文件 | 代码量（2026-11-23 实测，`\n` 计数） | 接线健康度 |
 | --- | --- | --- |
-| `service.rs` | 716 行 | ✅ 全部已接线（本项目真实入口） |
+| `service.rs` | 745 行 | ✅ 全部已接线（本项目真实入口；含版本台账记录 / 删除） |
 | `lock.rs` | 230 行 | ✅ 全部已接线 |
 | `store.rs` | 948 行 | ⚠️ 核心已接线；**死代码已清（ProjectManager / to_project / stub），剩 1 组归属待定**（见下）；新增 `BUILD_TAG_KEY` 写盘分支 |
-| `models.rs` | 395 行 → 2026-11-23 删掉 4 个错误路径推导后更短 | ⚠️ 域模型已接线，**含 1 组预留**（版本化） |
-| `ui.rs` + `ui/tests.rs` | 3300 + 1411 行（测试 38 项：24 窗口 + 14 纯函数） | ✅ 全部已接线（有窗口测试锚定） |
+| `models.rs` | 371 行 | ⚠️ 域模型已接线，**含 1 组预留**（版本化） |
+| `ui.rs` + `ui/tests.rs` | 3486 + 1571 行（测试 42 项：25 窗口 + 17 纯函数） | ✅ 全部已接线（有窗口测试锚定） |
 
 ## 逐方法
 
@@ -44,7 +48,7 @@
 | `soft_remove` / `restore` / `delete_disk` / `forget` | ✅ | 软删 / 恢复 / 硬删 / 移出 |
 | `has_recent_available` | 🔴 生产零调用（仅测试） | 会话解析辅助；暂无用例，保留为预留能力 |
 | `relocate` | ✅ | 重新定位 |
-| `list_versions` / `create_version` / `ensure_project_meta` | ✅ | **手动快照台账**（唯一在用的版本能力） |
+| `list_versions` / `create_version` / `delete_version` / `ensure_project_meta` | ✅ | **手动快照台账**（唯一在用的版本能力）：列出台账 / 记一条（说明非空）/ 按 id 删一条（先把子记录 `parent_id` 置空）/ 校验项目库存在并跑 `ProjectMeta` 迁移 |
 
 ### `lock.rs` — 实例锁（✅ 全部已接线）
 
@@ -111,7 +115,7 @@
 
 ### `ui.rs` + `ui/tests.rs`（✅ 全部已接线）
 
-选择器 / 标题栏菜单 / 项目设置 / 语义对话框 / 宿主桥 `ProjectUiHost`，均有窗口测试锚定（`ui/tests.rs` 38 项：24 窗口 + 14 纯函数）。
+选择器 / 标题栏菜单 / 项目设置 / 语义对话框 / 宿主桥 `ProjectUiHost`，均有窗口测试锚定（`ui/tests.rs` 42 项：25 窗口 + 17 纯函数）。
 
 2026-11-22 新增接线（均已接线、有生产调用方）：
 

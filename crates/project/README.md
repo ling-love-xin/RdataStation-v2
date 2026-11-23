@@ -49,6 +49,10 @@
 
 * **不可逆操作**（删磁盘数据）要求输入项目名二次确认，且按钮用 `danger` 变体；入口是**两处**——设置・危险区与卡片 `⋯`/右键菜单，共用同一批动作函数（`open_delete_dialog` / `confirm_delete`）。标题栏项目菜单**不提供删除**（只有「归档 / 取消归档」），所以不是「三处入口」。
 
+* **写动作的反馈通道**：归档 / 保存项目信息 / 改默认连接 / 创建版本 / 删除版本，成功与失败都走 `notify_success` / `notify_error` 双通道——写 `state.notice`（选择器里那一行，也是测试断言点），再 `window.push_notification` 出 toast。设置面板与标题栏项目菜单**没有** notice 行，只写状态等于用户看不到反馈。
+
+* **版本台账**：设置面板「版本」区列出 `project_versions` 台账（时间 + 说明）。行内「删除」是**两段式**：先切「确认删除 / 取消」，确认后才真删；表里只有说明与时间、没有内容列，所以删除只删台账行，不涉及物理数据。
+
 ### 视图与 model /service 同 crate
 
 按 GPUI-kit 指南，视图不再留在 workbench：`ui.rs` 自带选择器 / 菜单内容 / 设置 / 对话框，外部依赖经 `ProjectUiHost` 注入 —— 重绘桥（`ProjectUiNotifier`）、编辑区桥（`ProjectEditorBridge`）、排序持久化、打开后刷新。workbench 侧只剩 `components/project_host.rs` 做桥接，因此本 crate **不依赖 workbench 与 settings**。
@@ -110,9 +114,9 @@
 | `src/models.rs`             | 域模型：`Project` / `ProjectInfo` / `ProjectPath` / `Versioned<T>`（版本化模型为 DuckLake 预留，未接业务，见接线矩阵）                                                 |
 | `src/store.rs`              | `.RSmeta` 创建 / 加载 / 迁移；配置就地读写（`update_config`）；依赖自检；双真相源唯一写入入口（`save_info`）                                                             |
 | `src/lock.rs`               | 实例锁：OS 文件锁 + `project.lock.owner` 占用者信息                                                                                                                   |
-| `src/service.rs`            | 编排：列表 / 创建 / 打开（含只读）/ 关闭 / 重命名 / 固定 / 归档 / 软删 / 恢复 / 硬删 / 移出 / 重定位 / 默认连接读写 / 版本台账；进程级复用 tokio 运行时（P0.3）                            |
+| `src/service.rs`            | 编排：列表 / 创建 / 打开（含只读）/ 关闭 / 重命名 / 固定 / 归档 / 软删 / 恢复 / 硬删 / 移出 / 重定位 / 默认连接读写 / 版本台账（记录与删除）；进程级复用 tokio 运行时（P0.3）                            |
 | `src/ui.rs`                 | 视图：选择器、标题栏菜单内容、项目设置、语义对话框、`ProjectUiHost` 宿主桥                                                                                                             |
-| `src/ui/tests.rs`           | 38 项 `ui` 测试（24 项 GPUI headless 窗口测试 + 14 项纯函数测试：选择器 /facet 解析 / 状态筛选 / 设置快照与结构树 / 默认连接 / 对话框 / 拦截 / 排序 / 浏览目录 / 空目录询问 / 卡片与描述 / 卡片与标题栏菜单规格 / 只读拦截 / 键盘激活 / 行内校验与提示 memo） |
+| `src/ui/tests.rs`           | 42 项 `ui` 测试（25 项 GPUI headless 窗口测试 + 17 项纯函数测试：选择器 /facet 解析 / 状态筛选 / 设置快照与结构树 / 默认连接 / 对话框 / 拦截 / 排序 / 浏览目录 / 空目录询问 / 卡片与描述 / 卡片与标题栏菜单规格 / 只读拦截 / 键盘激活 / 行内校验与提示 memo / 状态文案与概览状态 / 版本台账删除） |
 | `tests/project_registry.rs` | 名册端到端集成：创建登记 → 固定置顶 → 软删隐藏（磁盘保留）→ 已移除找回（注入临时全局库）                                                                                                          |
 | `tests/project_store.rs`    | 磁盘 `.RSmeta` / 实例锁 / 默认连接（U3）集成                                                                                                                           |
 

@@ -549,6 +549,8 @@ pub struct ProjectUiState {
     /// 当前持有的项目写锁（只读打开时为 `None`）。
     pub lock: Option<crate::ProjectLock>,
     pub read_only: bool,
+    /// 版本台账行内删除的二次确认：`Some(id)` 时该行显示「确认删除 / 取消」。
+    pub version_delete_confirm: Option<String>,
     pub notice: Option<String>,
     /// 设置面板的磁盘 / 名册快照（B2 / B3；事件路径填充，render 纯读）。
     pub settings: SettingsSnapshot,
@@ -2026,6 +2028,8 @@ pub struct SettingsSnapshot {
     pub meta_rows: Vec<MetaTreeRow>,
     /// 名册里的描述（概览显示；编辑后由保存路径刷新）。
     pub description: Option<String>,
+    /// 名册里的状态 key（`active` / `archived` …）：概览据此显示归档状态。
+    pub status: Option<String>,
     pub missing_drivers: Vec<String>,
     /// 默认连接（U3）：`None` = 不设默认。
     pub default_connection: Option<String>,
@@ -2055,6 +2059,7 @@ pub fn load_settings_snapshot(host: &ProjectUiHost, cx: &mut App) {
     let snapshot = SettingsSnapshot {
         meta_rows: meta_tree_rows(&root.join(project_service::RS_META_DIR_NAME)),
         description: summary.as_ref().and_then(|p| p.description.clone()),
+        status: summary.as_ref().map(|p| p.status.clone()),
         missing_drivers: summary.map(|p| p.missing_drivers).unwrap_or_default(),
         default_connection: project_service::load_default_connection(&root)
             .ok()
@@ -2866,6 +2871,8 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
 
     // 概览：描述来自名册快照（R7：元信息包含描述）
     let description = snapshot_description(&ui.settings);
+    // 状态 = 名册归档状态 + 当前读写状态（两件事分开看：归档不等于只读）
+    let status_text = settings_status_text(ui.settings.status.as_deref(), read_only);
     // 存储（B2）：`.RSmeta` 结构树 + 合计，只读排障视图
     let (meta_rows, meta_total) = (
         &ui.settings.meta_rows,
@@ -2990,7 +2997,7 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
                             .child(kv(theme, "名称", &name))
                             .child(kv(theme, "路径", &root.to_string_lossy()))
                             .child(kv(theme, "描述", &description))
-                            .child(kv(theme, "状态", if read_only { "只读" } else { "可写" })),
+                            .child(kv(theme, "状态", &status_text)),
                     )
                     .child(section(theme, "基本信息"))
                     .child(label(theme, "名称（重命名，仅改显示名）"))
@@ -3042,7 +3049,7 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
                     .child(section(theme, "依赖"))
                     .child(deps)
                     .child(section(theme, "版本"))
-                    .child(versions_view(&ui.settings, theme))
+                    .child(versions_view(&ui.settings, &ui, host, theme))
                     .child(
                         div()
                             .h_flex()
@@ -3127,6 +3134,16 @@ fn snapshot_description(snapshot: &SettingsSnapshot) -> String {
         .filter(|d| !d.is_empty())
         .unwrap_or("—")
         .to_string()
+}
+
+/// 概览里的「状态」：名册归档状态 + 读写状态。
+///
+/// 两件事要分开看：归档（名册标记）与只读（实例锁被占用）互不因果，所以并排写。
+/// 快照没取到状态时用「—」，不要默认成「活跃」（那是编数据）。
+fn settings_status_text(status: Option<&str>, read_only: bool) -> String {
+    let registry = status.map(status_label).unwrap_or("—");
+    let access = if read_only { "只读" } else { "可写" };
+    format!("{registry} · {access}")
 }
 
 /// 结构树的一行：缩进 + 图标 + 名称 + 大小 + 「复制路径」。
@@ -3278,8 +3295,16 @@ fn section(theme: &gpui_kit::component::Theme, title: &str) -> Div {
         .child(title.to_string())
 }
 
-/// 项目版本列表（只读；数据来自快照，render 不查库；失败降级为提示行）。
-fn versions_view(snapshot: &SettingsSnapshot, theme: &gpui_kit::component::Theme) -> Div {
+/// 项目版本列表（只读数据来自快照，render 不查库；失败降级为提示行）。
+///
+/// 删除是**两段式**：先点「删除」把该行切成「确认删除 / 取消」，再点确认才真删——
+/// 版本行没有弹窗，这一行就是确认区（`state.version_delete_confirm` 记录待删 id）。
+fn versions_view(
+    snapshot: &SettingsSnapshot,
+    state: &ProjectUiState,
+    host: &ProjectUiHost,
+    theme: &gpui_kit::component::Theme,
+) -> Div {
     let mut list = div().v_flex().gap_1().text_xs();
     if !snapshot.loaded {
         list = list.child(
@@ -3297,24 +3322,110 @@ fn versions_view(snapshot: &SettingsSnapshot, theme: &gpui_kit::component::Theme
         );
     } else {
         for v in &snapshot.versions {
-            list = list.child(
-                div()
-                    .h_flex()
-                    .gap_2()
+            let confirming = state.version_delete_confirm.as_deref() == Some(v.id.as_str());
+            let mut row = div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .text_color(theme.colors.muted_foreground)
+                        .child(v.created_at.clone()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .text_color(theme.colors.foreground)
+                        .child(v.message.clone()),
+                );
+            if confirming {
+                let host_confirm = host.clone();
+                let id_confirm = v.id.clone();
+                let host_cancel = host.clone();
+                let id_cancel = v.id.clone();
+                row = row
                     .child(
-                        div()
-                            .text_color(theme.colors.muted_foreground)
-                            .child(v.created_at.clone()),
+                        Button::new(format!("ver-del-confirm-{id_confirm}"))
+                            .danger()
+                            .small()
+                            .label("确认删除")
+                            .on_click(move |_, window, app| {
+                                confirm_version_delete(&host_confirm, &id_confirm, window, app)
+                            }),
                     )
                     .child(
-                        div()
-                            .text_color(theme.colors.foreground)
-                            .child(v.message.clone()),
-                    ),
-            );
+                        Button::new(format!("ver-del-cancel-{id_cancel}"))
+                            .ghost()
+                            .small()
+                            .label("取消")
+                            .on_click(move |_, _, app| cancel_version_delete(&host_cancel, app)),
+                    );
+            } else {
+                let host_request = host.clone();
+                let id_request = v.id.clone();
+                row = row.child(
+                    Button::new(format!("ver-del-{id_request}"))
+                        .ghost()
+                        .small()
+                        .disabled(state.read_only)
+                        .label("删除")
+                        .on_click(move |_, _, app| {
+                            request_version_delete(&host_request, &id_request, app)
+                        }),
+                );
+            }
+            list = list.child(row);
         }
     }
     list
+}
+
+/// 版本行内删除第一步：把该行切进二次确认态（不删数据）。
+fn request_version_delete(host: &ProjectUiHost, id: &str, cx: &mut App) {
+    if read_only_blocked(host, cx, "删除版本") {
+        return;
+    }
+    host.state.borrow_mut().version_delete_confirm = Some(id.to_string());
+    host.notify(cx);
+}
+
+/// 版本行内删除第二步的「取消」：退出二次确认态。
+fn cancel_version_delete(host: &ProjectUiHost, cx: &mut App) {
+    host.state.borrow_mut().version_delete_confirm = None;
+    host.notify(cx);
+}
+
+/// 版本行内删除的确认：删台账行 → 重取版本快照 → 清确认态。
+///
+/// 失败时也清确认态：留着确认按钮只会让人反复点同一条已删/不可删的记录。
+fn confirm_version_delete(host: &ProjectUiHost, id: &str, window: &mut Window, cx: &mut App) {
+    if read_only_blocked(host, cx, "删除版本") {
+        return;
+    }
+    let root = match host.session.borrow().as_ref().map(|s| s.root.clone()) {
+        Some(r) => r,
+        None => return,
+    };
+    match project_service::delete_version(&root, id) {
+        Ok(()) => {
+            let (versions, versions_error) = match project_service::list_versions(&root) {
+                Ok(versions) => (versions, None),
+                Err(e) => (Vec::new(), Some(e)),
+            };
+            {
+                let mut ui = host.state.borrow_mut();
+                ui.settings.versions = versions;
+                ui.settings.versions_error = versions_error;
+                ui.version_delete_confirm = None;
+            }
+            notify_success(host, window, cx, "已删除版本记录");
+        }
+        Err(e) => {
+            host.state.borrow_mut().version_delete_confirm = None;
+            notify_error(host, window, cx, e);
+        }
+    }
+    host.notify(cx);
 }
 
 /// 创建版本快照（只读模式拦截）。

@@ -674,6 +674,35 @@ pub fn create_version(root: &Path, message: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 删除一条版本台账记录（按 `project_versions.id`）。
+///
+/// 只删台账行：快照内容本就未落盘（`create_version` 只记说明与时间），没有
+/// 需要一并清理的物理数据。先把指向它的 `parent_id` 置空再删，避免留下悬空
+/// 引用（当前 `create_version` 恒写 `NULL`，但台账允许外部写入 parent）。
+pub fn delete_version(root: &Path, id: &str) -> Result<(), String> {
+    let id = id.trim();
+    if id.is_empty() {
+        return Err("版本 id 不能为空".to_string());
+    }
+    let db_path = ensure_project_meta(root)?;
+    let conn = rusqlite::Connection::open(&db_path).map_err(|e| format!("打开项目库失败: {e}"))?;
+    conn.execute(
+        "UPDATE project_versions SET parent_id = NULL WHERE parent_id = ?1",
+        rusqlite::params![id],
+    )
+    .map_err(|e| format!("解除版本引用失败: {e}"))?;
+    let removed = conn
+        .execute(
+            "DELETE FROM project_versions WHERE id = ?1",
+            rusqlite::params![id],
+        )
+        .map_err(|e| format!("删除版本失败: {e}"))?;
+    if removed == 0 {
+        return Err(format!("版本记录不存在: {id}"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

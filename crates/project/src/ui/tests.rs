@@ -25,15 +25,17 @@ use gpui_kit::{
 use super::{
     ConnectionOption, OpenProject, PendingAction, PickerTab, ProjectEditorBridge, ProjectInputs,
     ProjectMenuEntry, ProjectSort, ProjectUiHost, ProjectUiNotifier, ProjectUiState,
-    SettingsSnapshot, StatusFilter, advance_pending, build_project_menu, card_description,
-    card_menu_entries, confirm_delete, create_version_action, default_connection_label, do_close,
-    folder_hint, load_settings_snapshot, location_hint, memo_hint, meta_line, meta_tree_rows,
-    more_menu, open_create_dialog, open_delete_dialog, open_folder_dialog, open_lock_busy_dialog,
-    parse_search, pick_directory, prepare_unsaved, project_card, project_menu_entries,
-    render_picker, render_settings, request_close, request_create_project, request_open,
-    request_open_folder, save_project_info, set_default_connection, set_sort, set_status_filter,
-    set_tab, snapshot_description, sort_menu_entries, status_filter_menu_entries, status_label,
-    submit_create, submit_open_folder, toggle_archive, visible_items,
+    SettingsSnapshot, StatusFilter, advance_pending, build_project_menu, cancel_version_delete,
+    card_description, card_menu_entries, confirm_delete, confirm_version_delete,
+    create_version_action, default_connection_label, do_close, folder_hint, load_settings_snapshot,
+    location_hint, memo_hint, meta_line, meta_tree_rows, more_menu, open_create_dialog,
+    open_delete_dialog, open_folder_dialog, open_lock_busy_dialog, parse_search, pick_directory,
+    prepare_unsaved, project_card, project_menu_entries, render_picker, render_settings,
+    request_close, request_create_project, request_open, request_open_folder,
+    request_version_delete, save_project_info, set_default_connection, set_sort, set_status_filter,
+    set_tab, settings_status_text, snapshot_description, sort_menu_entries,
+    status_filter_menu_entries, status_label, submit_create, submit_open_folder, toggle_archive,
+    visible_items,
 };
 use crate::service::ProjectSummary;
 
@@ -1026,6 +1028,13 @@ fn read_only_blocks_archive_and_version_snapshot(cx: &mut TestAppContext) {
     let versions = crate::service::list_versions(&root).expect("列版本");
     assert!(versions.is_empty(), "只读不该写版本台账");
 
+    // 删除版本同属写操作：只读下连确认态都不该进
+    cx.update(|_, cx| request_version_delete(&host, "any-id", cx));
+    assert!(
+        host.state.borrow().version_delete_confirm.is_none(),
+        "只读不该进入删除确认态"
+    );
+
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -1430,6 +1439,90 @@ fn meta_line_shows_only_last_opened() {
     let line = meta_line(&item);
     assert_eq!(line, "最后打开：2026-11-23 01:00");
     assert!(!line.contains("状态"), "状态不重复展示：{line}");
+}
+
+/// 概览「状态」= 归档状态 + 读写状态；快照没取到时用「—」，不编成「活跃」。
+#[test]
+fn settings_status_text_keeps_registry_state_and_access() {
+    assert_eq!(
+        settings_status_text(Some("archived"), false),
+        "已归档 · 可写"
+    );
+    assert_eq!(settings_status_text(Some("active"), true), "活跃 · 只读");
+    assert_eq!(settings_status_text(None, false), "— · 可写");
+    assert_eq!(settings_status_text(Some("weird"), true), "weird · 只读");
+}
+
+/// 版本删除是两段式：第一步只进确认态（不删数据），第二步确认后才删台账行。
+#[gpui_kit::test]
+fn version_delete_is_two_step(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let root = temp_root("version-delete");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("建项目根");
+    crate::ProjectStore::create("删除项目", &root).expect("建项目");
+
+    let rec = Rc::new(Recorder::default());
+    let host = test_host(&rec);
+    host.set_current(Some(OpenProject::new(root.clone(), "删除项目")));
+    let (host, _inputs, cx) = open_harness(cx, host);
+
+    crate::service::create_version(&root, "第一条").expect("写第一条");
+    crate::service::create_version(&root, "第二条").expect("写第二条");
+    cx.update(|_, cx| load_settings_snapshot(&host, cx));
+
+    let versions = host.state.borrow().settings.versions.clone();
+    assert_eq!(versions.len(), 2, "快照该取到两条");
+    let target = versions
+        .iter()
+        .find(|v| v.message == "第一条")
+        .expect("有第一条")
+        .id
+        .clone();
+
+    // 第一步：只进确认态
+    cx.update(|_, cx| request_version_delete(&host, &target, cx));
+    assert_eq!(
+        host.state.borrow().version_delete_confirm.as_deref(),
+        Some(target.as_str())
+    );
+    assert_eq!(
+        crate::service::list_versions(&root).expect("列版本").len(),
+        2,
+        "第一步不该删数据"
+    );
+
+    // 取消
+    cx.update(|_, cx| cancel_version_delete(&host, cx));
+    assert!(host.state.borrow().version_delete_confirm.is_none());
+
+    // 第二步：确认删除
+    cx.update(|_, cx| request_version_delete(&host, &target, cx));
+    cx.update(|window, cx| confirm_version_delete(&host, &target, window, cx));
+
+    assert!(
+        host.state.borrow().version_delete_confirm.is_none(),
+        "删完清确认态"
+    );
+    assert!(
+        host.state
+            .borrow()
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("已删除版本记录")),
+        "要有删除反馈，实际：{:?}",
+        host.state.borrow().notice
+    );
+    let left = crate::service::list_versions(&root).expect("列版本");
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].message, "第二条");
+    assert_eq!(
+        host.state.borrow().settings.versions.len(),
+        1,
+        "删除后快照应同步"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 /// 创建版本快照成功后要清空备注框：否则连点两次会写下两条一模一样的快照。
