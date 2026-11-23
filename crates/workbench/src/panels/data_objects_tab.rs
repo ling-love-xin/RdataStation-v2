@@ -97,6 +97,13 @@ pub struct DataObjectsTab {
     /// 清单版本号（`Shared::data_objects_epoch`）上次同步到的值：变了就重取，
     /// 让面板跟上「连接变化 / 查询产出结果集 / 加源 / 切项目」
     seen_epoch: u64,
+    /// 过滤后的可见行缓存：`(段筛, 搜索词, 行)`。
+    ///
+    /// render 每帧都要这份清单，而 `data_objects` 在展开源库连接后可能是上千条——
+    /// 每帧「整表克隆 + 逐条筛 + 再逐条克隆命中项」是纯浪费（一次滚动就几千次分配）。
+    /// 只在三件事发生时重建：清单变了（[`Self::refresh`] 写缓存后 / [`Self::render`] 发现
+    /// 外部版本号变了）、段筛变了、搜索词变了。
+    rows_cache: Option<(Option<Group>, String, Vec<data_objects::Object>)>,
 }
 
 impl DataObjectsTab {
@@ -118,6 +125,7 @@ impl DataObjectsTab {
             // 初值故意落后于 Shared（`refresh` 里会同步成当前值）：构造那次刷新已经取过，
             // 不能让「首次 render 又发现 epoch 变了」再白重取一遍
             seen_epoch: shared_epoch,
+            rows_cache: None,
         };
         tab.refresh(cx);
         tab
@@ -242,6 +250,8 @@ impl DataObjectsTab {
         // 资产行单独存一份：`Object` 只带名字与版本，构造来源还要本体路径
         *self.shared.data_object_assets.borrow_mut() = collected.assets.clone();
         *self.shared.data_objects.borrow_mut() = data_objects::objects(&collected);
+        // 清单换了：可见行缓存跟着作废（否则面板会一直画上一次的那份行）
+        self.rows_cache = None;
         // 展开着的源行：清单重取一遍（会话可能被重建，旧清单会骗人）。
         // 刷新是例行动作，失败不刷提示——真正的展开点击才把原因亮出来。
         // 取数在 worker 线程（`source_kids_jobs`），回执由宿主泵写回，这里只提交
@@ -349,9 +359,10 @@ impl DataObjectsTab {
         cx.notify();
     }
 
-    fn render_body(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        let all = self.shared.data_objects.borrow().clone();
-        let total = all.len();
+    fn render_body(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        // 只借不拷：清单在展开源库连接后可能上千条，每帧整表克隆（每条 3~4 个 String）
+        // 是滚动时最大的一笔无谓分配。条数、名字回查都按需借。
+        let total = self.shared.data_objects.borrow().len();
         // 搜索框：`InputState` 要窗口才能建，面板 `new` 没有窗口，所以按 key 在渲染时惰性建
         // （同一 id 每次拿到的是同一个实体，输入内容不会因重渲染丢）
         let search = window.use_keyed_state("data-objects-search", cx, |window, cx| {
@@ -359,19 +370,34 @@ impl DataObjectsTab {
         });
         let query = search.read(cx).value().trim().to_lowercase();
 
+        // 可见行缓存：段筛 / 搜索词 / 清单三者都没变就不重筛（见字段上的注释）。
         // 筛选只改“看得见哪些”，不动工作集：选了某个对象后换个段看，已选仍在
-        let filter = self.filter;
-        let objects: Vec<data_objects::Object> = all
-            .iter()
-            .filter(|object| {
-                filter.is_none_or(|group| object.group == group)
-                    && (query.is_empty()
-                        || object.name.to_lowercase().contains(&query)
-                        || object.note.to_lowercase().contains(&query))
-            })
-            .cloned()
-            .collect();
+        let cache_stale = match &self.rows_cache {
+            Some((filter, seen_query, _)) => *filter != self.filter || *seen_query != query,
+            None => true,
+        };
+        if cache_stale {
+            let all = self.shared.data_objects.borrow();
+            let rows: Vec<data_objects::Object> = all
+                .iter()
+                .filter(|object| {
+                    self.filter.is_none_or(|group| object.group == group)
+                        && (query.is_empty()
+                            || object.name.to_lowercase().contains(&query)
+                            || object.note.to_lowercase().contains(&query))
+                })
+                .cloned()
+                .collect();
+            self.rows_cache = Some((self.filter, query.clone(), rows));
+        }
+        let objects: &[data_objects::Object] = self
+            .rows_cache
+            .as_ref()
+            .map(|(_, _, rows)| rows.as_slice())
+            .unwrap_or_default();
         let picked = self.shared.data_object_picked.borrow().clone();
+        // 行内「这行选没选」原来每行扫一遍工作集（行数 × 已选数）：换成集合查
+        let picked_set: HashSet<&str> = picked.iter().map(|key| key.as_str()).collect();
         // 头部只说清“这是哪一档引擎、现在占多少”：读数在刷新时取一次，取不到就显示「—」
         // 总和“现在看得见几个”不是一回事：筛过之后得把两个数都说出来
         let count_label = if objects.len() == total {
@@ -485,10 +511,12 @@ impl DataObjectsTab {
                 .child(format!("当前对象 · {} 个", picked.len())),
         );
         let mut selected_row = div().h_flex().items_center().flex_wrap().gap_1();
+        // 名字回查按需借（工作集一般只有几个，扫一遍清单是 O(已选 × 清单)，借不拷）
+        let all_for_names = self.shared.data_objects.borrow();
         for key in picked.iter() {
             // 名字要能显示：主清单里有的直接取；源库表叶子只在展开时存在（`conn_children`），
             // 折叠后也得显示得出来——最后按身份反解表名兜底，绝不把 `srctable:C_1|…` 露给用户
-            let name = all
+            let name = all_for_names
                 .iter()
                 .find(|object| &object.key == key)
                 .map(|object| object.name.clone())
@@ -526,6 +554,7 @@ impl DataObjectsTab {
                     ),
             );
         }
+        drop(all_for_names);
         tray = tray.child(selected_row);
         // 原型 07 的 tray 尾巴：先说清这批对象会被怎么用，再把主按钮放这儿——
         // 头部那排按钮是“对这面板做什么”，这里才是“拿这堆对象去做什么”。
@@ -709,12 +738,25 @@ impl DataObjectsTab {
             .overflow_y_scrollbar()
             .id("data-objects-list");
 
+        // 每段几行：段头要显示计数。先一遍数出来，别在段头里再扫一遍整表（5 段 = 5 遍）
+        let mut group_counts: Vec<(Group, usize)> = Vec::new();
+        for object in objects {
+            match group_counts.iter_mut().find(|(group, _)| *group == object.group) {
+                Some((_, count)) => *count += 1,
+                None => group_counts.push((object.group, 1)),
+            }
+        }
+
         let mut last_group: Option<Group> = None;
-        for object in &objects {
+        for object in objects {
             if last_group != Some(object.group) {
                 last_group = Some(object.group);
                 // 段头带计数：这一段里几行，扫一眼就知道要不要往下翻
-                let group_count = objects.iter().filter(|o| o.group == object.group).count();
+                let group_count = group_counts
+                    .iter()
+                    .find(|(group, _)| *group == object.group)
+                    .map(|(_, count)| *count)
+                    .unwrap_or(0);
                 let group = object.group;
                 let expanded = !self.collapsed.contains(&group);
                 let entity_for_group = entity.clone();
@@ -768,7 +810,7 @@ impl DataObjectsTab {
             } else {
                 colors.danger
             };
-            let is_picked = picked.iter().any(|k| k == &object.key);
+            let is_picked = picked_set.contains(object.key.as_str());
             // 只有能用的对象能进工作集：失效行点进去只会在分析时炸；
             // 连接行（`conn:`）也不行——它是表的位置，不是数据对象（见 `Object::can_pick`）
             let pick_button = if object.can_pick() {
@@ -1033,7 +1075,7 @@ impl DataObjectsTab {
                     match self.conn_children.get(&object.key) {
                         Some(children) if !children.is_empty() => {
                             for leaf in children.iter() {
-                                let leaf_picked = picked.iter().any(|key| key == &leaf.key);
+                                let leaf_picked = picked_set.contains(leaf.key.as_str());
                                 list = list.child(source_table_leaf_row(
                                     leaf,
                                     leaf_picked,
@@ -1404,6 +1446,9 @@ impl Render for DataObjectsTab {
         let epoch = self.shared.data_objects_epoch.get();
         if epoch != self.seen_epoch {
             self.seen_epoch = epoch;
+            // 别的路径写了清单（加源、切项目）：缓存作废，这一帧就按新清单重建，
+            // 不靠下一帧的 refresh 才跟上
+            self.rows_cache = None;
             cx.defer_in(window, |tab, _window, cx| tab.refresh(cx));
         }
         self.render_body(window, cx)
