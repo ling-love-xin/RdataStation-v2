@@ -37,7 +37,7 @@
 | ⑧ 文档同步 | 原型 §5.1（改写为「设置·项目页」并补动作投递、入口、为什么不再占 Dock）、§11 / §13.1 落点、使用手册 §2 / §3.3 / §3.4 / §3.6 / §4.4 / §4.5 / §5 / §6 / §9、视图架构 §2（宿主新增两槽的语义）/ §3（子模块表）/ §7、接线矩阵（新函数行 + 行数）、本文、两份 README（模块入口 + crate 入口）、`project-showcase.md`、`settings-architecture.md` | 本提交 |
 | 验证 | settings：`cargo check -p rds-settings --all-targets -j 1` 零告警、`cargo test -p rds-settings -j 1` **49 项**全过（新增 2 项：id 只随 seq 变、切节必须重挂骨架）、`cargo clippy` 干净；project：`check --all-targets` 零告警、`test` = **64 lib + 1 + 5 + 3**、`clippy --all-targets` 无新增告警；workbench：`check --lib` / `--all-targets` 通过、`test --lib` **192 项**全过、`clippy --lib` 干净；`rustfmt --check` 干净 | — |
 | 已知取舍 | ① 设置页列表高度固定 `rems(30.0)`：`render_picker` 根是 `size_full`，放进自适应高度的卡片会塌成 0 且内部滚动失效；② 切节代价是换 keyed-state id，搜索框内容与滚动位置会重置；③ `projects_panel` 在 `open_settings_at` 时捕获 `Option<ProjectUiHost>` / `Option<ProjectInputs>`，首次渲染前打开设置窗口会显示「尚未装配」占位；④ 设置页里点入口时若有未保存草稿，拦截对话框弹在**主窗口**（甲方案的自然结果） | §13.1 |
-| 遗留 | §13.1 剩余 7 条产品差异（#4 / #5 / #7 / #8 / #12 / #13 后半 / #17）仍待逐项拍板；`clippy -p rds-workbench --all-targets` 因工作区另一处未提交改动的变体改名而无法跑完（`--lib` 已通过） | §13.1 |
+| 遗留 | §13.1 剩余 7 条产品差异（#4 / #5 / #7 / #8 / #12 / #13 后半 / #17）仍待逐项拍板。`clippy -p rds-workbench --all-targets` 曾在 ⑦ 刀落地时被工作区另一处未提交改动挡住（变体改名未同步测试），该改动合入后补跑：**exit 0、0 error，本刀改动的四个 workbench 文件零命中** | §13.1 |
 
 ### 2026-11-24 — 项目管理入口补齐（四刀：菜单与切换 / 项目中心覆盖层 / 文档 / 示例入口）+ 只读判据收窄
 
