@@ -47,6 +47,18 @@ impl Locale {
             _ => Locale::Zh,
         }
     }
+
+    /// 组件库（`gpui-kit` 内的 rust-i18n）认的语言码。
+    ///
+    /// 与 [`Locale::code`] 分开是必须的：存储码是 `zh` / `en`，而组件库
+    /// `locales/ui.yml` 的语言块是 **`zh-CN`** —— 直接把 `zh` 透传过去命中不到，
+    /// rust-i18n 会静默回退到 `en`（组件内置文案仍是英文，且不报错）。
+    pub fn component_code(self) -> &'static str {
+        match self {
+            Locale::Zh => "zh-CN",
+            Locale::En => "en",
+        }
+    }
 }
 
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -141,6 +153,17 @@ mod tests {
         assert_eq!(current(), Locale::Zh);
         set_locale(Locale::En);
         assert_eq!(current(), Locale::En);
+    }
+
+    /// 存储码 ≠ 组件库语言码：`appearance.locale` 存 `zh`，而组件库 `ui.yml` 的语言块是
+    /// `zh-CN`。谁把 `code()` 直接透传给 rust-i18n，组件文案就会静默回退英文——这条钉住映射。
+    #[test]
+    fn component_locale_code_differs_from_storage_code() {
+        assert_eq!(Locale::Zh.code(), "zh");
+        assert_eq!(Locale::Zh.component_code(), "zh-CN");
+        assert_ne!(Locale::Zh.code(), Locale::Zh.component_code());
+        assert_eq!(Locale::En.code(), "en");
+        assert_eq!(Locale::En.component_code(), "en");
     }
 
     /// 目录化完整性：zh / en 键集合完全一致（漏译、误植键、多余键都会让本测试失败）。
