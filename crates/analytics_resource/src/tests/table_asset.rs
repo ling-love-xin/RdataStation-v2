@@ -5,7 +5,7 @@
 
 use super::*;
 
-use crate::table_asset::{TableAssetRequest, register};
+use crate::table_asset::{ExistingTableOutcome, TableAssetRequest, register, register_existing};
 
 fn request(name: &str, table: &str) -> TableAssetRequest {
     TableAssetRequest {
@@ -95,6 +95,67 @@ async fn blank_name_or_table_is_rejected() {
     assert!(
         store.list_alive_resources().await.expect("清单").is_empty(),
         "被拒的请求不该留下任何行"
+    );
+
+    cleanup(dir);
+}
+
+/// 「登记为资产」：给库里已有的表补身份——v1、不搬数据、不走版本。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn registering_an_existing_table_gives_it_an_identity() {
+    let (store, dir) = create_test_store().await;
+
+    let outcome = register_existing(&store, request("订单宽表", "orders_wide"))
+        .await
+        .expect("登记应成功");
+    let ExistingTableOutcome::Registered(outcome) = outcome else {
+        panic!("首次登记不该报「已登记过」");
+    };
+    assert_eq!(outcome.version, 1);
+    assert!(!outcome.created_new_version, "登记不是新版本");
+
+    let row = store
+        .get_resource_by_id(&outcome.resource_id)
+        .await
+        .expect("行应读得回来");
+    assert_eq!(row.analytics_table.as_deref(), Some("orders_wide"));
+    assert_eq!(
+        crate::ArchiveKind::resolve(&row.kind, row.analytics_table.as_deref()),
+        crate::ArchiveKind::AnalyticsTable
+    );
+
+    cleanup(dir);
+}
+
+/// 同一张表再登记一次：不造第二条、不涨版本，交回原来那条（口径：定位而非重复登记）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn registering_the_same_table_twice_returns_the_same_asset() {
+    let (store, dir) = create_test_store().await;
+
+    let first = register_existing(&store, request("订单宽表", "orders_wide"))
+        .await
+        .expect("首次登记");
+    let first_id = first.outcome().resource_id.clone();
+
+    let again = register_existing(&store, request("换个名字", "orders_wide"))
+        .await
+        .expect("再登记");
+    let ExistingTableOutcome::AlreadyCurrent(again) = &again else {
+        panic!("同一张表不该被登记第二次");
+    };
+    assert_eq!(again.resource_id, first_id, "交回同一条资产");
+    assert_eq!(again.name, "订单宽表", "名字以首次登记为准，不被后来者覆盖");
+    assert_eq!(again.version, 1, "不涨版本");
+    assert_eq!(
+        store
+            .list_alive_resources()
+            .await
+            .expect("清单")
+            .iter()
+            .filter(|row| row.analytics_table.as_deref() == Some("orders_wide"))
+            .count(),
+        1,
+        "库里只留一条指向这张表的资产"
     );
 
     cleanup(dir);

@@ -70,6 +70,105 @@ pub(crate) fn table_fingerprint(table: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+/// 「登记为资产」的两种结果（对**已存在的表**，不搬数据、不涨版本）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExistingTableOutcome {
+    /// 这张表原先没有身份，本次登记成 v1。
+    Registered(TableAssetOutcome),
+    /// 这张表已经是某条资产的当前版本：不造第二条，直接把那条交回去（口径：定位而非重复登记）。
+    AlreadyCurrent(TableAssetOutcome),
+}
+
+impl ExistingTableOutcome {
+    pub fn outcome(&self) -> &TableAssetOutcome {
+        match self {
+            Self::Registered(outcome) | Self::AlreadyCurrent(outcome) => outcome,
+        }
+    }
+
+    /// 状态栏回执：两种结果说法不同（"已登记" vs "已登记过，带你去看"）。
+    pub fn notice(&self) -> String {
+        match self {
+            Self::Registered(outcome) => format!("已登记为资产「{}」v{}", outcome.name, outcome.version),
+            Self::AlreadyCurrent(outcome) => format!(
+                "「{}」已是资产 v{} 的当前版本，没有重复登记",
+                outcome.name, outcome.version
+            ),
+        }
+    }
+}
+
+/// 登记一张**已经在项目分析库里**的表（数据对象面板「登记为资产」）。
+///
+/// 与 [`register`] 的分工：`register` 服务「升级」（数据刚被搬成新表，可能是同名链的
+/// 新版本）；本函数服务「这张表本来就在库里、只是没有资产身份」——所以它**不改版本、
+/// 不写快照、不搬数据**，命中已登记的表就原样返回那条资产。
+pub async fn register_existing(
+    store: &AnalyticsResourceStore,
+    request: TableAssetRequest,
+) -> Result<ExistingTableOutcome, CoreError> {
+    let name = request.name.trim().to_string();
+    let table = request.analytics_table.trim().to_string();
+    if name.is_empty() {
+        return Err(CoreError::common(CommonError::General(
+            "登记为资产需要显示名".to_string(),
+        )));
+    }
+    if table.is_empty() {
+        return Err(CoreError::common(CommonError::General(
+            "登记为资产需要本体表名（项目分析库里的那张表）".to_string(),
+        )));
+    }
+    // 幂等：这张表已经有身份 → 交回那条资产，不造第二条、不涨版本。
+    if let Some(row) = store.latest_alive_by_analytics_table(&table).await? {
+        return Ok(ExistingTableOutcome::AlreadyCurrent(TableAssetOutcome {
+            resource_id: row.id,
+            name: row.name,
+            version: row.version,
+            created_new_version: false,
+        }));
+    }
+    let content_hash = table_fingerprint(&table);
+    let input = NewArchiveInput {
+        resource_type: "analysis".to_string(),
+        name: name.clone(),
+        alias: None,
+        kind: ArchiveKind::AnalyticsTable,
+        content_hash: content_hash.clone(),
+        definition_sql: None,
+        row_count: request.row_count,
+        column_count: request.column_count,
+        // 表型资产没有 `resources/` 下的本体文件（写库侧会把空串转成 NULL）
+        file_rel_path: String::new(),
+        payload_mode: PayloadMode::Copy,
+        source_path: None,
+        file_size: None,
+        structured: true,
+        binding: ArchiveBinding {
+            promoted_from: None,
+            source_connection_id: None,
+            source_table: Some(table.clone()),
+        },
+        scope: "project".to_string(),
+    };
+    let detail = format!("登记项目分析库里已有的表 {table}");
+    let resource = store
+        .insert_table_archive_with_event(input, &table, Some(&detail))
+        .await?;
+    Ok(ExistingTableOutcome::Registered(outcome(resource, false)))
+}
+
+/// 宿主入口（数据对象面板「登记为资产」）：按项目根开库后登记。
+pub async fn register_existing_at(
+    project_root: &Path,
+    request: TableAssetRequest,
+) -> Result<ExistingTableOutcome, CoreError> {
+    let db_path = project_root.join(PROJECT_META_DB);
+    let pool = Arc::new(ProjectSqlitePool::new(db_path, 2).await?);
+    let store = AnalyticsResourceStore::new(pool);
+    register_existing(&store, request).await
+}
+
 /// 在**给定 store** 上登记（测试与宿主共用；`register_at` 只是它的一层开库封装）。
 pub async fn register(
     store: &AnalyticsResourceStore,

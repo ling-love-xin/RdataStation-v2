@@ -70,6 +70,33 @@ impl AnalyticsResourceStore {
         }
     }
 
+    /// 按**本体表名**找当前版本的那条资产行（「登记为资产」的幂等判据）。
+    ///
+    /// 一张表只该有一条资产（`append_table_version` 改的是同一行的 `analytics_table`），
+    /// 所以命中即"这张表已有身份"，不该再登记一次。若有历史脏数据同表两个名字，
+    /// 按版本降序取最新那条。
+    pub async fn latest_alive_by_analytics_table(
+        &self,
+        table: &str,
+    ) -> Result<Option<AnalyticsResource>, CoreError> {
+        let conn = self.get_conn().await?;
+        let sql = format!(
+            "SELECT {RESOURCE_COLUMNS} FROM analytics_resources \
+             WHERE analytics_table = ?1 AND deleted_at IS NULL ORDER BY version DESC LIMIT 1"
+        );
+        let mut stmt = conn
+            .inner()?
+            .prepare(&sql)
+            .map_err(|e| persistence_err("select", e))?;
+        let mut rows = stmt
+            .query_map(rusqlite::params![table], map_resource_row)
+            .map_err(|e| persistence_err("select", e))?;
+        match rows.next() {
+            Some(row) => Ok(Some(row.map_err(|e| persistence_err("select", e))?)),
+            None => Ok(None),
+        }
+    }
+
     /// 单连接版本的读取：供"读 → 写"必须在同一事务内完成的路径复用。
     ///
     /// v1 的 `update_resource` 先占一条连接，调 `get_resource_by_id` 又占一条，存快照再占一条
