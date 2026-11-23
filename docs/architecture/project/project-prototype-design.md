@@ -175,24 +175,47 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 [📁] 项目 营销分析        ← 文件夹图标 + 「项目」 + 名称（实测：没有状态点）
 ```
 
-点击弹出**项目菜单**（`popover` token），条目来自 `project::ui::project_menu_entries(read_only)`（**非只读 6 项；只读时顶部多一条置灰说明，共 7 项**，顺序如下）：
+点击弹出**项目菜单**（`popover` token），条目来自 `project::ui::project_menu_entries(read_only)`（**非只读 8 项；只读时顶部多一条置灰说明，共 9 项**，顺序如下）：
 
 ```
 ┌────────────────────────────┐
 │ 只读模式：写操作不可用      │  ← 仅只读打开时出现，禁用态
 │ ──────────────────────────  │
-│ 切换项目…                  │
-│ 项目设置…                  │
-│ 重命名…                    │  ← 只读时禁用
-│ 在资源管理器中显示           │
+│ ＋ 新建项目…               │  ← 作用于别的目录，只读时仍可用
+│ 🗀 打开现有目录…            │  ← 同上
 │ ──────────────────────────  │
-│ 归档 / 取消归档             │  ← 只读时禁用
+│ ← 项目中心…                │  ← 打开覆盖层，不关闭当前项目
+│ ⚙ 项目设置…                │
+│ ▤ 重命名…                  │  ← 只读时禁用
+│ ↗ 在资源管理器中显示         │
 │ ──────────────────────────  │
-│ 关闭项目                    │
+│ ▥ 归档 / 取消归档           │  ← 只读时禁用
+│ ──────────────────────────  │
+│ ✕ 关闭项目                  │
 └────────────────────────────┘
 ```
 
-> 菜单项**不显示快捷键**（`PopupMenuItem` 只有 label + icon + 禁用态）；但快捷键本身仍在：`Ctrl+Shift+P` = 切换项目、`Ctrl+Shift+W` = 关闭项目（`crates/app/src/main.rs` 的 `KeyBinding::new("ctrl-shift-p", SwitchProject, Some("workbench"))` 与 `"ctrl-shift-w"`，context `"workbench"`）。“切换项目…”与“关闭项目”在实现上是同一条回头路（关当前 + 回选择器），“重命名…”是“项目设置…”的直达别名。提升/引用**不在此菜单**（范围外，见 §12）。固定/取消固定为选择器卡片级操作，不进标题栏菜单。缺失驱动只在**卡片**上以 `⚠ 缺失驱动：…` 一行展示，菜单里没有警告行。
+> **两份菜单都覆盖「有项目时怎么进别的项目」**：`new` / `open-folder` 走 `request_create_project` / `request_open_folder`（有草稿先拦，确认后直达目标对话框，见 §8），`switch` 走 `open_project_hub`（覆盖层，见 §5.1）。菜单项**不显示快捷键**（`PopupMenuItem` 只有 label + icon + 禁用态）；快捷键：`Ctrl+Shift+P` = 打开项目中心、`Ctrl+Shift+W` = 关闭项目（`crates/app/src/main.rs` 的 `KeyBinding::new("ctrl-shift-p", SwitchProject, Some("workbench"))` 与 `"ctrl-shift-w"`，context `"workbench"`）。两者已彻底分工：`SwitchProject` **不再**等价于 `CloseProject`。`重命名…` 是 `项目设置…` 的直达别名。提升/引用**不在此菜单**（范围外，见 §12）。固定/取消固定为选择器卡片级操作，不进标题栏菜单。缺失驱动只在**卡片**上以 `⚠ 缺失驱动：…` 一行展示，菜单里没有警告行。
+
+### 5.1 项目中心（覆盖层，有项目态）
+
+「有项目时，别的项目在哪里管理」——答案是**覆盖层**，不是要求先关项目：
+
+```
+┌────────────────────────────────────────────────────────────┐
+│ 项目中心    当前：营销分析   点「打开」切换到该项目；…   [✕ 关闭] │
+├────────────────────────────────────────────────────────────┤
+│ （与选择器同一份列表：Tab / 搜索 facet / 状态 / 排序 / 卡片菜单）  │
+│  营销分析  active 已固定 [当前]        [打开] [⋯]            │
+│  流量看板  archived                   [打开] [⋯]            │
+└────────────────────────────────────────────────────────────┘
+```
+
+- **复用选择器**：`render_project_hub` 只加一条 header，body 直接挂 `render_picker`——列表、搜索、facet、排序、卡片右键/`⋯`、只读置灰**没有第二套实现**。
+- **当前标记**：卡片按「`item.path == host.root()`」打 `Tag::primary().child("当前")`（判据是纯函数 `is_current_project`）。
+- **切换语义**：卡片「打开」与 `⋯` 的「打开」都走 `request_switch`：无当前项目 → 等价 `request_open`；目标 == 当前根 → no-op；脏草稿 → `open_unsaved_dialog(..., PendingAction::SwitchTo(path))`；否则 `switch_now` = `do_close`（还锁 + `on_closed` 清连接作用域）→ `open_path`。**先释放再打开**，不把新锁盖在旧会话上。
+- **开关**：`Ctrl+Shift+P` / 菜单「项目中心…」→ `open_project_hub`（置 `hub_open` + `refresh_picker`）；右上「关闭」→ `close_project_hub`；项目打开成功（`apply_opened`）与关闭项目（`do_close`）都会复位 `hub_open`。
+- **为什么不做 Dock 常驻 tab**：常驻 tab 在每次打开项目后都占着中央区、与编辑器 tab 争位置；覆盖层「用的时候才出现」，且不动 Dock 装配。无项目态不需要它——中央区本来就是完整选择器。
 
 ## 6. 新建项目对话框（Create）
 
@@ -289,7 +312,7 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 
 | 组成 | 类型/位置 |
 | --- | --- |
-| 项目管理 UI（选择器 / 菜单 / 对话框 / 设置） | `crates/project/src/ui.rs`（公共面：类型、`ProjectUiHost`、UI 状态与输入实体；视图与 model/service 同 crate）+ 五个子模块 `ui/{host,actions,dialogs,picker,settings}.rs`（`pub use` 重导出，`project::ui::*` 路径不变）。选择器 = `render_picker`（挂载在 `crates/workbench/src/panels/project_picker.rs:132`）；设置 = `render_settings`（覆盖式面板，挂载在 `crates/workbench/src/view/render.rs:362`）；菜单 = 语义 `Button::dropdown_menu` + `PopupMenu`；对话框 = `Dialog` / `AlertDialog` |
+| 项目管理 UI（选择器 / 项目中心 / 菜单 / 对话框 / 设置） | `crates/project/src/ui.rs`（公共面：类型、`ProjectUiHost`、UI 状态与输入实体；视图与 model/service 同 crate）+ 六个子模块 `ui/{host,actions,dialogs,hub,picker,settings}.rs`（`pub use` 重导出，`project::ui::*` 路径不变）。选择器 = `render_picker`（挂载在 `crates/workbench/src/panels/project_picker.rs` 的 `ProjectPickerPanel`，仅无项目态可见）；**项目中心** = `render_project_hub`（覆盖层，挂载在 `crates/workbench/src/view/render.rs`，位于 `render_settings` **之前**，与设置面板同时打开时设置在上层）；设置 = `render_settings`（覆盖式面板）；菜单 = 语义 `Button::dropdown_menu` + `PopupMenu`；对话框 = `Dialog` / `AlertDialog` |
 | 项目服务编排（列表 / 创建 / 打开 / 关闭 / 更新 / 删除 / 找回 / 版本） | `crates/project/src/service.rs` |
 | 项目视图 ↔ 宿主桥（重绘 / 编辑区 / 排序偏好 / 打开后刷新） | `crates/workbench/src/components/project_host.rs`（`ProjectUiHost` 注入） |
 | 会话解析（env → 最近 → 空态） | `crates/workbench/src/services/project_session.rs` |
@@ -344,7 +367,7 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 | 10 | 项目设置为「中央编辑区 Tab」、6 节 | **覆盖式面板**、**7 节**（多「基本信息」；「依赖自检」实际叫「依赖」） | `ui.settings_open`；7 处 `section(theme, …)` |
 | 11 | 「版本」= `Version` 版本链 | 实际是**手动快照台账**（`project_versions` 一行一条 message，不承载内容），支持记录 / 列出 / 按 id 删除（行内两段式确认） | `service::{list_versions, create_version, delete_version}`；`models.rs` 对 `Versioned` 的「未接入」标注 |
 | 12 | 标题栏项目槽带状态点（`●`，警告=缺失驱动/归档） | 槽内是 `Folder` 图标 + 「项目」+ 名称，**没有状态点** | `view/dock.rs::render_title_bar`（`Button::new("project-slot")` + `CatalogIcon::Folder`） |
-| 13 | 项目菜单 6 项，「切换项目…」带 `Ctrl+⇧P`，顶部一条缺失驱动黄色警告行 | **项数一致（非只读 6 项）**：切换项目…/项目设置…/重命名…/在资源管理器中显示/──/归档 / 取消归档/──/关闭项目；只读时顶部多插一条置灰说明「只读模式：写操作不可用」（共 7 项）；菜单**不显示快捷键**、**无缺失驱动警告行**（快捷键本身仍在：`crates/app/src/main.rs` 的两条 `KeyBinding` 分别绑 `Ctrl+Shift+P` / `Ctrl+Shift+W`） | `ui.rs::project_menu_entries` / `ui.rs::build_project_menu` |
+| 13 | 项目菜单 6 项，「切换项目…」带 `Ctrl+⇧P`，顶部一条缺失驱动黄色警告行 | **8 项**（非只读）：「新建项目…」/「打开现有目录…」/──/「**项目中心…**」（原「切换项目…」）/「项目设置…」/「重命名…」/「在资源管理器中显示」/──/「归档 / 取消归档」/──/「关闭项目」；只读时顶部多插一条置灰说明（共 9 项），`new` / `open-folder` **保持可用**、`rename` / `archive` 置灰；菜单**不显示快捷键**、**无缺失驱动警告行**（快捷键本身仍在：`crates/app/src/main.rs` 的两条 `KeyBinding` 分别绑 `Ctrl+Shift+P`（打开项目中心）/ `Ctrl+Shift+W`（关闭项目）） | `ui/picker.rs::project_menu_entries` / `build_project_menu` |
 | 14 | 未保存拦截按钮「保存 / 不保存 / 取消」 | 「取消 / 放弃更改并继续 / 保存并继续」（标题「未保存的草稿」） | `ui.rs::open_unsaved_dialog` |
 | 15 | 锁对话框按钮顺序「取消 / 只读打开 / 仍要打开」 | 标题「项目「{name}」已在另一实例打开」、正文给 pid，按钮「取消 / 仍要打开 / 只读打开」 | `ui.rs::open_lock_busy_dialog` |
 | 16 | 选择器顶部只有一个「排序: 最近打开 ▾」 | 搜索框（placeholder 含 facet 说明）+ `状态：<当前>` + `排序：<当前>` 两个下拉 | `ui.rs::render_picker`（搜索行 / 两个下拉在 `render_picker` 内组装）；`ui.rs::StatusFilter` |
@@ -359,3 +382,16 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 
 **本轮核对范围**：§2 CRUD 全览（R4 搜索 facet、D1/D2 入口）、§3 三态与项目槽、§4 布局与卡片、§5 项目菜单、§6 新建对话框、§7 设置视图、§8 未保存拦截与锁、§9 校验清单、§10 token 名（抽查 `vendor/gpui-component/src/theme/schema.rs`：`list_hover` / `list_active` / `list_active_border` / `description_list.label.*` / `muted_foreground` 均存在；`title_bar.slot.background` 属产品 token）、§11 落点表中的文件路径（逐条 `Test-Path` 核对，已修正 `crates/store` 两处），均已与 `crates/project/src/ui.rs` / `crates/workbench/src/view/dock.rs` 对照修正。
 **仍未逐条比对**：§10 只核到 token 名存在、未核每个组件实际取色调用（值以 `assets/themes/rds-theme.json` 为准，见 `theme/theme-design.md`）；§11 表内的组件选型描述（组件名以 `vendor/gpui-component` 0.10.0 源码为准，未逐行核到每个 view 文件）；§12 范围外。涉及实现细节时以 `project-wiring-matrix.md` 与源码为准，不要引用本文当接口文档。
+
+### 13.1 2026-11-24 增量（项目管理入口：三刀）
+
+| 改动 | 落点 |
+| --- | --- |
+| 菜单 6 → 8 项（+「新建项目…」/「打开现有目录…」，只读仍可用）；「切换项目…」→「项目中心…」 | `ui/picker.rs::project_menu_entries` / `attach_project_menu_handler`；期望值在 `ui/tests.rs::menu_spec_*` |
+| **真正的切换**：`PendingAction::SwitchTo`；`request_switch` 判三分（无当前 → `request_open`；同根 → no-op；脏草稿 → 拦截后 `switch_now`）；`switch_now` = `do_close` → `open_path` | `ui.rs`（`PendingAction`）、`ui/actions.rs`、`ui/dialogs.rs::advance_pending` |
+| **项目中心覆盖层**（不关当前项目也能浏览 / 管理别的项目）：`open_project_hub` / `close_project_hub` / `render_project_hub`，body 复用 `render_picker`；当前项目卡片打「当前」`Tag` | `ui/hub.rs`、`ui/picker.rs::is_current_project` / `project_card` |
+| `Ctrl+Shift+P` 由 `request_close` 改为 `open_project_hub`，与 `Ctrl+Shift+W` 分工 | `crates/workbench/src/view/render.rs`（`SwitchProject` 处理器）；覆盖层挂在 `render_settings` 之前 |
+| `ProjectUiState` 8 → 9 字段（加 `hub_open`）；`apply_opened` / `do_close` 复位 | `ui.rs`、`ui/actions.rs` |
+| 测试 42 → 48（30 窗口 + 18 纯函数；lib 61） | `ui/tests.rs`（`project_hub_*`、`current_marker_only_for_current_root`） |
+
+> 仍未做（与设计稿的既有差异，非本轮引入）：标题栏槽**无状态点**（#12）、空态**无按钮**（#17）、卡片缺连接数与版本数（#4）、路径中间省略（#5）、新建对话框宽 448（#7）与其三项复选框缺失（#8）、菜单不显示快捷键（#13 后半）。

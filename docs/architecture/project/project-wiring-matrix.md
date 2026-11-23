@@ -10,7 +10,7 @@
 >
 > **2026-11-23 复核（遗留点清理第三、四刀）**：
 > ① **写动作加 toast 通道**：`save_project_info` / `toggle_archive` / `set_default_connection` / `create_version_action` 改走 `notify_success` / `notify_error`（`state.notice` + `window.push_notification` 双写）——此前只写 `state.notice`，而设置面板与标题栏菜单里不渲染它，用户点完没有反馈。
-> ② **删死字段** `ProjectUiState::epoch`（仅两处 `+= 1`，crate 内外零读点）；`ProjectUiState` 现 **8 字段**（新增 `version_delete_confirm`）。
+> ② **删死字段** `ProjectUiState::epoch`（仅两处 `+= 1`，crate 内外零读点）；`ProjectUiState` 当时 **8 字段**（新增 `version_delete_confirm`）——2026-11-24 再加 `hub_open`，现为 **9 字段**（见文末「项目管理入口补齐」）。
 > ③ **新增版本台账删除**：`service::delete_version`（按 `project_versions.id` 删行，先把指向它的 `parent_id` 置空再删）；UI 侧 `versions_view` 行内「删除」两段式（`request_version_delete` → `confirm_version_delete` / `cancel_version_delete`），`SettingsSnapshot` 新增 `status`，概览「状态」改为「归档状态 · 读写状态」（`settings_status_text`）。
 > 本文是**唯一接线台账**；改 `crates/project` 实现后请同步本表。
 
@@ -30,8 +30,8 @@
 | `lock.rs` | 230 行 | ✅ 全部已接线 |
 | `store.rs` | 948 行 | ⚠️ 核心已接线；**死代码已清（ProjectManager / to_project / stub），剩 1 组归属待定**（见下）；新增 `BUILD_TAG_KEY` 写盘分支 |
 | `models.rs` | 371 行 | ⚠️ 域模型已接线，**含 1 组预留**（版本化） |
-| `ui.rs` + `ui/{host,actions,dialogs,picker,settings}.rs` | 622 + 59 + 396 + 834 + 848 + 785 行（合计 3544；`ui.rs` 只留公共面） | ✅ 全部已接线（有窗口测试锚定） |
-| `ui/tests.rs` | 1571 行（测试 42 项：25 窗口 + 17 纯函数） | ✅ 全部已接线 |
+| `ui.rs` + `ui/{host,actions,dialogs,hub,picker,settings}.rs` | 630 + 59 + 436 + 836 + 94 + 897 + 785 行（合计 3737；`ui.rs` 只留公共面） | ✅ 全部已接线（有窗口测试锚定） |
+| `ui/tests.rs` | 1737 行（测试 48 项：30 窗口 + 18 纯函数） | ✅ 全部已接线 |
 
 ## 逐方法
 
@@ -117,7 +117,7 @@
 
 ### `ui.rs` + 子模块（✅ 全部已接线）
 
-选择器 / 标题栏菜单 / 项目设置 / 语义对话框 / 宿主桥 `ProjectUiHost`，均有窗口测试锚定（`ui/tests.rs` 42 项：25 窗口 + 17 纯函数）。
+选择器 / 项目中心 / 标题栏菜单 / 项目设置 / 语义对话框 / 宿主桥 `ProjectUiHost`，均有窗口测试锚定（`ui/tests.rs` 48 项：30 窗口 + 18 纯函数）。
 
 2026-11-22 新增接线（均已接线、有生产调用方）：
 
@@ -161,3 +161,26 @@
 - 逐字搬迁，未改任何逻辑（含注释）。
 
 验证（拆分后）：`cargo check -p rds-project --all-targets -j 1` 零告警；`cargo test -p rds-project -j 1` = 55 + 1 + 5 + 3（与拆分前同数）；`cargo clippy` 仍 2 条基线；`cargo check -p rds-workbench --lib -j 1` 通过（下游调用面不变）；`rustfmt --edition 2024 --check` 干净。
+
+## 2026-11-24 项目管理入口补齐（三刀）
+
+「切换 / 创建 / 管理项目在哪里」此前没有完整入口：有项目时选择器整块从 Dock 消失，`SwitchProject` 又和 `CloseProject` 逐字相同。本轮补齐后的接线落点：
+
+| 新增 / 改动 | 位置 | 接线 |
+| --- | --- | --- |
+| `PendingAction::SwitchTo(PathBuf)` | `ui.rs` | 与 `OpenPath` 的区别：后者假定「当前没有项目」 |
+| `request_switch(host, path, window, cx)` | `ui/actions.rs` | 卡片「打开」与 `⋯`「打开」；三分：无当前 → `request_open`；同根 → no-op；脏草稿 → `open_unsaved_dialog(…, SwitchTo)` |
+| `switch_now(host, path, window, cx)` | `ui/actions.rs` | `do_close`（还锁 + `on_closed` 刷新连接作用域）→ `open_path`；由 `advance_pending` 的 `SwitchTo` 分支调用 |
+| `advance_pending` 的 `SwitchTo` 分支 | `ui/dialogs.rs` | 未保存对话框「保存 / 放弃并继续」后直达切换 |
+| `open_project_hub(host, cx)` | `ui/hub.rs` | 标题栏菜单「项目中心…」（`picker.rs::attach_project_menu_handler` 的 `switch` 分支）与 `SwitchProject` 动作 |
+| `close_project_hub(host, cx)` | `ui/hub.rs` | 覆盖层 header 的 `project-hub-close` 按钮 |
+| `render_project_hub(host, inputs, cx)` | `ui/hub.rs` | 挂载于 `crates/workbench/src/view/render.rs`（有项目时；在 `render_settings` 之前） |
+| `is_current_project(root, item)` | `ui/picker.rs` | 卡片「当前」`Tag` 的判据；纯函数单测 |
+| `ProjectUiState::hub_open` | `ui.rs` | `ProjectUiState` 现 **9 字段**；`apply_opened` / `do_close` 复位 |
+| `SwitchProject` 处理器 | `crates/workbench/src/view/render.rs` | 由 `request_close` 改为 `open_project_hub`；`CloseProject` 仍 `request_close` |
+| 右侧栏 `picker-new` / `picker-open` | `ui/picker.rs` | 改走 `request_create_project` / `request_open_folder`（有项目时先拦截草稿） |
+| 菜单项「新建项目…」/「打开现有目录…」/「项目中心…」 | `ui/picker.rs::project_menu_entries` + `attach_project_menu_handler` | 8 项（只读 9 项）；`new` / `open-folder` 只读仍可用 |
+
+行数与测试（按 `\n` 口径实测）：`ui.rs` 630、`ui/host.rs` 59、`ui/actions.rs` 436、`ui/dialogs.rs` 836、`ui/hub.rs` 94、`ui/picker.rs` 897、`ui/settings.rs` 785（合计 3737）；`ui/tests.rs` 1737 行、**48 项**（30 窗口 + 18 纯函数），本 crate lib 共 61 项。
+
+验证：`cargo check -p rds-project --all-targets -j 1` 零告警；`cargo test -p rds-project -j 1` = 61 + 1 + 5 + 3 全过；`cargo clippy -p rds-project --all-targets -j 1` 仍只有 2 条基线（`service.rs` 的 `OpenOutcome` 与 `ui/dialogs.rs::dialog_footer_three`，有意保留）；`cargo check -p rds-workbench --lib -j 1` 通过；`rustfmt --edition 2024 --check` 干净。

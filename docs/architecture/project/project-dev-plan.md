@@ -1,6 +1,6 @@
 # 项目管理模块 · 开发方案（P0 + Phase A/B/C）
 
-> 状态：**已实现（Phase A/B 主体 + Phase C1/C2 + C1/C4/B1 + B2/B3 + A1 + C3/C5 + E1/E4）**（2026-09-19，`cargo check -p rds-project -p rds-workbench --all-targets` 零告警；project 43 lib（含 20 项窗口测试 + 9 项纯函数）+ 1 名册集成 + 4 存储集成全绿）。**2026-11-22 实测**：lib 50（含 24 窗口 + 14 纯函数）+ 名册集成 1 + 生命周期集成 5 + 存储集成 3，全绿。**2026-11-23 实测**：lib 55（`ui/tests.rs` 42 项 = 25 窗口 + 17 纯函数）+ 1 + 5 + 3，全绿；`ui.rs` 已拆为公共面 + 五个子模块。 · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）、`project-view-architecture.md`（视图架构与测试）、`project-user-guide.md`（使用手册）
+> 状态：**已实现（Phase A/B 主体 + Phase C1/C2 + C1/C4/B1 + B2/B3 + A1 + C3/C5 + E1/E4）**（2026-09-19，`cargo check -p rds-project -p rds-workbench --all-targets` 零告警；project 43 lib（含 20 项窗口测试 + 9 项纯函数）+ 1 名册集成 + 4 存储集成全绿）。**2026-11-22 实测**：lib 50（含 24 窗口 + 14 纯函数）+ 名册集成 1 + 生命周期集成 5 + 存储集成 3，全绿。**2026-11-23 实测**：lib 55（`ui/tests.rs` 42 项 = 25 窗口 + 17 纯函数）+ 1 + 5 + 3，全绿；`ui.rs` 已拆为公共面 + 五个子模块。**2026-11-24 实测**：lib 61（`ui/tests.rs` 48 项 = 30 窗口 + 18 纯函数）+ 1 + 5 + 3，全绿；子模块增至六个（新增 `ui/hub.rs`）。 · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）、`project-view-architecture.md`（视图架构与测试）、`project-user-guide.md`（使用手册）
 > 前置：v1 行为蓝本 `v1/backend/src/commands/project_commands.rs`；v2 后端已迁移（`crates/project`：`store.rs` / `models.rs`；P0 会话 `workbench/src/services/project_session.rs`）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：项目**增删改查与生命周期**。**提升/引用（promote/snapshot）不在本模块**（另立设计，见原型 §12）。
@@ -25,6 +25,18 @@
 | 13 | 描述编辑（U2）与状态筛选（R4）纳入本期；**默认连接（U3）后端未实现**（`service` 无 config 读写），待另立 |
 
 ## 0. 进度记录（最近在前）
+
+### 2026-11-24 — 项目管理入口补齐（三刀：菜单与切换 / 项目中心 / 文档）
+
+起因：有项目时选择器整块从 Dock 消失（`ProjectPickerPanel::visible()` = 无会话），于是「有项目时怎么新建」「切换在哪」「别的项目怎么管理」三问都没有答案；`SwitchProject` 与 `CloseProject` 的实现又逐字相同。用户拍板路线 A：**覆盖式项目中心，允许不关当前项目就浏览 / 管理**。
+
+| 项 | 内容 | 落点 / 提交 |
+| --- | --- | --- |
+| ① 菜单补齐 + 真正的切换 | 标题栏菜单 6 → 8 项（新增「新建项目…」「打开现有目录…」，只读时仍可用；「切换项目…」后改名为「项目中心…」）；`PendingAction::SwitchTo` + `request_switch` / `switch_now`：先 `do_close`（还锁 + `on_closed`）再 `open_path`，同根 no-op，脏草稿拦截后直达 | `416df6df` |
+| ② 项目中心覆盖层 | `ui/hub.rs`（`open_project_hub` / `close_project_hub` / `render_project_hub`，body 复用 `render_picker`）；当前项目卡片打「当前」`Tag`（`is_current_project`）；`Ctrl+Shift+P` 由 `request_close` 改 `open_project_hub`，覆盖层挂在 `render_settings` 之前；`ProjectUiState` 加 `hub_open`（8 → 9 字段） | `816c0bf6` |
+| ③ 文档同步 | 原型 §5（8/9 项菜单 + 新增 §5.1 项目中心）、§11（六个子模块 + `ui/hub.rs` 落点）、§13（#13 更新 + 新增 §13.1）、本文、`project-user-guide.md`（§2 / §3.3 / §3.4 项目中心 / §4.5 / §6 / §9）、`README.md`（测试 38 → 48）、接线矩阵（新函数行 + 9 字段 + 行数） | 本提交 |
+| 验证 | `cargo check -p rds-project --all-targets -j 1` 零告警；`cargo test -p rds-project -j 1` = **61 lib**（`ui/tests.rs` 48 = 30 窗口 + 18 纯函数）+ 1 + 5 + 3 全过；`cargo clippy -p rds-project --all-targets -j 1` 仍 2 条基线；`cargo check -p rds-workbench --lib -j 1` 通过；`rustfmt --edition 2024 --check` 干净 | — |
+| 遗留 | 菜单「新建项目…」的真实用处依赖「有项目时新建」这条路径（本轮已接通）；§13 剩余 7 条产品差异仍待逐项拍板，与本轮无关 | §13.1 |
 
 ### 2026-11-23 — 遗留点清理（五刀：反馈通道 / 文档对齐 / 死字段与状态 / 版本删除 / 结构拆分）
 
@@ -353,13 +365,13 @@
 | --- | --- |
 | 项目服务编排（列表 / 创建 / 打开 / 关闭 / 更新 / 删除 / 找回 / 版本） | `crates/project/src/service.rs`（feature crate 内，符合 GPUI-kit 指南「model/service/view 同 crate」） |
 | 会话解析（env → 最近 → 空态） | `crates/workbench/src/services/project_session.rs`（返回 `project::ui::OpenProject`） |
-| 项目选择器 / 菜单 / 对话框 / 设置（UI） | `crates/project/src/ui.rs`（视图与 model / service 同 crate；选择器与设置由宿主渲染为受控 overlay，菜单为语义 `Button::dropdown_menu` + `PopupMenu`，对话框为 `Dialog` / `AlertDialog`） |
+| 项目选择器 / 项目中心 / 菜单 / 对话框 / 设置（UI） | `crates/project/src/ui.rs`（公共面）+ `ui/{host,actions,dialogs,hub,picker,settings}.rs`（视图与 model / service 同 crate；选择器与项目中心、设置由宿主渲染为受控 overlay，菜单为语义 `Button::dropdown_menu` + `PopupMenu`，对话框为 `Dialog` / `AlertDialog`） |
 | 项目视图 ↔ 宿主桥（重绘 / 编辑区 / 排序偏好 / 打开后刷新） | `crates/workbench/src/components/project_host.rs` |
 | 项目锁（OS 文件锁 + 占用者信息） | `crates/project/src/lock.rs`（`.RSmeta/project.lock` / `project.lock.owner`） |
 | 名册迁移（固定/软删字段） | `crates/engine/migrations/global/019_add_project_ui_state.sql`（新） |
 | 全局库项目 CRUD / 固定 / 已移除 | `crates/engine/src/persistence/global_db.rs` |
 | 排序方式偏好 | `crates/settings`（`projects.sort_mode`） |
-| 命令 / Action | `crates/workbench/src/commands.rs`（`SwitchProject` / `CloseProject`；project crate 不再有 commands 文件） |
+| 命令 / Action | `crates/workbench/src/commands.rs`（`SwitchProject`（= 打开项目中心）/ `CloseProject`（= 关闭项目）；project crate 不再有 commands 文件） |
 | 标题栏项目槽 + 项目菜单 | `crates/workbench/src/view.rs`（`render_title_bar`；菜单规格 / 内容由 `project::ui::project_menu_entries` / `build_project_menu` 提供） |
 | 会话共享与刷新信号 | `crates/workbench/src/panels/`（`Shared`；`project` 字段类型为 `project::ui::OpenProject`） |
 | 存储 / 模型（不改表，只加列） | `crates/project/src/store.rs`（`update_config` 配置就地读写）/ `models.rs` |
