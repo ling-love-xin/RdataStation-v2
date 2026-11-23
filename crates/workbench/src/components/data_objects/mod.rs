@@ -310,6 +310,10 @@ pub struct ConnRow {
     pub note: String,
     /// 运行时是否已连上（连不上就没有表可列，行不可展开）
     pub connected: bool,
+    /// 驱动 id（判「文件库」用：sqlite / duckdb 的本体是一个文件，不是网络库）
+    pub driver: String,
+    /// 库名 / 文件路径（`database` 字段；文件库驱动时是裸路径）
+    pub database: Option<String>,
 }
 
 /// 资产清单里的一行（只读，只给最新版本）。
@@ -424,19 +428,38 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
     //
     // 注册了但没连上的也要列（铁律 B 组第 4 条）：用户刚切了项目、或连接暂时断了，
     // 源不会从清单里"蒸发"——行上写「未连接」，不给展开、不给选用。
+    //
+    // 文件库（sqlite / duckdb）还多一档：连上了但**没挂进分析实例**。本体路径不在
+    // `loaded_files` 里就说明没挂——同样不给展开（没有表可列），只给「挂载」。
+    // 挂没挂由路径判（见 [`unmounted_file_sources`]），不看连接状态：驱动能连上 ≠ 已 ATTACH。
+    let unmounted: Vec<(String, String)> = unmounted_file_sources(collected);
     for conn in &collected.connections {
         let connected = conn.connected;
+        let key = format!("conn:{}", conn.id);
+        let file_path = file_source_path(conn);
+        let not_mounted = unmounted
+            .iter()
+            .find(|(row_key, _)| row_key == &key)
+            .map(|(_, path)| path.clone());
+        let note = match (&file_path, &not_mounted) {
+            // 文件库把本体路径写在副标题上：用户要确认"挂的是哪一个文件"
+            (Some(path), _) => format!("文件库 · {path}"),
+            _ => conn.note.clone(),
+        };
+        let state = if !connected {
+            State::Failed("未连接 · 连上后可展开选表".to_string())
+        } else if not_mounted.is_some() {
+            State::Failed("未挂载 · 右键挂载后可展开选表".to_string())
+        } else {
+            State::Ready
+        };
         out.push(Object {
-            key: format!("conn:{}", conn.id),
+            key,
             name: conn.name.clone(),
-            note: conn.note.clone(),
+            note,
             channel: Channel::Source,
             life: Life::External,
-            state: if connected {
-                State::Ready
-            } else {
-                State::Failed("未连接 · 连上后可展开选表".to_string())
-            },
+            state,
             group: Group::Source,
             pill: "源连接",
             version: None,
@@ -590,6 +613,14 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
     // 洞察产物（`tmp_i_`）**不进面板**：它是抽取的样，不是全量；生命周期属于洞察
     // 会话。要留就由用户在洞察里「保留到项目库」，落成持久表后再从这里看。
 
+    // 注册成分析源的文件库连接的本体路径：下面判「catalog 行要不要让位给连接行」用它。
+    // 一次算出来（而不是每行遍历一遍连接清单）：路径比较还带斜杠/大小写归一。
+    let fed_file_paths: Vec<String> = collected
+        .connections
+        .iter()
+        .filter_map(file_source_path)
+        .collect();
+
     // 已加载进进程单例的文件，按**加载形态**分派（2026-11-18 拍板：库文件走 ATTACH）：
     // - 数据文件（csv / parquet / excel…）是 `f_` 视图 → 文件段，视图名即 SQL 里
     //   能直接用的名字，路径放 note；
@@ -598,6 +629,16 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
     //   按路径扩展判定——加载那一刻是什么形态，这里就是什么形态
     for (alias, path) in &collected.loaded_files {
         let is_database = engine::duckdb::file_view::is_database_file(path);
+        // 文件库既是连接又是 catalog：注册成分析源的连接已经占了源段那一行（挂载后
+        // conn 行就能展开选表），这里不要再给同一路径单出一行「文件库」——
+        // 两行同名同源，用户分不清该点哪个。没有对应连接的（加源直接挑的文件库）照出。
+        let owned_by_connection = is_database
+            && fed_file_paths
+                .iter()
+                .any(|registered| same_file(registered, path));
+        if owned_by_connection {
+            continue;
+        }
         out.push(Object {
             key: format!("fileview:{alias}"),
             name: alias.clone(),
@@ -927,6 +968,47 @@ pub fn fileview_alias(key: &str) -> Option<&str> {
     key.strip_prefix("fileview:")
 }
 
+/// 文件库连接（sqlite / duckdb）的本体路径：`None` = 网络库，或没填 `database`。
+pub fn file_source_path(conn: &ConnRow) -> Option<String> {
+    if !connection_dialog::services::data_source_service::is_file_db_driver(&conn.driver) {
+        return None;
+    }
+    let database = conn.database.as_deref()?.trim();
+    if database.is_empty() {
+        return None;
+    }
+    Some(
+        connection_dialog::services::data_source_service::normalize_file_db_path(
+            &conn.driver, database,
+        ),
+    )
+}
+
+/// 两条路径是不是同一个文件（Windows 上盘符 / 大小写不同也算同一个）。
+fn same_file(left: &str, right: &str) -> bool {
+    left.replace('\\', "/")
+        .eq_ignore_ascii_case(&right.replace('\\', "/"))
+}
+
+/// 源清单里「注册成分析源、但**还没挂进分析实例**」的文件库行：`(行 key, 本体路径)`。
+///
+/// 挂没挂的判据只有一条：这个路径在不在 `loaded_files` 里（加源 / 挂载都会写这一份）。
+/// 没挂的源不可展开（铁律 B 组第 4 条）——面板据此把 chevron 换空位、只给「挂载」。
+pub fn unmounted_file_sources(collected: &Collected) -> Vec<(String, String)> {
+    collected
+        .connections
+        .iter()
+        .filter_map(|conn| {
+            let path = file_source_path(conn)?;
+            let mounted = collected
+                .loaded_files
+                .iter()
+                .any(|(_, seen)| same_file(seen, &path));
+            (!mounted).then(|| (format!("conn:{}", conn.id), path))
+        })
+        .collect()
+}
+
 /// SQL 标识符的转义口径（与 `result_set_actions::select_sql_for_table` 同一规则：
 /// 表名可能带引号，`tmp_i_` 的描述段来自用户）。
 pub fn sql_ident(name: &str) -> String {
@@ -985,6 +1067,8 @@ pub fn collect(shared: &Shared) -> Collected {
                 None => item.driver.clone(),
             },
             connected: item.connected,
+            driver: item.driver.clone(),
+            database: item.database.clone(),
         })
         .collect();
     let project = shared.project.borrow().clone();
@@ -1077,6 +1161,8 @@ mod tests {
                 name: "订单库".into(),
                 note: "MySQL · 10.0.0.8".into(),
                 connected: true,
+                driver: "mysql".into(),
+                database: Some("orders".into()),
             }],
             analysis_tables: vec![
                 "res_订单明细_20261115103000".into(),
@@ -1756,6 +1842,8 @@ mod tests {
             name: "离线数仓".into(),
             note: "PostgreSQL · 10.0.0.99".into(),
             connected: false,
+            driver: "postgres".into(),
+            database: Some("dw".into()),
         });
         let rows = objects(&offline);
         let down = rows
@@ -1963,13 +2051,62 @@ mod tests {
 
 #[cfg(test)]
 mod temp_source_tests {
-    use super::temp_source_for;
+    use super::{Collected, ConnRow, objects, temp_source_for, unmounted_file_sources};
 
     #[test]
     fn maps_prefixes_to_sources() {
         assert_eq!(temp_source_for("tmp_q_orders"), Some(engine::duckdb::temp_table::TempTableSource::Query));
         assert_eq!(temp_source_for("tmp_i_eda"), Some(engine::duckdb::temp_table::TempTableSource::Insight));
         assert_eq!(temp_source_for("res_orders_2026"), None);
+    }
+
+    /// 文件库源：本体路径进了 `loaded_files` 才算「挂上」；没挂的行不可用（面板据此不给展开），
+    /// 判据看路径、不看连接状态——驱动连得上 ≠ 已经 ATTACH 进分析实例。
+    #[test]
+    fn file_sources_are_unmounted_until_their_path_is_loaded() {
+        let mut c = Collected::empty();
+        c.connections.push(ConnRow {
+            id: "C_lite".into(),
+            name: "销售.duckdb".into(),
+            note: "duckdb".into(),
+            connected: true,
+            driver: "duckdb".into(),
+            database: Some("D:/data/销售.duckdb".into()),
+        });
+        let row = objects(&c)
+            .into_iter()
+            .find(|o| o.key == "conn:C_lite")
+            .expect("文件库源要进源段");
+        assert!(!row.can_analyze(), "没挂的文件库不可展开选表");
+        assert!(row.state.label().contains("未挂载"), "{}", row.state.label());
+        assert_eq!(
+            unmounted_file_sources(&c),
+            vec![(
+                "conn:C_lite".to_string(),
+                "D:/data/销售.duckdb".to_string()
+            )]
+        );
+
+        // 路径进了 loaded_files（斜杠 / 大小写不同也算同一个文件）→ 可用，且不在未挂清单
+        c.loaded_files
+            .push(("f_sales".into(), "d:\\data\\销售.duckdb".into()));
+        let row = objects(&c)
+            .into_iter()
+            .find(|o| o.key == "conn:C_lite")
+            .expect("文件库源要进源段");
+        assert!(row.can_analyze(), "挂上之后要能展开");
+        assert!(unmounted_file_sources(&c).is_empty());
+
+        // 网络库没有本体路径：不进「未挂」清单，也不该被标未挂
+        c.loaded_files.clear();
+        c.connections[0].driver = "mysql".into();
+        c.connections[0].database = Some("orders".into());
+        assert!(unmounted_file_sources(&c).is_empty());
+        let row = objects(&c)
+            .into_iter()
+            .find(|o| o.key == "conn:C_lite")
+            .expect("网络源也要进源段");
+        assert!(row.can_analyze());
     }
 }
 

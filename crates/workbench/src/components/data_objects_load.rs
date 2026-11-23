@@ -249,6 +249,32 @@ fn mark_connections(shared: &Shared, conn_ids: &[String]) -> Result<Vec<String>,
     Ok(names)
 }
 
+/// 把**一个**文件库（`.duckdb` / `.sqlite`）挂进分析实例（源段右键「挂载」）。
+///
+/// 与「加源」的文件线同一条路径（`load_database_global` → ATTACH 成 catalog → 写进
+/// `loaded_files` → 重取清单），区别只在入口：加源要开对话框选文件，挂载是源行上
+/// 已经知道路径（注册成分析源的那条连接登记的本体文件）。
+///
+/// 挂上之后源段会多出一行「文件库」，原 conn 行不再是失效态——两边都指向**同一个**
+/// 分析实例里的 catalog，不另存副本。
+pub fn mount_file_database(shared: &Shared, path_text: &str, cx: &mut App) {
+    match engine::duckdb::file_view::load_database_global(path_text) {
+        Ok(alias) => {
+            let mut list = shared.loaded_files.borrow_mut();
+            // 同名重挂是覆盖：清单里只留最新那份路径
+            list.retain(|(seen, _)| seen != &alias);
+            list.push((alias.clone(), path_text.to_string()));
+            drop(list);
+            let collected = data_objects::collect(shared);
+            *shared.data_objects.borrow_mut() = data_objects::objects(&collected);
+            // 与加源同一步：递增清单版本号，面板/工作集据此重取（不各自猜）
+            shared.mark_data_objects_dirty(cx);
+            shared.say(format!("已挂载 {alias} ← {path_text}"), cx);
+        }
+        Err(error) => shared.say_error(format!("挂载失败：{error}"), cx),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::LoadScope;
