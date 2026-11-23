@@ -1,6 +1,10 @@
 # 存档模块待修正：缺「本体 = 项目 analytics.duckdb 持久表」这一档
 
-> 结论先说：**现在存档模块的三档（`file` / `analysis` / `table_ref`）都不覆盖「本体是项目
+> **状态（2026-11-23 复核）：本文所列缺口已实现，本文降级为历史记录。**
+> 不要按下面的「改动清单 A–H」重新做一遍——照着做的结果会是重复命名、重复加列。
+> 现行实现位置见文末「状态复核」；唯一残留债是 `kind` 列的 CHECK 收口。
+
+> 结论先说（2026-11-16 撰写时）：**当时存档模块的三档（`file` / `analysis` / `table_ref`）都不覆盖「本体是项目
 > `analytics.duckdb` 里的一张持久表」**，所以「临时表 / 临时结果集升级成资产」这个动作
 > 在登记层无处落。引擎侧搬表的能力是齐的，缺的是存档侧的本体类型与登记字段。
 
@@ -98,3 +102,30 @@ H 的具体清单（都在 `crates/analytics_resource/src`）：
 - **`strength` 只有两档**：新档归 `Strong` 即可，不要再造中档（`kind.rs:90-92` 已经因为「承诺做不到的事」撤过一次中档）。
 - **`res_` 前缀是引擎内部标识**：不要拿它当展示名，也不要在资产侧再拼一次前缀。
 - **旧的 `analysis` 行不能改语义**：改语义等于让历史数据换含义，只能新增档。
+
+---
+
+## 六、状态复核（2026-11-23）
+
+逐条核对代码后的结论：**A–H 全部已实现**，且「升级成资产」的登记闭环也在 2026-11-23 补齐。
+
+| 条目 | 实现位置（代码为准） |
+|---|---|
+| A 本体类型 | `model/kind.rs`：`ArchiveKind::{File, AnalyticsTable, TableRef}`；`label` = 「文件 / 分析库表 / 引用」；`resolve(kind, analytics_table)` 是权威判据 |
+| B 旧档改名 | 旧 `Analysis` 变体已直接撤掉（不再是"改名"，而是只保留「文件」与「分析库表」两档），不存在撞名 |
+| C 登记表名 | 迁移 031 加 `analytics_table` 列 + 局部索引 `idx_ar_analytics_table`；全局侧 034；读取走 `store/rows.rs` 的 `analytics_table` 字段 |
+| D 版本一版一表 | `engine::duckdb::temp_table::promote::persistent_table_name`；全局 `global/promote.rs` 逐版记 `analytics_table`、历史表不删 |
+| E 升级动作 | 「存为表」`components/result_set_actions.rs::persist_to_project` → `services/persist_jobs.rs`（worker 落库）→ **2026-11-23 新增** `analytics_resource::table_asset::register_at` 登记成表型资产 |
+| F 取数分派 | `resource_host/detail_actions.rs`：`AnalyticsTable` 走 `SampleSource::on_duckdb`（`open_analytics_table` / 统计分支），不按文件路径 |
+| G 归档判定 | 迁移 031 引入 `structured` 列（「能不能被 DuckDB 读成表」是能力事实），档位由本体来源决定，不再靠扩展名二次猜 |
+| H 联动 | `filter/*`、`present/{snapshot,format,detail,rows,trash}.rs`、`detail_view/{mod,rows,body_sections}.rs`、`model/mod.rs`、`view_model/{row,detail}.rs`、`resource_view/{row_meta,tests}.rs`、`dnd.rs` 均已按 `ArchiveKind::resolve` 分派 |
+
+**2026-11-23 补的那一段**（`b8c60421`）：`persist_jobs` 建完表只提示、不登记，导致「库里有表、
+资产列表里没有」；现在同一 worker 线程上顺手调用 `table_asset::register` —— 首次 v1、
+同名再升级 v2（旧表名进版本快照，回退 = 指回去），显示名用结果集展示名（不带 `res_` 前缀）。
+单测在 `crates/analytics_resource/src/tests/table_asset.rs`，端到端在
+`crates/workbench/tests/persist_result_table.rs`。
+
+**唯一残留债**：`kind` 列的 CHECK 仍只认 `file` / `analysis` / `table_ref`，所以
+`db_write_str` 把表型折回 `analysis`、读取靠 `resolve` 还原。迁移 031 的注释写清了为什么推迟
+（迁移执行器整包事务、表被 5 处外键引用）——要收口得安排一个事务外的重建窗口，不是顺手能做的事。
