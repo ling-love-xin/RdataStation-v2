@@ -968,4 +968,69 @@ mod tests {
         assert!(saw_prompt, "必须先收到输入请求");
         session.shutdown();
     }
+
+    /// `getpass()` 的协议形状：`password` 标志是否置位（面板遮挡分支的前提）
+    ///
+    /// 这是**上游行为取证**，不是产品行为断言：面板的遮挡只在 `password = true` 时生效，
+    /// 若 ipykernel 不置位，遮挡分支就没有触发源——那种情况要如实记下来，而不是假设它
+    /// 会触发。执行 `import getpass; p = getpass.getpass('pw? '); print('pw=' + p)`。
+    #[test]
+    #[ignore = "需要本机安装 ipykernel（RDS_KERNEL_PYTHON 指向对应解释器）"]
+    fn getpass_reports_password_flag() {
+        let python = std::env::var("RDS_KERNEL_PYTHON").unwrap_or_else(|_| "python".to_string());
+        let mut session = KernelSession::spawn(Path::new(&python))
+            .unwrap_or_else(|e| panic!("启动内核失败（python={python}）：{e:#}"));
+        let mut events = session.take_events();
+
+        let msg_id = session.execute(
+            "import getpass; p = getpass.getpass('pw? '); print('pw=' + p)".to_string(),
+        );
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut flagged: Option<bool> = None;
+        let mut saw_value = false;
+        let mut saw_reply = false;
+        loop {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "等 getpass 的输入请求 / 回执超时（flag={flagged:?} value={saw_value} reply={saw_reply}）"
+            );
+            let Some(env) = events.blocking_recv() else {
+                panic!("事件通道断开");
+            };
+            if let Some(id) = env.msg_id.as_ref() {
+                assert_eq!(id, &msg_id, "事件归属错误：应属于本次执行");
+            }
+            match env.event {
+                KernelEvent::InputRequest { prompt, password } => {
+                    assert!(prompt.contains("pw?"), "提示串要原样：{prompt:?}");
+                    flagged = Some(password);
+                    session.input("doubao".to_string());
+                }
+                KernelEvent::Stream { text, .. } => {
+                    if text.contains("pw=doubao") {
+                        saw_value = true;
+                    }
+                }
+                KernelEvent::ExecuteReply { status, .. } => {
+                    assert_eq!(status, "ok", "回送之后执行应成功收口");
+                    saw_reply = true;
+                }
+                KernelEvent::Failed(reason) => panic!("内核通道失败：{reason}"),
+                KernelEvent::Error { evalue, .. } => {
+                    panic!("`getpass()` 不应报错：{evalue}")
+                }
+                _ => {}
+            }
+            if saw_value && saw_reply {
+                break;
+            }
+        }
+        assert_eq!(
+            flagged,
+            Some(true),
+            "ipykernel 必须把 `getpass()` 标成 password=true（否则面板的遮挡分支没有触发源）"
+        );
+        session.shutdown();
+    }
 }
