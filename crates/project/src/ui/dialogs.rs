@@ -563,6 +563,8 @@ pub(super) fn advance_pending(
 ) {
     match pending {
         PendingAction::OpenPath(path) => open_path(host, path, window, cx),
+        // 切换到另一个项目：确认「放弃 / 保存」后先释放当前项目再打开目标。
+        PendingAction::SwitchTo(path) => switch_now(host, path, window, cx),
         PendingAction::Close => do_close(host, cx),
         // 「＋ 新增项目」/「打开现有目录…」：确认后直接开目标对话框（#4）。
         PendingAction::CreateProject(inputs) => open_create_dialog(host, inputs, window, cx),

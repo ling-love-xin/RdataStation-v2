@@ -319,7 +319,8 @@ pub(super) fn project_card(
     ))))
     .small()
     .label("打开")
-    .on_click(move |_, window, app| request_open(&host_open, &path_open, window, app));
+    // 已有项目打开时点卡片＝切换：先释放当前项目再打开目标（不覆盖会话与锁）。
+    .on_click(move |_, window, app| request_switch(&host_open, &path_open, window, app));
 
     let more = more_menu(host, inputs, item, tab);
 
@@ -554,7 +555,8 @@ pub(super) fn attach_card_menu_handler(
     match id {
         "open" => {
             let host = ProjectUiHost::clone(host);
-            menu_item.on_click(move |_, window, app| request_open(&host, &path, window, app))
+            // 与卡片主按钮同路：已有当前项目时是「切换」，不是覆盖会话。
+            menu_item.on_click(move |_, window, app| request_switch(&host, &path, window, app))
         }
         "pin" => {
             let host = ProjectUiHost::clone(host);
@@ -699,13 +701,16 @@ pub struct ProjectMenuEntry {
     pub separator_before: bool,
 }
 
-/// 标题栏项目槽下拉菜单的规格（原型 §2.4）。
+/// 标题栏项目槽下拉菜单的规格（原型 §2.4 / §5）。
 ///
-/// 只读模式（写锁被另一实例持有）下：写命令（重命名 / 归档）置灰，并在顶部插一条说明
-/// 为什么点不动；切换项目 / 项目设置 / 显示位置 / 关闭项目保持可用——只读是「不许写」，
-/// 不是「不许看、不许走」，用户始终能退出去。
+/// 只读模式（写锁被另一实例持有）下：**当前项目的**写命令（重命名 / 归档）置灰，并在顶部
+/// 插一条说明为什么点不动；「新建项目 / 打开现有目录」作用于**别的目录**（不写当前项目），
+/// 切换 / 项目设置 / 显示位置 / 关闭项目也都保持可用——只读是「不许写」，不是「不许看、
+/// 不许走」，用户始终能退出去。
+///
+/// 「切换项目…」= 打开项目中心（不关闭当前项目）；「关闭项目」才是释放当前项目。
 pub fn project_menu_entries(read_only: bool) -> Vec<ProjectMenuEntry> {
-    let mut entries = Vec::with_capacity(7);
+    let mut entries = Vec::with_capacity(9);
     if read_only {
         entries.push(ProjectMenuEntry {
             id: "read-only",
@@ -715,12 +720,27 @@ pub fn project_menu_entries(read_only: bool) -> Vec<ProjectMenuEntry> {
             separator_before: false,
         });
     }
+    // 有项目时也能创建 / 打开别的项目（此前只能先「切换项目」退回选择器）。
+    entries.push(ProjectMenuEntry {
+        id: "new",
+        label: "新建项目…",
+        icon: IconName::Plus,
+        enabled: true,
+        separator_before: read_only,
+    });
+    entries.push(ProjectMenuEntry {
+        id: "open-folder",
+        label: "打开现有目录…",
+        icon: IconName::FolderOpen,
+        enabled: true,
+        separator_before: false,
+    });
     entries.push(ProjectMenuEntry {
         id: "switch",
         label: "切换项目…",
         icon: IconName::ArrowLeft,
         enabled: true,
-        separator_before: read_only,
+        separator_before: true,
     });
     entries.push(ProjectMenuEntry {
         id: "settings",
@@ -797,6 +817,18 @@ pub(super) fn attach_project_menu_handler(
     root: &std::path::Path,
 ) -> PopupMenuItem {
     match id {
+        // 有项目时也能创建 / 打开别的项目：走与连接对话框项目栏相同的入口，
+        // 脏草稿同样先拦截（确认后直达目标对话框）。
+        "new" => {
+            let host = host.clone();
+            let inputs = inputs.clone();
+            item.on_click(move |_, window, app| request_create_project(&host, &inputs, window, app))
+        }
+        "open-folder" => {
+            let host = host.clone();
+            let inputs = inputs.clone();
+            item.on_click(move |_, window, app| request_open_folder(&host, &inputs, window, app))
+        }
         // 一实例一项目：「切换项目」与「关闭项目」是同一条回头路（关当前 + 回选择器）。
         "switch" | "close" => {
             let host = host.clone();

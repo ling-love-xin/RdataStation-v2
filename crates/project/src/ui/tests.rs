@@ -31,11 +31,11 @@ use super::{
     location_hint, memo_hint, meta_line, meta_tree_rows, more_menu, open_create_dialog,
     open_delete_dialog, open_folder_dialog, open_lock_busy_dialog, parse_search, pick_directory,
     prepare_unsaved, project_card, project_menu_entries, render_picker, render_settings,
-    request_close, request_create_project, request_open, request_open_folder,
+    request_close, request_create_project, request_open, request_open_folder, request_switch,
     request_version_delete, save_project_info, set_default_connection, set_sort, set_status_filter,
     set_tab, settings_status_text, snapshot_description, sort_menu_entries,
-    status_filter_menu_entries, status_label, submit_create, submit_open_folder, toggle_archive,
-    visible_items,
+    status_filter_menu_entries, status_label, submit_create, submit_open_folder, switch_now,
+    toggle_archive, visible_items,
 };
 use crate::service::ProjectSummary;
 
@@ -371,6 +371,90 @@ fn request_open_intercepts_dirty_editor(cx: &mut TestAppContext) {
 
     assert!(host.current().is_none(), "拦截期间不应切换项目");
     assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+}
+
+// ==================== 项目中心：真正的「切换」 ====================
+
+/// 切换 = 先释放当前项目（锁 / 宿主清理）再打开目标，不是把新锁盖到旧会话上。
+/// 无全局库环境下 `open` 会失败，但「先关」这一步必须发生（否则旧锁 / 旧消息会残留）。
+#[gpui_kit::test]
+fn request_switch_releases_current_project_before_opening(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = Rc::new(Recorder::default());
+    let host = test_host(&rec);
+    let root = temp_root("switch-from");
+    host.set_current(Some(OpenProject::new(root.clone(), "当前项目")));
+    let (host, _inputs, cx) = open_harness(cx, host);
+    let target = root.join("另一个项目");
+
+    cx.update(|window, cx| request_switch(&host, &target, window, cx));
+
+    assert!(
+        host.current().is_none(),
+        "切换必须先释放当前项目会话（目标是否打开成功取决于全局名册）"
+    );
+    assert_eq!(rec.closed.get(), 1, "关闭回调应触发一次（连接作用域刷新）");
+    assert!(
+        host.state.borrow().picker.error.is_some(),
+        "应确实尝试打开目标项目（此处全局库未就绪 → 报错落到选择器）"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 未保存草稿：切换同样先拦截，不能先丢当前项目。
+#[gpui_kit::test]
+fn request_switch_intercepts_dirty_editor(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = Rc::new(Recorder::default());
+    rec.dirty.set(true);
+    let host = test_host(&rec);
+    let root = temp_root("switch-dirty");
+    host.set_current(Some(OpenProject::new(root.clone(), "有草稿的项目")));
+    let (host, _inputs, cx) = open_harness(cx, host);
+
+    cx.update(|window, cx| request_switch(&host, &root.join("目标项目"), window, cx));
+
+    assert!(host.current().is_some(), "拦截期间不应释放当前项目");
+    assert_eq!(rec.closed.get(), 0, "拦截期间不应触发关闭");
+    assert!(
+        cx.update(|window, cx| window.has_active_dialog(cx)),
+        "脏草稿应先出未保存确认"
+    );
+    // 确认「放弃更改并继续」后走 SwitchTo 分支：先关再开。
+    cx.update(|window, cx| {
+        assert!(prepare_unsaved(&host, false, window, cx));
+        window.close_dialog(cx);
+        advance_pending(
+            &host,
+            &PendingAction::SwitchTo(root.join("目标项目")),
+            window,
+            cx,
+        );
+    });
+    assert!(host.current().is_none(), "确认后先释放当前项目");
+    assert_eq!(rec.closed.get(), 1, "确认后关闭回调触发一次");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 目标是当前项目：不做任何事（不丢锁、不重开、不弹框）。
+#[gpui_kit::test]
+fn request_switch_to_current_project_is_noop(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = Rc::new(Recorder::default());
+    let host = test_host(&rec);
+    let root = temp_root("switch-same");
+    host.set_current(Some(OpenProject::new(root.clone(), "当前项目")));
+    let (host, _inputs, cx) = open_harness(cx, host);
+
+    cx.update(|window, cx| request_switch(&host, &root, window, cx));
+    assert!(host.current().is_some(), "目标就是当前项目时不该关闭它");
+    assert_eq!(rec.closed.get(), 0);
+    assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+
+    // `switch_now` 是「已处理完草稿」的入口，语义上总会先关（供 advance_pending 用）。
+    cx.update(|window, cx| switch_now(&host, &root.join("别处"), window, cx));
+    assert!(host.current().is_none());
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[gpui_kit::test]
@@ -1050,6 +1134,8 @@ fn menu_spec_greys_out_write_commands_in_read_only() {
     assert_eq!(
         writable,
         vec![
+            ("新建项目…", true),
+            ("打开现有目录…", true),
             ("切换项目…", true),
             ("项目设置…", true),
             ("重命名…", true),
@@ -1068,6 +1154,9 @@ fn menu_spec_greys_out_write_commands_in_read_only() {
         read_only,
         vec![
             ("只读模式：写操作不可用", false),
+            // 创建 / 打开作用于别的目录，不写当前项目：只读时仍可用
+            ("新建项目…", true),
+            ("打开现有目录…", true),
             ("切换项目…", true),
             ("项目设置…", true),
             ("重命名…", false),
@@ -1079,7 +1168,7 @@ fn menu_spec_greys_out_write_commands_in_read_only() {
     );
 }
 
-/// 分隔线位置：只读提示与「切换项目」之间、列表尾部两项之前。
+/// 分隔线位置：只读提示与「新建项目」之间、「切换项目」与创建入口之间、列表尾部两项之前。
 #[test]
 fn menu_spec_keeps_escape_hatches_without_leading_separator() {
     for read_only in [false, true] {
@@ -1094,12 +1183,18 @@ fn menu_spec_keeps_escape_hatches_without_leading_separator() {
                 .any(|e| e.id == "close" && e.separator_before),
             "「关闭项目」应与上方命令分开"
         );
-        // 只读提示与后续命令之间要有分隔线（提示项当时是首项，分隔线落在下一项上）。
+        // 只读提示与后续命令之间要有分隔线（提示项当时是首项，分隔线落在「新建项目」上）。
+        let new_item = entries
+            .iter()
+            .position(|e| e.id == "new")
+            .expect("新建项目项");
+        assert_eq!(entries[new_item].separator_before, read_only);
+        // 创建 / 打开入口与「切换项目」之间有分隔线（两类不同语义）。
         let switch = entries
             .iter()
             .position(|e| e.id == "switch")
             .expect("切换项目项");
-        assert_eq!(entries[switch].separator_before, read_only);
+        assert!(entries[switch].separator_before, "创建入口应与切换分开");
     }
 }
 

@@ -58,6 +58,42 @@ pub fn open_path(host: &ProjectUiHost, path: &Path, window: &mut Window, cx: &mu
     }
 }
 
+/// 请求切换到另一个项目（一实例一项目：**先关当前、再开目标**）。
+///
+/// 与 [`request_open`] 的差别只在「当前已有项目」这一段：
+/// - 目标就是当前项目 → 什么都不做（重复打开会白白丢一次锁）；
+/// - 有未保存草稿 → 交给拦截对话框，确认后走 [`switch_now`]；
+/// - 否则先 [`do_close`]（显式释放写锁 + 触发宿主 `on_closed`）再 [`open_path`]。
+///
+/// 为什么不能直接 `open_path`：那条路假定当前没有项目，会把新锁直接覆盖到
+/// `ui.lock` 上——旧项目的锁文件与宿主连接作用域都不会被正确收尾。
+pub fn request_switch(host: &ProjectUiHost, path: &Path, window: &mut Window, cx: &mut App) {
+    let Some(current) = host.root() else {
+        // 没有当前项目：就是普通的打开。
+        return request_open(host, path, window, cx);
+    };
+    if current == path {
+        return;
+    }
+    if host.editor.is_dirty() {
+        open_unsaved_dialog(
+            host,
+            PendingAction::SwitchTo(path.to_path_buf()),
+            window,
+            cx,
+        );
+        return;
+    }
+    switch_now(host, path, window, cx);
+}
+
+/// 立即切换：释放当前项目后打开目标（调用方已处理未保存草稿）。
+pub fn switch_now(host: &ProjectUiHost, path: &Path, window: &mut Window, cx: &mut App) {
+    tracing::debug!(path = %path.display(), "项目切换：先关闭当前项目再打开目标");
+    do_close(host, cx);
+    open_path(host, path, window, cx);
+}
+
 /// 锁占用逃生口：只读打开 / 仍要打开 / 取消。
 pub fn open_lock_busy_dialog(
     host: &ProjectUiHost,

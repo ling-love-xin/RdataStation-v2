@@ -329,6 +329,9 @@ impl Default for PickerState {
 #[derive(Debug, Clone)]
 pub enum PendingAction {
     OpenPath(PathBuf),
+    /// 切换到另一个项目：**先释放当前项目**（锁 + 宿主清理）再打开目标。
+    /// 与 `OpenPath` 的区别是后者假定当前没有项目（打开即接管）。
+    SwitchTo(PathBuf),
     Close,
     CreateProject(ProjectInputs),
     OpenFolder(ProjectInputs),
