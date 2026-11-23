@@ -157,8 +157,8 @@
 | P1.3 | 分节由 `registry::sections()`、行由 `registry::page_rows()` 驱动 | 同上 | 页面行集 == 登记表 `entry != Module`（测试 `page_rows_match_the_registry`） | ✅ |
 | P1.4 | 三种控件接组件库（`TabBar::segmented` / `Switch` / 预设档分段） | 同上 | 无手搓分段控件 | ✅ |
 | P1.5 | 行规格：标签列 / 说明行 / 行分隔 / 恢复默认 / 节级重置 | 同上 | 原型 §4.2 逐条对照；说明行（登记表 `hint`）已渲染 | ✅ |
-| P1.6 | 替换宿主渲染（`settings_view` → `settings_page`），旧文件退役 | `workbench/src/view.rs::render_settings_panel`、`settings/src/lib.rs` | 入口 / `Ctrl+,` / Quick Open 三入口行为不变 | ⬜ 等 `view.rs` 并行改动落地 |
-| P1.7 | 窗口测试（切节 / 点击写入 / 恢复默认） | `settings_page.rs` 或 `tests/` | 需给 `settings` 加 `test-support` dev-dep（照 `project` 做法） | ⬜ |
+| P1.6 | 替换宿主渲染（`settings_view` → `settings_page`），旧文件退役 | `crates/workbench/src/view/actions.rs::open_settings_at`（旧 `view.rs::render_settings_panel` 已删）、`settings/src/lib.rs` | 入口 / `Ctrl+,` / Quick Open 三入口行为不变 | ✅（2026-09-16 关闭；2026-10-30 升级为独立窗口） |
+| P1.7 | 窗口测试（切节 / 点击写入 / 恢复默认） | `settings_page.rs` | `cargo test -p rds-settings` 覆盖切节重挂骨架 / 恢复默认 / 写入拦截 | ✅（49 项） |
 
 ### P2 搜索与状态（✅ 主体已完成）
 
@@ -246,9 +246,9 @@ cargo run -p rds-app     # 设置页改主题 / 显示标签 / 建连超时 → 
 | 准入五条 / 登记表（代码侧权威） | `crates/settings/src/registry.rs`（+ 架构 §6/§7） |
 | 设置项字段与默认值 | `crates/settings/src/model.rs` |
 | 服务与持久化（唯一写入者） | `crates/settings/src/lib.rs` |
-| 页面（目标形态） | `crates/settings/src/settings_page.rs`（P1b 新增；`settings_view.rs` 退役） |
+| 页面 | `crates/settings/src/settings_page.rs`（P1b 新增；旧 `settings_view.rs` 已删除） |
 | 尺寸常量 | `crates/workbench_shell/src/ui.rs`（P1.1） |
-| 宿主 overlay / 互斥 / 桥 | `crates/workbench/src/view.rs::render_settings_panel`（P1.6 / P3.1 / P3.4） |
+| 宿主装配 / 互斥 / 桥 | `crates/workbench/src/view/actions.rs::open_settings_at`（独立窗口 + 存活检测；旧 `view.rs::render_settings_panel` 已删）（P1.6 / P3.1 / P3.4） |
 | 命令与键位 | `crates/settings/src/commands.rs`、`crates/app/src/main.rs`（P3.2 / P3.5） |
 | 契约扫描 | `crates/workbench/tests/ui_contract.rs`（P3.3） |
 | 文档同步 | `settings-prototype-design.md` §5、`settings-architecture.md` §6/§7 |

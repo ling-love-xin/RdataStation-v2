@@ -2,7 +2,7 @@
 
 > 状态：**首版（2026-09-16，待迭代）** · 本文回答"设置页长什么样"，"什么能进设置页"归 `settings-architecture.md`
 > 关联：`settings-architecture.md`（准入与作用域裁决）、`settings-prototype.html`（交互稿，**示意稿非权威**）、`settings-dev-plan.md`（开发方案）、`settings-crate-design.md`（crate 沿革）、`../layout/layout-design.md`（入口与五段布局）、`../ui/ui-design-spec.md`（三层约束）、`../theme/theme-design.md`（配色）
-> 落地进度（2026-09-16）：僵尸项裁撤 + 代码侧登记表 + **两栏页面实体**（`crates/settings/src/settings_page.rs`）已落地；**宿主替换未做**（工作台仍渲染旧的单列 `settings_view`），见 `settings-dev-plan.md` §0/§2。
+> 落地进度（更新至 2026-11-24）：僵尸项裁撤 + 代码侧登记表 + **两栏页面实体**（`crates/settings/src/settings_page.rs`）+ **宿主替换**（`workbench/src/view/actions.rs::open_settings_at` 装配 `SettingsPage::new`，旧单列 `settings_view` 已删除）+ 独立设置窗口（2026-10-30 窗口化）+ 「项目」节两个宿主注入槽（列表 / 当前项目设置）均已落地；见 `settings-dev-plan.md` §0/§2。
 > 技术栈：gpui-kit 0.7.1（2026-10-11 由 0.6.1 升入），组件只从组件库取（禁止手搓），取色零裸 hex，尺寸只引用 `crates/workbench_shell/src/ui.rs` 常量
 
 ## 1. 设计基准
@@ -200,12 +200,12 @@
 | 设置项字段与默认值 | `crates/settings/src/model.rs` | 新增字段必先登记 |
 | 唯一写入路径 | `crates/settings/src/lib.rs::{apply_by_key, value_by_key}` | 页面不直接改 model |
 | 宿主桥 | `SettingsHost { on_open_cache, on_open_log_dir, on_open_log_view, on_open_type_short_map, on_open_settings_json, on_settings_changed, projects_panel, project_settings_panel }`（`settings_page.rs`） | 副作用与内容区块都由宿主提供（两个 `*_panel` = `PanelRender`，见 `settings-architecture.md` §3.1） |
-| 设置页实体 | `crates/settings/src/settings_page.rs`（✅ 已实现；`settings_view.rs` 待退役） | `Entity<SettingsPage>`；分节 / 行 / 下拉全部由 `registry` 驱动 |
+| 设置页实体 | `crates/settings/src/settings_page.rs`（✅ 已实现；旧 `settings_view.rs` 已删除） | `Entity<SettingsPage>`；分节 / 行 / 下拉全部由 `registry` 驱动 |
 | 分节导航 | 同上 | `List` + `ListDelegate`（hover / 选中 / 键盘由组件给）；稳定 id 用**节的 key**，不用下标 |
 | 分节与行清单 | `crates/settings/src/registry.rs`（`sections()` / `page_rows()`） | 页面**不得自排顺序、不得自加行**（登记表是权威） |
 | 行与控件 | 同上 | 只读 `SettingsService::get_*`；写只经 `SettingsService::set_*` |
 | 搜索框 | 同上 | `Input` + `InputState`（`cx.new(\|cx\| InputState::new(window, cx))`） |
-| 宿主 overlay | `crates/workbench/src/view.rs::render_settings_panel`（⬜ 待替换为 `SettingsPage::new(window, host, cx)`） | 互斥规则在宿主实现（§2.1） |
+| 宿主装配 | ✅ `crates/workbench/src/view/actions.rs::open_settings_at` 开独立窗口并装配 `SettingsPage::new(window, host, cx)`（旧 `view.rs::render_settings_panel` 已删） | 互斥规则在宿主实现（§2.1） |
 | 缓存管理 | 宿主回调（现状 `on_open_cache`）→ `workbench/src/components/cache_dialog.rs` | 缓存 UI 依赖 engine，不进 `settings`（依赖只向下） |
 | 命令 | `settings/src/commands.rs`（`OpenSettings` 已有） | `ToggleThemeMode` 未接线，见 §11 |
 | 契约扫描 | `crates/workbench/tests/ui_contract.rs`：把本页视图文件加入**尺寸**扫描（颜色扫描已含） | 见 §11 落地项 5 |

@@ -397,8 +397,8 @@
 | --- | --- |
 | 项目服务编排（列表 / 创建 / 打开 / 关闭 / 更新 / 删除 / 找回 / 版本） | `crates/project/src/service.rs`（feature crate 内，符合 GPUI-kit 指南「model/service/view 同 crate」） |
 | 会话解析（env → 最近 → 空态） | `crates/workbench/src/services/project_session.rs`（返回 `project::ui::OpenProject`） |
-| 项目选择器 / 项目中心 / 菜单 / 对话框 / 设置（UI） | `crates/project/src/ui.rs`（公共面）+ `ui/{host,actions,dialogs,picker,settings}.rs`（五个子模块；视图与 model / service 同 crate）。选择器与项目设置由宿主渲染为受控 overlay（项目设置浮层、选择器 = 无项目态中央 tab）；**项目中心 = 全局设置窗口的「项目」页**（列表由 workbench 注入 `render_picker`，动作经 `HomeDispatch` 投回主窗口）；菜单为语义 `Button::dropdown_menu` + `PopupMenu`，对话框为 `Dialog` / `AlertDialog`） |
-| 设置页宿主注入点 | `crates/settings/src/settings_page.rs`（`SettingsHost::projects_panel` / `SettingsPage::select_section`）、`settings/src/skeleton.rs`（`section_seq` → keyed-state id）、`settings/src/fields.rs`（`panel_item`） |
+| 项目选择器 / 项目中心 / 菜单 / 对话框 / 设置（UI） | `crates/project/src/ui.rs`（公共面）+ `ui/{host,actions,dialogs,picker,settings}.rs`（五个子模块；视图与 model / service 同 crate）。选择器 = 无项目态中央 tab（Dock 面板）；**项目中心 = 全局设置窗口的「项目」页**（列表由 workbench 注入 `render_picker`，动作经 `HomeDispatch` 投回主窗口）；**项目设置 = 同页第二块**（`render_current_settings`，宿主注入 `SettingsHost::project_settings_panel`，主窗口不再挂浮层）；菜单为语义 `Button::dropdown_menu` + `PopupMenu`，对话框为 `Dialog` / `AlertDialog`） |
+| 设置页宿主注入点 | `crates/settings/src/settings_page.rs`（`SettingsHost::projects_panel` / `project_settings_panel` / `SettingsPage::select_section`）、`settings/src/skeleton.rs`（`section_seq` → keyed-state id、`projects` 节两组）、`settings/src/fields.rs`（`panel_item`） |
 | 项目视图 ↔ 宿主桥（重绘 / 编辑区 / 排序偏好 / 打开后刷新） | `crates/workbench/src/components/project_host.rs` |
 | 项目锁（OS 文件锁 + 占用者信息） | `crates/project/src/lock.rs`（`.RSmeta/project.lock` / `project.lock.owner`） |
 | 名册迁移（固定/软删字段） | `crates/engine/migrations/global/019_add_project_ui_state.sql`（新） |
