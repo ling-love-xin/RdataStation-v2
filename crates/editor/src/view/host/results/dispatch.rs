@@ -467,6 +467,13 @@ impl EditorHostPanel {
                 // 【右栏页签持久化】对齐 `enabledPanelIds` 的移除语义：关一次落一次盘
                 self.persist_result_open_tabs(cx);
             }
+            // 【页签重排】拖拽换位（对齐 DBeaver `TabFolderReorder(panelFolder)`）：
+            // 只改显示顺序，顺序随 `result_panel.open_tabs` 偏好一起落盘。
+            ResultRequest::MoveRightTab { from, to } => {
+                self.result_panel
+                    .update(cx, |p, cx| p.move_right_tab(from, to, cx));
+                self.persist_result_open_tabs(cx);
+            }
             // 【右栏】重新打开一页（视图菜单勾选项）：与 `SetRightTab` 同口径，
             // 切到引用页时同样要触发外键读取。
             ResultRequest::OpenRightTab(tab) => {

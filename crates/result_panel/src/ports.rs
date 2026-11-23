@@ -339,6 +339,10 @@ pub enum ResultRequest {
     /// `ResultSetViewer.addPanel:1330-1394` 的 `new CTabItem(panelFolder, SWT.CLOSE)`
     /// 与 `presentationSettings.enabledPanelIds` 的增删语义：关掉一页 = 从已启用集合移除。
     CloseRightTab(RightTab),
+    /// 【页签重排 2026-11-24】把页签条上第 `from` 个页移到第 `to` 位
+    /// （对齐 DBeaver `TabFolderReorder(panelFolder)`，`ResultSetViewer.java:360`）。
+    /// 两个下标都是**页签条上的位置**，不是 `RightTab::ALL` 的规范序下标。
+    MoveRightTab { from: usize, to: usize },
     /// 重新打开右栏某一页（视图菜单的勾选项）：按规范序插回集合并置为当前页。
     OpenRightTab(RightTab),
     /// 【#28-B3】在指定视图行下方插入一条本地空行（`None` = 追加到末尾区段）。

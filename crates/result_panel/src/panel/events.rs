@@ -777,6 +777,22 @@ impl ResultPanel {
         self.set_right_tab(tab, cx);
     }
 
+    /// 【页签重排 2026-11-24】把页签条上第 `from` 个页移到第 `to` 位。
+    ///
+    /// 对齐 DBeaver `TabFolderReorder(panelFolder)`（`ResultSetViewer.java:360`）：
+    /// 它只改 `CTabFolder` 里 page 的显示顺序，不改变任何页的状态。本仓的唯一顺序真值
+    /// 就是 `open_tabs`（页签条按它逐项渲染、`selected_index` 由 `strip_index` 算），
+    /// 所以这里只搬这一个 Vec 的元素。顺序会随 `result_panel.open_tabs` 偏好一起落盘
+    /// （见 dispatch 里 `persist_result_open_tabs`）。
+    pub fn move_right_tab(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
+        if from == to || from >= self.open_tabs.len() || to >= self.open_tabs.len() {
+            return;
+        }
+        let tab = self.open_tabs.remove(from);
+        self.open_tabs.insert(to, tab);
+        cx.notify();
+    }
+
     /// 【右栏】**只关掉这一页**（其余页仍在页签条里），对齐 DBeaver
     /// `CTabItem(panelFolder, SWT.CLOSE)` + `presentationSettings.enabledPanelIds` 的移除语义
     /// （`ResultSetViewer.addPanel:1357/:1388`）。

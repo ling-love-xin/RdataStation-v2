@@ -514,20 +514,46 @@ impl ResultPanel {
                     // 说清这一页做什么。
                     .tooltip(SharedString::from(right_tab_description(tab)))
                     .suffix(close)
+                    // 【双击最大化 2026-11-24】对齐 DBeaver `ResultSetViewer.java:366-374`：
+                    // `panelFolder` 上挂 `SWT.MouseDoubleClick`，**只有双击落在已选中那页**
+                    // 才 `togglePanelsMaximize()`。
+                    // 组件侧不需要 patch：0.10.0 官方的 `ClickEvent` 自带 `click_count()`
+                    // （`gpui-base/src/event.rs:52` 判 `== 2` 用的就是它），`Tab::on_click`
+                    // 每次点击都会带上这个计数，所以双击在这里自己判即可。
+                    .on_click({
+                        let double_queue = self.queue.clone();
+                        // 渲染时快照 = 当时的「已选中页」（与 DBeaver 在事件里查
+                        // `panelFolder.getSelection()` 同口径）
+                        let is_current = tab == self.right_tab;
+                        move |event, _window, app| {
+                            if event.click_count() < 2 || !is_current {
+                                return;
+                            }
+                            double_queue.request(ResultRequest::TogglePanelMaximize, app);
+                        }
+                    })
             })
             .collect();
         let tab_queue = self.queue.clone();
+        let reorder_queue = self.queue.clone();
         let strip = open_tabs.clone();
         let tab_bar = TabBar::new("editor-result-right-tabs")
             .segmented()
             .with_size(Size::Small)
             .selected_index(strip_index(&open_tabs, self.right_tab))
             .children(children)
-            // 六页在窄右栏里可能放不下：`menu(true)` 在溢出时给一颗菜单钮（否则被裁掉的
+            // 五页在窄右栏里可能放不下：`menu(true)` 在溢出时给一颗菜单钮（否则被裁掉的
             // 页签没法点，只能横向滚轮——不显眼）
             .menu(true)
             .on_click(move |index, _window, app| {
                 tab_queue.request(ResultRequest::SetRightTab(tab_at_strip_index(&strip, *index)), app);
+            })
+            // 【页签重排 2026-11-24】对齐 DBeaver `TabFolderReorder(panelFolder)`
+            // （`ResultSetViewer.java:360`）：组件侧 `TabBar::on_reorder` 已支持
+            // （`tab_bar.rs:92-103`），此前只是应用层没接。这里把页签条位置
+            // 原样交给面板，面板只搬 `open_tabs` 的元素。
+            .on_reorder(move |from, to, _window, app| {
+                reorder_queue.request(ResultRequest::MoveRightTab { from, to }, app);
             });
         let content = match self.right_tab {
             RightTab::Browser => self.render_browser_tab(cx),
