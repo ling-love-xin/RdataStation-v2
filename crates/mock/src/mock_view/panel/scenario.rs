@@ -836,7 +836,7 @@ impl MockPanel {
                             };
                             message = format!(
                                 "已加关系 {child_table}.{child_column} → {}",
-                                domain.label()
+                                shared::i18n::tr_dyn(&domain.label())
                             );
                         }
                     }

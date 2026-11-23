@@ -55,7 +55,7 @@ pub(crate) fn render_create(
                 div()
                     .text_xs()
                     .text_color(theme.colors.foreground)
-                    .child(c.label()),
+                    .child(tr(c.label())),
             )),
         ),
         None => {
@@ -97,7 +97,7 @@ pub(crate) fn render_create(
                     div()
                         .text_xs()
                         .text_color(theme.colors.foreground)
-                        .child(spec.label),
+                        .child(tr(spec.label)),
                 )),
         ),
         None => body.child(select_line(
@@ -151,7 +151,7 @@ pub(crate) fn render_create(
                                 fields
                                     .iter()
                                     .find(|f| f.key == param_key(param))
-                                    .map(|f| f.label.to_string())
+                                    .map(|f| tr(f.label).to_string())
                                     .unwrap_or_else(|| param_key(param).to_string())
                             };
                             let state = state.clone();

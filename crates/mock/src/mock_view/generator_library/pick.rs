@@ -77,7 +77,7 @@ pub(crate) fn render_browse_pane(
                                     });
                                 (
                                     spec.name.to_string(),
-                                    spec.label.to_string(),
+                                    tr(spec.label).to_string(),
                                     column_type_label(&data_type_for_spec(spec)),
                                     false,
                                     selected,
@@ -165,7 +165,7 @@ pub(crate) fn render_browse_pane(
                                     });
                                 (
                                     spec.name.to_string(),
-                                    spec.label.to_string(),
+                                    tr(spec.label).to_string(),
                                     column_type_label(&data_type),
                                     false,
                                     selected,
@@ -280,7 +280,7 @@ pub(crate) fn render_history_chips(
                         .iter()
                         .copied()
                         .find(|spec| spec.name == key.as_str())
-                        .map(|spec| (key.clone(), spec.label.to_string(), false))
+                        .map(|spec| (key.clone(), tr(spec.label).to_string(), false))
                 }
             })
             .collect()

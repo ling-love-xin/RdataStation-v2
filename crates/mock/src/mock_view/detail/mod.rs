@@ -462,7 +462,7 @@ impl MockDetailView {
                 .items_center()
                 .gap_2()
                 .w_full()
-                .child(div().flex_none().text_xs().text_color(fg).child(spec.label))
+                .child(div().flex_none().text_xs().text_color(fg).child(tr(spec.label)))
                 .child(card_note(&theme, note));
             block = block.child(
                 card(&theme)

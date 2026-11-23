@@ -1,6 +1,7 @@
 // ==================== 生成器搜索（第二条路径） ====================
 
 // 继承父模块（mock_view）的全部 use 绑定
+use shared::i18n::tr;
 use super::*;
 
 /// 搜索生成器目录：按**中文标签 / 名称 / 分类名**匹配（大小写不敏感，多词之间是 AND）。
@@ -128,7 +129,7 @@ impl ListDelegate for GeneratorSearchDelegate {
                                 .min_w_0()
                                 .text_sm()
                                 .text_ellipsis()
-                                .child(spec.label),
+                                .child(tr(spec.label)),
                         )
                         .child(
                             div()
@@ -142,7 +143,7 @@ impl ListDelegate for GeneratorSearchDelegate {
                                 .flex_none()
                                 .text_xs()
                                 .text_color(muted)
-                                .child(spec.category.label()),
+                                .child(tr(spec.category.label())),
                         ),
                 ),
         )

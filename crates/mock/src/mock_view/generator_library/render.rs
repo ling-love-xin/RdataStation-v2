@@ -184,7 +184,7 @@ fn describe_spec(spec: &'static generator_catalog::GeneratorSpec) -> String {
             .collect::<Vec<_>>()
             .join(" / ")
     };
-    format!("{} · 产出 {output} · 参数：{params}", spec.category.label())
+    format!("{} · 产出 {output} · 参数：{params}", tr(spec.category.label()))
 }
 
 pub(crate) fn render_item_row(

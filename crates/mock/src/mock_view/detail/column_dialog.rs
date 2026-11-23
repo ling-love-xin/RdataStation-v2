@@ -130,7 +130,7 @@ impl MockDetailView {
                         .params
                         .iter()
                         .find(|f| f.key == p.key)
-                        .map(|f| f.label.to_string())
+                        .map(|f| tr(f.label).to_string())
                         .unwrap_or_else(|| p.key.clone());
                     match &p.widget {
                         ParamWidget::Scalar(state) => ParamRowView::Scalar {
@@ -164,10 +164,10 @@ impl MockDetailView {
                     Some(ug) => (
                         format!("{}（自定义）", ug.name),
                         ug.category
-                            .map(|category| category.label().to_string())
-                            .unwrap_or_else(|| spec.category.label().to_string()),
+                            .map(|category| tr(category.label()).to_string())
+                            .unwrap_or_else(|| tr(spec.category.label()).to_string()),
                     ),
-                    None => (spec.label.to_string(), spec.category.label().to_string()),
+                    None => (tr(spec.label).to_string(), tr(spec.category.label()).to_string()),
                 }
             };
             // 右栏滚动区 id：随选中生成器变化，换生成器时滚动位置自动回顶部
@@ -193,7 +193,7 @@ impl MockDetailView {
                     .iter()
                     .copied()
                     .find(|s| generator_catalog::default_of(s.name) == Some(cfg.clone()))
-                    .map(|s| s.label.to_string())
+                    .map(|s| tr(s.label).to_string())
             });
             // #5 零参生成器（如 UUID v4 / 布尔 / 时长）：参数区标题下显示空态文案
             let zero_param = generator_catalog::spec_of(&draft.def.generator).params.is_empty();

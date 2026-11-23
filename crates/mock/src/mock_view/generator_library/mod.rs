@@ -57,7 +57,7 @@ impl SearchableListItem for CategoryChoice {
 
     fn title(&self) -> SharedString {
         match self.0 {
-            Some(category) => category.label().into(),
+            Some(category) => tr(category.label()).into(),
             None => "（不分组）".into(),
         }
     }
@@ -73,7 +73,7 @@ impl SearchableListItem for &'static GeneratorSpec {
     type Value = &'static GeneratorSpec;
 
     fn title(&self) -> SharedString {
-        (*self).label.into()
+        tr(self.label).into()
     }
 
     fn value(&self) -> &Self::Value {
