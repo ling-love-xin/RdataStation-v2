@@ -111,8 +111,19 @@ impl EditorShared {
         if kernels.contains_key(kernel_id) {
             return Ok(());
         }
-        let mut session = rds_kernel::KernelSession::spawn_spec(launch, kernel_id)
-            .map_err(|e| e.to_string())?;
+        // 【R2】事件唤醒：内核线程每次写事件后 notify_one，视图侧长任务据此 drain。
+        // 事件已在通道内才唤醒（kernel 侧 EventSink 固定「先入队再唤醒」）。
+        let wake = std::sync::Arc::new(tokio::sync::Notify::new());
+        let waker: std::sync::Arc<dyn Fn() + Send + Sync> = {
+            let wake = wake.clone();
+            std::sync::Arc::new(move || wake.notify_one())
+        };
+        let mut session = rds_kernel::KernelSession::spawn_spec_with_waker(
+            launch,
+            kernel_id,
+            Some(waker),
+        )
+        .map_err(|e| e.to_string())?;
         let events = session.take_events();
         kernels.insert(
             kernel_id.to_string(),
@@ -120,6 +131,7 @@ impl EditorShared {
                 session,
                 events,
                 python: std::path::PathBuf::from(command),
+                wake,
             },
         );
         Ok(())
@@ -147,6 +159,14 @@ impl EditorShared {
             out.push(event);
         }
         out
+    }
+
+    /// 【R2】取某内核的唤醒句柄（`Arc` clone；未启动 = None）
+    pub fn kernel_wake(&self, kernel_id: &str) -> Option<std::sync::Arc<tokio::sync::Notify>> {
+        self.kernels
+            .borrow()
+            .get(kernel_id)
+            .map(|entry| entry.wake.clone())
     }
 
     /// 【#17】关闭并摘除某内核（笔记本关闭时逐个调；不 panic 于未启动）

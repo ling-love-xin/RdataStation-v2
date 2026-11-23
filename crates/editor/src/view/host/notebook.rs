@@ -808,8 +808,10 @@ impl EditorHostPanel {
         }
     }
 
-    /// 【#17】内核事件泵：60ms 一拍轮询当前内核单元的事件，回填输出直到 ExecuteReply /
-    /// Failed（内核空闲即退出循环，下次执行重新起）
+    /// 【#17 → R2】内核事件泵：**push 化**——内核线程写入事件即唤醒，不再 60ms 轮询。
+    ///
+    /// 循环：drain 一轮 → 执行未收口就等唤醒。`timer(2s)` 只是「会话静默消失」的
+    /// 逃生阀（不是常规节拍）：正常情况下醒来的唯一原因是 `Notify::notify_one`。
     fn ensure_kernel_pump(&self, cx: &mut Context<Self>) {
         if let Some(task) = self.kernel_pump.borrow().as_ref()
             && !task.is_ready()
@@ -820,38 +822,50 @@ impl EditorHostPanel {
         let executor = cx.background_executor().clone();
         let task = cx.spawn(async move |_this, cx| {
             loop {
-                executor.timer(std::time::Duration::from_millis(60)).await;
-                let keep_going = weak
+                // 先 drain：Started 之后事件可能比本任务更早到达（首屏零等待）
+                let wake = weak
                     .update(cx, |this, cx| {
-                        let before = this.notebook_ctrl.current().is_some();
-                        this.drain_kernel_events(cx);
-                        if before {
+                        // 只有真的取到事件（或执行状态变化）才重绘；
+                        // 2s 兜底醒来时通常 false，不产生空转重绘
+                        if this.drain_kernel_events(cx) {
                             cx.notify();
                         }
-                        this.notebook_ctrl.current().is_some()
+                        this.current_kernel_wake()
                     })
-                    .unwrap_or(false);
-                if !keep_going {
-                    return;
+                    .ok()
+                    .flatten();
+                let Some(wake) = wake else {
+                    return; // 执行已收口 / 单元没了 / 内核已摘除
+                };
+                tokio::select! {
+                    _ = wake.notified() => {}
+                    _ = executor.timer(std::time::Duration::from_secs(2)) => {}
                 }
             }
         });
         *self.kernel_pump.borrow_mut() = Some(task);
     }
 
+    /// 【R2】当前执行所属内核的唤醒句柄（无执行 / 内核未启动 = None）
+    fn current_kernel_wake(&self) -> Option<std::sync::Arc<tokio::sync::Notify>> {
+        let run = self.notebook_ctrl.current()?;
+        self.shared.kernel_wake(&run.kernel_id)
+    }
+
     /// 【#17】取走内核事件并落到当前运行的单元
     ///
     /// **规则不在这里**：归属过滤 / stderr 前缀 / mime 分发 / 收口都在
     /// [`crate::notebook::orchestrate::apply_events`]（纯函数，可无 GPUI 单测）。
-    /// 本方法只做四件事：会话作废判定 → 调规则 → 回写单元 → 队列推进 / notify。
-    fn drain_kernel_events(&mut self, _cx: &mut Context<Self>) {
+    /// 本方法只做四件事：会话作废判定 → 调规则 → 回写单元 → 队列推进。
+    /// 返回 `true` = 本次改动了可见状态（调用方据此决定是否重绘）。
+    fn drain_kernel_events(&mut self, _cx: &mut Context<Self>) -> bool {
         // 【R1】进行中的执行从 controller 账本取（账本只由 controller 增删）
         let Some(run) = self.notebook_ctrl.current().cloned() else {
-            return;
+            return false;
         };
         let events = self.shared.kernel_drain(&run.kernel_id);
         if events.is_empty() {
-            return;
+            return false;
         }
         let mut state = self.notebook_state();
         // 会话 id 先克隆（`cell_mut` 之后不能同时借 `state.session`）
@@ -859,7 +873,7 @@ impl EditorHostPanel {
         let Some(cell) = state.cell_mut(&run.cell_id) else {
             // 单元没了：执行作废（不再等回执）
             self.notebook_ctrl.finish();
-            return;
+            return true;
         };
         // 会话已切换：回执不落，执行作废
         if session_id != run.session_id {
@@ -867,7 +881,7 @@ impl EditorHostPanel {
             cell.state = crate::cell::CellState::Idle;
             cell.outputs.clear();
             self.shared.set_notebook_cells(&self.document, state.cells);
-            return;
+            return true;
         }
         // 【R6】业务规则（归属过滤 / stderr 前缀 / mime 分发 / 收口 / 失败原因）
         // 全部在 notebook/orchestrate.rs 的纯函数里：可在无窗口环境单测
@@ -887,6 +901,7 @@ impl EditorHostPanel {
         if applied.finished {
             self.advance_notebook_queue(_cx);
         }
+        true
     }
 
     /// 【15.15】从一条单元回执里取出「执行出错位点」（**认不出就不给位置**）

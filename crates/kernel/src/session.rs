@@ -21,6 +21,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as ProcCommand, Stdio};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result, bail};
@@ -146,6 +147,18 @@ impl KernelSession {
     /// 同步返回：内部起后台 tokio 线程做端口 / 进程 / 握手，成功后本函数才返回
     /// （启动失败 = 这里直接 Err，不留半死会话）。
     pub fn spawn_spec(launch: &KernelLaunch, kernel_name: &str) -> Result<Self> {
+        Self::spawn_spec_with_waker(launch, kernel_name, None)
+    }
+
+    /// 同 [`Self::spawn_spec`]，但每次事件写入后额外调用 `wake`。
+    ///
+    /// `wake` 是 push 化的唯一钩子：消费方拿它挂一个唤醒（如 `Notify::notify_one`），
+    /// 就不必定时轮询事件通道。**不依赖任何 UI 类型**——它只是一个回调。
+    pub fn spawn_spec_with_waker(
+        launch: &KernelLaunch,
+        kernel_name: &str,
+        wake: Option<Arc<dyn Fn() + Send + Sync>>,
+    ) -> Result<Self> {
         if !launch.is_launchable() {
             bail!("内核启动参数不完整（argv 必须包含 {{connection_file}} 占位）");
         }
@@ -169,7 +182,7 @@ impl KernelSession {
                         return;
                     }
                 };
-                let _ = rt.block_on(run_kernel_launch(&launch, &kernel_name, ready_tx));
+                let _ = rt.block_on(run_kernel_launch(&launch, &kernel_name, ready_tx, wake));
             })
             .context("spawn rds-kernel 线程失败")?;
 
@@ -234,11 +247,34 @@ struct LaunchParts {
     events: mpsc::UnboundedReceiver<KernelEventEnvelope>,
 }
 
+/// 事件出口：写入事件后立即调用 `wake`（push 化的唯一钩子）。
+///
+/// 没有 `wake` 时行为与旧的裸 `mpsc::UnboundedSender` 完全一致——轮询方不受影响。
+struct EventSink {
+    tx: mpsc::UnboundedSender<KernelEventEnvelope>,
+    wake: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+impl EventSink {
+    fn new(tx: mpsc::UnboundedSender<KernelEventEnvelope>, wake: Option<Arc<dyn Fn() + Send + Sync>>) -> Self {
+        Self { tx, wake }
+    }
+
+    /// 写事件 + 唤醒。顺序固定为「先入队再唤醒」：唤醒方醒来时事件必然已可取。
+    fn send(&self, event: KernelEventEnvelope) {
+        let _ = self.tx.send(event);
+        if let Some(wake) = self.wake.as_ref() {
+            wake();
+        }
+    }
+}
+
 /// 内核启动全流程（tokio 线程内）：端口 → 进程 → 握手 → 交还控制端 → 事件循环
 async fn run_kernel_launch(
     launch: &KernelLaunch,
     kernel_name: &str,
     ready: tokio::sync::oneshot::Sender<Result<LaunchParts>>,
+    wake: Option<Arc<dyn Fn() + Send + Sync>>,
 ) -> Result<()> {
     let session_id = new_session_id();
     let launched = async {
@@ -329,7 +365,8 @@ async fn run_kernel_launch(
         Ok((_info, conn_file, child, iopub, shell, control)) => {
             let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<Command>();
             let (ev_tx, ev_rx) = mpsc::unbounded_channel::<KernelEventEnvelope>();
-            let _ = ev_tx.send(KernelEventEnvelope::session(KernelEvent::Status(
+            let sink = EventSink::new(ev_tx, wake);
+            sink.send(KernelEventEnvelope::session(KernelEvent::Status(
                 KernelStatus::Starting,
             )));
             // 启动成功 → 交还命令端与事件端
@@ -339,7 +376,7 @@ async fn run_kernel_launch(
             }));
             // 事件循环直接跑在 launch 的 tokio runtime 上（runtime 存活期 = 会话存活期；
             // 若这里提前返回，runtime drop 会把未完成任务 abort 掉，事件通道随之断开）
-            event_loop(cmd_rx, ev_tx, iopub, shell, control, child, conn_file).await;
+            event_loop(cmd_rx, &sink, iopub, shell, control, child, conn_file).await;
             Ok(())
         }
         Err(e) => {
@@ -353,7 +390,7 @@ async fn run_kernel_launch(
 /// 退出条件：收到 Shutdown / 任一路通道错误。
 async fn event_loop(
     mut cmd_rx: mpsc::UnboundedReceiver<Command>,
-    ev_tx: mpsc::UnboundedSender<KernelEventEnvelope>,
+    sink: &EventSink,
     mut iopub: ClientIoPubConnection,
     mut shell: ClientShellConnection,
     mut control: ClientControlConnection,
@@ -382,7 +419,7 @@ async fn event_loop(
                         // 内核回传的消息 parent_header 即此 id，消费方据此归属事件
                         msg.header.msg_id = msg_id;
                         if let Err(e) = shell.send(msg).await {
-                            let _ = ev_tx.send(KernelEventEnvelope::session(
+                            sink.send(KernelEventEnvelope::session(
                                 KernelEvent::Failed(format!("发送执行请求失败：{e}")),
                             ));
                             break;
@@ -391,7 +428,7 @@ async fn event_loop(
                     Command::Interrupt => {
                         let msg: JupyterMessage = InterruptRequest {}.into();
                         if let Err(e) = control.send(msg).await {
-                            let _ = ev_tx.send(KernelEventEnvelope::session(
+                            sink.send(KernelEventEnvelope::session(
                                 KernelEvent::Failed(format!("发送中断请求失败：{e}")),
                             ));
                             break;
@@ -418,7 +455,7 @@ async fn event_loop(
                                     ExecutionState::Starting => KernelStatus::Starting,
                                     _ => KernelStatus::Starting,
                                 };
-                                let _ = ev_tx.send(KernelEventEnvelope::for_execution(
+                                sink.send(KernelEventEnvelope::for_execution(
                                     parent.clone(),
                                     KernelEvent::Status(status),
                                 ));
@@ -428,31 +465,31 @@ async fn event_loop(
                                     jupyter_protocol::messaging::Stdio::Stdout => "stdout",
                                     jupyter_protocol::messaging::Stdio::Stderr => "stderr",
                                 };
-                                let _ = ev_tx.send(KernelEventEnvelope::for_execution(
+                                sink.send(KernelEventEnvelope::for_execution(
                                     parent.clone(),
                                     KernelEvent::Stream { name: name.to_string(), text: s.text },
                                 ));
                             }
                             JupyterMessageContent::DisplayData(d) => {
-                                let _ = ev_tx.send(KernelEventEnvelope::for_execution(
+                                sink.send(KernelEventEnvelope::for_execution(
                                     parent.clone(),
                                     KernelEvent::Display(d.data),
                                 ));
                             }
                             JupyterMessageContent::UpdateDisplayData(d) => {
-                                let _ = ev_tx.send(KernelEventEnvelope::for_execution(
+                                sink.send(KernelEventEnvelope::for_execution(
                                     parent.clone(),
                                     KernelEvent::Display(d.data),
                                 ));
                             }
                             JupyterMessageContent::ExecuteResult(r) => {
-                                let _ = ev_tx.send(KernelEventEnvelope::for_execution(
+                                sink.send(KernelEventEnvelope::for_execution(
                                     parent.clone(),
                                     KernelEvent::Display(r.data),
                                 ));
                             }
                             JupyterMessageContent::ErrorOutput(e) => {
-                                let _ = ev_tx.send(KernelEventEnvelope::for_execution(
+                                sink.send(KernelEventEnvelope::for_execution(
                                     parent.clone(),
                                     KernelEvent::Error { ename: e.ename, evalue: e.evalue, traceback: e.traceback },
                                 ));
@@ -462,7 +499,7 @@ async fn event_loop(
                         }
                     },
                     Err(e) => {
-                        let _ = ev_tx.send(KernelEventEnvelope::session(
+                        sink.send(KernelEventEnvelope::session(
                             KernelEvent::Failed(format!("iopub 通道错误：{e}")),
                         ));
                         break;
@@ -481,7 +518,7 @@ async fn event_loop(
                                     ReplyStatus::Error => "error",
                                     ReplyStatus::Aborted => "abort",
                                 };
-                                let _ = ev_tx.send(KernelEventEnvelope::for_execution(
+                                sink.send(KernelEventEnvelope::for_execution(
                                     parent,
                                     KernelEvent::ExecuteReply {
                                         status: status.to_string(),
@@ -493,7 +530,7 @@ async fn event_loop(
                         }
                     },
                     Err(e) => {
-                        let _ = ev_tx.send(KernelEventEnvelope::session(
+                        sink.send(KernelEventEnvelope::session(
                             KernelEvent::Failed(format!("shell 通道错误：{e}")),
                         ));
                         break;
@@ -503,7 +540,7 @@ async fn event_loop(
         }
     }
 
-    let _ = ev_tx.send(KernelEventEnvelope::session(KernelEvent::Status(
+    sink.send(KernelEventEnvelope::session(KernelEvent::Status(
         KernelStatus::Stopped,
     )));
     // 内核进程兜底清理（正常关闭时已自行退出；异常时强杀）
@@ -578,6 +615,45 @@ mod tests {
     #[test]
     fn key_hex_is_64_chars() {
         assert_eq!(new_key_hex().len(), 64);
+    }
+
+    #[test]
+    fn event_sink_wakes_after_every_send() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = calls.clone();
+        let (tx, mut rx) = mpsc::unbounded_channel::<KernelEventEnvelope>();
+        let sink = EventSink::new(
+            tx,
+            Some(Arc::new(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+            })),
+        );
+        sink.send(KernelEventEnvelope::session(KernelEvent::Status(
+            KernelStatus::Idle,
+        )));
+        sink.send(KernelEventEnvelope::session(KernelEvent::Status(
+            KernelStatus::Stopped,
+        )));
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "每次 send 必须唤醒一次（R2 push 的成立前提）"
+        );
+        // 顺序不变量：唤醒发生时事件已经在通道里（先入队再唤醒）
+        assert!(rx.try_recv().is_ok(), "第一条事件应已可读");
+        assert!(rx.try_recv().is_ok(), "第二条事件应已可读");
+    }
+
+    #[test]
+    fn event_sink_without_waker_keeps_old_behavior() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<KernelEventEnvelope>();
+        let sink = EventSink::new(tx, None);
+        sink.send(KernelEventEnvelope::session(KernelEvent::Status(
+            KernelStatus::Stopped,
+        )));
+        assert!(rx.try_recv().is_ok(), "无 wake 时只入队，行为与旧裸 sender 一致");
+        assert!(rx.try_recv().is_err());
     }
 
     /// 真实内核集成验证：启动 ipykernel → 执行 `print` → 断言 stdout 流 + ok 回复。

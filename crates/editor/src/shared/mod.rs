@@ -163,6 +163,10 @@ pub struct KernelEntry {
     pub events: tokio::sync::mpsc::UnboundedReceiver<rds_kernel::KernelEventEnvelope>,
     /// 启动该内核用的解释器可执行路径（指示器回显；来自注册表 spec，见 [`crate::kernel`]）
     pub python: std::path::PathBuf,
+    /// 【R2】事件唤醒句柄：内核线程每次写入事件后 `notify_one()`，
+    /// 视图侧长任务 `notified().await` 醒来 drain（取代 60ms 轮询）。
+    /// `Notify` 会保留一个 permit：唤醒先于等待也不会丢。
+    pub wake: std::sync::Arc<tokio::sync::Notify>,
 }
 
 /// 【#17 → #20】旧的单解释器来源已被注册表取代（见 [`crate::kernel`]）：本函数仅保留给
