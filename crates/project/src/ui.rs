@@ -26,6 +26,7 @@ use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{Disableable as _, Icon, IconName, Sizable as _, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -547,6 +548,8 @@ pub struct ConnectionOption {
 pub struct ProjectUiState {
     pub picker: PickerState,
     pub settings_open: bool,
+    /// 项目中心是否打开（有项目时也能浏览 / 管理其它项目的覆盖层）。
+    pub hub_open: bool,
     /// 当前对话框的校验错误：对话框 builder 每帧读取，提交失败时写入并重绘。
     pub dialog_error: Option<String>,
     /// 当前持有的项目写锁（只读打开时为 `None`）。
@@ -603,7 +606,7 @@ fn default_location() -> String {
 
 // ==================== 子模块 ====================
 //
-// `ui.rs` 只留公共面（类型、宿主、输入实体），实现按职责拆成五个子模块，
+// `ui.rs` 只留公共面（类型、宿主、输入实体），实现按职责拆成六个子模块，
 // 靠末尾的 `pub use` 保持 `project::ui::*` 的对外路径不变。
 // 依赖方向单向：子模块 -> 父模块（`use super::*`），子模块之间不互相 `use`。
 //
@@ -611,6 +614,7 @@ fn default_location() -> String {
 mod actions;
 mod dialogs;
 mod host;
+mod hub;
 mod picker;
 mod settings;
 
@@ -618,6 +622,7 @@ pub use actions::*;
 pub use dialogs::*;
 // `host` 里只有 crate 内辅助（只读守卫 / 反馈通道 / 名册反查），不对外导出
 use host::*;
+pub use hub::*;
 pub use picker::*;
 pub use settings::*;
 

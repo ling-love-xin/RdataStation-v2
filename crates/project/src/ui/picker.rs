@@ -210,8 +210,9 @@ pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App)
                 .primary()
                 .icon(IconName::Plus)
                 .label("新建项目")
+                // 走与标题栏菜单同一入口：有当前项目（项目中心）时先拦截未保存草稿。
                 .on_click(move |_, window, app| {
-                    open_create_dialog(&host_new, &inputs_new, window, app);
+                    request_create_project(&host_new, &inputs_new, window, app);
                 }),
         )
         .child(
@@ -220,7 +221,7 @@ pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App)
                 .icon(IconName::FolderOpen)
                 .label("打开文件夹…")
                 .on_click(move |_, window, app| {
-                    open_folder_dialog(&host_open, &inputs_open, window, app);
+                    request_open_folder(&host_open, &inputs_open, window, app);
                 }),
         )
         .child(
@@ -290,6 +291,11 @@ pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App)
         .child(rail)
 }
 
+/// 卡片对应的是否就是当前打开的项目（项目中心「当前」标记与切换 no-op 的判据）。
+pub fn is_current_project(root: Option<&Path>, item: &ProjectSummary) -> bool {
+    root.is_some_and(|root| root == item.path.as_path())
+}
+
 /// 项目卡片：一个可见主操作（打开）+ 次要命令收进 `DropdownMenu`；同一批命令另有
 /// **右键菜单**（指南：作用于指针下对象的命令应当同时提供 `ContextMenu`）。
 ///
@@ -304,6 +310,8 @@ pub(super) fn project_card(
 ) -> impl IntoElement {
     let host_open = host.clone();
     let path_open = item.path.clone();
+    // 项目中心里当前项目要能被认出来（点它不该重开，否则白丢一次锁）。
+    let is_current = is_current_project(host.root().as_deref(), item);
 
     let status_color = match item.status.as_str() {
         "active" => theme.colors.success,
@@ -362,6 +370,9 @@ pub(super) fn project_card(
                 .when(item.is_pinned, |d| {
                     d.child(Icon::new(IconName::Star).text_color(theme.colors.primary))
                 })
+                // 项目中心里标记「当前」：告诉用户这一条就是正在用的项目，
+                // 点它不会重开（`request_switch` 对同一路径直接返回）。
+                .when(is_current, |d| d.child(Tag::primary().child("当前")))
                 .child(
                     div().ml_auto().child(
                         div()
@@ -735,9 +746,10 @@ pub fn project_menu_entries(read_only: bool) -> Vec<ProjectMenuEntry> {
         enabled: true,
         separator_before: false,
     });
+    // 「项目中心…」不关闭当前项目：先看列表，选中目标才切换（一次点击完成）。
     entries.push(ProjectMenuEntry {
         id: "switch",
-        label: "切换项目…",
+        label: "项目中心…",
         icon: IconName::ArrowLeft,
         enabled: true,
         separator_before: true,
@@ -829,8 +841,13 @@ pub(super) fn attach_project_menu_handler(
             let inputs = inputs.clone();
             item.on_click(move |_, window, app| request_open_folder(&host, &inputs, window, app))
         }
-        // 一实例一项目：「切换项目」与「关闭项目」是同一条回头路（关当前 + 回选择器）。
-        "switch" | "close" => {
+        // 「项目中心…」：不关闭当前项目，只在上面盖一层列表（选中目标才切换）。
+        "switch" => {
+            let host = host.clone();
+            item.on_click(move |_, _, app| open_project_hub(&host, app))
+        }
+        // 「关闭项目」才是释放当前项目（回无项目态的选择器）。
+        "close" => {
             let host = host.clone();
             item.on_click(move |_, window, app| request_close(&host, window, app))
         }

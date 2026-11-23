@@ -252,6 +252,8 @@ pub(super) fn apply_opened(
         ui.lock = lock;
         ui.read_only = read_only;
         ui.settings_open = false;
+        // 项目中心是「挑一个项目」的覆盖层：打开成功就没人再看它了。
+        ui.hub_open = false;
         ui.dialog_error = None;
         ui.notice = read_only.then(|| "只读打开：该项目已被另一实例占用".to_string());
         ui.picker.error = None;
@@ -320,6 +322,8 @@ pub fn do_close(host: &ProjectUiHost, cx: &mut App) {
         let mut ui = host.state.borrow_mut();
         ui.read_only = false;
         ui.settings_open = false;
+        // 关掉项目就回无项目态，中央「项目」tab 已是完整列表：覆盖层没有意义。
+        ui.hub_open = false;
         ui.dialog_error = None;
         ui.notice = None;
     }

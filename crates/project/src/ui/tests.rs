@@ -26,12 +26,13 @@ use super::{
     ConnectionOption, OpenProject, PendingAction, PickerTab, ProjectEditorBridge, ProjectInputs,
     ProjectMenuEntry, ProjectSort, ProjectUiHost, ProjectUiNotifier, ProjectUiState,
     SettingsSnapshot, StatusFilter, advance_pending, build_project_menu, cancel_version_delete,
-    card_description, card_menu_entries, confirm_delete, confirm_version_delete,
-    create_version_action, default_connection_label, do_close, folder_hint, load_settings_snapshot,
-    location_hint, memo_hint, meta_line, meta_tree_rows, more_menu, open_create_dialog,
-    open_delete_dialog, open_folder_dialog, open_lock_busy_dialog, parse_search, pick_directory,
-    prepare_unsaved, project_card, project_menu_entries, render_picker, render_settings,
-    request_close, request_create_project, request_open, request_open_folder, request_switch,
+    card_description, card_menu_entries, close_project_hub, confirm_delete, confirm_version_delete,
+    create_version_action, default_connection_label, do_close, folder_hint, is_current_project,
+    load_settings_snapshot, location_hint, memo_hint, meta_line, meta_tree_rows, more_menu,
+    open_create_dialog, open_delete_dialog, open_folder_dialog, open_lock_busy_dialog,
+    open_project_hub, parse_search, pick_directory, prepare_unsaved, project_card,
+    project_menu_entries, render_picker, render_project_hub, render_settings, request_close,
+    request_create_project, request_open, request_open_folder, request_switch,
     request_version_delete, save_project_info, set_default_connection, set_sort, set_status_filter,
     set_tab, settings_status_text, snapshot_description, sort_menu_entries,
     status_filter_menu_entries, status_label, submit_create, submit_open_folder, switch_now,
@@ -106,6 +107,10 @@ impl Render for Harness {
         let mut body = div().v_flex().gap_2();
         if self.host.current().is_none() {
             body = body.child(render_picker(&self.host, &self.inputs, cx));
+        }
+        // 项目中心覆盖层先挂、设置面板后挂（与 workbench 的挂载顺序一致）。
+        if let Some(hub) = render_project_hub(&self.host, &self.inputs, cx) {
+            body = body.child(hub);
         }
         if let Some(settings) = render_settings(&self.host, &self.inputs, cx) {
             body = body.child(settings);
@@ -455,6 +460,72 @@ fn request_switch_to_current_project_is_noop(cx: &mut TestAppContext) {
     cx.update(|window, cx| switch_now(&host, &root.join("别处"), window, cx));
     assert!(host.current().is_none());
     let _ = std::fs::remove_dir_all(&root);
+}
+
+// ==================== 项目中心：覆盖层 ====================
+
+/// 有项目时也能开项目中心（不关闭当前项目），关闭后回到普通视图。
+#[gpui_kit::test]
+fn project_hub_opens_without_closing_current_project(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = Rc::new(Recorder::default());
+    let host = test_host(&rec);
+    let root = temp_root("hub-open");
+    host.set_current(Some(OpenProject::new(root.clone(), "在用的项目")));
+    let (host, inputs, cx) = open_harness(cx, host);
+
+    assert!(
+        cx.update(|_, cx| render_project_hub(&host, &inputs, cx).is_none()),
+        "默认不开项目中心"
+    );
+
+    cx.update(|_, cx| open_project_hub(&host, cx));
+    assert!(host.state.borrow().hub_open, "打开后状态位应置真");
+    assert!(host.current().is_some(), "打开项目中心不该丢当前项目");
+    assert_eq!(rec.closed.get(), 0, "打开项目中心不该触发关闭回调");
+    assert!(rec.notifies.get() > 0, "打开应请求宿主重绘");
+    assert!(
+        cx.update(|_, cx| render_project_hub(&host, &inputs, cx).is_some()),
+        "有当前项目 + hub_open 时应渲染覆盖层"
+    );
+
+    cx.update(|_, cx| close_project_hub(&host, cx));
+    assert!(!host.state.borrow().hub_open);
+    assert!(
+        cx.update(|_, cx| render_project_hub(&host, &inputs, cx).is_none()),
+        "关闭后不再渲染"
+    );
+    assert!(host.current().is_some(), "关闭项目中心与项目本身无关");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 无项目态不渲染覆盖层：中央「项目」tab 本身就是完整列表（两层列表只会打架）。
+#[gpui_kit::test]
+fn project_hub_stays_none_without_current_project(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = Rc::new(Recorder::default());
+    let host = test_host(&rec);
+    let (host, inputs, cx) = open_harness(cx, host);
+
+    cx.update(|_, cx| open_project_hub(&host, cx));
+    assert!(host.state.borrow().hub_open);
+    assert!(
+        cx.update(|_, cx| render_project_hub(&host, &inputs, cx).is_none()),
+        "无当前项目时覆盖层应为 None（由选择器面板承载）"
+    );
+}
+
+/// 「当前」标记判据：只有路径与当前根一致的那张卡片才带标记。
+#[test]
+fn current_marker_only_for_current_root() {
+    let item = summary("p1", "项目一", "active");
+    let root = item.path.clone();
+    assert!(is_current_project(Some(root.as_path()), &item));
+    assert!(!is_current_project(
+        Some(std::path::Path::new("C:/tmp/别处")),
+        &item
+    ));
+    assert!(!is_current_project(None, &item));
 }
 
 #[gpui_kit::test]
@@ -1136,7 +1207,7 @@ fn menu_spec_greys_out_write_commands_in_read_only() {
         vec![
             ("新建项目…", true),
             ("打开现有目录…", true),
-            ("切换项目…", true),
+            ("项目中心…", true),
             ("项目设置…", true),
             ("重命名…", true),
             ("在资源管理器中显示", true),
@@ -1157,7 +1228,7 @@ fn menu_spec_greys_out_write_commands_in_read_only() {
             // 创建 / 打开作用于别的目录，不写当前项目：只读时仍可用
             ("新建项目…", true),
             ("打开现有目录…", true),
-            ("切换项目…", true),
+            ("项目中心…", true),
             ("项目设置…", true),
             ("重命名…", false),
             ("在资源管理器中显示", true),
@@ -1168,7 +1239,7 @@ fn menu_spec_greys_out_write_commands_in_read_only() {
     );
 }
 
-/// 分隔线位置：只读提示与「新建项目」之间、「切换项目」与创建入口之间、列表尾部两项之前。
+/// 分隔线位置：只读提示与「新建项目」之间、「项目中心」与创建入口之间、列表尾部两项之前。
 #[test]
 fn menu_spec_keeps_escape_hatches_without_leading_separator() {
     for read_only in [false, true] {
@@ -1189,12 +1260,12 @@ fn menu_spec_keeps_escape_hatches_without_leading_separator() {
             .position(|e| e.id == "new")
             .expect("新建项目项");
         assert_eq!(entries[new_item].separator_before, read_only);
-        // 创建 / 打开入口与「切换项目」之间有分隔线（两类不同语义）。
+        // 创建 / 打开入口与「项目中心」之间有分隔线（两类不同语义）。
         let switch = entries
             .iter()
             .position(|e| e.id == "switch")
-            .expect("切换项目项");
-        assert!(entries[switch].separator_before, "创建入口应与切换分开");
+            .expect("项目中心项");
+        assert!(entries[switch].separator_before, "创建入口应与项目中心分开");
     }
 }
 
