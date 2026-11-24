@@ -330,6 +330,12 @@ fn view_layer_has_no_raw_size_literals() {
             "panels/data_objects_tab.rs",
             include_str!("../src/panels/data_objects_tab.rs"),
         ),
+        // 面板行布局探针（2026-11-24）：只在 debug 构建里登记坐标，但它是视图源码，
+        // 尺寸 / 颜色两份契约照样管（漏登 = 契约对它静默失效）
+        (
+            "panels/data_objects_tab/layout_probe.rs",
+            include_str!("../src/panels/data_objects_tab/layout_probe.rs"),
+        ),
         // 工作台概览卡片（2026-11-08）：尺寸与颜色同受这两份契约约束
         (
             "panels/overview.rs",
@@ -957,6 +963,12 @@ fn ui_sources_have_no_raw_color_literals() {
         (
             "panels/data_objects_tab.rs",
             include_str!("../src/panels/data_objects_tab.rs"),
+        ),
+        // 面板行布局探针（2026-11-24）：只在 debug 构建里登记坐标，但它是视图源码，
+        // 尺寸 / 颜色两份契约照样管（漏登 = 契约对它静默失效）
+        (
+            "panels/data_objects_tab/layout_probe.rs",
+            include_str!("../src/panels/data_objects_tab/layout_probe.rs"),
         ),
         // 工作台概览卡片（2026-11-08）：尺寸与颜色同受这两份契约约束
         (

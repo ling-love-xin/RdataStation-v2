@@ -1215,6 +1215,11 @@ impl DataObjectsTab {
                     .border_b_1()
                     .border_color(colors.border)
                     .relative()
+                    // 坐标锚点：整行外框（用例据此判断内容有没有被顶出面板）
+                    .debug_selector({
+                        let key = object.key.clone();
+                        move || format!("data-object-row-{key}")
+                    })
                     // 已选的行给一道左侧色条：走共用原语，别再用 border 挤掉 2px 内距
                     .when(is_picked, |el| el.child(workbench_shell::tree::active_bar(colors.primary)))
                     // 失效行压暗：仍然看得见，但别让人以为能直接点
@@ -1240,6 +1245,12 @@ impl DataObjectsTab {
                             .min_w_0()
                             .child(
                                 div()
+                                    // 坐标锚点：窗口用例靠它量「名字这一格实际多宽」
+                                    // （`.id()` 只登记可点，不登记几何）
+                                    .debug_selector({
+                                        let key = object.key.clone();
+                                        move || format!("data-object-name-{key}")
+                                    })
                                     .text_sm()
                                     .text_color(colors.foreground)
                                     // 窄面板里名字一长就顶出去，行尾按钮会被挤掉
@@ -1249,6 +1260,10 @@ impl DataObjectsTab {
                             )
                             .child(
                                 div()
+                                    .debug_selector({
+                                        let key = object.key.clone();
+                                        move || format!("data-object-note-{key}")
+                                    })
                                     .text_xs()
                                     .text_color(colors.muted_foreground)
                                     .overflow_hidden()
@@ -1257,9 +1272,20 @@ impl DataObjectsTab {
                             ),
                     )
                     // 业务身份走标准 Tag：手写胶囊的圆角、内距、字号各写一遍就会漂
-                    .child(pill.child(object.pill_text()))
                     .child(
                         div()
+                            .debug_selector({
+                                let key = object.key.clone();
+                                move || format!("data-object-pill-{key}")
+                            })
+                            .child(pill.child(object.pill_text())),
+                    )
+                    .child(
+                        div()
+                            .debug_selector({
+                                let key = object.key.clone();
+                                move || format!("data-object-channel-{key}")
+                            })
                             .text_xs()
                             .flex_none()
                             // 固定一档最小宽：`→ 联邦` 与 `→ 进程 DuckDB` 差太多，
@@ -1272,12 +1298,22 @@ impl DataObjectsTab {
                     )
                     .child(
                         div()
+                            .debug_selector({
+                                let key = object.key.clone();
+                                move || format!("data-object-state-{key}")
+                            })
                             .text_xs()
                             .flex_none()
                             .min_w_10()
+                            // 行上只放短码：全文（`availability_text`）30 字实测 209px，
+                            // 窄面板里会把这一格顶到行外、连带挤掉行尾按钮。上限钉住（6rem = 96px，
+                            // 够 6 字短码），再短也有 ellipsis 兜底（属性窗口里看全文，见铁律第 38 条）
+                            .max_w(rems(6.))
+                            .overflow_hidden()
+                            .text_ellipsis()
                             .text_color(state_color)
-                            // 能用 → 寿命（会不会自己消失）；不能用 → 原因（要动手解决什么）
-                            .child(object.availability_text()),
+                            // 能用 → 寿命（会不会自己消失）；不能用 → 短原因（要动手解决什么）
+                            .child(object.availability_chip()),
                     )
                     .children(pick_button)
                     .children(install_button)
@@ -2282,5 +2318,11 @@ mod tests {
         // 页数为 0 是异常值：按一页算，绝不能画 0 行（否则展开像没反应）
         assert_eq!(leaf_shown(10, Some(0)), LEAF_PAGE_SIZE.min(10));
     }
+
+    // ── 真实布局测量见 `layout_probe.rs`（headless 窗口 + gpui 排版引擎）────────
 }
+
+#[cfg(test)]
+mod layout_probe;
+
 

@@ -280,6 +280,32 @@ impl Object {
             _ => self.state.label(),
         }
     }
+
+    /// 状态列的**行上短码**（[`Self::availability_text`] 是全文，去属性窗口 / 右键菜单看）。
+    ///
+    /// 为什么必须分两档：整句原因实测 209px（12px 字号、30 字），面板 380px 宽时
+    /// 状态格只有 40px 的下限位，整句会把状态块顶到行外 25px、把行尾按钮挤出可视区
+    /// （`panels/data_objects_tab/layout_probe.rs` 量出来的数，不是估算）。
+    /// 所以行上只放判据：能用 → 寿命；不能用 → **原因的第一段**（超过 6 字退化成
+    /// 「失败」，宁可少说也不在窄面板里撑行）。
+    pub fn availability_chip(&self) -> String {
+        match &self.state {
+            State::Ready => self.life.label().to_string(),
+            State::Stale(_) => "已失效".to_string(),
+            State::Failed(why) => {
+                let head = why
+                    .split(['·', '，', ',', '：', ':'])
+                    .next()
+                    .unwrap_or(why)
+                    .trim();
+                if !head.is_empty() && head.chars().count() <= 6 {
+                    head.to_string()
+                } else {
+                    "失败".to_string()
+                }
+            }
+        }
+    }
 }
 
 /// 联邦会话里的一条源（面板「本次会话」段用）。
@@ -1982,6 +2008,49 @@ mod tests {
                 "sample 里没有「{expected}」的行，这条断言失去意义"
             );
         }
+    }
+
+    /// 行上状态**短码**：再窄也不撑行；全文仍留在属性窗口。
+    ///
+    /// 这条用例钉的是「行上不放整句」这个决定本身——整句实测 209px（12px / 30 字），
+    /// 面板 380px 宽时状态格只有 40px 下限位，整句会把状态块顶到行外 25px
+    /// （`panels/data_objects_tab/layout_probe.rs` 的实测）。
+    #[test]
+    fn availability_chip_stays_short_on_the_row() {
+        for object in &objects(&sample()) {
+            let chip = object.availability_chip();
+            assert!(
+                chip.chars().count() <= 6,
+                "{} 的短码超过 6 字：{chip}",
+                object.key
+            );
+            if object.can_analyze() {
+                assert_eq!(
+                    chip,
+                    object.availability_text(),
+                    "{} 可用行的短码就是寿命，不需要退化",
+                    object.key
+                );
+            }
+        }
+
+        // 实测那条最宽的整句：短码只取第一段
+        let mut down = objects(&sample())
+            .into_iter()
+            .find(|o| !o.can_analyze())
+            .expect("sample 里应有不可用行");
+        down.state = State::Failed(
+            "未挂载 · 先在这条连接上开「本地加速」，挂上后可展开选表".to_string(),
+        );
+        assert_eq!(down.availability_chip(), "未挂载");
+        assert!(
+            down.availability_text().len() > down.availability_chip().len() * 4,
+            "全文才是长的那份（属性窗口读它）"
+        );
+
+        // 没有分隔符的长原因：不猜哪一段是重点，直接退化成「失败」
+        down.state = State::Failed("这一行背后到底怎么了暂时说不清".to_string());
+        assert_eq!(down.availability_chip(), "失败");
     }
 
     /// 表型资产的本体表从分析库里消失 = 真失效（`State::Stale` 的生产路径）。
