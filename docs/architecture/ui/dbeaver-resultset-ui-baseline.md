@@ -2197,3 +2197,118 @@ Label「筛选：」在左、`Text(SWT.BORDER|SWT.SEARCH|SWT.ICON_CANCEL)` 在�
 
 工作区改动仅 `grid/{delegate,header,tests}.rs` 三个文件（+44/−1、+36/−2、+85/0），无 vendor、
 无并行线文件；文档本节随另一 commit 入库（LF blob）。
+
+## §36 D10-5：列头按下 = 整列选中
+
+（结 §35.4 #2）
+
+### 36.1 DBeaver 取证
+
+**命中条件**（`LightGrid.java:3185`）：`columnHeadersVisible && e.y <= headerHeight`
+—— 列头带内，且不在 `:3174` 那条「行头 ∩ 列头」交角分支里（交角已在 §35 结掉）。
+
+分支体（`:3186-3204`）：
+
+- `col = getColumn(point)`（`:3187`）；`col == null` → **直接 return**（`:3189-3191`，
+  即列头带里列头右侧的空白不会选中任何东西）；
+- **只对左键**（`:3193` `e.button == 1`）：`getCells(col, cells)` 取整列，再
+  `updateCellSelection(cells, e.stateMask, false, true, EventSource.MOUSE)`（`:3194-3196`）
+  —— `stateMask` 原样交给选区引擎，所以 Shift / Ctrl 的扩展语义走的是同一个入口；
+- `cellColumnSelectedOnLastMouseDown = (getCellSelectionCount() > 0)`（`:3199`）：
+  记下「这次按下之后是不是有线了」，供后面的**列头拖动**判定（`:3591-3626`）；
+- `focusColumn = col`（`:3201`）、`showColumn(col)`（`:3203`）：焦点列摆到该列，
+  并横向滚到该列可见；随后 `redraw()`。
+
+**整列集合**（`getCells(GridColumn col, List cells)`，`:4378-4395`）：
+
+- 叶子列 → `int colIndex = col.getIndex();` 然后 `for i in 0..getItemCount()` 全部行 ×该列（`:4389-4393`）；
+- 有 `getChildren()` 的父列（分组列头）→ 把该父列下**所有叶子列 × 全部行**一起铺进去（`:4379-4387`）。
+
+**排序不在这条路上**：DBeaver 的列头排序入口是列头右端的排序图标，与列头按下是两条独立入口。
+本仓的对应物是 vendor `render_sort_icon`（`table/state.rs:2064-2108`，`:2099-2101` 的
+`.on_click(perform_sort)`，**未** `stop_propagation`）—— 因此这刀可以零 vendor 改动。
+
+### 36.2 本仓现状（先取证，避免走弯路）
+
+`TableEvent::SelectColumn` 在本仓**已经存在但没人接**：
+
+| 位置 | 现状 |
+| --- | --- |
+| vendor `table/state.rs:1089-1103` | `on_col_head_click` → `set_selected_col(col)` |
+| vendor `table/state.rs:641-649` | `set_selected_col` 末尾 emit `TableEvent::SelectColumn(col_ix)` |
+| `result_panel/panel/lifecycle.rs` | 落进兜底分支，原注释写着「SelectColumn 由组件内联处理，面板不跟」 |
+| `editor/view/host/construct.rs` | 同样未订阅 |
+
+于是按 DBeaver 口径点列头时，只有列头自身换色，**数据区没有整列高亮**、状态行三项数字不动。
+这刀就是把这条事件接上（并把「排序」留在原来的箭头入口，行为不变）。
+
+### 36.3 落点
+
+| 文件 | 改动 |
+| --- | --- |
+| `crates/result_panel/src/grid/delegate.rs` | 新增 `click_col(col, extend)`（`:415`）：矩形 = `(0, col)` .. `(末视图行, col)`；`extend`（Shift）保留锚点列 → **列区间**（两列之间的全部行）；`is_row_number(col)` 时退化成 `click_cell(0, 0, extend)` 给整行（不另开一套）；空表三档（无行 / 无列 / 只有占位行）直接 return |
+| `crates/result_panel/src/grid/text.rs` | `GridSelection` 加 `Column { col }` 变体（`:564`）；`selection_text` 前置列分支（`:505-507`）+ 私有 `column_selection_text`（`:526-535`）：视图列 → `data_column(col - 1)` → 既有 `column_text(data_col)`，行号槽 / 越界返回 `None` |
+| `crates/result_panel/src/panel/lifecycle.rs` | 新增 `TableEvent::SelectColumn` 分支（`:567-575`）：`window.modifiers().shift` → `click_col(col, extend)`、`set_selected_row(None)`（列选中不吃整行镜像）、`cx.notify()` |
+| `crates/editor/src/view/host/construct.rs` | 同事件再写一次 `click_col`（`:324-346`，同值幂等，先例是 `ColumnWidthsChanged` 的双写注释）：随后按 `selection_counts` 写三项数字、`set_selected_pos(None)`、`result_selection = Some(Column { col })` |
+| `crates/editor/src/view/host/results/copy.rs` | `copy_grid_selection` 的文案 match 加一条（`:76`）：`Column { .. } => "已复制整列（TSV）"` |
+| `crates/result_panel/src/grid/tests.rs` | `clicking_a_column_header_selects_the_whole_column`（`:5186`，整列 / Shift 列区间 / 行号槽列头给整行 / 两档空表）；`a_column_selection_copies_the_whole_column`（`:5230`，复制文本 = `column_text(0)`，`Column { col: 0 }` 给 `None`） |
+| `crates/result_panel/src/panel/tests.rs` | `clicking_a_column_header_selects_the_whole_column`（`:6766`，走真事件：`set_selected_col(1)` → 矩形 (0,1)..(1,1)、`selection_counts == (2,1,2)`） |
+
+**为什么两处都写 `click_col`**：面板与宿主各订阅一次同一条组件事件，谁先跑不确定
+（先例见 `ColumnWidthsChanged`）；写两次是同值幂等，换来的是「谁先跑，选区都已经是新的」，
+宿主随后读 `selection_counts` 才不会读到上一刀的数字。
+
+**为什么宿主要把 `result_selection` 换成 `Column`**：`Ctrl+C` 的复制文本按最近一次选择事件走
+（`GridSelection` 的注释：「组件没公开当前是选格还是选行」），不换就等于列选中复制到的是
+列头那一格。
+
+**零 vendor 改动**：排序列头箭头与列头点击本来就是两条入口（§36.1 末），本刀只接事件。
+
+### 36.4 差异明账（未做，不静默）
+
+1. **列头拖动 = 整列区间未做**（DBeaver `:3591-3626`，靠 `:3199` 的
+   `cellColumnSelectedOnLastMouseDown` 决定起拖）：vendor 列头的 `on_drag` 已被列重排
+   `DragColumn` 占用（`state.rs:2156-2169`），要先定「列头拖拽优先做重排还是做选区」——同 §34.4 #2。
+2. **Ctrl 并集 / 反选未做**：DBeaver 把 `stateMask` 原样下传（`:3196`），本仓仍是单矩形模型
+   （同 §30.4 #2）。目前只认 Shift（列区间）。
+3. **父列（分组列头）语义不适用**：`getCells` 的 `getChildren() != null` 分支（`:4379-4387`）
+   一次框住全部叶子列；本仓没有分组列头，无对等表达。
+4. **`showColumn(col)` 未做**（`:3203`）：本仓列头点击不做横向滚动。列头本来就只有可见时才点得到，
+   实际影响最低，登记备查。
+5. **焦点格不设**：DBeaver 把 `focusColumn = col`（`:3201`）；本仓列选中一律 `set_selected_pos(None)`
+   —— 「当前格」语义被三处既有用例锁定（同 §34.4 #1 / §35.4 #1）。
+6. 行号列宽 40 下限（§34.4 #5）、空态占位行本身的渲染（§35.4 #3）两处仍开放，不在本刀。
+
+### 36.5 验证
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo test -p rds-result-panel --lib` | **443 passed / 0 failed**（440 + 本刀 3） |
+| `cargo test -p rds-editor` | 干净树 **867 passed + 4 ignored**；离线 `tests/offline_baseline.rs` 5 passed |
+| `cargo check -p rds-workbench --lib` | Finished，0 warning |
+
+**868 → 867 的差额已查明，不是回归**：§34.5 / §35.5 记的 868 是「主工作区含并行线未提交改动」
+时的数字；差额那 1 条是并行线在 `crates/editor/src/view/tests/core.rs` 新增的
+`editor_panel_offers_zoom_in_the_title_bar_and_the_menu`（未提交）。本刀门禁跑在独立 worktree 的
+**干净树**上（`8eee15d8`），因此是 867。并行线随后把它自己的提交 `c6da8c75` 落在同一棵树上
+（仍未包含那条 `core.rs` 改动），所以 867 是这条线当下的干净口径。
+
+门禁为什么在 worktree 跑：主工作区当时被并行线的 `crates/result_panel/src/{sets.rs,ui.rs}`
+未提交中间态挡住（`sets.rs` 报 `gpui_kit::Div` 无 `when`），本线不得替并行线改文件也不得提交它们。
+worktree 位置 `D:\RdataStation\RDS\_worktrees\d10-5`（`git worktree add --detach … 08825c03`），
+建好后需手动 `New-Item .rds\tmp`（否则 gpui-component 的 build script 链接失败 `LNK1104`）。
+
+### 36.6 提交与合并链
+
+- `08825c03` 功能（7 文件：delegate +34、text +28/−4、grid/tests +70、panel/lifecycle +19/−1、
+  panel/tests +32、construct +23、copy +4/−3）
+- `8eee15d8` 补 `crates/result_panel/src/analysis.rs` 的 `use super::tr;`（+1 行）：`#[cfg(test)]`
+  内的 `tr("计数行数")` 缺作用域，**不带这一行该分支编不过**。此前三次问过是否单独成刀未答，
+  故按「恢复可编译」的最小改动单独提交，并在 msg 里写明原委。
+- 合并：main 以 CAS 从 `bc2e4b21` 前进到 `c6da8c75`（`git update-ref refs/heads/main c6da8c75 bc2e4b21`），
+  后者是并行线（dock chrome）在本树上接续的提交，父即 `8eee15d8`。合并前逐个核对本线 8 个文件
+  的 blob（`git rev-parse <rev>:<path>` 八项全 `True`）——本刀内容原样在 main 里；随后
+  `git symbolic-ref HEAD refs/heads/main` 把工作区挂回 main（不动文件），`git branch -d feat/resultset-d10-5` 删分支。
+- **教训（留痕）**：诊断编译阻塞时把工作区 HEAD 切到了 feature 分支，事后没有切回 main，
+  于是并行线的下一次 `git commit` 直接落在 feature 分支之上（`c6da8c75`）。分支隔离形同虚设，
+  只能靠事后 blob 比对确认内容无损。**下次切 feature 分支诊断完必须立刻 `git symbolic-ref HEAD refs/heads/main` 挂回**。
