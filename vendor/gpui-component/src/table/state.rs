@@ -1,5 +1,5 @@
 use gpui_base::TestSupportExt as _;
-use std::{ops::Range, rc::Rc, time::Duration};
+use std::{cell::Cell, ops::Range, rc::Rc, time::Duration};
 
 use crate::{
     ActiveTheme, ElementExt, Icon, IconName, StyleSized as _, StyledExt, VirtualListScrollHandle,
@@ -13,11 +13,11 @@ use crate::{
     v_flex,
 };
 use gpui::{
-    AppContext, Axis, Bounds, ClickEvent, Context, Div, DragMoveEvent, ElementId, EventEmitter,
-    FocusHandle, Focusable, InteractiveElement, IntoElement, ListSizingBehavior, Modifiers,
-    MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render, ScrollStrategy, SharedString,
-    Stateful, StatefulInteractiveElement as _, Styled, Task, TextAlign, UniformListScrollHandle,
-    Window, div, prelude::FluentBuilder, px, uniform_list,
+    AppContext, Axis, Bounds, ClickEvent, Context, Div, DragMoveEvent, ElementId, EntityId,
+    EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, ListSizingBehavior,
+    Modifiers, MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render, ScrollStrategy,
+    SharedString, Stateful, StatefulInteractiveElement as _, Styled, Task, TextAlign,
+    UniformListScrollHandle, Window, div, prelude::FluentBuilder, px, uniform_list,
 };
 use rust_i18n::t;
 
@@ -71,6 +71,39 @@ pub enum TableSelection {
     Column(usize),
     /// A cell is selected, as `(row_ix, col_ix)`.
     Cell(usize, usize),
+}
+
+/// 单元格拖拽选区的拖拽负载（DBeaver `LightGrid.cellDragSelectionOccurring`）。
+///
+/// 任意格都能起拖：DBeaver 鼠标按下就先把该格选进选区（`LightGrid.java:3152-3170`），
+/// 所以拖动起点总是「刚被按下选中的格」。本仓是渲染期决定挂载，按下那一刻格子的选中态
+/// 还没刷新，故负载里带起点格 + 一次性标志，由首个 `DragMove` 补立锚点。
+/// 拖拽本体不带选区状态：锚点立在 delegate 里，这里只管「从哪格起、是否已立过锚」。
+#[derive(Clone)]
+pub struct SelectCellsDrag {
+    /// 发起拖拽的表格实例（多表共存时事件会派发到每个挂了回调的元素）
+    owner: EntityId,
+    /// 拖拽起点格（按下时那一格）
+    start: (usize, usize),
+    /// 「首次 DragMove」一次性标志。每次渲染新建一个 `Rc`（拖拽内的多次事件共享同一份，
+    /// 下一手势从新渲染出来的元素启动会拿到新的 `Rc`），因此不需要在拖拽结束时清理。
+    anchored: Rc<Cell<bool>>,
+}
+
+impl SelectCellsDrag {
+    fn new(owner: EntityId, row_ix: usize, col_ix: usize) -> Self {
+        Self {
+            owner,
+            start: (row_ix, col_ix),
+            anchored: Rc::new(Cell::new(false)),
+        }
+    }
+}
+
+impl Render for SelectCellsDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
 }
 
 /// The Table event.
@@ -865,6 +898,135 @@ where
         let body_height = (self.bounds.size.height - self.header_band_height()).max(px(0.));
         let count = (body_height / row_height).floor() as usize;
         count.max(1)
+    }
+
+    /// 命中测试用的布局快照（单元格拖拽选区用，见 [`cell_at_point`]）。
+    fn cell_hit_geometry(&self, width: Pixels, cx: &App) -> CellHitGeometry {
+        let col_widths: Vec<f32> = self
+            .col_groups
+            .iter()
+            .map(|col| col.width.as_f32())
+            .collect();
+        let total = col_widths.len();
+        let left = self.fixed_cols_count(ColumnFixed::Left).min(total);
+        let right = self.fixed_cols_count(ColumnFixed::Right).min(total - left);
+        CellHitGeometry {
+            body_top: self.header_band_height().as_f32(),
+            row_height: self.options.size.table_row_height().as_f32(),
+            scroll_y: (-self
+                .vertical_scroll_handle
+                .0
+                .borrow()
+                .base_handle
+                .offset()
+                .y)
+                .max(px(0.))
+                .as_f32(),
+            scroll_x: (-self.horizontal_scroll_handle.offset().x)
+                .max(px(0.))
+                .as_f32(),
+            width: width.as_f32(),
+            left_fixed_width: col_widths.iter().take(left).sum::<f32>(),
+            right_fixed_width: col_widths.iter().rev().take(right).sum::<f32>(),
+            left_fixed_count: left,
+            right_fixed_count: right,
+            col_widths,
+            rows_count: self.delegate.rows_count(cx),
+        }
+    }
+
+    /// 测试/调试用：当前布局快照（`drag_select_to` 内部用的同一份）。
+    pub fn debug_hit_geometry(&self, cx: &App) -> CellHitGeometry {
+        self.cell_hit_geometry(self.bounds.size.width, cx)
+    }
+
+    /// 拖拽选区：把鼠标位置换成 hover 格，再当作「带 Shift 的新终点」扩选区。
+    ///
+    /// DBeaver 同一动作走 `updateCellSelection(newCell, ctrlFlag | SWT.MOD2, ...)`
+    /// （`LightGrid.java:3539-3566`）——`MOD2` 即 Shift，所以本组件只发一条
+    /// 「带 Shift 的 `CellClicked`」，锚点仍由最初的点击立在 delegate 里。
+    /// 拖到边缘时再把目标格滚进可视区，对应 DBeaver 的 `showItem` / `showColumn`。
+    fn handle_select_cells_drag(
+        &mut self,
+        e: &DragMoveEvent<SelectCellsDrag>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.cell_selectable {
+            return;
+        }
+        // 只认自己发起的拖拽（多个表格实例共存时事件会派发到每个挂了回调的元素）
+        let (owner, start, anchored) = {
+            let drag = e.drag(cx);
+            (drag.owner, drag.start, drag.anchored.clone())
+        };
+        if owner != cx.entity_id() {
+            return;
+        }
+
+        // DBeaver 鼠标按下就先把该格选中（`LightGrid.java:3152-3170`）：本仓从任意格起拖，
+        // 起点格在按下那一帧还不是选中态 → 首个 DragMove 先补一次「无修饰点击」立锚点。
+        if !anchored.replace(true) {
+            self.begin_drag_at(start.0, start.1, cx);
+        }
+
+        let x = e.event.position.x - e.bounds.origin.x;
+        let y = e.event.position.y - e.bounds.origin.y;
+        self.drag_select_to(x, y, e.bounds.size.width, cx);
+    }
+
+    /// 拖拽起点的「按下即选中」（等价 DBeaver `updateCellSelection(...)` 在鼠标按下时选格）。
+    ///
+    /// 起点已经是选中格时什么都不做（此时锚点由之前那次点击立在 delegate 里）。
+    pub fn begin_drag_at(&mut self, row_ix: usize, col_ix: usize, cx: &mut Context<Self>) {
+        if !self.cell_selectable {
+            return;
+        }
+        if self.selected_cell() == Some((row_ix, col_ix)) {
+            return;
+        }
+        cx.emit(TableEvent::CellClicked {
+            row_ix,
+            col_ix,
+            modifiers: Modifiers::default(),
+        });
+        self.set_selected_cell(row_ix, col_ix, cx);
+    }
+
+    /// 把「相对表格左上角的拖拽位置」换成格并当作带 Shift 的终点扩选区。
+    ///
+    /// 与 [`Self::handle_select_cells_drag`] 分开，是为了让几何换算能脱离 GPUI 的
+    /// 拖拽状态机被验证（测试里直接喂坐标即可）。
+    pub fn drag_select_to(
+        &mut self,
+        x: Pixels,
+        y: Pixels,
+        width: Pixels,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.cell_selectable {
+            return;
+        }
+        let geometry = self.cell_hit_geometry(width, cx);
+        let Some((row_ix, col_ix)) = cell_at_point(x.as_f32(), y.as_f32(), &geometry) else {
+            return;
+        };
+        if self.selected_cell() == Some((row_ix, col_ix)) {
+            return;
+        }
+
+        cx.emit(TableEvent::CellClicked {
+            row_ix,
+            col_ix,
+            modifiers: Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+        });
+        self.set_selected_cell(row_ix, col_ix, cx);
+        self.vertical_scroll_handle
+            .scroll_to_item(row_ix, ScrollStrategy::Nearest);
+        self.scroll_to_col(col_ix, cx);
     }
 
     fn on_row_right_click(
@@ -2445,6 +2607,10 @@ where
                                             visible_range.end - visible_range.start,
                                         );
 
+                                        // 拖拽选区的负载要带发起者 id（见
+                                        // `handle_select_cells_drag`），循环外算一次。
+                                        let drag_owner = cx.entity_id();
+
                                         visible_range.for_each(|col_ix| {
                                             let col_ix = col_ix + scrollable_cols.start;
                                             let is_cell_selected =
@@ -2475,6 +2641,22 @@ where
                                                             cx,
                                                         )
                                                         .relative()
+                                                        // 拖拽选区：任意格都是拖拽起点（DBeaver 鼠标按下
+                                                        // 就先把该格选中，`:3152-3170`）；起点不是当前
+                                                        // 选中格时由 `begin_drag_at` 在首次 DragMove 补立锚点
+                                                        .when(table.cell_selectable, |this| {
+                                                            this.on_drag(
+                                                                SelectCellsDrag::new(
+                                                                    drag_owner,
+                                                                    row_ix,
+                                                                    col_ix,
+                                                                ),
+                                                                |drag, _, _, cx| {
+                                                                    cx.stop_propagation();
+                                                                    cx.new(|_| drag.clone())
+                                                                },
+                                                            )
+                                                        })
                                                         .child(table.measure_render_td(
                                                             row_ix, col_ix, window, cx,
                                                         ))
@@ -2632,6 +2814,7 @@ where
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let drag_owner = cx.entity_id();
         let items: Vec<_> = cols
             .map(|col_ix| {
                 let is_cell_selected = self.selected_cell() == Some((row_ix, col_ix));
@@ -2649,6 +2832,16 @@ where
                             cx,
                         )
                         .relative()
+                        // 固定列上同样是「任意格都能起拖」（见 `handle_select_cells_drag`）
+                        .when(self.cell_selectable, |this| {
+                            this.on_drag(
+                                SelectCellsDrag::new(drag_owner, row_ix, col_ix),
+                                |drag, _, _, cx| {
+                                    cx.stop_propagation();
+                                    cx.new(|_| drag.clone())
+                                },
+                            )
+                        })
                         .child(self.measure_render_td(row_ix, col_ix, window, cx))
                         .when(is_cell_selected, |this| {
                             this.child(
@@ -2862,6 +3055,9 @@ where
             .test_support()
             .size_full()
             .overflow_hidden()
+            // 拖拽选区：整块内容区接收拖拽位移，按坐标换算 hover 格
+            // （DBeaver `LightGrid.java:3539-3566` 的等价物）
+            .on_drag_move(cx.listener(Self::handle_select_cells_drag))
             .child(self.render_table_header(scrollable_cols.clone(), window, cx))
             .context_menu({
                 let view = cx.entity();

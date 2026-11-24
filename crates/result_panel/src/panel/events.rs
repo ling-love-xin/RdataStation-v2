@@ -1052,9 +1052,34 @@ impl ResultPanel {
     pub fn remove_stats_item(&mut self, item: StatsItem, cx: &mut Context<Self>) {
         let before = self.stats_items.len();
         self.stats_items.retain(|existing| *existing != item);
+        // 【D12】删掉的正是选中行时，选中态一起作废（否则工具条「−」会指着不存在的行）
+        if self.stats_selected == Some(item) {
+            self.stats_selected = None;
+        }
         if self.stats_items.len() != before {
             cx.notify();
         }
+    }
+
+    /// 【D12】选中 / 取消选中一个统计行（工具条「−」的作用对象）。
+    ///
+    /// 对齐 DBeaver `aggregateTable` 的单选语义：`RemoveFunctionAction.isEnabled()`
+    /// 只要求 `getSelectionCount() > 0`（`AggregateColumnsPanel.java:424-426`）。
+    pub fn select_stats_item(&mut self, item: Option<StatsItem>, cx: &mut Context<Self>) {
+        if self.stats_selected == item {
+            return;
+        }
+        self.stats_selected = item;
+        cx.notify();
+    }
+
+    /// 【D11】切换「按列分组聚合」（对齐 `GroupByColumnsAction.run` `:341-345`：只翻开关）
+    pub fn set_stats_group_by(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.stats_group_by == on {
+            return;
+        }
+        self.stats_group_by = on;
+        cx.notify();
     }
 
     /// 【R2 计算页】恢复默认函数集（对齐 DBeaver `ResetFunctionsAction`

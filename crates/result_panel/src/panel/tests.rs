@@ -1253,6 +1253,158 @@ fn stats_tab_renders_toolbar_header_and_rows(cx: &mut gpui_kit::TestAppContext) 
     );
 }
 
+/// 【D11/D12/D13】计算页：工具条「− / 分组」存在 + 行选中态 + 按选区列/行分组聚合。
+///
+/// 钉住三件对齐 `AggregateColumnsPanel` 的事实：
+/// - `fillToolBar`（`:322-331`）里的「−」「分组」真的在工具条上；
+/// - 「−」删的是**选中的行**（`:418-436`），行点击维护这份单选态；
+/// - 分组开启后按选区覆盖的列各出一组、只算选区行区间（`:221-262`）。
+#[gpui_kit::test]
+fn stats_group_by_splits_selected_columns_and_rows(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::component::table::TableState;
+    use gpui_kit::component::Root;
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{AppContext as _, ElementId, Entity, IntoElement, Render, SharedString};
+
+    struct PanelHost {
+        panel: Entity<super::ResultPanel>,
+    }
+    impl Render for PanelHost {
+        fn render(
+            &mut self,
+            _window: &mut gpui_kit::Window,
+            cx: &mut gpui_kit::Context<Self>,
+        ) -> impl IntoElement {
+            self.panel.read(cx).render(cx)
+        }
+    }
+
+    cx.update(gpui_kit::init);
+    let slot: std::rc::Rc<std::cell::RefCell<Option<Entity<super::ResultPanel>>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let slot_in = slot.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let queue = crate::ports::ResultActionQueue::new();
+        let panel = cx.new(|cx| super::ResultPanel::new(window, cx, queue));
+        let mut delegate = crate::grid::ResultGridDelegate::default();
+        delegate.set_data(
+            vec!["id".to_string(), "amount".to_string(), "note".to_string()],
+            vec![
+                vec!["1".to_string(), "10".to_string(), "a".to_string()],
+                vec!["2".to_string(), "20".to_string(), "b".to_string()],
+                vec!["3".to_string(), "30".to_string(), "c".to_string()],
+                vec!["4".to_string(), "40".to_string(), "d".to_string()],
+            ],
+        );
+        let grid: Entity<TableState<crate::grid::ResultGridDelegate>> =
+            cx.new(|cx| TableState::new(delegate, window, cx));
+        panel.update(cx, |p, cx| {
+            p.set_grids(grid, None, None, window, cx);
+            // 作用列 = 第 2 列（amount）；只留「非空」一项，断言好算
+            p.selected_col = Some(1);
+            p.stats_items = vec![StatsItem::Count];
+            p.set_right_tab(RightTab::Stats, cx);
+        });
+        *slot_in.borrow_mut() = Some(panel.clone());
+        let host = cx.new(|_| PanelHost { panel });
+        Root::new(host, window, cx)
+    });
+    let panel = slot.borrow().clone().expect("ResultPanel 已创建");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let visible = |id: &'static str, cx: &mut gpui_kit::VisualTestContext| -> bool {
+        let by_id = cx.update(|window, _| {
+            window
+                .try_find(ElementId::Name(SharedString::from(id.to_string())))
+                .is_some_and(|snap| snap.visible())
+        });
+        by_id || cx.debug_bounds(id).is_some()
+    };
+
+    // 1) 工具条补齐：`fillToolBar` 的「−」与「分组」都在
+    assert!(
+        visible("editor-result-stat-remove-tool", cx),
+        "工具条应有「−」（DBeaver RemoveFunctionAction）"
+    );
+    assert!(
+        visible("editor-result-stat-group", cx),
+        "工具条应有「分组」（DBeaver GroupByColumnsAction）"
+    );
+
+    // 2) 行选中态：由行点击维护（「−」的 isEnabled 判据 = 有选中）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.select_stats_item(Some(StatsItem::Count), cx));
+    });
+    assert_eq!(
+        panel.read_with(cx, |p, _app| p.stats_selected),
+        Some(StatsItem::Count),
+        "点击统计行后应记住该行为选中项"
+    );
+
+    // 3) 分组 + 矩形选区（行 0..=1、视图列 1..=2 → 数据列 id / amount 各一组）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.grid.update(cx, |grid, _| {
+                let delegate = grid.delegate_mut();
+                delegate.click_cell(0, 1, false);
+                delegate.click_cell(1, 2, true);
+            });
+            p.set_stats_group_by(true, cx);
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    // 先钉住「分组要用的三件输入真的到位」，再钉渲染（失败时能一眼看出是数据还是渲染）
+    let probe = panel.read_with(cx, |p, cx| {
+        let delegate = p.grid.read(cx).delegate();
+        (
+            p.stats_group_by,
+            delegate.cell_range(),
+            p.inspect_column(delegate),
+        )
+    });
+    assert!(probe.0, "分组开关应已开启");
+    assert!(probe.1.is_some(), "矩形选区应已建立");
+    assert_eq!(probe.2, Some(1), "作用列应落在 amount");
+    assert!(
+        visible("editor-result-stats-group-1", cx),
+        "分组后应有 amount 列（数据列 1）的组标题行"
+    );
+    assert!(
+        visible("editor-result-stats-group-2", cx),
+        "分组后应有 note 列（数据列 2）的组标题行"
+    );
+
+    // 4) 分组口径只算选区的行区间：整列 4 行 → 区间 2 行
+    let whole = panel.read_with(cx, |p, cx| {
+        let delegate = p.grid.read(cx).delegate();
+        p.stats_entries_for_column(delegate, 1, None)
+    });
+    assert_eq!(
+        whole,
+        vec![(StatsItem::Count, "4".to_string())],
+        "整列口径应统计全部 4 行"
+    );
+    let region = panel.read_with(cx, |p, cx| {
+        let delegate = p.grid.read(cx).delegate();
+        p.stats_entries_for_column(delegate, 1, Some((0, 1)))
+    });
+    assert_eq!(
+        region,
+        vec![(StatsItem::Count, "2".to_string())],
+        "分组口径应只统计选区的行区间（DBeaver `aggregateSelection` 按选区收集）"
+    );
+
+    // 5) 「−」删掉选中行后选中态作废（否则按钮会指着不存在的行）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.remove_stats_item(StatsItem::Count, cx));
+    });
+    assert_eq!(
+        panel.read_with(cx, |p, _app| p.stats_selected),
+        None,
+        "删除选中项后选中态应清空"
+    );
+}
+
 /// 【R3】分组排序 / 「仅重复」的纯函数口径（不依赖渲染）
 #[test]
 fn arrange_groups_sorts_and_filters() {
@@ -6389,4 +6541,217 @@ fn shift_click_extends_a_rectangular_cell_range_and_paints_it(
         cx.debug_bounds("editor-result-cell-in-range-1-2").is_none(),
         "焦点格由组件 overlay 画，delegate 不叠第二层"
     );
+}
+
+/// 【D10-1】正文拖拽选矩形：组件把「相对表格左上角的拖拽位置」换成 hover 格，
+/// 再当作带 Shift 的新终点（DBeaver `LightGrid.java:3539-3566`）。
+///
+/// gpui 的真实拖拽状态机不在 headless 里跑，这里喂的是同一条几何链路：
+/// 组件自己的布局快照（`debug_hit_geometry`，与 `drag_select_to` 内部同一份）
+/// → `drag_select_to` → `CellClicked{shift}` → delegate 扩矩形。锚点仍由第一次点击立。
+#[gpui_kit::test]
+fn dragging_inside_the_grid_extends_the_cell_range(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    let grid = cx.update(|_, app| panel.read(app).grid.clone());
+    // `panel_harness` 给别的用例建的是裸 `TableState`（`cell_selectable` 默认 false）；
+    // 生产里走 `grid::new_table_state`（`status.rs:488` 开 `cell_selectable`）。
+    // 本用例要验的正是「可点选格子的表上拖拽成立」，故按生产口径补上。
+    assert!(
+        cx.update(|_, app| {
+            grid.update(app, |state, _| state.cell_selectable = true);
+            grid.read(app).cell_selectable
+        }),
+        "表格必须开 cell_selectable，否则 drag_select_to 直接早退"
+    );
+
+    // 第一步：点 (0,1) 立锚点（无修饰键）
+    cx.update(|_, app| {
+        grid.update(app, |_, cx| {
+            cx.emit(gpui_kit::component::table::TableEvent::CellClicked {
+                row_ix: 0,
+                col_ix: 1,
+                modifiers: gpui_kit::Modifiers::default(),
+            })
+        })
+    });
+    cx.run_until_parked();
+
+    // 帧语义：先 refresh 再 draw，布局量（列宽/表头高/容器宽）才是真实值
+    cx.update(|window, _| window.refresh());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 用组件自己的布局快照算目标坐标（与 `drag_select_to` 内部同一份 geometry）：
+    // 第 2 行中心、第 2 个数据列中心
+    let geometry = cx.update(|_, app| grid.read(app).debug_hit_geometry(app));
+    assert!(
+        geometry.row_height > 0.0,
+        "行高必须大于 0：{geometry:?}"
+    );
+    assert!(
+        geometry.body_top > 0.0 && geometry.body_top < 200.0,
+        "表头高异常：{geometry:?}"
+    );
+    assert!(geometry.rows_count >= 2, "行数不足：{geometry:?}");
+    assert_eq!(geometry.col_widths.len(), 3, "列数不符：{geometry:?}");
+    let target_x = geometry.left_fixed_width + geometry.col_widths[1] + geometry.col_widths[2] / 2.0;
+    let target_y = geometry.body_top + geometry.row_height * 1.5;
+    // 先自证换算式：目标点必须落在 (1,2)，否则下面的断言失败原因会指错地方
+    assert_eq!(
+        gpui_kit::component::table::cell_at_point(target_x, target_y, &geometry),
+        Some((1, 2)),
+        "目标点应落在 (1,2)：{geometry:?}"
+    );
+
+    // 第二步：拖到 (1,2)
+    cx.update(|_, app| {
+        grid.update(app, |table, cx| {
+            table.drag_select_to(px(target_x), px(target_y), px(geometry.width), cx)
+        })
+    });
+    cx.run_until_parked();
+
+    // 分两层核对：① 组件自己的选中格有没有被搬到 (1,2)；② 面板订阅有没有扩矩形
+    let state_cell = cx.update(|_, app| grid.read(app).selected_cell());
+    assert_eq!(
+        state_cell,
+        Some((1, 2)),
+        "drag_select_to 应把组件选中格搬到 (1,2)（target=({target_x},{target_y})，geometry={geometry:?}）"
+    );
+
+    let range = cx.update(|_, app| {
+        grid.read(app)
+            .delegate()
+            .cell_range()
+            .expect("拖过就有矩形选区")
+    });
+    assert_eq!(range.anchor, (0, 1), "拖拽不移动锚点");
+    assert_eq!(range.focus, (1, 2), "焦点跟着拖到的格走");
+    assert_eq!(range.rows_count(), 2, "两格对角 = 2 行");
+    assert_eq!(range.data_columns(), vec![1, 2], "两格对角 = 2 个数据列");
+}
+
+/// 【D10-1b】从**未选中格**起拖：DBeaver 鼠标按下就先把该格选进选区
+/// （`LightGrid.java:3152-3170`），所以任意格按下都能拖动扩矩形。
+///
+/// 本仓 `on_drag` 是渲染期挂的，按下那一帧起点格还不是选中态 → 由首个 `DragMove`
+/// 调 `begin_drag_at` 补一次「无修饰点击」把锚点立到起点格，再走 `drag_select_to`。
+#[gpui_kit::test]
+fn dragging_from_an_unselected_cell_anchors_there_first(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    let grid = cx.update(|_, app| panel.read(app).grid.clone());
+    assert!(
+        cx.update(|_, app| {
+            grid.update(app, |state, _| state.cell_selectable = true);
+            grid.read(app).cell_selectable
+        }),
+        "表格必须开 cell_selectable，否则拖拽链路整体早退"
+    );
+
+    // 先点 (0,1)：立一个「旧锚点」，证明起点格不是它
+    cx.update(|_, app| {
+        grid.update(app, |_, cx| {
+            cx.emit(gpui_kit::component::table::TableEvent::CellClicked {
+                row_ix: 0,
+                col_ix: 1,
+                modifiers: gpui_kit::Modifiers::default(),
+            })
+        })
+    });
+    cx.run_until_parked();
+    let range = cx.update(|_, app| {
+        grid.read(app).delegate().cell_range().expect("点过就有选区")
+    });
+    assert_eq!(range.anchor, (0, 1), "旧锚点在 (0,1)");
+
+    // 从 (1,2) 起拖 → 按下即选中：锚点搬到起点格
+    cx.update(|_, app| {
+        grid.update(app, |table, cx| table.begin_drag_at(1, 2, cx));
+    });
+    cx.run_until_parked();
+    let range = cx.update(|_, app| {
+        grid.read(app).delegate().cell_range().expect("起点格已立锚点")
+    });
+    assert_eq!(range.anchor, (1, 2), "起点格成为新锚点");
+    assert_eq!(range.focus, (1, 2), "刚起拖时焦点就是起点格");
+    assert_eq!(
+        cx.update(|_, app| grid.read(app).selected_cell()),
+        Some((1, 2)),
+        "组件选中格也搬到起点格"
+    );
+
+    // 帧语义：先 refresh 再 draw，布局量才是真实值
+    cx.update(|window, _| window.refresh());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 拖到 (0,1)：矩形覆盖 (0,1)..(1,2)
+    let geometry = cx.update(|_, app| grid.read(app).debug_hit_geometry(app));
+    let target_x = geometry.left_fixed_width + geometry.col_widths[1] / 2.0;
+    let target_y = geometry.body_top + geometry.row_height * 0.5;
+    assert_eq!(
+        gpui_kit::component::table::cell_at_point(target_x, target_y, &geometry),
+        Some((0, 1)),
+        "目标点应落在 (0,1)：{geometry:?}"
+    );
+    cx.update(|_, app| {
+        grid.update(app, |table, cx| {
+            table.drag_select_to(px(target_x), px(target_y), px(geometry.width), cx)
+        })
+    });
+    cx.run_until_parked();
+
+    let range = cx.update(|_, app| {
+        grid.read(app).delegate().cell_range().expect("拖过就有矩形")
+    });
+    assert_eq!(range.anchor, (1, 2), "拖拽不移动锚点");
+    assert_eq!(range.focus, (0, 1), "焦点跟着 hover 格走");
+    assert_eq!(range.rows_count(), 2, "两行");
+    assert_eq!(range.data_columns(), vec![1, 2], "两个数据列");
+}
+
+/// 【D10-2】行号槽按下 = 整行：状态行三项与「当前格」口径一起钉住。
+///
+/// DBeaver 的 row header 不在 `columns` 里，`getCells(row, …)`
+/// （`LightGrid.java:3125-3132`）铺的是全部数据列；本仓行号槽是组件第 0 列，
+/// delegate 把矩形两侧归一成 `0..=末列`（见 `grid/delegate.rs::click_cell`）。
+/// 状态行三项按 `SelectionExt` 口径（`ResultSetStatListener.java:80-92`）：
+/// 行数 1、列数 2（两个数据列）、格数 2。
+#[gpui_kit::test]
+fn clicking_the_row_number_slot_selects_the_whole_row(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    let grid = cx.update(|_, app| panel.read(app).grid.clone());
+
+    // 行号槽（组件列 0）按下：走生产口径「按下即选」（`begin_drag_at` 先发无修饰
+    // `CellClicked`、再 `set_selected_cell`，等价 DBeaver `:3152-3170` 的按下分支）。
+    // 裸 `TableState::new` 的 `cell_selectable` 默认关（`grid/status.rs` 的生产构造才开），
+    // 先按生产口径补上，否则整条链路早退、测的是另一张表。
+    cx.update(|_, app| {
+        grid.update(app, |table, cx| {
+            table.cell_selectable = true;
+            table.begin_drag_at(1, 0, cx);
+        })
+    });
+    cx.run_until_parked();
+
+    let range = cx.update(|_, app| {
+        grid.read(app).delegate().cell_range().expect("点过就有选区")
+    });
+    assert_eq!(range.rows(), (1, 1), "只选点中的那一行");
+    assert_eq!(range.cols(), (0, 2), "整行：从行号槽铺到末列");
+
+    // 状态行三项（1 行 × 2 数据列 × 2 格）由 `SelectionExt` 同口径纯函数算出——
+    // harness 的 `ResultPanel` 不注入 `status`（只有宿主 sync 才填），所以这里直接按
+    // 同一个入口验一遍，避免「选区对了、计数口径错了」漏检。
+    let counts = crate::grid::selection_counts(Some(&range));
+    assert_eq!(counts, (1, 2, 2), "整行 = 1 行 × 2 数据列 × 2 格");
+
+    // 「当前格」仍是行号槽本身：本仓既有口径（「修改」按钮据此置灰）
+    let pos = cx.update(|_, app| panel.read(app).selection_pos);
+    assert_eq!(pos, Some((1, 0)), "行号槽保持为当前格，不回落到数据列");
 }

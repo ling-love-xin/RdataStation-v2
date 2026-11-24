@@ -558,6 +558,73 @@ fn the_status_row_reports_the_selected_row(cx: &mut TestAppContext) {
     );
 }
 
+/// 【D10-4】状态行三项按**矩形选区规模**算（DBeaver `LightGrid.updateSelectionCache:2863-2882`
+/// 从 `selectedCells` 反推：行 = 涉及的行、列 = 涉及的列、格 = 格集合大小）。
+///
+/// 事件按生产顺序复刻：组件 `on_cell_click` 先发 `CellClicked`（带修饰键），随后
+/// `set_selected_cell` 无条件发 `SelectCell`（`vendor/gpui-component/src/table/state.rs:943-989`、
+/// `:648-660`）。写死 `1/1/1` 的旧实现会在第二个断言上失败。
+#[gpui_kit::test]
+fn the_status_row_counts_the_rectangular_cell_selection(cx: &mut TestAppContext) {
+    use gpui_kit::Modifiers;
+    use gpui_kit::component::table::TableEvent;
+
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+
+    let grid = cx.update(|_window, cx| panel.read(cx).grid_for_test());
+    let click = |row: usize, col: usize, shift: bool, cx: &mut VisualTestContext| {
+        let modifiers = Modifiers {
+            shift,
+            ..Modifiers::default()
+        };
+        cx.update(|_window, app| {
+            grid.update(app, |_, cx| {
+                cx.emit(TableEvent::CellClicked {
+                    row_ix: row,
+                    col_ix: col,
+                    modifiers,
+                });
+                // 组件在同一次点击里随后发这条（不带修饰键），组合固定
+                cx.emit(TableEvent::SelectCell(row, col));
+            })
+        });
+        cx.run_until_parked();
+    };
+
+    // 默认假执行器给 2 列（n / note）1 行
+    click(0, 1, false, cx);
+    let status = cx
+        .update(|_window, cx| panel.read(cx).result_status_for_test(cx))
+        .expect("有网格就有状态行");
+    assert_eq!(
+        (
+            status.selected_rows,
+            status.selected_columns,
+            status.selected_cells
+        ),
+        (1, 1, 1),
+        "单格 = 1 行 / 1 列 / 1 格"
+    );
+
+    // Shift 点同一行的下一列：1 行 × 2 列 = 2 格
+    click(0, 2, true, cx);
+    let status = cx
+        .update(|_window, cx| panel.read(cx).result_status_for_test(cx))
+        .expect("有网格就有状态行");
+    assert_eq!(
+        (
+            status.selected_rows,
+            status.selected_columns,
+            status.selected_cells
+        ),
+        (1, 2, 2),
+        "1 行 2 列 = 2 格（写死 1/1/1 的旧实现会失败）"
+    );
+}
+
 /// 【8-左栏】无选中行时点「记录」也应打开转置（第 0 行兜底）——用户反馈
 /// "记录按钮点击没反应，只有选中一行才可以"。直调面板方法验证 toggle_transpose
 /// 在无选中行时确实生效（选中行只是改变转置起点，不是必要条件）。

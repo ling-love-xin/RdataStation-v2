@@ -354,6 +354,29 @@ impl ResultGridDelegate {
     /// Ctrl（并集）本仓没做：DBeaver 是往集合里加/减（`:2718-2735`），单矩形模型表达不了，
     /// 所以调用方在 Ctrl 时也传 `extend = false`（差异记在基线文档 §29 台账）。
     pub fn click_cell(&mut self, row: usize, col: usize, extend: bool) {
+        // 【D10-2】行号槽按下 = 选中整行。
+        //
+        // DBeaver 的 row header 不在 `columns` 里，所以 `getCells(row, cells)`
+        // （`LightGrid.java:3125-3132`）铺出来的是**全部数据列**；Shift 点行头同理走
+        // `getCells(row, focusItem, cells)`（`:3128-3129`）——行区间两端、列全宽。
+        // 本仓行号槽是组件第 0 列（`columns_count` 首列），因此命中行号槽时把矩形两侧
+        // 一起归一：锚点列钉在 0、焦点列钉在末列 → `cols()` = `0..=末列`，与 DBeaver
+        // 「整行 = 全部数据列」等价；Shift 那次只换行的一端，列仍全宽（`:3128-3129`）。
+        // 计数不受影响——`CellRange::data_columns()` 本来就把列 0 当行号槽排除
+        // （`grid/selection.rs:68-72`），所以整行仍是「1 行 × N 数据列 × N 格」。
+        if Self::is_row_number(col) {
+            let last = self.last_view_column();
+            let anchor_row = if extend {
+                self.cell_range.map_or(row, |range| range.anchor.0)
+            } else {
+                row
+            };
+            self.cell_range = Some(CellRange {
+                anchor: (anchor_row, 0),
+                focus: (row, last),
+            });
+            return;
+        }
         if extend {
             if let Some(range) = self.cell_range {
                 self.cell_range = Some(CellRange {
@@ -364,6 +387,22 @@ impl ResultGridDelegate {
             }
         }
         self.cell_range = Some(CellRange::single((row, col)));
+    }
+
+    /// 最后一个可见组件列的下标（含行号槽那列）。
+    ///
+    /// 组件列序 = `[行号槽(0)] + 可见数据列`，所以末列下标 = 可见数据列数
+    /// （`table_impl::columns_count` 的 `columns.len() + 1 - hidden.len() - 1` 同值）；
+    /// 转置视图固定三列（`#` / 字段 / 值），末列恒为 2。没有结果时只有行号槽位，
+    /// 返回 0（此时选区本来也只有一格）。
+    fn last_view_column(&self) -> usize {
+        if self.columns.is_empty() {
+            0
+        } else if self.transposed {
+            2
+        } else {
+            self.visible_column_count()
+        }
     }
 
     /// 【D10】当前选区（`None` = 还没选过任何格 / 已被清空）

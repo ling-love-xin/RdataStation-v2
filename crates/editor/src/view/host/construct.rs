@@ -275,11 +275,20 @@ impl EditorHostPanel {
                         // 编辑器在事件里读网格 delegate 算好值传给面板（面板不碰网格；
                         // 长值截断防状态行被撑爆）
                         let text = grid.read(cx).delegate().cell_text(*row, *col, cx);
+                        // 【D10-4】状态行三项按**选区规模**：DBeaver 在
+                        // `LightGrid.updateSelectionCache:2863-2882` 从 `selectedCells` 反推 ——
+                        // 行 = 选区涉及的行、列 = 选区涉及的列、格 = 格集合大小。矩形选区
+                        // （Shift 点击）在 `CellClicked` 里已写进 delegate，随后这条事件读到它；
+                        // 键盘移动 / 尚无矩形时退回单格 1/1/1。口径只有一份
+                        // （`result_panel::grid::selection_counts`）。
+                        let (sel_rows, sel_cols, sel_cells) = {
+                            let delegate = grid.read(cx).delegate();
+                            result_panel::grid::selection_counts(delegate.cell_range().as_ref())
+                        };
                         result_panel.update(cx, |panel, cx| {
                             panel.set_selected_cell(Some(Self::clip_cell_preview(&text)), cx);
-                            // 【选中统计】格选中 = 1 行 / 1 列 / 1 格
-                            // （对齐 DBeaver `SelectionExt` 对单格 region 的计数）
-                            panel.set_selected_counts(1, 1, 1, cx);
+                            // 【选中统计】单格 = 1/1/1；矩形 = 选区规模（见上）
+                            panel.set_selected_counts(sel_rows, sel_cols, sel_cells, cx);
                             // 【侧栏】右侧辅助栏（值详情 / 列浏览器）要位置：选中格的原生事件就带着
                             // window 同步列浏览器 List 内部选中高亮（网格反推路径）
                             panel.set_selection_pos(Some((*row, *col)), window, cx);

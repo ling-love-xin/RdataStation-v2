@@ -1743,7 +1743,7 @@ Label「筛选：」在左、`Text(SWT.BORDER|SWT.SEARCH|SWT.ICON_CANCEL)` 在�
 
 1. **正文拖拽选矩形**：DBeaver 按下后拖动即扩矩形（`:3565`）。本仓点击两态已覆盖「任意矩形」，
    拖拽需要容器级几何（`DragMoveEvent.bounds` + 行高 + 列宽累积 + 横向滚动偏移 + 固定列），
-   单独立一刀。
+   单独立一刀。→ **已由 §33（D10-1）落地**。
 2. **Ctrl 并集 / 反选**：DBeaver 是往集合里加/减（`:2718-2735`）。单矩形模型表达不了，Ctrl 现按
    「普通点击」处理（清选区重立锚点）。
 3. **选区边框**：DBeaver 的选中矩形有一圈边框（`cellActiveBorder`）。本刀只有底色 + 组件给焦点格
@@ -1762,3 +1762,369 @@ Label「筛选：」在左、`Text(SWT.BORDER|SWT.SEARCH|SWT.ICON_CANCEL)` 在�
 | `cargo test -p rds-editor` | 867 passed / 4 ignored；`tests/offline_baseline.rs` 5 passed |
 | `cargo check -p rds-mock --tests -p rds-workbench` | 通过（另两处使用 `DataTable` 的 crate 也吃到新事件变体） |
 | 新增用例点 | 事件链（`CellClicked` → 面板 → delegate）+ 渲染哨兵（三格有、焦点格无） |
+
+## 31. D11 / D12 / D13 落地：计算页按列分组 + 工具条「−」+ 六项顺序
+
+取证对象：`AggregateColumnsPanel.java`（498 行，行号见 §27 与本节）。
+
+### 31.1 DBeaver 的事实
+
+**工具条六项**（`fillToolBar:322-331`）：
+
+| # | 动作 | 形态 | 判据 / 行为 | 源码 |
+| --- | --- | --- | --- | --- |
+| 1 | `AddFunctionAction` | `MODE_FORCE_TEXT` 文字钮 | 菜单只列 `enabledFunctions` 里**没有**的函数；`isEnabled` 无判据 | `:365-401`、`:403-416` |
+| 2 | `RemoveFunctionAction` | 图标钮 | `isEnabled = aggregateTable != null && !isDisposed() && getSelectionCount() > 0`；`run()` 遍历 `getSelection()` 逐个 `enabledFunctions.remove(func)` | `:418-436` |
+| 3 | `ResetFunctionsAction` | 图标钮 | `enabledFunctions.clear()` + `loadDefaultFunctions()`（只收 `isDefault()`，按 label 排序） | `:438-449`、`:157-164` |
+| 4 | `ToolbarSeparator` | 分隔 | — | `:322-331` |
+| 5 | `GroupByColumnsAction` | CHECK | `run()` 只 `groupByColumns = !groupByColumns; setChecked; refresh(false)` | `:333-346` |
+| 6 | `ValueTypeToggleAction` | CHECK | `aggregateAsStrings` 翻转 + `updatePanelActions()` + `refresh(false)` | `:348-363` |
+
+**分组聚合口径**（`:199-315`）：
+- `refresh(force)`：清表 → 有 `IResultSetSelection` 就 `aggregateSelection` → `packColumns` → `saveSettings`（`:199-214`）
+- `aggregateSelection`：`groupByColumns == true` 时按 `selection.getElementAttribute(element)` 归组成
+  `LinkedHashMap<attr, List<Object>>`，每 attr 一个 `TreeItem`（列名 + 类型图标）+ `setExpanded(true)`（`:221-262`）；
+  否则把所有值汇成一个列表平铺（`:250-261`）
+- `aggregateValues`：每个启用函数一行，`accumulate(element, aggregateAsStrings)` 累计；
+  `funcCount <= 0` 的行不出值（`:294-297`）；Double/Float/BigDecimal 走 `DOUBLE_FORMAT`，
+  Int/Long/Short 走 `INTEGER_FORMAT`（`:303-309`）
+
+### 31.2 本仓卡点与解法
+
+| 卡点 | 解法 |
+| --- | --- |
+| 「−」删的是 Tree 选中项，本仓统计页是平铺行、无选中模型 | 新增 `stats_selected: Option<StatsItem>` 单选态，**行点击**就是选中（`:424` 的 `isEnabled` 只要求「有选中」，不要求多选）；行尾 × 保留 |
+| 「按列分组」要「选区覆盖了哪些列、每列哪些值」 | D10 的 `CellRange` 提供列区间；`delegate.data_column_checked(view_col)` 把**视图列**换成**数据列**（列可重排 / 可隐藏，不能 `col - 1` 硬算）；`column_values_in_rows(col, rows)` 只取**行区间内**的值 |
+| 单列页与分组页要同一套取值 / 极值 / 去重 / 中位数口径 | 抽 `stats_entries_for_column(delegate, data_col, Option<rows>)`：`None` = 整列（数值口径可走事实档列式聚合）、`Some` = 区间（必须走显示取值，事实档无法按区间切） |
+| 统计页不是树，分组的「每列一组」怎么落地 | `render_stats_grouped`：每列一个组标题行（列名 + 底 hairline，哨兵 `editor-result-stats-group-{data_col}`）+ 该列函数行；不引 `Tree` |
+
+### 31.3 本仓改动表
+
+| 文件 | 改动 |
+| --- | --- |
+| `crates/result_panel/src/ports.rs` | 新请求 `SetStatsGroupBy(bool)`、`SelectStatsItem(Option<StatsItem>)`（紧跟 `SetStatsMode`） |
+| `crates/result_panel/src/panel/data.rs` | 新字段 `stats_group_by: bool`、`stats_selected: Option<StatsItem>` |
+| `crates/result_panel/src/panel/lifecycle.rs` | 默认值：`stats_group_by: false`、`stats_selected: None` |
+| `crates/result_panel/src/panel/events.rs` | `set_stats_group_by(on, cx)`、`select_stats_item(item, cx)`；`remove_stats_item` 顺带清「删掉的就是选中行」的选中态 |
+| `crates/result_panel/src/panel/tabs.rs` | `render_stats_tab` 加分组分支；新增 `stats_entries_for_column`（共用取值口径）与 `render_stats_grouped`（组标题 + 组内行）；`stats_toolbar` 补「−」「分组」两钮、顺序改为 ＋ / − / Reset / 分隔 / 分组 / 口径；`stat_row` 加行点击选中 + `tokens.table_active` 底色 |
+| `crates/result_panel/src/grid/text.rs` | 新访问器 `column_values_in_rows(column, (top, bottom))`（口径同 `column_values`，只收窄行范围，本地行 / 被删行仍跳过） |
+| `crates/editor/src/view/host/results/dispatch.rs` | `SetStatsGroupBy` / `SelectStatsItem` 两个分支（纯展示态、不落盘） |
+| `crates/result_panel/src/panel/tests.rs` | 新用例 `stats_group_by_splits_selected_columns_and_rows`：工具条两钮在 + 行选中态 + 分组两组标题 + 区间口径「2 行」vs 整列「4 行」+ 删除后选中态作废 |
+
+### 31.4 与 DBeaver 的差异明账（未做，不静默）
+
+1. **组标题无列类型图标**：DBeaver 的 `TreeItem` 带 `getColumnImage`（`:236`）。本仓组标题只有列名，
+   类型图标在列浏览器已有，统计页不重复。
+2. **选区为空时退回当前作用列**：DBeaver `aggregateSelection` 需要 `IResultSetSelection`，
+   无选区时整表为空。本仓保留「作用列（选中格 → 列浏览器选中列）」整列视图，不弹空表。
+3. **分组开关不落盘**：DBeaver 存 `PARAM_GROUP_BY_COLUMNS`（`:131`/`:167`）。本仓沿用
+   「口径切换（`SetStatsMode`）不落盘」的既有取舍。
+4. **组内多列不同行区间**：DBeaver 的分组按「每个选中格所属列 + 该格的值」归集，行集合是**逐格**的；
+   本仓按矩形行区间取整列值。单矩形模型下二者等价（矩形内每列的格集合就是同一行区间）。
+5. **「−」删除后函数集为空**：DBeaver 允许删空（`packColumns` 后表空）；本仓同样允许，
+   并给「没有启用任何统计项：点 ＋ 添加」的空态提示。
+
+### 31.5 验证
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo check -p rds-result-panel -p rds-editor` | 通过，0 warning |
+| `cargo test -p rds-result-panel` | **431 passed / 0 failed**（原 430 + 本刀 1） |
+| `cargo test -p rds-editor` | 867 passed + 4 ignored；离线 `tests/offline_baseline.rs` 5 passed |
+| `cargo check -p rds-workbench` | 通过 |
+| 新增用例点 | 工具条两钮真渲染（`editor-result-stat-remove-tool` / `editor-result-stat-group`）、行点击选中、分组两组标题（`editor-result-stats-group-1` / `-2`）、区间口径 vs 整列口径的计数差、删除后选中态清空 |
+
+**门禁前置修补（未随本刀提交）**：`cargo test` 曾被 i18n 合流遗留缺陷挡住 ——
+`crates/result_panel/src/analysis.rs:281` 的 `tr("计数行数")` 在 `#[cfg(test)]` 模块内没有 `tr`
+在作用域（该模块是显式列举 import 的「安全模式」）。临时补 `use super::tr;` 一行后测试全绿；
+该修复是否单独成刀待定。
+
+## §32 D10-4 状态行「已选 N 格」按矩形选区规模
+
+### 32.1 DBeaver 事实（源码实证）
+
+- `ResultSetStatListener.java:80-92`：三项文案的数据全部来自 `IResultSetSelectionExt`
+  （`getSelectedRowCount` / `getSelectedColumnCount` / `getSelectedCellCount`）。
+- `SpreadsheetPresentation.java:2038-2051`（内部类 `GridSelection implements IResultSetSelectionExt`）
+  三个方法**全部转调** `spreadsheet.get*SelectionSize()`，自己不另算。
+- `Spreadsheet extends LightGrid`（`Spreadsheet.java:53`），三个 size 都继承自 `LightGrid`：
+  `getCellSelectionSize` = `selectedCells.size()`（`:4349-4351`）、
+  `getColumnSelectionSize` = `selectedColumns.size()`（`:4361-4363`）、
+  `getRowSelectionSize` = `selectedRows.size()`（`:4374-4376`）。
+- 关键在于 `updateSelectionCache()`（`:2863-2882`）：`selectedColumns` / `selectedRows`
+  每次从 `selectedCells` **反推** —— 只要有一格落在该行（该列）就计入。因此
+  **矩形 rows × cols** 的计数就是 `(rows, cols, rows × cols)`，而不是恒定的 `(1,1,1)`。
+- 整行选中：`setSelection(int)`（`:1590-1597`）= `selectedCells.clear()` +
+  `selectCells(getCells(index))`，而 `getCells(row)`（`:4397-4401`）把该行
+  **所有 columns** 填进集合 → `(1, 列数, 列数)`。
+
+### 32.2 本仓改动
+
+改前：`crates/editor/src/view/host/construct.rs` 的 `SelectCell` 分支写死
+`set_selected_counts(1, 1, 1, cx)` —— 状态行在矩形选区下永远报 1 格。
+
+改后：
+
+- `CellRange::data_cells_count()` = `rows_count() × data_columns().len()`（口径同
+  `getCellSelectionSize`：行号槽那列不算数据格）。
+- 新增 `grid::selection_counts(range: Option<&CellRange>) -> (rows, cols, cells)`：
+  **口径只有一份**，由 `grid/mod.rs` re-export；`None`（还没建立矩形 / 键盘刚落到第一格）
+  按单格 `(1, 1, 1)`。
+- `construct.rs::SelectCell` 改为读 `delegate.cell_range()`，交给 `selection_counts` 算，
+  再写 `set_selected_counts`。
+
+**为什么计数权威放在编辑器侧**：`on_cell_click`
+（`vendor/gpui-component/src/table/state.rs:943-989`）先 `emit(CellClicked)`，随后
+`set_selected_cell`；而 `set_selected_cell`（`:648-660`）**无条件** `emit(SelectCell)`
+（`:658`）——所以每次点击必有一条 `SelectCell` 紧随 `CellClicked`。面板侧
+`handle_grid_event` 的 `CellClicked` 分支因此**不写** counts：两处订阅（编辑器 / 面板）
+写同一字段时的执行顺序不确定，双写会出现「矩形值被单格值盖掉」的抖动。
+
+**唯一不发 `SelectCell` 的路径**：行头隐藏时「点击已选格 → 升级整行」
+（`on_cell_click:973-982` 直接 `return`），此时计数由编辑器 `SelectRow` 分支给出
+`(1, visible_columns, visible_columns)` —— 与 DBeaver `getCells(row)` 的「整行所有列」同义。
+
+### 32.3 改动表
+
+| 文件 | 改动 |
+| --- | --- |
+| `crates/result_panel/src/grid/selection.rs` | 新 `data_cells_count()`、新 `selection_counts(Option<&CellRange>)`；单测 `data_cells_count_multiplies_rows_by_data_columns`、`selection_counts_mirror_the_rectangles_rows_and_data_columns` |
+| `crates/result_panel/src/grid/mod.rs` | re-export `selection_counts` |
+| `crates/editor/src/view/host/construct.rs` | `SelectCell` 分支由写死 `1/1/1` 改为读选区规模（算式走 `selection_counts`） |
+| `crates/editor/src/view/tests/results_a.rs` | 新用例 `the_status_row_counts_the_rectangular_cell_selection`：按生产序列 emit `CellClicked`（带 Shift）+ `SelectCell`，断言单格 `(1,1,1)`、1 行 2 列 → `(1,2,2)` |
+
+### 32.4 与 DBeaver 的差异明账（未做，不静默）
+
+1. **整行选中「列数」**：DBeaver 的行头不在 `columns` 里，`getCells(row)` 只遍历数据列，
+   所以「列数」= 数据列数，与本仓 `visible_column_count()` 同口径。§34.1 已取证
+   `Spreadsheet.java:108`（结果集构造即 `setRowHeaderVisible(true)`），原先「可能差 1」作废。
+2. **行号槽列**：若矩形只覆盖视图列 0，本仓算出 `(1, 0, 0)`。生产路径下点行头走
+   `SelectRow`（不发 `CellClicked`），不会产生这种 range；防御性登记。
+3. **Ctrl 并集 / 反选仍缺**（§30.4 #2）：DBeaver 的「并集计数」要多矩形模型才表达，
+   当前一律按单矩形算。
+4. **正文拖拽选矩形**：已由 §33（D10-1）落地——拖拽沿用同一口径，业务侧零改动。
+
+### 32.5 验证
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo test -p rds-result-panel --lib` | **433 passed / 0 failed**（原 431 + 本刀 2） |
+| `cargo check -p rds-editor --tests` | Finished，0 warning |
+| `cargo test -p rds-editor` | **868 passed + 4 ignored**（原 867 + 本刀 1）；离线 `tests/offline_baseline.rs` 5 passed |
+| 新增用例点 | 单格 `(1,1,1)`；Shift 点同行下一列 → `(1,2,2)`（写死 `1/1/1` 的旧实现必失败） |
+
+**环境说明**：本轮与并行线共用同一 `target` 目录，期间并行线在跑
+`cargo check -p rds-workbench --tests`；并发起过两次 `E0462`（staticlib vs rlib）与一次
+`memory allocation failed`。等其进程结束后顺序执行，全绿。结论：本仓门禁必须**串行**跑
+（`CARGO_BUILD_JOBS=1` 之外还要保证同一 target 只有一个 cargo）。
+
+## 33. D10-1 落地：正文拖拽选矩形
+
+取证对象：`LightGrid.java` 的 `mouseMove` 全链（`:3480-3610`）。
+
+### 33.1 DBeaver 的事实
+
+**起拖条件**（`:3507-3516`）：`!cellDragSelectionOccurring && cellSelectedOnLastMouseDown`
+成立时置 `cellDragSelectionOccurring = true`、光标换 `SWT.CURSOR_CROSS`，并记
+`cellDragCTRL = (stateMask & SWT.MOD1) != 0`（Ctrl 按住时把当前选集快照进
+`selectedCellsBeforeRangeSelect`，供并集用）。`cellSelectedOnLastMouseDown` 由鼠标按下设值
+（`:3166`）：按下时先 `updateCellSelection(newCell, stateMask, false, true, MOUSE)` 选中该格，
+再取 `getCellSelectionCount() > 0` —— 所以**按下任意格都能起拖**。
+
+**每次 move**（`:3537-3566`）：
+
+| # | 行为 | 源码 |
+| --- | --- | --- |
+| 1 | `ctrlFlag = cellDragCTRL ? SWT.MOD1 : SWT.NONE` | `:3537` |
+| 2 | `handleCellHover(e.x, e.y)` 得 hover 列/行；hover 行 < 0 时按方向取 `min(itemCount-1, bottomIndex+1)` / `max(0, topIndex-1)`；hover 列为空时取 `columns.getLast()` / `columns.getFirst()` | `:3539-3560` |
+| 3 | `showColumn(intentColumn)` + `showItem(intentItem)`：把目标格滚进可视区 | `:3562-3563` |
+| 4 | `updateCellSelection(newCell, ctrlFlag \| SWT.MOD2, true, false, MOUSE)` —— **`SWT.MOD2` 就是 Shift**，即「终点换成 hover 格、锚点不动」 | `:3564-3565` |
+
+同一段还有两条同族分支：整行拖（`:3567-3589`，`getCells(intentItem, focusItem, cells)` 取整行区间）
+与整列拖（`:3591+`，从 `focusColumn` 逐列 `getCells(iterCol, newSelected)` 累加）。
+
+**与 D10 的关系**：拖拽在 DBeaver 里走的就是「带 Shift 的同一个 `updateCellSelection`」，
+等价于本仓 D10 已经接好的 `click_cell(row, col, extend = true)`。所以拖拽只需把「鼠标位置」
+换成「带 Shift 的格点击」，delegate / 面板 / 状态行计数全部零改动。
+
+### 33.2 本仓实现（vendor 私有 patch 第 2 处）
+
+| 层 | 落点 | 做法 |
+| --- | --- | --- |
+| 纯函数 | `vendor/gpui-component/src/table/hit.rs`（**新文件**） | `CellHitGeometry`（`body_top` / `row_height` / `scroll_x` / `scroll_y` / `width` / `left_fixed_width` / `right_fixed_width` / `left_fixed_count` / `right_fixed_count` / `col_widths` / `rows_count`）+ `cell_at_point(x, y, &geometry)`：表头区 → `None`（对应 DBeaver `getRow` 返回 -1）；行按 `(y - body_top + scroll_y) / row_height` 再 clamp 到 `rows_count - 1`；列分「左固定区 / 可滚动区（扣左固定宽再叠 `scroll_x`）/ 右固定区」三支累积，越界收拢到首末行列 |
+| 布局快照 | `state.rs::cell_hit_geometry(width, cx)` | 取 `col_groups[i].width`、`header_band_height()`、`options.size.table_row_height()`、两个滚动 handle 的 offset、`fixed_cols_count(Left/Right)`、`delegate.rows_count(cx)` |
+| 拖拽负载 | `state.rs::SelectCellsDrag { owner: EntityId }` | 只带发起者 id：多表实例共存时 `on_drag_move` 会派发到每个挂了回调的元素，用 owner 过滤 |
+| 挂载点 | `state.rs` 的 `render_table_row`（可滚动列）与 `render_fixed_cells`（固定列） | 任意格都挂 `on_drag`（`cell_selectable` 下无条件），负载带起点格 + 一次性 `Rc<Cell<bool>>`，首个 `DragMove` 由 `begin_drag_at` 补立锚点（见 §33.6）；容器 `inner_table` 挂 `on_drag_move` |
+| 判定 | `state.rs::handle_select_cells_drag` | 相对坐标 = `e.event.position - e.bounds.origin`；owner 校验后转调 `drag_select_to` |
+| 出口 | `state.rs::drag_select_to(x, y, width, cx)` | `cell_at_point` → 与当前选中格相同则不动 → 否则 `emit(CellClicked{row, col, modifiers: shift})` + `set_selected_cell` + `scroll_to_item(row, Nearest)` + `scroll_to_col(col)` |
+
+**为什么复用 `CellClicked{shift}` 而不新增事件**：D10 已把「带修饰键的格点击」接到 delegate
+（`crates/result_panel/src/panel/lifecycle.rs:473-488`），拖拽自动继承选中覆盖层、状态行计数、
+值详情跟随、JSON 树重建等全部既有行为。
+
+**为什么滚动用 `Nearest`**：`ScrollStrategy` 只有 `Top/Center/Bottom/Nearest`（**没有 `Minimal`**），
+`Nearest` 是最接近「不可见才滚」的一档。
+
+### 33.3 改动表
+
+| 文件 | 变化 |
+| --- | --- |
+| `vendor/gpui-component/src/table/hit.rs` | **新增 162 行**：`CellHitGeometry` + `cell_at_point` + 5 条内置单测 |
+| `vendor/gpui-component/src/table/mod.rs` | +2：`mod hit;` + `pub use hit::*;` |
+| `vendor/gpui-component/src/table/state.rs` | +161/−5（D10-1）+68/−28（D10-1b）：`SelectCellsDrag`、`cell_hit_geometry`、`handle_select_cells_drag`、`drag_select_to`、`debug_hit_geometry`、两处 `on_drag`、容器 `on_drag_move`、`EntityId` 入 imports |
+| `crates/result_panel/src/grid/selection.rs` | +51：命中换算用例（表头 / 行号槽 / 滚动量 / 两侧固定列 / 越界收拢，6 类断言） |
+| `crates/result_panel/src/panel/tests.rs` | +89/−1（D10-1）+81（D10-1b）：`dragging_inside_the_grid_extends_the_cell_range`（锚点 → 拖到 (1,2) → 2×2 矩形） |
+
+`vendor` 不在 workspace 成员里，`hit.rs` 内置的 5 条单测不随 `cargo test -p rds-result-panel` 跑；
+同一批口径已在 `grid/selection.rs` 的门禁用例里复刻（见 33.5）。
+
+### 33.4 与 DBeaver 的差异明账（未做，不静默）
+
+1. **任意格起拖**：已由 §33.6（D10-1b）落地——`on_drag` 放宽到全部格，起点格未选中时由首个
+   `DragMove` 补一次无修饰 `CellClicked` 立锚点（对应 DBeaver `:3152-3170` 的「按下即选」）。
+2. **边缘滚动差一格**：DBeaver 在 hover 越界时把终点设为 `bottomIndex+1` / `topIndex-1` 再
+   `showItem`（`:3543-3550`）；本仓先把坐标收拢到首末行列，再 `scroll_to_item(.., Nearest)`，
+   等价于「把边界格滚进可视区」，但不会跨到可视区之外的下一格。
+3. **Ctrl 并集 / 反选**：DBeaver 在 Ctrl 拖时先快照 `selectedCellsBeforeRangeSelect`（`:3512-3515`）
+   再做并集；本仓单矩形模型表达不了，Ctrl 仍按单矩形处理（同 §30.4 #2）。
+4. **整行拖 / 整列拖**：DBeaver 另有两条分支（`:3567-3589`、`:3591+`，从行头 / 列头起拖）；
+   本仓行头是自绘 `#` 列、列头拖拽已用于列序重排，未接。
+5. **拖拽光标**：DBeaver 换成 `SWT.CURSOR_CROSS`（`:3510`）；本仓未改光标。
+6. **headless 覆盖边界**：gpui 的真实拖拽状态机不在测试窗口里跑，`on_drag` 挂载与 `on_drag_move`
+   派发只有实机可见；门禁覆盖的是「几何换算 → 事件 → 矩形」这条链。
+
+### 33.5 验证
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo test -p rds-result-panel --lib` | **436 passed / 0 failed**（435 + D10-1b 用例 1；命中用例口径扩成 6 类断言） |
+| `cargo test -p rds-editor` | **868 passed + 4 ignored**；离线 `tests/offline_baseline.rs` 5 passed |
+| `cargo check -p rds-result-panel --lib` | Finished，0 warning |
+| `cargo check -p rds-workbench --lib` | Finished，0 warning（vendor patch 不破坏主程序编译） |
+| 新增用例点 | 锚点 (0,1) 不动、焦点到 (1,2)、`rows_count() == 2`、`data_columns() == [1,2]`；并分两层自证：① `cell_at_point(目标点) == (1,2)`；② 组件选中格已搬到 (1,2) |
+| D10-1b 用例点 | 旧锚点 (0,1) → `begin_drag_at(1, 2)` 把锚点与组件选中格一起搬到起点格 → 拖到 (0,1) → 矩形 (0,1)..(1,2) |
+
+### 33.6 D10-1b：任意格起拖（补 §33.4 #1）
+
+**DBeaver 事实**：鼠标按下走 `:3152-3170`（`e.button == 1` 分支）——先
+`updateCellSelection(new GridPos(col.getIndex(), row), e.stateMask, false, true, MOUSE)` 把该格选进
+选区，再 `cellSelectedOnLastMouseDown = (getCellSelectionCount() > 0)`（`:3166`）。所以 `:3507`
+的起拖条件「按下时选区非空」对**任意格**都成立。
+
+**本仓约束**：`on_drag` 是渲染期决定挂载的，按下那一帧起点格还没有变成 `selected_cell`，
+所以「只给选中格挂 `on_drag`」天然只能从已选中格起拖。
+
+**做法**：
+
+| 改动 | 内容 |
+| --- | --- |
+| 挂载条件 | 从 `is_cell_selected && cell_selectable` 放宽为 `cell_selectable`（可滚动列与固定列两处） |
+| 拖拽负载 | `SelectCellsDrag { owner, start: (row, col), anchored: Rc<Cell<bool>> }`。`anchored` 由 `SelectCellsDrag::new` 每次渲染新建：一次拖拽内的多次 `DragMove` 共享同一个 `Rc`，下一手势从新渲染出来的元素启动会拿到新的 `Rc` → **不需要在拖拽结束时清理** |
+| 首个 DragMove | `!anchored.replace(true)` 时调 `begin_drag_at(start)`：起点格不是当前选中格就 emit 一次**无修饰** `CellClicked` + `set_selected_cell`，等价 DBeaver 的「按下即选中」 |
+| 之后 | 照旧 `drag_select_to`（把 hover 格当带 Shift 的终点） |
+
+**顺带核实的一条上游行为**：gpui-fast `div.rs:53` 的 `DRAG_THRESHOLD = 2.`（px）——移动超过 2px
+就启动拖拽，并把 `clicked_state` 清空（`:3127`，这一次 click 不再触发）。「拖拽启动吞掉点击」是
+组件既有语义；`begin_drag_at` 同时补上「点一下就被选中」的观感，不会出现「按了没反应」。
+
+**验证**：`cargo test -p rds-result-panel --lib` **436 passed / 0 failed**（新增用例
+`dragging_from_an_unselected_cell_anchors_there_first`）；`cargo test -p rds-editor` 868 passed +
+4 ignored（离线 5 passed）；`cargo check -p rds-workbench --lib` Finished、0 warning。
+
+**调试记录（值得留的经验）**：拖拽用例最初卡在「焦点不动」，`cell_selectable` 断言把方向钉住 ——
+`panel_harness`（`panel/tests.rs:2052`）给别的用例建的是裸 `TableState::new`，
+`cell_selectable` 默认 **false**，而生产走 `grid::new_table_state`（`grid/status.rs:488` 开了它）。
+面板级用例只要碰「单元格选择」相关能力，都要按生产口径补齐开关，否则测的是另一张表。
+另一坑：`cx.debug_bounds` 只认 `debug_selector` 的 div，`.id()` + `test_support()` 的元素取不到 bounds，
+所以坐标改由 `debug_hit_geometry` 自算（`drag_select_to` 内部用的同一份）。
+
+**并发**：本仓门禁串行跑（同 §32.5）。
+
+## 34. D10-2 落地：行号槽按下 = 整行
+
+取证对象：`LightGrid.java` 的行头链（`:226` 字段、`:1574-1579` 开关、`:1866-1898` 宽度、
+`:3107-3151` 按下、`:3567-3589` 拖动、`:3174-3184` 交角），`GridRowRenderer.java`（137 行，
+渲染与宽度算式），`SpreadsheetPresentation.java:3365-3409`（行头文本与配色槽）。
+
+### 34.1 DBeaver 的事实
+
+**行号列恒开**：`LightGrid.rowHeaderVisible` 默认 `false`（`:226`），但结果集视图的
+`Spreadsheet` 构造就 `super.setRowHeaderVisible(true)`（`Spreadsheet.java:108`）→ DBeaver 结果集
+**始终**有行号列。（§32.4 里「`showRowNumber` 默认值未取证」由本条结清。）
+
+**宽度算式**（`computeHeaderSizes`，`:1866-1898`）：起点 `DEFAULT_ROW_HEADER_WIDTH = 30`
+（`:72`），逐行取 `rowHeaderRenderer.computeHeaderWidth` 的最大值，再夹到
+`MIN_ROW_HEADER_WIDTH = 40`（`:73`）与 `MAX_ROW_HEADER_WIDTH = 400`（`:74`）。
+→ **实际下限是 40**（只记 30 是漏了这层 clamp）。内容宽算式见
+`GridRowRenderer.computeHeaderWidth`（`:114-129`）：`LEFT_MARGIN + RIGHT_MARGIN`（4 + 4）
++ 展开箭头位（`EXPANDED_BOUNDS.width + EXPANDER_SPACING`，可展开行才有）+ 行图标宽 + `IMAGE_SPACING`
++ 文本宽 + `level * LEVEL_SPACING`。
+
+**行号文本**（`SpreadsheetPresentation.GridLabelProvider#getText`，`:3390-3408`）：
+列（记录模式）返回 `"行 #" + (visualNumber + 1)`；**行**且非记录模式返回 `row.toString()`
+（`:3396-3398`）；其余行对象走 `String.valueOf(row.getRelativeIndex() + 1)`（`:3404-3405`）
+——即**相对序号 + 1**，从 1 起。
+
+**行头绘制**（`GridRowRenderer.paint`，`:47-112`）：背景 `getHeaderBackground(element, selected)`；
+右边线与底边线 `getHeaderBorder`（`:59-71`）；文本从 `x = LEFT_MARGIN(4)` 起、垂直居中
+（`:104`）；当前行用 `boldFont`（`:96`）。配色槽在结果集侧：`cellHeaderBackground` /
+选中 `cellHeaderSelectionBackground` / `cellHeaderForeground` / `cellHeaderBorder`
+（`SpreadsheetPresentation.java:3365-3381`）。
+
+**行头按下**（`:3107-3151`，条件 `col == null && rowHeaderVisible && e.x <= rowHeaderWidth`）：
+无修饰 → `getCells(row, cells)`（**整行 = 全部数据列**，行头格本身不在 `columns` 里），
+`cellRowSelectedOnLastMouseDown = true`（`:3138`），并把 `focusColumn` 挪到行头右侧第一列
+（`:3142`）、`focusItem = row`；Shift → `getCells(row, focusItem, cells)`（行区间，列仍全宽）。
+
+**行头拖动**（`:3567-3589`）：`getCells(intentItem, focusItem, cells)` —— 焦点行与锚点行之间的
+**整行区间**，非 Ctrl 时替换选区。边界：hover 落在表头之上且 `topIndex > 0` → `topIndex - 1`，
+否则 0；底部越界 → `topIndex + 1`（与格拖的收拢算式不同）。
+
+**左上角交角**（`:3174-3184`）：点击 = 全选（`selectAllCellsInternal`）。
+
+**列头**（`:3185-3204` 按下 / `:3591-3626` 拖动）：按下 = `getCells(col, cells)` 整列；
+拖动 = 从 hover 列逐步走到 `focusColumn`，每列 `getCells(iterCol, …)`，即**整列区间**
+（`dragging = true`）。
+
+### 34.2 本仓现状（先取证，避免走弯路）
+
+- 本仓**已经有行号列**，形态不是组件 `row_header`，而是 delegate 的**首个组件列**：
+  `table_impl.rs::columns_count` = `columns.len() + 1 - hidden.len()`（转置固定 3 列 `#`/字段/值），
+  渲染走 `grid/cell.rs:267-313` 的行号槽分支（灰字、每格表头底色、当前行加粗、选中行留空让行容器色透上、
+  右键记 `context_cell=(row,0)` 供「复制行号」），注释里已按 `GridRowRenderer:55-70 / :96` 对齐。
+- 组件自带的 `row_header` 是**关的**（`grid/status.rs:492` `.row_header(false)`）：它在 vendor
+  `render_row_header_cell` 里是 `w_3()` 宽、无文本、只给 `row_selectable` 挂点击，与既有行号槽
+  **重复**。→ 本刀**不动 vendor**，只补口径。
+
+### 34.3 落点
+
+| 文件 | 改动 |
+| --- | --- |
+| `crates/result_panel/src/grid/delegate.rs` | `click_cell` 命中行号槽时把矩形两侧归一：锚点列钉 0、焦点列钉末列（Shift 只换行的一端、列仍全宽）；新增私有 `last_view_column()`（末列下标 = 可见数据列数，转置恒 2，无结果 0） |
+| `crates/result_panel/src/grid/tests.rs` | 用例 `clicking_the_row_number_slot_covers_the_whole_row`：单行全宽 → Shift 行区间（列仍全宽）→ 数据格点击不受影响 → 隐藏一列后整行收窄 |
+| `crates/result_panel/src/panel/tests.rs` | 用例 `clicking_the_row_number_slot_selects_the_whole_row`：按生产路径 `begin_drag_at(1, 0)`（先 `cell_selectable = true`，裸 `TableState::new` 默认关）→ 选区 (1,1)..(1,末列)、`selection_counts == (1,2,2)`、`selection_pos` 仍是 `(1,0)` |
+
+### 34.4 差异明账（未做，不静默）
+
+1. **值详情焦点不回落第一列**：DBeaver 行头按下把 `focusColumn` 挪到右侧第一列（`:3142`），
+   本仓 `selection_pos` 同时是「当前数据格」判据（「修改」按钮置灰、列归属、宿主提示三处既有
+   用例锁定），归一化会让 `edit_row_button_is_disabled_in_record_view` /
+   `select_column_goes_to_the_column_under_the_current_cell` 失效 → **保持现口径**，登记为差异。
+2. **列头拖动（整列区间）未做**：vendor 列头的 `on_drag` 已被列重排 `DragColumn` 占用
+   （`state.rs::render_th:2156-2169`），要加选区拖必须先决定「列头拖拽优先做重排还是做选区」。
+3. **交角点击全选未做**（`:3174-3184`）：需要 `selectAll` 的 delegate 径路与整表选区表达。
+4. **行头 Ctrl 追加 / Shift 区间只做了一半**：Shift 已对齐（列全宽 + 行区间），Ctrl 并集仍缺
+   （同 §30.4 #2 的单矩形模型限制）。
+5. **行号列宽度未按 40 下限夹**：本仓行号槽宽度由 `fit.rs:48` 钉死、不参与自适应，
+   DBeaver 是 `max(40, 内容宽)` 且随行号位数增长——属「尺寸」类，留到统一尺寸回补批次。
+
+### 34.5 验证
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo test -p rds-result-panel --lib` | **438 passed / 0 failed**（436 + 本刀 2） |
+| `cargo test -p rds-editor` | **868 passed + 4 ignored**；离线 `tests/offline_baseline.rs` 5 passed |
+| `cargo check -p rds-workbench --lib` | Finished，0 warning |
+
+**本刀没有 vendor 改动**：D10-1 / D10-1b 的私有 patch 保持原样（`table/{state,hit}.rs`），
+`vendor` 仍只此五处。

@@ -377,6 +377,17 @@ pub struct ResultPanel {
     /// 【R2 计算页】聚合口径（数值 / 字符串）。对齐 DBeaver Calc 的
     /// `aggregateAsStrings` CHECK：字符串口径下 MIN/MAX 走字典序，AVG/SUM 不出值。
     pub(crate) stats_mode: StatsMode,
+    /// 【D11】「按列分组聚合」开关（对齐 `AggregateColumnsPanel.groupByColumns`，
+    /// `:131` 从 `PARAM_GROUP_BY_COLUMNS` 读、`:167` 写回；出厂 false）。
+    /// 开启后统计页按**选区覆盖的列**分组展示（`:231-249`），每列一组；
+    /// 选区为空时退回当前作用列（DBeaver 此时整表为空，本仓保留单列视图，见 §31 明账）。
+    pub(crate) stats_group_by: bool,
+    /// 【D12】当前选中的统计行（工具条「−」的作用对象）。
+    ///
+    /// DBeaver 的「−」删 `aggregateTable` 的选中项（`RemoveFunctionAction`
+    /// `:424-433`）；本仓统计页是平铺行、没有 Tree 选中模型，所以由行点击维护这**一个**
+    /// 选中项（`:424` 的 `isEnabled` 只判「有选中」，不要求多选）。
+    pub(crate) stats_selected: Option<StatsItem>,
     /// 【R3 分组页】额外分组列集合（数据列序；空 = 只用当前选中列）。
     /// 点选加入 / 再点移除（顺序即分组键的拼接顺序，用户可感知地决定「按 A 再按 B」）。
     /// **只活在本视图态、跨会话不记**：DBeaver 侧 `GroupingPanel.loadSettings/saveSettings`

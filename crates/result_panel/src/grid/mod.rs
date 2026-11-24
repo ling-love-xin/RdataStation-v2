@@ -227,7 +227,7 @@ actions!(
 );
 
 pub use cell::format_cell_text;
-pub use selection::CellRange;
+pub use selection::{selection_counts, CellRange};
 pub use delegate::{
     CELL_DISPLAY_LIMIT, COLUMN_FILTER_VALUE_LIMIT, CellEdit, ColumnFilterHook, ColumnStatsHook,
     CommitEditHook, CommitLocalEditHook, FilterValueHook, InsightColumnHook, LoadMoreHook,

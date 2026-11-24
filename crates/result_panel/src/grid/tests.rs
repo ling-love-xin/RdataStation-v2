@@ -5138,3 +5138,41 @@ fn filters_group_starts_with_the_find_command() {
         "列头菜单同样要摆（DBeaver filtersMenu 对三个落点都挂）"
     );
 }
+
+/// 【D10-2】行号槽按下 = 选中整行（DBeaver `LightGrid.java:3125-3132`）。
+///
+/// DBeaver 的 row header 不在 `columns` 里，`getCells(row, …)` 铺出来的是全部数据列；
+/// 本仓行号槽是组件第 0 列，所以 `click_cell` 把命中行号槽的焦点列归一成末列。
+/// 这条把四件事一起钉住：单行全宽、Shift 点行号槽按行区间扩展、行号槽不算数据列、
+/// 隐藏列后整行跟着收窄。
+#[test]
+fn clicking_the_row_number_slot_covers_the_whole_row() {
+    // 2 数据列 → 组件列 0(#) / 1 / 2
+    let mut grid = grid();
+
+    // 无修饰键：单行 + 全宽
+    grid.click_cell(0, 0, false);
+    let range = grid.cell_range().expect("选区应已建立");
+    assert_eq!(range.rows(), (0, 0));
+    assert_eq!(range.cols(), (0, 2), "行号槽点击要铺到末列");
+    assert_eq!(range.data_columns(), vec![1, 2], "行号槽不是数据列");
+    assert_eq!(range.data_cells_count(), 2, "整行 = 1 行 × 2 数据列");
+
+    // Shift 点行号槽：锚点行不动、列仍全宽（DBeaver `:3128-3129` 的整行区间）
+    grid.click_cell(1, 0, true);
+    let range = grid.cell_range().expect("选区应已建立");
+    assert_eq!(range.rows(), (0, 1));
+    assert_eq!(range.cols(), (0, 2));
+    assert_eq!(range.data_cells_count(), 4);
+
+    // 数据格点击不受这套归一影响：焦点就是该格
+    grid.click_cell(0, 1, false);
+    assert_eq!(grid.cell_range().unwrap().cols(), (1, 1));
+
+    // 隐藏一列后「末列」跟着变（整行 = 现存可见列，不是历史列数）
+    grid.hide_column(1);
+    grid.click_cell(0, 0, false);
+    let range = grid.cell_range().expect("选区应已建立");
+    assert_eq!(range.cols(), (0, 1), "隐藏后只剩行号槽 + 1 个数据列");
+    assert_eq!(range.data_columns(), vec![1]);
+}

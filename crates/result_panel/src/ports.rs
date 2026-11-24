@@ -462,6 +462,14 @@ pub enum ResultRequest {
     ResetStatsItems,
     /// 切换聚合口径（对齐 `aggregateAsStrings` CHECK：影响 MIN/MAX 的比较方式）
     SetStatsMode(StatsMode),
+    /// 【D11/D13】「按列分组聚合」开关（对齐 `GroupByColumnsAction`，
+    /// `AggregateColumnsPanel.java:333-346`：CHECK 项，切换后只重算展示、不动函数集）。
+    /// 开启后按选区覆盖的列分组（`:231-249`）；选区为空时退回当前作用列。
+    SetStatsGroupBy(bool),
+    /// 【D12/D13】选中 / 取消选中一个统计行：工具条「−」删的就是它
+    /// （`RemoveFunctionAction.isEnabled()` = `aggregateTable.getSelectionCount() > 0`，
+    /// `AggregateColumnsPanel.java:424-426`；`:430-433` 逐个移除选中项）
+    SelectStatsItem(Option<StatsItem>),
     /// 【R3 分组页】切换分组列集合里的某一列（点选加入 / 再点移除；空集合 = 用当前选中列）
     ToggleGroupColumn(usize),
     /// 【R3 分组页】把分组键里某一列上移 / 下移一位（`delta` = -1 上移 / +1 下移）。
