@@ -70,11 +70,40 @@ impl CellRange {
         // 列 0 是行号槽（`crate::grid::table_impl` 的首列），不是数据列
         (left.max(1)..=right).collect()
     }
+
+    /// 选区覆盖的**数据格数**（行 × 数据列）。
+    ///
+    /// 对齐 DBeaver 的 `getCellSelectionSize()`（`LightGrid.java:4349-4351` =
+    /// `selectedCells.size()`：矩形选区内每格都在集合里、行号槽那列不在）。
+    /// 状态行「单元格数」用它；行号槽自成一列，与 [`Self::data_columns`] 同口径。
+    pub fn data_cells_count(&self) -> usize {
+        self.rows_count() * self.data_columns().len()
+    }
+}
+
+/// 状态行三项（行数 / 列数 / 单元格数）的取值口径。
+///
+/// DBeaver 的三项全部来自同一次 `updateSelectionCache()`
+/// （`LightGrid.java:2863-2882`）：`selectedRows` / `selectedColumns` 由
+/// `selectedCells` **反推**（凡有一格在该行/该列即计入），所以矩形 `rows × cols`
+/// 的数就是 `(rows, cols, rows*cols)`；单格即 `(1, 1, 1)`。
+///
+/// `None` 表示还没建立矩形（键盘刚落到第一格，或面板自建的初始态）：按单格算，
+/// 与 DBeaver 单格选区一个集合只装一格等价。
+pub fn selection_counts(range: Option<&CellRange>) -> (usize, usize, usize) {
+    match range {
+        Some(range) => (
+            range.rows_count(),
+            range.data_columns().len(),
+            range.data_cells_count(),
+        ),
+        None => (1, 1, 1),
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::CellRange;
+    use super::{selection_counts, CellRange};
 
     #[test]
     fn a_range_normalizes_rows_and_columns_from_either_corner() {
@@ -107,5 +136,36 @@ mod tests {
             focus: (4, 3),
         };
         assert_eq!(range.data_columns(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn data_cells_count_multiplies_rows_by_data_columns() {
+        // 3 行 × 3 数据列（含行号槽的 2..=4 三列里，行号槽那列不算数据格）
+        let range = CellRange {
+            anchor: (2, 1),
+            focus: (4, 3),
+        };
+        assert_eq!(range.rows_count(), 3);
+        assert_eq!(range.data_columns().len(), 3);
+        assert_eq!(range.data_cells_count(), 9);
+        // 只点行号槽：没有数据格
+        assert_eq!(CellRange::single((7, 0)).data_cells_count(), 0);
+    }
+
+    #[test]
+    fn selection_counts_mirror_the_rectangles_rows_and_data_columns() {
+        // 2 行 × 2 数据列 —— DBeaver `updateSelectionCache` 反推出来的三项
+        let range = CellRange {
+            anchor: (0, 1),
+            focus: (1, 2),
+        };
+        assert_eq!(selection_counts(Some(&range)), (2, 2, 4));
+        // 单格
+        assert_eq!(
+            selection_counts(Some(&CellRange::single((3, 4)))),
+            (1, 1, 1)
+        );
+        // 没建立矩形 → 按单格
+        assert_eq!(selection_counts(None), (1, 1, 1));
     }
 }
