@@ -67,7 +67,8 @@ impl BasePanel for InsightPanelTab {
     }
 
     fn closable(&self, _cx: &App) -> bool {
-        false
+        // 右侧栏 tab 与中央标签一致（2026-11-24 用户验收）：悬停出 ✕、点击关掉这个 tab。
+        true
     }
 
     fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
@@ -83,6 +84,16 @@ impl ComponentPanel for InsightPanelTab {
     fn tab_name(&self, _cx: &App) -> Option<SharedString> {
         // 返回 None：tab 条用 title() 渲染（图标 + 文字），对齐 VSCode 风格
         None
+    }
+
+    /// 【关闭前询问】右侧栏 tab 的 ✕：没有脏概念，撤登记后交还皮肤移除。
+    fn request_close(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::component::dock::CloseRequest {
+        self.shared.close_right_panel(RightPanel::Insight, cx);
+        gpui_kit::component::dock::CloseRequest::Proceed
     }
 
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -165,7 +176,8 @@ impl BasePanel for MockPanelTab {
     }
 
     fn closable(&self, _cx: &App) -> bool {
-        false
+        // 右侧栏 tab 与中央标签一致（2026-11-24 用户验收）：悬停出 ✕、点击关掉这个 tab。
+        true
     }
 
     fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
@@ -181,6 +193,16 @@ impl ComponentPanel for MockPanelTab {
     fn tab_name(&self, _cx: &App) -> Option<SharedString> {
         // 返回 None：tab 条用 title() 渲染（图标 + 文字），对齐 VSCode 风格
         None
+    }
+
+    /// 【关闭前询问】右侧栏 tab 的 ✕：没有脏概念，撤登记后交还皮肤移除。
+    fn request_close(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::component::dock::CloseRequest {
+        self.shared.close_right_panel(RightPanel::Mock, cx);
+        gpui_kit::component::dock::CloseRequest::Proceed
     }
 
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -263,7 +285,8 @@ impl BasePanel for HistoryPanelTab {
     }
 
     fn closable(&self, _cx: &App) -> bool {
-        false
+        // 右侧栏 tab 与中央标签一致（2026-11-24 用户验收）：悬停出 ✕、点击关掉这个 tab。
+        true
     }
 
     fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
@@ -279,6 +302,16 @@ impl ComponentPanel for HistoryPanelTab {
     fn tab_name(&self, _cx: &App) -> Option<SharedString> {
         // 返回 None：tab 条用 title() 渲染（图标 + 文字），对齐 VSCode 风格
         None
+    }
+
+    /// 【关闭前询问】右侧栏 tab 的 ✕：没有脏概念，撤登记后交还皮肤移除。
+    fn request_close(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::component::dock::CloseRequest {
+        self.shared.close_right_panel(RightPanel::History, cx);
+        gpui_kit::component::dock::CloseRequest::Proceed
     }
 
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -420,7 +453,8 @@ impl BasePanel for ArchivePanel {
     }
 
     fn closable(&self, _cx: &App) -> bool {
-        false
+        // 右侧栏 tab 与中央标签一致（2026-11-24 用户验收）：悬停出 ✕、点击关掉这个 tab。
+        true
     }
 
     fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
@@ -436,6 +470,16 @@ impl ComponentPanel for ArchivePanel {
     fn tab_name(&self, _cx: &App) -> Option<SharedString> {
         // 返回 None：tab 条用 title() 渲染（图标 + 文字），对齐 VSCode 风格
         None
+    }
+
+    /// 【关闭前询问】右侧栏 tab 的 ✕：没有脏概念，撤登记后交还皮肤移除。
+    fn request_close(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::component::dock::CloseRequest {
+        self.shared.close_right_panel(RightPanel::Archive, cx);
+        gpui_kit::component::dock::CloseRequest::Proceed
     }
 
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {

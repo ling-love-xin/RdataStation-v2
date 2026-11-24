@@ -856,6 +856,52 @@ impl Shared {
         self.notify_host(cx);
     }
 
+    /// 关掉左侧 dock 的一个 tab：**先撤登记再交还皮肤移除**。
+    ///
+    /// 为什么必须有这一步：`apply_left_mode`（`view/dock.rs:97-105`）每帧会把
+    /// 「激活但未挂载」的模块重新挂回 dock，所以只让皮肤把面板摘掉的话，下一帧它就
+    /// 又回来了（✕ 看起来没反应）。这里同时维护三件事：
+    /// 1. `left_open_panels` 摘掉该项（tab 条只画登记过的模块）；
+    /// 2. 关的是激活项 → 激活换成剩下的第一个，相邻标签就不会"跳"到空面板；
+    /// 3. 一个都不剩 → 左 dock 收起（`SidebarMode::Collapsed`），与「侧栏收起来」
+    ///    的语义一致。
+    pub fn close_left_panel(&self, panel: LeftPanel, cx: &mut App) {
+        let next = {
+            let mut open = self.left_open_panels.borrow_mut();
+            open.retain(|candidate| *candidate != panel);
+            open.first().copied()
+        };
+        match next {
+            Some(next) => {
+                if self.active_left.get() == panel {
+                    self.active_left.set(next);
+                }
+                self.left_mode.set(SidebarMode::Expanded);
+            }
+            None => self.left_mode.set(SidebarMode::Collapsed),
+        }
+        self.notify_host(cx);
+    }
+
+    /// 关掉右侧 dock 的一个 tab：与 [`Self::close_left_panel`] 同一口径。
+    pub fn close_right_panel(&self, panel: RightPanel, cx: &mut App) {
+        let next = {
+            let mut open = self.right_open_panels.borrow_mut();
+            open.retain(|candidate| *candidate != panel);
+            open.first().copied()
+        };
+        match next {
+            Some(next) => {
+                if self.active_right.get() == panel {
+                    self.active_right.set(next);
+                }
+                self.right_mode.set(SidebarMode::Expanded);
+            }
+            None => self.right_mode.set(SidebarMode::Collapsed),
+        }
+        self.notify_host(cx);
+    }
+
     /// M7：让 Mock 面板重读候选清单（连接 / 项目分析库既有表）与生成历史。
     ///
     /// 为什么必须由宿主在**事件路径**上推一把：这三份都是「打开面板时该是最新的」状态，

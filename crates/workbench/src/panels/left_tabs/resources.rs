@@ -40,7 +40,8 @@ impl BasePanel for ResourcePanelTab {
     }
 
     fn closable(&self, _cx: &App) -> bool {
-        false
+        // 侧栏 tab 与中央标签一致（2026-11-24 用户验收）：悬停出 ✕、点击关掉这个 tab。
+        true
     }
 
     fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
@@ -57,6 +58,16 @@ impl ComponentPanel for ResourcePanelTab {
     fn tab_name(&self, _cx: &App) -> Option<SharedString> {
         // 返回 None：tab 条用 title() 渲染（图标 + 文字），对齐 VSCode 风格
         None
+    }
+
+    /// 【关闭前询问】侧栏 tab 的 ✕：没有脏概念，直接撤登记交还皮肤移除。
+    fn request_close(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::component::dock::CloseRequest {
+        self.shared.close_left_panel(LeftPanel::Resources, cx);
+        gpui_kit::component::dock::CloseRequest::Proceed
     }
 
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {

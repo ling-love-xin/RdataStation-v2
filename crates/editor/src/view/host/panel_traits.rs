@@ -30,14 +30,14 @@ impl BasePanel for EditorHostPanel {
         "editor"
     }
 
-    /// 可关闭：**脏文档不给 ✕**（Dock 无“关闭前否决”钩子，架构 §12 #18）
+    /// 可关闭：**恒为真**（`closable` 只决定 ✕ 画不画）。
     ///
-    /// 标签 ✕ 由 Dock 自己处理：`DockArea` 收到 `TabGroupEvent::ClosePanel` 就直接移除面板，
-    /// 没有地方能插一句“先问用户”。因此脏文档的关闭入口只留**显式的那一个**：
-    /// `Ctrl+W` → [`request_close_document`]（保存 / 不保存 / 取消）。
-    /// 保存后脏点消失，✕ 自然回来。
+    /// 2026-11-24：改用皮肤的 `request_close` 钩子（`vendor/gpui-component` 的
+    /// `dock::CloseRequest`）——脏文档的 ✕ 照常悬停显示，点击先弹「保存 / 不保存 /
+    /// 取消」，只有选到"不保存/已保存"才真正移除面板。老做法 `!is_dirty()` 会把脏
+    /// 标签的 ✕ 整颗藏掉：非激活的脏标签既看不到脏点也看不到关闭入口（用户实机反馈）。
     fn closable(&self, _cx: &App) -> bool {
-        !self.is_dirty()
+        true
     }
 
     /// 记下所在标签组的弱句柄：
@@ -91,6 +91,23 @@ impl ComponentPanel for EditorHostPanel {
         div().text_sm().child(self.title_text())
     }
 
+    /// 【关闭前询问】标签 ✕ 点击先到这里：脏 → 交给「保存 / 不保存 / 取消」三态
+    /// 确认（与 `Ctrl+W` 同一入口 [`request_close_document`]），并**否决**这次移除；
+    /// 干净 → 放行，皮肤照常把面板摘掉。
+    fn request_close(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::component::dock::CloseRequest {
+        if !self.is_dirty() {
+            return gpui_kit::component::dock::CloseRequest::Proceed;
+        }
+        if let Some(area) = self.area.as_ref().and_then(|weak| weak.upgrade()) {
+            request_close_document(&area, cx.entity(), window, cx);
+        }
+        gpui_kit::component::dock::CloseRequest::Cancel
+    }
+
     /// 面板 zoom（组铺满 DockArea）的入口位置：**标题栏内联按钮 + 三点菜单都可用**。
     ///
     /// 0.10 的 `PanelControl` 只有三档：`Menu`（默认，唯一入口埋在标题栏三点菜单里，
@@ -104,32 +121,49 @@ impl ComponentPanel for EditorHostPanel {
         Some(PanelControl::Both)
     }
 
-    /// 【C3 状态槽】脏点画在**标签左端**的固定 12px 槽里，切走的标签也看得见。
+    /// 【C3 状态槽】标签左端 = **类型图标 + 固定 12px 状态槽**，脏点在槽里。
     ///
-    /// 上游只给了 `title_suffix`（挂在**标题栏**右端），而中央编辑区恒为标签条形态
-    /// （`GroupChrome::Tabs`），标题栏不画——所以此前"非激活的脏标签"完全没有标记，
-    /// 用户切回来后才知道没保存（真 bug）。槽位固定占位，变脏只换内容不改宽度。
+    /// 图标为什么在这里：中央编辑区恒为标签条形态，标签文字只走 `tab_name()`
+    /// （纯字符串），标题行里 `title()` 的那套富文本用不上——所以文件 tab 此前
+    /// 光秃秃只有文件名（用户实机反馈 2026-11-24「文件类型小图标不见了」）。
+    /// 左侧 dock 的 tab（`tab_name() == None`）走 `title()`，图标本来就在。
+    ///
+    /// 槽位固定占位，变脏只换内容不改宽度，所以标签不会因为状态变化而抖动
+    /// （对齐 Zed 的 `START_TAB_SLOT_SIZE`）。
     fn tab_prefix(
         &mut self,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
         let dirty = self.is_dirty();
+        let icon = ui::file_type_icon(&self.title_text());
         Some(
             div()
-                .w(rems(ui::TAB_STATUS_SLOT))
-                .flex_shrink_0()
-                .flex()
+                .h_flex()
                 .items_center()
-                .justify_center()
-                .when(dirty, |this| {
-                    this.child(
-                        div()
-                            .size(rems(ui::STATUS_DOT_SIZE))
-                            .rounded_full()
-                            .bg(cx.theme().colors.primary),
-                    )
-                })
+                .gap_1()
+                .flex_shrink_0()
+                .child(
+                    Icon::empty()
+                        .path(icon)
+                        .size(cx.theme().font_size * ui::TAB_TYPE_ICON),
+                )
+                .child(
+                    div()
+                        .w(rems(ui::TAB_STATUS_SLOT))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .when(dirty, |this| {
+                            this.child(
+                                div()
+                                    .size(rems(ui::STATUS_DOT_SIZE))
+                                    .rounded_full()
+                                    .bg(cx.theme().colors.primary),
+                            )
+                        }),
+                )
                 .into_any_element(),
         )
     }

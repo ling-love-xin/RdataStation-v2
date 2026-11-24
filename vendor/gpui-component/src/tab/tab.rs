@@ -807,7 +807,7 @@ impl Sizable for Tab {
 }
 
 impl RenderOnce for Tab {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(mut self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let mut normal_style = self.variant.normal(cx);
         let mut selected_style = self.variant.selected(cx);
         let mut disabled_style = self.variant.disabled(self.selected, cx);
@@ -915,6 +915,14 @@ impl RenderOnce for Tab {
             .justify_center()
             .overflow_hidden()
             .margins(inner_margins)
+            .gap_1()
+            // 【项目私有 patch：状态槽内嵌】`prefix` 挂在**内容行内**、跟在 12px 内边距
+            // 之后、标签文字之前，与 Zed 的 `start_slot`（`START_TAB_SLOT_SIZE`，
+            // 内容行内的一格）同构。外挂在内容行之外时，脏点会贴住标签的左边界，
+            // 看上去像是上一颗标签的右边缘（用户实机反馈 2026-11-24）。
+            .when_some(self.prefix.take(), |this, prefix| {
+                this.child(div().flex_shrink_0().child(prefix))
+            })
             // Normally the label decides the tab width, so it never shrinks. With
             // `max_width` it is the one part that gives way.
             .map(|this| match max_width {
@@ -1111,15 +1119,6 @@ impl RenderOnce for Tab {
                                 .rounded(inner_radius)
                                 .when(tab_style.shadow, |this| this.shadow_sm()),
                         ),
-                )
-            })
-            // Under `max_width` the label is the only part that gives way, so
-            // hold the prefix and suffix (e.g. a close button) at their full size.
-            .when_some(self.prefix, |this, prefix| {
-                this.child(
-                    div()
-                        .when_some(max_width, |this, _| this.flex_shrink_0())
-                        .child(prefix),
                 )
             })
             .child(inner_element)

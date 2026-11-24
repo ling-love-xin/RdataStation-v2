@@ -29,6 +29,37 @@ pub const STATUS_DOT_SIZE: f32 = 0.375;
 /// `START_TAB_SLOT_SIZE`）。干净时槽照样占位、只留空白。
 pub const TAB_STATUS_SLOT: f32 = 0.75;
 
+/// 标签左端文件类型图标边长（1rem = 16px）：与左侧 dock 的 tab 图标同档
+/// （`LeftPanel::icon()` 也是 16px），一行里两个标签的类型图标看起来一样大。
+pub const TAB_TYPE_ICON: f32 = 1.0;
+
+/// 文件类型图标（Lucide 全量嵌入，`gpui_kit::assets::AllAssets` 可加载任意
+/// `icons/*.svg`）：标签名左侧的类型微标，与草稿箱、文件树的同一套映射同构。
+///
+/// 为什么在这里另写一份：`scratchpad` 的 `scratchpad_type_icon` 在上游 crate，
+/// 依赖方向是 `scratchpad → editor`（editor 不能反向依赖），所以这张表在编辑器
+/// 侧各留一份；两处改动要同步（`crates/scratchpad/src/scratchpad_view/primitives.rs`）。
+pub fn file_type_icon(name: &str) -> &'static str {
+    let ext = name
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "sql" => "icons/database.svg",
+        "log" => "icons/file-terminal.svg",
+        "md" | "markdown" | "txt" => "icons/file-text.svg",
+        "json" => "icons/braces.svg",
+        "csv" | "tsv" => "icons/table.svg",
+        "toml" => "icons/settings.svg",
+        "yaml" | "yml" | "py" => "icons/file-code.svg",
+        "html" | "htm" => "icons/code.svg",
+        "css" => "icons/palette.svg",
+        "js" | "mjs" | "cjs" | "ts" | "tsx" | "jsx" | "rs" | "go" | "java" | "c" | "h" | "cpp"
+        | "hpp" => "icons/file-code.svg",
+        _ => "icons/file.svg",
+    }
+}
+
 /// 结果区尺寸常量：**单一来源在 `result_panel::ui`**（依赖方向 `editor → result_panel`，
 /// 正向引用成立；反向不行，所以不能反过来放）。
 ///

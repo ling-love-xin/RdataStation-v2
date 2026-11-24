@@ -50,6 +50,21 @@ pub enum PanelControl {
     Toolbar,
 }
 
+/// 【项目私有 patch：关闭前询问】皮肤在真正摘掉面板**之前**问一句面板自己。
+///
+/// 上游的 `TabGroup::close_panel` 收到点击就移除面板，中间没有可插入的确认点，
+/// 所以脏文档只能靠 `closable() == false` 把 ✕ 藏掉（Dock 架构 §12 #18 的遗留）。
+/// 有了这个钩子，✕ 可以常驻（悬停显示），点击时由面板决定：
+/// - [`Proceed`](CloseRequest::Proceed)：照旧移除；
+/// - [`Cancel`](CloseRequest::Cancel)：面板自己接管（例如弹「保存/不保存/取消」，
+///   确认后再走自己的关闭路径），这次点击到此为止。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CloseRequest {
+    #[default]
+    Proceed,
+    Cancel,
+}
+
 impl PanelControl {
     #[inline]
     pub fn toolbar_visible(&self) -> bool {
@@ -156,6 +171,11 @@ pub trait Panel: gpui_base::dock::Panel {
     fn title_bar(&self, cx: &App) -> bool {
         true
     }
+
+    /// 【项目私有 patch：关闭前询问】皮肤在移除面板之前问一句，见 [`CloseRequest`]。
+    fn request_close(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> CloseRequest {
+        CloseRequest::Proceed
+    }
 }
 
 /// Object-safe counterpart of [`Panel`], and the presentation half of the
@@ -172,6 +192,8 @@ pub trait PanelView: gpui_base::dock::PanelView {
     fn zoom_control(&self, cx: &App) -> Option<PanelControl>;
     fn inner_padding(&self, cx: &App) -> bool;
     fn title_bar(&self, cx: &App) -> bool;
+    /// 【项目私有 patch：关闭前询问】见 [`CloseRequest`]。
+    fn request_close(&self, window: &mut Window, cx: &mut App) -> CloseRequest;
 }
 
 impl<T: Panel> PanelView for Entity<T> {
@@ -217,6 +239,10 @@ impl<T: Panel> PanelView for Entity<T> {
 
     fn title_bar(&self, cx: &App) -> bool {
         self.read(cx).title_bar(cx)
+    }
+
+    fn request_close(&self, window: &mut Window, cx: &mut App) -> CloseRequest {
+        self.update(cx, |this, cx| this.request_close(window, cx))
     }
 }
 

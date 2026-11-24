@@ -44,7 +44,10 @@ impl BasePanel for ScratchPanel {
     }
 
     fn closable(&self, _cx: &App) -> bool {
-        false
+        // 2026-11-24 用户验收：侧栏 tab 与中央标签一致——悬停出 ✕、点击关掉这个 tab
+        // （最后一个关掉 → 整条侧栏收起）。侧栏面板没有"脏"状态，不需要三态确认，
+        // 但必须在 `request_close` 里撤登记，否则 `apply_left_mode` 会把它挂回来。
+        true
     }
 
     fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
@@ -61,6 +64,16 @@ impl ComponentPanel for ScratchPanel {
     fn tab_name(&self, _cx: &App) -> Option<SharedString> {
         // 返回 None：tab 条用 title() 渲染（图标 + 文字），对齐 VSCode 风格
         None
+    }
+
+    /// 【关闭前询问】侧栏 tab 的 ✕：没有脏概念，直接撤登记交还皮肤移除。
+    fn request_close(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::component::dock::CloseRequest {
+        self.shared.close_left_panel(LeftPanel::Draft, cx);
+        gpui_kit::component::dock::CloseRequest::Proceed
     }
 
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {

@@ -33,7 +33,7 @@ use crate::{
     ActiveTheme as _, IconName, Selectable as _, Sizable as _,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
     dock::{
-        ClosePanel, PanelControl, PanelHandle, SkinShared, ToggleZoom,
+        ClosePanel, CloseRequest, PanelControl, PanelHandle, SkinShared, ToggleZoom,
         toggle_dock_by_user,
     },
     h_flex,
@@ -559,6 +559,8 @@ impl TabGroupSkin {
                     .map(|ix| {
                         let panel = &group.panels()[ix];
                         let handle = PanelHandle::of(panel);
+                        // 【项目私有 patch：关闭前询问】`'static` 回调要自有句柄（见下）。
+                        let leaf_handle = handle.cloned();
                         let drag = tab_drag(group, ix, cx);
 
                         Tab::new()
@@ -636,10 +638,21 @@ impl TabGroupSkin {
                                                     })
                                                     .on_click({
                                                         let group = group.clone();
+                                                        // 【项目私有 patch：关闭前询问】脏文档不能再靠
+                                                        // `closable=false` 藏掉 ✕（那样非激活标签也就没有
+                                                        // 关闭入口）；改成先问面板 `request_close`。
+                                                        let handle = leaf_handle.clone();
                                                         let panel_id = panel.panel_id(cx);
                                                         move |_, window, cx| {
                                                             cx.stop_propagation();
-                                                            group.close(panel_id, window, cx);
+                                                            if let Some(handle) = handle.as_ref() {
+                                                                if handle.request_close(window, cx)
+                                                                    == CloseRequest::Cancel
+                                                                {
+                                                                    return;
+                                                                }
+                                                            }
+                                                            group.close(panel_id.clone(), window, cx);
                                                         }
                                                     }),
                                             ),
@@ -684,6 +697,10 @@ impl TabGroupSkin {
                                 let is_zoomed = group.is_zoomed();
                                 let panels = group.panels().to_vec();
                                 let visible_count = visible.len();
+                                // 【项目私有 patch：关闭前询问】句柄要在 `'static` 闭包构造
+                                // **之前**克隆成自有值——`handle` 借的是 `group` 里的 `Arc`，
+                                // 直接进闭包会把引用带出去（E0521）。
+                                let menu_handle = leaf_handle.clone();
                                 this.on_context_menu(move |menu, _window, _cx| {
                                     let mut menu = menu;
                                     menu = menu.item(PopupMenuItem::new(if is_zoomed { "还原" } else { "缩放" })
@@ -699,8 +716,18 @@ impl TabGroupSkin {
                                             PopupMenuItem::new("关闭")
                                                 .on_click({
                                                     let group = group.clone();
+                                                    // 【项目私有 patch：关闭前询问】与 ✕ 同一口径。
+                                                    let menu_handle = menu_handle.clone();
+                                                    let panel_id = panel_id.clone();
                                                     move |_, window, cx| {
-                                                        group.close(panel_id, window, cx);
+                                                        if let Some(handle) = menu_handle.as_ref() {
+                                                            if handle.request_close(window, cx)
+                                                                == CloseRequest::Cancel
+                                                            {
+                                                                return;
+                                                            }
+                                                        }
+                                                        group.close(panel_id.clone(), window, cx);
                                                     }
                                                 }),
                                         );
@@ -715,6 +742,15 @@ impl TabGroupSkin {
                                                         for panel in panels.iter() {
                                                             let pid = panel.panel_id(cx);
                                                             if pid != panel_id && group.is_panel_closable(pid, cx) {
+                                                                // 【项目私有 patch：关闭前询问】脏面板先答应确认，
+                                                                // 未确认的这一轮整体不动（避免连坐丢修改）。
+                                                                if let Some(handle) = PanelHandle::of(panel) {
+                                                                    if handle.request_close(window, cx)
+                                                                        == CloseRequest::Cancel
+                                                                    {
+                                                                        return;
+                                                                    }
+                                                                }
                                                                 group.close(pid, window, cx);
                                                             }
                                                         }
@@ -730,6 +766,14 @@ impl TabGroupSkin {
                                                         for panel in panels.iter() {
                                                             let pid = panel.panel_id(cx);
                                                             if group.is_panel_closable(pid, cx) {
+                                                                // 【项目私有 patch：关闭前询问】同上。
+                                                                if let Some(handle) = PanelHandle::of(panel) {
+                                                                    if handle.request_close(window, cx)
+                                                                        == CloseRequest::Cancel
+                                                                    {
+                                                                        return;
+                                                                    }
+                                                                }
                                                                 group.close(pid, window, cx);
                                                             }
                                                         }
@@ -838,12 +882,11 @@ impl TabGroupSkin {
                         .bg(cx.theme().tokens.tab_bar)
                         .px_2()
                         .gap_1()
-                        .children(
-                            group
-                                .active_panel()
-                                .and_then(PanelHandle::of)
-                                .and_then(|handle| handle.title_suffix(window, cx)),
-                        )
+                        // 【项目私有 patch：状态槽唯一化】标签条形态**不再**渲染
+                        // `title_suffix`：面板的脏点/失败点已经画在标签自己的
+                        // `prefix` 槽里，再在右端画一次就是同一状态的两处标记
+                        // （用户实机反馈 2026-11-24「最右侧也出现了脏页」）。
+                        // 标题行形态（`render_title`）保留 `title_suffix`。
                         .child(self.render_toolbar(group, window, cx))
                         .children(right_button),
                 )
