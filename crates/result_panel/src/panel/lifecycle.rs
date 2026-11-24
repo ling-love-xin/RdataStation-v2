@@ -396,6 +396,9 @@ impl ResultPanel {
             // 【R2 计算页】默认全集（与 DBeaver `loadDefaultFunctions` 同口径：默认函数全上）
             stats_items: crate::ports::StatsItem::DEFAULT_SET.to_vec(),
             stats_mode: crate::ports::StatsMode::Numeric,
+            // 【D11/D12】出厂：不分组（DBeaver `PARAM_GROUP_BY_COLUMNS` 默认 false）、无选中行
+            stats_group_by: false,
+            stats_selected: None,
             // 【R3 分组页】默认不额外选列（只用当前选中列）、按值序、不筛重复
             group_columns: Vec::new(),
             group_sort: crate::ports::GroupSort::Value,

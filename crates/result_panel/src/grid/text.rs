@@ -251,6 +251,35 @@ impl ResultGridDelegate {
             .collect()
     }
 
+    /// 【D11】当前视图行序下，某数据列在**矩形选区的行区间**内的取值
+    /// （对齐 DBeaver `AggregateColumnsPanel.aggregateSelection` `:231-241`：
+    /// 按列收集「选区里属于该列的那些格」的值，逐列聚合）。
+    ///
+    /// 取值口径与 [`Self::column_values`] 完全一致（本地行 / 被删底层行同样跳过），
+    /// 只是把行范围收窄到选区；越界的行由调用方先裁剪（这里只做闭区间遍历）。
+    pub fn column_values_in_rows(&self, column: usize, rows: (usize, usize)) -> Vec<String> {
+        let (top, bottom) = rows;
+        (top..=bottom)
+            .filter_map(|view_ix| {
+                let data_ix = self.data_row(view_ix)?;
+                if self
+                    .local
+                    .as_ref()
+                    .is_some_and(|set| set.is_deleted(data_ix))
+                {
+                    return None;
+                }
+                Some(
+                    self.rows
+                        .get(data_ix)
+                        .and_then(|row| row.get(column))
+                        .cloned()
+                        .unwrap_or_default(),
+                )
+            })
+            .collect()
+    }
+
     /// 【P2-2】计算页：某数据列统计（列级访问器 → 列级纯函数，口径与矩阵版一致）
     /// 【P2-2】计算页：某数据列统计。
     ///

@@ -1253,6 +1253,158 @@ fn stats_tab_renders_toolbar_header_and_rows(cx: &mut gpui_kit::TestAppContext) 
     );
 }
 
+/// 【D11/D12/D13】计算页：工具条「− / 分组」存在 + 行选中态 + 按选区列/行分组聚合。
+///
+/// 钉住三件对齐 `AggregateColumnsPanel` 的事实：
+/// - `fillToolBar`（`:322-331`）里的「−」「分组」真的在工具条上；
+/// - 「−」删的是**选中的行**（`:418-436`），行点击维护这份单选态；
+/// - 分组开启后按选区覆盖的列各出一组、只算选区行区间（`:221-262`）。
+#[gpui_kit::test]
+fn stats_group_by_splits_selected_columns_and_rows(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::component::table::TableState;
+    use gpui_kit::component::Root;
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{AppContext as _, ElementId, Entity, IntoElement, Render, SharedString};
+
+    struct PanelHost {
+        panel: Entity<super::ResultPanel>,
+    }
+    impl Render for PanelHost {
+        fn render(
+            &mut self,
+            _window: &mut gpui_kit::Window,
+            cx: &mut gpui_kit::Context<Self>,
+        ) -> impl IntoElement {
+            self.panel.read(cx).render(cx)
+        }
+    }
+
+    cx.update(gpui_kit::init);
+    let slot: std::rc::Rc<std::cell::RefCell<Option<Entity<super::ResultPanel>>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let slot_in = slot.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let queue = crate::ports::ResultActionQueue::new();
+        let panel = cx.new(|cx| super::ResultPanel::new(window, cx, queue));
+        let mut delegate = crate::grid::ResultGridDelegate::default();
+        delegate.set_data(
+            vec!["id".to_string(), "amount".to_string(), "note".to_string()],
+            vec![
+                vec!["1".to_string(), "10".to_string(), "a".to_string()],
+                vec!["2".to_string(), "20".to_string(), "b".to_string()],
+                vec!["3".to_string(), "30".to_string(), "c".to_string()],
+                vec!["4".to_string(), "40".to_string(), "d".to_string()],
+            ],
+        );
+        let grid: Entity<TableState<crate::grid::ResultGridDelegate>> =
+            cx.new(|cx| TableState::new(delegate, window, cx));
+        panel.update(cx, |p, cx| {
+            p.set_grids(grid, None, None, window, cx);
+            // 作用列 = 第 2 列（amount）；只留「非空」一项，断言好算
+            p.selected_col = Some(1);
+            p.stats_items = vec![StatsItem::Count];
+            p.set_right_tab(RightTab::Stats, cx);
+        });
+        *slot_in.borrow_mut() = Some(panel.clone());
+        let host = cx.new(|_| PanelHost { panel });
+        Root::new(host, window, cx)
+    });
+    let panel = slot.borrow().clone().expect("ResultPanel 已创建");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let visible = |id: &'static str, cx: &mut gpui_kit::VisualTestContext| -> bool {
+        let by_id = cx.update(|window, _| {
+            window
+                .try_find(ElementId::Name(SharedString::from(id.to_string())))
+                .is_some_and(|snap| snap.visible())
+        });
+        by_id || cx.debug_bounds(id).is_some()
+    };
+
+    // 1) 工具条补齐：`fillToolBar` 的「−」与「分组」都在
+    assert!(
+        visible("editor-result-stat-remove-tool", cx),
+        "工具条应有「−」（DBeaver RemoveFunctionAction）"
+    );
+    assert!(
+        visible("editor-result-stat-group", cx),
+        "工具条应有「分组」（DBeaver GroupByColumnsAction）"
+    );
+
+    // 2) 行选中态：由行点击维护（「−」的 isEnabled 判据 = 有选中）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.select_stats_item(Some(StatsItem::Count), cx));
+    });
+    assert_eq!(
+        panel.read_with(cx, |p, _app| p.stats_selected),
+        Some(StatsItem::Count),
+        "点击统计行后应记住该行为选中项"
+    );
+
+    // 3) 分组 + 矩形选区（行 0..=1、视图列 1..=2 → 数据列 id / amount 各一组）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.grid.update(cx, |grid, _| {
+                let delegate = grid.delegate_mut();
+                delegate.click_cell(0, 1, false);
+                delegate.click_cell(1, 2, true);
+            });
+            p.set_stats_group_by(true, cx);
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    // 先钉住「分组要用的三件输入真的到位」，再钉渲染（失败时能一眼看出是数据还是渲染）
+    let probe = panel.read_with(cx, |p, cx| {
+        let delegate = p.grid.read(cx).delegate();
+        (
+            p.stats_group_by,
+            delegate.cell_range(),
+            p.inspect_column(delegate),
+        )
+    });
+    assert!(probe.0, "分组开关应已开启");
+    assert!(probe.1.is_some(), "矩形选区应已建立");
+    assert_eq!(probe.2, Some(1), "作用列应落在 amount");
+    assert!(
+        visible("editor-result-stats-group-1", cx),
+        "分组后应有 amount 列（数据列 1）的组标题行"
+    );
+    assert!(
+        visible("editor-result-stats-group-2", cx),
+        "分组后应有 note 列（数据列 2）的组标题行"
+    );
+
+    // 4) 分组口径只算选区的行区间：整列 4 行 → 区间 2 行
+    let whole = panel.read_with(cx, |p, cx| {
+        let delegate = p.grid.read(cx).delegate();
+        p.stats_entries_for_column(delegate, 1, None)
+    });
+    assert_eq!(
+        whole,
+        vec![(StatsItem::Count, "4".to_string())],
+        "整列口径应统计全部 4 行"
+    );
+    let region = panel.read_with(cx, |p, cx| {
+        let delegate = p.grid.read(cx).delegate();
+        p.stats_entries_for_column(delegate, 1, Some((0, 1)))
+    });
+    assert_eq!(
+        region,
+        vec![(StatsItem::Count, "2".to_string())],
+        "分组口径应只统计选区的行区间（DBeaver `aggregateSelection` 按选区收集）"
+    );
+
+    // 5) 「−」删掉选中行后选中态作废（否则按钮会指着不存在的行）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.remove_stats_item(StatsItem::Count, cx));
+    });
+    assert_eq!(
+        panel.read_with(cx, |p, _app| p.stats_selected),
+        None,
+        "删除选中项后选中态应清空"
+    );
+}
+
 /// 【R3】分组排序 / 「仅重复」的纯函数口径（不依赖渲染）
 #[test]
 fn arrange_groups_sorts_and_filters() {

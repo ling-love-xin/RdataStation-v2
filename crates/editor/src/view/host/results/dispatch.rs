@@ -681,6 +681,17 @@ impl EditorHostPanel {
                 self.result_panel
                     .update(cx, |p, cx| p.set_stats_mode(mode, cx));
             }
+            // 【D11】「按列分组」开关：纯展示态，不落盘（DBeaver 存在 `PARAM_GROUP_BY_COLUMNS`，
+            // 本仓沿用「口径切换不落盘」这条既有取舍，差异记在基线 §31）
+            ResultRequest::SetStatsGroupBy(on) => {
+                self.result_panel
+                    .update(cx, |p, cx| p.set_stats_group_by(on, cx));
+            }
+            // 【D12】统计行选中态：工具条「−」的作用对象，纯视图态
+            ResultRequest::SelectStatsItem(item) => {
+                self.result_panel
+                    .update(cx, |p, cx| p.select_stats_item(item, cx));
+            }
             // 【R3 分组页】分组键增删 / 清空是纯面板视图状态（不落盘、不影响取数）；
             // 【分组页持久化】排序口径与「仅重复」要落盘（对齐 DBeaver `ChangeSortingAction`
             // 写 `RS_GROUPING_DEFAULT_SORTING` + `persistConfiguration()`、`DuplicatesOnlyAction`

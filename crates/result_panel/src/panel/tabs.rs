@@ -14,6 +14,7 @@ use gpui_kit::component::table::TableDelegate;
 use gpui_kit::component::toolbar::Toolbar;
 use gpui_kit::component::tree::tree;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 // 【B5】事实帧只读句柄随网格投影进 delegate（列式统计 / 原生数值排序交互派生时读取）
@@ -603,19 +604,22 @@ impl ResultPanel {
     }
 
     /// 【右栏】计算页（对齐 DBeaver Calc `AggregateColumnsPanel`）：
-    /// 列级聚合 + **可配置函数集**（＋ 添加 / 行尾 × 停用 / Reset 恢复）+ **聚合口径**
-    /// 切换（数值 / 字符串）+ 两列表头（Function / Value）+ 千分位数字。
+    /// 列级聚合 + **可配置函数集**（＋ 添加 / − 删除选中 / 行尾 × 停用 / Reset 恢复）
+    /// + **聚合口径**切换（数值 / 字符串）+ **按列分组聚合**开关
+    /// + 两列表头（Function / Value）+ 千分位数字。
+    ///
+    /// 工具条顺序照 `fillToolBar`（`AggregateColumnsPanel.java:322-331`）：
+    /// ＋ / − / Reset / 分隔 / 分组（CHECK）/ 口径（CHECK）。
     ///
     /// 作用列 = 网格选中格优先（`selection_pos`），列浏览器清单选中列（`selected_col`）兜底；
     /// 转置视图不给语义列。数据 = 列级访问器 `column_stats_for`（数值口径走事实档列式
     /// 原生聚合，不物化整行矩阵）；字符串口径才取整列取值算字典序极值。
     ///
-    /// **与 DBeaver 的两处有意偏离**（登记在册，不是遗漏）：
-    /// 1. DBeaver 的「−」删的是 Tree 里选中的函数行；本仓统计行是普通元素、没有行选中
-    ///    模型，改为每行行尾一个 ×（避免为对齐一个按钮去引整棵 Tree）。
-    /// 2. DBeaver 的「按列分组聚合」（`GroupByColumnsAction`）以**多单元格选区**为输入；
-    ///    本仓网格只有单格选择（`selection_pos: Option<(usize, usize)>`），没有多选模型，
-    ///    故不实现——要做需先给 DataTable 引入单元格选区，属独立工程。
+    /// **「按列分组」口径**（D11，`:221-262`）：DBeaver 以多单元格选区为输入，按
+    /// `selection.getElementAttribute(element)` 把选区里每个格归到所属列，每列一个
+    /// `TreeItem` 且展开（`:231-249`）。本仓 D10 已引入单矩形选区 [`CellRange`]，故按
+    /// 选区覆盖的数据列逐列聚合、只算**行区间内**的值。**选区为空时退回当前作用列整列**
+    /// （DBeaver 此时整表为空，本仓保留单列视图，登记在基线 §31 差异明账）。
     pub(crate) fn render_stats_tab(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let muted = theme.colors.muted_foreground;
@@ -631,35 +635,23 @@ impl ResultPanel {
                 cx,
             );
         };
+        // 【D11】分组开关 + 选区覆盖列 → 按列分组（单列也走该渲染，列标题行语义一致）
+        if self.stats_group_by {
+            if let Some(range) = delegate.cell_range() {
+                let cols = range.data_columns();
+                if !cols.is_empty() {
+                    return self.render_stats_grouped(delegate, &cols, range.rows(), cx);
+                }
+            }
+        }
         let name = delegate
             .columns()
             .get(data_col)
             .cloned()
             .unwrap_or_else(|| "列".to_string());
-        let stats = delegate.column_stats_for(data_col);
-        // 整列取值：字符串口径的极值要它，去重计数 / 中位数 / 众数也要它
-        // （数值口径的 min/max/avg/sum 走事实档列式统计，不必物化矩阵）
-        let need_values = matches!(self.stats_mode, StatsMode::Text)
-            || self.stats_items.iter().any(|item| item.needs_column_values());
-        let values = need_values.then(|| delegate.column_values(data_col));
-        let text_extremes = matches!(self.stats_mode, StatsMode::Text)
-            .then(|| text_minmax(values.as_deref().unwrap_or(&[])));
         // 【函数=值】启用项 + 当前值先算成一对表：行渲染与「复制全部」共用同一份快照
         // （复制全部必须拷「此刻看到的这些」，不能在菜单回调里再算一遍）
-        let extras = StatExtras {
-            text_extremes: text_extremes.as_ref(),
-            distinct: values.as_deref().map(distinct_count),
-            median: values.as_deref().and_then(median_of),
-            mode: values.as_deref().and_then(mode_of),
-        };
-        let entries: Vec<(StatsItem, String)> = self
-            .stats_items
-            .iter()
-            .map(|item| {
-                let value = stat_value(*item, &stats, &extras, self.stats_mode);
-                (*item, value)
-            })
-            .collect();
+        let entries = self.stats_entries_for_column(delegate, data_col, None);
         let copy_all = stats_copy_all_text(&entries);
         let rows: Vec<AnyElement> = entries
             .iter()
@@ -714,6 +706,158 @@ impl ResultPanel {
                     .min_h_0()
                     .children(empty_hint)
                     .children(rows)
+                    .overflow_y_scrollbar(),
+            )
+            .into_any_element()
+    }
+
+    /// 【D11】某列「启用项 → 值」快照（单列页与分组页共用）。
+    ///
+    /// `rows = Some(区间)` 时口径收窄到选区的行区间（DBeaver `aggregateSelection`
+    /// `:231-241` 按列收集选区里的格、`aggregateValues` `:264-315` 逐元素累计）。
+    /// 区间口径必须走显示取值（事实档列式聚合不能按行区间切），整列口径才按需省掉取值。
+    pub(crate) fn stats_entries_for_column(
+        &self,
+        delegate: &crate::grid::ResultGridDelegate,
+        data_col: usize,
+        rows: Option<(usize, usize)>,
+    ) -> Vec<(StatsItem, String)> {
+        // 整列取值：字符串口径的极值要它，去重计数 / 中位数 / 众数也要它
+        // （数值口径的 min/max/avg/sum 走事实档列式统计，不必物化矩阵）
+        let need_values = matches!(self.stats_mode, StatsMode::Text)
+            || self.stats_items.iter().any(|item| item.needs_column_values());
+        let values: Option<Vec<String>> = match rows {
+            Some(region) => Some(delegate.column_values_in_rows(data_col, region)),
+            None => need_values.then(|| delegate.column_values(data_col)),
+        };
+        let stats = match rows {
+            Some(_) => {
+                crate::grid::stats::column_stats_from_values(values.as_deref().unwrap_or(&[]))
+            }
+            None => delegate.column_stats_for(data_col),
+        };
+        let text_extremes = matches!(self.stats_mode, StatsMode::Text)
+            .then(|| text_minmax(values.as_deref().unwrap_or(&[])));
+        let extras = StatExtras {
+            text_extremes: text_extremes.as_ref(),
+            distinct: values.as_deref().map(distinct_count),
+            median: values.as_deref().and_then(median_of),
+            mode: values.as_deref().and_then(mode_of),
+        };
+        self.stats_items
+            .iter()
+            .map(|item| {
+                let value = stat_value(*item, &stats, &extras, self.stats_mode);
+                (*item, value)
+            })
+            .collect()
+    }
+
+    /// 【D11】分组渲染：每列一组（列名标题行 + 该列函数行）。
+    ///
+    /// 对齐 DBeaver `aggregateSelection` `:231-262`：分组开启时每个属性一个 `TreeItem`
+    /// （文本 = 列名），`setExpanded(true)` 展开显示该列的 `aggregateValues` 结果。
+    /// 本仓是平铺列表 + 组标题行（不引 Tree，理由同「行尾 ×」那条：统计页不是树形数据）。
+    /// **差异**：DBeaver 组标题带列类型图标（`:236` `getColumnImage`），本仓只给列名，
+    /// 类型图标在列浏览器已有，此处不重复（登记基线 §31）。
+    pub(crate) fn render_stats_grouped(
+        &self,
+        delegate: &crate::grid::ResultGridDelegate,
+        cols: &[usize],
+        region: (usize, usize),
+        cx: &App,
+    ) -> AnyElement {
+        let theme = cx.theme();
+        let muted = theme.colors.muted_foreground;
+        // 选区给的是**视图列**（`CellRange::data_columns()` 已去掉行号槽），统计要的是
+        // **数据列**：经 `data_column_checked` 反查（列可重排、可隐藏，不能当作 `col - 1`
+        // 直接换算；越界 / 隐藏的视图列在这里被过滤掉）
+        let data_cols: Vec<usize> = cols
+            .iter()
+            .filter_map(|view| delegate.data_column_checked(*view))
+            .collect();
+        let names: Vec<String> = data_cols
+            .iter()
+            .map(|col| {
+                delegate
+                    .columns()
+                    .get(*col)
+                    .cloned()
+                    .unwrap_or_else(|| "列".to_string())
+            })
+            .collect();
+        let mut body: Vec<AnyElement> =
+            Vec::with_capacity(data_cols.len() * (self.stats_items.len() + 1));
+        for (ix, col) in data_cols.iter().enumerate() {
+            let name = names[ix].clone();
+            let group_id = format!("editor-result-stats-group-{col}");
+            body.push(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .h_5()
+                    .flex_none()
+                    .text_xs()
+                    .border_b(ui::HAIRLINE)
+                    .border_color(theme.colors.border)
+                    .debug_selector(move || group_id.clone())
+                    .child(div().flex_1().min_w_0().text_ellipsis().child(SharedString::from(name)))
+                    .into_any_element(),
+            );
+            let entries = self.stats_entries_for_column(delegate, *col, Some(region));
+            let copy_all = stats_copy_all_text(&entries);
+            body.extend(
+                entries
+                    .iter()
+                    .map(|(item, value)| self.stat_row(*item, value, copy_all.clone(), cx)),
+            );
+        }
+        let empty_hint = self.stats_items.is_empty().then(|| {
+            div()
+                .px_2()
+                .py_1()
+                .text_xs()
+                .text_color(muted)
+                .child(SharedString::from("没有启用任何统计项：点 ＋ 添加"))
+                .into_any_element()
+        });
+        div()
+            .flex_1()
+            .min_h_0()
+            .v_flex()
+            .debug_selector(|| "editor-result-stats-tab".to_string())
+            // 工具条与单列页同形（＋ / − / Reset / 分隔 / 分组 / 口径），标题给分组口径
+            .child(self.stats_toolbar("选中区", cx))
+            .child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .h_5()
+                    .flex_none()
+                    .border_b(ui::HAIRLINE)
+                    .border_color(theme.colors.border)
+                    .text_xs()
+                    .text_color(muted)
+                    .debug_selector(|| "editor-result-stats-header".to_string())
+                    .child(
+                        div()
+                            .w(rems(ui::RESULT_SIDEBAR_KV_LABEL_WIDTH))
+                            .flex_none()
+                            .child(SharedString::from("函数")),
+                    )
+                    .child(div().flex_1().child(SharedString::from("值")))
+                    .child(div().w(rems(1.25)).flex_none()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .children(empty_hint)
+                    .children(body)
                     .overflow_y_scrollbar(),
             )
             .into_any_element()
@@ -986,16 +1130,67 @@ impl ResultPanel {
                 })
                 .into_any_element()
         };
+        // 【D12/D13】「−」（`fillToolBar` 第二项 `RemoveFunctionAction`，`:418-436`）：
+        // 删的是**选中的统计行**；没有选中时禁用（`:424-426` 的 `isEnabled` 只判
+        // `getSelectionCount() > 0`，不要求多选）
+        let selected_item = self.stats_selected;
+        let remove = {
+            let queue = self.queue.clone();
+            Button::new("editor-result-stat-remove-tool")
+                .ghost()
+                .xsmall()
+                .debug_selector(|| "editor-result-stat-remove-tool".to_string())
+                .icon(IconName::Minus)
+                .disabled(selected_item.is_none())
+                .tooltip("移除选中的统计项（先点一下统计行选中它）")
+                .on_click(move |_, _window, app| {
+                    if let Some(item) = selected_item {
+                        queue.request(ResultRequest::RemoveStatsItem(item), app);
+                    }
+                })
+                .into_any_element()
+        };
+        // 【D11/D13】「分组」（`GroupByColumnsAction`，`:333-346`：CHECK 项，切换后只重算
+        // 展示、不动函数集；开启时按选区覆盖的列分组，`:231-249`）
+        let group_by = self.stats_group_by;
+        let group = {
+            let queue = self.queue.clone();
+            Button::new("editor-result-stat-group")
+                .ghost()
+                .xsmall()
+                .debug_selector(|| "editor-result-stat-group".to_string())
+                .label("分组")
+                .selected(group_by)
+                .toggled(group_by)
+                .tooltip("按选区覆盖的列分组聚合（对齐 DBeaver Calc 的 Group by columns）")
+                .on_click(move |_, _window, app| {
+                    queue.request(ResultRequest::SetStatsGroupBy(!group_by), app);
+                })
+                .into_any_element()
+        };
         self.panel_toolbar(
             "editor-result-stats-toolbar",
             SharedString::from(format!("「{column_name}」统计")),
-            vec![add, reset, mode_button],
+            // 顺序严格照 `fillToolBar`（`:322-331`）：＋ / − / Reset / 分隔 / 分组 / 口径
+            vec![
+                add,
+                remove,
+                reset,
+                Separator::vertical().into_any_element(),
+                group,
+                mode_button,
+            ],
             page_needs_separator(RightTab::Stats),
             cx,
         )
     }
 
-    /// 【R2】计算页一行：函数名（左）+ 值（右）+ 行尾停用钮（替代 DBeaver 的「−」）。
+    /// 【R2】计算页一行：函数名（左）+ 值（右）+ 行尾停用钮。
+    ///
+    /// 【D12】行点击 = 选中该行（工具条「−」的作用对象）。DBeaver 那侧是
+    /// `aggregateTable` 的普通 Tree 选中（`RemoveFunctionAction:424-426` 只判
+    /// `getSelectionCount() > 0`），本仓平铺行用一份单选态表达；行尾 × 与工具条「−」
+    /// 都走 `RemoveStatsItem`，两者并存（× 是单手直达、− 对齐 DBeaver 工具条形态）。
     ///
     /// 【R7 对齐右键菜单】行上挂 `AggregateColumnsPanel` 的右键菜单（`:106-116`）：
     /// 复制值 / 复制全部 / 分隔 / 与工具条同款动作（本仓只摆「恢复默认统计项」，
@@ -1017,6 +1212,10 @@ impl ResultPanel {
         let menu_queue = self.queue.clone();
         // 菜单条目按「此刻启用的集合 + 当前口径」定稿（与 `stat_menu_entries` 纯函数同一口径）
         let menu_entries = stat_menu_entries(&self.stats_items, self.stats_mode);
+        // 【D12】行点击 = 选中该行（工具条「−」的作用对象；DBeaver 是 Tree 的
+        // `getSelection()`，本仓平铺行用这一份单选态表达，`:424-426`）
+        let select_queue = self.queue.clone();
+        let is_selected = self.stats_selected == Some(item);
         div()
             .id(("editor-result-stat-menu", item as usize))
             .h_flex()
@@ -1026,6 +1225,10 @@ impl ResultPanel {
             .h_5()
             .text_xs()
             .debug_selector(move || row_id.clone())
+            .when(is_selected, |row| row.bg(cx.theme().tokens.table_active))
+            .on_click(move |_, _window, app| {
+                select_queue.request(ResultRequest::SelectStatsItem(Some(item)), app);
+            })
             .context_menu(move |mut menu: PopupMenu, _window, _cx| {
                 for entry in menu_entries.iter() {
                     if matches!(entry, StatMenuEntry::Separator) {
