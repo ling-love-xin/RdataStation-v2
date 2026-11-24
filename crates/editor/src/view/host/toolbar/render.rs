@@ -11,6 +11,7 @@ use crate::model::EditorMode;
 use crate::ui;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::toolbar::Toolbar;
+use workbench_shell::panel_toolbar::PanelToolbar;
 
 impl EditorHostPanel {
     /// 工具栏（原型 §2.2 + T2c-5 分组自定义）：按其分层只放**今天真有动作**的控件
@@ -30,18 +31,17 @@ impl EditorHostPanel {
         mode: EditorMode,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let border = cx.theme().colors.border;
+    ) -> AnyElement {
         let entity = cx.entity();
         // 模式指示器的 dropdown_menu 闭包会 move 走 `entity`，工具栏按钮也要用宿主：
         // 先克隆一份，避免「move 之后再 borrow」（E0382）
         let toolbar_entity = entity.clone();
         let current_channel = self.channel();
 
-        // 【组件统一化】外壳迁移到 gpui-kit Toolbar（获得：左右方向键焦点漫游 +
-        // 档位统一）。Small 档是 min_h_8(32px)，editor 按原型 2.25rem 定高覆盖；
-        // Small 档 p_1=4px 内距，恢复原型水平 8px（px_2 覆盖）。底部边框随外层
-        // 滚动容器走（2026-10-28），避免横向滚动时边框跟着内容一起滚。
+        // 【组件统一化】行高 / 左缘 / 下边界线由外层 `PanelToolbar` 托管（2026-11-25）：
+        // 内层 gpui-kit Toolbar 只负责排布（Small 档 min_h_8 = 32px，容器 36 内居中；
+        // Small 档 p_1 = 4px 内距 → 左缘 8 + 4 = 12，与其它面板同一条线）。
+        // 原先 `.h(rems(EDITOR_TOOLBAR_HEIGHT))` / `.px_2()` 的覆盖已随容器交接删掉。
         //
         // 埋点只在**首次**渲染打一条：render 每次重绘都会进来，光标闪烁每 0.5s 就要出帧，
         // 每帧一条 info 会把日志刷满（`Once` 不占运行时成本，也不再随重绘重复写盘）。
@@ -51,8 +51,6 @@ impl EditorHostPanel {
         });
         let mut toolbar = Toolbar::new("editor-toolbar")
             .small()
-            .h(rems(ui::EDITOR_TOOLBAR_HEIGHT))
-            .px_2()
             .content(
                 Button::new("editor-mode-indicator")
                     .ghost()
@@ -209,14 +207,13 @@ impl EditorHostPanel {
         let theme = cx.theme();
         let arrow_bg = theme.colors.sidebar;
 
-        let mut bar = div()
+        // 滚动视口 + 悬浮箭头放进一个 `relative` 弹性容器，再整体交给 `PanelToolbar`
+        // 的左槽：高度 / 左缘 / 下边界线都由容器画，这里只管横向滚动与箭头定位。
+        let mut viewport_box = div()
             .relative()
-            .h_flex()
-            .w_full()
+            .h_full()
+            .flex_1()
             .min_w_0()
-            .h(rems(ui::EDITOR_TOOLBAR_HEIGHT))
-            .border_b(ui::HAIRLINE)
-            .border_color(border)
             .child(
                 div()
                     .id("editor-toolbar-viewport")
@@ -229,7 +226,7 @@ impl EditorHostPanel {
             );
         if show_left {
             let handle = scroll_handle.clone();
-            bar = bar.child(
+            viewport_box = viewport_box.child(
                 div()
                     .absolute()
                     .left(Pixels::from(0.))
@@ -258,7 +255,7 @@ impl EditorHostPanel {
         }
         if show_right {
             let handle = scroll_handle.clone();
-            bar = bar.child(
+            viewport_box = viewport_box.child(
                 div()
                     .absolute()
                     .right(Pixels::from(0.))
@@ -285,7 +282,12 @@ impl EditorHostPanel {
                     ),
             );
         }
-        bar
+
+        PanelToolbar::new("editor-toolbar-row")
+            // 与全仓面板头同档（`EDITOR_TOOLBAR_HEIGHT` 目前就是 2.25 = 36）。
+            .height(ui::EDITOR_TOOLBAR_HEIGHT)
+            .left(viewport_box)
+            .into_any_element()
     }
 
     /// 【2026-10-27】用户只读开关（工具栏 roLock）：`toggled` = 只读

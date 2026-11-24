@@ -49,7 +49,7 @@ use gpui_kit::component::empty::{
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::toolbar::{Toolbar, ToolbarGroup};
+use gpui_kit::component::toolbar::ToolbarGroup;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme, IconName, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -69,6 +69,7 @@ use crate::jobs as scratchpad_jobs;
 
 use crate::ScratchpadWatcher;
 
+use workbench_shell::panel_toolbar::PanelToolbar;
 use workbench_shell::tree;
 use workbench_shell::ui;
 

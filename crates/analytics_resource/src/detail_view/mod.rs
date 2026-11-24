@@ -16,6 +16,7 @@ pub(crate) use gpui_kit::component::scroll::ScrollableElement as _;
 pub(crate) use gpui_kit::component::tag::Tag;
 pub(crate) use gpui_kit::component::{ActiveTheme, Icon, Sizable as _, Size};
 pub(crate) use gpui_kit::*;
+pub(crate) use workbench_shell::panel_toolbar::PanelToolbar;
 
 pub(crate) use crate::model::{
     ArchiveKind, ArchiveStatus, DeleteTarget, PayloadMode, PromotedFrom, RowScope, can_checkout,

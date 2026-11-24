@@ -18,6 +18,7 @@ pub(crate) use gpui_kit::component::skeleton::Skeleton;
 pub(crate) use gpui_kit::component::{ActiveTheme, Icon};
 pub(crate) use gpui_kit::prelude::FluentBuilder as _;
 pub(crate) use gpui_kit::*;
+pub(crate) use workbench_shell::panel_toolbar::PanelToolbar;
 
 pub(crate) use crate::commands;
 pub(crate) use crate::filter::{self, SortField};

@@ -17,8 +17,7 @@ impl super::InsightWorkspacePanel {
         entity: &Entity<Self>,
         theme: &Theme,
         cx: &Context<Self>,
-    ) -> Div {
-        let colors = theme.colors;
+    ) -> impl IntoElement {
         // 菜单构造需要 opened 快照（闭包 'static，不能借面板状态）：只带 key + 标题
         let candidates: Vec<(String, String)> = self
             .opened
@@ -48,11 +47,11 @@ impl super::InsightWorkspacePanel {
             .target()
             .map(|t| SharedString::from(t.title()));
 
-        // 面板头命令按钮行（刷新/取样/导出）：2026-10-28 迁移到 `toolbar::Toolbar`
-        // （容器层反例修复）——Toolbar 统一 size 托管 + roving 方向键焦点 + toolbar a11y；
-        // 按钮保留 ghost 语义（`prepare_for_toolbar` 强制 ghost+compact，与面板头一致）。
+        // 面板头命令按钮行（刷新/取样/导出）：尺寸统一 `.xsmall()`（36 行里 24 高档），
+        // 行为 ghost 语义（与面板头其它按钮一致）。行容器由 `PanelToolbar` 提供。
         let refresh_btn = Button::new("insight-ws-refresh")
             .ghost()
+            .xsmall()
             .icon(IconName::RotateCw)
             .label(tr("刷新"))
             .tooltip(tr("重算当前画像"))
@@ -76,6 +75,7 @@ impl super::InsightWorkspacePanel {
         );
         let scope_btn = Button::new("insight-ws-scope-toggle")
             .ghost()
+            .xsmall()
             .icon(if is_full {
                 CatalogIcon::Shrink
             } else {
@@ -108,6 +108,7 @@ impl super::InsightWorkspacePanel {
             });
         let export_btn = Button::new("insight-ws-export")
             .ghost()
+            .xsmall()
             .icon(IconName::FileText)
             .label(tr("导出"))
             .tooltip(tr("导出画像报告（Markdown）"))
@@ -140,25 +141,17 @@ impl super::InsightWorkspacePanel {
                     }
                 }
             });
-        // 面板头容器：背景/边框/高度外层自画；命令按钮行由 Toolbar 渲染
-        // （统一 size 托管 + roving 方向键焦点 + toolbar a11y 语义）。
-        div()
-            .flex_none()
-            .h(rems(ui::PANEL_HEADER_HEIGHT))
-            .px(rems(ui::PANEL_PADDING))
-            .flex()
-            .items_center()
-            .border_b_1()
-            .border_color(colors.border)
-            .child(Toolbar::new("insight-ws-toolbar").xsmall().children([
-                refresh_btn,
-                scope_btn,
-                export_btn,
-            ]))
-            .child(divider(theme))
+        // 统一容器（`PanelToolbar`）：36 高 / 左缘 12 / 1px 下边界。
+        // 左槽 = 刷新 / 取样↔全量 / 导出 + 分隔线 + 目标切换；右槽 = 内存占用读数。
+        // 按钮各自 `.xsmall()`：外层 `Toolbar` 只做行容器（`p_1` + `gap_1`），槽内元素不托管 size。
+        let mut toolbar = PanelToolbar::new("insight-ws-toolbar")
+            .left(refresh_btn)
+            .left(scope_btn)
+            .left(export_btn)
+            .left(divider(theme))
             // 目标切换下拉：已进入洞察的目标 → 切换画像；末项 → 打开多表对比。
             // 菜单闭包要 'static：先克隆实体句柄，不借用参数引用
-            .child({
+            .left({
                 let entity_owned = entity.clone();
                 Button::new("insight-ws-target-switch")
                     .ghost()
@@ -205,12 +198,12 @@ impl super::InsightWorkspacePanel {
                             }),
                         )
                     })
-            })
-            .child(div().flex_1().min_w_0())
+            });
+        if self.view.read(cx).status_usage {
             // 分析引擎内存占用（设置「显示内存占用」关闭时整段不渲染）
-            .when(self.view.read(cx).status_usage, |bar| {
-                bar.child(self.render_memory_usage(cx, theme))
-            })
+            toolbar = toolbar.right(self.render_memory_usage(cx, theme));
+        }
+        toolbar
     }
 
     /// 内存占用只读文本：「内存 X MB / 上限 Y MB · 临时表 N」。

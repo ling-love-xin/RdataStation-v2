@@ -14,11 +14,13 @@
 
 // ===== 与外壳共用的结构尺寸（重导出；单一来源 = `workbench_shell::ui`） =====
 //
-// 为什么重导出而不是再登记一份：面板头 / 行高 / 图标档 / 固定描边必须与 M4 导航、M5 草稿箱一致，
+// 为什么重导出而不是再登记一份：行高 / 图标档 / 固定描边必须与 M4 导航、M5 草稿箱一致，
 // 镜像两份会在任一侧调整时静默错位（连接对话框、洞察、设置都已在用外壳那一份）。
+//
+// `PANEL_HEADER_HEIGHT` 不再重导出（2026-11-25）：面板头高度已由
+// `workbench_shell::panel_toolbar::PanelToolbar` 托管，本 crate 的头部/工具条都不再直接取该值。
 pub use workbench_shell::ui::{
-    CONTROL_HEIGHT_SM, HAIRLINE, NAV_GROUP_BAR_WIDTH as GROUP_BAR_WIDTH,
-    PANEL_HEADER_HEIGHT, ROW_HEIGHT,
+    CONTROL_HEIGHT_SM, HAIRLINE, NAV_GROUP_BAR_WIDTH as GROUP_BAR_WIDTH, ROW_HEIGHT,
 };
 
 // ===== 本 crate 自有尺寸 =====

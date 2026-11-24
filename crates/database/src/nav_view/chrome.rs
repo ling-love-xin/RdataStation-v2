@@ -11,7 +11,9 @@ use crate::nav::capability::NavOp;
 use crate::nav::family_profile;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::separator::Separator;
-use gpui_kit::component::toolbar::Toolbar;
+
+// 面板顶部工具栏的统一容器（高度 / 内距 / 分隔线 / 左右槽都归它）。
+use workbench_shell::panel_toolbar::PanelToolbar;
 
 /// 面板头连接汇总面板的单行快照（需求①）：`id` 供行尾按钮定位，`connected` 用于
 /// 排序（在线排前）与按钮文案（已连「断开」/ 未连「连接」）。
@@ -242,40 +244,31 @@ impl NavView {
         let has_unconnected = connected_count < all_conns.len();
         let has_connected = connected_count > 0;
 
-        let header = div()
-            .w_full()
-            .h(rems(ui::PANEL_HEADER_HEIGHT))
-            .border_b(ui::HAIRLINE)
-            .border_color(border)
-            .child(
-                // 面板头按钮行迁移到标准 `Toolbar`：自带 roving 方向键焦点 + toolbar a11y
-                // 语义 + 统一 size 托管；标题/徽标/弹簧/分隔线走 `.content()` 槽，按钮走
-                // `.child()`（sized 控件）。外层 div 只保留高度与底边框，背景由 Toolbar
-                // 透明穿透到面板容器。
-                Toolbar::new("nav-header")
-                    .h_full()
+        // 统一容器（`PanelToolbar`）：36 高 / 左缘 12 / 1px 下边界 / 左槽徽标 + 右槽动作。
+        // 动作次序与原型一致：预热进度 → ＋新建源 → 新建分组 → ⟳ → 断开 → 全部连接/断开
+        // → 分组折叠 → 提交 N → ⋯。弹簧由左槽的 `flex_1` 提供，这里不再插 `div().flex_1()`。
+        let header = PanelToolbar::new("nav-header")
                     // 面板头连接状态徽标：移到最左侧（去掉"数据源"标题）
-                    .when_some(self.render_nav_conn_badge(cx), |t, badge| t.content(badge))
-                    .content(div().flex_1())
+                    .when_some(self.render_nav_conn_badge(cx), |t, badge| t.left(badge))
                     // C1 预热进度（后台任务进行中时显示，可取消）。
                     .when(nav_jobs::warm_active(), |t| {
                         let (done, total) = nav_jobs::warm_progress();
-                        t.content(
+                        t.right(
                             div()
                                 .text_xs()
                                 .text_color(muted)
                                 .child(format!("预热 {done}/{total}")),
                         )
-                        .child(
+                        .right(
                             Button::new("nav-warm-cancel")
                                 .ghost()
                                 .small()
                                 .label(tr("取消"))
                                 .on_click(|_, _, _| nav_jobs::cancel_warm()),
                         )
-                        .content(Separator::vertical())
+                        .right(Separator::vertical())
                     })
-                    .child(
+                    .right(
                 // 新建数据源（＋）：与编辑区「新建连接」同一条对话框入口。
                 Button::new("nav-new-connection")
                     .ghost()
@@ -289,7 +282,7 @@ impl NavView {
                         }
                     }),
             )
-            .child(
+            .right(
                 // 新建分组：项目级自定义分组。
                 // 图标走资产（`folder-plus`）而不是 emoji `🗂＋`：emoji 是全库唯一的字形图标，
                 // 字宽随字体变，与同排的 `IconName` 按钮对不齐。
@@ -322,7 +315,7 @@ impl NavView {
                         }
                     }),
             )
-            .child(
+            .right(
                 // 刷新元数据（⟳）：刷新当前选中连接（设计 §4.2「单连接 = 工具栏 ⟳」，
                 // 「全部」在「⋯」菜单）；未选中连接时禁用。
                 Button::new("nav-refresh")
@@ -344,7 +337,7 @@ impl NavView {
                     }),
             )
             .when(current_connected, |t| {
-                t.child(
+                t.right(
                     // 断开当前连接（设计 §2.1 / 原型 title「断开当前连接」）：仅运行时已连接时
                     // 可用；断开只关运行时连接，元数据缓存保留（可离线浏览 / 重连秒开）。
                     // 仅已连接时才渲染，避免无用图标占位。
@@ -371,7 +364,7 @@ impl NavView {
                         }),
                 )
             })
-            .child(
+            .right(
                 // 全部连接/断开（合并为一个按钮，根据当前状态显示不同图标）
                 // 有未连接的 → 显示「全部连接」
                 // 有已连接的 → 显示「全部断开」
@@ -430,7 +423,7 @@ impl NavView {
             // 分组折叠入口（⇅）已从组头移到面板头工具栏：组头右侧只留批量连接两个按钮，
             // 组名因此能拿到更多宽度。按钮只作用于「点击认领过的当前分组」，语义仍是
             // 「收起 / 展开本组已展开的成员」，不波及其它分组；未认领时禁用。
-            .child(
+            .right(
                 Button::new("nav-fold-active")
                     .ghost()
                     .xsmall()
@@ -475,7 +468,7 @@ impl NavView {
             // 点击走两阶段：Context 内拍快照与文案，App 作用域开汇总确认对话框；OK 回调
             // 触发后台逐条提交执行（同 B6-4 DeleteToStaged 开窗口径）。
             .when(staged_count > 0, |t| {
-                t.content(Separator::vertical()).child(
+                t.right(Separator::vertical()).right(
                     Button::new("nav-commit-staged")
                         .ghost()
                         .small()
@@ -515,7 +508,7 @@ impl NavView {
                         }),
                 )
             })
-            .content(
+            .right(
                 // 更多（⋯）：刷新全部元数据 / 显示开关 / 缓存管理 / 删除当前连接（原型对齐）。
                 // 注意：`.dropdown_menu(...)` 装饰返回 `DropdownMenuPopover<Button>`，不实现
                 // `Sizable`，不能挂 Toolbar.child()；用 `.content()` 槽（只要求 IntoElement）。
@@ -801,7 +794,6 @@ impl NavView {
                             )
                         }
                     }),
-            ),
             );
 
         let chips = div()

@@ -36,10 +36,12 @@ use gpui_kit::component::popover::Popover;
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::toolbar::Toolbar;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, Size, Theme};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+
+// 面板顶部工具栏的统一容器（高度 / 内距 / 分隔线 / 左右槽都归它）。
+use workbench_shell::panel_toolbar::PanelToolbar;
 
 use crate::insight_view::{InsightEvent, InsightView};
 use crate::model::{

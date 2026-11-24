@@ -1516,46 +1516,29 @@ impl ScratchpadView {
             }
         }
         toolbar = toolbar.child(
-            // 外层 div 只画高度与底边框，**不做 h_flex**：Toolbar 在普通（block）布局里
-            // 宽度自动 = 父行宽，中间的 `div().flex_1()` 弹簧才有空间展开——左右两组才能
-            // 分居两端（⋯ 菜单的「放在左/右」随之可见）。此前把 Toolbar 包进 h_flex 行：
-            // flex 子元素按内容收缩不铺满，弹簧恒 0 宽，左右两组永远贴在一起、面板拉伸
-            // 也不重排（2026-11-24 用户目视反馈①）。与数据导航面板头同一写法（nav_view
-            // chrome.rs 的 `Toolbar::new("nav-header").h_full()`）。
-            div()
-                .w_full()
-                .h(rems(ui::PANEL_HEADER_HEIGHT))
-                .border_b(ui::HAIRLINE)
-                .border_color(theme.colors.border)
-                .child(
-                    // Toolbar 容器：自带 roving 方向键焦点 + toolbar a11y 语义 + 统一 size；
-                    // 背景/边框/高度由外层画（0.8.1 vendor toolbar.rs 文档同口径）。
-                    Toolbar::new("sp-toolbar")
-                        .h_full()
-                        .content(
-                            div()
-                                .h_flex()
-                                .items_center()
-                                .gap_1()
-                                .debug_selector(|| "sp-toolbar-left".into())
-                                .child(
-                                    ToolbarGroup::new("sp-toolbar-left-group").children(left_btns),
-                                ),
-                        )
-                        .content(div().flex_1())
-                        .content(
-                            div()
-                                .h_flex()
-                                .items_center()
-                                .gap_1()
-                                .debug_selector(|| "sp-toolbar-right".into())
-                                .child(
-                                    ToolbarGroup::new("sp-toolbar-right-group")
-                                        .children(right_btns),
-                                ),
-                        )
-                        .content(more_btn),
-                ),
+            // 统一容器（`PanelToolbar`）：36 高 / 左缘 12 / 1px 下边界；
+            // 左槽 = 配置在「左」的按钮组，右槽 = 右组 + ⋯ 菜单。中间弹簧由左槽的
+            // `flex_1` 提供——两组才能分居两端（⋯ 菜单的「放在左/右」随之可见）。
+            // 此前把 Toolbar 包进 h_flex 行：flex 子元素按内容收缩不铺满，弹簧恒 0 宽，
+            // 左右两组永远贴在一起（2026-11-24 用户目视反馈①）。
+            PanelToolbar::new("sp-toolbar")
+                .left(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_1()
+                        .debug_selector(|| "sp-toolbar-left".into())
+                        .child(ToolbarGroup::new("sp-toolbar-left-group").children(left_btns)),
+                )
+                .right(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_1()
+                        .debug_selector(|| "sp-toolbar-right".into())
+                        .child(ToolbarGroup::new("sp-toolbar-right-group").children(right_btns)),
+                )
+                .right(more_btn),
         );
 
         // ── 冲突条（C-4）：同一份草稿在编辑器里有未保存修改，磁盘上又被外部改了 ──

@@ -61,29 +61,22 @@ impl super::InsightWorkspacePanel {
             .v_flex()
             .size_full()
             .child(
-                div()
-                    .flex_none()
-                    .h(rems(ui::PANEL_HEADER_HEIGHT))
-                    .px(rems(ui::PANEL_PADDING))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .border_b_1()
-                    .border_color(colors.border)
-                    .child(
+                PanelToolbar::new("insight-ws-compare-run-bar")
+                    // 左槽：标题 + 已选表数
+                    .left(
                         div()
                             .text_sm()
                             .font_weight(FontWeight::MEDIUM)
                             .child(tr("多表洞察对比")),
                     )
-                    .child(
+                    .left(
                         div()
                             .text_xs()
                             .text_color(colors.muted_foreground)
                             .child(format!("已选择 {} 张表", self.compare_selected.len())),
                     )
-                    .child(div().flex_1())
-                    .child(
+                    // 右槽：开始对比
+                    .right(
                         Button::new("insight-ws-compare-run")
                             .primary()
                             .small()
@@ -230,23 +223,14 @@ impl super::InsightWorkspacePanel {
             .v_flex()
             .size_full()
             .child(
-                div()
-                    .flex_none()
-                    .h(rems(ui::PANEL_HEADER_HEIGHT))
-                    .px(rems(ui::PANEL_PADDING))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .border_b_1()
-                    .border_color(colors.border)
-                    .child(
+                PanelToolbar::new("insight-ws-compare-progress-bar")
+                    .left(
                         div()
                             .text_sm()
                             .font_weight(FontWeight::MEDIUM)
                             .child(tr("多表洞察对比")),
                     )
-                    .child(div().flex_1())
-                    .child(
+                    .right(
                         Progress::new("insight-ws-compare-progress")
                             .loading(true)
                             .with_size(Size::Small)
@@ -327,29 +311,20 @@ impl super::InsightWorkspacePanel {
             .v_flex()
             .size_full()
             .child(
-                div()
-                    .flex_none()
-                    .h(rems(ui::PANEL_HEADER_HEIGHT))
-                    .px(rems(ui::PANEL_PADDING))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .border_b_1()
-                    .border_color(colors.border)
-                    .child(
+                PanelToolbar::new("insight-ws-compare-again-bar")
+                    .left(
                         div()
                             .text_sm()
                             .font_weight(FontWeight::MEDIUM)
                             .child(tr("多表洞察对比")),
                     )
-                    .child(
+                    .left(
                         div()
                             .text_xs()
                             .text_color(colors.muted_foreground)
                             .child(format!("{} 张表 · 已完成", selected.len())),
                     )
-                    .child(div().flex_1())
-                    .child(
+                    .right(
                         Button::new("insight-ws-compare-again")
                             .ghost()
                             .small()

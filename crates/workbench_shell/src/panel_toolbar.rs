@@ -96,6 +96,19 @@ impl PanelToolbar {
     pub fn is_empty(&self) -> bool {
         self.left.is_empty() && self.right.is_empty() && self.secondary.is_empty()
     }
+
+    /// 条件构造器：`cond` 为真时才追加（避免调用方为了一个条件拆成 `let mut … ; if …`）。
+    pub fn when(self, cond: bool, f: impl FnOnce(Self) -> Self) -> Self {
+        if cond { f(self) } else { self }
+    }
+
+    /// `Option` 条件构造器：`Some(v)` 时把 `v` 交给 `f`（例如连接状态徽标可能不存在）。
+    pub fn when_some<T>(self, opt: Option<T>, f: impl FnOnce(Self, T) -> Self) -> Self {
+        match opt {
+            Some(v) => f(self, v),
+            None => self,
+        }
+    }
 }
 
 impl RenderOnce for PanelToolbar {
@@ -112,6 +125,9 @@ impl RenderOnce for PanelToolbar {
                 .h_flex()
                 .items_center()
                 .flex_none()
+                // 行必须铺满面板宽：否则左槽的 `flex_1` 拿不到剩余空间，
+                // 右槽会紧贴左槽（草稿箱 `toolbar_left_and_right_groups_split_at_panel_edges` 抓的就是这个）。
+                .w_full()
                 .h(rems(self.height))
                 .px(rems(self.padding))
                 .debug_selector(move || id.to_string());
@@ -143,7 +159,10 @@ impl RenderOnce for PanelToolbar {
                         .children(self.right),
                 );
             }
-            root = root.child(row.child(bar));
+            // 内层 `toolbar::Toolbar` 自身 `flex_shrink_0`、宽度按内容算（vendor/gpui-component
+            // src/toolbar.rs:251），必须在这里补 `w_full` 撑满行宽；否则左槽的 `flex_1`
+            // 没有可分配的剩余空间，右槽贴不到右端。
+            root = root.child(row.child(bar.w_full()));
         }
 
         if !self.secondary.is_empty() {

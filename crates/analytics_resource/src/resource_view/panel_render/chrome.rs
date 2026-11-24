@@ -4,27 +4,19 @@ use shared::i18n::tr;
 use super::*;
 
 impl ResourcesPanel {
-    pub(super) fn render_header(&self, cx: &mut Context<Self>) -> Div {
-        let (border, muted, foreground) = {
+    pub(super) fn render_header(&self, cx: &mut Context<Self>) -> AnyElement {
+        let (_, muted, foreground) = {
             let colors = cx.theme().colors;
             (colors.border, colors.muted_foreground, colors.foreground)
         };
         let read_only = self.snapshot.read_only;
         let host = self.host.clone();
 
-        div()
-            .h(rems(ui::PANEL_HEADER_HEIGHT))
-            .flex_none()
-            .h_flex()
-            .justify_between()
-            .gap_2()
-            .px_2()
-            // 固定描边：不随字号缩放（`ui::HAIRLINE` = 1px，与 editor / settings 同口径）。
-            .border_b(ui::HAIRLINE)
-            .border_color(border)
-            .child(
-                // 标题 = 前缀图标 + 文字（原型 §2.1）：图标形状与活动栏该面板的图标一致，
-                // 一眼就对得上"这里是资产库"。
+        // 统一容器（`PanelToolbar`）：36 高 / 左缘 12 / 1px 下边界 / 左槽标题 + 右槽动作。
+        PanelToolbar::new("archive-header")
+            // 左槽：标题 = 前缀图标 + 文字（原型 §2.1）。图标形状与活动栏该面板的图标一致，
+            // 一眼就对得上"这里是资产库"。
+            .left(
                 div()
                     .h_flex()
                     .items_center()
@@ -47,73 +39,64 @@ impl ResourcesPanel {
                             .child(tr("资产库")),
                     ),
             )
-            .child(
-                div()
-                    .flex_none()
-                    .h_flex()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        // 原型 §2.1：`＋ ▾` 主操作，两项——**存档的本体必须来自某处**，
-                        // 所以菜单里是两个来源，而不是"新建存档"。
-                        Button::new("archive-add")
-                            .ghost()
-                            .label("＋ ▾")
-                            .disabled(read_only)
-                            .dropdown_menu({
-                                let host = host.clone();
-                                move |menu, _window, _cx| {
-                                    let drafts_host = host.clone();
-                                    let file_host = host.clone();
-                                    menu.item(PopupMenuItem::new(tr("从草稿箱归档…")).on_click(
-                                        move |_, window, cx| {
-                                            drafts_host.request_archive_from_drafts(window, cx)
-                                        },
-                                    ))
-                                    .item(
-                                        PopupMenuItem::new(tr("从本地文件归档…")).on_click(
-                                            move |_, window, cx| {
-                                                file_host.request_archive_from_file(window, cx)
-                                            },
-                                        ),
-                                    )
-                                }
-                            }),
-                    )
-                    .child(
-                        // 原型 §2.1：`⋯` 更多四项。写操作（重建索引）不单独置灰：
-                        // 菜单里三项与只读无关，置灰整个 `⋯` 反而把刷新也锁上了。
-                        Button::new("archive-more")
-                            .ghost()
-                            .label("⋯")
-                            .debug_selector(|| "archive-more".to_string())
-                            .dropdown_menu({
-                                let host = host.clone();
-                                move |menu, _window, _cx| {
-                                    let mut menu = menu;
-                                    for action in HeaderMenuAction::ALL {
-                                        let target = host.clone();
-                                        menu =
-                                            menu.item(PopupMenuItem::new(action.label()).on_click(
-                                                move |_, window, cx| {
-                                                    dispatch_header_action(
-                                                        &target, action, window, cx,
-                                                    )
-                                                },
-                                            ));
-                                    }
-                                    menu
-                                }
-                            }),
-                    ),
-            )
+            // 右槽：`＋ ▾` 主操作 → `⋯` 更多
+            .right({
+                let host = host.clone();
+                // 原型 §2.1：`＋ ▾` 主操作，两项——**存档的本体必须来自某处**，
+                // 所以菜单里是两个来源，而不是"新建存档"。
+                Button::new("archive-add")
+                    .ghost()
+                    .label("＋ ▾")
+                    .disabled(read_only)
+                    .dropdown_menu({
+                        move |menu, _window, _cx| {
+                            let drafts_host = host.clone();
+                            let file_host = host.clone();
+                            menu.item(PopupMenuItem::new(tr("从草稿箱归档…")).on_click(
+                                move |_, window, cx| {
+                                    drafts_host.request_archive_from_drafts(window, cx)
+                                },
+                            ))
+                            .item(
+                                PopupMenuItem::new(tr("从本地文件归档…")).on_click(
+                                    move |_, window, cx| {
+                                        file_host.request_archive_from_file(window, cx)
+                                    },
+                                ),
+                            )
+                        }
+                    })
+            })
+            .right({
+                let host = host.clone();
+                // 原型 §2.1：`⋯` 更多四项。写操作（重建索引）不单独置灰：
+                // 菜单里三项与只读无关，置灰整个 `⋯` 反而把刷新也锁上了。
+                Button::new("archive-more")
+                    .ghost()
+                    .label("⋯")
+                    .debug_selector(|| "archive-more".to_string())
+                    .dropdown_menu({
+                        move |menu, _window, _cx| {
+                            let mut menu = menu;
+                            for action in HeaderMenuAction::ALL {
+                                let target = host.clone();
+                                menu = menu.item(PopupMenuItem::new(action.label()).on_click(
+                                    move |_, window, cx| {
+                                        dispatch_header_action(&target, action, window, cx)
+                                    },
+                                ));
+                            }
+                            menu
+                        }
+                    })
+            })
+            .into_any_element()
     }
     /// 工具栏（高 2rem）：搜索框 + 筛选 + 排序（原型 §2.2）。
     ///
     /// 空库时也照常渲染：工具栏是面板版式的一部分，不能随"有没有存档"上下跳。
     /// 条件在渲染时快照一份给菜单（菜单开启时读一次，之后用 `checked` 表达状态）。
-    pub(super) fn render_toolbar(&self, cx: &mut Context<Self>) -> Div {
-        let border = cx.theme().colors.border;
+    pub(super) fn render_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
         let panel = cx.entity();
         let kinds = self.filter.kinds.clone();
         let tags = self.filter.tags.clone();
@@ -244,18 +227,12 @@ impl ResourcesPanel {
                 }
             });
 
-        div()
-            .flex_none()
-            .h(rems(ui::TOOLBAR_HEIGHT))
-            .h_flex()
-            // 工具条 32px、里面的控件 26px：不居中就是顶着上沿，下边空 6px
-            .items_center()
-            .gap_1()
-            .px_1()
-            .border_b(ui::HAIRLINE)
-            .border_color(border)
-            .child(
-                // 搜索框占满除两个按钮之外的宽度（`min_w_0`：窄面板下允许被压缩）。
+        // 统一容器（`PanelToolbar`），高度取 `TOOLBAR_HEIGHT`（32）——这是面板内
+        // **第二行**（头行 36 已在 `render_header`），不跟着头行走 36。
+        PanelToolbar::new("archive-toolbar")
+            .height(ui::TOOLBAR_HEIGHT)
+            // 左槽：搜索框占满除三个按钮之外的宽度（`min_w_0`：窄面板下允许被压缩）。
+            .left(
                 div()
                     .flex_1()
                     .min_w_0()
@@ -267,8 +244,10 @@ impl ResourcesPanel {
                         )
                     }),
             )
-            .child(instance_button)
-            .child(filter_button)
-            .child(sort_button)
+            // 右槽：实例维度 → 筛选 → 排序
+            .right(instance_button)
+            .right(filter_button)
+            .right(sort_button)
+            .into_any_element()
     }
 }

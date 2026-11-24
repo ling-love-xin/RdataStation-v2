@@ -18,114 +18,101 @@
 use shared::i18n::tr;
 use gpui_kit::base::{Disableable as _, StyledExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::toolbar::Toolbar;
 use gpui_kit::component::{Icon, IconName, Theme};
 use gpui_kit::*;
+
+// 面板顶部工具栏的统一容器（高度 / 内距 / 分隔线 / 左右槽都归它）。
+use workbench_shell::panel_toolbar::PanelToolbar;
 
 use crate::InsightTarget;
 use crate::insight_view::{InsightEvent, InsightView};
 use crate::ui;
 
 impl InsightView {
-    pub(crate) fn render_header(&self, entity: &Entity<Self>, theme: &Theme) -> Div {
+    pub(crate) fn render_header(&self, entity: &Entity<Self>, theme: &Theme) -> impl IntoElement {
         let colors = theme.colors;
-        div()
-            .flex_none()
-            .h(rems(ui::PANEL_HEADER_HEIGHT))
-            .px(rems(ui::PANEL_PADDING))
-            .flex()
-            .items_center()
-            .gap_2()
-            .border_b_1()
-            .border_color(colors.border)
-            // 左：面板标题（dock-head 语义：标题是面板身份，不进 Toolbar——
-            // Toolbar 是按钮行容器，不承担文字标题）
-            .child(
+        // 统一容器（`PanelToolbar`）：36 高 / 左缘 12 / 1px 下边界 / 左槽标题 + 右槽动作，
+        // 与数据对象 / Mock / 插件管理同一条度量。
+        PanelToolbar::new("insight-header")
+            // 左：面板标题（标题是面板身份，不进按钮组）
+            .left(
                 div()
                     .flex_none()
                     .text_xs()
                     .text_color(colors.muted_foreground)
                     .child(tr("洞察")),
             )
-            .child(div().flex_1())
-            // 右：操作按钮（对齐 EDA 原型 right-toolbar）。顺序 = 规则管理 →
-            // 重算画像 → 全量统计 → spacer → ＋新建洞察（最右）。
+            // 右：规则管理 → 重算画像 → 全量统计 → ＋新建洞察。
             // 「刷新」按钮原型有、真机不加：洞察表集合是宿主推送的会话快照
             // （set_insight_set），无本地缓存需要手动刷新，加了就是死按钮。
-            .child(
-                Toolbar::new("insight-header-toolbar")
-                    .child(
-                        Button::new("insight-rules")
-                            .ghost()
-                            .icon(IconName::Settings)
-                            .disabled(!self.project_open)
-                            .tooltip(if self.project_open {
-                                "规则管理"
-                            } else {
-                                "规则管理（需先打开项目）"
-                            })
-                            .on_click({
-                                let rules = self.rules.clone();
-                                move |_, window, app| {
-                                    rules.update(app, |view, cx| view.begin_load(window, cx));
-                                }
-                            }),
-                    )
-                    .child(
-                        Button::new("insight-refresh")
-                            .ghost()
-                            .icon(IconName::RotateCw)
-                            .tooltip(tr("重算画像"))
-                            .on_click({
-                                let entity = entity.clone();
-                                move |_, _, app| {
-                                    entity.update(app, |view, cx| view.reload(cx));
-                                }
-                            }),
-                    )
-                    // ⧉ 全量统计：源表/源列目标才有「取样」概念（其余目标数据已是
-                    // 既定内容，request_full 内部也会忽略）；非源目标置灰并给说明。
-                    .child({
-                        let can_full = matches!(
-                            self.target,
-                            Some(InsightTarget::SourceTable { .. })
-                                | Some(InsightTarget::SourceColumn { .. })
-                        );
-                        Button::new("insight-full")
-                            .ghost()
-                            // component::IconName 只是兼容子集（无 Expand）；
-                            // 全量 Lucide 目录在 gpui_kit::assets::IconName（中间页同款）
-                            .icon(gpui_kit::assets::IconName::Expand)
-                            .disabled(!can_full)
-                            .tooltip(if can_full {
-                                "全量统计（大表全量重算，可能较慢）"
-                            } else {
-                                "全量统计（仅源表 / 源列目标可用）"
-                            })
-                            .on_click({
-                                let entity = entity.clone();
-                                move |_, _, app| {
-                                    entity.update(app, |view, cx| view.request_full(cx));
-                                }
-                            })
+            .right(
+                Button::new("insight-rules")
+                    .ghost()
+                    .icon(IconName::Settings)
+                    .disabled(!self.project_open)
+                    .tooltip(if self.project_open {
+                        "规则管理"
+                    } else {
+                        "规则管理（需先打开项目）"
                     })
-                    // spacer：把「新建洞察」推到工具栏最右（原型 `.tb-btn.spacer`）
-                    .content(div().flex_1())
-                    .child(
-                        Button::new("insight-new")
-                            .ghost()
-                            .icon(IconName::Plus)
-                            .tooltip(tr("新建洞察"))
-                            .on_click({
-                                let entity = entity.clone();
-                                move |_, _, app| {
-                                    entity.update(app, |_view, cx| {
-                                        cx.emit(InsightEvent::NewInsightRequested);
-                                        cx.notify();
-                                    });
-                                }
-                            }),
-                    ),
+                    .on_click({
+                        let rules = self.rules.clone();
+                        move |_, window, app| {
+                            rules.update(app, |view, cx| view.begin_load(window, cx));
+                        }
+                    }),
+            )
+            .right(
+                Button::new("insight-refresh")
+                    .ghost()
+                    .icon(IconName::RotateCw)
+                    .tooltip(tr("重算画像"))
+                    .on_click({
+                        let entity = entity.clone();
+                        move |_, _, app| {
+                            entity.update(app, |view, cx| view.reload(cx));
+                        }
+                    }),
+            )
+            // ⧉ 全量统计：源表/源列目标才有「取样」概念（其余目标数据已是
+            // 既定内容，request_full 内部也会忽略）；非源目标置灰并给说明。
+            .right({
+                let can_full = matches!(
+                    self.target,
+                    Some(InsightTarget::SourceTable { .. }) | Some(InsightTarget::SourceColumn { .. })
+                );
+                Button::new("insight-full")
+                    .ghost()
+                    // component::IconName 只是兼容子集（无 Expand）；
+                    // 全量 Lucide 目录在 gpui_kit::assets::IconName（中间页同款）
+                    .icon(gpui_kit::assets::IconName::Expand)
+                    .disabled(!can_full)
+                    .tooltip(if can_full {
+                        "全量统计（大表全量重算，可能较慢）"
+                    } else {
+                        "全量统计（仅源表 / 源列目标可用）"
+                    })
+                    .on_click({
+                        let entity = entity.clone();
+                        move |_, _, app| {
+                            entity.update(app, |view, cx| view.request_full(cx));
+                        }
+                    })
+            })
+            .right(
+                Button::new("insight-new")
+                    .ghost()
+                    .icon(IconName::Plus)
+                    .tooltip(tr("新建洞察"))
+                    .on_click({
+                        let entity = entity.clone();
+                        move |_, _, app| {
+                            entity.update(app, |_view, cx| {
+                                cx.emit(InsightEvent::NewInsightRequested);
+                                cx.notify();
+                            });
+                        }
+                    }),
             )
     }
 
