@@ -174,10 +174,11 @@ impl DataObjectsTab {
         tab
     }
 
-    /// 删掉清单里的临时对象（进程内存里的临时表；删了要重跑才有）。
+    /// 删掉清单里的临时对象（进程内存里的临时表；删了要重跑 / 重新载入才有）。
     ///
-    /// 范围与「升级为资产」对称（`can_clear` = `result:` 前缀）：Mock / 插件表同段但
-    /// 归各自模块管，不从这里删（删了它们模块的登记就指向空表）。
+    /// 范围由 [`data_objects::can_clear`] 定：结果集（`tmp_q_`）与载入（`tmp_l_`）——
+    /// 前者删了要重跑查询，后者删了要重新从源里载。洞察取样 / Mock 同段但归各自模块管，
+    /// 不从这里删（删了它们模块的登记就指向空表）。
     /// 属于破坏性动作，调用前必须过确认框；这里只管执行与把失败原话留在面板上。
     fn clear_temp_objects(&mut self, cx: &mut Context<Self>) {
         let names: Vec<String> = self
@@ -936,7 +937,7 @@ impl DataObjectsTab {
                                     alert
                                         .confirm()
                                         .title(tr("清理临时对象"))
-                                        .description("将删掉清单里的临时表。它们在进程内存里，删了要重跑才有；想留就先「升级为资产」。确定继续？")
+                                        .description("将删掉清单里的临时表（结果集与载入的副本）。它们在进程内存里，删了要重跑 / 重新载入才有；想留就先「升级为资产」或「归档到分析库」。确定继续？")
                                         .on_ok(move |_window, _cx, cx| {
                                             entity.update(cx, |tab, cx| {
                                                 tab.clear_temp_objects(cx);

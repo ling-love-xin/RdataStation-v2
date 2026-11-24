@@ -1063,11 +1063,15 @@ pub fn can_persist(object: &Object) -> bool {
 
 /// 这一行能不能被「清理临时对象」删掉。
 ///
-/// 与 [`can_persist`] **同一口径**（`result:` 前缀）：面板对临时对象的“进 / 出”两个
-/// 动作必须对称——落库只收结果集，清理就也只能删结果集，谁单独放宽都会留下
-/// “能进不能出”或“能删不该删”的对象。
+/// 口径 = **本面板可弃的会话级对象**：结果集（`result:` → `tmp_q_`）与载入
+/// （`load:` → `tmp_l_`）。两者都是「删了要重跑 / 重新载入才有」的占用，没有留存价值；
+/// 洞察取样（`tmp_i_`）与 mock 产物归各自模块管，从这里删会让它们的登记指向空表。
+///
+/// 与 [`can_persist`] 的关系（2026-11-24 调整）：载入档**只能删、不能升级**
+/// （第 11 条只给 `tmp_q_`），所以「进 / 出对称」不再是两者的等式；仍然守住的是
+/// **不得多删**——清理集合之外的 key 一律不给这颗按钮。
 pub fn can_clear(object: &Object) -> bool {
-    object.key.starts_with("result:")
+    object.key.starts_with("result:") || object.key.starts_with("load:")
 }
 
 /// 落库时给人看的名字：去掉临时前缀（`tmp_q_` / `tmp_i_`），别让表名里再出现一层 `tmp_`。
@@ -1772,16 +1776,21 @@ mod tests {
     /// 「升级为资产」与「清理」必须对称：都只认 `result:`——进 / 出两个动作同一口径，
     /// 谁单独放宽都会留下"能进不能出"或"能删不该删"的对象。
     #[test]
-    fn persist_and_clear_share_the_same_prefix_rule() {
+    fn clear_covers_results_and_loads_but_persist_only_covers_results() {
         let rows = objects(&sample());
+        // 能升级的必然也能清理（不能出现「能进不能出」）
         for object in &rows {
-            assert_eq!(
-                super::can_persist(object),
-                super::can_clear(object) && object.can_analyze(),
-                "{} 进出两个动作的口径要一致",
-                object.key
-            );
+            if super::can_persist(object) {
+                assert!(super::can_clear(object), "{} 能升级就要能清理", object.key);
+            }
         }
+        // 载入档反过来：只能清理、不能升级（第 11 条只给 `tmp_q_`）
+        let loaded = rows
+            .iter()
+            .find(|o| o.key.starts_with("load:"))
+            .expect("样本里要有载入表");
+        assert!(super::can_clear(loaded));
+        assert!(!super::can_persist(loaded));
     }
 
     /// 已加载文件按形态分派：库文件（ATTACH 成 catalog）进「已挂载的源」段、
