@@ -2312,3 +2312,148 @@ worktree 位置 `D:\RdataStation\RDS\_worktrees\d10-5`（`git worktree add --det
 - **教训（留痕）**：诊断编译阻塞时把工作区 HEAD 切到了 feature 分支，事后没有切回 main，
   于是并行线的下一次 `git commit` 直接落在 feature 分支之上（`c6da8c75`）。分支隔离形同虚设，
   只能靠事后 blob 比对确认内容无损。**下次切 feature 分支诊断完必须立刻 `git symbolic-ref HEAD refs/heads/main` 挂回**。
+
+## §37 D10-6：方向键 / Home / End 挪焦点格
+
+（D10 键盘导航第一刀）
+
+### 37.1 DBeaver 取证
+
+入口 `LightGrid.onKeyDown(KeyEvent e)`（`LightGrid.java:3738-3928`），逐段：
+
+- `:3739-3744`：`focusColumn == null` 时先取 `columns[0]` 兜底 —— 所以「还没选过任何格」时按键也有落点，
+  不是什么都不做；
+- `:3746-3752`：`\r` → `SWT.DefaultSelection`（Enter 打开编辑器，本刀未接）；
+- `:3773-3786` →：行不动、列 +1；`index >= size` 时 `newColumnFocus = focusColumn` ——
+  **到头停在原列，不绕回另一端**；
+- `:3788-3801` ←：同上镜像，`index == 0` 时停在首列；
+- `:3803-3809` ↑：列不动、`getPreviousVisibleItem(item)`；
+- `:3811-3821` ↓：`getNextVisibleItem(item)`；`focusItem < 0 && getItemCount() > 0` 时
+  `newSelection = 0`（还没焦点行 → 先落第 0 行）；
+- `:3822-3830` Home：列钉 `columns.getFirst()`；**行端只在 `ctrlPressed || columns.size() == 1`**
+  时才甩到第 0 行；
+- `:3831-3841` End：列钉 `columns.getLast()`；行端条件同上，甩到 `itemCount - 1`；
+- `:3842-3874` PAGE_UP / PAGE_DOWN：靠 `getTopIndex()` / `getBottomIndex()` 的可见行范围翻页；
+- `:3875-3894` `+` / `-` / `=` 展开折叠、空格 `toggleCellValue`（树形行 / 可切换单元格语义）；
+- `:3897-3908`：`newSelection < 0 → return`；否则
+  `updateCellSelection(new GridPos(newColumnFocus, newSelection), e.stateMask, false, false, EventSource.KEYBOARD)`
+  —— `stateMask` 原样交给选区引擎（Shift / Ctrl 的扩展语义与鼠标同一条路）；
+- `:3911-3923`：`!e.shiftPressed` 才回写 `focusColumn` / `focusItem`，随后 `showColumn(col)` + `showItem(item)`
+  —— **每条分支末尾都要把新焦点滚进视口**。
+
+### 37.2 本仓现状（先取证，避免重复造轮子）
+
+| 位置 | 现状 |
+| --- | --- |
+| `vendor/gpui-component/src/table/**` | grep `ArrowUp` / `ArrowDown` / `KeyDownEvent` / `on_key_down` **零命中**：组件完全不处理键盘 |
+| `crates/result_panel/src` | 只有三处 `on_key_down`：改名输入框、侧栏搜索、单元格编辑器 —— 都不在网格本体上 |
+| 选区三件套 | `cell_range` / `selection_counts` / `set_selection_pos` 已具备（§30 / §34 / §35 落地） |
+
+即：方向键按下去**选区一格都不动**。这刀只补「位移 + 投影 + 通知宿主」，不动选区模型。
+
+### 37.3 落点
+
+| 文件 | 改动 |
+| --- | --- |
+| `crates/result_panel/src/grid/selection.rs` | 新增 `GridKeyStep`（`:92-106`）：`Left` / `Right` / `Up` / `Down` / `Home { row_to_start }` / `End { row_to_end }`；行端用**布尔参数**表达 DBeaver 的 `ctrlPressed || columns.size() == 1`，条件由 UI 层算好再传，网格层不读键盘修饰键 |
+| `crates/result_panel/src/grid/delegate.rs` | 新增 `step_focus(step, extend) -> Option<(usize, usize)>`（`:486-520`）：空表 / 无列 / 占位行 / 末列 0 → `None`；起点取 `cell_range.focus`（无矩形时 `(0, 1)`，等价 DBeaver `:3739-3744` 兜底）；`Left` = `cur_col.saturating_sub(1).max(1)`、`Right` = `(cur_col + 1).min(last_col)`、`Up/Down` = 行 ±1 夹在 `0..=rows-1`、Home/End 钉列 + 条件行端；`had_range && 同格` → `None`（撞边界不空刷新）；`extend` 保留原 anchor、否则新格自成单格 |
+| `crates/result_panel/src/grid/mod.rs` | `pub use selection::{selection_counts, CellRange, GridKeyStep};`（`:230`） |
+| `crates/result_panel/src/ports.rs` | 新增 `ResultRequest::StepFocus { step: GridKeyStep, extend: bool }`（`:389-392`） |
+| `crates/result_panel/src/panel/lifecycle.rs` | 新增 `step_grid_focus(step, extend, window, cx) -> Option<(usize, usize)>`（`:593-624`）：先 `grid.update` 里位移，位移成功即 `scroll_to_row` + `scroll_to_col`（对齐 `:3914` / `:3923` 的 `showColumn` / `showItem`）；随后投影 `set_selected_counts` / `set_selected_cell` / `set_selected_row(None)` / `set_selection_pos`，并入队 `StepFocus` |
+| `crates/result_panel/src/panel/render.rs` | 主网格容器（`editor-result-main-grid`，`:1222-1248`）挂 `.on_key_down`：**先判焦点归属**（`grid_key.read(app).focus_handle(app).is_focused(window)`，编辑框 / 筛选框 / 侧栏有焦点时一个键都不抢），再把 `left` / `right` / `up` / `down` / `home` / `end` 映射成 `GridKeyStep`（Home/End 的 `row_to_*` = `ctrl \|\| visible_column_count() <= 1`），`extend = shift` |
+| `crates/editor/src/view/host/results/dispatch.rs` | `StepFocus` 分支（`:572-585`）：走 `window.update` 调面板，拿到新格后 `result_selection = Some(GridSelection::Cell { row, col })` + `cx.notify()` |
+| `crates/result_panel/src/grid/tests.rs` | `arrow_keys_walk_the_focus_cell_and_clamp_at_the_edges`（`:5341-5418`）：无选区 ← 落位 `(0, 1)`、四向到边界同格不动、Home/End 钉列、Shift 保留锚点、空表两档 |
+
+**为什么走队列而不是面板内自处理**：挪完焦点还要让**宿主**把「最近一次选的是格」换成 `Cell{row,col}`
+——`Ctrl+C` 的复制目标读的是宿主缓存那份（`editor/view/host/mod.rs:411`），面板改不动宿主字段。
+这是本仓既有的单向数据流（面板 → `ResultQueue` → 宿主 dispatch），不是为这刀新开的路。
+
+**为什么状态行投影放在面板**：三项计数与「当前格值」在点击 / 拖拽路径上本来就在面板里算
+（`set_selected_counts` / `set_selected_cell`），键盘路径复用同一套，宿主只换缓存的选择类型。
+
+**零 vendor 改动**：组件没有键盘处理，键事件从「焦点在网格上」的元素冒泡到面板容器，面板接管即可。
+
+### 37.4 差异明账（未做，不静默）
+
+1. **PAGE_UP / PAGE_DOWN 未做**（`:3842-3874`）：要可见行范围（`getTopIndex` / `getBottomIndex`），
+   `delegate` 拿不到视口；入口在面板层，但翻几行必须由组件报可见行区间，另开一刀。
+2. **Enter `\r` → DefaultSelection 未接**（`:3746-3752`）：语义等同双击进编辑，
+   本仓已有 `BeginEditCellAt` 通道，但键盘入口未接（双击那条走的是鼠标命中路径）。
+3. **`+` / `-` / `=` 展开折叠、空格 `toggleCellValue` 不做**（`:3875-3894`）：
+   本仓结果网格没有树形行（无父子节点），也没有「可切换单元格」语义，无对等表达。
+4. **Shift 的焦点回写差异**：DBeaver 在 `shiftPressed` 时**不回写** `focusColumn` / `focusItem`（`:3911`），
+   只让选区扩；本仓用「anchor + focus」矩形表达扩选，Shift 会挪 focus —— 观感等价（选区同形），
+   内部模型不同，登记备查。
+5. **Ctrl 并集 / 反选仍未做**：DBeaver 把 `stateMask` 原样下传（`:3901`），本仓仍是单矩形模型
+   （同 §30.4 #2 / §36.4 #2）；键盘目前只认 Shift。
+6. **Home/End 的「一列」判定口径**：DBeaver 看 `columns.size()`（**不含行头**），本仓按
+   `visible_column_count() <= 1`（**可见数据列**）；转置视图恒 2 列，故行端条件不会误触发。
+7. **键盘不跨网格**：对比栏 / 分组栏是另外两个 `TableState`，各自没挂键处理；DBeaver 只有一棵 grid。
+8. 行号列宽 40 下限（§34.4 #5）、空态占位行本身的渲染（§35.4 #3）、列头拖动（§36.4 #1）三处仍开放，不在本刀。
+
+### 37.5 验证
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo test -p rds-result-panel --lib` | **444 passed / 0 failed**（443 + 本刀 1） |
+| `cargo test -p rds-editor` | **867 passed / 0 failed / 4 ignored**；离线 `tests/offline_baseline.rs` 5 passed |
+| `cargo check -p rds-workbench --lib` | Finished（编译通过；该轮日志里的 47 条 "warning" 全是下文第 4 条的 `os error 145` 增量 GC 失败，非代码警告） |
+
+867 = **干净树**口径（与 §36.5 一致；868 那条差额是并行线未提交的 `tests/core.rs` 用例）。
+门禁跑在独立 worktree（`D:\RdataStation\RDS\_worktrees\d10-6`，detached 到 `bda39063`）。
+树本身干净，只复制了**一份**并行线漏提交的文件做编译环境：`crates/editor/src/view/host/mod.rs`
+—— 它提供 `panel_traits.rs:120` 用到的 `PanelControl` import（`c6da8c75` 起就漏提交，到 `ddacbdd6`
+仍未补），不补 editor 编不过。该文件不入库。
+
+**为什么不在主工作区跑**：主工作区 test profile 当时被并行线的驱动重构中间态挡住
+（`cargo test -p rds-result-panel` 报 `error[E0463]: can't find crate for rds_driver`，
+`crates/engine/src/driver/mod.rs:6` 起 9 个错，`rds-engine` 失败；dev profile 的 `cargo check` 正常）。
+本线不替并行线改文件、也不提交它们，故沿用「独立 index 造提交 → 干净 worktree 验证」。
+worktree 建好后需手动 `New-Item .rds\tmp`，否则 gpui-component 的 build script 链接失败 `LNK1104`。
+
+**中途踩过的四个坑（都已归因，留痕避免重蹈）**：
+
+1. **共享 `CARGO_TARGET_DIR` 下 worktree 复用了陈旧二进制**。在 `968846c5`（父 `847eec80`）的树上跑
+   editor，失败的用例名 `a_dirty_document_has_no_close_glyph` **在源码里已不存在**（并行线早已改名
+   `a_dirty_document_keeps_the_close_glyph_but_asks_first`）。原因是 rustc 对**路径不同但内容相同**的源码
+   会命中 fingerprint 复用产物，而 worktree 路径与主工作区不同、增量状态又互相覆盖，于是跑的是上一轮编出来的
+   测试二进制。那次「867 passed / 1 failed」不是本刀回归，也不能当门禁数字。
+   **结论**：worktree 验证必须用独立 `CARGO_TARGET_DIR`，或者验前 `cargo clean -p <crate>`。
+2. **独立 target 全量编译打爆了机器**。`CARGO_BUILD_JOBS=4` + 新建 target（机器只有 15.8G 内存、空闲 5.5G），
+   rustc 报 `failed to spawn work thread: Os { code: 1450, "系统资源不足，无法完成请求的服务。" }`，
+   `tiff` / `exr` / `windows` 三个与本刀无关的 crate 编译崩掉，rp 阶段 exit=101，editor / wb 没跑到。
+   **结论**：这台机器上 `CARGO_BUILD_JOBS` 恒为 1，不新建独立 target；另一条线活跃时不跑全量编译。
+3. **并行线把 main 推走两次**。本刀提交先后在 `6c4e4fd0` / `847eec80` / `ddacbdd6` 三个父上各造过一次，
+   每次都用独立 index 重造 + CAS 换分支，HEAD 全程留在 main。
+   `7e7b6f56`（脏文档 ✕ 用例）入库后，上面第 1 条里那个红灯在干净树上已自然消失。
+4. **AI 执行沙箱对 D 盘的删除是虚拟化的——这是本轮最大的时间黑洞，前三个判断全被它带偏。**
+   症状链：editor 门禁在 `rds-shared` / `rds-connection` 的 rustc 内部 panic
+   （`rustc_metadata/src/rmeta/encoder.rs:2474: no entry found for key`），满屏
+   `failed to garbage collect finalized incremental compilation session directory ... (os error 145)` 与
+   `error copying object file ... 另一个程序正在使用此文件 (os error 32)`；要删 31 个增量目录时
+   `Remove-Item -Recurse` / `rd /s /q` 都报 `The directory is not empty` / `Reached the end of the file`；
+   最后 editor 编译通过但 **857 passed / 10 failed**，10 条全是 SQLite 存储类
+   （`NavCache::open` 返回 `None`、`no such table: script_environments`、`external_modified` 断言失败）。
+   先后误判为 Defender 实时保护（关保护后 31 个目录仍删不掉）、NTFS 损坏（`Repair-Volume -Scan` 为 `NoErrorsFound`，
+   `-SpotFix` 因卷被占用失败）。**最终实证**：沙箱里对 D 盘任意路径（`D:\` 根、`.rds\tmp`、`target`）
+   做 `[IO.File]::Delete` 返回成功但 `dir` 仍列得出文件、C 盘 `%TEMP%` 下正常；**用户在自己终端删同样文件立刻消失**。
+   同一棵树、同一个 target、同一个 worktree：用户终端跑 **867 passed / 0 failed**，沙箱跑 857+10 红。
+   `external_modified` 失败的那条断言正是「`remove_file` 之后 `metadata` 仍成功」—— 就是沙箱删除虚拟化本身。
+   **结论（铁律）**：
+   - 沙箱里跑 cargo 出现 `os error 32` / `error 145` / 增量 panic / "删不掉" / 临时目录相关测试红，**一律先怀疑沙箱，不要怀疑代码、Defender 或磁盘**；
+   - 任何需要「删文件 / 删目录 / 事务文件」的验证，必须让用户在**自己的终端**跑，或先做一个最小的「写 → 删 → 查」对照；
+   - 本仓库的 `target` 下已残留沙箱删不掉的坏目录（`incremental.dead-20261125` 等），用户终端可删，不影响 cargo。
+
+### 37.6 提交与合并链
+
+- 功能提交 `bda39063`（8 文件 +282/−10）：`grid/selection.rs`、`grid/delegate.rs`、`grid/mod.rs`、`grid/tests.rs`、
+  `ports.rs`、`panel/lifecycle.rs`、`panel/render.rs`、`editor/view/host/results/dispatch.rs`。
+- 分支 `feat/resultset-d10-6` 上用独立 index 构造（`read-tree <main>` → `update-index --add -- <8 路径>` →
+  `write-tree` → `commit-tree -p <main>` → `update-ref` CAS）；HEAD 全程留在 `main`，工作区文件一个不动。
+- 合并：`git update-ref refs/heads/main bda39063 ddacbdd6`（CAS，ff），随后 `git branch -d feat/resultset-d10-6`。
+- **教训（两次同类事故的根因，这次已闭环）**：`update-ref` 的 CAS 旧值**必须 `git rev-parse <ref>` 取全 40 位**，
+  不许拿短 sha 推想补全。上一次 `ref exit=128` 就是因为旧值写成了 `d233617134b4b8a6a4c53af1b0e9dbd9a0b71e28`，
+  而分支真实值是 `d23361716659f9bf3c6664650f6d69c60f69c1bb` —— git 报
+  `is at d23361716659f9bf... but expected d233617134b4b8a...`，一眼可读却先被当成「对象不匹配」猜了一轮。
+- **教训（并行线节奏）**：验证前先 `rev-parse main`，父 ≠ main 就先重造再跑门禁，避免
+  「验证的是旧父树、合进去的是另一棵树」；合并块里的 CAS 旧值也必须重新 `rev-parse`，不能复用造提交时那份。
