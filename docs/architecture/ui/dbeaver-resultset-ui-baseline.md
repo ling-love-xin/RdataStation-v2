@@ -1762,3 +1762,79 @@ Label「筛选：」在左、`Text(SWT.BORDER|SWT.SEARCH|SWT.ICON_CANCEL)` 在�
 | `cargo test -p rds-editor` | 867 passed / 4 ignored；`tests/offline_baseline.rs` 5 passed |
 | `cargo check -p rds-mock --tests -p rds-workbench` | 通过（另两处使用 `DataTable` 的 crate 也吃到新事件变体） |
 | 新增用例点 | 事件链（`CellClicked` → 面板 → delegate）+ 渲染哨兵（三格有、焦点格无） |
+
+## 31. D11 / D12 / D13 落地：计算页按列分组 + 工具条「−」+ 六项顺序
+
+取证对象：`AggregateColumnsPanel.java`（498 行，行号见 §27 与本节）。
+
+### 31.1 DBeaver 的事实
+
+**工具条六项**（`fillToolBar:322-331`）：
+
+| # | 动作 | 形态 | 判据 / 行为 | 源码 |
+| --- | --- | --- | --- | --- |
+| 1 | `AddFunctionAction` | `MODE_FORCE_TEXT` 文字钮 | 菜单只列 `enabledFunctions` 里**没有**的函数；`isEnabled` 无判据 | `:365-401`、`:403-416` |
+| 2 | `RemoveFunctionAction` | 图标钮 | `isEnabled = aggregateTable != null && !isDisposed() && getSelectionCount() > 0`；`run()` 遍历 `getSelection()` 逐个 `enabledFunctions.remove(func)` | `:418-436` |
+| 3 | `ResetFunctionsAction` | 图标钮 | `enabledFunctions.clear()` + `loadDefaultFunctions()`（只收 `isDefault()`，按 label 排序） | `:438-449`、`:157-164` |
+| 4 | `ToolbarSeparator` | 分隔 | — | `:322-331` |
+| 5 | `GroupByColumnsAction` | CHECK | `run()` 只 `groupByColumns = !groupByColumns; setChecked; refresh(false)` | `:333-346` |
+| 6 | `ValueTypeToggleAction` | CHECK | `aggregateAsStrings` 翻转 + `updatePanelActions()` + `refresh(false)` | `:348-363` |
+
+**分组聚合口径**（`:199-315`）：
+- `refresh(force)`：清表 → 有 `IResultSetSelection` 就 `aggregateSelection` → `packColumns` → `saveSettings`（`:199-214`）
+- `aggregateSelection`：`groupByColumns == true` 时按 `selection.getElementAttribute(element)` 归组成
+  `LinkedHashMap<attr, List<Object>>`，每 attr 一个 `TreeItem`（列名 + 类型图标）+ `setExpanded(true)`（`:221-262`）；
+  否则把所有值汇成一个列表平铺（`:250-261`）
+- `aggregateValues`：每个启用函数一行，`accumulate(element, aggregateAsStrings)` 累计；
+  `funcCount <= 0` 的行不出值（`:294-297`）；Double/Float/BigDecimal 走 `DOUBLE_FORMAT`，
+  Int/Long/Short 走 `INTEGER_FORMAT`（`:303-309`）
+
+### 31.2 本仓卡点与解法
+
+| 卡点 | 解法 |
+| --- | --- |
+| 「−」删的是 Tree 选中项，本仓统计页是平铺行、无选中模型 | 新增 `stats_selected: Option<StatsItem>` 单选态，**行点击**就是选中（`:424` 的 `isEnabled` 只要求「有选中」，不要求多选）；行尾 × 保留 |
+| 「按列分组」要「选区覆盖了哪些列、每列哪些值」 | D10 的 `CellRange` 提供列区间；`delegate.data_column_checked(view_col)` 把**视图列**换成**数据列**（列可重排 / 可隐藏，不能 `col - 1` 硬算）；`column_values_in_rows(col, rows)` 只取**行区间内**的值 |
+| 单列页与分组页要同一套取值 / 极值 / 去重 / 中位数口径 | 抽 `stats_entries_for_column(delegate, data_col, Option<rows>)`：`None` = 整列（数值口径可走事实档列式聚合）、`Some` = 区间（必须走显示取值，事实档无法按区间切） |
+| 统计页不是树，分组的「每列一组」怎么落地 | `render_stats_grouped`：每列一个组标题行（列名 + 底 hairline，哨兵 `editor-result-stats-group-{data_col}`）+ 该列函数行；不引 `Tree` |
+
+### 31.3 本仓改动表
+
+| 文件 | 改动 |
+| --- | --- |
+| `crates/result_panel/src/ports.rs` | 新请求 `SetStatsGroupBy(bool)`、`SelectStatsItem(Option<StatsItem>)`（紧跟 `SetStatsMode`） |
+| `crates/result_panel/src/panel/data.rs` | 新字段 `stats_group_by: bool`、`stats_selected: Option<StatsItem>` |
+| `crates/result_panel/src/panel/lifecycle.rs` | 默认值：`stats_group_by: false`、`stats_selected: None` |
+| `crates/result_panel/src/panel/events.rs` | `set_stats_group_by(on, cx)`、`select_stats_item(item, cx)`；`remove_stats_item` 顺带清「删掉的就是选中行」的选中态 |
+| `crates/result_panel/src/panel/tabs.rs` | `render_stats_tab` 加分组分支；新增 `stats_entries_for_column`（共用取值口径）与 `render_stats_grouped`（组标题 + 组内行）；`stats_toolbar` 补「−」「分组」两钮、顺序改为 ＋ / − / Reset / 分隔 / 分组 / 口径；`stat_row` 加行点击选中 + `tokens.table_active` 底色 |
+| `crates/result_panel/src/grid/text.rs` | 新访问器 `column_values_in_rows(column, (top, bottom))`（口径同 `column_values`，只收窄行范围，本地行 / 被删行仍跳过） |
+| `crates/editor/src/view/host/results/dispatch.rs` | `SetStatsGroupBy` / `SelectStatsItem` 两个分支（纯展示态、不落盘） |
+| `crates/result_panel/src/panel/tests.rs` | 新用例 `stats_group_by_splits_selected_columns_and_rows`：工具条两钮在 + 行选中态 + 分组两组标题 + 区间口径「2 行」vs 整列「4 行」+ 删除后选中态作废 |
+
+### 31.4 与 DBeaver 的差异明账（未做，不静默）
+
+1. **组标题无列类型图标**：DBeaver 的 `TreeItem` 带 `getColumnImage`（`:236`）。本仓组标题只有列名，
+   类型图标在列浏览器已有，统计页不重复。
+2. **选区为空时退回当前作用列**：DBeaver `aggregateSelection` 需要 `IResultSetSelection`，
+   无选区时整表为空。本仓保留「作用列（选中格 → 列浏览器选中列）」整列视图，不弹空表。
+3. **分组开关不落盘**：DBeaver 存 `PARAM_GROUP_BY_COLUMNS`（`:131`/`:167`）。本仓沿用
+   「口径切换（`SetStatsMode`）不落盘」的既有取舍。
+4. **组内多列不同行区间**：DBeaver 的分组按「每个选中格所属列 + 该格的值」归集，行集合是**逐格**的；
+   本仓按矩形行区间取整列值。单矩形模型下二者等价（矩形内每列的格集合就是同一行区间）。
+5. **「−」删除后函数集为空**：DBeaver 允许删空（`packColumns` 后表空）；本仓同样允许，
+   并给「没有启用任何统计项：点 ＋ 添加」的空态提示。
+
+### 31.5 验证
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo check -p rds-result-panel -p rds-editor` | 通过，0 warning |
+| `cargo test -p rds-result-panel` | **431 passed / 0 failed**（原 430 + 本刀 1） |
+| `cargo test -p rds-editor` | 867 passed + 4 ignored；离线 `tests/offline_baseline.rs` 5 passed |
+| `cargo check -p rds-workbench` | 通过 |
+| 新增用例点 | 工具条两钮真渲染（`editor-result-stat-remove-tool` / `editor-result-stat-group`）、行点击选中、分组两组标题（`editor-result-stats-group-1` / `-2`）、区间口径 vs 整列口径的计数差、删除后选中态清空 |
+
+**门禁前置修补（未随本刀提交）**：`cargo test` 曾被 i18n 合流遗留缺陷挡住 ——
+`crates/result_panel/src/analysis.rs:281` 的 `tr("计数行数")` 在 `#[cfg(test)]` 模块内没有 `tr`
+在作用域（该模块是显式列举 import 的「安全模式」）。临时补 `use super::tr;` 一行后测试全绿；
+该修复是否单独成刀待定。
