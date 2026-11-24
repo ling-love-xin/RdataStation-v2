@@ -1008,6 +1008,44 @@ fn rendered_ui_elements_survive(cx: &mut gpui_kit::TestAppContext) {
         "后退/前进与查找之间应有竖分隔线（DBeaver ResultSetFilterPanel.java:354）"
     );
 
+    // 1.8) 【筛选历史·浮层】历史入口点开的是**一张表**，不是菜单：DBeaver
+    //      `HistoryPanel.showFilterHistoryPopup` 在无边框 Shell 里建
+    //      `createFilterHistoryPanel`（`ResultSetFilterPanel.java:1093-1276`）。
+    //      钉三件事：展开 → 表与行出现；行内容 = 历史里**去掉当前输入框文本**的那些
+    //      （`:1233-1236`）；关掉 → 表消失。
+    assert!(
+        !visible("editor-result-filter-history-table", cx),
+        "浮层未展开时不该有历史表"
+    );
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.filter_text = "2".to_string();
+            p.note_filter_commit();
+            p.set_filter_history_popup(true, cx);
+        })
+    });
+    // `Popover` 内容画在 overlay 层，打开那一帧常只出 trigger：画两帧再断言
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        visible("editor-result-filter-history-table", cx),
+        "展开后应出现历史表（DBeaver 是无边框 Shell 里的 TableViewer，不是菜单）"
+    );
+    assert!(
+        visible("editor-result-filter-history-row-0", cx),
+        "历史表应有行：当前文本为「2」，余下的「1」应占第 0 行"
+    );
+    assert!(
+        !visible("editor-result-filter-history-row-1", cx),
+        "当前输入框文本那条应被过滤掉，只剩一行"
+    );
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_filter_history_popup(false, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        !visible("editor-result-filter-history-table", cx),
+        "关掉浮层后历史表应消失（再点箭头 / 选行 / 失焦都走这条）"
+    );
+
     // 2) 展开筛选条：两列按钮（左=收起 / 右=运行）+ 多行输入框随条出现
     cx.update(|_, app| panel.update(app, |p, cx| p.toggle_filter_expand(cx)));
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -4053,12 +4091,24 @@ fn filter_history_dedupes_caps_and_replays(cx: &mut gpui_kit::TestAppContext) {
         "被提上来那条之外的名次保持原序（k1 已在封顶时被挤掉）"
     );
 
-    // 从历史里选一条：回填输入框 + 立即应用
+    // 从历史里选一条：回填输入框 + 立即应用 + **收回浮层**
+    // （DBeaver 三个入口都先 `closeHistoryPopup()`，`ResultSetFilterPanel.java:1251-1271`）
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.set_filter_history_popup(true, cx))
+    });
+    assert!(
+        cx.update(|_window, app| panel.read(app).filter_history_popup_open),
+        "`set_filter_history_popup(true)` 应把浮层标成展开"
+    );
     cx.update(|window, cx| {
         panel.update(cx, |panel, cx| {
             panel.apply_filter_from_history("k2", window, cx);
         });
     });
+    assert!(
+        !cx.update(|_window, app| panel.read(app).filter_history_popup_open),
+        "选行应用后浮层应自动收回（否则浮层还挂在输入框下面）"
+    );
     let replayed = cx.update(|_window, app| {
         (
             panel.read(app).filter_text.clone(),

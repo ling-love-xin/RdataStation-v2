@@ -469,6 +469,14 @@ pub struct ResultPanel {
     /// 本仓暂无那条持久化通道，故这里是**会话级内存**（面板存活期内有效），
     /// 关闭编辑器即丢。
     pub(crate) filter_history: Vec<String>,
+    /// 【筛选历史】历史浮层是否展开
+    ///
+    /// 对齐 DBeaver `HistoryPanel.showFilterHistoryPopup`（`ResultSetFilterPanel.java:1093-1197`）：
+    /// 那颗箭头点开的是一个**独立无边框 Shell 里的一张两列表**（不是菜单），
+    /// 再点一次同一颗箭头即 `closeHistoryPopup`（`:1094-1097`），选行 / 失焦也关。
+    /// 本仓用受控 `Popover`（`gpui_kit` 组件，禁手搓浮层）承载同一张表，
+    /// 展开态由这个字段驱动；行点击应用后由 `apply_filter_from_history` 收回。
+    pub(crate) filter_history_popup_open: bool,
     /// 【结果内查找】查找栏是否打开（筛选条上的查找钮 + 查找栏本身都按它渲染）
     ///
     /// 对齐 DBeaver：筛选条工具条上的 `openFindReplaceButton` 是 **SWT.CHECK**

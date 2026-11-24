@@ -108,6 +108,9 @@ impl ResultPanel {
     ) {
         self.filter_text = value.to_string();
         self.filter_version = self.filter_version.wrapping_add(1);
+        // 选行即关浮层：DBeaver 三个入口（Enter / Space、单击、`↑` 归零）都先
+        // `closeHistoryPopup()` 再落值（`ResultSetFilterPanel.java:1251-1253` / `:1268-1271`）
+        self.filter_history_popup_open = false;
         let input = self.filter_input.clone();
         let text = value.to_string();
         input.update(cx, |state, cx| state.set_value(text, window, cx));
@@ -119,6 +122,20 @@ impl ResultPanel {
     /// 【筛选历史】只读快照（渲染下拉用）
     pub fn filter_history(&self) -> &[String] {
         &self.filter_history
+    }
+
+    /// 【筛选历史】开 / 关历史表浮层
+    ///
+    /// 对齐 DBeaver `HistoryPanel.showFilterHistoryPopup` 的开头那段
+    /// （`ResultSetFilterPanel.java:1094-1097`）：**同一颗箭头再点一次 = 关**，
+    /// 所以这里收的是「目标态」而不是「翻转」，箭头点击由渲染层算目标态
+    /// （`!self.filter_history_popup_open`），浮层自身的失焦 / 选中行也走同一个入口。
+    pub fn set_filter_history_popup(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.filter_history_popup_open == open {
+            return;
+        }
+        self.filter_history_popup_open = open;
+        cx.notify();
     }
 
     // ── 【结果内查找】查找栏（对齐 DBeaver 的 `FindReplaceOverlay` / `SpreadsheetFindReplaceTarget`）

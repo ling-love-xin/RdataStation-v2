@@ -84,6 +84,13 @@ pub enum ResultRequest {
     /// 选中一条即回到那个筛选口径）。回填输入框要 `&mut Window`，故照 `ClearFilter`
     /// 的同一条路子：宿主用窗口句柄转手调面板。
     ApplyFilter(String),
+    /// 【筛选历史】开 / 关历史表浮层（目标态，不是翻转）。
+    ///
+    /// 对齐 DBeaver `HistoryPanel.showFilterHistoryPopup`（`ResultSetFilterPanel.java:1093`）：
+    /// 箭头点开的是无边框 Shell 里的一张两列表（`createFilterHistoryPanel:1207`），
+    /// 同一颗箭头再点 = 关（`:1094-1097`），失焦（`:1176-1190`）与选中行（`:1251-1271`）
+    /// 也回同一个关闭入口。渲染层算出目标态（`!filter_history_popup_open`）后发这条请求。
+    SetFilterHistoryPopup(bool),
     /// 【结果内查找】打开 / 关闭查找栏（DBeaver 筛选条上的 CHECK 型
     /// `openFindReplaceButton`，`ResultSetFilterPanel.java:356`）。打开时要 `&mut Window`
     /// 把焦点交给查找框，故同样走宿主的窗口转手。

@@ -442,6 +442,7 @@ impl ResultPanel {
             filter_version: 0,
             filter_debounce: RefCell::new(None),
             filter_history: Vec::new(),
+            filter_history_popup_open: false,
             pushdown: false,
             renaming: None,
             renaming_input: None,

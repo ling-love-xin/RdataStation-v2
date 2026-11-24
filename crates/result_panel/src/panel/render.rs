@@ -10,7 +10,9 @@ use gpui_kit::component::Selectable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, Textarea};
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::menu::PopupMenuItem;
+use gpui_kit::component::popover::Popover;
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::separator::Separator;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -25,7 +27,7 @@ use super::events::{
 use crate::error_card::{self};
 use crate::export;
 use crate::grid::{self as result_grid, ResultToolbar, RowTargetState};
-use crate::ports::{FindOption, PageTarget, Presentation, ResultRequest};
+use crate::ports::{FindOption, PageTarget, Presentation, ResultActionQueue, ResultRequest};
 use crate::script_card::{self};
 use crate::sets::{self as result_sets};
 use crate::ui;
@@ -423,12 +425,35 @@ impl ResultPanel {
             // 2026-11-21 从「筛选设置之后」移回这里（此前顺序与 DBeaver 相反）。
             // 空历史不摆入口（DBeaver 列常在，但点了只有一张空表；本仓口径是「能力没有就不摆」）。
             .when(!self.filter_expanded && !self.filter_history.is_empty(), |row| {
-                let items: Vec<String> = self.filter_history.to_vec();
-                let queue = self.queue.clone();
-                // 【DBeaver 对齐 2026-11-25】历史格**左缘竖线**：`HistoryPanel.paintPanel`
-                // 画 `drawLine(e.x + 2, e.y + 2 → e.x + 2, e.y + e.height - 4)`
-                // （`ResultSetFilterPanel.java:1082-1085`）——下拉箭头左边一根 14px 线，
-                // 是「输入/执行格 | 历史格」之间的分隔。
+                // 行内容：**去掉「与当前输入框文本相同」的那条**——DBeaver
+                // `createFilterHistoryPanel` 里 `filter(f -> !f.text().equals(currentFilterText))`
+                // （`ResultSetFilterPanel.java:1233-1236`），避免浮层里第一条就是眼前这份。
+                let current = self.filter_text.as_str();
+                let items: Vec<String> = self
+                    .filter_history
+                    .iter()
+                    .filter(|text| text.as_str() != current)
+                    .cloned()
+                    .collect();
+                let open = self.filter_history_popup_open;
+                let toggle_queue = self.queue.clone();
+                let apply_queue = self.queue.clone();
+                // 【DBeaver 对齐 2026-11-25】历史格由「普通下拉菜单」改成「浮层里的一张表」：
+                // DBeaver `HistoryPanel` 点开的是 `SWT.NO_TRIM` 独立 Shell 里的一张
+                // **两列 `TableViewer`**（`createFilterHistoryPanel`，`:1207-1276`），
+                // 不是菜单——菜单条目的样式（图标位、行高、选中反白）与那张表差得远。
+                // 本仓落在 gpui-kit 的受控 `Popover`（浮层组件，禁手搓），内容 = 一张表。
+                let button = Button::new("editor-result-filter-history")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::ChevronDown)
+                    .selected(open)
+                    // 【DBeaver 对齐 2026-11-25】历史格**左缘竖线**：`HistoryPanel.paintPanel`
+                    // 画 `drawLine(e.x + 2, e.y + 2 → e.x + 2, e.y + e.height - 4)`
+                    // （`ResultSetFilterPanel.java:1082-1085`）——下拉箭头左边一根 14px 线，
+                    // 是「输入/执行格 | 历史格」之间的分隔。
+                    .debug_selector(|| "editor-result-filter-history".to_string())
+                    .tooltip(tr("历史筛选（点开是一张历史表，选中一条即回到那个口径）"));
                 row.child(
                     div()
                         .w(ui::HAIRLINE)
@@ -438,25 +463,22 @@ impl ResultPanel {
                         .debug_selector(|| "editor-result-filter-vline-history".to_string()),
                 )
                 .child(
-                    Button::new("editor-result-filter-history")
-                        .ghost()
-                        .xsmall()
-                        .icon(IconName::ChevronDown)
-                        .debug_selector(|| "editor-result-filter-history".to_string())
-                        .tooltip(tr("历史筛选（选中一条即回到那个口径）"))
-                        .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
-                            let mut menu = menu;
-                            for text in items.iter() {
-                                let label = text.clone();
-                                let text = text.clone();
-                                let queue = queue.clone();
-                                menu = menu.item(PopupMenuItem::new(label).on_click(
-                                    move |_, _window, app| {
-                                        queue.request(ResultRequest::ApplyFilter(text.clone()), app);
-                                    },
-                                ));
-                            }
-                            menu
+                    Popover::new("editor-result-filter-history-popover")
+                        // 浮层落在输入框下方、左缘对齐：DBeaver
+                        // `y = parentRect.y + getSize().y`、`x = 文本框左下角`（`:1146-1165`）。
+                        .anchor(Anchor::TopLeft)
+                        .offset(px(2.))
+                        .open(open)
+                        .trigger(button)
+                        // 三个关闭入口都收在这一个回调里：再点箭头（BasePopover 自己 toggle）、
+                        // 点浮层外部（`overlay_closable`，≈ DBeaver 的失焦关闭 `:1176-1190`）、
+                        // 选行（`apply_filter_from_history` 里直接写回状态）。
+                        .on_open_change(move |is_open, _window, app| {
+                            toggle_queue
+                                .request(ResultRequest::SetFilterHistoryPopup(*is_open), app);
+                        })
+                        .content(move |_state, _window, cx| {
+                            Self::render_filter_history_table(&items, &apply_queue, cx)
                         }),
                 )
             })
@@ -1622,6 +1644,91 @@ impl ResultPanel {
                     .then(|| self.render_goto_column(cx)),
             )
             .into_any_element()
+    }
+
+    /// 【筛选历史】历史表（浮层内容）：对齐 DBeaver `createFilterHistoryPanel`
+    /// （`ResultSetFilterPanel.java:1207-1276`）。
+    ///
+    /// 逐项对照：
+    /// - **容器**：`GridLayoutFactory.fillDefaults().margins(2, 2)` + `CompositeBorderPainter`
+    ///   直角描边（`:1102-1104`）→ `p(px(2.))` + 1px `border` 色；
+    /// - **表体**：`TableViewer(SWT.FULL_SELECTION | SWT.SINGLE)`（`:1208`），单行一条；
+    /// - **第 1 列**：SQL 文本、**等宽字体**（`cell.setFont(BaseThemeSettings.monospaceFont)`，
+    ///   `:1219-1221`）；
+    /// - **第 2 列**：`QMQueryFilter.title()`、右对齐、hint 色（`:1224-1231`）——
+    ///   本仓历史条目只有 SQL 文本（`filter_history: Vec<String>`，会话级内存、无 title
+    ///   字段，见 `data.rs` 该字段注释），**没有可摆的标题**，故不摆这一列（差异入册）；
+    /// - **高度**：`min(MAX_HISTORY_PANEL_HEIGHT = 200, 内容高)`（`:1159-1160`）
+    ///   → `max_h(rems(12.5))`（1rem = 16px）；
+    /// - **宽度**：DBeaver = 文本格 + 历史格 + 展开格 + 执行格 宽之和（`:1150-1157`），
+    ///   本仓渲染层拿不到那几格的实测宽（它们在同一条 flex 链上，无共享句柄），
+    ///   改用 `min_w(rems(26.))` 兜住「至少摊得开一条 SQL」（差异入册）；
+    /// - **`Manage Filters` 按钮**：DBeaver 仅在 `viewer.getFilterManager().isPersistent()`
+    ///   且表非空时建（`:1114`）；本仓历史是**会话级内存**、没有持久化通道
+    ///   （`data.rs::filter_history` 注释），判据为假 → 按 DBeaver 自己的门控**不建**。
+    ///
+    /// 单击行即应用（`mouseDown` → `closeHistoryPopup(); setFilterValue(); setCustomDataFilter()`，
+    /// `:1266-1273`）；关闭那一半由 `apply_filter_from_history` 直接写回状态。
+    fn render_filter_history_table(
+        items: &[String],
+        queue: &ResultActionQueue,
+        cx: &App,
+    ) -> AnyElement {
+        let theme = cx.theme();
+        let mono = theme.mono_font_family.clone();
+        let accent = theme.colors.accent;
+        let mut table = div()
+            .v_flex()
+            .min_w(rems(26.))
+            .max_h(rems(12.5))
+            .overflow_y_scrollbar()
+            .p(px(2.))
+            .border_1()
+            .border_color(theme.colors.border)
+            .debug_selector(|| "editor-result-filter-history-table".to_string());
+        if items.is_empty() {
+            // 表空时 DBeaver 高度收到一行（`:1159` `itemCount <= 0 ? getItemHeight() : …`），
+            // 这里给一行灰字占位，避免浮层塌成一条线（本仓没有「空表」的视觉先例）
+            table = table.child(
+                div()
+                    .px_1()
+                    .py(px(2.))
+                    .text_xs()
+                    .text_color(theme.colors.muted_foreground)
+                    .child(tr("暂无其他历史口径")),
+            );
+        }
+        for (index, text) in items.iter().enumerate() {
+            let label = text.clone();
+            let value = text.clone();
+            let queue = queue.clone();
+            let row_id = format!("editor-result-filter-history-row-{index}");
+            table = table.child(
+                div()
+                    .id(ElementId::Name(SharedString::from(row_id.clone())))
+                    .h_flex()
+                    .items_center()
+                    .px_1()
+                    .py(px(2.))
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(accent.opacity(0.12)))
+                    .debug_selector(move || row_id)
+                    .on_click(move |_, _window, app| {
+                        queue.request(ResultRequest::ApplyFilter(value.clone()), app);
+                    })
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_xs()
+                            .font_family(mono.clone())
+                            .text_ellipsis()
+                            .overflow_hidden()
+                            .child(label),
+                    ),
+            );
+        }
+        table.into_any_element()
     }
 
     /// 【结果内查找】查找栏：查找词输入框 + 三口径开关 + 「N 个匹配」+ 上一处 /

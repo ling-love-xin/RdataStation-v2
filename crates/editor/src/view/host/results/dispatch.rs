@@ -70,6 +70,10 @@ impl EditorHostPanel {
                 self.clear_filter_and_ordering_via_window(cx)
             }
             ResultRequest::ApplyFilter(value) => self.apply_filter_via_window(value, cx),
+            // 【筛选历史】开 / 关历史表浮层：纯状态切换，面板自己 notify
+            ResultRequest::SetFilterHistoryPopup(open) => self
+                .result_panel
+                .update(cx, |p, cx| p.set_filter_history_popup(open, cx)),
             ResultRequest::ToggleFind => self.toggle_find_via_window(cx),
             // 【结果内查找·命令语义】右键 filters 段首的「在结果中查找…」：只开不关
             ResultRequest::OpenFind => self.open_find_via_window(cx),
