@@ -198,5 +198,5 @@ pub use state::{DockAreaState, DockPlacement, DockState, PanelInfo, PanelState};
 /// could name the trait its parameter requires.
 pub use state_convert::{PanelBuilder, PanelSource};
 pub use tab_group::{
-    TabGroup, TabGroupConstraints, TabGroupContext, TabGroupEvent, TabGroupRenderer,
+    GroupChrome, TabGroup, TabGroupConstraints, TabGroupContext, TabGroupEvent, TabGroupRenderer,
 };

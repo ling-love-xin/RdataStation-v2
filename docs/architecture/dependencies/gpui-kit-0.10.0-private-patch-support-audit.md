@@ -11,7 +11,8 @@
    纯净包全部为 0 命中（`set_gutter_markers` / `GutterMarkerKind` / `GutterMarkerClick` / `collapse_cursors` /
    `select_columnar_block` / `take_last_edit_delta` / `TabReorder` / `on_reorder` / `register_syntax_context_provider` /
    `tab_bar_max_width` / `tab_bar_variant` / `Notification::timeout` 均是）。
-3. **补丁仍全部在手，且绝大部分在生效**：vendor 内 12 个源文件、70 个 hunk、`+1165 −48`（核查时口径）都在；
+3. **补丁仍全部在手，且绝大部分在生效**：vendor 内 16 个源文件、93 个 hunk、`+1373 −84`（含 2026-11-24 追加的
+   dock 三层 chrome 4 处 + P3 tab 状态槽 2 处，见 §1 与 §2 A 末 5 行）都在；
    项目侧有实际调用点（下表 §3），只有 2 处属仅测试调用（另 1 处零调用已在本轮删除，见 §7）。
 4. **唯一有"官方等价入口"的是自定义语法上下文**——但它是 **0.9.0 就有**的 `LanguageProvider` +
    `set_language_provider`，不是这次 0.10.0 升级带来的；而且完全替代有代价（见 §2 B-1）。
@@ -36,8 +37,12 @@
 | `gpui-base/src/input/base/state.rs` | +285/−8 | 17 | `GutterMarker{Kind}` / `set_gutter_markers` / `GutterMarkerClick` / pin / hover 计时 / 列开关；多光标与列选择 public API；`LineDelta` 编辑行增量；折叠候选空守卫（2 处）；核查时为 +289/−8，删 `add_cursor_above_line` 后 +285/−8 |
 | `gpui-base/src/input/editor/display_map/display_map.rs` | +9/−0 | 1 | `has_fold_candidates()`（供空守卫判断） |
 | `gpui-base/src/tabs.rs` | +86/−5 | 6 | `TabReorder` / `TabDragGhost` / `Tab::on_reorder`（拖拽重排 + 拖拽浮层） |
+| `gpui-base/src/dock/dock_area.rs` | +31/−7 | 4 | 【2026-11-24 追加】`plan_tree` / `plan_node` 带 `DockPlacement`；中央组 `GroupChrome::Tabs`、dock 组 `Auto`（placement 级形态） |
+| `gpui-base/src/dock/tab_group.rs` | +58/−0 | 6 | 【2026-11-24 追加】新增 `GroupChrome{Auto,Tabs}`；`TabGroupConstraints` 增 `placement` / `chrome` 字段与 `at()` / `with_chrome()` + getter；`TabGroupContext::placement()` / `chrome()` |
+| `gpui-base/src/dock/mod.rs` | +1/−1 | 1 | 【2026-11-24 追加】re-export `GroupChrome` |
 | `gpui-component/src/dock/mod.rs` | +26/−0 | 4 | `SkinShared` 新增 `tab_bar_max_width` / `tab_bar_variant` + `DockSkin::set_*` |
-| `gpui-component/src/dock/tab_panel.rs` | +72/−2 | 4 | 把上面两个值透传给 `TabBar`；dock 标签右键菜单（缩放/关闭/关闭其他/关闭全部） |
+| `gpui-component/src/dock/panel.rs` | +17/−0 | 3 | 【2026-11-24 追加】`Panel::tab_prefix()`（tab 状态槽）+ 对象安全 `PanelView::tab_prefix()` + `Entity<T>` 空实现转发 |
+| `gpui-component/src/dock/tab_panel.rs` | +177/−30 | 13 | 把上面两个值透传给 `TabBar`；dock 标签右键菜单（缩放/关闭/关闭其他/关闭全部）；【2026-11-24 追加】组头 32px + 1px 底边、标题行 hover 分组 + 单面板 ✕（= 收起该 dock，走 `toggle_dock_by_user`）、标签 ✕ 常驻占位 + hover 浮出（`dock-tab-{ix}` 分组）、`render_tab_bar` 改读 `group.chrome()`、`Tab::prefix` 接面板的 `tab_prefix()` |
 | `gpui-component/src/input/input.rs` | +16/−17 | 1 | 代码编辑器左内边距 `min(6px)` → `0`（行号顶到最左） |
 | `gpui-component/src/input/mod.rs` | +3/−0 | 1 | re-export `register_syntax_context_provider` / `SyntaxContextFactory` |
 | `gpui-component/src/input/syntax_context.rs` | +41/−1 | 2 | 自定义语法上下文工厂注册表，优先于 tree-sitter |
@@ -45,15 +50,23 @@
 | `gpui-component/src/tab/tab.rs` | +65/−2 | 7 | `Tab::on_context_menu` / `Tab::tooltip` / `on_reorder` 字段与接线 |
 | `gpui-component/src/tab/tab_bar.rs` | +19/−0 | 3 | `TabBar::on_reorder`（整条标签条下发到每个标签） |
 
-合计 **12 个源文件 / 70 hunk / +1165 −48**。另有 2 个 `Cargo.toml.orig` 是发布包打包产物差异（vendor 不带），
+合计 **16 个源文件 / 93 hunk / +1373 −84**。另有 2 个 `Cargo.toml.orig` 是发布包打包产物差异（vendor 不带），
 不计入补丁（它们会在 `--stat` 里各显示一行 deletion，base 侧 95 行、component 侧 271 行，别误当补丁）。
 
 > 2026-11-24 复核（删 `add_cursor_above_line` 之后）：hunk 仍是 70（`-- 2 个 Cargo.toml.orig` 后 base 44 + component 28 = 72），
 > 行数变为 **+1161 −48**（`state.rs` 由 +289/−8 → +285/−8，净 −4 行）。
+>
+> 2026-11-24 追加（dock 三层 chrome）：`dock_area.rs` +31/−7（4 hunk）、`tab_group.rs` +58/−0（6 hunk）、
+> `gpui-base/src/dock/mod.rs` +1/−1（1 hunk）、`tab_panel.rs` 由 +72/−2（4 hunk）长到 +168/−30（13 hunk）。
+> 合计 **+1347 −84 / 15 文件 / 90 hunk**，口径同上（`git diff --no-index --ignore-cr-at-eol` vs 纯净 0.10.0 发布包）。
+>
+> 2026-11-24 追加（P3 tab 状态槽）：`gpui-component/src/dock/panel.rs` 由未改变为 +17/−0（3 hunk，`Panel::tab_prefix`
+> 三处：trait 默认方法 / 对象安全 trait / `Entity<T>` 转发），`tab_panel.rs` 再 +9 行（`Tab::prefix` 接面板内容）。
+> 合计 **+1373 −84 / 16 文件 / 93 hunk**。
 
 ## 2. 逐点判定
 
-### A. 上游没有、必须保留（14 项）
+### A. 上游没有、必须保留（19 项）
 
 | 补丁点 | 上游 0.10.0 实况（实测） | 判定 |
 |---|---|---|
@@ -71,6 +84,11 @@
 | `Notification::timeout` | 上游写死 `Duration::from_secs(5)`；内层 `ToastOptions` 有 `timeout` 字段但 `Notification` 无 setter | 保留 |
 | 代码编辑器左内边距 0 | 上游写死 `min(px(6.))`，`Input` 无 padding builder | 保留（纯视觉口径） |
 | `Tab::on_context_menu`（**应用自建标签条**那半边） | 上游 `ContextMenuExt` 确实是 public（`menu/mod.rs:10`），`Tab` 也满足它的 bound；**但套上去就进不了标签条**：`TabBar::children` 签名是 `impl IntoIterator<Item = impl Into<Tab>>`（`vendor/gpui-component/src/tab/tab_bar.rs:178`），而 `ContextMenu<Tab>` 不是 `Tab`、也没有 `Into<Tab>` 通道（`ContextMenu<E>: IntoElement` 只在"能挂到任意元素上"这一层成立） | 保留（dock 内部同理；撤它需要给 `TabBar` 另开一条 `AnyElement` 子项入口＝再加补丁，或手搓标签条＝违规） |
+| dock 组头形态按 **placement**（`GroupChrome` + `TabGroupConstraints.placement/chrome`） | `PanelStyle` 只是皮肤上的**全局一档**（`SkinShared.panel_style`，`dock/mod.rs:135`），没有 placement 维度；组约束原只有 `alone/dock_locked/collapsed/closable`（`tab_group.rs:61-67`） | 保留（否则"中央恒标签条 + 侧栏单面板标题栏"无法共存：`workspace.rs` 只能全局选一档，侧栏会被连带画成空标签条） |
+| dock 组头 **32px + 1px 底边** | `render_title` 写死 `h(px(30.))`、无 `border_b`（0.10.0 `tab_panel.rs:394`，函数体 `:375-446`） | 保留（与标签条（`tab/tab_bar.rs:684-698` 自带 `border_b_1`、Default 32px）对齐，形态切换时高度不跳） |
+| dock 标题行 hover 分组 + 单面板 ✕（= 收起该 dock） | `render_title` 未注册 hover 分组；`is_closable = constraints.is_closable() && draggable && panel.closable`，而 `is_last_panel → draggable = false`（`tab_group.rs:223/229/251`）⇒ 侧栏最后一个面板永远关不掉；`set_close_button_visible` 只有常显/常隐 | 保留（"整行 hover 才显 ✕"与"最后一个面板收起 dock"都无上游入口；`toggle_dock_by_user` 是上游 `pub(crate)`，只有在 vendor 内才能调到，它才会发 `DockToggleEvent`） |
+| dock 标签 ✕ **常驻占位 + hover 浮出** | `Tab` 有 `prefix/suffix`（`tab/tab.rs:706/712`）与 `InteractiveElement`（`:788`），但"关闭按钮只在悬停时出现"没有开关（`close_button_visible` 只有常显/常隐） | 保留（Zed 的 `tabs.show_close_button = "hover"` 没有上游对应物；项目侧只能改结果集标签条，dock 内部渲染够不到） |
+| `Panel::tab_prefix()`（tab 状态槽） | 组件层 `Panel` 的钩子只有 `tab_name` / `title` / `title_style` / `title_suffix` / `toolbar_buttons` / `dropdown_menu` / `zoom_control` / `inner_padding` / `title_bar`（`dock/panel.rs:71-149`）；`title_suffix` 只挂在**标题栏**右端，而 `Tab::prefix` 是皮肤独占（`tab_panel.rs` 自己 set），面板插不进去 | 保留（中央恒为标签条形态 ⇒ 标题栏不画 ⇒ 非激活的脏/失败标签零标记，属上游能力缺口） |
 
 ### B. 上游有等价入口/API，可评撤（1 项，附代价）
 

@@ -97,6 +97,16 @@ pub trait Panel: gpui_base::dock::Panel {
         None::<gpui::Div>
     }
 
+    /// 【项目私有 patch：tab 状态槽】标签左端的固定槽位内容（状态点等）。
+    ///
+    /// 上游只有 [`Panel::title_suffix`]——挂在**标题栏**右端。中央编辑区恒为标签条
+    /// 形态（`GroupChrome::Tabs`），标题栏根本不画，所以"脏/失败"这类状态在非激活
+    /// 标签上无处可见。这里给它一个与标题栏并列的位置：皮肤把它放进 `Tab::prefix`，
+    /// 与 suffix（关闭 ✕ 等）互不覆盖，也不受 hover 显隐影响。
+    fn tab_prefix(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        None
+    }
+
     /// Buttons for the title bar's toolbar.
     fn toolbar_buttons(
         &mut self,
@@ -155,6 +165,8 @@ pub trait PanelView: gpui_base::dock::PanelView {
     fn title(&self, window: &mut Window, cx: &mut App) -> AnyElement;
     fn title_style(&self, cx: &App) -> Option<TitleStyle>;
     fn title_suffix(&self, window: &mut Window, cx: &mut App) -> Option<AnyElement>;
+    /// 【项目私有 patch：tab 状态槽】标签左端槽位（见 [`Panel::tab_prefix`]）。
+    fn tab_prefix(&self, window: &mut Window, cx: &mut App) -> Option<AnyElement>;
     fn toolbar_buttons(&self, window: &mut Window, cx: &mut App) -> Option<Vec<Button>>;
     fn dropdown_menu(&self, menu: PopupMenu, window: &mut Window, cx: &mut App) -> PopupMenu;
     fn zoom_control(&self, cx: &App) -> Option<PanelControl>;
@@ -184,6 +196,11 @@ impl<T: Panel> PanelView for Entity<T> {
 
     fn toolbar_buttons(&self, window: &mut Window, cx: &mut App) -> Option<Vec<Button>> {
         self.update(cx, |this, cx| this.toolbar_buttons(window, cx))
+    }
+
+    /// 【项目私有 patch：tab 状态槽】标签左端槽位内容。
+    fn tab_prefix(&self, window: &mut Window, cx: &mut App) -> Option<AnyElement> {
+        self.update(cx, |this, cx| this.tab_prefix(window, cx))
     }
 
     fn dropdown_menu(&self, menu: PopupMenu, window: &mut Window, cx: &mut App) -> PopupMenu {

@@ -32,7 +32,9 @@ use super::{
     registry::{PanelBuildContext, PanelRegistry},
     state::{DockAreaState, DockPlacement, DockState, PanelInfo, PanelState},
     state_convert::{PanelBuilder, PanelSource as _},
-    tab_group::{BareTabGroup, TabGroup, TabGroupConstraints, TabGroupEvent, TabGroupRenderer},
+    tab_group::{
+        BareTabGroup, GroupChrome, TabGroup, TabGroupConstraints, TabGroupEvent, TabGroupRenderer,
+    },
 };
 
 /// What the dock area reports outward.
@@ -989,9 +991,17 @@ impl DockArea {
         // Planned first, applied second: the plan borrows the trees, and
         // applying it needs `&mut self` to fill the caches.
         let mut plans = Vec::new();
-        plan_tree(&self.center, false, self.locked, &mut plans);
-        for pane in self.docks.values() {
-            plan_tree(&pane.tree, !pane.dock.is_open(), self.locked, &mut plans);
+        // 【项目私有 patch：placement 级形态】组的形态随"它属于哪棵树"定，
+        // 所以这里必须把位置一路带到约束里（上游只传 alone/collapsed/locked）。
+        plan_tree(&self.center, DockPlacement::Center, false, self.locked, &mut plans);
+        for (placement, pane) in self.docks.iter() {
+            plan_tree(
+                &pane.tree,
+                *placement,
+                !pane.dock.is_open(),
+                self.locked,
+                &mut plans,
+            );
         }
 
         // Sets rather than vectors: these are membership tests, run once per
@@ -1693,13 +1703,20 @@ fn sync_split_panels(
     );
 }
 
-fn plan_tree(tree: &PaneTree, collapsed: bool, locked: bool, out: &mut Vec<ContainerPlan>) {
+fn plan_tree(
+    tree: &PaneTree,
+    placement: DockPlacement,
+    collapsed: bool,
+    locked: bool,
+    out: &mut Vec<ContainerPlan>,
+) {
     // The root has nothing beside it by definition.
-    plan_node(tree.root(), true, collapsed, locked, out);
+    plan_node(tree.root(), placement, true, collapsed, locked, out);
 }
 
 fn plan_node(
     node: &PaneNode,
+    placement: DockPlacement,
     alone: bool,
     collapsed: bool,
     locked: bool,
@@ -1719,14 +1736,21 @@ fn plan_node(
             });
             let children_alone = children.len() <= 1;
             for child in children {
-                plan_node(child, children_alone, collapsed, locked, out);
+                plan_node(child, placement, children_alone, collapsed, locked, out);
             }
         }
         PaneRef::Tabs { panels, active_ix } => out.push(ContainerPlan::Group {
             node: node.id(),
             panels: panels.to_vec(),
             active_ix,
+            // 【项目私有 patch：placement 级形态】中央恒标签条；dock 单面板
+            // 用标题栏、多面板回标签条（由皮肤按 `chrome` 判定）。
             constraints: TabGroupConstraints::in_split(alone)
+                .at(placement)
+                .with_chrome(match placement {
+                    DockPlacement::Center => GroupChrome::Tabs,
+                    _ => GroupChrome::Auto,
+                })
                 .dock_locked(locked)
                 .collapsed(collapsed),
         }),

@@ -165,6 +165,7 @@ impl WorkbenchView {
             project_host: Some(host),
             _editor_subscription: None,
             _archive_subscription: None,
+            _dock_toggle_subscription: None,
             _insight_ws_subs: Vec::new(),
             _insight_rules_watcher: None,
             editor_service,

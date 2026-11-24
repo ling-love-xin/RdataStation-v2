@@ -17,7 +17,7 @@ use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants};
 use gpui_kit::component::dialog::{Dialog, DialogButtonProps, DialogContent};
 use gpui_kit::component::dock::{
-    DockArea, DockLayout, DockPlacement, DockSkin, PanelId, PanelStyle, panel_handle,
+    DockArea, DockLayout, DockPlacement, DockSkin, DockToggleEvent, PanelId, panel_handle,
 };
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
@@ -114,6 +114,11 @@ pub struct WorkbenchView {
     /// 观察的是**面板实体**而不是 `SidebarPanel`：子实体的 `notify` 不级联到父面板，
     /// 订在侧栏上一条都收不到。句柄必须被持有——drop 即解除观察。
     _archive_subscription: Option<Subscription>,
+    /// 【三层 chrome】dock 的**用户**开关事件（`DockToggleEvent`）：标题 ✕ / 拖分隔线
+    /// 收起 dock 都走这条通道。收到"已收起"就把 `Shared` 的 left/right 意图同步成
+    /// `Collapsed`，否则下一帧 `apply_*_mode` 的 Expanded 分支会把它重新打开。
+    /// 句柄必须被持有，drop 即解除订阅。
+    _dock_toggle_subscription: Option<Subscription>,
     /// M8 洞察**中间工作页**的取数 / 动作订阅句柄（`jobs::attach` +
     /// `insight_actions::attach` + 右栏联动 observe；面板懒创建时建立一次）。
     ///

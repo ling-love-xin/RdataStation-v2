@@ -34,6 +34,12 @@ const PIN_ICON_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox=
 /// ——与 `workbench_shell::model::LeftPanel::icon` 同一口径。
 const RESULT_SET_ICON: &str = "icons/table.svg";
 
+/// 【Zed 对齐】每个结果标签的悬停分组名：标签根挂它，关闭按钮用 `group_hover` 消费，
+/// 于是「整行悬停 → ✕ 浮出」而不是「只有按钮自己热区」。
+fn tab_group_name(index: usize) -> SharedString {
+    SharedString::from(format!("editor-result-tab-{index}"))
+}
+
 
 /// 【C1】标签条每个 tab 的「⋯」菜单动作回调（宿主侧传入；对比栏传 `None` = 不画菜单按钮）
 #[derive(Default, Clone)]
@@ -140,7 +146,8 @@ pub fn render(
         .iter()
         .enumerate()
         .map(|(index, entry_tab)| {
-            // 徽标与失败点合并成一个后缀：`Tab::suffix` 只有一个位置（调两次是覆盖，不是叠加）
+            // 【C3 状态在左】徽标留在后缀（它是“哪个通道/旧不旧”的说明文字，跟着文字走）；
+            // 失败点已迁到前缀（见下 `prefix` 的构造），这样非激活标签也能一眼看出“这句错了”。
             let mut suffix = div()
                 .h_flex()
                 .items_center()
@@ -148,35 +155,35 @@ pub fn render(
                 .text_xs()
                 .text_color(if entry_tab.stale { muted } else { primary })
                 .child(SharedString::from(entry_tab.badge()));
-            if entry_tab.failed {
-                // 失败的结果集要在一排标签里看得出来（否则“哪句错了”要靠逐个点开）
-                suffix = suffix.child(
-                    div()
-                        .size(rems(ui::STATUS_DOT_SIZE))
-                        .rounded_full()
-                        .bg(danger),
-                );
-            }
             // 【T8 2026-11-24】「⋯」重命名按钮已移除：标签上只留关闭 ×，
             // 重命名 / 钉住 / 分析 / 对比全部进右键菜单（对齐 DBeaver 的单关闭钮形态）。
             // 【DBeaver 对齐】后缀最右端是关闭按钮（对应它的 `resultsTab.setShowClose(true)`）。
             // 钉住的结果集同样可关：钉住挡的是自动淘汰，不是用户主动关。
             if let Some(on_close) = actions.on_close.clone() {
                 let idx = index;
+                // 【Zed 对齐】✕ 默认不可见，鼠标悬停到**这个标签**上才浮出：
+                // 热区是标签整行（`Tab` 根挂了同名 group），不是仅按钮自身。
+                // 不可见只是 `opacity(0.)`，位置照占——所以标签宽度不会因悬停抖动。
                 suffix = suffix.child(
-                    Button::new(SharedString::from(format!(
-                        "editor-result-tab-close-{index}"
-                    )))
-                    .ghost()
-                    .small()
-                    .icon(IconName::Close)
-                    .debug_selector(|| format!("editor-result-tab-close-{index}"))
-                    .tooltip(tr("关闭这个结果集").to_string())
-                    .on_click(move |_e, _w, cx| on_close(idx, cx)),
+                    div()
+                        .opacity(0.)
+                        .group_hover(tab_group_name(index), |s| s.opacity(1.))
+                        .child(
+                            Button::new(SharedString::from(format!(
+                                "editor-result-tab-close-{index}"
+                            )))
+                            .ghost()
+                            .small()
+                            .icon(IconName::Close)
+                            .debug_selector(|| format!("editor-result-tab-close-{index}"))
+                            .tooltip(tr("关闭这个结果集").to_string())
+                            .on_click(move |_e, _w, cx| on_close(idx, cx)),
+                        ),
                 );
             }
-            // 【DBeaver 对齐】prefix = 结果集类型图标 + （钉住时）小图钉按钮。
-            // 两者的顺序按 DBeaver：图标贴在最左，钉住是状态标记紧随其后。
+            // 【DBeaver 对齐】prefix = 结果集类型图标 + 状态点（失败）+ （钉住时）小图钉。
+            // 顺序：[类型图标] → [状态点] → [图钉]：类型贴最左（一眼定位），状态紧随其后，
+            // 钉住是后者长期状态（【C3 状态在左】：失败点不再放后缀，非激活标签同样可见）。
             let mut prefix = div()
                 .h_flex()
                 .items_center()
@@ -188,6 +195,23 @@ pub fn render(
                         .path(RESULT_SET_ICON)
                         .with_size(Size::Small),
                 );
+            // 【C3 状态在左 + 占位恒定】失败点固定 12px 槽：干净也占位、失败只换内容，
+            // 结果由"成功"翻成"失败"时标签宽度不抖（对齐 Zed 的固定 start slot 做法）。
+            prefix = prefix.child(
+                div()
+                    .debug_selector(|| format!("editor-result-tab-status-{index}"))
+                    .w(rems(ui::TAB_STATUS_SLOT))
+                    .h_flex()
+                    .justify_center()
+                    // `Option` 本身就是 `IntoIterator`：失败时塞点，干净时槽留空
+                    .children(entry_tab.failed.then(|| {
+                        div()
+                            .debug_selector(|| format!("editor-result-tab-failed-{index}"))
+                            .size(rems(ui::STATUS_DOT_SIZE))
+                            .rounded_full()
+                            .bg(danger)
+                    })),
+            );
             if entry_tab.pinned {
                 // 【T8 2026-11-24】钉住改为**静态指示**（对齐你的定稿：钉住状态要能一眼看到，
                 // 但点击入口收进右键菜单）：不再包 Button，只画不可点的图钉图标。
@@ -200,7 +224,10 @@ pub fn render(
             let mut tab_el = Tab::new()
                 .label(SharedString::from(entry_tab.label.clone()))
                 .prefix(prefix)
-                .suffix(suffix);
+                .suffix(suffix)
+                // 【Zed 对齐】标签自己就是悬停热区：整行 hover 时 ✕ 才显形
+                // （`Tab` 未占用 `group` 槽位，注册后由后缀里的 `group_hover` 消费）。
+                .group(tab_group_name(index));
             // 【DBeaver 对齐】悬停显示原始 SQL（空 SQL 不挂，避免一个空白气泡）
             if !entry_tab.sql.is_empty() {
                 tab_el = tab_el.tooltip(SharedString::from(entry_tab.sql.clone()));

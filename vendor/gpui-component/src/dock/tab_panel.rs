@@ -21,7 +21,8 @@ use gpui::{
 use gpui_base::{
     LogicalStyledExt as _,
     dock::{
-        AnyDrag, DockPlacement, DragPanel, DropIndicator, NodeId, PaneNode, PaneRef, PanelId,
+        AnyDrag, DockPlacement, DragPanel, DropIndicator, GroupChrome, NodeId, PaneNode, PaneRef,
+        PanelId,
         TabGroupContext, TabGroupRenderer,
     },
     spring,
@@ -32,7 +33,7 @@ use crate::{
     ActiveTheme as _, IconName, Selectable as _, Sizable as _,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
     dock::{
-        ClosePanel, PanelControl, PanelHandle, PanelStyle, SkinShared, ToggleZoom,
+        ClosePanel, PanelControl, PanelHandle, SkinShared, ToggleZoom,
         toggle_dock_by_user,
     },
     h_flex,
@@ -53,6 +54,10 @@ const TAB_SELECTOR: &str = "dock-tab";
 /// Debug-bounds selector prefix for a dock's collapse button, suffixed with
 /// its placement.
 const DOCK_TOGGLE_SELECTOR: &str = "dock-toggle";
+
+/// 【项目私有 patch：dock 标题的隐藏入口】单面板标题右端那个 ✕ 的选择器前缀，
+/// 语义是"收起这个 dock"（dock 不能被清空，所以最后一个面板的 ✕ 只能隐藏它）。
+const HIDE_DOCK_SELECTOR: &str = "dock-hide";
 
 /// The size the styled drag preview occupies, reported to base so a drop
 /// placeholder knows where to fly in from.
@@ -380,6 +385,7 @@ impl TabGroupSkin {
         cx: &mut App,
     ) -> AnyElement {
         let panel = &group.panels()[ix];
+        let placement = group.placement();
         let left_button = self.dock_toggle_button(DockPlacement::Left, group, cx);
         let bottom_button = self.dock_toggle_button(DockPlacement::Bottom, group, cx);
         let right_button = self.dock_toggle_button(DockPlacement::Right, group, cx);
@@ -387,11 +393,47 @@ impl TabGroupSkin {
         let handle = PanelHandle::of(panel);
         let title_style = handle.and_then(|handle| handle.title_style(cx));
         let drag = tab_drag(group, ix, cx);
+        // 【项目私有 patch：dock 标题的隐藏入口】整行是一个 hover 分组：✕ 常驻占位、
+        // 不透明度 0，鼠标进入这一行才浮出（对齐 Zed 的"放上去才出现"）。
+        let row_group = SharedString::from(format!("dock-title-{:?}", group.node()));
+        let hide_button: Option<AnyElement> = (!matches!(placement, DockPlacement::Center)
+            && !group.is_collapsed())
+            .then(|| {
+                let area = self.shared.area().clone();
+                let row_group = row_group.clone();
+                div()
+                    .flex_shrink_0()
+                    .opacity(0.)
+                    .group_hover(row_group, |style| style.opacity(1.))
+                    .child(
+                        Button::new(SharedString::from(format!("hide-dock-{:?}", placement)))
+                            .icon(IconName::Close)
+                            .xsmall()
+                            .ghost()
+                            .tab_stop(false)
+                            .tooltip(t!("Dock.Collapse"))
+                            .debug_selector(move || format!("{HIDE_DOCK_SELECTOR}-{placement:?}"))
+                            .on_click(move |_, window, cx| {
+                                // 走上游的「用户动作」通道：会发 `DockToggleEvent`，应用据此
+                                // 把"要展开"的意图同步成"已收起"，否则下一帧又会被打开。
+                                _ = area.update(cx, |area, cx| {
+                                    toggle_dock_by_user(area, placement, window, cx);
+                                });
+                            }),
+                    )
+                    .into_any_element()
+            });
 
         h_flex()
             .flex_row_dir(cx)
             .justify_between()
-            .h(px(30.))
+            // 【项目私有 patch：三层 chrome 契约】组头统一 32px + 1px 底边（上游为
+            // 30px 且无底边）。底边与标签条那条同色，两种形态切换时高度不跳。
+            .h(px(32.))
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().tokens.tab_bar)
+            .group(row_group)
             .py_2()
             .ps(rems(0.75), cx)
             .pe(rems(0.5), cx)
@@ -440,7 +482,8 @@ impl TabGroupSkin {
                     .ms(rems(0.25), cx)
                     .gap_1()
                     .child(self.render_toolbar(group, window, cx))
-                    .children(right_button),
+                    .children(right_button)
+                    .children(hide_button),
             )
             .into_any_element()
     }
@@ -521,7 +564,18 @@ impl TabGroupSkin {
                         Tab::new()
                             .ix(ix)
                             .debug_selector(move || format!("{TAB_SELECTOR}-{ix}"))
+                            // 【项目私有 patch：hover 关闭】标签根是悬停热区（整行），
+                            // 后缀里的 ✕ 用同名 `group_hover` 消费。
+                            .group(SharedString::from(format!("dock-tab-{ix}")))
                             .tab_bar_prefix(has_leading)
+                            // 【项目私有 patch：tab 状态槽】面板可以在标签左端放固定槽位
+                            // 内容（脏点、失败点）。`Tab::prefix` 与 `tab_bar_prefix`
+                            // 是两个不同字段，互不覆盖；槽位由面板自己定宽。
+                            .map(|this| match handle.and_then(|handle| handle.tab_prefix(window, cx))
+                            {
+                                Some(prefix) => this.prefix(prefix),
+                                None => this,
+                            })
                             .map(|this| match handle.and_then(|handle| handle.tab_name(cx)) {
                                 Some(tab_name) => this.child(tab_name),
                                 None => this.child(panel_title(panel, window, cx)),
@@ -536,20 +590,16 @@ impl TabGroupSkin {
                                     && self.shared.close_button_visible.get()
                                     && group.is_panel_closable(panel.panel_id(cx), cx),
                                 |this| {
+                                    // 【项目私有 patch：hover 关闭】✕ 常驻占位但不可见，
+                                    // 鼠标进入**这个标签**才浮出（对齐 Zed 的 tabs.show_close_button
+                                    // = "hover"）；占位不变，所以标签宽度不会因悬停抖动。
                                     this.suffix(
-                                        Button::new(("close-tab", ix))
-                                            .icon(IconName::Close)
-                                            .xsmall()
-                                            // The regular ghost hover matches the
-                                            // inactive tab bar background in the
-                                            // default theme. Use a stronger theme
-                                            // surface while keeping a transparent
-                                            // idle background and no border.
-                                            .custom(
-                                                ButtonCustomVariant::new(cx)
-                                                    .foreground(cx.theme().secondary_foreground)
-                                                    .hover(*cx.theme().tokens.secondary_hover)
-                                                    .active(*cx.theme().tokens.secondary_active),
+                                        div()
+                                            .flex_shrink_0()
+                                            .opacity(0.)
+                                            .group_hover(
+                                                SharedString::from(format!("dock-tab-{ix}")),
+                                                |style| style.opacity(1.),
                                             )
                                             // The 20px XS button has a 12px icon:
                                             // 4px inside plus 8px outside matches
@@ -559,16 +609,40 @@ impl TabGroupSkin {
                                             // text-to-icon distance is also 12px.
                                             .ms(-px(8.), cx)
                                             .me(rems(0.5), cx)
-                                            .tab_stop(false)
-                                            .debug_selector(|| CLOSE_BUTTON_SELECTOR.to_string())
-                                            .on_click({
-                                                let group = group.clone();
-                                                let panel_id = panel.panel_id(cx);
-                                                move |_, window, cx| {
-                                                    cx.stop_propagation();
-                                                    group.close(panel_id, window, cx);
-                                                }
-                                            }),
+                                            .child(
+                                                Button::new(("close-tab", ix))
+                                                    .icon(IconName::Close)
+                                                    .xsmall()
+                                                    // The regular ghost hover matches the
+                                                    // inactive tab bar background in the
+                                                    // default theme. Use a stronger theme
+                                                    // surface while keeping a transparent
+                                                    // idle background and no border.
+                                                    .custom(
+                                                        ButtonCustomVariant::new(cx)
+                                                            .foreground(
+                                                                cx.theme().secondary_foreground,
+                                                            )
+                                                            .hover(
+                                                                *cx.theme().tokens.secondary_hover,
+                                                            )
+                                                            .active(
+                                                                *cx.theme().tokens.secondary_active,
+                                                            ),
+                                                    )
+                                                    .tab_stop(false)
+                                                    .debug_selector(|| {
+                                                        CLOSE_BUTTON_SELECTOR.to_string()
+                                                    })
+                                                    .on_click({
+                                                        let group = group.clone();
+                                                        let panel_id = panel.panel_id(cx);
+                                                        move |_, window, cx| {
+                                                            cx.stop_propagation();
+                                                            group.close(panel_id, window, cx);
+                                                        }
+                                                    }),
+                                            ),
                                     )
                                 },
                             )
@@ -850,7 +924,10 @@ impl TabGroupRenderer for TabGroupSkin {
 
         match visible.as_slice() {
             [] => Empty.into_any_element(),
-            [ix] if self.shared.panel_style() == PanelStyle::Auto => {
+            // 【项目私有 patch：placement 级形态】形态由"这个组在哪"决定，不再读皮肤上的
+            // 全局 `panel_style`：中央恒标签条（`GroupChrome::Tabs`），dock 走 Auto
+            // （单面板标题栏、多面板标签条）。
+            [ix] if group.chrome() == GroupChrome::Auto => {
                 // A panel that draws its own chrome declines the title bar.
                 let panel = &group.panels()[*ix];
                 if PanelHandle::of(panel).is_some_and(|handle| !handle.title_bar(cx)) {

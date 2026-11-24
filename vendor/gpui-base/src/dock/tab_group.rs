@@ -19,6 +19,7 @@ use super::{
     },
     layout::{InsertTarget, NodeId, PanelId},
     panel::PanelView,
+    state::DockPlacement,
 };
 
 /// Behavior a tab group cannot carry out on its own.
@@ -58,12 +59,30 @@ pub enum TabGroupEvent {
 /// reports itself alone. Choosing a constructor forces the container kind to be
 /// stated; anything a constructor does not grant stays off, so a container
 /// that forgets something gets a group that does less rather than more.
+/// 【项目私有 patch：placement 级形态】组头的形态，由"这个组在哪儿"决定。
+///
+/// 上游只有 `PanelStyle` 一档全局开关（`Auto` / `TabBar`），应用把中央编辑区设成
+/// `TabBar`（单文档也要有标签条）时，侧栏单面板会被连带画成一条空标签条。把形态
+/// 落到组约束上，皮肤才能按组判定：中央恒标签条，dock 单面板画标题栏。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GroupChrome {
+    /// 单面板画标题栏，多面板画标签条（dock 的既有外观）。
+    #[default]
+    Auto,
+    /// 无论几个面板都画标签条（中央编辑区的既有外观）。
+    Tabs,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TabGroupConstraints {
     alone: bool,
     dock_locked: bool,
     collapsed: bool,
     closable: bool,
+    /// 【项目私有 patch：placement 级形态】这个组所在的容器位置。
+    placement: DockPlacement,
+    /// 【项目私有 patch：placement 级形态】组头形态（见 [`GroupChrome`]）。
+    chrome: GroupChrome,
 }
 
 impl TabGroupConstraints {
@@ -75,6 +94,10 @@ impl TabGroupConstraints {
             dock_locked: true,
             collapsed: false,
             closable: false,
+            // 未定位的组按中央口径：恒标签条（与上游默认的全局 `Auto` 不同，
+            // 但这里表达的是"没有容器给它定位"这一种真实状态）。
+            placement: DockPlacement::Center,
+            chrome: GroupChrome::Tabs,
         }
     }
 
@@ -87,7 +110,21 @@ impl TabGroupConstraints {
             dock_locked: false,
             collapsed: false,
             closable: true,
+            placement: DockPlacement::Center,
+            chrome: GroupChrome::Auto,
         }
+    }
+
+    /// 【项目私有 patch：placement 级形态】这个组所在的容器位置。
+    pub fn at(mut self, placement: DockPlacement) -> Self {
+        self.placement = placement;
+        self
+    }
+
+    /// 【项目私有 patch：placement 级形态】组头形态。
+    pub fn with_chrome(mut self, chrome: GroupChrome) -> Self {
+        self.chrome = chrome;
+        self
     }
 
     /// Whether the dock as a whole forbids rearranging.
@@ -130,6 +167,16 @@ impl TabGroupConstraints {
 
     pub fn is_closable(&self) -> bool {
         self.closable
+    }
+
+    /// 【项目私有 patch：placement 级形态】这个组所在的容器位置。
+    pub fn placement(&self) -> DockPlacement {
+        self.placement
+    }
+
+    /// 【项目私有 patch：placement 级形态】组头形态。
+    pub fn chrome(&self) -> GroupChrome {
+        self.chrome
     }
 }
 
@@ -816,6 +863,17 @@ impl TabGroupContext {
 
     pub fn is_collapsed(&self) -> bool {
         self.constraints.is_collapsed()
+    }
+
+    /// 【项目私有 patch：placement 级形态】这个组所在的容器位置
+    /// （`Center` / `Left` / `Right` / `Bottom`）。皮肤据此决定组头形态。
+    pub fn placement(&self) -> DockPlacement {
+        self.constraints.placement()
+    }
+
+    /// 【项目私有 patch：placement 级形态】组头形态（见 [`GroupChrome`]）。
+    pub fn chrome(&self) -> GroupChrome {
+        self.constraints.chrome()
     }
 
     /// Whether the active panel can be closed.

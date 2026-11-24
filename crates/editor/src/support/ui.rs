@@ -24,6 +24,11 @@ pub const EDITOR_MIN_HEIGHT: f32 = 6.0;
 /// 状态点直径（0.375rem = 6px）：标签脏点与结果集失败点共用一档
 pub const STATUS_DOT_SIZE: f32 = 0.375;
 
+/// 标签左端状态槽宽（0.75rem = 12px）：脏点放在这个**固定占位**的槽里，
+/// 变脏只换内容不改宽度，所以标签不会因为状态变化而抖动（对齐 Zed 的
+/// `START_TAB_SLOT_SIZE`）。干净时槽照样占位、只留空白。
+pub const TAB_STATUS_SLOT: f32 = 0.75;
+
 /// 结果区尺寸常量：**单一来源在 `result_panel::ui`**（依赖方向 `editor → result_panel`，
 /// 正向引用成立；反向不行，所以不能反过来放）。
 ///

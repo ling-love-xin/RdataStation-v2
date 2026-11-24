@@ -91,6 +91,49 @@ impl ComponentPanel for EditorHostPanel {
         div().text_sm().child(self.title_text())
     }
 
+    /// 面板 zoom（组铺满 DockArea）的入口位置：**标题栏内联按钮 + 三点菜单都可用**。
+    ///
+    /// 0.10 的 `PanelControl` 只有三档：`Menu`（默认，唯一入口埋在标题栏三点菜单里，
+    /// 用户找不到）、`Toolbar`（只画内联按钮，但三点菜单会留下一条**灰掉的禁用项**，
+    /// 见 `vendor/gpui-component/src/dock/tab_panel.rs` 的 `menu_with_disabled(!menu_zoom)`）、
+    /// `Both`（两处都在且都可用）。这里选 `Both`：标题栏直接能点，菜单不出现"坏掉的项"。
+    ///
+    /// zoom 是瞬态（`DockState` / `PanelInfo` 不含 zoomed，重启不恢复），只影响该组铺满
+    /// area，不涉及文档状态，因此不需要持久化配合。
+    fn zoom_control(&self, _cx: &App) -> Option<PanelControl> {
+        Some(PanelControl::Both)
+    }
+
+    /// 【C3 状态槽】脏点画在**标签左端**的固定 12px 槽里，切走的标签也看得见。
+    ///
+    /// 上游只给了 `title_suffix`（挂在**标题栏**右端），而中央编辑区恒为标签条形态
+    /// （`GroupChrome::Tabs`），标题栏不画——所以此前"非激活的脏标签"完全没有标记，
+    /// 用户切回来后才知道没保存（真 bug）。槽位固定占位，变脏只换内容不改宽度。
+    fn tab_prefix(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        let dirty = self.is_dirty();
+        Some(
+            div()
+                .w(rems(ui::TAB_STATUS_SLOT))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .when(dirty, |this| {
+                    this.child(
+                        div()
+                            .size(rems(ui::STATUS_DOT_SIZE))
+                            .rounded_full()
+                            .bg(cx.theme().colors.primary),
+                    )
+                })
+                .into_any_element(),
+        )
+    }
+
     /// 脏点：Dock 没有"关闭前询问"钩子，脏状态必须**在标签上可见**（否则用户会误关）
     ///
     /// 2026-10-19：自绘 ✕ 改为**悬停显示**（`title_hovered` 随标题区 hover 翻转），

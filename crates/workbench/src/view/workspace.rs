@@ -695,11 +695,41 @@ impl WorkbenchView {
         // 编辑器 tab 只有标签、没有 ✕ 管理按钮。这里显式启用；面板自身的
         // `closable` 约束（gpui-base `Panel::closable` 默认 true）仍然生效。
         skin.set_close_button_visible(true, cx);
-        // 搜索结果标签页对齐 VSCode（2026-10-10 用户截图：搜索 tab 单独存在时
-        // 只有标题栏、没有 tab 栏 →「没有展开页面」）：默认 `PanelStyle::Auto`
-        // 单面板只画简单标题，改 `TabBar` **总是显示 tab 栏**（VSCode 编辑区/搜索
-        // 结果恒有标签页形态；单 tab 也显示「搜索: query」标签 + ✕）。
-        skin.set_panel_style(PanelStyle::TabBar, cx);
+        // 用户点名：标签条/标题里不要再出现折叠（collapse）按钮。上游已有公开开关
+        // （`DockSkin::set_toggle_button_visible`，0.10.0 `dock/mod.rs:263`）——收起的
+        // 入口在项目侧（活动栏按钮 / 状态栏 / 视图菜单），dock chrome 不再重复一份。
+        skin.set_toggle_button_visible(false, cx);
+        // 【三层 chrome】dock 标题的 ✕（= 收起这个 dock）与拖分隔线收起都属**用户动作**，
+        // 上游统一用 `DockToggleEvent` 上报（`toggle_dock_by_user`）。这里把 `Shared` 的
+        // 意图同步成 `Collapsed`——否则下一帧 `apply_left_mode` / `apply_right_mode`
+        // 的 Expanded 分支会把刚收起的 dock 又打开。
+        self._dock_toggle_subscription = Some(cx.subscribe(
+            &area,
+            |this: &mut Self, _area: Entity<DockArea>, event: &DockToggleEvent, cx| {
+                if event.is_open() {
+                    return;
+                }
+                match event.placement() {
+                    DockPlacement::Left => {
+                        if this.shared.left_mode.get() != SidebarMode::Collapsed {
+                            this.shared.left_mode.set(SidebarMode::Collapsed);
+                            cx.notify();
+                        }
+                    }
+                    DockPlacement::Right => {
+                        if this.shared.right_mode.get() != SidebarMode::Collapsed {
+                            this.shared.right_mode.set(SidebarMode::Collapsed);
+                            cx.notify();
+                        }
+                    }
+                    _ => {}
+                }
+            },
+        ));
+        // 【三层 chrome】形态不再由皮肤全局 `PanelStyle` 决定（上游只有一档，选了
+        // `TabBar` 就会把侧栏单面板也画成空标签条）。现在按**组的位置**判定：
+        // 中央恒标签条，dock 单面板画 32px 标题、多面板回标签条（vendor 私有 patch，
+        // 见 `docs/architecture/dependencies/gpui-kit-0.10.0-private-patch-support-audit.md`）。
         // T-1：标签栏「最大宽度 / 样式」设置项装配到 DockSkin（启动一次 + 设置变更
         // 经 `on_settings_changed` 再应用；渲染读取点在 vendor `dock/tab_panel.rs`）。
         // 句柄存字段：设置页回调与后续装配（如重建）都要复用同一份皮肤配置。
