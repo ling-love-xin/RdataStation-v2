@@ -203,6 +203,7 @@ mod tests {
         AnalysisItem, CUSTOM_DEFAULT_SQL, custom_hint, is_runnable, menu_items, request_for,
         request_for_item,
     };
+    use super::tr;
     use crate::store::ResultEntry;
     use ::shared::{FactFrame, StoragePref};
     use std::sync::Arc;
