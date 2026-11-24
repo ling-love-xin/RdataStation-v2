@@ -1838,3 +1838,82 @@ Label「筛选：」在左、`Text(SWT.BORDER|SWT.SEARCH|SWT.ICON_CANCEL)` 在�
 `crates/result_panel/src/analysis.rs:281` 的 `tr("计数行数")` 在 `#[cfg(test)]` 模块内没有 `tr`
 在作用域（该模块是显式列举 import 的「安全模式」）。临时补 `use super::tr;` 一行后测试全绿；
 该修复是否单独成刀待定。
+
+## §32 D10-4 状态行「已选 N 格」按矩形选区规模
+
+### 32.1 DBeaver 事实（源码实证）
+
+- `ResultSetStatListener.java:80-92`：三项文案的数据全部来自 `IResultSetSelectionExt`
+  （`getSelectedRowCount` / `getSelectedColumnCount` / `getSelectedCellCount`）。
+- `SpreadsheetPresentation.java:2038-2051`（内部类 `GridSelection implements IResultSetSelectionExt`）
+  三个方法**全部转调** `spreadsheet.get*SelectionSize()`，自己不另算。
+- `Spreadsheet extends LightGrid`（`Spreadsheet.java:53`），三个 size 都继承自 `LightGrid`：
+  `getCellSelectionSize` = `selectedCells.size()`（`:4349-4351`）、
+  `getColumnSelectionSize` = `selectedColumns.size()`（`:4361-4363`）、
+  `getRowSelectionSize` = `selectedRows.size()`（`:4374-4376`）。
+- 关键在于 `updateSelectionCache()`（`:2863-2882`）：`selectedColumns` / `selectedRows`
+  每次从 `selectedCells` **反推** —— 只要有一格落在该行（该列）就计入。因此
+  **矩形 rows × cols** 的计数就是 `(rows, cols, rows × cols)`，而不是恒定的 `(1,1,1)`。
+- 整行选中：`setSelection(int)`（`:1590-1597`）= `selectedCells.clear()` +
+  `selectCells(getCells(index))`，而 `getCells(row)`（`:4397-4401`）把该行
+  **所有 columns** 填进集合 → `(1, 列数, 列数)`。
+
+### 32.2 本仓改动
+
+改前：`crates/editor/src/view/host/construct.rs` 的 `SelectCell` 分支写死
+`set_selected_counts(1, 1, 1, cx)` —— 状态行在矩形选区下永远报 1 格。
+
+改后：
+
+- `CellRange::data_cells_count()` = `rows_count() × data_columns().len()`（口径同
+  `getCellSelectionSize`：行号槽那列不算数据格）。
+- 新增 `grid::selection_counts(range: Option<&CellRange>) -> (rows, cols, cells)`：
+  **口径只有一份**，由 `grid/mod.rs` re-export；`None`（还没建立矩形 / 键盘刚落到第一格）
+  按单格 `(1, 1, 1)`。
+- `construct.rs::SelectCell` 改为读 `delegate.cell_range()`，交给 `selection_counts` 算，
+  再写 `set_selected_counts`。
+
+**为什么计数权威放在编辑器侧**：`on_cell_click`
+（`vendor/gpui-component/src/table/state.rs:943-989`）先 `emit(CellClicked)`，随后
+`set_selected_cell`；而 `set_selected_cell`（`:648-660`）**无条件** `emit(SelectCell)`
+（`:658`）——所以每次点击必有一条 `SelectCell` 紧随 `CellClicked`。面板侧
+`handle_grid_event` 的 `CellClicked` 分支因此**不写** counts：两处订阅（编辑器 / 面板）
+写同一字段时的执行顺序不确定，双写会出现「矩形值被单格值盖掉」的抖动。
+
+**唯一不发 `SelectCell` 的路径**：行头隐藏时「点击已选格 → 升级整行」
+（`on_cell_click:973-982` 直接 `return`），此时计数由编辑器 `SelectRow` 分支给出
+`(1, visible_columns, visible_columns)` —— 与 DBeaver `getCells(row)` 的「整行所有列」同义。
+
+### 32.3 改动表
+
+| 文件 | 改动 |
+| --- | --- |
+| `crates/result_panel/src/grid/selection.rs` | 新 `data_cells_count()`、新 `selection_counts(Option<&CellRange>)`；单测 `data_cells_count_multiplies_rows_by_data_columns`、`selection_counts_mirror_the_rectangles_rows_and_data_columns` |
+| `crates/result_panel/src/grid/mod.rs` | re-export `selection_counts` |
+| `crates/editor/src/view/host/construct.rs` | `SelectCell` 分支由写死 `1/1/1` 改为读选区规模（算式走 `selection_counts`） |
+| `crates/editor/src/view/tests/results_a.rs` | 新用例 `the_status_row_counts_the_rectangular_cell_selection`：按生产序列 emit `CellClicked`（带 Shift）+ `SelectCell`，断言单格 `(1,1,1)`、1 行 2 列 → `(1,2,2)` |
+
+### 32.4 与 DBeaver 的差异明账（未做，不静默）
+
+1. **整行选中「列数」可能差 1**：DBeaver `getCells(row)` 遍历 `columns`，若 `showRowNumber`
+   为真，行号槽列也在其中；本仓 `visible_column_count()` 只数数据列。`showRowNumber`
+   的默认值未取证到 → **未改**。
+2. **行号槽列**：若矩形只覆盖视图列 0，本仓算出 `(1, 0, 0)`。生产路径下点行头走
+   `SelectRow`（不发 `CellClicked`），不会产生这种 range；防御性登记。
+3. **Ctrl 并集 / 反选仍缺**（§30.4 #2）：DBeaver 的「并集计数」要多矩形模型才表达，
+   当前一律按单矩形算。
+4. **正文拖拽选矩形仍缺**（§30.4 #1）：拖拽成型后会沿用同一口径，届时无需再改代码。
+
+### 32.5 验证
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo test -p rds-result-panel --lib` | **433 passed / 0 failed**（原 431 + 本刀 2） |
+| `cargo check -p rds-editor --tests` | Finished，0 warning |
+| `cargo test -p rds-editor` | **868 passed + 4 ignored**（原 867 + 本刀 1）；离线 `tests/offline_baseline.rs` 5 passed |
+| 新增用例点 | 单格 `(1,1,1)`；Shift 点同行下一列 → `(1,2,2)`（写死 `1/1/1` 的旧实现必失败） |
+
+**环境说明**：本轮与并行线共用同一 `target` 目录，期间并行线在跑
+`cargo check -p rds-workbench --tests`；并发起过两次 `E0462`（staticlib vs rlib）与一次
+`memory allocation failed`。等其进程结束后顺序执行，全绿。结论：本仓门禁必须**串行**跑
+（`CARGO_BUILD_JOBS=1` 之外还要保证同一 target 只有一个 cargo）。
