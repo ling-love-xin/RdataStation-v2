@@ -565,6 +565,24 @@ impl EditorHostPanel {
                 self.result_panel
                     .update(cx, |p, cx| p.begin_edit_cell_at(row, col, cx));
             }
+            // 【D10-6】方向键 / Home / End 挪焦点格（DBeaver `LightGrid.java:3738-3841`）：
+            // 位移与状态行 / 值详情投影都在面板里（`set_selection_pos` 要 window 驱动列浏览
+            // 器选中行，面板层拿不到 window，故走 `self.window` 转手）；宿主只剩一件事——
+            // 把「最近一次选的是格」换成新格，`Ctrl+C` 的复制目标读的是这份缓存。
+            ResultRequest::StepFocus { step, extend } => {
+                let panel = self.result_panel.clone();
+                let moved = self
+                    .window
+                    .update(cx, |_panel, window, app| {
+                        panel.update(app, |p, cx| p.step_grid_focus(step, extend, window, cx))
+                    })
+                    .ok()
+                    .flatten();
+                if let Some((row, col)) = moved {
+                    self.result_selection = Some(result_grid::GridSelection::Cell { row, col });
+                    cx.notify();
+                }
+            }
             // 【第 55 批】「从上一行 / 下一行复制」：逐格改写现有行（不是插新行）
             ResultRequest::CopyRowValuesFrom { row, above } => {
                 self.copy_row_values_from_adjacent(row, above, cx);

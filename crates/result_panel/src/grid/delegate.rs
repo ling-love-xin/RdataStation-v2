@@ -12,7 +12,7 @@ use gpui_kit::component::input::InputState;
 use gpui_kit::*;
 
 use super::menu::column_distinct_values;
-use super::selection::CellRange;
+use super::selection::{CellRange, GridKeyStep};
 use super::view_rows::TextFingerprint;
 use crate::ports::Presentation;
 use crate::rowset::{LocalRowSet, RowRef};
@@ -457,6 +457,66 @@ impl ResultGridDelegate {
             focus: (rows - 1, self.last_view_column()),
         });
         true
+    }
+
+    /// 【D10-6】方向键移动焦点格（DBeaver `LightGrid.java:3738-3841` 的 `onKeyDown`）。
+    ///
+    /// DBeaver 的键导航真值是 `focusColumn/focusItem`（`:3739-3744`：焦点列缺失时拿
+    /// `columns[0]` 兜底）。四向的具体走法：
+    ///
+    /// - → / ←（`:3773-3801`）：行不动，列 ±1；`index >= size` / `index == 0` 时
+    ///   `newColumnFocus = focusColumn` —— 即**到头停在原列**，不绕回另一端；
+    /// - ↑ / ↓（`:3803-3821`）：列不动，行 ±1；↓ 在「还没有焦点行」时落到第 0 行；
+    /// - Home / End（`:3822-3841`）：列钉首列 / 末列，行端只在
+    ///   `ctrlPressed || columns.size() == 1` 时才甩到两端。
+    ///
+    /// 本仓的列序是 `[行号槽(0)] + 可见数据列`，而 DBeaver 的 `columns` **不含行头**，
+    /// 所以「首列」= 视图列 1、「末列」= `last_view_column()`（转置视图恒 2，天然可用）。
+    /// 起点取矩形 `focus`（没有矩形时按 `(0, 首列)`，等价于 DBeaver 的焦点列兜底）。
+    ///
+    /// `extend`（Shift）保留锚点、只挪焦点（与 `click_cell` 的 Shift 档同义）；否则新格成单格选区。
+    ///
+    /// 返回新焦点格（调用方据此投影状态行 / 复制目标）；`None` = 这一下没有位移（空表 /
+    /// 只有占位行 / 撞到边界 / Home·End 落回原格），调用方不必刷新。
+    ///
+    /// 「还没有选区」时任何方向键都先把焦点落到 `(0, 首列)` 并建立选区（DBeaver 的
+    /// `focusColumn` 兜底 `:3739-3744` + ↓ 的 `newSelection = 0` 特例 `:3814-3817`）；
+    /// 有选区且撞到边界时同格不动，返回 `None`（DBeaver 那边 `newColumnFocus` 保持原列，
+    /// 仍会发一次同格的选择事件——本仓省掉这次空刷新）。
+    pub fn step_focus(&mut self, step: GridKeyStep, extend: bool) -> Option<(usize, usize)> {
+        let rows = self.view_len();
+        let last_col = self.last_view_column();
+        if rows == 0 || self.columns.is_empty() || self.placeholder_row || last_col == 0 {
+            return None;
+        }
+        let had_range = self.cell_range.is_some();
+        let (cur_row, cur_col) = match self.cell_range {
+            Some(range) => (range.focus.0.min(rows - 1), range.focus.1.clamp(1, last_col)),
+            None => (0, 1),
+        };
+        let (row, col) = match step {
+            GridKeyStep::Left => (cur_row, cur_col.saturating_sub(1).max(1)),
+            GridKeyStep::Right => (cur_row, (cur_col + 1).min(last_col)),
+            GridKeyStep::Up => (cur_row.saturating_sub(1), cur_col),
+            GridKeyStep::Down => ((cur_row + 1).min(rows - 1), cur_col),
+            GridKeyStep::Home { row_to_start } => (if row_to_start { 0 } else { cur_row }, 1),
+            GridKeyStep::End { row_to_end } => {
+                (if row_to_end { rows - 1 } else { cur_row }, last_col)
+            }
+        };
+        if had_range && (row, col) == (cur_row, cur_col) {
+            return None;
+        }
+        let anchor = if extend {
+            self.cell_range.map_or((row, col), |range| range.anchor)
+        } else {
+            (row, col)
+        };
+        self.cell_range = Some(CellRange {
+            anchor,
+            focus: (row, col),
+        });
+        Some((row, col))
     }
 
     /// 最后一个可见组件列的下标（含行号槽那列）。

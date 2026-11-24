@@ -5331,3 +5331,88 @@ fn clicking_the_top_left_corner_selects_every_cell(cx: &mut gpui_kit::TestAppCon
     assert_eq!(range.cols(), (0, 2), "从行号槽铺到末列");
     assert_eq!(range.data_cells_count(), 4, "2 行 × 2 数据列");
 }
+
+/// 【D10-6】方向键挪焦点格：四向 ±1、撞边界同格不动、Home/End 钉列、Shift 保留锚点。
+///
+/// DBeaver `LightGrid.java:3772-3841`：→/← 到 `columns` 两端时 `newColumnFocus = focusColumn`
+/// （不绕回另一端）；↑/↓ 走 `getPreviousVisibleItem` / `getNextVisibleItem`；Home/End 列恒钉
+/// 两端、行端只在 `ctrlPressed || columns.size() == 1` 时甩到两端。本仓没有隐藏行，
+/// 「上一 / 下一可见行」就是 ±1。
+#[gpui_kit::test]
+fn arrow_keys_walk_the_focus_cell_and_clamp_at_the_edges() {
+    use super::selection::GridKeyStep;
+    let mut grid = grid(); // 2 行 × 2 数据列 → 视图列 0 = 行号槽, 1 = id, 2 = name
+
+    // 还没有选区：方向键先把焦点落到首行首数据列（不是「什么都不做」）
+    assert_eq!(
+        grid.step_focus(GridKeyStep::Left, false),
+        Some((0, 1)),
+        "无选区时 ← 落位到首行第一个数据列"
+    );
+    assert_eq!(
+        grid.step_focus(GridKeyStep::Left, false),
+        None,
+        "首列再 ← 不绕回末列"
+    );
+    assert_eq!(grid.step_focus(GridKeyStep::Right, false), Some((0, 2)));
+    assert_eq!(
+        grid.step_focus(GridKeyStep::Right, false),
+        None,
+        "末列再 → 停在原列"
+    );
+    assert_eq!(grid.step_focus(GridKeyStep::Down, false), Some((1, 2)));
+    assert_eq!(
+        grid.step_focus(GridKeyStep::Down, false),
+        None,
+        "末行再 ↓ 停在原行"
+    );
+    assert_eq!(grid.step_focus(GridKeyStep::Up, false), Some((0, 2)));
+    assert_eq!(
+        grid.step_focus(GridKeyStep::Up, false),
+        None,
+        "首行再 ↑ 停在原行"
+    );
+
+    // Home / End：列钉两端；行端只有「Ctrl 或只有一列数据」时才跟
+    assert_eq!(
+        grid.step_focus(GridKeyStep::Home { row_to_start: false }, false),
+        Some((0, 1)),
+        "Home 只挪列（行端要 Ctrl）"
+    );
+    assert_eq!(
+        grid.step_focus(GridKeyStep::End { row_to_end: false }, false),
+        Some((0, 2)),
+        "End 只挪列"
+    );
+    grid.step_focus(GridKeyStep::Down, false); // 落到底行，验证 End 的行端判定
+    assert_eq!(
+        grid.step_focus(GridKeyStep::End { row_to_end: false }, false),
+        None,
+        "已在末列末行：End 不动"
+    );
+
+    // Shift：锚点不动，只挪焦点 → 矩形从锚点铺到新格
+    grid.click_cell(0, 1, false);
+    assert_eq!(grid.step_focus(GridKeyStep::Down, true), Some((1, 1)));
+    let range = grid.cell_range().expect("Shift ↓ 之后应有选区");
+    assert_eq!(range.rows(), (0, 1), "锚点在首行、焦点下沉一行");
+    assert_eq!(range.cols(), (1, 1), "列不跟着走");
+    assert_eq!(range.data_cells_count(), 2, "2 行 × 1 数据列");
+
+    // 无修饰键：新格自成单格
+    grid.step_focus(GridKeyStep::Right, false);
+    let range = grid.cell_range().expect("→ 之后应有选区");
+    assert_eq!(range.rows(), (1, 1));
+    assert_eq!(range.cols(), (2, 2));
+
+    // 空表两档：都没有可走的格
+    let mut no_columns = ResultGridDelegate::empty("尚未执行");
+    assert_eq!(no_columns.step_focus(GridKeyStep::Down, false), None);
+    let mut no_rows = ResultGridDelegate::empty("尚未执行");
+    no_rows.set_data(vec!["id".to_string()], Vec::<Vec<String>>::new());
+    assert_eq!(
+        no_rows.step_focus(GridKeyStep::Right, false),
+        None,
+        "占位行不算数据"
+    );
+}

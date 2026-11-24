@@ -1212,16 +1212,43 @@ impl ResultPanel {
             // 注意这里不是「把右栏拖宽」——开合态（`show_value_sidebar`）保持原值，
             // 还原后回到用户原本的开合。
             let maximized = self.panel_maximized;
+            // 【D10-6】网格键盘导航（DBeaver `LightGrid.java:3738-3841` 的 `onKeyDown`）：
+            // 四向 + Home/End 挪焦点格，Shift 保留锚点扩选。事件从「焦点在网格上」的
+            // 元素冒泡到这里（组件自己没挂键处理），所以先判焦点归属再接管——编辑框 /
+            // 筛选框 / 侧栏有焦点时一个键都不抢。Home/End 的行端语义对齐 DBeaver 的
+            // `ctrlPressed || columns.size() == 1`：只有一列数据时行也跟着甩到两端。
+            let queue_key = self.queue.clone();
+            let grid_key = self.grid.clone();
+            let grid_container = div()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .debug_selector(|| "editor-result-main-grid".to_string())
+                .on_key_down(move |event: &KeyDownEvent, window, app| {
+                    if !grid_key.read(app).focus_handle(app).is_focused(window) {
+                        return;
+                    }
+                    let shift = event.keystroke.modifiers.shift;
+                    let ctrl = event.keystroke.modifiers.control;
+                    let one_column = grid_key.read(app).delegate().visible_column_count() <= 1;
+                    let step = match event.keystroke.key.as_str() {
+                        "left" => result_grid::GridKeyStep::Left,
+                        "right" => result_grid::GridKeyStep::Right,
+                        "up" => result_grid::GridKeyStep::Up,
+                        "down" => result_grid::GridKeyStep::Down,
+                        "home" => result_grid::GridKeyStep::Home {
+                            row_to_start: ctrl || one_column,
+                        },
+                        "end" => result_grid::GridKeyStep::End {
+                            row_to_end: ctrl || one_column,
+                        },
+                        _ => return,
+                    };
+                    queue_key.request(ResultRequest::StepFocus { step, extend: shift }, app);
+                });
             row = row.child(
                 main_area
-                    .children((!maximized).then(|| {
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .min_h_0()
-                            .debug_selector(|| "editor-result-main-grid".to_string())
-                            .child(result_pane)
-                    }))
+                    .children((!maximized).then(|| grid_container.child(result_pane)))
                     .child(self.render_right_sidebar(cx)),
             );
             // 【右缘竖条】三态开关控制可见性（`edge_bar_visible`）；有可复制语义

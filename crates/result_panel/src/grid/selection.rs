@@ -81,6 +81,30 @@ impl CellRange {
     }
 }
 
+/// 【D10-6】键盘方向键的移动档（DBeaver `LightGrid.java:3772-3841` 的 `onKeyDown` 分支）
+///
+/// 只覆盖四向 + Home/End：`PAGE_UP` / `PAGE_DOWN` 依赖可见行范围
+/// （`getTopIndex()` / `getBottomIndex()`，`:3842-3874`），delegate 拿不到视口，未做。
+///
+/// `Home` / `End` 的行端语义词对齐 DBeaver 的 `ctrlPressed || columns.size() == 1`
+/// （`:3823`、`:3833`）：只有「按住 Ctrl」或「只有一列数据」时才把行也甩到两端，
+/// 否则只挪列、行原地不动。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GridKeyStep {
+    /// ←（`:3788-3801`）：行不动、列 −1，到头停在首列
+    Left,
+    /// →（`:3773-3786`）：行不动、列 +1，到头停在末列
+    Right,
+    /// ↑（`:3803-3809`）：列不动、行 −1，到 0 停住
+    Up,
+    /// ↓（`:3811-3821`）：列不动、行 +1，到末行停住
+    Down,
+    /// Home（`:3822-3830`）：列钉首列；`row_to_start` = DBeaver 的 `ctrlPressed || 单列`
+    Home { row_to_start: bool },
+    /// End（`:3831-3841`）：列钉末列；`row_to_end` 同上
+    End { row_to_end: bool },
+}
+
 /// 状态行三项（行数 / 列数 / 单元格数）的取值口径。
 ///
 /// DBeaver 的三项全部来自同一次 `updateSelectionCache()`

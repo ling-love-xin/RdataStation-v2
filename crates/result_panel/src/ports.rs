@@ -377,6 +377,19 @@ pub enum ResultRequest {
     /// `col` 是**组件列**（含行号槽，数据格从 1 起）：右键 `ContextTarget::column` 是
     /// 折算了行号槽的数据列下标，出菜单时 +1（见 `menu.rs` 的 `EditCell` 分派）。
     BeginEditCellAt { row: usize, col: usize },
+    /// 【D10-6】方向键 / Home / End 移动焦点格（对齐 DBeaver `LightGrid.java:3738-3841`
+    /// 的 `onKeyDown`）。
+    ///
+    /// 为什么走队列而不是面板内自处理：挪完焦点还得让**宿主**把「最近一次选的是格」换成
+    /// `GridSelection::Cell`（`Ctrl+C` 的复制目标读的是宿主缓存那份，见
+    /// `editor/view/host/mod.rs:411`），面板改不动宿主字段。
+    ///
+    /// 网格层只做位移（`ResultGridDelegate::step_focus`），状态行三项 / 当前格值 / 值详情
+    /// 位置都由面板在同一个方法里投影，宿主只负责换缓存的选择类型。
+    StepFocus {
+        step: crate::grid::GridKeyStep,
+        extend: bool,
+    },
     /// 【第 67 批】把指定格**重置为数据原值**（对齐 DBeaver `CMD_CELL_RESET`，
     /// `ResultSetViewer.fillEditMenu:3536` → `resetCellValue` →
     /// `ResultSetModel.resetCellValue:571-590`）。

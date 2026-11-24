@@ -578,6 +578,51 @@ impl ResultPanel {
         }
     }
 
+    /// 【D10-6】方向键 / Home / End：移动焦点格并投影（DBeaver `LightGrid.java:3738-3841`）
+    ///
+    /// 位移本身在网格层（`ResultGridDelegate::step_focus`）；这里只做三件投影：
+    ///
+    /// 1. 状态行三项计数（`selection_counts`，与点击 / 拖拽同一口径）；
+    /// 2. 状态行「当前格值」+ 右栏值详情位置（格选中；顺带撤掉整行镜像，与点击格同口径）；
+    /// 3. 入队 [`ResultRequest::StepFocus`] 让**宿主**把「最近一次选的是格」换掉——
+    ///    `Ctrl+C` 的复制目标读的是宿主缓存那份（`editor/view/host/mod.rs:411`）。
+    ///
+    /// `window` 只给 `set_selection_pos`（它要驱动列浏览器 List 的选中行）。
+    ///
+    /// 返回新焦点格（宿主据此把「最近一次选的是格」换成 `Cell{row,col}`）；`None` = 没位移。
+    pub fn step_grid_focus(
+        &mut self,
+        step: result_grid::GridKeyStep,
+        extend: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<(usize, usize)> {
+        let moved = self.grid.update(cx, |state, cx| {
+            let moved = state.delegate_mut().step_focus(step, extend);
+            if let Some((row, col)) = moved {
+                // DBeaver 每条分支末尾都 `showColumn` + `showItem`（`:3914` / `:3923`）——
+                // 键盘把焦点格挪出视口时要把它滚回来，否则用户看不见落点。
+                state.scroll_to_row(row, cx);
+                state.scroll_to_col(col, cx);
+            }
+            moved
+        });
+        let (row, col) = moved?;
+        let (counts, cell_text) = {
+            let delegate = self.grid.read(cx).delegate();
+            (
+                result_grid::selection_counts(delegate.cell_range().as_ref()),
+                delegate.cell(row, col),
+            )
+        };
+        self.set_selected_counts(counts.0, counts.1, counts.2, cx);
+        self.set_selected_cell(Some(cell_text), cx);
+        self.set_selected_row(None, cx);
+        self.set_selection_pos(Some((row, col)), window, cx);
+        self.queue.request(ResultRequest::StepFocus { step, extend }, cx);
+        Some((row, col))
+    }
+
     /// 编辑器把构造好的网格（含钩子）交进来
     ///
     /// 【订阅重挂】面板在 `new` 里订阅的是**构造期的占位网格**；换网格后旧订阅指向旧实体，
