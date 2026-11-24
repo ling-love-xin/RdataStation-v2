@@ -443,6 +443,7 @@ impl ResultPanel {
             filter_debounce: RefCell::new(None),
             filter_history: Vec::new(),
             filter_history_popup_open: false,
+            applied_filter_text: String::new(),
             pushdown: false,
             renaming: None,
             renaming_input: None,

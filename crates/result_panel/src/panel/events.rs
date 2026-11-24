@@ -138,6 +138,23 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【筛选条执行钮】当前是否还有「尚未应用」的筛选草稿（= 执行钮该不该亮）
+    ///
+    /// 对齐 DBeaver `ExecutePanel.isItemEnabled`（`ResultSetFilterPanel.java:1413-1436`）：
+    /// 把**已经落到数据筛选里的条件串**（`viewer.getModel().getDataFilter()` 经
+    /// `SQLUtils.appendConditionString` 还原）与输入框文本一起 trim 再比，
+    /// **不等才亮**——含义就是「输入框里有还没应用的东西」。
+    ///
+    /// 本仓没有「条件串」这一层，等价物是把**已落到网格上的** [`Self::applied_filter_text`]
+    /// 与输入框的实时副本 [`Self::filter_text`] 一起 trim 再比：打字过程中后者变、前者
+    /// 不变 → 亮；提交（Enter / ▶ / 防抖到点 / 换历史条目）走 `apply_filter` 落地 → 灭。
+    /// DBeaver 那条判据里另有两半本仓不可表达：
+    /// 「刷新进行中 → 灭」（本仓无刷新中态）、「无执行上下文 → 灭」（本仓恒有上下文），
+    /// 都登记在基线文档的差异表里，不在此处假装实现。
+    pub fn has_pending_filter_draft(&self) -> bool {
+        self.filter_text.trim() != self.applied_filter_text.trim()
+    }
+
     // ── 【结果内查找】查找栏（对齐 DBeaver 的 `FindReplaceOverlay` / `SpreadsheetFindReplaceTarget`）
 
     /// 打开 / 关闭查找栏
@@ -364,6 +381,10 @@ impl ResultPanel {
     /// （drain 分派路径用，防队列死循环）
     pub(crate) fn apply_filter_inner(&mut self, cx: &mut Context<Self>, requeue: bool) {
         let filter = self.filter_text.clone();
+        // 这次真正落到网格上 ⇒ 记为「已应用」：执行钮的启用态按它比
+        // （DBeaver `ExecutePanel.isItemEnabled` 比「已落地条件」vs「输入框文本」，
+        // `ResultSetFilterPanel.java:1413-1436`）
+        self.applied_filter_text = filter.clone();
         let grid = self.grid.clone();
         grid.update(cx, |state, cx| {
             state.delegate_mut().set_filter(filter);

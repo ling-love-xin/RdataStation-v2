@@ -477,6 +477,13 @@ pub struct ResultPanel {
     /// 本仓用受控 `Popover`（`gpui_kit` 组件，禁手搓浮层）承载同一张表，
     /// 展开态由这个字段驱动；行点击应用后由 `apply_filter_from_history` 收回。
     pub(crate) filter_history_popup_open: bool,
+    /// 【筛选条执行钮】**已落到网格上的**筛选词（`apply_filter_inner` 每次落地时快照）
+    ///
+    /// DBeaver `ExecutePanel.isItemEnabled` 比的是「已落到 model 的条件串」与
+    /// 「输入框文本」（`ResultSetFilterPanel.java:1415-1435`）；本仓 `filter_text`
+    /// 是**输入框的实时同步副本**（`on_filter_input` 一收到 change 就写，防抖只延迟
+    /// 「是否下发查询」），不能直接当「已落地」用——否则执行钮永远灭。故单独记一份。
+    pub(crate) applied_filter_text: String,
     /// 【结果内查找】查找栏是否打开（筛选条上的查找钮 + 查找栏本身都按它渲染）
     ///
     /// 对齐 DBeaver：筛选条工具条上的 `openFindReplaceButton` 是 **SWT.CHECK**

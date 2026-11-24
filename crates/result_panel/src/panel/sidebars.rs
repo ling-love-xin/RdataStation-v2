@@ -982,17 +982,22 @@ impl ResultPanel {
                                 .xsmall(),
                         ),
                     )
-                    .child(
+                    .child({
+                        // 展开态的执行钮与框内那颗同口径（DBeaver 是**同一个**
+                        // `ExecutePanel` 实例，`:209`）：草稿未应用才亮，
+                        // 判据见 `has_pending_filter_draft`（`ResultSetFilterPanel.java:1413-1436`）
+                        let can_run = self.has_pending_filter_draft();
                         Button::new("editor-result-filter-expand-run")
                             .ghost()
                             .xsmall()
                             .icon(IconName::Play)
+                            .disabled(!can_run)
                             .debug_selector(|| "editor-result-filter-expand-run".to_string())
                             .tooltip(tr("用 select * from (原SQL) where 词 重查（替换当前结果集）"))
                             .on_click(move |_, _window, app| {
                                 run_queue.request(ResultRequest::RunFilterAsQuery, app);
-                            }),
-                    ),
+                            })
+                    }),
             )
             .when(!self.filter_text.trim().is_empty(), |row| {
                 row.child(

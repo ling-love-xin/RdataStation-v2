@@ -403,19 +403,26 @@ impl ResultPanel {
                                 .h(rems(1.25)),
                         ),
                     )
-                    .child(
+                    .child({
                         // 第 4 列：执行。DBeaver 同列是 `ExecutePanel`（`ToolItemPanel` 子类，
                         // `heightHint = MIN_FILTER_TEXT_HEIGHT`，`:1351`），紧贴文本列右侧。
+                        //
+                        // 【DBeaver 对齐 2026-11-25】**启用态**按 `ExecutePanel.isItemEnabled`
+                        // （`ResultSetFilterPanel.java:1413-1436`）：已落地的条件串 vs
+                        // 输入框文本，不等才亮（= 还有草稿没应用）。判据见
+                        // `has_pending_filter_draft`，不可表达的两半在那边与差异表里写明。
+                        let can_run = self.has_pending_filter_draft();
                         Button::new("editor-result-filter-run")
                             .ghost()
                             .xsmall()
                             .icon(IconName::Play)
+                            .disabled(!can_run)
                             .debug_selector(|| "editor-result-filter-run".to_string())
                             .tooltip(tr("用 select * from (原SQL) where 词 重查（替换当前结果集）"))
                             .on_click(move |_, _window, app| {
                                 run_queue.request(ResultRequest::RunFilterAsQuery, app);
-                            }),
-                    )
+                            })
+                    })
             })
             // 【筛选历史】DBeaver `filterComposite` 的第 5 列是 `HistoryPanel`
             // （`ResultSetFilterPanel.java:174/214`）：一个下拉箭头，点开是历史筛选表

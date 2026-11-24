@@ -4030,6 +4030,11 @@ fn commit_on_enter_records_filter_history(cx: &mut gpui_kit::TestAppContext) {
     });
     cx.simulate_keystrokes("1");
     cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.update(|_window, app| panel.read(app).has_pending_filter_draft()),
+        "输入框里有未应用的草稿时执行钮应亮（DBeaver `ExecutePanel.isItemEnabled`：\
+         `ResultSetFilterPanel.java:1413-1436` 比「已落地条件」与「输入框文本」）"
+    );
 
     // 此时还没到防抖点：网格未筛、历史为空（打字不算提交）
     let before = cx.update(|_window, app| {
@@ -4044,6 +4049,10 @@ fn commit_on_enter_records_filter_history(cx: &mut gpui_kit::TestAppContext) {
     // Enter = 提交：立即应用 + 入历史
     cx.simulate_keystrokes("enter");
     cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        !cx.update(|_window, app| panel.read(app).has_pending_filter_draft()),
+        "Enter 已把词落到筛选上，草稿消失 → 执行钮该灭（同一判据的另一半）"
+    );
     let after = cx.update(|_window, app| {
         (
             grid.read(app).delegate().view_total(),
