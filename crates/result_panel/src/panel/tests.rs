@@ -6630,3 +6630,84 @@ fn dragging_inside_the_grid_extends_the_cell_range(cx: &mut gpui_kit::TestAppCon
     assert_eq!(range.rows_count(), 2, "两格对角 = 2 行");
     assert_eq!(range.data_columns(), vec![1, 2], "两格对角 = 2 个数据列");
 }
+
+/// 【D10-1b】从**未选中格**起拖：DBeaver 鼠标按下就先把该格选进选区
+/// （`LightGrid.java:3152-3170`），所以任意格按下都能拖动扩矩形。
+///
+/// 本仓 `on_drag` 是渲染期挂的，按下那一帧起点格还不是选中态 → 由首个 `DragMove`
+/// 调 `begin_drag_at` 补一次「无修饰点击」把锚点立到起点格，再走 `drag_select_to`。
+#[gpui_kit::test]
+fn dragging_from_an_unselected_cell_anchors_there_first(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    let grid = cx.update(|_, app| panel.read(app).grid.clone());
+    assert!(
+        cx.update(|_, app| {
+            grid.update(app, |state, _| state.cell_selectable = true);
+            grid.read(app).cell_selectable
+        }),
+        "表格必须开 cell_selectable，否则拖拽链路整体早退"
+    );
+
+    // 先点 (0,1)：立一个「旧锚点」，证明起点格不是它
+    cx.update(|_, app| {
+        grid.update(app, |_, cx| {
+            cx.emit(gpui_kit::component::table::TableEvent::CellClicked {
+                row_ix: 0,
+                col_ix: 1,
+                modifiers: gpui_kit::Modifiers::default(),
+            })
+        })
+    });
+    cx.run_until_parked();
+    let range = cx.update(|_, app| {
+        grid.read(app).delegate().cell_range().expect("点过就有选区")
+    });
+    assert_eq!(range.anchor, (0, 1), "旧锚点在 (0,1)");
+
+    // 从 (1,2) 起拖 → 按下即选中：锚点搬到起点格
+    cx.update(|_, app| {
+        grid.update(app, |table, cx| table.begin_drag_at(1, 2, cx));
+    });
+    cx.run_until_parked();
+    let range = cx.update(|_, app| {
+        grid.read(app).delegate().cell_range().expect("起点格已立锚点")
+    });
+    assert_eq!(range.anchor, (1, 2), "起点格成为新锚点");
+    assert_eq!(range.focus, (1, 2), "刚起拖时焦点就是起点格");
+    assert_eq!(
+        cx.update(|_, app| grid.read(app).selected_cell()),
+        Some((1, 2)),
+        "组件选中格也搬到起点格"
+    );
+
+    // 帧语义：先 refresh 再 draw，布局量才是真实值
+    cx.update(|window, _| window.refresh());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 拖到 (0,1)：矩形覆盖 (0,1)..(1,2)
+    let geometry = cx.update(|_, app| grid.read(app).debug_hit_geometry(app));
+    let target_x = geometry.left_fixed_width + geometry.col_widths[1] / 2.0;
+    let target_y = geometry.body_top + geometry.row_height * 0.5;
+    assert_eq!(
+        gpui_kit::component::table::cell_at_point(target_x, target_y, &geometry),
+        Some((0, 1)),
+        "目标点应落在 (0,1)：{geometry:?}"
+    );
+    cx.update(|_, app| {
+        grid.update(app, |table, cx| {
+            table.drag_select_to(px(target_x), px(target_y), px(geometry.width), cx)
+        })
+    });
+    cx.run_until_parked();
+
+    let range = cx.update(|_, app| {
+        grid.read(app).delegate().cell_range().expect("拖过就有矩形")
+    });
+    assert_eq!(range.anchor, (1, 2), "拖拽不移动锚点");
+    assert_eq!(range.focus, (0, 1), "焦点跟着 hover 格走");
+    assert_eq!(range.rows_count(), 2, "两行");
+    assert_eq!(range.data_columns(), vec![1, 2], "两个数据列");
+}
