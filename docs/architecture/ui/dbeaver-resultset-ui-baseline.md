@@ -1954,7 +1954,7 @@ Label「筛选：」在左、`Text(SWT.BORDER|SWT.SEARCH|SWT.ICON_CANCEL)` 在�
 | 纯函数 | `vendor/gpui-component/src/table/hit.rs`（**新文件**） | `CellHitGeometry`（`body_top` / `row_height` / `scroll_x` / `scroll_y` / `width` / `left_fixed_width` / `right_fixed_width` / `left_fixed_count` / `right_fixed_count` / `col_widths` / `rows_count`）+ `cell_at_point(x, y, &geometry)`：表头区 → `None`（对应 DBeaver `getRow` 返回 -1）；行按 `(y - body_top + scroll_y) / row_height` 再 clamp 到 `rows_count - 1`；列分「左固定区 / 可滚动区（扣左固定宽再叠 `scroll_x`）/ 右固定区」三支累积，越界收拢到首末行列 |
 | 布局快照 | `state.rs::cell_hit_geometry(width, cx)` | 取 `col_groups[i].width`、`header_band_height()`、`options.size.table_row_height()`、两个滚动 handle 的 offset、`fixed_cols_count(Left/Right)`、`delegate.rows_count(cx)` |
 | 拖拽负载 | `state.rs::SelectCellsDrag { owner: EntityId }` | 只带发起者 id：多表实例共存时 `on_drag_move` 会派发到每个挂了回调的元素，用 owner 过滤 |
-| 挂载点 | `state.rs` 的 `render_table_row`（可滚动列）与 `render_fixed_cells`（固定列） | 只在 `is_cell_selected && cell_selectable` 的格上 `on_drag`，即 DBeaver「按下时已在选区」的等价；容器 `inner_table` 挂 `on_drag_move` |
+| 挂载点 | `state.rs` 的 `render_table_row`（可滚动列）与 `render_fixed_cells`（固定列） | 任意格都挂 `on_drag`（`cell_selectable` 下无条件），负载带起点格 + 一次性 `Rc<Cell<bool>>`，首个 `DragMove` 由 `begin_drag_at` 补立锚点（见 §33.6）；容器 `inner_table` 挂 `on_drag_move` |
 | 判定 | `state.rs::handle_select_cells_drag` | 相对坐标 = `e.event.position - e.bounds.origin`；owner 校验后转调 `drag_select_to` |
 | 出口 | `state.rs::drag_select_to(x, y, width, cx)` | `cell_at_point` → 与当前选中格相同则不动 → 否则 `emit(CellClicked{row, col, modifiers: shift})` + `set_selected_cell` + `scroll_to_item(row, Nearest)` + `scroll_to_col(col)` |
 
@@ -1971,20 +1971,17 @@ Label「筛选：」在左、`Text(SWT.BORDER|SWT.SEARCH|SWT.ICON_CANCEL)` 在�
 | --- | --- |
 | `vendor/gpui-component/src/table/hit.rs` | **新增 162 行**：`CellHitGeometry` + `cell_at_point` + 5 条内置单测 |
 | `vendor/gpui-component/src/table/mod.rs` | +2：`mod hit;` + `pub use hit::*;` |
-| `vendor/gpui-component/src/table/state.rs` | +161/−5：`SelectCellsDrag`、`cell_hit_geometry`、`handle_select_cells_drag`、`drag_select_to`、`debug_hit_geometry`、两处 `on_drag`、容器 `on_drag_move`、`EntityId` 入 imports |
+| `vendor/gpui-component/src/table/state.rs` | +161/−5（D10-1）+68/−28（D10-1b）：`SelectCellsDrag`、`cell_hit_geometry`、`handle_select_cells_drag`、`drag_select_to`、`debug_hit_geometry`、两处 `on_drag`、容器 `on_drag_move`、`EntityId` 入 imports |
 | `crates/result_panel/src/grid/selection.rs` | +51：命中换算用例（表头 / 行号槽 / 滚动量 / 两侧固定列 / 越界收拢，6 类断言） |
-| `crates/result_panel/src/panel/tests.rs` | +89/−1：`dragging_inside_the_grid_extends_the_cell_range`（锚点 → 拖到 (1,2) → 2×2 矩形） |
+| `crates/result_panel/src/panel/tests.rs` | +89/−1（D10-1）+81（D10-1b）：`dragging_inside_the_grid_extends_the_cell_range`（锚点 → 拖到 (1,2) → 2×2 矩形） |
 
 `vendor` 不在 workspace 成员里，`hit.rs` 内置的 5 条单测不随 `cargo test -p rds-result-panel` 跑；
 同一批口径已在 `grid/selection.rs` 的门禁用例里复刻（见 33.5）。
 
 ### 33.4 与 DBeaver 的差异明账（未做，不静默）
 
-1. **只能从「已选中格」起拖**：DBeaver 鼠标按下就先选中该格（`:3152-3170`），故任意格按下即可拖；
-   本仓 `on_drag` 是渲染期按 `selected_cell` 挂的，按下未选中格时这一帧还没挂上 → 那一下只能选中、
-   拖不出矩形（先点一格再拖的常规路径不受影响）。修法：所有格挂 `on_drag`，payload 带起点格 +
-   一次性 `Rc<Cell<bool>>`，首次 `DragMove` 时若起点 ≠ 选中格就先补一次无修饰 `CellClicked` 立锚点。
-   留给下一刀。
+1. **任意格起拖**：已由 §33.6（D10-1b）落地——`on_drag` 放宽到全部格，起点格未选中时由首个
+   `DragMove` 补一次无修饰 `CellClicked` 立锚点（对应 DBeaver `:3152-3170` 的「按下即选」）。
 2. **边缘滚动差一格**：DBeaver 在 hover 越界时把终点设为 `bottomIndex+1` / `topIndex-1` 再
    `showItem`（`:3543-3550`）；本仓先把坐标收拢到首末行列，再 `scroll_to_item(.., Nearest)`，
    等价于「把边界格滚进可视区」，但不会跨到可视区之外的下一格。
@@ -2000,11 +1997,39 @@ Label「筛选：」在左、`Text(SWT.BORDER|SWT.SEARCH|SWT.ICON_CANCEL)` 在�
 
 | 项 | 结果 |
 | --- | --- |
-| `cargo test -p rds-result-panel --lib` | **435 passed / 0 failed**（原 434 + 拖拽用例 1；命中用例口径扩成 6 类断言） |
+| `cargo test -p rds-result-panel --lib` | **436 passed / 0 failed**（435 + D10-1b 用例 1；命中用例口径扩成 6 类断言） |
 | `cargo test -p rds-editor` | **868 passed + 4 ignored**；离线 `tests/offline_baseline.rs` 5 passed |
 | `cargo check -p rds-result-panel --lib` | Finished，0 warning |
 | `cargo check -p rds-workbench --lib` | Finished，0 warning（vendor patch 不破坏主程序编译） |
 | 新增用例点 | 锚点 (0,1) 不动、焦点到 (1,2)、`rows_count() == 2`、`data_columns() == [1,2]`；并分两层自证：① `cell_at_point(目标点) == (1,2)`；② 组件选中格已搬到 (1,2) |
+| D10-1b 用例点 | 旧锚点 (0,1) → `begin_drag_at(1, 2)` 把锚点与组件选中格一起搬到起点格 → 拖到 (0,1) → 矩形 (0,1)..(1,2) |
+
+### 33.6 D10-1b：任意格起拖（补 §33.4 #1）
+
+**DBeaver 事实**：鼠标按下走 `:3152-3170`（`e.button == 1` 分支）——先
+`updateCellSelection(new GridPos(col.getIndex(), row), e.stateMask, false, true, MOUSE)` 把该格选进
+选区，再 `cellSelectedOnLastMouseDown = (getCellSelectionCount() > 0)`（`:3166`）。所以 `:3507`
+的起拖条件「按下时选区非空」对**任意格**都成立。
+
+**本仓约束**：`on_drag` 是渲染期决定挂载的，按下那一帧起点格还没有变成 `selected_cell`，
+所以「只给选中格挂 `on_drag`」天然只能从已选中格起拖。
+
+**做法**：
+
+| 改动 | 内容 |
+| --- | --- |
+| 挂载条件 | 从 `is_cell_selected && cell_selectable` 放宽为 `cell_selectable`（可滚动列与固定列两处） |
+| 拖拽负载 | `SelectCellsDrag { owner, start: (row, col), anchored: Rc<Cell<bool>> }`。`anchored` 由 `SelectCellsDrag::new` 每次渲染新建：一次拖拽内的多次 `DragMove` 共享同一个 `Rc`，下一手势从新渲染出来的元素启动会拿到新的 `Rc` → **不需要在拖拽结束时清理** |
+| 首个 DragMove | `!anchored.replace(true)` 时调 `begin_drag_at(start)`：起点格不是当前选中格就 emit 一次**无修饰** `CellClicked` + `set_selected_cell`，等价 DBeaver 的「按下即选中」 |
+| 之后 | 照旧 `drag_select_to`（把 hover 格当带 Shift 的终点） |
+
+**顺带核实的一条上游行为**：gpui-fast `div.rs:53` 的 `DRAG_THRESHOLD = 2.`（px）——移动超过 2px
+就启动拖拽，并把 `clicked_state` 清空（`:3127`，这一次 click 不再触发）。「拖拽启动吞掉点击」是
+组件既有语义；`begin_drag_at` 同时补上「点一下就被选中」的观感，不会出现「按了没反应」。
+
+**验证**：`cargo test -p rds-result-panel --lib` **436 passed / 0 failed**（新增用例
+`dragging_from_an_unselected_cell_anchors_there_first`）；`cargo test -p rds-editor` 868 passed +
+4 ignored（离线 5 passed）；`cargo check -p rds-workbench --lib` Finished、0 warning。
 
 **调试记录（值得留的经验）**：拖拽用例最初卡在「焦点不动」，`cell_selectable` 断言把方向钉住 ——
 `panel_harness`（`panel/tests.rs:2052`）给别的用例建的是裸 `TableState::new`，
