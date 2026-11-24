@@ -43,6 +43,11 @@
 | `RDS_BUILD_TARGET` | cargo 的 `TARGET` | `unknown` |
 | `RDS_BUILD_LAX_SQL` | `Cargo.lock` 中 `lax-sql` 的 `version` | `unknown` |
 | `RDS_BUILD_GPUI_KIT` | `Cargo.lock` 中 `gpui-kit` 的 `version` | `unknown` |
+| `RDS_BUILD_SQLGLOT` | `Cargo.lock` 中 `sqlglot-rust` 的 `version` | `unknown` |
+| `RDS_BUILD_FAKE` | `Cargo.lock` 中 `fake` 的 `version` | `unknown` |
+| `RDS_BUILD_GPUI_FAST` | `Cargo.lock` 中 `gpui-fast` 的 `version` | `unknown` |
+| `RDS_BUILD_DUCKDB` | `Cargo.lock` 中 `duckdb` 的 `version`（crate 版本，引擎版本运行期解码） | `unknown` |
+| `RDS_BUILD_RUSQLITE` | `Cargo.lock` 中 `rusqlite` 的 `version`（引擎版本走 `rusqlite::version()`） | `unknown` |
 
 任何一条拿不到都只写 `unknown`，**不阻断构建**——版本标识是辅助设施，不能成为编译的前置条件。
 
@@ -56,7 +61,7 @@
 - `BuildInfo::tag()`：§2 的单行标识（`tag_base()` + `-dirty`）。状态栏那枚标识用它。
 - `BuildInfo::tree_text()`：给弹窗看的"干净 / 有未提交改动 / 无法判定"。
 - `BuildInfo::commit_time_text()`：`chrono` 按本地时区格式化 `YYYY-MM-DD HH:MM:SS +08:00`。
-- `BuildInfo::rows()`：弹窗逐行明细（9 行）。
+- `BuildInfo::rows()`：弹窗逐行明细（14 行，身份 5 + 构建与依赖 9）。
 - `BuildInfo::clipboard_text()`：粘进 issue / 聊天 / 验证记录的多行文本。
 
 纯读取，无缓存、无状态；`grep` 不到任何运行期写盘。
@@ -77,21 +82,26 @@
   （`Dialog` 默认 448，只在内容容器上设上限不改弹窗宽度）
 - 顶部一行：`tag_base()` 大字 + 状态徽标 `Tag`（`DIRTY` / `CLEAN` / `UNKNOWN`，全部 `outline()`）
 - 脏树时挂 `Alert::warning`（标题「工作树有未提交改动」，正文说明该构建不对应任何提交）
-- 明细分两组，均为 `DescriptionList::new().label_width(px(120.)).columns(1)`（**horizontal 默认布局**）：
+- 明细共 14 项，前 5 项身份、后 9 项构建与依赖，均用
+  `DescriptionList::new().label_width(px(120.)).columns(1)`（**horizontal 默认布局**）；
+  字段顺序与文案由 `version::BuildInfo::rows()` 单一提供，`version_dialog.rs` 只按
+  `IDENTITY_ROWS = 5` 切分：
   - 身份 5 项：版本标识 / 版本号 / 提交（commit · branch）/ 工作树 / 提交时间
   - `Separator::horizontal_dashed().label("构建与依赖")`
-  - 构建 4 项：构建档 / 目标平台 / SQL 排版引擎（lax-sql x.y.z）/ UI 组件库（gpui-kit x.y.z）
+  - 构建与依赖 9 项：构建档 / 目标平台 / SQL 语义（sqlglot）/ SQL 排版（lax-sql）/
+    分析引擎（DuckDB，带 crate 版本）/ 本地存储（SQLite，带 rusqlite 版本）/ UI 组件库（gpui-kit）/
+    渲染内核（gpui-fast）/ Mock 数据（fake）
 - 底部说明：核对只看「提交」「工作树」两行
 - 脚注按钮：右为**主操作**「复制版本信息」（`Button` + `ButtonVariant::Primary` + `Copy` 图标，
   写 `ClipboardItem`），左为「关闭」
 
 > 版式坑（改版时踩过）：`DescriptionList::vertical()` 会把每项拆成"带底色的 label 行 + 值行"两行，
-> 9 项就是 18 行，必然撑破对话框高度触发内部滚动。**明细一律用默认 horizontal**。
+> 14 项就是 28 行，必然撑破对话框高度触发内部滚动。**明细一律用默认 horizontal**。
 
-> 扩版设计（同一 560 宽弹窗内补 6 个核心库，不换形态；未落地）：见
-> [`version-info-page-design.md`](./version-info-page-design.md)（2026-11-25 定稿，原型
-> [`version-info-page-prototype.html`](./version-info-page-prototype.html)）。本节描述的结构在扩版里
-> 保留，只把「构建 4 项」换成「构建与依赖 9 项」。
+> 扩版已落地（2026-11-25）：同一 560 宽弹窗内补 5 个新库（sqlglot / fake / gpui-fast / DuckDB /
+> SQLite），形态不变。字段字典、值来源（含两个引擎版本的解码）与验收口径见
+> [`version-info-page-design.md`](./version-info-page-design.md)；同目录
+> [`version-info-page-prototype.html`](./version-info-page-prototype.html) 为 14 项原型。
 
 ### 5.1 落到项目（只写不展示）
 
@@ -155,7 +165,7 @@ Cargo.lock
 
 | 文件 | 职责 |
 | --- | --- |
-| `crates/workbench/build.rs` | 采集 git / 环境 / 锁定版本，注入 8 个 `RDS_BUILD_*` |
+| `crates/workbench/build.rs` | 采集 git / 环境 / 锁定版本，注入 13 个 `RDS_BUILD_*` |
 | `crates/workbench/src/version.rs` | 常量解析、`tag_base()` / `tag()` / `rows()` / `clipboard_text()`，4 个单测 |
 | `crates/workbench/src/components/version_dialog.rs` | 弹窗装配（标准模板 + `Alert` / `Tag` / `Separator` / `DescriptionList` / 主位复制按钮） |
 | `crates/workbench/src/components/mod.rs` | 模块登记 |

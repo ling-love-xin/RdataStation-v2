@@ -103,15 +103,19 @@
 
 **DuckDB**：crate 版本 `1.10506.1` 与引擎版本 `1.5.6` 不是同一个数，直接显示前者会让验证者
 误判。`libduckdb-sys` 的 `build.rs` 里 `duckdb_version_from_pkg_version` 把第二段 `10506`
-拆成 major 1 / minor 5 / patch 06 —— 这是纯字符串运算，在 `workbench/build.rs` 里照抄同一规则
-算出 `RDS_BUILD_DUCKDB_ENGINE`，**不建连接、不读盘**。根 `Cargo.toml` 注释「`1.10506.1` ↔
-DuckDB `v1.5.6`」已二次确认，动态链接目录 `third_party/duckdb/1.5.6` 与之一致。
+拆成 major 1 / minor 5 / patch 06 —— 这是纯字符串运算。构建侧只注入 crate 版本
+（`RDS_BUILD_DUCKDB`），解码放在 `version.rs` 的 `duckdb_engine_from(pkg_version)` 里，照抄同
+一套规则，**不建连接、不读盘**。与上游唯一的差别是失败姿势：上游直接 `panic`，这里
+`encoded < 10_000` 或解析失败一律回 `None`（`unknown`），避免「关于」弹窗因锁文件异常而崩。
+根 `Cargo.toml` 注释「`1.10506.1` ↔ DuckDB `v1.5.6`」已二次确认，动态链接目录
+`third_party/duckdb/1.5.6` 与之一致。
 
 **SQLite**：`libsqlite3-sys` 的 crate 版本（0.38.2）与引擎版本（3.51.3）同样是两个数，且
 bundled 的 `sqlite3.h` 在 cargo registry 里，构建期读它不稳。改用运行时零成本 API：
 `rusqlite::version() -> &'static str`（`rusqlite-0.40.2/src/version.rs:21`，直接返回
-`SQLITE_VERSION` 常量，不查库、不开连接）。在 `version::info()` 里 `OnceLock` 取一次缓存，
-`render` 只读结构体——守现有「render 不读盘」的约定。
+`SQLITE_VERSION` 常量，不查库、不开连接）。`version::sqlite_engine()` 直接把它返回，**不需要
+`OnceLock` 缓存**（已经是 `&'static str`，拷贝一次就是 `String`）；crate 版本仍走
+`RDS_BUILD_RUSQLITE`。`render` 只读结构体，守现有「render 不读盘」的约定。
 
 ### 5.2 精确到什么程度
 
@@ -184,6 +188,11 @@ fake        5.1.0
 
 ## §9 i18n
 
+**实现状态（2026-11-25）**：本轮沿用既有做法——明细 label 仍是硬编码中文，只有标题与按钮走
+`shared::i18n::tr`。下表是待接入的 key 清单；接入时要同时改 `shared::i18n` 资源与
+`version.rs::rows()` 的 label 来源，并保证「复制版本信息」的文本仍是中文（那段是给人贴到
+issue / 群聊里的，不随界面语言变）。
+
 新增 7 个 label key（中 / 英成对）：
 
 | key | 中文 | 英文 |
@@ -210,10 +219,18 @@ fake        5.1.0
   `unknown` 而不是 panic。
 - 未知兜底：把五个新常量置 `unknown` 时，值仍能渲染成 `unknown（…）` 而非空串。
 
-窗口测试（`crates/workbench` 既有 dialog 测试口径）：
+版式常量单测（`crates/workbench/src/components/version_dialog.rs::tests::dialog_layout_is_pinned`）：
 
-- 打开弹窗宽度等于 560（断言 `dialog` 尺寸，防止有人"顺手"改内容容器）。
-- 脏树时 `Alert` 存在、hero 后不带 `-dirty`；干净时 `Alert` 不存在。
+- 钉死宽度 `560`、label 列宽 `120`、切分点 `IDENTITY_ROWS = 5`，防止有人"顺手"改内容容器
+  或把字段挪进错段；同时断言 `rows()` 第 5 / 第 6 项分别是「提交时间」「构建档」。
+- 脏树 `Alert` 与徽标依赖运行期 `info.dirty`，属窗口行为，本轮未新增窗口测试；核对靠真机：
+  在 `-dirty` 构建下打开弹窗，应看到 `0.2.12+xxxxxxx`（不带后缀）+ DIRTY 红标 + 警示条。
+
+**落地验证（2026-11-25）**：`cargo check -p rds-workbench --lib -j 1` 通过；
+`cargo test -p rds-workbench --lib -j 1 version` 10 passed / 0 failed；
+`cargo clippy -p rds-workbench --all-targets -j 1` 0 error（128 条 warning 全部在其它文件，
+本文件 0 条）；`rustfmt --edition 2024 --check` 三文件通过。真机渲染未核对——14 项在
+1280×720 下是否触发内部滚动，需打开一次弹窗确认（原型按同版式估算为 635 高）。
 
 ## §11 与既有文档的关系
 

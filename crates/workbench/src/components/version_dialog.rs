@@ -5,18 +5,19 @@
 //! 数据全部来自构建期注入（见 `crate::version` 与 `crates/workbench/build.rs`），
 //! 运行时不做任何推断。
 //!
-//! 版式（2026-11-22 按原型定稿）：
+//! 版式（2026-11-22 定稿，2026-11-25 扩字段）：
 //! - 弹窗宽 **560**（`Dialog` 默认 448，必须显式给宽，改内容容器上限没有用）；
 //! - `DescriptionList` 用**默认 horizontal**（label 120px + 值一行）。
-//!   `vertical()` 会把每项拆成"带底色的 label 行 + 值行"两行，9 项就是 18 行，
+//!   `vertical()` 会把每项拆成"带底色的 label 行 + 值行"两行，14 项就是 28 行，
 //!   必然撑破对话框高度、触发内部滚动——这是本文件改版时踩过的坑；
+//! - 明细共 14 项：身份 5 项 + 构建与依赖 9 项（后者补 sqlglot / duckdb / sqlite /
+//!   gpui-fast / fake，见 `docs/architecture/ui/version-info-page-design.md`）；
+//!   顺序由 `version::BuildInfo::rows()` 单一提供，本文件只负责切分与渲染；
 //! - 脏树用 `Tag`（一眼可判）+ `Alert`（替代裸橙色文字）；
-//! - 身份 5 项 / 构建 4 项用 `Separator` 分组；
 //! - 「复制版本信息」是主操作（放右侧、primary 变体），「关闭」是次操作。
 //!
 //! 入口：状态栏右端常驻标识（`view::actions::render_status_bar`）。
 
-use shared::i18n::tr;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
@@ -30,12 +31,22 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     App, ClipboardItem, ParentElement as _, SharedString, Styled as _, Window, div, px,
 };
+use shared::i18n::tr;
 
 use crate::components::dialog_helpers::{standard_dialog_body, standard_dialog_footer};
 use crate::version;
 
+/// 弹窗宽度。`Dialog` 默认 448，14 项明细在这个宽度下会让引擎类值折成三行。
+const WIDTH: f32 = 560.0;
+
 /// label 列宽（`DescriptionList` horizontal 的默认值，显式写出便于对齐其它弹窗）。
 const LABEL_WIDTH: f32 = 120.0;
+
+/// 明细里「身份」占前几项，其余归入「构建与依赖」。
+///
+/// 与 `version::BuildInfo::rows()` 的顺序绑定：前 5 项身份，后 9 项构建与依赖。
+/// 增删字段时两处一起改（`version.rs` 的单测会卡住 `rows.len()`）。
+const IDENTITY_ROWS: usize = 5;
 
 /// 打开版本信息对话框。
 pub fn open_version_dialog(window: &mut Window, cx: &mut App) {
@@ -66,30 +77,21 @@ pub fn open_version_dialog(window: &mut Window, cx: &mut App) {
         )
         .title(tr("工作树有未提交改动"));
 
-        // 身份 5 项 + 构建 4 项：默认 horizontal 布局，一项一行。
+        // 14 项明细：前 5 项身份、后 9 项构建与依赖。顺序与文案由 `rows()` 统一给出，
+        // 这里只做切分与渲染，避免弹窗与剪贴板/单测三处各写一份字段清单。
+        let rows = info.rows();
         let mut identity = DescriptionList::new()
             .label_width(px(LABEL_WIDTH))
             .columns(1);
-        for (label, value) in [
-            ("版本标识", info.tag()),
-            ("版本号", info.version.to_string()),
-            ("提交", format!("{} · {}", info.commit, info.branch)),
-            ("工作树", info.tree_text()),
-            ("提交时间", info.commit_time_text()),
-        ] {
-            identity = identity.item(label, value, 1);
+        for (label, value) in rows.iter().take(IDENTITY_ROWS) {
+            identity = identity.item(*label, value.clone(), 1);
         }
 
         let mut build = DescriptionList::new()
             .label_width(px(LABEL_WIDTH))
             .columns(1);
-        for (label, value) in [
-            ("构建档", info.profile.to_string()),
-            ("目标平台", info.target.to_string()),
-            ("SQL 排版引擎", format!("lax-sql {}", info.lax_sql)),
-            ("UI 组件库", format!("gpui-kit {}", info.gpui_kit)),
-        ] {
-            build = build.item(label, value, 1);
+        for (label, value) in rows.iter().skip(IDENTITY_ROWS) {
+            build = build.item(*label, value.clone(), 1);
         }
 
         let body = div()
@@ -122,8 +124,31 @@ pub fn open_version_dialog(window: &mut Window, cx: &mut App) {
 
         dialog
             .title(tr("关于 RdataStation"))
-            .w(px(560.))
+            .w(px(WIDTH))
             .child(standard_dialog_body(body))
             .footer(standard_dialog_footer(copy, Some(close)))
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{IDENTITY_ROWS, LABEL_WIDTH, WIDTH};
+    use crate::version;
+
+    /// 尺寸与切分点是「关于」弹窗的版式契约：改宽、挪字段、重排 `rows()` 都会先撞这里。
+    ///
+    /// 560 不是随手取的：14 项 × 约 28px 行高 + 头部 + 页脚，1280×720 屏一屏放得下；
+    /// 缩回默认 448 会让 `DuckDB 1.5.6（crate 1.10506.1）` 这类双包值折行。
+    #[test]
+    fn dialog_layout_is_pinned() {
+        assert_eq!(WIDTH, 560.0);
+        assert_eq!(LABEL_WIDTH, 120.0);
+        assert_eq!(IDENTITY_ROWS, 5);
+
+        // 切分点必须真的落在身份段之后，否则「构建与依赖」段会从头混进身份字段。
+        let rows = version::info().rows();
+        assert_eq!(rows.len(), 14);
+        assert_eq!(rows[IDENTITY_ROWS - 1].0, "提交时间");
+        assert_eq!(rows[IDENTITY_ROWS].0, "构建档");
+    }
 }

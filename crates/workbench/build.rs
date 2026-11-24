@@ -13,6 +13,11 @@
 //! - `RDS_BUILD_TARGET`        目标三元组
 //! - `RDS_BUILD_LAX_SQL`       `Cargo.lock` 里 `lax-sql` 的锁定版本（SQL 排版引擎）
 //! - `RDS_BUILD_GPUI_KIT`      `Cargo.lock` 里 `gpui-kit` 的锁定版本（UI 框架）
+//! - `RDS_BUILD_SQLGLOT`       `Cargo.lock` 里 `sqlglot-rust` 的锁定版本（SQL 语义引擎）
+//! - `RDS_BUILD_FAKE`          `Cargo.lock` 里 `fake` 的锁定版本（Mock 数据）
+//! - `RDS_BUILD_GPUI_FAST`     `Cargo.lock` 里 `gpui-fast` 的锁定版本（渲染内核）
+//! - `RDS_BUILD_DUCKDB`        `Cargo.lock` 里 `duckdb` 的**crate** 版本（引擎版本运行时解码）
+//! - `RDS_BUILD_RUSQLITE`      `Cargo.lock` 里 `rusqlite` 的锁定版本（引擎版本走 `rusqlite::version()`）
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -107,15 +112,22 @@ fn main() {
         std::env::var("TARGET").unwrap_or_else(|_| "unknown".into()),
     );
 
-    // 关键依赖的锁定版本：给「关于」弹窗核对排版/UI 引擎用。
-    emit(
-        "RDS_BUILD_LAX_SQL",
-        lock_version(&root, "lax-sql").unwrap_or_else(|| "unknown".into()),
-    );
-    emit(
-        "RDS_BUILD_GPUI_KIT",
-        lock_version(&root, "gpui-kit").unwrap_or_else(|| "unknown".into()),
-    );
+    // 关键依赖的锁定版本：给「关于」弹窗核对语义/排版/UI/引擎用。
+    // 版本一律从 `Cargo.lock` 采，不写死在源码里——锁文件与二进制才是同一份事实。
+    for (key, package) in [
+        ("RDS_BUILD_LAX_SQL", "lax-sql"),
+        ("RDS_BUILD_GPUI_KIT", "gpui-kit"),
+        ("RDS_BUILD_SQLGLOT", "sqlglot-rust"),
+        ("RDS_BUILD_FAKE", "fake"),
+        ("RDS_BUILD_GPUI_FAST", "gpui-fast"),
+        ("RDS_BUILD_DUCKDB", "duckdb"),
+        ("RDS_BUILD_RUSQLITE", "rusqlite"),
+    ] {
+        emit(
+            key,
+            lock_version(&root, package).unwrap_or_else(|| "unknown".into()),
+        );
+    }
 
     // 触发条件：自己、依赖锁、git 指针/索引。
     // 不加全量源码监听——源码变更本来就会重编本 crate，而 commit / add 只动 HEAD / index。
