@@ -378,6 +378,11 @@ impl ResultGridDelegate {
         // 「整行 = 全部数据列」等价；Shift 那次只换行的一端，列仍全宽（`:3128-3129`）。
         // 计数不受影响——`CellRange::data_columns()` 本来就把列 0 当行号槽排除
         // （`grid/selection.rs:68-72`），所以整行仍是「1 行 × N 数据列 × N 格」。
+        //
+        // 已知差异（§39.3）：DBeaver 点完行头会把当前格改钉到**首个数据列**
+        // （`:3140-3145` 的 `focusColumn = getColumn(new Point(rowHeaderWidth + 1, e.y))`），
+        // 本仓 `focus` 留在矩形末列。原因同 `select_all_cells`：focus 是矩形的一个角，
+        // 而矩形必须含列 0 才有行号槽高亮。要等选区与当前格解耦（§40.3）。
         if Self::is_row_number(col) {
             let last = self.last_view_column();
             let anchor_row = if extend {
@@ -417,6 +422,10 @@ impl ResultGridDelegate {
     ///
     /// 行号槽的列头就是左上交角（D10-3 已在 `grid/header.rs` 拦下并全选）；
     /// 万一走到这里，按行头按下口径给整行，不另开一套。
+    ///
+    /// 已知差异（§39.3）：DBeaver 列头点击后 `focusColumn = col`、`focusItem` 不动（`:3201`），
+    /// 当前格就是该列的原焦点行；本仓 `focus` 是矩形对角 `(末行, col)`，两者行位置不同。
+    /// 同属「focus 只能是矩形角」的限制，随 §40.3 一起解。
     pub fn click_col(&mut self, col: usize, extend: bool) {
         let rows = self.view_len();
         if rows == 0 || self.columns.is_empty() || self.placeholder_row {
@@ -452,15 +461,17 @@ impl ResultGridDelegate {
     ///
     /// 返回 `false` = 空表，调用方不必刷新（对齐 DBeaver 那条 `return null`）。
     ///
-    /// 【D10-8 取证后判定：不做】DBeaver `LightGrid.java:4279-4289` 把
-    /// `focusColumn/focusItem` 临时设成 `(columns.getFirst(), 0)` 跑完
-    /// `updateCellSelection(getAllCells())` 后，**再把焦点恢复成原样**——「选区」与
-    /// 「当前格」是两份独立状态。本仓是单矩形模型（`CellRange{anchor,focus}`，§37.4 #5）：
-    /// 选区形状由两个对角点定义，当前格必然落在其中一个角上，因此「覆盖全表（含行号槽）
-    /// + 当前格停在中间/首列」无法同时成立。实测把 `focus` 挪到 `(0, 1)` 会让
-    /// `cols()` 的包围盒从 `(0, 末列)` 收成 `(1, 末列)`，行号槽整列掉出选区、不再高亮，
-    /// 与 DBeaver `:4741` 的整行头高亮冲突。故维持 `(0,0) → (末行, 末列)`，
-    /// 「当前格不随全选移动」等单矩形模型改造后再议（同 §37.4 #5）。
+    /// 【D10-8 取证后判定：不做】DBeaver 交角的**最终**当前格是「首行首数据列」：
+    /// `selectAllCellsInternal`（`:4272-4296`）内部先临时借 `(首列, 0)` 当锚、选完还回去
+    /// （`:4288-4289`），但紧接着**调用方**又把它钉住——`focusColumn =
+    /// getColumn(new Point(rowHeaderWidth + 1, 1))`、`focusItem = getTopIndex()`
+    /// （`:3183-3184`）。行头点整行（`:3140-3145`）、列头点整列（`:3201`）是同族口径。
+    ///
+    /// 本仓对齐不了：`CellRange{anchor,focus}` 是单矩形（§37.4 #5），`focus` 必然落在
+    /// 矩形的角上；而行号槽高亮又**靠矩形列区间**（`cols()` 必须含列 0）。要让 focus 的列 = 1，
+    /// 包围盒就收成 `(1, 末列)`、行号槽整列掉出选区——实测改后 `cols()==(1,2)`、两个用例失败，
+    /// 那是拿 DBeaver `:4741` 的整行头高亮去换当前格位置。
+    /// 故维持 `(0,0) → (末行, 末列)`；真对齐要先把选区与当前格解耦（§39.3 / §40.3）。
     pub fn select_all_cells(&mut self) -> bool {
         let rows = self.view_len();
         // 空态占位行不算数据（`set_data` 的注释）：DBeaver 那边 `getItemCount()` 是 0
