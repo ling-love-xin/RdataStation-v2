@@ -692,6 +692,29 @@ where
         cx.notify();
     }
 
+    /// 【RDS patch】Sets the selected cell **without touching scroll position**.
+    ///
+    /// 结果集的「左上交角全选」要把当前格搬到 `(视口首行, 首个数据列)`——DBeaver
+    /// `LightGrid.java:3183-3184` 的 `focusColumn = getColumn(new Point(rowHeaderWidth + 1, 1))`
+    /// + `focusItem = getTopIndex()`，`getTopIndex()` 就是视口首行，**不滚动**。
+    /// [`TableState::set_selected_cell`] 的 [`ScrollStrategy::Center`] 会把该行拽到视口正中，
+    /// 与 DBeaver 不符，故这里拆出一个原地不动的入口。
+    ///
+    /// 语义与 `set_selected_cell` 的其余部分一致：切到单元格模式、清掉右键格、发
+    /// [`TableEvent::SelectCell`]。调用方负责保证行列都在有效范围内。
+    pub fn set_selected_cell_without_scroll(
+        &mut self,
+        row_ix: usize,
+        col_ix: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.selection_mode = SelectionMode::Cell;
+        self.selected_cell = Some((row_ix, col_ix));
+        self.right_clicked_cell = None;
+        cx.emit(TableEvent::SelectCell(row_ix, col_ix));
+        cx.notify();
+    }
+
     /// Sets the selection as one value; [`TableSelection::None`] clears it.
     ///
     /// Scrolls and emits exactly as the matching `set_selected_*` or

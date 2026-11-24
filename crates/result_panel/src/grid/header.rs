@@ -248,8 +248,19 @@ pub(crate) fn render_th(
             .on_click(move |_, _, cx| {
                 cx.stop_propagation();
                 table.update(cx, |state, cx| {
+                    // 【D10-10】当前格 = 视口首行 × 首个数据列（DBeaver `:3183-3184`：
+                    // `focusColumn = getColumn(new Point(rowHeaderWidth + 1, 1))` +
+                    // `focusItem = getTopIndex()`）。`getTopIndex()` 就是视口首行，
+                    // **不滚动**——所以走不带滚动的 setter，否则 `Center` 会把首行拽到正中。
+                    let top_row = state.visible_range().rows().start;
                     // 空表（没有行或没有列）什么都不选，与 DBeaver 那条 `return null` 一致
-                    if state.delegate_mut().select_all_cells() {
+                    if state.delegate_mut().select_all_cells(top_row) {
+                        // 读回 delegate 的当前格（它已把 top_row 夹到有效行内），保证
+                        // 组件 / 矩形 / 状态行三份是同一个值。
+                        if let Some(range) = state.delegate().cell_range() {
+                            let (row, col) = range.cursor();
+                            state.set_selected_cell_without_scroll(row, col, cx);
+                        }
                         cx.notify();
                     }
                 });

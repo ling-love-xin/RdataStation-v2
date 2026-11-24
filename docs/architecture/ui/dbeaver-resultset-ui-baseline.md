@@ -2670,7 +2670,7 @@ D10 清单里「键盘 / 鼠标选区」这一族到此可以收口了：**能�
 | 11 | `+` / `-` / `=` 展开折叠树行 | `:3875-3894` | 不做 | 本仓结果集无树形行（无 `getLevel()` 分组） |
 | 12 | 空格 `toggleCellValue` | 同上区间 | 不做 | 同上：无「可切换值」的单元格类型 |
 | 13 | Ctrl 并集 / 反选 | `:2718-2735` | 待模型改造 | 需选区不再是单个矩形，见 40.3 |
-| 14 | 「当前格」列钉首个数据列 | `:3183-3184`、`:3140-3145`、`:3201` | **行号槽档已做（D10-9）**；列头/全选两档待组件入口 | 见 §41；`CellRange::cursor` 已能表达「矩形铺满 + 当前格另置」 |
+| 14 | 「当前格」列钉首个数据列 | `:3183-3184`、`:3140-3145`、`:3201` | **行号槽档 / 交角档已做（D10-9 / D10-10）**；列头档判定不做 | 见 §41；`CellRange::cursor` 承载「矩形铺满 + 当前格另置」，组件侧补了 `set_selected_cell_without_scroll`。列头受组件 `selection_mode` 单一状态限制（§41.6） |
 | 15 | 行号列宽自适应 `[40,400]` | `:1884-1897` | 待（有正路） | 见 §39.2 |
 
 ### 40.2 两条「不做」的细差异
@@ -2759,16 +2759,20 @@ let cursor = if extend {
 self.cell_range = Some(CellRange { anchor: (anchor_row, 0), focus: (row, last), cursor });
 ```
 
-### 41.3 两档仍未跟（明账）
+### 41.3 两档的归宿（更新于 D10-10）
 
-| 档 | DBeaver | 本仓现状 | 卡在哪 |
-| --- | --- | --- | --- |
-| 交角全选 | 当前格 = `(getTopIndex(), 首数据列)`（`:3183-3184`），**不滚动** | `cursor: None`（当前格 = 矩形末列末行） | 组件的 `TableState::set_selected_cell(row, col, cx)`（vendor `table/state.rs:681-693`）是唯一写入口，内部 `scroll_to_item(row, Center)` 会把该行滚到视口正中——DBeaver 用 `getTopIndex()` 不动视口。照抄会拽动视口 |
-| 列头点击 | 当前格列 = 该列、行不动（`:3201`），只 `showColumn`（横向滚） | `cursor: None`（当前格 = `(末行, col)`） | 同一个 setter；这里连横向也不该滚（DBeaver `showColumn` 只保证可见）。等组件提供「设当前格但不滚动」的入口 |
+| 档 | DBeaver | 结果 |
+| --- | --- | --- |
+| 交角全选 | 当前格 = `(getTopIndex(), 首数据列)`（`:3183-3184`），**不滚动** | **已做（D10-10，见 41.5）**。给组件补了不滚动的 setter，矩形的 `cursor` 与组件 `selected_cell` 一起搬 |
+| 列头点击 | 当前格列 = 该列、行不动（`:3201`），只 `showColumn`（横向滚） | **不做**（新增理由见 41.6）。不是缺 setter 的问题，而是组件的 `selection_mode` 一个字段同时承载「列/行/格高亮类型」与「当前格类型」，改当前格就会把列头自身的变色弄丢 |
 
-另外：即使不依赖 setter，「矩形铺满 + cursor 另置」也要求**组件 overlay 画的那个焦点框**跟着走，
-否则会出现「焦点框在 A 格、但 A 格因 `cell.rs:347` 被判为焦点格而不铺色 → 出现一个空槽」。
-所以两档都必须先有组件侧的同步入口，不是纯 delegate 侧能解决的。
+原则性约束（两档共用）：即使不依赖 setter，「矩形铺满 + cursor 另置」也要求**组件 overlay 画的那个焦点框**跟着走，
+否则会出现「焦点框在 A 格、但 A 格因 `cell.rs:347` 被判为焦点格而不铺色 → 空出一个槽」。
+所以任何一档都必须先同步组件，纯 delegate 侧改不动。
+
+为什么交角这一档能成、列头那一档不能：交角的行头 / 列头高亮在 DBeaver 由 `getAllCells()` 的选区形状驱动，
+本仓的行号槽高亮也是「矩形列区间含列 0」驱动的，与 `selection_mode` 无关；而列头点击要靠 `selection_mode == Column`
+才画列头自身的高亮，把模式改成 Cell 就直接丢了它。
 
 ### 41.4 验证
 
@@ -2783,6 +2787,65 @@ self.cell_range = Some(CellRange { anchor: (anchor_row, 0), focus: (row, last), 
 **仍未做（明账）**：没有做目视验收（点行号槽后焦点框是否视觉上落在首列那一格）。
 按既有约定，GUI 验收由用户手动确认；本刀只保证 delegate / 组件 / 状态行三份状态一致，
 并以单元测试钉死（`grid/tests.rs` 三条 `cursor` 断言 + `panel/tests.rs` 的 `selection_pos` 断言）。
+
+### 41.5 D10-10：交角全选的当前格（组件侧补一个不滚动的 setter）
+
+接着 41.3 的缺口做第二刀。DBeaver 的两处「当前格搬家」都不动视口（`getTopIndex()` / `showColumn`），
+而组件唯一写入口 `set_selected_cell`（vendor `table/state.rs:681-693`）内部硬编码
+`scroll_to_item(row, ScrollStrategy::Center)` + `scroll_to_col`。所以先补组件入口，再接业务。
+
+**vendor patch**（`vendor/gpui-component/src/table/state.rs`，紧跟 `set_selected_cell` 之后）：
+
+```rust
+/// 【RDS patch】Sets the selected cell **without touching scroll position**.
+pub fn set_selected_cell_without_scroll(&mut self, row_ix: usize, col_ix: usize, cx: &mut Context<Self>) {
+    self.selection_mode = SelectionMode::Cell;
+    self.selected_cell = Some((row_ix, col_ix));
+    self.right_clicked_cell = None;
+    cx.emit(TableEvent::SelectCell(row_ix, col_ix));
+    cx.notify();
+}
+```
+
+语义与 `set_selected_cell` 完全一致，只去掉两处滚动。该文件此前已有三次同类 patch
+（`bae152b8` / `fcd34a36` / `78a97586`，D10 点击档 / 拖拽档 / 任意格起拖），属既有惯例。
+
+**业务侧改动**
+
+| 文件 | 改动 |
+| --- | --- |
+| `crates/result_panel/src/grid/delegate.rs` | `select_all_cells(&mut self, top_row: usize)`：矩形照旧 `(0,0) → (末行, 末列)`，`cursor` 置 `(clamp(top_row), 1)`（只有行号槽时 `None`） |
+| `crates/result_panel/src/grid/header.rs` | 交角 `on_click`：先取 `state.visible_range().rows().start` 当 `top_row`（等价 `getTopIndex()`），`select_all_cells(top_row)` 成功后**读回** delegate 的 `cursor()` 再调 `set_selected_cell_without_scroll`，保证三份状态同一值 |
+
+选「读回」而不是「直接用 `top_row`」：`select_all_cells` 内部会把越界的 `top_row` 夹到末行，
+读回才能保证组件拿到的是同一个已夹值。
+
+**测试**（`grid/tests.rs`，均在 `gpui_kit::test` 里）
+
+- `selecting_all_cells_covers_every_row_and_column`：签名改传 `top_row`；新增
+  `cursor() == (0,1)` / `range_focus() == Some((0,1))` / 视口首行 1 时 `(1,1)` /
+  越界 `top_row = 9` 夹到 `(1,1)` / 只剩一列时仍 `(0,1)` / 矩形形状不受当前格影响。
+- `clicking_the_top_left_corner_selects_every_cell`（真鼠标 + `HeaderHarness`）：新增
+  `range.cursor() == (0,1)` 与**组件** `selected_cell() == Some((0,1))` 两条断言——
+  后者正是「overlay 焦点框跟着走」的落点，只验 delegate 会漏掉这一层。
+
+### 41.6 列头点击：判定不做（理由升级）
+
+上一轮把这一档记成「等组件入口」，本轮取证后改判为**不做**——原因不是缺入口（41.5 已经把入口补出来了），
+而是组件用**一个** `selection_mode` 同时表达两件事：
+
+1. 哪一类高亮要画（`is_row` / `is_column` / `is_cell`，列头自身变色依赖 `SelectionMode::Column`）；
+2. 当前格是什么（`selected_cell()` 带 `filter(|_| self.selection_mode.is_cell())`，vendor `:662-663`）。
+
+`set_selected_col`（`:641-649`）把模式设为 `Column` 且**不动** `selected_cell` 字段，所以
+「先把当前格搬到 `(原行, col)`、同时保住列头变色」在现有组件里无法同时成立：
+调 `set_selected_cell_without_scroll` 会把模式改成 `Cell`，列头变色立刻消失。
+
+而 DBeaver 没有这个问题，因为它的列头高亮来自 `updateCellSelection` 的 `selectedCells` 形状
+（`:3194-3196` 的 `getCells(col, cells)`），与 `focusColumn` 正交。要真对齐，得让组件的列头高亮也改由选区形状驱动，
+那是组件侧重构（`selection_mode` 拆分或新增独立的高亮来源），不属于结果集 1:1 这一条线的一刀。
+故登记为「组件侧前置项」，本仓现状（当前格 = `(末行, col)`）保留。
+
 
 
 

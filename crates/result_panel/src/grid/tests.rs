@@ -5260,32 +5260,47 @@ fn a_column_selection_copies_the_whole_column() {
 ///
 /// DBeaver `LightGrid.java:3174-3184` 命中「行头带 ∩ 列头带」的左上格 →
 /// `selectAllCellsInternal`（`:4272-4296`）：先挡空表（无列 / 无行直接 `return null`），
-/// 再把 `getAllCells()` 整个塞进选区。本仓用单矩形表达同一件事：`(0,0)` 到
-/// `(末行, 末列)`（当前格因此落在末行末列——DBeaver 那边全选后会把焦点还原原样，
-/// 本仓单矩形模型做不到，见 `select_all_cells` 的 D10-8 判定）。列 0 是行号槽，计数由 `data_columns()` 排除，
-/// 所以「2 行 × 2 数据列 × 4 格」与 DBeaver 的行头不在 `columns` 里同口径。
+/// 再把 `getAllCells()` 整个塞进选区。本仓用单矩形表达形状：`(0,0)` 到 `(末行, 末列)`。
+/// 【D10-10】当前格另置到「视口首行 × 首个数据列」（`:3183-3184`），由 `CellRange::cursor` 承载。
+/// 列 0 是行号槽，计数由 `data_columns()` 排除，所以「2 行 × 2 数据列 × 4 格」与 DBeaver
+/// 的行头不在 `columns` 里同口径。
 #[gpui_kit::test]
 fn selecting_all_cells_covers_every_row_and_column() {
     let mut grid = grid(); // 2 行 × 2 数据列（id / name）
 
-    assert!(grid.select_all_cells(), "有行有列时全选应成立");
+    assert!(grid.select_all_cells(0), "有行有列时全选应成立");
     let range = grid.cell_range().expect("全选后应有选区");
     assert_eq!(range.rows(), (0, 1), "全部行（2 行）");
     assert_eq!(range.cols(), (0, 2), "从行号槽铺到末列");
     assert_eq!(range.data_columns(), vec![1, 2], "行号槽不是数据列");
     assert_eq!(range.data_cells_count(), 4, "2 行 × 2 数据列");
+    assert_eq!(range.cursor(), (0, 1), "当前格 = 视口首行 × 首个数据列");
+    assert_eq!(grid.range_focus(), Some((0, 1)), "渲染读的也是 cursor");
+
+    // 视口首行不是 0 时当前格跟着走（DBeaver `focusItem = getTopIndex()`），并夹到末行内
+    assert!(grid.select_all_cells(1));
+    assert_eq!(grid.cell_range().unwrap().cursor(), (1, 1));
+    assert!(grid.select_all_cells(9));
+    assert_eq!(
+        grid.cell_range().unwrap().cursor(),
+        (1, 1),
+        "越界的视口首行夹到末行"
+    );
+    // 矩形形状不受当前格影响
+    assert_eq!(grid.cell_range().unwrap().rows(), (0, 1));
 
     // 「全部列」跟当前可见列走：隐藏一列后只剩 1 个数据列，格数跟着收
     grid.hide_column(1);
-    assert!(grid.select_all_cells());
+    assert!(grid.select_all_cells(0));
     let range = grid.cell_range().expect("全选后应有选区");
     assert_eq!(range.cols(), (0, 1), "隐藏后全部列 = 行号槽 + 1 个数据列");
     assert_eq!(range.data_columns(), vec![1]);
     assert_eq!(range.data_cells_count(), 2);
+    assert_eq!(range.cursor(), (0, 1), "只剩一个数据列时当前格仍是它");
 
     // 空表两档都不选，与 DBeaver 那两条 `return null`（`:4273-4277`）一致
     let mut no_columns = ResultGridDelegate::empty("尚未执行");
-    assert!(!no_columns.select_all_cells(), "没有列 → 不选");
+    assert!(!no_columns.select_all_cells(0), "没有列 → 不选");
     assert!(no_columns.cell_range().is_none());
 
     let mut no_rows = ResultGridDelegate::empty("尚未执行");
@@ -5293,7 +5308,7 @@ fn selecting_all_cells_covers_every_row_and_column() {
         vec!["id".to_string()],
         Vec::<Vec<String>>::new(),
     );
-    assert!(!no_rows.select_all_cells(), "没有行 → 不选");
+    assert!(!no_rows.select_all_cells(0), "没有行 → 不选");
     assert!(no_rows.cell_range().is_none());
 }
 
@@ -5340,6 +5355,15 @@ fn clicking_the_top_left_corner_selects_every_cell(cx: &mut gpui_kit::TestAppCon
     assert_eq!(range.rows(), (0, 1), "全部行");
     assert_eq!(range.cols(), (0, 2), "从行号槽铺到末列");
     assert_eq!(range.data_cells_count(), 4, "2 行 × 2 数据列");
+    // 【D10-10】当前格 = 视口首行 × 首个数据列，并且**组件的** `selected_cell` 也搬过去了
+    // （overlay 焦点框读组件那份）；首行是 0（两帧后视口在顶部）。
+    assert_eq!(range.cursor(), (0, 1), "矩形的当前格另置到首个数据列");
+    let component_cell = vcx.update(|_window, cx| harness.read(cx).state.read(cx).selected_cell());
+    assert_eq!(
+        component_cell,
+        Some((0, 1)),
+        "组件 selected_cell 同步到同一格（不得留在行号槽或末列）"
+    );
 }
 
 /// 【D10-6】方向键挪焦点格：四向 ±1、撞边界同格不动、Home/End 钉列、Shift 保留锚点。

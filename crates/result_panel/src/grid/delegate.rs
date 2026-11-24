@@ -481,28 +481,38 @@ impl ResultGridDelegate {
     ///
     /// 返回 `false` = 空表，调用方不必刷新（对齐 DBeaver 那条 `return null`）。
     ///
-    /// 【D10-9 部分对齐】DBeaver 交角的**最终**当前格是「首行首数据列」：
-    /// `selectAllCellsInternal`（`:4272-4296`）内部先临时借 `(首列, 0)` 当锚、选完还回去
-    /// （`:4288-4289`），但紧接着**调用方**又把它钉住——`focusColumn =
-    /// getColumn(new Point(rowHeaderWidth + 1, 1))`、`focusItem = getTopIndex()`
-    /// （`:3183-3184`）。行头点整行（`:3140-3145`）、列头点整列（`:3201`）是同族口径。
+    /// 【D10-10】当前格 = 「视口首行 × 首个数据列」：`selectAllCellsInternal`
+    /// （`:4272-4296`）内部先临时借 `(首列, 0)` 当锚、选完还回去（`:4288-4289`），
+    /// 但紧接着**调用方**又把它钉住——`focusColumn = getColumn(new Point(rowHeaderWidth + 1, 1))`、
+    /// `focusItem = getTopIndex()`（`:3183-3184`）。行头点整行（`:3140-3145`）、
+    /// 列头点整列（`:3201`）是同族口径。
     ///
-    /// `CellRange::cursor` 已经能表达「矩形铺满 + 当前格另置」，所以行号槽点整行那一档
-    /// 本轮已接上（`click_cell` 行号槽分支）。全选这一档**还没接**，原因是当前格必须由
-    /// 组件的 `selected_cell` 一起决定（overlay 画焦点框、`grid/cell.rs:347` 据此不铺色），
-    /// 而组件唯一的 setter `set_selected_cell` 内部 `scroll_to_item(.., Center)` 纵向居中——
-    /// DBeaver 这里用 `getTopIndex()`、不滚动。照抄会把视口纵向拽动，等组件有不滚动的
-    /// 选中格入口再补（§41 明账）。故仍维持 `(0,0) → (末行, 末列)`、`cursor: None`。
-    pub fn select_all_cells(&mut self) -> bool {
+    /// `CellRange::cursor` 承载「矩形铺满 + 当前格另置」：矩形照旧铺满整表（行号槽整列
+    /// 靠它铺色），当前格另存。组件侧的 `selected_cell` 由调用方用
+    /// `set_selected_cell_without_scroll` 同步（DBeaver 这两处都不滚视口）。
+    ///
+    /// `top_row` = 视口首行（组件 `visible_range().rows.start`，等价 DBeaver 的
+    /// `getTopIndex()`）；越界在这里夹住（空表已被上面的 guard 挡掉，`rows >= 1`）。
+    pub fn select_all_cells(&mut self, top_row: usize) -> bool {
         let rows = self.view_len();
         // 空态占位行不算数据（`set_data` 的注释）：DBeaver 那边 `getItemCount()` 是 0
         if rows == 0 || self.columns.is_empty() || self.placeholder_row {
             return false;
         }
+        let last = self.last_view_column();
+        // 【D10-10】矩形铺满整表，当前格另置到「视口首行 × 首个数据列」——DBeaver
+        // `:3183-3184`：`focusColumn = getColumn(new Point(rowHeaderWidth + 1, 1))`、
+        // `focusItem = getTopIndex()`。行号槽整列仍靠矩形铺色（`cols()` 含列 0），
+        // 所以这里不需要把矩形收窄（`CellRange::cursor` 就是为此而设）。
+        let cursor = if last >= 1 {
+            Some((top_row.min(rows - 1), 1))
+        } else {
+            None
+        };
         self.cell_range = Some(CellRange {
             anchor: (0, 0),
-            focus: (rows - 1, self.last_view_column()),
-            cursor: None,
+            focus: (rows - 1, last),
+            cursor,
         });
         true
     }
