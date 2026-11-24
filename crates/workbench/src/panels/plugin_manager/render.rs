@@ -8,9 +8,11 @@ use gpui_kit::component::input::Input;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::separator::Separator;
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::toolbar::Toolbar;
 use gpui_kit::component::{ActiveTheme, IconName, Sizable, Size, WindowExt as _};
 use gpui_kit::{Context, Div, FontWeight, IntoElement, SharedString, Window, div, rems};
+
+// 面板顶部工具栏的统一容器（高度 / 内距 / 分隔线 / 左右槽都归它）。
+use workbench_shell::panel_toolbar::PanelToolbar;
 
 use super::widgets::{
     driver_registry_rows, filtered_plugins, plugin_driver_chain, plugin_driver_stats,
@@ -34,30 +36,26 @@ impl PluginManagerPanel {
             .selected_id()
             .or_else(|| filtered.first().map(|p| p.id.clone()));
 
-        let header = Toolbar::new("plugin-manager-head")
-            .h(rems(ui::PANEL_HEADER_HEIGHT))
-            .content(
-                div().v_flex().gap_1().child(
-                    div()
-                        .h_flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(tr("插件管理")),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.colors.muted_foreground)
-                                .child(tr("本地已安装 · 所有操作立即生效")),
-                        ),
-                ),
+        let header = PanelToolbar::new("plugin-manager-head")
+            .left(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(tr("插件管理")),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .child(tr("本地已安装 · 所有操作立即生效")),
+                    ),
             )
-            .content(div().flex_1())
-            .child(
+            .right(
                 Button::new("plugin-manager-install-file")
                     .label(tr("安装插件"))
                     .with_size(Size::Small)
@@ -68,7 +66,7 @@ impl PluginManagerPanel {
                         }
                     }),
             )
-            .child(
+            .right(
                 Button::new("plugin-manager-install-dir")
                     .ghost()
                     .label(tr("从目录导入"))
@@ -80,8 +78,8 @@ impl PluginManagerPanel {
                         }
                     }),
             )
-            .content(Separator::vertical())
-            .child(
+            .right(Separator::vertical())
+            .right(
                 Button::new("plugin-manager-refresh")
                     .ghost()
                     .icon(IconName::RefreshCw)

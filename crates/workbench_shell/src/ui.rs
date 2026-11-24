@@ -221,6 +221,17 @@ pub const NAV_EDITOR_COPY: f32 = 4.5;
 pub const NAV_EDITOR_GROUP: f32 = 5.5;
 /// 面板头部高度（2.25rem ≈ 36px）
 pub const PANEL_HEADER_HEIGHT: f32 = 2.25;
+/// 面板工具栏的**外层**左右内距（0.5rem ≈ 8px）。
+///
+/// 与 `PANEL_PADDING` 同值但语义不同：这里是「工具栏这一行」的左右缘，真正的文字左缘
+/// 还要加上 `toolbar::Toolbar` 自带的 `p_1`（4px），合计 12 —— 与面板里的列表行 /
+/// 状态栏那条左缘同一条线（`PANEL_TOOLBAR_TEXT_INSET`）。
+pub const PANEL_TOOLBAR_PADDING: f32 = 0.5;
+/// 工具栏**文字左缘**（0.75rem ≈ 12px）= 外层 `PANEL_TOOLBAR_PADDING`(8) + `Toolbar::p_1`(4)。
+///
+/// 面板内所有「从面板左边起」的元素（工具栏内容 / 分组 chips / 状态栏 / 行 / 托盘）
+/// 都应当落在这一条线上；改了外层内距就要同步改这里。
+pub const PANEL_TOOLBAR_TEXT_INSET: f32 = 0.75;
 /// 连接行主机名副标（`host:port`）最大宽（6rem ≈ 96px；超出省略，双击连接看全量）。
 pub const NAV_HOST_SUBLINE_W: f32 = 6.0;
 /// 对象行注释副标最大宽（8rem ≈ 128px；超出省略，属性面板看全量）。

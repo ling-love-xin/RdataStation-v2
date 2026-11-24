@@ -19,10 +19,12 @@
 //! - [`product_tokens`]：产品语义 token（主题取色的产品角色层）；
 //! - [`db_icons`]：数据库类型 → 图标（微标）；
 //! - [`result_style`]：结果集「类型样式」偏好模型（settings 持久化与 result_panel
-//!   渲染消费共用的枚举 / 聚合，打破双向依赖）。
+//!   渲染消费共用的枚举 / 聚合，打破双向依赖）；
+//! - [`panel_toolbar`]：面板顶部那一行的**统一容器**（高度 / 内距 / 分隔线 / 三槽 / 空态）。
 
 pub mod db_icons;
 pub mod model;
+pub mod panel_toolbar;
 pub mod product_tokens;
 pub mod result_style;
 pub mod tree;

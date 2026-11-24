@@ -69,10 +69,11 @@ use gpui_kit::component::switch::Switch;
 use gpui_kit::component::table::{
     Column, ColumnSort, DataTable, TableDelegate, TableEvent, TableState,
 };
-use gpui_kit::component::toolbar::Toolbar;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+// 面板顶部工具栏的统一容器（高度 / 内距 / 分隔线 / 左右槽都归它）。
+use workbench_shell::panel_toolbar::PanelToolbar;
 // 清单行的选中标识条（2px + 上下内缩）与 M4 导航 / M5 草稿箱同一份共用原语，
 // 不在本 crate 手搓绝对定位的 div。
 use workbench_shell::tree;

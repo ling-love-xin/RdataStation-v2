@@ -10,7 +10,11 @@ impl MockPanel {
     /// 按钮语义全部是 `Button`（自带 hover / 焦点 / 键盘）；标题栏只留标题，
     /// 「＋」从标题栏工具栏迁到这里（原型同构：mock-toolbar 在面板头下方一行）。
     /// 行高走 `CONTROL_HEIGHT_SM`（与数据导航筛选行同档），底部分隔线用 `HAIRLINE`。
-    pub(crate) fn render_toolbar(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Div {
+    pub(crate) fn render_toolbar(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let running = self.is_running();
         let entity = cx.entity();
 
@@ -104,22 +108,19 @@ impl MockPanel {
             format!("{} 张结果", self.results.len())
         };
 
-        // 工具栏走 `toolbar::Toolbar`（roving 方向键焦点 + toolbar a11y 语义 + 统一 size 托管）；
-        // 外层只画高度 / 底部分隔线（规范：背景边框高度外层自己画）。
+        // 统一容器：高度 / 左右内距 / 底部分隔线 / 左右两槽全部由 `PanelToolbar` 决定，
+        // 本面板只声明「左边四个动作、右边清单状态提示」。
         //
-        // 左右内距交给根容器的 `p_2`，工具栏自己**不再**加 `px`：原来「根 p_2(8) + 本行 px(8)」
-        // 把按钮推到左缘 16，而它下面的动作行 / 折叠段是 8，工具栏看上去整体往里缩了一格。
-        div()
-            .w_full()
-            .h(rems(ui::PANEL_HEADER_HEIGHT))
-            .border_b_1()
-            .border_color(cx.theme().colors.border)
-            .child(
-                Toolbar::new("mock-toolbar")
-                    .children([new_table, new_scene, refresh])
-                    // import 是 `DropdownMenuPopover` 包装（无 Sizable），走非托管 content 槽
-                    .content(import)
-                    .content(card_note(cx.theme(), hint)),
-            )
+        // 左槽内容左缘 = `PANEL_TOOLBAR_PADDING`(8) + `Toolbar::p_1`(4) = 12，与它下面的
+        // 动作行 / 折叠段（`PANEL_PADDING`=8 的内容留白）不同档是**有意的**：工具栏属「头」，
+        // 与面板列表行、状态栏同一条 12 的线（见 `ui::PANEL_TOOLBAR_TEXT_INSET`）。
+        PanelToolbar::new("mock-toolbar-row")
+            .left(new_table)
+            .left(new_scene)
+            .left(refresh)
+            // import 是 `DropdownMenuPopover` 包装（无 Sizable），同样走左槽（非 size 托管）
+            .left(import)
+            .right(card_note(cx.theme(), hint))
+            .into_any_element()
     }
 }

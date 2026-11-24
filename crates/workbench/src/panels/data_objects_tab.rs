@@ -35,6 +35,7 @@ use shared::i18n::tr;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use workbench_shell::panel_toolbar::PanelToolbar;
 use workbench_shell::{tree, ui};
 
 use crate::components::data_objects::{self, Group};
@@ -704,8 +705,9 @@ impl DataObjectsTab {
         let hovered_row =
             window.use_keyed_state("data-objects-hovered-row", cx, |_, _| HoveredRow::default());
 
-        // 工具栏（36px，与数据库导航 / 编辑器 / 洞察 / 资产库头行同一档）：搜索框占满，
-        // 右侧「加源 / 存快照」+ ⓘ 口径说明。
+        // 统一容器（`PanelToolbar`）：36 高 / 左缘 12 / 1px 下边界 / 左槽可伸缩 + 右槽固定
+        // 都由它决定。左缘 = 外层 `PANEL_TOOLBAR_PADDING`(8) + `Toolbar::p_1`(4) = 12，
+        // 与下面的 chips / 状态栏 / 行 / 托盘同一条线。
         //
         // 这一行就是这个面板的头行（Dock 标题栏只做容器管理，没有面板内的第二行标题），
         // 所以取 `PANEL_HEADER_HEIGHT`（2.25rem = 36）。32 是「面板内第二行」的档
@@ -715,19 +717,10 @@ impl DataObjectsTab {
         // （`toolbar_buttons` 返回 None，标题栏只做容器管理），否则同一排标题栏里
         // 有的 tab 有按钮、有的没有，横向也对不齐。
         //
-        // 全面板一条左缘（`px_3` = 12）：工具栏 / chips / 状态栏 / 行 / 托盘都从这条线起。
+        // 全面板一条左缘（12）：工具栏 / chips / 状态栏 / 行 / 托盘都从这条线起。
         // 上一版是 4（工具栏、chips）、8（状态栏）、12（行）三条线并在一屏里。
-        let toolbar = div()
-            .flex_none()
-            .h(rems(ui::PANEL_HEADER_HEIGHT))
-            .h_flex()
-            .items_center()
-            .gap_1()
-            .px_3()
-            .border_b(ui::HAIRLINE)
-            .border_color(colors.border)
-            .debug_selector(|| "data-objects-toolbar".to_string())
-            .child(
+        let toolbar = PanelToolbar::new("data-objects-toolbar")
+            .left(
                 // 搜索框占满除按钮之外的宽度（`min_w_0`：窄面板下允许被压缩）
                 div()
                     .flex_1()
@@ -739,7 +732,7 @@ impl DataObjectsTab {
                     // 与 24 的按钮差 8px——这一行四个控件必须同高。
                     .child(Input::new(&search).small()),
             )
-            .child(
+            .right(
                 // 外层包一格只为测量（`layout_probe` 量行内控件是否真的同高）；
                 // `flex_none` + 一个子，不改变原来的排布
                 div()
@@ -768,7 +761,7 @@ impl DataObjectsTab {
                         })
                     }),
             )
-            .child(
+            .right(
                 div()
                     .flex_none()
                     .debug_selector(|| "data-objects-add-source-snapshot-slot".to_string())
@@ -796,7 +789,7 @@ impl DataObjectsTab {
                         })
                     }),
             )
-            .child(
+            .right(
                 div()
                     .flex_none()
                     .debug_selector(|| "data-objects-scope-hint-slot".to_string())
