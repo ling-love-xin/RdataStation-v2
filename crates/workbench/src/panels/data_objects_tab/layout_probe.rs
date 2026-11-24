@@ -1,4 +1,4 @@
-﻿//! 数据对象面板：**真实布局测量**（headless 窗口 + gpui 排版引擎）。
+//! 数据对象面板：**真实布局测量**（headless 窗口 + gpui 排版引擎）。
 //!
 //! 不是估算：把面板放进指定宽度的容器里真排一遍，再按 `debug_selector` 记录
 //! 读出每一格的真实宽度（`debug_bounds` 只在 debug 构建里登记，发布物无副作用）。
@@ -127,6 +127,22 @@ fn fmt(v: Option<f32>) -> String {
 /// 左缘：走马灯位移就是靠它随时间往左走。
 fn left(cx: &mut VisualTestContext, selector: &'static str) -> Option<f32> {
     cx.debug_bounds(selector).map(|b| b.origin.x.into())
+}
+
+/// 高度：工具栏 / 状态栏的档位就是靠它跟兄弟面板对。
+fn hgt(cx: &mut VisualTestContext, selector: &'static str) -> Option<f32> {
+    cx.debug_bounds(selector).map(|b| b.size.height.into())
+}
+
+/// 上缘：判「工具栏是不是面板第一行」。
+fn top(cx: &mut VisualTestContext, selector: &'static str) -> Option<f32> {
+    cx.debug_bounds(selector).map(|b| b.origin.y.into())
+}
+
+/// 下缘：判「状态栏是不是面板最后一行」。
+fn bottom(cx: &mut VisualTestContext, selector: &'static str) -> Option<f32> {
+    cx.debug_bounds(selector)
+        .map(|b| f32::from(b.origin.y) + f32::from(b.size.height))
 }
 
 /// 一条探针行的量值（`line` 是打给人看的一行字）。
@@ -383,8 +399,8 @@ fn marquee_runs_only_on_the_hovered_row_that_does_not_fit(cx: &mut TestAppContex
     vcx.simulate_mouse_move(row_box.center(), None, Modifiers::default());
     settle(&mut vcx);
 
-    let inner = w(vcx, "data-object-marquee-result:probe")
-        .expect("名字放不下时 hover 应改画走马灯");
+    let inner =
+        w(vcx, "data-object-marquee-result:probe").expect("名字放不下时 hover 应改画走马灯");
     let x0 = left(vcx, "data-object-marquee-result:probe").expect("走马灯应有坐标");
     println!("MARQUEE cell={cell:.1}  inner={inner:.1}  x0={x0:.1}");
     assert!(
@@ -394,8 +410,7 @@ fn marquee_runs_only_on_the_hovered_row_that_does_not_fit(cx: &mut TestAppContex
     );
 
     // 时间推进：4s 一轮、两端各停 18%，1200ms 时正在中段滚动
-    vcx.executor()
-        .advance_clock(Duration::from_millis(1200));
+    vcx.executor().advance_clock(Duration::from_millis(1200));
     settle(vcx);
     let x1 = left(vcx, "data-object-marquee-result:probe").expect("走马灯应有坐标");
     println!("MARQUEE at 1.2s  x={x1:.1}");
@@ -422,5 +437,57 @@ fn marquee_runs_only_on_the_hovered_row_that_does_not_fit(cx: &mut TestAppContex
     assert!(
         w(vcx, "data-object-marquee-result:probe").is_none(),
         "名字放得下（{wide_cell:.1}px 格子装 210px 的字）时不该出现走马灯"
+    );
+}
+
+/// 面板骨架：工具栏在上、状态栏在下，档位与兄弟面板（资产库 / 数据库导航）一致。
+///
+/// 用户口径（2026-11-25）：面板头部那行「16 个 · 已选 0 · 进程 DuckDB」是**状态**，
+/// 该落到下方状态栏；动作（加源 / 存快照）该在面板自己的工具栏里，不该上 Dock 标题栏。
+/// 这里钉三件事：工具栏是面板第一行且 32px、状态栏是面板最后一行且 24px、
+/// 两个动作按钮确实长在工具栏里（不在标题栏）。
+#[gpui_kit::test]
+fn toolbar_and_status_bar_sit_where_the_sibling_panels_put_them(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let objects = vec![row(
+        "result:probe",
+        "商城库",
+        "MySQL · db.example.com",
+        State::Ready,
+        "载入",
+    )];
+    let (_panel, vcx) = host_window(cx, 520.0, objects);
+
+    // 兄弟面板的档位（`workbench_shell::ui`）：工具栏 = CONTROL_HEIGHT_MD（2rem = 32px）、
+    // 状态栏 = ROW_HEIGHT（1.5rem = 24px）
+    let toolbar_h = hgt(vcx, "data-objects-toolbar").expect("工具栏应有坐标");
+    let status_h = hgt(vcx, "data-objects-status-bar").expect("状态栏应有坐标");
+    let toolbar_top = top(vcx, "data-objects-toolbar").expect("工具栏应有坐标");
+    let status_bottom = bottom(vcx, "data-objects-status-bar").expect("状态栏应有坐标");
+    println!(
+        "CHROME  toolbar_h={toolbar_h:.1}  status_h={status_h:.1}  toolbar_top={toolbar_top:.1}  \
+         status_bottom={status_bottom:.1}"
+    );
+
+    let rem = 16.0f32;
+    assert!(
+        (toolbar_h - workbench_shell::ui::CONTROL_HEIGHT_MD * rem).abs() <= 1.0,
+        "工具栏高 {toolbar_h:.1}px，兄弟面板是 {}rem —— 同一排面板的工具栏必须同高",
+        workbench_shell::ui::CONTROL_HEIGHT_MD
+    );
+    assert!(
+        (status_h - workbench_shell::ui::ROW_HEIGHT * rem).abs() <= 1.0,
+        "状态栏高 {status_h:.1}px，兄弟面板是 {}rem",
+        workbench_shell::ui::ROW_HEIGHT
+    );
+    // 工具栏是面板第一行（面板有 `pt_2` = 8px 的顶部间隔）
+    assert!(
+        toolbar_top <= 8.5,
+        "工具栏上缘 {toolbar_top:.1}px —— 它必须是面板的第一行（面板顶部只留 8px 间隔）"
+    );
+    // 状态栏是面板最后一行：面板高 600（`Host` 的 `rems(37.5)`），下缘要贴着底
+    assert!(
+        (status_bottom - 600.0).abs() <= 1.0,
+        "状态栏下缘 {status_bottom:.1}px，面板底是 600px —— 状态栏必须贴在面板底部"
     );
 }

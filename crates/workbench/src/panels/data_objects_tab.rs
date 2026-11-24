@@ -696,51 +696,73 @@ impl DataObjectsTab {
         let hovered_row =
             window.use_keyed_state("data-objects-hovered-row", cx, |_, _| HoveredRow::default());
 
-        let header = div()
+        // 工具栏（32px，与资产库面板同一档）：搜索框占满，右侧是「加源 / 存快照」。
+        //
+        // 这两个动作**不放 Dock 标题栏**：兄弟面板一律把动作留在面板自己的工具栏里
+        // （`toolbar_buttons` 返回 None，标题栏只做容器管理），否则同一排标题栏里
+        // 有的 tab 有按钮、有的没有，横向也对不齐。
+        let toolbar = div()
+            .flex_none()
+            .h(rems(ui::CONTROL_HEIGHT_MD))
             .h_flex()
             .items_center()
-            .gap_2()
-            .px_3()
-            .py_2()
-            .border_b_1()
+            .gap_1()
+            .px_1()
+            .border_b(ui::HAIRLINE)
             .border_color(colors.border)
+            .debug_selector(|| "data-objects-toolbar".to_string())
             .child(
+                // 搜索框占满除按钮之外的宽度（`min_w_0`：窄面板下允许被压缩）
                 div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(colors.foreground)
-                    .child(tr("数据对象")),
+                    .flex_1()
+                    .min_w_0()
+                    .child(Input::new(&search).h(rems(ui::CONTROL_HEIGHT_SM))),
             )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(colors.muted_foreground)
-                    .child(count_label),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(colors.muted_foreground)
-                    .child(memory_label),
-            )
-            // 清单会变（连上/断开连接、临时表失效、资产改了版本），面板得有条自己重取的路
             .child({
-                let entity = entity.clone();
-                Button::new("data-objects-refresh")
+                let shared = self.shared.clone();
+                Button::new("data-objects-add-source")
                     .ghost()
-                    .label(tr("刷新"))
-                    .on_click(move |_, _, cx| {
-                        entity.update(cx, |tab, cx| tab.refresh(cx));
+                    .small()
+                    // 和搜索框同高：同一行里 26 与 32 的边框对不齐
+                    .h(rems(ui::CONTROL_HEIGHT_SM))
+                    .label(tr("加源"))
+                    .tooltip(tr("按需加源：挂成视图读原文件，切项目即清"))
+                    .on_click(move |_, window, cx| {
+                        crate::components::data_objects_load::open_load_files_dialog(
+                            &shared,
+                            crate::components::data_objects_load::LoadScope::Session,
+                            window,
+                            cx,
+                        );
+                    })
+            })
+            .child({
+                let shared = self.shared.clone();
+                Button::new("data-objects-add-source-snapshot")
+                    .ghost()
+                    .small()
+                    .h(rems(ui::CONTROL_HEIGHT_SM))
+                    .label(tr("存快照"))
+                    .tooltip(tr(
+                        "把选中的文件在资源库里存一份只读副本，跟着项目走、带版本",
+                    ))
+                    .on_click(move |_, window, cx| {
+                        crate::components::data_objects_load::open_load_files_dialog(
+                            &shared,
+                            crate::components::data_objects_load::LoadScope::Snapshot,
+                            window,
+                            cx,
+                        );
                     })
             });
-
-        let search_row = div().px_3().pb_2().child(Input::new(&search).small());
 
         // 三条口径先写清楚：省得每行都要解释"为什么只有一版""洞察产物在哪""为什么展不开"
         let hint = div()
             .text_xs()
             .text_color(colors.muted_foreground)
-            .px_3()
+            // 与工具栏同一条左边距（`px_1`）：同一面板里各行从左缘对齐，
+            // 不然工具栏 4px、筛选 12px、说明 12px，扫一眼就是没对齐
+            .px_1()
             .pb_2()
             .child(tr("只有三段（源 / 表 / 文件）；资产只给最新版本；洞察产物 tmp_i_ 不进本清单；源要展开连接才列表，没挂载的源展不开"));
 
@@ -750,7 +772,7 @@ impl DataObjectsTab {
             .items_center()
             .flex_wrap()
             .gap_1()
-            .px_3()
+            .px_1()
             .pb_2();
         let mut entries: Vec<(Option<Group>, String)> = vec![(None, "全部".to_string())];
         // 段顺序只认 `Group::ALL`（唯一权威）：这里再抄一份列表，加段时漏改就会
@@ -1233,8 +1255,8 @@ impl DataObjectsTab {
             } else {
                 0.0
             };
-            let marquee = row_hovered
-                && data_objects::layout::should_marquee(name_text_width, name_space);
+            let marquee =
+                row_hovered && data_objects::layout::should_marquee(name_text_width, name_space);
 
             let name_cell = {
                 let cell = div()
@@ -1267,9 +1289,7 @@ impl DataObjectsTab {
                                 ))
                                 .repeat(),
                                 move |el, delta| {
-                                    el.left(px(data_objects::layout::marquee_offset(
-                                        travel, delta,
-                                    )))
+                                    el.left(px(data_objects::layout::marquee_offset(travel, delta)))
                                 },
                             ),
                     )
@@ -1962,13 +1982,51 @@ impl DataObjectsTab {
             })
             .child(list);
 
+        // 状态栏（24px，与资产库面板同一档）：左边是状态口径，右边是「刷新」。
+        //
+        // 「几个对象 / 已选几个 / 占多少内存」是**状态**，不是工具栏内容：它挤在面板头部
+        // 会占掉动作按钮的位置，也让每块面板的头部长得不一样。面板会变（连上/断开连接、
+        // 临时表失效、资产改了版本），所以刷新钮跟状态放一起——状态旁边才是最想重取的地方。
+        let status_bar = div()
+            .flex_none()
+            .h(rems(ui::ROW_HEIGHT))
+            .h_flex()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .px_2()
+            .border_t(ui::HAIRLINE)
+            .border_color(colors.border)
+            .text_xs()
+            .text_color(colors.muted_foreground)
+            .debug_selector(|| "data-objects-status-bar".to_string())
+            .child(
+                // 窄面板里这行字允许被截（`min_w_0` + ellipsis）：宁可少几个数，
+                // 也不能把刷新钮顶出去
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .child(format!("{count_label} · {memory_label}")),
+            )
+            .child({
+                let entity = entity.clone();
+                Button::new("data-objects-refresh")
+                    .ghost()
+                    .xsmall()
+                    .label(tr("刷新"))
+                    .on_click(move |_, _, cx| {
+                        entity.update(cx, |tab, cx| tab.refresh(cx));
+                    })
+            });
+
         div()
             .v_flex()
             .size_full()
             .min_h_0()
             .pt_2()
-            .child(header)
-            .child(search_row)
+            .child(toolbar)
             .child(chips)
             .child(hint)
             .child(list_frame)
@@ -2006,6 +2064,7 @@ impl DataObjectsTab {
                     )
                 },
             )
+            .child(status_bar)
     }
 }
 
@@ -2395,39 +2454,13 @@ impl ComponentPanel for DataObjectsTab {
     fn toolbar_buttons(
         &mut self,
         _window: &mut Window,
-        cx: &mut Context<Self>,
+        _cx: &mut Context<Self>,
     ) -> Option<Vec<Button>> {
-        // 「加源」是面板唯一往外接数据的入口：只接能直接读的文件，库表由连接下推。
-        // 两档 scope（铁律 B 组第 6 条）在工具栏上就是两个按钮：按需（视图）/ 快照（存副本）。
-        // 导出格式**不在这里**：它是「这一次导出」的属性，问在导出窗口里（2026-11-24 拍板）。
-        Some(vec![
-            Button::new("data-objects-add-source")
-                .ghost()
-                .label(tr("加源"))
-                .tooltip(tr("按需加源：挂成视图读原文件，切项目即清"))
-                .on_click(cx.listener(|this, _, window, cx| {
-                    crate::components::data_objects_load::open_load_files_dialog(
-                        &this.shared,
-                        crate::components::data_objects_load::LoadScope::Session,
-                        window,
-                        cx,
-                    );
-                })),
-            Button::new("data-objects-add-source-snapshot")
-                .ghost()
-                .label(tr("存快照"))
-                .tooltip(tr(
-                    "把选中的文件在资源库里存一份只读副本，跟着项目走、带版本",
-                ))
-                .on_click(cx.listener(|this, _, window, cx| {
-                    crate::components::data_objects_load::open_load_files_dialog(
-                        &this.shared,
-                        crate::components::data_objects_load::LoadScope::Snapshot,
-                        window,
-                        cx,
-                    );
-                })),
-        ])
+        // 模块内部已有工具栏（`render_body` 的第一行：搜索框 + 加源 / 存快照），
+        // Dock 标题栏只做容器管理——与资产库 / 数据库导航面板同一口径。
+        // 「加源」是面板唯一往外接数据的入口：两档 scope（铁律 B 组第 6 条）按需（视图）/
+        // 快照（存副本）；导出格式不在这两处，问在导出窗口里（2026-11-24 拍板）。
+        None
     }
 
     fn dropdown_menu(
@@ -2510,7 +2543,12 @@ fn text_width(window: &Window, text: &str, font_size: Pixels) -> f32 {
     };
     window
         .text_system()
-        .shape_line(SharedString::from(text.to_string()), font_size, &[run], None)
+        .shape_line(
+            SharedString::from(text.to_string()),
+            font_size,
+            &[run],
+            None,
+        )
         .width()
         .into()
 }
