@@ -63,10 +63,17 @@
 > 2026-11-24 追加（P3 tab 状态槽）：`gpui-component/src/dock/panel.rs` 由未改变为 +17/−0（3 hunk，`Panel::tab_prefix`
 > 三处：trait 默认方法 / 对象安全 trait / `Entity<T>` 转发），`tab_panel.rs` 再 +9 行（`Tab::prefix` 接面板内容）。
 > 合计 **+1373 −84 / 16 文件 / 93 hunk**。
+>
+> 2026-11-24 追加（第二轮实机验收反馈 `010fe111`，逐文件实测 numstat）：
+> `tab/tab.rs` +65/−2 → **+74/−12**（`prefix` 从外层行搬进 `inner_content`）；`dock/panel.rs` +17/−0 → **+43/−0**
+> （`CloseRequest` + `request_close` 三处：trait 默认方法 / 对象安全 trait / `Entity<T>` 转发）；
+> `dock/tab_panel.rs` +177/−30 → **+226/−36**（标签 ✕、右键「关闭」「关闭其他」「关闭全部」先过 `request_close`；
+> 标签条形态右簇删 `title_suffix`，脏点唯一位于标签自己的状态槽）。
+> 合计约 **+1459 −100 / 16 文件**（hunk 数未逐个数，如需精确值按 `--numstat` 重跑上表）。
 
 ## 2. 逐点判定
 
-### A. 上游没有、必须保留（19 项）
+### A. 上游没有、必须保留（21 项）
 
 | 补丁点 | 上游 0.10.0 实况（实测） | 判定 |
 |---|---|---|
@@ -89,6 +96,8 @@
 | dock 标题行 hover 分组 + 单面板 ✕（= 收起该 dock） | `render_title` 未注册 hover 分组；`is_closable = constraints.is_closable() && draggable && panel.closable`，而 `is_last_panel → draggable = false`（`tab_group.rs:223/229/251`）⇒ 侧栏最后一个面板永远关不掉；`set_close_button_visible` 只有常显/常隐 | 保留（"整行 hover 才显 ✕"与"最后一个面板收起 dock"都无上游入口；`toggle_dock_by_user` 是上游 `pub(crate)`，只有在 vendor 内才能调到，它才会发 `DockToggleEvent`） |
 | dock 标签 ✕ **常驻占位 + hover 浮出** | `Tab` 有 `prefix/suffix`（`tab/tab.rs:706/712`）与 `InteractiveElement`（`:788`），但"关闭按钮只在悬停时出现"没有开关（`close_button_visible` 只有常显/常隐） | 保留（Zed 的 `tabs.show_close_button = "hover"` 没有上游对应物；项目侧只能改结果集标签条，dock 内部渲染够不到） |
 | `Panel::tab_prefix()`（tab 状态槽） | 组件层 `Panel` 的钩子只有 `tab_name` / `title` / `title_style` / `title_suffix` / `toolbar_buttons` / `dropdown_menu` / `zoom_control` / `inner_padding` / `title_bar`（`dock/panel.rs:71-149`）；`title_suffix` 只挂在**标题栏**右端，而 `Tab::prefix` 是皮肤独占（`tab_panel.rs` 自己 set），面板插不进去 | 保留（中央恒为标签条形态 ⇒ 标题栏不画 ⇒ 非激活的脏/失败标签零标记，属上游能力缺口） |
+| `CloseRequest` + `Panel::request_close()`（关闭前询问） | `TabGroup::close_panel`（`tab_group.rs:293-312`）收到点击就依次校验 `constraints.is_closable / draggable / panel.closable` 然后 `emit(ClosePanel)`，**中间没有任何返回否决的钩子**；`closable` 只能"常显/藏掉" ✕ | 保留（脏文档要"✕ 照常显示 + 点击先问保存"，藏按钮的做法会让非激活脏标签既没脏点也没关闭入口；钩子只加在 component 层，不动 gpui-base） |
+| `Tab::prefix` 挂在 `inner_content` **内**（而非外层行） | 上游 `prefix` 加在外层 `h_flex` 上（`tab.rs:1118-1124`），12px `inner_paddings` 在 `inner_content` 内（`:937`）⇒ 前缀贴住标签左边界，与文字隔 12px；Zed 的 `start_slot` 在内容行内 | 保留（否则脏点看起来像上一个标签的右边缘；改动后与 Zed 同构：内边距 → 前缀槽 → 4px gap → 文字） |
 
 ### B. 上游有等价入口/API，可评撤（1 项，附代价）
 
