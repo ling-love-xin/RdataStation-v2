@@ -149,6 +149,15 @@ pub struct ResultGridDelegate {
     /// 的列名匹配会是 O(n²)）。
     pub(crate) order_cache: Vec<usize>,
     pub(crate) rows: Vec<Vec<String>>,
+    /// 【D10-3】`rows` 里唯一那行是「空态占位行」而不是真数据。
+    ///
+    /// `set_data` 在「0 行 + 有列」时塞一行全空行撑起表头（见那里的注释），
+    /// 于是本仓空结果集在网格里**看起来**有 1 行。DBeaver 那边 `getItemCount() == 0`，
+    /// 交角全选（`LightGrid.java:4276-4277`）会直接 `return null` 什么都不选；
+    /// 所以全选必须先认出这是占位行，否则状态行会把空结果报成「1 行 × N 列」。
+    ///
+    /// 只在 [`ResultGridDelegate::set_data`] 里维护：那是本仓唯一「整批换行」的入口。
+    pub(crate) placeholder_row: bool,
     /// **每列的类型**（与 `columns` 同序；空 = 这份结果没带类型）
     ///
     /// 只影响怎么画（右对齐 / 等宽 / 表头小标签），不影响任何取值；没带类型时与今天完全一致。
@@ -389,6 +398,33 @@ impl ResultGridDelegate {
         self.cell_range = Some(CellRange::single((row, col)));
     }
 
+    /// 【D10-3】全选（左上交角点击 / 等价的整表选中）。
+    ///
+    /// DBeaver `LightGrid.java:3174-3184`：命中「行头带 ∩ 列头带」的左上交角
+    /// （`rowHeaderVisible && x <= rowHeaderWidth && y < headerHeight`）→
+    /// `selectAllCellsInternal`（`:4272-4296`）。那个函数先挡空表
+    /// （`columns.isEmpty()` / `getItemCount() == 0` 直接返回 null，不选也不通知），
+    /// 再把 `getAllCells()` 整个塞进 `updateCellSelection` —— 语义是「全部行 × 全部列」。
+    ///
+    /// 本仓矩形选区用同一个表达式：锚点钉 `(0, 0)`、焦点钉 `(末行, 末列)`。
+    /// 末列走 `last_view_column()`（数据列按可见列算、转置恒 2），行号槽那列因此被
+    /// 一起框住，但计数走 `CellRange::data_columns()`（排除列 0），与 DBeaver
+    /// 「行头不在 columns 里」同口径。
+    ///
+    /// 返回 `false` = 空表，调用方不必刷新（对齐 DBeaver 那条 `return null`）。
+    pub fn select_all_cells(&mut self) -> bool {
+        let rows = self.view_len();
+        // 空态占位行不算数据（`set_data` 的注释）：DBeaver 那边 `getItemCount()` 是 0
+        if rows == 0 || self.columns.is_empty() || self.placeholder_row {
+            return false;
+        }
+        self.cell_range = Some(CellRange {
+            anchor: (0, 0),
+            focus: (rows - 1, self.last_view_column()),
+        });
+        true
+    }
+
     /// 最后一个可见组件列的下标（含行号槽那列）。
     ///
     /// 组件列序 = `[行号槽(0)] + 可见数据列`，所以末列下标 = 可见数据列数
@@ -460,13 +496,18 @@ impl ResultGridDelegate {
         // 【空态】0 行时塞一行全空数据：DataTable 组件在 rows=0 时切到 render_empty 不画表头，
         // 用户要求空结果集也要看到字段名（DBeaver 口径）。塞一行空行让组件画表头 + 空白数据区，
         // 空态文案在状态栏/工具栏显示，不在网格里画。
-        let rows = if rows.is_empty() && !columns.is_empty() {
+        //
+        // 【D10-3】这一行是**占位**不是数据：记到 `placeholder_row`，全选据此按 DBeaver
+        // `getItemCount() == 0` 的口径什么都不选（状态行也就不会把空结果报成 1 行）。
+        let placeholder_row = rows.is_empty() && !columns.is_empty();
+        let rows = if placeholder_row {
             vec![vec![String::new(); columns.len()]]
         } else {
             rows
         };
         self.columns = columns;
         self.rows = rows;
+        self.placeholder_row = placeholder_row;
         // 【D10】换了一批数据，矩形选区的旧坐标不再指向同一批格（DBeaver 重新取数
         // 也会清 `selectedCells`），连同整行镜像一起复位
         self.cell_range = None;
@@ -712,6 +753,8 @@ impl ResultGridDelegate {
     pub fn clear(&mut self, text: impl Into<String>) {
         self.columns.clear();
         self.rows.clear();
+        // 【D10-3】没行也没列时不存在「空态占位行」
+        self.placeholder_row = false;
         self.column_types.clear();
         // 【A9】来源表名跟着清（没有结果就没有 INSERT 目标）
         self.result_table = None;

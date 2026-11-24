@@ -5176,3 +5176,88 @@ fn clicking_the_row_number_slot_covers_the_whole_row() {
     assert_eq!(range.cols(), (0, 1), "隐藏后只剩行号槽 + 1 个数据列");
     assert_eq!(range.data_columns(), vec![1]);
 }
+
+/// 【D10-3】左上交角 = 全选：矩形铺满全部行 × 全部列，空表不选。
+///
+/// DBeaver `LightGrid.java:3174-3184` 命中「行头带 ∩ 列头带」的左上格 →
+/// `selectAllCellsInternal`（`:4272-4296`）：先挡空表（无列 / 无行直接 `return null`），
+/// 再把 `getAllCells()` 整个塞进选区。本仓用单矩形表达同一件事：`(0,0)` 到
+/// `(末行, 末列)`。列 0 是行号槽，计数由 `data_columns()` 排除，
+/// 所以「2 行 × 2 数据列 × 4 格」与 DBeaver 的行头不在 `columns` 里同口径。
+#[gpui_kit::test]
+fn selecting_all_cells_covers_every_row_and_column() {
+    let mut grid = grid(); // 2 行 × 2 数据列（id / name）
+
+    assert!(grid.select_all_cells(), "有行有列时全选应成立");
+    let range = grid.cell_range().expect("全选后应有选区");
+    assert_eq!(range.rows(), (0, 1), "全部行（2 行）");
+    assert_eq!(range.cols(), (0, 2), "从行号槽铺到末列");
+    assert_eq!(range.data_columns(), vec![1, 2], "行号槽不是数据列");
+    assert_eq!(range.data_cells_count(), 4, "2 行 × 2 数据列");
+
+    // 「全部列」跟当前可见列走：隐藏一列后只剩 1 个数据列，格数跟着收
+    grid.hide_column(1);
+    assert!(grid.select_all_cells());
+    let range = grid.cell_range().expect("全选后应有选区");
+    assert_eq!(range.cols(), (0, 1), "隐藏后全部列 = 行号槽 + 1 个数据列");
+    assert_eq!(range.data_columns(), vec![1]);
+    assert_eq!(range.data_cells_count(), 2);
+
+    // 空表两档都不选，与 DBeaver 那两条 `return null`（`:4273-4277`）一致
+    let mut no_columns = ResultGridDelegate::empty("尚未执行");
+    assert!(!no_columns.select_all_cells(), "没有列 → 不选");
+    assert!(no_columns.cell_range().is_none());
+
+    let mut no_rows = ResultGridDelegate::empty("尚未执行");
+    no_rows.set_data(
+        vec!["id".to_string()],
+        Vec::<Vec<String>>::new(),
+    );
+    assert!(!no_rows.select_all_cells(), "没有行 → 不选");
+    assert!(no_rows.cell_range().is_none());
+}
+
+/// 【D10-3】点表头左上角那一格（行号槽表头）= 全选。
+///
+/// 这条钉**交互链路**：真鼠标事件落到 `editor-result-th-0` 上 → delegate 的
+/// `select_all_cells` 生效。组件的列头点击（`on_col_head_click`）报 `SelectColumn(0)`，
+/// 面板收到会去「按行号槽排序」——所以 delegate 那边必须 `stop_propagation` 截断，
+/// 这一刀在 `grid/header.rs` 的对应分支里，`HeaderHarness` 是一条真实渲染链路。
+#[gpui_kit::test]
+fn clicking_the_top_left_corner_selects_every_cell(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::{Modifiers, MouseButton};
+
+    cx.update(gpui_kit::init);
+    let (harness, vcx) = cx.add_window_view(|window, cx| HeaderHarness {
+        state: cx.new(|cx| gpui_kit::component::table::TableState::new(grid(), window, cx)),
+    });
+
+    // 首帧只排位置，几何第二帧才稳定
+    for _ in 0..2 {
+        vcx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+    }
+
+    let corner = vcx
+        .debug_bounds("editor-result-th-0")
+        .expect("行号槽表头应有 debug 几何");
+
+    // 先 move 再按下：命中测试读窗口记录的最近一次指针位置
+    vcx.simulate_mouse_move(corner.center(), MouseButton::Left, Modifiers::default());
+    vcx.simulate_mouse_down(corner.center(), MouseButton::Left, Modifiers::default());
+    vcx.simulate_mouse_up(corner.center(), MouseButton::Left, Modifiers::default());
+
+    let range = vcx.update(|_window, cx| {
+        harness
+            .read(cx)
+            .state
+            .read(cx)
+            .delegate()
+            .cell_range()
+            .expect("交角点击后应有选区")
+    });
+    assert_eq!(range.rows(), (0, 1), "全部行");
+    assert_eq!(range.cols(), (0, 2), "从行号槽铺到末列");
+    assert_eq!(range.data_cells_count(), 4, "2 行 × 2 数据列");
+}

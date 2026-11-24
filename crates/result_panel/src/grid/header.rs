@@ -223,9 +223,43 @@ pub(crate) fn render_th(
         None
     };
 
-    // 转置视图只画列名（类型是混合的，注释表头没有意义）；行号槽 / 空列名同理。
+    // 【D10-3】行号槽表头格（组件第 0 列）= DBeaver 的「左上交角」：点一下全选所有格
+    // （`LightGrid.java:3174-3184` → `selectAllCellsInternal` `:4272-4296`）。
+    //
+    // 它同样不挂列头菜单（行号槽没有列级动作），所以在接菜单之前就返回。
+    // 组件把 `on_col_head_click` 挂在列头格**外层**（vendor `state.rs:2139-2141`），
+    // 那条路会报 `SelectColumn(0)`，面板收到就是「按此列排序」——行号槽没有可排的键，
+    // 所以这里 `stop_propagation` 把冒泡截住（与列头菜单 guard 同一手法，见 `:311-322`；
+    // `on_click` 是 `StatefulInteractiveElement` 方法，元素必须先有 `.id()`）。
+    if ResultGridDelegate::is_row_number(col_ix) {
+        let table = cx.entity().clone();
+        return div()
+            .id(("editor-result-th-corner", col_ix))
+            .v_flex()
+            .size_full()
+            .min_w_0()
+            .justify_center()
+            // 左右内距 6px：与单元格同一个口径（DBeaver `GridColumnRenderer.LEFT/RIGHT_MARGIN = 6`）
+            .px(ui::RESULT_CELL_PADDING_X)
+            // 首列的左边界就是表格左边缘，不画（DBeaver 同口径，`LightGrid.java:2426-2437`
+            // 跳过首个边界）。
+            .debug_selector(move || format!("editor-result-th-{col_ix}"))
+            .child(main_row)
+            .on_click(move |_, _, cx| {
+                cx.stop_propagation();
+                table.update(cx, |state, cx| {
+                    // 空表（没有行或没有列）什么都不选，与 DBeaver 那条 `return null` 一致
+                    if state.delegate_mut().select_all_cells() {
+                        cx.notify();
+                    }
+                });
+            })
+            .into_any_element();
+    }
+
+    // 转置视图只画列名（类型是混合的，注释表头没有意义）；空列名同理。
     // 这几档不挂列头菜单，所以在接菜单之前就返回（否则会白构造一份菜单项）。
-    if delegate.transposed || ResultGridDelegate::is_row_number(col_ix) || name.is_empty() {
+    if delegate.transposed || name.is_empty() {
         return div()
             .v_flex()
             .size_full()
