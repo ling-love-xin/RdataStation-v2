@@ -2953,6 +2953,79 @@ pub fn set_selected_cell_without_scroll(&mut self, row_ix: usize, col_ix: usize,
 - 全量：`cargo test -p rds-editor --lib` → **869 passed / 0 failed / 4 ignored**
   （全量 873 = 原 868 + 新增 1 + 4 ignored）。
 
+## §44 筛选栏第 1 格：来源查询短文本（`显示 SQL` 固定文案 → 归一化 SQL）
+
+按「工具栏 → 表格 → 左右侧栏 → 状态栏」的顺序，先把工具栏这一段核了一遍。结论是：**5 列
++ `filterToolbar` 5 个 ToolItem 的结构已在 2026-11-17 ~ 2026-11-21 对齐过，只剩下第 1 格的
+文本内容不对**。这一刀只改这一格。
+
+### 44.1 DBeaver 真值（`ResultSetFilterPanel.java`）
+
+| 事实 | 出处 |
+| --- | --- |
+| 第 1 列是 `ActiveObjectPanel extends FilterPanel`，`SWT.NO_FOCUS` | `:184`、`:911-935` |
+| 画的是**对象图标 + 一段文本**：图标 x=2 垂直居中，文本 x=`2 + 图标宽 + 2` | `:1041-1049` |
+| 文本来源 = `getActiveSourceQueryNormalized(true)` | `:480` |
+| 三分支：① `DBSEntity`（表直读）**且**无数据过滤器 → 固定文案 `sql_editor_resultset_filter_panel_show_sql_label`；② 其它 UI 情形 → `viewer.getActiveQueryText()`；③ 非 UI 情形 → `dataContainer.getName()` | `:574-585` |
+| `getActiveQueryText()` = `SQLQueryContainer.getQuery().getText()`，即**原始查询文本**（不含筛选 where） | `ResultSetViewer.java:4518-4528` |
+| 归一化三步：去 `/\*.*\*/`（DOTALL）→ 去 `--.+` → `compactWhiteSpaces` | `:588-600` |
+| 再截 200 字符：`truncateString(displayName, 200)` + `notEmpty` 兜底 | `:496-501` |
+| 宽度 = `max(min(24X 文本宽, 文本宽), min(文本宽 + 10, 父容器宽 / 4))`，其中 24X 只在文本比 24 个 X 窄时被覆盖 | `:987-1011` |
+| 高度 = `min(文本高 + 6, MIN_FILTER_TEXT_HEIGHT=20)` | `:1010`、`:103` |
+| 绘制文字色 = `SWT.COLOR_DARK_GREEN`；非 hover 时右边界画一条竖线 `drawLine(x+w-4, y+2, x+w-4, y+h-4)`，hover 时另有底色 `blend(bg, fg, 90)` | `:1018-1035`、`:1037` |
+| 单击 → 弹「对象信息」浮层 = 图标 + **SQL 全文 Sirius 文本控件**（`createSQLPanel` 传 `viewer.getActiveQueryText()`） | `:924-935`、`:728-772` |
+| 双击 / Ctrl+单击 → `openEditorForActiveQuery()`：打开 SQL 控制台，内容 = `getActiveQueryText()` | `:924-928`、`:947-950`、`:774-791` |
+
+**关键判定**：三分支里第 ① 档（表直读）才出现「显示 SQL」文案。本仓没有表直读这一路
+（所有结果都来自执行一条 SQL），所以按源码**恒走第 ② 档**：显示归一化后的原始查询文本。
+2026-11-17 把这一格做成固定文案「显示 SQL」，是只看了 `:577-578` 那一行、没管 `forUI` 的前置
+条件（`dataContainer instanceof DBSEntity && !hasFilters()`），属于取证不完整。
+
+### 44.2 落地
+
+| 改动 | 位置 |
+| --- | --- |
+| 新增 `normalize_query_preview(sql)`：单次遍历、单 String，①块注释 ②行注释 ③折叠空白（含首尾 trim）④截 200 `char` | `crates/result_panel/src/grid/text.rs`（`clip_bytes` 之后） |
+| 第 1 格 label 改用归一化文本；空结果（全文只有注释）不摆这一格 | `panel/render.rs`（`sql_chip`，原 `:245-273`） |
+| 宽度上限 `.max_w(relative(0.25))` = `computeSize` 的 `parent.x / 4` | 同上 |
+| 回归用例 `query_preview_strips_comments_and_folds_whitespace`（8 组断言） | `grid/tests.rs`（`clip_bytes` 用例之后） |
+| 渲染断言翻转 + 新增「全注释不留空壳」 | `panel/tests.rs` 原第 7 项 |
+
+两处**实现细节**（照 Java 正则行为，不是「顺手简化」）：
+
+- `replaceAll("--.+", "")` 的 `.` 不匹配换行 ⇒ 行注释逐行生效；`--` 后面**直接是行尾**时
+  `+` 匹配不到至少一个字符 ⇒ 该行不动（`select id--` 保留两个短横）。
+- `replaceAll("/*...*/")` **不补空格** ⇒ `a/*x*/b` → `ab`。本仓实现同样不补（删块注释时不置
+  pending space），否则会多出一个空格、与 DBeaver 的显示差一个字符。
+
+### 44.3 取证边界（明确不能声称逐字复刻的部分）
+
+`CommonUtils.compactWhiteSpaces` 与 `CommonUtils.truncateString` 的函数体在 `jkiss-utils`
+（Maven 依赖），参考仓 `dbeaver-ref` 里**没有它的源码**（只有 dbeaver 自己的 plugins）。所以：
+
+- ③ 折叠空白：按语义等价实现（折叠所有 Unicode 空白为单空格 + 去首尾），不声称与人家的实现逐字节相同；
+- ④ 截 200：按 `char` 截断、**不补省略号**。补与不补无法取证，选不补（容器层已有宽度裁剪，
+  再补一个 `…` 会多占一个字符）。
+
+其余各步（① ② 的正则语义、200 这个数字、`parent/4` 这个上限、`min(文本高 + 6, 20)` 这个高度）都
+有源码行号支撑。
+
+### 44.4 仍未对齐（本刀有意不做，逐条登记）
+
+| 项 | DBeaver | 本仓 | 为什么不做 |
+| --- | --- | --- | --- |
+| 第 ① 档「显示 SQL」文案 | 表直读 + 无过滤器时显示固定文案 | 无表直读路径 ⇒ 恒显示 SQL 文本 | 没有 `DBSEntity` 这种结果来源；等「数据对象直读」这条链路建起来才有这一档 |
+| 双击打开 SQL 编辑器 | `openEditorForActiveQuery()` 开控制台并塞入当前查询 | 无 | 本仓右栏「执行 SQL」页签是**只读回显**（不是可编辑控制台）；开一个真编辑器属于跨模块动作，单独立项 |
+| 右边界竖线 | 非 hover 时画 `drawLine(x+w-4, …)` | 无（列间靠 Button 自身宽度分离） | 本仓这一格是 Button，要画这条线得自绘；与「列间无间距」的整体布局一起重新算，P1 先登记 |
+| 文字色 `COLOR_DARK_GREEN` | 硬编码深绿 | 主题色 | 项目硬约束：禁裸 hex、只用主题 token；主题里没有「深绿」这一角色，硬塞一个等于绕过主题体系 |
+| hover 态 | 底色 `blend(bg, fg, 90)` + 竖线 | Button 的 ghost hover 底色 | 组件统一 hover 语义，不自绘 |
+
+### 44.5 验证
+
+- `cargo test -p rds-result-panel --lib` → **447 passed / 0 failed**（原 446 + 新增 1）。
+- `cargo check -p rds-result-panel --all-targets` → 0 error / 0 warning。
+- 目视验收（宽度是否真的压在 1/4、长 SQL 是否只出现一段）按既有约定由用户手动确认，这里不做截图。
+
 
 
 

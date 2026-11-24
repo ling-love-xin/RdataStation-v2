@@ -2834,7 +2834,8 @@ fn right_panel_pages_share_the_toolbar_shape(cx: &mut gpui_kit::TestAppContext) 
         "分组页无分组键时仍应有分组列下拉"
     );
 
-    // 7) 工具栏 SQL 入口：有 SQL 时第一格是固定文案「显示 SQL」（不再摊开 SQL 原文）
+    // 7) 工具栏 SQL 入口：有 SQL 时第一格是**来源查询短文本**（剥注释 + 折叠空白的
+    //    归一化结果，见 §44 / `normalize_query_preview`），不再是固定文案「显示 SQL」
     cx.update(|_, app| {
         panel.update(app, |p, _| {
             p.result_sql = Some("select id, amount from t where amount > 100".to_string())
@@ -2848,7 +2849,21 @@ fn right_panel_pages_share_the_toolbar_shape(cx: &mut gpui_kit::TestAppContext) 
     });
     assert!(
         visible("editor-result-sql-preview", cx),
-        "有 SQL 时筛选框第 1 格应渲染「显示 SQL」入口"
+        "有 SQL 时筛选框第 1 格应渲染来源查询入口"
+    );
+
+    // 8) 归一化后为空（全文只有注释）→ 不摆这一格
+    //    （DBeaver 会用 `DEFAULT_QUERY_TEXT` 兜底，本仓口径是「没有的东西不摆占位」）
+    cx.update(|_, app| {
+        panel.update(app, |p, _| p.result_sql = Some("-- 只有注释".to_string()))
+    });
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
+    assert!(
+        !visible("editor-result-sql-preview", cx),
+        "SQL 归一化后为空时不该留一个空壳按钮"
     );
 }
 

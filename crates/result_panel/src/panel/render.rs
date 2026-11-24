@@ -242,35 +242,54 @@ impl ResultPanel {
         // （`CompositeBorderPainter.java:34-39`），SWT 的 composite 本身也没有圆角。
         // 此前挂 `rounded(theme.radius)` 会把四角磨圆，框形与 DBeaver 不一致。
         let theme = cx.theme();
-        // 【DBeaver 对齐 2026-11-17】筛选框第 1 格 = 对象图标 +「显示 SQL」固定文案。
+        // 【DBeaver 对齐 2026-11-25】筛选框第 1 格 = 对象图标 + **来源查询短文本**。
         //
         // DBeaver 的 `filterComposite` 是 5 列 GridLayout（`ResultSetFilterPanel.java:174`），
-        // 第 1 列 `ActiveObjectPanel`（`:184`）画的不是 SQL 原文：`getActiveSourceQuery(true)`
-        // 在「数据容器是表且当前没有筛选条件」时返回固定文案
-        // `sql_editor_resultset_filter_panel_show_sql_label`（`:577-578`，
-        // zh 资源 `ResultSetMessages_zh.properties:746` = 「显示 SQL」），
-        // 绘制时先画对象图标再画这段文字（`ActiveObjectPanel.paint:1043-1049`），
-        // 文本宽度按 `maxTextLength = compactMode ? 16 : 24` 个字符封顶（`:996`）。
-        // 完整 SQL 只在点击后的弹层里出现（`ActiveObjectPanel` 双击开 popup，`:924`）。
+        // 第 1 列 `ActiveObjectPanel`（`:184`）画的内容取自 `getActiveSourceQueryNormalized(true)`：
+        //   - 数据容器是**表**（`DBSEntity`）且当前没有数据过滤器 → 固定文案
+        //     `sql_editor_resultset_filter_panel_show_sql_label`（`:577-578`，
+        //     zh 资源 `ResultSetMessages_zh.properties:746` = 「显示 SQL」）；
+        //   - 其它情况（SQL 编辑器里跑出来的结果集就是这一档）→ `viewer.getActiveQueryText()`
+        //     （`ResultSetViewer.java:4518-4528`：`SQLQueryContainer.getQuery().getText()`，
+        //     即**原始查询文本**），再经剥注释 / 折叠空白 / 截 200 字符（`:588-600`、`:497`）。
+        // 绘制时先画对象图标再画这段文字（`ActiveObjectPanel.paintPanel:1043-1049`）。
         //
-        // 本仓此前把「SQL: 前 60 字符」摆成工具栏最左的独立按钮，长度随 SQL 变化，
-        // 会把筛选输入压窄；改成固定文案后宽度恒定（与 DBeaver 一致），
-        // 原文只走 `editor-result-sql-dialog`。点击仍用单击（用户口径：点击就弹窗）。
-        let sql_chip: Option<AnyElement> = toolbar.sql.is_some().then(|| {
-            let queue = self.queue.clone();
-            Button::new("editor-result-sql-preview")
-                .ghost()
-                // 20px 档：与筛选框内其它子控件同高（框内高 20、外圈 24，见下方注释）
-                .xsmall()
-                .debug_selector(|| "editor-result-sql-preview".to_string())
-                .icon(IconName::Table2)
-                .label(tr("显示 SQL"))
-                .tooltip(tr("点击查看完整 SQL（弹出窗口）"))
-                .on_click(move |_, _window, app| {
-                    queue.request(ResultRequest::OpenSqlDialog, app);
-                })
-                .into_any_element()
-        });
+        // 本仓没有「表直读」（`DBSEntity`）这一路——所有结果都来自执行一条 SQL，
+        // 所以按源码恒走第二档：**显示归一化后的来源 SQL**，而不是固定文案。
+        // 此前（2026-11-17）为了「宽度恒定」摆了固定文案「显示 SQL」；但 DBeaver 本身
+        // 的宽度就不是恒定值：`computeSize` 给的是 `min(文本宽 + 10, 父容器宽 / 4)`
+        // （`:987-1011`），宽度随文本变、上限 1/4。本仓照这个上限做，宽度自然也就稳了。
+        //
+        // 文本宽度上限 `.max_w(relative(0.25))` = DBeaver 的 `maxWidth = control.getSize().x / 4`
+        // （`:988-991`，沿父链取第一个非零宽度）；超长时组件内部 `overflow_hidden`
+        // 直接裁（`button.rs:786-792`），与 DBeaver 的 `gc.setClipping` 同样是**硬裁**、不加省略号。
+        //
+        // 完整 SQL 仍只走 `editor-result-sql-dialog`（单击弹出），与 DBeaver 单击弹 SQL 浮层
+        // （`createObjectPanel:728-772`）同口径；双击打开 SQL 编辑器的能力本仓没有对应物
+        // （右栏「执行 SQL」页签是只读回显，登记在 §44）。
+        let sql_chip: Option<AnyElement> = toolbar
+            .sql
+            .as_deref()
+            .map(result_grid::text::normalize_query_preview)
+            .filter(|text| !text.is_empty())
+            .map(|text| {
+                let queue = self.queue.clone();
+                Button::new("editor-result-sql-preview")
+                    .ghost()
+                    // 20px 档：与筛选框内其它子控件同高（框内高 20、外圈 24，见下方注释）
+                    .xsmall()
+                    .flex_none()
+                    // DBeaver `computeSize` 的上限：父容器宽的 1/4
+                    .max_w(relative(0.25))
+                    .debug_selector(|| "editor-result-sql-preview".to_string())
+                    .icon(IconName::Table2)
+                    .label(text)
+                    .tooltip(tr("点击查看完整 SQL（弹出窗口）"))
+                    .on_click(move |_, _window, app| {
+                        queue.request(ResultRequest::OpenSqlDialog, app);
+                    })
+                    .into_any_element()
+            });
         let filter = div()
             .h_flex()
             .items_center()

@@ -11,7 +11,7 @@ use crate::grid::status::{
     ResultControls, format_integer_cell, render_status_row, render_toolbar,
 };
 use crate::grid::status::{FIRST_PAGER_ACTION, FIRST_SYSTEM_ACTION};
-use crate::grid::text::{cell_matches, clip_bytes, find_in_cell, preview_of};
+use crate::grid::text::{cell_matches, clip_bytes, find_in_cell, normalize_query_preview, preview_of};
 use crate::grid::view_rows::compare_cells;
 use crate::ports::{FindCriteria, Presentation};
 use gpui_kit::ImageFormat;
@@ -951,6 +951,58 @@ fn clip_bytes_never_splits_a_multibyte_character() {
     assert_eq!(clip_bytes("中", 1), "…");
     // 空串
     assert_eq!(clip_bytes("", 80), "");
+}
+
+/// 【§44】筛选栏第 1 格的来源查询短文本：剥注释 + 折叠空白 + 200 字符截断
+///
+/// 期望值全部按 DBeaver `getActiveSourceQueryNormalized`（`ResultSetFilterPanel.java:574-600`）
+/// 的正则语义推出来，不是「看着差不多」：
+/// - `--.+` 的 `.` 不匹配换行 ⇒ 行注释逐行生效；`--` 后直接是行尾时 `+` 匹配不到 ⇒ 整行不动；
+/// - `/*.*.*/`(DOTALL) 跨行匹配 ⇒ 块注释可跨行删；`replaceAll` 不补空格 ⇒ `a/*x*/b` → `ab`；
+/// - 未闭合的 `/*` 匹配不上 ⇒ 原样保留（后续仍折叠空白）。
+/// 200 与 `char` 计数取自 `:497` 的 `truncateString(displayName, 200)` + 本仓「按字符不按字节」
+/// 的既有约定（按字节切会 panic，见 `clip_bytes` 那条）。
+#[test]
+fn query_preview_strips_comments_and_folds_whitespace() {
+    // 行注释删到行尾
+    assert_eq!(
+        normalize_query_preview("select id -- 主键\nfrom orders"),
+        "select id from orders"
+    );
+    // `--` 后面直接是行尾：整行不动（`--.+` 匹配不到）
+    assert_eq!(
+        normalize_query_preview("select id--\nfrom t"),
+        "select id-- from t"
+    );
+    // 块注释跨行；删掉后不补空格
+    assert_eq!(
+        normalize_query_preview("select a/*x\ny*/b from t"),
+        "select ab from t"
+    );
+    // 未闭合块注释原样保留（空白照样折叠）
+    assert_eq!(
+        normalize_query_preview("select /* x\n  y"),
+        "select /* x y"
+    );
+    // 空白折叠 + 去首尾
+    assert_eq!(
+        normalize_query_preview("  select\t\r\n  a   b  "),
+        "select a b"
+    );
+    // 200 字符上限（按 char 计，不补省略号）
+    assert_eq!(
+        normalize_query_preview(&"a".repeat(300)).chars().count(),
+        200
+    );
+    // 多字节同样按 char 截、不 panic
+    assert_eq!(
+        normalize_query_preview(&"中".repeat(300)).chars().count(),
+        200
+    );
+    // 空串 / 全文只有注释 → 空串（调用方据此不摆这一格）
+    assert_eq!(normalize_query_preview(""), "");
+    assert_eq!(normalize_query_preview("-- only comment"), "");
+    assert_eq!(normalize_query_preview("/* only */"), "");
 }
 
 /// 值预览：空白折叠 + 截断（长值不该把菜单撑开）

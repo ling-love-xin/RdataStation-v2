@@ -606,6 +606,76 @@ pub(crate) fn clip_bytes(value: &str, max_bytes: usize) -> String {
     out
 }
 
+/// 筛选栏第 1 格要显示的「来源查询」短文本（DBeaver `getActiveSourceQueryNormalized`）
+///
+/// 对齐 `ResultSetFilterPanel.java:574-600` 的三步 + `:497` 的截断：
+/// ① 去 `/* ... */` 块注释（`Pattern.compile("/\\*.*\\*/", Pattern.DOTALL)`，可跨行）；
+/// ② 去 `--` 到行尾（`replaceAll("--.+", "")`——`.` 不匹配换行，故逐行生效；
+///    `--` 后面直接是行尾时 `+` 匹配不到至少一个字符，该行**不动**）；
+/// ③ 折叠连续空白为单空格（`CommonUtils.compactWhiteSpaces`）；
+/// ④ 截到 200 字符（`CommonUtils.truncateString(displayName, 200)`，见 `:497`）。
+///
+/// **取证边界（不要当成逐字复刻）**：③④ 的函数体在 `jkiss-utils` 里，那是 Maven jar，
+/// 参考仓（`dbeaver-ref`）没有它的源码，故按语义等价实现：③ 折叠所有 Unicode 空白并去首尾；
+/// ④ 按 `char` 截 200、**不补省略号**（补与不补无法取证；容器层已有宽度裁剪，这里再补一个
+/// `…` 反而多占一个字符）。①② 的正则语义已按 Java 正则行为对齐（含 `a/*x*/b` → `ab`
+/// 这种「删注释不补空格」的细节）。
+///
+/// 为什么不用 [`clip_bytes`]：这条按 `char` 计数（DBeaver 的 200 是字符数）、且要单次遍历
+/// 只产出一个 String —— 它在每帧 render 里被调用，不能像 `clip_bytes` 那样先判字节长度
+/// 再整串复制。两者的分工：本函数负责「一张表里长什么样」，`clip_bytes` 负责「按字节上限硬截」。
+///
+/// 字符串字面量里的 `--`、`/*` 同样会被删 —— DBeaver 的正则没有 SQL 感知，这里保持一致。
+pub(crate) fn normalize_query_preview(sql: &str) -> String {
+    const MAX_CHARS: usize = 200;
+    let mut out = String::with_capacity(MAX_CHARS);
+    let bytes = sql.as_bytes();
+    let mut i = 0usize;
+    // 见到空白先记账，等下一个非空白字符再落一个空格（等价于「折叠 + trim」）
+    let mut pending_space = false;
+    let mut emitted = 0usize;
+    while i < bytes.len() {
+        if emitted >= MAX_CHARS {
+            break;
+        }
+        // ① 块注释：只删配对的。未配对时走普通字符路径（Java 那段正则同样匹配不上、原文保留）
+        if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+            if let Some(rel) = sql[i + 2..].find("*/") {
+                // `replaceAll` 不补空格：`a/*x*/b` → `ab`
+                i = i + 2 + rel + 2;
+                continue;
+            }
+        }
+        // ② 行注释：`--` 后至少一个字符才删到行尾（行尾直接是 `--` 时整行不动）
+        if bytes[i] == b'-' && i + 1 < bytes.len() && bytes[i + 1] == b'-' {
+            let line_end = sql[i..].find('\n').map_or(bytes.len(), |rel| i + rel);
+            if line_end > i + 2 {
+                i = line_end;
+                pending_space = true;
+                continue;
+            }
+        }
+        let ch = sql[i..].chars().next().expect("i 落在字符边界内");
+        i += ch.len_utf8();
+        if ch.is_whitespace() {
+            pending_space = true;
+            continue;
+        }
+        // ③ 折叠空白：连续空白只在「已有输出」之后落一个空格（首部空白直接丢弃）
+        if pending_space && !out.is_empty() {
+            out.push(' ');
+            emitted += 1;
+            if emitted >= MAX_CHARS {
+                break;
+            }
+        }
+        pending_space = false;
+        out.push(ch);
+        emitted += 1;
+    }
+    out
+}
+
 /// 单元格里找 `needle`（**已小写**）的字节区间：两边都是 ASCII → 零分配
 pub(crate) fn ascii_match_range(cell: &str, needle: &str) -> Option<Range<usize>> {
     let (haystack, needle) = (cell.as_bytes(), needle.as_bytes());
