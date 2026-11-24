@@ -88,10 +88,10 @@
 > 版式坑（改版时踩过）：`DescriptionList::vertical()` 会把每项拆成"带底色的 label 行 + 值行"两行，
 > 9 项就是 18 行，必然撑破对话框高度触发内部滚动。**明细一律用默认 horizontal**。
 
-> 详版设计（独立窗口 + 依赖清单 + 搜索引擎版本，未落地）：见
-> [`version-info-page-design.md`](./version-info-page-design.md)（设计稿 2026-11-25，原型
-> [`version-info-page-prototype.html`](./version-info-page-prototype.html)）。本节描述的 560 宽弹窗现状在
-> 详版落地后仍保留为「快速核对」入口，或按该文档 §2 备选 B 整体替换。
+> 扩版设计（同一 560 宽弹窗内补 6 个核心库，不换形态；未落地）：见
+> [`version-info-page-design.md`](./version-info-page-design.md)（2026-11-25 定稿，原型
+> [`version-info-page-prototype.html`](./version-info-page-prototype.html)）。本节描述的结构在扩版里
+> 保留，只把「构建 4 项」换成「构建与依赖 9 项」。
 
 ### 5.1 落到项目（只写不展示）
 
