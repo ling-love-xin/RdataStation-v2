@@ -3400,7 +3400,8 @@ pub fn set_selected_cell_without_scroll(&mut self, row_ix: usize, col_ix: usize,
 
 浮层结构 = 根 `h_flex`（`items_start`、`gap_2`、`min_w(18.75rem)`=300px、`max_w(40rem)`、`min_h(6.25rem)`=100px、`max_h(25rem)`=400px）→ 左：图标列（`Icon::Table2`，`flex_none`）→ 右：`v_flex`（血缘行 + 只读等宽滚动文本）。
 
-- SQL 全文来源：`sql_textarea` 的 `value()`（每处 `open_sql_dialog` 都用 `set_value` 写过完整 SQL）；没有该实体时退回归一化预览文本。
+- SQL 全文来源：直接取 `toolbar.sql` **原文**（保留换行与缩进，浮层内 `overflow_y_scrollbar` 可滚）——与 DBeaver 给 `viewer.getActiveQueryText()`（`:757`）同口径；归一化短文本（`normalize_query_preview`，§44）只作兜底。
+  - 修订记录：`0229299c` 最初优先取模态卡片那张 `TextareaState` 的 `value()`，但该实体只在开过卡片后才有，首次单击会退化成归一化预览；`b70d9fb0` 改为直接取原文。
 - 血缘行文本 `来自{lineage} · {connection}`（`connection` 为空时只 `来自{lineage}`），`text_xs` + `muted_foreground` + `text_ellipsis` + 探针 `editor-result-sql-popover-lineage`。
 - **血缘行的来历**：DBeaver 的对象信息浮层里没有「血缘」这一项；本仓模态卡片额外承载血缘与来源标题。用户明确要求「保留血缘信息」，故把血缘搬进浮层首行，而不是砍掉。
 - **模态卡片保留**：右栏「本次重查 SQL」入口（`sidebars.rs:887-895` → `OpenSqlDialog`）仍在用它，且它带标题与全文滚动、SQL 可选可复制。
@@ -3417,6 +3418,9 @@ pub fn set_selected_cell_without_scroll(&mut self, row_ix: usize, col_ix: usize,
 | SQL 可选/可复制 | `StyledText`（可选中、可复制） | 只读文本、不可选 | 同一个 `TextareaState` 若同时被浮层与模态卡片渲染会撞 `ElementId`；卡片里可选可复制 |
 | 可缩放 | `SWT.RESIZE` 可拖拽改尺寸 | 固定上下界 | `Popover` 无拖拽改尺寸入口 |
 | 血缘行 | **无此项** | 首行保留 | 用户明确要求保留（本仓卡片固有信息） |
+| 再点同一格 | `:943-945` 先 `popup.dispose()` 再新造 → **重开并跟随新点击点重定位** | 已开时再点 = **关闭** | `Popover` 底层 trigger `on_mouse_down` 是 `if state.is_open() == open { toggle_open }`（`vendor/gpui-base/src/popover.rs:359-369`），即开关语义；面板里没有「重开并重定位」的入口，且开关语义同样满足「点一下能看完再点一下收起」 |
+
+点外部关闭的链路（源码实证，非目视）：`vendor/gpui-base/src/popover.rs:389-409` 的 `on_mouse_down_out` → `PopoverState::dismiss`（`:68-72`）→ `toggle_open`（`:100-102`）→ `transition_to(_, announce = true, ...)`（`:104-154`）→ `on_open_change` 回调（`:150-152`）→ 本仓 `SetSqlPopup(false)`。即**点外部关闭会真正把 `sql_popup_open` 复位**，不会卡在「开着关不掉」。
 
 ### 51.5 验证
 
