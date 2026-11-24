@@ -293,7 +293,6 @@ impl RightSidebarPanel {
             .v_flex()
             .size_full()
             .min_h_0()
-            .pt_2()
             .child(
                 div()
                     .px_3()

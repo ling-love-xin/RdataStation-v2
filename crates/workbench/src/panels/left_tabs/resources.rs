@@ -29,8 +29,8 @@ impl Focusable for ResourcePanelTab {
 impl Render for ResourcePanelTab {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let resources = self.resources.clone();
-        // 顶部留 8px 间隔：dock 标题栏与模块内容不贴边（与右侧 dock 统一）
-        div().v_flex().size_full().min_h_0().pt_2().child(resources)
+        // 内容直接接官方标题条，不再补上间隔（同左侧其它 tab）。
+        div().v_flex().size_full().min_h_0().child(resources)
     }
 }
 

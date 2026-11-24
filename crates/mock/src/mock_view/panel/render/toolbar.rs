@@ -105,11 +105,13 @@ impl MockPanel {
         };
 
         // 工具栏走 `toolbar::Toolbar`（roving 方向键焦点 + toolbar a11y 语义 + 统一 size 托管）；
-        // 外层只画高度 / 内距 / 底部分隔线（规范：背景边框高度外层自己画）。
+        // 外层只画高度 / 底部分隔线（规范：背景边框高度外层自己画）。
+        //
+        // 左右内距交给根容器的 `p_2`，工具栏自己**不再**加 `px`：原来「根 p_2(8) + 本行 px(8)」
+        // 把按钮推到左缘 16，而它下面的动作行 / 折叠段是 8，工具栏看上去整体往里缩了一格。
         div()
             .w_full()
             .h(rems(ui::PANEL_HEADER_HEIGHT))
-            .px(rems(ui::PANEL_PADDING))
             .border_b_1()
             .border_color(cx.theme().colors.border)
             .child(

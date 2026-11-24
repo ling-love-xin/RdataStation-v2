@@ -56,8 +56,9 @@ impl Render for InsightPanelTab {
         self.insight
             .update(cx, |panel, cx| panel.set_project_open(open, cx));
         let insight = self.insight.clone();
-        // 顶部留 8px 间隔：dock 标题栏与模块内容（含内置工具栏）不贴边（#15）。
-        div().v_flex().size_full().min_h_0().pt_2().child(insight)
+        // 内容直接接官方标题条（32 高 + 1px 下边界线）：不再补一层上间隔——
+        // 这层 8px 是「面板还没有标题栏」时代的对齐补偿，现在标题条本身已经是面板头。
+        div().v_flex().size_full().min_h_0().child(insight)
     }
 }
 
@@ -165,8 +166,8 @@ impl Focusable for MockPanelTab {
 impl Render for MockPanelTab {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let mock = self.mock.clone();
-        // 顶部留 8px 间隔：dock 标题栏与模块内置工具栏不贴边（#15）。
-        div().v_flex().size_full().min_h_0().pt_2().child(mock)
+        // 内容直接接官方标题条：面板内的工具栏就是它下面第一行，不再补上间隔。
+        div().v_flex().size_full().min_h_0().child(mock)
     }
 }
 
@@ -274,8 +275,8 @@ impl Focusable for HistoryPanelTab {
 impl Render for HistoryPanelTab {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let history = self.history.clone();
-        // 顶部留 8px 间隔：dock 标题栏与模块内容不贴边（#15）。
-        div().v_flex().size_full().min_h_0().pt_2().child(history)
+        // 内容直接接官方标题条，不再补上间隔（同 Insight / Mock）。
+        div().v_flex().size_full().min_h_0().child(history)
     }
 }
 
