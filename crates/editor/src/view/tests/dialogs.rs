@@ -23,8 +23,8 @@ use crate::view::host::{
 };
 
 use super::{
-    bind_editor_keys, open_panel, shared_with_document, shared_with_runner, temp_dir,
-    wait_for_result,
+    bind_editor_keys, open_panel, run_statement, shared_with_document, shared_with_runner,
+    temp_dir, wait_for_result,
 };
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -1166,4 +1166,66 @@ fn insight_column_asks_before_touching_the_analysis_library(cx: &mut TestAppCont
         !reached.get(),
         "未确认前不得进入洞察（此刻数据还没进分析库临时表）"
     );
+}
+
+/// 【洞察整链 · 确认之后】确认框的回调里只有一句：`panel.insight_column(&column, cx)`。
+/// 这条测试从回调处接手，验「列名 + 产生这份结果的 SQL + 连接 + 结果集标签」
+/// 真的原样交到宿主端口（洞察侧据此重跑带 `LIMIT` 的取样，不物化结果集 —— 决策在案）。
+///
+/// 起点为什么放在回调而不是按钮：弹层按钮的命中在 headless 下不稳
+/// （见 `dialog_button_rendered` 的注释：试过 `simulate_click`，单跑能中、全套跑中不了），
+/// 而「确认 → `insight_column`」之间没有别的逻辑。与上面那条
+/// `insight_column_asks_before_touching_the_analysis_library` 合起来，
+/// 洞察入口这条链除「鼠标真点确认按钮」一跳外全部被覆盖。
+#[gpui_kit::test]
+fn insight_column_after_confirm_hands_the_result_to_the_port(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    // 这条执行器能在结果上解析出连接（真实入口的前提：取样得回源库）
+    let (shared, id) = super::shared_with_connection_runner("select rows=3", "conn-1");
+
+    let seen = Rc::new(std::cell::RefCell::new(
+        None::<crate::shared::InsightColumnRequest>,
+    ));
+    let sink = seen.clone();
+    shared.attach_insight_column(Rc::new(
+        move |request: crate::shared::InsightColumnRequest, _cx: &mut gpui_kit::App| {
+            *sink.borrow_mut() = Some(request);
+        },
+    ));
+
+    let (harness, cx) = dialog_harness(cx, &shared, &id, "editor-insight-after-confirm");
+    let panel = cx.update(|_window, cx| harness.read(cx).panels[0].clone());
+    run_statement(
+        cx,
+        &panel,
+        "select rows=3",
+        execution::ResultPlacement::Replace,
+    );
+
+    // 先验入口这一档真会出现：否则下面那句会静默不动作，测试就成了假绿
+    let entry = shared.results_active(&id).expect("应有当前结果").clone();
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).insight_available(&entry)),
+        "连接可解析 + 结果可取样时，入口必须出现"
+    );
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.insight_column("amount", cx));
+    });
+
+    let request = seen
+        .borrow()
+        .clone()
+        .expect("确认后必须把请求交到洞察端口");
+    assert_eq!(request.column, "amount", "交出去的是被点的那一列");
+    assert_eq!(
+        request.connection, "conn-1",
+        "取样要回产生这份结果的那条连接（否则会串库）"
+    );
+    assert!(
+        request.sql.contains("select rows=3"),
+        "交的是产生这份结果的 SQL：{:?}",
+        request.sql
+    );
+    assert!(!request.label.is_empty(), "结果集标签要带上（面板副标题用）");
 }

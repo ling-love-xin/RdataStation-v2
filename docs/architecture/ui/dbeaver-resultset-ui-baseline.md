@@ -1513,10 +1513,12 @@ T1 按 Q13 裁掉的六个工具栏构造里，有两处的**入口至今没有�
 
 1. **引用页 live 未接线**：`render_reference_tab_live`、`begin_references_load`、三处 `Reference` 触发
    全部保留（两处注释、一处原样），接线时把 `render_reference_tab` 的占位换回即可。
-2. **洞察确认的点击级回归没做**：只验到「弹框 + 未确认不动作」。确认之后的整链
-   （弹框 → `insight_column` → 宿主端口 → 展开洞察面板）未做点击级测试——headless 下
-   `debug_bounds` 坐标与命中测试对不上（见 `dialog_button_rendered` 注释：试过 `simulate_click`，
-   单跑能中、全套跑中不了）。
+2. ~~**洞察确认的点击级回归没做**：只验到「弹框 + 未确认不动作」。~~ **已补（§43）**：
+   确认回调 → `insight_column` → 宿主端口这一段已有点击级等价回归
+   （`view/tests/dialogs.rs::insight_column_after_confirm_hands_the_result_to_the_port`，
+   断言列名 / SQL / 连接 / 标签四字段）。仍不覆盖的只有「鼠标真点确认按钮」一跳，
+   原因是 headless 下 `debug_bounds` 坐标与命中测试对不上（见 `dialog_button_rendered` 注释：
+   试过 `simulate_click`，单跑能中、全套跑中不了）。
 3. ~~**筛选展开区 `preview` 的字节切片**：`&wrapped[..80]` 按字节截断，遇多字节列名会 panic。~~
    **已修（D10-11）**：新增 `grid/text.rs::clip_bytes`，按字节上限截断并回退到最近的字符边界
    （最多 3 字节），超长补省略号；`sidebars.rs` 的 SQL 预览改用它。回归用例
@@ -1592,8 +1594,8 @@ Label「筛选：」在左、`Text(SWT.BORDER|SWT.SEARCH|SWT.ICON_CANCEL)` 在�
    计算页接入多选输入。落地后 D11（按列分组）、D12（− 移除）、D13（工具条补两项）一起收。
 3. **D1 元数据页 Tree**：等 `ColumnAnnotation` 能表达嵌套子属性（驱动 struct/list）再做，
    在此之前换 Tree 只是形式主义。
-4. 引用页 live 接线（§26.5-1）、洞察确认后的点击级回归（§26.5-2）、筛选 `preview` 的
-   字节切片 panic（§26.5-3）仍按 §26.5 挂着。
+4. 引用页 live 接线（§26.5-1）仍按 §26.5 挂着（Q36-A 置灰口径，等「引用行内嵌结果集」）；
+   洞察确认后的回归（§26.5-2）与筛选 `preview` 字节切片 panic（§26.5-3）已分别由 §43、D10-11 关掉。
 ## 28. D14 落地：分组页改成 DBeaver 的内嵌结果集形态
 
 ### 28.1 取证（源码行号）
@@ -2900,6 +2902,56 @@ pub fn set_selected_cell_without_scroll(&mut self, row_ix: usize, col_ix: usize,
 
 第 1 条的意义：**「行号列宽自适应」做不了（§39.2，要遍历缓存行且 `column()` 只拿 `&App`），
 但「数据列双击自适应」早就有了**——两者别混为一谈。§39.2 的判定只对「行号槽那一列」成立。
+
+## §43 洞察确认之后的整链回归（§26.5-2 收口）
+
+### 43.1 缺口原状与结论
+
+§26.5-2 记的是「只验到『弹框 + 未确认不动作』，确认之后的整链没有点击级回归」。本轮把这条
+链拆开数了一遍，落点是**一跳不可测 + 一跳没人测**，后者补上即闭环：
+
+| 跳 | 生产代码 | 本轮前 | 本轮后 |
+| --- | --- | --- | --- |
+| 列头右键「洞察此列」→ 钩子入队 | `construct.rs:605-623` | 有（`results_b.rs::insight_column_hook_follows_the_host_port_and_the_result` 验钩子装/不装 + 入口显/隐） | 不变 |
+| 入队请求 → 弹确认框、未确认不碰端口 | `dispatch.rs:490-496`、`dialogs.rs`（确认框） | 有（`dialogs.rs::insight_column_asks_before_touching_the_analysis_library`） | 不变 |
+| **确认按钮 → 回调 → `panel.insight_column`** | `dispatch.rs:493-495` 的闭包体只有一句 `panel.insight_column(&for_confirm, cx)` | 无（按钮命中在 headless 不稳） | **回调处起测**（见 43.2） |
+| **`insight_column` → 宿主端口（列名/SQL/连接/标签）** | `view/host/results/sort.rs:32-56` | 无 | 有（新测试） |
+
+按钮那一跳的不可测原因是既有事实，不是本轮新发现：headless 下 `debug_bounds` 的坐标与鼠标命中
+测试对不上，试过 `simulate_click` + `run_until_parked`，「单跑能中、全套跑就中不了」
+（`dialogs.rs::dialog_button_rendered` 的注释）。既然回调体只有一句转发、且这句在源码里钉死，
+从回调处起测即可覆盖缺口里**唯一有逻辑的一跳**（端口请求的四个字段）。
+
+### 43.2 新增的测试基础设施与用例
+
+- `crates/editor/src/view/tests/mod.rs`：新增假执行器 `ConnectionRunner`（结果形状转发 `SizedRunner`，
+  但重写 `QueryRunner::active_connection` 返回固定连接）。原 `SizedRunner` 用的是默认实现（`None`），
+  而洞察入口的前提正是「能解析出产生这份结果的连接」（`sort.rs:15-25` 的 `effective_connection`），
+  没有它入口根本不出现，测试会变成假绿。配套构造函数 `shared_with_connection_runner(content, conn)`。
+- `crates/editor/src/view/tests/dialogs.rs`：
+  `insight_column_after_confirm_hands_the_result_to_the_port`。步骤：
+  1. 装端口收集请求（`Rc<RefCell<Option<InsightColumnRequest>>>`）；
+  2. `dialog_harness` + `run_statement("select rows=3")` 产生一份带连接的结果；
+  3. **先断言 `insight_available(&entry)` 为真**——若入口不出现，下一步会静默不动作，属假绿；
+  4. 调 `panel.insight_column("amount", cx)`（= 确认回调转发的那一句）；
+  5. 断言端口收到 `column == "amount"`、`connection == "conn-1"`、`sql` 含 `select rows=3`、
+     `label` 非空。
+
+四个字段都断言的理由：`column` 决定洞察分析哪一列；`connection` 决定取样回哪条库（错一条就是串库）；
+`sql` 是洞察侧重跑 `LIMIT` 取样的唯一依据（本仓不物化结果集，决策在案 `shared/mod.rs:44-47`）；
+`label` 是面板来源副标题。
+
+### 43.3 仍不覆盖的一跳（明确登记）
+
+- 「鼠标真点确认按钮 → 闭包执行」：受 headless 命中不稳限制。若将来 headless 的
+  `simulate_click` 修好（或组件库给出可编程派发），把本用例第 4 步换成「dispatch 请求 →
+  真点 `editor-dialog-insight-confirm` → 断言端口」，其余断言原样可用。
+
+### 43.4 验证
+
+- 单跑：`cargo test -p rds-editor --lib insight_column_after_confirm` → **1 passed**。
+- 全量：`cargo test -p rds-editor --lib` → **869 passed / 0 failed / 4 ignored**
+  （全量 873 = 原 868 + 新增 1 + 4 ignored）。
 
 
 

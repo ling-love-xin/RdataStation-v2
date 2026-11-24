@@ -420,6 +420,46 @@ fn shared_with_sized_runner(content: &str) -> (EditorShared, DocumentId) {
     (shared, id)
 }
 
+/// 假执行器（洞察链路）：结果形状照 `SizedRunner`，但**报得出一条活动连接**
+///
+/// `QueryRunner::active_connection` 的默认实现是 `None`（“宿主没接这条能力”的真实状态），
+/// 而「洞察此列」入口要求知道“产生这份结果的是哪条连接”（取样得回源库），
+/// 所以验整链的测试必须有一条能解析出连接的执行器。
+struct ConnectionRunner {
+    connection: &'static str,
+}
+
+impl QueryRunner for ConnectionRunner {
+    fn run(
+        &self,
+        connection: Option<&str>,
+        schema: Option<&str>,
+        channel: ExecChannel,
+        sql: &str,
+        options: execution::RunOptions,
+    ) -> Result<QueryData, String> {
+        SizedRunner.run(connection, schema, channel, sql, options)
+    }
+
+    fn active_connection(&self) -> Option<String> {
+        Some(self.connection.to_string())
+    }
+}
+
+/// 带 `ConnectionRunner` 的共享状态 + 一份文档（洞察整链用）
+fn shared_with_connection_runner(
+    content: &str,
+    connection: &'static str,
+) -> (EditorShared, DocumentId) {
+    let shared = EditorShared::new();
+    shared.attach_runner(std::sync::Arc::new(ConnectionRunner { connection }));
+    let id = shared
+        .open(OpenRequest::untitled(content, EditorMode::Sql))
+        .id()
+        .clone();
+    (shared, id)
+}
+
 /// 假执行器（B5）：按 SQL 内容给出「写语句 / 被截断 / 普通结果」三种真实形状
 struct ToolbarRunner;
 
