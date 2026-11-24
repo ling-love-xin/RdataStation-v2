@@ -2128,3 +2128,72 @@ Label「筛选：」在左、`Text(SWT.BORDER|SWT.SEARCH|SWT.ICON_CANCEL)` 在�
 
 **本刀没有 vendor 改动**：D10-1 / D10-1b 的私有 patch 保持原样（`table/{state,hit}.rs`），
 `vendor` 仍只此五处。
+
+## §35 D10-3：左上交角点击 = 全选
+
+（结 §34.4 #3）
+
+### 35.1 DBeaver 取证
+
+**命中条件**（`LightGrid.java:3174`）：`e.button == 1 && rowHeaderVisible && e.x <= rowHeaderWidth && e.y < headerHeight`
+—— 即「行头带 ∩ 列头带」那一格（左上交角）。分支体（`:3175-3184`）：
+
+- `getItemCount() == 0` → **直接 return**（不选、不发 Selection 事件）；
+- `selectAllCellsInternal(e.stateMask)`（`:4272-4296`）：再挡两档空表（`columns.isEmpty()` 与
+  `getItemCount() == 0` 都 `return null`），随后 `focusColumn = columns.getFirst()`、`focusItem = 0`，
+  把 `getAllCells()` 整批塞进 `updateCellSelection(…, EventSource.KEYBOARD)`，最后把
+  `focusColumn` / `focusItem` **恢复原值**；
+- 交角分支自己再把 `focusColumn = getColumn(new Point(rowHeaderWidth + 1, 1))`（= 数据区第一列）、
+  `focusItem = getTopIndex()`（`:3183-3184`）。
+
+**全选集合**（`getAllCells`，`:4404-4415`）= `itemCount × columns.size()` 的笛卡尔积（列序从 0 起）。
+行头不在 `columns` 里，所以「全选」= 全部行 × 全部数据列；状态行三层数字（行 / 列 / 格）按
+`ResultSetStatListener.java:80-92` 的 `IResultSetSelectionExt` 口径算。
+
+**结论**：交角全选的语义是「整表矩形」，不是「只选数据区的高亮格」——行头列只是不在计数里。
+
+### 35.2 本仓的关键落差：空态占位行
+
+本仓 `set_data`（`grid/delegate.rs:494-509`）在「0 行 + 有列」时**塞一行全空行**撑起表头
+（组件 `rows = 0` 会切到 `render_empty` 不画表头），于是空结果集在网格里看起来有 1 行、
+`view_len() == 1`。DBeaver 那边 `getItemCount() == 0`，交角全选什么都不选（`:4276-4277`）；
+本仓若照 `view_len()` 全选，状态行会把空结果报成「1 行 × N 列」——数字是错的。
+
+落法：`set_data` 塞行的那一处同时置 `placeholder_row = true`（字段 `grid/delegate.rs:160`、
+置位 `:502`，`clear()` 复位 `:757`），`select_all_cells` 认这个标记，按 DBeaver 口径返回 `false`。
+
+### 35.3 落点
+
+| 文件 | 改动 |
+| --- | --- |
+| `crates/result_panel/src/grid/delegate.rs` | 新增 `select_all_cells()`（`:415`）：空表（无列 / 无行 / 只有占位行）返回 `false`，否则矩形 = `(0,0)`..`(末行, 末列)`（末列沿用 `last_view_column()`，隐藏列后随之收窄）；新增 `placeholder_row` 字段（`:160`）及 `set_data` / `clear` 两处维护 |
+| `crates/result_panel/src/grid/header.rs` | `render_th` 把「行号槽」这一档从原合并分支拆出来（`:234` 起）：元素加 `.id(("editor-result-th-corner", col_ix))`（`on_click` 需要 Stateful），点击即 `cx.stop_propagation()` → `table.update(… select_all_cells())` 成功才 `cx.notify()` |
+| `crates/result_panel/src/grid/tests.rs` | `selecting_all_cells_covers_every_row_and_column`（`:5188`，纯函数：整表矩形 / 隐藏一列后收窄 / 无列与无行两档不选）；`clicking_the_top_left_corner_selects_every_cell`（`:5227`，`HeaderHarness` 用真鼠标事件打 `editor-result-th-0`） |
+
+**为什么必须截冒泡**：组件把 `on_col_head_click` 挂在列头格**外层**（`vendor/.../table/state.rs:2139-2141`），
+那条路报 `SelectColumn(0)`，面板收到就是「按此列排序」——行号槽没有可排的键。与列头菜单 guard
+同一手法（`grid/header.rs:311-322`）。
+
+**零 vendor 改动**：交角落在本仓自己的行号槽表头格上（组件 `row_header` 仍然关着，见 §34.2）。
+
+### 35.4 差异明账（仍未做，不静默）
+
+1. **交角点击后焦点不挪到数据区第一列**：DBeaver `:3183-3184` 把 `focusColumn` 摆到右侧第一列、
+   `focusItem = topIndex`；本仓「当前格」语义（`selection_pos`）被三处既有用例锁定
+   （`edit_row_button_is_disabled_in_record_view` 等，见 §34.4 #1），全选后保持原值，登记为差异。
+2. **列头点击 = 整列选中未做**（`:3185-3204`）：本仓列头点击仍是「按此列排序」，且列头 `on_drag`
+   被列重排 `DragColumn` 占用（§34.4 #2）。改成 DBeaver 口径要先定「排序入口搬到排序箭头、
+   列头点击让位给整列选中」的整体方案，不在本刀硬塞。
+3. 行号列宽 40 下限（§34.4 #5）、Ctrl 并集（§34.4 #4）、空态占位行本身的渲染（DBeaver 空结果
+   不画数据行、本仓塞一行撑表头）三处仍开放。
+
+### 35.5 验证
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo test -p rds-result-panel --lib` | **440 passed / 0 failed**（438 + 本刀 2） |
+| `cargo test -p rds-editor` | **868 passed + 4 ignored**；离线 `tests/offline_baseline.rs` 5 passed |
+| `cargo check -p rds-workbench --lib` | Finished，0 warning |
+
+工作区改动仅 `grid/{delegate,header,tests}.rs` 三个文件（+44/−1、+36/−2、+85/0），无 vendor、
+无并行线文件；文档本节随另一 commit 入库（LF blob）。
