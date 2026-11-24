@@ -381,9 +381,23 @@ impl DataObjectsTab {
         let Some(source) = data_objects::source_ref(key) else {
             return;
         };
-        // 项目根是连接列举唯一需要的宿主信息（`Shared` 不能跨线程）
-        let project_root = self.shared.project.borrow().as_ref().map(|p| p.root.clone());
-        match source_kids_jobs::submit(key.to_string(), source, project_root, announce) {
+        // 连接行要的两样宿主信息（`Shared` 不能跨线程，先在 UI 线程取出来）：
+        // - 已挂载的文件库本体路径：文件库的叶子靠它算 ATTACH 别名（挂没挂看 `loaded_files`）
+        // - 行上的名字：列举失败时用人名报错，不把 `conn:C_xxx` 甩给用户
+        let mounted_file = self
+            .mounted_sources
+            .iter()
+            .find(|(row_key, _)| row_key == key)
+            .map(|(_, path)| path.clone());
+        let display = self
+            .shared
+            .data_objects
+            .borrow()
+            .iter()
+            .find(|object| object.key == key)
+            .map(|object| object.name.clone())
+            .unwrap_or_else(|| key.to_string());
+        match source_kids_jobs::submit(key.to_string(), source, mounted_file, display, announce) {
             Ok(()) => {
                 self.loading_sources.insert(key.to_string());
             }

@@ -127,49 +127,6 @@ fn query_tables(
         .unwrap_or_default()
 }
 
-/// 一条连接里**所有**能分析的表 / 视图（catalog / schema 折平成一个清单）。
-///
-/// 供右侧「数据对象」面板的「源库表」段懒加载用（2026-11-22）：面板展开某个连接才调，
-/// 不预先枚举——逐层 introspect 在远端库上是秒级开销。
-///
-/// **只吃项目根，不吃 `Shared`**（2026-11-23）：这条列举现在跑在
-/// [`crate::services::source_kids_jobs`] 的 worker 线程上，`Shared` 是视图层 `Rc` 结构、
-/// 不能跨线程；项目根是列举唯一需要的宿主信息，由调用方在 UI 线程取出后传进来。
-///
-/// **错误往上抛**：展开失败必须说出原因（权限 / 网络 / 扩展缺失），
-/// 返回空清单会让人以为「这个库里真的没有表」。
-pub(crate) fn list_connection_tables_in(
-    project_root: Option<PathBuf>,
-    conn_id: &str,
-) -> Result<Vec<super::TableCandidate>, String> {
-    let svc = navigator(project_root);
-    let rt = tokio::runtime::Runtime::new().map_err(|error| format!("起不了异步运行时：{error}"))?;
-    rt.block_on(async {
-        let catalogs = svc
-            .list_all_catalogs(conn_id)
-            .await
-            .map_err(|error| error.to_string())?;
-        let mut out = Vec::new();
-        for catalog in catalogs {
-            let schemas = svc
-                .list_all_schemas(conn_id, &catalog)
-                .await
-                .map_err(|error| error.to_string())?;
-            if schemas.is_empty() {
-                out.extend(tables_under(&svc, conn_id, &catalog, "").await?);
-            } else {
-                for schema in schemas {
-                    out.extend(tables_under(&svc, conn_id, &catalog, &schema).await?);
-                }
-            }
-        }
-        out.sort_by(|a, b| {
-            (&a.catalog, &a.schema, &a.name).cmp(&(&b.catalog, &b.schema, &b.name))
-        });
-        Ok(out)
-    })
-}
-
 /// 草稿箱里 duckdb 支持格式的文件（相对路径 + 绝对路径，按相对路径排序）。
 pub(crate) fn collect_drafts(shared: &Shared) -> Vec<(String, PathBuf)> {
     let project_borrow = shared.project.borrow();

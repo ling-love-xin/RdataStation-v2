@@ -172,7 +172,6 @@
 
 | 事项 | 口径 | 缺口 |
 |---|---|---|
-| 源段连接行叶子 | 第 37 条：以分析实例视角列举，`NavigatorService` 内省只作归档前选表 | 现走 `source_kids_jobs` → `NavigatorService` 直连内省，列的是"源库有什么" |
 | 源段行上的取数方式小标 | 第 34 条：直查 / 复制 | `ConnRow` 只有 `driver`，装不下取数方式 |
 
 ## 变更记录
@@ -240,4 +239,13 @@
   第 12 条补「全清 / 单行」两粒度不可互相替代。起因是工具栏那颗是全清——为删一份载入副本
   要把同段别人的结果集一起清掉，代价太大。实现复用既有的 `temp_source_for` 认档 +
   `drop_temp_table`（引擎内部再校验一次前缀，传错来源直接拒），失败原话留面板、不吞错误。
+- 2026-11-24：源段**连接行的叶子改成分析实例视角**（第 37 条推论落地）。
+  `source_kids_jobs` 的 `Connection` 分支不再走 `NavigatorService` 直连内省，改为：
+  有加速会话 → `accel::list_tables_for`（按 `conn_id`）；文件库已挂载 → `file_view::alias_for`
+  + `list_tables_global`；两条都没有 → **报错并把怎么挂说出来**（不返回空清单冒充「库里没表」）。
+  叶子对象的 catalog 一律留空：`MountedTable.schema` 已是源库自己那一层（MySQL 是库名、
+  PG 是 schema、本机库文件是 `main`），拼 `schema.表` 才是这条连接上的合法取样名。
+  `source_picker::list_connection_tables_in` 随之删除（它是这条叶子来源的唯一调用者）；
+  `source_kids_jobs::submit` 丢掉 `project_root`，改带「已挂载文件路径 + 行上显示名」
+  （报错用人名，不甩 `conn:C_xxx`）。
 
