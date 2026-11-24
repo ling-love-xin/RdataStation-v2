@@ -5416,3 +5416,73 @@ fn arrow_keys_walk_the_focus_cell_and_clamp_at_the_edges() {
         "占位行不算数据"
     );
 }
+
+/// 【D10-7】PageUp / PageDown：目标行算式（`page_target`）与落选区（`step_focus`）。
+///
+/// DBeaver `LightGrid.java:3842-3874`：PageUp 跳到 `getTopIndex()`，已在首行时取上一页
+/// 起点；PageDown 跳到 `getBottomIndex()`，已在末行前一格时取下一页终点；两处列都不动。
+#[gpui_kit::test]
+fn page_keys_target_the_viewport_edge_and_clamp_at_the_data_ends() {
+    use super::selection::{page_target, GridKeyStep, PageDir};
+
+    // 视口事实：首行 5、容量 4（第 5~8 行完整可见，末行 = 8）
+    assert_eq!(
+        page_target(PageDir::Up, 7, 5, 4),
+        Some(5),
+        "PageUp：焦点不在首行 → 跳到视口首行"
+    );
+    assert_eq!(
+        page_target(PageDir::Up, 5, 5, 4),
+        Some(1),
+        "PageUp：已在首行 → 上一页首行（top - len）"
+    );
+    assert_eq!(
+        page_target(PageDir::Up, 5, 3, 4),
+        Some(3),
+        "PageUp：焦点在首行下方一行 → 仍先回视口首行"
+    );
+    assert_eq!(
+        page_target(PageDir::Up, 3, 3, 4),
+        Some(0),
+        "PageUp：上一页起点越过 0 → 算 0，由落点再夹"
+    );
+    assert_eq!(
+        page_target(PageDir::Down, 6, 5, 4),
+        Some(8),
+        "PageDown：焦点不在末行附近 → 跳到视口末行"
+    );
+    assert_eq!(
+        page_target(PageDir::Down, 7, 5, 4),
+        Some(12),
+        "PageDown：已在末行前一格 → 下一页末行（bottom + len）"
+    );
+    assert_eq!(
+        page_target(PageDir::Down, 8, 5, 4),
+        Some(12),
+        "PageDown：就在末行 → 同「末行前一格」档，DBeaver 的 >= 语义"
+    );
+    assert_eq!(
+        page_target(PageDir::Up, 3, 5, 0),
+        None,
+        "视口容量未知（首帧测量前）→ 不位移"
+    );
+
+    // 落选区：列不动，目标行越过数据末行时夹到末行；同格不动返回 None
+    let mut grid = grid(); // 2 行 × 2 数据列
+    grid.click_cell(0, 1, false);
+    assert_eq!(
+        grid.step_focus(GridKeyStep::PageDown { target_row: 12 }, false),
+        Some((1, 1)),
+        "PageDown 目标 12 夹到末行 1，列保持 1"
+    );
+    assert_eq!(
+        grid.step_focus(GridKeyStep::PageDown { target_row: 20 }, false),
+        None,
+        "已在末行：同格不动"
+    );
+    assert_eq!(
+        grid.step_focus(GridKeyStep::PageUp { target_row: 0 }, false),
+        Some((0, 1)),
+        "PageUp 回首行，列仍不动"
+    );
+}

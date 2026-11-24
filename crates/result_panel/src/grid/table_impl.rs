@@ -254,7 +254,10 @@ impl TableDelegate for ResultGridDelegate {
         _window: &mut Window,
         _cx: &mut Context<TableState<Self>>,
     ) {
+        // 【D10-7 翻页键】首行与容量一起回写：`PAGE_UP` / `PAGE_DOWN` 的「一页」
+        // 就是视口容量（DBeaver `getVisibleGridHeight()`），所以 `len` 必须跟着存。
         self.visible_top = visible_range.start;
+        self.visible_len = visible_range.len();
     }
 
     /// 滚动到底自动加载（B5b）：组件库在可见范围距末尾不足 `load_more_threshold` 行时

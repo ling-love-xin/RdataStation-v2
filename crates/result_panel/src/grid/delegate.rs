@@ -308,6 +308,11 @@ pub struct ResultGridDelegate {
     /// 回写（滚动 / 筛选 / 排序后都会变），供状态栏「上页 / 下页」算目标行。
     /// 面板不自己猜滚动位置——表格才是滚动位置的唯一真值。
     pub(crate) visible_top: usize,
+    /// 【D10-7 翻页键】当前视口能完整容纳的行数（`visible_range.len()`）。
+    /// 与 [`Self::visible_top`] 同一回调回写；`PAGE_UP` / `PAGE_DOWN` 的「一页」
+    /// 就取这个值（DBeaver `LightGrid.java:3842-3874` 的 `getVisibleGridHeight()`）。
+    /// 0 = 还没有可见范围回写（首帧测量前），此时翻页键不位移。
+    pub(crate) visible_len: usize,
     /// 【选中行】组件报来的整行选中（`TableEvent::SelectRow`；**视图行序**）。
     ///
     /// 组件自己**不给**选中行铺色：`table/state.rs:2249` 拿到 `is_selected` 后只用来决定
@@ -503,6 +508,11 @@ impl ResultGridDelegate {
             GridKeyStep::End { row_to_end } => {
                 (if row_to_end { rows - 1 } else { cur_row }, last_col)
             }
+            // 【D10-7】PageUp / PageDown：列不动，行落到调用方算好的视口目标行；
+            // 越过数据末行由这里统一夹住（与 Home/End 同口径）。
+            GridKeyStep::PageUp { target_row } | GridKeyStep::PageDown { target_row } => {
+                (target_row.min(rows - 1), cur_col)
+            }
         };
         if had_range && (row, col) == (cur_row, cur_col) {
             return None;
@@ -573,6 +583,14 @@ impl ResultGridDelegate {
     /// 【分页】当前视口首行（视图行序，0 基）；翻页按钮据此算上 / 下一页目标。
     pub fn visible_top(&self) -> usize {
         self.visible_top
+    }
+
+    /// 【D10-7 翻页键】当前视口完整可见的行数（0 = 首帧测量前未知）。
+    ///
+    /// 键盘 `PAGE_UP` / `PAGE_DOWN` 的一页步长取自它，与状态栏翻页钮的
+    /// 目标行算法共用同一份视口事实（不另造页大小常量）。
+    pub fn visible_len(&self) -> usize {
+        self.visible_len
     }
 
     /// 【分页】当前视图行数（筛选 / 排序后的可见行数；转置视图为可见字段数）。

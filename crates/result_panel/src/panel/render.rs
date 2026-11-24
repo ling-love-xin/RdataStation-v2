@@ -1242,6 +1242,36 @@ impl ResultPanel {
                         "end" => result_grid::GridKeyStep::End {
                             row_to_end: ctrl || one_column,
                         },
+                        // 【D10-7】PageUp / PageDown（DBeaver `LightGrid.java:3842-3874`）：
+                        // 目标行按「视口首行 + 视口容量」现算（`page_target` 是纯函数，
+                        // 与状态栏翻页钮共用同一份视口事实），列不动。
+                        "pageup" | "pagedown" => {
+                            let dir = if event.keystroke.key == "pageup" {
+                                result_grid::PageDir::Up
+                            } else {
+                                result_grid::PageDir::Down
+                            };
+                            let target = {
+                                let delegate = grid_key.read(app).delegate();
+                                let cur_row =
+                                    delegate.cell_range().map_or(0, |range| range.focus.0);
+                                result_grid::page_target(
+                                    dir,
+                                    cur_row,
+                                    delegate.visible_top(),
+                                    delegate.visible_len(),
+                                )
+                            };
+                            let Some(row) = target else {
+                                // 视口容量还没回写（首帧测量前）：这一下不位移。
+                                return;
+                            };
+                            if dir == result_grid::PageDir::Up {
+                                result_grid::GridKeyStep::PageUp { target_row: row }
+                            } else {
+                                result_grid::GridKeyStep::PageDown { target_row: row }
+                            }
+                        }
                         _ => return,
                     };
                     queue_key.request(ResultRequest::StepFocus { step, extend: shift }, app);

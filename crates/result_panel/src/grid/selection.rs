@@ -103,6 +103,59 @@ pub enum GridKeyStep {
     Home { row_to_start: bool },
     /// End（`:3831-3841`）：列钉末列；`row_to_end` 同上
     End { row_to_end: bool },
+    /// 【D10-7】PageUp（`:3842-3854`）：列不动；行跳到视口首行，已在首行时翻到上一页首行。
+    /// `target_row` 由调用方按视口事实算好（见 [`page_target`]），这里只负责落选区。
+    PageUp { target_row: usize },
+    /// 【D10-7】PageDown（`:3855-3874`）：列不动；行跳到视口末行，已在末行前一格时
+    /// 翻到下一页末行。`target_row` 同 [`Self::PageUp`]。
+    PageDown { target_row: usize },
+}
+
+/// 【D10-7 翻页键】翻页方向（键盘 `PAGE_UP` / `PAGE_DOWN` 各一个）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageDir {
+    Up,
+    Down,
+}
+
+/// 【D10-7 翻页键】视口翻一页的目标行（严格对齐 DBeaver `LightGrid.java:3842-3874`）。
+///
+/// - PageUp：目标 = 视口首行 `top`；当前焦点正好落在首行时，目标 = 上一页首行
+///   （DBeaver 的 `getRowRange(getTopIndex(), …).startIndex`，近似 `top - len`）；
+/// - PageDown：目标 = 视口末行 `top + len - 1`；当前焦点落在末行前一格时，
+///   目标 = 下一页末行（DBeaver 的 `getRowRange(getBottomIndex(), …).endIndex`，近似
+///   `bottom + len`）。
+///
+/// 只算「意图行」，不做数据行数夹取——落点由 [`super::delegate::ResultGridDelegate::step_focus`]
+/// 统一 clamp（与 Home/End 同口径）。`visible_len == 0`（首帧测量前视口未知）返回 `None`，
+/// 这一下不位移，避免把焦点甩到 0 行。
+pub fn page_target(
+    dir: PageDir,
+    cur_row: usize,
+    visible_top: usize,
+    visible_len: usize,
+) -> Option<usize> {
+    if visible_len == 0 {
+        return None;
+    }
+    match dir {
+        PageDir::Up => {
+            if cur_row <= visible_top {
+                Some(visible_top.saturating_sub(visible_len))
+            } else {
+                Some(visible_top)
+            }
+        }
+        PageDir::Down => {
+            let bottom = visible_top + visible_len - 1;
+            // DBeaver 的判据是 `focusItem == bottomIndex - 1`（`>=` 语义含末行本身）。
+            if cur_row + 1 >= bottom {
+                Some(bottom + visible_len)
+            } else {
+                Some(bottom)
+            }
+        }
+    }
 }
 
 /// 状态行三项（行数 / 列数 / 单元格数）的取值口径。

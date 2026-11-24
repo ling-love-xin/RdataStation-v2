@@ -2375,10 +2375,13 @@ worktree 位置 `D:\RdataStation\RDS\_worktrees\d10-5`（`git worktree add --det
 
 ### 37.4 差异明账（未做，不静默）
 
-1. **PAGE_UP / PAGE_DOWN 未做**（`:3842-3874`）：要可见行范围（`getTopIndex` / `getBottomIndex`），
-   `delegate` 拿不到视口；入口在面板层，但翻几行必须由组件报可见行区间，另开一刀。
-2. **Enter `\r` → DefaultSelection 未接**（`:3746-3752`）：语义等同双击进编辑，
-   本仓已有 `BeginEditCellAt` 通道，但键盘入口未接（双击那条走的是鼠标命中路径）。
+1. ~~**PAGE_UP / PAGE_DOWN 未做**~~ → **已做，见 §38**：视口容量由组件
+   `visible_rows_changed(visible_range)` 回写（`visible_len`），目标行由纯函数 `page_target` 算。
+2. ~~**Enter `\r` → DefaultSelection 未接**~~ → **撤销（登记错误）**：全仓扫描 `SWT.DefaultSelection`
+   的注册者为零——`LightGrid.addSelectionListener` 在 `dbeaver-ref` 里无任何调用方、
+   `addListener(SWT.DefaultSelection, …)` 无调用方，`isListening(SWT.DefaultSelection)`（`:3361`）
+   恒为 false；`:3750` 发出去的事件没有接收方。**DBeaver 里网格上按 Enter 实际什么都不发生**
+   （顺带 `return` 掉、不进方向键导航），不是「打开编辑器」。按「有明确实现才复刻」原则不实现。
 3. **`+` / `-` / `=` 展开折叠、空格 `toggleCellValue` 不做**（`:3875-3894`）：
    本仓结果网格没有树形行（无父子节点），也没有「可切换单元格」语义，无对等表达。
 4. **Shift 的焦点回写差异**：DBeaver 在 `shiftPressed` 时**不回写** `focusColumn` / `focusItem`（`:3911`），
@@ -2457,3 +2460,67 @@ worktree 建好后需手动 `New-Item .rds\tmp`，否则 gpui-component 的 buil
   `is at d23361716659f9bf... but expected d233617134b4b8a...`，一眼可读却先被当成「对象不匹配」猜了一轮。
 - **教训（并行线节奏）**：验证前先 `rev-parse main`，父 ≠ main 就先重造再跑门禁，避免
   「验证的是旧父树、合进去的是另一棵树」；合并块里的 CAS 旧值也必须重新 `rev-parse`，不能复用造提交时那份。
+
+## §38 D10-7：PAGE_UP / PAGE_DOWN 翻页键
+
+### 38.1 DBeaver 取证
+
+`LightGrid.onKeyDown`（`LightGrid.java:3738` 起）的两条翻页分支：
+
+- **PAGE_UP**（`:3842-3854`）：`newSelection = getTopIndex()`（视口首行）；若焦点已经等于首行
+  （`impliedFocusItem == topIndex || focusItem == topIndex`），改取
+  `getRowRange(getTopIndex(), getVisibleGridHeight(), false, true).startIndex`——即上一页的起点；
+  列保持 `impliedFocusColumn`。
+- **PAGE_DOWN**（`:3855-3874`）：`newSelection = getBottomIndex()`（视口末行）；若末行没有完整显示，
+  先退到上一个完整可见项；若焦点已到 `bottomIndex - 1`（判据用 `>=`，含末行本身），改取
+  `getRowRange(getBottomIndex(), getVisibleGridHeight(), true, false).endIndex`——即下一页的终点；
+  列同样保持不动。
+
+两条分支末尾都走 `updateCellSelection`，与方向键同一条落选区路径（`:3901-3914`），随后
+`showItem` 把落点滚回视口（`:3914`）。
+
+### 38.2 本仓现状（先取证，避免重复造轮子）
+
+- **视口事实已经有了**：`TableDelegate::visible_rows_changed(visible_range, …)` 由组件库在可见行范围
+  变化时回调（`vendor/gpui-component/src/table/state.rs:1723`，`visible_range` 已按 `items_count` 夹过），
+  本仓此前只写了 `visible_top = visible_range.start`（`grid/table_impl.rs:251-258`），
+  容量 `len()` 被丢掉。
+- **键盘多路复用已经有骨架**：`panel/render.rs` 的 `on_key_down` 已接管 ←/→/↑/↓/Home/End，
+  统一走 `ResultRequest::StepFocus { step, extend }`，落点由 `ResultGridDelegate::step_focus`
+  （`grid/delegate.rs:486`）统一 clamp、`lifecycle.rs` 的 `step_grid_focus` 负责滚回视口 + 状态行投影。
+- **不另造页大小常量**：状态栏「上页 / 下页」钮本来就用 `visible_top` 算目标行（`ports.rs:268` 的
+  `GoPage(PageTarget)`），键盘与它共用同一份视口事实，避免两套页长。
+
+### 38.3 落点
+
+1. `grid/delegate.rs`：新增字段 `visible_len`（+ `pub fn visible_len()`），与 `visible_top` 并列；
+   结构体 `derive(Default)`，初始 0 = 首帧测量前未知。
+2. `grid/table_impl.rs::visible_rows_changed`：一并回写 `visible_len = visible_range.len()`。
+3. `grid/selection.rs`：`GridKeyStep` 增 `PageUp { target_row }` / `PageDown { target_row }`；
+   新增纯函数 `page_target(PageDir, cur_row, visible_top, visible_len) -> Option<usize>`，
+   只算「意图行」，`visible_len == 0` 返回 `None`（不位移）。
+4. `grid/delegate.rs::step_focus`：两个新变体共用一条分支——列不动、行 `target_row.min(rows - 1)`。
+5. `panel/render.rs::on_key_down`：接 `"pageup"` / `"pagedown"`（gpui 的 Keystroke 键名，与导航面板
+   的 `KeyBinding::new("pageup", …)` 同口径），现算目标行后仍发 `StepFocus`。
+
+### 38.4 差异明账（未做，不静默）
+
+1. **「上一页起点」是近似**：DBeaver 用 `getRowRange(top, visibleHeight, false, true).startIndex`
+   按实际行高/滚动像素算；本仓按「视口容量」等步长减（`top - len`），行高一致时两者同值，
+   行高可变行（分组头等）下会有 ≤1 行偏差。本仓行高统一（`RESULT_TABLE_SIZE`），暂按等步长。
+2. **「下一页终点」同理**用 `bottom + len`，落点再被 `step_focus` 夹到数据末行。
+3. **Shift 扩选**：本仓 `page_target` 只给目标行，Shift 时仍走 `step_focus` 的 anchor/focus 扩选
+   （与方向键一致）；DBeaver 的 PageUp/Down 分支不读 `shiftPressed`。
+4. 键盘不跨网格（对比栏 / 分组栏仍各自无键处理），同 §37.4 #7。
+
+### 38.5 验证
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo check -p rds-result-panel --all-targets`（`CARGO_INCREMENTAL=0`、jobs=1） | `Finished` 3m09s，**0 error / 0 warning** |
+| `cargo test -p rds-result-panel --lib` | **445 passed / 0 failed**（含新增 `page_keys_target_the_viewport_edge_and_clamp_at_the_data_ends`） |
+
+### 38.6 提交与合并链
+
+分支 `feat/resultset-paging-keys`（基于 `main` `9719e656`）；合并后 ff 到 main 并删分支。
+
