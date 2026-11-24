@@ -871,9 +871,10 @@ fn the_toolbar_shows_the_connection_slots_in_sql_mode(cx: &mut TestAppContext) {
 // B16：关闭口径 + 工具栏分层
 // ══════════════════════════════════════════════════════════════════════
 
-/// 脏文档不给标签 ✕：Dock 没有“关闭前否决”钩子，能问用户的入口只留 `Ctrl+W`
+/// 脏文档：✕ **照常显示**，点击先被 `request_close` 拦下来问「保存 / 不保存 / 取消」
+/// （2026-11-24 改口径：皮肤新增关闭前询问钩子，不再靠藏按钮防误关）
 #[gpui_kit::test]
-fn a_dirty_document_has_no_close_glyph(cx: &mut TestAppContext) {
+fn a_dirty_document_keeps_the_close_glyph_but_asks_first(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (shared, id) = shared_with_document(r"D:\sql\glyph.sql", "select 1;");
     let (panel, cx) = {
@@ -882,28 +883,55 @@ fn a_dirty_document_has_no_close_glyph(cx: &mut TestAppContext) {
         cx.add_window_view(move |window, cx| EditorHostPanel::new(shared, id, window, cx))
     };
 
-    // 刚打开：干净 → 有 ✕（`closable` 是 Dock 显示 ✕ 的判据）
+    // 刚打开：干净 → 有 ✕（`closable` 是 Dock 显示 ✕ 的判据），点了直接关
     assert!(
         cx.update(|_window, cx| panel.read(cx).closable(cx)),
         "干净文档应当可关（标签上有 ✕）"
     );
+    let clean_request = cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            gpui_kit::component::dock::Panel::request_close(panel, window, cx)
+        })
+    });
+    assert_eq!(
+        clean_request,
+        gpui_kit::component::dock::CloseRequest::Proceed,
+        "干净文档的 ✕ 直接放行"
+    );
 
-    // 改动 → 脏 → 收起 ✕（否则 Dock 会直接移除面板，静默丢掉改动）
+    // 改动 → 脏：✕ **仍然在**（否则非激活的脏标签既看不到脏点也没有关闭入口），
+    // 但点击被这里否决，改为弹三态确认。
     shared.update(|service| service.set_content(&id, "select 2;".to_string()));
     assert!(
-        !cx.update(|_window, cx| panel.read(cx).closable(cx)),
-        "脏文档不得给 ✕（Dock 无否决钩子，只能靠收起入口）"
+        cx.update(|_window, cx| panel.read(cx).closable(cx)),
+        "脏文档也要有 ✕（关闭前询问由 request_close 负责）"
     );
-    // 标签脏点仍然在（用户看得出“有未保存改动”）
+    let dirty_request = cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            gpui_kit::component::dock::Panel::request_close(panel, window, cx)
+        })
+    });
+    assert_eq!(
+        dirty_request,
+        gpui_kit::component::dock::CloseRequest::Cancel,
+        "脏文档的 ✕ 必须先确认（否决这次移除）"
+    );
+    // 脏点仍然在（用户看得出“有未保存改动”）
     assert!(cx.update(|_window, cx| panel.read(cx).is_dirty()));
 
-    // 保存（清脏）→ ✕ 回来
+    // 保存（清脏）→ ✕ 点击重新放行
     shared.update(|service| {
         service.mark_saved(&id);
     });
-    assert!(
-        cx.update(|_window, cx| panel.read(cx).closable(cx)),
-        "保存后 ✕ 应当回来"
+    let saved_request = cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            gpui_kit::component::dock::Panel::request_close(panel, window, cx)
+        })
+    });
+    assert_eq!(
+        saved_request,
+        gpui_kit::component::dock::CloseRequest::Proceed,
+        "保存后 ✕ 直接放行"
     );
 }
 
