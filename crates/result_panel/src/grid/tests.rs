@@ -5252,7 +5252,8 @@ fn a_column_selection_copies_the_whole_column() {
 /// DBeaver `LightGrid.java:3174-3184` 命中「行头带 ∩ 列头带」的左上格 →
 /// `selectAllCellsInternal`（`:4272-4296`）：先挡空表（无列 / 无行直接 `return null`），
 /// 再把 `getAllCells()` 整个塞进选区。本仓用单矩形表达同一件事：`(0,0)` 到
-/// `(末行, 末列)`。列 0 是行号槽，计数由 `data_columns()` 排除，
+/// `(末行, 末列)`（当前格因此落在末行末列——DBeaver 那边全选后会把焦点还原原样，
+/// 本仓单矩形模型做不到，见 `select_all_cells` 的 D10-8 判定）。列 0 是行号槽，计数由 `data_columns()` 排除，
 /// 所以「2 行 × 2 数据列 × 4 格」与 DBeaver 的行头不在 `columns` 里同口径。
 #[gpui_kit::test]
 fn selecting_all_cells_covers_every_row_and_column() {

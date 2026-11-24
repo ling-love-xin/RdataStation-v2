@@ -451,6 +451,16 @@ impl ResultGridDelegate {
     /// 「行头不在 columns 里」同口径。
     ///
     /// 返回 `false` = 空表，调用方不必刷新（对齐 DBeaver 那条 `return null`）。
+    ///
+    /// 【D10-8 取证后判定：不做】DBeaver `LightGrid.java:4279-4289` 把
+    /// `focusColumn/focusItem` 临时设成 `(columns.getFirst(), 0)` 跑完
+    /// `updateCellSelection(getAllCells())` 后，**再把焦点恢复成原样**——「选区」与
+    /// 「当前格」是两份独立状态。本仓是单矩形模型（`CellRange{anchor,focus}`，§37.4 #5）：
+    /// 选区形状由两个对角点定义，当前格必然落在其中一个角上，因此「覆盖全表（含行号槽）
+    /// + 当前格停在中间/首列」无法同时成立。实测把 `focus` 挪到 `(0, 1)` 会让
+    /// `cols()` 的包围盒从 `(0, 末列)` 收成 `(1, 末列)`，行号槽整列掉出选区、不再高亮，
+    /// 与 DBeaver `:4741` 的整行头高亮冲突。故维持 `(0,0) → (末行, 末列)`，
+    /// 「当前格不随全选移动」等单矩形模型改造后再议（同 §37.4 #5）。
     pub fn select_all_cells(&mut self) -> bool {
         let rows = self.view_len();
         // 空态占位行不算数据（`set_data` 的注释）：DBeaver 那边 `getItemCount()` 是 0

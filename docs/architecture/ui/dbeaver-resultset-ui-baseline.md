@@ -2524,3 +2524,88 @@ worktree 建好后需手动 `New-Item .rds\tmp`，否则 gpui-component 的 buil
 
 分支 `feat/resultset-paging-keys`（基于 `main` `9719e656`）；合并后 ff 到 main 并删分支。
 
+## §39 D10-8：行号列宽自适应 + 交角全选后的当前格（取证后判定不做）
+
+这两项都是 D10 清单里剩下的「小差异」。本节把两侧源码读到能用一句话下结论的程度，
+**两项结论都是「不做」**，理由分开落在 39.2 / 39.3，不是合并成一句「工作量小所以跳过」。
+
+### 39.1 DBeaver 取证
+
+**行号列宽**（`LightGrid.java`）：
+
+| 常量 / 动作 | 值 / 行为 | 行号 |
+| --- | --- | --- |
+| `DEFAULT_ROW_HEADER_WIDTH` | `30` | `:72` |
+| `MIN_ROW_HEADER_WIDTH` | `40` | `:73` |
+| `MAX_ROW_HEADER_WIDTH` | `400` | `:74` |
+| 自适应算法 | `newRowHeaderWidth = 30`，遍历**已缓存行** `rowHeaderRenderer.computeHeaderWidth(gc, row, row.getLevel())` 取最大 → clamp `[40,400]` | `:1884-1894` |
+| 写回条件 | `newRowHeaderWidth > oldRowHeaderWidth \|\| decreaseSize` 才赋值（单调增长，防抖动） | `:1895-1897` |
+| 消费者 | `if (x > getRowHeaderWidth())` 判「行头 vs 数据区」；行头整块矩形宽 `getRowHeaderWidth()` | `:2036`、`:4741` |
+
+**交角全选后的当前格**（`selectAllCellsInternal`，`:4272-4296`）：
+
+```java
+GridColumn oldFocusColumn = focusColumn;
+int oldFocusItem = focusItem;
+focusColumn = columns.getFirst();   // 临时设
+focusItem = 0;
+Event selectionEvent = updateCellSelection(getAllCells(), stateMask, false, true, EventSource.KEYBOARD);
+focusColumn = oldFocusColumn;       // 还原
+focusItem = oldFocusItem;
+```
+
+即 DBeaver 里「选区」与「当前格」是**两份独立状态**：全选只临时借 `(首列, 0)` 当锚，
+选完就把焦点还原到选中前的位置（原焦点在中间格，选完还在中间格）。
+
+### 39.2 行号列宽：不做（下限已满足，自适应用不了 DBeaver 的口径）
+
+- 本仓 `ui.rs:171` 是固定 `RESULT_ROW_NUMBER_WIDTH = px(48.)`，在 `grid/table_impl.rs:311-320`
+  同时作 `.width()` 与 `.min_width()`，且 `.resizable(false)`。
+- **DBeaver 的 40 下限本仓已经满足**（48 > 40），`MAX = 400` 只有在行号 ≥ 7 位（百万行）时才有意义。
+- 要按 DBeaver 口径做，得有两样本仓拿不到/不合适的东西：
+  1. **实测文本宽**：DBeaver 用 `GC`（`computeHeaderWidth` 走 `gc.textExtent`）。本仓 `TableDelegate::column(&self, col_ix, _cx: &App)`
+     只有 `&App`、无 window，且 `column()` 是**每帧每列**调用的热路径。
+  2. **遍历候选行**：DBeaver 遍历的是**已缓存行**（`gridRows`，视口量级）；本仓 `view_len()` 可达百万，
+     照抄遍历不成立，只能退化成「按最大行号的十进制位数」推算。
+- 「按位数推算」不是 DBeaver 的实现，而是本仓自创的口径（位数 × 某固定字宽 + padding，
+  换字体/换主题字号就失准），**按「没有的实现不要造」不做**。
+- 后续可做的正路（若真被 7 位行号逼到）：delegate 缓存 `row_header_width: Pixels`，
+  在 `visible_rows_changed`（有 window）里用 `text_system` 量一次 `view_len()-1` 的字符串宽并 clamp，
+  走 DBeaver 的「只增不减」判据。这条已登记为待办，不在本轮实现。
+
+### 39.3 交角全选后的当前格：不做（单矩形模型的结构性限制）
+
+- 本仓 `grid/delegate.rs::select_all_cells` 用 `CellRange { anchor: (0,0), focus: (末行, 末列) }` 表达全选。
+- `CellRange` 的 `rows()/cols()` 是**两个对角点的包围盒**，`focus` 必然是其一个角。
+  要让「当前格 = 首行首数据列」，`focus` 就得是 `(0, 1)`，此时 `anchor` 只能是 `(末行, 末列)`，
+  包围盒的列区间从 `(0, 末列)` 收成 **`(1, 末列)`** —— 行号槽整列掉出选区。
+- 这是实测到的（`clicking_the_top_left_corner_selects_every_cell` 断言 `cols() == (0,2)`，
+  改后为 `(1,2)` 而失败），不是推测。
+- 而行号槽必须留在选区里：DBeaver `:4741` 的行头在选中态是**整块**重绘的，本仓
+  `grid/cell.rs:186-201`（`row_number_paints_head` / `row_number_is_bold`）也是同一语义。
+  **为了「当前格位置」丢掉「行号列高亮」是拿一个视觉正确换另一个视觉错误。**
+- 真正对齐 DBeaver 需要把「当前格」从 `CellRange` 里拆出来单独存（选区形状与游标解耦），
+  这属于 §37.4 #5「单矩形选区模型」的改造，不是一个小项。因此本轮维持现状，
+  并在 `select_all_cells` 的 doc 注释里写明这个取舍，避免以后被当成 bug 再报一次。
+
+### 39.4 差异明账
+
+1. 行号列宽：本仓固定 48px，**不随行号位数增长**。行号 ≥ 7 位（百万行）时文字会被裁。
+   下限（DBeaver 40）已满足；上限（400）未实现。
+2. 交角全选：当前格落在**末行末列**（DBeaver 还原到选中前的原焦点）。单矩形模型限制，见 39.3。
+3. 二者都不产生运行时行为变化；本轮提交只含注释与文档，**代码零改动**。
+
+### 39.5 验证
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo test -p rds-result-panel --lib` | **445 passed / 0 failed**（回退后回归，见 39.6 的两次跑法说明） |
+| 反证记录 | 把 `focus` 改 `(0,1)` 的那版实测 `443 passed / 2 failed`，两条都是 `cols()` 从 `(0,2)` 变 `(1,2)` —— 该失败即 39.3 的实证依据 |
+
+### 39.6 提交与合并链
+
+分支 `feat/resultset-corner-rowheader`（基于 `main` `a3313588`）。本轮先按「真的改」写过一版
+（`focus (0,1)`），跑测试被 `cols()` 断言挡下，据此把改动回退、只留取证与判定，
+提交为 `docs(result-panel)` 类改动（注释 + 本节）；合并后 ff 到 main 并删分支。
+
+
