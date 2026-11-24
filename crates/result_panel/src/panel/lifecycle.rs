@@ -328,6 +328,7 @@ impl ResultPanel {
             sql_dialog_open: false,
             sql_textarea: None,
             sql_dialog_title: None,
+            sql_popup_open: false,
             // 【第 72 批】「获取全部数据」确认浮层出厂关（只在用户点了才开）
             fetch_all_confirm_open: false,
             // 【第 75 批】跳列浮层出厂关；输入框是常驻实体（构造期建好，见上）

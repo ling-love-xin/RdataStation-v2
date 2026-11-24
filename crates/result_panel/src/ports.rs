@@ -217,6 +217,12 @@ pub enum ResultRequest {
     OpenSqlDialog,
     /// 【2026-10-28 微调】关闭 SQL 预览弹窗（Dialog 关闭按钮 / 遮罩点击触发）
     CloseSqlDialog,
+    /// 【对象格浮层】开 / 关筛选框第 1 格点开的**非模态**对象信息浮层（目标态，不是翻转）
+    ///
+    /// 对齐 DBeaver `ActiveObjectPanel.showObjectInfoPopup`（`ResultSetFilterPanel.java:942-984`）：
+    /// 单击弹 `SWT.ON_TOP | SWT.RESIZE` 无边框 Shell（图标列 + 只读 SQL），再点同一颗、
+    /// 点别处、失焦都关。与 [`Self::OpenSqlDialog`]（模态卡片、另被右栏复用）并存。
+    SetSqlPopup(bool),
     /// 【1.2】复制筛选栏展开区里那句「已执行的 SQL」（原「执行SQL」页签的复制钮，
     /// 页签删除后迁到展开条上）
     CopyExecSql,

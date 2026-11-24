@@ -2890,6 +2890,31 @@ fn right_panel_pages_share_the_toolbar_shape(cx: &mut gpui_kit::TestAppContext) 
         "有 SQL 时筛选框第 1 格应渲染来源查询入口"
     );
 
+    // 7.5) 【对象格浮层】单击第 1 格弹的是**非模态浮层**（DBeaver
+    //      `ActiveObjectPanel.showObjectInfoPopup`，`ResultSetFilterPanel.java:942-984`：
+    //      `SWT.ON_TOP | SWT.RESIZE` 无边框 Shell，内容 = 图标列 + 只读 SQL，
+    //      `createObjectPanel:728-772`）。钉三态：未开不在 / 开后有浮层与 SQL / 关后消失。
+    assert!(
+        !visible("editor-result-sql-popover", cx),
+        "未点开时不该有对象信息浮层"
+    );
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_sql_popup(true, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    for id in [
+        "editor-result-sql-popover",
+        "editor-result-sql-popover-icon",
+        "editor-result-sql-popover-sql",
+    ] {
+        assert!(visible(id, cx), "对象信息浮层元素 {id} 应渲染可见");
+    }
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_sql_popup(false, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        !visible("editor-result-sql-popover", cx),
+        "关掉后对象信息浮层应消失（再点 / 点别处 / 失焦同一条入口）"
+    );
+
     // 8) 归一化后为空（全文只有注释）→ 不摆这一格
     //    （DBeaver 会用 `DEFAULT_QUERY_TEXT` 兜底，本仓口径是「没有的东西不摆占位」）
     cx.update(|_, app| {

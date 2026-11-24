@@ -1287,6 +1287,20 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【对象格浮层】开 / 关筛选框第 1 格点开的非模态浮层（目标态，不是翻转）
+    ///
+    /// 对齐 DBeaver `ActiveObjectPanel.showObjectInfoPopup`（`ResultSetFilterPanel.java:942-984`）：
+    /// 该 Shell 的三条关闭路径是「再点同一颗 / 点别处 / 失焦」（`:943-945`、`:1176-1190` 同款），
+    /// 本仓都由受控 `Popover` 的 `on_open_change` 汇到这一个入口。
+    /// 打开时**不动** `sql_dialog_open`：两者是两条独立的呈现通道（浮层看全文、卡片另被右栏复用）。
+    pub fn set_sql_popup(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.sql_popup_open == open {
+            return;
+        }
+        self.sql_popup_open = open;
+        cx.notify();
+    }
+
     /// 【第 72 批】打开「获取全部数据」确认浮层
     /// （DBeaver `CONFIRM_RS_FETCH_ALL`，`ResultSetViewer.readAllData:4433-4440`）。
     ///

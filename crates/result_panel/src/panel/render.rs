@@ -13,6 +13,7 @@ use gpui_kit::component::input::{Input, Textarea};
 use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::Icon;
 use gpui_kit::component::separator::Separator;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -269,26 +270,58 @@ impl ResultPanel {
         // 完整 SQL 仍只走 `editor-result-sql-dialog`（单击弹出），与 DBeaver 单击弹 SQL 浮层
         // （`createObjectPanel:728-772`）同口径；双击打开 SQL 编辑器的能力本仓没有对应物
         // （右栏「执行 SQL」页签是只读回显，登记在 §44）。
+        //
+        // 【DBeaver 对齐 2026-11-25】单击的**载体**换成非模态浮层：DBeaver 单击走
+        // `ActiveObjectPanel.showObjectInfoPopup`（`:942-984`）造 `SWT.ON_TOP | SWT.RESIZE`
+        // 无边框 Shell，内容 = 图标列 + 只读 SQL 视图（`createObjectPanel:728-772`），
+        // 宽 `min(父宽, max(300, 内容宽+30))`、高 `min(400, max(100, 内容高+30))`，
+        // 失焦即关。本仓用受控 `Popover`（`open` 由 `sql_popup_open` 驱动）；
+        // 模态卡片 `OpenSqlDialog` 保留——右栏「本次重查 SQL」仍在用它，且它带标题与全文滚动。
+        // 血缘一行是 DBeaver 没有、本仓既有卡片有的信息，按用户要求**保留**（浮层内首行）。
         let sql_chip: Option<AnyElement> = toolbar
             .sql
             .as_deref()
             .map(result_grid::text::normalize_query_preview)
             .filter(|text| !text.is_empty())
             .map(|text| {
-                let queue = self.queue.clone();
-                Button::new("editor-result-sql-preview")
+                let open = self.sql_popup_open;
+                let toggle_queue = self.queue.clone();
+                // 浮层里放**全文**：卡片那张只读 Textarea 的 value 就是完整 SQL
+                // （`open_sql_dialog` 每次用 `set_value` 刷新）；没有该实体时退回归一化预览。
+                let full_sql = self
+                    .sql_textarea
+                    .as_ref()
+                    .map(|ta| ta.read(cx).value().to_string())
+                    .filter(|sql| !sql.is_empty())
+                    .unwrap_or_else(|| text.clone());
+                let source = self.toolbar.as_ref().and_then(|toolbar| {
+                    let lineage = toolbar.lineage.as_deref()?;
+                    Some((lineage.to_string(), toolbar.connection.clone()))
+                });
+                let trigger = Button::new("editor-result-sql-preview")
                     .ghost()
                     // 20px 档：与筛选框内其它子控件同高（框内高 20、外圈 24，见下方注释）
                     .xsmall()
                     .flex_none()
                     // DBeaver `computeSize` 的上限：父容器宽的 1/4
                     .max_w(relative(0.25))
+                    .selected(open)
                     .debug_selector(|| "editor-result-sql-preview".to_string())
                     .icon(IconName::Table2)
                     .label(text)
-                    .tooltip(tr("点击查看完整 SQL（弹出窗口）"))
-                    .on_click(move |_, _window, app| {
-                        queue.request(ResultRequest::OpenSqlDialog, app);
+                    .tooltip(tr("点击查看完整 SQL（浮层）"));
+                Popover::new("editor-result-sql-popover")
+                    // 浮层落在点击点右下方一像素（DBeaver `x = parentRect.x + e.x + 1`、
+                    // `y = parentRect.y + e.y + 1`，`:969-970`）；组件侧只做「触发器下方」近似
+                    .anchor(Anchor::TopLeft)
+                    .offset(px(2.))
+                    .open(open)
+                    .trigger(trigger)
+                    .on_open_change(move |is_open, _window, app| {
+                        toggle_queue.request(ResultRequest::SetSqlPopup(*is_open), app);
+                    })
+                    .content(move |_state, _window, cx| {
+                        Self::render_object_info_popup(&full_sql, source.as_ref(), cx)
                     })
                     .into_any_element()
             });
@@ -1736,6 +1769,78 @@ impl ResultPanel {
             );
         }
         table.into_any_element()
+    }
+
+    /// 【对象格浮层】筛选框第 1 格点开的非模态浮层内容
+    ///
+    /// 对齐 DBeaver `createObjectPanel`（`ResultSetFilterPanel.java:728-772`）：
+    /// `GridLayout(2, false)` —— 列 0 是对象图标（`VERTICAL_ALIGN_BEGINNING`、手型光标、
+    /// 点击开 SQL 控制台 `:744-749`），列 1 是 `FillLayout` 里的只读 SQL 文本视图。
+    /// 尺寸上下限取 `showObjectInfoPopup:967-968`：宽 `min(父宽, max(300, 内容宽 + 30))`、
+    /// 高 `min(400, max(100, 内容高 + 30))`；去 `min(父宽, …)` 那半边本仓拿不到父宽，
+    /// 用 `max_w(40rem)` 作近似上界（登记在基线文档）。
+    ///
+    /// 本仓落点与差异：
+    /// - 列 1 用**只读文本**（等宽 + 滚动），不挂 `Textarea`：同一个 `TextareaState`
+    ///   若同时被模态卡片与本浮层渲染会撞 `ElementId`。代价是不可选/不可复制——卡片里有。
+    /// - 图标列点击「开 SQL 控制台」不做：本仓没有 SQL 控制台（§44.4 未决），图标只做标识。
+    /// - 血缘一行 DBeaver 没有、本仓卡片固有，按用户要求**保留**（放在 SQL 之上）。
+    fn render_object_info_popup(
+        sql: &str,
+        source: Option<&(String, Option<String>)>,
+        cx: &App,
+    ) -> AnyElement {
+        let theme = cx.theme();
+        let mono = theme.mono_font_family.clone();
+        let mut body = div()
+            .v_flex()
+            .flex_1()
+            .min_w_0()
+            .gap_1()
+            .debug_selector(|| "editor-result-sql-popover-body".to_string());
+        if let Some((lineage, connection)) = source {
+            let text = match connection.as_deref() {
+                Some(connection) => format!("来自{lineage} · {connection}"),
+                None => format!("来自{lineage}"),
+            };
+            body = body.child(
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.muted_foreground)
+                    .text_ellipsis()
+                    .overflow_hidden()
+                    .debug_selector(|| "editor-result-sql-popover-lineage".to_string())
+                    .child(SharedString::from(text)),
+            );
+        }
+        body = body.child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scrollbar()
+                .text_xs()
+                .whitespace_normal()
+                .font_family(mono)
+                .debug_selector(|| "editor-result-sql-popover-sql".to_string())
+                .child(SharedString::from(sql.to_string())),
+        );
+        div()
+            .h_flex()
+            .items_start()
+            .gap_2()
+            .min_w(rems(18.75))
+            .max_w(rems(40.))
+            .min_h(rems(6.25))
+            .max_h(rems(25.))
+            .debug_selector(|| "editor-result-sql-popover".to_string())
+            .child(
+                div()
+                    .flex_none()
+                    .debug_selector(|| "editor-result-sql-popover-icon".to_string())
+                    .child(Icon::new(IconName::Table2).size_4()),
+            )
+            .child(body)
+            .into_any_element()
     }
 
     /// 【结果内查找】查找栏：查找词输入框 + 三口径开关 + 「N 个匹配」+ 上一处 /

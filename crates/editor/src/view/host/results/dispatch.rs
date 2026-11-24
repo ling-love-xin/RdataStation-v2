@@ -171,6 +171,10 @@ impl EditorHostPanel {
             ResultRequest::CloseSqlDialog => {
                 self.result_panel.update(cx, |p, cx| p.close_sql_dialog(cx));
             }
+            // 【对象格浮层】开 / 关筛选框第 1 格的非模态浮层：纯状态切换
+            ResultRequest::SetSqlPopup(open) => self
+                .result_panel
+                .update(cx, |p, cx| p.set_sql_popup(open, cx)),
             // 【1.2】筛选框运行：wrapped SQL（select * from (原SQL) where 词）替换重查，
             // 生成 SQL 写入面板 exec_sql（右栏「执行SQL」页签）
             ResultRequest::RunFilterAsQuery => {

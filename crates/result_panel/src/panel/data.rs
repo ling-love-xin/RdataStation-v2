@@ -229,6 +229,15 @@ pub struct ResultPanel {
     /// 有的值为「生成 DDL」这类复用同一浮层的场景（对齐 DBeaver 用 `ViewSQLDialog`
     /// 展示生成结果的做法，`MetaDataPanel.java:203-215` → `SQLGeneratorHandlerResultSetDDL`）。
     pub(crate) sql_dialog_title: Option<gpui_kit::SharedString>,
+    /// 【对象格浮层】筛选框第 1 格（对象图标 + 来源 SQL 短文本）点开的那层**非模态**浮层
+    ///
+    /// 对齐 DBeaver `ActiveObjectPanel.showObjectInfoPopup`（`ResultSetFilterPanel.java:942-984`）：
+    /// 单击是 `SWT.ON_TOP | SWT.RESIZE` 的无边框 Shell（2 列：对象图标 + 只读 SQL 文本视图，
+    /// `createObjectPanel:728-772`），宽 `min(父宽, max(300, 内容宽+30))`、
+    /// 高 `min(400, max(100, 内容高+30))`，失焦即关（`:1176-1190` 同款）。
+    /// 与本仓那张模态卡片（`sql_dialog_open`，也是 `OpenSqlDialog`）**并存**：
+    /// 卡片另被右栏「本次重查 SQL」入口使用（`sidebars.rs`），且卡片承载标题与全文滚动。
+    pub(crate) sql_popup_open: bool,
     /// 【第 72 批】「获取全部数据」确认浮层开关（DBeaver
     /// `CONFIRM_RS_FETCH_ALL`，`ResultSetViewer.readAllData:4433-4440`）。
     ///
