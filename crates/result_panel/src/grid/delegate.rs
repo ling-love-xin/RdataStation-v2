@@ -398,6 +398,40 @@ impl ResultGridDelegate {
         self.cell_range = Some(CellRange::single((row, col)));
     }
 
+    /// 【D10-5】列头按下 = 选中整列（DBeaver `LightGrid.java:3185-3204`）。
+    ///
+    /// DBeaver 的列头分支（`columnHeadersVisible && e.y <= headerHeight`）里
+    /// `getCells(col, cells)`（`:4418-4422` → `:4424` 起的整列铺法）把**该列所有行**
+    /// 塞进 `updateCellSelection(cells, e.stateMask, false, true, MOUSE)`（`:3194-3196`），
+    /// 所以列头点击的语义是「整列选区」，不是「只选中列头那一格」。
+    /// 排序在 DBeaver 走列头右端的排序箭头（本仓对应 vendor `render_sort_icon`
+    /// → `perform_sort`），与列头点击是两条独立入口。
+    ///
+    /// - `extend == false`：锚点列移到该列 → 单列全高；
+    /// - `extend == true`（Shift）：锚点列不动，只换另一端 → **列区间**（全部行）。
+    ///
+    /// 行号槽的列头就是左上交角（D10-3 已在 `grid/header.rs` 拦下并全选）；
+    /// 万一走到这里，按行头按下口径给整行，不另开一套。
+    pub fn click_col(&mut self, col: usize, extend: bool) {
+        let rows = self.view_len();
+        if rows == 0 || self.columns.is_empty() || self.placeholder_row {
+            return;
+        }
+        if Self::is_row_number(col) {
+            self.click_cell(0, 0, extend);
+            return;
+        }
+        let anchor_col = if extend {
+            self.cell_range.map_or(col, |range| range.anchor.1)
+        } else {
+            col
+        };
+        self.cell_range = Some(CellRange {
+            anchor: (0, anchor_col),
+            focus: (rows - 1, col),
+        });
+    }
+
     /// 【D10-3】全选（左上交角点击 / 等价的整表选中）。
     ///
     /// DBeaver `LightGrid.java:3174-3184`：命中「行头带 ∩ 列头带」的左上交角

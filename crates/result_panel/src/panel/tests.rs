@@ -6755,3 +6755,35 @@ fn clicking_the_row_number_slot_selects_the_whole_row(
     let pos = cx.update(|_, app| panel.read(app).selection_pos);
     assert_eq!(pos, Some((1, 0)), "行号槽保持为当前格，不回落到数据列");
 }
+
+/// 【D10-5】列头点击 → 整列选区。
+///
+/// 组件的列头点击只做一件事：`set_selected_col(col_ix, cx)`（vendor `state.rs:1064-1072`
+/// → `:642-649`），它 emit `TableEvent::SelectColumn(col_ix)`。此前面板把它落在兜底
+/// 分支里忽略，于是点列头只有列头自身变色、数据区没有整列高亮。
+/// 这条钉的是**订阅链路**：真事件 → `delegate.click_col` → 矩形 + 三项计数。
+#[gpui_kit::test]
+fn clicking_a_column_header_selects_the_whole_column(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    let grid = cx.update(|_, app| panel.read(app).grid.clone());
+
+    cx.update(|_, app| {
+        grid.update(app, |table, cx| table.set_selected_col(1, cx));
+    });
+    cx.run_until_parked();
+
+    let range = cx.update(|_, app| {
+        grid.read(app)
+            .delegate()
+            .cell_range()
+            .expect("列头点击后应有选区")
+    });
+    assert_eq!(range.rows(), (0, 1), "整列铺满全部视图行");
+    assert_eq!(range.cols(), (1, 1), "只框点中的那一列");
+    assert_eq!(range.data_columns(), vec![1]);
+    assert_eq!(range.data_cells_count(), 2, "2 行 × 1 数据列");
+
+    let counts = crate::grid::selection_counts(Some(&range));
+    assert_eq!(counts, (2, 1, 2), "整列 = 2 行 × 1 数据列 × 2 格");
+}

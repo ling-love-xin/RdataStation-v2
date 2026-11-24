@@ -321,6 +321,29 @@ impl EditorHostPanel {
                         });
                         Some(result_grid::GridSelection::Row { row: *row })
                     }
+                    TableEvent::SelectColumn(col) => {
+                        // 【D10-5】列头按下 = 选中整列（DBeaver `LightGrid.java:3185-3204`）。
+                        // 面板订阅（`result_panel/panel/lifecycle.rs`）对同一事件也写一次
+                        // `click_col`（同值幂等）：两个订阅者先后顺序不确定，谁先跑都得让
+                        // 选区已经是新的，下面才读得到正确的三项数字。
+                        let extend = window.modifiers().shift;
+                        grid.update(cx, |state, _cx| {
+                            state.delegate_mut().click_col(*col, extend);
+                            state.delegate_mut().set_selected_row(None);
+                        });
+                        let (sel_rows, sel_cols, sel_cells) = {
+                            let delegate = grid.read(cx).delegate();
+                            result_panel::grid::selection_counts(delegate.cell_range().as_ref())
+                        };
+                        result_panel.update(cx, |panel, cx| {
+                            panel.set_selected_cell(None, cx);
+                            // 【选中统计】整列 = 全部视图行 × 1 列 × 全部格（`SelectionExt` 同口径）
+                            panel.set_selected_counts(sel_rows, sel_cols, sel_cells, cx);
+                            // 【侧栏】列选中没有「当前格」：值详情 / 列浏览器不给位置
+                            panel.set_selection_pos(None, window, cx);
+                        });
+                        Some(result_grid::GridSelection::Column { col: *col })
+                    }
                     TableEvent::ClearSelection => {
                         // 【选中行】清除选择也把整行色撤掉（否则旧行一直亮着）
                         grid.update(cx, |state, _cx| state.delegate_mut().set_selected_row(None));

@@ -55,10 +55,10 @@ impl EditorHostPanel {
             .update(cx, |p, cx| p.transpose_step(delta, cx));
     }
 
-    /// 【B14】`Ctrl+C`（网格里）：把选中的**一格**或**一整行**拷到剪贴板
+    /// 【D10-5】`Ctrl+C`（网格里）：把选中的**一格**、**一整行**或**一整列**拷到剪贴板
     ///
-    /// 与右键菜单同一套口径：一格给**原文**（要的就是那一格的值），一整行拼 TSV。
-    /// 选择自身是组件的真值，面板只记“最近一次选的是格还是行”（见 `result_selection`），
+    /// 与右键菜单同一套口径：一格给**原文**（要的就是那一格的值），整行 / 整列拼 TSV。
+    /// 选择自身是组件的真值，面板只记“最近一次选的是格还是行还是列”（见 `result_selection`），
     /// 文本由 delegate 按**视图行序**拼（筛选 / 排序之后看着的那一行）。
     ///
     /// 设了键位就不能静默失败：没选中 / 选中的行已经不在视图里时给一句可读的提示。
@@ -73,6 +73,7 @@ impl EditorHostPanel {
         cx.write_to_clipboard(ClipboardItem::new_string(text));
         let message = match selection {
             Some(result_grid::GridSelection::Row { .. }) => "已复制整行（TSV）".to_string(),
+            Some(result_grid::GridSelection::Column { .. }) => "已复制整列（TSV）".to_string(),
             _ => "已复制单元格".to_string(),
         };
         self.set_message(Some(message), cx);

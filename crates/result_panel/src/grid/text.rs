@@ -493,14 +493,21 @@ impl ResultGridDelegate {
         )
     }
 
-    /// 【B14】选中内容的复制文本（`Ctrl+C` 用）：一格给**原文**，一整行给 TSV
+    /// 【D10-5】选中内容的复制文本（`Ctrl+C` 用）：一格给**原文**，一整行 / 一整列给 TSV
     ///
-    /// 与右键「复制此值 / 复制整行（TSV）」同一套口径与同一份实现（本方法就是它俩的入口）：
-    /// 单格不转义（要的就是那一格的值），整行才拼 TSV。
-    /// `None` = 没东西可复制（选择指向的行已经不在视图里了——筛选 / 刷新之后可能如此）。
+    /// 与右键「复制此值 / 复制整行（TSV） / 复制整列」同一套口径与同一份实现
+    /// （行走 [`Self::row_text`]、列走 [`Self::column_text`]）。
+    /// `None` = 没东西可复制（选择指向的行已经不在视图里了——筛选 / 刷新之后可能如此；
+    /// 或者列选落在行号槽上，那一列没有可复制的数据文本）。
     pub fn selection_text(&self, selection: GridSelection) -> Option<String> {
+        // 【D10-5】列选中没有「单一行」：行存在性检查对它不成立（列里混着被删行，
+        // `column_text` 自己会跳过），直接走列文本
+        if let GridSelection::Column { col } = selection {
+            return self.column_selection_text(col);
+        }
         let row = match selection {
             GridSelection::Cell { row, .. } | GridSelection::Row { row } => row,
+            GridSelection::Column { .. } => unreachable!("列选中在上面已返回"),
         };
         // 行不在了就说清“没东西可复制”，而不是安静地拷一个空串（用户会粘出一片空白）；
         // 被删底层行同样不参与复制（#28-B1 排除矩阵：复制单格 / 整行 TSV / 行 JSON 排除被删行）。
@@ -510,7 +517,21 @@ impl ResultGridDelegate {
         Some(match selection {
             GridSelection::Cell { row, col } => self.cell(row, col),
             GridSelection::Row { row } => self.row_text(row),
+            GridSelection::Column { .. } => unreachable!("列选中在上面已返回"),
         })
+    }
+
+    /// 【D10-5】列选中的复制文本：视图列 → 数据列（列 0 是行号槽），
+    /// 再交给既有的「复制整列」实现（一行一个值、逐格 TSV 转义）。
+    fn column_selection_text(&self, col: usize) -> Option<String> {
+        if Self::is_row_number(col) || self.columns.is_empty() {
+            return None;
+        }
+        let data_col = self.data_column(col - 1);
+        if data_col >= self.columns.len() {
+            return None;
+        }
+        Some(self.column_text(data_col))
     }
 }
 /// 单元格 / 表头的悬停全文：取值与列名都可能很宽，`truncate` 之后只剩这一条看全的路。
@@ -538,6 +559,9 @@ pub enum GridSelection {
     Cell { row: usize, col: usize },
     /// 选中一整行（**视图行序**）
     Row { row: usize },
+    /// 【D10-5】选中一整列（`col` 是含行号槽的列下标；DBeaver 列头点击
+    /// `LightGrid.java:3185-3204` 的产物）
+    Column { col: usize },
 }
 
 /// 结果内查找的一个命中（[`ResultGridDelegate::find_next`] 的产物）

@@ -5177,6 +5177,76 @@ fn clicking_the_row_number_slot_covers_the_whole_row() {
     assert_eq!(range.data_columns(), vec![1]);
 }
 
+/// 【D10-5】列头按下 = 选中整列（全部视图行），Shift = 列区间。
+///
+/// DBeaver `LightGrid.java:3185-3204`：列头命中 `columnHeadersVisible && e.y <= headerHeight`
+/// → `getCells(col, cells)`（`:4418-4424`）铺该列全部行 → `updateCellSelection`。
+/// 本仓用矩形表达：`(0, 列)`..`(末行, 列)`；计数里列 0（行号槽）仍被排除。
+#[gpui_kit::test]
+fn clicking_a_column_header_selects_the_whole_column() {
+    let mut grid = grid(); // 2 行 × 2 数据列（id / name）
+
+    // 视图列 1 = 第一个数据列：整列 = 2 行 × 1 列 × 2 格
+    grid.click_col(1, false);
+    let range = grid.cell_range().expect("列头点击应有选区");
+    assert_eq!(range.rows(), (0, 1), "整列铺满全部视图行");
+    assert_eq!(range.cols(), (1, 1), "只框这一列");
+    assert_eq!(range.data_columns(), vec![1], "视图列 1 = 数据列 1");
+    assert_eq!(range.data_cells_count(), 2, "2 行 × 1 数据列");
+
+    // Shift：锚点列不动 → 列区间（全部行），与格拖同一套矩形表达
+    grid.click_col(2, true);
+    let range = grid.cell_range().expect("列头 Shift 点击应有选区");
+    assert_eq!(range.rows(), (0, 1));
+    assert_eq!(range.cols(), (1, 2), "从原锚点列铺到点中的列");
+    assert_eq!(range.data_columns(), vec![1, 2]);
+    assert_eq!(range.data_cells_count(), 4, "2 行 × 2 数据列");
+
+    // 无修饰键再点一列：锚点跟着走，回到单列
+    grid.click_col(2, false);
+    let range = grid.cell_range().expect("列头点击应有选区");
+    assert_eq!(range.cols(), (2, 2));
+
+    // 行号槽的列头是左上交角（D10-3 已在 `grid/header.rs` 拦成全选）；
+    // 万一走到这里按行头口径给整行，不另开一套
+    grid.click_col(0, false);
+    let range = grid.cell_range().expect("行号槽列头应有选区");
+    assert_eq!(range.cols(), (0, 2), "整行：从行号槽铺到末列");
+    assert_eq!(range.rows(), (0, 0), "只框第 1 行");
+
+    // 空表两档不选（与 `select_all_cells` 同一判据）
+    let mut no_columns = ResultGridDelegate::empty("尚未执行");
+    no_columns.click_col(1, false);
+    assert!(no_columns.cell_range().is_none(), "没有列 → 不选");
+
+    let mut no_rows = ResultGridDelegate::empty("尚未执行");
+    no_rows.set_data(vec!["id".to_string(), "name".to_string()], Vec::<Vec<String>>::new());
+    no_rows.click_col(1, false);
+    assert!(no_rows.cell_range().is_none(), "只有空态占位行 → 不选");
+}
+
+/// 【D10-5】整列选中的复制文本走既有「复制整列」：视图列 → 数据列，行号槽列不可复制。
+#[gpui_kit::test]
+fn a_column_selection_copies_the_whole_column() {
+    let grid = grid();
+
+    let text = grid
+        .selection_text(GridSelection::Column { col: 1 })
+        .expect("视图列 1（第一个数据列）应有文本");
+    assert!(!text.is_empty(), "两行取值不该是空串");
+    assert_eq!(
+        text,
+        grid.column_text(0),
+        "视图列 1 = 数据列 0，与「复制此列」同一份实现"
+    );
+
+    assert_eq!(
+        grid.selection_text(GridSelection::Column { col: 0 }),
+        None,
+        "行号槽那一列没有可复制的数据文本"
+    );
+}
+
 /// 【D10-3】左上交角 = 全选：矩形铺满全部行 × 全部列，空表不选。
 ///
 /// DBeaver `LightGrid.java:3174-3184` 命中「行头带 ∩ 列头带」的左上格 →

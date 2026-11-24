@@ -555,7 +555,25 @@ impl ResultPanel {
                     self.queue.push(ResultRequest::ColumnWidthsChanged);
                 }
             }
-            // 其他事件忽略（SelectColumn 由组件内联处理，面板不跟）
+            // 【D10-5】列头按下 = 选中整列（DBeaver `LightGrid.java:3185-3204`）
+            //
+            // 组件 `set_selected_col` 会 emit 这条（vendor `state.rs:641-649`）；此前它落在
+            // 兜底分支里被忽略，于是点列头只有列头自身变色、数据区没有整列高亮。
+            // Shift 取窗口修饰键：锚点列不动 → 列区间（全部行），与格拖同一套矩形表达。
+            //
+            // 宿主订阅（`editor/view/host/construct.rs`）对同一事件也写一次 `click_col`
+            // （同值幂等，先例见 `ColumnWidthsChanged` 的双写注释）：两个订阅者的先后顺序
+            // 不确定，谁先跑都得让选区已经是新的，状态行数字才不会读到上一刀的结果。
+            TableEvent::SelectColumn(col_ix) => {
+                let extend = window.modifiers().shift;
+                self.grid.update(cx, |state, cx| {
+                    state.delegate_mut().click_col(*col_ix, extend);
+                    // 与格点击同口径：列选中不吃整行镜像（否则整行色和整列色叠着）
+                    state.delegate_mut().set_selected_row(None);
+                    cx.notify();
+                });
+            }
+            // 其他事件忽略（SelectColumn 之外的未接事件）
             _ => {}
         }
     }
