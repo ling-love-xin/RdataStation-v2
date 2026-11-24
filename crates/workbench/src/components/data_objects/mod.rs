@@ -20,9 +20,10 @@ use insight::SampleSource;
 
 use crate::panels::Shared;
 
-use super::source_picker::{
-    analysis_tables_of, split_persistent_tables, persistent_table_label,
-};
+use super::source_picker::{analysis_tables_of, persistent_table_label, split_persistent_tables};
+
+/// 行宽预算（面板窄到多少该丢哪列）：纯函数 + 实测常量，见模块注释。
+pub mod layout;
 
 /// 这份数据「怎么读」——决定执行路径，也决定物化与错误类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -713,7 +714,11 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             } else {
                 Group::File
             },
-            pill: if is_database { "文件库" } else { "已加载" },
+            pill: if is_database {
+                "文件库"
+            } else {
+                "已加载"
+            },
             version: None,
             // 文件视图是 `f_*` 裸名；库文件是 catalog，引用要 `别名.schema.表`，不在这里编
             sql_ref: (!is_database).then(|| sql_ident(alias)),
@@ -783,7 +788,12 @@ pub fn temp_source_for(name: &str) -> Option<engine::duckdb::temp_table::TempTab
         TempTableSource::Load,
     ]
     .into_iter()
-    .find(|source| source.prefixes().iter().any(|prefix| name.starts_with(prefix)))
+    .find(|source| {
+        source
+            .prefixes()
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+    })
 }
 
 /// 会话行上能做的动作（后端已齐，`engine::duckdb::federation::session`）。
@@ -962,12 +972,9 @@ pub fn analysis_sources(
             )),
             // 已加载的**数据文件视图**也在单例上,同样能取样;库文件挂的是 catalog
             // (在 MountedSources 段),没有"整库取样"这回事,落到兜底分支老实说
-            Some(("fileview", alias)) if object.group == Group::File => {
-                Some(SampleSource::on_duckdb(
-                    format!("SELECT * FROM \"{alias}\""),
-                    object.name.clone(),
-                ))
-            }
+            Some(("fileview", alias)) if object.group == Group::File => Some(
+                SampleSource::on_duckdb(format!("SELECT * FROM \"{alias}\""), object.name.clone()),
+            ),
             // 资产：本体是 `resources/` 下的受管文件，读它 = 按扩展名交给 DuckDB 读。
             // 身份段是 `resource_id`（见 `objects()` 里资产行的 key），按 id 找本体：
             // 按名字找会在重名时拿错那一份
@@ -1040,7 +1047,8 @@ pub fn file_source_path(conn: &ConnRow) -> Option<String> {
     }
     Some(
         connection_dialog::services::data_source_service::normalize_file_db_path(
-            &conn.driver, database,
+            &conn.driver,
+            database,
         ),
     )
 }
@@ -1159,7 +1167,8 @@ pub fn collect(shared: &Shared) -> Collected {
             )
         })
         .unwrap_or_default();
-    let global_tables = engine::analysis::global::global_tables("C_data_objects").unwrap_or_default();
+    let global_tables =
+        engine::analysis::global::global_tables("C_data_objects").unwrap_or_default();
     let result_sets = engine::analysis::result_set::list_result_sets().unwrap_or_default();
     let loaded_tables = engine::analysis::result_set::list_loaded_tables().unwrap_or_default();
     let insight_samples = engine::analysis::result_set::list_insight_samples().unwrap_or_default();
@@ -1172,7 +1181,15 @@ pub fn collect(shared: &Shared) -> Collected {
                 let alias = mounted.alias().to_string();
                 let (note, failed) = match &mounted.state {
                     engine::duckdb::federation::registry::MountState::Ready { tables } => (
-                        format!("{} 张表 · {}", tables, if primary.as_deref() == Some(alias.as_str()) { "主源" } else { "已挂载" }),
+                        format!(
+                            "{} 张表 · {}",
+                            tables,
+                            if primary.as_deref() == Some(alias.as_str()) {
+                                "主源"
+                            } else {
+                                "已挂载"
+                            }
+                        ),
                         None,
                     ),
                     engine::duckdb::federation::registry::MountState::Failed(reason) => {
@@ -1230,8 +1247,8 @@ pub fn collect(shared: &Shared) -> Collected {
 mod tests {
     // 刻意不用 `use super::*`：会把 gpui 的 `test` 属性宏带进作用域。
     use super::{
-        AssetRow, Channel, Collected, ConnRow, Group, Life, Object, SessionSource, State,
-        can_archive_snapshot, fileview_alias, objects,
+        can_archive_snapshot, fileview_alias, objects, AssetRow, Channel, Collected, ConnRow,
+        Group, Life, Object, SessionSource, State,
     };
 
     fn sample() -> Collected {
@@ -1244,10 +1261,7 @@ mod tests {
                 driver: "mysql".into(),
                 database: Some("orders".into()),
             }],
-            analysis_tables: vec![
-                "res_订单明细_20261115103000".into(),
-                "数据修复".into(),
-            ],
+            analysis_tables: vec!["res_订单明细_20261115103000".into(), "数据修复".into()],
             // sample 代表「项目开着」的常态：`analysis_tables` 是权威全集
             project_open: true,
             global_tables: vec!["G_月度经营".into()],
@@ -1345,11 +1359,7 @@ mod tests {
         let mut table = ranks_of(Group::Table);
         assert_eq!(table[0], 0, "表段从资产开始");
         table.sort();
-        assert_eq!(
-            ranks_of(Group::Table),
-            table,
-            "表段内次序要被 rank 排好"
-        );
+        assert_eq!(ranks_of(Group::Table), table, "表段内次序要被 rank 排好");
         assert!(
             rows.iter()
                 .find(|o| o.key.starts_with("result:"))
@@ -1376,7 +1386,12 @@ mod tests {
         }
         // 顺序与 Ord 一致（严格递增）
         for pair in all.windows(2) {
-            assert!(pair[0] < pair[1], "{} 与 {} 的顺序与声明相反", pair[0].title(), pair[1].title());
+            assert!(
+                pair[0] < pair[1],
+                "{} 与 {} 的顺序与声明相反",
+                pair[0].title(),
+                pair[1].title()
+            );
         }
     }
 
@@ -1394,15 +1409,9 @@ mod tests {
 
         // 落库 / 自建 / 全局同段（都是库里现有的表），小标负责说清是哪一类
         assert_eq!(persistent.group, Group::Table);
-        let own = rows
-            .iter()
-            .find(|o| o.key.starts_with("project:"))
-            .unwrap();
+        let own = rows.iter().find(|o| o.key.starts_with("project:")).unwrap();
         assert_eq!(own.group, Group::Table);
-        let global = rows
-            .iter()
-            .find(|o| o.key.starts_with("global:"))
-            .unwrap();
+        let global = rows.iter().find(|o| o.key.starts_with("global:")).unwrap();
         assert_eq!(global.group, Group::Table);
         assert_eq!(own.name, "数据修复");
         assert_eq!(own.pill, "未登记");
@@ -1506,7 +1515,11 @@ mod tests {
         assert_eq!(asset.version, Some(3));
         assert!(asset.note.contains("只读"));
         // 有副本（`payload_rel_path` 有值）= 快照；表型没有文件模式这一说
-        assert!(asset.note.contains("快照"), "有副本的文件资产标快照：{}", asset.note);
+        assert!(
+            asset.note.contains("快照"),
+            "有副本的文件资产标快照：{}",
+            asset.note
+        );
         assert!(
             !table_asset.note.contains("快照") && !table_asset.note.contains("按需"),
             "表型资产不该带文件模式：{}",
@@ -1544,7 +1557,11 @@ mod tests {
             "sql 资产不该出现在文件段"
         );
         let reference = rows.iter().find(|o| o.key == "asset:arp_ref").unwrap();
-        assert!(reference.note.contains("按需"), "引用型要标按需：{}", reference.note);
+        assert!(
+            reference.note.contains("按需"),
+            "引用型要标按需：{}",
+            reference.note
+        );
     }
 
     /// 只有文件段里的 `f_*` 视图给「归档为快照」；库文件在源段（catalog），不给。
@@ -1624,11 +1641,7 @@ mod tests {
         });
         let rows = objects(&c);
         let by = |key: &str| rows.iter().find(|o| o.key == key).unwrap();
-        for key in [
-            "fileview:f_orders",
-            "asset:arp_2",
-            "asset:arp_demo",
-        ] {
+        for key in ["fileview:f_orders", "asset:arp_2", "asset:arp_demo"] {
             if key == "asset:arp_demo" {
                 // 文件型资产没有 SQL 引用（本体是 `resources/` 下的副本）
                 assert_eq!(by(key).sql_ref, None, "{key}");
@@ -1699,8 +1712,10 @@ mod tests {
         ];
         let rows = objects(&c);
         // 按 `session:` 键前缀滤（段里还有加速源行，不能按整段数）
-        let session_rows: Vec<&Object> =
-            rows.iter().filter(|o| o.key.starts_with("session:")).collect();
+        let session_rows: Vec<&Object> = rows
+            .iter()
+            .filter(|o| o.key.starts_with("session:"))
+            .collect();
         assert_eq!(session_rows.len(), 2);
         assert_ne!(session_rows[0].key, session_rows[1].key);
         // 界面上仍显示同一个别名（用户认的是别名，不是 owner）
@@ -1752,7 +1767,8 @@ mod tests {
 
     /// 「分析已选」：能转的转成来源，转不了的说清原因，不许静默丢。
     #[test]
-    fn analysis_sources_convert_what_they_can_and_name_what_they_cannot() {        let mut c = sample();
+    fn analysis_sources_convert_what_they_can_and_name_what_they_cannot() {
+        let mut c = sample();
         c.analysis_tables = vec!["orders".into()];
         c.global_tables = vec!["G_月度经营".into()];
         c.result_sets = vec!["tmp_q_结果_3".into()];
@@ -1855,7 +1871,10 @@ mod tests {
         assert_eq!(view.pill, "已加载");
 
         // 视图能转取样来源（它在单例上）；库文件 catalog 转不了，老实进跳过清单
-        let picked = vec!["fileview:f_sales".to_string(), "fileview:f_warehouse".to_string()];
+        let picked = vec![
+            "fileview:f_sales".to_string(),
+            "fileview:f_warehouse".to_string(),
+        ];
         let (sources, skipped) = super::analysis_sources(&rows, &picked, &sample().assets, None);
         assert_eq!(sources.len(), 1, "{sources:?}");
         assert!(sources[0].sql.contains("f_sales"), "{sources:?}");
@@ -1993,7 +2012,12 @@ mod tests {
             if object.can_analyze() {
                 assert_eq!(text, object.life.label(), "{} 可用时该写寿命", object.key);
             } else {
-                assert_eq!(text, object.state.label(), "{} 不可用时该写原因", object.key);
+                assert_eq!(
+                    text,
+                    object.state.label(),
+                    "{} 不可用时该写原因",
+                    object.key
+                );
             }
         }
         // 四种寿命都要真出现过：文案里有，才算「参与渲染」
@@ -2004,7 +2028,8 @@ mod tests {
             "受管",     // 资产
         ] {
             assert!(
-                rows.iter().any(|o| o.can_analyze() && o.life.label() == expected),
+                rows.iter()
+                    .any(|o| o.can_analyze() && o.life.label() == expected),
                 "sample 里没有「{expected}」的行，这条断言失去意义"
             );
         }
@@ -2039,9 +2064,8 @@ mod tests {
             .into_iter()
             .find(|o| !o.can_analyze())
             .expect("sample 里应有不可用行");
-        down.state = State::Failed(
-            "未挂载 · 先在这条连接上开「本地加速」，挂上后可展开选表".to_string(),
-        );
+        down.state =
+            State::Failed("未挂载 · 先在这条连接上开「本地加速」，挂上后可展开选表".to_string());
         assert_eq!(down.availability_chip(), "未挂载");
         assert!(
             down.availability_text().len() > down.availability_chip().len() * 4,
@@ -2150,10 +2174,8 @@ mod tests {
             other => panic!("{other:?}"),
         }
 
-        let failed = super::session_actions(
-            "session:doc:oracle_src",
-            &State::Failed("ORA-12541".into()),
-        );
+        let failed =
+            super::session_actions("session:doc:oracle_src", &State::Failed("ORA-12541".into()));
         assert_eq!(failed.len(), 2, "失败行不给设主源：{failed:?}");
         assert!(
             !failed
@@ -2185,8 +2207,12 @@ mod tests {
 
         // 没路径（引用型 / 旧行）：不猜，如实跳过
         c.assets[0].payload_rel_path = None;
-        let (sources, skipped) =
-            super::analysis_sources(&rows, &["asset:arp_demo".into()], &c.assets, Some(dir.as_path()));
+        let (sources, skipped) = super::analysis_sources(
+            &rows,
+            &["asset:arp_demo".into()],
+            &c.assets,
+            Some(dir.as_path()),
+        );
         assert!(sources.is_empty(), "{sources:?}");
         assert_eq!(skipped.len(), 1);
         assert!(skipped[0].contains("资产"), "{skipped:?}");
@@ -2195,12 +2221,20 @@ mod tests {
 
 #[cfg(test)]
 mod temp_source_tests {
-    use super::{Collected, ConnRow, mounted_file_sources, objects, temp_source_for, unmounted_file_sources};
+    use super::{
+        mounted_file_sources, objects, temp_source_for, unmounted_file_sources, Collected, ConnRow,
+    };
 
     #[test]
     fn maps_prefixes_to_sources() {
-        assert_eq!(temp_source_for("tmp_q_orders"), Some(engine::duckdb::temp_table::TempTableSource::Query));
-        assert_eq!(temp_source_for("tmp_i_eda"), Some(engine::duckdb::temp_table::TempTableSource::Insight));
+        assert_eq!(
+            temp_source_for("tmp_q_orders"),
+            Some(engine::duckdb::temp_table::TempTableSource::Query)
+        );
+        assert_eq!(
+            temp_source_for("tmp_i_eda"),
+            Some(engine::duckdb::temp_table::TempTableSource::Insight)
+        );
         assert_eq!(temp_source_for("res_orders_2026"), None);
     }
 
@@ -2222,13 +2256,14 @@ mod temp_source_tests {
             .find(|o| o.key == "conn:C_lite")
             .expect("文件库源要进源段");
         assert!(!row.can_analyze(), "没挂的文件库不可展开选表");
-        assert!(row.state.label().contains("未挂载"), "{}", row.state.label());
+        assert!(
+            row.state.label().contains("未挂载"),
+            "{}",
+            row.state.label()
+        );
         assert_eq!(
             unmounted_file_sources(&c),
-            vec![(
-                "conn:C_lite".to_string(),
-                "D:/data/销售.duckdb".to_string()
-            )]
+            vec![("conn:C_lite".to_string(), "D:/data/销售.duckdb".to_string())]
         );
 
         // 路径进了 loaded_files（斜杠 / 大小写不同也算同一个文件）→ 可用，且不在未挂清单
@@ -2244,10 +2279,7 @@ mod temp_source_tests {
         // 两边判据互斥（同一行不该既算「未挂」又算「已挂」）
         assert_eq!(
             mounted_file_sources(&c),
-            vec![(
-                "conn:C_lite".to_string(),
-                "D:/data/销售.duckdb".to_string()
-            )]
+            vec![("conn:C_lite".to_string(), "D:/data/销售.duckdb".to_string())]
         );
 
         // 网络库没有本体路径：不进「未挂」清单，但**挂没挂改看加速会话**（第 4 / 37 条）
@@ -2263,7 +2295,11 @@ mod temp_source_tests {
             !row.can_analyze(),
             "没有加速会话 = 没挂进分析实例：行首不给展开指示"
         );
-        assert!(row.state.label().contains("未挂载"), "{}", row.state.label());
+        assert!(
+            row.state.label().contains("未挂载"),
+            "{}",
+            row.state.label()
+        );
         assert!(
             row.state.label().contains("本地加速"),
             "状态字要指出去哪挂：{}",
@@ -2297,4 +2333,3 @@ mod memory_format_tests {
         assert_eq!(format_bytes(2 * 1024 * 1024 * 1024), "2.0 GB");
     }
 }
-

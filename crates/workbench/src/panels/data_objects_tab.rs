@@ -13,24 +13,24 @@
 //! 前两个是场景 3 的两段，顺序不能颠倒：临时表在进程单例里（项目库打不开它），
 //! 所以先「升级为资产」拿到存档身份，才谈得上「升级到全局」并留下版本线索。
 
-use shared::i18n::tr;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::prelude::FluentBuilder as _;
-use gpui_kit::component::ActiveTheme;
-use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelControl};
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
+use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelControl};
 use gpui_kit::component::empty::{
     Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle,
 };
-use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::input::{Input, InputState};
-use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::tag::Tag;
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Icon;
 use gpui_kit::component::Sizable as _;
-use gpui_kit::component::tag::Tag;
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use shared::i18n::tr;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -423,23 +423,21 @@ impl DataObjectsTab {
     /// 除了标脏数据对象，还要让导航缓存失效（新表在导航的「项目分析库」下也要出现）。
     pub(crate) fn watch_archive(&mut self, job: u64, cx: &mut Context<Self>) {
         let executor = cx.background_executor().clone();
-        cx.spawn(async move |this, cx| {
-            loop {
-                executor.timer(std::time::Duration::from_millis(200)).await;
-                let Some((note, ok)) = crate::services::archive_jobs::take_for(job) else {
-                    continue;
-                };
-                let _ = this.update(cx, |tab, cx| {
-                    if ok {
-                        tab.shared.say(note, cx);
-                        tab.shared.invalidate_nav_cache();
-                        tab.shared.mark_data_objects_dirty(cx);
-                    } else {
-                        tab.shared.say_error(note, cx);
-                    }
-                });
-                return;
-            }
+        cx.spawn(async move |this, cx| loop {
+            executor.timer(std::time::Duration::from_millis(200)).await;
+            let Some((note, ok)) = crate::services::archive_jobs::take_for(job) else {
+                continue;
+            };
+            let _ = this.update(cx, |tab, cx| {
+                if ok {
+                    tab.shared.say(note, cx);
+                    tab.shared.invalidate_nav_cache();
+                    tab.shared.mark_data_objects_dirty(cx);
+                } else {
+                    tab.shared.say_error(note, cx);
+                }
+            });
+            return;
         })
         .detach();
     }
@@ -452,22 +450,20 @@ impl DataObjectsTab {
         cx: &mut Context<Self>,
     ) {
         let executor = cx.background_executor().clone();
-        cx.spawn(async move |this, cx| {
-            loop {
-                executor.timer(std::time::Duration::from_millis(200)).await;
-                let Some((note, ok)) = take(job) else {
-                    continue;
-                };
-                let _ = this.update(cx, |tab, cx| {
-                    if ok {
-                        tab.shared.say(note, cx);
-                        tab.shared.mark_data_objects_dirty(cx);
-                    } else {
-                        tab.shared.say_error(note, cx);
-                    }
-                });
-                return;
-            }
+        cx.spawn(async move |this, cx| loop {
+            executor.timer(std::time::Duration::from_millis(200)).await;
+            let Some((note, ok)) = take(job) else {
+                continue;
+            };
+            let _ = this.update(cx, |tab, cx| {
+                if ok {
+                    tab.shared.say(note, cx);
+                    tab.shared.mark_data_objects_dirty(cx);
+                } else {
+                    tab.shared.say_error(note, cx);
+                }
+            });
+            return;
         })
         .detach();
     }
@@ -481,8 +477,7 @@ impl DataObjectsTab {
         self.loading_sources.remove(&outcome.key);
         match outcome.result {
             Ok(Kids::Mounted(tables)) => {
-                self.source_children
-                    .insert(outcome.key, Arc::new(tables));
+                self.source_children.insert(outcome.key, Arc::new(tables));
             }
             Ok(Kids::Connection(objects)) => {
                 self.conn_children.insert(outcome.key, Arc::new(objects));
@@ -533,7 +528,11 @@ impl DataObjectsTab {
 
     /// 工作集落在哪个项目根下（`None` = 没项目 → 只在内存里，不落盘）
     fn working_set_root_now(&self) -> Option<std::path::PathBuf> {
-        self.shared.project.borrow().as_ref().map(|p| p.root.clone())
+        self.shared
+            .project
+            .borrow()
+            .as_ref()
+            .map(|p| p.root.clone())
     }
 
     /// 把「活动文档的当前选择」回存进账本。
@@ -664,7 +663,12 @@ impl DataObjectsTab {
         let count_label = if objects.len() == total {
             format!("{} 个 · 已选 {}", total, picked.len())
         } else {
-            format!("{} 个（显示 {}）· 已选 {}", total, objects.len(), picked.len())
+            format!(
+                "{} 个（显示 {}）· 已选 {}",
+                total,
+                objects.len(),
+                picked.len()
+            )
         };
         let memory_label = match self.memory {
             Some((bytes, tables)) => format!(
@@ -676,6 +680,14 @@ impl DataObjectsTab {
         };
         let colors = cx.theme().colors;
         let entity = cx.entity();
+
+        // 面板可用宽：上一帧 prepaint 量到的（0 = 还没量到，见文件末尾 `RowWidth`）。
+        // 行布局按它判档（`data_objects::layout::RowTier`）：窄了先丢执行通道、再丢小标，
+        // 把宽度让给名字——判据是实测出来的「名字可用宽 = 面板宽 − 290」，不是估的。
+        let row_width =
+            window.use_keyed_state("data-objects-row-width", cx, |_, _| RowWidth::default());
+        let panel_width = row_width.read(cx).get();
+        let tier = data_objects::layout::RowTier::for_width(panel_width);
 
         let header = div()
             .h_flex()
@@ -789,8 +801,7 @@ impl DataObjectsTab {
                         .map(|leaf| leaf.name.clone())
                 })
                 .or_else(|| {
-                    data_objects::source_table_parts(key)
-                        .map(|(_, _, _, table)| table.to_string())
+                    data_objects::source_table_parts(key).map(|(_, _, _, table)| table.to_string())
                 })
                 .unwrap_or_else(|| key.clone());
             let key_for_remove = key.clone();
@@ -821,15 +832,12 @@ impl DataObjectsTab {
         // 头部那排按钮是“对这面板做什么”，这里才是“拿这堆对象去做什么”。
         // 多选（2026-11-22）后必须说清口径：洞察**每源各取一份样本**，不做跨源 join，
         // 所以「选 3 个」不等于「3 个合成一张表」，用户不该靠自己猜。
-        tray = tray.child(
-            div()
-                .text_xs()
-                .text_color(colors.muted_foreground)
-                .child(match picked.len() {
-                    0 | 1 => "洞察只取这一个对象；想看别的就再点「选用」，各取各的样本".to_string(),
-                    count => format!("已选 {count} 个：洞察会为每个对象各取一份样本，不跨源 join"),
-                }),
-        );
+        tray = tray.child(div().text_xs().text_color(colors.muted_foreground).child(
+            match picked.len() {
+                0 | 1 => "洞察只取这一个对象；想看别的就再点「选用」，各取各的样本".to_string(),
+                count => format!("已选 {count} 个：洞察会为每个对象各取一份样本，不跨源 join"),
+            },
+        ));
         let shared_for_tray = self.shared.clone();
         let entity_for_tray = entity.clone();
         // 按钮文案跟着选中个数走：选 1 个说「此对象」，选多个说清是「这 N 个」，
@@ -1007,7 +1015,10 @@ impl DataObjectsTab {
         // 每段几行：段头要显示计数。先一遍数出来，别在段头里再扫一遍整表（5 段 = 5 遍）
         let mut group_counts: Vec<(Group, usize)> = Vec::new();
         for object in objects {
-            match group_counts.iter_mut().find(|(group, _)| *group == object.group) {
+            match group_counts
+                .iter_mut()
+                .find(|(group, _)| *group == object.group)
+            {
                 Some((_, count)) => *count += 1,
                 None => group_counts.push((object.group, 1)),
             }
@@ -1138,8 +1149,12 @@ impl DataObjectsTab {
                 .strip_prefix("persistent:")
                 .or_else(|| object.key.strip_prefix("project:"))
                 .map(str::to_string);
-            let persist_target = data_objects::can_persist(object)
-                .then(|| (object.name.clone(), data_objects::persist_label(&object.name)));
+            let persist_target = data_objects::can_persist(object).then(|| {
+                (
+                    object.name.clone(),
+                    data_objects::persist_label(&object.name),
+                )
+            });
             // 单行的「清理这张表」：结果集 / 载入 都是会话级占用（`can_clear`）。
             // 工具栏那颗是「全清」——为删一张副本把别的结果集一起清掉，是这把按钮的粗口
             let clear_target = data_objects::can_clear(object).then(|| object.name.clone());
@@ -1272,30 +1287,35 @@ impl DataObjectsTab {
                             ),
                     )
                     // 业务身份走标准 Tag：手写胶囊的圆角、内距、字号各写一遍就会漂
-                    .child(
-                        div()
-                            .debug_selector({
-                                let key = object.key.clone();
-                                move || format!("data-object-pill-{key}")
-                            })
-                            .child(pill.child(object.pill_text())),
-                    )
-                    .child(
-                        div()
-                            .debug_selector({
-                                let key = object.key.clone();
-                                move || format!("data-object-channel-{key}")
-                            })
-                            .text_xs()
-                            .flex_none()
-                            // 固定一档最小宽：`→ 联邦` 与 `→ 进程 DuckDB` 差太多，
-                            // 不钉住的话每行的按钮位置都在跳。
-                            // 文案直接用 `channel.label()`（自带箭头）——这里再拼一层
-                            // 会画出「→ → 联邦」（修掉的旧缺陷）
-                            .min_w_16()
-                            .text_color(colors.muted_foreground)
-                            .child(object.channel.label()),
-                    )
+                    // 极窄档才丢小标（它是身份判据，见 `data_objects::layout`）
+                    .when(tier.shows_pill(), |el| {
+                        el.child(
+                            div()
+                                .debug_selector({
+                                    let key = object.key.clone();
+                                    move || format!("data-object-pill-{key}")
+                                })
+                                .child(pill.child(object.pill_text())),
+                        )
+                    })
+                    .when(tier.shows_channel(), |el| {
+                        el.child(
+                            div()
+                                .debug_selector({
+                                    let key = object.key.clone();
+                                    move || format!("data-object-channel-{key}")
+                                })
+                                .text_xs()
+                                .flex_none()
+                                // 固定一档最小宽：`→ 联邦` 与 `→ 进程 DuckDB` 差太多，
+                                // 不钉住的话每行的按钮位置都在跳。
+                                // 文案直接用 `channel.label()`（自带箭头）——这里再拼一层
+                                // 会画出「→ → 联邦」（修掉的旧缺陷）
+                                .min_w_16()
+                                .text_color(colors.muted_foreground)
+                                .child(object.channel.label()),
+                        )
+                    })
                     .child(
                         div()
                             .debug_selector({
@@ -1682,26 +1702,28 @@ impl DataObjectsTab {
                             }
                         }
                         Some(_) => {
-                    list = list.child(
-                        div()
-                            .id(SharedString::from(format!(
-                                "data-object-leaf-empty-{}",
-                                object.key
-                            )))
-                            .h_flex()
-                            .items_center()
-                            .gap_2()
-                            .px_3()
-                            .py_1()
-                            .child(tree::indent_spacer(ui::TREE_INDENT, 1))
-                            .child(tree::disclosure_slot())
-                            .child(
+                            list = list.child(
                                 div()
-                                    .text_xs()
-                                    .text_color(colors.muted_foreground)
-                                    .child(tr("这个连接里没有可列的表 / 视图（目录为空或没有权限）")),
-                            ),
-                    );
+                                    .id(SharedString::from(format!(
+                                        "data-object-leaf-empty-{}",
+                                        object.key
+                                    )))
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .px_3()
+                                    .py_1()
+                                    .child(tree::indent_spacer(ui::TREE_INDENT, 1))
+                                    .child(tree::disclosure_slot())
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(colors.muted_foreground)
+                                            .child(tr(
+                                            "这个连接里没有可列的表 / 视图（目录为空或没有权限）",
+                                        )),
+                                    ),
+                            );
                         }
                         // 后台列举还没回执：说一声在查（远端库要等网络往返）
                         None => {
@@ -1838,6 +1860,26 @@ impl DataObjectsTab {
             });
         }
 
+        // 宽度探针：这层只有一个子（滚动容器），`bounds[0]` 就是面板可用宽。
+        // 量到就写进 keyed state 并请求重绘一次——下一帧行布局才能按真实宽度判档；
+        // 相等时不 notify，避免自激成帧循环。
+        let width_probe = row_width.clone();
+        let entity_for_width = entity.clone();
+        let list_frame = div()
+            .flex_1()
+            .min_h_0()
+            .on_children_prepainted(move |bounds, _window, cx| {
+                let Some(first) = bounds.first() else {
+                    return;
+                };
+                let width: f32 = first.size.width.into();
+                if (width_probe.read(cx).get() - width).abs() > 0.5 {
+                    width_probe.update(cx, |slot, _| slot.set(width));
+                    entity_for_width.update(cx, |_, cx| cx.notify());
+                }
+            })
+            .child(list);
+
         div()
             .v_flex()
             .size_full()
@@ -1847,7 +1889,7 @@ impl DataObjectsTab {
             .child(search_row)
             .child(chips)
             .child(hint)
-            .child(list)
+            .child(list_frame)
             .when(!picked.is_empty(), |el| el.child(tray))
             .when_some(sess_row, |el, row| el.child(row))
             .when_some(self.note.clone(), |el, note| {
@@ -1867,18 +1909,21 @@ impl DataObjectsTab {
                 )
             })
             // 工作集软上限：只提示代价，不拦（拦下来等于替用户决定要不要等）
-            .when_some(data_objects::picked_limit_note(picked.len()), move |el, note| {
-                el.child(
-                    div()
-                        .px_3()
-                        .py_2()
-                        .border_t_1()
-                        .border_color(colors.border)
-                        .text_xs()
-                        .text_color(colors.warning)
-                        .child(note),
-                )
-            })
+            .when_some(
+                data_objects::picked_limit_note(picked.len()),
+                move |el, note| {
+                    el.child(
+                        div()
+                            .px_3()
+                            .py_2()
+                            .border_t_1()
+                            .border_color(colors.border)
+                            .text_xs()
+                            .text_color(colors.warning)
+                            .child(note),
+                    )
+                },
+            )
     }
 }
 
@@ -1900,7 +1945,9 @@ fn leaf_more_row(
     let key = parent_key.to_string();
     let entity = entity.clone();
     div()
-        .id(SharedString::from(format!("data-object-leaf-more-{parent_key}")))
+        .id(SharedString::from(format!(
+            "data-object-leaf-more-{parent_key}"
+        )))
         .h_flex()
         .items_center()
         .gap_2()
@@ -2008,21 +2055,23 @@ fn source_leaf_row(
     }
     let qualified = table.qualified.clone();
     let base = row.child(
-        Button::new(SharedString::from(format!("data-object-leaf-copy-{leaf_id}")))
-            .ghost()
-            .xsmall()
-            .label(tr("复制名"))
-            .on_click({
-                let qualified = qualified.clone();
-                let entity = entity.clone();
-                move |_, _, cx| {
-                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(qualified.clone()));
-                    entity.update(cx, |tab, cx| {
-                        tab.note = Some(PanelNote::info(format!("已复制限定名：{qualified}")));
-                        cx.notify();
-                    });
-                }
-            }),
+        Button::new(SharedString::from(format!(
+            "data-object-leaf-copy-{leaf_id}"
+        )))
+        .ghost()
+        .xsmall()
+        .label(tr("复制名"))
+        .on_click({
+            let qualified = qualified.clone();
+            let entity = entity.clone();
+            move |_, _, cx| {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(qualified.clone()));
+                entity.update(cx, |tab, cx| {
+                    tab.note = Some(PanelNote::info(format!("已复制限定名：{qualified}")));
+                    cx.notify();
+                });
+            }
+        }),
     );
 
     // 铁律 H 组第 35 条：载入 = 把这张**已经挂进分析实例**的源表复制成 `tmp_l_`，
@@ -2070,22 +2119,20 @@ fn source_leaf_row(
                 let source_name = source_name.clone();
                 let entity = entity.clone();
                 let shared = shared.clone();
-                menu = menu.item(PopupMenuItem::new("载入内存…").on_click(
-                    move |_, _, cx| {
-                        // 名字用 `<源>_<表>`：临时表名的尺子只留 ASCII，中文会折成下划线，
-                        // 回执里显示的是**实际落下的表名**（`landed`），不是用户看到的这张表名
-                        let description = format!("{source_name}_{table_name_for_job}");
-                        let job = crate::services::load_jobs::start(
-                            source.clone(),
-                            source_name.clone(),
-                            table_name_for_note.clone(),
-                            qualified.clone(),
-                            description,
-                        );
-                        shared.say(format!("正在载入「{table_name_for_note}」…"), cx);
-                        entity.update(cx, |tab, cx| tab.watch_load(job, cx));
-                    },
-                ));
+                menu = menu.item(PopupMenuItem::new("载入内存…").on_click(move |_, _, cx| {
+                    // 名字用 `<源>_<表>`：临时表名的尺子只留 ASCII，中文会折成下划线，
+                    // 回执里显示的是**实际落下的表名**（`landed`），不是用户看到的这张表名
+                    let description = format!("{source_name}_{table_name_for_job}");
+                    let job = crate::services::load_jobs::start(
+                        source.clone(),
+                        source_name.clone(),
+                        table_name_for_note.clone(),
+                        qualified.clone(),
+                        description,
+                    );
+                    shared.say(format!("正在载入「{table_name_for_note}」…"), cx);
+                    entity.update(cx, |tab, cx| tab.watch_load(job, cx));
+                }));
             }
             menu
         })
@@ -2209,7 +2256,8 @@ impl BasePanel for DataObjectsTab {
     }
 
     fn closable(&self, _cx: &App) -> bool {
-        false
+        // 右侧栏 tab 与中央标签一致（2026-11-24 用户验收）：悬停出 ✕、点击关掉这个 tab。
+        true
     }
 
     fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
@@ -2228,6 +2276,16 @@ impl ComponentPanel for DataObjectsTab {
     fn tab_name(&self, _cx: &App) -> Option<SharedString> {
         // 与其它右 dock tab 一致：返回 None，用 title() 渲染图标 + 文字
         None
+    }
+
+    /// 【关闭前询问】右侧栏 tab 的 ✕：没有脏概念，撤登记后交还皮肤移除。
+    fn request_close(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::component::dock::CloseRequest {
+        self.shared.close_right_panel(RightPanel::DataObjects, cx);
+        gpui_kit::component::dock::CloseRequest::Proceed
     }
 
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -2276,7 +2334,9 @@ impl ComponentPanel for DataObjectsTab {
             Button::new("data-objects-add-source-snapshot")
                 .ghost()
                 .label(tr("存快照"))
-                .tooltip(tr("把选中的文件在资源库里存一份只读副本，跟着项目走、带版本"))
+                .tooltip(tr(
+                    "把选中的文件在资源库里存一份只读副本，跟着项目走、带版本",
+                ))
                 .on_click(cx.listener(|this, _, window, cx| {
                     crate::components::data_objects_load::open_load_files_dialog(
                         &this.shared,
@@ -2298,9 +2358,26 @@ impl ComponentPanel for DataObjectsTab {
     }
 }
 
+/// 面板可用宽（行宽）：prepaint 时量到就写进来，供**下一帧**的行布局判档。
+///
+/// 首帧是 0（还没量到），`RowTier::for_width(0)` 按全列画——宁可第一帧挤一点，
+/// 也不要先画成极简再跳回全列。
+#[derive(Default)]
+struct RowWidth(std::cell::Cell<f32>);
+
+impl RowWidth {
+    fn get(&self) -> f32 {
+        self.0.get()
+    }
+
+    fn set(&self, width: f32) {
+        self.0.set(width);
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{LEAF_PAGE_SIZE, leaf_shown};
+    use super::{leaf_shown, LEAF_PAGE_SIZE};
 
     #[test]
     fn leaves_start_with_one_page_and_grow_by_a_page() {
@@ -2324,5 +2401,3 @@ mod tests {
 
 #[cfg(test)]
 mod layout_probe;
-
-

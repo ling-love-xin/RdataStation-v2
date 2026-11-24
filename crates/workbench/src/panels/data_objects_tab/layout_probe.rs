@@ -50,11 +50,7 @@ struct Natural {
 }
 
 impl Render for Natural {
-    fn render(
-        &mut self,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let name = self.name;
         let note = self.note;
         let state = self.state;
@@ -92,11 +88,7 @@ struct Host {
 }
 
 impl Render for Host {
-    fn render(
-        &mut self,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         // 高度只要够放几行：不是被测项，取窗口默认高度量级（37.5rem = 600px @16px）
         div()
             .v_flex()
@@ -128,13 +120,17 @@ fn right(cx: &mut VisualTestContext, selector: &'static str) -> Option<f32> {
 }
 
 fn fmt(v: Option<f32>) -> String {
-    v.map(|x| format!("{x:.1}")).unwrap_or_else(|| "—".to_string())
+    v.map(|x| format!("{x:.1}"))
+        .unwrap_or_else(|| "—".to_string())
 }
 
 /// 一条探针行的量值（`line` 是打给人看的一行字）。
 struct Probe {
     line: String,
     row: Option<f32>,
+    name: Option<f32>,
+    pill: Option<f32>,
+    channel: Option<f32>,
     state_right: Option<f32>,
 }
 
@@ -165,41 +161,54 @@ fn panel_at(cx: &mut TestAppContext, width: f32, objects: Vec<Object>, key: &'st
     settle(&mut vcx);
 
     // (行, 名字, 副标题, 小标, 通道, 状态) 六个锚点
-    let sels: (&'static str, &'static str, &'static str, &'static str, &'static str, &'static str) =
-        match key {
-            "result:probe" => (
-                "data-object-row-result:probe",
-                "data-object-name-result:probe",
-                "data-object-note-result:probe",
-                "data-object-pill-result:probe",
-                "data-object-channel-result:probe",
-                "data-object-state-result:probe",
-            ),
-            _ => (
-                "data-object-row-conn:probe",
-                "data-object-name-conn:probe",
-                "data-object-note-conn:probe",
-                "data-object-pill-conn:probe",
-                "data-object-channel-conn:probe",
-                "data-object-state-conn:probe",
-            ),
-        };
+    let sels: (
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+    ) = match key {
+        "result:probe" => (
+            "data-object-row-result:probe",
+            "data-object-name-result:probe",
+            "data-object-note-result:probe",
+            "data-object-pill-result:probe",
+            "data-object-channel-result:probe",
+            "data-object-state-result:probe",
+        ),
+        _ => (
+            "data-object-row-conn:probe",
+            "data-object-name-conn:probe",
+            "data-object-note-conn:probe",
+            "data-object-pill-conn:probe",
+            "data-object-channel-conn:probe",
+            "data-object-state-conn:probe",
+        ),
+    };
 
     let row_w = w(&mut vcx, sels.0);
+    let name_w = w(&mut vcx, sels.1);
+    let pill_w = w(&mut vcx, sels.3);
+    let channel_w = w(&mut vcx, sels.4);
+    let tier = crate::components::data_objects::layout::RowTier::for_width(width);
     let line = format!(
-        "PANEL={width:>5.0}  row={}  name={}  note={}  pill={}  channel={}  state={}  \
-         stateRight={}",
+        "PANEL={width:>5.0}  tier={tier:?}  row={}  name={}  note={}  pill={}  channel={}  \
+         state={}  stateRight={}",
         fmt(row_w),
-        fmt(w(&mut vcx, sels.1)),
+        fmt(name_w),
         fmt(w(&mut vcx, sels.2)),
-        fmt(w(&mut vcx, sels.3)),
-        fmt(w(&mut vcx, sels.4)),
+        fmt(pill_w),
+        fmt(channel_w),
         fmt(w(&mut vcx, sels.5)),
         fmt(right(&mut vcx, sels.5)),
     );
     Probe {
         line,
         row: row_w,
+        name: name_w,
+        pill: pill_w,
+        channel: channel_w,
         state_right: right(&mut vcx, sels.5),
     }
 }
@@ -222,7 +231,9 @@ fn measure_row_layout(cx: &mut TestAppContext) {
         fmt(w(&mut vcx, "natural-state")),
     );
 
-    // 2) 正常行（结果集 · 可用）在各档面板宽度下的真实分布
+    // 2) 正常行（结果集 · 可用）在各档面板宽度下的真实分布。
+    //    这里钉的就是「行宽预算」本身：名字宽必须等于 `RowTier::name_space(面板宽)`，
+    //    以及该档该出现的列必须真出现 / 真消失——预算表与真排版不许各说各话。
     for width in [260.0f32, 300.0, 340.0, 380.0, 440.0, 520.0, 680.0] {
         let probe = panel_at(
             cx,
@@ -237,11 +248,37 @@ fn measure_row_layout(cx: &mut TestAppContext) {
             "result:probe",
         );
         println!("{}", probe.line);
+        let tier = crate::components::data_objects::layout::RowTier::for_width(width);
         // 行宽恒等于可用宽：这些列都是定宽/可收缩，没有谁把行撑长
         assert_eq!(
             probe.row.map(|w| w.round()),
             Some(width),
             "行宽应等于面板宽（{width}）"
+        );
+        // 名字吃到的宽度 = 预算算出来的宽度（预算是**上限**：按最宽的小标估，
+        // 真实行可能比它少十来像素，但绝不该比它更宽——更宽说明布局里偷偷省了东西）
+        let budget = tier.name_space(width);
+        let actual = probe.name.expect("名字格应有宽度");
+        assert!(
+            actual <= budget + 2.0,
+            "面板 {width} 宽 / {tier:?} 档：名字实测 {actual:.1} 比预算 {budget:.1} 还宽——\
+             预算漏算了某一列的宽度"
+        );
+        assert!(
+            budget - actual <= crate::components::data_objects::layout::PILL_COL_PX,
+            "面板 {width} 宽 / {tier:?} 档：名字实测 {actual:.1} 比预算 {budget:.1} 窄太多——\
+             预算把腾出来的宽度算多了（一个最宽小标 = {}px）",
+            crate::components::data_objects::layout::PILL_COL_PX
+        );
+        assert_eq!(
+            probe.channel.is_some(),
+            tier.shows_channel(),
+            "面板 {width} 宽 / {tier:?} 档：执行通道列的去留与预算不一致"
+        );
+        assert_eq!(
+            probe.pill.is_some(),
+            tier.shows_pill(),
+            "面板 {width} 宽 / {tier:?} 档：小标列的去留与预算不一致"
         );
     }
 
@@ -270,4 +307,28 @@ fn measure_row_layout(cx: &mut TestAppContext) {
              整句又被放回行上了"
         );
     }
+
+    // 4) 常量校准：`ROW_CHROME_PX` 是实测拟合出来的，布局一改它就会漂——这里钉死。
+    let wide = panel_at(
+        cx,
+        680.0,
+        vec![row(
+            "result:probe",
+            long_name(),
+            "源表副本 · 载入内存",
+            State::Ready,
+            "载入",
+        )],
+        "result:probe",
+    );
+    let (row, name) = (
+        wide.row.expect("行应有宽度"),
+        wide.name.expect("名字格应有宽度"),
+    );
+    let chrome = row - name;
+    assert!(
+        (chrome - crate::components::data_objects::layout::ROW_CHROME_PX).abs() <= 2.0,
+        "固定开销实测 {chrome:.1}px，预算常量 {}px——常量该按这次实测更新（名字可用宽 = 面板宽 − 这个数）",
+        crate::components::data_objects::layout::ROW_CHROME_PX
+    );
 }
