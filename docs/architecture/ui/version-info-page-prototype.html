@@ -11,7 +11,7 @@
   --primary:#BC5340; --primary-fg:#FFFFFF; --primary-hover:#A8452F;
   --title:#F8F8F8; --status:#F3F3F3; --muted:#6E6E6E; --muted-bg:#F3F3F3;
   --group:#F5F5F5; --hover:#F0F0F0; --stripe:#FAFAFA;
-  --success:#15803D; --danger:#B91C1C; --warning:#A16207; --info:#1D4ED8;
+  --ok:#15803D; --bad:#B91C1C; --warn:#A16207;
   --shadow:0 18px 44px rgba(0,0,0,.20);
   --radius:6px; --radius-sm:4px;
   --mono:"Cascadia Mono","Consolas","SF Mono",monospace;
@@ -19,22 +19,17 @@
 }
 html[data-theme="dark"]{
   --canvas:#0C0C0C; --canvas-ink:#8A8A8A; --dot:#242424;
-  --bg:#1F1F1F; --fg:#CCCCCC; --border:#3C3C3C; --border-soft:#2B2B2B;
+  --bg:#1F1F1F; --fg:#CCCCCC; --border:#3C3C3C; --border-soft:#2F2F2F;
   --primary:#E8846F; --primary-fg:#1E1E1E; --primary-hover:#F5A188;
   --title:#181818; --status:#181818; --muted:#8A8A8A; --muted-bg:#3A3D41;
-  --group:#171717; --hover:#2A2D2E; --stripe:#232323;
-  --success:#89D185; --danger:#F14C4C; --warning:#E3B341; --info:#75BEFF;
+  --group:#171717; --hover:#2A2D2E; --stripe:#262626;
+  --ok:#89D185; --bad:#F14C4C; --warn:#E3B341;
   --shadow:0 20px 50px rgba(0,0,0,.62);
 }
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
-body{
-  background:var(--canvas); color:var(--canvas-ink); font-family:var(--sans);
-  font-size:13px; -webkit-font-smoothing:antialiased;
-}
-/* ---------- 原型控制条（不属于应用 UI） ---------- */
-.bar{display:flex;align-items:center;gap:8px;padding:10px 14px;flex-wrap:wrap;
-  border-bottom:1px solid rgba(128,128,128,.18)}
+body{background:var(--canvas);color:var(--canvas-ink);font-family:var(--sans);font-size:13px;-webkit-font-smoothing:antialiased}
+.bar{display:flex;align-items:center;gap:8px;padding:10px 14px;flex-wrap:wrap;border-bottom:1px solid rgba(128,128,128,.18)}
 .bar .label{font-size:11px;letter-spacing:.06em;opacity:.6}
 .seg{display:flex;border:1px solid rgba(128,128,128,.32);border-radius:var(--radius-sm);overflow:hidden}
 .seg button{font:inherit;font-size:12px;padding:5px 11px;border:0;cursor:pointer;background:transparent;color:inherit}
@@ -42,138 +37,530 @@ body{
 .seg button[aria-pressed="true"]{background:var(--primary);color:var(--primary-fg)}
 .seg button:hover[aria-pressed="false"]{background:rgba(128,128,128,.14)}
 .bar .note{margin-left:auto;font-size:11px;opacity:.55}
-/* ---------- 舞台 ---------- */
 .stage{display:flex;justify-content:center;padding:20px 12px 30px}
-.app{
-  width:1160px;height:700px;flex:none;position:relative;overflow:hidden;
-  background:
-    radial-gradient(circle at 1px 1px, var(--dot) 1px, transparent 0) 0 0/16px 16px, var(--canvas);
-  border:1px solid var(--border);border-radius:8px;
-}
-.appbar{
-  height:34px;display:flex;align-items:center;gap:8px;padding:0 12px;
-  background:var(--title);border-bottom:1px solid var(--border);color:var(--fg);
-}
+.app{width:1160px;height:700px;flex:none;position:relative;overflow:hidden;
+  background:radial-gradient(circle at 1px 1px,var(--dot) 1px,transparent 0) 0 0/16px 16px,var(--canvas);
+  border:1px solid var(--border);border-radius:8px}
+.appbar{height:34px;display:flex;align-items:center;gap:8px;padding:0 12px;background:var(--title);
+  border-bottom:1px solid var(--border);color:var(--fg)}
 .appbar .logo{width:16px;height:16px;border-radius:4px;background:var(--primary);flex:none}
 .appbar .name{font-size:12px;font-weight:600}
 .appbar .dim{font-size:11px;color:var(--muted)}
-.appbar .right{margin-left:auto;display:flex;gap:6px;align-items:center}
+.appbar .right{margin-left:auto;display:flex;gap:6px}
 .dot{width:9px;height:9px;border-radius:50%;background:var(--border)}
-/* ---------- 版本窗口 ---------- */
-.win{
-  position:absolute;left:90px;top:74px;width:980px;height:620px;
-  background:var(--bg);color:var(--fg);border:1px solid var(--border);
-  border-radius:8px;box-shadow:var(--shadow);display:flex;flex-direction:column;overflow:hidden;
-}
-.wtitle{
-  height:40px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;
-  background:var(--title);border-bottom:1px solid var(--border);
-}
+.win{position:absolute;left:50px;top:70px;width:1060px;height:640px;background:var(--bg);color:var(--fg);
+  border:1px solid var(--border);border-radius:8px;box-shadow:var(--shadow);
+  display:flex;flex-direction:column;overflow:hidden}
+.wtitle{height:40px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;
+  background:var(--title);border-bottom:1px solid var(--border)}
 .wtitle .ttl{font-size:13px;font-weight:600}
 .wtitle .spacer{flex:1}
 .wbtns{display:flex;gap:6px}
-.btn{
-  font:inherit;font-size:12px;padding:5px 12px;border-radius:var(--radius-sm);cursor:pointer;
-  border:1px solid var(--border);background:transparent;color:var(--fg);
-  display:inline-flex;align-items:center;gap:6px;
-}
+.btn{font:inherit;font-size:12px;padding:5px 12px;border-radius:var(--radius-sm);cursor:pointer;
+  border:1px solid var(--border);background:transparent;color:var(--fg);display:inline-flex;align-items:center;gap:6px}
 .btn:hover{background:var(--hover)}
 .btn.primary{background:var(--primary);border-color:var(--primary);color:var(--primary-fg)}
 .btn.primary:hover{background:var(--primary-hover);border-color:var(--primary-hover)}
-.br{width:10px;height:10px;display:block}
-.mini{width:10px;height:10px;background:transparent;border:0;cursor:pointer;color:var(--muted)}
-/* ---------- 主体两栏 ---------- */
+.br{width:10px;height:10px;display:block;flex:none}
 .body{flex:1;min-height:0;display:grid;grid-template-columns:360px 1fr}
 .left{border-right:1px solid var(--border);padding:14px 16px;overflow:auto}
-.right{display:flex;flex-direction:column;min-width:0}
-/* 左栏字段 */
+.right{display:flex;flex-direction:column;min-width:0;min-height:0}
 .sec{font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);
-  margin:2px 0 8px;display:flex;align-items:center;gap:8px}
+  margin:12px 0 8px;display:flex;align-items:center;gap:8px}
+.sec:first-of-type{margin-top:2px}
 .sec::after{content:"";flex:1;height:1px;background:var(--border-soft)}
-.kv{display:grid;grid-template-columns:92px 1fr;gap:2px 10px;margin-bottom:4px}
+.kv{display:grid;grid-template-columns:88px 1fr;gap:3px 10px;margin:0}
 .kv dt{color:var(--muted);font-size:11.5px;padding-top:2px}
-.kv dd{margin:0;font-size:12.5px;word-break:break-all}
+.kv dd{margin:0;font-size:12.5px;word-break:break-all;line-height:1.45}
 .mono{font-family:var(--mono);font-size:12px}
-.hero{display:flex;align-items:center;gap:8px;margin-bottom:12px}
-.hero .tag{font-family:var(--mono);font-size:15px;font-weight:600;letter-spacing:.01em}
-.tag{
-  display:inline-flex;align-items:center;gap:4px;font-size:10.5px;padding:1px 6px;
-  border:1px solid currentColor;border-radius:999px;line-height:1.5;white-space:nowrap;
-}
-.tag.ok{color:var(--success)} .tag.bad{color:var(--danger)} .tag.unk{color:var(--muted)}
-.tag.soft{color:var(--muted);border-color:var(--border);background:var(--muted-bg)}
-.tag.vendor{color:var(--warning)}
-.alert{
-  display:flex;gap:8px;padding:8px 10px;margin:10px 0 4px;border-radius:var(--radius-sm);
-  border:1px solid color-mix(in srgb, var(--warning) 40%, transparent);
-  background:color-mix(in srgb, var(--warning) 9%, transparent);
-  font-size:11.5px;line-height:1.5;color:var(--fg);
-}
-.alert b{color:var(--warning);display:block;margin-bottom:1px}
-/* ---------- 右栏工具条 ---------- */
-.tools{height:44px;flex:none;display:flex;align-items:center;gap:10px;padding:0 12px;
-  border-bottom:1px solid var(--border)}
-.search{
-  display:flex;align-items:center;gap:6px;height:26px;padding:0 8px;min-width:210px;
-  border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);
-}
+.hero{display:flex;align-items:center;gap:8px;margin:0 0 6px}
+.hero .tagid{font-family:var(--mono);font-size:15px;font-weight:600}
+.tag{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;padding:1px 6px;
+  border:1px solid currentColor;border-radius:999px;line-height:1.5;white-space:nowrap}
+.tag.ok{color:var(--ok)} .tag.bad{color:var(--bad)} .tag.unk{color:var(--muted)}
+.tag.vendor{color:var(--warn)}
+.alert{display:flex;gap:8px;padding:8px 10px;margin:8px 0;border-radius:var(--radius-sm);
+  border:1px solid color-mix(in srgb,var(--warn) 40%,transparent);
+  background:color-mix(in srgb,var(--warn) 9%,transparent);font-size:11.5px;line-height:1.5}
+.alert[hidden]{display:none}
+.alert b{color:var(--warn);display:block;margin-bottom:1px}
+.eng{display:flex;flex-direction:column;gap:1px}
+.eng b{font-family:var(--mono);font-size:12.5px}
+.eng i{font-style:normal;font-size:10.5px;color:var(--muted)}
+.tools{height:44px;flex:none;display:flex;align-items:center;gap:10px;padding:0 12px;border-bottom:1px solid var(--border)}
+.search{display:flex;align-items:center;gap:6px;height:26px;padding:0 8px;min-width:210px;
+  border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg)}
 .search:focus-within{border-color:var(--primary)}
-.search input{
-  border:0;outline:0;background:transparent;color:var(--fg);font:inherit;font-size:12px;width:100%;
-}
+.search input{border:0;outline:0;background:transparent;color:var(--fg);font:inherit;font-size:12px;width:100%}
 .search .hint{font-size:10.5px;color:var(--muted);font-family:var(--mono);white-space:nowrap}
-.chips{display:flex;gap:4px;flex-wrap:nowrap;overflow:hidden}
-.chip{
-  font:inherit;font-size:11.5px;padding:3px 9px;border-radius:999px;cursor:pointer;
-  border:1px solid transparent;background:transparent;color:var(--muted);white-space:nowrap;
-}
+.chips{display:flex;gap:3px;flex-wrap:nowrap;overflow:hidden}
+.chip{font:inherit;font-size:11.5px;padding:3px 9px;border-radius:999px;cursor:pointer;
+  border:1px solid transparent;background:transparent;color:var(--muted);white-space:nowrap}
 .chip:hover{background:var(--hover);color:var(--fg)}
 .chip[aria-pressed="true"]{background:var(--muted-bg);border-color:var(--border);color:var(--fg);font-weight:600}
-/* ---------- 表格 ---------- */
-.wrap{flex:1;min-height:0;overflow:auto;padding:0 0 2px}
+.wrap{flex:1;min-height:0;overflow:auto}
 table{width:100%;border-collapse:collapse;table-layout:fixed}
-th,td{padding:0 8px;text-align:left;vertical-align:middle;border-bottom:1px solid var(--border-soft)}
-thead th{
-  position:sticky;top:0;z-index:1;height:32px;font-size:11px;font-weight:600;color:var(--muted);
-  background:var(--bg);border-bottom:1px solid var(--border);letter-spacing:.02em;white-space:nowrap;
-}
+th,td{padding:0 9px;text-align:left;vertical-align:middle;border-bottom:1px solid var(--border-soft)}
+thead th{position:sticky;top:0;z-index:1;height:32px;font-size:11px;font-weight:600;color:var(--muted);
+  background:var(--bg);border-bottom:1px solid var(--border);letter-spacing:.02em;white-space:nowrap}
 thead th[data-sort]{cursor:pointer}
 thead th[data-sort]:hover{color:var(--fg)}
-tbody tr{height:36px}
+thead th[data-sort]::after{content:attr(data-ind);margin-left:4px;font-size:9px;opacity:.8}
+tbody tr{height:44px}
 tbody tr:nth-child(even){background:var(--stripe)}
 tbody tr:hover{background:var(--hover)}
-tr.grp td{
-  height:26px;background:var(--group);color:var(--muted);font-size:10.5px;
-  letter-spacing:.08em;text-transform:uppercase;border-bottom:1px solid var(--border-soft);
-}
+tr.grp td{height:26px;background:var(--group);color:var(--muted);font-size:10.5px;
+  letter-spacing:.08em;text-transform:uppercase;border-bottom:1px solid var(--border-soft)}
 td.name .dn{font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:6px}
 td.name .cn{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-top:1px}
-td.ver{font-family:var(--mono);font-size:11.5px}
-td.eng{font-size:11.5px;color:var(--muted)}
-td.eng b{color:var(--fg);font-family:var(--mono);font-size:11.5px;font-weight:600}
+td.verb .v{font-family:var(--mono);font-size:11.5px}
+td.verb .l{font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:1px}
+td.eng{font-size:11px;color:var(--muted);line-height:1.35}
+td.eng b{color:var(--fg);font-family:var(--mono);font-size:11.5px}
 td.src .tag{font-size:10px}
-td.lic{font-family:var(--mono);font-size:10.5px;color:var(--muted)}
-td.use{font-size:11.5px;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+td.use{font-size:11.5px;line-height:1.4;color:var(--fg)}
+td.use .u{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .star{color:var(--primary);font-size:10px}
-/* ---------- 页脚 ---------- */
-.foot{
-  height:34px;flex:none;display:flex;align-items:center;gap:10px;padding:0 12px;
-  border-top:1px solid var(--border);background:var(--status);
-  font-size:11px;color:var(--muted);
-}
+.foot{height:34px;flex:none;display:flex;align-items:center;gap:10px;padding:0 12px;
+  border-top:1px solid var(--border);background:var(--status);font-size:11px;color:var(--muted)}
 .foot .spacer{flex:1}
-.foot .src{font-size:10.5px}
-/* ---------- toast（原型反馈） ---------- */
-.toast{
-  position:absolute;left:50%;bottom:46px;transform:translate(-50%,8px);
-  background:var(--fg);color:var(--bg);font-size:12px;padding:6px 12px;border-radius:999px;
-  opacity:0;pointer-events:none;transition:opacity .18s ease, transform .18s ease;z-index:5;
-}
+.toast{position:absolute;left:50%;bottom:46px;transform:translate(-50%,8px);background:var(--fg);
+  color:var(--bg);font-size:12px;padding:6px 12px;border-radius:999px;opacity:0;pointer-events:none;
+  transition:opacity .18s ease,transform .18s ease;z-index:5}
 .toast.on{opacity:.94;transform:translate(-50%,0)}
-@media (max-width:1240px){ .stage{zoom:.92} }
+.empty{padding:18px 14px;color:var(--muted);font-size:11.5px;line-height:1.6;border-bottom:1px solid var(--border-soft)}
 </style>
 </head>
 <body>
 
 <div class="bar">
-  <span class="label">主题
+  <span class="label">主题</span>
+  <div class="seg" id="themeSeg">
+    <button aria-pressed="true" data-theme-val="light">浅色</button>
+    <button aria-pressed="false" data-theme-val="dark">深色</button>
+  </div>
+  <span class="label">依赖视图</span>
+  <div class="seg" id="viewSeg">
+    <button aria-pressed="true" data-view="core">核心依赖</button>
+    <button aria-pressed="false" data-view="all">全部依赖</button>
+  </div>
+  <span class="label">工作树</span>
+  <div class="seg" id="dirtySeg">
+    <button aria-pressed="true" data-dirty="clean">干净</button>
+    <button aria-pressed="false" data-dirty="dirty">有改动</button>
+  </div>
+  <span class="note">原型稿（视觉示意，非权威）· 版本与许可取自 2026-11-25 仓库实测；时间戳为示意值</span>
+</div>
+
+<div class="stage">
+  <div class="app">
+    <div class="appbar">
+      <span class="logo"></span>
+      <span class="name">RdataStation</span>
+      <span class="dim">main · ade87d3a</span>
+      <span class="right"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span>
+    </div>
+
+    <div class="win">
+      <div class="wtitle">
+        <span class="ttl">版本与依赖</span>
+        <span class="tag unk">构建期锁定 + 运行时自述</span>
+        <span class="spacer"></span>
+        <div class="wbtns">
+          <button class="btn primary" id="copySummary">
+            <svg class="br" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="8" height="9" rx="1.5"/><path d="M11 3.5V3a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v7A1.5 1.5 0 0 0 4 11.5h.5"/></svg>
+            复制摘要
+          </button>
+          <button class="btn" id="copyAll">复制全部</button>
+          <button class="btn" id="closeBtn">关闭</button>
+        </div>
+      </div>
+
+      <div class="body">
+        <div class="left">
+          <div class="hero">
+            <span class="tagid" id="tagid">0.2.12+ade87d3a</span>
+            <span class="tag ok" id="treeTag">CLEAN</span>
+          </div>
+
+          <div class="alert" id="dirtyAlert" hidden>
+            <div>
+              <b>工作树有未提交改动</b>
+              这个构建不对应任何一次提交。据此得出的验证结论必须标注 -dirty，或重新编译后再验。
+            </div>
+          </div>
+
+          <div class="sec">应用身份</div>
+          <dl class="kv">
+            <dt>版本号</dt><dd class="mono">0.2.12</dd>
+            <dt>提交 · 分支</dt><dd class="mono">ade87d3a · main</dd>
+            <dt>工作树</dt><dd id="vTree">干净（与上面提交一致）</dd>
+            <dt>提交时间</dt><dd class="mono">2026-11-24 03:38:31 +08:00</dd>
+          </dl>
+
+          <div class="sec">构建环境</div>
+          <dl class="kv">
+            <dt>构建档</dt><dd>debug</dd>
+            <dt>目标平台</dt><dd class="mono">x86_64-pc-windows-msvc</dd>
+            <dt>构建时间</dt><dd class="mono">2026-11-24 23:14:02 +08:00</dd>
+            <dt>Rust 版本</dt><dd class="mono">1.98.0</dd>
+            <dt>Cargo 版本</dt><dd class="mono">1.98.0</dd>
+          </dl>
+
+          <div class="sec">运行引擎</div>
+          <dl class="kv">
+            <dt>DuckDB</dt><dd class="eng"><b>1.5.6</b><i>动态链接 · third_party/duckdb/1.5.6</i></dd>
+            <dt>SQLite</dt><dd class="eng"><b>3.51.3</b><i>bundled · libsqlite3-sys 0.38.2</i></dd>
+          </dl>
+
+          <div class="sec" style="margin-top:auto">核对要点</div>
+          <div style="font-size:11.5px;line-height:1.6;color:var(--muted)">
+            只看两行：<b style="color:var(--fg)">提交</b>与<b style="color:var(--fg)">工作树</b>。要贴给别人或记进验证记录，点右上「复制摘要」。
+          </div>
+        </div>
+
+        <div class="right">
+          <div class="tools">
+            <label class="search">
+              <svg class="br" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" style="color:var(--muted)"><circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2 14 14"/></svg>
+              <input id="q" placeholder="搜索 crate / 显示名 / 用途…" autocomplete="off">
+              <span class="hint">Ctrl+F</span>
+            </label>
+            <div class="chips" id="chips">
+              <button class="chip" aria-pressed="true" data-g="*">全部</button>
+              <button class="chip" aria-pressed="false" data-g="sql">SQL 与分析</button>
+              <button class="chip" aria-pressed="false" data-g="db">引擎 / 驱动</button>
+              <button class="chip" aria-pressed="false" data-g="ui">UI 框架</button>
+              <button class="chip" aria-pressed="false" data-g="mock">数据生成</button>
+              <button class="chip" aria-pressed="false" data-g="infra">基础设施</button>
+            </div>
+          </div>
+
+          <div class="wrap" id="wrap">
+            <table id="tblCore">
+              <colgroup>
+                <col style="width:170px"><col style="width:118px"><col style="width:170px">
+                <col style="width:96px"><col>
+              </colgroup>
+              <thead>
+                <tr>
+                  <th data-sort="name">名称</th>
+                  <th data-sort="ver">版本 · 许可</th>
+                  <th>引擎 / 上游</th>
+                  <th>来源</th>
+                  <th>用途</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr class="grp" data-grp="sql"><td colspan="5">SQL 与分析</td></tr>
+
+                <tr data-g="sql" data-s="sqlglot sqlglot-rust 语义 解析 转译 tokenizer mit">
+                  <td class="name"><div class="dn"><span class="star">★</span>sqlglot</div><div class="cn">sqlglot-rust</div></td>
+                  <td class="verb"><div class="v">0.11.2</div><div class="l">MIT</div></td>
+                  <td class="eng">—</td>
+                  <td class="src"><span class="tag unk">crates.io</span></td>
+                  <td class="use"><div class="u">语义：解析 / 转译 / tokenizer（engine::sql 唯一接入）</div></td>
+                </tr>
+                <tr data-g="sql" data-s="lax-sql 排版 lossless 空白 格式化 mit">
+                  <td class="name"><div class="dn">lax-sql</div></td>
+                  <td class="verb"><div class="v">0.3.0</div><div class="l">MIT</div></td>
+                  <td class="eng">—</td>
+                  <td class="src"><span class="tag unk">crates.io</span></td>
+                  <td class="use"><div class="u">排版：lossless 空白格式化，永不动语义</div></td>
+                </tr>
+                <tr data-g="sql" data-s="arrow recordbatch 结果集 apache apache-2.0">
+                  <td class="name"><div class="dn">arrow</div><div class="cn">arrow-rs</div></td>
+                  <td class="verb"><div class="v">58.4.0</div><div class="l">Apache-2.0</div></td>
+                  <td class="eng">—</td>
+                  <td class="src"><span class="tag unk">crates.io</span></td>
+                  <td class="use"><div class="u">结果集 RecordBatch（两端传数据）</div></td>
+                </tr>
+
+                <tr class="grp" data-grp="db"><td colspan="5">数据引擎</td></tr>
+                <tr data-g="db" data-s="duckdb 分析 引擎 动态链接 mit">
+                  <td class="name"><div class="dn"><span class="star">★</span>DuckDB</div><div class="cn">duckdb</div></td>
+                  <td class="verb"><div class="v">1.10506.1</div><div class="l">MIT</div></td>
+                  <td class="eng"><b>引擎 1.5.6</b> 动态链接 · third_party/duckdb/1.5.6</td>
+                  <td class="src"><span class="tag unk">crates.io</span></td>
+                  <td class="use"><div class="u">分析执行引擎（结果集直灌）</div></td>
+                </tr>
+                <tr data-g="db" data-s="sqlite rusqlite libsqlite3-sys 元数据 存储 bundled mit">
+                  <td class="name"><div class="dn"><span class="star">★</span>SQLite</div><div class="cn">rusqlite</div></td>
+                  <td class="verb"><div class="v">0.40.2</div><div class="l">MIT</div></td>
+                  <td class="eng"><b>引擎 3.51.3</b> bundled · libsqlite3-sys 0.38.2</td>
+                  <td class="src"><span class="tag unk">crates.io</span></td>
+                  <td class="use"><div class="u">元数据与本地存储</div></td>
+                </tr>
+
+                <tr class="grp" data-grp="db-drv"><td colspan="5">驱动</td></tr>
+                <tr data-g="db" data-s="mysql_async mysql 协议 客户端 mit apache">
+                  <td class="name"><div class="dn">mysql_async</div></td>
+                  <td class="verb"><div class="v">0.37.1</div><div class="l">MIT OR Apache-2.0</div></td>
+                  <td class="eng">—</td>
+                  <td class="src"><span class="tag unk">crates.io</span></td>
+                  <td class="use"><div class="u">MySQL 协议客户端</div></td>
+                </tr>
+                <tr data-g="db" data-s="tokio-postgres postgres pg 客户端 mit apache">
+                  <td class="name"><div class="dn">tokio-postgres</div></td>
+                  <td class="verb"><div class="v">0.7.18</div><div class="l">MIT OR Apache-2.0</div></td>
+                  <td class="eng">—</td>
+                  <td class="src"><span class="tag unk">crates.io</span></td>
+                  <td class="use"><div class="u">PostgreSQL 客户端</div></td>
+                </tr>
+
+                <tr class="grp" data-grp="ui"><td colspan="5">UI 框架</td></tr>
+                <tr data-g="ui" data-s="gpui-kit 组件 门面 apache apache-2.0">
+                  <td class="name"><div class="dn"><span class="star">★</span>GPUI-kit</div><div class="cn">gpui-kit</div></td>
+                  <td class="verb"><div class="v">0.10.0</div><div class="l">Apache-2.0</div></td>
+                  <td class="eng">features gpui-fast</td>
+                  <td class="src"><span class="tag unk">crates.io</span></td>
+                  <td class="use"><div class="u">组件门面（控件一律从此取）</div></td>
+                </tr>
+                <tr data-g="ui" data-s="gpui-base 内核 基座 vendor patch apache">
+                  <td class="name"><div class="dn">gpui-base</div></td>
+                  <td class="verb"><div class="v">0.10.0</div><div class="l">Apache-2.0</div></td>
+                  <td class="eng">—</td>
+                  <td class="src"><span class="tag vendor">vendor+patch</span></td>
+                  <td class="use"><div class="u">gpui 内核基座（含项目私有 patch）</div></td>
+                </tr>
+                <tr data-g="ui" data-s="gpui-component 控件 实现 vendor patch apache">
+                  <td class="name"><div class="dn">gpui-component</div></td>
+                  <td class="verb"><div class="v">0.10.0</div><div class="l">Apache-2.0</div></td>
+                  <td class="eng">—</td>
+                  <td class="src"><span class="tag vendor">vendor+patch</span></td>
+                  <td class="use"><div class="u">控件实现（含项目私有 patch）</div></td>
+                </tr>
+                <tr data-g="ui" data-s="gpui-pre gpui 上游 核心 pre apache">
+                  <td class="name"><div class="dn">gpui-pre</div></td>
+                  <td class="verb"><div class="v">0.3.12</div><div class="l">Apache-2.0</div></td>
+                  <td class="eng">—</td>
+                  <td class="src"><span class="tag unk">crates.io</span></td>
+                  <td class="use"><div class="u">gpui 核心运行时（pre 线；与 gpui-fast 同编，二进制不双份）</div></td>
+                </tr>
+                <tr data-g="ui" data-s="gpui-fast 渲染 内核 wgpu apache">
+                  <td class="name"><div class="dn"><span class="star">★</span>GPUI-fast</div><div class="cn">gpui-fast</div></td>
+                  <td class="verb"><div class="v">0.1.17</div><div class="l">Apache-2.0</div></td>
+                  <td class="eng">渲染内核</td>
+                  <td class="src"><span class="tag unk">crates.io</span></td>
+                  <td class="use"><div class="u">fast 线的渲染内核（Windows 需宿主提供 manifest）</div></td>
+                </tr>
+
+                <tr class="grp" data-grp="mock"><td colspan="5">数据生成</td></tr>
+                <tr data-g="mock" data-s="fake faker mock 假数据 locale mit apache">
+                  <td class="name"><div class="dn"><span class="star">★</span>Faker</div><div class="cn">fake</div></td>
+                  <td class="verb"><div class="v">5.1.0</div><div class="l">MIT OR Apache-2.0</div></td>
+                  <td class="eng">—</td>
+                  <td class="src"><span class="tag unk">crates.io</span></td>
+                  <td class="use"><div class="u">Mock 数据（zh-CN / en / ja / zh-TW / fr 多 locale）</div></td>
+                </tr>
+
+                <tr class="grp" data-grp="infra"><td colspan="5">基础设施</td></tr>
+                <tr data-g="infra" data-s="tokio 异步 运行时 mit">
+                  <td class="name"><div class="dn">tokio</div></td>
+                  <td class="verb"><div class="v">1.54.1</div><div class="l">MIT</div></td>
+                  <td class="eng">—</td>
+                  <td class="src"><span class="tag unk">crates.io</span></td>
+                  <td class="use"><div class="u">异步运行时</div></td>
+                </tr>
+                <tr data-g="infra" data-s="serde serde_json 序列化 ipc 配置 mit apache">
+                  <td class="name"><div class="dn">serde</div><div class="cn">serde_json</div></td>
+                  <td class="verb"><div class="v">1.0.229</div><div class="l">MIT OR Apache-2.0</div></td>
+                  <td class="eng">serde_json 1.0.154</td>
+                  <td class="src"><span class="tag unk">crates.io</span></td>
+                  <td class="use"><div class="u">配置与 IPC 序列化</div></td>
+                </tr>
+                <tr data-g="infra" data-s="chrono 时间 格式化 mit apache">
+                  <td class="name"><div class="dn">chrono</div></td>
+                  <td class="verb"><div class="v">0.4.45</div><div class="l">MIT OR Apache-2.0</div></td>
+                  <td class="eng">—</td>
+                  <td class="src"><span class="tag unk">crates.io</span></td>
+                  <td class="use"><div class="u">时间格式化（提交时间 / 本地时区）</div></td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div id="allView" hidden>
+              <div class="empty">
+                全量清单由 <span class="mono">Cargo.lock</span> 生成，共 <b style="color:var(--fg)">1218</b> 项，不含「用途 / 引擎」列。
+                本原型只示意前 3 行（落地时由 <span class="mono">build.rs</span> 写入全部行）。
+              </div>
+              <table>
+                <colgroup><col style="width:220px"><col style="width:120px"><col style="width:190px"><col></colgroup>
+                <thead><tr><th>crate</th><th>版本</th><th>许可</th><th>来源</th></tr></thead>
+                <tbody>
+                  <tr><td class="mono">tokio</td><td class="verb"><div class="v">1.54.1</div></td><td class="mono">MIT</td><td class="src"><span class="tag unk">crates.io</span></td></tr>
+                  <tr><td class="mono">serde</td><td class="verb"><div class="v">1.0.229</div></td><td class="mono">MIT OR Apache-2.0</td><td class="src"><span class="tag unk">crates.io</span></td></tr>
+                  <tr><td class="mono">chrono</td><td class="verb"><div class="v">0.4.45</div></td><td class="mono">MIT OR Apache-2.0</td><td class="src"><span class="tag unk">crates.io</span></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="foot">
+            <span id="count">共 16 项 · 6 组</span>
+            <span class="spacer"></span>
+            <span>版本 = 构建期锁定（Cargo.lock）· 引擎版本 = 运行时自述</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var toastTimer = null;
+  function toast(msg){
+    var t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('on');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ t.classList.remove('on'); }, 1600);
+  }
+
+  document.querySelectorAll('#themeSeg button').forEach(function(b){
+    b.addEventListener('click', function(){
+      document.querySelectorAll('#themeSeg button').forEach(function(x){ x.setAttribute('aria-pressed','false'); });
+      b.setAttribute('aria-pressed','true');
+      document.documentElement.setAttribute('data-theme', b.dataset.themeVal);
+    });
+  });
+
+  document.querySelectorAll('#dirtySeg button').forEach(function(b){
+    b.addEventListener('click', function(){
+      document.querySelectorAll('#dirtySeg button').forEach(function(x){ x.setAttribute('aria-pressed','false'); });
+      b.setAttribute('aria-pressed','true');
+      var dirty = b.dataset.dirty === 'dirty';
+      var tag = dirty ? '0.2.12+ade87d3a-dirty' : '0.2.12+ade87d3a';
+      document.getElementById('dirtyAlert').hidden = !dirty;
+      var tt = document.getElementById('treeTag');
+      tt.textContent = dirty ? 'DIRTY' : 'CLEAN';
+      tt.className = dirty ? 'tag bad' : 'tag ok';
+      document.getElementById('tagid').textContent = tag;
+      document.getElementById('vTree').textContent = dirty
+        ? '有未提交改动（与上面提交不完全一致）'
+        : '干净（与上面提交一致）';
+    });
+  });
+
+  var tbl = document.getElementById('tblCore');
+  var allView = document.getElementById('allView');
+  var count = document.getElementById('count');
+  var q = document.getElementById('q');
+  var chips = document.getElementById('chips');
+  var group = '*';
+  var view = 'core';
+
+  function apply(){
+    var kw = (q.value || '').trim().toLowerCase();
+    if (view === 'all') {
+      tbl.hidden = true; allView.hidden = false;
+      count.textContent = '共 1218 项（原型示意 3 行）';
+      return;
+    }
+    tbl.hidden = false; allView.hidden = true;
+    var rows = tbl.querySelectorAll('tbody tr');
+    var shown = 0, groupsShown = 0;
+    rows.forEach(function(tr){
+      if (tr.classList.contains('grp')) return;
+      var okG = (group === '*') || (tr.dataset.g === group);
+      var okK = !kw || (tr.dataset.s || '').indexOf(kw) >= 0;
+      tr.hidden = !(okG && okK);
+      if (!tr.hidden) shown++;
+    });
+    // 组头看自己块内的行：两个组头同属一个 chip，按 data-g 判会漏
+    tbl.querySelectorAll('tbody tr.grp').forEach(function(g){
+      var any = false, n = g.nextElementSibling;
+      while (n && !n.classList.contains('grp')) {
+        if (!n.hidden) any = true;
+        n = n.nextElementSibling;
+      }
+      g.hidden = !any;
+      if (any) groupsShown++;
+    });
+    count.textContent = shown ? ('共 ' + shown + ' 项 · ' + groupsShown + ' 组') : '无匹配项';
+  }
+
+  q.addEventListener('input', apply);
+  document.addEventListener('keydown', function(e){
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) { e.preventDefault(); q.focus(); q.select(); }
+    if (e.key === 'Escape' && q.value) { q.value = ''; apply(); }
+  });
+
+  // 列头排序：只在组内重排，组头不动（避免跨组乱序）
+  var sortKey = null, sortDir = 1;
+  var sortHead = tbl.querySelectorAll('thead th[data-sort]');
+  function sortGroups(){
+    if (!sortKey) return;
+    var tbody = tbl.querySelector('tbody');
+    tbody.querySelectorAll('tr.grp').forEach(function(g){
+      var rows = [], n = g.nextElementSibling;
+      while (n && !n.classList.contains('grp')) { rows.push(n); n = n.nextElementSibling; }
+      rows.sort(function(a, b){
+        var ka, kb;
+        if (sortKey === 'name') {
+          ka = a.querySelector('.dn').textContent.trim().toLowerCase();
+          kb = b.querySelector('.dn').textContent.trim().toLowerCase();
+        } else {
+          ka = a.querySelector('.v').textContent.trim();
+          kb = b.querySelector('.v').textContent.trim();
+        }
+        if (ka === kb) return 0;
+        return (ka < kb ? -1 : 1) * sortDir;
+      });
+      var anchor = g;
+      rows.forEach(function(r){ anchor.after(r); anchor = r; });
+    });
+  }
+  sortHead.forEach(function(th){
+    th.dataset.ind = '';
+    th.addEventListener('click', function(){
+      var key = th.dataset.sort;
+      sortDir = (sortKey === key) ? -sortDir : 1;
+      sortKey = key;
+      sortHead.forEach(function(x){ x.dataset.ind = ''; });
+      th.dataset.ind = sortDir === 1 ? '▲' : '▼';
+      sortGroups();
+      apply();
+    });
+  });
+
+  chips.querySelectorAll('.chip').forEach(function(c){
+    c.addEventListener('click', function(){
+      chips.querySelectorAll('.chip').forEach(function(x){ x.setAttribute('aria-pressed','false'); });
+      c.setAttribute('aria-pressed','true');
+      group = c.dataset.g;
+      apply();
+    });
+  });
+
+  document.querySelectorAll('#viewSeg button').forEach(function(b){
+    b.addEventListener('click', function(){
+      document.querySelectorAll('#viewSeg button').forEach(function(x){ x.setAttribute('aria-pressed','false'); });
+      b.setAttribute('aria-pressed','true');
+      view = b.dataset.view;
+      apply();
+    });
+  });
+
+  document.getElementById('copySummary').addEventListener('click', function(){
+    toast('已复制摘要（13 行纯文本，含引擎版本）');
+  });
+  document.getElementById('copyAll').addEventListener('click', function(){
+    toast('已复制全部（Markdown 表格 16 行）');
+  });
+  document.getElementById('closeBtn').addEventListener('click', function(){
+    toast('关闭窗口');
+  });
+
+  document.querySelectorAll('#tblCore td.use .u').forEach(function(el){
+    el.title = el.textContent.trim();
+  });
+
+  apply();
+})();
+</script>
+</body>
+</html>
