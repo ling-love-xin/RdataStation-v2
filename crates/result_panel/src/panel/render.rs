@@ -286,12 +286,14 @@ impl ResultPanel {
             .map(|text| {
                 let open = self.sql_popup_open;
                 let toggle_queue = self.queue.clone();
-                // 浮层里放**全文**：卡片那张只读 Textarea 的 value 就是完整 SQL
-                // （`open_sql_dialog` 每次用 `set_value` 刷新）；没有该实体时退回归一化预览。
-                let full_sql = self
-                    .sql_textarea
-                    .as_ref()
-                    .map(|ta| ta.read(cx).value().to_string())
+                // 浮层里放**全文原文**：DBeaver 浮层给的是 `viewer.getActiveQueryText()`
+                // （`ResultSetFilterPanel.java:757`）—— 未剥注释、未折叠空白的原查询；
+                // 而这一格 label 用的是 `normalize_query_preview` 归一化短文本（§44）。
+                // 故优先取 `toolbar.sql` 原文（保留换行与缩进，浮层内纵向滚动），
+                // 归一化预览只作兜底。
+                let full_sql = toolbar
+                    .sql
+                    .clone()
                     .filter(|sql| !sql.is_empty())
                     .unwrap_or_else(|| text.clone());
                 let source = self.toolbar.as_ref().and_then(|toolbar| {
