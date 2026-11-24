@@ -14,6 +14,7 @@
 //!
 //! 所有 IO 错误都在此模块转换为 CoreError，确保上下文不丢失。
 
+pub mod analysis_sources;
 pub mod auth_store;
 pub mod cache_version_migration;
 pub mod connection_draft_store;

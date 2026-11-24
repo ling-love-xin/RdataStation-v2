@@ -17,7 +17,7 @@
 //! 挂载与执行在 [`super::session`]；连接与凭据在连接体系；持久化的"哪些连接用作联邦源"
 //! 是宿主侧的事（第一期后半接）。
 
-use super::super::accel::{AccelKind, normalize_file_path, normalize_scheme, quote_literal};
+use super::super::accel::{normalize_file_path, normalize_scheme, quote_literal, AccelKind};
 
 /// 别名里不能用的名字：DuckDB 自己的 catalog、加速档的固定别名，以及**最容易被当成
 /// 连接名的 SQL 关键字**（`left` / `order` / `table` …——真机踩到过：`ATTACH … AS left`
@@ -352,6 +352,15 @@ pub fn unique_alias(base: &str, taken: &[String]) -> String {
     format!("{base}_x")
 }
 
+/// 新登记一条分析源时的**默认别名**（用户 2026-11-25 口径：第一个 —— 连接名直取，撞名加 `_2`）。
+///
+/// 组合两个已有的纯函数，不另造规则：[`sanitize_alias`] 把展示名规整成能写的别名
+/// （中文名整串折成 `db`），[`unique_alias`] 在已占用的别名里让位（`db` → `db_2`）。
+/// 登记表（`store::persistence::analysis_sources`）在写入前用它算出 `alias`。
+pub fn default_alias(name: &str, taken: &[String]) -> String {
+    unique_alias(&sanitize_alias(name), taken)
+}
+
 /// 别名能不能用（会话建之前就拦下，别让 DuckDB 报一句看不懂的语法错）
 pub fn validate_alias(alias: &str) -> Result<(), String> {
     let trimmed = alias.trim();
@@ -430,7 +439,8 @@ impl SessionSnapshot {
 mod tests {
     // 安全模式：**不通配导入**
     use super::{
-        FederatedSource, oracle_secret_from_url, sanitize_alias, unique_alias, validate_alias,
+        default_alias, oracle_secret_from_url, sanitize_alias, unique_alias, validate_alias,
+        FederatedSource,
     };
 
     #[test]
@@ -453,6 +463,32 @@ mod tests {
         let taken = vec!["orders".to_string(), "orders_2".to_string()];
         assert_eq!(unique_alias("orders", &taken), "orders_3");
         assert_eq!(unique_alias("fresh", &taken), "fresh");
+    }
+
+    #[test]
+    fn default_alias_takes_the_connection_name_and_adds_suffix_on_collision() {
+        // 第一个：连接名直取（大小写 / 符号归整）
+        assert_eq!(default_alias("Shop", &[]), "shop");
+        assert_eq!(default_alias("shop-db", &[]), "shop_db");
+        // 撞名：`_2` → `_3`
+        let taken = vec!["shop".to_string()];
+        assert_eq!(default_alias("Shop", &taken), "shop_2");
+        let taken = vec!["shop".to_string(), "shop_2".to_string()];
+        assert_eq!(default_alias("Shop", &taken), "shop_3");
+        // 中文连接名整串折成 `db`，第二、三条让位成 `db_2` / `db_3`
+        assert_eq!(default_alias("商城库", &[]), "db");
+        assert_eq!(default_alias("商城库", &["db".to_string()]), "db_2");
+        // 保留字要缀 `_src`，且同样参与撞名
+        assert_eq!(default_alias("left", &[]), "left_src");
+        assert_eq!(
+            default_alias("left", &["left_src".to_string()]),
+            "left_src_2"
+        );
+        // 生成结果一定能用（校验闸口在前，登记表不必再猜）
+        for name in ["Shop", "商城库", "left", "2orders", "a b  c"] {
+            let alias = default_alias(name, &["db".to_string(), "s2orders".to_string()]);
+            validate_alias(&alias).unwrap_or_else(|e| panic!("{name} → {alias} 不可用：{e}"));
+        }
     }
 
     #[test]
