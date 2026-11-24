@@ -3173,7 +3173,7 @@ pub fn set_selected_cell_without_scroll(&mut self, row_ix: usize, col_ix: usize,
 | 对象图标 | 数据容器节点图标，回退 `DBIcon.SQL_TEXT`（`:552-571`） | `IconName::Table2`（表） | 本仓结果恒来自一条 SQL，按 `:568-570` 应落 `SQL_TEXT`；lucide 里对应 `FileCode`，改图标属观感项，与「先对齐结构」可分开 |
 | 逐格宽高 | `computeSize` 精确到 `icon+4` / `icon+6` | Button 组件内距决定（±2-4px） | 组件没有「图标 + 固定内距」旋钮；差异在像素级，肉眼小于一条竖线 |
 | hover 语义 | 图标灰副本 ↔ 彩色、格子以 blend 90% 铺底 | `Button::ghost()` 的 hover 底色 | 要完全等价需自绘格子（违反「组件选型禁手搓」）；现有 hover 反馈语义相同 |
-| 对象格单击 | 弹对象信息浮层（内嵌只读 SQL 面板，失焦关闭） | 弹 `OpenSqlDialog` 对话框 | **仍未落地**：属「弹出窗口」类，但改成浮层会丢掉本仓卡片自带的血缘/标题（见 §47.4 的判读），待产品定；另需决定是否引入可编辑 SQL 控制台（§44.4 未决） |
+| 对象格单击 | 弹对象信息浮层（内嵌只读 SQL 面板，失焦关闭） | 受控 `Popover`：图标列 + 血缘行 + 只读等宽 SQL | **已落地（§51）**：非模态浮层由 `sql_popup_open` 驱动（`showObjectInfoPopup:942-984`）；血缘一行本仓卡片固有、按用户要求保留；模态卡片 `OpenSqlDialog` 仍留给右栏「本次重查 SQL」；Ctrl+单击开 SQL 控制台（`:947-950`）本仓无该物 |
 | 历史下拉 | 表格浮层（70/30 双列、SQL 等宽字体、`Manage Filters`、↑ 关闭） | 普通下拉菜单 | **已落地，见 §48**（残余差异登记在 §48.4） |
 | ExecutePanel 启用条件 | 文本 ≠ 当前条件才亮 | 恒可点 | **已落地，见 §49**；本表原判「本仓没有未应用草稿态」经实测**修正**：`filter_text` 确为输入框实时副本，但「落到网格」另有防抖/提交两步，故另记 `applied_filter_text` 作等价物 |
 | 工具钮图标 | ERASE / FILTER / RS_BACK / RS_FORWARD / FIND_REPLACE 五套专图 | Eraser / Funnel / ChevronLeft / ChevronRight / Search | lucide 无 `RS_BACK`/`RS_FORWARD` 等价物，方向箭头已是最接近的语义 |
@@ -3231,7 +3231,7 @@ pub fn set_selected_cell_without_scroll(&mut self, row_ix: usize, col_ix: usize,
 | ③ 重置颜色 | `hasColorOverrides()` → `ResetAllColorAction` | 不摆 | 本仓没有「列/单元格颜色覆盖」这一层，按「没有就不造」缺省 |
 | ④ 重置转换器 | `hasColumnTransformers()` → `FilterResetAllTransformersAction` | 不摆 | 同上，无转换器能力 |
 | 菜单为空的分支 | `menuManager.isEmpty()` 时整份不 add（`:1525`） | 恒非空（① 无门控） | 与 DBeaver 一致：① 本身就在 `isEmpty` 之外无条件 add，故实际永不为空 |
-| 对象格单击的行为 | 弹对象信息浮层 | 弹 `OpenSqlDialog` 卡片 | **未落地**：本仓那张卡片额外承载血缘与来源标题（卡片是「SQL 全文预览」的既有载体），改成无边框浮层会丢掉这些；是否改属产品取舍，不擅自改设计 |
+| 对象格单击的行为 | 弹对象信息浮层 | 受控 `Popover`（图标列 + 血缘行 + 只读 SQL） | **已落地（§51）**：血缘与来源标题不丢——浮层首行保留血缘；卡片 `OpenSqlDialog` 仍服务右栏「本次重查 SQL」 |
 
 ## §48 筛选历史入口：从「普通菜单」改成「浮层里的一张表」
 
@@ -3347,11 +3347,83 @@ pub fn set_selected_cell_without_scroll(&mut self, row_ix: usize, col_ix: usize,
 | 清除钮箭头菜单门控（§47） | **已落地** |
 | 历史入口 → 表格浮层（§48） | **已落地** |
 | 执行钮启用态（§49） | **已落地** |
-| 对象格单击 → 对象信息浮层 | **未落地**：改浮层会丢本仓卡片的血缘/标题，需产品决定；另 §44.4 的「双击开 SQL 控制台」在本仓无对应物 |
+| 对象格单击 → 对象信息浮层（§51） | **已落地**：非模态 `Popover`，保留血缘行 |
 | 查找钮 → `FindReplaceOverlay` 浮层 | **未落地**：本仓是工具栏下方一行（`render_find_bar` 注释已写明取舍：浮层要绝对定位覆盖网格，会把网格行列几何绑进来） |
 | 筛选条文本框的内容补全弹层 | **未落地**：`InputState` 无补全通道，等输入组件 |
 | 首格文本色 / 图标 / hover 灰↔彩 | 登记在 §46.4，未落地 |
 | 左/右侧栏规范序与出厂启用集合 | `stash@{0}` 半成品，未编译未验证 |
+
+## §51 对象格单击：模态卡片改成 DBeaver 非模态信息浮层（保留血缘行）
+
+### 51.1 DBeaver 真值
+
+`ActiveObjectPanel` 的鼠标监听挂在构造函数里（`ResultSetFilterPanel.java:924-934`）：**双击**走 `openEditorForActiveQuery()`，**单击**异步 `showObjectInfoPopup(e)`。
+
+`showObjectInfoPopup`（`:942-984`）：
+
+| 环节 | 源码 | 行为 |
+| --- | --- | --- |
+| 旧浮层 | `:943-945` | 先 `popup.dispose()` 再重造 |
+| **Ctrl+单击** | `:947-950` | `(e.stateMask & SWT.CTRL) != 0` → 不弹浮层，直接 `openEditorForActiveQuery()` |
+| 造壳 | `:952-953` | `new Shell(getShell(), SWT.ON_TOP \| SWT.RESIZE)` + `FillLayout`：**无标题栏、无边框、置顶、可缩放** |
+| 内容 | `:956` → `:728-772` | `createObjectPanel(popup)` |
+| 宽 | `:967` | `min(filterComposite宽, max(300, 内容宽 + 30))` |
+| 高 | `:968` | `min(400, max(100, 内容高 + 30))` |
+| 位置 | `:969-970` | `x = parentRect.x + e.x + 1`、`y = parentRect.y + e.y + 1`（相对**对象格**的点击点偏移一像素） |
+| 底部溢出 | `:971-973` | `y + height > 屏幕底` → `y = parentRect.y - height`（翻到上方） |
+| 关闭 | `:978-983` | 内容控件 `focusLost` → `popup.dispose()` |
+
+常量：`MIN_INFO_PANEL_WIDTH = 300`、`MIN_INFO_PANEL_HEIGHT = 100`、`MAX_INFO_PANEL_HEIGHT = 400`（`:912-914`）。
+
+`createObjectPanel`（`:728-772`）：
+
+- 布局 `GridLayout(2, false)` + `marginHeight = 0`（`:730-733`）。
+- 列 0 = 图标 `Label`：`VERTICAL_ALIGN_BEGINNING`（`:742`）、`CURSOR_HAND`（`:743`）、`mouseUp` → `openEditorForActiveQuery()`（`:744-749`）、tooltip 取自 `sql_editor_resultset_filter_panel_label`（`:741`）。
+- 列 1 = `FILL_BOTH` 的 `FillLayout` 容器（`:750-752`），内装 `UIServiceSQL.createSQLPanel(..., false, viewer.getActiveQueryText())`（`:757`）：**只读** SQL 视图（第 5 个参数 `false` = 不可编辑）；返回的 `StyledText` 即被 `:963` 拿去 `computeSize`。
+- 服务不可用时抛 `PartInitException`（`:768`），外层 `showObjectInfoPopup` 捕获后报错并 dispose（`:957-961`）。
+
+### 51.2 本仓原状
+
+`sql_chip`（`render.rs`，§44）是 `Button`，`on_click` → `ResultRequest::OpenSqlDialog`，弹**模态卡片** `render_sql_dialog`（`dialog.rs:24-135`：遮罩 + 680×480 卡片 + 标题 + 血缘 + 只读 `Textarea`）。宽度此前已按 `computeSize` 口径对齐（`max_w(relative(0.25))`）。
+
+### 51.3 本刀落地（提交 `0229299c`）
+
+| 文件 | 改动 |
+| --- | --- |
+| `crates/result_panel/src/ports.rs` | 新请求 `SetSqlPopup(bool)` |
+| `crates/result_panel/src/panel/data.rs` | 新字段 `sql_popup_open: bool` |
+| `crates/result_panel/src/panel/lifecycle.rs` | 初值 `false` |
+| `crates/result_panel/src/panel/events.rs` | 新 `set_sql_popup`（幂等 + `cx.notify()`） |
+| `crates/result_panel/src/panel/render.rs` | `sql_chip` 改受控 `Popover`（`open` ← `sql_popup_open`；`on_open_change` → `SetSqlPopup`；`anchor(TopLeft)` + `offset(px(2.))` 近似 `+1px`）；新 `render_object_info_popup` |
+| `crates/editor/src/view/host/results/dispatch.rs` | `SetSqlPopup` → `panel.set_sql_popup` 分支 |
+| `crates/result_panel/src/panel/tests.rs` | `rendered_ui_elements_survive` 7.5：浮层三态断言 |
+
+浮层结构 = 根 `h_flex`（`items_start`、`gap_2`、`min_w(18.75rem)`=300px、`max_w(40rem)`、`min_h(6.25rem)`=100px、`max_h(25rem)`=400px）→ 左：图标列（`Icon::Table2`，`flex_none`）→ 右：`v_flex`（血缘行 + 只读等宽滚动文本）。
+
+- SQL 全文来源：`sql_textarea` 的 `value()`（每处 `open_sql_dialog` 都用 `set_value` 写过完整 SQL）；没有该实体时退回归一化预览文本。
+- 血缘行文本 `来自{lineage} · {connection}`（`connection` 为空时只 `来自{lineage}`），`text_xs` + `muted_foreground` + `text_ellipsis` + 探针 `editor-result-sql-popover-lineage`。
+- **血缘行的来历**：DBeaver 的对象信息浮层里没有「血缘」这一项；本仓模态卡片额外承载血缘与来源标题。用户明确要求「保留血缘信息」，故把血缘搬进浮层首行，而不是砍掉。
+- **模态卡片保留**：右栏「本次重查 SQL」入口（`sidebars.rs:887-895` → `OpenSqlDialog`）仍在用它，且它带标题与全文滚动、SQL 可选可复制。
+
+### 51.4 差异登记
+
+| 项 | DBeaver | 本仓 | 原因 |
+| --- | --- | --- | --- |
+| 宽高上界 | 依 `filterComposite` 实测宽 / 内容 `computeSize` 动态算（`:963`、`:967-968`） | `18.75~40rem` 宽、`6.25~25rem` 高 | render 侧拿不到父容器实测宽，也没有内容的 `computeSize`（尺寸由 `Popover` 组件侧测量）：用 DBeaver 的 MIN/MAX 常量作静态上下界；`max_w(40rem)` 是经验上界，不是源码值 |
+| 定位 | `x/y = parentRect + e.x/y + 1`，底部溢出翻上方 | `anchor(TopLeft)` + `offset(px(2.))`，不做翻转 | 组件只提供四向 anchor，无「按点击点定位 + 溢出翻转」入口 |
+| Ctrl+单击 | `:947-950` → 开 SQL 编辑器 | 不做 | 本仓无 SQL 控制台（§44.4 未决） |
+| 图标列点击 | `:744-749` → `openEditorForActiveQuery()` | 只做标识 | 同上 |
+| 图标资源 | `getActiveObjectImage()`（`DBIcon.SQL_TEXT`） | `IconName::Table2` | 与对象格同一颗（§46.4 已登记观感项） |
+| SQL 可选/可复制 | `StyledText`（可选中、可复制） | 只读文本、不可选 | 同一个 `TextareaState` 若同时被浮层与模态卡片渲染会撞 `ElementId`；卡片里可选可复制 |
+| 可缩放 | `SWT.RESIZE` 可拖拽改尺寸 | 固定上下界 | `Popover` 无拖拽改尺寸入口 |
+| 血缘行 | **无此项** | 首行保留 | 用户明确要求保留（本仓卡片固有信息） |
+
+### 51.5 验证
+
+- `cargo check -p rds-result-panel` → `Finished`，**0 warning**。
+- `cargo test -p rds-result-panel --lib` → **448 passed / 0 failed**（含新 7.5 三态断言：未开不在 / 开后有浮层与 SQL / 关后消失）。
+- `cargo test -p rds-editor --lib` → **869 passed / 0 failed / 4 ignored**（`SetSqlPopup` 分支编译并回归）。
+- 目视项（浮层贴点击点、宽高上下界是否够看、失焦关、血缘行截断）按要求由用户手动确认；本刀不启动 GUI、不截图。
 
 
 
