@@ -435,6 +435,11 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
     // 文件库（sqlite / duckdb）还多一档：连上了但**没挂进分析实例**。本体路径不在
     // `loaded_files` 里就说明没挂——同样不给展开（没有表可列），只给「挂载」。
     // 挂没挂由路径判（见 [`unmounted_file_sources`]），不看连接状态：驱动能连上 ≠ 已 ATTACH。
+    //
+    // 网络连接同理（铁律 B 组第 4 条 + H 组第 37 条）：挂进分析实例的唯一凭据是**加速会话**
+    // （`accel` 按 conn_id 登记，`Collected::accel_sources` 的 `owner` 就是 conn_id）。
+    // 没有会话 = 实例里查不到它的表，展开只会得到一句报错——不如事先就说「未挂载」，
+    // 行首不给展开指示（`State::Failed` 让 `can_analyze` 变假，chevron 换空位）。
     let unmounted: Vec<(String, String)> = unmounted_file_sources(collected);
     for conn in &collected.connections {
         let connected = conn.connected;
@@ -444,6 +449,10 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             .iter()
             .find(|(row_key, _)| row_key == &key)
             .map(|(_, path)| path.clone());
+        let accel_mounted = collected
+            .accel_sources
+            .iter()
+            .any(|source| source.owner == conn.id);
         let note = match (&file_path, &not_mounted) {
             // 文件库把本体路径写在副标题上：用户要确认"挂的是哪一个文件"
             (Some(path), _) => format!("文件库 · {path}"),
@@ -453,6 +462,10 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             State::Failed("未连接 · 连上后可展开选表".to_string())
         } else if not_mounted.is_some() {
             State::Failed("未挂载 · 右键挂载后可展开选表".to_string())
+        } else if file_path.is_none() && !accel_mounted {
+            // 网络连接：没有加速会话就是没挂。展开它只会得到一句「先开本地加速」——
+            // 那不该做成一个能点开才报错的行
+            State::Failed("未挂载 · 先在这条连接上开「本地加速」，挂上后可展开选表".to_string())
         } else {
             State::Ready
         };
@@ -2168,7 +2181,7 @@ mod temp_source_tests {
             )]
         );
 
-        // 网络库没有本体路径：不进「未挂」清单，也不该被标未挂
+        // 网络库没有本体路径：不进「未挂」清单，但**挂没挂改看加速会话**（第 4 / 37 条）
         c.loaded_files.clear();
         c.connections[0].driver = "mysql".into();
         c.connections[0].database = Some("orders".into());
@@ -2177,7 +2190,29 @@ mod temp_source_tests {
             .into_iter()
             .find(|o| o.key == "conn:C_lite")
             .expect("网络源也要进源段");
-        assert!(row.can_analyze());
+        assert!(
+            !row.can_analyze(),
+            "没有加速会话 = 没挂进分析实例：行首不给展开指示"
+        );
+        assert!(row.state.label().contains("未挂载"), "{}", row.state.label());
+        assert!(
+            row.state.label().contains("本地加速"),
+            "状态字要指出去哪挂：{}",
+            row.state.label()
+        );
+
+        // 加速会话起来了（`accel_sources.owner` 就是 conn_id）→ 这才可展开
+        c.accel_sources.push(super::SessionSource {
+            owner: "C_lite".into(),
+            alias: "商城库".into(),
+            note: "MySQL · 本地加速会话".into(),
+            failed: None,
+        });
+        let row = objects(&c)
+            .into_iter()
+            .find(|o| o.key == "conn:C_lite")
+            .expect("网络源也要进源段");
+        assert!(row.can_analyze(), "挂上之后要能展开");
     }
 }
 
