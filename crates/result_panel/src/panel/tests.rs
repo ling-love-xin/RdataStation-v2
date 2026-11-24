@@ -6542,3 +6542,91 @@ fn shift_click_extends_a_rectangular_cell_range_and_paints_it(
         "焦点格由组件 overlay 画，delegate 不叠第二层"
     );
 }
+
+/// 【D10-1】正文拖拽选矩形：组件把「相对表格左上角的拖拽位置」换成 hover 格，
+/// 再当作带 Shift 的新终点（DBeaver `LightGrid.java:3539-3566`）。
+///
+/// gpui 的真实拖拽状态机不在 headless 里跑，这里喂的是同一条几何链路：
+/// 组件自己的布局快照（`debug_hit_geometry`，与 `drag_select_to` 内部同一份）
+/// → `drag_select_to` → `CellClicked{shift}` → delegate 扩矩形。锚点仍由第一次点击立。
+#[gpui_kit::test]
+fn dragging_inside_the_grid_extends_the_cell_range(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    let grid = cx.update(|_, app| panel.read(app).grid.clone());
+    // `panel_harness` 给别的用例建的是裸 `TableState`（`cell_selectable` 默认 false）；
+    // 生产里走 `grid::new_table_state`（`status.rs:488` 开 `cell_selectable`）。
+    // 本用例要验的正是「可点选格子的表上拖拽成立」，故按生产口径补上。
+    assert!(
+        cx.update(|_, app| {
+            grid.update(app, |state, _| state.cell_selectable = true);
+            grid.read(app).cell_selectable
+        }),
+        "表格必须开 cell_selectable，否则 drag_select_to 直接早退"
+    );
+
+    // 第一步：点 (0,1) 立锚点（无修饰键）
+    cx.update(|_, app| {
+        grid.update(app, |_, cx| {
+            cx.emit(gpui_kit::component::table::TableEvent::CellClicked {
+                row_ix: 0,
+                col_ix: 1,
+                modifiers: gpui_kit::Modifiers::default(),
+            })
+        })
+    });
+    cx.run_until_parked();
+
+    // 帧语义：先 refresh 再 draw，布局量（列宽/表头高/容器宽）才是真实值
+    cx.update(|window, _| window.refresh());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 用组件自己的布局快照算目标坐标（与 `drag_select_to` 内部同一份 geometry）：
+    // 第 2 行中心、第 2 个数据列中心
+    let geometry = cx.update(|_, app| grid.read(app).debug_hit_geometry(app));
+    assert!(
+        geometry.row_height > 0.0,
+        "行高必须大于 0：{geometry:?}"
+    );
+    assert!(
+        geometry.body_top > 0.0 && geometry.body_top < 200.0,
+        "表头高异常：{geometry:?}"
+    );
+    assert!(geometry.rows_count >= 2, "行数不足：{geometry:?}");
+    assert_eq!(geometry.col_widths.len(), 3, "列数不符：{geometry:?}");
+    let target_x = geometry.left_fixed_width + geometry.col_widths[1] + geometry.col_widths[2] / 2.0;
+    let target_y = geometry.body_top + geometry.row_height * 1.5;
+    // 先自证换算式：目标点必须落在 (1,2)，否则下面的断言失败原因会指错地方
+    assert_eq!(
+        gpui_kit::component::table::cell_at_point(target_x, target_y, &geometry),
+        Some((1, 2)),
+        "目标点应落在 (1,2)：{geometry:?}"
+    );
+
+    // 第二步：拖到 (1,2)
+    cx.update(|_, app| {
+        grid.update(app, |table, cx| {
+            table.drag_select_to(px(target_x), px(target_y), px(geometry.width), cx)
+        })
+    });
+    cx.run_until_parked();
+
+    // 分两层核对：① 组件自己的选中格有没有被搬到 (1,2)；② 面板订阅有没有扩矩形
+    let state_cell = cx.update(|_, app| grid.read(app).selected_cell());
+    assert_eq!(
+        state_cell,
+        Some((1, 2)),
+        "drag_select_to 应把组件选中格搬到 (1,2)（target=({target_x},{target_y})，geometry={geometry:?}）"
+    );
+
+    let range = cx.update(|_, app| {
+        grid.read(app)
+            .delegate()
+            .cell_range()
+            .expect("拖过就有矩形选区")
+    });
+    assert_eq!(range.anchor, (0, 1), "拖拽不移动锚点");
+    assert_eq!(range.focus, (1, 2), "焦点跟着拖到的格走");
+    assert_eq!(range.rows_count(), 2, "两格对角 = 2 行");
+    assert_eq!(range.data_columns(), vec![1, 2], "两格对角 = 2 个数据列");
+}

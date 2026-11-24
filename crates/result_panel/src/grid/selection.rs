@@ -168,4 +168,55 @@ mod tests {
         // 没建立矩形 → 按单格
         assert_eq!(selection_counts(None), (1, 1, 1));
     }
+
+    /// 【D10-1】拖拽选区依赖组件的坐标换算（`vendor/.../table/hit.rs::cell_at_point`）。
+    /// 这条用例把换算的全部口径钉死：表头不算格、行号槽是列 0、滚动量参与换算、
+    /// 两侧固定列不随滚动移动、越界收拢到边界。
+    #[test]
+    fn the_table_hit_test_maps_a_drag_point_to_its_cell() {
+        use gpui_kit::component::table::{cell_at_point, CellHitGeometry};
+
+        // 列 0 = 行号槽（左固定 40）、列 1/2 = 数据列（各 80）、列 3 = 右固定列 60
+        let geometry = CellHitGeometry {
+            body_top: 30.0,
+            row_height: 20.0,
+            rows_count: 10,
+            col_widths: vec![40.0, 80.0, 80.0, 60.0],
+            left_fixed_count: 1,
+            left_fixed_width: 40.0,
+            right_fixed_count: 1,
+            right_fixed_width: 60.0,
+            width: 500.0,
+            ..Default::default()
+        };
+        // 表头区域：不算格（DBeaver `getRow` 返回 -1）
+        assert_eq!(cell_at_point(50.0, 5.0, &geometry), None);
+        // 行号槽（x = 10）
+        assert_eq!(cell_at_point(10.0, 35.0, &geometry), Some((0, 0)));
+        // 第 2 行（y = 30 + 25）、第 1 个数据列（x = 40 + 10）
+        assert_eq!(cell_at_point(50.0, 55.0, &geometry), Some((1, 1)));
+        // 第 2 个数据列（可滚动区内 80..160 之间）
+        assert_eq!(cell_at_point(150.0, 35.0, &geometry), Some((0, 2)));
+        // 右固定列：贴容器右缘（x >= 500 - 60）
+        assert_eq!(cell_at_point(470.0, 35.0, &geometry), Some((0, 3)));
+
+        // 滚动量参与换算：向下滚一行 → 同样屏幕位置对应下一行；
+        // 向右滚一列 → 可滚动区首列变成原来的列 2
+        let scrolled = CellHitGeometry {
+            scroll_y: 20.0,
+            scroll_x: 100.0,
+            ..geometry.clone()
+        };
+        assert_eq!(cell_at_point(10.0, 35.0, &scrolled), Some((1, 0)));
+        assert_eq!(cell_at_point(50.0, 35.0, &scrolled), Some((1, 2)));
+
+        // 越界收拢：y 远超出底部 → 末行；x 越过可滚动区最右 → 末列
+        let no_right_fixed = CellHitGeometry {
+            right_fixed_count: 0,
+            right_fixed_width: 0.0,
+            ..geometry.clone()
+        };
+        assert_eq!(cell_at_point(50.0, 5000.0, &no_right_fixed), Some((9, 1)));
+        assert_eq!(cell_at_point(1000.0, 35.0, &no_right_fixed), Some((0, 3)));
+    }
 }
