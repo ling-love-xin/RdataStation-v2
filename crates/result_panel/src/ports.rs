@@ -67,6 +67,17 @@ pub enum ResultRequest {
     /// 【筛选条 ✕ 箭头菜单】显示全部列（对齐 DBeaver erase 箭头里的
     /// 「显示隐藏列」，`ResultSetViewer.java:1525-1545`）
     ShowAllColumns,
+    /// 【筛选条 ✕ 箭头菜单】取消所有冻结列（对齐 DBeaver erase 箭头里的
+    /// 「重置所有 pins」`FilterResetAllPinsAction`——那边 pins 就是固定列，
+    /// 实现是逐约束 `removeOption(ATTR_OPTION_PINNED)` 后重画，
+    /// `actions/FilterResetAllPinsAction.java:34-44`；本仓冻结列即同一语义）。
+    UnfreezeAllColumns,
+    /// 【筛选条 ✕ 箭头菜单】「重置所有设置」：把上面各项**各做一遍**
+    /// （对齐 `FilterResetAllSettingsAction.run`：`clearDataFilter(false)` → 有隐藏列则
+    /// `CMD_SHOW_COLUMNS` → 有颜色/转换器/pins 则各自 reset → `refreshData`，
+    /// `actions/FilterResetAllSettingsAction.java:44-63`）。
+    /// 本仓没有颜色覆盖与转换器，落 `滤清 + 排序清 + 显示全部列 + 解冻全部`。
+    ResetAllFilterSettings,
     /// 【筛选历史】从筛选条右侧的历史下拉里选了一条：回填输入框 + 立即应用。
     ///
     /// 对齐 DBeaver 的 `HistoryPanel`（`ResultSetFilterPanel.java:214`，点击弹历史表，

@@ -4590,36 +4590,56 @@ fn filter_clear_button_is_always_present_and_never_gated(
     assert_eq!(empty, filled, "词的有无不影响清除钮的可用状态");
 }
 
-/// 【2026-11-18 工具栏结构对齐 / 2026-11-20 改正】筛选条 ✕ 的箭头菜单条目（纯函数）：
+/// 【2026-11-18 工具栏结构对齐 / 2026-11-25 补齐】筛选条 ✕ 的箭头菜单条目（纯函数）：
 /// DBeaver `EraseItemListener.fillDropDownMenu`（`ResultSetViewer.java:1525-1545`）里
-/// `CMD_FILTER_CLEAR_SETTING` 是第一项且**无门控**，其后才按条件摆「显示隐藏列」等项。
-/// 本仓「能力没有就不摆」只留真有落点的两条：全清恒在，隐藏列项按需。
+/// `CMD_FILTER_CLEAR_SETTING` 是第一项且**无门控**，其后才按条件摆「显示隐藏列」、
+/// 「重置所有 pins」等项，最后在「除第一项外还有其它项」时补一条「重置所有设置」。
+/// 本仓没有颜色覆盖 / 转换器两层，其余逐条对应。
 #[test]
 fn the_erase_menu_always_offers_the_full_clear() {
     assert_eq!(
-        super::events::erase_menu_labels("", 0),
+        super::events::erase_menu_labels("", 0, 0),
         vec!["删除所有过滤 / 排序"],
-        "没词、没隐藏列时也要有全清项（它就是清除钮的主点击动作）"
+        "没词、没隐藏列、没冻结列时只有全清项（它就是清除钮的主点击动作）"
     );
     assert_eq!(
-        super::events::erase_menu_labels("   ", 0),
+        super::events::erase_menu_labels("   ", 0, 0),
         vec!["删除所有过滤 / 排序"],
         "空白筛选词也一样——全清项不看词"
     );
     assert_eq!(
-        super::events::erase_menu_labels("x", 0),
+        super::events::erase_menu_labels("x", 0, 0),
         vec!["删除所有过滤 / 排序"],
         "有词也不再单列「清除筛选词」——已并进全清（DBeaver 没有单独的窄口径项）"
     );
     assert_eq!(
-        super::events::erase_menu_labels("x", 2),
-        vec!["删除所有过滤 / 排序", "显示全部列"],
-        "有隐藏列时补「显示全部列」（hasHiddenAttributes 口径，顺序固定：全清在前）"
+        super::events::erase_menu_labels("x", 2, 0),
+        vec![
+            "删除所有过滤 / 排序",
+            "显示全部列",
+            "重置所有筛选与列设置"
+        ],
+        "有隐藏列时补「显示全部列」（hasHiddenAttributes 口径，顺序固定：全清在前），
+         并因「除第一项外还有别的」补「重置所有设置」"
     );
     assert_eq!(
-        super::events::erase_menu_labels("", 1),
-        vec!["删除所有过滤 / 排序", "显示全部列"],
-        "隐藏列项不看筛选词"
+        super::events::erase_menu_labels("", 0, 1),
+        vec![
+            "删除所有过滤 / 排序",
+            "取消所有冻结列",
+            "重置所有筛选与列设置"
+        ],
+        "有冻结列时补「取消所有冻结列」（对应 DBeaver 的 reset pins），同样补「重置所有设置」"
+    );
+    assert_eq!(
+        super::events::erase_menu_labels("", 1, 2),
+        vec![
+            "删除所有过滤 / 排序",
+            "显示全部列",
+            "取消所有冻结列",
+            "重置所有筛选与列设置"
+        ],
+        "两项都成立时按 DBeaver 顺序排，并补「重置所有设置」（门控 = 除第一项外还有别的）"
     );
 }
 

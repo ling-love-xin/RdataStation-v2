@@ -3195,20 +3195,36 @@ pub(crate) fn panel_view_item_label(
 
 /// 【筛选条 ✕ 箭头菜单】条目清单（纯函数，测试直接覆盖；`PopupMenu` 内部不可读）。
 ///
-/// 对齐 DBeaver `EraseItemListener.fillDropDownMenu`（`ResultSetViewer.java:1525-1545`）：
-/// 那边第一项恒是 `CMD_FILTER_CLEAR_SETTING`（「删除所有过滤 / 排序」），其后按条件摆
-/// 显示隐藏列 / 重置颜色 / 重置 transformers / 重置 pins，最后「全部重置」。
-/// 本仓口径「能力没有就不摆」：只留**真有落点**的两条——
-/// - `删除所有过滤 / 排序`（恒在：它就是清除钮的主点击动作，也是它的 tooltip 文案，
-///   `ResultSetFilterPanel.java:319-325`；空态下点了是 no-op，DBeaver 那边同样恒可用）
-/// - `显示全部列`（有隐藏列才摆，与列头 / 右键菜单同口径）
+/// 对齐 DBeaver `EraseItemListener.fillDropDownMenu`（`ResultSetViewer.java:1525-1545`），
+/// 逐条对应关系：
 ///
-/// `filter_text` 不再影响条目清单（原先「有词才摆『清除筛选词』」那条已并进全清），
-/// 参数保留是为了调用点不用跟着改，且将来若恢复窄口径项可直接用。
-pub(crate) fn erase_menu_labels(_filter_text: &str, hidden_columns: usize) -> Vec<&'static str> {
+/// | DBeaver 条目 | 条件 | 本仓 |
+/// | --- | --- | --- |
+/// | `CMD_FILTER_CLEAR_SETTING`（清筛选设置） | **无门控，恒第一项** | `删除所有过滤 / 排序` |
+/// | `CMD_SHOW_COLUMNS`（显示隐藏列） | `getDataFilter().hasHiddenAttributes()` | `显示全部列`（`column_hidden` 非空） |
+/// | `ResetAllColorAction`（重置颜色） | `viewer.hasColorOverrides()` | 不摆（本仓没有列颜色覆盖这一层） |
+/// | `FilterResetAllTransformersAction`（重置转换器） | `viewer.hasColumnTransformers()` | 不摆（本仓没有转换器这一层） |
+/// | `FilterResetAllPinsAction`（重置所有 pins） | `getDataFilter().hasPinnedAttributes()` | `取消所有冻结列`（`column_frozen` 非空） |
+/// | `FilterResetAllSettingsAction`（重置所有设置） | `menuManager.getSize() > 1`（即除第一项外还有别的） | `重置所有筛选与列设置`（同样条件） |
+///
+/// `filter_text` 不参与清单（DBeaver 那六项全部与输入词无关；主点击的
+/// `clearDataFilter(true)` 才是「清掉筛选词」那条），参数保留给调用点与将来窄口径项。
+pub(crate) fn erase_menu_labels(
+    _filter_text: &str,
+    hidden_columns: usize,
+    frozen_columns: usize,
+) -> Vec<&'static str> {
     let mut labels = vec!["删除所有过滤 / 排序"];
     if hidden_columns > 0 {
         labels.push("显示全部列");
+    }
+    if frozen_columns > 0 {
+        labels.push("取消所有冻结列");
+    }
+    // DBeaver 的门控是「菜单里已经不止一项了」——第一项恒在，所以「还有别的」等价于
+    // 「隐藏列或 pins 至少有一项成立」
+    if labels.len() > 1 {
+        labels.push("重置所有筛选与列设置");
     }
     labels
 }

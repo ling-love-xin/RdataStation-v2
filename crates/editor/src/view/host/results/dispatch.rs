@@ -411,6 +411,41 @@ impl EditorHostPanel {
                     .update(cx, |panel, cx| panel.snapshot_column_layout(cx));
                 self.result_panel.update(cx, |_, cx| cx.notify());
             }
+            // 【筛选条 ✕ 箭头菜单】「取消所有冻结列」（DBeaver「重置所有 pins」的对应物：
+            // 逐约束 `removeOption(ATTR_OPTION_PINNED)`，`FilterResetAllPinsAction.java:34-44`）：
+            // 清 delegate 的冻结集合，再照 `ShowAllColumns` 同一条路子刷新 + 快照落盘
+            ResultRequest::UnfreezeAllColumns => {
+                let grid = self.grid.clone();
+                let changed = grid.update(cx, |table, cx| {
+                    let changed = table.delegate_mut().unfreeze_all_columns();
+                    if changed {
+                        table.refresh(cx);
+                    }
+                    changed
+                });
+                if changed {
+                    self.result_panel
+                        .update(cx, |panel, cx| panel.snapshot_column_layout(cx));
+                    self.result_panel.update(cx, |_, cx| cx.notify());
+                }
+            }
+            // 【筛选条 ✕ 箭头菜单】「重置所有筛选与列设置」：对齐
+            // `FilterResetAllSettingsAction.run`（`actions/FilterResetAllSettingsAction.java:44-63`）
+            // ——清筛选 → 有隐藏列就显示全部列 → 有 pins 就重置 pins（颜色 / 转换器本仓没有）。
+            // 清筛选这一步带输入框回填，走宿主窗口转手；列级两步直接改 delegate
+            ResultRequest::ResetAllFilterSettings => {
+                self.clear_filter_and_ordering_via_window(cx);
+                let grid = self.grid.clone();
+                grid.update(cx, |table, cx| {
+                    let delegate = table.delegate_mut();
+                    delegate.show_all_columns();
+                    delegate.unfreeze_all_columns();
+                    table.refresh(cx);
+                });
+                self.result_panel
+                    .update(cx, |panel, cx| panel.snapshot_column_layout(cx));
+                self.result_panel.update(cx, |_, cx| cx.notify());
+            }
             // 【呈现】显示方式（网格 / 文本）：纯面板状态，宿主只转发。
             // 【第 60 批】切完移交焦点：文本态下网格卸载、焦点会退化到窗口根，
             // 面板级 `Ctrl+反引号` 就切不回来（目标句柄见 `presentation_focus_target`）。

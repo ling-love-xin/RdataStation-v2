@@ -895,6 +895,17 @@ impl ResultGridDelegate {
         self.frozen.sort_unstable();
     }
 
+    /// 【筛选条 ✕ 箭头菜单】取消所有冻结列（DBeaver「重置所有 pins」的对应物：
+    /// 逐约束 `removeOption(ATTR_OPTION_PINNED)`，`FilterResetAllPinsAction.java:34-44`）。
+    /// 返回是否真的动过——调用方据此决定要不要刷新 / 落盘。
+    pub fn unfreeze_all_columns(&mut self) -> bool {
+        if self.frozen.is_empty() {
+            return false;
+        }
+        self.frozen.clear();
+        true
+    }
+
     /// 【列布局落盘】注入动作队列（面板接线时调用一次）：列头菜单 / 列头右键的「冻结」
     /// 经它交回宿主分派——UI 回调里直接改 delegate 就没有落库触发点。
     pub fn set_action_queue(&mut self, queue: crate::ports::ResultActionQueue) {
