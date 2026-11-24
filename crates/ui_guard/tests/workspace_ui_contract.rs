@@ -303,7 +303,7 @@ fn theme_asset_colors_only_use_schema_keys() {
     let keys: HashSet<String> = schema_color_keys(&root).into_iter().collect();
     assert_eq!(
         keys.len(),
-        141,
+        143,
         "ThemeConfigColors 键数变了：gpui-kit 升级了？升级后请重跑 tools/gen_theme_keys.py"
     );
 

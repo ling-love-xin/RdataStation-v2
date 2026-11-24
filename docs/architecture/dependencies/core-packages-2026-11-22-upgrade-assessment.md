@@ -275,6 +275,15 @@ python -c "..."   # 对比两版 table/state.rs 的 set_selected_row 函数体
 
 **结论（可复用）**：跨大版本 vendor patch 的主线是三方合并，锚点法只能当兜底。
 
+**2026-11-25 新增私有 patch（升级后新增，非重打）**：为「面板工具栏统一」加两个主题键，上游 0.10.0 没有：
+
+| 文件 | 改动 |
+| --- | --- |
+| `vendor/gpui-component/src/theme/theme_color.rs` | `ThemeColor` 加 `border_variant: Hsla`（`border` 后）、`toolbar_background: Hsla`（`title_bar_border` 后）；`define_theme_tokens!` 同步加同名 token |
+| `vendor/gpui-component/src/theme/schema.rs` | `ThemeConfigColors` 加 `#[serde(rename = "border.variant")]` / `#[serde(rename = "toolbar.background")]`；apply 段加 `apply_color!(border_variant, fallback = self.border)` 与 `apply_background_color!(toolbar_background, fallback = tokens.title_bar)` |
+
+`ThemeColor` 是 `#[derive(Default)] #[non_exhaustive]`、全仓无字面量构造，加字段零编译负担；`DEFAULT_THEME_COLORS` 由 `default-theme.json` + `apply_config` 生成，不需要改常量。语义对齐 Zed `crates/theme/src/styles/default_colors.rs`（`border_variant` = neutral step_5、`toolbar_background` = neutral step_1；fallback_themes 里 `toolbar_background = editor`），取值复用本仓现有色板：`border.variant` = `sidebar.border`（light `#E7E7E7` / dark `#2B2B2B`）、`toolbar.background` = `title_bar`/`tab_bar` 档（light `#F8F8F8` / dark `#181818`）。键数 141 → **143**，`theme-keys.json`、`rds-theme.json`、8 个出厂包、`ui_guard` 守卫与 `rds-app` 的 `theme_pack` 断言全部同步。
+
 ### 11.4 编译验证阶梯（含一次环境级阻塞的根因）
 
 1. 首次 `cargo check -p gpui-base` 报 `LNK1104 无法打开 ...\.rds\tmp\lnk{GUID}`。

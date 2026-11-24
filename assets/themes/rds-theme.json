@@ -3,7 +3,7 @@
   "name": "RdataStation",
   "author": "RDS",
   "url": "https://rds.local",
-  "$comment": "全量 token 版（140/140）。品牌珊瑚色明度下压一档以通过 WCAG AA；明暗两套语义色统一为『实心底 + 高对比文字』；list/table active 与 selection 按 schema 的 clamp_alpha 上限（0.2/0.3）给值。规范见 docs/architecture/theme/theme-tokens-complete.md",
+  "$comment": "全量 token 版（143/143）。品牌珊瑚色明度下压一档以通过 WCAG AA；明暗两套语义色统一为『实心底 + 高对比文字』；list/table active 与 selection 按 schema 的 clamp_alpha 上限（0.2/0.3）给值。2026-11-25 补齐 `border.variant`（弱分隔线）与 `toolbar.background`（工具栏/面板头底色）两键——对应 Zed 的 `border_variant` / `toolbar_background`，取值复用现有色板（sidebar.border / title_bar 档），未新造色。规范见 docs/architecture/theme/theme-tokens-complete.md",
   "themes": [
     {
       "name": "RDS Light",
@@ -16,6 +16,7 @@
         "background": "#FFFFFF",
         "foreground": "#333333",
         "border": "#D4D4D4",
+        "border.variant": "#E7E7E7",
         "input.border": "#B0B0B0",
         "caret": "#BC5340",
         "selection.background": "#ADD6FF4D",
@@ -36,6 +37,7 @@
         "sidebar.primary.foreground": "#FFFFFF",
 
         "title_bar.background": "#F8F8F8",
+        "toolbar.background": "#F8F8F8",
         "title_bar.border": "#D4D4D4",
         "status_bar.background": "#F3F3F3",
         "status_bar.border": "#D4D4D4",
@@ -60,6 +62,7 @@
         "list.active.border": "#BC5340",
         "list.even.background": "#FAFAFA",
         "list.head.background": "#FAFAFA",
+        "list.highlight.foreground": "#2563EB",
 
         "table.background": "#FFFFFF",
         "table.hover.background": "#F0F0F0",
@@ -224,6 +227,7 @@
         "background": "#1F1F1F",
         "foreground": "#CCCCCC",
         "border": "#3C3C3C",
+        "border.variant": "#2B2B2B",
         "input.border": "#4F4F4F",
         "caret": "#E8846F",
         "selection.background": "#264F784D",
@@ -244,6 +248,7 @@
         "sidebar.primary.foreground": "#1E1E1E",
 
         "title_bar.background": "#181818",
+        "toolbar.background": "#181818",
         "title_bar.border": "#2B2B2B",
         "status_bar.background": "#181818",
         "status_bar.border": "#2B2B2B",
@@ -268,6 +273,7 @@
         "list.active.border": "#E8846F",
         "list.even.background": "#252526CC",
         "list.head.background": "#252526CC",
+        "list.highlight.foreground": "#3794FF",
 
         "table.background": "#1F1F1F",
         "table.hover.background": "#2A2D2E",

@@ -3,7 +3,7 @@
 //! 「包」= 一个 Light + 一个 Dark + 一套产品 token，落在 `assets/themes/packs/<id>/`：
 //!
 //! ```text
-//! assets/themes/packs/<id>/theme.json           # themes: [Light, Dark]（140 键）
+//! assets/themes/packs/<id>/theme.json           # themes: [Light, Dark]（143 键）
 //! assets/themes/packs/<id>/product-tokens.json  # light / dark 各 13 个产品角色
 //! ```
 //!
@@ -147,7 +147,8 @@ mod tests {
             assert_eq!(dark.font_size, Some(16.0), "包 {id} Dark 字号不对");
             assert!(light.name.starts_with("RDS "), "包 {id} 命名缺 RDS 前缀");
 
-            // 键数：140 色 token（与现役资产同口径）。
+            // 键数：143 色 token（与现役资产同口径；141 = 0.10 schema，+2 = 本仓
+            // `border.variant` / `toolbar.background` patch）。
             for mode in ["light", "dark"] {
                 let raw = std::fs::read_to_string(pack.theme_file()).unwrap();
                 let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
@@ -157,7 +158,7 @@ mod tests {
                     .find(|t| t["mode"] == mode)
                     .unwrap_or_else(|| panic!("包 {id} 缺 {mode}"));
                 let colors = me["colors"].as_object().unwrap();
-                assert_eq!(colors.len(), 140, "包 {id} {mode} 色 token 不是 140");
+                assert_eq!(colors.len(), 143, "包 {id} {mode} 色 token 不是 143");
             }
 
             let pt = pack.product_tokens_file();

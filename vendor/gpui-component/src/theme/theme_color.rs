@@ -69,6 +69,13 @@ pub struct ThemeColor {
     pub background: Hsla,
     /// Default border color
     pub border: Hsla,
+    /// 更弱一档的分隔线（面板内分隔 / 工具栏下缘 / 组内分块）。
+    ///
+    /// 对应 `zed-1.29.3` 的 `border_variant`（`crates/theme/src/styles/default_colors.rs:56`）：
+    /// 同色相、更低对比，用来区分「面板内的分隔线」与「面板之间的分隔线」。
+    /// 上游 0.10.0 无此键，属本仓 vendor patch（记录见
+    /// `docs/architecture/dependencies/core-packages-2026-11-22-upgrade-assessment.md` §11.3）。
+    pub border_variant: Hsla,
     /// Default Button background color.
     pub button: Hsla,
     /// Default Button active background color.
@@ -299,6 +306,11 @@ pub struct ThemeColor {
     pub title_bar: Hsla,
     /// TitleBar border color.
     pub title_bar_border: Hsla,
+    /// 工具栏 / 面板头的底色。
+    ///
+    /// 对应 `zed-1.29.3` 的 `toolbar_background`（同文件 `:91`）：比 `background` 更「组件档」，
+    /// 让面板头与内容区在视觉上分开，而不是把面板头当成内容的一部分。上游 0.10.0 无此键（同上 patch）。
+    pub toolbar_background: Hsla,
     /// StatusBar background color, use for the bottom status bar.
     pub status_bar: Hsla,
     /// StatusBar border color.
@@ -412,6 +424,7 @@ define_theme_tokens! {
     accordion,
     background,
     border,
+    border_variant,
     button,
     button_active,
     button_foreground,
@@ -527,6 +540,7 @@ define_theme_tokens! {
     table_row_border,
     title_bar,
     title_bar_border,
+    toolbar_background,
     status_bar,
     status_bar_border,
     warning,

@@ -9,8 +9,8 @@
   docs/architecture/theme/palette-candidates/<id>-product-tokens.json 该包的产品语义 token
 
 设计与口径：
-- 角色 → 140 键的映射是本文件 KEY_ROLES 中的单表；键名集合与顺序取自现役
-  assets/themes/rds-theme.json（140/140，键名合法性由 tools/audit_theme_packs.py 对照 schema 校验）。
+- 角色 → 143 键的映射是本文件 KEY_ROLES 中的单表；键名集合与顺序取自现役
+  assets/themes/rds-theme.json（143/143，键名合法性由 tools/audit_theme_packs.py 对照 schema 校验）。
 - 由主色 / 灰阶派生出来的键（button 系列、scrollbar、base.* light 变体、语法补充名）都在
   derived() 里显式推导，不写死色值。
 - 语法高亮补充名取 chart 系列色时，若在编辑器底上不足 4.5:1，按 2% 步长向对比方向微调，
@@ -32,13 +32,15 @@ _spec.loader.exec_module(gpo)
 
 mix, alpha, ratio = gpo.mix, gpo.alpha, gpo.ratio
 
-# ===== 角色 → 140 键映射（键名 / 顺序取自现役 rds-theme.json）=====
+# ===== 角色 → 143 键映射（键名 / 顺序取自现役 rds-theme.json）=====
 
 KEY_ROLES = {
     # 基础
     "background": "content",
     "foreground": "fg",
     "border": "border",
+    # 面板内分隔线 / 工具栏下缘：比 `border` 弱一档（角色 = sidebar.border 同档的 row_border）
+    "border.variant": "row_border",
     "input.border": "input_border",
     "caret": "accent",
     "selection.background": "selection",
@@ -58,6 +60,8 @@ KEY_ROLES = {
     "sidebar.primary.foreground": "accent_on",
     "title_bar.background": "chrome",
     "title_bar.border": "border",
+    # 工具栏 / 面板头底色：与标题条同档（chrome）
+    "toolbar.background": "chrome",
     "status_bar.background": "status",
     "status_bar.border": "border",
     "tab.background": "chrome",
@@ -80,6 +84,9 @@ KEY_ROLES = {
     "list.active.border": "accent",
     "list.even.background": "zebra",
     "list.head.background": "zebra",
+    # 列表高亮（搜索命中）前景：schema 的 fallback 就是 `blue`（schema.rs 的
+    # `apply_color!(list_highlight_foreground, fallback = self.blue)`），这里显式取同一档。
+    "list.highlight.foreground": "base_blue",
     "table.background": "content",
     "table.hover.background": "hover",
     "table.active.background": "soft",
@@ -337,7 +344,7 @@ def build_pack(scheme):
         "url": "https://rds.local",
         "$comment": (
             f"候选主题包「{scheme['cn']} {scheme['name']}」：一 Light + 一 Dark + 一套产品 token。"
-            "由 tools/gen_theme_packs.py 从 docs/architecture/theme/palette-options.md 的色板角色展开为 140 键；"
+            "由 tools/gen_theme_packs.py 从 docs/architecture/theme/palette-options.md 的色板角色展开为 143 键；"
             "对比度由 tools/audit_theme_packs.py 校验。运行时副本在 assets/themes/packs/<id>/（子目录，"
             "不会被 ThemeRegistry 自动注册），用环境变量 RDS_THEME_PACK=<id> 启用。"
         ),
@@ -376,7 +383,7 @@ def main():
         (adir / "theme.json").write_text(theme_txt, encoding="utf-8")
         (adir / "product-tokens.json").write_text(prod_txt, encoding="utf-8")
 
-        print(f"{scheme['id']:15s} 140键 {n_keys}  产品角色 {len(product_json['light'])}"
+        print(f"{scheme['id']:15s} {n_keys}键  产品角色 {len(product_json['light'])}"
               f"  -> docs/{p1.name} + assets/themes/packs/{scheme['id']}/")
     if ADJUST_LOG:
         print("\n语法补充名对比度微调（chart 色 -> 达标色）:")

@@ -8,7 +8,7 @@
 PRODUCT_PAIRS / HIGHLIGHT_NAMES / ratio，保证与现役资产审计完全同源（那边改口径这里自动跟上）。
 
 检查项（每个包 × Light/Dark）:
-  1. 140 键覆盖：缺键 / schema 不接受的未知键
+  1. 143 键覆盖：缺键 / schema 不接受的未知键
   2. 对比度：theme_audit.PAIRS（52 对，正文 4.5 / 非文本 3）
   3. 产品 token：13 角色齐全 + PRODUCT_PAIRS（9 对，按包内产品 token 合成背景）
   4. 语法：41 个合法名覆盖（点号名可回退前缀）+ 每个带 color 的条目对比度
@@ -182,7 +182,7 @@ def main():
             continue
         check_pack(tp, pp)
 
-    print(f"{'包':16s} {'140键':9s} {'主题PAIRS':10s} {'产品PAIRS':9s} {'语法未覆盖':9s} {'语法不达标':9s}")
+    print(f"{'包':16s} {'143键':9s} {'主题PAIRS':10s} {'产品PAIRS':9s} {'语法未覆盖':9s} {'语法不达标':9s}")
     for r in rows:
         print(f"{r['pack']:16s} {r['keys']:9s} {r['pairs']:^10d} {r['product']:^9d} "
               f"{r['syn_uncovered']:^9d} {r['syn_fail']:^9d}")

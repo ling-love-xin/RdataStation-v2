@@ -280,6 +280,9 @@ pub struct ThemeConfigColors {
     /// Default border color
     #[serde(rename = "border")]
     pub border: Option<SharedString>,
+    /// 更弱一档的分隔线（面板内分隔 / 工具栏下缘 / 组内分块）。Zed 的 `border_variant`。
+    #[serde(rename = "border.variant")]
+    pub border_variant: Option<SharedString>,
     /// Default Button background color.
     #[serde(rename = "button.background")]
     pub button: Option<SharedString>,
@@ -628,6 +631,9 @@ pub struct ThemeConfigColors {
     /// TitleBar border color.
     #[serde(rename = "title_bar.border")]
     pub title_bar_border: Option<SharedString>,
+    /// 工具栏 / 面板头底色（Zed 的 `toolbar_background`）：比 `background` 更「组件档」。
+    #[serde(rename = "toolbar.background")]
+    pub toolbar_background: Option<SharedString>,
     /// StatusBar background color, use for the bottom status bar.
     #[serde(rename = "status_bar.background")]
     pub status_bar: Option<SharedString>,
@@ -792,6 +798,8 @@ impl ThemeColor {
         );
 
         apply_color!(border);
+        // 弱分隔线：没给值就退化为主边框（不引入新观感），给了值才弱于 `border`。
+        apply_color!(border_variant, fallback = self.border);
         apply_color!(foreground);
         apply_color!(input, fallback = self.border);
         apply_background_color!(muted);
@@ -1037,6 +1045,8 @@ impl ThemeColor {
         apply_color!(status_bar_border, fallback = self.title_bar_border);
         apply_background_color!(overlay);
         apply_color!(window_border, fallback = self.border);
+        // 工具栏 / 面板头底色：没给值就跟标题条同档（与 `status_bar` 的 fallback 口径一致）。
+        apply_background_color!(toolbar_background, fallback = tokens.title_bar);
 
         // TODO: Apply default fallback colors to highlight.
 

@@ -1,6 +1,6 @@
 # RdataStation 主题色板候选（8 套 · 明暗）
 
-> 状态：**候选方案，未落地**（不改 `assets/themes/`）。生成于 2026-11-15 15:19，由 `python tools/gen_palette_options.py` 输出本文件与 `palette-options.html`。
+> 状态：**候选方案，未落地**（不改 `assets/themes/`）。生成于 2026-11-25 05:47，由 `python tools/gen_palette_options.py` 输出本文件与 `palette-options.html`。
 > 色值权威性：本文件是候选色板的唯一来源；采纳某套后再并入 `theme-tokens-complete.md` 与 `rds-theme.json`。
 > 验证口径：WCAG 2.x，正文/控件文字 ≥ 4.5:1、非文本 ≥ 3:1；单套单模式 58 项，8 套 × 明暗共 928 项，**928 项达标**。
 
@@ -23,7 +23,7 @@
 
 ### 2.1 珊瑚石墨 `Coral Graphite` — 接现役品牌 · 中性骨架
 
-中性灰骨架 + coral 品牌。沿用现役 140 token 的分层，把 chrome 与内容区再拉开半档，状态栏保持中性。主色在现役 #BC5340 基础上再压 2.5%（#B94F3B）：现役值放在 #F7F7F8 的侧栏底上只有 4.41:1。
+中性灰骨架 + coral 品牌。沿用现役 143 token 的分层，把 chrome 与内容区再拉开半档，状态栏保持中性。主色在现役 #BC5340 基础上再压 2.5%（#B94F3B）：现役值放在 #F7F7F8 的侧栏底上只有 4.41:1。
 
 **适用**：默认候选：分层与现役资产一致，迁移成本最低，图标 / 启动图等品牌资产不用动；唯一改动是主色压暗一档，肉眼几乎不可分辨。
 
@@ -809,11 +809,11 @@
 
 **对比度**：明暗各 58 项全部达标（明细见 `palette-options.html`）。
 
-## 4. 角色 → 140 token 落地映射
+## 4. 角色 → 143 token 落地映射
 
 采纳任意一套时，按这张表把角色值铺到 `assets/themes/rds-theme.json`；新增/改色后跑 `python tools/theme_audit.py` 与 `cargo test -p rds-ui-guard`。
 
-| 角色（本文件） | 对应 140 token 键 | 备注 |
+| 角色（本文件） | 对应 143 token 键 | 备注 |
 | --- | --- | --- |
 | `content` | `background` / `list.background` / `table.background` / `highlight.editor.background` | 编辑区 = 列表底 = 表格底，同值 |
 | `chrome` | `sidebar.background` / `title_bar.background` / `tab.background` / `tab_bar.background` + 产品 token `activity_bar.background` | 外层 chrome 同底，靠激活条/图标区分 |
@@ -837,7 +837,7 @@
 | `search` / `quick` | 产品 token `search.match.background` / `quick_open.group.header` | 命中底 / 分组头 |
 | `overlay` | `overlay` | 模态遮罩 + Quick Open 遮罩共用（无 scrim 键） |
 
-### 4.1 已生成的包文件（140 键，可直接落地）
+### 4.1 已生成的包文件（143 键，可直接落地）
 
 每个包 = 一个 Light + 一个 Dark + 一套产品 token（13 角色）。同一份内容有两处副本：`docs/architecture/theme/palette-candidates/`（可读复审用）与 `assets/themes/packs/<id>/`（运行时目录，`theme.json` + `product-tokens.json`）：
 
@@ -856,9 +856,9 @@
 
 ### 4.2 生成与校验
 
-- 生成：`python tools/gen_theme_packs.py` —— 从本文件 `SCHEMES` 的角色值展开 140 键 + 13 个产品角色，派生的键（button 系列、scrollbar、`base.*` light 变体、语法补充名）在脚本里显式推导。
+- 生成：`python tools/gen_theme_packs.py` —— 从本文件 `SCHEMES` 的角色值展开 143 键 + 13 个产品角色，派生的键（button 系列、scrollbar、`base.*` light 变体、语法补充名）在脚本里显式推导。
 - 校验：`python tools/audit_theme_packs.py` —— 复用 `tools/theme_audit.py` 的 schema 键集合 / 52 对 / 9 对产品 / 41 个语法名口径，逐包逐模式跑；另打印「分层强度」ΔL（信息项，用来抓按钮 hover 这类「按下去没反应」的表面）。
-- 当前结果：**8 包 × 明暗全部通过**（140/140 键、主题对照 0 不达标、产品对照 0 不达标、41 个语法名 0 未覆盖、语法着色 0 不达标）。
+- 当前结果：**8 包 × 明暗全部通过**（143/143 键、主题对照 0 不达标、产品对照 0 不达标、41 个语法名 0 未覆盖、语法着色 0 不达标）。
 - 分层强度里仍有 27 处 ΔL < 0.004，全部是有意为之：浅色「弹层 = 内容区」（靠阴影/描边抬升）、深色「状态栏 = chrome」（VS Code 同口径）、深色「内容区 vs chrome / 斑马行」只差 0.002–0.004（近黑墨那套为 0，页面层级全靠描边，是 §2 明说的代价）。
 
 ### 4.3 与现役资产的有意差异
@@ -906,7 +906,7 @@
 - 为什么必须「主题 + 产品 token 一起换」：产品 token 只按明暗模式解析、没有主题维度，
   只换主题会让活动栏底色 / Quick Open 组头 / 搜索命中底 / 结果集四槽残留默认珊瑚包的值。
 - 自检：`cargo test -p rds-settings theme_pack`（值域：默认 `rds`、未登记 id 被拒）+
-  `cargo test -p rds-app theme_pack`（每个出厂包都能读出 Light+Dark、字号 16、140 键、13 个产品角色）。
+  `cargo test -p rds-app theme_pack`（每个出厂包都能读出 Light+Dark、字号 16、143 键、13 个产品角色）。
 - **还没做的**：真机四组合全界面人工过目（明暗 × 两包，表格页 / 结果集 / 编辑器）；上第 3 个包不需要先升级
   `ProductTokenSet`（它整表替换、换包不残留，源码依据见 `theme-tokens-complete.md` §9），但要在设置页多给一档并补一次审计。
 
@@ -924,11 +924,11 @@
 6. **内置首选 → 青花**：蓝白最克制，与“数据库工作台”的冷静气质不冲突；info 换青瓷绿后语义仍清楚。
 7. **要辨识度 → 朱砂**：一眼记住，但朱砂与危险红同族，danger 已压到绛色；表单校验、删除确认这类场景要真机确认能分辨。
 8. **要“深色为主 + 金线点睛” → 墨金**：warning 已改成赭橙；金只做强调，不要铺大面积（大面积金色会压掉数据本身的颜色区分度）。
-9. **不建议一次内置 8 套**：每多一包 QA 成本 ×N（140 键 × 2 模式 + 41 个语法名 + 11 个产品角色 + 真机截图），且会稀释品牌识别；先上 2 包，其余留在可选包。
+9. **不建议一次内置 8 套**：每多一包 QA 成本 ×N（143 键 × 2 模式 + 41 个语法名 + 11 个产品角色 + 真机截图），且会稀释品牌识别；先上 2 包，其余留在可选包。
 
 ## 7. 验证与边界
 
-- 两层校验：色卡页按**角色口径**验 58 项/模式（正文、次要文字、表头、主色三态、语义四色三态、图表 5 系列、涨跌、产品槽 6 个、选中态合成、语法 6 个代表名）；`audit_theme_packs.py` 按**包文件口径**再验 140/140 覆盖、52 对主题对比度、9 对产品对比度、41 个语法名覆盖与着色对比度。
+- 两层校验：色卡页按**角色口径**验 58 项/模式（正文、次要文字、表头、主色三态、语义四色三态、图表 5 系列、涨跌、产品槽 6 个、选中态合成、语法 6 个代表名）；`audit_theme_packs.py` 按**包文件口径**再验 143/143 覆盖、52 对主题对比度、9 对产品对比度、41 个语法名覆盖与着色对比度。
 - 选中底 / 文本选区按 `clamp_alpha` 上限（0.2 / 0.3）给值，超限会被 schema 静默压缩。
 - **真机核验（2026-11-13 已做一半）**：`cargo build -p rds-app` 后直接跑 `target/debug/rds-app.exe`（dev 期资源目录落在仓库 `assets/`），设置页「外观 → 主题方案」可见 `RDS 经典` / `青花` 两档；点「青花」后界面即时重绘为青花配色、`target/debug/config/settings.json` 落盘 `"theme_pack": "qinghua"`；再点「深色」界面转暗（实测内容区像素 `#1A232E`，是青花暗色的靛蓝底，不是 RDS Dark 的中性 `#1E1E1E`）。截图存 `.rds/tmp/palette-lab/app_*.png`。**仍需人工过目**：明暗 × 两包的四组合全界面（表格页 / 结果集 / 编辑器）。
 - **未做的**：真机四组合全界面人工过目（明暗 × 两包，表格页 / 结果集 / 编辑器）；主题包的更换只在单进程内即时生效，回滚 = 再选回 `rds`。加第 3 个包**不需要**升级 `ProductTokenSet`（`light`/`dark` 单表、每次整表替换，换包不残留；源码依据见 `theme-tokens-complete.md` §9）。

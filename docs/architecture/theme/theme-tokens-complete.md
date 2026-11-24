@@ -1,19 +1,36 @@
 # RdataStation 全量主题色板（RDS Light / RDS Dark）
 
-> 状态：**已落地** · 资产 `assets/themes/rds-theme.json`（明暗各 140 个已配 token / schema 现有 141 键）· 校验脚本 `tools/theme_audit.py` · 预览页生成 `tools/gen_theme_preview.py`
+> 状态：**已落地** · 资产 `assets/themes/rds-theme.json`（明暗各 143 个 token 全配 / schema 现有 143 键）· 校验脚本 `tools/theme_audit.py` · 预览页生成 `tools/gen_theme_preview.py`
 > 技术栈：**gpui-kit 0.10.0**（2026-11-22 由 0.9.x 升级），字段名与 JSON 键名逐项对齐 `vendor/gpui-component/src/theme/schema.rs::ThemeConfigColors`
 > 本文件是**色值权威来源**；`theme-design.md` 保留设计意图说明，凡与本文件冲突以本文件为准。
 
-> **2026-11-22 勘误（gpui-kit 0.10.0 升级）**：`ThemeConfigColors` 键数 **140 → 141**，
+> **2026-11-25 勘误（本仓 vendor patch，现行口径）**：`ThemeConfigColors` **141 → 143**。
+> 上游 0.10.0 只有 141 键，本仓为「面板工具栏统一」在
+> `vendor/gpui-component/src/theme/theme_color.rs`（`ThemeColor` + `define_theme_tokens!`）与
+> `theme/schema.rs`（`ThemeConfigColors` + apply 宏）各加两个字段（patch 记录见
+> `docs/architecture/dependencies/core-packages-2026-11-22-upgrade-assessment.md` §11.3 末段）：
+> - **`border.variant`** —— 弱边框（对齐 Zed `border_variant`）：light `#E7E7E7` / dark `#2B2B2B`，
+>   取现有 `sidebar.border` 档（不造新色）；schema fallback = `border`。
+> - **`toolbar.background`** —— 工具栏 / 面板头底色（对齐 Zed `toolbar_background`）：
+>   light `#F8F8F8` / dark `#181818`（与 `title_bar` / `tab_bar` 同档）；schema fallback = `title_bar.background`。
+> - 顺带补齐 0.10 遗留的 **`list.highlight.foreground`**（light `#2563EB` / dark `#3794FF`，取各自 `base.blue`），
+>   即上一段勘误里「未赋值、走上游默认」的那一键，现已明确上值。
+>
+> 现状：schema 143 / `assets/themes/theme-keys.json` 143 / `rds-theme.json` 明暗各 143 / 8 个出厂包各 143；
+> `python tools/theme_audit.py` 与 `python tools/audit_theme_packs.py` 均 0 不达标；
+> `crates/ui_guard/tests/workspace_ui_contract.rs` 与 `crates/app/src/theme_pack.rs` 的键数断言同步为 143。
+
+> **2026-11-22 勘误（gpui-kit 0.10.0 升级，历史）**：`ThemeConfigColors` 键数 **140 → 141**，
 > 新增键 **`list.highlight.foreground`**（列表高亮行的前景色）。实测 `python tools/theme_audit.py`：
 > `[schema] 可配键总数: 141`，RDS Light / RDS Dark 均「已定义 140 / 141，缺失 1：`list.highlight.foreground`，未知键 0」。
 >
 > 因此：
-> - 下文所有「140/140」「140 键」表述的真实含义是**当时 schema 的全部键**，现在等价于「141 键中的 140 个」；
+> - 下文所有「140/140」「140 键」表述的真实含义是**当时 schema 的全部键**，现在等价于「143 键中的 140 个」；
 > - `assets/themes/theme-keys.json` 已由 `python tools/gen_theme_keys.py` 重建为 **141 键**（启动期键名白名单），
 >   `crates/ui_guard/tests/workspace_ui_contract.rs` 的守卫常量同步为 141；
 > - `assets/themes/rds-theme.json` **没有**给第 141 键赋值 —— 未赋值即走上游默认色。要不要为 RDS Light/Dark 各配一个值，
 >   属设计决策（会改变列表高亮的观感），登记在 `docs/architecture/dependencies/core-packages-2026-11-22-upgrade-assessment.md` §11.6-2 / §11.7-4。
+>   （该决策已于 2026-11-25 落到上段：已配 `#2563EB` / `#3794FF`。）
 
 ---
 
@@ -69,7 +86,7 @@
 
 ---
 
-## 4. 全量 Token 对照表（140 键）
+## 4. 全量 Token 对照表（143 键）
 
 ### 4.1 基础 · 文本 · 链接
 
@@ -78,6 +95,7 @@
 | `background` | `#FFFFFF` | `#1F1F1F` |
 | `foreground` | `#333333` | `#CCCCCC` |
 | `border` | `#D4D4D4` | `#3C3C3C` |
+| `border.variant` | `#E7E7E7` | `#2B2B2B` |
 | `input.border` | `#B0B0B0` | `#4F4F4F` |
 | `caret` | `#BC5340` | `#E8846F` |
 | `selection.background` | `#ADD6FF4D` | `#264F784D` |
@@ -104,6 +122,7 @@
 | `sidebar.primary.background` | `#BC5340` | `#E8846F` |
 | `sidebar.primary.foreground` | `#FFFFFF` | `#1E1E1E` |
 | `title_bar.background` / `.border` | `#F8F8F8` / `#D4D4D4` | `#181818` / `#2B2B2B` |
+| `toolbar.background` | `#F8F8F8` | `#181818` |
 | `status_bar.background` / `.border` | `#F3F3F3` / `#D4D4D4` | `#181818` / `#2B2B2B` |
 | `tab_bar.background` | `#F8F8F8` | `#181818` |
 | `tab_bar.segmented.background` | `#F3F3F3` | `#252526` |
@@ -309,9 +328,9 @@ cargo test -p rds-ui-guard                       # 全工作区守门（4 项，
 
 判定标准：
 
-- token 覆盖 **140/140**，未知键 0
+- token 覆盖 **143/143**，未知键 0
 - 对比度：正文/控件文字 ≥ 4.5:1，大文字与图形 ≥ 3:1，全部配对 0 不达标
-- 产品语义角色（`product-tokens.json`，9 个 × 明暗）对比度一并校验——它们**不在** 140 键内，容易漏
+- 产品语义角色（`product-tokens.json`，9 个 × 明暗）对比度一并校验——它们**不在** 143 键内，容易漏
 - 语法高亮：41 个合法名全覆盖（含前缀回退）、0 非法键、代码文字对 `editor.background` 达标
 - `list.active` / `table.active` 的 alpha ≤ 0.2、`selection` ≤ 0.3（超出会被 schema 的 `clamp_alpha` 静默压缩，表现为"选中态看不见"）
 - 视图代码零裸 hex（契约 2），新增颜色一律先加 token 再消费
@@ -350,7 +369,7 @@ cargo test -p rds-ui-guard                       # 全工作区守门（4 项，
 4. **`StatusBar` 文字色** = `muted_foreground`，见 §6。
 5. 主题切换：`Ctrl+Shift+L` 或设置 → 外观；资产热更新由 `ThemeRegistry::watch_dir` 负责，改 JSON 无需重编译即可看效果。
 6. **`overlay` 一键两用**（模态遮罩 / Quick Open 遮罩），0.8.1 无 `scrim` 键可拆档，见 §4.1。
-7. **产品语义 token 独立于 140 键**：9 个角色在 `assets/themes/product-tokens.json` 由 `workbench_shell`
+7. **产品语义 token 独立于 143 键**：9 个角色在 `assets/themes/product-tokens.json` 由 `workbench_shell`
    单独加载为 GPUI global；该文件缺失 = 整块回退标准字段，且**不在**主题覆盖率检查范围内。
 8. **键名写错是静默失败**：`ThemeConfigColors` 无 `deny_unknown_fields`，未知键被忽略后该字段回退默认色。
    防法：启动期 `assets/themes/theme-keys.json` 比对（stderr 告警）+ `cargo test -p rds-ui-guard` 编译期校验。
@@ -360,7 +379,7 @@ cargo test -p rds-ui-guard                       # 全工作区守门（4 项，
 
 ## 9. 主题方案（包）
 
-一包 = 一个 Light + 一个 Dark（各 140 键）+ 一套产品语义 token（light/dark 各 13 角色）。
+一包 = 一个 Light + 一个 Dark（各 143 键）+ 一套产品语义 token（light/dark 各 13 角色）。
 
 **目录与注册**
 
@@ -403,4 +422,4 @@ python tools/audit_theme_packs.py                                               
 ```
 
 两套口径同源（后者直接 import 前者的 schema 键集合 / 52 对 PAIRS / 9 对产品 / 41 个语法名），不另立标准；
-包级审计额外验 140 键覆盖、跨包主题名不重复、以及「分层强度」ΔL 信息表。
+包级审计额外验 143 键覆盖、跨包主题名不重复、以及「分层强度」ΔL 信息表。

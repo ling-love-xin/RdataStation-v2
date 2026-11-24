@@ -1,6 +1,6 @@
 # RdataStation 主题系统说明
 
-> 本文档是 RdataStation-v2 的主题系统权威说明。基于 **gpui-kit 0.10.0** 的 `ThemeConfigColors` 系统（0.10.0 起 **141 键**，较 0.9.x 新增 `list.highlight.foreground`；本文其他小节里出现的 0.8.1 / 140 键口径属历史记录，键数现状见 `docs/architecture/theme/theme-tokens-complete.md` 顶部勘误）。
+> 本文档是 RdataStation-v2 的主题系统权威说明。基于 **gpui-kit 0.10.0** 的 `ThemeConfigColors` 系统（上游 0.10.0 **141 键**，较 0.9.x 新增 `list.highlight.foreground`；**本仓另有 2 个 vendor patch 键** `border.variant` / `toolbar.background`，现行 **143 键** —— 见 `docs/architecture/theme/theme-tokens-complete.md` 顶部 2026-11-25 勘误与 `core-packages-2026-11-22-upgrade-assessment.md` §11.3 末段。本文其他小节里出现的 0.8.1 / 140 键口径属历史记录）。
 
 ---
 

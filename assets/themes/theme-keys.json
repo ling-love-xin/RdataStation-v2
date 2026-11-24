@@ -1,7 +1,7 @@
 {
   "$comment": "由 tools/gen_theme_keys.py 从 vendor/gpui-component/src/theme/schema.rs 生成，请勿手改。主题 JSON 的 colors 里出现本清单之外的键会被 serde 忽略并静默回退默认色。",
   "source": "vendor/gpui-component/src/theme/schema.rs (pub struct ThemeConfigColors)",
-  "count": 141,
+  "count": 143,
   "keys": [
     "accent.background",
     "accent.foreground",
@@ -20,6 +20,7 @@
     "base.yellow",
     "base.yellow.light",
     "border",
+    "border.variant",
     "button.active.background",
     "button.background",
     "button.danger.active.background",
@@ -139,6 +140,7 @@
     "table.row.border",
     "title_bar.background",
     "title_bar.border",
+    "toolbar.background",
     "warning.active.background",
     "warning.background",
     "warning.foreground",

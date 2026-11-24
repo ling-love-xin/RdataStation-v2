@@ -64,8 +64,8 @@
 <body>
 <h1>RdataStation 主题色板候选 · 8 套（明 / 暗）</h1>
 <p class="sub">
-  由 <code>tools/gen_palette_options.py</code> 生成（2026-11-15 15:19）—— 色值与对比度同源，改色后重跑即可。<br>
-  角色口径对齐 <code>assets/themes/rds-theme.json</code> 的 140 token 语义切片；对比度按 WCAG 2.x（正文 4.5:1、非文本 3:1），
+  由 <code>tools/gen_palette_options.py</code> 生成（2026-11-25 05:47）—— 色值与对比度同源，改色后重跑即可。<br>
+  角色口径对齐 <code>assets/themes/rds-theme.json</code> 的 143 token 语义切片；对比度按 WCAG 2.x（正文 4.5:1、非文本 3:1），
   与 <code>tools/theme_audit.py</code> 同算法。合计 928 项配对，928 项达标。
 </p>
 <table class="sum">
@@ -76,7 +76,7 @@
 <div class="scheme">
   <div class="scheme-head"><h2>珊瑚石墨</h2><span style="font-size:12px;color:#bdbdbd">Coral Graphite</span>
     <span class="tag">接现役品牌 · 中性骨架</span><span class="id">coral-graphite</span></div>
-  <div class="pos">中性灰骨架 + coral 品牌。沿用现役 140 token 的分层，把 chrome 与内容区再拉开半档，状态栏保持中性。主色在现役 #BC5340 基础上再压 2.5%（#B94F3B）：现役值放在 #F7F7F8 的侧栏底上只有 4.41:1。</div>
+  <div class="pos">中性灰骨架 + coral 品牌。沿用现役 143 token 的分层，把 chrome 与内容区再拉开半档，状态栏保持中性。主色在现役 #BC5340 基础上再压 2.5%（#B94F3B）：现役值放在 #F7F7F8 的侧栏底上只有 4.41:1。</div>
   <div class="fit">默认候选：分层与现役资产一致，迁移成本最低，图标 / 启动图等品牌资产不用动；唯一改动是主色压暗一档，肉眼几乎不可分辨。</div>
   <div class="cols">
 <div class="panel" style="background:#FFFFFF;border-color:#D5D5D8">
@@ -934,7 +934,7 @@
   用来看 chrome 与内容区的分档、选中态、表头与斑马纹是否成立；色块区是可直接抄用的角色值。<br>
   选中底（α 0.2）与文本选区（α 0.3）是按 gpui-kit <code>clamp_alpha</code> 上限给的，超过会被静默压缩，表现为「选中看不见」。<br>
   语义色是「实心底 + 高对比文字」：浅色模式深底白字、深色模式亮底极深字，与现役资产同口径。<br>
-  落地：每套已展开成 140 键的包文件（<code>docs/architecture/theme/palette-candidates/</code>，主题 + 产品 token 成对），
+  落地：每套已展开成 143 键的包文件（<code>docs/architecture/theme/palette-candidates/</code>，主题 + 产品 token 成对），
   由 <code>tools/gen_theme_packs.py</code> 生成、<code>tools/audit_theme_packs.py</code> 校验（8 包 × 明暗 0 不达标）。
 </p>
 </body>

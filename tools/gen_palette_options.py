@@ -70,7 +70,7 @@ def over(fg, bg):
 
 # ===== 候选色板 =====
 #
-# 角色口径（对应 140 token 的语义切片，见文档 §落地映射）：
+# 角色口径（对应 143 token 的语义切片，见文档 §落地映射）：
 #   content 内容区 / chrome 外层 chrome / popover 弹层 / status 状态栏 / group 分组容器
 #   head 表头 / zebra 斑马行 / hover 悬停行
 #   fg 正文 / muted 次要文字 / subtle 占位 / head_fg 表头文字
@@ -87,7 +87,7 @@ SCHEMES = [
         "name": "Coral Graphite",
         "cn": "珊瑚石墨",
         "tag": "接现役品牌 · 中性骨架",
-        "position": "中性灰骨架 + coral 品牌。沿用现役 140 token 的分层，把 chrome 与内容区再拉开半档，状态栏保持中性。主色在现役 #BC5340 基础上再压 2.5%（#B94F3B）：现役值放在 #F7F7F8 的侧栏底上只有 4.41:1。",
+        "position": "中性灰骨架 + coral 品牌。沿用现役 143 token 的分层，把 chrome 与内容区再拉开半档，状态栏保持中性。主色在现役 #BC5340 基础上再压 2.5%（#B94F3B）：现役值放在 #F7F7F8 的侧栏底上只有 4.41:1。",
         "fit": "默认候选：分层与现役资产一致，迁移成本最低，图标 / 启动图等品牌资产不用动；唯一改动是主色压暗一档，肉眼几乎不可分辨。",
         "light": {
             "content": "#FFFFFF", "chrome": "#F7F7F8", "status": "#F2F2F3",
@@ -816,7 +816,7 @@ def build_html():
 <h1>RdataStation 主题色板候选 · {len(SCHEMES)} 套（明 / 暗）</h1>
 <p class="sub">
   由 <code>tools/gen_palette_options.py</code> 生成（{now}）—— 色值与对比度同源，改色后重跑即可。<br>
-  角色口径对齐 <code>assets/themes/rds-theme.json</code> 的 140 token 语义切片；对比度按 WCAG 2.x（正文 4.5:1、非文本 3:1），
+  角色口径对齐 <code>assets/themes/rds-theme.json</code> 的 143 token 语义切片；对比度按 WCAG 2.x（正文 4.5:1、非文本 3:1），
   与 <code>tools/theme_audit.py</code> 同算法。合计 {total_checks} 项配对，{total_checks - total_fail} 项达标。
 </p>
 <table class="sum">
@@ -829,7 +829,7 @@ def build_html():
   用来看 chrome 与内容区的分档、选中态、表头与斑马纹是否成立；色块区是可直接抄用的角色值。<br>
   选中底（α 0.2）与文本选区（α 0.3）是按 gpui-kit <code>clamp_alpha</code> 上限给的，超过会被静默压缩，表现为「选中看不见」。<br>
   语义色是「实心底 + 高对比文字」：浅色模式深底白字、深色模式亮底极深字，与现役资产同口径。<br>
-  落地：每套已展开成 140 键的包文件（<code>docs/architecture/theme/palette-candidates/</code>，主题 + 产品 token 成对），
+  落地：每套已展开成 143 键的包文件（<code>docs/architecture/theme/palette-candidates/</code>，主题 + 产品 token 成对），
   由 <code>tools/gen_theme_packs.py</code> 生成、<code>tools/audit_theme_packs.py</code> 校验（8 包 × 明暗 0 不达标）。
 </p>
 </body>
@@ -840,7 +840,7 @@ def build_html():
 
 # ===== Markdown =====
 
-MAPPING = """| 角色（本文件） | 对应 140 token 键 | 备注 |
+MAPPING = """| 角色（本文件） | 对应 143 token 键 | 备注 |
 | --- | --- | --- |
 | `content` | `background` / `list.background` / `table.background` / `highlight.editor.background` | 编辑区 = 列表底 = 表格底，同值 |
 | `chrome` | `sidebar.background` / `title_bar.background` / `tab.background` / `tab_bar.background` + 产品 token `activity_bar.background` | 外层 chrome 同底，靠激活条/图标区分 |
@@ -893,7 +893,7 @@ BUILTIN_NOTE = """> 三条都是本机源码实测（2026-11-12），不是推�
 - 为什么必须「主题 + 产品 token 一起换」：产品 token 只按明暗模式解析、没有主题维度，
   只换主题会让活动栏底色 / Quick Open 组头 / 搜索命中底 / 结果集四槽残留默认珊瑚包的值。
 - 自检：`cargo test -p rds-settings theme_pack`（值域：默认 `rds`、未登记 id 被拒）+
-  `cargo test -p rds-app theme_pack`（每个出厂包都能读出 Light+Dark、字号 16、140 键、13 个产品角色）。
+  `cargo test -p rds-app theme_pack`（每个出厂包都能读出 Light+Dark、字号 16、143 键、13 个产品角色）。
 - **还没做的**：真机四组合全界面人工过目（明暗 × 两包，表格页 / 结果集 / 编辑器）；上第 3 个包不需要先升级
   `ProductTokenSet`（它整表替换、换包不残留，源码依据见 `theme-tokens-complete.md` §9），但要在设置页多给一档并补一次审计。
 """
@@ -953,12 +953,12 @@ def build_md(total_checks, total_fail):
                 lines.append(f"**对比度**：明暗各 {per_mode} 项全部达标（明细见 `palette-options.html`）。\n")
         sec += 1
 
-    lines.append(f"## {sec}. 角色 → 140 token 落地映射\n")
+    lines.append(f"## {sec}. 角色 → 143 token 落地映射\n")
     lines.append("采纳任意一套时，按这张表把角色值铺到 `assets/themes/rds-theme.json`；"
                  "新增/改色后跑 `python tools/theme_audit.py` 与 `cargo test -p rds-ui-guard`。\n")
     lines.append(MAPPING + "\n")
 
-    lines.append(f"### {sec}.1 已生成的包文件（140 键，可直接落地）\n")
+    lines.append(f"### {sec}.1 已生成的包文件（143 键，可直接落地）\n")
     lines.append("每个包 = 一个 Light + 一个 Dark + 一套产品 token（13 角色）。同一份内容有两处副本："
                  "`docs/architecture/theme/palette-candidates/`（可读复审用）与 "
                  "`assets/themes/packs/<id>/`（运行时目录，`theme.json` + `product-tokens.json`）：\n")
@@ -973,12 +973,12 @@ def build_md(total_checks, total_fail):
                  "启用方式见 §5「怎么切换」。\n")
 
     lines.append(f"### {sec}.2 生成与校验\n")
-    lines.append("- 生成：`python tools/gen_theme_packs.py` —— 从本文件 `SCHEMES` 的角色值展开 140 键 + 13 个产品角色，"
+    lines.append("- 生成：`python tools/gen_theme_packs.py` —— 从本文件 `SCHEMES` 的角色值展开 143 键 + 13 个产品角色，"
                  "派生的键（button 系列、scrollbar、`base.*` light 变体、语法补充名）在脚本里显式推导。")
     lines.append("- 校验：`python tools/audit_theme_packs.py` —— 复用 `tools/theme_audit.py` 的 schema 键集合 / 52 对 / "
                  "9 对产品 / 41 个语法名口径，逐包逐模式跑；另打印「分层强度」ΔL（信息项，用来抓按钮 hover 这类"
                  "「按下去没反应」的表面）。")
-    lines.append("- 当前结果：**8 包 × 明暗全部通过**（140/140 键、主题对照 0 不达标、产品对照 0 不达标、"
+    lines.append("- 当前结果：**8 包 × 明暗全部通过**（143/143 键、主题对照 0 不达标、产品对照 0 不达标、"
                  "41 个语法名 0 未覆盖、语法着色 0 不达标）。")
     lines.append("- 分层强度里仍有 27 处 ΔL < 0.004，全部是有意为之：浅色「弹层 = 内容区」（靠阴影/描边抬升）、"
                  "深色「状态栏 = chrome」（VS Code 同口径）、深色「内容区 vs chrome / 斑马行」只差 0.002–0.004"
@@ -1019,14 +1019,14 @@ def build_md(total_checks, total_fail):
                  "表单校验、删除确认这类场景要真机确认能分辨。")
     lines.append("8. **要“深色为主 + 金线点睛” → 墨金**：warning 已改成赭橙；"
                  "金只做强调，不要铺大面积（大面积金色会压掉数据本身的颜色区分度）。")
-    lines.append("9. **不建议一次内置 8 套**：每多一包 QA 成本 ×N（140 键 × 2 模式 + 41 个语法名 + 11 个产品角色 + 真机截图），"
+    lines.append("9. **不建议一次内置 8 套**：每多一包 QA 成本 ×N（143 键 × 2 模式 + 41 个语法名 + 11 个产品角色 + 真机截图），"
                  "且会稀释品牌识别；先上 2 包，其余留在可选包。\n")
 
     sec += 1
     lines.append(f"## {sec}. 验证与边界\n")
     lines.append(f"- 两层校验：色卡页按**角色口径**验 {per_mode} 项/模式（正文、次要文字、表头、主色三态、"
                  "语义四色三态、图表 5 系列、涨跌、产品槽 6 个、选中态合成、语法 6 个代表名）；"
-                 "`audit_theme_packs.py` 按**包文件口径**再验 140/140 覆盖、52 对主题对比度、9 对产品对比度、"
+                 "`audit_theme_packs.py` 按**包文件口径**再验 143/143 覆盖、52 对主题对比度、9 对产品对比度、"
                  "41 个语法名覆盖与着色对比度。")
     lines.append("- 选中底 / 文本选区按 `clamp_alpha` 上限（0.2 / 0.3）给值，超限会被 schema 静默压缩。")
     lines.append("- **真机核验（2026-11-13 已做一半）**：`cargo build -p rds-app` 后直接跑 `target/debug/rds-app.exe`"
