@@ -229,6 +229,39 @@ impl DataObjectsTab {
         self.refresh(cx);
     }
 
+    /// 删掉**一张**临时表（单行右键「清理这张表…」）。
+    ///
+    /// 与 [`Self::clear_temp_objects`] 的分工：那个是工具栏的全清（删掉清单里所有
+    /// 结果集 / 载入），这个是"只删这一张"——用户常常只想丢掉一份载入的副本，
+    /// 不该为此把别人的结果集一起清掉。来源仍由 [`data_objects::temp_source_for`]
+    /// 按前缀认（`drop_temp_table` 会再校验一次，传错来源直接拒）。
+    pub(crate) fn clear_one(&mut self, table: &str, cx: &mut Context<Self>) {
+        let Some(source) = data_objects::temp_source_for(table) else {
+            self.note = Some(PanelNote::error(format!(
+                "清理 {table}：认不出这是哪一档临时表（只认结果集 / 载入）"
+            )));
+            cx.notify();
+            return;
+        };
+        let outcome = engine::duckdb::DuckDBManager::global()
+            .lock()
+            .map_err(|error| format!("拿不到进程库锁：{error}"))
+            .and_then(|guard| {
+                engine::duckdb::temp_table::drop_temp_table(&guard, source, table)
+                    .map_err(|error| error.to_string())
+            });
+        match outcome {
+            Ok(()) => {
+                self.note = Some(PanelNote::info(format!("已清理 {table}")));
+                self.shared.mark_data_objects_dirty(cx);
+            }
+            Err(reason) => {
+                self.note = Some(PanelNote::error(format!("清理 {table} 失败：{reason}")));
+            }
+        }
+        self.refresh(cx);
+    }
+
     /// 收起 / 展开一段（段头 caret 回调）
     fn toggle_group(&mut self, group: Group, cx: &mut Context<Self>) {
         if let Some(index) = self.collapsed.iter().position(|item| item == &group) {
@@ -1093,6 +1126,9 @@ impl DataObjectsTab {
                 .map(str::to_string);
             let persist_target = data_objects::can_persist(object)
                 .then(|| (object.name.clone(), data_objects::persist_label(&object.name)));
+            // 单行的「清理这张表」：结果集 / 载入 都是会话级占用（`can_clear`）。
+            // 工具栏那颗是「全清」——为删一张副本把别的结果集一起清掉，是这把按钮的粗口
+            let clear_target = data_objects::can_clear(object).then(|| object.name.clone());
             // 缺扩展的行：与其只标个警告，给一条能走的路（跳插件管理）。
             // 只给**会话源**（联邦挂载失败）——源库连接没连上不是缺扩展，给「装扩展」是误导
             let install_button = if object.can_analyze() || !object.key.starts_with("session:") {
@@ -1251,6 +1287,9 @@ impl DataObjectsTab {
                         let usable = object.can_analyze();
                         let register_target = register_target.clone();
                         let persist_target = persist_target.clone();
+                        let clear_target = clear_target.clone();
+                        // 单行清理要在确认框的回调里更新面板：把实体句柄带进菜单闭包
+                        let entity_menu = entity.clone();
                         // 属性窗口要整行快照：必须先克隆到闭包外。`object` 是借来的引用，
                         // 在菜单闭包里 `object.clone()` 只会克隆那个引用，闭包就不满足 'static
                         let props_object = (*object).clone();
@@ -1366,6 +1405,33 @@ impl DataObjectsTab {
                                             &table_label,
                                             cx,
                                         );
+                                    },
+                                ));
+                            }
+                            // 单行清理（结果集 / 载入）：只删这一张，不牵连同段别的临时表。
+                            // 破坏性动作照旧过确认框，文案说清「删了要重跑 / 重新载入」。
+                            if let Some(table) = clear_target.clone() {
+                                let entity = entity_menu.clone();
+                                menu = menu.item(PopupMenuItem::new(tr("清理这张表…")).on_click(
+                                    move |_, window, cx| {
+                                        let entity = entity.clone();
+                                        let table = table.clone();
+                                        window.open_alert_dialog(cx, move |alert, _window, _cx| {
+                                            let entity = entity.clone();
+                                            let table = table.clone();
+                                            alert
+                                                .confirm()
+                                                .title(tr("清理这张表"))
+                                                .description(format!(
+                                                    "将从进程内存里删掉 {table}：删了要重跑 / 重新载入才有。想留就先「升级为资产」或「归档到分析库」。确定继续？"
+                                                ))
+                                                .on_ok(move |_window, _cx, cx| {
+                                                    entity.update(cx, |tab, cx| {
+                                                        tab.clear_one(&table, cx);
+                                                    });
+                                                    true
+                                                })
+                                        });
                                     },
                                 ));
                             }
