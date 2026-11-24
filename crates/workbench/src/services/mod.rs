@@ -46,6 +46,8 @@ pub mod nav_runtime;
 pub mod persist_jobs;
 /// 源表「载入内存」通道（worker 线程 + 按任务号认领的回执；铁律 H 组第 35 条）
 pub mod load_jobs;
+/// 源表「归档到分析库」通道（worker 线程 + 按任务号认领的回执 + 登记资产；铁律 H 组第 35 条前半）
+pub mod archive_jobs;
 /// 工作台「业务数据概览」计数（连接 / 项目元数据 / 洞察画像 / 分析库表；见 panels/overview.rs）
 pub mod overview;
 pub mod project_session;

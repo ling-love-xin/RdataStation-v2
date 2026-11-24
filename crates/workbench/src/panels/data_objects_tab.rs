@@ -365,18 +365,54 @@ impl DataObjectsTab {
     /// 载入的搬运在 worker 线程（[`crate::services::load_jobs`]）；这里只等**自己那一次**
     /// 的回执（按任务号认领，连点两次也不会拿错），说完 + 标脏就结束，不常驻。
     /// 不并进宿主泵：那是导出回执的队列，两条队列混住会让"谁取走"变成两处都要知道的事。
-    fn watch_load(&mut self, job: u64, cx: &mut Context<Self>) {
+    pub(crate) fn watch_load(&mut self, job: u64, cx: &mut Context<Self>) {
+        self.watch_job(job, crate::services::load_jobs::take_for, cx);
+    }
+
+    /// 「归档到分析库」回执的一次性小泵（第 35 条前半 / 第 25 条）。
+    ///
+    /// 归档成功 → 项目分析库多一张持久表、资产列表多一条，两处清单都过期：
+    /// 除了标脏数据对象，还要让导航缓存失效（新表在导航的「项目分析库」下也要出现）。
+    pub(crate) fn watch_archive(&mut self, job: u64, cx: &mut Context<Self>) {
         let executor = cx.background_executor().clone();
         cx.spawn(async move |this, cx| {
             loop {
                 executor.timer(std::time::Duration::from_millis(200)).await;
-                let Some((note, ok)) = crate::services::load_jobs::take_for(job) else {
+                let Some((note, ok)) = crate::services::archive_jobs::take_for(job) else {
                     continue;
                 };
                 let _ = this.update(cx, |tab, cx| {
                     if ok {
                         tab.shared.say(note, cx);
-                        // 载入成功 → 表段多一行：清单过期，下一次重绘重取
+                        tab.shared.invalidate_nav_cache();
+                        tab.shared.mark_data_objects_dirty(cx);
+                    } else {
+                        tab.shared.say_error(note, cx);
+                    }
+                });
+                return;
+            }
+        })
+        .detach();
+    }
+
+    /// 载入 / 归档共用的一次性回执泵：按任务号认领，说完 + 标脏就结束，不常驻。
+    fn watch_job(
+        &mut self,
+        job: u64,
+        take: fn(u64) -> Option<(String, bool)>,
+        cx: &mut Context<Self>,
+    ) {
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            loop {
+                executor.timer(std::time::Duration::from_millis(200)).await;
+                let Some((note, ok)) = take(job) else {
+                    continue;
+                };
+                let _ = this.update(cx, |tab, cx| {
+                    if ok {
+                        tab.shared.say(note, cx);
                         tab.shared.mark_data_objects_dirty(cx);
                     } else {
                         tab.shared.say_error(note, cx);
@@ -1885,29 +1921,55 @@ fn source_leaf_row(
         let shared = shared.clone();
         base.context_menu(move |menu, _window, _cx| {
             let mut menu = menu;
-            let qualified = qualified.clone();
-            let table_name_for_job = table_name.clone();
-            let table_name_for_note = table_name.clone();
-            let source = source.clone();
-            let source_name = source_name.clone();
-            let entity = entity.clone();
-            let shared = shared.clone();
-            menu = menu.item(PopupMenuItem::new("载入内存…").on_click(
-                move |_, _, cx| {
-                    // 名字用 `<源>_<表>`：临时表名的尺子只留 ASCII，中文会折成下划线，
-                    // 回执里显示的是**实际落下的表名**（`landed`），不是用户看到的这张表名
-                    let description = format!("{source_name}_{table_name_for_job}");
-                    let job = crate::services::load_jobs::start(
-                        source.clone(),
-                        source_name.clone(),
-                        table_name_for_note.clone(),
-                        qualified.clone(),
-                        description,
-                    );
-                    shared.say(format!("正在载入「{table_name_for_note}」…"), cx);
-                    entity.update(cx, |tab, cx| tab.watch_load(job, cx));
-                },
-            ));
+            // 归档（第 35 条前半）：先问表名（撞名要用户改），再进 worker。
+            {
+                let qualified = qualified.clone();
+                let table_name = table_name.clone();
+                let source = source.clone();
+                let source_name = source_name.clone();
+                let entity = entity.clone();
+                let shared = shared.clone();
+                menu = menu.item(PopupMenuItem::new("归档到分析库…").on_click(
+                    move |_, window, cx| {
+                        crate::components::archive_dialog::open_archive_dialog(
+                            shared.clone(),
+                            entity.clone(),
+                            source.clone(),
+                            source_name.clone(),
+                            table_name.clone(),
+                            qualified.clone(),
+                            window,
+                            cx,
+                        );
+                    },
+                ));
+            }
+            // 载入（第 35 条后半）：一键落到 `tmp_l_`，不征询名字（会话级、不登记）。
+            {
+                let qualified = qualified.clone();
+                let table_name_for_job = table_name.clone();
+                let table_name_for_note = table_name.clone();
+                let source = source.clone();
+                let source_name = source_name.clone();
+                let entity = entity.clone();
+                let shared = shared.clone();
+                menu = menu.item(PopupMenuItem::new("载入内存…").on_click(
+                    move |_, _, cx| {
+                        // 名字用 `<源>_<表>`：临时表名的尺子只留 ASCII，中文会折成下划线，
+                        // 回执里显示的是**实际落下的表名**（`landed`），不是用户看到的这张表名
+                        let description = format!("{source_name}_{table_name_for_job}");
+                        let job = crate::services::load_jobs::start(
+                            source.clone(),
+                            source_name.clone(),
+                            table_name_for_note.clone(),
+                            qualified.clone(),
+                            description,
+                        );
+                        shared.say(format!("正在载入「{table_name_for_note}」…"), cx);
+                        entity.update(cx, |tab, cx| tab.watch_load(job, cx));
+                    },
+                ));
+            }
             menu
         })
         .into_any_element()

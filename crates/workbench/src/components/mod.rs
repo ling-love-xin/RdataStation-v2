@@ -1,6 +1,8 @@
 //! 工作台 GPUI 组件（Phase A：数据源连接对话框；M1：项目视图宿主桥；
 //! M4：数据库导航宿主桥；M7：Mock 面板宿主桥；M2：日志查看对话框）。
 
+/// 数据对象「归档到分析库」确认窗口（表名可改；写库在后台，铁律 H 组第 35 条）
+pub mod archive_dialog;
 pub mod cache_dialog;
 /// 数据对象清单（面板与来源选择器共用的一层取数与身份规则）
 pub mod data_objects;

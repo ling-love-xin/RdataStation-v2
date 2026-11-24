@@ -258,6 +258,87 @@ pub fn load_qualified_from_session(
     landed
 }
 
+/// 归档默认表名：`<源>_<表>`（铁律第 35 条）。
+///
+/// 用持久名的清洗尺子（保留中文，只换掉 DuckDB 建表会拒的字符），**不加** `tmp_` / `res_`
+/// 任何前缀：归档出来的表是项目分析库里的正式表，名字本身就是资产名，加前缀等于让用户
+/// 在资产列表里认一个自己没起过的名字。撞名由调用方在对话框里改名，这里不负责去重。
+pub fn archive_table_name(source: &str, table: &str) -> String {
+    let clean = crate::duckdb::temp_table::sanitize_persistent_description;
+    // 空的一侧**不参与拼接**：清洗尺子对空串会兜底成 `tmp`，直接拼就会变成 `tmp_orders`
+    // 这种既不像源名、也不像表名的东西。
+    if source.trim().is_empty() {
+        return clean(table);
+    }
+    if table.trim().is_empty() {
+        return clean(source);
+    }
+    let source = clean(source);
+    let table = clean(table);
+    format!("{source}_{table}")
+}
+
+/// 归档（跨实例）：把一条 `SELECT` 的结果写进**项目分析库**里的一张持久表，返回行数。
+///
+/// 与 [`load_qualified_from_session`] 同一条搬运路线（源侧 `COPY … TO parquet` →
+/// 目标库 `CREATE TABLE AS read_parquet`），区别只在**落点与寿命**：那份是进程单例的
+/// `tmp_l_`（会话级、不登记），这份是 `.RSmeta/analytics.duckdb` 里的永久表（随后由调用方
+/// 登记成表型资产，两步不可分，铁律第 11/35 条）。
+///
+/// 目标连接由调用方给：项目分析库的写连接归 `ProjectDatabaseManager` 按次开关，
+/// 引擎不替它决定生命周期。已存在同名表 → `CREATE TABLE` 直接失败（不覆盖别人的持久表）。
+pub fn archive_select_into(
+    select_sql: &str,
+    dest_table: &str,
+    run: impl Fn(&str) -> Result<(), CoreError>,
+    dest: &duckdb::Connection,
+) -> Result<u64, CoreError> {
+    let select = select_sql.trim().trim_end_matches(';').trim();
+    if select.is_empty() {
+        return Err(invalid("归档需要一条 SELECT：空 SQL 建不出表".to_string()));
+    }
+    let dest_table = dest_table.trim();
+    if dest_table.is_empty() {
+        return Err(invalid("归档需要目标表名".to_string()));
+    }
+    let unique = uuid::Uuid::new_v4().simple().to_string();
+    let parquet = std::env::temp_dir().join(format!("rds_archive_{}.parquet", &unique[..12]));
+    let literal = parquet.to_string_lossy().replace('\\', "/").replace('\'', "''");
+
+    let copy = format!("COPY ({select}) TO '{literal}' (FORMAT PARQUET)");
+    if let Err(error) = run(&copy) {
+        let _ = std::fs::remove_file(&parquet);
+        return Err(invalid(format!("把源表导出到中转文件失败: {error}")));
+    }
+
+    let target = crate::duckdb::temp_table::quote_ident(dest_table);
+    let written = (|| -> Result<u64, CoreError> {
+        dest.execute_batch(&format!(
+            "CREATE TABLE {target} AS SELECT * FROM read_parquet('{literal}')"
+        ))
+        .map_err(|e| {
+            let text = e.to_string();
+            if text.contains("already exists") || text.contains("已存在") {
+                invalid(format!(
+                    "项目分析库已存在表 {dest_table}：换一个名字再归档（不覆盖别人的持久表）"
+                ))
+            } else {
+                invalid(format!("在项目分析库建表 {dest_table} 失败: {text}"))
+            }
+        })?;
+        let count = dest
+            .query_row(&format!("SELECT count(*) FROM {target}"), [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map_err(|e| invalid(format!("统计归档表行数失败: {e}")))?;
+        Ok(count.max(0) as u64)
+    })();
+
+    // 中转文件无论成败都不留（同 `move_sample_to_process_db` 的口径）
+    let _ = std::fs::remove_file(&parquet);
+    written
+}
+
 /// 丢掉一张物化表（幂等）。`qualified` 接受 `memory.x` 或裸名 `x`。
 ///
 /// 前缀守卫与 `temp_table::drop_temp_table` 同口径：只允许删 `tmp_i_` / `tmp_q_` / `tmp_l_`
@@ -392,5 +473,65 @@ mod tests {
         assert!(format!("{err}").contains("拒绝删除非临时表"));
         // 源库档没有会话 → 幂等成功（没什么可删）
         assert!(drop_materialized(&SessionHandle::None, "memory.tmp_i_x").is_ok());
+    }
+
+    /// 归档默认名 = `<源>_<表>`，中文保留、不带 `tmp_` / `res_` 前缀（铁律第 35 条）。
+    #[test]
+    fn archive_name_is_source_then_table() {
+        assert_eq!(super::archive_table_name("shop", "orders"), "shop_orders");
+        let zh = super::archive_table_name("订单 库", "明细/表");
+        assert!(zh.contains('订') && zh.contains('明'), "中文要留：{zh}");
+        assert!(!zh.contains('/') && !zh.contains(' '), "非法字符要清：{zh}");
+        // 源名空时只剩表名，不造出「_表」这种以分隔符开头的名字
+        assert_eq!(super::archive_table_name("", "orders"), "orders");
+    }
+
+    /// 归档落的是**目标库**里的持久表；同名再来必须失败（不覆盖）。
+    #[test]
+    fn archiving_lands_a_table_in_the_target_db_and_refuses_to_overwrite() {
+        let unique = uuid::Uuid::new_v4().simple().to_string();
+        let dir = std::env::temp_dir().join(format!("rds_archive_{}", &unique[..8]));
+        std::fs::create_dir_all(&dir).expect("建临时目录");
+        let target = dir.join("analytics.duckdb");
+
+        let source = duckdb::Connection::open_in_memory().expect("源连接");
+        source
+            .execute_batch("CREATE TABLE shop_orders AS SELECT 1 AS a UNION ALL SELECT 2")
+            .expect("建源表");
+        let dest = duckdb::Connection::open(&target).expect("目标库");
+
+        let run = |sql: &str| {
+            source.execute_batch(sql).map_err(|error| {
+                shared::error::CoreError::common(shared::error::CommonError::General(
+                    error.to_string(),
+                ))
+            })
+        };
+        let rows = super::archive_select_into(
+            "SELECT * FROM main.shop_orders",
+            "shop_orders",
+            run,
+            &dest,
+        )
+        .expect("归档");
+        assert_eq!(rows, 2, "行数要如实回报");
+
+        let again =
+            super::archive_select_into("SELECT * FROM main.shop_orders", "shop_orders", run, &dest)
+                .unwrap_err();
+        assert!(
+            format!("{again}").contains("已存在"),
+            "同名归档必须报「已存在」而不是覆盖：{again}"
+        );
+
+        drop(dest);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn archiving_rejects_an_empty_select_or_table() {
+        let dest = duckdb::Connection::open_in_memory().expect("目标库");
+        assert!(super::archive_select_into("  ", "x", |_| Ok(()), &dest).is_err());
+        assert!(super::archive_select_into("select 1", "  ", |_| Ok(()), &dest).is_err());
     }
 }

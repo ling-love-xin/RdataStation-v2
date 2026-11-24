@@ -224,10 +224,33 @@ pub fn persist_result_table(
     Ok((table, result, columns))
 }
 
+/// 在项目分析库的**写连接**上跑一段同步工作（worker 线程专用；不要从 UI / async 上下文调）。
+///
+/// 把「开 manager → 取写连接 → acquire → lock → 取 slot」这套动作收在一处：
+/// 项目库同一时刻只允许一个写连接，顺序（先源后项目）与重试窗口都必须一致，
+/// 两个模块各抄一遍迟早抄出两条不一样的顺序。
+pub(crate) fn with_project_write_connection<T>(
+    project_root: &Path,
+    work: impl FnOnce(&duckdb::Connection) -> Result<T, String>,
+) -> Result<T, String> {
+    let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("无法启动异步运行时: {e}"))?;
+    let manager = open_project_manager(&runtime, project_root)?;
+    let project_conn = manager
+        .duckdb_conn()
+        .ok_or_else(|| "项目库读模式打开（无写连接）：请重新打开项目后重试".to_string())?;
+    let guard = runtime
+        .block_on(project_conn.acquire())
+        .map_err(|e| format!("取项目写连接失败: {e}"))?;
+    let mut slot = runtime.block_on(guard.lock());
+    let dest = slot
+        .as_mut()
+        .ok_or_else(|| "项目写连接已关闭：请重新打开项目后重试".to_string())?;
+    work(dest)
+}
+
 /// 列数：走 `information_schema.columns`（`DESCRIBE` 在本仓实测拿不到结果集，
 /// 见 `a_result_table_lands_in_the_project_analytics_db` 的核对段也走同一张视图）。
-fn count_columns(conn: &duckdb::Connection, table: &str) -> Option<i32> {
-    let count: i64 = conn
+pub(crate) fn count_columns(conn: &duckdb::Connection, table: &str) -> Option<i32> {    let count: i64 = conn
         .query_row(
             "SELECT count(*) FROM information_schema.columns \
              WHERE table_name = ?1 AND table_schema = 'main'",
@@ -243,7 +266,7 @@ fn count_columns(conn: &duckdb::Connection, table: &str) -> Option<i32> {
 /// 单独一个 runtime：本函数在 worker 线程（普通 std 线程）上跑，
 /// `persist_result_table` 的 runtime 已随它返回而散；再建一个短命 runtime 比把两段
 /// 塞进同一个 async 作用域更简单，也不构成嵌套。
-fn register_table_asset(
+pub(crate) fn register_table_asset(
     project_root: &Path,
     label: &str,
     table: &str,
