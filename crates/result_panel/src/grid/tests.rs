@@ -5157,6 +5157,10 @@ fn clicking_the_row_number_slot_covers_the_whole_row() {
     assert_eq!(range.cols(), (0, 2), "行号槽点击要铺到末列");
     assert_eq!(range.data_columns(), vec![1, 2], "行号槽不是数据列");
     assert_eq!(range.data_cells_count(), 2, "整行 = 1 行 × 2 数据列");
+    // 【D10-9】矩形铺满整行，但**当前格**另置在首个数据列（DBeaver 点行头后
+    // `focusColumn = getColumn(new Point(rowHeaderWidth + 1, e.y))`，`LightGrid.java:3140-3145`）
+    assert_eq!(range.cursor(), (0, 1), "当前格钉首个数据列，而不是矩形的末列");
+    assert_eq!(grid.range_focus(), Some((0, 1)), "渲染读的也是 cursor");
 
     // Shift 点行号槽：锚点行不动、列仍全宽（DBeaver `:3128-3129` 的整行区间）
     grid.click_cell(1, 0, true);
@@ -5164,6 +5168,11 @@ fn clicking_the_row_number_slot_covers_the_whole_row() {
     assert_eq!(range.rows(), (0, 1));
     assert_eq!(range.cols(), (0, 2));
     assert_eq!(range.data_cells_count(), 4);
+    assert_eq!(range.cursor(), (0, 1), "Shift 扩选不挪当前格（DBeaver `:3140`）");
+
+    // 【D10-9】Shift 扩完之后再普通点一次行号槽：当前格跟着新行走
+    grid.click_cell(1, 0, false);
+    assert_eq!(grid.cell_range().unwrap().cursor(), (1, 1));
 
     // 数据格点击不受这套归一影响：焦点就是该格
     grid.click_cell(0, 1, false);

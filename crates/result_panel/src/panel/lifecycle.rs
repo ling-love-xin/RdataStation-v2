@@ -483,18 +483,52 @@ impl ResultPanel {
                     // 行区间（`LightGrid.java:2705-2717` 清空重填），本仓组件切到格模式后
                     // `selected_row()` 只 filter 不落到 delegate 的镜像，旧整行色会一直亮着。
                     delegate.set_selected_row(None);
+                    // 【D10-9】点行号槽（视图列 0）：DBeaver 把当前格钉到「行头右侧第一列」
+                    // 并 `showItem(row)`（`LightGrid.java:3140-3149`）。本仓 `click_cell`
+                    // 已把矩形铺满整行、`CellRange::cursor` 记成 `(row, 1)`，这里把**组件的**
+                    // 当前格也搬过去：overlay 的焦点框与 `cell.rs:347` 的「焦点格不铺色」
+                    // 都读组件这一份，不搬就会出现「框在行号槽、首列那一格反而没有底色」。
+                    // 组件的 setter 自带 `scroll_to_item(row, Center)`，正好等价 DBeaver 的
+                    // `showItem(row)`；Shift 扩选不重设焦点（`:3140` 的 `if (!shift …)`）。
+                    if !extend && *col_ix == 0 {
+                        state.set_selected_cell(*row_ix, 1, cx);
+                    }
                     cx.notify();
                 });
             }
             // 单击选格：值详情跟随点选（此前只接双击——「点击文字半天才出来」
             // 的根因之一）+ 重建 JSON 展开树（选中值是 JSON/数组时）
             TableEvent::SelectCell(row_ix, col_ix) => {
-                // 【D10-2】点行号槽时 selection_pos 仍是行号槽本身：本仓这一格位置同时是
-                // 「当前数据格」的判据（「修改」按钮置灰、宿主提示、列归属都读它，
-                // 见 `edit.rs::has_current_cell` 与 `tests.rs` 的三条既有用例），
-                // 所以不把焦点回落到第一列。DBeaver 那边 `focusColumn` 会落到行头右侧
-                // 第一列（`LightGrid.java:3140-3145`），差异记在基线文档 §34 台账。
-                self.set_selection_pos(Some((*row_ix, *col_ix)), window, cx);
+                // 【D10-9 撤销旧 §34 决定】旧台账曾以「这一格位置兼作当前数据格判据
+                // （`edit.rs::has_current_cell`、列归属）」为由，不把行号槽点击的焦点回落到
+                // 第一列。但 DBeaver 的当前格就是 `LightGrid.focusColumn/focusItem`，
+                // 点行头后它自己就把 `focusColumn` 钉到行头右侧第一列（`:3140-3145`），
+                // 而 `SpreadsheetPresentation.getCurrentAttribute()`（`:365`）正是照着这个
+                // 焦点列取属性——即**编辑目标就是首个数据列的值**。所以按源码对齐。
+                // 读数取 delegate 的当前格（`CellRange::cursor`）作单一来源：组件点行号槽
+                // 时会先发一条 `SelectCell(row, 0)`，这里据 cursor 换成 `(row, 1)`，
+                // 免得把 `CellClicked` 里已经设好的值覆盖回去。
+                let pos = if *col_ix == 0 {
+                    // 只在「delegate 的矩形确实是这一行的整行」时采用它的 cursor，
+                    // 免得把无关的旧矩形当前格套到这一行上。
+                    match self
+                        .grid
+                        .read(cx)
+                        .delegate()
+                        .cell_range()
+                        .map(|range| range.cursor())
+                    {
+                        Some((range_row, range_col))
+                            if range_row == *row_ix && range_col >= 1 =>
+                        {
+                            (*row_ix, range_col)
+                        }
+                        _ => (*row_ix, *col_ix),
+                    }
+                } else {
+                    (*row_ix, *col_ix)
+                };
+                self.set_selection_pos(Some(pos), window, cx);
                 self.rebuild_value_tree(window, cx);
                 cx.notify();
             }

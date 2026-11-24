@@ -2618,6 +2618,12 @@ focusItem = getTopIndex();                                  // 视口首行
   （`delegate.rs:509`、`:571`、`panel/render.rs:1257`），不是一个小项。
   本轮维持现状，并在三处 doc 注释里写明取舍，避免以后被当成 bug 再报一次。
 
+> **再更正（同日，§41）**：上面 (a) 已落地——`CellRange` 加了 `cursor` 字段，当前格不再必然是
+> 矩形的一角；实测证明**不需要**做 (b)（矩形照旧铺满整行，行号槽高亮不变）。
+> 行号槽点整行那一档已按 DBeaver 钉到首个数据列并与组件当前格同步；列头 / 全选两档仍卡在
+> 组件「只能经带滚动效果的 setter 写当前格」，见 §41.3。
+> 本节结论「不做」只对列头 / 全选两档仍然成立。
+
 ### 39.4 差异明账
 
 1. 行号列宽：本仓固定 48px，**不随行号位数增长**。行号 ≥ 7 位（百万行）时文字会被裁。
@@ -2664,7 +2670,7 @@ D10 清单里「键盘 / 鼠标选区」这一族到此可以收口了：**能�
 | 11 | `+` / `-` / `=` 展开折叠树行 | `:3875-3894` | 不做 | 本仓结果集无树形行（无 `getLevel()` 分组） |
 | 12 | 空格 `toggleCellValue` | 同上区间 | 不做 | 同上：无「可切换值」的单元格类型 |
 | 13 | Ctrl 并集 / 反选 | `:2718-2735` | 待模型改造 | 需选区不再是单个矩形，见 40.3 |
-| 14 | 「当前格」列钉首个数据列 | `:3183-3184`、`:3140-3145`、`:3201` | 待模型改造 | 见 §39.3 |
+| 14 | 「当前格」列钉首个数据列 | `:3183-3184`、`:3140-3145`、`:3201` | **行号槽档已做（D10-9）**；列头/全选两档待组件入口 | 见 §41；`CellRange::cursor` 已能表达「矩形铺满 + 当前格另置」 |
 | 15 | 行号列宽自适应 `[40,400]` | `:1884-1897` | 待（有正路） | 见 §39.2 |
 
 ### 40.2 两条「不做」的细差异
@@ -2690,5 +2696,93 @@ D10 清单里「键盘 / 鼠标选区」这一族到此可以收口了：**能�
 3. 落点：`CellRange` 的 6 处构造（`delegate.rs:388/396/403/434/470/535`）+ 三处读者
    （`delegate.rs:509`、`:571`、`panel/render.rs:1257`）+ `grid/cell.rs` 的行号槽高亮判据；
 4. 顺带解锁：Ctrl 并集/反选、`Ctrl+C` 起点语义、状态行「当前格值」与 DBeaver 对齐。
+
+> **进展（§41）**：第 1 条已按「给 `CellRange` 加 `cursor` 字段」落地，行号槽点整行那一档
+> 已与 DBeaver 对齐；第 2 条经取证判定**不需要**（矩形仍铺满整行，行号槽高亮照旧），
+> 因为当前格已能独立于矩形存在。矛盾不在于「矩形要不要含列 0」，而在于「当前格是不是矩形的一角」。
+
+## §41 D10-9：选区形状与当前格解耦（落地）
+
+### 41.1 取证：DBeaver 的两份状态
+
+DBeaver 的 `LightGrid` 从头到尾维护**两份独立状态**，本仓此前把它们压进一个矩形的两个角，
+这正是 §39.3 / §40 里第 14 项卡住的根因。
+
+| 事实 | 出处 |
+| --- | --- |
+| 选区形状 = `selectedCells`（`CellInfo[][]`，可为整行/整列/矩形，彼此无形状约束） | `LightGrid.java:170` 起（`updateCellSelection` 每次重建） |
+| 当前格 = `focusColumn` + `focusItem`，与选区形状无关 | `:3739-3744`（键导航直接读写这两个字段） |
+| 行头点击：`focusItem = row`、`focusColumn = getColumn(new Point(rowHeaderWidth + 1, e.y))` | `:3140-3145`（注释原文 `set focus back to the first visible column`） |
+| 行头点击的 Shift 档**不重设**焦点 | `:3140` 的条件就是 `if (!shift && !altPressed)` |
+| 列头点击：只改 `focusColumn = col`，`focusItem` 不动 | `:3201` |
+| 交角全选：`focusColumn = getColumn(new Point(rowHeaderWidth + 1, 1))`、`focusItem = getTopIndex()` | `:3183-3184` |
+| 编辑目标读的就是当前格：`getCurrentAttribute()` → `getCurrentRowIndexes()` → `spreadsheet.getFocusPos()` | `SpreadsheetPresentation.java:365`、`:393` |
+
+结论：**行号槽从不充当当前格**——点行头后当前格就是「该行 × 首个数据列」，
+`getCurrentAttribute()` 因此返回首列属性，编辑动作作用在首列的值上。
+本仓旧台账 §34 曾以「这一格位置兼作当前数据格判据」为由拒绝回落，理由是错的：
+DBeaver 的判据同样读回落后的那个格，所以回落后行为一致，不回反而偏了。
+
+### 41.2 本仓改动
+
+| 文件 | 改动 |
+| --- | --- |
+| `crates/result_panel/src/grid/selection.rs` | `CellRange` 新增 `pub cursor: Option<(usize, usize)>` 与 `pub fn cursor(&self)`（`None` = 当前格就是 `focus`，等价于旧行为）；`single()` 与 4 处测试构造补 `cursor: None` |
+| `crates/result_panel/src/grid/delegate.rs` | `click_cell` 行号槽分支：普通点击把 `cursor` 钉 `(row, 1)`、Shift 沿用原 `cursor`（对齐 `:3140` 的 `if (!shift …)`）；`extend` 数据格分支沿用 `range.cursor`；`click_col` / `select_all_cells` / `step_focus` 显式 `cursor: None`（见 41.3 为何这两档不跟）；`range_focus()` 改读 `cursor()`；`step_focus` 起点、`panel/render.rs` 翻页起点（PageUp/PageDown 算目标行）也从 `focus` 改读 `cursor()` |
+| `crates/result_panel/src/panel/lifecycle.rs` | `CellClicked` 的空修饰键 + 视图列 0 分支追加 `state.set_selected_cell(row, 1, cx)`（组件 overlay 的焦点框与 `grid/cell.rs:347` 的「焦点格不铺色」读的是组件那份）；`SelectCell` 处理**撤销旧 §34 决定**：视图列 0 时改取 `delegate` 矩形 `cursor` 的行列（仅当矩形确实是这一行、列 ≥ 1） |
+| `crates/result_panel/src/panel/tests.rs` | `clicking_the_row_number_slot_selects_the_whole_row` 的断言由 `Some((1, 0))` 翻转为 `Some((1, 1))`；`select_column_goes_to_the_column_under_the_current_cell` 的「行号槽」那档改成直接写 `selection_pos`（该状态在点击路径上已不可达，只留纯函数防御） |
+| `crates/result_panel/src/grid/tests.rs` | `clicking_the_row_number_slot_covers_the_whole_row` 补三条 `cursor` 断言（普通点击 `(0,1)`、Shift 不挪、再普通点击跟到 `(1,1)`），并断言 `range_focus()` 同值 |
+
+```rust
+// grid/selection.rs
+pub struct CellRange {
+    pub anchor: (usize, usize),
+    pub focus: (usize, usize),
+    /// 只有「矩阵形状」与「当前格」分不开的那几档才填；`None` = 当前格就是 `focus`
+    pub cursor: Option<(usize, usize)>,
+}
+
+impl CellRange {
+    pub fn cursor(&self) -> (usize, usize) { self.cursor.unwrap_or(self.focus) }
+}
+```
+
+```rust
+// grid/delegate.rs::click_cell —— 行号槽分支
+let cursor = if extend {
+    self.cell_range.and_then(|range| range.cursor)   // Shift：不重设焦点
+} else if last >= 1 {
+    Some((row, 1))                                   // 普通点击：钉首个数据列
+} else {
+    None                                             // 只有行号槽（空结果）：无可落
+};
+self.cell_range = Some(CellRange { anchor: (anchor_row, 0), focus: (row, last), cursor });
+```
+
+### 41.3 两档仍未跟（明账）
+
+| 档 | DBeaver | 本仓现状 | 卡在哪 |
+| --- | --- | --- | --- |
+| 交角全选 | 当前格 = `(getTopIndex(), 首数据列)`（`:3183-3184`），**不滚动** | `cursor: None`（当前格 = 矩形末列末行） | 组件的 `TableState::set_selected_cell(row, col, cx)`（vendor `table/state.rs:681-693`）是唯一写入口，内部 `scroll_to_item(row, Center)` 会把该行滚到视口正中——DBeaver 用 `getTopIndex()` 不动视口。照抄会拽动视口 |
+| 列头点击 | 当前格列 = 该列、行不动（`:3201`），只 `showColumn`（横向滚） | `cursor: None`（当前格 = `(末行, col)`） | 同一个 setter；这里连横向也不该滚（DBeaver `showColumn` 只保证可见）。等组件提供「设当前格但不滚动」的入口 |
+
+另外：即使不依赖 setter，「矩形铺满 + cursor 另置」也要求**组件 overlay 画的那个焦点框**跟着走，
+否则会出现「焦点框在 A 格、但 A 格因 `cell.rs:347` 被判为焦点格而不铺色 → 出现一个空槽」。
+所以两档都必须先有组件侧的同步入口，不是纯 delegate 侧能解决的。
+
+### 41.4 验证
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo check -p rds-result-panel --all-targets` | `Finished dev profile`，0 error |
+| `cargo test -p rds-result-panel --lib` | **445 passed / 0 failed** |
+
+中途出现过的 2 条失败都是**旧口径断言**（`Some((1,0))` 与「行号槽不当作数据列」），
+翻转后全绿——这正是本刀要改变的行为，已在 41.2 里列明。
+
+**仍未做（明账）**：没有做目视验收（点行号槽后焦点框是否视觉上落在首列那一格）。
+按既有约定，GUI 验收由用户手动确认；本刀只保证 delegate / 组件 / 状态行三份状态一致，
+并以单元测试钉死（`grid/tests.rs` 三条 `cursor` 断言 + `panel/tests.rs` 的 `selection_pos` 断言）。
+
 
 

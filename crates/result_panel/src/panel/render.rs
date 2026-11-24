@@ -1253,8 +1253,10 @@ impl ResultPanel {
                             };
                             let target = {
                                 let delegate = grid_key.read(app).delegate();
+                                // 起点读**当前格**（`cursor()`）：行号槽点整行之后
+                                // 矩形的 `focus` 在末列、当前格在首数据列，翻页要从后者起算。
                                 let cur_row =
-                                    delegate.cell_range().map_or(0, |range| range.focus.0);
+                                    delegate.cell_range().map_or(0, |range| range.cursor().0);
                                 result_grid::page_target(
                                     dir,
                                     cur_row,

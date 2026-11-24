@@ -6163,8 +6163,12 @@ fn select_column_goes_to_the_column_under_the_current_cell(cx: &mut gpui_kit::Te
     assert_eq!(component_col, Some(2));
     assert_eq!(data_col, Some(1));
 
-    // 行号槽（组件列 0）没有数据列可跟
-    cx.update(|_w, app| grid.update(app, |state, cx| state.set_selected_cell(0, 0, cx)));
+    // 行号槽（组件列 0）没有数据列可跟。
+    // 【D10-9】这条状态在点击路径上已不可达（点行号槽时 lifecycle 会把当前格换成首数据列），
+    // 这里只钉纯函数对越界输入的防御：直接写 `selection_pos` 绕过事件路径。
+    cx.update(|_w, app| {
+        panel.update(app, |p, _cx| p.selection_pos = Some((0, 0)));
+    });
     assert!(
         !cx.update(|_w, app| panel.update(app, |p, cx| p.select_current_column(cx))),
         "行号槽不当作数据列（宿主据此留提示）"
@@ -6751,9 +6755,12 @@ fn clicking_the_row_number_slot_selects_the_whole_row(
     let counts = crate::grid::selection_counts(Some(&range));
     assert_eq!(counts, (1, 2, 2), "整行 = 1 行 × 2 数据列 × 2 格");
 
-    // 「当前格」仍是行号槽本身：本仓既有口径（「修改」按钮据此置灰）
+    // 【D10-9】「当前格」落到**首个数据列**：DBeaver 点行头后 `focusColumn` 就是
+    // `getColumn(new Point(rowHeaderWidth + 1, e.y))`（`LightGrid.java:3140-3145`），
+    // 它同时是 `SpreadsheetPresentation.getCurrentAttribute()` 的取值来源，即编辑目标
+    // 就是首列的值。旧 §34 台账「行号槽保持为当前格」已按源码撤销。
     let pos = cx.update(|_, app| panel.read(app).selection_pos);
-    assert_eq!(pos, Some((1, 0)), "行号槽保持为当前格，不回落到数据列");
+    assert_eq!(pos, Some((1, 1)), "行号槽点整行后当前格落到首个数据列");
 }
 
 /// 【D10-5】列头点击 → 整列选区。

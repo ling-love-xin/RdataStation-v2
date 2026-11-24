@@ -21,6 +21,13 @@ pub struct CellRange {
     pub anchor: (usize, usize),
     /// 当前点到的格（选区矩形的另一个对角）
     pub focus: (usize, usize),
+    /// 【D10-9】当前格单独记（对齐 DBeaver 的 `focusColumn/focusItem` 与 `selectedCells` 两份状态）。
+    ///
+    /// 只有「矩阵形状」与「当前格」分不开的那几档才填它：行号槽点击选整行时，
+    /// 矩形必须铺满 `0..=末列`（否则行号槽不高亮），而 DBeaver 把当前格钉在**首个数据列**
+    /// （`LightGrid.java:3140-3145`）。`None` = 当前格就是矩形的 `focus`
+    /// （普通点格 / 键盘移动 / 拖拽都落这一档，行为与引入本字段前完全一致）。
+    pub cursor: Option<(usize, usize)>,
 }
 
 impl CellRange {
@@ -29,7 +36,13 @@ impl CellRange {
         Self {
             anchor: cell,
             focus: cell,
+            cursor: None,
         }
+    }
+
+    /// 当前格（组件 overlay 画焦点框、`Ctrl+C` 起点、状态行「当前格值」都读它）
+    pub fn cursor(&self) -> (usize, usize) {
+        self.cursor.unwrap_or(self.focus)
     }
 
     /// 归一化后的行区间（含两端）
@@ -187,6 +200,7 @@ mod tests {
         let range = CellRange {
             anchor: (5, 4),
             focus: (1, 2),
+            cursor: None,
         };
         assert_eq!(range.rows(), (1, 5));
         assert_eq!(range.cols(), (2, 4));
@@ -211,6 +225,7 @@ mod tests {
         let range = CellRange {
             anchor: (2, 0),
             focus: (4, 3),
+            cursor: None,
         };
         assert_eq!(range.data_columns(), vec![1, 2, 3]);
     }
@@ -221,6 +236,7 @@ mod tests {
         let range = CellRange {
             anchor: (2, 1),
             focus: (4, 3),
+            cursor: None,
         };
         assert_eq!(range.rows_count(), 3);
         assert_eq!(range.data_columns().len(), 3);
@@ -235,6 +251,7 @@ mod tests {
         let range = CellRange {
             anchor: (0, 1),
             focus: (1, 2),
+            cursor: None,
         };
         assert_eq!(selection_counts(Some(&range)), (2, 2, 4));
         // 单格

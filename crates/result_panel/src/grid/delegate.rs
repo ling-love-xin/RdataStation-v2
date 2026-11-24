@@ -379,10 +379,11 @@ impl ResultGridDelegate {
         // 计数不受影响——`CellRange::data_columns()` 本来就把列 0 当行号槽排除
         // （`grid/selection.rs:68-72`），所以整行仍是「1 行 × N 数据列 × N 格」。
         //
-        // 已知差异（§39.3）：DBeaver 点完行头会把当前格改钉到**首个数据列**
+        // 【D10-9】当前格：DBeaver 点行头后 `focusColumn` 落到「行头右侧第一列」
         // （`:3140-3145` 的 `focusColumn = getColumn(new Point(rowHeaderWidth + 1, e.y))`），
-        // 本仓 `focus` 留在矩形末列。原因同 `select_all_cells`：focus 是矩形的一个角，
-        // 而矩形必须含列 0 才有行号槽高亮。要等选区与当前格解耦（§40.3）。
+        // `focusItem = row`。矩形本身仍铺满整行（行号槽要高亮），两份状态分开存
+        // （见 `CellRange::cursor`）。Shift 那一档 DBeaver 不重设焦点
+        // （`:3140` 的 `if (!shift && !altPressed)`），所以扩展时沿用原当前格。
         if Self::is_row_number(col) {
             let last = self.last_view_column();
             let anchor_row = if extend {
@@ -390,9 +391,18 @@ impl ResultGridDelegate {
             } else {
                 row
             };
+            let cursor = if extend {
+                self.cell_range.and_then(|range| range.cursor)
+            } else if last >= 1 {
+                Some((row, 1))
+            } else {
+                // 只有行号槽没有数据列（空结果）：没有「首数据列」可落，退回矩形焦点
+                None
+            };
             self.cell_range = Some(CellRange {
                 anchor: (anchor_row, 0),
                 focus: (row, last),
+                cursor,
             });
             return;
         }
@@ -401,6 +411,9 @@ impl ResultGridDelegate {
                 self.cell_range = Some(CellRange {
                     anchor: range.anchor,
                     focus: (row, col),
+                    // Shift 扩展不挪当前格（DBeaver `:3154-3156` 只在非 Shift 时更新
+                    // `focusColumn/focusItem`），沿用原 cursor。
+                    cursor: range.cursor,
                 });
                 return;
             }
@@ -440,9 +453,16 @@ impl ResultGridDelegate {
         } else {
             col
         };
+        // 【D10-9 待办】DBeaver 列头点击只把 `focusColumn` 改到这一列、`focusItem` 不动
+        // （`:3201`），当前格因此落在「原当前行 × 这一列」。本仓暂不跟：当前格由组件的
+        // `selected_cell` 一起决定（overlay 画焦点框、`grid/cell.rs:347` 据此不铺色），
+        // 而组件唯一的 setter `set_selected_cell` 会 `scroll_to_item(.., Center)` 纵向居中——
+        // DBeaver 这里只 `showColumn`（横向滚），照抄会把视口纵向拽动。等组件有不滚动
+        // 的选中格入口再补，先把矩形形状对齐（本刀不变）。
         self.cell_range = Some(CellRange {
             anchor: (0, anchor_col),
             focus: (rows - 1, col),
+            cursor: None,
         });
     }
 
@@ -461,17 +481,18 @@ impl ResultGridDelegate {
     ///
     /// 返回 `false` = 空表，调用方不必刷新（对齐 DBeaver 那条 `return null`）。
     ///
-    /// 【D10-8 取证后判定：不做】DBeaver 交角的**最终**当前格是「首行首数据列」：
+    /// 【D10-9 部分对齐】DBeaver 交角的**最终**当前格是「首行首数据列」：
     /// `selectAllCellsInternal`（`:4272-4296`）内部先临时借 `(首列, 0)` 当锚、选完还回去
     /// （`:4288-4289`），但紧接着**调用方**又把它钉住——`focusColumn =
     /// getColumn(new Point(rowHeaderWidth + 1, 1))`、`focusItem = getTopIndex()`
     /// （`:3183-3184`）。行头点整行（`:3140-3145`）、列头点整列（`:3201`）是同族口径。
     ///
-    /// 本仓对齐不了：`CellRange{anchor,focus}` 是单矩形（§37.4 #5），`focus` 必然落在
-    /// 矩形的角上；而行号槽高亮又**靠矩形列区间**（`cols()` 必须含列 0）。要让 focus 的列 = 1，
-    /// 包围盒就收成 `(1, 末列)`、行号槽整列掉出选区——实测改后 `cols()==(1,2)`、两个用例失败，
-    /// 那是拿 DBeaver `:4741` 的整行头高亮去换当前格位置。
-    /// 故维持 `(0,0) → (末行, 末列)`；真对齐要先把选区与当前格解耦（§39.3 / §40.3）。
+    /// `CellRange::cursor` 已经能表达「矩形铺满 + 当前格另置」，所以行号槽点整行那一档
+    /// 本轮已接上（`click_cell` 行号槽分支）。全选这一档**还没接**，原因是当前格必须由
+    /// 组件的 `selected_cell` 一起决定（overlay 画焦点框、`grid/cell.rs:347` 据此不铺色），
+    /// 而组件唯一的 setter `set_selected_cell` 内部 `scroll_to_item(.., Center)` 纵向居中——
+    /// DBeaver 这里用 `getTopIndex()`、不滚动。照抄会把视口纵向拽动，等组件有不滚动的
+    /// 选中格入口再补（§41 明账）。故仍维持 `(0,0) → (末行, 末列)`、`cursor: None`。
     pub fn select_all_cells(&mut self) -> bool {
         let rows = self.view_len();
         // 空态占位行不算数据（`set_data` 的注释）：DBeaver 那边 `getItemCount()` 是 0
@@ -481,6 +502,7 @@ impl ResultGridDelegate {
         self.cell_range = Some(CellRange {
             anchor: (0, 0),
             focus: (rows - 1, self.last_view_column()),
+            cursor: None,
         });
         true
     }
@@ -516,8 +538,13 @@ impl ResultGridDelegate {
             return None;
         }
         let had_range = self.cell_range.is_some();
+        // 起点读**当前格**（DBeaver 的 `focusColumn/focusItem`），而不是矩形的 `focus`：
+        // 行号槽点整行之后两者列位置不同（`cursor` = 首数据列、`focus` = 末列）。
         let (cur_row, cur_col) = match self.cell_range {
-            Some(range) => (range.focus.0.min(rows - 1), range.focus.1.clamp(1, last_col)),
+            Some(range) => {
+                let (row, col) = range.cursor();
+                (row.min(rows - 1), col.clamp(1, last_col))
+            }
             None => (0, 1),
         };
         let (row, col) = match step {
@@ -546,6 +573,9 @@ impl ResultGridDelegate {
         self.cell_range = Some(CellRange {
             anchor,
             focus: (row, col),
+            // 键盘移动后当前格就是新格（DBeaver 的 `focusColumn/focusItem` 同步更新），
+            // 不需要独立的 cursor。
+            cursor: None,
         });
         Some((row, col))
     }
@@ -577,9 +607,10 @@ impl ResultGridDelegate {
             .is_some_and(|range| range.contains(row, col))
     }
 
-    /// 【D10】焦点格 = 最近一次点到的格。组件 overlay 自己画它，delegate 不再重复铺色。
+    /// 【D10】当前格 = 最近一次点到的格。组件 overlay 自己画它，delegate 不再重复铺色。
+    /// 【D10-9】读 `CellRange::cursor()`：行号槽点整行等「矩形铺满但当前格另置」的档由它表达。
     pub fn range_focus(&self) -> Option<(usize, usize)> {
-        self.cell_range.map(|range| range.focus)
+        self.cell_range.map(|range| range.cursor())
     }
 
     /// 【D10】选区覆盖的数据列（视图列下标升序，已去掉行号槽）——计算页「按列分组」读它
