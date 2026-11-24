@@ -3173,9 +3173,9 @@ pub fn set_selected_cell_without_scroll(&mut self, row_ix: usize, col_ix: usize,
 | 对象图标 | 数据容器节点图标，回退 `DBIcon.SQL_TEXT`（`:552-571`） | `IconName::Table2`（表） | 本仓结果恒来自一条 SQL，按 `:568-570` 应落 `SQL_TEXT`；lucide 里对应 `FileCode`，改图标属观感项，与「先对齐结构」可分开 |
 | 逐格宽高 | `computeSize` 精确到 `icon+4` / `icon+6` | Button 组件内距决定（±2-4px） | 组件没有「图标 + 固定内距」旋钮；差异在像素级，肉眼小于一条竖线 |
 | hover 语义 | 图标灰副本 ↔ 彩色、格子以 blend 90% 铺底 | `Button::ghost()` 的 hover 底色 | 要完全等价需自绘格子（违反「组件选型禁手搓」）；现有 hover 反馈语义相同 |
-| 对象格单击 | 弹对象信息浮层（内嵌只读 SQL 面板，失焦关闭） | 弹 `OpenSqlDialog` 对话框 | 属「弹出窗口」刀；另需决定是否引入可编辑 SQL 控制台（§44.4 未决） |
-| 历史下拉 | 表格浮层（70/30 双列、SQL 等宽字体、`Manage Filters`、↑ 关闭） | 普通下拉菜单 | 属「弹出窗口」刀 |
-| ExecutePanel 启用条件 | 文本 ≠ 当前条件才亮 | 恒可点 | 本仓 `filter_text` 同时是生效值与输入（即时本地过滤），没有「未应用草稿」态，该条件在本仓无意义 |
+| 对象格单击 | 弹对象信息浮层（内嵌只读 SQL 面板，失焦关闭） | 弹 `OpenSqlDialog` 对话框 | **仍未落地**：属「弹出窗口」类，但改成浮层会丢掉本仓卡片自带的血缘/标题（见 §47.4 的判读），待产品定；另需决定是否引入可编辑 SQL 控制台（§44.4 未决） |
+| 历史下拉 | 表格浮层（70/30 双列、SQL 等宽字体、`Manage Filters`、↑ 关闭） | 普通下拉菜单 | **已落地，见 §48**（残余差异登记在 §48.4） |
+| ExecutePanel 启用条件 | 文本 ≠ 当前条件才亮 | 恒可点 | **已落地，见 §49**；本表原判「本仓没有未应用草稿态」经实测**修正**：`filter_text` 确为输入框实时副本，但「落到网格」另有防抖/提交两步，故另记 `applied_filter_text` 作等价物 |
 | 工具钮图标 | ERASE / FILTER / RS_BACK / RS_FORWARD / FIND_REPLACE 五套专图 | Eraser / Funnel / ChevronLeft / ChevronRight / Search | lucide 无 `RS_BACK`/`RS_FORWARD` 等价物，方向箭头已是最接近的语义 |
 
 ### 46.5 验证
@@ -3184,6 +3184,174 @@ pub fn set_selected_cell_without_scroll(&mut self, row_ix: usize, col_ix: usize,
 - `cargo test -p rds-result-panel --lib` → **448 passed / 0 failed**（与 §45 同数，无回归）。
 - `cargo test -p rds-editor --lib` → **869 passed / 0 failed / 4 ignored**（与 §45 同数，无回归）。
 - 目视验收（框线是否只绕 5 格、两条竖线是否落在对象格右缘与历史格左缘、expand 展开后是否变成「还原」图标）按要求由用户手动确认；本刀不启动 GUI、不截图。
+
+## §47 筛选条清除钮下拉：按 DBeaver 状态门控出项
+
+### 47.1 真值（`ResultSetViewer.java:1525-1545`）
+
+清除钮（`filtersClearButton`，`SWT.DROP_DOWN`）的箭头菜单由 `EraseItemListener` 现场拼装：
+
+```java
+1525: if (!menuManager.isEmpty()) {   // 只有主点那一项也在时
+1526:   menuManager.add(new Action(CMD_FILTER_CLEAR_SETTING) { ... });   // ① 恒第一项、无门控
+1527:   if (resultSet.hasHiddenAttributes())   add(new ShowColumnsAction());        // ②
+1530:   if (resultSet.hasColorOverrides())     add(new ResetAllColorAction());      // ③
+1533:   if (resultSet.getColumnTransformers()...hasTransformers()) add(FilterResetAllTransformersAction); // ④
+1536:   if (resultSet.hasPinnedAttributes())   add(new FilterResetAllPinsAction()); // ⑤
+1540:   if (menuManager.getSize() > 1)         add(new FilterResetAllSettingsAction()); // ⑥
+1544: }
+```
+
+三个 Action 的实现：
+
+- `FilterResetAllPinsAction.execute`：逐约束 `removeOption(ATTR_OPTION_PINNED)` 后重画（`actions/FilterResetAllPinsAction.java:34-44`）——DBeaver 的「pins」就是固定列。
+- `FilterResetAllSettingsAction.run`：`clearDataFilter(false)` → 有隐藏列则发 `CMD_SHOW_COLUMNS` → 有颜色 / 转换器 / pins 才各自 reset → `refreshData(null)`（`actions/FilterResetAllSettingsAction.java:44-63`）。
+- `ResetAllColorAction`：清颜色覆盖（本仓无此能力）。
+
+### 47.2 本仓原状
+
+清除钮箭头菜单**恒为 3 项**（删除所有过滤 / 排序、显示全部列、重置所有列设置）：
+「重置」无条件出现（DBeaver 要 `menuManager.getSize() > 1`），且整体缺「取消所有冻结列」这一路。
+
+### 47.3 本刀落地（提交 `d79edeb0`）
+
+| 位置 | 改动 |
+| --- | --- |
+| `ports.rs` | 新增 `ResultRequest::UnfreezeAllColumns`（引 `FilterResetAllPinsAction.java:34-44`）、`ResultRequest::ResetAllFilterSettings`（引 `FilterResetAllSettingsAction.java:44-63`） |
+| `grid/delegate.rs` | 新增 `unfreeze_all_columns() -> bool`：清冻结集合，本来就是空集合时返回 `false`（对应「逐约束 removeOption 后是否真的要重画」） |
+| `panel/events.rs::erase_menu_labels` | 改三参数 `(filter_text, hidden_columns, frozen_columns)`：恒有 ①；有隐藏列补 ②；有冻结列补 ⑤；除 ① 外还有别的项时补 ⑥ |
+| `panel/render.rs` | 调用点传 `column_hidden.len()` / `column_frozen.len()`；菜单 match 补两条分支 |
+| `editor/view/host/results/dispatch.rs` | `UnfreezeAllColumns`：改 delegate → `changed` 才 refresh + 列布局快照 + notify；`ResetAllFilterSettings`：`clear_filter_and_ordering_via_window` → `show_all_columns` + `unfreeze_all_columns` → refresh + 快照 |
+| `panel/tests.rs` | `the_erase_menu_always_offers_the_full_clear` 扩到 6 个 case，含「有隐藏列」「有冻结列」的完整清单 |
+
+### 47.4 差异登记
+
+| 项 | DBeaver | 本仓 | 原因 |
+| --- | --- | --- | --- |
+| ③ 重置颜色 | `hasColorOverrides()` → `ResetAllColorAction` | 不摆 | 本仓没有「列/单元格颜色覆盖」这一层，按「没有就不造」缺省 |
+| ④ 重置转换器 | `hasColumnTransformers()` → `FilterResetAllTransformersAction` | 不摆 | 同上，无转换器能力 |
+| 菜单为空的分支 | `menuManager.isEmpty()` 时整份不 add（`:1525`） | 恒非空（① 无门控） | 与 DBeaver 一致：① 本身就在 `isEmpty` 之外无条件 add，故实际永不为空 |
+| 对象格单击的行为 | 弹对象信息浮层 | 弹 `OpenSqlDialog` 卡片 | **未落地**：本仓那张卡片额外承载血缘与来源标题（卡片是「SQL 全文预览」的既有载体），改成无边框浮层会丢掉这些；是否改属产品取舍，不擅自改设计 |
+
+## §48 筛选历史入口：从「普通菜单」改成「浮层里的一张表」
+
+### 48.1 真值（`ResultSetFilterPanel.java:1093-1276`）
+
+`HistoryPanel.showFilterHistoryPopup`：
+
+```java
+1094: if (popup != null && !popup.isDisposed()) { closeHistoryPopup(); return; }  // 再点 = 关
+1099: popup = new Shell(getShell(), SWT.NO_TRIM);        // 独立无边框 Shell
+1102: Composite composite = new Composite(popup, SWT.NONE);
+1103: GridLayoutFactory.fillDefaults().margins(2, 2).applyTo(composite);
+1104: new CompositeBorderPainter(composite);            // 直角描边
+1111: Table editControl = createFilterHistoryPanel(composite, filtersHistory);
+1114: if (isPersistent() && context != null && editControl.getItemCount() > 0) → 建 Manage Filters 按钮
+```
+
+表本身（`createFilterHistoryPanel:1207-1276`）：
+
+- `TableViewer(popupLayer, SWT.FULL_SELECTION | SWT.SINGLE)`（`:1208`）
+- 第 1 列左对齐、`cell.setFont(BaseThemeSettings.instance.monospaceFont)`（`:1219-1221`）
+- 第 2 列右对齐、`cell.setText(title)`、`cell.setForeground(hintColor)`（`:1224-1231`）
+- 行内容 = `filters.stream().filter(f -> !f.text().equals(currentFilterText))`（`:1233-1236`）
+- 键盘：`SWT.CR` / `SWT.SPACE` → 应用；`SWT.ARROW_UP` 且选中 index `<= 0` → 关闭（`:1240-1263`）
+- 鼠标：`hoverItem` 上 `mouseDown` → 应用（`:1264-1273`）
+- 尺寸：宽 = `filtersText 宽 + historyPanel 宽`（有 expand 则 `x -= w; width += w`；有 execute 则 `width += execute 宽`，`:1150-1157`）；高 = `min(MAX_HISTORY_PANEL_HEIGHT = 200, popup computeSize)`（`:1159-1160`）；位置 `y = parentRect.y + getSize().y`（下方，超屏则翻上方，`:1161-1164`）
+- 列宽 `queryWidth = tableWidth * 0.7f - 2`、`titleWidth = tableWidth - queryWidth - 2`（`:1171-1174`）
+- 失焦关闭（`:1176-1190`）
+
+### 48.2 本仓原状
+
+历史入口是一颗 `Button`（`IconName::ChevronDown`）+ `dropdown_menu_with_anchor` 的**普通下拉菜单**（每条历史一个 `PopupMenuItem`）。菜单条目的行高、图标位、悬停反白都与那张表不同。
+
+### 48.3 本刀落地（提交 `8c4f1e3a`）
+
+| 位置 | 改动 |
+| --- | --- |
+| `ports.rs` | 新增 `ResultRequest::SetFilterHistoryPopup(bool)`（收目标态，不是翻转） |
+| `panel/data.rs` | 新增 `filter_history_popup_open` |
+| `panel/lifecycle.rs` | 初始化 `false` |
+| `panel/events.rs` | 新增 `set_filter_history_popup(open, cx)`（幂等写状态 + notify）；`apply_filter_from_history` 里直接收回浮层（选行即关） |
+| `panel/render.rs` | 历史格改受控 `Popover`（`gpui_kit::component::popover::Popover`）：`.anchor(TopLeft)` + `.offset(px(2.))` + `.open(open)` + `.trigger(button)` + `.on_open_change(...)`；行内容按 `:1233-1236` 过滤当前文本；行 = 等宽 SQL 文本 + 悬停高亮 + 点击 `ApplyFilter`；`max_h(rems(12.5))` = 200px；`min_w(rems(26.))` |
+| `panel/render.rs::render_filter_history_table` | 表体：`p(px(2.))` + 1px `border`（≈ `margins(2,2)` + `CompositeBorderPainter`）；空表给一行灰字占位 |
+| `editor/view/host/results/dispatch.rs` | 新增该请求的分派 |
+| `panel/tests.rs` | `rendered_ui_elements_survive`：未开无表 / 开后有表且只剩「1」一行 / 关后消失；`filter_history_dedupes_caps_and_replays`：展开后选行 → 浮层自动收回 |
+
+### 48.4 差异登记
+
+| 项 | DBeaver | 本仓 | 原因 |
+| --- | --- | --- | --- |
+| 第 2 列（`title`） | `QMQueryFilter.title()` 右对齐 + hint 色（`:1224-1231`） | 不摆 | 本仓历史是 `Vec<String>`，只有 SQL 文本、没有标题字段（`data.rs::filter_history` 注释），按「没有就不造」不摆 |
+| `Manage Filters` 按钮 | `isPersistent() && itemCount > 0` 才建（`:1114`） | 不建 | 本仓历史是**会话级内存**、无持久化通道 ⇒ `isPersistent()` 恒假，按 DBeaver 自己的门控不建 |
+| 宽度 | = 输入框 + 历史格 + expand + execute 宽之和（`:1150-1157`） | `min_w(26rem)` 兜底 | 那几格在同一条 flex 链上、渲染层拿不到实测宽；要精确需给它们加共享句柄（另开一刀） |
+| 直角描边 | `CompositeBorderPainter` 直角（`:1104`） | `Popover` 默认外观（圆角 + 阴影） | 沿用 kit 浮层组件的统一观感，不自绘外壳 |
+| `↑` 归零关闭 | `SWT.ARROW_UP` 且 index `<= 0`（`:1256-1260`） | 未接 | 表行没有键盘焦点通道（`Popover` 内容不参与 tab 序）；与「表格段键盘导航」同批 |
+| 连续两次点击箭头 | 第二次是「关」（`:1094-1097`） | 由 `BasePopover` 自身 toggle + `on_open_change` 回写状态 | 语义一致 |
+
+## §49 筛选条执行钮：按 `isItemEnabled` 出启用态
+
+### 49.1 真值（`ResultSetFilterPanel.java:1407-1436`）
+
+```java
+1414: protected boolean isItemEnabled() {
+1415:   if (viewer.isRefreshInProgress() && isEnabled()) return false;
+1418:   DBCExecutionContext context = viewer.getExecutionContext();
+1419:   if (context == null) return false;
+1422:   StringBuilder currentCondition = new StringBuilder();
+1424:   SQLUtils.appendConditionString(viewer.getModel().getDataFilter(), ..., currentCondition, true);
+1435:   return !currentCondition.toString().trim().equals(filtersText.getText().trim());
+1436: }
+```
+
+语义：把**已经落到数据模型上的筛选条件**还原成字符串，与输入框文本一起 trim 再比，**不等才亮**——即「输入框里有还没应用的东西」。另两条前置：刷新进行中 → 灭；无执行上下文 → 灭。
+
+### 49.2 本仓原状
+
+框内第 4 格与展开态的执行钮都恒可点。
+
+### 49.3 本刀落地（提交 `7acced8f`）
+
+| 位置 | 改动 |
+| --- | --- |
+| `panel/data.rs` | 新增 `applied_filter_text`：**已落到网格上的**筛选词快照 |
+| `panel/lifecycle.rs` | 初始化空串 |
+| `panel/events.rs::apply_filter_inner` | 落地（`delegate_mut().set_filter(...)`）时同步快照 `applied_filter_text` |
+| `panel/events.rs::has_pending_filter_draft` | `self.filter_text.trim() != self.applied_filter_text.trim()` |
+| `panel/render.rs` | 框内执行钮 `.disabled(!has_pending_filter_draft())` |
+| `panel/sidebars.rs` | 展开态执行钮同口径（DBeaver 是**同一个** `ExecutePanel` 实例，`:209`） |
+| `panel/tests.rs::commit_on_enter_records_filter_history` | 加两侧断言：打字未提交 → 有草稿；Enter 提交后 → 无草稿 |
+
+**修正一条既有判断**：§46.4 原写「本仓 `filter_text` 同时是生效值与输入，没有『未应用草稿』态，该条件在本仓无意义」——实测**不成立**。`on_filter_input` 一收到 change 就把值写进 `filter_text`（`lifecycle.rs:68` 起的订阅），而「落到网格」发生在防抖 300ms 或 Enter/▶ 时（`events.rs:40-48`、`apply_filter_inner`）。两者之间确实存在「有草稿」窗口，所以该判据在本仓有等价物，只是要单独记一份已应用值。
+
+### 49.4 差异登记
+
+| 项 | DBeaver | 本仓 | 原因 |
+| --- | --- | --- | --- |
+| 刷新进行中 → 灭 | `viewer.isRefreshInProgress()`（`:1415-1417`） | 无此分支 | 本仓结果面板没有「刷新中」状态位；要么等执行通道暴露，要么自造一个假状态——后者就是编造 |
+| 无执行上下文 → 灭 | `viewer.getExecutionContext() == null`（`:1418-1421`） | 无此分支 | 本仓结果面板恒绑在一个网格上，没有「上下文为空」这一态 |
+| 比较对象 | `getDataFilter()` 还原的条件串 | `applied_filter_text`（原始词） | 本仓没有「条件串」层：筛选词是本地行过滤，`set_filter(text)` 直接用原文，还原成串反而会引入两边不一致 |
+
+### 49.5 验证
+
+- `cargo check -p rds-result-panel` → `Finished dev profile`，0 error / 0 warning。
+- `cargo check -p rds-editor` → `Finished`，0 error / 0 warning。
+- `cargo test -p rds-result-panel --lib` → **448 passed / 0 failed**（§47/§48/§49 三刀累计，与 §46 同数，无回归）。
+- `cargo test -p rds-editor --lib` → **869 passed / 0 failed / 4 ignored**（三刀后无回归）。
+- 目视验收（清除钮箭头项数随隐藏列/冻结列变化、历史浮层是否为一张表且选中即关、执行钮打字时亮/提交后灭）按要求由用户手动确认；本线不启动 GUI、不截图。
+
+## §50 工具栏「点击动作与弹窗」剩余项
+
+| 项 | 状态 |
+| --- | --- |
+| 清除钮箭头菜单门控（§47） | **已落地** |
+| 历史入口 → 表格浮层（§48） | **已落地** |
+| 执行钮启用态（§49） | **已落地** |
+| 对象格单击 → 对象信息浮层 | **未落地**：改浮层会丢本仓卡片的血缘/标题，需产品决定；另 §44.4 的「双击开 SQL 控制台」在本仓无对应物 |
+| 查找钮 → `FindReplaceOverlay` 浮层 | **未落地**：本仓是工具栏下方一行（`render_find_bar` 注释已写明取舍：浮层要绝对定位覆盖网格，会把网格行列几何绑进来） |
+| 筛选条文本框的内容补全弹层 | **未落地**：`InputState` 无补全通道，等输入组件 |
+| 首格文本色 / 图标 / hover 灰↔彩 | 登记在 §46.4，未落地 |
+| 左/右侧栏规范序与出厂启用集合 | `stash@{0}` 半成品，未编译未验证 |
 
 
 
