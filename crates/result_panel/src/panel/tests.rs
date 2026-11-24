@@ -6711,3 +6711,47 @@ fn dragging_from_an_unselected_cell_anchors_there_first(
     assert_eq!(range.rows_count(), 2, "两行");
     assert_eq!(range.data_columns(), vec![1, 2], "两个数据列");
 }
+
+/// 【D10-2】行号槽按下 = 整行：状态行三项与「当前格」口径一起钉住。
+///
+/// DBeaver 的 row header 不在 `columns` 里，`getCells(row, …)`
+/// （`LightGrid.java:3125-3132`）铺的是全部数据列；本仓行号槽是组件第 0 列，
+/// delegate 把矩形两侧归一成 `0..=末列`（见 `grid/delegate.rs::click_cell`）。
+/// 状态行三项按 `SelectionExt` 口径（`ResultSetStatListener.java:80-92`）：
+/// 行数 1、列数 2（两个数据列）、格数 2。
+#[gpui_kit::test]
+fn clicking_the_row_number_slot_selects_the_whole_row(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    let grid = cx.update(|_, app| panel.read(app).grid.clone());
+
+    // 行号槽（组件列 0）按下：走生产口径「按下即选」（`begin_drag_at` 先发无修饰
+    // `CellClicked`、再 `set_selected_cell`，等价 DBeaver `:3152-3170` 的按下分支）。
+    // 裸 `TableState::new` 的 `cell_selectable` 默认关（`grid/status.rs` 的生产构造才开），
+    // 先按生产口径补上，否则整条链路早退、测的是另一张表。
+    cx.update(|_, app| {
+        grid.update(app, |table, cx| {
+            table.cell_selectable = true;
+            table.begin_drag_at(1, 0, cx);
+        })
+    });
+    cx.run_until_parked();
+
+    let range = cx.update(|_, app| {
+        grid.read(app).delegate().cell_range().expect("点过就有选区")
+    });
+    assert_eq!(range.rows(), (1, 1), "只选点中的那一行");
+    assert_eq!(range.cols(), (0, 2), "整行：从行号槽铺到末列");
+
+    // 状态行三项（1 行 × 2 数据列 × 2 格）由 `SelectionExt` 同口径纯函数算出——
+    // harness 的 `ResultPanel` 不注入 `status`（只有宿主 sync 才填），所以这里直接按
+    // 同一个入口验一遍，避免「选区对了、计数口径错了」漏检。
+    let counts = crate::grid::selection_counts(Some(&range));
+    assert_eq!(counts, (1, 2, 2), "整行 = 1 行 × 2 数据列 × 2 格");
+
+    // 「当前格」仍是行号槽本身：本仓既有口径（「修改」按钮据此置灰）
+    let pos = cx.update(|_, app| panel.read(app).selection_pos);
+    assert_eq!(pos, Some((1, 0)), "行号槽保持为当前格，不回落到数据列");
+}

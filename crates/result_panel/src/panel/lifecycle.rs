@@ -489,6 +489,11 @@ impl ResultPanel {
             // 单击选格：值详情跟随点选（此前只接双击——「点击文字半天才出来」
             // 的根因之一）+ 重建 JSON 展开树（选中值是 JSON/数组时）
             TableEvent::SelectCell(row_ix, col_ix) => {
+                // 【D10-2】点行号槽时 selection_pos 仍是行号槽本身：本仓这一格位置同时是
+                // 「当前数据格」的判据（「修改」按钮置灰、宿主提示、列归属都读它，
+                // 见 `edit.rs::has_current_cell` 与 `tests.rs` 的三条既有用例），
+                // 所以不把焦点回落到第一列。DBeaver 那边 `focusColumn` 会落到行头右侧
+                // 第一列（`LightGrid.java:3140-3145`），差异记在基线文档 §34 台账。
                 self.set_selection_pos(Some((*row_ix, *col_ix)), window, cx);
                 self.rebuild_value_tree(window, cx);
                 cx.notify();
