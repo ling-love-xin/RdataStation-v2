@@ -290,6 +290,7 @@ impl ResultPanel {
                     })
                     .into_any_element()
             });
+        let has_sql_chip = sql_chip.is_some();
         let filter = div()
             .h_flex()
             .items_center()
@@ -310,6 +311,20 @@ impl ResultPanel {
             .debug_selector(|| "editor-result-filter".to_string())
             // 第 1 列：对象图标 +「显示 SQL」（`ActiveObjectPanel`，见上文注释）
             .children(sql_chip)
+            // 【DBeaver 对齐 2026-11-25】对象格**右缘竖线**：`ActiveObjectPanel.paintPanel`
+            // 非 hover 时 `drawLine(e.x + e.width - 4, e.y + 2 → e.y + e.height - 4)`
+            // （`ResultSetFilterPanel.java:1028-1035`），格高 20 → 线长 14。这条线是
+            // 「对象格 | 输入格」之间的唯一分隔，本仓此前缺了它。
+            .when(has_sql_chip, |row| {
+                row.child(
+                    div()
+                        .w(ui::HAIRLINE)
+                        .h(rems(0.875))
+                        .flex_none()
+                        .bg(theme.colors.border)
+                        .debug_selector(|| "editor-result-filter-vline-source".to_string()),
+                )
+            })
             // 第 2 列：展开切换，放在文本列**左侧**。DBeaver 的 `FilterExpandPanel` 正是
             // `GridLayout(5)` 的第 2 列（`ResultSetFilterPanel.java:186`），`GridData` 为
             // `HORIZONTAL_ALIGN_BEGINNING | FILL_VERTICAL` + `widthHint = 图标宽 + 4`
@@ -324,7 +339,15 @@ impl ResultPanel {
                 Button::new("editor-result-filter-expand")
                     .ghost()
                     .xsmall()
-                    .icon(IconName::Maximize2)
+                    // 【DBeaver 对齐 2026-11-25】双态图标：`FilterExpandPanel` 常态画
+                    // `UIIcon.FIT_WINDOW`、展开态画 `UIIcon.ORIGINAL_SIZE`
+                    // （`ResultSetFilterPanel.java:1288-1291`，paint 在 `:1310-1317`）。
+                    // 语义是「铺满编辑区 / 还原成一行」，对应 lucide 的 maximize-2 / minimize-2。
+                    .icon(if self.filter_expanded {
+                        IconName::Minimize2
+                    } else {
+                        IconName::Maximize2
+                    })
                     // `selected` 出按下态、`toggled` 只写 a11y（0.9.0 实测，
                     // 见 gpui-component `button.rs:513-571`）：DBeaver 这颗是 CHECK，
                     // 展开态必须看得见按下去
@@ -402,7 +425,19 @@ impl ResultPanel {
             .when(!self.filter_expanded && !self.filter_history.is_empty(), |row| {
                 let items: Vec<String> = self.filter_history.to_vec();
                 let queue = self.queue.clone();
+                // 【DBeaver 对齐 2026-11-25】历史格**左缘竖线**：`HistoryPanel.paintPanel`
+                // 画 `drawLine(e.x + 2, e.y + 2 → e.x + 2, e.y + e.height - 4)`
+                // （`ResultSetFilterPanel.java:1082-1085`）——下拉箭头左边一根 14px 线，
+                // 是「输入/执行格 | 历史格」之间的分隔。
                 row.child(
+                    div()
+                        .w(ui::HAIRLINE)
+                        .h(rems(0.875))
+                        .flex_none()
+                        .bg(theme.colors.border)
+                        .debug_selector(|| "editor-result-filter-vline-history".to_string()),
+                )
+                .child(
                     Button::new("editor-result-filter-history")
                         .ghost()
                         .xsmall()
@@ -425,6 +460,27 @@ impl ResultPanel {
                         }),
                 )
             })
+            .into_any_element();
+
+        // 【DBeaver 对齐 2026-11-25】框外工具条 = `ResultSetFilterPanel.filterToolbar`
+        // （`ResultSetFilterPanel.java:314-386`）：`ToolBar(SWT.HORIZONTAL | SWT.RIGHT)`，
+        // 是外层 `GridLayout(2, false)`（`:163`）的**第 2 列**，与带边框的 `filterComposite`
+        // （第 1 列）并列。所以它落在**框外**、按内容宽、垂直居中，框线不加在它外面。
+        //
+        // 条目顺序（非 compactMode，`:318-386`）：
+        //   1 `filtersClearButton`（ERASE 图标，SWT.DROP_DOWN）—— 主点清筛选、箭头弹菜单
+        //   2 `filtersCustomButton`（FILTER 图标，SWT.DROP_DOWN）—— 主点开筛选设置、箭头弹菜单
+        //   3 `historyBackButton`（RS_BACK，SWT.DROP_DOWN）
+        //   4 `historyForwardButton`（RS_FORWARD，SWT.DROP_DOWN）
+        //   5 竖分隔（`UIUtils.createToolBarSeparator(filterToolbar, SWT.NONE)`，`:354`）
+        //   6 `openFindReplaceButton`（FIND_REPLACE，SWT.CHECK）
+        // 本仓原本把这 6 项都塞在 `filter` 那条带边框的行里，导致边框绕到工具钮外面，
+        // 视觉上「工具栏在输入框内」——这正是与 DBeaver 最大的形态差异。
+        let tools = div()
+            .h_flex()
+            .items_center()
+            .flex_none()
+            .debug_selector(|| "editor-result-toolbar-tools".to_string())
             // 【2026-11-18 结构对齐】清除钮改成 DBeaver 的口径：**常驻 + 空词禁用**
             // （`filtersClearButton` 建出来就 `setEnabled(false)`，`:319-327`；有筛选后才
             // 由 `enablePanelControls` 打开，`:449-454`）。此前是「有词才出现」，位置会
@@ -447,7 +503,11 @@ impl ResultPanel {
                     .ghost()
                     .xsmall()
                     .debug_selector(|| "editor-result-filter-clear".to_string())
-                    .label("✕")
+                    // 【DBeaver 对齐 2026-11-25】图标：`filtersClearButton.setImage(
+                    // DBeaverIcons.getImage(UIIcon.ERASE))`（`ResultSetFilterPanel.java:320`）。
+                    // 此前用文字 `✕` 顶替，与 DBeaver 的橡皮图不一致；lucide 的 `eraser`
+                    // 就是同一语义（橡皮擦）。
+                    .icon(IconName::Eraser)
                     .tooltip(tr("删除所有过滤 / 排序"))
                     .on_click(move |_, _window, app| {
                         clear_queue.request(ResultRequest::ClearFilterAndOrdering, app);
@@ -654,6 +714,9 @@ impl ResultPanel {
                     })
             })
             .into_any_element();
+        // 筛选条整条显隐同口径：DBeaver `updateFilterPanelVisibility` 一次隐藏
+        // `filtersPanelComposite`（含复合体与工具条两列，`ResultSetViewer.java:2002-2012`）。
+        let tools = self.show_filter_panel.then_some(tools);
 
         // 【T1 工具栏收口 2026-11-24】「下发源库」删除（基线 §13.4：执行通道非源库时
         // 拼 WHERE 重查没有语义，筛选本身就是在 SQL 上包一层 where）；列注释开关
@@ -1084,7 +1147,7 @@ impl ResultPanel {
         };
         // 工具栏：右栏开关已移状态栏右端，这里不再摆（None）；导出/刷新已移状态栏
         // SQL 入口已并入筛选框第 1 格（「显示 SQL」，见上方 `sql_chip`），工具栏左段不再单摆
-        let toolbar_el = result_grid::render_toolbar(filter, cx);
+        let toolbar_el = result_grid::render_toolbar(filter, tools, cx);
         // 状态栏右段耗时取自工具栏投影；先取出再移动 `toolbar` 进 pane
         let elapsed_ms = toolbar.elapsed_ms;
         // 【状态栏三项】右段只显示 内存 / 查询时间 / 查询条数（用户口径 2026-10-28）。

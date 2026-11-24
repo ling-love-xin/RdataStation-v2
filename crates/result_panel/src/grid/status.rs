@@ -337,14 +337,26 @@ impl Default for ResultPane {
 /// - 执行信息（行数/耗时/失败/血缘/连接…）**不在工具栏**：移入状态栏（见
 ///   `render_status_row` 的 `memory` / `affected_rows` 参数）——用户口径：执行信息归结果集状态栏
 /// - 导出 / 刷新同样移入状态栏（左动作组系统段），工具栏不再摆
-pub fn render_toolbar(filter: Option<AnyElement>, cx: &App) -> AnyElement {
+pub fn render_toolbar(
+    filter: Option<AnyElement>,
+    // 【DBeaver 对齐 2026-11-25】框外工具条（`ResultSetFilterPanel.filterToolbar`）。
+    // 它是**外层 GridLayout 的第 2 列**（`ResultSetFilterPanel.java:163` `new GridLayout(2, false)`），
+    // 与带边框的 `filterComposite`（第 1 列，只含 5 格）是**两个并列控件**：
+    // 边框框不住工具钮，工具钮也不在输入框里。此前本仓把 clear/settings/back/forward/find
+    // 全塞进 `filter` 那条带边框的行里，框线绕到了工具钮外面——这是「工具栏看起来不像
+    // DBeaver」的结构性原因。
+    tools: Option<AnyElement>,
+    cx: &App,
+) -> AnyElement {
     let theme = cx.theme();
     let muted = theme.colors.muted_foreground;
     div()
         .h_flex()
         .items_center()
         .justify_between()
-        .gap_2()
+        // 两列间距 5px：DBeaver 外层 `GridLayout(2, false)` 用的是 SWT 默认
+        // `horizontalSpacing = 5`（未显式设置，`:163-166` 只改了 margin）。
+        .gap(px(5.))
         // 水平内距 3px（`ui::RESULT_TOOLBAR_PADDING`）：DBeaver 的筛选条面板 `marginWidth = 3`
         // （`ResultSetFilterPanel.java:163-166`），此前 `px_2`(8px) 宽了 5px。垂直方向不加，
         // 由「30px 行高居中 24px 筛选区」自然形成 3px（见 `ui.rs` 常量注释）。
@@ -387,8 +399,14 @@ pub fn render_toolbar(filter: Option<AnyElement>, cx: &App) -> AnyElement {
                 // `panel/render.rs` 的 `sql_chip`）
                 .children(filter),
         )
-        // 【T1 工具栏收口 2026-11-24】右段整段移除：DBeaver 筛选栏只有左段复合体
-        // （`ResultSetFilterPanel.java:180-214` 内层 5 格），动作项全在底部状态条。
+        // 【DBeaver 对齐 2026-11-25】右段 = `filterToolbar`（框外工具条）。
+        // 它是 `ToolBar(SWT.HORIZONTAL | SWT.RIGHT)` 且 GridData 为
+        // `HORIZONTAL_ALIGN_BEGINNING | VERTICAL_ALIGN_CENTER`（`ResultSetFilterPanel.java:315-316`）
+        // —— 也就是**紧贴第 1 列右侧、按内容宽、垂直居中**，不是推到最右。
+        // 本仓 `justify_between` 已把左段吃掉剩余宽（`flex_1`），右段自然紧贴其后。
+        .children(tools)
+        // 【T1 工具栏收口 2026-11-24】右段业务按钮（对比/分析/提交撤销/复制）不在这里：
+        // DBeaver 筛选栏只有左段复合体 + 这条无业务的工具条，动作项全在底部状态条。
         // 本仓对比/分析入口迁到结果集标签页右键（基线文档 §21.1），列注释迁到结果集设置（§14.2）。
         .into_any_element()
 }

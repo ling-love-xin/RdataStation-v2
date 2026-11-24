@@ -3100,6 +3100,91 @@ pub fn set_selected_cell_without_scroll(&mut self, row_ix: usize, col_ix: usize,
 - 未跑 `-p rds-settings --all-targets`：`settings_page.rs:284` 的 `tr` E0425（main 既有的 `#[cfg(test)]` 模块缺 `use shared::i18n::tr;`）会挡住该包的 test target；本刀不动它，缺陷仍登记在案。
 - 目视验收（设置页选「字段注释 / 数据类型」后列头第二行是否真的出现、切「无」是否复原）按要求由用户手动确认，本刀不启动 GUI、不截图。
 
+## §46 工具栏（筛选条）：框内复合体与框外工具条拆开（形态对齐第一刀）
+
+用户实测后给的口径是「工具栏都没有对齐 DBeaver，请你完整对齐，高保真，以及点击后的操作、按钮的弹出窗口等等」。此前 §44 只把**第 1 格**做了（来源查询短文本），整条筛选条仍是本仓自造形态。本节先把**结构**按源码对齐，弹出窗口层面的差异单列在 46.4 等下一刀。
+
+### 46.1 DBeaver 真值：这是**两个并列控件**，不是一个带框的行
+
+`ResultSetFilterPanel` 的外观由外层两列 GridLayout 决定（`dbeaver-ref/plugins/org.jkiss.dbeaver.ui.editors.data/src/org/jkiss/dbeaver/ui/controls/resultset/ResultSetFilterPanel.java`）：
+
+```java
+163: GridLayout gl = new GridLayout(2, false);
+164: gl.marginHeight = 3;
+165: gl.marginWidth = 3;
+```
+
+- **第 1 列 `filterComposite`**（`:170-182`）：`GridLayout(compactMode ? 4 : 5, false)` + `marginHeight/Width = 2` + `horizontalSpacing = 0` + `verticalSpacing = 0`，`GridData(FILL_HORIZONTAL)`，挂 `CompositeBorderPainter`。描边是**直角矩形**、颜色取 `UIUtils.getShadowColor()`（`CompositeBorderPainter.java:34-39`）。5 格依次是：
+  1. `ActiveObjectPanel`（`:184`）——对象图标 + 来源查询文本
+  2. `FilterExpandPanel`（`:186`，非 compactMode）
+  3. `filtersTextViewer`（`:192-308`，`TextViewer(SWT.MULTI)` + IME + undo + 空文本提示 + 内容补全）
+  4. `ExecutePanel`（`:209`）
+  5. `HistoryPanel`（`:214`）
+- **第 2 列 `filterToolbar`**（`:315-316`）：`ToolBar(SWT.HORIZONTAL | SWT.RIGHT)`，`GridData(HORIZONTAL_ALIGN_BEGINNING | VERTICAL_ALIGN_CENTER)`，即**框外、紧贴复合体右缘、按内容宽、垂直居中**。条目（非 compactMode）：
+  1. `filtersClearButton`：`UIIcon.ERASE`，`SWT.DROP_DOWN`，建出来 `setEnabled(false)`（`:319-328`）
+  2. `filtersCustomButton`：`UIIcon.FILTER`，`SWT.DROP_DOWN`（`:330-338`）
+  3. `historyBackButton`：`UIIcon.RS_BACK`，`SWT.DROP_DOWN`（`:342-346`）
+  4. `historyForwardButton`：`UIIcon.RS_FORWARD`，`SWT.DROP_DOWN`（`:348-352`）
+  5. 竖分隔：`UIUtils.createToolBarSeparator(filterToolbar, SWT.NONE)`（`:354`）
+  6. `openFindReplaceButton`：`UIIcon.FIND_REPLACE`，`SWT.CHECK`（`:356-385`）
+
+两列间距没有显式设置，落 SWT `GridLayout` 默认 `horizontalSpacing = 5`。
+
+**格间竖线**（这是本仓此前完全缺失的一层）：
+
+- `ActiveObjectPanel.paintPanel`：`e.gc.drawLine(e.x + e.width - 4, e.y + 2, e.x + e.width - 4, e.y + e.height - 4)`（`:1032-1035`），hover 时先按主题明暗 mix 90% 铺底再画同一条线（`:1019-1031`）
+- `HistoryPanel.paintPanel`：`e.gc.drawLine(e.x + 2, e.y + 2, e.x + 2, e.y + e.height - 4)`（`:1083-1085`）
+- 格高 `MIN_FILTER_TEXT_HEIGHT = 20`（`:103`），线从 `y+2` 到 `y+h-4` ⇒ 线长 14px
+
+**其余形态真值**：
+
+- `ActiveObjectPanel.computeSize`：宽 `min(文本宽 + 10, 父链第一个非零宽 / 4)`，下限 `"X" × 24`（compact 16）；高 `min(文本高 + 6, 20)`（`:987-1011`）
+- 对象格文本色：`e.gc.setForeground(COLOR_DARK_GREEN)`（`:1037`）；图标画在 `x=2`，文本从 `2 + iconW + 2` 起（`:1040-1049`）
+- `FilterExpandPanel`：宽 `iconW + 4`、高 20；常态 `FIT_WINDOW`、展开态 `ORIGINAL_SIZE`，非 hover 画灰度副本、hover 画彩色（`:1288-1291`、`:1309-1317`）
+- `HistoryPanel`：宽 `dropIconW + 6`、高 20；`SWT.IMAGE_GRAY` 副本做非 hover 态（`:1056-1069`）
+- `ExecutePanel`：`SWT.NONE`（不画分隔线），宽 `4 + iconW`（`:1350-1355`）；`isItemEnabled` = 「当前筛选条件字符串 ≠ 输入框文本」且非 `isRefreshInProgress`（`:1413-1436`）
+- `ToolItemPanel.paintPanel`：`isRefreshInProgress()` 时改画 `UIIcon.CLOSE`（`:1367-1373`）
+
+### 46.2 本仓原状（`crates/result_panel/src/panel/render.rs` 的筛选段）
+
+- `filter` 是**一个**带边框的 `div`，里面依次放了 5 格**再放全部 6 个工具钮**（clear / settings / back / forward / 分隔 / find）——边框把工具钮也框进来了，DBeaver 里它们在框**外**。
+- 没有任何格间竖线（只有 Button 自身内距形成的缝）。
+- expand 只有 `Maximize2` 一个图标，不随展开态变。
+- clear 用文字 `✕` 顶替图标。
+- 对象格单击 = `OpenSqlDialog`（对话框），DBeaver 是**浮层**。
+
+### 46.3 本刀落地
+
+| 位置 | 改动 |
+| --- | --- |
+| `grid/status.rs::render_toolbar` | 签名加第二段 `tools: Option<AnyElement>`；容器间距 `gap_2`(8px) → `gap(px(5.))`，注明 SWT `GridLayout` 默认 hSpacing=5；右段按内容宽（`flex_none`）紧贴左段 |
+| `panel/render.rs` 筛选段 | `filter` 只保留框内 5 格（对象 / expand / 文本 / 执行 / 历史）+ 两条竖线，`.into_any_element()` 后新建 `tools` 承载 6 个工具钮；两者同受 `show_filter_panel` 门控 |
+| 竖线 1 | 对象格右缘：`1px × 14px`，探针 `editor-result-filter-vline-source`（依据 `:1032-1035`） |
+| 竖线 2 | 历史格左缘：`1px × 14px`，探针 `editor-result-filter-vline-history`（依据 `:1083-1085`） |
+| expand 图标 | `filter_expanded ? Minimize2 : Maximize2`（依据 `FIT_WINDOW` / `ORIGINAL_SIZE`，`:1288-1291`） |
+| clear 图标 | `IconName::Eraser` 替代文字 `✕`（依据 `UIIcon.ERASE`，`:320`） |
+| `tools` 容器 | 探针 `editor-result-toolbar-tools` |
+
+### 46.4 差异登记（形态层仍不同，本刀不做）
+
+| 项 | DBeaver | 本仓 | 原因 |
+| --- | --- | --- | --- |
+| 对象格文本色 | `COLOR_DARK_GREEN`（SWT 系统色，明暗主题都是绿） | `theme.colors.muted_foreground` | 本仓主题是「140/140 全量 token」口径，新增一个语义色要同步 `theme-tokens-complete.md` 与校验；单独一刀，不夹带 |
+| 对象图标 | 数据容器节点图标，回退 `DBIcon.SQL_TEXT`（`:552-571`） | `IconName::Table2`（表） | 本仓结果恒来自一条 SQL，按 `:568-570` 应落 `SQL_TEXT`；lucide 里对应 `FileCode`，改图标属观感项，与「先对齐结构」可分开 |
+| 逐格宽高 | `computeSize` 精确到 `icon+4` / `icon+6` | Button 组件内距决定（±2-4px） | 组件没有「图标 + 固定内距」旋钮；差异在像素级，肉眼小于一条竖线 |
+| hover 语义 | 图标灰副本 ↔ 彩色、格子以 blend 90% 铺底 | `Button::ghost()` 的 hover 底色 | 要完全等价需自绘格子（违反「组件选型禁手搓」）；现有 hover 反馈语义相同 |
+| 对象格单击 | 弹对象信息浮层（内嵌只读 SQL 面板，失焦关闭） | 弹 `OpenSqlDialog` 对话框 | 属「弹出窗口」刀；另需决定是否引入可编辑 SQL 控制台（§44.4 未决） |
+| 历史下拉 | 表格浮层（70/30 双列、SQL 等宽字体、`Manage Filters`、↑ 关闭） | 普通下拉菜单 | 属「弹出窗口」刀 |
+| ExecutePanel 启用条件 | 文本 ≠ 当前条件才亮 | 恒可点 | 本仓 `filter_text` 同时是生效值与输入（即时本地过滤），没有「未应用草稿」态，该条件在本仓无意义 |
+| 工具钮图标 | ERASE / FILTER / RS_BACK / RS_FORWARD / FIND_REPLACE 五套专图 | Eraser / Funnel / ChevronLeft / ChevronRight / Search | lucide 无 `RS_BACK`/`RS_FORWARD` 等价物，方向箭头已是最接近的语义 |
+
+### 46.5 验证
+
+- `cargo check -p rds-result-panel` → `Finished dev profile`，0 error。
+- `cargo test -p rds-result-panel --lib` → **448 passed / 0 failed**（与 §45 同数，无回归）。
+- `cargo test -p rds-editor --lib` → **869 passed / 0 failed / 4 ignored**（与 §45 同数，无回归）。
+- 目视验收（框线是否只绕 5 格、两条竖线是否落在对象格右缘与历史格左缘、expand 展开后是否变成「还原」图标）按要求由用户手动确认；本刀不启动 GUI、不截图。
+
 
 
 
