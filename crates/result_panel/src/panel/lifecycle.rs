@@ -445,7 +445,8 @@ impl ResultPanel {
             pushdown: false,
             renaming: None,
             renaming_input: None,
-            show_column_comments: false,
+            // 列头附加内容出厂「无」（host 构造时按全局偏好覆盖）
+            column_header_extra: workbench_shell::result_style::ColumnHeaderExtra::Nothing,
             // 类型样式默认全继承 / 原始值（与渲染现状一致；host 构造时按全局偏好覆盖）
             type_style: TypeStylePrefs::default(),
         }

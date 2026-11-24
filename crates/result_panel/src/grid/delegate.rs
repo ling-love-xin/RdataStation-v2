@@ -19,7 +19,7 @@ use crate::rowset::{LocalRowSet, RowRef};
 use crate::store::ColumnType;
 use ::shared::FactFrame;
 use workbench_shell::model::ColumnAnnotation;
-use workbench_shell::result_style::TypeStylePrefs;
+use workbench_shell::result_style::{ColumnHeaderExtra, TypeStylePrefs};
 /// 结果网格的 key context（`crates/app` 把 `Ctrl+C` 绑在它上面，两边成对）
 ///
 /// 与编辑器面板根的 `editor` 刻意分开：这个上下文只挂在结果网格那层元素上，所以
@@ -168,9 +168,10 @@ pub struct ResultGridDelegate {
     /// 只影响表头 tooltip（来源表 / 来源列 / 注释 / 类型 / 可空 / 默认值）；没报时与今天完全一致。
     /// 由面板在 `set_data` **之后**同一次同步里给（见 [`ResultGridDelegate::set_column_annotations`]）。
     pub(crate) column_annotations: Vec<Option<ColumnAnnotation>>,
-    /// 【B1】列头是否直接显示注释（列名下方第二行小字；默认 false——注释只在 hover tooltip 里）。
-    /// 由面板在切换「注释」开关时同步过来；开启后列头变高（两行：列名 + 注释小字）。
-    pub(crate) show_column_comments: bool,
+    /// 【DBeaver 对齐】列头第二行画什么（三档，出厂 `Nothing`；列名下方小字）。
+    /// 由面板在构造 / 设置变更时同步过来；非 `Nothing` 时表头抬成两行
+    /// （列名 + 附加行）。
+    pub(crate) column_header_extra: ColumnHeaderExtra,
     /// 【选中统计】三项开关的镜像（对齐 DBeaver `resultset.show.selected.*`）。
     ///
     /// 菜单要标「✓ 已开启」，而偏好真值在面板：网格只读这份镜像。面板在构造 / 切换 /
@@ -744,14 +745,20 @@ impl ResultGridDelegate {
         self.column_annotations = annotations;
     }
 
-    /// 【B1】面板切换「注释」开关时同步：列头是否直接显示注释（第二行小字）。
+    /// 【DBeaver 对齐】设置页改「列头附加内容」时同步：三档决定列头第二行画
+    /// 注释 / 类型名 / 什么都不画。
     /// 不随 `set_data` 清掉——这是面板视图偏好，不是这份结果自己的元数据。
-    pub fn set_show_column_comments(&mut self, on: bool) {
-        self.show_column_comments = on;
+    pub fn set_column_header_extra(&mut self, extra: ColumnHeaderExtra) {
+        self.column_header_extra = extra;
+    }
+
+    /// 当前列头附加内容档位（`header.rs` 据此选第二行文本）。
+    pub fn column_header_extra(&self) -> ColumnHeaderExtra {
+        self.column_header_extra
     }
 
     /// 【选中统计】面板同步三项开关镜像（右键菜单据此标勾选态）。
-    /// 与 [`Self::set_show_column_comments`] 同口径：面板视图偏好，不随 `set_data` 清掉。
+    /// 与 [`Self::set_column_header_extra`] 同口径：面板视图偏好，不随 `set_data` 清掉。
     pub fn set_selection_stat_prefs(&mut self, prefs: crate::grid::SelectionStatPrefs) {
         self.selection_stat_prefs = prefs;
     }
@@ -778,21 +785,26 @@ impl ResultGridDelegate {
 
     /// 表头带该多高（`None` = 用组件默认，即 [`crate::ui::RESULT_TABLE_SIZE`] 档的行高 26px）。
     ///
-    /// 只有「注释开关开启」这一档才抬：那时表头是**两行**（列名主行 + 注释小字），组件
-    /// 默认的 26px 减掉 `table_cell_padding` 上下各 2px 只剩 22px 内容高，两行各被裁一半
-    /// ——主行会被压到读不出字（2026-11-08「字段被遮挡」就是这一族问题的极端形态：
-    /// 列头菜单当时还是第二行，直接把主行挤成 0）。单行表头一个像素都不动，
-    /// 默认视觉不变。
+    /// 只有「列头附加内容」非 `Nothing`（注释 / 类型名）时才抬：那时表头是**两行**
+    /// （列名主行 + 附加小字），组件默认的 26px 减掉 `table_cell_padding` 上下各 2px
+    /// 只剩 22px 内容高，两行各被裁一半——主行会被压到读不出字
+    /// （2026-11-08「字段被遮挡」就是这一族问题的极端形态：列头菜单当时还是第二行，
+    /// 直接把主行挤成 0）。单行表头一个像素都不动，默认视觉不变。
+    ///
+    /// DBeaver 侧表头行高由渲染器按需算（`GridColumnRenderer` 在两行内容下自己
+    /// 报更大 preferred size），本仓是固定抬到两行够用的常量——口径相同
+    /// （「有第二行才变高」），数值来源见 [`crate::ui::RESULT_HEADER_COMMENT_ROW_HEIGHT`]。
     ///
     /// 由宿主在渲染表格时读给 `DataTable::header_row_height`（`grid/status.rs`）。
     pub(crate) fn header_row_height(&self) -> Option<Pixels> {
-        self.show_column_comments
+        self.column_header_extra
+            .shows_extra_line()
             .then_some(crate::ui::RESULT_HEADER_COMMENT_ROW_HEIGHT)
     }
 
     /// 【类型样式】同步全局偏好（数字格式 / NULL 占位 / 布尔映射 / 按族对齐与前景色）。
     ///
-    /// 与 [`Self::set_show_column_comments`] 同口径：**面板视图偏好**，不随 `set_data` 清掉；
+    /// 与 [`Self::set_column_header_extra`] 同口径：**面板视图偏好**，不随 `set_data` 清掉；
     /// 由面板在构造、`set_data` 同步与偏好变更（workbench 设置钩子）时调用。
     pub fn set_type_style(&mut self, prefs: TypeStylePrefs) {
         self.type_style = prefs;

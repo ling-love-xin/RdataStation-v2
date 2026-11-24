@@ -456,6 +456,65 @@ impl TypeStylePrefs {
     }
 }
 
+/// 列名下方第二行画什么（对齐 DBeaver `ResultSetPreferences.ColumnHeaderExtraContent`）。
+///
+/// DBeaver 该偏好是**三档**、出厂 `NOTHING`（`PrefPageResultSetPresentation.java:145-147`
+/// 与 `DataEditorsPreferencesInitializer.java:80`）；旧的布尔偏好
+/// `RESULT_SET_SHOW_DESCRIPTION` 只在枚举键为空时作向后兼容回退
+/// （`SpreadsheetPresentation.java:974-987`）。
+///
+/// 本仓直接以三档落盘，不做旧 `result_panel.show_column_comments` 的迁移：
+/// 旧值 `false`（出厂）语义等同 [`ColumnHeaderExtra::Nothing`]，`true` 等同
+/// [`ColumnHeaderExtra::Description`]，但旧键只有两档、表达不出 `DataType`
+/// 这一档，保留双键只会留下一个永远读不到第三档的影子开关。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColumnHeaderExtra {
+    /// 不画第二行（出厂档）。DBeaver 侧 `getDescription` 直接返回 `null`
+    /// （`SpreadsheetPresentation.java:3425-3427`）。
+    #[default]
+    Nothing,
+    /// 画字段注释：`DBDAttributeBinding.getDescription()`（`:3432`）。
+    Description,
+    /// 画完整类型名：`DBUtils.getFullTypeName(...)`（`:3430`），主键列前缀 `PK `
+    /// （`:992-996` 用 `rowIdentifier.getUniqueKey().getConstraintType() ==
+    /// PRIMARY_KEY` 判定）——本仓缺主键标记，见文档 §45 的差异登记。
+    DataType,
+}
+
+impl ColumnHeaderExtra {
+    /// 三档全量（设置页下拉与测试用）。
+    pub const ALL: [ColumnHeaderExtra; 3] = [
+        ColumnHeaderExtra::Nothing,
+        ColumnHeaderExtra::Description,
+        ColumnHeaderExtra::DataType,
+    ];
+
+    /// 落盘 / 设置项取值（与 `SettingKind::Enum` 的键一致）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Nothing => "nothing",
+            Self::Description => "description",
+            Self::DataType => "data_type",
+        }
+    }
+
+    /// 解析落盘值；未知值返回 `None`（设置文件被手改坏时由调用方拒绝写入）。
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "nothing" => Some(Self::Nothing),
+            "description" => Some(Self::Description),
+            "data_type" => Some(Self::DataType),
+            _ => None,
+        }
+    }
+
+    /// 是否要画第二行（表头高度据此抬成两行）。
+    pub fn shows_extra_line(self) -> bool {
+        !matches!(self, Self::Nothing)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -167,8 +167,13 @@ impl EditorHostPanel {
     pub fn apply_result_style(&self, cx: &mut Context<Self>) {
         if let Some(settings) = cx.try_global::<settings::model::Settings>() {
             let prefs = settings.result_panel.type_style();
+            // 列头附加内容（三档）与类型样式同一钩子：设置页改档后列头立即重绘
+            // （DBeaver 侧是 `ResultSetPreferences` 变更后 `redrawPanels` 同口径）
+            let header_extra = settings.result_panel.column_header_extra;
             self.result_panel
                 .update(cx, |p, cx| p.set_type_style(prefs, cx));
+            self.result_panel
+                .update(cx, |p, cx| p.set_column_header_extra(header_extra, cx));
         }
     }
 

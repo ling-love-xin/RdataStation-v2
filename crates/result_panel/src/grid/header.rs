@@ -22,6 +22,7 @@ use crate::rowset::RowRef;
 use crate::store::ColumnKind;
 use crate::ui;
 use workbench_shell::model::ColumnAnnotation;
+use workbench_shell::result_style::ColumnHeaderExtra;
 /// 表头悬停的分块内容：第一行「列名 · 类型」，后续行字段元数据（来源 / 注释 / 可空 / 默认）。
 ///
 /// 返回 `(标题行, 元数据行列表)`。注释缺失 = 空列表（与单行 tooltip 等效）。
@@ -66,6 +67,27 @@ pub(crate) fn header_tooltip_lines(
         meta.push(format!("默认：{default_value}"));
     }
     (title, meta)
+}
+
+/// 列头第二行该画的文本（`columnHeaderExtra` × 列注解）。
+///
+/// 对齐 DBeaver `SpreadsheetPresentation.java:3422-3436` 的 `getDescription`：
+/// - `Nothing` → 不画（该处 `return null`）；
+/// - `Description` → 字段注释（`attributeBinding.getDescription()`）；
+/// - `DataType` → 完整类型名（`columnTypeDescriptions` = `DBUtils.getFullTypeName`）。
+///
+/// 空 / 纯空白的文本按「没有」处理（DBeaver 侧 `null` 与空串在渲染上都是不占位）。
+pub(crate) fn column_header_extra_text(
+    extra: ColumnHeaderExtra,
+    annotation: Option<&ColumnAnnotation>,
+) -> Option<String> {
+    let text = match extra {
+        ColumnHeaderExtra::Nothing => return None,
+        ColumnHeaderExtra::Description => annotation?.comment.as_deref(),
+        ColumnHeaderExtra::DataType => annotation?.data_type.as_deref(),
+    };
+    text.filter(|text| !text.trim().is_empty())
+        .map(str::to_string)
 }
 /// 表头单元格：组件默认只画列名（`div().size_full().child(name)`），这里补三件事——
 /// **截断**、**悬停全文**、**列类型小标签**。列名常常比默认列宽（128px）长，截断之后
@@ -194,34 +216,38 @@ pub(crate) fn render_th(
             )
         });
 
-    // 【B1】注释第二行：开关开启 + 列有注释时画（muted 小字，截短；hover tooltip 看全）
+    // 【DBeaver 对齐】列头附加第二行：`columnHeaderExtra` 三档决定画什么——
+    // `Nothing` 不画 / `Description` 画字段注释 / `DataType` 画完整类型名
+    // （`SpreadsheetPresentation.java:3422-3436` 的 `getDescription`）。
+    // 文字为空（没报注释 / 没报类型）的列不占位，与该处返回 `null` 一致。
     // 两行要装得下，表头带由 `ResultGridDelegate::header_row_height()` 抬到 40px
     // （内容高 36 = 两行各 18px）；没抬之前这行会被组件的 `overflow_hidden` 裁掉。
-    let comment_line = if delegate.show_column_comments
-        && !ResultGridDelegate::is_row_number(col_ix)
-        && !delegate.transposed
-    {
-        delegate
-            .column_annotations
-            .get(col_ix - 1)
-            .cloned()
-            .flatten()
-            .and_then(|a| a.comment)
-            .filter(|c| !c.trim().is_empty())
-            .map(|comment| {
-                div()
-                    .w_full()
-                    .min_w_0()
-                    .truncate()
-                    .text_xs()
-                    .text_color(muted)
-                    // 给用例读「注释行真的上屏了」：表头没抬高时这一行会被组件裁掉
-                    .debug_selector(move || format!("editor-result-th-comment-{col_ix}"))
-                    .child(SharedString::from(comment))
-            })
-    } else {
+    let extra_text = if ResultGridDelegate::is_row_number(col_ix) || delegate.transposed {
+        // 行号槽没有列注解；转置视图的类型是混合的（DBeaver 侧转置列同样不挂
+        // `DBDAttributeBinding`，`getDescription` 返回 null）
         None
+    } else {
+        column_header_extra_text(
+            delegate.column_header_extra(),
+            delegate
+                .column_annotations
+                .get(col_ix - 1)
+                .cloned()
+                .flatten()
+                .as_ref(),
+        )
     };
+    let extra_line = extra_text.map(|text| {
+        div()
+            .w_full()
+            .min_w_0()
+            .truncate()
+            .text_xs()
+            .text_color(muted)
+            // 给用例读「第二行真的上屏了」：表头没抬高时这一行会被组件裁掉
+            .debug_selector(move || format!("editor-result-th-extra-{col_ix}"))
+            .child(SharedString::from(text))
+    });
 
     // 【D10-3】行号槽表头格（组件第 0 列）= DBeaver 的「左上交角」：点一下全选所有格
     // （`LightGrid.java:3174-3184` → `selectAllCellsInternal` `:4272-4296`）。
@@ -289,7 +315,7 @@ pub(crate) fn render_th(
             })
             .debug_selector(move || format!("editor-result-th-{col_ix}"))
             .child(main_row)
-            .when_some(comment_line, |head, line| head.child(line))
+            .when_some(extra_line, |head, line| head.child(line))
             .into_any_element();
     }
     // 【列头菜单】DBeaver 列头箭头：排序 / 复制此列 / 冻结 / 隐藏 / 统计 / 洞察
@@ -609,7 +635,7 @@ pub(crate) fn render_th(
         // 的「表头右端真点击」随即取不到坐标（`editor-result-th-1` 恒为 None）。
         .debug_selector(move || format!("editor-result-th-{col_ix}"))
         .child(main_row)
-        .when_some(comment_line, |head, line| head.child(line));
+        .when_some(extra_line, |head, line| head.child(line));
     head.id(("editor-result-th", col_ix))
         .tooltip(move |window, cx| {
             let (title, meta) =

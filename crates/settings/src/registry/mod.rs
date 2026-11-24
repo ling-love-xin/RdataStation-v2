@@ -220,8 +220,9 @@ pub enum Slot {
     /// 结果集事实档载体偏好（auto / memory / table；分流纯函数在 `shared::fact`，
     /// 触发物化路径 B 批接通消费）。
     ResultPanelFactStorage,
-    /// 列头是否直接显示字段注释（默认 false；面板工具栏另有 B1 临时开关）。
-    ResultPanelShowColumnComments,
+    /// 列头第二行画什么（三档 nothing / description / data_type；出厂 nothing）。
+    /// 对齐 DBeaver `ResultSetPreferences.RESULT_SET_COLUMN_HEADER_EXTRA`。
+    ResultPanelColumnHeaderExtra,
     /// 列头是否显示类型徽标（123/Aa/◷/✓/01 浅底符号）。
     ResultPanelShowTypeBadge,
     /// 键盘导航是否循环选择（到末尾后循环回开头）。
@@ -374,7 +375,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "sql_format.ignore_file_comment_text" => Slot::SqlFormatIgnoreFileText,
         "sql_format.normalize_operators" => Slot::SqlFormatNormalizeOperators,
         "result_panel.fact_storage" => Slot::ResultPanelFactStorage,
-        "result_panel.show_column_comments" => Slot::ResultPanelShowColumnComments,
+        "result_panel.column_header_extra" => Slot::ResultPanelColumnHeaderExtra,
         "result_panel.show_type_badge" => Slot::ResultPanelShowTypeBadge,
         "result_panel.loop_selection" => Slot::ResultPanelLoopSelection,
         "result_panel.select_on_modifier_click" => Slot::ResultPanelSelectOnModifierClick,
@@ -491,8 +492,7 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::SqlAnalysisSemanticDiagnostics
         | Slot::SqlAnalysisPredicatePushdown
         | Slot::SqlAnalysisHoverScope => KindTag::Bool,
-        Slot::ResultPanelFactStorage => KindTag::Enum,
-        Slot::ResultPanelShowColumnComments => KindTag::Bool,
+        Slot::ResultPanelFactStorage | Slot::ResultPanelColumnHeaderExtra => KindTag::Enum,
         Slot::ResultPanelShowTypeBadge
         | Slot::ResultPanelLoopSelection
         | Slot::ResultPanelSelectOnModifierClick

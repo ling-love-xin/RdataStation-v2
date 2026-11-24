@@ -451,8 +451,6 @@ pub enum ResultRequest {
     CommitRename,
     /// 【C1】取消重命名（不发请求，面板退出 renaming 态）
     CancelRename,
-    /// 【B1】面板级临时开关：列头直接显示注释（覆盖全局偏好）
-    SetShowColumnComments { open: bool },
     /// 【选中统计】切换状态行三项开关之一（数据格右键的 layout 段，
     /// 对齐 `ResultSetViewer.java:3580-3588` 的 `ToggleSelectionStatAction`）。
     ///

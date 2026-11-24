@@ -1833,15 +1833,26 @@ impl ResultPanel {
         cx.notify();
     }
 
-    /// 【B1】切换列头直接显示注释（面板级临时开关；host 也可从全局偏好同步过来）。
-    pub fn set_show_column_comments(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.show_column_comments = on;
+    /// 【DBeaver 对齐】同步「列头附加内容」三档（注释 / 类型名 / 无）。
+    ///
+    /// 与 [`Self::set_type_style`] 同一条分工：面板留一份权威值、同时写进网格 delegate，
+    /// 并让网格重绘（列头第二行与表头高度都读 delegate 的那份）。
+    pub fn set_column_header_extra(
+        &mut self,
+        extra: workbench_shell::result_style::ColumnHeaderExtra,
+        cx: &mut Context<Self>,
+    ) {
+        self.column_header_extra = extra;
+        self.grid.update(cx, |state, cx| {
+            state.delegate_mut().set_column_header_extra(extra);
+            state.refresh(cx);
+        });
         cx.notify();
     }
 
-    /// 【B1】当前是否直接显示注释（delegate 读这个决定列头画不画第二行注释）。
-    pub fn show_column_comments(&self) -> bool {
-        self.show_column_comments
+    /// 【DBeaver 对齐】当前列头附加内容档位（宿主落盘 / 面板内读用）。
+    pub fn column_header_extra(&self) -> workbench_shell::result_style::ColumnHeaderExtra {
+        self.column_header_extra
     }
 
     /// 【类型样式】同步全局偏好（数字格式 / NULL 占位 / 布尔映射 / 按族对齐与前景色）。

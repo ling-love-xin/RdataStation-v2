@@ -668,7 +668,7 @@ Spreadsheet extends LightGrid
 
 **两个直接影响**：
 
-a) **`show_column_comments: bool` 要改成三档枚举**（`NOTHING` / `DESCRIPTION` / `DATA_TYPE`，对应 `ResultSetPreferences.ColumnHeaderExtraContent`）。我们的「列注释」= `DESCRIPTION`。
+a) **`show_column_comments: bool` 要改成三档枚举**（`NOTHING` / `DESCRIPTION` / `DATA_TYPE`，对应 `ResultSetPreferences.ColumnHeaderExtraContent`）。我们的「列注释」= `DESCRIPTION`。→ **2026-11-25 落地，见 §45**（同时修掉「面板从不把该值同步给 delegate」的断线，与删掉无发送方的 `SetShowColumnComments`）。
 b) **长期待确认项「COLUMN_HEADER_EXTRA 默认档」已解**：默认 `NOTHING`（`:143-149`、`:203-208` 两处兜底值都是 NOTHING）→ **表头默认只有 1 行**，第二行 `+ font_height + 6` 只在选 DESCRIPTION / DATA_TYPE 时才出现。这改写了 §3.2 的「表头高一律 2 行」推断。
 
 **Q22（要你定，重要）**：`columnWidthByValue` 在 DBeaver 里**默认 false**（不按值算列宽），而你此前拍板「列宽复刻内容自适应」。二者冲突，必须选一个：
@@ -1054,7 +1054,7 @@ pub fn on_reorder(
 | 4 | 标签页新增右键菜单（分析这份结果集 / 并排对比） | §19.3 |
 | 5 | 行高、表头高按 `font_height` 计算；表头默认 1 行（`COLUMN_HEADER_EXTRA` 默认 NOTHING） | §7.2 / §14.2 |
 | 6 | 列宽默认不按值算（`columnWidthByValue=false`） | Q22-A |
-| 7 | `show_column_comments` → 三档 `HeaderExtra { Nothing, Description, DataType }` | §14.2 |
+| 7 | `show_column_comments` → 三档 `HeaderExtra { Nothing, Description, DataType }`（**已落地 §45**） | §14.2 / §45 |
 | 8 | 设置浮层扩 6 页（左页列 + 右内容） | §10.4 |
 | 9 | 08 对话框补「来源 SQL」（2 行截断）+ 三处偏差待定 | §14.4 / Q23 |
 | 10 | 状态栏按 DBeaver 顺序重排、裁多余入口、宽度按字高 | §15.4 / Q26 |
@@ -3025,6 +3025,81 @@ pub fn set_selected_cell_without_scroll(&mut self, row_ix: usize, col_ix: usize,
 - `cargo test -p rds-result-panel --lib` → **447 passed / 0 failed**（原 446 + 新增 1）。
 - `cargo check -p rds-result-panel --all-targets` → 0 error / 0 warning。
 - 目视验收（宽度是否真的压在 1/4、长 SQL 是否只出现一段）按既有约定由用户手动确认，这里不做截图。
+
+## §45 表格段（列头区域元素）：列头附加内容改 DBeaver 三档
+
+用户给的施工顺序是「工具栏 → 表格（列头 / 列右键 / 列区域元素）→ 左右侧栏 → 状态栏」。工具栏段已在 §44 收口；本刀处理表格段的**列头区域元素**这一格。
+
+### 45.1 DBeaver 真值（逐条带行号）
+
+**偏好键与枚举**（`ResultSetPreferences.java`）：
+
+```java
+55: public static final String RESULT_SET_SHOW_DESCRIPTION = "resultset.show.columnDescription";
+56: public static final String RESULT_SET_COLUMN_HEADER_EXTRA = "resultset.show.columnHeaderExtra";
+58: public enum ColumnHeaderExtraContent { NOTHING, DESCRIPTION, DATA_TYPE }
+```
+
+**偏好页是三档下拉**（`PrefPageResultSetPresentation.java:96-110`，`UIUtils.createLabelCombo` + 三个 `add(...)` 分别落 `NOTHING.ordinal()` / `DESCRIPTION.ordinal()` / `DATA_TYPE.ordinal()`）；出厂值 `NOTHING` 有两处声明（`:145-147` 的 `getDefaultString` 与 `:205-207` 的 `getDefaultValue`），初始化器再兜一次（`DataEditorsPreferencesInitializer.java:80`）。
+
+**读取与向后兼容**（`SpreadsheetPresentation.java:973-1002`）：枚举键为空时回退旧布尔 `RESULT_SET_SHOW_DESCRIPTION`（`true` → DESCRIPTION，`false` → NOTHING）；枚举值走 `CommonUtils.valueOf(..., NOTHING)`（未知值落回出厂档）。`DATA_TYPE` 档会**预先**为每个可见列算一份类型名表：`DBUtils.getFullTypeName(dataSource, binding)`，若该列是主键（`rowIdentifier.getUniqueKey().getConstraintType() == PRIMARY_KEY`）则前缀 `PK `（`:988-999`）。
+
+**渲染**（`SpreadsheetPresentation.java:3422-3436` 的 `getDescription`）：
+
+```java
+3425  if (columnHeaderExtra == NOTHING || element.getParent() != null) return null;
+3428  if (element.getElement() instanceof DBDAttributeBinding attributeBinding) {
+3429      if (columnHeaderExtra == DATA_TYPE) return columnTypeDescriptions.get(attributeBinding);
+3432      return attributeBinding.getDescription();
+```
+
+即：`NOTHING` 不画；`DESCRIPTION` 画列注释；`DATA_TYPE` 画完整类型名；嵌套行（`getParent() != null`）一律不画；取不到就是 `null`（不占位）。
+
+**顺带一条同段真值**（本刀未做，登记）：`:3415-3419` 在 `RESULT_SET_SHOW_COLUMN_POS` 打开时把列名后缀成 `名称 (序号)`，序号是 `binding.getOrdinalPosition() + 1`。
+
+### 45.2 本仓原状：两处真缺陷
+
+1. **只有两档**：偏好是 `result_panel.show_column_comments: bool`（`settings/src/model/result_panel.rs:16`）、设置条目 `SettingKind::Bool`、`KindTag::Bool`，表达不出 `DATA_TYPE`。
+2. **接线断了（生产路径从未生效）**：`ResultGridDelegate::show_column_comments` 只由 `grid/tests.rs` 直接设过；面板侧 `ResultPanel::set_show_column_comments` 只改自己的字段、**从不同步给 delegate**，而渲染读的是 delegate。因此即使把偏好打开，真实 UI 的列头第二行也不会出现——这条只有测试里能看见。另外 `ResultRequest::SetShowColumnComments` 全仓**没有任何发送方**，是一个死请求。
+
+结论：这不是「加一档」的小改，而是「三档 + 把同步链打通 + 删死请求」。
+
+### 45.3 落地
+
+| 位置 | 改动 |
+| --- | --- |
+| `workbench_shell/src/result_style.rs` | 新增 `ColumnHeaderExtra { Nothing, Description, DataType }`（`Default = Nothing`、`serde(rename_all="snake_case")`），附 `ALL` / `as_str` / `parse` / `shows_extra_line`；放在外壳层是因为 `settings`（持久化 + 设置页）与 `result_panel`（渲染）都要用，与 `TypeStylePrefs` 同一理由 |
+| `settings/src/model/result_panel.rs` | `show_column_comments: bool` → `column_header_extra: ColumnHeaderExtra`（`#[serde(default)]`，旧 JSON 的旧键被忽略、落回出厂档） |
+| `settings/src/registry/mod.rs` | `Slot::ResultPanelShowColumnComments` → `ResultPanelColumnHeaderExtra`，键 `result_panel.show_column_comments` → `result_panel.column_header_extra`，`KindTag::Bool` → `KindTag::Enum` |
+| `settings/src/registry/entries/result_panel.rs` | 设置条目改三档下拉（`SettingKind::Enum(&[("nothing","无"),("description","字段注释"),("data_type","数据类型")])`），默认 `"nothing"`，label/hint 按 DBeaver 语义重写 |
+| `settings/src/service/{mod,result_panel}.rs` | 读侧 `SettingValue::Text(as_str())`；写侧只认三档（未知值拒绝写入，与 `fact_storage` 同口径） |
+| `result_panel/src/grid/delegate.rs` | 字段与访问器改名三档；`header_row_height()` 改由 `shows_extra_line()` 判定；`set_type_style` 的两条文档链接同步 |
+| `result_panel/src/grid/header.rs` | 新增纯函数 `column_header_extra_text(extra, annotation)`（三档 → 文本，空/纯空白按「没有」）；`render_th` 改为两行段统一叫 `extra_line`，探针选择器 `editor-result-th-comment-{ix}` → `editor-result-th-extra-{ix}` |
+| `result_panel/src/panel/{data,events,lifecycle}.rs` | 面板字段三档；`set_column_header_extra` **写面板 + 写 delegate + `refresh`**（照 `set_type_style` 的形态，把断掉的同步链接上） |
+| `result_panel/src/ports.rs` + `editor/.../results/dispatch.rs` | 删死请求 `SetShowColumnComments`（无发送方，且 DBeaver 没有「面板内临时开关」这种东西，只有偏好） |
+| `editor/src/view/host/construct.rs` | 构造时无条件同步三档（旧写法是 `if on { set(true) }`，两档口径） |
+| `editor/src/view/host/results/tests.rs` | `apply_result_style`（workbench 设置变更钩子）同时推 `set_column_header_extra`，设置页改档即时生效 |
+
+### 45.4 差异登记（本仓仍与 DBeaver 不同，且本刀不做）
+
+| 项 | DBeaver | 本仓 | 为什么 |
+| --- | --- | --- | --- |
+| 主键 `PK ` 前缀 | 主键列类型名前加 `PK `（`:992-996`） | 无 | `ColumnAnnotation` 没有主键标记字段（只有 `source_table/source_column/comment/data_type/nullable/default_value`）；要加得先让 NavCache 采集主键，跨模块 |
+| 类型名取法 | `DBUtils.getFullTypeName(...)`（含长度/精度修饰） | NavCache 的 `data_type` 原样（驱动原始名） | 本仓 `data_type` 是采集时的驱动名，是否带长度取决于采集侧；本刀不声称等价 |
+| 列名后缀序号 `(N)` | `RESULT_SET_SHOW_COLUMN_POS` 打开时 `名称 (N)`（`:3415-3419`） | 无 | 是独立的偏好项（又要一个开关 + 又要 `ordinalPosition` 来源），不该塞进本刀 |
+| 表头两行高度 | 渲染器按内容算 preferred size | 固定抬到 `RESULT_HEADER_COMMENT_ROW_HEIGHT`（40px） | 组件只暴露一个整表 `header_row_height`，逐列自适应不在能力内；口径相同（有第二行才变高） |
+| 旧布尔偏好迁移 | 枚举键为空时回退 `RESULT_SET_SHOW_DESCRIPTION` | 不回退 | 旧键只有两档，回退进来也表达不出 `DataType`；出厂 `false` 与 `Nothing` 等价，直接丢旧键的代价只是「曾手动开注释的用户回到出厂档」 |
+| 类型徽标 badge | 无（列头只有图标 + 名称 + 排序/筛选指示） | 有（`type_badge`，123/Aa/◷/✓/01） | 本仓既有产品扩展（§A3 批次），信息密度更高，属「优于 DBeaver」的一组，不属差异缺陷 |
+| 转置视图 | 转置列不挂 `DBDAttributeBinding` ⇒ `getDescription` 为 null | 同理不画（`delegate.transposed` 直接 `None`） | 一致 |
+
+### 45.5 验证
+
+- `cargo check -p rds-settings -p rds-result-panel -p rds-editor` → `Finished dev profile`，0 error / 0 warning。
+- `cargo test -p rds-result-panel --lib` → **448 passed / 0 failed**（原 447 + 新增 `column_header_extra_picks_comment_or_type_name`；既有 `comment_header_row_gets_room_for_two_lines` 改档后仍过）。
+- `cargo test -p rds-editor --lib` → **869 passed / 0 failed / 4 ignored**（与 §43 同数，无回归）。
+- 未跑 `-p rds-settings --all-targets`：`settings_page.rs:284` 的 `tr` E0425（main 既有的 `#[cfg(test)]` 模块缺 `use shared::i18n::tr;`）会挡住该包的 test target；本刀不动它，缺陷仍登记在案。
+- 目视验收（设置页选「字段注释 / 数据类型」后列头第二行是否真的出现、切「无」是否复原）按要求由用户手动确认，本刀不启动 GUI、不截图。
+
 
 
 

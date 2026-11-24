@@ -28,16 +28,20 @@ pub(crate) fn apply_slot(
             persist(&cx.global::<Settings>().clone());
             // NextUse：下次触发物化路径读取；渲染与文本导出不读本偏好，无需通知重绘。
         }
-        Slot::ResultPanelShowColumnComments => {
-            let Some(on) = value.as_bool() else {
+        Slot::ResultPanelColumnHeaderExtra => {
+            let Some(text) = value.as_text() else {
+                return false;
+            };
+            // 只认登记表三档；未知值拒绝（设置文件被手改坏时不让写入）。
+            let Some(extra) = workbench_shell::result_style::ColumnHeaderExtra::parse(text) else {
                 return false;
             };
             {
                 let settings = cx.global_mut::<Settings>();
-                settings.result_panel.show_column_comments = on;
+                settings.result_panel.column_header_extra = extra;
             }
             persist(&cx.global::<Settings>().clone());
-            // Immediate：面板在下次 sync 时重读偏好并重绘列头（渲染路径读本偏好）。
+            // Immediate：宿主在偏好变更钩子里推 `set_column_header_extra`，面板重绘列头。
         }
         Slot::ResultPanelShowTypeBadge => {
             let Some(on) = value.as_bool() else {

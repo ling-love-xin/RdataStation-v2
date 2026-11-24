@@ -5,7 +5,7 @@ use crate::grid::cell::{
     ViewerMode, blob_summary, cell_display_text, cell_style, classify_value, clip_cell_display,
     detect_image_format, hex_lines, image_format_of, json_tree_items, pretty_json_display,
 };
-use crate::grid::header::header_tooltip_lines;
+use crate::grid::header::{column_header_extra_text, header_tooltip_lines};
 use crate::grid::stats::{distinct_count, fmt_grouped, fmt_stat_num, median_of, mode_of, text_minmax};
 use crate::grid::status::{
     ResultControls, format_integer_cell, render_status_row, render_toolbar,
@@ -44,7 +44,7 @@ use gpui_kit::{AppContext as _, ParentElement as _, Styled as _};
 use std::rc::Rc;
 use std::sync::Arc;
 use workbench_shell::model::ColumnAnnotation;
-use workbench_shell::result_style::{AlignPref, ColorRolePref, TypeStylePrefs};
+use workbench_shell::result_style::{AlignPref, ColorRolePref, ColumnHeaderExtra, TypeStylePrefs};
 
 /// 【B5】由同构数组构造内存档事实帧（测试辅助；列名与数组顺序一一对应）。
 fn fact_frame(columns: &[&str], arrays: Vec<ArrayRef>) -> Arc<FactFrame> {
@@ -4216,7 +4216,7 @@ fn comment_header_row_gets_room_for_two_lines(cx: &mut gpui_kit::TestAppContext)
         None,
         "单行表头不该覆盖组件默认高度（默认视觉必须一个像素都不变）"
     );
-    plain.set_show_column_comments(true);
+    plain.set_column_header_extra(ColumnHeaderExtra::Description);
     assert_eq!(
         plain.header_row_height(),
         Some(crate::ui::RESULT_HEADER_COMMENT_ROW_HEIGHT),
@@ -4235,7 +4235,7 @@ fn comment_header_row_gets_room_for_two_lines(cx: &mut gpui_kit::TestAppContext)
     let (_, vcx) = cx.add_window_view(|window, cx| HeaderHarness {
         state: cx.new(|cx| {
             let mut state = gpui_kit::component::table::TableState::new(grid(), window, cx);
-            state.delegate_mut().set_show_column_comments(true);
+            state.delegate_mut().set_column_header_extra(ColumnHeaderExtra::Description);
             state.delegate_mut().set_column_annotations(vec![
                 Some(annotation.clone()),
                 Some(annotation),
@@ -4252,24 +4252,78 @@ fn comment_header_row_gets_room_for_two_lines(cx: &mut gpui_kit::TestAppContext)
     let main = vcx
         .debug_bounds("editor-result-th-main-1")
         .expect("表头主行应有 debug 几何");
-    let comment = vcx
-        .debug_bounds("editor-result-th-comment-1")
-        .expect("注释开关开着、列有注释时注释行必须上屏（被裁的形态下这里取不到）");
+    let extra = vcx
+        .debug_bounds("editor-result-th-extra-1")
+        .expect("附加内容档开着、列有对应文本时第二行必须上屏（被裁的形态下这里取不到）");
     assert!(
         main.size.height >= gpui_kit::px(14.),
         "抬高表头后主行仍须装下一行文字：main={:?}",
         main.size.height
     );
     assert!(
-        comment.size.height >= gpui_kit::px(12.),
-        "注释行被裁成一条缝：comment={:?}",
-        comment.size.height
+        extra.size.height >= gpui_kit::px(12.),
+        "附加行被裁成一条缝：extra={:?}",
+        extra.size.height
     );
     assert!(
-        comment.origin.y > main.origin.y,
-        "注释行应落主行下方：main.y={:?} comment.y={:?}",
+        extra.origin.y > main.origin.y,
+        "附加行应落主行下方：main.y={:?} extra.y={:?}",
         main.origin.y,
-        comment.origin.y
+        extra.origin.y
+    );
+}
+
+/// 【列头附加内容三档 §45】档位 → 第二行文本的映射（`columnHeaderExtra` 的判定核心）：
+/// `Nothing` 不画；`Description` 取字段注释；`DataType` 取类型名；空/纯空白都不占位。
+/// DBeaver 侧同口径见 `SpreadsheetPresentation.java:3422-3436`（`getDescription`）。
+#[test]
+fn column_header_extra_picks_comment_or_type_name() {
+    let annotation = ColumnAnnotation {
+        source_table: Some("sales".into()),
+        source_column: Some("amount".into()),
+        comment: Some("总额".into()),
+        data_type: Some("NUMERIC".into()),
+        nullable: None,
+        default_value: None,
+    };
+    let blank = ColumnAnnotation {
+        source_table: None,
+        source_column: None,
+        comment: Some("   ".into()),
+        data_type: None,
+        nullable: None,
+        default_value: None,
+    };
+
+    assert_eq!(
+        column_header_extra_text(ColumnHeaderExtra::Nothing, Some(&annotation)),
+        None,
+        "出厂档不画第二行（DBeaver 该档 return null）"
+    );
+    assert_eq!(
+        column_header_extra_text(ColumnHeaderExtra::Description, Some(&annotation)),
+        Some("总额".to_string()),
+        "DESCRIPTION 档取字段注释"
+    );
+    assert_eq!(
+        column_header_extra_text(ColumnHeaderExtra::DataType, Some(&annotation)),
+        Some("NUMERIC".to_string()),
+        "DATA_TYPE 档取类型名"
+    );
+    assert_eq!(
+        column_header_extra_text(ColumnHeaderExtra::Description, Some(&blank)),
+        None,
+        "注释只有空白 = 没有，不占第二行"
+    );
+    assert_eq!(
+        column_header_extra_text(ColumnHeaderExtra::DataType, Some(&blank)),
+        None,
+        "这一列没报类型 = 没有，不占第二行"
+    );
+    assert_eq!(
+        column_header_extra_text(ColumnHeaderExtra::Description, None),
+        None,
+        "整份结果没报列注解时任何档都不画"
     );
 }
 

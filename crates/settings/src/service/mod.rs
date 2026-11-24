@@ -198,9 +198,9 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::ResultPanelFactStorage => {
             SettingValue::Text(settings.result_panel.fact_storage.as_str().to_string())
         }
-        Slot::ResultPanelShowColumnComments => {
-            SettingValue::Bool(settings.result_panel.show_column_comments)
-        }
+        Slot::ResultPanelColumnHeaderExtra => SettingValue::Text(
+            settings.result_panel.column_header_extra.as_str().to_string(),
+        ),
         Slot::ResultPanelShowTypeBadge => SettingValue::Bool(settings.result_panel.show_type_badge),
         Slot::ResultPanelLoopSelection => SettingValue::Bool(settings.result_panel.loop_selection),
         Slot::ResultPanelSelectOnModifierClick => {
@@ -468,7 +468,7 @@ impl SettingsService {
             | Slot::SqlFormatIgnoreFileText
             | Slot::SqlFormatNormalizeOperators => sql_format::apply_slot(slot, value, window, cx),
             Slot::ResultPanelFactStorage
-            | Slot::ResultPanelShowColumnComments
+            | Slot::ResultPanelColumnHeaderExtra
             | Slot::ResultPanelShowTypeBadge
             | Slot::ResultPanelLoopSelection
             | Slot::ResultPanelSelectOnModifierClick

@@ -656,11 +656,6 @@ impl EditorHostPanel {
             ResultRequest::CancelRename => {
                 self.result_panel.update(cx, |p, cx| p.cancel_rename(cx));
             }
-            // 【B1】列头直接显示注释（面板级临时开关）
-            ResultRequest::SetShowColumnComments { open } => {
-                self.result_panel
-                    .update(cx, |p, cx| p.set_show_column_comments(open, cx));
-            }
             // 【选中统计】数据格右键 layout 段切换三项之一：面板改本地态（状态行重画），
             // 随后宿主把三项一起落盘（与「计算页统计项」同一条分工：面板推、宿主存）
             ResultRequest::ToggleSelectionStat { kind, on } => {

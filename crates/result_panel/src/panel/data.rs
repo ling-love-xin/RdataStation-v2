@@ -507,9 +507,10 @@ pub struct ResultPanel {
     pub(crate) renaming: Option<usize>,
     /// 【C1】重命名输入框实体（懒创建：第一次进重命名态时建；重命名态关闭后保留实体复用）
     pub(crate) renaming_input: Option<Entity<InputState>>,
-    /// 【B1】列头直接显示注释的面板级临时开关（覆盖全局偏好 `result_panel.show_column_comments`；
-    /// 默认 false——全局偏好开启时由 host 在 sync 时同步过来）。
-    pub(crate) show_column_comments: bool,
+    /// 【DBeaver 对齐】列头附加内容三档（`nothing` / `description` / `data_type`）：
+    /// 面板侧权威值，构造与设置变更时由 host 推 [`super::ResultPanel::set_column_header_extra`]；
+    /// setter 同时写进网格 delegate，列头据此画第二行。
+    pub(crate) column_header_extra: workbench_shell::result_style::ColumnHeaderExtra,
     /// 【类型样式】全局偏好（数字格式 / NULL 占位 / 布尔映射 / 按族对齐与前景色）。
     /// host 构造时同步（settings.result_panel.type_style()），设置页变更由 workbench
     /// 钩子推 `set_type_style` 即时生效；只影响渲染显示。

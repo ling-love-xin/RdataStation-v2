@@ -183,12 +183,13 @@ impl EditorHostPanel {
                 window,
                 cx,
             );
-            // 【B2】全局偏好 `result_panel.show_column_comments` 启动时同步到面板（面板级临时开关
-            // 覆盖此默认值；用户在面板工具栏切换后不再回写全局——全局只控"默认开不开"）
+            // 【DBeaver 对齐】全局偏好 `result_panel.column_header_extra`
+            // （`RESULT_SET_COLUMN_HEADER_EXTRA` 的等价物）构造时同步到面板：
+            // 三档 nothing / description / data_type，面板据此决定列头第二行画什么。
             if let Some(settings) = cx.try_global::<settings::model::Settings>() {
                 // 先拷贝偏好值、释放 `settings` 借用，再对 panel 可变借用 `cx`
                 //（try_global 的借用与 `cx` 可变借用冲突 → E0502，2026-10-28 修复）。
-                let on = settings.result_panel.show_column_comments;
+                let column_header_extra = settings.result_panel.column_header_extra;
                 let type_style = settings.result_panel.type_style();
                 // 【R5 比例持久化】右栏宽度初值（px）：必须与上面两项一起**先拷贝**，
                 // 最后一行再读 `settings` 会把借用拉到块末，与下面的 `&mut cx` 冲突（E0502）。
@@ -224,9 +225,8 @@ impl EditorHostPanel {
                 // 【筛选条显隐】对齐 DBeaver `resultset.show.filterPanel`（出厂 true）：
                 // 同样先拷贝（借用不能跨到 `&mut cx`）。
                 let show_filter_panel = settings.result_panel.show_filter_panel;
-                if on {
-                    panel.set_show_column_comments(true, cx);
-                }
+                // 列头附加内容：三档一律同步（不是「只有 true 才打开」的两档口径）
+                panel.set_column_header_extra(column_header_extra, cx);
                 // 【类型样式】全局偏好启动同步（数字格式 / NULL 占位 / 布尔映射 / 按族对齐与前景色）；
                 // 设置页后续变更走 `apply_result_style`（workbench 钩子）即时生效
                 panel.set_type_style(type_style, cx);

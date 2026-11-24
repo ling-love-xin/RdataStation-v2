@@ -9,11 +9,13 @@ pub struct ResultPanel {
     /// `table`（强制表档；B 批接通后直灌常驻表，A 批未接通时按降级档处理）。
     #[serde(default = "default_result_fact_storage")]
     pub fact_storage: FactStoragePref,
-    /// 列头是否**直接显示**字段注释（默认 `false`：注释只在 hover tooltip 里）。
-    /// 开启后列名下方第二行小字显示注释（截短 + ellipsis；注释为空不占位）。
-    /// 面板工具栏另有 B1 临时开关，覆盖此全局偏好。
+    /// 【DBeaver 对齐】列头第二行画什么（三档，出厂 `nothing`）：
+    /// `nothing` 不画 / `description` 画字段注释 / `data_type` 画完整类型名
+    /// （对齐 `ResultSetPreferences.RESULT_SET_COLUMN_HEADER_EXTRA` 的三档
+    /// `ColumnHeaderExtraContent`，判定在 `SpreadsheetPresentation.java:3422-3436`）。
+    /// 第二行文字截短、悬停看全；该档文字为空时不占位。
     #[serde(default)]
-    pub show_column_comments: bool,
+    pub column_header_extra: workbench_shell::result_style::ColumnHeaderExtra,
     /// 【DBeaver 对齐】列头是否显示类型徽标（123/Aa/◷/✓/01 浅底符号）。
     #[serde(default = "default_true")]
     pub show_type_badge: bool,
@@ -166,7 +168,8 @@ impl Default for ResultPanel {
     fn default() -> Self {
         Self {
             fact_storage: default_result_fact_storage(),
-            show_column_comments: false,
+            // 列头附加内容出厂 `nothing`（对齐 `DataEditorsPreferencesInitializer.java:80`）
+            column_header_extra: workbench_shell::result_style::ColumnHeaderExtra::Nothing,
             show_type_badge: true,
             loop_selection: true,
             select_on_modifier_click: true,
