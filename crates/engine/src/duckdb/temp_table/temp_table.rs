@@ -29,19 +29,25 @@ pub enum TempTableSource {
     Mock,
     /// 插件临时数据 (p)
     Plugin,
+    /// 源库表载入内存 (l)：数据对象面板「载入内存…」的落点。
+    ///
+    /// 与 `Query` 的区别只在语义：`q` 是**查询的产物**，`l` 是**源表的副本**
+    /// （铁律第 34/35 条：复制轴的「复制」、寿命轴的「载入」）。
+    Load,
 }
 
 impl TempTableSource {
     /// 获取来源缩写字母
     ///
     /// # 返回
-    /// 单个字母缩写: q/i/m/p
+    /// 单个字母缩写: q/i/m/p/l
     pub fn abbreviation(&self) -> &str {
         match self {
             TempTableSource::Query => "q",
             TempTableSource::Insight => "i",
             TempTableSource::Mock => "m",
             TempTableSource::Plugin => "p",
+            TempTableSource::Load => "l",
         }
     }
 
@@ -64,6 +70,7 @@ impl TempTableSource {
             TempTableSource::Insight => &["tmp_i_"],
             TempTableSource::Mock => &["tmp_m_", "temp_mock_"],
             TempTableSource::Plugin => &["tmp_p_"],
+            TempTableSource::Load => &["tmp_l_"],
         }
     }
 }
@@ -110,6 +117,17 @@ impl TempTableConfig {
             max_count: None,
         }
     }
+
+    /// 获取载入档配置：与结果集同口径——**不设 TTL、不设上限**。
+    ///
+    /// 载入是用户显式要的一份副本，被 TTL 悄悄删掉只会让他以为"点了没反应"；
+    /// 清场责任在项目切换 / 进程退出（与 `tmp_q_` 同一条纪律）。
+    pub fn load() -> Self {
+        TempTableConfig {
+            ttl_secs: None,
+            max_count: None,
+        }
+    }
 }
 
 /// 临时表登记的数量概览（按来源分档）。
@@ -121,12 +139,13 @@ pub struct TempTableStats {
     pub insight: usize,
     pub mock: usize,
     pub plugin: usize,
+    pub load: usize,
 }
 
 impl TempTableStats {
     /// 已认得的表合计（不含名字不带任何来源前缀的表）。
     pub fn total(&self) -> usize {
-        self.query + self.insight + self.mock + self.plugin
+        self.query + self.insight + self.mock + self.plugin + self.load
     }
 }
 
@@ -448,6 +467,7 @@ impl TempTableManager {
             insight: count(TempTableSource::Insight),
             mock: count(TempTableSource::Mock),
             plugin: count(TempTableSource::Plugin),
+            load: count(TempTableSource::Load),
         }
     }
 

@@ -215,6 +215,17 @@ fn clear_result_temp_tables() {
         Ok(_) => {}
         Err(error) => tracing::warn!("[project] 清理结果集临时表失败: {error}"),
     }
+    // 「载入内存」的源表副本（`tmp_l_`）是会话级产物（铁律第 35 条）：切项目一并清掉，
+    // 与结果集同一口径、同一非阻塞纪律。它不属于任何项目，留着只会让新项目看到旧项目的表。
+    match engine::duckdb::DuckDBManager::try_drop_in_memory_temp_tables(
+        engine::duckdb::TempTableSource::Load,
+    ) {
+        Ok(Some(cleared)) if !cleared.is_empty() => {
+            tracing::info!("[project] 切项目清掉 {} 张载入表", cleared.len());
+        }
+        Ok(_) => {}
+        Err(error) => tracing::warn!("[project] 清理载入表失败: {error}"),
+    }
 }
 
 /// 项目切换时的**加源文件视图**清理（铁律 F 组：`f_*` 也得走清场口）。

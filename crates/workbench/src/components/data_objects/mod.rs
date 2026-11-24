@@ -346,6 +346,8 @@ pub struct Collected {
     pub project_open: bool,
     pub global_tables: Vec<String>,
     pub result_sets: Vec<String>,
+    /// 「载入内存」的源表副本（`tmp_l_*`，会话级；铁律第 12/35 条）
+    pub loaded_tables: Vec<String>,
     pub insight_samples: Vec<String>,
     /// 「加源」加载进进程单例的文件视图：`(视图名, 原路径)`。视图不物化，
     /// 所以这里只记名字与出处，面板按它列行
@@ -368,6 +370,7 @@ impl Collected {
             project_open: false,
             global_tables: Vec::new(),
             result_sets: Vec::new(),
+            loaded_tables: Vec::new(),
             insight_samples: Vec::new(),
             loaded_files: Vec::new(),
             assets: Vec::new(),
@@ -606,6 +609,24 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
         });
     }
 
+    // 「载入内存」的源表副本（铁律第 12/35 条）：与结果集同段、同寿命档，
+    // 但小标写「载入」——它**不是查询产物**，是用户显式要的一份源表副本；
+    // 也因此不开放「升级为资产」（第 11 条只给 `tmp_q_`）。
+    for name in &collected.loaded_tables {
+        out.push(Object {
+            key: format!("load:{name}"),
+            name: name.clone(),
+            note: "源表副本 · 载入内存".to_string(),
+            channel: Channel::Process,
+            life: Life::Session,
+            state: State::Ready,
+            group: Group::Table,
+            pill: "载入",
+            version: None,
+            sql_ref: Some(sql_ident(&name)),
+        });
+    }
+
     // Mock（`tmp_m_`）与插件（`tmp_p_`）产物**不进面板**（2026-11-18 用户口径）：
     // mock 的下游是草稿箱 / 外部目录 / 资产归档，插件产物归插件——它们是各模块的
     // 生成物，不是分析链路的输入对象；与 `tmp_i_`（洞察样本）同一条纪律。
@@ -720,6 +741,7 @@ pub fn temp_source_for(name: &str) -> Option<engine::duckdb::temp_table::TempTab
         TempTableSource::Insight,
         TempTableSource::Mock,
         TempTableSource::Plugin,
+        TempTableSource::Load,
     ]
     .into_iter()
     .find(|source| source.prefixes().iter().any(|prefix| name.starts_with(prefix)))
@@ -1096,6 +1118,7 @@ pub fn collect(shared: &Shared) -> Collected {
         .unwrap_or_default();
     let global_tables = engine::analysis::global::global_tables("C_data_objects").unwrap_or_default();
     let result_sets = engine::analysis::result_set::list_result_sets().unwrap_or_default();
+    let loaded_tables = engine::analysis::result_set::list_loaded_tables().unwrap_or_default();
     let insight_samples = engine::analysis::result_set::list_insight_samples().unwrap_or_default();
     // 联邦会话：一次拿全（面板不知道 owner 是谁，`owners()` 正是为这种调用准备的）
     let session_sources = engine::duckdb::federation::session::owners()
@@ -1151,6 +1174,7 @@ pub fn collect(shared: &Shared) -> Collected {
         project_open,
         global_tables,
         result_sets,
+        loaded_tables,
         insight_samples,
         loaded_files: shared.loaded_files.borrow().clone(),
         assets: Vec::new(),
@@ -1185,6 +1209,7 @@ mod tests {
             project_open: true,
             global_tables: vec!["G_月度经营".into()],
             result_sets: vec!["tmp_q_结果_3".into()],
+            loaded_tables: vec!["tmp_l_orders_shop_20261124120000_ab12cd34".into()],
             insight_samples: vec!["tmp_i_orders_sample".into()],
             loaded_files: vec![
                 ("f_sales".into(), "D:/数据/sales_2026q1.csv".into()),
@@ -1666,10 +1691,25 @@ mod tests {
         assert_eq!(unique.len(), keys.len(), "身份必须全局唯一");
     }
 
+    /// 「载入内存」的表进表段：小标「载入」、会话级、**不给升级为资产**（铁律第 11/35 条）。
+    #[test]
+    fn loaded_tables_are_session_rows_without_upgrade() {
+        let c = sample();
+        let rows = objects(&c);
+        let loaded = rows
+            .iter()
+            .find(|row| row.key.starts_with("load:"))
+            .expect("载入表要进表段");
+        assert_eq!(loaded.pill_text(), "载入");
+        assert_eq!(loaded.group, Group::Table);
+        assert_eq!(loaded.life, Life::Session);
+        assert!(!super::can_persist(loaded), "第 11 条只给 tmp_q_ 升级");
+        assert!(loaded.sql_ref.is_some(), "进程单例里的表裸名可见");
+    }
+
     /// 「分析已选」：能转的转成来源，转不了的说清原因，不许静默丢。
     #[test]
-    fn analysis_sources_convert_what_they_can_and_name_what_they_cannot() {
-        let mut c = sample();
+    fn analysis_sources_convert_what_they_can_and_name_what_they_cannot() {        let mut c = sample();
         c.analysis_tables = vec!["orders".into()];
         c.global_tables = vec!["G_月度经营".into()];
         c.result_sets = vec!["tmp_q_结果_3".into()];

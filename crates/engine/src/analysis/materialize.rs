@@ -196,15 +196,77 @@ pub fn move_sample_to_process_db(
     landed
 }
 
+/// 载入：把一条 `SELECT` 的结果落成进程单例里的 `tmp_l_*` 表（建表即登记）。
+///
+/// 与 [`materialize_sample`] 的区别是**来源档与寿命分档**：那份是洞察取样
+/// （`tmp_i_`、TTL 管着），这份是数据对象面板「载入内存…」的落点（`tmp_l_`、
+/// 无 TTL、随项目切换 / 进程退出清掉）。铁律第 12/34/35 条。
+pub fn load_select_into_process_db(
+    select_sql: &str,
+    description: &str,
+) -> Result<String, CoreError> {
+    let select = select_sql.trim().trim_end_matches(';').trim();
+    if select.is_empty() {
+        return Err(invalid("载入需要一条 SELECT：空 SQL 建不出表".to_string()));
+    }
+    let singleton = crate::services::duckdb_service::DuckDbService::get_or_create_duckdb()
+        .map_err(|e| invalid(format!("取内存分析库失败: {e}")))?;
+    let guard = singleton
+        .lock()
+        .map_err(|e| invalid(format!("DuckDB 单例锁中毒: {e}")))?;
+    crate::duckdb::temp_table::create_analysis_temp_table_as_for(
+        &guard,
+        select,
+        description,
+        crate::duckdb::temp_table::TempTableSource::Load,
+    )
+}
+
+/// 载入（跨实例）：源表在**会话**里（联邦 / 加速档），把它搬进进程单例的 `tmp_l_*`。
+///
+/// 与 [`move_sample_to_process_db`] 同一条搬运路线（会话侧 `COPY … TO parquet` →
+/// 单例侧 `CREATE TABLE AS read_parquet`），区别只有两点：
+/// - 源表由**限定名**给（`别名.schema.表`），不是会话里的 `memory.xxx`；
+/// - 落到 `tmp_l_`（载入档），不是 `tmp_i_`（洞察取样）。
+///
+/// `run` 是「在这条会话上执行一句 SQL」的闭包：会话对象（`AccelSession` /
+/// `FederatedSession`）各自藏着自己的 `Connection`，引擎不在这里替它们选类型。
+pub fn load_qualified_from_session(
+    qualified: &str,
+    description: &str,
+    run: impl Fn(&str) -> Result<(), CoreError>,
+) -> Result<String, CoreError> {
+    let qualified = qualified.trim();
+    if qualified.is_empty() {
+        return Err(invalid("载入需要限定名（别名.schema.表）".to_string()));
+    }
+    let unique = uuid::Uuid::new_v4().simple().to_string();
+    let parquet = std::env::temp_dir().join(format!("rds_load_{}.parquet", &unique[..12]));
+    let literal = parquet.to_string_lossy().replace('\\', "/").replace('\'', "''");
+    // 中转文件在会话侧写、单例侧读：路径字面量同上一条，统一正斜杠 + 引号翻倍
+    let copy = format!("COPY (SELECT * FROM {qualified}) TO '{literal}' (FORMAT PARQUET)");
+    if let Err(error) = run(&copy) {
+        let _ = std::fs::remove_file(&parquet);
+        return Err(invalid(format!("把源表导出到中转文件失败: {error}")));
+    }
+    let landed = load_select_into_process_db(
+        &format!("SELECT * FROM read_parquet('{literal}')"),
+        description,
+    );
+    // 中转文件无论成败都不留（同 `move_sample_to_process_db` 的口径）
+    let _ = std::fs::remove_file(&parquet);
+    landed
+}
+
 /// 丢掉一张物化表（幂等）。`qualified` 接受 `memory.x` 或裸名 `x`。
 ///
-/// 前缀守卫与 `temp_table::drop_temp_table` 同口径：只允许删 `tmp_i_` / `tmp_q_`
-/// （洞察取样 / 查询结果），放开就等于给了一把「传什么名字删什么表」的刀。
+/// 前缀守卫与 `temp_table::drop_temp_table` 同口径：只允许删 `tmp_i_` / `tmp_q_` / `tmp_l_`
+/// （洞察取样 / 查询结果 / 载入），放开就等于给了一把「传什么名字删什么表」的刀。
 pub fn drop_materialized(handle: &SessionHandle, qualified: &str) -> Result<(), CoreError> {
     let name = qualified
         .strip_prefix(&format!("{MATERIALIZE_CATALOG}."))
         .unwrap_or(qualified);
-    let allowed = ["tmp_i_", "tmp_q_"];
+    let allowed = ["tmp_i_", "tmp_q_", "tmp_l_"];
     if !allowed.iter().any(|prefix| name.starts_with(prefix)) {
         return Err(invalid(format!(
             "拒绝删除非临时表：{name}（只允许 {} 前缀）",
@@ -220,7 +282,10 @@ pub fn drop_materialized(handle: &SessionHandle, qualified: &str) -> Result<(), 
         let guard = conn
             .lock()
             .map_err(|e| invalid(format!("DuckDB 单例锁中毒: {e}")))?;
-        return crate::duckdb::temp_table::drop_analysis_temp_table(&guard, name);
+        return match name.starts_with("tmp_l_") {
+            true => crate::duckdb::temp_table::drop_loaded_temp_table(&guard, name),
+            false => crate::duckdb::temp_table::drop_analysis_temp_table(&guard, name),
+        };
     }
     handle.run(&format!(
         "DROP TABLE IF EXISTS {MATERIALIZE_CATALOG}.{name}"
@@ -293,6 +358,31 @@ mod tests {
     #[test]
     fn materialize_sample_requires_a_session() {
         assert!(materialize_sample(&SessionHandle::None, "orders", "select 1").is_err());
+    }
+
+    #[test]
+    fn loading_lands_a_tmp_l_table_on_the_process_singleton() {
+        // 铁律第 35 条：载入 = `tmp_l_`，落进程单例、不登记资产
+        let landing = super::load_select_into_process_db("select 1 as a", "orders_shop")
+            .expect("载入应当成功");
+        assert!(landing.starts_with("tmp_l_"), "载入档命名：{landing}");
+        assert!(
+            crate::analysis::result_set::list_loaded_tables()
+                .expect("列载入表")
+                .contains(&landing),
+            "载入表要能被表段列出来：{landing}"
+        );
+        let handle = crate::analysis::result_set::open_for_result_set("载入测试").expect("取单例");
+        drop_materialized(&handle, &landing).expect("删除");
+        assert!(!crate::analysis::result_set::list_loaded_tables()
+            .expect("列载入表")
+            .contains(&landing));
+    }
+
+    #[test]
+    fn loading_rejects_an_empty_select() {
+        assert!(super::load_select_into_process_db("   ", "x").is_err());
+        assert!(super::load_qualified_from_session("", "x", |_| Ok(())).is_err());
     }
 
     #[test]

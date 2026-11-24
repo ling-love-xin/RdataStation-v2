@@ -161,7 +161,7 @@
 |---|---|---|
 | 源段连接行叶子 | 第 37 条：以分析实例视角列举，`NavigatorService` 内省只作归档前选表 | 现走 `source_kids_jobs` → `NavigatorService` 直连内省，列的是"源库有什么" |
 | 「归档到分析库…」 | 第 35 条：源库表 → 项目分析库持久表 + 登记资产 | 右键无此入口；缺"临时表 / 结果集 → 文件库"的引擎写盘原语 |
-| 「载入内存…」 | 第 35 条：源库表 → `memory.tmp_l_*`，会话级 | 右键无此入口；`TempTableSource` 无 `Load` 档，表段也不认 `tmp_l_` |
+| 「载入内存…」 | 第 35 条：已挂载源的表 → `memory.tmp_l_*`，会话级 | 入口与引擎已落地（见变更记录）；**裸连接**（`SourceRef::Connection`，还没挂进分析实例）仍无通道——需"源库驱动完整拉数 + 类型推断"，现明确报错；载入行暂无「清理」入口（随会话 / 切项目消失） |
 | 源段行上的取数方式小标 | 第 34 条：直查 / 复制 | `ConnRow` 只有 `driver`，装不下取数方式 |
 
 ## 变更记录
@@ -200,4 +200,12 @@
   并定下「导航栏是生产面、源段是消费面」的分界（共用连接清单与 `NavigatorService`，不共用树）。
   同批：第 12 条扩容到 `tmp_l_`（载入档），第 15–19 条把文件侧动作统一叫「存为快照」，
   第 23 条把资源模块的「归档」与新动作拆开说明；新增「已定口径 · 实现未跟进」表记四笔缺口。
+- 2026-11-24：「**载入内存…**」落地（第 35 条后半）。引擎：`TempTableSource::Load`（前缀 `tmp_l_`，
+  TTL / 上限不设——被 TTL 悄悄删掉等于"点了没反应"）+ `create_analysis_temp_table_as_for` +
+  `drop_loaded_temp_table` + `analysis::materialize::{load_select_into_process_db, load_qualified_from_session}`
+  （后者与 `move_sample_to_process_db` 同一手法：会话 `COPY … TO parquet` → 进程单例 `CREATE TABLE AS read_parquet`，
+  中转文件必删）。工作面：`services/load_jobs`（worker + 按任务号认领回执）、`Collected.loaded_tables`、
+  表段 `load:` 行（小标「载入」，不开放升级）、叶子右键「载入内存…」、面板自持一次性回执泵、
+  切项目清 `tmp_l_`。只对**已挂进分析实例**的源（会话 / 加速 / 文件库）开放；裸连接仍缺拉数通道。
+  第 12 条的「载入」档沿用第 35 条口径（同段、小标「载入」、状态「会话级」），不另开段落。
 

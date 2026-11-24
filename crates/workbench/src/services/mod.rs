@@ -44,6 +44,8 @@ pub mod mock_jobs;
 pub mod nav_runtime;
 /// 结果集「持久化为项目表」的落库通道（worker 线程 + 单槽 + UI 泵；见模块头）
 pub mod persist_jobs;
+/// 源表「载入内存」通道（worker 线程 + 按任务号认领的回执；铁律 H 组第 35 条）
+pub mod load_jobs;
 /// 工作台「业务数据概览」计数（连接 / 项目元数据 / 洞察画像 / 分析库表；见 panels/overview.rs）
 pub mod overview;
 pub mod project_session;

@@ -53,7 +53,7 @@ pub fn create_analysis_temp_table(
         tracing::warn!("[analysis] 惰性清理洞察中间表失败: {e}");
     }
 
-    let table = generate_table_name(description);
+    let table = generate_table_name_for(TempTableSource::Insight, description);
     let col_defs: Vec<String> = columns
         .iter()
         .enumerate()
@@ -107,7 +107,7 @@ pub fn create_analysis_temp_table_arrow(
         tracing::warn!("[analysis] 惰性清理洞察中间表失败: {e}");
     }
 
-    let table = generate_table_name(description);
+    let table = generate_table_name_for(TempTableSource::Insight, description);
     let col_defs: Vec<String> = batch
         .schema()
         .fields()
@@ -189,12 +189,25 @@ pub fn create_analysis_temp_table_as(
     select_sql: &str,
     description: &str,
 ) -> Result<String, CoreError> {
+    create_analysis_temp_table_as_for(conn, select_sql, description, TempTableSource::Insight)
+}
+
+/// 同 [`create_analysis_temp_table_as`]，但**临时表来源档由调用方给**（前缀随之而定）。
+///
+/// 用途：数据对象面板「载入内存…」落 `tmp_l_`（`TempTableSource::Load`）。前缀不是装饰——
+/// TTL / 上限 / 按来源清理 / 关项目清场全靠它识别（铁律第 12/35 条）。
+pub fn create_analysis_temp_table_as_for(
+    conn: &Connection,
+    select_sql: &str,
+    description: &str,
+    source: TempTableSource,
+) -> Result<String, CoreError> {
     // 惰性清理放在建表前：让 TTL / 上限在「下一次建表」这个廉价时机生效
     if let Err(e) = cleanup_analysis_temp_tables(conn) {
         tracing::warn!("[analysis] 惰性清理洞察中间表失败: {e}");
     }
 
-    let table = generate_table_name(description);
+    let table = generate_table_name_for(source, description);
     conn.execute_batch(&format!(
         "CREATE TABLE {} AS {}",
         quote_ident(&table),
@@ -244,6 +257,21 @@ pub fn drop_analysis_temp_table(conn: &Connection, table: &str) -> Result<(), Co
     }
 
     super::temp_table::drop_temp_table(conn, TempTableSource::Insight, table)
+}
+
+/// 删掉一张「载入内存」的表（`tmp_l_`）并同步登记表。幂等：表不在也返回成功。
+///
+/// 与 [`drop_analysis_temp_table`] 分开，是因为前缀守卫就是**来源识别**：
+/// 一份守卫认两个前缀，等于把「洞察取样」与「载入副本」的清场口径混在一起
+/// （铁律第 12/35 条：两者寿命不同，清理时机也不同）。
+pub fn drop_loaded_temp_table(conn: &Connection, table: &str) -> Result<(), CoreError> {
+    const LOADED_PREFIX: &str = "tmp_l_";
+    if !table.starts_with(LOADED_PREFIX) {
+        return Err(CoreError::common(CommonError::General(format!(
+            "拒绝删除非载入表：{table}（只允许 {LOADED_PREFIX} 开头的表）"
+        ))));
+    }
+    super::temp_table::drop_temp_table(conn, TempTableSource::Load, table)
 }
 
 /// 建 → 用 → **无论如何都收掉**（纯中间产物的默认姿势）。
@@ -296,13 +324,13 @@ pub fn analysis_temp_tables(conn: &Connection) -> Result<Vec<String>, CoreError>
 
 // ==================== 内部 ====================
 
-/// 表名：`tmp_i_<描述>_<紧凑时间戳>_<短随机>`。
+/// 表名：`tmp_{缩写}_<描述>_<紧凑时间戳>_<短随机>`。
 ///
 /// 末尾那截随机不是好看：管理器的 `generate_name` 只到**秒**，同一秒建两张同描述的表
 /// 会撞名（`CREATE TABLE` 直接失败）。分析路径一秒内建多张完全可能（多列分析逐列）。
-fn generate_table_name(description: &str) -> String {
+fn generate_table_name_for(source: TempTableSource, description: &str) -> String {
     // 命名口径与查询结果表 / mock 共用一份实现（前缀由来源决定，随机尾巴防同秒撞名）
-    super::temp_table::generate_unique_name(TempTableSource::Insight, description)
+    super::temp_table::generate_unique_name(source, description)
 }
 
 /// 标识符引号（名字由本模块生成 / 校验过，这里只做最小必要的包裹）

@@ -360,6 +360,34 @@ impl DataObjectsTab {
         }
     }
 
+    /// 「载入内存」回执的**一次性**小泵（铁律 H 组第 35 条 / E 组第 25 条）。
+    ///
+    /// 载入的搬运在 worker 线程（[`crate::services::load_jobs`]）；这里只等**自己那一次**
+    /// 的回执（按任务号认领，连点两次也不会拿错），说完 + 标脏就结束，不常驻。
+    /// 不并进宿主泵：那是导出回执的队列，两条队列混住会让"谁取走"变成两处都要知道的事。
+    fn watch_load(&mut self, job: u64, cx: &mut Context<Self>) {
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            loop {
+                executor.timer(std::time::Duration::from_millis(200)).await;
+                let Some((note, ok)) = crate::services::load_jobs::take_for(job) else {
+                    continue;
+                };
+                let _ = this.update(cx, |tab, cx| {
+                    if ok {
+                        tab.shared.say(note, cx);
+                        // 载入成功 → 表段多一行：清单过期，下一次重绘重取
+                        tab.shared.mark_data_objects_dirty(cx);
+                    } else {
+                        tab.shared.say_error(note, cx);
+                    }
+                });
+                return;
+            }
+        })
+        .detach();
+    }
+
     /// 回执写回缓存（宿主泵调用）。`key` 仍然展开着才写——用户可能已经收起了。
     pub(crate) fn apply_kids(
         &mut self,
@@ -1541,9 +1569,18 @@ impl DataObjectsTab {
                                 children.len(),
                                 self.leaf_pages.get(&object.key).copied(),
                             );
+                            // 「载入内存…」只对挂在分析实例上的源开（见 `source_leaf_row`）
+                            let leaf_source = data_objects::source_ref(&object.key);
                             for table in children.iter().take(shown) {
-                                list =
-                                    list.child(source_leaf_row(&object.key, table, &entity, cx));
+                                list = list.child(source_leaf_row(
+                                    &object.key,
+                                    table,
+                                    &entity,
+                                    &self.shared,
+                                    leaf_source.as_ref(),
+                                    &object.name,
+                                    cx,
+                                ));
                             }
                             if shown < children.len() {
                                 list = list.child(leaf_more_row(
@@ -1761,6 +1798,9 @@ fn source_leaf_row(
     parent_key: &str,
     table: &engine::duckdb::accel::MountedTable,
     entity: &Entity<DataObjectsTab>,
+    shared: &Shared,
+    source: Option<&data_objects::SourceRef>,
+    source_name: &str,
     cx: &App,
 ) -> AnyElement {
     let colors = cx.theme().colors;
@@ -1814,7 +1854,7 @@ fn source_leaf_row(
         );
     }
     let qualified = table.qualified.clone();
-    row.child(
+    let base = row.child(
         Button::new(SharedString::from(format!("data-object-leaf-copy-{leaf_id}")))
             .ghost()
             .xsmall()
@@ -1830,8 +1870,50 @@ fn source_leaf_row(
                     });
                 }
             }),
-    )
-    .into_any_element()
+    );
+
+    // 铁律 H 组第 35 条：载入 = 把这张**已经挂进分析实例**的源表复制成 `tmp_l_`，
+    // 会话级、不登记资产。写库在 worker 线程，回执由面板自己的小泵取回（第 25 条）。
+    // 只给「挂在分析实例上的源」开这个口（`source` 有值 = 会话 / 加速 / 文件库），
+    // 裸连接的表还没有取数通道（见 `services::load_jobs::load` 的报错分支）。
+    if let Some(source) = source {
+        let qualified = table.qualified.clone();
+        let table_name = table.name.clone();
+        let source = source.clone();
+        let source_name = source_name.to_string();
+        let entity = entity.clone();
+        let shared = shared.clone();
+        base.context_menu(move |menu, _window, _cx| {
+            let mut menu = menu;
+            let qualified = qualified.clone();
+            let table_name_for_job = table_name.clone();
+            let table_name_for_note = table_name.clone();
+            let source = source.clone();
+            let source_name = source_name.clone();
+            let entity = entity.clone();
+            let shared = shared.clone();
+            menu = menu.item(PopupMenuItem::new("载入内存…").on_click(
+                move |_, _, cx| {
+                    // 名字用 `<源>_<表>`：临时表名的尺子只留 ASCII，中文会折成下划线，
+                    // 回执里显示的是**实际落下的表名**（`landed`），不是用户看到的这张表名
+                    let description = format!("{source_name}_{table_name_for_job}");
+                    let job = crate::services::load_jobs::start(
+                        source.clone(),
+                        source_name.clone(),
+                        table_name_for_note.clone(),
+                        qualified.clone(),
+                        description,
+                    );
+                    shared.say(format!("正在载入「{table_name_for_note}」…"), cx);
+                    entity.update(cx, |tab, cx| tab.watch_load(job, cx));
+                },
+            ));
+            menu
+        })
+        .into_any_element()
+    } else {
+        base.into_any_element()
+    }
 }
 
 /// 源库表的叶子行：缩进 + 图标 + 表名 + 所在 catalog / schema + 「选用」。

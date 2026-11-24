@@ -50,6 +50,18 @@ pub fn list_insight_samples() -> Result<Vec<String>, CoreError> {
     TempTableManager::list_by_source(&guard, TempTableSource::Insight)
 }
 
+/// 列出「载入内存」的源表副本（`tmp_l_` 前缀，按名排序）。
+///
+/// 与 [`list_result_sets`] 同一个取数面（进程单例 + 按前缀查 `information_schema`），
+/// 只差来源档：`tmp_l_` 是数据对象面板「载入内存…」落下的**源表副本**（铁律第 35 条）。
+pub fn list_loaded_tables() -> Result<Vec<String>, CoreError> {
+    let conn = DuckDbService::get_or_create_duckdb()?;
+    let guard = conn
+        .lock()
+        .map_err(|e| invalid(format!("DuckDB 单例锁中毒: {e}")))?;
+    TempTableManager::list_by_source(&guard, TempTableSource::Load)
+}
+
 /// 结果集二次分析的会话：进程单例句柄（在它上面直接读 `tmp_q_` 表）。
 ///
 /// `label` 只用于计划的展示名（历史面板 / 日志），不参与执行。
