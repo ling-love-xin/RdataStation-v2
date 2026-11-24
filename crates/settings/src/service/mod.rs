@@ -152,8 +152,6 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         }
         // 复合值（工具栏按钮布局）：读写走草稿箱 ⋯ 菜单自己的入口。
         Slot::ScratchpadToolbar => return None,
-        // 分区高度上限（数值）：读写走分区拖拽 handle，无标量入口。
-        Slot::ScratchpadGroupMaxH => SettingValue::Number(settings.scratchpad.group_max_h as f64),
         Slot::InsightMemoryLimitMb => SettingValue::Number(settings.insight.memory_limit_mb as f64),
         Slot::InsightFullScanConfirm => SettingValue::Bool(settings.insight.full_scan_confirm),
         Slot::InsightWorkSetLimit => SettingValue::Number(settings.insight.work_set_limit as f64),
@@ -449,9 +447,7 @@ impl SettingsService {
             }
             Slot::LogMinLevel => logging::apply_slot(slot, value, window, cx),
             Slot::StartupDefaultLeftPanel => startup::apply_slot(slot, value, window, cx),
-            Slot::ScratchpadGroupMaxH | Slot::ScratchpadToolbar => {
-                scratchpad::apply_slot(slot, value, window, cx)
-            }
+            Slot::ScratchpadToolbar => scratchpad::apply_slot(slot, value, window, cx),
             Slot::InsightMemoryLimitMb
             | Slot::InsightFullScanConfirm
             | Slot::InsightWorkSetLimit

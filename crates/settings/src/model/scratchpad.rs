@@ -9,17 +9,12 @@ pub struct Scratchpad {
     /// `reference`/`import`/`sort`/`refresh`）；值 = 显示/隐藏 + 左/右位置。
     #[serde(default)]
     pub toolbar: BTreeMap<String, ToolbarButtonCfg>,
-    /// 草稿/引用/回收站可拖拽分区的最大高度（rem，默认 7.5 = 面板默认，
-    /// 区间 [2.0, 18.0]，2026-10-28 B3 接线持久化；数值形态方便设置契约）。
-    #[serde(default)]
-    pub group_max_h: f32,
 }
 
 impl Default for Scratchpad {
     fn default() -> Self {
         Self {
             toolbar: BTreeMap::new(),
-            group_max_h: 7.5,
         }
     }
 }

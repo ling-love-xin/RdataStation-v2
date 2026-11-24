@@ -4,7 +4,9 @@
 use std::rc::Rc;
 
 use gpui_kit::component::Root;
-use gpui_kit::component::dock::{BasePanel as _, DockPlacement, DockSkin, Panel as _};
+use gpui_kit::component::dock::{
+    BasePanel as _, DockPlacement, DockSkin, Panel as _, PanelControl,
+};
 use gpui_kit::{AppContext as _, Entity, Focusable as _, TestAppContext};
 
 use crate::fold::{FoldSpan, spans as fold_spans};
@@ -17,9 +19,38 @@ use crate::view::host::{EditorHostPanel, close_document_in_dock};
 use super::Harness;
 use super::{bind_editor_keys, open_panel, shared_with_document, temp_dir};
 
+/// 编辑器面板把 zoom 入口同时放在标题栏内联按钮和三点菜单：
+///
+/// 选 `Menu`（0.10 默认）时"缩放/还原"只埋在三点菜单里；选 `Toolbar` 又会让菜单里
+/// 留一条灰掉的禁用项。`Both` 是唯一"两处可用、无禁用项"的档位——这里把契约钉死，
+/// 防止以后被顺手改回默认。
 #[gpui_kit::test]
-fn tab_name_tracks_document_title(cx: &mut TestAppContext) {
+fn editor_panel_offers_zoom_in_the_title_bar_and_the_menu(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_document(r"D:\sql\zoom.sql", "select 1");
+
+    let (panel, cx) = {
+        let shared = shared.clone();
+        let id = id.clone();
+        cx.add_window_view(move |window, cx| EditorHostPanel::new(shared, id, window, cx))
+    };
+
+    let control = cx.update(|_window, cx| panel.read(cx).zoom_control(cx));
+    // `PanelControl` 在 vendor 里没有 derive Debug/PartialEq（只有 Clone/Copy/Default），
+    // 用 matches! 断言（0.10 源码 `dock/panel.rs:45`）
+    assert!(
+        matches!(control, Some(PanelControl::Both)),
+        "标题栏与三点菜单都要有可用的缩放入口（Toolbar 会留灰菜单项、Menu 只埋菜单）"
+    );
+    // zoom 本体仍是基类行为：编辑器面板允许 zoom
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).zoomable(cx)),
+        "允许 zoom 才谈得上出现在按钮/菜单"
+    );
+}
+
+#[gpui_kit::test]
+fn tab_name_tracks_document_title(cx: &mut TestAppContext) {    cx.update(gpui_kit::init);
     let (shared, id) = shared_with_document(r"D:\sql\report.sql", "select 1");
 
     let (panel, cx) = {
@@ -49,7 +80,7 @@ fn dirty_dot_appears_only_after_edit(cx: &mut TestAppContext) {
         cx.add_window_view(move |window, cx| EditorHostPanel::new(shared, id, window, cx))
     };
 
-    // 刚打开：干净 → 无脏点（脏点由 `title_suffix` 按 `is_dirty()` 渲染）
+    // 刚打开：干净 → 无脏点（脏点由 `Panel::tab_prefix`（标签形态）/ `title_suffix`（标题形态）按 `is_dirty()` 渲染）
     assert!(!cx.update(|_window, cx| panel.read(cx).is_dirty()));
 
     // 内容变了（这里直接走服务层，等价于内核回写后的状态）

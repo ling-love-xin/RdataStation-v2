@@ -18,7 +18,8 @@ use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::dock::{
-    BasePanel, DockArea, Panel as ComponentPanel, PanelEvent as BasePanelEvent, PanelId, TabGroup,
+    BasePanel, DockArea, Panel as ComponentPanel, PanelControl, PanelEvent as BasePanelEvent,
+    PanelId, TabGroup,
 };
 use gpui_kit::component::date_picker::{DatePickerEvent, DatePickerState};
 use gpui_kit::component::input::{EditorState, InputEvent, InputState, RangeDecorationCollection};

@@ -16,15 +16,15 @@
 ├── resources/                   ← M6 分析资源（后续；提升目标）
 ├── mock/                        ← M7 Mock 产物（后续）
 └── .RSmeta/
-    ├── scratchpad/config.json   ← 模块内部态（外部引用 + file_meta）
-    └── trash/                   ← 项目级回收站（草稿 + 资源共用）
+    ├── scratchpad/
+    │   ├── config.json           ← 外部引用（file_meta 已迁 per-file sidecar，见 §5）
+    │   └── meta/<相对路径>.json  ← per-file sidecar（与 rds-file-meta::FileMeta 共住）
+    └── trash/                    ← 项目级回收站（草稿 + 资源共用）
 ```
 
 - 内容在可见目录里，用户可直接用系统文件管理器取走；**内部态全部在 `.RSmeta/`**，面板永不用过滤。
 - 「草稿」因此是一个**目录语义**而非视图过滤：在 `scratchpad/` 里的就是草稿。不需要忽略规则、不需要扫描整个项目。
-- 旧布局 `{项目}/.scratchpad/` 一次性迁移（配置 → `.RSmeta/scratchpad/`、内容 → `scratchpad/`、旧回收站 → 项目级回收站）；幂等、非破坏、同名不覆盖。
-
-### 2. 回收站是项目级的，且自包含来源
+- 旧布局 `{项目}/.scratchpad/` 一次性迁移（配置 → `.RSmeta/scratchpad/`、内容 → `scratchpad/`、旧回收站 → 项目级回收站）；幂等、非破坏、同名不覆盖。### 2. 回收站是项目级的，且自包含来源
 
 - 位置 `.RSmeta/trash/`；条目为 `trash/<id>/{payload, manifest.json}`。
 - `manifest` 记录 `origin`（来源模块）+ `original_rel_path`（原相对路径）+ `kind/size/deleted_at`，因此还原能回到原模块、原路径（同名自动改名，不覆盖）。
@@ -47,7 +47,8 @@
 
 ### 5. 元数据：只存 ID / 路径，绝不存凭据
 
-- `config.json` 的 `files` 键 = **相对模块根的路径**（项目迁移不失效），记录 `last_connection_id` / `last_executed_at` / `bound_connections`（均为连接 ID）。
+- 文件元数据走 **per-file sidecar**（`{项目}/.RSmeta/scratchpad/meta/<相对路径>.json`，2026-10-29 从 `config.json::file_meta` 迁出，启动幂等搬迁）：与 `rds-file-meta::FileMeta` **共住**，本模块只占 `last_connection` 与 `extra` 两个 key（书签/折叠等编辑器字段互不干扰）。记录 `last_connection_id` / `last_executed_at` / `bound_connections`（均为连接 ID）；**快照语义**：文件移动 sidecar 随走，离开草稿箱即清理。
+- `config.json` 只剩外部引用。
 - 凭据始终在 `auth_store`（AES-256-GCM）；文件元数据不落明文。
 - 外部引用（链接）：项目外的目标只能存**绝对路径** + 别名，**不复制**；加载时探测可用性，失效项置灰并提示「丢失」；可改名 / 在文件管理器中打开 / 重新引用（`update_external_reference_path`，只改路径） / 移除。
   - 与**导入**的本质差异：导入是**复制**进 `scratchpad/`（计体积、随项目迁移）；引用只记路径（不计体积、可能失效）。
@@ -58,7 +59,7 @@
 | 文件 | 职责 |
 | --- | --- |
 | `src/models.rs` | 域模型：`ScratchpadEntry` / `FileMeta`（+ `preferred_connection()`：显式绑定优先、其次最近执行） / `ExternalReference` / `ExternalReferenceStatus` / 搜索 / Diff / 替换 |
-| `src/store.rs` | `ScratchpadStore`：列表（懒加载按目录）、CRUD、**递归复制**、回收站入口（按来源过滤的列表 / 还原 / 清空）、内容搜索（子串/正则/大小写 + **命中区间**）、替换（正则/字面量 + 大小写）、Diff、外部引用（含**重新定位**）、可分析文件、路径防护（含反向的 `relative_path_of`）、旧布局迁移、文件元数据读写（`file_meta` / `bind_connections` / `update_file_meta`） |
+| `src/store.rs` | `ScratchpadStore`：列表（懒加载按目录）、CRUD、**递归复制**、回收站入口（按来源过滤的列表 / 还原 / 清空）、内容搜索（子串/正则/大小写 + **命中区间**）、替换（正则/字面量 + 大小写）、Diff、外部引用（含**重新定位**）、可分析文件、路径防护（含反向的 `relative_path_of`）、旧布局迁移、文件元数据读写（**per-file sidecar**：`file_meta` / `bind_connections` / `update_file_meta`；标签索引 `scratchpad_tags` 走项目库） |
 | ~~`src/trash.rs`~~ | 已上提到 `engine::persistence::trash`（`ProjectTrash` / `TrashManifest` / `TrashEntry` / `TrashKind` / `TrashRestoreOutcome`；P0.8）——`crate::lib.rs` 重导出保持旧路径可用 |
 | `src/watch.rs` | `ScratchpadWatcher` / `ChangeFlag`：模块目录文件监控（**外部改动 → 变更标记**，视图侧去抖重拉；只监听内容目录，`.RSmeta` 不在范围内） |
 | ~~`src/state.rs`~~ | ~~`ScratchpadState` 进程级状态壳~~ **已删（2026-10-09，K11）**：无使用方即删；store 按窗口构造、watcher 面板自持 |
@@ -79,7 +80,7 @@
 | 打开草稿到编辑器 + 按 `file_meta` 预选连接 + **执行后回写**最近连接 | — |
 | **冲突 Diff**（外部改动 + 编辑器有未保存修改 → 冲突条：差异 / 重载 / 忽略；差异行级落中央编辑区） | — |
 | **拖入编辑器插入**（拖草稿行落到编辑器文本区 → 内容插到光标处；载荷 `shared::InsertFileDrag`，落点现读）+ **命中跳转到具体行**（点命中标题 → 打开文件并选中命中文本；行号 1 基 + 行内字节区间） | — |
-| 懒加载、排序（名称/大小/时间）、文件名过滤、**虚拟列表**（只渲染可视区）、空态大图标 + 按钮 | 提升/存档只读/取回/版本（Phase D，依赖 `analytics_resource`） |
+| 懒加载、排序（名称/大小/时间）、文件名过滤、**虚拟列表**（只渲染可视区）、空态大图标 + 按钮 | 归档/取回/版本已由资产库侧建成（**copy 语义**，非 move）；草稿箱侧入口已接（右键「归档为存档…」经 `ScratchpadHost::archive_drafts` 递绝对路径）。余 K8：归档时外部引用与 `file_meta` 的处置待产品裁决 |
 | 内容搜索（正则/大小写）+ **命中高亮**（含 Unicode 宽度变化字符的正确回射）+ **全部替换**（结果与替换栏落中央编辑区）+ **点命中标题打开该草稿并跳行** | — |
 | 外部引用（添加文件或目录 / 自定义别名 / 改名 / 打开 / 移除 / 可用性探测 / **失效后重新引用**）、文件元数据（数据源绑定：读 `file_meta` + 写 `bind_connections` / `update_file_meta`） | 引用目录的展开浏览（当前只作入口；K6 待拍板） |
 | **文件监控**（`notify` 递归监听模块根 + 1.2 s 去抖重拉；启动失败降级为手动 `↻`）+ **外部改动后自动重搜**已打开的搜索结果 | — |
@@ -92,5 +93,5 @@
 
 - 设计（权威）：`docs/architecture/scratchpad/` 五件套——`README.md`（模块入口）· `scratchpad-architecture.md`（设计理念与架构 + 已知问题）· `scratchpad-prototype-design.md` + `scratchpad-prototype.html`（原型）· `scratchpad-dev-plan.md`（进度）· `scratchpad-user-guide.md`（使用手册）。
 - 对外宣传 / 新人先读：`docs/architecture/scratchpad/scratchpad-showcase.html`（视觉版：吸顶导航 + 关键数字 + 卡片排版）· `scratchpad-showcase.md`（可贴版：纯文本 + 流程图，适合 PR / wiki）。
-- 验证：`cargo check -p rds-scratchpad -j 2`；单测 `cargo test -p rds-scratchpad -j 2 --lib`（**42 项**：域逻辑 + 面板纯函数 + 后台任务）。
+- 验证：`cargo check -p rds-scratchpad -j 2`；单测 `cargo test -p rds-scratchpad -j 2 --lib`（**52 项**：域逻辑 + 面板纯函数 + 后台任务 + 窗口级回归）。
 - **命令约定**：全量编译/测试必须限制并发（`cargo check-all` / `cargo test-all` 别名，含 `-j 2` 与 `RUST_MIN_STACK`）——并发链接重型 crate 会耗尽内存（DuckDB 已改动态链接）。

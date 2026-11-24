@@ -118,7 +118,10 @@ impl ScratchpadView {
         // 作用：按文件名过滤树（实时）；⌕ = 聚焦输入框（Enter 等效，过滤实时无需额外执行）；
         // 内容搜索入口在普通工具栏 ⌕（`open_search_panel`），两处图标区分（搜文件 vs 搜内容）。
         let search_row = {
-            let _theme = cx.theme();
+            // 搜索行整体给一层底（与数据导航面板头搜索行同一处理，nav #2「工具栏与
+            // 内容分层」）：无边框输入框（`bordered(false)`）靠这层底显形，否则在面板
+            // 背景上边界不可辨（2026-11-24 用户目视反馈②）。theme 取色后先释放借用再建行。
+            let group_bg = cx.theme().colors.group_box;
             let filter_input = self.scratchpad.borrow().search_input.clone();
             let filter_input_for_btn = filter_input.clone();
             let run_file_filter =
@@ -137,8 +140,9 @@ impl ScratchpadView {
                 .items_center()
                 .gap_1()
                 .w_full()
-                .px_1p5()
-                .py_0p5();
+                .px_2()
+                .py_0p5()
+                .bg(group_bg);
             if let Some(input) = filter_input {
                 row = row
                     .child(
@@ -276,48 +280,18 @@ impl ScratchpadView {
         );
         panel = panel.child(drafts);
 
-        // ── 底部固定区（引用 / 回收站 / 撤销栏 / 状态；不随草稿树滚动）──
-        // 引用与回收站两块抽成方法（`render_scratchpad_refs_and_trash`）：主视图只留装配顺序。
-        let body = self.render_scratchpad_refs_and_trash(cx);
-
-        // 引用 / 回收站限高可滚，保证草稿树始终有可用高度。
-        // 拖拽分区 handle（2026-10-12 用户点名：草稿 | 引用+回收站 高度可拖拽调整，进程内）。
-        let group_max_h = self.scratchpad.borrow().group_max_h;
-        let split_handle = {
-            let entity = entity.clone();
-            div()
-                .id("sp-split-handle")
-                .w_full()
-                .h(rems(0.375))
-                .flex_none()
-                .cursor_row_resize()
-                .hover(move |s| s.bg(hover_bg))
-                .on_drag(0u8, |_, _, _, cx| cx.new(|_| ToolbarDragOverlay))
-                .on_drag_move::<u8>(move |event, _, app| {
-                    let delta_px = event.event.position.y.as_f32() - event.bounds.top().as_f32();
-                    if delta_px.abs() > 1.0 {
-                        entity.update(app, |this, cx| {
-                            let mut v = this.scratchpad.borrow_mut();
-                            v.group_max_h = (v.group_max_h + delta_px / 16.0).clamp(2.0, 18.0);
-                            drop(v);
-                            // B3（2026-10-28）：拖拽后的分区高度立即持久化（settings），
-                            // 重启后恢复；落盘失败不改本进程已生效。
-                            this.persist_group_max_h(cx);
-                            cx.notify();
-                        });
-                    }
-                })
-        };
-        panel = panel.child(
-            div().v_flex().w_full().child(split_handle).child(
-                div()
-                    .v_flex()
-                    .w_full()
-                    .max_h(rems(group_max_h))
-                    .overflow_y_scrollbar()
-                    .child(body),
-            ),
-        );
+        // ── 书签 / 引用 / 回收站分区（VSCode 资源管理器式，2026-11-25 用户拍板）──
+        // 四个分区与草稿分区同一形态平铺在面板 v_flex 里：头行常驻（自带底色即分隔
+        // 语言），展开内容 `flex_1` —— 多个分区展开时**均分**剩余高度、唯一展开的
+        // **占满**、收起的分区塌成头行沉底。原「拖拽把手 + group_max_h 限高」（引用+
+        // 回收站共享固定高度）随该模式移除：高度改由 flex 分配，不再需要限高把手。
+        // 书签分区顺序按用户口径：草稿 → 书签 → 引用 → 回收站。
+        let bookmarks_section = self.render_scratchpad_bookmarks_section(cx);
+        let (refs_section, trash_section) = self.render_scratchpad_refs_and_trash(cx);
+        panel = panel
+            .child(bookmarks_section)
+            .child(refs_section)
+            .child(trash_section);
 
         // ── 撤销栏 ──
         if let Some(undo) = &undo {
@@ -601,16 +575,165 @@ impl ScratchpadView {
             .child(count.to_string())
     }
 
-    /// 底部固定区的「外部引用 + 回收站」两块（不随草稿树滚动）。
+    /// 「书签」分区（2026-11-25 用户拍板：跨文件书签管理面放草稿箱）。
+    ///
+    /// 数据 = 草稿目录各文件的**文件旁 sidecar** 书签（含便签 `label`，与编辑器
+    /// 同一数据源）；展开时惰性入队扫描（jobs 工作线程），收起不扫、空结果不重扫。
+    /// 行点击 = 打开该草稿并跳到书签行（复用搜索命中的跳行端口，span 置 `None`
+    /// 只落光标不选区）。单文件书签操作在编辑器（`Ctrl+Shift+B` / `F8`）；归档侧
+    /// 是只读引用查看，不走这条链路。
+    fn render_scratchpad_bookmarks_section(&self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme();
+        let muted = theme.colors.muted_foreground;
+        let hover_bg = theme.colors.list_hover;
+        let group_bg = theme.colors.group_box;
+        let entity = cx.entity();
+        let (expanded, loading, rows) = {
+            let view = self.scratchpad.borrow();
+            (view.bookmarks_expanded, view.bookmarks_loading, view.bookmarks.clone())
+        };
+        // 展开即触发惰性扫描（与根加载同款「只入队 + 起轮询」；render 纯读约束下
+        // 的既有例外——入队本身无 I/O）。
+        if expanded {
+            self.ensure_bookmarks_loaded(cx);
+        }
+
+        let toggle = {
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                entity.update(app, |this, cx| this.toggle_bookmarks_section(cx));
+            }
+        };
+        let bookmarks_head = div()
+            .debug_selector(|| "sp-bookmarks-head".into())
+            .id("sp-bookmarks-head")
+            .cursor_pointer()
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .text_xs()
+            .h(rems(ui::ROW_HEIGHT_COMPACT))
+            .px_1p5()
+            .bg(group_bg)
+            .child(tree::disclosure_slot().child(tree::disclosure_icon(expanded, muted)))
+            .child(Icon::new(gpui_kit::assets::IconName::Bookmark).size(rems(ui::ICON_SIZE_SM)))
+            .child(tr("书签"))
+            .child(div().flex_1())
+            .child(Badge::new().count(rows.len()))
+            .on_click(toggle);
+
+        // 内容行：文件 · 行号 · 便签（muted 截断）；点击跳到书签行。
+        let mut list = div().v_flex().w_full().gap_1();
+        if loading {
+            list = list.child(
+                div()
+                    .px_1p5()
+                    .py_1()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(tr("扫描书签中…")),
+            );
+        } else if rows.is_empty() {
+            list = list.child(
+                div()
+                    .px_1p5()
+                    .py_1()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(tr("暂无书签（在编辑器 Ctrl+Shift+B 添加，可带便签）")),
+            );
+        } else {
+            for row in &rows {
+                let host = self.host.clone();
+                let target = ScratchpadSearchHitTarget {
+                    file: row.relative_path.clone(),
+                    line: row.line,
+                    span: None,
+                };
+                let label = row.label.clone();
+                let name_line = format!("{}:{}", row.name, row.line);
+                list = list.child(
+                    div()
+                        .id(format!(
+                            "sp-bm-{}-{}",
+                            row.relative_path.replace('/', "-"),
+                            row.line
+                        ))
+                        .h_flex()
+                        .items_center()
+                        .gap_1()
+                        .w_full()
+                        .h(rems(ui::ROW_HEIGHT_COMPACT))
+                        .px_1p5()
+                        .cursor_pointer()
+                        .hover(move |s| s.bg(hover_bg))
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_xs()
+                                .child(name_line),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_xs()
+                                .text_ellipsis()
+                                .text_color(muted)
+                                .when(!label.is_empty(), |s| s.child(label.clone())),
+                        )
+                        .on_click(move |_, _, _| {
+                            // 与搜索命中同一跳行端口：宿主覆盖为打开 + 落光标/选区。
+                            host.open_search_hit(target.clone());
+                        }),
+                );
+            }
+        }
+
+        div()
+            .v_flex()
+            .w_full()
+            .min_h_0()
+            .when(expanded, |s| s.flex_1())
+            .when(!expanded, |s| s.flex_none())
+            .child(bookmarks_head)
+            .child(
+                Collapsible::new()
+                    .open(expanded)
+                    .h_full()
+                    .content(
+                        div()
+                            .w_full()
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scrollbar()
+                            .px_1()
+                            .pb_1()
+                            .child(list),
+                    ),
+            )
+    }
+
+    /// 「外部引用」+「回收站」两个分区。
+    ///
+    /// VSCode 资源管理器式（2026-11-25 用户拍板）：分区 = 常驻头行 + 展开内容，
+    /// 展开内容 `flex_1` —— 多个分区展开时**均分**剩余高度、唯一展开的**占满**、
+    /// 收起的分区塌成头行沉底（被别的展开区推下去）。与草稿分区
+    /// （`render_scratchpad_tree` 的 drafts 容器）同一形态，三个分区平铺在面板
+    /// v_flex 里；高度链也照抄草稿分区（容器 flex_1 → Collapsible h_full →
+    /// 内容 flex_1 + 自滚），内容各自滚动、互不挤占。
     ///
     /// 为什么单独成方法：`render_scratchpad` 是面板唯一主视图，接近千行——把与「数据从哪来」
-    /// 无关的两块搬出来，主视图只剩装配顺序（行为不变：同一元素树，只换了落点）。
-    fn render_scratchpad_refs_and_trash(&self, cx: &mut Context<Self>) -> Div {
+    /// 无关的两块搬出来，主视图只剩装配顺序。
+    fn render_scratchpad_refs_and_trash(&self, cx: &mut Context<Self>) -> (Div, Div) {
         let theme = cx.theme();
         let fg = theme.colors.foreground;
         let muted = theme.colors.muted_foreground;
         let _primary = theme.colors.primary;
         let _hover_bg = theme.colors.list_hover;
+        // 分组头底色（2026-11-24 反馈③）：引用/回收站两栏与草稿树的隔离语言，
+        // 与「草稿」折叠头、搜索行同用 `group_box`。
+        let group_bg = theme.colors.group_box;
         let ref_color = theme.colors.info;
         let _info = theme.colors.info;
 
@@ -626,15 +749,14 @@ impl ScratchpadView {
             )
         };
 
-        let mut body = div().v_flex().w_full().gap_1().px_1().pb_1();
         // ── 外部引用（原型 415-424 acc-item「引用」；2026-10-11 对齐：常驻可折叠
         // Accordion + 胶囊 badge；改名 / 打开 / 移除 / 重新引用操作保留）──
         let mut ref_rows = div().v_flex().w_full().gap_1();
         for r in &external_refs {
-            // 本引用正在改名 → 行内输入。
+            // 本引用正在改名 → 行内输入（插在该引用行自己的位置，随 `ref_rows` 进分区）。
             if let Some(ScratchpadEdit::RenameReference { alias }) = &edit {
                 if alias == &r.alias {
-                    body = body.child(self.render_scratchpad_edit_row(0, cx));
+                    ref_rows = ref_rows.child(self.render_scratchpad_edit_row(0, cx));
                     continue;
                 }
             }
@@ -773,6 +895,9 @@ impl ScratchpadView {
             .items_center()
             .gap_1()
             .text_xs()
+            .h(rems(ui::ROW_HEIGHT_COMPACT))
+            .px_1p5()
+            .bg(group_bg)
             .child(tree::disclosure_slot().child(tree::disclosure_icon(refs_expanded, muted)))
             .child(tr("引用"))
             .child(div().flex_1())
@@ -795,14 +920,30 @@ impl ScratchpadView {
             )
             .child(ref_badge)
             .on_click(toggle_refs);
-        body = body.child(
-            div().v_flex().w_full().child(ref_head).child(
+        let refs_section = div()
+            .v_flex()
+            .w_full()
+            .min_h_0()
+            .when(refs_expanded, |s| s.flex_1())
+            .when(!refs_expanded, |s| s.flex_none())
+            .child(ref_head)
+            .child(
                 Collapsible::new()
                     .open(refs_expanded)
-                    .content(div().w_full().px_1().pb_1().child(ref_rows)),
-            ),
-        );
+                    .h_full()
+                    .content(
+                        div()
+                            .w_full()
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scrollbar()
+                            .px_1()
+                            .pb_1()
+                            .child(ref_rows),
+                    ),
+            );
 
+        let trash_section;
         // ── 回收站（原型 425-432 acc-item「垃圾箱」；2026-10-11 对齐：可折叠 Accordion +
         // 胶囊 badge + 标题右侧清空按钮；还原不保留）──
         {
@@ -894,21 +1035,39 @@ impl ScratchpadView {
                 .items_center()
                 .gap_1()
                 .text_xs()
+                .h(rems(ui::ROW_HEIGHT_COMPACT))
+                .px_1p5()
+                .bg(group_bg)
                 .child(tree::disclosure_slot().child(tree::disclosure_icon(trash_expanded, muted)))
                 .child(tr("回收站"))
                 .child(div().flex_1())
                 .child(trash_badge)
                 .when_some(empty_btn, |this, btn| this.child(btn))
                 .on_click(toggle_trash);
-            body = body.child(
-                div().v_flex().w_full().child(trash_head).child(
+            trash_section = div()
+                .v_flex()
+                .w_full()
+                .min_h_0()
+                .when(trash_expanded, |s| s.flex_1())
+                .when(!trash_expanded, |s| s.flex_none())
+                .child(trash_head)
+                .child(
                     Collapsible::new()
                         .open(trash_expanded)
-                        .content(div().w_full().px_1().pb_1().child(trash_rows)),
-                ),
-            );
+                        .h_full()
+                        .content(
+                            div()
+                                .w_full()
+                                .flex_1()
+                                .min_h_0()
+                                .overflow_y_scrollbar()
+                                .px_1()
+                                .pb_1()
+                                .child(trash_rows),
+                        ),
+                );
         }
-        body
+        (refs_section, trash_section)
     }
 }
 
@@ -1357,10 +1516,13 @@ impl ScratchpadView {
             }
         }
         toolbar = toolbar.child(
+            // 外层 div 只画高度与底边框，**不做 h_flex**：Toolbar 在普通（block）布局里
+            // 宽度自动 = 父行宽，中间的 `div().flex_1()` 弹簧才有空间展开——左右两组才能
+            // 分居两端（⋯ 菜单的「放在左/右」随之可见）。此前把 Toolbar 包进 h_flex 行：
+            // flex 子元素按内容收缩不铺满，弹簧恒 0 宽，左右两组永远贴在一起、面板拉伸
+            // 也不重排（2026-11-24 用户目视反馈①）。与数据导航面板头同一写法（nav_view
+            // chrome.rs 的 `Toolbar::new("nav-header").h_full()`）。
             div()
-                .h_flex()
-                .items_center()
-                .gap_1()
                 .w_full()
                 .h(rems(ui::PANEL_HEADER_HEIGHT))
                 .border_b(ui::HAIRLINE)
@@ -1369,6 +1531,7 @@ impl ScratchpadView {
                     // Toolbar 容器：自带 roving 方向键焦点 + toolbar a11y 语义 + 统一 size；
                     // 背景/边框/高度由外层画（0.8.1 vendor toolbar.rs 文档同口径）。
                     Toolbar::new("sp-toolbar")
+                        .h_full()
                         .content(
                             div()
                                 .h_flex()
@@ -1684,13 +1847,16 @@ impl ScratchpadView {
         // ── 搜索行（VSCode 式，2026-10-11 用户点名）：Aa/ab/.* 嵌在输入框内右侧 ──
         // 运行方式：输入框 Enter 触发（`ensure_scratchpad_inputs` 的 PressEnter 订阅）；
         // 不再有模式 chip / 运行按钮（原型 449-460，用户拍板确认删除）。
+        // 无边框输入框靠一层底显形（与普通视图搜索行、导航面板同一处理；2026-11-24 反馈②）。
+        let search_group_bg = theme.colors.group_box;
         let mut search_row = div()
             .h_flex()
             .items_center()
             .gap_1()
             .w_full()
             .px_1p5()
-            .pb_1();
+            .pb_1()
+            .bg(search_group_bg);
         if let Some(input) = self.scratchpad.borrow().content_search_input.clone() {
             let search_word = self.scratchpad.borrow().search_word;
             let word_btn = Button::new("sp-word")
@@ -2019,6 +2185,9 @@ impl ScratchpadView {
         let selected_bg = theme.colors.list_active;
         let fg = theme.colors.foreground;
         let muted = theme.colors.muted_foreground;
+        // 分组头底色（2026-11-24 反馈③）：「草稿/引用/回收站」三个固定栏靠这层底
+        // 与树内容区分——与搜索行同用 `group_box`（导航面板同款分层语言）。
+        let group_bg = theme.colors.group_box;
         let folder_color = theme.colors.warning;
         let primary = theme.colors.primary;
         let info = theme.colors.info;
@@ -2169,6 +2338,9 @@ impl ScratchpadView {
                 .items_center()
                 .gap_1()
                 .text_xs()
+                .h(rems(ui::ROW_HEIGHT_COMPACT))
+                .px_1p5()
+                .bg(group_bg)
                 .child(tree::disclosure_slot().child(tree::disclosure_icon(drafts_expanded, muted)))
                 .child(tr("草稿"))
                 .child(div().flex_1())
@@ -2250,20 +2422,6 @@ impl ScratchpadView {
             cx.global_mut::<settings::model::Settings>()
                 .scratchpad
                 .toolbar = map;
-            let snapshot = cx.global::<settings::model::Settings>().clone();
-            let _ = settings::save_settings(&snapshot);
-        }
-    }
-
-    /// 分区高度持久化（B3，2026-10-28）：把拖拽后的 `group_max_h` 写回
-    /// `settings.scratchpad.group_max_h` 并落盘（模型默认 7.5 = 面板默认）。
-    /// 落盘失败不改本进程已生效（与 `persist_toolbar_cfg` 同口径）。
-    pub(super) fn persist_group_max_h(&self, cx: &mut Context<Self>) {
-        let h = self.scratchpad.borrow().group_max_h;
-        if cx.has_global::<settings::model::Settings>() {
-            cx.global_mut::<settings::model::Settings>()
-                .scratchpad
-                .group_max_h = h;
             let snapshot = cx.global::<settings::model::Settings>().clone();
             let _ = settings::save_settings(&snapshot);
         }

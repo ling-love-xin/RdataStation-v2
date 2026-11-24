@@ -121,7 +121,12 @@ impl ComponentPanel for EditorHostPanel {
         Some(PanelControl::Both)
     }
 
-    /// 【C3 状态槽】标签左端 = **类型图标 + 固定 12px 状态槽**，脏点在槽里。
+    /// 【C3 状态槽】标签左端 = **固定 12px 状态槽 + 类型图标**，脏点在槽里。
+    ///
+    /// 顺序按 Zed：`start_slot`（状态位）在最左，随后才是文件类型图标，最后是标题。
+    /// 状态槽在左的好处是它在**所有标签的同一列**上（状态位不随标题文字长短漂移），
+    /// 扫一眼标签条就能看出哪些文档有未保存改动（用户实机反馈 2026-11-24：
+    /// 首版把图标放前、脏点放后，与 Zed 相反）。
     ///
     /// 图标为什么在这里：中央编辑区恒为标签条形态，标签文字只走 `tab_name()`
     /// （纯字符串），标题行里 `title()` 的那套富文本用不上——所以文件 tab 此前
@@ -129,7 +134,7 @@ impl ComponentPanel for EditorHostPanel {
     /// 左侧 dock 的 tab（`tab_name() == None`）走 `title()`，图标本来就在。
     ///
     /// 槽位固定占位，变脏只换内容不改宽度，所以标签不会因为状态变化而抖动
-    /// （对齐 Zed 的 `START_TAB_SLOT_SIZE`）。
+    /// （对齐 Zed 的 `START_TAB_SLOT_SIZE = 12px`）。
     fn tab_prefix(
         &mut self,
         _window: &mut Window,
@@ -143,11 +148,6 @@ impl ComponentPanel for EditorHostPanel {
                 .items_center()
                 .gap_1()
                 .flex_shrink_0()
-                .child(
-                    Icon::empty()
-                        .path(icon)
-                        .size(cx.theme().font_size * ui::TAB_TYPE_ICON),
-                )
                 .child(
                     div()
                         .w(rems(ui::TAB_STATUS_SLOT))
@@ -163,6 +163,11 @@ impl ComponentPanel for EditorHostPanel {
                                     .bg(cx.theme().colors.primary),
                             )
                         }),
+                )
+                .child(
+                    Icon::empty()
+                        .path(icon)
+                        .size(cx.theme().font_size * ui::TAB_TYPE_ICON),
                 )
                 .into_any_element(),
         )

@@ -11,7 +11,6 @@ pub(crate) fn apply_slot(
     _cx: &mut App,
 ) -> bool {
     match slot {
-        Slot::ScratchpadGroupMaxH => return false,
         Slot::ScratchpadToolbar => return false,
         _ => return false,
     }

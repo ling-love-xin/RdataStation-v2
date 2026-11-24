@@ -1,4 +1,4 @@
-//! 数据对象面板：**真实布局测量**（headless 窗口 + gpui 排版引擎）。
+﻿//! 数据对象面板：**真实布局测量**（headless 窗口 + gpui 排版引擎）。
 //!
 //! 不是估算：把面板放进指定宽度的容器里真排一遍，再按 `debug_selector` 记录
 //! 读出每一格的真实宽度（`debug_bounds` 只在 debug 构建里登记，发布物无副作用）。
@@ -124,6 +124,11 @@ fn fmt(v: Option<f32>) -> String {
         .unwrap_or_else(|| "—".to_string())
 }
 
+/// 左缘：走马灯位移就是靠它随时间往左走。
+fn left(cx: &mut VisualTestContext, selector: &'static str) -> Option<f32> {
+    cx.debug_bounds(selector).map(|b| b.origin.x.into())
+}
+
 /// 一条探针行的量值（`line` 是打给人看的一行字）。
 struct Probe {
     line: String,
@@ -136,6 +141,20 @@ struct Probe {
 
 /// 面板宽度 → 行内各格真实宽度。
 fn panel_at(cx: &mut TestAppContext, width: f32, objects: Vec<Object>, key: &'static str) -> Probe {
+    let (_panel, vcx) = host_window(cx, width, objects);
+    probe_in(vcx, width, key)
+}
+
+/// 建面板 + 指定宽容器（= 把右侧面板拖到这么窄），返回面板实体与可交互的测试窗口。
+///
+/// `new` 会自己 `refresh`（真去查库，headless 下拿到空清单）。这里按生产口径接手：
+/// 上游取好的清单写进 `Shared`，再把面板那份可见行缓存作废——**不**动 epoch，
+/// 否则 render 里排的 `defer_in` 会再跑一次 refresh 把清单又覆盖成空。
+fn host_window<'a>(
+    cx: &'a mut TestAppContext,
+    width: f32,
+    objects: Vec<Object>,
+) -> (Entity<DataObjectsTab>, &'a mut VisualTestContext) {
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -151,15 +170,16 @@ fn panel_at(cx: &mut TestAppContext, width: f32, objects: Vec<Object>, key: &'st
         }
     });
     let panel = slot.borrow().clone().expect("面板已建");
-    // `new` 会自己 `refresh`（真去查库，headless 下拿到空清单）。这里按生产口径接手：
-    // 上游取好的清单写进 `Shared`，再把面板那份可见行缓存作废——**不**动 epoch，
-    // 否则 render 里排的 `defer_in` 会再跑一次 refresh 把清单又覆盖成空。
     *shared.data_objects.borrow_mut() = objects;
     vcx.update(|_, app| {
         panel.update(app, |tab, _| tab.rows_cache = None);
     });
     settle(&mut vcx);
+    (panel, vcx)
+}
 
+/// 已建好的窗口里量一条探针行。
+fn probe_in(vcx: &mut VisualTestContext, width: f32, key: &'static str) -> Probe {
     // (行, 名字, 副标题, 小标, 通道, 状态) 六个锚点
     let sels: (
         &'static str,
@@ -187,21 +207,21 @@ fn panel_at(cx: &mut TestAppContext, width: f32, objects: Vec<Object>, key: &'st
         ),
     };
 
-    let row_w = w(&mut vcx, sels.0);
-    let name_w = w(&mut vcx, sels.1);
-    let pill_w = w(&mut vcx, sels.3);
-    let channel_w = w(&mut vcx, sels.4);
+    let row_w = w(vcx, sels.0);
+    let name_w = w(vcx, sels.1);
+    let pill_w = w(vcx, sels.3);
+    let channel_w = w(vcx, sels.4);
     let tier = crate::components::data_objects::layout::RowTier::for_width(width);
     let line = format!(
         "PANEL={width:>5.0}  tier={tier:?}  row={}  name={}  note={}  pill={}  channel={}  \
          state={}  stateRight={}",
         fmt(row_w),
         fmt(name_w),
-        fmt(w(&mut vcx, sels.2)),
+        fmt(w(vcx, sels.2)),
         fmt(pill_w),
         fmt(channel_w),
-        fmt(w(&mut vcx, sels.5)),
-        fmt(right(&mut vcx, sels.5)),
+        fmt(w(vcx, sels.5)),
+        fmt(right(vcx, sels.5)),
     );
     Probe {
         line,
@@ -209,7 +229,7 @@ fn panel_at(cx: &mut TestAppContext, width: f32, objects: Vec<Object>, key: &'st
         name: name_w,
         pill: pill_w,
         channel: channel_w,
-        state_right: right(&mut vcx, sels.5),
+        state_right: right(vcx, sels.5),
     }
 }
 
@@ -226,9 +246,9 @@ fn measure_row_layout(cx: &mut TestAppContext) {
     settle(&mut vcx);
     println!(
         "NATURAL  name(14px)={}  note(12px)={}  state(12px)={}",
-        fmt(w(&mut vcx, "natural-name")),
-        fmt(w(&mut vcx, "natural-note")),
-        fmt(w(&mut vcx, "natural-state")),
+        fmt(w(vcx, "natural-name")),
+        fmt(w(vcx, "natural-note")),
+        fmt(w(vcx, "natural-state")),
     );
 
     // 2) 正常行（结果集 · 可用）在各档面板宽度下的真实分布。
@@ -330,5 +350,77 @@ fn measure_row_layout(cx: &mut TestAppContext) {
         (chrome - crate::components::data_objects::layout::ROW_CHROME_PX).abs() <= 2.0,
         "固定开销实测 {chrome:.1}px，预算常量 {}px——常量该按这次实测更新（名字可用宽 = 面板宽 − 这个数）",
         crate::components::data_objects::layout::ROW_CHROME_PX
+    );
+}
+
+/// 走马灯：**只有名字真的放不下、且鼠标停住这一行时才滚**。
+///
+/// 三件事必须都在真窗口里成立：
+/// 1. 放不下的行 hover 后改画走马灯（文字按自然宽排，内层比格子宽出截断的那截）；
+/// 2. 时间推进后内层真的在往左走（不是画了个静止的宽元素）；
+/// 3. 放得下的行 hover 也不滚（短名字不该无缘无故动起来）。
+#[gpui_kit::test]
+fn marquee_runs_only_on_the_hovered_row_that_does_not_fit(cx: &mut TestAppContext) {
+    use std::time::Duration;
+
+    use gpui_kit::Modifiers;
+
+    cx.update(gpui_kit::init);
+    let objects = vec![row(
+        "result:probe",
+        long_name(),
+        "源表副本 · 载入内存",
+        State::Ready,
+        "载入",
+    )];
+
+    // 1) 窄面板（260）：名字 210px 塞进 111px 的格子
+    let (_panel, mut vcx) = host_window(cx, 260.0, objects.clone());
+    let cell = w(vcx, "data-object-name-result:probe").expect("名字格应有宽度");
+    let row_box = vcx
+        .debug_bounds("data-object-row-result:probe")
+        .expect("行应有坐标");
+    vcx.simulate_mouse_move(row_box.center(), None, Modifiers::default());
+    settle(&mut vcx);
+
+    let inner = w(vcx, "data-object-marquee-result:probe")
+        .expect("名字放不下时 hover 应改画走马灯");
+    let x0 = left(vcx, "data-object-marquee-result:probe").expect("走马灯应有坐标");
+    println!("MARQUEE cell={cell:.1}  inner={inner:.1}  x0={x0:.1}");
+    assert!(
+        inner > cell + 40.0,
+        "走马灯里的文字必须按自然宽排（格子 {cell:.1}，内层 {inner:.1}）——\
+         内层若等于格子宽，说明它被压扁了，滚起来只是把截断的字挪来挪去"
+    );
+
+    // 时间推进：4s 一轮、两端各停 18%，1200ms 时正在中段滚动
+    vcx.executor()
+        .advance_clock(Duration::from_millis(1200));
+    settle(vcx);
+    let x1 = left(vcx, "data-object-marquee-result:probe").expect("走马灯应有坐标");
+    println!("MARQUEE at 1.2s  x={x1:.1}");
+    assert!(
+        x1 < x0 - 1.0,
+        "1.2s 后文字应已向左移动：x0={x0:.1} → x1={x1:.1}"
+    );
+    // 位移不许超过「自然宽 − 格子宽」，否则结尾会被推出可视区（等于没滚完）
+    let travel = inner - cell;
+    assert!(
+        (x0 - x1) <= travel + 1.0,
+        "位移 {:.1}px 超过了可滚余量 {travel:.1}px",
+        x0 - x1
+    );
+
+    // 2) 宽面板（680）：名字放得下，hover 也不许滚
+    let (_panel, mut vcx) = host_window(cx, 680.0, objects);
+    let wide_cell = w(vcx, "data-object-name-result:probe").expect("名字格应有宽度");
+    let row_box = vcx
+        .debug_bounds("data-object-row-result:probe")
+        .expect("行应有坐标");
+    vcx.simulate_mouse_move(row_box.center(), None, Modifiers::default());
+    settle(&mut vcx);
+    assert!(
+        w(vcx, "data-object-marquee-result:probe").is_none(),
+        "名字放得下（{wide_cell:.1}px 格子装 210px 的字）时不该出现走马灯"
     );
 }

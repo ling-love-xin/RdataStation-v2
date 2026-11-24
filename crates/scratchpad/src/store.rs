@@ -6,8 +6,8 @@ use tokio::sync::Mutex;
 
 use crate::models::{
     AnalyzableFile, DiffLine, DiffLineKind, DiffResult, ExternalReference, ExternalReferenceStatus,
-    FileMeta, FlatFile, ReplaceResult, ScratchpadConfig, ScratchpadEntry, ScratchpadEntryKind,
-    ScratchpadResponse,
+    FileMeta, FlatFile, ReplaceResult, ScratchpadBookmarkRow, ScratchpadConfig, ScratchpadEntry,
+    ScratchpadEntryKind, ScratchpadResponse,
 };
 use engine::persistence::trash::{ProjectTrash, TrashEntry, TrashKind};
 use shared::error::{CoreError, StorageError};
@@ -1330,6 +1330,43 @@ impl ScratchpadStore {
                 )))
             }
         }
+    }
+
+    /// 跨文件书签扫描（书签管理面，2026-11-25）：全树文件逐个读**文件旁 sidecar**
+    /// （file-meta 约定 `.{name}.meta.json`，与编辑器书签同一数据源；scratchpad 自有
+    /// 的连接元信息 sidecar 在 `.RSmeta/` 集中目录，与书签无关、不在此列）。
+    /// 全树遍历 + 逐文件小读盘 → 归「重操作」走 jobs 工作线程（K1b 判据）。
+    /// 结果按（相对路径, 行号）升序；无 sidecar / 读失败的文件跳过（与编辑器
+    /// 「缺失返回空」口径一致，不让一个坏文件拖垮整次扫描）。
+    pub async fn scan_bookmarks(&self) -> Result<Vec<ScratchpadBookmarkRow>, CoreError> {
+        let response = self.get_full_response().await?;
+        let mut rows = Vec::new();
+        for entry in Self::flatten_entries_from_ref(&response.local_entries) {
+            if entry.kind != ScratchpadEntryKind::File {
+                continue;
+            }
+            let Ok(relative) = entry.path.strip_prefix(&self.scratchpad_dir) else {
+                continue;
+            };
+            let Ok(meta) = file_meta::read_meta(&entry.path) else {
+                continue;
+            };
+            let relative_path = relative.to_string_lossy().replace('\\', "/");
+            for bookmark in &meta.bookmarks {
+                rows.push(ScratchpadBookmarkRow {
+                    relative_path: relative_path.clone(),
+                    name: entry.name.clone(),
+                    line: bookmark.line as u32,
+                    label: bookmark.label.clone(),
+                });
+            }
+        }
+        rows.sort_by(|a, b| {
+            a.relative_path
+                .cmp(&b.relative_path)
+                .then(a.line.cmp(&b.line))
+        });
+        Ok(rows)
     }
 
     pub async fn get_analyzable_files(&self) -> Result<Vec<AnalyzableFile>, CoreError> {

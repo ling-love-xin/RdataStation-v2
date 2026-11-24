@@ -27,8 +27,8 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Mutex, OnceLock};
 
 use crate::{
-    DiffResult, ExternalReferenceStatus, FlatFile, ScratchpadEntry, ScratchpadStore, SearchMatch,
-    TrashEntry,
+    DiffResult, ExternalReferenceStatus, FlatFile, ScratchpadBookmarkRow, ScratchpadEntry,
+    ScratchpadStore, SearchMatch, TrashEntry,
 };
 
 /// 模块根加载结果（回传主线程）。
@@ -100,6 +100,10 @@ pub enum OpResult {
         relative_path: String,
         outcome: Result<DiffResult, String>,
     },
+    /// 书签管理面扫描（跨文件书签，含便签 label）。
+    Bookmarks {
+        outcome: Result<Vec<ScratchpadBookmarkRow>, String>,
+    },
 }
 
 enum Job {
@@ -131,6 +135,10 @@ enum Job {
         cut: bool,
         paths: Vec<String>,
         target: String,
+    },
+    /// 书签管理面：扫描草稿目录全部文件的 sidecar 书签（含便签）。
+    LoadBookmarks {
+        project_root: PathBuf,
     },
     /// 清空项目级回收站。
     EmptyTrash { project_root: PathBuf },
@@ -341,6 +349,12 @@ fn worker(rx: mpsc::Receiver<Job>) {
                         });
                         shared().pending_ops.fetch_sub(1, Ordering::SeqCst);
                     }
+                    Job::LoadBookmarks { .. } => {
+                        lock(&shared().op_results).push(OpResult::Bookmarks {
+                            outcome: Err(unavailable),
+                        });
+                        shared().pending_ops.fetch_sub(1, Ordering::SeqCst);
+                    }
                 }
             }
             return;
@@ -495,6 +509,14 @@ fn worker(rx: mpsc::Receiver<Job>) {
                     relative_path,
                     outcome,
                 });
+                shared().pending_ops.fetch_sub(1, Ordering::SeqCst);
+            }
+            Job::LoadBookmarks { project_root } => {
+                let store = ScratchpadStore::new(project_root);
+                let outcome = rt
+                    .block_on(store.scan_bookmarks())
+                    .map_err(|e| e.to_string());
+                lock(&shared().op_results).push(OpResult::Bookmarks { outcome });
                 shared().pending_ops.fetch_sub(1, Ordering::SeqCst);
             }
             Job::Search {
@@ -900,6 +922,14 @@ pub fn enqueue_diff(project_root: &Path, relative_path: &str, other_content: Str
         project_root: project_root.to_path_buf(),
         relative_path: relative_path.to_string(),
         other_content,
+    });
+}
+
+/// 入队书签管理面扫描（跨文件书签 + 便签；结果经 `OpResult::Bookmarks` 回填）。
+pub fn enqueue_bookmarks(project_root: &Path) {
+    shared().pending_ops.fetch_add(1, Ordering::SeqCst);
+    let _ = shared().tx.send(Job::LoadBookmarks {
+        project_root: project_root.to_path_buf(),
     });
 }
 

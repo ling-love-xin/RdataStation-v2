@@ -1,10 +1,29 @@
 # 草稿箱模块 · 开发方案（P0 + Phase A/B/C）
 
-> 状态：**Phase A/B 全部落地 + K1/K1b（加载与重操作全面后台化，render 零 I/O）已修** · Phase C 进度：打开✅ / 连接预选✅（C-2 前半）/ 执行回写✅（C-2 后半）/ 脏点✅（C-3）/ **冲突 Diff✅（C-4）** / **拖放✅（拖入编辑器插入 + 系统文件拖入导入）** / **命中跳行✅** · 待续：K1c（元数据级操作保持同步，**有意保留**）、Phase D（提升/存档/取回，依赖 `analytics_resource`）
+> 状态：**Phase A/B 全部落地 + K1/K1b（加载与重操作全面后台化，render 零 I/O）已修** · Phase C 进度：打开✅ / 连接预选✅（C-2 前半）/ 执行回写✅（C-2 后半）/ 脏点✅（C-3）/ **冲突 Diff✅（C-4）** / **拖放✅（拖入编辑器插入 + 系统文件拖入导入）** / **命中跳行✅** · Phase D：**草稿箱侧入口已接**（右键「归档为存档…」2026-11-06；归档/取回/版本本体在 `analytics_resource` 侧建成，**copy 语义**——2026-10-13 裁决，非原设计的 move）· 元数据已迁 per-file sidecar（2026-10-29）· 待续：K1c（元数据级操作保持同步，**有意保留**）
 > 关联文件：`scratchpad-prototype-design.md`（原型与已确认决策）、`scratchpad-prototype.html`（可交互原型）、`crates/scratchpad/README.md`（crate 入口与特点提炼）
 > 前置：v1 后端/前端为行为蓝本（`v1/backend/src/core/scratchpad`、`v1/frontend/extensions/builtin/scratchpad`）；v2 后端已迁移（`crates/scratchpad`，`models`/`state`/`store` 47 个方法）
 > 本方案核心变更：草稿箱根 = **模块目录 `{project}/scratchpad/`**（可见），内部元数据 `.RSmeta/scratchpad/`，回收站为**项目级** `.RSmeta/trash/`（草稿 + 资源共用）
 > 复用 `connection-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
+
+### 2026-11-24（三十次）— 用户目视四项修复 + 文档对账（Phase D / sidecar 口径）
+
+用户目视反馈四项，逐项定位根因并修复；同时把 2026-10-12 之后的断档（sidecar 迁移 / 归档入口 /
+perf 缓存 / i18n 未记轮次）做一次文档对账：
+
+| # | 问题 | 根因 | 修复 |
+| --- | --- | --- | --- |
+| 1 | 工具栏拉伸面板不跟随；⋯ 菜单「放在左/右」看不出效果 | `Toolbar` 被包进 `h_flex()` 行——flex 子元素按内容收缩不铺满，中间 `div().flex_1()` 弹簧恒 0 宽，左右两组贴在一起（两个现象同一根因） | 外层 div 改 **block 布局**（只画高度/底边框）+ `Toolbar::h_full()`，Toolbar 宽度自动 = 父行宽、弹簧生效（与数据导航面板头同一写法，`nav_view/chrome.rs` 的 `Toolbar::new("nav-header").h_full()`）；新增回归断言 `toolbar_left_and_right_groups_split_at_panel_edges`（52 项） |
+| 2 | 搜索栏无背景/边界，输入范围不可辨 | 无边框输入框（`bordered(false)` + `focus_bordered(true)`）直接坐在面板背景上；导航面板的同类输入框有一层 `group_box` 底显形（nav #2「工具栏与内容分层」），草稿箱漏了这层 | 普通视图搜索行 + 搜索态搜索行补 `.bg(theme.colors.group_box)`（与 nav 同款分层语言） |
+| 3 | 草稿/引用/回收站三个固定栏无背景，看不出隔离 | 三个分组头（折叠头）无底色无固定高度，与树内容混为一片 | 三个分组头加 `.bg(group_box)` + `h(ROW_HEIGHT_COMPACT)` + `px_1p5`；底部固定区容器补 `border_t` 上边线 |
+| 4 | 属性面板未接文件元数据 | `db_connection` 是 2026-10-10 立的占位（`None`），sidecar 里有 `preferred_connection` 却没读 | 右键属性（事件路径，K1c 同步单次 JSON 读）读 sidecar 填**连接 ID**，宿主弹窗渲染时在编辑器连接下拉里翻译成**连接名**（已删连接 → `—`）；组件形态待用户拍板 |
+
+**文档对账**（本轮一并落地）：架构 §3.2 改写为 per-file sidecar 口径（2026-10-29 迁移此前未记档）；
+Phase D 表格标注实际落地状态（见下）；两份 README 的能力表 / 元数据口径 / 状态行 / 单测数对齐。
+
+**验证**：`cargo check -p rds-scratchpad -p rds-workbench --all-targets -j 2` 零 error；
+`cargo test -p rds-scratchpad -j 2 --lib` → **52 passed**（+1 分组分离回归）；
+`cargo test -p rds-workbench --lib scratchpad` 3 passed + `scratchpad_editor_entry` 1 passed。
 
 ### 2026-10-12（二十九次）— 更多设置四栏重构（眼睛/左右滑动/拖拽排序）+ 分区拖拽 + 搜索态细节对齐
 
@@ -598,14 +617,22 @@
 
 ### Phase D — 提升 / 存档 / 取回（分析资源）
 
-| # | 任务 | 落点 | 验收 |
-| --- | --- | --- | --- |
-| D1 | `resources/` 模块根约定（`{project}/resources/`）与资源登记模型（`resource_id / version / hash / promoted_from / readonly`） | `crates/analytics_resource` + `project.db` | 登记可查询、可回读 |
-| D2 | 提升：`scratchpad/ → resources/` **move + 归档**，随文件归档数据源绑定/来源；完成后发事件刷新两侧 | `rds-scratchpad` 命令 + 资源服务 | 提升后草稿消失、资源只读 |
-| D3 | 锁定：文件系统只读属性 + 应用守卫（禁重命名/移动；编辑器只读打开） | 存储 + 编辑器 | 资源不可写 |
-| D4 | 取回（检出）：资源**复制**回 `scratchpad/`（新名 + 派生关系），资源本体不动 | 资源服务 + 草稿箱 | 可取回并编辑 |
-| D5 | 版本：再次提升生成**新版本**（稳定 `resource_id`），旧版保留 | 资源服务 + `project.db` | 版本递增、引用不断 |
-| D6 | 资源删除 → 项目级回收站（`origin = "resources"`；在资源模块还原） | `ProjectTrash` + 资源服务 | 条目来源正确、不在草稿箱误还原 |
+> **实际落地（2026-11-24 对账）**：D1–D6 已通过 M6（`analytics_resource`）+ 草稿箱右键入口
+> 基本闭环，但**语义与原设计不同**——D2 原写「move + 归档」，2026-10-13 裁决改为 **copy
+> 语义**（归档是复制、草稿保留为工作副本，`service/tests/archive.rs` 有断言钉住）；
+> 「提升」因此通称「归档」。草稿箱侧只经 `ScratchpadHost::archive_drafts` 递绝对路径
+> （依赖方向 `analytics_resource → scratchpad`，防成环），归档确认对话框 / 标签继承 /
+> 取回落点全在资产库那一侧。**仍未落地**：K8（归档时外部引用与 `file_meta` 的处置——
+> sidecar 快照语义现为「离开草稿箱即清理」，引用是否随归档冻结待产品裁决）。
+
+| # | 任务 | 落点 | 验收 | 实际 |
+| --- | --- | --- | --- | --- |
+| D1 | `resources/` 模块根约定（`{project}/resources/`）与资源登记模型（`resource_id / version / hash / promoted_from / readonly`） | `crates/analytics_resource` + `project.db` | 登记可查询、可回读 | ✅ `analytics_resource::store` |
+| D2 | 提升：`scratchpad/ → resources/` **move + 归档**，随文件归档数据源绑定/来源；完成后发事件刷新两侧 | `rds-scratchpad` 命令 + 资源服务 | 提升后草稿消失、资源只读 | ✅ 但为 **copy 语义**（草稿保留为工作副本）；入口：资产库面板头「从草稿箱归档…」+ 草稿行右键「归档为存档…」（2026-11-06） |
+| D3 | 锁定：文件系统只读属性 + 应用守卫（禁重命名/移动；编辑器只读打开） | 存储 + 编辑器 | 资源不可写 | ✅ 存档本体只读打开（`open_in_editor_with` 的 read_only 维度） |
+| D4 | 取回（检出）：资源**复制**回 `scratchpad/`（新名 + 派生关系），资源本体不动 | 资源服务 + 草稿箱 | 可取回并编辑 | ✅ `checkout.rs`（含「取回该版本为草稿」、checkout_receipt 回连） |
+| D5 | 版本：再次提升生成**新版本**（稳定 `resource_id`），旧版保留 | 资源服务 + `project.db` | 版本递增、引用不断 | ✅ `jobs/version.rs`（reference 档忽略草稿凭据，防索引指纹与 source_path 错位） |
+| D6 | 资源删除 → 项目级回收站（`origin = "resources"`；在资源模块还原） | `ProjectTrash` + 资源服务 | 条目来源正确、不在草稿箱误还原 | ✅ `jobs/archive/trash.rs`（跨模块还原拒绝有测试） |
 
 ## 3. 测试场景清单（参照 v1 §四，Phase A 覆盖 1–6）
 

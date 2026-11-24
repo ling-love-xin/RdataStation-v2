@@ -689,6 +689,13 @@ impl DataObjectsTab {
         let panel_width = row_width.read(cx).get();
         let tier = data_objects::layout::RowTier::for_width(panel_width);
 
+        // 走马灯的两个前提：名字格实际多宽（prepaint 写入，下一帧读）、鼠标停在哪一行。
+        // 名字格宽度**逐行**量（行尾按钮数随行的可点性变化，同宽面板里各行名字格不等宽）。
+        let name_widths =
+            window.use_keyed_state("data-objects-name-widths", cx, |_, _| NameWidths::default());
+        let hovered_row =
+            window.use_keyed_state("data-objects-hovered-row", cx, |_, _| HoveredRow::default());
+
         let header = div()
             .h_flex()
             .items_center()
@@ -1217,6 +1224,60 @@ impl DataObjectsTab {
             } else {
                 None
             };
+            // 走马灯的两个实测数：这一行名字格多宽（上一帧 prepaint 量到的）、
+            // 名字按同字体同字号排出来多宽（只在鼠标停在这行时才量，别为整张清单做 shaping）
+            let name_space = name_widths.read(cx).get(&object.key).unwrap_or(0.0);
+            let row_hovered = hovered_row.read(cx).0.as_deref() == Some(object.key.as_str());
+            let name_text_width = if row_hovered {
+                text_width(window, &object.name, window.rem_size() * 0.875)
+            } else {
+                0.0
+            };
+            let marquee = row_hovered
+                && data_objects::layout::should_marquee(name_text_width, name_space);
+
+            let name_cell = {
+                let cell = div()
+                    // 坐标锚点：窗口用例靠它量「名字这一格实际多宽」
+                    // （`.id()` 只登记可点，不登记几何）
+                    .debug_selector({
+                        let key = object.key.clone();
+                        move || format!("data-object-name-{key}")
+                    })
+                    .text_sm()
+                    .text_color(colors.foreground)
+                    // 窄面板里名字一长就顶出去，行尾按钮会被挤掉
+                    .overflow_hidden();
+                if marquee {
+                    // 放不下：hover 时改走马灯。文字按**自然宽**排（`flex_none` 不许压缩），
+                    // 外层照旧裁切，动画只是把裁切窗口顺着字往后挪——不是把字拉细。
+                    let travel = (name_text_width - name_space).max(0.0);
+                    cell.h_flex().child(
+                        div()
+                            .flex_none()
+                            .debug_selector({
+                                let key = object.key.clone();
+                                move || format!("data-object-marquee-{key}")
+                            })
+                            .child(object.name.clone())
+                            .with_animation(
+                                SharedString::from(format!("data-objects-marquee-{}", object.key)),
+                                Animation::new(std::time::Duration::from_millis(
+                                    data_objects::layout::MARQUEE_PERIOD_MS,
+                                ))
+                                .repeat(),
+                                move |el, delta| {
+                                    el.left(px(data_objects::layout::marquee_offset(
+                                        travel, delta,
+                                    )))
+                                },
+                            ),
+                    )
+                } else {
+                    cell.text_ellipsis().child(object.name.clone())
+                }
+            };
+
             list = list.child(
                 div()
                     // 每一行都要能被 hover 与键盘看清：hover 需要命中的 id，不是样式
@@ -1227,6 +1288,26 @@ impl DataObjectsTab {
                     .px_3()
                     .py_2()
                     .hover(|s| s.bg(colors.list_hover))
+                    // 走马灯只在鼠标停住的那一行跑：常驻滚动会让整张清单每帧重绘
+                    .on_hover({
+                        let hovered_slot = hovered_row.clone();
+                        let entity_for_hover = entity.clone();
+                        let key = object.key.clone();
+                        move |&hovering, _window, cx| {
+                            let changed = hovered_slot.update(cx, |slot, _| {
+                                let next = hovering.then(|| key.clone());
+                                if slot.0 == next {
+                                    false
+                                } else {
+                                    slot.0 = next;
+                                    true
+                                }
+                            });
+                            if changed {
+                                entity_for_hover.update(cx, |_, cx| cx.notify());
+                            }
+                        }
+                    })
                     .border_b_1()
                     .border_color(colors.border)
                     .relative()
@@ -1258,21 +1339,22 @@ impl DataObjectsTab {
                             .v_flex()
                             .flex_1()
                             .min_w_0()
-                            .child(
-                                div()
-                                    // 坐标锚点：窗口用例靠它量「名字这一格实际多宽」
-                                    // （`.id()` 只登记可点，不登记几何）
-                                    .debug_selector({
-                                        let key = object.key.clone();
-                                        move || format!("data-object-name-{key}")
-                                    })
-                                    .text_sm()
-                                    .text_color(colors.foreground)
-                                    // 窄面板里名字一长就顶出去，行尾按钮会被挤掉
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .child(object.name.clone()),
-                            )
+                            // 名字格的真实宽：prepaint 量到就写回 keyed state，供下一帧判走马灯。
+                            // 逐行量而不是按面板宽推算：行尾按钮数随行的可点性变化（源行没有勾选钮）
+                            .on_children_prepainted({
+                                let widths = name_widths.clone();
+                                let key = object.key.clone();
+                                move |bounds, _window, cx| {
+                                    let Some(first) = bounds.first() else {
+                                        return;
+                                    };
+                                    let width: f32 = first.size.width.into();
+                                    widths.update(cx, |map, _| {
+                                        map.remember(key.clone(), width);
+                                    });
+                                }
+                            })
+                            .child(name_cell)
                             .child(
                                 div()
                                     .debug_selector({
@@ -2373,6 +2455,64 @@ impl RowWidth {
     fn set(&self, width: f32) {
         self.0.set(width);
     }
+}
+
+/// 每一行名字格的**实际宽**（prepaint 量到）：走马灯判据的另一半。
+///
+/// 不按「面板宽 − 常量」推：行尾按钮数随行的可点性变化（源连接行没有勾选钮），
+/// 同宽面板里各行的名字格并不等宽——只有量出来的数才可信。
+#[derive(Default)]
+struct NameWidths(HashMap<String, f32>);
+
+impl NameWidths {
+    fn get(&self, key: &str) -> Option<f32> {
+        self.0.get(key).copied()
+    }
+
+    /// 只在与上次不同（>0.5px）时才写：prepaint 每帧都跑，写回不判等会成帧抖。
+    fn remember(&mut self, key: String, width: f32) {
+        if let Some(&old) = self.0.get(&key) {
+            if (old - width).abs() <= 0.5 {
+                return;
+            }
+        }
+        self.0.insert(key, width);
+    }
+}
+
+/// 鼠标此刻停在哪一行（`None` = 没停在任何行）：只有这一行才跑走马灯。
+#[derive(Default)]
+struct HoveredRow(Option<String>);
+
+/// 单行文本的渲染宽：与 `Text` 同一套 shaping（同字体、同字号、同字距）。
+///
+/// 换行符会被 `shape_line` 当非法输入（名字里不会有，但外部来的副标题可能有），
+/// 统一折成空格再量。
+fn text_width(window: &Window, text: &str, font_size: Pixels) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    let flat;
+    let text = if text.contains(['\n', '\r', '\t']) {
+        flat = text.replace(['\n', '\r', '\t'], " ");
+        flat.as_str()
+    } else {
+        text
+    };
+    let style = window.text_style();
+    let run = TextRun {
+        len: text.len(),
+        font: style.font(),
+        color: style.color,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    window
+        .text_system()
+        .shape_line(SharedString::from(text.to_string()), font_size, &[run], None)
+        .width()
+        .into()
 }
 
 #[cfg(test)]

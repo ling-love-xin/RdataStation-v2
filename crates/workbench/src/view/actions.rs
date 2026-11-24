@@ -254,7 +254,18 @@ impl WorkbenchView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let view = (*self.shared.scratchpad_file_info.borrow()).clone()?;
+        let mut view = (*self.shared.scratchpad_file_info.borrow()).clone()?;
+        // 连接 ID → 展示名：在编辑器连接下拉里查（连接已删除时翻译不到，退化为「—」——
+        // 裸 ID 无信息量）。纯内存查找，render 路径可读；与打开草稿预选连接
+        // （`lifecycle.rs::scratchpad_preferred_connection`）同一份连接注册表。
+        if let Some(conn_id) = view.db_connection.clone() {
+            view.db_connection = self
+                .editor_service
+                .connection_options()
+                .into_iter()
+                .find(|option| option.id == conn_id)
+                .map(|option| option.name);
+        }
         let shared = self.shared.clone();
         let close = move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
             *shared.scratchpad_file_info.borrow_mut() = None;

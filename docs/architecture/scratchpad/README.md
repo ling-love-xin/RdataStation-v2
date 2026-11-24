@@ -5,7 +5,7 @@
 > **宣传页（一页看懂）**：[`scratchpad-showcase.html`](scratchpad-showcase.html)（视觉版，明暗双主题、离线可开、吸顶导航）· [`scratchpad-showcase.md`](scratchpad-showcase.md)（可贴版，适合贴进 PR / wiki）
 >
 > 本文只提炼**特点 / 边界 / 代码地图 / 硬约束**；细节指向本目录内文档，**不复制设计**。
-> 状态：**面板与存储闭环已落地**（2026-09-15）——Phase A/B 全部完成；**Phase C（编辑器联动）已接**（打开 / 连接预选与执行回写 / 脏点 / 冲突 Diff / 拖入编辑器插入，2026-09-16 ~ 09-17；**系统文件拖入树导入 · 命中跳行，2026-10-09**）；Phase D（提升为分析资源）待续。
+> 状态：**面板与存储闭环已落地**（2026-09-15）——Phase A/B 全部完成；**Phase C（编辑器联动）已接**（打开 / 连接预选与执行回写 / 脏点 / 冲突 Diff / 拖入编辑器插入，2026-09-16 ~ 09-17；**系统文件拖入树导入 · 命中跳行，2026-10-09**）；**Phase D（归档/取回/版本）已通**——本体在 `analytics_resource` 侧建成（**copy 语义**，2026-10-13 裁决），草稿箱侧右键「归档为存档…」入口 2026-11-06 接入；文件元数据已迁 per-file sidecar（2026-10-29）；2026-11-24 目视四项修复（工具栏 Toolbar 布局 / 搜索行底色 / 分组头底色 / 属性面板接 sidecar）。
 
 ## 1. 模块特点
 
@@ -25,9 +25,9 @@
 
 | 特点 | 含义 | 出处 |
 | --- | --- | --- |
-| **内容与内部态分离** | 内容在可见目录 `scratchpad/`；内部态（外部引用 + 文件元数据）在 `{项目}/.RSmeta/scratchpad/config.json`，面板永不需要过滤 | 架构 §3 |
+| **内容与内部态分离** | 内容在可见目录 `scratchpad/`；内部态在 `.RSmeta/scratchpad/`——外部引用在 `config.json`，**文件元数据走 per-file sidecar**（`meta/<相对路径>.json`，与 `rds-file-meta::FileMeta` 共住；2026-10-29 迁出），面板永不需要过滤 | 架构 §3 |
 | **回收站为项目级** | `.RSmeta/trash/<id>/{payload, manifest.json}`，条目自带 `origin` + `original_rel_path`，草稿与将来的资源删除共用；草稿箱只还原 `origin = "scratchpad"` 的条目 | 架构 §4 |
-| **元数据只存 ID / 路径** | `file_meta` 记 `last_connection_id` / `last_executed_at` / `bound_connections`（**均为连接 ID**），凭据始终在 `auth_store` | 架构 §3.2 |
+| **元数据只存 ID / 路径** | sidecar `file_meta` 记 `last_connection_id` / `last_executed_at` / `bound_connections`（**均为连接 ID**），凭据始终在 `auth_store`；快照语义：文件离开草稿箱即清理 sidecar | 架构 §3.2 |
 | **路径防护** | `resolve_path` 拒绝 `..` 穿越与点前缀（`.RSmeta` 等）路径；列表跳过点前缀条目 | 架构 §5 |
 | **旧布局一次性迁移** | 旧 `{项目}/.scratchpad/` → 新布局（配置进 `.RSmeta/scratchpad/`、内容进 `scratchpad/`、旧回收站并入项目级回收站）；幂等、非破坏、同名不覆盖 | 架构 §3.3 |
 | **惰性加载 + 虚拟化** | 树只取模块根，展开时按目录拉取；渲染走 `v_virtual_list`（只画可视区行）；`MAX_DEPTH=4` 只约束搜索/递归复制 | 架构 §6.2 |
@@ -54,7 +54,7 @@
 
 | 特点 | 含义 | 出处 |
 | --- | --- | --- |
-| **业务在 crate、视图也在 crate** | 递归复制 / 搜索 / 替换 / 引用重定位等语义与**面板视图**都在 `crates/scratchpad`（37 项单测：域逻辑 + 面板纯函数 + 后台任务）；workbench 只剩宿主端口实现与左 Dock 装配 | 架构 §7.1 |
+| **业务在 crate、视图也在 crate** | 递归复制 / 搜索 / 替换 / 引用重定位等语义与**面板视图**都在 `crates/scratchpad`（52 项单测：域逻辑 + 面板纯函数 + 后台任务 + 窗口级回归）；workbench 只剩宿主端口实现与左 Dock 装配 | 架构 §7.1 |
 | **命令要限并发** | 并发链接重型 crate 会耗尽内存（DuckDB 已改动态链接）：`cargo check/test` 必须带 `-j 2` | 本文 §5 |
 | **设计先于实现** | 本轮补模块入口 + 架构 + 使用手册；原型/开发方案的进度记录逐轮追加 | 本文 §6 |
 
@@ -63,7 +63,7 @@
 - 本模块拥有：**草稿文件读写 / 导入 / 外部引用 / 项目级回收站入口 / 内容搜索与替换 / 文件元数据（连接绑定）**。
 - 不属于本模块：
   - **中央编辑区**（打开、编辑、`Ctrl+S` 回存、脏点、冲突 Diff、多文件 Tab）→ `editor`（**Phase C 已接**，经 `ScratchpadHost` 端口；多文件 Tab 体系仍属编辑器侧）；
-  - **归档与取回**（提升为分析资源、只读存档、版本）→ `analytics_resource`（Phase D，经 command/event 协作）；
+  - **归档与取回**（提升为分析资源、只读存档、版本）→ `analytics_resource`（**已通**，copy 语义；草稿箱侧经 `ScratchpadHost::archive_drafts` 端口转交绝对路径，右键入口 2026-11-06 接入）；
   - **数据源连接与内省** → `database` / `connection`（草稿只保存连接 **ID**）；
   - **项目 CRUD / 锁 / 回收站基础设施** → `project`（回收站由 `project` 定义位置与清单格式，草稿箱只是使用方）。
 - **不做**：跨项目共享草稿、multi-root 工作区、在草稿箱内做数据计算（计算属 `engine`/DuckDB）。
@@ -111,10 +111,10 @@
 env RUSTC="<toolchain>/bin/rustc.exe" "<toolchain>/bin/cargo.exe" \
   check -p rds-scratchpad -p rds-workbench -p rds-app --all-targets -j 2
 
-# 单测（37 项：模块根隔离 / 路径防护 / 回收站来源 / 跨模块还原拒绝 / 旧布局迁移 / 引用状态与重定位 /
-# 绑定与最近执行回读 / 绝对路径→模块内相对路径 / 搜索区间 / 正则大小写 / 递归复制 / 替换 /
+# 单测（52 项：模块根隔离 / 路径防护 / 回收站来源 / 跨模块还原拒绝 / 旧布局迁移 / 引用状态与重定位 /
+# 绑定与最近执行回读 / 绝对路径→模块内相对路径 / 搜索区间 / 正则大小写 / 递归复制 / 替换 / 标签关联读写 /
 # Diff 行分类与两侧行号·行前级 / 面板纯函数（排序·压平·模板后缀·搜索结果映射·脏点判据）/
-# 后台任务（加载·粘贴·导入·搜索替换））
+# 后台任务（加载·粘贴·导入·搜索替换）/ 窗口级回归（树空白·面板尺寸·对齐断言·工具栏左右分组分离））
 env RUSTC="<toolchain>/bin/rustc.exe" "<toolchain>/bin/cargo.exe" test -p rds-scratchpad -j 2 --lib
 
 # 宿主侧（回执→相对路径的纯函数）
@@ -143,7 +143,8 @@ env RUSTC="<toolchain>/bin/rustc.exe" "<toolchain>/bin/cargo.exe" test -p rds-wo
 | --- | --- | --- |
 | ~~系统文件拖入树导入~~ ✅ **已实现（2026-10-09）** | Phase C 余项 | OS 文件拖放（`FileDropEvent` → 面板根 3 事件 + 拖入提示条；过滤文件夹；复用导入任务） |
 | ~~命中跳转到具体行~~ ✅ **已实现（2026-10-09）** | Phase C 余项 | `ScratchpadSearchHitTarget{file,line,span}` → 打开文件并选中命中文本（行号 1 基 + 行内字节区间） |
-| 工具栏按钮 hover 提示 | 对齐原型 | 原型 HTML 用 `title=`；gpui-kit 有 `.tooltip()` 可接 |
-| 提升 / 存档只读 / 取回 / 版本；资源侧回收站统一展示 | Phase D（依赖 `analytics_resource`） | 架构 §9.3 |
-| 冲突改真模态对话框（可选） | 待拍板 | 现为“冲突条 + 中央 Diff 面板”（内容等价、形式不同）；改模态需挂宿主 `open_dialog` 层 |
-| 引用目录可展开浏览（当前只作入口） | 待拍板 | 依赖「引用目录是否计入树」的产品决定 |
+| ~~归档 / 取回 / 版本~~ ✅ **已通（资产库侧，copy 语义）** | Phase D | 本体在 `analytics_resource`（2026-10-13 裁决 copy）；草稿箱右键「归档为存档…」2026-11-06 接入。**余 K8**：归档时外部引用与 `file_meta` 的处置待产品裁决 |
+| 属性面板组件形态 | 待拍板 | 数据已接 sidecar（2026-11-24）；当前 Dialog + DescriptionList，形态待用户确认 |
+| 工具栏按钮 hover 提示 | 对齐原型 | 原型 HTML 用 `title=`；gpui-kit 有 `.tooltip()` 可接（大部分入口已带） |
+| 冲突改真模态对话框（可选） | 待拍板 | 现为"冲突条 + 中央 Diff 面板"（内容等价、形式不同）；改模态需挂宿主 `open_dialog` 层 |
+| 引用目录可展开浏览（当前只作入口） | 待拍板 | 依赖「引用目录是否计入树」的产品决定（K6） |

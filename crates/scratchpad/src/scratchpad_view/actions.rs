@@ -177,7 +177,8 @@ impl ScratchpadView {
     /// 文件属性面板（右键 → 属性）：收集元数据投给中央编辑区。
     ///
     /// 用户点名（2026-10-10）：树行 meta 只留大小；时间与连接信息进属性面板。
-    /// `db_connection` 为后期「SQL 文件连接哪个数据库」预留（分析文件类型实现后填充）。
+    /// 连接信息读 per-file sidecar（`file_meta` 的 preferred_connection，存连接 ID，
+    /// 展示名由宿主翻译——2026-11-24 接通，此前是占位 `None`）。
     pub(super) fn show_scratchpad_file_info(&mut self, relative: String, cx: &mut Context<Self>) {
         let Some(root) = self.host.project_root() else {
             self.host.notice(tr("未打开项目").to_string(), cx);
@@ -228,6 +229,18 @@ impl ScratchpadView {
             .get(&relative)
             .map(|tags| tags.iter().map(|tag| tag.name.clone()).collect())
             .unwrap_or_default();
+        // 数据库连接（2026-11-24 反馈④接通）：读 per-file sidecar 的 `file_meta`
+        // （preferred_connection = 显式绑定优先、其次最近执行），填的是**连接 ID**；
+        // 展示名由宿主在弹窗渲染时翻译（本 crate 不依赖 connection，下拉只在宿主手里）。
+        // 右键是事件路径，一次小 JSON 读按 K1c 保持同步；任何一步失败退化为「无绑定」。
+        let db_connection = self
+            .scratchpad_store()
+            .ok()
+            .and_then(|(store, rt)| {
+                rt.block_on(store.file_meta(&relative))
+                    .ok()
+                    .and_then(|meta| meta.preferred_connection().map(str::to_string))
+            });
         self.host.show_file_info(
             Some(ScratchpadFileInfoView {
                 relative_path: relative,
@@ -237,7 +250,7 @@ impl ScratchpadView {
                 size_label,
                 modified_at,
                 created_at,
-                db_connection: None,
+                db_connection,
                 tags,
             }),
             cx,
@@ -348,6 +361,14 @@ impl ScratchpadView {
                         }
                     }
                     this.scratchpad.borrow_mut().loaded = false;
+                    // 书签分区开着 → 外部改动后 sidecar 可能已变（增删书签/删文件），
+                    // 置「未加载」，下一帧 render 重新入队扫描（与列表重拉同一时机）。
+                    {
+                        let mut v = this.scratchpad.borrow_mut();
+                        if v.bookmarks_expanded {
+                            v.bookmarks_loaded = false;
+                        }
+                    }
                     // C-4：外部改动 + 编辑器里有未保存修改 → 冲突（差异在后台算）。
                     if this.detect_scratchpad_conflicts() {
                         this.ensure_scratchpad_pump(cx);
@@ -627,6 +648,16 @@ impl ScratchpadView {
                         error = Some(format!("差异计算失败: {e}"));
                     }
                 },
+                // 书签管理面扫描回填：分区行数据 + 便签；失败进状态栏不静默。
+                scratchpad_jobs::OpResult::Bookmarks { outcome } => {
+                    let mut view = self.scratchpad.borrow_mut();
+                    view.bookmarks_loading = false;
+                    view.bookmarks_loaded = true;
+                    match outcome {
+                        Ok(rows) => view.bookmarks = rows,
+                        Err(e) => error = Some(format!("书签扫描失败: {e}")),
+                    }
+                },
             }
         }
 
@@ -835,6 +866,35 @@ impl ScratchpadView {
         }
         self.scratchpad.borrow_mut().tag_dialog = Some(rel_path.to_string());
         cx.notify();
+    }
+
+    /// 书签分区展开/收起（2026-11-25 书签管理面）。展开即触发惰性扫描（见
+    /// [`Self::ensure_bookmarks_loaded`]）；收起不取消在途任务（结果回填无害）。
+    pub(super) fn toggle_bookmarks_section(&mut self, cx: &mut Context<Self>) {
+        {
+            let mut v = self.scratchpad.borrow_mut();
+            v.bookmarks_expanded = !v.bookmarks_expanded;
+        }
+        self.ensure_bookmarks_loaded(cx);
+        cx.notify();
+    }
+
+    /// 书签分区展开且未加载时入队扫描（render 路径调用，与根加载同款「只入队 +
+    /// 起轮询」模式；空结果也置 `bookmarks_loaded`，不反复扫）。
+    pub(super) fn ensure_bookmarks_loaded(&self, cx: &mut Context<Self>) {
+        let need = {
+            let v = self.scratchpad.borrow();
+            v.bookmarks_expanded && !v.bookmarks_loading && !v.bookmarks_loaded
+        };
+        if !need {
+            return;
+        }
+        let Some(root) = self.host.project_root() else {
+            return;
+        };
+        self.scratchpad.borrow_mut().bookmarks_loading = true;
+        scratchpad_jobs::enqueue_bookmarks(&root);
+        self.ensure_scratchpad_pump(cx);
     }
 
     /// 关闭标签编辑弹窗。

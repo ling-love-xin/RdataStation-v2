@@ -28,8 +28,8 @@ pub struct ScratchpadDiffView {
 
 /// 文件属性面板的载荷（跨 crate：workbench 宿主 overlay 弹窗渲染）。
 ///
-/// 用户点名（2026-10-10）：树行 meta 只留大小，时间挪进属性面板；后期 SQL 文件
-/// 还要知道「连接哪个数据库」，`db_connection` 即为该能力预留（分析文件类型实现后填充）。
+/// 用户点名（2026-10-10）：树行 meta 只留大小，时间挪进属性面板；「连接哪个数据库」
+/// 读 sidecar `file_meta`（2026-11-24 接通：构造时填连接 ID，宿主翻译展示名）。
 #[derive(Clone)]
 pub struct ScratchpadFileInfoView {
     /// 模块内相对路径。
@@ -46,7 +46,8 @@ pub struct ScratchpadFileInfoView {
     pub modified_at: Option<String>,
     /// 创建时间（RFC3339；面板内转相对时间）。
     pub created_at: Option<String>,
-    /// SQL 文件的数据库连接描述（后期分析文件类型实现后填充；现在 `None`）。
+    /// 该草稿的数据库连接（sidecar `file_meta` 的 preferred_connection；构造时填
+    /// 连接 ID，宿主在弹窗里翻译成连接名。已删除的连接翻译不到 → 显示 `—`）。
     pub db_connection: Option<String>,
     /// 条目上的活跃标签名（项目库 `scratchpad_tags` 关联，按名称升序）。
     ///

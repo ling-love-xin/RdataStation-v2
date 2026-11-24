@@ -82,6 +82,41 @@ impl RowTier {
     }
 }
 
+/// 走马灯一轮（滚到头再滚回来）的时长。
+///
+/// 4s 是「一眼能读完 + 不晃眼」的折中：再快就读不过来，再慢鼠标一划过去就以为它没动。
+pub const MARQUEE_PERIOD_MS: u64 = 4_000;
+
+/// 走马灯两端各停多长（占一轮的比例）。停在两端是为了让人看清开头和结尾——
+/// 一路匀速滚的话，名字的第一眼永远是半截。
+pub const MARQUEE_DWELL: f32 = 0.18;
+
+/// 名字要不要走马灯：**文字自然宽 > 名字格实际宽**才滚。
+///
+/// 两个数都得是真的（文字按同字体同字号 shaping 出来、格子宽从 prepaint 量出来），
+/// 少一个就会变成「短名字也在滚」或「长名字还在被截」。
+pub fn should_marquee(text_width: f32, space: f32) -> bool {
+    space > 0.0 && text_width > space + 0.5
+}
+
+/// 走马灯的横向位移（负值 = 往左推）。`delta` 是一轮的进度 0→1。
+///
+/// 两端各停 [`MARQUEE_DWELL`]，中间用 smoothstep 缓慢起停：线性匀速看着像机器在抽搐。
+pub fn marquee_offset(travel: f32, delta: f32) -> f32 {
+    // 三角波：0→1→0，滚到头再滚回来（滚到头瞬移回起点会像卡了一下）
+    let t = if delta < 0.5 { delta * 2.0 } else { (1.0 - delta) * 2.0 };
+    let span = 1.0 - MARQUEE_DWELL * 2.0;
+    let eased = if t <= MARQUEE_DWELL {
+        0.0
+    } else if t >= MARQUEE_DWELL + span {
+        1.0
+    } else {
+        let u = (t - MARQUEE_DWELL) / span;
+        u * u * (3.0 - 2.0 * u)
+    };
+    -(travel.max(0.0) * eased)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,5 +159,30 @@ mod tests {
 
         let tight = RowTier::for_width(300.0);
         assert!(!tight.shows_channel() && !tight.shows_pill());
+    }
+
+    /// 走马灯的触发判据：只有真的放不下才滚，正好放下不滚（差 0.5px 是取整容差）。
+    #[test]
+    fn marquee_only_when_the_text_does_not_fit() {
+        assert!(should_marquee(210.0, 111.0), "24 字表名在 111px 格里必须滚");
+        assert!(!should_marquee(210.0, 390.0), "放得下就没必要动");
+        assert!(!should_marquee(110.0, 111.0), "短名不滚");
+        assert!(!should_marquee(210.0, 0.0), "格子还没量到（0）时不动");
+    }
+
+    /// 位移轨迹：两端要停住（开头结尾看得清），中段才真的走完一整段行程。
+    #[test]
+    fn marquee_starts_at_rest_and_ends_at_the_full_travel() {
+        let travel = 99.0;
+        assert_eq!(marquee_offset(travel, 0.0), 0.0);
+        assert_eq!(marquee_offset(travel, MARQUEE_DWELL / 2.0), 0.0, "起点要停");
+        assert!(
+            (marquee_offset(travel, 0.5) + travel).abs() < 1.0,
+            "滚到一半就是走满行程"
+        );
+        assert_eq!(marquee_offset(travel, 1.0), 0.0, "一轮结束回到起点");
+        // 单调性：中段一路向左，不许来回抖
+        let mid = |t: f32| marquee_offset(travel, t);
+        assert!(mid(0.25) > mid(0.35) && mid(0.35) > mid(0.45));
     }
 }

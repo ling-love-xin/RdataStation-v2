@@ -182,8 +182,6 @@ pub enum Slot {
     StartupDefaultLeftPanel,
     /// 草稿箱工具栏布局（复合值：按钮稳定标识 → { visible, side }；读写走 ⋯ 菜单）。
     ScratchpadToolbar,
-    /// 草稿箱拖拽分区高度上限（复合值：None = 默认；拖拽 handle 写回，2026-10-28 补登记）。
-    ScratchpadGroupMaxH,
     InsightMemoryLimitMb,
     InsightFullScanConfirm,
     InsightWorkSetLimit,
@@ -287,9 +285,9 @@ pub enum Slot {
     ResultPanelFontBlob,
     /// 布局锁定（默认 false；render 时同步到 DockArea::set_locked）。
     LayoutLocked,
-    /// 左侧侧边栏宽度（默认 250px；render 时同步到 DockArea::set_dock_size）。
+    /// 左侧侧边栏宽度（默认 320px；render 时同步到 DockArea::set_dock_size）。
     LayoutLeftSidebarWidth,
-    /// 右侧侧边栏宽度（默认 300px；render 时同步到 DockArea::set_dock_size）。
+    /// 右侧侧边栏宽度（默认 352px；render 时同步到 DockArea::set_dock_size）。
     LayoutRightSidebarWidth,
     NotificationSuccessAutohideSecs,
     NotificationInfoAutohideSecs,
@@ -356,7 +354,6 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "logging.min_level" => Slot::LogMinLevel,
         "startup.default_left_panel" => Slot::StartupDefaultLeftPanel,
         "scratchpad.toolbar" => Slot::ScratchpadToolbar,
-        "scratchpad.group_max_h" => Slot::ScratchpadGroupMaxH,
         "insight.memory_limit_mb" => Slot::InsightMemoryLimitMb,
         "insight.full_scan_confirm" => Slot::InsightFullScanConfirm,
         "insight.work_set_limit" => Slot::InsightWorkSetLimit,
@@ -489,8 +486,6 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::StartupDefaultLeftPanel => KindTag::Enum,
         // 复合值（工具栏按钮布局）：没有页面写入路径，读写走草稿箱 ⋯ 菜单。
         Slot::ScratchpadToolbar => KindTag::Composite,
-        // 复合值（拖拽分区高度上限）：读写走草稿箱分区拖拽 handle，不上设置页。
-        Slot::ScratchpadGroupMaxH => KindTag::Number,
         Slot::InsightMemoryLimitMb | Slot::InsightWorkSetLimit => KindTag::Number,
         Slot::InsightFullScanConfirm | Slot::InsightStatusUsage => KindTag::Bool,
         Slot::SqlAnalysisSemanticDiagnostics
@@ -585,7 +580,6 @@ pub fn slot_is_scalar(slot: Slot) -> bool {
             | Slot::NavigatorGlobalMask
             | Slot::ResourcesCollapsedGroups
             | Slot::ScratchpadToolbar
-            | Slot::ScratchpadGroupMaxH
     )
 }
 

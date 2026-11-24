@@ -759,6 +759,45 @@ fn toolbar_more_toggles_visibility_and_reset(cx: &mut TestAppContext) {
     );
 }
 
+/// 工具栏左右分组分离回归（2026-11-24 用户目视反馈①）：`Toolbar` 曾被包进
+/// `h_flex` 行——flex 子元素按内容收缩不铺满，中间弹簧恒 0 宽，左右两组贴在
+/// 一起（⋯ 菜单的「放在左/右」因此看不出效果，面板拉伸也不重排）。修复 = 外层
+/// div 改 block 布局 + `Toolbar::h_full()`（与数据导航面板头同一写法），弹簧
+/// 生效后两组分居两端。断言：右组左缘与左组右缘的间距远大于组内 gap（4px）。
+#[gpui_kit::test]
+fn toolbar_left_and_right_groups_split_at_panel_edges(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let root = panel_root("k39_split");
+    let host = host_with(Some(root.clone()), false);
+    let (panel, cx) = {
+        let host = host.clone();
+        cx.add_window_view(move |_window, cx| ScratchpadView::new(host, cx))
+    };
+
+    // 注入模块根加载成功（普通视图渲染前置；与 more 测试同一回填路径）。
+    let seq = scratchpad_jobs::enqueue_root_load(&root, vec![]);
+    cx.update(|_window, cx| {
+        panel.update(cx, |view, cx| {
+            view.apply_scratchpad_loads(vec![panel_load(seq, vec![])], cx);
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let left = cx
+        .debug_bounds("sp-toolbar-left")
+        .expect("左分组必须渲染（⋯ 菜单锚点）");
+    let right = cx
+        .debug_bounds("sp-toolbar-right")
+        .expect("右分组必须渲染（⋯ 锚点）");
+    let gap = (right.origin.x - (left.origin.x + left.size.width)).as_f32();
+    assert!(
+        gap > 16.0,
+        "左右两组应被中间弹簧分居两端（间距 > 16px，实测 {gap}px）；\
+         若只剩组内 gap 量级（≤ 4px），说明 Toolbar 没铺满面板宽——弹簧没拿到空间，\
+         「放在左/右」切换在视觉上也不会生效"
+    );
+}
+
 /// 「草稿箱有文件但没显示」排查回归（2026-10-11 用户现场反馈）：
 /// 注入根加载 + 一个文件条目 → 渲染普通视图 → 断言文件行文本 debug_bounds 高度 > 0。
 /// 若 Accordion 内虚拟列表高度坍塌（高度链无约束），此处失败，直接定位显示问题。

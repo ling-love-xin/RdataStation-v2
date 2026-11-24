@@ -2,21 +2,21 @@
 
 > 本文回答**为什么这样设计 / 怎么运转**：不变式、概念模型、存储布局、数据流、决策表、降级、测试策略、实现映射，以及**权威的已知问题清单**。
 > 视觉与交互规格看 `scratchpad-prototype-design.md`；进度与阶段任务看 `scratchpad-dev-plan.md`；使用方式看 `scratchpad-user-guide.md`。
-> 状态：Phase A/B 已落地（2026-09-15）· **Phase C 已全部落地（2026-10-12）**：打开 / 连接预选与执行回写 / 脏点 / 冲突 Diff / 拖入编辑器插入（C-5 前半）/ **系统文件拖入导入 / 命中跳行（2026-10-09）** / 搜索状态（VSCode 式：替换行 + ⋮ 高级选项默认收起 + 结果树对齐草稿箱树）** + 更多设置四栏重构 + 分区拖拽（2026-10-12）** · Phase D 未开始。
+> 状态：Phase A/B 已落地（2026-09-15）· **Phase C 已全部落地（2026-10-12）**：打开 / 连接预选与执行回写 / 脏点 / 冲突 Diff / 拖入编辑器插入（C-5 前半）/ **系统文件拖入导入 / 命中跳行（2026-10-09）** / 搜索状态（VSCode 式：替换行 + ⋮ 高级选项默认收起 + 结果树对齐草稿箱树）** + 更多设置四栏重构 + 分区拖拽（2026-10-12）** · **Phase D 已通（2026-11-24 对账）**：归档/取回/版本本体在 `analytics_resource` 侧（copy 语义），草稿箱侧右键「归档为存档…」入口已接（2026-11-06）；file_meta 已迁 per-file sidecar（2026-10-29）。
 
 ## 0. 裁决摘要（一页读完）
 
 | # | 裁决 | 影响 |
 | --- | --- | --- |
 | 1 | **草稿箱根 = `{项目}/scratchpad/`**（可见模块目录），不是项目根、不是隐藏目录 | 「草稿」是目录语义；迁移/备份/引用都变简单 |
-| 2 | **内部态全在 `{项目}/.RSmeta/scratchpad/`**（`config.json`） | 面板不需要忽略规则；用户可见目录里没有半内部文件 |
+| 2 | **内部态全在 `{项目}/.RSmeta/scratchpad/`**（`config.json` + per-file `meta/` sidecar） | 面板不需要忽略规则；用户可见目录里没有半内部文件 |
 | 3 | **回收站为项目级** `.RSmeta/trash/`，条目自带 `origin` + `original_rel_path` | 草稿与将来的资源删除共用一个回收站，还原能回原模块原路径 |
 | 4 | **导入与引用区分**：导入 = 复制进模块目录；引用 = 只记绝对路径 + 别名 | 体积/迁移/失效语义完全不同，UI 与后端都必须分开表达 |
 | 5 | **编辑器无根**：树只发「打开这个绝对路径」的意图 | 编辑器不假设项目根，同一编辑器将来可开 `resources/`、`mock/` |
 | 6 | **重结果落中央编辑区**（内容搜索结果与替换栏） | 侧栏只承载输入与开关；240 px 面板不承担宽内容 |
-| 7 | **提升为资源 = 移动 + 只读存档**，修改须取回（检出） | 归档是"冻结凭证"语义，与 M6 的版本模型对齐 |
+| 7 | **归档 = 复制 + 只读存档**（2026-10-13 裁决，**取代原设计的 move**），修改须取回（检出） | 草稿保留为工作副本（checkout 语义），与 M6 的版本模型对齐 |
 | 8 | **窗口 = 项目**：项目态不放进程单例，不做 multi-root | 会话/监控/元数据复杂度可控 |
-| 9 | **业务与视图都在 crate**（2026-09-16 视图下沉，A'4） | 复制/搜索/替换/路径防护与面板纯函数可单测（37 项），宿主能力经 `ScratchpadHost` 端口注入 |
+| 9 | **业务与视图都在 crate**（2026-09-16 视图下沉，A'4） | 复制/搜索/替换/路径防护与面板纯函数可单测（52 项），宿主能力经 `ScratchpadHost` 端口注入 |
 
 ## 1. 定位与边界
 
@@ -29,7 +29,7 @@ M4 数据源管理/导航       M5 草稿箱（本文）          M6 资产库/�
 只读内省                 导入/引用的临时数据        正式存档
 ```
 
-草稿箱是**工作台（项目）内的临时区**：允许乱、允许删、允许失效；一旦某份草稿值得留存，**提升**到 M6 冻结为存档（Phase D）。
+草稿箱是**工作台（项目）内的临时区**：允许乱、允许删、允许失效；一旦某份草稿值得留存，**归档**到 M6 冻结为存档（copy 语义，草稿保留为工作副本）。
 
 ### 1.2 与相邻模块的关系
 
@@ -38,8 +38,8 @@ M4 数据源管理/导航       M5 草稿箱（本文）          M6 资产库/�
 | `project`（M1） | 提供项目会话（`OpenProject.root`）、项目锁、只读标志；**回收站位置与清单格式由本模块实现、位置约定与项目元数据目录一致** |
 | `connection` / `database`（M2/M3/M4） | 草稿只保存**连接 ID**（`file_meta.last_connection_id` / `bound_connections`），执行与内省完全在它们内部 |
 | `editor` | Phase C 接线的对方：草稿箱发「打开这个路径」，编辑器负责打开/回存/脏点/冲突 |
-| `analytics_resource`（M6） | Phase D 的对方：草稿箱右键「提升为分析资源」经 command/event 发起，草稿箱**不依赖**其视图 |
-| `mock`（M7） | 无直接依赖；M7 的产物进 `mock/` 与草稿箱同级 |
+| `analytics_resource`（M6） | 归档/取回的对方：草稿箱右键「归档为存档…」经 `ScratchpadHost::archive_drafts` 端口**只递绝对路径**（依赖方向 `analytics_resource → scratchpad`，防成环），归档确认对话框与标签继承全在资产库那一侧 |
+| `mock`（M7） | 无直接依赖；M7 的产物进 `mock/` 与草稿箱同级（「保存到草稿箱」落 `scratchpad/mock/`） |
 
 ### 1.3 明确不做
 
@@ -57,7 +57,7 @@ M4 数据源管理/导航       M5 草稿箱（本文）          M6 资产库/�
 | **条目**（`ScratchpadEntry`） | `{项目}/scratchpad/**` | 文件或文件夹；名字即真相（重命名 = 真改文件名） |
 | **外部引用**（`ExternalReference`） | `config.json` | 别名 + **绝对路径** + 创建时间；不复制本体 |
 | **引用状态**（`ExternalReferenceStatus`） | 运行时计算 | `exists` / `is_dir`，用于置灰与「重新引用」入口 |
-| **文件元数据**（`FileMeta`） | `config.json` | `last_connection_id` / `last_executed_at` / `bound_connections`（**仅 ID**） |
+| **文件元数据**（`FileMeta`） | per-file sidecar（§3.2） | `last_connection_id` / `last_executed_at` / `bound_connections`（**仅 ID**） |
 | **回收站条目**（`TrashEntry`） | `.RSmeta/trash/<id>/` | 自带 `manifest.json`（§4） |
 
 ### 2.2 四条不变式
@@ -74,8 +74,8 @@ M4 数据源管理/导航       M5 草稿箱（本文）          M6 资产库/�
 | **草稿箱 / 工作区** | 模块整体；根 = `{项目}/scratchpad/` |
 | **导入** | 从系统文件对话框复制文件**进来**（计体积、随项目迁移） |
 | **引用（外部引用）** | 只记外部路径 + 别名（不计体积、可能失效）；**不是**代码引用 |
-| **提升 / 归档** | 草稿 → 只读存档（Phase D，属 M6 语义） |
-| **取回 / 检出** | 存档 → 可编辑工作副本（Phase D） |
+| **提升 / 归档** | 草稿 → 只读存档（属 M6 语义；**copy**——草稿保留为工作副本，2026-10-13 裁决） |
+| **取回 / 检出** | 存档 → 可编辑工作副本（M6 `checkout`，落在草稿箱模块目录） |
 | **模块目录** | 项目根下每个功能模块自己的可见目录：`scratchpad/`、`resources/`、`mock/` |
 
 ## 3. 存储布局
@@ -88,31 +88,35 @@ M4 数据源管理/导航       M5 草稿箱（本文）          M6 资产库/�
 │   ├── 临时订单分析.sql
 │   ├── data/…
 │   └── …（点前缀条目被隐藏：树跳过，API 拒绝）
-├── resources/                      ← M6 归档目标（Phase D；本模块只发起移动）
+├── resources/                      ← M6 归档目标（copy 语义；本模块只经端口转交路径）
 └── .RSmeta/
-    ├── scratchpad/config.json      ← 模块内部态（外部引用 + file_meta）
+    ├── scratchpad/
+    │   ├── config.json             ← 外部引用
+    │   └── meta/<相对路径>.json    ← per-file sidecar（file_meta，§3.2）
     └── trash/                      ← 项目级回收站（本项目所有模块共用）
         └── <id>/{payload, manifest.json}
 ```
 
-### 3.2 `config.json`
+### 3.2 `config.json` 与 per-file sidecar
 
 ```jsonc
+// config.json（只管外部引用）
 {
   "external_references": [
     { "alias": "下载数据", "path": "D:/data", "created_at": "2026-09-15T08:00:00Z" }
-  ],
-  "file_meta": {
-    "临时订单分析.sql": {
-      "last_connection_id": "P_1",
-      "last_executed_at": "2026-09-15T08:10:00Z",
-      "bound_connections": ["P_1", "G_2"]
-    }
-  }
+  ]
 }
 ```
 
-- `file_meta` 的键是**相对模块根的路径**：项目整体迁移（换盘符/换目录）后依然有效。
+- **文件元数据（`file_meta`）已从 `config.json` 迁到 per-file sidecar**（2026-10-29，
+  `migrate_file_meta_to_sidecar`）：`.RSmeta/scratchpad/meta/<相对路径>.json`，与
+  `rds-file-meta::FileMeta` **共住一个 sidecar**——本模块的连接元信息只占其中
+  `last_connection` 与 `extra` 里两个 key，书签/折叠等编辑器字段互不干扰（读取见
+  `models.rs::FileMeta::from_file_meta`，写入见 `store.rs::update_sidecar`）。启动时
+  一次性把旧 `config.json::file_meta` 幂等搬进 sidecar 并清空旧键。
+- sidecar 的定位是**相对模块根的路径**：项目整体迁移（换盘符/换目录）后依然有效；
+  文件移动/重命名时 sidecar 随文件走，**离开草稿箱即清理**（快照语义：回收站还原
+  不恢复连接预选）。
 - **绝不存凭据**：连接密码在 `connection` 的 `auth_store`（AES-256-GCM）；这里只有 ID。
 - 配置读写有内存缓存 + 锁（`config_cache`），避免每帧重复解析。
 

@@ -35,9 +35,9 @@ pub use scratchpad_view::{
 pub use jobs::{DirResult, FileListPayload, LoadResult, SearchPayload};
 pub use models::{
     AnalyzableFile, DiffLine, DiffLineKind, DiffResult, ExternalReference, ExternalReferenceStatus,
-    FileMeta, FlatFile, ReplaceResult, ScratchpadChangeEntry, ScratchpadChangeEvent,
-    ScratchpadConfig, ScratchpadEntry, ScratchpadEntryKind, ScratchpadResponse, SearchMatch,
-    SearchResult,
+    FileMeta, FlatFile, ReplaceResult, ScratchpadBookmarkRow, ScratchpadChangeEntry,
+    ScratchpadChangeEvent, ScratchpadConfig, ScratchpadEntry, ScratchpadEntryKind,
+    ScratchpadResponse, SearchMatch, SearchResult,
 };
 pub use store::{MODULE_DIR_NAME, ORIGIN_SCRATCHPAD, ScratchpadStore};
 // 回收站已上提到 engine（中性化：不再返回 `ScratchpadEntry`，来源是字符串标记）。

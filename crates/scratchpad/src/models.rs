@@ -221,6 +221,21 @@ pub struct DiffResult {
     pub right_label: String,
 }
 
+/// 跨文件书签行（书签管理面，2026-11-25 用户拍板放草稿箱）：草稿目录各文件的
+/// **文件旁 sidecar**（file-meta 约定）扫描回填；`label` 即便签（编辑器书签按钮
+/// 旁输入的说明文字，悬停备注同一数据源）。归档侧只读引用查看，不在此链路。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScratchpadBookmarkRow {
+    /// 模块内相对路径（`/` 分隔）。
+    pub relative_path: String,
+    /// 文件名（展示主文本）。
+    pub name: String,
+    /// 行号（1 基；跳行端口吃 `u32`）。
+    pub line: u32,
+    /// 便签（书签说明文字；空串 = 无便签）。
+    pub label: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

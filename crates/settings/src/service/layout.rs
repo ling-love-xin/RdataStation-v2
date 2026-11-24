@@ -5,6 +5,18 @@ use crate::SettingsService;
 use crate::model::Settings;
 use crate::persistence::persist;
 use crate::registry::{SettingValue, Slot};
+use workbench_shell::ui;
+
+/// 侧边栏宽度写入的合法区间（基准字号下的 px）。
+///
+/// 上下界与 Dock 起步宽**同一来源**（`ui::*_DOCK_MIN/MAX × BASE_FONT_SIZE`）：
+/// 过去写死 100..2000，等于允许把侧栏拖成 100px 的废条，也允许它吃掉整个窗口。
+fn width_range(min_rem: f32, max_rem: f32) -> (i64, i64) {
+    (
+        (min_rem * ui::BASE_FONT_SIZE) as i64,
+        (max_rem * ui::BASE_FONT_SIZE) as i64,
+    )
+}
 
 /// 本域 slot 的标量写入处理；返回 `false` 表示拒绝（值形态不符 / 复合值 / 无法解析）。
 pub(crate) fn apply_slot(
@@ -24,7 +36,8 @@ pub(crate) fn apply_slot(
             let Some(n) = value.as_number() else {
                 return false;
             };
-            if !(100.0..=2000.0).contains(&n) {
+            let (min, max) = width_range(ui::LEFT_DOCK_MIN, ui::LEFT_DOCK_MAX);
+            if !(min as f64..=max as f64).contains(&n) {
                 return false;
             }
             SettingsService::set_layout_left_sidebar_width(n as i64, cx);
@@ -33,7 +46,8 @@ pub(crate) fn apply_slot(
             let Some(n) = value.as_number() else {
                 return false;
             };
-            if !(100.0..=2000.0).contains(&n) {
+            let (min, max) = width_range(ui::RIGHT_DOCK_MIN, ui::RIGHT_DOCK_MAX);
+            if !(min as f64..=max as f64).contains(&n) {
                 return false;
             }
             SettingsService::set_layout_right_sidebar_width(n as i64, cx);
@@ -48,11 +62,11 @@ impl SettingsService {
     pub fn layout_locked(cx: &App) -> bool {
         cx.global::<Settings>().layout.locked
     }
-    /// 读取左侧侧边栏宽度（默认 250px）。
+    /// 读取左侧侧边栏宽度（基准字号下的 px，默认 320）。
     pub fn layout_left_sidebar_width(cx: &App) -> i64 {
         cx.global::<Settings>().layout.left_sidebar_width
     }
-    /// 读取右侧侧边栏宽度（默认 300px）。
+    /// 读取右侧侧边栏宽度（基准字号下的 px，默认 352）。
     pub fn layout_right_sidebar_width(cx: &App) -> i64 {
         cx.global::<Settings>().layout.right_sidebar_width
     }
@@ -67,18 +81,20 @@ impl SettingsService {
     }
     /// 【并行线补充】左侧侧边栏宽度：更新 global → 持久化 → 立即重绘。
     pub fn set_layout_left_sidebar_width(px: i64, cx: &mut App) {
+        let (min, max) = width_range(ui::LEFT_DOCK_MIN, ui::LEFT_DOCK_MAX);
         {
             let settings = cx.global_mut::<Settings>();
-            settings.layout.left_sidebar_width = px.clamp(100, 2000);
+            settings.layout.left_sidebar_width = px.clamp(min, max);
         }
         persist(&cx.global::<Settings>().clone());
         cx.refresh_windows();
     }
     /// 【并行线补充】右侧侧边栏宽度：更新 global → 持久化 → 立即重绘。
     pub fn set_layout_right_sidebar_width(px: i64, cx: &mut App) {
+        let (min, max) = width_range(ui::RIGHT_DOCK_MIN, ui::RIGHT_DOCK_MAX);
         {
             let settings = cx.global_mut::<Settings>();
-            settings.layout.right_sidebar_width = px.clamp(100, 2000);
+            settings.layout.right_sidebar_width = px.clamp(min, max);
         }
         persist(&cx.global::<Settings>().clone());
         cx.refresh_windows();

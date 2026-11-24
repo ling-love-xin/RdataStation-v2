@@ -61,8 +61,8 @@ use crate::commands::{
 };
 
 use crate::{
-    DiffLineKind, DiffResult, ExternalReferenceStatus, ScratchpadEntry, ScratchpadEntryKind,
-    ScratchpadStore, TrashEntry,
+    DiffLineKind, DiffResult, ExternalReferenceStatus, ScratchpadBookmarkRow, ScratchpadEntry,
+    ScratchpadEntryKind, ScratchpadStore, TrashEntry,
 };
 
 use crate::jobs as scratchpad_jobs;
@@ -231,8 +231,15 @@ pub struct ScratchpadViewState {
     drafts_expanded: bool,
     /// 引用分组是否展开（Collapsible 承载，默认展开）。
     refs_expanded: bool,
-    /// 底部引用/回收站区域的最大高度（拖拽分区 handle 调整，进程内；默认 7.5rem）。
-    group_max_h: f32,
+    /// 书签分组是否展开（2026-11-25 用户拍板：跨文件书签管理面放草稿箱，与
+    /// 草稿/引用/回收站同一分区模式；单文件书签操作仍在编辑器，归档侧只读查看）。
+    bookmarks_expanded: bool,
+    /// 跨文件书签行（草稿目录的 per-file sidecar 惰性扫描回填；含便签 `label`）。
+    bookmarks: Vec<ScratchpadBookmarkRow>,
+    /// 书签列表加载中（后台扫描未回填）。
+    bookmarks_loading: bool,
+    /// 书签列表已加载过（空结果也不重扫，直到外部改动/项目切换置回 false）。
+    bookmarks_loaded: bool,
     /// 更多菜单拖拽排序进行中的按钮（on_drag 开始写入，on_drag_move 每帧重排）。
     /// 注：拖拽排序尚未接线（调整面板四栏的自绘 grip 已就位），字段暂只写不读 → 预留。
     #[allow(dead_code)]
@@ -407,7 +414,10 @@ impl Default for ScratchpadViewState {
             trash_expanded: false,
             drafts_expanded: true,
             refs_expanded: true,
-            group_max_h: 7.5,
+            bookmarks_expanded: false,
+            bookmarks: Vec::new(),
+            bookmarks_loading: false,
+            bookmarks_loaded: false,
             toolbar_drag: None,
             expanded: HashSet::new(),
             selected: HashSet::new(),
@@ -537,13 +547,6 @@ impl ScratchpadView {
             .unwrap_or_default();
         let mut state = ScratchpadViewState::default();
         state.toolbar_cfg = toolbar_cfg;
-        // B3（2026-10-28）：分区高度持久化——启动时读 `settings.scratchpad.group_max_h`
-        // （模型默认 7.5 = 面板默认），越界值收敛到面板 clamp 区间。
-        state.group_max_h = cx
-            .try_global::<settings::model::Settings>()
-            .map(|s| s.scratchpad.group_max_h)
-            .unwrap_or(7.5)
-            .clamp(2.0, 18.0);
         Self {
             host,
             focus_handle: cx.focus_handle(),
