@@ -14,6 +14,10 @@
 //! 所以先「升级为资产」拿到存档身份，才谈得上「升级到全局」并留下版本线索。
 
 use gpui_kit::base::StyledExt;
+use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::Icon;
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelControl};
@@ -24,10 +28,6 @@ use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::tag::Tag;
-use gpui_kit::component::ActiveTheme;
-use gpui_kit::component::Icon;
-use gpui_kit::component::Sizable as _;
-use gpui_kit::component::WindowExt as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use shared::i18n::tr;
@@ -423,21 +423,23 @@ impl DataObjectsTab {
     /// 除了标脏数据对象，还要让导航缓存失效（新表在导航的「项目分析库」下也要出现）。
     pub(crate) fn watch_archive(&mut self, job: u64, cx: &mut Context<Self>) {
         let executor = cx.background_executor().clone();
-        cx.spawn(async move |this, cx| loop {
-            executor.timer(std::time::Duration::from_millis(200)).await;
-            let Some((note, ok)) = crate::services::archive_jobs::take_for(job) else {
-                continue;
-            };
-            let _ = this.update(cx, |tab, cx| {
-                if ok {
-                    tab.shared.say(note, cx);
-                    tab.shared.invalidate_nav_cache();
-                    tab.shared.mark_data_objects_dirty(cx);
-                } else {
-                    tab.shared.say_error(note, cx);
-                }
-            });
-            return;
+        cx.spawn(async move |this, cx| {
+            loop {
+                executor.timer(std::time::Duration::from_millis(200)).await;
+                let Some((note, ok)) = crate::services::archive_jobs::take_for(job) else {
+                    continue;
+                };
+                let _ = this.update(cx, |tab, cx| {
+                    if ok {
+                        tab.shared.say(note, cx);
+                        tab.shared.invalidate_nav_cache();
+                        tab.shared.mark_data_objects_dirty(cx);
+                    } else {
+                        tab.shared.say_error(note, cx);
+                    }
+                });
+                return;
+            }
         })
         .detach();
     }
@@ -450,20 +452,22 @@ impl DataObjectsTab {
         cx: &mut Context<Self>,
     ) {
         let executor = cx.background_executor().clone();
-        cx.spawn(async move |this, cx| loop {
-            executor.timer(std::time::Duration::from_millis(200)).await;
-            let Some((note, ok)) = take(job) else {
-                continue;
-            };
-            let _ = this.update(cx, |tab, cx| {
-                if ok {
-                    tab.shared.say(note, cx);
-                    tab.shared.mark_data_objects_dirty(cx);
-                } else {
-                    tab.shared.say_error(note, cx);
-                }
-            });
-            return;
+        cx.spawn(async move |this, cx| {
+            loop {
+                executor.timer(std::time::Duration::from_millis(200)).await;
+                let Some((note, ok)) = take(job) else {
+                    continue;
+                };
+                let _ = this.update(cx, |tab, cx| {
+                    if ok {
+                        tab.shared.say(note, cx);
+                        tab.shared.mark_data_objects_dirty(cx);
+                    } else {
+                        tab.shared.say_error(note, cx);
+                    }
+                });
+                return;
+            }
         })
         .detach();
     }
@@ -688,6 +692,10 @@ impl DataObjectsTab {
             window.use_keyed_state("data-objects-row-width", cx, |_, _| RowWidth::default());
         let panel_width = row_width.read(cx).get();
         let tier = data_objects::layout::RowTier::for_width(panel_width);
+        // 工具栏按钮在最窄一档退成纯图标：两个中文字的按钮一出现，搜索框就被压成半截。
+        // 判据直接复用行布局的 `tier`（同一份实测边界），不另起一个阈值。
+        // 首帧 `panel_width == 0` 按 `Full` 画，按钮带字（宁可比真实的宽一帧，不闪）。
+        let icon_only = matches!(tier, data_objects::layout::RowTier::DropChannelAndPill);
 
         // 走马灯的两个前提：名字格实际多宽（prepaint 写入，下一帧读）、鼠标停在哪一行。
         // 名字格宽度**逐行**量（行尾按钮数随行的可点性变化，同宽面板里各行名字格不等宽）。
@@ -696,18 +704,26 @@ impl DataObjectsTab {
         let hovered_row =
             window.use_keyed_state("data-objects-hovered-row", cx, |_, _| HoveredRow::default());
 
-        // 工具栏（32px，与资产库面板同一档）：搜索框占满，右侧是「加源 / 存快照」。
+        // 工具栏（36px，与数据库导航 / 编辑器 / 洞察 / 资产库头行同一档）：搜索框占满，
+        // 右侧「加源 / 存快照」+ ⓘ 口径说明。
+        //
+        // 这一行就是这个面板的头行（Dock 标题栏只做容器管理，没有面板内的第二行标题），
+        // 所以取 `PANEL_HEADER_HEIGHT`（2.25rem = 36）。32 是「面板内第二行」的档
+        // （资产库那条面板内工具条），夹在一排 36 的头行里横向一眼就差 4px。
         //
         // 这两个动作**不放 Dock 标题栏**：兄弟面板一律把动作留在面板自己的工具栏里
         // （`toolbar_buttons` 返回 None，标题栏只做容器管理），否则同一排标题栏里
         // 有的 tab 有按钮、有的没有，横向也对不齐。
+        //
+        // 全面板一条左缘（`px_3` = 12）：工具栏 / chips / 状态栏 / 行 / 托盘都从这条线起。
+        // 上一版是 4（工具栏、chips）、8（状态栏）、12（行）三条线并在一屏里。
         let toolbar = div()
             .flex_none()
-            .h(rems(ui::CONTROL_HEIGHT_MD))
+            .h(rems(ui::PANEL_HEADER_HEIGHT))
             .h_flex()
             .items_center()
             .gap_1()
-            .px_1()
+            .px_3()
             .border_b(ui::HAIRLINE)
             .border_color(colors.border)
             .debug_selector(|| "data-objects-toolbar".to_string())
@@ -716,64 +732,95 @@ impl DataObjectsTab {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .child(Input::new(&search).h(rems(ui::CONTROL_HEIGHT_SM))),
+                    .debug_selector(|| "data-objects-search-slot".to_string())
+                    // 单行 `Input` 的高度由 `Size` 档定（`sizing.rs::input_h`：Small = `h_6` = 24），
+                    // 它的 `.h()` 只对多行输入生效（`input.rs` 里 `.when(is_multi_line)` 才用）。
+                    // 上一版写 `CONTROL_HEIGHT_SM`（26）实际画出来是 32（Medium 档），
+                    // 与 24 的按钮差 8px——这一行四个控件必须同高。
+                    .child(Input::new(&search).small()),
             )
-            .child({
-                let shared = self.shared.clone();
-                Button::new("data-objects-add-source")
-                    .ghost()
-                    .small()
-                    // 和搜索框同高：同一行里 26 与 32 的边框对不齐
-                    .h(rems(ui::CONTROL_HEIGHT_SM))
-                    .label(tr("加源"))
-                    .tooltip(tr("按需加源：挂成视图读原文件，切项目即清"))
-                    .on_click(move |_, window, cx| {
-                        crate::components::data_objects_load::open_load_files_dialog(
-                            &shared,
-                            crate::components::data_objects_load::LoadScope::Session,
-                            window,
-                            cx,
-                        );
-                    })
-            })
-            .child({
-                let shared = self.shared.clone();
-                Button::new("data-objects-add-source-snapshot")
-                    .ghost()
-                    .small()
-                    .h(rems(ui::CONTROL_HEIGHT_SM))
-                    .label(tr("存快照"))
-                    .tooltip(tr(
-                        "把选中的文件在资源库里存一份只读副本，跟着项目走、带版本",
-                    ))
-                    .on_click(move |_, window, cx| {
-                        crate::components::data_objects_load::open_load_files_dialog(
-                            &shared,
-                            crate::components::data_objects_load::LoadScope::Snapshot,
-                            window,
-                            cx,
-                        );
-                    })
-            });
-
-        // 三条口径先写清楚：省得每行都要解释"为什么只有一版""洞察产物在哪""为什么展不开"
-        let hint = div()
-            .text_xs()
-            .text_color(colors.muted_foreground)
-            // 与工具栏同一条左边距（`px_1`）：同一面板里各行从左缘对齐，
-            // 不然工具栏 4px、筛选 12px、说明 12px，扫一眼就是没对齐
-            .px_1()
-            .pb_2()
-            .child(tr("只有三段（源 / 表 / 文件）；资产只给最新版本；洞察产物 tmp_i_ 不进本清单；源要展开连接才列表，没挂载的源展不开"));
+            .child(
+                // 外层包一格只为测量（`layout_probe` 量行内控件是否真的同高）；
+                // `flex_none` + 一个子，不改变原来的排布
+                div()
+                    .flex_none()
+                    .debug_selector(|| "data-objects-add-source-slot".to_string())
+                    .child({
+                        let shared = self.shared.clone();
+                        let button = Button::new("data-objects-add-source")
+                            .ghost()
+                            .small()
+                            .icon(gpui_kit::assets::IconName::FilePlus)
+                            .tooltip(tr("按需加源：挂成视图读原文件，切项目即清"));
+                        // 最窄一档只留图标（tooltip 仍给全文案），把宽度让回搜索框
+                        let button = if icon_only {
+                            button
+                        } else {
+                            button.label(tr("加源"))
+                        };
+                        button.on_click(move |_, window, cx| {
+                            crate::components::data_objects_load::open_load_files_dialog(
+                                &shared,
+                                crate::components::data_objects_load::LoadScope::Session,
+                                window,
+                                cx,
+                            );
+                        })
+                    }),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .debug_selector(|| "data-objects-add-source-snapshot-slot".to_string())
+                    .child({
+                        let shared = self.shared.clone();
+                        let button = Button::new("data-objects-add-source-snapshot")
+                            .ghost()
+                            .small()
+                            .icon(gpui_kit::assets::IconName::BookMarked)
+                            .tooltip(tr(
+                                "把选中的文件在资源库里存一份只读副本，跟着项目走、带版本",
+                            ));
+                        let button = if icon_only {
+                            button
+                        } else {
+                            button.label(tr("存快照"))
+                        };
+                        button.on_click(move |_, window, cx| {
+                            crate::components::data_objects_load::open_load_files_dialog(
+                                &shared,
+                                crate::components::data_objects_load::LoadScope::Snapshot,
+                                window,
+                                cx,
+                            );
+                        })
+                    }),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .debug_selector(|| "data-objects-scope-hint-slot".to_string())
+                    .child(
+                        // 三条口径从常驻说明行收进这里：看一次就够的信息，不该常年占掉两行列表高度
+                        Button::new("data-objects-scope-hint")
+                            .ghost()
+                            .small()
+                            .icon(gpui_kit::assets::IconName::Info)
+                            .tooltip(tr("只有三段（源 / 表 / 文件）；资产只给最新版本；洞察产物 tmp_i_ 不进本清单；源要展开连接才列表，没挂载的源展不开")),
+                    ),
+            );
 
         // 分组 chips：三个段各一个（业务身份是小标，不单独当筛选项）
+        // 上留 8（`pt_2`）把工具栏与筛选断开：上一版两者各只有 `pb_2`，边界糊成一块。
         let mut chips = div()
             .h_flex()
             .items_center()
             .flex_wrap()
             .gap_1()
-            .px_1()
-            .pb_2();
+            .px_3()
+            .pt_2()
+            .pb_2()
+            .debug_selector(|| "data-objects-chips".to_string());
         let mut entries: Vec<(Option<Group>, String)> = vec![(None, "全部".to_string())];
         // 段顺序只认 `Group::ALL`（唯一权威）：这里再抄一份列表，加段时漏改就会
         // 「排序里有、筛选项里没有」
@@ -1994,7 +2041,9 @@ impl DataObjectsTab {
             .items_center()
             .justify_between()
             .gap_2()
-            .px_2()
+            // 与工具栏、chips、行同一条左缘（`px_3` = 12）：上一版这里单独是 8，
+            // 同一面板里 4/8/12 三条线，横向扫一眼就是没对齐
+            .px_3()
             .border_t(ui::HAIRLINE)
             .border_color(colors.border)
             .text_xs()
@@ -2008,6 +2057,7 @@ impl DataObjectsTab {
                     .min_w_0()
                     .overflow_hidden()
                     .text_ellipsis()
+                    .debug_selector(|| "data-objects-status-text".to_string())
                     .child(format!("{count_label} · {memory_label}")),
             )
             .child({
@@ -2028,7 +2078,6 @@ impl DataObjectsTab {
             .pt_2()
             .child(toolbar)
             .child(chips)
-            .child(hint)
             .child(list_frame)
             .when(!picked.is_empty(), |el| el.child(tray))
             .when_some(sess_row, |el, row| el.child(row))
@@ -2555,7 +2604,7 @@ fn text_width(window: &Window, text: &str, font_size: Pixels) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{leaf_shown, LEAF_PAGE_SIZE};
+    use super::{LEAF_PAGE_SIZE, leaf_shown};
 
     #[test]
     fn leaves_start_with_one_page_and_grow_by_a_page() {

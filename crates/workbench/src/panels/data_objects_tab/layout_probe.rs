@@ -11,8 +11,8 @@
 
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::{
-    div, px, rems, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext, Window,
+    AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
+    Render, Styled as _, TestAppContext, VisualTestContext, Window, div, px, rems,
 };
 
 use crate::components::data_objects::{Channel, Group, Life, Object, State};
@@ -440,12 +440,18 @@ fn marquee_runs_only_on_the_hovered_row_that_does_not_fit(cx: &mut TestAppContex
     );
 }
 
-/// 面板骨架：工具栏在上、状态栏在下，档位与兄弟面板（资产库 / 数据库导航）一致。
+/// 面板骨架：工具栏在上、状态栏在下，档位与兄弟面板（数据库导航 / 编辑器 / 资产库）一致。
 ///
 /// 用户口径（2026-11-25）：面板头部那行「16 个 · 已选 0 · 进程 DuckDB」是**状态**，
 /// 该落到下方状态栏；动作（加源 / 存快照）该在面板自己的工具栏里，不该上 Dock 标题栏。
-/// 这里钉三件事：工具栏是面板第一行且 32px、状态栏是面板最后一行且 24px、
-/// 两个动作按钮确实长在工具栏里（不在标题栏）。
+///
+/// 这里钉四件事：
+/// 1. 工具栏是面板第一行，高度 = `PANEL_HEADER_HEIGHT`（36）——这一行就是这个面板的头行，
+///    兄弟面板的头行也是 36；32 是「面板内第二行」那一档（资产库的面板内工具条）；
+/// 2. 状态栏是面板最后一行，高度 = `ROW_HEIGHT`（24）；
+/// 3. 行内控件（搜索框 / 加源 / 存快照 / ⓘ）**同高 = ROW_HEIGHT**：一行里四个控件，
+///    任何一个高一档都会让框线错开；
+/// 4. 工具栏与状态栏同一条左缘（`px_3` = 12），与行、托盘对齐。
 #[gpui_kit::test]
 fn toolbar_and_status_bar_sit_where_the_sibling_panels_put_them(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -458,8 +464,6 @@ fn toolbar_and_status_bar_sit_where_the_sibling_panels_put_them(cx: &mut TestApp
     )];
     let (_panel, vcx) = host_window(cx, 520.0, objects);
 
-    // 兄弟面板的档位（`workbench_shell::ui`）：工具栏 = CONTROL_HEIGHT_MD（2rem = 32px）、
-    // 状态栏 = ROW_HEIGHT（1.5rem = 24px）
     let toolbar_h = hgt(vcx, "data-objects-toolbar").expect("工具栏应有坐标");
     let status_h = hgt(vcx, "data-objects-status-bar").expect("状态栏应有坐标");
     let toolbar_top = top(vcx, "data-objects-toolbar").expect("工具栏应有坐标");
@@ -471,9 +475,10 @@ fn toolbar_and_status_bar_sit_where_the_sibling_panels_put_them(cx: &mut TestApp
 
     let rem = 16.0f32;
     assert!(
-        (toolbar_h - workbench_shell::ui::CONTROL_HEIGHT_MD * rem).abs() <= 1.0,
-        "工具栏高 {toolbar_h:.1}px，兄弟面板是 {}rem —— 同一排面板的工具栏必须同高",
-        workbench_shell::ui::CONTROL_HEIGHT_MD
+        (toolbar_h - workbench_shell::ui::PANEL_HEADER_HEIGHT * rem).abs() <= 1.0,
+        "工具栏高 {toolbar_h:.1}px，兄弟面板的头行是 {}rem —— 这一行就是这个面板的头行，\
+         不能取 32（那是面板内第二行的档）",
+        workbench_shell::ui::PANEL_HEADER_HEIGHT
     );
     assert!(
         (status_h - workbench_shell::ui::ROW_HEIGHT * rem).abs() <= 1.0,
@@ -489,5 +494,50 @@ fn toolbar_and_status_bar_sit_where_the_sibling_panels_put_them(cx: &mut TestApp
     assert!(
         (status_bottom - 600.0).abs() <= 1.0,
         "状态栏下缘 {status_bottom:.1}px，面板底是 600px —— 状态栏必须贴在面板底部"
+    );
+
+    // 行内控件同高：36 的行里四个控件上下各留 6px，框线才在一条线上
+    let control_target = workbench_shell::ui::ROW_HEIGHT * rem;
+    for (selector, name) in [
+        ("data-objects-search-slot", "搜索框"),
+        ("data-objects-add-source-slot", "加源"),
+        ("data-objects-add-source-snapshot-slot", "存快照"),
+        ("data-objects-scope-hint-slot", "ⓘ 说明"),
+    ] {
+        let h = hgt(vcx, selector)
+            .unwrap_or_else(|| panic!("{name} 笼子应有坐标（{selector}）——测量锚点被删了？"));
+        assert!(
+            (h - control_target).abs() <= 1.0,
+            "{name} 高 {h:.1}px，工具栏里四个控件必须同高 {control_target:.1}px"
+        );
+    }
+
+    // 一条左缘：工具栏内容与状态栏内容都从 12px 起（`px_3`）
+    let gutter = 0.75 * rem;
+    for (selector, name) in [
+        ("data-objects-search-slot", "搜索框"),
+        ("data-objects-status-text", "状态栏文字"),
+    ] {
+        let x = left(vcx, selector).unwrap_or_else(|| panic!("{name} 应有坐标（{selector}）"));
+        assert!(
+            (x - gutter).abs() <= 1.0,
+            "{name} 左缘 {x:.1}px，全面板只有一条左缘 {gutter:.0}px（`px_3`）——\
+             工具栏 4 / 状态栏 8 / 行 12 三条线的版本已经废了"
+        );
+    }
+
+    // chips 上留 8（`pt_2`）：工具栏与筛选之间要断开，否则两个都是 `pb_2`、边界糊成一块。
+    // chips 里的按钮是 Medium（32），所以整条 = 8 + 32 + 8。
+    let chips_h = hgt(vcx, "data-objects-chips").expect("chips 应有坐标");
+    let chips_top = top(vcx, "data-objects-chips").expect("chips 应有坐标");
+    assert!(
+        (chips_top - (toolbar_top + toolbar_h)).abs() <= 1.0,
+        "chips 上缘 {chips_top:.1}px，工具栏下缘是 {:.1}px —— chips 必须紧接工具栏",
+        toolbar_top + toolbar_h
+    );
+    assert!(
+        chips_h >= 32.0 + 16.0 - 0.5,
+        "chips 高 {chips_h:.1}px —— 上下各 8（`pt_2` / `pb_2`）+ 32 的 chip 才够；\
+         上一版没有 `pt_2`，工具栏与筛选糊在一起"
     );
 }
