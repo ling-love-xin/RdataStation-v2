@@ -915,11 +915,10 @@ impl ResultPanel {
                 let wrapped = engine::sql::rewrite_with_where(&sql, word)
                     .map(|rewritten| rewritten.sql)
                     .unwrap_or_else(|_| format!("select * from ({sql}) as rds_filtered where {word}"));
-                let preview_text: SharedString = if wrapped.len() > 80 {
-                    format!("{}…", &wrapped[..80]).into()
-                } else {
-                    wrapped.into()
-                };
+                // 截断按**字节**上限、且不切进多字节字符（列名/中文标识符很常见）：
+                // 原来写的是 `&wrapped[..80]`，第 80 字节落在汉字中间就 panic（§26.5-3）。
+                let preview_text: SharedString =
+                    crate::grid::text::clip_bytes(&wrapped, 80).into();
                 div()
                     .min_w_0()
                     .truncate()

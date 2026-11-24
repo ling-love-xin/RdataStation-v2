@@ -1517,10 +1517,14 @@ T1 按 Q13 裁掉的六个工具栏构造里，有两处的**入口至今没有�
    （弹框 → `insight_column` → 宿主端口 → 展开洞察面板）未做点击级测试——headless 下
    `debug_bounds` 坐标与命中测试对不上（见 `dialog_button_rendered` 注释：试过 `simulate_click`，
    单跑能中、全套跑中不了）。
-3. **筛选展开区 `preview` 的字节切片**：`&wrapped[..80]` 按字节截断，遇多字节列名会 panic。
-   既有问题（非本轮引入），未修，记在这里。
+3. ~~**筛选展开区 `preview` 的字节切片**：`&wrapped[..80]` 按字节截断，遇多字节列名会 panic。~~
+   **已修（D10-11）**：新增 `grid/text.rs::clip_bytes`，按字节上限截断并回退到最近的字符边界
+   （最多 3 字节），超长补省略号；`sidebars.rs` 的 SQL 预览改用它。回归用例
+   `clip_bytes_never_splits_a_multibyte_character`（ASCII 恰好等长 / 超长 / 汉字 80 字节落字符内部 /
+   上限小于首字符 / 空串五种）。
 4. **§25 差异表 D1–D16 仍未拍板的部分**：元数据页 Tree vs List（D1）、筛选标签（D2）、
    元数据页 DDL 工具条项（D5）、计算页多单元格选区（D10/D11/D13）、分组页是否改「内嵌结果集」（D14）。
+   （D2 / D5 / D14 已在 §27.1 结算，此行属旧状态；仍开放的是 D1 与 D10/D11/D13，见 §40.1、§42）
 
 ## 27 差异表结算与 D2 落地（2026-11-24 续）
 
@@ -2669,7 +2673,7 @@ D10 清单里「键盘 / 鼠标选区」这一族到此可以收口了：**能�
 | 10 | Enter → `DefaultSelection` | `:857` 起的监听 | **不做**（撤销登记） | 全仓无 `DefaultSelection` 接收者，按「没有的实现不要造」撤销，见 §37.4 #2 |
 | 11 | `+` / `-` / `=` 展开折叠树行 | `:3875-3894` | 不做 | 本仓结果集无树形行（无 `getLevel()` 分组） |
 | 12 | 空格 `toggleCellValue` | 同上区间 | 不做 | 同上：无「可切换值」的单元格类型 |
-| 13 | Ctrl 并集 / 反选 | `:2718-2735` | 待模型改造 | 需选区不再是单个矩形，见 40.3 |
+| 13 | Ctrl 并集 / 反选 | `:2718-2735`、`:2797-2832` | **不做**（判定见 §42：DBeaver 用全格集合，与本仓 O(1) 矩形选区冲突） | 见 §42 |
 | 14 | 「当前格」列钉首个数据列 | `:3183-3184`、`:3140-3145`、`:3201` | **行号槽档 / 交角档已做（D10-9 / D10-10）**；列头档判定不做 | 见 §41；`CellRange::cursor` 承载「矩形铺满 + 当前格另置」，组件侧补了 `set_selected_cell_without_scroll`。列头受组件 `selection_mode` 单一状态限制（§41.6） |
 | 15 | 行号列宽自适应 `[40,400]` | `:1884-1897` | 待（有正路） | 见 §39.2 |
 
@@ -2845,6 +2849,58 @@ pub fn set_selected_cell_without_scroll(&mut self, row_ix: usize, col_ix: usize,
 （`:3194-3196` 的 `getCells(col, cells)`），与 `focusColumn` 正交。要真对齐，得让组件的列头高亮也改由选区形状驱动，
 那是组件侧重构（`selection_mode` 拆分或新增独立的高亮来源），不属于结果集 1:1 这一条线的一刀。
 故登记为「组件侧前置项」，本仓现状（当前格 = `(末行, col)`）保留。
+
+## §42 Ctrl 并集 / 反选：取证后判定不做（附两处「以为没做、其实已做」的复核）
+
+§40.1 第 13 项是 D10 清单里最后一项没落地的。本轮把 DBeaver 那两条分支读完之后，判定**不做**，
+理由不是懒，是模型不可兼容——并把判定依据钉在源码行号上，避免以后被当成 bug 再报一次。
+
+### 42.1 DBeaver 的真值
+
+| 事实 | 出处 |
+| --- | --- |
+| 选区是**全格集合**：`private final Set<GridPos> selectedCells = new TreeSet<>(new GridPos.PosComparator())` | `LightGrid.java:186` |
+| 取/判都是集合操作：`getCellSelectionCount() = selectedCells.size()`；`isCellSelected(cell) = selectedCells.contains(cell)` | `:1163-1165`、`:1418-1421` |
+| Ctrl 点击（无 Shift）= **toggle**：`reverse = true` 且新格全在其中 → `selectedCells.removeAll(newCells)`；否则逐个 `addToCellSelection` | `:2797-2832`（`reverse` 初值是调用方传的 `reverseDuplicateSelections`，`:2801-2802` 再按包含关系否决） |
+| Ctrl+Shift 点击：清空后从 `shiftSelectionAnchor*` 重铺区间；Ctrl 时先恢复 `selectedCellsBeforeRangeSelect` | `:2718-2791`（尤其 `:2730-2735`） |
+| Ctrl+Alt 点击：把该行在**所有已选列**上的格一起切换 | `:2810-2827`（`alt && newCells.size() == 1` 两条特例） |
+| 拖拽期先回滚到拖拽前快照 | `:2804-2807` |
+| 依赖「连续范围」的操作对多范围**直接拒绝**：`getContinuousRange` 返回 null 时弹「You can't perform this operation on a multiple range selection.」 | `SpreadsheetPresentation.java:698-703` |
+
+### 42.2 本仓为什么不能照抄
+
+1. **内存口径不可调和**。本仓选区是 `CellRange`（`anchor` + `focus` + `cursor`），一个矩形的存储是 O(1)；
+   全选时也只是一个矩形。DBeaver 的全选是 `getAllCells()` 一次性把 **rows × cols** 个 `GridPos` 放进 TreeSet。
+   本仓结果集按百万行虚拟滚动设计（`view_len()` 可达百万、`visible_range` 只为视口服务），
+   照抄全集合会在「全选」这一步直接把进程打爆。这不是「我们没做」，是**两种存储模型各自的边界**。
+2. **压缩模型能表达的形状有限**。矩形 + 当前格（`cursor`）可以表达：单格、矩形、整行、整列、全表。
+   表达不了：Ctrl 并集产生的「矩形 + 零散格」，更表达不了「在矩形里挖掉一格」（`removeAll` 的语义）。
+   要表达就必须引入差集（`added` / `holes` 两个小列表），而 `holes` 会让每个可见格的「是否选中」
+   从一次区间比较变成「区间比较 + 两次线性查找」——渲染是每帧热路径，这笔账要单独立项算，不该顺手加。
+3. **本仓状态行口径给不出多范围的行/列数**。状态行显示「N 行 × M 列 × K 格」，其中 N/M 是包围盒的行列数。
+   多范围选区的「行数 / 列数」只有在集合语义下才有意义（并集去重），而并集行数无法在 O(1) 内得出
+   （要遍历行的并集）。硬凑一个近似的 N/M 等于给用户看错数字。
+4. **DBeaver 自己也不让多范围做多数操作**（`:698-703`）。也就是说即使本仓实现并集，
+   紧接着要补的是「哪些动作在多范围下禁用」以及对应的用户提示——那是产品口径清单，不是一行代码。
+
+### 42.3 若将来要做，前置三步（不是现在）
+
+1. `CellRange` 旁边加 `added: Vec<(usize, usize)>`、`holes: Vec<(usize, usize)>`（`k` 是用户手点的次数，
+   天然很小；`k > 阈值` 时退化到 `HashSet`），并把 `in_selection()` 提成唯一判据；
+2. 把「包围盒口径」的读点全部改成「集合口径」：状态行 N/M/K、行号槽整行高亮、`Ctrl+C` 目标、
+   `has_current_cell`；并按 `:698-703` 补上多范围禁用表与提示文案；
+3. 最后才接 Ctrl 修饰键（`window.modifiers().ctrl`，与 `SelectColumn` 同法，**不需要改 vendor 事件签名**）。
+
+### 42.4 复核：两项「以为没做」其实已做（本轮顺带查清，避免重复施工）
+
+| 项 | 以为的状态 | 实际 |
+| --- | --- | --- |
+| 双击列头边界 → 自适应列宽（DBeaver `:3345-3353` 的 `columnBeingResized.pack(gc, true)`） | 以为缺（§39.2 只清了行号列的自适应） | **已具备**：组件 resize handle 的 `on_mouse_down` 里 `e.click_count == 2` → `fit_col(ix, window, cx)`（vendor `state.rs:2017-2021` → `:1529-1558`），而本仓 `grid/fit.rs::fit_column` 已实现内容宽度采样（`table_impl.rs:166`），并有测试 `fit_column_follows_content_and_caps_the_sample` |
+| 表头排序箭头 | 以为只有列头点击 | 列头点击走 `SelectColumn` → 排序是独立入口（`render_sort_icon` → `perform_sort`），与 DBeaver 一致 |
+
+第 1 条的意义：**「行号列宽自适应」做不了（§39.2，要遍历缓存行且 `column()` 只拿 `&App`），
+但「数据列双击自适应」早就有了**——两者别混为一谈。§39.2 的判定只对「行号槽那一列」成立。
+
 
 
 

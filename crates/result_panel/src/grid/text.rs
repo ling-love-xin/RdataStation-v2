@@ -585,6 +585,27 @@ pub(crate) fn preview_of(value: &str) -> String {
         folded
     }
 }
+
+/// 按**字节**上限截断，且不切进多字节字符内部；超长时补省略号。
+///
+/// 为什么不能写 `&s[..80]`：那是**字节**切片，第 80 个字节若落在多字节字符中间会 panic
+/// （`byte index 80 is not a char boundary`）。筛选 SQL 预览里列名 / 中文标识符很常见，
+/// 而 `s.len() > 80` 这个前置判断又是按字节算的，两者口径必须一致才安全。
+/// 长度判断与截断都以字节为准，回退到最近的字符边界（最多 3 字节），所以预览最宽 80 字节。
+pub(crate) fn clip_bytes(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_string();
+    }
+    let mut end = max_bytes;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut out = String::with_capacity(end + 3);
+    out.push_str(&value[..end]);
+    out.push('…');
+    out
+}
+
 /// 单元格里找 `needle`（**已小写**）的字节区间：两边都是 ASCII → 零分配
 pub(crate) fn ascii_match_range(cell: &str, needle: &str) -> Option<Range<usize>> {
     let (haystack, needle) = (cell.as_bytes(), needle.as_bytes());

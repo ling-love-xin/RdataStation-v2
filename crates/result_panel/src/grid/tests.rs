@@ -11,7 +11,7 @@ use crate::grid::status::{
     ResultControls, format_integer_cell, render_status_row, render_toolbar,
 };
 use crate::grid::status::{FIRST_PAGER_ACTION, FIRST_SYSTEM_ACTION};
-use crate::grid::text::{cell_matches, find_in_cell, preview_of};
+use crate::grid::text::{cell_matches, clip_bytes, find_in_cell, preview_of};
 use crate::grid::view_rows::compare_cells;
 use crate::ports::{FindCriteria, Presentation};
 use gpui_kit::ImageFormat;
@@ -922,6 +922,35 @@ fn context_menu_only_offers_insight_when_available() {
         "洞察项起算应只剩它自己 + 呈现方式组 4 项 + 三颗统计 + 筛选条显隐：{:?}",
         with[ix..].iter().map(|i| i.label.as_str()).collect::<Vec<_>>()
     );
+}
+
+/// 【§26.5-3】筛选 SQL 预览的字节截断：不许切进多字节字符内部
+///
+/// 原来是 `&wrapped[..80]`：`str` 的字节索引遇到非字符边界会 panic
+/// （`byte index 80 is not a char boundary`），而 `wrapped.len() > 80` 这个前置判断
+/// 又是字节口径，所以列名/中文标识符一长就会炸。这条钉的是修复后的行为。
+#[test]
+fn clip_bytes_never_splits_a_multibyte_character() {
+    // 短串原样返回（不补省略号）
+    assert_eq!(clip_bytes("select 1", 80), "select 1");
+    // 恰好等于上限也不补
+    let exact = "a".repeat(80);
+    assert_eq!(clip_bytes(&exact, 80), exact);
+    // ASCII 超长：80 字节 + 一个省略号
+    let long = "a".repeat(200);
+    let clipped = clip_bytes(&long, 80);
+    assert!(clipped.ends_with('…'), "{clipped}");
+    assert_eq!(clipped.chars().count(), 81, "80 个字符 + 省略号");
+    // 多字节：汉字 3 字节/个，第 80 字节必落在字符内部 → 回退到最近的边界且不 panic
+    let cjk = "中".repeat(60); // 180 字节
+    let clipped = clip_bytes(&cjk, 80);
+    assert!(clipped.ends_with('…'), "{clipped}");
+    assert_eq!(clipped.chars().count(), 27, "26 个汉字 + 省略号");
+    assert_eq!(clipped.as_bytes().len(), 81, "78 字节正文 + 3 字节省略号");
+    // 上限小于首字符宽度：正文退到空，只剩省略号
+    assert_eq!(clip_bytes("中", 1), "…");
+    // 空串
+    assert_eq!(clip_bytes("", 80), "");
 }
 
 /// 值预览：空白折叠 + 截断（长值不该把菜单撑开）
