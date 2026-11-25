@@ -499,10 +499,32 @@ fn ensure_secret(conn: &Connection, source: &FederatedSource) -> Result<(), Stri
     })
 }
 
+/// 这个别名是否已经挂在这个**实例**上（catalog 是实例级的，不是会话级的）。
+///
+/// 为什么必须查：实例化之后第二次 `ATTACH` 同一别名会报 "already attached"，
+/// 而"同一份文档再执行一次"、"第二个会话挂同一个源"都是正常路径。
+fn is_attached(conn: &Connection, alias: &str) -> bool {
+    conn.query_row(
+        "SELECT count(*) FROM duckdb_databases() WHERE database_name = ?",
+        [alias],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|count| count > 0)
+    .unwrap_or(false)
+}
+
 /// 建凭据 + `ATTACH`（**挂载只有这一处实现**：`open` 与 `refresh` 共用，别在两处各挂一遍）
+///
+/// **幂等**：别名已在实例上挂着就直接算成功（数一下表）。`ATTACH` 是实例级事实，
+/// 重复挂只会报 "already attached"；把它当失败会让"再执行一次"变成假报错。
 ///
 /// 失败不抛：状态就是结论（挂不上的源不该把整条会话带下去）。
 fn attach_source(conn: &Connection, source: &FederatedSource) -> MountState {
+    if is_attached(conn, &source.alias) {
+        return MountState::Ready {
+            tables: count_tables(conn, &source.alias).unwrap_or(0),
+        };
+    }
     let outcome = ensure_secret(conn, source).and_then(|()| {
         conn.execute_batch(&source.attach_sql())
             .map_err(|error| attach_error(&source.alias, &error))

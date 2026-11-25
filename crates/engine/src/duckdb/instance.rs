@@ -125,6 +125,9 @@ impl MountRegistry {
 
 struct InstanceState {
     sessions: HashMap<String, Arc<AnalysisSession>>,
+    /// owner（文档 / 源连接 / 通道）→ 会话 id：同一 owner 再要会话时复用同一条，
+    /// 这样"同一份文档两次执行"不会每次都换一条 `TEMP` 世界
+    owners: HashMap<String, String>,
     mounts: MountRegistry,
     temps: Vec<TempEntry>,
     next_session: u64,
@@ -248,6 +251,7 @@ impl AnalysisInstance {
             write_lane: Mutex::new(()),
             state: Mutex::new(InstanceState {
                 sessions: HashMap::new(),
+                owners: HashMap::new(),
                 mounts: MountRegistry::default(),
                 temps: Vec::new(),
                 next_session: 0,
@@ -326,6 +330,38 @@ impl AnalysisInstance {
         self.state.lock().ok()?.sessions.get(id).cloned()
     }
 
+    /// 按 owner 取（必要时建立）会话：同一 owner 复用同一条，`TEMP` 世界不来回换。
+    ///
+    /// 典型 owner：文档 id（编辑器联邦 / 加速档用 `accel:<源连接 id>`）、`process`。
+    /// 会话被关掉后再要，会开一条**新的**（旧会话的 `TEMP` 已随关闭消失，这是正确语义）。
+    pub fn ensure_session(
+        self: &Arc<Self>,
+        owner: &str,
+        label: &str,
+    ) -> Result<Arc<AnalysisSession>, String> {
+        if owner.trim().is_empty() {
+            return Err("会话必须有归属（owner 不能为空）".to_string());
+        }
+        {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| "实例状态锁被污染".to_string())?;
+            if let Some(id) = state.owners.get(owner) {
+                if let Some(session) = state.sessions.get(id) {
+                    if session.is_open() {
+                        return Ok(session.clone());
+                    }
+                }
+            }
+        }
+        let session = self.open_session(owner, label)?;
+        if let Ok(mut state) = self.state.lock() {
+            state.owners.insert(owner.to_string(), session.id().to_string());
+        }
+        Ok(session)
+    }
+
     /// 所有会话摘要（**渲染路径可调**）。
     pub fn sessions(&self) -> Vec<SessionInfo> {
         let Ok(state) = self.state.lock() else {
@@ -342,6 +378,16 @@ impl AnalysisInstance {
         let Some(session) = state.sessions.remove(id) else {
             return false;
         };
+        // owner 映射要跟着销：否则下次 `ensure_session` 会拿到一条已关的会话再开新的却记旧 id
+        let owners: Vec<String> = state
+            .owners
+            .iter()
+            .filter(|(_, session_id)| session_id.as_str() == id)
+            .map(|(owner, _)| owner.clone())
+            .collect();
+        for owner in owners {
+            state.owners.remove(&owner);
+        }
         session.close();
         true
     }
@@ -352,6 +398,7 @@ impl AnalysisInstance {
             return 0;
         };
         let sessions: Vec<_> = state.sessions.drain().map(|(_, s)| s).collect();
+        state.owners.clear();
         for session in &sessions {
             session.close();
         }
@@ -575,6 +622,23 @@ impl AnalysisSession {
             .lock()
             .map_err(|_| "会话连接锁被污染（上一条语句崩了），重开一条会话".to_string())?;
         super::federation::session::mount_into(&conn, sources)
+    }
+
+    /// 切本会话的默认 catalog（联邦主源用）。
+    ///
+    /// 只接受标识符字符：别名来自 `MountRegistry` 与驱动的校验，但这里是拼 SQL 的地方，
+    /// 宁可多一条白名单检查，也不让一个精心构造的别名变成第二条语句。
+    pub fn use_catalog(&self, alias: &str) -> Result<(), String> {
+        let valid = !alias.is_empty()
+            && alias
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+        if !valid {
+            return Err(format!("别名 {alias:?} 里有不允许的字符，拒绝拿去拼 SQL"));
+        }
+        self.run_with_timeout(&format!("USE {alias}"), Duration::from_secs(5))
+            .map(|_| ())
+            .map_err(|error| format!("切主源到 {alias} 失败：{error}"))
     }
 
     fn close(&self) {

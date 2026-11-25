@@ -19,7 +19,8 @@ use shared::models::QueryResult;
 
 use crate::duckdb::accel::{self, AccelSession, AccelSource};
 use crate::duckdb::federation::registry::FederatedSource;
-use crate::duckdb::federation::session::{self, FederatedSession};
+use crate::duckdb::federation::session::FederatedSession;
+use crate::duckdb::instance::{self, AnalysisSession};
 use crate::services::duckdb_service::DuckDbService;
 
 use super::channel::AnalysisChannel;
@@ -86,6 +87,15 @@ pub enum SessionHandle {
     ProcessDb(Arc<Mutex<Connection>>),
     Accelerated(Arc<AccelSession>),
     Federated(Arc<FederatedSession>),
+    /// 分析实例上的一条会话（2026-11-26 起本地加速 / 联邦都落这里）。
+    ///
+    /// 与 `Federated` / `Accelerated` 的区别不是"类型不同"，而是**不再各建一条内存库**：
+    /// catalog（底座 + 源别名）由实例共享，`TEMP` 仍是本会话的。`label` 保留原来的
+    /// 档位词（`accelerated` / `federated`），历史面板与日志不必改口径。
+    Instance {
+        session: Arc<AnalysisSession>,
+        label: &'static str,
+    },
 }
 
 impl std::fmt::Debug for SessionHandle {
@@ -106,6 +116,7 @@ impl SessionHandle {
             Self::ProcessDb(_) => "process",
             Self::Accelerated(_) => "accelerated",
             Self::Federated(_) => "federated",
+            Self::Instance { label, .. } => label,
         }
     }
 
@@ -131,6 +142,7 @@ impl SessionHandle {
             }
             Self::Accelerated(session) => session.run(sql),
             Self::Federated(session) => session.run(sql),
+            Self::Instance { session, .. } => session.run(sql),
         }
     }
 }
@@ -169,8 +181,35 @@ pub fn open(plan: &SessionPlan, prepared: &PreparedMounts) -> Result<SessionHand
                 .first()
                 .ok_or_else(|| invalid("本地加速档的计划没有源".to_string()))?;
             check_same_mount(expected, &prepared_accel.mount, "本地加速")?;
-            let session = accel::ensure_session(&prepared_accel.source).map_err(invalid)?;
-            Ok(SessionHandle::Accelerated(session))
+            // 本地加速也落**同一个分析实例**：一条会话 + 挂这一条源，不再另起内存库。
+            // owner 用源连接 id：同一源上的多份文档共用这条会话（与原加速档的缓存键一致）。
+            let instance = instance::instance().map_err(invalid)?;
+            let owner = format!("accel:{}", prepared_accel.source.conn_id);
+            let session = instance
+                .ensure_session(&owner, "本地加速")
+                .map_err(invalid)?;
+            // 加速档的别名是固定的 `rds_src`（与旧加速档一致：SQL 里的限定名不用跟着会话变）
+            let source = FederatedSource {
+                conn_id: prepared_accel.source.conn_id.clone(),
+                alias: accel::SOURCE_ALIAS.to_string(),
+                kind: prepared_accel.source.kind,
+                connection_string: prepared_accel.source.connection_string.clone(),
+                secret: None,
+            };
+            let mounted = session
+                .mount_sources(std::slice::from_ref(&source))
+                .map_err(invalid)?;
+            // 加速档只挂一条源：挂不上就是这条通道不能用，当场说清而不是等查询报"表不存在"
+            if let Some(entry) = mounted.first() {
+                if let crate::duckdb::federation::registry::MountState::Failed(reason) = &entry.state
+                {
+                    return Err(invalid(reason.clone()));
+                }
+            }
+            Ok(SessionHandle::Instance {
+                session,
+                label: "accelerated",
+            })
         }
         AnalysisChannel::Federated { owner } => {
             if prepared.accel.is_some() {
@@ -196,9 +235,26 @@ pub fn open(plan: &SessionPlan, prepared: &PreparedMounts) -> Result<SessionHand
                 .iter()
                 .map(|entry| entry.source.clone())
                 .collect();
-            let session = session::ensure_session(owner, &sources, plan.primary.as_deref())
-                .map_err(invalid)?;
-            Ok(SessionHandle::Federated(session))
+            // 联邦档同样落**同一个分析实例**：按 owner 取会话，把源挂进这条会话。
+            // 好处是 `tmp_q_`（结果集临时表）与源在同一个实例里，`tmp_q_ JOIN 源` 才成立
+            // （第 ⑪ 条遗留的真因是"两份实例之间没有 JOIN 这回事"）。
+            let instance = instance::instance().map_err(invalid)?;
+            let session = instance.ensure_session(owner, "联邦").map_err(invalid)?;
+            let mounted = session.mount_sources(&sources).map_err(invalid)?;
+            // 主源只在"它确实挂上了"时切：挂不上就保持默认 catalog，
+            // 由快照里的原因告诉用户，而不是让整条查询跑在一个不存在的 catalog 上
+            if let Some(primary) = plan.primary.as_deref() {
+                let ready = mounted.iter().any(|entry| {
+                    entry.alias() == primary && entry.is_ready()
+                });
+                if ready {
+                    session.use_catalog(primary).map_err(invalid)?;
+                }
+            }
+            Ok(SessionHandle::Instance {
+                session,
+                label: "federated",
+            })
         }
     }
 }
