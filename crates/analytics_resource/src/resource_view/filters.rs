@@ -17,6 +17,16 @@ impl ResourcesPanel {
             .map(|tag| tag.id.clone())
             .collect();
         self.filter.tags.retain(|id| alive.contains(id));
+        // 分组同理：分组被删 / 重命名换 id 后，悬空条件会让列表变空而菜单上的勾还在。
+        let alive_groups: Vec<String> = self
+            .snapshot
+            .groups
+            .iter()
+            .map(|group| group.id.clone())
+            .collect();
+        self.filter.groups.retain(|id| {
+            id == crate::filter::GROUP_UNGROUPED || alive_groups.contains(id)
+        });
         self.refresh_view_rows(cx);
         cx.notify();
     }
@@ -64,6 +74,12 @@ impl ResourcesPanel {
     pub fn toggle_tag(&mut self, tag_id: &str, cx: &mut Context<Self>) {
         self.filter.toggle_tag(tag_id);
         self.refresh_view_rows(cx);
+    }
+    /// 勾选 / 取消一个分组（多选是并集；`GROUP_UNGROUPED` 是「未分组」伪 id）。
+    pub fn toggle_group(&mut self, group_id: &str, cx: &mut Context<Self>) {
+        self.filter.toggle_group(group_id);
+        self.refresh_view_rows(cx);
+        cx.notify();
     }
     /// 选排序字段：同一字段再点一次翻转方向；换字段保持当前方向
     /// （沿用 M4 与 v1 `use-pagination` 的语义——用户刚调完方向再换字段，不该被重置）。

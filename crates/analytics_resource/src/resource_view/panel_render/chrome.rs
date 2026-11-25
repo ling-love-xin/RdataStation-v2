@@ -4,41 +4,15 @@ use shared::i18n::tr;
 use super::*;
 
 impl ResourcesPanel {
-    pub(super) fn render_header(&self, cx: &mut Context<Self>) -> AnyElement {
-        let (_, muted, foreground) = {
-            let colors = cx.theme().colors;
-            (colors.border, colors.muted_foreground, colors.foreground)
-        };
+    pub(super) fn render_header(&self, _cx: &mut Context<Self>) -> AnyElement {
         let read_only = self.snapshot.read_only;
         let host = self.host.clone();
 
         // 统一容器（`PanelToolbar`）：36 高 / 左缘 12 / 1px 下边界 / 左槽标题 + 右槽动作。
+        //
+        // 左槽**不放标题**：Dock 标签条已经写明「资产库」，面板头再写一遍是重复
+        // （实机反馈 2026-11-25 第 4 条）。左槽留空后动作整体靠右，与数据对象面板同版式。
         PanelToolbar::new("archive-header")
-            // 左槽：标题 = 前缀图标 + 文字（原型 §2.1）。图标形状与活动栏该面板的图标一致，
-            // 一眼就对得上"这里是资产库"。
-            .left(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .gap_1()
-                    .min_w_0()
-                    .child(
-                        Icon::default()
-                            .path("icons/chart-column.svg")
-                            .flex_none()
-                            .size_3p5()
-                            .text_color(muted),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .text_ellipsis()
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(foreground)
-                            .child(tr("资产库")),
-                    ),
-            )
             // 右槽：`＋ ▾` 主操作 → `⋯` 更多
             .right({
                 let host = host.clone();
@@ -92,7 +66,7 @@ impl ResourcesPanel {
             })
             .into_any_element()
     }
-    /// 工具栏（高 2rem）：搜索框 + 筛选 + 排序（原型 §2.2）。
+    /// 工具栏（高 2rem）：搜索框 + 分组 + 标签 + 实例 + 筛选 + 排序（原型 §2.2）。
     ///
     /// 空库时也照常渲染：工具栏是面板版式的一部分，不能随"有没有存档"上下跳。
     /// 条件在渲染时快照一份给菜单（菜单开启时读一次，之后用 `checked` 表达状态）。
@@ -100,11 +74,23 @@ impl ResourcesPanel {
         let panel = cx.entity();
         let kinds = self.filter.kinds.clone();
         let tags = self.filter.tags.clone();
+        let groups = self.snapshot.groups.clone();
+        let selected_groups = self.filter.groups.clone();
         let only_issues = self.filter.only_issues;
         // 菜单里设了几个条件就标在按钮上：搜索词不计数（它在输入框里看得见）。
         let filter_label = match self.filter.menu_dims() {
             0 => "筛选 ▾".to_string(),
             dims => format!("筛选 {dims} ▾"),
+        };
+        // 「分组」「标签」各是一个独立入口（实机反馈 2026-11-25 第 4 条：工具栏缺这两项）：
+        // 徽标只数本维的选中数，不跟「筛选」混算——否则两项一改，三个按钮的数一起跳。
+        let group_label = match selected_groups.len() {
+            0 => tr("分组 ▾").to_string(),
+            n => format!("分组 {n} ▾"),
+        };
+        let tag_label = match tags.len() {
+            0 => tr("标签 ▾").to_string(),
+            n => format!("标签 {n} ▾"),
         };
         let (field, order) = (self.sort_field, self.sort_order);
         let sort_label = format!("{} {} ▾", field.short_label(), order.arrow());
@@ -143,6 +129,7 @@ impl ResourcesPanel {
                 }
             });
 
+        let tags_filter = tags.clone();
         let filter_button = Button::new("archive-filter")
             .ghost()
             .small()
@@ -172,7 +159,7 @@ impl ResourcesPanel {
                         menu = menu.separator().item(PopupMenuItem::label(tr("标签")));
                         for option in &dictionary {
                             let target = panel.clone();
-                            let is_checked = tags.iter().any(|id| id == &option.id);
+                            let is_checked = tags_filter.iter().any(|id| id == &option.id);
                             let label = format!("{}（{}）", option.name, option.count);
                             let tag_id = option.id.clone();
                             menu =
@@ -227,6 +214,86 @@ impl ResourcesPanel {
                 }
             });
 
+        // 分组筛选：菜单项 = 快照里的分组字典 + 「未分组」伪项（多选按并集）。
+        let group_button = Button::new("archive-group")
+            .ghost()
+            .small()
+            // 和搜索框同高：同一行里 24 与 26 的边框对不齐
+            .h(rems(ui::CONTROL_HEIGHT_SM))
+            .label(group_label)
+            .debug_selector(|| "archive-group".to_string())
+            .dropdown_menu({
+                let panel = panel.clone();
+                let dictionary = groups.clone();
+                let selected = selected_groups.clone();
+                move |menu, _window, _cx| {
+                    let mut menu = menu.item(PopupMenuItem::label(tr("分组")));
+                    if dictionary.is_empty() {
+                        menu = menu.item(PopupMenuItem::label(tr("暂无分组")));
+                    }
+                    for option in &dictionary {
+                        let target = panel.clone();
+                        let is_checked = selected.iter().any(|id| id == &option.id);
+                        let name = option.name.clone();
+                        let id = option.id.clone();
+                        menu = menu.item(PopupMenuItem::new(name).checked(is_checked).on_click(
+                            move |_, _, app| {
+                                let id = id.clone();
+                                target.update(app, |panel, cx| panel.toggle_group(&id, cx));
+                            },
+                        ));
+                    }
+                    // 「未分组」：还没归档到任何分组的行——它不是一个真分组，
+                    // 但用户确实会问「哪些还没归类」，所以留一个入口。
+                    let target = panel.clone();
+                    let is_checked = selected
+                        .iter()
+                        .any(|id| id == crate::filter::GROUP_UNGROUPED);
+                    menu.separator().item(
+                        PopupMenuItem::new(tr("未分组"))
+                            .checked(is_checked)
+                            .on_click(move |_, _, app| {
+                                target.update(app, |panel, cx| {
+                                    panel.toggle_group(crate::filter::GROUP_UNGROUPED, cx);
+                                });
+                            }),
+                    )
+                }
+            });
+
+        // 标签筛选：与「筛选」菜单里的标签节是**同一个条件**（`filter.tags`），
+        // 这里只是把它提到工具栏做独立入口——两处勾选互相同步。
+        let tag_button = Button::new("archive-tag")
+            .ghost()
+            .small()
+            .h(rems(ui::CONTROL_HEIGHT_SM))
+            .label(tag_label)
+            .debug_selector(|| "archive-tag".to_string())
+            .dropdown_menu({
+                let panel = panel.clone();
+                let dictionary = self.snapshot.tags.clone();
+                let selected = tags.clone();
+                move |menu, _window, _cx| {
+                    let mut menu = menu.item(PopupMenuItem::label(tr("标签")));
+                    if dictionary.is_empty() {
+                        return menu.item(PopupMenuItem::label(tr("暂无标签")));
+                    }
+                    for option in &dictionary {
+                        let target = panel.clone();
+                        let is_checked = selected.iter().any(|id| id == &option.id);
+                        let text = format!("{}（{}）", option.name, option.count);
+                        let id = option.id.clone();
+                        menu = menu.item(PopupMenuItem::new(text).checked(is_checked).on_click(
+                            move |_, _, app| {
+                                let id = id.clone();
+                                target.update(app, |panel, cx| panel.toggle_tag(&id, cx));
+                            },
+                        ));
+                    }
+                    menu
+                }
+            });
+
         // 统一容器（`PanelToolbar`），高度取 `TOOLBAR_HEIGHT`（32）——这是面板内
         // **第二行**（头行 36 已在 `render_header`），不跟着头行走 36。
         PanelToolbar::new("archive-toolbar")
@@ -240,11 +307,17 @@ impl ResourcesPanel {
                         row.child(
                             Input::new(&input)
                                 .h(rems(ui::CONTROL_HEIGHT_SM))
-                                .cleanable(true),
+                                .cleanable(true)
+                                // 与左侧导航 / 草稿箱 / 数据对象同一档：无边框 + `input.background`
+                                // 填充底，聚焦才出边框（实机反馈 2026-11-25 第 2 条）。
+                                .bordered(false)
+                                .focus_bordered(true),
                         )
                     }),
             )
-            // 右槽：实例维度 → 筛选 → 排序
+            // 右槽：分组 → 标签 → 实例维度 → 筛选 → 排序
+            .right(group_button)
+            .right(tag_button)
             .right(instance_button)
             .right(filter_button)
             .right(sort_button)

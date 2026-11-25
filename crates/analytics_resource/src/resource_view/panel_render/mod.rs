@@ -15,7 +15,7 @@ pub(crate) use gpui_kit::component::input::Input;
 pub(crate) use gpui_kit::component::list::List;
 pub(crate) use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 pub(crate) use gpui_kit::component::skeleton::Skeleton;
-pub(crate) use gpui_kit::component::{ActiveTheme, Icon};
+pub(crate) use gpui_kit::component::ActiveTheme;
 pub(crate) use gpui_kit::prelude::FluentBuilder as _;
 pub(crate) use gpui_kit::*;
 pub(crate) use workbench_shell::panel_toolbar::PanelToolbar;

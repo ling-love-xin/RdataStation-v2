@@ -138,6 +138,11 @@ pub struct ResourcesFilter {
     /// 多选是 **OR**：选中「重要」与「待办」意味着“这两个标签的存档都看”，
     /// 而不是“同时打两个标签”——后者是更细的诉求，不靠筛选器表达（用户在列表里一眼能看出来）。
     pub tags: Vec<String>,
+    /// 分组多选（**存 group id**：名字会改，id 不会；空 = 不限）。
+    ///
+    /// [`GROUP_UNGROUPED`] 是「未分组」的伪 id，与拖拽落点同一个常量——
+    /// 用户想「只看还没归档到分组的那些」时也有入口。
+    pub groups: Vec<String>,
     /// 只看需要处理的异常（缺失 / 内容已变），对应状态行的“修复…”场景。
     pub only_issues: bool,
     /// 业务断言搜索索引：`resource_id → 可搜文本`。
@@ -153,6 +158,7 @@ impl ResourcesFilter {
         self.query.trim().is_empty()
             && self.kinds.is_empty()
             && self.tags.is_empty()
+            && self.groups.is_empty()
             && !self.only_issues
     }
 
@@ -200,6 +206,25 @@ impl ResourcesFilter {
         self.tags.iter().any(|id| id == tag_id)
     }
 
+    /// 勾选 / 取消一个分组（筛选菜单用；`GROUP_UNGROUPED` 也能勾）。
+    pub fn toggle_group(&mut self, group_id: &str) {
+        match self.groups.iter().position(|id| id == group_id) {
+            Some(index) => {
+                self.groups.remove(index);
+            }
+            None => self.groups.push(group_id.to_string()),
+        }
+    }
+
+    pub fn has_group(&self, group_id: &str) -> bool {
+        self.groups.iter().any(|id| id == group_id)
+    }
+
+    /// 抹掉一个不再存在的分组（分组被删后清悬空条件，与 [`drop_tag`](Self::drop_tag) 同理）。
+    pub fn drop_group(&mut self, group_id: &str) {
+        self.groups.retain(|id| id != group_id);
+    }
+
     /// 抹掉一个不再存在的标签（标签被删后清悬空条件，与选择集的悬空清理同一个道理）。
     pub fn drop_tag(&mut self, tag_id: &str) {
         self.tags.retain(|id| id != tag_id);
@@ -210,7 +235,7 @@ impl ResourcesFilter {
     /// 搜索词在输入框里看得见，算进来会让"筛选 N"这个徽标口径混乱；它只负责数
     /// "必须开菜单才能看出来"的那几维。
     pub fn menu_dims(&self) -> usize {
-        self.kinds.len() + self.tags.len() + usize::from(self.only_issues)
+        self.kinds.len() + self.tags.len() + self.groups.len() + usize::from(self.only_issues)
     }
 
     /// 单行是否命中。
@@ -231,6 +256,16 @@ impl ResourcesFilter {
         }
         if !self.tags.is_empty() && !row.tags.iter().any(|tag| self.tags.contains(&tag.id)) {
             return false;
+        }
+        if !self.groups.is_empty() {
+            // 未分组行只被 `GROUP_UNGROUPED` 命中；有分组的行只被自己的 id 命中。
+            let hit = match row.folder_id.as_deref() {
+                Some(id) => self.groups.iter().any(|g| g == id),
+                None => self.has_group(GROUP_UNGROUPED),
+            };
+            if !hit {
+                return false;
+            }
         }
         if self.only_issues && row.status == ArchiveStatus::Normal {
             return false;

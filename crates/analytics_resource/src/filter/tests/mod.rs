@@ -494,12 +494,65 @@ fn tag_filter_is_multi_select_or() {
     );
 }
 
-/// 标签被删后要能抹掉悬空条件（否则列表会“什么都没匹配”，而菜单上的勾还在）。
+/// 分组被删 / 换 id 后要能抹掉悬空条件（与标签同一条道理）。
 #[test]
 fn drop_tag_removes_a_stale_condition() {
     let mut filter = ResourcesFilter::default();
     filter.toggle_tag("at_a");
     filter.drop_tag("at_a");
+    assert!(filter.is_empty());
+    assert_eq!(filter.menu_dims(), 0);
+}
+
+/// 分组维：有分组的行只被自己的 id 命中；`GROUP_UNGROUPED` 只命中 `folder_id == None`。
+#[test]
+fn group_filter_matches_members_and_ungrouped() {
+    let mut grouped = row(
+        "ar_1",
+        "月报.sql",
+        ArchiveKind::File,
+        ArchiveStatus::Normal,
+        1,
+        "",
+    );
+    grouped.folder_id = Some("af_reports".to_string());
+    let ungrouped = row(
+        "ar_2",
+        "散件.sql",
+        ArchiveKind::File,
+        ArchiveStatus::Normal,
+        1,
+        "",
+    );
+    let rows = vec![grouped, ungrouped];
+
+    let only_reports = ResourcesFilter {
+        groups: vec!["af_reports".to_string()],
+        ..ResourcesFilter::default()
+    };
+    let hit = apply_view(&rows, &only_reports, SortField::Name, SortOrder::Asc);
+    assert_eq!(hit.len(), 1, "有分组的行不该被别的分组 id 命中");
+    assert_eq!(hit[0].id, "ar_1");
+
+    let only_ungrouped = ResourcesFilter {
+        groups: vec![crate::filter::GROUP_UNGROUPED.to_string()],
+        ..ResourcesFilter::default()
+    };
+    let hit = apply_view(&rows, &only_ungrouped, SortField::Name, SortOrder::Asc);
+    assert_eq!(hit.len(), 1, "「未分组」只命中没有 folder_id 的行");
+    assert_eq!(hit[0].id, "ar_2");
+}
+
+/// 分组条件与标签同样是逐项勾/取，且计入「筛选 N」徽标。
+#[test]
+fn toggle_group_roundtrips_and_clears() {
+    let mut filter = ResourcesFilter::default();
+    filter.toggle_group("af_1");
+    assert!(filter.has_group("af_1"));
+    assert!(!filter.is_empty(), "选了分组就是真筛选");
+    assert_eq!(filter.menu_dims(), 1);
+    filter.toggle_group("af_1");
+    assert!(!filter.has_group("af_1"));
     assert!(filter.is_empty());
     assert_eq!(filter.menu_dims(), 0);
 }
