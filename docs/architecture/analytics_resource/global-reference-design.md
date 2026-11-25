@@ -96,7 +96,7 @@ analytics_global_refs(
 
 | 设计决策 | 代码位置 |
 | --- | --- |
-| 全局引用登记表 | `crates/store/migrations/global/037_analytics_global_refs.sql` |
+| 全局引用登记表 | `crates/store/migrations/global/038_analytics_global_refs.sql`（原 037，与网络两层撞号后改 038） |
 | 登记 API / 查询 | `crates/analytics_resource/src/global/refs.rs` |
 | 裁剪守卫 | `crates/analytics_resource/src/global/sql.rs` |
 | 删除守卫 | `crates/analytics_resource/src/global/delete.rs` |
