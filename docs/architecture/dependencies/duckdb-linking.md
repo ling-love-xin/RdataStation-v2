@@ -1,4 +1,4 @@
-# DuckDB 内核：动态链接（设计 / 操作手册）
+﻿# DuckDB 内核：动态链接（设计 / 操作手册）
 
 状态：**已落地（2026-09-16）**。取代此前的 `features = ["bundled"]`（构建期编 DuckDB 的 C++ 内核）。
 记录出处：`dependency-strategy.md` §3「编译时间」的待评估项 + §5「DuckDB 内核与扩展」。
@@ -22,19 +22,30 @@
 | 取库脚本 | `tools/fetch-duckdb.sh` |
 | 构建期指向 | `.cargo/config.toml` 的 `[env] DUCKDB_LIB_DIR`（`relative = true`，开发机零环境变量） |
 | 运行时 dll 拷贝 | `crates/engine/build.rs`（拷到 `target/<profile>/` 与 `.../deps/`） |
-| crate 版本 | 根 `Cargo.toml` 的 `duckdb = "=1.10506.1"`（对应 DuckDB **v1.5.6**，**精确锁定**，见 §5 第 1 条） |
+| crate 版本 | 根 `Cargo.toml` 的 `duckdb = "=1.20001.0"`（对应 DuckDB **v2.0.1**，**精确锁定**，见 §5 第 1 条） |
 | 体积守门 | `tools/target-guard.sh`（§9） |
 
-**版本映射**：crate 版本第二段的十进制数编码 DuckDB 版本——`10506` → `1.5.6`
+**版本映射**：crate 版本第二段的十进制数编码 DuckDB 版本——`10506` → `1.5.6`、`20001` → `2.0.1`
 （`libduckdb-sys` build script 的 `duckdb_version_from_pkg_version`）。**crate 与库必须成对升级**，
 不一致会在运行期以符号缺失 / 崩溃体现，而不是编译期。
-**必须写 `=` 精确锁定**：`1.10505` / `1.10506` / `1.20000` 是三条不同内核线，caret 约束会被解析到
-`1.20000.1`（DuckDB 2.0，连带强制 `arrow 60`）——2026-11-08 实测踩到，见 `duckdb-1.5.6-upgrade-report.md` §3。
+**必须写 `=` 精确锁定**：`1.10505` / `1.10506` / `1.20000` / `1.20001` 是不同内核线，caret 约束会被
+解析到别的线（2026-11-08 实测踩到 1.20000.1，连带强制 `arrow 60`，见 `duckdb-1.5.6-upgrade-report.md` §3）。
+
+**当前线：2.0.1（2026-11-26 升级）**
+
+- DuckDB 2.0.0 LTS 2026-10-21 发布，2.0.1 为 2026-11-20 的 patch；crate `duckdb 1.20001.0`
+  硬依赖 `arrow ^60`（本仓随之把 `arrow` 从 58.4 升到 60.2.0，`comfy-table` 7→8）。
+- **资产改名**：2.0 起发布资产是 `duckdb-shared-libs-windows-amd64.tar.gz`（实测 v2.0.1 含
+  `duckdb.dll` / `duckdb.lib` / `duckdb.h` / `duckdb_extension*.h`，19.2MB）；
+  旧的 `libduckdb-windows-amd64.zip` 在 2.0.1 上已 404。`tools/fetch-duckdb.sh` 已按主版本号分档适配。
+- **存储格式单向**：2.0 可读写 1.5 建的文件并保持其旧存储版本号；2.0 **新建**的库是 storage v69，
+  1.5 读不了 —— 升上来即不可回退（要有"旧客户端还能不能打开项目分析库"的产品结论，见 §12 待办）。
+- 实测：`cargo test -p rds-engine --lib` 336 passed、`cargo test -p rds-workbench --lib` 220 passed。
 
 ## 3. 首次与换机
 
 ```bash
-tools/fetch-duckdb.sh            # 默认 1.5.6 → third_party/duckdb/1.5.6/
+tools/fetch-duckdb.sh            # 默认 2.0.1 → third_party/duckdb/2.0.1/
 cargo check -p rds-engine        # 冒烟
 ```
 
@@ -49,7 +60,7 @@ cargo check -p rds-engine        # 冒烟
   与 `target/<profile>/deps/`（测试二进制）。这是 `libduckdb-sys` 的 `DUCKDB_DOWNLOAD_LIB`
   路径同款手法（那边拷的是它下载到 `target/duckdb-download/` 的那份）。
 - **Linux / macOS**：动态库靠 rpath / `LD_LIBRARY_PATH` 解析（拷到 exe 旁无效），
-  开发机导出 `export LD_LIBRARY_PATH="$PWD/third_party/duckdb/1.5.6"`。
+  开发机导出 `export LD_LIBRARY_PATH="$PWD/third_party/duckdb/2.0.1"`。
 
 ## 5. 升级内核
 
