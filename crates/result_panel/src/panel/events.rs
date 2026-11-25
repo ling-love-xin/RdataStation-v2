@@ -2700,8 +2700,13 @@ impl ResultPanel {
     /// 名字：上游取 `attr.getLabel()`（空则 `getName()`），且有数据源时套
     /// `DBUtils.getQuotedIdentifier`（贴进 SQL 就是带引号的标识符）；本仓 `columns()`
     /// 就是显示名、也没有数据源方言通道，所以**不加引号**（有意差异）。
+    ///
+    /// `window` 是为了把记忆样式**回填进三行输入框**（`InputState::set_value` 要
+    /// `&mut Window`）；本仓对话框的三行是可编辑输入框（真值 `Combo` 带 `SWT.DROP_DOWN`，
+    /// 同样可敲字、也能从下拉里挑）。
     pub fn copy_column_names(
         &mut self,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<crate::copy_names::CopyColumnNamesOutcome, String> {
         let picked: Vec<String> = {
@@ -2721,18 +2726,39 @@ impl ResultPanel {
                     .collect(),
             }
         };
+        self.copy_names_for(picked, window, cx)
+    }
+
+    /// 【复制列名】列浏览器清单的多选集合走**同一条命令**（列名由清单算好交来）。
+    ///
+    /// 真值清单那条 `meta_data_panel_action_copy_column_text` 是换行直拷、不弹；本仓按
+    /// 2026-11-26 的诉求把它并到 `CMD_COPY_COLUMN_NAMES` 的分流（本仓表格没有列选区，
+    /// 清单是唯一的多选入口）：>1 列弹「选项」，单列直拷。
+    pub fn copy_column_names_from_list(
+        &mut self,
+        names: Vec<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<crate::copy_names::CopyColumnNamesOutcome, String> {
+        self.copy_names_for(names, window, cx)
+    }
+
+    /// 「复制列名」共用的分流：空 → 报错；多列 → 开「选项」浮层（剪贴板不动）；
+    /// 单列 → 直接写剪贴板
+    fn copy_names_for(
+        &mut self,
+        picked: Vec<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<crate::copy_names::CopyColumnNamesOutcome, String> {
         if picked.is_empty() {
             return Err("这份结果没有可复制的列".to_string());
         }
         let count = picked.len();
         // 真值 `ResultSetHandlerMain.java:351`：多列先弹「选项」，确认后才拷
         if crate::copy_names::copy_names_needs_dialog(count) {
-            self.copy_names_dialog = Some(crate::panel::data::CopyNamesDialog {
-                names: picked,
-                // 打开时按上次确认的样式回填（真值 `CopyConfigDialog` 构造函数读
-                // `DialogSettings("CopyGridNamesOptionsDialog")`，`:132-140`）
-                settings: self.copy_names_settings.clone(),
-            });
+            self.fill_copy_names_inputs(window, cx);
+            self.copy_names_dialog = Some(crate::panel::data::CopyNamesDialog { names: picked });
             cx.notify();
             return Ok(crate::copy_names::CopyColumnNamesOutcome::Options(count));
         }
@@ -2744,36 +2770,46 @@ impl ResultPanel {
         Ok(crate::copy_names::CopyColumnNamesOutcome::Copied(count))
     }
 
-    /// 【复制列名】「选项」浮层：某个字段的下拉选中（写进**浮层**的临时样式，
-    /// 「确定」才回写记忆；真值 `CopyConfigDialog.okPressed:177-186` 同口径）。
+    /// 把记忆样式（真值）回填成三行输入框的**显示串**（`\t` 显示成 `\t` 两个字面字符）。
     ///
-    /// `value` 是**显示串**（`\t` / `\n` 这种字面量，与真值 Combo 里存的形态一致），
-    /// 这里按 `CommonUtils.unescapeDisplayString` 还原成控制字符再落样式。
-    pub fn set_copy_names_field(
+    /// 真值 `CopyConfigDialog` 构造时从 `DialogSettings("CopyGridNamesOptionsDialog")`
+    /// 读三项塞进 `Combo`（`:132-140`），口径一致。
+    pub(crate) fn fill_copy_names_inputs(
         &mut self,
-        field: crate::copy_names::CopyNamesField,
-        value: String,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(dialog) = self.copy_names_dialog.as_mut() {
-            let raw = crate::copy_names::unescape_display_string(&value);
-            field.apply(&mut dialog.settings, raw);
-            cx.notify();
+        for field in crate::copy_names::CopyNamesField::ALL {
+            let shown = crate::copy_names::escape_display_string(
+                field.value(&self.copy_names_settings),
+            );
+            let input = self.copy_names_inputs[field.index()].clone();
+            input.update(cx, |state, cx| state.set_value(shown, window, cx));
         }
     }
 
-    /// 【复制列名】「选项」浮层「确定」：按当前样式拼文本 → 写剪贴板 → 记忆样式 → 关闭
-    /// （真值 `ResultSetHandlerMain.java:359-374` 的拼接 + `ResultSetUtils.copyToClipboard`）
+    /// 【复制列名】「选项」浮层「确定」：读三行输入框（显示串 → `unescape` 还原成真值）
+    /// → 用列分隔符拼文本 → 写剪贴板 → 记忆样式 → 关闭
+    /// （真值 `ResultSetHandlerCopySpecial.okPressed:177-186` + `ResultSetHandlerMain:359-374`）
     pub fn apply_copy_names_options(&mut self, cx: &mut Context<Self>) {
         let Some(dialog) = self.copy_names_dialog.take() else {
             return;
         };
-        let text = crate::copy_names::join_column_names(
-            &dialog.names,
-            &dialog.settings.column_delimiter,
-        );
+        let mut settings = crate::copy_names::CopyNamesSettings::default();
+        for field in crate::copy_names::CopyNamesField::ALL {
+            let shown = self.copy_names_inputs[field.index()]
+                .read(cx)
+                .value()
+                .to_string();
+            field.apply(
+                &mut settings,
+                crate::copy_names::unescape_display_string(&shown),
+            );
+        }
+        let text =
+            crate::copy_names::join_column_names(&dialog.names, &settings.column_delimiter);
         cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text));
-        self.copy_names_settings = dialog.settings;
+        self.copy_names_settings = settings;
         cx.notify();
     }
 

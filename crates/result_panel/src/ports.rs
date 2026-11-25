@@ -602,13 +602,14 @@ pub enum ResultRequest {
         /// 已生成好的 `SELECT * FROM 目标表 WHERE …`（不合法时面板不会发这条请求）
         sql: String,
     },
-    /// 【复制列名】选项对话框里某个字段的选中值（值已是真值：`\t` / `\n` 等控制字符，
-    /// 不是下拉里显示的 `\t` 字面量）
-    SetCopyNamesField {
-        field: crate::copy_names::CopyNamesField,
-        value: String,
+    /// 【复制列名】列浏览器清单的多选集合（列名由清单在渲染期算好——只有那一刻拿得到
+    /// 多选集合与列序）。面板收到后与 `ALT+SHIFT+C` 走**同一条分流**：单列直拷、
+    /// 多列开「选项」对话框（真值 `ResultSetHandlerMain.java:351` 的 `attrs.size() > 1`）。
+    CopyColumnNames {
+        names: Vec<String>,
     },
-    /// 【复制列名】选项对话框「确定」：按当前样式拼文本 → 写剪贴板 → 关闭，并记忆样式
+    /// 【复制列名】选项对话框「确定」：读三行输入框（显示串 → `unescape` 还原）→ 用列分隔符
+    /// 拼文本 → 写剪贴板 → 关闭，并记忆样式
     /// （真值 `CopyConfigDialog.okPressed:177-186` 落 `DialogSettings`；本仓只记忆在面板）
     ApplyCopyNamesOptions,
     /// 【复制列名】选项对话框「取消」/ `ESC`（真值 `open() != OK_ID` 直接 return，不拷）

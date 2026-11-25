@@ -2972,13 +2972,15 @@ fn multi_selection_toggles_with_ctrl_and_replaces_without() {
     assert_eq!(next_multi_selection(&[0, 2], 2, true), vec![0]);
 }
 
-/// 【复制列名】剪贴板文本：多选集合逐行拼（换行分隔）、单列只拷自己、越界跳过。
+/// 【复制列名】清单多选集合算出的列名：多选里含右键列 → 整个集合（按数据列序）；
+/// 否则只拷它自己；越界下标跳过。
 ///
-/// 对齐 DBeaver `MetaDataPanel.fillCustomActions` 的 `meta_data_panel_action_copy_column_text`
-/// （选中几行就拷几行，`"\n"` 分隔，空文本直接返回不写剪贴板）。
+/// 真值 `meta_data_panel_action_copy_column_text` 是「选中几行拷几行、换行分隔直拷」；
+/// 本仓 2026-11-26 起把这条并到 `CMD_COPY_COLUMN_NAMES` 的分流（>1 列弹「选项」、
+/// 单列直拷），所以这里测的是**列名集合**，换行拼法只作参考。
 #[test]
-fn copy_column_names_joins_the_selection_with_newlines() {
-    use crate::column_browser::column_names_to_copy;
+fn copy_column_names_collects_the_selection_in_data_order() {
+    use crate::column_browser::column_names_for_copy;
 
     let columns = vec![
         "id".to_string(),
@@ -2987,31 +2989,35 @@ fn copy_column_names_joins_the_selection_with_newlines() {
     ];
 
     // 单选：右键那一列不在集合里（或集合是空）→ 只拷它自己
-    assert_eq!(column_names_to_copy(&columns, &[], 1), "name");
-    assert_eq!(column_names_to_copy(&columns, &[0], 2), "amount");
+    assert_eq!(column_names_for_copy(&columns, &[], 1), vec!["name"]);
+    assert_eq!(column_names_for_copy(&columns, &[0], 2), vec!["amount"]);
 
-    // 多选且右键的那一列在集合里 → 整个集合按数据列序（换行分隔）
+    // 多选且右键的那一列在集合里 → 整个集合按数据列序
     assert_eq!(
-        column_names_to_copy(&columns, &[0, 2], 2),
-        "id\namount",
-        "选中两列时一次带走两行"
+        column_names_for_copy(&columns, &[0, 2], 2),
+        vec!["id", "amount"],
+        "选中两列时一次带走两列（顺序 = 数据列序）"
+    );
+    // 换行拼法（真值清单命令的形态）仍可按这个集合算出来
+    assert_eq!(
+        column_names_for_copy(&columns, &[0, 2], 2).join("\n"),
+        "id\namount"
     );
 
     // 越界下标跳过（搜索过滤后旧下标可能失效）：集合里只剩有效的那几个
     assert_eq!(
-        column_names_to_copy(&columns, &[0, 9], 9),
-        "id",
+        column_names_for_copy(&columns, &[0, 9], 9),
+        vec!["id"],
         "9 在集合里但列已不存在 → 跳过它，只留有效列"
     );
-    assert_eq!(
-        column_names_to_copy(&columns, &[87, 99], 99),
-        "",
-        "集合全越界 = 空文本（调用方据此不写剪贴板）"
+    assert!(
+        column_names_for_copy(&columns, &[87, 99], 99).is_empty(),
+        "集合全越界 = 空清单（调用方据此不写剪贴板/不开对话框）"
     );
-    // 右键那一列越界且不在集合里 → 同样空文本
-    assert_eq!(column_names_to_copy(&columns, &[0], 9), "");
-    // 列名清单本身为空（无列的结果集）→ 空文本，不 panic
-    assert_eq!(column_names_to_copy(&[], &[0, 1], 0), "");
+    // 右键那一列越界且不在集合里 → 同样空清单
+    assert!(column_names_for_copy(&columns, &[0], 9).is_empty());
+    // 列名清单本身为空（无列的结果集）→ 空清单，不 panic
+    assert!(column_names_for_copy(&[], &[0, 1], 0).is_empty());
 }
 
 /// 【列注释】清单第二行的取值：`None` / 空串 / 纯空白都不占行（DBeaver 的
@@ -6923,7 +6929,7 @@ fn copying_column_names_uses_the_current_cell_then_every_visible_column(
         None,
         "前提：harness 出厂没有当前格"
     );
-    let outcome = cx.update(|_w, app| panel.update(app, |p, cx| p.copy_column_names(cx)));
+    let outcome = cx.update(|window, app| panel.update(app, |p, cx| p.copy_column_names(window, cx)));
     assert_eq!(
         outcome,
         Ok(crate::copy_names::CopyColumnNamesOutcome::Options(2)),
@@ -6934,14 +6940,11 @@ fn copying_column_names_uses_the_current_cell_then_every_visible_column(
         cx.update(|_w, app| panel.read(app).copy_names_dialog.is_some()),
         "对话框已打开"
     );
-    // 在对话框里把列分隔符换成逗号，再「确定」
-    cx.update(|_w, app| {
+    // 在对话框的「列分隔符」输入框里敲逗号，再「确定」
+    cx.update(|window, app| {
         panel.update(app, |p, cx| {
-            p.set_copy_names_field(
-                crate::copy_names::CopyNamesField::ColumnDelimiter,
-                ",".to_string(),
-                cx,
-            )
+            p.copy_names_inputs[crate::copy_names::CopyNamesField::ColumnDelimiter.index()]
+                .update(cx, |state, cx| state.set_value(",", window, cx))
         })
     });
     cx.update(|_w, app| panel.update(app, |p, cx| p.apply_copy_names_options(cx)));
@@ -6961,7 +6964,7 @@ fn copying_column_names_uses_the_current_cell_then_every_visible_column(
         grid.update(app, |state, cx| state.set_selected_cell(0, 2, cx));
         panel.update(app, |p, cx| p.set_selection_pos(Some((0, 2)), window, cx));
     });
-    let outcome = cx.update(|_w, app| panel.update(app, |p, cx| p.copy_column_names(cx)));
+    let outcome = cx.update(|window, app| panel.update(app, |p, cx| p.copy_column_names(window, cx)));
     assert_eq!(
         outcome,
         Ok(crate::copy_names::CopyColumnNamesOutcome::Copied(1)),
@@ -6971,7 +6974,7 @@ fn copying_column_names_uses_the_current_cell_then_every_visible_column(
 
     // ③ 那一列被藏掉 → 当前格不在可见列上，退回全部可见列（现在只剩一列 → 仍直拷）
     cx.update(|_w, app| panel.update(app, |p, cx| p.set_columns_hidden(vec![1], true, cx)));
-    let outcome = cx.update(|_w, app| panel.update(app, |p, cx| p.copy_column_names(cx)));
+    let outcome = cx.update(|window, app| panel.update(app, |p, cx| p.copy_column_names(window, cx)));
     assert_eq!(
         outcome,
         Ok(crate::copy_names::CopyColumnNamesOutcome::Copied(1)),
@@ -6993,7 +6996,7 @@ fn copying_column_names_is_refused_without_columns(cx: &mut gpui_kit::TestAppCon
             state.refresh(cx);
         });
     });
-    let result = cx.update(|_w, app| panel.update(app, |p, cx| p.copy_column_names(cx)));
+    let result = cx.update(|window, app| panel.update(app, |p, cx| p.copy_column_names(window, cx)));
     let reason = result.err().unwrap_or_default();
     assert!(
         reason.contains("没有可复制的列"),
@@ -7526,7 +7529,7 @@ fn copy_names_options_cancel_leaves_clipboard_and_settings_untouched(
     cx.update(gpui_kit::init);
     let (panel, cx) = panel_harness(cx);
 
-    let outcome = cx.update(|_w, app| panel.update(app, |p, cx| p.copy_column_names(cx)));
+    let outcome = cx.update(|window, app| panel.update(app, |p, cx| p.copy_column_names(window, cx)));
     assert_eq!(
         outcome,
         Ok(crate::copy_names::CopyColumnNamesOutcome::Options(2)),
@@ -7538,14 +7541,11 @@ fn copy_names_options_cancel_leaves_clipboard_and_settings_untouched(
         "打开对话框本身不写剪贴板"
     );
 
-    // 先改成分号，再取消
-    cx.update(|_w, app| {
+    // 输入框里先改成分号，再取消
+    cx.update(|window, app| {
         panel.update(app, |p, cx| {
-            p.set_copy_names_field(
-                crate::copy_names::CopyNamesField::ColumnDelimiter,
-                ";".to_string(),
-                cx,
-            )
+            p.copy_names_inputs[crate::copy_names::CopyNamesField::ColumnDelimiter.index()]
+                .update(cx, |state, cx| state.set_value(";", window, cx))
         })
     });
     cx.update(|_w, app| panel.update(app, |p, cx| p.close_copy_names_options(cx)));
@@ -7574,25 +7574,23 @@ fn copy_names_options_field_values_arrive_as_display_literals(
 ) {
     cx.update(gpui_kit::init);
     let (panel, cx) = panel_harness(cx);
-    cx.update(|_w, app| panel.update(app, |p, cx| p.copy_column_names(cx)));
+    let _ = cx.update(|window, app| panel.update(app, |p, cx| p.copy_column_names(window, cx)));
 
-    cx.update(|_w, app| {
+    cx.update(|window, app| {
         panel.update(app, |p, cx| {
-            p.set_copy_names_field(
-                crate::copy_names::CopyNamesField::ColumnDelimiter,
-                "\\t".to_string(),
-                cx,
-            )
+            p.copy_names_inputs[crate::copy_names::CopyNamesField::ColumnDelimiter.index()]
+                .update(cx, |state, cx| state.set_value("\\t", window, cx))
         })
     });
     assert_eq!(
-        panel.read_with(cx, |p, _| {
-            p.copy_names_dialog
-                .as_ref()
-                .map(|d| d.settings.column_delimiter.clone())
+        panel.read_with(cx, |p, app| {
+            p.copy_names_inputs[crate::copy_names::CopyNamesField::ColumnDelimiter.index()]
+                .read(app)
+                .value()
+                .to_string()
         }),
-        Some("\t".to_string()),
-        "显示串 `\\t` 还原成真正的 Tab"
+        "\\t".to_string(),
+        "输入框里是显示串 `\\t`（两个字面字符）"
     );
 
     cx.update(|_w, app| panel.update(app, |p, cx| p.apply_copy_names_options(cx)));

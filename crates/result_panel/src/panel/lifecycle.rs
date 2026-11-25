@@ -91,6 +91,18 @@ impl ResultPanel {
             state
         });
 
+        // 【复制列名】「选项」对话框的三行输入框（真值 `CopyConfigDialog` 的
+        // `createDelimiterCombo` 是 SWT `Combo`（`SWT.DROP_DOWN`，**可编辑**）：既能直接
+        // 敲文本，也能从下拉候选里挑。本仓用 `Input` + 右侧候选下拉，打开时按记忆样式回填。
+        let copy_names_col_input = cx.new(|cx| InputState::new(window, cx));
+        let copy_names_row_input = cx.new(|cx| InputState::new(window, cx));
+        let copy_names_quote_input = cx.new(|cx| InputState::new(window, cx));
+        let copy_names_inputs = [
+            copy_names_col_input,
+            copy_names_row_input,
+            copy_names_quote_input,
+        ];
+
         // 【结果内查找】查找词输入框 + 订阅（Enter = 下一处，与 DBeaver 查找浮层一致：
         // `FindReplaceOverlay` 的文本框回车走 findNext）
         let find_input = cx.new(|cx| {
@@ -348,6 +360,7 @@ impl ResultPanel {
             // `ResultSetHandlerCopySpecial.java:129-131`）
             copy_names_dialog: None,
             copy_names_settings: crate::copy_names::CopyNamesSettings::default(),
+            copy_names_inputs,
             // 【第 75 批】跳列浮层出厂关；输入框是常驻实体（构造期建好，见上）
             goto_column_open: false,
             goto_column_input,

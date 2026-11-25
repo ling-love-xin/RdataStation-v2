@@ -4092,33 +4092,40 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
 | 标题 | `ResultSetMessages.copy_special_options` = 中文「选项」 | `CopySpecial:126` |
 | 三行 | 列分隔符 / 行分隔符 / 引号字符（`copy_special_col_delim` / `row_delim` / `quote`） | `:154-163` |
 | 默认值 | `\t` / `\n` / `"` | `:129-131` |
-| 候选 | 列 `\t` `;` `,`；行 `\n` `\|` `^` `,`；引号 `"` `'`（`Combo` 不可编辑） | `:154-156` |
+| 三行控件 | 都是**可编辑输入框**：`UIWidgets.createDelimiterCombo` 建 `new Combo(group, SWT.BORDER \| SWT.DROP_DOWN)`，**无 `SWT.READ_ONLY`**；候选用 `escapeDisplayString` 转成显示串，默认值不在候选时先追加，`okPressed` 读 `combo.getText()` 再 `unescapeDisplayString` | `CopySpecial:154-156`、`:178-180`；`UIWidgets.createDelimiterCombo` |
+| 候选 | 列 `\t` `;` `,`；行 `\n` `\|` `^` `,`；引号 `"` `'`（候选只是下拉项，可手输别的） | `:154-156` |
 | 记忆 | Eclipse `DialogSettings(dialogId)` 三项，打开回填、确定写回 | `:132-140`、`:181-186` |
 | 提示行 | `copy_special_hint_for_hotkey` + `CMD_COPY_SPECIAL_LAST` 键位描述 | `:161-163` |
 
 截图实证的中文：标题「选项」、`列分隔符`、`行分隔符`、`引号字符`、
 「将来在此设置下可以使用快捷键：Ctrl+Alt+Shift+C」、`确定` / `取消`；
-下拉里显示转义字面量（`\t` / `\n`），不是控制字符本身。
+三个输入框里显示的是转义字面量（`\t` / `\n` 两个字符），不是控制字符本身——
+它们是可编辑输入框（截图里为白底输入区），不是只读下拉。
 
 #### 57.11.2 本仓落点
 
 | 项 | 落点 |
 | --- | --- |
 | 参数模型 / 文案 / 候选 / 转义 / 拼接 / 判定 | 新增 `crates/result_panel/src/copy_names.rs` |
-| 命令本体（多列开浮层、单列直拷） | `panel/events.rs::copy_column_names`（返回 `CopyColumnNamesOutcome`） |
-| 浮层渲染（420px 卡片 + 三行下拉 + 提示 + 页脚） | `panel/dialog.rs::render_copy_names_options` |
+| 命令本体（多列开浮层、单列直拷） | `panel/events.rs::copy_column_names(window, cx)`（返回 `CopyColumnNamesOutcome`）；`copy_names_for` 是快捷键 / 清单两入口共用分流 |
+| 三行控件 | `Input`（`copy_names_inputs: [Entity<InputState>; 3]`，可编辑、存显示串）+ 右邻只 caret 的 `DropdownButton` 候快捷填入（`InputState::set_value`） |
+| 浮层渲染（420px 卡片 + 三行输入框 + 提示 + 页脚） | `panel/dialog.rs::render_copy_names_options` / `render_copy_names_row` |
 | 挂载 / ESC 收口 | `panel/render.rs` 浮层链末尾；`panel/events.rs::dismiss_overlay` |
-| 动作入口 | `ports.rs` 三变体 → `editor/.../results/dispatch.rs` 三分支 |
+| 动作入口 | `ports.rs` 三变体（`CopyColumnNames{names}` / `Apply…` / `Close…`）→ `editor/.../results/dispatch.rs` 三分支 |
 | 状态行文案 | `editor/.../exec/edit_cmds.rs::on_copy_column_names` |
-| 回归哨兵 | `editor-result-copy-names`（遮罩）、`-card`、`-column-delimiter` / `-row-delimiter` / `-quote`、`-cancel` / `-apply` |
+| 回归哨兵 | `editor-result-copy-names`（遮罩）、`-card`、`-column-delimiter` / `-row-delimiter` / `-quote`（包 `Input`）、`-candidates-{id}`、`-cancel` / `-apply` |
 
 #### 57.11.3 仍存差异
 
-1. 面板内 `absolute` 遮罩卡片，不是窗口级 `BaseDialog`。
-2. 下拉是 `DropdownButton`（左半只读值 + 右半 caret），真值 `Combo`；不支持手输自定义分隔符。
+1. 面板内 `absolute` 遮罩卡片，不是窗口级 `BaseDialog`（无 −/□/×，用卡片右上角 ✕）。
+2. 三行的**可编辑性已对齐**（真值 `Combo` 无 `READ_ONLY` → 本仓 `Input` 可手输）；
+   仍存的形态差是「一个带内嵌箭头的 `Combo`」vs「`Input` + 右邻独立 caret 按钮」两控件
+   （gpui-kit `Input` 无内嵌下拉后缀，不手搓）。
 3. 提示行是固定中文原文，不解析 `CMD_COPY_SPECIAL_LAST` 键位（本仓无「复制特殊」命令）。
-4. 多列来源：真值取表格**列选区**；本仓表格无列多选，多列只在 `ALT+SHIFT+C`「无焦点格 → 全部可见列」出现。
-   列头右键单列直拷、列浏览器清单换行直拷（都按真值各自的命令口径）。
+4. 多列来源：真值取表格**列选区**；本仓表格无列多选，多列在 `ALT+SHIFT+C`「无焦点格 → 全部可见列」
+   与**列浏览器清单多选**两处出现。列头右键单列直拷（真值同）。
+   清单那条真值命令（`meta_data_panel_action_copy_column_text`）本是换行直拷不弹窗，
+   本仓统一到「>1 列弹选项」是**按用户诉求的增强**（登记于 result-panel.md §9.73.3-4）。
 5. 不加引号；样式只在会话内记忆（真值写 `DialogSettings` 落盘）。
 
 细节见 `docs/architecture/editor/result-panel.md` §9.73。

@@ -93,11 +93,12 @@ impl Render for PreviewHost {
                     self.panel
                         .update(cx, |p, cx| p.close_auto_refresh_config(cx));
                 }
-                // 【复制列名】「选项」浮层三出口（真值 `CopyConfigDialog`）：纯面板态
-                ResultRequest::SetCopyNamesField { field, value } => {
-                    let (field, value) = (*field, value.clone());
-                    self.panel
-                        .update(cx, |p, cx| p.set_copy_names_field(field, value, cx));
+                // 【复制列名】清单多选集合 + 「选项」浮层两出口（真值 `CopyConfigDialog`）
+                ResultRequest::CopyColumnNames { names } => {
+                    let names = names.clone();
+                    let _ = self.panel.update(cx, |p, cx| {
+                        p.copy_column_names_from_list(names, window, cx)
+                    });
                 }
                 ResultRequest::ApplyCopyNamesOptions => {
                     self.panel
@@ -370,7 +371,7 @@ fn run_preview() {
                     // （单列不弹；想验单列可在网格里点一格再用键位）。
                     if stage == 5 {
                         let outcome =
-                            panel.update(cx, |p, cx| p.copy_column_names(cx));
+                            panel.update(cx, |p, cx| p.copy_column_names(window, cx));
                         eprintln!("[preview] copy_column_names -> {outcome:?}");
                     }
                     if stage == 2 {

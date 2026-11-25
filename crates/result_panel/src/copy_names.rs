@@ -134,6 +134,22 @@ pub enum CopyNamesField {
 }
 
 impl CopyNamesField {
+    /// 三行从上到下的顺序（对话框渲染与三只输入框的索引都取它）
+    pub const ALL: [CopyNamesField; 3] = [
+        CopyNamesField::ColumnDelimiter,
+        CopyNamesField::RowDelimiter,
+        CopyNamesField::QuoteString,
+    ];
+
+    /// 在 [`Self::ALL`] 里的位置（= `ResultPanel::copy_names_inputs` 的下标）
+    pub fn index(self) -> usize {
+        match self {
+            CopyNamesField::ColumnDelimiter => 0,
+            CopyNamesField::RowDelimiter => 1,
+            CopyNamesField::QuoteString => 2,
+        }
+    }
+
     /// 把选中值写进样式（值来自下拉候选或用户输入，已 `unescape` 过）
     pub fn apply(self, settings: &mut CopyNamesSettings, value: String) {
         match self {

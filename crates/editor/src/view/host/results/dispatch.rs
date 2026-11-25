@@ -323,11 +323,15 @@ impl EditorHostPanel {
             ResultRequest::CloseAutoRefreshConfig => self
                 .result_panel
                 .update(cx, |p, cx| p.close_auto_refresh_config(cx)),
+            // 【复制列名】列浏览器清单的多选集合：与 `ALT+SHIFT+C` 同一分流（单列直拷 /
+            // 多列开「选项」浮层）。状态行不另报（清单自己就在用户眼前）
+            ResultRequest::CopyColumnNames { names } => {
+                let _ = self.result_panel.update(cx, |p, cx| {
+                    p.copy_column_names_from_list(names, window, cx)
+                });
+            }
             // 【复制列名】「选项」对话框（真值 `ResultSetHandlerCopySpecial.CopyConfigDialog`）：
-            // 三行的下拉选中 / 「确定」/「取消」，全部只动面板状态与剪贴板，不需要 window
-            ResultRequest::SetCopyNamesField { field, value } => self
-                .result_panel
-                .update(cx, |p, cx| p.set_copy_names_field(field, value, cx)),
+            // 「确定」读三行输入框（不需要 window，`InputState::value()` 走 `&App`）/「取消」
             ResultRequest::ApplyCopyNamesOptions => self
                 .result_panel
                 .update(cx, |p, cx| p.apply_copy_names_options(cx)),

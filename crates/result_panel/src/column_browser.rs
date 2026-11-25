@@ -262,12 +262,15 @@ impl ListDelegate for ColumnBrowserDelegate {
         let selected: Vec<usize> = self.selected_set.clone();
         let copy_text = delegate.column_text(data_col);
         let stats_payload = delegate.column_stats_payload(data_col);
-        // 【复制列名】要拷哪些列：右键这一列在**多选集合**里 → 拷整个集合（升序），
-        // 否则只拷这一列（对齐 DBeaver：拷的是清单当前的结构化选中项，多选才有多行）
+        // 【复制列名】要拷哪些列：右键这一列在**多选集合**里 → 拷整个集合（按数据列序），
+        // 否则只拷这一列。**命名（多列）与真值 `CMD_COPY_COLUMN_NAMES` 同路**：>1 列先弹
+        // 「选项」对话框，单列直拷（2026-11-26 用户要求；本仓表格没有列选区，清单是唯一
+        // 的多选入口，真值里那条清单命令是换行直拷、不弹——这里按用户诉求统一到对话框）
         let copy_names = {
             let columns = delegate.columns();
-            column_names_to_copy(columns, &self.selected_set, data_col)
+            column_names_for_copy(columns, &self.selected_set, data_col)
         };
+        let names_queue = self.queue.clone();
 
         // 双击判定：ListItem 无 on_double_click，单击（click_count == 1）留给 List
         // 内部 confirm（SelectColumn），双击在第二次点击时入队 LocateColumn
@@ -325,15 +328,20 @@ impl ListDelegate for ColumnBrowserDelegate {
                 for item in menu_items.clone() {
                     match item.action {
                         result_grid::ContextAction::CopyColumnNames => {
-                            // 文本在渲染期算好（多选集合 / 列名都只有此刻拿得到）
-                            let text = copy_names.clone();
+                            // 列名清单在渲染期算好（多选集合 / 列名都只有此刻拿得到），
+                            // 交给面板走同一条「单列直拷 / 多列弹选项」分流
+                            let names = copy_names.clone();
+                            let queue_copy = names_queue.clone();
                             menu = menu.item(PopupMenuItem::new(item.label).on_click(
                                 move |_, _window, app| {
-                                    // 空文本不写剪贴板（DBeaver 同口径：`text.isEmpty()` 直接返回）
-                                    if text.is_empty() {
+                                    // 空集合不做事（DBeaver 同口径：`text.isEmpty()` 直接返回）
+                                    if names.is_empty() {
                                         return;
                                     }
-                                    app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                                    queue_copy.request(
+                                        ResultRequest::CopyColumnNames { names: names.clone() },
+                                        app,
+                                    );
                                 },
                             ));
                         }
@@ -572,25 +580,21 @@ pub(crate) fn browser_comment_text(comment: &Option<String>) -> Option<String> {
         .map(|comment| comment.to_string())
 }
 
-/// 【复制列名】要写进剪贴板的文本（纯函数；对齐 DBeaver
-/// `meta_data_panel_action_copy_column_text`：选中几行就拷几行，换行分隔）。
-///
-/// 取法：右键那一列在**多选集合**里 → 拷整个集合（按数据列序）；否则只拷它自己。
-/// 集合里的下标越界一律跳过（搜索词把行过滤掉后旧下标可能失效）。
-pub(crate) fn column_names_to_copy(
+/// 【复制列名】要拷哪些列（纯函数）：右键那一列在**多选集合**里 → 整个集合（按数据列序）；
+/// 否则只拷它自己。集合里的下标越界一律跳过（搜索词把行过滤掉后旧下标可能失效）。
+pub(crate) fn column_names_for_copy(
     columns: &[String],
     selected: &[usize],
     clicked: usize,
-) -> String {
+) -> Vec<String> {
     if selected.contains(&clicked) {
         selected
             .iter()
             .filter_map(|column| columns.get(*column))
             .cloned()
-            .collect::<Vec<_>>()
-            .join("\n")
+            .collect()
     } else {
-        columns.get(clicked).cloned().unwrap_or_default()
+        columns.get(clicked).cloned().into_iter().collect()
     }
 }
 

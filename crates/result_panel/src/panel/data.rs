@@ -82,15 +82,14 @@ pub struct SavedFilterSetting {
 
 /// 【复制列名】「选项」对话框的打开态（真值 `ResultSetHandlerCopySpecial.CopyConfigDialog`）。
 ///
-/// 字段就是这次要拷的列名 + 对话框里三个可编辑值。真值每次打开都新建一份 dialog，并把
-/// 上次确认的样式回填（`DialogSettings("CopyGridNamesOptionsDialog")`）；本仓的「上次样式」
-/// 存在 [`ResultPanel::copy_names_settings`]，打开时拷一份进这里，取消不影响已记忆的样式。
+/// 字段就是这次要拷的列名。对话框里的三个值不在这儿——它们活在
+/// [`ResultPanel::copy_names_inputs`] 的三只输入框里（真值 `Combo` 可编辑，
+/// 「确定」时才 `unescapeDisplayString` 回读）；上次确认的样式存在
+/// [`ResultPanel::copy_names_settings`]，每次打开回填，取消不影响已记忆的样式。
 #[derive(Clone, Debug)]
 pub(crate) struct CopyNamesDialog {
     /// 这次要拷的列名（按数据列序；单列时不会打开本对话框）
     pub names: Vec<String>,
-    /// 对话框当前值（下拉选中会改写它；「确定」才回写 `copy_names_settings`）
-    pub settings: crate::copy_names::CopyNamesSettings,
 }
 
 impl SavedFilterSetting {
@@ -487,6 +486,10 @@ pub struct ResultPanel {
     /// 【复制列名】上次确认的样式（真值存 Eclipse `DialogSettings`，下次打开回填；
     /// 本仓只在会话内记忆，不落盘——与 AutoRefresh 配置同口径）
     pub(crate) copy_names_settings: crate::copy_names::CopyNamesSettings,
+    /// 【复制列名】「选项」对话框的三行输入框（顺序 = `CopyNamesField::ALL`：
+    /// 列分隔符 / 行分隔符 / 引号字符）。打开对话框时按记忆样式回填成显示串，
+    /// 「确定」时逐行 `value()` 读回来
+    pub(crate) copy_names_inputs: [Entity<InputState>; 3],
     pub(crate) result_can_copy: bool,
     pub(crate) fetching_more: bool,
     /// 导出菜单静态上下文（sync 写入；render 期只读）

@@ -651,14 +651,17 @@ impl ResultPanel {
     /// 【复制列名】「选项」对话框（真值 `ResultSetHandlerCopySpecial.CopyConfigDialog`，
     /// 实例化于 `ResultSetHandlerMain.java:352`，dialogId = `CopyGridNamesOptionsDialog`）
     ///
-    /// 形态按截图 1:1：标题「选项」+ 三行（列分隔符 / 行分隔符 / 引号字符，均下拉，
-    /// 下拉里显示转义字面量 `\t` / `\n`）+ 提示行
+    /// 形态按截图 1:1：标题「选项」+ 三行（列分隔符 / 行分隔符 / 引号字符，**都是可编辑输入框**
+    /// ——真值 `UIWidgets.createDelimiterCombo` 用的是 SWT `Combo(SWT.DROP_DOWN)`，可敲字，
+    /// 也能从下拉候选里挑；输入框右侧那颗 caret 就是候选下拉）+ 提示行
     /// 「将来在此设置下可以使用快捷键：Ctrl+Alt+Shift+C」+ 取消 / 确定。
     ///
-    /// 本仓差异（登记 `result-panel.md` §9.73.3）：
-    /// - 面板内 absolute 遮罩，不是窗口级 `BaseDialog`（面板 render 拿不到 `&mut Window`）；
-    /// - 下拉是组件 `DropdownButton`（左半显当前值、右半 caret 开候选），真值是可编辑 `Combo`；
-    /// - 没有「重复上次复制特殊」命令，提示行按真值文案固定显示（不随快捷键解析）。
+    /// 输入框里放的是**显示串**（`\t` / `\n` 两个字面字符，真值 `Combo` 同口径）：
+    /// 「确定」时逐行 `unescape`（`CommonUtils.unescapeDisplayString`，`:178-180`）还原成
+    /// 控制字符再拼文本。
+    ///
+    /// 登记差异（`result-panel.md` §9.73.3）：面板内 absolute 遮罩，不是窗口级 `BaseDialog`
+    /// （面板 render 拿不到 `&mut Window`）；提示行按真值中文原文固定显示。
     pub(crate) fn render_copy_names_options(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let close_queue = self.queue.clone();
@@ -669,6 +672,17 @@ impl ResultPanel {
             .as_ref()
             .map(|dialog| dialog.names.len())
             .unwrap_or(0);
+        // 行尾预览：直接用第一行输入框里的显示串（空 = 无分隔符，会拼成一串）
+        let delimiter_preview = self.copy_names_inputs
+            [crate::copy_names::CopyNamesField::ColumnDelimiter.index()]
+        .read(cx)
+        .value()
+        .to_string();
+        let preview_note = if delimiter_preview.is_empty() {
+            format!("将复制 {count} 个列名（无分隔符）")
+        } else {
+            format!("将复制 {count} 个列名（分隔符 {delimiter_preview}）")
+        };
         div()
             .absolute()
             .inset_0()
@@ -763,18 +777,7 @@ impl ResultPanel {
                                     .min_w_0()
                                     .text_xs()
                                     .text_color(theme.colors.muted_foreground)
-                                    .child(SharedString::from(format!(
-                                        "将复制 {count} 个列名（{})",
-                                        crate::copy_names::escape_display_string(
-                                            self.copy_names_dialog
-                                                .as_ref()
-                                                .map(|dialog| dialog
-                                                    .settings
-                                                    .column_delimiter
-                                                    .as_str())
-                                                .unwrap_or("\t")
-                                        )
-                                    ))),
+                                    .child(SharedString::from(preview_note)),
                             )
                             .child(
                                 Button::new("editor-result-copy-names-cancel")
@@ -803,10 +806,10 @@ impl ResultPanel {
             .into_any_element()
     }
 
-    /// 「选项」对话框的一行：label + 下拉（左半显当前值、右半 caret 开候选）。
+    /// 「选项」对话框的一行：label + **可编辑输入框** + 右侧候选下拉（只画 caret）。
     ///
-    /// 显示值走 [`crate::copy_names::escape_display_string`]：`\t` 显示成 `\t` 两个字面字符
-    /// （真值 `UIWidgets.createDelimiterCombo` 同口径，截图里就是这样）。
+    /// 真值三行都是 `Combo`（可输可选），所以这里不是「选择框」：文本由输入框持有，
+    /// 候选只是「点一下帮你填进去」的快捷方式（`set_value` 写显示串）。
     fn render_copy_names_row(
         &self,
         id: &'static str,
@@ -814,60 +817,48 @@ impl ResultPanel {
         field: crate::copy_names::CopyNamesField,
         candidates: &'static [&'static str],
     ) -> AnyElement {
-        let current = self
-            .copy_names_dialog
-            .as_ref()
-            .map(|dialog| field.value(&dialog.settings).to_string())
-            .unwrap_or_default();
-        let shown = crate::copy_names::escape_display_string(&current);
-        let queue = self.queue.clone();
+        let input = self.copy_names_inputs[field.index()].clone();
+        let menu_input = input.clone();
         div()
             .h_flex()
             .items_center()
             .gap_2()
-            .child(div().w(rems(6.)).text_sm().child(label))
             .child(
                 div()
-                    .w(rems(9.))
-                    .debug_selector(move || format!("editor-result-copy-names-{id}"))
-                    .child(
-                        DropdownButton::new(ElementId::Name(SharedString::from(format!(
-                            "editor-result-copy-names-dd-{id}"
-                        ))))
-                        .small()
-                        .button(
-                            Button::new(ElementId::Name(SharedString::from(format!(
-                                "editor-result-copy-names-value-{id}"
-                            ))))
-                            .label(shown)
-                            .ghost()
-                            .small(),
-                        )
-                        .dropdown_menu(move |mut menu, _window, _cx| {
-                            for candidate in candidates.iter() {
-                                let queue = queue.clone();
-                                // 菜单项显示转义字面量（`\t`），值也按**显示串**回传：
-                                // 真值 Combo 存的就是显示串，`okPressed` 才
-                                // `unescapeDisplayString` 还原成控制字符（`:178-180`）
-                                let shown = crate::copy_names::escape_display_string(candidate);
-                                let value = shown.clone();
-                                menu = menu.item(
-                                    PopupMenuItem::new(shown).on_click(move |_, _window, app| {
-                                        queue.request(
-                                            ResultRequest::SetCopyNamesField {
-                                                field,
-                                                value: value.clone(),
-                                            },
-                                            app,
-                                        );
-                                    }),
-                                );
-                            }
-                            menu
-                        }),
-                    ),
+                    .w(rems(6.))
+                    .flex_none()
+                    .text_sm()
+                    .child(label),
             )
-            .child(div().flex_1())
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .debug_selector(move || format!("editor-result-copy-names-{id}"))
+                    .child(Input::new(&input)),
+            )
+            .child(
+                DropdownButton::new(ElementId::Name(SharedString::from(format!(
+                    "editor-result-copy-names-candidates-{id}"
+                ))))
+                .small()
+                .dropdown_menu(move |mut menu, _window, _cx| {
+                    for candidate in candidates.iter() {
+                        let shown = crate::copy_names::escape_display_string(candidate);
+                        let input = menu_input.clone();
+                        let value = shown.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(shown).on_click(move |_, window, app| {
+                                let value = value.clone();
+                                input.update(app, |state, cx| {
+                                    state.set_value(value, window, cx)
+                                });
+                            }),
+                        );
+                    }
+                    menu
+                }),
+            )
             .into_any_element()
     }
 
