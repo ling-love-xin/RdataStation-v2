@@ -630,6 +630,15 @@ async fn table_asset_trash_cycles_the_registry_only() {
     .await
     .expect("登记表型资产");
 
+    // 还原前预检要看「分析库里那张表还在」：先把本体建出来。
+    let analytics_db = engine::persistence::ProjectDatabaseManager::analysis_db_path(&dir);
+    std::fs::create_dir_all(dir.join(".RSmeta")).expect("建 .RSmeta");
+    {
+        let conn = duckdb::Connection::open(&analytics_db).expect("建项目分析库");
+        conn.execute_batch("CREATE TABLE res_t_order_wide (id INTEGER);")
+            .expect("建表型本体");
+    }
+
     let entry = service
         .move_to_trash(&[registered.resource_id.clone()])
         .await
@@ -690,5 +699,66 @@ async fn table_asset_trash_cycles_the_registry_only() {
         "永久删除后登记行应彻底消失"
     );
 
+    let _ = fs::remove_dir_all(&dir).await;
+}
+
+/// 表型登记还在回收站，但用户已经把分析库里的表手工 DROP：还原必须当场拒绝，
+/// 而不是复活一条指向空处的 Missing 行。
+#[tokio::test]
+async fn table_restore_refuses_when_analytics_table_is_gone() {
+    use crate::table_asset::{TableAssetRequest, register};
+
+    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let registered = register(
+        service.store(),
+        TableAssetRequest {
+            name: "已丢的表".to_string(),
+            analytics_table: "res_t_gone".to_string(),
+            row_count: Some(1),
+            column_count: Some(1),
+        },
+    )
+    .await
+    .expect("登记表型资产");
+
+    // 项目分析库存在，但里面没有 `res_t_gone`（只放一张无关表，确保文件是真 DuckDB）。
+    let analytics_db = engine::persistence::ProjectDatabaseManager::analysis_db_path(&dir);
+    std::fs::create_dir_all(dir.join(".RSmeta")).expect("建 .RSmeta");
+    {
+        let conn = duckdb::Connection::open(&analytics_db).expect("建项目分析库");
+        conn.execute_batch("CREATE TABLE unrelated (id INTEGER);")
+            .expect("建无关表");
+    }
+
+    let entry = service
+        .move_to_trash(&[registered.resource_id.clone()])
+        .await
+        .expect("表型移入回收站")
+        .remove(0);
+    let error = service
+        .restore_archive_from_trash(&entry.trash_id)
+        .await
+        .expect_err("表已不在，还原必须被拒");
+    let message = format!("{error}");
+    assert!(
+        message.contains("已经没有表") && message.contains("res_t_gone"),
+        "错误要说清哪张表没了，实际：{message}"
+    );
+    assert!(
+        service
+            .store()
+            .get_resource_by_id(&registered.resource_id)
+            .await
+            .expect("软删行仍可读")
+            .deleted_at
+            .is_some(),
+        "拒绝还原后登记行必须仍在回收站"
+    );
+
+    // 收掉这条登记（永久删除只清登记，不动分析库）。
+    service
+        .purge_archive(&entry.trash_id)
+        .await
+        .expect("永久删除表型登记");
     let _ = fs::remove_dir_all(&dir).await;
 }

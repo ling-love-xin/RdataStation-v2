@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::model::*;
+use shared::error::CommonError;
 
 impl ArchiveService {
     /// 把一个或多个存档移入项目级回收站（原型 §4.7：`Delete` / 右键 / 后续的危险区）。
@@ -184,13 +185,24 @@ impl ArchiveService {
             return self.store.get_resource_by_id(resource_id).await;
         }
 
-        // 表型条目：和引用型一样没有实体 manifest；还原 = 复活登记行，表一直在分析库。
+        // 表型条目：和引用型一样没有实体 manifest；还原 = 复活登记行，但**先确认表还在**。
+        // 表被用户手工 DROP 后还硬还原，只会把列表里多一条 Missing 行——与其事后惊一下，
+        // 不如当场说清「表已不在，要清登记请永久删除」。
         if let Some(resource_id) = trash_id.strip_prefix(TRASH_ID_TABLE_PREFIX) {
             let record = self.store.get_resource_by_id(resource_id).await?;
             if record.deleted_at.is_none() {
                 return Err(service_err(
                     "untrash",
                     &format!("「{}」不在回收站里", record.name),
+                ));
+            }
+            let table = record.analytics_table.as_deref().unwrap_or("");
+            if self.analysis_table_present(table).await? == Some(false) {
+                return Err(service_err(
+                    "untrash",
+                    &format!(
+                        "分析库里已经没有表「{table}」：还原只会多一条缺失登记，请改用永久删除清理这条记录"
+                    ),
                 ));
             }
             self.store.undelete_archive(resource_id, None).await?;
@@ -471,4 +483,54 @@ impl ArchiveService {
         Ok(())
     }
 
+    /// 表型还原前的存在性预检：`Some(true/false)` 是查到确定结果，`None` 是**拿不到**
+    /// （项目主写连接占着 `analytics.duckdb`、或文件不是 DuckDB）。
+    ///
+    /// 拿不到时**不拦还原**：Windows 上 DuckDB 同文件单句柄，运行期再开连接必撞锁；
+    /// 为了一个预检把正常还原卡死，比偶尔漏报一条 Missing 行更糟。撞锁只记 warn。
+    async fn analysis_table_present(&self, table: &str) -> Result<Option<bool>, CoreError> {
+        let path = engine::persistence::ProjectDatabaseManager::analysis_db_path(
+            self.payload.project_root(),
+        );
+        if table.trim().is_empty() || !path.exists() {
+            return Ok(Some(false));
+        }
+        let table = table.to_string();
+        let path_sql = path.display().to_string().replace('\'', "''");
+        tokio::task::spawn_blocking(move || -> Result<Option<bool>, CoreError> {
+            let conn = duckdb::Connection::open_in_memory().map_err(|e| {
+                CoreError::common(CommonError::General(format!(
+                    "打开内存 DuckDB 以校验表存在性失败：{e}"
+                )))
+            })?;
+            let attach = format!("ATTACH DATABASE '{path_sql}' AS probe (READ_ONLY);");
+            if let Err(error) = conn.execute_batch(&attach) {
+                tracing::warn!(
+                    error = %error,
+                    table = %table,
+                    "无法只读挂载项目分析库，跳过表型还原的存在性预检"
+                );
+                return Ok(None);
+            }
+            let count: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM duckdb_tables() \
+                     WHERE database_name = 'probe' AND schema_name = 'main' AND table_name = ?1",
+                    duckdb::params![table.as_str()],
+                    |row| row.get(0),
+                )
+                .map_err(|e| {
+                    CoreError::common(CommonError::General(format!(
+                        "查询项目分析库表清单失败：{e}"
+                    )))
+                })?;
+            Ok(Some(count > 0))
+        })
+        .await
+        .map_err(|e| {
+            CoreError::common(CommonError::General(format!(
+                "表型还原预检任务失败：{e}"
+            )))
+        })?
+    }
 }

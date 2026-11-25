@@ -217,8 +217,8 @@ Windows 单句柄下互相 `ATTACH` 会撞「文件被占用」（分发侧同�
 | 迁移 020 + 新列接入（写入 + 读取 + 按本体路径查重） | `kind` 过滤的**存储层**入口（面板已能按 kind 筛可见行，SQL 未接，后续刀） |
 | **全局一版一张表**【刀 4 + 2026-11-25】`global/table_name.rs`：升级落 `res_<描述>_<时间戳>`、旧版表保留；`analytics_table` 记实际表名（迁移 `global/036` 给老行回填成资产名，读取面另有 `name` 回退）；升级冲突只剩登记层，覆盖只软删登记；全局表型行打开走 `SampleSource::on_global`；**全局实例删除已落**（`global/delete.rs` + 详情危险区 + 列表右键「从全局实例删除…」，见下） | — |
 | **表型 `KeepVersions`**【刀 6】`prune_version_tables`：升级成功后按设置里的保留策略裁掉更早版本的**表**；当前版本那张是「本体」永远留，`keep` 数历史份数（`MetadataOnly` 只留当前一张）；**登记行与版本快照一条不删**；内容被清的那版分发时报「已被保留策略清理」而不是 DuckDB Catalog Error；裁剪失败只记日志，不回滚升级 | — |
-| **表型动作判据 + 回收站闭环**【2026-11-25】`ActionContext` 增 `has_table`，「有本体」= 文件或分析库表：打开 / 升级 / 详情删除走 `has_body`，取回只认文件本体（表型置灰并给「去 SQL 里改数据」提示）；回收站 `tbl:` 条目只软删登记、分析库表保留，还原 / 永久删除按 `has_payload` 分派提示 | — |
-| **全局实例删除**【2026-11-25】`GlobalInstanceStore::delete_global`：逐张 `DROP` 同名各版表 → 单事务删版本快照、全局登记、分发回执；失败中止可重试；回执写明版本数 / 表数 / 曾分发项目数；`can_delete_global` 不看本体状态（表已丢时正好清脏登记） | —（本体缺失也能删，是清理手段不是缺口） |
+| **表型动作判据 + 回收站闭环**【2026-11-25】`ActionContext` 增 `has_table`，「有本体」= 文件或分析库表：打开 / 升级 / 详情删除走 `has_body`，取回只认文件本体（表型置灰并给「去 SQL 里改数据」提示）；回收站 `tbl:` 条目只软删登记、分析库表保留，还原 / 永久删除按 `has_payload` 分派提示；**还原前只读挂载项目分析库预检表是否还在**，撞锁拿不到就不拦还原 | — |
+| **全局实例删除**【2026-11-25】`GlobalInstanceStore::delete_global`：逐张 `DROP` 同名各版表 → 单事务删版本快照、全局登记、分发回执；失败中止可重试；回执写明版本数 / 表数 / 曾分发项目数；`can_delete_global` 不看本体状态（表已丢时正好清脏登记），也不看项目只读（只动全局库） | —（本体缺失也能删，是清理手段不是缺口） |
 | **来源链浏览 + 分发谱系**【刀 3 + 2026-11-25】`origin_kind` + `origin_ref` 记**直接上游**那一跳（全局行 `project` + 资源 id/版本；项目行 `global` + 实例/版本），详情「来源」区多一行「上游」；详情动作区「查看来源链…」按 id 在面板快照里逐跳往上追（最多 8 跳、防环；上游不在快照时如实灰显并注明可能已删除或在别的项目）；分发成功后补记 `derived_from`（项目产物 → 全局上游，失败只告警不回滚分发） | 升级路径尚无 `derived_from`（产物落在全局库，项目侧没有对应行可挂） |
 | **表型升级**【刀 5c】本体是项目分析库里一张表的存档也能升级：入口只给表名 → 工作线程 `COPY` 整表出 parquet → 按数据文件升级；`COPY` 不带 LIMIT（不采样），临时文件用完即删，项目侧表原样留着 | — |
 | **数据对象面板的单一升级路径**【刀 7 / 刀 12】场景 3 在面板里闭环：会话表（结果集 / 洞察产物）→「存为表」（整表搬进项目库，成功顺手重取面板清单）。面板上**只有这一条升级路径**——「升级」的唯一含义是临时对象 → 项目持久表；全局升级入口在资产库：详情动作区与列表右键「升级到全局…」（`detail_actions::request_promote_to_global`），刀 12 撤掉了面板里那个第二个入口（同一动作两处语义会互相打脸） | 面板不再提供全局升级；文件型与表型资产都走资产库那两条入口 |
@@ -228,5 +228,5 @@ Windows 单句柄下互相 `ATTACH` 会撞「文件被占用」（分发侧同�
 ## 设计与验证
 
 - 设计（权威）：`docs/architecture/analytics_resource/` —— `README.md`（模块入口）· `analytics-resource-architecture.md`（语义裁决与数据流）· `analytics-resource-prototype-design.md` + `analytics-resource-prototype.html`（原型）· `analytics-resource-dev-plan.md`（进度与任务）· `analytics-resource-user-guide.md`（使用手册）。**这些是阶段快照**：其中的测试数、迁移编号与待办状态停在 2026-10 / 11，当前状态以本 README、`D:\RdataStation\RDS\M6-终审问题清单-2026-11-12.md` 为准。
-- 验证（2026-11-25 实测）：`cargo check -p rds-analytics-resource --all-targets -j 1` 零错误；`cargo test -p rds-analytics-resource -j 1` → **278 单测 + 10 对话框 + 29 面板 = 317 项全绿**；下游 `cargo test -p rds-workbench -j 1 --lib` → **219 项全绿**，`--test ui_contract` → 10 项全绿，`cargo test -p rds-ui-guard -j 1` → 4 项全绿。全仓 `cargo test --workspace` 链接耗时较长；**CI 不跑产品测试**（`ci.yml` 只做 `clippy-all` 与单个 ui-guard 用例），合并前必须本地跑 `cargo test-all`。
+- 验证（2026-11-25 实测）：`cargo check -p rds-analytics-resource --all-targets -j 1` 零错误零警告；`cargo test -p rds-analytics-resource -j 1` → **279 单测 + 10 对话框 + 29 面板 = 318 项全绿**；下游 `cargo test -p rds-workbench -j 1 --lib` → **219 项全绿**，`--test ui_contract` → 10 项全绿，`cargo test -p rds-ui-guard -j 1` → 4 项全绿。全仓 `cargo test --workspace` 链接耗时较长；**CI 不跑产品测试**（`ci.yml` 只做 `clippy-all` 与单个 ui-guard 用例），合并前必须本地跑 `cargo test-all`。
 - **命令约定**：全量编译/测试必须限制并发（`cargo test-all` / `cargo check-all` 别名，含 `-j 2` 与 `RUST_MIN_STACK`）——并发链接重型 crate 会耗尽内存（DuckDB 已改动态链接）。
