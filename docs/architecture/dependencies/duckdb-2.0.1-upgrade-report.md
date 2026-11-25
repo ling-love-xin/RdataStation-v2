@@ -29,7 +29,7 @@
 | --- | --- |
 | 根 `Cargo.toml` | `duckdb = { version = "=1.20001.0", features = ["appender-arrow"] }`；`arrow = "60.1.0"`（manifest 下界，锁到 60.2.0）；注释块改写成 2.0 口径，1.5 的 patch 沿革降为历史行 |
 | `.cargo/config.toml` | `DUCKDB_LIB_DIR = { value = "third_party/duckdb/2.0.1", relative = true }` |
-| `third_party/duckdb/2.0.1/` | 新增（**gitignore，不入库**）；`1.5.5/`、`1.5.6/` 暂留未删（见 §10） |
+| `third_party/duckdb/2.0.1/` | 新增（**gitignore，不入库**）；`1.5.5/`、`1.5.6/` 已于 2026-11-26 删除（见 §10） |
 | `tools/fetch-duckdb.sh` | 默认 `VERSION="${1:-2.0.1}"`；按主版本分档资产名；注释示例改成 `2.0.1` |
 
 > `tools/package-release.sh` 从 `.cargo/config.toml` 的 `DUCKDB_LIB_DIR` 反查版本（单一来源），无需改；
@@ -105,13 +105,14 @@
 
 ## 9. 回退路径
 
-- **代码 / 构建**：`third_party/duckdb/1.5.6/` 仍在本机未删 → 改回 `=1.10506.1` + `DUCKDB_LIB_DIR=third_party/duckdb/1.5.6` + `arrow ^58` 即可重建。
+- **代码 / 构建**：`third_party/duckdb/1.5.6/` 已随本次清理删除（§10）。要回退就先 `tools/fetch-duckdb.sh 1.5.6` 把库取回来，再改根 `Cargo.toml` 回 `=1.10506.1` + `DUCKDB_LIB_DIR=third_party/duckdb/1.5.6` + `arrow ^58`，即可重建。
 - **数据（不可逆的部分）**：2.0 新建的 DuckDB 文件是 `storage version 69`，1.5 打不开。升级后用户已有分析库一旦被 2.0 写过（`ATTACH … READ_WRITE`）就可能被推高存储版本。**产品结论待定**：是否要在打开旧库前做一次"版本探测 + 只读挂载"，以及是否保留 1.5 客户端兼容承诺——这是升级带来的唯一需产品拍板的点。
 
-## 10. 清理项（未执行，待拍板）
+## 10. 清理项（2026-11-26 已执行）
 
-- `third_party/duckdb/1.5.5/`（~35 MB dll）与 `1.5.6/`（~36.7 MB dll）：`1.5.6` 报告里写"确认稳定后可删"，现在已稳定，但**保留它同时是 §9 的回退资产**，建议至少留 `1.5.6`。
-- `target/` 里可能残留 1.5.x 的 `duckdb.dll`：`build.rs` 会在下次构建时覆盖，无需手工清。
+- **已删**：`third_party/duckdb/1.5.5/` 与 `third_party/duckdb/1.5.6/`（按用户决定直接删，不进回收站）。现在 `third_party/duckdb/` 下只剩 `2.0.1/` 与 `README.md`；回退要先把库取回来（见 §9）。
+- 顺带释放的空间：另一废弃 worktree（`RdataStation-v2-duckdb2`，分支 `upgrade/duckdb-2.0-1122`，其 `.cargo/config.toml` 亦已指向 `2.0.1`）的 `target/` 已删，D 盘回收约 **99 GB**。
+- `target/` 里的旧 `duckdb.dll` 由 `build.rs` 下次构建覆盖，无需手工清。
 
 ## 11. 1.5.x 时代旧假设的复核结果（2026-11-26 探针实跑）
 
