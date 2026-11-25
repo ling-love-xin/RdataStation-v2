@@ -1897,13 +1897,16 @@ impl NavView {
     /// 一次算好（见 `docs/architecture/database/database-nav-dev-plan.md` §2.5）。
     /// 面板头 / 来源 chips / 搜索框 / 筛选弹层都在列表之外。
     pub(super) fn render_nav_body(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        // 左内距**不进 body**（2026-11-25 反馈①）：body 一旦带 `px_1`，分组头的 `group_box`
+        // 底色带就从 4px 处起、左缘留一道 4px 面板底色竖缝（旧草稿箱【草稿】组同病）。
+        // 现在内距下沉到每行自己的根部（`render_nav_row` 给非分组头行套 `px_1`），
+        // 分组头因此能通栏铺色，行内容位置与改前一致。
         let mut body = div()
             .v_flex()
             .w_full()
             .flex_1()
             .min_h_0()
             .gap_0p5()
-            .px_1()
             .pt_0p5()
             .pb_1();
         // 结果区**只剩一行说明**（命中行已并入列表：同一片滚动区、同一条 ↑↓ 漫游）。
@@ -1920,7 +1923,8 @@ impl NavView {
                     .v_flex()
                     .w_full()
                     .gap_1()
-                    .px_1()
+                    // 与行级同一档左缘（body 已不带内距）：4 + 本行 4 = 8。
+                    .px_2()
                     .pt_1()
                     .child(
                         div()
@@ -2115,6 +2119,8 @@ impl NavView {
             .flex_none()
             .gap_0p5()
             .pb_0p5()
+            // body 不再带左内距（分组头通栏，见 `render_nav_body`）：这里自己补回 4。
+            .px_1()
             .child(
                 div()
                     .w_full()

@@ -860,6 +860,19 @@ fn nav_tree_rows_are_laid_out_by_the_virtual_list(cx: &mut gpui_kit::TestAppCont
         super::ui::NAV_ROW_CONNECTION,
         super::ui::NAV_ROW_TREE
     );
+    // 左缘口径（2026-11-25 反馈①）：分组头是分区条、底色带必须**贴列表左缘**，
+    // 行级左内距（4px）下沉在每行自己的根上。若把内距加回 body（历史写法），
+    // 分组头也会被推离左缘 —— 这条断言正是那个回归的判据。
+    assert!(
+        header.origin.x < conn_row.origin.x,
+        "分组头底色带要通栏（左缘 {} 不应与行内容左缘 {} 齐平）",
+        header.origin.x,
+        conn_row.origin.x
+    );
+    assert_eq!(
+        conn_row.origin.x, tree_row.origin.x,
+        "树行与连接行同一档行级左内距"
+    );
 }
 
 /// 签证：横向画布落地后，滚树的竖向滚轮**不得**把整片树横向推走。

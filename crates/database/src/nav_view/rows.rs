@@ -37,7 +37,26 @@ impl NavView {
     ///
     /// 顺序 / 归属 / 深度来自 [`Self::collect_nav_rows`]；这里只管「这一行长什么样」。
     /// 实体会在**布局期**（不是 render 期）被借用进来，所以这里只读状态、不写状态。
+    ///
+    /// 行级左内距（`px_1`）在这里统一加，不在 `render_nav_body` 的 body 上加：
+    /// body 带内距会让**分组头的底色带**从 4px 处起、左缘留一道竖缝（2026-11-25 反馈①，
+    /// 与旧草稿箱【草稿】组同病）；下沉到行根后分组头能通栏铺色，其余行位置不变。
     pub(super) fn render_nav_row(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some(row) = self.rows.get(ix) else {
+            // 行集合刚变的那一帧可能还拿旧索引来问：给空元素，不 panic。
+            return div().into_any_element();
+        };
+        // 分组头是分区条（不是可点行）：底色通栏，内容左缘由 `GroupHeader` 自己的 `px_1p5` 定。
+        let full_bleed = matches!(row, NavRow::GroupHeader { .. });
+        let inner = self.render_nav_row_inner(ix, cx);
+        if full_bleed {
+            return inner;
+        }
+        div().w_full().px_1().child(inner).into_any_element()
+    }
+
+    /// 行外观本体（不含行级左内距，见 [`Self::render_nav_row`]）。
+    fn render_nav_row_inner(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
         let Some(row) = self.rows.get(ix) else {
             // 行集合刚变的那一帧可能还拿旧索引来问：给空元素，不 panic。
             return div().into_any_element();
