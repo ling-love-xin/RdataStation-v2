@@ -3616,3 +3616,21 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
 
 
 
+
+### 54.8 右键切「边输边过滤」能力（2026-11-25）
+
+真值在 `ResultsetFindReplaceOverlay`：`configureSelectAllButton:107-135` 给勾选框加右键菜单两项 `enableInteractiveFilterAction` / `disableInteractiveFilterAction`（文案 `"Check 'Show matching' on to filter while typing"` / `"Use 'Show matching' explicitly to apply filter"`），切换 `isInteractiveFilterEnabled`；`setEnableInteractiveFilter:159-169` 关掉时**强制取消勾选**、`setChecked` 两个 action、把反值写进 dialog settings（`INTERACTIVE_FILTER_DISABLED_DIALOG_SETTING`）；`performSelectAll:210-223` 分两支——能力开：勾上 `scheduleFilter()`、取消 `applyFilterAction(null)`；能力关：强制不勾 + `applyQuickFilter()` + `searchBar.storeHistory()`；`applyQuickFilter:225-242` 词空即撤过滤；`onClose:250-264` 只在 `findAllActionApplied` 时撤过滤。
+
+| 项 | 真值 | 本仓落地 |
+| --- | --- | --- |
+| 能力开关 | `isInteractiveFilterEnabled`（`:76`，默认 true） | 字段 `find_interactive_filter`（默认 true） |
+| 「已应用过」标记 | `findAllActionApplied`（`:188` / `:257`） | 字段 `find_filter_applied`（勾选与一次性应用都置真） |
+| 右键两项 | 两个互斥 `Action` + `setChecked`（`:115-134`、`:164-165`） | `ContextMenuExt::context_menu` + `PopupMenuItem::checked`，纯函数 `find_only_menu_entries` 出文案/勾选/目标值 |
+| 关掉时的勾选框 | 强制 `setSelection(false)`，已应用过滤**不动**（`:160-162`） | `set_find_interactive_filter(false)` 只清 `find_filter_only`，不撤过滤 |
+| 点这颗钮 | 能力关：不保持勾选，按当前词过滤一次 + 进历史（`:218-222`） | `set_find_filter_only` 能力关分支 → `apply_find_filter_once`（词空则撤过滤、非空则灌词 + `note_filter_commit`） |
+| 词变 | 能力关：只做父类即时增量搜索（`:180-182`） | `find_query_changed` 因 `find_filter_only` 恒假而只重算命中 + 定位 |
+| 关浮层 | `findAllActionApplied` 才撤（`:257-263`） | `clear_find_filter`（幂等：两标记都空即返回），`close_find` / `toggle_find` 共用 |
+
+差异登记：① 不落盘——DBeaver 把能力开关写进 dialog settings（`:167-168`），本仓只存内存；② 菜单文案按中文 `tr(...)`（真值是英文硬编码字符串，没收进 `ResultSetMessages`）；③ 真值带快捷键 `KeyboardShortcuts.SEARCH_ALL` 与图标 `UIIcon.FIND_REPLACE_FIND_ALL_FILTER`，本仓这两样都没接（图标名在 `gpui-kit-assets 0.10.0` 的 Lucide 集合里没有对应项）。
+
+验证：`cargo test -p rds-result-panel --lib` → **452 passed / 0 failed**（新增 `interactive_filter_off_turns_show_matching_into_a_one_shot_button` 与 `find_only_menu_entries_follow_the_interactive_switch`）；`cargo check -p rds-editor --lib` → `Finished`（唯一 warning 来自并行线在途的 `view/host/format.rs:13` unused import，非本刀）。`cargo test -p rds-editor --lib` 仍被并行线中间态挡住（`ChannelsPort::confirm_federated_mount` 缺实现，E0046，与本次改动无关）。
