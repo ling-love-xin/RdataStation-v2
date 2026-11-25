@@ -88,6 +88,7 @@
 | `cargo check --workspace --all-targets` | 通过 |
 | 真机 `duckdb_accel_probe` | **3 passed**（并行下三源分别拿到 `rds_src` / `rds_src_2` / `rds_src_3`） |
 | 真机 `federation_credentials_probe` | **1 passed**（失败信息里口令被抹成 `******`，原因保留） |
+| 一次性复核探针 `zz_dd2_recheck_probe`（2026-11-26） | **5 passed**（`memory_limit` 回读 / `duckdb_indexes()` 列集 / `duckdb_databases()` 列集 / 列元数据时机 / 扩展落点 / Secret / ODBC 清单，结论见 §11） |
 
 已知失败且**与本次无关**：`ctrl_alt_f2_to_f6_toggle_the_right_panels` 在改动前的基线（`8a473169`）就失败。
 
@@ -112,21 +113,51 @@
 - `third_party/duckdb/1.5.5/`（~35 MB dll）与 `1.5.6/`（~36.7 MB dll）：`1.5.6` 报告里写"确认稳定后可删"，现在已稳定，但**保留它同时是 §9 的回退资产**，建议至少留 `1.5.6`。
 - `target/` 里可能残留 1.5.x 的 `duckdb.dll`：`build.rs` 会在下次构建时覆盖，无需手工清。
 
-## 11. 1.5.x 时代旧假设的复核状态
+## 11. 1.5.x 时代旧假设的复核结果（2026-11-26 探针实跑）
 
-升级只证了"能编、能跑、这几条行为变了"，**没有**逐条重跑 1.5.x 时代的所有实测。下表是诚实状态：
+升级当时只证了"能编、能跑"，没逐条重跑 1.5.x 的实测。这一节是用一次性探针
+（`crates/engine/tests/zz_dd2_recheck_probe.rs`，**过程产物，跑完即删**；复现命令见 §12）
+在 **2.0.1 真内核**上重问一遍的结果——**有一条把旧结论推翻了**。
 
-| 旧假设 | 出处 | 2.0.1 状态 |
+| 旧假设 | 出处 | 2.0.1 复核结果 |
 | --- | --- | --- |
-| mysql / postgres 扫描器不认 Secret | `connection/secret.rs:193`、`accel.rs:238`、`editor_exec/conn.rs:50`、`data_objects_load.rs:410` | **未复核**（代码仍走"运行时连接串 + 脱敏"，未验证 2.0.1 是否已支持 Secret） |
-| `duckdb_indexes()` 只有两列（不含 `expressions` 之类） | `crates/driver/src/native/duckdb.rs` 的解析断言 | **未复核** |
-| duckdb-rs 列元数据须在语句执行后才能读 | `engine/src/duckdb/executor.rs:202,273`、`duckdb_service.rs:249` | **未复核**（2.0.1 的 duckdb-rs 是否仍如此） |
-| `current_setting('memory_limit')` 回读会被人类可读重格式化 | `engine/src/duckdb/manager.rs:25,531,675` | **未复核**（注释用 `1.5+` 表述，未在 2.0.1 上重跑） |
-| 扩展目录按 `<版本>/<平台>/` 落（`v1.5.5/windows_amd64`） | `tests/duckdb_export_probe.rs:24` | **未复核**（`extension_directory` 的版本段在 2.0.1 上是否仍是 `v2.0.1`） |
-| 社区 scanner 列表里没有 ODBC 扫描器 | `docs/architecture/federation/README.md:49`、`federation-architecture.md:30` | **未复核**（2.0.1 的社区扩展清单未重新拉取） |
-| MySQL scanner 能动态解析源库新表 | `tests/duckdb_accel_probe.rs` | ✅ **已复核**（2.0.1 下成立，且旧断言"必须 ERR"已删） |
+| mysql / postgres 扫描器**不认** Secret | `connection/secret.rs:193`、`accel.rs:238`、`editor_exec/conn.rs:50`、`data_objects_load.rs:410` | ✅ **仍不认**：Secret 本身注册成功，但 `ATTACH 'mysql://host:port/db'`（URL 不带凭据）时扫描器用**操作系统账号**去连——`Access denied for user 'sling'@… (using password: NO)`。所以"凭据写进 URL + 出引擎脱敏"的取舍继续有效 |
+| `duckdb_indexes()` 只有 `index_name` / `is_unique` / `is_primary` / `expressions` 等列，没有 `index_type` / `expression` | `driver/src/native/duckdb.rs:767,792` | ✅ **仍成立**，且列集已核对为 14 列：`database_name, database_oid, schema_name, schema_oid, index_name, index_oid, table_name, table_oid, comment, tags, is_unique, is_primary, expressions, sql`。现有 `list_indexes` 的 SQL 不需改 |
+| duckdb-rs 的 `Statement::column_names()` / `schema()` 在**执行前**取会 panic | `engine/src/duckdb/executor.rs:202,273`、`duckdb_service.rs:249` | ✅ **仍会炸**：`raw_statement.rs:144` 的 `The statement was not executed yet` 原样触发。"列名一律执行后取"的纪律在 `duckdb 1.20001.0` 上一样成立 |
+| `current_setting('memory_limit')` 回读被人类可读重格式化 | `engine/src/duckdb/manager.rs:25,531,675` | ✅ **仍重格式化**：`SET memory_limit='2GB'` 回读 **`1.8 GiB`**（不是 `2.0 GiB` 也不是原始串） |
+| 扩展落在 `<extension_directory>/<内核版本>/<平台>/` | `tests/duckdb_export_probe.rs:24` | ✅ **布局不变**：2.0.1 装到 `v2.0.1/windows_amd64/mysql_scanner.duckdb_extension`（文件名仍带 `_scanner`） |
+| 联邦"不用 ODBC 通道"——理由是 DuckDB 没有 ODBC 扫描器 | `federation/README.md:49`、`federation-architecture.md:30`、`federation-dev-plan.md` | ❌ **理由被推翻**：2.0.1 的 `duckdb_extensions()` 里**有 `odbc_scanner`**（未安装、连通性未实测）。结论（不采用 ODBC）可以先维持，但"内核没有"这条依据不能再写 |
+| MySQL scanner 能动态解析源库新建的表 | `tests/duckdb_accel_probe.rs` | ✅ 已有真机用例覆盖（不重挂即可查） |
 
-要闭掉这张表，最小成本是加一条一次性探针（`Secret` 注册 + `duckdb_indexes()` 列集 + 列元数据读取时机 + `memory_limit` 回读 + 扩展安装落点），跑真机一次即可；不跑就保持"未复核"标注，别把假设当结论。
+**顺带核清的三条（会影响文档/规格里的具体写法）**：
+
+1. `SET dialect = 'mysql'` 仍**不可用**（`unrecognized configuration parameter "dialect"`），但 2.0.1 多了个
+   `dialect_compatibility_mode` 设置项（本次未验证其取值与效果）。
+2. **反引号现在能解析了**：`SELECT \`x\` FROM bt` 在 2.0.1 上返回 OK（1.5.5 会 `syntax error at or near "`"`）。
+3. `duckdb_databases()` 的列名是 **`path` / `readonly`**（不是 `read_only`），且**没有 `storage_version` 列**
+   —— `analysis-sources-spec.md` 那条待确认项可以按这个写死。
+
+### 11.1 探针原始输出（关键行）
+
+```text
+[1] memory_limit 回读 = 1.8 GiB
+[2] duckdb_indexes() 列 = ["database_name","database_oid","schema_name","schema_oid","index_name","index_oid","table_name","table_oid","comment","tags","is_unique","is_primary","expressions","sql"]
+[3] duckdb_databases() 列 = ["database_name","database_oid","path","comment","tags","internal","type","readonly","encrypted","cipher","options"]
+[4] duckdb_extensions() 里含 odbc 的扩展 = odbc_scanner
+[5] SET dialect='mysql' → ERR Catalog Error: unrecognized configuration parameter "dialect"
+[5b] SELECT `x` FROM bt → OK
+[6a] prepare 后、执行前 column_names() → PANIC（未执行前取列名仍会炸）
+[6b] 执行后 Rows::as_ref().column_names() → ["a", "b"]
+[7a] INSTALL mysql → OK
+[7c] 临时扩展目录内容 = ["v2.0.1/windows_amd64/mysql_scanner.duckdb_extension", "v2.0.1/windows_amd64/mysql_scanner.duckdb_extension.info"]
+[8b] CREATE PERSISTENT SECRET → OK
+[8c] ATTACH（URL 无凭据）→ ERR IO Error: Failed to connect to MySQL database …: Access denied for user 'sling'@'192.168.3.29' (using password: NO)
+[9b] SET search_path TO a, b → ERR Parser Error: SET can only contain a single value
+[9c] SET search_path = 'main,rds_tmp' → ERR Catalog Error: SET search_path: No catalog + schema named "rds_tmp" found.
+```
+
+> `[9c]` 的报错是"这个新内存库里没有 `rds_tmp`"，不是语法问题——语法本身在 2.0.1 可用（见 §5 第 2 条）。
+> `[9a]` 查 `storage_version` 列报 Binder Error，即为上表第 3 条的来源。
 
 ## 12. 复现（隔离 worktree 一套）
 
@@ -148,3 +179,18 @@ $env:RDS_TEST_PG_URL='postgres://postgres:postgresql@192.168.3.138:5432/postgres
 $env:RDS_TEST_SQLITE_PATH='D:\FossilT\T.fossil'
 cargo test -p rds-engine --test duckdb_accel_probe -- --include-ignored
 ```
+
+### 12.1 复核 §11 那张表（一次性探针，跑完即删）
+
+探针内容就是 §11.1 那段输出：内存库 + `extension_directory` 指临时区 + 关自动下载，然后依次问
+`memory_limit` 回读 / `duckdb_indexes()` 与 `duckdb_databases()` 列集 / 执行前取列名 / `SET dialect`
+与反引号 / `INSTALL mysql` 落点 / Secret 能否让不带凭据的 `ATTACH` 连通 / 匹配清单里有没有 `odbc`。
+
+```powershell
+$env:RDS_TEST_MYSQL_URL='mysql://root:root@192.168.3.138:3306/mysql'
+cargo test -p rds-engine --test zz_dd2_recheck_probe -- --nocapture --test-threads=1
+```
+
+要点：`catch_unwind` **抓不住**"执行前取列名"的断言（它会先打 panic 日志再被捕获，看起来像失败，
+但 `test result: ok` 才是判据）；`SET search_path = 'main,rds_tmp'` 在全新内存库里会报
+`No catalog + schema named "rds_tmp"`，那是名字不存在，不是语法不行。

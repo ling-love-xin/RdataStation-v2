@@ -245,7 +245,7 @@ CREATE INDEX IF NOT EXISTS idx_analysis_sources_kind ON analysis_sources(kind);
 
 ## 12. 待确认（不在本规格内定）
 
-1. `duckdb_databases()` 的 `path` / `read_only` 两列在 **DuckDB 2.0.1** 下的确切列名与可用性（真机验；本条写于 1.5.6 时代，内核已升 2.0.1，验的时候按当前内核来）；
+1. ~~`duckdb_databases()` 的 `path` / `read_only` 两列在 1.5.6 下的确切列名与可用性（真机验）~~ —— **已定（2026-11-26，DuckDB 2.0.1 真机）**：列名是 **`path`** 与 **`readonly`**（不是 `read_only`），**没有** `storage_version` 列；整表列为 `database_name, database_oid, path, comment, tags, internal, type, readonly, encrypted, cipher, options`；
 2. `accel` 档固定别名 `rds_src` 是否要改成按源别名（动 engine，需单独评估多源并发场景）；
 3. 表名 `analysis_sources` 暂定；
 4. 「已挂载 · 会话级」行的默认动作是"登记为项目源"还是"卸载"优先。

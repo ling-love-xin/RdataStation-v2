@@ -200,6 +200,7 @@ impl<'a> DuckDBExecutor<'a> {
             }
 
             // duckdb-rs 1.10505：列元数据需在语句执行（query）后才能读取
+            // （1.20001.0 / DuckDB 2.0.1 复核：执行前取列名仍 panic，`The statement was not executed yet`）
             let columns: Vec<String> = (0..stmt.column_count())
                 .map(|i| stmt.column_name(i).map_or("unknown", |v| v).to_string())
                 .collect();
@@ -271,6 +272,7 @@ impl<'a> DuckDBExecutor<'a> {
             }
 
             // duckdb-rs 1.10505：列元数据需在语句执行（query）后才能读取
+            // （1.20001.0 / DuckDB 2.0.1 复核：执行前取列名仍 panic，`The statement was not executed yet`）
             let columns: Vec<String> = (0..stmt.column_count())
                 .map(|i| stmt.column_name(i).map_or("unknown", |v| v).to_string())
                 .collect();

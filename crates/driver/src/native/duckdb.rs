@@ -791,6 +791,10 @@ impl Database for DuckDbDatabase {
 
         // duckdb_indexes() 的真实列（1.5.5 实测）：index_name, is_unique, is_primary,
         // expressions（列表）…；**没有** index_type / expression
+        // （1.20001.0 / DuckDB 2.0.1 复核：列集扩到 14 列——database_name, database_oid,
+        //  schema_name, schema_oid, index_name, index_oid, table_name, table_oid, comment,
+        //  tags, is_unique, is_primary, expressions, sql；本查询用到的四列及"没有 index_type /
+        //  expression"的结论不变）
         let mut stmt = conn
             .prepare(
                 "SELECT index_name, is_unique, is_primary,

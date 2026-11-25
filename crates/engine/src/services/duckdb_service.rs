@@ -250,6 +250,7 @@ impl DuckDbService {
         // **执行结果**（`raw_statement.rs` 的 `executed()`），prepare 之后、执行之前调会直接
         // panic（`The statement was not executed yet`）。所以先 `query` 把语句跑起来，再从
         // `Rows::as_ref()` 取回那条已执行的语句读列名——这也是 duckdb-rs 文档推荐的写法。
+        // （1.20001.0 / DuckDB 2.0.1 复核：prepare 后执行前取列名仍 panic，此顺序不能改）
         let mut query_rows = stmt.query([]).map_err(|e| {
             CoreError::common(CommonError::General(format!("DuckDB query failed: {}", e)))
         })?;

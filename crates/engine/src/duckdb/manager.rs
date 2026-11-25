@@ -26,6 +26,7 @@ static GLOBAL_TEMP_TABLE_MANAGER: OnceLock<TempTableManager> = OnceLock::new();
 /// 格式化成「1.8 GiB」这种近似读数（十进制存、二进制显示，一位小数），直接拿它显示
 /// 「内存 X / 上限」会出现「1.9 GB / 2 GB」的怪样。显式设置（设置页 / sink）时记
 /// 精确字节，读数优先用它；`0` 才回退解析 DuckDB 的读数（环境变量覆盖路径）。
+/// （2.0.1 复核：仍是这个行为——`SET memory_limit='2GB'` 回读 `1.8 GiB`）
 static LAST_MEMORY_LIMIT_BYTES: AtomicU64 = AtomicU64::new(0);
 
 /// 内存库的可观测读数（状态栏 / 洞察工具栏「内存 X MB / 上限」）。
