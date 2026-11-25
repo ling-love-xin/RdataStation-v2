@@ -56,7 +56,7 @@ mod search;
 mod state;
 
 pub use db::{catalog_level, db_rows, schema_rows, table_rows, CatalogLevel, ConnBrief, DbCache};
-pub use dialog::open_source_picker;
+pub use dialog::{open_source_picker, open_source_picker_for_connection};
 pub use group::{group_of, grouped, SourceGroup};
 pub use node::{ArchiveScope, NodeId, NodeKind, Row, TempScope, PICKER_MAX_DEPTH};
 pub use render::{render_rows, RowAction};
