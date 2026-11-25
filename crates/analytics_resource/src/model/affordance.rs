@@ -17,8 +17,15 @@ pub struct ActionContext {
     pub scope: RowScope,
     /// 本体状态（缺失 = 本体被删/被移走，只剩登记）。
     pub status: ArchiveStatus,
-    /// 本体是否登记了路径（File 档 = `resources/` 下相对路径；分析表 / 引用型恒 `false`）。
+    /// 本体是否是**文件**（File 档 = `resources/` 下相对路径；引用型是源绝对路径）。
+    ///
+    /// 取回与「移入回收站搬本体」都只认它：表型没有文件可复制、可搬。
     pub has_payload: bool,
+    /// 本体是否是**分析库里的一张表**（表型；`analytics_table` 非空、没有文件路径）。
+    ///
+    /// 有它就算「有本体」：打开（洞察取样）、升级到全局（整表导出）、移入回收站
+    /// （只软删登记）都成立——过去只看 `has_payload`，把这一类全挡住了。
+    pub has_table: bool,
     /// **项目**是否只读（不是行的 `readonly` 列：那是归档只读，两者不是一件事）。
     pub read_only: bool,
     /// 本次动作作用几行（多选时是整选集）。
@@ -33,6 +40,7 @@ impl ActionContext {
             scope,
             status,
             has_payload: false,
+            has_table: false,
             read_only,
             multi_count,
         }
@@ -44,9 +52,24 @@ impl ActionContext {
             scope: RowScope::Project,
             status: ArchiveStatus::Normal,
             has_payload: true,
+            has_table: false,
             read_only: false,
             multi_count: 1,
         }
+    }
+
+    /// 表型资产（本体是分析库里的一张表、没有文件路径）的常态上下文。
+    pub fn project_table_row() -> Self {
+        Self {
+            has_payload: false,
+            has_table: true,
+            ..Self::project_row()
+        }
+    }
+
+    /// 有没有本体（文件或分析库表）。打开 / 升级 / 详情删除都只问这一件事。
+    fn has_body(&self) -> bool {
+        self.has_payload || self.has_table
     }
 
     fn single(&self) -> bool {
@@ -58,24 +81,34 @@ impl ActionContext {
     }
 }
 
-/// 打开本体（只读）：本体必须登记了路径且还在，且只开一条（多选时打开哪一条都是猜）。
+/// 打开本体（只读）：本体必须还在（文件或分析库表），且只开一条（多选时打开哪一条都是猜）。
+///
+/// 表型没有文件路径，但「打开」走洞察取样（`SELECT * FROM <表>`），所以它也算有本体。
 pub fn can_open(ctx: &ActionContext) -> bool {
-    ctx.single() && ctx.status != ArchiveStatus::Missing && ctx.has_payload
+    ctx.single() && ctx.status != ArchiveStatus::Missing && ctx.has_body()
 }
 
-/// 取回（检出）：往草稿箱写工作副本——只对项目行、本体正常、项目非只读。
+/// 取回（检出）：往草稿箱写工作副本——只对项目行、**文件本体**、本体正常、项目非只读。
+///
+/// 表型没有文件可复制（它的本体是项目分析库里的一张表），取回必失败，所以挡在这里；
+/// 要看旧版数据走版本历史的「用 vN 分析」。引用型有源文件路径，仍可取回。
 ///
 /// 内容已变（`ContentChanged`）也挡：那是"本体被绕过只读改过"，先让用户在状态行
 /// 接受当前内容或从历史还原，再取回（否则取走的是来路不明的内容）。
 pub fn can_checkout(ctx: &ActionContext) -> bool {
-    ctx.project() && ctx.status == ArchiveStatus::Normal && !ctx.read_only
+    ctx.project() && ctx.status == ArchiveStatus::Normal && !ctx.read_only && ctx.has_payload
 }
 
-/// 升级到全局：本质是一次发布——项目行、本体在位、单选、项目非只读。
+/// 升级到全局：本质是一次发布——项目行、本体在位（文件或表）、单选、项目非只读。
 ///
 /// 全局行必须挡（否则能把全局表再"升级"一次，撞同名冲突）；这一点旧判据漏了。
+/// 表型走整表导出（`PromoteRequest::source_table`）：只认「有本体」，不要求文件路径。
 pub fn can_promote(ctx: &ActionContext) -> bool {
-    ctx.project() && can_open(ctx) && ctx.single() && !ctx.read_only
+    ctx.project()
+        && ctx.status != ArchiveStatus::Missing
+        && ctx.has_body()
+        && ctx.single()
+        && !ctx.read_only
 }
 
 /// 分发到本项目：全局行、本体在位（表被删了但登记还在时 COPY 必失败）、单选、项目非只读。
@@ -114,7 +147,7 @@ pub fn can_delete_row(ctx: &ActionContext) -> bool {
 /// 与列表不同是有意的：详情下面那句提示要说清"本体去哪了"，而缺失行没有本体可送进
 /// 回收站（该先走索引修复）。
 pub fn can_delete_from_detail(ctx: &ActionContext) -> bool {
-    ctx.project() && ctx.status != ArchiveStatus::Missing && ctx.has_payload && !ctx.read_only
+    ctx.project() && ctx.status != ArchiveStatus::Missing && ctx.has_body() && !ctx.read_only
 }
 
 #[cfg(test)]
@@ -177,5 +210,27 @@ mod tests {
         assert!(!can_open(&ctx));
         assert!(!can_delete_from_detail(&ctx), "详情要先走索引修复");
         assert!(can_delete_row(&ctx), "列表删记录正是清理脏登记的手段");
+    }
+
+    #[test]
+    fn table_assets_are_openable_promotable_and_deletable_but_not_checkout() {
+        let ctx = ActionContext::project_table_row();
+        assert!(can_open(&ctx), "表型打开走洞察取样，不该被没有文件路径挡住");
+        assert!(can_promote(&ctx), "表型升级走整表导出（source_table），不是没有本体");
+        assert!(can_delete_from_detail(&ctx), "表型移入回收站 = 只软删登记，表留在分析库");
+        assert!(can_rename(&ctx), "改显示名只动登记");
+        assert!(
+            !can_checkout(&ctx),
+            "表型没有文件可复制：取回必失败，按钮必须置灰"
+        );
+    }
+
+    #[test]
+    fn checkout_requires_a_file_payload_not_a_table() {
+        let mut ctx = ActionContext::project_row();
+        ctx.has_payload = false;
+        ctx.has_table = true;
+        assert!(!can_checkout(&ctx));
+        assert!(can_open(&ctx), "表型仍可打开");
     }
 }

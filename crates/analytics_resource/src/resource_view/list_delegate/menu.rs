@@ -110,9 +110,9 @@ pub(super) fn build(
                                 }),
                         );
                         // 「升级到全局…」（§13）：项目 → 全局，表 + 版本信息进全局 DuckDB。
-                        // 判据 = 项目行 + 本体在位 + 单选 + 项目非只读（`can_promote`）：
-                        // 全局行必须挡（否则把全局表再来一次升级）；分析表型存档由宿主侧再挡一层
-                        // （其升级依赖分析表读取路径，M8 后续批次接）。
+                        // 判据 = 项目行 + 有本体（文件或分析库表）+ 单选 + 项目非只读（`can_promote`）：
+                        // 全局行必须挡（否则把全局表再来一次升级）；表型走宿主侧的整表导出
+                        // （`PromoteRequest::source_table`），与文件型同一入口。
                         menu = menu.item(
                             PopupMenuItem::new(tr("升级到全局…"))
                                 .disabled(!can_promote)

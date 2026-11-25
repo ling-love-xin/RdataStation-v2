@@ -150,6 +150,11 @@ pub struct TrashArchiveEntry {
 /// id 由登记行 id 合成，还原 / 永久删除据此分派到"只动登记行"的分支（§12.1.1 ③）。
 pub const TRASH_ID_REF_PREFIX: &str = "ref:";
 
+/// 表型条目的回收站 id 前缀：本体是分析库里的一张表，没有实体 manifest，
+/// id 同样由登记行 id 合成。与 `ref:` 分开是因为还原/永久删除的文案要说明
+/// 「表不随删除走」：引用型源文件本来就在源位置，表型则是登记删了、表照旧。
+pub const TRASH_ID_TABLE_PREFIX: &str = "tbl:";
+
 /// 变更原因：事件必须带原因，面板据此决定局部更新还是整表刷新（架构 §6.2）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChangeReason {

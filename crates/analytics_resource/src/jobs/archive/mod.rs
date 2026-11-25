@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use crate::analysis::AnalysisFacts;
 use crate::dialogs::trash::{ForeignTrash, TrashAction, TrashDialogSeed, TrashRow};
 use crate::payload::PayloadStore;
-use crate::present::{build_trash_snapshot, entity_trash_row, reference_trash_rows};
+use crate::present::{build_trash_snapshot, entity_trash_row, registry_trash_rows};
 use crate::model::ArchiveAssertion;
 use crate::{ArchiveKind, ArchiveRequest, ArchiveUndo, CheckoutRequest, KeepVersions};
 
@@ -148,4 +148,5 @@ mod trash;
 
 pub(crate) use run::{run_archive, run_checkout, run_undo, run_trash};
 pub(crate) use trash::{load_trash, reload_trash_after, run_trash_action};
+
 

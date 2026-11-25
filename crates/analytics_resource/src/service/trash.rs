@@ -53,6 +53,26 @@ impl ArchiveService {
         }
         let mode = PayloadMode::from_db_str(&resource.payload_mode);
 
+        // 表型：本体是项目分析库里的一张表，没有文件路径可搬。移入回收站 = 只软删
+        // 资产登记（表留在分析库）——数据本身不跟着登记走，删错了还能用「登记为资产」
+        // 找回身份。登记与版本元数据的永久删除走 registry-only 分支。
+        if mode == PayloadMode::Copy && resource.file_rel_path.is_none() {
+            self.store.soft_delete_archive(&resource.id).await?;
+            self.record_timeline(
+                &resource.id,
+                Some(resource.version),
+                TimelineEventKind::Trashed,
+                Some("移入回收站（表型：仅软删登记，分析库表保留）"),
+                resource.content_hash.as_deref(),
+            )
+            .await;
+            return Ok(TrashArchiveEntry {
+                resource_id: resource.id.clone(),
+                name: resource.name,
+                trash_id: format!("{TRASH_ID_TABLE_PREFIX}{}", resource.id),
+            });
+        }
+
         // reference 型：本体在源位置（用户工作区 / 外部路径），M6 不能未经同意移动用户文件；
         // 移入回收站 = 只软删登记行（血缘标签随登记行留着，还原时一并复活）。
         // 还原 = 复活登记行；永久删除 = 仅删登记行 + 版本元数据（§12.1.1 ③）。
@@ -158,6 +178,28 @@ impl ArchiveService {
                 Some(record.version),
                 TimelineEventKind::Untrashed,
                 Some("从回收站还原（引用型）"),
+                record.content_hash.as_deref(),
+            )
+            .await;
+            return self.store.get_resource_by_id(resource_id).await;
+        }
+
+        // 表型条目：和引用型一样没有实体 manifest；还原 = 复活登记行，表一直在分析库。
+        if let Some(resource_id) = trash_id.strip_prefix(TRASH_ID_TABLE_PREFIX) {
+            let record = self.store.get_resource_by_id(resource_id).await?;
+            if record.deleted_at.is_none() {
+                return Err(service_err(
+                    "untrash",
+                    &format!("「{}」不在回收站里", record.name),
+                ));
+            }
+            self.store.undelete_archive(resource_id, None).await?;
+            self.emit(ChangeReason::Untrashed, Some(record.id.clone()));
+            self.record_timeline(
+                resource_id,
+                Some(record.version),
+                TimelineEventKind::Untrashed,
+                Some("从回收站还原（表型：登记恢复，分析库表一直都在）"),
                 record.content_hash.as_deref(),
             )
             .await;
@@ -289,6 +331,20 @@ impl ArchiveService {
             return Ok(());
         }
 
+        // 表型条目：只清登记行 + 标签 / 分组归属 + 版本元数据；分析库里的表**不动**
+        // （它不在本模块的回收站里，删表是用户自己 SQL 的事）。
+        if let Some(resource_id) = trash_id.strip_prefix(TRASH_ID_TABLE_PREFIX) {
+            let row = self.store.get_resource_by_id(resource_id).await?;
+            if row.deleted_at.is_none() {
+                return Err(service_err(
+                    "purge",
+                    &format!("「{}」不在回收站里", row.name),
+                ));
+            }
+            self.store.purge_deleted_row(resource_id).await?;
+            return Ok(());
+        }
+
         let trash = self.payload.trash();
         let entry = trash.get(trash_id).await?;
         if entry.manifest.origin != ORIGIN_RESOURCES {
@@ -316,6 +372,7 @@ impl ArchiveService {
     /// 不走 `ProjectTrash::empty`（整仓）：回收站是项目级的，把草稿箱的东西一起删掉不是"清空"。
     /// 登记行那边用 `purge_all_deleted` 收尾：它还兼顾“条目被手工删了、行还留着”的幽灵行——
     /// 清空的语义是“资产库的回收站彻底空了”，不是“删掉我在界面上看见的那几条”。
+    /// 返回值把 registry-only 行（引用型 / 表型）也算进去，否则只有登记行时回执会说删了 0 项。
     pub async fn empty_trash(&self) -> Result<usize, CoreError> {
         let trash = self.payload.trash();
         let entries: Vec<_> = trash
@@ -324,24 +381,30 @@ impl ArchiveService {
             .into_iter()
             .filter(|entry| entry.manifest.origin == ORIGIN_RESOURCES)
             .collect();
+        let registry_only = self.deleted_registry_archives().await?.len();
         for entry in &entries {
             trash.purge(&entry.manifest.id).await?;
         }
         self.store.purge_all_deleted().await?;
-        Ok(entries.len())
+        Ok(entries.len() + registry_only)
     }
 
-    /// 列出软删的 reference 存档（回收站第二来源；§12.1.1 ③）。
+    /// 列出软删的 registry-only 存档（回收站第二来源；§12.1.1 ③）。
     ///
-    /// copy 软删行都有实体 `ProjectTrash` 条目，回收站清单由实体条目承载；reference 没有
-    /// 本体可搬，回收站清单要把这些软删登记行一并列出。
-    pub async fn deleted_reference_archives(&self) -> Result<Vec<AnalyticsResource>, CoreError> {
+    /// copy 软删行都有实体 `ProjectTrash` 条目，回收站清单由实体条目承载；
+    /// 引用型没有本体可搬、表型的本体在分析库，这两类的回收站清单都要从
+    /// 「软删登记行」这一侧补出来。
+    pub async fn deleted_registry_archives(&self) -> Result<Vec<AnalyticsResource>, CoreError> {
         Ok(self
             .store
             .list_deleted_archives()
             .await?
             .into_iter()
-            .filter(|r| PayloadMode::from_db_str(&r.payload_mode) == PayloadMode::Reference)
+            .filter(|r| {
+                PayloadMode::from_db_str(&r.payload_mode) == PayloadMode::Reference
+                    || (PayloadMode::from_db_str(&r.payload_mode) == PayloadMode::Copy
+                        && r.file_rel_path.is_none())
+            })
             .collect())
     }
 

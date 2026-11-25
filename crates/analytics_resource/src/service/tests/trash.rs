@@ -608,3 +608,87 @@ async fn t131_trash_and_restore_leave_timeline_events() {
 
     let _ = fs::remove_dir_all(&dir).await;
 }
+
+/// 表型资产的回收站环形口径：**登记软删、分析库表保留**。
+///
+/// 钉三件事：移入回收站不再报「没有本体路径」；回收站清单的第三来源能列出它；
+/// 还原复活登记、永久删除只清登记行。表本身不在回收站语义里，谁都不该去动它。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn table_asset_trash_cycles_the_registry_only() {
+    use crate::table_asset::{TableAssetRequest, register};
+
+    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let registered = register(
+        service.store(),
+        TableAssetRequest {
+            name: "订单宽表".to_string(),
+            analytics_table: "res_t_order_wide".to_string(),
+            row_count: Some(120),
+            column_count: Some(6),
+        },
+    )
+    .await
+    .expect("登记表型资产");
+
+    let entry = service
+        .move_to_trash(&[registered.resource_id.clone()])
+        .await
+        .expect("表型应能移入回收站（只软删登记）")
+        .remove(0);
+    assert!(
+        entry.trash_id.starts_with(crate::model::TRASH_ID_TABLE_PREFIX),
+        "表型条目要用 tbl: 前缀，实际：{}",
+        entry.trash_id
+    );
+    let soft = service
+        .store()
+        .get_resource_by_id(&registered.resource_id)
+        .await
+        .expect("软删行仍可读");
+    assert!(soft.deleted_at.is_some(), "登记行应软删");
+    assert_eq!(
+        soft.analytics_table.as_deref(),
+        Some("res_t_order_wide"),
+        "表名不应随登记软删而丢失"
+    );
+
+    let listed = service
+        .deleted_registry_archives()
+        .await
+        .expect("回收站清单第三来源");
+    assert!(
+        listed.iter().any(|r| r.id == registered.resource_id),
+        "表型软删行必须出现在回收站清单里"
+    );
+
+    let restored = service
+        .restore_archive_from_trash(&entry.trash_id)
+        .await
+        .expect("还原表型登记");
+    assert!(restored.deleted_at.is_none(), "还原后登记行复活");
+    assert_eq!(
+        restored.analytics_table.as_deref(),
+        Some("res_t_order_wide"),
+        "还原本体指向不变"
+    );
+
+    let again = service
+        .move_to_trash(&[registered.resource_id.clone()])
+        .await
+        .expect("再次移入回收站")
+        .remove(0);
+    service
+        .purge_archive(&again.trash_id)
+        .await
+        .expect("永久删除表型登记");
+    assert!(
+        service
+            .store()
+            .get_resource_by_id(&registered.resource_id)
+            .await
+            .is_err(),
+        "永久删除后登记行应彻底消失"
+    );
+
+    let _ = fs::remove_dir_all(&dir).await;
+}

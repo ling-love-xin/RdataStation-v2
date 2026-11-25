@@ -61,12 +61,15 @@ pub(super) fn render_actions(
                                 .ghost()
                                 .label(tr("分发到本项目…"))
                                 .disabled(!can_distribute)
-                                .on_click(move |_, window, cx| {
-                                    host.request_distribute_from_global(
-                                        &detail_for_distribute.name,
-                                        window,
-                                        cx,
-                                    )
+                                .on_click({
+                                    let host = host.clone();
+                                    move |_, window, cx| {
+                                        host.request_distribute_from_global(
+                                            &detail_for_distribute.name,
+                                            window,
+                                            cx,
+                                        )
+                                    }
                                 }),
                         ),
                     )
@@ -75,6 +78,9 @@ pub(super) fn render_actions(
         } else {
             let missing = detail.status == ArchiveStatus::Missing;
             let changed = detail.status == ArchiveStatus::ContentChanged;
+            // 表型（本体是分析库里的一张表）：打开走洞察取样、取回没有文件可复制、
+            // 移入回收站只软删登记——三句提示各不相同，不能共用文件型那套。
+            let is_table = detail.kind == ArchiveKind::AnalyticsTable;
             // 三个判据都走同一份上下文（多选的限制在列表侧，详情恒单选）。
             let can_open = can_open(&ctx);
             let can_checkout = can_checkout(&ctx);
@@ -90,6 +96,8 @@ pub(super) fn render_actions(
                 "项目处于只读模式"
             } else if changed {
                 "内容已变：先在状态行「修复…」接受当前内容或从历史还原，再取回"
+            } else if is_table {
+                "打开 = 在洞察面板取样查看（本体只读）；表型没有文件本体，不能取回；要改数据请直接在 SQL 里操作项目表"
             } else {
                 "打开 = 只读查看本体；取回 = 复制一份可写的工作副本（本体不动）"
             };
@@ -97,6 +105,8 @@ pub(super) fn render_actions(
                 "本体缺失：先走索引修复（回收站里没有它的本体）"
             } else if actions.read_only {
                 "项目处于只读模式"
+            } else if is_table {
+                "表型：只软删资产登记，分析库里的表保留（可用「登记为资产」找回）"
             } else if is_reference {
                 "只删除登记记录与版本元数据，源文件留在原位置不受影响；可从回收站还原登记"
             } else {

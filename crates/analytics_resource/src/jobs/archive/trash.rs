@@ -19,8 +19,8 @@ pub(crate) async fn load_trash(job: &TrashListJob) -> Result<TrashDialogSeed, St
     // 项目库读不到时不弄砸实体清单：第二来源缺失只表现为 reference 条目不显示。
     let reference: Vec<(DateTime<Utc>, TrashRow)> =
         match open_service(job.project_root.clone(), None).await {
-            Ok(service) => match service.deleted_reference_archives().await {
-                Ok(rows) => reference_trash_rows(&rows),
+            Ok(service) => match service.deleted_registry_archives().await {
+                Ok(rows) => registry_trash_rows(&rows),
                 Err(error) => {
                     tracing::warn!(error = %error, "读取软删 reference 回收站条目失败");
                     Vec::new()
@@ -126,3 +126,4 @@ pub(crate) async fn run_trash_action(job: &TrashActionJob) -> OpOutcome {
 pub(crate) async fn reload_trash_after(project_root: PathBuf) -> Result<TrashDialogSeed, String> {
     load_trash(&TrashListJob { project_root }).await
 }
+

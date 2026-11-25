@@ -46,11 +46,12 @@ pub(super) fn trash_line(
         let state = state.clone();
         let on_action = on_action.clone();
         let trash_id = row.trash_id.clone();
-        // 还原口径按粒度区分（§12.1.1 ③）：copy 把副本从回收站取回原位；
-        // reference 本体一直留在源位置，还原只是复活登记行。
-        let restore_note = match row.payload_mode {
-            PayloadMode::Reference => "正在还原登记记录…".to_string(),
-            PayloadMode::Copy => "正在还原…".to_string(),
+        // 还原口径按「有没有实体本体」区分（§12.1.1 ③）：文件型把副本从回收站取回原位；
+        // 引用型 / 表型的本体不在回收站里（源位置 / 分析库），还原只是复活登记行。
+        let restore_note = if row.has_payload {
+            "正在还原…".to_string()
+        } else {
+            "正在还原登记记录…".to_string()
         };
         move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
             state.set_busy(true);
@@ -64,12 +65,12 @@ pub(super) fn trash_line(
             );
         }
     };
-    // 永久删除口径按粒度区分：copy 连本体一起删；reference 本体留原位，只删登记行与版本元数据。
-    let purge_description = match row.payload_mode {
-        PayloadMode::Reference => {
-            "本体留在源位置不受影响；登记记录与版本元数据将彻底删除，不可恢复。".to_string()
-        }
-        PayloadMode::Copy => "本体将从回收站里彻底删除，不可恢复；登记记录一并删除。".to_string(),
+    // 永久删除口径按「有没有实体本体」区分：文件型连本体一起删；引用型 / 表型的本体
+    // 不随删除走（源文件留在原位 / 分析库表保留），只删登记行与版本元数据。
+    let purge_description = if row.has_payload {
+        "本体将从回收站里彻底删除，不可恢复；登记记录一并删除。".to_string()
+    } else {
+        "本体不随删除走（源文件留在原位置、分析库表保留）；登记记录与版本元数据将彻底删除，不可恢复。".to_string()
     };
     let purge = {
         let state = state.clone();

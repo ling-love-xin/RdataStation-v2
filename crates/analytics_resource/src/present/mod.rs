@@ -18,6 +18,7 @@ pub(crate) use crate::dialogs::trash::TrashRow;
 pub(crate) use crate::dialogs::version::VersionRow;
 pub(crate) use crate::model::{
     ArchiveKind, ArchiveStatus, ORIGIN_RESOURCES, PayloadMode, RowScope, TRASH_ID_REF_PREFIX,
+    TRASH_ID_TABLE_PREFIX,
 };
 pub(crate) use crate::payload::RESOURCES_DIR_NAME;
 pub(crate) use crate::preview::Preview;
@@ -57,7 +58,7 @@ mod repair;
 mod snapshot;
 
 pub use self::format::{format_size, format_scale, format_relative_time, format_timestamp, tail_for};
-pub use self::trash::{build_trash_snapshot, entity_trash_row, reference_trash_rows, FolderMemberships};
+pub use self::trash::{build_trash_snapshot, entity_trash_row, registry_trash_rows, FolderMemberships};
 pub use self::rows::{SnapshotInputs, to_row, tag_options};
 pub use self::detail::{DetailExtras, to_detail};
 pub use self::versions::{build_version_rows};

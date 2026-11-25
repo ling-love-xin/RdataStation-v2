@@ -100,6 +100,8 @@ impl ArchiveDetail {
             scope: self.scope,
             status: self.status,
             has_payload: self.payload_rel_path.is_some(),
+            // 表型本体是分析库里的一张表：`payload_rel_path` 为空，但「有本体」成立。
+            has_table: self.analytics_table.is_some(),
             read_only,
             multi_count,
         }

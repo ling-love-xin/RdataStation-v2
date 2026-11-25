@@ -67,34 +67,52 @@ pub fn entity_trash_row(entry: &TrashEntry) -> Option<(DateTime<Utc>, TrashRow)>
     };
     Some((manifest.deleted_at, row))
 }
-/// reference 软删登记行 → 回收站行（第二来源；§12.1.1 ③）。
+/// registry-only 软删登记行 → 回收站行（第二来源；§12.1.1 ③）。
 ///
-/// 这类条目没有实体 manifest（本体一直在源位置），回收站清单要把它们一并列出；
-/// copy 软删行已由实体条目覆盖，这里只收 reference，避免双来源重复。返回删除时间供归并。
-pub fn reference_trash_rows(deleted: &[AnalyticsResource]) -> Vec<(DateTime<Utc>, TrashRow)> {
+/// 两类条目没有实体 manifest：引用型（本体一直在源位置）与表型（本体在项目分析库）。
+/// 回收站清单要把它们一并列出；带上实体 manifest 的 copy 行已由实体条目覆盖，
+/// 这里跳过，避免同一行出现两次。返回删除时间供归并。
+pub fn registry_trash_rows(deleted: &[AnalyticsResource]) -> Vec<(DateTime<Utc>, TrashRow)> {
     deleted
         .iter()
-        .filter(|r| PayloadMode::from_db_str(&r.payload_mode) == PayloadMode::Reference)
-        .map(|r| {
+        .filter_map(|r| {
+            let mode = PayloadMode::from_db_str(&r.payload_mode);
+            let is_reference = mode == PayloadMode::Reference;
+            // 表型：copy 档但没有文件路径（本体是分析库里的表）。
+            let is_table = mode == PayloadMode::Copy && r.file_rel_path.is_none();
+            if !is_reference && !is_table {
+                return None;
+            }
             let kind = ArchiveKind::resolve(&r.kind, r.analytics_table.as_deref());
-            let original_label = r
-                .source_path
-                .clone()
-                .or_else(|| r.file_rel_path.clone())
-                .unwrap_or_else(|| r.name.clone());
+            let original_label = if is_table {
+                r.analytics_table
+                    .as_deref()
+                    .map(|table| format!("分析库表 {table}"))
+                    .unwrap_or_else(|| r.name.clone())
+            } else {
+                r.source_path
+                    .clone()
+                    .or_else(|| r.file_rel_path.clone())
+                    .unwrap_or_else(|| r.name.clone())
+            };
+            let trash_id = if is_table {
+                format!("{TRASH_ID_TABLE_PREFIX}{}", r.id)
+            } else {
+                format!("{TRASH_ID_REF_PREFIX}{}", r.id)
+            };
             let when = r.deleted_at.unwrap_or(r.updated_at);
             let row = TrashRow {
-                trash_id: format!("{TRASH_ID_REF_PREFIX}{}", r.id),
+                trash_id,
                 name: r.name.clone(),
                 original_label,
                 kind_label: crate::detail_view::kind_label(kind).to_string(),
                 time_label: format_timestamp(when),
                 size_label: format_size(r.file_size),
-                payload_mode: PayloadMode::Reference,
+                payload_mode: mode,
                 resource_id: r.id.clone(),
                 has_payload: false,
             };
-            (when, row)
+            Some((when, row))
         })
         .collect()
 }
