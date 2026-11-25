@@ -717,9 +717,8 @@ impl NavView {
             NavBadgeStatus::Idle
         };
         let dot_color = dot_status.color(cx.theme());
-        // 分组表单初值：新建用自动去重默认名，编辑预填现有名称与描述。
+        // 新建分组的初值（自动去重的默认名）；改名走组名原格就地编辑，不用表单。
         let default_group_name = self.next_group_name();
-        let group_seed = self.group_form_seed(group_id);
         // 上移 / 下移分组：边界项禁用（拖拽是主路径，菜单项是键盘 / 无鼠标的替代）。
         let group_ids_now = self.group_ids();
         let group_ix = group_ids_now.iter().position(|id| id == group_id);
@@ -770,7 +769,9 @@ impl NavView {
             } else {
                 dot.into_any_element()
             };
-            health = health.child(dot).child(Badge::new().count(count));
+            // 计数**不在这里**（2026-11-25 用户口径：不要胶囊组件，纯文本紧跟组名，
+            // 走 `GroupHeader::count`）；组头右侧只留状态点。
+            health = health.child(dot);
             health
         };
         let connect_all = Button::new(format!("nav-group-connectall-{group_id}"))
@@ -862,23 +863,50 @@ impl NavView {
                     });
                 }
             });
-        let group_head = tree::GroupHeader::new(format!("nav-group-{group_id}"), name.to_string())
-            .debug_selector("nav-row-group")
-            .expanded(!collapsed)
-            .label_max_width(ui::NAV_NAME_MAX_W)
-            .leading(
-                div()
-                    .w(ui::NAV_GROUP_BAR_WIDTH)
-                    .h(rems(0.875))
-                    .flex_none()
-                    .rounded_full()
-                    .bg(bar),
-            )
-            .trailing(health)
-            .trailing(connect_all)
-            .trailing(disconnect_all)
-            .hover_background(hover)
-            .on_click(toggle_group);
+        // 重命名态：组名那一格换成输入框（**原位**，不再另起一行 / 弹窗）。
+        let renaming = self.nav.borrow().group_rename_for.as_deref() == Some(group_id);
+        let mut group_head =
+            tree::GroupHeader::new(format!("nav-group-{group_id}"), name.to_string())
+                .debug_selector("nav-row-group")
+                .expanded(!collapsed)
+                .label_max_width(ui::NAV_NAME_MAX_W)
+                .leading(
+                    div()
+                        .w(ui::NAV_GROUP_BAR_WIDTH)
+                        .h(rems(0.875))
+                        .flex_none()
+                        .rounded_full()
+                        .bg(bar),
+                );
+        if renaming {
+            if let Some(input) = self.nav_group_input.clone() {
+                // `XSmall` = 20 高，正好落进 22 的分组头行（`Small` 是 24，会顶出 1px）。
+                group_head = group_head.label_editor(
+                    div()
+                        .w_full()
+                        .debug_selector(|| "nav-group-rename".to_string())
+                        .child(
+                            Input::new(&input)
+                                .xsmall()
+                                .bordered(false)
+                                .focus_bordered(true)
+                                .w_full(),
+                        ),
+                );
+            } else {
+                // 输入框还没建好那一帧：先按普通组名画，下一帧就换进来。
+                group_head = group_head.count(count, muted);
+            }
+        } else {
+            group_head = group_head
+                .count(count, muted)
+                .trailing(health)
+                .trailing(connect_all)
+                .trailing(disconnect_all)
+                .hover_background(hover)
+                .on_click(toggle_group);
+        }
+
         // 外壳只承载拖拽 / 落点 / 右键菜单：点击与视觉都在 `GroupHeader` 内。
         let mut header = div().id(format!("nav-group-{group_id}")).child(group_head);
         // 「收起 / 展开本组已展开的成员」入口已移到面板头工具栏（`nav-fold-active`）：
@@ -968,38 +996,23 @@ impl NavView {
                     let gid_rename = gid.clone();
                     let e_new = entity.clone();
                     let seed_new = GroupFormSeed::for_new(default_group_name.clone());
-                    let e_desc = entity.clone();
-                    let seed_desc = group_seed.clone();
                     let e_del = entity.clone();
                     let gid_del = gid.clone();
                     let gname_del = gname.clone();
+                    // 只有一个改名入口：**组名原格就地编辑**（`group_rename_for` → 组头换成输入框）。
+                    // 原来的「编辑分组…」弹窗项已删——它和这一项是同一件事（改名称），两个入口
+                    // 只会让人不知道该点哪个；要连描述一起改走面板头的「管理分组」。
                     menu.item(
                         PopupMenuItem::new(tr("重命名分组")).on_click(move |_, _, app| {
                             let gid = gid_rename.clone();
                             e_rename.update(app, |this, cx| {
                                 this.nav.borrow_mut().group_rename_for = Some(gid.clone());
+                                // 输入框在 `render_nav` 里建：这一帧就先把焦点请求挂上。
+                                this.nav_group_focus_pending = true;
                                 cx.notify();
                             });
                         }),
                     )
-                    // 名称 + 描述一次编辑（行内重命名只改名称，这里补上描述）。
-                    .item(PopupMenuItem::new(tr("编辑分组…")).on_click({
-                        let host = host.clone();
-                        move |_, window, app| {
-                            let e = e_desc.clone();
-                            let seed = seed_desc.clone();
-                            host.open_group_form(
-                                seed,
-                                window,
-                                app,
-                                Rc::new(move |gid, name, desc, app| {
-                                    e.update(app, |this, cx| {
-                                        this.save_group_form(gid, name, desc, cx);
-                                    });
-                                }),
-                            );
-                        }
-                    }))
                     .item(PopupMenuItem::new(tr("新建分组")).on_click({
                         let host = host.clone();
                         move |_, window, app| {
@@ -1074,15 +1087,9 @@ impl NavView {
                 }
             });
 
-        let mut wrap = div().v_flex().w_full().gap_0p5();
-        wrap = wrap.child(header);
-        // 重命名内联输入（打开时创建，见 `render_nav`）。
-        if self.nav.borrow().group_rename_for.as_deref() == Some(group_id) {
-            if let Some(input) = &self.nav_group_input {
-                wrap = wrap.child(div().px_1().pb_0p5().child(Input::new(input)));
-            }
-        }
-        wrap
+        // 重命名输入**在组名那一格里**（`GroupHeader::label_editor`，见上方装配）：
+        // 不再另起一行挂一个输入框——那样既不是「原地改」，看起来还像一块悬着的透明条。
+        header
     }
 
     /// 引用行（v6）：连接已在其**主组**全亮呈现，此分组下只做指路。

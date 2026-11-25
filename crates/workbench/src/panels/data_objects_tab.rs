@@ -2480,7 +2480,8 @@ fn source_schema_row(
         )
         .child(
             div()
-                .flex_1()
+                // 名称按内容宽、**不再吃满一行**：计数紧跟名称（2026-11-25 用户口径：
+                // 计数是纯文本不是胶囊，位置在组名 / 层名之后），弹簧挪到行尾。
                 .min_w_0()
                 .text_xs()
                 .text_color(muted)
@@ -2488,7 +2489,8 @@ fn source_schema_row(
                 .text_ellipsis()
                 .child(layer.to_string()),
         )
-        .child(tree::count_badge(count, muted, colors.list_hover))
+        .child(tree::group_count(count, muted))
+        .child(div().flex_1())
         .into_any_element()
 }
 

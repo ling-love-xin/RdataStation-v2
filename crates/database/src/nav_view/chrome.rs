@@ -170,6 +170,9 @@ impl NavView {
                         |this, _e, ev: &InputEvent, _w, cx| match ev {
                             InputEvent::Change => cx.notify(),
                             InputEvent::PressEnter { .. } => this.commit_group_rename(cx),
+                            // 点到别处即提交（与 DBeaver / VS Code 的行内重命名同口径）：
+                            // 否则一块没焦点的输入框会一直挂在组名格子里。
+                            InputEvent::Blur => this.commit_group_rename(cx),
                             _ => {}
                         },
                     );
@@ -180,6 +183,17 @@ impl NavView {
             None => {
                 self.nav_group_input = None;
                 self._nav_group_sub = None;
+            }
+        }
+        // 「重命名分组」那一帧的焦点请求：输入框建好后把焦点交给它并全选，
+        // 用户可以直接键入覆盖原名（点不进去 = 之前那个「不可选中的透明框」）。
+        if self.nav_group_focus_pending {
+            if let Some(input) = self.nav_group_input.clone() {
+                self.nav_group_focus_pending = false;
+                let len = input.read(cx).value().len();
+                let handle = input.read(cx).focus_handle(cx);
+                handle.focus(window, cx);
+                input.update(cx, |s, cx| s.set_selected_range(0..len, cx));
             }
         }
 

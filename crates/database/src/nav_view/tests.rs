@@ -875,6 +875,121 @@ fn nav_tree_rows_are_laid_out_by_the_virtual_list(cx: &mut gpui_kit::TestAppCont
     );
 }
 
+/// 分组重命名必须**在原组名那一格**就地编辑（2026-11-25 反馈②）。
+///
+/// 历史写法把输入框另起一行挂在分组头下面：既不是「原地改」，看起来还像一块悬着的
+/// 透明条；而且从来没把焦点交出去（按不进字），于是就成了用户说的「透明弹窗还不可选中」。
+/// 这条钉三件事：① 输入框画在分组头那一行里（不另起一行）；② 高度走 `XSmall`（20），
+/// 不撑破 22 的组头行；③ 焦点真的落在它上面、原名被全选（直接键入即覆盖）。
+#[gpui_kit::test]
+fn nav_group_rename_edits_in_place(cx: &mut gpui_kit::TestAppContext) {
+    let conn = "G_1";
+    let (view, cx) = open_nav_view(cx, conn);
+    // 先播一个真分组 + 一棵能画出连接行的树（stub 宿主不产分组，`groups` 由加载回填）。
+    let name = "生产";
+    let gid = "g1";
+    cx.update(|_window, cx| {
+        seed_reveal_state(
+            &view.read(cx),
+            conn,
+            "shop",
+            "public",
+            vec![table_node(conn, "shop", "public", "customers")],
+            None,
+        );
+        view.update(cx, |view, cx| {
+            let mut state = view.nav.borrow_mut();
+            state.groups_loaded = true;
+            state.loading.clear();
+            state.attempted.clear();
+            state.expanded.clear();
+            state.expanded.insert(conn.to_string());
+            state.groups = vec![engine::persistence::ConnectionGroup {
+                id: gid.to_string(),
+                name: name.to_string(),
+                description: None,
+                sort_order: 0,
+                created_at: String::new(),
+                updated_at: String::new(),
+            }];
+            state
+                .membership
+                .insert(conn.to_string(), vec![gid.to_string()]);
+            state
+                .group_order
+                .insert(gid.to_string(), vec![conn.to_string()]);
+            // 等价右键菜单里的「重命名分组」：只置位，输入框由 `render_nav` 懒建。
+            state.group_rename_for = Some(gid.to_string());
+            view.nav_group_focus_pending = true;
+            cx.notify();
+        });
+    });
+    assert_eq!(
+        cx.update(|_window, cx| view.read(cx).nav.borrow().group_rename_for.clone()),
+        Some(gid.to_string()),
+        "置位要落到 `nav` 状态上"
+    );
+    redraw(cx);
+    redraw(cx);
+    // 注意 `debug_bounds` 按选择器存最后画到的那个元素：`nav-row-group` 会同时命中
+    // 「未分组」头。所以这里**不**拿它的 y 当基准，只用它的**行高**（同一档 22），
+    // 再借紧跟其后的连接行定位「组头那一行到哪儿结束」。
+    let header_h = cx.debug_bounds("nav-row-group").expect("分组头应被画出").size.height;
+    let conn_row = cx.debug_bounds("nav-row-conn").expect("连接行应被画出");
+    let edit = cx
+        .debug_bounds("nav-group-rename")
+        .expect("重命名输入框应画在组名那一格");
+    assert!(
+        edit.size.height > Pixels::ZERO,
+        "输入框要有实际高度（0 = 被压扁 / 根本没画）"
+    );
+    assert!(
+        conn_row.origin.y > edit.origin.y,
+        "重命名中的分组头应在连接行之上：input y={:?}，conn y={:?}",
+        edit.origin.y,
+        conn_row.origin.y
+    );
+    assert!(
+        edit.size.height <= header_h,
+        "XSmall 输入 {:?} 不应撑破组头行 {:?}",
+        edit.size.height,
+        header_h
+    );
+    // 组头那一行的上缘 = 下一行（连接行）上缘 − 行高；输入框在其中垂直居中（20 高
+    // 落在 22 的行里 → 上下各 1px），所以上缘最多差 2px。
+    let row_top = conn_row.origin.y - header_h;
+    assert!(
+        edit.origin.y >= row_top && edit.origin.y <= row_top + px(2.),
+        "输入框要在组头行内：行上缘={:?}，input y={:?}",
+        row_top,
+        edit.origin.y
+    );
+    assert!(
+        edit.origin.y + edit.size.height <= conn_row.origin.y,
+        "输入框不得压到下一行（连接行 y={:?}）",
+        conn_row.origin.y
+    );
+    let input = cx.update(|_window, cx| view.read(cx).nav_group_input.clone());
+    let input = input.expect("重命名态下输入框应被建出来");
+    cx.update(|window, cx| {
+        let state = input.read(cx);
+        assert!(
+            state.focus_handle(cx).is_focused(window),
+            "打开重命名后焦点要落在输入框上（否则按不进字 = 不可选中）"
+        );
+        assert_eq!(
+            state.value().to_string(),
+            name,
+            "输入框要预填当前组名"
+        );
+        assert_eq!(
+            state.selected_range(),
+            0..name.len(),
+            "原名应被全选（直接键入即覆盖；范围是 UTF-8 字节偏移）"
+        );
+    });
+}
+
 /// 签证：横向画布落地后，滚树的竖向滚轮**不得**把整片树横向推走。
 ///
 /// 树区现在是两层（`chrome.rs`：视口 `overflow_x_scroll` + 画布 `min_w(NAV_TREE_CANVAS_W)`）。

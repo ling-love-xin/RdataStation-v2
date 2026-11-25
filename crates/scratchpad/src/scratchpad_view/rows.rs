@@ -273,7 +273,9 @@ impl ScratchpadView {
                     if count == 0 {
                         this
                     } else {
-                        this.child(tree::count_badge(count, primary, hover_bg))
+                        // 命中数是**纯文本**（2026-11-25 用户口径：计数统一收成纯文本，
+                        // 不要胶囊）；位置与组头同款，紧跟文件名。
+                        this.child(tree::group_count(count, muted))
                     }
                 },
             )
@@ -953,14 +955,21 @@ impl ScratchpadView {
                                 // debug_selector 供 VisualTestContext::debug_bounds 像素级断言（.id() 不注册）。
                                 .debug_selector(|| format!("sp-res-file-text-{file}"))
                                 .id(format!("sp-res-file-text-{file}"))
-                                .flex_1()
+                                // 名称按内容宽，弹簧挪到计数之后：命中数紧跟文件名（纯文本）。
                                 .min_w_0()
                                 .text_xs()
                                 .text_color(fg)
                                 .overflow_hidden()
                                 .child(fname),
                         )
-                        .child(tree::count_badge(count, primary, hover_bg))
+                        // 命中数是纯文本（2026-11-25 用户口径：计数统一收成纯文本，不要胶囊）。
+                        .child(
+                            div()
+                                .flex_none()
+                                .pl(rems(ui::GROUP_COUNT_GAP))
+                                .child(tree::group_count(count, muted)),
+                        )
+                        .child(div().flex_1())
                         .child(file_ops),
                 );
 

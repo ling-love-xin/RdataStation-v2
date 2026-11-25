@@ -810,6 +810,9 @@ pub struct NavView {
     nav_pump: RefCell<Option<Task<()>>>,
     /// Ctrl+F 待聚焦标记：搜索框懒创建，先到位的请求在这里等一帧。
     nav_search_focus_pending: bool,
+    /// 分组重命名待聚焦标记：组名输入框由 `render_nav` 懒建，点「重命名分组」的那一帧
+    /// 在这里等；建好后把焦点（并全选）交给它——否则输入框在组名格子里却点不进去。
+    nav_group_focus_pending: bool,
     /// 驱动 id → 类型 / 显示名（徽标、hover 卡与属性面板共用；随组织数据一次性加载）。
     driver_catalog: RefCell<HashMap<String, DriverMeta>>,
 }
@@ -848,6 +851,7 @@ impl NavView {
             warm_poll: None,
             nav_pump: RefCell::new(None),
             nav_search_focus_pending: false,
+            nav_group_focus_pending: false,
             driver_catalog: RefCell::new(HashMap::new()),
         }
     }

@@ -608,7 +608,8 @@ impl ScratchpadView {
             .debug_selector("sp-bookmarks-head")
             .expanded(expanded)
             .label_icon(Icon::new(gpui_kit::assets::IconName::Bookmark).size(rems(ui::ICON_SIZE_SM)))
-            .trailing(Badge::new().count(rows.len()))
+            // 计数是**纯文本紧跟组名**（2026-11-25 用户口径：不要胶囊 / 徽标组件）。
+            .count(rows.len(), muted)
             .on_click(toggle);
 
         // 内容行：文件 · 行号 · 便签（muted 截断）；点击跳到书签行。
@@ -862,7 +863,6 @@ impl ScratchpadView {
             }
         };
         let ref_count = external_refs.len();
-        let ref_badge = Badge::new().count(ref_count);
         let toggle_refs = {
             let entity = entity.clone();
             move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
@@ -876,7 +876,8 @@ impl ScratchpadView {
         let ref_head = GroupHeader::new("sp-refs-head", tr("引用"))
             .debug_selector("sp-refs-head")
             .expanded(refs_expanded)
-            .trailing(ref_badge)
+            // 计数纯文本紧跟组名（2026-11-25 用户口径）。
+            .count(ref_count, muted)
             .hover_action(
                 Button::new("sp-refs-head-add")
                     .ghost()
@@ -976,7 +977,6 @@ impl ScratchpadView {
                     )
                 }
             };
-            let trash_badge = Badge::new().count(trash.len());
             let toggle_trash = {
                 let entity = entity.clone();
                 move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
@@ -990,7 +990,8 @@ impl ScratchpadView {
             let mut trash_head = GroupHeader::new("sp-trash-head", tr("回收站"))
                 .debug_selector("sp-trash-head")
                 .expanded(trash_expanded)
-                .trailing(trash_badge);
+                // 计数纯文本紧跟组名（2026-11-25 用户口径）。
+                .count(trash.len(), muted);
             // 清空按钮只在垃圾桶非空时存在，且 hover 才显（与草稿 / 引用两个头一致）。
             if let Some(btn) = empty_btn {
                 trash_head = trash_head.hover_action(btn);
@@ -2286,7 +2287,8 @@ impl ScratchpadView {
             let drafts_head = GroupHeader::new("sp-drafts-head", tr("草稿"))
                 .debug_selector("sp-drafts-head")
                 .expanded(drafts_expanded)
-                .trailing(Badge::new().count(row_count))
+                // 计数纯文本紧跟组名（2026-11-25 用户口径）。
+                .count(row_count, muted)
                 .hover_action(
                     Button::new("sp-drafts-head-new-file")
                         .ghost()

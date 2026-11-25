@@ -76,30 +76,6 @@ pub fn disclosure_icon(expanded: bool, color: Hsla) -> Icon {
         .text_color(color)
 }
 
-/// 行内**计数徽章**（对齐 VS Code `countBadge` 胶囊规格：最小 18px、圆角全、
-/// 内距 4px（Tailwind `px_1`）、字号 `text_sm`（13–14px 档））。
-///
-/// 消费方（2026-10-12 起收口）：草稿箱树命中数角标、搜索结果树文件行命中数角标——
-/// 此前两处各写一遍「`px_1 + rounded_sm + text_xs + text_color(primary) + bg(hover_bg)`」。
-/// 规格来源：`docs/architecture/ui/ui-design-spec.md` §4 徽标行
-/// （VS Code `countBadge` 2026-10-12 实证，见 `vscode-ui-design-system.md` §4.5）。
-/// 颜色口径沿用既有消费点：`fg` = 强调色文字、`bg` = 浅底（信息类角标，非实底徽章）。
-pub fn count_badge(count: usize, fg: Hsla, bg: Hsla) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .justify_center()
-        .flex_none()
-        .min_w(rems(ui::NAV_BADGE_SIZE))
-        .h(rems(ui::NAV_BADGE_SIZE))
-        .px_1()
-        .rounded_full()
-        .text_sm()
-        .text_color(fg)
-        .bg(bg)
-        .child(count.to_string())
-}
-
 /// 缩进占位（子元素形式）：宽度 = `depth × step`。
 ///
 /// 用于「行的第一个子元素是缩进」的排版（草稿箱）；导航那边缩进走 `pl`，
@@ -173,6 +149,20 @@ pub fn row_sizes(
     )
 }
 
+/// 分组名后的**纯文本计数**（2026-11-25 用户口径：分组上的计数不要胶囊 / 徽标组件）。
+///
+/// 没有底色、没有圆角、没有最小宽——只要一行 `text_xs` 的弱色数字，跟在组名后
+/// `GROUP_COUNT_GAP + 行 gap_1`（≈ 两个字宽）的位置。有样式反而突兀。
+/// 位置间隔由 [`GroupHeader::count`] 统一套；`source_schema_row` 这类「名左数右」的行
+/// 直接用它做尾部即可（同一套字色 / 字号，不另造胶囊）。
+pub fn group_count(count: usize, color: Hsla) -> Div {
+    div()
+        .flex_none()
+        .text_xs()
+        .text_color(color)
+        .child(count.to_string())
+}
+
 /// 分组头（可折叠分区标题行）的统一原语。
 ///
 /// ## 为什么收
@@ -199,6 +189,13 @@ pub fn row_sizes(
 ///
 /// 尾部**不**收在 `trailing` 里的东西：真正的业务动作按各自面板需要自己组按钮，
 /// 这里只管位置与显隐。
+///
+/// ## 组名后的计数 / 组名原地编辑（2026-11-25）
+///
+/// - [`Self::count`]：计数**紧跟组名**、纯文本（[`group_count`]），不进 `trailing`
+///   （放右缘就离组名太远，也不是「分组上有几个」的读法）。
+/// - [`Self::label_editor`]：组名原位编辑（导航分组重命名）——输入框顶替组名占住同一格，
+///   展开槽与色条保留；调用方此时不要再挂 `trailing` / `on_click`（那一格已经给输入框）。
 #[derive(IntoElement)]
 pub struct GroupHeader {
     id: SharedString,
@@ -208,6 +205,8 @@ pub struct GroupHeader {
     expanded: bool,
     leading: Option<AnyElement>,
     label_icon: Option<AnyElement>,
+    label_suffix: Option<AnyElement>,
+    label_editor: Option<AnyElement>,
     hover_bg: Option<Rgba>,
     trailing: Vec<AnyElement>,
     hover_actions: Vec<AnyElement>,
@@ -226,6 +225,8 @@ impl GroupHeader {
             expanded: false,
             leading: None,
             label_icon: None,
+            label_suffix: None,
+            label_editor: None,
             hover_bg: None,
             trailing: Vec::new(),
             hover_actions: Vec::new(),
@@ -272,6 +273,22 @@ impl GroupHeader {
     #[must_use]
     pub fn trailing(mut self, el: impl IntoElement) -> Self {
         self.trailing.push(el.into_any_element());
+        self
+    }
+
+    /// 组名后的**纯文本计数**（详见 [`group_count`]）：紧跟组名，不进尾部。
+    ///
+    /// 间隔 = 行 `gap_1`（4px）+ `ui::GROUP_COUNT_GAP`（8px）≈ 两个字宽。
+    #[must_use]
+    pub fn count(mut self, count: usize, color: Hsla) -> Self {
+        self.label_suffix = Some(group_count(count, color).into_any_element());
+        self
+    }
+
+    /// 组名**原位编辑**：`el` 顶替组名占住同一格（导航分组重命名用输入框）。
+    #[must_use]
+    pub fn label_editor(mut self, el: impl IntoElement) -> Self {
+        self.label_editor = Some(el.into_any_element());
         self
     }
 
@@ -331,18 +348,33 @@ impl RenderOnce for GroupHeader {
         }
         row = row
             .child(disclosure_slot().child(disclosure_icon(self.expanded, muted)))
-            .when_some(self.label_icon, |d, icon| d.child(icon))
-            .child(
-                div()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(colors.foreground)
-                    .when_some(self.label_max_width, |d, w| d.max_w(rems(w)))
-                    .child(self.label),
-            )
-            .child(div().flex_1());
+            .when_some(self.label_icon, |d, icon| d.child(icon));
+        // 组名格：原地编辑时整格交给输入框（不再叠计数与弹簧），否则 组名 + 纯文本计数 + 弹簧。
+        if let Some(editor) = self.label_editor {
+            row = row.child(div().flex_1().min_w_0().child(editor));
+        } else {
+            row = row
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(colors.foreground)
+                        .when_some(self.label_max_width, |d, w| d.max_w(rems(w)))
+                        .child(self.label),
+                )
+                // 计数紧跟组名、不贴弹簧：行 gap_1 + GROUP_COUNT_GAP ≈ 两个字宽。
+                .when_some(self.label_suffix, |d, suffix| {
+                    d.child(
+                        div()
+                            .flex_none()
+                            .pl(rems(ui::GROUP_COUNT_GAP))
+                            .child(suffix),
+                    )
+                })
+                .child(div().flex_1());
+        }
 
         for el in self.trailing {
             row = row.child(el);
