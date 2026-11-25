@@ -53,5 +53,5 @@ pub(crate) const GLOBAL_MIGRATIONS_SQL: &str = concat!(
     "\n",
     include_str!("../../../store/migrations/global/036_global_version_table_names.sql"),
     "\n",
-    include_str!("../../../store/migrations/global/037_analytics_global_refs.sql")
+    include_str!("../../../store/migrations/global/038_analytics_global_refs.sql")
 );
