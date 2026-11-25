@@ -2972,7 +2972,7 @@ pub fn set_selected_cell_without_scroll(&mut self, row_ix: usize, col_ix: usize,
 | 再截 200 字符：`truncateString(displayName, 200)` + `notEmpty` 兜底 | `:496-501` |
 | 宽度 = `max(min(24X 文本宽, 文本宽), min(文本宽 + 10, 父容器宽 / 4))`，其中 24X 只在文本比 24 个 X 窄时被覆盖 | `:987-1011` |
 | 高度 = `min(文本高 + 6, MIN_FILTER_TEXT_HEIGHT=20)` | `:1010`、`:103` |
-| 绘制文字色 = `SWT.COLOR_DARK_GREEN`；非 hover 时右边界画一条竖线 `drawLine(x+w-4, y+2, x+w-4, y+h-4)`，hover 时另有底色 `blend(bg, fg, 90)` | `:1018-1035`、`:1037` |
+| 绘制文字色 = `SWT.COLOR_DARK_GREEN`；非 hover 时右边界画一条竖线 `drawLine(x+w-4, y+2, x+w-4, y+h-4)`，hover 时另有底色：`UIUtils.blend(background, isDarkBG ? white : black, 90)`（= 90% 背景 + 10% 白/黑，`UIUtils.java:1859-1860`） | `:1018-1035`、`:1037` |
 | 单击 → 弹「对象信息」浮层 = 图标 + **SQL 全文 Sirius 文本控件**（`createSQLPanel` 传 `viewer.getActiveQueryText()`） | `:924-935`、`:728-772` |
 | 双击 / Ctrl+单击 → `openEditorForActiveQuery()`：打开 SQL 控制台，内容 = `getActiveQueryText()` | `:924-928`、`:947-950`、`:774-791` |
 
@@ -3017,8 +3017,8 @@ pub fn set_selected_cell_without_scroll(&mut self, row_ix: usize, col_ix: usize,
 | 第 ① 档「显示 SQL」文案 | 表直读 + 无过滤器时显示固定文案 | 无表直读路径 ⇒ 恒显示 SQL 文本 | 没有 `DBSEntity` 这种结果来源；等「数据对象直读」这条链路建起来才有这一档 |
 | 双击打开 SQL 编辑器 | `openEditorForActiveQuery()` 开控制台并塞入当前查询 | 无 | 本仓右栏「执行 SQL」页签是**只读回显**（不是可编辑控制台）；开一个真编辑器属于跨模块动作，单独立项 |
 | 右边界竖线 | 非 hover 时画 `drawLine(x+w-4, …)` | 无（列间靠 Button 自身宽度分离） | 本仓这一格是 Button，要画这条线得自绘；与「列间无间距」的整体布局一起重新算，P1 先登记 |
-| 文字色 `COLOR_DARK_GREEN` | 硬编码深绿 | 主题色 | 项目硬约束：禁裸 hex、只用主题 token；主题里没有「深绿」这一角色，硬塞一个等于绕过主题体系 |
-| hover 态 | 底色 `blend(bg, fg, 90)` + 竖线 | Button 的 ghost hover 底色 | 组件统一 hover 语义，不自绘 |
+| 文字色 `COLOR_DARK_GREEN` | 硬编码深绿 | `theme.colors.success`（§53） | 项目硬约束：禁裸 hex、只用主题 token；按用户拍板借用 `success` 语义绿，不新增主题键 |
+| hover 态 | 底色 `blend(background, 暗?白:黑, 90)` + 竖线 | `object_chip_hover_bg()` 算同一公式（§54.9） | 竖线仍靠封边的 `vline-source` 表达，不自绘整格 |
 
 ### 44.5 验证
 
@@ -3169,10 +3169,10 @@ pub fn set_selected_cell_without_scroll(&mut self, row_ix: usize, col_ix: usize,
 
 | 项 | DBeaver | 本仓 | 原因 |
 | --- | --- | --- | --- |
-| 对象格文本色 | `COLOR_DARK_GREEN`（SWT 系统色，明暗主题都是绿） | `theme.colors.muted_foreground` | 本仓主题是「140/140 全量 token」口径，新增一个语义色要同步 `theme-tokens-complete.md` 与校验；单独一刀，不夹带 |
+| 对象格文本色 | `COLOR_DARK_GREEN`（SWT 系统色，明暗主题都是绿） | `theme.colors.success` | **已落地（§53）**：按用户拍板「直接用主题色」，借用 `success`（明 `#15803D` / 暗 `#89D185`），不新增主题键 |
 | 对象图标 | `getActiveObjectImage()` 三段（`:551-571`）：导航节点图标 / `getObjectImage()` / `TREE_TABLE`（表）/ 兜底 `SQL_TEXT` | `IconName::FileCode` | **已落地（§52）**：本仓结果集恒是「一条 SQL 的结果」、拿不到实体类型 → 落 `:568-569` 兜底支（`DBIcon.SQL_TEXT`），lucide 对应 `file-code`；先前的 `Table2` 是 `TREE_TABLE` 那一支的对应物 |
 | 逐格宽高 | `computeSize` 精确到 `icon+4` / `icon+6` | Button 组件内距决定（±2-4px） | 组件没有「图标 + 固定内距」旋钮；差异在像素级，肉眼小于一条竖线 |
-| hover 语义 | 图标灰副本 ↔ 彩色、格子以 blend 90% 铺底 | `Button::ghost()` 的 hover 底色 | 要完全等价需自绘格子（违反「组件选型禁手搓」）；现有 hover 反馈语义相同 |
+| hover 语义 | **只有底色**：`blend(自身背景, 暗?白:黑, 90)` = 90% 背景 + 10% 白/黑（`:1019-1027`、`UIUtils.java:1859-1860`），另画右边界竖线；对象格**没有**图标双态 | `object_chip_hover_bg()` 按同一公式算 `ButtonCustomVariant::hover` 底 | **已落地（§54.9）**。更正：此处原写「图标灰副本 ↔ 彩色」是**误记**——`SWT.IMAGE_GRAY` 双图属**展开钮** `FilterExpandPanel:1288-1291`、`:1309-1317` 与**历史钮** `HistoryPanel:1056-1069`，对象格 `paintPanel` 全程用同一张固定图标（`:1045`） |
 | 对象格单击 | 弹对象信息浮层（内嵌只读 SQL 面板，失焦关闭） | 受控 `Popover`：图标列 + 血缘行 + 只读等宽 SQL | **已落地（§51）**：非模态浮层由 `sql_popup_open` 驱动（`showObjectInfoPopup:942-984`）；血缘一行本仓卡片固有、按用户要求保留；模态卡片 `OpenSqlDialog` 仍留给右栏「本次重查 SQL」；Ctrl+单击开 SQL 控制台（`:947-950`）本仓无该物 |
 | 历史下拉 | 表格浮层（70/30 双列、SQL 等宽字体、`Manage Filters`、↑ 关闭） | 普通下拉菜单 | **已落地，见 §48**（残余差异登记在 §48.4） |
 | ExecutePanel 启用条件 | 文本 ≠ 当前条件才亮 | 恒可点 | **已落地，见 §49**；本表原判「本仓没有未应用草稿态」经实测**修正**：`filter_text` 确为输入框实时副本，但「落到网格」另有防抖/提交两步，故另记 `applied_filter_text` 作等价物 |
@@ -3350,7 +3350,7 @@ pub fn set_selected_cell_without_scroll(&mut self, row_ix: usize, col_ix: usize,
 | 对象格单击 → 对象信息浮层（§51） | **已落地**：非模态 `Popover`，保留血缘行 |
 | 查找钮 → `FindReplaceOverlay` 浮层（§54） | **已落地**：改为覆盖网格右上角的浮层；残余（替换栏 / 按宽藏工具条 / 换角 / 历史 / 补全）见 §54.4 |
 | 筛选条文本框的内容补全弹层 | **未落地**：`InputState` 无补全通道，等输入组件 |
-| 首格文本色 / hover 灰↔彩 | 登记在 §46.4，未落地（文本色需新增一枚语义 token 并同步 theme pack 与 token 全集校验，与在途的 theme 改造撞同一批文件，待其落地后单开一刀；hover 灰↔彩需自绘格子） |
+| 首格文本色（§53） / 首格悬停底（§54.9） | **均已落地** |
 | 对象格 / 浮层图标（§52） | **已落地**：`Table2` → `FileCode` |
 | 左/右侧栏规范序与出厂启用集合 | `stash@{0}` 半成品，未编译未验证 |
 
@@ -3507,7 +3507,7 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
 | --- | --- | --- | --- |
 | 色源 | 系统常量 `rgb(0,128,0)` | 主题键 `success.background` | 用户拍板用主题色；本仓禁裸色、且要明暗都可读 |
 | 语义 | 「对象名」专用系统色 | 借用 `success`（成功语义） | 复用一个语义相近的绿，不新增主题键（新增键要同步 theme pack / token 全集守卫，属另一刀） |
-| 悬停 | `blend(background, 90%)` 铺底（`:1019-1030`） | 沿用 ghost 的 `accent` 悬停底 | 这层不变；「灰↔彩」图标仍是未做项 |
+| 悬停 | `blend(background, 暗?白:黑, 90)` 铺底（`:1019-1027`） | ghost 的 `accent` 悬停底 → **已换**为 `object_chip_hover_bg()`（§54.9） | `accent` 强调色与真值相差一个色相；「灰↔彩」图标是误记，对象格无此逻辑（见 §46.4 更正） |
 
 ### 53.4 验证
 
@@ -3634,3 +3634,47 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
 差异登记：① 不落盘——DBeaver 把能力开关写进 dialog settings（`:167-168`），本仓只存内存；② 菜单文案按中文 `tr(...)`（真值是英文硬编码字符串，没收进 `ResultSetMessages`）；③ 真值带快捷键 `KeyboardShortcuts.SEARCH_ALL` 与图标 `UIIcon.FIND_REPLACE_FIND_ALL_FILTER`，本仓这两样都没接（图标名在 `gpui-kit-assets 0.10.0` 的 Lucide 集合里没有对应项）。
 
 验证：`cargo test -p rds-result-panel --lib` → **452 passed / 0 failed**（新增 `interactive_filter_off_turns_show_matching_into_a_one_shot_button` 与 `find_only_menu_entries_follow_the_interactive_switch`）；`cargo check -p rds-editor --lib` → `Finished`（唯一 warning 来自并行线在途的 `view/host/format.rs:13` unused import，非本刀）。`cargo test -p rds-editor --lib` 仍被并行线中间态挡住（`ChannelsPort::confirm_federated_mount` 缺实现，E0046，与本次改动无关）。
+
+## §54.9 对象格悬停底换成 DBeaver 的 blend（并更正「图标灰↔彩」误记）
+
+### 54.9.1 取证
+
+| 事实 | 真值 | 出处 |
+| --- | --- | --- |
+| hover 底色 | `UIUtils.blend(background, isDarkBG ? white : black, 90)` | `ResultSetFilterPanel.java:1019-1027` |
+| `blend` 语义 | `(ratio*v1 + (100-ratio)*v2)/100` → **90% 背景 + 10% 白/黑**（暗底提亮、亮底压暗） | `UIUtils.java:1859-1860`（RGB 版 `:1863-1869`） |
+| 铺底范围 | `fillRectangle(e.x, e.y, e.width-3, panelHeight)`：整格宽减 3，满高 | `:1027-1028` |
+| 右边界竖线 | hover 与非 hover **都画**：`drawLine(x+w-4, y+2 → y+h-4)`；hover 只是多一层底色 | `:1029-1035` |
+| 对象格图标 | `paintPanel` 只画**一张固定图标**：`drawImage(icon, 2, (h-iconH)/2)`，无灰度/彩色双态 | `:1045` |
+| 灰度双图归属 | **展开钮** `FilterExpandPanel`：构造期造 `SWT.IMAGE_GRAY` 副本（`:1288-1291`），paint 里「非 hover 画灰度、hover 画实图」（`:1309-1317`） | 同文件 |
+| 灰度双图归属（续） | **历史钮** `HistoryPanel` 同样造灰度副本（`:1056-1069`） | 同文件 |
+
+**更正**：§46.4 原把「图标灰副本 ↔ 彩色」记在对象格 hover 上，是把展开钮/历史钮的逻辑搬错了位置；对象格 `paintPanel` 全程用同一张图标。§44.4、§46.4、§50、§53.3 四处已就地改正。
+
+### 54.9.2 落地
+
+- `crates/result_panel/src/panel/render.rs` 新增纯函数：
+
+  ```rust
+  pub(crate) fn object_chip_hover_bg(bg: Hsla, is_dark: bool) -> Hsla {
+      let lift = hsla(0., 0., if is_dark { 1. } else { 0. }, 1.);
+      bg.lerp(&lift, 0.1)
+  }
+  ```
+
+  `sql_chip` 里 `ButtonCustomVariant::hover/.active` 的取值从 ghost 的 `tokens.accent`（暗色再乘 0.5）换成 `object_chip_hover_bg(theme.colors.background, theme.mode.is_dark())` —— 底色取筛选框自身的 `theme.colors.background`，与真值「拿控件自己的背景去混」同口径。
+- 为什么用 `Hsla` 通道插值：vendor 只给了 `Lerp for Hsla`（`vendor/gpui-base/src/animation.rs:127-139`，逐通道），没有 `Rgba` 版；其文档注明面向近灰阶颜色，而此处只有 10% 幅度、底色中性，与真值 RGB 混合的差肉眼不可分。若要逐通道精确对齐 RGB，需自行 `to_rgba()` 混合再转回，留作可选精度项。
+
+### 54.9.3 残余差异（登记，不做）
+
+| 项 | 真值 | 本仓 | 说明 |
+| --- | --- | --- | --- |
+| 竖线缩进 | `x+w-4`、`y+2 → y+h-4`，hover/非 hover 同一条 | 封边 `vline-source`：1px、满高、贴右边 | 不自绘整格（组件选型禁手搓）；位置差 ≤3px |
+| 铺底宽度 | `e.width-3` | 整格 | 同上 |
+| 逐格宽高 | `computeSize`：`icon.width + 4`、`textSize.x + 10`、`textSize.y + 6`、`maxWidth = 父/4` | 由 `Button` 内距决定 | 组件没有「图标 + 固定内距」旋钮，属像素级差异 |
+
+### 54.9.4 验证
+
+- `cargo check -p rds-result-panel --lib` → `Finished`，0 warning。
+- `cargo test -p rds-result-panel --lib` → **453 passed / 0 failed**（新增 `object_chip_hover_background_blends_a_tenth_towards_white_or_black`；断言暗底 `l` 上升且幅度 = `(1-l)*0.1`、亮底 `l` 下降且幅度 = `l*0.1`）。
+- 悬停观感（明/暗两主题的实际对比度）按要求由用户手动目视；本刀不启动 GUI、不截图。

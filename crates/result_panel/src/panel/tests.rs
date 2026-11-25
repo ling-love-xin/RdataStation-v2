@@ -4706,6 +4706,34 @@ fn find_only_menu_entries_follow_the_interactive_switch(_cx: &mut gpui_kit::Test
     assert!(!off[1].2);
 }
 
+/// 【§54.9】对象格悬停底：暗底提亮 10%、亮底压暗 10%
+///
+/// 真值 `ActiveObjectPanel.paintPanel:1019-1027` = `UIUtils.blend(background,
+/// isDarkBG ? white : black, 90)`，`blend(v1,v2,ratio) = (ratio*v1 + (100-ratio)*v2)/100`
+/// （`UIUtils.java:1859-1860`）——即朝白/黑走 10%，不是换一个强调色。
+#[gpui_kit::test]
+fn object_chip_hover_background_blends_a_tenth_towards_white_or_black(
+    _cx: &mut gpui_kit::TestAppContext,
+) {
+    let dark_bg = gpui_kit::hsla(220., 0.06, 0.12, 1.);
+    let dark_hover = super::render::object_chip_hover_bg(dark_bg, true);
+    assert!(dark_hover.l > dark_bg.l, "暗底 hover 应提亮");
+    assert!(
+        (dark_hover.l - (dark_bg.l + (1. - dark_bg.l) * 0.1)).abs() < 1e-4,
+        "提亮幅度应朝白走 10%（实际 l = {}）",
+        dark_hover.l
+    );
+
+    let light_bg = gpui_kit::hsla(220., 0.04, 0.94, 1.);
+    let light_hover = super::render::object_chip_hover_bg(light_bg, false);
+    assert!(light_hover.l < light_bg.l, "亮底 hover 应压暗");
+    assert!(
+        (light_hover.l - (light_bg.l - light_bg.l * 0.1)).abs() < 1e-4,
+        "压暗幅度应朝黑走 10%（实际 l = {}）",
+        light_hover.l
+    );
+}
+
 /// 【工具栏 2026-11-20 / 收口 2026-11-24】CHECK 型按钮的「点一次就翻转面板态」：
 /// 筛选栏只剩筛选展开 / 查找两颗（下发源库已删、列注释已迁结果集设置，见基线 §21.3），
 /// 二者都是 DBeaver 的 CHECK `ToolItem`

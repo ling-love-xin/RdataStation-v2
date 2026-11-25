@@ -4,6 +4,7 @@ use shared::i18n::tr;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt as _;
+use gpui_kit::base::animation::Lerp as _;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::Selectable as _;
@@ -311,15 +312,17 @@ impl ResultPanel {
                 // `.text_color(normal_style.fg)`），没有单独给 label 着色的入口；
                 // `Button::foreground` 在 vendor 里是**死字段**（只在 `:128` 赋值，
                 // 全文件无读取），设了不生效。故用官方 `ButtonCustomVariant`
-                // 复刻 ghost 的底色与悬停、只把 fg 换成主题绿：
-                // ghost 的悬停底是 `tokens.accent`（`:1226-1233`，暗色再乘 0.5），
-                // 而 `tokens.accent = colors.accent`（`theme/mod.rs:655`），
-                // 所以下面这一对值就是 ghost 的原值。
-                let hover_bg = if theme.mode.is_dark() {
-                    theme.colors.accent.opacity(0.5)
-                } else {
-                    theme.colors.accent
-                };
+                // 复刻 ghost 的底色与悬停、只把 fg 换成主题绿。
+                //
+                // 悬停底**不取 ghost 的 `tokens.accent`**：DBeaver 对象格是自己 `paintPanel`
+                // 画的，hover 时铺的是「控件背景与白/黑按 90:10 混合」的色
+                // （`ResultSetFilterPanel.java:1019-1027`：
+                // `UIUtils.blend(background, isDarkBG ? white : black, 90)`，而
+                // `blend(v1, v2, ratio) = (ratio*v1 + (100-ratio)*v2)/100`，
+                // `UIUtils.java:1859-1860`）——即暗底提亮 10%、亮底压暗 10%，不是固定强调色。
+                // 本仓筛选框底就是 `theme.colors.background`（下面 `filter` 的 `.bg(...)`），
+                // 故按同一底色算。
+                let hover_bg = object_chip_hover_bg(theme.colors.background, theme.mode.is_dark());
                 let object_name_style = ButtonCustomVariant::new(cx)
                     .foreground(theme.colors.success)
                     .hover(hover_bg)
@@ -2110,4 +2113,19 @@ pub(crate) fn find_only_menu_entries(interactive_on: bool) -> [(&'static str, bo
         ("勾选「仅显示匹配」即边输边过滤", interactive_on, true),
         ("「仅显示匹配」只在点按时过滤一次", !interactive_on, false),
     ]
+}
+
+/// 对象格（筛选框第 1 格）的悬停底色（DBeaver `ActiveObjectPanel.paintPanel:1019-1027`）
+///
+/// 真值不是取某个强调色，而是把**控件自身的背景**与白/黑按 90:10 混合：
+/// `UIUtils.blend(background, isDarkBG ? white : black, 90)`，其中
+/// `blend(v1, v2, ratio) = (ratio*v1 + (100-ratio)*v2)/100`（`UIUtils.java:1859-1860`），
+/// 于是暗底提亮 10%、亮底压暗 10% —— 对比度很轻，只是「指过去有一点反应」。
+///
+/// 本仓用 `Hsla` 的通道插值实现（`gpui_base::animation::Lerp`）：只有 10% 的幅度、且
+/// 底色是近中性灰，HSL 与真值的 RGB 插值在这里几乎等价（Lerp 的文档也注明它面向近灰阶颜色）。
+pub(crate) fn object_chip_hover_bg(bg: Hsla, is_dark: bool) -> Hsla {
+    // 白的 HSL 是 (0, 0, 1)、黑是 (0, 0, 0)；混的是「底色 → 白/黑」的 10%
+    let lift = hsla(0., 0., if is_dark { 1. } else { 0. }, 1.);
+    bg.lerp(&lift, 0.1)
 }
