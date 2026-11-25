@@ -101,7 +101,8 @@ impl AnalysisSourceKind {
 pub enum AnalysisMountKind {
     /// 联邦直查：`federation::session::ensure_session`，别名自由。
     Federation,
-    /// 本地加速：`accel::ensure_session`，**ATTACH 别名是固定 `rds_src`**（不按源命名）。
+    /// 本地加速：`accel::ensure_on_instance`，首条源用 `rds_src`，同实例多源时由实例让位成
+    /// `rds_src_2`（2026-11-26 起不再"固定别名"；实际别名见 `AnalysisInstance::alias_for_conn`）。
     Accel,
     /// 数据库文件挂载：`file_view::load_database_as` / `load_database_global`，别名自由。
     AttachFile,

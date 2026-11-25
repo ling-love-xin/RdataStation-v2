@@ -688,10 +688,12 @@ impl QueryRunner for EngineQueryRunner {
         // 加速档：`alias` 无意义（就那一条源）
         if channel != ExecChannel::Federated {
             let source = self.accel_source(connection)?;
-            let session = accel::ensure_session(&source)?;
-            session.refresh().map_err(|error| error.to_string())?;
-            tracing::info!(source = %source.conn_id, "本地加速源已重新挂载（表清单已刷新）");
-            return Ok("已重新挂载源库（新表可见了）".to_string());
+            let alias = match accel::remount_on_instance(&source) {
+                Ok(alias) => alias,
+                Err(reason) => return Err(reason),
+            };
+            tracing::info!(source = %source.conn_id, alias = %alias, "本地加速源已重新挂载（表清单已刷新）");
+            return Ok(format!("已重新挂载源库（catalog {alias}，新表可见了）"));
         }
 
         // 联邦档：会话已经建好（源清单就是按同一套口径组装的），这里只重挂

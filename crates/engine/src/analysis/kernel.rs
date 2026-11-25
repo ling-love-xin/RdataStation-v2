@@ -17,7 +17,7 @@ use duckdb::Connection;
 use shared::error::{CommonError, CoreError};
 use shared::models::QueryResult;
 
-use crate::duckdb::accel::{self, AccelSession, AccelSource};
+use crate::duckdb::accel::{self, AccelSource};
 use crate::duckdb::federation::registry::FederatedSource;
 use crate::duckdb::federation::session::FederatedSession;
 use crate::duckdb::instance::{self, AnalysisSession};
@@ -79,17 +79,16 @@ impl PreparedMounts {
 /// 正是这个事实的写法——不需要按调用方各发一个。
 static PROCESS_RUNNING: AtomicBool = AtomicBool::new(false);
 
-/// 内核交出去的会话句柄。四条执行面各一种，**不含隐藏的第五种**。
+/// 内核交出去的会话句柄。执行面各一种，**不含隐藏的第五种**。
 pub enum SessionHandle {
     /// 源库直连：没有 DuckDB 会话，SQL 交回驱动。
     None,
     /// 进程内 DuckDB 单例（导出 / 临时表 / 洞察取样）。
     ProcessDb(Arc<Mutex<Connection>>),
-    Accelerated(Arc<AccelSession>),
     Federated(Arc<FederatedSession>),
     /// 分析实例上的一条会话（2026-11-26 起本地加速 / 联邦都落这里）。
     ///
-    /// 与 `Federated` / `Accelerated` 的区别不是"类型不同"，而是**不再各建一条内存库**：
+    /// 与 `Federated` 的区别不是"类型不同"，而是**不再各建一条内存库**：
     /// catalog（底座 + 源别名）由实例共享，`TEMP` 仍是本会话的。`label` 保留原来的
     /// 档位词（`accelerated` / `federated`），历史面板与日志不必改口径。
     Instance {
@@ -114,7 +113,6 @@ impl SessionHandle {
         match self {
             Self::None => "source",
             Self::ProcessDb(_) => "process",
-            Self::Accelerated(_) => "accelerated",
             Self::Federated(_) => "federated",
             Self::Instance { label, .. } => label,
         }
@@ -140,7 +138,6 @@ impl SessionHandle {
                     .map_err(|e| invalid(format!("DuckDB 单例锁中毒: {e}")))?;
                 accel::run_sql_on(&guard, &PROCESS_RUNNING, sql)
             }
-            Self::Accelerated(session) => session.run(sql),
             Self::Federated(session) => session.run(sql),
             Self::Instance { session, .. } => session.run(sql),
         }

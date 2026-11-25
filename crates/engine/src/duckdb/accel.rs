@@ -42,7 +42,7 @@ use std::sync::{Arc, Mutex};
 use duckdb::Connection;
 use once_cell::sync::Lazy;
 
-use shared::error::{CommonError, CoreError};
+use shared::error::CoreError;
 use shared::models::QueryResult;
 
 /// 附加源的固定别名（用户 SQL 里可以显式写 `<alias>.<schema>.<table>` 跨 schema）
@@ -259,6 +259,10 @@ impl AccelSource {
     }
 
     /// 挂载语句（只读；别名固定 [`SOURCE_ALIAS`]）
+    ///
+    /// 生产路径不再由这里拼：单实例后挂载统一走 `federation::session::mount_into`
+    /// （按计划里的别名）。留着是给用例做口径对照——「加速与联邦的 ATTACH 形状必须一致」。
+    #[cfg(test)]
     fn attach_sql(&self) -> String {
         let literal = quote_literal(&self.connection_string);
         match self.kind.attach_type() {
@@ -344,25 +348,6 @@ pub(crate) fn scrub_credentials(connection_string: &str, text: &str) -> String {
     out
 }
 
-/// 一条加速会话（一个源一条专用 DuckDB 连接）
-pub struct AccelSession {
-    conn: Mutex<Connection>,
-    kind: AccelKind,
-    /// 源连接 id（与会话表的键同源）：存一份让会话**自己知道自己挂的是谁**，
-    /// [`owners`] 枚举时不依赖调用方再拿键去对
-    conn_id: String,
-    /// 挂载语句（`refresh` 用同一份口径重建；**里面有凭据**，只在本进程里用）
-    source_attach: String,
-    /// 源连接串（脱敏用：错误文本要把里面的口令抹掉才能离开引擎）
-    connection_string: String,
-    /// 中断句柄（**建会话时就取出来**：真正跑查询时连接锁被占着，那时再取就晚了）
-    interrupt: Arc<duckdb::InterruptHandle>,
-    /// 现在有没有语句在跑（中断的“有没有可中断的”靠它，不凭猜）
-    running: std::sync::atomic::AtomicBool,
-    /// 建立时刻（诊断用：会话活了多久）
-    attached_at: std::time::SystemTime,
-}
-
 /// “正在跑”的守卫：无论正常返回还是提前 `?` 返回，都把标记清掉
 struct RunningGuard<'a>(&'a std::sync::atomic::AtomicBool);
 
@@ -422,67 +407,6 @@ pub(crate) fn run_sql_on(
     Ok(QueryResult::with_batches(columns, vec![batch], Some(true)))
 }
 
-impl AccelSession {
-    /// 在**这条会话**上执行一句（读语句出 Arrow 批，写语句出影响行数）
-    ///
-    /// 错误文本先脱敏再往外走：驱动报错里可能带着建连参数（见 [`scrub_credentials`]）。
-    pub fn run(&self, sql: &str) -> Result<QueryResult, CoreError> {
-        let conn = self.lock()?;
-        run_sql_on(&conn, &self.running, sql)
-            .map_err(|error| scrub_error(&self.connection_string, error))
-    }
-
-    /// 重新挂载：源库侧**新建的表**要这样才看得见（数据本来就是实时的）
-    ///
-    /// 必须先 `USE memory`：默认 catalog 是附加源时 DuckDB 拒绝 DETACH 它。
-    pub fn refresh(&self) -> Result<(), CoreError> {
-        let conn = self.lock()?;
-        conn.execute_batch(&format!("USE memory; DETACH {SOURCE_ALIAS}"))
-            .map_err(|error| {
-                scrub_error(&self.connection_string, attach_error("DETACH", &error))
-            })?;
-        let attach = self.source_attach.clone();
-        run_attach_steps(&conn, &attach)
-            .map_err(|error| scrub_error(&self.connection_string, error))
-    }
-
-    /// 中断这条会话上正在跑的语句
-    ///
-    /// `Ok(false)` = 现在没有语句在跑（与源库通道同一语义：没可中断的不算错误，但要如实说）。
-    /// DuckDB 的中断句柄在建会话时就取好了（跑查询时连接锁被占着，那时再取就晚了）。
-    pub fn interrupt(&self) -> Result<bool, String> {
-        if !self.running.load(std::sync::atomic::Ordering::SeqCst) {
-            return Ok(false);
-        }
-        self.interrupt.interrupt();
-        Ok(true)
-    }
-
-    /// 挂载多久了（诊断）
-    pub fn attached_for(&self) -> std::time::Duration {
-        self.attached_at
-            .elapsed()
-            .unwrap_or(std::time::Duration::ZERO)
-    }
-
-    /// 源类型（诊断 / 测试）
-    pub fn kind(&self) -> AccelKind {
-        self.kind
-    }
-
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, Connection>, CoreError> {
-        self.conn.lock().map_err(|error| {
-            CoreError::common(CommonError::General(format!(
-                "加速会话连接锁被污染：{error}"
-            )))
-        })
-    }
-}
-
-/// 进程内的加速会话表（按源连接 id）
-static SESSIONS: Lazy<Mutex<HashMap<String, Arc<AccelSession>>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
-
 /// 建立会话时的全局互斥（**只护“装扩展 + ATTACH”这一段**，不护查询）
 ///
 /// 为什么需要它：`INSTALL` 与 `LOAD` 都是进程级资源（扩展目录里的同一个文件），
@@ -513,57 +437,15 @@ pub fn extension_state(kind: AccelKind) -> Result<(), String> {
     }
 }
 
-/// 取（必要时建立）某个源的加速会话
-///
-/// **会做 I/O**：首次要 `INSTALL` 扩展（联网一次）、`ATTACH` 源库。所以它属于**事件路径**
-/// （工作线程上的执行），不属于渲染路径；界面可用性看 [`extension_state`]。
-pub fn ensure_session(source: &AccelSource) -> Result<Arc<AccelSession>, String> {
-    if let Some(session) = session_for(&source.conn_id) {
-        return Ok(session);
-    }
-    // 挂载这一步串行（见 `mount_lock`）；查询不受它影响
-    let _mount = mount_lock();
-    // 拿锁期间可能已被别人建好了
-    if let Some(session) = session_for(&source.conn_id) {
-        return Ok(session);
-    }
-
-    let conn =
-        Connection::open_in_memory().map_err(|error| format!("开本地分析连接失败：{error}"))?;
-    // 统一配置（扩展目录 / 内存闸 / 溢写口 / 不静默联网）——别再在这里自己拼 SET：
-    // 会话是个长期存活的连接，绕开 `configure_connection` 就会漏掉其中某几项（审计抓到过）
-    super::manager::DuckDBManager::configure_connection(&conn)
-        .map_err(|error| format!("配置本地分析连接失败：{error}"))?;
-
-    ensure_extension(&conn, source.kind)?;
-
-    let attach = source.attach_sql();
-    run_attach_steps(&conn, &attach)
-        .map_err(|error| scrub_credentials(&source.connection_string, &error.to_string()))?;
-    // 扩展这一关过了：清掉旧的失败记录（否则菜单会一直说“不可用”）
-    if let Ok(mut failures) = EXTENSION_FAILURES.lock() {
-        failures.remove(&source.kind);
-    }
-
-    let session = Arc::new(AccelSession {
-        interrupt: conn.interrupt_handle(),
-        conn: Mutex::new(conn),
-        kind: source.kind,
+/// 加速源 → 挂载用的 `FederatedSource`（别名由调用方给：加速档要按源唯一）
+fn federated_source(source: &AccelSource, alias: &str) -> super::federation::registry::FederatedSource {
+    super::federation::registry::FederatedSource {
         conn_id: source.conn_id.clone(),
-        source_attach: attach,
+        alias: alias.to_string(),
+        kind: source.kind,
         connection_string: source.connection_string.clone(),
-        running: std::sync::atomic::AtomicBool::new(false),
-        attached_at: std::time::SystemTime::now(),
-    });
-    if let Ok(mut sessions) = SESSIONS.lock() {
-        sessions.insert(source.conn_id.clone(), session.clone());
+        secret: None,
     }
-    tracing::info!(
-        source = %source.conn_id,
-        kind = source.kind.label(),
-        "本地加速会话已建立（源库以只读方式挂载）"
-    );
-    Ok(session)
 }
 
 /// 把一个加速源挂进**分析实例**，返回（该源在实例上的会话，实际别名）。
@@ -574,18 +456,12 @@ pub fn ensure_session(source: &AccelSource) -> Result<Arc<AccelSession>, String>
 pub fn ensure_on_instance(
     source: &AccelSource,
 ) -> Result<(Arc<super::instance::AnalysisSession>, String), String> {
-    use super::federation::registry::{FederatedSource, MountState};
+    use super::federation::registry::MountState;
 
     let instance = super::instance::instance()?;
     let alias = instance.reserve_alias(SOURCE_ALIAS, &source.conn_id, source.kind)?;
     let session = instance.session_for_conn(&source.conn_id)?;
-    let mounted = session.mount_sources(&[FederatedSource {
-        conn_id: source.conn_id.clone(),
-        alias: alias.clone(),
-        kind: source.kind,
-        connection_string: source.connection_string.clone(),
-        secret: None,
-    }])?;
+    let mounted = session.mount_sources(&[federated_source(source, &alias)])?;
     // 挂不上就是这条源不能用：当场说清，而不是等查询报"表不存在"
     if let Some(entry) = mounted.first() {
         if let MountState::Failed(reason) = &entry.state {
@@ -595,6 +471,37 @@ pub fn ensure_on_instance(
     // 未限定名落在这一条源上（与旧加速档的 `USE rds_src` 同一语义）
     session.use_catalog(&alias)?;
     Ok((session, alias))
+}
+
+/// 重新挂载某个加速源（界面「重新挂载源库」）：同一条会话里 `DETACH` 再挂回去。
+///
+/// 为什么不是关会话重开：关会话会连 `TEMP` 一起清掉，而重挂只该刷新源侧清单。
+/// 源库侧新建的表在 2.0.1 上多数能直接看见（动态解析），这条留给"清单确实要重建"的场合。
+pub fn remount_on_instance(source: &AccelSource) -> Result<String, String> {
+    let instance = super::instance::instance()?;
+    let alias = instance.reserve_alias(SOURCE_ALIAS, &source.conn_id, source.kind)?;
+    let session = instance.session_for_conn(&source.conn_id)?;
+    // 先回 memory：默认 catalog 停在源上时 DuckDB 会拒绝 DETACH 它
+    session.with_connection(|conn| {
+        match conn.execute_batch(&format!("USE memory; DETACH {alias}")) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let text = error.to_string();
+                // 本来就没挂（首次调用）不算错误，接着挂上就是
+                if text.contains("does not exist") {
+                    Ok(())
+                } else {
+                    Err(format!("卸下 {alias} 失败：{text}"))
+                }
+            }
+        }
+    })?;
+    let mounted = session.mount_sources(&[federated_source(source, &alias)])?;
+    if let Some(super::federation::registry::MountedSource { state: super::federation::registry::MountState::Failed(reason), .. }) = mounted.first() {
+        return Err(reason.clone());
+    }
+    session.use_catalog(&alias)?;
+    Ok(alias)
 }
 
 /// 确保该源需要的扩展已就绪（统一走 [`super::extensions::ensure`]）
@@ -627,15 +534,6 @@ pub(crate) fn ensure_extension(conn: &Connection, kind: AccelKind) -> Result<(),
             Err(reason)
         }
     }
-}
-
-/// 挂载两步：`ATTACH` 再 `USE`（默认 catalog 指到源库，用户才能不写限定名）
-fn run_attach_steps(conn: &Connection, attach_sql: &str) -> Result<(), CoreError> {
-    conn.execute_batch(attach_sql)
-        .map_err(|error| attach_error("ATTACH", &error))?;
-    conn.execute_batch(&format!("USE {SOURCE_ALIAS}"))
-        .map_err(|error| attach_error("USE", &error))?;
-    Ok(())
 }
 
 /// 挂载源里的一张表 / 视图（数据对象面板「源行展开」的叶子数据）
@@ -737,93 +635,47 @@ fn quote_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
-/// 已建立的会话（不做 I/O）
-pub fn session_for(conn_id: &str) -> Option<Arc<AccelSession>> {
-    SESSIONS.lock().ok()?.get(conn_id).cloned()
-}
-
-/// **列出当前进程全部加速会话**（owner = 源连接 id），按 id 排序
-///
-/// 给数据对象面板用（联邦侧的 `owners()` 对应物）：面板不知道哪些连接被加速档用过，
-/// 从这里拿全。**纯内存读**，渲染路径可调；返回的是拷贝，不持会话句柄。
-pub fn owners() -> Vec<(String, AccelKind)> {
-    let Ok(sessions) = SESSIONS.lock() else {
-        return Vec::new();
-    };
-    let mut out: Vec<(String, AccelKind)> = sessions
-        .values()
-        .map(|session| (session.conn_id.clone(), session.kind))
-        .collect();
-    // 只按 conn_id 排（它是键，天然唯一；AccelKind 不参与排序语义）
-    out.sort_by(|a, b| a.0.cmp(&b.0));
-    out
-}
-
-/// 列出某个加速会话里源库的表 / 视图（面板「源行展开」用；没有会话如实报错）
-///
-/// 会查那条专用连接（**事件路径**）。加速档的默认 catalog 已 `USE` 到源库别名上，
-/// 但这里仍按别名过滤——清单口径与联邦侧一字不差。
-pub fn list_tables_for(conn_id: &str) -> Result<Vec<MountedTable>, String> {
-    let session = session_for(conn_id)
-        .ok_or_else(|| format!("连接 {conn_id} 还没有本地加速会话：先在该连接上执行一次"))?;
-    let conn = session
-        .lock()
-        .map_err(|error| format!("加速会话连接锁被污染：{error}"))?;
-    list_mounted_tables(&conn, SOURCE_ALIAS, session.kind)
-}
-
-/// 放掉某个源的会话（测试 / 连接被删时用）
-pub fn drop_session(conn_id: &str) -> bool {
-    SESSIONS
-        .lock()
-        .map(|mut sessions| sessions.remove(conn_id).is_some())
-        .unwrap_or(false)
-}
-
-/// 放掉全部会话（测试用：进程内的加速状态要能清干净）
-pub fn drop_all() {
-    if let Ok(mut sessions) = SESSIONS.lock() {
-        sessions.clear();
-    }
-    if let Ok(mut failures) = EXTENSION_FAILURES.lock() {
-        failures.clear();
-    }
-}
-
-/// 中断某个源上的语句（没有会话 = `None`，「谁在跑就中断谁」由调用方决定）
-pub fn cancel(conn_id: &str) -> Option<Result<bool, String>> {
-    session_for(conn_id).map(|session| session.interrupt())
-}
 
 fn query_error(sql: &str, error: &duckdb::Error) -> CoreError {
     CoreError::database(shared::error::DatabaseError::query(sql, error.to_string()))
-}
-
-/// 错误文本脱敏（把 `connection_string` 里的口令抹掉）
-///
-/// `CoreError` 是各档共用的错误类型，这里按种类还原成同一种形状（只改文本）。
-fn scrub_error(connection_string: &str, error: CoreError) -> CoreError {
-    let text = error.to_string();
-    let scrubbed = scrub_credentials(connection_string, &text);
-    if scrubbed == text {
-        return error;
-    }
-    CoreError::common(CommonError::General(scrubbed))
-}
-
-fn attach_error(step: &str, error: &duckdb::Error) -> CoreError {
-    CoreError::common(CommonError::General(format!("{step} 源库失败：{error}")))
 }
 
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
     use super::{
-        AccelKind, AccelSource, SOURCE_ALIAS, drop_all, drop_session, ensure_session,
-        extension_state, list_tables_for, normalize_file_path, owners, session_for,
+        AccelKind, AccelSource, SOURCE_ALIAS, extension_state, normalize_file_path,
     };
+    use crate::duckdb::federation::registry::MountState;
+    use crate::duckdb::instance::{AnalysisInstance, AnalysisSession};
     use duckdb::Connection;
     use std::sync::Arc;
+
+    /// 把一个源挂进**私有实例**（用例之间互不共享全局单例，别名也不会互相让位）
+    fn mount(
+        tag: &str,
+        source: &AccelSource,
+    ) -> (Arc<AnalysisInstance>, Arc<AnalysisSession>, String) {
+        let instance = AnalysisInstance::open_tagged(tag, std::time::Duration::from_secs(30))
+            .expect("开实例");
+        let alias = instance
+            .reserve_alias(SOURCE_ALIAS, &source.conn_id, source.kind)
+            .expect("取别名");
+        let session = instance
+            .session_for_conn(&source.conn_id)
+            .expect("取会话");
+        let mounted = session
+            .mount_sources(&[super::federated_source(source, &alias)])
+            .expect("挂载");
+        assert!(
+            mounted
+                .iter()
+                .any(|entry| entry.alias() == alias && entry.is_ready()),
+            "源要真挂上"
+        );
+        session.use_catalog(&alias).expect("USE");
+        (instance, session, alias)
+    }
 
     fn temp_dir(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("rds_accel_{tag}_{}", std::process::id()));
@@ -914,7 +766,6 @@ mod tests {
     /// 会话建立 → 不写限定名就能查到源表（`USE` 生效的真实证明）
     #[test]
     fn a_session_resolves_source_tables_without_qualification() {
-        drop_all();
         let dir = temp_dir("session");
         let path = source_file(&dir, 3);
         let source = AccelSource {
@@ -923,30 +774,26 @@ mod tests {
             connection_string: path.to_string_lossy().to_string(),
         };
 
-        let session = ensure_session(&source).expect("建会话");
+        let (instance, session, _alias) = mount("t_accel_unqualified", &source);
         let result = session
             .run("SELECT count(*) AS n FROM orders")
             .expect("查源表");
         let rows = result.to_rows();
         assert_eq!(rows.len(), 1, "源文件里的表要能直接查到");
         assert_eq!(rows[0][0].to_string(), "3");
-        assert_eq!(session.kind(), AccelKind::DuckDb);
 
-        // 同一源第二次取 = 复用会话（不会撞 “Unique file handle conflict”）
-        let again = ensure_session(&source).expect("复用会话");
+        // 同一源第二次取 = 复用同一条会话（不会撞 “Unique file handle conflict”）
+        let again = instance.session_for_conn("C_session").expect("复用会话");
         assert!(
             Arc::ptr_eq(&session, &again),
             "同一 conn_id 应当复用同一条会话"
         );
-        assert!(drop_session("C_session"), "会话被放掉");
-        assert!(!drop_session("C_session"), "再放一次就没有了");
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// 数据对象面板用：`owners()` 能枚举存活会话，`list_tables_for` 给出可粘贴的限定名
+    /// 数据对象面板用：`mounted_conns()` 能枚举挂载，`list_mounted_tables_for_conn` 给出可粘贴的限定名
     #[test]
     fn owners_enumerate_sessions_and_tables_list_with_qualified_names() {
-        drop_all();
         let dir = temp_dir("owners");
         let path = source_file(&dir, 2);
         let source = AccelSource {
@@ -954,15 +801,19 @@ mod tests {
             kind: AccelKind::DuckDb,
             connection_string: path.to_string_lossy().to_string(),
         };
-        ensure_session(&source).expect("建会话");
+        let (instance, session, _alias) = mount("t_accel_owners", &source);
 
-        let owners = owners();
+        let conns = instance.mounted_conns();
         assert!(
-            owners.contains(&("C_owners".to_string(), AccelKind::DuckDb)),
-            "枚举里要有这条会话：{owners:?}"
+            conns
+                .iter()
+                .any(|(id, _alias, kind)| id == "C_owners" && *kind == AccelKind::DuckDb),
+            "枚举里要有这条挂载：{conns:?}"
         );
 
-        let tables = list_tables_for("C_owners").expect("列源里的表");
+        let tables = instance
+            .list_mounted_tables_for_conn("C_owners")
+            .expect("列源里的表");
         let orders = tables.iter().find(|t| t.name == "orders").expect("有 orders 表");
         assert!(!orders.is_view);
         // 限定名按挂载别名给三段（DuckDB 文件源不是两段名），粘进 SQL 要真能查
@@ -971,22 +822,19 @@ mod tests {
             "限定名应带挂载别名：{}",
             orders.qualified
         );
-        let session = session_for("C_owners").expect("会话还在");
         let result = session
             .run(&format!("SELECT count(*) AS n FROM {}", orders.qualified))
             .expect("限定名可查");
         assert_eq!(result.to_rows()[0][0].to_string(), "2");
 
-        // 没有会话的连接：如实报错（面板据此给「为什么展不开」）
-        assert!(list_tables_for("C_nope").is_err());
-        drop_all();
+        // 没挂过的连接：如实报错（面板据此给「为什么展不开」）
+        assert!(instance.list_mounted_tables_for_conn("C_nope").is_err());
         let _ = std::fs::remove_dir_all(dir);
     }
 
     /// 只读挂载：写源对象被 DuckDB 拒；本地临时对象允许
     #[test]
     fn the_source_is_read_only_but_local_temp_objects_are_allowed() {
-        drop_all();
         let dir = temp_dir("readonly");
         let path = source_file(&dir, 1);
         let source = AccelSource {
@@ -994,7 +842,7 @@ mod tests {
             kind: AccelKind::DuckDb,
             connection_string: path.to_string_lossy().to_string(),
         };
-        let session = ensure_session(&source).expect("建会话");
+        let (_instance, session, _alias) = mount("t_accel_readonly", &source);
 
         let write = session
             .run("INSERT INTO orders VALUES (99)")
@@ -1018,7 +866,6 @@ mod tests {
     /// 本进程另开写连接会被文件锁拦住，单元测试造不出那个现场。）
     #[test]
     fn refresh_reattaches_the_source_and_keeps_working() {
-        drop_all();
         let dir = temp_dir("refresh");
         let path = source_file(&dir, 2);
         let source = AccelSource {
@@ -1026,7 +873,7 @@ mod tests {
             kind: AccelKind::DuckDb,
             connection_string: path.to_string_lossy().to_string(),
         };
-        let session = ensure_session(&source).expect("建会话");
+        let (_instance, session, alias) = mount("t_accel_refresh", &source);
         assert_eq!(
             session
                 .run("SELECT count(*) FROM orders")
@@ -1036,7 +883,22 @@ mod tests {
             "2"
         );
 
-        session.refresh().expect("重新挂载");
+        // 「重新挂载」在单实例下的等价动作：本会话 `DETACH` 再挂回去（会话不重建，
+        // 所以 `TEMP` 与本地变量都还在）。旧 `AccelSession::refresh` 就是这个序列。
+        session
+            .with_connection(|conn| {
+                conn.execute_batch(&format!("USE memory; DETACH {alias}"))
+                    .map_err(|error| error.to_string())
+            })
+            .expect("卸下");
+        let mounted = session
+            .mount_sources(&[super::federated_source(&source, &alias)])
+            .expect("再挂回去");
+        assert!(
+            mounted.iter().any(|entry| entry.is_ready()),
+            "重挂后要 Ready"
+        );
+        session.use_catalog(&alias).expect("再 USE");
         assert_eq!(
             session
                 .run("SELECT count(*) FROM orders")
@@ -1046,16 +908,29 @@ mod tests {
             "2"
         );
         assert!(
-            session.run("SELECT * FROM rds_src.orders").is_ok(),
+            session.run(&format!("SELECT * FROM {alias}.orders")).is_ok(),
             "限定名（别名）也要能走"
         );
-        // 重挂后本地临时表还在吗？在——DETACH/ATTACH 不重建连接（会话变量不受影响）
+        // 重挂不重建连接：会话里的临时表还在
         session
             .run("CREATE TEMP TABLE keep AS SELECT 7 AS x")
             .expect("建临时表");
-        session.refresh().expect("再挂一次");
+        session
+            .with_connection(|conn| {
+                conn.execute_batch(&format!("USE memory; DETACH {alias}"))
+                    .map_err(|error| error.to_string())
+            })
+            .expect("再卸一次");
+        session
+            .mount_sources(&[super::federated_source(&source, &alias)])
+            .expect("再挂一次");
+        session.use_catalog(&alias).expect("USE");
         assert_eq!(
-            session.run("SELECT x FROM keep").unwrap().to_rows()[0][0].to_string(),
+            session
+                .run("SELECT x FROM keep")
+                .unwrap()
+                .to_rows()[0][0]
+                .to_string(),
             "7",
             "重挂不该把会话里的临时表弄丢"
         );
@@ -1065,7 +940,6 @@ mod tests {
     /// 两个不同的源同时建立会话：装扩展 / 挂载串行，互不影响
     #[test]
     fn concurrent_mounts_do_not_race_on_the_extension_directory() {
-        drop_all();
         let dir = temp_dir("concurrent");
         let first = AccelSource {
             conn_id: "C_conc_1".to_string(),
@@ -1085,8 +959,9 @@ mod tests {
         let handles: Vec<_> = [first, second]
             .into_iter()
             .map(|source| {
+                let tag = format!("t_accel_conc_{}", source.conn_id);
                 std::thread::spawn(move || {
-                    let session = super::ensure_session(&source).expect("建会话");
+                    let (_instance, session, _alias) = mount(&tag, &source);
                     session.run("SELECT count(*) FROM orders").expect("查表")
                 })
             })
@@ -1096,24 +971,36 @@ mod tests {
             .map(|handle| handle.join().expect("线程不该 panic").to_rows()[0][0].to_string())
             .collect();
         assert_eq!(counts.len(), 2, "两条会话都建起来了");
-        drop_all();
         let _ = std::fs::remove_dir_all(dir);
     }
 
     /// 没试过扩展 = 不拦（`Unknown`）；失败才记下来拦（首用联网失败的现场）
     #[test]
     fn extension_state_only_blocks_after_a_real_failure() {
-        drop_all();
         assert!(extension_state(AccelKind::MySql).is_ok(), "没试过就不该拦");
         assert!(extension_state(AccelKind::DuckDb).is_ok());
 
-        // 造一次真实失败：文件型的“源”指向不存在的路径 → 会话建不起来
+        // 造一次真实失败：文件型的“源”指向不存在的路径 → 挂载状态是 Failed
         let source = AccelSource {
             conn_id: "C_missing".to_string(),
             kind: AccelKind::DuckDb,
             connection_string: "Z:/definitely/missing.duckdb".to_string(),
         };
-        assert!(ensure_session(&source).is_err(), "挂不上的源要报错");
+        let instance = AnalysisInstance::open_tagged("t_accel_missing", std::time::Duration::from_secs(30))
+            .expect("开实例");
+        let alias = instance
+            .reserve_alias(SOURCE_ALIAS, &source.conn_id, source.kind)
+            .expect("取别名");
+        let session = instance.session_for_conn("C_missing").expect("取会话");
+        let mounted = session
+            .mount_sources(&[super::federated_source(&source, &alias)])
+            .expect("单个源挂不上不整批失败");
+        assert!(
+            mounted
+                .iter()
+                .any(|entry| matches!(entry.state, MountState::Failed(_))),
+            "挂不上的源要报失败"
+        );
         // 失败不写进“扩展失败”表（那是另一个维度：挂载失败由执行路径每次如实报）
         assert!(extension_state(AccelKind::DuckDb).is_ok());
     }

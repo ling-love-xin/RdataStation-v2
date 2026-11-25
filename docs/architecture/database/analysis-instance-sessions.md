@@ -68,7 +68,7 @@
 | 2c | 联邦会话门面化：`FederatedSession` 只持有 `Arc<AnalysisSession>`，不再自建内存库 | ✅ `fa71c4f6` |
 | 2d | 加速档别名按源唯一（`reserve_alias` + 实例 `conn_alias` 映射 + `USE` 实际别名） | ✅ 本刀 |
 | 2e | 消费方迁移：工作台三处 `accel::session_for` / 编辑器直跑加速档 / 卸载 / 会话源树根全部改读实例 | ✅ 本刀（`accel::ensure_on_instance` 单一入口） |
-| 2e-1 | `accel` 模块退役（删 `AccelSession` / `ensure_session` / `SESSIONS` 缓存 / `owners` / `drop_session` / `cancel` / `list_tables_for`） | ⬜ 仅剩引擎集成测试（`duckdb_accel_probe.rs`、`federation_credentials_probe.rs`）还在引用 |
+| 2e-1 | `accel` 模块退役（删 `AccelSession` / `ensure_session` / `SESSIONS` 缓存 / `owners` / `drop_session` / `drop_all` / `cancel` / `list_tables_for`） | ✅ 本刀（用例与两条真机探针同批改到实例 API） |
 | 2f | `SessionHandle::ProcessDb` / `Accelerated` / `Federated` 三个旧变体删除；`ProcessDuckDb` 取样落 `rds_tmp` | ⬜ 与 3 同一刀（取样表与下游读端必须同处一个实例） |
 | 3 | `rds_tmp` 自动登记（结果集保存 / 洞察取样落 `rds_tmp` 时登记） | ⬜ |
 | 4 | 保护接线（超时值从设置读、面板显示"被中断"） | ⬜ |
@@ -93,6 +93,22 @@
 
 判定"这个源挂没挂"一律读 `alias_for_conn`，**不再**由 `accel::session_for(conn_id).is_some()` 回答——
 那是旧的多实例口径，单实例下它必然为 `None`（加速档已不在自建会话）。
+
+**2e-1 之后 `accel` 只剩三样东西**：`AccelSource`（组装源）、`AccelKind`（类型/命名口径）、
+以及三个挂实例上的入口（`ensure_on_instance` / `remount_on_instance` / `extension_state`）。
+`AccelSession`、会话表、`owner` 枚举、逐个源的 `drop_*` 全部删除——单实例下"会话"就是实例的会话。
+
+**真机实证（2026-11-26，`192.168.3.138` + `D:\FossilT\T.fossil`）**：
+
+| 探针 | 结果 |
+| --- | --- |
+| `duckdb_accel_probe`（MySQL / PostgreSQL / SQLite 三源） | **3 passed**：未限定名查询、源库插入实时可见、写源库被"read-only attached"拒、`CREATE TEMP TABLE` 允许、`rds_src.orders` 限定名可用 |
+| `federation_credentials_probe` | **1 passed**：错误文本里的口令被抹成 `root:******@…`，原因照留 |
+| `cargo test -p rds-engine --lib` | **344 passed / 0 failed** |
+
+**2.0.1 的一处行为变化（旧断言已过期）**：MySQL 源的**表清单不再在 `ATTACH` 时定型**——
+源库新建的表不重挂也能查（1.x 时代要先 `refresh`）。探针里的对应断言已改成实测口径，
+`remount_on_instance` 仍保留（界面「重新挂载源库」还按它走，`TEMP` 不会因此丢）。
 
 ## 6. 验收口径
 

@@ -195,13 +195,13 @@ fn probe_network_source_credentials() {
     }
 
     // 4. 脱敏：走真实加速会话，让 ATTACH 失败并检查错误文本
-    accel::drop_all();
+    let _ = rds_engine::duckdb::instance::drop_instance();
     let wrong = format!(
         "mysql://{}:{}@{}:{}/no_such_database_{PROBE_DB}",
         parts.user, parts.password, parts.host, parts.port
     );
     let source = AccelSource::new("C_probe_scrub", "mysql_native", &wrong).expect("组装源");
-    let error = match accel::ensure_session(&source) {
+    let error = match accel::ensure_on_instance(&source) {
         Ok(_) => panic!("指向不存在的库该挂不上"),
         Err(reason) => reason,
     };
@@ -226,7 +226,7 @@ fn probe_network_source_credentials() {
         "原因要留着（只是把口令抹掉）：{error}"
     );
     eprintln!("✅ 失败原因脱敏：{error}");
-    accel::drop_all();
+    let _ = rds_engine::duckdb::instance::drop_instance();
     assert_eq!(source.kind, AccelKind::MySql);
 
     mysql_teardown(&mysql_url);

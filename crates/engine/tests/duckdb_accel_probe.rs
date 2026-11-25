@@ -48,6 +48,10 @@ fn mysql_setup(url: &str, rows: i64) -> String {
             conn.query_drop("DROP TABLE IF EXISTS rds_accel_probe.orders")
                 .await
                 .expect("清旧表");
+            // 上一轮若在断言处 panic，teardown 不会跑：这里把中途新建的表也清掉
+            conn.query_drop("DROP TABLE IF EXISTS rds_accel_probe.late_table")
+                .await
+                .expect("清旧表");
             conn.query_drop("CREATE TABLE rds_accel_probe.orders AS SELECT 1 AS id")
                 .await
                 .expect("建表");
@@ -92,7 +96,33 @@ fn mysql_exec(url: &str, sql: &str) {
     });
 }
 
-fn scalar(session: &Arc<accel::AccelSession>, sql: &str) -> String {
+fn remount(session: &rds_engine::duckdb::instance::AnalysisSession, source: &AccelSource, alias: &str) {
+    session
+        .with_connection(|conn| {
+            conn.execute_batch(&format!("USE memory; DETACH {alias}"))
+                .map_err(|error| error.to_string())
+        })
+        .expect("卸下");
+    let mounted = session
+        .mount_sources(&[rds_engine::duckdb::federation::registry::FederatedSource {
+            conn_id: source.conn_id.clone(),
+            alias: alias.to_string(),
+            kind: source.kind,
+            connection_string: source.connection_string.clone(),
+            secret: None,
+        }])
+        .expect("再挂回去");
+    assert!(mounted.iter().any(|entry| entry.is_ready()), "重挂后要 Ready");
+    session.use_catalog(alias).expect("再 USE");
+}
+
+fn unmount(conn_id: &str) {
+    if let Some(instance) = rds_engine::duckdb::instance::current() {
+        let _ = instance.unmount_conn(conn_id);
+    }
+}
+
+fn scalar(session: &Arc<rds_engine::duckdb::instance::AnalysisSession>, sql: &str) -> String {
     match session.run(sql) {
         Ok(result) => result
             .to_rows()
@@ -110,13 +140,13 @@ fn probe_mysql_source_live_and_read_only() {
         println!("跳过：未设 RDS_TEST_MYSQL_URL");
         return;
     };
-    accel::drop_all();
+    let _ = rds_engine::duckdb::instance::drop_instance();
     let source_url = mysql_setup(&url, 3);
 
     let source = AccelSource::new("C_mysql_probe", "mysql_native", &source_url).expect("组装源");
     assert_eq!(source.kind, AccelKind::MySql);
-    let session = match accel::ensure_session(&source) {
-        Ok(session) => session,
+    let session = match accel::ensure_on_instance(&source) {
+        Ok((session, _alias)) => session,
         Err(reason) => {
             mysql_teardown(&url);
             panic!("建加速会话失败：{reason}");
@@ -135,17 +165,21 @@ fn probe_mysql_source_live_and_read_only() {
     assert_eq!(after_insert, "4", "源库插入后应当立刻看到（不是快照）");
     println!("✅ 新鲜度：源库插入后同一会话 → {after_insert}（实时，不是快照）");
 
-    // 3) 表清单在 ATTACH 时定型：源库新建的表要 refresh 才可见
+    // 3) 表清单：DuckDB 2.0.1 的 mysql scanner 改成**动态解析**——源库新建的表
+    //    不重挂也能直接查（1.x 时代"ATTACH 时定型、要 refresh"的断言已过期）。
+    //    这里如实记录实测口径，并把这条源上的重挂（DETACH → ATTACH → USE）也跑一遍。
     mysql_exec(&url, "CREATE TABLE rds_accel_probe.late_table (id INT)");
     let before_refresh = scalar(&session, "SELECT count(*) FROM late_table");
-    assert!(
-        before_refresh.starts_with("ERR"),
-        "ATTACH 之后新建的表不该直接可见：{before_refresh}"
+    assert_eq!(
+        before_refresh, "0",
+        "2.0.1 下新表应当直接可见（旧口径是报 Catalog Error）：{before_refresh}"
     );
-    session.refresh().expect("重新 ATTACH");
+    remount(&session, &source, "rds_src");
     let after_refresh = scalar(&session, "SELECT count(*) FROM late_table");
-    assert_eq!(after_refresh, "0", "重新 ATTACH 后应看到新表");
-    println!("✅ 表清单：新表 refresh 前不可见、refresh 后可见（{after_refresh} 行）");
+    assert_eq!(after_refresh, "0", "重挂后仍应看到新表");
+    println!(
+        "✅ 表清单：新表不重挂可见（2.0.1 动态解析），重挂后仍可用（{after_refresh} 行）"
+    );
 
     // 4) 写源库被 DuckDB 拒；本地临时对象允许
     let refused = session
@@ -165,7 +199,7 @@ fn probe_mysql_source_live_and_read_only() {
     assert_eq!(scalar(&session, "SELECT count(*) FROM rds_src.orders"), "4");
     println!("✅ 显式限定名（rds_src.orders）可用");
 
-    accel::drop_session("C_mysql_probe");
+    unmount("C_mysql_probe");
     mysql_teardown(&url);
 }
 
@@ -175,11 +209,11 @@ fn probe_postgres_source_attach() {
         println!("跳过：未设 RDS_TEST_PG_URL");
         return;
     };
-    accel::drop_all();
+    let _ = rds_engine::duckdb::instance::drop_instance();
     let source = AccelSource::new("C_pg_probe", "postgres_native", &url).expect("组装源");
     assert_eq!(source.kind, AccelKind::PostgreSql);
-    let session = match accel::ensure_session(&source) {
-        Ok(session) => session,
+    let session = match accel::ensure_on_instance(&source) {
+        Ok((session, _alias)) => session,
         Err(reason) => panic!("建加速会话失败：{reason}"),
     };
     println!("✅ 加速会话已建立（PostgreSQL 源只读挂载）");
@@ -194,7 +228,7 @@ fn probe_postgres_source_attach() {
         .run("CREATE TABLE t_probe (id INT)")
         .expect_err("写源库必须被拒");
     println!("✅ 写拒绝：{refused}");
-    accel::drop_session("C_pg_probe");
+    unmount("C_pg_probe");
 }
 
 #[test]
@@ -203,11 +237,11 @@ fn probe_sqlite_file_source_attach() {
         println!("跳过：未设 RDS_TEST_SQLITE_PATH");
         return;
     };
-    accel::drop_all();
+    let _ = rds_engine::duckdb::instance::drop_instance();
     let source = AccelSource::new("C_lite_probe", "sqlite", &path).expect("组装源");
     assert_eq!(source.kind, AccelKind::Sqlite);
-    let session = match accel::ensure_session(&source) {
-        Ok(session) => session,
+    let session = match accel::ensure_on_instance(&source) {
+        Ok((session, _alias)) => session,
         Err(reason) => panic!("建加速会话失败：{reason}"),
     };
     let tables = scalar(
@@ -224,5 +258,5 @@ fn probe_sqlite_file_source_attach() {
         .expect_err("写文件源也要被拒");
     assert!(refused.to_string().contains("read-only"), "{refused}");
     println!("✅ 写拒绝：{refused}");
-    accel::drop_session("C_lite_probe");
+    unmount("C_lite_probe");
 }

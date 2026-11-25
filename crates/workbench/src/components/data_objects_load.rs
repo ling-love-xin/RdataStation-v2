@@ -403,8 +403,9 @@ pub fn analyze_asset_version(
 
 /// 把一条**网络连接**挂进分析实例的本地加速档（源段右键「挂载」）。
 ///
-/// 这是规格 §8 补上的缺口（铁律第 37 条记着的「workbench 里零调用
-/// `accel::ensure_session`」）。凭据取法与编辑器侧同一口径：
+/// 这是规格 §8 补上的缺口（铁律第 37 条记着的「workbench 里零挂载入口」）。
+/// 挂载走 `accel::ensure_on_instance`（2026-11-26 起加速档落分析实例，不再自建会话）。
+/// 凭据取法与编辑器侧同一口径：
 /// 连接管理器给 `db_type`，运行时连接串（`url_override`，带凭据）优先，
 /// 拿不到才退回 `ConnectionInfo.url`——DuckDB 1.5.5 的 mysql/pg 扫描器不认
 /// Secret，凭据只能随连接串进 ATTACH。
