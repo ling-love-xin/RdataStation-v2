@@ -13,8 +13,13 @@
 //! - 次行槽（`secondary`）给动作多的面板，不把主行挤爆；
 //! - **全空时整条不画**（返回零高元素）——没有动作的面板不该留一条空行。
 //!
+//! 配色也在这里收口（对齐 Zed 工具栏）：底色用 `toolbar.background`（比 `background`
+//! 更「组件档」，让面板头与内容区在视觉上分开），下缘用 `border.variant`（比面板间的
+//! `border` 弱一档，避免每个面板头都像被硬切一刀）。两者都是本仓 vendor patch 新增的
+//! 主题键（上游 0.10.0 没有，见 `crates/ui_guard` 的 143 键守卫与 theme skill）。
+//!
 //! 内层仍然是官方的 `toolbar::Toolbar`（roving 方向键焦点 + toolbar a11y 语义 + size 托管），
-//! 本层只负责它外面的高度 / 内距 / 分隔线（规范：背景与边框由宿主画）。
+//! 本层只负责它外面的高度 / 内距 / 底色 / 分隔线（规范：背景与边框由宿主画）。
 //!
 //! ## 与 Zed 的对应
 //!
@@ -37,19 +42,22 @@ pub struct PanelToolbar {
     height: f32,
     padding: f32,
     hairline: bool,
+    background: bool,
     left: Vec<AnyElement>,
     right: Vec<AnyElement>,
     secondary: Vec<AnyElement>,
 }
 
 impl PanelToolbar {
-    /// 默认形态：`PANEL_HEADER_HEIGHT`（36）高、`PANEL_TOOLBAR_PADDING`（8）左右内距、带 1px 下边界线。
+    /// 默认形态：`PANEL_HEADER_HEIGHT`（36）高、`PANEL_TOOLBAR_PADDING`（8）左右内距、
+    /// `toolbar.background` 底色、1px `border.variant` 下界。
     pub fn new(id: impl Into<SharedString>) -> Self {
         Self {
             id: id.into(),
             height: PANEL_HEADER_HEIGHT,
             padding: PANEL_TOOLBAR_PADDING,
             hairline: true,
+            background: true,
             left: Vec::new(),
             right: Vec::new(),
             secondary: Vec::new(),
@@ -71,6 +79,12 @@ impl PanelToolbar {
     /// 去掉底部分隔线（工具栏下面还有自己的分组容器时用）。
     pub fn no_hairline(mut self) -> Self {
         self.hairline = false;
+        self
+    }
+
+    /// 去掉底色：面板头下面紧接同底色的容器（如标题条 / 侧栏同档）时，避免两层叠色出边。
+    pub fn no_background(mut self) -> Self {
+        self.background = false;
         self
     }
 
@@ -119,6 +133,9 @@ impl RenderOnce for PanelToolbar {
         let has_primary = !self.left.is_empty() || !self.right.is_empty();
 
         let mut root = div().v_flex().w_full().flex_none();
+        if self.background {
+            root = root.bg(theme.colors.toolbar_background);
+        }
 
         if has_primary {
             let mut row = div()
@@ -132,7 +149,11 @@ impl RenderOnce for PanelToolbar {
                 .px(rems(self.padding))
                 .debug_selector(move || id.to_string());
             if self.hairline {
-                row = row.border_b(HAIRLINE).border_color(theme.colors.border);
+                // 弱一档的分隔线：面板头的下缘不该用面板之间那档 `border`，
+                // 否则每个面板都像被硬切一刀（Zed 同口径，`border_variant`）。
+                row = row
+                    .border_b(HAIRLINE)
+                    .border_color(theme.colors.border_variant);
             }
 
             // 左槽可伸缩、右槽固定：左右两槽都作为 `Toolbar` 的 content（不参与 size 托管，
