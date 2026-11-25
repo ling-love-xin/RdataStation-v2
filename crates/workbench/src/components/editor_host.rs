@@ -135,7 +135,7 @@ impl EditorHost for WorkbenchEditorHost {
         };
         let shared = self.shared.clone();
         let conn_id = conn_id.to_string();
-        handle.update(cx, |window, cx| {
+        let _ = handle.update(cx, |_, window, cx| {
             window.open_alert_dialog(cx, move |alert, _window, _cx| {
                 let take_ok = take.clone();
                 let take_cancel = take.clone();
