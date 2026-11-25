@@ -31,9 +31,18 @@ const BASELINE: &[(&str, usize, usize)] = &[
     // `GENERATOR_MENU_WIDTH` / `GENERATOR_MENU_MAX_HEIGHT` / `GENERATOR_PICK_INDENT`）。
     // 本文件是尺寸常量单一来源，`px(N.)` 在此是**推荐写法**，不是违规。
     ("crates/mock/src/ui.rs", 0, 26),
-    ("crates/notification/src/view.rs", 0, 3),
+    ("crates/notification/src/view.rs", 0, 2),
     ("crates/result_panel/src/grid/header.rs", 0, 1),
+    // 1 = 状态行左右两列之间的固定间距 `.gap(px(5.))`：DBeaver 外层 `GridLayout(2, false)`
+    // 用的是 SWT 默认 `horizontalSpacing = 5`（未显式设置，`ResultSetFilterPanel.java:163-166`
+    // 只改了 margin）。它不是字号档位，跟着 rem 缩放会让状态行在放大字号时挤到换行，
+    // 故就地写物理像素、在这里登记。
+    ("crates/result_panel/src/grid/status.rs", 0, 1),
     ("crates/result_panel/src/panel/dialog.rs", 0, 3),
+    // 7 = 筛选条 / 对象格信息浮层的描边内距：`.offset(px(2.))` ×2 与 `.p/.py(px(2.))` ×5，
+    // 都是 DBeaver 侧 `ResultSetFilterPanel` / 对象格浮层的原值（2px 边框内距），
+    // 与 `RESULT_TOOLBAR_PADDING` 同属「跟 DBeaver 像素相等」的一类，不随字号缩放。
+    ("crates/result_panel/src/panel/render.rs", 0, 7),
     ("crates/result_panel/src/panel/sidebars.rs", 0, 2),
     // 16 = 原 4 + 类型默认列宽 8 档（numeric / boolean / date·time / timestamp / uuid /
     // json / binary / text，`20fb50a4`）+ 列宽自适应 3 档（`RESULT_FIT_CELL_PADDING` /
@@ -57,7 +66,9 @@ const BASELINE: &[(&str, usize, usize)] = &[
     // 渲染侧（`grid/cell.rs` / `grid/header.rs`）与列宽自适应（`grid/fit.rs`）共用这一个来源；
     // 原先渲染写 `rems(0.375)`、自适应写 `RESULT_FIT_CELL_PADDING = px(12.)`，两个独立编码
     // 一旦分叉，双击算出的列宽就会差 12px）。
-    ("crates/result_panel/src/ui.rs", 0, 21),
+    // 2026-11-25 21 → 22：**不是新增常量**，只多一处文档注释 —— `TAB_STATUS_SLOT` 的注释里
+    // 引用了 Zed 的 `START_TAB_SLOT_SIZE = px(12.)` 作为出处。守门按全文匹配，注释也算命中。
+    ("crates/result_panel/src/ui.rs", 0, 22),
     ("crates/settings/src/skeleton.rs", 0, 1),
     ("crates/workbench/src/components/dialog_helpers.rs", 0, 1),
     (
@@ -72,10 +83,17 @@ const BASELINE: &[(&str, usize, usize)] = &[
         0,
         1,
     ),
-    // 1 = 「关于」弹窗宽度 `w(px(560.))`（`version_dialog.rs`）：窗口尺寸是**物理像素**，
-    // 内容只有版本号与构建标识两列，宽度由「最长一行不折行」定死；它不是视图内距/字号档位，
-    // 提去 `ui.rs` 会把「窗口多大」与「控件留白」混成一张表。
-    ("crates/workbench/src/components/version_dialog.rs", 0, 1),
+    // 1 = 归档对话框宽度 `w(px(560.0))`：窗口尺寸是物理像素，内容是最长一行不折行的宽度；
+    // 它不是视图内距 / 字号档位，提去 `ui.rs` 会把「窗口多大」与「控件留白」混成一张表。
+    ("crates/workbench/src/components/archive_dialog.rs", 0, 1),
+    // 1 = 导出对话框宽度 `w(px(520.0))`：同上（窗口尺寸按内容行宽定死，DBeaver 导出页同档）。
+    ("crates/workbench/src/components/export_dialog.rs", 0, 1),
+    // 3 = 对象属性弹窗的三处几何：`label_width(px(96.0))`（属性名列宽，按最长中文标签量出）、
+    // `w(px(560.0))`（窗口宽度）、`h(px(1.0))`（基本信息与列结构之间的发丝分隔线）。
+    // 三者都是「这一张窗口的形态」，不是可复用的字号 / 内距档位，故就地写并登记。
+    ("crates/workbench/src/components/object_props.rs", 0, 3),
+    // 「关于」弹窗（`version_dialog.rs`）的 1 处裸 px 已随版本弹窗改 `DescriptionList` 收进
+    // `ui.rs` 常量，本版把该文件从基线里删掉（再出现就算新增）。
     // 1 = 解锁窗尺寸 `size(px(440.), px(250.))`：窗口尺寸是**物理像素**（不随字号缩放，
     // 缩放会让口令框一屏放不下），且只有这一处来源；它不是视图内距/字号档位，
     // 提去 `ui.rs` 反而把「窗口多大」与「控件留白」两件事混在一张表里。

@@ -301,7 +301,7 @@ impl ResultPanel {
                     Some((lineage.to_string(), toolbar.connection.clone()))
                 });
                 // 对象名文本色：DBeaver `paintPanel` 用 SWT 常量
-                // `COLOR_DARK_GREEN`（`ResultSetFilterPanel.java:1037`，rgb(0,128,0)，
+                // `COLOR_DARK_GREEN`（`ResultSetFilterPanel.java:1037`，#008000，
                 // 跟主题无关）。按用户拍板「直接用主题色」，取 `theme.colors.success`
                 // （明 `#15803D` / 暗 `#89D185`，即 `success.background`）——
                 // 明暗两套都是绿、且各自保证可读，比 SWT 常量在暗色下强。
