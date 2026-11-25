@@ -400,6 +400,44 @@ impl WorkbenchView {
         crate::panels::focus_search_tab(&panel, window, cx);
     }
 
+    /// 统计看板标签页（单例）：面板未建 → 建并加入中央 tab 组 + 聚焦；
+    /// 已建（弱句柄有效）→ 只聚焦不重建。
+    ///
+    /// 关闭态（`layout.dashboard_enabled` = false）由状态栏不渲染 chip 入口保证不触发；
+    /// 面板概览取数自持，不依赖本方法反复调用。
+    pub(super) fn ensure_dashboard_panel(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // 取出即清空：同一次 chip 点击不在后续帧重复入队。
+        self.shared.open_dashboard_request.replace(false);
+        if let Some(panel) = self
+            .shared
+            .dashboard_panel
+            .borrow()
+            .as_ref()
+            .and_then(|weak| weak.upgrade())
+        {
+            crate::panels::focus_dashboard_tab(&panel, window, cx);
+            return;
+        }
+        let Some(area) = self.area.clone() else {
+            return;
+        };
+        let shared = self.shared.clone();
+        let panel = cx.new(|cx| crate::panels::DashboardPanel::new(shared.clone(), cx));
+        self.shared
+            .dashboard_panel
+            .borrow_mut()
+            .replace(panel.downgrade());
+        let handle = panel_handle(panel.clone());
+        area.update(cx, |area, cx| {
+            area.add_panel_view(handle, DockPlacement::Center, None, window, cx);
+        });
+        crate::panels::focus_dashboard_tab(&panel, window, cx);
+    }
+
     /// 元数据搜索标签页（P0，VSCode「搜索: query」形态，搜的是连接级元数据缓存）：
     /// 面板未建 → 建并加入中央 tab 组 + 聚焦；已建（弱句柄有效）→ 只聚焦不重建。
     ///

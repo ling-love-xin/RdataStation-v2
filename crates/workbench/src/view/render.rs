@@ -70,6 +70,13 @@ impl Render for WorkbenchView {
                 this.consume_insight_compare(window, cx);
             });
         }
+        // 统计看板：状态栏 chip 置请求标志 → `defer_in` 建 / 聚焦中央看板 tab
+        // （事件路径可改 dock；render 纯读）。开关关闭态 chip 不渲染入口，不会置标志。
+        if self.shared.open_dashboard_request.get() {
+            cx.defer_in(window, |this, window, cx| {
+                this.ensure_dashboard_panel(window, cx);
+            });
+        }
         // M1：项目输入实体懒创建（选择器搜索 / 新建 / 删除确认）。
         if self.project_inputs.is_none() {
             self.project_inputs = Some(project::ui::ProjectInputs::new(window, cx));

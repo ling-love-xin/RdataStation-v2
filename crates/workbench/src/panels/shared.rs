@@ -33,6 +33,8 @@ use connection_dialog::ManagerKind;
 use scratchpad::{ScratchpadDiffView, ScratchpadFileInfoView, ScratchpadSearchView};
 // 属性面板（中央 Dock 独立 tab）：Shared 只持弱句柄与打开回调。
 use super::property_panel::PropertyHostPanel;
+// 统计看板标签页（中央 Dock 独立 tab，只读概览四卡）：同上持弱句柄。
+use super::dashboard::DashboardPanel;
 // 搜索结果标签页（中央 Dock 独立 tab，VSCode「搜索: query」形态）：同上持弱句柄。
 use super::search_results::SearchResultsHostPanel;
 // P0：元数据搜索标签页（同一形态，搜的是**连接级元数据缓存**，不是草稿箱内容）。
@@ -447,6 +449,10 @@ pub struct Shared {
     pub scratchpad_search: Rc<RefCell<Option<ScratchpadSearchView>>>,
     /// 搜索结果标签页实体弱句柄（已关闭则为死弱引用，下次有结果时重建）。
     pub search_results_panel: Rc<RefCell<Option<WeakEntity<SearchResultsHostPanel>>>>,
+    /// 统计看板标签页实体弱句柄（单例；已关闭则为死弱引用，点状态栏 chip 时重建）。
+    pub dashboard_panel: Rc<RefCell<Option<WeakEntity<DashboardPanel>>>>,
+    /// 状态栏 chip 唤起看板的请求标志（render 检测到后 `defer_in` 建 / 聚焦；取出即清空）。
+    pub open_dashboard_request: Rc<Cell<bool>>,
     /// 「搜索」标签页被 tab ✕ 关闭（2026-10-10 用户拍板语义：关标签**保留结果**）。
     /// `true` = 用户已关闭标签页 → `WorkbenchView::render` 不再自动重建；
     /// 新的搜索结果到达（`show_scratchpad_search(Some)`）自动置 `false`（重新搜索 → 重建并聚焦）。
@@ -532,6 +538,8 @@ impl Shared {
             open_config_center: Rc::new(RefCell::new(None)),
             scratchpad_search: Rc::new(RefCell::new(None)),
             search_results_panel: Rc::new(RefCell::new(None)),
+            dashboard_panel: Rc::new(RefCell::new(None)),
+            open_dashboard_request: Rc::new(Cell::new(false)),
             search_results_dismissed: Rc::new(RefCell::new(false)),
             metadata_search: Rc::new(RefCell::new(None)),
             metadata_search_panel: Rc::new(RefCell::new(None)),
@@ -1175,6 +1183,12 @@ impl Shared {
                 panel.preset_from_columns(table, columns, origin, cx);
             });
         }
+    }
+
+    /// 状态栏 chip 唤起统计看板：置请求标志并通知宿主重绘（render 检测后 defer 建 / 聚焦）。
+    pub fn request_dashboard(&self, cx: &mut App) {
+        self.open_dashboard_request.set(true);
+        self.notify_host(cx);
     }
 }
 

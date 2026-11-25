@@ -433,6 +433,21 @@ impl WorkbenchView {
             move |app| toggle_sidebar_hidden(&right_shared, &right_entity, false, app),
         );
 
+        // 统计看板入口（受 `layout.dashboard_enabled` 开关控制）：关闭态 chip 不渲染、
+        // 面板不挂载、不发起概览取数。点击只置 Shared 请求标志，render defer 建 / 聚焦。
+        let dashboard_on = settings::SettingsService::dashboard_enabled(cx);
+        let dashboard_shared = shared.clone();
+        let dashboard_chip = dashboard_on.then(|| {
+            sb_toggle(
+                "toggle-dashboard",
+                IconName::LayoutDashboard,
+                tr("统计看板"),
+                theme.colors.primary_foreground,
+                theme.colors.primary_active,
+                move |app| dashboard_shared.request_dashboard(app),
+            )
+        });
+
         // 布局锁定开关。
         let layout_locked = self.shared.layout_locked.get();
         let lock_shared = shared.clone();
@@ -509,6 +524,7 @@ impl WorkbenchView {
                     .child(div().child(format!("连接：{selected}")))
                     .child(lsp_item)
                     .child(notification_bell)
+                    .children(dashboard_chip)
                     .child(lock_toggle)
                     .child(right_toggle)
                     .child(version_chip),
