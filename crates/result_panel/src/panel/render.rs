@@ -1368,7 +1368,10 @@ impl ResultPanel {
                     .flex_1()
                     .min_w_0()
                     .h_full()
-                    .child(self.render_text_view(cx)),
+                    // 同网格：查找浮层的定位上下文（文本视图里也覆盖在内容之上）
+                    .relative()
+                    .child(self.render_text_view(cx))
+                    .children(self.find_open.then(|| self.render_find_overlay(cx))),
             )
             .into_any_element()
         } else if !self.compare_mode {
@@ -1407,6 +1410,11 @@ impl ResultPanel {
                 .flex_1()
                 .min_w_0()
                 .min_h_0()
+                // 定位上下文：结果内查找是**覆盖网格的浮层**（DBeaver
+                // `FindReplaceOverlay` 的 `targetControl` 正是 presentation 控件，
+                // `FindReplaceOverlay.java:1045-1108` 按目标控件 bounds 定位），
+                // 不是布局里的一行 —— 见 `render_find_overlay`。
+                .relative()
                 .debug_selector(|| "editor-result-main-grid".to_string())
                 .on_key_down(move |event: &KeyDownEvent, window, app| {
                     if !grid_key.read(app).focus_handle(app).is_focused(window) {
@@ -1464,7 +1472,12 @@ impl ResultPanel {
                 });
             row = row.child(
                 main_area
-                    .children((!maximized).then(|| grid_container.child(result_pane)))
+                    .children((!maximized).then(|| {
+                        grid_container
+                            .child(result_pane)
+                            // 查找浮层挂在网格容器里（后挂 = 画在网格之上）
+                            .children(self.find_open.then(|| self.render_find_overlay(cx)))
+                    }))
                     .child(self.render_right_sidebar(cx)),
             );
             // 【右缘竖条】三态开关控制可见性（`edge_bar_visible`）；有可复制语义
@@ -1689,9 +1702,8 @@ impl ResultPanel {
                 (self.show_filter_panel && self.filter_expanded)
                     .then(|| self.render_filter_expand_bar(cx)),
             )
-            // 【结果内查找】查找栏（工具栏下方一行；与展开条互斥场景由调用方口径定：
-            // 两者都开时先筛选条后查找栏，读起来仍是「筛选 → 找」）
-            .children(self.find_open.then(|| self.render_find_bar(cx)))
+            // 【结果内查找】查找浮层挂在网格容器里（见 `body` 的 `grid_container` /
+            // 文本视图容器）：DBeaver 是覆盖目标控件的浮动层，不是布局里的一行。
             // 第三行：主体
             .child(body)
             // 第四行：状态栏
@@ -1876,22 +1888,30 @@ impl ResultPanel {
             .into_any_element()
     }
 
-    /// 【结果内查找】查找栏：查找词输入框 + 三口径开关 + 「N 个匹配」+ 上一处 /
-    /// 下一处 / 关闭。
+    /// 【结果内查找】查找浮层：查找词输入框 + 三口径开关 + 上一处 / 下一处 +
+    /// 「仅显示匹配」+「N 个匹配」+ 关闭。
     ///
-    /// 对齐 DBeaver：结果集的查找是 `ResultsetFindReplaceOverlay`（浮层，
-    /// `ResultsetFindReplaceOverlay.java:47`），带 Prev / Next 与命中数
-    /// （`SpreadsheetFindReplaceTarget`）；入口是筛选条上的 CHECK 型
-    /// `openFindReplaceButton`（`ResultSetFilterPanel.java:356`）；行内三颗口径开关是
-    /// `FindReplaceOverlay` 的 Regex / Case / WholeWord 三颗 `SWT.CHECK`。
+    /// 对齐 DBeaver `FindReplaceOverlay`（`plugins/org.jkiss.dbeaver.ui/src/org/jkiss/
+    /// dbeaver/ui/controls/findandreplace/FindReplaceOverlay.java`；结果集版
+    /// `ResultsetFindReplaceOverlay` 只多了「边输边过滤」）：
+    /// - 浮层**覆盖在目标控件之上**（`targetControl` 就是 presentation 控件，`:1045-1056`）
+    /// - 默认落 `TOP_RIGHT`（`:348`），备选 `BOTTOM_RIGHT` → `BOTTOM_LEFT`（`:84-86`），
+    ///   换角条件是「与选中区不重叠」（`:1090-1106`）
+    /// - 宽 = 理想宽夹在 `[min(无工具条最小宽, 0.95×目标宽), 0.7×目标宽]`（`:982-999`）
+    /// - 高 = 内容自然高（`:1080`）
+    /// - 外壳 = 阴影色底 + `margins(1,1)`（`:610-614`，视觉即 1px 边框 + 1px 外距），
+    ///   内容底色 = overlay 底色 + `margins(2,2)` + `spacing(2,0)`（`:615-617`）
+    /// - 宽度不够时先藏工具条（`:1001-1007`）
     ///
-    /// 本仓把「浮层」落成工具栏下方一行：浮层要绝对定位覆盖网格，会把网格行/列几何
-    /// 与格内命中高亮一起绑进来；而「找出并选中该格」（`find_step` 用
-    /// `set_selected_cell` + `scroll_to_row/col`）已经完成了读取那一半。
+    /// 本仓落点：挂在网格容器（`editor-result-main-grid`）与文本视图容器内，
+    /// `absolute().top_1().right_1()` 覆盖右上角；宽 `relative(0.7)` + `min_w(20rem)`；
+    /// 1px 边框 + 2px 内距；底色 `background`。
     ///
-    /// 未做（在册）：替换（DBeaver 走 `SpreadsheetFindReplaceTarget.replaceSelection`
-    /// 改单元格值；本仓值编辑走「待提交」通道，批量替换另开一批）、格内区间高亮。
-    pub(crate) fn render_find_bar(&self, cx: &App) -> AnyElement {
+    /// 本仓没做的（在册，见 §54.4）：替换栏（`replaceToggle` + `replaceBar`，DBeaver
+    /// 仅 `target.isEditable()` 时显示，`:968`，本仓结果集不可编辑）、按实测宽隐藏
+    /// 工具条、按选中区换角、查找历史（`HistoryStore`，`HISTORY_SIZE = 15`，`:81`/`:828`）、
+    /// 内容补全、格内区间高亮。
+    pub(crate) fn render_find_overlay(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let prev_queue = self.queue.clone();
         let next_queue = self.queue.clone();
@@ -1907,17 +1927,22 @@ impl ResultPanel {
         };
         let nav_disabled = self.find_hits == 0;
         div()
+            // 覆盖在网格之上（DBeaver `containerControl` 是目标控件的子级、靠角摆放）
+            .absolute()
+            .top_1()
+            .right_1()
+            // 宽 = 0.7 × 目标宽（DBeaver 上界 `BIG_WIDTH_RATIO_EDITOR_TO_OVERLAY`，`:78`）
+            // 本仓拿不到「内容理想宽 / 工具条实测宽」→ 只做上界，另加 20rem 下限兜底
+            .w(relative(0.7))
+            .min_w(rems(20.))
             .h_flex()
             .items_center()
             .gap_2()
-            .w_full()
-            .flex_none()
-            .min_h_0()
-            .border_b(ui::HAIRLINE)
+            // 外壳 1px 阴影边 + 内容 2px 内距（`:610-617` 合成）
+            .border_1()
             .border_color(theme.colors.border)
             .bg(theme.colors.background)
-            .px_2()
-            .py_1()
+            .p(px(2.))
             .text_xs()
             .debug_selector(|| "editor-result-find-bar".to_string())
             .child(
@@ -1973,31 +1998,6 @@ impl ResultPanel {
                     }),
             )
             .child(
-                // 「只显示匹配行」：DBeaver 的 `selectAllButton`（SWT.CHECK，图标
-                // `FIND_REPLACE_FIND_ALL_FILTER`）。勾上把查找词当临时行过滤。
-                // `Checkbox` 是 RenderOnce，自身 id 进不了 `debug_bounds`，探针挂外层 div。
-                div()
-                    .flex_none()
-                    .debug_selector(|| "editor-result-find-only-wrap".to_string())
-                    .child(
-                        Checkbox::new(ElementId::Name(SharedString::from(
-                            "editor-result-find-only",
-                        )))
-                        .checked(only_on)
-                        .label(tr("仅显示匹配"))
-                        .accessibility_label("只显示匹配行")
-                        .on_click(move |_checked, _window, app| {
-                            only_queue.request(ResultRequest::SetFindFilterOnly(!only_on), app);
-                        }),
-                    ),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .text_color(theme.colors.muted_foreground)
-                    .child(hits),
-            )
-            .child(
                 Button::new("editor-result-find-prev")
                     .ghost()
                     .xsmall()
@@ -2020,6 +2020,35 @@ impl ResultPanel {
                     .on_click(move |_, _window, app| {
                         next_queue.request(ResultRequest::FindNext, app);
                     }),
+            )
+            // DBeaver 工具条顺序是 `Case / Regex / WholeWord / 范围内查找 / 分隔 /
+            // 上一处 / 下一处 / 全选匹配`（`:663-687`），「全选匹配」（本仓落成
+            // 「仅显示匹配」勾选框）在**上一处/下一处之后**，故排在这里。
+            .child(
+                // 「只显示匹配行」：DBeaver 的 `selectAllButton`（SWT.CHECK，图标
+                // `FIND_REPLACE_FIND_ALL_FILTER`）。勾上把查找词当临时行过滤。
+                // `Checkbox` 是 RenderOnce，自身 id 进不了 `debug_bounds`，探针挂外层 div。
+                div()
+                    .flex_none()
+                    .debug_selector(|| "editor-result-find-only-wrap".to_string())
+                    .child(
+                        Checkbox::new(ElementId::Name(SharedString::from(
+                            "editor-result-find-only",
+                        )))
+                        .checked(only_on)
+                        .label(tr("仅显示匹配"))
+                        .accessibility_label("只显示匹配行")
+                        .on_click(move |_checked, _window, app| {
+                            only_queue.request(ResultRequest::SetFindFilterOnly(!only_on), app);
+                        }),
+                    ),
+            )
+            // 命中数：本仓增强（DBeaver 浮层不摆计数文本），故放在工具条之后、关闭之前
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(theme.colors.muted_foreground)
+                    .child(hits),
             )
             .child(
                 Button::new("editor-result-find-close")

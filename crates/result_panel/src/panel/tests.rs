@@ -4531,6 +4531,45 @@ fn find_bar_criteria_buttons_queue_their_option(cx: &mut gpui_kit::TestAppContex
     assert!(cx.update(|_, app| panel.read(app).find_criteria.regex));
 }
 
+/// 【结果内查找 2026-11-25】查找是**覆盖网格的浮层**，不是布局里的一行：
+/// DBeaver `FindReplaceOverlay` 把浮层摆在 `targetControl`（presentation 控件）之上，
+/// 默认 `TOP_RIGHT`（`FindReplaceOverlay.java:348`），宽取 `0.7 × 目标宽`
+/// （`BIG_WIDTH_RATIO_EDITOR_TO_OVERLAY`，`:78`）。本仓据此挂在
+/// `editor-result-main-grid` 里、`absolute().top_1().right_1()`。
+#[gpui_kit::test]
+fn find_overlay_sits_in_the_grid_top_right_corner(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|window, cx| panel.update(cx, |p, cx| p.toggle_find(window, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let grid = cx
+        .debug_bounds("editor-result-main-grid")
+        .expect("应有网格容器");
+    let bar = cx
+        .debug_bounds("editor-result-find-bar")
+        .expect("应有查找浮层");
+
+    // 上缘：浮层在网格容器内部、贴着顶部（`top_1` = 4px）
+    let dy = bar.origin.y - grid.origin.y;
+    assert!(
+        dy >= gpui_kit::px(0.) && dy < gpui_kit::px(8.),
+        "浮层上缘应贴网格顶部（实际差 {dy:?}），而不是排在工具栏下方一行"
+    );
+    // 右缘：贴着网格右缘、且不越界
+    let d_right = (grid.origin.x + grid.size.width) - (bar.origin.x + bar.size.width);
+    assert!(
+        d_right >= gpui_kit::px(0.) && d_right < gpui_kit::px(8.),
+        "浮层右缘应贴网格右缘（实际差 {d_right:?}）"
+    );
+    // 宽：≈ 0.7 × 网格宽（容差留给 `min_w(20rem)` 兜底）
+    let ratio = f32::from(bar.size.width) / f32::from(grid.size.width);
+    assert!(
+        (ratio - 0.7).abs() < 0.06 || f32::from(bar.size.width) >= 320.,
+        "浮层宽应约为网格宽的 0.7（实际 {ratio}，或已落到 20rem 下限）"
+    );
+}
+
 /// 【工具栏 2026-11-20 / 收口 2026-11-24】CHECK 型按钮的「点一次就翻转面板态」：
 /// 筛选栏只剩筛选展开 / 查找两颗（下发源库已删、列注释已迁结果集设置，见基线 §21.3），
 /// 二者都是 DBeaver 的 CHECK `ToolItem`
