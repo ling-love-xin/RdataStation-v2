@@ -10297,6 +10297,9 @@ panicked at gpui-fast-0.1.17/src/app.rs:2657: no state of type rds_settings::mod
 - 未做（仍登记）：`CMD_ACTIVATE_PANELS`（真值的「恢复默认面板」在 `fillPanelsMenu:1579`，
   本仓无端口，三处菜单一致不摆）；子菜单图标用的是本仓 `PanelRight`（真值 `PANEL_CUSTOMIZE`，
   同一语义、不同图标集）。
+- 位置差异（有意）：真值这段插在 `GroupMarker(EDIT)` 之后、`viewMenu` 之前（菜单中段），
+  本仓追加在右键菜单**末尾**——本仓右键是平铺长菜单、段位与原版本就不同（§20.1 首条），
+  子菜单挂在尾部不打断既有段序；要挪到中段得先重排整份右键段位，不在本批。
 
 ## 20. 有意差异汇总
 
