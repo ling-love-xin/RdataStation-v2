@@ -129,6 +129,10 @@
 （仅 `editor/format.rs` 与 `data_objects/mod.rs` 两条既有 warning）。注意：workbench 测试编译须在 **cargo 层**
 `-j 1` 单线程；多 crate 并发曾触编译期 OOM / E0786 rmeta 损坏并连锁出 E0432/E0463，属环境资源 / 缓存问题，非源码错误。
 
+**2026-11-26 4-2c 后复测（HEAD `114fdee5`）**：`rds-settings` 50 passed、`rds-shared` 68 passed、
+`ui_contract` 10 passed、`cargo check --workspace -j 1` 0 error（仅 `editor/format.rs` 与
+`data_objects/mod.rs` 两条既有 warning）。
+
 跨线适配（非本任务路径，单独 commit）：
 
 - `f19a6064` 适配 `AnyWindowHandle::update` 闭包三参签名；
