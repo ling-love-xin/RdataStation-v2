@@ -382,10 +382,16 @@ pub struct ConnRow {
     pub driver: String,
     /// 库名 / 文件路径（`database` 字段；文件库驱动时是裸路径）
     pub database: Option<String>,
+    /// **有没有 ATTACH 能力**（= 这个驱动能不能被 DuckDB 挂进联邦库）。
+    ///
+    /// 两类源行靠它分流（铁律第 42 条）：能力者行尾给「挂载 / 卸载」一个动作位；
+    /// 无能力且已登记的只给小标「已登记」，**不给挂载**（永远挂不上）。
+    /// 判据统一走 `AccelKind::from_db_type`，与连接对话框的开关门控同源。
+    pub attach_capable: bool,
     /// 登记状态 = 项目库 `analysis_sources` 里有这一条（「项目级意图」）。
     ///
-    /// 旧标记 `use_duckdb_fed` 暂时也算登记（见 `collect` 的注释）：不然升级那一刻
-    /// 老用户已注册的源会集体从「项目级」掉成「会话级」，看着像被清掉了。
+    /// **只认这一份**：`use_duckdb_fed` 是"能力/加速开关"，不是"我要注册这个源"
+    /// （2026-11-25 用户口径）。登记了但连接不在清单里的，走 `reg:<id>` 行。
     pub registered: bool,
 }
 
@@ -1403,23 +1409,27 @@ pub fn collect(shared: &Shared) -> Collected {
         .as_ref()
         .and_then(|p| engine::persistence::analysis_sources::list_in_project(&p.root).ok())
         .unwrap_or_default();
+    // 执行侧（联邦计划，工作线程）拿不到项目根，靠这份进程级快照认别名；
+    // 每次都整体换掉：切项目后不许留上个项目的键（`publish_aliases` 先清后填）
+    engine::persistence::analysis_sources::publish_aliases(&registered_sources);
+    // 底座也跟着清单同步一次：切项目不重启时，`analytics` / `rds_global` 的路径必须跟着换
+    // （会话指纹含底座，下一次开联邦会话就会重建）
+    crate::services::analysis_bases::sync(project.as_ref().map(|p| p.root.as_path()));
     let registered_conn_ids: Vec<&str> = registered_sources
         .iter()
         .filter_map(|row| row.connection_id.as_deref())
         .collect();
 
-    // 源段只收**已注册成分析源**的连接：没注册的是导航栏的对象，不是分析源
-    // （铁律 B 组第 4 条）。注册过但没连上的仍进清单 —— 行上写「未连接」，
-    // 不给展开（没有表可列）。
-    //
-    // 登记判据两档：新表 `analysis_sources` 里有这条连接，**或**旧标记
-    // `use_duckdb_fed` 还亮着。旧标记必须继续算数——不然升级那一刻，老用户
-    // 已注册的源会从「项目级」集体掉成「会话级」，像被清掉了。
+    // 源段收两类连接（铁律第 42 条末段 / 2026-11-25 用户口径）：
+    // 1. `use_duckdb_fed` 有值 = 有 ATTACH 能力且已声明当 DuckDB 源 → **必须出**；
+    // 2. 开关为空（没有 ATTACH 能力）但**已进项目分析源表** → 也出（小标「已登记」，
+    //    不给挂载，只在导航里是活连接时可展开选表）。
+    // 其余一律不进：源段不做探索搜查（"可挂但没挂也没登记"的走「增源」进来）。
     let connections: Vec<ConnRow> = shared
         .connections
         .borrow()
         .iter()
-        .filter(|item| item.use_duckdb_fed)
+        .filter(|item| item.use_duckdb_fed || registered_conn_ids.iter().any(|id| *id == item.id))
         .map(|item| ConnRow {
             id: item.id.clone(),
             name: item.name.clone(),
@@ -1430,8 +1440,12 @@ pub fn collect(shared: &Shared) -> Collected {
             connected: item.connected,
             driver: item.driver.clone(),
             database: item.database.clone(),
-            registered: item.use_duckdb_fed
-                || registered_conn_ids.iter().any(|id| *id == item.id),
+            // 能力判据只走引擎那一份（`AccelKind::from_db_type`），UI 不另判一套；
+            // 这里手上有的是驱动 id（`mysql_native` / `postgres` / `sqlite` / `duckdb` / `oracle`），
+            // 它按前缀认驱动，与 `db_type` 同一套规则
+            attach_capable: engine::duckdb::accel::AccelKind::from_db_type(&item.driver).is_ok(),
+            // 登记只认项目库那一行：`use_duckdb_fed` 是能力/加速开关，**不是**选表的意图
+            registered: registered_conn_ids.iter().any(|id| *id == item.id),
         })
         .collect();
     let analysis_tables = project
@@ -1554,6 +1568,7 @@ mod tests {
                 connected: true,
                 driver: "mysql".into(),
                 database: Some("orders".into()),
+                attach_capable: true,
                 registered: true,
             }],
             analysis_tables: vec!["res_订单明细_20261115103000".into(), "数据修复".into()],
@@ -2401,6 +2416,7 @@ mod tests {
             connected: false,
             driver: "postgres".into(),
             database: Some("dw".into()),
+            attach_capable: true,
             registered: true,
         });
         let rows = objects(&offline);
@@ -2688,6 +2704,7 @@ mod temp_source_tests {
             connected: true,
             driver: "duckdb".into(),
             database: Some("D:/data/销售.duckdb".into()),
+            attach_capable: true,
             registered: true,
         });
         let row = objects(&c)

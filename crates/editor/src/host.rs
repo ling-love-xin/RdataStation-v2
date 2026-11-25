@@ -38,6 +38,12 @@ pub struct FederatedSourceRecord {
     pub conn_id: String,
     /// 展示名。
     pub name: String,
+    /// 项目登记里这条连接的别名（`analysis_sources.alias`）。
+    ///
+    /// 有值就**必须**拿它当 catalog 名：面板三级树第一层、登记表、SQL 引用名
+    /// 三者只有同名，用户改别名才不会出现"SQL 里叫一个名、界面上叫另一个"。
+    /// `None` = 没登记的会话级源，退回「连接名 sanitize」的旧规则。
+    pub alias: Option<String>,
     /// 数据库类型（`db_type`）。
     pub db_type: String,
     /// 已解密的连接串（DuckDB 联邦直连用）。

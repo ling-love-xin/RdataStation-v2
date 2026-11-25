@@ -95,6 +95,14 @@ impl FederatedSession {
 
         // 装扩展与一批 ATTACH 串行（`INSTALL` 写目录、`LOAD` 是连接级，都要独占）
         let _mount = mount_lock();
+
+        // 底座先挂：它们不是"源"，但 SQL 里随时可能引用（`analytics.main.x` / `rds_global.main.x`）。
+        // 挂不上不算会话失败——缺文件 / 正被写入方持有都只让这一格缺席，别把整条会话带下去
+        for (alias, outcome) in attach_bases(&conn) {
+            if let Err(reason) = outcome {
+                tracing::warn!(alias = %alias, reason = %reason, "联邦底座没挂上（这一格本轮不可用）");
+            }
+        }
         // 同一批源可能重复要同一个扩展（如两个 MySQL 源）：按**种类**去重，
         // 而不是按扩展名——`ensure` 已经幂等，这里只省重复的登记与日志
         let mut ensured: HashSet<AccelKind> = HashSet::new();
@@ -404,6 +412,75 @@ fn mentions_alias(sql: &str, alias: &str) -> bool {
     false
 }
 
+/// 执行面底座（联邦 / 分析共用）：一条固定的只读 catalog，不是"用户加的源"。
+///
+/// 为什么底座不是源：分析库和全局库是**执行面自带的**两个库（项目持久表 / `res_` 结果集
+/// 落在 `analytics`，全局表落在 `rds_global`）。用户口径（2026-11-25）：
+/// 「全局分析库 + 归档文件必须能进联邦，联邦和分析本质上没有差别」。
+/// 所以它们跟着会话走：每次 open 挂、缺文件就跳过（还没建库不是错误），
+/// 不参与源段的登记/三态，也不给卸载入口。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BaseMount {
+    /// SQL 里的 catalog 名（固定，不让入口自己起名）
+    pub alias: String,
+    /// 库文件绝对路径
+    pub path: String,
+}
+
+/// 项目分析库在会话 SQL 里的固定别名（与引擎别处对 `analytics` 的叫法一致）
+pub const PROJECT_BASE_ALIAS: &str = "analytics";
+
+/// 全局分析库在会话 SQL 里的固定别名：与 [`crate::analysis::global::GLOBAL_ALIAS`] 同一常量
+/// （两处各起一个名，`rds_global` 与 `analytics` 就会在 SQL 里出现两套写法）
+pub const GLOBAL_BASE_ALIAS: &str = crate::analysis::global::GLOBAL_ALIAS;
+
+/// 进程级底座清单（由宿主在项目开关时设置；引擎不猜路径——那是宿主的事）
+static BASES: Lazy<Mutex<Vec<BaseMount>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+/// 设置执行面底座。宿主在「打开项目 / 关闭项目」时调它。
+///
+/// 只改配置，**不动已建会话**：下一次 [`ensure_session`] 会因指纹变化重建会话
+/// （与「源清单变了就重建」同一口径——切项目后旧的 `analytics` 一定不能留着）。
+pub fn set_bases(bases: Vec<BaseMount>) {
+    let mut current = BASES.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    *current = bases;
+}
+
+/// 当前底座指纹（顺序无关）：并进会话指纹，切项目就重建会话
+pub fn bases_fingerprint() -> String {
+    let bases = BASES.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut parts: Vec<String> = bases
+        .iter()
+        .map(|base| format!("{}|{}", base.alias, base.path))
+        .collect();
+    parts.sort();
+    parts.join(";")
+}
+
+/// 把底座只读挂进会话（**缺文件跳过**：项目刚建、全局库还没初始化都不是错误）
+fn attach_bases(conn: &Connection) -> Vec<(String, Result<(), String>)> {
+    let bases = BASES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    let mut out = Vec::with_capacity(bases.len());
+    for base in bases {
+        let path = std::path::Path::new(&base.path);
+        if !path.is_file() {
+            out.push((base.alias, Err("库文件还没建".to_string())));
+            continue;
+        }
+        let literal = base.path.replace('\'', "''");
+        let alias = base.alias.clone();
+        let sql = format!("ATTACH '{literal}' AS {alias} (READ_ONLY)");
+        let outcome = conn
+            .execute_batch(&sql)
+            .map_err(|error| format!("底座 {alias} 挂不上（可能正被写入方持有）：{error}"));
+        out.push((base.alias, outcome));
+    }
+    out
+}
+
 /// 开一条按产品纪律配置好的内存连接（扩展目录 / 内存闸 / 溢写口 / 不静默联网）
 fn open_configured() -> Result<Connection, String> {
     let conn =
@@ -621,6 +698,14 @@ pub fn source_fingerprint(sources: &[FederatedSource]) -> String {
     parts.join(";")
 }
 
+/// 会话指纹 = 源清单 + 底座清单。
+///
+/// 底座必须参与：切项目后 `analytics` 指向另一个库文件，旧会话里的那份**必须**消失，
+/// 否则用户会对着上个项目的表查数据（那是比"重建慢一点"严重得多的错）。
+pub fn session_fingerprint(sources: &[FederatedSource]) -> String {
+    format!("{}#bases:{}", source_fingerprint(sources), bases_fingerprint())
+}
+
 /// 取（必要时建立）一条联邦会话
 ///
 /// **会做 I/O**（首次装扩展要联网一次、`ATTACH` 要连源库），属于**事件路径**（工作线程上
@@ -638,7 +723,7 @@ pub fn ensure_session(
             "联邦查询至少需要一个源：在连接设置里开启「DuckDB 本地加速」并连接它".to_string(),
         );
     }
-    let fingerprint = source_fingerprint(sources);
+    let fingerprint = session_fingerprint(sources);
     if let Some(session) = cached_for(owner, &fingerprint) {
         apply_requested_primary(&session, requested_primary);
         return Ok(session);
@@ -786,7 +871,8 @@ pub fn owners() -> Vec<(String, SessionSnapshot)> {
 }
 
 /// 缓存命中：主人与指纹都对上才算
-fn cached_for(owner: &str, fingerprint: &str) -> Option<Arc<FederatedSession>> {    let sessions = SESSIONS.lock().ok()?;
+fn cached_for(owner: &str, fingerprint: &str) -> Option<Arc<FederatedSession>> {
+    let sessions = SESSIONS.lock().ok()?;
     let cached = sessions.get(owner)?;
     (cached.fingerprint == fingerprint).then(|| cached.session.clone())
 }
@@ -810,7 +896,10 @@ fn apply_requested_primary(session: &FederatedSession, requested: Option<&str>) 
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
-    use super::{FederatedSession, file_view_sql, write_refusal};
+    use super::{
+        BaseMount, FederatedSession, GLOBAL_BASE_ALIAS, PROJECT_BASE_ALIAS, file_view_sql,
+        session_fingerprint, set_bases, write_refusal,
+    };
     use crate::duckdb::federation::registry::{FederatedSource, MountState, MountedSource};
     use std::sync::Arc;
 
@@ -922,6 +1011,62 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("建目录");
         dir
+    }
+
+    /// 底座（项目 / 全局分析库）跟着会话走：一条源都没有时，SQL 里也能直接引用它们。
+    ///
+    /// 用户口径（2026-11-25）：联邦与分析本质相同，`analytics` / `rds_global` 是执行面
+    /// 自带的两个库，必须能被联邦 SQL 看见；底座清单变了（切项目）会话要重建。
+    #[test]
+    fn bases_are_mounted_with_the_session_and_fingerprinted() {
+        static BASE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = BASE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let dir = workdir("bases");
+        let project_db = dir.join("analytics.duckdb");
+        {
+            let conn = duckdb::Connection::open(&project_db).expect("建项目分析库");
+            conn.execute_batch("CREATE TABLE res_demo AS SELECT 1 AS n")
+                .expect("建表");
+        }
+        let global_db = dir.join("global_analytics.duckdb");
+        {
+            let conn = duckdb::Connection::open(&global_db).expect("建全局分析库");
+            conn.execute_batch("CREATE TABLE G_month AS SELECT 2 AS n")
+                .expect("建表");
+        }
+        let bases = vec![
+            BaseMount {
+                alias: PROJECT_BASE_ALIAS.to_string(),
+                path: project_db.to_str().expect("路径").to_string(),
+            },
+            BaseMount {
+                alias: GLOBAL_BASE_ALIAS.to_string(),
+                path: global_db.to_str().expect("路径").to_string(),
+            },
+        ];
+        set_bases(bases.clone());
+        // 指纹里必须有底座：否则切项目后旧会话还挂着上个项目的表
+        let with_bases = session_fingerprint(&[]);
+        set_bases(Vec::new());
+        let without_bases = session_fingerprint(&[]);
+        assert_ne!(with_bases, without_bases, "底座变了指纹必须变");
+        set_bases(bases);
+
+        let session = FederatedSession::open(&[], None).expect("只剩底座也能建会话");
+        let project = session
+            .run("SELECT count(*) AS n FROM analytics.main.res_demo")
+            .expect("项目分析库应可查");
+        assert_eq!(project.to_rows()[0][0].to_string(), "1");
+        let global = session
+            .run("SELECT count(*) AS n FROM rds_global.main.G_month")
+            .expect("全局分析库应可查");
+        assert_eq!(global.to_rows()[0][0].to_string(), "1");
+
+        set_bases(Vec::new());
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!with_bases.is_empty());
+        assert!(!without_bases.is_empty());
     }
 
     /// 两个源跨源 join：未限定名走主源，限定名走各自

@@ -19,6 +19,8 @@
 
 pub use connection_dialog::services::connection_service;
 pub use connection_dialog::services::data_source_service;
+/// 分析底座接线：把项目 / 全局分析库发布给联邦会话（`analytics` / `rds_global` 只读挂载）
+pub mod analysis_bases;
 pub mod db_navigator;
 /// 数据对象「导出 / 存到草稿」的写盘通道（worker 线程 + 回执队列 + UI 泵；铁律 E 组第 25 条）
 pub mod export_jobs;

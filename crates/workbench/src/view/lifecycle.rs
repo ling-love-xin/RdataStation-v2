@@ -15,6 +15,9 @@ impl WorkbenchView {
             crate::services::workspace_loader::load_connections_for_scope(project_root.as_deref());
         let shared = Shared::with_connections(connections, notice);
         *shared.project.borrow_mut() = project;
+        // 分析底座：项目 / 全局分析库先发布给联邦会话，切档时 `analytics` / `rds_global`
+        // 才在 SQL 里本来可见（见 `services::analysis_bases`）
+        crate::services::analysis_bases::sync(project_root.as_deref());
         // 启动恢复的项目也要**取写锁**——与改动前同一时机：**在端口装配之前**
         //（端口只是拄着 `Shared` 的句柄，真正读锁状态是调用 / 渲染那一刻）。
         Self::lock_startup_project(&shared, project_root);
@@ -71,8 +74,23 @@ impl WorkbenchView {
         };
         // A12：把会话存储接上（光标 / 选区 / 模式跨重启保留；未接时不持久化但编辑可用）
         crate::services::editor_session::attach(&editor_service);
-        // A9：把“另存为”的路径选择接上（系统文件对话框；未接时另存为会明确报未接入）
-        crate::services::editor_files::attach(&editor_service);
+        // A9：把“另存为”的路径选择接上（系统文件对话框；未接时另存为会明确报未接入）。
+        // 未命名文档（导航「在 SQL 编辑器中打开」等内存文档）没有目录可回填——
+        // 默认目录指向**当前项目草稿箱根**（2026-11-25 用户口径：草稿箱 = 我正在
+        // 做的事，未命名 SQL 落进去即入草稿箱管理面，watcher ~1.2s 自动上树）。
+        // 有路径的文档仍回自己所在目录；无项目 / 草稿箱目录还没建过时回落系统默认。
+        {
+            let shared_for_picker = shared.clone();
+            crate::services::editor_files::attach(
+                &editor_service,
+                move || {
+                    shared_for_picker
+                        .project_root()
+                        .map(|root| root.join(scratchpad::MODULE_DIR_NAME))
+                        .filter(|dir| dir.is_dir())
+                },
+            );
+        }
         // B1：把连接端口接上（连接列表 + 自动建连；未接时选择器说“未接入连接列表”）
         crate::services::editor_connections::attach(&editor_service, editor_host.clone());
         // B13：把执行通道端口接上（源库 / 本地加速 / 联邦 的门控；未接时后两档都不可选并给原因）

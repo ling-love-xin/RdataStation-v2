@@ -15,8 +15,46 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use std::collections::HashMap;
+use std::sync::RwLock;
 
 use shared::error::{CoreError, StorageError};
+
+/// 连接 id → 登记别名 的**进程级快照**（宿主在清单刷新时发布，执行侧读取）。
+///
+/// 为什么要有这一份：联邦计划的组装在**工作线程**上（`FederatedSourcePort::records`，
+/// 不持 `Shared`、拿不到项目根），而登记表在项目库里。让执行侧每次去开项目库是错的
+/// （工作线程不能 mutate UI 状态、也不该反复 open SQLite）；所以由面板在刷新清单时
+/// 顺带发布一份只读快照（几十条，复制一次比每次查库便宜）。
+///
+/// 语义：**只是缓存**，权威仍是项目库；发布点必须跟着 [`list_in_project`] 走。
+static ALIASES_BY_CONN: std::sync::LazyLock<RwLock<HashMap<String, String>>> =
+    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+
+/// 发布「连接 id → 别名」快照（清空后重填：切项目必须整体换掉，不能留上个项目的键）。
+pub fn publish_aliases(rows: &[AnalysisSourceRow]) {
+    let mut map = ALIASES_BY_CONN
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    map.clear();
+    for row in rows {
+        if let Some(conn_id) = row.connection_id.as_deref() {
+            map.insert(conn_id.to_string(), row.alias.clone());
+        }
+    }
+}
+
+/// 取某条连接在项目里登记的别名（没有登记 / 快照还没发布 → `None`）。
+///
+/// 调用方据此决定联邦挂载别名：有登记用它（SQL 引用名与面板/登记一致），
+/// 没有就退回「连接名 sanitize」的旧规则（会话级源）。
+pub fn alias_for_connection(conn_id: &str) -> Option<String> {
+    ALIASES_BY_CONN
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(conn_id)
+        .cloned()
+}
 
 fn storage_err(op: &str, reason: String) -> CoreError {
     CoreError::storage(StorageError::Persistence {

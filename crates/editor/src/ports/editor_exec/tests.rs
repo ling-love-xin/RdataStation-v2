@@ -353,6 +353,8 @@ mod tests {
         FedSourceRecord {
             conn_id: conn_id.to_string(),
             name: name.to_string(),
+            // 会话级源（没登记）：别名走「连接名 sanitize」旧规则
+            alias: None,
             db_type: db_type.to_string(),
             url: url.to_string(),
         }
@@ -519,12 +521,13 @@ mod tests {
         );
     }
 
-    /// 不够两个源 / 一个都没有：入口就把话说清楚（与门控同一口径）
+    /// 没有源要拒；**一条源照跑**（切档时「把手上这条连接挂进 DuckDB 当主源」是常态）
     #[test]
     fn the_plan_refuses_before_the_session_is_built() {
         let one = vec![record("G_1", "订单库", "mysql_native", "mysql://h:3306/a")];
-        let error = plan_from_records(&one, &[], "G_1").expect_err("一个源该拒");
-        assert!(error.contains("至少需要两个源"), "{error}");
+        let plan = plan_from_records(&one, &[], "G_1").expect("一条源不该拒");
+        assert!(plan.primary.is_some(), "一条源时主源就是它");
+        assert!(plan.notes.iter().any(|note| note.contains("只有一条源")), "{:?}", plan.notes);
 
         let error = plan_from_records(&[], &[], "G_1").expect_err("没有源该拒");
         assert!(error.contains("本地加速"), "{error}");

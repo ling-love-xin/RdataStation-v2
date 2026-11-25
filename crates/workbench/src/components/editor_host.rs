@@ -155,6 +155,9 @@ impl FederatedSourcePort for WorkbenchFederatedSource {
                     .map(|url| FederatedSourceRecord {
                         conn_id: item.id.clone(),
                         name: item.name.clone(),
+                        // 别名优先用项目登记（面板刷新时发布的快照）；没登记 = 会话级源，
+                        // 计划里退回「连接名 sanitize」（`plan_from_records`）
+                        alias: engine::persistence::analysis_sources::alias_for_connection(&item.id),
                         db_type: item.db_type.clone(),
                         url,
                     })

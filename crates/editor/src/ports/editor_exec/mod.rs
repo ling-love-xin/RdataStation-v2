@@ -87,6 +87,9 @@ pub(crate) struct FederatedPlan {
 pub(crate) struct FedSourceRecord {
     conn_id: String,
     name: String,
+    /// 项目登记里这条连接的别名（`analysis_sources.alias`）；`None` = 没登记的会话级源，
+    /// 别名回退「连接名 sanitize」（见 `plan_from_records`）
+    alias: Option<String>,
     db_type: String,
     /// 运行时连接串（`accel::AccelSource::new` 认的那份）
     url: String,

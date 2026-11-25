@@ -38,9 +38,14 @@ impl EngineQueryRunner {
 
         // ① 连接记录（不要求已连接）：宿主组装连接串（解密口令是宿主的事，编辑器不碰）
         for item in self.fed.records() {
+            // 别名以宿主给的为准（它读得到项目）；宿主没填就查进程级快照兜底
+            let alias = item.alias.clone().or_else(|| {
+                engine::persistence::analysis_sources::alias_for_connection(&item.conn_id)
+            });
             records.push(FedSourceRecord {
                 conn_id: item.conn_id,
                 name: item.name,
+                alias,
                 db_type: item.db_type,
                 url: item.url,
             });
@@ -59,6 +64,7 @@ impl EngineQueryRunner {
             records.push(FedSourceRecord {
                 conn_id: info.id.clone(),
                 name: info.name.clone(),
+                alias: engine::persistence::analysis_sources::alias_for_connection(&info.id),
                 db_type: info.db_type.clone(),
                 url,
             });
@@ -269,7 +275,14 @@ pub(crate) fn plan_from_records(
             notes.push(format!("连接 {} 没参与：{reason}", record.name));
             continue;
         }
-        let alias = fed_registry::unique_alias(&fed_registry::sanitize_alias(&record.name), &taken);
+        // 别名优先取项目登记（`analysis_sources.alias`）：面板、登记、SQL 三处同名，
+        // 用户改别名后语句才跟得上（否则界面改了名、SQL 还得写旧名）
+        let wanted = record
+            .alias
+            .as_deref()
+            .map(fed_registry::sanitize_alias)
+            .unwrap_or_else(|| fed_registry::sanitize_alias(&record.name));
+        let alias = fed_registry::unique_alias(&wanted, &taken);
         taken.push(alias.clone());
         // 凭据随连接串进 `ATTACH`（DuckDB 的扫描器不认 Secret，见 `accel::AccelSource::new`）；
         // L2 是拆成会话级 Secret（`registry::oracle_secret_from_url`）。
@@ -296,10 +309,12 @@ pub(crate) fn plan_from_records(
                 .to_string(),
         );
     }
-    // 联邦与本地加速的区别就是“跨源”：只有一个源时两者是同一件事（门控也是这么挡的）
-    if sources.len() < 2 {
-        return Err(format!(
-            "联邦查询至少需要两个源（现在只有 {}）：把另一个连接也开启「DuckDB 本地加速」",
+    // 只有一个源也照样联邦（2026-11-25 用户口径）：从源库档切到联邦时，最常见的就是
+    // 「把手上这一条连接挂进 DuckDB 当主源，SQL 一字不改」——数量不是区别，
+    // 联邦与分析本质是同一件事，只差入口和主源。
+    if sources.len() == 1 {
+        notes.push(format!(
+            "只有一条源（{}）：联邦会话照跑，主源就是它",
             sources[0].alias
         ));
     }
