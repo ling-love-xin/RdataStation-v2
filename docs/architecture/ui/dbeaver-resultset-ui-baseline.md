@@ -3348,7 +3348,7 @@ pub fn set_selected_cell_without_scroll(&mut self, row_ix: usize, col_ix: usize,
 | 历史入口 → 表格浮层（§48） | **已落地** |
 | 执行钮启用态（§49） | **已落地** |
 | 对象格单击 → 对象信息浮层（§51） | **已落地**：非模态 `Popover`，保留血缘行 |
-| 查找钮 → `FindReplaceOverlay` 浮层 | **未落地**：本仓是工具栏下方一行（`render_find_bar` 注释已写明取舍：浮层要绝对定位覆盖网格，会把网格行列几何绑进来） |
+| 查找钮 → `FindReplaceOverlay` 浮层（§54） | **已落地**：改为覆盖网格右上角的浮层；残余（替换栏 / 按宽藏工具条 / 换角 / 历史 / 补全）见 §54.4 |
 | 筛选条文本框的内容补全弹层 | **未落地**：`InputState` 无补全通道，等输入组件 |
 | 首格文本色 / hover 灰↔彩 | 登记在 §46.4，未落地（文本色需新增一枚语义 token 并同步 theme pack 与 token 全集校验，与在途的 theme 改造撞同一批文件，待其落地后单开一刀；hover 灰↔彩需自绘格子） |
 | 对象格 / 浮层图标（§52） | **已落地**：`Table2` → `FileCode` |
@@ -3469,6 +3469,126 @@ pub fn set_selected_cell_without_scroll(&mut self, row_ix: usize, col_ix: usize,
 ### 52.5 残余
 
 `DBIcon.SQL_TEXT` 的图形细节（带折角的纸 + 若干代码行）与 lucide `file-code` 不完全一致，属图标库差异，无等价资源可换；本仓不加自绘图标（禁手搓）。
+
+## §53 对象名文本色：主题绿（对齐 `SWT.COLOR_DARK_GREEN`）
+
+### 53.1 真值
+
+`ActiveObjectPanel.paintPanel`（`ResultSetFilterPanel.java:1037`）：
+
+```java
+e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
+```
+
+`SWT.COLOR_DARK_GREEN` = `rgb(0,128,0)`，**系统常量、与主题无关**（DBeaver 暗色主题下这行字几乎看不清，属其观感缺陷）。
+
+### 53.2 落地（提交 `ed90d044`）
+
+按用户拍板「直接使用主题色即可」，取 `theme.colors.success`：
+
+| 主题 | `success.background` | 观感 |
+| --- | --- | --- |
+| 明（rds-theme light） | `#15803D` | 深绿，接近 DBeaver 的 `rgb(0,128,0)` |
+| 暗（rds-theme dark） | `#89D185` | 亮绿，暗底上可读（比 SWT 常量更合适） |
+
+实现路径（为什么换 variant，两条 vendor 实证）：
+
+1. `Button` 的文字色由 variant 决定 —— `vendor/gpui-component/src/button/button.rs:736` `.text_color(normal_style.fg)`，没有给 label 单独着色的入口。
+2. `Button::foreground` 在 vendor 里是**死字段**：`:44` 声明、`:128` 赋值，全文件再无读取点（`grep foreground` 只出这一处赋值），设了不生效。未擅改 vendor。
+
+故改用官方 `ButtonCustomVariant`（`:104-140`，经 `ButtonVariants::custom` `:99-101`）复刻 ghost 的底色与悬停、只把 fg 换成主题绿：
+
+- 常态底：`color` 默认 `transparent` → `:1026` `mix_oklab(transparent, 0.2)` 仍是透明
+- 悬停底：ghost 取 `tokens.accent`（`:1226-1233`，暗色再乘 0.5），而 `tokens.accent = colors.accent`（`vendor/gpui-component/src/theme/mod.rs:655`）→ 传 `theme.colors.accent`（暗色 `opacity(0.5)`）即 ghost 原值
+
+### 53.3 差异登记
+
+| 项 | DBeaver | 本仓 | 原因 |
+| --- | --- | --- | --- |
+| 色源 | 系统常量 `rgb(0,128,0)` | 主题键 `success.background` | 用户拍板用主题色；本仓禁裸色、且要明暗都可读 |
+| 语义 | 「对象名」专用系统色 | 借用 `success`（成功语义） | 复用一个语义相近的绿，不新增主题键（新增键要同步 theme pack / token 全集守卫，属另一刀） |
+| 悬停 | `blend(background, 90%)` 铺底（`:1019-1030`） | 沿用 ghost 的 `accent` 悬停底 | 这层不变；「灰↔彩」图标仍是未做项 |
+
+### 53.4 验证
+
+- `cargo check -p rds-result-panel` → `Finished`，0 warning。
+- `cargo test -p rds-result-panel --lib` → **448 passed / 0 failed**。
+- 绿色深浅与悬停底是否与改前一致，按要求由用户手动目视；本刀不启动 GUI、不截图。
+
+## §54 结果内查找：从「工具栏下方一行」改成覆盖网格的浮层
+
+### 54.1 真值（父类 + 结果集子类）
+
+文件：
+
+- `plugins/org.jkiss.dbeaver.ui/src/org/jkiss/dbeaver/ui/controls/findandreplace/FindReplaceOverlay.java`（通用浮层，Eclipse 派生，`:69-72`）
+- `plugins/org.jkiss.dbeaver.ui.editors.data/src/org/jkiss/dbeaver/ui/controls/resultset/ResultsetFindReplaceOverlay.java`（结果集版，只多「边输边过滤」）
+
+形态与摆放：
+
+| 维度 | 真值 | 源码 |
+| --- | --- | --- |
+| 层级 | 浮层是**目标控件的子级**、`moveAbove(null)` 置顶 | `:483`、`:550-555` |
+| 目标控件 | `targetControl` = presentation 控件（不是整个面板） | `:96`、`:1045-1056` |
+| 默认位置 | `TOP_RIGHT` | `:348` |
+| 备选位置 | `BOTTOM_RIGHT` → `BOTTOM_LEFT`，换角条件「与选中区不重叠」 | `:84-86`、`:1090-1106` |
+| 宽度 | 理想宽夹在 `[min(无工具条最小宽, 0.95×目标宽), 0.7×目标宽]` | `:982-999` |
+| 理想宽的度量文本 | `"THIS TEXT HAS A REASONABLE LENGTH FOR SEARCHING"` | `:80` |
+| 宽度不够时 | 先藏 `searchTools`，再藏替换钮 | `:1001-1007`、`:959-972` |
+| 高度 | 内容自然高 `computeSize` | `:1080` |
+| 外壳 | `COLOR_WIDGET_NORMAL_SHADOW` 底 + `margins(1,1)` = 1px 边 + 1px 外距 | `:610-614` |
+| 内容 | overlay 底色 + `margins(2,2)` + `spacing(2,0)`，2 列（列 0 = 替换钮，列 1 = 内容组） | `:615-617` |
+| 内容组 | 1 列、`spacing(0,2)`（查找行 / 替换行上下两条） | `:650-653` |
+| 可见性 | 目标控件 bounds 必须完全包住浮层 | `:1117-1119` |
+
+工具条顺序（`:658-712`）：
+
+1. `searchTools`（`align END`）：`SEPARATOR` → `Case` → `Regex` → `WholeWord` → `SearchInSelection` → `SEPARATOR` → `Backward` → `Forward` → `SelectAll`
+2. `closeTools`：`Close`
+3. 替换行（可折叠，默认从 dialog settings 恢复）：`SEPARATOR` → `Replace` → `ReplaceAll`
+
+其他：
+
+- 替换钮只在 `findReplaceLogic.getTarget().isEditable()` 时显示（`:968`）
+- `HISTORY_SIZE = 15` 的查找历史（`:81`），挂在输入框的内容补全上（`:799-808`）
+- 关闭：`Close` 钮 / `Esc`（`closeOnTargetEscapeListener`，`:535-544`）
+- 结果集版：`filterSchedulingTimeoutMilliseconds = 250`（`:50`）边输边把结果集过滤成匹配行，且该「interactive filter」**默认开**（`:53` 注释：默认 ENABLE、存反值；`:76` `isInteractiveFilterEnabled = true`），右键菜单可关（`:115-119`）
+
+### 54.2 本仓原状
+
+`render_find_bar` 是**布局里的一行**：挂在根组装里、`w_full` + `flex_none` + `border_b`，把主体往下推；内容已有输入框、三口径、仅显示匹配、命中数、上一处/下一处、关闭。
+
+### 54.3 本刀落地（提交 `9095466f`）
+
+| 文件 | 改动 |
+| --- | --- |
+| `crates/result_panel/src/panel/render.rs` 根组装 | 删掉「工具栏下方一行」那一挂 |
+| 同上 网格容器 `editor-result-main-grid` | 加 `.relative()` 作定位上下文；`.child(result_pane)` 后 `.children(find_open.then(render_find_overlay))` |
+| 同上 文本视图容器 | 同样加 `.relative()` + 挂浮层（文本视图下也覆盖内容） |
+| `render_find_bar` → `render_find_overlay` | `absolute().top_1().right_1()` + `w(relative(0.7))` + `min_w(rems(20.))` + `border_1` + `p(px(2.))` + `bg(background)` |
+| 工具条顺序 | 「仅显示匹配」（= `selectAllButton`）从输入框后挪到上一处/下一处之后；命中数（本仓增强）放关闭之前 |
+| `crates/result_panel/src/panel/tests.rs` | 新增 `find_overlay_sits_in_the_grid_top_right_corner` |
+
+### 54.4 差异登记
+
+| 项 | DBeaver | 本仓 | 原因 |
+| --- | --- | --- | --- |
+| 宽度 | 按「理想文本宽 + 工具条实测宽」夹在三档之间（`:982-1022`） | `w(relative(0.7))` + `min_w(20rem)` | render 侧拿不到「文本像素宽」与「工具条实测宽」（GPUI 的测量发生在布局阶段之后），只能落上界 + 固定下限 |
+| 按宽藏工具条 | 宽度不足先藏工具条、再藏替换钮（`:1001-1007`） | 不藏 | 同上：拿不到实测宽就无法开门控；窄面板下浮层内容会被自身 `overflow` 裁 |
+| 换角 | 与选中区冲突时 `TOP_RIGHT` → `BOTTOM_RIGHT` → `BOTTOM_LEFT`（`:1090-1106`） | 恒 `TOP_RIGHT` | 冲突判定 `hasSelectionBoundsConflict` 在 `:224`（拿 `ISelection` 与浮层矩形比）；本仓能拿到选中行列但拿不到像素矩形，落「恒右上」并登记 |
+| 替换栏 | `isEditable()` 才出现（`:968`），含 Replace / ReplaceAll | 不做 | 本仓结果集不可编辑；替换语义走「待提交」通道，属另一批 |
+| 查找历史 | `HistoryStore`，`HISTORY_SIZE = 15`（`:81`、`:828`） | 保留词不落历史栈 | `InputState` 无历史栈/补全通道（与筛选框补全同一缺口） |
+| 「边输边过滤」默认值 | 默认**开**、250ms 防抖（`:50-53`、`:76`） | 「仅显示匹配」勾选框、默认**关** | 本仓把同一件事做成显式勾选；改默认值会改变既有交互与测试前提，**未擅自改**，待拍板 |
+| 命中数文本 | 无 | 有（「N 个匹配」/「无匹配」） | 本仓增强，保留 |
+| 格内区间高亮 | `StyledText` 的查找高亮 | 无 | 网格自绘，需另做装饰层 |
+
+### 54.5 验证
+
+- `cargo check -p rds-result-panel` → `Finished`，**0 warning**。
+- `cargo test -p rds-result-panel --lib` → **449 passed / 0 failed**（新增 1 条）。
+- `cargo test -p rds-editor --lib` → **869 passed / 0 failed / 4 ignored**（无回归）。
+- 新断言 `find_overlay_sits_in_the_grid_top_right_corner` 钉三件事：浮层上缘贴网格顶部（差 < 8px）、右缘贴网格右缘（差 < 8px）、宽 ≈ 0.7 × 网格宽（或已落到 20rem 下限）——即它确实是浮层，不是布局行。
+- 目视项（浮层是否盖住网格、边框/底色、窄面板时是否可读）按要求由用户手动确认；本刀不启动 GUI、不截图。
 
 
 
