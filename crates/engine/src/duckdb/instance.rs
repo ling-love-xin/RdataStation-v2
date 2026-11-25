@@ -121,6 +121,11 @@ impl MountRegistry {
     fn release(&mut self, alias: &str) {
         self.aliases.remove(alias);
     }
+
+    /// 这个别名此刻归谁（纯内存读；没人占就是 `None`）
+    fn owner_of(&self, alias: &str) -> Option<&String> {
+        self.aliases.get(alias)
+    }
 }
 
 struct InstanceState {
@@ -502,8 +507,21 @@ impl AnalysisInstance {
         Ok(alias)
     }
 
-    /// **进程面**会话（owner `process`）：导出、结果集临时表、洞察取样都落在这条上。
+    /// 这个别名此刻归哪个源连接（纯内存读；没人占就是 `None`）。
     ///
+    /// 用途：联邦挂载前**先看归属**（第 2g 项）——`ATTACH` 是实例级事实，
+    /// 同一个别名被两个源看中时，先挂的那个才是库里的真身；后到的必须报失败，
+    /// 不能"看到别名已存在就算自己挂上了"（那样查询会静默指到别人的库）。
+    pub fn alias_owner(&self, alias: &str) -> Option<String> {
+        self.state
+            .lock()
+            .ok()?
+            .mounts
+            .owner_of(alias)
+            .cloned()
+    }
+
+    /// **进程面**会话（owner `process`）：导出、结果集临时表、洞察取样都落在这条上。    ///
     /// 与文档会话共享 catalog（底座 + 源别名），`TEMP` / 临时表也彼此可见——这正是
     /// "取样的 `tmp_i_` 与源、与 `tmp_q_` 能一起 JOIN"的前提。
     pub fn process_session(self: &Arc<Self>) -> Result<Arc<AnalysisSession>, String> {
@@ -895,21 +913,67 @@ impl AnalysisSession {
         &self,
         sources: &[super::federation::registry::FederatedSource],
     ) -> Result<Vec<super::federation::registry::MountedSource>, String> {
+        use super::federation::registry::{MountState, MountedSource};
+
         if !self.is_open() {
             return Err("这条分析会话已经关了，重新开一条再挂源".to_string());
         }
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| "会话连接锁被污染（上一条语句崩了），重开一条会话".to_string())?;
-        let mounted = super::federation::session::mount_into(&conn, sources)?;
+        // 第 2g 项：先按实例的别名登记核对归属，再决定挂哪些。
+        // 别名被**别的源**占着 → 这个源判 Failed（原话说明），绝不"看到已存在就算挂上"；
+        // 名额归自己（同 conn_id 重复挂）→ 幂等，照常挂（`attach_source` 会认已挂）。
+        let instance = self.instance.upgrade();
+        let mut granted: Vec<super::federation::registry::FederatedSource> = Vec::new();
+        let mut refusals: Vec<(String, String)> = Vec::new();
+        for source in sources {
+            let owner = instance
+                .as_ref()
+                .and_then(|instance| instance.alias_owner(&source.alias));
+            match owner {
+                Some(held) if held != source.conn_id => refusals.push((
+                    source.alias.clone(),
+                    format!(
+                        "源 {}：别名 {} 已被另一个源（连接 {held}）占用，换个别名再挂；\
+                         这个源本批不参与查询（别名是实例级的，不会替你改名）",
+                        source.alias, source.alias
+                    ),
+                )),
+                _ => granted.push(source.clone()),
+            }
+        }
+        // 自己的源登记进别名表（`conn_id → 别名`）：之后冲突判定、面板查挂载都靠它。
+        if let Some(instance) = instance.as_ref() {
+            for source in &granted {
+                instance.reserve_alias(&source.alias, &source.conn_id, source.kind)?;
+            }
+        }
+        let mounted = if granted.is_empty() {
+            Vec::new()
+        } else {
+            let conn = self.conn.lock().map_err(|_| {
+                "会话连接锁被污染（上一条语句崩了），重开一条会话".to_string()
+            })?;
+            super::federation::session::mount_into(&conn, &granted)?
+        };
+        // 按原顺序拼回去：被拒的源以 Failed 出现（界面上一眼看到是"谁被占了"）
+        let mut ordered = Vec::with_capacity(sources.len());
+        let mut mounted_iter = mounted.into_iter();
+        for source in sources {
+            if let Some((_, reason)) = refusals.iter().find(|(alias, _)| alias == &source.alias) {
+                ordered.push(MountedSource {
+                    source: source.clone(),
+                    state: MountState::Failed(reason.clone()),
+                });
+            } else if let Some(next) = mounted_iter.next() {
+                ordered.push(next);
+            }
+        }
         if let Ok(mut stored) = self.mounted.lock() {
-            for entry in &mounted {
+            for entry in &ordered {
                 stored.retain(|existing| existing.alias() != entry.alias());
                 stored.push(entry.clone());
             }
         }
-        Ok(mounted)
+        Ok(ordered)
     }
 
     /// 本会话最近一次挂载的逐源状态（纯内存读，渲染路径可调）。
@@ -1254,6 +1318,63 @@ mod tests {
         session
             .run_with_timeout("SELECT 1 AS ok", Duration::from_secs(3))
             .expect("拒绝后会话仍可用");
+    }
+
+    /// 第 2g 项：同一个别名被两个源看中时，**后到的判失败**，不静默指到先挂的库。
+    #[test]
+    fn an_alias_held_by_another_source_is_refused_not_hijacked() {
+        use super::super::federation::registry::{FederatedSource, MountState};
+
+        let dir = std::env::temp_dir().join(format!("rds_alias_owner_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("建目录");
+        let first_path = dir.join("first.duckdb");
+        let second_path = dir.join("second.duckdb");
+        for (path, rows) in [(&first_path, 3), (&second_path, 5)] {
+            let conn = Connection::open(path).expect("建源文件");
+            conn.execute_batch(&format!(
+                "CREATE TABLE items AS SELECT i AS id FROM range({rows}) AS r(i)"
+            ))
+            .expect("建表");
+        }
+
+        let instance = instance("t_alias_owner");
+        let session_a = instance.open_session("doc-a", "编辑器 A").expect("开 A");
+        let session_b = instance.open_session("doc-b", "编辑器 B").expect("开 B");
+
+        let source_a = FederatedSource::new(
+            "conn-a",
+            "shared",
+            "duckdb",
+            first_path.to_str().expect("路径"),
+        )
+        .expect("造源 A");
+        let mounted_a = session_a.mount_sources(&[source_a]).expect("挂 A");
+        assert!(mounted_a[0].is_ready(), "第一个源该挂上：{:?}", mounted_a[0].state);
+
+        let source_b = FederatedSource::new(
+            "conn-b",
+            "shared",
+            "duckdb",
+            second_path.to_str().expect("路径"),
+        )
+        .expect("造源 B");
+        let mounted_b = session_b.mount_sources(&[source_b]).expect("挂 B（不该整批报错）");
+        match &mounted_b[0].state {
+            MountState::Failed(reason) => {
+                assert!(reason.contains("已被另一个源"), "要说清被谁占了：{reason}");
+                assert!(reason.contains("conn-a"), "要点名占位的源：{reason}");
+            }
+            other => panic!("后到的源应判失败，实际：{other:?}"),
+        }
+
+        // 别名仍指向 A 的库（3 行），而不是 B 的 5 行——没有被静默劫持
+        let count = session_b
+            .run_with_timeout("SELECT count(*) AS n FROM shared.items", Duration::from_secs(3))
+            .expect("查别名");
+        assert_eq!(count.to_rows()[0][0].to_string(), "3");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 写语句走车道、读语句不排队：两句写串行执行（不会互相踩连接）。

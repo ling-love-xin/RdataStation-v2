@@ -145,13 +145,15 @@ fn probe_mysql_source_live_and_read_only() {
 
     let source = AccelSource::new("C_mysql_probe", "mysql_native", &source_url).expect("组装源");
     assert_eq!(source.kind, AccelKind::MySql);
-    let session = match accel::ensure_on_instance(&source) {
-        Ok((session, _alias)) => session,
+    let (session, alias) = match accel::ensure_on_instance(&source) {
+        Ok((session, alias)) => (session, alias),
         Err(reason) => {
             mysql_teardown(&url);
             panic!("建加速会话失败：{reason}");
         }
     };
+    // 别写死 `rds_src`：实例是进程级共享的，别的用例抢先占了别名时这里会是 `rds_src_2`
+    println!("（本条源的实际别名：{alias}）");
     println!("✅ 加速会话已建立（MySQL 源只读挂载）");
 
     // 1) 不写限定名就能查到源表（USE 生效）
@@ -174,7 +176,7 @@ fn probe_mysql_source_live_and_read_only() {
         before_refresh, "0",
         "2.0.1 下新表应当直接可见（旧口径是报 Catalog Error）：{before_refresh}"
     );
-    remount(&session, &source, "rds_src");
+    remount(&session, &source, &alias);
     let after_refresh = scalar(&session, "SELECT count(*) FROM late_table");
     assert_eq!(after_refresh, "0", "重挂后仍应看到新表");
     println!(
@@ -196,8 +198,11 @@ fn probe_mysql_source_live_and_read_only() {
     println!("✅ 本地临时对象（CREATE TEMP TABLE）允许");
 
     // 5) 显式别名也能用（跨 schema 的写法）
-    assert_eq!(scalar(&session, "SELECT count(*) FROM rds_src.orders"), "4");
-    println!("✅ 显式限定名（rds_src.orders）可用");
+    assert_eq!(
+        scalar(&session, &format!("SELECT count(*) FROM {alias}.orders")),
+        "4"
+    );
+    println!("✅ 显式限定名（{alias}.orders）可用");
 
     unmount("C_mysql_probe");
     mysql_teardown(&url);
@@ -212,16 +217,18 @@ fn probe_postgres_source_attach() {
     let _ = rds_engine::duckdb::instance::drop_instance();
     let source = AccelSource::new("C_pg_probe", "postgres_native", &url).expect("组装源");
     assert_eq!(source.kind, AccelKind::PostgreSql);
-    let session = match accel::ensure_on_instance(&source) {
-        Ok((session, _alias)) => session,
+    let (session, alias) = match accel::ensure_on_instance(&source) {
+        Ok((session, alias)) => (session, alias),
         Err(reason) => panic!("建加速会话失败：{reason}"),
     };
-    println!("✅ 加速会话已建立（PostgreSQL 源只读挂载）");
+    println!("✅ 加速会话已建立（PostgreSQL 源只读挂载，别名 {alias}）");
     let one = scalar(&session, "SELECT 1 AS n");
     assert_eq!(one, "1", "本地 DuckDB 语句应当能跑");
     // 源库的 `pg_catalog` 里那张表：证明限定名解析到源库 schema
     let names = session
-        .run("SELECT count(*) FROM information_schema.tables WHERE table_catalog = 'rds_src'")
+        .run(&format!(
+            "SELECT count(*) FROM information_schema.tables WHERE table_catalog = '{alias}'"
+        ))
         .expect("查源库表清单");
     println!("✅ 源库可见表数：{:?}", names.to_rows()[0][0].to_string());
     let refused = session
@@ -240,13 +247,13 @@ fn probe_sqlite_file_source_attach() {
     let _ = rds_engine::duckdb::instance::drop_instance();
     let source = AccelSource::new("C_lite_probe", "sqlite", &path).expect("组装源");
     assert_eq!(source.kind, AccelKind::Sqlite);
-    let session = match accel::ensure_on_instance(&source) {
-        Ok((session, _alias)) => session,
+    let (session, alias) = match accel::ensure_on_instance(&source) {
+        Ok((session, alias)) => (session, alias),
         Err(reason) => panic!("建加速会话失败：{reason}"),
     };
     let tables = scalar(
         &session,
-        "SELECT count(*) FROM duckdb_tables() WHERE database_name = 'rds_src'",
+        &format!("SELECT count(*) FROM duckdb_tables() WHERE database_name = '{alias}'"),
     );
     println!("✅ SQLite 文件源已挂载，可见表数：{tables}");
     assert!(

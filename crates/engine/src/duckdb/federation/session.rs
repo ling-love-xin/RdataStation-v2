@@ -522,9 +522,9 @@ fn is_attached(conn: &Connection, alias: &str) -> bool {
 fn attach_source(conn: &Connection, source: &FederatedSource) -> MountState {
     // 已挂上就直接算 Ready（同一条会话重挂自己的源是幂等的）。
     //
-    // **已知边界（2g 收口）**：`ATTACH` 出来的 catalog 是**实例级**的，别名不再只属于
-    // 本会话。若另一个源在别处抢先占了同名别名，这里会把它当成"自己的"报 Ready，
-    // 查询就静默指到那个库上（加速档已用 `reserve_alias` 收口，联邦侧还没接）。
+    // **别名归属在上一层已核过**（第 2g 项：`AnalysisSession::mount_sources` 先按实例的别名
+    // 登记表判"这个别名归谁"，被别的源占着的源根本不会走到这里）。所以这里"已存在"
+    // 只可能是**自己的**那份；`ATTACH` 是实例级事实，重复挂只会报 "already attached"。
     if is_attached(conn, &source.alias) {
         return MountState::Ready {
             tables: count_tables(conn, &source.alias).unwrap_or(0),
