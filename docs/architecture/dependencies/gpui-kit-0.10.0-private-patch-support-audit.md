@@ -233,3 +233,21 @@ git reset -q    # 让索引与 HEAD 同步，避免留下 "M " 悬挂态
 ```
 
 改完后必须用 `git show --stat --oneline HEAD` 复核：行数应与逻辑改动等量，出现"上万行"就是又被 CRLF 坑了。
+
+## 8. 2026-11-26 追加：菜单项无障碍两处补丁
+
+起因：用 gpui-kit test 组件实测标题栏「项目」下拉（`.rds/tmp/menu-findings.md`），发现禁用菜单项
+不写无障碍节点、分隔线被当成菜单项。上游 0.10.0 两处都没有原生支持，本轮补两处：
+
+| 文件 | +/− | 补丁内容要点 |
+| --- | ---: | --- |
+| `gpui-base/src/a11y_disabled.rs` | +2/−2 | `A11yDisabled` 结构与 `A11yDisabledExt` 由 `pub(crate)` 改为 `pub`——组件 crate 无法调用私有 trait |
+| `gpui-base/src/lib.rs` | +2/−0 | `pub use a11y_disabled::A11yDisabledExt` |
+| `gpui-component/src/menu/menu_item.rs` | +27/−2 | ① 渲染链尾加 `.a11y_disabled(self.disabled)`（GPUI 的 `disabled()` 只拦事件、不写 `accesskit` 节点，禁用项到读屏仍"可点"）；② 新增 `separator` 字段与 `MenuItemElement::separator()`，分隔线改走**无 id / 无 `Role::MenuItem`** 的装饰 `div`（原实现让读屏把 2px 分隔线念成一条无名菜单项） |
+| `gpui-component/src/menu/popup_menu.rs` | +1/−8 | `PopupMenuItem::Separator` 分支改调 `this.separator()`，样式收进 `menu_item.rs` |
+
+生效证据（`rdata` 侧窗口级断言，见 `crates/project/src/ui/tests.rs::menu_render_is_wide_enough_and_separators_are_not_items`）：
+只读 + 已归档场景下菜单 8 行全部有 `label`（无无名 `MenuItem`）、「重命名…」「取消归档」报
+`disabled=Some(true)`、「在资源管理器中显示」不报禁用、「取消归档」报 `checked=Some(true)`；
+真机标题栏实测菜单 200×226、行 192×26（探针输出见 `.rds/tmp/probe-verify.log`）。
+

@@ -113,7 +113,7 @@
 | 组件 | 尺寸 | 颜色 / 其他 |
 | --- | --- | --- |
 | **标题栏** | 高 `TITLE_BAR_HEIGHT`；logo `TITLE_LOGO_SIZE`；挖空槽高 `TITLE_SLOT_HEIGHT` + 水平内距 `TITLE_SLOT_PADDING_X`；Quick Open 入口 `QUICK_OPEN_ENTRY_WIDTH`×`QUICK_OPEN_ENTRY_HEIGHT` | 背景 `title_bar`，底边 `title_bar_border`；挖空槽 `sidebar`；窗口控制由 `TitleBar` 组件自带 |
-| **活动栏** | 宽 `ACTIVITY_BAR_WIDTH`；单项 `ACTIVITY_ITEM_WIDTH`×`ACTIVITY_ITEM_HEIGHT`；图标 `ACTIVITY_ICON_SIZE`；激活条 `ACTIVITY_ACCENT_BAR` | 背景 `secondary`；激活条 / 激活图标 `sidebar_accent_foreground` |
+| **标题栏项目下拉菜单** | 菜单最小宽 **200**（`PopupMenu::min_w(px(200.))`，`crates/project/src/ui/picker.rs::build_project_menu`）；行高 26（组件 `item_height`）；行数 = 规格条数（分隔线不算）。**宽度必须自己给**：`PopupMenuItem::Item` 的标签在 `w_full()` 容器里，不参与菜单宽计算，默认只有 `min_w(rems(8.))`=128、文本区约 84px —— 超过 5 个全角字的文案会画到菜单右缘之外（弹层不裁剪，2026-11-26 实测「在资源管理器中显示」溢出约 60px） | **条目语义**：当前项目读写命令（`重命名…` / `归档`）在只读时置灰，顶部插**一行说明**（`PopupMenuItem::label`，不是菜单项：无图标 / 无 hover / 不占 26 高行），文案压到 9 个全角字内（「只读：写操作不可用」）；**「归档」按状态出文案**（未归档「归档」、已归档「取消归档」+ 对勾）——不再用一条「归档 / 取消归档」让人猜；**同一目的地只留一个入口**（「项目设置…」已删，与「项目中心…」都落设置「项目」页）；条目配色沿用组件默认（禁用 `muted_foreground`），选中态由键盘 / hover 决定，禁用项不得进键盘序 |
 | **Dock 边栏** | 起步宽左 `LEFT_DOCK_WIDTH` / 右 `RIGHT_DOCK_WIDTH`（`set_dock_size`，用户拖拽可调） | 面板背景 `background`，分隔 `border` |
 | **状态栏** | 高由内容（约 1.5rem）；开关图标 `ICON_SIZE_SM` | 背景 `primary` + 文字 `primary_foreground`；左右各一个「完全隐藏 / 恢复」自绘开关 |
 | **树节点** | 行高 `ROW_HEIGHT`（数据源导航树专用值见 §2.1 `NAV_ROW_*`：分组 22（`ROW_HEIGHT_COMPACT`，见下一行的原语）/ 连接 26 / 对象 22，字号沿用 `text_xs` 档）；缩进 = `TREE_BASE_PADDING` + `TREE_INDENT` × depth；激活条 `TREE_ACTIVE_BAR` | 标题 `text_sm`（导航树按密度预算取 `text_xs`）；激活态 `list_active` + `list_active_border`；**悬停不得覆盖激活态**（`list_hover` 只在未激活时生效）；类别靠**形状**区分，颜色只承载状态 |
