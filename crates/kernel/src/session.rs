@@ -1049,19 +1049,19 @@ mod tests {
         let msg_id = session.execute("import time; time.sleep(20)".to_string());
         // 等执行真的开始跑（Status(Busy) 或首个事件），再发中断
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-        loop {
-            while let Ok(env) = events.try_recv() {
-                if let Some(id) = env.msg_id.as_ref() {
-                    assert_eq!(id, &msg_id, "事件归属错误：应属于本次执行");
-                }
+        // 单趟排空此刻已到达的事件（归属校验），随后让内核先跑起来，下面立刻发中断。
+        // 原来是 `loop { … break }`，clippy `never_loop` 判错；这里去掉空转的循环壳，
+        // 语义与原来那趟完全一致（只此一趟，不做轮询等待）。
+        while let Ok(env) = events.try_recv() {
+            if let Some(id) = env.msg_id.as_ref() {
+                assert_eq!(id, &msg_id, "事件归属错误：应属于本次执行");
             }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "20s 没看到执行开始"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(20));
-            break; // 让内核先跑起来，下面立刻发中断
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "20s 没看到执行开始"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
         std::thread::sleep(std::time::Duration::from_millis(300));
         session.interrupt();
 
