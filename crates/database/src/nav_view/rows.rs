@@ -7,14 +7,14 @@
 //! 「已定位」/ 搜索命中）与它们的高度估算，是全文件最大的一块；与面板外壳（`chrome.rs`）
 //! 分开后，改行样式不必跨过整个面板的脚手架。
 
-use shared::i18n::tr;
 use super::StagedOp;
 use super::*;
 use crate::nav::action_registry;
 use crate::nav::actions::{ActionGroup, NavActionId};
-use crate::nav::capability::{NavOp, family_ops, nav_node_object_kind};
+use crate::nav::capability::{family_ops, nav_node_object_kind, NavOp};
 use crate::nav_jobs::JobPriority;
 use gpui_kit::component::badge::Badge;
+use shared::i18n::tr;
 
 impl NavView {
     /// 把某一行滚进视口（虚拟列表换来的可编程滚动入口）。
@@ -662,10 +662,9 @@ impl NavView {
         failed_count: usize,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let fg = cx.theme().colors.foreground;
         let muted = cx.theme().colors.muted_foreground;
         let bar = cx.theme().colors.primary;
-        let bg = cx.theme().colors.sidebar_accent;
+        // 底色 / 前景 / 折叠槽改由 `tree::GroupHeader` 内定（凹槽档 `group_box`）。
         let hover = cx.theme().colors.list_hover;
         let collapsed = self.group_collapsed(group_id);
         let entity = cx.entity();
@@ -708,40 +707,147 @@ impl NavView {
         let can_up = group_ix.is_some_and(|i| i > 0);
         let can_down = group_ix.is_some_and(|i| i + 1 < group_ids_now.len());
 
-        let mut header = div()
-            .id(format!("nav-group-{group_id}"))
-            .debug_selector(|| "nav-row-group".to_string())
-            .h_flex()
-            .items_center()
-            .w_full()
-            .h(rems(ui::NAV_ROW_GROUP))
-            .px_1()
-            .gap_1()
-            .bg(bg)
-            .cursor_pointer()
-            .hover(move |s| s.bg(hover))
+        // 视觉与度量统一交给 `tree::GroupHeader`（22 高 / 内距 6 / 凹槽底色 `group_box` /
+        // 折叠指示槽），与草稿箱四个分组头同一套；外壳只留拖拽、落点与右键菜单
+        // （这些要 `Stateful<Div>`，原语不掺交互）。
+        let toggle_group = {
+            let entity = entity.clone();
+            let gid = gid.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                let gid = gid.clone();
+                entity.update(app, |this, cx| {
+                    {
+                        let mut view = this.nav.borrow_mut();
+                        if view.collapsed_groups.contains(&gid) {
+                            view.collapsed_groups.remove(&gid);
+                        } else {
+                            view.collapsed_groups.insert(gid.clone());
+                        }
+                        // 认领为「当前分组」：工具栏上的「收起 / 展开本组」只对它生效
+                        // （折叠入口已从组头移到面板头工具栏，工具栏自身不带分组上下文）。
+                        view.active_group = Some(gid.clone());
+                    }
+                    cx.notify();
+                });
+            }
+        };
+        let health = {
+            let mut health = div().h_flex().items_center().gap_0p5().flex_none();
+            let dot = div()
+                .w(rems(0.375))
+                .h(rems(0.375))
+                .flex_none()
+                .rounded_full()
+                .bg(dot_color);
+            let dot: AnyElement = if matches!(dot_status, NavBadgeStatus::Connecting) {
+                dot.with_animation(
+                    SharedString::from(format!("nav-health-pulse-{group_id}")),
+                    Animation::new(std::time::Duration::from_millis(ui::NAV_BADGE_PULSE_MS))
+                        .repeat()
+                        .with_easing(bounce(ease_in_out)),
+                    |dot, delta| dot.opacity(1.0 - delta * 0.5),
+                )
+                .into_any_element()
+            } else {
+                dot.into_any_element()
+            };
+            health = health.child(dot).child(Badge::new().count(count));
+            health
+        };
+        let connect_all = Button::new(format!("nav-group-connectall-{group_id}"))
+            .ghost()
+            .xsmall()
+            .icon(Icon::empty().path("icons/plug.svg").text_color(muted))
             .on_click({
                 let entity = entity.clone();
-                let gid = gid.clone();
-                move |_, _, app| {
-                    let gid = gid.clone();
+                // 闭包 move 自己的拷贝，不动原 `gid`（后面拖排序还要用它）。
+                let gid_for_connect = gid.clone();
+                let ungrouped_for_connect = is_ungrouped;
+                move |_, _, app: &mut App| {
                     entity.update(app, |this, cx| {
-                        {
-                            let mut view = this.nav.borrow_mut();
-                            if view.collapsed_groups.contains(&gid) {
-                                view.collapsed_groups.remove(&gid);
+                        // 未分组 = 伪分组，成员走 `ungrouped_order`；自定义分组走 `group_order`。
+                        let member_ids: Vec<String> = {
+                            let view = this.nav.borrow();
+                            if ungrouped_for_connect {
+                                view.ungrouped_order.clone()
                             } else {
-                                view.collapsed_groups.insert(gid.clone());
+                                view.group_order
+                                    .get(&gid_for_connect)
+                                    .cloned()
+                                    .unwrap_or_default()
                             }
-                            // 认领为「当前分组」：工具栏上的「收起 / 展开本组」只对它生效
-                            // （折叠入口已从组头移到面板头工具栏，工具栏自身不带分组上下文）。
-                            view.active_group = Some(gid.clone());
+                        };
+                        let conns = this.host.connections();
+                        let connected: std::collections::HashSet<String> = {
+                            let view = this.nav.borrow();
+                            view.connected.iter().cloned().collect()
+                        };
+                        let mut pending = 0usize;
+                        for c in &conns {
+                            if member_ids.contains(&c.id) && !connected.contains(&c.id) {
+                                pending += 1;
+                                this.toggle_connection(&c.id, None, cx);
+                            }
                         }
-                        cx.notify();
+                        if pending == 0 {
+                            this.host
+                                .notice(tr("该分组连接均已就绪，无需重复连接").to_string(), cx);
+                        }
                     });
                 }
-            })
-            .child(
+            });
+        // 组内全部断开（需求⑥）：遍历组成员，已连的逐条断开。
+        // 判据与工具栏「全部断开」一致（运行时真值或会话内已标连）；
+        // 仅记录标可用而未真连的连接不会在此被反向连上。
+        let disconnect_all = Button::new(format!("nav-group-disconnectall-{group_id}"))
+            .ghost()
+            .xsmall()
+            .icon(Icon::empty().path("icons/unplug.svg").text_color(muted))
+            .on_click({
+                let entity = entity.clone();
+                // 闭包 move 自己的拷贝，不动原 `gid`（后面拖排序还要用它）。
+                let gid_for_disconnect = gid.clone();
+                let ungrouped_for_disconnect = is_ungrouped;
+                move |_, _, app: &mut App| {
+                    entity.update(app, |this, cx| {
+                        // 未分组 = 伪分组，成员走 `ungrouped_order`；自定义分组走 `group_order`。
+                        let member_ids: Vec<String> = {
+                            let view = this.nav.borrow();
+                            if ungrouped_for_disconnect {
+                                view.ungrouped_order.clone()
+                            } else {
+                                view.group_order
+                                    .get(&gid_for_disconnect)
+                                    .cloned()
+                                    .unwrap_or_default()
+                            }
+                        };
+                        let conns = this.host.connections();
+                        let connected: std::collections::HashSet<String> =
+                            this.nav.borrow().connected.iter().cloned().collect();
+                        let mut pending = 0usize;
+                        for c in &conns {
+                            if member_ids.contains(&c.id) {
+                                let already =
+                                    this.host.is_connected(&c.id) || connected.contains(&c.id);
+                                if already {
+                                    pending += 1;
+                                    this.toggle_connection(&c.id, None, cx);
+                                }
+                            }
+                        }
+                        if pending == 0 {
+                            this.host
+                                .notice(tr("该分组没有已连接的连接").to_string(), cx);
+                        }
+                    });
+                }
+            });
+        let group_head = tree::GroupHeader::new(format!("nav-group-{group_id}"), name.to_string())
+            .debug_selector("nav-row-group")
+            .expanded(!collapsed)
+            .label_max_width(ui::NAV_NAME_MAX_W)
+            .leading(
                 div()
                     .w(ui::NAV_GROUP_BAR_WIDTH)
                     .h(rems(0.875))
@@ -749,159 +855,13 @@ impl NavView {
                     .rounded_full()
                     .bg(bar),
             )
-            .child(nav_disclosure(true, !collapsed, muted))
-            .child(
-                div()
-                    // 组名左锚、按内容宽取宽（上限 `NAV_NAME_MAX_W`）：不设 `flex_none`，
-                    // 让它在空间不足时能被压缩并触发省略号——否则窄面板里组名会把
-                    // 右侧批量图标挤出容器（`overflow_hidden` 只裁掉文字、不会让位）。
-                    // 剩余空间由后面的弹性占位吃掉，所以这里**不要** `flex_1`
-                    // （那会把健康度 / 计数一起推到行右缘）。
-                    .max_w(rems(ui::NAV_NAME_MAX_W))
-                    .min_w_0()
-                    .overflow_hidden()
-                    .text_xs()
-                    .text_ellipsis()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(fg)
-                    .child(name.to_string()),
-            )
-            // 聚合健康度与计数**合成一个元素**：状态点（色 = 组内最差状态）+ 计数胶囊（总数）。
-            // 截图反馈的「已连 1/4」与「4」双计数：v9 文字口径与原型 `.cnt` 胶囊并存会读成
-            // 重复数字，对齐原型只保留点 + 胶囊；状态细节（全连 / 部分 / 失败 / 加载中）由
-            // 点色承载（ok / off / err / info 呼吸），hover 卡补充人话。
-            .child({
-                let mut health = div().h_flex().items_center().gap_0p5().flex_none();
-                let dot = div()
-                    .w(rems(0.375))
-                    .h(rems(0.375))
-                    .flex_none()
-                    .rounded_full()
-                    .bg(dot_color);
-                let dot: AnyElement = if matches!(dot_status, NavBadgeStatus::Connecting) {
-                    dot.with_animation(
-                        SharedString::from(format!("nav-health-pulse-{group_id}")),
-                        Animation::new(std::time::Duration::from_millis(ui::NAV_BADGE_PULSE_MS))
-                            .repeat()
-                            .with_easing(bounce(ease_in_out)),
-                        |dot, delta| dot.opacity(1.0 - delta * 0.5),
-                    )
-                    .into_any_element()
-                } else {
-                    dot.into_any_element()
-                };
-                health = health.child(dot).child(
-                    div()
-                        .flex_none()
-                        .px_1()
-                        .rounded_sm()
-                        .bg(muted.alpha(0.14))
-                        .text_xs()
-                        .text_color(muted)
-                        .child(count.to_string()),
-                );
-                health
-            })
-            // 弹性占位：把后面的三个批量图标顶到行右缘，且**不吃**组名宽度
-            // （组名按内容宽、健康度紧随组名，两者都在左侧）。
-            // 间距不变：占位只在剩余空间里生长，空间不足时先缩回 0。
-            .child(div().flex_1().min_w_0())
-            // 「连接组内所有数据库」：批量把该组里未连接的连接逐条后台建连。
-            // 单个连接的语义是「只连那一个库」；这里给**组**一个批量入口
-            // （组 = 同一批业务库的集合，DBeaver 的组连接同款）。
-            // 已连接 / 正在连接的跳过；失败的逐个落 notice（仍不阻塞其余）。
-            .child(
-                Button::new(format!("nav-group-connectall-{group_id}"))
-                    .ghost()
-                    .xsmall()
-                    .icon(Icon::empty().path("icons/plug.svg").text_color(muted))
-                    .on_click({
-                        let entity = entity.clone();
-                        // 闭包 move 自己的拷贝，不动原 `gid`（后面拖排序还要用它）。
-                        let gid_for_connect = gid.clone();
-                        let ungrouped_for_connect = is_ungrouped;
-                        move |_, _, app: &mut App| {
-                            entity.update(app, |this, cx| {
-                                // 未分组 = 伪分组，成员走 `ungrouped_order`；自定义分组走 `group_order`。
-                                let member_ids: Vec<String> = {
-                                    let view = this.nav.borrow();
-                                    if ungrouped_for_connect {
-                                        view.ungrouped_order.clone()
-                                    } else {
-                                        view.group_order
-                                            .get(&gid_for_connect)
-                                            .cloned()
-                                            .unwrap_or_default()
-                                    }
-                                };
-                                let conns = this.host.connections();
-                                let connected: std::collections::HashSet<String> = {
-                                    let view = this.nav.borrow();
-                                    view.connected.iter().cloned().collect()
-                                };
-                                let mut pending = 0usize;
-                                for c in &conns {
-                                    if member_ids.contains(&c.id) && !connected.contains(&c.id) {
-                                        pending += 1;
-                                        this.toggle_connection(&c.id, None, cx);
-                                    }
-                                }
-                                if pending == 0 {
-                                    this.host
-                                        .notice(tr("该分组连接均已就绪，无需重复连接").to_string(), cx);
-                                }
-                            });
-                        }
-                    }),
-            )
-            .child(
-                // 组内全部断开（需求⑥）：遍历组成员，已连的逐条断开。
-                // 判据与工具栏「全部断开」一致（运行时真值或会话内已标连）；
-                // 仅记录标可用而未真连的连接不会在此被反向连上。
-                Button::new(format!("nav-group-disconnectall-{group_id}"))
-                    .ghost()
-                    .xsmall()
-                    .icon(Icon::empty().path("icons/unplug.svg").text_color(muted))
-                    .on_click({
-                        let entity = entity.clone();
-                        // 闭包 move 自己的拷贝，不动原 `gid`（后面拖排序还要用它）。
-                        let gid_for_disconnect = gid.clone();
-                        let ungrouped_for_disconnect = is_ungrouped;
-                        move |_, _, app: &mut App| {
-                            entity.update(app, |this, cx| {
-                                // 未分组 = 伪分组，成员走 `ungrouped_order`；自定义分组走 `group_order`。
-                                let member_ids: Vec<String> = {
-                                    let view = this.nav.borrow();
-                                    if ungrouped_for_disconnect {
-                                        view.ungrouped_order.clone()
-                                    } else {
-                                        view.group_order
-                                            .get(&gid_for_disconnect)
-                                            .cloned()
-                                            .unwrap_or_default()
-                                    }
-                                };
-                                let conns = this.host.connections();
-                                let connected: std::collections::HashSet<String> =
-                                    this.nav.borrow().connected.iter().cloned().collect();
-                                let mut pending = 0usize;
-                                for c in &conns {
-                                    if member_ids.contains(&c.id) {
-                                        let already = this.host.is_connected(&c.id)
-                                            || connected.contains(&c.id);
-                                        if already {
-                                            pending += 1;
-                                            this.toggle_connection(&c.id, None, cx);
-                                        }
-                                    }
-                                }
-                                if pending == 0 {
-                                    this.host.notice(tr("该分组没有已连接的连接").to_string(), cx);
-                                }
-                            });
-                        }
-                    }),
-            );
+            .trailing(health)
+            .trailing(connect_all)
+            .trailing(disconnect_all)
+            .hover_background(hover)
+            .on_click(toggle_group);
+        // 外壳只承载拖拽 / 落点 / 右键菜单：点击与视觉都在 `GroupHeader` 内。
+        let mut header = div().id(format!("nav-group-{group_id}")).child(group_head);
         // 「收起 / 展开本组已展开的成员」入口已移到面板头工具栏（`nav-fold-active`）：
         // 组头右侧只留批量连接两个按钮，第三个 ⇅ 会让组名可用的宽度更小，且它读的是
         // 「点击过的这一组」，放在全局面板头反而更好认领（见 `NavViewState::active_group`）。
@@ -994,13 +954,15 @@ impl NavView {
                     let e_del = entity.clone();
                     let gid_del = gid.clone();
                     let gname_del = gname.clone();
-                    menu.item(PopupMenuItem::new(tr("重命名分组")).on_click(move |_, _, app| {
-                        let gid = gid_rename.clone();
-                        e_rename.update(app, |this, cx| {
-                            this.nav.borrow_mut().group_rename_for = Some(gid.clone());
-                            cx.notify();
-                        });
-                    }))
+                    menu.item(
+                        PopupMenuItem::new(tr("重命名分组")).on_click(move |_, _, app| {
+                            let gid = gid_rename.clone();
+                            e_rename.update(app, |this, cx| {
+                                this.nav.borrow_mut().group_rename_for = Some(gid.clone());
+                                cx.notify();
+                            });
+                        }),
+                    )
                     // 名称 + 描述一次编辑（行内重命名只改名称，这里补上描述）。
                     .item(PopupMenuItem::new(tr("编辑分组…")).on_click({
                         let host = host.clone();
@@ -1038,14 +1000,18 @@ impl NavView {
                     }))
                     .separator()
                     // 分组排序：拖拽是主路径，这两项是键盘 / 无鼠标时的替代（边界置灰）。
-                    .item(PopupMenuItem::new(tr("上移分组")).disabled(!can_up).on_click({
-                        let e = entity.clone();
-                        let gid = gid.clone();
-                        move |_, _, app| {
-                            let gid = gid.clone();
-                            e.update(app, |this, cx| this.step_group(&gid, -1, cx));
-                        }
-                    }))
+                    .item(
+                        PopupMenuItem::new(tr("上移分组"))
+                            .disabled(!can_up)
+                            .on_click({
+                                let e = entity.clone();
+                                let gid = gid.clone();
+                                move |_, _, app| {
+                                    let gid = gid.clone();
+                                    e.update(app, |this, cx| this.step_group(&gid, -1, cx));
+                                }
+                            }),
+                    )
                     .item(
                         PopupMenuItem::new(tr("下移分组"))
                             .disabled(!can_down)
@@ -2456,18 +2422,15 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             // 表 / 视图走下面的富卡（类型 + 约行数 + 注释 + 连接），其它种类不挂——
             // 与表 / 视图同一 300ms 口径，鼠标扫过整棵树时不闪。
             let detail_extra: Option<Vec<String>> = match &node.kind {
-                NavNodeKind::Catalog => Some(vec![
-                    "目录".to_string(),
-                    format!("连接：{n_conn_label}"),
-                ]),
-                NavNodeKind::Schema => Some(vec![
-                    "Schema".to_string(),
-                    format!("连接：{n_conn_label}"),
-                ]),
-                NavNodeKind::Folder(_) => Some(vec![
-                    "文件夹".to_string(),
-                    format!("连接：{n_conn_label}"),
-                ]),
+                NavNodeKind::Catalog => {
+                    Some(vec!["目录".to_string(), format!("连接：{n_conn_label}")])
+                }
+                NavNodeKind::Schema => {
+                    Some(vec!["Schema".to_string(), format!("连接：{n_conn_label}")])
+                }
+                NavNodeKind::Folder(_) => {
+                    Some(vec!["文件夹".to_string(), format!("连接：{n_conn_label}")])
+                }
                 NavNodeKind::Column {
                     data_type,
                     nullable,

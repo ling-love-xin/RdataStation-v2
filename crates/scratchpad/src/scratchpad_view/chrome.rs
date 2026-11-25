@@ -13,6 +13,7 @@ use gpui_kit::component::collapsible::Collapsible;
 use gpui_kit::component::dialog::{Dialog, DialogButtonProps, DialogContent};
 use gpui_kit::component::label::Label;
 use gpui_kit::component::menu::DropdownMenu;
+use workbench_shell::tree::GroupHeader;
 
 /// 拖拽期间的浮层视图（gpui `on_drag` 要求 W: Render；内容透明，仅承接拖拽会话）。
 pub(super) struct ToolbarDragOverlay;
@@ -586,7 +587,6 @@ impl ScratchpadView {
         let theme = cx.theme();
         let muted = theme.colors.muted_foreground;
         let hover_bg = theme.colors.list_hover;
-        let group_bg = theme.colors.group_box;
         let entity = cx.entity();
         let (expanded, loading, rows) = {
             let view = self.scratchpad.borrow();
@@ -604,22 +604,11 @@ impl ScratchpadView {
                 entity.update(app, |this, cx| this.toggle_bookmarks_section(cx));
             }
         };
-        let bookmarks_head = div()
-            .debug_selector(|| "sp-bookmarks-head".into())
-            .id("sp-bookmarks-head")
-            .cursor_pointer()
-            .h_flex()
-            .items_center()
-            .gap_1()
-            .text_xs()
-            .h(rems(ui::ROW_HEIGHT_COMPACT))
-            .px_1p5()
-            .bg(group_bg)
-            .child(tree::disclosure_slot().child(tree::disclosure_icon(expanded, muted)))
-            .child(Icon::new(gpui_kit::assets::IconName::Bookmark).size(rems(ui::ICON_SIZE_SM)))
-            .child(tr("书签"))
-            .child(div().flex_1())
-            .child(Badge::new().count(rows.len()))
+        let bookmarks_head = GroupHeader::new("sp-bookmarks-head", tr("书签"))
+            .debug_selector("sp-bookmarks-head")
+            .expanded(expanded)
+            .label_icon(Icon::new(gpui_kit::assets::IconName::Bookmark).size(rems(ui::ICON_SIZE_SM)))
+            .trailing(Badge::new().count(rows.len()))
             .on_click(toggle);
 
         // 内容行：文件 · 行号 · 便签（muted 截断）；点击跳到书签行。
@@ -731,9 +720,7 @@ impl ScratchpadView {
         let muted = theme.colors.muted_foreground;
         let _primary = theme.colors.primary;
         let _hover_bg = theme.colors.list_hover;
-        // 分组头底色（2026-11-24 反馈③）：引用/回收站两栏与草稿树的隔离语言，
-        // 与「草稿」折叠头、搜索行同用 `group_box`。
-        let group_bg = theme.colors.group_box;
+        // 分组头底色由 `tree::GroupHeader` 统一决定（`group_box`，与搜索行同一档）。
         let ref_color = theme.colors.info;
         let _info = theme.colors.info;
 
@@ -886,39 +873,18 @@ impl ScratchpadView {
                 });
             }
         };
-        let ref_head = div()
-            .debug_selector(|| "sp-refs-head".into())
-            .id("sp-refs-head")
-            .group("sp-refs-head")
-            .cursor_pointer()
-            .h_flex()
-            .items_center()
-            .gap_1()
-            .text_xs()
-            .h(rems(ui::ROW_HEIGHT_COMPACT))
-            .px_1p5()
-            .bg(group_bg)
-            .child(tree::disclosure_slot().child(tree::disclosure_icon(refs_expanded, muted)))
-            .child(tr("引用"))
-            .child(div().flex_1())
-            .child(
-                div()
-                    .flex_none()
-                    .invisible()
-                    .group_hover("sp-refs-head", |s| s.visible())
-                    .h_flex()
-                    .items_center()
-                    .gap_0p5()
-                    .child(
-                        Button::new("sp-refs-head-add")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Plus)
-                            .tooltip(tr("添加外部引用（软连接）"))
-                            .on_click(hdr_add_ref),
-                    ),
+        let ref_head = GroupHeader::new("sp-refs-head", tr("引用"))
+            .debug_selector("sp-refs-head")
+            .expanded(refs_expanded)
+            .trailing(ref_badge)
+            .hover_action(
+                Button::new("sp-refs-head-add")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Plus)
+                    .tooltip(tr("添加外部引用（软连接）"))
+                    .on_click(hdr_add_ref),
             )
-            .child(ref_badge)
             .on_click(toggle_refs);
         let refs_section = div()
             .v_flex()
@@ -994,24 +960,19 @@ impl ScratchpadView {
                     None
                 } else {
                     Some(
-                        div()
-                            .invisible()
-                            .group_hover("sp-trash-head", |s| s.visible())
-                            .child(
-                                Button::new("sp-trash-empty")
-                                    .ghost()
-                                    .small()
-                                    .label(tr("清空"))
-                                    .on_click(
-                                    move |_: &gpui_kit::ClickEvent,
-                                          _: &mut gpui_kit::Window,
-                                          app: &mut App| {
-                                        entity.update(app, |this, cx| {
-                                            this.empty_scratchpad_trash(cx)
-                                        });
-                                    },
-                                ),
-                            ),
+                        Button::new("sp-trash-empty")
+                            .ghost()
+                            .small()
+                            .label(tr("清空"))
+                            .on_click(
+                            move |_: &gpui_kit::ClickEvent,
+                                  _: &mut gpui_kit::Window,
+                                  app: &mut App| {
+                                entity.update(app, |this, cx| {
+                                    this.empty_scratchpad_trash(cx)
+                                });
+                            },
+                        ),
                     )
                 }
             };
@@ -1026,24 +987,15 @@ impl ScratchpadView {
                     });
                 }
             };
-            let trash_head = div()
-                .debug_selector(|| "sp-trash-head".into())
-                .id("sp-trash-head")
-                .group("sp-trash-head")
-                .cursor_pointer()
-                .h_flex()
-                .items_center()
-                .gap_1()
-                .text_xs()
-                .h(rems(ui::ROW_HEIGHT_COMPACT))
-                .px_1p5()
-                .bg(group_bg)
-                .child(tree::disclosure_slot().child(tree::disclosure_icon(trash_expanded, muted)))
-                .child(tr("回收站"))
-                .child(div().flex_1())
-                .child(trash_badge)
-                .when_some(empty_btn, |this, btn| this.child(btn))
-                .on_click(toggle_trash);
+            let mut trash_head = GroupHeader::new("sp-trash-head", tr("回收站"))
+                .debug_selector("sp-trash-head")
+                .expanded(trash_expanded)
+                .trailing(trash_badge);
+            // 清空按钮只在垃圾桶非空时存在，且 hover 才显（与草稿 / 引用两个头一致）。
+            if let Some(btn) = empty_btn {
+                trash_head = trash_head.hover_action(btn);
+            }
+            let trash_head = trash_head.on_click(toggle_trash);
             trash_section = div()
                 .v_flex()
                 .w_full()
@@ -2168,9 +2120,6 @@ impl ScratchpadView {
         let selected_bg = theme.colors.list_active;
         let fg = theme.colors.foreground;
         let muted = theme.colors.muted_foreground;
-        // 分组头底色（2026-11-24 反馈③）：「草稿/引用/回收站」三个固定栏靠这层底
-        // 与树内容区分——与搜索行同用 `group_box`（导航面板同款分层语言）。
-        let group_bg = theme.colors.group_box;
         let folder_color = theme.colors.warning;
         let primary = theme.colors.primary;
         let info = theme.colors.info;
@@ -2235,7 +2184,9 @@ impl ScratchpadView {
             case_sensitive,
         };
 
-        let mut drafts = div().v_flex().flex_1().min_h_0().w_full().gap_1().px_1();
+        // 分组头自己带 `px_1p5`（与书签 / 引用 / 回收站同一档）；这里不再套 `px_1`，
+        // 否则「草稿」头的左缘会比其余三个多 4px（实机反馈 2026-11-25）。
+        let mut drafts = div().v_flex().flex_1().min_h_0().w_full().gap_1();
         if display_count == 0 {
             // 加载中不显示空态引导，避免「草稿箱是空的」闪现。
             if loading {
@@ -2312,55 +2263,34 @@ impl ScratchpadView {
                     });
                 }
             };
-            let drafts_head = div()
-                .debug_selector(|| "sp-drafts-head".into())
-                .id("sp-drafts-head")
-                .group("sp-drafts-head")
-                .cursor_pointer()
-                .h_flex()
-                .items_center()
-                .gap_1()
-                .text_xs()
-                .h(rems(ui::ROW_HEIGHT_COMPACT))
-                .px_1p5()
-                .bg(group_bg)
-                .child(tree::disclosure_slot().child(tree::disclosure_icon(drafts_expanded, muted)))
-                .child(tr("草稿"))
-                .child(div().flex_1())
-                .child(
-                    div()
-                        .flex_none()
-                        .invisible()
-                        .group_hover("sp-drafts-head", |s| s.visible())
-                        .h_flex()
-                        .items_center()
-                        .gap_0p5()
-                        .child(
-                            Button::new("sp-drafts-head-new-file")
-                                .ghost()
-                                .small()
-                                .icon(IconName::Plus)
-                                .tooltip(tr("新建文件"))
-                                .on_click(hdr_new_file),
-                        )
-                        .child(
-                            Button::new("sp-drafts-head-new-folder")
-                                .ghost()
-                                .small()
-                                .icon(IconName::Folder)
-                                .tooltip(tr("新建目录"))
-                                .on_click(hdr_new_folder),
-                        )
-                        .child(
-                            Button::new("sp-drafts-head-refresh")
-                                .ghost()
-                                .small()
-                                .icon(IconName::RefreshCw)
-                                .tooltip(tr("刷新草稿箱"))
-                                .on_click(hdr_refresh),
-                        ),
+            let drafts_head = GroupHeader::new("sp-drafts-head", tr("草稿"))
+                .debug_selector("sp-drafts-head")
+                .expanded(drafts_expanded)
+                .trailing(Badge::new().count(row_count))
+                .hover_action(
+                    Button::new("sp-drafts-head-new-file")
+                        .ghost()
+                        .small()
+                        .icon(IconName::Plus)
+                        .tooltip(tr("新建文件"))
+                        .on_click(hdr_new_file),
                 )
-                .child(Badge::new().count(row_count))
+                .hover_action(
+                    Button::new("sp-drafts-head-new-folder")
+                        .ghost()
+                        .small()
+                        .icon(IconName::Folder)
+                        .tooltip(tr("新建目录"))
+                        .on_click(hdr_new_folder),
+                )
+                .hover_action(
+                    Button::new("sp-drafts-head-refresh")
+                        .ghost()
+                        .small()
+                        .icon(IconName::RefreshCw)
+                        .tooltip(tr("刷新草稿箱"))
+                        .on_click(hdr_refresh),
+                )
                 .on_click(toggle_drafts);
             drafts = drafts.child(
                 div()
@@ -2374,7 +2304,7 @@ impl ScratchpadView {
                         Collapsible::new()
                             .open(drafts_expanded)
                             .h_full()
-                            .content(div().flex_1().min_h_0().w_full().child(list)),
+                            .content(div().flex_1().min_h_0().w_full().px_1().child(list)),
                     ),
             );
         }

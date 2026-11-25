@@ -25,7 +25,9 @@
 
 use std::rc::Rc;
 
-use gpui_kit::component::Icon;
+use gpui_kit::base::StyledExt;
+use gpui_kit::component::{ActiveTheme as _, Icon};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::ui;
@@ -169,6 +171,200 @@ pub fn row_sizes(
             .map(|ix| Size::new(Pixels::ZERO, f(ix).to_pixels(rem_size)))
             .collect(),
     )
+}
+
+/// 分组头（可折叠分区标题行）的统一原语。
+///
+/// ## 为什么收
+///
+/// 草稿箱的四个分组（草稿 / 书签 / 引用 / 回收站）与数据源导航的分组头此前各写一份，
+/// 肉眼可见的差三处：行高 22 vs 24、左右内距 6 vs 4、底色 `group_box` vs
+/// `sidebar_accent`（后者在各主题包里与 `list.hover` **同值**，分组头常态就长得像被 hover）。
+/// 用户实机反馈 2026-11-25：**以草稿箱为准**统一，边距取「书签 / 引用 / 回收站」那一档。
+///
+/// ## 规格（改这里就是改全部五个分组头）
+///
+/// - 行高 `ui::ROW_HEIGHT_COMPACT`（1.375rem = 22）
+/// - 左右内距 `px_1p5`（6）
+/// - 行级 `text_xs`，组名 `MEDIUM` + 省略号
+/// - 底色 `colors.group_box`（凹槽档：暗色主题比面板底暗一档，不是「亮起来」那档）
+/// - 展开指示一律 [`disclosure_slot`] + [`disclosure_icon`]
+///
+/// ## 槽位（齐了才对齐，别在调用方再补 px / height）
+///
+/// - `leading`：组标识，导航用 2px 主色条；草稿箱没有
+/// - 固定段：`disclosure_slot + 组名 + 弹簧`
+/// - `trailing`：常驻尾部（健康点 / 计数徽标 / 批量动作）
+/// - `hover_actions`：hover 才显的动作组（草稿箱的「新建 / 刷新 / 清空」）
+///
+/// 尾部**不**收在 `trailing` 里的东西：真正的业务动作按各自面板需要自己组按钮，
+/// 这里只管位置与显隐。
+#[derive(IntoElement)]
+pub struct GroupHeader {
+    id: SharedString,
+    debug: Option<&'static str>,
+    label: SharedString,
+    label_max_width: Option<f32>,
+    expanded: bool,
+    leading: Option<AnyElement>,
+    label_icon: Option<AnyElement>,
+    hover_bg: Option<Rgba>,
+    trailing: Vec<AnyElement>,
+    hover_actions: Vec<AnyElement>,
+    on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
+}
+
+impl GroupHeader {
+    /// 建一行分组头：`id` 走 `ElementId` 与 `group`（hover 动作按它显隐），
+    /// `label` 传已翻译好的文案。
+    pub fn new(id: impl Into<SharedString>, label: impl Into<SharedString>) -> Self {
+        Self {
+            id: id.into(),
+            debug: None,
+            label: label.into(),
+            label_max_width: None,
+            expanded: false,
+            leading: None,
+            label_icon: None,
+            hover_bg: None,
+            trailing: Vec::new(),
+            hover_actions: Vec::new(),
+            on_click: None,
+        }
+    }
+
+    /// 登记 `debug_selector`（既有面板的测试按名字量这一行的高度 / 位置）。
+    #[must_use]
+    pub fn debug_selector(mut self, name: &'static str) -> Self {
+        self.debug = Some(name);
+        self
+    }
+
+    /// 展开态（决定 chevron 朝向）。
+    #[must_use]
+    pub fn expanded(mut self, expanded: bool) -> Self {
+        self.expanded = expanded;
+        self
+    }
+
+    /// 组名前的语义图标（书签分组用 `Bookmark`）；导航不传。
+    #[must_use]
+    pub fn label_icon(mut self, el: impl IntoElement) -> Self {
+        self.label_icon = Some(el.into_any_element());
+        self
+    }
+
+    /// 组名最大宽（rem）：导航的分组名按内容宽并允许省略；草稿箱不传。
+    #[must_use]
+    pub fn label_max_width(mut self, rem: f32) -> Self {
+        self.label_max_width = Some(rem);
+        self
+    }
+
+    /// 组标识（导航的 2px 主色条）。
+    #[must_use]
+    pub fn leading(mut self, el: impl IntoElement) -> Self {
+        self.leading = Some(el.into_any_element());
+        self
+    }
+
+    /// 常驻尾部元素（健康点 / 计数 / 批量动作），按调用顺序排在弹簧右侧。
+    #[must_use]
+    pub fn trailing(mut self, el: impl IntoElement) -> Self {
+        self.trailing.push(el.into_any_element());
+        self
+    }
+
+    /// hover 才显的动作组（整组一起淡入；不 hover 时占位不消失，行宽不跳）。
+    /// 多次调用即按顺序累加。
+    #[must_use]
+    pub fn hover_action(mut self, el: impl IntoElement) -> Self {
+        self.hover_actions.push(el.into_any_element());
+        self
+    }
+
+    /// hover 提亮（分组头平时是凹槽档 `group_box`，指上去才亮一档）。
+    /// 草稿箱不传；导航沿用既有 `list.hover` 提亮。
+    #[must_use]
+    pub fn hover_background(mut self, color: impl Into<Rgba>) -> Self {
+        self.hover_bg = Some(color.into());
+        self
+    }
+
+    /// 点击折叠 / 展开。
+    #[must_use]
+    pub fn on_click(
+        mut self,
+        f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_click = Some(Box::new(f));
+        self
+    }
+}
+
+impl RenderOnce for GroupHeader {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let colors = cx.theme().colors;
+        let muted = colors.muted_foreground;
+        let group_id = format!("{}::group", self.id);
+
+        let mut row = div()
+            .id(self.id.clone())
+            .group(group_id.clone())
+            .h_flex()
+            .items_center()
+            .w_full()
+            .gap_1()
+            .text_xs()
+            .h(rems(ui::ROW_HEIGHT_COMPACT))
+            .px_1p5()
+            .bg(colors.group_box);
+
+        if let Some(name) = self.debug {
+            row = row.debug_selector(move || name.to_string());
+        }
+        if let Some(color) = self.hover_bg {
+            row = row.hover(move |s| s.bg(color));
+        }
+        if let Some(leading) = self.leading {
+            row = row.child(leading);
+        }
+        row = row
+            .child(disclosure_slot().child(disclosure_icon(self.expanded, muted)))
+            .when_some(self.label_icon, |d, icon| d.child(icon))
+            .child(
+                div()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(colors.foreground)
+                    .when_some(self.label_max_width, |d, w| d.max_w(rems(w)))
+                    .child(self.label),
+            )
+            .child(div().flex_1());
+
+        for el in self.trailing {
+            row = row.child(el);
+        }
+        if !self.hover_actions.is_empty() {
+            let mut actions = div()
+                .flex_none()
+                .invisible()
+                .group_hover(group_id.clone(), |s| s.visible())
+                .h_flex()
+                .items_center()
+                .gap_0p5();
+            for el in self.hover_actions {
+                actions = actions.child(el);
+            }
+            row = row.child(actions);
+        }
+        if let Some(f) = self.on_click {
+            row = row.cursor_pointer().on_click(f);
+        }
+        row
+    }
 }
 
 #[cfg(test)]
