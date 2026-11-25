@@ -55,6 +55,7 @@
 | ~~`editor_set`~~ | — | ✅ **已删（B11/B12，2026-09-16）**：SQL 注入改走 `Shared::request_query(QueryRequest)`（私有字段 + 方法对），消费点在宿主 render；`EditorBridge::insert_sql` 一并删除 |
 | `scratchpad_search` | scratchpad 写 → editor 读 | 内容搜索结果落中央区 |
 | `scratchpad_file_info` | scratchpad 写 → 宿主 overlay 读 | 文件属性弹窗（右键 → 属性；信息少走弹窗不走面板，2026-10-10） |
+| `scratchpad_diff` | scratchpad 写 → 中央编辑区面板读 | 草稿箱冲突 Diff 载荷（`None` = 关闭）；状态归 Shared（与 `scratchpad_file_info` 同型），展示出口暂留面板内嵌，最终挂载形态待拍板（2026-11-25 补登记） |
 | `open_file_request` | scratchpad 写 → shared → 宿主 | 在编辑器中打开文件（`QueryRequest` 同形，已收为私有字段 + 方法对） |
 | `project_ui` | editor / scratchpad | 项目管理 UI 状态 |
 | `layout_locked` / `prev_left_sidebar_width` / `prev_right_sidebar_width` | 设置页 → 宿主 | 布局锁定 + 边栏宽度同步（`settings` 写、宿主 render 读；M-layout，2026-10-28） |
@@ -67,11 +68,12 @@
 共 20 个字段跨模块。它们**没有类型级保护**：任何模块都能写任何字段，改一处语义不会有编译错误，
 只能靠约定与 review。
 
-> 另一类不在此列的字段是**宿主 ↔ 特性 crate 视图的实体弱句柄**（`mock_panel` / `mock_details` / `insight_panel` / `resources_panel` / `sidebar_panel` / `property_panel` / `plugin_manager`）：
+> 另一类不在此列的字段是**宿主 ↔ 特性 crate 视图的实体弱句柄**（`mock_panel` / `mock_details` / `insight_panel` / `resources_panel` / `sidebar_panel` / `property_panel` / `plugin_manager` / `dashboard_panel`）：
 > 它们只在 workbench 内部读写——特性 crate 拿到的是注入的宿主端口，根本不认识 `Shared`——用途是
 > "宿主转发渲染 / 取面板选中项"（例：M6 的存档详情读左栏选中项；状态栏读 Mock 面板的运行中任务——“面板被切走时任务还在跑”）。
 > `sidebar_panel` 是 2026-11-24 新增的同类弱句柄：数据对象面板借它开资产版本历史（取数与轮询泵在侧栏，面板只转发请求）。
 > `open_property` / `open_plugin_manager` / `open_mock_detail` / `open_config_center` 同列：中央 tab「已建则聚焦、未建则新建」的创建/聚焦通道（`open_config_center` 为配置中心页，2026-11-20 补登记）。
+> `open_dashboard_request`（2026-11-25）：看板单例的唤起请求标志——状态栏 chip 置位，宿主 render 检测后 `defer_in` 经 `ensure_dashboard_panel` 建 / 聚焦（弱句柄复用同例）；`welcome_forced`：标题栏回家入口在有项目时强制唤回欢迎 tab 的显隐标志。
 > 注意 `plugin_manager` 是**强持有**（关 tab 后再次点击复用同一实体，搜索/筛选状态不丢），
 > `property_panel` 是弱句柄（关闭即释放，下次重建）。
 > 新增同类句柄只需更新 `ui_contract.rs` 的白名单，不必改本表。

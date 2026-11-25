@@ -96,7 +96,17 @@
 | 4-2a 对话框状态 / 订阅 / 桥上移宿主 | 待办（阻塞，见下） | — |
 | 4-2c 拖拽兜底请求逻辑沉 Shared | 待办（随第 3 步落点一起迁） | — |
 | 4-3 连接详情卡 / 导航树落点 | 待 `database` 导航线 WIP 落定 | — |
-| 5 收口校验 / i18n / 文档同步 | 待批次 4 | — |
+| 5 收口校验 / i18n / 文档同步 | 部分完成（白名单 + 耦合表已同步；locale 词条待随并行 WIP 收口；全量 workspace check 待批次 4） | 见下 |
+
+**批次 5 收口明细（2026-11-25）**：
+
+- 白名单契约 `tests/ui_contract.rs::shared_fields_are_whitelisted` 已补登本任务四字段：
+  `dashboard_panel` / `open_dashboard_request` / `welcome_forced`，以及批次 2b 漏登的
+  `scratchpad_diff`；`panels-modules.md` §3 耦合表、`shared-ownership-plan.md` §2.1 清单同步。
+- 契约测试通过（1 passed）；`rds-shared` 68 测试全过（含 zh/en 键对齐）；`cargo check -p rds-workbench` 0 error。
+- **遗留 i18n**：`"回到欢迎页"` zh/en 词条与并行自动刷新 WIP 同处 `locales/{zh,en}.json`，
+  按 WIP 隔离口径本批不摘 hunk，留工作区待并行线收口时一并入库；未登记项 `tr` 回退中文原文，不阻断编译。
+- 全量 `cargo check --workspace` 与剩余 EditorPanel 出口 tr 包裹，待批次 4 主体落定后复核。
 
 跨线适配（非本任务路径，单独 commit）：
 
@@ -148,3 +158,4 @@
 - 状态栏：`crates/workbench/src/view/actions.rs`、`view/status.rs`
 - 标题栏：`crates/workbench/src/view/dock.rs`
 - 设置先例：`crates/settings/src/model/layout.rs`、`registry/entries/layout.rs`、`service/layout.rs`
+- 契约 / 耦合表：`crates/workbench/tests/ui_contract.rs`（Shared 字段白名单）、`docs/architecture/layout/panels-modules.md` §3、`shared-ownership-plan.md` §2.1

@@ -27,11 +27,11 @@
 | `notice` | 状态栏回执（`say()`） |
 | `editor_bridge` / `scratchpad_bridge` / `resources_bridge` | 三个宿主桥（装配期注入） |
 | `host_redraw` | 宿主重绘桥（模态层挂载点） |
-| `nav_panel` / `mock_panel` / `mock_details` / `insight_panel` / `insight_workspace_panel` / `resources_panel` / `property_panel` / `search_results_panel` / `metadata_search_panel` | 面板弱句柄（宿主持有） |
+| `nav_panel` / `mock_panel` / `mock_details` / `insight_panel` / `insight_workspace_panel` / `resources_panel` / `property_panel` / `search_results_panel` / `metadata_search_panel` / `dashboard_panel` | 面板弱句柄（宿主持有） |
 | `open_mock_detail` / `open_property` | 需要 window 的 tab 创建命令 |
-| `project_new_request` / `project_open_request` | 连接对话框 → 宿主动作标记（已方法化：`take_project_action_request`） |
+| `project_new_request` / `project_open_request` / `open_dashboard_request` | 连接对话框 / 状态栏 → 宿主动作标记（已方法化：`take_project_action_request`；看板请求由 render 检测后 defer 唤起） |
 | `driver_catalog` | 驱动目录（导航/徽标/属性面板跨域共用，归宿主级） |
-| `scratchpad_search` / `search_results_dismissed` / `metadata_search` / `metadata_search_dismissed` | 搜索结果全局数据源 + 标签页开关（宿主协调） |
+| `scratchpad_search` / `search_results_dismissed` / `metadata_search` / `metadata_search_dismissed` / `welcome_forced` | 搜索结果全局数据源 + 标签页开关（宿主协调）；`welcome_forced` = 标题栏回家入口强制唤回欢迎页 |
 
 ### 2.2 特性级（迁移目标，约 27 个）
 

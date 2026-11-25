@@ -1500,6 +1500,8 @@ fn shared_fields_are_whitelisted() {
         "active_right",
         "conflict_dialog",
         "connections",
+        // 统计看板（2026-11-25）：中央 Dock 单例面板弱句柄。
+        "dashboard_panel",
         // 数据对象面板（2026-11-16）：清单缓存 + 工作集身份，属面板 ↔ 宿主的命名槽位，
         // 不跨特性 crate（宿主只把它们转成 `SampleSource` 交给洞察）。
         "data_object_assets",
@@ -1527,6 +1529,8 @@ fn shared_fields_are_whitelisted() {
         "notice",
         // 配置中心（2026-11-20）：宿主级开关（谁都能「打开配置中心」），不携带状态本体。
         "open_config_center",
+        // 统计看板唤起请求标志（2026-11-25）：状态栏 chip 置位，render defer 建 / 聚焦面板。
+        "open_dashboard_request",
         "open_mock_detail",
         "open_plugin_manager",
         "open_property",
@@ -1549,6 +1553,8 @@ fn shared_fields_are_whitelisted() {
         "right_mode_before_hidden",
         "right_open_panels",
         "scratchpad_bridge",
+        // 草稿冲突 Diff 状态（2026-11-25，2b 上移 Shared）：Diff 内容/可见性归宿主级，面板不自持。
+        "scratchpad_diff",
         "scratchpad_file_info",
         "scratchpad_search",
         "search_results_dismissed",
@@ -1561,6 +1567,8 @@ fn shared_fields_are_whitelisted() {
         "trash_dialog",
         "version_dialog",
         "version_diff_dialog",
+        // 欢迎页「回家」强制显隐（2026-11-25）：标题栏 Home 入口在有项目时强制唤回欢迎 tab。
+        "welcome_forced",
         // 数据对象工作集的「按文档」账本（2026-11-23）：宿主泵写 current / epoch，
         // 面板据此换那一份并落盘到 `{项目}/.RSmeta/workbench/working_set.json`。
         "working_set",
