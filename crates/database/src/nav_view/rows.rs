@@ -717,8 +717,9 @@ impl NavView {
             NavBadgeStatus::Idle
         };
         let dot_color = dot_status.color(cx.theme());
-        // 新建分组的初值（自动去重的默认名）；改名走组名原格就地编辑，不用表单。
+        // 分组表单初值：新建用自动去重默认名，编辑预填现有名称与描述。
         let default_group_name = self.next_group_name();
+        let group_seed = self.group_form_seed(group_id);
         // 上移 / 下移分组：边界项禁用（拖拽是主路径，菜单项是键盘 / 无鼠标的替代）。
         let group_ids_now = self.group_ids();
         let group_ix = group_ids_now.iter().position(|id| id == group_id);
@@ -996,12 +997,13 @@ impl NavView {
                     let gid_rename = gid.clone();
                     let e_new = entity.clone();
                     let seed_new = GroupFormSeed::for_new(default_group_name.clone());
+                    let e_desc = entity.clone();
+                    let seed_desc = group_seed.clone();
                     let e_del = entity.clone();
                     let gid_del = gid.clone();
                     let gname_del = gname.clone();
-                    // 只有一个改名入口：**组名原格就地编辑**（`group_rename_for` → 组头换成输入框）。
-                    // 原来的「编辑分组…」弹窗项已删——它和这一项是同一件事（改名称），两个入口
-                    // 只会让人不知道该点哪个；要连描述一起改走面板头的「管理分组」。
+                    // 改名有两条路径，分工写清：**原格就地编辑**（快，只改名称）走「重命名分组」；
+                    // 连描述一起改走「编辑分组…」表单（同一份 `save_group_form`，不各自落库）。
                     menu.item(
                         PopupMenuItem::new(tr("重命名分组")).on_click(move |_, _, app| {
                             let gid = gid_rename.clone();
@@ -1013,6 +1015,23 @@ impl NavView {
                             });
                         }),
                     )
+                    .item(PopupMenuItem::new(tr("编辑分组…")).on_click({
+                        let host = host.clone();
+                        move |_, window, app| {
+                            let e = e_desc.clone();
+                            let seed = seed_desc.clone();
+                            host.open_group_form(
+                                seed,
+                                window,
+                                app,
+                                Rc::new(move |gid, name, desc, app| {
+                                    e.update(app, |this, cx| {
+                                        this.save_group_form(gid, name, desc, cx);
+                                    });
+                                }),
+                            );
+                        }
+                    }))
                     .item(PopupMenuItem::new(tr("新建分组")).on_click({
                         let host = host.clone();
                         move |_, window, app| {

@@ -218,6 +218,18 @@ impl NavView {
         }
     }
 
+    /// 分组表单初值（编辑时需带上描述；分组头渲染只拿到名称）。
+    pub(super) fn group_form_seed(&self, group_id: &str) -> GroupFormSeed {
+        let view = self.nav.borrow();
+        view.groups
+            .iter()
+            .find(|g| g.id == group_id)
+            .map(|g| {
+                GroupFormSeed::for_existing(g.id.clone(), g.name.clone(), g.description.clone())
+            })
+            .unwrap_or_else(|| GroupFormSeed::for_new(self.next_group_name()))
+    }
+
     /// 提交分组表单（新建 / 编辑），成功时返回分组 ID。
     ///
     /// 名称唯一性不在这里拦：同名分组允许存在（排序 / 描述已经能区分），
