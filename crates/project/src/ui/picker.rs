@@ -466,6 +466,7 @@ pub fn card_menu_entries(
         label: "打开",
         icon: IconName::FolderOpen,
         enabled: true,
+        checked: false,
         separator_before: false,
     }];
     entries.push(ProjectMenuEntry {
@@ -481,6 +482,7 @@ pub fn card_menu_entries(
             IconName::Star
         },
         enabled: !locked,
+        checked: false,
         separator_before: true,
     });
 
@@ -491,6 +493,7 @@ pub fn card_menu_entries(
             label: "恢复",
             icon: IconName::RotateCw,
             enabled: !locked,
+            checked: false,
             separator_before: true,
         });
         return entries;
@@ -502,6 +505,7 @@ pub fn card_menu_entries(
             label: "在资源管理器中显示",
             icon: IconName::ExternalLink,
             enabled: true,
+            checked: false,
             separator_before: true,
         });
         // 路径正常：软删（名册上留痕，可在「已移除」找回）
@@ -510,6 +514,7 @@ pub fn card_menu_entries(
             label: "移出列表",
             icon: IconName::Close,
             enabled: !locked,
+            checked: false,
             separator_before: false,
         });
         entries.push(ProjectMenuEntry {
@@ -517,6 +522,7 @@ pub fn card_menu_entries(
             label: "删除数据…",
             icon: IconName::Delete,
             enabled: !locked,
+            checked: false,
             separator_before: true,
         });
     } else {
@@ -525,6 +531,7 @@ pub fn card_menu_entries(
             label: "重新定位…",
             icon: IconName::RotateCw,
             enabled: !locked,
+            checked: false,
             separator_before: true,
         });
         // 路径已失效：没什么可重定位的目标，移出 = 清掉名册记录（`forget`）
@@ -533,6 +540,7 @@ pub fn card_menu_entries(
             label: "移出列表",
             icon: IconName::Close,
             enabled: !locked,
+            checked: false,
             separator_before: false,
         });
     }
@@ -723,25 +731,36 @@ pub struct ProjectMenuEntry {
     pub enabled: bool,
     /// 与上一项之间画分隔线（首项忽略）。
     pub separator_before: bool,
+    /// 勾选态（目前只有「归档」用：已归档时显示对勾，让状态可读）。
+    ///
+    /// 只在为真时挂到菜单项上——给所有项都写 `checked(false)` 会让读屏把每条命令
+    /// 都念成「开关」。
+    pub checked: bool,
 }
 
 /// 标题栏项目槽下拉菜单的规格（原型 §2.4 / §5）。
 ///
 /// 只读模式（写锁被另一实例持有）下：**当前项目的**写命令（重命名 / 归档）置灰，并在顶部
 /// 插一条说明为什么点不动；「新建项目 / 打开现有目录」作用于**别的目录**（不写当前项目），
-/// 切换 / 项目设置 / 显示位置 / 关闭项目也都保持可用——只读是「不许写」，不是「不许看、
-/// 不许走」，用户始终能退出去。
+/// 切换 / 显示位置 / 关闭项目也都保持可用——只读是「不许写」，不是「不许看、不许走」，
+/// 用户始终能退出去。
 ///
-/// 「切换项目…」= 打开项目中心（不关闭当前项目）；「关闭项目」才是释放当前项目。
-pub fn project_menu_entries(read_only: bool) -> Vec<ProjectMenuEntry> {
-    let mut entries = Vec::with_capacity(9);
+/// 「项目中心…」不关闭当前项目（选中目标才切换）；「关闭项目」才是释放当前项目。
+///
+/// 归档项**按状态出文案**：已归档显示「取消归档」并带对勾，未归档显示「归档」——
+/// 原先一条「归档 / 取消归档」让用户看不出当前处于哪一档，只能盲点一下。
+pub fn project_menu_entries(read_only: bool, archived: bool) -> Vec<ProjectMenuEntry> {
+    let mut entries = Vec::with_capacity(8);
     if read_only {
+        // 说明行，不是命令：走 `PopupMenuItem::label`（禁用说明行），文案压到 9 个全角字内
+        // ——菜单最小宽 200 时文本区约 156px，再长会顶出菜单右缘（见 `build_project_menu`）。
         entries.push(ProjectMenuEntry {
             id: "read-only",
-            label: "只读模式：写操作不可用",
+            label: "只读：写操作不可用",
             icon: IconName::Info,
             enabled: false,
             separator_before: false,
+            checked: false,
         });
     }
     // 有项目时也能创建 / 打开别的项目（此前只能先「切换项目」退回选择器）。
@@ -751,6 +770,7 @@ pub fn project_menu_entries(read_only: bool) -> Vec<ProjectMenuEntry> {
         icon: IconName::Plus,
         enabled: true,
         separator_before: read_only,
+        checked: false,
     });
     entries.push(ProjectMenuEntry {
         id: "open-folder",
@@ -758,6 +778,7 @@ pub fn project_menu_entries(read_only: bool) -> Vec<ProjectMenuEntry> {
         icon: IconName::FolderOpen,
         enabled: true,
         separator_before: false,
+        checked: false,
     });
     // 「项目中心…」不关闭当前项目：先看列表，选中目标才切换（一次点击完成）。
     entries.push(ProjectMenuEntry {
@@ -766,20 +787,17 @@ pub fn project_menu_entries(read_only: bool) -> Vec<ProjectMenuEntry> {
         icon: IconName::ArrowLeft,
         enabled: true,
         separator_before: true,
+        checked: false,
     });
-    entries.push(ProjectMenuEntry {
-        id: "settings",
-        label: "项目设置…",
-        icon: IconName::Settings,
-        enabled: true,
-        separator_before: false,
-    });
+    // 「项目设置…」已删：它与「项目中心…」落的是同一个「设置 → 项目」页，
+    // 同一目的地摆两个入口只会让人多点一次。设置里改名称/描述仍有「重命名…」。
     entries.push(ProjectMenuEntry {
         id: "rename",
         label: "重命名…",
         icon: IconName::FileText,
         enabled: !read_only,
         separator_before: false,
+        checked: false,
     });
     entries.push(ProjectMenuEntry {
         id: "reveal",
@@ -787,13 +805,15 @@ pub fn project_menu_entries(read_only: bool) -> Vec<ProjectMenuEntry> {
         icon: IconName::ExternalLink,
         enabled: true,
         separator_before: false,
+        checked: false,
     });
     entries.push(ProjectMenuEntry {
         id: "archive",
-        label: "归档 / 取消归档",
+        label: if archived { "取消归档" } else { "归档" },
         icon: IconName::Inbox,
         enabled: !read_only,
         separator_before: true,
+        checked: archived,
     });
     entries.push(ProjectMenuEntry {
         id: "close",
@@ -801,6 +821,7 @@ pub fn project_menu_entries(read_only: bool) -> Vec<ProjectMenuEntry> {
         icon: IconName::Close,
         enabled: true,
         separator_before: true,
+        checked: false,
     });
     entries
 }
@@ -810,22 +831,42 @@ pub fn project_menu_entries(read_only: bool) -> Vec<ProjectMenuEntry> {
 /// 用语义 `PopupMenu` / `PopupMenuItem`（而非自绘弹层）：方向键导航、Escape 关闭、
 /// 焦点恢复、禁用项与分隔线都由组件负责。顺序 / 文案 / 可用性来自
 /// [`project_menu_entries`]，这里只负责按 id 挂事件。
+///
+/// **最小宽 200 是必须的**（2026-11-26 实测）：`PopupMenuItem::Item` 的标签装在
+/// `w_full()` 容器里（vendor `popup_menu.rs:1454-1461`），不参与菜单的宽计算；菜单宽度
+/// 只剩默认 `min_w(128)`，项宽 120、文本区约 84px，超过 5 个全角字的文案会**画到菜单
+/// 右缘之外**（弹层不裁剪）。给到 200 后文本区约 156px，9 个全角字仍能放下。
 pub fn build_project_menu(
     menu: PopupMenu,
     host: &ProjectUiHost,
     inputs: &ProjectInputs,
 ) -> PopupMenu {
     // 菜单在宿主 render 里构造，状态在此一次性读完（逐项再读会把 `RefCell` 借用拖长）。
-    let (read_only, root) = (host.state.borrow().read_only, host.root());
+    let (read_only, archived, root) = {
+        let state = host.state.borrow();
+        (state.read_only, state.current_archived, host.root())
+    };
     let root = root.unwrap_or_default();
-    let mut menu = menu;
-    for (ix, entry) in project_menu_entries(read_only).into_iter().enumerate() {
+    let mut menu = menu.min_w(px(200.));
+    for (ix, entry) in project_menu_entries(read_only, archived)
+        .into_iter()
+        .enumerate()
+    {
         if ix > 0 && entry.separator_before {
             menu = menu.separator();
         }
-        let item = PopupMenuItem::new(entry.label)
+        // 只读提示是说明行，不是命令：用 `PopupMenuItem::label`（无图标、无 hover、
+        // 读屏念作禁用说明），不要做成一条 26 高的灰菜单项。
+        if entry.id == "read-only" {
+            menu = menu.item(PopupMenuItem::label(entry.label));
+            continue;
+        }
+        let mut item = PopupMenuItem::new(entry.label)
             .icon(entry.icon)
             .disabled(!entry.enabled);
+        if entry.checked {
+            item = item.checked(true);
+        }
         menu = menu.item(attach_project_menu_handler(
             item, entry.id, host, inputs, &root,
         ));
@@ -864,10 +905,9 @@ pub(super) fn attach_project_menu_handler(
             let host = host.clone();
             item.on_click(move |_, window, app| act_close(&host, window, app))
         }
-        // 「项目设置…」/「重命名…」：同一个面板，都在全局设置的「项目」页
-        // （上面是列表、下面是当前项目设置）。预填名称与描述后跳过去；焦点不跨窗口
+        // 「重命名…」：项目设置页（名称 + 描述）。预填当前名称与描述后跳过去；焦点不跨窗口
         // 硬抢——用户在设置窗口里自己点输入框（内容已备好）。
-        "settings" | "rename" => {
+        "rename" => {
             let host = host.clone();
             let inputs = inputs.clone();
             item.on_click(move |_, window, app| {

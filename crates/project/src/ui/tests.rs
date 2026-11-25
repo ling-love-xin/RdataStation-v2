@@ -1269,7 +1269,7 @@ fn read_only_blocks_archive_and_version_snapshot(cx: &mut TestAppContext) {
 /// 菜单规格是「菜单长什么样」的唯一权威来源（渲染只按 id 挂事件）。
 #[test]
 fn menu_spec_greys_out_write_commands_in_read_only() {
-    let writable: Vec<(&str, bool)> = project_menu_entries(false)
+    let writable: Vec<(&str, bool)> = project_menu_entries(false, false)
         .iter()
         .map(|e| (e.label, e.enabled))
         .collect();
@@ -1279,42 +1279,55 @@ fn menu_spec_greys_out_write_commands_in_read_only() {
             ("新建项目…", true),
             ("打开现有目录…", true),
             ("项目中心…", true),
-            ("项目设置…", true),
+            // 「项目设置…」已删：与「项目中心…」同一目的地（设置 → 项目页）
             ("重命名…", true),
             ("在资源管理器中显示", true),
-            ("归档 / 取消归档", true),
+            ("归档", true),
             ("关闭项目", true),
         ],
         "可写模式：全部可用，且没有只读提示项"
     );
 
-    let read_only: Vec<(&str, bool)> = project_menu_entries(true)
+    let read_only: Vec<(&str, bool)> = project_menu_entries(true, false)
         .iter()
         .map(|e| (e.label, e.enabled))
         .collect();
     assert_eq!(
         read_only,
         vec![
-            ("只读模式：写操作不可用", false),
+            ("只读：写操作不可用", false),
             // 创建 / 打开作用于别的目录，不写当前项目：只读时仍可用
             ("新建项目…", true),
             ("打开现有目录…", true),
             ("项目中心…", true),
-            ("项目设置…", true),
             ("重命名…", false),
             ("在资源管理器中显示", true),
-            ("归档 / 取消归档", false),
+            ("归档", false),
             ("关闭项目", true),
         ],
         "只读模式：写命令置灰，读命令与出口保持可用"
     );
 }
 
+/// 归档项按状态出文案 + 对勾（原「归档 / 取消归档」看不出当前状态）。
+#[test]
+fn menu_spec_archive_item_reflects_state() {
+    let draft = project_menu_entries(false, false);
+    let archive = draft.iter().find(|e| e.id == "archive").expect("归档项");
+    assert_eq!(archive.label, "归档", "未归档时文案是「归档」");
+    assert!(!archive.checked, "未归档时不带对勾");
+
+    let archived = project_menu_entries(false, true);
+    let archive = archived.iter().find(|e| e.id == "archive").expect("归档项");
+    assert_eq!(archive.label, "取消归档", "已归档时文案是「取消归档」");
+    assert!(archive.checked, "已归档时带对勾");
+}
+
 /// 分隔线位置：只读提示与「新建项目」之间、「项目中心」与创建入口之间、列表尾部两项之前。
 #[test]
 fn menu_spec_keeps_escape_hatches_without_leading_separator() {
     for read_only in [false, true] {
-        let entries = project_menu_entries(read_only);
+        let entries = project_menu_entries(read_only, false);
         assert!(
             !entries[0].separator_before,
             "首项上方不该有分隔线（read_only={read_only}）"
@@ -1363,6 +1376,120 @@ fn title_bar_menu_builds_in_both_modes(cx: &mut TestAppContext) {
             "菜单不应为空（read_only={read_only}）"
         );
     }
+}
+
+/// 菜单真渲染后的硬指标：宽度 / 文案不出界 / 分隔线不是菜单项 / 禁用态进无障碍树。
+///
+/// 背景（2026-11-26 实测）：`PopupMenuItem::Item` 的标签在 `w_full()` 容器里，不参与菜单
+/// 宽计算；菜单默认只有 128 宽，长文案会画到菜单右缘之外（弹层不裁剪）。所以这里断的是
+/// 「菜单宽 ≥ 200」+「每条菜单项都在菜单边界内」+「每行都有名字」+「禁用项 disabled=真」。
+#[gpui_kit::test]
+fn menu_render_is_wide_enough_and_separators_are_not_items(cx: &mut TestAppContext) {
+    use gpui_kit::base::test_support::snapshots;
+    use gpui_kit::test::TestWindowExt as _;
+
+    cx.update(gpui_kit::init);
+    let rec = Rc::new(Recorder::default());
+    let host = test_host(&rec);
+    host.set_current(Some(OpenProject::new(temp_root("menu-win"), "菜单项目")));
+    let (host, _inputs, cx) = open_harness(cx, host);
+    {
+        // 只读 + 已归档：一次性覆盖到说明行、两条禁用写命令与归档文案/勾选。
+        let mut state = host.state.borrow_mut();
+        state.read_only = true;
+        state.current_archived = true;
+    }
+
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
+    cx.update(|window, cx| window.click("harness-project-menu", cx));
+    cx.update(|window, cx| {
+        for _ in 0..4 {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        }
+    });
+
+    let menu = cx
+        .update(|window, _| window.try_find("popup-menu"))
+        .expect("点触发器后菜单应当打开");
+    let menu_bounds = menu.bounds();
+    assert!(
+        menu_bounds.size.width >= px(200.),
+        "菜单最小宽 200（实测 {:?}）",
+        menu_bounds.size.width
+    );
+
+    // 只看菜单子树里的观测项。
+    let rows: Vec<_> = cx
+        .update(|window, _| snapshots(window))
+        .into_iter()
+        .filter(|s| {
+            let path: Vec<String> = s.path().iter().map(|id| format!("{id:?}")).collect();
+            path.join(" > ").contains("popup-menu")
+        })
+        .collect();
+
+    let items: Vec<_> = rows
+        .iter()
+        .filter(|s| s.role() == Some(gpui_kit::Role::MenuItem))
+        .collect();
+    // 只读说明行 + 新建 / 打开 / 项目中心 / 重命名 / 显示位置 / 取消归档 / 关闭 = 8 行。
+    assert_eq!(items.len(), 8, "菜单行数应等于规格条数（两条分隔线不算菜单项）");
+    assert!(
+        items.iter().all(|s| s.label().is_some()),
+        "每条菜单项都要有名字；无名字的 2px 项就是被暴露成菜单项的分隔线"
+    );
+
+    let labels: Vec<&str> = items.iter().filter_map(|s| s.label()).collect();
+    for expected in [
+        "只读：写操作不可用",
+        "新建项目…",
+        "打开现有目录…",
+        "项目中心…",
+        "重命名…",
+        "在资源管理器中显示",
+        "取消归档",
+        "关闭项目",
+    ] {
+        assert!(labels.contains(&expected), "菜单缺少「{expected}」：{labels:?}");
+    }
+    assert!(!labels.contains(&"项目设置…"), "「项目设置…」与「项目中心…」同目的地，应已删除");
+
+    // 不能画到菜单外：每条菜单项的水平边界都在菜单边界里。
+    for s in &items {
+        let b = s.bounds();
+        assert!(
+            b.left() >= menu_bounds.left() - px(0.5)
+                && b.right() <= menu_bounds.right() + px(0.5),
+            "菜单项 {:?} 越出菜单边界：{b:?} vs {menu_bounds:?}",
+            s.label()
+        );
+    }
+
+    // 禁用态进无障碍树（只读说明行 + 重命名 + 取消归档）。
+    for label in ["只读：写操作不可用", "重命名…", "取消归档"] {
+        let row = items
+            .iter()
+            .find(|s| s.label() == Some(label))
+            .unwrap_or_else(|| panic!("找不到「{label}」"));
+        assert_eq!(row.disabled(), Some(true), "「{label}」应报告 disabled");
+    }
+    // 读命令不报禁用。
+    let reveal = items
+        .iter()
+        .find(|s| s.label() == Some("在资源管理器中显示"))
+        .expect("显示位置项");
+    assert_ne!(reveal.disabled(), Some(true), "读命令不该被标成禁用");
+
+    // 已归档 → 「取消归档」带勾。
+    let archive = items
+        .iter()
+        .find(|s| s.label() == Some("取消归档"))
+        .expect("归档项");
+    assert_eq!(archive.checked(), Some(true), "已归档项应报告 checked");
 }
 
 /// C4：选择器控件语义组件化后（TabBar / DropdownMenu / Button）键盘与回调同路——

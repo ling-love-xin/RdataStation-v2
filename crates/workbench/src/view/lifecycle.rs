@@ -224,12 +224,15 @@ impl WorkbenchView {
         };
         match opened {
             Ok(opened) => {
-                let (store, lock, read_only, _summary) = opened.into_parts();
+                let (store, lock, read_only, summary) = opened.into_parts();
                 // store 仅用于确认加载成功（与 `project::ui::apply_opened` 同口径）
                 drop(store);
                 let mut ui = shared.project_ui.borrow_mut();
                 ui.lock = lock;
                 ui.read_only = read_only;
+                // 标题栏项目菜单的「归档 / 取消归档」按这份缓存出文案：启动路径也写一次，
+                // 否则重启后菜单永远显示「归档」（实际可能已归档）。
+                ui.current_archived = summary.status == "archived";
                 ui.notice = read_only.then(|| "只读打开：该项目已被另一实例占用".to_string());
             }
             // 取锁 / 载入失败：不动会话（项目仍是当前项目），只提示一声

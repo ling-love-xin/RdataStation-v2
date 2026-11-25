@@ -254,6 +254,8 @@ pub(super) fn apply_opened(
         let mut ui = host.state.borrow_mut();
         ui.lock = lock;
         ui.read_only = read_only;
+        // 归档状态在这里落缓存（名册摘要已经在手，不需要再读盘）。
+        ui.current_archived = summary.status == "archived";
         ui.dialog_error = None;
         ui.notice = read_only.then(|| "只读打开：该项目已被另一实例占用".to_string());
         ui.picker.error = None;
@@ -484,12 +486,16 @@ pub fn toggle_archive(host: &ProjectUiHost, window: &mut Window, cx: &mut App) {
     };
     let archived = item.status == "archived";
     match project_service::set_archived(&item.id, &item.path, !archived) {
-        Ok(()) => notify_success(
-            host,
-            window,
-            cx,
-            format!("已{}项目", if archived { "取消归档" } else { "归档" }),
-        ),
+        Ok(()) => {
+            // 菜单的「归档 / 取消归档」按这个缓存出文案与对勾：事件路径写入，render 纯读。
+            host.state.borrow_mut().current_archived = !archived;
+            notify_success(
+                host,
+                window,
+                cx,
+                format!("已{}项目", if archived { "取消归档" } else { "归档" }),
+            );
+        }
         Err(e) => notify_error(host, window, cx, e),
     }
     host.notify(cx);

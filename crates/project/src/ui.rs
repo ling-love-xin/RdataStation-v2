@@ -573,6 +573,11 @@ impl ProjectUiHost {
 
     /// 记录当前会话。
     pub fn set_current(&self, project: Option<OpenProject>) {
+        // 关闭项目时归档标记一起清掉：它描述的是「当前项目」，会话没了就没有意义。
+        // （打开路径随后由 `apply_opened` 按名册状态覆盖成真值。）
+        if project.is_none() {
+            self.state.borrow_mut().current_archived = false;
+        }
         *self.session.borrow_mut() = project;
     }
 
@@ -608,6 +613,11 @@ pub struct ProjectUiState {
     /// 设置面板的磁盘 / 名册快照（B2 / B3；事件路径填充，render 纯读）。
     /// 「项目」页的「当前项目设置」块按它渲染，未取时显示「未读取」。
     pub settings: SettingsSnapshot,
+    /// 当前项目是否已归档（`status == "archived"`）。
+    ///
+    /// 缓存值：打开项目 / 归档切换这类**事件路径**写入，菜单在 render 里纯读。
+    /// 不在 render 里读名册——那是一次磁盘 I/O，违反「render 不做副作用」。
+    pub current_archived: bool,
 }
 
 /// 项目相关输入实体（由宿主懒创建并持有）。
