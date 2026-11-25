@@ -446,6 +446,14 @@ pub fn set_bases(bases: Vec<BaseMount>) {
     *current = bases;
 }
 
+/// 当前底座清单（只读快照；数据对象面板据此出「底座」行——面板不猜路径、不查盘）
+pub fn bases() -> Vec<BaseMount> {
+    BASES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
 /// 当前底座指纹（顺序无关）：并进会话指纹，切项目就重建会话
 pub fn bases_fingerprint() -> String {
     let bases = BASES.lock().unwrap_or_else(|poisoned| poisoned.into_inner());

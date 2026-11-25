@@ -503,6 +503,32 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
         .filter_map(|row| row.path.as_deref())
         .collect();
 
+    // 分析底座（`analytics` / `rds_global`）：**不允许卸载**（第 42 条），所以不给动作位，
+    // 但必须在源段可见——用户要能确认"归档表 / 全局库已经在联邦里"，
+    // 而不是切到联邦后凭记忆猜。路径由宿主发布（`analysis_bases::sync`），面板不查盘。
+    for base in engine::duckdb::federation::session::bases() {
+        let global = base.alias == engine::duckdb::federation::session::GLOBAL_BASE_ALIAS;
+        out.push(Object {
+            key: format!("base:{}", base.alias),
+            name: base.alias.clone(),
+            note: if global {
+                "全局分析库 · 只读挂载".to_string()
+            } else {
+                format!("项目分析库 · {}", base.path)
+            },
+            channel: Channel::Federated,
+            life: Life::Project,
+            state: State::Ready,
+            group: Group::Source,
+            // 静态串（`Object.pill` 是 `&'static str`）：不临时拼
+            pill: "底座",
+            version: None,
+            sql_ref: None,
+            // 底座不允许卸载：行尾没有动作位
+            source_action: None,
+        });
+    }
+
     for source in &collected.session_sources {
         // 挂载事实 = 会话真起来了（失败态不算挂上）；登记侧按别名查
         let registered = registered_aliases.iter().any(|alias| alias == &source.alias);
