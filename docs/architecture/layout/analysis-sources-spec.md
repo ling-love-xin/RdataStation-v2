@@ -250,6 +250,20 @@ CREATE INDEX IF NOT EXISTS idx_analysis_sources_kind ON analysis_sources(kind);
 3. 表名 `analysis_sources` 暂定；
 4. 「已挂载 · 会话级」行的默认动作是"登记为项目源"还是"卸载"优先。
 
+### 12.1 别名唯一性按档位分域（2026-11-25 第 6 条，已落地）
+
+`alias` 的**语义三档不同**，全表唯一是错的（迁移 `035_analysis_sources_alias_domain.sql`）：
+
+| 档位 | `alias` 是什么 | 唯一性 |
+|---|---|---|
+| `federation` | DuckDB 里的 schema 名（`database_name`） | 与同档互斥（全局唯一索引） |
+| `attach_file` | 挂载名 | 同上 |
+| `accel` | **只是展示名**（ATTACH 固定 `rds_src`，一次一库） | 允许重复；**不占**挂载名 |
+
+据此：`taken_aliases` 只把"别名即挂载名"的两档算占用（否则第二条加速源的展示名会
+白白抢掉联邦想要的 `xxx_src`）；`insert` / `update_alias` 的"别名已被占用"报错
+只可能来自那两档。identity 判重对加速档看 `connection_id` / `path`，不看 `alias`。
+
 ## 13. 明确不做（避免复活已否决项）
 
 - 不做"其他资产（不可分析）"段；

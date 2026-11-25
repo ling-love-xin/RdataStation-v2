@@ -166,7 +166,12 @@ pub fn ensure_tables(conn: &Connection) -> Result<(), CoreError> {
             created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_analysis_sources_alias ON analysis_sources(alias);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_analysis_sources_alias
+            ON analysis_sources(alias)
+            WHERE mount_kind <> 'accel';
+        CREATE INDEX IF NOT EXISTS idx_analysis_sources_alias_accel
+            ON analysis_sources(alias)
+            WHERE mount_kind = 'accel';
         CREATE INDEX IF NOT EXISTS idx_analysis_sources_kind ON analysis_sources(kind);",
     )
     .map_err(|e| storage_err("ensure_tables", e.to_string()))
@@ -289,10 +294,18 @@ pub fn find(conn: &Connection, id: &str) -> Result<Option<AnalysisSourceRow>, Co
 }
 
 /// 已占用的别名（给"重名加 `_2`"用）。`except_id` 用来排除正在改名的那一行。
+///
+/// 加速档不算"占用"（035 起唯一性分域）：它的 ATTACH 别名固定 `rds_src`，
+/// 表里的 `alias` 只是展示名——若把它算进来，第二条加速源的展示名会白白
+/// 抢掉联邦/文件档想要的挂载名（`taken_aliases` 的调用方正是要挑挂载名）。
 pub fn taken_aliases(conn: &Connection, except_id: Option<&str>) -> Result<Vec<String>, CoreError> {
     ensure_tables(conn)?;
     let mut stmt = conn
-        .prepare("SELECT alias FROM analysis_sources WHERE id IS NOT ?1 ORDER BY alias")
+        .prepare(
+            "SELECT alias FROM analysis_sources
+             WHERE id IS NOT ?1 AND mount_kind <> 'accel'
+             ORDER BY alias",
+        )
         .map_err(|e| storage_err("taken_prepare", e.to_string()))?;
     let rows = stmt
         .query_map(params![except_id], |row| row.get::<_, String>(0))
@@ -432,6 +445,30 @@ mod tests {
         assert!(delete(&c, "s_1").expect("delete"));
         assert!(!delete(&c, "s_1").expect("再删一次返回 false"));
         assert_eq!(list(&c).expect("list").len(), 1);
+    }
+
+    /// 035：唯一性按档位分域——加速档的 `alias` 只是展示名（ATTACH 固定 `rds_src`），
+    /// 两条加速源可以同名共存，且**不占**联邦/文件档想要的挂载名。
+    #[test]
+    fn accel_alias_is_not_unique_and_does_not_reserve_the_name() {
+        let c = conn();
+        let mut a1 = row("s_1", "rds_src");
+        a1.mount_kind = AnalysisMountKind::Accel;
+        a1.connection_id = Some("C_1".to_string());
+        let mut a2 = row("s_2", "rds_src");
+        a2.mount_kind = AnalysisMountKind::Accel;
+        a2.connection_id = Some("C_2".to_string());
+        insert(&c, &a1).expect("第一条加速源");
+        insert(&c, &a2).expect("第二条加速源同名必须也能登进来");
+
+        let taken = taken_aliases(&c, None).expect("taken");
+        assert!(taken.is_empty(), "加速档不该占用挂载名，实际：{taken:?}");
+
+        // 同一时刻联邦档要叫 rds_src：这是它自己的挂载名，必须放行
+        insert(&c, &row("s_3", "rds_src")).expect("联邦档用 rds_src 不该被加速档挡住");
+        // 但联邦档之间仍然互斥
+        let err = insert(&c, &row("s_4", "rds_src")).expect_err("联邦档撞车必须拒");
+        assert!(format!("{err}").contains("别名已被占用"));
     }
 
     #[test]
