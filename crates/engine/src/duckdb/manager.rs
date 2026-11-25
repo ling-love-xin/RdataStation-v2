@@ -76,18 +76,25 @@ impl DuckDBManager {
     /// 获取或创建全局 DuckDB 内存单例。
     ///
     /// # 注意
-    /// 首次调用时初始化全局 DuckDB 内存实例。
-    /// 如果初始化失败，程序会 panic（因为全局分析引擎是核心组件，不可降级运行）。
+    /// **2026-11-26 起它不再是"另开一条内存库"**：这个"进程单例"实质上是分析实例里
+    /// `owner = process` 那条会话的连接句柄。于是进程面（导出 / 结果集 `tmp_q_` /
+    /// 洞察取样 `tmp_i_`）与分析实例共享同一个 catalog —— 这就是
+    /// `tmp_i_ JOIN 源` / `tmp_q_ JOIN tmp_i_` 能成立的前提。
+    ///
+    /// 首次调用时若实例还没建，会顺带建实例（含底座挂载）。失败即 panic：
+    /// 全局分析引擎是核心组件，不可降级运行。
     ///
     /// # 返回
-    /// 全局 DuckDB 内存连接的静态引用
+    /// 全局内存连接的静态引用（就是那条 `process` 会话的 `Arc<Mutex<Connection>>`）
     pub fn global() -> &'static Arc<Mutex<duckdb::Connection>> {
         GLOBAL_DUCKDB.get_or_init(|| {
-            let conn = duckdb::Connection::open_in_memory()
-                .unwrap_or_else(|e| panic!("初始化全局 DuckDB 内存实例失败: {}", e));
-            Self::configure_connection(&conn)
-                .unwrap_or_else(|e| panic!("配置全局 DuckDB 连接失败: {}", e));
-            Arc::new(Mutex::new(conn))
+            match crate::duckdb::instance::instance()
+                .and_then(|instance| instance.process_session())
+                .map(|session| session.connection_handle())
+            {
+                Ok(handle) => handle,
+                Err(error) => panic!("初始化全局 DuckDB 内存实例失败: {error}"),
+            }
         })
     }
 

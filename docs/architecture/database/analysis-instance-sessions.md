@@ -69,7 +69,8 @@
 | 2d | 加速档别名按源唯一（`reserve_alias` + 实例 `conn_alias` 映射 + `USE` 实际别名） | ✅ 本刀 |
 | 2e | 消费方迁移：工作台三处 `accel::session_for` / 编辑器直跑加速档 / 卸载 / 会话源树根全部改读实例 | ✅ 本刀（`accel::ensure_on_instance` 单一入口） |
 | 2e-1 | `accel` 模块退役（删 `AccelSession` / `ensure_session` / `SESSIONS` 缓存 / `owners` / `drop_session` / `drop_all` / `cancel` / `list_tables_for`） | ✅ 本刀（用例与两条真机探针同批改到实例 API） |
-| 2f | `SessionHandle::ProcessDb` / `Accelerated` / `Federated` 三个旧变体删除；`ProcessDuckDb` 取样落 `rds_tmp` | ⬜ 与 3 同一刀（取样表与下游读端必须同处一个实例） |
+| 2f | 进程面并进实例：`DuckDBManager::global()` 返回的"进程单例"就是实例 `owner = process` 那条会话的连接；`SessionHandle::{ProcessDb, Federated}` 两个旧变体删除 | ✅ |
+| 2g | 联邦侧别名归属核对（同实例下两个源抢同一别名会静默指到先挂的那个，加速档已用 `reserve_alias` 收口） | ⬜ |
 | 3 | `rds_tmp` 自动登记（结果集保存 / 洞察取样落 `rds_tmp` 时登记） | ⬜ |
 | 4 | 保护接线（超时值从设置读、面板显示"被中断"） | ⬜ |
 | 5 | 取库脚本与文档（2.0.1 资产改名、存储格式单向） | ✅ |
@@ -97,6 +98,28 @@
 **2e-1 之后 `accel` 只剩三样东西**：`AccelSource`（组装源）、`AccelKind`（类型/命名口径）、
 以及三个挂实例上的入口（`ensure_on_instance` / `remount_on_instance` / `extension_state`）。
 `AccelSession`、会话表、`owner` 枚举、逐个源的 `drop_*` 全部删除——单实例下"会话"就是实例的会话。
+
+**2f 的做法与理由（进程面不再另开一条内存库）**：77 处调用方拿的都是
+`DuckDbService::get_or_create_duckdb()`（导出 / 结果集临时表 / 洞察取样）。与其逐点改签名，不如让
+**那个"单例"本身就是实例里的 `owner = process` 会话的连接**：
+
+| 位置 | 现在 |
+| --- | --- |
+| `AnalysisSession.conn` | `Arc<Mutex<Connection>>`（多一个 `connection_handle()` 给历史入口复用同一连接） |
+| `AnalysisInstance::process_session()` | `ensure_session("process", "process")` |
+| `DuckDBManager::global()` | 首次调用时取实例 → `process_session()` → 连接句柄；`OnceCell` 里存的就是它 |
+| `SessionHandle` | 只剩 `None` 与 `Instance { session, label }`，`label = process / accelerated / federated` |
+| `AnalysisInstance::current()` 的槽 | **强引用**（原来存 `Weak`：调用方一放手实例就没了，所有会话跟着失效） |
+
+后果（正是第 ⑪ 条遗留要的）：`tmp_q_` / `tmp_i_` / `rds_tmp` 与源、与底座同处一个 catalog，
+`tmp_i_ JOIN 源` 成立；编辑器侧 `FederatedSession::adopt(session, primary)` 只接联邦语义
+（快照 / L2 写拒绝 / 错误脱敏），不再二次 `ATTACH`。离线验收用
+`crates/engine/tests/process_face_catalog_probe.rs`（DuckDB 文件源，无需网络）。
+
+**2g 的已知边界（同实例带来的新风险）**：`ATTACH` 出来的 catalog 是**实例级**的，别名不再只属于
+某条会话。加速档已用 `reserve_alias` 按源唯一分配；联邦侧 `attach_source` 目前仍是
+"别名已存在就算 Ready"，若另一个源抢先占了同名别名，查询会静默指到那个库上。收口方向：
+联邦挂载也走实例别名登记（后到者让位 `别名_2`，或直接判 Failed 并说清"该别名已被别的源占用"）。
 
 **真机实证（2026-11-26，`192.168.3.138` + `D:\FossilT\T.fossil`）**：
 

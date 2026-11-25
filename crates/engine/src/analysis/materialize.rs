@@ -120,13 +120,18 @@ pub fn materialize_sample(
         return Err(invalid("物化需要一条 SELECT：空 SQL 建不出表".to_string()));
     }
     match handle {
-        // 进程单例：走仓库的分析临时表入口，建表即登记（洞察取样就是这个形态）
-        SessionHandle::ProcessDb(conn) => {
-            let guard = conn
-                .lock()
-                .map_err(|e| invalid(format!("DuckDB 单例锁中毒: {e}")))?;
-            crate::duckdb::temp_table::create_analysis_temp_table_as(&guard, select, description)
-        }
+        // 进程面（`label = process`）：走仓库的分析临时表入口，建表即登记（洞察取样就是这个形态）。
+        // 它的连接就是实例里那条 `process` 会话的连接，和源同处一个 catalog。
+        SessionHandle::Instance { session, label } if *label == "process" => session
+            .with_connection(|conn| {
+                crate::duckdb::temp_table::create_analysis_temp_table_as(
+                    conn,
+                    select,
+                    description,
+                )
+                .map_err(|error| error.to_string())
+            })
+            .map_err(invalid),
         _ => {
             let name = sample_table_name(description);
             materialize_in_session(handle, &name, select)
@@ -152,10 +157,12 @@ pub fn move_sample_to_process_db(
     session_table: &str,
     description: &str,
 ) -> Result<String, CoreError> {
-    if let SessionHandle::ProcessDb(_) = handle {
-        return Err(invalid(
-            "这张表已经在进程单例上：无需搬运（直接按裸名使用即可）".to_string(),
-        ));
+    if let SessionHandle::Instance { label, .. } = handle {
+        if *label == "process" {
+            return Err(invalid(
+                "这张表已经在进程面上：无需搬运（直接按裸名使用即可）".to_string(),
+            ));
+        }
     }
     if !handle.has_session() {
         return Err(invalid(
@@ -358,15 +365,17 @@ pub fn drop_materialized(handle: &SessionHandle, qualified: &str) -> Result<(), 
     if !handle.has_session() {
         return Ok(());
     }
-    // 进程单例：走登记版删除，否则登记表会与库里实际张数对不上（K16 ④ 的计数信号就失真）
-    if let SessionHandle::ProcessDb(conn) = handle {
-        let guard = conn
-            .lock()
-            .map_err(|e| invalid(format!("DuckDB 单例锁中毒: {e}")))?;
-        return match name.starts_with("tmp_l_") {
-            true => crate::duckdb::temp_table::drop_loaded_temp_table(&guard, name),
-            false => crate::duckdb::temp_table::drop_analysis_temp_table(&guard, name),
-        };
+    // 进程面：走登记版删除，否则登记表会与库里实际张数对不上（K16 ④ 的计数信号就失真）
+    if let SessionHandle::Instance { session, label } = handle {
+        if *label == "process" {
+            return session
+                .with_connection(|conn| match name.starts_with("tmp_l_") {
+                    true => crate::duckdb::temp_table::drop_loaded_temp_table(conn, name),
+                    false => crate::duckdb::temp_table::drop_analysis_temp_table(conn, name),
+                }
+                .map_err(|error| error.to_string()))
+                .map_err(invalid);
+        }
     }
     handle.run(&format!(
         "DROP TABLE IF EXISTS {MATERIALIZE_CATALOG}.{name}"

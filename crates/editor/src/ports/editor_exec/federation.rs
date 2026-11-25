@@ -186,9 +186,13 @@ impl EngineQueryRunner {
         let plan = self.federated_plan(connection)?;
         let (session_plan, prepared) = session_plan_for(&plan)?;
         match engine::analysis::kernel::open(&session_plan, &prepared) {
-            Ok(SessionHandle::Federated(session)) => Ok((plan, session)),
+            Ok(SessionHandle::Instance { session, .. }) => {
+                // 内核已经挂好、也切过主源：这里只接一层联邦语义（快照 / 写拒绝 / 脱敏）
+                let facade = fed_session::FederatedSession::adopt(session, plan.primary.as_deref());
+                Ok((plan, Arc::new(facade)))
+            }
             Ok(other) => Err(format!(
-                "联邦档拿到的不是联邦会话（内核给的档位是 {}）",
+                "联邦档拿到的不是 DuckDB 会话（内核给的档位是 {}）",
                 other.channel_label()
             )),
             Err(error) => Err(error.to_string()),

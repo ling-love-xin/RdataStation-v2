@@ -132,10 +132,9 @@ fn ensure_alias_attached(
         return Ok(());
     }
     let reason = match session {
-        SessionHandle::Federated(federated) => federated
-            .snapshot()
-            .sources
-            .iter()
+        SessionHandle::Instance { session, .. } => session
+            .mounted_sources()
+            .into_iter()
             .find(|entry| entry.source.alias == alias)
             .map(|entry| match &entry.state {
                 crate::duckdb::federation::registry::MountState::Failed(text) => text.clone(),
@@ -144,7 +143,7 @@ fn ensure_alias_attached(
                 }
             })
             .unwrap_or_else(|| "会话里没有这条源".to_string()),
-        _ => "这条句柄不是联邦会话".to_string(),
+        _ => "这条句柄不是 DuckDB 会话".to_string(),
     };
     Err(invalid(format!(
         "按 {db_type} 挂载 {alias} 失败：{reason}"

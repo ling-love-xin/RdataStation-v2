@@ -106,6 +106,23 @@ impl FederatedSession {
         })
     }
 
+    /// 把**已经挂好**的实例会话接成联邦门面（**不再重挂一遍**）。
+    ///
+    /// 内核 `plan_for + open` 已经在会话上挂过源、也切过主源：编辑器要的只是这一层
+    /// 联邦语义（快照 / L2 写拒绝 / 错误脱敏 / 刷新），不该再 `ATTACH` 一次。
+    /// 挂载状态从会话自己的记账里取（`AnalysisSession::mounted_sources`），不另存一份真相。
+    pub fn adopt(session: Arc<AnalysisSession>, requested_primary: Option<&str>) -> Self {
+        let mounted = session.mounted_sources();
+        let (primary, primary_note) = pick_primary(&mounted, requested_primary);
+        Self {
+            session,
+            mounted: Mutex::new(mounted),
+            primary: Mutex::new(primary),
+            primary_note: Mutex::new(primary_note),
+            mounted_at: std::time::SystemTime::now(),
+        }
+    }
+
     /// 这条联邦会话落在实例的哪条会话上（关会话 / 诊断用）
     pub fn analysis_session(&self) -> &Arc<AnalysisSession> {
         &self.session
@@ -503,6 +520,11 @@ fn is_attached(conn: &Connection, alias: &str) -> bool {
 ///
 /// 失败不抛：状态就是结论（挂不上的源不该把整条会话带下去）。
 fn attach_source(conn: &Connection, source: &FederatedSource) -> MountState {
+    // 已挂上就直接算 Ready（同一条会话重挂自己的源是幂等的）。
+    //
+    // **已知边界（2g 收口）**：`ATTACH` 出来的 catalog 是**实例级**的，别名不再只属于
+    // 本会话。若另一个源在别处抢先占了同名别名，这里会把它当成"自己的"报 Ready，
+    // 查询就静默指到那个库上（加速档已用 `reserve_alias` 收口，联邦侧还没接）。
     if is_attached(conn, &source.alias) {
         return MountState::Ready {
             tables: count_tables(conn, &source.alias).unwrap_or(0),
@@ -1374,15 +1396,18 @@ mod tests {
     }
 
     /// 源清单没变 → 复用同一条会话（换主源也不重建）；变了 → 重建
+    ///
+    /// 别名刻意带 `cache_` 前缀：`ATTACH` 出来的 catalog 是**实例级**的，而这条用例走的是
+    /// 全局门面（同一个进程实例），跟别的用例共用 `alpha`/`beta` 会撞上先挂好的那个库。
     #[test]
     fn the_session_is_reused_until_the_source_set_changes() {
         let dir = workdir("cache");
-        let alpha = file_source(&dir, "alpha", "alpha", 1);
-        let beta = file_source(&dir, "beta", "beta", 2);
-        let gamma = file_source(&dir, "gamma", "gamma", 3);
+        let alpha = file_source(&dir, "alpha", "cache_a", 1);
+        let beta = file_source(&dir, "beta", "cache_b", 2);
+        let gamma = file_source(&dir, "gamma", "cache_g", 3);
         let owner = "C_fed_cache";
 
-        let first = super::ensure_session(owner, &[alpha.clone(), beta.clone()], Some("alpha"))
+        let first = super::ensure_session(owner, &[alpha.clone(), beta.clone()], Some("cache_a"))
             .expect("建会话");
         let count = first
             .run("SELECT count(*) AS n FROM items")
@@ -1393,10 +1418,10 @@ mod tests {
         first
             .run("CREATE TEMP TABLE scratch AS SELECT 7 AS n")
             .expect("建本地临时表");
-        let switched = super::ensure_session(owner, &[alpha.clone(), beta.clone()], Some("beta"))
+        let switched = super::ensure_session(owner, &[alpha.clone(), beta.clone()], Some("cache_b"))
             .expect("复用会话");
         assert!(Arc::ptr_eq(&first, &switched), "换主源不该重建会话");
-        assert_eq!(switched.snapshot().primary.as_deref(), Some("beta"));
+        assert_eq!(switched.snapshot().primary.as_deref(), Some("cache_b"));
         let count = switched
             .run("SELECT count(*) AS n FROM items")
             .expect("查新主源");
@@ -1411,7 +1436,7 @@ mod tests {
         assert!(!Arc::ptr_eq(&switched, &rebuilt), "源清单变了就该重建");
         let snapshot = rebuilt.snapshot();
         assert_eq!(snapshot.sources.len(), 1, "{snapshot:?}");
-        assert_eq!(snapshot.primary.as_deref(), Some("gamma"));
+        assert_eq!(snapshot.primary.as_deref(), Some("cache_g"));
         let count = rebuilt
             .run("SELECT count(*) AS n FROM items")
             .expect("查新源");
@@ -1437,13 +1462,15 @@ mod tests {
     }
 
     /// 刷新全部：逐源给结果（界面上要能逐行说清）
+    ///
+    /// 别名同样带前缀：`ATTACH` 的 catalog 是实例级的，这条用例共用全局实例。
     #[test]
     fn refresh_all_reports_each_source() {
         let dir = workdir("refresh_all");
-        let alpha = file_source(&dir, "alpha", "alpha", 1);
-        let beta = file_source(&dir, "beta", "beta", 1);
+        let alpha = file_source(&dir, "alpha", "refresh_a", 1);
+        let beta = file_source(&dir, "beta", "refresh_b", 1);
         let owner = "C_fed_refresh_all";
-        super::ensure_session(owner, &[alpha, beta], Some("alpha")).expect("建会话");
+        super::ensure_session(owner, &[alpha, beta], Some("refresh_a")).expect("建会话");
 
         let results = super::refresh_all(owner).expect("刷新全部");
         assert_eq!(results.len(), 2, "{results:?}");

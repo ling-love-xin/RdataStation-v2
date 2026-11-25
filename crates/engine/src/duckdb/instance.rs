@@ -163,13 +163,18 @@ pub struct AnalysisSession {
     id: String,
     label: String,
     owner: String,
-    conn: Mutex<Connection>,
+    conn: Arc<Mutex<Connection>>,
     interrupt: Arc<InterruptHandle>,
     running: AtomicBool,
     closed: AtomicBool,
     created_at_ms: AtomicU64,
     last_used_ms: AtomicU64,
     queries: AtomicU64,
+    /// 本会话最近一次挂载的结果（逐源状态：`Ready` / `Failed` 的原话都在这里）。
+    ///
+    /// 为什么要存：`ATTACH` 出去以后，某条源为什么不可用只有挂载那一步知道；
+    /// 面板 / 全局库核对想报原话时，不该再挂一遍去找原因。
+    mounted: Mutex<Vec<super::federation::registry::MountedSource>>,
     /// 弱引用：实例持有会话，会话反向取车道 / 登记册，不能成环
     instance: Weak<AnalysisInstance>,
 }
@@ -203,9 +208,9 @@ fn control_has_database(conn: &Connection, alias: &str) -> bool {
     .unwrap_or(false)
 }
 
-static INSTANCE: OnceLock<Mutex<Option<Weak<AnalysisInstance>>>> = OnceLock::new();
+static INSTANCE: OnceLock<Mutex<Option<Arc<AnalysisInstance>>>> = OnceLock::new();
 
-fn instance_slot() -> &'static Mutex<Option<Weak<AnalysisInstance>>> {
+fn instance_slot() -> &'static Mutex<Option<Arc<AnalysisInstance>>> {
     INSTANCE.get_or_init(|| Mutex::new(None))
 }
 
@@ -213,18 +218,19 @@ fn instance_slot() -> &'static Mutex<Option<Weak<AnalysisInstance>>> {
 ///
 /// **会做 I/O**（首次建库、挂底座），属事件路径；渲染路径用
 /// [`crate::duckdb::instance::current`] 取已有实例（不建）。
+///
+/// 槽里放的是 **强引用**：会话只持有 `Weak`，若这里也放 `Weak`，最后一个调用方
+/// 一放手实例就没了、所有会话跟着失效（"进程单例"必须活到 `drop_instance`）。
 pub fn instance() -> Result<Arc<AnalysisInstance>, String> {
     let slot = instance_slot();
     let mut guard = slot
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(weak) = guard.as_ref() {
-        if let Some(instance) = weak.upgrade() {
-            return Ok(instance);
-        }
+    if let Some(instance) = guard.as_ref() {
+        return Ok(instance.clone());
     }
     let instance = AnalysisInstance::open()?;
-    *guard = Some(Arc::downgrade(&instance));
+    *guard = Some(instance.clone());
     Ok(instance)
 }
 
@@ -234,7 +240,7 @@ pub fn current() -> Option<Arc<AnalysisInstance>> {
         .lock()
         .ok()?
         .as_ref()
-        .and_then(Weak::upgrade)
+        .map(|instance| instance.clone())
 }
 
 /// 放掉全局实例（测试 / 切项目重建时用：会话全关、连接释放）。
@@ -353,13 +359,14 @@ impl AnalysisInstance {
             id: id.clone(),
             label: label.to_string(),
             owner: owner.to_string(),
-            conn: Mutex::new(conn),
+            conn: Arc::new(Mutex::new(conn)),
             interrupt,
             running: AtomicBool::new(false),
             closed: AtomicBool::new(false),
             created_at_ms: AtomicU64::new(stamp),
             last_used_ms: AtomicU64::new(stamp),
             queries: AtomicU64::new(0),
+            mounted: Mutex::new(Vec::new()),
             instance: Arc::downgrade(self),
         });
         state.sessions.insert(id.clone(), session.clone());
@@ -472,6 +479,14 @@ impl AnalysisInstance {
         // 并发下可能刚有人用同一别名挂了 ATTACH：这里只登记不重复挂，
         // 真挂载由 federation::session / 调用方负责（按别名判重）。
         Ok(alias)
+    }
+
+    /// **进程面**会话（owner `process`）：导出、结果集临时表、洞察取样都落在这条上。
+    ///
+    /// 与文档会话共享 catalog（底座 + 源别名），`TEMP` / 临时表也彼此可见——这正是
+    /// "取样的 `tmp_i_` 与源、与 `tmp_q_` 能一起 JOIN"的前提。
+    pub fn process_session(self: &Arc<Self>) -> Result<Arc<AnalysisSession>, String> {
+        self.ensure_session("process", "process")
     }
 
     /// 本地加速档的 owner 键（内核与工作台共用一份，别各自拼字符串）。
@@ -729,6 +744,15 @@ impl AnalysisSession {
         !self.closed.load(Ordering::SeqCst)
     }
 
+    /// 底层连接的**共享句柄**（`Arc<Mutex<Connection>>`）。
+    ///
+    /// 给"进程单例"这类历史入口用：它们要的是 `lock()` 之后直接 `prepare` / `execute`，
+    /// 不想改签名。注意走这里**绕开**写车道与超时——只给内部短语句（CTAS 临时表、TTL 清理）用；
+    /// 用户 SQL 一律走 [`Self::run`]。
+    pub fn connection_handle(&self) -> Arc<Mutex<Connection>> {
+        self.conn.clone()
+    }
+
     pub fn info(&self) -> SessionInfo {
         SessionInfo {
             id: self.id.clone(),
@@ -837,7 +861,22 @@ impl AnalysisSession {
             .conn
             .lock()
             .map_err(|_| "会话连接锁被污染（上一条语句崩了），重开一条会话".to_string())?;
-        super::federation::session::mount_into(&conn, sources)
+        let mounted = super::federation::session::mount_into(&conn, sources)?;
+        if let Ok(mut stored) = self.mounted.lock() {
+            for entry in &mounted {
+                stored.retain(|existing| existing.alias() != entry.alias());
+                stored.push(entry.clone());
+            }
+        }
+        Ok(mounted)
+    }
+
+    /// 本会话最近一次挂载的逐源状态（纯内存读，渲染路径可调）。
+    pub fn mounted_sources(&self) -> Vec<super::federation::registry::MountedSource> {
+        self.mounted
+            .lock()
+            .map(|stored| stored.clone())
+            .unwrap_or_default()
     }
 
     /// 借本会话的连接跑一小段逻辑（**不接管执行**：只给需要直接 `execute_batch` 的调用方，

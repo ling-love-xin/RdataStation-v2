@@ -10,18 +10,14 @@
 //! 「计划说要挂 A（别名 a1）」和「宿主给的源别名是 a2」必须当场对上账，否则查询会在
 //! 一条名字不对的 catalog 上跑，报的还是「表不存在」这种误导性错误。
 
-use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use duckdb::Connection;
 use shared::error::{CommonError, CoreError};
 use shared::models::QueryResult;
 
 use crate::duckdb::accel::{self, AccelSource};
 use crate::duckdb::federation::registry::FederatedSource;
-use crate::duckdb::federation::session::FederatedSession;
 use crate::duckdb::instance::{self, AnalysisSession};
-use crate::services::duckdb_service::DuckDbService;
 
 use super::channel::AnalysisChannel;
 use super::mount::{MountSpec, SessionPlan};
@@ -73,24 +69,17 @@ impl PreparedMounts {
     }
 }
 
-/// 进程内单例上一条 SQL 的「正在跑」标志（`run_sql_on` 要求一个 `AtomicBool`）。
+/// 内核交出去的会话句柄：**只有两种**——「没有 DuckDB 会话」与「实例上的一条会话」。
 ///
-/// 单例本身是 `Mutex` 串行的，一条连接上不可能有两条 SQL 并发；用**同一个**静态标志
-/// 正是这个事实的写法——不需要按调用方各发一个。
-static PROCESS_RUNNING: AtomicBool = AtomicBool::new(false);
-
-/// 内核交出去的会话句柄。执行面各一种，**不含隐藏的第五种**。
+/// 曾经的 `ProcessDb`（进程单例）与 `Federated`（每 owner 一条内存库）都退了：
+/// 进程单例现在是实例里 `owner = process` 那条会话（见 `duckdb/manager.rs::global`），
+/// 联邦 / 加速也都是实例上的会话，区别只在 `label`（档位词）。
 pub enum SessionHandle {
     /// 源库直连：没有 DuckDB 会话，SQL 交回驱动。
     None,
-    /// 进程内 DuckDB 单例（导出 / 临时表 / 洞察取样）。
-    ProcessDb(Arc<Mutex<Connection>>),
-    Federated(Arc<FederatedSession>),
-    /// 分析实例上的一条会话（2026-11-26 起本地加速 / 联邦都落这里）。
+    /// 分析实例上的一条会话。catalog（底座 + 源别名）由实例共享，`TEMP` 是本会话的。
     ///
-    /// 与 `Federated` 的区别不是"类型不同"，而是**不再各建一条内存库**：
-    /// catalog（底座 + 源别名）由实例共享，`TEMP` 仍是本会话的。`label` 保留原来的
-    /// 档位词（`accelerated` / `federated`），历史面板与日志不必改口径。
+    /// `label` 保留档位词（`process` / `accelerated` / `federated`），历史面板与日志不必改口径。
     Instance {
         session: Arc<AnalysisSession>,
         label: &'static str,
@@ -112,8 +101,6 @@ impl SessionHandle {
     pub fn channel_label(&self) -> &'static str {
         match self {
             Self::None => "source",
-            Self::ProcessDb(_) => "process",
-            Self::Federated(_) => "federated",
             Self::Instance { label, .. } => label,
         }
     }
@@ -132,13 +119,6 @@ impl SessionHandle {
             Self::None => Err(invalid(
                 "源库直连档没有 DuckDB 会话：SQL 应由驱动执行，不该交给内核".to_string(),
             )),
-            Self::ProcessDb(conn) => {
-                let guard = conn
-                    .lock()
-                    .map_err(|e| invalid(format!("DuckDB 单例锁中毒: {e}")))?;
-                accel::run_sql_on(&guard, &PROCESS_RUNNING, sql)
-            }
-            Self::Federated(session) => session.run(sql),
             Self::Instance { session, .. } => session.run(sql),
         }
     }
@@ -161,8 +141,14 @@ pub fn open(plan: &SessionPlan, prepared: &PreparedMounts) -> Result<SessionHand
                     "进程内 DuckDB 不挂载外部源：要挂源请走本地加速或联邦".to_string(),
                 ));
             }
-            let conn = DuckDbService::get_or_create_duckdb()?;
-            Ok(SessionHandle::ProcessDb(conn))
+            // 进程面就是实例里 `owner = process` 那条会话（`manager::global` 也拿这条连接的句柄）。
+            // 于是结果集 `tmp_q_` / 洞察 `tmp_i_` 与源、`rds_tmp` 同处一个 catalog。
+            let instance = instance::instance().map_err(invalid)?;
+            let session = instance.process_session().map_err(invalid)?;
+            Ok(SessionHandle::Instance {
+                session,
+                label: "process",
+            })
         }
         AnalysisChannel::Accelerated => {
             if !prepared.federated.is_empty() {
