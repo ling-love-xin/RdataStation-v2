@@ -84,6 +84,21 @@
 4. **批次 4 — 旧面板瘦身**：详情卡 / 树 / 入口迁出，宿主职责上移，删除 `EditorPanel`。
 5. **批次 5 — 收口**：`cargo check --workspace` 0 error；随迁移补齐 i18n 词条与出口包裹；同步本文档与 skill。
 
+### 5.0 实现归属（2026-11-26 收口，看这段比看分支名可靠）
+
+本任务的全部落地都在 `main` 这条线上完成，提交号见 §5.1 进度表（`2bae2306` / `25701a74` /
+`290c1ad5` / `8c62eb43` / `4d81c73f` / `7c751f54` / `b64114d7` 等）。
+
+同期另有一条隔离分支 `feat/workbench-dashboard-split`，是**同一设计在另一条线上做的第二份实现**，
+已于 2026-11-26 废弃删除。判据：① main 已具备 `panels/dashboard.rs`、`layout.dashboard_enabled`
+五处接线、`dashboard_panel` 共享字段、`ensure_dashboard_panel`、`ui_contract` 白名单；② 该分支
+唯一看着像未合的 `bb5c138c`（分组计数改纯文本 + 导航分组重命名原位编辑）在 main 上由
+`workbench_shell/src/tree.rs::group_count`（纯文本计数）与 `nav_view/rows.rs::group_rename_for`
+（原位重命名）等价实现，`git cherry-pick -n bb5c138c` 应用结果为空。
+
+**以后改这条线直接在 `main` 上改**，不要从历史分支找回；批次 4 的 2a / 2b / 2c 仍未落地，
+形态待拍板（见下）。
+
 ### 5.1 落地进度（main 工作区，2026-11-25）
 
 | 批次 | 状态 | main commit |
