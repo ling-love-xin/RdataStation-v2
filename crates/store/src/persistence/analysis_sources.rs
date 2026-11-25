@@ -134,9 +134,24 @@ pub fn ensure_tables(conn: &Connection) -> Result<(), CoreError> {
     .map_err(|e| storage_err("ensure_tables", e.to_string()))
 }
 
+/// 读**某个项目**的登记表：`{project_root}/.RSmeta/project.db`，同步、一次性连接。
+///
+/// 读路径**不造项目骨架**：文件不在就返回空（还没建项目 / 还没写过），不在这里
+/// `create_dir_all` 出一份假项目。面板每次刷新调一次——本地一次 open + 一次全表读，
+/// 比多养一个连接池便宜，也不需要 tokio 运行时（UI 线程的事件路径可以直接调）。
+pub fn list_in_project(
+    project_root: &std::path::Path,
+) -> Result<Vec<AnalysisSourceRow>, CoreError> {
+    let path = project_root.join(".RSmeta").join("project.db");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let conn = Connection::open(&path).map_err(|e| storage_err("open_project_db", e.to_string()))?;
+    list(&conn)
+}
+
 /// 全部登记行，按别名排序（面板树的顺序要稳定，不按写入时间抖）。
-pub fn list(conn: &Connection) -> Result<Vec<AnalysisSourceRow>, CoreError> {
-    ensure_tables(conn)?;
+pub fn list(conn: &Connection) -> Result<Vec<AnalysisSourceRow>, CoreError> {    ensure_tables(conn)?;
     let mut stmt = conn
         .prepare(
             "SELECT id, name, kind, connection_id, path, alias, mount_kind, created_at, updated_at
@@ -487,6 +502,35 @@ mod tests {
         let row = row("s_1", "shop_src");
         insert(&c, &row).expect("迁移建的表应能按同一套列写");
         assert_eq!(list(&c).expect("list").len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 项目根下的读路径：没有 `.RSmeta/project.db` 就是空清单（**不许**顺手建一个假项目），
+    /// 有库就按别名读出来。
+    #[test]
+    fn list_in_project_reads_the_project_db_or_returns_empty() {
+        let dir = std::env::temp_dir().join(format!("rds_sources_proj_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // ① 没有项目库：空，且目录里不会凭空长出 .RSmeta
+        assert!(list_in_project(&dir).expect("空项目应返回空").is_empty());
+        assert!(
+            !dir.join(".RSmeta").exists(),
+            "读路径不许造项目骨架"
+        );
+
+        // ② 真有库：按别名读出来
+        std::fs::create_dir_all(dir.join(".RSmeta")).expect("建目录");
+        let db_path = dir.join(".RSmeta").join("project.db");
+        {
+            let c = Connection::open(&db_path).expect("open");
+            ensure_tables(&c).expect("建表");
+            insert(&c, &row("s_2", "zeta_src")).expect("写");
+            insert(&c, &row("s_1", "alpha_src")).expect("写");
+        }
+        let rows = list_in_project(&dir).expect("应能读出来");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].alias, "alpha_src", "按别名排序");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

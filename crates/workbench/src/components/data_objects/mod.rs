@@ -121,6 +121,46 @@ impl State {
     }
 }
 
+/// 源段一行的**挂载三态**（规格 §3）：登记（项目库意图）× 挂载（运行态事实）。
+///
+/// 为什么不是一个布尔：两半会各自独立地变——切项目登记没了、重开会话挂载没了。
+/// 只留「已挂载 / 未挂载」一列就分不出「从没挂过」和「挂过、会话被清掉了」，
+/// 而这两种在动作上完全不同（前者要挂，后者要重开）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MountState {
+    /// 登记了，且这一刻在实例里
+    MountedProject,
+    /// 没登记，但这一刻在实例里（会话级加源：切项目即清）
+    MountedSession,
+    /// 登记了，但这一刻不在实例里（意图还在，会话得重开）
+    Unmounted,
+}
+
+impl MountState {
+    /// 两半对账（**纯函数**）。判据只有一个：别名在不在 `duckdb_databases()`；
+    /// 登记侧来自项目库 `analysis_sources`。
+    pub fn from_facts(registered: bool, mounted: bool) -> Self {
+        match (registered, mounted) {
+            (true, true) => Self::MountedProject,
+            (true, false) => Self::Unmounted,
+            (false, true) => Self::MountedSession,
+            // 既没登记也没挂上：面板里本不该有这种行（它既没意图也没事实）。
+            // 真出现了（登记被删、会话也没了）就按「未挂载 · 项目级」说——允许重新挂；
+            // 冒充「已挂载 · 会话级」等于把一个不在实例里的东西说成在。
+            (false, false) => Self::Unmounted,
+        }
+    }
+
+    /// 行内小标原文（用户口径，别缩写：三种状态的差别就是这几个字）。
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::MountedProject => "已挂载 · 项目级",
+            Self::MountedSession => "已挂载 · 会话级",
+            Self::Unmounted => "未挂载 · 项目级",
+        }
+    }
+}
+
 /// 分组按**对象形态**排（2026-11-24 由六段并为**三段**：源 / 表 / 文件）：
 /// 段回答「这是什么形态的东西、怎么读」，业务身份（资产 / 未登记 / 结果集 / 全局 /
 /// 自建 / 落库 / 联邦 / 加速 / 文件库）全是行内小标。
@@ -342,6 +382,11 @@ pub struct ConnRow {
     pub driver: String,
     /// 库名 / 文件路径（`database` 字段；文件库驱动时是裸路径）
     pub database: Option<String>,
+    /// 登记状态 = 项目库 `analysis_sources` 里有这一条（「项目级意图」）。
+    ///
+    /// 旧标记 `use_duckdb_fed` 暂时也算登记（见 `collect` 的注释）：不然升级那一刻
+    /// 老用户已注册的源会集体从「项目级」掉成「会话级」，看着像被清掉了。
+    pub registered: bool,
 }
 
 /// 资产清单里的一行（只读，只给最新版本）。
@@ -386,6 +431,11 @@ pub struct Collected {
     pub session_sources: Vec<SessionSource>,
     /// 本地加速会话已挂上的源（`owner` = 源连接 id；`alias` 已翻译成连接显示名）
     pub accel_sources: Vec<SessionSource>,
+    /// 项目库 `analysis_sources` 的登记行（源段的「意图侧」）。
+    ///
+    /// 只存**项目级**意图；会话级加源不写库（切项目即清，写进去只会留假记录）。
+    /// 老连接（只有 `use_duckdb_fed` 标记、还没写进新表）由 [`ConnRow::registered`] 兜着。
+    pub registered_sources: Vec<engine::persistence::analysis_sources::AnalysisSourceRow>,
 }
 
 impl Collected {
@@ -404,6 +454,7 @@ impl Collected {
             assets: Vec::new(),
             session_sources: Vec::new(),
             accel_sources: Vec::new(),
+            registered_sources: Vec::new(),
         }
     }
 }
@@ -412,14 +463,41 @@ impl Collected {
 pub fn objects(collected: &Collected) -> Vec<Object> {
     let mut out = Vec::new();
 
+    // 登记侧的三把索引：按连接 id / 别名 / 本体路径各要一眼能查。
+    // 只读借用，不克隆行——每次刷新都要过一遍，几百条时不值得复制。
+    let registered_conns: Vec<&str> = collected
+        .registered_sources
+        .iter()
+        .filter_map(|row| row.connection_id.as_deref())
+        .collect();
+    let registered_aliases: Vec<&str> = collected
+        .registered_sources
+        .iter()
+        .map(|row| row.alias.as_str())
+        .collect();
+    let registered_paths: Vec<&str> = collected
+        .registered_sources
+        .iter()
+        .filter_map(|row| row.path.as_deref())
+        .collect();
+
     for source in &collected.session_sources {
+        // 挂载事实 = 会话真起来了（失败态不算挂上）；登记侧按别名查
+        let registered = registered_aliases.iter().any(|alias| alias == &source.alias);
+        let pill = match source.failed.is_some() {
+            // 挂载失败既不是「已挂载」也不该冒充三态里的任何一格：它就是失败
+            true => "挂载失败",
+            false => MountState::from_facts(registered, true).label(),
+        };
         out.push(Object {
             // 身份带 owner：同名别名可能在多个会话里同时存在
             key: format!("session:{}:{}", source.owner, source.alias),
             name: source.alias.clone(),
             note: match &source.failed {
                 Some(reason) => reason.clone(),
-                None => format!("{} · {}", source.owner, source.note),
+                // 小标现在是三态（规格 §3），挂载方式挪进副标题——不然用户分不清
+                // 这个“别名”是联邦挂的、还是加源加出来的
+                None => format!("联邦会话 · {} · {}", source.owner, source.note),
             },
             channel: Channel::Federated,
             life: Life::Session,
@@ -428,16 +506,17 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
                 None => State::Ready,
             },
             group: Group::Source,
-            pill: "联邦源",
+            pill,
             version: None,
             // 联邦源的表引用是 `<别名>.<schema>.<表>`，只给别名不算引用名
             sql_ref: None,
         });
     }
 
-    // 本地加速源：与联邦源同段（都是"挂进 DuckDB 的源"），pill 区分。
-    // 会话存在即挂载成功（加速档建会话失败不留会话），所以这里没有失败态。
+    // 本地加速源：与联邦源同段（都是"挂进 DuckDB 的源"），小标是三态。
+    // 会话存在即挂载成功（加速档建会话失败不留会话），所以这里 mounted 恒为真。
     for source in &collected.accel_sources {
+        let registered = registered_conns.iter().any(|id| id == &source.owner);
         out.push(Object {
             key: format!("accel:{}", source.owner),
             name: source.alias.clone(),
@@ -446,7 +525,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             life: Life::Session,
             state: State::Ready,
             group: Group::Source,
-            pill: "加速源",
+            pill: MountState::from_facts(registered, true).label(),
             version: None,
             // 加速档的表要切到该档才能引用，行上不给可直接抄的名字
             sql_ref: None,
@@ -486,6 +565,22 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             (Some(path), _) => format!("文件库 · {path}"),
             _ => conn.note.clone(),
         };
+        // 挂载事实：连上了 + 真挂进实例（文件库看 `loaded_files` 里有没有这个路径，
+        // 网络连接看加速会话有没有起来）。连不上就不可能有事实。
+        let mounted = connected
+            && not_mounted.is_none()
+            && (file_path.is_some() || accel_mounted);
+        let mount = MountState::from_facts(conn.registered, mounted);
+        // 登记过就把别名写进副标题：树的第一层是别名，行标题是连接名，不写就对不上
+        let registered_alias = collected
+            .registered_sources
+            .iter()
+            .find(|row| row.connection_id.as_deref() == Some(conn.id.as_str()))
+            .map(|row| row.alias.clone());
+        let note = match registered_alias {
+            Some(alias) => format!("{note} · 别名 {alias}"),
+            None => note,
+        };
         let state = if !connected {
             State::Failed("未连接 · 连上后可展开选表".to_string())
         } else if not_mounted.is_some() {
@@ -505,7 +600,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             life: Life::External,
             state,
             group: Group::Source,
-            pill: "源连接",
+            pill: mount.label(),
             version: None,
             // 连接本身不是数据对象：它下面展开的表才拼得出引用名
             sql_ref: None,
@@ -716,7 +811,11 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
                 Group::File
             },
             pill: if is_database {
-                "文件库"
+                // 库文件挂成 catalog：三态小标（登记过 = 项目级；加源随手挂的 = 会话级）
+                let registered = registered_paths
+                    .iter()
+                    .any(|known| same_file(known, path));
+                MountState::from_facts(registered, true).label()
             } else {
                 "已加载"
             },
@@ -1065,7 +1164,21 @@ pub fn analysis_sources(
                     sources.push(source);
                 }
             }
-            None => skipped.push(format!("{}（{}）", object.name, object.pill)),
+            None => {
+                // 跳过的原因要说**为什么取不了数**，不要拿行内小标凑数：
+                // 小标现在是挂载三态（`已挂载 · 会话级`），说不了「整库没有取样这回事」
+                let reason = if key.starts_with("asset:") {
+                    "资产本体不可读"
+                // 库文件挂的是 catalog，整库取样不成立：要在源段里按库表选
+                } else if matches!(key.split_once(':'), Some(("fileview", _))) {
+                    "整库文件，按库表取样"
+                } else if object.group == Group::Source {
+                    "源上还没有可读的表"
+                } else {
+                    "这类行不能直接取样"
+                };
+                skipped.push(format!("{}（{}）", object.name, reason))
+            }
         }
     }
 
@@ -1199,10 +1312,27 @@ pub fn persist_label(table: &str) -> String {
 /// `refresh_resources`），项目切换与资产增删都会推新——面板 refresh 时从它的 `view_rows`
 /// 翻译即可，取数只有这一份（这里不另开连接查库，避免两套真相）。
 pub fn collect(shared: &Shared) -> Collected {
-    // 源段只收**已注册成分析源**的连接（`use_duckdb_fed`）：没注册的是导航栏的对象，
-    // 不是分析源（铁律 B 组第 4 条）。注册过但没连上的仍进清单 —— 行上写「未连接」，
+    let project = shared.project.borrow().clone();
+    let project_open = project.is_some();
+    // 源段的**意图侧**：项目库 `analysis_sources` 的登记行（规格 §3）。
+    // 读路径只开一次 SQLite、不建库、不造项目骨架（见 `list_in_project`）；
+    // 读失败就当没有——登记是可选信息，不该把整个面板拖垮。
+    let registered_sources = project
+        .as_ref()
+        .and_then(|p| engine::persistence::analysis_sources::list_in_project(&p.root).ok())
+        .unwrap_or_default();
+    let registered_conn_ids: Vec<&str> = registered_sources
+        .iter()
+        .filter_map(|row| row.connection_id.as_deref())
+        .collect();
+
+    // 源段只收**已注册成分析源**的连接：没注册的是导航栏的对象，不是分析源
+    // （铁律 B 组第 4 条）。注册过但没连上的仍进清单 —— 行上写「未连接」，
     // 不给展开（没有表可列）。
-    // 这里零 I/O（连接清单是宿主快照），表清单交给展开时懒加载
+    //
+    // 登记判据两档：新表 `analysis_sources` 里有这条连接，**或**旧标记
+    // `use_duckdb_fed` 还亮着。旧标记必须继续算数——不然升级那一刻，老用户
+    // 已注册的源会从「项目级」集体掉成「会话级」，像被清掉了。
     let connections: Vec<ConnRow> = shared
         .connections
         .borrow()
@@ -1218,10 +1348,10 @@ pub fn collect(shared: &Shared) -> Collected {
             connected: item.connected,
             driver: item.driver.clone(),
             database: item.database.clone(),
+            registered: item.use_duckdb_fed
+                || registered_conn_ids.iter().any(|id| *id == item.id),
         })
         .collect();
-    let project = shared.project.borrow().clone();
-    let project_open = project.is_some();
     let analysis_tables = project
         .as_ref()
         .map(|p| {
@@ -1304,6 +1434,7 @@ pub fn collect(shared: &Shared) -> Collected {
         assets: Vec::new(),
         session_sources,
         accel_sources,
+        registered_sources,
     }
 }
 
@@ -1312,8 +1443,25 @@ mod tests {
     // 刻意不用 `use super::*`：会把 gpui 的 `test` 属性宏带进作用域。
     use super::{
         can_archive_snapshot, fileview_alias, objects, AssetRow, Channel, Collected, ConnRow,
-        Group, Life, Object, SessionSource, State,
+        Group, Life, MountState, Object, SessionSource, State,
     };
+    use engine::persistence::analysis_sources::{
+        AnalysisMountKind, AnalysisSourceKind, AnalysisSourceRow,
+    };
+
+    fn registered_row(id: &str, name: &str, conn: Option<&str>, alias: &str) -> AnalysisSourceRow {
+        AnalysisSourceRow {
+            id: id.to_string(),
+            name: name.to_string(),
+            kind: AnalysisSourceKind::Conn,
+            connection_id: conn.map(str::to_string),
+            path: None,
+            alias: alias.to_string(),
+            mount_kind: AnalysisMountKind::Accel,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
 
     fn sample() -> Collected {
         Collected {
@@ -1324,6 +1472,7 @@ mod tests {
                 connected: true,
                 driver: "mysql".into(),
                 database: Some("orders".into()),
+                registered: true,
             }],
             analysis_tables: vec!["res_订单明细_20261115103000".into(), "数据修复".into()],
             // sample 代表「项目开着」的常态：`analysis_tables` 是权威全集
@@ -1366,6 +1515,13 @@ mod tests {
                 note: "订单库 · MySQL · 本地加速会话".into(),
                 failed: None,
             }],
+            // 一条项目级登记：订单库以 `rds_src` 挂进来（加速档固定别名）
+            registered_sources: vec![registered_row(
+                "src_1",
+                "订单库",
+                Some("C_mysql_9"),
+                "rds_src",
+            )],
         }
     }
 
@@ -1750,7 +1906,7 @@ mod tests {
             .find(|o| matches!(o.state, State::Failed(_)))
             .unwrap();
         assert_eq!(failed.group, Group::Source);
-        assert_eq!(failed.pill, "联邦源");
+        assert_eq!(failed.pill, "挂载失败", "挂载失败的行不许冒充三态里的任何一格");
         assert_eq!(failed.note, "扩展未安装");
         assert!(!failed.can_analyze());
     }
@@ -1923,7 +2079,7 @@ mod tests {
             .find(|o| o.key == "fileview:f_warehouse")
             .expect("库文件要有行");
         assert_eq!(db_file.group, Group::Source, "ATTACH 的库是源");
-        assert_eq!(db_file.pill, "文件库");
+        assert_eq!(db_file.pill, "已挂载 · 会话级", "加源随手挂的库文件没登记：会话级");
         assert!(
             super::source_ref(&db_file.key).is_some(),
             "库文件行可展开列表"
@@ -1944,7 +2100,10 @@ mod tests {
         assert_eq!(sources.len(), 1, "{sources:?}");
         assert!(sources[0].sql.contains("f_sales"), "{sources:?}");
         assert_eq!(skipped.len(), 1, "库文件整库取样不成立：{skipped:?}");
-        assert!(skipped[0].contains("文件库"), "{skipped:?}");
+        assert!(
+            skipped[0].contains("整库"),
+            "跳过原因要说清是整库（不是把挂载三态当原因）：{skipped:?}"
+        );
     }
 
     /// 本地加速源进源段：pill 区分「加速源」，副标题把「要切通道」说清。
@@ -1956,7 +2115,7 @@ mod tests {
             .find(|o| o.key == "accel:C_mysql_9")
             .expect("加速源要有行");
         assert_eq!(accel.group, Group::Source);
-        assert_eq!(accel.pill, "加速源");
+        assert_eq!(accel.pill, "已挂载 · 项目级", "登记过的连接 = 项目级");
         assert_eq!(accel.channel, Channel::Accel);
         assert_eq!(accel.life, Life::Session);
         assert!(accel.can_analyze(), "会话在就是挂上了");
@@ -2021,6 +2180,53 @@ mod tests {
         assert_eq!(groups[1].1, vec![2]);
     }
 
+    /// 三态 = 登记 × 挂载（规格 §3）。四种组合只有三种会被摆到界面上；
+    /// 「既没登记也没挂上」要按「未挂载 · 项目级」说，不许冒充「已挂载 · 会话级」。
+    #[test]
+    fn mount_state_joins_registry_and_facts() {
+        assert_eq!(
+            MountState::from_facts(true, true).label(),
+            "已挂载 · 项目级"
+        );
+        assert_eq!(
+            MountState::from_facts(false, true).label(),
+            "已挂载 · 会话级"
+        );
+        assert_eq!(
+            MountState::from_facts(true, false).label(),
+            "未挂载 · 项目级"
+        );
+        assert_eq!(
+            MountState::from_facts(false, false).label(),
+            "未挂载 · 项目级",
+            "两半都没有时不冒充「已挂载 · 会话级」"
+        );
+    }
+
+    /// 没登记、但加速会话在：这一行要说「已挂载 · 会话级」——切项目它会消失。
+    #[test]
+    fn mounted_without_registry_is_session_level() {
+        let mut c = sample();
+        c.registered_sources.clear();
+        // 旧标记也要关掉：`ConnRow.registered` 是 collect 里合成的，这里直接改
+        c.connections[0].registered = false;
+
+        let accel = objects(&c)
+            .into_iter()
+            .find(|o| o.key == "accel:C_mysql_9")
+            .expect("加速源要有行");
+        assert_eq!(accel.pill, "已挂载 · 会话级");
+
+        let conn = objects(&c)
+            .into_iter()
+            .find(|o| o.key == "conn:C_mysql_9")
+            .expect("连接行要在");
+        assert_eq!(
+            conn.pill, "已挂载 · 会话级",
+            "挂上了但没登记：会话级，不是项目级"
+        );
+    }
+
     /// 源行 key → 展开目标：联邦源按最后一个冒号切（owner 可能带冒号），加速源直取；
     /// 其它行没有下一层。
     #[test]
@@ -2067,7 +2273,7 @@ mod tests {
             .find(|o| o.key == "conn:C_mysql_9")
             .expect("已连接的连接要有一行");
         assert_eq!(conn.group, Group::Source);
-        assert_eq!(conn.pill, "源连接");
+        assert_eq!(conn.pill, "已挂载 · 项目级", "登记 + 挂上 = 项目级");
         assert_eq!(conn.channel, Channel::Source, "读法是连接下推");
         assert_eq!(conn.life, Life::External, "表在源库上，不在我们管的库里");
         assert!(conn.note.contains("MySQL"), "副标题要写驱动：{}", conn.note);
@@ -2081,6 +2287,7 @@ mod tests {
             connected: false,
             driver: "postgres".into(),
             database: Some("dw".into()),
+            registered: true,
         });
         let rows = objects(&offline);
         let down = rows
@@ -2367,6 +2574,7 @@ mod temp_source_tests {
             connected: true,
             driver: "duckdb".into(),
             database: Some("D:/data/销售.duckdb".into()),
+            registered: true,
         });
         let row = objects(&c)
             .into_iter()
