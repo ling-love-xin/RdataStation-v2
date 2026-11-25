@@ -1592,14 +1592,16 @@ pub fn collect(shared: &Shared) -> Collected {
         })
         .collect();
 
-    // 本地加速会话：树根写**真实别名**（加速档固定 `rds_src`，规格 §6 的例外），
+    // 挂在分析实例上的源连接：树根写**实际别名**（冲突让位后可能是 `rds_src_2`），
     // 连接名进 note。用户要认「这是哪条连接」，但树根必须与 `duckdb_databases()`
     // 里那个 catalog 名一致，否则三级树的第一层就跟事实对不上。
     let accel_sources = {
         let connections = shared.connections.borrow();
-        engine::duckdb::accel::owners()
+        engine::duckdb::instance::current()
+            .map(|instance| instance.mounted_conns())
+            .unwrap_or_default()
             .into_iter()
-            .map(|(conn_id, kind)| {
+            .map(|(conn_id, alias, kind)| {
                 let conn_name = connections
                     .iter()
                     .find(|item| item.id == conn_id)
@@ -1607,8 +1609,8 @@ pub fn collect(shared: &Shared) -> Collected {
                     .unwrap_or_else(|| conn_id.clone());
                 SessionSource {
                     owner: conn_id,
-                    alias: engine::duckdb::accel::SOURCE_ALIAS.to_string(),
-                    note: format!("{conn_name} · {} · 本地加速会话", kind.label()),
+                    alias,
+                    note: format!("{conn_name} · {} · 分析实例挂载", kind.label()),
                     failed: None,
                 }
             })

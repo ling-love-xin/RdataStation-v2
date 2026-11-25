@@ -182,37 +182,10 @@ pub fn open(plan: &SessionPlan, prepared: &PreparedMounts) -> Result<SessionHand
                 .ok_or_else(|| invalid("本地加速档的计划没有源".to_string()))?;
             check_same_mount(expected, &prepared_accel.mount, "本地加速")?;
             // 本地加速也落**同一个分析实例**：一条会话 + 挂这一条源，不再另起内存库。
-            // owner 用源连接 id：同一源上的多份文档共用这条会话（与原加速档的缓存键一致）。
-            let instance = instance::instance().map_err(invalid)?;
-            let owner = format!("accel:{}", prepared_accel.source.conn_id);
-            let session = instance
-                .ensure_session(&owner, "本地加速")
-                .map_err(invalid)?;
-            // 别名必须**按源唯一**：单实例下两条加速源不能都叫 `rds_src`，否则第二个
-            // `ATTACH` 会命中"已挂"判定并静默指到第一个源。冲突时由实例单点让位
-            // （`rds_src` → `rds_src_2`），并把实际别名记进实例的 `conn_alias` 供面板查表。
-            let alias = instance
-                .reserve_alias(accel::SOURCE_ALIAS, &prepared_accel.source.conn_id)
-                .map_err(invalid)?;
-            let source = FederatedSource {
-                conn_id: prepared_accel.source.conn_id.clone(),
-                alias: alias.clone(),
-                kind: prepared_accel.source.kind,
-                connection_string: prepared_accel.source.connection_string.clone(),
-                secret: None,
-            };
-            let mounted = session
-                .mount_sources(std::slice::from_ref(&source))
-                .map_err(invalid)?;
-            // 加速档只挂一条源：挂不上就是这条通道不能用，当场说清而不是等查询报"表不存在"
-            if let Some(entry) = mounted.first() {
-                if let crate::duckdb::federation::registry::MountState::Failed(reason) = &entry.state
-                {
-                    return Err(invalid(reason.clone()));
-                }
-            }
-            // 未限定名要落在这一条源上（旧加速档同样 `USE rds_src`）
-            session.use_catalog(&alias).map_err(invalid)?;
+            // 别名按源唯一、幂等判重、`USE` 都收在 `accel::ensure_on_instance` 一处——
+            // 编辑器里直跑的加速档走的也是它，两边各写一遍迟早给出两套挂载事实。
+            let (session, _alias) =
+                accel::ensure_on_instance(&prepared_accel.source).map_err(invalid)?;
             Ok(SessionHandle::Instance {
                 session,
                 label: "accelerated",

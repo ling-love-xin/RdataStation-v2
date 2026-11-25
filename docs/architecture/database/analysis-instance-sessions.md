@@ -67,7 +67,8 @@
 | 2b | 底座挂实例 + 换项目 `refresh_bases` | ✅ `009baedf` |
 | 2c | 联邦会话门面化：`FederatedSession` 只持有 `Arc<AnalysisSession>`，不再自建内存库 | ✅ `fa71c4f6` |
 | 2d | 加速档别名按源唯一（`reserve_alias` + 实例 `conn_alias` 映射 + `USE` 实际别名） | ✅ 本刀 |
-| 2e | `accel` 模块退役（删 `AccelSession` / `ensure_session` 缓存）与工作台消费方迁移 | ⬜ 阻塞：本分支基线缺他人未提交的 `editor_files::attach` 改动，`rds-workbench` 在此分支编不过 |
+| 2e | 消费方迁移：工作台三处 `accel::session_for` / 编辑器直跑加速档 / 卸载 / 会话源树根全部改读实例 | ✅ 本刀（`accel::ensure_on_instance` 单一入口） |
+| 2e-1 | `accel` 模块退役（删 `AccelSession` / `ensure_session` / `SESSIONS` 缓存 / `owners` / `drop_session` / `cancel` / `list_tables_for`） | ⬜ 仅剩引擎集成测试（`duckdb_accel_probe.rs`、`federation_credentials_probe.rs`）还在引用 |
 | 2f | `SessionHandle::ProcessDb` / `Accelerated` / `Federated` 三个旧变体删除；`ProcessDuckDb` 取样落 `rds_tmp` | ⬜ 与 3 同一刀（取样表与下游读端必须同处一个实例） |
 | 3 | `rds_tmp` 自动登记（结果集保存 / 洞察取样落 `rds_tmp` 时登记） | ⬜ |
 | 4 | 保护接线（超时值从设置读、面板显示"被中断"） | ⬜ |
@@ -78,6 +79,20 @@
 **但手写 `rds_src.表名` 在第二条源上会失效**——面板按 `alias_for_conn(conn_id)` 显示真实别名。
 改这一刀的直接原因：单实例下所有加速源共用 `rds_src` 时，第二个 `ATTACH` 会命中"已挂载"判定，
 静默指到第一个源（多源查询结果串库的真实 bug）。
+
+**2e 的收口方式（挂载口径只剩一处）**：`accel::ensure_on_instance(source)` 同时做「申请别名 → 取源会话 →
+挂载（幂等）→ `USE`」，内核加速档、编辑器直跑加速档、面板右键「挂载」三处都调它。实例侧配套：
+
+| 入口 | 用途 |
+| --- | --- |
+| `AnalysisInstance::mounted_conns()` | 面板「会话源」树根：`(conn_id, 实际别名, kind)`，与 `duckdb_databases()` 一致 |
+| `AnalysisInstance::list_mounted_tables_for_conn(conn_id)` | 面板叶子：控制连接查元数据，限定名按登记的 `kind` 拼 |
+| `AnalysisInstance::session_for_conn(conn_id)` | 载入 / 归档「在这个源上再跑一条 SQL」；**不负责挂载** |
+| `AnalysisInstance::interrupt_conn(conn_id)` | 界面「取消」按源，不按会话 id |
+| `AnalysisInstance::unmount_conn(conn_id)` | 右键「卸载」：`DETACH` + 放别名 + 关该源会话，只断挂载不动连接 |
+
+判定"这个源挂没挂"一律读 `alias_for_conn`，**不再**由 `accel::session_for(conn_id).is_some()` 回答——
+那是旧的多实例口径，单实例下它必然为 `None`（加速档已不在自建会话）。
 
 ## 6. 验收口径
 

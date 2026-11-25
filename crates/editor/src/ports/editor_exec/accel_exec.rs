@@ -17,7 +17,7 @@ impl EngineQueryRunner {
         lineage: &str,
     ) -> Result<QueryData, String> {
         let source = self.accel_source(connection)?;
-        let session = accel::ensure_session(&source)?;
+        let (session, _alias) = accel::ensure_on_instance(&source)?;
         let (to_run, segmented) = match window_sql(sql, crate::execution::SEGMENT_ROWS, 0) {
             Some(wrapped) => (wrapped, true),
             None => (sql.to_string(), false),
@@ -59,7 +59,7 @@ impl EngineQueryRunner {
         limit: usize,
     ) -> Result<QueryData, String> {
         let source = self.accel_source(connection)?;
-        let session = accel::ensure_session(&source)?;
+        let (session, _alias) = accel::ensure_on_instance(&source)?;
         let wrapped =
             window_sql(sql, limit, offset).ok_or_else(|| "这份结果没有可再取的部分".to_string())?;
         let started = std::time::Instant::now();
@@ -88,7 +88,7 @@ impl EngineQueryRunner {
         lineage: &str,
     ) -> Result<QueryData, String> {
         let source = self.accel_source(connection)?;
-        let session = accel::ensure_session(&source)?;
+        let (session, _alias) = accel::ensure_on_instance(&source)?;
         let started = std::time::Instant::now();
         let outcome = session.run(&rewritten.sql);
         let elapsed_ms = started.elapsed().as_millis() as u64;

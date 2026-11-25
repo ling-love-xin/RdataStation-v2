@@ -147,7 +147,9 @@ pub fn load_kids(
             engine::duckdb::federation::session::list_tables_for(owner, alias).map(Kids::Mounted)
         }
         SourceRef::Accel { conn_id } => {
-            engine::duckdb::accel::list_tables_for(conn_id).map(Kids::Mounted)
+            let instance = engine::duckdb::instance::current()
+                .ok_or_else(|| "分析实例尚未启动（先跑一条查询）".to_string())?;
+            instance.list_mounted_tables_for_conn(conn_id).map(Kids::Mounted)
         }
         SourceRef::FileView { alias } => {
             engine::duckdb::file_view::list_tables_global(alias).map(Kids::Mounted)
@@ -158,17 +160,21 @@ pub fn load_kids(
 
 /// 连接行的叶子：**只从分析实例里取**（第 37 条），认不出挂载就如实说，不给空清单。
 ///
-/// 一个连接能挂进实例的路只有两条：本地加速会话（按 `conn_id` 登记）、文件库 ATTACH
-/// （`.duckdb` / `.sqlite`，按本体路径算别名）。两条都没有 = 这一刻实例里没有它的表，
-/// 展开只会得到空列表——所以这里报错并教怎么挂，而不是假装「库里没表」。
+/// 一个连接能挂进实例的路只有两条：本地加速（实例按 `conn_id` 记实际别名，冲突时
+/// 可能是 `rds_src_2`）、文件库 ATTACH（`.duckdb` / `.sqlite`，按本体路径算别名）。
+/// 两条都没有 = 这一刻实例里没有它的表，展开只会得到空列表——所以这里报错并教怎么挂，
+/// 而不是假装「库里没表」。
 fn connection_kids(
     conn_id: &str,
     mounted_file: Option<&str>,
     display: &str,
 ) -> Result<Kids, String> {
-    if engine::duckdb::accel::session_for(conn_id).is_some() {
-        return engine::duckdb::accel::list_tables_for(conn_id)
-            .map(|tables| Kids::Connection(connection_leaves(conn_id, &tables)));
+    if let Some(instance) = engine::duckdb::instance::current() {
+        if instance.alias_for_conn(conn_id).is_some() {
+            return instance
+                .list_mounted_tables_for_conn(conn_id)
+                .map(|tables| Kids::Connection(connection_leaves(conn_id, &tables)));
+        }
     }
     if let Some(path) = mounted_file.filter(|path| engine::duckdb::file_view::is_database_file(path))
     {

@@ -566,6 +566,37 @@ pub fn ensure_session(source: &AccelSource) -> Result<Arc<AccelSession>, String>
     Ok(session)
 }
 
+/// 把一个加速源挂进**分析实例**，返回（该源在实例上的会话，实际别名）。
+///
+/// 单实例之后本地加速不再各自建内存库：源是**实例级**的 `ATTACH`，会话只负责 `USE`。
+/// 内核的加速档与编辑器里直跑的加速档都走这里——别名申请、幂等判重、`USE` 只有一份口径，
+/// 否则「同一个源两处各挂一遍」就会重演"第二个源指到第一个"的串库问题。
+pub fn ensure_on_instance(
+    source: &AccelSource,
+) -> Result<(Arc<super::instance::AnalysisSession>, String), String> {
+    use super::federation::registry::{FederatedSource, MountState};
+
+    let instance = super::instance::instance()?;
+    let alias = instance.reserve_alias(SOURCE_ALIAS, &source.conn_id, source.kind)?;
+    let session = instance.session_for_conn(&source.conn_id)?;
+    let mounted = session.mount_sources(&[FederatedSource {
+        conn_id: source.conn_id.clone(),
+        alias: alias.clone(),
+        kind: source.kind,
+        connection_string: source.connection_string.clone(),
+        secret: None,
+    }])?;
+    // 挂不上就是这条源不能用：当场说清，而不是等查询报"表不存在"
+    if let Some(entry) = mounted.first() {
+        if let MountState::Failed(reason) = &entry.state {
+            return Err(reason.clone());
+        }
+    }
+    // 未限定名落在这一条源上（与旧加速档的 `USE rds_src` 同一语义）
+    session.use_catalog(&alias)?;
+    Ok((session, alias))
+}
+
 /// 确保该源需要的扩展已就绪（统一走 [`super::extensions::ensure`]）
 ///
 /// 以前这里自己拼 `INSTALL … ; LOAD …` 且**每次建会话都跑一遍**（已装的只是被 DuckDB

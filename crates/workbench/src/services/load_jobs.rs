@@ -79,9 +79,16 @@ fn load(source: &SourceRef, qualified: &str, description: &str) -> Result<String
                 .map_err(|error| error.to_string())
         }
         SourceRef::Accel { conn_id } => {
-            let session = engine::duckdb::accel::session_for(conn_id).ok_or_else(|| {
-                "加速会话已经不在了（重新展开这个源，或重跑一条加速档查询再试）".to_string()
-            })?;
+            // 载入要在**挂着这个源的分析实例**里跑：`ATTACH` 是实例级事实，随便一条
+            // 实例会话都看得见它。没挂过就是真没挂，别在取会话时悄悄补挂。
+            let instance = engine::duckdb::instance::current()
+                .ok_or_else(|| "分析实例尚未启动（先跑一条查询）".to_string())?;
+            if instance.alias_for_conn(conn_id).is_none() {
+                return Err(
+                    "这个源还没挂进分析实例（重新展开它，或跑一条加速档查询再试）".to_string(),
+                );
+            }
+            let session = instance.session_for_conn(conn_id)?;
             load_qualified_from_session(qualified, description, |sql| {
                 session.run(sql).map(|_| ())
             })

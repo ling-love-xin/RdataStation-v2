@@ -47,7 +47,6 @@ use super::super::accel::{
     AccelKind, MountedTable, list_mounted_tables, mount_lock, scrub_credentials,
 };
 use super::super::instance::AnalysisSession;
-use super::super::manager::DuckDBManager;
 use super::registry::{FederatedSource, MountState, MountedSource, SessionSnapshot};
 
 /// 一条联邦会话：**分析实例上的一条会话** + 一批只读挂载的记账

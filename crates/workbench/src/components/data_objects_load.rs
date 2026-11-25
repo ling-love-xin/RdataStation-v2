@@ -439,14 +439,11 @@ pub fn mount_network_source(shared: &Shared, conn_id: &str, cx: &mut App) {
             return;
         }
     };
-    match engine::duckdb::accel::ensure_session(&source) {
-        Ok(_) => {
+    match engine::duckdb::accel::ensure_on_instance(&source) {
+        Ok((_session, alias)) => {
             refresh(shared, cx);
             shared.say(
-                format!(
-                    "已挂载 {conn_id}（本地加速档，catalog 名固定 {}）",
-                    engine::duckdb::accel::SOURCE_ALIAS
-                ),
+                format!("已挂载 {conn_id}（本地加速档，catalog 名 {alias}）"),
                 cx,
             );
         }
@@ -454,13 +451,18 @@ pub fn mount_network_source(shared: &Shared, conn_id: &str, cx: &mut App) {
     }
 }
 
-/// 卸下一条网络连接的加速会话（源段右键「卸载」）：只断挂载，不动连接本身。
+/// 卸下一条网络连接在**分析实例**上的挂载（源段右键「卸载」）：只断挂载，不动连接本身。
 pub fn unmount_network_source(shared: &Shared, conn_id: &str, cx: &mut App) {
-    if engine::duckdb::accel::drop_session(conn_id) {
-        refresh(shared, cx);
-        shared.say(format!("已卸载 {conn_id}（连接本身没断）"), cx);
-    } else {
-        shared.say_error(format!("{conn_id} 没有加速会话可卸"), cx);
+    let outcome = engine::duckdb::instance::current()
+        .map(|instance| instance.unmount_conn(conn_id))
+        .unwrap_or(Ok(false));
+    match outcome {
+        Ok(true) => {
+            refresh(shared, cx);
+            shared.say(format!("已卸载 {conn_id}（连接本身没断）"), cx);
+        }
+        Ok(false) => shared.say_error(format!("{conn_id} 没有挂载可卸"), cx),
+        Err(reason) => shared.say_error(format!("卸载失败：{reason}"), cx),
     }
 }
 

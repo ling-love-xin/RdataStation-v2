@@ -128,8 +128,9 @@ struct InstanceState {
     /// owner（文档 / 源连接 / 通道）→ 会话 id：同一 owner 再要会话时复用同一条，
     /// 这样"同一份文档两次执行"不会每次都换一条 `TEMP` 世界
     owners: HashMap<String, String>,
-    /// 源连接 id → 实际挂载别名（冲突时可能是 `name_2`；界面要按这个查表）
-    conn_alias: HashMap<String, String>,
+    /// 源连接 id → (实际挂载别名, 源的命名口径)。冲突时别名可能是 `name_2`；
+    /// 界面要按这个查表，限定名要按这个 kind 拼。
+    conn_alias: HashMap<String, (String, crate::duckdb::accel::AccelKind)>,
     mounts: MountRegistry,
     temps: Vec<TempEntry>,
     next_session: u64,
@@ -447,33 +448,171 @@ impl AnalysisInstance {
     }
 
     /// 为源连接申请实例级别名（唯一性由实例单点决定，后到者让位）。
-    pub fn reserve_alias(&self, wanted: &str, conn_id: &str) -> Result<String, String> {
+    ///
+    /// `kind` 一起记下来：面板要给出的限定名取决于源的命名口径（两段 / 三段），
+    /// 而那个 kind 只有挂载方（内核）知道，事后没人能反推。
+    pub fn reserve_alias(
+        &self,
+        wanted: &str,
+        conn_id: &str,
+        kind: crate::duckdb::accel::AccelKind,
+    ) -> Result<String, String> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| "实例状态锁被污染".to_string())?;
         // 同一个源重复挂 → 回原别名（幂等；`rds_src` 这类固定别名尤其要紧）
-        if let Some(alias) = state.conn_alias.get(conn_id) {
+        if let Some((alias, _)) = state.conn_alias.get(conn_id) {
             return Ok(alias.clone());
         }
         let alias = state.mounts.reserve(wanted, conn_id)?;
-        state.conn_alias.insert(conn_id.to_string(), alias.clone());
+        state
+            .conn_alias
+            .insert(conn_id.to_string(), (alias.clone(), kind));
         // 并发下可能刚有人用同一别名挂了 ATTACH：这里只登记不重复挂，
         // 真挂载由 federation::session / 调用方负责（按别名判重）。
         Ok(alias)
+    }
+
+    /// 本地加速档的 owner 键（内核与工作台共用一份，别各自拼字符串）。
+    pub fn accel_owner(conn_id: &str) -> String {
+        format!("accel:{conn_id}")
+    }
+
+    /// 某源连接此刻的会话（没有就开一条）。
+    ///
+    /// 用途：载入 / 归档这类「在那个源上再跑一条 SQL」的活。catalog 是实例级共享的，
+    /// 新会话照样看得见已挂载的源；**这里不负责挂载**——挂载是实例级事实，
+    /// 没挂过先用 [`Self::alias_for_conn`] 判断，别在取会话时悄悄挂上去。
+    pub fn session_for_conn(
+        self: &Arc<Self>,
+        conn_id: &str,
+    ) -> Result<Arc<AnalysisSession>, String> {
+        self.ensure_session(&Self::accel_owner(conn_id), "本地加速")
+    }
+
+    /// 中断某个源连接上的会话（界面「取消」按的是源，不是某条会话 id）。
+    pub fn interrupt_conn(&self, conn_id: &str) -> Result<bool, String> {
+        let session = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| "实例状态锁被污染".to_string())?;
+            let id = state
+                .owners
+                .get(&Self::accel_owner(conn_id))
+                .ok_or_else(|| "这个源还没有会话（没跑过加速档查询）".to_string())?;
+            state
+                .sessions
+                .get(id)
+                .cloned()
+                .ok_or_else(|| "这个源还没有会话（没跑过加速档查询）".to_string())?
+        };
+        Ok(session.interrupt())
+    }
+
+    /// 此刻挂在实例上的所有源连接：`(conn_id, 实际别名, 源的命名口径)`。
+    ///
+    /// 面板的「会话源」树根按它渲染——树根必须与 `duckdb_databases()` 里的 catalog 名
+    /// 一致，所以给的是**实际别名**（冲突让位后的 `rds_src_2` 也算）。
+    pub fn mounted_conns(&self) -> Vec<(String, String, crate::duckdb::accel::AccelKind)> {
+        let Ok(state) = self.state.lock() else {
+            return Vec::new();
+        };
+        state
+            .conn_alias
+            .iter()
+            .map(|(conn_id, (alias, kind))| (conn_id.clone(), alias.clone(), kind.clone()))
+            .collect()
+    }
+
+    /// 卸下某个源连接的挂载（面板右键「卸载」）：`DETACH` + 放别名 + 关它在实例上的会话。
+    ///
+    /// 只断挂载，不动连接本身；返回 `false` = 这个源本来就没挂（调用方据此提示）。
+    pub fn unmount_conn(&self, conn_id: &str) -> Result<bool, String> {
+        let Some(alias) = self.alias_for_conn(conn_id) else {
+            return Ok(false);
+        };
+        let valid = !alias.is_empty()
+            && alias
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+        if !valid {
+            return Err(format!("别名 {alias:?} 里有不允许的字符，拒绝拿去拼 SQL"));
+        }
+        {
+            let conn = self
+                .control
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            // 控制连接可能停在别的 catalog 上；`DETACH` 前先回 memory，
+            // 否则"正被使用"会让卸下失败
+            let _ = conn.execute_batch("USE memory");
+            conn.execute_batch(&format!("DETACH {alias}"))
+                .map_err(|error| format!("卸下 {alias} 失败：{error}"))?;
+        }
+        self.release_alias(&alias);
+        // 会话一并关掉：源都不在了，留着它只会让面板看到一条空会话
+        let session = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| "实例状态锁被污染".to_string())?;
+            let owner = Self::accel_owner(conn_id);
+            state
+                .owners
+                .remove(&owner)
+                .and_then(|id| state.sessions.remove(&id))
+        };
+        if let Some(session) = session {
+            session.close();
+        }
+        Ok(true)
     }
 
     /// 某个源连接此刻挂在实例上的别名（**纯内存读**；没挂过就是 `None`）。
     ///
     /// 数据对象面板按它查表清单：挂载是实例级事实，不该再由"那个源自己有没有会话"回答。
     pub fn alias_for_conn(&self, conn_id: &str) -> Option<String> {
-        self.state.lock().ok()?.conn_alias.get(conn_id).cloned()
+        self.state
+            .lock()
+            .ok()?
+            .conn_alias
+            .get(conn_id)
+            .map(|(alias, _)| alias.clone())
     }
 
-    /// 列出某个别名下的表 / 视图（**事件路径**：要查 DuckDB 元数据）。
+    /// 列出某个源连接挂载下的表 / 视图（**事件路径**：要查 DuckDB 元数据）。
     ///
     /// 用控制连接查——它不属于任何会话，不受某条会话的 `USE` / `TEMP` 影响；
     /// 挂载是实例级事实，所以这里看到的正是"实例此刻能查到什么"。
+    /// 限定名按挂载时登记的 kind 算（两段 / 三段），与面板的「复制」一致。
+    pub fn list_mounted_tables_for_conn(
+        &self,
+        conn_id: &str,
+    ) -> Result<Vec<crate::duckdb::accel::MountedTable>, String> {
+        let (alias, kind) = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| "实例状态锁被污染".to_string())?;
+            state
+                .conn_alias
+                .get(conn_id)
+                .cloned()
+                .ok_or_else(|| "这个源还没挂进分析实例".to_string())?
+        };
+        let conn = self
+            .control
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        crate::duckdb::accel::list_mounted_tables(&conn, &alias, kind)
+    }
+
+    /// 列出某个别名下的表 / 视图名（**事件路径**：要查 DuckDB 元数据）。
+    ///
+    /// 只给名字、不拼限定名：限定名的口径随源 kind 变，那种事归
+    /// [`Self::list_mounted_tables_for_conn`]。这里留给「只想知道有没有表」的场景。
     pub fn list_tables_of_alias(&self, alias: &str) -> Result<Vec<String>, String> {
         let conn = self
             .control
@@ -497,7 +636,7 @@ impl AnalysisInstance {
     pub fn release_alias(&self, alias: &str) {
         if let Ok(mut state) = self.state.lock() {
             state.mounts.release(alias);
-            state.conn_alias.retain(|_, value| value != alias);
+            state.conn_alias.retain(|_, (value, _)| value != alias);
         }
     }
 
@@ -886,10 +1025,31 @@ mod tests {
     #[test]
     fn alias_conflicts_are_resolved_by_the_instance_single_point() {
         let instance = instance("t_alias");
-        assert_eq!(instance.reserve_alias("mysql_src", "conn-1").expect("首个"), "mysql_src");
-        assert_eq!(instance.reserve_alias("mysql_src", "conn-2").expect("第二个"), "mysql_src_2");
-        assert_eq!(instance.reserve_alias("mysql_src", "conn-1").expect("同一源重挂"), "mysql_src");
-        assert!(instance.reserve_alias("analytics", "conn-3").is_err(), "底座名要拒");
+        use crate::duckdb::accel::AccelKind;
+        assert_eq!(
+            instance
+                .reserve_alias("mysql_src", "conn-1", AccelKind::MySql)
+                .expect("首个"),
+            "mysql_src"
+        );
+        assert_eq!(
+            instance
+                .reserve_alias("mysql_src", "conn-2", AccelKind::MySql)
+                .expect("第二个"),
+            "mysql_src_2"
+        );
+        assert_eq!(
+            instance
+                .reserve_alias("mysql_src", "conn-1", AccelKind::MySql)
+                .expect("同一源重挂"),
+            "mysql_src"
+        );
+        assert!(
+            instance
+                .reserve_alias("analytics", "conn-3", AccelKind::DuckDb)
+                .is_err(),
+            "底座名要拒"
+        );
 
         // 面板按连接 id 查挂载事实：映射必须与 reserve 的结果一致
         assert_eq!(instance.alias_for_conn("conn-1").as_deref(), Some("mysql_src"));
@@ -898,7 +1058,12 @@ mod tests {
 
         instance.release_alias("mysql_src");
         assert_eq!(instance.alias_for_conn("conn-1"), None, "放掉别名要同时清映射");
-        assert_eq!(instance.reserve_alias("mysql_src", "conn-4").expect("放掉后可用"), "mysql_src");
+        assert_eq!(
+            instance
+                .reserve_alias("mysql_src", "conn-4", AccelKind::MySql)
+                .expect("放掉后可用"),
+            "mysql_src"
+        );
     }
 
     /// 超时会中断本会话的语句并给出可读错误，之后这条会话还能继续用。

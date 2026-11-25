@@ -451,7 +451,13 @@ impl QueryRunner for EngineQueryRunner {
         let mut cancelled = false;
         let mut reason: Option<String> = None;
         if let Some(conn_id) = self.resolve_conn_id(connection) {
-            for outcome in [accel::cancel(&conn_id), fed_session::cancel(&conn_id)] {
+            // 加速档的会话在**分析实例**上（按源连接 id 登记）；没挂过这个源就是 noop
+            let accel_outcome = engine::duckdb::instance::current().and_then(|instance| {
+                instance
+                    .alias_for_conn(&conn_id)
+                    .map(|_| instance.interrupt_conn(&conn_id))
+            });
+            for outcome in [accel_outcome, fed_session::cancel(&conn_id)] {
                 match outcome {
                     Some(Ok(true)) => cancelled = true,
                     Some(Ok(false)) | None => {}
