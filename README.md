@@ -537,7 +537,7 @@ tools/fetch-duckdb.sh
 cargo check -p rds-engine
 ```
 
-库落在 `third_party/duckdb/2.0.1/`（已 gitignore，`cargo clean` 不会删它）。**crate 版本与库版本必须成对升级**：`1.20001.0` ↔ DuckDB `v2.0.1`（第二段十进制数 `20001` → `2.0.1`）；版本不匹配会在**运行时**表现为缺符号，而不是编译报错。2.0 线另有三条连带约束：`arrow` 必须同批到 `60.2.0`（`duckdb 1.20001.0` 对它是非可选依赖，两端传 `RecordBatch` 必须是同一 arrow）；写出的库默认 storage version 69，**旧版 DuckDB 读不了**（存储格式单向兼容）；升级/回退口径见 `docs/architecture/dependencies/duckdb-2.0.1-upgrade-report.md`。
+库落在 `third_party/duckdb/2.0.1/`（已 gitignore，`cargo clean` 不会删它）。**crate 版本与库版本必须成对升级**：`1.20001.0` ↔ DuckDB `v2.0.1`（第二段十进制数 `20001` → `2.0.1`）；版本不匹配会在**运行时**表现为缺符号，而不是编译报错。2.0 线另有三条连带约束：`arrow` 必须同批到 `60.2.0`（`duckdb 1.20001.0` 对它是非可选依赖，两端传 `RecordBatch` 必须是同一 arrow）；写出的库默认 storage version 69，**旧版 DuckDB 读不了**（存储格式单向兼容）；本项目**只支持 2.0.1 客户端**，不兼容 1.5、也不做旧库版本探测/只读挂载——旧库要保 1.5 可读请在打开前自行备份；升级/回退口径见 `docs/architecture/dependencies/duckdb-2.0.1-upgrade-report.md`。
 
 ### 1. 构建与运行
 

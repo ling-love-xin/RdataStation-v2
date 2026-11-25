@@ -134,7 +134,7 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 
 | 依赖 | 当前 | 最新可用（2026-11-07 核实） | 代码使用点 | 备注 |
 | --- | --- | --- | --- | --- |
-| `duckdb` | `=1.20001.0`（DuckDB 2.0.1） | ✅ 已升（2026-11-26；隔离分支改完后合入 `main`，见 `duckdb-2.0.1-upgrade-report.md`） | `crates/engine`（`DUCKDB_LIB_DIR` 动态链接） | `arrow` 同批到 60.2.0；**必须 `=` 精确锁定**（caret 会被解析到 1.5 / 2.0 的别的补丁并连带换 arrow）；2.0 线有存储格式单向兼容（默认 storage version 69，旧版读不了）——回退要换回 1.5 的库并避免打开 2.0 写出的分析库 |
+| `duckdb` | `=1.20001.0`（DuckDB 2.0.1） | ✅ 已升（2026-11-26；隔离分支改完后合入 `main`，见 `duckdb-2.0.1-upgrade-report.md`） | `crates/engine`（`DUCKDB_LIB_DIR` 动态链接） | `arrow` 同批到 60.2.0；**必须 `=` 精确锁定**（caret 会被解析到 1.5 / 2.0 的别的补丁并连带换 arrow）；2.0 线有存储格式单向兼容（默认 storage version 69，旧版读不了）——**已决定不兼容 1.5 客户端**（不做版本探测 / 只读挂载，报告 §9.1）；回退只是把代码退回 1.5，且必须避免打开 2.0 写出的分析库 |
 | `arrow` | 60.2.0 | ✅ 已随 `duckdb` 同批升（2026-11-26） | — | **不可单独升**，须与 `duckdb` 同步（见 R4）；58→60 已核对：116 处引用符号全在、`DataType` 41 个变体零增删、default features 未变；`comfy-table` 7→8 同批 |
 | `gpui-kit` | `0.10.0` + `features = ["gpui-fast"]` | ✅ 已升（2026-11-22，隔离分支 `upgrade/core-2026-11-22`） | UI 全仓 | `cargo check --workspace` 0 error；`cargo test --workspace` 155 target 全 ok / 4617 passed / 0 failed；剩目视验收与 clippy，见 `core-packages-2026-11-22-upgrade-assessment.md` §11 / §12 |
 | `sqlglot-rust` | `=0.11.2` | ✅ 已升（2026-11-22） | `crates/sql` | 与 `lax-sql 0.3.0` 同批（语义走 sqlglot、排版走 lax）；854 条 SQL 用例与基线一致，见 `core-packages-2026-11-22-upgrade-assessment.md` §5 / §11.5 |

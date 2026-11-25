@@ -39,7 +39,8 @@
   `duckdb.dll` / `duckdb.lib` / `duckdb.h` / `duckdb_extension*.h`，19.2MB）；
   旧的 `libduckdb-windows-amd64.zip` 在 2.0.1 上已 404。`tools/fetch-duckdb.sh` 已按主版本号分档适配。
 - **存储格式单向**：2.0 可读写 1.5 建的文件并保持其旧存储版本号；2.0 **新建**的库是 storage v69，
-  1.5 读不了 —— 升上来即不可回退（要有"旧客户端还能不能打开项目分析库"的产品结论，见 §12 待办）。
+  1.5 读不了 —— 升上来即不可回退。**产品结论（2026-11-26）：不兼容 1.5 客户端，不做"版本探测 +
+  只读挂载"，旧库要保 1.5 可读只能打开前自行备份**（见 `duckdb-2.0.1-upgrade-report.md` §9.1）。
 - 实测（2026-11-26，2.0.1 全量回归）：`cargo test -p rds-engine --lib` **348 passed**、
   `cargo test -p rds-workbench --lib` **220 passed**；全工作区 `cargo test --workspace --lib -j 2`
   （跳过改动前就失败的 `ctrl_alt_f2_to_f6_toggle_the_right_panels`）**0 failed**。

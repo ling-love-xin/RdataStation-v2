@@ -8,7 +8,7 @@
 - 分析引擎从 **DuckDB 1.5.6** 升到 **2.0.1**，crate 从 `duckdb 1.10506.1` 升到 **`=1.20001.0`**（`libduckdb-sys` 同版）。
 - `arrow` **必须同批升**：`58.4.0` → **`60.2.0`**（`arrow-array` / `arrow-schema` 同为 60.2.0）；`comfy-table` 随之 `7.1` → **`8.0.1`**。
 - 项目代码**不是零改动**：2.0.1 改变了"源表清单何时定型""`search_path` 能否用""appender 认不认 schema"三件行为，引擎侧的会话 / 挂载 / 临时表路径随之重写（§5、§6）。
-- 存储格式**单向兼容**：2.0 能读写 1.5 建的文件（并保持其旧 storage version），但 2.0 **新建**的库是 `storage version 69`，1.5 **读不了**。这是本次升级唯一的不可逆点（§9）。
+- 存储格式**单向兼容**：2.0 能读写 1.5 建的文件（并保持其旧 storage version），但 2.0 **新建**的库是 `storage version 69`，1.5 **读不了**。这是本次升级唯一的不可逆点；**产品已拍板不兼容 1.5 客户端**（§9.1）。
 - 全仓版本口径已随之对齐（代码 / 文档 / 脚本 / 原型 / skill 面），清单见 §8。
 
 ## 2. 取证台账
@@ -103,10 +103,16 @@
 
 **不改的部分（历史实证型）**：`DuckDB 1.5.5 的 mysql/pg 扫描器不认 Secret`（`connection/secret.rs`、`connection_dialog`、`editor_exec/conn.rs`、`accel.rs`、`data_objects_load.rs`）、`duckdb-rs 1.10505 列元数据须执行后可读`（`executor.rs` / `duckdb_service.rs`）、`DuckDB 1.5+ 设置值重格式化`（`manager.rs`）、各探针顶部实测记录、`duckdb-1.5.6-upgrade-report.md` / `gpui-kit-0.8.0/0.9.0-upgrade-report.md` / `docs/architecture/federation/*` 的 1.5.5 时代台账。把历史记录改成 2.0.1 才是造假。
 
-## 9. 回退路径
+## 9. 回退路径与 1.5 兼容结论
 
-- **代码 / 构建**：`third_party/duckdb/1.5.6/` 已随本次清理删除（§10）。要回退就先 `tools/fetch-duckdb.sh 1.5.6` 把库取回来，再改根 `Cargo.toml` 回 `=1.10506.1` + `DUCKDB_LIB_DIR=third_party/duckdb/1.5.6` + `arrow ^58`，即可重建。
-- **数据（不可逆的部分）**：2.0 新建的 DuckDB 文件是 `storage version 69`，1.5 打不开。升级后用户已有分析库一旦被 2.0 写过（`ATTACH … READ_WRITE`）就可能被推高存储版本。**产品结论待定**：是否要在打开旧库前做一次"版本探测 + 只读挂载"，以及是否保留 1.5 客户端兼容承诺——这是升级带来的唯一需产品拍板的点。
+- **代码 / 构建**：`third_party/duckdb/1.5.6/` 已随本次清理删除（§10）。要回退就先 `tools/fetch-duckdb.sh 1.5.6` 把库取回来，再改根 `Cargo.toml` 回 `=1.10506.1` + `DUCKDB_LIB_DIR=third_party/duckdb/1.5.6` + `arrow ^58`，即可重建。这只是"把代码退回 1.5"，不代表兼容承诺。
+- **数据（不可逆的部分）**：2.0 新建的 DuckDB 文件是 `storage version 69`，1.5 读不了；2.0 能读 1.5 的旧文件，但一旦对其 `ATTACH … READ_WRITE` 就可能把存储版本推高，之后再回 1.5 就打不开。
+
+### 9.1 产品结论（2026-11-26 拍板）
+
+- **不兼容 DuckDB 1.5 客户端**：只承诺 2.0.1 一条线，不做"打开旧库先探测版本"、不做"探测到旧格式就只读挂载"的降级路径，也不保留 1.5 客户端读写同一批分析库的承诺。
+- 若用户需要保住某个库的 1.5 可读性，唯一手段是**在 2.0 打开它之前自己复制一份备份**；我们不在代码里加这层保护。
+- 连带：`tools/build-instance-project.py` 造库、内核扩展目录、`DUCKDB_LIB_DIR` 等状态型落点一律以 2.0.1 为唯一口径（§8 已扫完），不再为 1.5 留双份说明。
 
 ## 10. 清理项（2026-11-26 已执行）
 
