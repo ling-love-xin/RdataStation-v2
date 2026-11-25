@@ -1454,3 +1454,34 @@ pub(crate) fn context_menu(
     }
     menu
 }
+
+/// 单元格右键的「面板」子菜单（真值第三挂载点，`ResultSetViewer.java:3231-3233`）。
+///
+/// 真值：`MenuManager(ResultSetMessages.controls_resultset_viewer_action_panels)`（
+/// `ResultSetMessages_zh.properties:121` = 「面板」）+ `UIIcon.PANEL_CUSTOMIZE`，内容 =
+/// `fillPanelsMenu()`——与本仓页签区右键 / 面板视图菜单同一份，所以这里复用面板注入的
+/// 构造器（[`crate::grid::PanelsMenuBuilder`]），不在网格侧重跑一遍条目。门控是真值的
+/// `getDecorator().getDecoratorFeatures() & FEATURE_PANELS`（`:3225`），本仓对应「面板接了
+/// 没」：没注入构造器（独立网格 / 未接面板）就不摆。
+///
+/// 挂在 `TableDelegate::context_menu` 的转发层（`grid/table_impl.rs`）而不是
+/// [`context_menu`] 的 body 尾部：后者有转置 / 行号槽两处早退，转发层只有一个出口，
+/// 三种落点（数据格 / 行号槽 / 转置视图）都能带上子菜单——真值 `fillContextMenu` 对
+/// presentation 不作区分，转置与行号槽一样有这一段。
+pub(crate) fn append_panels_submenu(
+    delegate: &ResultGridDelegate,
+    menu: PopupMenu,
+    window: &mut Window,
+    cx: &mut App,
+) -> PopupMenu {
+    let Some(builder) = delegate.panels_menu_builder.clone() else {
+        return menu;
+    };
+    // `PopupMenu::build` 造子菜单实体（vendor `popup_menu.rs:372-378`）；父菜单不需要这里接
+    // ——vendor 在 `PopupMenu::render:1574-1590` 给「只有菜单值、没有 Context」这条路径补
+    // `parent_menu`，注释里点名的正是 table delegate 的 `context_menu`。
+    let submenu = PopupMenu::build(window, cx, move |menu, window, cx| builder(menu, window, cx));
+    menu.separator().item(
+        PopupMenuItem::submenu("面板", submenu).icon(gpui_kit::assets::IconName::PanelRight),
+    )
+}

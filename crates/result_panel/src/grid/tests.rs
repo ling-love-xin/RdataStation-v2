@@ -5655,3 +5655,26 @@ fn page_keys_target_the_viewport_edge_and_clamp_at_the_data_ends() {
         "PageUp 回首行，列仍不动"
     );
 }
+
+/// 【右栏菜单】单元格右键「面板」子菜单的接线开关：独立网格（没有面板）不摆，
+/// 面板 `set_grids` 注入后才有——真值门控 `getDecorator().getDecoratorFeatures() &
+/// FEATURE_PANELS`（`ResultSetViewer.java:3225`），本仓对应「面板接了没」。
+///
+/// 菜单内容（五页勾选 + 三个开关）钉在面板侧的 `panel_view_menu_items` /
+/// `fill_panel_view_menu` 上；这里只钉「该不该出现」以及接线不随换数据丢失。
+#[test]
+fn panels_submenu_builder_is_wired_only_when_a_panel_connects() {
+    let grid = ResultGridDelegate::default();
+    assert!(
+        grid.panels_menu_builder.is_none(),
+        "独立网格没有面板：单元格右键不该出现「面板」子菜单"
+    );
+
+    let mut grid = ResultGridDelegate::default();
+    grid.set_panels_menu_builder(std::rc::Rc::new(|menu, _window, _cx| menu));
+    assert!(grid.panels_menu_builder.is_some());
+
+    // 换结果集不该掉接线（与 `action_queue` 同口径：接线是视图能力，不是数据）
+    grid.set_data(vec!["a".to_string()], vec![vec!["1".to_string()]]);
+    assert!(grid.panels_menu_builder.is_some(), "换结果集不该掉接线");
+}

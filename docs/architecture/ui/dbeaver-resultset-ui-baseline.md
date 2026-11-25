@@ -3878,3 +3878,21 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
 - 详见 `docs/architecture/editor/result-panel.md` §9.67。
 
 
+
+### 57.6 单元格右键「面板」子菜单（第三挂载点）
+
+真值 `ResultSetViewer.java:3225-3233`：`FEATURE_PANELS` 门控下把
+`fillPanelsMenu()` 挂成单元格右键的「面板」子菜单（标题 `controls_resultset_viewer_action_panels`
+=「面板」，图标 `UIIcon.PANEL_CUSTOMIZE`）。
+
+- `grid/table_impl.rs::context_menu`（转发层，唯一出口）→ `append_panels_submenu`；
+  挂转发层是因为 body 里转置 / 行号槽两处早退，真值对 presentation 不作区分。
+- 状态来源：`ResultGridDelegate::panels_menu_builder`（`grid::PanelsMenuBuilder`），
+  面板 `set_grids` 注入（主 / 对比 / 分组三个 viewer），闭包右键瞬间读面板真值，
+  点击入同一 `ResultActionQueue`——不镜像状态、不新增同步点。
+- 子菜单用 `PopupMenu::build` + `PopupMenuItem::submenu`；父菜单由 vendor
+  `PopupMenu::render:1574-1590` 补齐（该段注释点名的正是 table delegate）。
+- 用例：`panels_submenu_builder_is_wired_only_when_a_panel_connects`（grid）+
+  `set_grids_wires_the_panels_submenu_builder_on_every_grid`（panel）。
+- 验证：check 0 warning；**461 passed / 0 failed**（459 + 2）。
+- 仍不摆：`CMD_ACTIVATE_PANELS`（不摆，三处菜单一致）；图标用 `PanelRight` 替代 `PANEL_CUSTOMIZE`。

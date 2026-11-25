@@ -290,6 +290,12 @@ pub struct ResultGridDelegate {
     /// delegate，而是把请求交回宿主——宿主改完才能借同一条通道存会话。
     /// `None` = 独立网格（单元测试等），菜单退回就地切换。
     pub(crate) action_queue: Option<crate::ports::ResultActionQueue>,
+    /// 【右栏菜单】单元格右键「面板」子菜单的构造器（面板注入，见
+    /// [`crate::grid::PanelsMenuBuilder`]）。`None` = 独立网格 / 还没接面板 → 不摆该项。
+    ///
+    /// 为什么不镜像面板状态：子菜单的勾选态来自面板（页签集合 / 可见性 / 方向 /
+    /// 最大化），网格留副本就得在每个改态入口再同步一遍；闭包在右键瞬间读真值更省。
+    pub(crate) panels_menu_builder: Option<crate::grid::PanelsMenuBuilder>,
     /// 【T2a-3】脏格集合（**数据行序**，含列序；面板从权威变更集投影，标底色）
     pub(crate) dirty: Vec<(usize, usize)>,
     /// 【T2a-6】冲突格集合（提交回执标过 `Conflict` 的格子；面板从权威变更集投影）
@@ -910,6 +916,11 @@ impl ResultGridDelegate {
     /// 经它交回宿主分派——UI 回调里直接改 delegate 就没有落库触发点。
     pub fn set_action_queue(&mut self, queue: crate::ports::ResultActionQueue) {
         self.action_queue = Some(queue);
+    }
+
+    /// 【右栏菜单】注入「面板」子菜单构造器（面板接线时调用，与 `set_action_queue` 同批）。
+    pub fn set_panels_menu_builder(&mut self, builder: crate::grid::PanelsMenuBuilder) {
+        self.panels_menu_builder = Some(builder);
     }
 
     /// 【A9】同步结果来源表名（与 `set_data` 同一次同步里、在它之后调）

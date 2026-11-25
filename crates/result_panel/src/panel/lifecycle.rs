@@ -703,6 +703,55 @@ impl ResultPanel {
         if let Some(group) = self.group_grid.clone() {
             group.update(cx, |state, _cx| state.delegate_mut().set_action_queue(queue));
         }
+        // 【右栏菜单】单元格右键「面板」子菜单（真值第三挂载点 `:3231-3233`）：
+        // 条目集合与页签区右键 / 面板视图菜单同源（`fillPanelsMenu()`），勾选态与点击
+        // 结果都是面板态 → 注入闭包，右键瞬间读面板真值、点下去入同一条队列。
+        // 不镜像状态：否则每个改态入口（切页 / 关页 / 拖拽 / 开合 / 最大化 / 方向）
+        // 都得再同步一遍，漏一处菜单就显示旧勾选。
+        let panels_builder: crate::grid::PanelsMenuBuilder = {
+            let weak = cx.entity().downgrade();
+            let queue = self.queue.clone();
+            let builder = move |menu: gpui_kit::component::menu::PopupMenu,
+                                _window: &mut gpui_kit::Window,
+                                app: &mut gpui_kit::Context<
+                gpui_kit::component::menu::PopupMenu,
+            >| {
+                let Some(panel) = weak.upgrade() else {
+                    return menu;
+                };
+                let panel = panel.read(app);
+                super::tabs::fill_panel_view_menu(
+                    menu,
+                    &super::events::panel_view_menu_items(),
+                    &panel.open_tabs,
+                    panel.panels_visible(),
+                    panel.vertical_layout,
+                    panel.panel_maximized,
+                    &queue,
+                )
+            };
+            std::rc::Rc::new(builder)
+        };
+        let grid = self.grid.clone();
+        grid.update(cx, |state, _cx| {
+            state
+                .delegate_mut()
+                .set_panels_menu_builder(panels_builder.clone())
+        });
+        if let Some(compare) = self.compare_grid.clone() {
+            compare.update(cx, |state, _cx| {
+                state
+                    .delegate_mut()
+                    .set_panels_menu_builder(panels_builder.clone())
+            });
+        }
+        if let Some(group) = self.group_grid.clone() {
+            group.update(cx, |state, _cx| {
+                state
+                    .delegate_mut()
+                    .set_panels_menu_builder(panels_builder)
+            });
+        }
         // 【订阅重挂】把网格事件订阅换到新网格上（旧句柄随赋值解订，不留两条）
         let grid = self.grid.clone();
         self._grid_sub = Some(cx.subscribe_in(

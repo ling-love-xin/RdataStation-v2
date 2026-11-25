@@ -226,6 +226,25 @@ actions!(
     ]
 );
 
+/// 单元格右键「面板」子菜单的构造器（面板注入，见 [`menu::append_panels_submenu`]）。
+///
+/// 真值第三挂载点：`ResultSetViewer.java:3231-3233` 把 `fillPanelsMenu()` 的同一批条目
+/// 挂成单元格右键的「面板」子菜单（`:3226-3229`）。本仓网格拿不到面板状态（页签集合 /
+/// 可见性 / 方向 / 最大化都在 `ResultPanel` 上），所以由面板注入闭包：右键瞬间读真值，
+/// 点下去仍走同一条 `ResultActionQueue`——与 `action_queue` 同一条通道。
+///
+/// 签名对齐 vendor `PopupMenu::build` + `PopupMenuItem::submenu`：拿到一个已构建的子菜单
+/// 实体。`TableDelegate::context_menu` 只有菜单值、没有 `Context<PopupMenu>`，vendor 在
+/// `PopupMenu::render:1574-1590` 对这条路径补齐 `parent_menu`（注释点名的正是
+/// "a table delegate's `context_menu`"），所以这里不必自己接父菜单。
+pub type PanelsMenuBuilder = std::rc::Rc<
+    dyn Fn(
+        gpui_kit::component::menu::PopupMenu,
+        &mut gpui_kit::Window,
+        &mut gpui_kit::Context<gpui_kit::component::menu::PopupMenu>,
+    ) -> gpui_kit::component::menu::PopupMenu,
+>;
+
 pub use cell::format_cell_text;
 pub use selection::{page_target, selection_counts, CellRange, GridKeyStep, PageDir};
 pub use delegate::{

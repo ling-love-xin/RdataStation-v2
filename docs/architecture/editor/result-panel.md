@@ -6636,7 +6636,7 @@ active 不在集合则取第一个」（与 DBeaver 第 2、3 步同口径，第
 分隔 → `CMD_TOGGLE_MAXIMIZE` → `CMD_ACTIVATE_PANELS` →（有 `FEATURE_PANELS` 时）分隔 +
 `CMD_TOGGLE_PANELS` + `CMD_TOGGLE_LAYOUT`。本仓 `panel_view_menu_items()` 同段位，`CMD_ACTIVATE_PANELS` 无端口不摆。
 
-**三处挂载点，本仓做两处**：DBeaver 把这份菜单挂了三次——面板区右键（`:407-417`）、
+**三处挂载点，本仓做三处**：DBeaver 把这份菜单挂了三次——面板区右键（`:407-417`）、
 每个面板工具条右端的视图菜单按钮（`:1590-1614`）、单元格右键的 panels 子菜单（`:3231-3233`）。
 本仓
 
@@ -6645,9 +6645,10 @@ active 不在集合则取第一个」（与 DBeaver 第 2、3 步同口径，第
   与 DBeaver 挂 `panelFolder` 同一范围；条目与视图菜单同一份构造函数
   （`panel/tabs.rs::fill_panel_view_menu`）。内层页内容自带的右键在冒泡阶段先命中并
   `stop_propagation()`（vendor `menu/context_menu.rs:405-409`），不会双弹。
-
-第三处（单元格右键的 panels 子菜单）仍不摆：单元格右键已有一份很长的菜单
-（`fillContextMenu:3107+` 三段），再嵌一层 panels 子菜单本仓没有对应端口。
+- **单元格右键「面板」子菜单**（2026-11-25，见 §9.67.5）：挂在 `TableDelegate::context_menu`
+  的转发层（`grid/table_impl.rs`），标题「面板」+ `IconName::PanelRight`（真值
+  `UIIcon.PANEL_CUSTOMIZE`）；条目由面板注入的 `PanelsMenuBuilder` 在右键瞬间取真值生成
+  ——仍是同一份 `fill_panel_view_menu`，三处不会漂移。
 
 #### 9.25.6 本轮改动
 
@@ -10238,7 +10239,8 @@ panicked at gpui-fast-0.1.17/src/app.rs:2657: no state of type rds_settings::mod
   生成——原本只服务页签条右端 ▾ 的闭包体抽了出来，两处入口同一份实现，不会漂移。
 - 不双弹的依据：内层页内容自带右键（列浏览器行 / 统计行）在气泡阶段先命中并
   `stop_propagation()`（vendor `menu/context_menu.rs:405-409`）。
-- 未做：单元格右键里的 panels 子菜单（`:3231-3233`，第三挂载点；理由见 §9.25.5）。
+- 未做→已做（2026-11-25）：单元格右键里的 panels 子菜单（`:3231-3233`，第三挂载点），
+  见 §9.67.5。
 
 #### 9.67.3 仍存在的差异（有意 / 待拍板）
 
@@ -10267,6 +10269,35 @@ panicked at gpui-fast-0.1.17/src/app.rs:2657: no state of type rds_settings::mod
   `edge_bar_reopens_a_closed_page`（重开的页应排首位）、
   `right_panel_tab_strip_lists_all_panels_and_click_switches`（首格期望值改取 `open_tabs[0]`）。
 
+#### 9.67.5 单元格右键「面板」子菜单（第三挂载点）
+
+- 真值：`fillContextMenu` 在 `GroupMarker(EDIT)` 之后加
+  `MenuManager(ResultSetMessages.controls_resultset_viewer_action_panels,
+  UIIcon.PANEL_CUSTOMIZE, "result_panels")`（`:3226-3229`），内容 `fillPanelsMenu()`
+  （`:3231-3233`）；门控 `getDecorator().getDecoratorFeatures() & FEATURE_PANELS`（`:3225`）。
+  标题中文是 `ResultSetMessages_zh.properties:121` 的 `面板`。
+- 落地：`grid/table_impl.rs::context_menu`（转发层）末尾调
+  `grid/menu.rs::append_panels_submenu`。挂转发层而不是 `context_menu` body 尾部的原因：
+  后者有转置 / 行号槽两处早退，转发层是唯一出口，三种落点（数据格 / 行号槽 / 转置视图）
+  都带上子菜单——真值 `fillContextMenu` 对 presentation 不作区分。
+- **状态来源**：网格不镜像右栏状态，`ResultGridDelegate::panels_menu_builder`
+  （`grid::PanelsMenuBuilder` = `Rc<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>)
+  -> PopupMenu>`）由面板在 `set_grids` 里注入（主网格 / 对比 / 分组三个 viewer 都注入）。
+  闭包捕获 `WeakEntity<ResultPanel>` + 队列，右键瞬间读面板真值（`open_tabs` /
+  `panels_visible()` / `vertical_layout` / `panel_maximized`），点下去入同一条
+  `ResultActionQueue`——与 `action_queue` 同一通道，面板侧无需再加同步点。
+- **子菜单构造**：`PopupMenu::build`（vendor `:372-378`）+ `PopupMenuItem::submenu`
+  （`:108`）。`TableDelegate::context_menu` 只有菜单值、没有 `Context<PopupMenu>`，父菜单
+  由 vendor 在 `PopupMenu::render:1574-1590` 补 `parent_menu`——该段注释点名的正是
+  table delegate 的 `context_menu`，属于已在 vendor 里支持的路径。
+- 门控：没注入构造器（独立网格 / 单元测试）就不摆，对应真值 `FEATURE_PANELS`。
+- 用例：`grid::tests::panels_submenu_builder_is_wired_only_when_a_panel_connects`（独立网格
+  `None`、注入后 `Some`、换数据不掉接线）；
+  `panel::tests::set_grids_wires_the_panels_submenu_builder_on_every_grid`（主网格 + 分组页都接上）。
+- 未做（仍登记）：`CMD_ACTIVATE_PANELS`（真值的「恢复默认面板」在 `fillPanelsMenu:1579`，
+  本仓无端口，三处菜单一致不摆）；子菜单图标用的是本仓 `PanelRight`（真值 `PANEL_CUSTOMIZE`，
+  同一语义、不同图标集）。
+
 ## 20. 有意差异汇总
 
 全部「有意为之、勿当 bug 修」的偏离集中在这里，按功能域分组；每条回指原小节，细节看原文。
@@ -10275,7 +10306,7 @@ panicked at gpui-fast-0.1.17/src/app.rs:2657: no state of type rds_settings::mod
 
 | 差异 | 出处 |
 | --- | --- |
-| 菜单扁平无子菜单，各段平铺在右键里（DBeaver 是 `filters` / `order` / `layoutMenu` 子菜单） | §9.32.3、§9.33.3、§9.35.3、§9.36.3 |
+| 菜单扁平无子菜单（例外：单元格右键的「面板」子菜单已按真值挂上，§9.67.5）；其余各段仍平铺（DBeaver 是 `filters` / `order` / `layoutMenu` 子菜单） | §9.32.3、§9.33.3、§9.35.3、§9.36.3、§9.67.5 |
 | 三颗选中统计开关平铺在数据格右键尾部（位置语义保留，形状不同） | §9.32.3 |
 | 不做 100 ms 防抖（本仓选中计数只改三个数，无连续重排成本） | §9.32.3 |
 | 计数来源是单区域选中（无 `IResultSetSelectionExt` 多 region） | §9.32.3 |

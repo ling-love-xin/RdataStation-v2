@@ -7314,3 +7314,22 @@ fn clicking_a_column_header_selects_the_whole_column(cx: &mut gpui_kit::TestAppC
     let counts = crate::grid::selection_counts(Some(&range));
     assert_eq!(counts, (2, 1, 2), "整列 = 2 行 × 1 数据列 × 2 格");
 }
+
+/// 【右栏菜单】`set_grids` 给三条网格都接「面板」子菜单构造器：真值里每个 viewer
+/// 的 `fillContextMenu` 都带 `panelsMenu`（`:3231-3233`），主网格 / 对比 / 分组页
+/// 是三个独立 viewer，各自都要有。
+#[gpui_kit::test]
+fn set_grids_wires_the_panels_submenu_builder_on_every_grid(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    let (main_wired, group_wired) = panel.read_with(cx, |p, app| {
+        (
+            p.grid.read(app).delegate().panels_menu_builder.is_some(),
+            p.group_grid
+                .as_ref()
+                .is_some_and(|g| g.read(app).delegate().panels_menu_builder.is_some()),
+        )
+    });
+    assert!(main_wired, "主网格：单元格右键要有「面板」子菜单");
+    assert!(group_wired, "分组页内嵌网格：同样要接");
+}

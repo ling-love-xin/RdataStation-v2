@@ -158,7 +158,10 @@ impl TableDelegate for ResultGridDelegate {
         window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
-        crate::grid::menu::context_menu(self, row_ix, menu, window, cx)
+        let menu = crate::grid::menu::context_menu(self, row_ix, menu, window, cx);
+        // 【DBeaver 对齐】「面板」子菜单挂在这里（真值 `ResultSetViewer.java:3231-3233`）：
+        // `context_menu` 内部有转置 / 行号槽两处早退，只有这一层是唯一出口。
+        crate::grid::menu::append_panels_submenu(self, menu, window, cx)
     }
 
     /// 列宽自适应（转发到 [`crate::grid::fit`]）：组件库双击 resize handle 时问这里要
