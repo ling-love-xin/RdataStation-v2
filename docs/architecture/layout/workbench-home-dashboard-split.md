@@ -109,7 +109,7 @@
 | 4-1 摘除旧面板概览 | 已完成（纯去重，−93 行） | `8c62eb43` |
 | 4-2b Diff 浮层状态上移 Shared | 已完成（挂载形态待拍板） | `4d81c73f` |
 | 4-2a 对话框状态 / 订阅 / 桥上移宿主 | 待办（阻塞，见下） | — |
-| 4-2c 拖拽兜底请求逻辑沉 Shared | 待办（随第 3 步落点一起迁） | — |
+| 4-2c 拖拽兜底请求逻辑沉 Shared | 已完成（下沉 `Shared::request_nav_drag`，落点仍在面板 on_drop） | `b088f99f` |
 | 4-3 连接详情卡 / 导航树落点 | 摸底完成（落点 = 属性面板 + 导航右键删除；待补字段缺口）；旧卡删除待阶段二 | — |
 | 5 收口校验 / i18n / 文档同步 | 部分完成（白名单 + 契约清单 + 耦合表已同步；全量 check 0 error；locale 词条待随并行 WIP 收口） | `7c751f54`、`b64114d7` |
 
@@ -145,9 +145,17 @@
   - **删除连接已有导航入口**：连接行右键「删除连接」（`rows.rs:2104`，确认对话框 → `host.delete_connection`）
     与面板头 ⋯ 菜单「删除当前连接」（`chrome.rs:766`）同一动作；宿主端口 `NavHost::delete_connection` 已实现。
   - **分析库导航树**本就是左栏导航树职责，详情卡里的内嵌 `nav_tables` 缓存是重复出口。
-  - **迁移待补字段缺口**：旧卡片的 主机 / 端口 / 数据库名 / DuckDB 联邦开关 / 创建时间 / 更新时间，
-    未全部进 `connection_base_rows`；迁卡时需逐项核对——有的并入连接串 / 网络分节，有的（联邦开关、时间戳）
-    需补 provider 行或确认不再展示。展示形态据此定为**走属性面板**，不在 NavView 行内另建键值卡。
+  - **迁移待补字段缺口**：旧卡片的 主机 / 端口 / 数据库名 / Schema / DuckDB 联邦开关 /
+    创建时间 / 更新时间，未全部进 `connection_base_rows`；迁卡时需逐项核对——有的并入
+    连接串 / 网络分节，有的（联邦开关、时间戳）需补 provider 行或确认不再展示。展示形态
+    据此定为**走属性面板**，不在 NavView 行内另建键值卡。
+  - **2026-11-26 字段级核证**：属性 counts 由 `property_panel.rs:287` 从
+    `ConnectionManager::get_connection_info`（`engine/connection_manager.rs:62` 的
+    `ConnectionInfo`）喂入。该结构**已有** `use_duckdb_fed: bool`、`created_at: Instant`、
+    `description`、`url`、`server_version`；**缺**独立的 `host` / `port` / `database` /
+    `schema` / `updated_at`（主机·端口·库名编码在 `url` 里，可解析或补字段；`created_at`
+    是 `Instant` 非展示串，且无 `updated_at`）。即联邦开关可直接补 counts 键；主机/端口/
+    库名需从 url 解析或回补 `ConnectionInfo`；Schema、更新时间当前数据层无对应值。
 - 批次 4 再拆三步，按风险从低到高：
   1. **摘除旧面板概览**（已完成 `8c62eb43`）：看板已接管四卡，删除 `EditorPanel`
      的 overview 字段 / 取数方法 / 概览渲染出口（低风险，纯去重）；
@@ -176,9 +184,12 @@
        `SearchResultsHostPanel` / `PropertyHostPanel` 先例，非模态）；② 宿主
        Dialog/Popover 模态弹层（套 `scratchpad_file_info` 先例，交互形态改变）；
        ③ 宿主 overlay 内嵌层。现状出口内嵌编辑区内容列、非模态。
-     - **2c 拖拽兜底**：`send_nav_drag` 仅调 `Shared::request_query` + `notify_host`
-       + 面板 `cx.notify()`，是面板作为拖拽落点的固有交互；价值低，建议随第 3 步
-       落点一起迁，不单独成批。
+     - **2c 拖拽兜底**（已完成 `b088f99f`）：原 `EditorPanel::send_nav_drag` 下沉为
+       `Shared::request_nav_drag(qualified, cx)`——解析 `selected_connection`、构造
+       `QueryRequest{conn_id, sql: qualified+" ", run:false}` 走 `request_query`，再
+       `notify_host`；面板 on_drop 闭包只持 `shared` 调它，删除私有方法与不再使用的
+       `QueryRequest` 导入，去掉原方法末尾冗余的面板重绘 `cx.notify()`。落点交互不变，
+       请求归属收在 Shared 一处，旧面板瘦身时不必再搬这段逻辑。
   3. **详情卡落点**：待 `database` 导航线 WIP 落定后，在 NavView 行模型上实现
      连接详情，再删除旧 `EditorPanel` 实体。
 
