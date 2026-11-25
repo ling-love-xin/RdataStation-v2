@@ -1426,10 +1426,12 @@ pub(super) fn nav_row_height(
     view: &NavViewState,
     show_tags: bool,
 ) -> tree::RowHeight {
-    // 基础行高按行型取（三档，与 `ui.rs` 的 `NAV_ROW_*` 成对），附加块逐个链上：
+    // 基础行高按行型取（与 `ui.rs` 的常量成对），附加块逐个链上：
     // 链式写法让「多算了哪一块」一眼看得出（虚拟列表不回写实测高度，估算与渲染是硬契约）。
+    // 分组头与对象树同一档（`tree::GroupHeader` 的实高就是 `ROW_HEIGHT_COMPACT`）：
+    // 这里若按旧的 24 估高，每个分组头都会多算 2px，整棵树的下方行位逐组下移。
     let base = match row {
-        NavRow::GroupHeader { .. } => ui::NAV_ROW_GROUP,
+        NavRow::GroupHeader { .. } => ui::ROW_HEIGHT_COMPACT,
         NavRow::Connection { .. } | NavRow::Reference { .. } => ui::NAV_ROW_CONNECTION,
         NavRow::Tree { .. }
         | NavRow::More { .. }

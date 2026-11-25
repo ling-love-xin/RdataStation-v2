@@ -150,9 +150,9 @@ pub const QUICK_OPEN_SEARCH_DEBOUNCE_MS: u64 = 150;
 pub const ROW_HEIGHT: f32 = 1.5;
 /// **紧凑行高**（1.375rem = 22px）——比 `ROW_HEIGHT` 矮一档的次级行。
 ///
-/// 用于「信息行 + 行内动作」这一类行：分组头、外部引用行、回收站头 / 行（草稿箱底部
-/// 固定区，不在虚拟列表内）。数值与导航对象树行（`NAV_ROW_TREE`）相同，但**语义独立**：
-/// 改一处不动另一处。
+/// 用于「信息行 + 行内动作」这一类行：分组头（草稿箱四个 + **数据源导航**，后者由
+/// `tree::GroupHeader` 统一）、外部引用行、回收站头 / 行（草稿箱底部固定区，不在虚拟列表内）。
+/// 数值与导航对象树行（`NAV_ROW_TREE`）相同，但**语义独立**：改一处不动另一处。
 pub const ROW_HEIGHT_COMPACT: f32 = 1.375;
 /// 树层级缩进步长（0.875rem ≈ 14px）
 pub const TREE_INDENT: f32 = 0.875;
@@ -204,8 +204,6 @@ pub const NAV_SCOPE_COL_SHORT: f32 = 1.25;
 pub const NAV_SCOPE_CHIP_H: f32 = 1.125;
 /// 连接行归属域格宽（文字模式）：`项目 / 全局 / 共享` 两汉字放不进两字符格，故保留原宽。
 pub const NAV_SCOPE_COL_TEXT: f32 = 3.4;
-/// 分组头行高（1.5rem = 24px）。
-pub const NAV_ROW_GROUP: f32 = 1.5;
 /// 连接行高（1.625rem = 26px；与旧的 `h(rems(1.625))` 同值）。
 pub const NAV_ROW_CONNECTION: f32 = 1.625;
 /// 对象树行高（1.375rem = 22px；与旧的 `h(rems(1.375))` 同值）。
