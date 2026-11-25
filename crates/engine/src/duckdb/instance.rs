@@ -662,6 +662,25 @@ impl AnalysisSession {
         super::federation::session::mount_into(&conn, sources)
     }
 
+    /// 借本会话的连接跑一小段逻辑（**不接管执行**：只给需要直接 `execute_batch` 的调用方，
+    /// 例如 `DETACH` / `CREATE VIEW` 这类必须拿到原始连接的活）。
+    ///
+    /// 走这里**不经过**写车道与超时（调用方自己是事件路径、语句都很短）；要执行用户 SQL
+    /// 一律用 [`Self::run`] / [`Self::run_with_timeout`]。
+    pub fn with_connection<T>(
+        &self,
+        f: impl FnOnce(&Connection) -> Result<T, String>,
+    ) -> Result<T, String> {
+        if !self.is_open() {
+            return Err("这条分析会话已经关了，重新开一条再执行".to_string());
+        }
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| "会话连接锁被污染（上一条语句崩了），重开一条会话".to_string())?;
+        f(&conn)
+    }
+
     /// 切本会话的默认 catalog（联邦主源用）。
     ///
     /// 只接受标识符字符：别名来自 `MountRegistry` 与驱动的校验，但这里是拼 SQL 的地方，

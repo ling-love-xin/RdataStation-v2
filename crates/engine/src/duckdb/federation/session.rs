@@ -1,14 +1,17 @@
-//! 联邦会话：把多个源挂到**同一条** DuckDB 连接上（见 `docs/architecture/federation/`）
+//! 联邦会话：把多个源挂到**分析实例的一条会话**上（见 `docs/architecture/federation/`）
 //!
 //! ## 与 `accel` 的关系（先说清楚，避免又长出一套）
 //!
 //! `accel` 是“一条源一条连接”（整库 `ATTACH … (READ_ONLY)` + `USE`）；联邦是它的**推广**：
-//! 同一条连接挂**多条**源、每条一个别名，`USE` 指向**主源**。所以这里直接复用 accel 的：
+//! 同一条会话挂**多条**源、每条一个别名，`USE` 指向**主源**。所以这里直接复用 accel 的：
 //!
 //! 1. [`mount_lock`]（`INSTALL` / `LOAD` 是进程级资源，并发建会话会撞文件）；
-//! 2. [`run_sql_on`]（读写分流与 Arrow 转换与加速档**同一份**，同一句在两个档上形状一致）；
-//! 3. 写保护双保险（`ATTACH … (READ_ONLY)` 让 DuckDB 自己拒 + 编辑器侧提交前拒）；
+//! 2. 写保护双保险（`ATTACH … (READ_ONLY)` 让 DuckDB 自己拒 + 编辑器侧提交前拒）；
 //!    L2 没有第一道，改用会话层判定（见 [`FederatedSession::l2_write_refusal`]）。
+//!
+//! 2026-11-26 起本层**不再自建内存库**：执行落在 `AnalysisInstance` 的一条会话上
+//! （`docs/architecture/database/analysis-instance-sessions.md`）。本层保留的是联邦语义
+//! （挂载清单 / 主源 / 快照 / 写拒绝 / 错误脱敏）。
 //!
 //! ## 三条会话内规则
 //!
@@ -28,11 +31,10 @@
 //! 两条要记住的语义：
 //!
 //! 1. **换主源不重建会话**（只是会话上的 `USE`）：用户建的本地临时对象不丢；
-//! 2. **源清单变了会重建会话**（旧会话连同它的临时对象一起消失，日志里写一条）——
+//! 2. **源清单变了会重建会话**（先关实例上那条旧会话 → `TEMP` 一起消失，再开新会话）——
 //!    这是“改了参与源就当新会话”的代价，比让旧表清单继续骗人强。
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use duckdb::Connection;
@@ -42,18 +44,20 @@ use shared::error::CoreError;
 use shared::models::QueryResult;
 
 use super::super::accel::{
-    AccelKind, MountedTable, list_mounted_tables, mount_lock, run_sql_on, scrub_credentials,
+    AccelKind, MountedTable, list_mounted_tables, mount_lock, scrub_credentials,
 };
+use super::super::instance::AnalysisSession;
 use super::super::manager::DuckDBManager;
 use super::registry::{FederatedSource, MountState, MountedSource, SessionSnapshot};
 
-/// 一条联邦会话：DuckDB 内存库 + 一批只读挂载
+/// 一条联邦会话：**分析实例上的一条会话** + 一批只读挂载的记账
+///
+/// 2026-11-26 起它不再自己开内存库：执行落在 `AnalysisInstance` 的会话上
+/// （`docs/architecture/database/analysis-instance-sessions.md`）。这层保留的是
+/// **联邦语义**（挂载清单 / 主源 / 快照 / 写拒绝 / 错误脱敏），不是"一台独立的库"。
 pub struct FederatedSession {
-    conn: Mutex<Connection>,
-    /// 中断句柄（**建会话时就取出来**：真正跑查询时连接锁被占着，那时再取就晚了）
-    interrupt: Arc<duckdb::InterruptHandle>,
-    /// 现在有没有语句在跑（中断的“有没有可中断的”靠它，不凭猜）
-    running: AtomicBool,
+    /// 实例会话（catalog 与底座由实例共享，`TEMP` 仍属于这条会话）
+    session: Arc<AnalysisSession>,
     mounted: Mutex<Vec<MountedSource>>,
     primary: Mutex<Option<String>>,
     primary_note: Mutex<Option<String>>,
@@ -74,49 +78,38 @@ impl std::fmt::Debug for FederatedSession {
 }
 
 impl FederatedSession {
-    /// 建会话并**逐个**挂载（挂不上的记原因，不中断）
+    /// 在**实例的一条会话**上建联邦并逐个挂载（挂不上的记原因，不中断）
     ///
     /// 会做 I/O（首次装扩展要联网一次、`ATTACH` 要连源库），属于**事件路径**；
     /// 界面可用性看 [`Self::snapshot`]（纯内存读）。
+    ///
+    /// `session` 必须是本条 owner 的实例会话；底座已由实例挂好（`ATTACH` 是实例级事实），
+    /// 这里只管源。
     pub fn open(
+        session: Arc<AnalysisSession>,
         sources: &[FederatedSource],
         requested_primary: Option<&str>,
     ) -> Result<Self, String> {
-        // 会话内重名由 [`mount_into`] 先拦（挂载唯一实现，别在两处各判一遍）
-
-        let conn = open_configured()?;
-
-        // 底座先挂：它们不是"源"，但 SQL 里随时可能引用（`analytics.main.x` / `rds_global.main.x`）。
-        // 挂不上不算会话失败——缺文件 / 正被写入方持有都只让这一格缺席，别把整条会话带下去
-        //
-        // 与 [`mount_into`] 分两次拿 `mount_lock`（同一把锁不可重入）：底座与源都串行即可
-        {
-            let _mount = mount_lock();
-            for (alias, outcome) in attach_bases(&conn) {
-                if let Err(reason) = outcome {
-                    tracing::warn!(alias = %alias, reason = %reason, "联邦底座没挂上（这一格本轮不可用）");
-                }
-            }
-        }
-
-        // 源挂载只有一处实现：`open` 与分析实例的会话都调它
-        let mounted = mount_into(&conn, sources)?;
+        // 源挂载只有一处实现（重名拦截也在里面）
+        let mounted = session.mount_sources(sources)?;
 
         let (primary, primary_note) = pick_primary(&mounted, requested_primary);
         if let Some(alias) = primary.as_deref() {
-            use_catalog(&conn, alias)?;
+            session.use_catalog(alias)?;
         }
 
-        let interrupt = conn.interrupt_handle();
         Ok(Self {
-            conn: Mutex::new(conn),
-            interrupt,
-            running: AtomicBool::new(false),
+            session,
             mounted: Mutex::new(mounted),
             primary: Mutex::new(primary),
             primary_note: Mutex::new(primary_note),
             mounted_at: std::time::SystemTime::now(),
         })
+    }
+
+    /// 这条联邦会话落在实例的哪条会话上（关会话 / 诊断用）
+    pub fn analysis_session(&self) -> &Arc<AnalysisSession> {
+        &self.session
     }
 
     /// 在本地库上执行一句（读语句出 Arrow 批，写语句出影响行数）
@@ -130,8 +123,8 @@ impl FederatedSession {
                 reason,
             )));
         }
-        let conn = self.lock()?;
-        run_sql_on(&conn, &self.running, sql).map_err(|error| self.scrub_error(error))
+        let err = self.session.run(sql).map_err(|error| self.scrub_error(error))?;
+        Ok(err)
     }
 
     /// 写 L2 源的保护（**引擎侧第二道闸**；第一道是编辑器的语句闸门，第三道是只读账号）
@@ -178,31 +171,33 @@ impl FederatedSession {
             .map(|entry| entry.source.clone())
             .ok_or_else(|| format!("会话里没有源 {alias}"))?;
 
-        let conn = self.lock().map_err(|error| error.to_string())?;
         let was_primary = self
             .primary
             .lock()
             .map(|primary| primary.as_deref() == Some(alias))
             .unwrap_or(false);
 
-        conn.execute_batch(&format!("USE memory; DETACH {alias}"))
-            .map_err(|error| {
-                scrub_error(
-                    &source.connection_string,
-                    format!("卸载 {alias} 失败：{error}"),
-                )
-            })?;
-        // 重挂走与 `open` 同一条实现：L2 的 Secret 在这里重建（口令可能有变）
-        let state = attach_source(&conn, &source);
+        let state = self.session.with_connection(|conn| {
+            conn.execute_batch(&format!("USE memory; DETACH {alias}"))
+                .map_err(|error| {
+                    scrub_error(
+                        &source.connection_string,
+                        format!("卸载 {alias} 失败：{error}"),
+                    )
+                })?;
+            // 重挂走与 `open` 同一条实现：L2 的 Secret 在这里重建（口令可能有变）
+            let state = attach_source(conn, &source);
+            // 重挂之后主源要 `USE` 回去（否则未限定名会解析到 memory 上）
+            if was_primary && matches!(state, MountState::Ready { .. }) {
+                use_catalog(conn, alias)?;
+            }
+            Ok(state)
+        })?;
 
         if let Ok(mut mounted) = self.mounted.lock()
             && let Some(entry) = mounted.iter_mut().find(|entry| entry.alias() == alias)
         {
-            entry.state = state.clone();
-        }
-        // 重挂之后主源要 `USE` 回去（否则未限定名会解析到 memory 上）
-        if was_primary && matches!(state, MountState::Ready { .. }) {
-            use_catalog(&conn, alias).map_err(|error| error.to_string())?;
+            entry.state = state;
         }
         Ok(())
     }
@@ -223,8 +218,9 @@ impl FederatedSession {
         if !ready {
             return Err(format!("源 {alias} 当前不可用，不能设为主源"));
         }
-        let conn = self.lock().map_err(|error| error.to_string())?;
-        use_catalog(&conn, alias).map_err(|error| error.to_string())?;
+        self.session
+            .use_catalog(alias)
+            .map_err(|error| error.to_string())?;
         if let Ok(mut primary) = self.primary.lock() {
             *primary = Some(alias.to_string());
         }
@@ -240,9 +236,10 @@ impl FederatedSession {
     /// 的本意，而不是偷偷拷一份（需要拷的只有临时表那一档，见 P4）。
     pub fn add_file_view(&self, path: &str, alias: &str) -> Result<(), String> {
         let sql = file_view_sql(path, alias)?;
-        let conn = self.lock().map_err(|error| error.to_string())?;
-        conn.execute_batch(&sql)
-            .map_err(|error| format!("加载文件失败：{error}"))
+        self.session.with_connection(|conn| {
+            conn.execute_batch(&sql)
+                .map_err(|error| format!("加载文件失败：{error}"))
+        })
     }
 
     /// 会话已经开着，再挂一个源（数据对象面板「加源」里选连接的出口）
@@ -259,8 +256,9 @@ impl FederatedSession {
             return Err(format!("源 {} 已经在会话里了", source.alias));
         }
 
-        let conn = self.lock().map_err(|error| error.to_string())?;
-        let mounted = mount_one(&conn, &source);
+        let mounted = self
+            .session
+            .with_connection(|conn| Ok(mount_one(conn, &source)))?;
         let failure = match &mounted.state {
             MountState::Failed(reason) => Some(reason.clone()),
             _ => None,
@@ -293,8 +291,8 @@ impl FederatedSession {
         if !ready {
             return Err(format!("源 {alias} 当前不可用，列不出表清单"));
         }
-        let conn = self.lock().map_err(|error| error.to_string())?;
-        list_mounted_tables(&conn, alias, kind)
+        self.session
+            .with_connection(|conn| list_mounted_tables(conn, alias, kind))
     }
 
     /// 会话快照（**界面读这个**：纯内存，渲染路径可调）
@@ -322,11 +320,7 @@ impl FederatedSession {
 
     /// 中断这条会话上正在跑的语句（三态可读，与加速档同一语义）
     pub fn interrupt(&self) -> Result<bool, String> {
-        if !self.running.load(std::sync::atomic::Ordering::SeqCst) {
-            return Ok(false);
-        }
-        self.interrupt.interrupt();
-        Ok(true)
+        Ok(self.session.interrupt())
     }
 
     /// 会话活了多久（诊断）
@@ -336,13 +330,6 @@ impl FederatedSession {
             .unwrap_or(std::time::Duration::ZERO)
     }
 
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, Connection>, CoreError> {
-        self.conn.lock().map_err(|error| {
-            CoreError::common(shared::error::CommonError::General(format!(
-                "联邦会话连接锁被污染：{error}"
-            )))
-        })
-    }
 }
 
 /// 写 L2 源的判据（**纯函数**：不碰连接，测试直接喂清单）
@@ -477,14 +464,8 @@ pub(crate) fn attach_bases(conn: &Connection) -> Vec<(String, Result<(), String>
     out
 }
 
-/// 开一条按产品纪律配置好的内存连接（扩展目录 / 内存闸 / 溢写口 / 不静默联网）
-fn open_configured() -> Result<Connection, String> {
-    let conn =
-        Connection::open_in_memory().map_err(|error| format!("开联邦分析连接失败：{error}"))?;
-    DuckDBManager::configure_connection(&conn)
-        .map_err(|error| format!("配置联邦分析连接失败：{error}"))?;
-    Ok(conn)
-}
+// 2026-11-26：`open_configured` 随"联邦自建内存库"一起删了——现在连接由分析实例给
+// （`AnalysisInstance::open_tagged` 里调 `DuckDBManager::configure_connection`）。
 
 /// 挂载前把凭据建成本连接的 Secret（L2 的唯一入口；L1 没有 Secret，直接过）
 ///
@@ -788,7 +769,23 @@ pub fn ensure_session(
         return Ok(session);
     }
 
-    let session = Arc::new(FederatedSession::open(sources, requested_primary)?);
+    // 源清单变了：先把**实例上的那条旧会话关掉**（`TEMP` 随旧会话消失，正是重建的本意），
+    // 再用同一个 owner 开一条新的（`ensure_session` 会给出新 id 并更新 owner 映射）。
+    if let Ok(sessions) = SESSIONS.lock() {
+        if let Some(cached) = sessions.get(owner) {
+            if let Ok(instance) = crate::duckdb::instance::instance() {
+                instance.close_session(cached.session.analysis_session().id());
+            }
+        }
+    }
+
+    let instance = crate::duckdb::instance::instance()?;
+    let analysis_session = instance.ensure_session(&format!("fed:{owner}"), "联邦")?;
+    let session = Arc::new(FederatedSession::open(
+        analysis_session,
+        sources,
+        requested_primary,
+    )?);
     if let Ok(mut sessions) = SESSIONS.lock() {
         if sessions.contains_key(owner) {
             tracing::info!(
@@ -832,17 +829,32 @@ pub fn snapshot_for(owner: &str) -> Option<SessionSnapshot> {
 }
 
 /// 放掉某个主人的会话（测试 / 连接被删时用）
+///
+/// 要连**实例上的那条会话**一起关：不然会话表里留一条空壳，`TEMP` 与 owner 映射也无主。
 pub fn drop_session(owner: &str) -> bool {
-    SESSIONS
+    let cached = SESSIONS
         .lock()
-        .map(|mut sessions| sessions.remove(owner).is_some())
-        .unwrap_or(false)
+        .ok()
+        .and_then(|mut sessions| sessions.remove(owner));
+    let Some(cached) = cached else {
+        return false;
+    };
+    if let Ok(instance) = crate::duckdb::instance::instance() {
+        instance.close_session(cached.session.analysis_session().id());
+    }
+    true
 }
 
 /// 放掉全部联邦会话（测试用：进程内状态要能清干净）
 pub fn drop_all() {
-    if let Ok(mut sessions) = SESSIONS.lock() {
-        sessions.clear();
+    let sessions: Vec<_> = SESSIONS
+        .lock()
+        .map(|mut sessions| sessions.drain().map(|(_, cached)| cached).collect())
+        .unwrap_or_default();
+    if let Ok(instance) = crate::duckdb::instance::instance() {
+        for cached in sessions {
+            instance.close_session(cached.session.analysis_session().id());
+        }
     }
 }
 
@@ -953,6 +965,32 @@ mod tests {
     use crate::duckdb::federation::registry::{FederatedSource, MountState, MountedSource};
     use std::sync::Arc;
 
+    /// 测试用：每条用例一个**独立分析实例**（避免共用 catalog 互相踩），owner 固定 `doc`。
+    ///
+    /// 底座在 `open_tagged` 时挂上，所以调它的用例必须先把 `set_bases(...)` 设好。
+    fn try_open_for_test(
+        tag: &str,
+        sources: &[FederatedSource],
+        primary: Option<&str>,
+    ) -> Result<Arc<FederatedSession>, String> {
+        let instance = crate::duckdb::instance::AnalysisInstance::open_tagged(
+            tag,
+            std::time::Duration::from_secs(10),
+        )?;
+        let session = instance.open_session("doc", "测试")?;
+        Ok(Arc::new(FederatedSession::open(
+            session, sources, primary,
+        )?))
+    }
+
+    fn open_for_test(
+        tag: &str,
+        sources: &[FederatedSource],
+        primary: Option<&str>,
+    ) -> Arc<FederatedSession> {
+        try_open_for_test(tag, sources, primary).expect("建联邦会话")
+    }
+
     /// 铁律 G 第 31 条：脚本 / 文档类文件只能说「不是数据」，不能说「读不了」。
     /// 未知格式（如 `.arrow2`）仍按能力表述，因为那才是真的缺读取器。
     #[test]
@@ -978,7 +1016,7 @@ mod tests {
         let dir = workdir("add_source");
         let first = file_source(&dir, "a.csv", "src_a", 2);
         let second = file_source(&dir, "b.csv", "src_b", 3);
-        let session = FederatedSession::open(&[first], None).expect("开会话");
+        let session = open_for_test("add_source", &[first], None);
         session.add_source(second).expect("追加源");
         let snapshot = session.snapshot();
         assert_eq!(snapshot.sources.len(), 2, "{snapshot:?}");
@@ -992,7 +1030,7 @@ mod tests {
     fn listing_tables_of_a_mounted_source_gives_copiable_names() {
         let dir = workdir("list_tables");
         let source = file_source(&dir, "alpha", "alpha", 2);
-        let session = FederatedSession::open(&[source], None).expect("建会话");
+        let session = open_for_test("single_source", &[source], None);
 
         let tables = session.list_tables("alpha").expect("列源里的表");
         let items = tables.iter().find(|t| t.name == "items").expect("有 items 表");
@@ -1016,7 +1054,7 @@ mod tests {
         let path = dir.join("orders.csv");
         std::fs::write(&path, "id,name\n1,a\n2,b\n").expect("写 csv");
 
-        let session = FederatedSession::open(&[], None).expect("空源也能开会话");
+        let session = open_for_test("empty", &[], None);
         session
             .add_file_view(path.to_str().expect("路径"), "orders_file")
             .expect("文件加载成视图");
@@ -1103,7 +1141,7 @@ mod tests {
         assert_ne!(with_bases, without_bases, "底座变了指纹必须变");
         set_bases(bases);
 
-        let session = FederatedSession::open(&[], None).expect("只剩底座也能建会话");
+        let session = open_for_test("bases_only", &[], None);
         let project = session
             .run("SELECT count(*) AS n FROM analytics.main.res_demo")
             .expect("项目分析库应可查");
@@ -1125,7 +1163,7 @@ mod tests {
         let dir = workdir("join");
         let alpha = file_source(&dir, "alpha", "alpha", 3);
         let beta = file_source(&dir, "beta", "beta", 3);
-        let session = FederatedSession::open(&[alpha, beta], Some("alpha")).expect("建会话");
+        let session = open_for_test("join", &[alpha, beta], Some("alpha"));
 
         let snapshot = session.snapshot();
         assert_eq!(snapshot.ready_count(), 2, "{snapshot:?}");
@@ -1161,8 +1199,7 @@ mod tests {
         .expect("组装源");
 
         // 请求的主源正好是坏的那个 → 回退到可用的，并留下说明
-        let session =
-            FederatedSession::open(&[missing, good], Some("missing")).expect("会话仍该建起来");
+        let session = open_for_test("primary_fallback", &[missing, good], Some("missing"));
         let snapshot = session.snapshot();
         assert_eq!(snapshot.ready_count(), 1, "{snapshot:?}");
         assert_eq!(snapshot.primary.as_deref(), Some("good"), "回退到可用源");
@@ -1197,7 +1234,7 @@ mod tests {
         let dir = workdir("dup");
         let a = file_source(&dir, "a", "same", 1);
         let b = file_source(&dir, "b", "same", 1);
-        let error = FederatedSession::open(&[a, b], None).expect_err("该拒");
+        let error = try_open_for_test("dup", &[a, b], None).expect_err("该拒");
         assert!(error.contains("same"), "{error}");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1212,8 +1249,7 @@ mod tests {
         let dir = workdir("refresh");
         let first = file_source(&dir, "first", "first", 1);
         let second = file_source(&dir, "second", "second", 2);
-        let session = FederatedSession::open(&[first.clone(), second.clone()], Some("first"))
-            .expect("建会话");
+        let session = open_for_test("refresh", &[first.clone(), second.clone()], Some("first"));
 
         // 重挂：状态仍是可用、表数正确，主源没丢
         session.refresh("first").expect("重挂");
@@ -1245,7 +1281,7 @@ mod tests {
     fn writing_to_a_source_is_refused_by_the_engine() {
         let dir = workdir("readonly");
         let source = file_source(&dir, "ro", "ro", 1);
-        let session = FederatedSession::open(&[source], None).expect("建会话");
+        let session = open_for_test("single_source", &[source], None);
         let error = session
             .run("INSERT INTO ro.items VALUES (99, 'x')")
             .expect_err("写源库该被拒");

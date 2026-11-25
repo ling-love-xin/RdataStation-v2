@@ -75,7 +75,17 @@ fn probe_federation_across_mysql_and_sqlite() {
         .expect("组装 ghost 源"),
     ];
 
-    let session = FederatedSession::open(&sources, Some("mysql_src")).expect("建联邦会话");
+    // 联邦会话现在落在分析实例的一条会话上（不再自建内存库）
+    let instance = rds_engine::duckdb::instance::AnalysisInstance::open_tagged(
+        "fed_probe",
+        std::time::Duration::from_secs(30),
+    )
+    .expect("开分析实例");
+    let analysis_session = instance
+        .open_session("fed_probe", "联邦探针")
+        .expect("开会话");
+    let session = FederatedSession::open(analysis_session, &sources, Some("mysql_src"))
+        .expect("建联邦会话");
     let snapshot = session.snapshot();
 
     // 1. 多源挂载：两个真源可用 + 一个坏源带原话保留
