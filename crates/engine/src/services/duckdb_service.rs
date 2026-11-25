@@ -88,6 +88,12 @@ impl DuckDbService {
             crate::duckdb::TempTableSource::Query,
             description,
         );
+        // 第 3b 项：结果集落 **`rds_tmp`**（跨会话共享的唯一去处），名字仍按裸名返回——
+        // `search_path` 让裸名与 `"双引号名"` 都解析到那里（见 `duckdb/temp_table/shared.rs`）。
+        crate::duckdb::temp_table::ensure_shared_schema(conn).map_err(|error| {
+            CoreError::common(CommonError::General(error))
+        })?;
+        let target = crate::duckdb::temp_table::qualified(&table_name);
         let col_defs: Vec<String> = columns
             .iter()
             .enumerate()
@@ -102,8 +108,8 @@ impl DuckDbService {
             .collect();
 
         conn.execute_batch(&format!(
-            "CREATE TABLE \"{}\" ({})",
-            table_name,
+            "CREATE TABLE {} ({})",
+            target,
             col_defs.join(", ")
         ))
         .map_err(|e| {
@@ -116,8 +122,8 @@ impl DuckDbService {
         if !rows.is_empty() {
             let placeholders: Vec<String> = (0..columns.len()).map(|_| "?".to_string()).collect();
             let insert_sql = format!(
-                "INSERT INTO \"{}\" VALUES ({})",
-                table_name,
+                "INSERT INTO {} VALUES ({})",
+                target,
                 placeholders.join(", ")
             );
             let mut stmt = conn.prepare(&insert_sql).map_err(|e| {
@@ -190,17 +196,25 @@ impl DuckDbService {
         // 命名口径与逐行那条路一致：前缀是 TTL / 上限 / 按来源清理 / 关项目清场唯一的识别依据
         let table_name =
             crate::duckdb::generate_unique_name(crate::duckdb::TempTableSource::Query, "result");
+        // 第 3b 项：落 `rds_tmp`、返回裸名（同逐行那条路）
+        crate::duckdb::temp_table::ensure_shared_schema(conn)
+            .map_err(|error| general_error(error))?;
+        let target = crate::duckdb::temp_table::qualified(&table_name);
 
         conn.execute_batch(&format!(
             "CREATE TABLE {} ({})",
-            quote_ident(&table_name),
+            target,
             col_defs.join(", ")
         ))
         .map_err(|e| general_error(format!("建直灌临时表失败: {e}")))?;
 
         {
+            // appender 认默认 schema、不吃 `search_path` → 显式给 schema
             let mut appender = conn
-                .appender(&table_name)
+                .appender_to_db(
+                    &table_name,
+                    crate::duckdb::temp_table::SHARED_TEMP_SCHEMA,
+                )
                 .map_err(|e| general_error(format!("打开直灌 Appender 失败: {e}")))?;
             for batch in batches {
                 if batch.num_rows() == 0 {

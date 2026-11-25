@@ -268,6 +268,11 @@ impl AnalysisInstance {
             .map_err(|error| format!("配置分析实例失败：{error}"))?;
         conn.execute_batch(&format!("CREATE SCHEMA IF NOT EXISTS {SHARED_TEMP_SCHEMA}"))
             .map_err(|error| format!("建 {SHARED_TEMP_SCHEMA} 失败：{error}"))?;
+        // 第 3b 项：控制连接也要认 `rds_tmp` 裸名（照看临时表、诊断、`drop_temp` 都走它）
+        conn.execute_batch(&format!(
+            "SET search_path = 'main,{SHARED_TEMP_SCHEMA}'"
+        ))
+        .map_err(|error| format!("设 search_path 失败：{error}"))?;
         // 底座在**实例**上挂（`analytics` 读写 / `rds_global` 只读）：`ATTACH` 是实例级事实，
         // 挂一次所有会话都看得见；挂不上只让那一格缺席，不把实例带下去
         for (alias, outcome) in super::federation::session::attach_bases(&conn) {
@@ -363,6 +368,13 @@ impl AnalysisInstance {
             })?
         };
         let interrupt = conn.interrupt_handle();
+        // 第 3b 项：每条会话都认 `rds_tmp` 裸名。克隆虽继承控制连接的设置，
+        // 但这里是「临时表能不能被看见」的唯一前提，显式设一次（幂等）。
+        conn.execute_batch(&format!(
+            "CREATE SCHEMA IF NOT EXISTS {SHARED_TEMP_SCHEMA}; \
+             SET search_path = 'main,{SHARED_TEMP_SCHEMA}'"
+        ))
+        .map_err(|error| format!("会话 {id} 设 {SHARED_TEMP_SCHEMA} 落点失败：{error}"))?;
         let stamp = now_ms();
         let session = Arc::new(AnalysisSession {
             id: id.clone(),

@@ -245,10 +245,15 @@ pub fn drop_temp_table(
         ))));
     }
 
-    conn.execute_batch(&format!("DROP TABLE IF EXISTS {}", quote_ident(name)))
-        .map_err(|e| {
-            CoreError::common(CommonError::General(format!("删除临时表 {name} 失败: {e}")))
-        })?;
+    // 落点钉死：新表在 `rds_tmp`，历史表可能在 `memory.main`——两处都试一次（幂等）
+    let mut sql = format!(
+        "DROP TABLE IF EXISTS {}",
+        super::temp_schema::qualified(name)
+    );
+    sql.push_str(&format!("; DROP TABLE IF EXISTS memory.main.{}", quote_ident(name)));
+    conn.execute_batch(&sql).map_err(|e| {
+        CoreError::common(CommonError::General(format!("删除临时表 {name} 失败: {e}")))
+    })?;
     // 登记表同步摘掉：留着会让「登记数」与库里的实际张数对不上
     // （目录化后本文件位于 `duckdb/temp_table/` 下，`super` 指向 temp_table 目录；manager 用绝对路径）
     crate::duckdb::manager::DuckDBManager::temp_table_manager().unregister(name);
@@ -590,8 +595,8 @@ impl TempTableManager {
     ///
     /// 为什么不能只看注册表：注册表只在「新建时」写，进程里可能有没登记的表
     /// （旧版本建的、或上一次清理漏掉的），按前缀查库才是权威。
-    /// 限定 `catalog = memory` 且 `schema = main`：`ATTACH` 进来的文件库表不是临时表，
-    /// 绝不能当成待清理对象。
+    /// 限定 `catalog = memory` 且 schema 只认 `main` / `rds_tmp`（第 3b 项之后新表都在
+    /// `rds_tmp`，历史表留在 `main`）：`ATTACH` 进来的文件库表不是临时表，绝不能当成待清理对象。
     pub fn list_by_source(
         conn: &Connection,
         source: TempTableSource,
@@ -609,7 +614,9 @@ impl TempTableManager {
             let name: String = row.get(0).unwrap_or_default();
             let schema: String = row.get(1).unwrap_or_default();
             let catalog: String = row.get(2).unwrap_or_default();
-            if schema != "main" || catalog != IN_MEMORY_CATALOG {
+            if catalog != IN_MEMORY_CATALOG
+                || (schema != "main" && schema != super::temp_schema::SHARED_TEMP_SCHEMA)
+            {
                 continue;
             }
             if prefixes.iter().any(|prefix| name.starts_with(prefix)) {
@@ -1040,7 +1047,7 @@ mod tests {
         let still_there = conn
             .query_row(
                 "SELECT COUNT(*) FROM information_schema.tables
-                 WHERE table_catalog = 'memory' AND table_schema = 'main' AND table_name = ?",
+                 WHERE table_catalog = 'memory' AND table_schema = 'rds_tmp' AND table_name = ?",
                 duckdb::params![name],
                 |row| row.get::<_, i64>(0),
             )

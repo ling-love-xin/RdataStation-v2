@@ -47,6 +47,8 @@ pub fn create_analysis_temp_table(
     rows: &[Vec<Value>],
     description: &str,
 ) -> Result<String, CoreError> {
+    // 落点先备好（`rds_tmp` + `search_path`）：跨会话共享是这一层的唯一用意
+    super::temp_schema::ensure_shared_schema(conn).map_err(internal)?;
     // 惰性清理放在建表前：让 TTL / 上限在「下一次建表」这个廉价时机生效
     if let Err(e) = cleanup_analysis_temp_tables(conn) {
         // 清理失败不该挡住建表（表还等着用），但要在日志里留痕
@@ -54,6 +56,7 @@ pub fn create_analysis_temp_table(
     }
 
     let table = generate_table_name_for(TempTableSource::Insight, description);
+    let target = super::temp_schema::qualified(&table);
     let col_defs: Vec<String> = columns
         .iter()
         .enumerate()
@@ -67,17 +70,13 @@ pub fn create_analysis_temp_table(
         })
         .collect();
 
-    conn.execute_batch(&format!(
-        "CREATE TABLE {}({})",
-        quote_ident(&table),
-        col_defs.join(", ")
-    ))
-    .map_err(|e| {
-        CoreError::common(CommonError::General(format!(
-            "建分析临时表 {} 失败: {e}",
-            table
-        )))
-    })?;
+    conn.execute_batch(&format!("CREATE TABLE {}({})", target, col_defs.join(", ")))
+        .map_err(|e| {
+            CoreError::common(CommonError::General(format!(
+                "建分析临时表 {} 失败: {e}",
+                table
+            )))
+        })?;
 
     if let Err(e) = insert_rows(conn, &table, columns.len(), rows) {
         // 半成品不能留：建成功但灌数据失败时，表已在库里且已占内存
@@ -103,11 +102,13 @@ pub fn create_analysis_temp_table_arrow(
     batch: &RecordBatch,
     description: &str,
 ) -> Result<String, CoreError> {
+    super::temp_schema::ensure_shared_schema(conn).map_err(internal)?;
     if let Err(e) = cleanup_analysis_temp_tables(conn) {
         tracing::warn!("[analysis] 惰性清理洞察中间表失败: {e}");
     }
 
     let table = generate_table_name_for(TempTableSource::Insight, description);
+    let target = super::temp_schema::qualified(&table);
     let col_defs: Vec<String> = batch
         .schema()
         .fields()
@@ -120,25 +121,24 @@ pub fn create_analysis_temp_table_arrow(
             )
         })
         .collect();
-    conn.execute_batch(&format!(
-        "CREATE TABLE {}({})",
-        quote_ident(&table),
-        col_defs.join(", ")
-    ))
-    .map_err(|e| {
-        CoreError::common(CommonError::General(format!(
-            "建分析临时表 {table} 失败（Arrow 直灌，来源：{description}）: {e}"
-        )))
-    })?;
+    conn.execute_batch(&format!("CREATE TABLE {}({})", target, col_defs.join(", ")))
+        .map_err(|e| {
+            CoreError::common(CommonError::General(format!(
+                "建分析临时表 {table} 失败（Arrow 直灌，来源：{description}）: {e}"
+            )))
+        })?;
 
     // 灌数据（0 行批跳过——表结构已就位）；失败收半成品
     let appender_result = (|| -> Result<(), CoreError> {
         if batch.num_rows() == 0 {
             return Ok(());
         }
-        let mut app = conn.appender(&table).map_err(|e| {
-            CoreError::common(CommonError::General(format!("建 appender 失败: {e}")))
-        })?;
+        // appender 不走 `search_path`（它认默认 schema），所以显式指定 schema
+        let mut app = conn
+            .appender_to_db(&table, super::temp_schema::SHARED_TEMP_SCHEMA)
+            .map_err(|e| {
+                CoreError::common(CommonError::General(format!("建 appender 失败: {e}")))
+            })?;
         app.append_record_batch(batch.clone()).map_err(|e| {
             CoreError::common(CommonError::General(format!("Arrow 批灌入失败: {e}")))
         })?;
@@ -202,25 +202,23 @@ pub fn create_analysis_temp_table_as_for(
     description: &str,
     source: TempTableSource,
 ) -> Result<String, CoreError> {
+    super::temp_schema::ensure_shared_schema(conn).map_err(internal)?;
     // 惰性清理放在建表前：让 TTL / 上限在「下一次建表」这个廉价时机生效
     if let Err(e) = cleanup_analysis_temp_tables(conn) {
         tracing::warn!("[analysis] 惰性清理洞察中间表失败: {e}");
     }
 
     let table = generate_table_name_for(source, description);
-    conn.execute_batch(&format!(
-        "CREATE TABLE {} AS {}",
-        quote_ident(&table),
-        select_sql
-    ))
-    .map_err(|e| {
-        // 建表失败时可能已经留了半成品（DuckDB 的 CTAS 是原子的，但不同版本行为
-        // 不一）——幂等地收一下，代价是一次不存在的 DROP
-        let _ = conn.execute_batch(&format!("DROP TABLE IF EXISTS {}", quote_ident(&table)));
-        CoreError::common(CommonError::General(format!(
-            "建分析临时表 {table} 失败（来源：{description}）: {e}"
-        )))
-    })?;
+    let target = super::temp_schema::qualified(&table);
+    conn.execute_batch(&format!("CREATE TABLE {} AS {}", target, select_sql))
+        .map_err(|e| {
+            // 建表失败时可能已经留了半成品（DuckDB 的 CTAS 是原子的，但不同版本行为
+            // 不一）——幂等地收一下，代价是一次不存在的 DROP
+            let _ = conn.execute_batch(&format!("DROP TABLE IF EXISTS {}", target));
+            CoreError::common(CommonError::General(format!(
+                "建分析临时表 {table} 失败（来源：{description}）: {e}"
+            )))
+        })?;
 
     DuckDBManager::register_temp_table(&table);
     warn_if_near_capacity();
@@ -302,8 +300,12 @@ pub fn cleanup_analysis_temp_tables(conn: &Connection) -> Result<Vec<String>, Co
     let evicted = DuckDBManager::temp_table_manager().lazy_cleanup_insight_tables();
     let mut dropped = Vec::new();
     for name in evicted {
-        // 登记表已经由管理器摘掉了，这里只负责把表删掉
-        match conn.execute_batch(&format!("DROP TABLE IF EXISTS {}", quote_ident(&name))) {
+        // 登记表已经由管理器摘掉了，这里只负责把表删掉（落点钉死 `rds_tmp`，不走 search_path）
+        let sql = format!(
+            "DROP TABLE IF EXISTS {}",
+            super::temp_schema::qualified(&name)
+        );
+        match conn.execute_batch(&sql) {
             Ok(_) => dropped.push(name),
             Err(e) => tracing::warn!("[analysis] 清理洞察中间表 {name} 失败: {e}"),
         }
@@ -336,6 +338,11 @@ fn generate_table_name_for(source: TempTableSource, description: &str) -> String
 /// 标识符引号（名字由本模块生成 / 校验过，这里只做最小必要的包裹）
 fn quote_ident(name: &str) -> String {
     super::temp_table::quote_ident(name)
+}
+
+/// 共享临时区准备失败 → 统一错误
+fn internal(message: String) -> CoreError {
+    CoreError::common(CommonError::General(message))
 }
 
 /// 灌数据（参数化插入；值的转换与结果集那条路径共用一份实现）
@@ -389,12 +396,25 @@ mod tests {
     fn table_exists(conn: &Connection, name: &str) -> bool {
         conn.query_row(
             "SELECT COUNT(*) FROM information_schema.tables
-             WHERE table_catalog = 'memory' AND table_schema = 'main' AND table_name = ?",
+             WHERE table_catalog = 'memory'
+               AND table_schema IN ('main', 'rds_tmp')
+               AND table_name = ?",
             duckdb::params![name],
             |row| row.get::<_, i64>(0),
         )
         .map(|n| n > 0)
         .unwrap_or(false)
+    }
+
+    /// 表具体落在哪个 schema（第 3b 项之后应一律是 `rds_tmp`）
+    fn schema_of(conn: &Connection, name: &str) -> Option<String> {
+        conn.query_row(
+            "SELECT table_schema FROM information_schema.tables
+             WHERE table_catalog = 'memory' AND table_name = ?",
+            duckdb::params![name],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
     }
 
     /// 名字必须落在洞察前缀下，并且登记进管理器（否则 TTL / 上限 / 按来源清理都看不见它）
@@ -409,6 +429,11 @@ mod tests {
             "表名必须带洞察前缀与描述（K16 的根因就是前缀不匹配）：{table}"
         );
         assert!(table_exists(&conn, &table));
+        assert_eq!(
+            schema_of(&conn, &table).as_deref(),
+            Some(crate::duckdb::temp_table::temp_schema::SHARED_TEMP_SCHEMA),
+            "第 3b 项：洞察中间表要落在 rds_tmp（跨会话共享的唯一去处）"
+        );
         assert!(
             analysis_temp_tables(&conn).expect("查库").contains(&table),
             "按来源查库应当能看见它（这正是按前缀清理的依据）"

@@ -6,10 +6,12 @@
 
 pub mod analysis;
 pub mod promote;
+pub mod temp_schema;
 pub mod temp_table;
 
 pub use analysis::*;
 pub use promote::*;
+pub use temp_schema::*;
 pub use temp_table::*;
 
 // 标识符加引号的**唯一规则**在临时表模块（B7 切片二的导出 COPY 也要用）；
