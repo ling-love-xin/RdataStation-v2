@@ -3552,7 +3552,7 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
 - 替换钮只在 `findReplaceLogic.getTarget().isEditable()` 时显示（`:968`）
 - `HISTORY_SIZE = 15` 的查找历史（`:81`），挂在输入框的内容补全上（`:799-808`）
 - 关闭：`Close` 钮 / `Esc`（`closeOnTargetEscapeListener`，`:535-544`）
-- 结果集版：`filterSchedulingTimeoutMilliseconds = 250`（`:50`）边输边把结果集过滤成匹配行，且该「interactive filter」**默认开**（`:53` 注释：默认 ENABLE、存反值；`:76` `isInteractiveFilterEnabled = true`），右键菜单可关（`:115-119`）
+- 结果集版：`filterSchedulingTimeoutMilliseconds = 250`（`:50`）边输边把结果集过滤成匹配行。注意 `:76` 的 `isInteractiveFilterEnabled = true` 与 `:155-157` 只是说**这项能力默认启用**，真正开始过滤要等用户把 `selectAllButton` 勾上（`performSelectAll:211-223`：勾上 → `scheduleFilter()`，取消 → `applyFilterAction(null)`；打开浮层时该勾选框是未勾状态，`restoreOverlaySettings:150-157` 只恢复能力开关、不恢复勾选）。右键菜单可切换这项能力（`:115-134`，存的是「disabled」反值 `:53`）。
 
 ### 54.2 本仓原状
 
@@ -3578,7 +3578,7 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
 | 换角 | 与选中区冲突时 `TOP_RIGHT` → `BOTTOM_RIGHT` → `BOTTOM_LEFT`（`:1090-1106`） | 恒 `TOP_RIGHT` | 冲突判定 `hasSelectionBoundsConflict` 在 `:224`（拿 `ISelection` 与浮层矩形比）；本仓能拿到选中行列但拿不到像素矩形，落「恒右上」并登记 |
 | 替换栏 | `isEditable()` 才出现（`:968`），含 Replace / ReplaceAll | 不做 | 本仓结果集不可编辑；替换语义走「待提交」通道，属另一批 |
 | 查找历史 | `HistoryStore`，`HISTORY_SIZE = 15`（`:81`、`:828`） | 保留词不落历史栈 | `InputState` 无历史栈/补全通道（与筛选框补全同一缺口） |
-| 「边输边过滤」默认值 | 默认**开**、250ms 防抖（`:50-53`、`:76`） | 「仅显示匹配」勾选框、默认**关** | 本仓把同一件事做成显式勾选；改默认值会改变既有交互与测试前提，**未擅自改**，待拍板 |
+| 边输边过滤的触发 | `selectAllButton` 勾选 + interactive filter enabled（**能力**默认开，`:76`、`:155-157`）→ 每次输入 `scheduleFilter()`，**250ms 防抖**（`:50`、`:171-183`）；能力关掉时勾选只一次性应用（`:218-222`） | 「仅显示匹配」勾选 → `find_query_changed` 每次输入**即时**重过滤（`crates/result_panel/src/panel/events.rs:268-278`）；没有「关掉边输边过滤」的模式 | 语义同构（都是「勾选才过滤、默认不勾、关浮层撤过滤」），差在防抖与「可关」两处：本仓词一变就重刷，行集合与词恒一致 |
 | 命中数文本 | 无 | 有（「N 个匹配」/「无匹配」） | 本仓增强，保留 |
 | 格内区间高亮 | `StyledText` 的查找高亮 | 无 | 网格自绘，需另做装饰层 |
 
@@ -3589,6 +3589,27 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
 - `cargo test -p rds-editor --lib` → **869 passed / 0 failed / 4 ignored**（无回归）。
 - 新断言 `find_overlay_sits_in_the_grid_top_right_corner` 钉三件事：浮层上缘贴网格顶部（差 < 8px）、右缘贴网格右缘（差 < 8px）、宽 ≈ 0.7 × 网格宽（或已落到 20rem 下限）——即它确实是浮层，不是布局行。
 - 目视项（浮层是否盖住网格、边框/底色、窄面板时是否可读）按要求由用户手动确认；本刀不启动 GUI、不截图。
+
+### 54.6 更正记录（2026-11-25）
+
+上一轮初稿把 `:76` / `:53` 的「interactive filter 能力默认启用」误读成「打开查找就默认过滤」，据此登记了「DBeaver 默认开、本仓默认关」的差异。经复读 `performSelectAll:211-223`、`onSearchFieldModified:171-183`、`restoreOverlaySettings:150-157` 更正为：**DBeaver 同样要用户勾上 `selectAllButton` 才开始过滤**，打开浮层时该勾选框是未勾状态；本仓「仅显示匹配」勾选框的默认值（不勾）与它一致，无需改默认值。
+
+真正的残余差异只有一条：DBeaver 可整项关掉边输边过滤（右键菜单 `:115-134`，关掉后勾选只一次性应用 `:218-222`），本仓没有这个模式。
+
+### 54.7 防抖落地（提交 `e2e5e7de`）
+
+上面那条防抖差异已按真值补齐：`find_query_changed` 在「仅显示匹配」勾着时，把「过滤 + 命中重算 + 定位」整组延迟 250ms（同 `scheduleFilter` → `applyInteractiveFilterJob` 延迟三件一起，`:204-208`），未勾时仍即时（`super.onSearchFieldModified` 路径，`:180-182`）；在途任务用 `find_version` 代次号作废（同筛选框 `on_filter_input` 的范式），切换勾选 / 关闭浮层时立即作废并走一次显式过滤。
+
+| 项 | 真值 | 本仓 |
+| --- | --- | --- |
+| 延迟时长 | `filterSchedulingTimeoutMilliseconds = 250`（`:50`） | `Duration::from_millis(250)` |
+| 延迟范围 | 过滤 + 命中更新 + 高亮整组（`:204-208`） | `apply_find_filter_and_locate`（`set_find_filter` + `count_find_hits` + `find_step`） |
+| 未勾时的搜索 | 即时增量搜索（`:180-182`） | 即时（不进防抖分支） |
+| 勾选动作本身 | 也过一次 `scheduleFilter`，带 250ms 延迟（`:211-223`） | 即时生效（故意省这一跳，登记为微差） |
+
+新增测试 `find_query_change_while_filtering_waits_for_the_250ms_debounce`：改词后立刻断言 delegate 仍是旧词、行集合未变；`advance_clock(300ms)` + `run_until_parked` 后断言换成新词。`cargo test -p rds-result-panel --lib` → **450 passed / 0 failed**；`cargo check -p rds-result-panel --lib --tests` → `Finished`，0 warning。
+
+寄存器说明：上一轮 §54.5 的 449 是加防抖测试之前的数，现已 450。
 
 
 
