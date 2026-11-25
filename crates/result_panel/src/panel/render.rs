@@ -10,7 +10,7 @@ use gpui_kit::component::Selectable as _;
 use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, Textarea};
-use gpui_kit::component::menu::PopupMenuItem;
+use gpui_kit::component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::Icon;
@@ -2027,10 +2027,41 @@ impl ResultPanel {
             .child(
                 // 「只显示匹配行」：DBeaver 的 `selectAllButton`（SWT.CHECK，图标
                 // `FIND_REPLACE_FIND_ALL_FILTER`）。勾上把查找词当临时行过滤。
-                // `Checkbox` 是 RenderOnce，自身 id 进不了 `debug_bounds`，探针挂外层 div。
+                // 右键挂两项能力开关（`configureSelectAllButton:107-135`）：「勾选即边输边
+                // 过滤」/「只在点按时应用」。能力关掉后这颗钮退化成一次性按钮
+                // （`performSelectAll:218-222` 强制不勾 + `applyQuickFilter`）。
+                // `Checkbox` 是 RenderOnce，自身 id 进不了 `debug_bounds`，探针挂外层 div；
+                // 右键菜单也要稳定 id（`ContextMenuExt` 优先用元素 id 做菜单状态键）。
                 div()
                     .flex_none()
+                    .id("editor-result-find-only-menu")
                     .debug_selector(|| "editor-result-find-only-wrap".to_string())
+                    .context_menu({
+                        let queue = self.queue.clone();
+                        let interactive_on = self.find_interactive_filter;
+                        move |mut menu: PopupMenu, _window, _cx| {
+                            // `context_menu` 的 builder 是 `Fn`（菜单可能被反复重建），
+                            // 所以每项先克隆一份队列，别把外层捕获移走
+                            for (label, checked, enabled) in find_only_menu_entries(interactive_on)
+                            {
+                                let q = queue.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::new(tr(label))
+                                        .checked(checked)
+                                        // DBeaver 的 action 自带「已处于该状态就什么都不做」
+                                        // 的守卫（`:118-121` / `:126-129`）；本仓由
+                                        // `set_find_interactive_filter` 的幂等早退承担
+                                        .on_click(move |_, _window, app| {
+                                            q.request(
+                                                ResultRequest::SetFindInteractiveFilter(enabled),
+                                                app,
+                                            );
+                                        }),
+                                );
+                            }
+                            menu
+                        }
+                    })
                     .child(
                         Checkbox::new(ElementId::Name(SharedString::from(
                             "editor-result-find-only",
@@ -2064,4 +2095,19 @@ impl ResultPanel {
             )
             .into_any_element()
     }
+}
+
+/// 「仅显示匹配」勾选框右键菜单的两项（DBeaver `configureSelectAllButton:107-135`）
+///
+/// 返回 `(文案, 是否勾选, 点中后要设的 enabled)`：真值里是两个互斥的 `Action`
+/// （`enableInteractiveFilterAction` / `disableInteractiveFilterAction`），文案分别是
+/// `"Check 'Show matching' on to filter while typing"` 与
+/// `"Use 'Show matching' explicitly to apply filter"`（`:115` / `:123`），
+/// 勾选状态由 `setEnableInteractiveFilter` 里的 `setChecked` 维护（`:164-165`）。
+/// 抽成纯函数是为了能断言菜单长相（`PopupMenu` 不暴露菜单项，见 gpui-kit-dev skill）。
+pub(crate) fn find_only_menu_entries(interactive_on: bool) -> [(&'static str, bool, bool); 2] {
+    [
+        ("勾选「仅显示匹配」即边输边过滤", interactive_on, true),
+        ("「仅显示匹配」只在点按时过滤一次", !interactive_on, false),
+    ]
 }

@@ -113,6 +113,14 @@ pub enum ResultRequest {
     /// 纯视图态，不落盘——DBeaver 只把「交互过滤是否启用」写进 dialog settings，
     /// 勾选本身不持久化。
     SetFindFilterOnly(bool),
+    /// 【结果内查找·右键】「边输边过滤」能力开关
+    ///
+    /// 真值：`ResultsetFindReplaceOverlay` 的 `selectAllButton` 挂了右键菜单两项
+    /// （`enableInteractiveFilterAction` / `disableInteractiveFilterAction`，`:115-134`），
+    /// 切换的是 `isInteractiveFilterEnabled`（`:159-169`），并把它写进 dialog settings
+    /// （`INTERACTIVE_FILTER_DISABLED_DIALOG_SETTING`，存反值）。关掉后勾选框强制不勾，
+    /// 点它就是「按当前词过滤一次」（`:218-222`）。
+    SetFindInteractiveFilter(bool),
     /// 【结果内查找】三颗口径开关之一（大小写 / 正则 / 全词，DBeaver `FindReplaceOverlay`
     /// 的三颗 `SWT.CHECK`）。改口径会同时影响定位与「只显示匹配行」的过滤。
     SetFindOption(FindOption, bool),

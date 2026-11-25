@@ -169,9 +169,11 @@ impl ResultPanel {
             let input = self.find_input.clone();
             input.update(cx, |state, cx| state.focus(window, cx));
         } else {
-            // 关查找栏 = 撤掉「只显示匹配行」（DBeaver：`ResultsetFindReplaceOverlay.onClose`
+            // 关查找栏 = 撤掉查找应用出来的行过滤（DBeaver：`ResultsetFindReplaceOverlay.onClose`
             // 在 `findAllActionApplied` 时 `applyFilterAction(null)`，浮层关了过滤不残留）。
-            self.set_find_filter_only(false, cx);
+            // 走 `clear_find_filter` 而不是 `set_find_filter_only(false)`：后者在能力关掉时
+            // 是「一次性应用」的入口，会把过滤又灌回去。
+            self.clear_find_filter(cx);
         }
         cx.notify();
     }
@@ -199,10 +201,19 @@ impl ResultPanel {
     /// 勾选/取消这一次动作本身是即时的（DBeaver 的 `performSelectAll:211-223` 也要过一次
     /// `scheduleFilter`，本仓省掉这一跳，让勾选结果立刻可见——已登记为微差）。
     pub fn set_find_filter_only(&mut self, on: bool, cx: &mut Context<Self>) {
+        // 能力关着（`isInteractiveFilterEnabled = false`）时这颗控件不是勾选框，而是
+        // 一颗「按当前词过滤一次」的按钮 —— `performSelectAll:218-222` 先强制
+        // `setSelection(false)` 再 `applyQuickFilter()` + `storeHistory()`。
+        if !self.find_interactive_filter {
+            self.apply_find_filter_once(cx);
+            return;
+        }
         if self.find_filter_only == on {
             return;
         }
         self.find_filter_only = on;
+        // 勾着即「已应用」、取消即「已撤」，两个状态一起走（关浮层按后者决定撤不撤）
+        self.find_filter_applied = on;
         // 丢掉还在等 250ms 的那次任务：此刻的行集合由下面这发显式过滤决定
         self.find_version = self.find_version.wrapping_add(1);
         *self.find_debounce.borrow_mut() = None;
@@ -212,6 +223,59 @@ impl ResultPanel {
             None
         };
         self.push_find_filter(needle, cx);
+    }
+
+    /// 【结果内查找·右键】切换「边输边过滤」能力（DBeaver `setEnableInteractiveFilter`，
+    /// `ResultsetFindReplaceOverlay:159-169`）
+    ///
+    /// 关掉时只把勾选框强制取消（`:160-162`），**已应用的过滤不动**——撤过滤要等用户
+    /// 再点下这颗钮（一次性路径）或关浮层（`onClose:257-263`）。
+    pub fn set_find_interactive_filter(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.find_interactive_filter == enabled {
+            return;
+        }
+        self.find_interactive_filter = enabled;
+        // 两种方向都回到「未勾」：DBeaver 重新打开能力时也不恢复勾选（只恢复能力开关，
+        // `restoreOverlaySettings:150-157`），行集合保持现状
+        self.find_filter_only = false;
+        self.find_version = self.find_version.wrapping_add(1);
+        *self.find_debounce.borrow_mut() = None;
+        cx.notify();
+    }
+
+    /// 一次性把当前查找词应用成行过滤（DBeaver 关掉 interactive filter 后的
+    /// `applyQuickFilter:225-242`）
+    ///
+    /// 与勾选路径的区别：不改 `find_filter_only`（勾选框保持不勾），只置
+    /// `find_filter_applied`；词空时等于撤过滤（`:230-232` 走 `applyFilterAction(null)`）。
+    fn apply_find_filter_once(&mut self, cx: &mut Context<Self>) {
+        if self.find_query.trim().is_empty() {
+            self.clear_find_filter(cx);
+            return;
+        }
+        let needle = self.find_query.clone();
+        self.find_version = self.find_version.wrapping_add(1);
+        *self.find_debounce.borrow_mut() = None;
+        self.find_filter_applied = true;
+        self.push_find_filter(Some(needle), cx);
+        // `searchBar.storeHistory()`：一次性应用也算一次确认过的筛选，进历史
+        self.note_filter_commit();
+    }
+
+    /// 撤掉查找应用出来的行过滤（查找词本身保留）
+    ///
+    /// DBeaver 的撤过滤只有两条来源：取消勾选（`performSelectAll:215-217`）与
+    /// 关浮层（`onClose:257-263` 的 `findAllActionApplied`）。本仓统一走这里，
+    /// 幂等：两个标记都空时直接返回。
+    fn clear_find_filter(&mut self, cx: &mut Context<Self>) {
+        if !self.find_filter_only && !self.find_filter_applied {
+            return;
+        }
+        self.find_filter_only = false;
+        self.find_filter_applied = false;
+        self.find_version = self.find_version.wrapping_add(1);
+        *self.find_debounce.borrow_mut() = None;
+        self.push_find_filter(None, cx);
     }
 
     /// 三颗口径开关之一（大小写 / 正则 / 全词）
@@ -361,7 +425,7 @@ impl ResultPanel {
         }
         self.find_open = false;
         // 同 DBeaver 的 `onClose`：关浮层就撤掉曾应用的过滤（词本身保留）
-        self.set_find_filter_only(false, cx);
+        self.clear_find_filter(cx);
         cx.notify();
     }
 

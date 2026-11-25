@@ -4618,6 +4618,94 @@ fn find_query_change_while_filtering_waits_for_the_250ms_debounce(
     assert_eq!(rows, 1, "`null` 只命中第二行");
 }
 
+/// 【§54.8 2026-11-25】「边输边过滤」能力关掉后，「仅显示匹配」退化成一次性按钮。
+///
+/// 真值 `ResultsetFindReplaceOverlay`：右键菜单切 `isInteractiveFilterEnabled`（`:115-134`），
+/// 关掉后 `performSelectAll` 先强制 `setSelection(false)` 再 `applyQuickFilter()` +
+/// `storeHistory()`（`:218-222`）；词变只走父类的即时增量搜索、不动行集合（`:180-182`）；
+/// 关浮层按 `findAllActionApplied` 撤过滤（`:257-263`）。
+#[gpui_kit::test]
+fn interactive_filter_off_turns_show_matching_into_a_one_shot_button(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let grid = cx.update(|_window, app| panel.read(app).grid().clone());
+
+    // 词 `null`：两行里只命中第二行（`1` / `1234.5` 都不含它）
+    cx.update(|window, cx| {
+        panel.update(cx, |p, cx| {
+            p.toggle_find(window, cx);
+            p.find_query_changed("null".to_string(), cx);
+            p.set_find_interactive_filter(false, cx);
+        })
+    });
+    let before = cx.update(|_window, app| grid.read(app).delegate().view_total());
+    assert_eq!(before, 2, "能力关着时敲词不动行集合");
+
+    // 点这颗钮（能力关 = 一次性应用）→ 过滤生效，但勾选框不保持勾着
+    cx.update(|_window, cx| panel.update(cx, |p, cx| p.set_find_filter_only(true, cx)));
+    let applied = cx.update(|_window, app| {
+        let d = grid.read(app).delegate();
+        (d.find_filter().map(str::to_string), d.view_total())
+    });
+    let flags = cx.update(|_window, app| {
+        let p = panel.read(app);
+        (p.find_filter_only, p.find_filter_applied)
+    });
+    assert_eq!(
+        applied.0.as_deref(),
+        Some("null"),
+        "一次性应用应把当前词灌进视图"
+    );
+    assert_eq!(applied.1, 1, "只剩命中那一行");
+    assert!(
+        !flags.0,
+        "能力关着时勾选框不能保持勾选（DBeaver `setSelection(false)`）"
+    );
+    assert!(flags.1, "要记住「已应用过」，关浮层时按它撤过滤");
+
+    // 改词：能力关着，行集合与过滤词都不跟着变
+    cx.update(|_window, cx| panel.update(cx, |p, cx| p.find_query_changed("1".into(), cx)));
+    let after_typing = cx.update(|_window, app| {
+        let d = grid.read(app).delegate();
+        (d.find_filter().map(str::to_string), d.view_total())
+    });
+    assert_eq!(
+        after_typing.0.as_deref(),
+        Some("null"),
+        "能力关着：词变了也不换过滤词"
+    );
+    assert_eq!(after_typing.1, 1, "行集合保持上次一次性应用的结果");
+
+    // 关浮层 → 撤过滤（查找词本身保留）
+    cx.update(|_window, cx| panel.update(cx, |p, cx| p.close_find(cx)));
+    let closed = cx.update(|_window, app| {
+        let d = grid.read(app).delegate();
+        (d.find_filter().map(str::to_string), d.view_total())
+    });
+    assert_eq!(closed.0, None, "关浮层要撤掉一次性应用的过滤");
+    assert_eq!(closed.1, 2, "两行都回来");
+}
+
+/// 【§54.8】勾选框右键菜单两项的文案 / 勾选态随能力开关互斥
+/// （`PopupMenu` 不暴露菜单项，故按 gpui-kit-dev skill 的口径断言纯函数）。
+#[gpui_kit::test]
+fn find_only_menu_entries_follow_the_interactive_switch(_cx: &mut gpui_kit::TestAppContext) {
+    let on = super::render::find_only_menu_entries(true);
+    assert!(on[0].1, "能力开着：第一项（边输边过滤）勾选");
+    assert!(on[0].2);
+    assert!(!on[1].1, "能力开着：第二项（只在点按时过滤）不勾");
+    assert!(!on[1].2);
+
+    let off = super::render::find_only_menu_entries(false);
+    assert!(!off[0].1, "能力关着：第一项不勾");
+    assert!(off[0].2);
+    assert!(off[1].1, "能力关着：第二项勾选");
+    assert!(!off[1].2);
+}
+
 /// 【工具栏 2026-11-20 / 收口 2026-11-24】CHECK 型按钮的「点一次就翻转面板态」：
 /// 筛选栏只剩筛选展开 / 查找两颗（下发源库已删、列注释已迁结果集设置，见基线 §21.3），
 /// 二者都是 DBeaver 的 CHECK `ToolItem`

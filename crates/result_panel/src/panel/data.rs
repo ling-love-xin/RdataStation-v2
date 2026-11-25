@@ -530,6 +530,19 @@ pub struct ResultPanel {
     /// 本仓照此：勾着时延迟 250ms 再重过滤 + 重算命中 + 定位；未勾时保持即时。
     pub(crate) find_version: u64,
     pub(crate) find_debounce: RefCell<Option<Task<()>>>,
+    /// 【结果内查找】「边输边过滤」能力开关（DBeaver `isInteractiveFilterEnabled`，
+    /// `ResultsetFindReplaceOverlay:76`，默认 true）
+    ///
+    /// 关掉后勾选框强制不勾（`:160-162`），点它变成「按当前词过滤一次」（`:218-222`）；
+    /// 词变只重算命中，不动行集合（`:180-182` 走父类的即时增量搜索）。
+    /// 切换入口是勾选框的**右键菜单**（`:115-134`），DBeaver 还会把它写进 dialog settings
+    /// （`:167-168`），本仓不落盘——登记为差异。
+    pub(crate) find_interactive_filter: bool,
+    /// 【结果内查找】是否**已把**查找词应用成行过滤（DBeaver `findAllActionApplied`）
+    ///
+    /// 与 `find_filter_only` 分开：能力关掉后 `find_filter_only` 恒为 false（勾选框不勾），
+    /// 但「一次性应用」过的过滤仍在，关浮层时要按它撤（`onClose:257-263` 只看这个标记）。
+    pub(crate) find_filter_applied: bool,
     /// 【结果内查找】匹配口径（大小写 / 正则 / 全词三开关；查找栏上三颗 CHECK）
     ///
     /// 定位与「只显示匹配行」共用这一份（DBeaver 的 `SearchQuickFilterInfo` 同款：

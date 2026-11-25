@@ -378,6 +378,10 @@ impl ResultPanel {
             find_filter_only: false,
             find_version: 0,
             find_debounce: RefCell::new(None),
+            // 边输边过滤能力默认开（DBeaver `ResultsetFindReplaceOverlay:76`）；
+            // `find_filter_applied` 记「曾把词应用成行过滤」，关浮层时按它撤
+            find_interactive_filter: true,
+            find_filter_applied: false,
             find_criteria: crate::ports::FindCriteria::default(),
             // 【筛选设置】浮层默认关闭、排序草稿为空（空 = 沿用原查询 ORDER BY）
             filter_settings_open: false,

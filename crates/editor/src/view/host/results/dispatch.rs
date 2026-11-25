@@ -87,6 +87,10 @@ impl EditorHostPanel {
             ResultRequest::SetFindFilterOnly(on) => self
                 .result_panel
                 .update(cx, |p, cx| p.set_find_filter_only(on, cx)),
+            // 【结果内查找·右键】边输边过滤能力开关（勾选框右键菜单的两项）
+            ResultRequest::SetFindInteractiveFilter(enabled) => self
+                .result_panel
+                .update(cx, |p, cx| p.set_find_interactive_filter(enabled, cx)),
             // 【结果内查找】三颗口径开关（大小写 / 正则 / 全词）
             ResultRequest::SetFindOption(option, on) => self
                 .result_panel
