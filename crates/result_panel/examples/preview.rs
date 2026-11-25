@@ -180,7 +180,12 @@ fn main() {
         .with_assets(gpui_kit::assets::AllAssets)
         .run(|cx| {
             gpui_kit::init(cx);
-            // 主题：与工作台一致的默认主题；明暗切换留给 settings（预览不接设置服务）
+            // 语言：与工作台同一套（`shared::i18n` 默认即 Zh，`tr()` 直出中文原文）。
+            // 组件库自带文案（Empty / Dialog / Select 占位…）走另一套 rust-i18n，
+            // 不设会一直停在 fallback `en`，中文界面里蹦出 "No data"，故一并同步。
+            shared::i18n::set_locale(shared::i18n::Locale::Zh);
+            gpui_kit::component::set_locale(shared::i18n::Locale::Zh.component_code());
+            // 主题：`gpui_kit::init` 已装默认主题；明暗跟随系统外观（预览不接设置服务）
             let mut options = TitleBar::window_options();
             if let Some(titlebar) = options.titlebar.as_mut() {
                 titlebar.title = Some("RdataStation · 结果集预览".into());
