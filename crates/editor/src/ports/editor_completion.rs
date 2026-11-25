@@ -1482,6 +1482,16 @@ mod tests {
 
     impl EditorHost for StubHost {
 
+        /// 测试桩没有窗口：确认一律放行
+        fn confirm_federated_mount(
+            &self,
+            _conn_id: &str,
+            on_decision: Box<dyn FnOnce(bool, &mut gpui_kit::App)>,
+            cx: &mut gpui_kit::App,
+        ) {
+            on_decision(true, cx);
+        }
+
         fn connections(&self) -> Vec<ConnectionItem> {
 
             self.connections.clone()

@@ -108,6 +108,21 @@ pub trait EditorHost: 'static {
     /// 导航树定位对象（`rds://navigator/<限定表名>` 跳转定义；复用 Quick Open `⌥↵`
     /// 同款 `request_reveal` 机制，宿主侧只入队，导航面板下一帧消费）。
     fn request_reveal(&self, object: engine::ObjectRef);
+
+    /// 切到联邦前的确认（**宿主弹窗 + 必要时挂载**；用户口径 2026-11-25）。
+    ///
+    /// 宿主自己判断这条连接能不能 ATTACH：
+    /// - 能 → 弹「把这条连接挂进 DuckDB 并设为主源？」，确定时先挂（`mount_network_source`）
+    ///   再回调 `true`（主源由计划按"本文档绑定的连接"认定，不另传参）；
+    /// - 不能 → 弹说明（先到结果集标题栏右键保存为临时表 / 项目表，切联邦后从 `analytics` 查），
+    ///   确定只回调 `true`（不挂任何东西）。
+    /// 取消回调 `false`；弹不出窗口时按 `true`（不让菜单点不动）。
+    fn confirm_federated_mount(
+        &self,
+        conn_id: &str,
+        on_decision: Box<dyn FnOnce(bool, &mut App)>,
+        cx: &mut App,
+    );
 }
 
 /// 联邦源清单端口（**工作线程专用**：`editor_exec` 的 `QueryRunner` 是

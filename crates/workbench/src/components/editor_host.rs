@@ -82,6 +82,105 @@ impl EditorHost for WorkbenchEditorHost {
         self.shared.request_reveal(object);
     }
 
+    /// 切到联邦前的确认（用户口径 2026-11-25：**默认挂上并设为主源**）。
+    ///
+    /// - 能 ATTACH（`AccelKind::from_db_type` 认这个驱动）：弹确认框，确定时先
+    ///   `mount_network_source` 再回 `true`——主源由联邦计划按"本文档绑定的连接"认定，
+    ///   所以"挂上"就等于"设为主源"，不再另传一个标记。
+    /// - 不能 ATTACH：弹说明框（先到结果集标题栏右键「保存为临时表 / 项目表」，
+    ///   切联邦后从 `analytics` 查），确定只回 `true`，不挂任何东西。
+    /// - 弹不出窗口：照样回 `true`（菜单不能点不动）。
+    fn confirm_federated_mount(
+        &self,
+        conn_id: &str,
+        on_decision: Box<dyn FnOnce(bool, &mut gpui_kit::App)>,
+        cx: &mut gpui_kit::App,
+    ) {
+        use gpui_kit::component::WindowExt as _;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // 两条路（确定 / 取消）共用同一个回调，只许调一次
+        let decision: Rc<RefCell<Option<Box<dyn FnOnce(bool, &mut gpui_kit::App)>>>> =
+            Rc::new(RefCell::new(Some(on_decision)));
+        let take = {
+            let decision = decision.clone();
+            move |ok: bool, cx: &mut gpui_kit::App| {
+                let cb = decision.borrow_mut().take();
+                if let Some(cb) = cb {
+                    cb(ok, cx);
+                }
+            }
+        };
+
+        let conn = self
+            .shared
+            .connections
+            .borrow()
+            .iter()
+            .find(|item| item.id == conn_id)
+            .cloned();
+        let Some(conn) = conn else {
+            // 连接已经不在清单里（刚被删 / 切了项目）：放行，切档本身还会各自报原因
+            take(true, cx);
+            return;
+        };
+        let capable =
+            engine::duckdb::accel::AccelKind::from_db_type(&conn.driver).is_ok();
+        let name = conn.name.clone();
+
+        let Some(handle) = cx.active_window().or_else(|| cx.windows().first().copied()) else {
+            take(true, cx);
+            return;
+        };
+        let shared = self.shared.clone();
+        let conn_id = conn_id.to_string();
+        handle.update(cx, |window, cx| {
+            window.open_alert_dialog(cx, move |alert, _window, _cx| {
+                let take_ok = take.clone();
+                let take_cancel = take.clone();
+                if capable {
+                    let shared = shared.clone();
+                    let cid = conn_id.clone();
+                    alert
+                        .confirm()
+                        .title(shared::i18n::tr("切到联邦"))
+                        .description(format!(
+                            "将把「{name}」挂进 DuckDB 作为联邦主源（SQL 不用改写）。是否继续？"
+                        ))
+                        .on_ok(move |_ev, _window, cx| {
+                            crate::components::data_objects_load::mount_network_source(
+                                &shared, &cid, cx,
+                            );
+                            take_ok(true, cx);
+                            true
+                        })
+                        .on_cancel(move |_ev, _window, cx| {
+                            take_cancel(false, cx);
+                            true
+                        })
+                } else {
+                    alert
+                        .confirm()
+                        .title(shared::i18n::tr("这条连接挂不上"))
+                        .description(format!(
+                            "「{name}」的驱动没有 DuckDB ATTACH 能力，切联邦后它不会以 catalog 出现。\n\
+                             要用它的结果，先在结果集标题栏右键「保存为临时表」或「持久化为项目表」，\
+                             切联邦后从 analytics 里查这两类表。仍要切到联邦吗？"
+                        ))
+                        .on_ok(move |_ev, _window, cx| {
+                            take_ok(true, cx);
+                            true
+                        })
+                        .on_cancel(move |_ev, _window, cx| {
+                            take_cancel(false, cx);
+                            true
+                        })
+                }
+            });
+        });
+    }
+
     fn open_insight_result_set(
         &self,
         request: editor::shared::AnalyzeResultSetRequest,

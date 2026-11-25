@@ -58,6 +58,11 @@ impl EditorShared {
         }
     }
 
+    /// 通道端口的句柄（切联邦前的确认要走宿主弹窗，需要 `&mut App`，所以由调用方拿句柄再调）
+    pub fn channels_port(&self) -> Option<crate::channel::ChannelsHandle> {
+        self.channels.borrow().clone()
+    }
+
     /// 【T1.6】注入源清单端口（**宿主调用一次**：workbench 读引擎的联邦会话快照）
     pub fn attach_sources(&self, port: SourcesHandle) {
         *self.sources.borrow_mut() = Some(port);

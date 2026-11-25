@@ -100,8 +100,17 @@ struct WorkbenchChannels {
 
 impl ChannelsPort for WorkbenchChannels {
 
-    fn availability(&self, conn_id: Option<&str>) -> ChannelAvailabilitySet {
+    /// 弹窗与"挂上"都是宿主的活（这里只转交；连接清单 / 能力判断宿主自己读得到）
+    fn confirm_federated_mount(
+        &self,
+        conn_id: &str,
+        on_decision: Box<dyn FnOnce(bool, &mut gpui_kit::App)>,
+        cx: &mut gpui_kit::App,
+    ) {
+        self.host.confirm_federated_mount(conn_id, on_decision, cx);
+    }
 
+    fn availability(&self, conn_id: Option<&str>) -> ChannelAvailabilitySet {
         let Some(conn_id) = conn_id else {
 
             // 未绑定连接时没有“要加速的源”：加速档缺的是源，联邦档缺的是外部源
@@ -319,6 +328,16 @@ mod tests {
 
 
     impl EditorHost for StubHost {
+
+        /// 测试桩没有窗口，也不该弹窗：确认一律放行（用例直接验切档结果）
+        fn confirm_federated_mount(
+            &self,
+            _conn_id: &str,
+            on_decision: Box<dyn FnOnce(bool, &mut gpui_kit::App)>,
+            cx: &mut gpui_kit::App,
+        ) {
+            on_decision(true, cx);
+        }
 
         fn connections(&self) -> Vec<ConnectionItem> {
 

@@ -9,6 +9,8 @@ use gpui_kit::component::input::{RangeDecoration, RangeDecorationStyle};
 // #48 编辑器常规设置（行号开关即时 / 新文档默认缩进·换行·编码）：settings 不依赖 editor，方向合法
 
 use crate::channel::ExecChannel;
+// 切联邦前的确认要调端口方法（`channels_port()` 返回 `Rc<dyn ChannelsPort>`，方法解析需要 trait 在作用域）
+use crate::channel::ChannelsPort as _;
 use crate::format;
 use crate::sources;
 // 【下移】结果放置 / 下发原料定义已随结果存储搬到 rds-result-panel（经 crate::store 重导出）
@@ -327,6 +329,44 @@ impl EditorHostPanel {
     /// 否则界面会停在一个“看着能用、一按就错”的状态。切完旧结果**保留**（原型 §5.7 规则 2：
     /// 不删用户的东西，只标灰 + 顶部一行说清它来自哪档）。
     pub(crate) fn set_channel(&mut self, channel: ExecChannel, cx: &mut Context<Self>) {
+        // 从别的档切到联邦：先问一句（用户口径 2026-11-25）——
+        // 能 ATTACH → 宿主弹「挂上并设为主源」；挂不上 → 宿主弹说明，指明先保存结果集。
+        // 已经在联邦档就不问（切同一档是空动作）。
+        if channel == ExecChannel::Federated
+            && self.channel() != ExecChannel::Federated
+            && let Some(conn_id) = self.bound_connection()
+        {
+            // 端口未接（测试装配 / 无宿主）：直接切，别让一个缺失的门控把功能卡死
+            let Some(port) = self.shared.channels_port() else {
+                self.apply_channel(channel, cx);
+                return;
+            };
+            let weak = cx.entity().downgrade();
+            port.confirm_federated_mount(
+                &conn_id,
+                Box::new(move |confirmed, cx| {
+                    if !confirmed {
+                        return; // 取消：停在原档，什么都不改
+                    }
+                    let Some(editor) = weak.upgrade() else {
+                        return;
+                    };
+                    editor.update(cx, |view, cx| {
+                        view.apply_channel(ExecChannel::Federated, cx);
+                    });
+                }),
+                cx,
+            );
+            return;
+        }
+        self.apply_channel(channel, cx);
+    }
+
+    /// 真正落地的切档（门控 → service → 结果区投影 → 状态栏）。
+    ///
+    /// 与 [`Self::set_channel`] 分开：后者是"要不要先问一句"，这条才是改状态——
+    /// 确认回调里重入时不能再过一遍弹窗（否则会自己套娃）。
+    fn apply_channel(&mut self, channel: ExecChannel, cx: &mut Context<Self>) {
         if channel != ExecChannel::Source {
             let availability = self
                 .shared

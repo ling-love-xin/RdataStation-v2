@@ -88,6 +88,19 @@ pub trait ChannelsPort: 'static {
     ///
     /// `conn_id` = 文档绑定的连接（`None` = 未绑定 → 按“没有可加速的源”回答）。
     fn availability(&self, conn_id: Option<&str>) -> ChannelAvailabilitySet;
+
+    /// 切到联邦前的确认（**弹窗在宿主侧**，编辑器只拿到"同意 / 不同意"）。
+    ///
+    /// 口径（2026-11-25）：能 ATTACH 的连接 → 「挂上并设为主源」；挂不上的 → 说清
+    /// 「先在结果集标题栏右键保存为临时表 / 项目表，切联邦后从 analytics 查询」。
+    /// `on_decision` 由宿主在用户点确定 / 取消后**调一次**（`true` = 继续切档）。
+    /// 宿主没有窗口（弹不出来）时也按 `true` 调——不能让用户卡在一个点不动的菜单上。
+    fn confirm_federated_mount(
+        &self,
+        conn_id: &str,
+        on_decision: Box<dyn FnOnce(bool, &mut gpui_kit::App)>,
+        cx: &mut gpui_kit::App,
+    );
 }
 
 /// 端口句柄（与 `QueryRunner` / `SessionStore` 同一模式：宿主注入、可缺省）
