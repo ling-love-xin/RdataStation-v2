@@ -64,6 +64,12 @@ impl ComponentPanel for InsightWorkspacePanel {
             .text_ellipsis()
             .child(name)
     }
+
+    /// 内容区顶部内距：**不要**（面板第一行是自绘 `PanelToolbar`）。
+    /// Dock 在多面板组里会补 `pt_2`（8px），自绘头再垫一层就是异色空带。
+    fn inner_padding(&self, _cx: &App) -> bool {
+        false
+    }
 }
 
 /// 把中间洞察 tab 切到前台（窗口聚焦 + 在所在 Dock 组里选中自身）。

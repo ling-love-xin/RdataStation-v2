@@ -531,4 +531,9 @@ impl ComponentPanel for MockDetailView {
         let label = self.tab_label(cx);
         div().text_sm().font_weight(FontWeight::MEDIUM).child(label)
     }
+
+    /// 内容区顶部内距：**不要**（面板第一行是自绘 `PanelToolbar`）。
+    fn inner_padding(&self, _cx: &App) -> bool {
+        false
+    }
 }

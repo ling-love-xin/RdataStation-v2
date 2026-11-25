@@ -689,4 +689,11 @@ impl ComponentPanel for EditorPanel {
                     .child(tr("工作台")),
             )
     }
+
+    /// 内容区顶部内距：**不要**。本面板与编辑器主机（`EditorHostPanel`）同处中央
+    /// 标签组，后者的 `inner_padding` 已是 `false`（自绘工具栏）；这里若吃 Dock 的
+    /// 默认 `pt_2`（8px），同一组里切 tab 时内容区会上下跳 8px。
+    fn inner_padding(&self, _cx: &App) -> bool {
+        false
+    }
 }

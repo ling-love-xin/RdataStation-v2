@@ -121,6 +121,17 @@ impl ComponentPanel for EditorHostPanel {
         Some(PanelControl::Both)
     }
 
+    /// 内容区顶部内距：**不要**（面板自己画了 36 高的工具栏）。
+    ///
+    /// Dock 的 `TabGroupSkin::content_frame` 在多面板组里给内容区加 `pt_2`（8px），
+    /// 本意是给「裸内容」留呼吸；本面板第一行就是自绘工具栏，再垫 8px 会露一条
+    /// 与工具栏异色的空带（用户实机反馈 2026-11-25：编辑器与右侧面板头离标题条有间隔）。
+    /// 同组里的左右面板一律 `false`（`workbench/src/panels/left_tabs/*`、`right_tabs.rs`），
+    /// 这里不跟着写就会「切一个 tab 内容区上下跳 8px」。
+    fn inner_padding(&self, _cx: &App) -> bool {
+        false
+    }
+
     /// 【C3 状态槽】标签左端 = **固定 12px 状态槽 + 类型图标**，脏点在槽里。
     ///
     /// 顺序按 Zed：`start_slot`（状态位）在最左，随后才是文件类型图标，最后是标题。
