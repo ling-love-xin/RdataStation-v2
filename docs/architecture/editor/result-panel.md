@@ -57,27 +57,32 @@
 键位表里看不到、设置页也不列，不可重绑 —— 代价换「焦点在哪都能关」，见 §9.64。
 网格自身的 `ESC` 保留组件语义（先清选区），与这一条不冲突。
 
-### 0.2 右栏六页
+### 0.2 右栏五页
 
-出厂全开、当前页 = 列浏览器；顺序即页签条 / 竖条 / 视图菜单的渲染序
-（`RightTab::ALL`，`ports.rs:864-871`）：
+出厂**只启用值详情**：DBeaver 的 `org.jkiss.dbeaver.resultset.panel` 扩展里唯一 `default="true"`
+的面板就是 `value-view`（`plugin.xml:127-173`），补白逻辑见 `ResultSetViewer.java:1396-1410`
+（集合为空才补默认页、仍空取第一个可用页）。本仓对应 `default_result_open_tabs() = ["value"]`
+（settings），页序 = **DBeaver 面板注册序** = 页签条 / 竖条 / 视图菜单的渲染序（`RightTab::ALL`，`ports.rs`）：
 
 | 页 | `RightTab` / 落盘 id | 内容 | 出处 |
 | --- | --- | --- | --- |
-| 列浏览器 | `Browser` / `browser` | 搜索框 + 列清单 + 底部元数据明细 + 「生成 DDL」 | §8.12 / §8.78 / §8.81 |
 | 值详情 | `Value` / `value` | 选中格完整值、hex 转储翻页、图片预览、保存至文件 / 外部程序打开 | §8.47 / §8.98 |
 | 计算 | `Stats` / `stats` | 9 项统计、函数集可增删 + Reset、数值 / 字符串口径 | §8.40 / §9.04 |
+| 列浏览器 | `Browser` / `browser` | 搜索框 + 列清单 + 底部元数据明细 + 「生成 DDL」 | §8.12 / §8.78 / §8.81 |
 | 分组 | `Group` / `group` | 分组键（可上下移 / 移除）+ 排序 + `COUNT(*)` | §8.42 / §9.18 |
 | 引用 | `Reference` / `reference` | 外键清单 + 「查看引用行」 | §8.79 / §8.80 |
-| 执行SQL | `ExecSql` / `execsql` | 筛选「运行」下发的 wrapped SQL 原文（只读 + 复制） | §8.50 / §8.69 |
 
-页集合落盘为偏好 `result_panel.open_tabs`（§9.10）；整栏可见性不落盘，重启回出厂展开
-（§9.65.5）。
+原先的「执行SQL」页已按拍板删除（DBeaver 没有对应面板）；它承载的 wrapped SQL 改为显示在
+筛选栏展开区（`sidebars.rs::render_filter_expand_bar`）。
+
+页集合落盘为偏好 `result_panel.open_tabs`（§9.10、基线文档 §55.1）；整栏可见性不落盘，重启回
+出厂展开（§9.65.5）。
 
 ### 0.3 功能域导航
 
 | 想找什么 | 看哪里 |
 | --- | --- |
+| **只想看界面、不想开整台工作台** | §0.5（独立预览窗口） |
 | 架构决策（Dock 化 / 迁移清单 / `ResultRequest` 全集） | §8.1-§8.5 |
 | DBeaver 对齐 backlog 与逐项状态 | §8.7、§9.25 |
 | 网格视觉（列宽 / 表头 / 分隔线 / 斑马线 / 行号槽 / 内距） | §8.22-§8.37、§8.51-§8.59、§9.31 |
@@ -111,6 +116,27 @@
 - `zoom`（`ALT+0` / `ALT+9`）：纯目视，归「目视统一处理」（§9.33.3 第 7 条）。
 - 右栏页焦点体系（六页各给 `FocusHandle`）：缺它导致 `CTRL+SHIFT+7` / `CTRL+SHIFT+F2..F6`
   与「打开单页即聚焦该页」三条都做不了（§9.65.5、§9.66.5）。
+
+### 0.5 独立预览窗口（2026-11-25）
+
+**为什么有它**：本 crate 与 workbench / editor 的耦合只剩「宿主投影」一层（`sync` + 动作队列），
+所以结果集 UI 可以**单独开窗调**，不必起整台工作台（省掉解锁窗、设置装配、Dock 布局）。
+
+```powershell
+cargo run -p rds-result-panel --example preview
+```
+
+| 项 | 事实 |
+| --- | --- |
+| 文件 | `crates/result_panel/examples/preview.rs`（不属于 lib，`cargo test -p rds-result-panel` 不编它） |
+| 装配路径 | 与 `panel/tests.rs::panel_harness` 同源：`ResultPanel::new` → `set_grids` → `sync`（生产投影入口）→ `panel.render(cx)` |
+| 窗口 | `gpui_kit::application().with_assets(gpui_kit::assets::AllAssets).run` + `TitleBar::window_options()` + 第一层 `Root` |
+| 数据 | 造 8 行 5 列（`bigint` / `text` / `numeric(10,2)` / `timestamp` / `jsonb`，含 NULL 与 JSON），外加两份结果集标签（一份 `stale` + `pinned` 用来验标签徽标） |
+| 状态 | `status.has_more = true`（状态栏摆「取下一段 / 取全部」且总数显示 `8+`）、`export_ctx` 有值（导出钮走真钮而非占位）、选中统计开「行数 + 单元格数」 |
+| 动作 | 宿主侧只 `drain` 后打印到 stderr——按钮点得动、请求真入队，但没有执行引擎，数据不会变 |
+| 不覆盖 | 键盘快捷键（要 app 层 `bind_keys`）、主题明暗切换与持久化设置（要 settings 服务）、真实 SQL 执行 |
+
+改完 `preview.rs` 后直接重跑即可；调 lib 里的 UI 代码则 `cargo build -p rds-result-panel --example preview` 会连带重编。
 
 ## 1. 目标
 
