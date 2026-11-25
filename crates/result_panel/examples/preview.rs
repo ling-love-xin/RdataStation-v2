@@ -19,7 +19,9 @@
 use gpui_kit::component::Root;
 use gpui_kit::component::TitleBar;
 use gpui_kit::component::table::TableState;
-use gpui_kit::{AppContext as _, Entity, IntoElement, Render, Subscription, Window};
+// 与 lib 内同范式：glob 引入 `div` / 尺寸助手 / `AnyView` 等（非测试模块，不会与
+// `#[gpui_kit::test]` 的宏冲突）
+use gpui_kit::*;
 use rds_result_panel::grid::{
     ResultGridDelegate, ResultStatus, ResultToolbar, SelectionStatPrefs,
 };
@@ -39,13 +41,14 @@ struct PreviewHost {
 
 impl PreviewHost {
     fn new(panel: Entity<ResultPanel>, queue: ResultActionQueue, cx: &mut gpui_kit::Context<Self>) -> Self {
-        // 真实宿主在同一处 drain + 分派；这里只打印，证明动作链没断
-        let actions_sub = cx.observe(&panel, |host, _, cx| {
+        // 真实宿主在同一处 drain + 分派；这里只打印，证明动作链没断。
+        // 注意：回调里**不要** `cx.notify()`——面板 notify → 宿主 notify → 重渲染 →
+        // 面板再 notify 会立刻在同一 effect cycle 里滚成同步递归（实测直接爆栈）。
+        let actions_sub = cx.observe(&panel, |host, _, _cx| {
             let actions = host.queue.drain();
             if !actions.is_empty() {
                 eprintln!("[preview] 宿主收到 {} 个动作：{actions:?}", actions.len());
             }
-            cx.notify();
         });
         Self {
             panel,
@@ -174,7 +177,65 @@ fn demo_input() -> ResultSyncInput {
     }
 }
 
+/// 分段开关（爆栈诊断用，正常跑不需要设）：`1` = 空窗口，`2` = 只渲染面板（不订阅），
+/// 其余 = 完整宿主。三种形态一次编译、三次运行即可判「问题在框架层还是面板层」。
+fn stage() -> u8 {
+    std::env::var("PREVIEW_STAGE")
+        .ok()
+        .and_then(|v| v.parse::<u8>().ok())
+        .unwrap_or(3)
+}
+
+/// 空窗口：只验 `application + Root + TitleBar` 这条框架链
+struct Blank;
+
+impl Render for Blank {
+    fn render(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut gpui_kit::Context<Self>,
+    ) -> impl IntoElement {
+        gpui_kit::div().size_full().child("blank")
+    }
+}
+
+/// 只转发面板渲染、**不**订阅面板：验「面板自身渲染」是否可收敛
+struct PanelOnly {
+    panel: Entity<ResultPanel>,
+}
+
+impl Render for PanelOnly {
+    fn render(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut gpui_kit::Context<Self>,
+    ) -> impl IntoElement {
+        self.panel.read(cx).render(cx)
+    }
+}
+
 fn main() {
+    // Windows 主线程默认 1 MiB 栈，而这条渲染链在 debug 构建下递归很深（与 app 的
+    // 现象完全一致，见 `crates/app/src/main.rs:109-125` 的同类注释）：直接在主线程
+    // 跑会以 `thread 'main' has overflowed its stack` 崩掉。照 app 的做法把 UI 主循环
+    // 放到专用大栈线程；`RDS_UI_STACK_MB` 可覆盖（诊断用）。
+    let stack_mb = std::env::var("RDS_UI_STACK_MB")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|mb| *mb >= 16)
+        .unwrap_or(64);
+    let handle = std::thread::Builder::new()
+        .name("rds-preview-main".to_string())
+        .stack_size(stack_mb * 1024 * 1024)
+        .spawn(run_preview)
+        .expect("failed to spawn preview main thread");
+    if let Err(e) = handle.join() {
+        eprintln!("[preview] 主线程异常退出: {e:?}");
+        std::process::exit(1);
+    }
+}
+
+fn run_preview() {
     gpui_kit::application()
         // 图标 / 字体资产：组件库内置全量（Lucide 图标 + 默认字体）
         .with_assets(gpui_kit::assets::AllAssets)
@@ -190,36 +251,47 @@ fn main() {
             if let Some(titlebar) = options.titlebar.as_mut() {
                 titlebar.title = Some("RdataStation · 结果集预览".into());
             }
+            let stage = stage();
+            eprintln!("[preview] stage={stage}");
             cx.open_window(options, |window, cx| {
-                let queue = ResultActionQueue::new();
-                let panel = cx.new(|cx| ResultPanel::new(window, cx, queue.clone()));
-                // 网格与分组页网格：生产里由编辑器构造期建好交进来（面板只持有渲染 / 投影）
-                let grid: Entity<TableState<ResultGridDelegate>> =
-                    cx.new(|cx| TableState::new(ResultGridDelegate::default(), window, cx));
-                let group_grid: Entity<TableState<ResultGridDelegate>> = cx.new(|cx| {
-                    TableState::new(ResultGridDelegate::empty("尚未分组重查"), window, cx)
-                });
-                // 宿主投影：走生产入口 `sync`（不是逐个字段塞），保证预览与真机同一条路径
-                let input = demo_input();
-                panel.update(cx, |p, cx| {
-                    p.set_grids(grid, None, Some(group_grid), window, cx);
-                    p.sync(cx, input);
-                    // 选中统计三项出厂全关（DBeaver 默认），预览打开「行数 + 单元格数」
-                    // 以便看到状态栏那一段的排布
-                    p.set_selection_stat_prefs(
-                        SelectionStatPrefs {
-                            rows: true,
-                            columns: false,
-                            cells: true,
-                        },
-                        cx,
-                    );
-                });
-                // 队列的宿主侧：拿到面板弱引用，按钮 notify 才能传到宿主
-                panel.read(cx).queue().set_panel(panel.downgrade());
-                let host = cx.new(|cx| PreviewHost::new(panel, queue, cx));
+                let view: gpui_kit::AnyView = if stage == 1 {
+                    cx.new(|_| Blank).into()
+                } else {
+                    let queue = ResultActionQueue::new();
+                    let panel = cx.new(|cx| ResultPanel::new(window, cx, queue.clone()));
+                    // 网格与分组页网格：生产里由编辑器构造期建好交进来（面板只持有渲染 / 投影）
+                    let grid: Entity<TableState<ResultGridDelegate>> =
+                        cx.new(|cx| TableState::new(ResultGridDelegate::default(), window, cx));
+                    let group_grid: Entity<TableState<ResultGridDelegate>> = cx.new(|cx| {
+                        TableState::new(ResultGridDelegate::empty("尚未分组重查"), window, cx)
+                    });
+                    // 宿主投影：走生产入口 `sync`（不是逐个字段塞），保证预览与真机同一条路径
+                    let input = demo_input();
+                    panel.update(cx, |p, cx| {
+                        p.set_grids(grid, None, Some(group_grid), window, cx);
+                        p.sync(cx, input);
+                        // 选中统计三项出厂全关（DBeaver 默认），预览打开「行数 + 单元格数」
+                        // 以便看到状态栏那一段的排布
+                        p.set_selection_stat_prefs(
+                            SelectionStatPrefs {
+                                rows: true,
+                                columns: false,
+                                cells: true,
+                            },
+                            cx,
+                        );
+                    });
+                    // 队列的宿主侧：拿到面板弱引用，按钮 notify 才能传到宿主
+                    panel.read(cx).queue().set_panel(panel.downgrade());
+                    if stage == 2 {
+                        cx.new(|_| PanelOnly { panel: panel.clone() }).into()
+                    } else {
+                        let host = cx.new(|cx| PreviewHost::new(panel, queue, cx));
+                        host.into()
+                    }
+                };
                 // 窗口第一层必须是 Root（`Root::new` 的第 3 参是 `Context<Root>`，故再包一层 `cx.new`）
-                cx.new(|cx| Root::new(host, window, cx))
+                cx.new(|cx| Root::new(view, window, cx))
             })
             .expect("预览窗口创建失败");
         });

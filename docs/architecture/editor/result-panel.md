@@ -135,6 +135,8 @@ cargo run -p rds-result-panel --example preview
 | 状态 | `status.has_more = true`（状态栏摆「取下一段 / 取全部」且总数显示 `8+`）、`export_ctx` 有值（导出钮走真钮而非占位）、选中统计开「行数 + 单元格数」 |
 | 动作 | 宿主侧只 `drain` 后打印到 stderr——按钮点得动、请求真入队，但没有执行引擎，数据不会变 |
 | 语言 | 固定中文：`shared::i18n::set_locale(Zh)` + `gpui_kit::component::set_locale("zh-CN")`（两套 i18n 不同源，只设前者时组件库内置文案如 "No data" 仍停在 fallback 英文） |
+| 栈 | UI 主循环跑在 64 MiB 专用线程（`RDS_UI_STACK_MB` 可覆盖）：Windows 主线程默认 1 MiB，debug 构建下这条渲染链递归较深，直接在主线程跑会 `thread 'main' has overflowed its stack`（窗口一闪即退）。处理方式与 app 一致，见 `crates/app/src/main.rs:109-125` |
+| 诊断 | `PREVIEW_STAGE=1` 只开空窗口、`=2` 只渲染面板（不订阅宿主）、不设 = 完整。一次编译三次运行即可判「框架层还是面板层」，也是当初定位上面那次爆栈的手段 |
 | 不覆盖 | 键盘快捷键（要 app 层 `bind_keys`）、主题明暗切换与持久化设置（要 settings 服务）、真实 SQL 执行 |
 
 改完 `preview.rs` 后直接重跑即可；调 lib 里的 UI 代码则 `cargo build -p rds-result-panel --example preview` 会连带重编。
