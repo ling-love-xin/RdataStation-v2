@@ -22,23 +22,5 @@ pub fn entries() -> Vec<SettingSpec> {
             composite: true,
             disabled: false,
         },
-        SettingSpec {
-            key: "scratchpad.group_max_h",
-            section: "scratchpad",
-            section_label: "草稿箱",
-            group: "scratchpad",
-            group_label: None,
-            label: "分区高度上限",
-            hint: "草稿/引用/回收站可拖拽分区的高度上限（rems，默认 7.5 = 面板默认）；拖拽 handle 写回（B3 新增，2026-10-28 补登记）。不上设置页，读写走分区拖拽 handle",
-            hint_inline: true,
-            kind: SettingKind::Number,
-            presets: &[],
-            default_json: "7.5",
-            effect: SettingEffect::Immediate,
-            entry: SettingEntry::Module,
-            consumer: "crates/scratchpad/src/scratchpad_view.rs::ScratchpadView::new（启动读入）+ chrome.rs::persist_group_max_h（拖拽写回）",
-            composite: false,
-            disabled: false,
-        },
     ]
 }
