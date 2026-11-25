@@ -1,7 +1,7 @@
 # 分析引擎：单实例 + 每编辑器一条会话
 
 > 状态：**已落地并合入 `main`**（2026-11-26；代码 `crates/engine/src/duckdb/instance.rs`）。
-> 迁移表里 `2g`（联邦别名归属核对）与 `3b`（临时表真的搬进 `rds_tmp`）仍是遗留，见 §迁移表。
+> 迁移表 `2a`–`2g`、`3`、`3b`、`4`、`5` **全部收口**，见 §迁移表。
 > 口径来源：2026-11-26 用户裁决（"打开项目的分析引擎，本质就是打开了项目的分析库，全局库也挂在
 > 这里，一个 SQL 编辑器就是这个实例的一个会话"）。本文只写确定的事实与边界，不写规划语。
 
@@ -71,9 +71,9 @@
 | 2e | 消费方迁移：工作台三处 `accel::session_for` / 编辑器直跑加速档 / 卸载 / 会话源树根全部改读实例 | ✅ 本刀（`accel::ensure_on_instance` 单一入口） |
 | 2e-1 | `accel` 模块退役（删 `AccelSession` / `ensure_session` / `SESSIONS` 缓存 / `owners` / `drop_session` / `drop_all` / `cancel` / `list_tables_for`） | ✅ 本刀（用例与两条真机探针同批改到实例 API） |
 | 2f | 进程面并进实例：`DuckDBManager::global()` 返回的"进程单例"就是实例 `owner = process` 那条会话的连接；`SessionHandle::{ProcessDb, Federated}` 两个旧变体删除 | ✅ |
-| 2g | 联邦侧别名归属核对（同实例下两个源抢同一别名会静默指到先挂的那个，加速档已用 `reserve_alias` 收口） | ⬜ |
+| 2g | 联邦侧别名归属核对：挂前按实例别名登记判归属，被别的源占着的判 `Failed` 并点名占位者（不替用户改名） | ✅ 本刀 |
 | 3 | `rds_tmp` 自动登记：结果集 / 洞察样本建表即登进实例登记册（`drop_temp` 手动清理，两处落点都认） | ✅ |
-| 3b | 把新建临时表**实际搬进** `rds_tmp`（洞察的引用模板按裸标识符拼 SQL，要整批改模板才动得干净） | ⬜ |
+| 3b | 新临时表**实际建进** `rds_tmp`，靠 `SET search_path = 'main,rds_tmp'` 让裸名/双引号名照旧解析（引用模板零改动） | ✅ 本刀 |
 | 4 | 保护接线：语句超时从设置读（`insight.statement_timeout_ms`，默认 30s、0 = 不限时），被中断的语句在错误里说人话 | ✅ |
 | 5 | 取库脚本与文档（2.0.1 资产改名、存储格式单向） | ✅ |
 
@@ -118,19 +118,51 @@
 （快照 / L2 写拒绝 / 错误脱敏），不再二次 `ATTACH`。离线验收用
 `crates/engine/tests/process_face_catalog_probe.rs`（DuckDB 文件源，无需网络）。
 
-**2g 的已知边界（同实例带来的新风险）**：`ATTACH` 出来的 catalog 是**实例级**的，别名不再只属于
-某条会话。加速档已用 `reserve_alias` 按源唯一分配；联邦侧 `attach_source` 目前仍是
-"别名已存在就算 Ready"，若另一个源抢先占了同名别名，查询会静默指到那个库上。收口方向：
-联邦挂载也走实例别名登记（后到者让位 `别名_2`，或直接判 Failed 并说清"该别名已被别的源占用"）。
+**2g 的收口（别名归属先核对再挂）**：`ATTACH` 出来的 catalog 是**实例级**的，别名不再只属于
+某条会话，所以挂在哪一层判归属就成了要害。现在两档共用一份实例别名登记
+（`MountRegistry`：`别名 → 源连接 id`）：
+
+- `AnalysisSession::mount_sources` 在挂之前逐个源核对 `AnalysisInstance::alias_owner(别名)`；
+  **被别的连接占着的源直接判 `Failed`**，原话是「别名 X 已被另一个源（连接 Y）占用，换个别名再挂；
+  这个源本批不参与查询（别名是实例级的，不会替你改名）」——宁可报失败，也不替用户改名后
+  让 SQL 悄悄指到别的库；
+- 名额归自己（同 `conn_id` 重复挂）→ 幂等，照旧走 `attach_source` 的"已挂上就算 Ready"；
+- 核对通过的源会 `reserve_alias` 登记进实例，之后面板查挂载 / 冲突判定都以它为准。
+
+用例：`instance.rs::an_alias_held_by_another_source_is_refused_not_hijacked`
+（两个 DuckDB 文件源抢 `shared`：后到者 `Failed` 并点名 `conn-a`，且 `shared.items` 仍读到
+先挂那份的 3 行，不会被 5 行那份静默顶掉）。
 
 **3 的落点（登记先接上，搬家留下一刀）**：`DuckDBManager::register_temp_table` 在建表那一步
 把名字**同时**登进实例登记册（`AnalysisInstance::register_temp`），于是
 `instance.temps()` / `drop_temp` / `drop_all_temps` 这套"用户看得见、点得掉"的入口对结果集
 （`tmp_q_`）与洞察样本（`tmp_i_` / `tmp_l_`）都生效；`drop_temp` 认两种落点
 （`rds_tmp.<名>` 与历史口径 `memory.main.<名>`），并顺手销掉管理器侧的登记，避免计数漂移。
-**3b（未做）**：把新建的临时表真的搬进 `rds_tmp` schema——卡在引用侧：洞察的规则 / 直方图 /
-列统计模板都是 `"SELECT … FROM \"{table}\""`（裸标识符 + 双引号），表名一带 `rds_tmp.`
-就会当成一张名字里带点的表而报"不存在"，所以搬家必须整批改模板，不能单改建表侧。
+**3b 的落点（临时表真的搬进 `rds_tmp`，引用侧零改动）**：卡点原是引用侧——洞察的规则 /
+直方图 / 列统计模板是 `"SELECT … FROM \"{table}\""`（裸标识符 + 双引号），表名一带
+`rds_tmp.` 就被当成"名字里带点的表"。解法是 **`search_path`**（2.0.1 实测可用
+`SET search_path = 'main,rds_tmp'`，裸名与 `"双引号名"` 都会落到 `rds_tmp`）：
+
+- 建表侧一律落 `rds_tmp."名"`：`duckdb_service::create_temp_table_internal` /
+  `create_temp_table_from_batches`、`temp_table::analysis` 的
+  `create_analysis_temp_table{,_arrow,_as,_as_for}`；**返回给调用方的仍是裸名**，
+  既有前缀判定（`starts_with("tmp_q_")`）与洞察模板一行没改；
+- 落点规则收在 `duckdb/temp_table/temp_schema.rs`（常量 `SHARED_TEMP_SCHEMA`、
+  幂等的 `ensure_shared_schema` 建 schema + 设 `search_path`、`qualified` 拼限定名）；
+  模块**不叫 `shared`**——engine 已有一个顶层 `shared` crate 模块，同目录再挂会二义（E0659）；
+- 设 `search_path` 的时机：实例控制连接（`open_tagged`）、每条会话（`open_session`，克隆虽
+  继承设置但显式设一次更稳）、以及**单测里裸 `open_in_memory` 的连接**（由
+  `ensure_shared_schema` 兜住，它们没有实例）；
+- `appender` 不吃 `search_path`（它认默认 schema），Arrow 直灌两处改用
+  `Connection::appender_to_db(table, "rds_tmp")`；
+- 删表两处都认：`drop_temp_table` 先 `DROP … rds_tmp."名"` 再补一刀 `memory.main."名"`
+  （历史表），`instance::drop_temp` 保持双落点口径；
+- 枚举口径跟着放宽：`TempTableManager::list_by_source` 从只看 `main` 改成 `main` / `rds_tmp`，
+  否则按来源清理与"表段列出来"都看不见新表。
+
+用例：`analysis.rs::create_uses_the_insight_prefix_and_registers` 增加落点断言（`schema_of` = `rds_tmp`），
+跨会话按裸名可见由 `tests/process_face_catalog_probe.rs` 第 5 步覆盖
+（进程面建洞察表 → 编辑器会话 `SELECT … FROM "裸名"` 读到 1 行）。
 
 **4 的接线（超时不再是写死的 30s）**：`AnalysisInstance` 的 `timeout_ms` 是原子量，
 `AnalysisSession::run` 每句现读；设置页新项 `insight.statement_timeout_ms`
