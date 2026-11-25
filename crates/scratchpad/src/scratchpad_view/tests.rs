@@ -618,6 +618,96 @@ fn search_result_hit_text_aligns_with_file_name(cx: &mut TestAppContext) {
     );
 }
 
+/// 搜索态四行同档（2026-11-25 用户反馈③）：搜索 / 替换 / 包含 / 排除四个输入行必须
+/// **同左缘、同间距、同一输入底色**。
+///
+/// 历史写法：搜索行单独包一层 `bg(group_box)` + `px_1p5` + `pb_1` —— 左缘比另三行多缩 6、
+/// 与替换行间距比其它行多 4；更隐蔽的是那层更暗的底色，`Input` 暗色底是半透明
+/// （`input_background()` = `input` 混 30% 透明，`vendor/gpui-component/src/theme/mod.rs:503`），
+/// 同一个控件叠在 `group_box` 上显 #282828、叠在 `background` 上显 #2D2D2D，同屏两种深浅。
+///
+/// 元素级断言（不靠截图/OCR）：四行各挂 `debug_selector`，直接量几何。
+#[gpui_kit::test]
+fn search_rows_share_one_gutter_and_spacing(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let root = panel_root("k39_search_rows");
+    let host = host_with(Some(root.clone()), false);
+    let (panel, cx) = {
+        let host = host.clone();
+        cx.add_window_view(move |_window, cx| ScratchpadView::new(host, cx))
+    };
+
+    // 模块根加载成功（渲染提前返回的分支要排除）。
+    let seq = scratchpad_jobs::enqueue_root_load(&root, vec![]);
+    cx.update(|_window, cx| {
+        panel.update(cx, |view, cx| {
+            view.apply_scratchpad_loads(vec![panel_load(seq, vec![])], cx);
+        });
+    });
+    // 搜索态 + 展开高级选项：四行（搜索/替换/包含/排除）同时在场。
+    cx.update(|window, cx| {
+        panel.update(cx, |view, cx| {
+            view.ensure_scratchpad_inputs(window, cx);
+            {
+                let mut sp = view.scratchpad.borrow_mut();
+                sp.search_panel_open = true;
+                sp.search_advanced = true;
+            }
+            cx.notify();
+        });
+        window.refresh();
+    });
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+
+    let ids = [
+        "sp-search-row",
+        "sp-replace-row",
+        "sp-include-row",
+        "sp-exclude-row",
+    ];
+    let rows: Vec<(&str, gpui_kit::Bounds<gpui_kit::Pixels>)> = ids
+        .iter()
+        .map(|id| {
+            let b = cx
+                .debug_bounds(*id)
+                .unwrap_or_else(|| panic!("{id} 必须渲染（搜索态四行）"));
+            (*id, b)
+        })
+        .collect();
+
+    // 四行都真的画出了输入框（行高非零），否则下面的一致性断言会退化成「零对零」。
+    for (id, b) in &rows {
+        assert!(
+            b.size.height > gpui_kit::Pixels::ZERO,
+            "「{id}」行必须有高度（输入框在场，height={:?}）",
+            b.size.height
+        );
+    }
+    // 左缘：四行同一档（历史写法里搜索行比另三行多 6）。
+    for (id, b) in rows.iter().skip(1) {
+        assert_eq!(
+            b.origin.x, rows[0].1.origin.x,
+            "「{id}」左缘 {} 必须与搜索行 {} 一致（搜索行不得多套一层内距）",
+            b.origin.x, rows[0].1.origin.x
+        );
+    }
+    // 间距：三处垂直间隙相等（历史写法里搜索 ↔ 替换多 4）。
+    let gaps: Vec<_> = rows
+        .windows(2)
+        .map(|w| w[1].1.origin.y - (w[0].1.origin.y + w[0].1.size.height))
+        .collect();
+    assert_eq!(
+        gaps[0], gaps[1],
+        "搜索 ↔ 替换的间距必须与替换 ↔ 包含一致：{gaps:?}"
+    );
+    assert_eq!(
+        gaps[1], gaps[2],
+        "替换 ↔ 包含 与 包含 ↔ 排除 必须同间距：{gaps:?}"
+    );
+}
+
 /// 工具栏 ⋯ 更多设置（2026-10-11 原型 644-658 对齐）：按钮可显示/隐藏、可重置默认布局。
 /// 元素级断言（用户裁定的对齐验证方式）：左右分组挂 `debug_selector` 锚点，用几何宽度
 /// 区分「按钮还在渲染」（宽 > 0）与「被 ⋯ 菜单隐藏后不再渲染」（空组宽归 0）。

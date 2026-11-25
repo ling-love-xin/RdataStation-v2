@@ -1783,15 +1783,20 @@ impl ScratchpadView {
         // 运行方式：输入框 Enter 触发（`ensure_scratchpad_inputs` 的 PressEnter 订阅）；
         // 不再有模式 chip / 运行按钮（原型 449-460，用户拍板确认删除）。
         // 无边框输入框靠一层底显形（与普通视图搜索行、导航面板同一处理；2026-11-24 反馈②）。
-        let search_group_bg = theme.colors.group_box;
+        // 搜索 / 替换 / 包含 / 排除四行**同一档**（2026-11-25 反馈③）：四行都挂在
+        // `search_block`（`px_1p5` = 6、`gap_1` = 4）下，本行不再自带内距与底色。
+        // 此前本行多包了一层 `bg(group_box)` + `px_1p5` + `pb_1`：左缘比另三行多缩 6、
+        // 与替换行之间多 4；而 `Input` 暗色底是 `input_background()` = `input` 混透明 30%
+        // （`vendor/gpui-component/src/theme/mod.rs:503`），叠在 `group_box`(#171717) 上呈
+        // #282828、叠在 `background`(#1F1F1F) 上呈 #2D2D2D —— 同一个控件同屏出现两种色。
+        // 去掉这层容器后四个框同色同缘同为 4 间距。
         let mut search_row = div()
             .h_flex()
             .items_center()
             .gap_1()
             .w_full()
-            .px_1p5()
-            .pb_1()
-            .bg(search_group_bg);
+            // 元素级几何锚点：四行同左缘 / 同间距的回归测试用（与另三行同口径）。
+            .debug_selector(|| "sp-search-row".to_string());
         if let Some(input) = self.scratchpad.borrow().content_search_input.clone() {
             let search_word = self.scratchpad.borrow().search_word;
             let word_btn = Button::new("sp-word")
@@ -1879,7 +1884,12 @@ impl ScratchpadView {
             }
         };
         let replace_case = self.scratchpad.borrow().search_replace_case;
-        let mut replace_row = div().h_flex().items_center().gap_1().w_full();
+        let mut replace_row = div()
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .w_full()
+            .debug_selector(|| "sp-replace-row".to_string());
         if let Some(input) = self.scratchpad.borrow().search_replace_input.clone() {
             // AB 开关嵌在替换输入框内右侧（VSCode 式；与搜索行 Aa/.* 同形态）。
             let ab_btn = Button::new("sp-replace-case")
@@ -1952,7 +1962,12 @@ impl ScratchpadView {
                     entity.update(app, |_, cx| cx.notify());
                 }
             };
-            let mut include_row = div().h_flex().w_full().items_center().gap_1();
+            let mut include_row = div()
+                .h_flex()
+                .w_full()
+                .items_center()
+                .gap_1()
+                .debug_selector(|| "sp-include-row".to_string());
             if let Some(input) = include_input {
                 include_row = include_row
                     .child(
@@ -1980,7 +1995,12 @@ impl ScratchpadView {
                             .on_click(hint_include),
                     );
             }
-            let mut exclude_row = div().h_flex().w_full().items_center().gap_1();
+            let mut exclude_row = div()
+                .h_flex()
+                .w_full()
+                .items_center()
+                .gap_1()
+                .debug_selector(|| "sp-exclude-row".to_string());
             if let Some(input) = exclude_input {
                 exclude_row = exclude_row
                     .child(
