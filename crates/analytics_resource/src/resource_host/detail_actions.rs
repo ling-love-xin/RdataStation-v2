@@ -294,10 +294,7 @@ pub(super) fn request_delete_global(
     let Some(root) = host.require_project("无法删除全局资产", cx) else {
         return;
     };
-    if host.read_only() {
-        host.notice(tr("资产库：项目为只读模式，不能删除全局资产"), cx);
-        return;
-    }
+    // 不检查项目只读：删除只动全局库，不写项目分析库 / resources。
     let name = detail.name.clone();
     // 分发面来自详情快照（`dispatch_label`）：让用户看见"这些项目里还有副本"再决定。
     let dispatched = if detail.dispatch_label.trim().is_empty() {
