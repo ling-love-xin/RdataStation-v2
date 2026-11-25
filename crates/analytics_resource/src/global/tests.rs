@@ -1325,8 +1325,18 @@ async fn g021_reference_asset_and_solidify_selected_version() {
     assert_eq!(version, 1);
     assert_eq!(alias.as_deref(), Some("订单引用"));
 
-    // 引用资产上的项目分组/标签，固化时要复制到新本地资产。
+    // 引用资产的 name 是全局本名，项目内不能 rename，只能改 alias。
     let store = crate::store::AnalyticsResourceStore::new(env.project_pool.clone());
+    let rename_error = store
+        .rename_resource(&first.resource_id, "改坏全局名")
+        .await
+        .expect_err("全局引用资产不能改本名");
+    assert!(
+        rename_error.to_string().contains("不能改本名"),
+        "错误要说清只能改别名：{rename_error}"
+    );
+
+    // 引用资产上的项目分组/标签，固化时要复制到新本地资产。
     let folder = store
         .create_folder(crate::store::rows::CreateFolderRequest {
             name: "订单分组".to_string(),

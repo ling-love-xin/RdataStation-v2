@@ -243,6 +243,24 @@ impl AnalyticsResourceStore {
     ) -> Result<AnalyticsResource, CoreError> {
         let conn = self.get_conn().await?;
         let inner = conn.inner()?;
+        // 全局引用资产的 `name` 就是全局本名，是版本链身份；项目内只允许改
+        // `alias`（`set_alias`）。这里在写入口兜住，避免调用方绕过 UI 把引用改名。
+        let is_global_ref: bool = inner
+            .query_row(
+                "SELECT count(*) FROM analytics_resources \
+                 WHERE id = ?1 AND kind = 'table_ref' AND origin_kind = 'global' \
+                   AND deleted_at IS NULL",
+                rusqlite::params![id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count > 0)
+            .map_err(|e| persistence_err("rename_check_global_ref", e))?;
+        if is_global_ref {
+            return Err(persistence_err(
+                "rename",
+                "全局引用资产不能改本名，只能在项目里改别名",
+            ));
+        }
         let affected = inner
             .execute(
                 "UPDATE analytics_resources SET name = ? WHERE id = ? AND deleted_at IS NULL",
