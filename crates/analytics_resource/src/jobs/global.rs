@@ -273,6 +273,27 @@ pub(crate) async fn run_distribute(job: &DistributeJob) -> OpOutcome {
                 .await
         }
     };
+    // 刀 C：分发成功后记一条 `derived_from`（项目产物 → 全局上游）。
+    // 跨库只存 id 字符串：时间线按 from_id 命中即可见；上游被删由全局侧自己回答。
+    // 写失败只告警：分发本身已成功，不能因为谱系补记不上就回滚一份能用的数据。
+    if let Ok(outcome) = &result {
+        match gstore.latest_global_id(&job.name).await {
+            Ok(Some(global_id)) => {
+                let store =
+                    crate::store::AnalyticsResourceStore::new(manager.sqlite_pool());
+                if let Err(error) = store
+                    .record_derived_from(&outcome.resource_id, &global_id)
+                    .await
+                {
+                    tracing::warn!(error = %error, "分发落库后补记 derived_from 失败");
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(error = %error, "读全局上游 id 失败，跳过 derived_from");
+            }
+        }
+    }
     match result {
         Ok(outcome) => OpOutcome::Distributed {
             name: outcome.name,

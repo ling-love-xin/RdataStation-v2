@@ -30,6 +30,8 @@ fn detail(status: ArchiveStatus, kind: ArchiveKind) -> ArchiveDetail {
         has_definition: false,
         definition_sql: None,
         origin_label: String::new(),
+        origin_kind: None,
+        origin_ref: None,
         history_label: "1 个历史版本".to_string(),
         version_timeline: Vec::new(),
         groups: Vec::new(),

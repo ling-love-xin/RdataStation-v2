@@ -371,6 +371,8 @@ fn detail(kind: ArchiveKind, status: ArchiveStatus, payload: Option<&str>) -> Ar
         has_definition: false,
         definition_sql: None,
         origin_label: String::new(),
+        origin_kind: None,
+        origin_ref: None,
         history_label: String::new(),
         version_timeline: Vec::new(),
         groups: Vec::new(),

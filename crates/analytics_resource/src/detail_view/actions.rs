@@ -43,6 +43,23 @@ pub(super) fn render_actions(
         let host = actions.host.clone();
         // 动作判据统一在 `model::affordance`（详情恒单选，`multi_count` 给 1）。
         let ctx = detail.action_context(actions.read_only, 1);
+        // 来源链（刀 C）：有直接上游才摆入口（没有上游时按也没内容可看）。
+        if detail.origin_kind.is_some() {
+            let detail_for_chain = detail.clone();
+            out.push(
+                div().h_flex().w_full().gap_2().child(
+                    Button::new("archive-detail-origin-chain")
+                        .ghost()
+                        .label(tr("查看来源链…"))
+                        .on_click({
+                            let host = host.clone();
+                            move |_, window, cx| {
+                                host.request_show_origin_chain(&detail_for_chain, window, cx)
+                            }
+                        }),
+                ),
+            );
+        }
         if detail.scope == RowScope::Global {
             let detail_for_distribute = detail.clone();
             let detail_for_delete = detail.clone();

@@ -78,6 +78,8 @@ pub fn to_detail(
             resource.origin_kind.as_deref(),
             resource.origin_ref.as_deref(),
         ),
+        origin_kind: resource.origin_kind.clone(),
+        origin_ref: resource.origin_ref.clone(),
         source_connection_id: resource.source_connection_id.clone(),
         source_table: resource.source_table.clone(),
         content_hash: resource.content_hash.clone(),

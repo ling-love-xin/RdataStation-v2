@@ -16,6 +16,7 @@ pub mod checkout;
 pub mod conflict;
 pub mod group;
 pub mod index_repair;
+pub mod origin_chain;
 pub mod pick;
 pub mod rename;
 pub mod tag;

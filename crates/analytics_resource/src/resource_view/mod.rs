@@ -206,6 +206,8 @@ pub trait ResourcesHost: 'static {
     fn request_distribute_from_global(&self, name: &str, window: &mut Window, cx: &mut App);
     /// 从全局实例删除（刀 B）：删全局各版表与登记，已分发到项目的副本不受影响。
     fn request_delete_global(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App);
+    /// 查看来源链（刀 C）：顺着一行行的直接上游往上追（只读，不改数据）。
+    fn request_show_origin_chain(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App);
 
     /// reference 快照是否已失效（打开时懒校验发现源内容与登记指纹不一致，§12.1.1 ②）。
     ///

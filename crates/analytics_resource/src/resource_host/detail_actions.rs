@@ -333,6 +333,24 @@ pub(super) fn request_delete_global(
     });
 }
 
+/// 查看来源链（刀 C）：从当前详情顺着 `origin_kind` / `origin_ref` 往上追，
+/// 每一跳都去**面板当前快照**里按 id 找（不另查库；找不到就如实标灰）。
+pub(super) fn request_show_origin_chain(
+    host: &ResourceHost,
+    detail: &ArchiveDetail,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let details: std::collections::HashMap<String, ArchiveDetail> = host
+        .backend
+        .snapshot_details(cx)
+        .into_iter()
+        .map(|item| (item.id.clone(), item))
+        .collect();
+    let chain = crate::present::build_origin_chain(detail, &details);
+    crate::dialogs::origin_chain::open_origin_chain(window, cx, chain);
+}
+
 pub(super) fn is_reference_stale(host: &ResourceHost, resource_id: &str) -> bool {
 
         host.backend.is_reference_stale(resource_id)

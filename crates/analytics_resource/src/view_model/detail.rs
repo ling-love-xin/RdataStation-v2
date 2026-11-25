@@ -35,6 +35,10 @@ pub struct ArchiveDetail {
     /// 跨项目链路的**直接上游**（`origin_kind` + `origin_ref` 拼好的一句话）。
     /// 空串 = 不画那一行（没有上游 / 老行 / ref 被写坏都归到这一档）。
     pub origin_label: String,
+    /// 上一步的原样字段（`project` / `global`）：「查看来源链」要顺着它往上追。
+    pub origin_kind: Option<String>,
+    /// 上一步原样的 JSON（`{"resource_id":…,"version":…}` / `{"instance":…,"version":…}`）。
+    pub origin_ref: Option<String>,
     pub source_connection_id: Option<String>,
     pub source_table: Option<String>,
     /// 内容指纹（完整值；展示时截断）。

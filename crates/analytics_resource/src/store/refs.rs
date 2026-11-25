@@ -68,4 +68,19 @@ impl AnalyticsResourceStore {
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| refs_err("select", e))
     }
+
+    /// 记一条「派生自」：`from_id` 是从 `to_id` 搬出来的产物（M6 刀 C 的落点）。
+    ///
+    /// 跨库语义：分发落项目时 `from_id` 是项目行、`to_id` 是全局登记 id——两边各自
+    /// 一份库，这里只存字符串不做外键。时间线按 `from_id` 命中就能看到这一跳；
+    /// 上游是否还在（被从全局删掉）由全局侧自己回答，项目库不复制它的状态。
+    pub async fn record_derived_from(
+        &self,
+        from_id: &str,
+        to_id: &str,
+    ) -> Result<(), CoreError> {
+        let conn = self.get_conn().await?;
+        let inner = conn.inner()?;
+        Self::record_ref_on(inner, from_id, to_id, "derived_from")
+    }
 }

@@ -179,6 +179,11 @@ impl ResourcesHost for RecordingHost {
             .borrow_mut()
             .push(format!("delete-global:{}", detail.name));
     }
+    fn request_show_origin_chain(&self, detail: &ArchiveDetail, _window: &mut Window, _cx: &mut App) {
+        self.calls
+            .borrow_mut()
+            .push(format!("origin-chain:{}", detail.id));
+    }
     fn is_reference_stale(&self, _resource_id: &str) -> bool {
         false
     }
@@ -289,6 +294,8 @@ fn detail_for(row: &ArchiveRow) -> ArchiveDetail {
         has_definition: false,
         definition_sql: None,
         origin_label: String::new(),
+        origin_kind: None,
+        origin_ref: None,
         history_label: String::new(),
         tags: Vec::new(),
         group: None,

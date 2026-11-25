@@ -174,6 +174,26 @@ impl ResourceHostBackend for WorkbenchResourceBackend {
             .map(|detail| detail.alias.clone())
     }
 
+    /// 来源链追下一跳要按 id 找行：直接从面板快照拷一份（不另查库）。
+    fn snapshot_details(&self, cx: &App) -> Vec<analytics_resource::detail_view::ArchiveDetail> {
+        let Some(panel) = self
+            .shared
+            .resources_panel
+            .borrow()
+            .as_ref()
+            .and_then(|weak| weak.upgrade())
+        else {
+            return Vec::new();
+        };
+        panel
+            .read(cx)
+            .snapshot()
+            .details
+            .values()
+            .cloned()
+            .collect()
+    }
+
     fn default_group(&self, root: &str, cx: &App) -> Option<String> {
         settings::SettingsService::default_group(root, cx)
     }

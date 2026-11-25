@@ -49,6 +49,7 @@ pub const DETAIL_RECENT_VERSIONS: usize = 3;
 
 /// 大小文案：按 1024 进制分档，`< 1 KB` 用字节（避免出现 `0.0 KB` 这种没信息量的值）。
 mod format;
+mod origin_chain;
 mod trash;
 mod rows;
 mod detail;
@@ -61,6 +62,7 @@ pub use self::format::{format_size, format_scale, format_relative_time, format_t
 pub use self::trash::{build_trash_snapshot, entity_trash_row, registry_trash_rows, FolderMemberships};
 pub use self::rows::{SnapshotInputs, to_row, tag_options};
 pub use self::detail::{DetailExtras, to_detail};
+pub use self::origin_chain::{build_origin_chain, OriginChain, OriginChainNode, MAX_CHAIN_HOPS};
 pub use self::versions::{build_version_rows};
 pub use self::timeline::{build_timeline_rows};
 pub use self::repair::{build_repair_rows};

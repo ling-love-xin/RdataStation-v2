@@ -110,6 +110,14 @@ pub trait ResourceHostBackend: 'static {
     fn connection_label(&self, _connection_id: &str) -> Option<String> {
         None
     }
+
+    /// 当前面板快照里的全部详情（来源链往上追下一跳时要按 id 找行）。
+    ///
+    /// 默认空：测试替身没有面板快照时链路只能追到「上游不在快照」那一档；
+    /// 生产实现从 `Shared::resources_panel` 取，不另查库。
+    fn snapshot_details(&self, _cx: &App) -> Vec<ArchiveDetail> {
+        Vec::new()
+    }
 }
 
 /// 状态栏提示（自由函数版：对话框回调里没有 `self`）。
@@ -253,6 +261,14 @@ impl ResourcesHost for ResourceHost {
         cx: &mut App,
     ) {
         detail_actions::request_delete_global(self, detail, window, cx);
+    }
+    fn request_show_origin_chain(
+        &self,
+        detail: &ArchiveDetail,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        detail_actions::request_show_origin_chain(self, detail, window, cx);
     }
     fn is_reference_stale(&self, resource_id: &str) -> bool {
         return detail_actions::is_reference_stale(self, resource_id);
