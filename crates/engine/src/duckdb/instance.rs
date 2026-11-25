@@ -685,20 +685,31 @@ impl AnalysisInstance {
     /// 手动清理一件（用户点"清理"才走这里，**绝不自动删**）。
     ///
     /// 先删表再销登记：表已经不在也把登记销掉（返回 `true` 表示登记被清掉）。
+    ///
+    /// 两处都删：`rds_tmp.<名>`（新口径的共享临时区）与 `<名>`（留在 `memory.main` 的旧口径表）。
+    /// 为什么容这两处：结果集 / 洞察样本是历史上建在 `memory.main` 的，名字（含 `tmp_q_` 前缀）
+    /// 已经被洞察的引用模板按裸标识符吃进 SQL，搬 schema 会连带改一片模板；所以这一刀先
+    /// 做到"登记 + 手工清得掉"，两处都认。
     pub fn drop_temp(&self, name: &str) -> Result<bool, String> {
         if name.trim().is_empty() {
             return Err("临时结果名不能为空".to_string());
         }
-        let quoted = name.replace('"', "\"\"");
+        let bare = name
+            .strip_prefix(&format!("{SHARED_TEMP_SCHEMA}."))
+            .unwrap_or(name);
+        let quoted = bare.replace('"', "\"\"");
         self.run_control(&format!(
             "DROP TABLE IF EXISTS {SHARED_TEMP_SCHEMA}.\"{quoted}\""
         ))?;
+        // 旧口径（`memory.main`）的同一张表：不在就静默跳过，删成功与否都继续走销登记
+        let _ = self.run_control(&format!("DROP TABLE IF EXISTS \"{quoted}\""));
+        let _ = super::DuckDBManager::temp_table_manager().unregister(bare);
         let removed = self
             .state
             .lock()
             .map(|mut state| {
                 let before = state.temps.len();
-                state.temps.retain(|entry| entry.name != name);
+                state.temps.retain(|entry| entry.name != name && entry.name != bare);
                 before != state.temps.len()
             })
             .unwrap_or(false);
@@ -1036,6 +1047,52 @@ mod tests {
                 .is_err(),
             "清理后两个会话都读不到"
         );
+    }
+
+    /// 手动清理要认**两种落点**：`rds_tmp.<名>`（新口径）与 `memory.main.<名>`（历史口径）。
+    ///
+    /// 为什么容两处：结果集 / 洞察样本的名字（含 `tmp_q_` 前缀）已经被洞察的引用模板按
+    /// 裸标识符吃进 SQL，整体搬 schema 会连带改一片模板；这一版先做到「登记 + 手工清得掉」。
+    #[test]
+    fn manual_cleanup_drops_either_schema_and_unregisters() {
+        let instance = instance("t_drop_locations");
+        let session = instance.open_session("doc-a", "编辑器 A").expect("开会话");
+
+        // ① 历史口径：裸名建表（默认 catalog/schema = memory.main）
+        session
+            .run_with_timeout("CREATE TABLE tmp_q_legacy (id INTEGER)", Duration::from_secs(3))
+            .expect("建历史口径表");
+        instance.register_temp("tmp_q_legacy", "用例", "历史口径");
+        assert!(
+            session
+                .run_with_timeout("SELECT count(*) FROM tmp_q_legacy", Duration::from_secs(3))
+                .is_ok(),
+            "建在前该读得到"
+        );
+        assert!(instance.drop_temp("tmp_q_legacy").expect("清理"), "登记该销掉");
+        assert!(
+            session
+                .run_with_timeout("SELECT count(*) FROM tmp_q_legacy", Duration::from_secs(3))
+                .is_err(),
+            "清理后表该没了"
+        );
+
+        // ② 新口径：`rds_tmp.<名>`；登记时带不带 schema 前缀都要能清
+        session
+            .run_with_timeout(
+                "CREATE TABLE rds_tmp.tmp_i_sample_1 AS SELECT 1 AS a",
+                Duration::from_secs(3),
+            )
+            .expect("建共享临时");
+        instance.register_temp("tmp_i_sample_1", "用例", "新口径");
+        assert!(instance.drop_temp("rds_tmp.tmp_i_sample_1").expect("带前缀清理"), "该清掉");
+        assert!(
+            session
+                .run_with_timeout("SELECT count(*) FROM rds_tmp.tmp_i_sample_1", Duration::from_secs(3))
+                .is_err(),
+            "清理后 rds_tmp 里也不该有"
+        );
+        assert!(instance.temps().is_empty(), "两件都应销掉登记");
     }
 
     /// 关会话 = TEMP 跟着消失（再开新会话是新世界），别的会话不受影响。

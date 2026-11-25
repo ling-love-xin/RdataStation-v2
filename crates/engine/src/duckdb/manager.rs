@@ -292,6 +292,11 @@ impl DuckDBManager {
     /// - `table_name`: 临时表名
     pub fn register_temp_table(table_name: &str) {
         Self::global_temp_table_manager().register(table_name);
+        // 同时登到**分析实例**的登记册：那是"用户看得见、点得掉"的那一份
+        // （`rds_tmp` 面板 → `AnalysisInstance::drop_temp`）。表名仍是裸名，前缀口径不动。
+        if let Some(instance) = crate::duckdb::instance::current() {
+            instance.register_temp(table_name, "引擎", "分析临时表");
+        }
     }
 
     /// 列出**内存库**里某来源的临时表（权威来源是库本身，不是注册表）。

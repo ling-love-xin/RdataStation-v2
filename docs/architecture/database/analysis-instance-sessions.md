@@ -71,7 +71,8 @@
 | 2e-1 | `accel` 模块退役（删 `AccelSession` / `ensure_session` / `SESSIONS` 缓存 / `owners` / `drop_session` / `drop_all` / `cancel` / `list_tables_for`） | ✅ 本刀（用例与两条真机探针同批改到实例 API） |
 | 2f | 进程面并进实例：`DuckDBManager::global()` 返回的"进程单例"就是实例 `owner = process` 那条会话的连接；`SessionHandle::{ProcessDb, Federated}` 两个旧变体删除 | ✅ |
 | 2g | 联邦侧别名归属核对（同实例下两个源抢同一别名会静默指到先挂的那个，加速档已用 `reserve_alias` 收口） | ⬜ |
-| 3 | `rds_tmp` 自动登记（结果集保存 / 洞察取样落 `rds_tmp` 时登记） | ⬜ |
+| 3 | `rds_tmp` 自动登记：结果集 / 洞察样本建表即登进实例登记册（`drop_temp` 手动清理，两处落点都认） | ✅ |
+| 3b | 把新建临时表**实际搬进** `rds_tmp`（洞察的引用模板按裸标识符拼 SQL，要整批改模板才动得干净） | ⬜ |
 | 4 | 保护接线（超时值从设置读、面板显示"被中断"） | ⬜ |
 | 5 | 取库脚本与文档（2.0.1 资产改名、存储格式单向） | ✅ |
 
@@ -120,6 +121,15 @@
 某条会话。加速档已用 `reserve_alias` 按源唯一分配；联邦侧 `attach_source` 目前仍是
 "别名已存在就算 Ready"，若另一个源抢先占了同名别名，查询会静默指到那个库上。收口方向：
 联邦挂载也走实例别名登记（后到者让位 `别名_2`，或直接判 Failed 并说清"该别名已被别的源占用"）。
+
+**3 的落点（登记先接上，搬家留下一刀）**：`DuckDBManager::register_temp_table` 在建表那一步
+把名字**同时**登进实例登记册（`AnalysisInstance::register_temp`），于是
+`instance.temps()` / `drop_temp` / `drop_all_temps` 这套"用户看得见、点得掉"的入口对结果集
+（`tmp_q_`）与洞察样本（`tmp_i_` / `tmp_l_`）都生效；`drop_temp` 认两种落点
+（`rds_tmp.<名>` 与历史口径 `memory.main.<名>`），并顺手销掉管理器侧的登记，避免计数漂移。
+**3b（未做）**：把新建的临时表真的搬进 `rds_tmp` schema——卡在引用侧：洞察的规则 / 直方图 /
+列统计模板都是 `"SELECT … FROM \"{table}\""`（裸标识符 + 双引号），表名一带 `rds_tmp.`
+就会当成一张名字里带点的表而报"不存在"，所以搬家必须整批改模板，不能单改建表侧。
 
 **真机实证（2026-11-26，`192.168.3.138` + `D:\FossilT\T.fossil`）**：
 

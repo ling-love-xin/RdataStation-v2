@@ -810,6 +810,33 @@ mod tests {
         drop_temp_table(&guard, TempTableSource::Query, &table).expect("删表");
     }
 
+    /// 建表即登到**分析实例**的登记册（第 3 项：`rds_tmp` 自动登记）。
+    ///
+    /// 登到实例的那一份才是"用户看得见、点得掉"的（面板 → `AnalysisInstance::drop_temp`）；
+    /// 原来的管理器登记册继续保留（TTL / 上限 / 惰性清理仍按它算）。
+    #[test]
+    fn a_result_set_registers_itself_in_the_instance() {
+        let table = DuckDbService::create_duckdb_temp_table(
+            &["id".to_string()],
+            &[vec![json!(1)]],
+        )
+        .expect("建表");
+        let instance = crate::duckdb::instance::current().expect("进程单例就是实例的 process 会话");
+        assert!(
+            instance.temps().iter().any(|entry| entry.name == table),
+            "实例登记册里应有 {table}：{:?}",
+            instance.temps()
+        );
+        assert!(
+            instance.drop_temp(&table).expect("手动清理"),
+            "该能销掉登记"
+        );
+        assert!(
+            !instance.temps().iter().any(|entry| entry.name == table),
+            "清理后登记不该还在"
+        );
+    }
+
     /// `rows_as_json` 直读 Arrow `batches`。
     ///
     /// 回归：旧实现走 `serde_json::to_value(&QueryResult)` 再读 `["batches"]`，
