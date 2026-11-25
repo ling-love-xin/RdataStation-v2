@@ -11,8 +11,8 @@
 
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::{
-    AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
-    Render, Styled as _, TestAppContext, VisualTestContext, Window, div, px, rems,
+    div, px, rems, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext, Window,
 };
 
 use crate::components::data_objects::{Channel, Group, Life, Object, State};
@@ -39,6 +39,9 @@ fn row(key: &str, name: &str, note: &str, state: State, pill: &'static str) -> O
         pill,
         version: None,
         sql_ref: Some(format!("\"{name}\"")),
+        // 探针造的都是表段行：没有行尾动作位，也没有"去选表"的展开出口
+        source_action: None,
+        expand_via: None,
     }
 }
 

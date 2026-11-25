@@ -2416,6 +2416,9 @@ mod tests {
         let mut c = sample();
         c.connections.clear();
         c.accel_sources.clear();
+        // 会话里那条同别名的源也要清：不清的话这份登记已经被"会话已挂上"解释掉了，
+        // 测的就不是"连接不在清单里"这一格
+        c.session_sources.clear();
 
         let row = objects(&c)
             .into_iter()
@@ -2455,8 +2458,17 @@ mod tests {
         );
         assert_eq!(
             super::source_ref("accel:C_mysql_9"),
-            None,
-            "加速会话不进面板，`accel:` 不再是可展开的源"
+            Some(super::SourceRef::Accel {
+                conn_id: "C_mysql_9".into()
+            }),
+            "纯函数仍认 `accel:`（服务层 `load_jobs` / `source_kids_jobs` 还按它分派），\
+             但源段已不再产这种行——见下面的断言"
+        );
+        assert!(
+            !objects(&sample())
+                .iter()
+                .any(|o| o.key.starts_with("accel:")),
+            "加速会话不进面板：源段不许再出 `accel:` 行"
         );
         assert_eq!(
             super::source_ref("fileview:f_warehouse"),
@@ -2841,12 +2853,14 @@ mod temp_source_tests {
             row.state.label()
         );
         assert!(
-            row.state.label().contains("本地加速"),
-            "状态字要指出去哪挂：{}",
+            row.state.label().contains("挂载"),
+            "状态字要指出去哪挂（右键「挂载」，加速已不进面板）：{}",
             row.state.label()
         );
 
-        // 加速会话起来了（`accel_sources.owner` 就是 conn_id）→ 这才可展开
+        // 加速会话起来了（`accel_sources.owner` 就是 conn_id）：**也不算挂载事实**
+        // （2026-11-25 口径：加速 = 一次一个库的 ATTACH，不进面板），所以这一行仍不可展开。
+        // 能展开的是「登记 + 活连接」那条路（`expand_via`），不是加速。
         c.accel_sources.push(super::SessionSource {
             owner: "C_lite".into(),
             alias: "商城库".into(),
@@ -2857,7 +2871,10 @@ mod temp_source_tests {
             .into_iter()
             .find(|o| o.key == "conn:C_lite")
             .expect("网络源也要进源段");
-        assert!(row.can_analyze(), "挂上之后要能展开");
+        assert!(
+            !row.can_analyze(),
+            "加速会话不构成展开依据：面板里这条连接仍然没有自己的表可列"
+        );
     }
 }
 
