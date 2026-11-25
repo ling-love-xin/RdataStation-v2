@@ -370,6 +370,147 @@ pub fn analyze_asset_version(
     }
 }
 
+/// 把一条**网络连接**挂进分析实例的本地加速档（源段右键「挂载」）。
+///
+/// 这是规格 §8 补上的缺口（铁律第 37 条记着的「workbench 里零调用
+/// `accel::ensure_session`」）。凭据取法与编辑器侧同一口径：
+/// 连接管理器给 `db_type`，运行时连接串（`url_override`，带凭据）优先，
+/// 拿不到才退回 `ConnectionInfo.url`——DuckDB 1.5.5 的 mysql/pg 扫描器不认
+/// Secret，凭据只能随连接串进 ATTACH。
+pub fn mount_network_source(shared: &Shared, conn_id: &str, cx: &mut App) {
+    let manager = engine::connection_manager::get_connection_manager();
+    let rt = match crate::services::nav_runtime::bridge_runtime() {
+        Ok(rt) => rt,
+        Err(error) => {
+            shared.say_error(format!("异步运行时不可用：{error}"), cx);
+            return;
+        }
+    };
+    let info = match rt.block_on(manager.get_connection_info(&conn_id.to_string())) {
+        Some(info) => info,
+        None => {
+            shared.say_error(
+                format!("拿不到连接 {conn_id} 的信息，无法在本地挂载它"),
+                cx,
+            );
+            return;
+        }
+    };
+    let url = rt
+        .block_on(manager.get_connection_config(&conn_id.to_string()))
+        .and_then(|config| config.url_override)
+        .filter(|url| !url.trim().is_empty())
+        .unwrap_or_else(|| info.url.clone());
+    let source = match engine::duckdb::accel::AccelSource::new(conn_id, &info.db_type, &url) {
+        Ok(source) => source,
+        Err(reason) => {
+            shared.say_error(format!("挂载失败：{reason}"), cx);
+            return;
+        }
+    };
+    match engine::duckdb::accel::ensure_session(&source) {
+        Ok(_) => {
+            refresh(shared, cx);
+            shared.say(
+                format!(
+                    "已挂载 {conn_id}（本地加速档，catalog 名固定 {}）",
+                    engine::duckdb::accel::SOURCE_ALIAS
+                ),
+                cx,
+            );
+        }
+        Err(reason) => shared.say_error(format!("挂载失败：{reason}"), cx),
+    }
+}
+
+/// 卸下一条网络连接的加速会话（源段右键「卸载」）：只断挂载，不动连接本身。
+pub fn unmount_network_source(shared: &Shared, conn_id: &str, cx: &mut App) {
+    if engine::duckdb::accel::drop_session(conn_id) {
+        refresh(shared, cx);
+        shared.say(format!("已卸载 {conn_id}（连接本身没断）"), cx);
+    } else {
+        shared.say_error(format!("{conn_id} 没有加速会话可卸"), cx);
+    }
+}
+
+/// 把一条连接**登记成项目源**（写 `analysis_sources`，别名按规格 §6 取第一个）。
+///
+/// 只登记意图，不顺手挂载：挂载是会话事实（见 [`mount_network_source`]），
+/// 两件事分开，用户才能看懂「未挂载 · 项目级」这一格。
+pub fn register_connection_source(shared: &Shared, conn_id: &str, name: &str, cx: &mut App) {
+    let Some(root) = shared.project_root() else {
+        shared.say_error("还没有打开项目，登记不落在任何项目里".to_string(), cx);
+        return;
+    };
+    let conn = match engine::persistence::analysis_sources::open_in_project(&root) {
+        Ok(conn) => conn,
+        Err(error) => {
+            shared.say_error(format!("打开项目库失败：{error}"), cx);
+            return;
+        }
+    };
+    let taken = match engine::persistence::analysis_sources::taken_aliases(&conn, None) {
+        Ok(aliases) => aliases,
+        Err(error) => {
+            shared.say_error(format!("读已有别名失败：{error}"), cx);
+            return;
+        }
+    };
+    let alias = engine::duckdb::federation::registry::default_alias(name, &taken);
+    let now = chrono::Utc::now().to_rfc3339();
+    let row = engine::persistence::analysis_sources::AnalysisSourceRow {
+        id: format!("src_{}", uuid::Uuid::new_v4().simple()),
+        name: name.to_string(),
+        kind: engine::persistence::analysis_sources::AnalysisSourceKind::Conn,
+        connection_id: Some(conn_id.to_string()),
+        path: None,
+        alias: alias.clone(),
+        mount_kind: engine::persistence::analysis_sources::AnalysisMountKind::Accel,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    match engine::persistence::analysis_sources::insert(&conn, &row) {
+        Ok(()) => {
+            refresh(shared, cx);
+            shared.say(
+                format!("已登记为项目源：{name} → 别名 {alias}"),
+                cx,
+            );
+        }
+        Err(error) => shared.say_error(format!("登记失败：{error}"), cx),
+    }
+}
+
+/// 删掉一条登记（源段右键「移除登记」）：只删意图，实例里挂着的会话不动。
+pub fn unregister_source(shared: &Shared, id: &str, cx: &mut App) {
+    let Some(root) = shared.project_root() else {
+        shared.say_error("还没有打开项目，登记不在任何项目里".to_string(), cx);
+        return;
+    };
+    let conn = match engine::persistence::analysis_sources::open_in_project(&root) {
+        Ok(conn) => conn,
+        Err(error) => {
+            shared.say_error(format!("打开项目库失败：{error}"), cx);
+            return;
+        }
+    };
+    match engine::persistence::analysis_sources::delete(&conn, id) {
+        Ok(true) => {
+            refresh(shared, cx);
+            shared.say("已移除登记（挂着的会话没动）".to_string(), cx);
+        }
+        Ok(false) => shared.say_error("这条登记已经不在了".to_string(), cx),
+        Err(error) => shared.say_error(format!("移除登记失败：{error}"), cx),
+    }
+}
+
+/// 挂载 / 卸载 / 登记之后统一重取清单：面板与本视图都跟着新事实重排。
+fn refresh(shared: &Shared, cx: &mut App) {
+    let collected = data_objects::collect(shared);
+    *shared.data_objects.borrow_mut() = data_objects::objects(&collected);
+    shared.mark_data_objects_dirty(cx);
+}
+
 #[cfg(test)]
 mod tests {
     use super::LoadScope;

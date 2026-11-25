@@ -42,9 +42,15 @@
      事实 = 进程实例的 `duckdb_databases()`。按 `alias` 匹配得三态：
      **已挂载 · 项目级**（登记 ∩ 实例）/ **已挂载 · 会话级**（实例有、登记无 → 行写「会话级 · 未登记」）/
      **未挂载 · 项目级**（登记有、实例无 → 行写「未挂载」）。
+     另有一种不在三态里的行：**已连接、没挂、也没登记**（只是「可挂的源」）→ 行写「未挂载」，
+     **不带scope**——它还没成为登记过的项目源，替用户说「项目级」等于替人做主。
    - 挂载的入口按 `mount_kind` 分三条：联邦直查 `federation::session::ensure_session`、
      本地加速 `accel::ensure_session`、数据库文件 `file_view::load_database_as` / `load_database_global`；
      卸载 = `USE memory` → `DETACH`（默认 catalog 指向该别名时必须先 `USE memory`）。
+     **workbench 侧的网络连接挂载入口 2026-11-25 补齐**（`data_objects_load::mount_network_source`
+     / `unmount_network_source`，右键「挂载 / 卸载」），第 37 条记的「`ensure_session` 零调用」缺口已关；
+     「登记为项目源 / 移除登记」是**意图侧**的独立菜单项（`register_connection_source` / `unregister_source`），
+     不与挂载合并成一步——两件事分开，用户才看得懂「未挂载 · 项目级」这一格。
      **加速档的 ATTACH 别名是固定常量 `accel::SOURCE_ALIAS = "rds_src"`**，不按源命名——
      登记行里的 `alias` 对它只是期望名 / 展示名。
    - **没有挂载的源不可展开**：未挂载 = 没有可列的表，行上只给「挂载」（入口在右键，行内不再摆按钮），

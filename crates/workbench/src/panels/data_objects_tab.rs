@@ -123,6 +123,13 @@ pub struct DataObjectsTab {
     unmounted_sources: Vec<(String, String)>,
     /// 源段里「文件库已经挂上」的行（行 key → 本体路径）：右键「卸载 / 重新挂载」用这一份
     mounted_sources: Vec<(String, String)>,
+    /// 网络连接里「连上了、但没挂进实例」的行（连接 id）：右键「挂载」用这一份。
+    /// 与文件库那条线分开：网络连接判的是加速会话，不是 `loaded_files` 路径。
+    unmounted_network: Vec<String>,
+    /// 网络连接里「加速会话在」的行（连接 id）：右键「卸载」用这一份
+    mounted_network: Vec<String>,
+    /// 项目登记表这份快照：`conn:` 行据此给「登记 / 移除登记」，`reg:` 行据此认本体
+    registrations: Vec<engine::persistence::analysis_sources::AnalysisSourceRow>,
     /// 上次同步到的活动文档 key（`None` = 还没对上 / 没有文档）。
     /// 与 `Shared::working_set.current` 比对：不同就说明用户切了文档，工作集要换那一份
     active_doc_key: Option<String>,
@@ -166,6 +173,9 @@ impl DataObjectsTab {
             collapsed_schemas: HashSet::new(),
             unmounted_sources: Vec::new(),
             mounted_sources: Vec::new(),
+            unmounted_network: Vec::new(),
+            mounted_network: Vec::new(),
+            registrations: Vec::new(),
             active_doc_key,
             seen_document_epoch,
             // `None` = 还没读过盘：构造那次 `refresh` 会按当前项目根读一遍
@@ -332,6 +342,24 @@ impl DataObjectsTab {
         self.unmounted_sources = data_objects::unmounted_file_sources(&collected);
         // 已挂的那几行：右键给「卸载 / 重新挂载」（同一份判据，反过来取）
         self.mounted_sources = data_objects::mounted_file_sources(&collected);
+        // 网络连接那条线：判据是加速会话（与文件库的 `loaded_files` 路径互不相干）
+        self.mounted_network = collected
+            .accel_sources
+            .iter()
+            .map(|source| source.owner.clone())
+            .collect();
+        self.unmounted_network = collected
+            .connections
+            .iter()
+            .filter(|conn| {
+                conn.connected
+                    // 文件库走上面那条线（路径判），这里只管网络库
+                    && data_objects::file_source_path(conn).is_none()
+                    && !self.mounted_network.iter().any(|id| id == &conn.id)
+            })
+            .map(|conn| conn.id.clone())
+            .collect();
+        self.registrations = collected.registered_sources.clone();
         collected.assets = self.assets_from_panel(cx);
         // 资产行单独存一份：`Object` 只带名字与版本，构造来源还要本体路径
         *self.shared.data_object_assets.borrow_mut() = collected.assets.clone();
@@ -1521,6 +1549,29 @@ impl DataObjectsTab {
                             .iter()
                             .find(|(key, _)| key == &object.key)
                             .map(|(_, path)| path.clone());
+                        // 网络连接那条线：挂载三态的两半（登记 = 意图，加速会话 = 事实）。
+                        // 连接行与「只剩登记」的 reg 行都要能在右键里补齐另一半
+                        let conn_id = object.key.strip_prefix("conn:").map(str::to_string);
+                        let conn_mounted = conn_id
+                            .as_ref()
+                            .map(|id| self.mounted_network.contains(id))
+                            .unwrap_or(false);
+                        let registered = conn_id.as_ref().and_then(|id| {
+                            self.registrations
+                                .iter()
+                                .find(|row| row.connection_id.as_deref() == Some(id.as_str()))
+                                .map(|row| row.id.clone())
+                        });
+                        let reg_row = object
+                            .key
+                            .strip_prefix("reg:")
+                            .and_then(|id| {
+                                self.registrations
+                                    .iter()
+                                    .find(|row| row.id == id)
+                                    .cloned()
+                            });
+                        let conn_name = object.name.clone();
                         move |menu, _window, _cx| {
                             let mut menu = menu;
                             if let Some(reference) = sql_ref.clone().filter(|_| usable) {
@@ -1706,6 +1757,106 @@ impl DataObjectsTab {
                                     move |_, window, cx| {
                                         crate::components::data_objects_load::mount_file_database(
                                             &remount, &path, cx,
+                                        );
+                                        window.refresh();
+                                    },
+                                ));
+                            }
+
+                            // 网络连接线（规格 §8 补的缺口）：挂载 / 卸载问的是**事实**，
+                            // 登记 / 移除登记问的是**意图**，两件事分两条菜单项，别合成一步
+                            if let Some(id) = conn_id.clone() {
+                                if conn_mounted {
+                                    let unmount = shared.clone();
+                                    let cid = id.clone();
+                                    menu = menu.item(PopupMenuItem::new("卸载").on_click(
+                                        move |_, window, cx| {
+                                            crate::components::data_objects_load::unmount_network_source(
+                                                &unmount, &cid, cx,
+                                            );
+                                            window.refresh();
+                                        },
+                                    ));
+                                } else {
+                                    let mount = shared.clone();
+                                    let cid = id.clone();
+                                    menu = menu.item(PopupMenuItem::new("挂载").on_click(
+                                        move |_, window, cx| {
+                                            crate::components::data_objects_load::mount_network_source(
+                                                &mount, &cid, cx,
+                                            );
+                                            window.refresh();
+                                        },
+                                    ));
+                                }
+                                match registered.clone() {
+                                    // 没登记：把「会话级」的那半补成项目级
+                                    None => {
+                                        let reg = shared.clone();
+                                        let cid = id.clone();
+                                        let name = conn_name.clone();
+                                        menu = menu.item(
+                                            PopupMenuItem::new(tr("登记为项目源")).on_click(
+                                                move |_, window, cx| {
+                                                    crate::components::data_objects_load::register_connection_source(
+                                                        &reg, &cid, &name, cx,
+                                                    );
+                                                    window.refresh();
+                                                },
+                                            ),
+                                        );
+                                    }
+                                    // 已登记：移除意图（挂着的会话不动）
+                                    Some(rid) => {
+                                        let del = shared.clone();
+                                        menu = menu.item(
+                                            PopupMenuItem::new(tr("移除登记")).on_click(
+                                                move |_, window, cx| {
+                                                    crate::components::data_objects_load::unregister_source(
+                                                        &del, &rid, cx,
+                                                    );
+                                                    window.refresh();
+                                                },
+                                            ),
+                                        );
+                                    }
+                                }
+                            }
+
+                            // 「只剩登记」的行（`reg:`）：连接/文件都不在清单里，
+                            // 右键只给能救回来的两件——按登记的本体挂回去，或直接删登记
+                            if let Some(row) = reg_row.clone() {
+                                match (row.connection_id.clone(), row.path.clone()) {
+                                    (Some(cid), _) => {
+                                        let mount = shared.clone();
+                                        menu = menu.item(PopupMenuItem::new("挂载").on_click(
+                                            move |_, window, cx| {
+                                                crate::components::data_objects_load::mount_network_source(
+                                                    &mount, &cid, cx,
+                                                );
+                                                window.refresh();
+                                            },
+                                        ));
+                                    }
+                                    (None, Some(path)) => {
+                                        let mount = shared.clone();
+                                        menu = menu.item(PopupMenuItem::new("挂载").on_click(
+                                            move |_, window, cx| {
+                                                crate::components::data_objects_load::mount_file_database(
+                                                    &mount, &path, cx,
+                                                );
+                                                window.refresh();
+                                            },
+                                        ));
+                                    }
+                                    (None, None) => {}
+                                }
+                                let del = shared.clone();
+                                let rid = row.id.clone();
+                                menu = menu.item(PopupMenuItem::new(tr("移除登记")).on_click(
+                                    move |_, window, cx| {
+                                        crate::components::data_objects_load::unregister_source(
+                                            &del, &rid, cx,
                                         );
                                         window.refresh();
                                     },

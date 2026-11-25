@@ -150,8 +150,24 @@ pub fn list_in_project(
     list(&conn)
 }
 
+/// 打开**某个项目**的登记表（**写**路径）：`.RSmeta/project.db` 不在时建出骨架。
+///
+/// 与 [`list_in_project`] 不同：写登记是用户显式动作（右键「登记为项目源」），
+/// 这一下没库就建库是对的——读路径才不该造骨架。
+pub fn open_in_project(
+    project_root: &std::path::Path,
+) -> Result<Connection, CoreError> {
+    let meta = project_root.join(".RSmeta");
+    std::fs::create_dir_all(&meta).map_err(|e| storage_err("create_RSmeta", e.to_string()))?;
+    let conn = Connection::open(meta.join("project.db"))
+        .map_err(|e| storage_err("open_project_db", e.to_string()))?;
+    ensure_tables(&conn)?;
+    Ok(conn)
+}
+
 /// 全部登记行，按别名排序（面板树的顺序要稳定，不按写入时间抖）。
-pub fn list(conn: &Connection) -> Result<Vec<AnalysisSourceRow>, CoreError> {    ensure_tables(conn)?;
+pub fn list(conn: &Connection) -> Result<Vec<AnalysisSourceRow>, CoreError> {
+    ensure_tables(conn)?;
     let mut stmt = conn
         .prepare(
             "SELECT id, name, kind, connection_id, path, alias, mount_kind, created_at, updated_at

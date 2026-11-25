@@ -147,6 +147,10 @@ CREATE INDEX IF NOT EXISTS idx_analysis_sources_kind ON analysis_sources(kind);
 | 已挂载 · 会话级（未登记） | `a ∈ F \ I` | 「会话级 · 未登记」 | 登记为项目源 / 卸载 |
 | 未挂载 · 项目级 | `a ∈ I \ F` | 「未挂载」 | 挂载 / 移除登记 |
 
+另有一种**不在三态里**的行（2026-11-25 落地时补定）：已连接、没挂、也没登记——它只是
+「可挂的源」，行上写「未挂载」（**不带 scope**）。scope 得等用户真挂了 / 登记了才出现，
+否则界面是在替用户做主。
+
 **未挂载照样列一行**（跟铁律第 4 条"注册过但没连上的照样列"同一形态，只是判据从
 "注册标记"改成本表行）。不另造顶部提示条、不另造子组——一行一个源，动作就在右键里
 （第 42 条：行内不摆按钮）。
@@ -161,6 +165,12 @@ CREATE INDEX IF NOT EXISTS idx_analysis_sources_kind ON analysis_sources(kind);
 
 铁律第 37 条已定的现行缺口仍在：**网络连接行缺「挂载」入口**（`crates/workbench` 里没有任何
 `accel::ensure_session` 调用）。本规格落地时这条一并补上——"未挂载"行的动作就是它。
+
+> 2026-11-25 已补齐：`components/data_objects_load.rs` 的 `mount_network_source` /
+> `unmount_network_source`（凭据取法与 `editor/src/ports/editor_exec/conn.rs::accel_source`
+> 同一口径：`url_override` 优先、退回 `ConnectionInfo.url`），源段右键「挂载 / 卸载」接上；
+> 意图侧的「登记为项目源 / 移除登记」（`register_connection_source` / `unregister_source`）
+> 是独立菜单项，不跟挂载合成一步。
 
 ## 9. 渲染：只借导航的视觉与结构语言
 
@@ -257,3 +267,4 @@ CREATE INDEX IF NOT EXISTS idx_analysis_sources_kind ON analysis_sources(kind);
 |---|---|
 | 2026-11-25 | 初稿：源 = 登记 ∩ `duckdb_databases()`；`analysis_sources` 只存项目级；别名复用 `registry` 三函数；列出铁律第 4 / 37 / 55 条改法 |
 | 2026-11-25 | 用户批准三处改法并补一条：源段表/视图叶子行右侧不摆按钮、动作走右键（铁律第 42 条）。铁律已同步，规格 §9 / §7 跟着改。另更正前稿把"第 55 行"写成"第 55 条"——铁律只有 1–42 条，那句话是第 6 条的子句 |
+| 2026-11-25 | 落地三段：①`analysis_sources` 登记表 + `data_objects` 三态对账（含「已连接 / 未挂 / 未登记 = 未挂载（不带 scope）」与「登记了但连接不在清单里照样出一行」）；②源段三级树 + 叶子右键化（第 42 条）；③右键「挂载 / 卸载」接上 `accel::ensure_session` / `drop_session`，登记 / 移除登记为独立菜单项——§8 记的缺口关闭。测试：workbench `data_objects` 49 passed、store `analysis_sources` 9 passed、`ui_contract` 10 passed |

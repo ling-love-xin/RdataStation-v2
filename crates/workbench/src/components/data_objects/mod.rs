@@ -570,7 +570,12 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
         let mounted = connected
             && not_mounted.is_none()
             && (file_path.is_some() || accel_mounted);
-        let mount = MountState::from_facts(conn.registered, mounted);
+        // 「已连接、没挂、也没登记」这一行只是**可挂的源**：它还没成为登记过的项目源，
+        // 说「项目级」是替用户做主——scope 等他真挂了/登记了再出现（规格 §7）
+        let pill = match (conn.registered, mounted) {
+            (false, false) => "未挂载",
+            _ => MountState::from_facts(conn.registered, mounted).label(),
+        };
         // 登记过就把别名写进副标题：树的第一层是别名，行标题是连接名，不写就对不上
         let registered_alias = collected
             .registered_sources
@@ -600,9 +605,39 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             life: Life::External,
             state,
             group: Group::Source,
-            pill: mount.label(),
+            pill,
             version: None,
             // 连接本身不是数据对象：它下面展开的表才拼得出引用名
+            sql_ref: None,
+        });
+    }
+
+    // 只剩登记、连连接行都没有的源：照样列一行（规格 §7「未挂载 · 项目级」）。
+    // 动作在右键里（挂载 / 移除登记），行上不给展开——实例里没有东西可列。
+    for row in unmounted_registrations(collected) {
+        let note = match (row.connection_id.as_deref(), row.path.as_deref()) {
+            (Some(id), _) => format!("连接 {id} 不在清单里 · 登记为源"),
+            (None, Some(path)) => format!("文件库 · {path}"),
+            (None, None) => "登记为源".to_string(),
+        };
+        let channel = match row.mount_kind {
+            engine::persistence::analysis_sources::AnalysisMountKind::Accel => Channel::Accel,
+            engine::persistence::analysis_sources::AnalysisMountKind::Federation => {
+                Channel::Federated
+            }
+            _ => Channel::Source,
+        };
+        out.push(Object {
+            // 身份用登记行 id：这些行没有连接/路径可当身份
+            key: format!("reg:{}", row.id),
+            name: row.alias.clone(),
+            note,
+            channel,
+            life: Life::External,
+            state: State::Failed("未挂载 · 右键「挂载」后才能展开选表".to_string()),
+            group: Group::Source,
+            pill: MountState::Unmounted.label(),
+            version: None,
             sql_ref: None,
         });
     }
@@ -1252,8 +1287,55 @@ pub fn mounted_file_sources(collected: &Collected) -> Vec<(String, String)> {
 ///
 /// 两个对外函数共用这一份判据：卸载 / 挂载是同一件事的两种状态，若各写一套比较逻辑，
 /// 早晚出现「挂载里有、卸载里没有」的行——那行就永远卸不掉。
-fn file_source_rows(collected: &Collected, want_mounted: bool) -> Vec<(String, String)> {
+/// 登记在项目库、但这一刻**连行都没能出**的源（规格 §7 的 `I \ F` 那一格）。
+///
+/// 为什么不跟 `ConnRow` 一起出：这些登记指向的连接可能已经不在清单里
+/// （连接被删、切了项目、文件库路径改了名），`Collected` 里根本没有它的连接行。
+/// 只靠事实侧成行，登记侧就永远看不见——用户重启后会发现源"蒸发"了，
+/// 那正是铁律第 4 / 42 条要防的事。
+///
+/// 已经被事实行代表的登记不回在这里（按别名认，挂载三态由此对得上）：
+/// - 别名在加速会话里 → `accel:` 行已经写着「已挂载 · 项目级」；
+/// - 别名在没失败的联邦会话里 → `session:` 行同理；
+/// - 连接本身在 `connections` 里 → `conn:` 行会自己说「未挂载 · 项目级」。
+pub fn unmounted_registrations(
+    collected: &Collected,
+) -> Vec<&engine::persistence::analysis_sources::AnalysisSourceRow> {
     collected
+        .registered_sources
+        .iter()
+        .filter(|row| {
+            let alias = row.alias.as_str();
+            if collected
+                .accel_sources
+                .iter()
+                .any(|source| source.alias == alias)
+            {
+                return false;
+            }
+            if collected
+                .session_sources
+                .iter()
+                .any(|source| source.alias == alias && source.failed.is_none())
+            {
+                return false;
+            }
+            match (row.connection_id.as_deref(), row.path.as_deref()) {
+                // 连接登记：连接还在清单里就不归这里管（conn 行自己会说未挂载）
+                (Some(id), _) => !collected.connections.iter().any(|conn| conn.id == id),
+                // 文件库登记：本体路径还挂着某条连接就不归这里管
+                (None, Some(path)) => !collected.connections.iter().any(|conn| {
+                    file_source_path(conn)
+                        .map(|seen| same_file(&seen, path))
+                        .unwrap_or(false)
+                }),
+                (None, None) => true,
+            }
+        })
+        .collect()
+}
+
+fn file_source_rows(collected: &Collected, want_mounted: bool) -> Vec<(String, String)> {    collected
         .connections
         .iter()
         .filter_map(|conn| {
@@ -2225,6 +2307,38 @@ mod tests {
             conn.pill, "已挂载 · 会话级",
             "挂上了但没登记：会话级，不是项目级"
         );
+    }
+
+    /// 登记指向的连接已经不在清单里：源不许「蒸发」，照样出一行「未挂载 · 项目级」。
+    #[test]
+    fn registrations_without_a_connection_row_still_show_unmounted() {
+        let mut c = sample();
+        c.connections.clear();
+        c.accel_sources.clear();
+
+        let row = objects(&c)
+            .into_iter()
+            .find(|o| o.key == "reg:src_1")
+            .expect("登记行要在");
+        assert_eq!(row.group, Group::Source);
+        assert_eq!(row.pill, "未挂载 · 项目级");
+        assert!(matches!(row.state, State::Failed(_)), "{:?}", row.state);
+        assert!(row.note.contains("C_mysql_9"), "{}", row.note);
+    }
+
+    /// 已连接、没挂、也没登记：这一行是可挂的源，scope 还没定，别冒充「项目级」。
+    #[test]
+    fn connected_but_unmounted_and_unregistered_says_plain_unmounted() {
+        let mut c = sample();
+        c.registered_sources.clear();
+        c.accel_sources.clear();
+        c.connections[0].registered = false;
+
+        let conn = objects(&c)
+            .into_iter()
+            .find(|o| o.key == "conn:C_mysql_9")
+            .expect("连接行要在");
+        assert_eq!(conn.pill, "未挂载", "没登记就不说项目级");
     }
 
     /// 源行 key → 展开目标：联邦源按最后一个冒号切（owner 可能带冒号），加速源直取；
