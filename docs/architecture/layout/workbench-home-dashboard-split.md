@@ -130,6 +130,18 @@
        并观察 editor 实体级联。上移需把泛型改 WorkbenchView、桥改持宿主实体，并同步
        改写该测试；必须保留 `install_host_redraw_bridge` 的 defer 防双租口径。
        `ConnectionDialogHost` 已由 `Shared` 实现，不动。
+       2026-11-25 只读摸底补充实证：
+       - 泛型约束是 `H: 'static`（`state.rs` / `mod.rs`），**不要求 `H: Host`**；
+         Host 能力另以 `Rc<dyn ConnectionDialogHost>`（Shared 实现）传入。故上移只需把
+         实体句柄类型 `EditorPanel` 换成宿主类型，crate 内泛型不用改。
+       - 实体绑定点：`dialog.open(cx.entity(), …)` 第一参、`subscribe_env_confirm(&cx.entity(), …)`；
+         项目下拉订阅 `subscribe_project_confirm` 走 trait 对象，不绑实体。
+       - 直读 `editor.dialog_state()` / `harness.dialog` 的集成测试面比单测广，至少含
+         `connection_type_driver` / `connection_staging` / `connection_render_matrix` /
+         `connection_project_picker` / `connection_edit_backfill` / `connection_dialog_ui` /
+         `connection_template` / `dialog_host_layer`——上移需逐份改 harness 绑定与访问路径。
+       - 装配点：`install_editor_bridge`（`panels/mod.rs:580`）闭包内 `editor.update` 调
+         `request_*`；`install_host_redraw_bridge`（`:558`）defer 防双租，口径保留。
      - **2b Diff 浮层**：状态已搬 Shared（同型先例 `scratchpad_search` /
        `metadata_search`）；**挂载形态待拍板**——① 独立中央 Dock tab（同
        `SearchResultsHostPanel` / `PropertyHostPanel` 先例，非模态）；② 宿主
