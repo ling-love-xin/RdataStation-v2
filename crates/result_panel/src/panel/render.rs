@@ -7,7 +7,7 @@ use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::Selectable as _;
-use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
+use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, Textarea};
 use gpui_kit::component::menu::PopupMenuItem;
@@ -300,8 +300,32 @@ impl ResultPanel {
                     let lineage = toolbar.lineage.as_deref()?;
                     Some((lineage.to_string(), toolbar.connection.clone()))
                 });
+                // 对象名文本色：DBeaver `paintPanel` 用 SWT 常量
+                // `COLOR_DARK_GREEN`（`ResultSetFilterPanel.java:1037`，rgb(0,128,0)，
+                // 跟主题无关）。按用户拍板「直接用主题色」，取 `theme.colors.success`
+                // （明 `#15803D` / 暗 `#89D185`，即 `success.background`）——
+                // 明暗两套都是绿、且各自保证可读，比 SWT 常量在暗色下强。
+                //
+                // 为什么要换 variant：`Button` 的文字色由 variant 决定
+                // （`vendor/gpui-component/src/button/button.rs:736`
+                // `.text_color(normal_style.fg)`），没有单独给 label 着色的入口；
+                // `Button::foreground` 在 vendor 里是**死字段**（只在 `:128` 赋值，
+                // 全文件无读取），设了不生效。故用官方 `ButtonCustomVariant`
+                // 复刻 ghost 的底色与悬停、只把 fg 换成主题绿：
+                // ghost 的悬停底是 `tokens.accent`（`:1226-1233`，暗色再乘 0.5），
+                // 而 `tokens.accent = colors.accent`（`theme/mod.rs:655`），
+                // 所以下面这一对值就是 ghost 的原值。
+                let hover_bg = if theme.mode.is_dark() {
+                    theme.colors.accent.opacity(0.5)
+                } else {
+                    theme.colors.accent
+                };
+                let object_name_style = ButtonCustomVariant::new(cx)
+                    .foreground(theme.colors.success)
+                    .hover(hover_bg)
+                    .active(hover_bg);
                 let trigger = Button::new("editor-result-sql-preview")
-                    .ghost()
+                    .custom(object_name_style)
                     // 20px 档：与筛选框内其它子控件同高（框内高 20、外圈 24，见下方注释）
                     .xsmall()
                     .flex_none()
