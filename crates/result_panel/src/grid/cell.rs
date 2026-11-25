@@ -345,8 +345,23 @@ pub(crate) fn render_td(
     let table = cx.entity().clone();
     // 【刀2】数组列：`▶ 首值 [+N-1]`（三角在单元格内、文本前，间距 `INSIDE_MARGIN = 3`；
     // hint 在文本右侧，间距 `LEFT_MARGIN = 6` —— `GridCellRenderer.java:158-172` /
-    // `renderHints:339`）。展开状态此刻恒为收起：子行铺平与状态读取是刀3。
-    let array_display = array_cell::array_cell_display(kind, &text, false);
+    // `renderHints:339`）。
+    // 【刀3】展开状态从 delegate 读（父数据行 + 数据列）；数组子行自己不再套一层三角
+    //（二级展开本仓没做，不给假图标）。
+    let row_reference = delegate.reference_of(row_ix);
+    let array_expanded = match row_reference {
+        Some(crate::rowset::RowRef::Data(data_row)) if !delegate.transposed => {
+            col_ix
+                .checked_sub(1)
+                .is_some_and(|view_col| delegate.is_array_expanded(data_row, delegate.data_column(view_col)))
+        }
+        _ => false,
+    };
+    let array_display = if row_reference.is_some_and(|reference| reference.is_array_child()) {
+        ArrayCellDisplay::Plain
+    } else {
+        array_cell::array_cell_display(kind, &text, array_expanded)
+    };
     // 【结果集配色槽】脏格 / 冲突格底色在闭包外先求值：`product_tokens::get` 要借 `cx`，
     // 而 `.when` 的闭包捕获后与后面的多次借用打架。
     let dirty_bg = product_tokens::get(cx).result_cell_modified_background(theme);
@@ -357,6 +372,28 @@ pub(crate) fn render_td(
     let in_cell_range = delegate.in_cell_range(row_ix, col_ix);
     let paints_range = in_cell_range && delegate.range_focus() != Some((row_ix, col_ix));
     let range_bg = theme.tokens.table_active;
+    // 【刀3】三角点击：展开 / 收起这一格数组（真值入口是行号槽三角
+    // `LightGrid.handleMouseDown:3117-3122`；本仓把三角画在单元格内、点的也是它，
+    // 与截图形态一致）。行数会变 → 通知表格重算行数并重画。
+    // 先单独 clone：下面的右键闭包会把 `table` 整个 move 走。
+    let toggle_array_expand = {
+        let table = cx.entity().clone();
+        move |_: &MouseDownEvent, window: &mut Window, app: &mut App| {
+            let toggled = table.update(app, |state, cx| {
+                let delegate = state.delegate_mut();
+                let Some(crate::rowset::RowRef::Data(data_row)) = delegate.reference_of(row_ix) else {
+                    return None;
+                };
+                let column = delegate.data_column(col_ix.checked_sub(1)?);
+                delegate.toggle_array_expand(data_row, column);
+                cx.notify();
+                Some(())
+            });
+            if toggled.is_some() {
+                window.refresh();
+            }
+        }
+    };
     let mut cell = div()
         // 悬停提示要求元素有 id：gpui 的**流式** `tooltip` 声明在
         // `StatefulInteractiveElement` 上（没 id 的裸 `div` 只有直调 `Interactivity` 的写法），
@@ -459,9 +496,12 @@ pub(crate) fn render_td(
                 .debug_selector(move || format!("editor-result-array-collapsed-{row_ix}-{col_ix}"))
                 .child(
                     div()
+                        .id(("editor-result-array-toggle", row_ix * 64 + col_ix))
                         .flex_none()
+                        .cursor_pointer()
                         .text_color(muted)
-                        .child(SharedString::from(ARRAY_COLLAPSED_GLYPH)),
+                        .child(SharedString::from(ARRAY_COLLAPSED_GLYPH))
+                        .on_mouse_down(MouseButton::Left, toggle_array_expand.clone()),
                 )
                 .child(
                     div()
@@ -486,9 +526,12 @@ pub(crate) fn render_td(
             .debug_selector(move || format!("editor-result-array-expanded-{row_ix}-{col_ix}"))
             .child(
                 div()
+                    .id(("editor-result-array-toggle", row_ix * 64 + col_ix))
                     .flex_none()
+                    .cursor_pointer()
                     .text_color(muted)
-                    .child(SharedString::from(ARRAY_EXPANDED_GLYPH)),
+                    .child(SharedString::from(ARRAY_EXPANDED_GLYPH))
+                    .on_mouse_down(MouseButton::Left, toggle_array_expand),
             )
             .child(
                 div()

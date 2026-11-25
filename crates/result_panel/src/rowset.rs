@@ -35,6 +35,23 @@ pub enum RowRef {
     Data(usize),
     /// 本地行（叠加层分配的稳定 id；不随其它本地行增删滑移）
     Local(u64),
+    /// **数组展开子行**（刀3）：父底层行 + 数组列 + 元素下标
+    ///
+    /// 子行不是数据行：不可编辑、不进变更集 / 统计 / 导出 / 分组 / 文本视图，
+    /// 只在被展开的那一列显示元素值（其它列空白）——对齐 DBeaver
+    /// `GridRowNested` + `SpreadsheetPresentation.getCellValue:2571`（父格未展开返回
+    /// `DBDVoid.INSTANCE`）。`sub_index` 是这一子行在**父行组内**的铺平序号（行号
+    /// `1.1` / `1.2` 的后者用 `sub_index + 1`）。
+    ArrayChild {
+        /// 父底层数据行号
+        row: usize,
+        /// 被展开的数据列号
+        column: usize,
+        /// 这一列里的元素下标（0 基）
+        index: usize,
+        /// 组内铺平序号（多列同时展开时继续累加，行号不重复）
+        sub_index: usize,
+    },
 }
 
 impl Default for RowRef {
@@ -61,20 +78,39 @@ impl RowRef {
         matches!(self, Self::Local(_))
     }
 
-    /// 底层行号（`Local` 返回 `None`）
+    /// 底层行号（`Local` / `ArrayChild` 返回 `None`：子行不是数据行，编辑与提交
+    /// 都必须落在父行）
     pub fn data_index(&self) -> Option<usize> {
         match self {
             Self::Data(index) => Some(*index),
-            Self::Local(_) => None,
+            Self::Local(_) | Self::ArrayChild { .. } => None,
         }
     }
 
-    /// 本地行 id（`Data` 返回 `None`）
+    /// 本地行 id（`Data` / `ArrayChild` 返回 `None`）
     pub fn local_id(&self) -> Option<u64> {
         match self {
             Self::Local(id) => Some(*id),
-            Self::Data(_) => None,
+            Self::Data(_) | Self::ArrayChild { .. } => None,
         }
+    }
+
+    /// 数组展开子行（刀3）：`(父底层行, 数据列, 元素下标, 组内序号)`
+    pub fn array_child_parts(&self) -> Option<(usize, usize, usize, usize)> {
+        match *self {
+            Self::ArrayChild {
+                row,
+                column,
+                index,
+                sub_index,
+            } => Some((row, column, index, sub_index)),
+            _ => None,
+        }
+    }
+
+    /// 这一行是不是数组展开子行
+    pub fn is_array_child(&self) -> bool {
+        matches!(self, Self::ArrayChild { .. })
     }
 }
 
@@ -302,6 +338,24 @@ mod tests {
         assert_eq!(data.local_id(), None);
         assert_eq!(local.local_id(), Some(3));
         assert_eq!(local.data_index(), None);
+    }
+
+    #[test]
+    fn array_child_is_neither_data_nor_local_row() {
+        let child = RowRef::ArrayChild {
+            row: 4,
+            column: 2,
+            index: 1,
+            sub_index: 1,
+        };
+        assert!(child.is_array_child());
+        assert!(!child.is_data() && !child.is_local());
+        // 子行不是数据行：编辑 / 提交 / 行级动作一律靠父行号，这一条必须为 None
+        assert_eq!(child.data_index(), None);
+        assert_eq!(child.local_id(), None);
+        assert_eq!(child.array_child_parts(), Some((4, 2, 1, 1)));
+        assert_eq!(RowRef::data(4).array_child_parts(), None);
+        assert!(!RowRef::data(4).is_array_child());
     }
 
     // ===== LocalRowSet 取号与登记 =====

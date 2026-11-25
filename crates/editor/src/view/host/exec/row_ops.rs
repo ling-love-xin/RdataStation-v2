@@ -27,6 +27,8 @@ impl EditorHostPanel {
             let anchor_data = match anchor_ref {
                 Some(RowRef::Data(ix)) => Some(ix),
                 Some(RowRef::Local(_)) => None,
+                // 【刀3】数组子行不是数据行，锚点记 None
+                Some(RowRef::ArrayChild { .. }) => None,
                 None => None,
             };
             let mut local_id = 0u64;
@@ -53,6 +55,10 @@ impl EditorHostPanel {
         let Some(reference) = self.grid.read(cx).delegate().reference_of(view) else {
             return;
         };
+        // 【刀3】数组子行是展示行，不是数据行：没有「复制这一行」可言
+        if reference.is_array_child() {
+            return;
+        }
         let applied = self.shared.update_results(|store| {
             let active = store.active_index(&document).unwrap_or(0);
             let snapshot = match reference {
@@ -66,10 +72,13 @@ impl EditorHostPanel {
                     .and_then(|set| set.local_row(id))
                     .map(|row| row.cells.clone())
                     .unwrap_or_default(),
+                // 【刀3】子行已在上面早退，这里只是穷举兜底
+                RowRef::ArrayChild { .. } => Vec::new(),
             };
             let anchor = match reference {
                 RowRef::Data(ix) => Some(ix),
                 RowRef::Local(_) => None,
+                RowRef::ArrayChild { .. } => None,
             };
             let mut local_id = 0u64;
             store.mutate_local_rows(&document, active, |set| {
@@ -131,6 +140,8 @@ impl EditorHostPanel {
                     });
                     true
                 }
+                // 【刀3】数组子行不可删除（它不是数据行；要删就删父行）
+                RowRef::ArrayChild { .. } => false,
             }
         });
         if applied {
@@ -182,6 +193,8 @@ impl EditorHostPanel {
                     reset
                 }
                 RowRef::Local(_) => false,
+                // 【刀3】数组子行没有「重置这一格」（它不落变更集）
+                RowRef::ArrayChild { .. } => false,
             }
         });
         if applied {
@@ -236,6 +249,8 @@ impl EditorHostPanel {
                     .and_then(|set| set.local_row(id))
                     .map(|row| row.cells.clone())
                     .unwrap_or_default(),
+                // 【刀3】数组子行不是数据行：源行取不到值，下面按空处理
+                RowRef::ArrayChild { .. } => Vec::new(),
             };
             if columns == 0 || source_cells.is_empty() {
                 return 0;
@@ -298,6 +313,8 @@ impl EditorHostPanel {
                     });
                     count
                 }
+                // 【刀3】数组子行不是数据行：没有「把邻行值复制进来」这回事
+                RowRef::ArrayChild { .. } => 0,
             }
         });
         if written > 0 {

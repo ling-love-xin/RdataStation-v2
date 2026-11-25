@@ -232,6 +232,8 @@ impl ResultGridDelegate {
                     self.rows.get(data_ix)?.get(data_col).map(String::as_str)
                 }
                 RowRef::Local(id) => self.local_cell(id, data_col),
+                // 【刀3】转置视图的行是「字段」，数组子行在转置里没有位置
+                RowRef::ArrayChild { .. } => None,
             },
         }
     }
@@ -360,6 +362,9 @@ impl ResultGridDelegate {
                     .as_ref()
                     .and_then(|set| set.local_row(id))
                     .map(|row| row.cells.clone()),
+                // 【刀3】文本视图 / 整份 TSV 是「一行数据一条」，数组子行不铺进来
+                // （子行只在网格里显示；对齐 DBeaver 的复制 / 导出只认数据行）
+                RowRef::ArrayChild { .. } => None,
             })
             .collect()
     }
@@ -464,6 +469,8 @@ impl ResultGridDelegate {
                     .and_then(|set| set.local_row(id))
                     .map(|row| row.cells.clone())
                     .unwrap_or_default(),
+                // 【刀3】子行不参与整份复制
+                RowRef::ArrayChild { .. } => continue,
             };
             lines.push(tsv_row(&cells));
             count += 1;
@@ -522,6 +529,8 @@ impl ResultGridDelegate {
             && self.column_filter.is_none()
             && self.sort.is_none()
             && self.find_filter.is_none()
+            // 【刀3】有展开的数组就得物化：子行是插进视图序列的行，恒等映射表达不了
+            && self.expanded_arrays.is_empty()
         {
             self.view_rows = None;
             return;
@@ -571,7 +580,70 @@ impl ResultGridDelegate {
                 }
             }
         }
-        self.view_rows = Some(view);
+        self.view_rows = Some(self.with_array_children(view));
+    }
+
+    /// 【刀3】把展开的数组元素铺成子行插进视图序列
+    ///
+    /// 对齐 DBeaver `LightGrid.collectNestedRows:512-540`（嵌套行混进 `gridRows`）：
+    /// 每个父底层行之后，按**列号顺序**把每一列展开的元素各铺一段；`sub_index` 是
+    /// 组内铺平序号（行号 `1.1` / `1.2` 用 `sub_index + 1`，多列同时展开时继续累加，
+    /// 不会两列都从 `1.1` 起）。
+    ///
+    /// 本地行不产出子行（本地行的数组值不进解析口径，登记序追加在末尾的语义不变）。
+    fn with_array_children(&self, view: Vec<RowRef>) -> Vec<RowRef> {
+        if self.expanded_arrays.is_empty() {
+            return view;
+        }
+        let mut out = Vec::with_capacity(view.len());
+        for reference in view {
+            out.push(reference);
+            let RowRef::Data(row) = reference else {
+                continue;
+            };
+            let mut sub_index = 0usize;
+            for (&(_, column), values) in self.expanded_arrays.range((row, 0)..=(row, usize::MAX)) {
+                for index in 0..values.len() {
+                    out.push(RowRef::ArrayChild {
+                        row,
+                        column,
+                        index,
+                        sub_index,
+                    });
+                    sub_index += 1;
+                }
+            }
+        }
+        out
+    }
+
+    /// 行号槽的显示文本：数据行 / 本地行 = **数据行序号**（子行不占号）；数组子行 = `父序.子序`
+    ///
+    /// 口径对齐 DBeaver：展开出来的子行插在父行后，但父行与后续数据行的行号不变——
+    /// 截图 2 里展开第 1 行后，紧跟的数据行仍然叫 `2`，子行才是 `1.1` / `1.2` / `1.3`
+    /// （`GridRowNested.toString():64-70` 逐级 `parentRelativeIndex + "." + (relativeIndex+1)`）。
+    ///
+    /// 没有展开时行号就是视图序号（O(1)，与改动前完全一致）；有展开才数一遍前缀
+    /// （每个父行下子行通常个位数，展开是人工动作，不会成为热路径）。
+    pub(crate) fn row_label(&self, row_ix: usize) -> String {
+        if self.expanded_arrays.is_empty() {
+            return (row_ix + 1).to_string();
+        }
+        let Some(view) = self.view_rows.as_ref() else {
+            return (row_ix + 1).to_string();
+        };
+        let Some(reference) = view.get(row_ix) else {
+            return (row_ix + 1).to_string();
+        };
+        // 本行之前（不含）的非子行个数 = 本行的数据行序号（1 基）
+        let before = view[..row_ix]
+            .iter()
+            .filter(|reference| !reference.is_array_child())
+            .count();
+        match reference {
+            RowRef::ArrayChild { sub_index, .. } => format!("{}.{}", before, sub_index + 1),
+            _ => (before + 1).to_string(),
+        }
     }
 
     /// 本地行是否命中全局筛选词（大小写不敏感子串，与底层行同一套口径）

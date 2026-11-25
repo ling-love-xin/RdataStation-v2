@@ -147,6 +147,11 @@ impl ResultGridDelegate {
         let Some(reference) = self.row_ref(view_row) else {
             return false;
         };
+        // 【刀3】数组展开子行是展示行，不是数据行：不许编辑（真值里子行格子是
+        // `DBDVoid.INSTANCE`，双击也落不到值编辑器）
+        if reference.is_array_child() {
+            return false;
+        }
         // 【#28-B4】被标记删除的底层行不再进编辑（撤销删除后才恢复可编辑）
         if let RowRef::Data(data_ix) = reference {
             if self
@@ -222,6 +227,8 @@ impl ResultGridDelegate {
                     }
                 }
             }
+            // 【刀3】数组子行不可编辑（`begin_edit` 已拦；这里兜底丢弃，不写任何地方）
+            RowRef::ArrayChild { .. } => {}
         }
         true
     }

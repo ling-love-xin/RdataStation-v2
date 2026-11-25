@@ -269,6 +269,12 @@ pub struct ResultGridDelegate {
     /// 也不会把“已抓到的窗口”搞乱）。行号列显示的是**视图行号**，不是数据行号。
     /// 排序只作用底层行；本地行参与筛选命中、始终登记序追加末尾（#28-B1 拍板 D1）。
     pub(crate) view_rows: Option<Vec<RowRef>>,
+    /// 【刀3】数组展开状态：`(父数据行, 数据列) → 顶层元素展示文本`
+    ///
+    /// 值里存的是**解析好的元素文本**（展开那一刻 parse 一次）：子行渲染直接借
+    /// `&str`，不在渲染路径里反复解析 PG 字面量。`BTreeMap` 保证行组内按列号有序
+    /// （多列同时展开时子行铺平顺序稳定，对齐 `LightGrid.collectNestedRows:512-540`）。
+    pub(crate) expanded_arrays: std::collections::BTreeMap<(usize, usize), Vec<String>>,
     /// 【T2a-4】这份结果能不能编辑（面板同步数据时算：`ResultEntry` 编辑判据 +
     /// 面板当前连接 / 项目只读防线；`false` 时双击不进入编辑）
     pub(crate) editable: bool,
@@ -729,6 +735,8 @@ impl ResultGridDelegate {
         self.fact = None;
         // 【#28】本地叠加层同理：换结果不套上一份的本地行（面板随后紧跟 set_local_snapshot）
         self.local = None;
+        // 【刀3】数组展开状态同理：换结果 = 换一批值，旧的展开格指向的数组已经不存在
+        self.expanded_arrays.clear();
         self.rebuild_view_rows();
         // 【文本视图】换数据 = 文本输出失效（行数 / 列数可能没变但内容变了）
         *self.text_cache.borrow_mut() = None;
@@ -957,6 +965,59 @@ impl ResultGridDelegate {
         self.local.as_ref().map_or(0, |set| set.local_count())
     }
 
+    /// 【刀3】这一格（父数据行 + 数据列）现在展开着吗
+    pub fn is_array_expanded(&self, data_row: usize, column: usize) -> bool {
+        self.expanded_arrays.contains_key(&(data_row, column))
+    }
+
+    /// 【刀3】展开后的元素展示文本（子行渲染借它；未展开 = `None`）
+    pub(crate) fn expanded_array_values(&self, data_row: usize, column: usize) -> Option<&[String]> {
+        self.expanded_arrays
+            .get(&(data_row, column))
+            .map(Vec::as_slice)
+    }
+
+    /// 【刀3】展开 / 收起一格数组，返回操作后是否展开
+    ///
+    /// 口径（对齐 DBeaver `LightGrid.toggleRowExpand:3257-3296` + `SpreadsheetPresentation`）：
+    /// - 已展开 → 收起（子行消失）；
+    /// - 未展开 → 当场按 PG 字面量拆元素（展开那一刻解析一次，值缓存进
+    ///   [`Self::expanded_arrays`]）；解析失败 / 空数组 **不展开**（没有子行可铺）；
+    /// - 视图行序跟着重建（子行是视图行，不是数据行）。
+    pub fn toggle_array_expand(&mut self, data_row: usize, column: usize) -> bool {
+        if self.expanded_arrays.remove(&(data_row, column)).is_some() {
+            self.rebuild_view_rows();
+            return false;
+        }
+        // 只有数组列的格子上有三角：别的列长得像字面量也不展开（真值按 `DBDComplexValue` 判）
+        if self.column_kind(column + 1) != crate::store::ColumnKind::Array {
+            return false;
+        }
+        let Some(text) = self.rows.get(data_row).and_then(|row| row.get(column)) else {
+            return false;
+        };
+        let Some(items) = crate::store::parse_pg_array_literal(text) else {
+            return false;
+        };
+        if items.is_empty() {
+            return false;
+        }
+        let values: Vec<String> = items.iter().map(|item| item.display()).collect();
+        self.expanded_arrays.insert((data_row, column), values);
+        self.rebuild_view_rows();
+        true
+    }
+
+    /// 【刀3】收起全部展开的数组（返回是否有变化；换视图 / 结果被替换时的收口）
+    pub fn collapse_all_arrays(&mut self) -> bool {
+        if self.expanded_arrays.is_empty() {
+            return false;
+        }
+        self.expanded_arrays.clear();
+        self.rebuild_view_rows();
+        true
+    }
+
     /// 清空（切到无结果的模式 / 关闭文档时）
     pub fn clear(&mut self, text: impl Into<String>) {
         self.columns.clear();
@@ -970,6 +1031,8 @@ impl ResultGridDelegate {
         self.fact = None;
         // 【#28】本地叠加层跟着清：空网格不套上一份的本地行
         self.local = None;
+        // 【刀3】数组展开状态跟着清
+        self.expanded_arrays.clear();
         self.view_rows = None;
         self.empty_text = text.into();
         // 没有结果就没有“下一段”：留着会让滚动到底去取一份已经不存在的结果

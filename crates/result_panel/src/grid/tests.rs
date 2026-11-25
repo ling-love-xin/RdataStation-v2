@@ -5678,3 +5678,166 @@ fn panels_submenu_builder_is_wired_only_when_a_panel_connects() {
     grid.set_data(vec!["a".to_string()], vec![vec!["1".to_string()]]);
     assert!(grid.panels_menu_builder.is_some(), "换结果集不该掉接线");
 }
+// ===== 【刀3】数组展开：子行铺平 =====
+
+/// 造一份「id / tags(text[])」两列网格：tags 依次是 3 项 / 空 / 2 项
+fn array_grid() -> ResultGridDelegate {
+    let mut grid = ResultGridDelegate::empty("尚未执行");
+    grid.set_data(
+        vec!["id".to_string(), "tags".to_string()],
+        vec![
+            vec!["1".to_string(), "{vip,trial,churn}".to_string()],
+            vec!["2".to_string(), "{}".to_string()],
+            vec!["3".to_string(), "{a,b}".to_string()],
+        ],
+    );
+    grid.set_column_types(vec![
+        Some(ColumnType::parse("int4")),
+        Some(ColumnType::parse("text[]")),
+    ]);
+    grid
+}
+
+/// 收起态：视图行数 = 数据行数，格子里没有 `1.1` 这类行号
+#[test]
+fn array_collapsed_keeps_view_len_and_labels_flat() {
+    let grid = array_grid();
+    assert_eq!(grid.view_len(), 3, "没展开就没有子行");
+    assert_eq!(grid.cell(0, 0), "1");
+    assert_eq!(grid.row_label(2), "3");
+}
+
+/// 展开：子行紧跟父行，行号 `父.子`，只有被展开的那列有值，其它列空
+#[test]
+fn array_expanded_paves_child_rows_with_parent_dot_child_labels() {
+    let mut grid = array_grid();
+    assert!(grid.toggle_array_expand(0, 1), "3 项数组应该能展开");
+    assert!(grid.is_array_expanded(0, 1));
+
+    // 3 数据行 + 3 子行
+    assert_eq!(grid.view_len(), 6, "第 1 行展开 3 项 → 多 3 个视图行");
+    assert_eq!(
+        grid.row_ref(1),
+        Some(RowRef::ArrayChild {
+            row: 0,
+            column: 1,
+            index: 0,
+            sub_index: 0
+        })
+    );
+    // 行号槽：父行 `1`，子行 `1.1` / `1.2` / `1.3`，下一个数据行仍是 `2`
+    assert_eq!(grid.row_label(0), "1");
+    assert_eq!(grid.row_label(1), "1.1");
+    assert_eq!(grid.row_label(2), "1.2");
+    assert_eq!(grid.row_label(3), "1.3");
+    assert_eq!(grid.row_label(4), "2");
+    // 子行只有 tags 列取到元素，id 列空（对齐 `SpreadsheetPresentation.getCellValue:2571` 的 DBDVoid）
+    // 组件列：0 = 行号槽，1 = id，2 = tags
+    assert_eq!(grid.cell(1, 2), "vip");
+    assert_eq!(grid.cell(1, 1), "");
+    assert_eq!(grid.cell(2, 2), "trial");
+    assert_eq!(grid.cell(3, 2), "churn");
+    // 父格回到收起态显示（值本身不变，画法由 render 层决定）
+    assert_eq!(grid.cell(0, 2), "{vip,trial,churn}");
+}
+
+/// 再点一次收起：子行撤回，视图行数回到数据行数
+#[test]
+fn array_toggle_collapses_back() {
+    let mut grid = array_grid();
+    assert!(grid.toggle_array_expand(0, 1));
+    assert_eq!(grid.view_len(), 6);
+    assert!(!grid.toggle_array_expand(0, 1), "已展开 → 收起，返回 false");
+    assert!(!grid.is_array_expanded(0, 1));
+    assert_eq!(grid.view_len(), 3);
+    assert_eq!(grid.row_label(1), "2");
+}
+
+/// 空数组 / 非法字面量 / 非数组列都不展开（不画三角也就没子行）
+#[test]
+fn array_toggle_refuses_empty_malformed_and_non_array_columns() {
+    let mut grid = array_grid();
+    assert!(
+        !grid.toggle_array_expand(1, 1),
+        "空数组 {{}} 没有元素可铺，不展开"
+    );
+    assert!(!grid.toggle_array_expand(0, 0), "int4 列不是数组列");
+    assert_eq!(grid.view_len(), 3);
+
+    // 非法字面量：值不像 PG 数组
+    let mut grid = ResultGridDelegate::empty("尚未执行");
+    grid.set_data(
+        vec!["tags".to_string()],
+        vec![vec!["{unclosed".to_string()]],
+    );
+    grid.set_column_types(vec![Some(ColumnType::parse("text[]"))]);
+    assert!(!grid.toggle_array_expand(0, 0), "解析失败不展开");
+    assert_eq!(grid.view_len(), 1);
+}
+
+/// 同时展开两列：`sub_index` 组内累加，行号不重复出现两个 `1.1`
+#[test]
+fn array_two_columns_share_sub_index_sequence() {
+    let mut grid = ResultGridDelegate::empty("尚未执行");
+    grid.set_data(
+        vec!["a".to_string(), "b".to_string()],
+        vec![vec!["{x,y}".to_string(), "{p,q,r}".to_string()]],
+    );
+    grid.set_column_types(vec![
+        Some(ColumnType::parse("text[]")),
+        Some(ColumnType::parse("text[]")),
+    ]);
+    assert!(grid.toggle_array_expand(0, 0));
+    assert!(grid.toggle_array_expand(0, 1));
+    assert_eq!(grid.view_len(), 6, "1 数据行 + 2 + 3 子行");
+    // 列序在前：a 的 2 项拿 1.1 / 1.2，b 的 3 项接着 1.3 / 1.4 / 1.5
+    assert_eq!(grid.row_label(1), "1.1");
+    assert_eq!(grid.row_label(2), "1.2");
+    assert_eq!(grid.row_label(3), "1.3");
+    assert_eq!(grid.row_label(5), "1.5");
+    assert_eq!(grid.cell(1, 1), "x");
+    assert_eq!(grid.cell(1, 2), "");
+    assert_eq!(grid.cell(3, 2), "p", "b 列第 1 项落在 sub_index 2 那一行");
+}
+
+/// 子行不进整份复制 / 整列复制，也不可编辑
+#[test]
+fn array_children_are_excluded_from_copy_and_edit() {
+    let mut grid = array_grid();
+    assert!(grid.toggle_array_expand(0, 1));
+    assert_eq!(grid.view_len(), 6);
+    // 整份 TSV 只含数据行（`active_result_tsv` 回 `(文本, 行数)`）
+    let (tsv, tsv_rows) = grid.active_result_tsv();
+    assert_eq!(tsv_rows, 3, "子行是展示行，不进整份复制");
+    assert_eq!(tsv.lines().count(), 4, "表头 1 行 + 数据 3 行");
+    // 整列复制同样只含数据行
+    let column = grid.column_text(1);
+    assert_eq!(column.lines().count(), 3);
+    // 子行起始编辑被拒（组件列 2 = tags，子行所在的被展开列）
+    assert!(!grid.begin_edit(1, 2), "数组子行不可编辑");
+}
+
+/// 收起全部：一次清干净（换视图 / 换结果的收口）
+#[test]
+fn array_collapse_all_clears_every_expansion() {
+    let mut grid = array_grid();
+    assert!(!grid.collapse_all_arrays(), "没有展开时是空转");
+    assert!(grid.toggle_array_expand(0, 1));
+    assert!(grid.collapse_all_arrays(), "有展开 → 清掉");
+    assert!(!grid.is_array_expanded(0, 1));
+    assert_eq!(grid.view_len(), 3);
+}
+
+/// 换一份数据：展开状态跟着清（旧行号的子行不能串到新结果集上）
+#[test]
+fn array_expansion_is_cleared_by_set_data() {
+    let mut grid = array_grid();
+    assert!(grid.toggle_array_expand(0, 1));
+    assert_eq!(grid.view_len(), 6);
+    grid.set_data(
+        vec!["id".to_string(), "tags".to_string()],
+        vec![vec!["9".to_string(), "{z}".to_string()]],
+    );
+    assert!(!grid.is_array_expanded(0, 1));
+    assert_eq!(grid.view_len(), 1);
+}
