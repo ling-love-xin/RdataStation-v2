@@ -523,7 +523,9 @@ fn close_right_tab_drops_one_page_and_reopen_restores_order(
     });
     assert_eq!(panel.read_with(cx, |p, _| p.right_tab), RightTab::Reference);
 
-    // 重开「计算」页：按规范序插回（值详情之后、列浏览器之前），并置为当前
+    // 重开「计算」页：按规范序插入后**被 MRU 挪到首位**
+    // （真值 `setMRUVisible(true)`，`ResultSetViewer.java:364`：重开 = `activatePanel`，
+    // 该页成为选中页，MRU 显示下它排到最前）
     cx.update(|_, app| {
         panel.update(app, |p, cx| p.open_right_tab(RightTab::Stats, cx))
     });
@@ -531,12 +533,12 @@ fn close_right_tab_drops_one_page_and_reopen_restores_order(
     assert_eq!(
         open,
         vec![
-            RightTab::Value,
             RightTab::Stats,
+            RightTab::Value,
             RightTab::Browser,
             RightTab::Reference,
         ],
-        "重开应按规范序插回原位"
+        "重开的页在 MRU 顺序下应排到首位（其余页保持相对序）"
     );
     assert_eq!(panel.read_with(cx, |p, _| p.right_tab), RightTab::Stats);
 
@@ -3657,10 +3659,18 @@ fn edge_bar_reopens_a_closed_page(cx: &mut gpui_kit::TestAppContext) {
         "点竖条应把被关掉的页重新启用"
     );
     assert_eq!(cx.update(|_, app| panel.read(app).right_tab), RightTab::Stats);
-    // 重新启用时按规范序插回（计算在值详情之后、列浏览器之前）
+    // 重新启用时按规范序插入，随后被 MRU 挪到首位
+    // （真值 `setMRUVisible(true)`，`ResultSetViewer.java:364`：`activatePanel` 的页排最前）
     assert_eq!(
         cx.update(|_, app| panel.read(app).open_tabs().to_vec()),
-        super::events::right_tabs().to_vec()
+        vec![
+            RightTab::Stats,
+            RightTab::Value,
+            RightTab::Browser,
+            RightTab::Group,
+            RightTab::Reference,
+        ],
+        "重开的页在 MRU 顺序下应排到首位，其余保持规范序相对次序"
     );
 }
 
@@ -5359,8 +5369,12 @@ fn right_panel_view_menu_lists_pages_then_the_two_toggles(cx: &mut gpui_kit::Tes
 /// 五页都作为页签常驻其中（`addPanel` 里 `new CTabItem(panelFolder, SWT.CLOSE)`），
 /// 点页签走 `setActivePanel`。此前本仓横条只显示当前页、`on_click` 是空实现（点了没反应）。
 ///
-/// 断言走**真实像素点击**：把当前页切到最后一个（引用），再点页签行最左侧，
-/// 必须切回第一个（列浏览器）——既证明五个页签真的排在这一行里，也证明点击真接了线。
+/// 断言走**真实像素点击**：把当前页切到引用（最后一个），再点页签行最左侧，
+/// 必须入队「切到该行首格所属的那一页」——既证明五个页签真的排在这一行里，
+/// 也证明点击真接了线。
+///
+/// 注意首格**不是**规范序首项：真值 `setMRUVisible(true)`（`:364`）让选中的页排到最前，
+/// 所以切到引用之后首格就是引用；期望值因此取 `open_tabs[0]` 而不是常量。
 #[gpui_kit::test]
 fn right_panel_tab_strip_lists_all_panels_and_click_switches(cx: &mut gpui_kit::TestAppContext) {
     cx.update(gpui_kit::init);
@@ -5371,7 +5385,7 @@ fn right_panel_tab_strip_lists_all_panels_and_click_switches(cx: &mut gpui_kit::
         panel.update(app, |p, cx| p.set_open_tabs_initial(&RightTab::ALL, cx))
     });
 
-    // 当前页 = 引用（最后一个页签）
+    // 当前页 = 引用（切页后 MRU 把它挪到首格）
     cx.update(|_, app| panel.update(app, |p, cx| p.set_right_tab(RightTab::Reference, cx)));
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert_eq!(
@@ -5379,23 +5393,30 @@ fn right_panel_tab_strip_lists_all_panels_and_click_switches(cx: &mut gpui_kit::
         RightTab::Reference,
         "先把当前页切到引用"
     );
+    let first_tab = cx.update(|_, app| panel.read(app).open_tabs()[0]);
+    assert_eq!(
+        first_tab,
+        RightTab::Reference,
+        "前提：MRU 让刚选中的页排在首格（`setMRUVisible(true)`，`:364`）"
+    );
 
     let bar = cx
         .debug_bounds("editor-result-right-tabs")
         .expect("页签行应带调试选择器才量得到");
-    // 页签行最左一格一定是第一个页签（规范序首项 = 值详情，§55）：点它应把
-    // 「切到值详情」入队（切页是宿主动作：面板只 `queue.request`，由宿主 dispatch 调
-    // `set_right_tab`，所以这里断言队列，而不是面板状态）
+    // 页签行最左一格 = `open_tabs[0]`：点它应把「切到该页」入队（切页是宿主动作：
+    // 面板只 `queue.request`，由宿主 dispatch 调 `set_right_tab`，所以这里断言队列，
+    // 而不是面板状态）
     let point = gpui_kit::point(bar.origin.x + px(24.), bar.origin.y + bar.size.height / 2.);
     cx.simulate_click(point, gpui_kit::Modifiers::default());
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
     let queued = cx.update(|_, app| panel.read(app).queue.drain());
     assert!(
-        queued
-            .iter()
-            .any(|request| matches!(request, crate::ports::ResultRequest::SetRightTab(RightTab::Value))),
-        "点第一个页签应入队「切到值详情」（点空白 / 死回调都会让队列为空）：{queued:?}，页签行 {bar:?}"
+        queued.iter().any(|request| matches!(
+            request,
+            crate::ports::ResultRequest::SetRightTab(tab) if *tab == first_tab
+        )),
+        "点首格页签应入队「切到 {first_tab:?}」（点空白 / 死回调都会让队列为空）：{queued:?}，页签行 {bar:?}"
     );
 }
 

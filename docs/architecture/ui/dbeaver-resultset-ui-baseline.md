@@ -3853,12 +3853,22 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
 
 | 差异 | 真值 | 本仓 | 处置 |
 | --- | --- | --- | --- |
-| 页签文案 | `数值查看器` / `元数据`（`bundle_zh.properties:220/224`） | `值详情` / `列浏览器` | **待拍板**（本仓名更贴合页内实际内容） |
-| MRU 显示 | `setMRUVisible(true)`（`:364`） | 固定注册序 | **待拍板**（会与手动重排打架） |
-| 页签 tooltip | 5 条 `panel.*.description` 直译 | 自有扩写 | 有意 |
+| 页签文案 | `数值查看器` / `元数据`（`bundle_zh.properties:220/224`） | 已对齐（真值直译） | 2026-11-25 落地（§57.5） |
+| MRU 显示 | `setMRUVisible(true)`（`:364`） | 已对齐（切页即挪首位） | 2026-11-25 落地（§57.5） |
+| 页签 tooltip | 5 条 `panel.*.description` 直译 | 已对齐 | 同上 |
 | `supports` 门控 | grouping 需 `context.supportsGrouping()`（`:161`） | 恒摆五页 | 有意（本地 groupby 恒可用） |
 | 页签字体 | `PART_TITLE_FONT`（`:513-514`） | `Size::Small` | 有意（字号只由主题键定） |
 | 溢出处理 | CTabFolder 横向滚动 | `TabBar::menu(true)` 溢出菜单 | 有意（手段差异，观感等价） |
+
+### 57.5 页签文案与 MRU（同批）
+
+- `right_tab_label`：`值详情` → `数值查看器`（`:224`）、`列浏览器` → `元数据`（`:220`）；
+  `right_tab_description` 五条改直译 `panel.*.description`（`:215-223`）。
+  页签条 / 竖条 tooltip / 视图菜单三处共用这两个函数。代码注释里的旧称保留（同一页内部叫法）。
+- `set_right_tab` 新增 `move_tab_to_front`：选中的页挪到 `open_tabs` 首位（`setMRUVisible(true)`，`:364`）。
+  初装 / 关闭后落邻居 / 拖拽重排三条路径不挪；拖完之后下一次切页会被 MRU 覆盖（与真值同）。
+- 三条既有用例按真值改断言（`close_right_tab_drops_one_page_and_reopen_restores_order` /
+  `edge_bar_reopens_a_closed_page` / `right_panel_tab_strip_lists_all_panels_and_click_switches`）。
 
 ### 57.4 验证
 

@@ -839,6 +839,12 @@ impl ResultPanel {
     /// 目标页若已被关闭，会先按规范序重新启用它（点得到就等于开得回来）。
     pub fn set_right_tab(&mut self, tab: RightTab, cx: &mut Context<Self>) {
         self.open_right_tab_only(tab);
+        // 【MRU 页签顺序 2026-11-25】对齐 `panelFolder.setMRUVisible(true)`
+        // （`ResultSetViewer.java:364`）：被选中的页挪到页签条最前。
+        // 与手动拖拽重排（`TabFolderReorder`，`:360`）共用同一份顺序：拖完之后下一次切页
+        // 会被 MRU 覆盖——SWT 那边两件事就是这样叠在一起的，不是本仓自造。
+        // 只挂「切页」这一个入口（关闭后落邻居、初装集合都不挪）。
+        self.move_tab_to_front(tab);
         self.right_tab = tab;
         if !self.show_value_sidebar {
             // 窄展开 / 收起态点页签图标 → 宽展开（竖条可见性保持；收起态在窄态已置 true）
@@ -847,6 +853,24 @@ impl ResultPanel {
             self.right_sidebar_epoch = self.right_sidebar_epoch.wrapping_add(1);
         }
         cx.notify();
+    }
+
+    /// 【MRU 页签顺序】把某页挪到已启用集合最前（对齐 `panelFolder.setMRUVisible(true)`，
+    /// `ResultSetViewer.java:364`）。
+    ///
+    /// 只改页签条的显示顺序，不写 `right_tab`（当前页由调用方写）；不在集合里 / 已在首位
+    /// → 无操作。
+    fn move_tab_to_front(&mut self, tab: RightTab) {
+        if let Some(pos) = self
+            .open_tabs
+            .iter()
+            .position(|existing| *existing == tab)
+        {
+            if pos > 0 {
+                self.open_tabs.remove(pos);
+                self.open_tabs.insert(0, tab);
+            }
+        }
     }
 
     /// 【右栏】把某页登记进已启用集合（已存在则不动），按**规范序**插入。
@@ -3198,11 +3222,16 @@ pub(crate) fn panel_view_menu_items() -> Vec<PanelViewItem> {
     items
 }
 
-/// 右栏页签的标题文案（页签条、视图菜单、竖条 tooltip 共用一份，避免三处各写一遍）
+/// 右栏页签的标题文案（页签条、视图菜单、竖条 tooltip 共用一份，避免三处各写一遍）。
+///
+/// 【2026-11-25 改回真值】此前本仓叫「值详情」/「列浏览器」，是早期只有 metadata 一页时的
+/// 自造名。真值在 `OSGI-INF/l10n/bundle_zh.properties`（`plugins/org.jkiss.dbeaver.ui.editors.data`）：
+/// `panel.value-view.label = 数值查看器`（`:224`）、`panel.results-metadata.label = 元数据`（`:220`）、
+/// 其余三页 `计算`（`:216`）/`分组`（`:218`）/`引用`（`:222`）。按 1:1 复刻口径改为直译真值。
 pub(crate) fn right_tab_label(tab: RightTab) -> &'static str {
     match tab {
-        RightTab::Browser => "列浏览器",
-        RightTab::Value => "值详情",
+        RightTab::Browser => "元数据",
+        RightTab::Value => "数值查看器",
         RightTab::Stats => "计算",
         RightTab::Group => "分组",
         RightTab::Reference => "引用",
@@ -3223,18 +3252,17 @@ pub(crate) fn right_tab_icon(tab: RightTab) -> IconName {
 /// 右栏页签的**提示文案**（对齐 DBeaver `addPanel` 里
 /// `panelTab.setToolTipText(panelDescriptor.getDescription())`，`ResultSetViewer.java:1361`）。
 ///
-/// 五条按 `OSGI-INF/l10n/bundle.properties:15-24` 的 `panel.*.description` 逐条译：
-/// `value-view` = Results cell value viewer、`column-aggregate` = Result cells calculations
-/// (SUM, MAX, AVG, etc)、`results-metadata` = ResultSet metadata description、
-/// `results-grouping` = Results grouping (GROUP BY)、
-/// `results-references` = One or more rows referencing current row(-s)。
+/// 【2026-11-25 改回真值】此前是自有扩写（带「可保存至文件」这类本仓增强说明）。现按 1:1
+/// 口径直译 `bundle_zh.properties:215-223` 的 `panel.*.description`：
+/// `结果单元格查看器` / `结果单元格计算(SUM, MAX, AVG 等)` / `结果集元数据描述` /
+/// `结果分组(GROUP BY)` / `引用当前行的一行或多行`。
 pub(crate) fn right_tab_description(tab: RightTab) -> &'static str {
     match tab {
-        RightTab::Browser => "结果集元数据说明（列清单 / 类型 / 注释，可筛可搜索）",
-        RightTab::Value => "结果单元格值查看器（文本 / 十六进制转储，可保存至文件）",
-        RightTab::Stats => "结果单元格计算（非空 / NULL / 最小 / 最大 / 均值 / 合计）",
-        RightTab::Group => "结果分组（按选中列做 GROUP BY 计数）",
-        RightTab::Reference => "引用当前行的其他行（外键清单 / 查看引用行）",
+        RightTab::Browser => "结果集元数据描述",
+        RightTab::Value => "结果单元格查看器",
+        RightTab::Stats => "结果单元格计算(SUM, MAX, AVG 等)",
+        RightTab::Group => "结果分组(GROUP BY)",
+        RightTab::Reference => "引用当前行的一行或多行",
     }
 }
 

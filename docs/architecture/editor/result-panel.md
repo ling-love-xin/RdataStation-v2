@@ -46,9 +46,9 @@
 | `ALT+SHIFT+C` | `CopyColumnNames` | 复制列名（TSV） | §9.62 |
 | `ALT+SHIFT+F` | `OpenFilterSettings` | 打开筛选设置浮层 | §9.63 |
 | `F7` / `CTRL+7` | `TogglePanels` | 右栏整组收起 / 展开 | §9.65 |
-| `CTRL+ALT+F2` | `ToggleValuePanel` | 开 / 关「值详情」页 | §9.66 |
+| `CTRL+ALT+F2` | `ToggleValuePanel` | 开 / 关「数值查看器」页 | §9.66 |
 | `CTRL+ALT+F3` | `ToggleReferencePanel` | 开 / 关「引用」页 | §9.66 |
-| `CTRL+ALT+F4` | `ToggleBrowserPanel` | 开 / 关「列浏览器」页 | §9.66 |
+| `CTRL+ALT+F4` | `ToggleBrowserPanel` | 开 / 关「元数据」页 | §9.66 |
 | `CTRL+ALT+F5` | `ToggleGroupPanel` | 开 / 关「分组」页 | §9.66 |
 | `CTRL+ALT+F6` | `ToggleStatsPanel` | 开 / 关「计算」页 | §9.66 |
 
@@ -59,16 +59,22 @@
 
 ### 0.2 右栏五页
 
-出厂**只启用值详情**：DBeaver 的 `org.jkiss.dbeaver.resultset.panel` 扩展里唯一 `default="true"`
+出厂**只启用「数值查看器」**（本仓内部/代码里旧称「值详情」）：DBeaver 的
+`org.jkiss.dbeaver.resultset.panel` 扩展里唯一 `default="true"`
 的面板就是 `value-view`（`plugin.xml:127-173`），补白逻辑见 `ResultSetViewer.java:1396-1410`
 （集合为空才补默认页、仍空取第一个可用页）。本仓对应 `default_result_open_tabs() = ["value"]`
 （settings），页序 = **DBeaver 面板注册序** = 页签条 / 竖条 / 视图菜单的渲染序（`RightTab::ALL`，`ports.rs`）：
 
-| 页 | `RightTab` / 落盘 id | 内容 | 出处 |
+页签上的文字取真值 `bundle_zh.properties`（`plugins/org.jkiss.dbeaver.ui.editors.data`，
+`panel.*.label`）：`数值查看器`（`:224`）/ `计算`（`:216`）/ `元数据`（`:220`）/
+`分组`（`:218`）/ `引用`（`:222`）。2026-11-25 之前本仓用自造名「值详情」「列浏览器」，
+已按 1:1 口径改回（见 §9.67.4）；代码注释里的旧称保留，指同一页。
+
+| 页（页签文案 = 真值） | `RightTab` / 落盘 id | 内容 | 出处 |
 | --- | --- | --- | --- |
-| 值详情 | `Value` / `value` | 选中格完整值、hex 转储翻页、图片预览、保存至文件 / 外部程序打开 | §8.47 / §8.98 |
+| 数值查看器（旧称「值详情」） | `Value` / `value` | 选中格完整值、hex 转储翻页、图片预览、保存至文件 / 外部程序打开 | §8.47 / §8.98 |
 | 计算 | `Stats` / `stats` | 9 项统计、函数集可增删 + Reset、数值 / 字符串口径 | §8.40 / §9.04 |
-| 列浏览器 | `Browser` / `browser` | 搜索框 + 列清单 + 底部元数据明细 + 「生成 DDL」 | §8.12 / §8.78 / §8.81 |
+| 元数据（旧称「列浏览器」） | `Browser` / `browser` | 搜索框 + 列清单 + 底部元数据明细 + 「生成 DDL」 | §8.12 / §8.78 / §8.81 |
 | 分组 | `Group` / `group` | 分组键（可上下移 / 移除）+ 排序 + `COUNT(*)` | §8.42 / §9.18 |
 | 引用 | `Reference` / `reference` | 外键清单 + 「查看引用行」 | §8.79 / §8.80 |
 
@@ -10238,12 +10244,28 @@ panicked at gpui-fast-0.1.17/src/app.rs:2657: no state of type rds_settings::mod
 
 | 差异 | 真值 | 本仓现状 | 处置 |
 | --- | --- | --- | --- |
-| 页签文案 | `数值查看器` / `元数据`（`bundle_zh.properties:220/224`） | `值详情` / `列浏览器` | **待拍板**：本仓名更贴合页内实际内容（列清单 + DDL + 搜索） |
-| 页签 MRU 显示 | `setMRUVisible(true)`（`:364`）：最近用过的页排到前面 | 恒为注册序 | **待拍板**：会与手动拖拽重排的序互相打架 |
-| 页签 tooltip | 5 条 `panel.*.description` 直译 | 自有扩写（`events.rs:3231-3239`） | 有意 |
+| 页签文案 | `数值查看器` / `元数据`（`bundle_zh.properties:220/224`） | **已对齐**（真值直译） | 2026-11-25 落地，见 §9.67.4 |
+| 页签 MRU 显示 | `setMRUVisible(true)`（`:364`）：选中的页排到最前 | **已对齐**（切页即挪首位） | 2026-11-25 落地，见 §9.67.4 |
+| 页签 tooltip | 5 条 `panel.*.description` 直译 | **已对齐**（同 §9.67.4） | 有意差异已销账 |
 | `supports` 门控 | grouping 需 `context.supportsGrouping()`（`:161`） | 恒摆五页 | 有意（本地 groupby 恒可用，§9.25.1） |
 | 页签字体 | `PART_TITLE_FONT`（`:513-514`） | `Size::Small` | 有意（字号只由主题键决定，见 gpui-kit-dev 字体约束） |
 | 页签溢出 | CTabFolder 横向滚动 | `TabBar::menu(true)` 溢出菜单 | 有意（实现手段差异，观感等价） |
+
+#### 9.67.4 页签文案与 MRU（同批落地）
+
+- **文案改回真值**：`right_tab_label`（`events.rs:3202`）两处 → `数值查看器`（`:224`）与
+  `元数据`（`:220`）；`right_tab_description`（`:3231`）五条 → 直译
+  `bundle_zh.properties:215-223` 的 `panel.*.description`（此前是带本仓增强说明的扩写）。
+  页签条 / 竖条 tooltip / 视图菜单三处共用这两个函数，因此一次改全。
+  代码注释里的旧称「值详情」「列浏览器」保留（同一页的内部叫法）——`§0.2` 表已两条并列。
+- **MRU 页签顺序**：`set_right_tab` 里新增 `move_tab_to_front`（`events.rs`）——把被选中的页
+  挪到 `open_tabs` 首位，对齐 `setMRUVisible(true)`（`:364`）。只挂「切页」这一个入口：
+  `set_open_tabs_initial`（初装）、`close_right_tab`（关闭后落邻居）、`move_right_tab`（拖拽重排）
+  都不挪。与 `TabFolderReorder` 的关系同真值：拖完之后下一次切页会被 MRU 覆盖。
+- **受影响的既有用例**（三条断言都建立在「顺序恒为规范序」上，按真值改断言而非回退实现）：
+  `close_right_tab_drops_one_page_and_reopen_restores_order`、
+  `edge_bar_reopens_a_closed_page`（重开的页应排首位）、
+  `right_panel_tab_strip_lists_all_panels_and_click_switches`（首格期望值改取 `open_tabs[0]`）。
 
 ## 20. 有意差异汇总
 
