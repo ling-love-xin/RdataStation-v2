@@ -780,6 +780,11 @@ impl ResultGridDelegate {
     /// 【布局段】面板同步呈现方式镜像（右键菜单给「网格 / 文本」标勾选态）。
     pub fn set_presentation_view(&mut self, presentation: Presentation) {
         self.presentation_view = presentation;
+        // 【刀4】文本视图不是网格：数组子行只存在于网格行序里，切到文本就收起
+        // （切回网格是干净的收起态；真值也没有跨视图保留展开的实现）
+        if presentation != Presentation::Grid {
+            self.collapse_all_arrays();
+        }
     }
 
     /// 【布局段】当前镜像的呈现方式（右键菜单构造 `ContextTarget` 时读）。

@@ -3948,3 +3948,41 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
 演示数据已扩到 8 列（`examples/preview.rs::demo_payload`：`tags text[]`、`attrs jsonb` 三层嵌套、
 `events jsonb` 顶层数组），用于肉眼验网格截断与右栏树展开。待做三项：双击路径分流到只读值编辑器
 浮层、`ColumnKind::Array`、值编辑器浮层壳。详见 `result-panel.md` §9.69。
+### 57.8 数组展开：收起态 → 子行 → 值查看器（2026-11-26，已落地）
+
+§57.7 表格里「数组列 `text[]`」那行（「`ColumnKind` 无数组档 → 原文」）已被四刀推翻，
+真值坐标与实现落点如下。
+
+#### 57.8.1 真值取证（补充：截图对出来的三处）
+
+用户两张截图（`int[]` 收起 `▶ 755 [+2]` / 展开 `▼ [3]` + 子行 `1.1/1.2/1.3`）对上源码：
+
+| 行为 | 坐标 |
+| --- | --- |
+| 三角画在**行号槽**（不是单元格里）；单击 = 展开该行**所有列** | `LightGrid.java:3115-3123`（`isOverExpander` → `toggleRowExpand(getRow(row), null)`）；双击行号槽同理 `:3367-3374` |
+| 首次展开时按列取集合大小建 `RowExpandState`；`:3289` 有一条 TODO「还要在所有 nested rows 里折叠此列」 | `LightGrid.java:3257-3296` |
+| 展开表 `expandedRows: Map<RowLocation, RowExpandState>`、`CellExpandState{int size; boolean expanded}` | `LightGrid.java:215` / `:86-93` |
+| 铺平：嵌套行混进 `gridRows` | `LightGrid.collectNestedRows:512-540` |
+| 子行行号：逐级 `parentRelativeIndex + 1` 用 `.` join | `GridRowNested.toString():64-70` |
+| 子行其它列取不到值（父格未展开 → `DBDVoid.INSTANCE`） | `SpreadsheetPresentation.getCellValue:2571` |
+| 完整数组预览上限 100 项 | `SpreadsheetPresentation.java:113` `MAX_FULL_ARRAY_PREVIEW_ITEMS`、`:3238-3296` |
+| 字段转换 `ArrayAttributeTransformer`；偏好 `resultset.transform.complex.type` 默认 true | `ArrayAttributeTransformer.java:39-62`、`ModelPreferences.java:219/349` |
+
+#### 57.8.2 本仓实现（四刀）
+
+| 刀 | 内容 | 落点 | 提交 |
+| --- | --- | --- | --- |
+| 刀1 | `ColumnKind::Array` + PG 字面量解析（`text[]` / `_int4` / `array` 词） | `store/array.rs`（新）、`store/entry.rs` | `0c159b6b` |
+| 刀2 | 收起态 `▶ 首值 [+N-1]`（最深首个元素） | `grid/array_cell.rs`（新）、`grid/cell.rs::render_td` | `0c159b6b` |
+| 刀3 | 展开态子行铺平 + `RowRef::ArrayChild` + 行号 `父.子` + 三角点击 | `rowset.rs`、`grid/delegate.rs`、`grid/view_rows.rs`、`grid/text.rs`、`grid/edit.rs`、`crates/editor/.../row_ops.rs` | `41762260` |
+| 刀4 | 值查看器 `ViewerMode::Array` + `array_tree_items`（100 项上限）+ 复制/导出/编辑排除子行 | `grid/cell.rs`、`panel/events.rs`、`panel/tabs.rs` | 本提交 |
+
+#### 57.8.3 与 §57.7 的关系
+
+- 双击仍是行内编辑（真值默认 `INLINE_EDITOR`）——**没变**；
+- 「展开」在**网格内**落地了（收起/展开三角 + 子行），但真值是行号槽行级展开，
+  本仓是单元格内单格单列展开（有意差异，截图形态优先）；
+- 值编辑器弹窗（`openValueEditor`）仍未做 —— 右栏「数值查看器」的树承担了「按项看」，
+  数组列现在走 PG 解析器的集合树。
+
+细节与验证见 `docs/architecture/editor/result-panel.md` §9.70。

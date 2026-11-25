@@ -558,6 +558,9 @@ pub(crate) enum ViewerMode {
     Text,
     /// 可展开 JSON 树（`tree::Tree` 组件）
     Json,
+    /// 【刀4】PostgreSQL 数组字面量：按集合树展开（与 JSON 树同一套 `Tree`，
+    /// 树内容由 `array_tree_items` 建）
+    Array,
     /// 十六进制转储（offset · hex · ASCII 三栏，分页）
     Hex,
     /// 图片预览（格式 + 字节数；解码走事件路径）
@@ -566,6 +569,7 @@ pub(crate) enum ViewerMode {
 
 /// 值查看器分派（轻量判定；真正的 JSON 校验在事件路径 `json_tree_items`）：
 /// - Binary：图片魔数命中 → Image，否则 → Hex
+/// - Array：能按 PG 字面量解析 → Array，否则按文本（不猜形态）
 /// - 其余：值以 `{` / `[` 开头（trim 后）→ Json，否则 → Text
 pub(crate) fn classify_value(kind: ColumnKind, text: &str) -> ViewerMode {
     match kind {
@@ -576,6 +580,15 @@ pub(crate) fn classify_value(kind: ColumnKind, text: &str) -> ViewerMode {
             },
             None => ViewerMode::Hex,
         },
+        // 【刀4】数组列走集合树：`{a,b}` 长得像 JSON 的对象/数组，但 PG 数组字面量和
+        // JSON 语法不同（无引号裸词、双引号元素、`NULL` 裸词），送 JSON 解析必失败
+        ColumnKind::Array => {
+            if crate::store::parse_pg_array_literal(text).is_some() {
+                ViewerMode::Array
+            } else {
+                ViewerMode::Text
+            }
+        }
         _ => {
             let t = text.trim_start();
             if t.starts_with('{') || t.starts_with('[') {
@@ -708,4 +721,50 @@ pub(crate) fn json_tree_items(text: &str) -> Option<Vec<TreeItem>> {
         }
     }
     Some(vec![build(&value, "$", "$", 0)])
+}
+
+/// 数组完整预览项上限（真值 `SpreadsheetPresentation.MAX_FULL_ARRAY_PREVIEW_ITEMS = 100`）
+pub(crate) const ARRAY_TREE_CHILD_LIMIT: usize = 100;
+
+/// 【刀4】PostgreSQL 数组字面量 → 可展开树（值查看器用，与 JSON 树共用 `Tree` 组件）
+///
+/// 与 `json_tree_items` 的差别只在**解析器**：PG 数组用 `{a,b}`、裸词不引号、`NULL` 是
+/// 裸词、元素用双引号转义——JSON 解析器一律不收，所以数组列单走这一条。嵌套元素
+/// （多维数组 `{{1,2},{3,4}}`）递归成子节点；顶层超过 100 项追加「… 还有 N 项」。
+pub(crate) fn array_tree_items(text: &str) -> Option<Vec<TreeItem>> {
+    use crate::store::ArrayItem;
+
+    fn build(item: &ArrayItem, key: &str, path: &str, depth: usize) -> TreeItem {
+        match item {
+            ArrayItem::Nested(inner) => {
+                let mut node =
+                    TreeItem::new(path.to_string(), format!("{key} 数组 [{}]", inner.len()))
+                        .expanded(depth < 2);
+                for (i, child) in inner.iter().take(ARRAY_TREE_CHILD_LIMIT).enumerate() {
+                    node = node.child(build(child, &i.to_string(), &format!("{path}[{i}]"), depth + 1));
+                }
+                if inner.len() > ARRAY_TREE_CHILD_LIMIT {
+                    node = node.child(TreeItem::new(
+                        format!("{path}.__trunc__"),
+                        format!("… 还有 {} 项", inner.len() - ARRAY_TREE_CHILD_LIMIT),
+                    ));
+                }
+                node
+            }
+            other => TreeItem::new(path.to_string(), format!("{key}: {}", other.display())),
+        }
+    }
+
+    let items = crate::store::parse_pg_array_literal(text)?;
+    let mut root = TreeItem::new("$".to_string(), format!("$ 数组 [{}]", items.len())).expanded(true);
+    for (i, item) in items.iter().take(ARRAY_TREE_CHILD_LIMIT).enumerate() {
+        root = root.child(build(item, &i.to_string(), &format!("$[{i}]"), 1));
+    }
+    if items.len() > ARRAY_TREE_CHILD_LIMIT {
+        root = root.child(TreeItem::new(
+            "$.__trunc__".to_string(),
+            format!("… 还有 {} 项", items.len() - ARRAY_TREE_CHILD_LIMIT),
+        ));
+    }
+    Some(vec![root])
 }

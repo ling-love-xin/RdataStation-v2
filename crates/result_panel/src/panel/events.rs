@@ -15,7 +15,7 @@ use super::data::{ResultPanel, SavedFilterSetting, FILTER_HISTORY_LIMIT};
 use super::sidebars::next_right_edge_state;
 use crate::error_card::ErrorCard;
 use crate::grid::cell::{
-    ViewerMode, classify_value, hex_to_bytes, image_format_of, json_tree_items,
+    ViewerMode, array_tree_items, classify_value, hex_to_bytes, image_format_of, json_tree_items,
 };
 use crate::grid::{ResultGridDelegate, ResultStatus, ResultToolbar, RowTargetState};
 use crate::ports::{
@@ -2285,6 +2285,8 @@ impl ResultPanel {
                 };
                 match classify_value(kind, &value) {
                     ViewerMode::Json => (json_tree_items(&value).unwrap_or_default(), None),
+                    // 【刀4】数组：PG 字面量 → 集合树（JSON 解析器收不了 `{a,b}` 这种语法）
+                    ViewerMode::Array => (array_tree_items(&value).unwrap_or_default(), None),
                     ViewerMode::Image { format, .. } => (
                         Vec::new(),
                         image_format_of(format).map(|format| {

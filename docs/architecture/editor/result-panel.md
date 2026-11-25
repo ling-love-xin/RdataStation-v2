@@ -10438,6 +10438,118 @@ JSON 树** —— 而网格里双击进去的是行内编辑框（一整条字�
 3. **值编辑器浮层的壳**（标题 / 关闭 / 复制 / 字数）：真值 `ValueViewerPanel` 有一套
    自带工具条，本仓浮层范式已有（`render_sql_dialog` 同款），需要单独一节。
 
+### 9.70 数组四刀：类型档 → 收起态 → 展开子行 → 值查看器（2026-11-26）
+
+用户给两张 DBeaver 结果集截图（`int[]` 收起 `▶ 755 [+2]`、展开 `▼ [3]` + 子行
+`1.1/1.2/1.3` 显示 `755/847/78`），授权「1-4 顺序做」。四刀定义与落点：
+
+| 刀 | 内容 | 提交 |
+| --- | --- | --- |
+| 刀1 | `ColumnKind::Array` + PG 数组字面量解析 | `0c159b6b` |
+| 刀2 | 收起态三件套：`▶ 首值 [+N-1]` | `0c159b6b` |
+| 刀3 | 展开态子行铺平 + `RowRef` 扩变体 + 行号 `父.子` + 三角点击 | `41762260` |
+| 刀4 | 值查看器走集合树 + 复制/导出/编辑/宿主动作排除子行 + 文档 | 本提交 |
+
+#### 9.70.1 刀1：类型档与字面量解析（`store/array.rs`、`store/entry.rs`）
+
+- `ColumnKind::Array`（13 档里的新一档）。`ColumnKind::parse` 首部前置判定
+  `looks_like_array`：`text[]`（`ends_with(']')` 且 `[` 不在首）→ Array；
+  `_text` 形式（PG 内部名 `_int4`）剥前缀后再 parse，非 Unknown 才认。`_node`
+  这类内部表保持 Unknown。`from_word` 补 `array` / `arrayof`。
+- `parse_pg_array_literal(&str) -> Option<Vec<ArrayItem>>`：字节游标实现的 PG 数组
+  字面量解析器。`ArrayItem = Null | Scalar(String) | Nested(Vec<ArrayItem>)`。覆盖
+  `{}` / `{ }` / `{a,b}` / `{{1,2},{3,4}}` / 双引号元素（`""` 与 `\"` 转义）/
+  未引号 `NULL` 与 `"NULL"` 的区分 / 空元素 `{,}` 拒绝 / 尾部垃圾拒绝 / 引号未闭合
+  拒绝 / UTF-8 元素。7 条单测。
+- 编译闭包五处：`ddl.rs::generic_type`（数组无跨库通用语法 → `None`，交驱动原始名）、
+  `grid/cell.rs::type_family`（→ Text 族）、`grid/view_rows.rs::type_kind_sym`（`[]`
+  两字符，`grid/fit.rs` 按同一字符串量宽）、`grid/header.rs` 配色（`theme.colors.success`）、
+  `grid/table_impl.rs::default_column_width`（`RESULT_COLUMN_WIDTH_TEXT`）、
+  `grid/edit.rs::validate_edit_value`（数组格编辑按 `parse_pg_array_literal` 校验，
+  失败提示 `{a,b}` 形状）。
+
+#### 9.70.2 刀2：收起态三件套（`grid/array_cell.rs`）
+
+`ArrayCellDisplay = Plain | Collapsed { lead, hint } | Expanded { label }`，
+`array_cell_display(kind, text, expanded)` 是纯判定：
+
+| 真值 | 坐标 |
+| --- | --- |
+| 画三角条件：非 null 的非空复杂值 + 展开偏好开 | `SpreadsheetPresentation.java:2517-2525` |
+| 三角方向：展开 `TREE_COLLAPSE`（▼）/ 收起 `TREE_EXPAND`（▶） | 同上 `:2524` |
+| 收起态文本取**最深首个**元素（`retrieveDeepestCollectionElement`） | `formatValue:2620-2632` |
+| hint 仅 `size > 1`，普通模式 `[+size-1]` | `ArrayCellHintProvider.java:48-68` |
+| 展开态文本 `[N]` | `SpreadsheetPresentation.java:2620-2627` |
+| 图标在文本前 `INSIDE_MARGIN = 3`；hint 在文本右 `LEFT_MARGIN = 6` | `GridCellRenderer.java:158-172` / `renderHints:339` |
+
+渲染在 `grid/cell.rs::render_td`：`▶`（muted、flex_none）+ `lead`（ml 3px、truncate）+
+`hint`（ml 6px、muted、flex_none）。回归哨兵
+`editor-result-array-collapsed-{r}-{c}` / `editor-result-array-expanded-{r}-{c}`。
+
+#### 9.70.3 刀3：展开子行（`rowset.rs` / `delegate.rs` / `view_rows.rs` / `text.rs`）
+
+**行身份**：`RowRef::ArrayChild { row, column, index, sub_index }`（父底层行 + 数组列 +
+元素下标 + 组内铺平序号）；`data_index()` / `local_id()` 对子行一律 `None` —— 这一条让
+编辑 / 变更集 / 统计 / 导出 / 分组全部天然排除子行。
+
+**展开状态**：`ResultGridDelegate.expanded_arrays: BTreeMap<(data_row, column), Vec<String>>`。
+`toggle_array_expand` 在展开那一刻解析一次并缓存元素文本；非数组列 / 解析失败 / 空数组
+不展开。`collapse_all_arrays` / `set_data` / `clear` 三处清空（换结果不把旧行号的子行
+串过来）。
+
+**铺平**：`view_rows.rs::with_array_children` 在每个父数据行后按**列号顺序**铺展开列的
+元素，`sub_index` 组内累加（同父两列同时展开不会出现两个 `1.1`）。`rebuild_view_rows`
+的「恒等映射」早退条件加 `expanded_arrays.is_empty()` —— 有展开必须物化。
+
+**行号**：`row_label` 数据行 / 本地行 = **数据行序号**（子行不占号），子行 = `父序.子序`。
+对齐截图 2：展开第 1 行后，紧跟的数据行仍然叫 `2`。无展开时走原 O(1) 分支。
+
+**取值**：`text.rs::row_cell_text` 子行只在被展开那一列取元素，其它列空白（对齐
+`SpreadsheetPresentation.getCellValue:2571` 的 `DBDVoid.INSTANCE`）；整份 TSV / 整列复制
+/ 整行 JSON / INSERT 都跳过子行。
+
+**点击**：`render_td` 从 delegate 读展开状态（父数据行 + 数据列），三角挂
+`on_mouse_down(Left)` → `toggle_array_expand` + `notify`，行数变化后 `window.refresh()`。
+数组子行本身不画第二层三角（二级展开本仓没做，不给假图标）。
+
+**子行的非数据语义**（穷举补全的地方）：`edit.rs::begin_edit` 直接拒、`commit_edit`
+兜底丢弃；宿主 `crates/editor/src/view/host/exec/row_ops.rs` 五处分支 —— 新增锚点 `None`
+/ 复制早退 / 删除 `false` / 重置 `false` / 邻行复制 `0`。
+
+#### 9.70.4 刀4：值查看器与周边
+
+- `ViewerMode::Array`：`classify_value(ColumnKind::Array, ..)` 能解析 → `Array`，否则
+  `Text`（不猜形态）。真值是 `ValueViewerPanel` 的数组值编辑器按项展开。
+- `grid/cell.rs::array_tree_items`：PG 字面量 → `TreeItem` 集合树（根 `$ 数组 [N]`，
+  元素 `i: 值`，嵌套元素自己是 folder 可再展开）。上限
+  `ARRAY_TREE_CHILD_LIMIT = 100`（真值 `MAX_FULL_ARRAY_PREVIEW_ITEMS = 100`，
+  `SpreadsheetPresentation.java:113`），超出追加「… 还有 N 项」。
+- 接线：`panel/events.rs::rebuild_value_tree` 走 `array_tree_items`；
+  `panel/tabs.rs::render_value_body` 复用 `render_json_tree`；「另存值」给 `.txt` 后缀
+  与原文（数组字面量不是 JSON，不给 `.json`）。
+- `examples/preview.rs::demo_payload` 的陈旧注释（原写「`ColumnKind` 没有数组档」）改掉。
+
+#### 9.70.5 有意差异（登记，勿当 bug）
+
+1. **展开点击入口**：真值是**行号槽里的三角**（`LightGrid.java:3115-3123` 单击
+   `isOverExpander` → `toggleRowExpand(row, null)` 展开该行**所有列**；`:3367-3374`
+   双击行号槽同理）。本仓把三角画在**单元格内**、点的也是它 —— 截图形态即如此；
+   本仓的展开粒度是**单格单列**，不是真值的「行级全列」。
+2. **空数组 `{}`**：真值不画三角、文本落空串；本仓保留原文 `{}`（不把真实值画成空白）。
+3. **非法字面量**：真值侧值本身是 `DBDCollection`（不存在「不是数组」）；本仓值是驱动
+   文本，解析失败按普通文本画。
+4. **子行元素对齐**：按列 `Array` → 文本族左对齐，不按元素自身数值类型右对齐。
+5. **二级展开**：多维数组子行不再给三角（真值 `GridRowNested` 可逐级展开）。
+
+#### 9.70.6 验证
+
+- `cargo check -p rds-result-panel --lib --tests` / `cargo check -p rds-editor --lib` 通过。
+- `cargo test -p rds-result-panel --lib`：刀1+2 后 480 → 刀3 后 **489** → 刀4 后 **494**
+  全绿。新增用例：收起态行号不漂、展开铺平与 `父.子`、再点收起、空数组 / 非法字面量 /
+  非数组列拒展开、两列同时展开的 `sub_index` 累加、子行不进复制与不可编辑、
+  `collapse_all_arrays`、`set_data` 清展开、`classify_value` 数组分派、`array_tree_items`
+  的根 / 子项 / 嵌套 / 100 项截断。
+
 ## 20. 有意差异汇总
 
 全部「有意为之、勿当 bug 修」的偏离集中在这里，按功能域分组；每条回指原小节，细节看原文。
@@ -10545,6 +10657,16 @@ JSON 树** —— 而网格里双击进去的是行内编辑框（一整条字�
 | `RightTab::ExecSql` 是自有页，不接键位 | §9.66.5 |
 | 上游 `results-metadata` 映射到本仓「列浏览器」 | §9.66.5 |
 | 不额外判 `enabledWhen`（面板 context 天然限定） | §9.66.5 |
+
+### 20.7 数组展开
+
+| 差异 | 出处 |
+| --- | --- |
+| 展开点击入口在**单元格内三角**（真值在行号槽三角，且是行级全列展开）；本仓粒度单格单列 | §9.70.5 |
+| 空数组 `{}` 保留原文（真值不画三角、文本落空串） | §9.70.5 |
+| 非法字面量按普通文本画（真值不存在「不是数组」的值） | §9.70.5 |
+| 子行元素按列 `Array` → 文本族左对齐（不按元素自身数值类型右对齐） | §9.70.5 |
+| 多维数组子行不再给三角（二级展开未做） | §9.70.5 |
 
 ## 21. 遗留汇总
 

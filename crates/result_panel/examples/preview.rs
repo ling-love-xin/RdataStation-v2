@@ -104,11 +104,12 @@ impl Render for PreviewHost {
     }
 }
 
-/// 造一份结果：8 行 5 列，覆盖数字 / 文本 / NULL / 时间 / JSON 几种渲染档
+/// 造一份结果：8 行 8 列，覆盖数字 / 文本 / NULL / 时间 / 数组 / JSON 几种渲染档
 fn demo_payload() -> GridPayload {
     // 【2026-11-26 用户诉求】加数组 / 嵌套 JSON / 顶层数组三列，用来验「值查看器能不能展开」：
-    // - `tags text[]`：Postgres 数组字面量（`{vip,trial}` / `{}`）——`ColumnKind` 没有数组档，
-    //   `text[]` 按词级解析落到 `Text`，网格与值查看器都只给原文（差异见文档）；
+    // - `tags text[]`：Postgres 数组字面量（`{vip,trial}` / `{}` / `{vip,trial,churn-risk}`）——
+    //   刀1 起 `text[]` 落 `ColumnKind::Array`：网格里收起态是 `▶ 首值 [+N-1]`、点三角
+    //   展开成子行（`1.1` / `1.2` …），值查看器走 PG 解析器建集合树；
     // - `attrs jsonb`：对象套对象 + 数组 + 布尔 + null + 浮点（三层，树展开才有意义）；
     // - `events jsonb`：**顶层数组**（元素是对象，部分元素里还有嵌套数组）。
     let columns = vec![

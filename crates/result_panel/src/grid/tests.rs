@@ -2,8 +2,9 @@
 //! 安全模式：不通配导入（`#[gpui_kit::test]` 与 `use gpui_kit::*` 会自相残杀）。
 
 use crate::grid::cell::{
-    ViewerMode, blob_summary, cell_display_text, cell_style, classify_value, clip_cell_display,
-    detect_image_format, hex_lines, image_format_of, json_tree_items, pretty_json_display,
+    ViewerMode, array_tree_items, blob_summary, cell_display_text, cell_style, classify_value,
+    clip_cell_display, detect_image_format, hex_lines, image_format_of, json_tree_items,
+    pretty_json_display,
 };
 use crate::grid::header::{column_header_extra_text, header_tooltip_lines};
 use crate::grid::stats::{distinct_count, fmt_grouped, fmt_stat_num, median_of, mode_of, text_minmax};
@@ -5840,4 +5841,94 @@ fn array_expansion_is_cleared_by_set_data() {
     );
     assert!(!grid.is_array_expanded(0, 1));
     assert_eq!(grid.view_len(), 1);
+}
+
+// ===== 【刀4】值查看器的数组分派 =====
+
+/// 数组列进值查看器走集合树；解析不了的按文本（不猜形态）
+#[test]
+fn classify_value_sends_array_columns_to_the_collection_tree() {
+    assert_eq!(
+        classify_value(ColumnKind::Array, "{755,847,78}"),
+        ViewerMode::Array
+    );
+    assert_eq!(classify_value(ColumnKind::Array, "{}"), ViewerMode::Array);
+    assert_eq!(
+        classify_value(ColumnKind::Array, "{{1,2},{3,4}}"),
+        ViewerMode::Array
+    );
+    // 解析失败：按普通文本显示原文，不送 JSON / 空树
+    assert_eq!(
+        classify_value(ColumnKind::Array, "{unclosed"),
+        ViewerMode::Text
+    );
+    assert_eq!(classify_value(ColumnKind::Array, "NULL"), ViewerMode::Text);
+    // 非数组列的 `{a,b}` 仍然按 JSON 形态判定（老口径不动）
+    assert_eq!(
+        classify_value(ColumnKind::Text, "{a,b}"),
+        ViewerMode::Json
+    );
+}
+
+/// 集合树：顶层一项 `$ 数组 [N]`，逐元素子项带下标
+#[test]
+fn array_tree_items_builds_a_root_and_one_child_per_element() {
+    let items = array_tree_items("{755,847,78}").expect("合法字面量");
+    assert_eq!(items.len(), 1);
+    let root = &items[0];
+    assert_eq!(root.label, "$ 数组 [3]");
+    assert!(root.is_folder(), "根是 folder，才能展开");
+    assert!(root.is_expanded(), "顶层预展开（与 JSON 树同口径）");
+    let children = &root.children;
+    assert_eq!(children.len(), 3);
+    assert_eq!(children[0].label, "0: 755");
+    assert_eq!(children[1].label, "1: 847");
+    assert_eq!(children[2].label, "2: 78");
+    // NULL 元素是裸词：显示 `NULL`，不当字符串
+    let nulls = array_tree_items("{NULL,x}").expect("合法字面量");
+    assert_eq!(nulls[0].children[0].label, "0: NULL");
+}
+
+/// 多维数组：子项自己是 folder（可再展开）
+#[test]
+fn array_tree_items_keeps_nested_arrays_expandable() {
+    let items = array_tree_items("{{1,2},{3,4}}").expect("合法字面量");
+    let root = &items[0];
+    assert_eq!(root.label, "$ 数组 [2]");
+    let children = &root.children;
+    assert_eq!(children.len(), 2);
+    assert!(children[0].is_folder(), "子数组是 folder");
+    assert_eq!(children[0].label, "0 数组 [2]");
+    assert_eq!(children[0].children[0].label, "0: 1");
+    assert_eq!(children[0].children[1].label, "1: 2");
+}
+
+/// 超过 100 项：只铺前 100，末尾追加「… 还有 N 项」（真值 MAX_FULL_ARRAY_PREVIEW_ITEMS）
+#[test]
+fn array_tree_items_truncates_past_the_preview_limit() {
+    let mut literal = String::from("{");
+    for i in 0..120 {
+        if i > 0 {
+            literal.push(',');
+        }
+        literal.push_str(&i.to_string());
+    }
+    literal.push('}');
+    let items = array_tree_items(&literal).expect("合法字面量");
+    let root = &items[0];
+    assert_eq!(root.label, "$ 数组 [120]");
+    let children = &root.children;
+    assert_eq!(children.len(), 101, "前 100 项 + 1 条截断占位");
+    assert_eq!(children[100].label, "… 还有 20 项");
+}
+
+/// 切到文本视图收起展开（子行只属于网格行序）
+#[test]
+fn array_expansion_collapses_when_switching_to_text_view() {
+    let mut grid = array_grid();
+    assert!(grid.toggle_array_expand(0, 1));
+    assert_eq!(grid.view_len(), 6);
+    grid.set_presentation_view(crate::ports::Presentation::Text);
+    assert!(!grid.is_array_expanded(0, 1), "文本视图不铺子行，顺手收起");
+    assert_eq!(grid.view_len(), 3);
 }

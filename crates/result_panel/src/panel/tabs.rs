@@ -199,6 +199,8 @@ pub(crate) fn value_payload(
         ViewerMode::Image { format, .. } => (hex_to_bytes(value), format.to_ascii_lowercase()),
         ViewerMode::Hex => (hex_to_bytes(value), "bin".to_string()),
         ViewerMode::Json => (value.as_bytes().to_vec(), "json".to_string()),
+        // 【刀4】数组：存原文（PG 字面量本身是可读文本，不是 JSON，别给 `.json` 后缀）
+        ViewerMode::Array => (value.as_bytes().to_vec(), "txt".to_string()),
         ViewerMode::Text => (value.as_bytes().to_vec(), "txt".to_string()),
     };
     ValuePayload {
@@ -433,6 +435,8 @@ impl ResultPanel {
                 .child(SharedString::from(value))
                 .into_any_element(),
             ViewerMode::Json => self.render_json_tree(cx),
+            // 【刀4】数组集合树与 JSON 树同一套渲染（树内容在事件路径按 PG 解析器建）
+            ViewerMode::Array => self.render_json_tree(cx),
             ViewerMode::Hex => self.render_hex_dump(value, cx),
             ViewerMode::Image { format, size } => {
                 let muted = cx.theme().colors.muted_foreground;
