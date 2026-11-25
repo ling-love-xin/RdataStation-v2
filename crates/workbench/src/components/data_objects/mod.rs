@@ -17,6 +17,7 @@
 //! 控件，只在行上标 `v{n}`，让用户知道自己读的是哪一版。
 
 use insight::SampleSource;
+use std::collections::HashMap;
 
 use crate::panels::Shared;
 
@@ -934,6 +935,68 @@ pub fn source_table_object(conn: &str, catalog: &str, schema: &str, table: &str)
     }
 }
 
+/// 已挂载源的叶子按 schema 分组（三级树第二层）：返回 `(schema 名, 组内下标)`。
+///
+/// 按**首见顺序**切段（引擎列举时已按 schema、名字排好，这里不再重排——再排一次
+/// 就可能与「复制限定名」抄走的顺序对不上）。`indices` 指向入参本身，调用方按它取
+/// 元素，不为了一屏几百张表每帧克隆一遍清单。
+pub fn schema_groups(tables: &[engine::duckdb::accel::MountedTable]) -> Vec<(String, Vec<usize>)> {
+    let mut order: Vec<String> = Vec::new();
+    let mut buckets: HashMap<String, Vec<usize>> = HashMap::new();
+    for (index, table) in tables.iter().enumerate() {
+        // 空 schema 归到 `main`：DuckDB 的外源目录里 schema 可能为空串（sqlite 等），
+        // 画一条空名分组行等于让用户点一个没有名字的东西
+        let label = match table.schema.is_empty() {
+            true => "main".to_string(),
+            false => table.schema.clone(),
+        };
+        if !buckets.contains_key(&label) {
+            order.push(label.clone());
+        }
+        buckets.entry(label).or_default().push(index);
+    }
+    order
+        .into_iter()
+        .map(|label| {
+            let indices = buckets.remove(&label).unwrap_or_default();
+            (label, indices)
+        })
+        .collect()
+}
+
+/// 源库连接（`srctable:` 行）按 catalog + schema 分组：同一棵三级树的第二层。
+///
+/// 层名在 catalog 与 schema 都有时写 `catalog.schema`（源库的 catalog 就是库名，
+/// 少了它分不清 `orders.main` 与 `bi.main`）。反解不出身份的行走 `main`——
+/// 与其丢一行，不如把它挂在一个说明得通的分组下。
+pub fn conn_schema_groups(children: &[Object]) -> Vec<(String, Vec<usize>)> {
+    let mut order: Vec<String> = Vec::new();
+    let mut buckets: HashMap<String, Vec<usize>> = HashMap::new();
+    for (index, child) in children.iter().enumerate() {
+        let label = source_table_parts(&child.key)
+            .map(
+                |(_, catalog, schema, _)| match (catalog.is_empty(), schema.is_empty()) {
+                    (false, false) => format!("{catalog}.{schema}"),
+                    (false, true) => catalog.to_string(),
+                    (true, false) => schema.to_string(),
+                    (true, true) => "main".to_string(),
+                },
+            )
+            .unwrap_or_else(|| "main".to_string());
+        if !buckets.contains_key(&label) {
+            order.push(label.clone());
+        }
+        buckets.entry(label).or_default().push(index);
+    }
+    order
+        .into_iter()
+        .map(|label| {
+            let indices = buckets.remove(&label).unwrap_or_default();
+            (label, indices)
+        })
+        .collect()
+}
+
 /// 已选对象 → 洞察取样来源（面板「分析已选」的取数口径，**纯函数**）。
 ///
 /// 返回 `(来源, 跳过原因)`：能给出**完整取数描述**的对象才转成来源，
@@ -1206,22 +1269,23 @@ pub fn collect(shared: &Shared) -> Collected {
         })
         .collect();
 
-    // 本地加速会话：引擎按源连接登记，这里把连接 id 翻译成用户认得的名字
-    // （连接清单是宿主快照；找不到就用 id 兜底——比显示空白强，且可定位）
+    // 本地加速会话：树根写**真实别名**（加速档固定 `rds_src`，规格 §6 的例外），
+    // 连接名进 note。用户要认「这是哪条连接」，但树根必须与 `duckdb_databases()`
+    // 里那个 catalog 名一致，否则三级树的第一层就跟事实对不上。
     let accel_sources = {
         let connections = shared.connections.borrow();
         engine::duckdb::accel::owners()
             .into_iter()
             .map(|(conn_id, kind)| {
-                let alias = connections
+                let conn_name = connections
                     .iter()
                     .find(|item| item.id == conn_id)
                     .map(|item| item.name.clone())
                     .unwrap_or_else(|| conn_id.clone());
                 SessionSource {
                     owner: conn_id,
-                    alias,
-                    note: format!("{} · 本地加速会话", kind.label()),
+                    alias: engine::duckdb::accel::SOURCE_ALIAS.to_string(),
+                    note: format!("{conn_name} · {} · 本地加速会话", kind.label()),
                     failed: None,
                 }
             })
@@ -1297,8 +1361,9 @@ mod tests {
             ],
             accel_sources: vec![SessionSource {
                 owner: "C_mysql_9".into(),
-                alias: "订单库".into(),
-                note: "MySQL · 本地加速会话".into(),
+                // 加速档的 catalog 名固定是 `rds_src`；连接名进 note（见 `collect`）
+                alias: "rds_src".into(),
+                note: "订单库 · MySQL · 本地加速会话".into(),
                 failed: None,
             }],
         }
@@ -1900,8 +1965,60 @@ mod tests {
             "要提示引用需切通道：{}",
             accel.note
         );
-        // 显示名是连接名（用户认名字，不认 conn_id）
-        assert_eq!(accel.name, "订单库");
+        // 树根写真实 catalog 名（加速档固定 `rds_src`）；连接名在副标题里
+        assert_eq!(accel.name, "rds_src");
+        assert!(
+            accel.note.contains("订单库"),
+            "副标题要带上这是哪条连接：{}",
+            accel.note
+        );
+    }
+
+    /// 三级树的第二层：叶子按 schema 切段，同一 schema 的连续下标归一组。
+    /// 乱序输入也按**首见顺序**分组，不按名字重排。
+    #[test]
+    fn schema_groups_split_leaves_by_schema_in_first_seen_order() {
+        use engine::duckdb::accel::MountedTable;
+        let table = |schema: &str, name: &str| MountedTable {
+            schema: schema.into(),
+            name: name.into(),
+            is_view: false,
+            qualified: name.into(),
+        };
+        let leaves = vec![
+            table("main", "orders"),
+            table("main", "users"),
+            table("sales", "deals"),
+            // 空 schema 归到 main（sqlite 等外源可能没有 schema 名）
+            table("", "notes"),
+        ];
+        let groups = super::schema_groups(&leaves);
+        assert_eq!(groups[0].0, "main");
+        assert_eq!(groups[0].1, vec![0, 1, 3], "main 组要含空 schema 那张");
+        assert_eq!(groups[1].0, "sales");
+        assert_eq!(groups[1].1, vec![2]);
+
+        // 首见顺序：先出现 sales 就把 sales 排第一
+        let reversed = vec![table("sales", "a"), table("main", "b")];
+        assert_eq!(super::schema_groups(&reversed)[0].0, "sales");
+    }
+
+    /// 源库连接的表行（`srctable:`）按 catalog + schema 分组：`orders.main` 与
+    /// `bi.main` 必须是两组，不能合成一个 `main`。
+    #[test]
+    fn conn_schema_groups_keep_catalog_in_the_label() {
+        use super::source_table_object;
+        let rows = vec![
+            source_table_object("C_1", "orders", "main", "t1"),
+            source_table_object("C_1", "orders", "main", "t2"),
+            source_table_object("C_1", "bi", "main", "t3"),
+        ];
+        let groups = super::conn_schema_groups(&rows);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].0, "orders.main");
+        assert_eq!(groups[0].1, vec![0, 1]);
+        assert_eq!(groups[1].0, "bi.main");
+        assert_eq!(groups[1].1, vec![2]);
     }
 
     /// 源行 key → 展开目标：联邦源按最后一个冒号切（owner 可能带冒号），加速源直取；

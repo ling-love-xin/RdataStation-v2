@@ -115,6 +115,9 @@ pub struct DataObjectsTab {
     /// 每个源已经翻过几页叶子（键 = 源行 key）：`None` / 没记录 = 第一页。
     /// 见 [`LEAF_PAGE_SIZE`] 与 [`leaf_shown`]——叶子多了只画一页，点「显示更多」才加。
     leaf_pages: HashMap<String, usize>,
+    /// 收起的 schema 分组（键 = `{源行 key}|{层名}`）：三级树的第二层，点击切换。
+    /// 默认全展开——`rds_src` / `f_*` 这种库往往只有一个 schema，收起来反而多点一次。
+    collapsed_schemas: HashSet<String>,
     /// 导出格式不在这里：它是「这一次导出」的属性，活在导出窗口里（见 `components/export_dialog.rs`）
     /// 源段里「文件库还没挂」的行（行 key → 本体路径）：右键「挂载」用这一份
     unmounted_sources: Vec<(String, String)>,
@@ -160,6 +163,7 @@ impl DataObjectsTab {
             conn_children: HashMap::new(),
             loading_sources: HashSet::new(),
             leaf_pages: HashMap::new(),
+            collapsed_schemas: HashSet::new(),
             unmounted_sources: Vec::new(),
             mounted_sources: Vec::new(),
             active_doc_key,
@@ -1825,14 +1829,35 @@ impl DataObjectsTab {
                                 children.len(),
                                 self.leaf_pages.get(&object.key).copied(),
                             );
-                            for leaf in children.iter().take(shown) {
-                                let leaf_picked = picked_set.contains(leaf.key.as_str());
-                                list = list.child(source_table_leaf_row(
-                                    leaf,
-                                    leaf_picked,
+                            // 三级树第二层 = catalog + schema：只画一级会把 `orders.main`
+                            // 与 `bi.main` 的同名表挤成两行一样的东西（第 37 条）
+                            for (layer, indices) in
+                                data_objects::conn_schema_groups(&children[..shown])
+                            {
+                                let schema_key = format!("{}|{layer}", object.key);
+                                let open = !self.collapsed_schemas.contains(&schema_key);
+                                list = list.child(source_schema_row(
+                                    &schema_key,
+                                    &layer,
+                                    indices.len(),
+                                    open,
                                     &entity,
                                     cx,
                                 ));
+                                if !open {
+                                    continue;
+                                }
+                                for index in indices {
+                                    let leaf = &children[index];
+                                    let leaf_picked = picked_set.contains(leaf.key.as_str());
+                                    list = list.child(source_table_leaf_row(
+                                        leaf,
+                                        leaf_picked,
+                                        &entity,
+                                        &self.shared,
+                                        cx,
+                                    ));
+                                }
                             }
                             if shown < children.len() {
                                 list = list.child(leaf_more_row(
@@ -1888,16 +1913,34 @@ impl DataObjectsTab {
                             );
                             // 「载入内存…」只对挂在分析实例上的源开（见 `source_leaf_row`）
                             let leaf_source = data_objects::source_ref(&object.key);
-                            for table in children.iter().take(shown) {
-                                list = list.child(source_leaf_row(
-                                    &object.key,
-                                    table,
+                            // 第二层 = schema：叶子按 schema 切段，点击组头收起
+                            for (layer, indices) in data_objects::schema_groups(&children[..shown])
+                            {
+                                let schema_key = format!("{}|{layer}", object.key);
+                                let open = !self.collapsed_schemas.contains(&schema_key);
+                                list = list.child(source_schema_row(
+                                    &schema_key,
+                                    &layer,
+                                    indices.len(),
+                                    open,
                                     &entity,
-                                    &self.shared,
-                                    leaf_source.as_ref(),
-                                    &object.name,
                                     cx,
                                 ));
+                                if !open {
+                                    continue;
+                                }
+                                for index in indices {
+                                    let table = &children[index];
+                                    list = list.child(source_leaf_row(
+                                        &object.key,
+                                        table,
+                                        &entity,
+                                        &self.shared,
+                                        leaf_source.as_ref(),
+                                        &object.name,
+                                        cx,
+                                    ));
+                                }
                             }
                             if shown < children.len() {
                                 list = list.child(leaf_more_row(
@@ -2139,7 +2182,8 @@ fn leaf_more_row(
         .border_b_1()
         .border_color(colors.border)
         .hover(|s| s.bg(colors.list_hover))
-        .child(tree::indent_spacer(ui::TREE_INDENT, 1))
+        // 「更多」是叶子那一层的东西：与叶子同缩进（第二层 = schema 之下，第三层）
+        .child(tree::indent_spacer(ui::TREE_INDENT, 2))
         .child(tree::disclosure_slot())
         .child(
             Button::new(SharedString::from(format!(
@@ -2170,13 +2214,77 @@ fn leaf_notice_row(row_id: &str, text: &str, color: Hsla) -> AnyElement {
         .into_any_element()
 }
 
-/// 源行展开出的表 / 视图叶子行：缩进 + 图标 + 名字 + 「复制名」。
+/// 三级树的**第二层**：schema 分组行（缩进 1、可点收起、无行尾按钮）。
 ///
-/// 叶子**只做复制限定名**——限定名由引擎按源种类生成（三段 / 两段，判据在
-/// `AccelKind::two_segment_names`），粘进对应通道的 SQL 就能用。**不给「选用」入口**：
-/// 联邦 / 加速的表在各自的专用连接上，洞察取样（进程单例）够不着；等公共入口
-/// Phase 3「洞察搬结果」落地再开。与其摆一个点了会炸的入口，不如只给写 SQL
-/// 真正需要的那一截。
+/// 为什么要有这一层：源段叶子现在是「别名（catalog）→ schema → 表 / 视图」，
+/// 只画两层时 `orders.main` 与 `bi.main` 的同名表会挤成两行看起来一样的东西
+/// （铁律第 37 条）。整行点击切换收起，与草稿箱分区头同一交互（`chrome.rs:2318`）、
+/// 与导航分组头同一形态（`nav_view/rows.rs:711`）：行本身就是命中区。
+///
+/// 行尾**不摆任何按钮**（铁律第 42 条）：计数徽章是信息不是控件。
+fn source_schema_row(
+    schema_key: &str,
+    layer: &str,
+    count: usize,
+    open: bool,
+    entity: &Entity<DataObjectsTab>,
+    cx: &App,
+) -> AnyElement {
+    let colors = cx.theme().colors;
+    let muted = colors.muted_foreground;
+    let row_id = format!("data-object-schema-{schema_key}");
+    let toggle_key = schema_key.to_string();
+    let entity = entity.clone();
+    div()
+        .id(SharedString::from(row_id.clone()))
+        .debug_selector(|| "data-object-schema-row".to_string())
+        .h_flex()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .py_1()
+        .border_b_1()
+        .border_color(colors.border)
+        .cursor_pointer()
+        .hover(|s| s.bg(colors.list_hover))
+        .on_click(move |_, _, cx| {
+            let key = toggle_key.clone();
+            entity.update(cx, |tab, cx| {
+                if tab.collapsed_schemas.contains(&key) {
+                    tab.collapsed_schemas.remove(&key);
+                } else {
+                    tab.collapsed_schemas.insert(key);
+                }
+                cx.notify();
+            });
+        })
+        .child(tree::indent_spacer(ui::TREE_INDENT, 1))
+        .child(tree::disclosure_slot().child(tree::disclosure_icon(open, muted)))
+        .child(
+            Icon::new(gpui_kit::assets::IconName::Folder)
+                .xsmall()
+                .text_color(muted),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_xs()
+                .text_color(muted)
+                .overflow_hidden()
+                .text_ellipsis()
+                .child(layer.to_string()),
+        )
+        .child(tree::count_badge(count, muted, colors.list_hover))
+        .into_any_element()
+}
+
+/// 源行展开出的表 / 视图叶子行：缩进 + 图标 + 名字（**行尾没有按钮**，铁律第 42 条）。
+///
+/// 动作全在右键：复制限定名（引擎按源种类生成，三段 / 两段，判据在
+/// `AccelKind::two_segment_names`）、归档到分析库、载入内存。**不摆可见的「选用」**：
+/// 联邦 / 加速的表在各自的专用连接上，洞察取样（进程单例）够不着——与其摆一个
+/// 点了会炸的入口，不如只给写 SQL 真正需要的那一截。
 fn source_leaf_row(
     parent_key: &str,
     table: &engine::duckdb::accel::MountedTable,
@@ -2199,8 +2307,8 @@ fn source_leaf_row(
         .border_b_1()
         .border_color(colors.border)
         .hover(|s| s.bg(colors.list_hover))
-        // 缩进一层（与 picker 树同一套原语：`TREE_INDENT × depth`）
-        .child(tree::indent_spacer(ui::TREE_INDENT, 1))
+        // 缩进 = `TREE_INDENT × 2`：叶子在「别名 → schema」之下（与 picker 同一套原语）
+        .child(tree::indent_spacer(ui::TREE_INDENT, 2))
         // 展开槽留空：叶子没有下一层，但缩进对齐靠这个固定宽槽
         .child(tree::disclosure_slot())
         .child(
@@ -2237,47 +2345,46 @@ fn source_leaf_row(
         );
     }
     let qualified = table.qualified.clone();
-    let base = row.child(
-        Button::new(SharedString::from(format!(
-            "data-object-leaf-copy-{leaf_id}"
-        )))
-        .ghost()
-        .xsmall()
-        .label(tr("复制名"))
-        .on_click({
-            let qualified = qualified.clone();
-            let entity = entity.clone();
-            move |_, _, cx| {
-                cx.write_to_clipboard(gpui::ClipboardItem::new_string(qualified.clone()));
-                entity.update(cx, |tab, cx| {
-                    tab.note = Some(PanelNote::info(format!("已复制限定名：{qualified}")));
-                    cx.notify();
-                });
-            }
-        }),
-    );
+    let table_name = table.name.clone();
+    // 菜单闭包要 `'static`：借来的参数先克隆成自有值（`context_menu` 存进元素树，
+    // 生命周期比这个函数长）
+    let shared_owned = shared.clone();
+    let source_owned = source.cloned();
+    let source_name_owned = source_name.to_string();
+    let entity_owned = entity.clone();
 
-    // 铁律 H 组第 35 条：载入 = 把这张**已经挂进分析实例**的源表复制成 `tmp_l_`，
-    // 会话级、不登记资产。写库在 worker 线程，回执由面板自己的小泵取回（第 25 条）。
-    // 只给「挂在分析实例上的源」开这个口（`source` 有值 = 会话 / 加速 / 文件库），
-    // 裸连接的表还没有取数通道（见 `services::load_jobs::load` 的报错分支）。
-    if let Some(source) = source {
-        let qualified = table.qualified.clone();
-        let table_name = table.name.clone();
-        let source = source.clone();
-        let source_name = source_name.to_string();
-        let entity = entity.clone();
-        let shared = shared.clone();
-        base.context_menu(move |menu, _window, _cx| {
-            let mut menu = menu;
+    // 铁律第 42 条：叶子行尾**不摆按钮**，动作全走右键。
+    //
+    // 「复制限定名」每一张挂载源的表都能做（什么都不用查）；归档 / 载入只对挂在
+    // 分析实例上的源开口（`source` 有值 = 会话 / 加速 / 文件库），裸连接的表还没有
+    // 取数通道（见 `services::load_jobs::load` 的报错分支）。
+    //
+    // 载入 = 把这张**已经挂进分析实例**的源表复制成 `tmp_l_`，会话级、不登记资产（第 35 条）。
+    // 写库在 worker 线程，回执由面板自己的小泵取回（第 25 条）。
+    row.context_menu(move |menu, _window, _cx| {
+        let mut menu = menu;
+        {
+            let qualified = qualified.clone();
+            let entity = entity_owned.clone();
+            menu = menu.item(
+                PopupMenuItem::new(tr("复制限定名")).on_click(move |_, _, cx| {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(qualified.clone()));
+                    entity.update(cx, |tab, cx| {
+                        tab.note = Some(PanelNote::info(format!("已复制限定名：{qualified}")));
+                        cx.notify();
+                    });
+                }),
+            );
+        }
+        if let Some(source) = source_owned.clone() {
             // 归档（第 35 条前半）：先问表名（撞名要用户改），再进 worker。
             {
                 let qualified = qualified.clone();
                 let table_name = table_name.clone();
                 let source = source.clone();
-                let source_name = source_name.clone();
-                let entity = entity.clone();
-                let shared = shared.clone();
+                let source_name = source_name_owned.clone();
+                let entity = entity_owned.clone();
+                let shared = shared_owned.clone();
                 menu = menu.item(PopupMenuItem::new("归档到分析库…").on_click(
                     move |_, window, cx| {
                         crate::components::archive_dialog::open_archive_dialog(
@@ -2299,9 +2406,9 @@ fn source_leaf_row(
                 let table_name_for_job = table_name.clone();
                 let table_name_for_note = table_name.clone();
                 let source = source.clone();
-                let source_name = source_name.clone();
-                let entity = entity.clone();
-                let shared = shared.clone();
+                let source_name = source_name_owned.clone();
+                let entity = entity_owned.clone();
+                let shared = shared_owned.clone();
                 menu = menu.item(PopupMenuItem::new("载入内存…").on_click(move |_, _, cx| {
                     // 名字用 `<源>_<表>`：临时表名的尺子只留 ASCII，中文会折成下划线，
                     // 回执里显示的是**实际落下的表名**（`landed`），不是用户看到的这张表名
@@ -2317,12 +2424,10 @@ fn source_leaf_row(
                     entity.update(cx, |tab, cx| tab.watch_load(job, cx));
                 }));
             }
-            menu
-        })
-        .into_any_element()
-    } else {
-        base.into_any_element()
-    }
+        }
+        menu
+    })
+    .into_any_element()
 }
 
 /// 源库表的叶子行：缩进 + 图标 + 表名 + 所在 catalog / schema + 「选用」。
@@ -2334,13 +2439,22 @@ fn source_table_leaf_row(
     leaf: &data_objects::Object,
     picked: bool,
     entity: &Entity<DataObjectsTab>,
+    shared: &Shared,
     cx: &App,
 ) -> AnyElement {
     let colors = cx.theme().colors;
     let muted = colors.muted_foreground;
     let leaf_id = SharedString::from(format!("data-object-srctable-{}", leaf.key));
-    let key_for_click = leaf.key.clone();
-    let entity_for_click = entity.clone();
+    let key_for_menu = leaf.key.clone();
+    let entity_for_menu = entity.clone();
+    let props_object = leaf.clone();
+    let shared_for_menu = shared.clone();
+    // 小标写「已选」：选中状态仍要看得见（铁律 G 第 30 条），但**不做成行尾按钮**
+    let pill = if picked {
+        format!("{} · 已选", leaf.pill_text())
+    } else {
+        leaf.pill_text()
+    };
     div()
         .id(leaf_id.clone())
         .h_flex()
@@ -2351,7 +2465,7 @@ fn source_table_leaf_row(
         .border_b_1()
         .border_color(colors.border)
         .hover(|s| s.bg(colors.list_hover))
-        .child(tree::indent_spacer(ui::TREE_INDENT, 1))
+        .child(tree::indent_spacer(ui::TREE_INDENT, 2))
         .child(tree::disclosure_slot())
         .child(
             Icon::new(gpui_kit::assets::IconName::Table)
@@ -2368,35 +2482,34 @@ fn source_table_leaf_row(
                 .text_ellipsis()
                 .child(leaf.name.clone()),
         )
-        .child(
-            div()
-                .flex_none()
-                .text_xs()
-                .text_color(muted)
-                .child(leaf.note.clone()),
-        )
-        // 铁律 G 第 30 条：源段这条是**源库里的表**（数据还在源库），与表段里
-        // 同名的那条（资产最新版本）不是一回事，小标说清它属于哪一段。
-        .child(
-            Tag::secondary()
-                .rounded_full()
-                .flex_none()
-                .child(leaf.pill_text()),
-        )
-        .child(
-            Button::new(SharedString::from(format!(
-                "data-object-srctable-pick-{}",
-                leaf.key
-            )))
-            .ghost()
-            .xsmall()
-            .toggled(picked)
-            .label(if picked { "已选" } else { "选用" })
-            .on_click(move |_, _, cx| {
-                let key = key_for_click.clone();
-                entity_for_click.update(cx, |tab, cx| tab.toggle_picked(&key, cx));
-            }),
-        )
+        // 三级树下 schema 已进第二层分组行，这里不再重复印 `catalog.schema`
+        // 铁律 G 第 30 条 + 第 42 条：源段这条是**源库里的表**（数据还在源库），
+        // 小标说清它属于哪一段；行尾不摆「选用」按钮，动作走右键。
+        .child(Tag::secondary().rounded_full().flex_none().child(pill))
+        .context_menu(move |menu, _window, _cx| {
+            let mut menu = menu;
+            let key = key_for_menu.clone();
+            let entity = entity_for_menu.clone();
+            let label = if picked {
+                "移出工作集"
+            } else {
+                "选入工作集"
+            };
+            menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
+                entity.update(cx, |tab, cx| tab.toggle_picked(&key, cx));
+            }));
+            let props = shared_for_menu.clone();
+            let object = props_object.clone();
+            menu = menu.item(PopupMenuItem::new("属性…").on_click(move |_, window, cx| {
+                crate::components::object_props::open_object_props(
+                    props.clone(),
+                    object.clone(),
+                    window,
+                    cx,
+                );
+            }));
+            menu
+        })
         .into_any_element()
 }
 
