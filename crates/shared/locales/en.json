@@ -1409,7 +1409,7 @@
   "设置排除文件规则（glob）": "Set the exclude-file rule (glob)",
   "还没有标签——在下面输入一个名字即可新建": "No tags yet — type a name below to create one",
   "新建编辑器查询（打开「搜索 query」独立 Tab）": "New editor query (opens a separate 'search query' tab)",
-  "使用正则表达式（如 \\\\d+ 匹配数字；关掉则按纯文本匹配）": "Use a regular expression (e.g. \\\\d+ matches digits; off = plain-text matching)",
+  "使用正则表达式（如 \\d+ 匹配数字；关掉则按纯文本匹配）": "Use a regular expression (e.g. \\d+ matches digits; off = plain-text matching)",
   "保留大小写（已接入：替换时保持命中词的原有大小写格式，如全大写/首字母大写/全小写）": "Preserve case (active: replacements keep the matched word's original casing, e.g. ALL CAPS / Capitalized / lowercase)",
   "样例：*.sql, src/**/include（留空搜索全部文件）": "Example: *.sql, src/**/include (empty = search all files)",
   "样例：*.log, .git/, target/（留空不排除）": "Example: *.log, .git/, target/ (empty = exclude nothing)",

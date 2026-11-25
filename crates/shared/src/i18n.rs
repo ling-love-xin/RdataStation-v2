@@ -4,7 +4,9 @@
 //! - `crates/shared/locales/zh.json`：源语言资源（键=中文原文，值=中文原文，翻译基线）；
 //! - `crates/shared/locales/en.json`：英文翻译（键=中文原文，值=英文）。
 //! 编译期 `include_str!` 嵌入（零运行时 IO、无部署资源缺失风险）；首次 `tr()` 查表时
-//! 惰性解析一次（`once_cell::sync::Lazy`），键值借用嵌入的 `'static` 内存，返回 `&'static str`。
+//! 惰性解析一次（`once_cell::sync::Lazy`），表本身是 `'static`，`tr()` 返回 `&'static str`。
+//! 键值用自有 `String`（不借用嵌入文本）：serde_json 的借用解析要求字符串内无转义，
+//! 而词表里确有含反斜杠的正则提示文案。
 //!
 //! 约定（design-guides §Internationalization）：
 //! - **中文原文是 key**（项目界面语言，stable intent 的过渡形态；改动最小——字符串就地包 `tr(...)`）；
@@ -85,15 +87,19 @@ const EN_JSON: &str = include_str!("../locales/en.json");
 #[cfg(test)]
 const ZH_JSON: &str = include_str!("../locales/zh.json");
 
-/// 英文翻译表（中文原文 → 英文）。惰性解析一次；键值借用 `EN_JSON` 的 `'static` 内存，
-/// `tr()` 返回值维持 `&'static str`（与旧静态表签名一致，调用点零改动）。
-static EN: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
+/// 英文翻译表（中文原文 → 英文）。惰性解析一次，表本身是 `'static`，
+/// `tr()` 返回值仍是 `&'static str`（从表里 `as_str()` 借出），调用点零改动。
+///
+/// 键值用 `String` 而不是 `&'static str`：serde_json 直接借用要求字符串里**没有转义**，
+/// 而词表里确有含反斜杠的文案（正则提示写 `\\d+`）。改用自有 `String` 后，转义文案也能进表；
+/// 代价是一次性堆分配 1661 条键值（启动各一次，可忽略）。
+static EN: Lazy<HashMap<String, String>> = Lazy::new(|| {
     serde_json::from_str(EN_JSON).expect("en.json 必须是合法 JSON 键值对象（键=中文原文，值=英文）")
 });
 
 /// 源语言资源（中文原文集合，完整性校验基线；仅测试用）。
 #[cfg(test)]
-static ZH: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
+static ZH: Lazy<HashMap<String, String>> = Lazy::new(|| {
     serde_json::from_str(ZH_JSON).expect("zh.json 必须是合法 JSON 键值对象（键=值=中文原文）")
 });
 
@@ -104,7 +110,7 @@ static ZH: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
 pub fn tr(zh: &'static str) -> &'static str {
     if current() == Locale::En {
         if let Some(en) = EN.get(zh) {
-            return en;
+            return en.as_str();
         }
     }
     zh
@@ -120,7 +126,7 @@ pub fn tr(zh: &'static str) -> &'static str {
 pub fn tr_dyn(zh: &str) -> &str {
     if current() == Locale::En {
         if let Some(en) = EN.get(zh) {
-            return *en;
+            return en.as_str();
         }
     }
     zh
