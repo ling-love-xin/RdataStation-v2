@@ -60,6 +60,8 @@ pub enum VersionAction {
     /// 铁律 D17：历史版本不进数据对象清单平铺，要看旧数据就走这个二级入口。
     /// 表型资产没有内容副本，不存在这个动作。
     Analyze { version: i32 },
+    /// 把这一版固化成本地独立表资产（只对全局引用资产：复制 pin 住的全局版本）。
+    Solidify { version: i32 },
 }
 
 impl VersionAction {
@@ -71,6 +73,7 @@ impl VersionAction {
             | Self::DeleteCopy { version }
             | Self::Diff { version }
             | Self::Analyze { version } => version,
+            Self::Solidify { version } => version,
         }
     }
 }

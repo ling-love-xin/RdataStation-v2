@@ -279,6 +279,15 @@ fn tail_follows_field_priority_per_kind() {
         "无指纹 · 刚刚"
     );
 
+    // 全局引用：尾巴要说清"全局引用 · 全局 vN"，不要混成普通远端引用。
+    let mut global_ref = row_model("ar_gref", "table_ref", None);
+    global_ref.origin_kind = Some(crate::model::ORIGIN_KIND_GLOBAL.to_string());
+    global_ref.origin_ref = Some(r#"{"instance":"gi_1","version":2}"#.to_string());
+    assert_eq!(
+        tail_for(&global_ref, ArchiveKind::TableRef, now),
+        "全局引用 · 全局 v2 · 刚刚"
+    );
+
     // 旧行（无体积）只剩时间，不留一个孤零零的分隔符。
     let legacy = row_model("ar_legacy", "file", None);
     assert_eq!(tail_for(&legacy, ArchiveKind::File, now), "刚刚");

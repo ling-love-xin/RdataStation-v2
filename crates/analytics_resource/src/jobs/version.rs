@@ -280,6 +280,10 @@ pub(crate) async fn run_version_action(job: &VersionActionJob) -> OpOutcome {
         VersionAction::Analyze { .. } => {
             unreachable!("analyze 不走版本动作执行（宿主已分流）")
         }
+        // 固化只对全局引用资产，宿主分流到 `enqueue_solidify`；普通版本作业不会收到。
+        VersionAction::Solidify { .. } => {
+            unreachable!("solidify 不走版本动作执行（宿主已分流到引用固化作业）")
+        }
         VersionAction::Restore { version } => {
             match service.restore_version(&job.resource_id, version).await {
                 Ok(outcome) if outcome.created_new_version => OpOutcome::VersionActionDone {

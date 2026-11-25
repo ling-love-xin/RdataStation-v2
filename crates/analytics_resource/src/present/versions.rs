@@ -44,6 +44,9 @@ pub fn build_version_rows(
     // （回退 = 把表名指回旧表，表还在项目库里，不需要副本）。
     let is_table = crate::ArchiveKind::resolve(&current.kind, current.analytics_table.as_deref())
         == crate::ArchiveKind::AnalyticsTable;
+    let is_global_ref = crate::ArchiveKind::from_db_str(&current.kind)
+        == crate::ArchiveKind::TableRef
+        && current.origin_kind.as_deref() == Some(crate::model::ORIGIN_KIND_GLOBAL);
     for version in versions {
         // 快照是当时那条资源记录的序列化；字段结构随迁移演进，解析不出来不算错。
         let snapshot = serde_json::from_value::<AnalyticsResource>(version.snapshot.clone()).ok();
@@ -75,6 +78,7 @@ pub fn build_version_rows(
             hash_short: crate::detail_view::short_hash(candidate.hash.as_deref()),
             has_copy: candidate.has_copy,
             is_table,
+            is_global_ref,
             // 与**上一版**（版本号 -1）比：列表里它的下一行（降序）。
             delta_label: candidates
                 .get(index + 1)

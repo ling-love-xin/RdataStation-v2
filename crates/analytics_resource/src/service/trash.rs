@@ -340,6 +340,7 @@ impl ArchiveService {
                 ));
             }
             self.store.purge_deleted_row(resource_id).await?;
+            self.release_global_pins_if_reference(&row).await;
             return Ok(());
         }
 
@@ -393,12 +394,44 @@ impl ArchiveService {
             .into_iter()
             .filter(|entry| entry.manifest.origin == ORIGIN_RESOURCES)
             .collect();
-        let registry_only = self.deleted_registry_archives().await?.len();
+        let registry_only = self.deleted_registry_archives().await?;
         for entry in &entries {
             trash.purge(&entry.manifest.id).await?;
         }
         self.store.purge_all_deleted().await?;
-        Ok(entries.len() + registry_only)
+        // 永久删除的条目里可能有全局引用：登记行已清，pin 必须一起释放，
+        // 否则全局版本会被永久保留（删除/裁剪守卫都以为还有人用）。
+        for row in &registry_only {
+            self.release_global_pins_if_reference(row).await;
+        }
+        Ok(entries.len() + registry_only.len())
+    }
+
+    /// 引用资产被永久删除后释放它 pin 的全部全局版本。
+    ///
+    /// 只对 `origin_kind='global'` 的行动作；失败只记日志、不回滚删除——登记行已经没了，
+    /// 再报错会让用户以为没删掉。真正的兜底是全局侧的活跃引用计数（下次清理时仍能看到）。
+    async fn release_global_pins_if_reference(&self, row: &AnalyticsResource) {
+        if row.origin_kind.as_deref() != Some(crate::model::ORIGIN_KIND_GLOBAL) {
+            return;
+        }
+        let root = self.payload.project_root().to_path_buf();
+        match crate::global::GlobalInstanceStore::production().await {
+            Ok(store) => {
+                if let Err(error) = store.release_global_refs_for_resource(&root, &row.id) {
+                    tracing::warn!(
+                        resource_id = %row.id,
+                        "永久删除全局引用后释放 pin 失败：{error}"
+                    );
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    resource_id = %row.id,
+                    "永久删除全局引用后打开全局库失败，pin 未释放：{error}"
+                );
+            }
+        }
     }
 
     /// 列出软删的 registry-only 存档（回收站第二来源；§12.1.1 ③）。

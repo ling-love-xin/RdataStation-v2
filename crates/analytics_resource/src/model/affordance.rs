@@ -30,12 +30,21 @@ pub struct ActionContext {
     pub read_only: bool,
     /// 本次动作作用几行（多选时是整选集）。
     pub multi_count: usize,
+    /// 是不是「全局引用」资产（项目行，`kind='table_ref'` + `origin_kind='global'`）。
+    ///
+    /// 它没有本地本体，`name` 是全局本名、项目里只能改 `alias`；改名类动作必须改道别名。
+    pub global_ref: bool,
 }
 
 impl ActionContext {
     /// 项目行（只有 `ArchiveRow`、没有详情时的降级构造；`has_payload` 给 `false`——
     /// 需要本体的动作会因此判为不可用，这是安全的一侧）。
-    pub fn from_row(scope: RowScope, status: ArchiveStatus, read_only: bool, multi_count: usize) -> Self {
+    pub fn from_row(
+        scope: RowScope,
+        status: ArchiveStatus,
+        read_only: bool,
+        multi_count: usize,
+    ) -> Self {
         Self {
             scope,
             status,
@@ -43,6 +52,7 @@ impl ActionContext {
             has_table: false,
             read_only,
             multi_count,
+            global_ref: false,
         }
     }
 
@@ -55,6 +65,7 @@ impl ActionContext {
             has_table: false,
             read_only: false,
             multi_count: 1,
+            global_ref: false,
         }
     }
 
@@ -84,8 +95,9 @@ impl ActionContext {
 /// 打开本体（只读）：本体必须还在（文件或分析库表），且只开一条（多选时打开哪一条都是猜）。
 ///
 /// 表型没有文件路径，但「打开」走洞察取样（`SELECT * FROM <表>`），所以它也算有本体。
+/// 全局引用没有本地本体，但可按 pin 的全局表只读取样，同样允许打开。
 pub fn can_open(ctx: &ActionContext) -> bool {
-    ctx.single() && ctx.status != ArchiveStatus::Missing && ctx.has_body()
+    ctx.single() && ctx.status != ArchiveStatus::Missing && (ctx.has_body() || ctx.global_ref)
 }
 
 /// 取回（检出）：往草稿箱写工作副本——只对项目行、**文件本体**、本体正常、项目非只读。
@@ -123,8 +135,13 @@ pub fn can_distribute(ctx: &ActionContext) -> bool {
 /// 改名只会让人以为问题解决了）。
 ///
 /// 全局行必须挡：全局登记不归本项目管（旧判据只在菜单里挡，`F2` 与详情头部都漏了）。
+/// 全局引用资产也挡：它的 `name` 是全局本名，项目里只能改 `alias`（另走「改别名…」）。
 pub fn can_rename(ctx: &ActionContext) -> bool {
-    ctx.project() && ctx.single() && ctx.status != ArchiveStatus::Missing && !ctx.read_only
+    ctx.project()
+        && !ctx.global_ref
+        && ctx.single()
+        && ctx.status != ArchiveStatus::Missing
+        && !ctx.read_only
 }
 
 /// 改标签：只写组织归属，不需要本体；全局行没有项目标签归属。
@@ -158,7 +175,10 @@ pub fn can_delete_row(ctx: &ActionContext) -> bool {
 /// 与列表不同是有意的：详情下面那句提示要说清"本体去哪了"，而缺失行没有本体可送进
 /// 回收站（该先走索引修复）。
 pub fn can_delete_from_detail(ctx: &ActionContext) -> bool {
-    ctx.project() && ctx.status != ArchiveStatus::Missing && ctx.has_body() && !ctx.read_only
+    ctx.project()
+        && ctx.status != ArchiveStatus::Missing
+        && (ctx.has_body() || ctx.global_ref)
+        && !ctx.read_only
 }
 
 #[cfg(test)]
@@ -177,6 +197,19 @@ mod tests {
         assert!(!can_move_to_group(&ctx));
         assert!(!can_delete_row(&ctx));
         assert!(can_delete_global(&ctx), "全局行可以从全局实例删除（刀 B）");
+    }
+
+    #[test]
+    fn global_reference_can_open_and_alias_but_not_rename() {
+        let mut ctx = ActionContext::project_row();
+        ctx.global_ref = true;
+        ctx.has_payload = false;
+        ctx.has_table = false;
+        assert!(can_open(&ctx), "全局引用要能按 pin 的版本只读查看");
+        assert!(!can_rename(&ctx), "全局本名不可改，只能改 alias");
+        assert!(!can_promote(&ctx), "引用没有本地本体，不能再升级到全局");
+        assert!(can_edit_tags(&ctx), "项目引用层可以打标签");
+        assert!(can_move_to_group(&ctx), "项目引用层可以进项目分组");
     }
 
     #[test]

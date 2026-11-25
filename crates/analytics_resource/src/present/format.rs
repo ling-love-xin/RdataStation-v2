@@ -85,6 +85,20 @@ pub fn tail_for(resource: &AnalyticsResource, kind: ArchiveKind, now: DateTime<U
             format_scale(resource.row_count, resource.column_count)
         }
         // 引用型没有可校验的指纹与体积：明说"无指纹"，而不是留空让人以为"还没算"。
+        // 全局引用（`origin_kind='global'`）改说"全局引用 · 全局 vN"，别让用户以为
+        // 这是普通远端引用；`name` 本身已经是全局本名，行标题不必再拼。
+        ArchiveKind::TableRef
+            if resource.origin_kind.as_deref() == Some(crate::model::ORIGIN_KIND_GLOBAL) =>
+        {
+            let global_version = resource
+                .origin_ref
+                .as_deref()
+                .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+                .and_then(|value| value.get("version").and_then(|v| v.as_i64()))
+                .map(|v| format!("全局 v{v}"))
+                .unwrap_or_else(|| "全局引用".to_string());
+            format!("全局引用 · {global_version}")
+        }
         ArchiveKind::TableRef => "无指纹".to_string(),
     };
     let modified = format_relative_time(now, resource.updated_at);

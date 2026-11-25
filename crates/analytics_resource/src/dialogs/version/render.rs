@@ -270,9 +270,17 @@ pub(super) fn action_bar(
     let can_diff = !row.is_current && row.has_copy && !row.is_table && !busy;
     // 「用这一版分析」= 把历史副本挂成分析视图（只读查看：不写库、不动本体，只读项目也能用）。
     let can_analyze = can_diff;
+    // 引用资产没有本地副本，只有「固化」：复制 pin 住的全局版本为独立本地表。
+    let can_solidify = row.is_global_ref && !busy && !read_only;
     // 取回 / 删副本都基于 `resources/` 下的本体副本，表型资产没有。
     let can_checkout = can_act && !row.is_table;
-    let hint = if read_only {
+    let hint = if row.is_global_ref {
+        if read_only {
+            "项目处于只读模式：固化会往本项目库写一张新表，需要先退出只读"
+        } else {
+            "这是全局引用：引用本身不复制数据；固化会把选中的全局版本复制成本地独立表（原引用保留）"
+        }
+    } else if read_only {
         "项目处于只读模式：还原 / 取回 / 删副本都是写操作；对比与「用 vN 分析」是查看，可以直接用"
     } else if row.is_current {
         "这是当前版本（本体上的内容）：取回请用详情面板的「取回（检出）…」"
@@ -319,6 +327,17 @@ pub(super) fn action_bar(
         move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
             state.set_selected(Some(version));
             on_action(VersionAction::Analyze { version }, window, cx);
+        }
+    };
+    // 固化：复制这一版 pin 住的全局表成本地独立资产（原引用保留），非破坏性，不弹确认。
+    let solidify = {
+        let state = state.clone();
+        let on_action = on_action.clone();
+        move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+            state.set_selected(Some(version));
+            state.set_busy(true);
+            state.set_note(Some(format!("正在固化 v{version}…")));
+            on_action(VersionAction::Solidify { version }, window, cx);
         }
     };
     // 删副本不可恢复（不进回收站）：先过一个确认框，再交给宿主。
@@ -378,6 +397,15 @@ pub(super) fn action_bar(
                         .tooltip("把这一版的内容副本挂成分析视图（只读：本体与版本都不动）")
                         .disabled(!can_analyze)
                         .on_click(analyze),
+                )
+                .child(
+                    Button::new("version-solidify")
+                        .small()
+                        .debug_selector(|| "version-solidify".to_string())
+                        .label(format!("固化为本地表（v{version}）"))
+                        .tooltip("把这一版引用的全局表复制成本地独立表；原引用保留，其他版本仍按引用访问")
+                        .disabled(!can_solidify)
+                        .on_click(solidify),
                 )
                 .child(
                     Button::new("version-restore")
@@ -513,4 +541,3 @@ pub(super) fn timeline_section(theme: &Theme, rows: &[crate::model::TimelineRow]
     }
     list
 }
-

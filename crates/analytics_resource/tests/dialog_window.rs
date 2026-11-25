@@ -380,11 +380,20 @@ fn version_row(version: i32, is_current: bool, has_copy: bool) -> VersionRow {
         hash_short: "0123456789ab".to_string(),
         has_copy,
         is_table: false,
+        is_global_ref: false,
         delta_label: if version > 1 {
             format!("较 v{} 大小+0.2 KB · 指纹已变", version - 1)
         } else {
             String::new()
         },
+    }
+}
+
+fn ref_version_row(version: i32, is_current: bool) -> VersionRow {
+    VersionRow {
+        is_global_ref: true,
+        has_copy: false,
+        ..version_row(version, is_current, false)
     }
 }
 
@@ -464,6 +473,43 @@ fn version_dialog_lists_rows_and_shows_actions_after_selection(cx: &mut TestAppC
         "换过的行要真渲染出来（还原后的新版本就在列表里）"
     );
     assert_eq!(closed.get(), 0, "对话框还开着：动作不该把它关掉");
+}
+
+#[gpui_kit::test]
+fn version_dialog_offers_solidify_for_a_global_reference(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let cx = harness(cx);
+    let closed: Rc<Cell<usize>> = Rc::new(Cell::new(0));
+    let state = VersionDialogState::new();
+    {
+        let closed = closed.clone();
+        cx.update(|window, cx| {
+            open_version_dialog_with(
+                window,
+                cx,
+                VersionDialogSeed {
+                    name: "月报".to_string(),
+                    current_version: 2,
+                    rows: vec![ref_version_row(2, true), ref_version_row(1, false)],
+                    timeline: vec![],
+                },
+                state.clone(),
+                move |_action, _window, _cx| {},
+                move |_cx| closed.set(closed.get() + 1),
+            );
+        });
+    }
+    draw(cx);
+
+    state.set_selected(Some(1));
+    draw(cx);
+    assert!(
+        cx.debug_bounds("version-solidify").is_some(),
+        "全局引用的历史版本要能固化成本地表"
+    );
+    // 引用资产没有本地副本：还原 / 取回 / 删副本都不该可用（按钮即使排版也置灰）。
+    assert!(cx.debug_bounds("version-restore").is_some());
+    assert!(cx.debug_bounds("version-checkout").is_some());
 }
 
 fn repair_row(group: RepairGroup, title: &str) -> RepairRow {

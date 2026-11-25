@@ -91,6 +91,7 @@ impl GlobalInstanceStore {
                 &id,
                 alias,
                 &origin_ref,
+                &table,
                 hash.as_deref(),
                 rows,
                 cols,
@@ -136,7 +137,7 @@ impl GlobalInstanceStore {
                     ?1, 'table', ?2, ?3, 'null', 'project', ?4, ?5, NULL,
                     1, NULL, NULL, NULL, ?6, ?6, NULL, NULL,
                     'table_ref', ?7, NULL, 1, NULL,
-                    NULL, NULL, NULL, ?6,
+                    NULL, ?9, NULL, ?6,
                     'reference', NULL, 'global', ?8, NULL, NULL
                 )
                 "#,
@@ -148,7 +149,8 @@ impl GlobalInstanceStore {
                     cols,
                     &now,
                     hash.as_deref(),
-                    &origin_ref
+                    &origin_ref,
+                    &table
                 ],
             )
             .map_err(|e| InstanceOpError::Core(sqlite_err("insert_project_ref")(e)))?;
@@ -234,6 +236,7 @@ impl GlobalInstanceStore {
         id: &str,
         alias: Option<&str>,
         origin_ref: &str,
+        table: &str,
         hash: Option<&str>,
         rows: Option<i32>,
         cols: Option<i32>,
@@ -261,9 +264,9 @@ impl GlobalInstanceStore {
                 "UPDATE analytics_resources \
                  SET alias = ?2, origin_ref = ?3, content_hash = ?4, row_count = ?5, \
                      column_count = ?6, parent_version_id = ?7, version = version + 1, \
-                     updated_at = ?8 \
+                     source_table = ?9, updated_at = ?8 \
                  WHERE id = ?1 AND deleted_at IS NULL",
-                rusqlite::params![id, alias, origin_ref, hash, rows, cols, snapshot_id, now],
+                rusqlite::params![id, alias, origin_ref, hash, rows, cols, snapshot_id, now, table],
             )
             .map_err(|e| InstanceOpError::Core(sqlite_err("append_project_ref")(e)))?;
         if affected == 0 {

@@ -117,6 +117,14 @@ impl SidebarPanel {
             self.finish_version_action("项目为只读模式，不能改版本".to_string(), cx);
             return;
         }
+        // 固化引用版本 = 复制选中的全局表成本地独立资产（原引用保留）。目标名在宿主拼好，
+        // 重名由工作线程拦下并回失败（不做覆盖：引用版本不是本地本体，没有“覆盖”语义）。
+        if let VersionAction::Solidify { version } = action {
+            let target = format!("{name} 固化 v{version}");
+            resource_jobs::enqueue_solidify(root, resource_id.to_string(), version, target);
+            self.ensure_resources_pump(cx);
+            return;
+        }
         resource_jobs::enqueue_version_action(
             root,
             read_only,
@@ -690,6 +698,16 @@ impl SidebarPanel {
                     analytics_resource::global::DistributeShape::File => "重建为文件",
                 }
             ),
+            resource_jobs::OpOutcome::Referenced {
+                name,
+                version,
+                global_version,
+            } => format!(
+                "资产库：已引用全局「{name}」v{global_version}（项目引用 v{version}，未复制数据）"
+            ),
+            resource_jobs::OpOutcome::Solidified { name, version } => {
+                format!("资产库：已固化引用版本为本地资产「{name}」v{version}")
+            }
             resource_jobs::OpOutcome::GlobalDeleted {
                 name,
                 versions,

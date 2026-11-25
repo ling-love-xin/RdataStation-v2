@@ -156,7 +156,12 @@ pub fn can_view_stats(detail: &ArchiveDetail) -> bool {
             .and_then(file_reader_function)
             .is_some(),
         ArchiveKind::TableRef => {
-            detail.source_connection_id.is_some() && detail.source_table.is_some()
+            // 全局引用：本体在全局分析库，按登记的实际表名只读取样即可。
+            if detail.origin_kind.as_deref() == Some(crate::model::ORIGIN_KIND_GLOBAL) {
+                detail.source_table.is_some()
+            } else {
+                detail.source_connection_id.is_some() && detail.source_table.is_some()
+            }
         }
         // 表型：本体就是分析库里的表，只要有登记表名就能直接取样。
         ArchiveKind::AnalyticsTable => detail.analytics_table.is_some(),

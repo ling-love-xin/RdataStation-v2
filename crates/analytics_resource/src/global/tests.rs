@@ -1287,19 +1287,20 @@ async fn g021_reference_asset_and_solidify_selected_version() {
     assert_eq!(first.version, 1, "引用资产首版从 1 开始");
 
     // 项目侧只有引用登记，没有物理表，也没有 analytics_table。
-    let (kind, table, origin_kind, origin_ref, version, alias): (
+    let (kind, table, origin_kind, origin_ref, version, alias, source_table): (
         String,
         Option<String>,
         Option<String>,
         Option<String>,
         i32,
         Option<String>,
+        Option<String>,
     ) = {
         let conn = env.project_pool.acquire().await.expect("project conn");
         let inner = conn.inner().expect("inner");
         inner
             .query_row(
-                "SELECT kind, analytics_table, origin_kind, origin_ref, version, alias \
+                "SELECT kind, analytics_table, origin_kind, origin_ref, version, alias, source_table \
                  FROM analytics_resources WHERE id = ?1",
                 rusqlite::params![first.resource_id],
                 |row| {
@@ -1310,6 +1311,7 @@ async fn g021_reference_asset_and_solidify_selected_version() {
                         row.get(3)?,
                         row.get(4)?,
                         row.get(5)?,
+                        row.get(6)?,
                     ))
                 },
             )
@@ -1324,6 +1326,10 @@ async fn g021_reference_asset_and_solidify_selected_version() {
         .contains("\"version\":1"));
     assert_eq!(version, 1);
     assert_eq!(alias.as_deref(), Some("订单引用"));
+    assert!(
+        source_table.is_some(),
+        "引用行要记 pin 版本的全局实际表名，打开/统计才能取样"
+    );
 
     // 引用资产的 name 是全局本名，项目内不能 rename，只能改 alias。
     let store = crate::store::AnalyticsResourceStore::new(env.project_pool.clone());

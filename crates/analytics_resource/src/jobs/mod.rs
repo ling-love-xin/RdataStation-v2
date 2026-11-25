@@ -47,7 +47,7 @@ use archive::{
     ArchiveJob, CheckoutJob, TrashActionJob, TrashJob, TrashListJob, UndoJob, load_trash,
     reload_trash_after, run_archive, run_checkout, run_trash, run_trash_action, run_undo,
 };
-use global::{DeleteGlobalJob, DistributeJob, PromoteJob, run_delete_global, run_distribute, run_promote};
+use global::{DeleteGlobalJob, DistributeJob, PromoteJob, ReferenceGlobalJob, SolidifyRefJob, run_delete_global, run_distribute, run_promote, run_reference, run_solidify};
 use index::{
     IndexRepairActionJob, IndexScanJob, load_index_report, reload_index_scan_after,
     run_repair_action,
@@ -95,6 +95,8 @@ pub(crate) enum Job {
     SetAlias(SetAliasJob),
     Promote(PromoteJob),
     Distribute(DistributeJob),
+    Reference(ReferenceGlobalJob),
+    Solidify(SolidifyRefJob),
     DeleteGlobal(DeleteGlobalJob),
 }
 
@@ -142,6 +144,14 @@ pub enum OpOutcome {
         version: i32,
         shape: crate::global::DistributeShape,
     },
+    /// 已把全局资产引用到本项目：引用资产名 / 项目版本 / 引用的全局版本。
+    Referenced {
+        name: String,
+        version: i32,
+        global_version: i32,
+    },
+    /// 已把引用版本固化成独立本地资产：新资产名 / 本地版本。
+    Solidified { name: String, version: i32 },
     /// 已从全局实例删除：资产名 / 版本数 / 表数 / 曾分发过的项目数
     /// （回执要说明"这些项目里的副本还在"）。
     GlobalDeleted {
@@ -409,6 +419,18 @@ fn handle_job(rt: &tokio::runtime::Runtime, job: Job) {
                 // 分发把全局表落进项目库：项目列表会出现新行，必须重取。
                 refresh_after_op(&rt, job.project_root, false);
             }
+            Job::Reference(job) => {
+                let outcome = rt.block_on(run_reference(&job));
+                *lock(&jobs().op_result) = Some(outcome);
+                // 引用只写项目登记与全局 pin：项目列表要多一条引用行。
+                refresh_after_op(&rt, job.project_root, false);
+            }
+            Job::Solidify(job) => {
+                let outcome = rt.block_on(run_solidify(&job));
+                *lock(&jobs().op_result) = Some(outcome);
+                // 固化会在项目里新建一条本地资产。
+                refresh_after_op(&rt, job.project_root, false);
+            }
             Job::DeleteGlobal(job) => {
                 let outcome = rt.block_on(run_delete_global(&job));
                 *lock(&jobs().op_result) = Some(outcome);
@@ -436,7 +458,10 @@ pub use archive::{
     enqueue_archive, enqueue_checkout, enqueue_trash, enqueue_trash_action, enqueue_trash_list,
     enqueue_undo,
 };
-pub use global::{enqueue_delete_global, enqueue_distribute, enqueue_promote};
+pub use global::{
+    enqueue_delete_global, enqueue_distribute, enqueue_promote, enqueue_reference,
+    enqueue_solidify,
+};
 pub use index::enqueue_index_repair_action;
 pub use index::enqueue_index_scan;
 pub use rename::{enqueue_rename, enqueue_set_alias};

@@ -53,6 +53,11 @@ pub(super) fn build(
     let can_checkout = p.can_checkout;
     let can_stats = p.can_stats;
     let can_distribute = p.can_distribute;
+    // 引用只认表型全局资产：文件型暂时没有引用语义（分发仍可复制一份）。
+    let can_reference = can_distribute
+        && open_detail
+            .as_ref()
+            .is_some_and(|detail| detail.payload_rel_path.is_none());
     let can_delete_global = p.can_delete_global;
     let can_promote = p.can_promote;
     let can_rename = p.can_rename;
@@ -81,6 +86,25 @@ pub(super) fn build(
                                         if let Some(detail) = detail.as_ref() {
                                             
                                             host.request_open(detail, window, cx);
+                                        }
+                                    }
+                                }),
+                        );
+                        // 「引用到本项目」：不复制数据，只建引用行并 pin 这一版。
+                        menu = menu.item(
+                            PopupMenuItem::new(tr("引用到本项目"))
+                                .disabled(!can_reference)
+                                .on_click({
+                                    let host = host.clone();
+                                    let detail = open_detail.clone();
+                                    move |_, window, cx| {
+                                        if let Some(detail) = detail.as_ref() {
+                                            host.request_reference_from_global(
+                                                &detail.name,
+                                                detail.version,
+                                                window,
+                                                cx,
+                                            );
                                         }
                                     }
                                 }),

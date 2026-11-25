@@ -2,6 +2,7 @@
 
 use shared::i18n::tr;
 use super::*;
+use gpui_kit::prelude::FluentBuilder as _;
 
 /// 全局行的分发按钮：`(是否可点, 按钮下方那句说明)`。
 ///
@@ -65,6 +66,9 @@ pub(super) fn render_actions(
             let detail_for_delete = detail.clone();
             // 分发要往本项目库写表：只读项目 / 本体缺失都挡住（与列表右键菜单同一判据）。
             let (can_distribute, distribute_hint) = distribute_affordance(&ctx);
+            // 引用只认表型全局资产：文件型暂时没有引用语义（分发仍可复制一份）。
+            let is_file_global = detail.payload_rel_path.is_some();
+            let can_reference = can_distribute && !is_file_global;
             let can_delete_global = crate::model::can_delete_global(&ctx);
             out.push(
                 div()
@@ -75,24 +79,51 @@ pub(super) fn render_actions(
                     .border_color(border)
                     .pt_2()
                     .child(
-                        div().h_flex().w_full().gap_2().child(
-                            Button::new("archive-detail-distribute")
-                                .ghost()
-                                .label(tr("分发到本项目…"))
-                                .disabled(!can_distribute)
-                                .on_click({
-                                    let host = host.clone();
-                                    move |_, window, cx| {
-                                        host.request_distribute_from_global(
-                                            &detail_for_distribute.name,
-                                            window,
-                                            cx,
-                                        )
-                                    }
-                                }),
-                        ),
+                        div()
+                            .h_flex()
+                            .w_full()
+                            .gap_2()
+                            .child(
+                                Button::new("archive-detail-reference")
+                                    .label(tr("引用到本项目"))
+                                    .disabled(!can_reference)
+                                    .on_click({
+                                        let host = host.clone();
+                                        let detail_for_reference = detail.clone();
+                                        move |_, window, cx| {
+                                            host.request_reference_from_global(
+                                                &detail_for_reference.name,
+                                                detail_for_reference.version,
+                                                window,
+                                                cx,
+                                            )
+                                        }
+                                    }),
+                            )
+                            .child(
+                                Button::new("archive-detail-distribute")
+                                    .ghost()
+                                    .label(tr("分发到本项目…"))
+                                    .disabled(!can_distribute)
+                                    .on_click({
+                                        let host = host.clone();
+                                        move |_, window, cx| {
+                                            host.request_distribute_from_global(
+                                                &detail_for_distribute.name,
+                                                window,
+                                                cx,
+                                            )
+                                        }
+                                    }),
+                            ),
                     )
-                    .child(div().text_xs().text_color(muted).child(distribute_hint))
+                    .child(div().text_xs().text_color(muted).child(if is_file_global {
+                        tr("文件型全局资产暂不支持引用；分发会复制一份到本项目")
+                    } else if can_reference {
+                        tr("引用不复制数据：本项目只记一条引用并钉住这一版；分发会复制出一份本地表")
+                    } else {
+                        distribute_hint
+                    }))
                     // 危险区（刀 B）：删除的是**全局这一份**，已分发副本不受影响。
                     .child(
                         div()
@@ -143,6 +174,8 @@ pub(super) fn render_actions(
             let can_open = can_open(&ctx);
             let can_checkout = can_checkout(&ctx);
             let is_reference = detail.payload_mode == PayloadMode::Reference;
+            let is_global_ref = detail.kind == ArchiveKind::TableRef
+                && detail.origin_kind.as_deref() == Some(crate::model::ORIGIN_KIND_GLOBAL);
             // 危险区（原型 §3.1）：与日常动作隔开（分隔线 + danger 文字按钮）。
             // copy 与 reference 都可移入回收站（B3 服务层已支持）：copy 搬本体进回收站，
             // reference 只删登记行 + 版本元数据，本体留在源位置。
@@ -152,6 +185,8 @@ pub(super) fn render_actions(
                 "本体缺失，先在状态行「修复…」处理"
             } else if actions.read_only {
                 "项目处于只读模式"
+            } else if is_global_ref {
+                "全局引用：打开 = 按 pin 的版本只读查看全局表；固化 = 把这一版复制成本地独立表（原引用保留）"
             } else if changed {
                 "内容已变：先在状态行「修复…」接受当前内容或从历史还原，再取回"
             } else if is_table {
@@ -174,6 +209,7 @@ pub(super) fn render_actions(
             let detail_for_open = detail.clone();
             let detail_for_checkout = detail.clone();
             let detail_for_delete = detail.clone();
+            let detail_for_solidify = detail.clone();
             out.push(
                 div()
                     .v_flex()
@@ -210,7 +246,31 @@ pub(super) fn render_actions(
                                             host.request_checkout(&detail, window, cx)
                                         }
                                     }),
-                            ),
+                            )
+                            .when(is_global_ref, |row| {
+                                row.child(
+                                    Button::new("archive-detail-solidify")
+                                        .label(tr("固化当前版本为本地表…"))
+                                        .disabled(actions.read_only)
+                                        .on_click({
+                                            let host = host.clone();
+                                            let detail = detail_for_solidify.clone();
+                                            move |_, window, cx| {
+                                                let target = format!(
+                                                    "{} 固化 v{}",
+                                                    detail.name, detail.version
+                                                );
+                                                host.request_solidify_ref(
+                                                    &detail.id,
+                                                    detail.version,
+                                                    &target,
+                                                    window,
+                                                    cx,
+                                                )
+                                            }
+                                        }),
+                                )
+                            }),
                     )
                     .child(div().text_xs().text_color(muted).child(hint))
                     .child(

@@ -18,7 +18,7 @@
 
 ## 2. 项目引用资产
 
-v1 不新增 `kind` 值，沿用 `table_ref` 落库（避免重建 `kind` CHECK 的迁移），用 `origin_kind='global'` 和 `config` 区分“全局引用”与历史远端引用。
+v1 不新增 `kind` 值，沿用 `table_ref` 落库（避免重建 `kind` CHECK 的迁移）。引用身份只用三列表达：`kind='table_ref'` + `origin_kind='global'` + `origin_ref`；`config` 列 v2 已无消费方、读取恒为 Null，**不参与引用身份**。
 
 建议的项目行：
 
@@ -32,15 +32,15 @@ v1 不新增 `kind` 值，沿用 `table_ref` 落库（避免重建 `kind` CHECK 
   "payload_mode": "reference",
   "readonly": 1,
   "origin_kind": "global",
-  "origin_ref": "{\"instance\":\"全局行 id\",\"version\":2}",
-  "config": "{\"global_name\":\"orders\",\"global_version\":2}"
+  "origin_ref": "{\"instance\":\"全局行 id\",\"version\":2}"
 }
 ```
 
 - `name` 保持全局本名，作为引用身份；`alias` 是项目内改名。
-- 引用版本只记当前 pin；项目版本快照记同一组 `global_name/global_version`。
+- 引用身份由 `name` + `origin_kind` + `origin_ref` 表达；`origin_ref` 记 `{"instance": 全局行 id, "version": N}`。
+- 引用版本只记当前 pin；项目版本快照的 `origin_ref` 记同一组 `instance/version`。
 - 引用行没有 `analytics_table`，不落本地数据。
-- 打开/查看时按 `global_name + global_version` 找全局实际表名，短命只读挂载。
+- 打开/查看时按 `origin_ref` 的 `instance` 找全局实际表名，短命只读挂载。
 
 ## 3. 引用登记与保留
 
@@ -68,9 +68,9 @@ analytics_global_refs(
 1. 校验 `global_name + global_version` 的表仍在。
 2. 用现有 parquet 中转路径把该全局表复制到项目分析库。
 3. 新建独立 `AnalyticsTable` 本地资产，版本从 `v1` 开始。
-4. 默认复制引用资产的别名、分组、标签；显示名加“（已固化）”，允许改名。
+4. 默认复制引用资产的别名、分组、标签；当前 UI 生成的目标名为「<全局名> 固化 vN」（重名则失败回执，不覆盖），之后可改名。
 5. `origin_ref` 记“固化自全局 vN”。
-6. 原引用资产保留，`vN` 标记“已固化”，释放该版本 pin；其他版本 pin 不动。
+6. 原引用资产保留，释放该版本 pin；其他版本 pin 不动。v1 不持久化“已固化”标记（后续需要时再由本地固化资产的 `origin_ref` 推断）。
 7. 失败则保留原引用和 pin，不产生半成品本地资产。
 
 固化后的本地资产不再依赖全局；该全局版本在没有其他 pin 后可以正常裁剪。
@@ -103,4 +103,7 @@ analytics_global_refs(
 | 项目引用资产行 | `crates/analytics_resource/src/global/refs.rs`：`reference_to_project`（首建 v1 / 同引用追加版本） |
 | 固化动作 | `crates/analytics_resource/src/global/refs.rs`：`solidify_ref_version`；底层 `distribute.rs`：`distribute_version` |
 | 回归证据 | `crates/analytics_resource/src/global/tests.rs`：`g021`（引用→追加→固化选中 v1）、`g022`（固化失败保留 pin/引用） |
-| UI 引用入口/版本动作 | 待落：`resource_view` / `detail_view` |
+| 作业层 | `crates/analytics_resource/src/jobs/global.rs`：`ReferenceGlobalJob` / `SolidifyRefJob`；`OpOutcome::Referenced` / `Solidified` |
+| UI 引用入口 | 全局行详情 `crates/analytics_resource/src/detail_view/actions.rs` 与右键菜单 `resource_view/list_delegate/menu.rs`：同时保留「引用到本项目」与「分发到本项目…」 |
+| UI 固化入口 | 引用资产版本对话框：`dialogs/version/mod.rs` 的 `VersionAction::Solidify`、`dialogs/version/render.rs` 按钮；`present/versions.rs` 标记 `is_global_ref` |
+| 冲突处理 | 固化目标名冲突走失败回执（不做覆盖、不弹同名冲突框） |

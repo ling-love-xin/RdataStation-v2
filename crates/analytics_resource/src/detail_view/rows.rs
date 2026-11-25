@@ -10,8 +10,15 @@ pub fn detail_rows(detail: &ArchiveDetail) -> Vec<(String, Vec<(&'static str, St
     let mut sections = Vec::new();
 
     // 1) 基本信息
+    let kind_text = if detail.kind == ArchiveKind::TableRef
+        && detail.origin_kind.as_deref() == Some(crate::model::ORIGIN_KIND_GLOBAL)
+    {
+        "全局引用（只读，可固化为本地表）"
+    } else {
+        kind_label(detail.kind)
+    };
     let mut basic = vec![
-        ("种类", kind_label(detail.kind).to_string()),
+        ("种类", kind_text.to_string()),
         ("版本", format!("v{}", detail.version)),
         (
             "实例",

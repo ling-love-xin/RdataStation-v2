@@ -108,6 +108,10 @@ impl ArchiveDetail {
             has_table: self.analytics_table.is_some(),
             read_only,
             multi_count,
+            // 全局引用 v1 以 `table_ref` 落库、上游是全局实例：它没有本地本体，
+            // 本名不可改（只能改项目别名）。
+            global_ref: matches!(self.kind, crate::ArchiveKind::TableRef)
+                && self.origin_kind.as_deref() == Some(crate::model::ORIGIN_KIND_GLOBAL),
         }
     }
 }

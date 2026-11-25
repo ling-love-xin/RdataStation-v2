@@ -204,6 +204,25 @@ pub trait ResourcesHost: 'static {
     ///
     /// 只带全局资源的**显示名**（分发只认全局登记的名字；本体在全局 DuckDB）。
     fn request_distribute_from_global(&self, name: &str, window: &mut Window, cx: &mut App);
+    /// 引用到本项目：不复制数据，只建项目引用行并 pin 全局版本（`global_version`）。
+    fn request_reference_from_global(
+        &self,
+        _name: &str,
+        _global_version: i32,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) {
+    }
+    /// 把引用资产的项目版本 `project_version` 固化成本地独立表（`target` 为新资产名）。
+    fn request_solidify_ref(
+        &self,
+        _resource_id: &str,
+        _project_version: i32,
+        _target: &str,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) {
+    }
     /// 从全局实例删除（刀 B）：删全局各版表与登记，已分发到项目的副本不受影响。
     fn request_delete_global(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App);
     /// 查看来源链（刀 C）：顺着一行行的直接上游往上追（只读，不改数据）。

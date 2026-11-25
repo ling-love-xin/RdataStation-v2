@@ -128,6 +128,14 @@
 只删更早版本的**表**，当前版本那张是本体、永远留，登记行与版本快照一条不删——被清掉的那版
 在分发时报「已被保留策略清理」，元数据仍在、版本链还看得见。
 
+**全局引用（2026-11-25）**：项目侧不再只能“分发复制一份”，也可以只记一条
+`kind='table_ref'` + `origin_kind='global'` 的引用资产，按项目版本 pin 全局版本
+（`global/refs.rs`、迁移 `global/038_analytics_global_refs.sql`）。引用行 `analytics_table`
+为空、`source_table` 记 pin 的全局实际表名，打开 / 查看统计走 `SampleSource::on_global`；
+`name` 是全局本名不可改，项目内只能改 `alias`。版本对话框对引用资产提供「固化为本地表」：
+复制选中的全局版本为独立 `analytics_table` 资产，原引用保留，只释放该版 pin。全局删除 /
+裁剪遇到活跃 pin 会跳过或拒绝；引用资产被永久删除时释放其全部 pin。
+
 **表型存档的升级**（本体是项目分析库里的一张表，而不是文件）走另一条路：入口只给表名
 （`PromoteRequest::source_table`），工作线程用项目写连接 `COPY <表> TO parquet`
 （**不带 LIMIT，整表搬**）→ 再按数据文件升级。绕这一步是因为两个 DuckDB 都是单写者，

@@ -36,6 +36,25 @@ pub(crate) struct DeleteGlobalJob {
     pub(crate) name: String,
 }
 
+/// 一次「引用到本项目」任务（全局 → 项目引用资产；不落数据）。
+pub(crate) struct ReferenceGlobalJob {
+    pub(crate) project_root: PathBuf,
+    pub(crate) name: String,
+    /// 引用的全局版本（列表/详情当前看到的那一版）。
+    pub(crate) global_version: i32,
+    /// 项目内别名（None = 不设）。
+    pub(crate) alias: Option<String>,
+}
+
+/// 一次「固化引用版本」任务（引用资产 vN → 独立本地表资产）。
+pub(crate) struct SolidifyRefJob {
+    pub(crate) project_root: PathBuf,
+    pub(crate) resource_id: String,
+    pub(crate) project_version: i32,
+    /// 固化成的新本地资产名 / 物理表名（调用方保证唯一，冲突走 Conflict）。
+    pub(crate) target: String,
+}
+
 /// 删除全局资产（工作线程上执行）。
 pub(crate) async fn run_delete_global(job: &DeleteGlobalJob) -> OpOutcome {
     use crate::global::GlobalInstanceStore;
@@ -338,6 +357,136 @@ pub fn enqueue_promote(
     }));
 }
 
+/// 引用到本项目（工作线程上执行）：项目侧建 `table_ref` 行 + pin 全局版本，不复制数据。
+pub(crate) async fn run_reference(job: &ReferenceGlobalJob) -> OpOutcome {
+    use crate::global::{GlobalInstanceStore, InstanceOpError};
+
+    let gstore = match GlobalInstanceStore::production().await {
+        Ok(store) => store,
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action: "引用全局资产",
+                reason: format!("打开全局系统库失败：{reason}"),
+            };
+        }
+    };
+    let project = match open_project_conn(&job.project_root).await {
+        Ok(project) => project,
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action: "引用全局资产",
+                reason,
+            };
+        }
+    };
+    match gstore
+        .reference_to_project(
+            &project,
+            &job.project_root,
+            &job.name,
+            job.global_version,
+            job.alias.as_deref(),
+        )
+        .await
+    {
+        Ok(outcome) => OpOutcome::Referenced {
+            name: outcome.name,
+            version: outcome.version,
+            global_version: outcome.global_version,
+        },
+        Err(InstanceOpError::NotFound { name }) => OpOutcome::Failed {
+            action: "引用全局资产",
+            reason: format!("全局实例中没有「{name}」v{}", job.global_version),
+        },
+        Err(reason) => OpOutcome::Failed {
+            action: "引用全局资产",
+            reason: reason.to_string(),
+        },
+    }
+}
+
+/// 固化引用版本（工作线程上执行）：复制指定全局版本 → 独立本地表资产。
+pub(crate) async fn run_solidify(job: &SolidifyRefJob) -> OpOutcome {
+    use crate::global::{GlobalInstanceStore, InstanceOpError};
+
+    let gstore = match GlobalInstanceStore::production().await {
+        Ok(store) => store,
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action: "固化引用版本",
+                reason: format!("打开全局系统库失败：{reason}"),
+            };
+        }
+    };
+    let project = match open_project_conn(&job.project_root).await {
+        Ok(project) => project,
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action: "固化引用版本",
+                reason,
+            };
+        }
+    };
+    match gstore
+        .solidify_ref_version(
+            &project,
+            &job.project_root,
+            &job.resource_id,
+            job.project_version,
+            &job.target,
+        )
+        .await
+    {
+        Ok(outcome) => OpOutcome::Solidified {
+            name: outcome.name,
+            version: outcome.version,
+        },
+        Err(InstanceOpError::Conflict { name, field }) => OpOutcome::Failed {
+            action: "固化引用版本",
+            reason: format!(
+                "目标名「{name}」已存在（冲突字段：{}），请换一个名字",
+                field.label()
+            ),
+        },
+        Err(reason) => OpOutcome::Failed {
+            action: "固化引用版本",
+            reason: reason.to_string(),
+        },
+    }
+}
+
+/// 提交一次「引用到本项目」（引用 = pin 全局版本，不写本地数据）。
+pub fn enqueue_reference(
+    project_root: PathBuf,
+    name: String,
+    global_version: i32,
+    alias: Option<String>,
+) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
+    let _ = jobs().tx.send(Job::Reference(ReferenceGlobalJob {
+        project_root,
+        name,
+        global_version,
+        alias,
+    }));
+}
+
+/// 提交一次「固化引用版本」（把选中的引用版本复制成本地独立表资产）。
+pub fn enqueue_solidify(
+    project_root: PathBuf,
+    resource_id: String,
+    project_version: i32,
+    target: String,
+) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
+    let _ = jobs().tx.send(Job::Solidify(SolidifyRefJob {
+        project_root,
+        resource_id,
+        project_version,
+        target,
+    }));
+}
+
 /// 提交一次「从全局分发」（§13；事件路径调用：全局实例列表动作之后）。
 ///
 /// `target` = 项目侧落库名（None = 沿用全局名；冲突询问「改名」分支填入）；
@@ -360,8 +509,7 @@ pub fn enqueue_distribute(
 /// 提交一次「从全局实例删除」（刀 B；确认框之后）。
 pub fn enqueue_delete_global(project_root: PathBuf, name: String) {
     jobs().pending.fetch_add(1, Ordering::SeqCst);
-    let _ = jobs().tx.send(Job::DeleteGlobal(DeleteGlobalJob {
-        project_root,
-        name,
-    }));
+    let _ = jobs()
+        .tx
+        .send(Job::DeleteGlobal(DeleteGlobalJob { project_root, name }));
 }

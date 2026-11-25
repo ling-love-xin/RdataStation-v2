@@ -252,6 +252,32 @@ impl ResourcesHost for ResourceHost {
     fn request_distribute_from_global(&self, name: &str, _window: &mut Window, cx: &mut App) {
         detail_actions::request_distribute_from_global(self, name, _window, cx);
     }
+    fn request_reference_from_global(
+        &self,
+        name: &str,
+        global_version: i32,
+        _window: &mut Window,
+        cx: &mut App,
+    ) {
+        detail_actions::request_reference_from_global(self, name, global_version, _window, cx);
+    }
+    fn request_solidify_ref(
+        &self,
+        resource_id: &str,
+        project_version: i32,
+        target: &str,
+        _window: &mut Window,
+        cx: &mut App,
+    ) {
+        detail_actions::request_solidify_ref(
+            self,
+            resource_id,
+            project_version,
+            target,
+            _window,
+            cx,
+        );
+    }
 
     /// 从全局实例删除（刀 B）：确认后入队，只清全局那一份，已分发副本不动。
     fn request_delete_global(

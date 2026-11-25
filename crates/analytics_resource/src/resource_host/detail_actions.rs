@@ -29,8 +29,33 @@ fn open_analytics_table(host: &ResourceHost, detail: &ArchiveDetail, cx: &mut Ap
         .open_insight_source_table(source, detail.name.clone(), cx);
 }
 
+/// 全局引用：按引用行登记的全局实际表名，短命只读挂载取样（与全局行同一路径）。
+fn open_global_ref(host: &ResourceHost, detail: &ArchiveDetail, cx: &mut App) {
+    let Some(table) = detail.source_table.as_deref() else {
+        host.notice(tr("资产库：这条全局引用没有登记全局表名，无法取样"), cx);
+        return;
+    };
+    let label = detail.alias.clone().unwrap_or_else(|| detail.name.clone());
+    let source = insight::SampleSource::on_global(table, label.clone());
+    host.backend.open_insight_source_table(source, label, cx);
+    host.notice(
+        format!(
+            "资产库：已在洞察面板打开全局引用「{}」（取样）——全局表只读",
+            detail.name
+        ),
+        cx,
+    );
+}
+
 pub(super) fn request_open(host: &ResourceHost, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
 
+        // 全局引用：没有本地本体，按登记的实际全局表名只读取样。
+        if detail.kind == ArchiveKind::TableRef
+            && detail.origin_kind.as_deref() == Some(crate::model::ORIGIN_KIND_GLOBAL)
+        {
+            open_global_ref(host, detail, cx);
+            return;
+        }
         // 表型先行：它没有文件本体，不能走下面的 `payload_path`（那样必然静默失败）。
         if detail.kind == ArchiveKind::AnalyticsTable {
             open_analytics_table(host, detail, cx);
@@ -124,6 +149,10 @@ pub(super) fn request_view_stats(host: &ResourceHost, detail: &ArchiveDetail, _w
             }
             // 远端引用：没有本体，按来源连接重新取样（连接不在或已删时报给洞察侧）。
             ArchiveKind::TableRef => {
+                if detail.origin_kind.as_deref() == Some(crate::model::ORIGIN_KIND_GLOBAL) {
+                    open_global_ref(host, detail, cx);
+                    return;
+                }
                 let (Some(conn_id), Some(table)) = (
                     detail.source_connection_id.as_deref(),
                     detail.source_table.as_deref(),
@@ -282,6 +311,33 @@ pub(super) fn request_distribute_from_global(host: &ResourceHost, name: &str, _w
         resource_jobs::enqueue_distribute(root, name.to_string(), None, false);
         host.backend.refresh_resources(cx);
         host.notice("资产库：正在从全局分发…", cx);
+}
+
+pub(super) fn request_reference_from_global(host: &ResourceHost, name: &str, global_version: i32, _window: &mut Window, cx: &mut App) {
+    let Some(root) = host.require_project("无法引用全局资产", cx) else {
+        return;
+    };
+    if host.read_only() {
+        host.notice(tr("资产库：项目为只读模式，不能引用全局资产"), cx);
+        return;
+    }
+    // 引用 = 建 `table_ref` 行 + pin 全局版本；不复制数据，显示名沿用全局本名。
+    resource_jobs::enqueue_reference(root, name.to_string(), global_version, None);
+    host.backend.refresh_resources(cx);
+    host.notice("资产库：正在引用到本项目…", cx);
+}
+
+pub(super) fn request_solidify_ref(host: &ResourceHost, resource_id: &str, project_version: i32, target: &str, _window: &mut Window, cx: &mut App) {
+    let Some(root) = host.require_project("无法固化引用版本", cx) else {
+        return;
+    };
+    if host.read_only() {
+        host.notice(tr("资产库：项目为只读模式，不能固化引用版本"), cx);
+        return;
+    }
+    resource_jobs::enqueue_solidify(root, resource_id.to_string(), project_version, target.to_string());
+    host.backend.refresh_resources(cx);
+    host.notice("资产库：正在固化引用版本…", cx);
 }
 
 /// 从全局实例删除（刀 B）：确认框说清「删的是全局这一份，已分发副本不受影响」。
