@@ -3808,14 +3808,14 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
 
 | 项 | 真值 | 本仓 | 原因 |
 | --- | --- | --- | --- |
-| 定时重跑 | `AutoRefreshJob` 按间隔循环 `refreshData` | **已接（2026-11-25）**：面板内定时任务（代际校验），到点只入队 `ResultRequest::Refresh`，执行仍归宿主（§56.5） | 周期口径差：真值从「上一次刷新完成」起算，本仓从「上一次触发」起算（固定周期） |
-| 「自定义...」对话框 | `AutoRefreshConfigDialog`（间隔 + 错误时停止） | **仍未做**：菜单项在，`ConfigureAutoRefresh` 仍是空分支 | 需要一张输入浮层（间隔 + 「错误时停止」勾选）；定时器已就位，对话框单独一刀 |
+| 定时重跑 | `AutoRefreshJob` 按间隔循环 `refreshData` | **已接（2026-11-25）**：面板内定时任务（代际校验），到点只入队 `ResultRequest::Refresh`，执行仍归宿主（§56.4） | 周期口径差：真值从「上一次刷新完成」起算，本仓从「上一次触发」起算（固定周期） |
+| 「自定义...」对话框 | `AutoRefreshConfigDialog`（间隔 + 错误时停止） | **已接（2026-11-25）**：面板内模态浮层（间隔输入 + 「错误时停止」勾选 + 取消/确定），确定后 `setRefreshSettings` + `enableAutoRefresh(true)`（§56.5） | 浮层非窗口级；普通输入框代 `Spinner`；`stop_on_error` 只存态（失败信号在宿主，未回传） |
 | hint 项 | `:247-256`，`setHintSupplier` 按事务状态二选一 | **已接（2026-11-25）**：菜单末尾分隔 + 禁用项，文案固定取 autocommit 口径 | 本仓没有事务状态端口（`AutoRefreshControl.java:292-302` 的 `txnManager.isAutoCommit()` 问不到） |
 | 主钮形态 | 纯图标（`UIIcon.REFRESH` / `CLOCK_STOP`） | 保留「⟳ 刷新」文字 label | 本仓状态栏一贯文字按钮；换成图标会牵动占位 id 与既有断言，改形态属另一刀 |
 | 主钮 tooltip | 「刷新 (F5)」= 命令名 + 快捷键描述 | 「刷新」/「停止自动刷新」 | 本仓没有 `F5` 键位绑定（`RDS` 的刷新走 `CTRL+R`/按钮） |
 | 初始禁用 | `enableControls(false)`（无结果时禁用） | 无 `result_sql` 时**整颗不注入**、走占位 | 本仓既有口径，见 §55 表「刷新钮」行 |
 
-### 56.5 定时重跑 + hint 项（2026-11-25 落地）
+### 56.4 定时重跑 + hint 项（2026-11-25 落地）
 
 - **定时重跑**（真值 `AutoRefreshControl.scheduleAutoRefresh:112-127` + `AutoRefreshJob:41-52`）：
   面板持 `auto_refresh_enabled` / `auto_refresh_interval_secs` / `auto_refresh_epoch` 三态；
@@ -3832,17 +3832,33 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
 - 用例：`hint_is_a_disabled_trailing_item_after_a_separator`（纯函数：末项禁用 + 前置分隔 +
   空白不摆）、`auto_refresh_timer_enqueues_refresh_per_interval`（1 秒间隔推进 3 秒
   = 恰好 3 次 `Refresh`；关掉后再推进 3 秒 = 0 次）。
-- 验证：**463 passed / 0 failed**（462 + 1）。
-| 主钮形态 | 纯图标（`UIIcon.REFRESH` / `CLOCK_STOP`） | 保留「⟳ 刷新」文字 label | 本仓状态栏一贯文字按钮；换成图标会牵动占位 id 与既有断言，改形态属另一刀 |
-| 主钮 tooltip | 「刷新 (F5)」= 命令名 + 快捷键描述 | 「刷新」/「停止自动刷新」 | 本仓没有 `F5` 键位绑定（`RDS` 的刷新走 `CTRL+R`/按钮） |
-| 初始禁用 | `enableControls(false)`（无结果时禁用） | 无 `result_sql` 时**整颗不注入**、走占位 | 本仓既有口径，见 §55 表「刷新钮」行 |
+- 验证：**466 passed / 0 failed**（463 + 3），0 warning。
 
-### 56.4 验证
+### 56.5 「自定义...」配置对话框（2026-11-25 落地）
 
-- `cargo check -p rds-result-panel --lib` → `Finished`，0 error / 0 warning。
-- `cargo check -p rds-result-panel -p rds-editor --lib` → `Finished`（唯一 warning 属并行线 `view/host/format.rs:13`）。
-- `cargo test -p rds-result-panel --lib` → **458 passed / 0 failed**（454 + `auto_refresh` 4 条）。
-- 预览窗口已起（`stage=3`、126 MB、`RdataStation · 结果集预览`），箭头菜单可点；菜单项的勾选/禁用逻辑由单测覆盖，**目视由用户验收**（本刀不截图）。
+真值 `AutoRefreshConfigDialog.java:31-79` 全程（逐项对照见 `result-panel.md` §9.68.4）。要点：
+
+- **打开**：`AutoRefreshControl.runCustomized`（`:186-192`）弹 `AutoRefreshConfigDialog(parentShell,
+  getRefreshSettings())`；本仓 `ResultPanel::open_auto_refresh_config(window, cx)`（面板内模态浮层，
+  按当时间隔回填输入框、交焦点；间隔 0 → 留空）。
+- **两个控件**：间隔 `createLabelSpinner("Interval (sec)", ..., 1, MAX)` 与
+  `createCheckbox("Stop on error", ..., 当前, 2)`；两者 `SelectionListener` 都是**选中即写**
+  （`:66-77`）。本仓：普通 `InputState`（解析走 `auto_refresh::parse_interval_secs`，
+  空/0/非数字/溢出不覆盖已生效间隔）+ `Checkbox`（点即写 `auto_refresh_stop_on_error`）。
+- **确定**：真值 `setRefreshSettings(...)` + `enableAutoRefresh(true)`。本仓
+  `apply_auto_refresh_settings`：解析间隔 → `set_auto_refresh(true, interval)`（无条件开启）。
+- **取消 / Esc / ✕**：关浮层，不改任何已生效状态（进 `dismiss_overlay` 链）。
+- 出厂 `stopOnError = true`（`RefreshSettings.java:27`）、`interval = 0`（`:26`）——与本仓一致。
+- 队列四条：`ConfigureAutoRefresh`（宿主直传 `&mut Window`）/ `SetAutoRefreshStopOnError(bool)` /
+  `ApplyAutoRefreshSettings` / `CloseAutoRefreshConfig`。
+- **有意差异**：面板内浮层非窗口级 `BaseDialog`；普通输入框代 `Spinner`；标题无图标
+  （`IconName` 无 `CLOCK_START` 对应项）；`stop_on_error` **只存态不生效**（刷新失败信号在宿主，
+  面板拿不到「这一轮失败了」，`AutoRefreshJob.afterError:41-52` 无从落地）——登记能力缺口。
+- 用例：`auto_refresh_config_dialog_applies_interval_and_enables`、
+  `auto_refresh_config_cancel_and_invalid_input_keep_interval`、
+  `auto_refresh::tests::interval_text_accepts_positive_numbers_only`。
+- 验证：`cargo check -p rds-result-panel -p rds-editor --lib` → `Finished`；
+  `cargo test -p rds-result-panel --lib` → **466 passed / 0 failed**。
 
 ## §57 右栏页签区：最小化钮 + 页签区右键菜单（「右栏是否对齐」逐项复核）
 

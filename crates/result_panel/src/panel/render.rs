@@ -1796,6 +1796,11 @@ impl ResultPanel {
                 self.goto_column_open
                     .then(|| self.render_goto_column(cx)),
             )
+            // 【自动刷新】「自定义...」对话框：同范式最后挂（模态遮罩盖住整面板）
+            .children(
+                self.auto_refresh_dialog_open
+                    .then(|| self.render_auto_refresh_config(cx)),
+            )
             .into_any_element()
     }
 

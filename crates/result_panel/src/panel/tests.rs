@@ -7368,3 +7368,115 @@ fn auto_refresh_timer_enqueues_refresh_per_interval(cx: &mut gpui_kit::TestAppCo
     cx.run_until_parked();
     assert!(queue.drain().is_empty(), "关掉后不再自动刷新");
 }
+
+/// 【自动刷新】「自定义...」对话框（真值 `AutoRefreshConfigDialog`，`AutoRefreshControl.java:186-192`）：
+/// 打开回填（间隔未配置 → 输入框空）→ 填 7 + 取消勾选「错误时停止」→ 确定 = 按新间隔开启并关浮层，
+/// 之后定时任务按新间隔跑。
+#[gpui_kit::test]
+fn auto_refresh_config_dialog_applies_interval_and_enables(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 出厂：对话框关着；「错误时停止」勾选（`RefreshSettings.java:27`）；间隔 0 = 未配置
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.auto_refresh_config_state()),
+        (false, true)
+    );
+    assert_eq!(panel.read_with(cx, |p, _| p.auto_refresh_interval_secs), 0);
+
+    // 1) 打开：浮层出现，且只改 UI 态（不入队）
+    cx.update(|window, app| panel.update(app, |p, cx| p.open_auto_refresh_config(window, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-auto-refresh-config-card")
+            .is_some(),
+        "打开后应渲染配置对话框"
+    );
+    assert!(
+        panel.read_with(cx, |p, _| p.queue.is_empty()),
+        "打开浮层不该入任何请求"
+    );
+
+    // 2) 填间隔 7 + 取消勾选（勾选点即写，真值 `:75-76`）
+    cx.update(|window, app| {
+        let input = panel.read(app).auto_refresh_interval_input.clone();
+        input.update(app, |state, cx| state.set_value("7", window, cx));
+    });
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| p.set_auto_refresh_stop_on_error(false, cx))
+    });
+    assert!(
+        !panel.read_with(cx, |p, _| p.auto_refresh_stop_on_error),
+        "勾选点即写，不等确定"
+    );
+
+    // 3) 确定：关闭浮层 + 按新间隔开启（真值 OK 分支 `:188-191`）
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| p.apply_auto_refresh_settings(cx))
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.auto_refresh_config_state()),
+        (false, false),
+        "确定后浮层关闭、勾选保持"
+    );
+    assert_eq!(panel.read_with(cx, |p, _| p.auto_refresh_interval_secs), 7);
+    assert!(
+        panel.read_with(cx, |p, _| p.auto_refresh_enabled),
+        "OK 后无条件开启（`enableAutoRefresh(true)`）"
+    );
+    assert!(
+        cx.debug_bounds("editor-result-auto-refresh-config-card")
+            .is_none(),
+        "确定后浮层应消失"
+    );
+
+    // 4) 新间隔已生效：推进 7 秒 → 恰好一轮 Refresh
+    let queue = panel.read_with(cx, |p, _| p.queue.clone());
+    queue.drain();
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(7));
+    cx.run_until_parked();
+    assert_eq!(queue.drain().len(), 1, "按对话框设的间隔跑一轮");
+}
+
+/// 【自动刷新】取消 / 非法输入：都不改已生效间隔（真值 `dialog.open() != OK` 直接返回；
+/// 非法值在真值里物理输不进 Spinner，本仓按「不覆盖」兜底）。
+#[gpui_kit::test]
+fn auto_refresh_config_cancel_and_invalid_input_keep_interval(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 取消：填了值也不生效
+    cx.update(|window, app| panel.update(app, |p, cx| p.open_auto_refresh_config(window, cx)));
+    cx.update(|window, app| {
+        let input = panel.read(app).auto_refresh_interval_input.clone();
+        input.update(app, |state, cx| state.set_value("30", window, cx));
+    });
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| p.close_auto_refresh_config(cx))
+    });
+    assert_eq!(panel.read_with(cx, |p, _| p.auto_refresh_interval_secs), 0);
+    assert!(!panel.read_with(cx, |p, _| p.auto_refresh_enabled));
+
+    // 非法输入 + 确定：间隔保持 0，但照真值仍开启（`enableAutoRefresh(true)` 无条件）
+    cx.update(|window, app| panel.update(app, |p, cx| p.open_auto_refresh_config(window, cx)));
+    cx.update(|window, app| {
+        let input = panel.read(app).auto_refresh_interval_input.clone();
+        input.update(app, |state, cx| state.set_value("abc", window, cx));
+    });
+    cx.update(|_window, app| {
+        panel.update(app, |p, cx| p.apply_auto_refresh_settings(cx))
+    });
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.auto_refresh_interval_secs),
+        0,
+        "非法输入不覆盖已生效间隔"
+    );
+    assert!(panel.read_with(cx, |p, _| p.auto_refresh_enabled));
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.auto_refresh_config_state()),
+        (false, true),
+        "浮层关，勾选没被动过"
+    );
+}

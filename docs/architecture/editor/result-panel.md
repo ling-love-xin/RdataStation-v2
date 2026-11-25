@@ -10339,9 +10339,48 @@ panicked at gpui-fast-0.1.17/src/app.rs:2657: no state of type rds_settings::mod
 - `hint_is_a_disabled_trailing_item_after_a_separator`（纯函数）。
 - `auto_refresh_timer_enqueues_refresh_per_interval`：1 秒间隔 + `advance_clock(3s)`
   → 恰好 3 条 `Refresh`（新旧任务不叠加）；关掉后再 `advance_clock(3s)` → 0 条。
-- `cargo test -p rds-result-panel --lib` → **463 passed / 0 failed**。
-- 仍缺：`ConfigureAutoRefresh`（「自定义...」对话框：间隔输入 + 「错误时停止」勾选）——
-  `dispatch.rs` 仍是空分支，基线 §56.3 已登记。
+- `cargo test -p rds-result-panel --lib` → **466 passed / 0 failed**。
+
+#### 9.68.4 「自定义...」配置对话框
+
+真值 `AutoRefreshConfigDialog.java:31-79` 全程：
+
+- `BaseDialog(parentShell, "Auto-refresh configuration", UIIcon.CLOCK_START)`（`:38`）；
+- 内容区 `createTitledComposite(composite, "Settings", 2, FILL_BOTH)`（`:57`）里两控件：
+  `createLabelSpinner("Interval (sec)", "Auto-refresh interval in seconds", 当前, 1, MAX)`
+  （`:58-65`）+ `createCheckbox("Stop on error", "Stop auto-refresh if error happens", 当前, 2)`
+  （`:68-74`）；
+- 两个 `SelectionListener` 都**选中即写** `RefreshSettings`（`:66-77`），不等 OK；
+- OK 之后 `setRefreshSettings(dialog.getRefreshSettings())` + `enableAutoRefresh(true)`
+  （`AutoRefreshControl.java:188-191`）；非 OK 直接返回，什么都不改；
+- 出厂 `interval = 0`、`stopOnError = true`（`RefreshSettings.java:26-27`）。
+
+本仓落点：
+
+| 件 | 位置 |
+| --- | --- |
+| 浮层 | `panel/dialog.rs::render_auto_refresh_config`：遮罩 + 420px 卡片，debug `editor-result-auto-refresh-config` / `-card` / `-close` / `-settings` / `-interval` / `-stop-on-error` / `-cancel` / `-apply` |
+| 打开 | `panel/events.rs::open_auto_refresh_config`（按当时间隔回填输入、交焦点；间隔 0 → 留空） |
+| 勾选 | `panel/events.rs::set_auto_refresh_stop_on_error`（点即写） |
+| 确定 | `panel/events.rs::apply_auto_refresh_settings`（`auto_refresh::parse_interval_secs` 解析：空 / 0 / 非数字 / 溢出 → 保持原间隔；随后照真值**无条件** `set_auto_refresh(true, …)`） |
+| 取消 / Esc / ✕ | `panel/events.rs::close_auto_refresh_config`（已进 `dismiss_overlay` 链） |
+| 队列 | `ResultRequest::{ConfigureAutoRefresh, SetAutoRefreshStopOnError, ApplyAutoRefreshSettings, CloseAutoRefreshConfig}`；`ConfigureAutoRefresh` 由宿主把 `&mut Window` 直传面板（同 `SubmitGotoColumn`） |
+| 文案 | `auto_refresh.rs` 六个常量（真值硬编码英文、未走 NLS，本仓直译） |
+
+**有意差异（四条）**：
+
+1. 面板内模态浮层，不是窗口级 `BaseDialog`（与 SQL 预览 / 筛选设置同一范式：面板 render
+   只有 `&App`，拿不到独立窗口）；
+2. 普通 `InputState` 不是只能输数字的 `Spinner` —— 非法输入不覆盖已生效间隔（兜底）；
+3. 标题不带图标（`IconName` 目录里没有 `UIIcon.CLOCK_START` 对应项，不拿别的图标顶替）；
+4. `stop_on_error` **只存态不生效**：刷新失败信号在宿主（执行是异步链），面板拿不到
+   「这一轮失败了」，`AutoRefreshJob.afterError`（`:41-52`）那套「失败即停」无从落地。
+   登记为能力缺口，等宿主有「刷新结果回传」通道再接。
+
+用例：`auto_refresh_config_dialog_applies_interval_and_enables`（打开 → 填 7 → 取消勾选 →
+确定 = 浮层关 / 间隔 7 / 已开启 / 推进 7 秒恰好一轮）、
+`auto_refresh_config_cancel_and_invalid_input_keep_interval`（取消不生效；`abc` 不覆盖间隔但仍开启）、
+`auto_refresh::tests::interval_text_accepts_positive_numbers_only`（解析域）。
 
 ## 20. 有意差异汇总
 

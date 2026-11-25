@@ -1478,6 +1478,68 @@ impl ResultPanel {
         task.detach();
     }
 
+    /// 【自动刷新】打开「自定义...」配置对话框（`runCustomized`，`AutoRefreshControl.java:186-192`）。
+    ///
+    /// 真值流程：弹 `AutoRefreshConfigDialog(parentShell, getRefreshSettings())` → 用户 OK →
+    /// `setRefreshSettings(...)` + `enableAutoRefresh(true)`。本仓拆成**打开**（本方法）与
+    /// **应用**（[`Self::apply_auto_refresh_settings`]）：对话框是面板内浮层（与 SQL 预览 /
+    /// 筛选设置同一范式），打开时把**当前生效**的间隔与勾选回填，重开不会带上次未提交的草稿。
+    ///
+    /// 间隔为 0（从未配置，`RefreshSettings.java:26`）时输入框留空：比填 "0" 更贴近
+    /// 「没有值」，确定时空/非法都保持原间隔（见 [`crate::auto_refresh::parse_interval_secs`]）。
+    pub fn open_auto_refresh_config(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let text = if self.auto_refresh_interval_secs > 0 {
+            self.auto_refresh_interval_secs.to_string()
+        } else {
+            String::new()
+        };
+        let input = self.auto_refresh_interval_input.clone();
+        input.update(cx, |state, cx| state.set_value(text, window, cx));
+        input.update(cx, |state, cx| state.focus(window, cx));
+        self.auto_refresh_dialog_open = true;
+        cx.notify();
+    }
+
+    /// 关掉对话框（取消 / Esc / ✕）：什么都不改（真值 `dialog.open() != OK` 时直接返回，
+    /// `:188`）。
+    pub fn close_auto_refresh_config(&mut self, cx: &mut Context<Self>) {
+        if !self.auto_refresh_dialog_open {
+            return;
+        }
+        self.auto_refresh_dialog_open = false;
+        cx.notify();
+    }
+
+    /// 「错误时停止」勾选（**点即写**，真值 `:75-76` 的 `SelectionListener` 直接
+    /// `setStopOnError`，不等 OK）。
+    pub fn set_auto_refresh_stop_on_error(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.auto_refresh_stop_on_error == on {
+            return;
+        }
+        self.auto_refresh_stop_on_error = on;
+        cx.notify();
+    }
+
+    /// 对话框「确定」：解析间隔 → 开启自动刷新（真值 OK 分支 `setRefreshSettings` +
+    /// `enableAutoRefresh(true)`，`:188-191`）。
+    ///
+    /// 解析失败（空 / 0 / 非数字）→ **保持当前间隔**：真值那个 `Spinner` 物理上输不进这些值，
+    /// 本仓用普通输入框，按「非法输入不生效」兜底；但照真值**照样开启**
+    /// （`enableAutoRefresh(true)` 是无条件动作）。
+    pub fn apply_auto_refresh_settings(&mut self, cx: &mut Context<Self>) {
+        let text = self.auto_refresh_interval_input.read(cx).value().to_string();
+        let interval =
+            crate::auto_refresh::parse_interval_secs(&text).unwrap_or(self.auto_refresh_interval_secs);
+        self.auto_refresh_dialog_open = false;
+        self.set_auto_refresh(true, interval, cx);
+        cx.notify();
+    }
+
+    /// 对话框态快照（渲染浮层用）：`(是否开着, 错误时停止)`
+    pub fn auto_refresh_config_state(&self) -> (bool, bool) {
+        (self.auto_refresh_dialog_open, self.auto_refresh_stop_on_error)
+    }
+
     /// 【第 72 批】打开「获取全部数据」确认浮层
     /// （DBeaver `CONFIRM_RS_FETCH_ALL`，`ResultSetViewer.readAllData:4433-4440`）。
     ///
@@ -1639,6 +1701,8 @@ impl ResultPanel {
             self.close_fetch_all_confirm(cx);
         } else if self.filter_settings_open {
             self.close_filter_settings(cx);
+        } else if self.auto_refresh_dialog_open {
+            self.close_auto_refresh_config(cx);
         } else if self.sql_dialog_open {
             self.close_sql_dialog(cx);
         } else {

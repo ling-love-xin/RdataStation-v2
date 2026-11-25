@@ -83,6 +83,14 @@ impl ResultPanel {
             state
         });
 
+        // 【自动刷新】「自定义...」对话框的间隔输入（真值那个控件是只能输数字的
+        // `Spinner`，`AutoRefreshConfigDialog.java:58-65`；本仓普通输入框 + 打开时回填）
+        let auto_refresh_interval_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx);
+            state.set_placeholder("如 10（秒）", window, cx);
+            state
+        });
+
         // 【结果内查找】查找词输入框 + 订阅（Enter = 下一处，与 DBeaver 查找浮层一致：
         // `FindReplaceOverlay` 的文本框回车走 findNext）
         let find_input = cx.new(|cx| {
@@ -331,6 +339,11 @@ impl ResultPanel {
             sql_popup_open: false,
             // 【第 72 批】「获取全部数据」确认浮层出厂关（只在用户点了才开）
             fetch_all_confirm_open: false,
+            // 【自动刷新】「自定义...」对话框出厂关；「错误时停止」出厂勾选（真值
+            // `RefreshSettings.java:27`）；间隔输入框常驻（打开时回填当时间隔）
+            auto_refresh_dialog_open: false,
+            auto_refresh_stop_on_error: true,
+            auto_refresh_interval_input,
             // 【第 75 批】跳列浮层出厂关；输入框是常驻实体（构造期建好，见上）
             goto_column_open: false,
             goto_column_input,

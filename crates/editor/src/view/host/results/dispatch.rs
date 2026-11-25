@@ -307,10 +307,22 @@ impl EditorHostPanel {
                 self.result_panel
                     .update(cx, |p, cx| p.set_auto_refresh(enabled, interval_secs, cx));
             }
-            // 【自动刷新】「自定义...」要一个配置对话框（间隔 + 错误时停止，
-            // DBeaver `AutoRefreshConfigDialog`）。本仓尚无此对话框 → 明确不走通：
-            // 只留一条注释级的空分支，避免误以为已实现。
-            ResultRequest::ConfigureAutoRefresh => {}
+            // 【自动刷新】「自定义...」：弹面板内配置对话框（真值 `AutoRefreshConfigDialog`，
+            // 两项：间隔 + 「错误时停止」）。建输入框、交焦点要 `&mut Window`，与
+            // `SubmitGotoColumn` 同一条「窗口参数直传面板」的路。
+            ResultRequest::ConfigureAutoRefresh => self
+                .result_panel
+                .update(cx, |p, cx| p.open_auto_refresh_config(window, cx)),
+            // 【自动刷新】对话框里两项各自的出口：勾选点即写；「确定」读输入 + 开启
+            ResultRequest::SetAutoRefreshStopOnError(on) => self
+                .result_panel
+                .update(cx, |p, cx| p.set_auto_refresh_stop_on_error(on, cx)),
+            ResultRequest::ApplyAutoRefreshSettings => self
+                .result_panel
+                .update(cx, |p, cx| p.apply_auto_refresh_settings(cx)),
+            ResultRequest::CloseAutoRefreshConfig => self
+                .result_panel
+                .update(cx, |p, cx| p.close_auto_refresh_config(cx)),
             // 【计算行数】状态行那颗钮：对原 SQL 跑 count(*)，数字就地回填到钮上
             ResultRequest::CountRows => self.count_result_rows(cx),
             ResultRequest::FetchMore => self.fetch_more(cx),

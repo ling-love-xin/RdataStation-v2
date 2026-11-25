@@ -41,35 +41,17 @@ struct PreviewHost {
 
 impl PreviewHost {
     fn new(panel: Entity<ResultPanel>, queue: ResultActionQueue, cx: &mut gpui_kit::Context<Self>) -> Self {
-        // 真实宿主在同一处 drain + 分派；预览里只对「纯 UI 态」的请求做本地落地
-        // （刷新钮箭头菜单），其余只打印——证明动作链没断。
-        // 注意：回调里**不要** `cx.notify()`——面板 notify → 宿主 notify → 重渲染 →
-        // 面板再 notify 会立刻在同一 effect cycle 里滚成同步递归（实测直接爆栈）。
+        // 真实宿主在同一处 drain + 分派；预览里只对「纯 UI 态」的请求做本地落地。
+        //
+        // 分工（2026-11-25 调整）：
+        // - `observe` 只负责「有动作了 → 请求重绘」。不能在回调里直接 `panel.update`：
+        //   面板 notify → 宿主 notify → 重渲染 会滚成同一 effect cycle 的同步递归（实测爆栈）。
+        // - 真正的 drain + 分派放到 `render`：那里才有 `&mut Window`，而「自定义...」配置对话框
+        //   要 `open_auto_refresh_config(window, cx)`（回填输入框 + 交焦点）。
         let actions_sub = cx.observe(&panel, |host, _, cx| {
-            let actions = host.queue.drain();
-            if actions.is_empty() {
-                return;
+            if !host.queue.is_empty() {
+                cx.notify();
             }
-            for action in &actions {
-                match action {
-                    // 自动刷新菜单：只改面板态（真机里定时重跑是宿主的活，预览没有引擎）
-                    ResultRequest::SetAutoRefresh {
-                        enabled,
-                        interval_secs,
-                    } => {
-                        let (enabled, secs) = (*enabled, *interval_secs);
-                        host.panel
-                            .update(cx, |p, cx| p.set_auto_refresh(enabled, secs, cx));
-                    }
-                    ResultRequest::ConfigureAutoRefresh => {
-                        eprintln!(
-                            "[preview] 「自定义...」需要 AutoRefreshConfigDialog（本仓未实现，见基线 §56）"
-                        );
-                    }
-                    _ => {}
-                }
-            }
-            eprintln!("[preview] 宿主收到 {} 个动作：{actions:?}", actions.len());
         });
         Self {
             panel,
@@ -80,7 +62,43 @@ impl PreviewHost {
 }
 
 impl Render for PreviewHost {
-    fn render(&mut self, _window: &mut Window, cx: &mut gpui_kit::Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui_kit::Context<Self>) -> impl IntoElement {
+        // drain + 分派（见 `Self::new` 的分工注释）
+        let actions = self.queue.drain();
+        for action in &actions {
+            match action {
+                // 自动刷新菜单：只改面板态（真机里定时重跑在面板侧，执行是宿主的事）
+                ResultRequest::SetAutoRefresh {
+                    enabled,
+                    interval_secs,
+                } => {
+                    let (enabled, secs) = (*enabled, *interval_secs);
+                    self.panel
+                        .update(cx, |p, cx| p.set_auto_refresh(enabled, secs, cx));
+                }
+                // 「自定义...」：面板内配置浮层（真值 `AutoRefreshConfigDialog`）
+                ResultRequest::ConfigureAutoRefresh => {
+                    self.panel
+                        .update(cx, |p, cx| p.open_auto_refresh_config(window, cx));
+                }
+                ResultRequest::SetAutoRefreshStopOnError(on) => {
+                    let on = *on;
+                    self.panel
+                        .update(cx, |p, cx| p.set_auto_refresh_stop_on_error(on, cx));
+                }
+                ResultRequest::ApplyAutoRefreshSettings => {
+                    self.panel.update(cx, |p, cx| p.apply_auto_refresh_settings(cx));
+                }
+                ResultRequest::CloseAutoRefreshConfig => {
+                    self.panel
+                        .update(cx, |p, cx| p.close_auto_refresh_config(cx));
+                }
+                _ => {}
+            }
+        }
+        if !actions.is_empty() {
+            eprintln!("[preview] 宿主收到 {} 个动作：{actions:?}", actions.len());
+        }
         // `ResultPanel` 没有标准 `Render`（自定义 `render(&self, cx)`，宿主手动调）
         self.panel.read(cx).render(cx)
     }

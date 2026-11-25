@@ -455,6 +455,19 @@ pub struct ResultPanel {
     /// 且不依赖 `Task::drop` 的取消语义（对比 DBeaver 每次 `scheduleAutoRefresh` 先
     /// `autoRefreshJob.cancel()` 再新建，`AutoRefreshControl.java:112-127`）。
     pub(crate) auto_refresh_epoch: u64,
+    /// 【自动刷新】「自定义...」对话框是否开着（`AutoRefreshControl.runCustomized` →
+    /// `AutoRefreshConfigDialog`，`AutoRefreshControl.java:186-192`；本仓落在面板内模态
+    /// 浮层，与 SQL 预览 / 筛选设置同一范式）。
+    pub(crate) auto_refresh_dialog_open: bool,
+    /// 【自动刷新】「错误时停止」（`RefreshSettings.stopOnError`，出厂 `true`，
+    /// `RefreshSettings.java:27`）。点勾选即写（真值 `:75-76` 的 `SelectionListener`）。
+    ///
+    /// **本仓暂不生效**：刷新失败信号在宿主（执行是异步链），面板拿不到「这一轮失败了」，
+    /// 故它目前只是对话框里一项可改状态（能力缺口，见 `result-panel.md` §9.68）。
+    pub(crate) auto_refresh_stop_on_error: bool,
+    /// 【自动刷新】对话框的间隔输入框（打开时按当前间隔回填，「确定」时解析；真值那个是
+    /// 只能输 `1..=Integer.MAX_VALUE` 的 `Spinner`，本仓用普通输入框 + 解析兜底）。
+    pub(crate) auto_refresh_interval_input: Entity<InputState>,
     pub(crate) result_can_copy: bool,
     pub(crate) fetching_more: bool,
     /// 导出菜单静态上下文（sync 写入；render 期只读）

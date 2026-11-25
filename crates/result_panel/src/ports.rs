@@ -273,9 +273,19 @@ pub enum ResultRequest {
     /// 【自动刷新】刷新钮右箭头菜单「自定义...」：打开刷新配置对话框
     /// （DBeaver `AutoRefreshControl.runCustomized` → `AutoRefreshConfigDialog`，`:186-192`）。
     ///
-    /// 本仓**没有**该对话框（间隔 + 「错误时停止」两项），故只入队交宿主：宿主未接时
-    /// 表现为「点一下没反应」，不静默假装成功。
+    /// 对话框是**面板内**浮层（`ResultPanel::open_auto_refresh_config`，建输入框要
+    /// `&mut Window`）：宿主拿着窗口转手调它，与 `SubmitGotoColumn` 那条同构。
     ConfigureAutoRefresh,
+    /// 【自动刷新】对话框里「错误时停止」勾选：**点即写**（真值 `:75-76` 的
+    /// `SelectionListener` 直接 `setStopOnError`，不等 OK）。
+    SetAutoRefreshStopOnError(bool),
+    /// 【自动刷新】对话框「确定」：读间隔输入（面板侧 `auto_refresh::parse_interval_secs`
+    /// 兜底）→ 开启自动刷新（真值 OK 分支 `setRefreshSettings` + `enableAutoRefresh(true)`，
+    /// `:188-191`）。取消 / Esc 不入队这条。
+    ApplyAutoRefreshSettings,
+    /// 【自动刷新】关掉配置对话框（取消 / Esc / ✕）：什么都不改
+    /// （真值 `dialog.open() != OK` 时直接返回，`AutoRefreshControl.java:188`）。
+    CloseAutoRefreshConfig,
     /// 取下一段
     FetchMore,
     /// 【计算行数】状态行那颗 `rowCountLabel`（对齐 DBeaver `:2155-2180`）：

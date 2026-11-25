@@ -418,6 +418,235 @@ impl ResultPanel {
             .into_any_element()
     }
 
+    /// 【自动刷新】「自定义...」配置对话框（`AutoRefreshConfigDialog.java:31-79`）。
+    ///
+    /// 真值是一个独立 `BaseDialog`（标题 `"Auto-refresh configuration"`，图标
+    /// `UIIcon.CLOCK_START`），内容区 `createTitledComposite(..., "Settings", 2, FILL_BOTH)`
+    /// 里两个控件：
+    /// 1. `createLabelSpinner("Interval (sec)", "Auto-refresh interval in seconds", 当前, 1, MAX)`
+    ///    —— 只能输正整数；
+    /// 2. `createCheckbox("Stop on error", "Stop auto-refresh if error happens", 当前, 2)`。
+    ///
+    /// 本仓落法（三处有意差异，全部登记在 `result-panel.md` §9.68）：
+    /// - 面板内模态浮层（与 SQL 预览 / 筛选设置同范式），不是窗口级 dialog；
+    /// - 普通输入框 + 解析兜底（`InputState` 没有 spinner 档；非法输入不覆盖已生效间隔）；
+    /// - 标题不带图标（`IconName` 里没有对应 `CLOCK_START` 的项，不拿别的图标顶替）。
+    pub(crate) fn render_auto_refresh_config(&self, cx: &App) -> AnyElement {
+        let theme = cx.theme();
+        let close_queue = self.queue.clone();
+        let close_queue2 = self.queue.clone();
+        let apply_queue = self.queue.clone();
+        let toggle_queue = self.queue.clone();
+        let current_interval = self.auto_refresh_interval_secs;
+        let stop_on_error = self.auto_refresh_stop_on_error;
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(theme.colors.overlay)
+            .debug_selector(|| "editor-result-auto-refresh-config".to_string())
+            // `ESC` 收起同样由面板根的 `DismissOverlay` 收口
+            .child(
+                div()
+                    .relative()
+                    .flex_col()
+                    .w(px(420.))
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.colors.border)
+                    .bg(theme.colors.background)
+                    .overflow_hidden()
+                    .debug_selector(|| "editor-result-auto-refresh-config-card".to_string())
+                    // 标题行：title + ✕
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .justify_between()
+                            .px_3()
+                            .py_2()
+                            .border_b(ui::HAIRLINE)
+                            .border_color(theme.colors.border)
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .child(crate::auto_refresh::AUTO_REFRESH_CONFIG_TITLE),
+                            )
+                            .child(
+                                Button::new("editor-result-auto-refresh-config-close")
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::X)
+                                    .debug_selector(|| {
+                                        "editor-result-auto-refresh-config-close".to_string()
+                                    })
+                                    .tooltip(tr("关闭").to_string())
+                                    .on_click(move |_, _window, app| {
+                                        close_queue.request(
+                                            ResultRequest::CloseAutoRefreshConfig,
+                                            app,
+                                        );
+                                    }),
+                            ),
+                    )
+                    // 内容：带框「设置」分组（真值 `createTitledComposite`）
+                    .child(
+                        div()
+                            .v_flex()
+                            .gap_2()
+                            .m_3()
+                            .p_2()
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(theme.colors.border)
+                            .debug_selector(|| {
+                                "editor-result-auto-refresh-config-settings".to_string()
+                            })
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.colors.muted_foreground)
+                                    .child(crate::auto_refresh::AUTO_REFRESH_CONFIG_GROUP),
+                            )
+                            // 间隔行：label + 输入框 + 说明
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .w(rems(6.))
+                                            .text_sm()
+                                            .child(
+                                                crate::auto_refresh::AUTO_REFRESH_CONFIG_INTERVAL_LABEL,
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .w(rems(9.))
+                                            .debug_selector(|| {
+                                                "editor-result-auto-refresh-config-interval"
+                                                    .to_string()
+                                            })
+                                            .child(Input::new(&self.auto_refresh_interval_input).small()),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .text_xs()
+                                            .text_color(theme.colors.muted_foreground)
+                                            .child(
+                                                crate::auto_refresh::AUTO_REFRESH_CONFIG_INTERVAL_HINT,
+                                            ),
+                                    ),
+                            )
+                            // 勾选行：错误时停止（点即写）
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .debug_selector(|| {
+                                        "editor-result-auto-refresh-config-stop-on-error".to_string()
+                                    })
+                                    .child(
+                                        Checkbox::new(ElementId::Name(SharedString::from(
+                                            "editor-result-auto-refresh-config-stop-on-error-box",
+                                        )))
+                                        .checked(stop_on_error)
+                                        .accessibility_label(
+                                            crate::auto_refresh::AUTO_REFRESH_CONFIG_STOP_ON_ERROR_LABEL
+                                                .to_string(),
+                                        )
+                                        .on_click(move |_checked, _window, app| {
+                                            toggle_queue.request(
+                                                ResultRequest::SetAutoRefreshStopOnError(
+                                                    !stop_on_error,
+                                                ),
+                                                app,
+                                            );
+                                        }),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .child(
+                                                crate::auto_refresh::AUTO_REFRESH_CONFIG_STOP_ON_ERROR_LABEL,
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .text_xs()
+                                            .text_color(theme.colors.muted_foreground)
+                                            .child(
+                                                crate::auto_refresh::AUTO_REFRESH_CONFIG_STOP_ON_ERROR_HINT,
+                                            ),
+                                    ),
+                            ),
+                    )
+                    // 页脚：本仓事实（间隔判定口径）+ 取消 / 确定
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .justify_between()
+                            .gap_2()
+                            .px_3()
+                            .pb_3()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_xs()
+                                    .text_color(theme.colors.muted_foreground)
+                                    .child(SharedString::from(format!(
+                                        "确定后按新间隔开启自动刷新；当前间隔 {}。",
+                                        if current_interval > 0 {
+                                            format!("{current_interval} 秒")
+                                        } else {
+                                            "未配置".to_string()
+                                        }
+                                    ))),
+                            )
+                            .child(
+                                Button::new("editor-result-auto-refresh-config-cancel")
+                                    .ghost()
+                                    .small()
+                                    .label(tr("取消"))
+                                    .debug_selector(|| {
+                                        "editor-result-auto-refresh-config-cancel".to_string()
+                                    })
+                                    .on_click(move |_, _window, app| {
+                                        close_queue2.request(
+                                            ResultRequest::CloseAutoRefreshConfig,
+                                            app,
+                                        );
+                                    }),
+                            )
+                            .child(
+                                Button::new("editor-result-auto-refresh-config-apply")
+                                    .primary()
+                                    .small()
+                                    .label(tr("确定"))
+                                    .debug_selector(|| {
+                                        "editor-result-auto-refresh-config-apply".to_string()
+                                    })
+                                    .on_click(move |_, _window, app| {
+                                        apply_queue
+                                            .request(ResultRequest::ApplyAutoRefreshSettings, app);
+                                    }),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
     /// 【筛选设置】自定义条件 / 排序浮层
     ///
     /// 对齐 DBeaver `FilterSettingsDialog` 的 **Custom** 页签（`createCustomFilters`，

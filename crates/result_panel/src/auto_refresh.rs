@@ -37,7 +37,8 @@ pub const AUTO_REFRESH_HINT: &str = "提示：频繁刷新可能会导致服务�
 /// 菜单项点下去要做什么（真值 `:218-245` 三个入口）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AutoRefreshAction {
-    /// 「自定义...」：打开刷新配置对话框（本仓无该对话框，入队给宿主）
+    /// 「自定义...」：打开刷新配置对话框（`runCustomized` → `AutoRefreshConfigDialog`，
+    /// `:186-192`；本仓落点 `ResultPanel::open_auto_refresh_config`）
     Configure,
     /// 「停止」：关掉自动刷新
     Stop,
@@ -111,9 +112,62 @@ pub fn menu_entries(enabled: bool, interval_secs: u32, hint: Option<&str>) -> Ve
     entries
 }
 
+// ── 「自定义...」对话框（`AutoRefreshConfigDialog.java:31-79`）─────────────────────
+//
+// 真值是一个独立 `BaseDialog(parentShell, "Auto-refresh configuration", UIIcon.CLOCK_START)`，
+// 内容区 `createTitledComposite(composite, "Settings", 2, FILL_BOTH)` 里两个控件：
+//
+// | 控件 | label | tooltip / 说明 | 初值 | 范围 |
+// | --- | --- | --- | --- | --- |
+// | `createLabelSpinner` | `Interval (sec)` | `Auto-refresh interval in seconds` | `getRefreshInterval()` | `1..=Integer.MAX_VALUE` |
+// | `createCheckbox` | `Stop on error` | `Stop auto-refresh if error happens` | `isStopOnError()` | — |
+//
+// 两个 `SelectionListener` 都是**选中即写** `RefreshSettings`（`:66-77`）；`runCustomized`
+// 在 OK 之后才 `setRefreshSettings(dialog.getRefreshSettings())` + `enableAutoRefresh(true)`
+// （`:186-192`）。上面文案全部是硬编码英文（没有 NLS 标记），本仓 UI 全中文，直译。
+// 出厂 `stopOnError = true`（`RefreshSettings.java:27`），`refreshInterval = 0`（`:26`）。
+
+/// 对话框标题（真值 `"Auto-refresh configuration"`）
+pub const AUTO_REFRESH_CONFIG_TITLE: &str = "自动刷新配置";
+/// 分组标题（真值 `createTitledComposite(..., "Settings", ...)`）
+pub const AUTO_REFRESH_CONFIG_GROUP: &str = "设置";
+/// 间隔标签（真值 `"Interval (sec)"`）
+pub const AUTO_REFRESH_CONFIG_INTERVAL_LABEL: &str = "间隔（秒）";
+/// 间隔说明（真值 spinner tooltip `"Auto-refresh interval in seconds"`）
+pub const AUTO_REFRESH_CONFIG_INTERVAL_HINT: &str = "自动刷新间隔（秒）";
+/// 「错误时停止」标签（真值 `"Stop on error"`）
+pub const AUTO_REFRESH_CONFIG_STOP_ON_ERROR_LABEL: &str = "错误时停止";
+/// 「错误时停止」说明（真值 checkbox tooltip `"Stop auto-refresh if error happens"`）
+pub const AUTO_REFRESH_CONFIG_STOP_ON_ERROR_HINT: &str = "发生错误时停止自动刷新";
+
+/// 解析间隔输入（真值 `Spinner` 只能输 `1..=Integer.MAX_VALUE` 的整数）。
+///
+/// `None` = 不合法（空 / 非数字 / 0 / 溢出）：调用方按「保持原值」处理，不用它覆盖已生效间隔。
+pub fn parse_interval_secs(text: &str) -> Option<u32> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    text.parse::<u32>().ok().filter(|secs| *secs > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interval_text_accepts_positive_numbers_only() {
+        // 真值 Spinner 的合法域是 `1..=Integer.MAX_VALUE`（`AutoRefreshConfigDialog.java:63-64`）
+        assert_eq!(parse_interval_secs(" 7 "), Some(7));
+        assert_eq!(parse_interval_secs("60"), Some(60));
+        // 0 / 负数 / 空 / 非数字 / 溢出都给 None（调用方保持原值）
+        assert_eq!(parse_interval_secs("0"), None);
+        assert_eq!(parse_interval_secs("-3"), None);
+        assert_eq!(parse_interval_secs(""), None);
+        assert_eq!(parse_interval_secs("   "), None);
+        assert_eq!(parse_interval_secs("1.5"), None);
+        assert_eq!(parse_interval_secs("99999999999"), None);
+    }
 
     #[test]
     fn menu_starts_with_customize_then_stop_then_presets() {
