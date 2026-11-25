@@ -249,7 +249,7 @@ impl GlobalInstanceStore {
                 "序列化引用版本快照失败：{e}"
             ))))
         })?;
-        store
+        let snapshot_id = store
             .save_resource_version(id, current.version, &snapshot)
             .await
             .map_err(InstanceOpError::Core)?;
@@ -260,9 +260,10 @@ impl GlobalInstanceStore {
             .execute(
                 "UPDATE analytics_resources \
                  SET alias = ?2, origin_ref = ?3, content_hash = ?4, row_count = ?5, \
-                     column_count = ?6, version = version + 1, updated_at = ?7 \
+                     column_count = ?6, parent_version_id = ?7, version = version + 1, \
+                     updated_at = ?8 \
                  WHERE id = ?1 AND deleted_at IS NULL",
-                rusqlite::params![id, alias, origin_ref, hash, rows, cols, now],
+                rusqlite::params![id, alias, origin_ref, hash, rows, cols, snapshot_id, now],
             )
             .map_err(|e| InstanceOpError::Core(sqlite_err("append_project_ref")(e)))?;
         if affected == 0 {
