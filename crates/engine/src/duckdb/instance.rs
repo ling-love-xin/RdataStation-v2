@@ -189,6 +189,17 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// 某个别名是否已经挂在这个实例上（`ATTACH` 是实例级事实，查 `duckdb_databases()`）。
+fn control_has_database(conn: &Connection, alias: &str) -> bool {
+    conn.query_row(
+        "SELECT count(*) FROM duckdb_databases() WHERE database_name = ?",
+        [alias],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|count| count > 0)
+    .unwrap_or(false)
+}
+
 static INSTANCE: OnceLock<Mutex<Option<Weak<AnalysisInstance>>>> = OnceLock::new();
 
 fn instance_slot() -> &'static Mutex<Option<Weak<AnalysisInstance>>> {
@@ -246,6 +257,13 @@ impl AnalysisInstance {
             .map_err(|error| format!("配置分析实例失败：{error}"))?;
         conn.execute_batch(&format!("CREATE SCHEMA IF NOT EXISTS {SHARED_TEMP_SCHEMA}"))
             .map_err(|error| format!("建 {SHARED_TEMP_SCHEMA} 失败：{error}"))?;
+        // 底座在**实例**上挂（`analytics` 读写 / `rds_global` 只读）：`ATTACH` 是实例级事实，
+        // 挂一次所有会话都看得见；挂不上只让那一格缺席，不把实例带下去
+        for (alias, outcome) in super::federation::session::attach_bases(&conn) {
+            if let Err(reason) = outcome {
+                tracing::warn!(alias = %alias, reason = %reason, "底座没挂上（这一格本轮不可用）");
+            }
+        }
         Ok(Arc::new(Self {
             control: Mutex::new(conn),
             write_lane: Mutex::new(()),
@@ -277,6 +295,26 @@ impl AnalysisInstance {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         conn.execute_batch(sql)
             .map_err(|error| format!("实例控制语句失败：{error}"))
+    }
+
+    /// 换项目时重挂底座：**先摘旧再挂新**，返回逐底座结果。
+    ///
+    /// 为什么必须摘：`analytics` 指向的是"当前项目"的分析库文件，切项目后旧的那份如果还挂着，
+    /// 用户会对着上个项目的表查数据（比"重建慢一点"严重得多）。
+    /// 本方法是**事件路径**（有 I/O）；纯内存读看 [`Self::sessions`] / [`Self::temps`]。
+    pub fn refresh_bases(&self) -> Vec<(String, Result<(), String>)> {
+        let conn = self
+            .control
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let bases = super::federation::session::bases();
+        for base in &bases {
+            if control_has_database(&conn, &base.alias) {
+                // `DETACH` 之前先回默认 catalog：当前默认就是它时 DuckDB 拒绝摘
+                let _ = conn.execute_batch(&format!("USE memory; DETACH {}", base.alias));
+            }
+        }
+        super::federation::session::attach_bases(&conn)
     }
 
     /// 开一条会话：`try_clone` 出第二连接（catalog 共享、`TEMP` 独立）。

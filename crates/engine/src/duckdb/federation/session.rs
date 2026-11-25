@@ -451,7 +451,10 @@ pub fn bases_fingerprint() -> String {
 }
 
 /// 把底座只读挂进会话（**缺文件跳过**：项目刚建、全局库还没初始化都不是错误）
-fn attach_bases(conn: &Connection) -> Vec<(String, Result<(), String>)> {
+///
+/// 公开给分析实例用：实例是"一台分析引擎"，底座必须在实例上，而不是某一条会话上
+/// （`ATTACH` 本身就是实例级事实，挂在哪条会话上都对所有会话可见）。
+pub(crate) fn attach_bases(conn: &Connection) -> Vec<(String, Result<(), String>)> {
     let bases = BASES
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
