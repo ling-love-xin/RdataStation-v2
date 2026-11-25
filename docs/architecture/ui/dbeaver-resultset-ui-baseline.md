@@ -3822,4 +3822,49 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
 - `cargo test -p rds-result-panel --lib` → **458 passed / 0 failed**（454 + `auto_refresh` 4 条）。
 - 预览窗口已起（`stage=3`、126 MB、`RdataStation · 结果集预览`），箭头菜单可点；菜单项的勾选/禁用逻辑由单测覆盖，**目视由用户验收**（本刀不截图）。
 
+## §57 右栏页签区：最小化钮 + 页签区右键菜单（「右栏是否对齐」逐项复核）
+
+> 起因：用户问「右侧面板是否对齐了」。复核基准 = `plugin.xml:127-172`（面板注册表）+ `ResultSetViewer.java` 里 `panelFolder` 的建法与全部回调（`:358-417`）。
+
+### 57.1 已对齐（骨架层）
+
+| 项 | 真值 | 本仓 |
+| --- | --- | --- |
+| 容器 | `new CTabFolder(viewerSash, SWT.FLAT \| SWT.TOP)`，`marginWidth/Height = 0`（`:358-362`） | 24px 页签条行 + `TabBar(segmented, Small)` |
+| 五页集合 / 顺序 | value-view → column-aggregate → results-metadata → results-grouping → results-references | `RightTab::ALL`（§55） |
+| 出厂只开一页 | 唯一 `default="true"` = value-view（`plugin.xml:133`） | `default_result_open_tabs() = "value"` |
+| 每页 × 关闭 | `new CTabItem(panelFolder, SWT.CLOSE)`（`:1357`） | `Tab::suffix` 内 20px × |
+| 拖拽重排 | `new TabFolderReorder(panelFolder)`（`:360`） | `TabBar::on_reorder` → `MoveRightTab` |
+| 双击已选页签 = 最大化 | `SWT.MouseDoubleClick` + 只认 `getSelection()`（`:366-375`） | `click_count() >= 2 && tab == right_tab` |
+| 右缘竖条三组 | `panelsButton` / 逐页 `VerticalButton` / 方向切换沉底（`:1037-1085`） | 同名三组 |
+| 视图菜单段位 | `fillPanelsMenu`（`:1559-1588`） | `panel_view_menu_items()`（`CMD_ACTIVATE_PANELS` 无端口不摆） |
+| 宽度 / 方向 / 最大化 | `SashForm` + `setMaximizedControl` | 拖拽手柄 + 三态 + `panel_maximized` |
+
+### 57.2 本批补的两处
+
+| 项 | 真值 | 落地 |
+| --- | --- | --- |
+| 页签条最小化钮 | `setMinimizeVisible(true)`（`:363`）+ `minimize` → `showPanels(false, true, true)`（`:399-401`） | `editor-result-right-tabs-minimize`（20px 图标钮，点击入队 `SetPanelsVisible(false)`）；`Button` XSmall 档 `min_h_7`=28px 会撑破 24px 条，故自绘 |
+| 页签区右键菜单 | `panelFolder.setMenu(panelsMenu)`（`:408-417`） | 右栏外壳 `editor-result-value-sidebar` 挂 `context_menu`，条目走共享函数 `panel/tabs.rs::fill_panel_view_menu`（与 ▾ 同一份）。内层页内容右键先命中并 `stop_propagation`（vendor `menu/context_menu.rs:405-409`），不双弹 |
+
+仍未做：单元格右键里的 panels 子菜单（`:3231-3233`，第三挂载点）。
+
+### 57.3 仍存差异（有意 / 待拍板）
+
+| 差异 | 真值 | 本仓 | 处置 |
+| --- | --- | --- | --- |
+| 页签文案 | `数值查看器` / `元数据`（`bundle_zh.properties:220/224`） | `值详情` / `列浏览器` | **待拍板**（本仓名更贴合页内实际内容） |
+| MRU 显示 | `setMRUVisible(true)`（`:364`） | 固定注册序 | **待拍板**（会与手动重排打架） |
+| 页签 tooltip | 5 条 `panel.*.description` 直译 | 自有扩写 | 有意 |
+| `supports` 门控 | grouping 需 `context.supportsGrouping()`（`:161`） | 恒摆五页 | 有意（本地 groupby 恒可用） |
+| 页签字体 | `PART_TITLE_FONT`（`:513-514`） | `Size::Small` | 有意（字号只由主题键定） |
+| 溢出处理 | CTabFolder 横向滚动 | `TabBar::menu(true)` 溢出菜单 | 有意（手段差异，观感等价） |
+
+### 57.4 验证
+
+- `cargo check -p rds-result-panel --lib` → `Finished`，0 warning。
+- `cargo test -p rds-result-panel --lib` → **459 passed / 0 failed**（458 + 最小化钮 1 条）。
+- 右键菜单的**打开动作**未做自动化断言（菜单层在 headless deferred 子树里，与既有菜单用例同口径：条目逻辑钉纯函数，形态由目视验收）。
+- 详见 `docs/architecture/editor/result-panel.md` §9.67。
+
 

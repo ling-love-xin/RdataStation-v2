@@ -960,91 +960,15 @@ impl ResultPanel {
             .button(button)
             .menu_accessibility_label("视图菜单")
             .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
-                let mut menu = menu;
-                for item in items.iter().copied() {
-                    match item {
-                        PanelViewItem::Separator => {
-                            menu = menu.item(PopupMenuItem::separator());
-                        }
-                        PanelViewItem::Page(tab) => {
-                            let queue = queue.clone();
-                            // 【勾选态 = 已启用 / 点击 = 开或关】对齐 DBeaver
-                            // `fillPanelsMenu:1559-1588` + `ResultSetHandlerTogglePanel`：
-                            // 每页是 `STYLE_CHECK` 的 `CMD_TOGGLE_PANEL`，勾 =
-                            // `isPanelVisible(id)`（`updateElement:99`）；点击走
-                            // `toggleResultsPanel:64-69` → 「已可见 → `closePanel`（关掉该页）；
-                            // 其余 → `activatePanel(id,true,true)`（打开并切过去）」。
-                            // 所以「已启用且整栏可见」= 关闭，其余一律 = 打开。
-                            let is_open = open_tabs.contains(&tab);
-                            // 判定抽成纯函数（`PopupMenu` 内部不可读，菜单用例只能钉纯函数）
-                            let closes = super::events::page_item_closes(panels_visible, is_open);
-                            let target = if closes {
-                                ResultRequest::CloseRightTab(tab)
-                            } else {
-                                ResultRequest::OpenRightTab(tab)
-                            };
-                            menu = menu.item(
-                                PopupMenuItem::new(panel_view_item_label(
-                                    item,
-                                    panels_visible,
-                                    vertical_layout,
-                                    panel_maximized,
-                                ))
-                                .checked(is_open)
-                                .on_click(move |_, _window, app| {
-                                    queue.request(target.clone(), app);
-                                }),
-                            );
-                        }
-                        PanelViewItem::PanelsToggle => {
-                            // 菜单项报「点了会做什么」：当前可见 → 收起，反之 → 展开
-                            let target = !panels_visible;
-                            let queue = queue.clone();
-                            menu = menu.item(
-                                PopupMenuItem::new(panel_view_item_label(
-                                    item,
-                                    panels_visible,
-                                    vertical_layout,
-                                    panel_maximized,
-                                ))
-                                .checked(panels_visible)
-                                .on_click(move |_, _window, app| {
-                                    queue.request(ResultRequest::SetPanelsVisible(target), app);
-                                }),
-                            );
-                        }
-                        PanelViewItem::LayoutToggle => {
-                            let queue = queue.clone();
-                            menu = menu.item(
-                                PopupMenuItem::new(panel_view_item_label(
-                                    item,
-                                    panels_visible,
-                                    vertical_layout,
-                                    panel_maximized,
-                                ))
-                                .on_click(move |_, _window, app| {
-                                    queue.request(ResultRequest::ToggleVerticalLayout, app);
-                                }),
-                            );
-                        }
-                        PanelViewItem::MaximizeToggle => {
-                            let queue = queue.clone();
-                            menu = menu.item(
-                                PopupMenuItem::new(panel_view_item_label(
-                                    item,
-                                    panels_visible,
-                                    vertical_layout,
-                                    panel_maximized,
-                                ))
-                                .checked(panel_maximized)
-                                .on_click(move |_, _window, app| {
-                                    queue.request(ResultRequest::TogglePanelMaximize, app);
-                                }),
-                            );
-                        }
-                    }
-                }
-                menu
+                fill_panel_view_menu(
+                    menu,
+                    &items,
+                    &open_tabs,
+                    panels_visible,
+                    vertical_layout,
+                    panel_maximized,
+                    &queue,
+                )
             })
             .into_any_element()
     }
@@ -2072,3 +1996,107 @@ pub(crate) fn stat_value(
         }
     }
 }
+
+/// 【页签区右键 / 视图菜单】把 [`panel_view_menu_items`] 的条目铺成一份 `PopupMenu`。
+///
+/// 对齐 DBeaver：`fillPanelsMenu()`（`ResultSetViewer.java:1559-1588`）被挂了三次
+/// —— 面板区右键（`:407-417` 的 `panelFolder.setMenu`）、页签条右端的视图菜单按钮
+/// （`:1590-1614`）、单元格右键的 panels 子菜单（`:3231-3233`）。三处条目同源，只是
+/// 触发位置不同；本仓做前两处，第三处（单元格右键子菜单）仍判冗余不摆。
+///
+/// 参数是**渲染期快照**：`PopupMenu` 内部不可读，菜单长相由纯函数
+/// `panel_view_menu_items` / `panel_view_item_label` 定，测试钉在那两个函数上。
+pub(super) fn fill_panel_view_menu(
+    mut menu: PopupMenu,
+    items: &[PanelViewItem],
+    open_tabs: &[RightTab],
+    panels_visible: bool,
+    vertical_layout: bool,
+    panel_maximized: bool,
+    queue: &ResultActionQueue,
+) -> PopupMenu {
+    for item in items.iter().copied() {
+        match item {
+            PanelViewItem::Separator => {
+                menu = menu.item(PopupMenuItem::separator());
+            }
+            PanelViewItem::Page(tab) => {
+                let queue = queue.clone();
+                // 【勾选态 = 已启用 / 点击 = 开或关】对齐 DBeaver
+                // `fillPanelsMenu:1559-1588` + `ResultSetHandlerTogglePanel`：
+                // 每页是 `STYLE_CHECK` 的 `CMD_TOGGLE_PANEL`，勾 = `isPanelVisible(id)`
+                // （`updateElement:99`）；点击走 `toggleResultsPanel:64-69` →「已可见 →
+                // `closePanel`（关掉该页）；其余 → `activatePanel(id,true,true)`
+                // （打开并切过去）」。所以「已启用且整栏可见」= 关闭，其余一律 = 打开。
+                let is_open = open_tabs.contains(&tab);
+                // 判定抽成纯函数（`PopupMenu` 内部不可读，菜单用例只能钉纯函数）
+                let closes = super::events::page_item_closes(panels_visible, is_open);
+                let target = if closes {
+                    ResultRequest::CloseRightTab(tab)
+                } else {
+                    ResultRequest::OpenRightTab(tab)
+                };
+                menu = menu.item(
+                    PopupMenuItem::new(panel_view_item_label(
+                        item,
+                        panels_visible,
+                        vertical_layout,
+                        panel_maximized,
+                    ))
+                    .checked(is_open)
+                    .on_click(move |_, _window, app| {
+                        queue.request(target.clone(), app);
+                    }),
+                );
+            }
+            PanelViewItem::PanelsToggle => {
+                // 菜单项报「点了会做什么」：当前可见 → 收起，反之 → 展开
+                let target = !panels_visible;
+                let queue = queue.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(panel_view_item_label(
+                        item,
+                        panels_visible,
+                        vertical_layout,
+                        panel_maximized,
+                    ))
+                    .checked(panels_visible)
+                    .on_click(move |_, _window, app| {
+                        queue.request(ResultRequest::SetPanelsVisible(target), app);
+                    }),
+                );
+            }
+            PanelViewItem::LayoutToggle => {
+                let queue = queue.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(panel_view_item_label(
+                        item,
+                        panels_visible,
+                        vertical_layout,
+                        panel_maximized,
+                    ))
+                    .on_click(move |_, _window, app| {
+                        queue.request(ResultRequest::ToggleVerticalLayout, app);
+                    }),
+                );
+            }
+            PanelViewItem::MaximizeToggle => {
+                let queue = queue.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(panel_view_item_label(
+                        item,
+                        panels_visible,
+                        vertical_layout,
+                        panel_maximized,
+                    ))
+                    .checked(panel_maximized)
+                    .on_click(move |_, _window, app| {
+                        queue.request(ResultRequest::TogglePanelMaximize, app);
+                    }),
+                );
+            }
+        }
+    }
+    menu
+}
+

@@ -3497,6 +3497,46 @@ fn right_tab_close_button_closes_only_that_page(cx: &mut gpui_kit::TestAppContex
     );
 }
 
+/// 【页签条】右端那颗最小化钮（对齐 DBeaver `panelFolder.setMinimizeVisible(true)`
+/// ——`ResultSetViewer.java:363`——及其 `minimize` 回调 `showPanels(false, true, true)`，
+/// `:399-401`）：点它 = 入队「整栏收起」，且不能冒泡成「切页」。
+#[gpui_kit::test]
+fn right_tab_strip_minimize_button_collapses_the_bar(cx: &mut gpui_kit::TestAppContext) {
+    use crate::ports::ResultRequest;
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    // 页签条只在右栏展开时挂载（收起态整条不渲染）
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_panels_visible(true, cx)));
+    assert!(cx.update(|_, app| panel.read(app).panels_visible()));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let bounds = cx.debug_bounds("editor-result-right-tabs-minimize").expect(
+        "页签条右端应有一颗最小化钮（DBeaver `setMinimizeVisible(true)`，`ResultSetViewer.java:363`）",
+    );
+    let point = gpui_kit::point(
+        bounds.origin.x + bounds.size.width / 2.,
+        bounds.origin.y + bounds.size.height / 2.,
+    );
+    cx.simulate_click(point, gpui_kit::Modifiers::default());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let queued = cx.update(|_, app| panel.read(app).queue.drain());
+    assert!(
+        queued
+            .iter()
+            .any(|request| matches!(request, ResultRequest::SetPanelsVisible(false))),
+        "点最小化钮应入队「整栏收起」：{queued:?}"
+    );
+    assert!(
+        !queued
+            .iter()
+            .any(|request| matches!(request, ResultRequest::SetRightTab(_))),
+        "最小化钮不挂在 `TabBar` 内，点击不应冒泡成切页：{queued:?}"
+    );
+}
+
 /// 【页签条】五页的 × 选择器必须互不相同（共用 id 会让 `debug_bounds` 只命中第一个，
 /// 并且重复 id 在 a11y 上有已知风险）。
 #[test]
@@ -5210,8 +5250,8 @@ fn history_buttons_sit_in_the_filter_row_and_gate_on_position(cx: &mut gpui_kit:
 /// 按钮（`addDefaultPanelActions`，`ResultSetViewer.java:1590-1614`），点开是
 /// `fillPanelsMenu()`（`:1559-1588`）生成的菜单：全部面板的 CHECK 项 → 分隔 →
 /// `CMD_TOGGLE_MAXIMIZE` → `CMD_ACTIVATE_PANELS` → 分隔 → `CMD_TOGGLE_PANELS` →
-/// `CMD_TOGGLE_LAYOUT`。本仓最大化 / 激活面板两项还没有落地端口（按「能力没有就不摆」
-/// 不列），其余每一项都有真请求落点。
+/// `CMD_TOGGLE_LAYOUT`。本仓最大化与面板总开关都已落地，只有 `CMD_ACTIVATE_PANELS`
+/// 没有端口（按「能力没有就不摆」不列），其余每一项都有真请求落点。
 ///
 /// 这里钉三件事：① 菜单条目顺序（纯函数）；② 条目文案随状态报「点了会做什么」；
 /// ③ 五页的页内工具条都真的挂上了这颗按钮（`PopupMenu` 内部不可读，形态断言走纯函数）。

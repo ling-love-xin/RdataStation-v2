@@ -6554,9 +6554,9 @@ a11y 上是「按下」，画面上是普通 ghost 按钮，「开着还是关�
 | `results-grouping` | `GroupingPanel`（`:160`） | `supports if="context.supportsGrouping()"`（`:161`） | `RightTab::Group` |
 | `results-references` | `ReferencesPanel`（`:169`） | `supports` **被注释掉**（`:170-171`，注释原文「引用永远显示，因为我们能定义虚拟外键」） | `RightTab::Reference` |
 
-- 本仓第六页 `RightTab::ExecSql`（筛选框运行后生成的 wrapped SQL 原文，只读 + 复制）
-  在 DBeaver 侧**没有对应 panel**——在册待拍板（保留则登记为「本仓扩展页」，
-  砍掉则要另找地方显示那句 wrapped SQL）。
+- 本仓曾有第六页 `RightTab::ExecSql`（筛选框运行后生成的 wrapped SQL 原文，只读 + 复制），
+  在 DBeaver 侧**没有对应 panel**。**2026-11-25 已删**：那句 wrapped SQL 移到筛选栏展开区显示
+  （`render_filter_expand_bar`），右栏回到与注册表一一对应的五页（`RightTab::ALL: [RightTab; 5]`）。
 - `supports` 门控：DBeaver 的 grouping 需要 `context.supportsGrouping()`（能不能下发
   `GROUP BY`）；本仓分组是本地 groupby，恒可用，按「本仓能力恒真」不摆门控。
   references 在 DBeaver 侧反而**故意去掉门控**，与本仓「恒摆」一致。
@@ -6571,14 +6571,13 @@ DBeaver 的六步：清掉 `enabledPanelIds` 里的空串（`:1398`）→ 空则
 因为只有 `value-view` 是 `default="true"`，**DBeaver 首次打开结果集只开「值查看器」一页**，
 其余页靠用户手动开、之后跟着 `enabledPanelIds` 记忆。
 
-本仓 `restore_default_tabs_when_empty`（`panel/events.rs`）只做「空 → 出厂六页 +
-active 不在集合则取第一个」：出厂集合恒非空（第 2、3 步等价跳过）、本仓六页都有空态
-可显示（第 6 步的剔除无对象）。**唯一实质差异 = 第 2 步的默认集合**：本仓六页全开、
-active = 列浏览器；DBeaver 只开值查看器。
+本仓 `restore_default_tabs_when_empty`（`panel/events.rs`）只做「空 → 补默认集合 +
+active 不在集合则取第一个」（与 DBeaver 第 2、3 步同口径，第 6 步的剔除无对象）。
 
-**这条不擅自动手**：改成只开一页会直接改掉用户每天看到的开局（列浏览器是本仓主力页），
-属「待拍板」；若最终要照抄，改法只有一处——把默认集合收窄到 registry 里
-`show_by_default` 的那几页。
+**默认集合 2026-11-25 已收窄并照抄真值**：settings `default_result_open_tabs() = "value"`
+（`crates/settings/src/model/result_panel.rs:356`），出厂只开「值详情」一页，与 DBeaver
+「只有 `value-view` 是 `default="true"`」一致（提交 `e281f119`）。
+此前的「六页全开、active = 列浏览器」是本仓早期口径，已作废。
 
 #### 9.25.3 筛选区五列（`filterComposite`，`ResultSetFilterPanel.java:174-214`）
 
@@ -6631,11 +6630,18 @@ active = 列浏览器；DBeaver 只开值查看器。
 分隔 → `CMD_TOGGLE_MAXIMIZE` → `CMD_ACTIVATE_PANELS` →（有 `FEATURE_PANELS` 时）分隔 +
 `CMD_TOGGLE_PANELS` + `CMD_TOGGLE_LAYOUT`。本仓 `panel_view_menu_items()` 同段位，`CMD_ACTIVATE_PANELS` 无端口不摆。
 
-**三处挂载点，只做一处**：DBeaver 把这份菜单挂了三次——面板区右键（`:407-417`）、
+**三处挂载点，本仓做两处**：DBeaver 把这份菜单挂了三次——面板区右键（`:407-417`）、
 每个面板工具条右端的视图菜单按钮（`:1590-1614`）、单元格右键的 panels 子菜单（`:3231-3233`）。
-本仓已有页签条右端的视图菜单（`DropdownButton` + `panel_view_menu_items`），
-**右键菜单判为冗余不做**：DBeaver 需要三处是因为它的面板工具条在某些 presentation 下不渲染，
-本仓视图菜单按钮常驻，再挂右键只是同一份条目的第二个入口。
+本仓
+
+- **页签条右端视图菜单**（`DropdownButton` + `panel_view_menu_items`，2026-11-18）；
+- **页签区右键**（2026-11-25，见 §9.67）：挂在右栏外壳 `editor-result-value-sidebar` 上，
+  与 DBeaver 挂 `panelFolder` 同一范围；条目与视图菜单同一份构造函数
+  （`panel/tabs.rs::fill_panel_view_menu`）。内层页内容自带的右键在冒泡阶段先命中并
+  `stop_propagation()`（vendor `menu/context_menu.rs:405-409`），不会双弹。
+
+第三处（单元格右键的 panels 子菜单）仍不摆：单元格右键已有一份很长的菜单
+（`fillContextMenu:3107+` 三段），再嵌一层 panels 子菜单本仓没有对应端口。
 
 #### 9.25.6 本轮改动
 
@@ -10194,6 +10200,50 @@ panicked at gpui-fast-0.1.17/src/app.rs:2657: no state of type rds_settings::mod
 
 - 「打开单页时把焦点交给该页」与 `CTRL+SHIFT+F2..F6` 一起等右栏焦点体系；
 - 其余同 §9.65.8 / §9.64.8。
+
+### 9.67 右栏页签区两颗真值能力：最小化钮 + 右键菜单（2026-11-25）
+
+对「右栏是否对齐」做了一次逐项复核（真值 = `plugin.xml:127-172` 的注册表 +
+`ResultSetViewer.java` 里 `panelFolder` 的建法与全部回调）。骨架层已对齐：五页集合 / 顺序 /
+出厂单页 / 每页 × 关闭 / 拖拽重排 / 双击已选页签最大化 / 右缘竖条三组 / 视图菜单段位 /
+宽度与方向拖拽。本批补掉两处缺项。
+
+#### 9.67.1 页签条右端最小化钮
+
+- 真值：`panelFolder.setMinimizeVisible(true)`（`:363`）与 `minimize` 回调
+  `showPanels(false, true, true)`（`:399-401`）——CTabFolder 把「最小化」画在页签条最右端，
+  点它 = 收起整块面板。
+- 落地：页签条行尾一颗 20px 图标钮（`editor-result-right-tabs-minimize`），点击入队
+  `SetPanelsVisible(false)`（复位最大化 + 走宽度补间，`events::set_panels_visible`）。
+  重新打开仍走状态栏三态 / 竖条总开关，那时补默认页集合（= DBeaver
+  `showPanels(true, …)` 里的 `activateDefaultPanels`）。
+- 形态说明：`Button` 的 XSmall 档 `min_h_7`(28px) 会撑破 24px 页签条
+  （`RESULT_STATUS_BAR_HEIGHT`），故与页签 × 同法用自绘 20px 点击区 + 图标。
+- 用例：`right_tab_strip_minimize_button_collapses_the_bar`（入队 `SetPanelsVisible(false)`；
+  且不得冒泡成 `SetRightTab`）。
+
+#### 9.67.2 页签区右键菜单
+
+- 真值：`panelFolder.setMenu(panelsMenu)`（`:408-417`），菜单由 `fillPanelsMenu()`
+  （`:1559-1588`）生成——逐页 CHECK → 分隔 → MAXIMIZE → ACTIVATE_PANELS →
+  （`FEATURE_PANELS` 时）分隔 + TOGGLE_PANELS + TOGGLE_LAYOUT。
+- 落地：右栏外壳 `editor-result-value-sidebar` 挂 `context_menu`（与 DBeaver 挂
+  `panelFolder` 同一覆盖范围）。条目由新共享函数 `panel/tabs.rs::fill_panel_view_menu`
+  生成——原本只服务页签条右端 ▾ 的闭包体抽了出来，两处入口同一份实现，不会漂移。
+- 不双弹的依据：内层页内容自带右键（列浏览器行 / 统计行）在气泡阶段先命中并
+  `stop_propagation()`（vendor `menu/context_menu.rs:405-409`）。
+- 未做：单元格右键里的 panels 子菜单（`:3231-3233`，第三挂载点；理由见 §9.25.5）。
+
+#### 9.67.3 仍存在的差异（有意 / 待拍板）
+
+| 差异 | 真值 | 本仓现状 | 处置 |
+| --- | --- | --- | --- |
+| 页签文案 | `数值查看器` / `元数据`（`bundle_zh.properties:220/224`） | `值详情` / `列浏览器` | **待拍板**：本仓名更贴合页内实际内容（列清单 + DDL + 搜索） |
+| 页签 MRU 显示 | `setMRUVisible(true)`（`:364`）：最近用过的页排到前面 | 恒为注册序 | **待拍板**：会与手动拖拽重排的序互相打架 |
+| 页签 tooltip | 5 条 `panel.*.description` 直译 | 自有扩写（`events.rs:3231-3239`） | 有意 |
+| `supports` 门控 | grouping 需 `context.supportsGrouping()`（`:161`） | 恒摆五页 | 有意（本地 groupby 恒可用，§9.25.1） |
+| 页签字体 | `PART_TITLE_FONT`（`:513-514`） | `Size::Small` | 有意（字号只由主题键决定，见 gpui-kit-dev 字体约束） |
+| 页签溢出 | CTabFolder 横向滚动 | `TabBar::menu(true)` 溢出菜单 | 有意（实现手段差异，观感等价） |
 
 ## 20. 有意差异汇总
 

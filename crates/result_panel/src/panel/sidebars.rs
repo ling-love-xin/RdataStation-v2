@@ -14,6 +14,7 @@ use gpui_kit::component::Selectable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, Textarea};
 use gpui_kit::component::list::List;
+use gpui_kit::component::menu::ContextMenuExt as _;
 use gpui_kit::component::resizable::{HandleEdge, resize_handle};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::tab::{Tab, TabBar};
@@ -25,11 +26,11 @@ use gpui_kit::*;
 
 use super::data::ResultPanel;
 use super::events::{
-    edge_tab_active, edge_tab_tooltip, presentation_tooltip, record_view_tooltip,
-    right_tab_description, right_tab_icon, right_tab_label, right_tabs, strip_index,
-    tab_at_strip_index,
+    edge_tab_active, edge_tab_tooltip, panel_view_menu_items, presentation_tooltip,
+    record_view_tooltip, right_tab_description, right_tab_icon, right_tab_label, right_tabs,
+    strip_index, tab_at_strip_index,
 };
-use super::tabs::kv_row;
+use super::tabs::{fill_panel_view_menu, kv_row};
 use crate::ports::{Presentation, ResultRequest, RightTab};
 use crate::ui;
 
@@ -621,6 +622,18 @@ impl ResultPanel {
         // （`EffectTransition` 只提供 `width` 补间，没有 height），方向切换本身也不是
         // 展开 / 收起动作；横排保持原来的宽度补间。
         let vertical = self.vertical_layout;
+        // 【页签区右键 2026-11-25】对齐 DBeaver `panelFolder.setMenu(panelsMenu)`
+        // （`ResultSetViewer.java:408-417`）：`fillPanelsMenu()`（`:1559-1588`，= 本仓
+        // `panel_view_menu_items`）挂在**整个面板区**的右键上，条目与页签条右端的视图菜单
+        // 同源（同一份构造函数 `tabs::fill_panel_view_menu`）。
+        // 内层页内容自带的右键（列浏览器行 / 统计行）在冒泡阶段先命中并
+        // `stop_propagation()`（vendor `menu/context_menu.rs:405-409`），不会双弹。
+        let menu_items = panel_view_menu_items();
+        let menu_open_tabs = open_tabs.clone();
+        let menu_panels_visible = self.panels_visible();
+        let menu_vertical_layout = vertical;
+        let menu_maximized = maximized;
+        let menu_queue = self.queue.clone();
         let mut wrapper = div()
             .flex_none()
             // 【2026-11-17 右栏对齐】外壳必须是 flex 列：页签条固定 24px，页内容吃满剩余高。
@@ -632,7 +645,18 @@ impl ResultPanel {
             .v_flex()
             .overflow_hidden()
             .bg(theme.colors.sidebar)
-            .debug_selector(|| "editor-result-value-sidebar".to_string());
+            .debug_selector(|| "editor-result-value-sidebar".to_string())
+            .context_menu(move |menu, _window, _cx| {
+                fill_panel_view_menu(
+                    menu,
+                    &menu_items,
+                    &menu_open_tabs,
+                    menu_panels_visible,
+                    menu_vertical_layout,
+                    menu_maximized,
+                    &menu_queue,
+                )
+            });
         wrapper = if maximized {
             // 最大化：右栏独占整块区域（横排满宽 / 竖排满高），不接受拖拽尺寸
             wrapper.w_full().h_full()
@@ -659,7 +683,40 @@ impl ResultPanel {
                     // 页签条的**外层行**才带调试选择器（`TabBar` 组件自身不挂 id；
                     // 测试要按这一行的真实像素点坐标模拟点击）
                     .debug_selector(|| "editor-result-right-tabs".to_string())
-                    .child(div().flex_1().min_w_0().child(tab_bar)),
+                    .child(div().flex_1().min_w_0().child(tab_bar))
+                    .child({
+                        // 【页签条最小化 2026-11-25】对齐 DBeaver `panelFolder.setMinimizeVisible(true)`
+                        // （`ResultSetViewer.java:363`）与其 `minimize` 回调
+                        // `showPanels(false, true, true)`（`:399-401`）：CTabFolder 把「最小化」
+                        // 画在页签条最右端，点它就是收起整块面板。
+                        // 收起语义走同一条端口 `SetPanelsVisible(false)`（复位最大化 + 宽度补间，
+                        // 见 `events::set_panels_visible`）；重新打开仍走状态栏三态开关 / 竖条总开关，
+                        // 那时会补默认页集合——与 DBeaver `showPanels(true, …)` 的
+                        // `activateDefaultPanels` 同一处境。
+                        //
+                        // 形态取舍同页签 ×：`Button` 的 XSmall 档 `min_h_7`(28px) 会撑破 24px
+                        // 页签条（`RESULT_STATUS_BAR_HEIGHT`），这里用 20px 自绘点击区 + 图标。
+                        let minimize_queue = self.queue.clone();
+                        let tint = theme.colors.muted_foreground;
+                        let hover_bg = theme.colors.list_hover;
+                        div()
+                            .id("editor-result-right-tabs-minimize")
+                            .debug_selector(|| "editor-result-right-tabs-minimize".to_string())
+                            .flex_none()
+                            .w(rems(1.25))
+                            .h(rems(1.25))
+                            .h_flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .rounded_sm()
+                            .hover(move |style| style.bg(hover_bg))
+                            .child(Icon::new(IconName::Minimize).size_3().text_color(tint))
+                            .on_click(move |_, _window, app| {
+                                minimize_queue
+                                    .request(ResultRequest::SetPanelsVisible(false), app);
+                            })
+                    }),
             )
             .child(
                 // 页内容吃满剩余高：各页自己再排「28px 工具条 + flex_1 正文」
