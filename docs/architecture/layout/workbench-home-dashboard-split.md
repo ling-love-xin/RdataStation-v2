@@ -124,6 +124,11 @@
   按 WIP 隔离口径本批不摘 hunk，留工作区待并行线收口时一并入库；未登记项 `tr` 回退中文原文，不阻断编译。
 - `cargo check --workspace` 0 error（仅两条既有 warning，非本批）；剩余 EditorPanel 出口 tr 包裹待批次 4 主体落定后复核。
 
+**2026-11-26 main 复测（HEAD `26d5344a`）**：`rds-settings` 50 passed、`rds-shared` 68 passed（含 zh/en 键对齐）、
+`ui_contract` 10 passed（白名单 / 尺寸 / 颜色 / 面板清单登记全过）、`cargo check --workspace -j 1` 0 error
+（仅 `editor/format.rs` 与 `data_objects/mod.rs` 两条既有 warning）。注意：workbench 测试编译须在 **cargo 层**
+`-j 1` 单线程；多 crate 并发曾触编译期 OOM / E0786 rmeta 损坏并连锁出 E0432/E0463，属环境资源 / 缓存问题，非源码错误。
+
 跨线适配（非本任务路径，单独 commit）：
 
 - `f19a6064` 适配 `AnyWindowHandle::update` 闭包三参签名；
