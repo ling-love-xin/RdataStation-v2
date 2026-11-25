@@ -1088,3 +1088,174 @@ async fn g017_delete_global_drops_tables_and_registry_only() {
 
     let _ = fs::remove_dir_all(&env.dir);
 }
+
+fn pin_ref(
+    env: &TestEnv,
+    resource_id: &str,
+    project_version: i32,
+    global_name: &str,
+    global_version: i32,
+) {
+    env.store
+        .pin_global_ref(&crate::global::GlobalRefPin {
+            project_root: env.project_root.to_string_lossy().replace('\\', "/"),
+            project_resource_id: resource_id.to_string(),
+            project_version,
+            global_name: global_name.to_string(),
+            global_version,
+        })
+        .expect("pin global ref");
+}
+
+/// 保留按版本：被 pin 的历史版即使超出 `KeepVersions` 也不能裁；
+/// 释放该版 pin 后，下一次裁剪才允许删它。
+#[tokio::test]
+async fn g018_prune_keeps_only_pinned_versions() {
+    let env = create_test_env().await;
+    let csv = write_csv(&env.dir);
+
+    for round in 0..3 {
+        let mut req = promote_req("ref_guard_orders", &csv, PromoteKind::DataFile);
+        req.content_hash = format!("hash_ref_round_{round}");
+        env.store.promote_overwrite(&req).await.expect("promote");
+    }
+    let versions = read_global_version_tables(&env, "ref_guard_orders");
+    assert_eq!(versions.len(), 3);
+    let oldest_version = versions[2].0;
+    let oldest_table = versions[2].1.clone().expect("oldest table");
+    let middle_table = versions[1].1.clone().expect("middle table");
+
+    // 只 pin 最老版本；当前 v3 是本体，Keep(0) 只允许删 v1/v2 中没人引用的。
+    pin_ref(&env, "arp_ref_guard", 1, "ref_guard_orders", oldest_version);
+    let removed = env
+        .store
+        .prune_version_tables("ref_guard_orders", crate::model::KeepVersions::MetadataOnly)
+        .await
+        .expect("prune");
+    assert_eq!(removed, 1, "只删中间那版，最老那版有 pin");
+    assert!(
+        env.store.table_exists(&oldest_table).await.expect("exists"),
+        "被 pin 的最老版本必须保留"
+    );
+    assert!(
+        !env.store.table_exists(&middle_table).await.expect("exists"),
+        "未被 pin 的中间版本可以裁掉"
+    );
+
+    // 释放这一版 pin 后再裁，最老版本才允许被删。
+    let released = env
+        .store
+        .release_global_ref(&env.project_root, "arp_ref_guard", 1)
+        .expect("release");
+    assert_eq!(released, 1);
+    let removed = env
+        .store
+        .prune_version_tables("ref_guard_orders", crate::model::KeepVersions::MetadataOnly)
+        .await
+        .expect("prune after release");
+    assert!(removed >= 1, "释放 pin 后至少会删掉最老那版");
+    assert!(
+        !env.store.table_exists(&oldest_table).await.expect("exists"),
+        "释放 pin 后历史版本可裁"
+    );
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+/// 删除守卫：有活跃引用时整条全局资产不能删，登记/表都保持原样；
+/// 释放引用后才允许删除。
+#[tokio::test]
+async fn g019_delete_global_blocked_by_active_ref() {
+    let env = create_test_env().await;
+    let csv = write_csv(&env.dir);
+    let req = promote_req("ref_delete_me", &csv, PromoteKind::DataFile);
+    let outcome = env.store.promote(&req).await.expect("promote");
+    let table = read_global_table(&env, "ref_delete_me").expect("table");
+
+    pin_ref(&env, "arp_ref_delete", 1, "ref_delete_me", outcome.version);
+    let err = env
+        .store
+        .delete_global("ref_delete_me")
+        .await
+        .expect_err("有引用必须拒绝删除");
+    assert!(matches!(err, InstanceOpError::Referenced { refs: 1, .. }));
+    assert!(
+        env.store.table_exists(&table).await.expect("exists"),
+        "拒绝删除时表必须还在"
+    );
+    assert_eq!(
+        env.store.active_ref_count("ref_delete_me").expect("count"),
+        1
+    );
+
+    env.store
+        .release_global_ref(&env.project_root, "arp_ref_delete", 1)
+        .expect("release");
+    let deleted = env
+        .store
+        .delete_global("ref_delete_me")
+        .await
+        .expect("delete");
+    assert_eq!(deleted.versions, 1);
+    assert!(
+        !env.store.table_exists(&table).await.expect("exists"),
+        "释放引用后删除成功"
+    );
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+/// pin 是版本级 upsert：同一项目引用版本重指到新全局版本时，
+/// 旧版本计数归零，新版本计数为一。
+#[tokio::test]
+async fn g020_pin_ref_upserts_version_and_reactivates() {
+    let env = create_test_env().await;
+    let csv = write_csv(&env.dir);
+    for round in 0..2 {
+        let mut req = promote_req("ref_upsert_orders", &csv, PromoteKind::DataFile);
+        req.content_hash = format!("hash_upsert_{round}");
+        env.store.promote_overwrite(&req).await.expect("promote");
+    }
+
+    pin_ref(&env, "arp_ref_upsert", 1, "ref_upsert_orders", 1);
+    assert_eq!(
+        env.store
+            .active_ref_count_for_version("ref_upsert_orders", 1)
+            .expect("count v1"),
+        1
+    );
+
+    pin_ref(&env, "arp_ref_upsert", 1, "ref_upsert_orders", 2);
+    assert_eq!(
+        env.store
+            .active_ref_count_for_version("ref_upsert_orders", 1)
+            .expect("count v1"),
+        0
+    );
+    assert_eq!(
+        env.store
+            .active_ref_count_for_version("ref_upsert_orders", 2)
+            .expect("count v2"),
+        1
+    );
+    assert_eq!(
+        env.store
+            .active_ref_versions("ref_upsert_orders")
+            .expect("versions"),
+        vec![2]
+    );
+
+    env.store
+        .release_global_ref(&env.project_root, "arp_ref_upsert", 1)
+        .expect("release");
+    pin_ref(&env, "arp_ref_upsert", 1, "ref_upsert_orders", 2);
+    assert_eq!(
+        env.store
+            .active_ref_count_for_version("ref_upsert_orders", 2)
+            .expect("count reactivated"),
+        1,
+        "释放后同一版本再 pin 要重新激活"
+    );
+
+    let _ = fs::remove_dir_all(&env.dir);
+}

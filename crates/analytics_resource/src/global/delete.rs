@@ -52,6 +52,16 @@ impl GlobalInstanceStore {
             });
         }
 
+        // 引用守卫：按版本 pin 的全局表不能整条删除。先让用户固化或解除引用，
+        // 而不是删完登记后让项目侧引用变成悬空指针。
+        let refs = self.active_ref_count(name).map_err(InstanceOpError::Core)?;
+        if refs > 0 {
+            return Err(InstanceOpError::Referenced {
+                name: name.to_string(),
+                refs,
+            });
+        }
+
         // 2. 曾分发到几个项目（在删回执之前数，否则永远是 0）。
         let projects: i64 = self.with_sqlite(|conn| {
             conn.query_row(

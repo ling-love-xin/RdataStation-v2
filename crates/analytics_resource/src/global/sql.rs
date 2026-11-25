@@ -162,10 +162,19 @@ impl GlobalInstanceStore {
                 .map_err(sqlite_err("collect_prune_versions"))
         })?;
 
+        // 被项目引用版本 pin 住的历史表不能裁：保留策略只对"没人引用"的旧版生效。
+        // 当前版本本来就不会进裁剪循环；这里只保护 index > keep 的历史版本。
+        let referenced = self.active_ref_versions(name)?;
+        let referenced: std::collections::HashSet<i32> = referenced.into_iter().collect();
+
         let mut removed = 0usize;
-        for (index, (_, table)) in versions.into_iter().enumerate() {
+        for (index, (version, table)) in versions.into_iter().enumerate() {
             // index 0 = 当前版本（本体）；1..=keep = 要留的历史份数。
             if index <= keep as usize {
+                continue;
+            }
+            if referenced.contains(&version) {
+                tracing::debug!(name, version, "全局历史表仍被项目引用，跳过裁剪");
                 continue;
             }
             let Some(table) = table else {

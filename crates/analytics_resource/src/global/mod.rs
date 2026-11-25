@@ -194,6 +194,9 @@ pub enum InstanceOpError {
     /// 资源不存在（分发引用了未登记的全局资源）。
     #[error("资源不存在：{name}")]
     NotFound { name: String },
+    /// 全局资产仍被项目引用（按版本 pin），不能整条删除。
+    #[error("全局资产「{name}」仍有 {refs} 个项目引用版本在使用，不能删除；先固化或解除引用")]
+    Referenced { name: String, refs: usize },
     #[error(transparent)]
     Core(#[from] CoreError),
 }
@@ -399,12 +402,14 @@ pub mod delete;
 pub mod distribute;
 pub mod list;
 pub mod promote;
+pub mod refs;
 pub mod register;
 pub mod sql;
 pub mod table_name;
 
 pub use self::delete::GlobalDeleteOutcome;
 pub use self::list::{list_global_resources, to_global_rows};
+pub use self::refs::GlobalRefPin;
 pub(crate) use self::sql::{duckdb_err, file_read_expr, quote_ident, sqlite_err};
 
 
