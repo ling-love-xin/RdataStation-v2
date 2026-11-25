@@ -473,6 +473,14 @@ pub fn validate_edit_value(kind: ColumnKind, value: &str) -> Option<String> {
                 Some("日期格式应为 YYYY-MM-DD".to_string())
             }
         }
+        // 数组：只校验 PG 字面量形状（`{}` / `{a,b}` / 嵌套）；元素类型但凭驱动判断
+        ColumnKind::Array => match crate::store::parse_pg_array_literal(value) {
+            Some(_) => None,
+            None => Some(
+                "数组列要填 `{a,b}` 形式的字面量（元素里带逗号 / 花括号时用双引号包起来）"
+                    .to_string(),
+            ),
+        },
         // Text / Timestamp / Time / Json / Binary / Unknown：不校验（文本自由、
         // 时刻格式各驱动不一、JSON / 二进制自由文本——交给源库自己判断）
         _ => None,

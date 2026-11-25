@@ -98,6 +98,11 @@ pub enum ColumnKind {
     Time,
     Uuid,
     Json,
+    /// 数组（`text[]` / `int4[3]` / `_int4` / `array<string>`）
+    ///
+    /// 只表示"这一列是数组"，**元素类型不在这里判**：值文本交给
+    /// [`crate::store::parse_pg_array_literal`] 拆元素（刀1），展开 UI 在刀2 / 刀3。
+    Array,
     Binary,
     /// 驱动没报 / 类型名认不出（渲染与没有类型完全一致）
     #[default]
@@ -112,6 +117,13 @@ impl ColumnKind {
     /// 都得落进同一档。词级匹配而不是子串匹配也是**防误判**：`point` / `interval` 里
     /// 没有独立的 `int` 词，不会因为“看着像”被当成整数列。
     pub fn parse(name: &str) -> Self {
+        // 数组类型名要**先于**词级解析：`text[]` 按词拆出来是 `text`，会被当成文本列；
+        // `_int4` 拆出来是 `int4`，还会被判整数列（右对齐、数字格式化全错）。
+        // 真值侧对应 `hasParentArrayRow` / `getDataKind() == DBPDataKind.ARRAY`
+        // （`SpreadsheetPresentation.java:3191-3203`），类型档是 `DBPDataKind.ARRAY`。
+        if Self::looks_like_array(name) {
+            return Self::Array;
+        }
         for word in name
             .trim()
             .to_ascii_lowercase()
@@ -140,6 +152,30 @@ impl ColumnKind {
             }
         }
         Self::Unknown
+    }
+
+    /// 类型名是不是数组（只判形状，不判元素类型）
+    ///
+    /// 认三种写法：
+    /// - 方括号后缀：`text[]` / `int4[3]` / `numeric(10,2)[]`（PG、MySQL、达梦…）；
+    /// - PG 内部名：`_text` / `_int4`（前导下划线 + 内层能认出标量类型才算，`_node` 这类
+    ///   自定义类型保持 `Unknown`，不硬判数组）；
+    /// - 关键字写法：`array<string>` / `Array(String)` —— 走词级匹配里的 `array` 词。
+    fn looks_like_array(name: &str) -> bool {
+        let name = name.trim();
+        if name.is_empty() {
+            return false;
+        }
+        if name.ends_with(']') {
+            // `类型[...]`：必须有开括号且在末尾之前（`numeric(10,2)[]` 也满足）
+            let open = name.find('[').unwrap_or(name.len());
+            return open + 1 < name.len();
+        }
+        if let Some(inner) = name.strip_prefix('_') {
+            // `_int4` → 递归判内层；每层少一个下划线，天然终止
+            return !inner.is_empty() && Self::parse(inner) != Self::Unknown;
+        }
+        false
     }
 
     /// 单个词 → 类别（顺序即优先级：`timestamp` / `datetime` 要先于 `date` / `time`）
@@ -197,6 +233,8 @@ impl ColumnKind {
             w if w.starts_with("time") => Some(Self::Time),
             "bool" | "boolean" => Some(Self::Boolean),
             "uuid" => Some(Self::Uuid),
+            // 数组关键字写法：`array<string>` / `Array(String)`（`arena` 之类不误伤）
+            "array" | "arrayof" => Some(Self::Array),
             w if w.starts_with("json") => Some(Self::Json),
             w if w.contains("binary") || w.contains("blob") || w == "bytea" || w == "bytes" => {
                 Some(Self::Binary)
@@ -853,6 +891,19 @@ mod tests {
             ("Time64(Nanosecond)", ColumnKind::Time),
             ("uuid", ColumnKind::Uuid),
             ("jsonb", ColumnKind::Json),
+            // 数组（刀1）：方括号后缀 / PG 内部名 / 关键字写法三种命名都要落进 Array
+            ("text[]", ColumnKind::Array),
+            ("int4[]", ColumnKind::Array),
+            ("int4[3]", ColumnKind::Array),
+            ("numeric(10,2)[]", ColumnKind::Array),
+            ("varchar(255)[]", ColumnKind::Array),
+            ("jsonb[]", ColumnKind::Array),
+            ("_int4", ColumnKind::Array),
+            ("_text", ColumnKind::Array),
+            ("array<string>", ColumnKind::Array),
+            ("Array(String)", ColumnKind::Array),
+            // 前导下划线但内层认不出：不是数组（PG 的自定义类型也这样命名）
+            ("_node", ColumnKind::Unknown),
             ("bytea", ColumnKind::Binary),
             ("LargeBinary", ColumnKind::Binary),
             ("VARBINARY(16)", ColumnKind::Binary),
@@ -885,6 +936,8 @@ mod tests {
             (ColumnKind::Uuid, false, true),
             (ColumnKind::Text, false, false),
             (ColumnKind::Json, false, false),
+            // 数组：展示是 `{a,b}` 文本，不右对齐、不等宽
+            (ColumnKind::Array, false, false),
             (ColumnKind::Binary, false, false),
             (ColumnKind::Unknown, false, false),
         ];

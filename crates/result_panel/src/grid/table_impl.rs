@@ -61,6 +61,8 @@ pub(crate) fn default_column_width(kind: ColumnKind) -> Pixels {
         ColumnKind::Json => ui::RESULT_COLUMN_WIDTH_JSON,
         ColumnKind::Binary => ui::RESULT_COLUMN_WIDTH_BINARY,
         ColumnKind::Text => ui::RESULT_COLUMN_WIDTH_TEXT,
+        // 数组：展示是 `{a,b}` 文本，宽按文本档（真值对数组列没有专属默认宽）
+        ColumnKind::Array => ui::RESULT_COLUMN_WIDTH_TEXT,
         ColumnKind::Unknown => ui::RESULT_COLUMN_WIDTH,
     }
 }

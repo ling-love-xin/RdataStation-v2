@@ -9,6 +9,10 @@ use gpui_kit::*;
 
 use std::borrow::Cow;
 
+use super::array_cell::{
+    self, ARRAY_COLLAPSED_GLYPH, ARRAY_EXPANDED_GLYPH, ARRAY_GLYPH_SPACING, ARRAY_HINT_SPACING,
+    ArrayCellDisplay,
+};
 use super::delegate::{CELL_DISPLAY_LIMIT, ResultGridDelegate};
 use super::status::format_integer_cell;
 use super::text::result_cell_tooltip;
@@ -44,9 +48,12 @@ fn type_family(kind: ColumnKind) -> TypeFamily {
         ColumnKind::Timestamp | ColumnKind::Date | ColumnKind::Time => TypeFamily::Temporal,
         ColumnKind::Boolean => TypeFamily::Boolean,
         ColumnKind::Binary => TypeFamily::Blob,
-        ColumnKind::Text | ColumnKind::Json | ColumnKind::Uuid | ColumnKind::Unknown => {
-            TypeFamily::Text
-        }
+        // 数组按文本族：展示是 `{a,b}` 文本（左对齐、非等宽），配色也跟随文本族
+        ColumnKind::Array
+        | ColumnKind::Text
+        | ColumnKind::Json
+        | ColumnKind::Uuid
+        | ColumnKind::Unknown => TypeFamily::Text,
     }
 }
 
@@ -336,6 +343,10 @@ pub(crate) fn render_td(
     // 【B14】右键菜单要用“哪个单元格”：组件库只公开了 `right_clicked_row`，
     // 没有单元格访问器，所以在单元格自己身上记一笔（事件从最内层派发，不会丢）
     let table = cx.entity().clone();
+    // 【刀2】数组列：`▶ 首值 [+N-1]`（三角在单元格内、文本前，间距 `INSIDE_MARGIN = 3`；
+    // hint 在文本右侧，间距 `LEFT_MARGIN = 6` —— `GridCellRenderer.java:158-172` /
+    // `renderHints:339`）。展开状态此刻恒为收起：子行铺平与状态读取是刀3。
+    let array_display = array_cell::array_cell_display(kind, &text, false);
     // 【结果集配色槽】脏格 / 冲突格底色在闭包外先求值：`product_tokens::get` 要借 `cx`，
     // 而 `.when` 的闭包捕获后与后面的多次借用打架。
     let dirty_bg = product_tokens::get(cx).result_cell_modified_background(theme);
@@ -437,7 +448,56 @@ pub(crate) fn render_td(
         let full = text.clone();
         cell = cell.tooltip(move |window, cx| result_cell_tooltip(full.clone(), window, cx));
     }
-    cell.child(SharedString::from(display)).into_any_element()
+    // 【刀2】数组格子拆成「三角 / 首值 / hint」三段（普通格子仍是单个文本）
+    let body: gpui_kit::AnyElement = match array_display {
+        ArrayCellDisplay::Plain => SharedString::from(display).into_any_element(),
+        ArrayCellDisplay::Collapsed { lead, hint } => {
+            let mut row = div()
+                .flex()
+                .items_center()
+                // 回归哨兵：几何在 headless 下量不到，用它坐实「收起态真的走这条分支」
+                .debug_selector(move || format!("editor-result-array-collapsed-{row_ix}-{col_ix}"))
+                .child(
+                    div()
+                        .flex_none()
+                        .text_color(muted)
+                        .child(SharedString::from(ARRAY_COLLAPSED_GLYPH)),
+                )
+                .child(
+                    div()
+                        .ml(gpui_kit::px(ARRAY_GLYPH_SPACING))
+                        .truncate()
+                        .child(SharedString::from(lead)),
+                );
+            if let Some(hint) = hint {
+                row = row.child(
+                    div()
+                        .ml(gpui_kit::px(ARRAY_HINT_SPACING))
+                        .flex_none()
+                        .text_color(muted)
+                        .child(SharedString::from(hint)),
+                );
+            }
+            row.into_any_element()
+        }
+        ArrayCellDisplay::Expanded { label } => div()
+            .flex()
+            .items_center()
+            .debug_selector(move || format!("editor-result-array-expanded-{row_ix}-{col_ix}"))
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(muted)
+                    .child(SharedString::from(ARRAY_EXPANDED_GLYPH)),
+            )
+            .child(
+                div()
+                    .ml(gpui_kit::px(ARRAY_GLYPH_SPACING))
+                    .child(SharedString::from(label)),
+            )
+            .into_any_element(),
+    };
+    cell.child(body).into_any_element()
 }
 
 // ========== 值查看器内容分派（纯函数；事件路径重建树，render 只摆） ==========

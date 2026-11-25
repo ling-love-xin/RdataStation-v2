@@ -36,14 +36,18 @@
 //!
 //! - [`entry`]：结果条目（`ResultEntry`）+ 列类型（`ColumnKind` / `ColumnType`）+ 落位语义
 //!   （`ResultPlacement` / `Pushdown`）+ 上限常量（`MAX_RESULT_SETS`），含条目相关测试；
+//! - [`array`]：PG 数组字面量解析（`{a,b}` / `{}` / `{{1,2},{3,4}}`，含引号 / NULL 元素），
+//!   给「数组列展开」用（`ColumnKind::Array` 的值侧）；
 //! - [`fact`]：事实档载体状态（`FactState` 三态状态机，L0 事实层）；
 //! - [`store`]：`ResultStore` 集合与逐文档结果槽（`DocumentResults`）、淘汰 / 追加合并
 //!   （`merge_fact_state` / `evict_oldest`），含集合相关测试。
 
+mod array;
 mod entry;
 mod fact;
 mod store;
 
+pub use array::{ArrayItem, format_array_items, parse_pg_array_literal};
 pub use entry::{ColumnKind, ColumnType, MAX_RESULT_SETS, Pushdown, ResultEntry, ResultPlacement};
 pub use fact::FactState;
 pub use store::ResultStore;

@@ -50,6 +50,7 @@
 //! | [`menu`] | 三组右键菜单（纯函数）+ 列去重 + `context_menu` |
 //! | [`stats`] | 列统计 / 分组计数 / 统计文本 |
 //! | [`cell`] | 单元格渲染（样式 / 裁剪 / JSON / BLOB + `render_td`） |
+//! | [`array_cell`] | 数组单元格显示拆分（收起 `▶ 首值 [+N-1]` / 展开 `▼ [N]`，刀2） |
 //! | [`header`] | 表头渲染（截断 / 类型标签 / 排序箭头 + `render_th`） |
 //! | [`fit`] | 列宽自适应（双击列头分隔线：按内容算宽 + `fit_column`） |
 //! | [`table_impl`] | `TableDelegate` 其余方法（列数 / 排序 / 拖列 / 取下一段 / 空态） |
@@ -62,6 +63,7 @@
 //! [`table_impl`] 只做薄转发。字段与方法放宽到 `pub(crate)` 供同 crate 共享，
 //! **对外 pub 面不变**（editor 侧 `pub use result_panel::grid::*` 通配重导出不受影响）。
 
+pub(crate) mod array_cell;
 pub(crate) mod cell;
 pub(crate) mod delegate;
 pub(crate) mod edit;

@@ -820,6 +820,8 @@ impl ResultGridDelegate {
             ColumnKind::Boolean => Some("✓"),
             ColumnKind::Timestamp | ColumnKind::Date | ColumnKind::Time => Some("◷"),
             ColumnKind::Text | ColumnKind::Uuid | ColumnKind::Json => Some("Aa"),
+            // 数组：`[]` 两字符（`grid/fit.rs` 按同一字符串量宽，与渲染一致）
+            ColumnKind::Array => Some("[]"),
             ColumnKind::Binary => Some("01"),
             ColumnKind::Unknown => None,
         }

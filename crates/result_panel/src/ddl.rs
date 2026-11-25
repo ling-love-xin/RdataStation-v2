@@ -64,6 +64,10 @@ fn generic_type(kind: ColumnKind) -> Option<&'static str> {
         ColumnKind::Time => Some("TIME"),
         ColumnKind::Uuid => Some("UUID"),
         ColumnKind::Json => Some("JSON"),
+        // 数组没有跨库通用的写法（`TEXT[]` / `ARRAY<TEXT>` 互不通用）：不兜底，
+        // 让上游「有驱动原始名就原样用」那条路径去出 `text[]`；真没名字就按
+        // 「编不出类型」报 `Unavailable`，不编一个错语法
+        ColumnKind::Array => None,
         ColumnKind::Binary => Some("BLOB"),
         ColumnKind::Unknown => None,
     }

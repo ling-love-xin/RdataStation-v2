@@ -147,7 +147,9 @@ pub(crate) fn render_th(
         // 族色 → 浅底 + 文字色
         let color = match kind {
             ColumnKind::Integer | ColumnKind::Float | ColumnKind::Decimal => theme.colors.primary,
-            ColumnKind::Text | ColumnKind::Uuid | ColumnKind::Json => theme.colors.success,
+            ColumnKind::Text | ColumnKind::Uuid | ColumnKind::Json | ColumnKind::Array => {
+                theme.colors.success
+            }
             ColumnKind::Timestamp | ColumnKind::Date | ColumnKind::Time => theme.colors.info,
             ColumnKind::Boolean => theme.colors.warning,
             ColumnKind::Binary => theme.colors.secondary,
