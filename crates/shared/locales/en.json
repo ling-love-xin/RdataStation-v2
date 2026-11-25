@@ -1231,6 +1231,7 @@
   "留痕只为可查，失败原因原样保留": "Trail is for auditing only; failure causes are kept as-is",
   "复制插件状态、驱动登记与日志路径，便于排查": "Copy plugin status, driver registrations and log paths for troubleshooting",
   "欢迎使用 RdataStation": "Welcome to RdataStation",
+  "回到欢迎页": "Back to Welcome",
   "新建连接、打开项目，或从最近使用继续": "Create a connection, open a project, or continue from recent items",
   "在左侧「资产库」选中一行，这里显示它的归档凭证": "Select a row in the 'Assets' panel on the left to see its archive receipt here",
   "在草稿箱搜索框输入关键词回车，结果会显示在这里": "Type a keyword in the drafts search box and press Enter; results appear here",
