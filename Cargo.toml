@@ -125,13 +125,13 @@ gpui-kit = { version = "0.10.0", features = ["gpui-fast"] }
 # 不动 arrow、不动存储格式；库换 `third_party/duckdb/1.5.6/` 并同步 `.cargo/config.toml`。
 # `appender-arrow`（→ `vtab-arrow` → `vtab` + `num`）是**纯 crate 侧**特性（不动 C 内核、不动
 # 动态库）：给的是 `Appender::append_record_batch` 与 `Statement::query_arrow` —— 二次分析
-# 那条「结果集直灌 DuckDB」的路就靠它们（P2.5，§4.5.2）。duckdb-rs 依赖的 arrow 是 58，
-# 与本仓同一个大版本，批能直接递过去，不用转格式。
-# **精确锁定**：duckdb 的版本号不是语义化兼容的（`1.10505` / `1.10506` / `1.20000`
-# 是三条不同的内核线），用 caret 约束会被解析到 `1.20000.1`（DuckDB 2.0，强制 arrow 60）。
-# 升 1.5 线内 patch 时改本行 + `.cargo/config.toml` 的 DUCKDB_LIB_DIR + `third_party/duckdb/` 三处成对。
-duckdb = { version = "=1.10506.1", features = ["appender-arrow"] }
-arrow = "58.4.0"
+# 那条「结果集直灌 DuckDB」的路就靠它们（P2.5，§4.5.2）。duckdb-rs 2.0 线依赖 arrow 60，
+# 与本仓同一大版本，批能直接递过去，不用转格式。
+# **精确锁定**：duckdb 的版本号不是语义化兼容的（`1.10506` / `1.20001` 是两条不同的内核线），
+# 用 caret 约束会被解析到别的内核线。升版本时改本行 + `.cargo/config.toml` 的
+# DUCKDB_LIB_DIR + `third_party/duckdb/` 三处成对。
+duckdb = { version = "=1.20001.0", features = ["appender-arrow"] }
+arrow = "60.1.0"
 bigdecimal = "0.4.11"
 num-traits = "0.2"
 
