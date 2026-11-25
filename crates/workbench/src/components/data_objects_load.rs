@@ -480,13 +480,30 @@ pub fn register_connection_source(shared: &Shared, conn_id: &str, name: &str, cx
             return;
         }
     };
-    let taken = match engine::persistence::analysis_sources::taken_aliases(&conn, None) {
-        Ok(aliases) => aliases,
+    // 同一份登记表可能被**多个文档**各登记一次（每个文档各自右键「登记为项目源」），
+    // 目录里写的是同一个 connection_id —— 这时不该再写第二行（面板会出现两条同名源、
+    // 别名也被挤成 `shop_2`）。先查这条连接是否已登记：是就只回显，不插。
+    let rows = match engine::persistence::analysis_sources::list(&conn) {
+        Ok(rows) => rows,
         Err(error) => {
-            shared.say_error(format!("读已有别名失败：{error}"), cx);
+            shared.say_error(format!("读已有登记失败：{error}"), cx);
             return;
         }
     };
+    if let Some(existing) = rows
+        .iter()
+        .find(|row| row.connection_id.as_deref() == Some(conn_id))
+    {
+        refresh(shared, cx);
+        shared.say(
+            format!("这条连接已经登记过：{} → 别名 {}", existing.name, existing.alias),
+            cx,
+        );
+        return;
+    }
+    // 展示名去重看**全表**（含加速档的展示名）：035 让加速档的 alias 不占挂载名，
+    // 但它照样得有个不撞车的显示名，否则面板上两行同名、用户分不出是哪个连接。
+    let taken: Vec<String> = rows.iter().map(|row| row.alias.clone()).collect();
     let alias = engine::duckdb::federation::registry::default_alias(name, &taken);
     let now = chrono::Utc::now().to_rfc3339();
     let row = engine::persistence::analysis_sources::AnalysisSourceRow {
