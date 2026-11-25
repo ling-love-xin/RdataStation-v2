@@ -71,6 +71,30 @@ pub fn open_load_files_dialog(
     window: &mut Window,
     cx: &mut App,
 ) {
+    open_load_dialog(shared, scope, None, window, cx);
+}
+
+/// 只在某一条连接上开「加源」（数据对象面板里「已登记、挂不上」的源行点展开走这条）
+///
+/// 与 [`open_load_files_dialog`] 同一套树 / 内省 / 确认动作，区别只是连接集合收成一条；
+/// 前提是这条连接**活着**（死连接没有表可列，模型侧也不给展开）。
+pub fn open_load_dialog_for_connection(
+    shared: &Shared,
+    conn_id: &str,
+    scope: LoadScope,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    open_load_dialog(shared, scope, Some(conn_id), window, cx);
+}
+
+fn open_load_dialog(
+    shared: &Shared,
+    scope: LoadScope,
+    only_conn: Option<&str>,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let config = PickerConfig {
         title: scope.title(),
         kinds: LOAD_KINDS,
@@ -82,7 +106,14 @@ pub fn open_load_files_dialog(
             confirm(shared, scope, state, window, cx);
         },
     );
-    source_picker::open_source_picker(shared, config, strategy, window, cx);
+    match only_conn {
+        Some(conn_id) => {
+            source_picker::open_source_picker_for_connection(
+                shared, conn_id, config, strategy, window, cx,
+            );
+        }
+        None => source_picker::open_source_picker(shared, config, strategy, window, cx),
+    }
 }
 
 /// 确认：文件逐项建视图、库表汇总成连接标记；任一失败就停下回显

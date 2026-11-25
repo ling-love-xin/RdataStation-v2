@@ -689,11 +689,43 @@ pub fn open_source_picker(
     window: &mut Window,
     cx: &mut App,
 ) {
+    open_with_conns(shared, config, strategy, None, window, cx);
+}
+
+/// 只在**某一条连接**上打开选源器（数据对象面板里「已登记但挂不上」的源行走这条）。
+///
+/// 口径（2026-11-25）：这类连接挂不进联邦，但活连接时可以直接从它的表里
+/// 载入临时表 / 落项目归档——树/内省/确认动作与通用「加源」完全同一套
+/// （`NavigatorService` 活连接内省，和导航栏同一份真相），差别只是连接集合收成一条。
+pub fn open_source_picker_for_connection(
+    shared: &Shared,
+    conn_id: &str,
+    config: PickerConfig,
+    strategy: ConfirmStrategy,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    open_with_conns(shared, config, strategy, Some(conn_id), window, cx);
+}
+
+fn open_with_conns(
+    shared: &Shared,
+    config: PickerConfig,
+    strategy: ConfirmStrategy,
+    only_conn: Option<&str>,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let conns = shared
         .connections
         .borrow()
         .iter()
         .filter(|c| c.connected)
+        // 指定连接时只留那一条（挂了但连不上的本来也不在树里——没有表可列）
+        .filter(|c| match only_conn {
+            Some(id) => c.id == id,
+            None => true,
+        })
         .cloned()
         .collect::<Vec<_>>();
     let drafts = collect_drafts(shared);
