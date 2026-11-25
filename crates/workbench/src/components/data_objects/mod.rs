@@ -519,24 +519,8 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
         });
     }
 
-    // 本地加速源：与联邦源同段（都是"挂进 DuckDB 的源"），小标是三态。
-    // 会话存在即挂载成功（加速档建会话失败不留会话），所以这里 mounted 恒为真。
-    for source in &collected.accel_sources {
-        let registered = registered_conns.iter().any(|id| id == &source.owner);
-        out.push(Object {
-            key: format!("accel:{}", source.owner),
-            name: source.alias.clone(),
-            note: format!("{} · 引用需切到本地加速档", source.note),
-            channel: Channel::Accel,
-            life: Life::Session,
-            state: State::Ready,
-            group: Group::Source,
-            pill: MountState::from_facts(registered, true).label(),
-            version: None,
-            // 加速档的表要切到该档才能引用，行上不给可直接抄的名字
-            sql_ref: None,
-        });
-    }
+    // 本地加速源**不再出源段行**（2026-11-25 用户口径）：加速 = 一次一个库的 ATTACH，
+    // 只在执行面存在，不进数据对象面板、也不算「已挂载」事实（铁律第 42 条末段）。
 
     // 源段的一级行 = 一条**已注册成分析源**的连接（`use_duckdb_fed`，零 I/O）。
     // 表清单不在这里——展开某个连接时才 introspect（面板 `load_source_children`），
@@ -562,44 +546,62 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             .iter()
             .find(|(row_key, _)| row_key == &key)
             .map(|(_, path)| path.clone());
-        let accel_mounted = collected
-            .accel_sources
-            .iter()
-            .any(|source| source.owner == conn.id);
-        let note = match (&file_path, &not_mounted) {
-            // 文件库把本体路径写在副标题上：用户要确认"挂的是哪一个文件"
-            (Some(path), _) => format!("文件库 · {path}"),
-            _ => conn.note.clone(),
-        };
-        // 挂载事实：连上了 + 真挂进实例（文件库看 `loaded_files` 里有没有这个路径，
-        // 网络连接看加速会话有没有起来）。连不上就不可能有事实。
-        let mounted = connected
-            && not_mounted.is_none()
-            && (file_path.is_some() || accel_mounted);
-        // 「已连接、没挂、也没登记」这一行只是**可挂的源**：它还没成为登记过的项目源，
-        // 说「项目级」是替用户做主——scope 等他真挂了/登记了再出现（规格 §7）
-        let pill = match (conn.registered, mounted) {
-            (false, false) => "未挂载",
-            _ => MountState::from_facts(conn.registered, mounted).label(),
-        };
         // 登记过就把别名写进副标题：树的第一层是别名，行标题是连接名，不写就对不上
         let registered_alias = collected
             .registered_sources
             .iter()
             .find(|row| row.connection_id.as_deref() == Some(conn.id.as_str()))
             .map(|row| row.alias.clone());
+        // 网络连接挂没挂 = **登记的别名在联邦/分析会话里有没有成事实**（会话行按别名列，
+        // 不按连接 id）。加速会话不算（第 42 条末段）。
+        let session_mounted = registered_alias.as_deref().is_some_and(|alias| {
+            collected
+                .session_sources
+                .iter()
+                .any(|source| source.alias == alias && source.failed.is_none())
+        });
+        let note = match (&file_path, &not_mounted) {
+            // 文件库把本体路径写在副标题上：用户要确认"挂的是哪一个文件"
+            (Some(path), _) => format!("文件库 · {path}"),
+            _ => conn.note.clone(),
+        };
+        // 挂载事实：连上了 + 真挂进实例（文件库看 `loaded_files` 里有没有这个路径，
+        // 网络连接只认**联邦 / 分析会话**——加速会话不算（第 42 条末段））。
+        let mounted = connected
+            && not_mounted.is_none()
+            && (file_path.is_some() || session_mounted);
+        // 小标（第 42 条 / 2026-11-25）：
+        // - 无 ATTACH 能力但已登记 → 「已登记」（永远挂不上，只等导航里活连接后选表）；
+        // - 有能力者走三态；「已连接、没挂、也没登记」只写「未挂载」（不给 scope）。
+        let pill: &'static str = if !conn.attach_capable {
+            if conn.registered {
+                "已登记"
+            } else {
+                // 无能力且没登记不该进源段（`collect` 的过滤挡掉了），兜底也说清楚
+                "未挂载"
+            }
+        } else if !conn.registered && !mounted {
+            "未挂载"
+        } else {
+            MountState::from_facts(conn.registered, mounted).label()
+        };
+        // 登记过就把别名写进副标题：树的第一层是别名，行标题是连接名，不写就对不上
         let note = match registered_alias {
             Some(alias) => format!("{note} · 别名 {alias}"),
             None => note,
         };
         let state = if !connected {
             State::Failed("未连接 · 连上后可展开选表".to_string())
+        } else if !conn.attach_capable {
+            // 无 ATTACH 能力、已登记：活连接就能展开选表（选中的表走右键「载入临时表 /
+            // 项目归档」进 DuckDB，产物是表段行，不是 catalog）
+            State::Ready
         } else if not_mounted.is_some() {
             State::Failed("未挂载 · 右键挂载后可展开选表".to_string())
-        } else if file_path.is_none() && !accel_mounted {
-            // 网络连接：没有加速会话就是没挂。展开它只会得到一句「先开本地加速」——
+        } else if file_path.is_none() && !session_mounted {
+            // 网络连接：没有联邦/分析会话就是没挂。展开它只会得到一句「先挂上」——
             // 那不该做成一个能点开才报错的行
-            State::Failed("未挂载 · 先在这条连接上开「本地加速」，挂上后可展开选表".to_string())
+            State::Failed("未挂载 · 右键「挂载」后才能展开选表".to_string())
         } else {
             State::Ready
         };
@@ -1612,12 +1614,12 @@ mod tests {
                 note: "订单库 · MySQL · 本地加速会话".into(),
                 failed: None,
             }],
-            // 一条项目级登记：订单库以 `rds_src` 挂进来（加速档固定别名）
+            // 一条项目级登记：订单库以 `mysql_src` 挂进联邦会话（sample 的会话行里有它）
             registered_sources: vec![registered_row(
                 "src_1",
                 "订单库",
                 Some("C_mysql_9"),
-                "rds_src",
+                "mysql_src",
             )],
         }
     }
@@ -2203,30 +2205,13 @@ mod tests {
         );
     }
 
-    /// 本地加速源进源段：pill 区分「加速源」，副标题把「要切通道」说清。
+    /// 本地加速会话**不产生源段行**（第 42 条末段）：加速一次一个库，只在执行面存在。
     #[test]
-    fn accel_sources_join_the_source_group_with_their_own_pill() {
+    fn accel_sessions_do_not_produce_source_rows() {
         let rows = objects(&sample());
-        let accel = rows
-            .iter()
-            .find(|o| o.key == "accel:C_mysql_9")
-            .expect("加速源要有行");
-        assert_eq!(accel.group, Group::Source);
-        assert_eq!(accel.pill, "已挂载 · 项目级", "登记过的连接 = 项目级");
-        assert_eq!(accel.channel, Channel::Accel);
-        assert_eq!(accel.life, Life::Session);
-        assert!(accel.can_analyze(), "会话在就是挂上了");
         assert!(
-            accel.note.contains("本地加速档"),
-            "要提示引用需切通道：{}",
-            accel.note
-        );
-        // 树根写真实 catalog 名（加速档固定 `rds_src`）；连接名在副标题里
-        assert_eq!(accel.name, "rds_src");
-        assert!(
-            accel.note.contains("订单库"),
-            "副标题要带上这是哪条连接：{}",
-            accel.note
+            rows.iter().all(|o| !o.key.starts_with("accel:")),
+            "加速度会话不该出现在数据对象面板"
         );
     }
 
@@ -2300,28 +2285,34 @@ mod tests {
         );
     }
 
-    /// 没登记、但加速会话在：这一行要说「已挂载 · 会话级」——切项目它会消失。
+    /// 没登记、会话在：源段只说「未挂载」（没登记就没有 scope 可宣称）。
     #[test]
     fn mounted_without_registry_is_session_level() {
         let mut c = sample();
         c.registered_sources.clear();
-        // 旧标记也要关掉：`ConnRow.registered` 是 collect 里合成的，这里直接改
         c.connections[0].registered = false;
-
-        let accel = objects(&c)
-            .into_iter()
-            .find(|o| o.key == "accel:C_mysql_9")
-            .expect("加速源要有行");
-        assert_eq!(accel.pill, "已挂载 · 会话级");
 
         let conn = objects(&c)
             .into_iter()
             .find(|o| o.key == "conn:C_mysql_9")
             .expect("连接行要在");
         assert_eq!(
-            conn.pill, "已挂载 · 会话级",
-            "挂上了但没登记：会话级，不是项目级"
+            conn.pill, "未挂载",
+            "没登记就不知道自己挂在哪、也不该冒充「项目级」"
         );
+    }
+
+    /// 无 ATTACH 能力但已登记：小标只写「已登记」，不给挂载（挂不上）。
+    #[test]
+    fn registered_without_attach_capability_says_registered() {
+        let mut c = sample();
+        c.connections[0].attach_capable = false;
+        let conn = objects(&c)
+            .into_iter()
+            .find(|o| o.key == "conn:C_mysql_9")
+            .expect("已登记的无能力源也要出");
+        assert_eq!(conn.pill, "已登记");
+        assert_eq!(conn.group, Group::Source);
     }
 
     /// 登记指向的连接已经不在清单里：源不许「蒸发」，照样出一行「未挂载 · 项目级」。
@@ -2369,9 +2360,8 @@ mod tests {
         );
         assert_eq!(
             super::source_ref("accel:C_mysql_9"),
-            Some(super::SourceRef::Accel {
-                conn_id: "C_mysql_9".into()
-            })
+            None,
+            "加速会话不进面板，`accel:` 不再是可展开的源"
         );
         assert_eq!(
             super::source_ref("fileview:f_warehouse"),
@@ -2518,8 +2508,7 @@ mod tests {
             .into_iter()
             .find(|o| !o.can_analyze())
             .expect("sample 里应有不可用行");
-        down.state =
-            State::Failed("未挂载 · 先在这条连接上开「本地加速」，挂上后可展开选表".to_string());
+        down.state = State::Failed("未挂载 · 右键「挂载」后才能展开选表".to_string());
         assert_eq!(down.availability_chip(), "未挂载");
         assert!(
             down.availability_text().len() > down.availability_chip().len() * 4,
