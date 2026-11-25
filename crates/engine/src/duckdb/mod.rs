@@ -35,6 +35,8 @@ pub mod extensions;
 pub mod export;
 pub mod federation;
 pub mod file_view;
+/// 分析实例 / 会话层：一个进程实例 + 每个 SQL 编辑器一条会话（catalog 共享、`TEMP` 会话级）
+pub mod instance;
 mod manager;
 mod metrics;
 mod probe;
