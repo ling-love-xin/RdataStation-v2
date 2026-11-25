@@ -441,7 +441,8 @@ fn the_top_filter_bar_drives_the_column_list(cx: &mut gpui_kit::TestAppContext) 
 }
 
 /// 页签顺序 / 下标映射（`events::right_tabs` 单一来源）：全集下
-/// 0=列浏览器（默认）/ 1=值详情 / 2=计算 / 3=分组 / 4=引用，越界回落默认页；
+/// 0=值详情 / 1=计算 / 2=列浏览器 / 3=分组 / 4=引用，越界回落默认页（= 值详情，
+/// 即 DBeaver 唯一 `default="true"` 的 `value-view`：规范序 = 扩展注册序，见 §46）；
 /// 反查（枚举 → 下标）与之互逆，页签条 `selected_index` 与点击回调用的是同一份换算
 /// （`strip_index` / `tab_at_strip_index`，作用在「当前已启用集合」上）。
 #[test]
@@ -449,12 +450,12 @@ fn right_tab_index_maps_to_the_five_panel_tabs() {
     use super::events::{right_tabs, strip_index, tab_at_strip_index};
 
     let all = right_tabs();
-    assert_eq!(tab_at_strip_index(&all, 0), RightTab::Browser);
-    assert_eq!(tab_at_strip_index(&all, 1), RightTab::Value);
-    assert_eq!(tab_at_strip_index(&all, 2), RightTab::Stats);
+    assert_eq!(tab_at_strip_index(&all, 0), RightTab::Value);
+    assert_eq!(tab_at_strip_index(&all, 1), RightTab::Stats);
+    assert_eq!(tab_at_strip_index(&all, 2), RightTab::Browser);
     assert_eq!(tab_at_strip_index(&all, 3), RightTab::Group);
     assert_eq!(tab_at_strip_index(&all, 4), RightTab::Reference);
-    assert_eq!(tab_at_strip_index(&all, 99), RightTab::Browser);
+    assert_eq!(tab_at_strip_index(&all, 99), RightTab::Value);
 
     // 互逆：每个页签既是自己的下标对应的枚举，下标也唯一
     for (index, tab) in all.iter().copied().enumerate() {
@@ -480,23 +481,27 @@ fn close_right_tab_drops_one_page_and_reopen_restores_order(
     use super::events::{neighbor_after_close, right_tabs};
 
     // 纯函数：关掉规范序中间那页 → 落到紧随其后的剩页；关最后一页 → 落到最后一个剩页
+    // （规范序 §55 = Value → Stats → Browser → Group → Reference）
     let all = right_tabs();
     let without_stats: Vec<RightTab> =
         all.iter().copied().filter(|t| *t != RightTab::Stats).collect();
-    assert_eq!(neighbor_after_close(&without_stats, RightTab::Stats), RightTab::Group);
+    assert_eq!(neighbor_after_close(&without_stats, RightTab::Stats), RightTab::Browser);
     let only_tail = [RightTab::Browser, RightTab::Value];
     assert_eq!(neighbor_after_close(&only_tail, RightTab::Reference), RightTab::Value);
 
-    // 面板态：出厂五页全开
+    // 面板态：先把出厂的单页集合铺成五页（本用例要看「关一页、其余还在」）
     cx.update(gpui_kit::init);
     let (panel, cx) = panel_harness(cx);
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.set_open_tabs_initial(&RightTab::ALL, cx))
+    });
     assert_eq!(
         panel.read_with(cx, |p, _| p.open_tabs().to_vec()),
-        right_tabs().to_vec(),
-        "出厂应是五页全开"
+        RightTab::ALL.to_vec(),
+        "前提：五页全开"
     );
 
-    // 关「计算」页（当前页是列浏览器 → 当前页不变，只少一项）
+    // 关「计算」页（当前页是出厂默认的值详情 → 当前页不变，只少一项）
     cx.update(|_, app| {
         panel.update(app, |p, cx| p.close_right_tab(RightTab::Stats, cx))
     });
@@ -505,7 +510,7 @@ fn close_right_tab_drops_one_page_and_reopen_restores_order(
     assert!(!open.contains(&RightTab::Stats));
     assert_eq!(
         panel.read_with(cx, |p, _| p.right_tab),
-        RightTab::Browser,
+        RightTab::Value,
         "关的不是当前页 → 当前页不动"
     );
 
@@ -518,7 +523,7 @@ fn close_right_tab_drops_one_page_and_reopen_restores_order(
     });
     assert_eq!(panel.read_with(cx, |p, _| p.right_tab), RightTab::Reference);
 
-    // 重开「计算」页：按规范序插回（在「值详情」之后、分组之前），并置为当前
+    // 重开「计算」页：按规范序插回（值详情之后、列浏览器之前），并置为当前
     cx.update(|_, app| {
         panel.update(app, |p, cx| p.open_right_tab(RightTab::Stats, cx))
     });
@@ -526,9 +531,9 @@ fn close_right_tab_drops_one_page_and_reopen_restores_order(
     assert_eq!(
         open,
         vec![
-            RightTab::Browser,
             RightTab::Value,
             RightTab::Stats,
+            RightTab::Browser,
             RightTab::Reference,
         ],
         "重开应按规范序插回原位"
@@ -596,6 +601,11 @@ fn reopening_after_closing_all_pages_restores_default_tabs(cx: &mut gpui_kit::Te
 fn toggling_the_sidebar_keeps_a_custom_tab_set(cx: &mut gpui_kit::TestAppContext) {
     cx.update(gpui_kit::init);
     let (panel, cx) = panel_harness(cx);
+
+    // 先把出厂的单页集合铺成五页（本用例要看「关一页、其余不动」）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.set_open_tabs_initial(&RightTab::ALL, cx))
+    });
 
     // 关掉「列浏览器」→ 四页
     cx.update(|_, app| {
@@ -2623,6 +2633,10 @@ fn injected_hidden_status_commands_replace_the_default_set(cx: &mut gpui_kit::Te
 fn column_browser_toolbar_queues_the_generate_ddl_request(cx: &mut gpui_kit::TestAppContext) {
     cx.update(gpui_kit::init);
     let (panel, vcx) = panel_harness(cx);
+    // 出厂只启用「值详情」（§55），本用例要列浏览器页内的钮 → 先切过去
+    vcx.update(|_, app| {
+        panel.update(app, |p, cx| p.set_right_tab(RightTab::Browser, cx))
+    });
     vcx.update(|window, cx| window.draw(cx).clear(cx));
 
     let button = vcx
@@ -2750,6 +2764,10 @@ fn right_panel_pages_share_the_toolbar_shape(cx: &mut gpui_kit::TestAppContext) 
 
     cx.update(gpui_kit::init);
     let (panel, cx) = panel_harness(cx);
+    // 出厂只启用「值详情」（§55）；本用例从列浏览器页开始量，先切过去（切页即登记）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.set_right_tab(RightTab::Browser, cx))
+    });
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
     let visible = |id: &'static str, cx: &mut gpui_kit::VisualTestContext| -> bool {
@@ -3066,8 +3084,11 @@ fn identical_column_projection_keeps_the_browser_selection(cx: &mut gpui_kit::Te
 fn column_browser_toolbar_offers_generate_ddl(cx: &mut gpui_kit::TestAppContext) {
 
     cx.update(gpui_kit::init);
-    // 默认页就是列浏览器，面板实体本身不再用到（只要它被挂上窗口即可）
-    let (_panel, cx) = panel_harness(cx);
+    // 出厂只启用「值详情」（§55）；列浏览器是下面这颗钮所在的页，先切过去
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.set_right_tab(RightTab::Browser, cx))
+    });
 
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(
@@ -3145,6 +3166,10 @@ fn column_browser_draws_the_comment_line_below_the_name(cx: &mut gpui_kit::TestA
 
     cx.update(gpui_kit::init);
     let (panel, cx) = panel_harness(cx);
+    // 出厂只启用「值详情」（§55），列浏览器的注释行要这一页可见 → 先切过去
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.set_right_tab(RightTab::Browser, cx))
+    });
     // 只有第一列（id）有注释，第二列（amount）没有 → 第二行应该只出现一次
     cx.update(|_, app| {
         panel.update(app, |p, cx| {
@@ -3378,7 +3403,13 @@ fn clicking_an_edge_tab_toggles_that_page(cx: &mut gpui_kit::TestAppContext) {
     cx.update(gpui_kit::init);
     let (panel, cx) = panel_harness(cx);
 
-    cx.update(|_, app| panel.update(app, |p, cx| p.set_right_tab(RightTab::Value, cx)));
+    // 铺满五页（出厂只启用「值详情」，§55）：本用例要看「关一页、其余仍在」
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.set_open_tabs_initial(&RightTab::ALL, cx);
+            p.set_right_tab(RightTab::Value, cx);
+        })
+    });
     assert!(cx.update(|_, app| panel.read(app).panels_visible()));
 
     // 当前页、整栏可见 → 点它 = 关掉这一页（返回 false 表示没有「切到该页」）
@@ -3431,8 +3462,14 @@ fn right_tab_close_button_closes_only_that_page(cx: &mut gpui_kit::TestAppContex
     cx.update(gpui_kit::init);
     let (panel, cx) = panel_harness(cx);
 
-    // 当前页 = 值详情；随后点「列浏览器」页签的 ×（不是当前页）
-    cx.update(|_, app| panel.update(app, |p, cx| p.set_right_tab(RightTab::Value, cx)));
+    // 当前页 = 值详情；铺满五页后再点「列浏览器」页签的 ×（不是当前页）
+    // （出厂只启用值详情，§55：不铺满就没有列浏览器页签可点）
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.set_open_tabs_initial(&RightTab::ALL, cx);
+            p.set_right_tab(RightTab::Value, cx);
+        })
+    });
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
     let close = cx
@@ -3506,10 +3543,10 @@ fn closing_the_last_edge_tab_collapses_the_bar(cx: &mut gpui_kit::TestAppContext
     });
     assert_eq!(
         panel.read_with(cx, |p, _| p.open_tabs().to_vec()),
-        vec![RightTab::Browser],
-        "只剩一页"
+        vec![RightTab::Value],
+        "只剩一页（规范序首项 = 值详情，§55）"
     );
-    cx.update(|_, app| panel.update(app, |p, cx| p.close_right_tab(RightTab::Browser, cx)));
+    cx.update(|_, app| panel.update(app, |p, cx| p.close_right_tab(RightTab::Value, cx)));
     assert!(cx.update(|_, app| panel.read(app).open_tabs().is_empty()));
     assert!(
         !cx.update(|_, app| panel.read(app).panels_visible()),
@@ -3532,8 +3569,12 @@ fn moving_a_right_tab_reorders_only_the_strip(cx: &mut gpui_kit::TestAppContext)
     cx.update(gpui_kit::init);
     let (panel, cx) = panel_harness(cx);
 
+    // 铺满五页（出厂只启用值详情，§55）：本用例要五个页签才谈得上重排
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.set_open_tabs_initial(&RightTab::ALL, cx))
+    });
     let before = panel.read_with(cx, |p, _| p.open_tabs().to_vec());
-    assert_eq!(before.len(), 5, "默认五页全开");
+    assert_eq!(before.len(), 5, "前提：五页全开");
 
     // 把第 3 个（下标 2）拖到最左（0）
     let moved = before[2];
@@ -3562,6 +3603,10 @@ fn edge_bar_reopens_a_closed_page(cx: &mut gpui_kit::TestAppContext) {
     cx.update(gpui_kit::init);
     let (panel, cx) = panel_harness(cx);
 
+    // 铺满五页（出厂只启用值详情，§55）后关掉「计算」页
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.set_open_tabs_initial(&RightTab::ALL, cx))
+    });
     cx.update(|_, app| panel.update(app, |p, cx| p.close_right_tab(RightTab::Stats, cx)));
     assert!(!cx.update(|_, app| panel.read(app).open_tabs().contains(&RightTab::Stats)));
 
@@ -3572,7 +3617,7 @@ fn edge_bar_reopens_a_closed_page(cx: &mut gpui_kit::TestAppContext) {
         "点竖条应把被关掉的页重新启用"
     );
     assert_eq!(cx.update(|_, app| panel.read(app).right_tab), RightTab::Stats);
-    // 重新启用时按规范序插回（计算仍在值详情之后、分组之前）
+    // 重新启用时按规范序插回（计算在值详情之后、列浏览器之前）
     assert_eq!(
         cx.update(|_, app| panel.read(app).open_tabs().to_vec()),
         super::events::right_tabs().to_vec()
@@ -5190,13 +5235,13 @@ fn right_panel_view_menu_lists_pages_then_the_two_toggles(cx: &mut gpui_kit::Tes
     assert_eq!(
         pages,
         vec![
-            RightTab::Browser,
             RightTab::Value,
             RightTab::Stats,
+            RightTab::Browser,
             RightTab::Group,
             RightTab::Reference,
         ],
-        "面板勾选项的顺序应与竖条 / 页签同一份（列浏览器在前）"
+        "面板勾选项的顺序应与竖条 / 页签同一份（规范序 = DBeaver 扩展注册序，§55）"
     );
     assert_eq!(items.len(), 10, "五页 + 分隔 + 最大化 + 分隔 + 面板开关 + 布局方向");
     assert_eq!(items[5], super::events::PanelViewItem::Separator);
@@ -5281,6 +5326,11 @@ fn right_panel_tab_strip_lists_all_panels_and_click_switches(cx: &mut gpui_kit::
     cx.update(gpui_kit::init);
     let (panel, cx) = panel_harness(cx);
 
+    // 铺满五页（出厂只启用「值详情」，§55）：本用例要点「五个页签都在这一行里」
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| p.set_open_tabs_initial(&RightTab::ALL, cx))
+    });
+
     // 当前页 = 引用（最后一个页签）
     cx.update(|_, app| panel.update(app, |p, cx| p.set_right_tab(RightTab::Reference, cx)));
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -5293,9 +5343,9 @@ fn right_panel_tab_strip_lists_all_panels_and_click_switches(cx: &mut gpui_kit::
     let bar = cx
         .debug_bounds("editor-result-right-tabs")
         .expect("页签行应带调试选择器才量得到");
-    // 页签行最左一格一定是第一个页签（列浏览器）：点它应把「切到列浏览器」入队
-    // （切页是宿主动作：面板只 `queue.request`，由宿主 dispatch 调 `set_right_tab`，
-    // 所以这里断言队列，而不是面板状态）
+    // 页签行最左一格一定是第一个页签（规范序首项 = 值详情，§55）：点它应把
+    // 「切到值详情」入队（切页是宿主动作：面板只 `queue.request`，由宿主 dispatch 调
+    // `set_right_tab`，所以这里断言队列，而不是面板状态）
     let point = gpui_kit::point(bar.origin.x + px(24.), bar.origin.y + bar.size.height / 2.);
     cx.simulate_click(point, gpui_kit::Modifiers::default());
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -5304,8 +5354,8 @@ fn right_panel_tab_strip_lists_all_panels_and_click_switches(cx: &mut gpui_kit::
     assert!(
         queued
             .iter()
-            .any(|request| matches!(request, crate::ports::ResultRequest::SetRightTab(RightTab::Browser))),
-        "点第一个页签应入队「切到列浏览器」（点空白 / 死回调都会让队列为空）：{queued:?}，页签行 {bar:?}"
+            .any(|request| matches!(request, crate::ports::ResultRequest::SetRightTab(RightTab::Value))),
+        "点第一个页签应入队「切到值详情」（点空白 / 死回调都会让队列为空）：{queued:?}，页签行 {bar:?}"
     );
 }
 
@@ -5351,6 +5401,93 @@ fn status_row_pager_follows_dbeaver_nav_order(cx: &mut gpui_kit::TestAppContext)
     assert!(
         first < prev && prev < next && next < last,
         "分页四钮应按 首页→上页→下页→末页 从左到右排（实际 {first}/{prev}/{next}/{last}）"
+    );
+}
+
+/// 【状态栏组序】DBeaver `createStatusBar0`（`ResultSetViewer.java:2043-2195`）按**添加序**
+/// 从左到右是十组：① 刷新（`rsToolbar`，`:2059-2074`）→ ② 编辑工具条（`:2077-2083`）→
+/// ③ 导航工具条（`:2084-2090`）→ ④ 配置工具条（空，`:2091-2096`）→ ⑤ 添加/导出
+/// （`:2098-2111`）→ ⑥ `ToolbarSeparatorContribution(true)` + `ConfigAction` 齿轮
+/// （`:2113-2122`）→ ⑦ `resultSetSize` 段大小（`:2126-2153`）→ ⑧ `rowCountLabel`
+/// （`:2155-2180`）→ ⑨ `selectionStatLabel`（`:2182-2184`）→ ⑩ `statusLabel`（`:2186-2191`）。
+///
+/// 本仓此前把「刷新 + 导出」并成一段摆最末、齿轮挂在整行最右端；本条按上面的真值组序
+/// 重排（刷新提到最左、导出自成一组落在行导航之后、齿轮挪到段大小之左），
+/// 并用**真实像素横坐标**把相对位置钉住——只看「在不在」守不住组序。
+#[gpui_kit::test]
+fn status_row_groups_follow_dbeaver_create_status_bar_order(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{ElementId, SharedString};
+
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|_, app| {
+        panel.update(app, |p, cx| {
+            p.status = Some(crate::grid::status::ResultStatus {
+                total_rows: 2,
+                ..Default::default()
+            });
+            // 工具条配置的默认隐藏集合（撤销/重做/取下一段）不含这几颗；清空是为了
+            // 断言与默认集合无关，只钉「组序」
+            p.hidden_status_commands.clear();
+            cx.notify();
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let left_of = |cx: &mut gpui_kit::VisualTestContext, id: &str| -> f32 {
+        let name = SharedString::from(id.to_string());
+        let snap = cx
+            .update(|window, _| window.try_find(ElementId::Name(name)))
+            .unwrap_or_else(|| panic!("状态栏应有 {id}"));
+        f32::from(snap.bounds().origin.x)
+    };
+    // 刷新 / 导出 两槽有两种长相：面板注入了真钮就是真钮，没有上下文时是禁用占位
+    // （占位 id 由图标 Debug 拼成，见 `status.rs` 的 `placeholder_btn`）。这里两者都认。
+    let left_of_either = |cx: &mut gpui_kit::VisualTestContext, ids: &[&str]| -> f32 {
+        for id in ids {
+            let name = SharedString::from((*id).to_string());
+            if let Some(snap) = cx.update(|window, _| window.try_find(ElementId::Name(name))) {
+                return f32::from(snap.bounds().origin.x);
+            }
+        }
+        panic!("状态栏应有 {ids:?} 之一");
+    };
+
+    let refresh = left_of_either(cx, &["editor-result-refresh", "editor-result-action-RotateCw"]);
+    let page_first = left_of(cx, "editor-result-page-first");
+    let page_last = left_of(cx, "editor-result-page-last");
+    let export = left_of_either(cx, &["editor-result-export", "editor-result-action-Download"]);
+    let preferences = left_of(cx, "editor-result-status-preferences");
+    // 段大小框挂在**外层 div 的 `debug_selector`** 上（`Input` 是 RenderOnce，内部 id
+    // 进不了 `try_find`）——与 `status_row_shows_the_segment_size_input` 同一口径，
+    // 只能走 `debug_bounds`
+    let segment: f32 = cx
+        .debug_bounds("editor-result-segment-size")
+        .unwrap_or_else(|| panic!("状态栏应有段大小框"))
+        .origin
+        .x
+        .into();
+    let count_rows = left_of(cx, "editor-result-count-rows");
+    assert!(
+        refresh < page_first,
+        "刷新应在最左、行导航之前（真值 `:2059-2074` 对 `:2084-2090`；实际 {refresh} / {page_first}）"
+    );
+    assert!(
+        page_last < export,
+        "导出应在行导航之后（真值「添加」组 `:2098-2111`；实际 {page_last} / {export}）"
+    );
+    assert!(
+        export < preferences,
+        "齿轮应在导出之后（真值 `:2113-2122`；实际 {export} / {preferences}）"
+    );
+    assert!(
+        preferences < segment,
+        "齿轮应在段大小之左（真值 `ConfigAction` 对 `resultSetSize`；实际 {preferences} / {segment}）"
+    );
+    assert!(
+        segment < count_rows,
+        "段大小在行计数标签之左（真值 `:2126-2153` 对 `:2155-2180`；实际 {segment} / {count_rows}）"
     );
 }
 

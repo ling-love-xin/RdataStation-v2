@@ -887,9 +887,11 @@ impl ResultPanel {
     /// 【右栏】注入已启用的页集合（宿主在创建后按偏好 `result_panel.open_tabs` 调用）。
     ///
     /// 入参按**规范序**归一：只收已知页、重复丢弃、顺序按 [`RightTab::ALL`]；
-    /// 结果为空 = 「偏好里没写过 / 被关空」→ 保持现状（出厂五页全开），对齐 DBeaver
-    /// `activateDefaultPanels:1396-1400`（先把空的 id 清掉再补默认面板，所以空集在那边
-    /// 也等于「恢复默认」）。当前页不在新集合里时落到集合第一页。
+    /// 结果为空 = 「偏好里没写过 / 被关空」→ 保持现状。DBeaver 的
+    /// `activateDefaultPanels:1396-1408` 对空集合的做法是「补 `default="true"` 的面板，
+    /// 补完仍空则取注册序第一个」；本仓出厂集合已按同一源码收窄为 `[value]`
+    /// （见 `result_panel.open_tabs` 的出厂值），所以首次启动「保持现状」的结果
+    /// 与那边「恢复默认」的结果一致。当前页不在新集合里时落到集合第一页。
     pub fn set_open_tabs_initial(&mut self, tabs: &[RightTab], cx: &mut Context<Self>) {
         let normalized: Vec<RightTab> = RightTab::ALL
             .into_iter()
@@ -3083,17 +3085,15 @@ pub(crate) fn saved_filter_applies(
 
 /// 右栏五页的**规范顺序**（页签条的左右顺序 / 索引映射 / 视图菜单条目共用一份）。
 ///
-/// 对齐 DBeaver 的 `CTabFolder panelFolder`（`ResultSetViewer.java:1430-1478`）：右栏是**一个**
+/// 对齐 DBeaver 的 `CTabFolder panelFolder`（`ResultSetViewer.java:1003-1080`）：右栏是**一个**
 /// 页签夹，五页都作为页签常驻在里面（`addPanel` 里 `new CTabItem(panelFolder, SWT.CLOSE)`），
-/// 点页签即 `setActivePanel`；顺序就是 `availablePanels` 的注册顺序（`:1003-1080`）。
+/// 点页签即 `setActivePanel`；顺序就是 `availablePanels` 的注册顺序（= `plugin.xml:127-173`）。
+///
+/// 【2026-11-25】顺序改为 `RightTab::ALL` 单一来源（§46）：值详情 → 计算 → 列浏览器 →
+/// 分组 → 引用，与 DBeaver 扩展注册序 value-view / column-aggregate / results-metadata /
+/// results-grouping / results-references 一一对应。
 pub(crate) fn right_tabs() -> [RightTab; 5] {
-    [
-        RightTab::Browser,
-        RightTab::Value,
-        RightTab::Stats,
-        RightTab::Group,
-        RightTab::Reference,
-    ]
+    RightTab::ALL
 }
 
 /// 【页内工具条】该页是否在「工具条与正文之间」画一条水平分隔线。
@@ -3115,8 +3115,11 @@ pub(crate) fn strip_index(open: &[RightTab], tab: RightTab) -> usize {
 }
 
 /// 【页签条】下标 → 已启用集合内的页（`TabBar::on_click` 回调用；越界兜底默认页）。
+///
+/// 兜底取 [`RightTab::default()`]（= 值详情，DBeaver 里唯一 `default="true"` 的
+/// `value-view`，也是出厂启用集合的首项）。
 pub(crate) fn tab_at_strip_index(open: &[RightTab], index: usize) -> RightTab {
-    open.get(index).copied().unwrap_or(RightTab::Browser)
+    open.get(index).copied().unwrap_or_default()
 }
 
 /// 【页签条】每个页签内侧那颗 × 的稳定选择器（`debug_selector` / 测试定位用）。
@@ -3155,7 +3158,7 @@ pub(crate) fn neighbor_after_close(remaining: &[RightTab], closed: RightTab) -> 
         })
         .or_else(|| remaining.last())
         .copied()
-        .unwrap_or(RightTab::Browser)
+        .unwrap_or_default()
 }
 
 /// 「视图菜单」条目清单（顺序照 `fillPanelsMenu:1559-1588`）：

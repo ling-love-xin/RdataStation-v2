@@ -2107,9 +2107,14 @@ fn f7_and_ctrl_7_toggle_the_result_panels(cx: &mut TestAppContext) {
 /// `activatePanel(id, true, true)`（整栏收起时顺带展开，并切到该页）。
 ///
 /// 断言口径照上游那两个分支：
-/// ① 出厂五页全开 → `CTRL+ALT+F2`（值详情）先**关掉那一页**，整栏仍在、页签少一页；
-/// ② 同一键再按 → 重新启用并切到该页；
-/// ③ 关掉**当前页** → 当前页落到规范序里的下一页；
+/// 出厂口径（§55）：右栏只启用「值详情」一页 —— DBeaver `plugin.xml:127-173` 里只有
+/// `value-view` 是 `default="true"`，`activateDefaultPanels:1396-1410` 只把
+/// `isShowByDefault()` 为真的面板补进空集合；规范序 = 扩展注册序
+/// `Value → Stats → Browser → Group → Reference`。
+///
+/// ① `CTRL+ALT+F2`（值详情）关掉唯一一页 → 集合空 → 整栏收起；
+/// ② 同一键再按 → 重新启用、展开并切到该页；
+/// ③ 关掉**当前页** → 落到规范序里其后最近的已启用页，没有则回退集合末项；
 /// ④ 整栏收起（`F7`）之后按任一页 → 展开并切到该页（`activatePanel` 的 `showPanels` 分支），
 ///    顺带把之前关掉的页重新启用。
 #[gpui_kit::test]
@@ -2151,101 +2156,76 @@ fn ctrl_alt_f2_to_f6_toggle_the_right_panels(cx: &mut TestAppContext) {
         })
     };
 
-    // 前提：出厂五页全开、当前页是列浏览器（`RightTab::ALL` 首项）
-    assert_eq!(
-        tabs(cx),
-        vec![
-            RightTab::Browser,
-            RightTab::Value,
-            RightTab::Stats,
-            RightTab::Group,
-            RightTab::Reference,
-        ],
-        "前提：出厂五页全开"
-    );
-    assert_eq!(active(cx), RightTab::Browser, "前提：出厂当前页是列浏览器");
+    // 前提：出厂只启用值详情（DBeaver 唯一 `default="true"` 的 value-view），当前页也是它
+    assert_eq!(tabs(cx), vec![RightTab::Value], "前提：出厂只启用值详情");
+    assert_eq!(active(cx), RightTab::Value, "前提：出厂当前页就是值详情");
+    assert!(visible(cx), "前提：右栏可见");
 
-    // ① `CTRL+ALT+F2`（value-view）→ 关掉值详情页；关的不是当前页，当前页不动
+    // ① `CTRL+ALT+F2`（value-view）→ 关掉唯一一页：集合空 → `close_right_tab` 的空集
+    //    分支直接把整栏收起
     cx.simulate_keystrokes("ctrl-alt-f2");
     cx.run_until_parked();
-    assert!(
-        !tabs(cx).contains(&RightTab::Value),
-        "CTRL+ALT+F2 首按应把这页从集合里摘掉"
-    );
-    assert!(visible(cx), "还剩别的页，整栏不该收起");
-    assert_eq!(active(cx), RightTab::Browser, "关的不是当前页，当前页不动");
+    assert!(tabs(cx).is_empty(), "关掉唯一一页后启用集合应为空");
+    assert!(!visible(cx), "集合空 → 整栏收起");
 
-    // ② 同一键再按 → 重新启用（按规范序插回列浏览器之后）并切到该页
+    // ② 同一键再按 → 重新启用、展开并切到该页
     cx.simulate_keystrokes("ctrl-alt-f2");
     cx.run_until_parked();
-    assert_eq!(
-        tabs(cx),
-        vec![
-            RightTab::Browser,
-            RightTab::Value,
-            RightTab::Stats,
-            RightTab::Group,
-            RightTab::Reference,
-        ],
-        "再按一次应把值详情按规范序插回"
-    );
+    assert_eq!(tabs(cx), vec![RightTab::Value], "再按一次应把值详情开回来");
+    assert!(visible(cx), "整栏收起态下重开应顺带展开");
     assert_eq!(active(cx), RightTab::Value, "打开即切到该页");
 
-    // ③ 关掉**当前页**（此时当前页就是值详情）→ 落到规范序里的下一页（计算）
-    cx.simulate_keystrokes("ctrl-alt-f2");
+    // ③ 关掉**当前页**：先开计算（CTRL+ALT+F6 = column-aggregate）与列浏览器
+    //    （CTRL+ALT+F4 = results-metadata），再关掉当前页
+    cx.simulate_keystrokes("ctrl-alt-f6");
     cx.run_until_parked();
-    assert!(!tabs(cx).contains(&RightTab::Value));
-    assert_eq!(active(cx), RightTab::Stats, "关当前页应落到规范序里的下一页");
+    assert_eq!(tabs(cx), vec![RightTab::Value, RightTab::Stats]);
+    assert_eq!(active(cx), RightTab::Stats, "打开即切到该页");
 
-    // 再把值详情开回来（此刻它的规范序前驱列浏览器仍在，插回原位）
-    cx.simulate_keystrokes("ctrl-alt-f2");
+    cx.simulate_keystrokes("ctrl-alt-f4");
+    cx.run_until_parked();
+    assert_eq!(
+        tabs(cx),
+        vec![RightTab::Value, RightTab::Stats, RightTab::Browser],
+        "按规范序插入（Browser 在 Stats 之后）"
+    );
+    assert_eq!(active(cx), RightTab::Browser);
+
+    // 关掉当前页（列浏览器）：规范序在它之后的 Group 未启用 → 回退集合末项（计算）
+    cx.simulate_keystrokes("ctrl-alt-f4");
+    cx.run_until_parked();
+    assert!(
+        !tabs(cx).contains(&RightTab::Browser),
+        "CTRL+ALT+F4 再按应关掉当前页"
+    );
+    assert_eq!(
+        active(cx),
+        RightTab::Stats,
+        "关当前页应落到其后最近的已启用页，没有则回退末项"
+    );
+    assert!(visible(cx), "还剩别的页，整栏不该收起");
+
+    // `CTRL+ALT+F5`（results-grouping）→ 打开分组页并切过去
+    cx.simulate_keystrokes("ctrl-alt-f5");
+    cx.run_until_parked();
+    assert_eq!(
+        tabs(cx),
+        vec![RightTab::Value, RightTab::Stats, RightTab::Group]
+    );
+    assert_eq!(active(cx), RightTab::Group);
+
+    // `CTRL+ALT+F3`（results-references）→ 打开引用页并切过去
+    cx.simulate_keystrokes("ctrl-alt-f3");
     cx.run_until_parked();
     assert_eq!(
         tabs(cx),
         vec![
-            RightTab::Browser,
             RightTab::Value,
             RightTab::Stats,
             RightTab::Group,
             RightTab::Reference,
         ]
     );
-    assert_eq!(active(cx), RightTab::Value);
-
-    // `CTRL+ALT+F4`（results-metadata = 列浏览器）→ 关掉列浏览器（非当前页）
-    cx.simulate_keystrokes("ctrl-alt-f4");
-    cx.run_until_parked();
-    assert!(
-        !tabs(cx).contains(&RightTab::Browser),
-        "CTRL+ALT+F4 应关掉列浏览器页"
-    );
-    assert_eq!(active(cx), RightTab::Value);
-
-    // `CTRL+ALT+F5`（results-grouping）→ 关掉分组页
-    cx.simulate_keystrokes("ctrl-alt-f5");
-    cx.run_until_parked();
-    assert!(!tabs(cx).contains(&RightTab::Group), "CTRL+ALT+F5 应关掉分组页");
-
-    // `CTRL+ALT+F6`（column-aggregate）→ 关掉计算页
-    cx.simulate_keystrokes("ctrl-alt-f6");
-    cx.run_until_parked();
-    assert!(!tabs(cx).contains(&RightTab::Stats), "CTRL+ALT+F6 应关掉计算页");
-    assert_eq!(
-        tabs(cx),
-        vec![RightTab::Value, RightTab::Reference]
-    );
-
-    // `CTRL+ALT+F3`（results-references）→ 关掉引用页；再按一次 → 开回来并切过去
-    cx.simulate_keystrokes("ctrl-alt-f3");
-    cx.run_until_parked();
-    assert!(
-        !tabs(cx).contains(&RightTab::Reference),
-        "CTRL+ALT+F3 应关掉引用页"
-    );
-    assert_eq!(tabs(cx), vec![RightTab::Value]);
-    cx.simulate_keystrokes("ctrl-alt-f3");
-    cx.run_until_parked();
-    assert!(tabs(cx).contains(&RightTab::Reference), "再按应开回引用页");
     assert_eq!(active(cx), RightTab::Reference, "打开即切到引用页");
 
     // ④ 整栏收起（`F7`）之后按 `CTRL+ALT+F4`：即使列浏览器此前被关掉，

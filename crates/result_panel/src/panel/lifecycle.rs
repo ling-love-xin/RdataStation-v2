@@ -393,10 +393,12 @@ impl ResultPanel {
             saved_filter: None,
             filter_backfill: None,
             presentation: Presentation::Grid,
-            right_tab: RightTab::Browser,
-            // 出厂 = 五页全开（DBeaver `activateDefaultPanels` 会补默认面板；
-            // 本仓的五页一直可用，初值取规范序全集）
-            open_tabs: super::events::right_tabs().to_vec(),
+            // 出厂当前页 = 值详情（DBeaver `activateDefaultPanels:1414-1418`：活动页取
+            // 启用集合首个，而出厂集合只有唯一 `default="true"` 的 `value-view`）
+            right_tab: RightTab::default(),
+            // 【2026-11-25 §46】出厂只启用「值详情」一页，与 DBeaver 出厂启用集合一致；
+            // 宿主随后用偏好 `result_panel.open_tabs` 覆盖（`set_open_tabs_initial`）
+            open_tabs: vec![RightTab::default()],
             // 【引用页】清单未读（切到该页签时宿主才去取外键）、没有选中键
             references: crate::references::ReferencesState::NotLoaded,
             active_reference: None,

@@ -912,35 +912,54 @@ impl Presentation {
     }
 }
 
-/// 结果面板右侧辅助栏的标签页（对齐 DBeaver `resultset/panel/` 右侧面板组：
-/// metadata / valueviewer / aggregate / grouping 同栏页签切换；「引用」页留 backlog，
-/// 见 result-panel.md §8.12）。顺序：列浏览器 → 值详情 → 计算 → 分组。
+/// 结果面板右侧辅助栏的标签页（对齐 DBeaver `resultset/panel/` 右侧面板组）。
+///
+/// **规范序 = DBeaver 扩展注册序**（`plugin.xml:127-173` 的 `org.jkiss.dbeaver.resultset.panel`
+/// 五项，按文档序）：`value-view` → `column-aggregate` → `results-metadata` →
+/// `results-grouping` → `results-references`。`availablePanels` 就是按这个顺序收集的
+/// （`ResultSetViewer.java:1003-1004` 的 `getSupportedPanels`），页签条 / 竖条 / 视图菜单
+/// 三处都用它排序（`:1055-1080`、`fillPanelsMenu:1559-1588`）。
+///
+/// 本仓页与 DBeaver 面板的对应：
+/// - [`RightTab::Value`] ↔ `value-view`（`ValueViewerPanel`）
+/// - [`RightTab::Stats`] ↔ `column-aggregate`（`AggregateColumnsPanel`）
+/// - [`RightTab::Browser`] ↔ `results-metadata`（`MetaDataPanel`；本仓在此页上加了列可见/冻结
+///   的行内操作与底部明细，属本仓增强）
+/// - [`RightTab::Group`] ↔ `results-grouping`（`GroupingPanel`）
+/// - [`RightTab::Reference`] ↔ `results-references`（`ReferencesPanel`）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RightTab {
-    /// 列浏览器：搜索框 + 列清单 + 底部元数据明细（默认；对齐 DBeaver metadata 面板）
+    /// 数值查看器：选中格完整值（DBeaver `value-view`，**唯一 `default="true"`** 的页）
     #[default]
-    Browser,
-    /// 数值查看器：选中格完整值
     Value,
     /// 计算：选中列的 count / null / min / max / avg / sum（纯函数，不引 polars）
+    /// （DBeaver `column-aggregate`）
     Stats,
+    /// 列浏览器：搜索框 + 列清单 + 底部元数据明细（DBeaver `results-metadata` / `MetaDataPanel`；
+    /// 本仓把「可见 / 冻结」的行内操作与底部明细加在这一页上）
+    Browser,
     /// 分组：按一列本地 groupby 计数（纯函数；DBeaver 大表口径是下发 GROUP BY）
+    /// （DBeaver `results-grouping`）
     Group,
-    /// 引用：外键引用查看（选中列被哪些表引用，对齐 DBeaver 引用页签；backlog 空态）
+    /// 引用：外键引用查看（选中列被哪些表引用；backlog 空态）（DBeaver `results-references`）
     Reference,
 }
 
 impl RightTab {
-    /// 全部页（规范序 = 页签条 / 竖条 / 视图菜单的渲染序）。
+    /// 全部页（规范序 = 页签条 / 竖条 / 视图菜单的渲染序 = DBeaver 面板注册序）。
     ///
-    /// 【2026-11-24 收口为五页】对齐 DBeaver `availablePanels`（`ResultSetViewer.java:1003-1080`）
-    /// 的五个右栏面板：metadata / valueviewer / aggregate / grouping / references。
-    /// 本仓原有第六页「执行SQL」（`ExecSql`）在 DBeaver 里**没有对应面板**，按拍板删除；
-    /// 它承载的 wrapped SQL 改为显示在筛选栏展开区（见 `sidebars.rs::render_filter_expand_bar`）。
+    /// 【2026-11-25 顺序对齐 §46】DBeaver 五面板在 `plugin.xml:127-173` 里的注册序是
+    /// value-view / column-aggregate / results-metadata / results-grouping / results-references；
+    /// 本仓此前把「列浏览器」排在首位（那是本仓早期只有 metadata 一页时的遗留），
+    /// `availablePanels` 在那边是按扩展序收集的，故这里改成同一顺序。
+    ///
+    /// 【2026-11-24 收口为五页】本仓原有第六页「执行SQL」（`ExecSql`）在 DBeaver 里
+    /// **没有对应面板**，按拍板删除；它承载的 wrapped SQL 改为显示在筛选栏展开区
+    /// （见 `sidebars.rs::render_filter_expand_bar`）。
     pub const ALL: [RightTab; 5] = [
-        RightTab::Browser,
         RightTab::Value,
         RightTab::Stats,
+        RightTab::Browser,
         RightTab::Group,
         RightTab::Reference,
     ];

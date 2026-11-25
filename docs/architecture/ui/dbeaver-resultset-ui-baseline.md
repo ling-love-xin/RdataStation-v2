@@ -3682,3 +3682,87 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
 - `cargo check -p rds-result-panel --lib` → `Finished`，0 warning。
 - `cargo test -p rds-result-panel --lib` → **453 passed / 0 failed**（新增 `object_chip_hover_background_blends_a_tenth_towards_white_or_black`；断言暗底 `l` 上升且幅度 = `(1-l)*0.1`、亮底 `l` 下降且幅度 = `l*0.1`）。
 - 悬停观感（明/暗两主题的实际对比度）按要求由用户手动目视；本刀不启动 GUI、不截图。
+
+## §55 四件拍板落地：侧栏规范序 / settings `tr` / 查找快捷键 / 状态栏组序
+
+用户 2026-11-25 一次性拍板四件事（「该 / 修 / 不做 / 按照 dbeaver 顺序重排」），本节逐条给结果。
+
+### 55.1 ① 侧栏：规范序 + 出厂启用集合（`RightTab::ALL`）
+
+**取证**（`plugins/org.jkiss.dbeaver.ui.editors.data/plugin.xml:127-173`）：
+
+| 注册序 | id | `default` | 本仓枚举 |
+| --- | --- | --- | --- |
+| 1 | `value-view`（`ValueViewerPanel`） | **`true`**（唯一一个） | `RightTab::Value` |
+| 2 | `column-aggregate`（`AggregateColumnsPanel`） | `false` | `RightTab::Stats` |
+| 3 | `results-metadata`（`MetaDataPanel`） | `false` | `RightTab::Browser` |
+| 4 | `results-grouping`（`GroupingPanel`） | `false` | `RightTab::Group` |
+| 5 | `results-references`（`ReferencesPanel`） | `false` | `RightTab::Reference` |
+
+补白逻辑在 `activateDefaultPanels`（`ResultSetViewer.java:1396-1410`）：集合为空时先补 `isShowByDefault()` 的项；仍为空则取 `availablePanels.getFirst()`（就是 `value-view`）；`activePanelId` 不在集合里也补进去。
+
+**落地**（原 `stash@{0}` 的 6 文件 + 测试修正）：
+
+- `ports.rs`：`RightTab` 按注册序重排为 `Value, Stats, Browser, Group, Reference`，`Value` 改 `#[default]`；新增 `RightTab::ALL` 常量（注释里写明注册序来源与补白规则）。
+- `panel/events.rs`：`right_tabs()` 返回 `RightTab::ALL`；`tab_at_strip_index` / `neighbor_after_close` 的兜底改 `unwrap_or_default()`（= `Value`，对应真值「集合空取第一个可用面板」）。
+- `panel/lifecycle.rs`：初始化 `right_tab: RightTab::default()`、`open_tabs: vec![RightTab::default()]`（只启用值详情，同 `default="true"` 唯一性）。
+- `settings/src/model/result_panel.rs`：出厂 `default_result_open_tabs()` 由 `"browser,value,stats,group,reference"` 改成 `"value"`。
+- `settings/src/registry/entries/result_panel.rs`：hint 与 `default_json` 同步成 `"value"`。
+- `crates/editor/src/view/tests/results_a.rs`：`ctrl_alt_f2_to_f6_toggle_the_right_panels` 按新口径重写——出厂只有值详情；关唯一一页→集合空→`close_right_tab` 空集分支收起整栏；同键再按→重开 + 展开 + 切页；关当前页→落到规范序其后最近者、否则回退末项；F7 收起后按键→展开 + 启用 + 切页。
+
+**测试修正（13 处，两类）**：`crates/result_panel/src/panel/tests.rs` 里依赖旧「五页全开 / Browser 首位」前提的用例，按需要补 `set_open_tabs_initial(&RightTab::ALL, cx)` 或 `set_right_tab(tab, cx)`（后者内部会 `open_right_tab_only` 登记），硬编码顺序断言改新序（`[Value, Stats, Browser, Group, Reference]`）。
+
+**验证**：`cargo check -p rds-result-panel -p rds-settings --lib` → `Finished`；`cargo test -p rds-result-panel --lib` → **453 passed / 0 failed**；`cargo test -p rds-editor --lib` → **869 passed / 0 failed / 4 ignored**（含重写后的页签用例）。
+
+### 55.2 ② settings `tr` E0425：实测已不存在，未改
+
+`crates/settings/src/settings_page.rs` 顶层（`:18`）与测试模块内（`:242`）各有一句 `use shared::i18n::tr;`，`cargo test -p rds-settings --all-targets --no-run` → `Finished`，`rds_settings` 测试 **50 passed / 0 failed**。该 E0425 是上一轮的陈旧报错，本轮无改动。
+
+### 55.3 ③ 查找快捷键：不做
+
+真值 `KeyboardShortcuts.SEARCH_ALL` 不在 `dbeaver-ref` 源码树内（`org.jkiss.dbeaver.ui` 的 `KeyboardShortcuts` 属 jar 依赖，源码目录里没有该文件），键位无法取证。按用户「不做」执行：不猜键位、不先挂一个占位快捷键。
+
+### 55.4 ④ 状态栏按 DBeaver 组序重排
+
+**真值组序**（`createStatusBar0`，`ResultSetViewer.java:2043-2195`，`RowLayout(SWT.HORIZONTAL)` 按添加序从左到右）：
+
+| # | 组 | 真值 | 行号 |
+| --- | --- | --- | --- |
+| ① | 刷新 | `rsToolbar` + `getAutoRefresh().populateRefreshButton(... UIIcon.REFRESH, () -> refreshData(null))`，随后 `getAutoRefresh().enableControls(false)` | `:2059-2074` |
+| ② | 编辑工具条 | 仅当 `supportsDecoratorFeature(FEATURE_EDIT) && !DATA_EDIT_DISABLED` 才建；贡献点 `TOOLBAR_EDIT_CONTRIBUTION_ID` | `:2077-2083` |
+| ③ | 导航工具条 | `TOOLBAR_NAVIGATION_CONTRIBUTION_ID` | `:2084-2090` |
+| ④ | 配置工具条 | 空容器（留给别人的贡献） | `:2091-2096` |
+| ⑤ | 添加/导出 | `POLICY_DATA_EXPORT` 未启用时才挂 `TOOLBAR_EXPORT_CONTRIBUTION_ID`；再 `GroupMarker(TOOLBAR_GROUP_PRESENTATIONS)` + `Separator(TOOLBAR_GROUP_ADDITIONS)` + `TOOLBAR_CONTRIBUTION_ID` | `:2098-2111` |
+| ⑥ | 分隔符 + 齿轮 | `ToolbarSeparatorContribution(true)` + `ConfigAction` | `:2113-2122` |
+| ⑦ | 段大小 | 有边框 `Text`，宽 `5*fontHeight`，tooltip `resultset_segment_size`；modify 写 `RESULT_SET_MAX_ROWS`（`>0` 且小于 `MIN_SEGMENT_SIZE` 时抬到下限）；失焦回显真实值 | `:2126-2153` |
+| ⑧ | 行计数 | `ActiveStatusMessage(UIIcon.COMPILE, controls_resultset_viewer_calculate_row_count, this)`，`isActionEnabled = hasData()`，异步 `readRowCount` 后按 `ROW_COUNT_FORMAT = "###,###,###,###,###,##0"`（`:164`）格式化 | `:2155-2180` |
+| ⑨ | 选中统计 | 只读 `Text` + tooltip `result_set_viewer_selection_stat_tooltip`，初值一个空格 | `:2182-2184` |
+| ⑩ | 状态消息 | `StatusLabel`，宽 `50*fontHeight`，仅当 `!supportsDecoratorFeature(FEATURE_COMPACT_STATUS)` 才建 | `:2186-2191` |
+
+末尾 `statusBarLayoutJob.schedule(10)`（`:2194`）。
+
+**本仓改动**（`crates/result_panel/src/grid/status.rs` 的 `render_status_row`，原来是一条扁平行）：
+
+- 原来「系统段 = 导出 · 刷新」并成一组摆最末，现拆两颗各归其位：**刷新**提到最左（①），**导出**排在行导航之后自成一组（⑤）。
+- 齿轮从整行最右端挪到**段大小之左**，并按真值补一颗前置发丝线（⑥ 的 `ToolbarSeparatorContribution(true)`）。
+- 组序落为：刷新 → 变更集动作（提交/回滚/撤销/重做）→ 行级动作（修改/新增/复制/删除）→ 行导航（首/上/下/末 + 取下一段 + 取全部）→ 导出 → |齿轮 → 段大小 → 行号框 → 计算行数 → 选中统计 →（右段三项）→ 右栏开关 → 配置菜单 ▾。
+- 分隔线仍走「两侧都有内容才画」，全隐一段时不留孤线。
+
+**新增测试** `status_row_groups_follow_dbeaver_create_status_bar_order`：用真实像素 x 钉五条相对位置——刷新 < 首页、末页 < 导出、导出 < 齿轮、齿轮 < 段大小、段大小 < 计算行数。刷新/导出两槽同时认「注入的真钮」与「禁用占位」两种长相（占位 id 由图标 Debug 拼成）；段大小框走 `debug_bounds`（它的 `debug_selector` 挂在外层 div，`Input` 是 `RenderOnce`，内部 id 进不了 `try_find`）。
+
+**残余差异（登记）**：
+
+| 项 | 真值 | 本仓 | 说明 |
+| --- | --- | --- | --- |
+| 组形态 | 每组一个 `ToolBar` / `ToolBarManager`，组内靠 `GroupMarker` / `Separator` 分界 | 一条 `h_flex` 里的扁按钮序列 + 1px 发丝线 | 组件层无「可嵌工具条组」；顺序与分组语义已对齐，形态非像素级 |
+| 刷新钮 | `getAutoRefresh().populateRefreshButton(...)` + `enableControls(false)`——刷新钮由 AutoRefresh 组件提供并初始禁用 | 单颗 `Button`（`⟳ 刷新`，`editor-result-refresh`），无 result_sql 时不注入、走占位 | `AutoRefresh.java` 不在 `dbeaver-ref` 源码树（jar 依赖），**其内部是否含「自动刷新」勾选项未取证**，故不补该控件 |
+| 编辑工具条的门控 | `FEATURE_EDIT && !DATA_EDIT_DISABLED` 才建 | 写操作段恒摆（无注入时是禁用占位） | 占位是「布局不跳」的本仓口径，与真值「整条不建」不同 |
+| 段大小框宽 | `5*fontHeight` | 常量 `ui::RESULT_SEGMENT_BOX_WIDTH` | 未按字体高换算 |
+| 行计数钮 | `ActiveStatusMessage`（图标 `COMPILE`，点它跑 `readRowCount`） | ghost `Button`（图标 `Calculator`，算完就地换文案） | 文案格式近似千分位，未用 `###,##0` 模板 |
+| ⑩ 状态消息位 | `StatusLabel`，宽 `50*fontHeight` | 无此位；消息走网格上方的 `editor-result-notice` 独立行 | 结构差异，未落地 |
+| 本仓增强项 | 真值没有 | 左/右栏开关、配置菜单 ▾（命令勾选）、行号跳转框、右段「内存/耗时/查询条数」 | 只按用户口径「按 dbeaver 顺序重排」调组序，增强项保留在原相对位置（右段三项推右、两开关收尾） |
+
+**并行线隐患登记（未改其代码）**：`crates/editor/src/view/host/format.rs:331-363` 的 `set_channel` 在 `EditorView::update` 里同步调 `ChannelsPort::confirm_federated_mount`，而宿主回调（`host.rs:119` 写明「弹不出窗口时按 `true`」）会再 `editor.update(... apply_channel ...)` ——**同步放行就重入同一实体**，实测 panic 在 `gpui-fast-0.1.17/src/app/entity_map.rs:197`（`view::tests::channels::the_sources_picker_shows_up_in_the_federated_channel`）。本轮的测试桩改用 `cx.defer(move |cx| on_decision(true, cx))` 绕开（defer 语义即「当前 effect cycle 末尾、实体已出栈后再跑」），生产侧建议同样走 defer。此点属并行线在途改动，本刀不动其实现，仅登记。
+
+**验证**：`cargo check -p rds-result-panel --lib` → `Finished`；`cargo test -p rds-result-panel --lib` → **454 passed / 0 failed**（453 + 新增组序用例）。
+

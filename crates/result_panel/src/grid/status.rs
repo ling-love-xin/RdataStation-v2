@@ -777,29 +777,27 @@ pub fn render_status_row(
     }
     let fetch_page = shown(StatusCommand::FetchPage).then(|| controls.more).flatten();
     let fetch_all = shown(StatusCommand::FetchAll).then(|| controls.fetch_all).flatten();
-    // 系统段：导出 · 刷新（2026-10-28 从工具栏移入状态栏；面板注入真钮，
-    // 未注入（无导出上下文 / 不可刷新）回退禁用占位——占位仍占位，布局不跳）
+    // 系统段拆成两颗、各归其位（真值组序见 `createStatusBar0`）：刷新是**最左第一组**
+    // （`rsToolbar` 的 `populateRefreshButton`，`ResultSetViewer.java:2059-2074`），导出走的是
+    // 行导航之后的「添加 / 导出」组（`TOOLBAR_EXPORT_CONTRIBUTION_ID` + `TOOLBAR_GROUP_ADDITIONS`
+    // + `TOOLBAR_CONTRIBUTION_ID`，`:2098-2111`）——此前合成一「系统段」摆在末尾，与真值不符
     let refresh_placeholder = (IconName::RotateCw, "刷新（重跑当前 SQL）");
-    let mut system_ops: Vec<AnyElement> = Vec::new();
-    if shown(StatusCommand::Export) {
-        system_ops.push(
-            controls
-                .export
-                .unwrap_or_else(|| placeholder_btn(placeholders[FIRST_SYSTEM_ACTION])),
-        );
-    }
-    if shown(StatusCommand::Refresh) {
-        system_ops.push(
-            controls
-                .refresh
-                .unwrap_or_else(|| placeholder_btn(refresh_placeholder)),
-        );
-    }
+    let refresh_op = shown(StatusCommand::Refresh)
+        .then(|| controls.refresh.unwrap_or_else(|| placeholder_btn(refresh_placeholder)));
+    let export_op = shown(StatusCommand::Export).then(|| {
+        controls
+            .export
+            .unwrap_or_else(|| placeholder_btn(placeholders[FIRST_SYSTEM_ACTION]))
+    });
     // 分隔线只在两侧都还有内容时才画（DBeaver 用 `visibleWhen` 做同一件事，
     // 全隐一段时不该留一条孤线）
     let change_empty = write_change.is_empty();
     let row_empty = write_row.is_empty();
     let mut left_ops: Vec<AnyElement> = Vec::new();
+    left_ops.extend(refresh_op);
+    if !left_ops.is_empty() && !(change_empty && row_empty) {
+        left_ops.push(separator()); // 刷新组之后才有东西
+    }
     left_ops.append(&mut write_change);
     if !change_empty && !row_empty {
         left_ops.push(separator()); // DBeaver `rowCmds.separator`（plugin.xml:1434）
@@ -811,10 +809,10 @@ pub fn render_status_row(
     left_ops.append(&mut pager_ops);
     left_ops.extend(fetch_page);
     left_ops.extend(fetch_all);
-    if !left_ops.is_empty() && !system_ops.is_empty() {
+    if !left_ops.is_empty() && export_op.is_some() {
         left_ops.push(separator());
     }
-    left_ops.append(&mut system_ops);
+    left_ops.extend(export_op);
 
     div()
         .h_flex()
@@ -836,6 +834,12 @@ pub fn render_status_row(
                 .flex_none()
                 .children(left_ops),
         )
+        // 齿轮在「段大小」之左（真值 `ToolbarSeparatorContribution(true)` + `ConfigAction`
+        // 位于添加/导出组之后、`resultSetSize` 之前，`ResultSetViewer.java:2113-2122`）——
+        // 此前挂在一行最右端，与「两栏开关」的本仓增强混排了
+        .when_some(settings_button, |row, btn| {
+            row.child(separator()).child(btn)
+        })
         // 中段·段大小框（DBeaver `resultSetSize` Text：默认值占位，改成 >0 的行数才生效）
         .children(segment_input.map(|state| {
             div()
@@ -915,9 +919,5 @@ pub fn render_status_row(
         .children(right_switch)
         // 【工具栏配置】最末端的 ▾：勾选要显示的命令项（DBeaver 工具条配置的等价物）
         .children(config_menu)
-        // 【结果集设置】最右端的齿轮：打开结果集首选项页
-        // （DBeaver `createStatusBar` 最后一个 config ToolBarManager 里的 `ConfigAction`，
-        //  `ResultSetViewer.java:2113-2122`）
-        .children(settings_button)
         .into_any_element()
 }

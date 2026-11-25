@@ -17,6 +17,15 @@ use super::{open_panel, shared_with_channel_recorder};
 struct OpenChannels;
 
 impl ChannelsPort for OpenChannels {
+    /// 不弹窗、**不自动决策**：本文件的用例就是「执行后保持挂起 → 直调面板确认」
+    fn confirm_federated_mount(
+        &self,
+        _conn_id: &str,
+        _on_decision: Box<dyn FnOnce(bool, &mut gpui_kit::App)>,
+        _cx: &mut gpui_kit::App,
+    ) {
+    }
+
     fn availability(&self, _conn_id: Option<&str>) -> ChannelAvailabilitySet {
         ChannelAvailabilitySet {
             accelerated: ChannelAvailability::ok(),

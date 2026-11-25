@@ -54,6 +54,20 @@ impl FakeChannels {
 }
 
 impl ChannelsPort for FakeChannels {
+    /// 测试桩不弹窗，**一律放行**：本文件的用例只验菜单 / 源清单，切联邦档要能直接过；
+    /// 需要「执行后保持挂起」的用例用 `federated_confirm.rs` 里那个不决策的 fake。
+    ///
+    /// 用 `defer` 而不是当场回调：`set_channel` 是在 `EditorView` 的 `update` 里调过来的，
+    /// 当场回调会重入同一个实体（`apply_channel` 又要 `update`）→ 实体表 panic。
+    fn confirm_federated_mount(
+        &self,
+        _conn_id: &str,
+        on_decision: Box<dyn FnOnce(bool, &mut gpui_kit::App)>,
+        cx: &mut gpui_kit::App,
+    ) {
+        cx.defer(move |cx| on_decision(true, cx));
+    }
+
     fn availability(&self, _conn_id: Option<&str>) -> ChannelAvailabilitySet {
         ChannelAvailabilitySet {
             accelerated: self.accelerated.clone(),

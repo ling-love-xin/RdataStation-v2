@@ -102,9 +102,9 @@ pub struct ResultPanel {
     #[serde(default)]
     pub group_duplicates_only: bool,
     /// 【右栏页签持久化，对齐 DBeaver `PresentationSettings.enabledPanelIds`】右栏启用了哪些页，
-    /// 逗号分隔的稳定 id（`browser,value,stats,group,reference`，顺序无关——
-    /// 读的时候按规范序归一）。空串 = 「没写过」→ 出厂五页全开（DBeaver
-    /// `activateDefaultPanels:1396-1400` 同样把空集合补成默认面板）。
+    /// 逗号分隔的稳定 id（`value,stats,browser,group,reference`，顺序无关——
+    /// 读的时候按规范序归一）。空串 = 「没写过」→ 出厂只有「值详情」一页（DBeaver
+    /// `activateDefaultPanels:1396-1410` 把空集合补成 `default="true"` 的面板 = 仅 `value-view`）。
     /// 未知 id 在面板侧丢弃（id ↔ 页对应见 `result_panel::ports::RightTab::id`）。
     /// 作用域 = 全局一份（DBeaver 是随工作区/演示设置存，本仓沿用结果集偏好的全局口径）。
     #[serde(default = "default_result_open_tabs")]
@@ -340,12 +340,19 @@ fn default_result_group_sort() -> String {
     "value".to_string()
 }
 
-/// 右栏启用页的出厂值：五页全开（规范序）。
+/// 右栏启用页的出厂值：**只有「值详情」一页**（`value`）。
 ///
-/// 对齐 DBeaver：内置面板都注册在 `availablePanels` 里，`activateDefaultPanels:1396-1400`
-/// 会把 `enabledPanelIds` 补成默认集合——本仓的默认集合就是五页全开。
+/// 对齐 DBeaver `activateDefaultPanels:1396-1410`：`enabledPanelIds` 为空时，把
+/// `ResultSetPanelDescriptor.isShowByDefault()` 为真的面板补进集合（`:1402-1406`），
+/// 补完仍为空则取 `availablePanels` 第一个（`:1408-1410`）。而 `showByDefault` 读的是
+/// 扩展属性 `default`（`ResultSetPanelDescriptor.java:67`），`plugin.xml:127-173` 里
+/// **只有 `value-view` 是 `default="true"`**（其余四项均 `default="false"`）——
+/// 所以首次打开结果集，右栏只有「值查看器」一页，其余四页靠右缘竖条 / 视图菜单自行打开。
+///
+/// 【2026-11-25 §46】此前出厂是五页全开（`browser,value,stats,group,reference`），
+/// 那是本仓早期口径；本轮按源码收窄为 `value`。
 /// 【2026-11-24】原第六页 `execsql`（本仓独有的「执行SQL」页）已删除，见
 /// `rds-result-panel` 的 `RightTab::ALL` 注释与基线文档 §25。
 fn default_result_open_tabs() -> String {
-    "browser,value,stats,group,reference".to_string()
+    "value".to_string()
 }
