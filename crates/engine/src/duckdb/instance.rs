@@ -556,6 +556,27 @@ impl AnalysisSession {
         true
     }
 
+    /// 把一批源挂进**本会话**（`ATTACH` 出的 catalog 是实例级的，所有会话都能看见）。
+    ///
+    /// 为什么挂在会话连接上、不挂控制连接：L2（Oracle）的凭据是**会话级** `SECRET`，
+    /// 与 `ATTACH` 必须落在同一个会话；挂在控制连接上，查询方会话里没有那个 Secret。
+    ///
+    /// 挂载实现只有一处（`federation::session::mount_into`），这里不另写一套。
+    /// 单个源挂不上不抛（状态即结论）；只有「别名重复 / 扩展装不上」这类整批失败才返回 `Err`。
+    pub fn mount_sources(
+        &self,
+        sources: &[super::federation::registry::FederatedSource],
+    ) -> Result<Vec<super::federation::registry::MountedSource>, String> {
+        if !self.is_open() {
+            return Err("这条分析会话已经关了，重新开一条再挂源".to_string());
+        }
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| "会话连接锁被污染（上一条语句崩了），重开一条会话".to_string())?;
+        super::federation::session::mount_into(&conn, sources)
+    }
+
     fn close(&self) {
         // 先中断：关会话时正在跑的语句不该把界面卡住
         self.interrupt();
@@ -731,6 +752,26 @@ mod tests {
             .run_with_timeout("SELECT 1 AS ok", Duration::from_secs(3))
             .expect("中断后仍可用");
         assert_eq!(after.total_rows, 1);
+    }
+
+    /// 挂源入口：整批失败（别名重复）不留半挂状态，会话照常可用。
+    #[test]
+    fn mounting_rejects_duplicate_aliases_and_leaves_the_session_usable() {
+        use super::super::federation::registry::FederatedSource;
+        let instance = instance("t_mount");
+        let session = instance.open_session("doc-a", "编辑器 A").expect("开 A");
+
+        let make = |alias: &str| {
+            FederatedSource::new("conn-1", alias, "sqlite", "C:/data/probe.db")
+                .expect("造源（不连库，只验别名判定）")
+        };
+        let outcome = session.mount_sources(&[make("dup"), make("dup")]);
+        let error = outcome.expect_err("别名重复应整批拒").to_string();
+        assert!(error.contains("出现了两次"), "错误要说清重复，实际：{error}");
+
+        session
+            .run_with_timeout("SELECT 1 AS ok", Duration::from_secs(3))
+            .expect("拒绝后会话仍可用");
     }
 
     /// 写语句走车道、读语句不排队：两句写串行执行（不会互相踩连接）。

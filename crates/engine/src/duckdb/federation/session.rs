@@ -82,40 +82,25 @@ impl FederatedSession {
         sources: &[FederatedSource],
         requested_primary: Option<&str>,
     ) -> Result<Self, String> {
-        // 会话内重名先拦：两个源叫一个名会静默指到其中一个（那是最难查的一类错）
-        let mut seen: Vec<String> = Vec::new();
-        for source in sources {
-            if seen.iter().any(|alias| alias == &source.alias) {
-                return Err(format!("别名 {} 在这次的源里出现了两次", source.alias));
-            }
-            seen.push(source.alias.clone());
-        }
+        // 会话内重名由 [`mount_into`] 先拦（挂载唯一实现，别在两处各判一遍）
 
         let conn = open_configured()?;
 
-        // 装扩展与一批 ATTACH 串行（`INSTALL` 写目录、`LOAD` 是连接级，都要独占）
-        let _mount = mount_lock();
-
         // 底座先挂：它们不是"源"，但 SQL 里随时可能引用（`analytics.main.x` / `rds_global.main.x`）。
         // 挂不上不算会话失败——缺文件 / 正被写入方持有都只让这一格缺席，别把整条会话带下去
-        for (alias, outcome) in attach_bases(&conn) {
-            if let Err(reason) = outcome {
-                tracing::warn!(alias = %alias, reason = %reason, "联邦底座没挂上（这一格本轮不可用）");
-            }
-        }
-        // 同一批源可能重复要同一个扩展（如两个 MySQL 源）：按**种类**去重，
-        // 而不是按扩展名——`ensure` 已经幂等，这里只省重复的登记与日志
-        let mut ensured: HashSet<AccelKind> = HashSet::new();
-        for source in sources {
-            if ensured.insert(source.kind) {
-                crate::duckdb::accel::ensure_extension(&conn, source.kind)?;
+        //
+        // 与 [`mount_into`] 分两次拿 `mount_lock`（同一把锁不可重入）：底座与源都串行即可
+        {
+            let _mount = mount_lock();
+            for (alias, outcome) in attach_bases(&conn) {
+                if let Err(reason) = outcome {
+                    tracing::warn!(alias = %alias, reason = %reason, "联邦底座没挂上（这一格本轮不可用）");
+                }
             }
         }
 
-        let mut mounted = Vec::with_capacity(sources.len());
-        for source in sources {
-            mounted.push(mount_one(&conn, source));
-        }
+        // 源挂载只有一处实现：`open` 与分析实例的会话都调它
+        let mounted = mount_into(&conn, sources)?;
 
         let (primary, primary_note) = pick_primary(&mounted, requested_primary);
         if let Some(alias) = primary.as_deref() {
@@ -537,6 +522,38 @@ fn mount_one(conn: &Connection, source: &FederatedSource) -> MountedSource {
         source: source.clone(),
         state: attach_source(conn, source),
     }
+}
+
+/// 把一批源挂进**已有连接**（挂载的唯一实现：`FederatedSession::open` 与分析实例的
+/// 会话都调它，别在两处各挂一遍）。
+///
+/// - 同一批里别名重复 → 直接拒（两个源叫一个名会静默指到其中一个，那是最难查的一类错）；
+/// - 扩展按**种类**去重后 `ensure`（`ensure` 本身幂等，这里只省重复的登记与日志）；
+/// - 整段串行（`INSTALL` 写扩展目录、`LOAD` 是连接级，都要独占）；
+/// - 单个源挂不上**不抛**：状态就是结论（`open` 与实例会话都按状态展示）。
+pub(crate) fn mount_into(
+    conn: &Connection,
+    sources: &[FederatedSource],
+) -> Result<Vec<MountedSource>, String> {
+    let mut seen: Vec<String> = Vec::new();
+    for source in sources {
+        if seen.iter().any(|alias| alias == &source.alias) {
+            return Err(format!("别名 {} 在这次的源里出现了两次", source.alias));
+        }
+        seen.push(source.alias.clone());
+    }
+
+    let _mount = mount_lock();
+    let mut ensured: HashSet<AccelKind> = HashSet::new();
+    for source in sources {
+        if ensured.insert(source.kind) {
+            crate::duckdb::accel::ensure_extension(conn, source.kind)?;
+        }
+    }
+    Ok(sources
+        .iter()
+        .map(|source| mount_one(conn, source))
+        .collect())
 }
 
 /// 挂载 / 卸载失败的原话（点名源：跨源场景里“哪个源出问题”是最重要的信息）
