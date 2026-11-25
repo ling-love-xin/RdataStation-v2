@@ -861,11 +861,14 @@ pub fn build_project_menu(
             menu = menu.item(PopupMenuItem::label(entry.label));
             continue;
         }
-        let mut item = PopupMenuItem::new(entry.label)
-            .icon(entry.icon)
-            .disabled(!entry.enabled);
+        // 勾选项的左槽给对勾（组件规则：图标存在时对勾不画，见 vendor
+        // `popup_menu.rs::render_icon` —— 有 icon 就画 icon，只在无 icon 时才回落到
+        // `IconName::Check`）。所以「取消归档」不再挂 Inbox 图标。
+        let mut item = PopupMenuItem::new(entry.label).disabled(!entry.enabled);
         if entry.checked {
             item = item.checked(true);
+        } else {
+            item = item.icon(entry.icon);
         }
         menu = menu.item(attach_project_menu_handler(
             item, entry.id, host, inputs, &root,
