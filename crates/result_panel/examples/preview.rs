@@ -26,7 +26,7 @@ use rds_result_panel::grid::{
     ResultGridDelegate, ResultStatus, ResultToolbar, SelectionStatPrefs,
 };
 use rds_result_panel::panel::{ExportCtx, GridPayload, ResultPanel, ResultSyncInput};
-use rds_result_panel::ports::ResultActionQueue;
+use rds_result_panel::ports::{ResultActionQueue, ResultRequest};
 use rds_result_panel::sets::ResultSetTab;
 use rds_result_panel::store::ColumnType;
 use workbench_shell::model::ExecChannel;
@@ -41,14 +41,35 @@ struct PreviewHost {
 
 impl PreviewHost {
     fn new(panel: Entity<ResultPanel>, queue: ResultActionQueue, cx: &mut gpui_kit::Context<Self>) -> Self {
-        // 真实宿主在同一处 drain + 分派；这里只打印，证明动作链没断。
+        // 真实宿主在同一处 drain + 分派；预览里只对「纯 UI 态」的请求做本地落地
+        // （刷新钮箭头菜单），其余只打印——证明动作链没断。
         // 注意：回调里**不要** `cx.notify()`——面板 notify → 宿主 notify → 重渲染 →
         // 面板再 notify 会立刻在同一 effect cycle 里滚成同步递归（实测直接爆栈）。
-        let actions_sub = cx.observe(&panel, |host, _, _cx| {
+        let actions_sub = cx.observe(&panel, |host, _, cx| {
             let actions = host.queue.drain();
-            if !actions.is_empty() {
-                eprintln!("[preview] 宿主收到 {} 个动作：{actions:?}", actions.len());
+            if actions.is_empty() {
+                return;
             }
+            for action in &actions {
+                match action {
+                    // 自动刷新菜单：只改面板态（真机里定时重跑是宿主的活，预览没有引擎）
+                    ResultRequest::SetAutoRefresh {
+                        enabled,
+                        interval_secs,
+                    } => {
+                        let (enabled, secs) = (*enabled, *interval_secs);
+                        host.panel
+                            .update(cx, |p, cx| p.set_auto_refresh(enabled, secs, cx));
+                    }
+                    ResultRequest::ConfigureAutoRefresh => {
+                        eprintln!(
+                            "[preview] 「自定义...」需要 AutoRefreshConfigDialog（本仓未实现，见基线 §56）"
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            eprintln!("[preview] 宿主收到 {} 个动作：{actions:?}", actions.len());
         });
         Self {
             panel,

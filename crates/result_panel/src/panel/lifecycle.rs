@@ -437,6 +437,10 @@ impl ResultPanel {
             history_pos: 0,
             exec_sql: None,
             result_is_analysis: false,
+            // 【自动刷新】出厂关闭、间隔未配置（对齐 DBeaver `RefreshSettings.java:26` 的
+            // `refreshInterval = 0`；开启与间隔由刷新钮箭头菜单设置，定时重跑归宿主）
+            auto_refresh_enabled: false,
+            auto_refresh_interval_secs: 0,
             result_can_copy: false,
             fetching_more: false,
             export_ctx: None,

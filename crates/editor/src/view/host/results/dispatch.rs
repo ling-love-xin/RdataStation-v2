@@ -295,6 +295,22 @@ impl EditorHostPanel {
             // 字节与默认文件名由面板按值形态算好，这里只走「选路径 + 写盘」
             ResultRequest::SaveValue => self.save_selected_value(cx),
             ResultRequest::Refresh => self.refresh_active_result(cx),
+            // 【自动刷新】刷新钮右箭头菜单：只把开启态/间隔记回面板（DBeaver
+            // `AutoRefreshControl.enableAutoRefresh` / `runPreset` 也只改标志 + 换图标）。
+            // 定时重跑（`AutoRefreshJob`，`AutoRefreshControl.java:112-127`）本仓**未接**：
+            // 结果执行是异步链（`pump.rs`），要排程得先有"同一条 SQL 的循环重查"语义，
+            // 没有就先只落 UI 态，不静默假装在刷。
+            ResultRequest::SetAutoRefresh {
+                enabled,
+                interval_secs,
+            } => {
+                self.result_panel
+                    .update(cx, |p, cx| p.set_auto_refresh(enabled, interval_secs, cx));
+            }
+            // 【自动刷新】「自定义...」要一个配置对话框（间隔 + 错误时停止，
+            // DBeaver `AutoRefreshConfigDialog`）。本仓尚无此对话框 → 明确不走通：
+            // 只留一条注释级的空分支，避免误以为已实现。
+            ResultRequest::ConfigureAutoRefresh => {}
             // 【计算行数】状态行那颗钮：对原 SQL 跑 count(*)，数字就地回填到钮上
             ResultRequest::CountRows => self.count_result_rows(cx),
             ResultRequest::FetchMore => self.fetch_more(cx),

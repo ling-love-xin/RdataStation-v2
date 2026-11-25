@@ -442,6 +442,12 @@ pub struct ResultPanel {
     /// 执行完成后写入，右栏「执行SQL」页签展示（只读 + 复制）。空 = 页签空态。
     pub(crate) exec_sql: Option<String>,
     pub(crate) result_is_analysis: bool,
+    /// 【自动刷新】刷新钮箭头菜单记下的开启态（DBeaver `AutoRefreshControl.autoRefreshEnabled`，
+    /// `AutoRefreshControl.java:50`）。本仓只存**UI 态**：定时重跑在宿主（面板无定时器）。
+    pub(crate) auto_refresh_enabled: bool,
+    /// 【自动刷新】间隔（秒）。`0` = 从未配置（DBeaver `RefreshSettings.refreshInterval` 默认 0，
+    /// `RefreshSettings.java:26`）；`> 0` 且不在预设里时，箭头菜单会把它插到预设列表首位。
+    pub(crate) auto_refresh_interval_secs: u32,
     pub(crate) result_can_copy: bool,
     pub(crate) fetching_more: bool,
     /// 导出菜单静态上下文（sync 写入；render 期只读）

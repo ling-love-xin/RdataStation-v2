@@ -3755,7 +3755,7 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
 | 项 | 真值 | 本仓 | 说明 |
 | --- | --- | --- | --- |
 | 组形态 | 每组一个 `ToolBar` / `ToolBarManager`，组内靠 `GroupMarker` / `Separator` 分界 | 一条 `h_flex` 里的扁按钮序列 + 1px 发丝线 | 组件层无「可嵌工具条组」；顺序与分组语义已对齐，形态非像素级 |
-| 刷新钮 | `getAutoRefresh().populateRefreshButton(...)` + `enableControls(false)`——刷新钮由 AutoRefresh 组件提供并初始禁用 | 单颗 `Button`（`⟳ 刷新`，`editor-result-refresh`），无 result_sql 时不注入、走占位 | `AutoRefresh.java` 不在 `dbeaver-ref` 源码树（jar 依赖），**其内部是否含「自动刷新」勾选项未取证**，故不补该控件 |
+| 刷新钮 | `getAutoRefresh().populateRefreshButton(...)` + `enableControls(false)`——刷新钮由 AutoRefresh 组件提供并初始禁用 | **已补下拉（§56）**：`DropdownButton`（左主钮 = 立即刷新，右箭头弹 AutoRefresh 菜单） | 原登记「`AutoRefresh.java` 不在源码树」**已证伪**——类文件实际叫 `AutoRefreshControl.java`，就在 `plugins/org.jkiss.dbeaver.ui/src/org/jkiss/dbeaver/ui/controls/autorefresh/`，箭头菜单与文案已逐行取证并落地（§56） |
 | 编辑工具条的门控 | `FEATURE_EDIT && !DATA_EDIT_DISABLED` 才建 | 写操作段恒摆（无注入时是禁用占位） | 占位是「布局不跳」的本仓口径，与真值「整条不建」不同 |
 | 段大小框宽 | `5*fontHeight` | 常量 `ui::RESULT_SEGMENT_BOX_WIDTH` | 未按字体高换算 |
 | 行计数钮 | `ActiveStatusMessage`（图标 `COMPILE`，点它跑 `readRowCount`） | ghost `Button`（图标 `Calculator`，算完就地换文案） | 文案格式近似千分位，未用 `###,##0` 模板 |
@@ -3765,4 +3765,61 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
 **并行线隐患登记（未改其代码）**：`crates/editor/src/view/host/format.rs:331-363` 的 `set_channel` 在 `EditorView::update` 里同步调 `ChannelsPort::confirm_federated_mount`，而宿主回调（`host.rs:119` 写明「弹不出窗口时按 `true`」）会再 `editor.update(... apply_channel ...)` ——**同步放行就重入同一实体**，实测 panic 在 `gpui-fast-0.1.17/src/app/entity_map.rs:197`（`view::tests::channels::the_sources_picker_shows_up_in_the_federated_channel`）。本轮的测试桩改用 `cx.defer(move |cx| on_decision(true, cx))` 绕开（defer 语义即「当前 effect cycle 末尾、实体已出栈后再跑」），生产侧建议同样走 defer。此点属并行线在途改动，本刀不动其实现，仅登记。
 
 **验证**：`cargo check -p rds-result-panel --lib` → `Finished`；`cargo test -p rds-result-panel --lib` → **454 passed / 0 failed**（453 + 新增组序用例）。
+
+## §56 刷新钮补「自动刷新」下拉（`AutoRefreshControl` 真值落地）
+
+> 起因：用户看预览窗口「工具栏对应按钮该有的弹出控制都没有」。核对后确认——**导出**（`DropdownButton`）与**齿轮**（`ConfigAction`，无下拉）本就是对的，缺的是**刷新钮**：本仓此前只是单颗 `Button`，真值却是 `SWT.DROP_DOWN` 复合控件。
+
+### 56.1 真值（逐行取证）
+
+主文件：`plugins/org.jkiss.dbeaver.ui/src/org/jkiss/dbeaver/ui/controls/autorefresh/AutoRefreshControl.java`
+（此前登记「`AutoRefresh.java` 不在源码树」是**找错文件名**）。
+
+| 环节 | 源码 | 内容 |
+| --- | --- | --- |
+| 控件形态 | `:148` | `new ToolItem(toolbar, SWT.DROP_DOWN \| SWT.NO_FOCUS)`——左半主钮 + 右半箭头 |
+| 主钮动作 | `ResultSetViewer.java:2067-2071` | `() -> { if (!isRefreshInProgress()) refreshData(null); }`（**立即刷新**，不是开对话框） |
+| 主钮 tooltip | `ResultSetViewer.java:2064-2065` | `controls_resultset_viewer_action_refresh + " (" + FILE_REFRESH 描述 + ")"`，即「刷新 (F5)」样式 |
+| 箭头菜单 | `:205-267`（`e.detail == SWT.ARROW`） | 四项结构见下 |
+| 菜单①「自定义...」 | `:217-219` → `:186-192` | → `AutoRefreshConfigDialog`（间隔 + 错误时停止），确定后 `setRefreshSettings` + `enableAutoRefresh(true)` |
+| 菜单②「停止」 | `:221-224` | `mi.setEnabled(isAutoRefreshEnabled())`，点击 `enableAutoRefresh(false)` |
+| 菜单③ 分隔线 | `:225` | — |
+| 菜单④ 预设间隔 | `:227-245` | `AUTO_REFRESH_DEFAULTS = {1, 5, 10, 15, 30, 60}`（`:194`，秒）；当前间隔 `> 0` 且不在预设里 → **插到首位**（`:230-233`）；**首项**用 `menu_refresh_interval`（「每 {0} 秒刷新一次」），其余用 `menu_refresh_interval_1`（「... {0} 秒」）（`:238-239`）；`isAutoRefreshEnabled() && timeout == defaultInterval` → `setDefaultItem`（`:241-243`） |
+| 菜单⑤ hint 项 | `:247-256` | 有 hint 时再加分隔 + 一条**禁用**项；注释说明它兼作「防误触下坠」的下沿填充 |
+| 开启态视觉 | `:174-184` | 开 = `UIIcon.CLOCK_STOP` + tooltip「停止自动刷新」；关 = 回默认图标 / tooltip |
+| 定时器 | `:112-127` | `AutoRefreshJob.schedule(interval * 1000)`；`stopOnError` 时错误后自动关（`RefreshSettings.java:27` 默认 `true`） |
+
+文案真值（`UIMessages_zh.properties:95-104`）：`配置自动刷新` / `停止自动刷新` / `自定义...` / `每 {0} 秒刷新一次` / `... {0} 秒` / `停止`。
+
+### 56.2 落地（提交见本轮）
+
+| 文件 | 改动 |
+| --- | --- |
+| `crates/result_panel/src/auto_refresh.rs`（新） | `AUTO_REFRESH_DEFAULTS` + `AutoRefreshAction` + `AutoRefreshEntry` + `menu_entries(enabled, interval_secs)` 纯函数（`PopupMenu` 不暴露项，抽出来才能断言）；4 条单测 |
+| `crates/result_panel/src/ports.rs` | 新请求 `SetAutoRefresh { enabled, interval_secs }`、`ConfigureAutoRefresh` |
+| `crates/result_panel/src/panel/data.rs` / `lifecycle.rs` | 面板态 `auto_refresh_enabled`（出厂 `false`）、`auto_refresh_interval_secs`（出厂 `0`，对齐 `RefreshSettings.java:26` 的 `refreshInterval = 0`） |
+| `crates/result_panel/src/panel/events.rs` | `set_auto_refresh(enabled, interval, cx)`（幂等 + `cx.notify()`） |
+| `crates/result_panel/src/panel/render.rs` | 刷新槽 `Button` → `DropdownButton`：内层主钮仍是 `editor-result-refresh`（点击 → `Refresh`），右箭头菜单由 `menu_entries` 逐项挂；tooltip 随开启态切「停止自动刷新」 |
+| `crates/editor/src/view/host/results/dispatch.rs` | `SetAutoRefresh` → `panel.set_auto_refresh`；`ConfigureAutoRefresh` → 空分支（见 56.3） |
+| `crates/shared/locales/{zh,en}.json` | 新增 5 个键（`自定义...` / `配置自动刷新` / `停止自动刷新` / `每 {0} 秒刷新一次` / `... {0} 秒`） |
+| `crates/result_panel/examples/preview.rs` | 宿主的 `drain` 里对 `SetAutoRefresh` 做本地落地（预览里点菜单真的会变勾选/换 tooltip），`ConfigureAutoRefresh` 打一行说明 |
+
+### 56.3 未做 / 差异登记（不静默）
+
+| 项 | 真值 | 本仓 | 原因 |
+| --- | --- | --- | --- |
+| 定时重跑 | `AutoRefreshJob` 按间隔循环 `refreshData` | **未接**：只记 UI 态 | 结果执行是异步链（`pump.rs`），要排程得先有「同一条 SQL 循环重查」语义；没有就不假装在刷 |
+| 「自定义...」对话框 | `AutoRefreshConfigDialog`（间隔 + 错误时停止） | 菜单项在，点下去入队后是空分支 | 对话框与「错误时停止」语义都依赖上一条的定时器，先有定时器再做配置 |
+| hint 项 | `:247-256` | 不做 | 本仓没有 hint 来源；该项本身是「下沿填充」的辅助 |
+| 主钮形态 | 纯图标（`UIIcon.REFRESH` / `CLOCK_STOP`） | 保留「⟳ 刷新」文字 label | 本仓状态栏一贯文字按钮；换成图标会牵动占位 id 与既有断言，改形态属另一刀 |
+| 主钮 tooltip | 「刷新 (F5)」= 命令名 + 快捷键描述 | 「刷新」/「停止自动刷新」 | 本仓没有 `F5` 键位绑定（`RDS` 的刷新走 `CTRL+R`/按钮） |
+| 初始禁用 | `enableControls(false)`（无结果时禁用） | 无 `result_sql` 时**整颗不注入**、走占位 | 本仓既有口径，见 §55 表「刷新钮」行 |
+
+### 56.4 验证
+
+- `cargo check -p rds-result-panel --lib` → `Finished`，0 error / 0 warning。
+- `cargo check -p rds-result-panel -p rds-editor --lib` → `Finished`（唯一 warning 属并行线 `view/host/format.rs:13`）。
+- `cargo test -p rds-result-panel --lib` → **458 passed / 0 failed**（454 + `auto_refresh` 4 条）。
+- 预览窗口已起（`stage=3`、126 MB、`RdataStation · 结果集预览`），箭头菜单可点；菜单项的勾选/禁用逻辑由单测覆盖，**目视由用户验收**（本刀不截图）。
+
 

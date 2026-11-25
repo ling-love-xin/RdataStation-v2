@@ -26,6 +26,7 @@ use super::data::ResultPanel;
 use super::events::{
     count_rows_available, count_rows_tooltip, erase_menu_labels, state_label,
 };
+use crate::auto_refresh::AutoRefreshAction;
 use crate::error_card::{self};
 use crate::export;
 use crate::grid::{self as result_grid, ResultToolbar, RowTargetState};
@@ -834,14 +835,74 @@ impl ResultPanel {
         //
         // 【复制】已退出工具栏，改由 ctrl-c（DBeaver 同键位）。
         let refresh = (self.result_sql.is_some() && !self.result_is_analysis).then(|| {
-            let queue = self.queue.clone();
-            Button::new("editor-result-refresh")
-                .ghost()
+            let refresh_queue = self.queue.clone();
+            let menu_queue = self.queue.clone();
+            let auto_enabled = self.auto_refresh_enabled;
+            let auto_interval = self.auto_refresh_interval_secs;
+            // 真值：自动刷新开着时 tooltip 换「停止自动刷新」（`AutoRefreshControl.java:174-184`）
+            let tooltip = if auto_enabled {
+                tr("停止自动刷新")
+            } else {
+                tr("刷新")
+            };
+            // 【自动刷新】对齐 DBeaver 刷新钮：`ToolItem(SWT.DROP_DOWN | SWT.NO_FOCUS)`
+            // （`AutoRefreshControl.java:148`）——左半主钮 = 立即刷新，右半箭头 = 弹菜单
+            // （`widgetSelected` 的 `e.detail == SWT.ARROW`，`:205-267`）。
+            // 菜单项由 `auto_refresh::menu_entries` 纯函数给（`PopupMenu` 不暴露项，
+            // 抽出来才能断言长相，见 gpui-kit-dev skill）。
+            DropdownButton::new("editor-result-refresh")
                 .xsmall()
-                .debug_selector(|| "editor-result-refresh".to_string())
-                .label(tr("⟳ 刷新"))
-                .on_click(move |_, _window, app| {
-                    queue.request(ResultRequest::Refresh, app);
+                .button(
+                    Button::new("editor-result-refresh-btn")
+                        .ghost()
+                        .xsmall()
+                        .debug_selector(|| "editor-result-refresh".to_string())
+                        .label(tr("⟳ 刷新"))
+                        .tooltip(tooltip)
+                        .on_click(move |_, _window, app| {
+                            refresh_queue.request(ResultRequest::Refresh, app);
+                        }),
+                )
+                .dropdown_menu(move |menu, _window, _app| {
+                    let mut menu = menu;
+                    for entry in crate::auto_refresh::menu_entries(auto_enabled, auto_interval) {
+                        if entry.separator_before {
+                            menu = menu.separator();
+                        }
+                        let Some(action) = entry.action else {
+                            // 真值的 hint 项是禁用项（`:247-256`）；本仓目前不产这类项
+                            menu = menu.item(PopupMenuItem::new(entry.label).disabled(true));
+                            continue;
+                        };
+                        // 「停止」的启用条件 = 自动刷新开着（`:223`）
+                        let queue = menu_queue.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(entry.label)
+                                .checked(entry.checked)
+                                .disabled(
+                                    matches!(action, AutoRefreshAction::Stop) && !auto_enabled,
+                                )
+                                .on_click(move |_, _window, app| match action {
+                                    AutoRefreshAction::Configure => queue
+                                        .request(ResultRequest::ConfigureAutoRefresh, app),
+                                    AutoRefreshAction::Stop => queue.request(
+                                        ResultRequest::SetAutoRefresh {
+                                            enabled: false,
+                                            interval_secs: auto_interval,
+                                        },
+                                        app,
+                                    ),
+                                    AutoRefreshAction::SetInterval(secs) => queue.request(
+                                        ResultRequest::SetAutoRefresh {
+                                            enabled: true,
+                                            interval_secs: secs,
+                                        },
+                                        app,
+                                    ),
+                                }),
+                        );
+                    }
+                    menu
                 })
                 .into_any_element()
         });

@@ -1398,6 +1398,25 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【自动刷新】刷新钮右箭头菜单落地：记下开启态与间隔。
+    ///
+    /// 对齐 DBeaver `AutoRefreshControl.enableAutoRefresh(boolean)`（`:100-104`，只改标志 +
+    /// `updateAutoRefreshToolbar` 换图标/tooltip）与 `runPreset(int)`（`:269-274`，写入
+    /// `RefreshSettings` 后开启）。间隔为 0 表示"未配置"，与 `RefreshSettings` 默认一致
+    /// （`RefreshSettings.java:26`），此时菜单不把任何预设标为默认项。
+    ///
+    /// **不做定时器**：`AutoRefreshJob`（`:125-126`）是宿主侧的活（要能拿到执行通道），
+    /// 面板只持有 UI 态；宿主读 `auto_refresh_enabled` / `auto_refresh_interval_secs`
+    /// 自行决定是否排程。
+    pub fn set_auto_refresh(&mut self, enabled: bool, interval_secs: u32, cx: &mut Context<Self>) {
+        if self.auto_refresh_enabled == enabled && self.auto_refresh_interval_secs == interval_secs {
+            return;
+        }
+        self.auto_refresh_enabled = enabled;
+        self.auto_refresh_interval_secs = interval_secs;
+        cx.notify();
+    }
+
     /// 【第 72 批】打开「获取全部数据」确认浮层
     /// （DBeaver `CONFIRM_RS_FETCH_ALL`，`ResultSetViewer.readAllData:4433-4440`）。
     ///

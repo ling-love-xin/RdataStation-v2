@@ -24,6 +24,7 @@
 //! - [`ports`]：宿主端口（执行 / 导出写文件 / 值预览 / 列统计 / 洞察 / 连接解析）
 
 pub mod analysis;
+pub mod auto_refresh;
 pub mod changes;
 pub mod column_browser;
 pub mod ddl;

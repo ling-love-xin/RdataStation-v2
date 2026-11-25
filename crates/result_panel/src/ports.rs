@@ -263,6 +263,19 @@ pub enum ResultRequest {
     OpenValueExternally,
     /// 刷新（重跑当前结果 SQL）
     Refresh,
+    /// 【自动刷新】刷新钮右箭头菜单命中：「停止」或某个预设间隔。
+    ///
+    /// 对齐 DBeaver `AutoRefreshControl.enableAutoRefresh`（`AutoRefreshControl.java:100-104`）
+    /// 与 `runPreset`（`:269-274`）：菜单只负责**把开启态与间隔记下来**；真正的定时重跑是
+    /// `AutoRefreshJob`（`:125-126`）在宿主侧跑的活。本仓面板没有定时器，故这一条只落到
+    /// 面板态（[`crate::auto_refresh::menu_entries`] 的勾选与「停止」的启用态都读它）。
+    SetAutoRefresh { enabled: bool, interval_secs: u32 },
+    /// 【自动刷新】刷新钮右箭头菜单「自定义...」：打开刷新配置对话框
+    /// （DBeaver `AutoRefreshControl.runCustomized` → `AutoRefreshConfigDialog`，`:186-192`）。
+    ///
+    /// 本仓**没有**该对话框（间隔 + 「错误时停止」两项），故只入队交宿主：宿主未接时
+    /// 表现为「点一下没反应」，不静默假装成功。
+    ConfigureAutoRefresh,
     /// 取下一段
     FetchMore,
     /// 【计算行数】状态行那颗 `rowCountLabel`（对齐 DBeaver `:2155-2180`）：
