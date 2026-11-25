@@ -468,6 +468,9 @@ pub struct Shared {
     /// 宿主重绘桥：连接对话框层挂在 `WorkbenchView::render` 上，而 `Root` 的
     /// notify 不会让子视图重建元素树；打开 / 关闭对话框后必须显式通知宿主重渲染。
     pub host_redraw: Rc<RefCell<Option<Rc<dyn Fn(&mut App)>>>>,
+    /// 欢迎页「回家」强制显隐：标题栏 Home 入口在有项目时把欢迎页重新唤出。
+    /// `visible()` 取「无项目 或 被强制唤回」；切项目后随会话路径自然失效。
+    pub welcome_forced: Rc<Cell<bool>>,
 }
 
 impl Shared {
@@ -545,6 +548,7 @@ impl Shared {
             metadata_search_panel: Rc::new(RefCell::new(None)),
             metadata_search_dismissed: Rc::new(RefCell::new(false)),
             host_redraw: Rc::new(RefCell::new(None)),
+            welcome_forced: Rc::new(Cell::new(false)),
         }
     }
 

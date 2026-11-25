@@ -1,12 +1,17 @@
-//! M1：项目选择器面板（中央 tab 组常驻 tab）。
+//! 欢迎页面板（中央 tab 组常驻 tab；由原项目选择器演进，见
+//! `docs/architecture/layout/workbench-home-dashboard-split.md` §2.1）。
+//!
+//! 职责：欢迎横幅 + 项目 / 连接入口 + 最近项目继续；首次使用引导（onboarding）位
+//! 本轮只预留锚点，后续迭代填充。
 //!
 //! 原设计是无项目时用选择器覆盖中央区（view.rs no_project 分支）；但那样
 //! DockArea 在无项目时不挂树，左右 Dock（Mock / 洞察 / 历史面板）整体不可达。
 //! Mock 面板「纯生成不受影响」（`docs/architecture/mock/mock-architecture.md`
 //! I8「未打开项目也能跑」），无项目时点 Mock 图标必须能打开右 Dock——所以把
 //! 选择器迁入 Dock 中央 tab 组：
-//! - 无项目：`visible() = true`，装配期激活（打开项目入口 = 中央「项目」tab）；
-//! - 有项目：`visible() = false`，Dock 渲染回退第一个可见 tab（编辑器）；
+//! - 无项目：`visible() = true`，装配期激活（打开项目入口 = 中央欢迎 tab）；
+//! - 有项目：默认 `visible() = false`，Dock 渲染回退第一个可见 tab（编辑器）；
+//!   标题栏「回家」入口置 `welcome_forced` 后可重新唤出；
 //! - 不可关闭（`closable() = false`）——这是无项目时打开项目的持久入口。
 
 use shared::i18n::tr;
@@ -129,6 +134,9 @@ impl Render for ProjectPickerPanel {
                     ),
             );
 
+        // 引导位（onboarding 预留）：首次使用的步骤提示 / 快捷上手后续在此填充；
+        // 本轮不占位渲染，避免在欢迎页上留未完成的空框（拆分设计 §2.1）。
+
         // 先渲染（可变借用 cx），再挂 id / role——顺序与 property 面板一致。
         let picker = project::ui::render_picker(&self.host, &self.inputs, cx);
         div()
@@ -151,9 +159,10 @@ impl BasePanel for ProjectPickerPanel {
         "project-picker"
     }
 
-    /// 无项目时显示（打开项目入口），有项目时隐藏——Dock 渲染回退第一个可见 tab。
+    /// 无项目时显示；有项目后被标题栏「回家」入口强制唤回（`welcome_forced`）。
+    /// 否则隐藏——Dock 渲染回退第一个可见 tab。
     fn visible(&self, _cx: &App) -> bool {
-        self.host.session.borrow().is_none()
+        self.host.session.borrow().is_none() || self.shared.welcome_forced.get()
     }
 
     /// 唯一的无项目入口，不允许关掉。

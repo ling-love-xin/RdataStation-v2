@@ -476,6 +476,30 @@ impl WorkbenchView {
         // 与快捷键同一入口——打开、清空上次输入、聚焦输入框；真正输入在浮层里（单一权威输入）。
         let quick_open = self.render_quick_open_entry(&entity, &theme);
 
+        // 欢迎页「回家」：有项目时欢迎 tab 默认隐藏，这里置 `welcome_forced` 覆盖
+        // visible 并 select_panel 唤出（与其他中央面板同一条幂等聚焦路径）。
+        let welcome_entity = entity.clone();
+        let welcome_home = Button::new("welcome-home")
+            .ghost()
+            .icon(Icon::new(CatalogIcon::House).size_3p5())
+            .tooltip(tr("回到欢迎页"))
+            .on_click(move |_, window, app| {
+                welcome_entity.update(app, |this, cx| {
+                    this.shared.welcome_forced.set(true);
+                    if let (Some(picker), Some(area)) = (&this.project_picker, &this.area) {
+                        let id = PanelId::from(picker.entity_id());
+                        area.update(cx, |area, cx| area.select_panel(id, window, cx));
+                    }
+                    cx.notify();
+                });
+            });
+        let welcome_home = div()
+            .h_flex()
+            .flex_none()
+            .items_center()
+            .occlude()
+            .child(welcome_home);
+
         // 主题切换入口：图标随当前外观策略（暗→月、亮→日、跟随系统→显示器），
         // 点击走与 Ctrl+Shift+L 同一条命令路径（`ToggleThemeMode`）。
         let appearance = SettingsService::theme_mode(cx);
@@ -553,6 +577,7 @@ impl WorkbenchView {
             )
             .child(quick_open)
             .child(div().flex_1())
+            .child(welcome_home)
             .child(theme_toggle)
             .child(lang_switch)
             .child(
