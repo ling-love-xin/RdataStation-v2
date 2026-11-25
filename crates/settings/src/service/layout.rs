@@ -32,6 +32,12 @@ pub(crate) fn apply_slot(
             };
             SettingsService::set_layout_locked(on, cx);
         }
+        Slot::LayoutDashboardEnabled => {
+            let Some(on) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_dashboard_enabled(on, cx);
+        }
         Slot::LayoutLeftSidebarWidth => {
             let Some(n) = value.as_number() else {
                 return false;
@@ -62,6 +68,10 @@ impl SettingsService {
     pub fn layout_locked(cx: &App) -> bool {
         cx.global::<Settings>().layout.locked
     }
+    /// 读取统计看板显隐开关（默认 true）。
+    pub fn dashboard_enabled(cx: &App) -> bool {
+        cx.global::<Settings>().layout.dashboard_enabled
+    }
     /// 读取左侧侧边栏宽度（基准字号下的 px，默认 320）。
     pub fn layout_left_sidebar_width(cx: &App) -> i64 {
         cx.global::<Settings>().layout.left_sidebar_width
@@ -75,6 +85,15 @@ impl SettingsService {
         {
             let settings = cx.global_mut::<Settings>();
             settings.layout.locked = on;
+        }
+        persist(&cx.global::<Settings>().clone());
+        cx.refresh_windows();
+    }
+    /// 统计看板开关：更新 global → 持久化 → 立即重绘。
+    pub fn set_dashboard_enabled(on: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.layout.dashboard_enabled = on;
         }
         persist(&cx.global::<Settings>().clone());
         cx.refresh_windows();

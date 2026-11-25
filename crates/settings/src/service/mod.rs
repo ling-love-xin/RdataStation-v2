@@ -322,6 +322,9 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
             SettingValue::Text(settings.result_panel.font_blob.as_str().to_string())
         }
         Slot::LayoutLocked => SettingValue::Bool(settings.layout.locked),
+        Slot::LayoutDashboardEnabled => {
+            SettingValue::Bool(settings.layout.dashboard_enabled)
+        }
         Slot::LayoutLeftSidebarWidth => {
             SettingValue::Number(settings.layout.left_sidebar_width as f64)
         }
@@ -507,7 +510,10 @@ impl SettingsService {
             | Slot::ResultPanelFontBool
             | Slot::ResultPanelFontBlob
             | Slot::ResultPanelShowFilterPanel => result_panel::apply_slot(slot, value, window, cx),
-            Slot::LayoutLocked | Slot::LayoutLeftSidebarWidth | Slot::LayoutRightSidebarWidth => {
+            Slot::LayoutLocked
+            | Slot::LayoutDashboardEnabled
+            | Slot::LayoutLeftSidebarWidth
+            | Slot::LayoutRightSidebarWidth => {
                 layout::apply_slot(slot, value, window, cx)
             }
             Slot::NotificationSuccessAutohideSecs

@@ -9,6 +9,9 @@ pub struct Layout {
     /// 是否锁定布局（用户不能通过拖动调整面板大小或位置）。
     #[serde(default = "default_layout_locked")]
     pub locked: bool,
+    /// 是否显示统计看板入口与面板（关闭后状态栏不显示看板 chip，也不发起概览取数）。
+    #[serde(default = "default_dashboard_enabled")]
+    pub dashboard_enabled: bool,
     /// 左侧侧边栏宽度（px）。
     #[serde(default = "default_layout_left_sidebar_width")]
     pub left_sidebar_width: i64,
@@ -21,6 +24,7 @@ impl Default for Layout {
     fn default() -> Self {
         Self {
             locked: default_layout_locked(),
+            dashboard_enabled: default_dashboard_enabled(),
             left_sidebar_width: default_layout_left_sidebar_width(),
             right_sidebar_width: default_layout_right_sidebar_width(),
         }
@@ -30,6 +34,11 @@ impl Default for Layout {
 /// 布局锁定：默认关闭。
 fn default_layout_locked() -> bool {
     false
+}
+
+/// 统计看板：默认开启。
+fn default_dashboard_enabled() -> bool {
+    true
 }
 
 /// 左侧侧边栏宽度：默认 320px。

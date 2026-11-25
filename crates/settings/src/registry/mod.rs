@@ -286,6 +286,8 @@ pub enum Slot {
     ResultPanelFontBlob,
     /// 布局锁定（默认 false；render 时同步到 DockArea::set_locked）。
     LayoutLocked,
+    /// 统计看板入口与面板显隐（默认 true；关闭后不渲染状态栏 chip、不发起概览取数）。
+    LayoutDashboardEnabled,
     /// 左侧侧边栏宽度（默认 320px；render 时同步到 DockArea::set_dock_size）。
     LayoutLeftSidebarWidth,
     /// 右侧侧边栏宽度（默认 352px；render 时同步到 DockArea::set_dock_size）。
@@ -415,6 +417,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "result_panel.font_bool" => Slot::ResultPanelFontBool,
         "result_panel.font_blob" => Slot::ResultPanelFontBlob,
         "layout.locked" => Slot::LayoutLocked,
+        "layout.dashboard_enabled" => Slot::LayoutDashboardEnabled,
         "layout.left_sidebar_width" => Slot::LayoutLeftSidebarWidth,
         "layout.right_sidebar_width" => Slot::LayoutRightSidebarWidth,
         "notifications.success_autohide_secs" => Slot::NotificationSuccessAutohideSecs,
@@ -536,7 +539,7 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         | Slot::ResultPanelFontTemporal
         | Slot::ResultPanelFontBool
         | Slot::ResultPanelFontBlob => KindTag::Enum,
-        Slot::LayoutLocked => KindTag::Bool,
+        Slot::LayoutLocked | Slot::LayoutDashboardEnabled => KindTag::Bool,
         Slot::LayoutLeftSidebarWidth | Slot::LayoutRightSidebarWidth => KindTag::Number,
         // 【通知】四种秒数（0 = 不自动消失 / 不合并）都是数值；推送到系统与
         // 两个静音开关是布尔。
