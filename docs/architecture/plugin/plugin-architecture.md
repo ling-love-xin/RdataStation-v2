@@ -122,7 +122,7 @@ install（installer / PluginService + global.sqlite 注册）
 | `<RDS_HOME>/plugin-data/<id>/` | 插件私有数据（沙箱内唯一可写区） | 我们 | §6 |
 | `<RDS_HOME>/plugin-cache/<id>/` | wasmtime 编译缓存 / sidecar 日志与临时文件 | 我们 | §6 |
 | `<RDS_HOME>/tmp/sidecar/<id>/` | sidecar 工作目录（`current_dir`） | 我们 | §6 |
-| `<RDS_HOME>/extensions/` | **DuckDB 引擎扩展**（`*.duckdb_extension`） | **DuckDB 自己**（落 `<内核版本>/`，如 `v1.5.5/`） | 已接线：所有长期存活的 DuckDB 连接统一设 `extension_directory`（`duckdb/manager.rs::configure_connection`） |
+| `<RDS_HOME>/extensions/` | **DuckDB 引擎扩展**（`*.duckdb_extension`） | **DuckDB 自己**（落 `<内核版本>/`，如 `v2.0.1/`） | 已接线：所有长期存活的 DuckDB 连接统一设 `extension_directory`（`duckdb/manager.rs::configure_connection`） |
 
 **为什么两者不混一个目录**：DuckDB 要求 `extension_directory` 指向**它自己的**扩展目录
 （内部按内核版本分子目录），而应用插件是另一个生命周期（manifest / 权限 / 沙箱）。

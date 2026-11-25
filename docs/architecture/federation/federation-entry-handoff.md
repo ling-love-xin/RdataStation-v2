@@ -150,7 +150,7 @@
 ### 8.3 环境坑（隔离 worktree 专属，已解）
 
 - `.cargo/config.toml` 用 `force=true` 把 `TEMP/TMP/TMPDIR` 钉在 `.rds/tmp`（相对路径）。新 worktree 没有 `.rds` → `link.exe` 报 `LNK1104`。**解**：建 `wt-kernel\.rds\tmp`。
-- `third_party/duckdb/1.5.6`（`duckdb.dll` 36.7 MB + `.lib` 2 MB + 头文件）未入库，worktree 缺失 → `build.rs` 找不到库。**解**：从主仓库 robocopy 进去（保持自包含）。
+- `third_party/duckdb/2.0.1`（`duckdb.dll` 61,957,416 B + `duckdb.lib` 3,230,072 B + 头文件）未入库，worktree 缺失 → `build.rs` 找不到库。**解**：从主仓库 robocopy 进去（或用 `mklink /J` 挂 junction，保持自包含）。
 - 首次全量编译 **8 分 13 秒**（独立 target）。
 
 ### 8.4 剩余刀与阻点

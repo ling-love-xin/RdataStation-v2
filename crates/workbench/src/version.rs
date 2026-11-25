@@ -59,7 +59,7 @@ pub struct BuildInfo {
     pub gpui_kit: &'static str,
     /// 渲染内核（`gpui-fast`）的锁定版本。
     pub gpui_fast: &'static str,
-    /// DuckDB 的 crate 版本（形如 `1.10506.1`，**不是**引擎版本）。
+    /// DuckDB 的 crate 版本（形如 `1.20001.0`，**不是**引擎版本）。
     pub duckdb: &'static str,
     /// SQLite 的 crate 版本（`rusqlite`）。
     pub rusqlite: &'static str,
@@ -100,8 +100,8 @@ pub fn sqlite_engine() -> &'static str {
 ///
 /// `duckdb-rs` 用 `1.MAJOR_MINOR_PATCH.x` 编码引擎版本，规则照
 /// `libduckdb-sys` 的 `build.rs::duckdb_version_from_pkg_version`：
-/// `1.10506.1` → 第二段 `10506` → major `10506/10000=1` / minor `(10506/100)%100=5`
-/// / patch `10506%100=6` → `1.5.6`。
+/// `1.20001.0` → 第二段 `20001` → major `20001/10000=2` / minor `(20001/100)%100=0`
+/// / patch `20001%100=1` → `2.0.1`（旧线 `1.10506.1` 同规则解出 `1.5.6`）。
 ///
 /// 与上游不同的是这里**不 panic**：`unknown`、缺段、小于 `1.0.0` 的编码一律返回
 /// `None`，由调用方显式显示 `unknown`。
@@ -262,7 +262,7 @@ mod tests {
             lax_sql: "0.3.0",
             gpui_kit: "0.9.0",
             gpui_fast: "0.1.17",
-            duckdb: "1.10506.1",
+            duckdb: "1.20001.0",
             rusqlite: "0.40.2",
             fake: "5.1.0",
         }
@@ -334,12 +334,19 @@ mod tests {
     fn duckdb_row_pair_engine_with_crate() {
         let info = sample(Some(false), "abc");
         let value = info.duckdb_text();
-        assert!(value.starts_with("DuckDB 1.5.6"), "got {value}");
-        assert!(value.contains("crate 1.10506.1"), "got {value}");
+        assert!(value.starts_with("DuckDB 2.0.1"), "got {value}");
+        assert!(value.contains("crate 1.20001.0"), "got {value}");
     }
 
     #[test]
     fn duckdb_engine_decodes_pkg_version() {
+        // 当前线：2.0.1（`1.20001.0`）。
+        assert_eq!(
+            duckdb_engine_from("1.20001.0").as_deref(),
+            Some("2.0.1"),
+            "1.20001.0 应解码为 2.0.1"
+        );
+        // 旧线编码也必须能解：`1.10506.1` → `1.5.6`（minor 非 0，能挡住「minor 被吞」的改坏）。
         assert_eq!(
             duckdb_engine_from("1.10506.1").as_deref(),
             Some("1.5.6"),
@@ -368,7 +375,7 @@ mod tests {
         assert!(text.contains("dirty       yes"));
         assert!(text.contains("sqlglot     0.11.2"));
         assert!(text.contains("lax-sql     0.3.0"));
-        assert!(text.contains("duckdb      1.5.6 (crate 1.10506.1)"));
+        assert!(text.contains("duckdb      2.0.1 (crate 1.20001.0)"));
         assert!(text.contains("gpui-fast   0.1.17"));
         assert!(text.contains("fake        5.1.0"));
     }

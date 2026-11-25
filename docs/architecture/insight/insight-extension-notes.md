@@ -9,7 +9,7 @@
 
 | 约束 | 事实 | 出处 | 后果 |
 | --- | --- | --- | --- |
-| duckdb 是**外部编译库** | 1.5.5，取到 `third_party/duckdb/<版本>/`，路径走 `.cargo/config.toml` 的 `[env]`；静态库并发链接会 OOM（全仓 `-j 2` 的由来） | 根 `Cargo.toml` 注释 + `tools/fetch-duckdb.sh` | 扩展必须与 **1.5.5 + 平台**精确匹配；每次升级 duckdb 都要复核每个扩展 |
+| duckdb 是**外部编译库** | 2.0.1（2026-11-26 由 1.5.5 / 1.5.6 线升入），取到 `third_party/duckdb/<版本>/`，路径走 `.cargo/config.toml` 的 `[env]`；静态库并发链接会 OOM（全仓 `-j 2` 的由来） | 根 `Cargo.toml` 注释 + `tools/fetch-duckdb.sh` | 扩展必须与**当前内核版本 + 平台**精确匹配；每次升级 duckdb 都要复核每个扩展（2.0.1 下各扩展的 ABI 是否仍兼容**未复核**，见 `dependencies/duckdb-2.0.1-upgrade-report.md` §11） |
 | 洞察跑在**单例内存库**上 | mock / 编辑器（本地加速）/ 联邦 / 结果集 / 洞察共用同一 DuckDB 实例 | D13 / D51 | `LOAD` 是**进程级**的：新扩展的函数面对**所有**功能可见，安全门（D52）要同步处置 |
 | 扩展机制**已有** | `ExtensionManager`（discover / install / load / unload + 名字白名单 + 状态缓存）；`fts` 模块；excel 扩展已用于 `read_excel_auto` | `engine/src/duckdb/extensions.rs`、`docs/architecture/insight/insight-user-guide.md` FAQ | 边际成本已降低；但每个新扩展仍是一格**分发矩阵**（离线 / 内网要预置 + 指定 extension_dir） |
 

@@ -120,7 +120,11 @@ def build_business_sqlite(path: pathlib.Path):
 
 
 def build_business_duckdb(path: pathlib.Path):
-    """业务示例库（DuckDB 1.5.5，与 RDS 内核同版本）。"""
+    """业务示例库（用 python `duckdb` 建，版本应与 RDS 内核一致——当前 DuckDB 2.0.1）。
+
+    注意：2.0 写出的库默认 storage version 69，**旧版 DuckDB 读不了**；反过来 1.5 写出的库
+    2.0 能读。造完库用 `rds-app` 打开验证一次，别让内核与造库工具各走一条线。
+    """
     import duckdb
 
     conn = duckdb.connect(str(path))

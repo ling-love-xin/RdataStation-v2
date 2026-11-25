@@ -1451,7 +1451,7 @@ ghost `Button` 同样紧凑且自带 hover / tooltip。
 
 ### 26.2 验证
 
-门禁环境：`CARGO_BUILD_JOBS=1`、`CARGO_TARGET_DIR=<repo>/target`、`DUCKDB_LIB_DIR=third_party/duckdb/1.5.6`，
+门禁环境：`CARGO_BUILD_JOBS=1`、`CARGO_TARGET_DIR=<repo>/target`、`DUCKDB_LIB_DIR=third_party/duckdb/2.0.1`，
 测试另加 `CARGO_PROFILE_TEST_DEBUG=line-tables-only`。
 
 | 命令 | 结果 |

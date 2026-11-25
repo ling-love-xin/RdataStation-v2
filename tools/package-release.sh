@@ -97,7 +97,8 @@ copy_assets() {
 }
 
 # 动态库：连同版本化文件名 / 链接一起拷。
-# 加载器认的是 **SONAME**（可能是 `libduckdb.so.1.5.5` 而不是 `libduckdb.so`），只拷一个
+# 加载器认的是 **SONAME**（可能是 `libduckdb.so.<内核版本>`（如 `…/libduckdb.so.2.0.1`）
+# 而不是 `libduckdb.so`），只拷一个
 # 会在用户机上表现成「找不到库」，而构建机上一切正常。
 copy_dylib() {
   cp -R "$DUCKDB_DIR"/$DYLIB* "$1/"

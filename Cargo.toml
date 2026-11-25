@@ -119,10 +119,14 @@ gpui-kit = { version = "0.10.0", features = ["gpui-fast"] }
 # 内核走**动态链接**（不再开 `bundled`）：编 DuckDB 的 C++ 内核单次要数分钟，
 # 且并发链接静态库会耗尽内存（全仓 `-j 2` 的由来）。库由 `tools/fetch-duckdb.sh`
 # 取到 `third_party/duckdb/<版本>/`，路径在 `.cargo/config.toml` 的 `[env]`。
-# **crate 版本与库版本必须成对升级**：`1.10506.1` ↔ DuckDB `v1.5.6`（映射规则：
-# 第二段十进制数 `10506` → `1.5.6`，见 `libduckdb-sys` 的 build script）。
-# 1.5 线内的 patch 升级（`1.10505.0` → `1.10506.1`，2026-11-08）：arrow 仍要 `^58`，
-# 不动 arrow、不动存储格式；库换 `third_party/duckdb/1.5.6/` 并同步 `.cargo/config.toml`。
+# **crate 版本与库版本必须成对升级**：`1.20001.0` ↔ DuckDB `v2.0.1`（映射规则：
+# 第二段十进制数 `20001` → `2.0.1`，见 `libduckdb-sys` 的 build script）。
+# 2.0 线升级（`1.10506.1` → `1.20001.0`，2026-11-26，见
+# `docs/architecture/dependencies/duckdb-2.0.1-upgrade-report.md`）：arrow `^58` → `^60`
+# （锁到 60.2.0，`comfy-table` 7→8 同批），库换 `third_party/duckdb/2.0.1/` 并同步
+# `.cargo/config.toml`；存储格式单向兼容（默认 storage version 69，旧版读不了）。
+# 1.5 线内的 patch 沿革（`1.10505.0` → `1.10506.1`，2026-11-08，arrow 仍 `^58`、
+# 不动存储格式）：见 `docs/architecture/dependencies/duckdb-1.5.6-upgrade-report.md`。
 # `appender-arrow`（→ `vtab-arrow` → `vtab` + `num`）是**纯 crate 侧**特性（不动 C 内核、不动
 # 动态库）：给的是 `Appender::append_record_batch` 与 `Statement::query_arrow` —— 二次分析
 # 那条「结果集直灌 DuckDB」的路就靠它们（P2.5，§4.5.2）。duckdb-rs 2.0 线依赖 arrow 60，

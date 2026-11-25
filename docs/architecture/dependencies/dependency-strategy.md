@@ -35,7 +35,7 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 | `specta` | `=2.0.0-rc.25` | rc 阶段，11 个 crate 共用；升级需同步核对类型生成链路 |
 | `sqlglot-rust` | `=0.11.2` | SQL 转译/生成行为对版本敏感（业务关键，见 §5），升级需跑 SQL 回归（0.10.29 → 0.10.33 于 2026-10-24，修「单条转译静默截断」；0.10.33 → 0.11.1 于 2026-11-08，代码仅 2 处补 CTAS 字段；0.11.1 → **0.11.2** 于 2026-11-22） |
 | `lax-sql` | `=0.3.0` | SQL **排版**引擎（lossless：只调空白，永不拒绝输入），与 `sqlglot-rust` 分工见 `crates/sql/src/formatter.rs` 头部；精确锁定是因为排版输出稳定是设置页预览一致性与幂等测试的前提。配置类型直接引用 `dprint-core` 的 `NewLineKind`，故连带 `=0.67.4` |
-| `arrow` | `58.4.0` | 主版本跟随 `duckdb`：两端之间传 `RecordBatch`，必须是同一 arrow，不能单独升（`duckdb 1.20001.0` 起其 `arrow ^60` 是非可选依赖，升 2.0 线必须与 arrow 60 同批，见 `core-packages-2026-11-22-upgrade-assessment.md` §4） |
+| `arrow` | `60.2.0` | 主版本跟随 `duckdb`：两端之间传 `RecordBatch`，必须是同一 arrow，不能单独升（`duckdb 1.20001.0` 起其 `arrow ^60` 是非可选依赖，因此 2.0 线升级时 arrow 58.4.0 → 60.2.0 **同批**完成，见 `duckdb-2.0.1-upgrade-report.md` §2） |
 
 ## 2. 升级流程
 
@@ -134,8 +134,8 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 
 | 依赖 | 当前 | 最新可用（2026-11-07 核实） | 代码使用点 | 备注 |
 | --- | --- | --- | --- | --- |
-| `duckdb` | `=1.10506.1`（DuckDB 1.5.6） | ✅ 已升（2026-11-08）；2.0 线已到 `1.20001.0`（DuckDB 2.0.1，2026-11-20），**暂缓** | `crates/engine`（`DUCKDB_LIB_DIR` 动态链接） | 1.5 线内 patch 升完，`arrow` 仍 58.4.0 未动；**必须 `=` 精确锁定**（caret 会被解析到 `1.20001.0` 并强拉 `arrow 60`）；2.0 线要 `arrow ^60` 且有存储格式单向兼容（默认 storage version 69，旧版读不了），见 `core-packages-2026-11-22-upgrade-assessment.md` §4 与 §13 的切换时间表 |
-| `arrow` | 58.4.0 | 60.2.0 | — | **不可单独升**，须与 `duckdb` 同步（见 R4）；只有上 DuckDB 2.0 线才需要 60。已核对：58→60 我们的 116 处引用符号全在、`DataType` 41 个变体零增删、default features 未变 |
+| `duckdb` | `=1.20001.0`（DuckDB 2.0.1） | ✅ 已升（2026-11-26；隔离分支改完后合入 `main`，见 `duckdb-2.0.1-upgrade-report.md`） | `crates/engine`（`DUCKDB_LIB_DIR` 动态链接） | `arrow` 同批到 60.2.0；**必须 `=` 精确锁定**（caret 会被解析到 1.5 / 2.0 的别的补丁并连带换 arrow）；2.0 线有存储格式单向兼容（默认 storage version 69，旧版读不了）——回退要换回 1.5 的库并避免打开 2.0 写出的分析库 |
+| `arrow` | 60.2.0 | ✅ 已随 `duckdb` 同批升（2026-11-26） | — | **不可单独升**，须与 `duckdb` 同步（见 R4）；58→60 已核对：116 处引用符号全在、`DataType` 41 个变体零增删、default features 未变；`comfy-table` 7→8 同批 |
 | `gpui-kit` | `0.10.0` + `features = ["gpui-fast"]` | ✅ 已升（2026-11-22，隔离分支 `upgrade/core-2026-11-22`） | UI 全仓 | `cargo check --workspace` 0 error；`cargo test --workspace` 155 target 全 ok / 4617 passed / 0 failed；剩目视验收与 clippy，见 `core-packages-2026-11-22-upgrade-assessment.md` §11 / §12 |
 | `sqlglot-rust` | `=0.11.2` | ✅ 已升（2026-11-22） | `crates/sql` | 与 `lax-sql 0.3.0` 同批（语义走 sqlglot、排版走 lax）；854 条 SQL 用例与基线一致，见 `core-packages-2026-11-22-upgrade-assessment.md` §5 / §11.5 |
 

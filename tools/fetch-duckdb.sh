@@ -7,7 +7,7 @@
 #
 # 用法：
 #   tools/fetch-duckdb.sh                 # 取默认版本（与 Cargo.toml 的 duckdb 版本对齐）
-#   tools/fetch-duckdb.sh 1.5.6           # 显式给版本
+#   tools/fetch-duckdb.sh 2.0.1           # 显式给版本
 #   GH_PROXY= tools/fetch-duckdb.sh       # 不走镜像（能直连 GitHub 时）
 #
 # 平台：按当前系统选资产（Windows amd64 / Linux amd64 / macOS universal）。

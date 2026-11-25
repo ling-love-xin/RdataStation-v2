@@ -1,5 +1,12 @@
 # 核心包版本复查与升级必要性判断（2026-11-22）
 
+> **后续进展（2026-11-26，读本文时先看这段）**：本文是**当时的评估记录**，结论与"当时实测"一律不改。
+> 其中 §4 对 `duckdb` 的「⛔ 不升」判断**已被现实越过**——2026-11-26 已在隔离分支完成
+> `duckdb 1.10506.1 → 1.20001.0`（DuckDB 1.5.6 → 2.0.1）+ `arrow 58.4.0 → 60.2.0` 同批升级并合入 `main`，
+> 全仓版本口径已随之对齐。执行记录、验证基线与"1.5.x 旧假设待复核"清单见
+> [`duckdb-2.0.1-upgrade-report.md`](duckdb-2.0.1-upgrade-report.md)。`gpui-kit` 0.10.0 / `sqlglot-rust` 0.11.2
+> 两项已于 2026-11-22 落地（§11 / §12）。
+
 - 复查日期：2026-11-22
 - 复查对象：`gpui-kit` / `gpui-fast` / `duckdb` / `sqlglot-rust`（及其绑定家族 `gpui-base` / `gpui-component` / `gpui-pre` / `libduckdb-sys`）
 - 项目基线：本地 `main`（2026-11-08 并入的 `gpui-kit 0.9.0 + gpui-fast 0.1.13`、`duckdb 1.10506.1`（DuckDB v1.5.6）、`sqlglot-rust 0.11.1`）

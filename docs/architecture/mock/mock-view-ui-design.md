@@ -194,7 +194,7 @@ panel/mod.rs `scratchpad_all` 硬编码 `MockExportFormat::Csv`，job.rs:46 注�
 
 ### 7.4 测试
 
-`cargo test -p rds-mock --all-targets -j 2`（worktree 内；需手动建 `.rds/tmp`、从主仓复制 `third_party/duckdb/1.5.5/*`）。
+`cargo test -p rds-mock --all-targets -j 2`（worktree 内；需手动建 `.rds/tmp`、从主仓复制 `third_party/duckdb/2.0.1/*`）。
 tests.rs 无「状态：○」「＋ 加列」「✕」「▾」文案断言（grep 实证），P0–P3 不破测试；仅 `status_chip_text` ◐ 断言原样保留。
 
 ## 八、第三轮：字段管理增强（P0–P2，排除批量；commit 待定）

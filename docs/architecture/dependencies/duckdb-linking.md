@@ -40,7 +40,9 @@
   旧的 `libduckdb-windows-amd64.zip` 在 2.0.1 上已 404。`tools/fetch-duckdb.sh` 已按主版本号分档适配。
 - **存储格式单向**：2.0 可读写 1.5 建的文件并保持其旧存储版本号；2.0 **新建**的库是 storage v69，
   1.5 读不了 —— 升上来即不可回退（要有"旧客户端还能不能打开项目分析库"的产品结论，见 §12 待办）。
-- 实测：`cargo test -p rds-engine --lib` 336 passed、`cargo test -p rds-workbench --lib` 220 passed。
+- 实测（2026-11-26，2.0.1 全量回归）：`cargo test -p rds-engine --lib` **348 passed**、
+  `cargo test -p rds-workbench --lib` **220 passed**；全工作区 `cargo test --workspace --lib -j 2`
+  （跳过改动前就失败的 `ctrl_alt_f2_to_f6_toggle_the_right_panels`）**0 failed**。
 
 ## 3. 首次与换机
 
@@ -64,18 +66,20 @@ cargo check -p rds-engine        # 冒烟
 
 ## 5. 升级内核
 
-1. 根 `Cargo.toml`：改 `duckdb` 版本（按 §2 的映射写第二段），**必须带 `=`**——只写 caret 会被
-   cargo 解析到 `1.20000.1`（2.0 线，同时把 `arrow` 拉到 60）；
+1. 根 `Cargo.toml`：改 `duckdb` 版本（按 §2 的映射写第二段），**必须带 `=`**——只写 caret 会跨到相邻内核线
+   （`1.105xx` / `1.200xx` 各成一线，2026-11-08 实测被解析到 `1.20000.1` 并连带把 `arrow` 拉到 60）；
 2. `tools/fetch-duckdb.sh <新版本>`（无 bash / curl 的 Windows 环境见下方「手取」）；
 3. `.cargo/config.toml`：改 `DUCKDB_LIB_DIR` 的路径；
 4. 冒烟：`cargo test -p rds-engine --lib` 与 `cargo test -p rds-mock`（引擎与 mock 是最重的两个 DuckDB 使用方）；
 5. 回填本文 + `dependency-strategy.md` 的版本记录。
 
-**手取（脚本跑不了时）**：资产是 `libduckdb-windows-amd64.zip`（Windows）/ `libduckdb-linux-amd64.zip` /
-`libduckdb-osx-universal.zip`，地址 `https://github.com/duckdb/duckdb/releases/download/v<版本>/<资产>`，
-本机走镜像前缀 `https://ghproxy.net/`。解压到 `third_party/duckdb/<版本>/` 后目录里必须有
-`duckdb.dll` + `duckdb.h`（`libduckdb-sys` 从 `DUCKDB_LIB_DIR` 找头文件生成 bindings），
-另带 `duckdb.lib`（Windows 链接用）、`duckdb.hpp`、`duckdb_extension.h`。
+**手取（脚本跑不了时）**：2.0 起资产改名成 `duckdb-shared-libs-<平台>.tar.gz`
+（Windows `duckdb-shared-libs-windows-amd64.tar.gz`，本机留档 `D:\FluxDown\Archive\`），
+1.5.x 及以前是 `libduckdb-<平台>.zip`；地址同为
+`https://github.com/duckdb/duckdb/releases/download/v<版本>/<资产>`，本机走镜像前缀 `https://ghproxy.net/`。
+解压到 `third_party/duckdb/<版本>/` 后目录里必须有 `duckdb.dll` + `duckdb.h`
+（`libduckdb-sys` 从 `DUCKDB_LIB_DIR` 找头文件生成 bindings），
+另带 `duckdb.lib`（Windows 链接用）、`duckdb.hpp`、`duckdb_extension*.h`。
 
 ## 6. 与扩展的关系（不变）
 

@@ -15,7 +15,7 @@
 
 [![Rust](https://img.shields.io/badge/Rust-edition%202024-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![GPUI-kit](https://img.shields.io/badge/GPUI--kit-0.8.0-4B8BBE)](https://gpui-kit.com)
-[![DuckDB](https://img.shields.io/badge/DuckDB-1.5.5-FFF000)](https://duckdb.org)
+[![DuckDB](https://img.shields.io/badge/DuckDB-2.0.1-FFF000)](https://duckdb.org)
 [![SQLite](https://img.shields.io/badge/SQLite-rusqlite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![Crates](https://img.shields.io/badge/workspace-21%20crates-6E4AFF)](#architecture)
 [![Status](https://img.shields.io/badge/status-beta-blue)](#release--verification-progress)
@@ -376,7 +376,7 @@ Two things are **deliberately not copied**: keeping the cache in memory only (th
 | --- | --- | --- |
 | Language | Rust · edition 2024 | The whole stack — including the UI; there is no JS runtime |
 | UI | **GPUI-kit 0.8.0** | View layer; version-locked to `gpui-base` / `gpui-component` and upgraded as one set |
-| Analysis engine | **DuckDB 1.5.5** (dynamically linked; crate `1.10505.0`) | Secondary analysis / federation / profiling / mock data / snapshots |
+| Analysis engine | **DuckDB 2.0.1** (dynamically linked; crate `1.20001.0`) | Secondary analysis / federation / profiling / mock data / snapshots |
 | Metadata store | **rusqlite 0.40** (bundled) | Transactional metadata + the L2 tier of the metadata cache |
 | Drivers | sqlx 0.9 (MySQL / PostgreSQL) · `mysql_async` · `tokio-postgres` · rusqlite · duckdb-rs | 6 drivers; MySQL and PostgreSQL each have two implementations (sqlx and official client) |
 | Connection security | russh 0.63 (ring backend) · native-tls · tokio-socks · x509-parser | SSH tunnels / TLS / SOCKS5 proxies / certificate parsing |
@@ -403,7 +403,7 @@ tools/fetch-duckdb.sh
 cargo check -p rds-engine
 ```
 
-The library lands in `third_party/duckdb/1.5.5/` (gitignored; `cargo clean` does not remove it). **The crate version and the library version must be upgraded as a pair**: `1.10505.0` ↔ DuckDB `v1.5.5` (the second segment, `10505`, decodes to `1.5.5`). A mismatch shows up at **runtime as missing symbols**, not as a compile error.
+The library lands in `third_party/duckdb/2.0.1/` (gitignored; `cargo clean` does not remove it). **The crate version and the library version must be upgraded as a pair**: `1.20001.0` ↔ DuckDB `v2.0.1` (the second segment, `20001`, decodes to `2.0.1`). A mismatch shows up at **runtime as missing symbols**, not as a compile error. The 2.0 line brings three coupled constraints: `arrow` must move to `60.2.0` in the same batch (`duckdb 1.20001.0` depends on it non-optionally, and a `RecordBatch` crossing the boundary must be the same `arrow`); databases written by 2.0 default to storage version 69 and **older DuckDB cannot read them** (storage format compatibility is one-way); upgrade / rollback notes live in `docs/architecture/dependencies/duckdb-2.0.1-upgrade-report.md`.
 
 ### 1. Build and run
 
@@ -451,7 +451,7 @@ pushed: see §9 of the same document.
 | The dev data root is `.rds/` | `RDS_HOME` and `TEMP` are both pinned inside the repository so a `cargo clean` can't wipe `global.db` or the key store; an explicit `RDS_HOME=<path>` on the command line still wins |
 | **Run `mkdir -p .rds/tmp` on a fresh clone** | `TEMP`/`TMP`/`TMPDIR` are pinned to the in-repo `.rds/tmp`, which a fresh clone does not have: on Windows the MSVC linker cannot create its temporary files and the build fails with `LNK1104` (invisible on Linux/macOS). Create it once after cloning; both CI workflows do it automatically |
 | `target/` grows | `tools/target-guard.sh` reports on it (60 GB threshold by default, exit code 1 above it); `tools/target-guard.sh --clean` removes regenerable files |
-| Linux / macOS | Set `LD_LIBRARY_PATH` to `third_party/duckdb/1.5.5` for local development (on Windows, `build.rs` copies the DLL for you); **release archives already bake `$ORIGIN` / `@executable_path` into the RPATH**, so they run straight out of the box |
+| Linux / macOS | Set `LD_LIBRARY_PATH` to `third_party/duckdb/2.0.1` for local development (on Windows, `build.rs` copies the DLL for you); **release archives already bake `$ORIGIN` / `@executable_path` into the RPATH**, so they run straight out of the box |
 
 ## Quality & verification
 

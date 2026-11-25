@@ -44,7 +44,7 @@
 │ 目标平台      x86_64-pc-windows-msvc
 │ SQL 语义      sqlglot 0.11.2
 │ SQL 排版      lax-sql 0.3.0
-│ 分析引擎      DuckDB 1.5.6（crate 1.10506.1）
+│ 分析引擎      DuckDB 2.0.1（crate 1.20001.0）
 │ 本地存储      SQLite 3.51.3（rusqlite 0.40.2）
 │ UI 组件库     gpui-kit 0.10.0
 │ 渲染内核      gpui-fast 0.1.17
@@ -71,7 +71,7 @@
 | 构建 | 目标平台 | `x86_64-pc-windows-msvc` | `RDS_BUILD_TARGET` | `unknown` |
 | 依赖 | SQL 语义 | `sqlglot 0.11.2` | 新增 `RDS_BUILD_SQLGLOT`（`Cargo.lock` 的 `sqlglot-rust`） | `unknown` |
 | 依赖 | SQL 排版 | `lax-sql 0.3.0` | `RDS_BUILD_LAX_SQL`（已有） | `unknown` |
-| 依赖 | 分析引擎 | `DuckDB 1.5.6（crate 1.10506.1）` | 新增 `RDS_BUILD_DUCKDB` + 解码得 `RDS_BUILD_DUCKDB_ENGINE` | `unknown` |
+| 依赖 | 分析引擎 | `DuckDB 2.0.1（crate 1.20001.0）` | 新增 `RDS_BUILD_DUCKDB` + 解码得 `RDS_BUILD_DUCKDB_ENGINE` | `unknown` |
 | 依赖 | 本地存储 | `SQLite 3.51.3（rusqlite 0.40.2）` | 运行时 `rusqlite::version()` + 新增 `RDS_BUILD_RUSQLITE` | `unknown` |
 | 依赖 | UI 组件库 | `gpui-kit 0.10.0` | `RDS_BUILD_GPUI_KIT`（已有） | `unknown` |
 | 依赖 | 渲染内核 | `gpui-fast 0.1.17` | 新增 `RDS_BUILD_GPUI_FAST` | `unknown` |
@@ -96,19 +96,19 @@
 | `RDS_BUILD_SQLGLOT` | `sqlglot-rust` | 0.11.2 |
 | `RDS_BUILD_FAKE` | `fake` | 5.1.0 |
 | `RDS_BUILD_GPUI_FAST` | `gpui-fast` | 0.1.17 |
-| `RDS_BUILD_DUCKDB` | `duckdb` | 1.10506.1 |
+| `RDS_BUILD_DUCKDB` | `duckdb` | 1.20001.0 |
 | `RDS_BUILD_RUSQLITE` | `rusqlite` | 0.40.2 |
 
 ### 5.1 两个引擎版本
 
-**DuckDB**：crate 版本 `1.10506.1` 与引擎版本 `1.5.6` 不是同一个数，直接显示前者会让验证者
-误判。`libduckdb-sys` 的 `build.rs` 里 `duckdb_version_from_pkg_version` 把第二段 `10506`
-拆成 major 1 / minor 5 / patch 06 —— 这是纯字符串运算。构建侧只注入 crate 版本
+**DuckDB**：crate 版本 `1.20001.0` 与引擎版本 `2.0.1` 不是同一个数，直接显示前者会让验证者
+误判。`libduckdb-sys` 的 `build.rs` 里 `duckdb_version_from_pkg_version` 把第二段 `20001`
+拆成 major 2 / minor 0 / patch 01 —— 这是纯字符串运算。构建侧只注入 crate 版本
 （`RDS_BUILD_DUCKDB`），解码放在 `version.rs` 的 `duckdb_engine_from(pkg_version)` 里，照抄同
 一套规则，**不建连接、不读盘**。与上游唯一的差别是失败姿势：上游直接 `panic`，这里
 `encoded < 10_000` 或解析失败一律回 `None`（`unknown`），避免「关于」弹窗因锁文件异常而崩。
-根 `Cargo.toml` 注释「`1.10506.1` ↔ DuckDB `v1.5.6`」已二次确认，动态链接目录
-`third_party/duckdb/1.5.6` 与之一致。
+根 `Cargo.toml` 注释「`1.20001.0` ↔ DuckDB `v2.0.1`」已二次确认，动态链接目录
+`third_party/duckdb/2.0.1` 与之一致。
 
 **SQLite**：`libsqlite3-sys` 的 crate 版本（0.38.2）与引擎版本（3.51.3）同样是两个数，且
 bundled 的 `sqlite3.h` 在 cargo registry 里，构建期读它不稳。改用运行时零成本 API：
@@ -175,7 +175,7 @@ profile     debug
 target      x86_64-pc-windows-msvc
 sqlglot     0.11.2
 lax-sql     0.3.0
-duckdb      1.5.6 (crate 1.10506.1)
+duckdb      2.0.1 (crate 1.20001.0)
 sqlite      3.51.3 (rusqlite 0.40.2)
 gpui-kit    0.10.0
 gpui-fast   0.1.17
@@ -215,8 +215,8 @@ issue / 群聊里的，不随界面语言变）。
 - `rows.len() == 14`（现有 `rows_and_clipboard_carry_the_key_fields` 里的 `9` 要改）。
 - 新断言：`rows` 含 `SQL 语义` / `分析引擎` / `本地存储` / `渲染内核` / `Mock 数据` 五个 key。
 - `clipboard_text()` 行数 14，且含 `sqlglot    0.11.2` 这类对齐后的行。
-- 引擎解码单测：`duckdb_engine_from("1.10506.1") == "1.5.6"`；异常输入（`unknown`、`1.1`）返回
-  `unknown` 而不是 panic。
+- 引擎解码单测：`duckdb_engine_from("1.20001.0") == "2.0.1"`（旧线 `1.10506.1 == "1.5.6"` 也要保一条，挡「minor 被吞」）；
+  异常输入（`unknown`、`1.1`）返回 `unknown` 而不是 panic。
 - 未知兜底：把五个新常量置 `unknown` 时，值仍能渲染成 `unknown（…）` 而非空串。
 
 版式常量单测（`crates/workbench/src/components/version_dialog.rs::tests::dialog_layout_is_pinned`）：

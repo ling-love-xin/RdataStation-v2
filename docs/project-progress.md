@@ -25,7 +25,7 @@
 | 模块 | 状态 | 备注 |
 | --- | --- | --- |
 | 连接（数据源/认证/网络/环境/标签分组） | ✅ M3 收尾 | 设计权威：`docs/architecture/connection/`（95 条决策） |
-| 引擎（DuckDB 1.5.6 / SQLite / MySQL / PG） | ✅ 可用 | 动态链接内核，`third_party/duckdb/1.5.6/` |
+| 引擎（DuckDB 2.0.1 / SQLite / MySQL / PG） | ✅ 可用 | 动态链接内核，`third_party/duckdb/2.0.1/`（2026-11-26 由 1.5.6 升入，见 `docs/architecture/dependencies/duckdb-2.0.1-upgrade-report.md`） |
 | 工作台 / 编辑器 / 导航 | ✅ 可用 | 见 `docs/architecture/{editor,layout,ui}*` |
 | 分析 / 洞察 / 结果集入 DuckDB | 🟡 推进中 | `docs/architecture/{analytics_resource,insight}*` |
 | 插件（Extism） | 🟡 编译受限 | wasmtime 在 Windows+rustc 1.98 崩溃，未纳入 `cargo test-all` |

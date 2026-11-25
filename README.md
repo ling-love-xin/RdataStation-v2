@@ -14,8 +14,8 @@
 *取数立本，分析明道；数不虚取，析不妄断。*
 
 [![Rust](https://img.shields.io/badge/Rust-edition%202024-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
-[![GPUI-kit](https://img.shields.io/badge/GPUI--kit-0.8.1-4B8BBE)](https://gpui-kit.com)
-[![DuckDB](https://img.shields.io/badge/DuckDB-1.5.5-FFF000)](https://duckdb.org)
+[![GPUI-kit](https://img.shields.io/badge/GPUI--kit-0.10.0-4B8BBE)](https://gpui-kit.com)
+[![DuckDB](https://img.shields.io/badge/DuckDB-2.0.1-FFF000)](https://duckdb.org)
 [![SQLite](https://img.shields.io/badge/SQLite-rusqlite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![Crates](https://img.shields.io/badge/workspace-27%20crates-6E4AFF)](#架构)
 [![Status](https://img.shields.io/badge/status-beta-blue)](#发布与验证进度)
@@ -510,7 +510,7 @@ RdataStation-v2/
 | --- | --- | --- |
 | 语言 | Rust · edition 2024 | 全栈（前端也是 Rust，无 JS 运行时） |
 | UI | **GPUI-kit 0.10.0**（`gpui-fast` 0.1.17 / `gpui-pre` 0.3.12） | 视图层；与 `gpui-base` / `gpui-component` 版本强绑定，整体升降 |
-| 分析引擎 | **DuckDB 1.5.6**（动态链接，crate `1.10506.1`） | 二次分析 / 联邦 / 画像 / 造数 / 快照 |
+| 分析引擎 | **DuckDB 2.0.1**（动态链接，crate `1.20001.0`） | 二次分析 / 联邦 / 画像 / 造数 / 快照 |
 | 元数据库 | **rusqlite 0.40**（bundled） | 事务元数据 + 三层缓存的 L2 |
 | 驱动 | sqlx 0.9（MySQL / PostgreSQL）· `mysql_async` · `tokio-postgres` · rusqlite · duckdb-rs | 6 个驱动，2 个引擎各两条实现（sqlx 版与官方客户端版） |
 | 连接安全 | russh 0.63（ring 后端）· native-tls · tokio-socks · x509-parser | SSH 隧道 / TLS / SOCKS5 代理 / 证书解析 |
@@ -521,7 +521,7 @@ RdataStation-v2/
 | 造数与文件 | fake 5.1 · notify 7 · rfd 0.17 · similar 3.2 · opener | Mock 语料 / 草稿箱监控 / 原生文件对话框 / 行级 diff / 资源管理器定位 |
 | 插件宿主 | extism 1.30 · reqwest 0.12 | WASM 运行时与 Sidecar JSON-RPC（**尚未接通**） |
 
-依赖治理：**版本唯一入口**在根 `[workspace.dependencies]`，crate 内一律 `dep.workspace = true`；gpui-kit 家族 / `specta` / `sqlglot-rust` / `arrow`（跟随 duckdb）四者精确锁定。详见 `docs/architecture/dependencies/dependency-strategy.md`。
+依赖治理：**版本唯一入口**在根 `[workspace.dependencies]`，crate 内一律 `dep.workspace = true`；gpui-kit 家族 / `specta` / `sqlglot-rust` / `arrow`（`60.2.0`，跟随 duckdb）四者精确锁定。详见 `docs/architecture/dependencies/dependency-strategy.md`。
 
 ## 快速开始
 
@@ -537,7 +537,7 @@ tools/fetch-duckdb.sh
 cargo check -p rds-engine
 ```
 
-库落在 `third_party/duckdb/1.5.5/`（已 gitignore，`cargo clean` 不会删它）。**crate 版本与库版本必须成对升级**：`1.10505.0` ↔ DuckDB `v1.5.5`（第二段十进制数 `10505` → `1.5.5`）；版本不匹配会在**运行时**表现为缺符号，而不是编译报错。
+库落在 `third_party/duckdb/2.0.1/`（已 gitignore，`cargo clean` 不会删它）。**crate 版本与库版本必须成对升级**：`1.20001.0` ↔ DuckDB `v2.0.1`（第二段十进制数 `20001` → `2.0.1`）；版本不匹配会在**运行时**表现为缺符号，而不是编译报错。2.0 线另有三条连带约束：`arrow` 必须同批到 `60.2.0`（`duckdb 1.20001.0` 对它是非可选依赖，两端传 `RecordBatch` 必须是同一 arrow）；写出的库默认 storage version 69，**旧版 DuckDB 读不了**（存储格式单向兼容）；升级/回退口径见 `docs/architecture/dependencies/duckdb-2.0.1-upgrade-report.md`。
 
 ### 1. 构建与运行
 
@@ -592,7 +592,7 @@ PR 与 `main` 上另有一套轻量编译门禁（Linux + Windows 跑 `clippy-al
 | 开发期数据根是 `.rds/` | `RDS_HOME` 与 `TEMP` 都被钉到仓库内，避免一次 `cargo clean` 清掉 `global.db` 与密钥库；命令行显式 `RDS_HOME=<某处>` 仍可覆盖 |
 | **全新检出先 `mkdir -p .rds/tmp`** | `TEMP`/`TMP`/`TMPDIR` 被钉在仓库内 `.rds/tmp`，而新克隆里没这个目录：Windows 上 MSVC 链接器写不了临时文件，构建直接报 `LNK1104`（Linux/macOS 看不出来）。克隆后先建一次；两个 CI 工作流里已自动建 |
 | `target/` 会膨胀 | `tools/target-guard.sh` 体检（默认 60 GB 阈值，超出退出码 1），`tools/target-guard.sh --clean` 清理可再生文件 |
-| Linux / macOS | 本地开发需 `LD_LIBRARY_PATH` 指向 `third_party/duckdb/1.5.5`（Windows 由 `build.rs` 自动拷贝 dll）；**发布包已把 `$ORIGIN` / `@executable_path` 写进 RPATH，解压即用** |
+| Linux / macOS | 本地开发需 `LD_LIBRARY_PATH` 指向 `third_party/duckdb/2.0.1`（Windows 由 `build.rs` 自动拷贝 dll）；**发布包已把 `$ORIGIN` / `@executable_path` 写进 RPATH，解压即用** |
 
 ## 质量与验证
 
