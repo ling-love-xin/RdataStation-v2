@@ -1219,6 +1219,57 @@ impl DataObjectsTab {
             } else {
                 None
             };
+            // 源行行尾的**唯一**动作位（铁律第 42 条）：有 ATTACH 能力且已登记的连接
+            // 给「挂载 / 卸载」，等于启用 / 关闭它在联邦库里的 catalog。无能力的行
+            // （`source_action == None`）行尾为空，叶子更是零按钮——属性 / 改名 / 登记
+            // / 移除登记全部走右键，这里不另摆按钮
+            let mount_button = match &object.source_action {
+                Some(data_objects::SourceAction::ToggleMount {
+                    conn_id,
+                    path,
+                    mounted,
+                }) => {
+                    let shared = self.shared.clone();
+                    let conn_id = conn_id.clone();
+                    let path = path.clone();
+                    let mounted = *mounted;
+                    Some(
+                        Button::new(SharedString::from(format!(
+                            "data-object-mount-{}",
+                            object.key
+                        )))
+                        .ghost()
+                        .label(if mounted { tr("卸载") } else { tr("挂载") })
+                        .on_click(move |_, window, cx| match (&path, mounted) {
+                            (Some(path), true) => {
+                                crate::components::data_objects_load::unmount_file_database(
+                                    &shared, path, cx,
+                                );
+                                window.refresh();
+                            }
+                            (Some(path), false) => {
+                                crate::components::data_objects_load::mount_file_database(
+                                    &shared, path, cx,
+                                );
+                                window.refresh();
+                            }
+                            (None, true) => {
+                                crate::components::data_objects_load::unmount_network_source(
+                                    &shared, &conn_id, cx,
+                                );
+                                window.refresh();
+                            }
+                            (None, false) => {
+                                crate::components::data_objects_load::mount_network_source(
+                                    &shared, &conn_id, cx,
+                                );
+                                window.refresh();
+                            }
+                        }),
+                    )
+                }
+                None => None,
+            };
             // 会话行的动作（重挂 / 设主源 / 关会话）后端已有，界面不发明。
             // 原型是点开该行下方直接出动作条：比下拉菜单少一次移动，也看得见都有什么。
             // 判据由 `session_actions` 自己按 key 前缀决定（非会话键返回空），
@@ -1519,6 +1570,7 @@ impl DataObjectsTab {
                             .child(object.availability_chip()),
                     )
                     .children(pick_button)
+                    .children(mount_button)
                     .children(install_button)
                     .children(session_button)
                     // 铁律 E 组第 20 条：与其他模块的交互一律走右键。
