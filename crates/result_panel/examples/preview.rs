@@ -121,7 +121,7 @@ fn demo_payload() -> GridPayload {
         "events".to_string(),
         "payload".to_string(),
     ];
-    let rows: Vec<Vec<SharedString>> = vec![
+    let rows: Vec<Vec<String>> = vec![
         vec!["1".into(), "张三".into(), "1234.50".into(), "2026-11-25 09:12:03".into(), "{vip,trial}".into(), r#"{"level":3,"prefs":{"theme":"dark","lang":"zh-CN"},"tags":["a","b"],"flags":{"beta":true,"rate":0.42}}"#.into(), r#"[{"type":"view","ts":"2026-11-25 09:10:00"},{"type":"buy","items":[{"sku":"A1","qty":2},{"sku":"B7","qty":1}],"total":148.6}]"#.into(), r#"{"k":"v"}"#.into()],
         vec!["2".into(), "李四".into(), "NULL".into(), "2026-11-24 18:40:11".into(), "{}".into(), r#"{"level":1,"prefs":{},"tags":[],"flags":{"beta":false,"rate":null}}"#.into(), "[]".into(), "{}".into()],
         vec!["3".into(), "王五".into(), "99.00".into(), "2026-11-24 11:02:55".into(), "{vip}".into(), r#"{"level":2,"prefs":{"theme":"light","lang":"en-US","timezone":"Asia/Shanghai"},"tags":["vip","long-term"],"flags":{"beta":true,"rate":1.25}}"#.into(), r#"[{"type":"login"}]"#.into(), "NULL".into()],
@@ -319,6 +319,15 @@ fn run_preview() {
                     });
                     // 宿主投影：走生产入口 `sync`（不是逐个字段塞），保证预览与真机同一条路径
                     let input = demo_input();
+                    // 自检：把投影里的列 / 行数打到 stderr，肉眼比对前先确认数据真的进来了
+                    // （8 列：id / customer / amount / created_at / tags / attrs / events / payload）
+                    if let Some(grid) = input.grid.as_ref() {
+                        eprintln!(
+                            "[preview] demo columns={} rows={}",
+                            grid.columns.len(),
+                            grid.rows.len()
+                        );
+                    }
                     panel.update(cx, |p, cx| {
                         p.set_grids(grid, None, Some(group_grid), window, cx);
                         p.sync(cx, input);
