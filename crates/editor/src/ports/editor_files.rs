@@ -34,10 +34,16 @@ const FILTERS: &[(&str, &[&str])] = &[
 ];
 
 /// 注入另存为与导出的路径选择器（**宿主调用一次**；未注入时两者都会明确报“未接入”）
-pub fn attach(shared: &EditorShared) {
+///
+/// `default_dir`：**未命名文档**另存为时的默认目录提供者（有路径的文档仍回自己
+/// 所在目录）。编辑器不知道“该存哪”——那是宿主的领域知识（如 RDS 的草稿箱根：
+/// 未命名 SQL = 正在探索的东西，落草稿箱即入管理面）；返回 `None` = 不设目录，
+/// 交给系统默认。导出选择器与目录无关（见 [`pick_export_path`]）。
+pub fn attach(shared: &EditorShared, default_dir: impl Fn() -> Option<PathBuf> + 'static) {
+    let default_dir = std::rc::Rc::new(default_dir);
     shared.attach_save_path_picker(std::rc::Rc::new(
-        |current: Option<PathBuf>, default_name: String| {
-            pick_save_path(current.as_deref(), &default_name)
+        move |current: Option<PathBuf>, default_name: String| {
+            pick_save_path(current.as_deref(), &default_name, default_dir.as_ref())
         },
     ));
     shared.attach_export_path_picker(std::rc::Rc::new(
@@ -58,9 +64,14 @@ pub fn pick_open_path() -> Option<PathBuf> {
 
 /// 弹「另存为」；用户取消返回 `None`
 ///
-/// `current` 是文档已有路径（给默认目录与文件名）；未命名文档传 `None` 时用 `default_name`。
+/// `current` 是文档已有路径（给默认目录与文件名）；未命名文档传 `None` 时用
+/// `default_name` + `default_dir()` 给的目录（宿主领域知识；`None` 时交给系统默认）。
 /// 返回值保持用户选的原样：**不替用户补扩展名**（补错了反而改了文件类型判定）。
-fn pick_save_path(current: Option<&Path>, default_name: &str) -> Option<PathBuf> {
+fn pick_save_path(
+    current: Option<&Path>,
+    default_name: &str,
+    default_dir: &dyn Fn() -> Option<PathBuf>,
+) -> Option<PathBuf> {
     let mut dialog = rfd::FileDialog::new().set_title("另存为");
     match current {
         Some(path) => {
@@ -73,7 +84,12 @@ fn pick_save_path(current: Option<&Path>, default_name: &str) -> Option<PathBuf>
                 .unwrap_or(default_name);
             dialog = dialog.set_file_name(name);
         }
-        None => dialog = dialog.set_file_name(default_name),
+        None => {
+            if let Some(dir) = default_dir() {
+                dialog = dialog.set_directory(dir);
+            }
+            dialog = dialog.set_file_name(default_name);
+        }
     }
     for (name, extensions) in FILTERS {
         dialog = dialog.add_filter(*name, extensions);
