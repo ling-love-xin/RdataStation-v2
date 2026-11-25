@@ -994,6 +994,15 @@ impl ResultGridDelegate {
             self.rebuild_view_rows();
             return false;
         }
+        if !self.expand_array_at(data_row, column) {
+            return false;
+        }
+        self.rebuild_view_rows();
+        true
+    }
+
+    /// 展开单格（解析 + 缓存元素），**不重建视图行序**——批量展开（行号槽三角）由调用方收口一次
+    fn expand_array_at(&mut self, data_row: usize, column: usize) -> bool {
         // 只有数组列的格子上有三角：别的列长得像字面量也不展开（真值按 `DBDComplexValue` 判）
         if self.column_kind(column + 1) != crate::store::ColumnKind::Array {
             return false;
@@ -1009,8 +1018,81 @@ impl ResultGridDelegate {
         }
         let values: Vec<String> = items.iter().map(|item| item.display()).collect();
         self.expanded_arrays.insert((data_row, column), values);
-        self.rebuild_view_rows();
         true
+    }
+
+    /// 【行号槽三角】这一数据行**可见列**里可展开的数组列（数据列号，按列序）
+    ///
+    /// 判据与单元格三角同一份（[`super::array_cell::array_cell_display`] 不是 `Plain`：
+    /// 数组列 + 非 NULL + 字面量可解析 + 非空），对齐真值 `hasExpandableElements`
+    /// （`SpreadsheetPresentation.java:2401-2409`：逐列问「这一格是不是复杂值」）。
+    /// 隐藏列 / 转置视图没有行级三角（真值里隐藏列同样不在这条扫描内）。
+    pub(crate) fn row_expandable_columns(&self, data_row: usize) -> Vec<usize> {
+        if self.transposed {
+            return Vec::new();
+        }
+        let Some(row) = self.rows.get(data_row) else {
+            return Vec::new();
+        };
+        (0..self.visible_column_count())
+            .map(|view_col| self.data_column(view_col))
+            .filter(|column| self.column_kind(column + 1) == crate::store::ColumnKind::Array)
+            .filter(|column| {
+                row.get(*column).is_some_and(|text| {
+                    !matches!(
+                        super::array_cell::array_cell_display(
+                            crate::store::ColumnKind::Array,
+                            text,
+                            false
+                        ),
+                        super::array_cell::ArrayCellDisplay::Plain
+                    )
+                })
+            })
+            .collect()
+    }
+
+    /// 【行号槽三角】该行的三角字形：`None` = 没有可展开的数组；`▶` = 收起 / 部分展开；
+    /// `▼` = 所有可展开列都展开（真值 `getRowState` + `isAllColumnsExpanded`，`LightGrid.java:3244-3255`）
+    pub fn row_expander_glyph(&self, data_row: usize) -> Option<&'static str> {
+        let columns = self.row_expandable_columns(data_row);
+        let expanded = columns
+            .iter()
+            .filter(|column| self.is_array_expanded(data_row, **column))
+            .count();
+        super::array_cell::row_expander_glyph(columns.len(), expanded)
+    }
+
+    /// 【行号槽三角】点击行头：一次展开该行**所有**可展开数组列；已全展开则全部收起。
+    ///
+    /// 真值 `LightGrid.toggleRowExpand(row, null)`（`:3279-3283`）：`wasExpanded =
+    /// isAllColumnsExpanded()` → 该行全部 `CellExpandState` 置反（部分展开时也走「全部展开」，
+    /// 因为 `wasExpanded` 是 false）。返回是否真的动了视图（无数组列 = `false`）。
+    pub fn toggle_row_array_expand(&mut self, data_row: usize) -> bool {
+        let columns = self.row_expandable_columns(data_row);
+        if columns.is_empty() {
+            return false;
+        }
+        let all_expanded = columns
+            .iter()
+            .all(|column| self.is_array_expanded(data_row, *column));
+        if all_expanded {
+            for column in columns {
+                self.expanded_arrays.remove(&(data_row, column));
+            }
+            self.rebuild_view_rows();
+            return true;
+        }
+        let mut changed = false;
+        for column in columns {
+            if self.expand_array_at(data_row, column) {
+                changed = true;
+            }
+        }
+        if changed {
+            self.rebuild_view_rows();
+        }
+        changed
     }
 
     /// 【刀3】收起全部展开的数组（返回是否有变化；换视图 / 结果被替换时的收口）

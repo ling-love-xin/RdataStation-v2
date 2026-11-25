@@ -5932,3 +5932,91 @@ fn array_expansion_collapses_when_switching_to_text_view() {
     assert!(!grid.is_array_expanded(0, 1), "文本视图不铺子行，顺手收起");
     assert_eq!(grid.view_len(), 3);
 }
+
+// ===== 【行号槽三角】行级数组展开 =====
+
+/// 造一份「id / tags(text[]) / labels(text[])」三列网格：第 0 行两列都是数组、第 1 行 tags 空数组
+fn two_array_grid() -> ResultGridDelegate {
+    let mut grid = ResultGridDelegate::empty("尚未执行");
+    grid.set_data(
+        vec![
+            "id".to_string(),
+            "tags".to_string(),
+            "labels".to_string(),
+        ],
+        vec![
+            vec![
+                "1".to_string(),
+                "{vip,trial}".to_string(),
+                "{a,b}".to_string(),
+            ],
+            vec!["2".to_string(), "{}".to_string(), "{c}".to_string()],
+        ],
+    );
+    grid.set_column_types(vec![
+        Some(ColumnType::parse("int4")),
+        Some(ColumnType::parse("text[]")),
+        Some(ColumnType::parse("text[]")),
+    ]);
+    grid
+}
+
+/// 行号槽三角：只有「这一行至少一格是可展开数组」的行才有字形
+#[test]
+fn row_expander_marks_only_rows_with_expandable_arrays() {
+    let grid = array_grid();
+    // 行 0：{vip,trial,churn} 三项 → 收起态 ▶
+    assert_eq!(grid.row_expander_glyph(0), Some("▶"));
+    // 行 1：`{}` 空数组没有子行可铺 → 不画三角
+    assert_eq!(grid.row_expander_glyph(1), None);
+    // 行 2：{a,b} → ▶
+    assert_eq!(grid.row_expander_glyph(2), Some("▶"));
+}
+
+/// 行级切换：一次展开该行**所有**数组列（真值 `toggleRowExpand(row, null)`），再点全部收起
+#[test]
+fn row_level_toggle_expands_every_array_column_and_collapses_back() {
+    let mut grid = two_array_grid();
+    // 未展开：两列都在 → ▶
+    assert_eq!(grid.row_expander_glyph(0), Some("▶"));
+
+    assert!(grid.toggle_row_array_expand(0), "有可展开列就该动");
+    assert!(grid.is_array_expanded(0, 1), "tags 列被一起展开");
+    assert!(grid.is_array_expanded(0, 2), "labels 列被一起展开");
+    // 全部展开 → ▼（真值 `isAllColumnsExpanded` 才给 EXPANDED）
+    assert_eq!(grid.row_expander_glyph(0), Some("▼"));
+    // 2 数据行 + (2 + 2) 子行
+    assert_eq!(grid.view_len(), 6);
+
+    assert!(grid.toggle_row_array_expand(0), "全展开状态下再点 = 全部收起");
+    assert!(!grid.is_array_expanded(0, 1));
+    assert!(!grid.is_array_expanded(0, 2));
+    assert_eq!(grid.row_expander_glyph(0), Some("▶"));
+    assert_eq!(grid.view_len(), 2);
+}
+
+/// 部分展开仍是收起态（▶），行级切换把它补齐而不是先收起
+#[test]
+fn row_toggle_from_partial_expansion_expands_the_rest() {
+    let mut grid = two_array_grid();
+    assert!(grid.toggle_array_expand(0, 1), "先只展开 tags 一列");
+    assert_eq!(
+        grid.row_expander_glyph(0),
+        Some("▶"),
+        "部分展开不等于全展开（真值 isRowExpanded 要求所有列）"
+    );
+
+    assert!(grid.toggle_row_array_expand(0));
+    assert!(grid.is_array_expanded(0, 2), "缺的那一列被补上");
+    assert_eq!(grid.row_expander_glyph(0), Some("▼"));
+}
+
+/// 没有可展开数组的行：行级切换什么都没做（也不会误重建视图）
+#[test]
+fn row_toggle_without_arrays_does_nothing() {
+    let mut grid = array_grid();
+    let before = grid.view_len();
+    assert!(!grid.toggle_row_array_expand(1), "空数组行没有三角可点");
+    assert_eq!(grid.view_len(), before);
+    assert_eq!(grid.row_expander_glyph(1), None);
+}

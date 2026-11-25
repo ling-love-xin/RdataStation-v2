@@ -10550,6 +10550,71 @@ JSON 树** —— 而网格里双击进去的是行内编辑框（一整条字�
   `collapse_all_arrays`、`set_data` 清展开、`classify_value` 数组分派、`array_tree_items`
   的根 / 子项 / 嵌套 / 100 项截断。
 
+### 9.71 行号槽数组展开三角：行级全列开关（2026-11-26）
+
+用户看 DBeaver 截图后追加的第 1 条：「序号栏 DBeaver 怎么设计的，好像只有这类的元素，
+他也有箭头展开，另要求箭头大小也要对齐 DBeaver」。取证 + 落地如下。
+
+#### 9.71.1 真值（`GridRowRenderer.java` 行头渲染）
+
+| 行为 | 真值坐标 |
+| --- | --- |
+| 图标来源 `IMG_EXPAND = TREE_EXPAND` / `IMG_COLLAPSE = TREE_COLLAPSE`；尺寸取图像 bounds | `:56-57` |
+| 图标实体是 SVG `icons/misc/expand.svg` / `collapse.svg`，`width/height=16`、`viewBox 0 0 16 16` | `UIIcon.java:195-197` |
+| 行头内距 `LEFT_MARGIN = 4` / `RIGHT_MARGIN = 4` | `:51-52` |
+| 间距 `IMAGE_SPACING = 5` / `EXPANDER_SPACING = 2` / `LEVEL_SPACING = 图标宽` | `:53-54` |
+| 画三角：`state != NONE`，`x = LEFT_MARGIN + level*LEVEL_SPACING`，垂直居中 | `:73-86` |
+| 三角后 `x += 图标宽 + 2` 才是行号数字 | `:86` |
+| `state == NONE` 但 `isElementExpandable && level == 0`：**不画但留位** | `:87-91` |
+| 行号字体：当前行 `boldFont`、其余 `normalFont` | `:96` |
+| 命中区 `isOverExpander`：`[LEFT_MARGIN, LEFT_MARGIN + 图标宽]` 闭区间 | `:118-124` |
+| 单击行头三角 → `toggleRowExpand(getRow(row), null)` | `LightGrid.java:3117-3122` |
+| `ElementState`：全列展开 `EXPANDED`、可展开 `COLLAPSED`、否则 `NONE` | `:3244-3255` |
+| `toggleRowExpand(row, null)`：`wasExpanded = isAllColumnsExpanded()` 后**整行所有列置反** | `:3279-3283` |
+| 行级可展开判据 `isElementExpandable(row)` = 该行**任意一格**是 `DBDComplexValue` | `SpreadsheetPresentation.java:2401-2409` |
+
+即：DBeaver 的三角是**行级**的——一行里只要有任意一格是可展开复杂值，行号槽就画一个三角，
+点一下把这一行**所有**可展开列一起展开（再点一起收起）；部分展开时仍显示 `▶`
+（`isRowExpanded` 要求「所有列都展开」）。
+
+#### 9.71.2 本仓落地（`ui.rs` / `grid/array_cell.rs` / `grid/delegate.rs` / `grid/cell.rs`）
+
+- 常量（`ui.rs`）：`RESULT_ROW_HEAD_MARGIN_X = 4`（行头内距是 4，与单元格/列头的 6 不同）、
+  `RESULT_ROW_EXPANDER_SIZE = 16`、`RESULT_ROW_EXPANDER_SPACING = 2`。行号槽宽 48 不变：
+  `4 + 16 + 2 + 数字 + 4`。
+- 纯判定（`grid/array_cell.rs::row_expander_glyph(expandable, expanded)`）：无可展开列 →
+  `None`；`expanded >= expandable` → `▼`；否则 `▶`（含部分展开）。2 条单测。
+- delegate 三件套：
+  - `row_expandable_columns(data_row)`：遍历**可见列**，取 `column_kind == Array` 且
+    `array_cell_display` 不是 `Plain` 的那些（与单元格三角同一门控）；
+  - `row_expander_glyph(data_row)`：把「可展开列数 / 已展开列数」交给上面的纯判定；
+  - `toggle_row_array_expand(data_row)`：全展开 → 逐列移除；否则 → 逐列
+    `expand_array_at`（新抽的私有 helper，只解析+缓存、**不重建视图**），最后一次性
+    `rebuild_view_rows`。`toggle_array_expand` 也复用它。
+- 渲染（`grid/cell.rs` 行号槽分支）：内距由 6 改 4；`h_flex + items_center`；
+  三角盒 `w(16) h_full flex items_center justify_center`、字形 `▶`/`▼`、
+  `muted_foreground`（真值 `#808080` 灰）、`cursor_pointer`、
+  `on_mouse_down(Left)` → `toggle_row_array_expand` + `notify` + `window.refresh()`；
+  数字 `flex_1 min_w_0 truncate`，有三角时 `ml(2)`。
+  回归哨兵 `editor-result-rowno-expander-{row}`（只有真有三角的行才存在）。
+
+#### 9.71.3 与 §9.70.5 第 1 条的关系
+
+§9.70.5 登记过「本仓把三角画在单元格内、粒度单格单列」。本轮把真值的**行号槽三角**补齐，
+于是那一档要拆成两半：
+
+- **行号槽三角（新）** = 真值形态：行级判定、点击整行所有数组列一起开关；
+- **单元格三角（既有）** = 本仓保留的第二入口（粒度单列），真值里没有这一层
+  （真值只在行号槽画三角，单元格内不画）——登记为有意差异，不删的理由是截图 2 里
+  `▼ [3]` 的形态本身需要单元格里有方向指示。
+
+#### 9.71.4 验证
+
+`cargo check -p rds-result-panel --lib --tests` 通过；`cargo test -p rds-result-panel --lib`
+**500 passed / 0 failed**（494 + 新增 6：`array_cell` 2 条纯判定 + `grid/tests.rs` 4 条——
+只画可展开行、行级全展开/全收起、部分展开补全、无数组行不动）。preview 重建后
+`stage=3`、`demo columns=8 rows=8`、无 stderr。
+
 ## 20. 有意差异汇总
 
 全部「有意为之、勿当 bug 修」的偏离集中在这里，按功能域分组；每条回指原小节，细节看原文。

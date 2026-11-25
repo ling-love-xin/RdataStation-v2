@@ -168,7 +168,28 @@ pub const RESULT_COLUMN_WIDTH_BINARY: Pixels = px(160.);
 pub const RESULT_COLUMN_WIDTH_TEXT: Pixels = px(200.);
 
 /// 结果网格首列的行号槽宽（48px，原型 §2.4 的固定 `#` 列）
+///
+/// 2026-11-26：行号槽里补了数组展开三角（真值 `GridRowRenderer.java:73-86`），
+/// 48 = 4（左距）+ 16（三角）+ 2（三角与数字间距）+ 数字 + 4（右距），
+/// 见 [`RESULT_ROW_HEAD_MARGIN_X`] / [`RESULT_ROW_EXPANDER_SIZE`] / [`RESULT_ROW_EXPANDER_SPACING`]。
 pub const RESULT_ROW_NUMBER_WIDTH: Pixels = px(48.);
+
+/// 行号槽的**单侧**左右内距（4px）
+///
+/// 取 DBeaver `GridRowRenderer.LEFT_MARGIN` / `RIGHT_MARGIN = 4`（`:51-52`）——注意
+/// 行头的内距是 **4**，与单元格 / 列头的 6 不同（那不是笔误，两个渲染器各写了一组）。
+pub const RESULT_ROW_HEAD_MARGIN_X: Pixels = px(4.);
+
+/// 行号槽数组展开三角的图标盒（16px）
+///
+/// 真值 `EXPANDED_BOUNDS = IMG_EXPAND.getBounds()`（`GridRowRenderer.java:57`）在运行期取图，
+/// 而图是 SVG：`icons/misc/expand.svg` / `collapse.svg` 的 `width="16" height="16"`
+/// `viewBox="0 0 16 16"`（`UIIcon.java:195-197`）——所以盒就是 16×16，与列头的排序 /
+/// 筛选图标同尺寸（`misc/sort_*.svg` 也是 16）。
+pub const RESULT_ROW_EXPANDER_SIZE: Pixels = px(16.);
+
+/// 三角与行号数字的间距（2px，真值 `EXPANDER_SPACING = 2`，`GridRowRenderer.java:54`）
+pub const RESULT_ROW_EXPANDER_SPACING: Pixels = px(2.);
 
 /// 结果网格的**密度档**（组件尺寸，不是 rem 倍率）。
 ///

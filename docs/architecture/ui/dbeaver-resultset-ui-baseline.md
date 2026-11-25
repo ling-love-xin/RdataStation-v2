@@ -3986,3 +3986,43 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
   数组列现在走 PG 解析器的集合树。
 
 细节与验证见 `docs/architecture/editor/result-panel.md` §9.70。
+
+### 57.9 行号槽数组展开三角（2026-11-26，已落地）
+
+§57.8.3 里那条「本仓是单元格内单格单列展开」被本条补齐了一半：真值的**行号槽三角**现已实现
+（行级、点一下整行所有数组列一起开关），单元格内的三角作为第二入口保留。
+
+#### 57.9.1 真值几何常量（`GridRowRenderer.java`）
+
+| 项 | 值 | 坐标 |
+| --- | --- | --- |
+| 行头左右内距 | 4 / 4 | `:51-52` |
+| 三角图标 | `TREE_EXPAND` / `TREE_COLLAPSE` 的 SVG，**16×16** | `:56-57`、`UIIcon.java:195-197`、`icons/misc/expand.svg`（`width=16 height=16 viewBox 0 0 16 16`） |
+| 三角与数字间距 `EXPANDER_SPACING` | 2 | `:54` |
+| 其它图标间距 `IMAGE_SPACING` | 5 | `:53` |
+| 三角起点 | `x = LEFT_MARGIN + level*图标宽`，垂直居中 | `:73-86` |
+| 不可展开但与可展开行对齐 | `isElementExpandable && level == 0 && state == NONE` 时只留位不画 | `:87-91` |
+| 命中区 | `[4, 4 + 图标宽]` 闭区间 | `:118-124` |
+| 点击行为 | `toggleRowExpand(row, null)`，`isAllColumnsExpanded()` 为真则整行全收起、否则整行全展开 | `LightGrid.java:3117-3122` / `:3279-3283` |
+| 状态 | 全列展开 `EXPANDED`（`▼`）、可展开 `COLLAPSED`（`▶`）、否则 `NONE` | `LightGrid.java:3244-3255` |
+| 可展开判据 | 该行**任意一格**是 `DBDComplexValue` | `SpreadsheetPresentation.java:2401-2409` |
+
+#### 57.9.2 本仓落点
+
+| 项 | 落点 |
+| --- | --- |
+| 常量 `RESULT_ROW_HEAD_MARGIN_X = 4` / `RESULT_ROW_EXPANDER_SIZE = 16` / `RESULT_ROW_EXPANDER_SPACING = 2` | `crates/result_panel/src/ui.rs` |
+| 纯判定 `row_expander_glyph(expandable, expanded)` | `grid/array_cell.rs`（2 单测） |
+| `row_expandable_columns` / `row_expander_glyph` / `toggle_row_array_expand` / 私有 `expand_array_at` | `grid/delegate.rs` |
+| 行号槽渲染（4px 内距 + 16px 三角盒 + 2px 间距 + 数字 `flex_1`） | `grid/cell.rs::render_td` 行号槽分支 |
+| 回归哨兵 | `editor-result-rowno-expander-{row}` |
+
+#### 57.9.3 仍存差异
+
+- 真值行号槽里**没有**单元格三角；本仓保留（截图形态 `▼ [3]` 需要格内有方向指示）。
+- 真值三角是 `▶`/`▼` 两个独立 SVG（`#808080` 灰）；本仓用同义文字字形（`U+25B6`/`U+25BC`）
+  装在 16×16 盒里，尺寸对齐、形状为字体字形。
+- 行号槽宽度固定 48（真值 `computeHeaderWidth` 按文本实测）；3 位以上行号或叠加行图标时
+  真值会更宽，本仓不变。
+
+细节见 `docs/architecture/editor/result-panel.md` §9.71。

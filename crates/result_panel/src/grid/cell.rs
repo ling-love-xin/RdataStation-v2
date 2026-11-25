@@ -289,11 +289,47 @@ pub(crate) fn render_td(
         // `selected_row` 唯一非空），所以判据与铺色共用同一个来源。
         let is_focused_row = delegate.row_number_is_bold(row_ix);
         let table = cx.entity().clone();
+        // 【行号槽三角 2026-11-26】真值行头对「有集合元素的行」画展开三角
+        // （`GridRowRenderer.java:73-86`）：`state != NONE` 时在 `LEFT_MARGIN` 处画 16×16 图标
+        // （`▶` 收起 / `▼` 展开），随后 `x += icon.w + EXPANDER_SPACING(2)` 才是行号数字；
+        // 点击落在 `isOverExpander` 区间（`:3117-3122`）→ `toggleRowExpand(row, null)`，
+        // 即**整行所有数组列一起展开 / 收起**（`:3279-3283`）。
+        // 判定只用数据行（视图行可能是筛选 / 排序后的位序，也可能本身是数组子行）。
+        let data_row = match delegate.reference_of(row_ix) {
+            Some(crate::rowset::RowRef::Data(data_row)) => Some(data_row),
+            _ => None,
+        };
+        let expander_glyph = data_row.and_then(|data_row| delegate.row_expander_glyph(data_row));
+        // 行级展开会插 / 摘子行 → 行数变了，与单元格三角同一条通知路径
+        let toggle_row_expand = {
+            let table = cx.entity().clone();
+            move |_: &MouseDownEvent, window: &mut Window, app: &mut App| {
+                let changed = table.update(app, |state, cx| {
+                    let delegate = state.delegate_mut();
+                    let Some(crate::rowset::RowRef::Data(data_row)) =
+                        delegate.reference_of(row_ix)
+                    else {
+                        return false;
+                    };
+                    let changed = delegate.toggle_row_array_expand(data_row);
+                    if changed {
+                        cx.notify();
+                    }
+                    changed
+                });
+                if changed {
+                    window.refresh();
+                }
+            }
+        };
         return div()
             .id(("editor-result-rowno-cell", row_ix))
-            // 内距 6px（DBeaver `GridCellRenderer.LEFT/RIGHT_MARGIN = 6`）；
-            // 列的组件层内距已置零（`table_impl::cell_paddings`），这里才是唯一一层
-            .px(crate::ui::RESULT_CELL_PADDING_X)
+            // 内距 4px（DBeaver `GridRowRenderer.LEFT/RIGHT_MARGIN = 4`——行头是 4、
+            // 单元格与列头才是 6，两个渲染器各写了一组）
+            .pl(crate::ui::RESULT_ROW_HEAD_MARGIN_X)
+            .pr(crate::ui::RESULT_ROW_HEAD_MARGIN_X)
+            .flex()
+            .items_center()
             .h_full()
             .truncate()
             .text_xs()
@@ -316,7 +352,35 @@ pub(crate) fn render_td(
                     state.delegate_mut().set_context_cell(Some((row_ix, 0)));
                 });
             })
-            .child(SharedString::from(text))
+            .when_some(expander_glyph, |cell, glyph| {
+                cell.child(
+                    div()
+                        .id(("editor-result-rowno-expander", row_ix))
+                        .flex_none()
+                        .w(crate::ui::RESULT_ROW_EXPANDER_SIZE)
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        // 回归哨兵：几何在 headless 下量不到，用它坐实「这一行真的画了三角」
+                        .debug_selector(move || format!("editor-result-rowno-expander-{row_ix}"))
+                        .child(SharedString::from(glyph))
+                        .on_mouse_down(MouseButton::Left, toggle_row_expand),
+                )
+            })
+            .child(
+                div()
+                    // 三角与数字的间距 2px（真值 `EXPANDER_SPACING`）；没有三角的行不留空位
+                    // （真值只在 `isElementExpandable` 的行上留 `icon.w + 2`，本仓同理）
+                    .when(expander_glyph.is_some(), |this| {
+                        this.ml(crate::ui::RESULT_ROW_EXPANDER_SPACING)
+                    })
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(SharedString::from(text)),
+            )
             .into_any_element();
     }
 

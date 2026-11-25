@@ -83,6 +83,26 @@ fn deepest_first(items: &[ArrayItem]) -> String {
     }
 }
 
+/// 行号槽里的行级三角该画哪个字形（`None` = 这一行没有可展开的数组，不画）
+///
+/// 真值 `GridRowRenderer.java:73-86` + `LightGrid.getRowState:3244-3255`：
+/// - `ElementState.NONE` → 不画；`EXPANDED` → `TREE_COLLAPSE`（`▼`）；`COLLAPSED` → `TREE_EXPAND`（`▶`）；
+/// - 而 `isRowExpanded` 的判据是「该行**所有**可展开列都展开」（`isAllColumnsExpanded`，`:3240-3242`），
+///   部分展开仍算 `COLLAPSED`（画 `▶`）。
+///
+/// 本仓「可展开列」= 该行至少一格的 [`array_cell_display`] 不是 `Plain`（解析成功且非空），
+/// 与 [`crate::grid::delegate::ResultGridDelegate::toggle_array_expand`] 的门控同一口径。
+pub(crate) fn row_expander_glyph(expandable: usize, expanded: usize) -> Option<&'static str> {
+    if expandable == 0 {
+        return None;
+    }
+    if expanded >= expandable {
+        Some(ARRAY_EXPANDED_GLYPH)
+    } else {
+        Some(ARRAY_COLLAPSED_GLYPH)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,5 +220,22 @@ mod tests {
             array_cell_display(ColumnKind::Array, "{}", true),
             ArrayCellDisplay::Plain
         );
+    }
+
+    #[test]
+    fn row_expander_is_absent_without_any_array_cell() {
+        // 这一行没有任何可展开的格子：行号槽不画三角（也不留空位）
+        assert_eq!(row_expander_glyph(0, 0), None);
+    }
+
+    #[test]
+    fn row_expander_points_right_until_every_column_is_expanded() {
+        // 一个数组列、未展开 → ▶
+        assert_eq!(row_expander_glyph(1, 0), Some(ARRAY_COLLAPSED_GLYPH));
+        // 部分展开也算收起态（真值 `isAllColumnsExpanded` 才给 EXPANDED）
+        assert_eq!(row_expander_glyph(2, 1), Some(ARRAY_COLLAPSED_GLYPH));
+        // 全展开 → ▼
+        assert_eq!(row_expander_glyph(2, 2), Some(ARRAY_EXPANDED_GLYPH));
+        assert_eq!(row_expander_glyph(1, 1), Some(ARRAY_EXPANDED_GLYPH));
     }
 }
