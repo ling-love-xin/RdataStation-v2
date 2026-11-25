@@ -443,11 +443,18 @@ pub struct ResultPanel {
     pub(crate) exec_sql: Option<String>,
     pub(crate) result_is_analysis: bool,
     /// 【自动刷新】刷新钮箭头菜单记下的开启态（DBeaver `AutoRefreshControl.autoRefreshEnabled`，
-    /// `AutoRefreshControl.java:50`）。本仓只存**UI 态**：定时重跑在宿主（面板无定时器）。
+    /// `AutoRefreshControl.java:50`）。**UI 态与定时器都在面板**：改态即重排（代际见
+    /// `auto_refresh_epoch`），到点只入队 `ResultRequest::Refresh`，执行仍归宿主。
     pub(crate) auto_refresh_enabled: bool,
     /// 【自动刷新】间隔（秒）。`0` = 从未配置（DBeaver `RefreshSettings.refreshInterval` 默认 0，
     /// `RefreshSettings.java:26`）；`> 0` 且不在预设里时，箭头菜单会把它插到预设列表首位。
     pub(crate) auto_refresh_interval_secs: u32,
+    /// 【自动刷新】排程代际：每次改开启态 / 间隔都 +1，旧定时任务醒来发现代际变了就退出。
+    ///
+    /// 用它而不是持 `Task` 句柄：`cx.spawn(..).detach()` 之后没法取消，代际校验等价、
+    /// 且不依赖 `Task::drop` 的取消语义（对比 DBeaver 每次 `scheduleAutoRefresh` 先
+    /// `autoRefreshJob.cancel()` 再新建，`AutoRefreshControl.java:112-127`）。
+    pub(crate) auto_refresh_epoch: u64,
     pub(crate) result_can_copy: bool,
     pub(crate) fetching_more: bool,
     /// 导出菜单静态上下文（sync 写入；render 期只读）

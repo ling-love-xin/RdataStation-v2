@@ -1429,16 +1429,53 @@ impl ResultPanel {
     /// `RefreshSettings` 后开启）。间隔为 0 表示"未配置"，与 `RefreshSettings` 默认一致
     /// （`RefreshSettings.java:26`），此时菜单不把任何预设标为默认项。
     ///
-    /// **不做定时器**：`AutoRefreshJob`（`:125-126`）是宿主侧的活（要能拿到执行通道），
-    /// 面板只持有 UI 态；宿主读 `auto_refresh_enabled` / `auto_refresh_interval_secs`
-    /// 自行决定是否排程。
+    /// **定时重跑**：`AutoRefreshJob`（`AutoRefreshControl.java:112-127`）等价物落在面板侧——
+    /// 每次改态都重排：`scheduleAutoRefresh` 先 `cancel()` 旧 job 再建新的，本仓用代际
+    /// （[`ResultPanel::auto_refresh_epoch`]）达到同样效果，旧任务下次醒来即退出。
+    /// 到点只入队 [`ResultRequest::Refresh`]（与主钮同一条通道），**不自己执行**：
+    /// 执行是宿主的异步链（`dispatch.rs::Refresh` → `refresh_active_result`）。
+    ///
+    /// 与真值的口径差：真值下一轮从「上一次刷新完成」起算（`scheduleAutoRefresh` 在
+    /// `refreshData` 结束后调，`:4312` / `:5689` / `:4747`），本仓是从上一次触发起算的
+    /// 固定周期；差异登记在 `result-panel.md` §9.68。
     pub fn set_auto_refresh(&mut self, enabled: bool, interval_secs: u32, cx: &mut Context<Self>) {
         if self.auto_refresh_enabled == enabled && self.auto_refresh_interval_secs == interval_secs {
             return;
         }
         self.auto_refresh_enabled = enabled;
         self.auto_refresh_interval_secs = interval_secs;
+        self.reschedule_auto_refresh(enabled, interval_secs, cx);
         cx.notify();
+    }
+
+    /// 重排自动刷新定时任务（[`Self::set_auto_refresh`] 的唯一调用方）。
+    ///
+    /// 代际先递增：无论开、关、换间隔，旧任务的下一次 tick 都会因代际不符而退出，
+    /// 因此不会出现「旧间隔任务和新间隔任务同时刷」。
+    fn reschedule_auto_refresh(&mut self, enabled: bool, interval_secs: u32, cx: &mut Context<Self>) {
+        self.auto_refresh_epoch = self.auto_refresh_epoch.wrapping_add(1);
+        if !enabled || interval_secs == 0 {
+            return;
+        }
+        let epoch = self.auto_refresh_epoch;
+        let weak = cx.entity().downgrade();
+        let period = std::time::Duration::from_secs(u64::from(interval_secs));
+        let task = cx.spawn(async move |_, cx| loop {
+            cx.background_executor().timer(period).await;
+            let keep = weak
+                .update(cx, |panel, cx| {
+                    if panel.auto_refresh_epoch != epoch || !panel.auto_refresh_enabled {
+                        return false;
+                    }
+                    panel.queue.request(ResultRequest::Refresh, cx);
+                    true
+                })
+                .unwrap_or(false);
+            if !keep {
+                break;
+            }
+        });
+        task.detach();
     }
 
     /// 【第 72 批】打开「获取全部数据」确认浮层

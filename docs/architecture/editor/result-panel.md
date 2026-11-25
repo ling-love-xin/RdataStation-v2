@@ -5300,7 +5300,7 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
 | 行数框 | **「计算行数」动作**（异步算总行数） | 行号跳转输入框 | **差异**：本仓提供跳转，不是算总行数 |
 | 选区统计 | `selectionStatLabel` | 无 | **有意不摆**（用户 2026-10-28 口径：右段只留内存 / 耗时 / 条数） |
 | 状态长文本 | `statusLabel`（50 字宽） | 无（notice 行在网格上方） | 差异，登记 |
-| 自动刷新 | `AutoRefresh` 控件 | 无 | **能力缺口**（无自动刷新机制） |
+| 自动刷新 | `AutoRefreshControl`（刷新钮 + 下拉菜单 + 定时 job） | 刷新钮带下拉菜单 + 面板内定时任务 | 已对齐（2026-11-25，§9.68；配置对话框未做） |
 | 齿轮 / 配置菜单 | `ConfigAction` + 工具条配置 | 齿轮 + `▾` 显隐菜单 | 已对齐 |
 | 布局 | `RowLayout(wrap=true)` | `h_flex` + 右段 `ml_auto` + 逐项 truncate | 等价 |
 | 左竖条分组 | RADIO 展示组 → 弹簧 → CHECK 记录模式 | 同（`render_vertical_bar`） | 已对齐（2026-11-18） |
@@ -10300,6 +10300,48 @@ panicked at gpui-fast-0.1.17/src/app.rs:2657: no state of type rds_settings::mod
 - 位置差异（有意）：真值这段插在 `GroupMarker(EDIT)` 之后、`viewMenu` 之前（菜单中段），
   本仓追加在右键菜单**末尾**——本仓右键是平铺长菜单、段位与原版本就不同（§20.1 首条），
   子菜单挂在尾部不打断既有段序；要挪到中段得先重排整份右键段位，不在本批。
+
+### 9.68 自动刷新：定时重跑 + 菜单 hint 项
+
+> 真值：`plugins/org.jkiss.dbeaver.ui/src/org/jkiss/dbeaver/ui/controls/autorefresh/`
+> `AutoRefreshControl.java`（菜单 `:216-256`、排程 `:112-127`、hint `:247-256`、
+> hint 供给 `:292-302`）+ `AutoRefreshJob.java:41-52`。
+
+#### 9.68.1 定时重跑
+
+- 三态：`auto_refresh_enabled` / `auto_refresh_interval_secs` / `auto_refresh_epoch`
+  （面板字段，`data.rs`）。`set_auto_refresh` 是唯一改态入口（菜单 SetInterval / Stop 与
+  宿主 dispatch 都经它），改态即 `reschedule_auto_refresh`。
+- 排程：代际先 +1 → `cx.spawn` 固定周期循环 → 醒来校验「代际没变 且 仍开启」→ 通过才
+  入队 `ResultRequest::Refresh`，否则 break。代际承担真值 `autoRefreshJob.cancel()`
+  的职责（`detach()` 后无法取消，也不依赖 `Task::drop` 语义）。
+- 执行仍在宿主：`Refresh` → `dispatch.rs::Refresh` → `refresh_active_result`，与主钮
+  同一条通道（筛选 / 包装 SQL / 执行通道都不受影响）。
+- **口径差（有意）**：真值每轮从「上一次刷新完成」起算（`refreshData` 收尾调
+  `scheduleAutoRefresh`，`:4312` / `:5689` / `:4747`），本仓是「上一次触发」起算的固定
+  周期——刷新耗时不影响节拍。另：真值的 `afterError` + `stopOnError` 自动停机依赖
+  对话框里的开关，本仓随「自定义...」一起未做。
+
+#### 9.68.2 菜单 hint 项
+
+- `menu_entries(enabled, interval_secs, hint)`：hint 非空 → 末尾再补分隔 + 一条
+  `action: None` 的禁用项（渲染侧 `disabled(true)`）。空白按「没 hint」处理
+  （对齐 `CommonUtils.isEmpty`）。
+- 文案常量 `AUTO_REFRESH_HINT` = 「提示：频繁刷新可能会导致服务器负载过高」
+  （`ResultSetMessages_zh.properties:146`）。**有意差异**：真值按事务状态二选一
+  （autocommit → 本条；非 autocommit → `..._switch_autocommit_hint`，`:184`），
+  本仓没有事务状态端口，固定取 autocommit 口径。
+- 该 hint 未走 i18n（字面量常量）：`crates/shared/locales` 正被并行线改动，等合并后
+  再补键（与 `right_tab_label` 的字面量做法同）。
+
+#### 9.68.3 用例与门禁
+
+- `hint_is_a_disabled_trailing_item_after_a_separator`（纯函数）。
+- `auto_refresh_timer_enqueues_refresh_per_interval`：1 秒间隔 + `advance_clock(3s)`
+  → 恰好 3 条 `Refresh`（新旧任务不叠加）；关掉后再 `advance_clock(3s)` → 0 条。
+- `cargo test -p rds-result-panel --lib` → **463 passed / 0 failed**。
+- 仍缺：`ConfigureAutoRefresh`（「自定义...」对话框：间隔输入 + 「错误时停止」勾选）——
+  `dispatch.rs` 仍是空分支，基线 §56.3 已登记。
 
 ## 20. 有意差异汇总
 

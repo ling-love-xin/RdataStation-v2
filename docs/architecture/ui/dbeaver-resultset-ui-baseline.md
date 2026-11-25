@@ -3808,9 +3808,31 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
 
 | 项 | 真值 | 本仓 | 原因 |
 | --- | --- | --- | --- |
-| 定时重跑 | `AutoRefreshJob` 按间隔循环 `refreshData` | **未接**：只记 UI 态 | 结果执行是异步链（`pump.rs`），要排程得先有「同一条 SQL 循环重查」语义；没有就不假装在刷 |
-| 「自定义...」对话框 | `AutoRefreshConfigDialog`（间隔 + 错误时停止） | 菜单项在，点下去入队后是空分支 | 对话框与「错误时停止」语义都依赖上一条的定时器，先有定时器再做配置 |
-| hint 项 | `:247-256` | 不做 | 本仓没有 hint 来源；该项本身是「下沿填充」的辅助 |
+| 定时重跑 | `AutoRefreshJob` 按间隔循环 `refreshData` | **已接（2026-11-25）**：面板内定时任务（代际校验），到点只入队 `ResultRequest::Refresh`，执行仍归宿主（§56.5） | 周期口径差：真值从「上一次刷新完成」起算，本仓从「上一次触发」起算（固定周期） |
+| 「自定义...」对话框 | `AutoRefreshConfigDialog`（间隔 + 错误时停止） | **仍未做**：菜单项在，`ConfigureAutoRefresh` 仍是空分支 | 需要一张输入浮层（间隔 + 「错误时停止」勾选）；定时器已就位，对话框单独一刀 |
+| hint 项 | `:247-256`，`setHintSupplier` 按事务状态二选一 | **已接（2026-11-25）**：菜单末尾分隔 + 禁用项，文案固定取 autocommit 口径 | 本仓没有事务状态端口（`AutoRefreshControl.java:292-302` 的 `txnManager.isAutoCommit()` 问不到） |
+| 主钮形态 | 纯图标（`UIIcon.REFRESH` / `CLOCK_STOP`） | 保留「⟳ 刷新」文字 label | 本仓状态栏一贯文字按钮；换成图标会牵动占位 id 与既有断言，改形态属另一刀 |
+| 主钮 tooltip | 「刷新 (F5)」= 命令名 + 快捷键描述 | 「刷新」/「停止自动刷新」 | 本仓没有 `F5` 键位绑定（`RDS` 的刷新走 `CTRL+R`/按钮） |
+| 初始禁用 | `enableControls(false)`（无结果时禁用） | 无 `result_sql` 时**整颗不注入**、走占位 | 本仓既有口径，见 §55 表「刷新钮」行 |
+
+### 56.5 定时重跑 + hint 项（2026-11-25 落地）
+
+- **定时重跑**（真值 `AutoRefreshControl.scheduleAutoRefresh:112-127` + `AutoRefreshJob:41-52`）：
+  面板持 `auto_refresh_enabled` / `auto_refresh_interval_secs` / `auto_refresh_epoch` 三态；
+  `set_auto_refresh` 每次改态都 `reschedule_auto_refresh` —— 先把代际 +1，再
+  `cx.spawn` 一个固定周期循环，醒来校验「代际没变 且 仍开启」，通过才入队
+  `ResultRequest::Refresh`，否则自行退出。
+  代际替代真值的 `autoRefreshJob.cancel()`（`detach()` 之后没法取消，也不依赖 `Task::drop` 语义）。
+  **执行不在面板**：`Refresh` 仍走宿主的 `dispatch.rs::Refresh → refresh_active_result`，
+  与主钮同一条通道，所以筛选 / 包装 SQL / 执行通道都不受影响。
+- **hint 项**：`auto_refresh::menu_entries(enabled, interval, hint)` 第三参；
+  `None` / 空串 / 纯空白 = 不摆（对齐 `CommonUtils.isEmpty`）。文案常量
+  `AUTO_REFRESH_HINT` = 「提示：频繁刷新可能会导致服务器负载过高」
+  （`ResultSetMessages_zh.properties:146`），固定取 autocommit 口径。
+- 用例：`hint_is_a_disabled_trailing_item_after_a_separator`（纯函数：末项禁用 + 前置分隔 +
+  空白不摆）、`auto_refresh_timer_enqueues_refresh_per_interval`（1 秒间隔推进 3 秒
+  = 恰好 3 次 `Refresh`；关掉后再推进 3 秒 = 0 次）。
+- 验证：**463 passed / 0 failed**（462 + 1）。
 | 主钮形态 | 纯图标（`UIIcon.REFRESH` / `CLOCK_STOP`） | 保留「⟳ 刷新」文字 label | 本仓状态栏一贯文字按钮；换成图标会牵动占位 id 与既有断言，改形态属另一刀 |
 | 主钮 tooltip | 「刷新 (F5)」= 命令名 + 快捷键描述 | 「刷新」/「停止自动刷新」 | 本仓没有 `F5` 键位绑定（`RDS` 的刷新走 `CTRL+R`/按钮） |
 | 初始禁用 | `enableControls(false)`（无结果时禁用） | 无 `result_sql` 时**整颗不注入**、走占位 | 本仓既有口径，见 §55 表「刷新钮」行 |

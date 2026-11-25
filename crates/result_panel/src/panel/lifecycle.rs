@@ -441,6 +441,7 @@ impl ResultPanel {
             // `refreshInterval = 0`；开启与间隔由刷新钮箭头菜单设置，定时重跑归宿主）
             auto_refresh_enabled: false,
             auto_refresh_interval_secs: 0,
+            auto_refresh_epoch: 0,
             result_can_copy: false,
             fetching_more: false,
             export_ctx: None,

@@ -7333,3 +7333,38 @@ fn set_grids_wires_the_panels_submenu_builder_on_every_grid(cx: &mut gpui_kit::T
     assert!(main_wired, "主网格：单元格右键要有「面板」子菜单");
     assert!(group_wired, "分组页内嵌网格：同样要接");
 }
+/// 【自动刷新】定时重跑：开启 1 秒间隔后时钟推进会让面板按周期入队 `Refresh`
+/// （与主钮同一条通道，执行仍归宿主）；关掉后旧任务代际不符、自行退出不再入队。
+///
+/// 真值对照：`AutoRefreshJob`（`AutoRefreshControl.java:112-127`）跑 runnable =
+/// `refreshData(null)`；本仓面板只入队请求，执行在 `dispatch.rs::Refresh`。
+#[gpui_kit::test]
+fn auto_refresh_timer_enqueues_refresh_per_interval(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    let queue = panel.read_with(cx, |p, _| p.queue.clone());
+
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_auto_refresh(true, 1, cx)));
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(3));
+    cx.run_until_parked();
+    let fired = queue.drain();
+    assert_eq!(
+        fired.len(),
+        3,
+        "1 秒间隔推进 3 秒 = 三次 tick（新旧任务不会叠加成六次）"
+    );
+    assert!(
+        fired
+            .iter()
+            .all(|request| *request == crate::ports::ResultRequest::Refresh),
+        "自动刷新只入队 Refresh"
+    );
+
+    // 关掉：再推进 3 秒不应有新请求（旧任务代际不符，自行退出）
+    cx.update(|_, app| panel.update(app, |p, cx| p.set_auto_refresh(false, 1, cx)));
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(3));
+    cx.run_until_parked();
+    assert!(queue.drain().is_empty(), "关掉后不再自动刷新");
+}
