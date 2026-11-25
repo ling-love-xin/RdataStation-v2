@@ -238,6 +238,9 @@ mod tests {
 
     use gpui_kit::TestAppContext;
 
+    // 父模块的 `tr` 是私有 `use` 绑定，子模块不自动继承（i18n 合流遗留：测试模块漏了这条）。
+    use shared::i18n::tr;
+
     use super::{SettingsHost, SettingsPage};
 
     /// 测试用宿主桥：全部回调为空操作（只记录调用，不接真实宿主）。

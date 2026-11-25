@@ -488,6 +488,8 @@ fn empty_hint(cx: &mut App, filter: Filter) -> AnyElement {
 mod tests {
     use super::Filter;
     use crate::core::{NotificationRecord, NotificationType};
+    // 父模块的 `tr` 是私有 `use` 绑定，子模块不自动继承（i18n 合流遗留：测试模块漏了这条）。
+    use shared::i18n::tr;
 
     fn record(type_: NotificationType, read: bool) -> NotificationRecord {
         NotificationRecord {
