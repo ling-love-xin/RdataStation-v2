@@ -3177,6 +3177,7 @@ pub fn set_selected_cell_without_scroll(&mut self, row_ix: usize, col_ix: usize,
 | 历史下拉 | 表格浮层（70/30 双列、SQL 等宽字体、`Manage Filters`、↑ 关闭） | 普通下拉菜单 | **已落地，见 §48**（残余差异登记在 §48.4） |
 | ExecutePanel 启用条件 | 文本 ≠ 当前条件才亮 | 恒可点 | **已落地，见 §49**；本表原判「本仓没有未应用草稿态」经实测**修正**：`filter_text` 确为输入框实时副本，但「落到网格」另有防抖/提交两步，故另记 `applied_filter_text` 作等价物 |
 | 工具钮图标 | ERASE / FILTER / RS_BACK / RS_FORWARD / FIND_REPLACE 五套专图 | Eraser / Funnel / ChevronLeft / ChevronRight / Search | lucide 无 `RS_BACK`/`RS_FORWARD` 等价物，方向箭头已是最接近的语义 |
+| 展开钮 / 历史钮 hover | 只换图标（`SWT.IMAGE_GRAY` 副本 ↔ 实图），**不铺底色**（`FilterExpandPanel:1309-1317`、`HistoryPanel:1080-1091`） | ghost `Button` 的 `accent` 悬停底，图标恒定 | **登记不做**：组件无 hover 前景通道，详见 §54.9.3 |
 
 ### 46.5 验证
 
@@ -3499,7 +3500,7 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
 故改用官方 `ButtonCustomVariant`（`:104-140`，经 `ButtonVariants::custom` `:99-101`）复刻 ghost 的底色与悬停、只把 fg 换成主题绿：
 
 - 常态底：`color` 默认 `transparent` → `:1026` `mix_oklab(transparent, 0.2)` 仍是透明
-- 悬停底：ghost 取 `tokens.accent`（`:1226-1233`，暗色再乘 0.5），而 `tokens.accent = colors.accent`（`vendor/gpui-component/src/theme/mod.rs:655`）→ 传 `theme.colors.accent`（暗色 `opacity(0.5)`）即 ghost 原值
+- 悬停底：ghost 取 `tokens.accent`（`:1226-1233`，暗色再乘 0.5），而 `tokens.accent = colors.accent`（`vendor/gpui-component/src/theme/mod.rs:655`）→ 传 `theme.colors.accent`（暗色 `opacity(0.5)`）即 ghost 原值（**§54.9 已换成 DBeaver 的 blend 公式，此处仅留变更史**）
 
 ### 53.3 差异登记
 
@@ -3578,7 +3579,7 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
 | 换角 | 与选中区冲突时 `TOP_RIGHT` → `BOTTOM_RIGHT` → `BOTTOM_LEFT`（`:1090-1106`） | 恒 `TOP_RIGHT` | 冲突判定 `hasSelectionBoundsConflict` 在 `:224`（拿 `ISelection` 与浮层矩形比）；本仓能拿到选中行列但拿不到像素矩形，落「恒右上」并登记 |
 | 替换栏 | `isEditable()` 才出现（`:968`），含 Replace / ReplaceAll | 不做 | 本仓结果集不可编辑；替换语义走「待提交」通道，属另一批 |
 | 查找历史 | `HistoryStore`，`HISTORY_SIZE = 15`（`:81`、`:828`） | 保留词不落历史栈 | `InputState` 无历史栈/补全通道（与筛选框补全同一缺口） |
-| 边输边过滤的触发 | `selectAllButton` 勾选 + interactive filter enabled（**能力**默认开，`:76`、`:155-157`）→ 每次输入 `scheduleFilter()`，**250ms 防抖**（`:50`、`:171-183`）；能力关掉时勾选只一次性应用（`:218-222`） | 「仅显示匹配」勾选 → `find_query_changed` 每次输入**即时**重过滤（`crates/result_panel/src/panel/events.rs:268-278`）；没有「关掉边输边过滤」的模式 | 语义同构（都是「勾选才过滤、默认不勾、关浮层撤过滤」），差在防抖与「可关」两处：本仓词一变就重刷，行集合与词恒一致 |
+| 边输边过滤的触发（**已对齐**） | `selectAllButton` 勾选 + interactive filter enabled（能力默认开，`:76`、`:155-157`）→ 每次输入 `scheduleFilter()`，**250ms 防抖**（`:50`、`:171-183`）；能力关掉时勾选只一次性应用（`:218-222`） | 勾选后输入走 `find_query_changed` 的 **250ms 防抖**（`events.rs`）；能力开关 `find_interactive_filter`（默认 true）由勾选框右键两项互斥菜单切换，关掉时「仅显示匹配」降级为一次性应用（`apply_find_filter_once`） | **本行原写「本仓即时重过滤、没有可关模式」为 §54.7/§54.8 之前的旧态**，现已对齐，见 §54.7、§54.8 |
 | 命中数文本 | 无 | 有（「N 个匹配」/「无匹配」） | 本仓增强，保留 |
 | 格内区间高亮 | `StyledText` 的查找高亮 | 无 | 网格自绘，需另做装饰层 |
 
@@ -3672,6 +3673,9 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
 | 竖线缩进 | `x+w-4`、`y+2 → y+h-4`，hover/非 hover 同一条 | 封边 `vline-source`：1px、满高、贴右边 | 不自绘整格（组件选型禁手搓）；位置差 ≤3px |
 | 铺底宽度 | `e.width-3` | 整格 | 同上 |
 | 逐格宽高 | `computeSize`：`icon.width + 4`、`textSize.x + 10`、`textSize.y + 6`、`maxWidth = 父/4` | 由 `Button` 内距决定 | 组件没有「图标 + 固定内距」旋钮，属像素级差异 |
+| 展开钮 hover | `FilterExpandPanel.paintPanel:1309-1317` **只换图标**（非 hover 画 `SWT.IMAGE_GRAY` 副本、hover 画实图），**不铺任何底色** | ghost `Button`：hover 铺 `tokens.accent`（暗色 ×0.5），图标恒定单色 | `ButtonCustomVariant` 只有 `color/foreground/shadow/hover/active`（`vendor/gpui-component/src/button/button.rs`），**没有 hover 前景通道**，无法让图标按悬停换色；单方面去掉底色会让悬停零反馈（真值至少有图标变实的反馈），故按现状保留并登记 |
+| 历史钮 hover | `HistoryPanel.paintPanel:1080-1091` 同理：先画左缘竖线 `x+2, y+2 → y+h-4`，再按 hover 画 `DROP_DOWN` 实图 / 灰度副本，**不铺底色** | ghost `Button`，hover 铺 `tokens.accent`；左缘竖线已用独立 `vline-history`（1px）表达 | 同上，同一组件限制 |
+| 展开钮 / 历史钮宽高 | `FilterExpandPanel` 宽 `icon.width + 4`、`HistoryPanel` 宽 `dropIcon.width + 6`、高均 `MIN_FILTER_TEXT_HEIGHT=20` | `xsmall` 按钮内距决定 | 同一类组件旋钮缺失 |
 
 ### 54.9.4 验证
 
