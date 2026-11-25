@@ -520,6 +520,16 @@ pub struct ResultPanel {
     /// 网格只留命中行；关掉查找栏 / 取消勾选 / 词清空时撤销。**不动筛选框的 `filter`**
     /// ——那是用户的词，撤查找过滤时必须原样还在。
     pub(crate) find_filter_only: bool,
+    /// 【结果内查找】边输边过滤的代次号 + 挂起任务（DBeaver 的防抖口径）
+    ///
+    /// `ResultsetFindReplaceOverlay.filterSchedulingTimeoutMilliseconds = 250`
+    /// （`:50`），`scheduleFilter` 延迟的是 `applyInteractiveFilterJob`
+    /// = `applyQuickFilter` + `updateIncrementalSearch` + `decorate` 三件一起（`:204-208`），
+    /// 且**只在 interactive filter 生效（= 勾了「仅显示匹配」）时**才延迟：
+    /// 未勾时走 `super.onSearchFieldModified` 的即时增量搜索（`:180-182`）。
+    /// 本仓照此：勾着时延迟 250ms 再重过滤 + 重算命中 + 定位；未勾时保持即时。
+    pub(crate) find_version: u64,
+    pub(crate) find_debounce: RefCell<Option<Task<()>>>,
     /// 【结果内查找】匹配口径（大小写 / 正则 / 全词三开关；查找栏上三颗 CHECK）
     ///
     /// 定位与「只显示匹配行」共用这一份（DBeaver 的 `SearchQuickFilterInfo` 同款：

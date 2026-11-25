@@ -195,13 +195,17 @@ impl ResultPanel {
     ///
     /// 对齐 DBeaver 的 `selectAllButton`（`SWT.CHECK`，`ResultsetFindReplaceOverlay:107-135`）：
     /// 勾上 → 把当前查找词作为 quickFilter 灌进视图；取消 → 撤掉。
-    /// 与 DBeaver 的差异登记：它是「边敲边过滤」（250ms 去抖的 `scheduleFilter`），
-    /// 本仓是「勾选框 + 词变时同步」（没有独立 job，靠 `find_query_changed` 驱动）。
+    /// 词变后的重过滤在 `find_query_changed` 里走 250ms 防抖（同 DBeaver `:50`/`:204-208`）；
+    /// 勾选/取消这一次动作本身是即时的（DBeaver 的 `performSelectAll:211-223` 也要过一次
+    /// `scheduleFilter`，本仓省掉这一跳，让勾选结果立刻可见——已登记为微差）。
     pub fn set_find_filter_only(&mut self, on: bool, cx: &mut Context<Self>) {
         if self.find_filter_only == on {
             return;
         }
         self.find_filter_only = on;
+        // 丢掉还在等 250ms 的那次任务：此刻的行集合由下面这发显式过滤决定
+        self.find_version = self.find_version.wrapping_add(1);
+        *self.find_debounce.borrow_mut() = None;
         let needle = if on {
             Some(self.find_query.clone())
         } else {
@@ -265,8 +269,35 @@ impl ResultPanel {
     pub fn find_query_changed(&mut self, text: String, cx: &mut Context<Self>) {
         self.find_query = text;
         self.find_at = None;
-        // 「只显示匹配行」开着时词变要跟着过滤（DBeaver 的边敲边过滤；本仓没有
-        // 独立 job，直接跟随每次输入，行集合与词始终一致）
+        if self.find_filter_only {
+            // DBeaver 的边输边过滤有 250ms 防抖（`ResultsetFindReplaceOverlay.
+            // filterSchedulingTimeoutMilliseconds = 250`，`:50`），且延迟的是
+            // 「过滤 + 命中更新 + 高亮」整组（`scheduleFilter` → `applyInteractiveFilterJob`
+            // = `applyQuickFilter` + `updateIncrementalSearch` + `decorate`，`:204-208`）。
+            // 未勾「仅显示匹配」时它走 `super.onSearchFieldModified` 的**即时**增量搜索
+            // （`:180-182`），故 else 分支保持同步执行。
+            self.find_version = self.find_version.wrapping_add(1);
+            let version = self.find_version;
+            let weak = cx.entity().downgrade();
+            let executor = cx.background_executor().clone();
+            let task = cx.spawn(async move |_this, cx| {
+                executor.timer(std::time::Duration::from_millis(250)).await;
+                _ = weak.update(cx, |panel, cx| {
+                    if panel.find_version == version {
+                        panel.apply_find_filter_and_locate(cx);
+                    }
+                });
+            });
+            *self.find_debounce.borrow_mut() = Some(task);
+            return;
+        }
+        self.apply_find_filter_and_locate(cx);
+    }
+
+    /// 查找词生效：勾着「仅显示匹配」时把词灌进 delegate 过滤，然后重算命中并定位第一处。
+    ///
+    /// 抽出来是因为两条入口共用：词变（即时或防抖后）与防抖任务的回调。
+    fn apply_find_filter_and_locate(&mut self, cx: &mut Context<Self>) {
         if self.find_filter_only {
             let criteria = self.find_criteria;
             let needle = Some(self.find_query.clone());

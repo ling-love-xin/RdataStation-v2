@@ -4570,6 +4570,54 @@ fn find_overlay_sits_in_the_grid_top_right_corner(cx: &mut gpui_kit::TestAppCont
     );
 }
 
+/// 【§54.6 2026-11-25】「仅显示匹配」开着时，改查找词要等 250ms 防抖才重过滤。
+///
+/// 真值 `ResultsetFindReplaceOverlay`：`filterSchedulingTimeoutMilliseconds = 250`（`:50`），
+/// 防抖延迟的是「过滤 + 命中更新 + 高亮」整组（`scheduleFilter` → `applyInteractiveFilterJob`
+/// = `applyQuickFilter` + `updateIncrementalSearch` + `decorate`，`:204-208`）；未勾时不延迟
+/// （走 `super.onSearchFieldModified` 的即时搜索，`:180-182`）。本仓照此实现。
+#[gpui_kit::test]
+fn find_query_change_while_filtering_waits_for_the_250ms_debounce(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let grid = cx.update(|_window, app| panel.read(app).grid().clone());
+
+    // 数据 `["1","1234.5"] / ["2","NULL"]`：词 `1` 只命中第一行
+    cx.update(|window, cx| {
+        panel.update(cx, |p, cx| {
+            p.toggle_find(window, cx);
+            p.find_query_changed("1".to_string(), cx);
+            p.set_find_filter_only(true, cx);
+        })
+    });
+    let rows = cx.update(|_window, app| grid.read(app).delegate().view_total());
+    assert_eq!(rows, 1, "勾上「仅显示匹配」后网格只剩命中行");
+
+    // 改词：这一刻**不该**同步生效（防抖还没到点）。新词取 `null`——两行里只有
+    // 第二行的 `NULL` 命中（`1` 与 `1234.5` 都不含它），便于断言行集合真的换了
+    cx.update(|_window, cx| panel.update(cx, |p, cx| p.find_query_changed("null".into(), cx)));
+    let (filter, rows) = cx.update(|_window, app| {
+        let d = grid.read(app).delegate();
+        (d.find_filter().map(str::to_string), d.view_total())
+    });
+    assert_eq!(filter.as_deref(), Some("1"), "防抖未到点：delegate 里还是旧词");
+    assert_eq!(rows, 1, "防抖未到点：行集合还没换");
+
+    // 推过 250ms → 新词生效
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(300));
+    cx.run_until_parked();
+    let (filter, rows) = cx.update(|_window, app| {
+        let d = grid.read(app).delegate();
+        (d.find_filter().map(str::to_string), d.view_total())
+    });
+    assert_eq!(filter.as_deref(), Some("null"), "防抖到点后应换成新词");
+    assert_eq!(rows, 1, "`null` 只命中第二行");
+}
+
 /// 【工具栏 2026-11-20 / 收口 2026-11-24】CHECK 型按钮的「点一次就翻转面板态」：
 /// 筛选栏只剩筛选展开 / 查找两颗（下发源库已删、列注释已迁结果集设置，见基线 §21.3），
 /// 二者都是 DBeaver 的 CHECK `ToolItem`
