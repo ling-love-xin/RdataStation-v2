@@ -685,6 +685,22 @@ impl Shared {
         self.query_request.borrow_mut().take()
     }
 
+    /// 消费导航拖拽兜底（表 / 视图 → 中央编辑器）：与导航「查看数据 / 生成 SQL」同口径，
+    /// 转成一条「打开查询」请求（[`Self::request_query`]，宿主 render 消费）；追加语义由
+    /// [`append_sql`] 保证，尾随空格避免连续拖多个表时粘成一个标识符。
+    ///
+    /// 原 `EditorPanel::send_nav_drag` 下沉至此：面板只作为拖拽落点，请求归属与查询入口
+    /// 收在 Shared 一处，旧面板瘦身时不必再搬这段逻辑。
+    pub fn request_nav_drag(&self, qualified: &str, cx: &mut App) {
+        let conn_id = self.selected_connection().map(|item| item.id.clone());
+        self.request_query(QueryRequest {
+            conn_id,
+            sql: format!("{qualified} "),
+            run: false,
+        });
+        self.notify_host(cx);
+    }
+
     /// 递「编辑连接」请求（走 `EditorBridge`；装配未完成时静默丢弃）。
     pub fn edit_connection(&self, id: String, window: &mut Window, cx: &mut App) {
         if let Some(bridge) = self.editor_bridge.borrow().clone() {

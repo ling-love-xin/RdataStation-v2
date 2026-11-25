@@ -29,8 +29,7 @@ use crate::services::db_navigator::NavTable;
 // M5 草稿箱替换入口已收敛到侧栏搜索面板（chrome.rs），本面板不再直接入队草稿箱任务。
 
 use super::Shared;
-use super::shared::QueryRequest;
-// 跨模块：导航拖拽载荷（落点转成「打开查询」请求，见 `Shared::request_query`）/ 属性面板状态。
+// 跨模块：导航拖拽载荷（落点转成「打开查询」请求，见 `Shared::request_nav_drag`）/ 属性面板状态。
 use database::nav_view::NavDragPayload;
 use scratchpad::scratchpad_view::render_scratchpad_diff_pane;
 
@@ -58,24 +57,6 @@ pub struct EditorPanel {
 }
 
 impl EditorPanel {
-    /// 消费导航拖拽（表 / 视图 → 中央编辑器）。
-    ///
-    /// B12 后不再往“编辑区自己的 SQL 框”里写：拖拽结果与右键「查看数据」同口径，
-    /// 都变成一条「打开查询」请求（`Shared::request_query`，宿主 render 消费）；
-    /// 追加语义由 `Shared::append_sql` 保证，尾随空格避免连续拖多个表时粘成一个标识符。
-    fn send_nav_drag(&self, qualified: &str, cx: &mut Context<Self>) {
-        self.shared.request_query(QueryRequest {
-            conn_id: self
-                .shared
-                .selected_connection()
-                .map(|item| item.id.clone()),
-            sql: format!("{qualified} "),
-            run: false,
-        });
-        self.shared.notify_host(cx);
-        cx.notify();
-    }
-
     pub fn new(shared: Shared, cx: &mut Context<Self>) -> Self {
         Self {
             shared,
@@ -530,12 +511,12 @@ impl Render for EditorPanel {
         }
 
         // 兜底落点：拖到本面板任意位置都变成「把限定名送进编辑器」的请求。
-        // 真正的 SQL 编辑器在中央 Dock（`crates/editor`），落点只是把意图转成请求。
+        // 真正的 SQL 编辑器在中央 Dock（`crates/editor`），落点只是把意图转成请求；
+        // 请求逻辑已下沉 `Shared::request_nav_drag`。
         content = content.on_drop({
-            let entity = entity.clone();
+            let shared = self.shared.clone();
             move |payload: &NavDragPayload, _window, app| {
-                let qualified = payload.qualified.clone();
-                entity.update(app, |this, cx| this.send_nav_drag(&qualified, cx));
+                shared.request_nav_drag(&payload.qualified, app);
             }
         });
 
