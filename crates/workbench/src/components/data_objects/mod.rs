@@ -223,6 +223,22 @@ pub struct Object {
     pub sql_ref: Option<String>,
     /// 源行行尾**唯一**的动作位（铁律第 42 条：叶子零按钮；源行只留这一个位）。
     pub source_action: Option<SourceAction>,
+    /// 这一行点开是「去选表」而不是「列自家挂载的表」（登记注册入口）。
+    ///
+    /// 无 ATTACH 能力的已登记连接：登记已在项目源表里，但联邦里没有它的 catalog——
+    /// 展开若走会话内省，只会得到一句「没挂载」。改为在这条**活连接**上开选源器，
+    /// 由用户选表后载入临时表 / 落项目归档（`data_objects_load` 同一套确认动作）。
+    pub expand_via: Option<ExpandVia>,
+}
+
+/// 源行展开的**另一条路**：不列自家挂载的表，而是去那条活连接上选表。
+///
+/// 只有「登记过、但没有 ATTACH 能力、当前连着」的连接才给——其余源行的展开
+/// 仍走会话内省（`load_source_children`），两条路不重叠。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExpandVia {
+    /// 在这条连接上开选源器（连接必须活着，否则选不出表）
+    Picker { conn_id: String },
 }
 
 /// 源行行尾那一个动作位的形态（目前只有一种：挂载 / 卸载开关）。
@@ -535,6 +551,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             version: None,
             // 联邦源的表引用是 `<别名>.<schema>.<表>`，只给别名不算引用名
             sql_ref: None,
+            expand_via: None,
             source_action: None,
         });
     }
@@ -562,6 +579,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             version: None,
             sql_ref: None,
             // 底座不允许卸载：行尾没有动作位
+            expand_via: None,
             source_action: None,
         });
     }
@@ -666,6 +684,9 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             sql_ref: None,
             // 行尾只有这一个位（第 42 条）：有 ATTACH 能力且已登记的连接给挂载 / 卸载；
             // 无能力（永远挂不上）、没登记（挂了也只是会话级）的都不给
+            // 挂不上（没有 ATTACH 能力）但已登记、且这条连接活着：展开 = 去它身上选表
+            expand_via: (!conn.attach_capable && conn.registered && conn.connected)
+                .then(|| ExpandVia::Picker { conn_id: conn.id.clone() }),
             source_action: (conn.attach_capable && conn.registered).then(|| {
                 SourceAction::ToggleMount {
                     conn_id: conn.id.clone(),
@@ -703,6 +724,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             pill: MountState::Unmounted.label(),
             version: None,
             sql_ref: None,
+            expand_via: None,
             source_action: None,
         });
     }
@@ -741,6 +763,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             version: None,
             // 项目分析库挂在分析实例上，表名裸名可见（与「登记为资产」同一口径）
             sql_ref: Some(sql_ident(&name)),
+            expand_via: None,
             source_action: None,
         });
     }
@@ -758,6 +781,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             pill: "未登记",
             version: None,
             sql_ref,
+            expand_via: None,
             source_action: None,
         });
     }
@@ -813,6 +837,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             version: Some(asset.version),
             // 表型资产才有 SQL 引用（文件型本体是 `resources/` 下的副本，不是库里的表）
             sql_ref: asset.analytics_table.as_deref().map(sql_ident),
+            expand_via: None,
             source_action: None,
         });
     }
@@ -830,6 +855,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             version: None,
             // 全局分析库同样挂在分析实例上，裸名可见
             sql_ref: Some(sql_ident(&name)),
+            expand_via: None,
             source_action: None,
         });
     }
@@ -846,6 +872,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             pill: "结果集",
             version: None,
             sql_ref: Some(sql_ident(&name)),
+            expand_via: None,
             source_action: None,
         });
     }
@@ -865,6 +892,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             pill: "载入",
             version: None,
             sql_ref: Some(sql_ident(&name)),
+            expand_via: None,
             source_action: None,
         });
     }
@@ -928,6 +956,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             version: None,
             // 文件视图是 `f_*` 裸名；库文件是 catalog，引用要 `别名.schema.表`，不在这里编
             sql_ref: (!is_database).then(|| sql_ident(alias)),
+            expand_via: None,
             source_action: None,
         });
     }
@@ -1138,6 +1167,7 @@ pub fn source_table_object(conn: &str, catalog: &str, schema: &str, table: &str)
         // 源库表要在这条连接上查（`SELECT … FROM <catalog>.<schema>.<表>`），
         // 引用名必须带连接上下文，不是这里能给的一句话
         sql_ref: None,
+        expand_via: None,
         source_action: None,
     }
 }

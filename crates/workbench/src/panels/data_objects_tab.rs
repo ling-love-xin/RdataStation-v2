@@ -38,7 +38,7 @@ use std::sync::Arc;
 use workbench_shell::panel_toolbar::PanelToolbar;
 use workbench_shell::{tree, ui};
 
-use crate::components::data_objects::{self, Group};
+use crate::components::data_objects::{self, ExpandVia, Group};
 use crate::view::RightPanel;
 
 use super::Shared;
@@ -380,7 +380,28 @@ impl DataObjectsTab {
     }
 
     /// 展开 / 收起一个源行（联邦源与本地加速源可展开，其余行没有下一层）。
-    fn toggle_source_expand(&mut self, key: &str, cx: &mut Context<Self>) {
+    ///
+    /// `expand_via` 有值 = 这一行**没有自家挂载的表可列**：它是登记过、但挂不进联邦的
+    /// 连接（`use_duckdb_fed` 开着却拿不到 ATTACH 能力）。展开改成在这条活连接上
+    /// 开「加源」选源器，用户在那里选表 → 载入临时表（`LoadScope::Session`），
+    /// 走的是和导航栏同一份内省（`NavigatorService`），不是第二套取数。
+    fn toggle_source_expand(
+        &mut self,
+        key: &str,
+        expand_via: Option<ExpandVia>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(ExpandVia::Picker { conn_id }) = expand_via {
+            crate::components::data_objects_load::open_load_dialog_for_connection(
+                &self.shared,
+                &conn_id,
+                crate::components::data_objects_load::LoadScope::Session,
+                window,
+                cx,
+            );
+            return;
+        }
         if self.expanded_sources.contains(key) {
             self.expanded_sources.remove(key);
             // 收起不清缓存：再展开立即可见，refresh 会让它跟上现实
@@ -1347,15 +1368,19 @@ impl DataObjectsTab {
             // 源行可展开（联邦源 / 加速源 / 文件库 / 源库连接）：行首给展开指示，
             // 与段头 chevron 同一习惯。**没挂载的源不给展开**（铁律 B 组第 4 条）：
             // 没有表可列，给了 chevron 只会点出一个空列表。失败的联邦源同理。
+            // 例外：登记过、挂不上、连接还活着的行（`expand_via`）——展开不是"列自家
+            // 挂载的表"，而是去那条活连接上选表，所以它没有 can_analyze() 也照样给指示。
             let in_source_group = object.group == Group::Source;
             let source_expandable = in_source_group
-                && object.can_analyze()
-                && data_objects::source_ref(&object.key).is_some();
+                && (object.expand_via.is_some()
+                    || (object.can_analyze()
+                        && data_objects::source_ref(&object.key).is_some()));
             let expanded_now = self.expanded_sources.contains(&object.key);
             let disclosure = if in_source_group {
                 Some(if source_expandable {
                     let key = object.key.clone();
                     let entity = entity.clone();
+                    let expand_via = object.expand_via.clone();
                     Button::new(SharedString::from(format!(
                         "data-object-expand-{}",
                         object.key
@@ -1367,9 +1392,12 @@ impl DataObjectsTab {
                     } else {
                         gpui_kit::assets::IconName::ChevronRight
                     })
-                    .on_click(move |_, _, cx| {
+                    .on_click(move |_, window, cx| {
                         let key = key.clone();
-                        entity.update(cx, |tab, cx| tab.toggle_source_expand(&key, cx));
+                        let expand_via = expand_via.clone();
+                        entity.update(cx, |tab, cx| {
+                            tab.toggle_source_expand(&key, expand_via, window, cx)
+                        });
                     })
                     .into_any_element()
                 } else {
