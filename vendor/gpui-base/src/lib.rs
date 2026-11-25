@@ -10,6 +10,8 @@ extern crate gpui_fast as gpui;
 extern crate gpui_fast_platform as gpui_platform;
 
 mod a11y_disabled;
+// 项目私有 patch：`gpui-component` 的菜单项也要给无障碍节点标 disabled 语义
+pub use a11y_disabled::A11yDisabledExt;
 mod accordion;
 pub mod actions;
 mod alert_dialog;

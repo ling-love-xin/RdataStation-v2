@@ -2,9 +2,9 @@ use crate::{ActiveTheme, Disableable, StyledExt, h_flex};
 use gpui::{
     AnyElement, App, ClickEvent, ElementId, InteractiveElement, IntoElement, MouseButton,
     ParentElement, RenderOnce, Role, SharedString, StatefulInteractiveElement as _,
-    StyleRefinement, Styled, Window, accesskit::Toggled, prelude::FluentBuilder as _,
+    StyleRefinement, Styled, Window, accesskit::Toggled, div, prelude::FluentBuilder as _, px,
 };
-use gpui_base::{LogicalStyledExt as _, TestSupportExt as _};
+use gpui_base::{A11yDisabledExt as _, LogicalStyledExt as _, TestSupportExt as _};
 use smallvec::SmallVec;
 
 #[derive(IntoElement)]
@@ -18,6 +18,9 @@ pub(crate) struct MenuItemElement {
     on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
     on_hover: Option<Box<dyn Fn(&bool, &mut Window, &mut App) + 'static>>,
     children: SmallVec<[AnyElement; 2]>,
+    /// 项目私有 patch：分隔线按「纯装饰」渲染（无 id / 无 MenuItem 角色 / 不进无障碍树）。
+    /// 原先沿用菜单项外壳，读屏会把 2px 分隔线念成一条无名的菜单项。
+    separator: bool,
 }
 
 impl MenuItemElement {
@@ -34,7 +37,14 @@ impl MenuItemElement {
             on_click: None,
             on_hover: None,
             children: SmallVec::new(),
+            separator: false,
         }
+    }
+
+    /// Render this item as a plain separator line instead of a menu item.
+    pub(crate) fn separator(mut self) -> Self {
+        self.separator = true;
+        self
     }
 
     /// Set ListItem as the selected item style.
@@ -101,6 +111,17 @@ impl ParentElement for MenuItemElement {
 
 impl RenderOnce for MenuItemElement {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        // 项目私有 patch：分隔线只是一条线——不加 id、不写无障碍节点（Role::MenuItem
+        // 会让读屏把分隔线当成一条没有名字的菜单项）。
+        if self.separator {
+            return div()
+                .h(px(2.))
+                .my_0p5()
+                .mx_neg_1()
+                .bg(cx.theme().border)
+                .into_any_element();
+        }
+
         h_flex()
             .flex_row_dir(cx)
             .id(self.id)
@@ -149,7 +170,11 @@ impl RenderOnce for MenuItemElement {
             .when(self.disabled, |this| {
                 this.text_color(cx.theme().muted_foreground)
             })
+            // 项目私有 patch：GPUI 的 `disabled()` 只拦事件、不写无障碍节点，
+            // 禁用项到读屏仍是「可点」。这里把节点标成 disabled。
             .children(self.children)
+            .a11y_disabled(self.disabled)
+            .into_any_element()
     }
 }
 

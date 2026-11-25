@@ -1378,14 +1378,7 @@ impl PopupMenu {
             );
 
         match item {
-            PopupMenuItem::Separator => this
-                .h_auto()
-                .p_0()
-                .my_0p5()
-                .mx_neg_1()
-                .border_b(px(2.))
-                .border_color(cx.theme().border)
-                .disabled(true),
+            PopupMenuItem::Separator => this.separator(),
             PopupMenuItem::Label(label) => this.disabled(true).cursor_default().child(
                 h_flex()
                     .flex_row_dir(cx)
