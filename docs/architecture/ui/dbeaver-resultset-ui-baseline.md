@@ -3170,7 +3170,7 @@ pub fn set_selected_cell_without_scroll(&mut self, row_ix: usize, col_ix: usize,
 | 项 | DBeaver | 本仓 | 原因 |
 | --- | --- | --- | --- |
 | 对象格文本色 | `COLOR_DARK_GREEN`（SWT 系统色，明暗主题都是绿） | `theme.colors.muted_foreground` | 本仓主题是「140/140 全量 token」口径，新增一个语义色要同步 `theme-tokens-complete.md` 与校验；单独一刀，不夹带 |
-| 对象图标 | 数据容器节点图标，回退 `DBIcon.SQL_TEXT`（`:552-571`） | `IconName::Table2`（表） | 本仓结果恒来自一条 SQL，按 `:568-570` 应落 `SQL_TEXT`；lucide 里对应 `FileCode`，改图标属观感项，与「先对齐结构」可分开 |
+| 对象图标 | `getActiveObjectImage()` 三段（`:551-571`）：导航节点图标 / `getObjectImage()` / `TREE_TABLE`（表）/ 兜底 `SQL_TEXT` | `IconName::FileCode` | **已落地（§52）**：本仓结果集恒是「一条 SQL 的结果」、拿不到实体类型 → 落 `:568-569` 兜底支（`DBIcon.SQL_TEXT`），lucide 对应 `file-code`；先前的 `Table2` 是 `TREE_TABLE` 那一支的对应物 |
 | 逐格宽高 | `computeSize` 精确到 `icon+4` / `icon+6` | Button 组件内距决定（±2-4px） | 组件没有「图标 + 固定内距」旋钮；差异在像素级，肉眼小于一条竖线 |
 | hover 语义 | 图标灰副本 ↔ 彩色、格子以 blend 90% 铺底 | `Button::ghost()` 的 hover 底色 | 要完全等价需自绘格子（违反「组件选型禁手搓」）；现有 hover 反馈语义相同 |
 | 对象格单击 | 弹对象信息浮层（内嵌只读 SQL 面板，失焦关闭） | 受控 `Popover`：图标列 + 血缘行 + 只读等宽 SQL | **已落地（§51）**：非模态浮层由 `sql_popup_open` 驱动（`showObjectInfoPopup:942-984`）；血缘一行本仓卡片固有、按用户要求保留；模态卡片 `OpenSqlDialog` 仍留给右栏「本次重查 SQL」；Ctrl+单击开 SQL 控制台（`:947-950`）本仓无该物 |
@@ -3350,7 +3350,8 @@ pub fn set_selected_cell_without_scroll(&mut self, row_ix: usize, col_ix: usize,
 | 对象格单击 → 对象信息浮层（§51） | **已落地**：非模态 `Popover`，保留血缘行 |
 | 查找钮 → `FindReplaceOverlay` 浮层 | **未落地**：本仓是工具栏下方一行（`render_find_bar` 注释已写明取舍：浮层要绝对定位覆盖网格，会把网格行列几何绑进来） |
 | 筛选条文本框的内容补全弹层 | **未落地**：`InputState` 无补全通道，等输入组件 |
-| 首格文本色 / 图标 / hover 灰↔彩 | 登记在 §46.4，未落地 |
+| 首格文本色 / hover 灰↔彩 | 登记在 §46.4，未落地（文本色需新增一枚语义 token 并同步 theme pack 与 token 全集校验，与在途的 theme 改造撞同一批文件，待其落地后单开一刀；hover 灰↔彩需自绘格子） |
+| 对象格 / 浮层图标（§52） | **已落地**：`Table2` → `FileCode` |
 | 左/右侧栏规范序与出厂启用集合 | `stash@{0}` 半成品，未编译未验证 |
 
 ## §51 对象格单击：模态卡片改成 DBeaver 非模态信息浮层（保留血缘行）
@@ -3414,7 +3415,7 @@ pub fn set_selected_cell_without_scroll(&mut self, row_ix: usize, col_ix: usize,
 | 定位 | `x/y = parentRect + e.x/y + 1`，底部溢出翻上方 | `anchor(TopLeft)` + `offset(px(2.))`，不做翻转 | 组件只提供四向 anchor，无「按点击点定位 + 溢出翻转」入口 |
 | Ctrl+单击 | `:947-950` → 开 SQL 编辑器 | 不做 | 本仓无 SQL 控制台（§44.4 未决） |
 | 图标列点击 | `:744-749` → `openEditorForActiveQuery()` | 只做标识 | 同上 |
-| 图标资源 | `getActiveObjectImage()`（`DBIcon.SQL_TEXT`） | `IconName::Table2` | 与对象格同一颗（§46.4 已登记观感项） |
+| 图标资源 | `getActiveObjectImage()`（`:737`；本仓路径落 `DBIcon.SQL_TEXT` 兜底支 `:568-569`） | `IconName::FileCode` | **已落地（§52）**，与对象格同一颗 |
 | SQL 可选/可复制 | `StyledText`（可选中、可复制） | 只读文本、不可选 | 同一个 `TextareaState` 若同时被浮层与模态卡片渲染会撞 `ElementId`；卡片里可选可复制 |
 | 可缩放 | `SWT.RESIZE` 可拖拽改尺寸 | 固定上下界 | `Popover` 无拖拽改尺寸入口 |
 | 血缘行 | **无此项** | 首行保留 | 用户明确要求保留（本仓卡片固有信息） |
@@ -3428,6 +3429,46 @@ pub fn set_selected_cell_without_scroll(&mut self, row_ix: usize, col_ix: usize,
 - `cargo test -p rds-result-panel --lib` → **448 passed / 0 failed**（含新 7.5 三态断言：未开不在 / 开后有浮层与 SQL / 关后消失）。
 - `cargo test -p rds-editor --lib` → **869 passed / 0 failed / 4 ignored**（`SetSqlPopup` 分支编译并回归）。
 - 目视项（浮层贴点击点、宽高上下界是否够看、失焦关、血缘行截断）按要求由用户手动确认；本刀不启动 GUI、不截图。
+
+## §52 对象格与浮层图标：`Table2` → lucide `file-code`
+
+### 52.1 真值
+
+`getActiveObjectImage()`（`ResultSetFilterPanel.java:551-571`）是四段 if/else：
+
+| 顺序 | 条件 | 返回 | 源码 |
+| --- | --- | --- | --- |
+| 1 | `dataContainer instanceof DBSEntity` 且数据源非空、导航模型能 `findNode` 到节点 | `dcNode.getNodeIcon()`（**数据容器节点图标**） | `:554-562` |
+| 2 | `instanceof DBPImageProvider` | `getObjectImage()` | `:564-565` |
+| 3 | `instanceof DBSEntity` | `DBIcon.TREE_TABLE`（**表**） | `:566-567` |
+| 4 | 其余 | `DBIcon.SQL_TEXT`（**SQL 文本**） | `:568-569` |
+
+浮层列 0 的图标也取这一支（`:737`：`DBPImage activeObjectImage = getActiveObjectImage()`），所以对象格与浮层图标必须同源。
+
+### 52.2 本仓该走哪一支
+
+本仓结果集恒是「一条 SQL 的执行结果」，`ResultToolbar` 里只有 `sql` / `lineage` / `connection`，没有「这个结果是否直接对应某个表实体」这一信息 → 无法命中第 1/3 段（它们都以 `instanceof DBSEntity` 为前提），落第 4 段兜底 `DBIcon.SQL_TEXT`。
+
+先前的 `IconName::Table2` 实际对应的是第 3 段（`DBSEntity` → `TREE_TABLE`），语义上偏了一支。
+
+### 52.3 本刀落地（提交 `cd5bc48b`）
+
+| 位置 | 改动 |
+| --- | --- |
+| `crates/result_panel/src/panel/render.rs` 对象格 `sql_chip` | `.icon(IconName::Table2)` → `.icon(IconName::FileCode)` |
+| 同上 `render_object_info_popup` 图标列 | `Icon::new(IconName::Table2)` → `Icon::new(IconName::FileCode)` |
+| 两处注释 | 写明四段真值、以及「为什么本仓落兜底支」 |
+
+`IconName::FileCode` 在 `gpui-kit-assets 0.10.0` 的生成枚举里存在（`file-code.svg`，生成物 `target/debug/build/gpui-kit-assets-*/out/icon_name.rs` 内 `FileCode,`），不是自造名字。
+
+### 52.4 验证
+
+- `cargo test -p rds-result-panel --lib` → **448 passed / 0 failed**。
+- 观感项（`file-code` 与 DBeaver 的 `SQL_TEXT` 图形是否足够接近）由用户手动目视确认；本刀不启动 GUI、不截图。
+
+### 52.5 残余
+
+`DBIcon.SQL_TEXT` 的图形细节（带折角的纸 + 若干代码行）与 lucide `file-code` 不完全一致，属图标库差异，无等价资源可换；本仓不加自绘图标（禁手搓）。
 
 
 
