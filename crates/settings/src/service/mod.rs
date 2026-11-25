@@ -31,6 +31,7 @@ mod startup;
 
 // 副作用出口 sink 的 re-export：lib.rs 据此保持 `settings::install_*` 公共路径不变。
 pub use insight::install_insight_memory_limit_sink;
+pub use insight::install_insight_statement_timeout_sink;
 pub use logging::install_log_level_sink;
 pub use sql_analysis::install_sql_analysis_sink;
 // SQL 格式化设置页的实时预览出口（格式化计算由装配层注入，本 crate 不依赖 engine）。
@@ -156,6 +157,9 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::InsightFullScanConfirm => SettingValue::Bool(settings.insight.full_scan_confirm),
         Slot::InsightWorkSetLimit => SettingValue::Number(settings.insight.work_set_limit as f64),
         Slot::InsightStatusUsage => SettingValue::Bool(settings.insight.status_usage),
+        Slot::InsightStatementTimeoutMs => {
+            SettingValue::Number(settings.insight.statement_timeout_ms as f64)
+        }
         Slot::SqlAnalysisSemanticDiagnostics => {
             SettingValue::Bool(settings.sql_analysis.semantic_diagnostics)
         }
@@ -454,7 +458,8 @@ impl SettingsService {
             Slot::InsightMemoryLimitMb
             | Slot::InsightFullScanConfirm
             | Slot::InsightWorkSetLimit
-            | Slot::InsightStatusUsage => insight::apply_slot(slot, value, window, cx),
+            | Slot::InsightStatusUsage
+            | Slot::InsightStatementTimeoutMs => insight::apply_slot(slot, value, window, cx),
             Slot::SqlAnalysisSemanticDiagnostics
             | Slot::SqlAnalysisPredicatePushdown
             | Slot::SqlAnalysisHoverScope => sql_analysis::apply_slot(slot, value, window, cx),

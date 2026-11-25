@@ -186,6 +186,8 @@ pub enum Slot {
     InsightFullScanConfirm,
     InsightWorkSetLimit,
     InsightStatusUsage,
+    /// 每句语句超时（毫秒；0 = 不限时）。
+    InsightStatementTimeoutMs,
     /// 打字期语义诊断（未知表 / 未知列；关掉只留词法层诊断）。
     SqlAnalysisSemanticDiagnostics,
     /// 补全候选按当前语句作用域排序。
@@ -361,6 +363,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "insight.full_scan_confirm" => Slot::InsightFullScanConfirm,
         "insight.work_set_limit" => Slot::InsightWorkSetLimit,
         "insight.status_usage" => Slot::InsightStatusUsage,
+        "insight.statement_timeout_ms" => Slot::InsightStatementTimeoutMs,
         "sql_analysis.semantic_diagnostics" => Slot::SqlAnalysisSemanticDiagnostics,
         "sql_analysis.predicate_pushdown" => Slot::SqlAnalysisPredicatePushdown,
         "sql_analysis.hover_scope" => Slot::SqlAnalysisHoverScope,
@@ -490,7 +493,9 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::StartupDefaultLeftPanel => KindTag::Enum,
         // 复合值（工具栏按钮布局）：没有页面写入路径，读写走草稿箱 ⋯ 菜单。
         Slot::ScratchpadToolbar => KindTag::Composite,
-        Slot::InsightMemoryLimitMb | Slot::InsightWorkSetLimit => KindTag::Number,
+        Slot::InsightMemoryLimitMb | Slot::InsightWorkSetLimit | Slot::InsightStatementTimeoutMs => {
+            KindTag::Number
+        }
         Slot::InsightFullScanConfirm | Slot::InsightStatusUsage => KindTag::Bool,
         Slot::SqlAnalysisSemanticDiagnostics
         | Slot::SqlAnalysisPredicatePushdown

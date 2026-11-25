@@ -21,6 +21,18 @@ impl DuckDbService {
         DuckDBManager::set_memory_limit_mb(mb)
     }
 
+    /// 运行时调整**每句语句超时**（毫秒；`0` = 不限时）——设置页改「语句超时」走这里。
+    ///
+    /// 超时由实例的看门狗落实（超时只中断本会话的语句，会话本身继续可用）；
+    /// 改完只影响之后开始的语句。值落盘在 `settings`，装配层负责在启动与变更时调这里。
+    pub fn apply_statement_timeout_ms(ms: u64) -> Result<(), CoreError> {
+        let instance = crate::duckdb::instance::instance().map_err(|error| {
+            CoreError::common(CommonError::General(format!("取分析实例失败: {error}")))
+        })?;
+        instance.set_timeout_ms(ms);
+        Ok(())
+    }
+
     /// 内存库可观测读数（上限 / 实际大小 / 临时表数）——转发到
     /// [`DuckDBManager::memory_stats`]。洞察工具栏的轮询采样走这里。
     pub fn memory_stats() -> Result<crate::duckdb::MemoryStats, CoreError> {

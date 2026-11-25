@@ -142,7 +142,9 @@ pub struct AnalysisInstance {
     control: Mutex<Connection>,
     write_lane: Mutex<()>,
     state: Mutex<InstanceState>,
-    timeout: Duration,
+    /// 每句默认超时（毫秒；**0 = 不限时**）。可运行时改（设置页「语句超时」→ 这里），
+    /// 所以是原子量而不是普通字段：会话 `run` 每次都现读。
+    timeout_ms: AtomicU64,
     /// 内存库统一前缀，测试用它区分不同实例（生产恒为 `analysis`）
     tag: String,
 }
@@ -284,7 +286,7 @@ impl AnalysisInstance {
                 temps: Vec::new(),
                 next_session: 0,
             }),
-            timeout,
+            timeout_ms: AtomicU64::new(timeout.as_millis().max(0) as u64),
             tag: tag.to_string(),
         }))
     }
@@ -293,8 +295,15 @@ impl AnalysisInstance {
         &self.tag
     }
 
+    /// 每句默认超时（`0` = 不限时；看门狗对零时长直接不启）。
     pub fn timeout(&self) -> Duration {
-        self.timeout
+        Duration::from_millis(self.timeout_ms.load(Ordering::SeqCst))
+    }
+
+    /// 改每句默认超时（毫秒）。**只影响之后开始的语句**：正在跑的那句按它启动时的值走。
+    pub fn set_timeout_ms(&self, ms: u64) {
+        self.timeout_ms.store(ms, Ordering::SeqCst);
+        tracing::info!(timeout_ms = ms, "分析实例语句超时已更新");
     }
 
     /// 在控制连接上执行一句（底座挂载 / `rds_tmp` 维护用；不承载用户查询）。
@@ -840,6 +849,15 @@ impl AnalysisSession {
                         timeout.as_millis()
                     )));
                 }
+                // 用户点「取消」也走同一条中断：DuckDB 回的是 INTERRUPT 原文，
+                // 面板上要能一眼看出「这是被中断，不是 SQL 写错」——所以换成人话再交出去。
+                let text = error.to_string();
+                let lowered = text.to_lowercase();
+                if lowered.contains("interrupt") || lowered.contains("cancelled") || lowered.contains("canceled") {
+                    return Err(common_error(format!(
+                        "查询已被中断（本会话已恢复，可继续执行）：{text}"
+                    )));
+                }
                 Err(error)
             }
         }
@@ -1180,6 +1198,30 @@ mod tests {
             .run_with_timeout("SELECT 1 AS ok", Duration::from_secs(3))
             .expect("中断后仍可用");
         assert_eq!(after.total_rows, 1);
+    }
+
+    /// 超时值可运行时改（设置页「语句超时」走这条），并且**会话 `run` 每次都现读**。
+    #[test]
+    fn the_default_timeout_is_read_at_runtime() {
+        let instance = instance("t_timeout_runtime");
+        let session = instance.open_session("doc-a", "编辑器 A").expect("开 A");
+        assert_eq!(instance.timeout(), Duration::from_millis(3000), "用例实例的初始值");
+
+        // 改到 30ms：无超时的 `run` 也该被掐掉（说明 run 没有缓存旧值）
+        instance.set_timeout_ms(30);
+        let error = session
+            .run("SELECT count(*) FROM range(0, 100000) a(x), range(0, 100000) b(y)")
+            .expect_err("该被 30ms 掐掉")
+            .to_string();
+        assert!(error.contains("被中断"), "{error}");
+
+        // 关掉超时（0 = 不限时）：同一句前缀的规模缩小后能正常跑完
+        instance.set_timeout_ms(0);
+        assert_eq!(instance.timeout(), Duration::ZERO);
+        let ok = session
+            .run("SELECT count(*) AS n FROM range(0, 1000)")
+            .expect("不限时该跑完");
+        assert_eq!(ok.total_rows, 1);
     }
 
     /// 挂源入口：整批失败（别名重复）不留半挂状态，会话照常可用。

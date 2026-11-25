@@ -25,6 +25,23 @@ fn notify_insight_memory_limit(mb: i64) {
     }
 }
 
+/// 分析引擎语句超时变更的副作用出口（装配层注册一次）。
+static INSIGHT_STATEMENT_TIMEOUT_SINK: RwLock<Option<fn(i64)>> = RwLock::new(None);
+pub fn install_insight_statement_timeout_sink(sink: fn(i64)) {
+    if let Ok(mut guard) = INSIGHT_STATEMENT_TIMEOUT_SINK.write() {
+        *guard = Some(sink);
+    }
+}
+fn notify_insight_statement_timeout(ms: i64) {
+    if let Some(sink) = INSIGHT_STATEMENT_TIMEOUT_SINK
+        .read()
+        .ok()
+        .and_then(|guard| *guard)
+    {
+        sink(ms);
+    }
+}
+
 /// 本域 slot 的标量写入处理；返回 `false` 表示拒绝（值形态不符 / 复合值 / 无法解析）。
 pub(crate) fn apply_slot(
     slot: Slot,
@@ -64,6 +81,16 @@ pub(crate) fn apply_slot(
                 return false;
             };
             SettingsService::set_status_usage(on, cx);
+        }
+        Slot::InsightStatementTimeoutMs => {
+            let Some(ms) = value.as_number() else {
+                return false;
+            };
+            // 1 秒 – 10 分钟，或 0 = 不限时（页面只给预设档；手改坏时拒绝，不猜）。
+            if !(ms == 0.0 || (1000.0..=600_000.0).contains(&ms)) {
+                return false;
+            }
+            SettingsService::set_statement_timeout_ms(ms.round() as i64, cx);
         }
         _ => return false,
     }
@@ -123,5 +150,22 @@ impl SettingsService {
             settings.insight.status_usage = on;
         }
         persist(&cx.global::<Settings>().clone());
+    }
+    /// 每句语句超时（毫秒；`0` = 不限时，默认 30000）。
+    pub fn statement_timeout_ms(cx: &App) -> i64 {
+        cx.global::<Settings>().insight.statement_timeout_ms
+    }
+    /// 设置并持久化语句超时，并通知分析引擎即时应用。
+    ///
+    /// 通知走 [`install_insight_statement_timeout_sink`] 注册的出口（装配层接
+    /// `DuckDbService::apply_statement_timeout_ms`）；没有出口时只落盘。
+    pub fn set_statement_timeout_ms(ms: i64, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.insight.statement_timeout_ms = ms;
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
+        notify_insight_statement_timeout(ms);
     }
 }

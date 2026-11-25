@@ -92,6 +92,12 @@ pub fn apply_insight_prefs(shared: &Shared, cx: &mut App) {
     engine::duckdb::DuckDBManager::apply_memory_limit_mb(
         settings::SettingsService::memory_limit_mb(cx),
     );
+    // 语句超时（第 4 项）：设置页改值走 sink，这里兜底启动与面板重建（同值幂等）。
+    if let Err(e) = engine::services::duckdb_service::DuckDbService::apply_statement_timeout_ms(
+        settings::SettingsService::statement_timeout_ms(cx).max(0) as u64,
+    ) {
+        eprintln!("[insight] 语句超时应用失败: {e}");
+    }
     let status_usage = settings::SettingsService::status_usage(cx);
     let work_set_limit = settings::SettingsService::work_set_limit(cx).max(0) as usize;
     let Some(panel) = shared

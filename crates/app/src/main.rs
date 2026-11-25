@@ -184,6 +184,15 @@ fn run_app() {
             settings::install_insight_memory_limit_sink(
                 engine::duckdb::DuckDBManager::apply_memory_limit_mb,
             );
+            // 语句超时变更的出口：设置页改超时 → 落盘 + 调这个 sink → 分析实例换默认超时
+            // （只影响之后开始的语句；进入洞察时装配还会兜底对齐一次）。
+            settings::install_insight_statement_timeout_sink(|ms| {
+                if let Err(e) = engine::services::duckdb_service::DuckDbService::apply_statement_timeout_ms(
+                    ms.max(0) as u64,
+                ) {
+                    eprintln!("[startup] 语句超时应用失败: {e}");
+                }
+            });
             // SQL 分析三开关的出口：设置页改开关 → 落盘 + 调这个 sink →
             // `rds_sql::analysis` 的进程内偏好即时生效（语言服务读侧无锁，下一帧就换口径）。
             settings::install_sql_analysis_sink(

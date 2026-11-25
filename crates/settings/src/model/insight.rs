@@ -12,6 +12,9 @@ pub struct Insight {
     pub work_set_limit: i64,
     #[serde(default = "default_insight_status_usage")]
     pub status_usage: bool,
+    /// 每句语句超时（毫秒；`0` = 不限时）。
+    #[serde(default = "default_insight_statement_timeout_ms")]
+    pub statement_timeout_ms: i64,
 }
 
 impl Default for Insight {
@@ -21,6 +24,7 @@ impl Default for Insight {
             full_scan_confirm: default_insight_full_scan_confirm(),
             work_set_limit: default_insight_work_set_limit(),
             status_usage: default_insight_status_usage(),
+            statement_timeout_ms: default_insight_statement_timeout_ms(),
         }
     }
 }
@@ -43,4 +47,9 @@ fn default_insight_work_set_limit() -> i64 {
 /// 工具栏内存占用显示：默认开启。
 fn default_insight_status_usage() -> bool {
     true
+}
+
+/// 每句语句超时：默认 30 秒（与 `AnalysisInstance::DEFAULT_STATEMENT_TIMEOUT_MS` 一致）。
+fn default_insight_statement_timeout_ms() -> i64 {
+    30_000
 }
