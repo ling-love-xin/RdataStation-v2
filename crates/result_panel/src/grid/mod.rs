@@ -52,6 +52,7 @@
 //! | [`cell`] | 单元格渲染（样式 / 裁剪 / JSON / BLOB + `render_td`） |
 //! | [`array_cell`] | 数组单元格显示拆分（收起 `▶ 首值 [+N-1]` / 展开 `▼ [N]`，刀2） |
 //! | [`header`] | 表头渲染（截断 / 类型标签 / 排序箭头 + `render_th`） |
+//! | [`column_menu`] | 列头菜单（分组计划 + 动作分派 + 右键 / 下拉两条入口，2026-11-26） |
 //! | [`fit`] | 列宽自适应（双击列头分隔线：按内容算宽 + `fit_column`） |
 //! | [`table_impl`] | `TableDelegate` 其余方法（列数 / 排序 / 拖列 / 取下一段 / 空态） |
 //! | [`status`] | 工具栏 / 状态行 / 提示文案 / 渲染家族 |
@@ -65,6 +66,7 @@
 
 pub(crate) mod array_cell;
 pub(crate) mod cell;
+pub(crate) mod column_menu;
 pub(crate) mod delegate;
 pub(crate) mod edit;
 pub(crate) mod fit;

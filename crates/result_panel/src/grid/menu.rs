@@ -763,12 +763,12 @@ pub fn filter_settings_menu_items() -> Vec<ContextMenuItem> {
     ]
 }
 
-/// 列头下拉菜单的项（**纯函数**；DBeaver 列头箭头菜单 = 右键菜单的列级子集）：
-/// 排序升/降 · 复制此列 · 冻结/取消冻结 · 隐藏此列 · 显示全部列 · 列统计 · 洞察此列。
-/// 值与行相关的动作（预览 / 按值筛选 / 复制值 / 复制整行）只属于右键——它们依赖
-/// “当前格”，列头没有当前格。条件与右键同口径（hidden>0 才摆「显示全部列」、
-/// insight 才摆「洞察此列」）。
-pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
+/// 列头菜单的**排序段**（升序 / 降序 / 生效时「取消排序」）
+///
+/// 真值 `ResultSetViewer.fillOrderingsMenu:3935-3948`（`OrderByAttributeAction` ASC/DESC +
+/// `getOrderPosition() > 0` 时的 NONE）。本仓的「升 / 降」是**下发源库**重查，
+/// 「取消排序」是本地回原顺序（口径差已在菜单文案里写明）。
+pub(crate) fn column_sort_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
     let column_name = target.column_name.as_str();
     let mut items = vec![
         ContextMenuItem {
@@ -799,11 +799,15 @@ pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             disabled: false,
         });
     }
-    // 【筛选】列级筛选段（DBeaver 列头筛选）：值列表 + 清除项。
-    // 值列表来自已抓行的去重取值（`target.column_values`，网格算好传入）；
-    // 有值才摆（没数据这一列自然没有可选值）。清除项只在筛选生效时摆——
-    // 「没有筛」还摆「清除」是僵尸入口。
-    let mut values = target
+    items
+}
+
+/// 列头菜单的**列级筛选段**：按值筛选（去重值列表）+ 生效时的「清除此列筛选」
+///
+/// 真值对应 `CMD_FILTER_MENU_DISTINCT`（按不同值筛选）与 `FilterResetAttributeAction`；
+/// 值列表来自已抓行的去重取值（`target.column_values`，网格算好传入）。
+pub(crate) fn column_filter_value_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
+    let mut items = target
         .column_values
         .iter()
         .map(|value| ContextMenuItem {
@@ -816,11 +820,11 @@ pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             disabled: false,
         })
         .collect::<Vec<_>>();
-    if !values.is_empty() {
-        values[0].separator_before = true;
+    if !items.is_empty() {
+        items[0].separator_before = true;
     }
     if target.column_filter_active {
-        values.push(ContextMenuItem {
+        items.push(ContextMenuItem {
             label: tr("清除此列筛选").to_string(),
             action: ContextAction::ClearColumnFilter {
                 column: target.column,
@@ -829,47 +833,62 @@ pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             disabled: false,
         });
     }
-    items.extend(values);
-    // 【DBeaver 对齐】列头菜单第一件复制动作是「复制列名」（`ResultSetViewer.java:3151-3161`
-    // 在 DATA 落点之外单独给 COLUMN_HEADER 挂 `CMD_COPY_COLUMN_NAMES`）。本仓列头菜单是
-    // 扁平结构（DBeaver 是「过滤 / 排序 / 编辑」子菜单），放在复制段首位：
-    // 用户拿列名是为了拼 SQL，比「复制整列取值」更靠前。
-    items.push(ContextMenuItem {
-        label: format!("复制列名「{column_name}」"),
-        action: ContextAction::CopyColumnName,
-        separator_before: false,
-        disabled: false,
-    });
-    items.push(ContextMenuItem {
-        label: format!("复制此列（{} 个取值）", target.rows),
-        action: ContextAction::CopyColumn(target.column),
-        separator_before: false,
-        disabled: false,
-    });
-    items.push(ContextMenuItem {
-        label: if target.frozen {
-            "取消冻结此列".to_string()
-        } else {
-            format!("冻结「{column_name}」")
+    items
+}
+
+/// 列头菜单的**复制段**：复制列名 + 复制此列取值
+///
+/// 真值 `ResultSetViewer.java:3151-3161` 只给 `COLUMN_HEADER` 落点挂 `CMD_COPY_COLUMN_NAMES`
+/// （复制列名）；「复制整列取值」是本仓已有能力（真值里要经 `复制特殊` 的下发路径）。
+pub(crate) fn column_copy_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
+    vec![
+        ContextMenuItem {
+            label: format!("复制列名「{}」", target.column_name),
+            action: ContextAction::CopyColumnName,
+            separator_before: false,
+            disabled: false,
         },
-        action: ContextAction::ToggleFreeze(target.column),
-        separator_before: false,
-        disabled: false,
-    });
-    items.push(ContextMenuItem {
-        label: format!("隐藏「{column_name}」"),
-        action: ContextAction::HideColumn(target.column),
-        separator_before: false,
-        disabled: false,
-    });
-    items.push(ContextMenuItem {
-        label: format!("列统计「{column_name}」"),
-        action: ContextAction::ColumnStats {
-            column: target.column,
+        ContextMenuItem {
+            label: format!("复制此列（{} 个取值）", target.rows),
+            action: ContextAction::CopyColumn(target.column),
+            separator_before: false,
+            disabled: false,
         },
-        separator_before: false,
-        disabled: false,
-    });
+    ]
+}
+
+/// 列头菜单的**列布局段**（本仓增强：冻结 / 隐藏 / 显示全部列 / 列统计 / 洞察）
+///
+/// 真值列头右键里没有这些（冻结与隐藏走 `fillColumnViewMenu` 之外的工具栏 / 偏好），
+/// 本仓把它们保留在单独一组，避免与真值的「筛选 / 排序」子菜单混在一起。
+pub(crate) fn column_layout_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
+    let column_name = target.column_name.as_str();
+    let mut items = vec![
+        ContextMenuItem {
+            label: if target.frozen {
+                "取消冻结此列".to_string()
+            } else {
+                format!("冻结「{column_name}」")
+            },
+            action: ContextAction::ToggleFreeze(target.column),
+            separator_before: false,
+            disabled: false,
+        },
+        ContextMenuItem {
+            label: format!("隐藏「{column_name}」"),
+            action: ContextAction::HideColumn(target.column),
+            separator_before: false,
+            disabled: false,
+        },
+        ContextMenuItem {
+            label: format!("列统计「{column_name}」"),
+            action: ContextAction::ColumnStats {
+                column: target.column,
+            },
+            separator_before: false,
+            disabled: false,
+        },
+    ];
     if target.hidden_columns > 0 {
         items.push(ContextMenuItem {
             label: tr("显示全部列").to_string(),
@@ -888,6 +907,20 @@ pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             disabled: false,
         });
     }
+    items
+}
+
+/// 列头**下拉三角**菜单的项（**纯函数**；真值 `ResultSetViewer.showColumnMenu:2988-2999`
+/// = `fillOrderingsMenu` + `fillFiltersMenu` 平铺，由列头右端的 `drop_down` 图标触发
+/// （`SpreadsheetPresentation.handleColumnIconClick:1585-1591`）。
+///
+/// 本仓这一档是「列级全集平铺」：排序 → 列级筛选值 → 复制 / 布局（本仓增强）→ 筛选设置段。
+/// 右键走**分组**形态（[`super::column_menu::column_menu_plan`]），两条入口共用上面的段构造函数。
+pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
+    let mut items = column_sort_items(target);
+    items.extend(column_filter_value_items(target));
+    items.extend(column_copy_items(target));
+    items.extend(column_layout_items(target));
     // 【DBeaver 对齐】`fillFiltersMenu` 整组（`ResultSetViewer.java:3864-3933`）：
     // 与数据格右键共用同一组（DBeaver 的 filters 子菜单对三个落点都摆，见
     // `fillContextMenu:3169-3177`），文案 / 顺序 / 分隔线口径只在 `filters_menu_items` 一处。

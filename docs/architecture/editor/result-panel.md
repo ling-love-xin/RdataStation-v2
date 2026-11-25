@@ -10615,6 +10615,77 @@ JSON 树** —— 而网格里双击进去的是行内编辑框（一整条字�
 只画可展开行、行级全展开/全收起、部分展开补全、无数组行不动）。preview 重建后
 `stage=3`、`demo columns=8 rows=8`、无 stderr。
 
+### 9.72 列头对齐：常显 drop_down 三角 + 右键分组菜单 + hover 底色（2026-11-26）
+
+#### 9.72.1 真值（`GridColumnRenderer.java` + `ResultSetViewer` 两条入口）
+
+**几何常量**（`GridColumnRenderer.java:41-46`）：
+
+| 常量 | 值 | 用途 |
+| --- | --- | --- |
+| `LEFT_MARGIN` / `RIGHT_MARGIN` / `BOTTOM_MARGIN` | 6 | 内容内距（`x += 6`、`w -= 12`；底 6） |
+| `TOP_MARGIN` | 4 | 内容顶部内距（`y += 4`、`h -= 10`） |
+| `ARROW_MARGIN` / `IMAGE_SPACING` | 6 / 3 | 排序图标与相邻元素间距 |
+| `PAINT_COLUMN_FOCUS_BORDER` | `true` | 焦点列画四边框 |
+
+**图标**：`SORT_UNKNOWN`（星号）/ `SORT_INCREASE` / `SORT_DECREASE` / `DROP_DOWN`
+全是 `icons/misc/*.svg` 的 16×16；`drop_down.svg` 填色 `#3387C5`。
+`IMAGE_FILTER` = 列右端那个 `drop_down`（`:165-173`，画在 `x + width - 3`，右对齐），
+**常显**、不做 hover 显隐；筛选未激活也画。
+
+**底色**：`getHeaderBackground(element, selected || hovering)` —— hover 与「选中」同一档色。
+
+**两条菜单入口（此前本仓混成一条）**：
+
+| 入口 | 真值 | 形态 |
+| --- | --- | --- |
+| 列头右端 `drop_down` 点击 | `SpreadsheetPresentation.handleColumnIconClick:1585-1591` → `ResultSetViewer.showColumnMenu:2988-2999` | **平铺**：`fillOrderingsMenu` 三项 + `fillFiltersMenu` 整组 |
+| 列头右键 | `SpreadsheetPresentation.fillContextMenu:1088-1110`（`COLUMN_HEADER`）→ `ResultSetViewer.fillContextMenu:3151-3300` | **分组**：`复制列名` 顶层 + `筛选▸` + `排序▸` + `导航▸` + `编辑▸` + `面板▸` + `呈现格式▸` + `布局▸` … |
+
+`fillOrderingsMenu:3935-3948`：`Separator` → ASC → DESC → [`orderPosition > 0`] NONE。
+`fillFiltersMenu:3864-3933`：查找替换 → [`supportsDataFilter`] 不同值筛选 → `Separator` →
+按值筛选组 → `Separator` → 无参操作符（IS NULL 等）→ `Separator` → [`constraints`] 重置 →
+`Separator` → [`DBSEntity`] 保存 / 重置筛选设置 → 删除所有 → 编辑筛选设置。
+
+#### 9.72.2 本仓落地
+
+- 新增 `grid/column_menu.rs`（`grid/` 第十块）：`ColumnMenuGroup` / `ColumnMenuPlan`、
+  纯函数 `column_menu_plan(target)`、`ColumnMenuHooks`（表格实体 + 两条队列 + 四个钩子 +
+  预计算文本）、唯一动作分派 `apply_item(menu, item, hooks)`、`build_plan_menu`（分组，子菜单用
+  `PopupMenu::submenu_with_icon`）、`build_flat_menu`（平铺）。
+- `grid/menu.rs`：`column_menu_items` 拆成 `column_sort_items` / `column_filter_value_items` /
+  `column_copy_items` / `column_layout_items` 四个段构造函数，原函数按旧顺序拼接（既有 16 处用例不动）。
+- `grid/header.rs::render_th`：
+  - 右端三角改**常显**（去掉 `invisible` + `group_hover` 包裹），内容仍平铺 `column_menu_items`；
+  - 整格挂 `.context_menu(...)`（`ContextMenuExt`；右键在**冒泡**阶段 `stop_propagation`，
+    内层先命中 → 压掉 `table-inner` 的数据行菜单）；
+  - hover 底色 = `theme.tokens.table_active`（与真值「hover 取选中色」同档）。
+- 右键计划（本仓能力内）：顶层 `复制列名`；组 = `筛选`（值筛选 + `filters_menu_items`）/
+  `排序`（升 / 降 / [已排序] 清除）/ `列操作`（复制此列 + 冻结 + 隐藏 + 显示全部 + 列统计 + 洞察）。
+
+#### 9.72.3 差异（登记，勿当 bug 修）
+
+1. **三角槽宽**：组件 `DropdownButton` ghost small 最小 28px，真值 16+3=19px → 列名可用宽
+   少约 9px（`grid()` 128px 列实测 95 → 67）。要 1:1 需自绘 16px 三角，与「禁手搓组件」冲突，
+   暂按组件形态。
+2. **真值有、本仓无的组**：`导航` / `编辑` / `呈现格式` / `逻辑结构` / `布局` / `导出` /
+   `打开方式`（本仓没有对应列级能力），不摆空壳子菜单。
+3. **面板▸ 不在列头菜单**：本仓的 `面板` 子菜单仍只挂数据格右键（`menu::append_panels_submenu`），
+   真值 `COLUMN_HEADER` 落点也会摆（`FEATURE_PANELS` 门控）。
+4. **排序图标**：真值 16px 三态（星号 / 上 / 下，且上下**反向**：`UP` 画 `SORT_DECREASE`）；
+   本仓由组件画 12px `ChevronsUpDown`（`table/state.rs::render_sort_icon`），改需动 vendor。
+5. **焦点列四边框 / readOnly 底部下划线 / 内容 inset 4-6**：未做（容器是组件的 th，
+   inset 由组件 layout 决定）。
+
+#### 9.72.4 验证
+
+`cargo check -p rds-result-panel --lib --tests` 通过；`cargo test -p rds-result-panel --lib`
+**503 passed / 0 failed**（原 500 + 新增 3：计划分组形状 / 值筛选进「筛选」组 / 列头计划
+不含单元格级动作）。既有用例 `header_column_menu_floats_and_leaves_the_name_its_full_width`
+是按旧「绝对定位 + 悬停显形」写的，本轮改名并改写为
+`header_column_menu_is_always_visible_beside_the_name`（三角恒有几何、不压字、列名仍 ≥ 56px）。
+`cargo check -p rds-editor --lib` 通过。preview 重建后 `stage=3`、`demo columns=8 rows=8`、无 stderr。
+
 ## 20. 有意差异汇总
 
 全部「有意为之、勿当 bug 修」的偏离集中在这里，按功能域分组；每条回指原小节，细节看原文。
@@ -10623,7 +10694,7 @@ JSON 树** —— 而网格里双击进去的是行内编辑框（一整条字�
 
 | 差异 | 出处 |
 | --- | --- |
-| 菜单扁平无子菜单（例外：单元格右键的「面板」子菜单已按真值挂上，§9.67.5）；其余各段仍平铺（DBeaver 是 `filters` / `order` / `layoutMenu` 子菜单） | §9.32.3、§9.33.3、§9.35.3、§9.36.3、§9.67.5 |
+| 菜单扁平无子菜单（例外：单元格右键的「面板」子菜单 §9.67.5、列头右键的分组菜单 §9.72）；其余各段仍平铺（DBeaver 是 `filters` / `order` / `layoutMenu` 子菜单） | §9.32.3、§9.33.3、§9.35.3、§9.36.3、§9.67.5、§9.72 |
 | 三颗选中统计开关平铺在数据格右键尾部（位置语义保留，形状不同） | §9.32.3 |
 | 不做 100 ms 防抖（本仓选中计数只改三个数，无连续重排成本） | §9.32.3 |
 | 计数来源是单区域选中（无 `IResultSetSelectionExt` 多 region） | §9.32.3 |

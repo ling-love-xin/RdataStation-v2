@@ -8,16 +8,18 @@ use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Icon;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{ButtonVariants as _, DropdownButton};
-use gpui_kit::component::menu::PopupMenuItem;
+use gpui_kit::component::menu::ContextMenuExt as _;
 use gpui_kit::component::table::TableState;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use super::column_menu::{
+    ColumnMenuHooks, build_flat_menu, build_plan_menu, column_menu_plan,
+};
 use super::delegate::ResultGridDelegate;
-use super::menu::{ContextAction, ContextTarget, column_menu_items};
+use super::menu::{ContextTarget, column_menu_items};
 use super::stats::{column_stats, stats_lines};
-use crate::ports::ResultRequest;
 use crate::rowset::RowRef;
 use crate::store::ColumnKind;
 use crate::ui;
@@ -320,11 +322,11 @@ pub(crate) fn render_th(
             .when_some(extra_line, |head, line| head.child(line))
             .into_any_element();
     }
-    // 【列头菜单】DBeaver 列头箭头：排序 / 复制此列 / 冻结 / 隐藏 / 统计 / 洞察
-    // （= 右键菜单的列级子集，见 `column_menu_items`）。外包一层 `stop_propagation`：
-    // 组件列头点击会排一次序（on_col_head_click），点箭头菜单不能顺带排。
-    // 菜单闭包是 move，依赖 self 的文本（复制整列 / 统计）在闭包外算好再捕获。
-    let table = cx.entity().clone();
+    // 【列头菜单 2026-11-26】真值有**两条**列头菜单入口，形态不同：
+    // ① 列头右端 `drop_down` 图标 → `showColumnMenu:2988-2999`（排序三项 + `fillFiltersMenu`，**平铺**）
+    // ② 列头右键 → `fillContextMenu(COLUMN_HEADER):3151-3300`（`复制列名` 顶层 + `筛选▸` + `排序▸` … **分组**）
+    // 两条入口共用 `column_menu::ColumnMenuHooks` 与 `apply_item`：动作分派只有一份，
+    // 形状差异只在「平铺 / 分组」。
     let column_menu_target = ContextTarget {
         value: String::new(),
         column_name: name.clone(),
@@ -360,251 +362,45 @@ pub(crate) fn render_th(
         // 同上：筛选条显隐项也不在列头菜单里
         show_filter_panel: delegate.show_filter_panel(),
     };
-    let menu_items = column_menu_items(&column_menu_target);
-    let copy_column_text = delegate.column_text(column);
-    let stats_text = stats_lines(&column_stats(&delegate.rows, column)).join("\n");
-    let column_name_for_menu = name.clone();
-    let on_sort_down = delegate.on_sort_down.clone();
-    let on_column_stats = delegate.on_column_stats.clone();
-    let on_insight_column = delegate.on_insight_column.clone();
-    let on_column_filter = delegate.on_column_filter.clone();
-    // 【列布局落盘】动作队列在闭包外取出（owned）：builder 要求 `'static`，闭包里
-    // 不能再借 `delegate`
-    let layout_queue = delegate.action_queue.clone();
-    // 【列头筛选段尾部】四项筛选命令（保存 / 重置 / 全清 / 编辑筛选设置）走同一个动作队列：
-    // 它们都由面板执行（存档、清空筛选、打开设置浮层都不是网格自己能做的）
-    let filter_queue = delegate.action_queue.clone();
-    // 【列头菜单】贴在主行**右端之上**（绝对定位，不参与流）：既不当第二行 child
-    // （表头带只有 22px 内容高，任何"第二行"都会把主行挤成 0 高、列名被裁——2026-11-08
-    // 截图实证：字只有半截残线），也不占列宽（恒吃 24px 会把窄列列名挤到读不出）。
-    // 默认 `invisible`，整格 hover 才显形（`header_hover_group`），
-    // 先例：vendor `attachment.rs` 的悬停删除按钮。
-    let menu_hover_group = header_hover_group.clone();
+    // 动作句柄 + 预计算文本（复制整列 / 统计正文都在闭包外算好：菜单 builder 是 `Fn`，
+    // 可能被调多次，且不能再借 `delegate`）
+    let column_menu_hooks = ColumnMenuHooks {
+        table: cx.entity().clone(),
+        layout_queue: delegate.action_queue.clone(),
+        filter_queue: delegate.action_queue.clone(),
+        sort_down: delegate.on_sort_down.clone(),
+        column_stats: delegate.on_column_stats.clone(),
+        insight_column: delegate.on_insight_column.clone(),
+        column_filter: delegate.on_column_filter.clone(),
+        column_name: name.clone(),
+        copy_column_text: delegate.column_text(column),
+        stats_text: stats_lines(&column_stats(&delegate.rows, column)).join("\n"),
+    };
+    // ① 下拉三角内容：平铺（真值 `showColumnMenu` 就是「排序 + 筛选」平铺；
+    // 本仓在此之上还带列级增强项：复制此列 / 冻结 / 隐藏 / 列统计 / 显示全部 / 洞察）
+    let flat_items = column_menu_items(&column_menu_target);
+    let flat_hooks = column_menu_hooks.clone();
+    // ② 右键计划：分组（`复制列名` 顶层 + `筛选▸` / `排序▸` / `列操作▸`）
+    let plan = column_menu_plan(&column_menu_target);
+    let plan_hooks = column_menu_hooks.clone();
+    // 【DBeaver 对齐】列头右端的 `drop_down` 图标**常显**：真值 `IMAGE_FILTER = UIIcon.DROP_DOWN`
+    // （`GridColumnRenderer.java:46`），`icons/misc/drop_down.svg` 是 `#3387C5` 蓝色实心三角、
+    // 16×16，不随 hover 显隐（旧版 `invisible + group_hover` 是本仓自造，已去掉）。
+    // 外层带 id 的 div 截住冒泡：组件列头点击会排一次序（`on_col_head_click`），
+    // 点箭头菜单不能顺带把列排了。
     let main_row = main_row.child(
-        // guard 层带 id：`on_click` 是 StatefulInteractiveElement 方法（裸 div 只有
-        // `on_mouse_down`）；点击落在 guard 上时截住冒泡，列头排序收不到
         div()
             .id(("editor-result-col-menu-guard", col_ix))
-            .absolute()
-            .top_0()
-            .right_0()
-            // 同 `editor-result-th-main-{col_ix}`：给用例钉"菜单贴右端、与列名重叠"
+            .flex_none()
             .debug_selector(move || format!("editor-result-col-menu-{col_ix}"))
-            .invisible()
-            .group_hover(menu_hover_group, |this| this.visible())
             .on_click(|_, _, cx| cx.stop_propagation())
             .child(
                 DropdownButton::new(("editor-result-col-menu", col_ix))
                     .ghost()
                     .small()
-                    .menu_accessibility_label(format!("列菜单：{column_name_for_menu}"))
-                    .dropdown_menu(move |mut menu, _window, _app| {
-                        // builder 是 Fn（可能被调多次）：items 只能 clone 不能消费
-                        for item in menu_items.clone() {
-                            let label = item.label.clone();
-                            match item.action {
-                                ContextAction::SortDown { column, descending } => {
-                                    // 与右键「按此列排序」同口径：没接钩子就不摆
-                                    if let Some(hook) = on_sort_down.clone() {
-                                        menu = menu.item(PopupMenuItem::new(label).on_click(
-                                            move |_, _window, app| hook(&column, descending, app),
-                                        ));
-                                    }
-                                }
-                                ContextAction::CopyColumnName => {
-                                    // 【DBeaver 对齐】列头「复制列名」：DBeaver 侧走
-                                    // `getQuotedIdentifier`（按方言加引号，`ResultSetHandlerMain.java:367-371`），
-                                    // 本仓网格不持有方言（结果可能来自联邦 / 计算列），复制**裸名**；
-                                    // 需要引号时由用户自己加——宁可少猜，不给出一个错的引号。
-                                    let text = column_name_for_menu.clone();
-                                    menu = menu.item(PopupMenuItem::new(label).on_click(
-                                        move |_, _window, app| {
-                                            app.write_to_clipboard(ClipboardItem::new_string(
-                                                text.clone(),
-                                            ));
-                                        },
-                                    ));
-                                }
-                                ContextAction::CopyColumn(_) => {
-                                    // 列头菜单只针对当前列：复制整列文本在闭包外已算好
-                                    let text = copy_column_text.clone();
-                                    menu = menu.item(PopupMenuItem::new(label).on_click(
-                                        move |_, _window, app| {
-                                            app.write_to_clipboard(ClipboardItem::new_string(
-                                                text.clone(),
-                                            ));
-                                        },
-                                    ));
-                                }
-                                ContextAction::ToggleFreeze(column) => {
-                                    // 冻结是**表格自己的事**（改 `Column.fixed`）：点击在
-                                    // 独立事件里，可安全更新它并重建列组
-                                    // 【列布局落盘】改完交回「该存了」（宿主先取快照再存）
-                                    let table = table.clone();
-                                    let queue = layout_queue.clone();
-                                    menu = menu.item(PopupMenuItem::new(label).on_click(
-                                        move |_, _window, app| {
-                                            table.update(app, |state, cx| {
-                                                state.delegate_mut().toggle_freeze(column);
-                                                state.refresh(cx);
-                                            });
-                                            if let Some(queue) = &queue {
-                                                queue.request(
-                                                    ResultRequest::ColumnLayoutChanged,
-                                                    app,
-                                                );
-                                            }
-                                        },
-                                    ));
-                                }
-                                ContextAction::HideColumn(column) => {
-                                    // 隐藏是**表格自己的事**（改视图列序），与冻结同一条路
-                                    let table = table.clone();
-                                    let queue = layout_queue.clone();
-                                    menu = menu.item(PopupMenuItem::new(label).on_click(
-                                        move |_, _window, app| {
-                                            table.update(app, |state, cx| {
-                                                state.delegate_mut().hide_column(column);
-                                                state.refresh(cx);
-                                            });
-                                            if let Some(queue) = &queue {
-                                                queue.request(
-                                                    ResultRequest::ColumnLayoutChanged,
-                                                    app,
-                                                );
-                                            }
-                                        },
-                                    ));
-                                }
-                                ContextAction::ShowAllColumns => {
-                                    let table = table.clone();
-                                    let queue = layout_queue.clone();
-                                    menu = menu.item(PopupMenuItem::new(label).on_click(
-                                        move |_, _window, app| {
-                                            table.update(app, |state, cx| {
-                                                state.delegate_mut().show_all_columns();
-                                                state.refresh(cx);
-                                            });
-                                            if let Some(queue) = &queue {
-                                                queue.request(
-                                                    ResultRequest::ColumnLayoutChanged,
-                                                    app,
-                                                );
-                                            }
-                                        },
-                                    ));
-                                }
-                                ContextAction::ColumnStats { column: _ } => {
-                                    // 统计是**网格自己算**（纯遍历），弹层由宿主开
-                                    if let Some(hook) = on_column_stats.clone() {
-                                        let name = column_name_for_menu.clone();
-                                        let text = stats_text.clone();
-                                        menu = menu.item(PopupMenuItem::new(label).on_click(
-                                            move |_, _window, app| {
-                                                hook(name.clone(), text.clone(), app)
-                                            },
-                                        ));
-                                    }
-                                }
-                                ContextAction::InsightColumn { column } => {
-                                    // 同「按值筛选」：没接钩子（宿主没接洞察端口）就不摆
-                                    if let Some(hook) = on_insight_column.clone() {
-                                        menu =
-                                            menu.item(PopupMenuItem::new(label).on_click(
-                                                move |_, _window, app| hook(&column, app),
-                                            ));
-                                    }
-                                }
-                                ContextAction::FilterColumnValue { column, value } => {
-                                    // 列级筛选交回面板（统一 set + 刷新筛选统计 + notify）；
-                                    // 没接钩子就不摆（面板构造时一定接，防御性分支）
-                                    if let Some(hook) = on_column_filter.clone() {
-                                        menu = menu.item(PopupMenuItem::new(label).on_click(
-                                            move |_, _window, app| hook(column, &value, app),
-                                        ));
-                                    }
-                                }
-                                ContextAction::ClearColumnFilter { column } => {
-                                    // 清除走同一钩子：值传空串（面板端约定「空 = 清除」）
-                                    if let Some(hook) = on_column_filter.clone() {
-                                        menu = menu.item(PopupMenuItem::new(label).on_click(
-                                            move |_, _window, app| hook(column, "", app),
-                                        ));
-                                    }
-                                }
-                                ContextAction::ClearSort => {
-                                    // 取消排序是本地动作（回原顺序，不下发源库重查）：
-                                    // 与冻结 / 隐藏同一条独立事件路径，可安全更新 delegate 并刷新
-                                    let table = table.clone();
-                                    menu = menu.item(PopupMenuItem::new(label).on_click(
-                                        move |_, _window, app| {
-                                            table.update(app, |state, cx| {
-                                                state.delegate_mut().clear_sort();
-                                                state.refresh(cx);
-                                            });
-                                        },
-                                    ));
-                                }
-                                // 【filters 段首】「在结果中查找…」：命令语义（只开不关），
-                                // 与数据格右键同一组请求（`fillFiltersMenu:3869`）
-                                ContextAction::OpenFind => {
-                                    if let Some(queue) = filter_queue.clone() {
-                                        menu = menu.item(PopupMenuItem::new(label).on_click(
-                                            move |_, _window, app| {
-                                                queue.request(ResultRequest::OpenFind, app);
-                                            },
-                                        ));
-                                    }
-                                }
-                                // 【DBeaver 对齐】`fillFiltersMenu` 尾部四项
-                                // （`ResultSetViewer.java:3926-3932`）：保存 / 重置筛选设置、
-                                // 删除所有过滤 / 排序、编辑筛选设置——全部转交面板执行
-                                ContextAction::SaveFilterSetting => {
-                                    if let Some(queue) = filter_queue.clone() {
-                                        menu = menu.item(PopupMenuItem::new(label).on_click(
-                                            move |_, _window, app| {
-                                                queue.request(ResultRequest::SaveFilterSetting, app);
-                                            },
-                                        ));
-                                    }
-                                }
-                                ContextAction::ResetFilterSetting => {
-                                    if let Some(queue) = filter_queue.clone() {
-                                        menu = menu.item(PopupMenuItem::new(label).on_click(
-                                            move |_, _window, app| {
-                                                queue.request(ResultRequest::ResetFilterSetting, app);
-                                            },
-                                        ));
-                                    }
-                                }
-                                ContextAction::ClearAllFilters => {
-                                    if let Some(queue) = filter_queue.clone() {
-                                        menu = menu.item(PopupMenuItem::new(label).on_click(
-                                            move |_, _window, app| {
-                                                queue.request(
-                                                    ResultRequest::ClearFilterAndOrdering,
-                                                    app,
-                                                );
-                                            },
-                                        ));
-                                    }
-                                }
-                                ContextAction::OpenFilterSettings => {
-                                    if let Some(queue) = filter_queue.clone() {
-                                        menu = menu.item(PopupMenuItem::new(label).on_click(
-                                            move |_, _window, app| {
-                                                queue.request(ResultRequest::OpenFilterSettings, app);
-                                            },
-                                        ));
-                                    }
-                                }
-                                _ => {
-                                    // 值与行相关的动作（预览 / 按值筛选 / 复制值 / 复制行）
-                                    // 只属于右键菜单；列头菜单不渲染它们
-                                }
-                            }
-                        }
-                        menu
+                    .menu_accessibility_label(format!("列菜单：{name}"))
+                    .dropdown_menu(move |menu, _window, _cx| {
+                        build_flat_menu(menu, &flat_items, &flat_hooks)
                     }),
             ),
     );
@@ -638,7 +434,17 @@ pub(crate) fn render_th(
         .debug_selector(move || format!("editor-result-th-{col_ix}"))
         .child(main_row)
         .when_some(extra_line, |head, line| head.child(line));
-    head.id(("editor-result-th", col_ix))
+    // 【列头右键】挂在整个表头格上：`ContextMenu` 在**冒泡**阶段 `stop_propagation`
+    // （`vendor/gpui-component/src/menu/context_menu.rs:404-410`），内层先命中 →
+    // 压掉 `table-inner` 的数据行菜单，右键落进列头就只出列头菜单。
+    // 【DBeaver 对齐】列头 hover 用**选中色**（`GridColumnRenderer.java:96-97`：底色取
+    // `getHeaderBackground(element, selected || hovering)`，hover 与选中同一档色）。
+    // 组件自己的列头没有 hover 分支（`table/state.rs:2120` 那个是行号槽分割线的 hover），
+    // 所以在内容层自绘一层背景；色先取出来，闭包是 `Fn` 不能被借的 `cx` 反复用。
+    let hover_bg = cx.theme().tokens.table_active;
+    let head = head
+        .id(("editor-result-th", col_ix))
+        .hover(move |this| this.bg(hover_bg))
         .tooltip(move |window, cx| {
             let (title, meta) =
                 header_tooltip_lines(&tip_name, tip_label.as_deref(), annotation.as_ref());
@@ -658,5 +464,12 @@ pub(crate) fn render_th(
             })
             .build(window, cx)
         })
-        .into_any_element()
+        .context_menu(move |menu, window, cx| {
+            build_plan_menu(menu, plan.clone(), &plan_hooks, window, cx)
+        });
+    // `ContextMenu<Div>` 在 gpui-fast 下只实现 `Element`（`IntoElement` 的 impl 被
+    // `#[cfg(not(feature = "gpui-fast"))]` 门掉），再包一层 `div` 回到 `Div`：
+    // `ContextMenu` 自身以绝对定位挂子元素、不参与流，视觉与布局不变。
+    // 返回类型被上面的 corner 早退钉成 `AnyElement`，这里同样 `into_any_element`。
+    div().size_full().child(head).into_any_element()
 }

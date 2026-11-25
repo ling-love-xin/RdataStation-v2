@@ -4026,3 +4026,56 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
   真值会更宽，本仓不变。
 
 细节见 `docs/architecture/editor/result-panel.md` §9.71。
+
+### 57.10 列头：常显 drop_down 三角 + 右键分组菜单 + hover 底色（2026-11-26，已落地）
+
+#### 57.10.1 真值几何与取色（`GridColumnRenderer.java`）
+
+| 项 | 值 | 出处 |
+| --- | --- | --- |
+| 内容内距 | 左右 6 / 底 6 / 顶 4（`x += 6`、`w -= 12`、`y += 4`、`h -= 10`） | `:41-45`、`:126-129` |
+| 图标与文字间距 `IMAGE_SPACING` | 3 | `:46` |
+| 排序图标与列名间距 `ARROW_MARGIN` | 6 | `:45` |
+| 列右端筛选/排序图标 | `IMAGE_FILTER = UIIcon.DROP_DOWN`（`drop_down.svg` 16×16、`#3387C5`），画在 `x + width - 3` | `:46`、`:165-173` |
+| 排序三态 | `SORT_UNKNOWN`（星号）/ `SORT_INCREASE` / `SORT_DECREASE`，均 16×16；`paintSort` 里 `UP → SORT_DECREASE`、`DOWN → SORT_INCREASE`（方向与直觉相反） | `:47-50`、`:186-214` |
+| 底色 / 前景 | `getHeaderBackground(element, selected \|\| hovering)`，hover 与选中同档色 | `:96-107` |
+| 列过滤边界框 | `PAINT_COLUMN_FOCUS_BORDER = true` → 焦点列画四边 `COLOR_WIDGET_NORMAL_SHADOW` | `:52`、`:110-118` |
+| 只读列 | 底边内 2px 画一条 `getHeaderReadOnlyColor()` 线 | `:131-135` |
+| 列名字体 | 恒 `normalFont`（不因焦点加粗） | `:140` |
+| 描述第二行 | `commentFont`，`y += TOP_MARGIN + fontHeight` | `:150-160` |
+| `drop_down` 显隐 | **常显**（不受 hover 影响，筛选未激活也画） | `:165-173` |
+
+#### 57.10.2 两条菜单入口（此前本仓只有一条）
+
+| 入口 | 真值调用链 | 形态 |
+| --- | --- | --- |
+| 右端 `drop_down` 点击 | `SpreadsheetPresentation.handleColumnIconClick:1585-1591` → `ResultSetViewer.showColumnMenu:2988-2999` | **平铺**：`fillOrderingsMenu:3935-3948`（升 / 降 / [已排序] 清除）+ `fillFiltersMenu:3864-3933` 整组 |
+| 列头右键 | `SpreadsheetPresentation.fillContextMenu:1088-1110`（`COLUMN_HEADER`）→ `ResultSetViewer.fillContextMenu:3151-3300` | **分组**：`复制列名` 顶层 + `筛选▸`（`UIIcon.FILTER`）+ `排序▸`（`UIIcon.SORT`）+ `导航▸` + `编辑▸` + `面板▸` + `呈现格式▸`（`fillColumnViewMenu`）+ `提示` + `逻辑结构` + `布局▸` + `导出` / `打开方式` |
+
+`fillFiltersMenu` 段序：查找替换 → [`supportsDataFilter`] 不同值筛选 → `Separator` →
+按值筛选（每组 `EmptyAction(类型标题)` + 操作符）→ `Separator` → 无参操作符（IS NULL 等）→
+`Separator` → [`constraints`] 重置 → `Separator` → [`DBSEntity`] 保存 / 重置筛选设置 →
+删除所有过滤与排序 → 编辑筛选设置。
+
+#### 57.10.3 本仓落点
+
+| 项 | 落点 |
+| --- | --- |
+| 分组计划 / hooks / 动作分派 / 菜单构造 | 新增 `crates/result_panel/src/grid/column_menu.rs` |
+| 段构造函数（排序 / 值筛选 / 复制 / 布局） | `grid/menu.rs`（`column_menu_items` 保持旧顺序拼接） |
+| 常显三角 + 右键 `.context_menu` + hover 底色 | `grid/header.rs::render_th` |
+| 回归哨兵 | `editor-result-col-menu-{col}`（常显三角）、`editor-result-th-{col}`（整格） |
+
+#### 57.10.4 仍存差异
+
+1. **三角槽宽**：组件 `DropdownButton` ghost small 最小 28px vs 真值 19px（16 + 3），
+   列名可用宽少约 9px（`grid()` 128px 列实测 95 → 67）。
+2. **排序图标**：组件画 12px `ChevronsUpDown`（`table/state.rs::render_sort_icon`），
+   真值 16px 三态（星号 / 上 / 下且上下反向）。改需动 vendor。
+3. **焦点列四边框 / 只读下划线 / 内容 inset 4-6**：未做（内容层是组件的 th）。
+4. **列头右键的组**：只落 `筛选▸` / `排序▸` / `列操作▸`（本仓无 `导航` / `编辑` /
+   `呈现格式` / `逻辑结构` / `布局` / `导出` / `打开方式` 的列级能力）；`面板▸` 仍只在数据格右键。
+5. **`复制列名` 不带引号**：真值走 `getQuotedIdentifier`（按方言加引号），本仓复制裸名
+   （网格不持有方言）。
+
+细节见 `docs/architecture/editor/result-panel.md` §9.72。

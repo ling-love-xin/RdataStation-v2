@@ -4328,18 +4328,15 @@ fn column_header_extra_picks_comment_or_type_name() {
     );
 }
 
-/// 【列头菜单不再占列宽 2026-11-08】菜单此前并进主行流内，恒吃 24px：布尔列 96px 时
-/// 列名只剩 37px（`is_active` → `is_a…`）。改成绝对定位贴右端 + 悬停表头才显形之后，
-/// 列名拿整列宽。
+/// 【列头 drop_down 常显 + 占槽 2026-11-26】真值列头右端是 `UIIcon.DROP_DOWN` **常显**图标
+/// （`GridColumnRenderer.java:46`，`icons/misc/drop_down.svg` 16×16、`#3387C5`），与列名
+/// 并排占宽。旧实现（2026-11-08）把它做成「绝对定位 + 悬停显形」、列名拿整列宽——那是
+/// 本仓自造；按「1:1 复刻 DBeaver」已改回常显（`grid/header.rs::render_th`）。
 ///
-/// 几何口径：`grid()` 两列都是未知类型（无 badge、无排序箭头、无筛选 ▽），默认列宽
-/// 128 扣掉组件左右 padding 8、再扣掉组件 `render_th` 自带的排序图标槽（实测 16）→
-/// 列名应拿到 **104**。菜单若回到流内（旧实现）只剩 80，断言 >= 96 足以区分两代实现。
-///
-/// 2026-11-18：表头补了 1px 列边界线（画在格的左边界，占掉 1px 内容宽）→ 实测 95，
-/// 阈值下调到 **92**：仍远高于「菜单在流内」的 80，区分力不变。
+/// 断言：三角**恒有几何**（不再 `invisible`）、落在列名右侧不压字，且列名仍留可读宽度。
+/// 槽宽差异（组件最小按钮 24–28px vs 真值 16+3=19px）登记在基线文档 §57.10。
 #[gpui_kit::test]
-fn header_column_menu_floats_and_leaves_the_name_its_full_width(
+fn header_column_menu_is_always_visible_beside_the_name(
     cx: &mut gpui_kit::TestAppContext,
 ) {
     cx.update(gpui_kit::init);
@@ -4355,22 +4352,26 @@ fn header_column_menu_floats_and_leaves_the_name_its_full_width(
     let name = vcx
         .debug_bounds("editor-result-th-name-1")
         .expect("列名应有 debug 几何");
+    let menu = vcx
+        .debug_bounds("editor-result-col-menu-1")
+        .expect("列头三角应常显（`invisible` + `group_hover` 已去掉）");
     let main = vcx
         .debug_bounds("editor-result-th-main-1")
         .expect("表头主行应有 debug 几何");
 
     assert!(
-        name.size.width >= gpui_kit::px(92.),
-        "列名没拿到整列宽（列头菜单又回到流内占位了？）：name={:?} main={:?}",
-        name.size.width,
-        main.size.width
+        menu.size.width > gpui_kit::px(0.),
+        "三角没有拿到宽度（又回到悬停显形？）：menu={menu:?}"
     );
-    // 列名是主行里唯一的 flex 子元素：它就该铺满主行（差值只剩 `gap_1` 的余量）
+    // 三角在主行右端、列名右侧：列名被 flex 压窄，而不是被三角盖住
     assert!(
-        main.size.width - name.size.width <= gpui_kit::px(8.),
-        "列名没有铺满主行，流里还有别的占宽元素：main={:?} name={:?}",
-        main.size.width,
-        name.size.width
+        menu.origin.x + gpui_kit::px(4.) >= name.origin.x + name.size.width,
+        "三角压到了列名上：menu={menu:?} name={name:?}"
+    );
+    // 常显槽会吃掉 ~28px：列名仍要留出可读宽度（旧实现的整列宽 95 → 现在 67 左右）
+    assert!(
+        name.size.width >= gpui_kit::px(56.),
+        "列名被常显三角挤到不可读：name={name:?} main={main:?}"
     );
 }
 
@@ -6019,4 +6020,118 @@ fn row_toggle_without_arrays_does_nothing() {
     assert!(!grid.toggle_row_array_expand(1), "空数组行没有三角可点");
     assert_eq!(grid.view_len(), before);
     assert_eq!(grid.row_expander_glyph(1), None);
+}
+
+// ── 列头菜单计划（2026-11-26）───────────────────────────────────────────────
+// 真值列头右键是**分组**菜单（`ResultSetViewer.fillContextMenu:3151-3300`，
+// `menuLocation = COLUMN_HEADER`），唯一多出来的顶层项是 `复制列名`；
+// 下拉三角是**平铺**（`showColumnMenu:2988-2999` = 排序三项 + `fillFiltersMenu`）。
+// 计划是纯函数，菜单长相不可断言，形状在这里钉死。
+
+/// 列头右键计划：顶层只有「复制列名」，三组 = 筛选 / 排序 / 列操作（顺序即真值组序）
+#[test]
+fn column_header_plan_splits_into_filter_sort_and_column_ops() {
+    let plan = super::column_menu::column_menu_plan(&target("", "amount", 2));
+    assert_eq!(plan.leading.len(), 1, "顶层只摆复制列名一项");
+    assert_eq!(plan.leading[0].action, ContextAction::CopyColumnName);
+    let labels: Vec<&str> = plan.groups.iter().map(|g| g.label).collect();
+    assert_eq!(labels, vec!["筛选", "排序", "列操作"]);
+    // 排序组：升序 / 降序 / 清除（真值 `fillOrderingsMenu:3935-3948` 的三项）
+    let sort: Vec<ContextAction> = plan.groups[1]
+        .items
+        .iter()
+        .map(|item| item.action.clone())
+        .collect();
+    // 升序 / 降序恒在；「清除排序」只在**这一列已参与排序**时才摆
+    // （真值 `fillOrderingsMenu:3944` 的 `orderPosition > 0` 约束）
+    assert_eq!(
+        sort,
+        vec![
+            ContextAction::SortDown {
+                column: "amount".to_string(),
+                descending: false,
+            },
+            ContextAction::SortDown {
+                column: "amount".to_string(),
+                descending: true,
+            },
+        ]
+    );
+    let sorted = ContextTarget {
+        sort_active: true,
+        ..target("", "amount", 2)
+    };
+    let plan = super::column_menu::column_menu_plan(&sorted);
+    assert!(plan.groups[1]
+        .items
+        .iter()
+        .any(|item| matches!(item.action, ContextAction::ClearSort)));
+    // 列操作组（本仓增强）：复制此列 / 冻结 / 隐藏 / 显示全部 / 列统计都在
+    let ops = &plan.groups[2].items;
+    assert!(ops
+        .iter()
+        .any(|item| matches!(item.action, ContextAction::CopyColumn(2))));
+    assert!(ops
+        .iter()
+        .any(|item| matches!(item.action, ContextAction::HideColumn(2))));
+    assert!(ops
+        .iter()
+        .any(|item| matches!(item.action, ContextAction::ToggleFreeze(2))));
+    assert!(ops
+        .iter()
+        .any(|item| matches!(item.action, ContextAction::ColumnStats { column: 2 })));
+}
+
+/// 「筛选」组：列里有不同值时才有按值筛选的项；没有值时仍保留 `fillFiltersMenu`
+/// 的整组命令（查找 / 保存 / 重置 / 全清 / 编辑设置），否则组会是空的。
+#[test]
+fn column_header_plan_puts_value_filters_into_filter_group() {
+    let no_values = super::column_menu::column_menu_plan(&target("", "name", 1));
+    assert!(
+        !no_values.groups[0]
+            .items
+            .iter()
+            .any(|item| matches!(item.action, ContextAction::FilterColumnValue { .. })),
+        "没有不同值时不该摆按值筛选项"
+    );
+    assert!(
+        no_values.groups[0]
+            .items
+            .iter()
+            .any(|item| matches!(item.action, ContextAction::OpenFind)),
+        "筛选组必须有 `fillFiltersMenu` 的查找项（不会退化成空组）"
+    );
+
+    let t = ContextTarget {
+        column_values: vec!["a".to_string(), "b".to_string()],
+        ..target("", "name", 1)
+    };
+    let plan = super::column_menu::column_menu_plan(&t);
+    assert!(plan.groups[0]
+        .items
+        .iter()
+        .any(|item| matches!(item.action, ContextAction::FilterColumnValue { column: 1, .. })));
+}
+
+/// 列头计划不带**单元格级**动作（预览 / 复制值 / 复制整行）：那些只在数据格右键出现
+#[test]
+fn column_header_plan_excludes_cell_level_actions() {
+    let plan = super::column_menu::column_menu_plan(&target("x", "name", 1));
+    let actions: Vec<&ContextAction> = plan
+        .leading
+        .iter()
+        .chain(plan.groups.iter().flat_map(|group| group.items.iter()))
+        .map(|item| &item.action)
+        .collect();
+    for action in actions {
+        assert!(
+            !matches!(
+                action,
+                ContextAction::PreviewValue(_)
+                    | ContextAction::CopyValue(_)
+                    | ContextAction::CopyRow(_)
+            ),
+            "列头计划不该带单元格级动作：{action:?}"
+        );
+    }
 }
