@@ -149,6 +149,7 @@ fn view_layer_has_no_raw_size_literals() {
         ("view/status.rs", include_str!("../src/view/status.rs")),
         ("view/render.rs", include_str!("../src/view/render.rs")),
         ("panels/mod.rs", include_str!("../src/panels/mod.rs")),
+        ("panels/dashboard.rs", include_str!("../src/panels/dashboard.rs")),
         (
             "panels/project_picker.rs",
             include_str!("../src/panels/project_picker.rs"),
@@ -783,6 +784,7 @@ fn ui_sources_have_no_raw_color_literals() {
         ("workbench/view/status.rs", include_str!("../src/view/status.rs")),
         ("workbench/view/render.rs", include_str!("../src/view/render.rs")),
         ("panels/mod.rs", include_str!("../src/panels/mod.rs")),
+        ("panels/dashboard.rs", include_str!("../src/panels/dashboard.rs")),
         (
             "panels/project_picker.rs",
             include_str!("../src/panels/project_picker.rs"),
