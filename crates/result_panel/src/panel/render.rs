@@ -309,7 +309,13 @@ impl ResultPanel {
                     .max_w(relative(0.25))
                     .selected(open)
                     .debug_selector(|| "editor-result-sql-preview".to_string())
-                    .icon(IconName::Table2)
+                    // 图标：DBeaver 取 `getActiveObjectImage()`（`:551-571`）三段——
+                    // `DBSEntity` 且能取到导航节点 → `dcNode.getNodeIcon()`；有
+                    // `DBPImageProvider` → `getObjectImage()`；`DBSEntity` → `TREE_TABLE`（表）；
+                    // 其余（SQL 查询结果集正是这一类）→ **`DBIcon.SQL_TEXT`**（`:568-569`）。
+                    // 本仓结果集恒是「一条 SQL 的结果」，拿不到实体类型，落兜底那一支，
+                    // 对应 lucide 的 `file-code`（`Table2` 是 `TREE_TABLE` 那支的对应物）。
+                    .icon(IconName::FileCode)
                     .label(text)
                     .tooltip(tr("点击查看完整 SQL（浮层）"));
                 Popover::new("editor-result-sql-popover")
@@ -1839,7 +1845,8 @@ impl ResultPanel {
                 div()
                     .flex_none()
                     .debug_selector(|| "editor-result-sql-popover-icon".to_string())
-                    .child(Icon::new(IconName::Table2).size_4()),
+                    // 与对象格同一颗（DBeaver 浮层列 0 也是 `getActiveObjectImage()`，`:737`）
+                    .child(Icon::new(IconName::FileCode).size_4()),
             )
             .child(body)
             .into_any_element()
