@@ -100,6 +100,7 @@ analytics_global_refs(
 | 登记 API / 查询 | `crates/analytics_resource/src/global/refs.rs` |
 | 裁剪守卫 | `crates/analytics_resource/src/global/sql.rs` |
 | 删除守卫 | `crates/analytics_resource/src/global/delete.rs` |
-| 项目引用资产行 | 待落：项目 `analytics_resources` 写入路径 |
-| 固化动作 | 待落：复用 `global/distribute.rs` 的 parquet 中转 |
+| 项目引用资产行 | `crates/analytics_resource/src/global/refs.rs`：`reference_to_project`（首建 v1 / 同引用追加版本） |
+| 固化动作 | `crates/analytics_resource/src/global/refs.rs`：`solidify_ref_version`；底层 `distribute.rs`：`distribute_version` |
+| 回归证据 | `crates/analytics_resource/src/global/tests.rs`：`g021`（引用→追加→固化选中 v1）、`g022`（固化失败保留 pin/引用） |
 | UI 引用入口/版本动作 | 待落：`resource_view` / `detail_view` |

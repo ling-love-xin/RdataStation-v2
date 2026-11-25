@@ -1259,3 +1259,300 @@ async fn g020_pin_ref_upserts_version_and_reactivates() {
 
     let _ = fs::remove_dir_all(&env.dir);
 }
+
+/// 引用资产不落数据；同一条引用资产按版本追加；固化选中历史版本时只释放该版 pin。
+#[tokio::test]
+async fn g021_reference_asset_and_solidify_selected_version() {
+    let env = create_test_env().await;
+    let project = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
+    let csv = write_csv(&env.dir);
+    let v1 = env
+        .store
+        .promote(&promote_req("ref_orders", &csv, PromoteKind::DataFile))
+        .await
+        .expect("promote v1");
+    assert_eq!(v1.version, 1);
+
+    let first = env
+        .store
+        .reference_to_project(
+            &project,
+            &env.project_root,
+            "ref_orders",
+            v1.version,
+            Some("订单引用"),
+        )
+        .await
+        .expect("reference v1");
+    assert_eq!(first.version, 1, "引用资产首版从 1 开始");
+
+    // 项目侧只有引用登记，没有物理表，也没有 analytics_table。
+    let (kind, table, origin_kind, origin_ref, version, alias): (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        i32,
+        Option<String>,
+    ) = {
+        let conn = env.project_pool.acquire().await.expect("project conn");
+        let inner = conn.inner().expect("inner");
+        inner
+            .query_row(
+                "SELECT kind, analytics_table, origin_kind, origin_ref, version, alias \
+                 FROM analytics_resources WHERE id = ?1",
+                rusqlite::params![first.resource_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .expect("read ref row")
+    };
+    assert_eq!(kind, "table_ref");
+    assert!(table.is_none(), "引用资产不能登记本地表名");
+    assert_eq!(origin_kind.as_deref(), Some("global"));
+    assert!(origin_ref
+        .as_deref()
+        .unwrap_or("")
+        .contains("\"version\":1"));
+    assert_eq!(version, 1);
+    assert_eq!(alias.as_deref(), Some("订单引用"));
+
+    // 引用资产上的项目分组/标签，固化时要复制到新本地资产。
+    let store = crate::store::AnalyticsResourceStore::new(env.project_pool.clone());
+    let folder = store
+        .create_folder(crate::store::rows::CreateFolderRequest {
+            name: "订单分组".to_string(),
+            scope: "project".to_string(),
+            parent_folder_id: None,
+            color: None,
+            icon: None,
+        })
+        .await
+        .expect("create folder");
+    store
+        .add_resource_to_folder(&first.resource_id, &folder.id)
+        .await
+        .expect("link folder");
+    let tag = store
+        .create_tag(crate::store::rows::CreateTagRequest {
+            name: "全局引用标签".to_string(),
+            color: None,
+            icon: None,
+            scope: "global".to_string(),
+        })
+        .await
+        .expect("create tag");
+    store
+        .add_tag_to_resource(&first.resource_id, &tag.id)
+        .await
+        .expect("link tag");
+
+    // 全局升到 v2，B 的同一引用资产追加 v2；v1 仍 pin 住。
+    fs::write(&csv, "id,sku,qty\n1,a,10\n2,b,20\n").expect("rewrite csv");
+    let v2 = env
+        .store
+        .promote_overwrite(&promote_req("ref_orders", &csv, PromoteKind::DataFile))
+        .await
+        .expect("promote v2");
+    assert_eq!(v2.version, 2);
+    let second = env
+        .store
+        .reference_to_project(
+            &project,
+            &env.project_root,
+            "ref_orders",
+            v2.version,
+            Some("订单引用"),
+        )
+        .await
+        .expect("reference v2");
+    assert_eq!(second.resource_id, first.resource_id, "同一引用资产");
+    assert_eq!(second.version, 2);
+    assert_eq!(
+        env.store
+            .active_ref_count_for_version("ref_orders", 1)
+            .expect("pin v1"),
+        1
+    );
+    assert_eq!(
+        env.store
+            .active_ref_count_for_version("ref_orders", 2)
+            .expect("pin v2"),
+        1
+    );
+
+    // 固化选中 v1：新本地资产 v1，原引用仍在，v1 pin 释放，v2 pin 不动。
+    let solid = env
+        .store
+        .solidify_ref_version(
+            &project,
+            &env.project_root,
+            &second.resource_id,
+            1,
+            "ref_orders_solid_v1",
+        )
+        .await
+        .expect("solidify v1");
+    assert_eq!(solid.version, 1, "固化资产从本地 v1 开始");
+    assert_eq!(
+        env.store
+            .active_ref_count_for_version("ref_orders", 1)
+            .expect("pin v1"),
+        0,
+        "固化后释放选中版本 pin"
+    );
+    assert_eq!(
+        env.store
+            .active_ref_count_for_version("ref_orders", 2)
+            .expect("pin v2"),
+        1,
+        "其他引用版本 pin 不动"
+    );
+
+    // 原引用资产仍在，当前版本仍是 v2。
+    let still_ref: (String, i32) = {
+        let conn = env.project_pool.acquire().await.expect("project conn");
+        let inner = conn.inner().expect("inner");
+        inner
+            .query_row(
+                "SELECT kind, version FROM analytics_resources WHERE id = ?1",
+                rusqlite::params![second.resource_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read ref row after solidify")
+    };
+    assert_eq!(still_ref, ("table_ref".to_string(), 2));
+
+    // 新本地资产继承引用的别名、分组、标签。
+    let (solid_alias, solid_folder, solid_tags): (Option<String>, Option<String>, i64) = {
+        let conn = env.project_pool.acquire().await.expect("project conn");
+        let inner = conn.inner().expect("inner");
+        let alias = inner
+            .query_row(
+                "SELECT alias FROM analytics_resources WHERE id = ?1",
+                rusqlite::params![solid.resource_id],
+                |row| row.get(0),
+            )
+            .expect("read solid alias");
+        let folder = inner
+            .query_row(
+                "SELECT folder_id FROM analytics_resource_folder WHERE resource_id = ?1 LIMIT 1",
+                rusqlite::params![solid.resource_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .expect("read solid folder");
+        let tags: i64 = inner
+            .query_row(
+                "SELECT count(*) FROM analytics_resource_tags WHERE resource_id = ?1",
+                rusqlite::params![solid.resource_id],
+                |row| row.get(0),
+            )
+            .expect("read solid tags");
+        (alias, folder, tags)
+    };
+    assert_eq!(solid_alias.as_deref(), Some("订单引用"));
+    assert_eq!(solid_folder.as_deref(), Some(folder.id.as_str()));
+    assert_eq!(solid_tags, 1, "标签也要复制");
+
+    // 固化出来的是 v1 的内容（3 行），不是 v2（2 行）。
+    let rows: Vec<i32> = {
+        let mut guard = env.project_duckdb.lock().await;
+        let conn = guard.as_mut().expect("project duckdb");
+        let mut stmt = conn
+            .prepare("SELECT id FROM ref_orders_solid_v1 ORDER BY id")
+            .expect("prepare solid table");
+        stmt.query_map([], |row| row.get(0))
+            .expect("query solid table")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect solid rows")
+    };
+    assert_eq!(rows, vec![1, 2, 3], "固化的是选中的 v1，不是当前 v2");
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+/// 固化失败（目标名冲突）时不释放 pin、不留下半成品表，原引用仍可再用。
+#[tokio::test]
+async fn g022_solidify_failure_keeps_pin_and_ref() {
+    let env = create_test_env().await;
+    let project = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
+    let csv = write_csv(&env.dir);
+    let v1 = env
+        .store
+        .promote(&promote_req("ref_conflict", &csv, PromoteKind::DataFile))
+        .await
+        .expect("promote v1");
+    let first = env
+        .store
+        .reference_to_project(
+            &project,
+            &env.project_root,
+            "ref_conflict",
+            v1.version,
+            None,
+        )
+        .await
+        .expect("reference v1");
+
+    // 目标名故意撞引用资产自己的登记名 → 分发在落表前返回 Conflict。
+    let error = env
+        .store
+        .solidify_ref_version(
+            &project,
+            &env.project_root,
+            &first.resource_id,
+            1,
+            "ref_conflict",
+        )
+        .await
+        .expect_err("同名目标应冲突");
+    assert!(
+        matches!(error, InstanceOpError::Conflict { .. }),
+        "应返回名字冲突：{error:?}"
+    );
+    assert_eq!(
+        env.store
+            .active_ref_count_for_version("ref_conflict", 1)
+            .expect("pin v1"),
+        1,
+        "失败不能释放 pin"
+    );
+
+    // 项目里不应有半成品表。
+    let table_count: i64 = {
+        let mut guard = env.project_duckdb.lock().await;
+        let conn = guard.as_mut().expect("project duckdb");
+        conn.prepare(
+            "SELECT count(*) FROM information_schema.tables WHERE table_name = 'ref_conflict'",
+        )
+        .expect("prepare table count")
+        .query_row([], |row| row.get(0))
+        .expect("query table count")
+    };
+    assert_eq!(table_count, 0, "失败后不能留下半成品表");
+
+    // 原引用资产仍在且版本还是 v1。
+    let (kind, version): (String, i32) = {
+        let conn = env.project_pool.acquire().await.expect("project conn");
+        let inner = conn.inner().expect("inner");
+        inner
+            .query_row(
+                "SELECT kind, version FROM analytics_resources WHERE id = ?1",
+                rusqlite::params![first.resource_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read ref row")
+    };
+    assert_eq!((kind.as_str(), version), ("table_ref", 1));
+
+    let _ = fs::remove_dir_all(&env.dir);
+}

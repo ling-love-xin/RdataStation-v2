@@ -39,7 +39,8 @@ impl RowScope {
 /// 2026-11-16 收口为两档：`File`（本体是受管文件）与 `AnalyticsTable`（本体是
 /// `analytics.duckdb` 里的持久表）。结构指纹**不再是一档**——它是能力，挂在
 /// `definition_sql` 上，与本体分类正交（同一个文件可以带指纹也可以不带）。
-/// `TableRef` 只留兼容读：历史行仍显示「引用」，但没有新写入点、也不进筛选菜单。
+/// `TableRef` 兼容历史行；全局引用 v1 仍以 `kind='table_ref'` 落库（
+/// `origin_kind='global'`，`analytics_table` 为空），避免重建 `kind` CHECK。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum ArchiveKind {

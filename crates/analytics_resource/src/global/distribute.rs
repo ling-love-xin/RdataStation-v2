@@ -2,7 +2,81 @@
 
 use super::*;
 
+/// 分发需要的一条全局登记行（id / version / kind / hash / rel_path / definition /
+/// row_count / column_count / file_size / analytics_table）。
+pub(super) type DistributionRow = (
+    String,
+    i32,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<i32>,
+    Option<i32>,
+    Option<i64>,
+    Option<String>,
+);
+
+fn map_distribution_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DistributionRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+        row.get(8)?,
+        row.get(9)?,
+    ))
+}
+
 impl GlobalInstanceStore {
+    /// 读分发要用的全局登记行。
+    ///
+    /// `selected_version = None` 取当前存活最新版；`Some(v)` 取历史版本，
+    /// **不过滤 `deleted_at`**——引用 pin 的旧版可能就是被覆盖升级软删掉的那一行。
+    pub(super) fn read_global_row(
+        &self,
+        name: &str,
+        selected_version: Option<i32>,
+    ) -> Result<Option<DistributionRow>, CoreError> {
+        self.with_sqlite(|conn| {
+            let row = match selected_version {
+                Some(version) => conn
+                    .query_row(
+                        r#"
+                        SELECT id, version, kind, content_hash, file_rel_path, definition_sql,
+                               row_count, column_count, file_size, analytics_table
+                        FROM analytics_resources
+                        WHERE name = ?1 AND scope = 'global' AND version = ?2
+                        LIMIT 1
+                        "#,
+                        rusqlite::params![name, version],
+                        map_distribution_row,
+                    )
+                    .optional()
+                    .map_err(sqlite_err("read_global_row_version"))?,
+                None => conn
+                    .query_row(
+                        r#"
+                        SELECT id, version, kind, content_hash, file_rel_path, definition_sql,
+                               row_count, column_count, file_size, analytics_table
+                        FROM analytics_resources
+                        WHERE name = ?1 AND scope = 'global' AND deleted_at IS NULL
+                        ORDER BY version DESC LIMIT 1
+                        "#,
+                        rusqlite::params![name],
+                        map_distribution_row,
+                    )
+                    .optional()
+                    .map_err(sqlite_err("read_global_row"))?,
+            };
+            Ok(row)
+        })
+    }
+
     /// 分发（全局 → 项目）：读全局登记 + 全局 DuckDB 表，落到当前项目库。
     ///
     /// 语义（§13.6）：跨项目唯一法定路径 = 项目 → 全局 → 项目，项目 ↔ 项目禁止直传。
@@ -19,41 +93,45 @@ impl GlobalInstanceStore {
         name: &str,
         target: Option<&str>,
     ) -> Result<DistributeOutcome, InstanceOpError> {
-        
+        self.distribute_inner(project, project_root, name, None, target)
+            .await
+    }
+
+    /// 按**指定全局版本**分发到项目（固化引用版本用）。
+    ///
+    /// 与 [`Self::distribute`] 的唯一区别是版本来源：这里不取“当前最新”，
+    /// 而是按 `name + global_version` 找登记行；目标名必须显式给出，避免覆盖项目同名资产。
+    pub async fn distribute_version(
+        &self,
+        project: &ProjectDuckConn,
+        project_root: &Path,
+        name: &str,
+        global_version: i32,
+        target: &str,
+    ) -> Result<DistributeOutcome, InstanceOpError> {
+        self.distribute_inner(
+            project,
+            project_root,
+            name,
+            Some(global_version),
+            Some(target),
+        )
+        .await
+    }
+
+    async fn distribute_inner(
+        &self,
+        project: &ProjectDuckConn,
+        project_root: &Path,
+        name: &str,
+        selected_version: Option<i32>,
+        target: Option<&str>,
+    ) -> Result<DistributeOutcome, InstanceOpError> {
         // 项目侧落库名：未填改名 = 沿用全局名（§13.6 冲突询问「改名」分支才带新名）。
         let target_name = target.unwrap_or(name).to_string();
 
-        // ---- 读全局登记行（最新版本）----
-        let global_row = self.with_sqlite(|conn| {
-            let row = conn
-                .query_row(
-                    r#"
-                    SELECT id, version, kind, content_hash, file_rel_path, definition_sql,
-                           row_count, column_count, file_size, analytics_table
-                    FROM analytics_resources
-                    WHERE name = ?1 AND scope = 'global' AND deleted_at IS NULL
-                    ORDER BY version DESC LIMIT 1
-                    "#,
-                    rusqlite::params![name],
-                    |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, i32>(1)?,
-                            row.get::<_, String>(2)?,
-                            row.get::<_, Option<String>>(3)?,
-                            row.get::<_, Option<String>>(4)?,
-                            row.get::<_, Option<String>>(5)?,
-                            row.get::<_, Option<i32>>(6)?,
-                            row.get::<_, Option<i32>>(7)?,
-                            row.get::<_, Option<i64>>(8)?,
-                            row.get::<_, Option<String>>(9)?,
-                        ))
-                    },
-                )
-                .optional()
-                .map_err(sqlite_err("read_global_row"))?;
-            Ok(row)
-        })?;
+        // ---- 读全局登记行（最新版本，或调用方指定的历史版本）----
+        let global_row = self.read_global_row(name, selected_version)?;
         let (
             global_id,
             global_version,
@@ -176,19 +254,34 @@ impl GlobalInstanceStore {
             let _ = std::fs::remove_file(&tmp);
             project_result?;
 
-            let (rows, cols) = project_table_stats(&project, &target_name).await?;
-            self.register_project_table(
-                project,
-                &target_name,
-                global_id.as_str(),
-                global_version,
-                global_hash.as_deref(),
-                definition_sql.as_deref(),
-                rows,
-                cols,
-            )
-            .await
-            .map_err(InstanceOpError::Core)?
+            let (rows, cols) = match project_table_stats(&project, &target_name).await {
+                Ok(stats) => stats,
+                Err(error) => {
+                    // 建表成功但统计失败：不留半成品表。
+                    drop_project_table_if_exists(project, Some(&target_name)).await;
+                    return Err(InstanceOpError::Core(error));
+                }
+            };
+            match self
+                .register_project_table(
+                    project,
+                    &target_name,
+                    global_id.as_str(),
+                    global_version,
+                    global_hash.as_deref(),
+                    definition_sql.as_deref(),
+                    rows,
+                    cols,
+                )
+                .await
+            {
+                Ok(shape) => shape,
+                Err(error) => {
+                    // 登记失败也回滚刚建的项目表，避免「表在、资产不在」。
+                    drop_project_table_if_exists(project, Some(&target_name)).await;
+                    return Err(InstanceOpError::Core(error));
+                }
+            }
         };
 
         // 落好了再记账：全局侧要看得到「我被哪些项目用过、用到第几版」。
