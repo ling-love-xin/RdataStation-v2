@@ -244,6 +244,16 @@ impl ResourcesHost for ResourceHost {
     fn request_distribute_from_global(&self, name: &str, _window: &mut Window, cx: &mut App) {
         detail_actions::request_distribute_from_global(self, name, _window, cx);
     }
+
+    /// 从全局实例删除（刀 B）：确认后入队，只清全局那一份，已分发副本不动。
+    fn request_delete_global(
+        &self,
+        detail: &ArchiveDetail,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        detail_actions::request_delete_global(self, detail, window, cx);
+    }
     fn is_reference_stale(&self, resource_id: &str) -> bool {
         return detail_actions::is_reference_stale(self, resource_id);
     }

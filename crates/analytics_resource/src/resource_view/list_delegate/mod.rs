@@ -213,6 +213,7 @@ impl ListDelegate for ArchiveListDelegate {
         let can_stats = open_detail.as_ref().is_some_and(can_view_stats);
         let can_checkout_row = can_checkout(&ctx);
         let can_distribute_row = can_distribute(&ctx);
+        let can_delete_global_row = crate::model::can_delete_global(&ctx);
         let can_promote_row = can_promote(&ctx);
         let can_rename_row = can_rename(&ctx);
         let can_edit_tags_row = can_edit_tags(&ctx);
@@ -232,6 +233,7 @@ impl ListDelegate for ArchiveListDelegate {
             can_checkout: can_checkout_row,
             can_stats,
             can_distribute: can_distribute_row,
+            can_delete_global: can_delete_global_row,
             can_promote: can_promote_row,
             can_rename: can_rename_row,
             can_edit_tags: can_edit_tags_row,

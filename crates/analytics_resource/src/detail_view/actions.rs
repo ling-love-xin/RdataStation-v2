@@ -45,8 +45,10 @@ pub(super) fn render_actions(
         let ctx = detail.action_context(actions.read_only, 1);
         if detail.scope == RowScope::Global {
             let detail_for_distribute = detail.clone();
+            let detail_for_delete = detail.clone();
             // 分发要往本项目库写表：只读项目 / 本体缺失都挡住（与列表右键菜单同一判据）。
             let (can_distribute, distribute_hint) = distribute_affordance(&ctx);
+            let can_delete_global = crate::model::can_delete_global(&ctx);
             out.push(
                 div()
                     .v_flex()
@@ -73,7 +75,46 @@ pub(super) fn render_actions(
                                 }),
                         ),
                     )
-                    .child(div().text_xs().text_color(muted).child(distribute_hint)),
+                    .child(div().text_xs().text_color(muted).child(distribute_hint))
+                    // 危险区（刀 B）：删除的是**全局这一份**，已分发副本不受影响。
+                    .child(
+                        div()
+                            .v_flex()
+                            .w_full()
+                            .gap_1()
+                            .mt_2()
+                            .pt_2()
+                            .border_t(ui::HAIRLINE)
+                            .border_color(border)
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(tone_color.danger)
+                                    .child(tr("危险区")),
+                            )
+                            .child(
+                                Button::new("archive-detail-delete-global")
+                                    .with_variant(ButtonVariant::Danger)
+                                    .label(tr("从全局实例删除…"))
+                                    .disabled(!can_delete_global)
+                                    .on_click({
+                                        let host = host.clone();
+                                        move |_, window, cx| {
+                                            host.request_delete_global(
+                                                &detail_for_delete,
+                                                window,
+                                                cx,
+                                            )
+                                        }
+                                    }),
+                            )
+                            .child(
+                                div().text_xs().text_color(muted).child(tr(
+                                    "删全局表与登记；已分发到项目的副本不受影响",
+                                )),
+                            ),
+                    ),
             );
         } else {
             let missing = detail.status == ArchiveStatus::Missing;

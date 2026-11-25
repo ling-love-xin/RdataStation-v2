@@ -1,6 +1,7 @@
 //! SQLite / DuckDB 连接助手。
 
 use super::*;
+use rusqlite::OptionalExtension as _;
 
 impl GlobalInstanceStore {
     /// 全局 SQLite 操作（懒加载打开全局库；同步段完成即放锁）。
@@ -103,6 +104,23 @@ impl GlobalInstanceStore {
             Ok(())
         })
         .await
+    }
+
+    /// 同名链最新一版的登记 id（分发写完项目行后，用来记 `derived_from` 的上游）。
+    ///
+    /// 只看未软删行（分发拿到的就是当前那一版）；软删行是覆盖升级留下的历史，不参与。
+    pub async fn latest_global_id(&self, name: &str) -> Result<Option<String>, CoreError> {
+        self.with_sqlite(|conn| {
+            conn.query_row(
+                "SELECT id FROM analytics_resources \
+                 WHERE name = ?1 AND scope = 'global' AND deleted_at IS NULL \
+                 ORDER BY version DESC LIMIT 1",
+                rusqlite::params![name],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(sqlite_err("latest_global_id"))
+        })
     }
 
     /// 按 `KeepVersions` 裁剪全局同名链的**历史版本表**（只删内容，不删登记与版本快照）。

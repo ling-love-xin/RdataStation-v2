@@ -137,6 +137,14 @@ pub fn can_move_to_group(ctx: &ActionContext) -> bool {
     ctx.project() && !ctx.read_only
 }
 
+/// 从全局实例删除（刀 B）：全局行、单选、项目非只读。
+///
+/// **不看 `status`**：本体缺失（全局表被手工删 / 版本裁剪过）也要允许删——
+/// 这正是清理脏登记的手段；表已不在时 `DROP ... IF EXISTS` 是空操作。
+pub fn can_delete_global(ctx: &ActionContext) -> bool {
+    !ctx.project() && ctx.single() && !ctx.read_only
+}
+
 /// 移入回收站（列表 / 多选）：项目行都可以——本体缺失的行也能删，那正是清理脏登记的手段。
 pub fn can_delete_row(ctx: &ActionContext) -> bool {
     ctx.project()
@@ -165,6 +173,15 @@ mod tests {
         assert!(!can_edit_tags(&ctx));
         assert!(!can_move_to_group(&ctx));
         assert!(!can_delete_row(&ctx));
+        assert!(can_delete_global(&ctx), "全局行可以从全局实例删除（刀 B）");
+    }
+
+    #[test]
+    fn read_only_project_blocks_deleting_a_global_asset() {
+        let mut ctx = ActionContext::project_row();
+        ctx.scope = RowScope::Global;
+        ctx.read_only = true;
+        assert!(!can_delete_global(&ctx));
     }
 
     #[test]

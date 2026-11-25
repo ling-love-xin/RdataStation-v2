@@ -994,3 +994,97 @@ async fn g016_version_table_pruning_keeps_current_and_says_why() {
 
     let _ = fs::remove_dir_all(&env.dir);
 }
+
+/// 刀 B：删除全局资产 = 删各版表 + 登记 + 版本快照 + 分发回执，**项目副本不动**。
+#[tokio::test]
+async fn g017_delete_global_drops_tables_and_registry_only() {
+    let env = create_test_env().await;
+    let csv = write_csv(&env.dir);
+    let req = promote_req("delete_me", &csv, PromoteKind::DataFile);
+
+    let first = env.store.promote(&req).await.expect("promote v1");
+    assert_eq!(first.version, 1);
+    let first_table = read_global_table(&env, "delete_me").expect("v1 table");
+    let second = env
+        .store
+        .promote_overwrite(&req)
+        .await
+        .expect("promote v2");
+    assert_eq!(second.version, 2);
+    let second_table = read_global_table(&env, "delete_me").expect("v2 table");
+
+    // 造一条分发回执（只验"计数与清理"，不必真开项目库分发一次）。
+    env.store
+        .with_sqlite(|conn| {
+            conn.execute(
+                "INSERT INTO analytics_resource_dispatch \
+                 (id, global_id, global_name, project_root, target_name, version, shape) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'table')",
+                rusqlite::params![
+                    Uuid::new_v4().simple().to_string(),
+                    first.resource_id,
+                    "delete_me",
+                    "/tmp/other_project",
+                    "delete_me_copy",
+                    2,
+                ],
+            )
+            .map_err(sqlite_err("insert_dispatch"))
+        })
+        .expect("insert dispatch");
+
+    let outcome = env.store.delete_global("delete_me").await.expect("delete");
+    assert_eq!(outcome.name, "delete_me");
+    assert_eq!(outcome.versions, 2, "两版登记都要删");
+    assert_eq!(outcome.tables, 2, "一版一张表，两张都要删");
+    assert_eq!(outcome.projects, 1, "回执在删除前数过");
+
+    assert!(
+        !env.store.table_exists(&first_table).await.expect("probe v1"),
+        "v1 表应已删除"
+    );
+    assert!(
+        !env.store.table_exists(&second_table).await.expect("probe v2"),
+        "v2 表应已删除"
+    );
+
+    let (rows, versions, dispatches) = env
+        .store
+        .with_sqlite(|conn| {
+            let rows: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM analytics_resources \
+                     WHERE name = 'delete_me' AND scope = 'global'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(sqlite_err("count_rows"))?;
+            let versions: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM analytics_resource_versions \
+                     WHERE resource_id = ?1",
+                    rusqlite::params![first.resource_id],
+                    |row| row.get(0),
+                )
+                .map_err(sqlite_err("count_versions"))?;
+            let dispatches: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM analytics_resource_dispatch \
+                     WHERE global_name = 'delete_me'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(sqlite_err("count_dispatch"))?;
+            Ok((rows, versions, dispatches))
+        })
+        .expect("count leftovers");
+    assert_eq!((rows, versions, dispatches), (0, 0, 0));
+
+    // 删过的名字再删一次：明确「资源不存在」，不是静默成功。
+    assert!(matches!(
+        env.store.delete_global("delete_me").await,
+        Err(InstanceOpError::NotFound { .. })
+    ));
+
+    let _ = fs::remove_dir_all(&env.dir);
+}

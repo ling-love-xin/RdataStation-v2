@@ -204,6 +204,8 @@ pub trait ResourcesHost: 'static {
     ///
     /// 只带全局资源的**显示名**（分发只认全局登记的名字；本体在全局 DuckDB）。
     fn request_distribute_from_global(&self, name: &str, window: &mut Window, cx: &mut App);
+    /// 从全局实例删除（刀 B）：删全局各版表与登记，已分发到项目的副本不受影响。
+    fn request_delete_global(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App);
 
     /// reference 快照是否已失效（打开时懒校验发现源内容与登记指纹不一致，§12.1.1 ②）。
     ///

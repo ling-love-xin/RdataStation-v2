@@ -47,7 +47,7 @@ use archive::{
     ArchiveJob, CheckoutJob, TrashActionJob, TrashJob, TrashListJob, UndoJob, load_trash,
     reload_trash_after, run_archive, run_checkout, run_trash, run_trash_action, run_undo,
 };
-use global::{DistributeJob, PromoteJob, run_distribute, run_promote};
+use global::{DeleteGlobalJob, DistributeJob, PromoteJob, run_delete_global, run_distribute, run_promote};
 use index::{
     IndexRepairActionJob, IndexScanJob, load_index_report, reload_index_scan_after,
     run_repair_action,
@@ -95,6 +95,7 @@ pub(crate) enum Job {
     SetAlias(SetAliasJob),
     Promote(PromoteJob),
     Distribute(DistributeJob),
+    DeleteGlobal(DeleteGlobalJob),
 }
 
 pub enum OpOutcome {
@@ -140,6 +141,14 @@ pub enum OpOutcome {
         name: String,
         version: i32,
         shape: crate::global::DistributeShape,
+    },
+    /// 已从全局实例删除：资产名 / 版本数 / 表数 / 曾分发过的项目数
+    /// （回执要说明"这些项目里的副本还在"）。
+    GlobalDeleted {
+        name: String,
+        versions: usize,
+        tables: usize,
+        projects: usize,
     },
     /// 失败：动作名 + 原因（原因原样来自服务层，已含可操作信息）。
     Failed {
@@ -400,6 +409,12 @@ fn handle_job(rt: &tokio::runtime::Runtime, job: Job) {
                 // 分发把全局表落进项目库：项目列表会出现新行，必须重取。
                 refresh_after_op(&rt, job.project_root, false);
             }
+            Job::DeleteGlobal(job) => {
+                let outcome = rt.block_on(run_delete_global(&job));
+                *lock(&jobs().op_result) = Some(outcome);
+                // 全局行从项目面板的「全局」分区消失：重取一次快照。
+                refresh_after_op(&rt, job.project_root, false);
+            }
         }
 }
 
@@ -421,7 +436,7 @@ pub use archive::{
     enqueue_archive, enqueue_checkout, enqueue_trash, enqueue_trash_action, enqueue_trash_list,
     enqueue_undo,
 };
-pub use global::{enqueue_distribute, enqueue_promote};
+pub use global::{enqueue_delete_global, enqueue_distribute, enqueue_promote};
 pub use index::enqueue_index_repair_action;
 pub use index::enqueue_index_scan;
 pub use rename::{enqueue_rename, enqueue_set_alias};

@@ -174,6 +174,11 @@ impl ResourcesHost for RecordingHost {
     fn request_distribute_from_global(&self, name: &str, _window: &mut Window, _cx: &mut App) {
         self.calls.borrow_mut().push(format!("distribute:{name}"));
     }
+    fn request_delete_global(&self, detail: &ArchiveDetail, _window: &mut Window, _cx: &mut App) {
+        self.calls
+            .borrow_mut()
+            .push(format!("delete-global:{}", detail.name));
+    }
     fn is_reference_stale(&self, _resource_id: &str) -> bool {
         false
     }

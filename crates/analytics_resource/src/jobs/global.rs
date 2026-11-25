@@ -30,6 +30,39 @@ pub(crate) struct DistributeJob {
     pub(crate) overwrite: bool,
 }
 
+/// 一次「从全局实例删除」任务（刀 B；只清全局这一份，已分发副本不动）。
+pub(crate) struct DeleteGlobalJob {
+    pub(crate) project_root: PathBuf,
+    pub(crate) name: String,
+}
+
+/// 删除全局资产（工作线程上执行）。
+pub(crate) async fn run_delete_global(job: &DeleteGlobalJob) -> OpOutcome {
+    use crate::global::GlobalInstanceStore;
+
+    let gstore = match GlobalInstanceStore::production().await {
+        Ok(store) => store,
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action: "删除全局资产",
+                reason: format!("打开全局系统库失败：{reason}"),
+            };
+        }
+    };
+    match gstore.delete_global(&job.name).await {
+        Ok(outcome) => OpOutcome::GlobalDeleted {
+            name: outcome.name,
+            versions: outcome.versions,
+            tables: outcome.tables,
+            projects: outcome.projects,
+        },
+        Err(reason) => OpOutcome::Failed {
+            action: "删除全局资产",
+            reason: reason.to_string(),
+        },
+    }
+}
+
 /// 升级到全局（工作线程上执行；§13）。
 ///
 /// 本体 = `{项目}/resources/<payload_rel_path>`（File 档）；`content_hash` 用
@@ -300,5 +333,14 @@ pub fn enqueue_distribute(
         name,
         target,
         overwrite,
+    }));
+}
+
+/// 提交一次「从全局实例删除」（刀 B；确认框之后）。
+pub fn enqueue_delete_global(project_root: PathBuf, name: String) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
+    let _ = jobs().tx.send(Job::DeleteGlobal(DeleteGlobalJob {
+        project_root,
+        name,
     }));
 }

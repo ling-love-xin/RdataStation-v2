@@ -17,6 +17,8 @@ pub(super) struct RowMenuParams {
     pub(super) can_checkout: bool,
     pub(super) can_stats: bool,
     pub(super) can_distribute: bool,
+    /// 从全局实例删除（刀 B；只对全局行，项目行不摆这一项）。
+    pub(super) can_delete_global: bool,
     pub(super) can_promote: bool,
     pub(super) can_rename: bool,
     pub(super) can_edit_tags: bool,
@@ -51,6 +53,7 @@ pub(super) fn build(
     let can_checkout = p.can_checkout;
     let can_stats = p.can_stats;
     let can_distribute = p.can_distribute;
+    let can_delete_global = p.can_delete_global;
     let can_promote = p.can_promote;
     let can_rename = p.can_rename;
     let can_edit_tags = p.can_edit_tags;
@@ -96,6 +99,26 @@ pub(super) fn build(
                                     }
                                 }),
                         );
+                        // 「从全局实例删除…」（刀 B）：只在全局行摆；删的是全局这一份，
+                        // 已分发到项目的副本不受影响。判据见 `can_delete_global`。
+                        if open_detail
+                            .as_ref()
+                            .is_some_and(|detail| detail.scope == crate::model::RowScope::Global)
+                        {
+                            menu = menu.item(
+                                PopupMenuItem::new(tr("从全局实例删除…"))
+                                    .disabled(!can_delete_global)
+                                    .on_click({
+                                        let host = host.clone();
+                                        let detail = open_detail.clone();
+                                        move |_, window, cx| {
+                                            if let Some(detail) = detail.as_ref() {
+                                                host.request_delete_global(detail, window, cx);
+                                            }
+                                        }
+                                    }),
+                            );
+                        }
                         menu = menu.item(
                             PopupMenuItem::new(tr("查看统计"))
                                 .disabled(!can_stats || multi_count > 1)

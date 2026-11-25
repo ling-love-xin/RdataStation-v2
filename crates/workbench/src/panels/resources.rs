@@ -690,6 +690,14 @@ impl SidebarPanel {
                     analytics_resource::global::DistributeShape::File => "重建为文件",
                 }
             ),
+            resource_jobs::OpOutcome::GlobalDeleted {
+                name,
+                versions,
+                tables,
+                projects,
+            } => format!(
+                "资产库：已从全局删除「{name}」（{versions} 个版本 / {tables} 张表）；曾分发到 {projects} 个项目，那些副本仍在"
+            ),
             resource_jobs::OpOutcome::Failed { action, reason } => {
                 format!("资产库：{action}失败：{reason}")
             }
