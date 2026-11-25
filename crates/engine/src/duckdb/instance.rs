@@ -128,6 +128,8 @@ struct InstanceState {
     /// owner（文档 / 源连接 / 通道）→ 会话 id：同一 owner 再要会话时复用同一条，
     /// 这样"同一份文档两次执行"不会每次都换一条 `TEMP` 世界
     owners: HashMap<String, String>,
+    /// 源连接 id → 实际挂载别名（冲突时可能是 `name_2`；界面要按这个查表）
+    conn_alias: HashMap<String, String>,
     mounts: MountRegistry,
     temps: Vec<TempEntry>,
     next_session: u64,
@@ -270,6 +272,7 @@ impl AnalysisInstance {
             state: Mutex::new(InstanceState {
                 sessions: HashMap::new(),
                 owners: HashMap::new(),
+                conn_alias: HashMap::new(),
                 mounts: MountRegistry::default(),
                 temps: Vec::new(),
                 next_session: 0,
@@ -449,16 +452,52 @@ impl AnalysisInstance {
             .state
             .lock()
             .map_err(|_| "实例状态锁被污染".to_string())?;
+        // 同一个源重复挂 → 回原别名（幂等；`rds_src` 这类固定别名尤其要紧）
+        if let Some(alias) = state.conn_alias.get(conn_id) {
+            return Ok(alias.clone());
+        }
         let alias = state.mounts.reserve(wanted, conn_id)?;
+        state.conn_alias.insert(conn_id.to_string(), alias.clone());
         // 并发下可能刚有人用同一别名挂了 ATTACH：这里只登记不重复挂，
-        // 真挂载由 federation::session 负责（它按 alias 判重）。
+        // 真挂载由 federation::session / 调用方负责（按别名判重）。
         Ok(alias)
+    }
+
+    /// 某个源连接此刻挂在实例上的别名（**纯内存读**；没挂过就是 `None`）。
+    ///
+    /// 数据对象面板按它查表清单：挂载是实例级事实，不该再由"那个源自己有没有会话"回答。
+    pub fn alias_for_conn(&self, conn_id: &str) -> Option<String> {
+        self.state.lock().ok()?.conn_alias.get(conn_id).cloned()
+    }
+
+    /// 列出某个别名下的表 / 视图（**事件路径**：要查 DuckDB 元数据）。
+    ///
+    /// 用控制连接查——它不属于任何会话，不受某条会话的 `USE` / `TEMP` 影响；
+    /// 挂载是实例级事实，所以这里看到的正是"实例此刻能查到什么"。
+    pub fn list_tables_of_alias(&self, alias: &str) -> Result<Vec<String>, String> {
+        let conn = self
+            .control
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut statement = conn
+            .prepare(
+                "SELECT table_name FROM duckdb_tables() WHERE database_name = ? \
+                 UNION ALL SELECT view_name FROM duckdb_views() WHERE database_name = ?",
+            )
+            .map_err(|error| format!("列不出 {alias} 的表：{error}"))?;
+        let rows = statement
+            .query_map([alias, alias], |row| row.get::<_, String>(0))
+            .map_err(|error| format!("列不出 {alias} 的表：{error}"))?;
+        let mut tables: Vec<String> = rows.filter_map(Result::ok).collect();
+        tables.sort();
+        Ok(tables)
     }
 
     /// 放掉别名（卸载源时调）。
     pub fn release_alias(&self, alias: &str) {
         if let Ok(mut state) = self.state.lock() {
             state.mounts.release(alias);
+            state.conn_alias.retain(|_, value| value != alias);
         }
     }
 
@@ -843,7 +882,7 @@ mod tests {
             .expect("A 的 TEMP 不跟着消失");
     }
 
-    /// 别名冲突后到者让位，且底座名字不许被占。
+    /// 别名冲突后到者让位，且底座名字不许被占；连接 → 别名映射要跟着走。
     #[test]
     fn alias_conflicts_are_resolved_by_the_instance_single_point() {
         let instance = instance("t_alias");
@@ -851,7 +890,14 @@ mod tests {
         assert_eq!(instance.reserve_alias("mysql_src", "conn-2").expect("第二个"), "mysql_src_2");
         assert_eq!(instance.reserve_alias("mysql_src", "conn-1").expect("同一源重挂"), "mysql_src");
         assert!(instance.reserve_alias("analytics", "conn-3").is_err(), "底座名要拒");
+
+        // 面板按连接 id 查挂载事实：映射必须与 reserve 的结果一致
+        assert_eq!(instance.alias_for_conn("conn-1").as_deref(), Some("mysql_src"));
+        assert_eq!(instance.alias_for_conn("conn-2").as_deref(), Some("mysql_src_2"));
+        assert_eq!(instance.alias_for_conn("conn-9"), None);
+
         instance.release_alias("mysql_src");
+        assert_eq!(instance.alias_for_conn("conn-1"), None, "放掉别名要同时清映射");
         assert_eq!(instance.reserve_alias("mysql_src", "conn-4").expect("放掉后可用"), "mysql_src");
     }
 

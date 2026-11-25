@@ -63,14 +63,25 @@
 | 步 | 内容 | 状态 |
 | --- | --- | --- |
 | 1 | `AnalysisInstance` / `AnalysisSession` / `MountRegistry` / `rds_tmp` 登记册 / 写车道 / 超时 | ✅ `a9f0acc6`（7 用例通过） |
-| 2 | `AnalysisChannel` 收成两档（`Driver` 源直连 / `Instance` 实例内），删 `Federated{owner}` 的 per-owner 会话与 `accel` 独立连接 | ⬜ 待做（调用点在 `editor/src/ports/editor_exec`、`insight`、工作台通道展示） |
+| 2a | kernel 改道：`SessionHandle::Instance`，加速 / 联邦通道都走实例会话 + `mount_sources` | ✅ `11ae4fec` |
+| 2b | 底座挂实例 + 换项目 `refresh_bases` | ✅ `009baedf` |
+| 2c | 联邦会话门面化：`FederatedSession` 只持有 `Arc<AnalysisSession>`，不再自建内存库 | ✅ `fa71c4f6` |
+| 2d | 加速档别名按源唯一（`reserve_alias` + 实例 `conn_alias` 映射 + `USE` 实际别名） | ✅ 本刀 |
+| 2e | `accel` 模块退役（删 `AccelSession` / `ensure_session` 缓存）与工作台消费方迁移 | ⬜ 阻塞：本分支基线缺他人未提交的 `editor_files::attach` 改动，`rds-workbench` 在此分支编不过 |
+| 2f | `SessionHandle::ProcessDb` / `Accelerated` / `Federated` 三个旧变体删除；`ProcessDuckDb` 取样落 `rds_tmp` | ⬜ 与 3 同一刀（取样表与下游读端必须同处一个实例） |
 | 3 | `rds_tmp` 自动登记（结果集保存 / 洞察取样落 `rds_tmp` 时登记） | ⬜ |
 | 4 | 保护接线（超时值从设置读、面板显示"被中断"） | ⬜ |
 | 5 | 取库脚本与文档（2.0.1 资产改名、存储格式单向） | ✅ |
 
+**2d 的口径变化（要知道的一处契约变动）**：加速档的别名从"永远是 `rds_src`"变成"按源唯一"。第一条源仍是
+`rds_src`，第二条起退为 `rds_src_2`、`rds_src_3`；未限定名由会话 `USE` 实际别名保证照旧可用，
+**但手写 `rds_src.表名` 在第二条源上会失效**——面板按 `alias_for_conn(conn_id)` 显示真实别名。
+改这一刀的直接原因：单实例下所有加速源共用 `rds_src` 时，第二个 `ATTACH` 会命中"已挂载"判定，
+静默指到第一个源（多源查询结果串库的真实 bug）。
+
 ## 6. 验收口径
 
-- `cargo test -p rds-engine --lib` 全绿（2.0.1 基线 336 + 本层 7）；
+- `cargo test -p rds-engine --lib` 全绿（2.0.1 基线 336 + 本层 8 → 当前 **344 passed / 0 failed**）；
 - 真机：两个编辑器会话，A 建 `CREATE TABLE` → B 刷新可见；A 建 `CREATE TEMP TABLE` → B 报
   `Catalog Error`；两会话都能读 `rds_tmp`；面板能列 `rds_tmp` 并手动清理；
 - 一句 `range(1e5) × range(1e5)` 的查询在 30ms 超时下被中断，会话仍可继续用。

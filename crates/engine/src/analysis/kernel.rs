@@ -188,10 +188,15 @@ pub fn open(plan: &SessionPlan, prepared: &PreparedMounts) -> Result<SessionHand
             let session = instance
                 .ensure_session(&owner, "本地加速")
                 .map_err(invalid)?;
-            // 加速档的别名是固定的 `rds_src`（与旧加速档一致：SQL 里的限定名不用跟着会话变）
+            // 别名必须**按源唯一**：单实例下两条加速源不能都叫 `rds_src`，否则第二个
+            // `ATTACH` 会命中"已挂"判定并静默指到第一个源。冲突时由实例单点让位
+            // （`rds_src` → `rds_src_2`），并把实际别名记进实例的 `conn_alias` 供面板查表。
+            let alias = instance
+                .reserve_alias(accel::SOURCE_ALIAS, &prepared_accel.source.conn_id)
+                .map_err(invalid)?;
             let source = FederatedSource {
                 conn_id: prepared_accel.source.conn_id.clone(),
-                alias: accel::SOURCE_ALIAS.to_string(),
+                alias: alias.clone(),
                 kind: prepared_accel.source.kind,
                 connection_string: prepared_accel.source.connection_string.clone(),
                 secret: None,
@@ -206,6 +211,8 @@ pub fn open(plan: &SessionPlan, prepared: &PreparedMounts) -> Result<SessionHand
                     return Err(invalid(reason.clone()));
                 }
             }
+            // 未限定名要落在这一条源上（旧加速档同样 `USE rds_src`）
+            session.use_catalog(&alias).map_err(invalid)?;
             Ok(SessionHandle::Instance {
                 session,
                 label: "accelerated",
