@@ -32,7 +32,7 @@ use super::Shared;
 use super::shared::QueryRequest;
 // 跨模块：导航拖拽载荷（落点转成「打开查询」请求，见 `Shared::request_query`）/ 属性面板状态。
 use database::nav_view::NavDragPayload;
-use scratchpad::{ScratchpadDiffView, scratchpad_view::render_scratchpad_diff_pane};
+use scratchpad::scratchpad_view::render_scratchpad_diff_pane;
 
 /// 中央内容区面板。
 pub struct EditorPanel {
@@ -53,8 +53,6 @@ pub struct EditorPanel {
     nav_tables: Rc<RefCell<Vec<NavTable>>>,
     /// 已消费的失效戳（与 `Shared` 逐帧对比，不等则丢弃自持缓存）。
     nav_cache_epoch: u64,
-    /// M5：草稿箱冲突 Diff（原型 §4.5「查看差异」→ 落中央编辑区；消解动作在左侧冲突条上）。
-    scratchpad_diff: Rc<RefCell<Option<ScratchpadDiffView>>>,
     /// 分析库元数据树是否正在后台加载（避免 render 每帧重复入队）。
     nav_tree_loading: Cell<bool>,
     /// 工作台 tab「业务数据概览」的计数快照：后台线程取数（`services::overview`），
@@ -97,7 +95,6 @@ impl EditorPanel {
             nav_for: Rc::new(RefCell::new(None)),
             nav_tables: Rc::new(RefCell::new(Vec::new())),
             nav_cache_epoch: 0,
-            scratchpad_diff: Rc::new(RefCell::new(None)),
             nav_tree_loading: Cell::new(false),
             overview: None,
             overview_task: None,
@@ -282,16 +279,6 @@ impl EditorPanel {
             });
         })
         .detach();
-    }
-
-    /// 投递草稿箱冲突 Diff（`EditorBridge::show_diff`；`None` = 关闭）。
-    pub(super) fn set_scratchpad_diff(
-        &mut self,
-        view: Option<ScratchpadDiffView>,
-        cx: &mut Context<Self>,
-    ) {
-        *self.scratchpad_diff.borrow_mut() = view;
-        cx.notify();
     }
 }
 
@@ -584,18 +571,15 @@ impl Render for EditorPanel {
         // （「搜索: query」标签页，见 `SearchResultsHostPanel` / `Shared::scratchpad_search`），
         // 与打开的文档 tab 并列（VSCode 全局搜索形态）；本面板不再承载搜索结果。
 
-        // M5 草稿箱冲突 Diff（原型 §4.5：冲突时「查看差异」→ 落中央编辑区）。
+        // M5 草稿箱冲突 Diff（状态归 Shared；出口暂留本面板，后续随形态选择挂宿主层）。
         {
-            let diff = self.scratchpad_diff.borrow();
+            let diff = self.shared.scratchpad_diff.borrow();
             if let Some(diff) = diff.as_ref() {
                 let shared = self.shared.clone();
-                let diff_state = self.scratchpad_diff.clone();
-                let entity = entity.clone();
                 let clear =
                     move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
-                        *diff_state.borrow_mut() = None;
+                        *shared.scratchpad_diff.borrow_mut() = None;
                         shared.notify_host(app);
-                        entity.update(app, |_, cx| cx.notify());
                     };
                 content = content.child(render_scratchpad_diff_pane(diff, theme, clear));
             }

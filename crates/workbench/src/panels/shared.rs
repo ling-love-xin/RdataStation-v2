@@ -63,8 +63,6 @@ pub struct EditorBridge {
     pub edit_connection: Rc<dyn Fn(String, &mut Window, &mut App)>,
     /// 打开「新建数据源连接」对话框。
     pub new_connection: Rc<dyn Fn(&mut Window, &mut App)>,
-    /// 投递草稿箱冲突 Diff（`None` = 关闭）：差异同在中央编辑区展。
-    pub show_diff: Rc<dyn Fn(Option<ScratchpadDiffView>, &mut App)>,
 }
 
 /// 「在编辑器中打开」请求：路径 + 只读维度 + 可选跳转目标。
@@ -343,6 +341,10 @@ pub struct Shared {
     ///
     /// 信息就几行，不走中央编辑区面板，挂宿主 overlay 弹窗（用户点名 2026-10-10）。
     pub scratchpad_file_info: Rc<RefCell<Option<ScratchpadFileInfoView>>>,
+    /// M5 草稿箱冲突 Diff 载荷（`None` = 关闭）。状态归 Shared（与
+    /// `scratchpad_file_info` 同型）；展示出口暂留中央编辑区面板读取，后续随形态
+    /// 选择挂宿主层。
+    pub scratchpad_diff: Rc<RefCell<Option<ScratchpadDiffView>>>,
     /// M6：详情「版本时间线」里选中的那一版（资产 id, 版本号）。
     ///
     /// 这是**窗口级 UI 状态**：详情是只读快照，选中“我在看哪一版”不该进快照（那会让
@@ -498,6 +500,7 @@ impl Shared {
             project: Rc::new(RefCell::new(None)),
             scratchpad_bridge: Rc::new(RefCell::new(None)),
             scratchpad_file_info: Rc::new(RefCell::new(None)),
+            scratchpad_diff: Rc::new(RefCell::new(None)),
             detail_version: Rc::new(RefCell::new(None)),
             open_file_request: Rc::new(RefCell::new(None)),
             reveal_request: Rc::new(RefCell::new(None)),
@@ -725,11 +728,10 @@ impl Shared {
         self.notify_host(cx);
     }
 
-    /// 投递草稿箱冲突 Diff（`None` = 关闭）；展示归中央编辑区。
+    /// 投递草稿箱冲突 Diff（`None` = 关闭）；状态归 Shared，展示出口暂留中央编辑区面板。
     pub fn show_scratchpad_diff(&self, view: Option<ScratchpadDiffView>, cx: &mut App) {
-        if let Some(bridge) = self.editor_bridge.borrow().clone() {
-            (*bridge.show_diff)(view, cx);
-        }
+        *self.scratchpad_diff.borrow_mut() = view;
+        self.notify_host(cx);
     }
 
     /// 发布元数据搜索结果（面板后台泵写入；`None` = 清空显示空态）。

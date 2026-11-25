@@ -578,7 +578,6 @@ pub fn install_host_redraw_bridge<T: Render + 'static>(
 pub fn install_editor_bridge(shared: &Shared, editor: Entity<EditorPanel>) {
     let editor_for_edit = editor.clone();
     let editor_for_new = editor.clone();
-    let editor_for_diff = editor.clone();
     *shared.editor_bridge.borrow_mut() = Some(EditorBridge {
         edit_connection: Rc::new(move |id: String, window: &mut Window, cx: &mut App| {
             editor_for_edit.update(cx, |panel, cx| {
@@ -593,8 +592,6 @@ pub fn install_editor_bridge(shared: &Shared, editor: Entity<EditorPanel>) {
         // 搜索结果同样已升为中央 Dock 独立 tab（「搜索: query」，2026-10-10 VSCode 对齐）：
         // `Shared::show_scratchpad_search` 直接存 `Shared::scratchpad_search` 并 notify_host，
         // 由 `WorkbenchView::render` 惰性建面板（`ensure_search_results_panel`），不再走编辑区桥。
-        show_diff: Rc::new(move |view: Option<ScratchpadDiffView>, cx: &mut App| {
-            editor_for_diff.update(cx, |panel, cx| panel.set_scratchpad_diff(view, cx));
-        }),
+        // 冲突 Diff 状态也已归 `Shared::scratchpad_diff`（见 `show_scratchpad_diff`），不经本桥。
     });
 }
