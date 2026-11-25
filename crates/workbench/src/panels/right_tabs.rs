@@ -404,11 +404,12 @@ impl ArchivePanel {
                 // 版本时间线的选中态：状态存 `Shared`，重绘通知这张面板（详情不在 Shared 子树）。
                 let selection =
                     version_selection(&self.shared, &detail.id, cx.entity());
+                // 存档面板同样是「面板头 / 工具栏紧贴标签条」口径（2026-11-25 反馈②）：
+                // 顶距交给 `render_detail` 自己的 `pt_2`，根上不再叠一层。
                 div()
                     .v_flex()
                     .size_full()
                     .min_h_0()
-                    .pt_2()
                     .child(render_detail(&detail, Some(actions), &selection, cx))
             }
             None => {
@@ -417,7 +418,6 @@ impl ArchivePanel {
                     .v_flex()
                     .size_full()
                     .min_h_0()
-                    .pt_2()
                     .items_center()
                     .justify_center()
                     .gap_2()

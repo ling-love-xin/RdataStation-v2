@@ -2267,11 +2267,12 @@ impl DataObjectsTab {
                     })
             });
 
+        // 面板根**零顶距**：工具栏紧贴 dock 标签条下缘（2026-11-25 反馈②）。
+        // 此前这里 `.pt_2()`（8）——`inner_padding` 已覆写为 false，剩下的 8px 缝就是它。
         div()
             .v_flex()
             .size_full()
             .min_h_0()
-            .pt_2()
             .child(toolbar)
             .child(chips)
             .child(list_frame)
