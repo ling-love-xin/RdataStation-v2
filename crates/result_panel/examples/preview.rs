@@ -106,22 +106,30 @@ impl Render for PreviewHost {
 
 /// 造一份结果：8 行 5 列，覆盖数字 / 文本 / NULL / 时间 / JSON 几种渲染档
 fn demo_payload() -> GridPayload {
+    // 【2026-11-26 用户诉求】加数组 / 嵌套 JSON / 顶层数组三列，用来验「值查看器能不能展开」：
+    // - `tags text[]`：Postgres 数组字面量（`{vip,trial}` / `{}`）——`ColumnKind` 没有数组档，
+    //   `text[]` 按词级解析落到 `Text`，网格与值查看器都只给原文（差异见文档）；
+    // - `attrs jsonb`：对象套对象 + 数组 + 布尔 + null + 浮点（三层，树展开才有意义）；
+    // - `events jsonb`：**顶层数组**（元素是对象，部分元素里还有嵌套数组）。
     let columns = vec![
         "id".to_string(),
         "customer".to_string(),
         "amount".to_string(),
         "created_at".to_string(),
+        "tags".to_string(),
+        "attrs".to_string(),
+        "events".to_string(),
         "payload".to_string(),
     ];
-    let rows = vec![
-        vec!["1".into(), "张三".into(), "1234.50".into(), "2026-11-25 09:12:03".into(), r#"{"k":"v"}"#.into()],
-        vec!["2".into(), "李四".into(), "NULL".into(), "2026-11-24 18:40:11".into(), "{}".into()],
-        vec!["3".into(), "王五".into(), "99.00".into(), "2026-11-24 11:02:55".into(), "NULL".into()],
-        vec!["4".into(), "赵六".into(), "0.00".into(), "2026-11-23 22:31:07".into(), r#"{"a":[1,2,3]}"#.into()],
-        vec!["5".into(), "孙七".into(), "-12.30".into(), "2026-11-23 08:15:42".into(), "{}".into()],
-        vec!["6".into(), "周八".into(), "88888.88".into(), "2026-11-22 14:09:30".into(), "NULL".into()],
-        vec!["7".into(), "吴九".into(), "12.00".into(), "2026-11-21 16:55:18".into(), r#"{"k":"长文本"}"#.into()],
-        vec!["8".into(), "郑十".into(), "3.14".into(), "2026-11-20 07:03:59".into(), "{}".into()],
+    let rows: Vec<Vec<SharedString>> = vec![
+        vec!["1".into(), "张三".into(), "1234.50".into(), "2026-11-25 09:12:03".into(), "{vip,trial}".into(), r#"{"level":3,"prefs":{"theme":"dark","lang":"zh-CN"},"tags":["a","b"],"flags":{"beta":true,"rate":0.42}}"#.into(), r#"[{"type":"view","ts":"2026-11-25 09:10:00"},{"type":"buy","items":[{"sku":"A1","qty":2},{"sku":"B7","qty":1}],"total":148.6}]"#.into(), r#"{"k":"v"}"#.into()],
+        vec!["2".into(), "李四".into(), "NULL".into(), "2026-11-24 18:40:11".into(), "{}".into(), r#"{"level":1,"prefs":{},"tags":[],"flags":{"beta":false,"rate":null}}"#.into(), "[]".into(), "{}".into()],
+        vec!["3".into(), "王五".into(), "99.00".into(), "2026-11-24 11:02:55".into(), "{vip}".into(), r#"{"level":2,"prefs":{"theme":"light","lang":"en-US","timezone":"Asia/Shanghai"},"tags":["vip","long-term"],"flags":{"beta":true,"rate":1.25}}"#.into(), r#"[{"type":"login"}]"#.into(), "NULL".into()],
+        vec!["4".into(), "赵六".into(), "0.00".into(), "2026-11-23 22:31:07".into(), "{trial}".into(), r#"{"level":0,"prefs":{"theme":"system"},"tags":["new"],"flags":{"beta":false,"rate":0}}"#.into(), r#"[{"type":"signup","source":{"channel":"web","utm":"spring"}}]"#.into(), r#"{"a":[1,2,3]}"#.into()],
+        vec!["5".into(), "孙七".into(), "-12.30".into(), "2026-11-23 08:15:42".into(), "{vip,trial,churn-risk}".into(), r#"{"level":4,"prefs":{"theme":"dark","lang":"zh-CN","density":"compact"},"tags":["a","b","c"],"flags":{"beta":true,"rate":0.98}}"#.into(), r#"[{"type":"refund","reason":"破损"},{"type":"view"}]"#.into(), "{}".into()],
+        vec!["6".into(), "周八".into(), "88888.88".into(), "2026-11-22 14:09:30".into(), "{vip}".into(), r#"{"level":5,"prefs":{"theme":"light"},"tags":[],"flags":{"beta":true,"rate":1}}"#.into(), r#"[{"type":"view"},{"type":"view"},{"type":"buy","total":88888.88}]"#.into(), "NULL".into()],
+        vec!["7".into(), "吴九".into(), "12.00".into(), "2026-11-21 16:55:18".into(), "{}".into(), r#"{"level":1,"prefs":{"lang":"zh-CN"},"tags":["short"],"flags":{"beta":false,"rate":0.1}}"#.into(), "[]".into(), r#"{"k":"长文本"}"#.into()],
+        vec!["8".into(), "郑十".into(), "3.14".into(), "2026-11-20 07:03:59".into(), "{vip,beta}".into(), r#"{"level":2,"prefs":{"theme":"dark"},"tags":["pi"],"flags":{"beta":true,"rate":3.14}}"#.into(), r#"[{"type":"refund","reason":"尺码不合适"}]"#.into(), "{}".into()],
     ];
     GridPayload {
         columns,
@@ -131,10 +139,13 @@ fn demo_payload() -> GridPayload {
             Some(ColumnType::parse("text")),
             Some(ColumnType::parse("numeric(10,2)")),
             Some(ColumnType::parse("timestamp")),
+            Some(ColumnType::parse("text[]")),
+            Some(ColumnType::parse("jsonb")),
+            Some(ColumnType::parse("jsonb")),
             Some(ColumnType::parse("jsonb")),
         ],
         table: Some("public.orders".to_string()),
-        annotations: vec![None; 5],
+        annotations: vec![None; 8],
         // 事实帧 / 本地叠加层属可选加速档，预览不摆
         fact: None,
         local: None,
@@ -143,7 +154,7 @@ fn demo_payload() -> GridPayload {
 
 /// 造一份宿主投影（真值：生产里由 editor 的 sync 路径算好后交进来）
 fn demo_input() -> ResultSyncInput {
-    let sql = "select id, customer, amount, created_at, payload from public.orders order by id".to_string();
+    let sql = "select id, customer, amount, created_at, tags, attrs, events, payload from public.orders order by id".to_string();
     ResultSyncInput {
         tabs: vec![
             ResultSetTab {

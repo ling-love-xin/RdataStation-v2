@@ -3934,3 +3934,17 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
   `set_grids_wires_the_panels_submenu_builder_on_every_grid`（panel）。
 - 验证：check 0 warning；**461 passed / 0 failed**（459 + 2）。
 - 仍不摆：`CMD_ACTIVATE_PANELS`（不摆，三处菜单一致）；图标用 `PanelRight` 替代 `PANEL_CUSTOMIZE`。
+
+### 57.7 「展开」能力：双击 / 值编辑器（取证完成，实现未做）
+
+用户问「表格有没有 DBeaver 那种展开能力」，取证结论：
+
+| 维度 | 真值 | 本仓 |
+| --- | --- | --- |
+| 双击单元格 | 偏好 `resultset.behavior.doubleClick`（`ResultSetPreferences.java:80`），`Spreadsheet.DoubleClickBehavior` 五值，**默认 `INLINE_EDITOR`**（`DataEditorsPreferencesInitializer.java:74`）；分派 `Spreadsheet.java:299-350`，仅当前焦点格生效 | 组件 `TableEvent::DoubleClickedCell` → 面板转发 → 宿主 `crates/editor/src/view/host/construct.rs:369-371` 行内编辑 —— **与真值默认一致** |
+| 「展开」本体 | `IResultSetEditor.openValueEditor(boolean inline)`（`IResultSetEditor.java:29`）→ `SpreadsheetPresentation.openValueEditor:1277` → `ValueViewerPanel` 呈现 JSON；调用点 `ResultSetHandlerMain.java:209/214/427`。**网格内没有折叠 / 展开控件** | 无弹窗值编辑器；JSON 树在右栏「数值查看器」页（`panel/tabs.rs::render_json_tree:484`，`grid/cell.rs::json_tree_items:570`） |
+| 数组列 `text[]` | 数组值编辑器按项展开 | `store/entry.rs::ColumnKind:86-105` 无数组档（容器词一律 `Unknown`，`text[]` 因 `text` 命中落 `Text`）→ 原文 `{vip,trial}` |
+
+演示数据已扩到 8 列（`examples/preview.rs::demo_payload`：`tags text[]`、`attrs jsonb` 三层嵌套、
+`events jsonb` 顶层数组），用于肉眼验网格截断与右栏树展开。待做三项：双击路径分流到只读值编辑器
+浮层、`ColumnKind::Array`、值编辑器浮层壳。详见 `result-panel.md` §9.69。

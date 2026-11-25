@@ -10382,6 +10382,62 @@ panicked at gpui-fast-0.1.17/src/app.rs:2657: no state of type rds_settings::mod
 `auto_refresh_config_cancel_and_invalid_input_keep_interval`（取消不生效；`abc` 不覆盖间隔但仍开启）、
 `auto_refresh::tests::interval_text_accepts_positive_numbers_only`（解析域）。
 
+### 9.69 数组 / JSON 列与「展开」能力（对照 DBeaver）
+
+用户诉求（2026-11-26）：演示数据里加数组 / JSON，看表格有没有 DBeaver 那种「展开」能力。
+
+#### 9.69.1 预览演示数据（`examples/preview.rs::demo_payload`）
+
+5 列扩到 8 列（8 行 × 8 列，`column_types` 同步 8 项、`annotations: vec![None; 8]`，
+`demo_input` 的 SQL 文本改成同列序）：
+
+| 列 | 类型 | 形态（关键行示例） |
+| --- | --- | --- |
+| `id` / `customer` / `amount` / `created_at` | `bigint` / `text` / `numeric(10,2)` / `timestamp` | 原样保留 |
+| `tags` | `text[]` | Postgres 数组字面量：`{vip,trial}` / `{}` / `{vip,trial,churn-risk}` |
+| `attrs` | `jsonb` | 三层嵌套：`{"level":3,"prefs":{"theme":"dark","lang":"zh-CN"},"tags":["a","b"],"flags":{"beta":true,"rate":0.42}}`（对象套对象 + 数组 + 布尔 + 浮点） |
+| `events` | `jsonb` | **顶层数组**：`[{"type":"buy","items":[{"sku":"A1","qty":2},{"sku":"B7","qty":1}],"total":148.6}, …]`（元素内含嵌套数组） |
+| `payload` | `jsonb` | 原 5 列里的那一列，保留 |
+
+边界值一并留着：`NULL`（值 / `events` 列）、`{}`、`[]`、负数、`88888.88`。
+
+用途三条：① 看网格单行截断（长 JSON 只显示开头）；② 看右栏「数值查看器」的树能展到
+几层、子项截断提示何时出；③ 看数组列在网格和值查看器里是什么形态。
+
+#### 9.69.2 真值：DBeaver 的「双击」和「展开」不是一件事
+
+- 双击由偏好 `resultset.behavior.doubleClick`（`ResultSetPreferences.java:80`）控制，
+  枚举 `Spreadsheet.DoubleClickBehavior` 五值（`NONE` / `EDITOR` / `INLINE_EDITOR` /
+  `COPY_VALUE` / `COPY_PASTE_VALUE`），**默认 `INLINE_EDITOR`**
+  （`DataEditorsPreferencesInitializer.java:74`）；
+- 分派在 `Spreadsheet.java:299-350`，且只有双击落在**当前焦点格**才生效；
+- 「展开」的真身是**值编辑器**：`IResultSetEditor.openValueEditor(boolean inline)`
+  （`IResultSetEditor.java:29`），入口 `SpreadsheetPresentation.openValueEditor:1277`，
+  JSON 由 `ValueViewerPanel` 呈现；`ResultSetHandlerMain.java:209/214/427` 三处调它；
+- 网格里**没有**「单元格折叠 / 展开」控件 —— 展开发生在弹出的值编辑器窗口里。
+
+#### 9.69.3 本仓现状
+
+| 维度 | 真值 | 本仓 | 结论 |
+| --- | --- | --- | --- |
+| 双击单元格 | 默认 `INLINE_EDITOR`（进行内编辑） | 组件发 `TableEvent::DoubleClickedCell` → 面板转发 → 宿主 `crates/editor/src/view/host/construct.rs:369-371` 进编辑 | **已对齐**（同为行内编辑，不是弹出） |
+| 弹窗值编辑器 | `openValueEditor(inline = false)` 出模态 | 无该入口 | 缺 |
+| JSON 展开 / 折叠 | `ValueViewerPanel` 树 | 右栏「数值查看器」页（`RightTab::Value`，出厂唯一默认页）：`panel/tabs.rs::render_json_tree:484` —— `▾/▸` 折叠、`ui::JSON_TREE_INDENT_STEP` 缩进、`JSON_TREE_CHILD_LIMIT` 截断并追加「… 还有 N 项」、顶层预展开 2 层；数据由 `panel/events.rs::rebuild_value_tree:2275` 在选中格变化时重建（`grid/cell.rs::classify_value` → `ViewerMode::Json` → `json_tree_items:570`，顶层数组在 `:589-591`） | **有**，但在**侧栏**不在网格 |
+| 数组列（`text[]`） | 数组值编辑器（按项展开） | `store/entry.rs::ColumnKind:86-105` 没有数组档；`ColumnKind::parse` 里 `list/struct/map/union/dictionary/…` 等容器词一律 `Unknown`，`text[]` 因 `text` 词命中落 `Text` → 网格与值查看器都只给原文 `{vip,trial}` | 缺（按文本显示，不按项展开） |
+
+一句话：**在表格里直接「展开」这一列，本仓目前做不到；能展开的是右栏「数值查看器」的
+JSON 树** —— 而网格里双击进去的是行内编辑框（一整条字符串），不是树。
+
+#### 9.69.4 要做 1:1 还差什么（未做，登记）
+
+1. **双击路径分流**：真值双击默认进行内编辑，但「查看值」另有入口（右键 `View value`、
+   快捷键、值编辑器内 `inline` 变体）。本仓要给「带结构的值」留一条打开值编辑器浮层的路
+   （复用 `json_tree` 渲染，走 `ResultRequest` 新分支，别在 grid delegate 里直接渲染）；
+2. **`ColumnKind::Array`**：识别 `[]` 后缀（`text[]` / `int4[]` / `jsonb[]`）与 `_array`
+   写法，值查看器对数组按「第 0..n 项」列表呈现，而不是整段文本；
+3. **值编辑器浮层的壳**（标题 / 关闭 / 复制 / 字数）：真值 `ValueViewerPanel` 有一套
+   自带工具条，本仓浮层范式已有（`render_sql_dialog` 同款），需要单独一节。
+
 ## 20. 有意差异汇总
 
 全部「有意为之、勿当 bug 修」的偏离集中在这里，按功能域分组；每条回指原小节，细节看原文。
