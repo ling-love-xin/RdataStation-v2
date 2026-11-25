@@ -1,6 +1,7 @@
 # 分析引擎：单实例 + 每编辑器一条会话
 
-> 状态：**落地中**（代码 `crates/engine/src/duckdb/instance.rs`，分支 `feat/analysis-instance-sessions`）
+> 状态：**已落地并合入 `main`**（2026-11-26；代码 `crates/engine/src/duckdb/instance.rs`）。
+> 迁移表里 `2g`（联邦别名归属核对）与 `3b`（临时表真的搬进 `rds_tmp`）仍是遗留，见 §迁移表。
 > 口径来源：2026-11-26 用户裁决（"打开项目的分析引擎，本质就是打开了项目的分析库，全局库也挂在
 > 这里，一个 SQL 编辑器就是这个实例的一个会话"）。本文只写确定的事实与边界，不写规划语。
 
