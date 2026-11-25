@@ -490,8 +490,16 @@ impl EditorHostPanel {
             .result_panel
             .update(cx, |panel, cx| panel.copy_column_names(cx));
         match result {
-            Ok(1) => self.set_message(Some("已复制列名".to_string()), cx),
-            Ok(count) => self.set_message(Some(format!("已复制 {count} 个列名（TSV）")), cx),
+            Ok(result_panel::copy_names::CopyColumnNamesOutcome::Copied(1)) => {
+                self.set_message(Some("已复制列名".to_string()), cx)
+            }
+            Ok(result_panel::copy_names::CopyColumnNamesOutcome::Copied(count)) => {
+                self.set_message(Some(format!("已复制 {count} 个列名（TSV）")), cx)
+            }
+            // 多列：面板已经开了「选项」对话框（剪贴板还没动，取消就不拷）
+            Ok(result_panel::copy_names::CopyColumnNamesOutcome::Options(count)) => {
+                self.set_message(Some(format!("{count} 个列名：选分隔符后「确定」")), cx)
+            }
             Err(reason) => self.set_message(Some(reason), cx),
         }
     }

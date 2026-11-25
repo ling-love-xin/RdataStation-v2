@@ -6916,30 +6916,67 @@ fn copying_column_names_uses_the_current_cell_then_every_visible_column(
         cx.update(|_w, app| app.read_from_clipboard().and_then(|item| item.text()))
     };
 
-    // ① 没有当前格：全部可见列（数据序，Tab 分隔）
+    // ① 没有当前格：全部可见列 → **多列先弹「选项」对话框**（真值 `ResultSetHandlerMain:351`），
+    //   确认前剪贴板不动
     assert_eq!(
         cx.update(|_w, app| panel.read(app).selection_pos),
         None,
         "前提：harness 出厂没有当前格"
     );
-    let count = cx.update(|_w, app| panel.update(app, |p, cx| p.copy_column_names(cx)));
-    assert_eq!(count, Ok(2), "两列都可见");
-    assert_eq!(clipboard(cx).as_deref(), Some("id\tamount"), "Tab 分隔");
+    let outcome = cx.update(|_w, app| panel.update(app, |p, cx| p.copy_column_names(cx)));
+    assert_eq!(
+        outcome,
+        Ok(crate::copy_names::CopyColumnNamesOutcome::Options(2)),
+        "两列都可见 → 走对话框，不直接拷"
+    );
+    assert_eq!(clipboard(cx), None, "对话框「确定」之前剪贴板不动");
+    assert!(
+        cx.update(|_w, app| panel.read(app).copy_names_dialog.is_some()),
+        "对话框已打开"
+    );
+    // 在对话框里把列分隔符换成逗号，再「确定」
+    cx.update(|_w, app| {
+        panel.update(app, |p, cx| {
+            p.set_copy_names_field(
+                crate::copy_names::CopyNamesField::ColumnDelimiter,
+                ",".to_string(),
+                cx,
+            )
+        })
+    });
+    cx.update(|_w, app| panel.update(app, |p, cx| p.apply_copy_names_options(cx)));
+    assert_eq!(
+        clipboard(cx).as_deref(),
+        Some("id,amount"),
+        "按对话框里选的分隔符拼"
+    );
+    assert!(
+        cx.update(|_w, app| panel.read(app).copy_names_dialog.is_none()),
+        "确定后收浮层"
+    );
 
-    // ② 当前格所在列盖过全量（组件列 2 = 数据列 1 = `amount`）
+    // ② 当前格所在列盖过全量（组件列 2 = 数据列 1 = `amount`）→ 单列直接拷，不弹
     cx.update(|window, app| {
         let grid = panel.read(app).grid.clone();
         grid.update(app, |state, cx| state.set_selected_cell(0, 2, cx));
         panel.update(app, |p, cx| p.set_selection_pos(Some((0, 2)), window, cx));
     });
-    let count = cx.update(|_w, app| panel.update(app, |p, cx| p.copy_column_names(cx)));
-    assert_eq!(count, Ok(1), "只拷这一列");
+    let outcome = cx.update(|_w, app| panel.update(app, |p, cx| p.copy_column_names(cx)));
+    assert_eq!(
+        outcome,
+        Ok(crate::copy_names::CopyColumnNamesOutcome::Copied(1)),
+        "只拷这一列，不开对话框"
+    );
     assert_eq!(clipboard(cx).as_deref(), Some("amount"), "单列不加分隔符");
 
-    // ③ 那一列被藏掉 → 当前格不在可见列上，退回全部可见列
+    // ③ 那一列被藏掉 → 当前格不在可见列上，退回全部可见列（现在只剩一列 → 仍直拷）
     cx.update(|_w, app| panel.update(app, |p, cx| p.set_columns_hidden(vec![1], true, cx)));
-    let count = cx.update(|_w, app| panel.update(app, |p, cx| p.copy_column_names(cx)));
-    assert_eq!(count, Ok(1), "只剩一列可见");
+    let outcome = cx.update(|_w, app| panel.update(app, |p, cx| p.copy_column_names(cx)));
+    assert_eq!(
+        outcome,
+        Ok(crate::copy_names::CopyColumnNamesOutcome::Copied(1)),
+        "只剩一列可见"
+    );
     assert_eq!(clipboard(cx).as_deref(), Some("id"), "隐藏的那列不拷");
 }
 
@@ -7478,5 +7515,95 @@ fn auto_refresh_config_cancel_and_invalid_input_keep_interval(cx: &mut gpui_kit:
         panel.read_with(cx, |p, _| p.auto_refresh_config_state()),
         (false, true),
         "浮层关，勾选没被动过"
+    );
+}
+/// 【复制列名 · 选项对话框】「取消」= 不写剪贴板、也不改记忆的样式
+/// （真值 `ResultSetHandlerMain.java:353-355`：`open() != OK_ID` 直接 return）。
+#[gpui_kit::test]
+fn copy_names_options_cancel_leaves_clipboard_and_settings_untouched(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+
+    let outcome = cx.update(|_w, app| panel.update(app, |p, cx| p.copy_column_names(cx)));
+    assert_eq!(
+        outcome,
+        Ok(crate::copy_names::CopyColumnNamesOutcome::Options(2)),
+        "两列 → 打开对话框"
+    );
+    assert_eq!(
+        cx.update(|_w, app| app.read_from_clipboard().and_then(|item| item.text())),
+        None,
+        "打开对话框本身不写剪贴板"
+    );
+
+    // 先改成分号，再取消
+    cx.update(|_w, app| {
+        panel.update(app, |p, cx| {
+            p.set_copy_names_field(
+                crate::copy_names::CopyNamesField::ColumnDelimiter,
+                ";".to_string(),
+                cx,
+            )
+        })
+    });
+    cx.update(|_w, app| panel.update(app, |p, cx| p.close_copy_names_options(cx)));
+    assert_eq!(
+        cx.update(|_w, app| app.read_from_clipboard().and_then(|item| item.text())),
+        None,
+        "取消不写剪贴板"
+    );
+    assert!(
+        cx.update(|_w, app| panel.read(app).copy_names_dialog.is_none()),
+        "取消后浮层收起"
+    );
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.copy_names_settings.column_delimiter.clone()),
+        "\t",
+        "取消不改记忆的样式"
+    );
+}
+
+/// 【复制列名 · 选项对话框】下拉项回传的是**显示串**（`\t` 两个字面字符），
+/// 面板按真值 `CommonUtils.unescapeDisplayString`（`CopyConfigDialog.okPressed:178-180`）
+/// 还原成控制字符再落样式；「确定」按该样式拼文本。
+#[gpui_kit::test]
+fn copy_names_options_field_values_arrive_as_display_literals(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (panel, cx) = panel_harness(cx);
+    cx.update(|_w, app| panel.update(app, |p, cx| p.copy_column_names(cx)));
+
+    cx.update(|_w, app| {
+        panel.update(app, |p, cx| {
+            p.set_copy_names_field(
+                crate::copy_names::CopyNamesField::ColumnDelimiter,
+                "\\t".to_string(),
+                cx,
+            )
+        })
+    });
+    assert_eq!(
+        panel.read_with(cx, |p, _| {
+            p.copy_names_dialog
+                .as_ref()
+                .map(|d| d.settings.column_delimiter.clone())
+        }),
+        Some("\t".to_string()),
+        "显示串 `\\t` 还原成真正的 Tab"
+    );
+
+    cx.update(|_w, app| panel.update(app, |p, cx| p.apply_copy_names_options(cx)));
+    assert_eq!(
+        cx.update(|_w, app| app.read_from_clipboard().and_then(|item| item.text())),
+        Some("id\tamount".to_string()),
+        "按还原后的 Tab 拼接"
+    );
+    assert_eq!(
+        panel.read_with(cx, |p, _| p.copy_names_settings.column_delimiter.clone()),
+        "\t",
+        "「确定」把还原后的值写进记忆"
     );
 }

@@ -93,6 +93,20 @@ impl Render for PreviewHost {
                     self.panel
                         .update(cx, |p, cx| p.close_auto_refresh_config(cx));
                 }
+                // 【复制列名】「选项」浮层三出口（真值 `CopyConfigDialog`）：纯面板态
+                ResultRequest::SetCopyNamesField { field, value } => {
+                    let (field, value) = (*field, value.clone());
+                    self.panel
+                        .update(cx, |p, cx| p.set_copy_names_field(field, value, cx));
+                }
+                ResultRequest::ApplyCopyNamesOptions => {
+                    self.panel
+                        .update(cx, |p, cx| p.apply_copy_names_options(cx));
+                }
+                ResultRequest::CloseCopyNamesOptions => {
+                    self.panel
+                        .update(cx, |p, cx| p.close_copy_names_options(cx));
+                }
                 _ => {}
             }
         }
@@ -228,10 +242,11 @@ fn demo_input() -> ResultSyncInput {
     }
 }
 
-/// 分段开关（爆栈诊断用，正常跑不需要设）：`1` = 空窗口，`2` = 只渲染面板（不订阅），
+/// 分段开关（爆栈诊断 / 浮层目视用，正常跑不需要设）：`1` = 空窗口，`2` = 只渲染面板（不订阅），
 /// `4` = 完整宿主 + 自动打开「自动刷新配置」浮层（验浮层渲染链 / render 期 drain，
-/// 不会自动弹，只在这个变量下弹），其余 = 完整宿主。
-/// 三种形态一次编译、多次运行即可判「问题在框架层还是面板层」。
+/// 不会自动弹，只在这个变量下弹），`5` = 完整宿主 + 直接走一次「复制列名」命令
+/// （无焦点格 → 全部 8 个可见列 → 多列 → 弹「选项」对话框），其余 = 完整宿主。
+/// 一次编译、多次运行即可判「问题在框架层还是面板层」。
 fn stage() -> u8 {
     std::env::var("PREVIEW_STAGE")
         .ok()
@@ -349,6 +364,14 @@ fn run_preview() {
                     // 不死循环；默认不弹，只在设了 `PREVIEW_STAGE=4` 时弹）
                     if stage == 4 {
                         panel.update(cx, |p, cx| p.open_auto_refresh_config(window, cx));
+                    }
+                    // stage 5：直接走一次「复制列名」（真值 `CMD_COPY_COLUMN_NAMES`）。
+                    // 预览出厂没有当前格 → 拿全部 8 个可见列 → 多列 → 打开「选项」浮层
+                    // （单列不弹；想验单列可在网格里点一格再用键位）。
+                    if stage == 5 {
+                        let outcome =
+                            panel.update(cx, |p, cx| p.copy_column_names(cx));
+                        eprintln!("[preview] copy_column_names -> {outcome:?}");
                     }
                     if stage == 2 {
                         cx.new(|_| PanelOnly { panel: panel.clone() }).into()

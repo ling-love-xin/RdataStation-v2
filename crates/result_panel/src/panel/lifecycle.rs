@@ -344,6 +344,10 @@ impl ResultPanel {
             auto_refresh_dialog_open: false,
             auto_refresh_stop_on_error: true,
             auto_refresh_interval_input,
+            // 【复制列名】「选项」对话框出厂关；样式取真值默认（列 `\t` / 行 `\n` / 引号 `"`，
+            // `ResultSetHandlerCopySpecial.java:129-131`）
+            copy_names_dialog: None,
+            copy_names_settings: crate::copy_names::CopyNamesSettings::default(),
             // 【第 75 批】跳列浮层出厂关；输入框是常驻实体（构造期建好，见上）
             goto_column_open: false,
             goto_column_input,

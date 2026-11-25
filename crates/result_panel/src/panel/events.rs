@@ -1703,6 +1703,9 @@ impl ResultPanel {
             self.close_filter_settings(cx);
         } else if self.auto_refresh_dialog_open {
             self.close_auto_refresh_config(cx);
+        } else if self.copy_names_dialog.is_some() {
+            // 【复制列名】「选项」浮层：`ESC` = 取消（不写剪贴板，真值 `!= OK_ID` 直接 return）
+            self.close_copy_names_options(cx);
         } else if self.sql_dialog_open {
             self.close_sql_dialog(cx);
         } else {
@@ -2683,13 +2686,24 @@ impl ResultPanel {
     /// 部件（`meta_data_panel_action_copy_column_text`），所以本仓的等价只有两级：
     /// 当前格所在列（且该列仍然可见）→ 全部可见列（数据序，跳过隐藏）。
     ///
-    /// 分隔符：上游多列走「复制配置」对话框，默认 `\t`（`ResultSetHandlerCopySpecial:129`），
-    /// 单列不弹；本仓固定 `\t`，不弹对话框（目视类后处理统一做）。
+    /// **多列先进「选项」对话框（2026-11-26）**：上游 `:350-357` 是
+    /// `if (attrs.size() > 1)` → 弹 `CopyConfigDialog`（列 / 行分隔符 + 引号三档，
+    /// 默认 `\t` / `\n` / `"`，`ResultSetHandlerCopySpecial:129-131`），确认后才拷；
+    /// 单列直接拷不加分隔符。本仓此前固定 `\t` 且从不弹，本轮按真值拆开：
+    /// 多列 → 打开面板内浮层（`copy_names_dialog`）并返回
+    /// [`CopyColumnNamesOutcome::Options`]，**此时剪贴板还没动**（取消 = 不拷）；
+    /// 单列 → 直接写剪贴板，返回 [`CopyColumnNamesOutcome::Copied`]。
+    ///
+    /// 行分隔符 / 引号在这条命令里**用不到**（上游拼列名的循环只用
+    /// `settings.getColumnDelimiter()`，`:361`），仅因为复用同一个对话框才显示出来。
     ///
     /// 名字：上游取 `attr.getLabel()`（空则 `getName()`），且有数据源时套
     /// `DBUtils.getQuotedIdentifier`（贴进 SQL 就是带引号的标识符）；本仓 `columns()`
     /// 就是显示名、也没有数据源方言通道，所以**不加引号**（有意差异）。
-    pub fn copy_column_names(&mut self, cx: &mut Context<Self>) -> Result<usize, String> {
+    pub fn copy_column_names(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Result<crate::copy_names::CopyColumnNamesOutcome, String> {
         let picked: Vec<String> = {
             let delegate = self.grid.read(cx).delegate();
             let names = delegate.columns();
@@ -2711,8 +2725,64 @@ impl ResultPanel {
             return Err("这份结果没有可复制的列".to_string());
         }
         let count = picked.len();
-        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(picked.join("\t")));
-        Ok(count)
+        // 真值 `ResultSetHandlerMain.java:351`：多列先弹「选项」，确认后才拷
+        if crate::copy_names::copy_names_needs_dialog(count) {
+            self.copy_names_dialog = Some(crate::panel::data::CopyNamesDialog {
+                names: picked,
+                // 打开时按上次确认的样式回填（真值 `CopyConfigDialog` 构造函数读
+                // `DialogSettings("CopyGridNamesOptionsDialog")`，`:132-140`）
+                settings: self.copy_names_settings.clone(),
+            });
+            cx.notify();
+            return Ok(crate::copy_names::CopyColumnNamesOutcome::Options(count));
+        }
+        let text = crate::copy_names::join_column_names(
+            &picked,
+            &self.copy_names_settings.column_delimiter,
+        );
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text));
+        Ok(crate::copy_names::CopyColumnNamesOutcome::Copied(count))
+    }
+
+    /// 【复制列名】「选项」浮层：某个字段的下拉选中（写进**浮层**的临时样式，
+    /// 「确定」才回写记忆；真值 `CopyConfigDialog.okPressed:177-186` 同口径）。
+    ///
+    /// `value` 是**显示串**（`\t` / `\n` 这种字面量，与真值 Combo 里存的形态一致），
+    /// 这里按 `CommonUtils.unescapeDisplayString` 还原成控制字符再落样式。
+    pub fn set_copy_names_field(
+        &mut self,
+        field: crate::copy_names::CopyNamesField,
+        value: String,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(dialog) = self.copy_names_dialog.as_mut() {
+            let raw = crate::copy_names::unescape_display_string(&value);
+            field.apply(&mut dialog.settings, raw);
+            cx.notify();
+        }
+    }
+
+    /// 【复制列名】「选项」浮层「确定」：按当前样式拼文本 → 写剪贴板 → 记忆样式 → 关闭
+    /// （真值 `ResultSetHandlerMain.java:359-374` 的拼接 + `ResultSetUtils.copyToClipboard`）
+    pub fn apply_copy_names_options(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.copy_names_dialog.take() else {
+            return;
+        };
+        let text = crate::copy_names::join_column_names(
+            &dialog.names,
+            &dialog.settings.column_delimiter,
+        );
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text));
+        self.copy_names_settings = dialog.settings;
+        cx.notify();
+    }
+
+    /// 【复制列名】「选项」浮层「取消」/ `ESC`：不写剪贴板、不改记忆的样式
+    /// （真值 `open() != IDialogConstants.OK_ID` → 直接 return，`:353-355`）
+    pub fn close_copy_names_options(&mut self, cx: &mut Context<Self>) {
+        if self.copy_names_dialog.take().is_some() {
+            cx.notify();
+        }
     }
 
     /// 【第 77 批】筛选框的焦点句柄（`switch_filter_focus` 的内部判据；宿主窗口用例

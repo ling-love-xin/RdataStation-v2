@@ -80,6 +80,19 @@ pub struct SavedFilterSetting {
     pub table: Option<String>,
 }
 
+/// 【复制列名】「选项」对话框的打开态（真值 `ResultSetHandlerCopySpecial.CopyConfigDialog`）。
+///
+/// 字段就是这次要拷的列名 + 对话框里三个可编辑值。真值每次打开都新建一份 dialog，并把
+/// 上次确认的样式回填（`DialogSettings("CopyGridNamesOptionsDialog")`）；本仓的「上次样式」
+/// 存在 [`ResultPanel::copy_names_settings`]，打开时拷一份进这里，取消不影响已记忆的样式。
+#[derive(Clone, Debug)]
+pub(crate) struct CopyNamesDialog {
+    /// 这次要拷的列名（按数据列序；单列时不会打开本对话框）
+    pub names: Vec<String>,
+    /// 对话框当前值（下拉选中会改写它；「确定」才回写 `copy_names_settings`）
+    pub settings: crate::copy_names::CopyNamesSettings,
+}
+
 impl SavedFilterSetting {
     /// 【筛选存档落盘】编码成会话存档串（JSON）。
     ///
@@ -468,6 +481,12 @@ pub struct ResultPanel {
     /// 【自动刷新】对话框的间隔输入框（打开时按当前间隔回填，「确定」时解析；真值那个是
     /// 只能输 `1..=Integer.MAX_VALUE` 的 `Spinner`，本仓用普通输入框 + 解析兜底）。
     pub(crate) auto_refresh_interval_input: Entity<InputState>,
+    /// 【复制列名】「选项」对话框（真值 `ResultSetHandlerMain.java:350-357`：只在**多列**时打开）。
+    /// `Some` = 浮层开着；载荷是这次要拷的列名与对话框当前值。
+    pub(crate) copy_names_dialog: Option<CopyNamesDialog>,
+    /// 【复制列名】上次确认的样式（真值存 Eclipse `DialogSettings`，下次打开回填；
+    /// 本仓只在会话内记忆，不落盘——与 AutoRefresh 配置同口径）
+    pub(crate) copy_names_settings: crate::copy_names::CopyNamesSettings,
     pub(crate) result_can_copy: bool,
     pub(crate) fetching_more: bool,
     /// 导出菜单静态上下文（sync 写入；render 期只读）

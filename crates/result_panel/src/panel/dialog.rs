@@ -4,9 +4,10 @@ use shared::i18n::tr;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt as _;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputState, Textarea};
+use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::separator::Separator;
 use gpui_kit::component::tab::{Tab, TabBar};
@@ -644,6 +645,229 @@ impl ResultPanel {
                             ),
                     ),
             )
+            .into_any_element()
+    }
+
+    /// 【复制列名】「选项」对话框（真值 `ResultSetHandlerCopySpecial.CopyConfigDialog`，
+    /// 实例化于 `ResultSetHandlerMain.java:352`，dialogId = `CopyGridNamesOptionsDialog`）
+    ///
+    /// 形态按截图 1:1：标题「选项」+ 三行（列分隔符 / 行分隔符 / 引号字符，均下拉，
+    /// 下拉里显示转义字面量 `\t` / `\n`）+ 提示行
+    /// 「将来在此设置下可以使用快捷键：Ctrl+Alt+Shift+C」+ 取消 / 确定。
+    ///
+    /// 本仓差异（登记 `result-panel.md` §9.73.3）：
+    /// - 面板内 absolute 遮罩，不是窗口级 `BaseDialog`（面板 render 拿不到 `&mut Window`）；
+    /// - 下拉是组件 `DropdownButton`（左半显当前值、右半 caret 开候选），真值是可编辑 `Combo`；
+    /// - 没有「重复上次复制特殊」命令，提示行按真值文案固定显示（不随快捷键解析）。
+    pub(crate) fn render_copy_names_options(&self, cx: &App) -> AnyElement {
+        let theme = cx.theme();
+        let close_queue = self.queue.clone();
+        let close_queue2 = self.queue.clone();
+        let apply_queue = self.queue.clone();
+        let count = self
+            .copy_names_dialog
+            .as_ref()
+            .map(|dialog| dialog.names.len())
+            .unwrap_or(0);
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(theme.colors.overlay)
+            .debug_selector(|| "editor-result-copy-names".to_string())
+            // `ESC` 收起同样由面板根的 `DismissOverlay` 收口（= 取消，不写剪贴板）
+            .child(
+                div()
+                    .relative()
+                    .flex_col()
+                    .w(px(420.))
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.colors.border)
+                    .bg(theme.colors.background)
+                    .overflow_hidden()
+                    .debug_selector(|| "editor-result-copy-names-card".to_string())
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .justify_between()
+                            .px_3()
+                            .py_2()
+                            .border_b(ui::HAIRLINE)
+                            .border_color(theme.colors.border)
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .child(crate::copy_names::COPY_NAMES_OPTIONS_TITLE),
+                            )
+                            .child(
+                                Button::new("editor-result-copy-names-close")
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::X)
+                                    .tooltip(tr("关闭").to_string())
+                                    .on_click(move |_, _window, app| {
+                                        close_queue.request(
+                                            ResultRequest::CloseCopyNamesOptions,
+                                            app,
+                                        );
+                                    }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .v_flex()
+                            .gap_2()
+                            .m_3()
+                            .child(self.render_copy_names_row(
+                                "column-delimiter",
+                                crate::copy_names::COPY_NAMES_COLUMN_DELIMITER_LABEL,
+                                crate::copy_names::CopyNamesField::ColumnDelimiter,
+                                &crate::copy_names::COLUMN_DELIMITER_CANDIDATES,
+                            ))
+                            .child(self.render_copy_names_row(
+                                "row-delimiter",
+                                crate::copy_names::COPY_NAMES_ROW_DELIMITER_LABEL,
+                                crate::copy_names::CopyNamesField::RowDelimiter,
+                                &crate::copy_names::ROW_DELIMITER_CANDIDATES,
+                            ))
+                            .child(self.render_copy_names_row(
+                                "quote",
+                                crate::copy_names::COPY_NAMES_QUOTE_LABEL,
+                                crate::copy_names::CopyNamesField::QuoteString,
+                                &crate::copy_names::QUOTE_CANDIDATES,
+                            ))
+                            // 提示行：真值 `copy_special_hint_for_hotkey`（截图同一行文案）
+                            .child(
+                                div()
+                                    .pt_1()
+                                    .text_xs()
+                                    .text_color(theme.colors.muted_foreground)
+                                    .child(crate::copy_names::COPY_NAMES_HOTKEY_HINT),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .justify_between()
+                            .gap_2()
+                            .px_3()
+                            .pb_3()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_xs()
+                                    .text_color(theme.colors.muted_foreground)
+                                    .child(SharedString::from(format!(
+                                        "将复制 {count} 个列名（{})",
+                                        crate::copy_names::escape_display_string(
+                                            self.copy_names_dialog
+                                                .as_ref()
+                                                .map(|dialog| dialog
+                                                    .settings
+                                                    .column_delimiter
+                                                    .as_str())
+                                                .unwrap_or("\t")
+                                        )
+                                    ))),
+                            )
+                            .child(
+                                Button::new("editor-result-copy-names-cancel")
+                                    .ghost()
+                                    .small()
+                                    .label(tr("取消"))
+                                    .on_click(move |_, _window, app| {
+                                        close_queue2.request(
+                                            ResultRequest::CloseCopyNamesOptions,
+                                            app,
+                                        );
+                                    }),
+                            )
+                            .child(
+                                Button::new("editor-result-copy-names-apply")
+                                    .primary()
+                                    .small()
+                                    .label(tr("确定"))
+                                    .on_click(move |_, _window, app| {
+                                        apply_queue
+                                            .request(ResultRequest::ApplyCopyNamesOptions, app);
+                                    }),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// 「选项」对话框的一行：label + 下拉（左半显当前值、右半 caret 开候选）。
+    ///
+    /// 显示值走 [`crate::copy_names::escape_display_string`]：`\t` 显示成 `\t` 两个字面字符
+    /// （真值 `UIWidgets.createDelimiterCombo` 同口径，截图里就是这样）。
+    fn render_copy_names_row(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        field: crate::copy_names::CopyNamesField,
+        candidates: &'static [&'static str],
+    ) -> AnyElement {
+        let current = self
+            .copy_names_dialog
+            .as_ref()
+            .map(|dialog| field.value(&dialog.settings).to_string())
+            .unwrap_or_default();
+        let shown = crate::copy_names::escape_display_string(&current);
+        let queue = self.queue.clone();
+        div()
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .child(div().w(rems(6.)).text_sm().child(label))
+            .child(
+                div()
+                    .w(rems(9.))
+                    .debug_selector(move || format!("editor-result-copy-names-{id}"))
+                    .child(
+                        DropdownButton::new(ElementId::Name(SharedString::from(format!(
+                            "editor-result-copy-names-dd-{id}"
+                        ))))
+                        .small()
+                        .button(
+                            Button::new(ElementId::Name(SharedString::from(format!(
+                                "editor-result-copy-names-value-{id}"
+                            ))))
+                            .label(shown)
+                            .ghost()
+                            .small(),
+                        )
+                        .dropdown_menu(move |mut menu, _window, _cx| {
+                            for candidate in candidates.iter() {
+                                let queue = queue.clone();
+                                // 菜单项显示转义字面量（`\t`），值也按**显示串**回传：
+                                // 真值 Combo 存的就是显示串，`okPressed` 才
+                                // `unescapeDisplayString` 还原成控制字符（`:178-180`）
+                                let shown = crate::copy_names::escape_display_string(candidate);
+                                let value = shown.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::new(shown).on_click(move |_, _window, app| {
+                                        queue.request(
+                                            ResultRequest::SetCopyNamesField {
+                                                field,
+                                                value: value.clone(),
+                                            },
+                                            app,
+                                        );
+                                    }),
+                                );
+                            }
+                            menu
+                        }),
+                    ),
+            )
+            .child(div().flex_1())
             .into_any_element()
     }
 

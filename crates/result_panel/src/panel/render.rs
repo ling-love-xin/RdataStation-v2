@@ -1801,6 +1801,13 @@ impl ResultPanel {
                 self.auto_refresh_dialog_open
                     .then(|| self.render_auto_refresh_config(cx)),
             )
+            // 【复制列名】「选项」对话框（真值 `CopyConfigDialog("CopyGridNamesOptionsDialog")`）：
+            // 同范式最后挂；只在多列复制时开（单列直接拷，不弹）
+            .children(
+                self.copy_names_dialog
+                    .is_some()
+                    .then(|| self.render_copy_names_options(cx)),
+            )
             .into_any_element()
     }
 

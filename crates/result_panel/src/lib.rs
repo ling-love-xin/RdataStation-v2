@@ -20,6 +20,8 @@
 //! - [`error_card`] / [`script_card`]：结果区两张卡片（失败 / 脚本输出）
 //! - [`export`]：结果导出五档（TSV / JSON / CSV / SQL Updates / Parquet / XLSX）
 //! - [`analysis`]：结果分析菜单（对已抓行跑聚合 SQL 的预置项）
+//! - [`column_browser`]：列浏览器清单（多选集合 + 批量动作）
+//! - [`copy_names`]：复制列名「选项」对话框的参数模型（列/行分隔符 + 引号 + 转义拼接）
 //! - [`panel`]：独立 `ResultPanel` 实体（状态 + 视图 + 动作闭环；由编辑器宿主嵌入）
 //! - [`ports`]：宿主端口（执行 / 导出写文件 / 值预览 / 列统计 / 洞察 / 连接解析）
 
@@ -27,6 +29,7 @@ pub mod analysis;
 pub mod auto_refresh;
 pub mod changes;
 pub mod column_browser;
+pub mod copy_names;
 pub mod ddl;
 pub mod error_card;
 pub mod export;

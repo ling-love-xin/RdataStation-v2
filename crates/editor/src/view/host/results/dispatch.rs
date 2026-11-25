@@ -323,6 +323,17 @@ impl EditorHostPanel {
             ResultRequest::CloseAutoRefreshConfig => self
                 .result_panel
                 .update(cx, |p, cx| p.close_auto_refresh_config(cx)),
+            // 【复制列名】「选项」对话框（真值 `ResultSetHandlerCopySpecial.CopyConfigDialog`）：
+            // 三行的下拉选中 / 「确定」/「取消」，全部只动面板状态与剪贴板，不需要 window
+            ResultRequest::SetCopyNamesField { field, value } => self
+                .result_panel
+                .update(cx, |p, cx| p.set_copy_names_field(field, value, cx)),
+            ResultRequest::ApplyCopyNamesOptions => self
+                .result_panel
+                .update(cx, |p, cx| p.apply_copy_names_options(cx)),
+            ResultRequest::CloseCopyNamesOptions => self
+                .result_panel
+                .update(cx, |p, cx| p.close_copy_names_options(cx)),
             // 【计算行数】状态行那颗钮：对原 SQL 跑 count(*)，数字就地回填到钮上
             ResultRequest::CountRows => self.count_result_rows(cx),
             ResultRequest::FetchMore => self.fetch_more(cx),

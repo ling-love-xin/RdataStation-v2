@@ -4079,3 +4079,46 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
    （网格不持有方言）。
 
 细节见 `docs/architecture/editor/result-panel.md` §9.72。
+### 57.11 「复制列名」的多列选项对话框（2026-11-26，已落地）
+
+#### 57.11.1 真值（`ResultSetHandlerMain.java:333-375` + `ResultSetHandlerCopySpecial.java:110-187`）
+
+| 项 | 真值 | 出处 |
+| --- | --- | --- |
+| 触发条件 | `attrs.size() > 1` 才弹；**单列不弹**，直接 `copyToClipboard` | `ResultSetHandlerMain:351` |
+| 对话框实例 | `new ResultSetHandlerCopySpecial.CopyConfigDialog(shell, "CopyGridNamesOptionsDialog")` | `:352` |
+| 取消语义 | `open() != OK_ID` → 直接 `return null`：**不拷、不改记忆** | `:353-355` |
+| 拼装 | 只用 `settings.getColumnDelimiter()` + `attr.getLabel()`（空则 `getName()`）；有 dataSource 时 `getQuotedIdentifier` | `:359-372` |
+| 标题 | `ResultSetMessages.copy_special_options` = 中文「选项」 | `CopySpecial:126` |
+| 三行 | 列分隔符 / 行分隔符 / 引号字符（`copy_special_col_delim` / `row_delim` / `quote`） | `:154-163` |
+| 默认值 | `\t` / `\n` / `"` | `:129-131` |
+| 候选 | 列 `\t` `;` `,`；行 `\n` `\|` `^` `,`；引号 `"` `'`（`Combo` 不可编辑） | `:154-156` |
+| 记忆 | Eclipse `DialogSettings(dialogId)` 三项，打开回填、确定写回 | `:132-140`、`:181-186` |
+| 提示行 | `copy_special_hint_for_hotkey` + `CMD_COPY_SPECIAL_LAST` 键位描述 | `:161-163` |
+
+截图实证的中文：标题「选项」、`列分隔符`、`行分隔符`、`引号字符`、
+「将来在此设置下可以使用快捷键：Ctrl+Alt+Shift+C」、`确定` / `取消`；
+下拉里显示转义字面量（`\t` / `\n`），不是控制字符本身。
+
+#### 57.11.2 本仓落点
+
+| 项 | 落点 |
+| --- | --- |
+| 参数模型 / 文案 / 候选 / 转义 / 拼接 / 判定 | 新增 `crates/result_panel/src/copy_names.rs` |
+| 命令本体（多列开浮层、单列直拷） | `panel/events.rs::copy_column_names`（返回 `CopyColumnNamesOutcome`） |
+| 浮层渲染（420px 卡片 + 三行下拉 + 提示 + 页脚） | `panel/dialog.rs::render_copy_names_options` |
+| 挂载 / ESC 收口 | `panel/render.rs` 浮层链末尾；`panel/events.rs::dismiss_overlay` |
+| 动作入口 | `ports.rs` 三变体 → `editor/.../results/dispatch.rs` 三分支 |
+| 状态行文案 | `editor/.../exec/edit_cmds.rs::on_copy_column_names` |
+| 回归哨兵 | `editor-result-copy-names`（遮罩）、`-card`、`-column-delimiter` / `-row-delimiter` / `-quote`、`-cancel` / `-apply` |
+
+#### 57.11.3 仍存差异
+
+1. 面板内 `absolute` 遮罩卡片，不是窗口级 `BaseDialog`。
+2. 下拉是 `DropdownButton`（左半只读值 + 右半 caret），真值 `Combo`；不支持手输自定义分隔符。
+3. 提示行是固定中文原文，不解析 `CMD_COPY_SPECIAL_LAST` 键位（本仓无「复制特殊」命令）。
+4. 多列来源：真值取表格**列选区**；本仓表格无列多选，多列只在 `ALT+SHIFT+C`「无焦点格 → 全部可见列」出现。
+   列头右键单列直拷、列浏览器清单换行直拷（都按真值各自的命令口径）。
+5. 不加引号；样式只在会话内记忆（真值写 `DialogSettings` 落盘）。
+
+细节见 `docs/architecture/editor/result-panel.md` §9.73。

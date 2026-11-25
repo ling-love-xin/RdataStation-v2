@@ -10685,6 +10685,86 @@ JSON 树** —— 而网格里双击进去的是行内编辑框（一整条字�
 是按旧「绝对定位 + 悬停显形」写的，本轮改名并改写为
 `header_column_menu_is_always_visible_beside_the_name`（三角恒有几何、不压字、列名仍 ≥ 56px）。
 `cargo check -p rds-editor --lib` 通过。preview 重建后 `stage=3`、`demo columns=8 rows=8`、无 stderr。
+### 9.73 「复制列名」的多列选项对话框（2026-11-26）
+
+#### 9.73.1 真值
+
+`CMD_COPY_COLUMN_NAMES` 的处理器 `ResultSetHandlerMain.java:333-375`：
+
+| 步骤 | 真值 | 行 |
+| --- | --- | --- |
+| 取列集合 | `selection.isEmpty() ? model.getVisibleAttributes() : selection.getSelectedAttributes()` | `:338` |
+| 事件带 `columns` 参数且只有一列 | 按逗号拆名字重建（列头右键那条入口） | `:339-348` |
+| **多列才弹对话框** | `if (attrs.size() > 1) { new CopyConfigDialog(shell, "CopyGridNamesOptionsDialog").open(); 非 OK 直接 return null; }` | `:350-357` |
+| 拼装 | 逐列 `buffer.append(settings.getColumnDelimiter())` + `attr.getLabel()`（空则 `getName()`）；有 dataSource 时套 `DBUtils.getQuotedIdentifier` | `:359-372` |
+
+对话框 `ResultSetHandlerCopySpecial.java:110-187`（`public static class CopyConfigDialog extends BaseDialog`）：
+
+| 项 | 真值 |
+| --- | --- |
+| 标题 | `ResultSetMessages.copy_special_options` → 中文「选项」（截图实证） |
+| 三行 | `列分隔符` / `行分隔符` / `引号字符`（`copy_special_col_delim` 等三条 NLS） |
+| 默认值 | `"\t"` / `"\n"` / `"\""`（`:129-131`） |
+| 候选（不可编辑 `Combo`） | 列 `{"\t",";",","}`；行 `{"\n","|","^",","}`；引号 `{"\"","'"}`（`:154-156`） |
+| 记忆 | `DialogSettings(dialogId)` 按 dialogId 存三项，下次打开回填（`:132-140`、`:181-186`） |
+| 确认 | 三项 `CommonUtils.unescapeDisplayString` 还原 → 写 `copySettings` → 写 `DialogSettings`（`:177-186`） |
+| 取消 | `open() != OK_ID` → 不拷、不改记忆 |
+| 提示行 | `NLS.bind(copy_special_hint_for_hotkey, ActionUtils.findCommandDescription(CMD_COPY_SPECIAL_LAST,…))` → 「将来在此设置下可以使用快捷键：Ctrl+Alt+Shift+C」（截图实证） |
+
+注意：**这条命令拼文本只用列分隔符**，行分隔符 / 引号是因为复用同一个 `CopyConfigDialog` 才显示出来
+（它们属于「复制特殊」`CMD_COPY_SPECIAL_LAST` 那条命令）。
+
+#### 9.73.2 本仓落地
+
+- 新增 `crates/result_panel/src/copy_names.rs`（`lib.rs` 注册 `pub mod copy_names;`）：
+  文案常量（`COPY_NAMES_OPTIONS_TITLE` / 三行 label / `COPY_NAMES_HOTKEY_HINT`）、三组候选常量、
+  `CopyNamesSettings`（默认 `\t` / `\n` / `"`）、`escape_display_string` / `unescape_display_string`、
+  `join_column_names`、`copy_names_needs_dialog(count)`、`CopyNamesField`（+ `apply` / `value`）、
+  `CopyColumnNamesOutcome { Copied(n) | Options(n) }`、5 条单测。
+- `panel/events.rs::copy_column_names` 改签名 `Result<CopyColumnNamesOutcome, String>`：
+  列集合口径不变（焦点格所在列 → 全部可见列）；**多列** → 打开 `copy_names_dialog`
+  （回填上次确认的样式）并返回 `Options(n)`，**此时剪贴板不动**；**单列** → 直接写剪贴板返回 `Copied(n)`。
+- 新增面板方法 `set_copy_names_field`（值按显示串 `\t` 收、`unescape` 后落样式）、
+  `apply_copy_names_options`（拼文本 → 写剪贴板 → 记忆样式 → 收浮层）、
+  `close_copy_names_options`（不写不记，只收）。
+- `panel/dialog.rs::render_copy_names_options` + `render_copy_names_row`：420px 卡片
+  （标题「选项」+ ✕ / 三行 label + `DropdownButton`（左半显转义值、右半 caret 开候选）/ 提示行 /
+  行尾「将复制 N 个列名（`\t`）」+ 取消 / 确定），范式同 `render_auto_refresh_config`；
+  `panel/render.rs` 挂在浮层链**最后**；`dismiss_overlay` 把 `copy_names_dialog` 收进去（`ESC` = 取消）。
+- `panel/data.rs`：`CopyNamesDialog { names, settings }` + `ResultPanel::copy_names_dialog` /
+  `copy_names_settings` 两字段（`panel/lifecycle.rs` 构造初始化）。
+- `ports.rs`：`ResultRequest::{SetCopyNamesField, ApplyCopyNamesOptions, CloseCopyNamesOptions}`。
+- `crates/editor/src/view/host/results/dispatch.rs`：三个分支（该 match 无 `_` 兜底，必须加）。
+- `crates/editor/src/view/host/exec/edit_cmds.rs::on_copy_column_names`：按新枚举发状态行文案
+  （`Copied(1)` → 已复制列名；`Copied(n)` → 已复制 N 个列名（TSV）；`Options(n)` → N 个列名：选分隔符后「确定」）。
+- `examples/preview.rs`：`PreviewStage=5` 时构造完直接调一次 `copy_column_names`（出厂无焦点格 →
+  8 列 → 弹「选项」），供目视；`drain` 补三个分支，浮层点击在预览里真生效。
+
+调试选择器：`editor-result-copy-names` / `-card` / `-close` / `-column-delimiter` / `-row-delimiter` /
+`-quote` / `-cancel` / `-apply`。
+
+#### 9.73.3 差异（登记，勿当 bug 修）
+
+1. **浮层形态**：本仓是面板内 `absolute` 遮罩卡片，不是窗口级 `BaseDialog`（面板 `render` 只有 `&App`）。
+2. **下拉控件**：`DropdownButton`（左半只读显示当前值 + 右半 caret），真值是可编辑 `Combo`（可手输自定义分隔符）。
+   手输通道未做——真值 `uneditable=false` 但实际只给候选。
+3. **快捷键提示是固定文案**：本仓没有「复制特殊」`CMD_COPY_SPECIAL_LAST` 那条命令，提示行按真值中文原文直出，
+   不做键位描述解析。
+4. **「多列」的取得路径**：真值的多列来自结果集表格的**列选区**；本仓表格没有列多选，多列只在
+   `ALT+SHIFT+C`「无焦点格 → 全部可见列」时出现。列头右键的「复制列名「x」」仍是单列直拷（真值同）。
+   列浏览器清单的「复制列名」保持换行直拷（真值 `meta_data_panel_action_copy_column_text` 是另一条命令、
+   不弹窗）。
+5. **不加引号**：真值有 dataSource 时 `DBUtils.getQuotedIdentifier`；本仓无方言通道，复制裸名（沿用既有口径）。
+6. **样式只在会话内记忆**：真值写 Eclipse `DialogSettings`（跨会话），本仓不落盘（与 AutoRefresh 配置同口径，
+   见 §54.8）。
+
+#### 9.73.4 验证
+
+`cargo check -p rds-result-panel --lib --tests` 通过（0 warning）；`cargo test -p rds-result-panel --lib`
+**510 passed / 0 failed**（503 + `copy_names` 5 条单测 + 2 条面板用例：取消不写不改、显示串还原）。
+既有 `copying_column_names_*` 用例按新语义改写（多列那一步改成断言 `Options(2)` + 确认前剪贴板为空 +
+改成逗号后确定得到 `id,amount`）。`cargo check -p rds-editor --lib` 通过（仅并行线 warning）。
+preview 重建后 `PREVIEW_STAGE=5`：`[preview] copy_column_names -> Ok(Options(8))`，浮层随窗口起即出，无 stderr 异常。
 
 ## 20. 有意差异汇总
 
@@ -10763,10 +10843,11 @@ JSON 树** —— 而网格里双击进去的是行内编辑框（一整条字�
 
 | 差异 | 出处 |
 | --- | --- |
-| 模态对话框 → 面板内 absolute 遮罩 + 卡片（四个浮层同范式） | §9.58.6、§9.63.4 |
+| 模态对话框 → 面板内 absolute 遮罩 + 卡片（五个浮层同范式，含「复制列名选项」§9.73） | §9.58.6、§9.63.4、§9.73.3 |
 | 筛选设置打开即把焦点交给「自定义排序」输入框 | §9.63.4 |
 | `ESC` 走 app 级 interceptor（不可重绑、设置页不列）；无浮层时零影响 | §9.64.5 |
 | 鼠标 ✕ 三条出口不交回焦点（只收 `cx`、没有 window） | §9.64.8 |
+| 「复制列名选项」的下拉是 `DropdownButton`（只读显值 + caret），真值是可编辑 `Combo`；提示行固定中文原文 | §9.73.3 |
 
 ### 20.5 筛选与存档
 
