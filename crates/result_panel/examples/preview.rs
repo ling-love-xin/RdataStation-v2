@@ -217,7 +217,9 @@ fn demo_input() -> ResultSyncInput {
 }
 
 /// 分段开关（爆栈诊断用，正常跑不需要设）：`1` = 空窗口，`2` = 只渲染面板（不订阅），
-/// 其余 = 完整宿主。三种形态一次编译、三次运行即可判「问题在框架层还是面板层」。
+/// `4` = 完整宿主 + 自动打开「自动刷新配置」浮层（验浮层渲染链 / render 期 drain，
+/// 不会自动弹，只在这个变量下弹），其余 = 完整宿主。
+/// 三种形态一次编译、多次运行即可判「问题在框架层还是面板层」。
 fn stage() -> u8 {
     std::env::var("PREVIEW_STAGE")
         .ok()
@@ -322,6 +324,11 @@ fn run_preview() {
                     });
                     // 队列的宿主侧：拿到面板弱引用，按钮 notify 才能传到宿主
                     panel.read(cx).queue().set_panel(panel.downgrade());
+                    // stage 4：自动打开「自动刷新配置」浮层（验证浮层渲染链 + render 期 drain
+                    // 不死循环；默认不弹，只在设了 `PREVIEW_STAGE=4` 时弹）
+                    if stage == 4 {
+                        panel.update(cx, |p, cx| p.open_auto_refresh_config(window, cx));
+                    }
                     if stage == 2 {
                         cx.new(|_| PanelOnly { panel: panel.clone() }).into()
                     } else {
