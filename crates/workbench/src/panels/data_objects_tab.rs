@@ -762,7 +762,16 @@ impl DataObjectsTab {
                     // 它的 `.h()` 只对多行输入生效（`input.rs` 里 `.when(is_multi_line)` 才用）。
                     // 上一版写 `CONTROL_HEIGHT_SM`（26）实际画出来是 32（Medium 档），
                     // 与 24 的按钮差 8px——这一行四个控件必须同高。
-                    .child(Input::new(&search).small()),
+                    // 样式与左侧导航 / 草稿箱 / 资产库同一档：**无边框 + `input.background`
+                    // 填充底**（`bordered(false)` 只去边框、保留底色；`appearance(false)` 才会连底一起去）。
+                    // 聚焦时才出边框（`focus_bordered`）——实机反馈 2026-11-25 第 2 条：
+                    // 左右两个搜索框一个是填充底、一个是 1px 亮边框，并排看着不是一套控件。
+                    .child(
+                        Input::new(&search)
+                            .small()
+                            .bordered(false)
+                            .focus_bordered(true),
+                    ),
             )
             .right(
                 // 外层包一格只为测量（`layout_probe` 量行内控件是否真的同高）；
