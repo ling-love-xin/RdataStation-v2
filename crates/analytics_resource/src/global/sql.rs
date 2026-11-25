@@ -1,7 +1,6 @@
 //! SQLite / DuckDB 连接助手。
 
 use super::*;
-use rusqlite::OptionalExtension as _;
 
 impl GlobalInstanceStore {
     /// 全局 SQLite 操作（懒加载打开全局库；同步段完成即放锁）。

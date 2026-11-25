@@ -23,7 +23,6 @@ pub(crate) use gpui_kit::component::{ActiveTheme, Sizable as _, Theme, WindowExt
 pub(crate) use gpui_kit::prelude::FluentBuilder as _;
 pub(crate) use gpui_kit::*;
 
-pub(crate) use crate::model::PayloadMode;
 pub(crate) use crate::ui;
 
 /// 列表最多列多少条：回收站条目只增不减（谁也不会常来清），超出的**明说**，
