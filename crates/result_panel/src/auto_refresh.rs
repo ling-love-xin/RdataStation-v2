@@ -26,6 +26,14 @@ use shared::i18n::{tr, tr_dyn};
 /// DBeaver `AUTO_REFRESH_DEFAULTS`（`AutoRefreshControl.java:194`，单位秒）。
 pub const AUTO_REFRESH_DEFAULTS: [u32; 6] = [1, 5, 10, 15, 30, 60];
 
+/// 菜单末尾那条提示（真值 `controls_resultset_viewer_frequent_refresh_hint`，
+/// `ResultSetMessages_zh.properties:146`）。
+///
+/// 真值的 hint 来自 `setHintSupplier`，按事务状态二选一（`AutoRefreshControl.java:292-302`）：
+/// autocommit → 本条；非 autocommit → `..._switch_autocommit_hint`（`:184`，「切换到自动提交
+/// 以查看外部更改」）。本仓没有事务状态端口可问，固定取 autocommit 口径，登记为有意差异。
+pub const AUTO_REFRESH_HINT: &str = "提示：频繁刷新可能会导致服务器负载过高";
+
 /// 菜单项点下去要做什么（真值 `:218-245` 三个入口）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AutoRefreshAction {
@@ -52,7 +60,9 @@ pub struct AutoRefreshEntry {
 ///
 /// `enabled` = 自动刷新当前是否打开；`interval_secs` = 当前间隔（0 = 从未配置，
 /// 与 DBeaver `RefreshSettings.refreshInterval` 的默认值一致，`RefreshSettings.java:26`）。
-pub fn menu_entries(enabled: bool, interval_secs: u32) -> Vec<AutoRefreshEntry> {
+/// `hint` = 菜单末尾那条**禁用提示**（真值 `:247-256`：`setHintSupplier` 给的文案非空才加，
+/// 且前面再补一条分隔线；注释说明它兼作"防误触下坠"的下沿填充）。
+pub fn menu_entries(enabled: bool, interval_secs: u32, hint: Option<&str>) -> Vec<AutoRefreshEntry> {
     let mut entries = vec![
         AutoRefreshEntry {
             label: tr("自定义...").to_string(),
@@ -87,6 +97,17 @@ pub fn menu_entries(enabled: bool, interval_secs: u32) -> Vec<AutoRefreshEntry> 
             checked: enabled && secs == interval_secs,
         });
     }
+    // 真值 `:247-256`：hint 非空才摆——分隔 + 一条**禁用**项（`action: None` 就是这条的
+    // 判据，渲染侧见 `menu.item(..disabled(true))`）。空串按"没 hint"处理（真值
+    // `CommonUtils.isEmpty` 同口径）。
+    if let Some(text) = hint.map(str::trim).filter(|text| !text.is_empty()) {
+        entries.push(AutoRefreshEntry {
+            label: text.to_string(),
+            action: None,
+            separator_before: true,
+            checked: false,
+        });
+    }
     entries
 }
 
@@ -96,7 +117,7 @@ mod tests {
 
     #[test]
     fn menu_starts_with_customize_then_stop_then_presets() {
-        let entries = menu_entries(false, 0);
+        let entries = menu_entries(false, 0, None);
         assert_eq!(entries.len(), 2 + AUTO_REFRESH_DEFAULTS.len());
         assert_eq!(entries[0].label, "自定义...");
         assert_eq!(entries[0].action, Some(AutoRefreshAction::Configure));
@@ -114,7 +135,7 @@ mod tests {
 
     #[test]
     fn interval_outside_presets_is_inserted_first() {
-        let entries = menu_entries(true, 7);
+        let entries = menu_entries(true, 7, None);
         // 「自定义...」「停止」之后的第一条预设 = 当前的非预设间隔
         assert_eq!(entries[2].action, Some(AutoRefreshAction::SetInterval(7)));
         assert_eq!(entries[2].label, "每 7 秒刷新一次");
@@ -123,7 +144,7 @@ mod tests {
 
     #[test]
     fn enabled_marks_only_the_active_interval() {
-        let entries = menu_entries(true, 10);
+        let entries = menu_entries(true, 10, None);
         let checked: Vec<&AutoRefreshEntry> = entries.iter().filter(|e| e.checked).collect();
         assert_eq!(checked.len(), 1, "只有当前间隔算默认项");
         assert_eq!(checked[0].action, Some(AutoRefreshAction::SetInterval(10)));
@@ -131,9 +152,23 @@ mod tests {
 
     #[test]
     fn disabled_marks_nothing() {
-        let entries = menu_entries(false, 10);
+        let entries = menu_entries(false, 10, None);
         assert!(entries.iter().all(|e| !e.checked), "未开启时没有默认项");
         // 「停止」项的启用态由渲染侧按 enabled 决定（真值 `:223`）
         assert_eq!(entries[1].action, Some(AutoRefreshAction::Stop));
+    }
+
+    #[test]
+    fn hint_is_a_disabled_trailing_item_after_a_separator() {
+        // 真值 `:247-256`：hint 非空 → 分隔 + 禁用项，且排在所有预设之后
+        let entries = menu_entries(true, 10, Some("提示：频繁刷新可能会导致服务器负载过高"));
+        let last = entries.last().expect("至少有一条 hint");
+        assert_eq!(last.label, "提示：频繁刷新可能会导致服务器负载过高");
+        assert_eq!(last.action, None, "hint 项没有动作（渲染侧画成禁用项）");
+        assert!(last.separator_before, "hint 前面要补一条分隔线");
+        assert!(!last.checked);
+        // 空串 / 纯空白按「没 hint」处理（真值 `CommonUtils.isEmpty` 同口径）
+        assert_eq!(menu_entries(true, 10, Some("   ")).len(), 2 + AUTO_REFRESH_DEFAULTS.len());
+        assert_eq!(menu_entries(true, 10, None).len(), 2 + AUTO_REFRESH_DEFAULTS.len());
     }
 }

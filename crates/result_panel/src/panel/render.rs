@@ -865,12 +865,17 @@ impl ResultPanel {
                 )
                 .dropdown_menu(move |menu, _window, _app| {
                     let mut menu = menu;
-                    for entry in crate::auto_refresh::menu_entries(auto_enabled, auto_interval) {
+                    for entry in crate::auto_refresh::menu_entries(
+                        auto_enabled,
+                        auto_interval,
+                        Some(crate::auto_refresh::AUTO_REFRESH_HINT),
+                    ) {
                         if entry.separator_before {
                             menu = menu.separator();
                         }
                         let Some(action) = entry.action else {
-                            // 真值的 hint 项是禁用项（`:247-256`）；本仓目前不产这类项
+                            // 真值 `:247-256` 的 hint 项：禁用（`setEnabled(false)`），
+                            // 同时兼作菜单下沿填充、避免误触下坠
                             menu = menu.item(PopupMenuItem::new(entry.label).disabled(true));
                             continue;
                         };
