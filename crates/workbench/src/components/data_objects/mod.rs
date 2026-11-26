@@ -398,6 +398,11 @@ pub struct SessionSource {
     /// 会话主人（文档 / 面板身份）：同一个别名可能在多个会话里同时存在，身份必须带它
     pub owner: String,
     pub alias: String,
+    /// 这个源来自哪条连接（`mounted.source.conn_id`；加速档就是自己的 conn_id）。
+    ///
+    /// `None` = 说不出归属（只可能是老调用方），此时只能按会话单出一行。
+    /// 有归属且该连接已在连接清单里 = 这条事实由**连接行**承载，会话行不再单出（K2）。
+    pub conn_id: Option<String>,
     /// 挂上时的说明（表数量之类）
     pub note: String,
     /// 挂载失败的原话（引擎侧不翻译，界面也不改写）
@@ -548,8 +553,24 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
         .iter()
         .map(|source| source.alias.as_str())
         .collect();
+    // 【K2】源记录唯一：一条源只出一行。连接清单里的 id 是「源记录」的主身份——
+    // 会话源的归属连接只要在清单里，它的事实就由那一行承载，这里不再单出。
+    let known_conn_ids: Vec<&str> = collected
+        .connections
+        .iter()
+        .map(|conn| conn.id.as_str())
+        .collect();
     for source in &collected.session_sources {
         if accel_aliases.contains(&source.alias.as_str()) {
+            continue;
+        }
+        // 归属连接在列（或已登记成项目源）→ 事实并进那一行；两侧都列 = 同一源两行
+        let covered_by_conn = source
+            .conn_id
+            .as_deref()
+            .is_some_and(|id| known_conn_ids.contains(&id));
+        let covered_by_registration = registered_aliases.iter().any(|alias| alias == &source.alias);
+        if covered_by_conn || covered_by_registration {
             continue;
         }
         // 挂载事实 = 会话真起来了（失败态不算挂上）；登记侧按别名查
@@ -661,16 +682,33 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             .iter()
             .find(|row| row.connection_id.as_deref() == Some(conn.id.as_str()))
             .map(|row| row.alias.clone());
-        // 网络连接挂没挂 = 两件事取或：**登记的别名在联邦/分析会话里成了事实**（会话行按
-        // 别名列，不按连接 id），或**它在本地加速档里有 catalog**（`mounted_conns()` 按
-        // conn_id 记；第 42 条末段 2026-11-26 起算「已挂载」）。加速档那条会话本身不出
-        // 源段，见上面 `accel_aliases` 的排除。
-        let session_mounted = registered_alias.as_deref().is_some_and(|alias| {
-            collected
-                .session_sources
-                .iter()
-                .any(|source| source.alias == alias && source.failed.is_none())
-        });
+        // 网络连接挂没挂：**先按归属连接 id 找会话事实**（K2：一个源一条记录，两个文档
+        // 各挂一次也只是同一条）；再兜一层登记别名（老调用方没有 conn_id 时）。
+        let conn_sessions: Vec<&SessionSource> = collected
+            .session_sources
+            .iter()
+            .filter(|source| source.conn_id.as_deref() == Some(conn.id.as_str()))
+            .collect();
+        let session_mounted = conn_sessions.iter().any(|source| source.failed.is_none())
+            || registered_alias.as_deref().is_some_and(|alias| {
+                collected
+                    .session_sources
+                    .iter()
+                    .any(|source| source.alias == alias && source.failed.is_none())
+            });
+        // 有会话但挂载失败：原话必须落到这一行（会话行已被并进来，原因不能在并入时丢掉）
+        let mount_failure: Option<String> = conn_sessions
+            .iter()
+            .find_map(|source| source.failed.clone())
+            .or_else(|| {
+                registered_alias.as_deref().and_then(|alias| {
+                    collected
+                        .session_sources
+                        .iter()
+                        .find(|source| source.alias == alias && source.failed.is_some())
+                        .and_then(|source| source.failed.clone())
+                })
+            });
         let note = match (&file_path, &not_mounted) {
             // 文件库把本体路径写在副标题上：用户要确认"挂的是哪一个文件"
             (Some(path), _) => format!("文件库 · {path}"),
@@ -707,6 +745,11 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             Some(alias) => format!("{note} · 别名 {alias}"),
             None => note,
         };
+        // 挂载失败的原话跟着并入的行走（K2：会话行不再单出，原因不能丢）
+        let note = match &mount_failure {
+            Some(reason) => format!("{note} · 挂载失败：{reason}"),
+            None => note,
+        };
         let state = if !connected {
             State::Failed("未连接 · 连上后可展开选表".to_string())
         } else if !conn.attach_capable {
@@ -715,6 +758,9 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             State::Ready
         } else if not_mounted.is_some() {
             State::Failed(UNMOUNTED_HINT.to_string())
+        } else if let Some(reason) = &mount_failure {
+            // 会话挂过但失败了：行进不去表段，原因就是引擎原话（已写进 note）
+            State::Failed(reason.clone())
         } else if file_path.is_none() && !session_mounted && !accel_mounted {
             // 网络连接：联邦/分析会话、加速档都没有就是没挂。展开它只会得到一句「先挂上」——
             // 那不该做成一个能点开才报错的行
@@ -1688,6 +1734,7 @@ pub fn collect(shared: &Shared) -> Collected {
                     rows.push(SessionSource {
                         owner: info.owner.clone(),
                         alias,
+                        conn_id: Some(mounted.source.conn_id.clone()),
                         note,
                         failed,
                     });
@@ -1713,8 +1760,9 @@ pub fn collect(shared: &Shared) -> Collected {
                     .map(|item| item.name.clone())
                     .unwrap_or_else(|| conn_id.clone());
                 SessionSource {
-                    owner: conn_id,
+                    owner: conn_id.clone(),
                     alias,
+                    conn_id: Some(conn_id),
                     note: format!("{conn_name} · {} · 分析实例挂载", kind.label()),
                     failed: None,
                 }
@@ -1802,12 +1850,14 @@ mod tests {
                 SessionSource {
                     owner: "编辑器 · 分析.sql".into(),
                     alias: "mysql_src".into(),
+                    conn_id: Some("C_mysql_9".into()),
                     note: "42 张表 · 主源".into(),
                     failed: None,
                 },
                 SessionSource {
                     owner: "编辑器 · 分析.sql".into(),
                     alias: "oracle_src".into(),
+                    conn_id: Some("C_oracle_1".into()),
                     note: String::new(),
                     failed: Some("扩展未安装".into()),
                 },
@@ -1816,6 +1866,7 @@ mod tests {
                 owner: "C_mysql_9".into(),
                 // 加速档的 catalog 名固定是 `rds_src`；连接名进 note（见 `collect`）
                 alias: "rds_src".into(),
+                conn_id: Some("C_mysql_9".into()),
                 note: "订单库 · MySQL · 本地加速会话".into(),
                 failed: None,
             }],
@@ -2241,37 +2292,73 @@ mod tests {
         assert!(!failed.can_analyze());
     }
 
-    /// 同一个别名挂在两个会话里时，必须能分开（身份带 owner）。
+    /// 【K2】同一条连接被两个文档各挂一次 → 面板里仍只有**一条源记录**（连接行承载）。
     ///
-    /// 不带 owner 的话两行 key 一样，工作集里点一个就等于点了两个。
+    /// 这是「任一源只出现一次」的核心性质：行身份是**源**（conn_id），不是会话。
     #[test]
-    fn same_alias_in_two_sessions_keeps_distinct_identities() {
+    fn same_connection_mounted_by_two_documents_is_one_row() {
         let mut c = sample();
         c.session_sources = vec![
             SessionSource {
                 owner: "编辑器 · a.sql".into(),
                 alias: "mysql_src".into(),
+                conn_id: Some("C_mysql_9".into()),
                 note: "42 张表 · 主源".into(),
                 failed: None,
             },
             SessionSource {
                 owner: "编辑器 · b.sql".into(),
                 alias: "mysql_src".into(),
+                conn_id: Some("C_mysql_9".into()),
                 note: "18 张表 · 已挂载".into(),
                 failed: None,
             },
         ];
         let rows = objects(&c);
-        // 按 `session:` 键前缀滤（段里还有加速源行，不能按整段数）
+        assert!(
+            !rows.iter().any(|o| o.key.starts_with("session:")),
+            "会话行已并入连接行，不该再单出：{:?}",
+            rows.iter().map(|o| o.key.as_str()).collect::<Vec<_>>()
+        );
+        let conn_rows = rows.iter().filter(|o| o.key == "conn:C_mysql_9").count();
+        assert_eq!(conn_rows, 1, "一条源只能一行");
+        let conn_row = rows.iter().find(|o| o.key == "conn:C_mysql_9").unwrap();
+        assert_eq!(
+            conn_row.pill,
+            MountState::from_facts(true, true).label(),
+            "并入后挂载事实照旧：登记过 + 会话里挂着"
+        );
+    }
+
+    /// 说不出归属的会话源（没有 conn_id 的老调用方）仍按会话各出一行，身份带 owner。
+    #[test]
+    fn session_rows_without_conn_identity_stay_separate() {
+        let mut c = sample();
+        c.session_sources = vec![
+            SessionSource {
+                owner: "编辑器 · a.sql".into(),
+                alias: "editor_a_src".into(),
+                conn_id: None,
+                note: "42 张表 · 主源".into(),
+                failed: None,
+            },
+            SessionSource {
+                owner: "编辑器 · b.sql".into(),
+                alias: "editor_b_src".into(),
+                conn_id: None,
+                note: "18 张表 · 已挂载".into(),
+                failed: None,
+            },
+        ];
+        let rows = objects(&c);
         let session_rows: Vec<&Object> = rows
             .iter()
             .filter(|o| o.key.starts_with("session:"))
             .collect();
         assert_eq!(session_rows.len(), 2);
         assert_ne!(session_rows[0].key, session_rows[1].key);
-        // 界面上仍显示同一个别名（用户认的是别名，不是 owner）
-        assert_eq!(session_rows[0].name, "mysql_src");
-        // 主源标记要带在副标题里
+        // 界面上仍显示别名（用户认的是别名，不是 owner）
+        assert_eq!(session_rows[0].name, "editor_a_src");
         assert!(session_rows[0].note.contains("主源"));
     }
 
@@ -2519,7 +2606,7 @@ mod tests {
         );
     }
 
-    /// 没登记、会话在：源段只说「未挂载」（没登记就没有 scope 可宣称）。
+    /// 没登记、会话在：源段说「已挂载 · 会话级」（挂上了，但没有项目级 scope）。
     #[test]
     fn mounted_without_registry_is_session_level() {
         let mut c = sample();
@@ -2531,8 +2618,8 @@ mod tests {
             .find(|o| o.key == "conn:C_mysql_9")
             .expect("连接行要在");
         assert_eq!(
-            conn.pill, "未挂载",
-            "没登记就不知道自己挂在哪、也不该冒充「项目级」"
+            conn.pill, "已挂载 · 会话级",
+            "会话里挂着就如实说会话级——没登记不等于没挂上（K2 起按 conn_id 认归属）"
         );
     }
 
@@ -2595,13 +2682,15 @@ mod tests {
         let mut c = sample();
         c.registered_sources.clear();
         c.accel_sources.clear();
+        // 真未挂：会话里的源也要清（留着就是「已挂载 · 会话级」那一格）
+        c.session_sources.clear();
         c.connections[0].registered = false;
 
         let conn = objects(&c)
             .into_iter()
             .find(|o| o.key == "conn:C_mysql_9")
             .expect("连接行要在");
-        assert_eq!(conn.pill, "未挂载", "没登记就不说项目级");
+        assert_eq!(conn.pill, "未挂载", "没登记也不说项目级");
     }
 
     /// 源行 key → 展开目标：联邦源按最后一个冒号切（owner 可能带冒号）；
@@ -3024,12 +3113,14 @@ mod temp_source_tests {
         c.session_sources.push(super::SessionSource {
             owner: "data_objects".into(),
             alias: "rds_src".into(),
+            conn_id: Some("C_lite".into()),
             note: "18 张表 · 已挂载".into(),
             failed: None,
         });
         c.accel_sources.push(super::SessionSource {
             owner: "C_lite".into(),
             alias: "rds_src".into(),
+            conn_id: Some("C_lite".into()),
             note: "商城库 · MySQL · 分析实例挂载".into(),
             failed: None,
         });
