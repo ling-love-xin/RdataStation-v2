@@ -24,7 +24,8 @@
 //!
 //! ## 会话生命周期
 //!
-//! 会话就在**分析实例**里（`label == "联邦"` 的那条会话），本模块**不再另存缓存表**：
+//! 会话就在**分析实例**里（`AnalysisInstance::is_analysis_session` 认可的那条——判据是
+//! 挂着源，不是 label），本模块**不再另存缓存表**：
 //! 执行路径由 `engine::analysis::kernel::open` 开 / 取会话；界面与中断路径按 owner
 //! 读 [`session_for`] / [`snapshot_for`]（纯内存，不做 I/O）。
 //!
@@ -676,8 +677,10 @@ pub fn file_view_sql(path: &str, alias: &str) -> Result<String, String> {
 
 /// 已建立的联邦会话（**不做 I/O**；没有就是 `None`）
 ///
-/// 按 owner（= 文档绑定的连接 id）去**实例**里取那条会话——联邦会话就是
-/// `label == "联邦"` 的实例会话，不再另存一张门面缓存表。
+/// 按 owner（= 文档绑定的连接 id）去**实例**里取那条会话——联邦与分析共用会话，
+/// 真值只有一份，不再另存一张门面缓存表。owner 是 1:1 的，所以取回来的就是这条；
+/// 至于「它算不算联邦会话」，判据是挂着源（`AnalysisInstance::is_analysis_session`），
+/// 不是 label（label 会被第一个建会话的路径写死）。
 pub fn session_for(owner: &str) -> Option<Arc<FederatedSession>> {
     let session = crate::duckdb::instance::current()?.session_for_owner(owner)?;
     Some(Arc::new(FederatedSession::adopt(session, None)))
@@ -710,7 +713,12 @@ pub fn drop_all() {
         return;
     };
     for info in instance.sessions() {
-        if info.label == "联邦" {
+        let Some(session) = instance.session(&info.id) else {
+            continue;
+        };
+        // 判据是「挂着源」而不是 label（理由见 `AnalysisInstance::is_analysis_session`）：
+        // 同 owner 的会话可能是「全局分析」先建、后被联邦复用，label 停在「全局分析」。
+        if crate::duckdb::instance::AnalysisInstance::is_analysis_session(&info, &session) {
             instance.close_session(&info.id);
         }
     }
@@ -785,11 +793,13 @@ pub fn owners() -> Vec<(String, SessionSnapshot)> {
     let mut out: Vec<(String, SessionSnapshot)> = instance
         .sessions()
         .into_iter()
-        .filter(|info| info.label == "联邦" && info.open)
         .filter_map(|info| {
-            instance
-                .session_for_owner(&info.owner)
-                .map(|session| (info.owner.clone(), snapshot_of(&session)))
+            let session = instance.session_for_owner(&info.owner)?;
+            // 挂着源才算分析会话（label 只当展示名，见 `is_analysis_session` 的说明）
+            if !crate::duckdb::instance::AnalysisInstance::is_analysis_session(&info, &session) {
+                return None;
+            }
+            Some((info.owner.clone(), snapshot_of(&session)))
         })
         .collect();
     out.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1252,6 +1262,57 @@ mod tests {
         let missing = super::refresh_all("C_fed_no_session").expect_err("该提醒");
         assert!(missing.contains("先执行一次"), "{missing}");
         super::drop_session(owner);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// label 不是角色判据：同一 owner 先建「全局分析」会话、后被联邦复用，仍然算分析会话。
+    ///
+    /// 这是 2026-11-26 合入 main 的 `871b9325` 之后露出来的路径：`open_global_session` 用
+    /// `ensure_session(owner, "全局分析")`，而 `ensure_session` 对同一 owner 是 1:1 复用、
+    /// 不改 label；于是「先开全局分析库、再跑联邦查询」的会话 label 停在「全局分析」，
+    /// 按 label 认会话的源段会整段消失。
+    #[test]
+    fn analysis_session_is_judged_by_mounted_sources_not_label() {
+        let dir = workdir("label_not_role");
+        let alpha = file_source(&dir, "alpha", "label_a", 1);
+        let beta = file_source(&dir, "beta", "label_b", 1);
+        let owner = "C_fed_label_role";
+        let instance = crate::duckdb::instance::instance().expect("全局实例");
+
+        // 先按「全局分析」开：label 就停在这里，之后联邦执行复用同一条
+        let session = instance.ensure_session(owner, "全局分析").expect("开会话");
+        let info = instance
+            .sessions()
+            .into_iter()
+            .find(|info| info.owner == owner)
+            .expect("会话摘要");
+        assert_eq!(info.label, "全局分析");
+        assert!(
+            !crate::duckdb::instance::AnalysisInstance::is_analysis_session(&info, &session),
+            "没挂源：不算分析会话（空会话也不该占源段）"
+        );
+
+        session.mount_sources(&[alpha]).expect("挂源");
+        assert!(
+            crate::duckdb::instance::AnalysisInstance::is_analysis_session(&info, &session),
+            "挂着源就算分析会话，与 label 停在「全局分析」无关"
+        );
+
+        // 加速档 / 进程面即使挂着源也不算：它们不占源段，只在连接行写「已挂载」
+        let accel = instance.session_for_conn("C_label_accel").expect("加速会话");
+        accel.mount_sources(&[beta]).expect("挂源");
+        let accel_info = instance
+            .sessions()
+            .into_iter()
+            .find(|info| info.owner == "accel:C_label_accel")
+            .expect("加速档摘要");
+        assert!(
+            !crate::duckdb::instance::AnalysisInstance::is_analysis_session(&accel_info, &accel),
+            "加速档不占源段"
+        );
+
+        super::drop_session(owner);
+        instance.close_session(accel.id());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

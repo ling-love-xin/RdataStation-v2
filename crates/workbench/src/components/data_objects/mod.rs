@@ -1555,17 +1555,18 @@ pub fn collect(shared: &Shared) -> Collected {
     //
     // 以前读 `federation::session::owners()` 那份门面缓存，但它已经没有生产写入通道
     // （`kernel::open` 只开实例会话 + `mount_sources`），面板因此永远看不到挂上的源。
-    // 现在按 `label == "联邦"` 认会话、逐会话取挂载快照；主源来自 `use_catalog` 的记录。
+    // 现在按**会话挂着的源**认会话（不是 label：同 owner 的会话被「全局分析」先建过、
+    // 之后被联邦复用，label 不会改），逐会话取挂载快照；主源来自 `use_catalog` 的记录。
     let session_sources = engine::duckdb::instance::current()
         .map(|instance| {
             let mut rows = Vec::new();
             for info in instance.sessions() {
-                if info.label != "联邦" {
-                    continue;
-                }
                 let Some(session) = instance.session(&info.id) else {
                     continue;
                 };
+                if !engine::duckdb::instance::AnalysisInstance::is_analysis_session(&info, &session) {
+                    continue;
+                }
                 let primary = session.primary_alias();
                 for mounted in session.mounted_sources() {
                     let alias = mounted.alias().to_string();

@@ -503,6 +503,22 @@ impl AnalysisInstance {
         state.sessions.values().map(|s| s.info()).collect()
     }
 
+    /// 一条会话是不是「分析会话」（联邦 / 全局分析那些挂着源、会进数据对象源段的会话）。
+    ///
+    /// 判据是**挂着源**，不是 `label`：`ensure_session` 对同一 owner 是 1:1 复用——先开
+    /// 全局分析库建下的那条会话（label「全局分析」）之后会被联邦执行复用，label 不会改。
+    /// 把 label 当角色判据，「先开全局分析库、再跑联邦查询」这条常见路径上的源就会在
+    /// 面板里整段消失（2026-11-26 合入 main 的 `871b9325` 之后露出来的）。
+    ///
+    /// 排除两类 owner：`process`（导出 / 取样 / 结果集的进程面会话）与
+    /// `accel:<连接 id>`（本地加速档：挂着 `rds_src`，但加速档不占源段，只在连接行上写「已挂载」）。
+    pub fn is_analysis_session(info: &SessionInfo, session: &AnalysisSession) -> bool {
+        if !session.is_open() || info.owner == "process" || info.owner.starts_with("accel:") {
+            return false;
+        }
+        !session.mounted_sources().is_empty()
+    }
+
     /// 关一条会话（再开就是新 id：`TEMP` 表随之消失，这是正确语义）。
     pub fn close_session(&self, id: &str) -> bool {
         let Ok(mut state) = self.state.lock() else {
