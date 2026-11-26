@@ -91,11 +91,16 @@ struct Context { owner: String, aliases: BTreeSet<String>, primary: Option<Strin
 
 1. **不改写 SQL。** 不做"把未限定名补成别名"的文本重写：CTE、子查询、动态 SQL 全脆。
    DuckDB 原生支持 `别名.schema.表`，交给它。
-2. **发送前静态预检**（`crates/editor` 内，新模块 `preflight`）：
-   - 抽出所有表引用（跳过 CTE 自身定义）；
-   - 未限定：命中 0 → 报"没有这张表"；命中 ≥2 → 报错并**附候选**（`a.orders` / `b.orders`）；
-   - 限定：alias / schema 不存在 → 本地报错；
-   - 跨源同名列 join：类型降级（DECIMAL→DOUBLE 等）只警告不阻断。
+2. **发送前静态预检**（抽取在 `rds-sql::table_paths`，判定在 `editor::exec::preflight`）：
+   - 抽出所有表引用：顶层 FROM/JOIN、派生表内部、CTE body、UNION 两侧、
+     `INSERT … SELECT` / `UPDATE … FROM` / `DELETE … USING` / CTAS / 表达式里的子查询；
+     CTE 名与派生表别名不算表，表函数（`read_csv` / `range`）不算表；
+   - 未限定：命中 0 → 报"没有这张表"（附现有别名）；命中 ≥2 → **主源（search_path 首位）
+     命中时直接放行**（那就是解析结果），主源没命中才报歧义并附候选（`a.orders` / `b.orders`）；
+   - 限定：首段是已知别名 → 校验别名可用与表存在；首段不是别名时两段当 `schema.table`
+     放行（`main` / `rds_tmp` / 用户 schema 本地分不清），三段以上报 catalog 不存在；
+   - 跨源同名列 join：类型降级（DECIMAL→DOUBLE 等）只警告不阻断（未做）；
+   - 事实不足（无实例 / 列不出表）→ 只保证能解析，不报存在性（宁可让 DuckDB 报原话）。
 3. **错误单一出口**：连接失败、ATTACH 失败、别名冲突都在挂载时报；解析失败在预检时报。
    运行期只有"真正执行出错"一种，透传原话。
 
@@ -154,7 +159,7 @@ struct SourceIntent { id, origin, alias, auto_attach: bool, primary: bool }
 |---|---|---|---|
 | **K0a** ✅ | `catalog.rs`：`CatalogOrigin/Holder/State/Info` + `snapshot()`；`file_view` 加路径索引（两写入口） | **零**（只新增 API） | `cargo check -p rds-engine`；三个纯函数单测（同行合并 / 失败不被盖 / 底座不算源） |
 | **K0b** ✅ | 面板读文件索引取代 `Shared.loaded_files`；该字段整条删除（不留兼容层）；指纹里删掉空的「洞察样本」维度 | 零（输出逐字不变） | `cargo check -p rds-workbench --lib/--tests` 通过；文件索引逐条清理（删视图即忘） |
-| K1 | `preflight`：表引用抽取 + 候选报错；执行路径先过预检 | 报错更早更准 | 表驱动：catalog 集 + SQL → 期望解析/报错 |
+| **K1** ✅ | 抽取 `rds-sql::table_paths`（递归全树、CTE/派生表/表函数排除）+ 判定 `editor::exec::preflight`（不存在 / 多源歧义给候选 / 未知 catalog / 源不可用）；联邦与加速两档发送前过闸 | 报错更早更准 | 表驱动：`rds-sql` 9 条抽取 + `editor` 13 条判定（含主源优先、内置库不参与歧义） |
 | K2 | 面板改"源记录 + 可用性分段"，会话行并入 | 重复行消失 | 性质测试：任一源只出现一次 |
 | K3 | 意图清单 replay + 主源持久化；`_2` 改拒绝；引用计数拒绝 DETACH | 重启不丢主源；冲突从静默改名变报错 | headless probe：restart 后 catalog 与 primary 恢复 |
 
