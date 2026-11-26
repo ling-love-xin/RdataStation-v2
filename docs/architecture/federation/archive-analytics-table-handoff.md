@@ -40,8 +40,9 @@
 ### 5. 引擎侧搬表能力已齐（不用新写）
 
 - `crates/engine/src/duckdb/temp_table/promote.rs:136-140` `persistent_table_name(desc)` → `res_<描述>_<YYYYMMDDHHMMSS>`，**每落一次一张新表**（天然一版一表）。
-- 同文件 `:142-150` 注释给出硬约束：`tmp_q_` 在进程内存单例，项目 `analytics.duckdb` 运行期被按次开关握着，**两边不能同时 ATTACH**（实测见 `crates/engine/tests/analysis_db_exclusive_probe.rs`），所以只能**搬运**，跨实例用 Parquet 中转（类型不丢，不装箱）。
-- `write_table_across_connections`（源表 → 目标表，返回行数）、`promote_with_conn` + `PromoteMode` 均已存在。
+- 同文件 `:142-150` 注释给出硬约束：`tmp_q_` 在进程内存单例，项目 `analytics.duckdb` 运行期被按次开关握着，**两边不能同时 ATTACH**（当时实测见 `crates/engine/tests/analysis_db_exclusive_probe.rs`）。
+  **2026-11-26 所有权收口后此约束已解除**：项目库与全局库同根 `ATTACH`，搬表走同根 CTAS，见 `duckdb-ownership-m6-slimming.md` §3。
+- 原 `write_table_across_connections`（Parquet 中转）已删除；现用 `promote` + `write_shared_temp_to_project`，`PromoteMode` 仍在。
 
 ### 6. 结论（缺口一句话）
 

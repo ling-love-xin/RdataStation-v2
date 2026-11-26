@@ -17,7 +17,7 @@ pub(super) struct RowMenuParams {
     pub(super) can_checkout: bool,
     pub(super) can_stats: bool,
     pub(super) can_distribute: bool,
-    /// 从全局实例删除（刀 B；只对全局行，项目行不摆这一项）。
+    /// 移入全局回收站（刀 B；只对全局行，项目行不摆这一项）。
     pub(super) can_delete_global: bool,
     pub(super) can_promote: bool,
     pub(super) can_rename: bool,

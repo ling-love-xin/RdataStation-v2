@@ -223,9 +223,9 @@ pub trait ResourcesHost: 'static {
         _cx: &mut App,
     ) {
     }
-    /// 从全局实例删除（刀 B）：删全局各版表与登记，已分发到项目的副本不受影响。
+    /// 把全局资产移入回收站（刀 B）：只软删当前活跃登记，表 / 文件本体 / 版本快照保留。
     fn request_delete_global(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App);
-    /// 把全局文件资产恢复到上一版（旧副本 → 新版本，不原地回滚）。
+    /// 把全局资产恢复到上一版：表型复制旧表，文件型复制旧副本，都生成新版本。
     fn request_restore_global_previous(
         &self,
         detail: &ArchiveDetail,

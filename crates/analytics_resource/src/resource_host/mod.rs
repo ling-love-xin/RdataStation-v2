@@ -286,7 +286,7 @@ impl ResourcesHost for ResourceHost {
         );
     }
 
-    /// 从全局实例删除（刀 B）：确认后入队，只清全局那一份，已分发副本不动。
+    /// 移入全局回收站（刀 B）：确认后入队，只软删全局当前登记，已分发副本不动。
     fn request_delete_global(
         &self,
         detail: &ArchiveDetail,

@@ -154,12 +154,12 @@ pub fn can_move_to_group(ctx: &ActionContext) -> bool {
     ctx.project() && !ctx.read_only
 }
 
-/// 从全局实例删除（刀 B）：全局行、单选。
+/// 移入全局回收站（刀 B）：全局行、单选。
 ///
-/// **不看 `status`**：本体缺失（全局表被手工删 / 版本裁剪过）也要允许删——
-/// 这正是清理脏登记的手段；表已不在时 `DROP ... IF EXISTS` 是空操作。
+/// **不看 `status`**：本体缺失（全局表被手工删 / 版本裁剪过）也要允许处理——
+/// 这正是清理脏登记的手段；进站只软删登记，表已不在也不影响登记清理。
 ///
-/// **也不看项目只读**：删除只动全局库，不写项目 `analytics.duckdb` / `resources/`；
+/// **也不看项目只读**：回收站只动全局登记，不写项目 `analytics.duckdb` / `resources/`；
 /// 只读项目里同样要能清理全局脏登记。
 pub fn can_delete_global(ctx: &ActionContext) -> bool {
     !ctx.project() && ctx.single()

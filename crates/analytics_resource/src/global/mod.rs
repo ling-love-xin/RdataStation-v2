@@ -18,9 +18,10 @@ use tokio::sync::Mutex as AsyncMutex;
 //   * 升级 = 表 + 版本信息进全局 DuckDB；跨项目唯一法定路径 = 项目 → 全局 → 项目，
 //     项目 ↔ 项目禁止直传。
 //
-// 连接纪律（重要）：
-//   * 全局 DuckDB 是**单写者**——本模块**不得**另开文件连接，必须复用
-//     `GlobalDatabaseManager::duckdb_conn()` 持有的连接（DuckDB 单句柄限制）；
+// 连接纪律（重要，2026-11-26 所有权收口后）：
+//   * 全局 / 项目分析库共用进程级 DuckDB 根连接（`shared::duckdb_root`），
+//     `rds_global` / `analytics` 两个 ATTACH 别名同根；本模块不另开文件连接，
+//     只借全局会话句柄执行 SQL（DuckDB 单句柄限制）；
 //   * 全局 SQLite 复用 `TagTable::open_global` 先例（直接打开文件；WAL 下低频写
 //     可并发）；测试注入独立临时路径，不碰产品数据根。
 // =====================================================================
