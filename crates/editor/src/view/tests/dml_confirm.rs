@@ -23,6 +23,7 @@ struct DmlRunner {
 impl QueryRunner for DmlRunner {
     fn run(
         &self,
+                _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,

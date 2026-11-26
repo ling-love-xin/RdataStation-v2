@@ -27,6 +27,7 @@ pub(crate) struct NotebookRunner {
 impl QueryRunner for NotebookRunner {
     fn run(
         &self,
+                _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: crate::channel::ExecChannel,

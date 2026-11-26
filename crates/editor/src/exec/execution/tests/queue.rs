@@ -33,6 +33,7 @@ impl CancellableRunner {
 impl QueryRunner for CancellableRunner {
     fn run(
         &self,
+                _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,
@@ -312,6 +313,7 @@ fn a_cancel_that_finds_nothing_running_leaves_a_note() {
     impl QueryRunner for NothingToCancel {
         fn run(
             &self,
+                        _document: &str,
             _connection: Option<&str>,
             _schema: Option<&str>,
             _channel: ExecChannel,

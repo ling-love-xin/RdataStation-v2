@@ -355,6 +355,7 @@ struct PushdownRunner {
 impl QueryRunner for PushdownRunner {
     fn run(
         &self,
+                _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,
@@ -379,6 +380,7 @@ impl QueryRunner for PushdownRunner {
 
     fn run_filtered(
         &self,
+                _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,
@@ -409,6 +411,7 @@ impl QueryRunner for PushdownRunner {
 
     fn run_sorted_down(
         &self,
+                _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,

@@ -36,6 +36,7 @@ struct AnalysisRunner {
 impl QueryRunner for AnalysisRunner {
     fn run(
         &self,
+                _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,
@@ -270,6 +271,7 @@ struct OrdersRunner;
 impl QueryRunner for OrdersRunner {
     fn run(
         &self,
+                _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,
@@ -493,6 +495,7 @@ struct CommitOrdersRunner {
 impl QueryRunner for CommitOrdersRunner {
     fn run(
         &self,
+                _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,

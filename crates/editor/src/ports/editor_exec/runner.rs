@@ -6,6 +6,7 @@ use super::convert::*;
 impl QueryRunner for EngineQueryRunner {
     fn run(
         &self,
+        document: &str,
         connection: Option<&str>,
         schema: Option<&str>,
         channel: ExecChannel,
@@ -33,7 +34,8 @@ impl QueryRunner for EngineQueryRunner {
             return self.run_on_federation(connection, sql, lineage);
         }
         if channel != ExecChannel::Source {
-            return self.run_on_accel(connection, sql, lineage);
+            // 加速档按**文档**开会话（同一连接的两条文档各一条，USE / 中断不互串）
+            return self.run_on_accel(document, connection, sql, lineage);
         }
         let started = std::time::Instant::now();
         let timeout_ms = self.runtime.block_on(self.query_timeout_ms(connection));
@@ -109,6 +111,7 @@ impl QueryRunner for EngineQueryRunner {
     /// 这里只把原料给过去。
     fn run_filtered(
         &self,
+        document: &str,
         connection: Option<&str>,
         schema: Option<&str>,
         channel: ExecChannel,
@@ -144,6 +147,7 @@ impl QueryRunner for EngineQueryRunner {
         }
         if channel != ExecChannel::Source {
             return self.run_rewritten_on_accel(
+                document,
                 connection,
                 &rewritten,
                 |limit| format!("已去掉原查询的 {limit}（下发筛选要能查到全部行）"),
@@ -180,6 +184,7 @@ impl QueryRunner for EngineQueryRunner {
     /// 【B14】排序下发：按用户点的那一列重查（不 CAST——让源库按自己的列类型排）
     fn run_sorted_down(
         &self,
+        document: &str,
         connection: Option<&str>,
         schema: Option<&str>,
         channel: ExecChannel,
@@ -199,6 +204,7 @@ impl QueryRunner for EngineQueryRunner {
         }
         if channel != ExecChannel::Source {
             return self.run_rewritten_on_accel(
+                document,
                 connection,
                 &rewritten,
                 |limit| format!("已去掉原查询的 {limit}（排序下发要能排全部行）"),
@@ -233,6 +239,7 @@ impl QueryRunner for EngineQueryRunner {
     /// 【B5b】取下一段：同一条原 SQL 的后一段（引擎套窗口取，见 `SqlService::execute_segment`）
     fn fetch_next(
         &self,
+        document: &str,
         connection: Option<&str>,
         schema: Option<&str>,
         channel: ExecChannel,
@@ -245,7 +252,7 @@ impl QueryRunner for EngineQueryRunner {
             return self.fetch_next_on_federation(connection, sql, offset, limit);
         }
         if channel != ExecChannel::Source {
-            return self.fetch_next_on_accel(connection, sql, offset, limit);
+            return self.fetch_next_on_accel(document, connection, sql, offset, limit);
         }
         let timeout_ms = self.runtime.block_on(self.query_timeout_ms(connection));
         let executed = self
@@ -681,6 +688,7 @@ impl QueryRunner for EngineQueryRunner {
     /// 【B13/T1.6】重新挂载源（表清单刷新；加速档那一条 / 联邦档某一源或全挂）
     fn refresh_sources(
         &self,
+        document: &str,
         connection: Option<&str>,
         channel: ExecChannel,
         alias: Option<&str>,
@@ -688,7 +696,7 @@ impl QueryRunner for EngineQueryRunner {
         // 加速档：`alias` 无意义（就那一条源）
         if channel != ExecChannel::Federated {
             let source = self.accel_source(connection)?;
-            let alias = match accel::remount_on_instance(&source) {
+            let alias = match accel::remount_on_instance(&source, document) {
                 Ok(alias) => alias,
                 Err(reason) => return Err(reason),
             };

@@ -51,7 +51,7 @@ fn the_process_face_lives_in_the_analysis_instance() {
         kind: AccelKind::DuckDb,
         connection_string: path.clone(),
     };
-    let (_session, alias) = accel::ensure_on_instance(&source).expect("挂源");
+    let (_session, alias) = accel::ensure_on_instance(&source, &source.conn_id).expect("挂源");
     assert!(alias.starts_with("rds_src"), "别名按源分配：{alias}");
 
     // 2. 进程面（历史 `DuckDBManager` 单例）能直接查到那个源 —— 这就是"同一个实例"

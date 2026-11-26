@@ -450,7 +450,9 @@ pub fn mount_network_source(shared: &Shared, conn_id: &str, cx: &mut App) {
             return;
         }
     };
-    match engine::duckdb::accel::ensure_on_instance(&source) {
+    // 会话 owner：面板挂载目前用固定 owner（`data_objects`）。等「面板跟随当前编辑器文档」
+    // 那一步落地后改成文档 id（见 `docs/architecture/resource-session-model.md` §5.2）。
+    match engine::duckdb::accel::ensure_on_instance(&source, "data_objects") {
         Ok((_session, alias)) => {
             refresh(shared, cx);
             shared.say(

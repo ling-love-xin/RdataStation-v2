@@ -174,6 +174,7 @@ impl ExecQueue {
                                 } else if let Some((offset, limit)) = job.segment {
                                     // 【B5b】取下一段：同一条原 SQL 的后一段（不新开结果集）
                                     runner.fetch_next(
+                                        job.document.as_str(),
                                         job.connection.as_deref(),
                                         job.schema.as_deref(),
                                         job.channel,
@@ -184,6 +185,7 @@ impl ExecQueue {
                                 } else if let Some((filter, columns)) = job.filtered.as_ref() {
                                     // 【B14】下发源库：拼 WHERE 的活交给执行器（它才知道方言）
                                     runner.run_filtered(
+                                        job.document.as_str(),
                                         job.connection.as_deref(),
                                         job.schema.as_deref(),
                                         job.channel,
@@ -195,6 +197,7 @@ impl ExecQueue {
                                 {
                                     // 【B14】排序下发：同上，改写与方言差异都在执行器
                                     runner.run_sorted_down(
+                                        job.document.as_str(),
                                         job.connection.as_deref(),
                                         job.schema.as_deref(),
                                         job.channel,
@@ -207,7 +210,9 @@ impl ExecQueue {
                                     runner.analyze(request)
                                 } else {
                                     // 连接透传给执行器（B1）：`None` = 未绑定 → 执行器自己决定回退口径
+                                    // 文档 id 也透传：本地加速 / 联邦的分析会话按它归属（一份工作一条会话）
                                     runner.run(
+                                        job.document.as_str(),
                                         job.connection.as_deref(),
                                         job.schema.as_deref(),
                                         job.channel,
@@ -469,10 +474,12 @@ impl ExecQueue {
             .name("rds-editor-source-action".to_string())
             .spawn(move || {
                 let conn = connection.as_deref();
+                // 文档 id 先取出：重挂加速源按它开会话（`refresh_sources` 的会话归属参数）
+                let doc = document.as_str().to_string();
                 let result = match &action {
-                    SourceAction::RefreshAll => runner.refresh_sources(conn, channel, None),
+                    SourceAction::RefreshAll => runner.refresh_sources(&doc, conn, channel, None),
                     SourceAction::RefreshSource { alias } => {
-                        runner.refresh_sources(conn, channel, Some(alias))
+                        runner.refresh_sources(&doc, conn, channel, Some(alias))
                     }
                     SourceAction::SetPrimary { alias } => runner.set_federated_primary(conn, alias),
                 };
@@ -725,6 +732,7 @@ mod tests {
     impl crate::execution::QueryRunner for SilentRunner {
         fn run(
             &self,
+                        _document: &str,
             _connection: Option<&str>,
             _schema: Option<&str>,
             _channel: crate::channel::ExecChannel,

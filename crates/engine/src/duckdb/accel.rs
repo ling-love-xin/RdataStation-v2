@@ -453,14 +453,19 @@ fn federated_source(source: &AccelSource, alias: &str) -> super::federation::reg
 /// 单实例之后本地加速不再各自建内存库：源是**实例级**的 `ATTACH`，会话只负责 `USE`。
 /// 内核的加速档与编辑器里直跑的加速档都走这里——别名申请、幂等判重、`USE` 只有一份口径，
 /// 否则「同一个源两处各挂一遍」就会重演"第二个源指到第一个"的串库问题。
+///
+/// `owner` 是**这条会话的身份**（2026-11-26 起按文档，不再按连接）：`USE` / `search_path` /
+/// 中断都是连接级状态，两条文档若共用一条会话就会互相污染。同时用同一连接的两条文档现在
+/// 各有一条会话，源仍是实例级 `ATTACH`（catalog 共享），只有会话状态分开。
 pub fn ensure_on_instance(
     source: &AccelSource,
+    owner: &str,
 ) -> Result<(Arc<super::instance::AnalysisSession>, String), String> {
     use super::federation::registry::MountState;
 
     let instance = super::instance::instance()?;
     let alias = instance.reserve_alias(SOURCE_ALIAS, &source.conn_id, source.kind)?;
-    let session = instance.session_for_conn(&source.conn_id)?;
+    let session = instance.ensure_session(owner, "本地加速")?;
     let mounted = session.mount_sources(&[federated_source(source, &alias)])?;
     // 挂不上就是这条源不能用：当场说清，而不是等查询报"表不存在"
     if let Some(entry) = mounted.first() {
@@ -477,10 +482,10 @@ pub fn ensure_on_instance(
 ///
 /// 为什么不是关会话重开：关会话会连 `TEMP` 一起清掉，而重挂只该刷新源侧清单。
 /// 源库侧新建的表在 2.0.1 上多数能直接看见（动态解析），这条留给"清单确实要重建"的场合。
-pub fn remount_on_instance(source: &AccelSource) -> Result<String, String> {
+pub fn remount_on_instance(source: &AccelSource, owner: &str) -> Result<String, String> {
     let instance = super::instance::instance()?;
     let alias = instance.reserve_alias(SOURCE_ALIAS, &source.conn_id, source.kind)?;
-    let session = instance.session_for_conn(&source.conn_id)?;
+    let session = instance.ensure_session(owner, "本地加速")?;
     // 先回 memory：默认 catalog 停在源上时 DuckDB 会拒绝 DETACH 它
     session.with_connection(|conn| {
         match conn.execute_batch(&format!("USE memory; DETACH {alias}")) {
