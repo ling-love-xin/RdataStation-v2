@@ -183,11 +183,28 @@
          `connection_template` / `dialog_host_layer`——上移需逐份改 harness 绑定与访问路径。
        - 装配点：`install_editor_bridge`（`panels/mod.rs:580`）闭包内 `editor.update` 调
          `request_*`；`install_host_redraw_bridge`（`:558`）defer 防双租，口径保留。
-     - **2b Diff 浮层**：状态已搬 Shared（同型先例 `scratchpad_search` /
-       `metadata_search`）；**挂载形态待拍板**——① 独立中央 Dock tab（同
-       `SearchResultsHostPanel` / `PropertyHostPanel` 先例，非模态）；② 宿主
-       Dialog/Popover 模态弹层（套 `scratchpad_file_info` 先例，交互形态改变）；
-       ③ 宿主 overlay 内嵌层。现状出口内嵌编辑区内容列、非模态。
+     - **2b Diff 浮层**：状态已搬 Shared（`scratchpad_diff: Option<ScratchpadDiffView>`，
+       与 `scratchpad_search` / `scratchpad_file_info` 同型）；**挂载形态待拍板**。
+       2026-11-26 三形态先例实证（渲染函数 `render_scratchpad_diff_pane` 三形态复用）：
+       - **① 独立中央 Dock tab（非模态，推荐）**：先例 `SearchResultsHostPanel`
+         （`search_results.rs`，吃 `ScratchpadSearchView` 快照；装配 `workspace.rs:391`
+         `cx.new` 入中央 DockArea，Shared 存 `WeakEntity`，show 复用聚焦或新建）、
+         `PropertyHostPanel`（`property_panel/mod.rs`，`workspace.rs:872`）。
+         改动：新增 `DiffHostPanel` 模块 + 装配 + Shared 弱句柄 / show 方法，new 时从
+         `scratchpad_diff` 快照，tab 标题「对比: 文件名」；与文档 tab 并列、可切走再回。
+         风险中（新面板实体 + Dock 装配 + 多开判定），但有同型先例。
+       - **② 宿主 Dialog/Popover 模态弹层**：先例 `render_scratchpad_file_info_popover`
+         （`actions.rs:252`，`Dialog::new(cx)` 包 content，内置 overlay / Esc / 遮罩点击
+         关闭；`render.rs:355` `root.child(info)` 叠加）。改动：宿主加
+         `render_scratchpad_diff_popover` 读 `scratchpad_diff`，content 调 diff 渲染函数，
+         on_close 清状态，render.rs 挂载；不新增面板实体。风险低-中（套现成 Dialog），
+         但 Diff 较长时弹窗滚动 / 尺寸需调；模态遮挡，与现状非模态差异最大。
+       - **③ 宿主 overlay 内嵌层（非模态，层归属上移）**：现状出口内嵌 `editor.rs:472`
+         内容列；③ 把这段渲染挪到宿主 `render.rs` 的 root overlay 层（仿 `quick_open` /
+         `notification_list` 的 `root.child(absolute 层)`，`render.rs:352-366`），不套
+         Dialog。改动：editor.rs 删 Diff 出口，宿主 render.rs 加 absolute overlay 层读
+         `scratchpad_diff` 渲染。风险低（纯挪出口），但 overlay 定位 / 遮挡口径需对齐现有层。
+       - 现状：出口内嵌编辑区内容列、非模态；状态在 Shared，三形态都只动挂载出口。
      - **2c 拖拽兜底**（已完成 `b088f99f`）：原 `EditorPanel::send_nav_drag` 下沉为
        `Shared::request_nav_drag(qualified, cx)`——解析 `selected_connection`、构造
        `QueryRequest{conn_id, sql: qualified+" ", run:false}` 走 `request_query`，再
