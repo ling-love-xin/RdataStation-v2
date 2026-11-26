@@ -1,3 +1,7 @@
 [toolchain]
-channel = "stable"
+# 2026-11-27 从 stable 钉到 1.100.0：本机曾停在 1.98.0 三个月，而 CI/发版骑 @stable
+# 已先行到 1.100.0（RDS-beta-0.2.14 即其产物）——钉版消除双轨，cargo 在所有场景
+# （本机/CI/发版 runner）按本文件解析。升级窗口：新 stable 落地后一个发版周期内
+# 主动 bump（= 独立 commit + clippy 棘轮基线重切 + test-all + wasm 轨重试）。
+channel = "1.100.0"
 components = ["rustfmt", "clippy"]
