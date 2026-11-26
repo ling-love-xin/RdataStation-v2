@@ -23,7 +23,7 @@ mod index;
 mod rename;
 mod tag;
 mod refresh;
-mod version;
+pub(crate) mod version;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};

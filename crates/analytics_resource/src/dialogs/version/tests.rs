@@ -45,6 +45,35 @@ fn selected_row_follows_the_selection() {
 fn action_carries_its_version() {
     assert_eq!(VersionAction::Restore { version: 3 }.version(), 3);
     assert_eq!(VersionAction::CheckoutDraft { version: 1 }.version(), 1);
-    assert_eq!(VersionAction::Diff { version: 2 }.version(), 2);
+    assert_eq!(
+        VersionAction::Diff {
+            version: 2,
+            against: None
+        }
+        .version(),
+        2
+    );
     assert_eq!(VersionAction::Analyze { version: 4 }.version(), 4);
+}
+
+#[test]
+fn diff_base_toggles_and_clears_with_rows() {
+    let state = VersionDialogState::new();
+    state.set_rows(vec![row(3, true), row(2, false), row(1, false)]);
+
+    assert_eq!(state.diff_base(), None);
+    state.toggle_diff_base(2);
+    assert_eq!(state.diff_base(), Some(2));
+    assert_eq!(
+        state.diff_base_row().expect("base row").version,
+        2,
+        "基准行要能拿到，动作栏才知道它是否可读"
+    );
+    state.toggle_diff_base(2);
+    assert_eq!(state.diff_base(), None, "再 Shift+点同一行 = 取消");
+
+    // 动作后换行：基准不在新列表里也要清掉，不能拿一个不存在的版本去 diff。
+    state.toggle_diff_base(1);
+    state.set_rows(vec![row(4, true), row(3, false)]);
+    assert_eq!(state.diff_base(), None);
 }

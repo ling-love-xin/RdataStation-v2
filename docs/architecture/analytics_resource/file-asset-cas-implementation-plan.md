@@ -18,8 +18,7 @@
 
 - 全局 file-first 的行拆分与全局 fork UI；
 - 二进制全局发布；
-- 表投影的自动创建；
-- 文件版本任意两版对比 UI。
+- 表投影的自动创建。
 
 它们进入后续里程碑，避免一次改动同时动项目/全局/UI 三条链路。
 
@@ -281,6 +280,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_active_lease
 - 归档对话框删除「保留历史内容」输入与解析；`ArchiveDialogResult` 只余 `name / alias / tags / group_id / payload_mode / assertion`。
 - workbench 归档 / 还原不再读 `resources.keep_versions`；`KeepVersions` 只保留给全局表型裁剪。
 - 测试：`cargo test -p rds-analytics-resource --lib -j 1 --no-fail-fast` 291 passed；`dialog_window` 11 项、`panel_window` 29 项通过；`cargo check -p rds-workbench --lib -j 1` 通过。
+
+#### M5 第四刀（2026-11-27）
+
+- 版本历史支持任意两版对比：Shift+点一行设「对比基准」（再点取消），选中另一行后动作栏变「与基准 vN 对比…」；行上标「基准」。
+- `VersionAction::Diff { version, against: Option<i32> }`；`VersionDiffJob` 带 `against`，后端 `diff_sides` 按版本号排成旧→新，点击顺序不影响 diff 方向。
+- 旧侧与新侧都从各自 manifest 物化；新侧是当前版本时仍读本体。同一版、无 manifest、非文本、超限都明确拒绝。
+- `VersionDiffSeed.current_version` 改名 `new_version`，标题 / 副标题按两版实际版本号显示。
+- 测试：`t124` 造 v1→v2→v3，验证 v1↔v3 不混入 v2、v1↔v2 不混入当前 v3、反着点仍排 v1→v3；`cargo test -p rds-analytics-resource --lib -j 1 --no-fail-fast -- --test-threads=1` 295 passed（并行全量会因 DuckDB 文件锁 / 全局标签残留抖动，串行是稳定口径）；`dialog_window` 11 项通过。顺带修 `g021`：全局标签名唯一化并在用例结束删除，避免重复跑污染 `data/system/global.db`。
 
 ### 9.2 与计划的偏差
 

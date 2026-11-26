@@ -445,6 +445,18 @@ fn version_dialog_lists_rows_and_shows_actions_after_selection(cx: &mut TestAppC
         "副本裁剪已随旧版本副本方案一起删掉"
     );
 
+    // Shift+点选基准：行上出现「基准」标记，对比按钮改成与基准比（任意两版）。
+    state.toggle_diff_base(1);
+    draw(cx);
+    assert!(
+        cx.debug_bounds("version-diff-base-v1").is_some(),
+        "基准行要标出来，用户才知道自己在跟哪一版比"
+    );
+    assert!(
+        cx.debug_bounds("version-diff").is_some(),
+        "有基准时对比按钮仍要在"
+    );
+
     // 动作完成 → 宿主换一批行（还原把 v4 顶上来了，选中的 v2 不在新行里）：
     // 选中与动作栏一起退场（不能指向一个已经不在列表里的版本）。
     state.set_rows(vec![
@@ -453,6 +465,7 @@ fn version_dialog_lists_rows_and_shows_actions_after_selection(cx: &mut TestAppC
     ]);
     draw(cx);
     assert!(state.selected().is_none(), "新行里没有它 → 选中清掉");
+    assert!(state.diff_base().is_none(), "基准行也不在新列表里 → 清掉");
     assert!(cx.debug_bounds("version-restore").is_none());
     assert!(
         cx.debug_bounds("version-row-4").is_some(),

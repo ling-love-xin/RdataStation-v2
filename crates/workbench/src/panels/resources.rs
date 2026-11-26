@@ -99,8 +99,13 @@ impl SidebarPanel {
         };
         // 对比是**只读查看**：不拒只读（只读项目也能看差异）、不入动作回执，
         // 直接走独立 diff 取数 job（读两版文本 + 生成 unified patch → 开 diff 对话框）。
-        if let VersionAction::Diff { version } = action {
-            resource_jobs::enqueue_version_diff(root, resource_id.to_string(), version);
+        if let VersionAction::Diff { version, against } = action {
+            resource_jobs::enqueue_version_diff(
+                root,
+                resource_id.to_string(),
+                version,
+                against,
+            );
             self.ensure_resources_pump(cx);
             return;
         }

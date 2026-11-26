@@ -49,11 +49,11 @@ pub(super) fn header_line(theme: &Theme) -> Div {
             div()
                 .w(rems(ui::VERSION_COL_COPY))
                 .flex_none()
-                .child(tr("副本")),
+                .child(tr("内容")),
         )
 }
 
-/// 一行版本（点击 = 选中；选中后动作栏才出现——768px 里塞不下每行三个按钮）。
+/// 一行版本（点击 = 选中；Shift+点击 = 设为/取消对比基准；选中后动作栏才出现——768px 里塞不下每行三个按钮）。
 ///
 /// 行本体走组件的 `ListItem`（与面板列表行同源）：hover / 选中 / 键盘都归它，
 /// 不再手搓 `when(selected, bg) + hover(bg)` 那对——那对写反顺序就会变成
@@ -62,6 +62,7 @@ pub(super) fn version_line(
     theme: &Theme,
     row: &VersionRow,
     selected: bool,
+    diff_base: Option<i32>,
     state: VersionDialogState,
 ) -> impl IntoElement {
     let (foreground, muted, danger, success) = {
@@ -74,10 +75,16 @@ pub(super) fn version_line(
         )
     };
     let version = row.version;
+    let is_diff_base = diff_base == Some(version);
     let toggle = {
         let state = state.clone();
-        move |_: &ClickEvent, _window: &mut Window, _cx: &mut App| {
-            state.set_selected(Some(version));
+        move |event: &ClickEvent, _window: &mut Window, _cx: &mut App| {
+            // Shift+点击不抢主选中：它只标记「拿这一版当对比基准」。
+            if event.modifiers().shift {
+                state.toggle_diff_base(version);
+            } else {
+                state.set_selected(Some(version));
+            }
         }
     };
 
@@ -106,6 +113,14 @@ pub(super) fn version_line(
                         .child(div().text_color(foreground).child(format!("v{version}")))
                         .when(row.is_current, |cell| {
                             cell.child(div().text_color(success).child(tr("当前")))
+                        })
+                        .when(is_diff_base, |cell| {
+                            cell.child(
+                                div()
+                                    .text_color(theme.colors.primary)
+                                    .debug_selector(move || format!("version-diff-base-v{version}"))
+                                    .child(tr("基准")),
+                            )
                         }),
                 )
                 .child(
@@ -146,13 +161,13 @@ pub(super) fn version_line(
                         .flex_none()
                         .text_ellipsis()
                         .child(if row.is_table {
-                            // 表型资产没有副本文件：这一列只能说清“本体是什么”，
-                            // 别按副本口径写「副本缺失」。
+                            // 表型资产没有内容文件：这一列只能说清“本体是什么”，
+                            // 别按文件口径写「内容缺失」。
                             div().text_color(muted).child(tr("项目表"))
                         } else if row.has_copy {
                             div().text_color(muted).child(tr("在位"))
                         } else {
-                            div().text_color(danger).child(tr("副本缺失"))
+                            div().text_color(danger).child(tr("内容缺失"))
                         }),
                 ),
         )
@@ -171,6 +186,7 @@ pub(super) fn version_rail(
     theme: &Theme,
     rows: &[VersionRow],
     selected: Option<i32>,
+    diff_base: Option<i32>,
     state: VersionDialogState,
 ) -> Div {
     let colors = theme.colors;
@@ -196,21 +212,26 @@ pub(super) fn version_rail(
         }
         let version = row.version;
         let is_selected = selected == Some(version);
+        let is_diff_base = diff_base == Some(version);
         let is_current = row.is_current;
-        let dot = if is_current || is_selected {
+        let dot = if is_current || is_selected || is_diff_base {
             colors.primary
         } else {
             colors.muted_foreground
         };
-        let label_color = if is_selected {
+        let label_color = if is_selected || is_diff_base {
             colors.primary
         } else {
             colors.muted_foreground
         };
         let toggle = {
             let state = state.clone();
-            move |_: &ClickEvent, _window: &mut Window, _cx: &mut App| {
-                state.set_selected(Some(version));
+            move |event: &ClickEvent, _window: &mut Window, _cx: &mut App| {
+                if event.modifiers().shift {
+                    state.toggle_diff_base(version);
+                } else {
+                    state.set_selected(Some(version));
+                }
             }
         };
         rail = rail.child(
@@ -252,9 +273,13 @@ pub(super) fn version_rail(
 }
 
 /// 动作栏：选中一行后才出现（原型 §4.3 的取舍：表格装不下每行三个按钮）。
+///
+/// `base` 是 Shift+点选的对比基准行；有它时「对比」改成「与基准 vN 对比」，
+/// 两版由后端排序，点选顺序不影响 diff 方向。
 pub(super) fn action_bar(
     theme: &Theme,
     row: &VersionRow,
+    base: Option<&VersionRow>,
     busy: bool,
     read_only: bool,
     state: VersionDialogState,
@@ -264,32 +289,60 @@ pub(super) fn action_bar(
     let version = row.version;
     // 当前版本不走这两个动作（它就是本体）：取回走详情面板的「取回（检出）…」。
     let can_act = !row.is_current && row.has_copy && !busy && !read_only;
-    // 对比是**只读查看**（不写库，只读项目也能看），只要求"这一版内容还在"；
+    // 对比是**只读查看**（不写库，只读项目也能看），只要求两侧内容还在；
     // 文本类型与大小上限由宿主在取数线程挡（对话框不查文件系统）。
     // 表型资产没有本体文件，文本对比无从谈起——直接不给这个按钮。
-    let can_diff = !row.is_current && row.has_copy && !row.is_table && !busy;
+    // 有基准时两侧都必须是可读的文件版本（当前版本读本体，也算可读）。
+    let selected_diffable = !row.is_table && (row.has_copy || row.is_current);
+    let base_diffable = base.is_some_and(|base| {
+        !base.is_table && (base.has_copy || base.is_current) && base.version != version
+    });
+    let can_diff = if base.is_some() {
+        !busy && selected_diffable && base_diffable
+    } else {
+        !busy && !row.is_current && row.has_copy && !row.is_table
+    };
     // 「用这一版分析」= 把历史副本挂成分析视图（只读查看：不写库、不动本体，只读项目也能用）。
-    let can_analyze = can_diff;
+    let can_analyze = !busy && !row.is_current && row.has_copy && !row.is_table;
     // 引用资产没有本地副本，只有「固化」：复制 pin 住的全局版本为独立本地表。
     let can_solidify = row.is_global_ref && !busy && !read_only;
-    // 取回 / 删副本都基于 `resources/` 下的本体副本，表型资产没有。
+    // 取回基于 `resources/` 下的本体，表型资产没有。
     let can_checkout = can_act && !row.is_table;
-    let hint = if row.is_global_ref {
+    let hint = if base.is_some() {
+        if !selected_diffable {
+            "选中的这一版没有可读内容（表型 / 内容已裁除），Shift+点另一行换一个对比版本"
+        } else if base_diffable {
+            "Shift+点另一行 = 换对比基准；Shift+再点这一行 = 取消基准"
+        } else {
+            "这个基准没有可读内容（表型 / 内容已裁除），Shift+点另一行换一个基准"
+        }
+    } else if row.is_global_ref {
         if read_only {
             "项目处于只读模式：固化会往本项目库写一张新表，需要先退出只读"
         } else {
             "这是全局引用：引用本身不复制数据；固化会把选中的全局版本复制成本地独立表（原引用保留）"
         }
     } else if read_only {
-        "项目处于只读模式：还原 / 取回 / 删副本都是写操作；对比与「用 vN 分析」是查看，可以直接用"
+        "项目处于只读模式：还原 / 取回都是写操作；对比与「用 vN 分析」是查看，可以直接用"
     } else if row.is_current {
-        "这是当前版本（本体上的内容）：取回请用详情面板的「取回（检出）…」"
+        "这是当前版本（本体上的内容）：取回请用详情面板的「取回（检出）…」；Shift+点另一行可设基准后对比"
     } else if row.is_table {
-        "表型资产没有内容副本：回退 = 把本体指回这一版的表（两张表都在，不删数据）"
+        "表型资产没有内容文件：回退 = 把本体指回这一版的表（两张表都在，不删数据）"
     } else if !row.has_copy {
         "该版本只留了元数据（内容副本已被保留策略裁剪），不能还原、取回或拿来分析"
     } else {
-        "还原 = 用这一版的内容生成新版本；取回 = 复制一份可写草稿（本体不动）；分析 = 把这一版挂成视图看旧数（不动本体）"
+        "还原 = 用这一版的内容生成新版本；取回 = 复制一份可写草稿（本体不动）；分析 = 把这一版挂成视图看旧数（不动本体）；Shift+点另一行可设对比基准"
+    };
+    let diff_label = match base {
+        Some(base) => format!("与基准 v{} 对比…", base.version),
+        None => tr("与当前版本对比…").to_string(),
+    };
+    let diff_tip = match base {
+        Some(base) => format!(
+            "打开文本 diff 查看器，把选中版本与基准 v{} 对比（只读，两版自动按旧→新排）",
+            base.version
+        ),
+        None => tr("打开文本 diff 查看器，看这一版和当前版本差在哪（只读）").to_string(),
     };
 
     let restore = {
@@ -315,9 +368,17 @@ pub(super) fn action_bar(
     let diff = {
         let state = state.clone();
         let on_action = on_action.clone();
+        let against = base.map(|base| base.version);
         move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
             state.set_selected(Some(version));
-            on_action(VersionAction::Diff { version }, window, cx);
+            on_action(
+                VersionAction::Diff {
+                    version,
+                    against,
+                },
+                window,
+                cx,
+            );
         }
     };
     // 分析不置忙、不开回执：它只是把这一版挂成视图（与对比同属查看；版本对话框保持打开）。
@@ -357,8 +418,8 @@ pub(super) fn action_bar(
                         .ghost()
                         .small()
                         .debug_selector(|| "version-diff".to_string())
-                        .label(tr("与当前版本对比…"))
-                        .tooltip(tr("打开文本 diff 查看器，看这一版和当前版本差在哪（只读）"))
+                        .label(diff_label.clone())
+                        .tooltip(diff_tip.clone())
                         .disabled(!can_diff)
                         .on_click(diff),
                 )
@@ -368,7 +429,7 @@ pub(super) fn action_bar(
                         .small()
                         .debug_selector(|| "version-analyze".to_string())
                         .label(format!("用 v{version} 分析…"))
-                        .tooltip("把这一版的内容副本挂成分析视图（只读：本体与版本都不动）")
+                        .tooltip("把这一版的内容挂成分析视图（只读：本体与版本都不动）")
                         .disabled(!can_analyze)
                         .on_click(analyze),
                 )

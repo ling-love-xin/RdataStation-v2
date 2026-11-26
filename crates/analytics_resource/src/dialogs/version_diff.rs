@@ -23,10 +23,10 @@ use crate::ui;
 pub struct VersionDiffSeed {
     /// 存档显示名（标题用）。
     pub name: String,
-    /// 对比的旧版本号（版本历史里选的那一版）。
+    /// 对比的旧版本号（两版按版本号排序后的低版）。
     pub old_version: i32,
-    /// 当前版本号（新侧）。
-    pub current_version: i32,
+    /// 对比的新版本号（可能是历史版本，也可能是本体当前版本）。
+    pub new_version: i32,
     /// unified diff patch 文本（`similar` 生成；`DiffFile::parse` 在这里解析）。
     pub patch: String,
 }
@@ -62,7 +62,7 @@ pub fn open_version_diff_dialog(
     let on_close: Rc<dyn Fn(&mut App)> = Rc::new(on_close);
     let name = seed.name.clone();
     let old_version = seed.old_version;
-    let current_version = seed.current_version;
+    let new_version = seed.new_version;
     // `DiffState` 在开窗前建好：`open_dialog` 的 builder 是 `Fn`（每帧重建），在里面 `cx.new`
     // 就会每帧漏一个 `DiffState`（`dialogs/mod.rs` 纪律 1）。
     let state = cx.new(|cx| DiffState::new(files, cx));
@@ -84,7 +84,7 @@ pub fn open_version_diff_dialog(
             .justify_between()
             .gap_2()
             .child(div().text_xs().text_color(muted).child(format!(
-                "v{old_version} → v{current_version} 的差异（只读）"
+                "v{old_version} → v{new_version} 的差异（只读）"
             )))
             .child(
                 div()
@@ -135,7 +135,7 @@ pub fn open_version_diff_dialog(
             );
 
         dialog
-            .title(format!("{name} · v{old_version} → v{current_version}"))
+            .title(format!("{name} · v{old_version} → v{new_version}"))
             .w(cx.theme().font_size * ui::DIFF_DIALOG_WIDTH)
             .child(body)
             .footer(

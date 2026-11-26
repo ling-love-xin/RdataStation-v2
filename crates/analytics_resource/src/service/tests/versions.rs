@@ -235,6 +235,70 @@ async fn t123_restore_version_requires_manifest_and_skips_identical_content() {
     let _ = fs::remove_dir_all(&dir).await;
 }
 
+/// 任意两版都能对比：跳过中间版本时不会偷偷拿当前本体去凑新侧。
+///
+/// 造 v1→v2→v3 三版，分别比 v1↔v3、v1↔v2、v3↔v1（反着点），检查两侧版本号、
+/// patch 头与正文都指向选中的那两版。
+#[tokio::test]
+async fn t124_diff_compares_any_two_manifest_versions() {
+    use crate::jobs::version::{VersionDiffJob, load_version_diff};
+    use engine::persistence::ProjectDatabaseManager;
+
+    // 用生产路径 `.RSmeta/project.db` 建测试项目：`load_version_diff` 走 `open_service`，
+    // 它按项目根重新打开同一个库；若把库放在临时目录根部，作业侧会读到一个空库。
+    let dir = crate::tests::temp_project_dir("archive-diff");
+    tokio::fs::create_dir_all(dir.join(".RSmeta"))
+        .await
+        .expect("create .RSmeta");
+    let manager = ProjectDatabaseManager::open(&dir, 2)
+        .await
+        .expect("open project db");
+    let store = AnalyticsResourceStore::new_for_test(manager.sqlite_pool(), dir.join("global.db"));
+    let service = ArchiveService::new(&dir, store);
+
+    let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
+    let first = service
+        .archive(archive_req(&draft, "dau.sql", None))
+        .await
+        .expect("archive v1");
+    for (index, content) in [b"select 2;", b"select 3;"].into_iter().enumerate() {
+        let draft = write_draft(&dir, &format!("dau{}.sql", index + 2), content).await;
+        service
+            .archive(archive_req(&draft, "dau.sql", Some(&first.resource_id)))
+            .await
+            .expect("re-archive");
+    }
+
+    let diff = |version, against| VersionDiffJob {
+        project_root: dir.clone(),
+        resource_id: first.resource_id.clone(),
+        version,
+        against,
+    };
+
+    // v1 ↔ v3：新侧是当前本体，但旧侧必须是 v1，不是 v2。
+    let v1_v3 = load_version_diff(&diff(3, Some(1))).await.expect("v1↔v3");
+    assert_eq!((v1_v3.seed.old_version, v1_v3.seed.new_version), (1, 3));
+    assert!(v1_v3.seed.patch.contains("-select 1;"));
+    assert!(v1_v3.seed.patch.contains("+select 3;"));
+    assert!(!v1_v3.seed.patch.contains("select 2;"), "中间版本不该混进来");
+
+    // v1 ↔ v2：两侧都走 manifest（新侧不是当前版本）。
+    let v1_v2 = load_version_diff(&diff(2, Some(1))).await.expect("v1↔v2");
+    assert_eq!((v1_v2.seed.old_version, v1_v2.seed.new_version), (1, 2));
+    assert!(v1_v2.seed.patch.contains("+select 2;"));
+    assert!(!v1_v2.seed.patch.contains("select 3;"), "当前版本不该混进来");
+
+    // 反着点（先点 v3 再拿 v1 当基准）也排成 v1 → v3。
+    let reversed = load_version_diff(&diff(1, Some(3))).await.expect("v3↔v1");
+    assert_eq!((reversed.seed.old_version, reversed.seed.new_version), (1, 3));
+
+    // Windows 上库还开着就删不掉目录；先放掉 service / manager，再清临时项目。
+    drop(service);
+    drop(manager);
+    let _ = fs::remove_dir_all(&dir).await;
+}
+
 /// 表型资产的「回退」：没有副本文件，回退 = 把本体表名指回旧版那张表。
 ///
 /// 钉住四件事：不要求副本、生成新版本且不覆盖历史、回退可以再退回去、重复退到

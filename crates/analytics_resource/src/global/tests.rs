@@ -1300,7 +1300,7 @@ async fn g021_reference_asset_and_solidify_selected_version() {
         .expect("link folder");
     let tag = store
         .create_tag(crate::store::rows::CreateTagRequest {
-            name: "全局引用标签".to_string(),
+            name: format!("全局引用标签{}", Uuid::new_v4().simple()),
             color: None,
             icon: None,
             scope: "global".to_string(),
@@ -1434,6 +1434,9 @@ async fn g021_reference_asset_and_solidify_selected_version() {
     };
     assert_eq!(rows, vec![1, 2, 3], "固化的是选中的 v1，不是当前 v2");
 
+    // 标签定义落在 RDS_HOME 的全局库（不是测试临时目录），用例结束要删掉，
+    // 否则重复跑会在全局库里越堆越多。
+    store.delete_tag(&tag.id).await.expect("delete global tag");
     let _ = fs::remove_dir_all(&env.dir);
 }
 

@@ -41,8 +41,10 @@ pub(crate) struct VersionActionJob {
 pub(crate) struct VersionDiffJob {
     pub(crate) project_root: PathBuf,
     pub(crate) resource_id: String,
-    /// 对比的旧版本号（版本历史里选的那一版；新侧 = 本体当前版本）。
-    pub(crate) old_version: i32,
+    /// 用户在版本表里选中的那一版。
+    pub(crate) version: i32,
+    /// 对比基准（版本表里 Shift+点选的那一版）；None = 本体当前版本。
+    pub(crate) against: Option<i32>,
 }
 
 /// 版本历史取数结果（宿主据此开窗，或刷新已经开着的那个窗）。
@@ -81,7 +83,7 @@ pub(crate) async fn load_versions(job: &VersionsJob) -> Result<VersionRows, Stri
         .await
         .map_err(|e| format!("读取文件版本索引失败：{e}"))?;
     // 表型资产的本体是项目分析库里的一张表（不是文件）：没有 `file_rel_path`，
-    // 不能因为“路径为空”就把当前版本标成「副本缺失」。
+    // 不能因为“路径为空”就把当前版本标成「内容缺失」。
     let payload_ok = if crate::ArchiveKind::resolve(&current.kind, current.analytics_table.as_deref())
         == crate::ArchiveKind::AnalyticsTable
     {
@@ -181,29 +183,60 @@ pub(crate) async fn load_version_diff(job: &VersionDiffJob) -> Result<VersionDif
         .get_resource_by_id(&job.resource_id)
         .await
         .map_err(|e| format!("读取存档失败：{e}"))?;
-    // 新侧 = 本体当前文本；旧侧 = 选中版本的 manifest 物化（缺失 = 该版本没有文件清单）。
-    let new_text = read_resource_text(&service, &current).await?;
-    let old_path = service
-        .version_file(&job.resource_id, job.old_version)
-        .await
-        .map_err(|e| format!("读取历史 manifest 失败：{e}"))?
-        .ok_or_else(|| "该版本没有 manifest（旧文件资产不再支持对比），无法对比".to_string())?;
-    let old_text = read_text_file(&old_path)?;
+    let (old_v, new_v) = diff_sides(job.version, job.against, current.version)?;
+    // 新侧若是当前版本就读本体（与旧行为一致）；否则从该版 manifest 物化。
+    // 旧侧在当前版本位于两版之间时也按 manifest 读，避免把“当前本体”误当成历史内容。
+    let new_text = if new_v == current.version {
+        read_resource_text(&service, &current).await?
+    } else {
+        read_manifest_text(&service, &job.resource_id, new_v).await?
+    };
+    let old_text = read_manifest_text(&service, &job.resource_id, old_v).await?;
     if diff_text_too_large(&old_text, &new_text) {
         return Err(DIFF_TOO_LARGE.to_string());
     }
     let name = current.name.clone();
-    let (old_v, new_v) = (job.old_version, current.version);
     let patch = unified_patch(&name, old_v, new_v, &old_text, &new_text);
     Ok(VersionDiffRows {
         resource_id: job.resource_id.clone(),
         seed: VersionDiffSeed {
             name,
             old_version: old_v,
-            current_version: new_v,
+            new_version: new_v,
             patch,
         },
     })
+}
+
+/// 选中的两版按版本号排成「旧侧 → 新侧」：diff 永远读旧→新，跟点选顺序无关。
+///
+/// 同一版不弹 diff（用户 Shift+点了当前选中行，或两次点到同一行）。
+fn diff_sides(selected: i32, against: Option<i32>, current: i32) -> Result<(i32, i32), String> {
+    let other = against.unwrap_or(current);
+    if selected == other {
+        return Err("两版相同，没有可对比的差异".to_string());
+    }
+    Ok(if selected < other {
+        (selected, other)
+    } else {
+        (other, selected)
+    })
+}
+
+/// 从某一版的 manifest 物化出首个内容条目并读成文本（无 manifest = 旧资产，拒绝对比）。
+async fn read_manifest_text(
+    service: &ArchiveService,
+    resource_id: &str,
+    version: i32,
+) -> Result<String, String> {
+    let path = service
+        .version_file(resource_id, version)
+        .await
+        .map_err(|e| format!("读取历史 manifest 失败：{e}"))?
+        .ok_or_else(|| {
+            format!("v{version} 没有 manifest（旧文件资产不再支持对比），无法对比")
+        })?;
+    read_text_file(&path)
 }
 
 /// 单侧文本是否超出对比上限（两侧都查：旧副本可能比本体大得多）。
@@ -390,15 +423,22 @@ pub fn enqueue_version_action(
     }));
 }
 
-/// 提交一次版本 diff 取数（**事件路径**调用：版本对话框动作栏「与当前版本对比…」）。
+/// 提交一次版本 diff 取数（**事件路径**调用：版本对话框动作栏「与…对比…」）。
 ///
 /// 只读查看：不改任何数据，job 线程读两版文本 + 生成 unified patch 后回填 `version_diff` 槽。
-pub fn enqueue_version_diff(project_root: PathBuf, resource_id: String, old_version: i32) {
+/// `against=None` = 与本体当前版本比；`Some(v)` = 与指定版本比（Shift+点选的基准）。
+pub fn enqueue_version_diff(
+    project_root: PathBuf,
+    resource_id: String,
+    version: i32,
+    against: Option<i32>,
+) {
     jobs().pending.fetch_add(1, Ordering::SeqCst);
     let _ = jobs().tx.send(Job::VersionDiff(VersionDiffJob {
         project_root,
         resource_id,
-        old_version,
+        version,
+        against,
     }));
 }
 
@@ -416,7 +456,22 @@ pub(crate) async fn reload_versions_after(
 
 #[cfg(test)]
 mod tests {
-    use super::{DIFF_MAX_TEXT_BYTES, diff_text_too_large, unified_patch};
+    use super::{DIFF_MAX_TEXT_BYTES, diff_sides, diff_text_too_large, unified_patch};
+
+    /// 任意两版都按版本号排成旧→新：点选顺序不影响 diff 方向。
+    #[test]
+    fn diff_sides_orders_versions_regardless_of_click_order() {
+        assert_eq!(diff_sides(5, Some(2), 9).unwrap(), (2, 5), "先点新版再点旧版");
+        assert_eq!(diff_sides(2, Some(5), 9).unwrap(), (2, 5), "先点旧版再点新版");
+        assert_eq!(diff_sides(4, None, 7).unwrap(), (4, 7), "不设基准 = 与当前比");
+    }
+
+    /// 同一版不弹 diff；Shift+点当前选中行也走这条。
+    #[test]
+    fn diff_sides_rejects_same_version() {
+        assert!(diff_sides(3, Some(3), 7).is_err());
+        assert!(diff_sides(7, None, 7).is_err(), "当前版本不能自己跟自己比");
+    }
 
     /// 头部两行是 diff 对话框标题之外**唯一**的版本出处：
     /// `a/名字@旧版`、`b/名字@新版`（`DiffFile::parse` 靠它认出文件名与两侧版本）。
