@@ -168,11 +168,17 @@ pub fn open(plan: &SessionPlan, prepared: &PreparedMounts) -> Result<SessionHand
             // 别名按源唯一、幂等判重、`USE` 都收在 `accel::ensure_on_instance` 一处——
             // 编辑器里直跑的加速档走的也是它，两边各写一遍迟早给出两套挂载事实。
             //
-            // owner 口径：内核这一档目前仍按**源连接 id**开会话（这里的调用方——洞察 / 引擎
-            // 内部路径——手里没有文档身份）；编辑器侧走 `ensure_on_instance(source, document)`，
-            // 按文档开会话。两处只差这一个参数，挂载逻辑同一条。
+            // owner 口径（D17，2026-11-27）：内核这一档的调用方（洞察 / 引擎内部路径）手里
+            // 没有文档身份，用**源级 owner** `accel:{conn_id}`——与 `session_for_conn`
+            // （载入 / 归档「在这个源上再跑一条 SQL」）同一个键。
+            //
+            // 为什么不能用裸 `conn_id`：`AnalysisInstance::is_analysis_session` 只按 `accel:`
+            // 前缀排除加速会话（`instance.rs:580`），裸 id 会被当成分析会话；它挂着 `rds_src`，
+            // 面板源段就会多出一行「来源不明」的会话源。编辑器侧走
+            // `ensure_on_instance(source, document)`，owner 是文档，不受这条影响。
+            let owner = instance::AnalysisInstance::accel_owner(&prepared_accel.source.conn_id);
             let (session, _alias) =
-                accel::ensure_on_instance(&prepared_accel.source, &prepared_accel.source.conn_id)
+                accel::ensure_on_instance(&prepared_accel.source, &owner)
                     .map_err(invalid)?;
             Ok(SessionHandle::Instance {
                 session,

@@ -10,8 +10,8 @@
 //! | --- | --- | --- | --- |
 //! | `Source` | 源驱动本身 | 不挂 | `editor/src/ports/editor_exec` 源库档 |
 //! | `ProcessDuckDb` | 进程内 DuckDB 单例 | 不挂（表本就在这个单例里） | `services/duckdb_service.rs:13` |
-//! | `Accelerated` | 专用连接，单源只读挂载 | 1 个源 | `duckdb/accel.rs:508` |
-//! | `Federated` | 按 owner 的联邦会话，多源 | N 个源 | `duckdb/federation/session.rs:498` |
+//! | `Accelerated` | 分析实例的一条会话，单源只读挂载 | 1 个源 | `duckdb/accel.rs::ensure_on_instance` |
+//! | `Federated` | 分析实例的一条会话，多源 | N 个源 | `kernel::open` 的 `Federated` 分支 |
 //!
 //! 用户可选的是「源库直连 / 本地加速 / 联邦」三档；`ProcessDuckDb` 不是可选档，而是
 //! **内部底座**——导出、临时表（`tmp_q_` / `tmp_i_`）、洞察取样都跑在它上面
@@ -26,8 +26,10 @@ pub enum AnalysisChannel {
     /// 进程内 DuckDB 单例：导出 / 临时表 / 洞察取样。**不挂源**——要读的表
     /// （结果集 `tmp_q_`、取样 `tmp_i_`）本来就是在这个单例里建的。
     ProcessDuckDb,
-    /// 本地加速：把**一个**源只读挂进一条专用 DuckDB 连接（`accel::ensure_session`）。
-    /// 会话按源连接 id 缓存，所以它同样是「有 owner 的会话」，只是 owner 就是源 id。
+    /// 本地加速：把**一个**源只读挂进分析实例的一条会话（`accel::ensure_on_instance`）。
+    ///
+    /// 会话 owner 由调用方决定（2026-11-27 口径，D17）：编辑器 = 文档 id；内核 / 洞察 = 源级
+    /// `accel:{conn_id}`（它们手里没有文档身份）。`ATTACH` 是**实例级**的，会话只负责 `USE`。
     Accelerated,
     /// 显式联邦：按 `owner` 建/取 `FederatedSession`，多个源挂进来。
     /// 编辑器联邦档、洞察「多源联邦」开关打开时落这里。
@@ -45,7 +47,8 @@ impl AnalysisChannel {
         !matches!(self, Self::Source)
     }
 
-    /// 联邦会话的 owner（只有 `Federated` 有；加速档的缓存键是源 id，由 accel 自己管）。
+    /// 联邦会话的 owner（只有 `Federated` 有；加速档的 owner 由调用方给——编辑器是文档 id，
+    /// 内核是 `accel:{conn_id}`，见 [`Self::Accelerated`] 的注释）。
     pub fn owner(&self) -> Option<&str> {
         match self {
             Self::Federated { owner } => Some(owner),

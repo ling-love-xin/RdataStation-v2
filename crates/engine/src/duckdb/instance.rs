@@ -578,7 +578,7 @@ impl AnalysisInstance {
     /// 排除两类 owner：`process`（导出 / 取样 / 结果集的进程面会话）与
     /// `accel:<连接 id>`（本地加速档：挂着 `rds_src`，但加速档不占源段，只在连接行上写「已挂载」）。
     pub fn is_analysis_session(info: &SessionInfo, session: &AnalysisSession) -> bool {
-        if !session.is_open() || info.owner == "process" || info.owner.starts_with("accel:") {
+        if !session.is_open() || info.owner == "process" || Self::is_accel_owner(&info.owner) {
             return false;
         }
         !session.mounted_sources().is_empty()
@@ -667,9 +667,22 @@ impl AnalysisInstance {
         self.ensure_session("process", "process")
     }
 
+    /// 本地加速档 owner 的前缀：`accel:{conn_id}`。
+    ///
+    /// 这里与 [`Self::accel_owner`] / [`Self::is_accel_owner`] / [`Self::is_analysis_session`]
+    /// 是**同一个键的唯一来源**——别在别处再拼字符串或再比前缀（D17 收口口径）。
+    pub const ACCEL_OWNER_PREFIX: &'static str = "accel:";
+
     /// 本地加速档的 owner 键（内核与工作台共用一份，别各自拼字符串）。
     pub fn accel_owner(conn_id: &str) -> String {
-        format!("accel:{conn_id}")
+        format!("{}{conn_id}", Self::ACCEL_OWNER_PREFIX)
+    }
+
+    /// 某个 owner 是不是本地加速档的键（空尾巴不算，防止 `accel:` 这种残键混进来）。
+    pub fn is_accel_owner(owner: &str) -> bool {
+        owner
+            .strip_prefix(Self::ACCEL_OWNER_PREFIX)
+            .is_some_and(|rest| !rest.is_empty())
     }
 
     /// 某源连接此刻的会话（没有就开一条）。
@@ -1371,6 +1384,19 @@ mod tests {
 
     fn instance(tag: &str) -> Arc<AnalysisInstance> {
         AnalysisInstance::open_tagged(tag, Duration::from_millis(3000)).expect("开实例")
+    }
+
+    /// D17：`accel:` 键只有一处来源；残键 `accel:`（空连接 id）不算加速 owner。
+    #[test]
+    fn accel_owner_key_is_single_sourced() {
+        assert_eq!(AnalysisInstance::accel_owner("C_x"), "accel:C_x");
+        assert!(AnalysisInstance::is_accel_owner("accel:C_x"));
+        assert!(
+            !AnalysisInstance::is_accel_owner("accel:"),
+            "空尾巴是残键，不能当加速档"
+        );
+        assert!(!AnalysisInstance::is_accel_owner("C_x"));
+        assert!(!AnalysisInstance::is_accel_owner("process"));
     }
 
     /// 会话 A 在 `main` 里建的**持久**表，会话 B 立刻看得见（catalog 实例级共享）。

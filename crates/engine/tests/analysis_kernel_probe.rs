@@ -61,6 +61,23 @@ fn accelerated_channel_runs_sql_on_a_real_duckdb_file() {
     let result = handle.run("select count(*) as n from orders").expect("加速档执行");
     // 只断言「会话真的跑起来了」，不依赖具体 row 取值形态（各驱动 Arrow 表示不同）
     assert!(!result.columns.is_empty(), "应至少返回一列");
+
+    // D17（2026-11-27）：内核加速档没有文档身份，会话 owner 必须是源级 `accel:{conn_id}`。
+    // 裸 conn_id 会被 `is_analysis_session` 当成分析会话，面板源段就多一行「来源不明」的 rds_src。
+    let instance = rds_engine::duckdb::instance::instance().expect("分析实例");
+    let listed = instance.sessions();
+    assert!(
+        listed.iter().any(|info| info.owner == "accel:C_kernel_accel"),
+        "加速档会话 owner 应为源级键：{listed:?}"
+    );
+    for info in listed.iter().filter(|info| info.owner.starts_with("accel:")) {
+        let session = instance.session(&info.id).expect("会话在册");
+        assert!(
+            !rds_engine::duckdb::instance::AnalysisInstance::is_analysis_session(info, &session),
+            "加速会话不该进数据对象源段（owner {}）",
+            info.owner
+        );
+    }
 }
 
 #[test]
