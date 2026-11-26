@@ -395,7 +395,7 @@ mod tests {
                 "mysql://root:real@h:3306/shop",
             ),
         ];
-        let plan = plan_from_records(&records, &[], "G_1").expect("组装");
+        let plan = plan_from_records(&records, &[], "G_1", "doc").expect("组装");
 
         assert_eq!(plan.owner, "G_1");
         assert_eq!(plan.sources.len(), 2);
@@ -439,7 +439,7 @@ mod tests {
             ),
             record("G_2", "仓库", "postgres", "postgres://u:real@h:5432/w"),
         ];
-        let plan = plan_from_records(&records, &[], "G_1").expect("组装");
+        let plan = plan_from_records(&records, &[], "G_1", "doc").expect("组装");
         assert_eq!(plan.sources.len(), 2, "重复的 conn_id 不该占两个源");
     }
 
@@ -451,7 +451,7 @@ mod tests {
             record("G_2", "仓库", "postgres", "postgres://h:5432/w"),
             record("G_3", "分析库", "duckdb", "D:/data/a.duckdb"),
         ];
-        let plan = plan_from_records(&records, &[], "G_1").expect("组装");
+        let plan = plan_from_records(&records, &[], "G_1", "doc").expect("组装");
         assert_eq!(plan.primary, None, "主源不是它，只能由引擎选第一个可用源");
         assert!(
             plan.notes.iter().any(|note| note.contains("本文档的连接")),
@@ -465,7 +465,7 @@ mod tests {
             record("G_2", "仓库", "postgres", "postgres://h:5432/w"),
             record("G_3", "归档库", "clickhouse", "clickhouse://h:8123/db"),
         ];
-        let plan = plan_from_records(&records, &[], "G_1").expect("组装");
+        let plan = plan_from_records(&records, &[], "G_1", "doc").expect("组装");
         assert_eq!(plan.sources.len(), 2, "驱动不支持的连接不占位");
         assert!(
             plan.notes.iter().any(|note| note.contains("归档库")),
@@ -479,7 +479,7 @@ mod tests {
             record("G_2", "仓库", "postgres", "postgres://h:5432/w"),
             record("G_3", "老库", "oracle", "oracle://h:1521/XEPDB1"),
         ];
-        let plan = plan_from_records(&records, &[], "G_1").expect("组装");
+        let plan = plan_from_records(&records, &[], "G_1", "doc").expect("组装");
         assert_eq!(plan.sources.len(), 2, "L2 组装不出来的不占位");
         assert!(
             plan.notes
@@ -494,7 +494,7 @@ mod tests {
             record("G_1", "订单库", "mysql_native", "mysql://u:p@h:3306/a"),
             record("G_2", "老库", "oracle", "oracle://u:p@h:1521/XEPDB1"),
         ];
-        let plan = plan_from_records(&records, &[], "G_1").expect("组装");
+        let plan = plan_from_records(&records, &[], "G_1", "doc").expect("组装");
         assert_eq!(plan.sources.len(), 2, "L2 该占位：{:?}", plan.notes);
         let oracle = plan
             .sources
@@ -513,7 +513,7 @@ mod tests {
             record("G_1", "订单库", "mysql_native", "mysql://h:3306/a"),
             record("G_2", "仓库", "postgres", "postgres://h:5432/w"),
         ];
-        let plan = plan_from_records(&records, &carried, "G_1").expect("组装");
+        let plan = plan_from_records(&records, &carried, "G_1", "doc").expect("组装");
         assert!(
             plan.notes.iter().any(|note| note.contains("解密失败")),
             "攒下的说明不该丢：{:?}",
@@ -525,11 +525,11 @@ mod tests {
     #[test]
     fn the_plan_refuses_before_the_session_is_built() {
         let one = vec![record("G_1", "订单库", "mysql_native", "mysql://h:3306/a")];
-        let plan = plan_from_records(&one, &[], "G_1").expect("一条源不该拒");
+        let plan = plan_from_records(&one, &[], "G_1", "doc").expect("一条源不该拒");
         assert!(plan.primary.is_some(), "一条源时主源就是它");
         assert!(plan.notes.iter().any(|note| note.contains("只有一条源")), "{:?}", plan.notes);
 
-        let error = plan_from_records(&[], &[], "G_1").expect_err("没有源该拒");
+        let error = plan_from_records(&[], &[], "G_1", "doc").expect_err("没有源该拒");
         assert!(error.contains("本地加速"), "{error}");
     }
 }
