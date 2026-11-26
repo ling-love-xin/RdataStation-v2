@@ -73,6 +73,7 @@ pub(crate) mod fit;
 pub(crate) mod header;
 pub(crate) mod menu;
 pub(crate) mod selection;
+pub(crate) mod sort_icon;
 pub(crate) mod stats;
 pub(crate) mod status;
 pub(crate) mod table_impl;

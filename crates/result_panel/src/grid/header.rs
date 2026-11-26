@@ -1,6 +1,7 @@
 //! 表头渲染域（`grid/` 第八块）：`TableDelegate::render_th`（截断 + 悬停全文 +
-//! 类型小标签 + 筛选图标 + 列头菜单）+ 表头 tooltip 分块文案。
-//! 注：排序三角由组件自己的图标槽画（`table/state.rs` 的 `render_sort_icon`），本文件不再自绘。
+//! 类型小标签 + 筛选图标 + **排序三态图标** + 列头菜单）+ 表头 tooltip 分块文案。
+//! 排序图标**自绘**（`grid/sort_icon.rs` 内嵌 DBeaver 真值 SVG）：组件那个 12px 双 chevron
+//! 槽既不匹配真值图形也没有定制入口，见 `table_impl::column()` 里「故意不设 `sort`」那段。
 
 use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
@@ -169,30 +170,52 @@ pub(crate) fn render_th(
             .child(SharedString::from(sym))
     });
 
-    // 【B1】列名主行：类型 badge + 列名(flex_1) + 筛选图标
+    // 【B1】列名主行：类型 badge + 列名(flex_1) + 筛选图标 + 排序三态 + 三角菜单
     //
-    // 排序指示不再自绘（2026-11-18）：组件在每个可排序列的右端留了 20px 图标槽
-    // （`state.rs:1849-1871` 的 `render_sort_icon`：`SortAscending` / `SortDescending` /
-    // 未排时 `ChevronsUpDown`），图标本身就是**可点的排序控件**（`:1863-1865` 调
-    // `perform_sort` → 我们的 delegate `perform_sort` → `apply_sort`），状态由
-    // `table_impl::column()` 的 `.sort(self.sort_mark(index))` 回灌。原先另画的一套
-    // `↑/↓` 文字是重复指示器，而且是不可点的假控件，本批删掉。
-    //
-    // 【列头菜单 2026-11-08】悬停表头才出现的组 key：菜单默认**不占列宽**（绝对定位
-    // 浮在列名右端，`invisible`），只有整格 hover 才显形。列头菜单恒吃 24px 会把窄列的
-    // 列名挤到读不出（布尔列 96px 时只剩 37px），而它其实一直是"想起来了才点"的控件。
-    let header_hover_group: SharedString = format!("editor-result-th-hover-{col_ix}").into();
+    // 【排序图标 2026-11-27】**改回自绘**：此前（2026-11-18）为去掉不可点的假指示器，
+    // 交给组件 `render_sort_icon`（`table/state.rs:2087-2131`）。复核真值后确认那条路
+    // 画的是 12px 的 Lucide「一实一虚双 chevron」，而真值是 16px「单支带杆箭头」三态
+    // （`GridColumnRenderer.java:43-50`、`:212-226`，三张 SVG 见 `grid/sort_icon.rs`），
+    // 且组件没有图标字段 / builder 可换。现在组件槽已关（`column()` 不设 `sort`），
+    // 这里自绘真值图标并挂点击（真值 `LightGrid.java:3404-3414` 点排序图标 →
+    // `Event_ChangeSort` → `changeSorting` → `toggleSortOrder`，即升→降→清空）。
+    // 元素间距取真值 `IMAGE_SPACING = 3`（此前 `gap_1()` 是 4）。
+    let sort_control = if ResultGridDelegate::is_row_number(col_ix) || delegate.transposed {
+        // 行号槽 / 转置视图没有列级排序（真值同样只对 `isElementSupportsSort` 的列画）
+        None
+    } else {
+        let sort = delegate.sort_mark(column);
+        Some(
+            div()
+                .id(("editor-result-col-sort", col_ix))
+                .debug_selector(move || format!("editor-result-sort-icon-{col_ix}"))
+                .flex_none()
+                // 截住冒泡：组件列头 `on_click` 会选整列，点排序图标不该顺带选列
+                // （真值这两个事件也是分开的：`Event_ChangeSort` vs 列头按下）
+                .on_click(cx.listener(move |table, _, _, cx| {
+                    cx.stop_propagation();
+                    // 真值 `toggleSortOrder`（`SpreadsheetPresentation.java:1567-1579`）：
+                    // 未排 → 升 → 降 → 清空
+                    let next = match table.delegate().sort_state() {
+                        Some((sorted, false)) if sorted == column => Some((column, true)),
+                        Some((sorted, true)) if sorted == column => None,
+                        _ => Some((column, false)),
+                    };
+                    table.delegate_mut().apply_sort(next);
+                    cx.notify();
+                }))
+                .child(super::sort_icon::sort_icon(sort)),
+        )
+    };
     let main_row = div()
         .h_flex()
         .items_center()
-        .gap_1()
+        // 元素间距 3px = 真值 `GridColumnRenderer.IMAGE_SPACING`（类型图标↔列名、
+        // 列名↔排序图标、排序图标↔筛选三角三处同值）；此前 `gap_1()` 是 4px
+        .gap(ui::RESULT_HEADER_ICON_SPACING)
         .w_full()
         .min_w_0()
         .truncate()
-        // 菜单用 `absolute` 贴右端，需要本行当定位父
-        .relative()
-        // 整格 hover 组（菜单显形的触发源）；先例见 vendor `attachment.rs` 的移除按钮
-        .group(header_hover_group.clone())
         // 给用例读主行几何（表头带 22px 内容高，主行被挤成 0 高时列名整行看不见——
         // 2026-11-08 的"字段被遮挡"就是这个；断言见 `grid/tests.rs`
         // `header_main_row_keeps_a_readable_height`）
@@ -209,7 +232,7 @@ pub(crate) fn render_th(
         )
         .when(delegate.has_column_filter(column), |row| {
             row.child(
-                // 筛选指示用图标而不是 `▽` 字符：与组件排序图标同尺寸（`size_3` = 12px），
+                // 筛选指示用图标而不是 `▽` 字符：与排序图标同尺寸（16px 槽内 12px 字形），
                 // 语义上比一个三角字符明确。DBeaver 这里画的是 `IMAGE_FILTER`
                 // （`GridColumnRenderer.java:46`，`UIIcon.DROP_DOWN`）——它是下拉入口的
                 // 指示；我们的筛选入口是列头菜单，「此列已筛选」用漏斗更准确。
@@ -218,7 +241,9 @@ pub(crate) fn render_th(
                     .flex_none()
                     .text_color(muted),
             )
-        });
+        })
+        // 排序三态（真值 16px，见上方 `sort_control` 的取值）
+        .when_some(sort_control, |row, sort| row.child(sort));
 
     // 【DBeaver 对齐】列头附加第二行：`columnHeaderExtra` 三档决定画什么——
     // `Nothing` 不画 / `Description` 画字段注释 / `DataType` 画完整类型名

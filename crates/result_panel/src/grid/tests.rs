@@ -1597,25 +1597,30 @@ fn clearing_drops_previous_rows() {
     assert!(grid.columns_for_test().is_empty());
 }
 
-/// 【B15】列头可排序：数据列给 `Some(Default)`（可排但未排），行号槽不给
+/// 【排序 2026-11-27】排序图标改自绘后，`column()` **不再**向组件声明 `sort`
 ///
-/// 组件库对 `sort: None` 的列**不响应点击**（`perform_sort` 里直接 return），
-/// 所以这条钉的是“列头真的能点下去”。
+/// 组件槽（12px Lucide 双 chevron）与真值（16px 单支带杆箭头三态）不是同一个图形，
+/// `Column` 也没有图标字段，所以组件那条路整条关掉（`sort: None` → `render_sort_icon` 早退）。
+/// 排序态仍由 delegate 自持：`sort_mark` 按当前排序给升/降/未排，`apply_sort` 改真值。
 #[gpui_kit::test]
-fn data_columns_are_sortable_from_the_header(cx: &mut gpui_kit::TestAppContext) {
+fn sorting_state_lives_in_the_delegate_not_in_component_columns(cx: &mut gpui_kit::TestAppContext) {
     cx.update(gpui_kit::init);
     let mut grid = grid();
     cx.update(|cx: &mut App| {
+        // 所有列（含数据列）都不声明 `sort`：组件因此不画它那个 12px 槽
         assert_eq!(grid.column(0, cx).sort, None, "行号槽不是数据列");
-        assert_eq!(grid.column(1, cx).sort, Some(ColumnSort::Default));
-        assert_eq!(grid.column(2, cx).sort, Some(ColumnSort::Default));
+        assert_eq!(grid.column(1, cx).sort, None, "数据列改自绘，不再声明组件 sort");
+        assert_eq!(grid.column(2, cx).sort, None);
     });
-    // 排上以后指示器要回得去（组件库 refresh 后会重新问 column）
+    // 排序态在 delegate：未排 → 升 → 降 → 清空
+    assert_eq!(grid.sort_mark(0), ColumnSort::Default, "未排序");
     grid.apply_sort(Some((0, false)));
-    cx.update(|cx: &mut App| {
-        assert_eq!(grid.column(1, cx).sort, Some(ColumnSort::Ascending));
-        assert_eq!(grid.column(2, cx).sort, Some(ColumnSort::Default));
-    });
+    assert_eq!(grid.sort_mark(0), ColumnSort::Ascending, "升序");
+    assert_eq!(grid.sort_mark(1), ColumnSort::Default, "别的列不受影响");
+    grid.apply_sort(Some((0, true)));
+    assert_eq!(grid.sort_mark(0), ColumnSort::Descending, "降序");
+    grid.apply_sort(None);
+    assert_eq!(grid.sort_mark(0), ColumnSort::Default, "清空");
 }
 
 /// 【P1-5】拖过的列宽按列名记进 delegate，重建表头（`column()` 重取）时恢复；
@@ -3784,14 +3789,16 @@ fn fit_column_follows_content_and_caps_the_sample(cx: &mut gpui_kit::TestAppCont
     );
 }
 
-/// 【排序图标槽】自适应宽度必须给组件的排序图标槽留出 20px
+/// 【排序图标槽】自适应宽度必须给表头右侧的固定件留够（`ui::RESULT_FIT_HEADER_CHROME`）
 ///
-/// 组件在可排序列的表头右端放一个 20px 的图标槽（12px 图标 + 2px 内距 + 4px 右侧偏移，
-/// 见 `ui::RESULT_FIT_HEADER_CHROME`）。列名足够长时表头块宽压过单元格块宽，量出的宽度
-/// 就该**恰好等于「列名 + 20」**——漏算这 20px，双击自适应出来的列宽会把列名挤成省略号
-/// （128px 列的表头格实测只有 108px，差的正是这 20px）。
+/// 右侧固定件 = 左右内距 12 + 自绘排序图标槽 16 + 两处间距 3+3 + 三角槽 19 + 组件右偏移 4。
+/// 列名足够长时表头块宽压过单元格块宽，量出的宽度就该**恰好等于「列名 + 该常量」**——
+/// 漏算任何一项，双击自适应出来的列宽都会把列名挤成省略号。
+///
+/// 2026-11-27 由 20 改为 57：此前只算了组件的 16px 排序槽与 4px 右偏移，漏掉了三角菜单槽
+/// （19px，2026-11-26 改常显后**真的占宽**）、两处 3px 间距和表头自己的 12px 左右内距。
 #[gpui_kit::test]
-fn autofit_reserves_the_component_sort_icon_slot(cx: &mut gpui_kit::TestAppContext) {
+fn autofit_reserves_the_header_chrome(cx: &mut gpui_kit::TestAppContext) {
     use crate::ui::RESULT_FIT_HEADER_CHROME;
     use gpui_kit::px;
 
@@ -3828,7 +3835,7 @@ fn autofit_reserves_the_component_sort_icon_slot(cx: &mut gpui_kit::TestAppConte
     assert_eq!(
         fitted,
         name_w + RESULT_FIT_HEADER_CHROME,
-        "自适应宽 = 列名 + 排序图标槽（{name_w:?} + {RESULT_FIT_HEADER_CHROME:?}）"
+        "自适应宽 = 列名 + 表头右侧固定件（{name_w:?} + {RESULT_FIT_HEADER_CHROME:?}）"
     );
 }
 
@@ -4333,8 +4340,11 @@ fn column_header_extra_picks_comment_or_type_name() {
 /// 并排占宽。旧实现（2026-11-08）把它做成「绝对定位 + 悬停显形」、列名拿整列宽——那是
 /// 本仓自造；按「1:1 复刻 DBeaver」已改回常显（`grid/header.rs::render_th`）。
 ///
-/// 断言：三角**恒有几何**（不再 `invisible`）、落在列名右侧不压字，且列名仍留可读宽度。
-/// 槽宽差异（组件最小按钮 24–28px vs 真值 16+3=19px）登记在基线文档 §57.10。
+/// 断言：三角**恒有几何**、槽宽 19±1（真值 16 + `IMAGE_SPACING` 3）、落在列名右侧不压字，
+/// 且列名仍留可读宽度。
+///
+/// 【排序图标 2026-11-27】同一帧再量自绘的三态图标（`editor-result-sort-icon-{col}`）：
+/// 方 16px、夹在列名与三角槽之间（真值 `paintSort` 在三角槽左侧、两者隔 `IMAGE_SPACING`）。
 #[gpui_kit::test]
 fn header_column_menu_is_always_visible_beside_the_name(
     cx: &mut gpui_kit::TestAppContext,
@@ -4355,6 +4365,9 @@ fn header_column_menu_is_always_visible_beside_the_name(
     let menu = vcx
         .debug_bounds("editor-result-col-menu-1")
         .expect("列头三角应常显（`invisible` + `group_hover` 已去掉）");
+    let sort = vcx
+        .debug_bounds("editor-result-sort-icon-1")
+        .expect("排序三态图标应常显（真值未排时也画 `SORT_UNKNOWN`）");
     let main = vcx
         .debug_bounds("editor-result-th-main-1")
         .expect("表头主行应有 debug 几何");
@@ -4365,7 +4378,7 @@ fn header_column_menu_is_always_visible_beside_the_name(
     );
     // 【DBeaver 对齐 2026-11-27】三角槽 19px（真值 `drop_down.svg` 16 + `IMAGE_SPACING` 3）；
     // 组件 `.small()` 实测 28px。现在走 `Size::Size` 自定义尺寸压缩，这里钉住真实布局宽，
-    // 组件内部常数（`Caret` 回落 16、padding `0.2 * size`）若被上游改掉会立刻掉下来。
+    // 组件内部常数（`Caret` 回落 16、icon-only 分支 `.size(v)`）若被上游改掉会立刻掉下来。
     assert!(
         menu.size.width >= crate::ui::RESULT_HEADER_TRIANGLE_SLOT - gpui_kit::px(1.),
         "三角槽窄于 19px（图标会被裁）：menu={menu:?}"
@@ -4380,10 +4393,30 @@ fn header_column_menu_is_always_visible_beside_the_name(
         menu.origin.x + gpui_kit::px(4.) >= name.origin.x + name.size.width,
         "三角压到了列名上：menu={menu:?} name={name:?}"
     );
-    // 常显槽会吃掉 ~28px：列名仍要留出可读宽度（旧实现的整列宽 95 → 现在 67 左右）
+    // 【排序图标】真值 16×16（`SORT_WIDTH = IMAGE_DESC.width`），未排时也常显（`SORT_UNKNOWN`）
+    assert!(
+        sort.size.width >= crate::ui::RESULT_HEADER_SORT_SLOT - gpui_kit::px(1.)
+            && sort.size.width <= crate::ui::RESULT_HEADER_SORT_SLOT + gpui_kit::px(1.),
+        "排序图标槽不是 16px（真值 `SORT_WIDTH`）：sort={sort:?}"
+    );
+    assert!(
+        sort.size.height >= crate::ui::RESULT_HEADER_SORT_SLOT - gpui_kit::px(1.)
+            && sort.size.height <= crate::ui::RESULT_HEADER_SORT_SLOT + gpui_kit::px(1.),
+        "排序图标不是正方形 16px：sort={sort:?}"
+    );
+    // 位置：列名右侧 → 排序图标 → 三角槽（真值同样从右往左是 filter、sort、列名）
+    assert!(
+        sort.origin.x >= name.origin.x + name.size.width - gpui_kit::px(1.),
+        "排序图标压到了列名上：sort={sort:?} name={name:?}"
+    );
+    assert!(
+        sort.origin.x + sort.size.width <= menu.origin.x + gpui_kit::px(1.),
+        "排序图标没排在三角槽左侧：sort={sort:?} menu={menu:?}"
+    );
+    // 常显槽会吃掉 ~19 + 16 + 间距：列名仍要留出可读宽度
     assert!(
         name.size.width >= gpui_kit::px(56.),
-        "列名被常显三角挤到不可读：name={name:?} main={main:?}"
+        "列名被常显图标挤到不可读：name={name:?} main={main:?}"
     );
 }
 
@@ -4431,9 +4464,9 @@ fn cells_stretch_to_the_column_boundary_for_grid_lines(cx: &mut gpui_kit::TestAp
         cell.size.width
     );
 
-    // 表头：列边界线画在表头格的**左**边界（右端被排序图标槽占 20px，
-    // `state.rs:1910`），所以这里钉的是「数据列表头从行号槽右缘开始」——
-    // 它一偏，表头竖线就与数据区的竖线错位。
+    // 表头：列边界线画在表头格的**左**边界（真值同样只给非焦点列画右 + 底边界，
+    // `GridColumnRenderer.java:105-109`；本仓右端还有三角槽，画右边会落到列内侧），
+    // 所以这里钉的是「数据列表头从行号槽右缘开始」——它一偏，表头竖线就与数据区的竖线错位。
     let th0 = vcx
         .debug_bounds("editor-result-th-0")
         .expect("行号列表头应有 debug 几何");

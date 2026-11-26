@@ -342,9 +342,14 @@ impl TableDelegate for ResultGridDelegate {
             .width(width)
             .min_width(ui::RESULT_COLUMN_MIN_WIDTH)
             .paddings(cell_paddings())
-            // 【B15】可本地排序：组件库点列头时会在 Default → Descending → Ascending 里循环，
-            // 并回调 `perform_sort`（排序状态存在它那边，这里只把当前态回去，refresh 后指示器不丢）
-            .sort(self.sort_mark(index))
+            // 【排序图标 2026-11-27】**故意不设 `sort`**：组件 `render_sort_icon`
+            // （`vendor/gpui-component/src/table/state.rs:2087-2131`）画的是 12px 的 Lucide
+            // 「一实一虚双 chevron」，而真值是 16px 的「单支带杆箭头」（三态各一张 SVG）。
+            // 组件没有图标字段也没有对应 builder，delegate 也改不了那个独立 slot，
+            // 所以这里关掉组件槽（`sort: None` → `render_sort_icon` 早退返回 `None`），
+            // 由 `grid/header.rs` 自绘真值图标（`grid/sort_icon.rs` 内嵌 SVG）。
+            // 排序态本身仍在 delegate 自持（`sort_mark` / `apply_sort`），点击入口是自绘图标
+            // 与两条列头菜单；真值点列名只选整列（`on_col_head_click` 同样只 `set_selected_col`）。
             // 【B15】冻结列用原生 `fixed_left`（横向滚动钉在左侧；行号槽一直是钉住的）
             .when(self.is_frozen(index), |column| column.fixed_left())
     }

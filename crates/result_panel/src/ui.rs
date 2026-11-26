@@ -233,8 +233,11 @@ pub const RESULT_CELL_PADDING_X: Pixels = px(6.);
 /// 改单侧内距时它会红，提醒同步。
 pub const RESULT_FIT_CELL_PADDING: Pixels = px(12.);
 
-/// 列宽自适应：表头 `main_row` 的 `gap_1`（badge / 列名 / 筛选图标之间）
-pub const RESULT_FIT_HEADER_GAP: Pixels = px(4.);
+/// 列宽自适应：表头 `main_row` 里元素之间的间距（3px，与 [`RESULT_HEADER_ICON_SPACING`] 同源）
+///
+/// 2026-11-27 由 4px 改为 3px：真值是 `GridColumnRenderer.IMAGE_SPACING = 3`
+/// （类型图标↔列名、列名↔排序图标、排序图标↔筛选三角三处全用这一个值）。
+pub const RESULT_FIT_HEADER_GAP: Pixels = px(3.);
 
 /// 列宽自适应：表头里我们自己画的图标宽（筛选漏斗，`Icon::size_3()` = 12px）
 ///
@@ -242,15 +245,27 @@ pub const RESULT_FIT_HEADER_GAP: Pixels = px(4.);
 /// 改图标尺寸时两处一起改。
 pub const RESULT_FIT_HEADER_ICON: Pixels = px(12.);
 
-/// 列宽自适应：组件在表头格右端占掉的固定宽（排序图标槽 16 + 右侧偏移 4 = 20px）
+/// 列宽自适应：表头格右侧**恒定占位**合计（57px）
 ///
-/// 来源（vendor 0.9.0 `table/state.rs`）：`render_th` 的内层 `h_flex` 含
-/// ① `render_sort_icon`（泛型图标 `size_3()` 12px + 内距 2px 合计 16px，`:1849-1871`）、
-/// ② `.pr(offset_pr)`，其中 `offset_pr = table_cell_padding().right - paddings.right`
-/// = 4 - 0 = 4px（`:1904-1909`）。实测 128px 列的表头格内容区只有 108px，正是这 20px。
+/// 逐项（左→右，均取自渲染实物，2026-11-27 复核）：
+/// 12 = 我们自己的左右内距（`RESULT_CELL_PADDING_X` 单侧 6 ×2；此前漏算，导致双击自适应
+///      算出的列宽比实际需要窄 12px，长列名照样被省略号吃掉）；
+/// 16 = 自绘排序图标槽（[`RESULT_HEADER_SORT_SLOT`]，真值 `SORT_WIDTH`）；
+/// 3  = 列名↔排序图标（[`RESULT_HEADER_ICON_SPACING`]）；
+/// 3  = 排序图标↔三角槽（同上）；
+/// 19 = 三角槽（[`RESULT_HEADER_TRIANGLE_SLOT`]，真值 16 图标 + 3 间距）；
+/// 4  = 组件 `render_th` 的 `.pr(offset_pr)`（`table/state.rs:2171-2176`：
+///      `offset_pr = table_cell_padding().right - paddings.right = 4 - 0`）。
 ///
-/// 不把这 20px 算进自适应，双击算出的列宽就会差 20px——列名照样被省略号吃掉。
-pub const RESULT_FIT_HEADER_CHROME: Pixels = px(20.);
+/// 有列筛选（漏斗图标）时再 + 一个 gap，见 `grid::fit::header_width`。
+pub const RESULT_FIT_HEADER_CHROME: Pixels = px(57.);
+
+/// 列宽自适应：不挂排序图标 / 三角菜单的表头格，只剩「两侧内距 + 组件右偏移」（16px = 12 + 4）
+///
+/// 用在转置视图的两列（`grid::fit::header_width`）：它们走 `render_th` 的早退分支，
+/// 只有外层 `px(RESULT_CELL_PADDING_X)` 与组件 `.pr(offset_pr)`（4px）。
+pub const RESULT_FIT_HEADER_SIDES: Pixels = px(16.);
+
 
 /// 列宽自适应：类型 badge 的 `px_1` 左右合计
 pub const RESULT_FIT_BADGE_PADDING: Pixels = px(8.);
@@ -308,6 +323,24 @@ pub const RESULT_HEADER_TYPE_FONT_SIZE: f32 = 0.6875;
 /// 组件 `.small()` 实测 28px（MiniButton 档，见基线 §57.10.4），本常量即替换掉那一档。
 /// `grid/tests.rs` 的 `header_column_menu_is_always_visible_beside_the_name` 用真实布局宽兜底。
 pub const RESULT_HEADER_TRIANGLE_SLOT: Pixels = px(19.);
+
+/// 列头排序三态图标的槽宽（16px = 真值 `SORT_WIDTH`）
+///
+/// 真值 `GridColumnRenderer.getSortControlBounds()`（`:61-63`）返回 `IMAGE_DESC.getBounds()`，
+/// 三张图标都是 16×16（`icons/misc/sort_{unknown,increase,decrease}.svg` 的 `viewBox`）；
+/// `paintSort`（`:175-183`）把它画在三角槽左侧、两者之间留 `IMAGE_SPACING = 3`。
+///
+/// 本仓在 `grid/header.rs` 自绘（`grid/sort_icon.rs` 内嵌真值 SVG），
+/// `grid/fit.rs` 的自适应宽读同一个常量——两处不同源会让双击自适应出来的列宽差几个像素。
+pub const RESULT_HEADER_SORT_SLOT: Pixels = px(16.);
+
+/// 列头内各元素之间的间距（3px = 真值 `GridColumnRenderer.IMAGE_SPACING`）
+///
+/// 真值 `:41`：`IMAGE_SPACING = 3`，用在「类型图标↔列名」「列名↔排序图标」
+/// 「排序图标↔筛选三角」（`:135-137`、`:158`、`:171`、`:182`）全部三处。
+/// 本仓此前用 `gap_1()`（4px），现统一到真值 3 —— `grid/header.rs` 的 `main_row`
+/// 与 `grid/fit.rs` 的 gap 都必须读这一个常量。
+pub const RESULT_HEADER_ICON_SPACING: Pixels = px(3.);
 
 /// 结果区最小高度（7rem = 112px：工具栏 24 + 多结果时的标签条 24 + 至少两行网格）
 ///

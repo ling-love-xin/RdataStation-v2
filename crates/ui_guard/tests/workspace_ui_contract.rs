@@ -82,7 +82,13 @@ const BASELINE: &[(&str, usize, usize)] = &[
     // 新常量——`RESULT_ROW_HEAD_MARGIN_X = px(4.)`（行号槽单侧内距）、
     // `RESULT_ROW_EXPANDER_SIZE = px(16.)`（三角图标盒，SVG 原尺寸）、
     // `RESULT_ROW_EXPANDER_SPACING = px(2.)`（三角与数字间距）。
-    ("crates/result_panel/src/ui.rs", 0, 25),
+    // 2026-11-27 25 → 29：列头几何按 DBeaver 真值收紧，四档新常量——
+    // `RESULT_HEADER_TRIANGLE_SLOT = px(19.)`（三角槽 = `drop_down` 16 + `IMAGE_SPACING` 3，
+    // 取代组件 `.small()` 的 28px；上一批已落地但漏登记基线）、
+    // `RESULT_HEADER_SORT_SLOT = px(16.)`（排序三态图标槽 = 真值 `SORT_WIDTH`）、
+    // `RESULT_HEADER_ICON_SPACING = px(3.)`（真值 `IMAGE_SPACING`，列头元素间距）、
+    // `RESULT_FIT_HEADER_SIDES = px(16.)`（不挂排序/菜单的表头格 = 左右内距 12 + 组件右偏移 4）。
+    ("crates/result_panel/src/ui.rs", 0, 29),
     ("crates/settings/src/skeleton.rs", 0, 1),
     ("crates/workbench/src/components/dialog_helpers.rs", 0, 1),
     (

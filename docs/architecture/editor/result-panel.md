@@ -3022,6 +3022,11 @@ DBeaver 清空后回空态；本仓没有「无分组键」态（`group_columns`
 > 108px）。所以它不再是「猜内部几何」，而是一个可以从源码逐项加出来的常量
 > `ui::RESULT_FIT_HEADER_CHROME`，**只用在列宽自适应**（§8.53）；画线仍走左边界。
 
+> 2026-11-27 再修正：组件排序槽已整条撤掉（改自绘真值图标，见 §9.72.3 第 4 条），
+> 上面的 20px 也随之作废——当前表头 chrome 是 **57px**（12 内距 + 16 排序槽 + 3 + 3 +
+> 19 三角槽 + 4 右偏移，见 §20.8.2）。「画左边」的结论不变，且更必要：表头自身 12px
+> 左右内距会让右边界线落在列内侧，左边界才与列边界重合。
+
 #### 8.52.3 测试口径调整
 
 - `cells_stretch_to_the_column_boundary_for_grid_lines` 追加表头断言：
@@ -3096,11 +3101,13 @@ DBeaver 侧：排序**只用图像**（`IMAGE_DESC` / `IMAGE_ASC` 三角，`ARRO
 
 #### 8.53.4 偏离与未决
 
-- **未排序列会显示 50% 透明度的双箭头**（组件的 `ChevronsUpDown`），而 DBeaver 未排序列
-  什么都不画。想「什么都不画」只有让 `.sort(None)`，但 `perform_sort` 在
-  `column.sort == None` 时直接 return ⇒ 表头点击排序整条失效。二者只能取一，本批选
-  「可点」，即保留组件的淡双箭头作为可点提示。要彻底贴合 DBeaver 必须改 vendor
-  （让 `perform_sort` 接受 `None` 并自行补 `Default`），登记未做。
+- ~~**未排序列会显示 50% 透明度的双箭头**~~ → **已解决（2026-11-27，见 §9.72.3 第 4 条）**：
+  当时的判断「想什么都不画只有让 `.sort(None)`、而 `perform_sort` 在 `None` 时直接 return
+  ⇒ 表头点击排序整条失效」漏看了一条——`on_col_head_click`（`state.rs:1112-1126`）**只
+  `set_selected_col`，不排序**，排序点击本来就由排序图标那一支独立承担。所以两条可以同时要：
+  组件槽关掉（`sort: None`）+ 自绘真值 16px 三态图标 + 自己挂点击（`toggleSortOrder` 语义），
+  **不必改 vendor**。真值未排时画的是 `SORT_UNKNOWN`（上下两支带杆箭头、常显、不透明），
+  与「什么都不画」也不是一回事，本仓现按真值画它。
 - 筛选图标形状与 DBeaver 的 `DROP_DOWN` 不同：DBeaver 那个是**下拉入口**的指示（它的
   列筛选是下拉面板），我们的筛选入口在列头菜单，指示的是「此列已筛选」这个状态，漏斗
   比空心三角更准确。这是有意偏离，不是漏做。
@@ -10688,11 +10695,18 @@ JSON 树** —— 而网格里双击进去的是行内编辑框（一整条字�
    按 `ColumnMenuPlan.panels_at` 在「排序」之后挂 `面板▸`，内容复用数据格右键同一份
    `PanelsMenuBuilder`（`menu::append_panels_submenu` 那条通道）；构造器未注入 = `FEATURE_PANELS`
    未开，列头与数据格**同时**不摆。
-4. **排序图标**：真值 16px 三态（`sort.svg` 未排 / `SORT_DECREASE` 升 / `SORT_INCREASE` 降，
-   且上下**反向**——`GridColumnRenderer.java:186-214` `UP → SORT_DECREASE`）；本仓由
-   `vendor/gpui-component/src/table/state.rs:2087-2131` 的 `render_sort_icon` 画
-   `Icon::size_3()`（12px）+ `SortAscending` / `SortDescending` / `ChevronsUpDown`，
-   改需动 vendor。
+4. ~~**排序图标**~~ → **已对齐（2026-11-27）**：真值 16px 三态（`sort_unknown.svg` 双带杆箭头 /
+   `SWT.UP → SORT_DECREASE`（向上箭头）/ `SWT.DOWN → SORT_INCREASE`（向下箭头），
+   `GridColumnRenderer.java:43-50`、`:212-226`），本仓改为**自绘真值 SVG**：
+   - 组件槽关掉：`table_impl::column()` 不再设 `sort` → `render_sort_icon`
+     （`vendor/gpui-component/src/table/state.rs:2087-2131`）早退返回 `None`；
+   - 三张 SVG 原样内嵌 `crates/result_panel/assets/`（`Icon::data()` 吃原始字节，
+     **不动资产管线**），渲染在 `grid/sort_icon.rs`，槽 16px（`ui::RESULT_HEADER_SORT_SLOT`）；
+   - 点击沿用真值 `toggleSortOrder`（`LightGrid.java:3404-3414` → `Event_ChangeSort` →
+     `SpreadsheetPresentation.java:1567-1579`）：未排 → 升 → 降 → 清空，落 `delegate.apply_sort`；
+   - 列头元素间距同时从 `gap_1()` 4px 收到真值 `IMAGE_SPACING` 3px
+     （`ui::RESULT_HEADER_ICON_SPACING`）。
+   旧记录「改需动 vendor」**不成立**：问题不在 vendor 的尺寸常数，而在图形本身不同。
 5. **获焦列四边框**：真值 `PAINT_COLUMN_FOCUS_BORDER = true`（`GridColumnRenderer.java:52`），
    焦点列（`grid.getFocusColumn()`）的列头格画四边框、色 `COLOR_WIDGET_NORMAL_SHADOW`
    （`:96-104`）；非焦列只画右边界 + 底边界（`:105-109`）。本仓列头只画**左**边界
@@ -10936,28 +10950,34 @@ preview 重建后 `PREVIEW_STAGE=5`：`[preview] copy_column_names -> Ok(Options
 
 | 缺口 | 真值 | 本仓现状 | 定量 / 落点 |
 | --- | --- | --- | --- |
-| **获焦列四边框** | `PAINT_COLUMN_FOCUS_BORDER = true`；焦点列列头格四边框，色 `COLOR_WIDGET_NORMAL_SHADOW`（`GridColumnRenderer.java:52`、`:96-104`）；非焦列画右边界 + 底边界（`:105-109`） | 只画列**左**边界（`header_sep = theme.colors.border`），无「焦点列」判定 | 需 `TableState::selected_cell()`（`table/state.rs:662`）取列 → `grid/header.rs` 三个返回分支加边框；缺口已登记在 §9.72.3 第 5 条 |
+| **获焦列四边框** | `PAINT_COLUMN_FOCUS_BORDER = true`；焦点列列头格四边框，色 `COLOR_WIDGET_NORMAL_SHADOW`（`GridColumnRenderer.java:52`、`:96-104`）；非焦列画右边界 + 底边界（`:105-109`） | 只画列**左**边界（`header_sep = theme.colors.border`），无「焦点列」判定 | 焦点列直接读 delegate 自持的当前格（`delegate.cell_range().cursor().1`）——`render_th` 里拿到的 `cx` 是 `Context<TableState<Self>>`，同实体已被 `&mut` 借出，**不能**再 `cx.entity().read(cx)`（会撞借用）。落点 `grid/header.rs` 三个返回分支；缺口已登记在 §9.72.3 第 5 条 |
 | **计算页 Copy / CopyAll** | `SpreadsheetPresentation` 计算页右键复制 | 未做 | §8.40.2 |
 | **多维数组二级展开** | `GridRowNested` 逐级可展开 | 子行不再给三角（键是 `(data_row, column)`，`delegate.rs:277`） | §9.70.5 第 5 条；要改成层级键 |
 
-#### 20.8.2 仍缺 · 需替换组件既有行为（不必 patch vendor）
+#### 20.8.2 已解决 · 原「需动 vendor」两条都是假的（2026-11-27）
 
-| 缺口 | 真值 | 本仓（vendor 侧） | 定量 |
-| --- | --- | --- | --- |
-| **排序图标** | 16px 三态（`sort.svg` / `SORT_DECREASE` / `SORT_INCREASE`），且 `UP → SORT_DECREASE`（`GridColumnRenderer.java:186-214`） | `table/state.rs:2087-2131`：`Icon::size_3()`（12px）+ `SortAscending` / `SortDescending` / `ChevronsUpDown` | 尺寸 −4px；未排态是**双箭头**而非真值单箭头；升降映射**相反** |
+原记的「排序图标改需动 vendor」「三角槽宽要自绘 16px 三角（与禁手搓冲突）」经原生能力排查后
+**都不成立**——两条都靠本仓 + 组件公开 API 解决，`vendor/gpui-component` 一个字节没动：
 
-**原生产路径（2026-11-27 取证，不需要改 vendor）**：`render_sort_icon` 只在 `col.sort != ColumnSort::Default`
-时才画（`state.rs:2087` 起），且图标是 `render_th`（`:2137-2178`，`h_flex().justify_between()`）里
-delegate 内容**之后**的独立 slot，delegate 侧改不了它。但可以**整个不设 `Column::sort`**（`column.rs`
-的 `Column` 字段只有 `key/name/align/sort/paddings/...`，无图标项）→ 组件那边早退返回 `None`，
-再在 `delegate.render_th` 自绘 16px 三态图标并自行挂排序点击。
+| 原缺口 | 结论 | 依据 |
+| --- | --- | --- |
+| **排序图标**（16px 三态 vs 组件 12px 双 chevron） | 组件槽整条关掉 + 自绘真值 SVG | `Column` 无图标字段、`TableState` 无对应 builder（`table/column.rs:10-52`），但 `Column::sort = None` 会让 `render_sort_icon` 早退（`table/state.rs:2087-2101`）；三张真值 SVG 用 `Icon::data()` 吃原始字节内嵌（`crates/result_panel/assets/`），**不动资产管线**。落点见 §9.72.3 第 4 条 |
+| **三角槽宽**（28 vs 19） | 原生 `Size::Size(px(19.))` | icon-only 按钮在该档宽高直取该值（`button/button.rs:693-700`），内部 `Caret` 恒 16px（`select.rs:60-69`）→ 19 = 16 + 左右各 1.5。见 §9.72.3 第 1 条 |
 
-代价只有一个：排序的点击入口要从组件接管。已核 `state.rs:1112-1126 on_col_head_click` **只做
-`set_selected_col`、不排序**（旧版「点列头会排一次序」的直觉在 0.10.0 不成立），所以撤掉
-`Column::sort` 不破坏列头点击语义，反而更贴真值（真值点列名 = 选整列）。
+**原生排查的三条硬结论**（后续再遇到「要不要 patch vendor」先看这里）：
 
-**已解决（原列在此档）**：列头三角槽宽 19px——原生 `Size::Size(px(19.))` 即可（见 §9.72.3 第 1 条），
-无需自绘 16px 三角。
+1. `render_th` 的排序图标是 delegate 内容**之后**的独立 slot（`table/state.rs:2137-2178` 的
+   `h_flex().justify_between()` + `.children(render_sort_icon(..))`），delegate 无法替换它
+   —— 想换图形只能整条关掉（不设 `Column::sort`）再自绘。
+2. `on_col_head_click` **只做 `set_selected_col`、不排序**（`table/state.rs:1112-1126`），
+   所以撤掉 `Column::sort` 不改变列头点击语义；排序入口由自绘图标与两条列头菜单承担。
+3. `Icon::data(&[u8])` 可以直接渲染任意 SVG 字节（`icon.rs:167-170`），**不需要注册 AssetSource**
+   —— 这条让「真值图形原样落地」不再需要改 `crates/app/src/assets.rs`。
+
+**顺带修掉的口径错**（列宽自适应）：`ui::RESULT_FIT_HEADER_CHROME` 原为 20px，只算了组件
+排序槽 16 + 右偏移 4，漏掉三角菜单槽 19、两处 3px 间距与表头自身 12px 左右内距
+→ 双击列头分隔线算出的列宽会窄 37px。现按渲染实物改为 57（逐项见常量注释），
+转置列另走 `ui::RESULT_FIT_HEADER_SIDES = 16`。
 
 #### 20.8.3 有意差异 / 已判定不做（勿当 bug）
 
