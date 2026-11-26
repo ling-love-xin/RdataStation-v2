@@ -2223,8 +2223,10 @@ SUM/AVG 对字符串累计不成立）。
    `DataTable` 引入单元格选区，属独立工程；且本仓已有独立「分组」页签，重复实现会两处打架。
 3. ~~**不做右键 Copy / CopyAll**~~：本仓统计页尚无右键菜单基建，且工具栏已有全局复制；
    ~~登记为后续增强~~
-   → **已由 §8.87 补齐**（`复制值` / `复制全部` / 分隔 / 恢复默认统计项，
-   `func=value` 文案即 `AggregateColumnsPanel.java:471-496` 的口径）。
+   → **已补齐**（`复制值` / `复制全部` / 分隔 / 恢复默认统计项，
+   `func=value` 文案即 `AggregateColumnsPanel.java:471-496` 的口径）。落点是
+   `panel/tabs.rs::stat_row` 的右键菜单 + `panel/tests.rs:657`（条目清单）与 `:3907`
+   （复制全部文本）；此前这里与 `tabs.rs:1125` 注释共引的 `§8.87` 是悬空引用（本文件无该节号）。
 
 #### 8.40.5 新增测试（5 条）
 
@@ -5248,7 +5250,7 @@ DBeaver 自己靠 `DBDAttributeBinding` 从结果集元数据推断），属于*
 **本仓现状对照**：
 | 项 | DBeaver | 本仓 | 结论 |
 | --- | --- | --- | --- |
-| 工具条顺序 | Add / Remove / Reset / SEP / GroupBy / ValueType | ＋ / Reset / 口径 | 顺序等价；Remove 换行尾 ×（§8.83）、GroupBy 不做（§8.87） |
+| 工具条顺序 | Add / Remove / Reset / SEP / GroupBy / ValueType | ＋ / Reset / 口径 | 顺序等价；Remove 换行尾 ×（理由见 §8.40.4 第 1 条）、GroupBy 不做（理由见 §8.40.4 第 2 条） |
 | 添加菜单口径 | 只列未启用项 | 同（`missing` 过滤） | 已对齐 |
 | 添加全启用时 | 菜单为空、点了没反应 | 按钮直接禁用 + tooltip | 有意（避免假按钮） |
 | Remove 可用性 | 有选中行才可用（可多选删） | 行尾 × 恒可用（单行） | **形态差异**（本仓无树行选中模型） |
@@ -10966,12 +10968,17 @@ preview 重建后 `PREVIEW_STAGE=5`：`[preview] copy_column_names -> Ok(Options
 
 | 缺口 | 真值 | 本仓现状 | 定量 / 落点 |
 | --- | --- | --- | --- |
-| **计算页 Copy / CopyAll** | `SpreadsheetPresentation` 计算页右键复制 | 未做 | §8.40.2 |
 | **多维数组二级展开** | `GridRowNested` 逐级可展开 | 子行不再给三角（键是 `(data_row, column)`，`delegate.rs:277`） | §9.70.5 第 5 条；要改成层级键 |
 
 **本轮已从此档移出（2026-11-27）**：获焦列四边框——原位记的落点（`delegate.cell_range().cursor().1`）
 成立，实现用的是绝对定位覆盖层而不是 `.border_*`（理由与残余 1px 口径见 §9.72.3 第 5 条），
 用例 `only_the_focused_column_gets_a_closed_header_border` 钉住。
+
+**同上（2026-11-27 复核）**：计算页 **Copy / CopyAll** 本表此前记「未做」是旧状态，
+实际早已落地（`panel/tabs.rs::stat_row` 挂 `AggregateColumnsPanel:106-116` 的右键菜单，
+`panel/tests.rs:657` 的 `stat_menu_entries` 用例钉住条目清单含「复制值 / 复制全部」，
+`panel/tests.rs:3907` 钉住「复制全部」的 `func=value` 文本口径）。同时订正 §8.40.4 第 3 条里
+指向的 `§8.87`——本文档无此节号（悬空引用），实际落点即上述两处。
 
 #### 20.8.2 已解决 · 原「需动 vendor」两条都是假的（2026-11-27）
 
@@ -11088,6 +11095,9 @@ preview 重建后 `PREVIEW_STAGE=5`：`[preview] copy_column_names -> Ok(Options
 - 1 处 `§4.1`（§8.22 段「分流规则」抬头），指早期外部方案文档，该文档未入库，**无法
   解析**，保留原样、勿当作本文档小节；
 - 1 处 `§9.44.5` 自指错号，实际小节为 `§9.44.3`，**本次已修**。
+- **2026-11-27 补查**：`§8.87`（§8.40.4 第 3 条、`panel/tabs.rs:1125` 注释）与 `§8.83`
+  （计算页「本仓现状对照」表的工具条一行）本文档**都无此节号**，属悬空引用，已改为实指：
+  前者 → `panel/tabs.rs::stat_row` + `panel/tests.rs:657/3907`，后者 → §8.40.4 第 1/2 条。
 
 本文档编号是历史累积结果，**不重排**（§8.x / §9.xx 之间有数千处互引，重排会整体失效）。
 新增小节从 §9.67 顺延即可。

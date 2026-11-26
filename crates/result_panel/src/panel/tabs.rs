@@ -1122,7 +1122,7 @@ impl ResultPanel {
     ///
     /// 【R7 对齐右键菜单】行上挂 `AggregateColumnsPanel` 的右键菜单（`:106-116`）：
     /// 复制值 / 复制全部 / 分隔 / 与工具条同款动作（本仓只摆「恢复默认统计项」，
-    /// 添加在工具条 ＋ 里、分组聚合不适用，见 §8.87）。
+    /// 添加在工具条 ＋ 里、分组聚合不适用，理由见 `result-panel.md` §8.40.4 第 2/3 条）。
     fn stat_row(
         &self,
         item: StatsItem,
