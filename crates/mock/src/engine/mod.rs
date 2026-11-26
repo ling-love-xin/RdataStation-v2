@@ -527,7 +527,9 @@ impl MockEngine {
     /// - 会话开在**内存库连接**上（临时表在那边，跨库才看得见）；写入期间该连接持有目标文件锁；
     /// - 列清单取自**临时表自身**的列元数据，目标表多出的列走默认值（与旧文本路径语义一致）；
     /// - `Create` 模式插入失败时删掉刚建的表（不留半成品空表），然后无论成败都 `DETACH`；
-    /// - 目标表名可以是用户给的任意名字（写 SQL 时带引号）；临时表列名留 `sanitize_identifier` 口径。
+    /// - 目标表名可以是用户给的任意名字（写 SQL 时带引号）；临时表列名留 `sanitize_identifier` 口径；
+    /// - **落地成功即收掉这张临时表**（用户口径「落地完即关」）：落完它的用处就结束了，
+    ///   留着只在进程内存库里逐张累积（架构 §9-I1/I2）；失败路径不删，重试还要它。
     ///
     /// **调用方不得持有内存库连接锁**后再调本函数（同 `insert_statements` 的死锁教训）。
     pub fn write_temp_table_to_database(
@@ -596,6 +598,25 @@ impl MockEngine {
         let detached = conn.execute_batch(&SqlEngine::build_detach_database(ATTACH_ALIAS));
         written?; // 写入失败优先报写入（解挂失败不拖淡根因）
         detached.map_err(|e| MockError::Generation(format!("解挂分析库失败: {e}")))?;
+
+        // 落地完成 = 这张临时表的用处在当下结束了（用户口径「落地完即关」，2026-11-27）：
+        // 表在进程内存库里，不删就一直占（长会话逐张累积，架构 §9-I1/I2）。
+        // **失败路径不删**（上面 `written?` 已提前返回）：重试还要它。
+        drop(conn);
+        match engine::duckdb::instance::current() {
+            Some(instance) => {
+                if let Err(error) = instance.drop_temp(temp_table) {
+                    tracing::warn!("mock 落地后收临时表 {temp_table} 失败：{error}");
+                }
+            }
+            None => {
+                // 没实例（headless 用例）：退回进程面内存库自己删
+                let db = Self::get_db()?;
+                let conn = Self::get_conn(&db)?;
+                let _ = conn.execute_batch(&SqlEngine::build_drop_table(temp_table, true));
+                let _ = DuckDBManager::temp_table_manager().unregister(temp_table);
+            }
+        }
         Ok(())
     }
 
