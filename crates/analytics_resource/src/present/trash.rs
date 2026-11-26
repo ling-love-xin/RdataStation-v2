@@ -63,10 +63,53 @@ pub fn entity_trash_row(entry: &TrashEntry) -> Option<(DateTime<Utc>, TrashRow)>
         },
         payload_mode: PayloadMode::Copy,
         resource_id: String::new(),
+        is_global: false,
         has_payload: true,
     };
     Some((manifest.deleted_at, row))
 }
+/// 全局回收站条目 → 回收站行（与项目条目同一个对话框）。
+///
+/// `trash_id` 前缀 `global:` 是动作分派的唯一依据：还原 / 永久删除要转到全局实例，
+/// 不走项目的 `ProjectTrash`。
+pub fn global_trash_row(entry: &crate::global::GlobalTrashEntry) -> (DateTime<Utc>, TrashRow) {
+    let (kind_label, original_label) = if entry.has_file_payload {
+        (
+            "全局文件".to_string(),
+            entry
+                .file_rel_path
+                .as_deref()
+                .map(|rel| format!("全局库文件 {rel}"))
+                .unwrap_or_else(|| "全局库文件".to_string()),
+        )
+    } else {
+        (
+            "全局表".to_string(),
+            entry
+                .analytics_table
+                .as_deref()
+                .map(|table| format!("全局分析库表 {table}"))
+                .unwrap_or_else(|| "全局分析库表".to_string()),
+        )
+    };
+    let row = TrashRow {
+        trash_id: format!("{GLOBAL_TRASH_ID_PREFIX}{}", entry.name),
+        name: entry.name.clone(),
+        original_label,
+        kind_label,
+        time_label: format_timestamp(entry.trashed_at),
+        size_label: String::new(),
+        payload_mode: PayloadMode::Copy,
+        resource_id: String::new(),
+        is_global: true,
+        has_payload: entry.has_file_payload,
+    };
+    (entry.trashed_at, row)
+}
+
+/// 全局回收站条目的 `trash_id` 前缀。
+pub const GLOBAL_TRASH_ID_PREFIX: &str = "global:";
+
 /// registry-only 软删登记行 → 回收站行（第二来源；§12.1.1 ③）。
 ///
 /// 两类条目没有实体 manifest：引用型（本体一直在源位置）与表型（本体在项目分析库）。
@@ -110,6 +153,7 @@ pub fn registry_trash_rows(deleted: &[AnalyticsResource]) -> Vec<(DateTime<Utc>,
                 size_label: format_size(r.file_size),
                 payload_mode: mode,
                 resource_id: r.id.clone(),
+                is_global: false,
                 has_payload: false,
             };
             Some((when, row))
@@ -120,3 +164,42 @@ pub fn registry_trash_rows(deleted: &[AnalyticsResource]) -> Vec<(DateTime<Utc>,
 /// 按资源的分组映射：`resource_id → folder_id`（来自 `folders_by_resource`，一次查完；
 /// 单层分组下最多一条，所以是 `Option` 语义的映射而不是列表）。
 pub type FolderMemberships = std::collections::HashMap<String, String>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(name: &str, table: Option<&str>, file: Option<&str>) -> crate::global::GlobalTrashEntry {
+        crate::global::GlobalTrashEntry {
+            name: name.to_string(),
+            version: 2,
+            analytics_table: table.map(str::to_string),
+            file_rel_path: file.map(str::to_string),
+            trashed_at: Utc::now(),
+            version_count: 3,
+            trash_dir: std::path::PathBuf::from("trash/global/x"),
+            has_file_payload: file.is_some(),
+        }
+    }
+
+    /// 全局条目的 `trash_id` 前缀是动作分派的依据：丢了前缀，还原 / 永久删除会走到
+    /// 项目回收站并按名字查不到，动作静默失败。
+    #[test]
+    fn global_rows_carry_the_routing_prefix_and_kind() {
+        let (_, table_row) = global_trash_row(&entry("dau", Some("dau"), None));
+        assert!(table_row.is_global);
+        assert!(table_row.trash_id.starts_with(GLOBAL_TRASH_ID_PREFIX));
+        assert_eq!(
+            table_row.trash_id,
+            format!("{GLOBAL_TRASH_ID_PREFIX}dau"),
+            "还原按名字找最新 manifest，id 里必须只剩名字"
+        );
+        assert_eq!(table_row.kind_label, "全局表");
+        assert!(!table_row.has_payload, "全局表没有文件本体，还原只复活登记");
+
+        let (_, file_row) = global_trash_row(&entry("sales.csv", None, Some("files/sales.csv")));
+        assert_eq!(file_row.kind_label, "全局文件");
+        assert!(file_row.has_payload, "全局文件的副本在回收站里");
+        assert!(file_row.original_label.contains("files/sales.csv"));
+    }
+}

@@ -59,7 +59,10 @@ mod repair;
 mod snapshot;
 
 pub use self::format::{format_size, format_scale, format_relative_time, format_timestamp, tail_for};
-pub use self::trash::{build_trash_snapshot, entity_trash_row, registry_trash_rows, FolderMemberships};
+pub use self::trash::{
+    build_trash_snapshot, entity_trash_row, global_trash_row, registry_trash_rows, FolderMemberships,
+    GLOBAL_TRASH_ID_PREFIX,
+};
 pub use self::rows::{SnapshotInputs, to_row, tag_options};
 pub use self::detail::{DetailExtras, to_detail};
 pub use self::origin_chain::{build_origin_chain, OriginChain};

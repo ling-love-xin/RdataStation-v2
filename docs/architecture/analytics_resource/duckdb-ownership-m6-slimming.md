@@ -511,8 +511,11 @@ WIP 产物串包（`rds_sql::guard` 缺失 / `use_duckdb_fed` 类型不一致）
 
 本段边界：草稿箱栏的“唯一回收站”入口已落地为回收站分区里的「资产库归档…」
 （`ScratchpadHost::can_open_asset_trash` / `open_asset_trash` → 资产库回收站对话框），
-资产库面板头的「⋯ → 回收站…」已撤掉。草稿箱分区里的条目行仍只列 `origin == scratchpad`；
-全局表回收站条目尚未并入这个对话框（`list_global_trash` 目前只有服务层）。
+资产库面板头的「⋯ → 回收站…」已撤掉。草稿箱分区里的条目行仍只列 `origin == scratchpad`。
+对话框里的清单是三路合并：项目实体条目、registry 软删登记行（引用型 / 表型）、
+以及 `list_global_trash` 读出的全局条目；全局行按 `trash_id` 前缀 `global:<name>`
+分派到 `restore_global` / `purge_global`，「清空回收站」同时清项目与全局两侧
+（全局被 pin 的条目跳过并在回执里报数）。
 
 ## 10. 风险与未决
 

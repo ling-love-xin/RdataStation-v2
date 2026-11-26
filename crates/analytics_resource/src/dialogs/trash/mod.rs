@@ -66,7 +66,7 @@ impl TrashScope {
 
     pub fn empty_confirm_title(self) -> &'static str {
         match self {
-            Self::Project => "清空资产库的回收站？",
+            Self::Project => "清空回收站？",
             Self::Global => "清空全局回收站？",
         }
     }

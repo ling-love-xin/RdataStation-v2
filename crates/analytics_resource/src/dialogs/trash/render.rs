@@ -48,7 +48,9 @@ pub(super) fn trash_line(
         let trash_id = row.trash_id.clone();
         // 还原口径按「有没有实体本体」区分（§12.1.1 ③）：文件型把副本从回收站取回原位；
         // 引用型 / 表型的本体不在回收站里（源位置 / 分析库），还原只是复活登记行。
-        let restore_note = if row.has_payload {
+        let restore_note = if row.is_global {
+            "正在还原全局条目…".to_string()
+        } else if row.has_payload {
             "正在还原…".to_string()
         } else {
             "正在还原登记记录…".to_string()
@@ -67,7 +69,9 @@ pub(super) fn trash_line(
     };
     // 永久删除口径按「有没有实体本体」区分：文件型连本体一起删；引用型 / 表型的本体
     // 不随删除走（源文件留在原位 / 分析库表保留），只删登记行与版本元数据。
-    let purge_description = if row.has_payload {
+    let purge_description = if row.is_global {
+        "全局条目的表 / 文件本体与版本快照将彻底删除，不可恢复；全局登记一并删除。".to_string()
+    } else if row.has_payload {
         "本体将从回收站里彻底删除，不可恢复；登记记录一并删除。".to_string()
     } else {
         "本体不随删除走（源文件留在原位置、分析库表保留）；登记记录与版本元数据将彻底删除，不可恢复。".to_string()

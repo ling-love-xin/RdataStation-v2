@@ -12,6 +12,7 @@ fn row(id: &str) -> TrashRow {
         size_label: "1.2 KB".to_string(),
         payload_mode: PayloadMode::Copy,
         resource_id: String::new(),
+        is_global: false,
         has_payload: true,
     }
 }
