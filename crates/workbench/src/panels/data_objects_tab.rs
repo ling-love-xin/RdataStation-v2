@@ -1216,37 +1216,34 @@ impl DataObjectsTab {
                 let group = object.group;
                 let expanded = !self.collapsed.contains(&group);
                 let entity_for_group = entity.clone();
+                // 段头用共享 `tree::GroupHeader`：与草稿箱的分区头（草稿 / 引用 / 书签 / 回收站）、
+                // 数据导航的分组头是同一个原语——整行可点、计数紧跟组名、凹槽底色与原语统一。
+                // 手搓版（Button 箭头 + 计数顶到右端 + 无底色）已撤：三段时间距 / 高度各写一套，
+                // 与兄弟面板对不齐。
+                // 外层 `pl_1p5` 把原语自带的 6px 内距补到面板的 12px 一线（铁律第 41 条：
+                // 工具栏 / 行 / 状态栏同一条左缘），底色同 `group_box` 让凹槽从面板左缘铺起。
                 list = list.child(
-                    div()
-                        .h_flex()
-                        .items_center()
-                        .gap_2()
-                        .px_3()
-                        .pt_3()
-                        .pb_1()
-                        .text_xs()
-                        .text_color(colors.muted_foreground)
-                        .child(
-                            Button::new(SharedString::from(format!(
+                    div().pl_1p5().bg(colors.group_box).child(
+                        tree::GroupHeader::new(
+                            SharedString::from(format!(
                                 "data-objects-group-{}",
                                 group.title()
-                            )))
-                            .ghost()
-                            .icon(if expanded {
-                                gpui_kit::assets::IconName::ChevronDown
-                            } else {
-                                gpui_kit::assets::IconName::ChevronRight
-                            })
-                            .on_click(move |_, _, cx| {
-                                let group = group;
-                                entity_for_group.update(cx, |tab, cx| {
-                                    tab.toggle_group(group, cx);
-                                });
-                            }),
+                            )),
+                            group.title(),
                         )
-                        .child(object.group.title())
-                        .child(div().flex_1())
-                        .child(div().text_xs().child(group_count.to_string())),
+                        .debug_selector("data-objects-group-head")
+                        .expanded(expanded)
+                        .count(group_count, colors.muted_foreground)
+                        // 可点的行必须给 hover 反馈（导航分组头同一口径）；草稿箱那几处是
+                        // 常驻分区头、不传，这里属于「点了会折叠」的一类。
+                        .hover_background(colors.list_hover)
+                        .on_click(move |_, _, cx| {
+                            let group = group;
+                            entity_for_group.update(cx, |tab, cx| {
+                                tab.toggle_group(group, cx);
+                            });
+                        }),
+                    ),
                 );
             }
             // 收起只是不画行：段头和计数留着，折叠起来也知道里面有几行
