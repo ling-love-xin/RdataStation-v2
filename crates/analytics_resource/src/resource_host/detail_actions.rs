@@ -384,44 +384,6 @@ pub(super) fn request_restore_global_previous(
     });
 }
 
-/// 全局文件资产解锁（文件资产不能直接删除）：当前内容退回本项目草稿箱，再撤销全局登记。
-pub(super) fn request_unlock_global_file(
-    host: &ResourceHost,
-    detail: &ArchiveDetail,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let Some(root) = host.require_project("无法解锁全局文件", cx) else {
-        return;
-    };
-    let name = detail.name.clone();
-    let backend = host.backend.clone();
-    window.open_alert_dialog(cx, move |alert, _window, _cx| {
-        let backend = backend.clone();
-        let root = root.clone();
-        let name = name.clone();
-        alert
-            .confirm()
-            .title(format!("解除锁定并退回草稿箱（{name}）？"))
-            .description(
-                "将把全局库里的当前内容复制到本项目草稿箱（同名时自动加序号避让），并撤销全局登记、清理历史副本。之后请从草稿箱删除该文件；已分发到项目的副本不受影响。"
-                    .to_string(),
-            )
-            .button_props(
-                gpui_kit::component::dialog::DialogButtonProps::default()
-                    .ok_text("解除锁定并退回")
-                    .ok_variant(gpui_kit::component::button::ButtonVariant::Danger)
-                    .show_cancel(true),
-            )
-            .on_ok(move |_, _window, cx| {
-                resource_jobs::enqueue_unlock_global_file(root.clone(), name.clone());
-                backend.refresh_resources(cx);
-                say(&backend, "资产库：正在解锁全局文件…", cx);
-                true
-            })
-    });
-}
-
 /// 移入全局回收站（刀 B）：确认框说清「只软删全局这一份，表与版本仍在，可恢复」。
 pub(super) fn request_delete_global(
     host: &ResourceHost,

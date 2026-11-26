@@ -77,41 +77,6 @@ async fn t129_file_asset_trashes_and_restores_without_auto_unlock() {
         "回收站不动历史副本"
     );
 
-    // 解锁仍是独立动作：只退当前版，清登记链与历史副本。
-    let outcome = service
-        .unlock_file_to_drafts(&archived.resource_id)
-        .await
-        .expect("unlock");
-    assert_eq!(outcome.draft_rel, "reports/locked.sql");
-    assert_eq!(outcome.removed_versions, 1);
-    let draft = service
-        .payload()
-        .project_root()
-        .join("scratchpad")
-        .join("reports/locked.sql");
-    assert_eq!(
-        fs::read_to_string(&draft).await.expect("draft"),
-        "select 2;",
-        "只退当前版本内容"
-    );
-    assert!(
-        service
-            .store()
-            .get_resource_by_id(&archived.resource_id)
-            .await
-            .is_err(),
-        "登记链已清"
-    );
-    assert!(
-        service
-            .payload()
-            .version_copies(&archived.resource_id)
-            .await
-            .expect("copies")
-            .is_empty(),
-        "历史副本随解锁清理"
-    );
-
     let _ = fs::remove_dir_all(&dir).await;
 }
 
@@ -221,9 +186,8 @@ async fn t158_purge_clears_versions_semantics_refs_but_keeps_history() {
 
 /// 回收站出入要留履历：移入记 `Trashed`、还原记 `Untrashed`。
 ///
-/// （2026-11-26：文件型资产改为“解锁退回草稿箱、只能从草稿箱删除”后，
-/// 原先基于文件型资产的回收站用例（t124–t128、t131 与按相对路径还原）已删除；
-/// 文件型新语义由 `t129_file_asset_must_unlock_before_delete` 钉住，
+/// （2026-11-27：文件型资产不再有“解锁退回草稿箱”这一步，删除即进回收站；
+/// 文件型语义由 `t129_file_asset_trashes_and_restores_without_auto_unlock` 钉住，
 /// 表型回收站语义由 `table_asset_trash_cycles_the_registry_only` 覆盖。）
 ///
 /// 少了这两条，「进过回收站又捞回来」在时间线上完全看不见——用户只看到归档与最终

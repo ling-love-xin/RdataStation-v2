@@ -66,12 +66,6 @@ pub(crate) struct RestoreGlobalVersionJob {
     pub(crate) table: bool,
 }
 
-/// 一次「全局文件解锁退回草稿箱」任务（当前内容退回项目草稿箱，再撤销全局登记）。
-pub(crate) struct UnlockGlobalFileJob {
-    pub(crate) project_root: PathBuf,
-    pub(crate) name: String,
-}
-
 /// 把全局资产移入回收站（工作线程上执行）。
 pub(crate) async fn run_delete_global(job: &DeleteGlobalJob) -> OpOutcome {
     use crate::global::GlobalInstanceStore;
@@ -97,35 +91,6 @@ pub(crate) async fn run_delete_global(job: &DeleteGlobalJob) -> OpOutcome {
     }
 }
 
-/// 全局文件资产解锁（工作线程上执行）：复制当前内容到本项目草稿箱，再撤销全局登记。
-pub(crate) async fn run_unlock_global_file(job: &UnlockGlobalFileJob) -> OpOutcome {
-    use crate::global::GlobalInstanceStore;
-
-    let gstore = match GlobalInstanceStore::production().await {
-        Ok(store) => store,
-        Err(reason) => {
-            return OpOutcome::Failed {
-                action: "解锁全局文件",
-                reason: format!("打开全局系统库失败：{reason}"),
-            };
-        }
-    };
-    let drafts = job.project_root.join("scratchpad");
-    match gstore
-        .unlock_global_file_to_project(&job.name, &drafts)
-        .await
-    {
-        Ok(outcome) => OpOutcome::GlobalFileUnlocked {
-            name: outcome.name,
-            draft_rel: outcome.draft_rel,
-            removed_versions: outcome.removed_versions,
-        },
-        Err(reason) => OpOutcome::Failed {
-            action: "解锁全局文件",
-            reason: reason.to_string(),
-        },
-    }
-}
 
 /// 从全局历史版本恢复（工作线程上执行）：表型复制旧表，文件型校验旧副本。
 pub(crate) async fn run_restore_global_version(job: &RestoreGlobalVersionJob) -> OpOutcome {
@@ -616,15 +581,6 @@ pub fn enqueue_restore_global_version(
         name,
         version,
         table,
-    }));
-}
-
-/// 提交一次「全局文件解锁退回草稿箱」。
-pub fn enqueue_unlock_global_file(project_root: PathBuf, name: String) {
-    jobs().pending.fetch_add(1, Ordering::SeqCst);
-    let _ = jobs().tx.send(Job::UnlockGlobalFile(UnlockGlobalFileJob {
-        project_root,
-        name,
     }));
 }
 

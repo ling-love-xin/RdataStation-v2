@@ -179,26 +179,6 @@ impl ResourcesHost for RecordingHost {
             .borrow_mut()
             .push(format!("delete-global:{}", detail.name));
     }
-    fn request_unlock_file_asset(
-        &self,
-        detail: &ArchiveDetail,
-        _window: &mut Window,
-        _cx: &mut App,
-    ) {
-        self.calls
-            .borrow_mut()
-            .push(format!("unlock-file:{}", detail.id));
-    }
-    fn request_unlock_global_file(
-        &self,
-        detail: &ArchiveDetail,
-        _window: &mut Window,
-        _cx: &mut App,
-    ) {
-        self.calls
-            .borrow_mut()
-            .push(format!("unlock-global-file:{}", detail.name));
-    }
     fn request_restore_global_previous(
         &self,
         detail: &ArchiveDetail,

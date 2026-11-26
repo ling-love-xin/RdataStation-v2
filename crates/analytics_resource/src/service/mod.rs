@@ -24,7 +24,6 @@ pub mod archive;
 pub mod checkout;
 pub mod semantics;
 pub mod trash;
-pub mod unlock;
 
 /// 历史内容副本默认保留份数（设置项 `resources.keep_versions`，架构 §5.2）。
 pub const DEFAULT_KEEP_VERSIONS: u32 = 5;

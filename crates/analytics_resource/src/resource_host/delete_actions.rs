@@ -64,50 +64,6 @@ pub(super) fn request_delete(host: &ResourceHost, targets: &[DeleteTarget], wind
         });
 }
 
-/// 文件型资产解锁退回草稿箱（文件资产不能直接删除）。
-pub(super) fn request_unlock_file_asset(
-    host: &ResourceHost,
-    detail: &ArchiveDetail,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let Some(root) = host.require_project("无法解锁文件资产", cx) else {
-        return;
-    };
-    if host.read_only() {
-        host.notice(tr("资产库：项目为只读模式，不能解锁"), cx);
-        return;
-    }
-    let id = detail.id.clone();
-    let name = detail.name.clone();
-    let backend = host.backend.clone();
-    let read_only = host.read_only();
-    window.open_alert_dialog(cx, move |alert, _window, _cx| {
-        let backend = backend.clone();
-        let root = root.clone();
-        let id = id.clone();
-        alert
-            .confirm()
-            .title(format!("解除锁定并退回草稿箱（{name}）？"))
-            .description(
-                "当前内容会复制到本项目草稿箱（同名时自动加序号避让）；资产库里的这一份登记与历史版本副本一并清理。之后请从草稿箱删除该文件。"
-                    .to_string(),
-            )
-            .button_props(
-                gpui_kit::component::dialog::DialogButtonProps::default()
-                    .ok_text("解除锁定并退回")
-                    .ok_variant(gpui_kit::component::button::ButtonVariant::Danger)
-                    .show_cancel(true),
-            )
-            .on_ok(move |_, _window, cx| {
-                resource_jobs::enqueue_unlock_file(root.clone(), read_only, id.clone());
-                backend.refresh_resources(cx);
-                say(&backend, "资产库：正在解除锁定…", cx);
-                true
-            })
-    });
-}
-
 pub(super) fn request_reveal(host: &ResourceHost, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
 
         let Some(path) = host.payload_path(detail, cx) else {

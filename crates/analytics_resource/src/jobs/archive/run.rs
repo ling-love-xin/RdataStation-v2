@@ -242,30 +242,6 @@ pub(crate) async fn run_undo(job: &UndoJob) -> OpOutcome {
     }
 }
 
-/// 执行一次文件资产解锁（退回草稿箱）。
-pub(crate) async fn run_unlock_file(job: &UnlockFileJob) -> OpOutcome {
-    let service = match open_service(job.project_root.clone(), None).await {
-        Ok(service) => service,
-        Err(reason) => {
-            return OpOutcome::Failed {
-                action: "解锁文件资产",
-                reason,
-            };
-        }
-    };
-    match service.unlock_file_to_drafts(&job.resource_id).await {
-        Ok(outcome) => OpOutcome::FileUnlocked {
-            name: outcome.name,
-            draft_rel: outcome.draft_rel,
-            removed_versions: outcome.removed_versions,
-        },
-        Err(error) => OpOutcome::Failed {
-            action: "解锁文件资产",
-            reason: error.to_string(),
-        },
-    }
-}
-
 /// 执行一次移入回收站（批量）。
 ///
 /// 逐条走服务层；服务层不做预回滚（部分成功就部分成功），所以错误文案里会带“已移入 N 项”

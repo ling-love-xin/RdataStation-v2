@@ -4,34 +4,6 @@ use super::*;
 use crate::model::GLOBAL_PREFIX;
 
 impl GlobalInstanceStore {
-    /// 读全局脚本内容表正文（分发重建文件用）。**参数是实际表名**。
-    ///
-    /// 这张表由 `promote` 一次 `CREATE TABLE` + 一条 `INSERT` 建起来，恒为一行；
-    /// 这里先数行再取，不用 `LIMIT 1` 静默取首行：表若被改坏（多行 / 空表），
-    /// 旧写法会产出"看着正常、内容不全"的文件，比直接报错难查得多。
-    pub(super) async fn read_script_content(&self, name: &str) -> Result<String, CoreError> {
-        self.with_duckdb(|conn| {
-            let table = quote_ident(name);
-            let rows: i64 = conn
-                .prepare(&format!("SELECT count(*) FROM {table};"))
-                .map_err(|e| duckdb_err("prepare_script_row_count", &e.to_string()))?
-                .query_row([], |row| row.get(0))
-                .map_err(|e| duckdb_err("count_script_rows", &e.to_string()))?;
-            if rows != 1 {
-                return Err(duckdb_err(
-                    "read_script_rows",
-                    &format!("脚本内容表 {name} 应只有一行，实际 {rows} 行"),
-                ));
-            }
-            let mut stmt = conn
-                .prepare(&format!("SELECT \"content\" FROM {table};"))
-                .map_err(|e| duckdb_err("prepare_read_script", &e.to_string()))?;
-            stmt.query_row([], |row| row.get::<_, String>(0))
-                .map_err(|e| duckdb_err("read_script_content", &e.to_string()))
-        })
-        .await
-    }
-
     /// 项目登记：Analysis 档（建表分发）。
     pub(super) async fn register_project_table(
         &self,
@@ -229,26 +201,21 @@ impl GlobalInstanceStore {
         row_count: Option<i32>,
         column_count: Option<i32>,
         definition_override: Option<String>,
-        file: Option<&super::payload::GlobalStagedFile>,
     ) -> Result<PromoteOutcome, InstanceOpError> {
         self.with_sqlite(|conn| {
             let id = format!("arg_{}", uuid::Uuid::new_v4().simple());
             let now = Utc::now().to_rfc3339();
-            // 脚本档的共享形态是文件（内容表只是兼容载体），数据文件档是表。
             let kind = match req.kind {
                 PromoteKind::DataFile => "analysis",
-                PromoteKind::Script => "file",
                 PromoteKind::File => "file",
             };
-            // 全局表由「能读成表的数据文件」建出来，就是结构化；脚本内容表不是。
+            // 全局表由「能读成表的数据文件」建出来，就是结构化；文件资产不建表。
             let structured = i32::from(matches!(req.kind, PromoteKind::DataFile));
             // 重建定义指向**实际表名**（G2 起表名带时间戳，不再是资产名）。
             // 表型直连 CTAS 不经过文件，调用方把真实来源 SQL 传进来，覆盖文件推断。
             let definition_sql = definition_override.or_else(|| match req.kind {
                 PromoteKind::DataFile => {
-                    let read_from = file
-                        .map(|file| file.abs.as_path())
-                        .unwrap_or(req.source_abs_path.as_path());
+                    let read_from = req.source_abs_path.as_path();
                     file_read_expr(read_from).map(|expr| {
                         format!(
                             "CREATE TABLE {} AS SELECT * FROM {};",
@@ -257,13 +224,6 @@ impl GlobalInstanceStore {
                         )
                     })
                 }
-                PromoteKind::Script => Some(format!(
-                    "内容表（方案 A，§13.5）：{}（filename / content / content_hash），分发时重建为 resources/{}",
-                    quote_ident(table),
-                    file.map(|file| file.rel.as_str())
-                        .or(req.rel_path.as_deref())
-                        .unwrap_or("")
-                )),
                 PromoteKind::File => None,
             });
 
@@ -300,14 +260,11 @@ impl GlobalInstanceStore {
                     name,
                     row_count,
                     column_count,
-                    file.map(|file| file.file_size)
-                        .or(req.file_size),
+                    req.file_size,
                     version,
                     now,
-                    file.map(|file| file.content_hash.as_str())
-                        .unwrap_or(&req.content_hash),
-                    file.map(|file| file.rel.as_str())
-                        .or(req.rel_path.as_deref()),
+                    &req.content_hash,
+                    req.rel_path.as_deref(),
                     definition_sql,
                     req.source_abs_path.to_string_lossy().replace('\\', "/"),
                     origin_kind,
@@ -324,11 +281,9 @@ impl GlobalInstanceStore {
             let snapshot = serde_json::json!({
                 "kind": kind,
                 "analytics_table": table,
-                "content_hash": file.map(|file| file.content_hash.clone())
-                    .unwrap_or_else(|| req.content_hash.clone()),
-                "file_rel_path": file.map(|file| file.rel.clone())
-                    .or_else(|| req.rel_path.clone()),
-                "file_size": file.map(|file| file.file_size).or(req.file_size),
+                "content_hash": req.content_hash.clone(),
+                "file_rel_path": req.rel_path.clone(),
+                "file_size": req.file_size,
                 "row_count": row_count,
                 "column_count": column_count,
                 "definition_sql": definition_sql,

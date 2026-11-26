@@ -18,7 +18,6 @@ use chrono::Utc;
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
-use super::payload;
 use super::{CommonError, CoreError, GlobalInstanceStore, InstanceOpError, sqlite_err};
 
 /// 一次全局资产删除的结果（回执文案用）。
@@ -262,11 +261,11 @@ impl GlobalInstanceStore {
             ))))
         })?;
 
-        // 文件本体与历史副本移入回收站：表型没有 payload，这一步自然跳过。
+        // 文件本体：当前物化缓存移入回收站；CAS 对象是跨版本共享的不可变内容，不搬。
         let current_file = current.4.clone();
         let mut payload_dir = None;
         if let Some(rel) = current_file.as_deref() {
-            let source = payload::resources_dir(&self.system_dir).join(rel);
+            let source = self.system_dir.join("resources").join(rel);
             if source.is_file() {
                 let payload_root = trash_dir.join("payload");
                 let dest = payload_root.join("resources").join(rel);
@@ -278,19 +277,6 @@ impl GlobalInstanceStore {
                 })?;
                 payload_dir = Some("payload".to_string());
             }
-        }
-        let key = payload::asset_key(name);
-        let versions_src = payload::asset_versions_dir(&self.system_dir, &key);
-        if versions_src.is_dir() {
-            let payload_root = trash_dir.join("payload");
-            let dest = payload_root.join("versions").join(&key);
-            move_path(&versions_src, &dest).map_err(|e| {
-                InstanceOpError::Core(CoreError::common(CommonError::General(format!(
-                    "移动全局文件历史副本到回收站失败（{}）：{e}",
-                    versions_src.display()
-                    ))))
-            })?;
-            payload_dir = Some("payload".to_string());
         }
 
         let manifest = GlobalTrashManifest {
@@ -388,7 +374,7 @@ impl GlobalInstanceStore {
             if let Some(rel) = manifest.file_rel_path.as_deref() {
                 let source = payload_root.join("resources").join(rel);
                 if source.is_file() {
-                    let dest = payload::resources_dir(&self.system_dir).join(rel);
+                    let dest = self.system_dir.join("resources").join(rel);
                     if dest.exists() {
                         return Err(InstanceOpError::Core(CoreError::common(
                             CommonError::General(format!(
@@ -404,25 +390,6 @@ impl GlobalInstanceStore {
                         ))))
                     })?;
                 }
-            }
-            let key = payload::asset_key(name);
-            let source = payload_root.join("versions").join(&key);
-            if source.is_dir() {
-                let dest = payload::versions_dir(&self.system_dir).join(&key);
-                if dest.exists() {
-                    return Err(InstanceOpError::Core(CoreError::common(
-                        CommonError::General(format!(
-                            "恢复全局「{name}」失败：历史版本目标已存在（{}）",
-                            dest.display()
-                        )),
-                    )));
-                }
-                move_path(&source, &dest).map_err(|e| {
-                    InstanceOpError::Core(CoreError::common(CommonError::General(format!(
-                        "恢复全局文件历史副本失败（{}）：{e}",
-                        dest.display()
-                    ))))
-                })?;
             }
         }
 
@@ -526,7 +493,7 @@ impl GlobalInstanceStore {
             }
         }
 
-        // 4. 文件本体与历史副本：永久删除时一并清掉（回收站里的 payload 由第 5 步清）。
+        // 4. 当前物化缓存：永久删除时清掉；CAS 对象留给后续 GC（可能被其他版本共享）。
         let file_rel: Option<String> = self.with_sqlite(|conn| {
             conn.query_row(
                 "SELECT file_rel_path FROM analytics_resources \
@@ -539,21 +506,12 @@ impl GlobalInstanceStore {
             .map_err(sqlite_err("read_purge_file"))
         })?;
         if let Some(rel) = file_rel {
-            let path = payload::resources_dir(&self.system_dir).join(&rel);
+            let path = self.system_dir.join("resources").join(&rel);
             if path.is_file() {
                 std::fs::remove_file(&path).map_err(|e| {
                     InstanceOpError::Core(CoreError::common(CommonError::General(format!(
                         "永久删除全局文件本体失败（{}）：{e}",
                         path.display()
-                    ))))
-                })?;
-            }
-            let versions = payload::versions_dir(&self.system_dir).join(payload::asset_key(name));
-            if versions.is_dir() {
-                std::fs::remove_dir_all(&versions).map_err(|e| {
-                    InstanceOpError::Core(CoreError::common(CommonError::General(format!(
-                        "永久删除全局文件历史副本失败（{}）：{e}",
-                        versions.display()
                     ))))
                 })?;
             }
@@ -572,6 +530,27 @@ impl GlobalInstanceStore {
                 )
                 .map_err(sqlite_err("delete_global_versions"))?;
             }
+            tx.execute(
+                "DELETE FROM file_asset_versions WHERE resource_id IN (\
+                    SELECT id FROM analytics_resources WHERE name = ?1 AND scope = 'global')",
+                rusqlite::params![name],
+            )
+            .map_err(sqlite_err("delete_global_file_versions"))?;
+            tx.execute(
+                "DELETE FROM global_checkout_leases WHERE resource_name = ?1",
+                rusqlite::params![name],
+            )
+            .map_err(sqlite_err("delete_global_leases"))?;
+            tx.execute(
+                "DELETE FROM global_publish_links WHERE global_name = ?1",
+                rusqlite::params![name],
+            )
+            .map_err(sqlite_err("delete_global_publish_links"))?;
+            tx.execute(
+                "DELETE FROM asset_forks WHERE parent_name = ?1 OR child_name = ?1",
+                rusqlite::params![name],
+            )
+            .map_err(sqlite_err("delete_global_forks"))?;
             tx.execute(
                 "DELETE FROM analytics_resources WHERE name = ?1 AND scope = 'global'",
                 rusqlite::params![name],

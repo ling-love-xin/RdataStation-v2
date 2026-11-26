@@ -202,40 +202,36 @@ impl GlobalInstanceStore {
                     )),
                 )));
             };
-            // 文件-first：有 manifest 的文件从全局 CAS 物化，不再读脚本内容表。
-            // 旧脚本行没有 manifest，仍按内容表重建，保持兼容。
-            let content_hash = if let Some(manifest_id) = manifest_id.as_deref() {
-                let cas = crate::payload::cas::CasStore::at_root(self.system_dir.join("cas"));
-                let manifest = cas
-                    .read_manifest(manifest_id)
-                    .await
-                    .map_err(InstanceOpError::Core)?;
-                let entry = manifest.content_entry().ok_or_else(|| {
-                    InstanceOpError::Core(CoreError::common(CommonError::General(format!(
-                        "全局文件「{name}」v{global_version} 的 manifest 缺少 Content"
-                    ))))
-                })?;
-                let blob = cas.blob_path(&entry.hash).map_err(InstanceOpError::Core)?;
-                let store = crate::payload::PayloadStore::new(project_root);
-                let staged = store
-                    .stage_payload(&blob, rel)
-                    .await
-                    .map_err(InstanceOpError::Core)?;
-                store
-                    .commit_staged(&staged, rel)
-                    .await
-                    .map_err(InstanceOpError::Core)?;
-                global_hash.clone().unwrap_or(manifest.content_hash)
-            } else {
-                // 旧脚本内容表 → 重建为文件（File 档）。
-                let content = self
-                    .read_script_content(&source_table)
-                    .await
-                    .map_err(InstanceOpError::Core)?;
-                write_project_file(project_root, rel, &content, &target_name)
-                    .map_err(InstanceOpError::Core)?;
-                global_hash.clone().unwrap_or_default()
+            // 文件-first：文件版本必须有 manifest，从全局 CAS 物化；没有 manifest
+            // 的旧文件行不再支持分发。
+            let Some(manifest_id) = manifest_id.as_deref() else {
+                return Err(InstanceOpError::Core(CoreError::common(
+                    CommonError::General(format!(
+                        "全局文件资产「{name}」v{global_version} 没有 manifest：旧文件资产不再支持分发"
+                    )),
+                )));
             };
+            let cas = crate::payload::cas::CasStore::at_root(self.system_dir.join("cas"));
+            let manifest = cas
+                .read_manifest(manifest_id)
+                .await
+                .map_err(InstanceOpError::Core)?;
+            let entry = manifest.content_entry().ok_or_else(|| {
+                InstanceOpError::Core(CoreError::common(CommonError::General(format!(
+                    "全局文件「{name}」v{global_version} 的 manifest 缺少 Content"
+                ))))
+            })?;
+            let blob = cas.blob_path(&entry.hash).map_err(InstanceOpError::Core)?;
+            let store = crate::payload::PayloadStore::new(project_root);
+            let staged = store
+                .stage_payload(&blob, rel)
+                .await
+                .map_err(InstanceOpError::Core)?;
+            store
+                .commit_staged(&staged, rel)
+                .await
+                .map_err(InstanceOpError::Core)?;
+            let content_hash = global_hash.clone().unwrap_or(manifest.content_hash);
             let outcome = self
                 .register_project_file(
                     project,

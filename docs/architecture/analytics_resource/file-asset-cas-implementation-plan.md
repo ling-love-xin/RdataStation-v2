@@ -194,12 +194,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_active_lease
 1. 查看路由改读 `content_class + duckdb_readable`，不再按扩展名猜。
 2. 结构化文件只读表格 / 会话 SQL；非结构化只读编辑器；二进制信息页。
 3. 版本对比支持任意两版；文本 unified diff、表格 schema/row diff、二进制元信息。
-4. 旧 `versions/<id>/vN` 回填为 manifest；无副本版本标 `content_pruned`。
+4. 旧 `versions/<id>/vN` 不再回填：M5 直接删除旧副本读写路径；只有 manifest 的版本可还原，缺失版本标 `content_pruned`。
 5. UI 动作文案：
    - 删除文件不再自动“解锁退回草稿”；
    - “取回（检出）”显示 lease 状态；
    - 全局“解锁”改为“取回/分发”，不销毁资产。
-6. 迁移完成后停写旧版本副本；旧目录只读保留一个周期。
+6. 停写旧版本副本，并删除旧副本模块；不做“只读保留一个周期”的兼容。
 
 ## 7. 风险与回滚
 
@@ -214,9 +214,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_active_lease
 
 回滚：
 
-- 新表只增不删；关闭 CAS 开关即回退旧 `copy_in/copy_out`。
-- manifest 与旧副本并存；读路径优先 manifest，缺失回退旧副本。
-- 不删除旧 `versions/`，直到 M5 回填验收通过。
+- 新表只增不删；M5 起不再提供旧 `copy_in/copy_out` 兼容开关。
+- manifest 是唯一版本读路径；缺失直接报错并标 `content_pruned`，不回退旧副本。
+- M5 删除旧 `versions/` 代码路径，不做回填或过渡保留（用户 2026-11-27 明确“不要兼容”）。
 
 ## 8. 验证矩阵
 
@@ -229,7 +229,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_active_lease
 | 再归档 base | base 落后返回 Conflict，不覆盖 head |
 | 元数据往返 | 书签/连接/视图随 manifest 存档，取回恢复 |
 | 崩溃注入 | DB 失败草稿保留；物化失败可从 manifest 重建 |
-| 旧资产兼容 | 无 manifest 的旧资产仍可打开/取回 |
+| 旧资产拒绝 | 无 manifest 的旧资产取回/还原明确报错，不静默回退 |
 | 全局发布 | base 匹配追加，不匹配 fork |
 
 ## 9. 实施状态
@@ -258,6 +258,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_active_lease
 - 新增 `g090`–`g095`：file-first 无表与 base 守卫、二进制无表、全局取回 lease 与 purge 守卫、fork 复用 manifest、分发物化项目文件、历史 manifest 恢复生成新 head。
 - `g031` 改为文件可直接进全局回收站、还原后再显式解锁；项目侧 `t129` 同步改为「删除 = 进回收站，还原后仍可显式解锁退草稿」。
 - 全局回收站根目录改由 `system_dir.parent()/trash/global` 推导，并行用例各自隔离，生产路径仍是 `{RDS_HOME}/data/trash/global`。
+
+#### M5 第一刀（2026-11-27，进行中）
+
+- 删除 `service/unlock.rs`、`global/unlock.rs`、`global/payload.rs`，移除 unlock 作业 / `OpOutcome` / 宿主动作与确认框。
+- 全局 `promote` 不再写旧文件 staging / `resources/versions/<asset>/vN` 副本，`PromoteKind` 只剩 `DataFile` / `File`；`register_global` 去掉 `GlobalStagedFile`。
+- 全局 `distribute` 对无 manifest 的文件行直接拒绝；全局 `restore_global_file_version` 只认 manifest；`purge_global` 连带清 `file_asset_versions` / `global_checkout_leases` / `global_publish_links` / `asset_forks`。
+- 删除 `g003/g005/g009/g010/g011/g012/g025/g026/g027/g031` 旧脚本/旧文件负载用例；`g028` 改用 `publish_file` 验证文件回收站。
+- `cargo check -p rds-analytics-resource --all-targets -j 2` 通过；`cargo test -p rds-analytics-resource --lib -j 2 --no-fail-fast`：297 passed，0 failed。
 
 ### 9.2 与计划的偏差
 

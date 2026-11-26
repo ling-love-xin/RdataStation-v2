@@ -295,22 +295,6 @@ impl ResourcesHost for ResourceHost {
     ) {
         detail_actions::request_delete_global(self, detail, window, cx);
     }
-    fn request_unlock_file_asset(
-        &self,
-        detail: &ArchiveDetail,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        delete_actions::request_unlock_file_asset(self, detail, window, cx);
-    }
-    fn request_unlock_global_file(
-        &self,
-        detail: &ArchiveDetail,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        detail_actions::request_unlock_global_file(self, detail, window, cx);
-    }
     fn request_restore_global_previous(
         &self,
         detail: &ArchiveDetail,

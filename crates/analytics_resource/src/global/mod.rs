@@ -48,7 +48,7 @@ pub struct PublishFileRequest {
     pub name: String,
     /// 项目根（读取项目 CAS；没有 manifest 时只用于说明来源）。
     pub source_project_root: PathBuf,
-    /// 项目 CAS 的 manifest id；旧资产没有回填时为空。
+    /// 项目 CAS 的 manifest id；文件版本必须提供。
     pub manifest_id: Option<String>,
     /// 没有 manifest 时的源文件绝对路径。
     pub source_abs_path: Option<PathBuf>,
@@ -99,11 +99,11 @@ pub struct GlobalFileForkOutcome {
 pub struct PromoteRequest {
     /// 升级后的显示名 = 全局 DuckDB 表名（冲突检测 / 分发定位都靠它）。
     pub name: String,
-    /// 本体种类：数据文件（映射出表）/ 脚本（内容表）。
+    /// 本体种类：数据文件（映射出表）/ 文件资产（CAS，不建表）。
     pub kind: PromoteKind,
-    /// 本体绝对路径（数据文件 / 脚本在项目 `resources/` 下的位置）。
+    /// 数据文件的源路径；文件资产走 `publish_file`，不经这里。
     pub source_abs_path: PathBuf,
-    /// 项目侧相对路径（脚本内容表分发时重建为目标文件；数据文件无此概念）。
+    /// 项目侧相对路径（表型来源只用说明；文件资产走 CAS）。
     pub rel_path: Option<String>,
     /// 内容指纹（sha256）。
     pub content_hash: String,
@@ -136,18 +136,9 @@ pub struct PromoteRequest {
 pub enum PromoteKind {
     /// 数据文件：CSV / TSV / Parquet / Excel / JSON → 全局表（read_xxx 映射）。
     DataFile,
-    /// 脚本 / 文本：内容表进全局（方案 A，§13.5），分发时重建为文件。
-    Script,
     /// 文件-first：任意文件（含二进制）进全局 CAS，不自动建表；分发/取回都按文件。
     File,
 }
-
-/// 脚本型资源提升到全局的体积上限（16 MiB）。
-///
-/// 脚本在全局库里是一张 `filename/content/content_hash` 三列表的**单行 TEXT**：
-/// 它承载的是定义而不是数据，16 MiB 已是正常脚本（几百 KB）的几十倍。超过就拒绝，
-/// 并指引按数据文件归档——那条路走 `CREATE TABLE AS read_xxx`，不进进程内存。
-pub const MAX_SCRIPT_BYTES: u64 = 16 * 1024 * 1024;
 
 /// 升级结果。
 #[derive(Debug, Clone)]
@@ -283,35 +274,6 @@ pub struct ProjectDuckConn(
     pub Arc<AsyncMutex<Option<duckdb::Connection>>>,
     pub Arc<engine::persistence::ProjectSqlitePool>,
 );
-
-/// 把脚本内容重建为项目 `resources/<rel>` 文件（§13.5 方案 A 分发侧）。
-///
-/// 目录自动创建；文件写入后即归档本体（File 档 copy 语义）。
-pub fn write_project_file(
-    project_root: &Path,
-    rel: &str,
-    content: &str,
-    name: &str,
-) -> Result<(), CoreError> {
-    let target = project_root.join("resources").join(rel);
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            CoreError::storage(StorageError::Persistence {
-                store: "analytics_resources".to_string(),
-                operation: "create_resources_dir".to_string(),
-                reason: format!("{}: {}", target.display(), e),
-            })
-        })?;
-    }
-    std::fs::write(&target, content).map_err(|e| {
-        CoreError::storage(StorageError::Persistence {
-            store: "analytics_resources".to_string(),
-            operation: "write_project_file".to_string(),
-            reason: format!("{}（分发「{name}」）: {}", target.display(), e),
-        })
-    })?;
-    Ok(())
-}
 
 /// 项目侧重名双保险探测（§13.6 冲突询问）：SQLite 未删登记 + DuckDB 表 + resources 文件，
 /// 任一命中即视为冲突。与升级侧 `promote` 的"登记层 + 本体层"口径一致，不静默覆盖。
@@ -509,12 +471,10 @@ pub mod delete;
 pub mod distribute;
 pub mod file;
 pub mod list;
-mod payload;
 pub mod promote;
 pub mod refs;
 pub mod register;
 pub mod sql;
-pub mod unlock;
 pub mod table_name;
 
 pub use self::delete::{

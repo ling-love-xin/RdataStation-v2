@@ -44,11 +44,10 @@ use crate::{
 };
 
 use archive::{
-    ArchiveJob, CheckoutJob, TrashActionJob, TrashJob, TrashListJob, UndoJob, UnlockFileJob, load_trash,
+    ArchiveJob, CheckoutJob, TrashActionJob, TrashJob, TrashListJob, UndoJob, load_trash,
     reload_trash_after, run_archive, run_checkout, run_trash, run_trash_action, run_undo,
-    run_unlock_file,
 };
-use global::{DeleteGlobalJob, DistributeJob, PromoteJob, ReferenceGlobalJob, RestoreGlobalVersionJob, SolidifyRefJob, UnlockGlobalFileJob, run_delete_global, run_distribute, run_promote, run_reference, run_restore_global_version, run_solidify, run_unlock_global_file};
+use global::{DeleteGlobalJob, DistributeJob, PromoteJob, ReferenceGlobalJob, RestoreGlobalVersionJob, SolidifyRefJob, run_delete_global, run_distribute, run_promote, run_reference, run_restore_global_version, run_solidify};
 use index::{
     IndexRepairActionJob, IndexScanJob, load_index_report, reload_index_scan_after,
     run_repair_action,
@@ -81,7 +80,6 @@ pub(crate) enum Job {
     Archive(ArchiveJob),
     Checkout(CheckoutJob),
     Undo(UndoJob),
-    UnlockFile(UnlockFileJob),
     Trash(TrashJob),
     Versions(VersionsJob),
     VersionAction(VersionActionJob),
@@ -100,7 +98,6 @@ pub(crate) enum Job {
     Reference(ReferenceGlobalJob),
     Solidify(SolidifyRefJob),
     DeleteGlobal(DeleteGlobalJob),
-    UnlockGlobalFile(UnlockGlobalFileJob),
     RestoreGlobalVersion(RestoreGlobalVersionJob),
 }
 
@@ -128,10 +125,6 @@ pub enum OpOutcome {
     AliasDone { note: String },
     /// 已撤销归档：显示名（本体已回原位）。
     Undone { name: String },
-    /// 文件资产已解锁退回草稿箱：草稿相对路径 / 清掉的历史副本份数。
-    FileUnlocked { name: String, draft_rel: String, removed_versions: usize },
-    /// 全局文件资产已解锁退回草稿箱：草稿相对路径 / 清掉的历史副本份数。
-    GlobalFileUnlocked { name: String, draft_rel: String, removed_versions: usize },
     /// 已移入回收站：显示名列表（多条时文案只说数量）。
     Trashed { names: Vec<String> },
     /// 版本历史动作完成（`note` 已是一句有信息量的话，事件路径直接印）。
@@ -338,12 +331,6 @@ fn handle_job(rt: &tokio::runtime::Runtime, job: Job) {
                 *lock(&jobs().op_result) = Some(outcome);
                 refresh_after_op(&rt, job.project_root, job.read_only);
             }
-            Job::UnlockFile(job) => {
-                let outcome = rt.block_on(run_unlock_file(&job));
-                *lock(&jobs().op_result) = Some(outcome);
-                // 解锁后资产库少一行，草稿箱多一个文件；两边都由事件路径刷新。
-                refresh_after_op(&rt, job.project_root, job.read_only);
-            }
             Job::Trash(job) => {
                 let outcome = rt.block_on(run_trash(&job));
                 *lock(&jobs().op_result) = Some(outcome);
@@ -459,11 +446,6 @@ fn handle_job(rt: &tokio::runtime::Runtime, job: Job) {
                 // 全局行从项目面板的「全局」分区消失：重取一次快照。
                 refresh_after_op(&rt, job.project_root, false);
             }
-            Job::UnlockGlobalFile(job) => {
-                let outcome = rt.block_on(run_unlock_global_file(&job));
-                *lock(&jobs().op_result) = Some(outcome);
-                refresh_after_op(&rt, job.project_root, false);
-            }
             Job::RestoreGlobalVersion(job) => {
                 let outcome = rt.block_on(run_restore_global_version(&job));
                 *lock(&jobs().op_result) = Some(outcome);
@@ -489,11 +471,11 @@ mod tests {
 
 pub use archive::{
     enqueue_archive, enqueue_checkout, enqueue_trash, enqueue_trash_action, enqueue_trash_list,
-    enqueue_undo, enqueue_unlock_file,
+    enqueue_undo,
 };
 pub use global::{
     enqueue_delete_global, enqueue_distribute, enqueue_promote, enqueue_reference,
-    enqueue_restore_global_version, enqueue_solidify, enqueue_unlock_global_file,
+    enqueue_restore_global_version, enqueue_solidify,
 };
 pub use index::enqueue_index_repair_action;
 pub use index::enqueue_index_scan;

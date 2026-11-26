@@ -193,55 +193,6 @@ impl GlobalInstanceStore {
         Ok(removed)
     }
 
-    /// 按保留策略裁全局文件历史副本（与表裁剪同一口径：当前版本不裁、被 pin 的历史版不裁）。
-    ///
-    /// 只删 `resources/versions/<asset_key>/vN/` 目录，版本行与快照都留；删了副本后
-    /// `restore_global_file_version` 会明确报「副本已被裁剪或缺失」，不留假可恢复。
-    pub(super) async fn prune_file_versions(
-        &self,
-        name: &str,
-        keep: crate::model::KeepVersions,
-    ) -> Result<usize, CoreError> {
-        let Some(keep) = keep.limit() else {
-            return Ok(0);
-        };
-        let versions: Vec<i32> = self.with_sqlite(|conn| {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT version FROM analytics_resources \
-                     WHERE name = ?1 AND scope = 'global' ORDER BY version DESC",
-                )
-                .map_err(sqlite_err("prepare_prune_file_versions"))?;
-            let rows = stmt
-                .query_map(rusqlite::params![name], |row| row.get::<_, i32>(0))
-                .map_err(sqlite_err("query_prune_file_versions"))?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(sqlite_err("collect_prune_file_versions"))
-        })?;
-        let referenced: std::collections::HashSet<i32> =
-            self.active_ref_versions(name)?.into_iter().collect();
-        let key = super::payload::asset_key(name);
-        let mut removed = 0usize;
-        for (index, version) in versions.into_iter().enumerate() {
-            if index <= keep as usize || referenced.contains(&version) {
-                continue;
-            }
-            let dir = super::payload::version_dir(&self.system_dir, &key, version);
-            if dir.is_dir() {
-                match std::fs::remove_dir_all(&dir) {
-                    Ok(()) => removed += 1,
-                    Err(error) => tracing::warn!(
-                        error = %error,
-                        dir = %dir.display(),
-                        name,
-                        "全局文件历史副本裁剪失败（保留策略这一次没生效，下次升级会再裁）"
-                    ),
-                }
-            }
-        }
-        Ok(removed)
-    }
-
     /// 统计全局表行数 / 列数（升级与分发共用；参数是实际表名）。
     pub(super) async fn table_stats(&self, name: &str) -> Result<(Option<i32>, Option<i32>), CoreError> {
         self.with_duckdb(|conn| {
