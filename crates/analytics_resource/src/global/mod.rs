@@ -347,33 +347,7 @@ impl GlobalInstanceStore {
     /// 建表幂等：跑 026 迁移 SQL（与 engine 全局迁移同一份），保证测试库结构
     /// 与生产一致（`map_resource_row` 引用的列全在）。
     pub async fn open_at(sqlite_path: PathBuf, duckdb_path: PathBuf) -> Result<Self, CoreError> {
-        if let Some(parent) = sqlite_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                CoreError::storage(StorageError::Persistence {
-                    store: "analytics_resources_global".to_string(),
-                    operation: "create_global_dir".to_string(),
-                    reason: e.to_string(),
-                })
-            })?;
-        }
-        let sqlite = rusqlite::Connection::open(&sqlite_path).map_err(|e| {
-            CoreError::storage(StorageError::Persistence {
-                store: "analytics_resources_global".to_string(),
-                operation: "open_sqlite".to_string(),
-                reason: e.to_string(),
-            })
-        })?;
-        // 全局库建表 SQL 统一从 `schema_sql` 取：此前 026/033/034 三段在这里手抄，
-        // 加一个迁移就得记着补这一处，见 `store::schema_sql` 的注释。
-        sqlite
-            .execute_batch(super::store::schema_sql::GLOBAL_MIGRATIONS_SQL)
-            .map_err(|e| {
-                CoreError::storage(StorageError::Persistence {
-                    store: "analytics_resources_global".to_string(),
-                    operation: "migrate_global_schema".to_string(),
-                    reason: e.to_string(),
-                })
-            })?;
+        let sqlite = open_registry(&sqlite_path)?;
         // 格式守门（2026-11-01）：DuckDB 能打开 SQLite 格式的同名文件（内置 SQLite 存储后端），
         // 所以必须先断格式，不能只靠 open 成功与否判断。
         shared::duckdb_open::assert_native_format(&duckdb_path).map_err(|e| {
@@ -396,6 +370,53 @@ impl GlobalInstanceStore {
         })
     }
 
+    /// 测试专用：登记库走临时 SQLite，DuckDB 用调用方给的会话。
+    ///
+    /// 同根改造后 M6 测试必须让全局库与项目库挂在同一条根连接上；调用方用
+    /// `shared::duckdb_root::isolated` 建根，再把 `handle(GLOBAL_ALIAS)` 传进来。
+    #[cfg(test)]
+    pub(crate) fn open_at_handle(
+        sqlite_path: PathBuf,
+        duckdb: duckdb::Connection,
+    ) -> Result<Self, CoreError> {
+        let sqlite = open_registry(&sqlite_path)?;
+        Ok(Self {
+            sqlite: Arc::new(Mutex::new(Some(sqlite))),
+            duckdb: Arc::new(AsyncMutex::new(Some(duckdb))),
+        })
+    }
+}
+
+/// 打开全局登记库并跑全局迁移。
+fn open_registry(sqlite_path: &Path) -> Result<rusqlite::Connection, CoreError> {
+    if let Some(parent) = sqlite_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            CoreError::storage(StorageError::Persistence {
+                store: "analytics_resources_global".to_string(),
+                operation: "create_global_dir".to_string(),
+                reason: e.to_string(),
+            })
+        })?;
+    }
+    let sqlite = rusqlite::Connection::open(sqlite_path).map_err(|e| {
+        CoreError::storage(StorageError::Persistence {
+            store: "analytics_resources_global".to_string(),
+            operation: "open_sqlite".to_string(),
+            reason: e.to_string(),
+        })
+    })?;
+    // 全局库建表 SQL 统一从 `schema_sql` 取：此前 026/033/034 三段在这里手抄，
+    // 加一个迁移就得记着补这一处，见 `store::schema_sql` 的注释。
+    sqlite
+        .execute_batch(super::store::schema_sql::GLOBAL_MIGRATIONS_SQL)
+        .map_err(|e| {
+            CoreError::storage(StorageError::Persistence {
+                store: "analytics_resources_global".to_string(),
+                operation: "migrate_global_schema".to_string(),
+                reason: e.to_string(),
+            })
+        })?;
+    Ok(sqlite)
 }
 
 pub mod delete;
@@ -411,7 +432,6 @@ pub use self::delete::GlobalDeleteOutcome;
 pub use self::list::{list_global_resources, to_global_rows};
 pub use self::refs::{GlobalRefOutcome, GlobalRefPin};
 pub(crate) use self::sql::{duckdb_err, file_read_expr, quote_ident, sqlite_err};
-
 
 #[cfg(test)]
 mod tests;

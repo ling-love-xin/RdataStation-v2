@@ -10,7 +10,7 @@ use engine::persistence::project_db::ProjectDatabaseManager;
 
 use shared::error::{CommonError, CoreError};
 
-use super::{ConflictContext, Job, OpOutcome, SQLITE_POOL_SIZE, jobs};
+use super::{jobs, ConflictContext, Job, OpOutcome, SQLITE_POOL_SIZE};
 
 /// 一次「升级到全局」任务（§13：项目 → 全局，表 + 版本信息进全局 DuckDB）。
 pub(crate) struct PromoteJob {
@@ -101,11 +101,13 @@ pub(crate) async fn run_promote(job: &PromoteJob) -> OpOutcome {
         }
     };
     let outcome = if job.request.source_table.is_some() {
-        // 表型：本体是项目分析库里的一张表。必须由项目自己的写连接整表导出，
-        // 再把导出的 parquet 按数据文件升级（见 `promote_table_from_project`）。
+        // 表型：本体是项目分析库里的一张表。全局库与项目库同处一条根连接，
+        // 项目会话直接 CTAS 到 `rds_global.<版本表>`（见 `promote_table_from_project`）。
         match open_project_conn(&job.project_root).await {
             Ok(project) => {
-                promote_table_from_project(&gstore, &project, &job.request, job.overwrite).await
+                gstore
+                    .promote_table_from_project(&project, &job.request, job.overwrite)
+                    .await
             }
             Err(reason) => Err(InstanceOpError::Core(CoreError::common(
                 CommonError::General(reason),
@@ -139,7 +141,7 @@ pub(crate) async fn run_promote(job: &PromoteJob) -> OpOutcome {
     }
 }
 
-/// 打开项目库并借一个写连接（表型升级要把项目表整表导出，必须由项目自己的连接做）。
+/// 打开项目库并借一个写连接（表型升级的 CTAS 要在项目会话上执行）。
 async fn open_project_conn(
     project_root: &std::path::Path,
 ) -> Result<crate::global::ProjectDuckConn, String> {
@@ -149,84 +151,14 @@ async fn open_project_conn(
     let Some(duckdb) = manager.duckdb_conn() else {
         return Err("项目 DuckDB 写连接未就绪".to_string());
     };
-    let duck_conn = duckdb.acquire().await.map_err(|reason| reason.to_string())?;
-    Ok(crate::global::ProjectDuckConn(duck_conn, manager.sqlite_pool()))
-}
-
-/// 表型升级：项目表 → 临时 parquet → 全局表（**整表搬运**）。
-///
-/// 为什么要绕一步 parquet：全局 DuckDB 与项目 DuckDB 都是单写者，Windows 单句柄下
-/// 互相 `ATTACH` 会撞「文件被占用」（分发侧已踩过，见 `distribute` 的注释）。
-/// 项目连接自己 `COPY ... TO` 是安全的，而且 **`COPY` 不带 LIMIT**——整表搬，
-/// 不采样：资产库要跨项目比版本，不允许「这次只有前一万行」。
-///
-/// 半成品清理：`COPY` 失败留下的是半截 parquet，升级失败留下的是已建的全局表
-/// （`promote` 内部按分支清），这里统一负责临时文件那一步。
-pub(crate) async fn promote_table_from_project(
-    gstore: &crate::global::GlobalInstanceStore,
-    project: &crate::global::ProjectDuckConn,
-    req: &crate::global::PromoteRequest,
-    overwrite: bool,
-) -> Result<crate::global::PromoteOutcome, crate::global::InstanceOpError> {
-    use crate::global::{InstanceOpError, PromoteKind, quote_ident};
-
-    let Some(table) = req.source_table.as_deref() else {
-        return Err(InstanceOpError::Core(CoreError::common(
-            CommonError::General("升级请求缺少源表名".to_string()),
-        )));
-    };
-
-    let tmp_dir = paths::temp_dir();
-    std::fs::create_dir_all(&tmp_dir)
-        .map_err(|e| {
-            InstanceOpError::Core(CoreError::common(CommonError::General(format!(
-                "创建临时目录失败（{}）：{e}",
-                tmp_dir.display()
-            ))))
-        })?;
-    let tmp = tmp_dir.join(format!(
-        "rds_promote_{}.parquet",
-        uuid::Uuid::new_v4().simple()
-    ));
-    let copy_sql = format!(
-        "COPY {} TO '{}' (FORMAT PARQUET);",
-        quote_ident(table),
-        tmp.to_string_lossy().replace('\\', "/")
-    );
-
-    let copy_result = {
-        let mut guard = project.0.lock().await;
-        match guard.as_mut() {
-            Some(conn) => conn.execute_batch(&copy_sql).map_err(|e| {
-                InstanceOpError::Core(CoreError::common(CommonError::General(format!(
-                    "导出项目表 {table} 失败：{e}"
-                ))))
-            }),
-            None => Err(InstanceOpError::Core(CoreError::common(
-                CommonError::General("项目 DuckDB 连接已关闭".to_string()),
-            ))),
-        }
-    };
-    if let Err(error) = copy_result {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(error);
-    }
-
-    // 导出的 parquet 就是「数据文件」：形态判定、全量建表、指纹都不必另走一套。
-    let mut effective = req.clone();
-    effective.kind = PromoteKind::DataFile;
-    effective.source_abs_path = tmp.clone();
-    // 表已经搬成文件了：源表名与重建目标都不再需要。
-    effective.source_table = None;
-    effective.rel_path = None;
-
-    let result = match overwrite {
-        true => gstore.promote_overwrite(&effective).await,
-        false => gstore.promote(&effective).await,
-    };
-    // 全局表建好之后这份 parquet 就没用了（数据已在全局库里）。
-    let _ = std::fs::remove_file(&tmp);
-    result
+    let duck_conn = duckdb
+        .acquire()
+        .await
+        .map_err(|reason| reason.to_string())?;
+    Ok(crate::global::ProjectDuckConn(
+        duck_conn,
+        manager.sqlite_pool(),
+    ))
 }
 
 /// 从全局分发到当前项目（工作线程上执行；§13 跨项目唯一法定路径）。
@@ -298,8 +230,7 @@ pub(crate) async fn run_distribute(job: &DistributeJob) -> OpOutcome {
     if let Ok(outcome) = &result {
         match gstore.latest_global_id(&job.name).await {
             Ok(Some(global_id)) => {
-                let store =
-                    crate::store::AnalyticsResourceStore::new(manager.sqlite_pool());
+                let store = crate::store::AnalyticsResourceStore::new(manager.sqlite_pool());
                 if let Err(error) = store
                     .record_derived_from(&outcome.resource_id, &global_id)
                     .await

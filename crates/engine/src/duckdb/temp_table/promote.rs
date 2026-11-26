@@ -27,8 +27,8 @@ use std::path::Path;
 use duckdb::Connection;
 use shared::error::{CommonError, CoreError};
 
-use crate::sql::SqlEngine;
 use crate::services::duckdb_service::DuckDbService;
+use crate::sql::SqlEngine;
 
 use super::quote_ident;
 
@@ -59,9 +59,8 @@ pub fn write_temp_table_to_file_db(
     }
     if let Some(parent) = db_path.parent() {
         if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                invalid(format!("建目标库目录失败（{}）: {e}", parent.display()))
-            })?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| invalid(format!("建目标库目录失败（{}）: {e}", parent.display())))?;
         }
     }
 
@@ -140,19 +139,16 @@ pub fn persistent_table_name(description: &str) -> String {
     format!("{PERSIST_PREFIX}{desc}_{stamp}")
 }
 
-/// 跨**实例**搬运：把 `source` 连接里的表写进 `dest` 连接上的表，返回写入行数。
+/// 把共享临时区（`rds_tmp`）里的表写进**已挂载的项目分析库**，返回写入行数。
 ///
-/// 为什么不能 ATTACH：`tmp_q_` 在**进程内存单例**（in-memory 库，别的 DuckDB 实例根本挂不到它），
-/// 而项目 `analytics.duckdb` 在运行期被 `ProjectDatabaseManager` 按次开关地握着——两边同时
-/// 「另一个程序正在使用此文件」的实测见 `crates/engine/tests/analysis_db_exclusive_probe.rs`。
-/// 于是数据只能**搬运**，两条连接的 SQL 上下文之间靠一个中转文件对接。
+/// 2026-11-26 所有权收口后，进程面 `tmp_q_` / `tmp_i_` 与项目 `analytics` 都在
+/// `shared::duckdb_root` 的同一条根连接上：源在 `main` 的 `rds_tmp` schema，
+/// 目标在 `analytics` 的 `main` schema。因此不再需要 Parquet 中转，直接
+/// `CREATE [OR REPLACE] TABLE analytics.<目标> AS SELECT * FROM rds_tmp.<源>`。
 ///
-/// 中转格式用 **Parquet**（不是 CSV）：列名与类型（含 Decimal / Timestamp / 嵌套）原样过一遍，
- /// 不经过 Rust 侧任何值装箱，也不需要在目标库重新推断类型。
-///
- /// **调用方不得持有 `source` / `dest` 的任何锁**后再调本函数。
-pub fn write_table_across_connections(
-    source: &Connection,
+/// **调用方不得持有 `dest` 的锁后再调本函数**：`dest` 是已经 `USE analytics` 的项目会话，
+/// 函数只在它上面执行两条 SQL，不自己开连接、不 `ATTACH`。
+pub fn write_shared_temp_to_project(
     dest: &Connection,
     source_table: &str,
     target_table: &str,
@@ -161,55 +157,41 @@ pub fn write_table_across_connections(
     if source_table.trim().is_empty() || target_table.trim().is_empty() {
         return Err(invalid("源表与目标表名都不能为空".to_string()));
     }
-    let staging = std::env::temp_dir().join(format!(
-        "rds_promote_{}_{}.parquet",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    let staging_sql = staging.to_string_lossy().replace('\'', "''");
-
-    // ① 源连接导出中转文件（DuckDB 内部流式写，不经过 Rust）
-    let export = source.execute_batch(&format!(
-        "COPY (SELECT * FROM {}) TO '{}' (FORMAT PARQUET)",
-        quote_ident(source_table),
-        staging_sql
-    ));
-    if let Err(error) = export {
-        let _ = std::fs::remove_file(&staging);
-        return Err(invalid(format!("导出中转文件失败: {error}")));
-    }
-
-    // ② 目标连接从文件建表（`CREATE OR REPLACE` / `CREATE` 由 mode 决定）
-    let target = quote_ident(target_table);
-    let reader = format!("read_parquet('{staging_sql}')");
+    let source = if source_table.starts_with("rds_tmp.") {
+        source_table.to_string()
+    } else {
+        format!(
+            "{}.{}",
+            super::SHARED_TEMP_SCHEMA,
+            quote_ident(source_table)
+        )
+    };
+    let target = format!(
+        "{}.{}",
+        quote_ident(shared::duckdb_root::PROJECT_ALIAS),
+        quote_ident(target_table)
+    );
     let create = match mode {
-        PromoteMode::Create => format!("CREATE TABLE {target} AS SELECT * FROM {reader}"),
+        PromoteMode::Create => format!("CREATE TABLE {target} AS SELECT * FROM {source}"),
         PromoteMode::Replace => {
-            format!("CREATE OR REPLACE TABLE {target} AS SELECT * FROM {reader}")
+            format!("CREATE OR REPLACE TABLE {target} AS SELECT * FROM {source}")
         }
     };
-    let written = (|| -> Result<u64, CoreError> {
-        dest.execute_batch(&create)
-            .map_err(|e| invalid(format!("在目标库建表 {target_table} 失败: {e}")))?;
-        let count = dest
-            .query_row(&format!("SELECT count(*) FROM {target}"), [], |row| {
-                row.get::<_, i64>(0)
-            })
-            .map_err(|e| invalid(format!("统计目标表行数失败: {e}")))?;
-        Ok(count.max(0) as u64)
-    })();
-
-    // ③ 清理中转文件（成败都清：留着只会占盘）
-    let _ = std::fs::remove_file(&staging);
-    written
+    dest.execute_batch(&create)
+        .map_err(|e| invalid(format!("在项目分析库建表 {target_table} 失败: {e}")))?;
+    let count = dest
+        .query_row(&format!("SELECT count(*) FROM {target}"), [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(|e| invalid(format!("统计目标表行数失败: {e}")))?;
+    Ok(count.max(0) as u64)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{promote_with_conn, persistent_table_name, write_table_across_connections, PromoteMode};
+    use super::{
+        persistent_table_name, promote_with_conn, write_shared_temp_to_project, PromoteMode,
+    };
 
     /// 持久表名：带 `res_` 前缀、清洗非法字符、**不在任何临时表前缀下**（否则会被 TTL 清掉）
     #[test]
@@ -256,9 +238,8 @@ mod tests {
         conn.execute_batch("CREATE TABLE tmp_q_src AS SELECT 1 AS a UNION ALL SELECT 2 AS a")
             .expect("建临时表");
 
-        let count =
-            promote_with_conn(&conn, &db, "tmp_q_src", "orders_copy", PromoteMode::Create)
-                .expect("写持久表");
+        let count = promote_with_conn(&conn, &db, "tmp_q_src", "orders_copy", PromoteMode::Create)
+            .expect("写持久表");
         assert_eq!(count, 2, "写入行数应与临时表一致");
 
         // 直接打开目标库验证：表真的落盘了，列与数据都在
@@ -293,39 +274,38 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 跨实例搬运：源是内存库（单例的等价物），目标是**另一个打开的文件库**（项目库的等价物）。
-    /// 类型必须原样过去（Parquet 中转的意义就在这）。
+    /// 同根 CTAS：源在 `rds_tmp`，目标在已挂载的 `analytics`，类型与引号原样过去。
     #[test]
-    fn moves_a_table_across_two_connections_with_types_intact() {
-        let dir = dir("transport");
+    fn writes_shared_temp_into_the_attached_project_without_parquet() {
+        let dir = dir("ctas");
         let dest_path = dir.join("analytics.duckdb");
+        let literal = dest_path
+            .to_string_lossy()
+            .replace('\\', "/")
+            .replace('\'', "''");
+        let root = Connection::open_in_memory().expect("根内存库");
+        root.execute_batch(&format!(
+            "CREATE SCHEMA rds_tmp; \
+             CREATE TABLE rds_tmp.tmp_q_orders AS SELECT \
+               CAST(1234.5678 AS DECIMAL(12,4)) AS amount, \
+               DATE '2026-11-15' AS biz_date, \
+               'a''b' AS note; \
+             ATTACH '{literal}' AS analytics (READ_WRITE)"
+        ))
+        .expect("建共享临时表并挂项目库");
 
-        let source = Connection::open_in_memory().expect("源内存库");
-        source
-            .execute_batch(
-                "CREATE TABLE tmp_q_orders AS SELECT \
-                   CAST(1234.5678 AS DECIMAL(12,4)) AS amount, \
-                   DATE '2026-11-15' AS biz_date, \
-                   'a''b' AS note",
-            )
-            .expect("源表");
-
-        let dest = Connection::open(&dest_path).expect("目标文件库");
-        let written = write_table_across_connections(
-            &source,
-            &dest,
+        let written = write_shared_temp_to_project(
+            &root,
             "tmp_q_orders",
             "orders_persisted",
             PromoteMode::Create,
         )
-        .expect("跨实例搬运");
+        .expect("同根 CTAS");
         assert_eq!(written, 1);
 
-        // 列类型跟着过去：Decimal 仍是 Decimal（不是被字符串化成 DOUBLE/TEXT）
-        let ty: String = dest
+        let ty: String = root
             .query_row(
-                "SELECT data_type FROM information_schema.columns \
-                 WHERE table_name = 'orders_persisted' AND column_name = 'amount'",
+                "SELECT typeof(amount) FROM analytics.orders_persisted",
                 [],
                 |row| row.get(0),
             )
@@ -334,26 +314,23 @@ mod tests {
             ty.to_uppercase().starts_with("DECIMAL"),
             "Decimal 类型应原样保留，实际 {ty}"
         );
-
-        // 引号与日期原样过一遍
-        let note: String = dest
-            .query_row("SELECT note FROM orders_persisted", [], |row| row.get(0))
+        let note: String = root
+            .query_row("SELECT note FROM analytics.orders_persisted", [], |row| {
+                row.get(0)
+            })
             .expect("读 note");
         assert_eq!(note, "a'b");
 
-        // Create 撞名被拒；Replace 允许覆盖
-        assert!(write_table_across_connections(
-            &source,
-            &dest,
+        assert!(write_shared_temp_to_project(
+            &root,
             "tmp_q_orders",
             "orders_persisted",
             PromoteMode::Create
         )
         .is_err());
         assert_eq!(
-            write_table_across_connections(
-                &source,
-                &dest,
+            write_shared_temp_to_project(
+                &root,
                 "tmp_q_orders",
                 "orders_persisted",
                 PromoteMode::Replace
@@ -362,7 +339,7 @@ mod tests {
             1
         );
 
-        drop(dest);
+        drop(root);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

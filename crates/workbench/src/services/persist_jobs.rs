@@ -5,10 +5,9 @@
 //!   （`ProjectDatabaseManager::open` 是 async，运行期谁也不能把一条连接挂很久）；
 //! - DuckDB 写是**阻塞**的，写在事件路径上会卡住 UI（gpui 规范 §状态与副作用）。
 //!
-//! 数据为什么要搬运（而不是 ATTACH）：`tmp_q_` 在**进程内存单例**（in-memory 库，别的实例挂不到），
-//! 且项目库被别的连接持有时 ATTACH 必失败（实测见
-//! `crates/engine/tests/analysis_db_exclusive_probe.rs`）。所以走
-//! `engine::duckdb::temp_table::promote::write_table_across_connections`（Parquet 中转）。
+//! 为什么不用中转文件：`tmp_q_` 在根连接的 `rds_tmp` schema，项目库是同一根连接上的
+//! `analytics`——2026-11-26 所有权收口后两边同源，直接在项目会话上
+//! `CREATE TABLE analytics.<目标> AS SELECT * FROM rds_tmp.<源>` 即可。
 //!
 //! 口径：目标表名 = [`persistent_table_name`]（`res_<描述>_<时间戳>`），已存在则**报错**不覆盖
 //! （覆盖别人的持久表不是「顺手做对」的事，要显式再来一次）。
@@ -18,10 +17,9 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Mutex, OnceLock};
 
 use engine::duckdb::temp_table::promote::{
-    persistent_table_name, write_table_across_connections, PromoteMode,
+    persistent_table_name, write_shared_temp_to_project, PromoteMode,
 };
 use engine::persistence::project_db::ProjectDatabaseManager;
-use engine::services::duckdb_service::DuckDbService;
 
 /// 一次落库请求
 #[derive(Debug, Clone)]
@@ -50,9 +48,16 @@ pub enum PersistOutcome {
         /// 所以这里把两件事分开报，由宿主提示成「表已落、资产没登记上」。
         asset: Result<analytics_resource::table_asset::TableAssetOutcome, String>,
     },
-    Failed { label: String, reason: String },
+    Failed {
+        label: String,
+        reason: String,
+    },
     /// 刚物化出临时表（不写库）：让 UI 刷新一次清单并留一句痕
-    Materialized { table: String, rows: u64, label: String },
+    Materialized {
+        table: String,
+        rows: u64,
+        label: String,
+    },
 }
 
 struct Shared {
@@ -175,15 +180,6 @@ pub fn persist_result_table(
     let table = persistent_table_name(description);
     let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("无法启动异步运行时: {e}"))?;
     let manager = open_project_manager(&runtime, project_root)?;
-
-    // 顺序固定：先取**源**（内存单例），再锁项目连接——反过来的实现在别处若也先拿项目再拿
-    // 单例，就会凑出死锁。这里只此一处同时持两把锁。
-    let singleton = DuckDbService::get_or_create_duckdb()
-        .map_err(|e| format!("取内存分析库失败: {e}"))?;
-    let source = singleton
-        .lock()
-        .map_err(|e| format!("内存分析库锁中毒: {e}"))?;
-
     let project_conn = manager
         .duckdb_conn()
         .ok_or_else(|| "项目库读模式打开（无写连接）：请重新打开项目后重试".to_string())?;
@@ -195,23 +191,16 @@ pub fn persist_result_table(
         .as_mut()
         .ok_or_else(|| "项目写连接已关闭：请重新打开项目后重试".to_string())?;
 
-    let result = write_table_across_connections(
-        &source,
-        dest,
-        source_table,
-        &table,
-        PromoteMode::Create,
-    )
-    .map_err(|e| {
-        let text = e.to_string();
-        if text.contains("already exists") || text.contains("已存在") {
-            format!("项目分析库已存在表 {table}：换一个结果名（再分析一次）或先删掉旧表")
-        } else if text.contains("另一个程序正在使用此文件") || text.contains("already open") {
-            format!("项目分析库正被别的操作占用，请稍后重试（{text}）")
-        } else {
-            format!("写入项目分析库失败: {text}")
-        }
-    })?;
+    // 源在根连接的 `rds_tmp`，目标在本会话的 `analytics`：一次 CTAS，不落中转文件。
+    let result = write_shared_temp_to_project(dest, source_table, &table, PromoteMode::Create)
+        .map_err(|e| {
+            let text = e.to_string();
+            if text.contains("already exists") || text.contains("已存在") {
+                format!("项目分析库已存在表 {table}：换一个结果名（再分析一次）或先删掉旧表")
+            } else {
+                format!("写入项目分析库失败: {text}")
+            }
+        })?;
 
     // 列数就地量一次：此刻项目写连接还在手里，另开一次纯属浪费。
     // 量不到就给 `None`（详情宁可不显示列数，也不显示猜的数）。
@@ -219,7 +208,6 @@ pub fn persist_result_table(
 
     drop(slot);
     drop(guard);
-    drop(source);
     drop(manager);
     Ok((table, result, columns))
 }
@@ -250,7 +238,8 @@ pub(crate) fn with_project_write_connection<T>(
 
 /// 列数：走 `information_schema.columns`（`DESCRIBE` 在本仓实测拿不到结果集，
 /// 见 `a_result_table_lands_in_the_project_analytics_db` 的核对段也走同一张视图）。
-pub(crate) fn count_columns(conn: &duckdb::Connection, table: &str) -> Option<i32> {    let count: i64 = conn
+pub(crate) fn count_columns(conn: &duckdb::Connection, table: &str) -> Option<i32> {
+    let count: i64 = conn
         .query_row(
             "SELECT count(*) FROM information_schema.columns \
              WHERE table_name = ?1 AND table_schema = 'main'",
@@ -306,7 +295,8 @@ fn open_project_manager(
             Ok(manager) => return Ok(manager),
             Err(error) => {
                 let text = error.to_string();
-                let busy = text.contains("另一个程序正在使用此文件") || text.contains("already open");
+                let busy =
+                    text.contains("另一个程序正在使用此文件") || text.contains("already open");
                 last = if busy {
                     format!("项目分析库正被别的操作占用（{text}）")
                 } else {
@@ -321,7 +311,9 @@ fn open_project_manager(
             }
         }
     }
-    Err(format!("{last}；请稍后重试（同一时间只允许一个项目库写连接）"))
+    Err(format!(
+        "{last}；请稍后重试（同一时间只允许一个项目库写连接）"
+    ))
 }
 // ---------------------------------------------------------------------------
 // 「登记为资产」通道（数据对象面板：给项目分析库里已有的表补身份）

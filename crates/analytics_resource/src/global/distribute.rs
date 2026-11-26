@@ -1,4 +1,4 @@
-//! 全局 → 项目分发：COPY parquet 中转 → CTAS。
+//! 全局 → 项目分发：同根跨库 CTAS。
 
 use super::*;
 
@@ -152,7 +152,7 @@ impl GlobalInstanceStore {
         let source_table = global_table.unwrap_or_else(|| name.to_string());
 
         // 内容表可能已被 `KeepVersions` 裁掉（登记行还在、表没了）。
-        // 不前置检查的话，后面的 `COPY` 会抛 DuckDB 的 Catalog Error，
+        // 不前置检查的话，后面的跨库 CTAS 会抛 DuckDB 的 Catalog Error，
         // 用户看不出这是「策略清掉的」而不是「数据坏了」。
         if !self.table_exists(&source_table).await? {
             return Err(InstanceOpError::Core(CoreError::common(
@@ -199,45 +199,14 @@ impl GlobalInstanceStore {
             outcome
         } else {
             // 分析表 / 数据文件映射表 → 建项目表（`AnalyticsTable` 档）。
-            // 数据搬运路径：全局连接 `COPY ... TO parquet` → 项目连接
-            // `CREATE TABLE AS SELECT read_parquet(...)`。
-            // 为什么不用 ATTACH：Windows 单句柄限制下，项目连接 ATTACH 全局 DuckDB
-            // 文件会撞「文件被占用」（全局写连接由 GlobalDatabaseManager 持有，不能关）。
-            // Parquet 是 DuckDB 原生格式，中转确定性、无锁冲突。
-            // 中转 parquet 落 `paths::temp_dir()`：运行时数据路径只有一个解析点
-            // （rds-architecture），系统临时目录在只读盘 / 多用户 / 清理策略下不可控。
-            let tmp_dir = paths::temp_dir();
-            std::fs::create_dir_all(&tmp_dir).map_err(|e| {
-                InstanceOpError::Core(CoreError::common(CommonError::General(format!(
-                    "创建临时目录失败（{}）：{}",
-                    tmp_dir.display(),
-                    e
-                ))))
-            })?;
-            let tmp = tmp_dir.join(format!("rds_dist_{}.parquet", uuid::Uuid::new_v4().simple()));
-            let copy_sql = format!(
-                "COPY {} TO '{}' (FORMAT PARQUET);",
-                quote_ident(&source_table),
-                tmp.to_string_lossy().replace('\\', "/")
-            );
-            let copy_result = self
-                .with_duckdb(|conn| {
-                    conn.execute_batch(&copy_sql)
-                        .map_err(|e| duckdb_err("distribute_copy_out", &e.to_string()))?;
-                    Ok(())
-                })
-                .await;
-            // COPY 失败时 `?` 会提前返回，后面那句「用后即删」就执行不到——
-            // 先把可能已生成的半截 parquet 收掉，别往系统临时目录漏文件。
-            if copy_result.is_err() {
-                let _ = std::fs::remove_file(&tmp);
-            }
-            copy_result?;
-
+            // 2026-11-26 所有权收口后全局库与项目库同处 `shared::duckdb_root` 一条根连接：
+            // 项目会话直接读 `rds_global.<源表>` 建 `analytics.<目标表>`，不再 COPY 中转。
             let create_sql = format!(
-                "CREATE TABLE {} AS SELECT * FROM read_parquet('{}');",
+                "CREATE TABLE {}.{} AS SELECT * FROM {}.{};",
+                quote_ident(shared::duckdb_root::PROJECT_ALIAS),
                 quote_ident(&target_name),
-                tmp.to_string_lossy().replace('\\', "/")
+                quote_ident(shared::duckdb_root::GLOBAL_ALIAS),
+                quote_ident(&source_table),
             );
             let mut guard = project.0.lock().await;
             let conn = guard.as_mut().ok_or_else(|| {
@@ -245,14 +214,9 @@ impl GlobalInstanceStore {
                     "项目 DuckDB 连接已关闭".to_string(),
                 )))
             })?;
-            let project_result = conn
-                .execute_batch(&create_sql)
-                .map_err(|e| duckdb_err("distribute_create_table", &e.to_string()));
+            conn.execute_batch(&create_sql)
+                .map_err(|e| duckdb_err("distribute_create_table", &e.to_string()))?;
             drop(guard);
-
-            // 临时 parquet 用后即删（失败也尝试清理，不污染系统临时目录）。
-            let _ = std::fs::remove_file(&tmp);
-            project_result?;
 
             let (rows, cols) = match project_table_stats(&project, &target_name).await {
                 Ok(stats) => stats,
@@ -349,7 +313,8 @@ impl GlobalInstanceStore {
             Err(error) => {
                 // 回滚顺序与藏的顺序相反：登记先复活（成本最低，用户最先生效）。
                 if !hidden_registry.is_empty() {
-                    if let Err(rollback) = restore_project_registry(project, &hidden_registry).await {
+                    if let Err(rollback) = restore_project_registry(project, &hidden_registry).await
+                    {
                         tracing::error!(error = %rollback, "覆盖分发回滚：复活登记行失败");
                     }
                 }
@@ -359,7 +324,8 @@ impl GlobalInstanceStore {
                     }
                 }
                 if let Some(backup) = backup_table.as_deref() {
-                    if let Err(rollback) = rename_project_table(project, backup, &target_name).await {
+                    if let Err(rollback) = rename_project_table(project, backup, &target_name).await
+                    {
                         tracing::error!(error = %rollback, "覆盖分发回滚：旧表改名回原位失败");
                     }
                 }
@@ -549,7 +515,6 @@ impl GlobalInstanceStore {
             tracing::warn!(error = %error, global_name, "分发回执写入失败");
         }
     }
-
 }
 
 // ==================== 覆盖式分发的可逆备份（本文件私有）====================
@@ -740,9 +705,9 @@ async fn soft_delete_project_registry(
     let pool = project.1.clone();
     let conn = pool.acquire().await.map_err(InstanceOpError::Core)?;
     let inner = conn.inner().map_err(InstanceOpError::Core)?;
-    inner.execute_batch("BEGIN IMMEDIATE").map_err(|e| {
-        InstanceOpError::Core(sqlite_err("begin_overwrite_registry")(e))
-    })?;
+    inner
+        .execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| InstanceOpError::Core(sqlite_err("begin_overwrite_registry")(e)))?;
     let result = (|| -> Result<Vec<String>, CoreError> {
         let ids: Vec<String> = {
             let mut stmt = inner
@@ -771,9 +736,9 @@ async fn soft_delete_project_registry(
     })();
     match result {
         Ok(ids) => {
-            inner.execute_batch("COMMIT").map_err(|e| {
-                InstanceOpError::Core(sqlite_err("commit_overwrite_registry")(e))
-            })?;
+            inner
+                .execute_batch("COMMIT")
+                .map_err(|e| InstanceOpError::Core(sqlite_err("commit_overwrite_registry")(e)))?;
             Ok(ids)
         }
         Err(error) => {

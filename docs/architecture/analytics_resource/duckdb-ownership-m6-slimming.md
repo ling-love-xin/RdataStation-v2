@@ -135,12 +135,12 @@
 
 | 位置 | 现在 | 改造后 |
 | --- | --- | --- |
-| `engine/duckdb/temp_table/promote.rs::write_table_across_connections` | 项目连接 `COPY TO parquet` → 目标连接 `read_parquet` → `CREATE TABLE` | 删除；调用方改 `CREATE TABLE <目标> AS SELECT * FROM <源>` |
-| `analytics_resource/src/global/promote.rs` | 表型升级导出 parquet 再建全局表 | `CREATE TABLE rds_global.<table> AS SELECT * FROM analytics.<source>` |
-| `analytics_resource/src/global/distribute.rs` | 全局 `COPY TO parquet` → 项目 `read_parquet` | `CREATE TABLE analytics.<target> AS SELECT * FROM rds_global.<source>` |
-| `analytics_resource/src/global/refs.rs` | 引用打开时短命 ATTACH / 取样 | 直接 `SELECT ... FROM rds_global.<source_table>` |
-| `analytics_resource/src/jobs/global.rs` | `ProjectDuckConn(duck_conn, sqlite_pool)` | `ProjectCtx(sqlite_pool, session)` |
-| `workbench/services/persist_jobs.rs` | 调 `write_table_across_connections` | 调实例 CTAS |
+| `engine/duckdb/temp_table/promote.rs::write_table_across_connections` | 项目连接 `COPY TO parquet` → 目标连接 `read_parquet` → `CREATE TABLE` | 已删除；改为 `write_shared_temp_to_project`（`CREATE TABLE analytics.<目标> AS SELECT * FROM rds_tmp.<源>`） |
+| `analytics_resource/src/global/promote.rs` | 表型升级导出 parquet 再建全局表 | 已改 `promote_table_from_project`：`CREATE TABLE rds_global.<table> AS SELECT * FROM analytics.<source>` |
+| `analytics_resource/src/global/distribute.rs` | 全局 `COPY TO parquet` → 项目 `read_parquet` | 已改 `CREATE TABLE analytics.<target> AS SELECT * FROM rds_global.<source>` |
+| `analytics_resource/src/global/refs.rs` | 引用打开时短命 ATTACH / 取样 | 当前 refs 已无 ATTACH，待复核引用读取是否还有取样路径 |
+| `analytics_resource/src/jobs/global.rs` | `ProjectDuckConn(duck_conn, sqlite_pool)` | `ProjectCtx(sqlite_pool, session)`（待做） |
+| `workbench/services/persist_jobs.rs` | 调 `write_table_across_connections` | 已改调 `write_shared_temp_to_project`（同根 CTAS，无中转文件） |
 | `ProjectDatabaseManager::open_read_only` | 只读 DuckDB 连接 | 删除；读路径从实例取 |
 | `GlobalInstanceStore::production` | 取全局管理器写连接 | 取实例 system session |
 
@@ -203,7 +203,7 @@
 | 0 | 本设计 + 资产遗留清单（本文件） | 文档评审 | ✅ 已完成 |
 | 1 | 所有权移交：两个 Manager 去文件连接；根连接统一挂两库；实例复用 | 串行单测 + 真机双库 CTAS 探针 | ✅ 已完成（2026-11-26） |
 | 2 | 会话角色 + 全局写守卫 | 守卫单测：`USE rds_global` / DDL / DML / ATTACH 全拒 | ✅ 已完成（2026-11-26） |
-| 3 | M6 表型减法：`ProjectCtx`、CTAS、删 parquet 路径 | `cargo test -p rds-analytics-resource --lib` | ⬜ 待做 |
+| 3 | M6 表型减法：`ProjectCtx`、CTAS、删 parquet 路径 | `cargo test -p rds-analytics-resource --lib` | 🟡 进行中：结果集 / 升级 / 分发已切同根 CTAS（286 passed）；`ProjectCtx` 与 system session 待做 |
 | 4 | 全局表回收站 `trash_global` / `purge_global` | 表资产 trash/restore/purge 用例 | ⬜ 待做 |
 | 5 | 全局文件资产 + 文件回收站 + 版本恢复 | 文件 hash、恢复、pin 依赖用例 | ⬜ 待做 |
 | 6 | UI：回收站、版本恢复、分发文件 | `dialog_window` / `panel_window` | ⬜ 待做 |
@@ -289,6 +289,56 @@
 Manager 句柄上的 DuckDB 迁移尚未挪到 system session，角色隔离目前只覆盖实例会话；
 守卫首版对高级 `Command` 保守拒绝，后续按真实语句放宽。
 
+## 9.3 第三段实施记录：表型链路切同根 CTAS（2026-11-26）
+
+代码落点：
+
+- `crates/engine/src/duckdb/temp_table/promote.rs`：
+  - 删除 `write_table_across_connections`（跨连接 `COPY TO parquet` → `read_parquet`）；
+  - 新增 `write_shared_temp_to_project(dest, source_table, target_table, mode)`：
+    源解析为 `rds_tmp.<表>`，目标为 `"analytics"."<表>"`，执行
+    `CREATE [OR REPLACE] TABLE ... AS SELECT * FROM ...`，再数目标表行数；
+  - 测试 `writes_shared_temp_into_the_attached_project_without_parquet`：同一内存根
+    建 `rds_tmp.tmp_q_orders`、`ATTACH` 临时项目库为 `analytics`，验证 DECIMAL 类型、
+    引号、`Create` 撞名拒绝、`Replace` 覆盖。
+- `crates/workbench/src/services/persist_jobs.rs`：
+  - `persist_result_table` 改调 `write_shared_temp_to_project`；
+  - 删除先锁进程单例再锁项目连接的顺序与 `DuckDbService` 依赖；
+  - 错误提示去掉“另一个程序正在使用此文件”分支，保留撞名提示。
+- `crates/analytics_resource/src/global/promote.rs`：
+  - 新增 `promote_table_from_project(project, req, overwrite)`：项目会话执行
+    `CREATE TABLE rds_global.<版本表> AS SELECT * FROM analytics.<源表>`；
+  - 冲突 / 覆盖、版本号、表名、登记、`KeepVersions` 裁剪与文件型升级同口径；
+  - 登记 `definition_sql` 支持调用方覆盖，表型写真实跨库 `SELECT`，不再留临时路径；
+  - 测试 `g015` 增补同名冲突与覆盖：v2 接续、v1 登记与表都保留。
+- `crates/analytics_resource/src/global/distribute.rs`：
+  - 表型分发改为项目会话 `CREATE TABLE analytics.<目标> AS SELECT * FROM rds_global.<源表>`；
+  - 删除 `COPY TO parquet` / `read_parquet` 中转与临时文件清理。
+- `crates/analytics_resource/src/global/mod.rs` + `src/global/tests.rs`：
+  - 新增测试专用 `open_at_handle`，登记库仍走临时 SQLite，DuckDB 用调用方会话；
+  - `create_test_env` 改为 `shared::duckdb_root::isolated` 一条根连接，
+    全局 / 项目各取 `handle(GLOBAL_ALIAS)` / `handle(PROJECT_ALIAS)`。
+
+验证（串行）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo test -p rds-engine --lib temp_table::promote` | 4 passed |
+| `cargo test -p rds-engine -j 1 --lib -- --test-threads=1` | 348 passed / 0 failed（PowerShell 把 cargo 的 `Finished` 走 stderr，退出码显示 1，非断言失败） |
+| `cargo test -p rds-analytics-resource --lib global::tests:: -- --test-threads=1` | 22 passed（含表型升级冲突 / 覆盖 / 版本保留、分发、引用、固化） |
+| `cargo test -p rds-analytics-resource --lib -- --test-threads=1` | 286 passed / 0 failed |
+| `cargo check -p rds-workbench -j 1` | 通过 |
+
+未取得结果：`cargo test -p rds-workbench --test persist_result_table` 在编译 `gpui-base` 时
+出现 `memory allocation ... failed` / `STATUS_STACK_BUFFER_OVERRUN`，属本机内存 / 页面文件限制，
+不是代码断言失败；待条件允许补跑。
+
+本段未动的 M6 路径：
+
+- `analytics_resource/src/global/refs.rs` 已无短命 `ATTACH`；引用读取是否仍绕取样路径待复核；
+- `jobs/global.rs::ProjectDuckConn` 仍是 `(duck_conn, sqlite_pool)`，未改名 `ProjectCtx`；
+- `GlobalInstanceStore::production` 仍取 Manager 会话句柄，未收敛到实例 system session。
+
 ## 10. 风险与未决
 
 1. **全局写守卫的绕过面**：`CALL` / `COPY` / `EXPORT` / prepared statement / 多语句；
@@ -297,8 +347,7 @@ Manager 句柄上的 DuckDB 迁移尚未挪到 system session，角色隔离目�
    或让旧查询读到新库。需要写车道 + 会话关闭协议。
 3. **迁移窗口**：全局 / 项目 DuckDB 迁移必须移进实例 system session；启动顺序错会回到
    “先开连接、实例挂不上”的老问题。
-4. **测试夹具**：M6 测试目前直开 `ProjectDuckConn`；改成实例后需要统一测试实例工厂，
-   否则每个测试都要自己造双库。
+4. **测试夹具**：M6 测试已改为 `isolated` 同根夹具；后续改成实例后仍要统一测试实例工厂。
 5. **资产文件与表双形态**：文件资产 + 派生表会产生两条全局行；UI / 删除 / pin 必须按
    `origin_kind='global_file'` 成组处理，不能只删一条。
 
@@ -307,7 +356,7 @@ Manager 句柄上的 DuckDB 迁移尚未挪到 system session，角色隔离目�
 - 真机：项目库 + 全局库同实例，双向 CTAS 成功（第一刀已达成）；
 - 真机：全局表写入被 user session 拒绝，system session 成功（第 2 步已达成）；
 - `cargo test -p rds-engine --lib` ≥ 344 passed（第一刀实测 348）；
-- `cargo test -p rds-analytics-resource --lib -- --test-threads=1` ≥ 286 passed（第 3 步）；
+- `cargo test -p rds-analytics-resource --lib -- --test-threads=1` ≥ 286 passed（第 3 步实测 286）；
 - `cargo check -p rds-workbench -j 1` 通过（第一刀已过 workspace check）；
-- 表型链路无 parquet 中转、无短命 ATTACH（第 3 步）；
+- 表型链路无 parquet 中转、无短命 ATTACH（结果集 / 升级 / 分发已达成；`ProjectCtx` / system session 待做）；
 - 资产引用 / 版本快照 / pin 的既有用例不改语义，只改测试夹具。

@@ -228,6 +228,7 @@ impl GlobalInstanceStore {
         req: &PromoteRequest,
         row_count: Option<i32>,
         column_count: Option<i32>,
+        definition_override: Option<String>,
     ) -> Result<PromoteOutcome, InstanceOpError> {
         self.with_sqlite(|conn| {
             let id = format!("arg_{}", uuid::Uuid::new_v4().simple());
@@ -235,7 +236,8 @@ impl GlobalInstanceStore {
             // 全局表由「能读成表的数据文件」建出来，就是结构化；脚本内容表不是。
             let structured = i32::from(matches!(req.kind, PromoteKind::DataFile));
             // 重建定义指向**实际表名**（G2 起表名带时间戳，不再是资产名）。
-            let definition_sql = match req.kind {
+            // 表型直连 CTAS 不经过文件，调用方把真实来源 SQL 传进来，覆盖文件推断。
+            let definition_sql = definition_override.or_else(|| match req.kind {
                 PromoteKind::DataFile => file_read_expr(&req.source_abs_path)
                     .map(|expr| {
                         format!(
@@ -249,7 +251,7 @@ impl GlobalInstanceStore {
                     quote_ident(table),
                     req.rel_path.as_deref().unwrap_or("")
                 )),
-            };
+            });
 
             // 来源链（A → 全局）：只记直接上游那一跳。`source_resource_id` 为空时
             // 两列都写 NULL —— 没有来源就不编一个。
@@ -331,5 +333,4 @@ impl GlobalInstanceStore {
         })
         .map_err(InstanceOpError::Core)
     }
-
 }

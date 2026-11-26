@@ -137,8 +137,15 @@ impl GlobalInstanceStore {
         };
 
         // ---- 全局登记（scope = 'global'，记实际表名）+ 版本快照 ----
-        let outcome =
-            self.register_global(&req.name, &table, next_version, req, row_count, column_count)?;
+        let outcome = self.register_global(
+            &req.name,
+            &table,
+            next_version,
+            req,
+            row_count,
+            column_count,
+            None,
+        )?;
         // 一版一张表会随版本线性增长：按保留策略裁掉更早的表（只删内容表，
         // 登记与版本快照都留）。裁剪失败只记日志，不回滚已经成功的升级。
         if let Some(keep) = req.keep_versions {
@@ -172,6 +179,122 @@ impl GlobalInstanceStore {
         })?;
         let mut outcome = self.promote(req).await?;
         outcome.overwritten = true;
+        Ok(outcome)
+    }
+
+    /// 表型升级：项目分析库里的表直接 CTAS 到全局库（不经 Parquet）。
+    ///
+    /// 与 [`Self::promote`] 的区别只在数据面：源是 `analytics.<源表>`，目标在同一根连接的
+    /// `rds_global.<版本表>`。版本号 / 表名 / 登记 / 裁剪与文件型升级共用同一套规则。
+    pub async fn promote_table_from_project(
+        &self,
+        project: &ProjectDuckConn,
+        req: &PromoteRequest,
+        overwrite: bool,
+    ) -> Result<PromoteOutcome, InstanceOpError> {
+        let Some(source_table) = req.source_table.as_deref() else {
+            return Err(InstanceOpError::Core(CoreError::common(
+                CommonError::General("升级请求缺少源表名".to_string()),
+            )));
+        };
+
+        // ---- 冲突 / 覆盖（与文件型升级同口径：只看登记层）----
+        let existing: Option<i32> = self.with_sqlite(|conn| {
+            conn.query_row(
+                r#"
+                SELECT version FROM analytics_resources
+                WHERE name = ?1 AND scope = 'global' AND deleted_at IS NULL
+                ORDER BY version DESC LIMIT 1
+                "#,
+                rusqlite::params![req.name],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sqlite_err("check_global_conflict"))
+        })?;
+        if overwrite {
+            self.with_sqlite(|conn| {
+                conn.execute(
+                    r#"
+                    UPDATE analytics_resources
+                    SET deleted_at = ?1
+                    WHERE name = ?2 AND scope = 'global' AND deleted_at IS NULL
+                    "#,
+                    rusqlite::params![Utc::now().to_rfc3339(), req.name],
+                )
+                .map_err(sqlite_err("soft_delete_global"))?;
+                Ok(())
+            })?;
+        } else if existing.is_some() {
+            return Err(InstanceOpError::Conflict {
+                name: req.name.clone(),
+                field: ConflictField::Registry,
+            });
+        }
+
+        // ---- 版本号 + 表名 ----
+        let next_version = self
+            .next_global_version(&req.name)
+            .map_err(InstanceOpError::Core)?;
+        let now = Utc::now();
+        let mut table = table_name::version_table_name(&req.name, now);
+        if self.table_exists(&table).await? {
+            table = table_name::version_table_name_with_version(&req.name, next_version, now);
+        }
+
+        // ---- 同根跨库 CTAS：项目会话直接读全局目标 ----
+        let source_ref = format!(
+            "{}.{}",
+            quote_ident(shared::duckdb_root::PROJECT_ALIAS),
+            quote_ident(source_table)
+        );
+        let create_sql = format!(
+            "CREATE TABLE {}.{} AS SELECT * FROM {source_ref};",
+            quote_ident(shared::duckdb_root::GLOBAL_ALIAS),
+            quote_ident(&table)
+        );
+        let write_result = {
+            let mut guard = project.0.lock().await;
+            match guard.as_mut() {
+                Some(conn) => conn.execute_batch(&create_sql).map_err(|e| {
+                    InstanceOpError::Core(duckdb_err(
+                        "create_global_table_from_project",
+                        &e.to_string(),
+                    ))
+                }),
+                None => Err(InstanceOpError::Core(CoreError::common(
+                    CommonError::General("项目 DuckDB 连接已关闭".to_string()),
+                ))),
+            }
+        };
+        if let Err(error) = write_result {
+            // CTAS 半途失败可能留下目标表；尽力清掉，不让登记指向残表。
+            let _ = self.drop_global_table(&table).await;
+            return Err(error);
+        }
+        let (row_count, column_count) = self.table_stats(&table).await?;
+
+        // 表型来源不是文件：重建定义直接写跨库 SELECT，避免登记成临时路径。
+        let definition = Some(format!(
+            "CREATE TABLE {} AS SELECT * FROM analytics.{};",
+            quote_ident(&table),
+            quote_ident(source_table)
+        ));
+        let mut outcome = self.register_global(
+            &req.name,
+            &table,
+            next_version,
+            req,
+            row_count,
+            column_count,
+            definition,
+        )?;
+        outcome.overwritten = overwrite;
+        if let Some(keep) = req.keep_versions {
+            if let Err(error) = self.prune_version_tables(&req.name, keep).await {
+                tracing::warn!(error = %error, name = %req.name, "全局历史表裁剪失败");
+            }
+        }
         Ok(outcome)
     }
 }

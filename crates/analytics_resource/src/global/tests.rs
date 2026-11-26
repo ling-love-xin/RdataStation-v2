@@ -13,6 +13,8 @@ struct TestEnv {
     project_pool: Arc<ProjectSqlitePool>,
     project_duckdb: Arc<AsyncMutex<Option<duckdb::Connection>>>,
     project_root: PathBuf,
+    /// 同根连接的所有者；测试结束时随 `TestEnv` 一起释放。
+    _root: Arc<shared::duckdb_root::DuckDbRoot>,
 }
 
 async fn create_test_env() -> TestEnv {
@@ -23,11 +25,24 @@ async fn create_test_env() -> TestEnv {
     fs::create_dir_all(&project_dir).expect("create project dir");
     fs::create_dir_all(project_dir.join("resources")).expect("create resources dir");
 
-    let store = GlobalInstanceStore::open_at(
-        global_dir.join("global.db"),
-        global_dir.join("analytics.duckdb"),
+    // 同根改造：全局库与项目库必须先存在，再由一条 isolated 根连接同时挂上；
+    // 两边各开独立连接在 M6 直连 CTAS 下会互相看不见。
+    let global_duckdb_path = global_dir.join("analytics.duckdb");
+    let project_duckdb_path = project_dir.join(".RSmeta/analytics.duckdb");
+    fs::create_dir_all(project_duckdb_path.parent().unwrap()).expect("create rsmeta for duckdb");
+    drop(duckdb::Connection::open(&global_duckdb_path).expect("create global duckdb"));
+    drop(duckdb::Connection::open(&project_duckdb_path).expect("create project duckdb"));
+    let root = shared::duckdb_root::isolated(
+        Some(project_duckdb_path.as_path()),
+        Some(global_duckdb_path.as_path()),
     )
-    .await
+    .expect("isolated duckdb root");
+
+    let store = GlobalInstanceStore::open_at_handle(
+        global_dir.join("global.db"),
+        root.handle(shared::duckdb_root::GLOBAL_ALIAS)
+            .expect("global handle"),
+    )
     .expect("open global store");
 
     // 项目 SQLite（跑 020/023/024 迁移，与生产结构一致）。
@@ -46,11 +61,10 @@ async fn create_test_env() -> TestEnv {
             .expect("run analytics_resources migrations");
     }
 
-    // 项目 DuckDB 写连接（独立临时文件）。
-    let duckdb_path = project_dir.join(".RSmeta/analytics.duckdb");
-    fs::create_dir_all(duckdb_path.parent().unwrap()).expect("create rsmeta for duckdb");
+    // 项目 DuckDB 会话：与全局句柄同根，默认 catalog 指到 analytics。
     let project_duckdb = Arc::new(AsyncMutex::new(Some(
-        duckdb::Connection::open(&duckdb_path).expect("open project duckdb"),
+        root.handle(shared::duckdb_root::PROJECT_ALIAS)
+            .expect("project handle"),
     )));
 
     TestEnv {
@@ -59,6 +73,7 @@ async fn create_test_env() -> TestEnv {
         project_pool: pool,
         project_duckdb,
         project_root: project_dir,
+        _root: root,
     }
 }
 
@@ -139,13 +154,16 @@ async fn g001_promote_data_file_and_register_global() {
         Some(table.as_str()),
         "登记行的表名要和建出来的那张表一致"
     );
-    assert_eq!(row.structured, Some(1), "数据文件升级出来的全局表能参与分析");
-    assert!(
-        row.definition_sql
-            .as_deref()
-            .unwrap_or("")
-            .contains("read_csv_auto")
+    assert_eq!(
+        row.structured,
+        Some(1),
+        "数据文件升级出来的全局表能参与分析"
     );
+    assert!(row
+        .definition_sql
+        .as_deref()
+        .unwrap_or("")
+        .contains("read_csv_auto"));
 
     // 版本快照落全局库。
     env.store
@@ -221,18 +239,12 @@ async fn g003_promote_script_content_table() {
     let list = list_global_resources(&env.store).expect("list");
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].kind, "analysis");
-    assert_eq!(
-        list[0].structured,
-        Some(0),
-        "脚本没有列结构，不参与分析"
-    );
-    assert!(
-        list[0]
-            .file_rel_path
-            .as_deref()
-            .unwrap_or("")
-            .contains("calc_script")
-    );
+    assert_eq!(list[0].structured, Some(0), "脚本没有列结构，不参与分析");
+    assert!(list[0]
+        .file_rel_path
+        .as_deref()
+        .unwrap_or("")
+        .contains("calc_script"));
 
     let _ = fs::remove_dir_all(&env.dir);
 }
@@ -607,10 +619,7 @@ async fn g011_oversized_script_is_rejected_before_reading() {
         text.contains("超过上限"),
         "错误要说清是体积问题，实际 {text}"
     );
-    assert!(
-        text.contains("16 MiB"),
-        "错误要给出具体上限值，实际 {text}"
-    );
+    assert!(text.contains("16 MiB"), "错误要给出具体上限值，实际 {text}");
     assert!(
         text.contains("数据文件"),
         "错误要指出替代路径（按数据文件归档），实际 {text}"
@@ -843,7 +852,7 @@ async fn g015_table_source_promote_moves_every_row() {
 
     let req = PromoteRequest {
         name: "daily_orders".to_string(),
-        // 占位：导出层会把形态改写成 DataFile（表先搬成 parquet 再升级）。
+        // 表型升级：不经文件，直接同根 CTAS。
         kind: PromoteKind::DataFile,
         source_abs_path: env.project_root.join(".RSmeta/analytics.duckdb"),
         rel_path: None,
@@ -856,7 +865,9 @@ async fn g015_table_source_promote_moves_every_row() {
         keep_versions: None,
     };
 
-    let outcome = crate::jobs::global::promote_table_from_project(&env.store, &project, &req, false)
+    let outcome = env
+        .store
+        .promote_table_from_project(&project, &req, false)
         .await
         .expect("promote table");
     assert_eq!(outcome.version, 1, "A 的 v5 升级成全局 v1（各层各自编号）");
@@ -887,6 +898,35 @@ async fn g015_table_source_promote_moves_every_row() {
         .await
         .expect("project stats");
     assert_eq!(rows, Some(100), "升级不动项目侧数据");
+
+    // 同名再升级：不覆盖时按登记冲突拒绝；覆盖时版本接续、旧表仍留库。
+    let conflict = env
+        .store
+        .promote_table_from_project(&project, &req, false)
+        .await;
+    assert!(
+        matches!(
+            conflict,
+            Err(InstanceOpError::Conflict {
+                field: ConflictField::Registry,
+                ..
+            })
+        ),
+        "同名表型升级应按登记层冲突拒绝：{conflict:?}"
+    );
+    let overwritten = env
+        .store
+        .promote_table_from_project(&project, &req, true)
+        .await
+        .expect("overwrite table");
+    assert_eq!(overwritten.version, 2, "覆盖按同名链接续版本号");
+    assert!(overwritten.overwritten, "覆盖结果要标记 overwritten");
+    let versions = read_global_version_tables(&env, "daily_orders");
+    assert_eq!(versions.len(), 2, "旧版本登记与表都保留");
+    assert!(
+        versions.iter().any(|(v, _)| *v == 1),
+        "v1 登记不能被覆盖删除：{versions:?}"
+    );
 
     let _ = fs::remove_dir_all(&env.dir);
 }
@@ -1005,11 +1045,7 @@ async fn g017_delete_global_drops_tables_and_registry_only() {
     let first = env.store.promote(&req).await.expect("promote v1");
     assert_eq!(first.version, 1);
     let first_table = read_global_table(&env, "delete_me").expect("v1 table");
-    let second = env
-        .store
-        .promote_overwrite(&req)
-        .await
-        .expect("promote v2");
+    let second = env.store.promote_overwrite(&req).await.expect("promote v2");
     assert_eq!(second.version, 2);
     let second_table = read_global_table(&env, "delete_me").expect("v2 table");
 
@@ -1040,11 +1076,17 @@ async fn g017_delete_global_drops_tables_and_registry_only() {
     assert_eq!(outcome.projects, 1, "回执在删除前数过");
 
     assert!(
-        !env.store.table_exists(&first_table).await.expect("probe v1"),
+        !env.store
+            .table_exists(&first_table)
+            .await
+            .expect("probe v1"),
         "v1 表应已删除"
     );
     assert!(
-        !env.store.table_exists(&second_table).await.expect("probe v2"),
+        !env.store
+            .table_exists(&second_table)
+            .await
+            .expect("probe v2"),
         "v2 表应已删除"
     );
 
