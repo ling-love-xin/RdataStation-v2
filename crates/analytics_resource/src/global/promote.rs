@@ -338,6 +338,157 @@ impl GlobalInstanceStore {
         self.promote_overwrite(&req).await
     }
 
+    /// 从全局表历史版本恢复：旧版表还在库 → 复制成新版本（不原地回滚）。
+    ///
+    /// 与项目表型回退同构：恢复 = 以旧版表为源再走一次「建表 + 登记」，版本号 +1，
+    /// 旧表与旧登记一律保留；被保留策略裁掉的版本明确失败。文件型资产不走这里。
+    pub async fn restore_global_table_version(
+        &self,
+        name: &str,
+        version: i32,
+    ) -> Result<PromoteOutcome, InstanceOpError> {
+        let active: Option<(String, Option<String>, Option<String>)> = self.with_sqlite(|conn| {
+            conn.query_row(
+                r#"
+                SELECT kind, file_rel_path, analytics_table
+                FROM analytics_resources
+                WHERE name = ?1 AND scope = 'global' AND deleted_at IS NULL
+                ORDER BY version DESC LIMIT 1
+                "#,
+                rusqlite::params![name],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(sqlite_err("read_table_restore_active"))
+        })?;
+        let Some((kind, file_rel_path, _current_table)) = active else {
+            return Err(InstanceOpError::NotFound {
+                name: name.to_string(),
+            });
+        };
+        if kind != "analysis" || file_rel_path.is_some() {
+            return Err(InstanceOpError::Core(CoreError::common(
+                CommonError::InvalidArgument {
+                    param: "name".to_string(),
+                    reason: format!("全局「{name}」不是表型资产，文件版本恢复请走 restore_global_file_version"),
+                },
+            )));
+        }
+
+        let snapshot: Option<(String,)> = self.with_sqlite(|conn| {
+            conn.query_row(
+                "SELECT snapshot FROM analytics_resource_versions \
+                 WHERE resource_id = (SELECT id FROM analytics_resources \
+                    WHERE name = ?1 AND scope = 'global' AND version = ?2 LIMIT 1) \
+                   AND version = ?2",
+                rusqlite::params![name, version],
+                |row| Ok((row.get::<_, String>(0)?,)),
+            )
+            .optional()
+            .map_err(sqlite_err("read_table_restore_snapshot"))
+        })?;
+        let Some((snapshot_text,)) = snapshot else {
+            return Err(InstanceOpError::Core(CoreError::common(
+                CommonError::General(format!(
+                    "全局「{name}」v{version} 的版本快照不存在，无法恢复"
+                )),
+            )));
+        };
+        let snapshot_json: serde_json::Value = serde_json::from_str(&snapshot_text).map_err(|e| {
+            InstanceOpError::Core(CoreError::common(CommonError::General(format!(
+                "全局「{name}」v{version} 的版本快照损坏：{e}"
+            ))))
+        })?;
+        let source_table = snapshot_json
+            .get("analytics_table")
+            .and_then(|value| value.as_str())
+            .filter(|table| !table.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                InstanceOpError::Core(CoreError::common(CommonError::General(format!(
+                    "全局「{name}」v{version} 的快照没有表名，无法恢复"
+                ))))
+            })?;
+        if !self.table_exists(&source_table).await? {
+            return Err(InstanceOpError::Core(CoreError::common(CommonError::General(
+                format!(
+                    "全局「{name}」v{version} 的表 {source_table} 已被保留策略清理或缺失，无法恢复"
+                ),
+            ))));
+        }
+
+        let next_version = self
+            .next_global_version(name)
+            .map_err(InstanceOpError::Core)?;
+        let now = Utc::now();
+        let mut table = table_name::version_table_name(name, now);
+        if self.table_exists(&table).await? {
+            table = table_name::version_table_name_with_version(name, next_version, now);
+        }
+        let create_sql = format!(
+            "CREATE TABLE {}.{} AS SELECT * FROM {}.{};",
+            quote_ident(shared::duckdb_root::GLOBAL_ALIAS),
+            quote_ident(&table),
+            quote_ident(shared::duckdb_root::GLOBAL_ALIAS),
+            quote_ident(&source_table)
+        );
+        if let Err(error) = self
+            .with_duckdb(|conn| {
+                conn.execute_batch(&create_sql)
+                    .map_err(|e| duckdb_err("restore_global_table", &e.to_string()))
+            })
+            .await
+        {
+            let _ = self.drop_global_table(&table).await;
+            return Err(InstanceOpError::Core(error));
+        }
+        let stats = self.table_stats(&table).await?;
+
+        // 旧活跃行软删（与覆盖升级同口径），新版本行成为唯一活跃行。
+        self.with_sqlite(|conn| {
+            conn.execute(
+                r#"
+                UPDATE analytics_resources
+                SET deleted_at = ?1
+                WHERE name = ?2 AND scope = 'global' AND deleted_at IS NULL
+                "#,
+                rusqlite::params![Utc::now().to_rfc3339(), name],
+            )
+            .map_err(sqlite_err("soft_delete_global_on_table_restore"))?;
+            Ok(())
+        })?;
+
+        let req = PromoteRequest {
+            name: name.to_string(),
+            kind: PromoteKind::DataFile,
+            source_abs_path: std::path::PathBuf::from(format!("rds_global.{source_table}")),
+            rel_path: None,
+            content_hash: String::new(),
+            file_size: None,
+            source_resource_id: None,
+            source_version: None,
+            source_table: Some(source_table.clone()),
+            keep_versions: None,
+        };
+        let definition = Some(format!(
+            "CREATE TABLE {} AS SELECT * FROM rds_global.{};",
+            quote_ident(&table),
+            quote_ident(&source_table)
+        ));
+        let mut outcome = self.register_global(
+            name,
+            &table,
+            next_version,
+            &req,
+            stats.0,
+            stats.1,
+            definition,
+            None,
+        )?;
+        outcome.overwritten = true;
+        Ok(outcome)
+    }
+
     /// 表型升级：项目分析库里的表直接 CTAS 到全局库（不经 Parquet）。
     ///
     /// 与 [`Self::promote`] 的区别只在数据面：源是 `analytics.<源表>`，目标在同一根连接的

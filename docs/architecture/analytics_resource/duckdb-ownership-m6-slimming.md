@@ -441,6 +441,21 @@ WIP 产物串包（`rds_sql::guard` 缺失 / `use_duckdb_fed` 类型不一致）
 本段边界：列表/清空只有服务层，资产库面板还没有“全局回收站…”入口（现有回收站对话框
 接的是项目 `.RSmeta/trash`）；全局回收站 TTL 与清空遇 pin 的 UI 文案仍未定。
 
+## 9.8 第八段实施记录：全局表历史版本恢复（2026-11-26）
+
+- `global/promote.rs`：新增 `restore_global_table_version(name, N)`。校验活跃行是
+  `kind = analysis` 且无文件本体（文件型走 `restore_global_file_version`）；从版本快照
+  取 `analytics_table`，校验旧表仍在库；在全局会话里
+  `CREATE TABLE rds_global.<新版本表> AS SELECT * FROM rds_global.<旧表>`；
+  旧活跃行软删后登记新版本（版本号 +1，旧表 / 旧登记 / 版本快照全留）。
+  旧表被 `KeepVersions` 裁掉或快照缺表名时明确失败。
+- 用例：`g030_table_version_restore_copies_the_old_table`（v1 100 行、覆盖升级 v2 50 行，
+  恢复 v1 → v3 是 100 行的新表，v1 / v2 / v3 三张表都还在）。
+
+验证：`cargo test -p rds-analytics-resource --lib global::tests::g030` 1 passed。
+
+本段边界：只有服务层，详情动作还没有“恢复上一版表…”入口；任意版本选择仍待版本历史 UI。
+
 ## 10. 风险与未决
 
 1. **全局写守卫的绕过面**：`CALL` / `COPY` / `EXPORT` / prepared statement / 多语句；

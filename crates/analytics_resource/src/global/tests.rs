@@ -931,6 +931,79 @@ async fn g015_table_source_promote_moves_every_row() {
     let _ = fs::remove_dir_all(&env.dir);
 }
 
+/// 表型历史版本恢复：旧版表还在 → 复制成新版本，不原地回滚；旧表与旧登记全留。
+#[tokio::test]
+async fn g030_table_version_restore_copies_the_old_table() {
+    let env = create_test_env().await;
+    let project = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
+    let make = |rows: i32| format!("CREATE TABLE daily AS SELECT i AS id FROM range(1, {rows}) r(i);");
+    {
+        let mut guard = project.0.lock().await;
+        guard
+            .as_mut()
+            .expect("project conn")
+            .execute_batch(&make(101))
+            .expect("create 100");
+    }
+    let req = PromoteRequest {
+        name: "restorable_orders".to_string(),
+        kind: PromoteKind::DataFile,
+        source_abs_path: env.project_root.join(".RSmeta/analytics.duckdb"),
+        rel_path: None,
+        content_hash: String::new(),
+        file_size: None,
+        source_resource_id: None,
+        source_version: None,
+        source_table: Some("daily".to_string()),
+        keep_versions: None,
+    };
+    env.store
+        .promote_table_from_project(&project, &req, false)
+        .await
+        .expect("promote v1");
+    {
+        let mut guard = project.0.lock().await;
+        let conn = guard.as_mut().expect("project conn");
+        conn.execute_batch("DROP TABLE daily;")
+            .expect("drop daily");
+        conn.execute_batch(&make(51)).expect("create 50");
+    }
+    env.store
+        .promote_table_from_project(&project, &req, true)
+        .await
+        .expect("promote v2");
+
+    let v1_table = read_global_version_tables(&env, "restorable_orders")
+        .into_iter()
+        .find(|(version, _)| *version == 1)
+        .and_then(|(_, table)| table)
+        .expect("v1 表名");
+    let restored = env
+        .store
+        .restore_global_table_version("restorable_orders", 1)
+        .await
+        .expect("restore v1");
+    assert_eq!(restored.version, 3, "恢复生成新版本");
+    let active = read_global_table(&env, "restorable_orders").expect("active table");
+    assert_ne!(active, v1_table, "恢复不原地换回旧表，而是复制成新表");
+    let (rows, _) = env.store.table_stats(&active).await.expect("stats");
+    assert_eq!(rows, Some(100), "新版本是 v1 的 100 行");
+
+    let tables = read_global_version_tables(&env, "restorable_orders");
+    assert_eq!(tables.len(), 3, "v1 / v2 / v3 三条登记全留");
+    for (_, table) in &tables {
+        assert!(
+            env.store
+                .table_exists(table.as_deref().expect("table"))
+                .await
+                .expect("exists"),
+            "历史表一张都不删"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
 /// 同名链的全部版本登记（含软删行）：`(version, analytics_table)`，版本倒序。
 fn read_global_version_tables(env: &TestEnv, name: &str) -> Vec<(i32, Option<String>)> {
     env.store
