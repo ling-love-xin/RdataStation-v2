@@ -168,12 +168,12 @@ pub fn open_global_session(owner: &str) -> Result<SessionHandle, CoreError> {
     // owner 加前缀，避免与 `process` / 文档 owner 撞键（撞键会把别人的默认 catalog 改掉）。
     let owner_key = format!("global:{owner}");
     let session = instance
-        .ensure_session(&owner_key, "process")
+        .ensure_session(&owner_key, "federated")
         .map_err(invalid)?;
     session.use_catalog(GLOBAL_ALIAS).map_err(invalid)?;
     Ok(SessionHandle::Instance {
         session,
-        label: "process",
+        label: "federated",
     })
 }
 

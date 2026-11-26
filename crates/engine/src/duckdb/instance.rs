@@ -67,6 +67,21 @@ pub struct SessionInfo {
     pub open: bool,
 }
 
+/// 会话角色：决定它能不能写全局分析库 `rds_global`。
+///
+/// 口径见 `docs/architecture/analytics_resource/duckdb-ownership-m6-slimming.md` §6：
+/// 全局库在根连接上是 RW，但只有系统会话能写；用户编辑器 / 进程面只读。
+/// 角色不是权限系统，只是把「谁能写全局」收在一个可审计的枚举里。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionRole {
+    /// 用户 SQL 编辑器 / 文档会话：可写项目库与临时表，全局只读。
+    User,
+    /// 进程面（导出 / 洞察取样）：可写临时表与项目库，全局只读。
+    Process,
+    /// 系统会话：全局迁移 / 全局资产动作的唯一写入通道。
+    System,
+}
+
 /// `rds_tmp` 里一件被登记过的临时结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TempEntry {
@@ -165,6 +180,22 @@ impl std::fmt::Debug for AnalysisInstance {
     }
 }
 
+impl SessionRole {
+    /// 只有系统会话能写全局分析库。
+    pub fn can_write_global(self) -> bool {
+        matches!(self, Self::System)
+    }
+
+    /// 给错误文案用的角色名。
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::User => "用户",
+            Self::Process => "进程",
+            Self::System => "系统",
+        }
+    }
+}
+
 /// 一条会话：`try_clone` 出来的第二连接，catalog 共享、`TEMP` 独占。
 pub struct AnalysisSession {
     id: String,
@@ -182,6 +213,10 @@ pub struct AnalysisSession {
     /// 为什么要存：`ATTACH` 出去以后，某条源为什么不可用只有挂载那一步知道；
     /// 面板 / 全局库核对想报原话时，不该再挂一遍去找原因。
     mounted: Mutex<Vec<super::federation::registry::MountedSource>>,
+    /// 会话角色：决定 `rds_global` 是否可写（见 [`SessionRole`]）。
+    role: SessionRole,
+    /// 当前默认 catalog（`USE` 跟踪）；裸名写表时用它判断目标是不是全局库。
+    default_catalog: Mutex<String>,
     /// 弱引用：实例持有会话，会话反向取车道 / 登记册，不能成环
     instance: Weak<AnalysisInstance>,
 }
@@ -192,6 +227,11 @@ impl std::fmt::Debug for AnalysisSession {
             .field("id", &self.id)
             .field("label", &self.label)
             .field("owner", &self.owner)
+            .field("role", &self.role)
+            .field(
+                "catalog",
+                &self.default_catalog.lock().map(|c| c.clone()).unwrap_or_default(),
+            )
             .field("open", &!self.closed.load(Ordering::SeqCst))
             .finish()
     }
@@ -202,6 +242,17 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// 按 owner 推默认角色：`process` 是进程面，`system:` 前缀是系统通道，其余都是用户会话。
+fn default_role_for_owner(owner: &str) -> SessionRole {
+    if owner == "process" {
+        SessionRole::Process
+    } else if owner.starts_with("system:") {
+        SessionRole::System
+    } else {
+        SessionRole::User
+    }
 }
 
 /// 进程内分析实例槽：强引用活到 `drop_instance`。
@@ -378,6 +429,16 @@ impl AnalysisInstance {
         owner: &str,
         label: &str,
     ) -> Result<Arc<AnalysisSession>, String> {
+        self.open_session_with_role(owner, label, default_role_for_owner(owner))
+    }
+
+    /// 开一条**指定角色**的会话（系统会话 / 测试用）。
+    pub fn open_session_with_role(
+        self: &Arc<Self>,
+        owner: &str,
+        label: &str,
+        role: SessionRole,
+    ) -> Result<Arc<AnalysisSession>, String> {
         if owner.trim().is_empty() {
             return Err("会话必须有归属（owner 不能为空）".to_string());
         }
@@ -417,10 +478,12 @@ impl AnalysisInstance {
             last_used_ms: AtomicU64::new(stamp),
             queries: AtomicU64::new(0),
             mounted: Mutex::new(Vec::new()),
+            role,
+            default_catalog: Mutex::new("main".to_string()),
             instance: Arc::downgrade(self),
         });
         state.sessions.insert(id.clone(), session.clone());
-        tracing::info!(session = %id, owner = %owner, label = %label, tag = %self.tag, "分析会话已开");
+        tracing::info!(session = %id, owner = %owner, label = %label, role = ?role, tag = %self.tag, "分析会话已开");
         Ok(session)
     }
 
@@ -438,6 +501,16 @@ impl AnalysisInstance {
         owner: &str,
         label: &str,
     ) -> Result<Arc<AnalysisSession>, String> {
+        self.ensure_session_with_role(owner, label, default_role_for_owner(owner))
+    }
+
+    /// 按 owner 取（必要时建立）**指定角色**的会话。
+    pub fn ensure_session_with_role(
+        self: &Arc<Self>,
+        owner: &str,
+        label: &str,
+        role: SessionRole,
+    ) -> Result<Arc<AnalysisSession>, String> {
         if owner.trim().is_empty() {
             return Err("会话必须有归属（owner 不能为空）".to_string());
         }
@@ -454,11 +527,25 @@ impl AnalysisInstance {
                 }
             }
         }
-        let session = self.open_session(owner, label)?;
+        let session = self.open_session_with_role(owner, label, role)?;
         if let Ok(mut state) = self.state.lock() {
             state.owners.insert(owner.to_string(), session.id().to_string());
         }
         Ok(session)
+    }
+
+    /// 系统会话：全局迁移 / 全局资产动作的唯一写入通道。
+    ///
+    /// owner 必须带 `system:` 前缀，避免和用户 / 进程会话共用同一条（共用就会把
+    /// 用户的默认 catalog 和 `TEMP` 世界一起改掉）。
+    pub fn ensure_system_session(
+        self: &Arc<Self>,
+        owner: &str,
+    ) -> Result<Arc<AnalysisSession>, String> {
+        if !owner.starts_with("system:") {
+            return Err("系统会话的 owner 必须以 `system:` 开头".to_string());
+        }
+        self.ensure_session_with_role(owner, "system", SessionRole::System)
     }
 
     /// 所有会话摘要（**渲染路径可调**）。
@@ -827,6 +914,11 @@ impl AnalysisSession {
         self.conn.clone()
     }
 
+    /// 本会话的写角色（全局库是否可写由它决定）。
+    pub fn role(&self) -> SessionRole {
+        self.role
+    }
+
     pub fn info(&self) -> SessionInfo {
         SessionInfo {
             id: self.id.clone(),
@@ -837,6 +929,57 @@ impl AnalysisSession {
             queries: self.queries.load(Ordering::SeqCst),
             open: self.is_open(),
         }
+    }
+
+    /// 本会话的默认 catalog（`USE` 跟踪；裸名写表时判全局用）。
+    pub fn default_catalog(&self) -> String {
+        self.default_catalog
+            .lock()
+            .map(|catalog| catalog.clone())
+            .unwrap_or_else(|poisoned| poisoned.into_inner().clone())
+    }
+
+    fn set_default_catalog(&self, catalog: &str) {
+        let mut current = self
+            .default_catalog
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *current = catalog.to_string();
+    }
+
+    /// 全局写闸门：user / process 会话不能写 `rds_global`，也不能改它的挂载。
+    ///
+    /// 返回 `Some(catalog)` = 这条 SQL 是 `USE <catalog>`，执行成功后要更新默认 catalog。
+    fn guard_global_write(&self, sql: &str) -> Result<Option<String>, CoreError> {
+        if self.role.can_write_global() {
+            return Ok(None);
+        }
+        let report = rds_sql::guard::write_report(
+            sql,
+            rds_sql::SqlDialect::Duckdb,
+            &self.default_catalog(),
+        );
+        if report.touches_global_catalog {
+            return Err(common_error(format!(
+                "全局分析库 rds_global 不能在{}会话里 ATTACH / DETACH / 切 catalog / 改 search_path；\
+                 全局写入请走系统会话或全局资产动作",
+                self.role.label()
+            )));
+        }
+        if report.writes_global {
+            return Err(common_error(format!(
+                "全局分析库 rds_global 对{}会话只读：这条语句会写全局库。\
+                 要改全局表请走「升级到全局 / 删除 / 版本恢复」这些资产动作，\
+                 或把它分发 / 固化到项目后再改，不要直接写 rds_global",
+                self.role.label()
+            )));
+        }
+        if let Some(reason) = report.unclassifiable {
+            return Err(common_error(format!(
+                "全局写守卫无法确认这条语句不会写全局库，已拒绝：{reason}"
+            )));
+        }
+        Ok(report.use_catalog)
     }
 
     /// 在**本条会话**上执行一句：写语句走实例写车道，超时只中断本会话。
@@ -860,6 +1003,8 @@ impl AnalysisSession {
         if !self.is_open() {
             return Err(common_error("这条分析会话已经关了，重新开一条再执行"));
         }
+        // 闸门放在 `is_write` 之前：被拒绝的语句不该再进写车道 / 起看门狗。
+        let next_catalog = self.guard_global_write(sql)?;
         let is_write = !crate::driver::utils::returns_rows(sql);
         // `upgrade` 出来的 Arc 必须活在 guard 之前：guard 借着它（只在 Arc 存活期间有效）
         let instance = self.instance.upgrade();
@@ -895,7 +1040,12 @@ impl AnalysisSession {
         self.last_used_ms.store(now_ms(), Ordering::SeqCst);
 
         match outcome {
-            Ok(result) => Ok(result),
+            Ok(result) => {
+                if let Some(catalog) = next_catalog {
+                    self.set_default_catalog(&catalog);
+                }
+                Ok(result)
+            }
             Err(error) => {
                 if timed_out.load(Ordering::SeqCst) {
                     return Err(common_error(format!(
@@ -1039,9 +1189,21 @@ impl AnalysisSession {
         if !valid {
             return Err(format!("别名 {alias:?} 里有不允许的字符，拒绝拿去拼 SQL"));
         }
-        self.run_with_timeout(&format!("USE {alias}"), Duration::from_secs(5))
-            .map(|_| ())
-            .map_err(|error| format!("切主源到 {alias} 失败：{error}"))
+        if !self.is_open() {
+            return Err("这条分析会话已经关了，重新开一条再执行".to_string());
+        }
+        // 内部切库是引擎自己的动作（全局读取会话 `USE rds_global`、联邦主源切别名），
+        // 不经过用户 SQL 闸门；用户 SQL 的 `USE rds_global` 仍会被 `run` 拒绝。
+        {
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|_| "会话连接锁被污染（上一条语句崩了），重开一条会话".to_string())?;
+            conn.execute_batch(&format!("USE {alias}"))
+                .map_err(|error| format!("切主源到 {alias} 失败：{error}"))?;
+        }
+        self.set_default_catalog(alias);
+        Ok(())
     }
 
     fn close(&self) {

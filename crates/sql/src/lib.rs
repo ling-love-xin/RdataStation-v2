@@ -31,6 +31,7 @@ mod filter;
 mod formatter;
 mod function_manual;
 mod functions;
+pub mod guard;
 mod highlight;
 mod hover;
 mod jump;

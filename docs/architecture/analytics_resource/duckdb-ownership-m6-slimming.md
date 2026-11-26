@@ -120,7 +120,7 @@
 
 实现口径：
 
-- `AnalysisSession` 增 `role: User | Process | System | Control`；
+- `AnalysisSession` 增 `role: User | Process | System`（`Control` 不是会话，控制连接直接执行，不经过闸门）；
 - 守卫在 `run` / `run_with_timeout` 入口，**不是**在 UI 层；
 - 语句分类复用 workspace 已有的 `sqlglot-rust` AST，不写正则；
 - 解析不了 / 多语句里有一条可疑 → **默认拒绝**，错误文案说清“全局库只允许系统写入，请把它分发/固化到项目后再改”；
@@ -202,7 +202,7 @@
 | --- | --- | --- | --- |
 | 0 | 本设计 + 资产遗留清单（本文件） | 文档评审 | ✅ 已完成 |
 | 1 | 所有权移交：两个 Manager 去文件连接；根连接统一挂两库；实例复用 | 串行单测 + 真机双库 CTAS 探针 | ✅ 已完成（2026-11-26） |
-| 2 | 会话角色 + 全局写守卫 | 守卫单测：`USE rds_global` / DDL / DML / ATTACH 全拒 | ⬜ 待做 |
+| 2 | 会话角色 + 全局写守卫 | 守卫单测：`USE rds_global` / DDL / DML / ATTACH 全拒 | ✅ 已完成（2026-11-26） |
 | 3 | M6 表型减法：`ProjectCtx`、CTAS、删 parquet 路径 | `cargo test -p rds-analytics-resource --lib` | ⬜ 待做 |
 | 4 | 全局表回收站 `trash_global` / `purge_global` | 表资产 trash/restore/purge 用例 | ⬜ 待做 |
 | 5 | 全局文件资产 + 文件回收站 + 版本恢复 | 文件 hash、恢复、pin 依赖用例 | ⬜ 待做 |
@@ -247,6 +247,48 @@
 `panel_window` 时因系统页面文件不足失败（`os error 1455`，非代码错误）；
 第 3 步会在内存条件允许时补跑。
 
+## 9.2 第二刀实施记录（2026-11-26）
+
+代码落点：
+
+- `crates/sql/src/guard.rs`：新增 `SqlWriteReport` / `write_report`，是 sqlglot AST 在
+  RdataStation 里的**唯一写范围分类口**。按语句切分逐条判定：
+  - `SELECT` / `WITH` / `EXPLAIN` / `SHOW` / `DESCRIBE` 等读语句放行；
+  - DDL / DML 只看目标表（`TableRef` 的 `catalog` / `schema` / `name`），
+    `rds_global` 目标才拒，读全局的子查询不误伤；
+  - 目标不带 catalog / schema 时用会话默认 catalog 判（`USE rds_global` 之后的裸名就是全局）；
+  - `CREATE TEMP` 落 temp schema，不算写全局；
+  - `ATTACH` / `DETACH` / `USE rds_global` / 含 `rds_global` 的 `SET search_path` 直接拒；
+  - `COPY ... TO` 只拦数据库文件目标；`COPY ... FROM` 目标含全局则拒；
+  - `CALL` / `VACUUM` / `EXPORT` / 分类不了 `Command` 默认拒，宁可误伤再收集放宽。
+- `crates/engine/src/duckdb/instance.rs`：
+  - `SessionRole { User, Process, System }`；`SessionRole::can_write_global()` 只对 `System` 成立；
+  - `AnalysisSession` 增 `role` / `default_catalog`；`open_session_with_role` /
+    `ensure_session_with_role` / `ensure_system_session` 提供系统通道；
+    `default_role_for_owner` 按 `process` / `system:` 前缀推默认角色；
+  - `run_with_timeout` 在 `is_write` 之前调 `guard_global_write`，被拒语句不进写车道 / 不起看门狗；
+  - 用户 SQL 的 `USE <catalog>` 执行成功后更新 `default_catalog`；
+  - `use_catalog` 是引擎内部切库原语，**绕过闸门**：全局读取会话 `USE rds_global` 仍然可用，
+    但用户 SQL 的 `USE rds_global` 仍被 `run` 拒绝。
+- `analysis::global::open_global_session`：会话标签从 `process` 改为 `federated`，
+  避免 `materialize_sample` 把全局取样误走“进程临时表”分支后 `move_sample_to_project` 失败；
+  全局会话角色是 `User`，写入仍受闸门约束。
+- `crates/engine/tests/global_write_guard.rs`：真机探针，验证用户 / 进程会话写全局被拒、
+  `USE` / `ATTACH` 被拒、`CREATE TEMP` 可用、系统会话可写、全局读取会话内部 `USE` 不被误伤。
+
+验证（串行）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo test -p rds-sql --lib guard::` | 6 passed（读写目标 / 默认 catalog / USE / ATTACH / SET / COPY / 不可分类） |
+| `cargo test -p rds-engine -j 1 --lib -- --test-threads=1` | 348 passed / 0 failed |
+| `cargo test -p rds-engine --test analysis_db_exclusive_probe --test analysis_global_probe --test global_write_guard -- --test-threads=1` | 1 + 4 + 1 passed |
+| `cargo check --workspace -j 1` | 通过（仅两条基线警告） |
+
+已知边界：`with_connection` 仍绕过闸门（内部挂载 / 物化用；用户 SQL 一律走 `run`）；
+Manager 句柄上的 DuckDB 迁移尚未挪到 system session，角色隔离目前只覆盖实例会话；
+守卫首版对高级 `Command` 保守拒绝，后续按真实语句放宽。
+
 ## 10. 风险与未决
 
 1. **全局写守卫的绕过面**：`CALL` / `COPY` / `EXPORT` / prepared statement / 多语句；
@@ -263,7 +305,7 @@
 ## 11. 验收口径
 
 - 真机：项目库 + 全局库同实例，双向 CTAS 成功（第一刀已达成）；
-- 真机：全局表写入被 user session 拒绝，system session 成功（第 2 步）；
+- 真机：全局表写入被 user session 拒绝，system session 成功（第 2 步已达成）；
 - `cargo test -p rds-engine --lib` ≥ 344 passed（第一刀实测 348）；
 - `cargo test -p rds-analytics-resource --lib -- --test-threads=1` ≥ 286 passed（第 3 步）；
 - `cargo check -p rds-workbench -j 1` 通过（第一刀已过 workspace check）；
