@@ -450,8 +450,9 @@ pub fn mount_network_source(shared: &Shared, conn_id: &str, cx: &mut App) {
             return;
         }
     };
-    // 会话 owner：面板挂载目前用固定 owner（`data_objects`）。等「面板跟随当前编辑器文档」
-    // 那一步落地后改成文档 id（见 `docs/architecture/resource-session-model.md` §5.2）。
+    // 会话 owner：面板**自己的一条会话**（口径 11 第②条"每个 SQL 编辑器 + 数据面板 = 一条会话"），
+    // 固定 `data_objects`。它不去追当前聚焦文档的 id——编辑器与面板之间的临时表共享靠
+    // 实例资源（`memory.rds_tmp`），不靠共用一条会话（见 `resource-session-model.md` §5.2）。
     match engine::duckdb::accel::ensure_on_instance(&source, "data_objects") {
         Ok((_session, alias)) => {
             refresh(shared, cx);
