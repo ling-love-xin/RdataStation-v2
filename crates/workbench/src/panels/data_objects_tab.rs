@@ -1419,7 +1419,7 @@ impl DataObjectsTab {
             let persist_target = data_objects::can_persist(object).then(|| {
                 (
                     object.name.clone(),
-                    data_objects::persist_label(&object.name),
+                    data_objects::default_archive_name(&object.name),
                 )
             });
             // 单行的「清理这张表」：结果集 / 载入 都是会话级占用（`can_clear`）。
@@ -1450,7 +1450,8 @@ impl DataObjectsTab {
                     }),
                 )
             };
-            // 源行可展开（联邦源 / 加速源 / 文件库 / 源库连接）：行首给展开指示，
+            // 源行可展开（会话源 / 文件库 / 源库连接；加速档不出源段行，它的叶子从连接行展开）：
+            // 行首给展开指示，
             // 与段头 chevron 同一习惯。**没挂载的源不给展开**（铁律 B 组第 4 条）：
             // 没有表可列，给了 chevron 只会点出一个空列表。失败的联邦源同理。
             // 例外：登记过、挂不上、连接还活着的行（`expand_via`）——展开不是"列自家

@@ -287,11 +287,14 @@ impl Object {
     /// 所以把段内次序写死在这里，`sort_key` 直接用；名字只在同档内比较。
     pub fn rank(&self) -> u8 {
         match self.group {
+            // 源段四档（2026-11-27 定）：会话（正在生效）→ 底座（常驻地基）→ 文件库
+            // （按路径挂的库）→ 连接 / 登记行（候选、只剩意图的）。底座原先与连接同档，
+            // `analytics` 按字符序落在中文连接名之前，注释里的「底座紧随会话」从没在排序上成立过。
             Group::Source => match self.key.split(':').next() {
                 Some("session") => 0,
-                Some("fileview") => 1,
-                // 源库连接（`conn:`）：也没挂任何东西，排在已挂载的后面
-                _ => 2,
+                Some("base") => 1,
+                Some("fileview") => 2,
+                _ => 3,
             },
             Group::Table => match self.key.split(':').next() {
                 Some("asset") => 0,
@@ -1561,8 +1564,13 @@ pub fn can_clear(object: &Object) -> bool {
     object.key.starts_with("result:") || object.key.starts_with("load:")
 }
 
-/// 落库时给人看的名字：去掉临时前缀（`tmp_q_` / `tmp_i_`），别让表名里再出现一层 `tmp_`。
-pub fn persist_label(table: &str) -> String {
+/// 「归档到分析库…」对话框的**默认表名**：去掉临时前缀（`tmp_q_` / `tmp_i_`），
+/// 别让落库后的表名里再出现一层 `tmp_`。
+///
+/// 与 `source_picker::persistent_table_label` **不是一件事**：那个是**显示名**
+/// （把 `res_<源>_<14 位时间戳>` 反解成「源 · 时间」给人读），这个只给新表起名、
+/// 不改任何已有名字。两个都叫 `*_label` 曾让调用方拿错过，2026-11-27 改名分开。
+pub fn default_archive_name(table: &str) -> String {
     table
         .strip_prefix("tmp_q_")
         .or_else(|| table.strip_prefix("tmp_i_"))
@@ -2366,9 +2374,12 @@ mod tests {
                 object.key
             );
         }
-        assert_eq!(super::persist_label("tmp_q_结果_3"), "结果_3");
-        assert_eq!(super::persist_label("tmp_i_orders_sample"), "orders_sample");
-        assert_eq!(super::persist_label("orders"), "orders");
+        assert_eq!(super::default_archive_name("tmp_q_结果_3"), "结果_3");
+        assert_eq!(
+            super::default_archive_name("tmp_i_orders_sample"),
+            "orders_sample"
+        );
+        assert_eq!(super::default_archive_name("orders"), "orders");
     }
 
     /// 「升级为资产」与「清理」必须对称：都只认 `result:`——进 / 出两个动作同一口径，
