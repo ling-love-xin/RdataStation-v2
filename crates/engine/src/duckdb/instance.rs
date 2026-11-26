@@ -24,6 +24,7 @@
 //! `federation::session` 提供，避免两处各写一套 `ATTACH`。
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::thread;
@@ -344,6 +345,41 @@ impl AnalysisInstance {
             }
         }
         super::federation::session::attach_bases(&conn)
+    }
+
+    /// 确保一台库以**底座**身份挂在实例上（`ATTACH ... READ_ONLY`）。
+    ///
+    /// 为什么单独开一个入口：`analytics` / `rds_global` 是保留别名，源别名册
+    /// （[`Self::reserve_alias`]）一律拒——那道闸门是为了不让**源连接**盖住底座；
+    /// 但引擎自己挂底座这条路径本来就不该走别名册（底座不是源）。
+    ///
+    /// 幂等：已挂着**同一份文件**就算成；挂着别的文件（切 `RDS_HOME`）就摘了重挂。
+    pub fn ensure_base(&self, alias: &str, path: &Path) -> Result<(), String> {
+        let conn = self
+            .control
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if control_has_database(&conn, alias) {
+            let attached = conn
+                .query_row(
+                    "SELECT path FROM duckdb_databases() WHERE database_name = ?",
+                    [alias],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .ok()
+                .flatten();
+            let wanted = path.to_string_lossy();
+            if attached.as_deref() == Some(wanted.as_ref()) {
+                return Ok(());
+            }
+            // `DETACH` 之前先回默认 catalog：当前默认就是它时 DuckDB 拒绝摘
+            conn.execute_batch(&format!("USE memory; DETACH {alias}"))
+                .map_err(|error| format!("底座 {alias} 摘不掉（可能正被写入方持有）：{error}"))?;
+        }
+        let literal = path.to_string_lossy().replace('\'', "''");
+        conn.execute_batch(&format!("ATTACH '{literal}' AS {alias} (READ_ONLY)"))
+            .map_err(|error| format!("底座 {alias} 挂不上（可能正被写入方持有）：{error}"))?;
+        Ok(())
     }
 
     /// 开一条会话：`try_clone` 出第二连接（catalog 共享、`TEMP` 独立）。
