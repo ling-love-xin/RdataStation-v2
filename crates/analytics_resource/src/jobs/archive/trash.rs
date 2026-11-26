@@ -52,6 +52,7 @@ pub(crate) async fn load_trash(job: &TrashListJob) -> Result<TrashDialogSeed, St
     }
 
     Ok(TrashDialogSeed {
+        scope: crate::dialogs::trash::TrashScope::Project,
         rows,
         foreign: snapshot
             .foreign

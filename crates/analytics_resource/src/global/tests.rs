@@ -1349,6 +1349,73 @@ async fn g027_file_copies_follow_the_keep_policy() {
 }
 
 #[tokio::test]
+async fn g028_global_trash_lists_restores_and_purges() {
+    let env = create_test_env().await;
+    let csv = write_csv(&env.dir);
+    for name in ["trash_a", "trash_b"] {
+        let mut req = promote_req(name, &csv, PromoteKind::DataFile);
+        req.name = name.to_string();
+        env.store.promote(&req).await.expect("promote");
+    }
+    env.store.trash_global("trash_a").await.expect("trash a");
+    env.store.trash_global("trash_b").await.expect("trash b");
+
+    let listed = env.store.list_global_trash().expect("list trash");
+    let mut names: Vec<_> = listed.iter().map(|entry| entry.name.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(names, vec!["trash_a", "trash_b"]);
+    assert!(
+        listed.iter().all(|entry| entry.has_file_payload),
+        "数据文件进回收站要带本体 payload"
+    );
+
+    env.store.restore_global("trash_a").await.expect("restore a");
+    let left = env.store.list_global_trash().expect("list after restore");
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].name, "trash_b");
+
+    env.store.purge_global("trash_b").await.expect("purge b");
+    assert!(
+        env.store.list_global_trash().expect("list after purge").is_empty(),
+        "永久删除后回收站列表要清掉"
+    );
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+#[tokio::test]
+async fn g029_empty_global_trash_skips_pinned_entries() {
+    let env = create_test_env().await;
+    let csv = write_csv(&env.dir);
+    let req = promote_req("pinned_empty", &csv, PromoteKind::DataFile);
+    env.store.promote(&req).await.expect("promote");
+    env.store
+        .trash_global("pinned_empty")
+        .await
+        .expect("trash");
+    // 进回收站后再被项目 pin：清空必须跳过，不能把仍被引用的登记抹掉。
+    pin_ref(&env, "arp_pinned_empty", 1, "pinned_empty", 1);
+
+    let (purged, skipped) = env.store.empty_global_trash().await.expect("empty");
+    assert_eq!(purged, 0);
+    assert_eq!(skipped, 1);
+    assert_eq!(
+        env.store.list_global_trash().expect("list").len(),
+        1,
+        "被 pin 的条目仍留在回收站"
+    );
+
+    env.store
+        .release_global_ref(&env.project_root, "arp_pinned_empty", 1)
+        .expect("release");
+    let (purged, skipped) = env.store.empty_global_trash().await.expect("empty after release");
+    assert_eq!((purged, skipped), (1, 0));
+    assert!(env.store.list_global_trash().expect("list").is_empty());
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+#[tokio::test]
 async fn g024_trash_refuses_while_a_project_pins_the_version() {
     let env = create_test_env().await;
     let csv = write_csv(&env.dir);

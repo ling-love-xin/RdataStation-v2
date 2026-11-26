@@ -419,6 +419,28 @@ WIP 产物串包（`rds_sql::guard` 缺失 / `use_duckdb_fed` 类型不一致）
 验证：`cargo test -p rds-analytics-resource --lib --no-run` 通过；完整 UI 编译仍受本机环境限制。
 本段只给“上一版”快捷入口，任意版本选择仍走后续版本历史 UI。
 
+## 9.7 第七段实施记录：全局回收站列表与清空（2026-11-26）
+
+- `global/delete.rs`：新增 `GlobalTrashEntry { name, version, analytics_table, file_rel_path,
+  trashed_at, version_count, trash_dir, has_file_payload }`。
+  `list_global_trash` 扫 `<RDS_HOME>/data/trash/global` 的两层目录，读 `manifest.json`，
+  只收 `kind == "analysis"`；同名只保留 `trashed_at` 最新的一条，按时间倒序。
+  `empty_global_trash` 逐条走 `purge_global`：`Referenced` 计入 skipped，`NotFound` 忽略，
+  其余错误原样返回，返回 `(purged, skipped)`。
+- 回收站根统一走 `store::persistence::global_paths::get_global_trash_dir()`，
+  不再由 `system_dir.parent()` 反推——测试注入的 sqlite 路径不保证落在 `data/system` 下。
+- `global/mod.rs` 导出 `GlobalTrashEntry`。
+- 用例：`g028_global_trash_lists_restores_and_purges`（两条进站、列表齐全且带本体、
+  恢复一条后只剩一条、永久删除后列表清空）、
+  `g029_empty_global_trash_skips_pinned_entries`（先入站后被项目 pin，清空返回 `(0,1)`；
+  释放 pin 后再次清空返回 `(1,0)`，列表清空）。
+
+验证：`cargo test -p rds-analytics-resource --lib -- --test-threads=1`
+293 passed / 0 failed。
+
+本段边界：列表/清空只有服务层，资产库面板还没有“全局回收站…”入口（现有回收站对话框
+接的是项目 `.RSmeta/trash`）；全局回收站 TTL 与清空遇 pin 的 UI 文案仍未定。
+
 ## 10. 风险与未决
 
 1. **全局写守卫的绕过面**：`CALL` / `COPY` / `EXPORT` / prepared statement / 多语句；

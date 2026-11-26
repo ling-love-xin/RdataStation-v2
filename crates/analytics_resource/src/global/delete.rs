@@ -81,6 +81,107 @@ struct TrashVersion {
 const TRASH_KIND_ANALYSIS: &str = "analysis";
 const MANIFEST_FILE: &str = "manifest.json";
 
+/// 全局回收站中的一个条目（宿主列表 / 对话框用，不暴露 manifest 文件结构）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GlobalTrashEntry {
+    /// 资产名（恢复 / 永久删除都按它找最新 manifest）。
+    pub name: String,
+    pub version: i32,
+    pub analytics_table: Option<String>,
+    pub file_rel_path: Option<String>,
+    pub trashed_at: chrono::DateTime<Utc>,
+    /// 同名链里进回收站时的版本数。
+    pub version_count: usize,
+    /// 条目目录（`trash/global/<asset_id>/<timestamp>`），恢复后不存在。
+    pub trash_dir: PathBuf,
+    /// 是否带文件本体 payload（表型旧条目为 false）。
+    pub has_file_payload: bool,
+}
+
+impl GlobalInstanceStore {
+    /// 列出全局回收站条目（按移入时间倒序）。
+    ///
+    /// 同一条资产多次移入只列最新一次（名称是恢复 / 永久删除的键，旧条目留着也没法单独操作）；
+    /// 文件本体是否在回收站由 `payload_dir` 判断，不再去查 `resources/`（那里已经没有它）。
+    pub fn list_global_trash(&self) -> Result<Vec<GlobalTrashEntry>, CoreError> {
+        let root = self.global_trash_root();
+        let mut latest: std::collections::HashMap<String, GlobalTrashEntry> =
+            std::collections::HashMap::new();
+        let Ok(asset_dirs) = std::fs::read_dir(&root) else {
+            return Ok(Vec::new());
+        };
+        for asset_dir in asset_dirs.flatten() {
+            let asset_path = asset_dir.path();
+            if !asset_path.is_dir() {
+                continue;
+            }
+            let Ok(entries) = std::fs::read_dir(&asset_path) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let dir = entry.path();
+                let manifest_path = dir.join(MANIFEST_FILE);
+                let Ok(text) = std::fs::read_to_string(&manifest_path) else {
+                    continue;
+                };
+                let Ok(manifest) = serde_json::from_str::<GlobalTrashManifest>(&text) else {
+                    continue;
+                };
+                if manifest.kind != TRASH_KIND_ANALYSIS {
+                    continue;
+                }
+                let Ok(trashed_at) = chrono::DateTime::parse_from_rfc3339(&manifest.trashed_at)
+                else {
+                    continue;
+                };
+                let item = GlobalTrashEntry {
+                    name: manifest.name.clone(),
+                    version: manifest.version,
+                    analytics_table: manifest.analytics_table,
+                    file_rel_path: manifest.file_rel_path,
+                    trashed_at: trashed_at.with_timezone(&Utc),
+                    version_count: manifest.versions.len(),
+                    trash_dir: dir,
+                    has_file_payload: manifest.payload_dir.is_some(),
+                };
+                match latest.get(&item.name) {
+                    Some(existing) if existing.trashed_at >= item.trashed_at => {}
+                    _ => {
+                        latest.insert(item.name.clone(), item);
+                    }
+                }
+            }
+        }
+        let mut items: Vec<_> = latest.into_values().collect();
+        items.sort_by(|a, b| b.trashed_at.cmp(&a.trashed_at));
+        Ok(items)
+    }
+
+    /// 清空全局回收站：逐条永久删除；仍被项目 pin 的条目跳过并计入 `skipped`。
+    ///
+    /// 不提供“整目录删除”的捷径：每条都要走 `purge_global` 的 pin 守卫与三表事务，
+    /// 否则会把仍被引用的登记一起抹掉。
+    pub async fn empty_global_trash(&self) -> Result<(usize, usize), InstanceOpError> {
+        let mut purged = 0usize;
+        let mut skipped = 0usize;
+        for entry in self.list_global_trash()? {
+            match self.purge_global(&entry.name).await {
+                Ok(_) => purged += 1,
+                Err(InstanceOpError::Referenced { .. }) => skipped += 1,
+                Err(InstanceOpError::NotFound { .. }) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok((purged, skipped))
+    }
+
+    fn global_trash_root(&self) -> PathBuf {
+        // 回收站根与全局库根同源（`RDS_HOME/data/trash/global`）。测试注入的 sqlite
+        // 路径不保证在 `data/system` 下，按目录推会推错，所以仍走统一的 `paths`。
+        trash_root()
+    }
+}
+
 impl GlobalInstanceStore {
     /// 移入全局回收站：活跃 pin 检查 → 只软删当前活跃行 → 写 manifest。
     ///

@@ -612,6 +612,7 @@ fn trash_dialog_lists_own_rows_and_keeps_the_shared_store_visible(cx: &mut TestA
     let cx = harness(cx);
     let state = TrashDialogState::new();
     let seed = TrashDialogSeed {
+        scope: rds_analytics_resource::dialogs::trash::TrashScope::Project,
         rows: vec![trash_row("t1")],
         // 别人的条目：只出一句说明，不进行列表（所以没有 trash-restore-1 这种行）。
         foreign: vec![ForeignTrash {
