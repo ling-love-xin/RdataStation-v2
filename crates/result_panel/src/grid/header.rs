@@ -2,6 +2,7 @@
 //! 类型小标签 + 筛选图标 + **排序三态图标** + 列头菜单）+ 表头 tooltip 分块文案。
 //! 排序图标**自绘**（`grid/sort_icon.rs` 内嵌 DBeaver 真值 SVG）：组件那个 12px 双 chevron
 //! 槽既不匹配真值图形也没有定制入口，见 `table_impl::column()` 里「故意不设 `sort`」那段。
+//! 焦点列额外画四边框（`focus_border_overlay`，真值 `GridColumnRenderer.java:96-104`）。
 
 use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
@@ -92,6 +93,25 @@ pub(crate) fn column_header_extra_text(
     text.filter(|text| !text.trim().is_empty())
         .map(str::to_string)
 }
+/// 焦点列表头格的四边框（真值 `GridColumnRenderer.java:96-104`，
+/// `PAINT_COLUMN_FOCUS_BORDER = true`，四边全画）。
+///
+/// 用**绝对定位覆盖层**而不是 `.border_t/b/r`：GPUI 的 border 占盒内空间
+/// （上下各 1px 会把表头文字顶偏，切到另一列时整条表头抖一下）；真值也是把线画在
+/// 格边界上、不挤内容（`gc.drawLine` 直接描在 `bounds` 上）。
+///
+/// 右边界落在「列宽 − 组件表头右内距 4px」处：组件给表头内容区留了 `offset_pr`
+/// （`vendor/gpui-component/src/table/state.rs:2171-2176`，`XSmall` 档 = 4px），
+/// 这 4px 只有改 vendor 才能消掉（见 `ui::RESULT_FIT_HEADER_CHROME` 的逐项构成）。
+fn focus_border_overlay(col_ix: usize, color: Hsla) -> impl IntoElement {
+    div()
+        .absolute()
+        .inset_0()
+        .border_1()
+        .border_color(color)
+        .debug_selector(move || format!("editor-result-th-focus-{col_ix}"))
+}
+
 /// 表头单元格：组件默认只画列名（`div().size_full().child(name)`），这里补三件事——
 /// **截断**、**悬停全文**、**列类型小标签**。列名常常比默认列宽（128px）长，截断之后
 /// 就没有第二条知道它是什么的路（单元格取值有悬停，表头同样需要）。
@@ -137,6 +157,19 @@ pub(crate) fn render_th(
     // 对应 DBeaver 的 `getHeaderBorder(element)`（同一色画列右边界与底边，
     // `GridColumnRenderer.java:106-108`）。先取出来：后面构造列头菜单要用 `cx` 的可变借用。
     let header_sep = cx.theme().colors.border;
+
+    // 【焦点列 2026-11-27】真值焦点列表头格画四边框（`GridColumnRenderer.java:96-104`）。
+    // 焦点列 = 选区**当前格**所在列：读 delegate 自持的 `CellRange::cursor()`（含行号槽的
+    // 组件列下标，与 `col_ix` 同口径）。不能走 `cx.entity().read(cx)` 拿
+    // `TableState::selected_cell`——这里 `cx` 是 `Context<TableState<Self>>`、同实体已被
+    // `&mut` 借出，再读会撞借用。
+    // 行号槽不是 `GridColumn`，真值的 `getFocusColumn()` 永远不会指到它，所以排除 col 0。
+    let focus_col = delegate.range_focus().map(|(_, col)| col);
+    let is_focused = focus_col == Some(col_ix) && !ResultGridDelegate::is_row_number(col_ix);
+    // 真值线色是 SWT 系统色 `COLOR_WIDGET_NORMAL_SHADOW`（平台给值，dbeaver-ref 里取不到
+    // 具体 RGB）；本仓取语义最近的 `table_active_border`——组件画单元格焦点框用的同一颗
+    // （`vendor/gpui-component/src/table/state.rs:2695-2714`），不写死色值。
+    let focus_border = cx.theme().table_active_border;
 
     // 【A3】类型族 badge：浅底 + 彩色符号（123/Aa/◷/✓/01）。
     // 位置在列名前；类型族未知不画 badge。浅底 = 族色 18% 透明度，文字 = 族色。
@@ -330,13 +363,14 @@ pub(crate) fn render_th(
             .v_flex()
             .size_full()
             .min_w_0()
+            .relative()
             .justify_center()
             // 左右内距 6px：与单元格同一个口径（DBeaver `GridColumnRenderer.LEFT/RIGHT_MARGIN = 6`），
             // 列名与下面格子的文字才落在同一条竖线上；来源是 `ui::RESULT_CELL_PADDING_X`
             .px(ui::RESULT_CELL_PADDING_X)
-            // 列边界线画在**左**边：表头格的盒子右端被组件排序图标槽占去 20px
-            // （`state.rs:1910` 的 `render_sort_icon`，图标 + 2px 内距），右边界线会
-            // 落在列内侧；左边与列左边界重合（列级内距已置零，`table_impl::cell_paddings`）。
+            // 列边界线画在**左**边：表头内容区的右端被组件 `offset_pr` 占去 4px
+            // （`state.rs:2171-2176`，`XSmall` 档 `table_cell_padding().right = 4`），
+            // 右边界线会落在列内侧；左边与列左边界重合（列级内距已置零，`table_impl::cell_paddings`）。
             // 首列（行号槽 / 转置首列）的左边界就是表格左边缘，不画（DBeaver 同口径，
             // `LightGrid.java:2426-2437` 跳过首个边界）。色与表头底边线同源（`theme.border`）。
             .when(col_ix > 0, |this| {
@@ -345,6 +379,10 @@ pub(crate) fn render_th(
             .debug_selector(move || format!("editor-result-th-{col_ix}"))
             .child(main_row)
             .when_some(extra_line, |head, line| head.child(line))
+            .when_some(
+                is_focused.then(|| focus_border_overlay(col_ix, focus_border)),
+                |head, overlay| head.child(overlay),
+            )
             .into_any_element();
     }
     // 【列头菜单 2026-11-26】真值有**两条**列头菜单入口，形态不同：
@@ -504,5 +542,14 @@ pub(crate) fn render_th(
     // `#[cfg(not(feature = "gpui-fast"))]` 门掉），再包一层 `div` 回到 `Div`：
     // `ContextMenu` 自身以绝对定位挂子元素、不参与流，视觉与布局不变。
     // 返回类型被上面的 corner 早退钉成 `AnyElement`，这里同样 `into_any_element`。
-    div().size_full().child(head).into_any_element()
+    // 外层 `.relative()` 是焦点列四边框的定位锚（覆盖层 `absolute().inset_0()`）。
+    div()
+        .size_full()
+        .relative()
+        .child(head)
+        .when_some(
+            is_focused.then(|| focus_border_overlay(col_ix, focus_border)),
+            |this, overlay| this.child(overlay),
+        )
+        .into_any_element()
 }

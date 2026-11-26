@@ -3024,15 +3024,17 @@ DBeaver 清空后回空态；本仓没有「无分组键」态（`group_columns`
 
 > 2026-11-27 再修正：组件排序槽已整条撤掉（改自绘真值图标，见 §9.72.3 第 4 条），
 > 上面的 20px 也随之作废——当前表头 chrome 是 **57px**（12 内距 + 16 排序槽 + 3 + 3 +
-> 19 三角槽 + 4 右偏移，见 §20.8.2）。「画左边」的结论不变，且更必要：表头自身 12px
-> 左右内距会让右边界线落在列内侧，左边界才与列边界重合。
+> 19 三角槽 + 4 右偏移，见 §20.8.2），表头格内容宽 = 列宽 − **4px**（组件 `offset_pr`，
+> `state.rs:2171-2176`，`XSmall` 档）而不再是 −20。「画左边」的结论不变，且更必要：
+> 那 4px 加上表头自身 12px 左右内距会让右边界线落在列内侧，左边界才与列边界重合。
 
 #### 8.52.3 测试口径调整
 
 - `cells_stretch_to_the_column_boundary_for_grid_lines` 追加表头断言：
   行号列表头宽 ≥ `RESULT_ROW_NUMBER_WIDTH - 4px`；数据列表头的 `left()` 比行号列表头
   右移 ≥ `RESULT_ROW_NUMBER_WIDTH - 1px`（= 表头竖线与数据区竖线同一条 x）。
-  **不能用表头格的宽度当基准**（它是 108 而不是 128，见修正 1）。
+  **不能用表头格的宽度当基准**（它是 108 而不是 128，见修正 1；2026-11-27 复核后是
+  128 − 4 = 124，那 4px 是组件 `offset_pr`，不是排序图标槽）。
 - `header_column_menu_floats_and_leaves_the_name_its_full_width`：列名实测 104 → **95**
   ——新增的 1px 左边界线画在格内部，占掉 1px 内容宽。阈值 96 → **92**（「菜单回到流内」
   时只有 80，区分力不变），并在注释里写明这一档 1px 的来由。
@@ -10707,10 +10709,24 @@ JSON 树** —— 而网格里双击进去的是行内编辑框（一整条字�
    - 列头元素间距同时从 `gap_1()` 4px 收到真值 `IMAGE_SPACING` 3px
      （`ui::RESULT_HEADER_ICON_SPACING`）。
    旧记录「改需动 vendor」**不成立**：问题不在 vendor 的尺寸常数，而在图形本身不同。
-5. **获焦列四边框**：真值 `PAINT_COLUMN_FOCUS_BORDER = true`（`GridColumnRenderer.java:52`），
-   焦点列（`grid.getFocusColumn()`）的列头格画四边框、色 `COLOR_WIDGET_NORMAL_SHADOW`
-   （`:96-104`）；非焦列只画右边界 + 底边界（`:105-109`）。本仓列头只画**左**边界
-   （`header_sep = theme.colors.border`），无焦点列判定（路径见 §:3037 / §:3202）。
+5. ~~**获焦列四边框**~~ → **已对齐（2026-11-27）**：真值 `PAINT_COLUMN_FOCUS_BORDER = true`
+   （`GridColumnRenderer.java:52`），焦点列（`grid.getFocusColumn()`）的列头格画四边框、
+   色 `COLOR_WIDGET_NORMAL_SHADOW`（`:96-104`）；非焦列只画右边界 + 底边界（`:105-109`，
+   底边由组件表头带自己画）。本仓实现：
+   - 焦点列 = 选区当前格所在列，读 delegate 自持的 `CellRange::cursor()`（`range_focus()`，
+     组件列下标与 `col_ix` 同口径）；**不能**走 `cx.entity().read(cx)` 拿
+     `TableState::selected_cell` —— `render_th` 里同实体已被 `&mut` 借出，再读撞借用；
+   - 四边框用**绝对定位覆盖层**（`grid/header.rs::focus_border_overlay`，外层 `.relative()`），
+     不用 `.border_t/b/r`：GPUI 的 border 占盒内空间，上下各 1px 会把表头文字顶偏，
+     切列时整条表头抖一下；真值也是把线描在格边界上、不挤内容；
+   - 线色取 `theme.table_active_border`（组件画单元格焦点框用的同一颗，
+     `vendor/gpui-component/src/table/state.rs:2695-2714`）。真值那颗是 SWT 系统色
+     `COLOR_WIDGET_NORMAL_SHADOW`（平台给值，dbeaver-ref 里取不到 RGB），本仓不写死色值；
+   - 行号槽不画（它不是 `GridColumn`，`getFocusColumn()` 不会指到它）。用例
+     `only_the_focused_column_gets_a_closed_header_border` 三档一起钉。
+   **残余 1px 口径**：覆盖层右边界落在「列宽 − 组件表头右内距 4px」处（`offset_pr`，
+   `state.rs:2171-2176`），这 4px 只有改 vendor 才能消掉；非焦列画左而非真值的右，
+   同一原因（见 §8.52.2 的两条订正注）。
 6. **readOnly 列头底部下划线**：真值 `:110-115` 读 `hintInfo.readOnly` 在列头底部画线；
    本仓**没有列级只读信息**（§9.47.5 的列级只读模型属等模型，见 §20.8）。
 7. **内容 inset**：真值 `LEFT/RIGHT_MARGIN = 6`、`TOP_MARGIN = 4`（`:52-53`）；本仓内容层
@@ -10950,9 +10966,12 @@ preview 重建后 `PREVIEW_STAGE=5`：`[preview] copy_column_names -> Ok(Options
 
 | 缺口 | 真值 | 本仓现状 | 定量 / 落点 |
 | --- | --- | --- | --- |
-| **获焦列四边框** | `PAINT_COLUMN_FOCUS_BORDER = true`；焦点列列头格四边框，色 `COLOR_WIDGET_NORMAL_SHADOW`（`GridColumnRenderer.java:52`、`:96-104`）；非焦列画右边界 + 底边界（`:105-109`） | 只画列**左**边界（`header_sep = theme.colors.border`），无「焦点列」判定 | 焦点列直接读 delegate 自持的当前格（`delegate.cell_range().cursor().1`）——`render_th` 里拿到的 `cx` 是 `Context<TableState<Self>>`，同实体已被 `&mut` 借出，**不能**再 `cx.entity().read(cx)`（会撞借用）。落点 `grid/header.rs` 三个返回分支；缺口已登记在 §9.72.3 第 5 条 |
 | **计算页 Copy / CopyAll** | `SpreadsheetPresentation` 计算页右键复制 | 未做 | §8.40.2 |
 | **多维数组二级展开** | `GridRowNested` 逐级可展开 | 子行不再给三角（键是 `(data_row, column)`，`delegate.rs:277`） | §9.70.5 第 5 条；要改成层级键 |
+
+**本轮已从此档移出（2026-11-27）**：获焦列四边框——原位记的落点（`delegate.cell_range().cursor().1`）
+成立，实现用的是绝对定位覆盖层而不是 `.border_*`（理由与残余 1px 口径见 §9.72.3 第 5 条），
+用例 `only_the_focused_column_gets_a_closed_header_border` 钉住。
 
 #### 20.8.2 已解决 · 原「需动 vendor」两条都是假的（2026-11-27）
 

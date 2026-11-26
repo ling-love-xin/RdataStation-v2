@@ -963,15 +963,18 @@ datetime #5CA259 / numeric #C0C0FF / string #D0D0D0）。全表见 `result-panel
 - **落点**：`grid/header.rs::render_th` 两支加 `.border_l(ui::HAIRLINE)`，色
   `theme.colors.border`（与表头底边同源，对应 DBeaver 的 `getHeaderBorder`）；`.when(col_ix > 0, …)`
   跳过首列（首列左边界就是表格左边缘）。
-- **为什么必须画左边**：表头格内容区右端被组件 `render_sort_icon` 占掉 20px
-  （`table/state.rs:1910`，图标 + 2px 内距）——实测 128px 列的表头格只有 **108px**，
-  右边界线会落在列内侧 20px。左边与列左边界重合，数据格也随之统一成 `.border_l`，
-  表头线与数据线落在同一条 x 上；行号槽不再画线（首条边界由首个数据格画）。
-- **测试口径**：表头几何断言不能用「表头格宽 = 列宽」（它是 108），改成
+- **为什么必须画左边**：表头内容区右端被组件 `offset_pr` 占掉（`table/state.rs:2171-2176`，
+  本仓 `XSmall` 档 = **4px**，不是 20px —— 那个 20px 是旧版组件排序图标槽，已于
+  2026-11-27 撤掉，见 §2.43 的订正）——右边界线会落在列内侧 4px。左边与列左边界重合，
+  数据格也随之统一成 `.border_l`，表头线与数据线落在同一条 x 上；行号槽不再画线
+  （首条边界由首个数据格画）。
+- **测试口径**：表头几何断言不能用「表头格宽 = 列宽」（它是 128 − 4），改成
   「行号列表头宽 ≥48-4」+「数据列表头左缘比行号槽右移 ≥48-1」；
   `header_column_menu_floats…` 的列名宽度 104 → 95（1px 线占内容宽），阈值 96 → 92。
-- **未做**：获焦列四边框（`TableState::selected_cell()` 在 `render_th` 里读不到，实体正被
-  `&mut` 借用，需先在 delegate 侧缓存焦点列）；只读列标记（无列级只读信息）。
+- ~~**未做**：获焦列四边框~~ → **已做（2026-11-27）**：真值 `:96-104`。原判断「`selected_cell()`
+  在 `render_th` 里读不到」是对的，出路不是缓存而是读 delegate 自持的选区
+  （`range_focus()` = `CellRange::cursor()`）。用绝对定位覆盖层画（见 `focus_border_overlay`），
+  线色 `theme.table_active_border`。仍**未做**：只读列标记（无列级只读信息）。
 - **陷阱**：`no_new_hardcoded_color_or_pixel` 会连**注释里的** `px(` 一起计——注释写
   「图标 + 2px 内距」而不是 `p(px(2.))`。
 
@@ -1037,7 +1040,8 @@ panel **262 passed** / guard **4**。
   缺席」只能在 `grid/tests.rs::selected_row_paints_a_whole_row_band` 里断言。
 - **未做**：选中色只到 20% tint（vendor `theme/schema.rs:1036-1067` 的 `clamp_alpha`
   把 `table_active` 封顶 0.2），DBeaver 是实心浅蓝；要实心须改 vendor（全局影响所有表格），
-  等拍板。`#` 槽底色、获焦列四边框仍未做（理由见 §8.54.6）。
+  等拍板。`#` 槽底色仍未做；获焦列四边框已于 2026-11-27 补上（见 §2.42 那条订正与
+  `result-panel.md` §9.72.3 第 5 条）。
 
 **验证**：`cargo check -p rds-result-panel -p rds-editor` 0 error / 0 warning；
 panel **264 passed** / guard **4**（基线 20）/ editor 测试目标 `--no-run` 通过。
@@ -3298,7 +3302,7 @@ panel **267 passed** / guard **4**（基线 21 生效）。
 - `panel/`：`mod.rs`（门面 + pub 面 re-export：`GridPayload` / `ExportCtx` / `ResultSyncInput` / `ResultPanel` / `AnalysisItem`）；`render.rs` 主 `render` 组装；`sidebars.rs` `render_vertical_bar`（左缘竖条：网格/文本/记录/上一行/下一行）/ `render_right_edge_bar`（右缘竖条，页签图标区）/ `render_right_sidebar`（横 tab 只显激活页签）/ `render_browser_tab` / `render_filter_expand_bar`（展开条：左=展开右=运行无边框）+ `sidebar_width_anim` / `next_right_edge_state` / `clamp_right_sidebar_width` / `clamp_right_sidebar_height` 纯函数 + **R5** `SidebarResizeDrag` / `render_right_sidebar_resize`（`resize_handle` 独立手柄，id `editor-result-right-sidebar-resize`，横排 Horizontal / 竖排 Vertical）；`tabs.rs` `render_value_tab`（值页工具条右段 = 位置标记 + 复制 + **保存值** `editor-result-value-save`）/ `render_stats_tab` / `render_group_tab` / `render_reference_tab`（backlog 空态）/ `render_exec_sql_tab` + **保存值** `value_payload(kind, value, row, col)`（纯函数，形态→字节+默认名）/ `ResultPanel::selected_value_payload` + `kv_row` / `fmt_stat` / `right_tab_from_index` + `panel_toolbar`（28px 页内工具条公用件，**`pub(crate)`**）/ **§2.40** `empty_page`（「工具条 + 空态正文」整页骨架）；`dialog.rs` `render_sql_dialog`（SQL 预览弹窗浮层）；`events.rs` `toggle_value_sidebar`（三态）/ `resize_right_sidebar`（拖拽改宽度 / 竖排改高度）/ **R5** `toggle_vertical_layout`（方向切换，清拖拽标记）/ `end_right_sidebar_resize` / `set_right_sidebar_width_px`/ `toggle_transpose` / `open_sql_dialog` / `close_sql_dialog`（事件路径，需 window）+ 分组页 `toggle_group_column` / `set_group_sort` / `set_group_duplicates_only` / **§2.39** `clear_group_columns` + `reorder_by` 纯函数；`lifecycle.rs` `new` / `sync`（投影同步）；`tests.rs` 尾部 `rendered_ui_elements_survive`（渲染断言防回退，见 §2.10）。
 - `ui.rs`：`RESULT_VERTICAL_BAR_WIDTH`（2.25）/ `RESULT_SIDEBAR_RIGHT_WIDTH`（20.0）+ **R5** `RESULT_SIDEBAR_RIGHT_MIN_WIDTH`（12.0 = 192px）/ `RESULT_SIDEBAR_RIGHT_MAX_WIDTH`（40.0 = 640px，均 f32，避裸 `px(`）/ **R5 方向切换** `RESULT_SIDEBAR_RIGHT_HEIGHT`（15.0 = 240px）/ `RESULT_SIDEBAR_RIGHT_MIN_HEIGHT`（8.0 = 128px）/ `RESULT_SIDEBAR_RIGHT_MAX_HEIGHT`（32.0 = 512px）/ `RESULT_STATUS_BAR_HEIGHT`（1.5）/ `RESULT_TOOLBAR_HEIGHT`（**1.875 = 30px，比标签条 2.0 矮一档**，对齐 DBeaver `3+2+20+2+3`）/ `RESULT_PANEL_TOOLBAR_HEIGHT`（**1.75 = 28px，右栏页内工具条，必须等于 vendor `toolbar.rs:242-259` XSmall 档的 `min_h_7`**）/ `RESULT_TOOLBAR_PADDING`（`px(3.)`，水平内距，对齐 DBeaver `marginWidth = 3`）/ **§2.41** `RESULT_FIT_CELL_PADDING`（12px，单元格左右内距合计 6+6）/ `RESULT_CELL_VERTICAL_PADDING`（`px(2.)`，列级 padding 的上下两份，沿用组件 XSmall 档原值）/ **§2.43** `RESULT_FIT_HEADER_ICON`（`px(12.)`，表头筛选漏斗图标宽）+ `RESULT_FIT_HEADER_CHROME`（`px(20.)`，组件排序图标槽 16 + 右侧偏移 4，自适应宽度必须计入）。
 - `ports.rs`：`ResultRequest` 全集（含 #7 / §2.9 新增变体 `RunFilterAsQuery` / `ToggleFilterExpand` / `OpenSqlDialog` / `CloseSqlDialog`；`ToggleSqlPreview` 已删）+ **§2.37** `SaveValue` 变体 / `ValuePayload { bytes, default_name }` + **§2.38/§2.39** 分组变体 `ToggleGroupColumn` / `SetGroupSort` / `SetGroupDuplicatesOnly` / `ClearGroupColumns` + `ResultActionQueue`（`request` / `set_panel` / `push` / `drain`）。
-- `grid/`：`delegate.rs` `ResultGridDelegate`（TableDelegate 主体实现 + 钩子类型 + RESULT_GRID_CONTEXT 等常量）；`cell.rs` `render_td`（**§2.41/§2.42** 单元格自带 6px 内距 + `.border_l(HAIRLINE)` 画列分隔线；行号槽不画线）/ `header.rs` `render_th`（**§2.41/§2.42** 同 6px 内距、同一左边界线基准，首列跳过；**§9.72.3 第 4 条** 自绘真值排序图标 `sort_control` + 三角槽 19px/间距 3px，不再由组件画排序图标；筛选指示为 `IconName::Funnel`）/ `sort_icon.rs`（真值三态 SVG `Icon::data()` 内嵌渲染，见 §9.72.3 第 4 条）/ `fit.rs` `fit_column` + `header_width`（**§20.8.2** 表头 chrome 57px：12 内距 + 16 排序槽 + 3 + 3 + 19 三角槽 + 4 右偏移；`measure` 为 `pub(crate)` 供用例按同口径量列名）/ `table_impl.rs` `cell_paddings`（列级 padding：上下 2px、左右 0，是竖线能落在列边界的前提）/ `menu.rs` `context_menu`（trait 方法不可分块 → 顶层自由函数 + `table_impl.rs` 薄转发）；`status.rs` `render_status_row`（三项新签名）/ `ResultToolbar` / `ResultStatus` / `ResultControls` / `ResultPane`；`text.rs` `format_cell_text` / `column_values`（按视图行序取列，跳过本地行与被删行）/ **§2.38** `column_group_keys`（原生数值分组键，回退口径必须与 `column_values` 一致）/ `group_by_for` / `group_by_columns_for`（多列逐列取原生键）/ `view_rows.rs` `text_presentation` 指纹缓存 / `stats.rs` 列统计 + `group_by_values` / `group_by_tuples` / `number_group_key` / `edit.rs` 行编辑 / `tests.rs`（全量测试迁入）。
+- `grid/`：`delegate.rs` `ResultGridDelegate`（TableDelegate 主体实现 + 钩子类型 + RESULT_GRID_CONTEXT 等常量）；`cell.rs` `render_td`（**§2.41/§2.42** 单元格自带 6px 内距 + `.border_l(HAIRLINE)` 画列分隔线；行号槽不画线）/ `header.rs` `render_th`（**§2.41/§2.42** 同 6px 内距、同一左边界线基准，首列跳过；**§9.72.3 第 4/5 条** 自绘真值排序图标 `sort_control` + 三角槽 19px/间距 3px，不再由组件画排序图标；焦点列四边框 `focus_border_overlay` 绝对定位覆盖层；筛选指示为 `IconName::Funnel`）/ `sort_icon.rs`（真值三态 SVG `Icon::data()` 内嵌渲染，见 §9.72.3 第 4 条）/ `fit.rs` `fit_column` + `header_width`（**§20.8.2** 表头 chrome 57px：12 内距 + 16 排序槽 + 3 + 3 + 19 三角槽 + 4 右偏移；`measure` 为 `pub(crate)` 供用例按同口径量列名）/ `table_impl.rs` `cell_paddings`（列级 padding：上下 2px、左右 0，是竖线能落在列边界的前提）/ `menu.rs` `context_menu`（trait 方法不可分块 → 顶层自由函数 + `table_impl.rs` 薄转发）；`status.rs` `render_status_row`（三项新签名）/ `ResultToolbar` / `ResultStatus` / `ResultControls` / `ResultPane`；`text.rs` `format_cell_text` / `column_values`（按视图行序取列，跳过本地行与被删行）/ **§2.38** `column_group_keys`（原生数值分组键，回退口径必须与 `column_values` 一致）/ `group_by_for` / `group_by_columns_for`（多列逐列取原生键）/ `view_rows.rs` `text_presentation` 指纹缓存 / `stats.rs` 列统计 + `group_by_values` / `group_by_tuples` / `number_group_key` / `edit.rs` 行编辑 / `tests.rs`（全量测试迁入）。
 - `store/`：`store.rs` `ResultStore`（按文档分槽，多结果集 sets(document) + TabBar 标签；事实档 A2 未接线）+ `entry.rs` / `fact.rs`。
 - `export/`：`mod.rs` 门面 + `formats.rs` / `encode.rs` / `table_name.rs`（editor 侧 `pub use result_panel::export::*` 通配，全 pub 面保持）。
 

@@ -4420,6 +4420,48 @@ fn header_column_menu_is_always_visible_beside_the_name(
     );
 }
 
+/// 【焦点列四边框 2026-11-27】真值 `GridColumnRenderer.java:96-104`
+/// （`PAINT_COLUMN_FOCUS_BORDER = true`）：**焦点列**表头格四边闭合，非焦点列只有一条
+/// 列分隔线（`:105-109`）。
+///
+/// 边框色宽不在 `ElementSnapshot` 里，所以这里钉的是「覆盖层挂没挂」：几何可读、
+/// 且三档一起钉——焦点列有、同排其它数据列没有、行号槽永远没有（真值的
+/// `getFocusColumn()` 只可能指向 `GridColumn`，行号槽不是）。
+#[gpui_kit::test]
+fn only_the_focused_column_gets_a_closed_header_border(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (harness, vcx) = cx.add_window_view(|window, cx| HeaderHarness {
+        state: cx.new(|cx| gpui_kit::component::table::TableState::new(grid(), window, cx)),
+    });
+
+    // 全选：delegate 的当前格被钉在「视口首行 × 首个数据列」=（0, 1），即组件列 1
+    let state = harness.read_with(vcx, |harness, _| harness.state.clone());
+    vcx.update(|_, cx| {
+        assert!(
+            state.update(cx, |state, _| state.delegate_mut().select_all_cells(0)),
+            "两列都有数据，全选应当成功（否则焦点列无从谈起）"
+        );
+    });
+    // 0.10.0 帧语义：只改状态直接 draw 读到的是上一帧，必须先 refresh
+    vcx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
+
+    assert!(
+        vcx.debug_bounds("editor-result-th-focus-1").is_some(),
+        "焦点列（组件列 1 = 首个数据列）没有画四边框"
+    );
+    assert!(
+        vcx.debug_bounds("editor-result-th-focus-2").is_none(),
+        "非焦点列也挂了焦点边框（真值只给 `getFocusColumn()` 那一列画）"
+    );
+    assert!(
+        vcx.debug_bounds("editor-result-th-focus-0").is_none(),
+        "行号槽不是 `GridColumn`，真值不会把焦点框画到它上面"
+    );
+}
+
 /// 【网格线 2026-11-17】列内距改由**单元格自己**画 6px、组件层置零（
 /// `grid/table_impl.rs::cell_paddings`）：单元格因此撑满整列宽，那条 1px 竖分隔线才落在
 /// 列边界上（DBeaver `LightGrid` 的 `linesVisible` 默认开、逐列画线，`LightGrid.java:295`
@@ -4428,8 +4470,9 @@ fn header_column_menu_is_always_visible_beside_the_name(
 /// 断言用**列宽常量**当基准：改前组件那层左右各 4px 内距会把单元格挤窄 8px（行号槽
 /// 48 → 40、数据列 128 → 120）。谁把左右内距又填回列定义里，这里立刻掉下来。
 ///
-/// 表头走同一条几何（2026-11-18 补）：表头的列边界线画在左边界（右端被排序图标槽
-/// 占 20px），所以断言收窄为「行号列表头撑满列宽」+「数据列表头从行号槽右缘开始」。
+/// 表头走同一条几何（2026-11-18 补）：表头的列边界线画在左边界（右端被组件表头右内距
+/// `offset_pr` 占 4px，见 `result-panel.md` §9.72.3 第 5 条），所以断言收窄为
+/// 「行号列表头撑满列宽」+「数据列表头从行号槽右缘开始」。
 #[gpui_kit::test]
 fn cells_stretch_to_the_column_boundary_for_grid_lines(cx: &mut gpui_kit::TestAppContext) {
     use gpui_kit::px;
@@ -4464,8 +4507,9 @@ fn cells_stretch_to_the_column_boundary_for_grid_lines(cx: &mut gpui_kit::TestAp
         cell.size.width
     );
 
-    // 表头：列边界线画在表头格的**左**边界（真值同样只给非焦点列画右 + 底边界，
-    // `GridColumnRenderer.java:105-109`；本仓右端还有三角槽，画右边会落到列内侧），
+    // 表头：列边界线画在表头格的**左**边界（真值给非焦点列画右 + 底边界，
+    // `GridColumnRenderer.java:105-109`；本仓表头内容区右端被组件 `offset_pr` 占 4px，
+    // 画右边会落到列内侧 4px，见 `result-panel.md` §9.72.3 第 5 条），
     // 所以这里钉的是「数据列表头从行号槽右缘开始」——它一偏，表头竖线就与数据区的竖线错位。
     let th0 = vcx
         .debug_bounds("editor-result-th-0")

@@ -4081,14 +4081,20 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
    点击走真值 `toggleSortOrder`（未排 → 升 → 降 → 清空）。vendor 未动；
    落点见 `result-panel.md` §9.72.3 第 4 条与 §20.8.2。
    列头元素间距同时收到真值 `IMAGE_SPACING = 3`（原 `gap_1()` 4px）。
-3. **焦点列四边框 / 只读下划线 / 内容 inset 4-6**：未做。前两项的差别在档位——焦点列四边框
-   用 `TableState::selected_cell()`（`state.rs:662`）+ `delegate.render_th` 可做；只读下划线
-   卡列级只读模型（`result-panel.md` §20.8）；内容 inset 横向已是 `px(6)`。
-4. **列头右键的组**：落 `筛选▸` / `排序▸` / `面板▸` / `列操作▸`（本仓无 `导航` / `编辑` /
+3. ~~**焦点列四边框**~~ → **已对齐（2026-11-27）**：真值 `GridColumnRenderer.java:96-104`
+   （`PAINT_COLUMN_FOCUS_BORDER`），焦点列列头格四边闭合、色 `COLOR_WIDGET_NORMAL_SHADOW`。
+   本仓用绝对定位覆盖层画（不挤内容；`.border_*` 会占盒内 1px 让文字抖），焦点列取自
+   delegate 的选区当前格（**不是** `TableState::selected_cell()`——`render_th` 的 `cx` 同实体
+   已借出，读它会撞借用），线色用 `theme.table_active_border`。用例
+   `only_the_focused_column_gets_a_closed_header_border` 钉住。残余 1px 口径（右边界落在
+   列宽 − 组件 4px 内距）见 `result-panel.md` §9.72.3 第 5 条。
+4. **readOnly 列头下划线**：未做，卡列级只读模型（`result-panel.md` §20.8）；
+   **内容 inset 横向**已是 `px(6)`。
+5. **列头右键的组**：落 `筛选▸` / `排序▸` / `面板▸` / `列操作▸`（本仓无 `导航` / `编辑` /
    `呈现格式` / `逻辑结构` / `布局` / `导出` / `打开方式` 的列级能力）。`面板▸` 2026-11-27 补上，
    与数据格右键共用注入的构造器（同一份 `fillPanelsMenu()`），排在「排序」之后
    （`ColumnMenuPlan.panels_at`）。
-5. **`复制列名` 不带引号**：真值走 `getQuotedIdentifier`（按方言加引号），本仓复制裸名
+6. **`复制列名` 不带引号**：真值走 `getQuotedIdentifier`（按方言加引号），本仓复制裸名
    （网格不持有方言）。
 
 细节见 `docs/architecture/editor/result-panel.md` §9.72。
