@@ -140,6 +140,12 @@ struct InstanceState {
     conn_alias: HashMap<String, (String, crate::duckdb::accel::AccelKind)>,
     mounts: MountRegistry,
     temps: Vec<TempEntry>,
+    /// 被用户"卸掉"的底座别名（**只是遮蔽，不 DETACH**）。
+    ///
+    /// `ATTACH` 是实例级事实，摘掉会让别的会话当场报 catalog 不存在；所以"卸载底座"
+    /// 落成这张名单：面板不再列它、以及它里面的表。边界要说清——**显式限定名
+    /// `analytics.x` 仍可达**（会话级遮蔽挡不住裸限定名，DuckDB 侧也没有这个开关）。
+    hidden_bases: Vec<String>,
     next_session: u64,
 }
 
@@ -313,6 +319,7 @@ impl AnalysisInstance {
                 conn_alias: HashMap::new(),
                 mounts: MountRegistry::default(),
                 temps: Vec::new(),
+                hidden_bases: Vec::new(),
                 next_session: 0,
             }),
             timeout_ms: AtomicU64::new(timeout.as_millis().max(0) as u64),
@@ -363,6 +370,56 @@ impl AnalysisInstance {
             }
         }
         super::federation::session::attach_bases(&conn)
+    }
+
+    /// 会话视角下"卸掉"一个底座：**只记遮蔽，不 DETACH**。
+    ///
+    /// 为什么不 DETACH：`ATTACH` 是实例级事实，摘掉会让别的会话当场报 catalog 不存在
+    /// （底座是"一直踩着的地基"）。遮蔽挡住的是**面板视图**：底座行与它里面的表不再列出。
+    /// 边界（必须说清，不装完整）：显式限定名 `analytics.表` **仍然可达**——会话级遮蔽
+    /// 挡不住裸限定名，DuckDB 侧也没有这个开关。
+    ///
+    /// 只认 [`federation::session::bases`] 里的别名；其余别名（尤其源）一律拒：
+    /// 源的卸载有它自己那条链（`unmount_conn` / `DETACH`），两条不能混。
+    pub fn hide_base(&self, alias: &str) -> Result<(), String> {
+        if !super::federation::session::bases()
+            .iter()
+            .any(|base| base.alias == alias)
+        {
+            return Err(format!("{alias} 不是执行面底座，不能按底座卸载"));
+        }
+        let Ok(mut state) = self.state.lock() else {
+            return Err("分析实例状态锁不可用".to_string());
+        };
+        if !state.hidden_bases.iter().any(|hidden| hidden == alias) {
+            state.hidden_bases.push(alias.to_string());
+        }
+        Ok(())
+    }
+
+    /// 把"卸掉"的底座挂回（只清遮蔽；`ATTACH` 本来就没动过）。
+    pub fn show_base(&self, alias: &str) -> Result<(), String> {
+        let Ok(mut state) = self.state.lock() else {
+            return Err("分析实例状态锁不可用".to_string());
+        };
+        state.hidden_bases.retain(|hidden| hidden != alias);
+        Ok(())
+    }
+
+    /// 当前被遮蔽的底座别名（面板据此不列底座行、也不列它里面的表）。
+    pub fn hidden_bases(&self) -> Vec<String> {
+        self.state
+            .lock()
+            .map(|state| state.hidden_bases.clone())
+            .unwrap_or_default()
+    }
+
+    /// 这个底座此刻在面板/会话视角里可见吗（`false` = 用户卸掉了）。
+    pub fn base_visible(&self, alias: &str) -> bool {
+        !self
+            .hidden_bases()
+            .iter()
+            .any(|hidden| hidden == alias)
     }
 
     /// 确保一台库以**底座**身份挂在实例上（`ATTACH ... READ_ONLY`）。

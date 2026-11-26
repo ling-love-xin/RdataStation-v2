@@ -1345,6 +1345,35 @@ impl DataObjectsTab {
                         }),
                     )
                 }
+                Some(data_objects::SourceAction::ToggleBase { alias, hidden }) => {
+                    let entity = entity.clone();
+                    let alias = alias.clone();
+                    let hidden = *hidden;
+                    Some(
+                        Button::new(SharedString::from(format!(
+                            "data-object-base-{}",
+                            object.key
+                        )))
+                        .ghost()
+                        .label(if hidden { tr("挂回") } else { tr("卸载") })
+                        .on_click(move |_, window, cx| {
+                            // 只改会话视角的遮蔽（`hide_base` 不 DETACH）：摘 ATTACH 会让别的
+                            // 会话当场报 catalog 不存在。改完重取一次面板数据，表段跟着变空 / 变回来
+                            if let Some(instance) = engine::duckdb::instance::current() {
+                                let outcome = if hidden {
+                                    instance.show_base(&alias)
+                                } else {
+                                    instance.hide_base(&alias)
+                                };
+                                if let Err(reason) = outcome {
+                                    tracing::warn!("底座 {alias} 切换失败：{reason}");
+                                }
+                            }
+                            entity.update(cx, |tab, cx| tab.refresh(cx));
+                            window.refresh();
+                        }),
+                    )
+                }
                 None => None,
             };
             // 会话行的动作（重挂 / 设主源 / 关会话）后端已有，界面不发明。

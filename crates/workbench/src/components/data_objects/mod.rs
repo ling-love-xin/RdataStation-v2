@@ -253,6 +253,16 @@ pub enum SourceAction {
         path: Option<String>,
         mounted: bool,
     },
+    /// 底座那一格的「卸载 / 挂回」：**只记遮蔽，不 `DETACH`**。
+    ///
+    /// `ATTACH` 是实例级事实，摘掉会让别的会话当场报 catalog 不存在；所以"卸载"落成
+    /// 会话视角的遮蔽（`AnalysisInstance::hide_base`）：面板不再列底座里面的表，
+    /// 但底座行还留着（文案「已卸载」，动作位给「挂回」）。
+    /// `hidden = true` = 当前被遮蔽。
+    ToggleBase {
+        alias: String,
+        hidden: bool,
+    },
 }
 
 impl Group {
@@ -480,6 +490,11 @@ pub struct Collected {
     /// 只存**项目级**意图；会话级加源不写库（切项目即清，写进去只会留假记录）。
     /// 老连接（只有 `use_duckdb_fed` 标记、还没写进新表）由 [`ConnRow::registered`] 兜着。
     pub registered_sources: Vec<engine::persistence::analysis_sources::AnalysisSourceRow>,
+    /// 被用户"卸掉"的底座别名（`analytics` / `rds_global`；见 `AnalysisInstance::hidden_bases`）。
+    ///
+    /// 遮蔽只改**面板视图**：底座行仍列（带「挂回」动作），它里面的表不再列。`ATTACH` 没动，
+    /// 显式限定名 `analytics.表` 仍可达——这一条要写进界面文案，不能假装它真被摘掉了。
+    pub hidden_bases: Vec<String>,
 }
 
 impl Collected {
@@ -499,6 +514,7 @@ impl Collected {
             session_sources: Vec::new(),
             accel_sources: Vec::new(),
             registered_sources: Vec::new(),
+            hidden_bases: Vec::new(),
         }
     }
 }
@@ -558,31 +574,44 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
         });
     }
 
-    // 分析底座（`analytics` / `rds_global`）：常驻挂载、**不允许卸载**（铁律第 42 条），
-    // 所以不给动作位；但必须在源段可见——用户要能确认"归档表 / 全局库已经在联邦里"，
-    // 而不是切到联邦后凭记忆猜。路径由宿主发布（`analysis_bases::sync`），面板不查盘。
-    // 排在会话之后：会话是"这次挂上的"，底座是"一直踩着的地基"。
+    // 分析底座（`analytics` / `rds_global`）：**默认挂、可人为卸**（2026-11-27 口径）。
+    // 卸 = 会话视角遮蔽（不 `DETACH`，见 `AnalysisInstance::hide_base`）：行还在，标「已卸载」，
+    // 动作位给「挂回」；它里面的表在表段不再列。路径由宿主发布（`analysis_bases::sync`），
+    // 面板不查盘。排在会话之后：会话是"这次挂上的"，底座是"一直踩着的地基"。
     for base in engine::duckdb::federation::session::bases() {
         let global = base.alias == engine::duckdb::federation::session::GLOBAL_BASE_ALIAS;
+        let hidden = collected
+            .hidden_bases
+            .iter()
+            .any(|alias| alias == &base.alias);
         out.push(Object {
             key: format!("base:{}", base.alias),
             name: base.alias.clone(),
-            note: if global {
+            note: if hidden {
+                // 遮蔽的边界必须写在行上：显式限定名仍可达，不能装作它真被摘掉了
+                "已卸载 · 表段不再列它（显式限定名仍可达）".to_string()
+            } else if global {
                 "全局分析库 · 只读挂载".to_string()
             } else {
                 format!("项目分析库 · {}", base.path)
             },
             channel: Channel::Federated,
             life: Life::Project,
-            state: State::Ready,
+            state: if hidden {
+                State::Failed("已卸载 · 会话视角遮蔽（ATTACH 未动）".to_string())
+            } else {
+                State::Ready
+            },
             group: Group::Source,
             // 静态串（`Object.pill` 是 `&'static str`）：不临时拼
             pill: "底座",
             version: None,
             sql_ref: None,
-            // 底座不允许卸载：行尾没有动作位
             expand_via: None,
-            source_action: None,
+            source_action: Some(SourceAction::ToggleBase {
+                alias: base.alias.clone(),
+                hidden,
+            }),
         });
     }
 
@@ -739,12 +768,37 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
     // 资产·表型的本体也在这一个库里（`information_schema` 会把它们一起列出）：
     // 不排除的话同一张表出两行，其中一行还会错标「项目自建」——它们只从资产行进
     // （pill「资产」、只读、带版本），归属由 M6 登记说了算
-    let asset_tables: Vec<String> = collected
-        .assets
+    // 底座被卸掉 = 它里面的表在面板里就该是空的（用户口径"卸了就空"）。先把来源清单
+    // 清空，比在四个循环里各加一个 if 好维护：下面表段 / 资产段的判断照旧走同一份代码。
+    let analytics_hidden = collected
+        .hidden_bases
+        .iter()
+        .any(|alias| alias == engine::duckdb::federation::session::PROJECT_BASE_ALIAS);
+    let global_hidden = collected
+        .hidden_bases
+        .iter()
+        .any(|alias| alias == engine::duckdb::federation::session::GLOBAL_BASE_ALIAS);
+    let no_tables: Vec<String> = Vec::new();
+    let analysis_tables: &[String] = if analytics_hidden {
+        &no_tables
+    } else {
+        &collected.analysis_tables
+    };
+    let global_tables: &[String] = if global_hidden {
+        &no_tables
+    } else {
+        &collected.global_tables
+    };
+    let assets: &[AssetRow] = if analytics_hidden {
+        &[]
+    } else {
+        &collected.assets
+    };
+    let asset_tables: Vec<String> = assets
         .iter()
         .filter_map(|asset| asset.analytics_table.clone())
         .collect();
-    let (own, persistent) = split_persistent_tables(&collected.analysis_tables);
+    let (own, persistent) = split_persistent_tables(analysis_tables);
     let own = own
         .into_iter()
         .filter(|name| !asset_tables.contains(name))
@@ -792,7 +846,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
     // 资产按**本体形态**分派（2026-11-18 口径：资产对象全部进面板）：
     // 表型本体在项目分析库里 → 持久表段；文件型本体在 `resources/` → 文件段。
     // pill 都是「资产」，行上标注只读 + 最新版本
-    for asset in &collected.assets {
+    for asset in assets {
         // 铁律 D 组第 14 条：非结构化文件（sql / py / md…）不是数据，不进文件段。
         // 表型资产不受这条限制（本体是库里的表，不是文件）。
         if asset.analytics_table.is_none() && !file_asset_is_analytic(asset) {
@@ -845,7 +899,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
         });
     }
 
-    for name in &collected.global_tables {
+    for name in global_tables {
         out.push(Object {
             key: format!("global:{name}"),
             name: name.clone(),
@@ -1648,6 +1702,10 @@ pub fn collect(shared: &Shared) -> Collected {
         session_sources,
         accel_sources,
         registered_sources,
+        // 底座遮蔽名单直读实例（"卸底座"是实例级记录，不是面板本地状态）
+        hidden_bases: engine::duckdb::instance::current()
+            .map(|instance| instance.hidden_bases())
+            .unwrap_or_default(),
     }
 }
 
@@ -1737,7 +1795,33 @@ mod tests {
                 Some("C_mysql_9"),
                 "mysql_src",
             )],
+            // 常态：底座都还挂着（面板底座行与表段都列）
+            hidden_bases: Vec::new(),
         }
+    }
+
+    /// 卸掉项目底座 = 它里面的表在面板里就空（用户口径"卸了就空"）；
+    /// 全局那格没卸，`G_*` 照列——两格各自独立，不能一刀切。
+    #[test]
+    fn hiding_a_base_empties_its_table_rows() {
+        let mut collected = sample();
+        collected.hidden_bases = vec!["analytics".to_string()];
+        let rows = objects(&collected);
+        assert!(
+            !rows.iter().any(|row| row.key.starts_with("project:")
+                || row.key.starts_with("persistent:")),
+            "项目底座卸了，它里面的表不该再列：{:?}",
+            rows.iter().map(|row| row.key.as_str()).collect::<Vec<_>>()
+        );
+        assert!(
+            rows.iter().any(|row| row.key.starts_with("global:")),
+            "全局底座没卸，G_* 照列"
+        );
+        // 结果集/载入是实例资源，不随底座走
+        assert!(
+            rows.iter().any(|row| row.key.starts_with("result:")),
+            "结果集不受底座遮蔽影响"
+        );
     }
 
     /// 分组顺序是「越靠上越正在用」：源在最前，文件在最后。
