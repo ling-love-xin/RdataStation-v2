@@ -476,8 +476,8 @@ pub struct Collected {
     pub result_sets: Vec<String>,
     /// 「载入内存」的源表副本（`tmp_l_*`，会话级；铁律第 12/35 条）
     pub loaded_tables: Vec<String>,
-    /// 「加源」加载进进程单例的文件视图：`(视图名, 原路径)`。视图不物化，
-    /// 所以这里只记名字与出处，面板按它列行
+    /// 进程单例里加载进来的文件（视图与库文件都算）：`(别名, 原路径)`。
+    /// 来源是 engine 的文件索引（不是面板自记的一份）；视图不物化，所以只记名字与出处。
     pub loaded_files: Vec<(String, String)>,
     /// 资产清单（由资产面板的已载行填；空 = 资产面板还没载过）
     pub assets: Vec<AssetRow>,
@@ -639,7 +639,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
     // 源不会从清单里"蒸发"——行上写「未连接」，不给展开、不给选用。
     //
     // 文件库（sqlite / duckdb）还多一档：连上了但**没挂进分析实例**。本体路径不在
-    // `loaded_files` 里就说明没挂——同样不给展开（没有表可列），只给「挂载」。
+    // 文件索引里就说明没挂——同样不给展开（没有表可列），只给「挂载」。
     // 挂没挂由路径判（见 [`unmounted_file_sources`]），不看连接状态：驱动能连上 ≠ 已 ATTACH。
     //
     // 网络连接同理（铁律 B 组第 4 条 + H 组第 37 条）：挂进分析实例的唯一凭据是**加速会话**
@@ -682,7 +682,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             .accel_sources
             .iter()
             .any(|source| source.owner == conn.id);
-        // 挂载事实：连上了 + 真挂进实例（文件库看 `loaded_files` 里有没有这个路径；
+        // 挂载事实：连上了 + 真挂进实例（文件库看文件索引里有没有这个路径；
         // 网络连接认**联邦 / 分析会话**，或**本地加速档**——两者都算「已挂载」）。
         let mounted = connected
             && not_mounted.is_none()
@@ -1457,7 +1457,7 @@ fn same_file(left: &str, right: &str) -> bool {
 
 /// 源清单里「注册成分析源、但**还没挂进分析实例**」的文件库行：`(行 key, 本体路径)`。
 ///
-/// 挂没挂的判据只有一条：这个路径在不在 `loaded_files` 里（加源 / 挂载都会写这一份）。
+/// 挂没挂的判据只有一条：这个路径在不在文件索引里（engine 的 global 入口单点记账）。
 /// 没挂的源不可展开（铁律 B 组第 4 条）——面板据此把 chevron 换空位、只给「挂载」。
 pub fn unmounted_file_sources(collected: &Collected) -> Vec<(String, String)> {
     file_source_rows(collected, false)
@@ -1729,7 +1729,7 @@ pub fn collect(shared: &Shared) -> Collected {
         global_tables,
         result_sets,
         loaded_tables,
-        loaded_files: shared.loaded_files.borrow().clone(),
+        loaded_files: engine::duckdb::file_view::file_entries(),
         assets: Vec::new(),
         session_sources,
         accel_sources,

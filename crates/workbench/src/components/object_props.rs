@@ -51,14 +51,12 @@ pub fn open_object_props(shared: Shared, object: Object, window: &mut Window, cx
     if let Some(note) = Some(object.note.as_str()).filter(|n| !n.trim().is_empty()) {
         rows.push(("副标题".to_string(), note.to_string()));
     }
-    // 文件型（`f_*` 视图）：把本体路径从会话清单里取出来一次性写进来
+    // 文件型（`f_*` 视图）：把本体路径从文件索引里取出来一次性写进来
     if let Some(alias) = data_objects::fileview_alias(&object.key) {
-        let path = shared
-            .loaded_files
-            .borrow()
-            .iter()
+        let path = engine::duckdb::file_view::file_entries()
+            .into_iter()
             .find(|(seen, _)| seen == &alias)
-            .map(|(_, path)| path.clone());
+            .map(|(_, path)| path);
         rows.push((
             "本体文件".to_string(),
             path.unwrap_or_else(|| format!("{alias}（会话清单里已没有它）")),

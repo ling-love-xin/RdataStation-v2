@@ -200,10 +200,7 @@ fn confirm(
         };
         match loaded {
             Ok((alias, how)) => {
-                // 同名重建是覆盖（视图覆盖 / 重挂），清单里也只留一条（路径换成最新的那份）
-                let mut list = shared.loaded_files.borrow_mut();
-                list.retain(|(seen, _)| seen != &alias);
-                list.push((alias.clone(), text.to_string()));
+                // 索引由 `file_view` 的 global 入口单点记账（同名重建即覆盖），这里不另记一份
                 notes.push(format!("{alias}（{how}）← {shown}"));
             }
             Err(error) => failed.push(format!("{shown}：{error}")),
@@ -292,8 +289,8 @@ fn mark_connections(shared: &Shared, conn_ids: &[String]) -> Result<Vec<String>,
 
 /// 把**一个**文件库（`.duckdb` / `.sqlite`）挂进分析实例（源段右键「挂载」）。
 ///
-/// 与「加源」的文件线同一条路径（`load_database_global` → ATTACH 成 catalog → 写进
-/// `loaded_files` → 重取清单），区别只在入口：加源要开对话框选文件，挂载是源行上
+/// 与「加源」的文件线同一条路径（`load_database_global` → ATTACH 成 catalog → 记进
+/// 文件索引 → 重取清单），区别只在入口：加源要开对话框选文件，挂载是源行上
 /// 已经知道路径（注册成分析源的那条连接登记的本体文件）。
 ///
 /// 挂上之后源段会多出一行「文件库」，原 conn 行不再是失效态——两边都指向**同一个**
@@ -301,11 +298,6 @@ fn mark_connections(shared: &Shared, conn_ids: &[String]) -> Result<Vec<String>,
 pub fn mount_file_database(shared: &Shared, path_text: &str, cx: &mut App) {
     match engine::duckdb::file_view::load_database_global(path_text) {
         Ok(alias) => {
-            let mut list = shared.loaded_files.borrow_mut();
-            // 同名重挂是覆盖：清单里只留最新那份路径
-            list.retain(|(seen, _)| seen != &alias);
-            list.push((alias.clone(), path_text.to_string()));
-            drop(list);
             let collected = data_objects::collect(shared);
             *shared.data_objects.borrow_mut() = data_objects::objects(&collected);
             // 与加源同一步：递增清单版本号，面板/工作集据此重取（不各自猜）
@@ -324,10 +316,6 @@ pub fn unmount_file_database(shared: &Shared, path_text: &str, cx: &mut App) {
     let alias = engine::duckdb::file_view::alias_for(path_text);
     match engine::duckdb::file_view::detach_database_global(&alias) {
         Ok(()) => {
-            shared
-                .loaded_files
-                .borrow_mut()
-                .retain(|(seen, _)| seen != &alias);
             let collected = data_objects::collect(shared);
             *shared.data_objects.borrow_mut() = data_objects::objects(&collected);
             shared.mark_data_objects_dirty(cx);
@@ -395,10 +383,6 @@ pub fn analyze_asset_version(
     };
     match outcome {
         Ok(()) => {
-            let mut list = shared.loaded_files.borrow_mut();
-            list.retain(|(seen, _)| seen != &alias);
-            list.push((alias.clone(), path_text.to_string()));
-            drop(list);
             let collected = data_objects::collect(shared);
             *shared.data_objects.borrow_mut() = data_objects::objects(&collected);
             shared.mark_data_objects_dirty(cx);

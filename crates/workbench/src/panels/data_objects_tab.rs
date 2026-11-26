@@ -124,7 +124,7 @@ pub struct DataObjectsTab {
     /// 源段里「文件库已经挂上」的行（行 key → 本体路径）：右键「卸载 / 重新挂载」用这一份
     mounted_sources: Vec<(String, String)>,
     /// 网络连接里「连上了、但没挂进实例」的行（连接 id）：右键「挂载」用这一份。
-    /// 与文件库那条线分开：网络连接判的是加速会话，不是 `loaded_files` 路径。
+    /// 与文件库那条线分开：网络连接判的是加速会话，不是文件索引里的路径。
     unmounted_network: Vec<String>,
     /// 网络连接里「加速会话在」的行（连接 id）：右键「卸载」用这一份
     mounted_network: Vec<String>,
@@ -390,7 +390,7 @@ impl DataObjectsTab {
         self.unmounted_sources = data_objects::unmounted_file_sources(&collected);
         // 已挂的那几行：右键给「卸载 / 重新挂载」（同一份判据，反过来取）
         self.mounted_sources = data_objects::mounted_file_sources(&collected);
-        // 网络连接那条线：判据是加速会话（与文件库的 `loaded_files` 路径互不相干）
+        // 网络连接那条线：判据是加速会话（与文件库的文件索引互不相干）
         self.mounted_network = collected
             .accel_sources
             .iter()
@@ -484,7 +484,7 @@ impl DataObjectsTab {
             return;
         };
         // 连接行要的两样宿主信息（`Shared` 不能跨线程，先在 UI 线程取出来）：
-        // - 已挂载的文件库本体路径：文件库的叶子靠它算 ATTACH 别名（挂没挂看 `loaded_files`）
+        // - 已挂载的文件库本体路径：文件库的叶子靠它算 ATTACH 别名（挂没挂看文件索引）
         // - 行上的名字：列举失败时用人名报错，不把 `conn:C_xxx` 甩给用户
         let mounted_file = self
             .mounted_sources
@@ -1881,12 +1881,10 @@ impl DataObjectsTab {
                                 let snapshot = shared.clone();
                                 menu = menu.item(PopupMenuItem::new("存为快照").on_click(
                                     move |_, _, cx| {
-                                        let path = snapshot
-                                            .loaded_files
-                                            .borrow()
-                                            .iter()
+                                        let path = engine::duckdb::file_view::file_entries()
+                                            .into_iter()
                                             .find(|(seen, _)| seen == &alias)
-                                            .map(|(_, path)| path.clone());
+                                            .map(|(_, path)| path);
                                         match path {
                                             Some(path) => {
                                                 archive_file_as_snapshot(&snapshot, &path, cx)

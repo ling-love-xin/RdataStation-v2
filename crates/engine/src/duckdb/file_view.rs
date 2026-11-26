@@ -12,40 +12,86 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::CoreError;
 
-/// 「别名 → 库文件路径」索引：`duckdb_databases()` 只说别名，说不出源路径。
-///
-/// 这是**唯一**一处由我们自己维护的挂载冗余，写入口只有两个方向：
-/// [`load_database_global`] / [`load_database_as_global`] 成功后记账，
-/// [`detach_database_global`] 成功后抹掉；其他任何地方一律只读。
-///
-/// 不放进 `load_database` / `detach_database`：那两个吃的是调用方给的连接（可能是
-/// 临时连接，例如「用 vN 分析」或测试），记进进程索引会把别人的挂载算到本进程头上。
-static CATALOG_FILE_INDEX: OnceLock<Mutex<Vec<(String, String)>>> = OnceLock::new();
-
-fn catalog_file_index() -> &'static Mutex<Vec<(String, String)>> {
-    CATALOG_FILE_INDEX.get_or_init(|| Mutex::new(Vec::new()))
+/// 加载进来的文件：数据文件建出来的是 `f_*` 视图，数据库文件 ATTACH 成 catalog。
+/// 两者都钉着绝对路径，面板要按路径回答"这一行是哪个文件"。
+struct FileEntry {
+    alias: String,
+    path: String,
+    /// `true` = ATTACH 进来的 catalog；`false` = 建出来的视图
+    catalog: bool,
 }
 
-/// 记一条（同名覆盖：`load_database_as` 本身就是覆盖语义）
-fn note_catalog_file(alias: &str, path: &str) {
-    let Ok(mut index) = catalog_file_index().lock() else {
+/// 「别名 → 原路径」的**唯一**索引。
+///
+/// `duckdb_databases()` 只说别名、说不出源路径，文件视图连别名都要自己记——所以这份
+/// 冗余是必须的。但写入口收敛到 global 入口与清场口，别处一律只读：
+///
+/// - `load_file_global` / `load_file_as_global` 成功后记账（视图）；
+/// - `load_database_global` / `load_database_as_global` 成功后记账（catalog）；
+/// - `detach_database_global` 成功后忘掉；
+/// - `clear_file_views` 每真删掉一条视图就忘掉对应别名。
+///
+/// 不放进吃调用方连接的 `load_file` / `load_database` / `detach_database`：那些可能跑在
+/// 临时连接上（测试、「用 vN 分析」），记进进程索引会把别人的挂载算到本进程头上。
+static FILE_INDEX: OnceLock<Mutex<Vec<FileEntry>>> = OnceLock::new();
+
+fn file_index() -> &'static Mutex<Vec<FileEntry>> {
+    FILE_INDEX.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// 记一条（同名覆盖：`load_*_as` 本身是覆盖语义，同一别名只留最新那份路径）
+fn note_file_entry(alias: &str, path: &str, catalog: bool) {
+    let Ok(mut index) = file_index().lock() else {
         return;
     };
-    index.retain(|(seen, _)| seen != alias);
-    index.push((alias.to_string(), path.to_string()));
+    index.retain(|entry| entry.alias != alias);
+    index.push(FileEntry {
+        alias: alias.to_string(),
+        path: path.to_string(),
+        catalog,
+    });
 }
 
-fn forget_catalog_file(alias: &str) {
-    if let Ok(mut index) = catalog_file_index().lock() {
-        index.retain(|(seen, _)| seen != alias);
+fn forget_file_entry(alias: &str) {
+    if let Ok(mut index) = file_index().lock() {
+        index.retain(|entry| entry.alias != alias);
     }
 }
 
-/// 此刻本进程挂着的库文件（别名 → 原路径）。纯内存读，供 catalog 快照与面板使用。
-pub fn catalog_files_snapshot() -> Vec<(String, String)> {
-    catalog_file_index()
+/// 此刻本进程加载进来的全部文件（视图与 catalog 都算）：`(别名, 原路径)`。
+///
+/// 面板按 `is_database_file(path)` 分流：库文件进源段、数据文件进文件段。
+pub fn file_entries() -> Vec<(String, String)> {
+    file_index()
         .lock()
-        .map(|index| index.clone())
+        .map(|index| {
+            index
+                .iter()
+                .map(|entry| (entry.alias.clone(), entry.path.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 只数文件视图（面板指纹用：纯计数，不克隆路径）
+pub fn file_view_count() -> usize {
+    file_index()
+        .lock()
+        .map(|index| index.iter().filter(|entry| !entry.catalog).count())
+        .unwrap_or_default()
+}
+
+/// 只取 catalog 那一半（catalog 快照用）
+pub fn catalog_files_snapshot() -> Vec<(String, String)> {
+    file_index()
+        .lock()
+        .map(|index| {
+            index
+                .iter()
+                .filter(|entry| entry.catalog)
+                .map(|entry| (entry.alias.clone(), entry.path.clone()))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -120,7 +166,10 @@ pub fn clear_file_views(conn: &Connection) -> Result<usize, CoreError> {
         let quoted = name.replace('"', "\"\"");
         // 单条失败不该挡住其余视图（一张坏了不能连坐整个清场口），记一笔继续
         match conn.execute_batch(&format!("DROP VIEW IF EXISTS \"{quoted}\"")) {
-            Ok(()) => cleared += 1,
+            Ok(()) => {
+                forget_file_entry(&name);
+                cleared += 1;
+            }
             Err(error) => tracing::warn!("[duckdb] 删文件视图 {name} 失败: {error}"),
         }
     }
@@ -147,7 +196,9 @@ pub fn load_file_global(path: &str) -> Result<String, CoreError> {
     let conn = crate::duckdb::manager::DuckDBManager::global()
         .lock()
         .map_err(|_| CoreError::common(CommonError::General("内存库连接锁被污染".to_string())))?;
-    load_file(&conn, path)
+    let alias = load_file(&conn, path)?;
+    note_file_entry(&alias, path, false);
+    Ok(alias)
 }
 
 /// 用**指定别名**把文件挂成视图（历史版本「用 vN 分析」用）。
@@ -167,7 +218,9 @@ pub fn load_file_as_global(path: &str, alias: &str) -> Result<(), CoreError> {
     let conn = crate::duckdb::manager::DuckDBManager::global()
         .lock()
         .map_err(|_| CoreError::common(CommonError::General("内存库连接锁被污染".to_string())))?;
-    load_file_as(&conn, path, alias)
+    load_file_as(&conn, path, alias)?;
+    note_file_entry(alias, path, false);
+    Ok(())
 }
 
 /// 是不是**数据库文件**（`.duckdb` / `.sqlite`）：这类不走 reader 建视图，走
@@ -238,7 +291,7 @@ pub fn load_database_as_global(path: &str, alias: &str) -> Result<(), CoreError>
         .lock()
         .map_err(|_| CoreError::common(CommonError::General("内存库连接锁被污染".to_string())))?;
     load_database_as(&conn, path, alias)?;
-    note_catalog_file(alias, path);
+    note_file_entry(alias, path, true);
     Ok(())
 }
 
@@ -248,7 +301,7 @@ pub fn load_database_global(path: &str) -> Result<String, CoreError> {
         .lock()
         .map_err(|_| CoreError::common(CommonError::General("内存库连接锁被污染".to_string())))?;
     let alias = load_database(&conn, path)?;
-    note_catalog_file(&alias, path);
+    note_file_entry(&alias, path, true);
     Ok(alias)
 }
 
@@ -272,7 +325,7 @@ pub fn detach_database_global(alias: &str) -> Result<(), CoreError> {
         .lock()
         .map_err(|_| CoreError::common(CommonError::General("内存库连接锁被污染".to_string())))?;
     detach_database(&conn, alias)?;
-    forget_catalog_file(alias);
+    forget_file_entry(alias);
     Ok(())
 }
 

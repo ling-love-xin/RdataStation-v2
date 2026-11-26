@@ -8,16 +8,14 @@ use connection_dialog::host::ConnectionDialogHost as _;
 
 /// 数据对象清单的**指纹**：任一维变化都说明清单可能过期。
 ///
-/// 刻意只放「便宜且稳定」的维度：比较在后台泵里做，取两个计数 + 读几份内存快照，
+/// 刻意只放「便宜且稳定」的维度：比较在后台泵里做，取一个计数 + 读几份内存快照，
 /// 不含任何读盘 / 打开库文件（那些留给面板自己 refresh 时做一次）。
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct DataObjectsSignature {
     /// 进程单例里的结果集（`tmp_q_`）个数
     result_sets: usize,
-    /// 洞察样本（`tmp_i_`）个数（不进清单，但会随「留到项目库」变持久表）
-    insight_samples: usize,
-    /// 「加源」加载过的文件视图个数
-    loaded_files: usize,
+    /// 「加源」加载过的文件视图个数（catalog 不算：库文件进出由路径维承担）
+    file_views: usize,
     /// 已连接的连接个数（源库表段的行数）
     connected: usize,
     /// 资产行个数
@@ -28,12 +26,11 @@ pub(crate) struct DataObjectsSignature {
 
 impl WorkbenchView {
     /// 清单一共能在哪些地方过期：把**当前现实**拍成一个指纹（主线程，纯读内存）。
-    fn data_objects_signature(&self, engine_counts: (usize, usize)) -> DataObjectsSignature {
+    fn data_objects_signature(&self, result_sets: usize) -> DataObjectsSignature {
         let shared = &self.shared;
         DataObjectsSignature {
-            result_sets: engine_counts.0,
-            insight_samples: engine_counts.1,
-            loaded_files: shared.loaded_files.borrow().len(),
+            result_sets,
+            file_views: engine::duckdb::file_view::file_view_count(),
             connected: shared
                 .connections
                 .borrow()
@@ -68,17 +65,12 @@ impl WorkbenchView {
             loop {
                 executor.timer(std::time::Duration::from_millis(1000)).await;
                 // 后台线程：两次 information_schema 查询（内存库，毫秒级）
-                let counts = (
-                    engine::analysis::result_set::list_result_sets()
-                        .map(|sets| sets.len())
-                        .unwrap_or_default(),
-                    engine::analysis::result_set::list_insight_samples()
-                        .map(|sets| sets.len())
-                        .unwrap_or_default(),
-                );
+                let result_sets = engine::analysis::result_set::list_result_sets()
+                    .map(|sets| sets.len())
+                    .unwrap_or_default();
                 let alive = weak
                     .update(cx, |this, cx| {
-                        let signature = this.data_objects_signature(counts);
+                        let signature = this.data_objects_signature(result_sets);
                         if this.data_objects_sig.as_ref() == Some(&signature) {
                             return;
                         }
