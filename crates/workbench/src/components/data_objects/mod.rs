@@ -501,13 +501,9 @@ impl Collected {
 pub fn objects(collected: &Collected) -> Vec<Object> {
     let mut out = Vec::new();
 
-    // 登记侧的三把索引：按连接 id / 别名 / 本体路径各要一眼能查。
+    // 登记侧的两把索引：按别名 / 本体路径各要一眼能查。
     // 只读借用，不克隆行——每次刷新都要过一遍，几百条时不值得复制。
-    let registered_conns: Vec<&str> = collected
-        .registered_sources
-        .iter()
-        .filter_map(|row| row.connection_id.as_deref())
-        .collect();
+    // （按连接 id 的那把在源段收口后已无消费方，2026-11-26 随告警清掉。）
     let registered_aliases: Vec<&str> = collected
         .registered_sources
         .iter()
