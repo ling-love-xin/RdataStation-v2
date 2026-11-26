@@ -131,6 +131,14 @@ pub trait EditorHost: 'static {
 /// 实现**不持 `Shared`**（`Rc` 不能跨线程），只调全局 `DataSourceService`——
 /// 原 workbench 代码就是执行线程 `block_on(service.list())`，线程边界不变。
 pub trait FederatedSourcePort: Send + Sync + 'static {
-    /// 当前开了「DuckDB 本地加速（联邦查询直连源库）」的连接清单（宿主组装连接串）。
-    fn records(&self) -> Vec<FederatedSourceRecord>;
+    /// 可作联邦源的连接清单（宿主组装连接串）。
+    ///
+    /// 判据**三源合一**（2026-11-27 用户拍板）——任一成立即算源：
+    ///
+    /// 1. `use_duckdb_fed == Some(true)`：用户明确开了「DuckDB 直连（本地加速）」；
+    /// 2. 项目登记过（`analysis_sources` 里有这一行 = **项目级意图**，`is_registered`）；
+    /// 3. `focus` 指定的连接（本文档绑定的那条：单源联邦的主源，即使没登记也必须进）。
+    ///
+    /// `use_duckdb_fed == None`（驱动不支持直连）一律不算。
+    fn records(&self, focus: Option<&str>) -> Vec<FederatedSourceRecord>;
 }

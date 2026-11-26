@@ -131,7 +131,7 @@ pub fn runner_for_test() -> Option<Arc<dyn QueryRunner>> {
 pub(crate) struct NoopFederatedSource;
 
 impl FederatedSourcePort for NoopFederatedSource {
-    fn records(&self) -> Vec<FederatedSourceRecord> {
+    fn records(&self, _focus: Option<&str>) -> Vec<FederatedSourceRecord> {
         Vec::new()
     }
 }

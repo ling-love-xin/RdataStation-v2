@@ -56,6 +56,14 @@ pub fn alias_for_connection(conn_id: &str) -> Option<String> {
         .cloned()
 }
 
+/// 这条连接在**当前项目**里有没有登记（= 快照里有别名）。
+///
+/// 只对「登记行」作答（`DbFile` 那种没有 `connection_id` 的源天然不在快照里）；
+/// 权威仍是项目库，快照由面板刷新 / 进项目时发布。
+pub fn is_registered(conn_id: &str) -> bool {
+    alias_for_connection(conn_id).is_some()
+}
+
 fn storage_err(op: &str, reason: String) -> CoreError {
     CoreError::storage(StorageError::Persistence {
         store: "analysis_sources".to_string(),

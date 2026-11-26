@@ -235,7 +235,7 @@ impl EditorHost for WorkbenchEditorHost {
 pub struct WorkbenchFederatedSource;
 
 impl FederatedSourcePort for WorkbenchFederatedSource {
-    fn records(&self) -> Vec<FederatedSourceRecord> {
+    fn records(&self, focus: Option<&str>) -> Vec<FederatedSourceRecord> {
         let Ok(service) = crate::services::data_source_service::DataSourceService::global() else {
             return Vec::new();
         };
@@ -247,10 +247,15 @@ impl FederatedSourcePort for WorkbenchFederatedSource {
         };
         items
             .into_iter()
-            // 可参与联邦执行的判据 = 「DuckDB 直连有值」（`Some(true)` 已开本地加速 /
-            // `Some(false)` 可直连未加速）；`None` = 驱动不支持直连，进不了 DuckDB。
-            // 与源段那颗挂/卸按钮同一判据（`fed_enabled = use_duckdb_fed.is_some()`）。
-            .filter(|item| item.use_duckdb_fed.is_some())
+            // 三源合一（判据见 `FederatedSourcePort` 的 doc）：明确开了加速 / 项目登记过 /
+            // 本文档绑定（`focus`）。全局池里的连接大多两样都没有——不收它们，
+            // 否则每跑一次联邦都要去 `ATTACH` 一堆与本次工作无关的库。
+            .filter(|item| {
+                item.use_duckdb_fed.is_some()
+                    && (item.use_duckdb_fed == Some(true)
+                        || engine::persistence::analysis_sources::is_registered(&item.id)
+                        || focus == Some(item.id.as_str()))
+            })
             .filter_map(|item| {
                 connection::url::build_connection_url(&item)
                     .ok()

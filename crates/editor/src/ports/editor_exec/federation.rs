@@ -12,16 +12,17 @@ impl EngineQueryRunner {
 
     /// 组装本次联邦的源清单（**宿主组装**：引擎不读连接库、也不解密口令）
     ///
-    /// 判据只有一个：连接开了 **「DuckDB 本地加速（联邦查询直连源库）」**（`use_duckdb_fed`）
-    /// ——它就是「允许分析引擎直连本连接」这个意图，同时也是**没有原生驱动的库**
-    /// （Oracle 这类：应用连不上它，但 DuckDB 扫描器能）唯一的参与入口。
+    /// 判据**三源合一**（2026-11-27 用户拍板）：`use_duckdb_fed == Some(true)`（明确开了本地加速）
+    /// ∪ 项目登记过（`analysis_sources` 有这一行）∪ 本文档绑定的连接（单源联邦的主源）。
+    /// 三者任一成立即算源；`None`（驱动不支持直连）不算。**没有原生驱动的库**
+    /// （Oracle 这类）正是靠这条进联邦：应用连不上它，但 DuckDB 扫描器能。
     ///
-    /// 两个来源，一套判据：
+    /// 两个来源，同一套判据：
     ///
     /// 1. **连接记录**（`DataSourceService::list()`，全局表）：**不要求已连接**，连接串现组
     ///    （`build_connection_url` 解密口令）——这是驱动类库能进来的那条路；
     /// 2. **运行态连接**（连接管理器里已建连的，含项目作用域 `P_`）：用重连用的
-    ///    `url_override`（带凭据），按同样的开关过滤。
+    ///    `url_override`（带凭据），按同样的三条件过滤。
     ///
     /// 驱动能不能挂由 [`accel::AccelKind`] 回答（L2 的 Oracle 也算：它只做联邦源、不做本地加速），
     /// 认不出就如实记一句；**别名**由连接名生成（`sanitize_alias` + 重名再排），
@@ -42,7 +43,7 @@ impl EngineQueryRunner {
         let mut notes: Vec<String> = Vec::new();
 
         // ① 连接记录（不要求已连接）：宿主组装连接串（解密口令是宿主的事，编辑器不碰）
-        for item in self.fed.records() {
+        for item in self.fed.records(Some(&doc_conn)) {
             // 别名以宿主给的为准（它读得到项目）；宿主没填就查进程级快照兜底
             let alias = item.alias.clone().or_else(|| {
                 engine::persistence::analysis_sources::alias_for_connection(&item.conn_id)
@@ -58,9 +59,19 @@ impl EngineQueryRunner {
 
         // ② 运行态连接（含项目作用域；记录里没有的补上）
         let infos = self.runtime.block_on(manager.get_all_connection_info());
-        // 运行态连接按同一判据补进清单：「DuckDB 直连有值」即可（`Some(true)` 已开加速 /
-        // `Some(false)` 可直连未加速）；`None` 进不了 DuckDB。
-        for info in infos.iter().filter(|info| info.use_duckdb_fed.is_some()) {
+        // 运行态连接按同一「三源合一」判据补进清单（与 `records(Some(doc_conn))` 同一套）：
+        // ① 明确开了本地加速 ② 项目登记过 ③ 本文档绑定（单源主源）；`None` 进不了 DuckDB。
+        for info in infos.iter() {
+            if info.use_duckdb_fed.is_none() {
+                continue;
+            }
+            let is_focus = info.id == doc_conn;
+            if info.use_duckdb_fed != Some(true)
+                && !engine::persistence::analysis_sources::is_registered(&info.id)
+                && !is_focus
+            {
+                continue;
+            }
             if records.iter().any(|record| record.conn_id == info.id) {
                 continue;
             }

@@ -19,6 +19,16 @@ impl WorkbenchView {
         // 分析底座：项目 / 全局分析库先发布给联邦会话，切档时 `analytics` / `rds_global`
         // 才在 SQL 里本来可见（见 `services::analysis_bases`）
         crate::services::analysis_bases::sync(project_root.as_deref());
+
+        // 联邦执行侧（工作线程）不持项目根：进项目就发布一次「连接 id → 登记别名」快照，
+        // 否则「已登记但没开本地加速」的源要等数据面板刷新过一次才被认成联邦源
+        // （`FederatedSourcePort::records` 读的就是这份快照）。
+        if let Some(root) = project_root.as_deref() {
+            match engine::persistence::analysis_sources::list_in_project(root) {
+                Ok(rows) => engine::persistence::analysis_sources::publish_aliases(&rows),
+                Err(error) => tracing::warn!("发布分析源登记快照失败：{error}"),
+            }
+        }
         // 启动恢复的项目也要**取写锁**——与改动前同一时机：**在端口装配之前**
         //（端口只是拄着 `Shared` 的句柄，真正读锁状态是调用 / 渲染那一刻）。
         Self::lock_startup_project(&shared, project_root);

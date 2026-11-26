@@ -23,7 +23,7 @@ use workbench_shell::model::{RightPanel, SidebarMode};
 /// 测试用联邦源 stub（空清单）：本用例只验洞察端口，不接真实连接清单。
 struct TestFederatedSource;
 impl FederatedSourcePort for TestFederatedSource {
-    fn records(&self) -> Vec<FederatedSourceRecord> {
+    fn records(&self, _focus: Option<&str>) -> Vec<FederatedSourceRecord> {
         Vec::new()
     }
 }

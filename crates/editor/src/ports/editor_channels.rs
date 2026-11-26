@@ -175,7 +175,7 @@ impl ChannelsPort for WorkbenchChannels {
 
         ChannelAvailabilitySet {
 
-            federated: federated_availability(&self.host.connections()),
+            federated: federated_availability(&self.host.connections(), Some(conn_id)),
 
             accelerated,
 
@@ -191,7 +191,11 @@ impl ChannelsPort for WorkbenchChannels {
 
 ///
 
-/// 可用 = **至少一个** `use_duckdb_fed` 有值（允许 DuckDB 直连）且驱动能挂的连接（主源 + 外部源），
+/// 可用 = **至少一个**「算源」且驱动能挂的连接（主源 + 外部源）。**谁算源是三源合一**
+
+/// （2026-11-27 用户拍板，与 `FederatedSourcePort::records` 同一套）：明确开了本地加速 /
+
+/// 项目登记过 / `focus`（本文档绑定的连接，单源主源）。`None`（不支持直连）不算。
 
 /// **含 Oracle 这类 L2**（它不能本地加速，但联邦源能挂——扫描器读得到）。
 
@@ -199,17 +203,15 @@ impl ChannelsPort for WorkbenchChannels {
 
 /// （Oracle 这类）也是这样进来的——“连不上”不是“不能做源”。
 
-/// 不可用时把“还差什么”说出来：没开开关 / 驱动不支持——两种原因两种修法。
+/// 不可用时把「还差什么」说出来：一个源都没选 / 驱动不支持——两种原因两种修法。
 
-fn federated_availability(connections: &[ConnectionItem]) -> ChannelAvailability {
-
-    let mut enabled = 0usize;
+fn federated_availability(connections: &[ConnectionItem], focus: Option<&str>) -> ChannelAvailability {
 
     let mut unsupported: Vec<String> = Vec::new();
 
     let mut ready: Vec<String> = Vec::new();
 
-
+    // 三源合一：明确开了加速 / 项目登记过 / 本文档绑定（`focus`）；`None` 一律不算
 
     for item in connections {
 
@@ -219,7 +221,19 @@ fn federated_availability(connections: &[ConnectionItem]) -> ChannelAvailability
 
         }
 
-        enabled += 1;
+        let is_focus = focus == Some(item.id.as_str());
+
+        if item.use_duckdb_fed != Some(true)
+
+            && !engine::persistence::analysis_sources::is_registered(&item.id)
+
+            && !is_focus
+
+        {
+
+            continue;
+
+        }
 
         if engine::duckdb::accel::AccelKind::from_db_type(&item.driver).is_err() {
 
@@ -233,9 +247,7 @@ fn federated_availability(connections: &[ConnectionItem]) -> ChannelAvailability
 
     }
 
-
-
-    if enabled == 0 {
+    if ready.is_empty() && unsupported.is_empty() {
 
         return ChannelAvailability::blocked(
 
@@ -251,31 +263,13 @@ fn federated_availability(connections: &[ConnectionItem]) -> ChannelAvailability
 
     }
 
-
-
-    // ready 为空只可能是「开了开关但驱动都挂不上」——逐条点名，并给出可操作的下一步
-
-    let mut reasons: Vec<String> = Vec::new();
-
-
-
-    if !unsupported.is_empty() {
-
-        reasons.push(format!("{} 的驱动还不能做联邦源", unsupported.join("、")));
-
-    }
-
-    if reasons.is_empty() {
-
-        reasons.push("还没有可用作联邦源的连接".to_string());
-
-    }
+    // 走到这里 = 有「算源」的连接，但驱动都挂不上：逐条点名
 
     ChannelAvailability::blocked(format!(
 
         "联邦查询至少需要一个可作为联邦源的连接（{}）",
 
-        reasons.join("；")
+        format!("{} 的驱动还不能做联邦源", unsupported.join("、"))
 
     ))
 
