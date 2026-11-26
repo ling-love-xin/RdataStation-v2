@@ -186,10 +186,11 @@ pub trait ResourcesHost: 'static {
     /// 宿主按项目分桶写设置（`resources.collapsed_groups`）；传的是**当前全集**而不是增量：
     /// 增量写入在“面板换了项目 / 分组被删”这些场景下容易和旧值叠出幽灵记录。
     fn remember_collapsed(&self, collapsed_keys: &[String], cx: &mut App);
-    /// 打开资源回收站（面板头「⋯ → 回收站…」）。
+    /// 打开资源回收站。
     ///
-    /// 回收站是**项目级**的（与草稿箱共用一处，模块硬约束 5）：对话框只列本模块的条目，
-    /// 别人的只给一句说明（还原归它自己的模块）。
+    /// 面板头不再摆入口；草稿箱栏经 `ScratchpadHost::open_asset_trash` 转到这里，
+    /// 回收站栏是唯一入口（模块硬约束 5）。回收站是**项目级**的（与草稿箱共用一处），
+    /// 对话框只列本模块的条目，别人的只给一句说明（还原归它自己的模块）。
     fn request_open_trash(&self, window: &mut Window, cx: &mut App);
     /// 重新取数（面板头「⋯ → 刷新」）。
     ///

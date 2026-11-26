@@ -1190,7 +1190,9 @@ async fn g017_delete_global_drops_tables_and_registry_only() {
         })
         .expect("insert dispatch");
 
-    let outcome = env.store.delete_global("delete_me").await.expect("delete");
+    // 只走回收站路径：先移入（写 manifest、软删登记），再永久删除。
+    env.store.trash_global("delete_me").await.expect("trash");
+    let outcome = env.store.purge_global("delete_me").await.expect("purge");
     assert_eq!(outcome.name, "delete_me");
     assert_eq!(outcome.versions, 2, "两版登记都要删");
     assert_eq!(outcome.tables, 2, "一版一张表，两张都要删");
@@ -1245,7 +1247,7 @@ async fn g017_delete_global_drops_tables_and_registry_only() {
 
     // 删过的名字再删一次：明确「资源不存在」，不是静默成功。
     assert!(matches!(
-        env.store.delete_global("delete_me").await,
+        env.store.trash_global("delete_me").await,
         Err(InstanceOpError::NotFound { .. })
     ));
 
@@ -1651,9 +1653,9 @@ async fn g019_delete_global_blocked_by_active_ref() {
     pin_ref(&env, "arp_ref_delete", 1, "ref_delete_me", outcome.version);
     let err = env
         .store
-        .delete_global("ref_delete_me")
+        .trash_global("ref_delete_me")
         .await
-        .expect_err("有引用必须拒绝删除");
+        .expect_err("有引用必须拒绝移入回收站");
     assert!(matches!(err, InstanceOpError::Referenced { refs: 1, .. }));
     assert!(
         env.store.table_exists(&table).await.expect("exists"),
@@ -1667,11 +1669,15 @@ async fn g019_delete_global_blocked_by_active_ref() {
     env.store
         .release_global_ref(&env.project_root, "arp_ref_delete", 1)
         .expect("release");
+    env.store
+        .trash_global("ref_delete_me")
+        .await
+        .expect("trash");
     let deleted = env
         .store
-        .delete_global("ref_delete_me")
+        .purge_global("ref_delete_me")
         .await
-        .expect("delete");
+        .expect("purge");
     assert_eq!(deleted.versions, 1);
     assert!(
         !env.store.table_exists(&table).await.expect("exists"),

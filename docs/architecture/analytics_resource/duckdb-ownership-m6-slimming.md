@@ -528,16 +528,17 @@ WIP 产物串包（`rds_sql::guard` 缺失 / `use_duckdb_fed` 类型不一致）
 4. **测试夹具**：M6 测试已改为 `isolated` 同根夹具；后续改成实例后仍要统一测试实例工厂。
 5. **资产文件与表双形态**：文件资产 + 派生表会产生两条全局行；UI / 删除 / pin 必须按
    `origin_kind='global_file'` 成组处理，不能只删一条。
-6. **回收站唯一入口的跨模块聚合**：草稿箱（`rds-scratchpad`）不能反向依赖资产库；
-   聚合要么由 workbench 注入 provider，要么把回收站列表提到 `workbench_shell`。
-   在落地前，资产库面板头的「回收站…」仍然是可达入口（待撤）。
+6. **回收站唯一入口的跨模块聚合**：草稿箱（`rds-scratchpad`）不反向依赖资产库，
+   由 workbench 注入 `ScratchpadHost::can_open_asset_trash` / `open_asset_trash` 端口，
+   入口落在草稿箱回收站分区的「资产库归档…」；资产库面板头的「回收站…」已撤。
+   全局条目由对话框自己读 `list_global_trash` 并入同一清单，不再另开入口。
 
 ## 11. 验收口径
 
 - 真机：项目库 + 全局库同实例，双向 CTAS 成功（第一刀已达成）；
 - 真机：全局表写入被 user session 拒绝，system session 成功（第 2 步已达成）；
 - `cargo test -p rds-engine --lib` ≥ 344 passed（第一刀实测 348）；
-- `cargo test -p rds-analytics-resource --lib -- --test-threads=1` ≥ 286 passed（第 3 步实测 286）；
+- `cargo test -p rds-analytics-resource --lib -- --test-threads=1` ≥ 286 passed（2026-11-26 实测 291）；
 - `cargo check -p rds-workbench -j 1` 通过（第一刀已过 workspace check）；
 - 表型链路无 parquet 中转、无短命 ATTACH（结果集 / 升级 / 分发已达成；`ProjectCtx` / system session 待做）；
 - 全局表资产删除只软删登记，表与版本保留；恢复校验表在、永久删除才 `DROP`（第 4 步表型已达成）；

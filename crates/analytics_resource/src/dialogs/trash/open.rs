@@ -61,7 +61,19 @@ pub fn open_trash_dialog_with(
                         .text_xs()
                         .text_ellipsis()
                         .text_color(theme.colors.muted_foreground)
-                        .child(format!("共 {} 项", rows.len())),
+                        .child({
+                            let global_count = rows.iter().filter(|row| row.is_global).count();
+                            if global_count == 0 {
+                                format!("共 {} 项", rows.len())
+                            } else {
+                                format!(
+                                    "共 {} 项（项目 {} · 全局 {}）",
+                                    rows.len(),
+                                    rows.len() - global_count,
+                                    global_count
+                                )
+                            }
+                        }),
                 )
                 .when_some(note, |bar, note| {
                     bar.child(

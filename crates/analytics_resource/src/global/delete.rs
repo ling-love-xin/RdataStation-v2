@@ -585,12 +585,6 @@ impl GlobalInstanceStore {
             projects: projects.max(0) as usize,
         })
     }
-
-    /// 旧入口：当前直接走永久删除，保持既有 UI 行为；新调用应改用
-    /// [`Self::trash_global`] / [`Self::purge_global`]。
-    pub async fn delete_global(&self, name: &str) -> Result<GlobalDeleteOutcome, InstanceOpError> {
-        self.purge_global(name).await
-    }
 }
 
 fn trash_root() -> PathBuf {

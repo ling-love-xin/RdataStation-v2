@@ -79,8 +79,8 @@ pub fn global_trash_row(entry: &crate::global::GlobalTrashEntry) -> (DateTime<Ut
             entry
                 .file_rel_path
                 .as_deref()
-                .map(|rel| format!("全局库文件 {rel}"))
-                .unwrap_or_else(|| "全局库文件".to_string()),
+                .map(|rel| format!("全局库文件 {rel}（v{}）", entry.version))
+                .unwrap_or_else(|| format!("全局库文件（v{}）", entry.version)),
         )
     } else {
         (
@@ -88,8 +88,8 @@ pub fn global_trash_row(entry: &crate::global::GlobalTrashEntry) -> (DateTime<Ut
             entry
                 .analytics_table
                 .as_deref()
-                .map(|table| format!("全局分析库表 {table}"))
-                .unwrap_or_else(|| "全局分析库表".to_string()),
+                .map(|table| format!("全局分析库表 {table}（v{}）", entry.version))
+                .unwrap_or_else(|| format!("全局分析库表（v{}）", entry.version)),
         )
     };
     let row = TrashRow {
