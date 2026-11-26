@@ -9,8 +9,6 @@ use gpui_kit::component::input::{RangeDecoration, RangeDecorationStyle};
 // #48 编辑器常规设置（行号开关即时 / 新文档默认缩进·换行·编码）：settings 不依赖 editor，方向合法
 
 use crate::channel::ExecChannel;
-// 切联邦前的确认要调端口方法（`channels_port()` 返回 `Rc<dyn ChannelsPort>`，方法解析需要 trait 在作用域）
-use crate::channel::ChannelsPort as _;
 use crate::format;
 use crate::sources;
 // 【下移】结果放置 / 下发原料定义已随结果存储搬到 rds-result-panel（经 crate::store 重导出）

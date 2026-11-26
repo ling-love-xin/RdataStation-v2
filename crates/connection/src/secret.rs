@@ -376,9 +376,20 @@ mod tests {
 
     #[test]
     fn test_in_memory_manager_isolated_empty() {
-        // 内存管理器：不写默认存储（~/.duckdb），只验证列表语义；
-        // 不注册任何 Secret，避免污染 DuckDB 默认 Secret 目录。
+        // 【2026-11-26 修正口径】原先这里直接断言 `in_memory()` 的列表为空——
+        // 那是个靠 HOME 状态才成立的断言：DuckDB 启动时会把 `secret_directory`
+        // （默认 `~/.duckdb/stored_secrets`）里的 PERSISTENT SECRET **自动载入**
+        // 任何实例（含内存库）。本机就残留了一份 401 B 的
+        // `~/.duckdb/stored_secrets/rds_probe_m1.duckdb_secret`（mysql / 192.168.3.x），
+        // 于是新开的内存管理器一上来就能 list 到它，"应为空"必挂。
+        // 空集只能相对**空目录**成立，所以这里换成 `isolated()`：
+        // 它把 `secret_directory` 指到全新的临时目录，语义仍是"没有注册过任何 Secret"。
+        let (mgr, dir) = isolated("empty");
+        assert!(mgr.list().unwrap().is_empty(), "全新 Secret 目录应为空");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // `in_memory()` 只保证"能开、能列"，不保证空（它读的是默认 Secret 目录）。
         let mgr = SecretManager::in_memory().unwrap();
-        assert!(mgr.list().unwrap().is_empty(), "新建内存管理器应为空");
+        mgr.list().unwrap();
     }
 }

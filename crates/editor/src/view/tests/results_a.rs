@@ -2177,40 +2177,51 @@ fn ctrl_alt_f2_to_f6_toggle_the_right_panels(cx: &mut TestAppContext) {
 
     // ③ 关掉**当前页**：先开计算（CTRL+ALT+F6 = column-aggregate）与列浏览器
     //    （CTRL+ALT+F4 = results-metadata），再关掉当前页
+    //
+    //    顺序口径（2026-11-26 期望值更新）：新页**先按规范序插进集合**，随后「切页」这一步
+    //    会把被选中的页挪到最前（DBeaver `panelFolder.setMRUVisible(true)`，
+    //    `ResultSetViewer.java:364`）。所以打开哪一页，它就在第 0 位——不是规范序位置。
     cx.simulate_keystrokes("ctrl-alt-f6");
     cx.run_until_parked();
-    assert_eq!(tabs(cx), vec![RightTab::Value, RightTab::Stats]);
+    assert_eq!(
+        tabs(cx),
+        vec![RightTab::Stats, RightTab::Value],
+        "计算页打开即切过去 → MRU 提到最前"
+    );
     assert_eq!(active(cx), RightTab::Stats, "打开即切到该页");
 
     cx.simulate_keystrokes("ctrl-alt-f4");
     cx.run_until_parked();
     assert_eq!(
         tabs(cx),
-        vec![RightTab::Value, RightTab::Stats, RightTab::Browser],
-        "按规范序插入（Browser 在 Stats 之后）"
+        vec![RightTab::Browser, RightTab::Stats, RightTab::Value],
+        "列浏览器先按规范序插到末尾，再因选中提到最前"
     );
     assert_eq!(active(cx), RightTab::Browser);
 
-    // 关掉当前页（列浏览器）：规范序在它之后的 Group 未启用 → 回退集合末项（计算）
+    // 关掉当前页（列浏览器）：规范序在它之后的 Group 未启用 → 没有后继 → 回退
+    // **页签条末项**。此刻页签条是 MRU 序 `[Browser, Stats, Value]`，末项是值详情
+    // （不是规范序的"前一页"计算页）——`neighbor_after_close` 的回退口径即显示序末项。
     cx.simulate_keystrokes("ctrl-alt-f4");
     cx.run_until_parked();
     assert!(
         !tabs(cx).contains(&RightTab::Browser),
         "CTRL+ALT+F4 再按应关掉当前页"
     );
+    assert_eq!(tabs(cx), vec![RightTab::Stats, RightTab::Value], "关完只剩两页");
     assert_eq!(
         active(cx),
-        RightTab::Stats,
-        "关当前页应落到其后最近的已启用页，没有则回退末项"
+        RightTab::Value,
+        "无后继 → 回退页签条末项（MRU 序末项 = 值详情）"
     );
     assert!(visible(cx), "还剩别的页，整栏不该收起");
 
-    // `CTRL+ALT+F5`（results-grouping）→ 打开分组页并切过去
+    // `CTRL+ALT+F5`（results-grouping）→ 打开分组页并切过去（MRU 同样提到最前）
     cx.simulate_keystrokes("ctrl-alt-f5");
     cx.run_until_parked();
     assert_eq!(
         tabs(cx),
-        vec![RightTab::Value, RightTab::Stats, RightTab::Group]
+        vec![RightTab::Group, RightTab::Stats, RightTab::Value]
     );
     assert_eq!(active(cx), RightTab::Group);
 
@@ -2220,10 +2231,10 @@ fn ctrl_alt_f2_to_f6_toggle_the_right_panels(cx: &mut TestAppContext) {
     assert_eq!(
         tabs(cx),
         vec![
-            RightTab::Value,
-            RightTab::Stats,
-            RightTab::Group,
             RightTab::Reference,
+            RightTab::Group,
+            RightTab::Stats,
+            RightTab::Value,
         ]
     );
     assert_eq!(active(cx), RightTab::Reference, "打开即切到引用页");

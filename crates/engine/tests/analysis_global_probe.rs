@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use rds_engine::analysis::global::{open_mounted, GLOBAL_ALIAS};
+use rds_engine::analysis::global::open_mounted;
 
 fn temp_db(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join("rds_global_probe");
@@ -27,10 +27,12 @@ fn temp_db(tag: &str) -> PathBuf {
 #[test]
 fn the_global_like_db_is_mounted_read_only_and_queryable() {
     let path = temp_db("mount_ok");
-    let session = open_mounted("C_global_probe", &path, GLOBAL_ALIAS, "duckdb").expect("只读挂载");
-    // 别名进 SQL：`rds_global.<表>` 能查，说明挂载真的接上了（不是「计划里有、实际没挂」）
+    let session = open_mounted("C_global_probe", &path, "global_probe_ok", "duckdb").expect("只读挂载");
+    // 别名进 SQL：`<别名>.<表>` 能查，说明挂载真的接上了（不是「计划里有、实际没挂」）
+    // 注意：`rds_global` 是本版新加的**保留别名**（底座 / 系统 catalog 名），
+    // 源连接一律不许用它——所以探针用普通别名，真全局库那一路走 `open_global_session`（底座口径）。
     let result = session
-        .run("select count(*) as n from rds_global.global_connections")
+        .run("select count(*) as n from global_probe_ok.global_connections")
         .expect("查挂载表");
     assert!(!result.columns.is_empty(), "挂载表应可查");
     let _ = std::fs::remove_file(&path);
@@ -39,9 +41,9 @@ fn the_global_like_db_is_mounted_read_only_and_queryable() {
 #[test]
 fn the_mounted_global_db_really_is_read_only() {
     let path = temp_db("read_only");
-    let session = open_mounted("C_global_probe", &path, GLOBAL_ALIAS, "duckdb").expect("只读挂载");
+    let session = open_mounted("C_global_probe", &path, "global_probe_ro", "duckdb").expect("只读挂载");
     let err = session
-        .run("create table rds_global.should_not_exist as select 1 as a")
+        .run("create table global_probe_ro.should_not_exist as select 1 as a")
         .expect_err("只读库不该允许建表");
     let text = format!("{err}").to_lowercase();
     assert!(
@@ -75,7 +77,7 @@ fn the_real_global_analysis_db_opens_read_only_when_idle() {
         eprintln!("跳过：{} 不存在（宿主未初始化）", path.display());
         return;
     }
-    match open_mounted("C_global_real_probe", &path, GLOBAL_ALIAS, "duckdb") {
+    match open_mounted("C_global_real_probe", &path, "global_probe_real", "duckdb") {
         Ok(session) => {
             // 分析库是 DuckDB：用 `duckdb_tables()` 按 database_name 数表，
             // 证明挂的是这台库（附带库名/表数，不是「表不存在」那种远端报错）。
@@ -83,7 +85,7 @@ fn the_real_global_analysis_db_opens_read_only_when_idle() {
             // 所以这里用系统函数而不是信息模式。
             let result = session
                 .run(&format!(
-                    "select count(*) as n from duckdb_tables() where database_name = '{GLOBAL_ALIAS}'"
+                    "select count(*) as n from duckdb_tables() where database_name = 'global_probe_real'"
                 ))
                 .expect("查真全局分析库的表清单");
             assert!(!result.columns.is_empty());
