@@ -85,8 +85,9 @@ pub fn open_for_result_set(label: &str) -> Result<SessionHandle, CoreError> {
 pub fn materialize_rows(
     columns: &[String],
     rows: &[Vec<serde_json::Value>],
+    owner: &str,
 ) -> Result<String, CoreError> {
-    DuckDbService::create_duckdb_temp_table(columns, rows)
+    DuckDbService::create_duckdb_temp_table(columns, rows, owner)
 }
 
 fn invalid(message: String) -> CoreError {
@@ -106,7 +107,7 @@ mod tests {
             vec![serde_json::json!(1), serde_json::json!("x")],
             vec![serde_json::json!(2), serde_json::json!("y")],
         ];
-        let table = materialize_rows(&columns, &rows).expect("默认物化为临时表");
+        let table = materialize_rows(&columns, &rows, "test").expect("默认物化为临时表");
         assert!(table.starts_with("tmp_q_"), "实际 {table}");
         // 物化完就在列表里可见（选择器的数据来源就是这张表清单）
         assert!(list_result_sets().expect("列表").contains(&table));

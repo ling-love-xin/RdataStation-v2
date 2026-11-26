@@ -512,7 +512,7 @@ impl QueryRunner for EngineQueryRunner {
     /// 分析产物本身只回列名 + JSON 行、没有原始 batches，所以 `fact: None`——后续对分析
     /// 结果再做分析 / 带类型导出仍走显示矩阵降级档（链式产物新 FactFrame 依赖引擎
     /// `query_duckdb` 回 Arrow，属后置增强项）。
-    fn analyze(&self, request: &AnalysisRequest) -> Result<QueryData, String> {
+    fn analyze(&self, request: &AnalysisRequest, document: &str) -> Result<QueryData, String> {
         let mut source_fact_table: Option<String> = None;
         let mut source_fact_release = false;
         let mut degraded = false;
@@ -527,6 +527,7 @@ impl QueryRunner for EngineQueryRunner {
                         Some(table),
                         &request.sql,
                         frame.batches(),
+                        document,
                     )
                     .map_err(|error| error.to_string())?
                 } else {
@@ -539,6 +540,7 @@ impl QueryRunner for EngineQueryRunner {
                             None,
                             &request.sql,
                             frame.batches(),
+                            document,
                         )
                         .map_err(|error| error.to_string())?;
                     source_fact_table = Some(res.temp_table.clone());
@@ -558,6 +560,7 @@ impl QueryRunner for EngineQueryRunner {
                     &request.sql,
                     Some(request.columns.clone()),
                     Some(rows),
+                    document,
                 )
                 .map_err(|error| error.to_string())?
             }

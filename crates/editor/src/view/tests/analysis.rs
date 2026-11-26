@@ -62,7 +62,11 @@ impl QueryRunner for AnalysisRunner {
         })
     }
 
-    fn analyze(&self, request: &crate::analysis::AnalysisRequest) -> Result<QueryData, String> {
+    fn analyze(
+        &self,
+        request: &crate::analysis::AnalysisRequest,
+        _document: &str,
+    ) -> Result<QueryData, String> {
         self.seen.lock().expect("锁").push(request.clone());
         Ok(QueryData {
             columns: vec!["行数".to_string()],

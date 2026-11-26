@@ -253,7 +253,12 @@ pub trait QueryRunner: Send + Sync + 'static {
     /// 【B15】本地 DuckDB 分析：对桥接过来的行跑一条聚合 SQL（**不碰源库**）
     ///
     /// 默认实现 = 不支持（宿主没接分析能力的真实状态，不是静默失败）。
-    fn analyze(&self, _request: &crate::analysis::AnalysisRequest) -> Result<QueryData, String> {
+    /// `document` 是这份工作的身份：分析建出的临时表按它归属，关文档时据此收掉该批。
+    fn analyze(
+        &self,
+        _request: &crate::analysis::AnalysisRequest,
+        _document: &str,
+    ) -> Result<QueryData, String> {
         Err("当前执行器不支持本地分析".to_string())
     }
 

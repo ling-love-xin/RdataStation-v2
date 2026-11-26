@@ -11,6 +11,7 @@ pub async fn re_execute_with_filter(
     original_sql: &str,
     where_clause: &str,
     order_clause: &str,
+    owner: &str,
 ) -> Result<ResultSet, CoreError> {
     let start = std::time::Instant::now();
     let manager = get_connection_manager().clone();
@@ -47,7 +48,8 @@ pub async fn re_execute_with_filter(
     // （明细见 `duckdb_service::rows_as_json`）。
     let columns = result.result.columns.clone();
     let rows = duckdb_service::rows_as_json(&result.result);
-    let temp_table = duckdb_service::DuckDbService::create_duckdb_temp_table(&columns, &rows)?;
+    let temp_table =
+        duckdb_service::DuckDbService::create_duckdb_temp_table(&columns, &rows, owner)?;
 
     Ok(ResultSet {
         row_count: rows.len() as u32,
@@ -63,6 +65,7 @@ pub fn execute_duckdb_analysis(
     sql: &str,
     columns: Option<Vec<String>>,
     rows: Option<Vec<Vec<serde_json::Value>>>,
+    owner: &str,
 ) -> Result<ResultSet, CoreError> {
     let start = std::time::Instant::now();
     let duckdb = duckdb_service::DuckDbService::get_or_create_duckdb()?;
@@ -72,7 +75,7 @@ pub fn execute_duckdb_analysis(
 
     let actual_table = if temp_table.is_empty() {
         if let (Some(cols), Some(rws)) = (columns, rows) {
-            duckdb_service::DuckDbService::create_temp_table_internal(&mut conn, &cols, &rws, "result")?
+            duckdb_service::DuckDbService::create_temp_table_internal(&mut conn, &cols, &rws, "result", owner)?
         } else {
             return Err(CoreError::common(CommonError::General(
                 "No temp table or data provided".to_string(),
@@ -115,6 +118,7 @@ pub fn execute_duckdb_analysis_from_batches(
     temp_table: Option<&str>,
     sql: &str,
     batches: &[shared::models::ArrowBatch],
+    owner: &str,
 ) -> Result<ResultSet, CoreError> {
     let start = std::time::Instant::now();
     let duckdb = duckdb_service::DuckDbService::get_or_create_duckdb()?;
@@ -124,7 +128,9 @@ pub fn execute_duckdb_analysis_from_batches(
 
     let actual_table = match temp_table {
         Some(name) if !name.is_empty() => name.to_string(),
-        _ => duckdb_service::DuckDbService::create_temp_table_from_batches(&mut conn, batches)?,
+        _ => duckdb_service::DuckDbService::create_temp_table_from_batches(
+            &mut conn, batches, owner,
+        )?,
     };
 
     let analysis_sql = sql
@@ -214,7 +220,7 @@ pub fn export_rows_via_duckdb(
     }
 
     let table =
-        duckdb_service::DuckDbService::create_temp_table_internal(&mut conn, columns, rows, "result")?;
+        duckdb_service::DuckDbService::create_temp_table_internal(&mut conn, columns, rows, "result", "process")?;
     let outcome = copy_table_to_file(&conn, &table, path, format);
     // 表是纯中间产物：成败都要收（收不掉只记日志，不盖主流程的错）
     if let Err(error) =
@@ -249,7 +255,8 @@ pub fn export_batches_via_duckdb(
         ensure_excel_extension(&conn)?;
     }
 
-    let table = duckdb_service::DuckDbService::create_temp_table_from_batches(&mut conn, batches)?;
+    let table =
+        duckdb_service::DuckDbService::create_temp_table_from_batches(&mut conn, batches, "process")?;
     let row_count = batches.iter().map(|batch| batch.num_rows()).sum();
     let outcome = copy_table_to_file(&conn, &table, path, format);
     // 临时表成败都收（与 internal 路径同一承诺）；收不掉只记日志，不盖主流程的错
@@ -470,7 +477,7 @@ mod export_tests {
         // 先建常驻表（函数内部取锁，建完即放，不跨调用持锁避免死锁）
         let table = {
             let mut conn = duckdb.lock().expect("锁");
-            DuckDbService::create_temp_table_from_batches(&mut conn, &[batch])
+            DuckDbService::create_temp_table_from_batches(&mut conn, &[batch], "test")
                 .expect("常驻表应当建出来")
         };
 
@@ -519,6 +526,7 @@ mod analysis_batches_tests {
             None,
             "SELECT count(*) AS \"行数\" FROM {table}",
             &[batch],
+            "test",
         )
         .expect("直灌建表 + 聚合应当成功");
 
@@ -541,6 +549,7 @@ mod analysis_batches_tests {
             None,
             "SELECT count(*) AS \"行数\" FROM {table}",
             &[batch],
+            "test",
         )
         .expect("首轮直灌成功");
 
@@ -549,6 +558,7 @@ mod analysis_batches_tests {
             Some(first.temp_table.as_str()),
             "SELECT count(*) AS \"计数\" FROM {table}",
             &[],
+            "test",
         )
         .expect("复用常驻表聚合应当成功");
 

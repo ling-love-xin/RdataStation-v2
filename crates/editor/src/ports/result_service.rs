@@ -31,12 +31,14 @@ impl ResultService {
         original_sql: &str,
         where_clause: &str,
         order_clause: &str,
+        owner: &str,
     ) -> Result<ResultSet, CoreError> {
         engine::services::execution_service::re_execute_with_filter(
             conn_id,
             original_sql,
             where_clause,
             order_clause,
+            owner,
         )
         .await
     }
@@ -46,8 +48,11 @@ impl ResultService {
         sql: &str,
         columns: Option<Vec<String>>,
         rows: Option<Vec<Vec<serde_json::Value>>>,
+        owner: &str,
     ) -> Result<ResultSet, CoreError> {
-        engine::services::execution_service::execute_duckdb_analysis(temp_table, sql, columns, rows)
+        engine::services::execution_service::execute_duckdb_analysis(
+            temp_table, sql, columns, rows, owner,
+        )
     }
 
     /// 【B4】事实档 batches 直灌建表后跑分析（保真档；`Some(table)` = 复用已有常驻表）。
@@ -55,9 +60,10 @@ impl ResultService {
         temp_table: Option<&str>,
         sql: &str,
         batches: &[shared::models::ArrowBatch],
+        owner: &str,
     ) -> Result<ResultSet, CoreError> {
         engine::services::execution_service::execute_duckdb_analysis_from_batches(
-            temp_table, sql, batches,
+            temp_table, sql, batches, owner,
         )
     }
 
@@ -102,8 +108,11 @@ impl ResultService {
     pub fn create_duckdb_temp_table(
         columns: &[String],
         rows: &[Vec<serde_json::Value>],
+        owner: &str,
     ) -> Result<String, CoreError> {
-        engine::services::duckdb_service::DuckDbService::create_duckdb_temp_table(columns, rows)
+        engine::services::duckdb_service::DuckDbService::create_duckdb_temp_table(
+            columns, rows, owner,
+        )
     }
 
     /// 带描述物化（用户起的名字进表名）；表名里非 ASCII 会被折成下划线。
@@ -111,9 +120,13 @@ impl ResultService {
         columns: &[String],
         rows: &[Vec<serde_json::Value>],
         description: &str,
+        owner: &str,
     ) -> Result<String, CoreError> {
         engine::services::duckdb_service::DuckDbService::create_duckdb_temp_table_named(
-            columns, rows, description,
+            columns,
+            rows,
+            description,
+            owner,
         )
     }
 

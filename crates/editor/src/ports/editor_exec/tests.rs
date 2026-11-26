@@ -43,7 +43,7 @@ mod analysis_tests {
             pref: StoragePref::Auto,
             source_set: 0,
         };
-        let data = runner.analyze(&request).expect("本地分析该跑通");
+        let data = runner.analyze(&request, "doc").expect("本地分析该跑通");
         assert_eq!(data.columns, vec!["总".to_string(), "非空".to_string()]);
         assert_eq!(
             data.rows,
@@ -76,7 +76,7 @@ mod analysis_tests {
             pref: StoragePref::Memory,
             source_set: 7,
         };
-        let data = runner.analyze(&request).expect("事实档直灌分析该跑通");
+        let data = runner.analyze(&request, "doc").expect("事实档直灌分析该跑通");
         assert_eq!(data.rows, vec![vec!["2".to_string()]], "两行事实档聚合出 2");
         assert!(
             data.source_fact_table.is_some(),
@@ -106,7 +106,7 @@ mod analysis_tests {
             pref: StoragePref::Table,
             source_set: 0,
         };
-        let data = runner.analyze(&request).expect("表档直灌分析该跑通");
+        let data = runner.analyze(&request, "doc").expect("表档直灌分析该跑通");
         assert!(
             data.source_fact_table.is_some(),
             "常驻表名回传；表档复用 / 新建都要给 host 一个句柄"
@@ -132,7 +132,7 @@ mod analysis_tests {
             pref: StoragePref::Auto,
             source_set: 0,
         };
-        let error = runner.analyze(&request).expect_err("该报错");
+        let error = runner.analyze(&request, "doc").expect_err("该报错");
         assert!(!error.is_empty(), "错误要说清原因：{error}");
     }
 }
@@ -297,6 +297,7 @@ mod export_tests {
                 None,
                 "SELECT * FROM {table}",
                 &batches,
+                "doc",
             )
             .expect("常驻表应当建出来");
         let table = analysis.temp_table.clone();

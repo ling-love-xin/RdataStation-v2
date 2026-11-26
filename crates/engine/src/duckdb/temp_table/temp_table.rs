@@ -59,6 +59,21 @@ impl TempTableSource {
         !matches!(self, TempTableSource::Insight)
     }
 
+    /// 该来源的临时表默认挂在谁名下（`TempTableManager` 的 `owner` 维度）。
+    ///
+    /// 只对**模块自建**的表有意义：编辑器结果集不走这里，它按文档 id 传 owner。
+    /// 模块表（洞察 / mock / 插件 / 载入）归模块，关文档不收它们——它们的寿命由
+    /// 模块自己的对象管理（洞察集合、mock 落地完即关、插件卸载）决定。
+    pub fn default_owner(&self) -> &'static str {
+        match self {
+            TempTableSource::Query => "process",
+            TempTableSource::Insight => "insight",
+            TempTableSource::Mock => "mock",
+            TempTableSource::Plugin => "plugin",
+            TempTableSource::Load => "data_objects",
+        }
+    }
+
     /// 该来源的临时表**命名前缀**（清理时按这些前缀识别）。
     ///
     /// 两套命名共存：v2 规范名 `tmp_{缩写}_…`（[`TempTableManager::generate_name`] 产出），
@@ -273,8 +288,8 @@ pub fn drop_temp_table(
 /// - Mock 临时表 (tmp_m_): 无 TTL/上限，项目关闭清理
 /// - 插件临时表 (tmp_p_): 无 TTL/上限，插件卸载清理
 pub struct TempTableManager {
-    /// 临时表注册表: 表名 -> 创建时间
-    registry: Arc<RwLock<HashMap<String, Instant>>>,
+    /// 临时表注册表: 表名 -> 登记行（创建时间 + 谁生的）
+    registry: Arc<RwLock<HashMap<String, TempEntry>>>,
     /// 全局 DuckDB 临时表上限
     global_max_tables: usize,
     /// 保护名单：被保护的表不参与 TTL / 上限清理。
@@ -283,6 +298,17 @@ pub struct TempTableManager {
     /// 与纯中间计算表（多列子查询的临时结果，用完即弃）必须区别对待——
     /// 集合内的表若被 30 分钟 TTL 悄悄清掉，右栏集合条目就指向不存在的表。
     protected: Arc<RwLock<HashSet<String>>>,
+}
+
+/// 一条临时表登记：什么时候建的、谁生的。
+///
+/// `owner` 的用途**只有一个**：关文档 / 关模块时按它收掉那一批
+/// （`AnalysisInstance::drop_temps_of`）。别名、TTL、数量上限都不看它——
+/// 那些仍按表名前缀判，两套判据互不替代。
+#[derive(Debug, Clone)]
+struct TempEntry {
+    created: Instant,
+    owner: String,
 }
 
 impl TempTableManager {
@@ -347,10 +373,10 @@ impl TempTableManager {
 
             // 检查洞察中间表 TTL
             let ttl = Duration::from_secs(1800); // 30分钟
-            for (name, time) in reg.iter() {
+            for (name, entry) in reg.iter() {
                 if name.starts_with("tmp_i_")
                     && !self.is_protected(name)
-                    && now.duration_since(*time) >= ttl
+                    && now.duration_since(entry.created) >= ttl
                 {
                     to_drop.push(name.clone());
                 }
@@ -411,16 +437,50 @@ impl TempTableManager {
     ///
     /// # 参数
     /// - `table_name`: 临时表名
+    /// - `owner`: 谁生的（文档 id / `process` / `insight` / `mock` / `plugin:<id>`）。
+    ///   只用于「关文档收掉这一批」，不影响前缀 / TTL 判据。
     ///
     /// # 注意
     /// 注册时触发洞察中间表的惰性清理
-    pub fn register(&self, table_name: &str) {
+    pub fn register(&self, table_name: &str, owner: &str) {
         let mut registry = self.registry.write().unwrap_or_else(|e| e.into_inner());
-        registry.insert(table_name.to_string(), Instant::now());
+        registry.insert(
+            table_name.to_string(),
+            TempEntry {
+                created: Instant::now(),
+                owner: owner.to_string(),
+            },
+        );
         drop(registry);
 
         // 注册后触发惰性清理（针对洞察中间表）
         self.lazy_cleanup_insight_tables();
+    }
+
+    /// 某个 owner 名下登记着的临时表（**纯内存读**，不查库）。
+    ///
+    /// 关文档 / 关模块时先拿这份名单，再逐张 `drop_temp`——删除本身归分析实例
+    /// （表落在 `memory.rds_tmp`，只有实例的连接能钉死落点）。
+    pub fn list_by_owner(&self, owner: &str) -> Vec<String> {
+        self.registry
+            .read()
+            .map(|registry| {
+                registry
+                    .iter()
+                    .filter(|(_, entry)| entry.owner == owner)
+                    .map(|(name, _)| name.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// 这张表登记在谁名下（诊断 / 测试用）。
+    pub fn owner_of(&self, table_name: &str) -> Option<String> {
+        self.registry
+            .read()
+            .ok()?
+            .get(table_name)
+            .map(|entry| entry.owner.clone())
     }
 
     /// 注销临时表。
@@ -495,7 +555,7 @@ impl TempTableManager {
         let mut insight_tables: Vec<_> = registry
             .iter()
             .filter(|(name, _)| name.starts_with(prefix))
-            .map(|(name, &time)| (name.clone(), time))
+            .map(|(name, entry)| (name.clone(), entry.created))
             .collect();
 
         // 按时间排序
@@ -713,7 +773,7 @@ mod tests {
         let manager = TempTableManager::new(50);
         assert_eq!(manager.count(), 0);
 
-        manager.register("tmp_q_test_20260512143025");
+        manager.register("tmp_q_test_20260512143025", "test");
         assert_eq!(manager.count(), 1);
 
         manager.unregister("tmp_q_test_20260512143025");
@@ -751,9 +811,9 @@ mod tests {
         );
 
         let manager = TempTableManager::new(50);
-        manager.register("tmp_m_a");
-        manager.register("temp_mock_b");
-        manager.register("tmp_i_c");
+        manager.register("tmp_m_a", "test");
+        manager.register("temp_mock_b", "test");
+        manager.register("tmp_i_c", "test");
 
         let dropped = manager
             .drop_by_source(&conn, TempTableSource::Mock)
@@ -807,9 +867,9 @@ mod tests {
     fn test_count_by_prefix() {
         let manager = TempTableManager::new(50);
 
-        manager.register("tmp_i_col_amount_20260512143030");
-        manager.register("tmp_i_col_price_20260512143031");
-        manager.register("tmp_q_orders_20260512143025");
+        manager.register("tmp_i_col_amount_20260512143030", "test");
+        manager.register("tmp_i_col_price_20260512143031", "test");
+        manager.register("tmp_q_orders_20260512143025", "test");
 
         assert_eq!(manager.count_by_prefix("tmp_i_"), 2);
         assert_eq!(manager.count_by_prefix("tmp_q_"), 1);
@@ -821,14 +881,14 @@ mod tests {
     fn test_stats_counts_by_source() {
         let manager = TempTableManager::new(50);
 
-        manager.register("tmp_q_orders_20260512143025");
-        manager.register("tmp_i_col_amount_20260512143030");
-        manager.register("tmp_i_col_price_20260512143031");
-        manager.register("tmp_m_users_20260512143030");
-        manager.register("temp_mock_users");
-        manager.register("tmp_p_plugin_20260512143035");
+        manager.register("tmp_q_orders_20260512143025", "test");
+        manager.register("tmp_i_col_amount_20260512143030", "test");
+        manager.register("tmp_i_col_price_20260512143031", "test");
+        manager.register("tmp_m_users_20260512143030", "test");
+        manager.register("temp_mock_users", "test");
+        manager.register("tmp_p_plugin_20260512143035", "test");
         // 不带任何来源前缀的表：既不属于任何一档，也不该被硬塞进某一档
-        manager.register("unrelated_table");
+        manager.register("unrelated_table", "test");
 
         let stats = manager.stats();
         assert_eq!(stats.query, 1);
@@ -842,9 +902,9 @@ mod tests {
     fn test_cleanup_by_prefix() {
         let manager = TempTableManager::new(50);
 
-        manager.register("tmp_i_table1_20260512143030");
-        manager.register("tmp_i_table2_20260512143031");
-        manager.register("tmp_q_table3_20260512143025");
+        manager.register("tmp_i_table1_20260512143030", "test");
+        manager.register("tmp_i_table2_20260512143031", "test");
+        manager.register("tmp_q_table3_20260512143025", "test");
 
         let cleaned = manager.cleanup_by_prefix("tmp_i_");
         assert_eq!(cleaned.len(), 2);
@@ -855,9 +915,9 @@ mod tests {
     fn test_cleanup_all() {
         let manager = TempTableManager::new(50);
 
-        manager.register("tmp_q_test1_20260512143025");
-        manager.register("tmp_m_test2_20260512143030");
-        manager.register("tmp_p_test3_20260512143035");
+        manager.register("tmp_q_test1_20260512143025", "test");
+        manager.register("tmp_m_test2_20260512143030", "test");
+        manager.register("tmp_p_test3_20260512143035", "test");
 
         let cleaned = manager.cleanup_all();
         assert_eq!(cleaned.len(), 3);
@@ -868,9 +928,9 @@ mod tests {
     fn test_cleanup_plugin_tables() {
         let manager = TempTableManager::new(50);
 
-        manager.register("tmp_p_plugin1_sql_20260512143040");
-        manager.register("tmp_p_plugin1_data_20260512143041");
-        manager.register("tmp_p_plugin2_sql_20260512143042");
+        manager.register("tmp_p_plugin1_sql_20260512143040", "test");
+        manager.register("tmp_p_plugin1_data_20260512143041", "test");
+        manager.register("tmp_p_plugin2_sql_20260512143042", "test");
 
         let cleaned = manager.cleanup_plugin_tables("plugin1");
         assert_eq!(cleaned.len(), 2);
@@ -886,8 +946,20 @@ mod tests {
         let expired_time = Instant::now()
             .checked_sub(Duration::from_secs(1801))
             .unwrap();
-        registry.insert("tmp_i_expired_20260512140000".to_string(), expired_time);
-        registry.insert("tmp_i_fresh_20260512143000".to_string(), Instant::now());
+        registry.insert(
+            "tmp_i_expired_20260512140000".to_string(),
+            TempEntry {
+                created: expired_time,
+                owner: "test".to_string(),
+            },
+        );
+        registry.insert(
+            "tmp_i_fresh_20260512143000".to_string(),
+            TempEntry {
+                created: Instant::now(),
+                owner: "test".to_string(),
+            },
+        );
         drop(registry);
 
         let cleaned = manager.lazy_cleanup_insight_tables();
@@ -905,7 +977,13 @@ mod tests {
         for i in 0..105 {
             let name = format!("tmp_i_test_{:04}_20260512140000", i);
             let time = Instant::now() + Duration::from_secs(i as u64);
-            registry.insert(name, time);
+            registry.insert(
+                name,
+                TempEntry {
+                    created: time,
+                    owner: "test".to_string(),
+                },
+            );
         }
         drop(registry);
 
@@ -925,8 +1003,20 @@ mod tests {
             let expired = Instant::now()
                 .checked_sub(Duration::from_secs(3600))
                 .unwrap();
-            registry.insert("tmp_i_protected_20260512140000".to_string(), expired);
-            registry.insert("tmp_i_expired_20260512140001".to_string(), expired);
+            registry.insert(
+                "tmp_i_protected_20260512140000".to_string(),
+                TempEntry {
+                    created: expired,
+                    owner: "test".to_string(),
+                },
+            );
+            registry.insert(
+                "tmp_i_expired_20260512140001".to_string(),
+                TempEntry {
+                    created: expired,
+                    owner: "test".to_string(),
+                },
+            );
         }
         manager.protect("tmp_i_protected_20260512140000");
 
@@ -955,7 +1045,13 @@ mod tests {
         for i in 0..102 {
             let name = format!("tmp_i_test_{i:04}_20260512140000");
             let time = Instant::now() + Duration::from_secs(i as u64);
-            registry.insert(name, time);
+            registry.insert(
+                name,
+                TempEntry {
+                    created: time,
+                    owner: "test".to_string(),
+                },
+            );
         }
         drop(registry);
         manager.protect("tmp_i_test_0000_20260512140000");
@@ -984,8 +1080,20 @@ mod tests {
             let expired = Instant::now()
                 .checked_sub(Duration::from_secs(3600))
                 .unwrap();
-            registry.insert("tmp_i_p1".to_string(), expired);
-            registry.insert("tmp_i_p2".to_string(), expired);
+            registry.insert(
+                "tmp_i_p1".to_string(),
+                TempEntry {
+                    created: expired,
+                    owner: "test".to_string(),
+                },
+            );
+            registry.insert(
+                "tmp_i_p2".to_string(),
+                TempEntry {
+                    created: expired,
+                    owner: "test".to_string(),
+                },
+            );
         }
         manager.protect("tmp_i_p1");
 
@@ -1035,7 +1143,7 @@ mod tests {
         let name = generate_unique_name(TempTableSource::Query, "drop_check");
         conn.execute_batch(&format!("CREATE TABLE {} (id INTEGER)", quote_ident(&name)))
             .expect("建表");
-        DuckDBManager::register_temp_table(&name);
+        DuckDBManager::register_temp_table(&name, "test");
         // 用**全名**当前缀断言：并行跑的用例可能也登记了 tmp_q_ 表，不能用前缀计数
         assert_eq!(
             DuckDBManager::temp_table_manager().count_by_prefix(&name),

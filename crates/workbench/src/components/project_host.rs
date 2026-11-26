@@ -370,6 +370,7 @@ mod tests {
         let table = engine::services::duckdb_service::DuckDbService::create_duckdb_temp_table(
             &["id".to_string()],
             &[],
+            "test",
         )
         .expect("建表");
         assert!(table.starts_with("tmp_q_"), "命名口径（D54）：{table}");

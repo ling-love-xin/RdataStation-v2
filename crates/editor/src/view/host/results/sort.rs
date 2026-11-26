@@ -250,6 +250,8 @@ impl EditorHostPanel {
             &entry.columns,
             &json_rows,
             description.unwrap_or("result"),
+            // owner = 本文档：结果集物化的表跟着文档走，关文档一并收掉
+            self.document.as_str(),
         ) {
             Ok(table) => Some((table, label, rows)),
             Err(error) => {

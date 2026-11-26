@@ -864,6 +864,45 @@ impl AnalysisInstance {
         Ok(removed)
     }
 
+    /// 收掉某个 owner 名下的临时结果（关文档 / 关模块时调）。
+    ///
+    /// 名单是**两处并集**：实例登记册（用户看得见、点得掉的那一份）与临时表管理器
+    /// （TTL / 上限用的那一份）。控制连接重开过时实例册可能先空、管理器那份还在，
+    /// 只查一处会漏收。
+    ///
+    /// 单张删除复用 [`Self::drop_temp`]（同一套落点 + 销登记），失败不阻断其余表，
+    /// 收完回第一条错。
+    pub fn drop_temps_of(&self, owner: &str) -> Result<usize, String> {
+        let mut names: Vec<String> = self
+            .temps()
+            .into_iter()
+            .filter(|entry| entry.created_by == owner)
+            .map(|entry| entry.name)
+            .collect();
+        for name in super::DuckDBManager::temp_table_manager().list_by_owner(owner) {
+            if !names.iter().any(|existing| existing == &name) {
+                names.push(name);
+            }
+        }
+        let mut dropped = 0;
+        let mut first_error: Option<String> = None;
+        for name in names {
+            match self.drop_temp(&name) {
+                Ok(true) => dropped += 1,
+                Ok(false) => {}
+                Err(error) => {
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                }
+            }
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(dropped),
+        }
+    }
+
     /// 清空 `rds_tmp` 里**所有已登记**的临时结果（用户点"全部清理"）。
     pub fn drop_all_temps(&self) -> Result<usize, String> {
         let names: Vec<String> = self.temps().into_iter().map(|entry| entry.name).collect();
@@ -1535,6 +1574,40 @@ mod tests {
             "清理后 rds_tmp 里也不该有"
         );
         assert!(instance.temps().is_empty(), "两件都应销掉登记");
+    }
+
+    /// 按 owner 收批：只动这个 owner 的表，别人的表与登记都不碰。
+    ///
+    /// 这是「关文档收掉这份工作的结果集」的唯一凭据——A 建的表不能因为关 B 就没了，
+    /// 也不能因为 A 关了就把 B 一起带走。
+    #[test]
+    fn dropping_temps_of_one_owner_spares_the_others() {
+        let instance = instance("t_drop_owner");
+        let session = instance.open_session("doc-a", "编辑器 A").expect("开会话");
+        session
+            .run_with_timeout(
+                "CREATE TABLE rds_tmp.tmp_q_a AS SELECT 1 AS v; \
+                 CREATE TABLE rds_tmp.tmp_q_b AS SELECT 2 AS v",
+                Duration::from_secs(3),
+            )
+            .expect("建两张表");
+        instance.register_temp("tmp_q_a", "doc-a", "A 的结果集");
+        instance.register_temp("tmp_q_b", "doc-b", "B 的结果集");
+
+        assert_eq!(instance.drop_temps_of("doc-a").expect("收 A 一批"), 1);
+        assert!(
+            session
+                .run_with_timeout("SELECT count(*) FROM rds_tmp.tmp_q_a", Duration::from_secs(3))
+                .is_err(),
+            "A 的表该没了"
+        );
+        assert!(
+            session
+                .run_with_timeout("SELECT count(*) FROM rds_tmp.tmp_q_b", Duration::from_secs(3))
+                .is_ok(),
+            "B 的表不该被牵连"
+        );
+        assert_eq!(instance.temps().len(), 1, "只剩 B 的登记");
     }
 
     /// 关会话 = TEMP 跟着消失（再开新会话是新世界），别的会话不受影响。

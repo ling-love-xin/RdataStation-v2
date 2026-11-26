@@ -287,7 +287,7 @@ impl MockEngine {
             on_progress(batch_idx as usize + 1, total_batches as usize);
         }
 
-        DuckDBManager::register_temp_table(&table_name);
+        DuckDBManager::register_temp_table(&table_name, "mock");
 
         let preview = Self::read_preview(&conn, &table_name, PREVIEW_ROWS)?;
         let elapsed_ms = start.elapsed().as_millis() as u64;

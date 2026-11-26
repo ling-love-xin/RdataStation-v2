@@ -48,8 +48,9 @@ impl DuckDbService {
     pub fn create_duckdb_temp_table(
         columns: &[String],
         rows: &[Vec<serde_json::Value>],
+        owner: &str,
     ) -> Result<String, CoreError> {
-        Self::create_duckdb_temp_table_named(columns, rows, "result")
+        Self::create_duckdb_temp_table_named(columns, rows, "result", owner)
     }
 
     /// 带**描述**的版本：描述会进表名（`tmp_q_<描述>_<时间戳>_<随机>`）。
@@ -57,16 +58,19 @@ impl DuckDbService {
     /// 用户给结果集起名后再物化就走这里——名字要能在面板里认出来。注意临时表名的
     /// 尺子只留 ASCII（[`crate::duckdb::generate_unique_name`] 的既有口径），中文会被
     /// 折成下划线：界面必须展示**实际生成的表名**，不要拿用户输入直接当表名显示。
+    ///
+    /// `owner` 是这张表该由谁回收（编辑器传文档 id，模块自己传模块名）。
     pub fn create_duckdb_temp_table_named(
         columns: &[String],
         rows: &[Vec<serde_json::Value>],
         description: &str,
+        owner: &str,
     ) -> Result<String, CoreError> {
         let duckdb = Self::get_or_create_duckdb()?;
         let mut conn = duckdb.lock().map_err(|e| {
             CoreError::common(CommonError::General(format!("DuckDB lock error: {}", e)))
         })?;
-        Self::create_temp_table_internal(&mut conn, columns, rows, description)
+        Self::create_temp_table_internal(&mut conn, columns, rows, description, owner)
     }
 
     /// 建一张**查询结果**临时表（表名带 `tmp_q_` 前缀、建完即登记）并回填数据。
@@ -83,6 +87,7 @@ impl DuckDbService {
         columns: &[String],
         rows: &[Vec<serde_json::Value>],
         description: &str,
+        owner: &str,
     ) -> Result<String, CoreError> {
         let table_name = crate::duckdb::generate_unique_name(
             crate::duckdb::TempTableSource::Query,
@@ -146,7 +151,7 @@ impl DuckDbService {
             }
         }
 
-        DuckDBManager::register_temp_table(&table_name);
+        DuckDBManager::register_temp_table(&table_name, owner);
         Ok(table_name)
     }
 
@@ -168,6 +173,7 @@ impl DuckDbService {
     pub fn create_temp_table_from_batches(
         conn: &mut duckdb::Connection,
         batches: &[ArrowBatch],
+        owner: &str,
     ) -> Result<String, CoreError> {
         let schema = batches
             .first()
@@ -231,7 +237,7 @@ impl DuckDbService {
                 .map_err(|e| general_error(format!("直灌收尾失败: {e}")))?;
         }
 
-        DuckDBManager::register_temp_table(&table_name);
+        DuckDBManager::register_temp_table(&table_name, owner);
         Ok(table_name)
     }
 
@@ -612,7 +618,7 @@ mod tests {
         let mut conn = duckdb::Connection::open_in_memory().expect("内存连接");
         let batch = typed_batch();
         let table =
-            DuckDbService::create_temp_table_from_batches(&mut conn, &[batch]).expect("直灌建表");
+            DuckDbService::create_temp_table_from_batches(&mut conn, &[batch], "test").expect("直灌建表");
 
         assert!(
             table.starts_with("tmp_q_"),
@@ -679,6 +685,7 @@ mod tests {
         let table = DuckDbService::create_temp_table_from_batches(
             &mut conn,
             &[empty, batch.slice(0, 1), batch.slice(1, 1)],
+            "test",
         )
         .expect("多批直灌");
 
@@ -713,7 +720,7 @@ mod tests {
         )]));
         let batch = RecordBatch::try_new(schema, vec![std::sync::Arc::new(dict)]).expect("批");
 
-        let table = DuckDbService::create_temp_table_from_batches(&mut conn, &[batch])
+        let table = DuckDbService::create_temp_table_from_batches(&mut conn, &[batch], "test")
             .expect("词典编码也该能直灌");
         assert_eq!(
             scalar_text(&conn, &format!("SELECT typeof(name) FROM {table} LIMIT 1")),
@@ -742,9 +749,12 @@ mod tests {
         // 形状不一致（列数不同）
         let batch = typed_batch();
         let narrow = batch.slice(0, 1).project(&[0]).expect("只留一列");
-        let err =
-            DuckDbService::create_temp_table_from_batches(&mut conn, &[batch.clone(), narrow])
-                .expect_err("形状不一致要报错");
+        let err = DuckDbService::create_temp_table_from_batches(
+            &mut conn,
+            &[batch.clone(), narrow],
+            "test",
+        )
+        .expect_err("形状不一致要报错");
         assert!(format!("{err:?}").contains("形状"), "{err:?}");
 
         // 嵌套类型（协议里这类是 JSON 字符串，真来了也先说明白）
@@ -762,13 +772,13 @@ mod tests {
             vec![list],
         )
         .expect("批");
-        let err = DuckDbService::create_temp_table_from_batches(&mut conn, &[list_batch])
+        let err = DuckDbService::create_temp_table_from_batches(&mut conn, &[list_batch], "test")
             .expect_err("嵌套类型要报错");
         let message = format!("{err:?}");
         assert!(message.contains("tags"), "要点名是哪一列：{message}");
 
         // 一批都没有
-        assert!(DuckDbService::create_temp_table_from_batches(&mut conn, &[]).is_err());
+        assert!(DuckDbService::create_temp_table_from_batches(&mut conn, &[], "test").is_err());
     }
 
     /// 两条路（Arrow 直灌 / 逐行 INSERT）在建出来的**数据**上必须一致。
@@ -778,7 +788,7 @@ mod tests {
         let columns = vec!["id".to_string(), "name".to_string()];
         let rows = vec![vec![json!(1), json!("甲")], vec![json!(2), json!("乙")]];
 
-        let row_table = DuckDbService::create_temp_table_internal(&mut conn, &columns, &rows, "result")
+        let row_table = DuckDbService::create_temp_table_internal(&mut conn, &columns, &rows, "result", "test")
             .expect("逐行建表");
         let arrow_batch = {
             use arrow::array::{Int64Array, LargeStringArray};
@@ -795,7 +805,7 @@ mod tests {
             )
             .expect("批")
         };
-        let arrow_table = DuckDbService::create_temp_table_from_batches(&mut conn, &[arrow_batch])
+        let arrow_table = DuckDbService::create_temp_table_from_batches(&mut conn, &[arrow_batch], "test")
             .expect("直灌建表");
 
         let count = |table: &str| scalar_i64(&conn, &format!("SELECT count(*) FROM {table}"));
@@ -820,7 +830,7 @@ mod tests {
         let columns = vec!["id".to_string(), "name".to_string()];
         let rows = vec![vec![json!(1), json!("a")]];
 
-        let table = DuckDbService::create_duckdb_temp_table(&columns, &rows).expect("建表");
+        let table = DuckDbService::create_duckdb_temp_table(&columns, &rows, "test").expect("建表");
         assert!(
             table.starts_with("tmp_q_"),
             "结果集临时表名要在 tmp_q_ 前缀下: {table}"
@@ -846,6 +856,7 @@ mod tests {
         let table = DuckDbService::create_duckdb_temp_table(
             &["id".to_string()],
             &[vec![json!(1)]],
+            "test",
         )
         .expect("建表");
         let instance = crate::duckdb::instance::current().expect("进程单例就是实例的 process 会话");

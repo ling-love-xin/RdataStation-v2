@@ -207,7 +207,8 @@ impl ExecQueue {
                                     )
                                 } else if let Some(request) = job.analysis.as_ref() {
                                     // 【B15】本地分析：桥接的行 + 分析 SQL 一起交给执行器（不碰源库）
-                                    runner.analyze(request)
+                                    // 文档 id 一并给：分析建的临时表按文档归属（关文档收这一批）
+                                    runner.analyze(request, job.document.as_str())
                                 } else {
                                     // 连接透传给执行器（B1）：`None` = 未绑定 → 执行器自己决定回退口径
                                     // 文档 id 也透传：本地加速 / 联邦的分析会话按它归属（一份工作一条会话）

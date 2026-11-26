@@ -58,7 +58,7 @@ async fn probe<D: Database>(db: &D, label: &str) {
     );
 
     // ② 建临时表并查回来：这一步证明「行真的到了表里」，而不只是中间变量不为空。
-    let table = DuckDbService::create_duckdb_temp_table(&columns, &rows)
+    let table = DuckDbService::create_duckdb_temp_table(&columns, &rows, "test")
         .unwrap_or_else(|e| panic!("{label}: 建临时表失败：{e}"));
     let conn = DuckDbService::get_or_create_duckdb().expect("内存 DuckDB");
     let guard = conn.lock().expect("锁 DuckDB");

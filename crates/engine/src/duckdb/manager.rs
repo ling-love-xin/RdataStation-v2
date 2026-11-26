@@ -291,12 +291,14 @@ impl DuckDBManager {
     ///
     /// # 参数
     /// - `table_name`: 临时表名
-    pub fn register_temp_table(table_name: &str) {
-        Self::global_temp_table_manager().register(table_name);
+    /// - `owner`: 谁生的（文档 id / `process` / `insight` / `mock`）。关文档时按它收该批——
+    ///   这是「B 能用 A 的结果集、关 A 后不能用」的唯一凭据。
+    pub fn register_temp_table(table_name: &str, owner: &str) {
+        Self::global_temp_table_manager().register(table_name, owner);
         // 同时登到**分析实例**的登记册：那是"用户看得见、点得掉"的那一份
         // （`rds_tmp` 面板 → `AnalysisInstance::drop_temp`）。表名仍是裸名，前缀口径不动。
         if let Some(instance) = crate::duckdb::instance::current() {
-            instance.register_temp(table_name, "引擎", "分析临时表");
+            instance.register_temp(table_name, owner, "分析临时表");
         }
     }
 
