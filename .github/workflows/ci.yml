@@ -63,8 +63,11 @@ jobs:
         if: runner.os == 'Linux'
         run: bash tools/install-linux-deps.sh
 
+      # 与 rust-toolchain.toml 的钉版保持同版：rustup 不会自动安装 toml 点名的具名
+      # 工具链（RUSTUP_AUTO_INSTALL 默认关），action 只装 @stable 的话 cargo 解析
+      # `1.100.0` 会当场失败。bump 工具链时三处一起改（ci + release ×2 + toml）。
       - name: 安装 Rust 工具链
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.100.0
 
       # 这里**开** target 缓存（与发布流水线相反）：PR 反复跑同一份代码，增量命中能把
       # 几十分钟压成几分钟。仓库缓存预算 10 GB，吃紧就把 `cache-targets` 关掉。
@@ -108,8 +111,9 @@ jobs:
       - name: 预建 TEMP 目录
         run: mkdir -p .rds/tmp
 
+      # 与 rust-toolchain.toml 钉版同版（rustup 不自动装 toml 点名的具名工具链）
       - name: 安装 Rust 工具链
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.100.0
 
       - name: 缓存 Cargo 依赖
         uses: Swatinem/rust-cache@v2
