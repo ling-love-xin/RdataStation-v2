@@ -1203,48 +1203,59 @@ impl DataObjectsTab {
             }
         }
 
-        let mut last_group: Option<Group> = None;
+        // 段头常驻（草稿箱分区头同一形态：0 条的段也要有「源 0」这一行），
+        // 所以不能由「遇到新行才画头」驱动——空段永远等不到那一行。
+        // 按固定顺序 源 → 表 → 文件 补齐，行循环只负责「补齐到当前组」。
+        let collapsed_for_head = self.collapsed.clone();
+        let entity_for_head = entity.clone();
+        let head = move |group: Group, count: usize| -> AnyElement {
+            let expanded = !collapsed_for_head.contains(&group);
+            let entity = entity_for_head.clone();
+            // `tree::GroupHeader` 与草稿箱的分区头（草稿 / 引用 / 书签 / 回收站）、数据导航的
+            // 分组头同一个原语：整行可点、计数紧跟组名、凹槽底色由原语统一。
+            // 外层 `pl_1p5` 把原语自带的 6px 内距补到面板的 12px 一线（铁律第 41 条），
+            // 底色同 `group_box` 让凹槽从面板左缘铺起。
+            div()
+                .pl_1p5()
+                .bg(colors.group_box)
+                .child(
+                    tree::GroupHeader::new(
+                        SharedString::from(format!("data-objects-group-{}", group.title())),
+                        group.title(),
+                    )
+                    .debug_selector("data-objects-group-head")
+                    .expanded(expanded)
+                    .count(count, colors.muted_foreground)
+                    // 可点的行必须给 hover 反馈（导航分组头同一口径）
+                    .hover_background(colors.list_hover)
+                    .on_click(move |_, _, cx| {
+                        entity.update(cx, |tab, cx| tab.toggle_group(group, cx));
+                    }),
+                )
+                .into_any_element()
+        };
+        let count_of = |group: Group| {
+            group_counts
+                .iter()
+                .find(|(item, _)| *item == group)
+                .map(|(_, count)| *count)
+                .unwrap_or(0)
+        };
+
+        let mut drawn: Vec<Group> = Vec::new();
         for object in objects {
-            if last_group != Some(object.group) {
-                last_group = Some(object.group);
-                // 段头带计数：这一段里几行，扫一眼就知道要不要往下翻
-                let group_count = group_counts
-                    .iter()
-                    .find(|(group, _)| *group == object.group)
-                    .map(|(_, count)| *count)
-                    .unwrap_or(0);
-                let group = object.group;
-                let expanded = !self.collapsed.contains(&group);
-                let entity_for_group = entity.clone();
-                // 段头用共享 `tree::GroupHeader`：与草稿箱的分区头（草稿 / 引用 / 书签 / 回收站）、
-                // 数据导航的分组头是同一个原语——整行可点、计数紧跟组名、凹槽底色与原语统一。
-                // 手搓版（Button 箭头 + 计数顶到右端 + 无底色）已撤：三段时间距 / 高度各写一套，
-                // 与兄弟面板对不齐。
-                // 外层 `pl_1p5` 把原语自带的 6px 内距补到面板的 12px 一线（铁律第 41 条：
-                // 工具栏 / 行 / 状态栏同一条左缘），底色同 `group_box` 让凹槽从面板左缘铺起。
-                list = list.child(
-                    div().pl_1p5().bg(colors.group_box).child(
-                        tree::GroupHeader::new(
-                            SharedString::from(format!(
-                                "data-objects-group-{}",
-                                group.title()
-                            )),
-                            group.title(),
-                        )
-                        .debug_selector("data-objects-group-head")
-                        .expanded(expanded)
-                        .count(group_count, colors.muted_foreground)
-                        // 可点的行必须给 hover 反馈（导航分组头同一口径）；草稿箱那几处是
-                        // 常驻分区头、不传，这里属于「点了会折叠」的一类。
-                        .hover_background(colors.list_hover)
-                        .on_click(move |_, _, cx| {
-                            let group = group;
-                            entity_for_group.update(cx, |tab, cx| {
-                                tab.toggle_group(group, cx);
-                            });
-                        }),
-                    ),
-                );
+            if !drawn.contains(&object.group) {
+                // 补齐到当前组：中间的空段也先占一行段头
+                for group in [Group::Source, Group::Table, Group::File] {
+                    if drawn.contains(&group) {
+                        continue;
+                    }
+                    list = list.child(head(group, count_of(group)));
+                    drawn.push(group);
+                    if group == object.group {
+                        break;
+                    }
+                }
             }
             // 收起只是不画行：段头和计数留着，折叠起来也知道里面有几行
             if self.collapsed.contains(&object.group) {
@@ -2269,6 +2280,17 @@ impl DataObjectsTab {
                             }
                         }
                     }
+                }
+            }
+        }
+
+        // 末尾补齐：文件段可能一行都没有，段头仍要占位（与草稿箱的分区头一致）。
+        // 整体为空时交给下面的空态，不摆三段空头——那时「一段都没有」比三个 0 更清楚。
+        if !objects.is_empty() {
+            for group in [Group::Source, Group::Table, Group::File] {
+                if !drawn.contains(&group) {
+                    list = list.child(head(group, count_of(group)));
+                    drawn.push(group);
                 }
             }
         }
