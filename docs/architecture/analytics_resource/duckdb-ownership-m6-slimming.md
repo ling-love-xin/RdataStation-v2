@@ -509,9 +509,10 @@ WIP 产物串包（`rds_sql::guard` 缺失 / `use_duckdb_fed` 类型不一致）
 用例：`service::tests::trash::t129_file_asset_must_unlock_before_delete`、
 `global::tests::g031_global_file_must_unlock_before_delete`。
 
-本段边界：草稿箱栏的“唯一回收站”聚合 UI 尚未落地——草稿箱回收站组目前只列
-`origin == "scratchpad"` 的条目，资产库面板头仍有「⋯ → 回收站…」。跨模块聚合需要
-由 workbench 注入 provider 或把回收站移到 workbench_shell，另开一刀。
+本段边界：草稿箱栏的“唯一回收站”入口已落地为回收站分区里的「资产库归档…」
+（`ScratchpadHost::can_open_asset_trash` / `open_asset_trash` → 资产库回收站对话框），
+资产库面板头的「⋯ → 回收站…」已撤掉。草稿箱分区里的条目行仍只列 `origin == scratchpad`；
+全局表回收站条目尚未并入这个对话框（`list_global_trash` 目前只有服务层）。
 
 ## 10. 风险与未决
 

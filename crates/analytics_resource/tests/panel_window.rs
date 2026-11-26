@@ -1254,11 +1254,11 @@ fn header_more_button_sits_in_the_header_and_dispatches_host_actions(cx: &mut Te
         "`⋯` 按钮要在面板头里"
     );
 
-    // 四个动作依次派发（顺序就是菜单顺序）：每个都要原样落到宿主端口。
+    // 三个动作依次派发（顺序就是菜单顺序）：每个都要原样落到宿主端口。
+    // 回收站不在这里——唯一入口在草稿箱栏。
     let expected = [
         (HeaderMenuAction::RebuildIndex, "repair"),
         (HeaderMenuAction::OpenPayloadDir, "open-dir"),
-        (HeaderMenuAction::OpenTrash, "trash"),
         (HeaderMenuAction::Refresh, "refresh"),
     ];
     cx.update(|window, cx| {

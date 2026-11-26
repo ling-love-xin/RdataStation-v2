@@ -211,11 +211,11 @@ fn enter_on_a_group_header_folds_that_group() {
 
 #[test]
 fn header_menu_actions_follow_the_prototype_order() {
-    // 原型 §2.1 的 `⋯` 四项，自上而下：重建索引… / 打开资源目录 / 回收站… / 刷新。
-    // 顺序与文案都是用户可见的约定，改动要有意识地改这条测试。
+    // `⋯` 三项，自上而下：重建索引… / 打开资源目录 / 刷新。
+    // 回收站不在这里：唯一入口在草稿箱栏（草稿箱与资产库共用一个回收站）。
     let labels: Vec<&str> = HeaderMenuAction::ALL.iter().map(|a| a.label()).collect();
-    assert_eq!(labels, vec!["重建索引…", "打开资源目录", "回收站…", "刷新"]);
-    assert_eq!(HeaderMenuAction::ALL.len(), 4);
+    assert_eq!(labels, vec!["重建索引…", "打开资源目录", "刷新"]);
+    assert_eq!(HeaderMenuAction::ALL.len(), 3);
 }
 
 #[test]

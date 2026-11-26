@@ -260,7 +260,10 @@ pub trait ResourcesHost: 'static {
     }
 }
 
-/// 面板头「⋯」菜单的动作（原型 §2.1 四项；顺序即菜单顺序）。
+/// 面板头「⋯」菜单的动作（原型 §2.1；顺序即菜单顺序）。
+///
+/// 回收站**不在这里**：项目回收站的唯一入口在草稿箱栏（草稿箱与资产库条目共用一个
+/// 回收站）。资产库面板只保留索引、资源目录与刷新。
 ///
 /// 单独成枚举而不是散在渲染闭包里：菜单项文案、顺序与去向可以被单测钉住
 /// ——弹层点击在窗口测试里模拟不了，这是那份测试的入口。
@@ -270,27 +273,19 @@ pub enum HeaderMenuAction {
     RebuildIndex,
     /// 打开资源目录（`{项目}/resources/`）。
     OpenPayloadDir,
-    /// 回收站…
-    OpenTrash,
     /// 刷新。
     Refresh,
 }
 
 impl HeaderMenuAction {
-    /// 菜单顺序（原型 §2.1 自上而下：重建索引… / 打开资源目录 / 回收站… / 刷新）。
-    pub const ALL: [Self; 4] = [
-        Self::RebuildIndex,
-        Self::OpenPayloadDir,
-        Self::OpenTrash,
-        Self::Refresh,
-    ];
+    /// 菜单顺序（原型 §2.1 自上而下：重建索引… / 打开资源目录 / 刷新）。
+    pub const ALL: [Self; 3] = [Self::RebuildIndex, Self::OpenPayloadDir, Self::Refresh];
 
     /// 菜单项文案（省略号表示它会开一个对话框/入口，而不是立即生效）。
     pub fn label(self) -> &'static str {
         match self {
             Self::RebuildIndex => "重建索引…",
             Self::OpenPayloadDir => "打开资源目录",
-            Self::OpenTrash => "回收站…",
             Self::Refresh => "刷新",
         }
     }
@@ -309,7 +304,6 @@ pub fn dispatch_header_action(
     match action {
         HeaderMenuAction::RebuildIndex => host.request_index_repair(window, cx),
         HeaderMenuAction::OpenPayloadDir => host.request_open_payload_dir(window, cx),
-        HeaderMenuAction::OpenTrash => host.request_open_trash(window, cx),
         HeaderMenuAction::Refresh => host.request_refresh(window, cx),
     }
 }

@@ -132,4 +132,20 @@ pub trait ScratchpadHost: 'static {
     fn archive_drafts(&self, paths: Vec<PathBuf>, window: &mut Window, cx: &mut App) {
         let _ = (paths, window, cx);
     }
+
+    /// 这个宿主接过资产库回收站没有？只影响回收站分区里摆不摆「资产库归档…」入口。
+    ///
+    /// 项目回收站是**唯一一个**回收站：草稿箱条目与资产库条目都在这里进出，
+    /// 资产库面板不再单独摆「回收站…」菜单。
+    fn can_open_asset_trash(&self) -> bool {
+        false
+    }
+
+    /// 打开资产库回收站（项目 `.RSmeta/trash` 里 `origin = resources` 的条目）。
+    ///
+    /// 与回收站分区里的草稿条目同一个入口：宿主把资产库的回收站对话框打开，
+    /// 还原 / 永久删除 / 清空都在那里执行。
+    fn open_asset_trash(&self, window: &mut Window, cx: &mut App) {
+        let _ = (window, cx);
+    }
 }

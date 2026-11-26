@@ -350,6 +350,9 @@ struct TestHost {
     opened: RefCell<Vec<std::path::PathBuf>>,
     notices: RefCell<Vec<String>>,
     searches: RefCell<Vec<Option<ScratchpadSearchView>>>,
+    /// 接过资产库回收站没有（只影响回收站分区的「资产库归档…」入口）。
+    asset_trash: bool,
+    asset_trash_opened: RefCell<usize>,
 }
 
 impl ScratchpadHost for TestHost {
@@ -369,6 +372,60 @@ impl ScratchpadHost for TestHost {
     fn open_in_editor(&self, path: std::path::PathBuf) {
         self.opened.borrow_mut().push(path);
     }
+    fn can_open_asset_trash(&self) -> bool {
+        self.asset_trash
+    }
+    fn open_asset_trash(&self, _window: &mut gpui_kit::Window, _cx: &mut App) {
+        *self.asset_trash_opened.borrow_mut() += 1;
+    }
+}
+
+/// 回收站分区是项目回收站的唯一入口：接过资产库的宿主在这里摆「资产库归档…」，
+/// 没接过的宿主不摆（点了没反应的入口比没有更糟）。
+#[gpui_kit::test]
+fn trash_section_exposes_the_asset_trash_entry_only_when_host_accepts_it(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let root = panel_root("asset_trash_entry");
+
+    let (with_asset, cx) = {
+        let host = host_with_asset_trash(root.clone());
+        cx.add_window_view(move |_window, cx| ScratchpadView::new(host, cx))
+    };
+    let seq = crate::jobs::enqueue_root_load(&root, vec![]);
+    cx.update(|_window, cx| {
+        with_asset.update(cx, |view, cx| {
+            view.apply_scratchpad_loads(vec![panel_load(seq, vec![])], cx);
+            view.scratchpad.borrow_mut().trash_expanded = true;
+            cx.notify();
+        });
+    });
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    assert!(
+        cx.debug_bounds("sp-trash-assets-entry").is_some(),
+        "接过资产库的宿主要在回收站分区摆出资产库入口"
+    );
+
+    let (without_asset, cx) = {
+        let host = host_with(Some(root.clone()), false);
+        cx.add_window_view(move |_window, cx| ScratchpadView::new(host, cx))
+    };
+    let seq = crate::jobs::enqueue_root_load(&root, vec![]);
+    cx.update(|_window, cx| {
+        without_asset.update(cx, |view, cx| {
+            view.apply_scratchpad_loads(vec![panel_load(seq, vec![])], cx);
+            view.scratchpad.borrow_mut().trash_expanded = true;
+            cx.notify();
+        });
+    });
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    assert!(
+        cx.debug_bounds("sp-trash-assets-entry").is_none(),
+        "没接资产库的宿主不得摆出点了没反应的入口"
+    );
 }
 
 /// 每个用例一个临时项目根（互不干扰；用完尽力清理）。
@@ -399,6 +456,21 @@ fn host_with(root: Option<std::path::PathBuf>, read_only: bool) -> Rc<TestHost> 
         opened: RefCell::new(Vec::new()),
         notices: RefCell::new(Vec::new()),
         searches: RefCell::new(Vec::new()),
+        asset_trash: false,
+        asset_trash_opened: RefCell::new(0),
+    })
+}
+
+/// 接过资产库回收站的宿主（回收站分区要摆「资产库归档…」入口）。
+fn host_with_asset_trash(root: std::path::PathBuf) -> Rc<TestHost> {
+    Rc::new(TestHost {
+        root: Some(root),
+        read_only: false,
+        opened: RefCell::new(Vec::new()),
+        notices: RefCell::new(Vec::new()),
+        searches: RefCell::new(Vec::new()),
+        asset_trash: true,
+        asset_trash_opened: RefCell::new(0),
     })
 }
 
