@@ -6,10 +6,11 @@
 use super::*;
 impl WorkbenchView {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        // P0：先解析当前项目会话（环境变量 → 最近项目 → 空态），供列表作用域 / 标题栏 /
-        // 草稿箱共用；**连接列表必须按作用域加载**（全局 + 项目 P_/GP_），否则启动后
-        // 只看到全局连接，要等重新打开项目才出现项目侧连接。
-        let project = crate::services::project_session::resolve();
+        // P0：先解析当前项目会话（环境变量 → 设置「启动时恢复上次项目」→ 空态），供列表
+        // 作用域 / 标题栏 / 草稿箱共用；**连接列表必须按作用域加载**（全局 + 项目 P_/GP_），
+        // 否则启动后只看到全局连接，要等重新打开项目才出现项目侧连接。
+        // 默认（开关关）解析结果为 `None` → 中央欢迎页，用户自己点项目进来。
+        let project = crate::services::project_session::resolve(cx);
         let project_root = project.as_ref().map(|p| p.root.clone());
         let (connections, notice) =
             crate::services::workspace_loader::load_connections_for_scope(project_root.as_deref());

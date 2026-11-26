@@ -24,6 +24,12 @@ pub(crate) fn apply_slot(
             }
             SettingsService::set_startup_default_left_panel(text, cx);
         }
+        Slot::StartupRestoreLastWorkspace => {
+            let Some(flag) = value.as_bool() else {
+                return false;
+            };
+            SettingsService::set_startup_restore_last_workspace(flag, cx);
+        }
         _ => return false,
     }
     true
@@ -41,6 +47,26 @@ impl SettingsService {
         {
             let settings = cx.global_mut::<Settings>();
             settings.startup.default_left_panel = key.to_string();
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
+    }
+
+    /// 启动时是否自动恢复上次打开的项目（默认 `false` = 先进欢迎页）。
+    ///
+    /// 唯一消费者：`workbench::services::project_session::resolve`（启动装配期读一次）。
+    pub fn startup_restore_last_workspace(cx: &App) -> bool {
+        cx.global::<Settings>().startup.restore_last_workspace
+    }
+
+    /// 设置并持久化「启动时恢复上次项目」（更新 global → 写 settings.json）。
+    pub fn set_startup_restore_last_workspace(flag: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            if settings.startup.restore_last_workspace == flag {
+                return;
+            }
+            settings.startup.restore_last_workspace = flag;
         }
         let settings = cx.global::<Settings>().clone();
         persist(&settings);
