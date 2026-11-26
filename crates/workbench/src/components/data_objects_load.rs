@@ -341,7 +341,7 @@ pub fn unmount_file_database(shared: &Shared, path_text: &str, cx: &mut App) {
 ///
 /// 铁律 D17：历史版本**不平铺进数据对象清单**，要看旧数就走这个二级入口。
 /// 三件事必须守住：
-/// 1. **只读**：读的是 `.RSmeta/resources/versions/<id>/<N>/` 下的副本，本体与版本行都不动；
+/// 1. **只读**：从该版本 manifest 物化到 `.RSmeta/cas/materialized/versions/<id>/v<N>/`，本体与版本行都不动；
 /// 2. **不覆盖当前版本**：副本与原文件同名，`alias_for` 会算出同一个 `f_*`，所以这里
 ///    用 `f_<stem>_v<N>` 的显式别名（`load_file_as_global` / `load_database_as_global`），
 ///    当前版本那行原样留着；

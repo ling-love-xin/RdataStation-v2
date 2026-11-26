@@ -103,30 +103,6 @@ pub fn get_global_metadata_dir() -> Result<PathBuf, CoreError> {
     Ok(metadata_dir)
 }
 
-/// 全局文件资产本体目录：`<RDS_HOME>/data/system/resources`
-pub fn get_global_resources_dir() -> Result<PathBuf, CoreError> {
-    let dir = get_system_dir()?.join("resources");
-    std::fs::create_dir_all(&dir).map_err(|e| {
-        CoreError::common(CommonError::General(format!(
-            "Failed to create global resources directory: {}",
-            e
-        )))
-    })?;
-    Ok(dir)
-}
-
-/// 全局文件资产历史副本目录：`<RDS_HOME>/data/system/resources/versions`
-pub fn get_global_resource_versions_dir() -> Result<PathBuf, CoreError> {
-    let dir = get_global_resources_dir()?.join("versions");
-    std::fs::create_dir_all(&dir).map_err(|e| {
-        CoreError::common(CommonError::General(format!(
-            "Failed to create global resource versions directory: {}",
-            e
-        )))
-    })?;
-    Ok(dir)
-}
-
 /// 全局资产回收站根：`<RDS_HOME>/data/trash/global`
 ///
 /// 与项目 `.RSmeta/trash/` 同一套应用语义、两个后端；不调用 Windows 回收站。
