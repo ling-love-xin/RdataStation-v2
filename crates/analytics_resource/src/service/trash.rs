@@ -497,9 +497,16 @@ impl ArchiveService {
         }
         let mode = PayloadMode::from_db_str(&resource.payload_mode);
 
-        // copy：删掉副本即可（源文件本来就在原处——归档是复制，不是搬走）。
+        // copy：归档已消费草稿，撤销要把本体送回原位（立即反悔窗口）；
+        // 若原位已有用户文件，不覆盖它，只删副本。
         if mode == PayloadMode::Copy {
-            self.payload.remove_payload(&rel_path).await?;
+            if undo.source_path.exists() {
+                self.payload.remove_payload(&rel_path).await?;
+            } else {
+                self.payload
+                    .move_payload_out(&rel_path, &undo.source_path)
+                    .await?;
+            }
         }
         if let Err(error) = self.store.hard_delete_row(&undo.resource_id).await {
             // 回滚本体（copy 模式）：删行失败 → 把副本放回去（与 archive_new 的回滚同纪律）。

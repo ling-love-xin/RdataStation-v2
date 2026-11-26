@@ -35,7 +35,9 @@ pub(crate) const PROJECT_MIGRATIONS_SQL: &str = concat!(
     "\n",
     include_str!("../../../store/migrations/project_meta/031_analytics_table_payload.sql"),
     "\n",
-    include_str!("../../../store/migrations/project_meta/032_archive_kind_two_tiers.sql")
+    include_str!("../../../store/migrations/project_meta/032_archive_kind_two_tiers.sql"),
+    "\n",
+    include_str!("../../../store/migrations/project_meta/036_file_asset_cas.sql")
 );
 
 /// 全局库：全局镜像表与版本表、分发回执、表型本体列、kind 归一。

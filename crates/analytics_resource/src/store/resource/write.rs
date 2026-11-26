@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::model::TimelineEventKind;
+use crate::store::file_asset::NewFileAssetVersion;
 
 impl AnalyticsResourceStore {
     /// 在**调用方连接**上插入一条归档行（供事务内复用）。
@@ -92,6 +93,20 @@ impl AnalyticsResourceStore {
         input: NewArchiveInput,
         detail: Option<&str>,
     ) -> Result<AnalyticsResource, CoreError> {
+        self.insert_archive_with_event_and_file(input, None, detail)
+            .await
+    }
+
+    /// 服务层首次归档（文件）：登记行 + 文件版本索引 + 履历事件同一事务。
+    ///
+    /// 文件版本索引与 `analytics_resources` 的 v1 同批写入；manifest 本体已经先在
+    /// CAS 落盘（对象可回滚为不可达，由 GC 清），这里只保证登记口径不半截。
+    pub async fn insert_archive_with_event_and_file(
+        &self,
+        input: NewArchiveInput,
+        file: Option<NewFileAssetVersion>,
+        detail: Option<&str>,
+    ) -> Result<AnalyticsResource, CoreError> {
         let conn = self.get_conn().await?;
         let inner = conn.inner()?;
         let id = format!("ar_{}", uuid::Uuid::new_v4().simple());
@@ -102,6 +117,9 @@ impl AnalyticsResourceStore {
             .map_err(|e| persistence_err("begin_immediate", e))?;
         let result = (|| -> Result<(), CoreError> {
             Self::insert_archive_on(inner, &input, &id, &now, None)?;
+            if let Some(file) = &file {
+                Self::insert_file_asset_version_on(inner, &id, 1, file)?;
+            }
             Self::record_event_on(
                 inner,
                 &id,
@@ -413,6 +431,61 @@ impl AnalyticsResourceStore {
                 event_kind,
                 event_detail,
                 Some(content_hash),
+            )
+        })();
+        match result {
+            Ok(()) => {
+                inner
+                    .execute_batch("COMMIT")
+                    .map_err(|e| persistence_err("commit", e))?;
+            }
+            Err(error) => {
+                let _ = inner.execute_batch("ROLLBACK");
+                return Err(error);
+            }
+        }
+        self.get_resource_by_id(id).await
+    }
+
+    /// 文件资产再归档：写前快照 + 文件版本索引 + 索引 +1 + 履历事件，同一事务。
+    ///
+    /// 与 [`Self::commit_new_version`] 的差别只在多写一条 `file_asset_versions`；
+    /// manifest 已先在 CAS 落盘，事务失败时它成为不可达对象，由 GC 清。
+    #[allow(clippy::too_many_arguments)]
+    pub async fn commit_new_file_version(
+        &self,
+        id: &str,
+        old_version: i32,
+        snapshot: &str,
+        file: NewFileAssetVersion,
+        file_size: Option<i64>,
+        analysis: Option<&crate::analysis::AnalysisFacts>,
+        event_kind: TimelineEventKind,
+        event_detail: Option<&str>,
+    ) -> Result<AnalyticsResource, CoreError> {
+        let conn = self.get_conn().await?;
+        let inner = conn.inner()?;
+        inner
+            .execute_batch("BEGIN IMMEDIATE")
+            .map_err(|e| persistence_err("begin_immediate", e))?;
+        let result = (|| -> Result<(), CoreError> {
+            let snapshot_id = Self::save_resource_version_on(inner, id, old_version, snapshot)?;
+            Self::insert_file_asset_version_on(inner, id, old_version + 1, &file)?;
+            Self::update_archive_content_on(
+                inner,
+                id,
+                &file.content_hash,
+                &snapshot_id,
+                file_size,
+                analysis,
+            )?;
+            Self::record_event_on(
+                inner,
+                id,
+                Some(old_version + 1),
+                event_kind,
+                event_detail,
+                Some(&file.content_hash),
             )
         })();
         match result {

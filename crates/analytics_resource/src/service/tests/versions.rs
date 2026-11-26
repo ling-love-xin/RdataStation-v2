@@ -3,7 +3,7 @@
 use super::*;
 
 #[tokio::test]
-async fn t120_undo_removes_copy_and_drops_the_row_keeps_draft() {
+async fn t120_undo_removes_copy_and_drops_the_row_restores_draft() {
     let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
     let mut events = service.subscribe();
     let draft = write_draft(&dir, "undo.sql", b"select 1;").await;
@@ -11,7 +11,7 @@ async fn t120_undo_removes_copy_and_drops_the_row_keeps_draft() {
         .archive(archive_req(&draft, "reports/undo.sql", None))
         .await
         .expect("archive");
-    assert!(draft.exists(), "copy 语义：归档后草稿仍在（工作副本）");
+    assert!(!draft.exists(), "归档消费草稿");
 
     let undo = ArchiveUndo {
         resource_id: outcome.resource_id.clone(),
@@ -20,8 +20,13 @@ async fn t120_undo_removes_copy_and_drops_the_row_keeps_draft() {
     };
     service.undo_archive(&undo).await.expect("undo");
 
-    // copy 语义：撤销 = 删掉 `resources/` 副本 + 删登记行；草稿本来就在，不动它。
-    assert!(draft.is_file(), "草稿（工作副本）不受撤销影响");
+    // 撤销 = 把本体送回原草稿位置 + 删登记行；立即反悔窗口内草稿应回来。
+    assert!(draft.is_file(), "撤销应把本体送回原草稿位置");
+    assert_eq!(
+        fs::read(&draft).await.expect("read draft"),
+        b"select 1;",
+        "送回的是归档时那一份内容"
+    );
     assert!(
         !service
             .payload()
@@ -61,14 +66,13 @@ async fn t121_undo_refuses_when_rearchived_but_allows_with_draft_in_place() {
         source_path: draft.clone(),
     };
 
-    // ① copy 语义：草稿在“原位”是常态（它是工作副本），撤销**不受它阻挡**——
-    // 撤销删的是 `resources/` 副本与登记行，不碰草稿。
+    // ① 撤销窗口内用户在原件位置又放了一个文件：不覆盖它，只删资产库本体。
     fs::write(&draft, b"other").await.expect("write again");
     service
         .undo_archive(&undo)
         .await
-        .expect("copy 语义下原草稿在位不阻挡撤销");
-    assert!(draft.is_file(), "草稿原样保留");
+        .expect("原位已有文件不阻挡撤销");
+    assert!(draft.is_file(), "用户新建的原位文件原样保留");
     assert!(
         !service
             .payload()

@@ -506,21 +506,21 @@ purge_file(asset_id) -> ()
 
 ---
 
-## 12. 实现位置映射（计划）
+## 12. 实现位置映射（计划 → 实际）
 
-| 设计决策 | 计划落点 | 现状 |
+| 设计决策 | 落点 | 实现状态 |
 | --- | --- | --- |
-| CAS 对象/清单 | 新增 `payload/cas.rs`、`payload/manifest.rs` | 当前只有 `copy_in` 整文件复制 |
-| 版本元数据 | `store/migrations/project_meta/*`、`store/migrations/global/*` | 现有 `analytics_resource_versions` 只有快照/副本 |
-| 归档消费草稿 | `service/archive.rs::archive_new` | 现走 `copy_in`，源草稿保留 |
-| 字节哈希 vs 结构哈希 | `service/archive.rs`、`analysis.rs` | 结构化文件误用 `AnalysisFacts::fingerprint` 当 `content_hash` |
-| checkout lease | `service/checkout.rs`、`store/checkout_receipt.rs`、新 `checkout_leases` | 现有 receipt 只按路径反查 |
-| 再归档冲突 | `jobs/archive/run.rs::run_archive`、`service/archive.rs::archive_into_existing` | 当前只按 hash 幂等，不校验 base |
-| 任意两版对比 | `jobs/version.rs::load_version_diff`、`dialogs/version_diff.rs` | 当前只“选中版本 vs 当前”，仅 UTF-8 文本 |
-| 全局 file-first | `global/promote.rs`、`global/register.rs`、`global/delete.rs`、`model/kind.rs` | 当前数据文件是 `analysis` + 文件混合行 |
-| 全局 fork | `global/promote.rs`、新 `asset_forks`、`global/distribute.rs` | 当前 `promote_overwrite` 软删旧行 |
-| 文件默认全保留 | `KeepVersions` 分支、`prune_file_versions` | 当前可裁剪完整副本 |
-| 查看路由 | `resource_host/detail_actions.rs`、`present/detail.rs` | 当前按扩展名路由，结构化文件走洞察取样 |
+| CAS 对象/清单 | `payload/cas.rs`、`payload/manifest.rs` | 已实现（M1） |
+| 版本元数据 | `store/migrations/project_meta/036_file_asset_cas.sql`、`store/file_asset.rs` | 项目库已实现；全局待 M4 |
+| 归档消费草稿 | `service/archive.rs::archive_new` / `archive_into_existing` | 已实现（草稿删除失败只记 note） |
+| 字节哈希 vs 结构哈希 | `service/archive.rs`、`analysis.rs` | 已实现：`ArchiveKind::File` 一律字节 sha256，结构只作元数据 |
+| checkout lease | `service/checkout.rs`、`store/file_asset.rs`、`jobs/archive/run.rs` | 已实现（项目侧；receipt 仅兼容保留） |
+| 再归档冲突 | `service/archive.rs::archive_into_existing`、`jobs/archive/run.rs::run_archive` | 已实现 base 校验 / lease 消费；fork 待 M4 |
+| 任意两版对比 | `jobs/version.rs::load_version_diff`、`dialogs/version_diff.rs` | 未实现（M5） |
+| 全局 file-first | `global/promote.rs`、`global/register.rs`、`global/delete.rs`、`model/kind.rs` | 未实现（M4） |
+| 全局 fork | `global/promote.rs`、新 `asset_forks`、`global/distribute.rs` | 未实现（M4） |
+| 文件默认全保留 | `service/archive.rs` 的 `prune_copies` 分支 | 已实现：默认全保留，显式 `KeepVersions` 仍生效 |
+| 查看路由 | `resource_host/detail_actions.rs`、`present/detail.rs` | 未实现（M5） |
 
 ---
 

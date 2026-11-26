@@ -190,6 +190,23 @@ async fn run_checkout_with_service(job: &CheckoutJob, service: &ArchiveService) 
             {
                 tracing::error!(error = %error, "取回凭据写入失败：改完再归档将无法升版");
             }
+            // 文件元数据随 manifest 取回：落到草稿箱的集中 sidecar，供编辑器恢复书签/连接/视图。
+            if let Some(meta) = &outcome.file_meta {
+                if let Some(sidecar) =
+                    scratchpad_sidecar_path(&job.project_root, &outcome.dest_path)
+                {
+                    let meta = meta.clone();
+                    if let Err(error) = tokio::task::spawn_blocking(move || {
+                        file_meta::write_meta_at(&sidecar, &meta)
+                    })
+                    .await
+                    .map_err(|error| error.to_string())
+                    .and_then(|result| result.map_err(|error| error.to_string()))
+                    {
+                        tracing::warn!(error = %error, "取回后写草稿元数据失败（文件本体已取回）");
+                    }
+                }
+            }
             OpOutcome::CheckedOut {
                 dest: outcome.dest_path,
                 version: outcome.version,
@@ -272,4 +289,25 @@ pub(crate) async fn run_trash(job: &TrashJob) -> OpOutcome {
             reason: error.to_string(),
         },
     }
+}
+
+/// 草稿箱集中 sidecar 路径（与 `scratchpad` 的目录约定一致）。
+fn scratchpad_sidecar_path(
+    project_root: &std::path::Path,
+    dest: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    let relative = dest
+        .strip_prefix(project_root.join("scratchpad"))
+        .ok()?;
+    let mut out = project_root
+        .join(".RSmeta")
+        .join("scratchpad")
+        .join("meta");
+    if let Some(parent) = relative.parent() {
+        if !parent.as_os_str().is_empty() {
+            out = out.join(parent);
+        }
+    }
+    let name = relative.file_name()?.to_string_lossy();
+    Some(out.join(format!("{name}.meta.json")))
 }

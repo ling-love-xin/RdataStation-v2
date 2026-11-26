@@ -124,6 +124,48 @@ async fn t203_scan_reports_content_changed() {
     let _ = fs::remove_dir_all(&dir).await;
 }
 
+/// 有 manifest 的结构化文件也按字节比对：不能因为 `definition_sql` 非空就跳过。
+#[tokio::test]
+async fn t208_structured_file_with_manifest_still_checks_bytes() {
+    use crate::analysis::{AnalysisFacts, ColumnSpec};
+
+    let (service, dir) = test_env().await;
+    let repair = IndexRepair::new(service.payload(), service.store());
+    let draft = dir.join("structured.csv");
+    fs::write(&draft, b"a,b\n1,2\n").await.expect("draft");
+    let mut req = request(&draft, "structured.csv");
+    req.analysis = Some(AnalysisFacts {
+        definition_sql: Some("select * from read_csv_auto('structured.csv')".to_string()),
+        columns: vec![
+            ColumnSpec::new("a", "INTEGER"),
+            ColumnSpec::new("b", "INTEGER"),
+        ],
+        row_count: Some(1),
+    });
+    let id = service.archive(req).await.expect("archive structured").resource_id;
+
+    let payload = service
+        .payload()
+        .resources_dir()
+        .join("structured.csv");
+    service
+        .payload()
+        .set_readonly(&payload, false)
+        .await
+        .expect("clear readonly");
+    fs::write(&payload, b"a,b\n1,3\n").await.expect("edit payload");
+
+    let report = repair.scan().await.expect("scan");
+    assert_eq!(
+        report.content_changes().len(),
+        1,
+        "有 manifest 的结构化文件必须参与字节比对"
+    );
+    assert_eq!(report.content_changes()[0].resource_id(), Some(id.as_str()));
+
+    let _ = fs::remove_dir_all(&dir).await;
+}
+
 #[tokio::test]
 async fn t204_adopt_file_registers_and_clears_issue() {
     let (service, dir) = test_env().await;

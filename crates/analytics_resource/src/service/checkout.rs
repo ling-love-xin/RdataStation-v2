@@ -20,17 +20,54 @@ impl ArchiveService {
             .clone()
             .ok_or_else(|| service_err("checkout", "该存档没有本体（非文件型或旧行）"))?;
 
-        match PayloadMode::from_db_str(&resource.payload_mode) {
-            // copy：从 `resources/` 副本复制（本体不动、仍只读）。
-            PayloadMode::Copy => self.payload.copy_out(&rel_path, &req.dest_path).await?,
-            // reference：从源绝对路径复制（本体在源位置，M6 不动它）。
-            PayloadMode::Reference => {
-                let source = self.payload_path_for(&resource)?;
-                self.payload
-                    .copy_out_source(&source, &req.dest_path)
-                    .await?;
+        // 文件资产优先按 manifest 物化：内容和 FileMeta 一起从 CAS 恢复；
+        // 旧资产没有 manifest 时退回原来的 copy_out，元数据为 None。
+        let file_meta = if let Some(version) = self
+            .store
+            .file_asset_version(&resource.id, resource.version)
+            .await?
+        {
+            let manifest = self
+                .payload
+                .cas()
+                .read_manifest(&version.manifest_id)
+                .await?;
+            self.payload
+                .cas()
+                .materialize_content(&manifest, &req.dest_path)
+                .await?
+        } else {
+            match PayloadMode::from_db_str(&resource.payload_mode) {
+                // copy：从 `resources/` 副本复制（本体不动、仍只读）。
+                PayloadMode::Copy => self.payload.copy_out(&rel_path, &req.dest_path).await?,
+                // reference：从源绝对路径复制（本体在源位置，M6 不动它）。
+                PayloadMode::Reference => {
+                    let source = self.payload_path_for(&resource)?;
+                    self.payload
+                        .copy_out_source(&source, &req.dest_path)
+                        .await?;
+                }
             }
+            None
+        };
+
+        // 取回是带 base_version 的租约，不是 OS 锁；同一资产同一 scope 只允许一条 active。
+        if let Err(error) = self
+            .store
+            .create_lease(&resource.id, "project", resource.version, &rel_path)
+            .await
+        {
+            // 工作副本没有租约就再归档无法校验 base：宁可删掉刚落的副本。
+            if let Err(cleanup) = tokio::fs::remove_file(&req.dest_path).await {
+                tracing::warn!(
+                    error = %cleanup,
+                    path = %req.dest_path.display(),
+                    "取回失败后清理工作副本失败"
+                );
+            }
+            return Err(error);
         }
+
         self.emit(ChangeReason::CheckedOut, Some(resource.id.clone()));
         self.record_timeline(
             &resource.id,
@@ -45,6 +82,7 @@ impl ArchiveService {
             resource_id: resource.id,
             version: resource.version,
             dest_path: req.dest_path,
+            file_meta,
         })
     }
 
@@ -291,6 +329,7 @@ impl ArchiveService {
             resource_id: resource.id,
             version,
             dest_path: dest_path.to_path_buf(),
+            file_meta: None,
         })
     }
 

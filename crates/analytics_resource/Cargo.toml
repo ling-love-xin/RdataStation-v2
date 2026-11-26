@@ -31,6 +31,8 @@ gpui-kit.workspace = true
 # ===== 内容指纹（本体 sha256）=====
 sha2.workspace = true
 hex.workspace = true
+# 文件元数据 sidecar（书签 / 连接 / 视图）随文件版本存档；不把元数据混进内容哈希
+file_meta.workspace = true
 
 # ===== 其他 =====
 tracing.workspace = true

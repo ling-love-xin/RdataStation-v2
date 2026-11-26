@@ -43,6 +43,9 @@ mod paths;
 mod transfer;
 mod versions;
 
+pub mod cas;
+pub mod manifest;
+
 fn safe_segment(raw: &str) -> Result<String, CoreError> {
     let trimmed = raw.trim();
     if trimmed.is_empty()

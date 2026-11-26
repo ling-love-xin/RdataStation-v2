@@ -14,17 +14,18 @@
 
 | kind | 本体在哪 | 复现强度 | 状态 |
 | --- | --- | --- | --- |
-| `file` | `{项目}/resources/`（**copy 默认**：复制进受管目录 + 只读，草稿箱那份保留为工作副本；**reference**：本体留原位、只存元数据） | **强**：内容冻结，重跑得同解（reference：读源 + 指纹校验） | ✅ 第一期 |
+| `file` | `{项目}/resources/` + `{项目}/.RSmeta/cas/`（归档后**消费草稿**，资产库只留一份只读本体；CAS 存内容与 `rds-file-meta` sidecar；`reference`：本体留原位、只存元数据） | **强**：内容冻结；文件版本按字节 sha256，`manifest` 同时收文件元数据；取回生成 lease；`reference` 读源 + 指纹校验 | ✅ 第一期 |
 | `analytics_table` | **分析库里的持久表**（项目侧 `{项目}/.RSmeta/analytics.duckdb`；全局侧 `<RDS_HOME>/data/system/analytics.duckdb`），表名登记在 `analytics_table` 列 | **强**（与 `file` 同级）：表在库内即冻结；取样走 `SampleSource::on_duckdb`，不按路径读 | ✅ 表名列已落；打开 / 查看统计已通 |
 | ~~`table_ref`~~ | ~~远端（不在本机）~~ | ~~**弱**~~ | ❌ 划掉：跨文件表引用属编辑器 / 联邦层语义（代码保留兼容读取，**不进筛选菜单**） |
 
-> **2026-11-16 口径收口**：`analysis` 档不再存在。它的本体一直是 `resources/` 下的受管文件，与
-> `file` 是同一个东西——「数据文件带结构指纹」是**能力**，不是分类，现在由 `definition_sql`
-> 是否非空表达（另有三列 `origin_kind` / `origin_ref` / `structured` 记来源与结构化事实）。
+> **2026-11-16 口径收口（2026-11-27 文件 CAS 修订）**：`analysis` 档不再存在。它的本体一直是
+> `resources/` 下的受管文件，与 `file` 是同一个东西——「数据文件带结构信息」是**能力**，不是分类，
+> 现在由 `definition_sql` 是否非空表达（另有三列 `origin_kind` / `origin_ref` / `structured` 记来源与结构化事实）。
 > 历史行的 `kind = 'analysis'`：读面 `ArchiveKind::from_db_str` 直接读成 `File`（旧库不迁移也不会
 > 认错档），迁移 `project_meta/032`（镜像 `global/035`）再把库里的串归一为 `file`。
-> 结构指纹行仍**不参与字节指纹比对**（`indexer/scan.rs` 按 `definition_sql` 跳过），否则每一行
-> 都会在索引修复里被报成「内容已变」。
+> 2026-11-27 起文件资产一律按字节 sha256 记 `content_hash`，结构/行数只作元信息；有
+> `file_asset_versions` 行的结构化文件也参与索引字节比对，只有**无 manifest 的旧结构化行**继续按
+> `definition_sql` 跳过，避免整片误报。
 >
 > **库层 `CHECK` 仍是三值**（`file` / `analysis` / `table_ref`）：改它要重建表，而迁移执行器把
 > 整段 SQL 包在一个事务里、`PRAGMA foreign_keys` 在事务内关不掉（见 `031` 迁移注释）。

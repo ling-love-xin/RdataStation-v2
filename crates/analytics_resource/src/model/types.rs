@@ -129,6 +129,11 @@ pub struct CheckoutOutcome {
     pub version: i32,
     /// 落地的草稿绝对路径。
     pub dest_path: PathBuf,
+    /// 这一版随 manifest 存档的文件元数据；旧资产或无 sidecar 时为 `None`。
+    ///
+    /// 服务层只负责“读出来交回去”；落成草稿箱 sidecar 由宿主按自己的目录约定写，
+    /// 依赖方向仍然是 `workbench → analytics_resource`。
+    pub file_meta: Option<file_meta::FileMeta>,
 }
 
 /// 回收站条目的来源标记：本模块（原型 §4.7）。

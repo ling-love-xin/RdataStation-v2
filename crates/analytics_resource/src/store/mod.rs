@@ -17,6 +17,7 @@ use crate::model::*;
 use self::rows::*;
 
 pub mod checkout_receipt;
+pub mod file_asset;
 pub mod folder;
 pub mod refs;
 pub mod resource;
