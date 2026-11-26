@@ -665,6 +665,11 @@ impl AnalysisInstance {
     /// 卸下某个源连接的挂载（面板右键「卸载」）：`DETACH` + 放别名 + 关它在实例上的会话。
     ///
     /// 只断挂载，不动连接本身；返回 `false` = 这个源本来就没挂（调用方据此提示）。
+    ///
+    /// 2026-11-27：卸完还要**收拾悬空会话**——凡是以它为「主源」的会话，`USE <别名>` 指向的
+    /// catalog 已经没了，之后任何未限定名的查询都会报 catalog 不存在。这里逐个重建默认路径
+    /// （[`AnalysisSession::reset_search_path`] 发现主源不在会清记录并退回 `memory`），
+    /// 并把该别名从各会话的挂载记录里摘掉（面板「会话源」跟着少一行）。
     pub fn unmount_conn(&self, conn_id: &str) -> Result<bool, String> {
         let Some(alias) = self.alias_for_conn(conn_id) else {
             return Ok(false);
@@ -702,6 +707,26 @@ impl AnalysisInstance {
         };
         if let Some(session) = session {
             session.close();
+        }
+        // 其余会话：摘掉这个别名（主源 → 退回 memory）
+        for info in self.sessions() {
+            let Some(session) = self.session(&info.id) else {
+                continue;
+            };
+            if !session.is_open() {
+                continue;
+            }
+            session.forget_mounted(&alias);
+            if session.primary_alias().as_deref() == Some(alias.as_str()) {
+                if let Err(reason) = session.reset_search_path() {
+                    tracing::warn!(
+                        alias = %alias,
+                        session = %session.id(),
+                        reason = %reason,
+                        "卸载后会话默认路径没能重建（该会话后续查询可能落到 memory）"
+                    );
+                }
+            }
         }
         Ok(true)
     }
@@ -1082,6 +1107,16 @@ impl AnalysisSession {
         }
     }
 
+    /// 把某一条挂载从本会话的记录里摘掉（源段「卸载」时对**所有**会话调一次）。
+    ///
+    /// 与 `retain_mounted` 的分工：那个按"本通道要哪几个"整体对齐，这个只摘一个名字；
+    /// 两者都**不动实例上的 `ATTACH`**——真 `DETACH` 只由 [`Self::unmount_conn`] 做一次。
+    pub fn forget_mounted(&self, alias: &str) {
+        if let Ok(mut stored) = self.mounted.lock() {
+            stored.retain(|entry| entry.alias() != alias);
+        }
+    }
+
     /// 借本会话的连接跑一小段逻辑（**不接管执行**：只给需要直接 `execute_batch` 的调用方，
     /// 例如 `DETACH` / `CREATE VIEW` 这类必须拿到原始连接的活）。
     ///
@@ -1400,6 +1435,58 @@ mod tests {
         assert!(
             instance.alias_owner("fed_a").is_some(),
             "实例上的别名归属不动：源段的卸载是另一颗两态按钮"
+        );
+        instance.close_all_sessions();
+    }
+
+    /// 源段卸载之后，用它当主源的会话不能悬空：默认路径退回 memory，挂载记录里少这一行。
+    #[test]
+    fn unmounting_a_primary_source_falls_back_to_memory() {
+        use super::super::federation::registry::FederatedSource;
+
+        let dir = std::env::temp_dir().join(format!("rds_unmount_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("建目录");
+        let path = dir.join("src.duckdb");
+        Connection::open(&path)
+            .expect("建源")
+            .execute_batch("CREATE TABLE t AS SELECT 1 AS n")
+            .expect("建表");
+
+        let instance = instance("t_unmount");
+        let session = instance.open_session("doc-a", "编辑器").expect("开会话");
+        let source = FederatedSource::new(
+            "conn-a",
+            "fed_a",
+            "duckdb",
+            path.to_str().expect("路径"),
+        )
+        .expect("造源");
+        session.mount_sources(&[source]).expect("挂源");
+        session.use_catalog("fed_a").expect("设主源");
+        assert_eq!(session.primary_alias().as_deref(), Some("fed_a"));
+
+        assert!(instance.unmount_conn("conn-a").expect("卸载"));
+        assert_eq!(session.primary_alias(), None, "主源记录该清掉");
+        assert!(
+            session.mounted_sources().is_empty(),
+            "挂载记录里不该再留着 fed_a"
+        );
+        session
+            .run_with_timeout("SELECT 1 AS ok", Duration::from_secs(3))
+            .expect("卸载后会话仍可用（退回 memory）");
+        let path_after = session
+            .run_with_timeout(
+                "SELECT value FROM duckdb_settings() WHERE name = 'search_path'",
+                Duration::from_secs(3),
+            )
+            .expect("读 search_path")
+            .to_rows()[0][0]
+            .to_string();
+        assert_eq!(
+            path_after,
+            format!("{SHARED_MAIN_PATH},{SHARED_TEMP_PATH}"),
+            "默认路径该退回 memory，且临时区仍在"
         );
         instance.close_all_sessions();
     }

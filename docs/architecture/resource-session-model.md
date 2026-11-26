@@ -141,10 +141,11 @@ session_for_conn(conn_id) → mount_sources([1 个源]) → use_catalog(alias)
 
 【已定】没有"联邦源"概念：点联邦通道后整个面板都可联邦；面板源分"有能力挂载 / 无能力挂载"两档。
 
-【待定】面板没有自己的会话，现在借 `C_data_objects` 假 owner（`mod.rs:1550`）。它的 owner 该取谁：
-- (a) 当前聚焦编辑器的文档 id；
-- (b) 当前 tab 的 owner；
-- (c) 维持独立 owner（则 A/B 的临时表不共享，与 §4 冲突，不推荐）。
+【已定·原表述更正】面板**有自己的一条会话**（口径 11 第②条"每个 SQL 编辑器 + 数据面板 = 一条会话"），
+owner 固定 `data_objects`（`data_objects_load.rs:455`，本地加速挂载用它开会话）。
+`C_data_objects`（`mod.rs:1561`）是面板查全局库用的**连接 id**，不是 owner——原先把两者写成
+"借假 owner"是笔误。编辑器与面板之间的临时表共享靠**实例资源**（`memory.rds_tmp`），不靠共用会话，
+所以面板不必去追当前聚焦文档的 id。
 
 ### 5.3 表段
 
@@ -163,7 +164,12 @@ session_for_conn(conn_id) → mount_sources([1 个源]) → use_catalog(alias)
 （`use_catalog` → `<主源>.main,memory.rds_tmp`，底座不进 `search_path`；显式 `analytics.x` 仍可达）。
 会话换通道时 `retain_mounted` 只清本会话的挂载记录（不 `DETACH`）——`ATTACH` 是实例级事实，
 真 `DETACH` 会波及别的文档正在跑的联邦。
-【待定】卸载入口语义：会话级遮蔽（只影响当前会话）还是真 `DETACH`（所有会话都看不见）。单实例前提下建议前者。
+【已落地·刀13】卸载的**悬空收尾**：`AnalysisInstance::unmount_conn` 卸掉一个源之后，
+逐个会话摘掉该别名（`forget_mounted`）；凡是以它为「主源」的会话调 `reset_search_path`
+（检测到 catalog 不在 → 清主源记录、写 `primary_note`、退回 `memory.rds_tmp`）。
+没有这一步，卸载之后那些会话的未限定名查询会一直报 catalog 不存在。
+【待定】"卸载底座"本身的语义：会话级遮蔽（只影响当前会话）还是真 `DETACH`（所有会话都看不见）。
+  单实例前提下建议前者；显式限定名无法被会话级遮蔽挡掉，这一点要说清。
 
 ---
 
@@ -176,9 +182,9 @@ session_for_conn(conn_id) → mount_sources([1 个源]) → use_catalog(alias)
 | 3 | 单源联邦被 ≥2 卡住 | `analysis/channel.rs::from_toggle`、`editor_channels.rs` | 【已落地·刀11a】`>= 1` |
 | 4 | 临时表无 owner，关文档不删 | `temp_table.rs`（只有 `drop_by_source`） | 【建议·未做】需先定"关文档是否自动删" |
 | 5 | 临时表落点不钉 catalog | `temp_schema.rs` | 【已落地·刀11b】`memory.rds_tmp`（实测可用） |
-| 6 | 面板借假 owner `C_data_objects`，凭空造会话 | `data_objects/mod.rs` | 【待定】 |
-| 7 | 洞察 `tmp_i_` 进共享 schema，与"没有下游"不符 | `duckdb/temp_table/analysis.rs` | 【建议】落点已钉 memory；"不进面板"待做 |
-| 8 | mock 与编辑器同实例，面板还列 `tmp_m_` | `mock/src/engine/mod.rs:612`、`mod.rs:1025` | 【建议】 |
+| 6 | 卸载源之后主源会话悬空 | `instance.rs::unmount_conn` | 【已落地·刀13】`forget_mounted` + `reset_search_path` |
+| 7 | 洞察 `tmp_i_` 进共享 schema，与"没有下游"不符 | `duckdb/temp_table/analysis.rs` | 【建议】落点已钉 memory；面板已不列（`objects()` 注释 903-908） |
+| 8 | mock 与编辑器同实例，面板还列 `tmp_m_` | `mock/src/engine/mod.rs:612` | 【已落地】面板不列（2026-11-18 口径）；"落地完即关"待做 |
 | 9 | 资源归档与实例双开同一 `analytics.duckdb` | `analytics_resource/global/sql.rs:47` vs `attach_bases` | 【待定】需真机验 |
 | 10 | 表段不按业务表过滤、恒无资产行 | `source_picker/load.rs:196`、`mod.rs:1647` | 【待定】 |
 
@@ -205,8 +211,8 @@ session_for_conn(conn_id) → mount_sources([1 个源]) → use_catalog(alias)
 | 2 | 洞察是否改用会话 TEMP？ | ~~改~~：与"临时表实例共享"冲突，**维持落 `rds_tmp`**，只把它挡在面板外 | 已修口径 |
 | 3 | 编辑器结果集是否加 owner 登记、关文档删？ | 加。否则"关 A 就不能用"不成立 | **仍待拍**（跨 4 层签名改动） |
 | 4 | 临时表落点钉 `memory.rds_tmp`？ | 钉。实测 `search_path` 接受 catalog 限定写法 | 已定·刀11b |
-| 5 | 面板 owner 取当前编辑器文档 / tab / 独立？ | 取当前编辑器文档（tab 会切视角，破坏"一份工作"语义） | **仍待拍** |
-| 6 | 底座卸载：会话级遮蔽 vs 真 `DETACH`？ | 会话级遮蔽 | **仍待拍**（刀11b 已先保证"看不见"，没做卸载入口） |
+| 5 | 面板 owner 取当前编辑器文档 / tab / 独立？ | 面板 = 自己的那条会话（口径 11 第②条），owner 固定 `data_objects`；跨模块共享靠实例临时表 | 已定·原表述更正 |
+| 6 | 底座卸载：会话级遮蔽 vs 真 `DETACH`？ | 会话级遮蔽（显式限定名挡不住，需说清） | **仍待拍**（悬空收尾已做·刀13） |
 | 7 | 表段"业务表"判据：白名单 vs 黑名单？ | 白名单（`res_*` + 资产表），避免新前缀偷偷漏进来 | **仍待拍** |
 | 8 | mock 是否退出面板可见范围？ | 退出，只留落地结果 | **仍待拍** |
 | 9 | 资源归档是否改为"卸载时才开、读完即关"？ | 先解决双开问题，再定缓存策略 | **仍待拍**（需真机验） |
@@ -219,3 +225,4 @@ session_for_conn(conn_id) → mount_sources([1 个源]) → use_catalog(alias)
 |---|---|
 | 2026-11-26 | 初稿：从"联邦内核收口 + 数据对象面板"讨论中抽出会话/临时表/可见性三层；标出对 `execution-context-model.md` 两处作废口径 |
 | 2026-11-27 | 落地记录回填：刀10（加速 owner 按文档）、刀11a（联邦 owner 拆 `session_owner`、单源联邦放开）、刀11b（`search_path` 全限定 + `retain_mounted` + `reset_search_path`）；补 2.0.1 实测结论（`memory.rds_tmp` 可作 `search_path` 项）；洞察口径由"会话 TEMP"修正回 `rds_tmp`（实例共享优先） |
+| 2026-11-27 | 刀13：`unmount_conn` 卸源后收尾悬空会话（`forget_mounted` + `reset_search_path`）；更正"面板借假 owner `C_data_objects`"的笔误——面板 owner 是固定 `data_objects`，`C_data_objects` 只是查全局库的连接 id |
