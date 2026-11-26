@@ -340,7 +340,7 @@ impl Object {
     /// 三段之后同段混着多种身份，小标就是**唯一不靠名字猜**的依据：
     /// 源段的叶子写 `库表`（数据还在源库），表段的表型资产把版本写进小标
     /// （`资产 vN`，它读的是资产的最新版本），其余沿用 [`Object::pill`] 的业务身份
-    /// （`未登记` / `未登记 · 全局` / `结果集` / `联邦源` / `加速源` / `文件库` / `已加载`）。
+    /// （`未登记` / `未登记 · 全局` / `结果集` / `载入` / `资产` / `底座` / 挂载三态 / `已加载`）。
     pub fn pill_text(&self) -> String {
         match (self.group, self.version) {
             // 源段的**叶子**（`srctable:`）才是「源库里的表」；源段的一级行是连接 /
@@ -366,11 +366,9 @@ impl Object {
 
     /// 状态列的**行上短码**（[`Self::availability_text`] 是全文，去属性窗口 / 右键菜单看）。
     ///
-    /// 为什么必须分两档：整句原因实测 209px（12px 字号、30 字），面板 380px 宽时
-    /// 状态格只有 40px 的下限位，整句会把状态块顶到行外 25px、把行尾按钮挤出可视区
-    /// （`panels/data_objects_tab/layout_probe.rs` 量出来的数，不是估算）。
-    /// 所以行上只放判据：能用 → 寿命；不能用 → **原因的第一段**（超过 6 字退化成
-    /// 「失败」，宁可少说也不在窄面板里撑行）。
+    /// 只放判据：能用 → 寿命；不能用 → **原因的第一段**（超过 6 字退化成「失败」）。
+    /// 整句必须留在线下：30 字 209px 的实测数与「顶到行外」的证据见第 38 条与 `layout_probe`，
+    /// 不在窄面板里撑行。
     pub fn availability_chip(&self) -> String {
         match &self.state {
             State::Ready => self.life.label().to_string(),
@@ -713,11 +711,11 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             // 项目归档」进 DuckDB，产物是表段行，不是 catalog）
             State::Ready
         } else if not_mounted.is_some() {
-            State::Failed("未挂载 · 右键挂载后可展开选表".to_string())
+            State::Failed(UNMOUNTED_HINT.to_string())
         } else if file_path.is_none() && !session_mounted && !accel_mounted {
             // 网络连接：联邦/分析会话、加速档都没有就是没挂。展开它只会得到一句「先挂上」——
             // 那不该做成一个能点开才报错的行
-            State::Failed("未挂载 · 右键「挂载」后才能展开选表".to_string())
+            State::Failed(UNMOUNTED_HINT.to_string())
         } else {
             State::Ready
         };
@@ -771,7 +769,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             note,
             channel,
             life: Life::External,
-            state: State::Failed("未挂载 · 右键「挂载」后才能展开选表".to_string()),
+            state: State::Failed(UNMOUNTED_HINT.to_string()),
             group: Group::Source,
             pill: MountState::Unmounted.label(),
             version: None,
@@ -1048,6 +1046,12 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
     out
 }
 
+/// 「未挂载」源行的统一提示：属性窗口看全文，行上只取首段「未挂载」（第 38 条）。
+///
+/// 三处说的是同一件事——文件库没挂、网络连接没挂、只剩登记的行——文案必须一字不差。
+/// 各写一份的结果是上一版出现过「右键挂载后…」与「右键「挂载」后…」两种说法。
+pub const UNMOUNTED_HINT: &str = "未挂载 · 右键「挂载」后才能展开选表";
+
 /// 工作集软上限（**软**：超过只提示代价，不硬拦）。
 ///
 /// 多源洞察一次全取各源样本，源越多首次取样越慢；8 是「一次还说清」的量级。
@@ -1251,21 +1255,16 @@ pub fn source_table_object(conn: &str, catalog: &str, schema: &str, table: &str)
     }
 }
 
-/// 已挂载源的叶子按 schema 分组（三级树第二层）：返回 `(schema 名, 组内下标)`。
+/// 按 `label` 的**首见顺序**分桶：返回 `(组名, 元素下标)`。
 ///
-/// 按**首见顺序**切段（引擎列举时已按 schema、名字排好，这里不再重排——再排一次
-/// 就可能与「复制限定名」抄走的顺序对不上）。`indices` 指向入参本身，调用方按它取
-/// 元素，不为了一屏几百张表每帧克隆一遍清单。
-pub fn schema_groups(tables: &[engine::duckdb::accel::MountedTable]) -> Vec<(String, Vec<usize>)> {
+/// 两个调用点只差「组名怎么算」（源库表看 `schema`、连接叶子看 `catalog.schema`），
+/// 分桶逻辑一模一样——各写一份，改了一处忘另一处就会让两棵树的分组顺序对不上。
+/// `indices` 指向入参本身，调用方按它取元素，不为了一屏几百张表每帧克隆一遍清单。
+fn bucket_by_label<T, F: Fn(&T) -> String>(items: &[T], label_of: F) -> Vec<(String, Vec<usize>)> {
     let mut order: Vec<String> = Vec::new();
     let mut buckets: HashMap<String, Vec<usize>> = HashMap::new();
-    for (index, table) in tables.iter().enumerate() {
-        // 空 schema 归到 `main`：DuckDB 的外源目录里 schema 可能为空串（sqlite 等），
-        // 画一条空名分组行等于让用户点一个没有名字的东西
-        let label = match table.schema.is_empty() {
-            true => "main".to_string(),
-            false => table.schema.clone(),
-        };
+    for (index, item) in items.iter().enumerate() {
+        let label = label_of(item);
         if !buckets.contains_key(&label) {
             order.push(label.clone());
         }
@@ -1278,6 +1277,19 @@ pub fn schema_groups(tables: &[engine::duckdb::accel::MountedTable]) -> Vec<(Str
             (label, indices)
         })
         .collect()
+}
+
+/// 已挂载源的叶子按 schema 分组（三级树第二层）。
+///
+/// 按**首见顺序**切段（引擎列举时已按 schema、名字排好，这里不再重排——再排一次
+/// 就可能与「复制限定名」抄走的顺序对不上）。
+pub fn schema_groups(tables: &[engine::duckdb::accel::MountedTable]) -> Vec<(String, Vec<usize>)> {
+    bucket_by_label(tables, |table| match table.schema.is_empty() {
+        // 空 schema 归到 `main`：DuckDB 的外源目录里 schema 可能为空串（sqlite 等），
+        // 画一条空名分组行等于让用户点一个没有名字的东西
+        true => "main".to_string(),
+        false => table.schema.clone(),
+    })
 }
 
 /// 源库连接（`srctable:` 行）按 catalog + schema 分组：同一棵三级树的第二层。
@@ -1286,31 +1298,18 @@ pub fn schema_groups(tables: &[engine::duckdb::accel::MountedTable]) -> Vec<(Str
 /// 少了它分不清 `orders.main` 与 `bi.main`）。反解不出身份的行走 `main`——
 /// 与其丢一行，不如把它挂在一个说明得通的分组下。
 pub fn conn_schema_groups(children: &[Object]) -> Vec<(String, Vec<usize>)> {
-    let mut order: Vec<String> = Vec::new();
-    let mut buckets: HashMap<String, Vec<usize>> = HashMap::new();
-    for (index, child) in children.iter().enumerate() {
-        let label = source_table_parts(&child.key)
-            .map(
-                |(_, catalog, schema, _)| match (catalog.is_empty(), schema.is_empty()) {
+    bucket_by_label(children, |child| {
+        source_table_parts(&child.key)
+            .map(|(_, catalog, schema, _)| {
+                match (catalog.is_empty(), schema.is_empty()) {
                     (false, false) => format!("{catalog}.{schema}"),
                     (false, true) => catalog.to_string(),
                     (true, false) => schema.to_string(),
                     (true, true) => "main".to_string(),
-                },
-            )
-            .unwrap_or_else(|| "main".to_string());
-        if !buckets.contains_key(&label) {
-            order.push(label.clone());
-        }
-        buckets.entry(label).or_default().push(index);
-    }
-    order
-        .into_iter()
-        .map(|label| {
-            let indices = buckets.remove(&label).unwrap_or_default();
-            (label, indices)
-        })
-        .collect()
+                }
+            })
+            .unwrap_or_else(|| "main".to_string())
+    })
 }
 
 /// 已选对象 → 洞察取样来源（面板「分析已选」的取数口径，**纯函数**）。
@@ -1318,9 +1317,8 @@ pub fn conn_schema_groups(children: &[Object]) -> Vec<(String, Vec<usize>)> {
 /// 返回 `(来源, 跳过原因)`：能给出**完整取数描述**的对象才转成来源，
 /// 转不了的老实说为什么——「点了没反应」比「说清楚不支持」糟得多。
 ///
-/// 目前能转的：项目分析库表 / 全局分析库表 / 结果集 / 洞察产物。
-/// 转不了的：资产（面板只知道名字与版本，不知道本体是表还是文件）、
-/// 文件（草稿行有路径但这里没按扩展名选读取器）、联邦源与加速源（表在各自的
+/// 目前能转的：项目分析库表 / 全局分析库表 / 结果集 / 已加载的数据文件视图 / 文件型资产。
+/// 转不了的：库文件（整库取样不成立，要在源段里按库表选）、联邦源与加速源（表在各自的
 /// 专用连接上，进程单例取样够不着——等公共入口 Phase 3「洞察搬结果」）。
 /// 这几类都能在 02 对话框里选——那是它们的正路，面板不抢。
 pub fn analysis_sources(
@@ -1344,8 +1342,10 @@ pub fn analysis_sources(
             Some(("global", table)) => {
                 Some(SampleSource::on_global(table, format!("全局 · {table}")))
             }
-            // 结果集 `tmp_q_` 与洞察产物 `tmp_i_` 都在进程单例里：取样即「再取一份」
-            Some(("result", table)) | Some(("insight", table)) => Some(SampleSource::on_duckdb(
+            // 结果集 `tmp_q_` 在进程单例里：取样即「再取一份」。
+            // （`tmp_i_` 洞察产物不进面板（第 12 条），所以这里没有 `insight:` 分支——
+            // 旧工作集里残留的 `insight:` key 会在上面 `objects.iter().find` 落空后跳过。）
+            Some(("result", table)) => Some(SampleSource::on_duckdb(
                 format!("SELECT * FROM \"{table}\""),
                 object.name.clone(),
             )),
@@ -1738,7 +1738,7 @@ mod tests {
     // 刻意不用 `use super::*`：会把 gpui 的 `test` 属性宏带进作用域。
     use super::{
         can_archive_snapshot, fileview_alias, objects, AssetRow, Channel, Collected, ConnRow,
-        Group, Life, MountState, Object, SessionSource, State,
+        Group, Life, MountState, Object, SessionSource, State, UNMOUNTED_HINT,
     };
     use engine::persistence::analysis_sources::{
         AnalysisMountKind, AnalysisSourceKind, AnalysisSourceRow,
@@ -2761,7 +2761,7 @@ mod tests {
             .into_iter()
             .find(|o| !o.can_analyze())
             .expect("sample 里应有不可用行");
-        down.state = State::Failed("未挂载 · 右键「挂载」后才能展开选表".to_string());
+        down.state = State::Failed(UNMOUNTED_HINT.to_string());
         assert_eq!(down.availability_chip(), "未挂载");
         assert!(
             down.availability_text().len() > down.availability_chip().len() * 4,
