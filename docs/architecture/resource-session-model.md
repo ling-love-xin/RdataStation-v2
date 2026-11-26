@@ -99,7 +99,7 @@ session_for_conn(conn_id) → mount_sources([1 个源]) → use_catalog(alias)
 |---|---|---|---|---|
 | 编辑器结果集（`tmp_q_` / `tmp_l_`） | `rds_tmp` 普通表 | 实例共享，面板可见 | 【已落地·刀14】绑**文档**（owner 登记，关文档删这一批） | `TempTableManager` 值改成 `TempEntry { created, owner }`，`execution_service → duckdb_service → manager → 实例登记` 全程透传文档 id；关文档 `on_removed` 调 `drop_temps_of(owner)` |
 | 洞察（`tmp_i_`） | `rds_tmp` 普通表 | 私有，不进面板 | 随清理兜底 | 曾建议"会话 TEMP"，但【已定】临时表实例共享优先，故仍落 `rds_tmp`；"私有"靠不进面板 + `lazy_cleanup_insight_tables`；owner 固定 `insight` |
-| mock（`tmp_m_`） | 一次性连接 | 无 | 【已落地·刀16】落地成功即收 | 走进程面 `DuckDBManager`，与编辑器同实例；owner 固定 `mock`；`write_temp_table_to_database` 成功返回前删掉这张临时表并销登记（失败保留，重试还要它） |
+| mock（`tmp_m_`） | 一次性连接 | 无 | 【已落地·刀16】落地成功即收 | 走进程面 `DuckDBManager`，与编辑器同实例；owner 固定 `mock`；`write_temp_table_to_database` 成功返回前删掉这张临时表并销登记（失败保留，重试还要它）。**"落地"只指写进项目分析库**：导出文件 / 存草稿箱后仍留着，用户还能接着换另一个出口（2026-11-27 拍板） |
 
 【已落地·刀11b】落点钉 catalog：
 
@@ -254,3 +254,4 @@ owner 固定 `data_objects`（`data_objects_load.rs:455`，本地加速挂载用
 | 2026-11-27 | 刀15：底座"卸载"落地为会话视角遮蔽——引擎 `hide_base/show_base/hidden_bases/base_visible`（`InstanceState.hidden_bases`，不 `DETACH`）；面板底座行给 `SourceAction::ToggleBase{alias,hidden}` 一颗两态按钮，遮蔽时清空项目/全局表来源清单（表段即空）；表段白名单（`res_*`）确认为已定；单测 `hiding_a_base_empties_its_table_rows` |
 | 2026-11-27 | 刀16：mock "落地完即关"——`write_temp_table_to_database` 在写入与解挂都成功后收掉这张临时表（有实例走 `AnalysisInstance::drop_temp`，无实例退回进程面内存库自删 + 销登记），失败路径保留供重试；`MockGenInfo` 自带预览快照，落地后结果区显示不受影响 |
 | 2026-11-27 | 校准 §6-10：表段名单一直是 `analysis_tables_of()`（底座全表），不是"不按业务表过滤"；资产本体已从表段剔除、只从资产行进——原【待定】改【已落地】 |
+| 2026-11-27 | 拍板刀16 边界：**"落地完即关"只覆盖写进项目分析库**（落库 / 追加）；导出文件、存草稿箱不删临时表，让用户还能继续换出口。无临时表残留只靠这一条 + 切项目 `clear_temp_tables` 兜底 |
