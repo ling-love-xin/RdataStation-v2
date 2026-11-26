@@ -897,7 +897,9 @@ impl<H: 'static> ConnectionDialogState<H> {
         self.cache_path.update(cx, |s, cx| {
             s.set_value(ds.metadata_path.clone().unwrap_or_default(), window, cx)
         });
-        self.duckdb_fed.set(ds.use_duckdb_fed);
+        // 三态 → 复选框：只有 `Some(true)` 勾上。`None`（驱动不可被 DuckDB 直连）在 UI 上
+        // 等于「开不了加速」，回读时按未勾选显示（保存时由 data_source_service 重新定值）。
+        self.duckdb_fed.set(ds.use_duckdb_fed == Some(true));
         // 驱动回读：记录里的 db_type/driver_id 均为驱动 id（如 mysql_native）；
         // 反查得到类型与实现短名，先选类型再选驱动（下拉按类型过滤）。
         let did = if ds.db_type.is_empty() {
@@ -1349,7 +1351,13 @@ impl ClonedDialogState {
             driver_properties,
             advanced_options,
             options: None,
-            use_duckdb_fed: Some(self.duckdb_fed.get()),
+            // 三态（2026-11-26）：驱动不被 DuckDB 直连（`AccelKind::from_db_type` 认不出）→ `None`；
+            // 能直连就按复选框落 `Some(...)`。否则「不可直连」会被一次保存洗成 `Some(false)`。
+            use_duckdb_fed: if engine::duckdb::accel::AccelKind::from_db_type(&db_type).is_ok() {
+                Some(self.duckdb_fed.get())
+            } else {
+                None
+            },
             // P0-4（2026-10-24）：表单「保存凭据」开关——关 = 密码不落库
             // （对齐 DBeaver `setSavePassword(false)`）。
             save_password: Some(self.save_credentials.get()),

@@ -79,7 +79,7 @@ pub struct ConnectionInfo {
     ///
     /// 语义：**这条连接可以被 DuckDB 直连**（凭据已注册为 Secret）。本地加速档用它做门控，
     /// 联邦档用它决定“哪些连接参与跨源查询”。
-    pub use_duckdb_fed: bool,
+    pub use_duckdb_fed: Option<bool>,
     pub created_at: std::time::Instant,
 }
 
@@ -240,7 +240,7 @@ impl ConnectionManager {
             advanced_options: None,
             description: None,
             // 这条路径（按驱动配置直接建连）不走连接对话框的开关：默认不参与联邦源清单
-            use_duckdb_fed: false,
+            use_duckdb_fed: None,
             created_at: std::time::Instant::now(),
         };
 

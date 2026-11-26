@@ -1522,7 +1522,9 @@ pub fn collect(shared: &Shared) -> Collected {
         .connections
         .borrow()
         .iter()
-        .filter(|item| item.use_duckdb_fed || registered_conn_ids.iter().any(|id| *id == item.id))
+        // 源段出行按三态：`use_duckdb_fed` **有值**（true/false）= 能被 DuckDB 直连，必须出；
+        // `None` = 不可直连，只有已登记（历史遗留）才兜底出行。
+        .filter(|item| item.use_duckdb_fed.is_some() || registered_conn_ids.iter().any(|id| *id == item.id))
         .map(|item| ConnRow {
             id: item.id.clone(),
             name: item.name.clone(),

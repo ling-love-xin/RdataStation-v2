@@ -20,7 +20,7 @@ pub struct ProjectConnection {
     pub password_encrypted: Option<String>,
     pub options: Option<String>,
     pub tags: Option<String>,
-    pub use_duckdb_fed: bool,
+    pub use_duckdb_fed: Option<bool>,
     pub metadata_path: Option<String>,
     pub is_active: bool,
     pub server_version: Option<String>,

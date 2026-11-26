@@ -208,7 +208,9 @@ impl Render for EditorPanel {
         // Round 25：分析库元数据树按需后台加载（同样必须在 `let theme = cx.theme()` 之前：
         // theme 借了 `cx`，之后再要 `&mut Context` 会 E0502）。
         if let Some(item) = self.shared.selected_connection() {
-            if item.use_duckdb_fed && self.nav_for.borrow().as_deref() != Some(item.id.as_str()) {
+            if item.use_duckdb_fed == Some(true)
+                && self.nav_for.borrow().as_deref() != Some(item.id.as_str())
+            {
                 self.ensure_analysis_tree(item.id.clone(), cx);
             }
         }
@@ -280,10 +282,12 @@ impl Render for EditorPanel {
                 ),
                 (
                     "DuckDB 联邦",
-                    if item.use_duckdb_fed {
+                    if item.use_duckdb_fed == Some(true) {
                         "开启（本地加速）".to_string()
+                    } else if item.use_duckdb_fed.is_some() {
+                        "关闭（可直连，未加速）".to_string()
                     } else {
-                        "关闭".to_string()
+                        "不支持（不可被 DuckDB 直连）".to_string()
                     },
                 ),
                 (
@@ -383,7 +387,7 @@ impl Render for EditorPanel {
 
         // Round 25：数据库导航区——分析库元数据树由上文按需后台加载，这里只读缓存。
         if let Some(item) = self.shared.selected_connection() {
-            if item.use_duckdb_fed {
+            if item.use_duckdb_fed == Some(true) {
                 let nav = self.nav_tables.borrow();
                 let mut nav_content = div().v_flex().gap_1().mt_1p5();
                 if nav.is_empty() {

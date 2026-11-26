@@ -258,10 +258,10 @@ pub fn ensure_secret_registered_gated(
     conn_id: &str,
     db_type: &str,
     url: &str,
-    use_duckdb_fed: bool,
+    use_duckdb_fed: Option<bool>,
 ) {
-    if !use_duckdb_fed {
-        return; // 默认不注册（加速关）
+    if use_duckdb_fed != Some(true) {
+        return; // 默认不注册（加速关；`None` = 不可直连，更不注册）
     }
     if !has_federable_extension(db_type) {
         tracing::info!(

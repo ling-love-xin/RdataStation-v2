@@ -825,7 +825,7 @@ impl DataSourceService {
                 &conn_id,
                 &input.db_type,
                 &url,
-                input.use_duckdb_fed.unwrap_or(false),
+                input.use_duckdb_fed,
             );
             // 标签同步到连接组织存储（connection_tags 为权威检索源；JSON 字段保留兼容）。
             sync_connection_tags(self.global_db, &conn_id, input.tags.as_deref(), None);
@@ -861,7 +861,7 @@ impl DataSourceService {
                 &pid,
                 &input.db_type,
                 &url,
-                input.use_duckdb_fed.unwrap_or(false),
+                input.use_duckdb_fed,
             );
             // 指纹接线：项目域登记（GP_ 项目快照侧同样走项目域）。
             register_identity_fp(
@@ -984,14 +984,14 @@ impl DataSourceService {
             // 加速关 → 移除（避免残留旧凭据）；目标为项目分析库。
             let project_analysis_db =
                 super::secret_integration::analysis_db_for_scope(conn_id, Some(path));
-            let fed_on = input.use_duckdb_fed.unwrap_or(false);
+            let fed_on = input.use_duckdb_fed == Some(true);
             if fed_on {
                 super::secret_integration::ensure_secret_registered_gated(
                     project_analysis_db.as_deref(),
                     conn_id,
                     &input.db_type,
                     &url,
-                    true,
+                    Some(true),
                 );
             } else {
                 let _ = super::secret_integration::remove_connection_secret_at(
@@ -1042,13 +1042,13 @@ impl DataSourceService {
             .await?;
 
         // 联邦加速开关联动（门控规则 2026-10-03）：开 + 有对应扩展 → 注册；关 → 清理（避免残留旧凭据）。
-        if input.use_duckdb_fed.unwrap_or(false) {
+        if input.use_duckdb_fed == Some(true) {
             super::secret_integration::ensure_secret_registered_gated(
                 self.analysis_db.as_deref(),
                 conn_id,
                 &input.db_type,
                 &url,
-                true,
+                Some(true),
             );
         } else {
             let _ = super::secret_integration::remove_connection_secret_at(
@@ -1079,7 +1079,7 @@ impl DataSourceService {
     pub async fn set_use_duckdb_fed(
         &self,
         conn_id: &str,
-        on: bool,
+        on: Option<bool>,
         project_path: Option<&str>,
     ) -> Result<(), CoreError> {
         let ds = self
@@ -1115,7 +1115,8 @@ impl DataSourceService {
             advanced_options: ds.advanced_options.clone(),
             options: ds.options.clone(),
             tags: ds.tags.clone(),
-            use_duckdb_fed: Some(on),
+            // 三态原样回填：`None` = 不可直连（显式写 NULL），`Some(false)` = 可直连未加速
+            use_duckdb_fed: on,
             schema_name: ds.schema_name.clone(),
             metadata_path: ds.metadata_path.clone(),
             save_password: None,
@@ -1285,7 +1286,7 @@ impl DataSourceService {
             advanced_options: ds.advanced_options.clone(),
             options: ds.options.clone(),
             tags: ds.tags.clone(),
-            use_duckdb_fed: Some(ds.use_duckdb_fed),
+            use_duckdb_fed: ds.use_duckdb_fed,
             schema_name: ds.schema_name.clone(),
             metadata_path: ds.metadata_path.clone(),
             save_password: None,
@@ -1479,7 +1480,7 @@ impl DataSourceService {
             advanced_options: ds.advanced_options.clone(),
             options: ds.options.clone(),
             tags: ds.tags.clone(),
-            use_duckdb_fed: Some(ds.use_duckdb_fed),
+            use_duckdb_fed: ds.use_duckdb_fed,
             schema_name: ds.schema_name.clone(),
             metadata_path: ds.metadata_path.clone(),
             save_password: None,
@@ -1858,7 +1859,7 @@ fn project_connection_from_input(
         password_encrypted,
         options: input.options.clone(),
         tags: input.tags.clone(),
-        use_duckdb_fed: input.use_duckdb_fed.unwrap_or(false),
+        use_duckdb_fed: input.use_duckdb_fed,
         metadata_path: input.metadata_path.clone(),
         is_active: true,
         server_version: None,
@@ -2159,7 +2160,7 @@ mod tests {
             password_encrypted: None,
             options: None,
             tags: None,
-            use_duckdb_fed: false,
+            use_duckdb_fed: None,
             metadata_path: None,
             is_active: true,
             created_at: String::new(),

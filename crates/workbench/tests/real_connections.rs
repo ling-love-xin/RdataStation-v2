@@ -85,7 +85,7 @@ fn global_db_roundtrip_maps_to_connection_items() {
     assert_eq!(infos.len(), 1);
     assert_eq!(infos[0].name, "测试 MySQL 库");
     assert_eq!(infos[0].driver, "mysql");
-    assert!(infos[0].use_duckdb_fed);
+    assert_eq!(infos[0].use_duckdb_fed, Some(true));
 
     let items = map_infos(infos);
     assert_eq!(items.len(), 1);
@@ -98,7 +98,7 @@ fn global_db_roundtrip_maps_to_connection_items() {
     assert_eq!(items[0].host.as_deref(), Some("127.0.0.1"));
     assert_eq!(items[0].port, Some(3306));
     assert_eq!(items[0].database.as_deref(), Some("test"));
-    assert!(items[0].use_duckdb_fed);
+    assert_eq!(items[0].use_duckdb_fed, Some(true));
     assert_eq!(items[0].description.as_deref(), Some("round 21 集成测试"));
 
     let _ = std::fs::remove_dir_all(&dir);

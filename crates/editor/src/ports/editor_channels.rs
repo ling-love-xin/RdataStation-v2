@@ -143,10 +143,12 @@ impl ChannelsPort for WorkbenchChannels {
 
 
 
-        let accelerated = if !connection.use_duckdb_fed {
-
+        // 三态：`Some(true)` = 已开启本地加速，继续判「驱动 → 本地加速支持 → 扩展」；
+        // `Some(false)` = 能直连但没开加速（用户可去设置里开）；`None` = 不可直连，开不了。
+        let accelerated = if connection.use_duckdb_fed.is_none() {
+            ChannelAvailability::blocked("该连接的驱动不支持 DuckDB 直连，无法开启本地加速")
+        } else if connection.use_duckdb_fed != Some(true) {
             ChannelAvailability::blocked("该连接未开启本地加速（连接设置里的 DuckDB 联邦）")
-
         } else {
 
             // 三条判据一条链：驱动类型 → 本地加速支持（L2 只做联邦源）→ 扩展
@@ -211,7 +213,7 @@ fn federated_availability(connections: &[ConnectionItem]) -> ChannelAvailability
 
     for item in connections {
 
-        if !item.use_duckdb_fed {
+        if item.use_duckdb_fed != Some(true) {
 
             continue;
 
@@ -432,7 +434,7 @@ mod tests {
 
             description: None,
 
-            use_duckdb_fed: fed,
+            use_duckdb_fed: Some(fed),
 
             environment: None,
 

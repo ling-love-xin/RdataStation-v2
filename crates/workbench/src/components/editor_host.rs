@@ -247,7 +247,9 @@ impl FederatedSourcePort for WorkbenchFederatedSource {
         };
         items
             .into_iter()
-            .filter(|item| item.use_duckdb_fed)
+            // 自动参与联邦执行的只有「已开启本地加速」的那类（`Some(true)`）：
+            // `Some(false)` = 可直连但没开加速，只在用户手动挂/登记时进场。
+            .filter(|item| item.use_duckdb_fed == Some(true))
             .filter_map(|item| {
                 connection::url::build_connection_url(&item)
                     .ok()

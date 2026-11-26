@@ -315,7 +315,7 @@ fn schema_sources_carry_connection_defaults() {
         database: Some("shop".to_string()),
         schema: Some("public".to_string()),
         description: None,
-        use_duckdb_fed: false,
+        use_duckdb_fed: None,
         environment: None,
         created_at: String::new(),
         updated_at: String::new(),

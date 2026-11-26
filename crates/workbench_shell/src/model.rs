@@ -146,7 +146,7 @@ pub struct ConnectionItem {
     pub schema: Option<String>,
     pub description: Option<String>,
     /// DuckDB 联邦（本地加速）开关。
-    pub use_duckdb_fed: bool,
+    pub use_duckdb_fed: Option<bool>,
     /// 所属环境展示名（全局域 `environment_id` 解成的名字；项目侧连接无环境 = `None`）。
     ///
     /// 编辑器状态栏据此判断是否要打 PROD 徽标——**不猜**：没绑定环境的连接一律无徽标。

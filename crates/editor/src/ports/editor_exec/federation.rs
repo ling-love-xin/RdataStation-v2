@@ -53,7 +53,9 @@ impl EngineQueryRunner {
 
         // ② 运行态连接（含项目作用域；记录里没有的补上）
         let infos = self.runtime.block_on(manager.get_all_connection_info());
-        for info in infos.iter().filter(|info| info.use_duckdb_fed) {
+        // 自动进源清单的只有已开启本地加速的连接（`Some(true)`）；
+        // `Some(false)` = 可直连未加速，等用户手动挂载/登记再进场。
+        for info in infos.iter().filter(|info| info.use_duckdb_fed == Some(true)) {
             if records.iter().any(|record| record.conn_id == info.id) {
                 continue;
             }
