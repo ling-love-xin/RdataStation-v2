@@ -41,7 +41,7 @@
 |---|---|---|---|---|---|
 | 1 | **资源归档** | 持久连接看资源库（文件 / 全局 / 项目分析库），后期支持卸载释放 | 自持 `duckdb::Connection::open` 并缓存（`analytics_resource/global/sql.rs:47`） | 已是独立持久连接 | ① 与实例 `ATTACH … READ_ONLY` 同一文件**双开**，需真机验；② 卸载语义未定义 |
 | 2 | **洞察** | 只做表 EDA 探查，**没有下游**，对象只有临时结果集 | 无独立会话；`insight` 全是 `_on(conn)` 形态，连接由调用方传 | `tmp_i_` 进 `rds_tmp` + 前缀清理 | 与"没有下游"不符：应私有化（见 §4） |
-| 3 | **mock** | faker 生成数据，DuckDB 只负责落地到草稿箱/系统管理器 | 进程面 `DuckDBManager` 的 in-memory 临时表（`mock/src/engine/mod.rs:612`，`tmp_m_`） | 与编辑器**同一实例**，且面板 `source_kinds` 列了 `Mock`（`data_objects/mod.rs:1025`） | 落地完即关；面板不该看到 `tmp_m_` |
+| 3 | **mock** | faker 生成数据，DuckDB 只负责落地到草稿箱/系统管理器 | 进程面 `DuckDBManager` 的 in-memory 临时表（`mock/src/engine/mod.rs:533`，`tmp_m_`） | 与编辑器**同一实例** | 【已落地·刀16】落地成功即删这张临时表（失败保留供重试）；面板不列 `tmp_m_` |
 | 4 | **数据对象面板 + SQL 编辑器** | 核心工作台 | 编辑器：`ensure_session(doc_owner)`；面板：**无会话**，借假 owner `C_data_objects`（`mod.rs:1550`） | 见 §3–§5 | 面板 owner、加速档 owner、单源联邦、底座可卸 |
 
 ---
@@ -99,7 +99,7 @@ session_for_conn(conn_id) → mount_sources([1 个源]) → use_catalog(alias)
 |---|---|---|---|---|
 | 编辑器结果集（`tmp_q_` / `tmp_l_`） | `rds_tmp` 普通表 | 实例共享，面板可见 | 【已落地·刀14】绑**文档**（owner 登记，关文档删这一批） | `TempTableManager` 值改成 `TempEntry { created, owner }`，`execution_service → duckdb_service → manager → 实例登记` 全程透传文档 id；关文档 `on_removed` 调 `drop_temps_of(owner)` |
 | 洞察（`tmp_i_`） | `rds_tmp` 普通表 | 私有，不进面板 | 随清理兜底 | 曾建议"会话 TEMP"，但【已定】临时表实例共享优先，故仍落 `rds_tmp`；"私有"靠不进面板 + `lazy_cleanup_insight_tables`；owner 固定 `insight` |
-| mock（`tmp_m_`） | 一次性连接 | 无 | 落地完即关 | 走进程面 `DuckDBManager`，与编辑器同实例；owner 固定 `mock` |
+| mock（`tmp_m_`） | 一次性连接 | 无 | 【已落地·刀16】落地成功即收 | 走进程面 `DuckDBManager`，与编辑器同实例；owner 固定 `mock`；`write_temp_table_to_database` 成功返回前删掉这张临时表并销登记（失败保留，重试还要它） |
 
 【已落地·刀11b】落点钉 catalog：
 
@@ -208,7 +208,7 @@ owner 固定 `data_objects`（`data_objects_load.rs:455`，本地加速挂载用
 | 5 | 临时表落点不钉 catalog | `temp_schema.rs` | 【已落地·刀11b】`memory.rds_tmp`（实测可用） |
 | 6 | 卸载源之后主源会话悬空 | `instance.rs::unmount_conn` | 【已落地·刀13】`forget_mounted` + `reset_search_path` |
 | 7 | 洞察 `tmp_i_` 进共享 schema，与"没有下游"不符 | `duckdb/temp_table/analysis.rs` | 【建议】落点已钉 memory；面板已不列（`objects()` 注释 903-908） |
-| 8 | mock 与编辑器同实例，面板还列 `tmp_m_` | `mock/src/engine/mod.rs:612` | 【已落地】面板不列（2026-11-18 口径）；"落地完即关"待做 |
+| 8 | mock 与编辑器同实例，面板还列 `tmp_m_` | `mock/src/engine/mod.rs:533` | 【已落地·刀16】面板不列（2026-11-18 口径）；落地成功即删临时表 + 销登记（失败保留供重试） |
 | 9 | 资源归档与实例双开同一 `analytics.duckdb` | `analytics_resource/global/sql.rs:47` vs `attach_bases` | 【待定】需真机验 |
 | 10 | 表段不按业务表过滤、恒无资产行 | `source_picker/load.rs:196`、`mod.rs:1647` | 【待定】 |
 
@@ -238,7 +238,7 @@ owner 固定 `data_objects`（`data_objects_load.rs:455`，本地加速挂载用
 | 5 | 面板 owner 取当前编辑器文档 / tab / 独立？ | 面板 = 自己的那条会话（口径 11 第②条），owner 固定 `data_objects`；跨模块共享靠实例临时表 | 已定·原表述更正 |
 | 6 | 底座卸载：会话级遮蔽 vs 真 `DETACH`？ | 会话级遮蔽（显式限定名挡不住，需说清） | 已定·刀15（`hide_base` / `ToggleBase`） |
 | 7 | 表段"业务表"判据：白名单 vs 黑名单？ | 白名单（`res_*` + 资产表），避免新前缀偷偷漏进来 | 已定·刀15（`res_*` 白名单维持） |
-| 8 | mock 是否退出面板可见范围？ | 退出，只留落地结果 | **仍待拍** |
+| 8 | mock 是否退出面板可见范围？ | 退出，只留落地结果（落地成功即删临时表，见刀16） | 已定·刀16 |
 | 9 | 资源归档是否改为"卸载时才开、读完即关"？ | 先解决双开问题，再定缓存策略 | **仍待拍**（需真机验） |
 
 ---
@@ -252,3 +252,4 @@ owner 固定 `data_objects`（`data_objects_load.rs:455`，本地加速挂载用
 | 2026-11-27 | 刀13：`unmount_conn` 卸源后收尾悬空会话（`forget_mounted` + `reset_search_path`）；更正"面板借假 owner `C_data_objects`"的笔误——面板 owner 是固定 `data_objects`，`C_data_objects` 只是查全局库的连接 id |
 | 2026-11-27 | 刀14：临时表 owner 登记落地——`TempTableManager` 值改 `TempEntry{created,owner}`，`register/ list_by_owner / owner_of`；`TempTableSource::default_owner()` 定模块默认归属；`execution_service → duckdb_service → manager → instance.register_temp` 全链透传文档 id（`QueryRunner` 五条执行路径 + `ResultService` + `sort.rs` 手动物化）；新增 `AnalysisInstance::drop_temps_of(owner)`（实例册 ∪ 管理器册并集），关文档在 `on_removed` 收批并关会话 |
 | 2026-11-27 | 刀15：底座"卸载"落地为会话视角遮蔽——引擎 `hide_base/show_base/hidden_bases/base_visible`（`InstanceState.hidden_bases`，不 `DETACH`）；面板底座行给 `SourceAction::ToggleBase{alias,hidden}` 一颗两态按钮，遮蔽时清空项目/全局表来源清单（表段即空）；表段白名单（`res_*`）确认为已定；单测 `hiding_a_base_empties_its_table_rows` |
+| 2026-11-27 | 刀16：mock "落地完即关"——`write_temp_table_to_database` 在写入与解挂都成功后收掉这张临时表（有实例走 `AnalysisInstance::drop_temp`，无实例退回进程面内存库自删 + 销登记），失败路径保留供重试；`MockGenInfo` 自带预览快照，落地后结果区显示不受影响 |
