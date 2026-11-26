@@ -204,7 +204,7 @@
 | 1 | 所有权移交：两个 Manager 去文件连接；根连接统一挂两库；实例复用 | 串行单测 + 真机双库 CTAS 探针 | ✅ 已完成（2026-11-26） |
 | 2 | 会话角色 + 全局写守卫 | 守卫单测：`USE rds_global` / DDL / DML / ATTACH 全拒 | ✅ 已完成（2026-11-26） |
 | 3 | M6 表型减法：`ProjectCtx`、CTAS、删 parquet 路径 | `cargo test -p rds-analytics-resource --lib` | 🟡 进行中：结果集 / 升级 / 分发已切同根 CTAS（286 passed）；`ProjectCtx` 与 system session 待做 |
-| 4 | 全局表回收站 `trash_global` / `purge_global` | 表资产 trash/restore/purge 用例 | ⬜ 待做 |
+| 4 | 全局表回收站 `trash_global` / `purge_global` | 表资产 trash/restore/purge 用例 | 🟡 表型已完成；文件回收站随第 5 步 |
 | 5 | 全局文件资产 + 文件回收站 + 版本恢复 | 文件 hash、恢复、pin 依赖用例 | ⬜ 待做 |
 | 6 | UI：回收站、版本恢复、分发文件 | `dialog_window` / `panel_window` | ⬜ 待做 |
 
@@ -339,6 +339,38 @@ Manager 句柄上的 DuckDB 迁移尚未挪到 system session，角色隔离目�
 - `jobs/global.rs::ProjectDuckConn` 仍是 `(duck_conn, sqlite_pool)`，未改名 `ProjectCtx`；
 - `GlobalInstanceStore::production` 仍取 Manager 会话句柄，未收敛到实例 system session。
 
+## 9.4 第四段实施记录：全局表资产回收站（2026-11-26）
+
+代码落点：
+
+- `crates/analytics_resource/src/global/delete.rs`：
+  - 新增 `trash_global(name)`：活跃 pin 检查 → 只软删当前活跃行 → 写
+    `<RDS_HOME>/data/trash/global/<asset_id>/<timestamp>/manifest.json`；表与版本快照保留；
+  - 新增 `restore_global(name)`：读最新 manifest → 校验 `analytics_table` 仍在 →
+    复活登记 → 清掉已消费的回收站条目；表被手工 `DROP` 时拒绝恢复；
+  - 新增 `purge_global(name)`：`DROP` 同名链各版表 → 清版本快照 / 登记 / 分发回执 →
+    清回收站条目；
+  - `delete_global` 暂时保留旧的硬删除语义（内部转 `purge_global`），兼容现有调用。
+- `crates/analytics_resource/src/jobs/global.rs`：删除动作改调 `trash_global`，
+  回执新增 `OpOutcome::GlobalTrashed { name, version }`。
+- UI：详情危险区 / 列表右键改「移入全局回收站…」，确认框说明
+  “只软删登记、表与版本保留、可从回收站恢复”；回执改为“已移入回收站”。
+
+验证（串行）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo test -p rds-analytics-resource --lib global::tests::g023` | 1 passed（trash 后表仍在 / restore 复活 / 表被 DROP 后拒绝恢复 / purge 清表与条目） |
+| `cargo test -p rds-analytics-resource --lib global::tests::g024` | 1 passed（活跃 pin 拒绝 trash，release 后可移入 / 恢复 / 永久删除） |
+| `cargo test -p rds-analytics-resource --lib -- --test-threads=1` | 288 passed / 0 failed |
+
+未取得结果：`cargo check -p rds-workbench` 仍被本机编译环境挡住——共享 target 会被主工作树
+WIP 产物串包（`rds_sql::guard` 缺失 / `use_duckdb_fed` 类型不一致）；独立 target 在编译
+`gpui-component` 时被系统终止。UI 改动已通过 rustfmt 解析，但类型检查待独立环境补跑。
+
+本段未做：全局回收站列表 / 恢复入口 UI（当前只有服务层 `restore_global` 与测试）；
+文件资产回收站随第 5 步（还没有全局文件资产本体可搬）。
+
 ## 10. 风险与未决
 
 1. **全局写守卫的绕过面**：`CALL` / `COPY` / `EXPORT` / prepared statement / 多语句；
@@ -359,4 +391,5 @@ Manager 句柄上的 DuckDB 迁移尚未挪到 system session，角色隔离目�
 - `cargo test -p rds-analytics-resource --lib -- --test-threads=1` ≥ 286 passed（第 3 步实测 286）；
 - `cargo check -p rds-workbench -j 1` 通过（第一刀已过 workspace check）；
 - 表型链路无 parquet 中转、无短命 ATTACH（结果集 / 升级 / 分发已达成；`ProjectCtx` / system session 待做）；
+- 全局表资产删除只软删登记，表与版本保留；恢复校验表在、永久删除才 `DROP`（第 4 步表型已达成）；
 - 资产引用 / 版本快照 / pin 的既有用例不改语义，只改测试夹具。

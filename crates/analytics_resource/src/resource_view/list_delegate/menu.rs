@@ -123,14 +123,14 @@ pub(super) fn build(
                                     }
                                 }),
                         );
-                        // 「从全局实例删除…」（刀 B）：只在全局行摆；删的是全局这一份，
+                        // 「移入全局回收站…」（刀 B）：只在全局行摆；只软删全局这一份，
                         // 已分发到项目的副本不受影响。判据见 `can_delete_global`。
                         if open_detail
                             .as_ref()
                             .is_some_and(|detail| detail.scope == crate::model::RowScope::Global)
                         {
                             menu = menu.item(
-                                PopupMenuItem::new(tr("从全局实例删除…"))
+                                PopupMenuItem::new(tr("移入全局回收站…"))
                                     .disabled(!can_delete_global)
                                     .on_click({
                                         let host = host.clone();

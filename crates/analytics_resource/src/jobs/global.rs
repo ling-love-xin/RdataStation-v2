@@ -55,7 +55,7 @@ pub(crate) struct SolidifyRefJob {
     pub(crate) target: String,
 }
 
-/// 删除全局资产（工作线程上执行）。
+/// 把全局资产移入回收站（工作线程上执行）。
 pub(crate) async fn run_delete_global(job: &DeleteGlobalJob) -> OpOutcome {
     use crate::global::GlobalInstanceStore;
 
@@ -63,20 +63,18 @@ pub(crate) async fn run_delete_global(job: &DeleteGlobalJob) -> OpOutcome {
         Ok(store) => store,
         Err(reason) => {
             return OpOutcome::Failed {
-                action: "删除全局资产",
+                action: "移入全局回收站",
                 reason: format!("打开全局系统库失败：{reason}"),
             };
         }
     };
-    match gstore.delete_global(&job.name).await {
-        Ok(outcome) => OpOutcome::GlobalDeleted {
+    match gstore.trash_global(&job.name).await {
+        Ok(outcome) => OpOutcome::GlobalTrashed {
             name: outcome.name,
-            versions: outcome.versions,
-            tables: outcome.tables,
-            projects: outcome.projects,
+            version: outcome.version,
         },
         Err(reason) => OpOutcome::Failed {
-            action: "删除全局资产",
+            action: "移入全局回收站",
             reason: reason.to_string(),
         },
     }

@@ -1131,6 +1131,108 @@ async fn g017_delete_global_drops_tables_and_registry_only() {
     let _ = fs::remove_dir_all(&env.dir);
 }
 
+#[tokio::test]
+async fn g023_trash_restore_keeps_table_until_purge() {
+    let env = create_test_env().await;
+    let csv = write_csv(&env.dir);
+    let req = promote_req("trash_orders", &csv, PromoteKind::DataFile);
+    env.store.promote(&req).await.expect("promote");
+    let table = read_global_table(&env, "trash_orders").expect("table");
+
+    let trashed = env.store.trash_global("trash_orders").await.expect("trash");
+    assert_eq!(trashed.name, "trash_orders");
+    assert_eq!(trashed.version, 1);
+    assert_eq!(trashed.analytics_table.as_deref(), Some(table.as_str()));
+    assert!(
+        env.store.table_exists(&table).await.expect("probe"),
+        "移入回收站只软删登记，表必须留库"
+    );
+    assert!(
+        list_global_resources(&env.store)
+            .expect("list")
+            .iter()
+            .all(|row| row.name != "trash_orders"),
+        "回收站条目不应出现在活跃列表"
+    );
+
+    let restored = env
+        .store
+        .restore_global("trash_orders")
+        .await
+        .expect("restore");
+    assert_eq!(restored.version, 1);
+    assert_eq!(
+        list_global_resources(&env.store)
+            .expect("list")
+            .iter()
+            .filter(|row| row.name == "trash_orders")
+            .count(),
+        1,
+        "恢复后登记回到活跃列表"
+    );
+    assert!(
+        !trashed.trash_dir.exists(),
+        "恢复成功后回收站条目要清掉"
+    );
+
+    // 第二次移入后手工 DROP 表：恢复必须拒绝，而不是复活一条指向空表的登记。
+    let trashed = env.store.trash_global("trash_orders").await.expect("trash again");
+    env.store.drop_global_table(&table).await.expect("drop table");
+    let refused = env.store.restore_global("trash_orders").await;
+    assert!(
+        matches!(refused, Err(InstanceOpError::Core(_))),
+        "表已不在时应拒绝恢复：{refused:?}"
+    );
+
+    env.store
+        .purge_global("trash_orders")
+        .await
+        .expect("purge");
+    assert!(
+        !env.store.table_exists(&table).await.expect("probe"),
+        "永久删除后表必须消失"
+    );
+    assert!(
+        !trashed.trash_dir.exists(),
+        "永久删除要清掉回收站条目"
+    );
+    assert!(matches!(
+        env.store.purge_global("trash_orders").await,
+        Err(InstanceOpError::NotFound { .. })
+    ));
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+#[tokio::test]
+async fn g024_trash_refuses_while_a_project_pins_the_version() {
+    let env = create_test_env().await;
+    let csv = write_csv(&env.dir);
+    let req = promote_req("pinned_trash", &csv, PromoteKind::DataFile);
+    env.store.promote(&req).await.expect("promote");
+    pin_ref(&env, "arp_ref_trash", 1, "pinned_trash", 1);
+
+    let refused = env.store.trash_global("pinned_trash").await;
+    assert!(
+        matches!(refused, Err(InstanceOpError::Referenced { refs: 1, .. })),
+        "被项目 pin 的全局版本不能移入回收站：{refused:?}"
+    );
+
+    env.store
+        .release_global_ref(&env.project_root, "arp_ref_trash", 1)
+        .expect("release pin");
+    let trashed = env
+        .store
+        .trash_global("pinned_trash")
+        .await
+        .expect("trash after release");
+    env.store.restore_global("pinned_trash").await.expect("restore");
+    env.store.purge_global("pinned_trash").await.expect("purge");
+    assert!(!trashed.trash_dir.exists(), "永久删除后回收站条目要清掉");
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
 fn pin_ref(
     env: &TestEnv,
     resource_id: &str,

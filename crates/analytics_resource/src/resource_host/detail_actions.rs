@@ -340,17 +340,17 @@ pub(super) fn request_solidify_ref(host: &ResourceHost, resource_id: &str, proje
     host.notice("资产库：正在固化引用版本…", cx);
 }
 
-/// 从全局实例删除（刀 B）：确认框说清「删的是全局这一份，已分发副本不受影响」。
+/// 移入全局回收站（刀 B）：确认框说清「只软删全局这一份，表与版本仍在，可恢复」。
 pub(super) fn request_delete_global(
     host: &ResourceHost,
     detail: &ArchiveDetail,
     window: &mut Window,
     cx: &mut App,
 ) {
-    let Some(root) = host.require_project("无法删除全局资产", cx) else {
+    let Some(root) = host.require_project("无法移入全局回收站", cx) else {
         return;
     };
-    // 不检查项目只读：删除只动全局库，不写项目分析库 / resources。
+    // 不检查项目只读：回收站只动全局登记，不写项目分析库 / resources。
     let name = detail.name.clone();
     // 分发面来自详情快照（`dispatch_label`）：让用户看见"这些项目里还有副本"再决定。
     let dispatched = if detail.dispatch_label.trim().is_empty() {
@@ -359,7 +359,7 @@ pub(super) fn request_delete_global(
         detail.dispatch_label.clone()
     };
     let description = format!(
-        "将从全局分析库删除「{name}」的全部版本表，并清掉全局登记与分发回执。\n{dispatched}：其中已分发到项目的副本不受影响，仍可继续使用。\n此操作不可撤销。"
+        "将把全局分析库里的「{name}」当前版本移入全局回收站：只软删全局登记，表与版本快照都保留，之后可以从回收站恢复。\n{dispatched}：已分发到项目的副本不受影响，仍可继续使用。\n永久删除要再进回收站执行。"
     );
     let backend = host.backend.clone();
     window.open_alert_dialog(cx, move |alert, _window, _cx| {
@@ -369,18 +369,18 @@ pub(super) fn request_delete_global(
         let description = description.clone();
         alert
             .confirm()
-            .title("从全局实例删除？")
+            .title("移入全局回收站？")
             .description(description)
             .button_props(
                 gpui_kit::component::dialog::DialogButtonProps::default()
-                    .ok_text("删除")
+                    .ok_text("移入回收站")
                     .ok_variant(gpui_kit::component::button::ButtonVariant::Danger)
                     .show_cancel(true),
             )
             .on_ok(move |_, _window, cx| {
                 resource_jobs::enqueue_delete_global(root.clone(), name.clone());
                 backend.refresh_resources(cx);
-                say(&backend, "资产库：正在删除全局资产…", cx);
+                say(&backend, "资产库：正在移入全局回收站…", cx);
                 true
             })
     });

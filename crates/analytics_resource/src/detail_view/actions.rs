@@ -144,7 +144,7 @@ pub(super) fn render_actions(
                             .child(
                                 Button::new("archive-detail-delete-global")
                                     .with_variant(ButtonVariant::Danger)
-                                    .label(tr("从全局实例删除…"))
+                                    .label(tr("移入全局回收站…"))
                                     .disabled(!can_delete_global)
                                     .on_click({
                                         let host = host.clone();
@@ -159,7 +159,7 @@ pub(super) fn render_actions(
                             )
                             .child(
                                 div().text_xs().text_color(muted).child(tr(
-                                    "删全局表与登记；已分发到项目的副本不受影响",
+                                    "移入全局回收站；表与版本快照保留，已分发副本不受影响",
                                 )),
                             ),
                     ),

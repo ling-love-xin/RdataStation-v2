@@ -708,6 +708,9 @@ impl SidebarPanel {
             resource_jobs::OpOutcome::Solidified { name, version } => {
                 format!("资产库：已固化引用版本为本地资产「{name}」v{version}")
             }
+            resource_jobs::OpOutcome::GlobalTrashed { name, version } => format!(
+                "资产库：已把全局「{name}」v{version} 移入回收站（表与版本快照保留，恢复后回到列表）"
+            ),
             resource_jobs::OpOutcome::GlobalDeleted {
                 name,
                 versions,

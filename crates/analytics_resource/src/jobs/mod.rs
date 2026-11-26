@@ -152,7 +152,9 @@ pub enum OpOutcome {
     },
     /// 已把引用版本固化成独立本地资产：新资产名 / 本地版本。
     Solidified { name: String, version: i32 },
-    /// 已从全局实例删除：资产名 / 版本数 / 表数 / 曾分发过的项目数
+    /// 已移入全局回收站：资产名 / 被移入的那一版。
+    GlobalTrashed { name: String, version: i32 },
+    /// 已从全局实例永久删除：资产名 / 版本数 / 表数 / 曾分发过的项目数
     /// （回执要说明"这些项目里的副本还在"）。
     GlobalDeleted {
         name: String,
