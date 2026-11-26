@@ -6036,6 +6036,13 @@ fn column_header_plan_splits_into_filter_sort_and_column_ops() {
     assert_eq!(plan.leading[0].action, ContextAction::CopyColumnName);
     let labels: Vec<&str> = plan.groups.iter().map(|g| g.label).collect();
     assert_eq!(labels, vec!["筛选", "排序", "列操作"]);
+    // `面板▸` 插在「排序」之后（真值 `fillContextMenu:3224-3234` 排在「编辑」后、
+    // 「呈现格式」前；本仓没有这两组），且插入位不越过组数
+    assert_eq!(plan.panels_at, 2, "面板子菜单落在排序与列操作之间");
+    assert!(
+        plan.panels_at <= plan.groups.len(),
+        "面板插入位必须能落在组边界上"
+    );
     // 排序组：升序 / 降序 / 清除（真值 `fillOrderingsMenu:3935-3948` 的三项）
     let sort: Vec<ContextAction> = plan.groups[1]
         .items

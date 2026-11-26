@@ -375,6 +375,9 @@ pub(crate) fn render_th(
         column_name: name.clone(),
         copy_column_text: delegate.column_text(column),
         stats_text: stats_lines(&column_stats(&delegate.rows, column)).join("\n"),
+        // `面板▸`：与数据格右键共用同一份注入构造器（真值三个落点共用 `fillPanelsMenu()`，
+        // `ResultSetViewer.java:3224-3234`）；`None` 时列头也不摆
+        panels: delegate.panels_menu_builder.clone(),
     };
     // ① 下拉三角内容：平铺（真值 `showColumnMenu` 就是「排序 + 筛选」平铺；
     // 本仓在此之上还带列级增强项：复制此列 / 冻结 / 隐藏 / 列统计 / 显示全部 / 洞察）

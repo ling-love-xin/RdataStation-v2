@@ -8,8 +8,8 @@
 //! | 列头右键 | `SpreadsheetPresentation.fillContextMenu:1088-1110`（`COLUMN_HEADER`）→ `ResultSetViewer.fillContextMenu:3151-3300` | **分组**：`复制列名` 顶层 + `筛选▸` + `排序▸` + `导航▸` + `编辑▸` + `面板▸` + `呈现格式▸` + `布局▸` … |
 //!
 //! 本仓：
-//! - 右键用 [`column_menu_plan`] 的**分组**形态（本仓没有导航 / 编辑 / 导出的列级能力，
-//!   面板子菜单由 `menu::append_panels_submenu` 仍在数据格右键上挂；登记见文档 §9.72）；
+//! - 右键用 [`column_menu_plan`] 的**分组**形态（本仓没有导航 / 编辑 / 导出的列级能力；
+//!   `面板▸` 与数据格右键共用同一份 `PanelsMenuBuilder`，列头落点按真值位置摆在「排序」之后）；
 //! - 下拉三角仍是**平铺**（`menu::column_menu_items`），与真值 `showColumnMenu` 同构。
 //!
 //! 两条入口共用 [`ColumnMenuHooks`] 与 [`apply_item`]：动作分派只有一份，形状差异只在
@@ -48,6 +48,9 @@ pub(crate) struct ColumnMenuPlan {
     pub leading: Vec<ContextMenuItem>,
     /// 分组子菜单（按显示顺序）
     pub groups: Vec<ColumnMenuGroup>,
+    /// `面板▸` 在 `groups` 里的插入位置（真值 `fillContextMenu:3224-3234` 排在「编辑」之后、
+    /// 「呈现格式」之前；本仓没有导航 / 编辑组，因此落在「排序」之后 = 2）
+    pub panels_at: usize,
 }
 
 /// 列头右键的菜单计划（纯函数，可单测）
@@ -67,6 +70,9 @@ pub(crate) fn column_menu_plan(target: &ContextTarget) -> ColumnMenuPlan {
         .collect();
     layout.extend(column_layout_items(target));
     ColumnMenuPlan {
+        // 真值的面板段排在「编辑」之后、「呈现格式」之前（`fillContextMenu:3217-3234`）；
+        // 本仓组序是 筛选 / 排序 / 列操作，故面板落在「排序」之后。
+        panels_at: 2,
         leading: column_copy_items(target)
             .into_iter()
             .filter(|item| matches!(item.action, ContextAction::CopyColumnName))
@@ -109,6 +115,9 @@ pub(crate) struct ColumnMenuHooks {
     pub copy_column_text: String,
     /// 「列统计」的弹层正文（同上）
     pub stats_text: String,
+    /// `面板▸` 的构造器（与数据格右键同一份 `PanelsMenuBuilder`）；`None` = 面板没接线，
+    /// 对应真值 `FEATURE_PANELS` 未开 → 不摆空壳子菜单（`ResultSetViewer.java:3225`）
+    pub panels: Option<crate::grid::PanelsMenuBuilder>,
 }
 
 /// 把一个菜单项挂到 `menu` 上（唯一的动作分派处；下拉三角与右键子菜单共用）
@@ -305,7 +314,15 @@ pub(crate) fn build_plan_menu(
     for item in plan.leading {
         menu = apply_item(menu, item, hooks);
     }
-    for group in plan.groups {
+    // `面板▸`：真值 `fillContextMenu:3224-3234` 在「编辑」段之后、「呈现格式」之前摆
+    // （`FEATURE_PANELS` 门控）；本仓没有导航 / 编辑组，故按 `plan.panels_at` 落在「排序」之后。
+    let panels_at = plan.panels_at;
+    let mut panels_placed = false;
+    for (idx, group) in plan.groups.into_iter().enumerate() {
+        if idx == panels_at {
+            menu = append_panels(menu, hooks, window, cx);
+            panels_placed = true;
+        }
         if group.items.is_empty() {
             continue;
         }
@@ -319,7 +336,33 @@ pub(crate) fn build_plan_menu(
             sub
         });
     }
+    if !panels_placed {
+        // 组被跳空（或 `panels_at` 落在末位之后）时仍要摆：真值的面板段不挂在任何组里
+        menu = append_panels(menu, hooks, window, cx);
+    }
     menu
+}
+
+/// 把 `面板▸` 子菜单挂到 `menu` 上（与数据格右键共用同一份构造器）
+///
+/// 真值里 `fillContextMenu:3224-3234` 的装配：`MenuManager(action_panels, UIIcon.PANEL_CUSTOMIZE)`
+/// + `fillPanelsMenu()` 的条目；对 `COLUMN_HEADER` / 数据格 / 行号槽三种落点一视同仁（不读 `row`）。
+/// 本仓 `PanelsMenuBuilder` 由面板注入（页签集合 / 可见性都在 `ResultPanel` 上），`None` 时
+/// 整个子菜单不摆（= `FEATURE_PANELS` 未开，真值同样不摆）。
+fn append_panels(
+    menu: PopupMenu,
+    hooks: &ColumnMenuHooks,
+    window: &mut Window,
+    cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    let Some(builder) = hooks.panels.clone() else {
+        return menu;
+    };
+    // `PopupMenu::build` 造子菜单实体；父菜单由 render 侧的 `parent_menu` 补齐，与
+    // `menu::append_panels_submenu` 走同一条路径（vendor `popup_menu.rs:1574-1590`）。
+    let submenu = PopupMenu::build(window, cx, move |menu, window, cx| builder(menu, window, cx));
+    menu.separator()
+        .item(PopupMenuItem::submenu("面板", submenu).icon(IconName::PanelRight))
 }
 
 /// 按平铺列表铺一份菜单（列头下拉三角用；真值 `showColumnMenu` 就是平铺）
