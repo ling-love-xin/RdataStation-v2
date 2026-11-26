@@ -144,6 +144,28 @@ pub fn snapshot() -> Vec<CatalogInfo> {
     by_alias.into_values().collect()
 }
 
+/// 此刻每个 catalog 的表 / 视图名（一次读全，供预检回答「命中几个源」）。
+///
+/// 没有实例 → 空表：预检只校验别名，不猜表存在性（宁可漏报，不误报）。
+/// 不缓存：这一层是 DuckDB 的派生读，任何缓存都得自己维护失效，反而成了第二份事实。
+pub fn table_names() -> BTreeMap<String, Vec<String>> {
+    let Some(instance) = super::instance::current() else {
+        return BTreeMap::new();
+    };
+    let Ok(rows) = instance.catalog_table_names() else {
+        return BTreeMap::new();
+    };
+    let mut map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (alias, name) in rows {
+        map.entry(alias).or_default().push(name);
+    }
+    for names in map.values_mut() {
+        names.sort();
+        names.dedup();
+    }
+    map
+}
+
 /// 同一个别名被多处描述时并成一行：持有者取并集，状态**先到的说了算**。
 ///
 /// 先到优先是因为两类事实的可靠性不同：会话里记的是挂载那一刻的真实结果

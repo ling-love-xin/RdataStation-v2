@@ -101,6 +101,10 @@ impl EngineQueryRunner {
         lineage: &str,
     ) -> Result<QueryData, String> {
         let (plan, session) = self.federated_session(document, connection)?;
+        // 【K1】发送前预检：这条 SQL 引用的表要在实例上落得下来——不存在 / 多源歧义 /
+        // 未知 catalog / 源不可用都在这里拒，不等到 DuckDB 报一句笼统的错。
+        let facts = crate::exec::preflight::Facts::capture(crate::exec::preflight::primary_of(document));
+        crate::exec::preflight::check(sql, engine::sql::SqlDialect::Duckdb, &facts)?;
         // 与另两档同口径：查询只取**第一段**（套窗口），写语句原样交给引擎
         let (to_run, segmented) = match window_sql(sql, crate::execution::SEGMENT_ROWS, 0) {
             Some(wrapped) => (wrapped, true),

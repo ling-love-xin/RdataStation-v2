@@ -863,6 +863,30 @@ impl AnalysisInstance {
         Ok(tables)
     }
 
+    /// 一次性列出**全部 catalog** 的表 / 视图名（`(别名, 名)`，不分 kind、不过滤系统库）。
+    ///
+    /// 预检要回答「这个未限定名在几个源里命中」，逐个别名查是 N 次往返；
+    /// `duckdb_tables()` 本身就是一次全量读，这里只做批量版。与
+    /// [`Self::list_tables_of_alias`] 同一份事实（表 + 视图），不另立口径。
+    pub fn catalog_table_names(&self) -> Result<Vec<(String, String)>, String> {
+        let conn = self
+            .control
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut statement = conn
+            .prepare(
+                "SELECT database_name, table_name FROM duckdb_tables() \
+                 UNION ALL SELECT database_name, view_name FROM duckdb_views()",
+            )
+            .map_err(|error| format!("列不出实例上的表：{error}"))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|error| format!("列不出实例上的表：{error}"))?;
+        Ok(rows.filter_map(Result::ok).collect())
+    }
+
     /// 放掉别名（卸载源时调）。
     pub fn release_alias(&self, alias: &str) {
         if let Ok(mut state) = self.state.lock() {

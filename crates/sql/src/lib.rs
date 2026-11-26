@@ -40,6 +40,7 @@ mod rewrite;
 pub mod script;
 mod semantic;
 mod split;
+mod tables;
 mod transpiler;
 
 pub use analysis::{
@@ -70,4 +71,5 @@ pub use parser::ProjectionSource;
 pub use rewrite::ScriptRewrite;
 pub use semantic::{CatalogTable, SemanticIssue, diagnose};
 pub use split::{SqlStatement, split_statements};
+pub use tables::{TablePath, table_paths};
 pub use transpiler::TranspileReport;

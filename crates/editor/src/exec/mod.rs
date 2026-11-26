@@ -23,6 +23,8 @@ pub mod execution;
 pub mod export;
 /// 【A14】执行回执：结论 / 事务 / 提交 / 导出 / 来源动作各 Note 与 `CommitReport` / `SubmitError`
 pub mod notes;
+/// 【K1】发送前预检：表引用 → 实例事实，报「不存在 / 歧义 / 未知 catalog」/「源不可用」
+pub mod preflight;
 /// 【A14】执行队列：按连接分组的工作线程 + mpsc + 主线程轮询泵
 pub mod queue;
 /// 【A14】执行端口：`QueryRunner` trait（宿主注入）+ `QueryData` 产物
