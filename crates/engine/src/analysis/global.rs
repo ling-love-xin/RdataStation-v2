@@ -4,15 +4,15 @@
 //! 所以「全局表」在 `<RDS_HOME>/data/system/analytics.duckdb` 里；同目录的 `global.db`
 //! 是 SQLite 元数据库（连接 / 资源归档 / 规则信任），递错了地方就查不到可分析的表。
 //!
-//! 2026-11-26 所有权收口后：全局分析库与项目分析库由 `shared::duckdb_root` 的**唯一根连接**
-//! 同时 `ATTACH`（`rds_global` / `analytics`），分析实例从同一条根连接复制控制会话。
-//! 本模块不再自己 `open` 全局库文件——那样会在 Windows 上撞「同一个文件只能一条根连接」。
-//! 会话仍由实例按 owner 复用一个句柄（同 owner 再次打开拿回同一会话），不再各自持有文件。
+//! 2026-11-26 所有权收口后：全局分析库与项目分析库由分析实例（`AnalysisInstance` 底座）
+//! 独占 `ATTACH`（`rds_global` / `analytics`），会话一律从实例按 owner 派生（同 owner 再次打开
+//! 拿回同一会话）。本模块不再自己 `open` 全局库文件——那样会在 Windows 上撞
+//! 「同一个文件只能一条根连接」，也会绕过实例的写闸门。
 //!
 //! # 边界
 //!
-//! - 全局分析库在根连接上是 `READ_WRITE`（写入方与实例共用）；写权限由「会话角色 + SQL 闸门」
-//!   收住：只有 `System` 角色能写全局库；
+//! - 全局分析库在实例底座上是 `READ_WRITE`；写权限由「会话角色 + SQL 闸门」收住：
+//!   只有 `System` 角色能写全局库；
 //! - 别名固定 [`GLOBAL_ALIAS`]，SQL 里写 `rds_global.<表>`。
 
 use std::path::{Path, PathBuf};
@@ -47,7 +47,7 @@ pub fn global_analysis_db_path() -> Result<PathBuf, CoreError> {
 
 /// 把任意一个库文件**单独**挂进一条短命联邦会话，返回会话句柄（**测试/探针用**）。
 ///
-/// 生产路径不要用它：全局分析库已经由 `shared::duckdb_root` 挂在实例底座上，
+/// 生产路径不要用它：全局分析库已经由分析实例的 `ensure_base` 挂在底座上，
 /// 这里再对一个已挂载的文件 `ATTACH` 会撞「同一个文件只能一条根连接」。
 ///
 /// `db_type` 是**驱动标识**（不是扩展名猜的）：`global.db` 实测是 SQLite 文件
@@ -151,14 +151,13 @@ fn ensure_alias_attached(
     )))
 }
 
-/// 打开全局分析库会话：从 `shared::duckdb_root` 的根连接复制一条会话，
-/// `USE rds_global`，别名 [`GLOBAL_ALIAS`]，驱动 **duckdb**（分析库一律 DuckDB）。
+/// 打开全局分析库会话：在分析实例上 `ensure_base` 挂 `rds_global` 底座，
+/// 再按 `global:{owner}` 派生一条会话，别名 [`GLOBAL_ALIAS`]，驱动 **duckdb**（分析库一律 DuckDB）。
 ///
 /// 曾经挂错过：首版按 `global.db` + sqlite 挂，那是元数据库（SQLite），里面没有可分析的表；
-/// 代价是「open 成功、随后查询报 schema/表不存在」——所以 `open_mounted` 里那道
-/// 「挂上之后核 catalog」的检查留着，不许删。
+/// 代价是「open 成功、随后查询报 schema/表不存在」——所以挂载后核 catalog 的检查留着，不许删。
 ///
-/// 2026-11-26：不再对全局库文件另开连接，改为根连接上的实例会话；文件存在性仍先核，
+/// 2026-11-26：不再对全局库文件另开连接，改为分析实例底座上的会话；文件存在性仍先核，
 /// 缺失时给出「宿主启动流程还没建它」的可读原因。
 pub fn open_global_session(owner: &str) -> Result<SessionHandle, CoreError> {
     let path = global_analysis_db_path()?;

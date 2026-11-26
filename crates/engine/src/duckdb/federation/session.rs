@@ -1019,7 +1019,8 @@ mod tests {
         set_bases(Vec::new());
         let _ = std::fs::remove_dir_all(&dir);
         assert!(!with_bases.is_empty());
-        assert!(!without_bases.is_empty());
+        // 清空后指纹就是空串：它是「无底座」的稳定标识，不是缺失值。
+        assert!(without_bases.is_empty(), "{without_bases:?}");
     }
 
     /// 两个源跨源 join：未限定名走主源，限定名走各自
