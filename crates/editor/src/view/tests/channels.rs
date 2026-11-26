@@ -361,6 +361,7 @@ fn refreshing_the_source_reports_back_from_the_side_thread(cx: &mut TestAppConte
     impl QueryRunner for RefreshRunner {
         fn run(
             &self,
+                        _document: &str,
             _connection: Option<&str>,
             _schema: Option<&str>,
             _channel: ExecChannel,
@@ -372,6 +373,7 @@ fn refreshing_the_source_reports_back_from_the_side_thread(cx: &mut TestAppConte
 
         fn refresh_sources(
             &self,
+                        _document: &str,
             _connection: Option<&str>,
             _channel: ExecChannel,
             _alias: Option<&str>,

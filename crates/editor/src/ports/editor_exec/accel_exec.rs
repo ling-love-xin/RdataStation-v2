@@ -12,12 +12,13 @@ impl EngineQueryRunner {
     /// `lineage` 随历史落库（【B5 余项】；`run()` 把队列注入的执行血缘递过来）。
     pub(crate) fn run_on_accel(
         &self,
+        document: &str,
         connection: Option<&str>,
         sql: &str,
         lineage: &str,
     ) -> Result<QueryData, String> {
         let source = self.accel_source(connection)?;
-        let (session, _alias) = accel::ensure_on_instance(&source)?;
+        let (session, _alias) = accel::ensure_on_instance(&source, document)?;
         let (to_run, segmented) = match window_sql(sql, crate::execution::SEGMENT_ROWS, 0) {
             Some(wrapped) => (wrapped, true),
             None => (sql.to_string(), false),
@@ -53,13 +54,14 @@ impl EngineQueryRunner {
     /// 加速档的「取下一段」（与源库档同一套窗口包装，见 `sql_service::window_sql`）
     pub(crate) fn fetch_next_on_accel(
         &self,
+        document: &str,
         connection: Option<&str>,
         sql: &str,
         offset: usize,
         limit: usize,
     ) -> Result<QueryData, String> {
         let source = self.accel_source(connection)?;
-        let (session, _alias) = accel::ensure_on_instance(&source)?;
+        let (session, _alias) = accel::ensure_on_instance(&source, document)?;
         let wrapped =
             window_sql(sql, limit, offset).ok_or_else(|| "这份结果没有可再取的部分".to_string())?;
         let started = std::time::Instant::now();
@@ -82,13 +84,14 @@ impl EngineQueryRunner {
     /// 加速档的下发（筛选 / 排序）：改写（引擎的 `sql::rewrite_*`）之后照跑
     pub(crate) fn run_rewritten_on_accel(
         &self,
+        document: &str,
         connection: Option<&str>,
         rewritten: &engine::sql::Rewrite,
         notice: impl FnOnce(&str) -> String,
         lineage: &str,
     ) -> Result<QueryData, String> {
         let source = self.accel_source(connection)?;
-        let (session, _alias) = accel::ensure_on_instance(&source)?;
+        let (session, _alias) = accel::ensure_on_instance(&source, document)?;
         let started = std::time::Instant::now();
         let outcome = session.run(&rewritten.sql);
         let elapsed_ms = started.elapsed().as_millis() as u64;

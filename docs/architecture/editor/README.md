@@ -67,7 +67,7 @@
 | --- | --- |
 | 文档 / 模式 / 只读 / 能力表 | `crates/editor/src/{model.rs, mode.rs}` |
 | 打开 / 关闭 / 激活 / 保存 / 脏状态 | `crates/editor/src/service.rs` |
-| 执行编排（目标解析 / 后台任务 / 回填 / 提交变更） | `crates/editor/src/execution.rs`（✅ 已落地：`ExecTarget` 含 `Commit`，提交在宿主 `workbench/src/services/editor_exec.rs::commit_changes` 落库） |
+| 执行编排（目标解析 / 后台任务 / 回填 / 提交变更） | `crates/editor/src/execution.rs`（✅ 已落地：`ExecTarget` 含 `Commit`，提交在 `crates/editor/src/ports/editor_exec/runner.rs::commit_changes` 落库） |
 | 执行通道与门控（源库 / 加速 / 联邦） | `crates/editor/src/channel.rs` + `crates/connection/src/secret.rs` + `crates/engine/src/duckdb/federation.rs` |
 | 筛选下发 / DuckDB 分析 | `crates/editor/src/execution.rs` + `crates/engine/src/services/execution_service.rs` |
 | 结果网格（渲染 + 就地编辑） | `crates/editor/src/view/results/grid.rs`（✅ 已落地；`GridEditSink` 形状的编辑逻辑在 `changes.rs` / `editability.rs` / `execution.rs`，**未抽公开 trait**，架构 §3.6） |
@@ -92,6 +92,25 @@
 | 契约测试范围 | `crates/workbench/tests/ui_contract.rs` |
 
 数据链路：`editor（编辑/执行编排）→ engine::SqlService（连接路由 / 取消 / 超时 / 缓存 / 历史）→ 驱动 → 目标库`；补全：`editor::completion → database::MetadataService → 驱动 MetadataBrowser`；结果：`engine::ResultSet → editor::ResultStore → 结果面板 / 内联输出`。**无 HTTP / IPC 层**。
+
+### 3.1 宿主执行器的落点（2026-11-08 目录化）
+
+`crates/workbench/src/services/editor_exec.rs` 曾是单体（2058 行），整块迁入
+`crates/editor/src/ports/editor_exec/` 并按域分文件。历史台账（`editor-dev-plan.md`、
+`editor-impl-taskbook.md`、`result-panel.md`、`plugin-dev-plan.md`、`federation-dev-plan.md`
+等）里记的旧路径是**当时的事实**，按本表换算：
+
+| 旧引用 | 现落点 |
+| --- | --- |
+| `editor_exec.rs::to_data`（含 `cell_json` 桥接） | `editor_exec/convert.rs` |
+| `::run` / `run_filtered` / `run_sorted_down` / `fetch_next` / `commit_changes` / `analyze` / `export_via_duckdb` / `run_script` / `run_cell` | `editor_exec/runner.rs` |
+| `::federated_plan` / `plan_from_records` / `run_on_federation` / `fetch_next_on_federation` / `run_rewritten_on_federation` | `editor_exec/federation.rs` |
+| `::run_on_accel` / `fetch_next_on_accel` / `run_rewritten_on_accel` | `editor_exec/accel_exec.rs` |
+| 连接解析（`resolve_conn_id` / `runtime_connection_string`） | `editor_exec/conn.rs` |
+| 历史带通道 / 参与源 | `editor_exec/history.rs` |
+| 入口、`runner_for_test` | `editor_exec/mod.rs` / `editor_exec/tests.rs` |
+
+旧文档里的 `editor_exec.rs:NNN` 行号在迁移后一律失效，按函数名查上表即可。
 
 ## 4. 改这个模块前必须遵守
 

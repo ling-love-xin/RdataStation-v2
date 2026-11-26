@@ -2071,7 +2071,7 @@ mod tests {
 
                 description: None,
 
-                use_duckdb_fed: false,
+                use_duckdb_fed: None,
 
                 environment: None,
 

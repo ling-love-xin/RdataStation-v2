@@ -32,17 +32,27 @@ const BASELINE: &[(&str, usize, usize)] = &[
     // 本文件是尺寸常量单一来源，`px(N.)` 在此是**推荐写法**，不是违规。
     ("crates/mock/src/ui.rs", 0, 26),
     ("crates/notification/src/view.rs", 0, 2),
+    // 1 = 标题栏项目下拉的最小宽 `.min_w(px(200.))`（2026-11-26 实测）：`PopupMenuItem` 的标签
+    // 装在 `w_full()` 容器里、不参与菜单宽计算，默认 128 时超过 5 个全角字的文案会画出右缘
+    // （弹层不裁剪）。它是「弹层最小宽」这一个形态事实，不是内距 / 字号档位，故就地写并登记。
+    ("crates/project/src/ui/picker.rs", 0, 1),
     ("crates/result_panel/src/grid/header.rs", 0, 1),
     // 1 = 状态行左右两列之间的固定间距 `.gap(px(5.))`：DBeaver 外层 `GridLayout(2, false)`
     // 用的是 SWT 默认 `horizontalSpacing = 5`（未显式设置，`ResultSetFilterPanel.java:163-166`
     // 只改了 margin）。它不是字号档位，跟着 rem 缩放会让状态行在放大字号时挤到换行，
     // 故就地写物理像素、在这里登记。
     ("crates/result_panel/src/grid/status.rs", 0, 1),
-    ("crates/result_panel/src/panel/dialog.rs", 0, 3),
+    // 5 = 结果面板对话框的三处几何 + 本版两个新对话框各一处窗口宽度。
+    // 3 = 列宽对话框的 `.w(px(680.))` / `.max_h(px(480.))` / `.h(px(360.))`（窗口尺寸按内容
+    // 行宽定死的物理像素，同 `archive_dialog` / `export_dialog` 那一档，提去 `ui.rs` 会把
+    // 「窗口多大」与「控件留白」混成一张表）。
+    // 2026-11-26 3 → 5：新增两个对话框（`editor-result-auto-refresh-config` 自动刷新配置、
+    // `editor-result-copy-names` 复制列名选项）各一处 `.w(px(420.))`——同一档窗口宽度原值。
+    ("crates/result_panel/src/panel/dialog.rs", 0, 5),
     // 7 = 筛选条 / 对象格信息浮层的描边内距：`.offset(px(2.))` ×2 与 `.p/.py(px(2.))` ×5，
     // 都是 DBeaver 侧 `ResultSetFilterPanel` / 对象格浮层的原值（2px 边框内距），
     // 与 `RESULT_TOOLBAR_PADDING` 同属「跟 DBeaver 像素相等」的一类，不随字号缩放。
-    ("crates/result_panel/src/panel/render.rs", 0, 7),
+    ("crates/result_panel/src/panel/render.rs", 1, 7),
     ("crates/result_panel/src/panel/sidebars.rs", 0, 2),
     // 16 = 原 4 + 类型默认列宽 8 档（numeric / boolean / date·time / timestamp / uuid /
     // json / binary / text，`20fb50a4`）+ 列宽自适应 3 档（`RESULT_FIT_CELL_PADDING` /
@@ -68,7 +78,11 @@ const BASELINE: &[(&str, usize, usize)] = &[
     // 一旦分叉，双击算出的列宽就会差 12px）。
     // 2026-11-25 21 → 22：**不是新增常量**，只多一处文档注释 —— `TAB_STATUS_SLOT` 的注释里
     // 引用了 Zed 的 `START_TAB_SLOT_SIZE = px(12.)` 作为出处。守门按全文匹配，注释也算命中。
-    ("crates/result_panel/src/ui.rs", 0, 22),
+    // 2026-11-26 22 → 25：行号槽补数组展开三角（真值 `GridRowRenderer.java:51-86`）带来三档
+    // 新常量——`RESULT_ROW_HEAD_MARGIN_X = px(4.)`（行号槽单侧内距）、
+    // `RESULT_ROW_EXPANDER_SIZE = px(16.)`（三角图标盒，SVG 原尺寸）、
+    // `RESULT_ROW_EXPANDER_SPACING = px(2.)`（三角与数字间距）。
+    ("crates/result_panel/src/ui.rs", 0, 25),
     ("crates/settings/src/skeleton.rs", 0, 1),
     ("crates/workbench/src/components/dialog_helpers.rs", 0, 1),
     (

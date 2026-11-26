@@ -112,7 +112,7 @@ async fn connect_real(
         driver_properties: None,
         advanced_options: None,
         description: None,
-        use_duckdb_fed: false,
+        use_duckdb_fed: None,
         created_at: std::time::Instant::now(),
     };
     manager

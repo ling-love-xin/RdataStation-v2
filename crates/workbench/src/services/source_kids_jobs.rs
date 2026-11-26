@@ -16,7 +16,7 @@ use crate::components::data_objects::{self, Object, SourceRef};
 
 /// 一次源行列举的结果。
 ///
-/// 已挂载的源（联邦 / 加速 / 文件库）给带限定名规则的 `MountedTable`（叶子只需复制名）；
+/// 联邦源给带限定名规则的 `MountedTable`（叶子只需复制名）；
 /// **连接行**给翻好的 [`Object`]（叶子可选用、可取样）——连接行的叶子同样是分析实例视角，
 /// 只是这几类叶子要能进洞察取样，得带 `srctable:` 身份（铁律 H 组第 37 条）。
 #[derive(Debug, Clone)]
@@ -145,11 +145,6 @@ pub fn load_kids(
     match source {
         SourceRef::Federated { owner, alias } => {
             engine::duckdb::federation::session::list_tables_for(owner, alias).map(Kids::Mounted)
-        }
-        SourceRef::Accel { conn_id } => {
-            let instance = engine::duckdb::instance::current()
-                .ok_or_else(|| "分析实例尚未启动（先跑一条查询）".to_string())?;
-            instance.list_mounted_tables_for_conn(conn_id).map(Kids::Mounted)
         }
         SourceRef::FileView { alias } => {
             engine::duckdb::file_view::list_tables_global(alias).map(Kids::Mounted)

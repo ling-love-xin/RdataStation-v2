@@ -60,9 +60,9 @@
 | 模块入口与硬约束 | `crates/engine/src/duckdb/federation/mod.rs`（✅） |
 | 旧实现（四类源 / 进程内状态） | `.../federation/legacy.rs`（✅ 迁入，标“已被取代”，待 `session.rs` 覆盖后退役） |
 | 源登记与状态快照 | `.../federation/registry.rs`（✅ 别名三件套 / 挂载状态 / 会话快照） |
-| 多源会话与挂载 | `.../federation/session.rs`（✅ 多源只读挂载 + 进程内会话缓存 + 按源刷新 + **L2：`ensure_secret` / `attach_source` / `write_refusal`**） |
+| 多源会话与挂载 | `.../federation/session.rs`（✅ 多源只读挂载 + 按 owner 取**分析实例里的会话**（真值只有一份，2026-11-26 起不再自持缓存）+ 按源刷新 + **L2：`ensure_secret` / `attach_source` / `write_refusal`**） |
 | L2 凭据（会话级 Secret） | `.../federation/registry.rs`（✅ `SourceSecret` + `oracle_secret_from_url`：`oracle://…/服务名` → `CREATE SECRET`） |
-| 联邦档执行路径 | `crates/workbench/src/services/editor_exec.rs`（✅ 源清单组装 + 三档分流 + 历史带参与源） |
+| 联邦档执行路径 | `crates/editor/src/ports/editor_exec/federation.rs`（✅ 源清单组装 + 三档分流 + 历史带参与源） |
 | 源清单（数据 / 菜单模型） | `crates/editor/src/sources.rs`（✅；`SourcesPort` + 纯函数 `menu_entries`） |
 | 源清单（快照翻译 / 视图 / 动作） | `workbench/src/services/editor_sources.rs`（✅）+ `editor/view/host.rs`（✅ `render_sources_picker`）+ `editor/src/execution.rs`（✅ `SourceAction` / `SourceNote`） |
 | 联邦档门控 | `crates/workbench/src/services/editor_channels.rs`（✅ 真值：≥ 2 个开了开关且可挂的连接） |
@@ -76,7 +76,7 @@
 | 临时表生命周期 | `crates/engine/src/duckdb/{analysis.rs, temp_table.rs}`（✅） |
 | 通道档位（编辑器侧） | `crates/editor/src/channel.rs`（✅） |
 | 选型实测探针 | `crates/engine/tests/duckdb_extensions_probe.rs`（✅） |
-| 数据对象面板（DuckDB 视角全览，规格见 `federation-entry-design.md` §12） | `workbench/src/panels/data_objects_tab.rs` + `workbench/src/components/data_objects/`（✅ 2026-11-18：四形态分组（源/持久表/文件/临时表）、源行展开表/视图叶子、本地加速源、加源文件线+连接线；未加载草稿与 tmp_i_/tmp_m_/tmp_p_ 均不进清单） |
+| 数据对象面板（DuckDB 视角全览，规格见 `federation-entry-design.md` §12） | `workbench/src/panels/data_objects_tab.rs` + `workbench/src/components/data_objects/`（✅ 2026-11-18：四形态分组（源/持久表/文件/临时表）、源行展开表/视图叶子、**加速档不占源段**（只在连接行写「已挂载」，`use_duckdb_fed` 有值即出行）、加源文件线+连接线；未加载草稿与 tmp_i_/tmp_m_/tmp_p_ 均不进清单） |
 
 ## 4. 改这个模块前必须遵守
 

@@ -145,7 +145,7 @@ mod tests {
             advanced_options: None,
             options: None,
             tags: None,
-            use_duckdb_fed: false,
+            use_duckdb_fed: None,
             metadata_path: None,
             server_version: None,
             scope: ConnectionScope::Global,

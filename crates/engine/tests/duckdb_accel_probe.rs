@@ -145,7 +145,7 @@ fn probe_mysql_source_live_and_read_only() {
 
     let source = AccelSource::new("C_mysql_probe", "mysql_native", &source_url).expect("组装源");
     assert_eq!(source.kind, AccelKind::MySql);
-    let (session, alias) = match accel::ensure_on_instance(&source) {
+    let (session, alias) = match accel::ensure_on_instance(&source, &source.conn_id) {
         Ok((session, alias)) => (session, alias),
         Err(reason) => {
             mysql_teardown(&url);
@@ -217,7 +217,7 @@ fn probe_postgres_source_attach() {
     let _ = rds_engine::duckdb::instance::drop_instance();
     let source = AccelSource::new("C_pg_probe", "postgres_native", &url).expect("组装源");
     assert_eq!(source.kind, AccelKind::PostgreSql);
-    let (session, alias) = match accel::ensure_on_instance(&source) {
+    let (session, alias) = match accel::ensure_on_instance(&source, &source.conn_id) {
         Ok((session, alias)) => (session, alias),
         Err(reason) => panic!("建加速会话失败：{reason}"),
     };
@@ -247,7 +247,7 @@ fn probe_sqlite_file_source_attach() {
     let _ = rds_engine::duckdb::instance::drop_instance();
     let source = AccelSource::new("C_lite_probe", "sqlite", &path).expect("组装源");
     assert_eq!(source.kind, AccelKind::Sqlite);
-    let (session, alias) = match accel::ensure_on_instance(&source) {
+    let (session, alias) = match accel::ensure_on_instance(&source, &source.conn_id) {
         Ok((session, alias)) => (session, alias),
         Err(reason) => panic!("建加速会话失败：{reason}"),
     };

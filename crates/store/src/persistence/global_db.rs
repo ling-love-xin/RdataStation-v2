@@ -41,7 +41,7 @@ pub struct GlobalConnectionInfo {
     pub password_encrypted: Option<String>,
     pub options: Option<String>,
     pub tags: Option<String>,
-    pub use_duckdb_fed: bool,
+    pub use_duckdb_fed: Option<bool>,
     pub metadata_path: Option<String>,
     pub is_active: bool,
     pub created_at: String,
@@ -708,10 +708,18 @@ impl GlobalDatabaseManager {
             .map_err(|e| CoreError::common(CommonError::General(e)))?
             .unwrap_or_else(|| "[\"global\"]".to_string());
 
+        // 三态写库：`None` 显式写 NULL（不可直连），`Some(false)` → 0，`Some(true)` → 1。
+        // 不依赖列的 `DEFAULT 0`——那会把“不可直连”写成“可直连未加速”。
+        // 绑定参数走 `'null'` 哨兵 + SQL 侧 `NULLIF`，因为这条 INSERT 的参数数组要求同类型。
+        let fed_value: &str = match input.use_duckdb_fed {
+            Some(true) => "1",
+            Some(false) => "0",
+            None => "null",
+        };
         conn.inner()?.execute(
             "INSERT OR REPLACE INTO global_connections
              (id, name, driver, host, port, database, schema_name, username, password_encrypted, options, tags, use_duckdb_fed, metadata_path, server_version, description, driver_id, environment_id, auth_config_id, auth_method, network_config_id, driver_properties, advanced_options, is_active, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, 1, CURRENT_TIMESTAMP)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULLIF(?12, 'null'), ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, 1, CURRENT_TIMESTAMP)",
             [
                 input.conn_id,
                 input.name,
@@ -724,7 +732,7 @@ impl GlobalDatabaseManager {
                 &final_password,
                 input.options.unwrap_or(""),
                 &tags_json,
-                input.use_duckdb_fed.map(|v| if v { "1" } else { "0" }).unwrap_or("0"),
+                fed_value,
                 input.metadata_path.unwrap_or(""),
                 input.server_version.unwrap_or(""),
                 input.description.unwrap_or(""),
@@ -810,10 +818,9 @@ impl GlobalDatabaseManager {
             }
         };
 
-        let use_duckdb_fed_str = input
-            .use_duckdb_fed
-            .map(|v| if v { "1" } else { "0" })
-            .unwrap_or("0");
+        // 三态：`None` → NULL（不可直连），`Some(false)` → 0，`Some(true)` → 1
+        let use_duckdb_fed_str: Option<&str> =
+            input.use_duckdb_fed.map(|v| if v { "1" } else { "0" });
 
         conn.inner()?
             .execute(
@@ -894,7 +901,12 @@ impl GlobalDatabaseManager {
             let rows = stmt
                 .query_map([], |row| {
                     let tags: Option<String> = row.get(10).ok();
-                    let use_duckdb_fed: bool = row.get(11).unwrap_or(false);
+                    // 三态：NULL = 不可被 DuckDB 直连；0 = 可直连未开加速；1 = 已开加速
+                    let use_duckdb_fed: Option<bool> = row
+                        .get::<_, Option<i64>>(11)
+                        .ok()
+                        .flatten()
+                        .map(|raw| raw != 0);
                     let metadata_path: Option<String> = row.get(12).ok();
                     let created_at: String = row.get(14).unwrap_or_default();
                     let updated_at: String = row.get(15).unwrap_or_default();

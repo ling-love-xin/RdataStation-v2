@@ -68,6 +68,7 @@ pub(crate) struct FakeRunner {
 impl QueryRunner for FakeRunner {
     fn run(
         &self,
+                _document: &str,
         connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,
@@ -101,6 +102,7 @@ impl QueryRunner for FakeRunner {
     /// 【B5b】分段假执行器：记下每次要的 (offset, limit)
     fn fetch_next(
         &self,
+                _document: &str,
         connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,

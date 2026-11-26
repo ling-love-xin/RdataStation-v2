@@ -90,7 +90,16 @@ pub fn open_mounted(
     // **必须核对真的挂上了**：联邦会话的既有约定是「挂不上不阻断」（记下原话继续挂下一个），
     // 所以 `open` 成功**不等于** alias 真的存在。实测踩过：SQLite 文件按 duckdb 驱动去挂，
     // open 返回 Ok，随后查询报 `schema "rds_global" does not exist`——错误位置离原因太远。
-    ensure_alias_attached(&session, alias, db_type)?;
+    ensure_alias_attached(
+        match &session {
+            SessionHandle::Instance { session, .. } => session,
+            SessionHandle::None => {
+                return Err(invalid("这条句柄不是 DuckDB 会话".to_string()));
+            }
+        },
+        alias,
+        db_type,
+    )?;
     Ok(session)
 }
 
@@ -99,7 +108,7 @@ pub fn open_mounted(
 /// 「为什么」直接从会话快照里取**原话**（`MountState::Failed`），不再另查一遍、也不翻译：
 /// 挂载失败的原因只有挂载那一处知道，第二处转述只会把它变得更模糊。
 fn ensure_alias_attached(
-    session: &SessionHandle,
+    session: &crate::duckdb::instance::AnalysisSession,
     alias: &str,
     db_type: &str,
 ) -> Result<(), CoreError> {
@@ -126,20 +135,17 @@ fn ensure_alias_attached(
     if mounted > 0 {
         return Ok(());
     }
-    let reason = match session {
-        SessionHandle::Instance { session, .. } => session
-            .mounted_sources()
-            .into_iter()
-            .find(|entry| entry.source.alias == alias)
-            .map(|entry| match &entry.state {
-                crate::duckdb::federation::registry::MountState::Failed(text) => text.clone(),
-                crate::duckdb::federation::registry::MountState::Ready { tables } => {
-                    format!("状态 Ready（{tables} 张表），但 catalog 里查不到")
-                }
-            })
-            .unwrap_or_else(|| "会话里没有这条源".to_string()),
-        _ => "这条句柄不是 DuckDB 会话".to_string(),
-    };
+    let reason = session
+        .mounted_sources()
+        .into_iter()
+        .find(|entry| entry.source.alias == alias)
+        .map(|entry| match &entry.state {
+            crate::duckdb::federation::registry::MountState::Failed(text) => text.clone(),
+            crate::duckdb::federation::registry::MountState::Ready { tables } => {
+                format!("状态 Ready（{tables} 张表），但 catalog 里查不到")
+            }
+        })
+        .unwrap_or_else(|| "会话里没有这条源".to_string());
     Err(invalid(format!(
         "按 {db_type} 挂载 {alias} 失败：{reason}"
     )))
@@ -162,15 +168,19 @@ pub fn open_global_session(owner: &str) -> Result<SessionHandle, CoreError> {
             path.display()
         )));
     }
-    shared::duckdb_root::ensure(None, Some(path.as_path()))
-        .map_err(|e| invalid(e.to_string()))?;
+    // `rds_global` 是**保留别名**（源别名册 `reserve_alias` 一律拒）：全局分析库只能以
+    // **底座**身份挂，不能按源去挂。实例上已经挂着这一格（宿主 `analysis_bases` 发布过）
+    // 就直接用，不再 ATTACH 第二次；没挂上才按底座口径补一次。
     let instance = crate::duckdb::instance::instance().map_err(invalid)?;
+    instance
+        .ensure_base(GLOBAL_ALIAS, &path)
+        .map_err(|reason| invalid(format!("挂载库失败: {reason}")))?;
     // owner 加前缀，避免与 `process` / 文档 owner 撞键（撞键会把别人的默认 catalog 改掉）。
     let owner_key = format!("global:{owner}");
     let session = instance
-        .ensure_session(&owner_key, "federated")
+        .ensure_session(&owner_key, "全局分析")
         .map_err(invalid)?;
-    session.use_catalog(GLOBAL_ALIAS).map_err(invalid)?;
+    ensure_alias_attached(&session, GLOBAL_ALIAS, "duckdb")?;
     Ok(SessionHandle::Instance {
         session,
         label: "federated",

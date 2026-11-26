@@ -464,7 +464,7 @@ impl ConnectionService {
             driver_properties: driver_properties.clone(),
             advanced_options: advanced_options.clone(),
             description: description.clone(),
-            use_duckdb_fed: use_duckdb_fed.unwrap_or(false),
+            use_duckdb_fed,
             created_at: std::time::Instant::now(),
         };
 
@@ -505,7 +505,7 @@ impl ConnectionService {
             &conn_id,
             &db_type,
             &url,
-            use_duckdb_fed.unwrap_or(false),
+            use_duckdb_fed,
         );
 
         // 指纹接线（2026-10-02）：登记 conn_id → 身份指纹，使指向同一物理库的多条连接

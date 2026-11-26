@@ -27,6 +27,7 @@ struct DuckDbExportRunner {
 impl QueryRunner for DuckDbExportRunner {
     fn run(
         &self,
+                _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,

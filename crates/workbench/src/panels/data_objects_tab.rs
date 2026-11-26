@@ -292,20 +292,68 @@ impl DataObjectsTab {
     /// 不吞错误：失败时把引擎原话留在面板上——用户点了没反应是最难查的那种。
     fn run_session_action(&mut self, action: data_objects::SessionAction, cx: &mut Context<Self>) {
         use data_objects::SessionAction;
+        // 三个动作都直接落在**分析实例的会话**上：`federation::session` 那套按 owner 查
+        // `SESSIONS` 的门面已经没有写入方（生产路径只开实例会话），按它找必然找不到。
         let outcome = match action {
             SessionAction::RefreshSource { owner, alias } => {
-                engine::duckdb::federation::session::refresh_source(&owner, &alias).map(|_| ())
+                engine::duckdb::instance::current()
+                    .ok_or_else(|| "分析实例尚未启动（先跑一条查询）".to_string())
+                    .and_then(|instance| {
+                        instance.session_for_owner(&owner).ok_or_else(|| {
+                            "联邦会话已经不在了（重跑一条联邦查询再试）".to_string()
+                        })
+                    })
+                    .and_then(|session| {
+                        let source = session
+                            .mounted_sources()
+                            .into_iter()
+                            .find(|entry| entry.alias() == alias)
+                            .map(|entry| entry.source)
+                            .ok_or_else(|| format!("会话里没有源 {alias}"))?;
+                        session
+                            .mount_sources(&[source])
+                            .map(|_| ())
+                            .map_err(|error| error.to_string())
+                    })
             }
             SessionAction::SetPrimary { owner, alias } => {
-                engine::duckdb::federation::session::set_primary(&owner, &alias)
+                engine::duckdb::instance::current()
+                    .ok_or_else(|| "分析实例尚未启动（先跑一条查询）".to_string())
+                    .and_then(|instance| {
+                        instance.session_for_owner(&owner).ok_or_else(|| {
+                            "联邦会话已经不在了（重跑一条联邦查询再试）".to_string()
+                        })
+                    })
+                    .and_then(|session| {
+                        let ready = session
+                            .mounted_sources()
+                            .iter()
+                            .any(|entry| entry.alias() == alias && entry.is_ready());
+                        if !ready {
+                            return Err(format!("源 {alias} 当前不可用，不能设为主源"));
+                        }
+                        session
+                            .use_catalog(&alias)
+                            .map_err(|error| error.to_string())
+                    })
             }
             SessionAction::DropSession { owner } => {
-                let dropped = engine::duckdb::federation::session::drop_session(&owner);
-                match dropped {
-                    true => Ok(()),
-                    // 后端返 bool：没这个会话就是没关成，别报成功
-                    false => Err(format!("没有这个会话：{owner}")),
-                }
+                engine::duckdb::instance::current()
+                    .ok_or_else(|| "分析实例尚未启动（先跑一条查询）".to_string())
+                    .and_then(|instance| {
+                        instance
+                            .session_for_owner(&owner)
+                            .ok_or_else(|| format!("没有这个会话：{owner}"))
+                            .map(|session| (instance, session))
+                    })
+                    .and_then(|(instance, session)| {
+                        // 后端返 bool：没这个会话就是没关成，别报成功
+                        if instance.close_session(session.id()) {
+                            Ok(())
+                        } else {
+                            Err(format!("没有这个会话：{owner}"))
+                        }
+                    })
             }
         };
         self.note = Some(match outcome {
@@ -1155,51 +1203,59 @@ impl DataObjectsTab {
             }
         }
 
-        let mut last_group: Option<Group> = None;
+        // 段头常驻（草稿箱分区头同一形态：0 条的段也要有「源 0」这一行），
+        // 所以不能由「遇到新行才画头」驱动——空段永远等不到那一行。
+        // 按固定顺序 源 → 表 → 文件 补齐，行循环只负责「补齐到当前组」。
+        let collapsed_for_head = self.collapsed.clone();
+        let entity_for_head = entity.clone();
+        let head = move |group: Group, count: usize| -> AnyElement {
+            let expanded = !collapsed_for_head.contains(&group);
+            let entity = entity_for_head.clone();
+            // `tree::GroupHeader` 与草稿箱的分区头（草稿 / 引用 / 书签 / 回收站）、数据导航的
+            // 分组头同一个原语：整行可点、计数紧跟组名、凹槽底色由原语统一。
+            // 外层 `pl_1p5` 把原语自带的 6px 内距补到面板的 12px 一线（铁律第 41 条），
+            // 底色同 `group_box` 让凹槽从面板左缘铺起。
+            div()
+                .pl_1p5()
+                .bg(colors.group_box)
+                .child(
+                    tree::GroupHeader::new(
+                        SharedString::from(format!("data-objects-group-{}", group.title())),
+                        group.title(),
+                    )
+                    .debug_selector("data-objects-group-head")
+                    .expanded(expanded)
+                    .count(count, colors.muted_foreground)
+                    // 可点的行必须给 hover 反馈（导航分组头同一口径）
+                    .hover_background(colors.list_hover)
+                    .on_click(move |_, _, cx| {
+                        entity.update(cx, |tab, cx| tab.toggle_group(group, cx));
+                    }),
+                )
+                .into_any_element()
+        };
+        let count_of = |group: Group| {
+            group_counts
+                .iter()
+                .find(|(item, _)| *item == group)
+                .map(|(_, count)| *count)
+                .unwrap_or(0)
+        };
+
+        let mut drawn: Vec<Group> = Vec::new();
         for object in objects {
-            if last_group != Some(object.group) {
-                last_group = Some(object.group);
-                // 段头带计数：这一段里几行，扫一眼就知道要不要往下翻
-                let group_count = group_counts
-                    .iter()
-                    .find(|(group, _)| *group == object.group)
-                    .map(|(_, count)| *count)
-                    .unwrap_or(0);
-                let group = object.group;
-                let expanded = !self.collapsed.contains(&group);
-                let entity_for_group = entity.clone();
-                list = list.child(
-                    div()
-                        .h_flex()
-                        .items_center()
-                        .gap_2()
-                        .px_3()
-                        .pt_3()
-                        .pb_1()
-                        .text_xs()
-                        .text_color(colors.muted_foreground)
-                        .child(
-                            Button::new(SharedString::from(format!(
-                                "data-objects-group-{}",
-                                group.title()
-                            )))
-                            .ghost()
-                            .icon(if expanded {
-                                gpui_kit::assets::IconName::ChevronDown
-                            } else {
-                                gpui_kit::assets::IconName::ChevronRight
-                            })
-                            .on_click(move |_, _, cx| {
-                                let group = group;
-                                entity_for_group.update(cx, |tab, cx| {
-                                    tab.toggle_group(group, cx);
-                                });
-                            }),
-                        )
-                        .child(object.group.title())
-                        .child(div().flex_1())
-                        .child(div().text_xs().child(group_count.to_string())),
-                );
+            if !drawn.contains(&object.group) {
+                // 补齐到当前组：中间的空段也先占一行段头
+                for group in [Group::Source, Group::Table, Group::File] {
+                    if drawn.contains(&group) {
+                        continue;
+                    }
+                    list = list.child(head(group, count_of(group)));
+                    drawn.push(group);
+                    if group == object.group {
+                        break;
+                    }
+                }
             }
             // 收起只是不画行：段头和计数留着，折叠起来也知道里面有几行
             if self.collapsed.contains(&object.group) {
@@ -1240,10 +1296,10 @@ impl DataObjectsTab {
             } else {
                 None
             };
-            // 源行行尾的**唯一**动作位（铁律第 42 条）：有 ATTACH 能力且已登记的连接
-            // 给「挂载 / 卸载」，等于启用 / 关闭它在联邦库里的 catalog。无能力的行
-            // （`source_action == None`）行尾为空，叶子更是零按钮——属性 / 改名 / 登记
-            // / 移除登记全部走右键，这里不另摆按钮
+            // 源行行尾的**唯一**动作位（铁律第 42 条）：每个能用 DuckDB 连的连接都给这一颗
+            // 按钮，文案随挂载状态在「挂载 / 卸载」之间切（一个按钮，不是两个），等于启用 /
+            // 关闭它在联邦库里的 catalog。驱动挂不上的行（`source_action == None`）行尾为空，
+            // 叶子更是零按钮——属性 / 改名 / 登记 / 移除登记全部走右键，这里不另摆按钮
             let mount_button = match &object.source_action {
                 Some(data_objects::SourceAction::ToggleMount {
                     conn_id,
@@ -2224,6 +2280,17 @@ impl DataObjectsTab {
                             }
                         }
                     }
+                }
+            }
+        }
+
+        // 末尾补齐：文件段可能一行都没有，段头仍要占位（与草稿箱的分区头一致）。
+        // 整体为空时交给下面的空态，不摆三段空头——那时「一段都没有」比三个 0 更清楚。
+        if !objects.is_empty() {
+            for group in [Group::Source, Group::Table, Group::File] {
+                if !drawn.contains(&group) {
+                    list = list.child(head(group, count_of(group)));
+                    drawn.push(group);
                 }
             }
         }

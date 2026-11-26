@@ -350,6 +350,7 @@ struct CellErrorRunner;
 impl crate::execution::QueryRunner for CellErrorRunner {
     fn run(
         &self,
+                _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: crate::channel::ExecChannel,

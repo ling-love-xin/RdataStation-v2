@@ -84,7 +84,7 @@ pub struct DataSource {
     /// 标签 JSON 数组
     pub tags: Option<String>,
     /// DuckDB 本地加速（联邦查询直连源库）
-    pub use_duckdb_fed: bool,
+    pub use_duckdb_fed: Option<bool>,
     /// DuckDB 联邦元数据缓存路径（global_connections.metadata_path）
     pub metadata_path: Option<String>,
     /// 测试/连接时探测到的服务器版本
@@ -343,7 +343,7 @@ mod tests {
             advanced_options: None,
             options: None,
             tags: None,
-            use_duckdb_fed: false,
+            use_duckdb_fed: None,
             metadata_path: None,
             server_version: None,
             scope: ConnectionScope::Global,
@@ -452,7 +452,7 @@ mod tests {
             advanced_options: None,
             options: None,
             tags: Some("[\"prod\",\"core\"]".to_string()),
-            use_duckdb_fed: true,
+            use_duckdb_fed: Some(true),
             metadata_path: Some("/cache/meta".to_string()),
             server_version: Some("16.4".to_string()),
             scope: ConnectionScope::GlobalAndProject,

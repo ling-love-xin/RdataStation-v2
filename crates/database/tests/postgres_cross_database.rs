@@ -54,7 +54,7 @@ async fn manager_with(url: &str, driver: &str) -> Arc<ConnectionManager> {
                 driver_properties: None,
                 advanced_options: None,
                 description: None,
-                use_duckdb_fed: false,
+                use_duckdb_fed: None,
                 created_at: std::time::Instant::now(),
             },
             config,

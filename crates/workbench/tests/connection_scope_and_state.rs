@@ -144,7 +144,7 @@ fn scope_visibility_and_runtime_state() {
         driver_properties: None,
         advanced_options: None,
         description: None,
-        use_duckdb_fed: false,
+        use_duckdb_fed: None,
         created_at: std::time::Instant::now(),
     };
     rt.block_on(engine::get_connection_manager().add_connection(

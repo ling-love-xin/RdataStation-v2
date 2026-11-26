@@ -279,10 +279,9 @@ impl Object {
         match self.group {
             Group::Source => match self.key.split(':').next() {
                 Some("session") => 0,
-                Some("accel") => 1,
-                Some("fileview") => 2,
+                Some("fileview") => 1,
                 // 源库连接（`conn:`）：也没挂任何东西，排在已挂载的后面
-                _ => 3,
+                _ => 2,
             },
             Group::Table => match self.key.split(':').next() {
                 Some("asset") => 0,
@@ -420,6 +419,13 @@ pub struct ConnRow {
     /// 无能力且已登记的只给小标「已登记」，**不给挂载**（永远挂不上）。
     /// 判据统一走 `AccelKind::from_db_type`，与连接对话框的开关门控同源。
     pub attach_capable: bool,
+    /// **能不能被 DuckDB 直连**（= `use_duckdb_fed` 三态里有值）。
+    ///
+    /// 源行行尾那颗「挂载 / 卸载」的判据是「驱动能挂」+「这条连接能用 DuckDB 连」
+    /// （`attach_capable && fed_enabled`），**不是**登记。「有值即登记」之后两者通常一致，
+    /// 但登记写库失败时（`set_use_duckdb_fed` 只 `warn!`、不回滚开关）这一行仍然要能挂——
+    /// 否则它会既出不了入口、也无处补救。
+    pub fed_enabled: bool,
     /// 登记状态 = 项目库 `analysis_sources` 里有这一条（「项目级意图」）。
     ///
     /// **只认这一份**：`use_duckdb_fed` 是"能力/加速开关"，不是"我要注册这个源"
@@ -501,13 +507,9 @@ impl Collected {
 pub fn objects(collected: &Collected) -> Vec<Object> {
     let mut out = Vec::new();
 
-    // 登记侧的三把索引：按连接 id / 别名 / 本体路径各要一眼能查。
+    // 登记侧的两把索引：按别名 / 本体路径各要一眼能查。
     // 只读借用，不克隆行——每次刷新都要过一遍，几百条时不值得复制。
-    let registered_conns: Vec<&str> = collected
-        .registered_sources
-        .iter()
-        .filter_map(|row| row.connection_id.as_deref())
-        .collect();
+    // （按连接 id 的那把在源段收口后已无消费方，2026-11-26 随告警清掉。）
     let registered_aliases: Vec<&str> = collected
         .registered_sources
         .iter()
@@ -682,12 +684,13 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             version: None,
             // 连接本身不是数据对象：它下面展开的表才拼得出引用名
             sql_ref: None,
-            // 行尾只有这一个位（第 42 条）：有 ATTACH 能力且已登记的连接给挂载 / 卸载；
-            // 无能力（永远挂不上）、没登记（挂了也只是会话级）的都不给
+            // 行尾只有这一个位（第 42 条）：**每个能用 DuckDB 连的连接**都给这一颗
+            // 「挂载 / 卸载」（同一个按钮，文案随 `mounted` 切）；驱动挂不上的
+            // （`attach_capable == false`）永远挂不上，不给
             // 挂不上（没有 ATTACH 能力）但已登记、且这条连接活着：展开 = 去它身上选表
             expand_via: (!conn.attach_capable && conn.registered && conn.connected)
                 .then(|| ExpandVia::Picker { conn_id: conn.id.clone() }),
-            source_action: (conn.attach_capable && conn.registered).then(|| {
+            source_action: (conn.attach_capable && conn.fed_enabled).then(|| {
                 SourceAction::ToggleMount {
                     conn_id: conn.id.clone(),
                     path: file_path.clone(),
@@ -1079,14 +1082,15 @@ pub fn session_actions(key: &str, state: &State) -> Vec<SessionAction> {
 
 /// 源行展开时要去的连接（**纯函数**：面板据此分派「去哪列举表」）。
 ///
-/// 三类源行可展开：联邦源（`session:{owner}:{alias}`）、本地加速源（`accel:{conn_id}`）、
+/// 可展开的源行只有三类：联邦源（`session:{owner}:{alias}`）、数据库文件（`fileview:{alias}`）、
 /// 源库连接（`conn:{conn_id}`）；其它 key 一律 `None`——表 / 文件 / 资产行没有下一层。
+///
+/// 本地加速**没有**自己的源行：它是执行通道（`use_duckdb_fed = true` 时那条连接走加速），
+/// 不占源段，所以也不需要 `accel:` 这种 key。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceRef {
     /// 联邦会话里的源（owner = 会话主人，alias = 挂载别名）
     Federated { owner: String, alias: String },
-    /// 本地加速会话（conn_id = 源连接 id）
-    Accel { conn_id: String },
     /// ATTACH 进进程单例的数据库文件（alias = 挂载别名）
     FileView { alias: String },
     /// **还没进 DuckDB** 的源库连接：展开要逐层 introspect（catalog → schema → 表）
@@ -1096,11 +1100,6 @@ pub enum SourceRef {
 /// 从行 key 解出 [`SourceRef`]（与 `session_actions` 同一套 `rsplit_once` 口径：
 /// owner 里可能带冒号——文档名，按**最后一个**冒号切）。
 pub fn source_ref(key: &str) -> Option<SourceRef> {
-    if let Some(conn_id) = key.strip_prefix("accel:") {
-        return (!conn_id.is_empty()).then(|| SourceRef::Accel {
-            conn_id: conn_id.to_string(),
-        });
-    }
     if let Some(conn_id) = key.strip_prefix("conn:") {
         return (!conn_id.is_empty()).then(|| SourceRef::Connection {
             conn_id: conn_id.to_string(),
@@ -1398,7 +1397,7 @@ pub fn mounted_file_sources(collected: &Collected) -> Vec<(String, String)> {
 /// 那正是铁律第 4 / 42 条要防的事。
 ///
 /// 已经被事实行代表的登记不回在这里（按别名认，挂载三态由此对得上）：
-/// - 别名在加速会话里 → `accel:` 行已经写着「已挂载 · 项目级」；
+/// - 别名在分析实例的加速档里 → 那条连接自己会出行，写着「已挂载 · 项目级」；
 /// - 别名在没失败的联邦会话里 → `session:` 行同理；
 /// - 连接本身在 `connections` 里 → `conn:` 行会自己说「未挂载 · 项目级」。
 pub fn unmounted_registrations(
@@ -1526,7 +1525,9 @@ pub fn collect(shared: &Shared) -> Collected {
         .connections
         .borrow()
         .iter()
-        .filter(|item| item.use_duckdb_fed || registered_conn_ids.iter().any(|id| *id == item.id))
+        // 源段出行按三态：`use_duckdb_fed` **有值**（true/false）= 能被 DuckDB 直连，必须出；
+        // `None` = 不可直连，只有已登记（历史遗留）才兜底出行。
+        .filter(|item| item.use_duckdb_fed.is_some() || registered_conn_ids.iter().any(|id| *id == item.id))
         .map(|item| ConnRow {
             id: item.id.clone(),
             name: item.name.clone(),
@@ -1541,6 +1542,9 @@ pub fn collect(shared: &Shared) -> Collected {
             // 这里手上有的是驱动 id（`mysql_native` / `postgres` / `sqlite` / `duckdb` / `oracle`），
             // 它按前缀认驱动，与 `db_type` 同一套规则
             attach_capable: engine::duckdb::accel::AccelKind::from_db_type(&item.driver).is_ok(),
+            // 「这条连接能不能被 DuckDB 连」就是三态有没有值（`Some(_)`），与驱动能力分开记：
+            // 能力是驱动给的，值是用户给的（`set_use_duckdb_fed`）
+            fed_enabled: item.use_duckdb_fed.is_some(),
             // 登记只认项目库那一行：`use_duckdb_fed` 是能力/加速开关，**不是**选表的意图
             registered: registered_conn_ids.iter().any(|id| *id == item.id),
         })
@@ -1558,39 +1562,53 @@ pub fn collect(shared: &Shared) -> Collected {
     let result_sets = engine::analysis::result_set::list_result_sets().unwrap_or_default();
     let loaded_tables = engine::analysis::result_set::list_loaded_tables().unwrap_or_default();
     let insight_samples = engine::analysis::result_set::list_insight_samples().unwrap_or_default();
-    // 联邦会话：一次拿全（面板不知道 owner 是谁，`owners()` 正是为这种调用准备的）
-    let session_sources = engine::duckdb::federation::session::owners()
-        .into_iter()
-        .flat_map(|(owner, snapshot)| {
-            let primary = snapshot.primary.clone();
-            snapshot.sources.into_iter().map(move |mounted| {
-                let alias = mounted.alias().to_string();
-                let (note, failed) = match &mounted.state {
-                    engine::duckdb::federation::registry::MountState::Ready { tables } => (
-                        format!(
-                            "{} 张表 · {}",
-                            tables,
-                            if primary.as_deref() == Some(alias.as_str()) {
-                                "主源"
-                            } else {
-                                "已挂载"
-                            }
-                        ),
-                        None,
-                    ),
-                    engine::duckdb::federation::registry::MountState::Failed(reason) => {
-                        (String::new(), Some(reason.clone()))
-                    }
+    // 联邦源：直接读**分析实例上的会话**（2026-11-26 单实例收口）。
+    //
+    // 以前读 `federation::session::owners()` 那份门面缓存，但它已经没有生产写入通道
+    // （`kernel::open` 只开实例会话 + `mount_sources`），面板因此永远看不到挂上的源。
+    // 现在按**会话挂着的源**认会话（不是 label：同 owner 的会话被「全局分析」先建过、
+    // 之后被联邦复用，label 不会改），逐会话取挂载快照；主源来自 `use_catalog` 的记录。
+    let session_sources = engine::duckdb::instance::current()
+        .map(|instance| {
+            let mut rows = Vec::new();
+            for info in instance.sessions() {
+                let Some(session) = instance.session(&info.id) else {
+                    continue;
                 };
-                SessionSource {
-                    owner: owner.clone(),
-                    alias,
-                    note,
-                    failed,
+                if !engine::duckdb::instance::AnalysisInstance::is_analysis_session(&info, &session) {
+                    continue;
                 }
-            })
+                let primary = session.primary_alias();
+                for mounted in session.mounted_sources() {
+                    let alias = mounted.alias().to_string();
+                    let (note, failed) = match &mounted.state {
+                        engine::duckdb::federation::registry::MountState::Ready { tables } => (
+                            format!(
+                                "{} 张表 · {}",
+                                tables,
+                                if primary.as_deref() == Some(alias.as_str()) {
+                                    "主源"
+                                } else {
+                                    "已挂载"
+                                }
+                            ),
+                            None,
+                        ),
+                        engine::duckdb::federation::registry::MountState::Failed(reason) => {
+                            (String::new(), Some(reason.clone()))
+                        }
+                    };
+                    rows.push(SessionSource {
+                        owner: info.owner.clone(),
+                        alias,
+                        note,
+                        failed,
+                    });
+                }
+            }
+            rows
         })
-        .collect();
+        .unwrap_or_default();
 
     // 挂在分析实例上的源连接：树根写**实际别名**（冲突让位后可能是 `rds_src_2`），
     // 连接名进 note。用户要认「这是哪条连接」，但树根必须与 `duckdb_databases()`
@@ -1668,6 +1686,7 @@ mod tests {
                 driver: "mysql".into(),
                 database: Some("orders".into()),
                 attach_capable: true,
+                fed_enabled: true,
                 registered: true,
             }],
             analysis_tables: vec!["res_订单明细_20261115103000".into(), "数据修复".into()],
@@ -2410,6 +2429,26 @@ mod tests {
             .expect("已登记的无能力源也要出");
         assert_eq!(conn.pill, "已登记");
         assert_eq!(conn.group, Group::Source);
+        assert!(conn.source_action.is_none(), "挂不上的连接不能给挂载按钮");
+    }
+
+    /// 「能用 DuckDB 连、但没登记」（登记写库失败那一种）仍要有挂载入口。
+    ///
+    /// 判据是能力 + 三态有值，不是登记：`set_use_duckdb_fed` 落库失败只 `warn!`、
+    /// 不回滚开关；若按钮跟着登记走，这一行就既没有入口、也没有补救的路。
+    #[test]
+    fn fed_enabled_connection_keeps_the_mount_button_without_registration() {
+        let mut c = sample();
+        c.registered_sources.clear();
+        assert!(c.connections[0].fed_enabled, "sample 的连接三态有值");
+        let conn = objects(&c)
+            .into_iter()
+            .find(|o| o.key == "conn:C_mysql_9")
+            .expect("连接行要在");
+        assert!(
+            matches!(conn.source_action, Some(super::SourceAction::ToggleMount { .. })),
+            "能连就能挂：登记缺一行不该把入口一起摘掉"
+        );
     }
 
     /// 登记指向的连接已经不在清单里：源不许「蒸发」，照样出一行「未挂载 · 项目级」。
@@ -2447,10 +2486,10 @@ mod tests {
         assert_eq!(conn.pill, "未挂载", "没登记就不说项目级");
     }
 
-    /// 源行 key → 展开目标：联邦源按最后一个冒号切（owner 可能带冒号），加速源直取；
-    /// 其它行没有下一层。
+    /// 源行 key → 展开目标：联邦源按最后一个冒号切（owner 可能带冒号）；
+    /// 其它行没有下一层，`accel:` 已经不是源行的 key 了。
     #[test]
-    fn source_ref_parses_both_source_kinds_and_rejects_flat_rows() {
+    fn source_ref_parses_source_kinds_and_rejects_flat_rows() {
         assert_eq!(
             super::source_ref("session:编辑器 · a.sql:mysql_src"),
             Some(super::SourceRef::Federated {
@@ -2458,19 +2497,16 @@ mod tests {
                 alias: "mysql_src".into(),
             })
         );
-        assert_eq!(
-            super::source_ref("accel:C_mysql_9"),
-            Some(super::SourceRef::Accel {
-                conn_id: "C_mysql_9".into()
-            }),
-            "纯函数仍认 `accel:`（服务层 `load_jobs` / `source_kids_jobs` 还按它分派），\
-             但源段已不再产这种行——见下面的断言"
-        );
         assert!(
             !objects(&sample())
                 .iter()
                 .any(|o| o.key.starts_with("accel:")),
-            "加速会话不进面板：源段不许再出 `accel:` 行"
+            "加速档不占源段：不许再出 `accel:` 行"
+        );
+        assert_eq!(
+            super::source_ref("accel:C_mysql_9"),
+            None,
+            "加速档没有自己的源行，`accel:` 前缀不再被认"
         );
         assert_eq!(
             super::source_ref("fileview:f_warehouse"),
@@ -2516,6 +2552,7 @@ mod tests {
             driver: "postgres".into(),
             database: Some("dw".into()),
             attach_capable: true,
+            fed_enabled: true,
             registered: true,
         });
         let rows = objects(&offline);
@@ -2803,6 +2840,7 @@ mod temp_source_tests {
             driver: "duckdb".into(),
             database: Some("D:/data/销售.duckdb".into()),
             attach_capable: true,
+            fed_enabled: true,
             registered: true,
         });
         let row = objects(&c)

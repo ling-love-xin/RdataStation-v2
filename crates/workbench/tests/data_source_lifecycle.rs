@@ -125,7 +125,7 @@ fn save_then_list_roundtrip_global_scope() {
     assert_eq!(ds.database.as_deref(), Some("warehouse"));
     assert_eq!(ds.username.as_deref(), Some("alice"));
     assert!(ds.password_encrypted.is_some(), "凭据应加密落库");
-    assert!(ds.use_duckdb_fed);
+    assert_eq!(ds.use_duckdb_fed, Some(true), "已开启本地加速");
     assert_eq!(ds.scope, ConnectionScope::Global);
 
     let _ = std::fs::remove_dir_all(&dir);

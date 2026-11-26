@@ -255,16 +255,26 @@ fn mark_connections(shared: &Shared, conn_ids: &[String]) -> Result<Vec<String>,
     let mut names = Vec::new();
     let mut failures = Vec::new();
     for conn_id in conn_ids {
-        let outcome = rt.block_on(service.set_use_duckdb_fed(conn_id, true, project.as_deref()));
+        let name = shared
+            .connections
+            .borrow()
+            .iter()
+            .find(|item| &item.id == conn_id)
+            .map(|item| item.name.clone())
+            .unwrap_or_else(|| conn_id.clone());
+        // 三态：`Some(true)` = 开本地加速（同时也说明这条连接能被 DuckDB 直连）
+        let outcome = rt.block_on(service.set_use_duckdb_fed(
+            conn_id,
+            Some(true),
+            project.as_deref(),
+        ));
         match outcome {
             Ok(()) => {
-                let name = shared
-                    .connections
-                    .borrow()
-                    .iter()
-                    .find(|item| &item.id == conn_id)
-                    .map(|item| item.name.clone())
-                    .unwrap_or_else(|| conn_id.clone());
+                // 「有值即登记」（用户口径 2026-11-26）：开关有值 = 这条连接能当 DuckDB 源，
+                // 项目登记表里必须有一行。登记失败不回滚开关（开关已生效），但要如实点名。
+                if let Err(error) = ensure_registration(shared, conn_id, &name) {
+                    failures.push(format!("{name}：开关已开，登记没写进去（{error}）"));
+                }
                 names.push(name);
             }
             Err(error) => failures.push(format!("{conn_id}：{error}")),
@@ -440,7 +450,9 @@ pub fn mount_network_source(shared: &Shared, conn_id: &str, cx: &mut App) {
             return;
         }
     };
-    match engine::duckdb::accel::ensure_on_instance(&source) {
+    // 会话 owner：面板挂载目前用固定 owner（`data_objects`）。等「面板跟随当前编辑器文档」
+    // 那一步落地后改成文档 id（见 `docs/architecture/resource-session-model.md` §5.2）。
+    match engine::duckdb::accel::ensure_on_instance(&source, "data_objects") {
         Ok((_session, alias)) => {
             refresh(shared, cx);
             shared.say(
@@ -467,68 +479,36 @@ pub fn unmount_network_source(shared: &Shared, conn_id: &str, cx: &mut App) {
     }
 }
 
+/// 把一条连接登记进项目库 `analysis_sources`（**幂等**：已登记就不再插第二行）。
+///
+/// 「有值即登记」的落点（用户口径 2026-11-26）：连接开关有值 = 它能被 DuckDB 直连，
+/// 项目登记表里就必须有它；调用方（面板「加源」/ 右键「登记为项目源」）共用这一处，
+/// 免得两个入口各写一套、别名分配各挤一次。
+///
+/// 只登记**意图**，不顺手挂载：挂载是会话事实（见 [`mount_network_source`]）。
+fn ensure_registration(shared: &Shared, conn_id: &str, name: &str) -> Result<Option<String>, String> {
+    let root = shared
+        .project_root()
+        .ok_or_else(|| "还没有打开项目，登记不落在任何项目里".to_string())?;
+    // 幂等 + 别名分配都在 engine 那一处（连接对话框保存也走它，两个入口不许各写一套）
+    engine::analysis::registration::ensure_conn_registered(&root, conn_id, name)
+}
+
 /// 把一条连接**登记成项目源**（写 `analysis_sources`，别名按规格 §6 取第一个）。
 ///
 /// 只登记意图，不顺手挂载：挂载是会话事实（见 [`mount_network_source`]），
 /// 两件事分开，用户才能看懂「未挂载 · 项目级」这一格。
 pub fn register_connection_source(shared: &Shared, conn_id: &str, name: &str, cx: &mut App) {
-    let Some(root) = shared.project_root() else {
-        shared.say_error("还没有打开项目，登记不落在任何项目里".to_string(), cx);
-        return;
-    };
-    let conn = match engine::persistence::analysis_sources::open_in_project(&root) {
-        Ok(conn) => conn,
-        Err(error) => {
-            shared.say_error(format!("打开项目库失败：{error}"), cx);
-            return;
-        }
-    };
-    // 同一份登记表可能被**多个文档**各登记一次（每个文档各自右键「登记为项目源」），
-    // 目录里写的是同一个 connection_id —— 这时不该再写第二行（面板会出现两条同名源、
-    // 别名也被挤成 `shop_2`）。先查这条连接是否已登记：是就只回显，不插。
-    let rows = match engine::persistence::analysis_sources::list(&conn) {
-        Ok(rows) => rows,
-        Err(error) => {
-            shared.say_error(format!("读已有登记失败：{error}"), cx);
-            return;
-        }
-    };
-    if let Some(existing) = rows
-        .iter()
-        .find(|row| row.connection_id.as_deref() == Some(conn_id))
-    {
-        refresh(shared, cx);
-        shared.say(
-            format!("这条连接已经登记过：{} → 别名 {}", existing.name, existing.alias),
-            cx,
-        );
-        return;
-    }
-    // 展示名去重看**全表**（含加速档的展示名）：035 让加速档的 alias 不占挂载名，
-    // 但它照样得有个不撞车的显示名，否则面板上两行同名、用户分不出是哪个连接。
-    let taken: Vec<String> = rows.iter().map(|row| row.alias.clone()).collect();
-    let alias = engine::duckdb::federation::registry::default_alias(name, &taken);
-    let now = chrono::Utc::now().to_rfc3339();
-    let row = engine::persistence::analysis_sources::AnalysisSourceRow {
-        id: format!("src_{}", uuid::Uuid::new_v4().simple()),
-        name: name.to_string(),
-        kind: engine::persistence::analysis_sources::AnalysisSourceKind::Conn,
-        connection_id: Some(conn_id.to_string()),
-        path: None,
-        alias: alias.clone(),
-        mount_kind: engine::persistence::analysis_sources::AnalysisMountKind::Accel,
-        created_at: now.clone(),
-        updated_at: now,
-    };
-    match engine::persistence::analysis_sources::insert(&conn, &row) {
-        Ok(()) => {
+    match ensure_registration(shared, conn_id, name) {
+        Ok(Some(alias)) => {
             refresh(shared, cx);
-            shared.say(
-                format!("已登记为项目源：{name} → 别名 {alias}"),
-                cx,
-            );
+            shared.say(format!("已登记为项目源：{name} → 别名 {alias}"), cx);
         }
-        Err(error) => shared.say_error(format!("登记失败：{error}"), cx),
+        Ok(None) => {
+            refresh(shared, cx);
+            shared.say(format!("这条连接已经登记过（幂等，未重复写）：{name}"), cx);
+        }
+        Err(error) => shared.say_error(error, cx),
     }
 }
 

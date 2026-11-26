@@ -746,6 +746,7 @@ struct CountingRunner {
 impl QueryRunner for CountingRunner {
     fn run(
         &self,
+                _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,

@@ -201,7 +201,7 @@ fn probe_network_source_credentials() {
         parts.user, parts.password, parts.host, parts.port
     );
     let source = AccelSource::new("C_probe_scrub", "mysql_native", &wrong).expect("组装源");
-    let error = match accel::ensure_on_instance(&source) {
+    let error = match accel::ensure_on_instance(&source, &source.conn_id) {
         Ok(_) => panic!("指向不存在的库该挂不上"),
         Err(reason) => reason,
     };

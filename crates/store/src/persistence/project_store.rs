@@ -30,7 +30,7 @@ pub struct StoredConnection {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<String>,
     pub tags: Option<String>,
-    pub use_duckdb_fed: bool,
+    pub use_duckdb_fed: Option<bool>,
     pub metadata_path: Option<String>,
     pub is_active: bool,
     pub server_version: Option<String>,
@@ -107,7 +107,13 @@ impl ProjectStore {
         let password = conn.password_encrypted.clone().unwrap_or_default();
         let options = conn.options.clone().unwrap_or_default();
         let tags = conn.tags.clone().unwrap_or_default();
-        let use_duckdb_fed = conn.use_duckdb_fed.to_string();
+        // 三态：`None` 写 NULL（不可直连），`Some(false)` → 0，`Some(true)` → 1。
+        // 绑定参数走 `'null'` 哨兵 + SQL 侧 `NULLIF`，因为这条 INSERT 的参数数组要求同类型。
+        let use_duckdb_fed: String = match conn.use_duckdb_fed {
+            Some(true) => "1".to_string(),
+            Some(false) => "0".to_string(),
+            None => "null".to_string(),
+        };
         let metadata_path = conn.metadata_path.clone().unwrap_or_default();
         let is_active = conn.is_active.to_string();
         let server_version = conn.server_version.clone().unwrap_or_default();
@@ -123,7 +129,7 @@ impl ProjectStore {
         sqlite.inner()?.execute(
             "INSERT OR REPLACE INTO connections
              (id, name, driver, host, port, database, schema_name, username, password_encrypted, options, tags, use_duckdb_fed, metadata_path, is_active, server_version, description, driver_id, environment_id, auth_config_id, auth_method, network_config_id, driver_properties, advanced_options, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULLIF(?12, 'null'), ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
             [
                 &conn.id,
                 &conn.name,
@@ -189,7 +195,7 @@ impl ProjectStore {
                     password_encrypted: row.get(8).ok(),
                     options: row.get(9).ok(),
                     tags: row.get(10).ok(),
-                    use_duckdb_fed: row.get::<_, bool>(11)?,
+                    use_duckdb_fed: row.get::<_, Option<bool>>(11).unwrap_or(None),
                     metadata_path: row.get(12).ok(),
                     is_active: row.get::<_, bool>(13)?,
                     created_at: row.get(14)?,
@@ -249,7 +255,7 @@ impl ProjectStore {
                 password_encrypted: row.get(8).ok(),
                 options: row.get(9).ok(),
                 tags: row.get(10).ok(),
-                use_duckdb_fed: row.get::<_, bool>(11)?,
+                use_duckdb_fed: row.get::<_, Option<bool>>(11).unwrap_or(None),
                 metadata_path: row.get(12).ok(),
                 is_active: row.get::<_, bool>(13)?,
                 created_at: row.get(14)?,

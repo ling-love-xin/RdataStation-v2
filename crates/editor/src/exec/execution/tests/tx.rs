@@ -47,6 +47,7 @@ impl TxRunner {
 impl QueryRunner for TxRunner {
     fn run(
         &self,
+                _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,
@@ -123,6 +124,7 @@ fn a_source_refresh_runs_off_the_execution_queue() {
     impl QueryRunner for RefreshRunner {
         fn run(
             &self,
+                        _document: &str,
             _connection: Option<&str>,
             _schema: Option<&str>,
             _channel: ExecChannel,
@@ -134,6 +136,7 @@ fn a_source_refresh_runs_off_the_execution_queue() {
 
         fn refresh_sources(
             &self,
+                        _document: &str,
             connection: Option<&str>,
             channel: ExecChannel,
             alias: Option<&str>,
@@ -206,6 +209,7 @@ fn setting_a_federated_primary_reaches_the_runner() {
     impl QueryRunner for PrimaryRunner {
         fn run(
             &self,
+                        _document: &str,
             _connection: Option<&str>,
             _schema: Option<&str>,
             _channel: ExecChannel,
@@ -458,6 +462,7 @@ struct SchemaRunner {
 impl QueryRunner for SchemaRunner {
     fn run(
         &self,
+                _document: &str,
         _connection: Option<&str>,
         schema: Option<&str>,
         _channel: ExecChannel,
@@ -598,6 +603,7 @@ fn a_batch_stays_busy_between_its_statements() {
     impl QueryRunner for SlowStatementRunner {
         fn run(
             &self,
+                        _document: &str,
             _connection: Option<&str>,
             _schema: Option<&str>,
             _channel: ExecChannel,
@@ -661,6 +667,7 @@ fn a_second_submit_on_the_same_connection_queues_while_one_is_running() {
     impl QueryRunner for SlowRunner {
         fn run(
             &self,
+                        _document: &str,
             _connection: Option<&str>,
             _schema: Option<&str>,
             _channel: ExecChannel,
@@ -750,6 +757,7 @@ struct CommitRunner {
 impl QueryRunner for CommitRunner {
     fn run(
         &self,
+                _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,
@@ -855,6 +863,7 @@ fn commit_is_refused_while_an_execution_is_running() {
     impl QueryRunner for SlowStatementRunner {
         fn run(
             &self,
+                        _document: &str,
             _connection: Option<&str>,
             _schema: Option<&str>,
             _channel: ExecChannel,
@@ -903,6 +912,7 @@ fn run_cell_defaults_to_honest_rejection() {
     impl QueryRunner for NoopRunner {
         fn run(
             &self,
+                        _document: &str,
             _connection: Option<&str>,
             _schema: Option<&str>,
             _channel: ExecChannel,
@@ -933,6 +943,7 @@ fn a_cell_runs_through_the_queue_and_its_note_comes_back() {
     impl QueryRunner for CellRunner {
         fn run(
             &self,
+                        _document: &str,
             _connection: Option<&str>,
             _schema: Option<&str>,
             _channel: ExecChannel,

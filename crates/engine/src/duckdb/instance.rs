@@ -24,6 +24,7 @@
 //! `federation::session` 提供，避免两处各写一套 `ATTACH`。
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::thread;
@@ -217,6 +218,15 @@ pub struct AnalysisSession {
     role: SessionRole,
     /// 当前默认 catalog（`USE` 跟踪）；裸名写表时用它判断目标是不是全局库。
     default_catalog: Mutex<String>,
+    /// 最近一次 `USE` 切过去的主源别名（纯展示：面板要在源行上区分「主源 / 已挂载」）。
+    ///
+    /// 存这里而不是每次现查 `current_database()`：面板是渲染路径，不能为一行小标跑 SQL。
+    primary: Mutex<Option<String>>,
+    /// 最近一次「要的主源没切成」的原因（界面要能说出来，不能悄悄换）
+    ///
+    /// 与 [`Self::primary`] 同构：真值放在会话上，联邦门面 / 数据对象面板 / 源清单浮层
+    /// 读的都是这一份，不再各自持一份副本。
+    primary_note: Mutex<Option<String>>,
     /// 弱引用：实例持有会话，会话反向取车道 / 登记册，不能成环
     instance: Weak<AnalysisInstance>,
 }
@@ -253,6 +263,17 @@ fn default_role_for_owner(owner: &str) -> SessionRole {
     } else {
         SessionRole::User
     }
+}
+
+/// 某个别名是否已经挂在这个实例上（`ATTACH` 是实例级事实，查 `duckdb_databases()`）。
+fn control_has_database(conn: &Connection, alias: &str) -> bool {
+    conn.query_row(
+        "SELECT count(*) FROM duckdb_databases() WHERE database_name = ?",
+        [alias],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|count| count > 0)
+    .unwrap_or(false)
 }
 
 /// 进程内分析实例槽：强引用活到 `drop_instance`。
@@ -421,6 +442,41 @@ impl AnalysisInstance {
         super::federation::session::attach_bases(&conn)
     }
 
+    /// 确保一台库以**底座**身份挂在实例上（`ATTACH ... READ_ONLY`）。
+    ///
+    /// 为什么单独开一个入口：`analytics` / `rds_global` 是保留别名，源别名册
+    /// （[`Self::reserve_alias`]）一律拒——那道闸门是为了不让**源连接**盖住底座；
+    /// 但引擎自己挂底座这条路径本来就不该走别名册（底座不是源）。
+    ///
+    /// 幂等：已挂着**同一份文件**就算成；挂着别的文件（切 `RDS_HOME`）就摘了重挂。
+    pub fn ensure_base(&self, alias: &str, path: &Path) -> Result<(), String> {
+        let conn = self
+            .control
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if control_has_database(&conn, alias) {
+            let attached = conn
+                .query_row(
+                    "SELECT path FROM duckdb_databases() WHERE database_name = ?",
+                    [alias],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .ok()
+                .flatten();
+            let wanted = path.to_string_lossy();
+            if attached.as_deref() == Some(wanted.as_ref()) {
+                return Ok(());
+            }
+            // `DETACH` 之前先回默认 catalog：当前默认就是它时 DuckDB 拒绝摘
+            conn.execute_batch(&format!("USE memory; DETACH {alias}"))
+                .map_err(|error| format!("底座 {alias} 摘不掉（可能正被写入方持有）：{error}"))?;
+        }
+        let literal = path.to_string_lossy().replace('\'', "''");
+        conn.execute_batch(&format!("ATTACH '{literal}' AS {alias} (READ_ONLY)"))
+            .map_err(|error| format!("底座 {alias} 挂不上（可能正被写入方持有）：{error}"))?;
+        Ok(())
+    }
+
     /// 开一条会话：`try_clone` 出第二连接（catalog 共享、`TEMP` 独立）。
     ///
     /// `self: &Arc<Self>`：会话要反向拿实例（写车道 / 登记册），用弱引用避免成环。
@@ -480,6 +536,8 @@ impl AnalysisInstance {
             mounted: Mutex::new(Vec::new()),
             role,
             default_catalog: Mutex::new("main".to_string()),
+            primary: Mutex::new(None),
+            primary_note: Mutex::new(None),
             instance: Arc::downgrade(self),
         });
         state.sessions.insert(id.clone(), session.clone());
@@ -490,6 +548,17 @@ impl AnalysisInstance {
     /// 取一条已开的会话（不做 I/O）。
     pub fn session(&self, id: &str) -> Option<Arc<AnalysisSession>> {
         self.state.lock().ok()?.sessions.get(id).cloned()
+    }
+
+    /// 按 owner 取一条**已经开着**的会话（纯内存读）。
+    ///
+    /// 与 [`Self::ensure_session`] 的区别是这里**不新建**：面板「刷新源 / 切主源」、
+    /// 载入 / 归档 拿不到会话时应该明说“会话已经不在了”，而不是悄悄开一条空会话，
+    /// 让后续 SQL 报「表不见了」。
+    pub fn session_for_owner(&self, owner: &str) -> Option<Arc<AnalysisSession>> {
+        let state = self.state.lock().ok()?;
+        let id = state.owners.get(owner)?;
+        state.sessions.get(id).cloned()
     }
 
     /// 按 owner 取（必要时建立）会话：同一 owner 复用同一条，`TEMP` 世界不来回换。
@@ -554,6 +623,22 @@ impl AnalysisInstance {
             return Vec::new();
         };
         state.sessions.values().map(|s| s.info()).collect()
+    }
+
+    /// 一条会话是不是「分析会话」（联邦 / 全局分析那些挂着源、会进数据对象源段的会话）。
+    ///
+    /// 判据是**挂着源**，不是 `label`：`ensure_session` 对同一 owner 是 1:1 复用——先开
+    /// 全局分析库建下的那条会话（label「全局分析」）之后会被联邦执行复用，label 不会改。
+    /// 把 label 当角色判据，「先开全局分析库、再跑联邦查询」这条常见路径上的源就会在
+    /// 面板里整段消失（2026-11-26 合入 main 的 `871b9325` 之后露出来的）。
+    ///
+    /// 排除两类 owner：`process`（导出 / 取样 / 结果集的进程面会话）与
+    /// `accel:<连接 id>`（本地加速档：挂着 `rds_src`，但加速档不占源段，只在连接行上写「已挂载」）。
+    pub fn is_analysis_session(info: &SessionInfo, session: &AnalysisSession) -> bool {
+        if !session.is_open() || info.owner == "process" || info.owner.starts_with("accel:") {
+            return false;
+        }
+        !session.mounted_sources().is_empty()
     }
 
     /// 关一条会话（再开就是新 id：`TEMP` 表随之消失，这是正确语义）。
@@ -1189,21 +1274,47 @@ impl AnalysisSession {
         if !valid {
             return Err(format!("别名 {alias:?} 里有不允许的字符，拒绝拿去拼 SQL"));
         }
-        if !self.is_open() {
-            return Err("这条分析会话已经关了，重新开一条再执行".to_string());
+        let outcome = self.run_with_timeout(&format!("USE {alias}"), Duration::from_secs(5));
+        match outcome {
+            Ok(_) => {
+                // 内部切库是引擎自己的动作（联邦主源切别名）；默认 catalog 供写闸门判
+                // 「裸名写的是不是全局库」，必须跟着切。
+                self.set_default_catalog(alias);
+                // 切成功才记：失败时主源没变，记下来会让面板把小标写错
+                if let Ok(mut primary) = self.primary.lock() {
+                    *primary = Some(alias.to_string());
+                }
+                if let Ok(mut note) = self.primary_note.lock() {
+                    *note = None; // 用户显式选过了，回退说明就该收起来
+                }
+                Ok(())
+            }
+            Err(error) => {
+                let reason = format!("切主源到 {alias} 失败：{error}");
+                // 失败也要说出来：否则用户只看到“怎么没换”
+                if let Ok(mut note) = self.primary_note.lock() {
+                    *note = Some(reason.clone());
+                }
+                Err(reason)
+            }
         }
-        // 内部切库是引擎自己的动作（全局读取会话 `USE rds_global`、联邦主源切别名），
-        // 不经过用户 SQL 闸门；用户 SQL 的 `USE rds_global` 仍会被 `run` 拒绝。
-        {
-            let conn = self
-                .conn
-                .lock()
-                .map_err(|_| "会话连接锁被污染（上一条语句崩了），重开一条会话".to_string())?;
-            conn.execute_batch(&format!("USE {alias}"))
-                .map_err(|error| format!("切主源到 {alias} 失败：{error}"))?;
+    }
+
+    /// 本会话当前的主源别名（纯内存读；没切过就是 `None`）。
+    pub fn primary_alias(&self) -> Option<String> {
+        self.primary.lock().ok().and_then(|slot| slot.clone())
+    }
+
+    /// 本会话「主源为什么不是你要的那个」的说明（纯内存读）
+    pub fn primary_note(&self) -> Option<String> {
+        self.primary_note.lock().ok().and_then(|slot| slot.clone())
+    }
+
+    /// 记一条主源回退说明（`None` = 收起来）
+    pub(crate) fn set_primary_note(&self, note: Option<String>) {
+        if let Ok(mut slot) = self.primary_note.lock() {
+            *slot = note;
         }
-        self.set_default_catalog(alias);
-        Ok(())
     }
 
     fn close(&self) {

@@ -117,28 +117,10 @@ fn archive(
                 Ok((rows, columns))
             })?
         }
-        SourceRef::Accel { conn_id } => {
-            // 与载入同一口径：悬在**挂着这个源的分析实例**里跑（`ATTACH` 实例级共享）
-            let instance = engine::duckdb::instance::current()
-                .ok_or_else(|| "分析实例尚未启动（先跑一条查询）".to_string())?;
-            if instance.alias_for_conn(conn_id).is_none() {
-                return Err(
-                    "这个源还没挂进分析实例（重新展开它，或跑一条加速档查询再试）".to_string(),
-                );
-            }
-            let session = instance.session_for_conn(conn_id)?;
-            crate::services::persist_jobs::with_project_write_connection(project_root, |dest| {
-                let rows = archive_select_into(&select, dest_table, |sql| {
-                    session.run(sql).map(|_| ())
-                }, dest)
-                .map_err(|e| e.to_string())?;
-                let columns = crate::services::persist_jobs::count_columns(dest, dest_table);
-                Ok((rows, columns))
-            })?
-        }
         SourceRef::Federated { owner, .. } => {
-            let session =
-                engine::duckdb::federation::session::session_for(owner).ok_or_else(|| {
+            let session = engine::duckdb::instance::current()
+                .and_then(|instance| instance.session_for_owner(owner))
+                .ok_or_else(|| {
                     "联邦会话已经不在了（重新展开这个源，或重跑一条联邦查询再试）".to_string()
                 })?;
             crate::services::persist_jobs::with_project_write_connection(project_root, |dest| {

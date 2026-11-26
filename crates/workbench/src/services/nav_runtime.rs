@@ -184,7 +184,7 @@ pub fn build_connect_request(
         tags: ds.tags.clone(),
         metadata_path: ds.metadata_path.clone(),
         schema_name: ds.schema_name.clone(),
-        use_duckdb_fed: Some(ds.use_duckdb_fed),
+        use_duckdb_fed: ds.use_duckdb_fed,
         password: None,
         skip_persistence: Some(true),
         network_method,

@@ -17,4 +17,6 @@ pub mod materialize;
 pub mod mount;
 /// 项目分析库里的持久表（结果集落库产物）的清单与删除口径
 pub mod persistent;
+/// 分析源登记的幂等写入（「连接开关有值 → 必须有一行」的唯一落点，面板与对话框共用）
+pub mod registration;
 pub mod result_set;

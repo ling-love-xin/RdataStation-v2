@@ -167,8 +167,13 @@ pub fn open(plan: &SessionPlan, prepared: &PreparedMounts) -> Result<SessionHand
             // 本地加速也落**同一个分析实例**：一条会话 + 挂这一条源，不再另起内存库。
             // 别名按源唯一、幂等判重、`USE` 都收在 `accel::ensure_on_instance` 一处——
             // 编辑器里直跑的加速档走的也是它，两边各写一遍迟早给出两套挂载事实。
+            //
+            // owner 口径：内核这一档目前仍按**源连接 id**开会话（这里的调用方——洞察 / 引擎
+            // 内部路径——手里没有文档身份）；编辑器侧走 `ensure_on_instance(source, document)`，
+            // 按文档开会话。两处只差这一个参数，挂载逻辑同一条。
             let (session, _alias) =
-                accel::ensure_on_instance(&prepared_accel.source).map_err(invalid)?;
+                accel::ensure_on_instance(&prepared_accel.source, &prepared_accel.source.conn_id)
+                    .map_err(invalid)?;
             Ok(SessionHandle::Instance {
                 session,
                 label: "accelerated",

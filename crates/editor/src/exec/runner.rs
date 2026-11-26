@@ -72,8 +72,13 @@ pub trait QueryRunner: Send + Sync + 'static {
     /// 不分流就等于把用户的“执行位置”当成了装饰。
     ///
     /// `options.use_transaction`（B4）= 本次执行先自动开一个事务（「自动提交」关闭时）。
+    ///
+    /// 【会话归属】`document` = 本次执行归属的文档 id：本地加速 / 联邦的**分析会话按它**
+    /// （一份工作一条会话），不再按 `connection`——两条文档绑同一连接时必须各有一条会话，
+    /// 否则 `USE` / `search_path` / 中断会互相串。
     fn run(
         &self,
+        _document: &str,
         connection: Option<&str>,
         schema: Option<&str>,
         channel: ExecChannel,
@@ -147,6 +152,7 @@ pub trait QueryRunner: Send + Sync + 'static {
     /// （宿主没接能力的真实状态，不是静默失败）。
     fn run_filtered(
         &self,
+        _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,
@@ -162,6 +168,7 @@ pub trait QueryRunner: Send + Sync + 'static {
     /// 默认实现与 [`Self::run_filtered`] 同口径：不支持就说出来。
     fn run_sorted_down(
         &self,
+        _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,
@@ -179,6 +186,7 @@ pub trait QueryRunner: Send + Sync + 'static {
     /// 与 `cancel` 同一口径：不假装成功）。
     fn fetch_next(
         &self,
+        _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,
@@ -221,6 +229,7 @@ pub trait QueryRunner: Send + Sync + 'static {
     /// 默认实现 = 不支持（没接本地加速的执行器）。
     fn refresh_sources(
         &self,
+        _document: &str,
         _connection: Option<&str>,
         _channel: crate::channel::ExecChannel,
         _alias: Option<&str>,

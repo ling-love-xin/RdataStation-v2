@@ -298,6 +298,7 @@ struct ScriptRunner {
 impl QueryRunner for ScriptRunner {
     fn run(
         &self,
+                _document: &str,
         connection: Option<&str>,
         _schema: Option<&str>,
         channel: crate::channel::ExecChannel,
@@ -374,6 +375,7 @@ struct SizedRunner;
 impl QueryRunner for SizedRunner {
     fn run(
         &self,
+                _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,
@@ -432,13 +434,14 @@ struct ConnectionRunner {
 impl QueryRunner for ConnectionRunner {
     fn run(
         &self,
+        _document: &str,
         connection: Option<&str>,
         schema: Option<&str>,
         channel: ExecChannel,
         sql: &str,
         options: execution::RunOptions,
     ) -> Result<QueryData, String> {
-        SizedRunner.run(connection, schema, channel, sql, options)
+        SizedRunner.run(_document, connection, schema, channel, sql, options)
     }
 
     fn active_connection(&self) -> Option<String> {
@@ -466,6 +469,7 @@ struct ToolbarRunner;
 impl QueryRunner for ToolbarRunner {
     fn run(
         &self,
+                _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,
@@ -547,6 +551,7 @@ struct SegmentRunner {
 impl QueryRunner for SegmentRunner {
     fn run(
         &self,
+                _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,
@@ -571,6 +576,7 @@ impl QueryRunner for SegmentRunner {
 
     fn fetch_next(
         &self,
+                _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,
@@ -607,6 +613,7 @@ struct ThreeSegmentRunner {
 impl QueryRunner for ThreeSegmentRunner {
     fn run(
         &self,
+                _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,
@@ -631,6 +638,7 @@ impl QueryRunner for ThreeSegmentRunner {
 
     fn fetch_next(
         &self,
+                _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,
@@ -707,6 +715,7 @@ struct MoreUnsupportedRunner;
 impl QueryRunner for MoreUnsupportedRunner {
     fn run(
         &self,
+                _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,
@@ -733,6 +742,7 @@ impl QueryRunner for MoreUnsupportedRunner {
 impl QueryRunner for LocatedFailureRunner {
     fn run(
         &self,
+                _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,
@@ -791,6 +801,7 @@ struct Script2bRunner {
 impl QueryRunner for Script2bRunner {
     fn run(
         &self,
+                _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,

@@ -417,6 +417,7 @@ struct BlockingRunner {
 impl QueryRunner for BlockingRunner {
     fn run(
         &self,
+                _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,
@@ -568,6 +569,7 @@ struct TxRunner {
 impl QueryRunner for TxRunner {
     fn run(
         &self,
+                _document: &str,
         _connection: Option<&str>,
         _schema: Option<&str>,
         _channel: ExecChannel,
