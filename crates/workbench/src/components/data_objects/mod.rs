@@ -279,10 +279,9 @@ impl Object {
         match self.group {
             Group::Source => match self.key.split(':').next() {
                 Some("session") => 0,
-                Some("accel") => 1,
-                Some("fileview") => 2,
+                Some("fileview") => 1,
                 // 源库连接（`conn:`）：也没挂任何东西，排在已挂载的后面
-                _ => 3,
+                _ => 2,
             },
             Group::Table => match self.key.split(':').next() {
                 Some("asset") => 0,
@@ -1075,14 +1074,15 @@ pub fn session_actions(key: &str, state: &State) -> Vec<SessionAction> {
 
 /// 源行展开时要去的连接（**纯函数**：面板据此分派「去哪列举表」）。
 ///
-/// 三类源行可展开：联邦源（`session:{owner}:{alias}`）、本地加速源（`accel:{conn_id}`）、
+/// 可展开的源行只有三类：联邦源（`session:{owner}:{alias}`）、数据库文件（`fileview:{alias}`）、
 /// 源库连接（`conn:{conn_id}`）；其它 key 一律 `None`——表 / 文件 / 资产行没有下一层。
+///
+/// 本地加速**没有**自己的源行：它是执行通道（`use_duckdb_fed = true` 时那条连接走加速），
+/// 不占源段，所以也不需要 `accel:` 这种 key。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceRef {
     /// 联邦会话里的源（owner = 会话主人，alias = 挂载别名）
     Federated { owner: String, alias: String },
-    /// 本地加速会话（conn_id = 源连接 id）
-    Accel { conn_id: String },
     /// ATTACH 进进程单例的数据库文件（alias = 挂载别名）
     FileView { alias: String },
     /// **还没进 DuckDB** 的源库连接：展开要逐层 introspect（catalog → schema → 表）
@@ -1092,11 +1092,6 @@ pub enum SourceRef {
 /// 从行 key 解出 [`SourceRef`]（与 `session_actions` 同一套 `rsplit_once` 口径：
 /// owner 里可能带冒号——文档名，按**最后一个**冒号切）。
 pub fn source_ref(key: &str) -> Option<SourceRef> {
-    if let Some(conn_id) = key.strip_prefix("accel:") {
-        return (!conn_id.is_empty()).then(|| SourceRef::Accel {
-            conn_id: conn_id.to_string(),
-        });
-    }
     if let Some(conn_id) = key.strip_prefix("conn:") {
         return (!conn_id.is_empty()).then(|| SourceRef::Connection {
             conn_id: conn_id.to_string(),
@@ -1394,7 +1389,7 @@ pub fn mounted_file_sources(collected: &Collected) -> Vec<(String, String)> {
 /// 那正是铁律第 4 / 42 条要防的事。
 ///
 /// 已经被事实行代表的登记不回在这里（按别名认，挂载三态由此对得上）：
-/// - 别名在加速会话里 → `accel:` 行已经写着「已挂载 · 项目级」；
+/// - 别名在分析实例的加速档里 → 那条连接自己会出行，写着「已挂载 · 项目级」；
 /// - 别名在没失败的联邦会话里 → `session:` 行同理；
 /// - 连接本身在 `connections` 里 → `conn:` 行会自己说「未挂载 · 项目级」。
 pub fn unmounted_registrations(
@@ -2458,10 +2453,10 @@ mod tests {
         assert_eq!(conn.pill, "未挂载", "没登记就不说项目级");
     }
 
-    /// 源行 key → 展开目标：联邦源按最后一个冒号切（owner 可能带冒号），加速源直取；
-    /// 其它行没有下一层。
+    /// 源行 key → 展开目标：联邦源按最后一个冒号切（owner 可能带冒号）；
+    /// 其它行没有下一层，`accel:` 已经不是源行的 key 了。
     #[test]
-    fn source_ref_parses_both_source_kinds_and_rejects_flat_rows() {
+    fn source_ref_parses_source_kinds_and_rejects_flat_rows() {
         assert_eq!(
             super::source_ref("session:编辑器 · a.sql:mysql_src"),
             Some(super::SourceRef::Federated {
@@ -2469,19 +2464,16 @@ mod tests {
                 alias: "mysql_src".into(),
             })
         );
-        assert_eq!(
-            super::source_ref("accel:C_mysql_9"),
-            Some(super::SourceRef::Accel {
-                conn_id: "C_mysql_9".into()
-            }),
-            "纯函数仍认 `accel:`（服务层 `load_jobs` / `source_kids_jobs` 还按它分派），\
-             但源段已不再产这种行——见下面的断言"
-        );
         assert!(
             !objects(&sample())
                 .iter()
                 .any(|o| o.key.starts_with("accel:")),
-            "加速会话不进面板：源段不许再出 `accel:` 行"
+            "加速档不占源段：不许再出 `accel:` 行"
+        );
+        assert_eq!(
+            super::source_ref("accel:C_mysql_9"),
+            None,
+            "加速档没有自己的源行，`accel:` 前缀不再被认"
         );
         assert_eq!(
             super::source_ref("fileview:f_warehouse"),
