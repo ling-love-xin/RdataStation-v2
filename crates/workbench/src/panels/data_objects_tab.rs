@@ -1296,10 +1296,10 @@ impl DataObjectsTab {
             } else {
                 None
             };
-            // 源行行尾的**唯一**动作位（铁律第 42 条）：有 ATTACH 能力且已登记的连接
-            // 给「挂载 / 卸载」，等于启用 / 关闭它在联邦库里的 catalog。无能力的行
-            // （`source_action == None`）行尾为空，叶子更是零按钮——属性 / 改名 / 登记
-            // / 移除登记全部走右键，这里不另摆按钮
+            // 源行行尾的**唯一**动作位（铁律第 42 条）：每个能用 DuckDB 连的连接都给这一颗
+            // 按钮，文案随挂载状态在「挂载 / 卸载」之间切（一个按钮，不是两个），等于启用 /
+            // 关闭它在联邦库里的 catalog。驱动挂不上的行（`source_action == None`）行尾为空，
+            // 叶子更是零按钮——属性 / 改名 / 登记 / 移除登记全部走右键，这里不另摆按钮
             let mount_button = match &object.source_action {
                 Some(data_objects::SourceAction::ToggleMount {
                     conn_id,
