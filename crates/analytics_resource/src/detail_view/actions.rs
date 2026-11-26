@@ -191,25 +191,7 @@ pub(super) fn render_actions(
                                     .text_color(tone_color.danger)
                                     .child(tr("危险区")),
                             )
-                            .when(is_file_global, |row| {
-                                row.child(
-                                    Button::new("archive-detail-unlock-global-file")
-                                        .with_variant(ButtonVariant::Danger)
-                                        .label(tr("解除锁定并退回草稿箱…"))
-                                        .disabled(!can_delete_global)
-                                        .on_click({
-                                            let host = host.clone();
-                                            let detail = detail_for_delete.clone();
-                                            move |_, window, cx| {
-                                                host.request_unlock_global_file(
-                                                    &detail, window, cx,
-                                                )
-                                            }
-                                        }),
-                                )
-                            })
-                            .when(!is_file_global, |row| {
-                                row.child(
+                            .child(
                                 Button::new("archive-detail-delete-global")
                                     .with_variant(ButtonVariant::Danger)
                                     .label(tr("移入回收站…"))
@@ -224,14 +206,11 @@ pub(super) fn render_actions(
                                             )
                                         }
                                     }),
-                                )
-                            })
+                            )
                             .child(
-                                div().text_xs().text_color(muted).child(if is_file_global {
-                                    tr("文件型全局资产不能直接删除：解锁会把当前内容退回本项目草稿箱（历史副本一并清理）")
-                                } else {
-                                    tr("移入项目回收站（草稿箱栏）；表与版本快照保留，已分发副本不受影响")
-                                }),
+                                div().text_xs().text_color(muted).child(
+                                    tr("移入全局回收站；表与版本快照保留，已分发副本不受影响"),
+                                ),
                             ),
                     ),
             );
@@ -245,8 +224,8 @@ pub(super) fn render_actions(
             let can_open = can_open(&ctx);
             let can_checkout = can_checkout(&ctx);
             let is_reference = detail.payload_mode == PayloadMode::Reference;
-            // 文件型（本体在本项目 resources/）：不能直接删除，只能解锁退回草稿箱。
-            let is_file_asset = detail.kind == ArchiveKind::File && !is_reference;
+            // 文件型（本体在本项目 resources/）：删除 = 软删登记 + 本体进回收站；
+            // 取回是独立动作，不再从删除入口自动解锁退草稿。
             let is_global_ref = detail.kind == ArchiveKind::TableRef
                 && detail.origin_kind.as_deref() == Some(crate::model::ORIGIN_KIND_GLOBAL);
             // 危险区（原型 §3.1）：与日常动作隔开（分隔线 + danger 文字按钮）。
@@ -273,8 +252,6 @@ pub(super) fn render_actions(
                 "项目处于只读模式"
             } else if is_table {
                 "表型：只软删资产登记，分析库里的表保留（可用「登记为资产」找回）"
-            } else if is_file_asset {
-                "文件型资产不能直接删除：解锁会把当前内容退回项目草稿箱（历史副本一并清理），再从草稿箱删除"
             } else if is_reference {
                 "只删除登记记录与版本元数据，源文件留在原位置不受影响；可从回收站还原登记"
             } else {
@@ -364,25 +341,7 @@ pub(super) fn render_actions(
                                     .text_color(tone_color.danger)
                                     .child(tr("危险区")),
                             )
-                            .when(is_file_asset, |row| {
-                                row.child(
-                                    Button::new("archive-detail-unlock-file")
-                                        .with_variant(ButtonVariant::Danger)
-                                        .label(tr("解除锁定并退回草稿箱…"))
-                                        .disabled(!can_delete)
-                                        .on_click({
-                                            let host = host.clone();
-                                            let detail = detail_for_delete.clone();
-                                            move |_, window, cx| {
-                                                host.request_unlock_file_asset(
-                                                    &detail, window, cx,
-                                                )
-                                            }
-                                        }),
-                                )
-                            })
-                            .when(!is_file_asset, |row| {
-                                row.child(
+                            .child(
                                 Button::new("archive-detail-delete")
                                     .with_variant(ButtonVariant::Danger)
                                     .label(tr("移入回收站"))
@@ -402,8 +361,7 @@ pub(super) fn render_actions(
                                             )
                                         }
                                     }),
-                                )
-                            })
+                            )
                             .child(div().text_xs().text_color(muted).child(delete_hint)),
                     ),
             );

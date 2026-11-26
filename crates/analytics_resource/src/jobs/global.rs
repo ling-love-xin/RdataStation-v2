@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
 use engine::persistence::project_db::ProjectDatabaseManager;
+use rusqlite::OptionalExtension;
 
 use shared::error::{CommonError, CoreError};
 
@@ -180,7 +181,9 @@ pub(crate) async fn run_promote(job: &PromoteJob) -> OpOutcome {
             };
         }
     };
-    let outcome = if job.request.source_table.is_some() {
+    let outcome = if job.request.kind == crate::global::PromoteKind::File {
+        promote_file_first(&gstore, job).await
+    } else if job.request.source_table.is_some() {
         // 表型：本体是项目分析库里的一张表。全局库与项目库同处一条根连接，
         // 项目会话直接 CTAS 到 `rds_global.<版本表>`（见 `promote_table_from_project`）。
         match open_project_conn(&job.project_root).await {
@@ -208,6 +211,13 @@ pub(crate) async fn run_promote(job: &PromoteJob) -> OpOutcome {
                 field,
             };
         }
+        Err(InstanceOpError::StaleBase { name, .. }) => {
+            return OpOutcome::Conflict {
+                context: ConflictContext::Promote(job.request.clone()),
+                name,
+                field: crate::global::ConflictField::Registry,
+            };
+        }
         Err(reason) => {
             return OpOutcome::Failed {
                 action: "升级到全局",
@@ -219,6 +229,82 @@ pub(crate) async fn run_promote(job: &PromoteJob) -> OpOutcome {
         name: outcome.name,
         version: outcome.version,
     }
+}
+
+/// 文件-first 升级：从项目 `file_asset_versions` 取 manifest（没有则按源文件现算），
+/// 进全局 CAS；同名 head 存在时按 `base_global_version` 追加，绝不静默覆盖。
+async fn promote_file_first(
+    gstore: &crate::global::GlobalInstanceStore,
+    job: &PromoteJob,
+) -> Result<crate::global::PromoteOutcome, crate::global::InstanceOpError> {
+    let project = open_project_conn(&job.project_root)
+        .await
+        .map_err(|reason| {
+            crate::global::InstanceOpError::Core(CoreError::common(CommonError::General(
+                reason,
+            )))
+        })?;
+
+    let (manifest_id, _source_hash, _source_size): (Option<String>, Option<String>, Option<i64>) =
+        match (&job.request.source_resource_id, job.request.source_version) {
+            (Some(id), Some(version)) => {
+                let conn = project.1.acquire().await.map_err(|error| {
+                    crate::global::InstanceOpError::Core(CoreError::common(CommonError::General(
+                        format!("借项目 SQLite 连接失败：{error}"),
+                    )))
+                })?;
+                let inner = conn.inner().map_err(|error| {
+                    crate::global::InstanceOpError::Core(CoreError::common(CommonError::General(
+                        format!("项目 SQLite 连接不可用：{error}"),
+                    )))
+                })?;
+                inner
+                    .query_row(
+                        "SELECT manifest_id, content_hash FROM file_asset_versions \
+                         WHERE resource_id = ?1 AND version = ?2",
+                        rusqlite::params![id, version],
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                    )
+                    .optional()
+                    .map_err(|error| {
+                        crate::global::InstanceOpError::Core(CoreError::common(
+                            CommonError::General(format!("读项目文件版本失败：{error}")),
+                        ))
+                    })?
+                    .map(|(manifest, hash)| (Some(manifest), Some(hash), None))
+                    .unwrap_or((None, None, None))
+            }
+            _ => (None, None, None),
+        };
+
+    let base_global_version = if job.overwrite {
+        gstore
+            .current_file_head(&job.request.name)
+            .map_err(crate::global::InstanceOpError::Core)?
+    } else {
+        None
+    };
+    let published = gstore
+        .publish_file(&crate::global::PublishFileRequest {
+            name: job.request.name.clone(),
+            source_project_root: job.project_root.clone(),
+            manifest_id,
+            source_abs_path: Some(job.request.source_abs_path.clone()),
+            rel_path: job.request.rel_path.clone(),
+            source_resource_id: job.request.source_resource_id.clone(),
+            source_version: job.request.source_version,
+            base_global_version,
+        })
+        .await?;
+
+    Ok(crate::global::PromoteOutcome {
+        resource_id: published.resource_id,
+        name: published.name,
+        version: published.version,
+        row_count: None,
+        column_count: None,
+        overwritten: base_global_version.is_some(),
+    })
 }
 
 /// 打开项目库并借一个写连接（表型升级的 CTAS 要在项目会话上执行）。

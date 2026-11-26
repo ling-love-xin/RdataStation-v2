@@ -50,6 +50,11 @@ impl CasStore {
         Self { root }
     }
 
+    /// 直接指定 CAS 根目录（全局 `data/system/cas` 这类非项目布局）。
+    pub fn at_root(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -66,7 +71,8 @@ impl CasStore {
         self.root.join(STAGING_DIR)
     }
 
-    fn blob_path(&self, hash: &str) -> Result<PathBuf, CoreError> {
+    /// blob 的绝对路径（只读校验/跨 CAS 搬运用，不给外部改写入口）。
+    pub fn blob_path(&self, hash: &str) -> Result<PathBuf, CoreError> {
         validate_hash(hash)?;
         Ok(self.blobs_dir().join(&hash[..2]).join(hash))
     }
@@ -174,6 +180,38 @@ impl CasStore {
             .await
             .map_err(|error| cas_io(&target, "commit_manifest", error))?;
         Ok(manifest.root_hash.clone())
+    }
+
+    /// 把另一个 CAS 的 manifest 连带对象搬进本 CAS（项目 → 全局发布用）。
+    ///
+    /// 对象按内容 hash 去重：目标已有同 hash 时不再搬字节；每个对象落库后重新校验，
+    /// 源对象被裁掉或损坏时明确失败，不把不完整的清单带过去。
+    pub async fn import_manifest(
+        &self,
+        source: &CasStore,
+        manifest: &FileManifest,
+    ) -> Result<String, CoreError> {
+        manifest.validate()?;
+        for entry in &manifest.entries {
+            let source_blob = source.blob_path(&entry.hash)?;
+            if !source_blob.is_file() {
+                return Err(cas_err(
+                    "import_manifest",
+                    format!("源 CAS 缺少对象 {}（{}）", entry.hash, source_blob.display()),
+                ));
+            }
+            let object = self.put_file(&source_blob).await?;
+            if object.hash != entry.hash || object.size != entry.size {
+                return Err(cas_err(
+                    "import_manifest",
+                    format!(
+                        "对象搬入后不一致：期望 {}/{}，实际 {}/{}",
+                        entry.hash, entry.size, object.hash, object.size
+                    ),
+                ));
+            }
+        }
+        self.put_manifest(manifest).await
     }
 
     /// 读 manifest 并校验；id 不存在返回错误。

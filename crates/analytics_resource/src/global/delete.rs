@@ -176,9 +176,12 @@ impl GlobalInstanceStore {
     }
 
     fn global_trash_root(&self) -> PathBuf {
-        // 回收站根与全局库根同源（`RDS_HOME/data/trash/global`）。测试注入的 sqlite
-        // 路径不保证在 `data/system` 下，按目录推会推错，所以仍走统一的 `paths`。
-        trash_root()
+        // 回收站跟全局库根走：生产是 `{RDS_HOME}/data/system` → `{RDS_HOME}/data/trash/global`；
+        // 测试注入的 `{tmp}/global` → `{tmp}/trash/global`，各用例互不串。
+        self.system_dir
+            .parent()
+            .map(|data| data.join("trash").join("global"))
+            .unwrap_or_else(trash_root)
     }
 }
 
@@ -234,17 +237,8 @@ impl GlobalInstanceStore {
                 CommonError::General(format!("全局资产「{name}」已经在回收站")),
             )));
         }
-        // 文件型资产不能直接删除/进回收站：先解锁退回项目草稿箱，再从草稿箱删除。
-        if active[0].5 == "file" && active[0].4.is_some() {
-            return Err(InstanceOpError::Core(CoreError::common(
-                CommonError::InvalidArgument {
-                    param: "name".to_string(),
-                    reason: format!(
-                        "全局「{name}」是文件型资产，不能直接删除：请先执行「解除锁定并退回草稿箱」"
-                    ),
-                },
-            )));
-        }
+        // 文件型资产不再强制“先解锁退回草稿箱”：file-first 下它和表型一样
+        // 可以进回收站；要取回请走 checkout，不再用删除来搬文件。
 
         // 活跃 pin 不允许移动：先让用户固化或解除引用，避免回收站里的版本被项目引用。
         let refs = self.active_ref_count(name).map_err(InstanceOpError::Core)?;
@@ -257,7 +251,10 @@ impl GlobalInstanceStore {
 
         let now = Utc::now().to_rfc3339();
         let current = active[0];
-        let trash_dir = trash_root().join(safe_dir_name(&current.0)).join(trash_stamp());
+        let trash_dir = self
+            .global_trash_root()
+            .join(safe_dir_name(&current.0))
+            .join(trash_stamp());
         std::fs::create_dir_all(&trash_dir).map_err(|e| {
             InstanceOpError::Core(CoreError::common(CommonError::General(format!(
                 "创建全局回收站目录失败（{}）：{e}",
@@ -358,7 +355,8 @@ impl GlobalInstanceStore {
         &self,
         name: &str,
     ) -> Result<GlobalRestoreOutcome, InstanceOpError> {
-        let (manifest, manifest_dir) = find_latest_manifest(name).ok_or_else(|| {
+        let (manifest, manifest_dir) =
+            find_latest_manifest(&self.global_trash_root(), name).ok_or_else(|| {
             InstanceOpError::Core(CoreError::common(CommonError::General(format!(
                 "全局回收站中没有「{name}」"
             ))))
@@ -496,6 +494,18 @@ impl GlobalInstanceStore {
             });
         }
 
+        // 全局文件仍被某个项目取回时不能永久删除：先让项目侧提交 / 放弃 lease。
+        if let Some((project_root, dest_rel)) = self
+            .active_global_lease(name)
+            .map_err(InstanceOpError::Core)?
+        {
+            return Err(InstanceOpError::LeaseActive {
+                name: name.to_string(),
+                project_root,
+                dest_rel,
+            });
+        }
+
         // 2. 曾分发到几个项目（在删回执之前数，否则永远是 0）。
         let projects: i64 = self.with_sqlite(|conn| {
             conn.query_row(
@@ -576,7 +586,7 @@ impl GlobalInstanceStore {
         })?;
 
         // 5. 回收站条目随永久删除清掉；找不到也视为已清。
-        purge_trash_entries(name);
+        purge_trash_entries(&self.global_trash_root(), name);
 
         Ok(GlobalDeleteOutcome {
             name: name.to_string(),
@@ -643,8 +653,7 @@ fn safe_dir_name(asset_id: &str) -> String {
         .collect()
 }
 
-fn find_latest_manifest(name: &str) -> Option<(GlobalTrashManifest, PathBuf)> {
-    let root = trash_root();
+fn find_latest_manifest(root: &Path, name: &str) -> Option<(GlobalTrashManifest, PathBuf)> {
     let mut best: Option<(GlobalTrashManifest, PathBuf)> = None;
     for asset_dir in std::fs::read_dir(&root).ok()? {
         let asset_dir = asset_dir.ok()?.path();
@@ -678,8 +687,7 @@ fn find_latest_manifest(name: &str) -> Option<(GlobalTrashManifest, PathBuf)> {
     best
 }
 
-fn purge_trash_entries(name: &str) {
-    let root = trash_root();
+fn purge_trash_entries(root: &Path, name: &str) {
     let Ok(assets) = std::fs::read_dir(&root) else {
         return;
     };

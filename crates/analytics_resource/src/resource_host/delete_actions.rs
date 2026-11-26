@@ -16,29 +16,20 @@ pub(super) fn request_delete(host: &ResourceHost, targets: &[DeleteTarget], wind
             return;
         }
 
-        // 文案按归档粒度区分本体命运（§12.1.1 ③）：copy 搬副本进回收站；reference 本体
-        // 留原位、只删登记行。混合时分组说清各有几项。
-        let is_unlock = |t: &DeleteTarget| t.kind == ArchiveKind::File && t.mode == PayloadMode::Copy;
-        let unlock_ids: Vec<String> = targets.iter().filter(|t| is_unlock(t)).map(|t| t.id.clone()).collect();
-        let trash_ids: Vec<String> = targets.iter().filter(|t| !is_unlock(t)).map(|t| t.id.clone()).collect();
+        // 2026-11-27 文件 CAS：文件型资产不再自动“解锁退回草稿”；删除统一进回收站
+        // （软删登记 + 本体进 `.RSmeta/trash`）。取回是独立动作，不借删除入口。
+        let trash_ids: Vec<String> = targets.iter().map(|t| t.id.clone()).collect();
         let copy_count = targets
             .iter()
-            .filter(|t| !is_unlock(t) && t.mode == PayloadMode::Copy)
+            .filter(|t| t.mode == PayloadMode::Copy)
             .count();
-        let reference_count = trash_ids.len() - copy_count;
-        let description = if !unlock_ids.is_empty() {
-            format!(
-                "{file_count} 项文件资产不能直接删除：会改为「解除锁定并退回草稿箱」（当前内容进草稿箱，历史副本一并清理），随后请从草稿箱删除；其余项照常移入回收站。",
-                file_count = unlock_ids.len()
-            )
-        } else {
-            match (copy_count, reference_count) {
-                (_, 0) => "将删除 resources/ 副本与登记记录，之后可从回收站还原。".to_string(),
-                (0, _) => "本体留在源位置不动，只删除登记记录，之后可从回收站还原登记行。".to_string(),
-                _ => format!(
-                    "{copy_count} 项副本将删除 resources/ 副本与登记记录；{reference_count} 项引用本体留在源位置、只删除登记记录。之后均可从回收站还原。"
-                ),
-            }
+        let reference_count = targets.len() - copy_count;
+        let description = match (copy_count, reference_count) {
+            (_, 0) => "将删除 resources/ 副本与登记记录，之后可从回收站还原。".to_string(),
+            (0, _) => "本体留在源位置不动，只删除登记记录，之后可从回收站还原登记行。".to_string(),
+            _ => format!(
+                "{copy_count} 项副本将删除 resources/ 副本与登记记录；{reference_count} 项引用本体留在源位置、只删除登记记录。之后均可从回收站还原。"
+            ),
         };
         let title = match targets.len() {
             1 => "移入回收站？".to_string(),
@@ -52,14 +43,13 @@ pub(super) fn request_delete(host: &ResourceHost, targets: &[DeleteTarget], wind
             let backend = backend.clone();
             let root = root.clone();
             let trash_ids = trash_ids.clone();
-            let unlock_ids = unlock_ids.clone();
             alert
                 .confirm()
                 .title(title.clone())
                 .description(description.clone())
                 .button_props(
                     gpui_kit::component::dialog::DialogButtonProps::default()
-                        .ok_text(if unlock_ids.is_empty() { "移入回收站" } else { "继续" })
+                        .ok_text("移入回收站")
                         .ok_variant(gpui_kit::component::button::ButtonVariant::Danger)
                         .show_cancel(true),
                 )
@@ -67,11 +57,8 @@ pub(super) fn request_delete(host: &ResourceHost, targets: &[DeleteTarget], wind
                     if !trash_ids.is_empty() {
                         resource_jobs::enqueue_trash(root.clone(), read_only, trash_ids.clone());
                     }
-                    for id in unlock_ids.iter() {
-                        resource_jobs::enqueue_unlock_file(root.clone(), read_only, id.clone());
-                    }
                     backend.refresh_resources(cx);
-                    say(&backend, "资产库：正在处理删除…", cx);
+                    say(&backend, "资产库：正在移入回收站…", cx);
                     true
                 })
         });

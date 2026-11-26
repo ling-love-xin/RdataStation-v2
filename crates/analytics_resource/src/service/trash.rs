@@ -54,21 +54,8 @@ impl ArchiveService {
         }
         let mode = PayloadMode::from_db_str(&resource.payload_mode);
 
-        // 产品口径（2026-11-26）：文件型资产不能直接删除/进回收站。要删先解锁退回草稿箱，
-        // 再从草稿箱删除（唯一的项目回收站）。这条是服务层硬闸门，UI 隐藏按钮只是辅助。
-        if mode == PayloadMode::Copy
-            && resource.file_rel_path.is_some()
-            && ArchiveKind::resolve(&resource.kind, resource.analytics_table.as_deref())
-                == ArchiveKind::File
-        {
-            return Err(service_err(
-                "trash",
-                &format!(
-                    "「{}」是文件型资产，不能直接删除：请先在详情执行「解除锁定并退回草稿箱」，再从草稿箱删除",
-                    resource.name
-                ),
-            ));
-        }
+        // 2026-11-27 文件 CAS：文件型资产不再强制“先解锁退回草稿箱”。删除 = 软删登记
+        // + 本体进项目回收站；取回是独立动作（checkout），不借删除入口。
 
         // 表型：本体是项目分析库里的一张表，没有文件路径可搬。移入回收站 = 只软删
         // 资产登记（表留在分析库）——数据本身不跟着登记走，删错了还能用「登记为资产」

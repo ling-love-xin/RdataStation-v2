@@ -511,14 +511,17 @@ purge_file(asset_id) -> ()
 | 设计决策 | 落点 | 实现状态 |
 | --- | --- | --- |
 | CAS 对象/清单 | `payload/cas.rs`、`payload/manifest.rs` | 已实现（M1） |
-| 版本元数据 | `store/migrations/project_meta/036_file_asset_cas.sql`、`store/file_asset.rs` | 项目库已实现；全局待 M4 |
+| 版本元数据 | `store/migrations/project_meta/036_file_asset_cas.sql`、`store/migrations/global/040_global_file_asset_cas.sql`、`store/file_asset.rs` | 项目库 + 全局库均已实现 |
 | 归档消费草稿 | `service/archive.rs::archive_new` / `archive_into_existing` | 已实现（草稿删除失败只记 note） |
 | 字节哈希 vs 结构哈希 | `service/archive.rs`、`analysis.rs` | 已实现：`ArchiveKind::File` 一律字节 sha256，结构只作元数据 |
 | checkout lease | `service/checkout.rs`、`store/file_asset.rs`、`jobs/archive/run.rs` | 已实现（项目侧；receipt 仅兼容保留） |
-| 再归档冲突 | `service/archive.rs::archive_into_existing`、`jobs/archive/run.rs::run_archive` | 已实现 base 校验 / lease 消费；fork 待 M4 |
+| 再归档冲突 | `service/archive.rs::archive_into_existing`、`jobs/archive/run.rs::run_archive` | 已实现 base 校验 / lease 消费；全局 fork 已实现，项目侧 fork 未做 |
 | 任意两版对比 | `jobs/version.rs::load_version_diff`、`dialogs/version_diff.rs` | 未实现（M5） |
-| 全局 file-first | `global/promote.rs`、`global/register.rs`、`global/delete.rs`、`model/kind.rs` | 未实现（M4） |
-| 全局 fork | `global/promote.rs`、新 `asset_forks`、`global/distribute.rs` | 未实现（M4） |
+| 全局 file-first | `global/file.rs::publish_file`、`global/distribute.rs`、`global/promote.rs`、`global/delete.rs`、`jobs/global.rs::promote_file_first` | 已实现（M4）：文件行 `kind=file`、`analytics_table=NULL`；旧 `analysis + file` 混合行迁移留 M5 |
+| 全局 fork | `global/file.rs::fork_file`、`global/040` 的 `asset_forks` | 已实现（M4）：复用 manifest、不移动 head |
+| 全局取回 | `global/file.rs::checkout_file`、`global/040` 的 `global_checkout_leases`、`project_meta/037` | 服务层已实现；UI/job 入口待接 |
+| 全局历史恢复 | `global/file.rs::restore_file_version`、`global/promote.rs::restore_global_file_version` | 已实现：有 manifest 走新 head，无 manifest 回退旧副本 |
+| 删除 / unlock 分离 | `service/trash.rs`、`resource_host/delete_actions.rs`、`detail_view/actions.rs`、`resource_view/list_delegate/menu.rs` | 文件删除统一进回收站（项目 / 全局）；unlock 仅保留服务层显式调用，UI 不再从删除入口触发 |
 | 文件默认全保留 | `service/archive.rs` 的 `prune_copies` 分支 | 已实现：默认全保留，显式 `KeepVersions` 仍生效 |
 | 查看路由 | `resource_host/detail_actions.rs`、`present/detail.rs` | 未实现（M5） |
 

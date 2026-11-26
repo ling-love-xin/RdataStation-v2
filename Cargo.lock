@@ -8294,7 +8294,6 @@ dependencies = [
  "rds-file-meta",
  "rds-insight",
  "rds-paths",
- "rds-settings",
  "rds-shared",
  "rds-tag",
  "rds-workbench-shell",

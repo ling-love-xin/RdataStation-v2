@@ -48,8 +48,19 @@ impl GlobalInstanceStore {
             .ok_or_else(|| InstanceOpError::NotFound {
                 name: global_name.to_string(),
             })?;
-        let (global_id, version, kind, hash, _rel_path, _definition, rows, cols, _size, table) =
-            row;
+        let (
+            global_id,
+            version,
+            kind,
+            hash,
+            _rel_path,
+            _definition,
+            rows,
+            cols,
+            _size,
+            table,
+            _manifest_id,
+        ) = row;
         // 只有 `kind = file` 才是文件资产；数据文件升级后也留了本体（用于版本恢复），
         // 但它仍以派生表被引用，不能按 `file_rel_path` 一刀切拒绝。
         if kind == "file" {

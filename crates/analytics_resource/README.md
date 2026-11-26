@@ -129,6 +129,15 @@
 只删更早版本的**表**，当前版本那张是本体、永远留，登记行与版本快照一条不删——被清掉的那版
 在分发时报「已被保留策略清理」，元数据仍在、版本链还看得见。
 
+**全局 file-first（2026-11-27）**：文件型资产发布到全局时不再走“内容表 + `analytics_table`”，
+而是项目 manifest → 全局 CAS（`{system}/cas`）+ 全局 `file_asset_versions`；全局行
+`kind='file'`、`analytics_table=NULL`，打开 / 取回 / 分发都按 manifest 物化，不建表。
+发布必须带 `base_global_version`：与当前 head 不符返回 `StaleBase`，不覆盖 head；同名要分叉时走
+`fork_file`（复用 manifest、不复制字节、原 head 不动）。全局取回写项目 `checkout_leases`
+（`base_scope='global'`、key `global:<name>`）并在全局 `global_checkout_leases` 记一条跨项目守卫；
+全局 `purge` 前必须无活跃取回。全局文件同样可进回收站，历史版本恢复从 manifest 生成新 head
+（不原地回滚）。
+
 **全局引用（2026-11-25）**：项目侧不再只能“分发复制一份”，也可以只记一条
 `kind='table_ref'` + `origin_kind='global'` 的引用资产，按项目版本 pin 全局版本
 （`global/refs.rs`、迁移 `global/038_analytics_global_refs.sql`）。引用行 `analytics_table`
@@ -148,7 +157,7 @@ Windows 单句柄下互相 `ATTACH` 会撞「文件被占用」（分发侧同�
 - **归档由上游发起**（草稿箱右键 / 本地文件选择）：M6 **只收 `PathBuf` + 元数据**（`ArchiveRequest`）与宿主预取好的 `DraftCandidate`，不认识 `ScratchpadStore` 等上游类型。依赖方向：`workbench / app → analytics_resource → engine, shared`；2026-11-12 收口后本 crate **不再依赖 scratchpad**（草稿箱扫描与标签预取由 `ResourceHostBackend::draft_candidates` 注入）。
 - 变更事件 `ResourcesChanged { reason, resource_id }`：替代 v1 那个"发了没人听"的无载荷事件；**发/收两端必须同批落地**。
 - 回收站只有一套：项目条目走项目级 `ProjectTrash`（`origin = "resources"`），全局条目由 `list_global_trash` 读出后并入**同一个对话框**；跨模块还原必须被拒。
-- 删除语义（2026-11-26 定稿）：**文件型资产不可直接删除**，只能 `unlock_file_to_drafts` 解锁退回草稿箱（只退当前版，历史副本随解锁清理），随后从草稿箱删除；表型分**逻辑删除**（进项目回收站，表保留）与**永久删除**（只在回收站执行）。项目回收站是唯一回收站入口：入口在草稿箱栏回收站分区的「资产库归档…」（经 `ScratchpadHost` 打开本模块的回收站对话框），资产库面板头不再单列「回收站…」。全局文件同样只能解锁退回项目草稿箱，全局回收站只收表型；全局条目也列在同一个对话框（`trash_id` 前缀 `global:<name>`，动作转到 `restore_global` / `purge_global`），「清空回收站」同时清项目与全局两侧。
+- 删除语义（2026-11-27 文件 CAS 修订）：**文件型资产和表型一样进回收站**——软删登记 + 本体搬进 `.RSmeta/trash`（全局条目进 `data/trash/global`），还原后本体回到 `resources/`。`unlock_file_to_drafts` / `unlock_global_file_to_project` 不再是删除的默认动作，只在服务层保留为显式「移出到草稿」能力，UI 的删除入口不再触发它。表型仍分**逻辑删除**（进项目回收站，表保留）与**永久删除**（只在回收站执行）；全局 `purge` 前必须没有活跃取回 lease。项目回收站是唯一回收站入口：入口在草稿箱栏回收站分区的「资产库归档…」（经 `ScratchpadHost` 打开本模块的回收站对话框），资产库面板头不再单列「回收站…」。全局条目也列在同一个对话框（`trash_id` 前缀 `global:<name>`，动作转到 `restore_global` / `purge_global`），「清空回收站」同时清项目与全局两侧。
 
 ## 代码结构（2026-11-12 按真实目录回写）
 
@@ -211,7 +220,7 @@ Windows 单句柄下互相 `ATTACH` 会撞「文件被占用」（分发侧同�
 | **归档 / 取回 / 再归档闭环**【Phase 0 + 2026-10-13 第一刀】`ArchiveService`：本体 copy（默认，草稿保留为工作副本）+ 登记 + 指纹版本 + 事件；索引失败回滚副本；取回产出可写工作副本；**File 档两档粒度已落**：`PayloadMode`（copy / reference）+ 迁移 023 + `copy_in`/`resolve_source`/`copy_out_source` + 服务层按模式分派（归档 / 再归档 / 取回 / 撤销）；reference 的 UI 入口与打开校验留后续刀 | reference 的历史版本还原仍拒绝（走「取回该版本」）；**取回 → 改 → 回原档升 vN+1 已打通**（030 取回凭据） |
 | **索引修复**【Phase 0 + Phase 3 第二刀 + P0.8】`IndexRepair`：三类孤儿（有文件无记录 / 有记录无本体 / 指纹不匹配）的扫描与人工确认修复；**对话框已接**（`dialogs/index_repair.rs` + `present::build_repair_rows` + 宿主接线）：三分组、行内动作（补登固定文件型 / **从回收站还原**（按原相对路径找条目）/ 删记录走确认 / 接受当前内容 / 打开版本历史），修完自动重扫换行 | 按目录批量补登（后续刀） |
 | **版本历史**【Phase 3 第一刀】`dialogs/version.rs` + `present::build_version_rows` + 宿主接线：当前版本与历史行同列（副本缺失行露出来）；**行本体走 `list::ListItem`**（hover / 选中由组件承担，不再手搓）；**还原 = 生成新版本**（不原地回滚）、**取回该版本为草稿**、**删除内容副本**（`AlertDialog` 确认）；动作后宿主换行，不关窗；还原后的裁剪按设置项（见下行） | 按版本 / 时间 / 来源过滤检索（后续刀）；「最近 3 条」、相邻版本差异、血缘均已落地 |
-| **文件资产解锁**【2026-11-26】`service/unlock.rs` + `global/unlock.rs`：文件型不能直接删除，`unlock_file_to_drafts` / `unlock_global_file_to_project` 把当前内容退回（全局则退回本项目）草稿箱（同名按 `-2/-3` 避让），再清资产本体 / 全局本体、登记链与全部历史副本；`trash_one` 与 `trash_global` 对文件型硬拒绝；作业 `UnlockFile` / `UnlockGlobalFile` + 详情危险区与右键入口 | 草稿箱扫描联动（当前靠扫描发现新文件） |
+| **文件资产删除与显式解锁**【2026-11-27 修订】`service/unlock.rs` + `global/unlock.rs` 保留为**显式移出**能力（把当前内容退回草稿箱并清登记链/历史副本）；删除入口已改为统一回收站：`trash_one` / `trash_global` 不再对文件型硬拒绝，软删登记 + 本体搬进 `.RSmeta/trash` / `data/trash/global`，还原后本体回位。项目/全局列表与详情危险区都只提供「移入回收站」 | 草稿箱扫描联动（当前靠扫描发现新文件） |
 | **回收站**【P0.8 + 2026-11-26】`engine::persistence::trash::ProjectTrash`（上提 + 中性化：来源是字符串 `origin`、不返回 M5 类型）+ `dialogs/trash` + 宿主接线：移入回收站（单选 / 多选批量，本体进 `.RSmeta/trash`、登记行**软删**——还原能恢复别名 / 标签 / 指纹）/ 还原（`origin` 校验、同名避让并同步登记路径）/ 永久删除 / 清空；**唯一入口在草稿箱栏回收站分区的「资产库归档…」**，清单三路合并（项目实体条目 / registry 软删登记行 / 全局条目），全局行按 `global:<name>` 路由到 `restore_global` / `purge_global`，清空同时清项目与全局两侧；索引修复的「从回收站还原」走 `restore_archive_by_rel_path` | 回收站 TTL 自动清理、「打开原位置」入口、按来源分组 / 筛选（后续刀） |
 | **面板**【Phase 1 + Phase 2 第一 / 二 / 三刀 + 2026-09-20 UI 收尾】`ResourcesPanel`：面板头（标题图标 + `＋ ▾` / `⋯` 四项）/ 工具栏（搜索·筛选（含**标签维**）·排序）/ **`List` 虚拟化行（kind 图标 + 强度徽标 + 尾部字段）+ 右键菜单** / **批量多选（单击 / `Ctrl` / `Shift` / 双击手势 + `Ctrl+A`，多选时单选项置灰、删除带数量）** / **分组折叠区（会话级折叠）** / 状态行 / 两种空态；`present.rs` 把索引行转成快照（含逐行详情与标签）；**workbench 接线已落**（`panels/resources.rs` 装配 + `services/resource_jobs.rs` 后台取数 + `components/resource_host.rs` 端口）；**右栏「存档详情」已接**（`RightPanel::Archive`，宿主观察面板实体做选中联动） | —（F2 重命名、标题点击折叠、折叠状态持久化均已落地） |
 | **行态与控件口径**【2026-09-20 UI 收尾 / 开发方案 V1–V12】：行距钉在 `ui::ROW_HEIGHT`（24px，`list_row()` 压掉 `ListItem` 默认 `py_1`——组件只量一个样本行定全局行距）；悬停不覆盖选中；分组头展开指示走共用原语 `tree::disclosure_slot` + `disclosure_icon`（字符 `▸/▾` 退场）+ 色条 `primary`（与 M4 同角色）；**停在分组头上按 `Enter` 也能折叠 / 展开**；撤销 / 复制 / chip `×` 一律 `Button::ghost().xsmall()`（键盘可达 + 命中区 20px）；加载骨架走组件 `Skeleton`；固定描边统一 `ui::HAIRLINE` | 行尾「相对时间 → 悬浮显示绝对时间」要等 div 级 tooltip 基建（后续刀） |
@@ -230,8 +239,9 @@ Windows 单句柄下互相 `ATTACH` 会撞「文件被占用」（分发侧同�
 | **表型 `KeepVersions`**【刀 6】`prune_version_tables`：升级成功后按设置里的保留策略裁掉更早版本的**表**；当前版本那张是「本体」永远留，`keep` 数历史份数（`MetadataOnly` 只留当前一张）；**登记行与版本快照一条不删**；内容被清的那版分发时报「已被保留策略清理」而不是 DuckDB Catalog Error；裁剪失败只记日志，不回滚升级 | — |
 | **表型动作判据 + 回收站闭环**【2026-11-25】`ActionContext` 增 `has_table`，「有本体」= 文件或分析库表：打开 / 升级 / 详情删除走 `has_body`，取回只认文件本体（表型置灰并给「去 SQL 里改数据」提示）；回收站 `tbl:` 条目只软删登记、分析库表保留，还原 / 永久删除按 `has_payload` 分派提示；**还原前只读挂载项目分析库预检表是否还在**，撞锁拿不到就不拦还原 | — |
 | **全局实例删除 → 回收站**【2026-11-26】`trash_global` 只软删当前活跃行、表与版本快照保留，manifest 落 `data/trash/global/`；`restore_global` 先校验表在再复活登记；`purge_global` 才逐张 `DROP` 同名各版表并清单 / 登记 / 分发回执；UI 动作改「移入全局回收站…」；**`delete_global` 旧硬删入口已撤**，全局删除只剩「移入 → 回收站永久删除」一条路 | 回收站 TTL；被 pin 跳过只在回执报数 |
-| **全局文件本体与版本恢复**【2026-11-26】`global/payload.rs`：升级时把原文件复制进 `data/system/resources/<rel>`，sha256 / 体积按实际字节；历史副本落 `resources/versions/<asset_key>/vN/`；`restore_global_file_version(name, N)` 校验副本 hash 后以旧字节再生成新版本（不原地回滚）；`KeepVersions` 同步裁副本（当前版与被 pin 的版本不裁）。详情全局行在文件本体存在且版本 > 1 时提供「恢复上一版文件…」；脚本档 `kind = file`，数据文件仍 `kind = analysis` | 任意版本选择 UI、独立文件资产行 / 派生表拆两条、旧表资产不伪造本体 |
-| **全局文件回收站**【2026-11-26】`trash_global` 把当前本体与历史副本移入 `data/trash/global/<id>/<time>/payload/`，`restore_global` 移回，`purge_global` 清掉；manifest 增 `file_rel_path` / `payload_dir`，旧条目靠默认值兼容；`list_global_trash` 按条目最新时间列出，`empty_global_trash` 逐条永久删除并跳过被 pin 的条目，返回 `(purged, skipped)`；**条目已并入草稿箱栏打开的回收站对话框**（`global:<name>` 行，可还原 / 永久删除 / 清空） | TTL；按来源分组 / 筛选 |
+| **全局 file-first**【2026-11-27】`global/file.rs`：`publish_file` 从项目 manifest 导入全局 CAS（按 hash 去重），全局行 `kind='file'`、`analytics_table=NULL`；无 manifest 的旧源文件现算单文件清单。`base_global_version` 不匹配返回 `StaleBase`，不覆盖 head；`fork_file` 复用 manifest 生成新资产、原 head 不动；`checkout_file` 物化到项目草稿并写项目/全局两道 lease；`distribute` 对文件行从 CAS 物化，不再要求内容表存在；`restore_file_version` 从历史 manifest 生成新 head。迁移 `global/040` | 旧 `analysis + file` 混合行迁移、派生表独立创建留 M5 |
+| **全局文件回收站与取回守卫**【2026-11-27】`trash_global` 可收文件型（本体 + 历史副本进 `data/trash/global`），`restore_global` 移回，`purge_global` 前检查 `global_checkout_leases` 活跃取回（有则 `LeaseActive`）；`global_trash_root` 从 `system_dir.parent()/trash/global` 推导，测试隔离 | TTL；按来源分组 / 筛选 |
+| **全局文件历史版本恢复**【2026-11-27】有 manifest 的版本走 `restore_file_version`（新 head，旧版行与 CAS 对象保留）；无 manifest 的旧资产回退 `resources/versions/<asset>/vN` 副本校验后恢复。详情全局行在版本 > 1 时提供「恢复上一版文件…」 | 任意版本选择 UI |
 | **全局表历史版本恢复**【2026-11-26】`restore_global_table_version(name, N)` 从快照取旧表名，校验旧表还在后 `CREATE TABLE rds_global.<新表> AS SELECT * FROM rds_global.<旧表>`，软删旧活跃行、登记新版本（版本号 +1）；旧表 / 旧登记 / 快照全留；旧表被裁或快照缺表名明确拒绝；文件型走 `restore_global_file_version`；详情全局表型行在版本 > 1 时提供「恢复上一版表…」 | 任意版本选择 UI |
 | **来源链浏览 + 分发谱系**【刀 3 + 2026-11-25】`origin_kind` + `origin_ref` 记**直接上游**那一跳（全局行 `project` + 资源 id/版本；项目行 `global` + 实例/版本），详情「来源」区多一行「上游」；详情动作区「查看来源链…」按 id 在面板快照里逐跳往上追（最多 8 跳、防环；上游不在快照时如实灰显并注明可能已删除或在别的项目）；分发成功后补记 `derived_from`（项目产物 → 全局上游，失败只告警不回滚分发） | 升级路径尚无 `derived_from`（产物落在全局库，项目侧没有对应行可挂） |
 | **表型升级**【刀 5c + 2026-11-26】本体是项目分析库里一张表的存档也能升级：所有权收口后项目库与全局库同根，项目会话直接 `CREATE TABLE rds_global.<版本表> AS SELECT * FROM analytics.<源表>`；冲突 / 覆盖 / 版本号 / 登记 / 裁剪与文件型升级同口径；不再导出 parquet、不再先锁进程单例 | — |

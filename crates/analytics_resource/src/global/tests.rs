@@ -91,7 +91,7 @@ fn promote_req(name: &str, path: &Path, kind: PromoteKind) -> PromoteRequest {
         // 数据文件分发 = 建项目表（无重建目标）；脚本分发 = 重建 resources/<rel> 文件。
         rel_path: match kind {
             PromoteKind::DataFile => None,
-            PromoteKind::Script => Some(format!("work/{name}")),
+            PromoteKind::Script | PromoteKind::File => Some(format!("work/{name}")),
         },
         content_hash: format!("hash_{}", Uuid::new_v4().simple()),
         file_size: Some(123),
@@ -931,9 +931,9 @@ async fn g015_table_source_promote_moves_every_row() {
     let _ = fs::remove_dir_all(&env.dir);
 }
 
-/// 全局文件型资产不得直接进回收站；解锁退回草稿箱后全局登记 / 本体 / 副本才清掉。
+/// 全局文件可以进回收站；恢复后仍可显式解锁退回草稿箱，清掉全局登记 / 本体 / 副本。
 #[tokio::test]
-async fn g031_global_file_must_unlock_before_delete() {
+async fn g031_global_file_trash_restore_then_unlock() {
     let env = create_test_env().await;
     let script = env.dir.join("unlock_me.sql");
     fs::write(&script, "SELECT 42;\n").expect("write script");
@@ -944,13 +944,22 @@ async fn g031_global_file_must_unlock_before_delete() {
     assert!(body.is_file(), "脚本本体应落进全局 resources");
     let key = payload::asset_key("unlock_me");
 
-    let refused = env.store.trash_global("unlock_me").await;
+    // file-first 后文件型全局资产和表型一样可进回收站，不再强制先解锁。
+    let trashed = env.store.trash_global("unlock_me").await.expect("trash file");
+    assert_eq!(trashed.version, 1);
+    assert!(!body.exists(), "进回收站后本体移出 resources");
     assert!(
-        matches!(refused, Err(InstanceOpError::Core(_))),
-        "文件型全局资产不能直接进回收站：{refused:?}"
+        env.store
+            .list_global_trash()
+            .expect("list")
+            .iter()
+            .any(|entry| entry.name == "unlock_me" && entry.has_file_payload),
+        "回收站条目要带文件本体"
     );
-    assert!(body.is_file(), "被拒后本体不动");
+    env.store.restore_global("unlock_me").await.expect("restore");
+    assert!(body.is_file(), "恢复后本体回到 resources");
 
+    // 显式的“解锁退回草稿箱”仍保留：它是分发到项目的一种快捷方式。
     let drafts = env.dir.join("scratchpad");
     let unlocked = env
         .store
@@ -2054,3 +2063,431 @@ async fn g022_solidify_failure_keeps_pin_and_ref() {
 
     let _ = fs::remove_dir_all(&env.dir);
 }
+
+// ==================== M4：全局 file-first ====================
+
+async fn seed_project_manifest(
+    env: &TestEnv,
+    rel: &str,
+    bytes: &[u8],
+) -> (PathBuf, String) {
+    let path = env.project_root.join("resources").join(rel);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("create project resources dir");
+    }
+    fs::write(&path, bytes).expect("write project file");
+    let cas = crate::payload::cas::CasStore::new(&env.project_root);
+    let object = cas.put_file(&path).await.expect("put project file");
+    let manifest = crate::payload::manifest::FileManifest::single_file(
+        rel,
+        object.hash,
+        object.size,
+        None,
+    );
+    let manifest_id = cas.put_manifest(&manifest).await.expect("put manifest");
+    (path, manifest_id)
+}
+
+fn publish_req(
+    name: &str,
+    env: &TestEnv,
+    source: PathBuf,
+    manifest_id: String,
+    rel: &str,
+    base: Option<i32>,
+) -> PublishFileRequest {
+    PublishFileRequest {
+        name: name.to_string(),
+        source_project_root: env.project_root.clone(),
+        manifest_id: Some(manifest_id),
+        source_abs_path: Some(source),
+        rel_path: Some(rel.to_string()),
+        source_resource_id: Some("arp_source".to_string()),
+        source_version: Some(1),
+        base_global_version: base,
+    }
+}
+
+fn read_global_row(env: &TestEnv, name: &str, version: Option<i32>) -> (String, Option<String>, String, Option<String>) {
+    env.store
+        .with_sqlite(|conn| {
+            let row = match version {
+                Some(version) => conn.query_row(
+                    "SELECT kind, analytics_table, content_hash, file_rel_path \
+                     FROM analytics_resources WHERE name = ?1 AND scope = 'global' AND version = ?2",
+                    rusqlite::params![name, version],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )?,
+                None => conn.query_row(
+                    "SELECT kind, analytics_table, content_hash, file_rel_path \
+                     FROM analytics_resources WHERE name = ?1 AND scope = 'global' \
+                     AND deleted_at IS NULL ORDER BY version DESC LIMIT 1",
+                    rusqlite::params![name],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )?,
+            };
+            Ok(row)
+        })
+        .expect("read global file row")
+}
+
+#[tokio::test]
+async fn g090_publish_file_is_file_first_and_base_guarded() {
+    let env = create_test_env().await;
+    let (source, manifest_id) =
+        seed_project_manifest(&env, "global/orders.csv", b"id,qty\n1,10\n").await;
+
+    let first = env
+        .store
+        .publish_file(&publish_req(
+            "orders_file",
+            &env,
+            source.clone(),
+            manifest_id.clone(),
+            "global/orders.csv",
+            None,
+        ))
+        .await
+        .expect("publish v1");
+    assert_eq!(first.version, 1);
+    assert_eq!(first.content_class, "tabular");
+
+    let row = read_global_row(&env, "orders_file", None);
+    assert_eq!(row.0, "file", "全局文件行必须是 file");
+    assert!(row.1.is_none(), "文件行不得有 analytics_table");
+    assert_eq!(row.2, first.content_hash);
+    assert_eq!(row.3.as_deref(), Some("global/orders.csv"));
+
+    let manifest: String = env
+        .store
+        .with_sqlite(|conn| {
+            conn.query_row(
+                "SELECT manifest_id FROM file_asset_versions WHERE resource_id = ?1 AND version = 1",
+                rusqlite::params![first.resource_id],
+                |row| row.get(0),
+            )
+            .map_err(sqlite_err("read_global_manifest"))
+        })
+        .expect("global file version");
+    assert_eq!(manifest, manifest_id);
+    let current = env
+        .dir
+        .join("global/resources/global/orders.csv");
+    assert_eq!(fs::read(&current).expect("current cache"), b"id,qty\n1,10\n");
+
+    // 没带 base 的同名发布不覆盖 head，只报 StaleBase。
+    let stale = env
+        .store
+        .publish_file(&publish_req(
+            "orders_file",
+            &env,
+            source.clone(),
+            manifest_id.clone(),
+            "global/orders.csv",
+            None,
+        ))
+        .await
+        .expect_err("missing base must conflict");
+    assert!(
+        matches!(
+            stale,
+            InstanceOpError::StaleBase {
+                base: None,
+                head: 1,
+                ..
+            }
+        ),
+        "应报 base 落后：{stale:?}"
+    );
+
+    // base = 1 才追加 v2；内容变化仍走字节 hash。
+    let (source2, manifest2) =
+        seed_project_manifest(&env, "global/orders-v2.csv", b"id,qty\n1,11\n").await;
+    let second = env
+        .store
+        .publish_file(&publish_req(
+            "orders_file",
+            &env,
+            source2,
+            manifest2,
+            "global/orders.csv",
+            Some(1),
+        ))
+        .await
+        .expect("publish v2");
+    assert_eq!(second.version, 2);
+    assert_ne!(second.content_hash, first.content_hash, "改字节必须换 content_hash");
+    let row = read_global_row(&env, "orders_file", None);
+    assert_eq!(row.0, "file");
+    assert!(row.1.is_none());
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+#[tokio::test]
+async fn g091_binary_global_file_has_no_table() {
+    let env = create_test_env().await;
+    let source = env.dir.join("blob.bin");
+    fs::write(&source, [0_u8, 159, 146, 150, 255]).expect("write binary");
+    let req = PublishFileRequest {
+        name: "blob_file".to_string(),
+        source_project_root: env.project_root.clone(),
+        manifest_id: None,
+        source_abs_path: Some(source),
+        rel_path: Some("binary/blob.bin".to_string()),
+        source_resource_id: None,
+        source_version: None,
+        base_global_version: None,
+    };
+    let out = env.store.publish_file(&req).await.expect("publish binary");
+    assert_eq!(out.content_class, "binary");
+    let row = read_global_row(&env, "blob_file", None);
+    assert_eq!(row.0, "file");
+    assert!(row.1.is_none(), "二进制全局文件不能建表");
+    assert_eq!(
+        fs::read(env.dir.join("global/resources/binary/blob.bin")).expect("binary cache"),
+        [0_u8, 159, 146, 150, 255]
+    );
+
+    // 全局库里没有这条资产对应的物理表（表名不会等于资产名）。
+    assert!(
+        !env.store.table_exists("blob_file").await.expect("table exists"),
+        "二进制全局文件不能建表"
+    );
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+#[tokio::test]
+async fn g092_global_checkout_creates_lease_and_blocks_purge() {
+    let env = create_test_env().await;
+    let (source, manifest_id) =
+        seed_project_manifest(&env, "global/data.csv", b"a,b\n1,2\n").await;
+    env.store
+        .publish_file(&publish_req(
+            "checkout_file",
+            &env,
+            source,
+            manifest_id,
+            "global/data.csv",
+            None,
+        ))
+        .await
+        .expect("publish");
+    fs::create_dir_all(env.project_root.join("scratchpad")).expect("scratchpad");
+
+    let project = crate::store::AnalyticsResourceStore::new(env.project_pool.clone());
+    let out = env
+        .store
+        .checkout_file(
+            &project,
+            &env.project_root,
+            "checkout_file",
+            None,
+            "global/data.csv",
+        )
+        .await
+        .expect("checkout");
+    assert_eq!(out.content_hash.len(), 64);
+    assert!(env.project_root.join("scratchpad/global/data.csv").is_file());
+    let lease = project
+        .active_lease("global:checkout_file")
+        .await
+        .expect("active lease")
+        .expect("lease exists");
+    assert_eq!(lease.base_scope, "global");
+    assert_eq!(lease.base_version, 1);
+
+    let second = env
+        .store
+        .checkout_file(
+            &project,
+            &env.project_root,
+            "checkout_file",
+            None,
+            "global/data-2.csv",
+        )
+        .await
+        .expect_err("second checkout must be refused");
+    assert!(
+        matches!(second, InstanceOpError::LeaseActive { .. }),
+        "第二次取回应报已有 lease：{second:?}"
+    );
+    assert!(!env.project_root.join("scratchpad/global/data-2.csv").exists());
+
+    let purge = env
+        .store
+        .purge_global("checkout_file")
+        .await
+        .expect_err("active lease must block purge");
+    assert!(
+        matches!(purge, InstanceOpError::LeaseActive { .. }),
+        "有活跃取回时 purge 必须拒绝：{purge:?}"
+    );
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+#[tokio::test]
+async fn g093_fork_reuses_manifest_without_moving_head() {
+    let env = create_test_env().await;
+    let (source, manifest_id) =
+        seed_project_manifest(&env, "global/fork.csv", b"k,v\n1,a\n").await;
+    let parent = env
+        .store
+        .publish_file(&publish_req(
+            "fork_parent",
+            &env,
+            source,
+            manifest_id,
+            "global/fork.csv",
+            None,
+        ))
+        .await
+        .expect("publish parent");
+
+    let fork = env
+        .store
+        .fork_file("fork_parent", 1, "fork_child")
+        .await
+        .expect("fork");
+    assert_eq!(fork.child_version, 1);
+    let row = read_global_row(&env, "fork_child", None);
+    assert_eq!(row.0, "file");
+    assert!(row.1.is_none());
+    assert!(env.dir.join("global/resources/global/fork_child.csv").is_file());
+
+    // 原 head 不变，fork 关系落库。
+    let parent_row = read_global_row(&env, "fork_parent", None);
+    assert_eq!(parent_row.2, parent.content_hash);
+    let (parent_name, child_name): (String, String) = env
+        .store
+        .with_sqlite(|conn| {
+            conn.query_row(
+                "SELECT parent_name, child_name FROM asset_forks WHERE fork_id = ?1",
+                rusqlite::params![fork.fork_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(sqlite_err("read_asset_fork"))
+        })
+        .expect("asset fork row");
+    assert_eq!(parent_name, "fork_parent");
+    assert_eq!(child_name, "fork_child");
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+#[tokio::test]
+async fn g094_distribute_file_first_materializes_project_file() {
+    let env = create_test_env().await;
+    let (source, manifest_id) =
+        seed_project_manifest(&env, "global/dist.csv", b"x,y\n1,2\n").await;
+    env.store
+        .publish_file(&publish_req(
+            "dist_file",
+            &env,
+            source,
+            manifest_id,
+            "global/dist.csv",
+            None,
+        ))
+        .await
+        .expect("publish");
+    // 模拟发布后项目侧工作副本已移走（真实流程里归档会消费草稿）；再分发回来不应冲突。
+    fs::remove_file(env.project_root.join("resources/global/dist.csv")).expect("remove published source");
+    let project = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
+    let out = env
+        .store
+        .distribute(&project, &env.project_root, "dist_file", None)
+        .await
+        .expect("distribute file");
+    assert_eq!(out.shape, DistributeShape::File);
+    assert!(env.project_root.join("resources/global/dist.csv").is_file());
+    let (kind, table, origin_kind): (String, Option<String>, Option<String>) = {
+        let conn = env.project_pool.acquire().await.expect("project conn");
+        let inner = conn.inner().expect("inner");
+        inner
+            .query_row(
+                "SELECT kind, analytics_table, origin_kind FROM analytics_resources \
+                 WHERE id = ?1",
+                rusqlite::params![out.resource_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("read project file row")
+    };
+    assert_eq!(kind, "file");
+    assert!(table.is_none(), "文件分发不能落 analytics_table");
+    assert_eq!(origin_kind.as_deref(), Some("global"));
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+#[tokio::test]
+async fn g095_restore_file_version_from_manifest_creates_new_head() {
+    let env = create_test_env().await;
+    let (source, manifest_id) =
+        seed_project_manifest(&env, "global/restore.csv", b"k,v\n1,old\n").await;
+    let v1 = env
+        .store
+        .publish_file(&publish_req(
+            "restore_file",
+            &env,
+            source,
+            manifest_id,
+            "global/restore.csv",
+            None,
+        ))
+        .await
+        .expect("publish v1");
+    let (source2, manifest2) =
+        seed_project_manifest(&env, "global/restore-v2.csv", b"k,v\n1,new\n").await;
+    let v2 = env
+        .store
+        .publish_file(&publish_req(
+            "restore_file",
+            &env,
+            source2,
+            manifest2,
+            "global/restore.csv",
+            Some(v1.version),
+        ))
+        .await
+        .expect("publish v2");
+    assert_eq!(v2.version, 2);
+    assert_ne!(v1.content_hash, v2.content_hash);
+
+    let restored = env
+        .store
+        .restore_global_file_version("restore_file", v1.version)
+        .await
+        .expect("restore v1");
+    assert_eq!(restored.version, 3, "恢复 = 新版，不原地回滚");
+    let row = read_global_row(&env, "restore_file", None);
+    assert_eq!(row.2, v1.content_hash, "当前内容回到 v1");
+    assert_eq!(
+        fs::read(env.dir.join("global/resources/global/restore.csv")).expect("current"),
+        b"k,v\n1,old\n"
+    );
+
+    let versions = env
+        .store
+        .with_sqlite(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT version FROM analytics_resources WHERE name = 'restore_file' \
+                     AND scope = 'global' ORDER BY version",
+                )
+                .map_err(sqlite_err("read_restore_versions"))?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, i32>(0))
+                .map_err(sqlite_err("query_restore_versions"))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(sqlite_err("collect_restore_versions"))?;
+            Ok(rows)
+        })
+        .expect("versions");
+    assert_eq!(versions, vec![1, 2, 3], "恢复只追加，不删旧版本");
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+

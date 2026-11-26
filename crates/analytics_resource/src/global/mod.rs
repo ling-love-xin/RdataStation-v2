@@ -39,6 +39,61 @@ pub struct GlobalInstanceStore {
     system_dir: PathBuf,
 }
 
+/// 全局文件发布请求（项目文件 → 全局文件，file-first）。
+///
+/// `manifest_id` 有值 = 直接提升项目 CAS 的清单（对象按 hash 复用）；为空时按
+/// `source_abs_path` 现算一份单文件清单。发布不删除项目资产，也不建表。
+#[derive(Debug, Clone)]
+pub struct PublishFileRequest {
+    pub name: String,
+    /// 项目根（读取项目 CAS；没有 manifest 时只用于说明来源）。
+    pub source_project_root: PathBuf,
+    /// 项目 CAS 的 manifest id；旧资产没有回填时为空。
+    pub manifest_id: Option<String>,
+    /// 没有 manifest 时的源文件绝对路径。
+    pub source_abs_path: Option<PathBuf>,
+    /// 分发重建目标（`resources/<rel>`）；空时按资产名 + 扩展名补。
+    pub rel_path: Option<String>,
+    /// 来源项目资产 id / 版本（发布链用）。
+    pub source_resource_id: Option<String>,
+    pub source_version: Option<i32>,
+    /// 已存在同名全局资产时必须给；等于当前 head 才追加，否则 Conflict。
+    pub base_global_version: Option<i32>,
+}
+
+/// 一次全局文件发布的结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishFileOutcome {
+    pub resource_id: String,
+    pub name: String,
+    pub version: i32,
+    pub manifest_id: String,
+    pub content_hash: String,
+    pub file_size: i64,
+    pub content_class: String,
+}
+
+/// 全局文件取回结果（落到项目草稿箱，写项目 lease）。
+#[derive(Debug, Clone)]
+pub struct GlobalFileCheckoutOutcome {
+    pub lease_id: String,
+    pub name: String,
+    pub version: i32,
+    pub dest_rel: String,
+    pub content_hash: String,
+    pub file_meta: Option<file_meta::FileMeta>,
+}
+
+/// 全局文件 fork 结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GlobalFileForkOutcome {
+    pub fork_id: String,
+    pub child_resource_id: String,
+    pub child_name: String,
+    pub child_version: i32,
+    pub manifest_id: String,
+}
+
 /// 升级请求（项目 → 全局）。
 #[derive(Debug, Clone)]
 pub struct PromoteRequest {
@@ -83,6 +138,8 @@ pub enum PromoteKind {
     DataFile,
     /// 脚本 / 文本：内容表进全局（方案 A，§13.5），分发时重建为文件。
     Script,
+    /// 文件-first：任意文件（含二进制）进全局 CAS，不自动建表；分发/取回都按文件。
+    File,
 }
 
 /// 脚本型资源提升到全局的体积上限（16 MiB）。
@@ -193,6 +250,20 @@ pub enum InstanceOpError {
         name: String,
         /// 撞在哪一层：让冲突框说清"是登记、是表、还是文件"，而不是笼统一句"已有同名"。
         field: ConflictField,
+    },
+    /// 全局文件发布的 base 落后：只允许 fork / 取消，不静默覆盖。
+    #[error("全局「{name}」head 已到 v{head}，本次发布 base 是 {base:?}：请 fork 或取消")]
+    StaleBase {
+        name: String,
+        base: Option<i32>,
+        head: i32,
+    },
+    /// 全局文件仍有活跃取回租约（落地项目 + 草稿路径）。
+    #[error("全局「{name}」仍有活跃取回（项目 {project_root}，草稿 {dest_rel}）：先提交或放弃")]
+    LeaseActive {
+        name: String,
+        project_root: String,
+        dest_rel: String,
     },
     /// 资源不存在（分发引用了未登记的全局资源）。
     #[error("资源不存在：{name}")]
@@ -436,6 +507,7 @@ fn open_registry(sqlite_path: &Path) -> Result<rusqlite::Connection, CoreError> 
 
 pub mod delete;
 pub mod distribute;
+pub mod file;
 pub mod list;
 mod payload;
 pub mod promote;

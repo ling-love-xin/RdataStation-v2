@@ -238,6 +238,7 @@ impl GlobalInstanceStore {
             let kind = match req.kind {
                 PromoteKind::DataFile => "analysis",
                 PromoteKind::Script => "file",
+                PromoteKind::File => "file",
             };
             // 全局表由「能读成表的数据文件」建出来，就是结构化；脚本内容表不是。
             let structured = i32::from(matches!(req.kind, PromoteKind::DataFile));
@@ -263,6 +264,7 @@ impl GlobalInstanceStore {
                         .or(req.rel_path.as_deref())
                         .unwrap_or("")
                 )),
+                PromoteKind::File => None,
             });
 
             // 来源链（A → 全局）：只记直接上游那一跳。`source_resource_id` 为空时

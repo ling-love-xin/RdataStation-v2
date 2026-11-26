@@ -239,19 +239,31 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_active_lease
 - [x] M2 迁移 + store（`036_file_asset_cas.sql`、`store/file_asset.rs`；两张表 `ON DELETE CASCADE`）
 - [x] M3 归档 / 取回 / 再归档（项目侧闭环：归档消费草稿、字节哈希、CAS manifest、lease 校验与消费）
 - [x] M3 元数据联动（归档读草稿/本地 sidecar → manifest；取回交回 `FileMeta` 并落 sidecar）
-- [ ] M4 全局 file-first
+- [x] M4 全局 file-first（全局发布 / fork / 取回 lease / 分发 / 回收站 / 历史 manifest 恢复；项目文件删除改走回收站）
 - [ ] M5 查看 / 对比 / 迁移 / UI
 
-### 9.1 本轮验证（2026-11-27）
+### 9.1 验证
+
+#### M3（2026-11-27）
 
 - `cargo check -p rds-analytics-resource -p rds-workbench --lib -j 2` 通过。
 - `cargo test -p rds-analytics-resource --lib -j 2`：303 passed（含新增 `t132_file_meta_roundtrip_and_single_active_lease`、`t208_structured_file_with_manifest_still_checks_bytes`）。
 - 旧用例按新语义更新：归档消费草稿（t101/t106）、撤销把本体送回原草稿（t120）、文件壳默认全保留但显式策略仍生效（t130）、文件字节哈希（t133）。
 - 结构化文件带 manifest 时仍参与索引字节比对（t208）；只有无 manifest 的旧结构化行继续跳过。
-- 已知未覆盖：base 落后的 Conflict 用例、全局 file-first、任意两版对比、旧数据回填；进入 M4/M5。
+
+#### M4（2026-11-27）
+
+- `cargo check -p rds-analytics-resource -p rds-workbench --lib -j 2` 通过。
+- `cargo test -p rds-analytics-resource --lib -j 2 --no-fail-fast`：308 passed，0 failed。
+- 新增 `g090`–`g095`：file-first 无表与 base 守卫、二进制无表、全局取回 lease 与 purge 守卫、fork 复用 manifest、分发物化项目文件、历史 manifest 恢复生成新 head。
+- `g031` 改为文件可直接进全局回收站、还原后再显式解锁；项目侧 `t129` 同步改为「删除 = 进回收站，还原后仍可显式解锁退草稿」。
+- 全局回收站根目录改由 `system_dir.parent()/trash/global` 推导，并行用例各自隔离，生产路径仍是 `{RDS_HOME}/data/trash/global`。
 
 ### 9.2 与计划的偏差
 
 - `ArchiveRequest` 未新增 `file_meta` 字段：服务按 `promoted_from` 字符串约定直接读 sidecar，避免把完整元数据穿过 UI 请求层，也避免破坏 `DraftCandidate` 的 `Eq`。
 - 文件资产默认全保留：`prune_copies` 在 `prepared.is_some() && keep_versions.is_none()` 时跳过；显式 `KeepVersions` 仍生效。
 - 归档删除草稿失败当前只写回执 note，未落 `pending_cleanup` 列（M5 再补持久化重试）。
+- 全局文件发布仍是「一版一行、新 `resource_id`」，版本链靠 `parent_resource_id` 接续；设计中的稳定单 asset id 未落，作为后续迁移项。
+- 全局发布暂不自动建派生表：文件行 `analytics_table=NULL`；旧 `analysis + file` 混合行迁移、派生表独立留到 M5。
+- 全局取回的 UI/job 入口尚未接；当前列表/详情只提供分发与回收站，`checkout_file` 已在服务层可用。

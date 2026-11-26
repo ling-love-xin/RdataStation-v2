@@ -2,14 +2,13 @@
 
 use super::*;
 
-use crate::model::ORIGIN_RESOURCES;
 /// 移入回收站：本体离开 `resources/` 进入项目级回收站，索引行**软删**（列表与
 /// “按路径查存活行”都看不到，但记录本身还在，还原才能恢复别名 / 标签 / 指纹）。
 /// 永久删除与清空：都**只动本模块的**条目（回收站是共用的，删别人的东西不是清空）；
 /// 登记行与它的标签 / 分组归属一并清掉（外键没有 `ON DELETE CASCADE`，不清就删不掉）。
-/// 文件型资产不能直接进回收站；解锁退回草稿箱只退当前版，清登记链与历史副本。
+/// 文件型资产直接进回收站（软删登记 + 本体搬走），还原后仍可显式解锁退回草稿箱。
 #[tokio::test]
-async fn t129_file_asset_must_unlock_before_delete() {
+async fn t129_file_asset_trashes_and_restores_without_auto_unlock() {
     let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
     let first = write_draft(&dir, "locked.sql", b"select 1;").await;
     let archived = service
@@ -17,7 +16,6 @@ async fn t129_file_asset_must_unlock_before_delete() {
         .await
         .expect("archive v1");
 
-    // 再归档一次产生历史副本，解锁要把它一起清掉。
     let second = write_draft(&dir, "locked-v2.sql", b"select 2;").await;
     service
         .archive(archive_req(
@@ -38,15 +36,48 @@ async fn t129_file_asset_must_unlock_before_delete() {
         "v1 应有历史副本"
     );
 
-    let error = service
+    let trashed = service
         .move_to_trash(&[archived.resource_id.clone()])
         .await
-        .expect_err("文件资产不得直接进回收站");
+        .expect("文件资产直接进回收站");
     assert!(
-        error.to_string().contains("解除锁定并退回草稿箱"),
-        "拒绝要指出去哪里：{error}"
+        trashed.iter().any(|entry| entry.resource_id == archived.resource_id),
+        "回收站回执要包含这条文件资产"
+    );
+    assert!(
+        !service
+            .payload()
+            .resolve("reports/locked.sql")
+            .expect("resolve")
+            .exists(),
+        "本体已离开 resources"
     );
 
+    let restored = service
+        .restore_archive_from_trash(&trashed[0].trash_id)
+        .await
+        .expect("restore file asset");
+    assert_eq!(restored.id, archived.resource_id);
+    assert!(
+        service
+            .payload()
+            .resolve("reports/locked.sql")
+            .expect("resolve")
+            .exists(),
+        "还原后本体回到 resources"
+    );
+    assert_eq!(
+        service
+            .payload()
+            .version_copies(&archived.resource_id)
+            .await
+            .expect("copies")
+            .len(),
+        1,
+        "回收站不动历史副本"
+    );
+
+    // 解锁仍是独立动作：只退当前版，清登记链与历史副本。
     let outcome = service
         .unlock_file_to_drafts(&archived.resource_id)
         .await
@@ -62,14 +93,6 @@ async fn t129_file_asset_must_unlock_before_delete() {
         fs::read_to_string(&draft).await.expect("draft"),
         "select 2;",
         "只退当前版本内容"
-    );
-    assert!(
-        !service
-            .payload()
-            .resolve("reports/locked.sql")
-            .expect("resolve")
-            .exists(),
-        "资产库本体已移出"
     );
     assert!(
         service

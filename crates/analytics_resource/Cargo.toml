@@ -46,8 +46,6 @@ thiserror.workspace = true
 similar.workspace = true
 # 2026-11-12 分层收口：草稿箱候选由宿主经 ResourceHostBackend 注入，
 # 本 crate 不再依赖 scratchpad（见 src/resource_host/mod.rs 的字符串约定）。
-# 默认分组 / 历史保留策略 / 默认排序（P2-b 下沉 `resource_host.rs`：事件路径读设置）
-settings.workspace = true
 # 洞察取样来源（P2-b 下沉 `resource_host.rs`：`SampleSource` 类型，打开数据文件/远端引用）
 insight.workspace = true
 # 打开资源目录 / 在文件管理器里显示本体（P2-b 下沉 `resource_host.rs`）

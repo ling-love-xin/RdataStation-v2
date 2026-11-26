@@ -107,6 +107,15 @@ impl GlobalInstanceStore {
                 .await?;
                 self.table_stats(&table).await?
             }
+            PromoteKind::File => {
+                return Err(InstanceOpError::Core(CoreError::common(
+                    CommonError::InvalidArgument {
+                        param: "kind".to_string(),
+                        reason: "文件-first 升级请走 publish_file（CAS），不能走表型 promote"
+                            .to_string(),
+                    },
+                )));
+            }
             PromoteKind::Script => {
                 // 先看体积再读内容：整段文本要进内存并落成全局库里的一条巨型行，
                 // 超过上限时按「该当数据文件」处理，别把内存当缓存用。
@@ -301,6 +310,32 @@ impl GlobalInstanceStore {
             .and_then(|value| value.as_str())
             .filter(|hash| !hash.is_empty())
             .map(str::to_string);
+
+        // 新文件-first 版本从 manifest 恢复；旧资产没有 manifest 时才走历史副本。
+        let has_manifest = self.with_sqlite(|conn| {
+            conn.query_row(
+                r#"
+                SELECT count(*) FROM analytics_resources ar
+                JOIN file_asset_versions fav
+                  ON fav.resource_id = ar.id AND fav.version = ar.version
+                WHERE ar.name = ?1 AND ar.scope = 'global' AND ar.version = ?2
+                "#,
+                rusqlite::params![name, version],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(sqlite_err("check_restore_file_manifest"))
+        })?;
+        if has_manifest > 0 {
+            let outcome = self.restore_file_version(name, version).await?;
+            return Ok(PromoteOutcome {
+                resource_id: outcome.resource_id,
+                name: outcome.name,
+                version: outcome.version,
+                row_count: None,
+                column_count: None,
+                overwritten: true,
+            });
+        }
 
         let key = payload::asset_key(name);
         let copy = payload::version_copy(&self.system_dir, &key, version, &rel).ok_or_else(|| {
