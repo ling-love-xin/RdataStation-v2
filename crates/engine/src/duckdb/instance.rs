@@ -186,6 +186,11 @@ pub struct AnalysisSession {
     ///
     /// 存这里而不是每次现查 `current_database()`：面板是渲染路径，不能为一行小标跑 SQL。
     primary: Mutex<Option<String>>,
+    /// 最近一次「要的主源没切成」的原因（界面要能说出来，不能悄悄换）
+    ///
+    /// 与 [`Self::primary`] 同构：真值放在会话上，联邦门面 / 数据对象面板 / 源清单浮层
+    /// 读的都是这一份，不再各自持一份副本。
+    primary_note: Mutex<Option<String>>,
     /// 弱引用：实例持有会话，会话反向取车道 / 登记册，不能成环
     instance: Weak<AnalysisInstance>,
 }
@@ -398,6 +403,7 @@ impl AnalysisInstance {
             queries: AtomicU64::new(0),
             mounted: Mutex::new(Vec::new()),
             primary: Mutex::new(None),
+            primary_note: Mutex::new(None),
             instance: Arc::downgrade(self),
         });
         state.sessions.insert(id.clone(), session.clone());
@@ -1031,19 +1037,44 @@ impl AnalysisSession {
         if !valid {
             return Err(format!("别名 {alias:?} 里有不允许的字符，拒绝拿去拼 SQL"));
         }
-        self.run_with_timeout(&format!("USE {alias}"), Duration::from_secs(5))
-            .map(|_| ())
-            .map_err(|error| format!("切主源到 {alias} 失败：{error}"))?;
-        // 切成功才记：失败时主源没变，记下来会让面板把小标写错
-        if let Ok(mut primary) = self.primary.lock() {
-            *primary = Some(alias.to_string());
+        let outcome = self.run_with_timeout(&format!("USE {alias}"), Duration::from_secs(5));
+        match outcome {
+            Ok(_) => {
+                // 切成功才记：失败时主源没变，记下来会让面板把小标写错
+                if let Ok(mut primary) = self.primary.lock() {
+                    *primary = Some(alias.to_string());
+                }
+                if let Ok(mut note) = self.primary_note.lock() {
+                    *note = None; // 用户显式选过了，回退说明就该收起来
+                }
+                Ok(())
+            }
+            Err(error) => {
+                let reason = format!("切主源到 {alias} 失败：{error}");
+                // 失败也要说出来：否则用户只看到“怎么没换”
+                if let Ok(mut note) = self.primary_note.lock() {
+                    *note = Some(reason.clone());
+                }
+                Err(reason)
+            }
         }
-        Ok(())
     }
 
     /// 本会话当前的主源别名（纯内存读；没切过就是 `None`）。
     pub fn primary_alias(&self) -> Option<String> {
         self.primary.lock().ok().and_then(|slot| slot.clone())
+    }
+
+    /// 本会话「主源为什么不是你要的那个」的说明（纯内存读）
+    pub fn primary_note(&self) -> Option<String> {
+        self.primary_note.lock().ok().and_then(|slot| slot.clone())
+    }
+
+    /// 记一条主源回退说明（`None` = 收起来）
+    pub(crate) fn set_primary_note(&self, note: Option<String>) {
+        if let Ok(mut slot) = self.primary_note.lock() {
+            *slot = note;
+        }
     }
 
     fn close(&self) {

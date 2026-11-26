@@ -22,19 +22,21 @@
 //!   （真机台账 §2.1），那一路由会话层 [`FederatedSession::run`] 拒 + 编辑器闸门 + 只读账号；
 //!   本地临时对象（`CREATE TEMP TABLE`）照常允许。
 //!
-//! ## 会话生命周期（进程内缓存）
+//! ## 会话生命周期
 //!
-//! 会话按**会话主人**（当前文档绑定的连接 id）缓存，命中条件是**源集合指纹**一致
-//! （[`source_fingerprint`]）。执行路径调 [`ensure_session`]，界面与中断路径读
-//! [`snapshot_for`] / [`cancel`]（纯内存，不做 I/O）。
+//! 会话就在**分析实例**里（`label == "联邦"` 的那条会话），本模块**不再另存缓存表**：
+//! 执行路径由 `engine::analysis::kernel::open` 开 / 取会话；界面与中断路径按 owner
+//! 读 [`session_for`] / [`snapshot_for`]（纯内存，不做 I/O）。
 //!
-//! 两条要记住的语义：
+//! 三条要记住的语义：
 //!
 //! 1. **换主源不重建会话**（只是会话上的 `USE`）：用户建的本地临时对象不丢；
-//! 2. **源清单变了会重建会话**（先关实例上那条旧会话 → `TEMP` 一起消失，再开新会话）——
-//!    这是“改了参与源就当新会话”的代价，比让旧表清单继续骗人强。
+//! 2. **源清单变了会重建会话**（先关实例上那条旧会话 → `TEMP` 一起消失，再开新的）——
+//!    这是“改了参与源就当新会话”的代价，比让旧表清单继续骗人强；
+//! 3. **真值只有一份**：挂载清单 / 主源 / 回退说明都记在 `AnalysisSession` 上，
+//!    门面、数据对象面板、源清单浮层读的都是它，不再各存副本。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use duckdb::Connection;
@@ -55,11 +57,11 @@ use super::registry::{FederatedSource, MountState, MountedSource, SessionSnapsho
 /// （`docs/architecture/database/analysis-instance-sessions.md`）。这层保留的是
 /// **联邦语义**（挂载清单 / 主源 / 快照 / 写拒绝 / 错误脱敏），不是"一台独立的库"。
 pub struct FederatedSession {
-    /// 实例会话（catalog 与底座由实例共享，`TEMP` 仍属于这条会话）
+    /// 实例会话：**挂载清单 / 主源 / 回退说明的真值都在它身上**
+    ///
+    /// 门面不再存副本（2026-11-26 收口）：`AnalysisSession` 自己记账（`mount_sources`），
+    /// 门面、数据对象面板、源清单浮层、编辑器读的都是这一份，不会各说各的。
     session: Arc<AnalysisSession>,
-    mounted: Mutex<Vec<MountedSource>>,
-    primary: Mutex<Option<String>>,
-    primary_note: Mutex<Option<String>>,
     mounted_at: std::time::SystemTime,
 }
 
@@ -67,11 +69,8 @@ impl std::fmt::Debug for FederatedSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // 连接没法 Debug：打印可读摘要（主源 + 源数），测试与日志都用它
         f.debug_struct("FederatedSession")
-            .field("primary", &self.primary.lock().ok().and_then(|p| p.clone()))
-            .field(
-                "sources",
-                &self.mounted.lock().map(|m| m.len()).unwrap_or(0),
-            )
+            .field("primary", &self.session.primary_alias())
+            .field("sources", &self.session.mounted_sources().len())
             .finish()
     }
 }
@@ -96,12 +95,11 @@ impl FederatedSession {
         if let Some(alias) = primary.as_deref() {
             session.use_catalog(alias)?;
         }
+        // 回退说明记在会话上：面板 / 浮层 / 门面读的是同一份
+        session.set_primary_note(primary_note);
 
         Ok(Self {
             session,
-            mounted: Mutex::new(mounted),
-            primary: Mutex::new(primary),
-            primary_note: Mutex::new(primary_note),
             mounted_at: std::time::SystemTime::now(),
         })
     }
@@ -113,12 +111,20 @@ impl FederatedSession {
     /// 挂载状态从会话自己的记账里取（`AnalysisSession::mounted_sources`），不另存一份真相。
     pub fn adopt(session: Arc<AnalysisSession>, requested_primary: Option<&str>) -> Self {
         let mounted = session.mounted_sources();
-        let (primary, primary_note) = pick_primary(&mounted, requested_primary);
+        // 请求的主源优先；没请求就沿用会话上已经 `USE` 过的那个（内核开会话时切过）
+        let wanted = requested_primary
+            .map(str::to_string)
+            .or_else(|| session.primary_alias());
+        let (primary, primary_note) = pick_primary(&mounted, wanted.as_deref());
+        if let Some(alias) = primary.as_deref() {
+            // `adopt` 不能重开 I/O，但主源必须落到会话上（否则快照说 A、实际 USE 的是 B）
+            if session.primary_alias().as_deref() != Some(alias) {
+                session.use_catalog(alias).ok();
+            }
+        }
+        session.set_primary_note(primary_note);
         Self {
             session,
-            mounted: Mutex::new(mounted),
-            primary: Mutex::new(primary),
-            primary_note: Mutex::new(primary_note),
             mounted_at: std::time::SystemTime::now(),
         }
     }
@@ -152,21 +158,16 @@ impl FederatedSession {
     /// 判据取“**保守**”那一侧：写语句（判据与驱动层同一份 `returns_rows`）+ 提到该源的别名
     /// （或它就是主源——未限定名会落在它上面）就拒，不做语义分析（宁可多拒一句，不能放过去真写）。
     fn l2_write_refusal(&self, sql: &str) -> Option<String> {
-        let Ok(mounted) = self.mounted.lock() else {
-            return None; // 锁被污染：不在这里另报一个错（执行路径会给真实原因）
-        };
-        let primary = self.primary.lock().ok().and_then(|primary| primary.clone());
-        write_refusal(&mounted, primary.as_deref(), sql)
+        let mounted = self.session.mounted_sources();
+        write_refusal(&mounted, self.session.primary_alias().as_deref(), sql)
     }
 
     /// 把错误文本里可能出现的源凭据抹掉（每个源一条规则；命中即换，没命中就原样）
     fn scrub_error(&self, error: CoreError) -> CoreError {
         let text = error.to_string();
         let mut scrubbed = text.clone();
-        if let Ok(mounted) = self.mounted.lock() {
-            for entry in mounted.iter() {
-                scrubbed = scrub_credentials(&entry.source.connection_string, &scrubbed);
-            }
+        for entry in self.session.mounted_sources().iter() {
+            scrubbed = scrub_credentials(&entry.source.connection_string, &scrubbed);
         }
         if scrubbed == text {
             return error;
@@ -179,71 +180,58 @@ impl FederatedSession {
     /// 先 `USE memory` 再 `DETACH`：默认 catalog 指向该源时 DuckDB 拒绝卸载它。
     pub fn refresh(&self, alias: &str) -> Result<(), String> {
         let source = self
-            .mounted
-            .lock()
-            .map_err(|_| "会话状态锁被污染".to_string())?
-            .iter()
+            .session
+            .mounted_sources()
+            .into_iter()
             .find(|entry| entry.alias() == alias)
-            .map(|entry| entry.source.clone())
+            .map(|entry| entry.source)
             .ok_or_else(|| format!("会话里没有源 {alias}"))?;
 
-        let was_primary = self
-            .primary
-            .lock()
-            .map(|primary| primary.as_deref() == Some(alias))
-            .unwrap_or(false);
+        let was_primary = self.session.primary_alias().as_deref() == Some(alias);
 
-        let state = self.session.with_connection(|conn| {
+        // 先 `USE memory` 再 `DETACH`：默认 catalog 指向该源时 DuckDB 拒绝卸载它
+        self.session.with_connection(|conn| {
             conn.execute_batch(&format!("USE memory; DETACH {alias}"))
                 .map_err(|error| {
                     scrub_error(
                         &source.connection_string,
                         format!("卸载 {alias} 失败：{error}"),
                     )
-                })?;
-            // 重挂走与 `open` 同一条实现：L2 的 Secret 在这里重建（口令可能有变）
-            let state = attach_source(conn, &source);
-            // 重挂之后主源要 `USE` 回去（否则未限定名会解析到 memory 上）
-            if was_primary && matches!(state, MountState::Ready { .. }) {
-                use_catalog(conn, alias)?;
-            }
-            Ok(state)
+                })
         })?;
-
-        if let Ok(mut mounted) = self.mounted.lock()
-            && let Some(entry) = mounted.iter_mut().find(|entry| entry.alias() == alias)
-        {
-            entry.state = state;
+        // 重挂走会话自己的挂载实现（L2 的 Secret 在这里重建，记账也由它写回）
+        self.session
+            .mount_sources(std::slice::from_ref(&source))?;
+        // 重挂之后主源要 `USE` 回去（否则未限定名会解析到 memory 上）
+        if was_primary {
+            let ready = self
+                .session
+                .mounted_sources()
+                .iter()
+                .any(|entry| entry.alias() == alias && entry.is_ready());
+            if ready {
+                self.session.use_catalog(alias)?;
+            }
         }
         Ok(())
     }
 
     /// 切换主源（未限定名从此在它里面解析）
     pub fn set_primary(&self, alias: &str) -> Result<(), String> {
-        let ready = {
-            let mounted = self
-                .mounted
-                .lock()
-                .map_err(|_| "会话状态锁被污染".to_string())?;
-            let entry = mounted
-                .iter()
-                .find(|entry| entry.alias() == alias)
-                .ok_or_else(|| format!("会话里没有源 {alias}"))?;
-            entry.is_ready()
-        };
+        let ready = self
+            .session
+            .mounted_sources()
+            .iter()
+            .find(|entry| entry.alias() == alias)
+            .map(|entry| entry.is_ready())
+            .ok_or_else(|| format!("会话里没有源 {alias}"))?;
         if !ready {
             return Err(format!("源 {alias} 当前不可用，不能设为主源"));
         }
+        // `use_catalog` 成功会清掉回退说明、失败会把原因写在会话上
         self.session
             .use_catalog(alias)
-            .map_err(|error| error.to_string())?;
-        if let Ok(mut primary) = self.primary.lock() {
-            *primary = Some(alias.to_string());
-        }
-        if let Ok(mut note) = self.primary_note.lock() {
-            *note = None; // 用户显式选过了，回退说明就该收起来
-        }
-        Ok(())
+            .map_err(|error| error.to_string())
     }
 
     /// 把一个**外部文件**挂成会话里的视图（数据对象第 ① 类里最便宜的那一档）
@@ -264,27 +252,20 @@ impl FederatedSession {
     /// 留一行**并带原因——界面要能说清“哪个源没挂上”，而不是悄悄吞掉。
     pub fn add_source(&self, source: FederatedSource) -> Result<(), String> {
         let already = self
-            .mounted
-            .lock()
-            .map(|store| store.iter().any(|seen| seen.alias() == source.alias))
-            .unwrap_or(false);
+            .session
+            .mounted_sources()
+            .iter()
+            .any(|seen| seen.alias() == source.alias);
         if already {
             return Err(format!("源 {} 已经在会话里了", source.alias));
         }
 
         let mounted = self
             .session
-            .with_connection(|conn| Ok(mount_one(conn, &source)))?;
-        let failure = match &mounted.state {
-            MountState::Failed(reason) => Some(reason.clone()),
-            _ => None,
-        };
-        if let Ok(mut store) = self.mounted.lock() {
-            store.push(mounted);
-        }
-        match failure {
-            Some(reason) => Err(reason),
-            None => Ok(()),
+            .mount_sources(std::slice::from_ref(&source))?;
+        match mounted.first().map(|entry| &entry.state) {
+            Some(MountState::Failed(reason)) => Err(reason.clone()),
+            _ => Ok(()),
         }
     }
 
@@ -293,17 +274,13 @@ impl FederatedSession {
     /// 会查这条会话的连接（**事件路径**，不是渲染路径）。别名不在会话里、或那个源
     /// 挂载失败时如实报错——面板叶子行要的是清单，不是一句“算了吧”。
     pub fn list_tables(&self, alias: &str) -> Result<Vec<MountedTable>, String> {
-        let (ready, kind) = {
-            let mounted = self
-                .mounted
-                .lock()
-                .map_err(|_| "会话状态锁被污染".to_string())?;
-            let entry = mounted
-                .iter()
-                .find(|entry| entry.alias() == alias)
-                .ok_or_else(|| format!("会话里没有源 {alias}"))?;
-            (entry.is_ready(), entry.source.kind)
-        };
+        let (ready, kind) = self
+            .session
+            .mounted_sources()
+            .into_iter()
+            .find(|entry| entry.alias() == alias)
+            .map(|entry| (entry.is_ready(), entry.source.kind))
+            .ok_or_else(|| format!("会话里没有源 {alias}"))?;
         if !ready {
             return Err(format!("源 {alias} 当前不可用，列不出表清单"));
         }
@@ -313,25 +290,7 @@ impl FederatedSession {
 
     /// 会话快照（**界面读这个**：纯内存，渲染路径可调）
     pub fn snapshot(&self) -> SessionSnapshot {
-        SessionSnapshot {
-            primary: self.primary.lock().ok().and_then(|primary| primary.clone()),
-            sources: self
-                .mounted
-                .lock()
-                .map(|mounted| mounted.clone())
-                .unwrap_or_default(),
-            primary_note: self.primary_note.lock().ok().and_then(|note| note.clone()),
-        }
-    }
-
-    /// 记一条“主源为什么不是你要的那个”的说明（界面上要说出来，不能悄悄换）
-    ///
-    /// 用在「换主源失败」这种路径上：[`Self::set_primary`] 拒了之后，快照里得留下原因，
-    /// 否则用户看到的只是“怎么没换”。
-    pub(crate) fn set_primary_note(&self, note: Option<String>) {
-        if let Ok(mut current) = self.primary_note.lock() {
-            *current = note;
-        }
+        snapshot_of(&self.session)
     }
 
     /// 中断这条会话上正在跑的语句（三态可读，与加速档同一语义）
@@ -604,12 +563,6 @@ fn count_tables(conn: &Connection, alias: &str) -> Result<usize, String> {
     .map_err(|error| error.to_string())
 }
 
-/// 切默认 catalog 到某个源
-fn use_catalog(conn: &Connection, alias: &str) -> Result<(), String> {
-    conn.execute_batch(&format!("USE {alias}"))
-        .map_err(|error| format!("切主源到 {alias} 失败：{error}"))
-}
-
 /// 选主源：指定的可用就用它；否则回退到第一个可用源并**留下说明**
 fn pick_primary(
     mounted: &[MountedSource],
@@ -642,24 +595,12 @@ fn pick_primary(
 // 所以“同一条会话”要靠指纹认：**指纹一致才复用**，不一致就重建（旧的连同它的本地临时
 // 对象一起消失——那是源清单变更的代价，日志里会写一条）。
 
-/// 会话主人是谁
-///
-/// 不是“主源”：主源可以在会话里换（[`FederatedSession::set_primary`]），但**会话的身份**
-/// 是**当前文档绑定的连接**（同一个连接上的两份文档共享一条联邦会话）。
-static SESSIONS: Lazy<Mutex<HashMap<String, CachedFederation>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
-
-/// 建会话的进程内互斥（**查指纹 → 建 → 登记**这一整段）
-///
-/// 不直接用 [`mount_lock`]：那个锁 [`FederatedSession::open`] 自己会拿，同一线程再拿一次
-/// 就是死锁（`std::sync::Mutex` 不可重入）。这里只护缓存表，两个锁之间不存在环。
-static SESSION_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
-
-struct CachedFederation {
-    /// 源集合指纹（只由源清单决定：主源切换不重建会话）
-    fingerprint: String,
-    session: Arc<FederatedSession>,
-}
+// 2026-11-26 收口：这里原有一张 `SESSIONS: owner -> CachedFederation` 的门面缓存，
+// 由 `ensure_session` 写入。实例化之后生产路径只开 `AnalysisInstance` 的会话
+// （`kernel::open` → `instance.ensure_session`），这张表**再也没有写入方**；
+// 而 `snapshot_for` / `refresh_source` / `set_primary` 全按它找会话，于是编辑器的
+// 源清单、刷新源、切主源，面板的会话动作一起变哑。现在这些函数一律按 owner 去实例
+// 里取会话（`AnalysisInstance::session_for_owner`），不再另存一张表。
 
 /// 源集合指纹（**纯函数**：源清单或连接串一变就换指纹）
 ///
@@ -733,113 +674,13 @@ pub fn file_view_sql(path: &str, alias: &str) -> Result<String, String> {
     ))
 }
 
-pub fn source_fingerprint(sources: &[FederatedSource]) -> String {
-    let mut parts: Vec<String> = sources
-        .iter()
-        .map(|source| {
-            format!(
-                "{}|{}|{}|{}",
-                source.conn_id,
-                source.alias,
-                source.kind.label(),
-                source.connection_string
-            )
-        })
-        .collect();
-    parts.sort();
-    parts.join(";")
-}
-
-/// 会话指纹 = 源清单 + 底座清单。
+/// 已建立的联邦会话（**不做 I/O**；没有就是 `None`）
 ///
-/// 底座必须参与：切项目后 `analytics` 指向另一个库文件，旧会话里的那份**必须**消失，
-/// 否则用户会对着上个项目的表查数据（那是比"重建慢一点"严重得多的错）。
-pub fn session_fingerprint(sources: &[FederatedSource]) -> String {
-    format!("{}#bases:{}", source_fingerprint(sources), bases_fingerprint())
-}
-
-/// 取（必要时建立）一条联邦会话
-///
-/// **会做 I/O**（首次装扩展要联网一次、`ATTACH` 要连源库），属于**事件路径**（工作线程上
-/// 的执行）；界面可用性看 [`snapshot_for`] 与宿主侧的门控。
-///
-/// 源清单为空直接拒：没有源就没有“联邦”这回事，与其给一条空会话跑出莫名其妙的结果，
-/// 不如在入口把话说清楚。
-pub fn ensure_session(
-    owner: &str,
-    sources: &[FederatedSource],
-    requested_primary: Option<&str>,
-) -> Result<Arc<FederatedSession>, String> {
-    if sources.is_empty() {
-        return Err(
-            "联邦查询至少需要一个源：在连接设置里开启「DuckDB 本地加速」并连接它".to_string(),
-        );
-    }
-    let fingerprint = session_fingerprint(sources);
-    if let Some(session) = cached_for(owner, &fingerprint) {
-        apply_requested_primary(&session, requested_primary);
-        return Ok(session);
-    }
-
-    let _guard = SESSION_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    // 等锁期间可能已被别人建好了
-    if let Some(session) = cached_for(owner, &fingerprint) {
-        apply_requested_primary(&session, requested_primary);
-        return Ok(session);
-    }
-
-    // 源清单变了：先把**实例上的那条旧会话关掉**（`TEMP` 随旧会话消失，正是重建的本意），
-    // 再用同一个 owner 开一条新的（`ensure_session` 会给出新 id 并更新 owner 映射）。
-    if let Ok(sessions) = SESSIONS.lock() {
-        if let Some(cached) = sessions.get(owner) {
-            if let Ok(instance) = crate::duckdb::instance::instance() {
-                instance.close_session(cached.session.analysis_session().id());
-            }
-        }
-    }
-
-    let instance = crate::duckdb::instance::instance()?;
-    let analysis_session = instance.ensure_session(&format!("fed:{owner}"), "联邦")?;
-    let session = Arc::new(FederatedSession::open(
-        analysis_session,
-        sources,
-        requested_primary,
-    )?);
-    if let Ok(mut sessions) = SESSIONS.lock() {
-        if sessions.contains_key(owner) {
-            tracing::info!(
-                owner = %owner,
-                "联邦源清单变了，重建会话（旧的本地临时对象随旧会话消失）"
-            );
-        }
-        sessions.insert(
-            owner.to_string(),
-            CachedFederation {
-                fingerprint,
-                session: session.clone(),
-            },
-        );
-    }
-    let snapshot = session.snapshot();
-    tracing::info!(
-        owner = %owner,
-        sources = snapshot.sources.len(),
-        ready = snapshot.ready_count(),
-        primary = snapshot.primary.as_deref().unwrap_or("-"),
-        "联邦会话已就绪"
-    );
-    Ok(session)
-}
-
-/// 已建立的会话（**不做 I/O**；没有就是 `None`）
+/// 按 owner（= 文档绑定的连接 id）去**实例**里取那条会话——联邦会话就是
+/// `label == "联邦"` 的实例会话，不再另存一张门面缓存表。
 pub fn session_for(owner: &str) -> Option<Arc<FederatedSession>> {
-    SESSIONS
-        .lock()
-        .ok()?
-        .get(owner)
-        .map(|cached| cached.session.clone())
+    let session = crate::duckdb::instance::current()?.session_for_owner(owner)?;
+    Some(Arc::new(FederatedSession::adopt(session, None)))
 }
 
 /// 会话快照（**渲染路径可调**：纯内存；没有会话就是 `None`）
@@ -853,28 +694,24 @@ pub fn snapshot_for(owner: &str) -> Option<SessionSnapshot> {
 ///
 /// 要连**实例上的那条会话**一起关：不然会话表里留一条空壳，`TEMP` 与 owner 映射也无主。
 pub fn drop_session(owner: &str) -> bool {
-    let cached = SESSIONS
-        .lock()
-        .ok()
-        .and_then(|mut sessions| sessions.remove(owner));
-    let Some(cached) = cached else {
+    let Some(instance) = crate::duckdb::instance::current() else {
         return false;
     };
-    if let Ok(instance) = crate::duckdb::instance::instance() {
-        instance.close_session(cached.session.analysis_session().id());
-    }
-    true
+    let Some(session) = instance.session_for_owner(owner) else {
+        return false;
+    };
+    // 关实例上那条会话：`TEMP` 与 owner 映射一起消失，不留空壳
+    instance.close_session(session.id())
 }
 
 /// 放掉全部联邦会话（测试用：进程内状态要能清干净）
 pub fn drop_all() {
-    let sessions: Vec<_> = SESSIONS
-        .lock()
-        .map(|mut sessions| sessions.drain().map(|(_, cached)| cached).collect())
-        .unwrap_or_default();
-    if let Ok(instance) = crate::duckdb::instance::instance() {
-        for cached in sessions {
-            instance.close_session(cached.session.analysis_session().id());
+    let Some(instance) = crate::duckdb::instance::current() else {
+        return;
+    };
+    for info in instance.sessions() {
+        if info.label == "联邦" {
+            instance.close_session(&info.id);
         }
     }
 }
@@ -942,37 +779,29 @@ pub fn list_tables_for(owner: &str, alias: &str) -> Result<Vec<MountedTable>, St
 /// 而 owner 是宿主侧的文档/面板身份，UI 侧不该反过来猜它）。快照是**一次性拷贝**：
 /// 面板拿着它渲染，不持有会话句柄，也就挡不住会话被重建。
 pub fn owners() -> Vec<(String, SessionSnapshot)> {
-    let Ok(sessions) = SESSIONS.lock() else {
+    let Some(instance) = crate::duckdb::instance::current() else {
         return Vec::new();
     };
-    let mut out: Vec<(String, SessionSnapshot)> = sessions
-        .iter()
-        .map(|(owner, cached)| (owner.clone(), cached.session.snapshot()))
+    let mut out: Vec<(String, SessionSnapshot)> = instance
+        .sessions()
+        .into_iter()
+        .filter(|info| info.label == "联邦" && info.open)
+        .filter_map(|info| {
+            instance
+                .session_for_owner(&info.owner)
+                .map(|session| (info.owner.clone(), snapshot_of(&session)))
+        })
         .collect();
     out.sort_by(|a, b| a.0.cmp(&b.0));
     out
 }
 
-/// 缓存命中：主人与指纹都对上才算
-fn cached_for(owner: &str, fingerprint: &str) -> Option<Arc<FederatedSession>> {
-    let sessions = SESSIONS.lock().ok()?;
-    let cached = sessions.get(owner)?;
-    (cached.fingerprint == fingerprint).then(|| cached.session.clone())
-}
-
-/// 把“请求的主源”落到会话上（**不重建会话**）
-///
-/// 请求的主源不可用就保留现状，并把原因留在快照的 `primary_note` 里——不能让一次
-/// “换主源”失败变成静默的“什么都没发生”。
-fn apply_requested_primary(session: &FederatedSession, requested: Option<&str>) {
-    let Some(want) = requested else {
-        return;
-    };
-    if session.snapshot().primary.as_deref() == Some(want) {
-        return;
-    }
-    if let Err(reason) = session.set_primary(want) {
-        session.set_primary_note(Some(reason));
+/// 会话快照（纯内存拼装：门面 / 会话面板 / 浮层用同一份口径）
+fn snapshot_of(session: &AnalysisSession) -> SessionSnapshot {
+    SessionSnapshot {
+        primary: session.primary_alias(),
+        sources: session.mounted_sources(),
+        primary_note: session.primary_note(),
     }
 }
 
@@ -981,7 +810,7 @@ mod tests {
     // 安全模式：**不通配导入**
     use super::{
         BaseMount, FederatedSession, GLOBAL_BASE_ALIAS, PROJECT_BASE_ALIAS, file_view_sql,
-        session_fingerprint, set_bases, write_refusal,
+        set_bases, write_refusal,
     };
     use crate::duckdb::federation::registry::{FederatedSource, MountState, MountedSource};
     use std::sync::Arc;
@@ -1156,9 +985,9 @@ mod tests {
         ];
         set_bases(bases.clone());
         // 指纹里必须有底座：否则切项目后旧会话还挂着上个项目的表
-        let with_bases = session_fingerprint(&[]);
+        let with_bases = super::bases_fingerprint();
         set_bases(Vec::new());
-        let without_bases = session_fingerprint(&[]);
+        let without_bases = super::bases_fingerprint();
         assert_ne!(with_bases, without_bases, "底座变了指纹必须变");
         set_bases(bases);
 
@@ -1374,73 +1203,19 @@ mod tests {
         }
     }
 
-    /// 指纹只看源清单：主源换了不换指纹（换主源是同一条会话上的 `USE` 切换）
-    #[test]
-    fn the_fingerprint_follows_the_source_set_only() {
-        let dir = workdir("fingerprint");
-        let alpha = file_source(&dir, "alpha", "alpha", 1);
-        let beta = file_source(&dir, "beta", "beta", 1);
-
-        let one = super::source_fingerprint(std::slice::from_ref(&alpha));
-        assert_eq!(
-            one,
-            super::source_fingerprint(std::slice::from_ref(&alpha)),
-            "同样输入同指纹"
-        );
-        assert_ne!(
-            one,
-            super::source_fingerprint(&[alpha, beta]),
-            "多一个源就要换指纹"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// 源清单没变 → 复用同一条会话（换主源也不重建）；变了 → 重建
+    /// 按 owner 查 / 注销会话：**去实例里取**，不另存缓存表
     ///
-    /// 别名刻意带 `cache_` 前缀：`ATTACH` 出来的 catalog 是**实例级**的，而这条用例走的是
-    /// 全局门面（同一个进程实例），跟别的用例共用 `alpha`/`beta` 会撞上先挂好的那个库。
+    /// 别名带 `cache_` 前缀：`ATTACH` 出来的 catalog 是**实例级**的，这条用例走全局实例，
+    /// 跟别的用例共用 `alpha`/`beta` 会撞上先挂好的那个库。
     #[test]
-    fn the_session_is_reused_until_the_source_set_changes() {
+    fn a_session_is_looked_up_and_dropped_by_owner() {
         let dir = workdir("cache");
         let alpha = file_source(&dir, "alpha", "cache_a", 1);
-        let beta = file_source(&dir, "beta", "cache_b", 2);
-        let gamma = file_source(&dir, "gamma", "cache_g", 3);
         let owner = "C_fed_cache";
 
-        let first = super::ensure_session(owner, &[alpha.clone(), beta.clone()], Some("cache_a"))
-            .expect("建会话");
-        let count = first
-            .run("SELECT count(*) AS n FROM items")
-            .expect("查主源");
-        assert_eq!(count.to_rows()[0][0].to_string(), "1", "主源是 alpha");
-
-        // 源集合没变：复用同一条会话，**换主源只是在会话上切 `USE`**
-        first
-            .run("CREATE TEMP TABLE scratch AS SELECT 7 AS n")
-            .expect("建本地临时表");
-        let switched = super::ensure_session(owner, &[alpha.clone(), beta.clone()], Some("cache_b"))
-            .expect("复用会话");
-        assert!(Arc::ptr_eq(&first, &switched), "换主源不该重建会话");
-        assert_eq!(switched.snapshot().primary.as_deref(), Some("cache_b"));
-        let count = switched
-            .run("SELECT count(*) AS n FROM items")
-            .expect("查新主源");
-        assert_eq!(count.to_rows()[0][0].to_string(), "2", "未限定名跟主源走");
-        let scratch = switched
-            .run("SELECT count(*) AS n FROM scratch")
-            .expect("本地临时对象该留着");
-        assert_eq!(scratch.to_rows()[0][0].to_string(), "1");
-
-        // 源集合变了：重建（新会话用新的源清单）
-        let rebuilt = super::ensure_session(owner, &[gamma], None).expect("重建会话");
-        assert!(!Arc::ptr_eq(&switched, &rebuilt), "源清单变了就该重建");
-        let snapshot = rebuilt.snapshot();
-        assert_eq!(snapshot.sources.len(), 1, "{snapshot:?}");
-        assert_eq!(snapshot.primary.as_deref(), Some("cache_g"));
-        let count = rebuilt
-            .run("SELECT count(*) AS n FROM items")
-            .expect("查新源");
-        assert_eq!(count.to_rows()[0][0].to_string(), "3");
+        let instance = crate::duckdb::instance::instance().expect("全局实例");
+        let session = instance.ensure_session(owner, "联邦").expect("开会话");
+        let _mounted = session.mount_sources(&[alpha]).expect("挂源");
 
         // 会话查询 / 注销（界面与中断路径用这两个）
         assert!(super::session_for(owner).is_some());
@@ -1454,13 +1229,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 一个源都没有：入口就把话说清楚（不拿空会话跑出莫名其妙的结果）
-    #[test]
-    fn an_empty_source_list_is_refused_at_the_entrance() {
-        let error = super::ensure_session("C_fed_empty", &[], None).expect_err("该拒");
-        assert!(error.contains("至少需要一个源"), "{error}");
-    }
-
     /// 刷新全部：逐源给结果（界面上要能逐行说清）
     ///
     /// 别名同样带前缀：`ATTACH` 的 catalog 是实例级的，这条用例共用全局实例。
@@ -1470,7 +1238,10 @@ mod tests {
         let alpha = file_source(&dir, "alpha", "refresh_a", 1);
         let beta = file_source(&dir, "beta", "refresh_b", 1);
         let owner = "C_fed_refresh_all";
-        super::ensure_session(owner, &[alpha, beta], Some("refresh_a")).expect("建会话");
+        let instance = crate::duckdb::instance::instance().expect("全局实例");
+        let session = instance.ensure_session(owner, "联邦").expect("建会话");
+        session.mount_sources(&[alpha, beta]).expect("挂两个源");
+        session.use_catalog("refresh_a").expect("主源");
 
         let results = super::refresh_all(owner).expect("刷新全部");
         assert_eq!(results.len(), 2, "{results:?}");
