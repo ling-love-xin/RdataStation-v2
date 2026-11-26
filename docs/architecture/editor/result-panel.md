@@ -10683,10 +10683,19 @@ JSON 树** —— 而网格里双击进去的是行内编辑框（一整条字�
    按 `ColumnMenuPlan.panels_at` 在「排序」之后挂 `面板▸`，内容复用数据格右键同一份
    `PanelsMenuBuilder`（`menu::append_panels_submenu` 那条通道）；构造器未注入 = `FEATURE_PANELS`
    未开，列头与数据格**同时**不摆。
-4. **排序图标**：真值 16px 三态（星号 / 上 / 下，且上下**反向**：`UP` 画 `SORT_DECREASE`）；
-   本仓由组件画 12px `ChevronsUpDown`（`table/state.rs::render_sort_icon`），改需动 vendor。
-5. **焦点列四边框 / readOnly 底部下划线 / 内容 inset 4-6**：未做（容器是组件的 th，
-   inset 由组件 layout 决定）。
+4. **排序图标**：真值 16px 三态（`sort.svg` 未排 / `SORT_DECREASE` 升 / `SORT_INCREASE` 降，
+   且上下**反向**——`GridColumnRenderer.java:186-214` `UP → SORT_DECREASE`）；本仓由
+   `vendor/gpui-component/src/table/state.rs:2087-2131` 的 `render_sort_icon` 画
+   `Icon::size_3()`（12px）+ `SortAscending` / `SortDescending` / `ChevronsUpDown`，
+   改需动 vendor。
+5. **获焦列四边框**：真值 `PAINT_COLUMN_FOCUS_BORDER = true`（`GridColumnRenderer.java:52`），
+   焦点列（`grid.getFocusColumn()`）的列头格画四边框、色 `COLOR_WIDGET_NORMAL_SHADOW`
+   （`:96-104`）；非焦列只画右边界 + 底边界（`:105-109`）。本仓列头只画**左**边界
+   （`header_sep = theme.colors.border`），无焦点列判定（路径见 §:3037 / §:3202）。
+6. **readOnly 列头底部下划线**：真值 `:110-115` 读 `hintInfo.readOnly` 在列头底部画线；
+   本仓**没有列级只读信息**（§9.47.5 的列级只读模型属等模型，见 §20.8）。
+7. **内容 inset**：真值 `LEFT/RIGHT_MARGIN = 6`、`TOP_MARGIN = 4`（`:52-53`）；本仓内容层
+   横向已 `px(6)`（`ui::RESULT_CELL_PADDING_X`），纵向由组件 th 的 layout 决定。
 
 #### 9.72.4 验证
 
@@ -10913,10 +10922,59 @@ preview 重建后 `PREVIEW_STAGE=5`：`[preview] copy_column_names -> Ok(Options
 | 子行元素按列 `Array` → 文本族左对齐（不按元素自身数值类型右对齐） | §9.70.5 |
 | 多维数组子行不再给三角（二级展开未做） | §9.70.5 |
 
+### 20.8 未对齐复核（2026-11-27）
+
+对照 `dbeaver-ref` 源码逐条复核后，剩余缺口按「卡在哪」分四档。**这一节是口径表，
+每条都写了真值坐标与定量差异；改动要不要做看档位，不看条目多少。**
+
+#### 20.8.1 仍缺 · 本仓可做（不碰 vendor、不等模型）
+
+| 缺口 | 真值 | 本仓现状 | 定量 / 落点 |
+| --- | --- | --- | --- |
+| **获焦列四边框** | `PAINT_COLUMN_FOCUS_BORDER = true`；焦点列列头格四边框，色 `COLOR_WIDGET_NORMAL_SHADOW`（`GridColumnRenderer.java:52`、`:96-104`）；非焦列画右边界 + 底边界（`:105-109`） | 只画列**左**边界（`header_sep = theme.colors.border`），无「焦点列」判定 | 需 `TableState::selected_cell()`（`table/state.rs:662`）取列 → `grid/header.rs` 三个返回分支加边框；缺口已登记在 §9.72.3 第 5 条 |
+| **计算页 Copy / CopyAll** | `SpreadsheetPresentation` 计算页右键复制 | 未做 | §8.40.2 |
+| **多维数组二级展开** | `GridRowNested` 逐级可展开 | 子行不再给三角（键是 `(data_row, column)`，`delegate.rs:277`） | §9.70.5 第 5 条；要改成层级键 |
+
+#### 20.8.2 仍缺 · 需动 `vendor/gpui-component`
+
+| 缺口 | 真值 | 本仓（vendor 侧） | 定量 |
+| --- | --- | --- | --- |
+| **排序图标** | 16px 三态（`sort.svg` / `SORT_DECREASE` / `SORT_INCREASE`），且 `UP → SORT_DECREASE`（`GridColumnRenderer.java:186-214`） | `table/state.rs:2087-2131`：`Icon::size_3()`（12px）+ `SortAscending` / `SortDescending` / `ChevronsUpDown` | 尺寸 −4px；未排态是**双箭头**而非真值单箭头；升降映射**相反** |
+| **列头三角槽宽** | 16（图标）+ 3（`IMAGE_SPACING`）= 19px | `DropdownButton` ghost small 最小 28px（`button/button.rs`） | 列名可用宽 −9px（`grid()` 128px 列实测 95 → 67） |
+
+#### 20.8.3 有意差异 / 已判定不做（勿当 bug）
+
+| 项 | 判定 |
+| --- | --- |
+| **行号槽宽固定 48** | 真值 `GridRowRenderer.computeHeaderWidth:114-128`（4+4 边界 + 16+2 三角 + 文本宽 + level*5）+ `LightGrid.java:1884-1897`（DEFAULT 30 / **MIN 40** / MAX 400，只在变大时改）。本仓 48 已满足 40 下限；**定性结论见 §39.2**（`column()` 只拿 `&App` 无法实测文本、百万行不能照抄遍历；「按位数推算」是自创口径 → 不做，正路待办 = `visible_rows_changed` 里量一次 + clamp）。定量：1–2 位行号真值约 **40–47**、3 位约 **54**、4 位约 **61** → **本仓只在 ≥3 位行号（≥100 行）时显窄 6–13px** |
+| **行号槽三角字形** | 真值 `expand.svg` / `collapse.svg`（16×16、`#808080`）；本仓 `U+25B6` / `U+25BC` 文字字形 + `muted_foreground`（§9.71 已核，色与真值灰同档）。**形状同为实心三角**，差异只剩「字形 vs 矢量」与字号（12px 字形在 16px 盒内居中） |
+| 单元格内三角（真值无） | 有意保留（截图形态 `▼ [3]` 需要格内方向指示） |
+| 列头其余 7 组菜单 | 本仓无列级能力，不摆空壳（§9.72.3） |
+| 「复制列名」浮层 / 输入框 / 固定提示 | 用户已定（§9.73.3） |
+| 菜单整体扁平 | 有意（§20.1） |
+| 空数组 `{}` / 非法字面量 / 子行左对齐 | 有意（§9.70.5） |
+
+#### 20.8.4 等模型 / 等外部条件
+
+| 项 | 卡点 |
+| --- | --- |
+| readOnly 列头底部下划线（`GridColumnRenderer.java:110-115`） | 无列级只读信息（§9.47.5 列级只读模型；缺口登记见 §9.72.3 第 6 条） |
+| 右栏六页键位 / 面板可见性落盘 | `crates/settings` 在并行线（§21.2） |
+
+#### 20.8.5 复核对前序清单的三处更正
+
+1. **行号槽宽不是「可做」**：§39.2 早在 2026-11 就判定不做（`&App` 无 window、百万行遍历不成立、位宽推算是自创口径）。此前汇总里写成「可做的差异」是口径错，现按 §20.8.3 定档，只保留「≥3 位行号显窄」这条定量事实。
+2. **行号槽三角不是「缺 SVG」**：形状同为实心三角、颜色已是真值灰档；差异只剩「文字字形 vs 矢量图标」与字号。
+3. **获焦列四边框与 readOnly 下划线不是同一档**：前者本仓可做（有 `selected_cell` 可用 + 已登记路径），后者卡列级只读模型。
+
+配套订正：§9.72.3 第 4 条与 `dbeaver-resultset-ui-baseline.md` §57.10.4 第 2 条原写
+`table/state.rs::render_sort_icon`（未标 vendor，易误读为本仓文件），已改为
+`vendor/gpui-component/src/table/state.rs:2087-2131`。
+
 ## 21. 遗留汇总
 
 按「能不能做」分三档：① 等模型（结构性缺口，见 §0.4）；② 等外部条件（并行线 / 框架）；
-③ 待用户拍板。每条回指原小节。
+③ 待用户拍板。每条回指原小节。**「本仓可做、尚未开工」的清单不在本表，见 §20.8.1。**
 
 ### 21.1 等模型
 

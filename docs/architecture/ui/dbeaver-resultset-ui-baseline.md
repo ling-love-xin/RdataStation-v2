@@ -4070,8 +4070,11 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
 
 1. **三角槽宽**：组件 `DropdownButton` ghost small 最小 28px vs 真值 19px（16 + 3），
    列名可用宽少约 9px（`grid()` 128px 列实测 95 → 67）。
-2. **排序图标**：组件画 12px `ChevronsUpDown`（`table/state.rs::render_sort_icon`），
-   真值 16px 三态（星号 / 上 / 下且上下反向）。改需动 vendor。
+2. **排序图标**：组件画 12px `ChevronsUpDown` 三态
+   （`vendor/gpui-component/src/table/state.rs:2087-2131` 的 `render_sort_icon`，
+   `Icon::size_3()` + `SortAscending` / `SortDescending` / `ChevronsUpDown`），
+   真值 16px 三态且上下反向（`GridColumnRenderer.java:186-214`，`UP → SORT_DECREASE`）。
+   改需动 vendor。
 3. **焦点列四边框 / 只读下划线 / 内容 inset 4-6**：未做（内容层是组件的 th）。
 4. **列头右键的组**：落 `筛选▸` / `排序▸` / `面板▸` / `列操作▸`（本仓无 `导航` / `编辑` /
    `呈现格式` / `逻辑结构` / `布局` / `导出` / `打开方式` 的列级能力）。`面板▸` 2026-11-27 补上，
