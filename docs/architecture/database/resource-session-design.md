@@ -219,7 +219,7 @@ mock 落库 ──► mock_generator::persist_table_at ──► MockEngine::wri
 
 | 刀 | 目标 | 改动面 | 验收 | 风险 |
 |---|---|---|---|---|
-| **D17** | 统一 owner 词表（§3 O1/O2）：`kernel::open` 加速档不再传裸 `conn_id`；`accel:` 判定收敛成单点函数；`AnalysisChannel::Accelerated` 注释按刀10 重写 | `kernel.rs:153-181`、`channel.rs` 注释、调用方（洞察 / 引擎内部） | 洞察里跑一次加速后，面板源段**不新增**行；`is_analysis_session` 用例补一条 | 洞察路径没有文档身份，需先定它传 `accel:{conn}` 还是 `process`（**要拍**） |
+| **D17** ✅ | 统一 owner 词表（§3 O1/O2）：`kernel::open` 加速档不再传裸 `conn_id`；`accel:` 判定收敛成单点函数；`AnalysisChannel::Accelerated` 注释按刀10 重写 | `kernel.rs` 加速档、`channel.rs` 注释、`instance.rs` 前缀常量 | 洞察里跑一次加速后，面板源段**不新增**行；`is_analysis_session` 用例补一条 | **已落地 `72486305`**：owner 定为源级 `accel:{conn_id}`（洞察 / 引擎内部没有文档身份，与 `session_for_conn` 同键）；判定收敛为 `ACCEL_OWNER_PREFIX` + `is_accel_owner()`（残键 `accel:` 不算） |
 | **D18** | 本地加速"一次一库"落到引擎侧：`rds_src` 被别的 conn 占着时**报错并引导改联邦**，不再静默 `_2` | `accel.rs::ensure_on_instance`、`instance.rs::reserve_alias` 调用点 | 两个连接同时开本地加速 → 第二个给出可读拒绝 | 与 `analysis-instance-sessions.md` §7.3 的"应撤回编号"一致；但若用户要"多加速"就得反过来拍（**要拍**） |
 | **D19** | 洞察临时表不进表段 / 不进共享登记：`tmp_i_` 只留在管理器册，不 `register_temp` 进实例册（或登记但 `objects()` 明确过滤） | `temp_table/analysis.rs`、`mod.rs` 来源清单 | 表段无 `tmp_i_`；洞察重算仍能读到自己的样本 | 洞察"没有下游"，但 `tmp_i_` 目前靠实例共享才能被结果集二次分析引用——先确认不需要这条 |
 | **D20** | 资源归档与实例双开同一 `analytics.duckdb` 的落定 | `analytics_resource/global/sql.rs:47` vs `ensure_base` | **必须真机验**（用户已说不做真机验证 → 本条挂起） | 双写 / 锁冲突 |
@@ -252,6 +252,24 @@ mock 落库 ──► mock_generator::persist_table_at ──► MockEngine::wri
 
 ## 11. 目视验收清单（对着界面逐条点）
 
+### 11.0 本轮运行环境（worktree 完全隔离，2026-11-27）
+
+- `RDS_HOME` = `<worktree>\.rds\home`（主仓 `RdataStation-v2\.rds` 一点不碰）。
+- 示例项目 = `<worktree>\.rds\home\data\samples\示例项目`，由**产品代码**生成：
+  - `data/sample.sqlite`（SQLite，customers 6 / orders 12）
+  - `data/sample.duckdb`（DuckDB，**2.0.1 写**，实测打开并查到 `orders` 12 行）
+  - `.RSmeta/analytics.duckdb`（项目分析库，2.0.1 迁移生成，实测可打开）
+  - `welcome.sql`
+- 导航树自带两条示例连接：`G_conn_sample_sqlite` / `G_conn_sample_duckdb`，
+  `use_duckdb_fed = false`（可直连、**未**本地加速——加速由源段那颗两态按钮决定）。
+- 真机 `MySQL / PG`（192.168.3.138）在全局连接里；driver 已改成内核实现
+  `mysql_native` / `postgres_native`（原先写的是 sidecar 插件 id `mysql`/`postgres`，
+  插件未装时在导航树里表现为「驱动缺失」）。
+- **Oracle / MSSQL 未写入**：内核没有这两个驱动实现（`crates/driver/src/native/` 只有
+  `duckdb / mysql_native / postgres_native / sqlite`），`oracle`/`mssql` 只出现在类型声明表；
+  按用户决定（2026-11-27）等驱动到位再加，避免"看着有、点不开"。
+- 启动：`$env:RDS_HOME="$PWD\.rds\home"; .\target\debug\rds-app.exe`
+
 运行：worktree 内 `cargo run -p rds-app`（先构建好，见构建产物
 `target\debug\rds-app.exe`）。
 
@@ -273,3 +291,4 @@ mock 落库 ──► mock_generator::persist_table_at ──► MockEngine::wri
 | 日期 | 变更 |
 |---|---|
 | 2026-11-27 | 初稿：把 16 刀之后的形态收敛成「判据 B1–B8 / 五层资源 / 生命周期矩阵 / owner 词表 / 通道矩阵 / 接口契约 / 面板信息架构 / 不变量 I1–I13 / 收口计划 D17–D22 / 边界」；核对中新发现三处不一致（O1 内核加速档用裸 `conn_id` 当 owner → 会误进源段；O2 `AnalysisChannel::Accelerated` 注释与刀10 相反；`insight_samples` 采集但不渲染） |
+| 2026-11-27 | D17 落地（`72486305`）：加速档 owner 定源级 `accel:{conn_id}`，`accel:` 前缀判定收敛单点；§11 补「11.0 本轮运行环境」（worktree 隔离 home、示例项目双源由 2.0.1 生成、真机 MySQL/PG 改 native 驱动、Oracle/MSSQL 等驱动） |

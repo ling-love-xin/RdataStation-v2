@@ -211,6 +211,7 @@ owner 固定 `data_objects`（`data_objects_load.rs:455`，本地加速挂载用
 | 8 | mock 与编辑器同实例，面板还列 `tmp_m_` | `mock/src/engine/mod.rs:533` | 【已落地·刀16】面板不列（2026-11-18 口径）；落地成功即删临时表 + 销登记（失败保留供重试） |
 | 9 | 资源归档与实例双开同一 `analytics.duckdb` | `analytics_resource/global/sql.rs:47` vs `attach_bases` | 【待定】需真机验 |
 | 10 | 表段不按业务表过滤、恒无资产行 | `source_picker/load.rs:196`、`data_objects/mod.rs:764` | 【已落地】表段名单 = `analysis_tables_of()`（项目分析库 `main` 全表，即"底座里有什么就列什么"），按 `res_` 白名单切「持久表 / 项目自建」两段；资产·表型本体已被 `asset_tables` 从表段剔除、只从资产行进（pill「资产」、只读、带版本） |
+| 11 | 内核加速档拿裸 `conn_id` 当会话 owner → 洞察跑一次加速，面板源段多一行「来源不明」 | `analysis/kernel.rs` 加速档、`instance.rs::is_analysis_session` | 【已落地·刀17】owner 定源级 `accel:{conn_id}`；`ACCEL_OWNER_PREFIX` + `is_accel_owner()` 单点判定 |
 
 ---
 
@@ -255,3 +256,5 @@ owner 固定 `data_objects`（`data_objects_load.rs:455`，本地加速挂载用
 | 2026-11-27 | 刀16：mock "落地完即关"——`write_temp_table_to_database` 在写入与解挂都成功后收掉这张临时表（有实例走 `AnalysisInstance::drop_temp`，无实例退回进程面内存库自删 + 销登记），失败路径保留供重试；`MockGenInfo` 自带预览快照，落地后结果区显示不受影响 |
 | 2026-11-27 | 校准 §6-10：表段名单一直是 `analysis_tables_of()`（底座全表），不是"不按业务表过滤"；资产本体已从表段剔除、只从资产行进——原【待定】改【已落地】 |
 | 2026-11-27 | 拍板刀16 边界：**"落地完即关"只覆盖写进项目分析库**（落库 / 追加）；导出文件、存草稿箱不删临时表，让用户还能继续换出口。无临时表残留只靠这一条 + 切项目 `clear_temp_tables` 兜底 |
+| 2026-11-27 | 刀17（D17）：加速档 owner 词表收口——内核 `kernel::open` 的 `Accelerated` 分支不再用裸 `conn_id` 当 owner，改源级 `accel:{conn_id}`（与 `session_for_conn` 同键）；`ACCEL_OWNER_PREFIX` / `is_accel_owner()` 成唯一判定点（残键 `accel:` 不算），`AnalysisChannel::Accelerated` 的"会话按源 id 缓存"注释按刀10 重写 |
+| 2026-11-27 | 刀18：示例项目自带双数据源——`project::service::ensure_sample_data` 用**当前内核的 duckdb crate** 生成 `data/sample.sqlite` + `data/sample.duckdb`（2.0.1 写，`orders` 12 行实测可读），`ensure_sample_connections` 登记两条全局连接（`use_duckdb_fed=false`），`create_sample` 每次进入幂等跑一遍；不再依赖仓库里 1.5 时代的 `examples/instance-project` |
