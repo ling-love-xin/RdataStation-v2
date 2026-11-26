@@ -475,7 +475,6 @@ pub struct Collected {
     pub result_sets: Vec<String>,
     /// 「载入内存」的源表副本（`tmp_l_*`，会话级；铁律第 12/35 条）
     pub loaded_tables: Vec<String>,
-    pub insight_samples: Vec<String>,
     /// 「加源」加载进进程单例的文件视图：`(视图名, 原路径)`。视图不物化，
     /// 所以这里只记名字与出处，面板按它列行
     pub loaded_files: Vec<(String, String)>,
@@ -508,7 +507,6 @@ impl Collected {
             global_tables: Vec::new(),
             result_sets: Vec::new(),
             loaded_tables: Vec::new(),
-            insight_samples: Vec::new(),
             loaded_files: Vec::new(),
             assets: Vec::new(),
             session_sources: Vec::new(),
@@ -540,7 +538,19 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
     // 源段的排位：**已挂上的会话在最前**（正在生效的事实），分析底座紧随（常驻、不可卸载），
     // 然后才是候选（连接 / 文件库）。
 
+    // 加速档（`rds_src` / 冲突让位后的 `rds_src_2`）**不占源段**（第 4 条）：它确实是一条
+    // 「挂在会话上的 catalog」，与联邦源同形出现在 `session_sources` 里——面板加源走的是
+    // `data_objects` 那条会话，owner 不是 `accel:<id>`，`is_analysis_session` 拦不住它。
+    // 它的身份写在**连接行**上（「已挂载」，第 42 条末段），这里按实际别名把它摘掉。
+    let accel_aliases: Vec<&str> = collected
+        .accel_sources
+        .iter()
+        .map(|source| source.alias.as_str())
+        .collect();
     for source in &collected.session_sources {
+        if accel_aliases.contains(&source.alias.as_str()) {
+            continue;
+        }
         // 挂载事实 = 会话真起来了（失败态不算挂上）；登记侧按别名查
         let registered = registered_aliases.iter().any(|alias| alias == &source.alias);
         let pill = match source.failed.is_some() {
@@ -615,8 +625,10 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
         });
     }
 
-    // 本地加速源**不再出源段行**（2026-11-25 用户口径）：加速 = 一次一个库的 ATTACH，
-    // 只在执行面存在，不进数据对象面板、也不算「已挂载」事实（铁律第 42 条末段）。
+    // 本地加速源**不出源段行**（2026-11-25 用户口径）：加速 = 一次一个库的 ATTACH，
+    // 只在执行面存在。但它的挂载事实写在**连接行**上（「已挂载」）——第 42 条末段
+    // 2026-11-26 更正过：判据 `mounted_conns()`，旧口径「不算已挂载」已废止。
+    // 不写的话用户点了「挂载」，行还写着「未挂载」，只能再点一次。
 
     // 源段的一级行 = 一条**已注册成分析源**的连接（`use_duckdb_fed`，零 I/O）。
     // 表清单不在这里——展开某个连接时才 introspect（面板 `load_source_children`），
@@ -648,8 +660,10 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             .iter()
             .find(|row| row.connection_id.as_deref() == Some(conn.id.as_str()))
             .map(|row| row.alias.clone());
-        // 网络连接挂没挂 = **登记的别名在联邦/分析会话里有没有成事实**（会话行按别名列，
-        // 不按连接 id）。加速会话不算（第 42 条末段）。
+        // 网络连接挂没挂 = 两件事取或：**登记的别名在联邦/分析会话里成了事实**（会话行按
+        // 别名列，不按连接 id），或**它在本地加速档里有 catalog**（`mounted_conns()` 按
+        // conn_id 记；第 42 条末段 2026-11-26 起算「已挂载」）。加速档那条会话本身不出
+        // 源段，见上面 `accel_aliases` 的排除。
         let session_mounted = registered_alias.as_deref().is_some_and(|alias| {
             collected
                 .session_sources
@@ -661,11 +675,17 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             (Some(path), _) => format!("文件库 · {path}"),
             _ => conn.note.clone(),
         };
-        // 挂载事实：连上了 + 真挂进实例（文件库看 `loaded_files` 里有没有这个路径，
-        // 网络连接只认**联邦 / 分析会话**——加速会话不算（第 42 条末段））。
+        // 加速档事实：这条连接在实例里有没有 catalog（`rds_src` / 冲突让位后的 `rds_src_2`）。
+        // `accel_sources.owner` 就是 conn_id（`collect` 按 `mounted_conns()` 填）。
+        let accel_mounted = collected
+            .accel_sources
+            .iter()
+            .any(|source| source.owner == conn.id);
+        // 挂载事实：连上了 + 真挂进实例（文件库看 `loaded_files` 里有没有这个路径；
+        // 网络连接认**联邦 / 分析会话**，或**本地加速档**——两者都算「已挂载」）。
         let mounted = connected
             && not_mounted.is_none()
-            && (file_path.is_some() || session_mounted);
+            && (file_path.is_some() || session_mounted || accel_mounted);
         // 小标（第 42 条 / 2026-11-25）：
         // - 无 ATTACH 能力但已登记 → 「已登记」（永远挂不上，只等导航里活连接后选表）；
         // - 有能力者走三态；「已连接、没挂、也没登记」只写「未挂载」（不给 scope）。
@@ -694,8 +714,8 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             State::Ready
         } else if not_mounted.is_some() {
             State::Failed("未挂载 · 右键挂载后可展开选表".to_string())
-        } else if file_path.is_none() && !session_mounted {
-            // 网络连接：没有联邦/分析会话就是没挂。展开它只会得到一句「先挂上」——
+        } else if file_path.is_none() && !session_mounted && !accel_mounted {
+            // 网络连接：联邦/分析会话、加速档都没有就是没挂。展开它只会得到一句「先挂上」——
             // 那不该做成一个能点开才报错的行
             State::Failed("未挂载 · 右键「挂载」后才能展开选表".to_string())
         } else {
@@ -811,7 +831,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
         out.push(Object {
             key: format!("persistent:{name}"),
             name: persistent_table_label(&name),
-            note: "可删除释放空间".to_string(),
+            note: "结果集落库 · 可删除释放空间".to_string(),
             channel: Channel::Local,
             life: Life::Project,
             state: State::Ready,
@@ -1014,7 +1034,13 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             // 文件视图是 `f_*` 裸名；库文件是 catalog，引用要 `别名.schema.表`，不在这里编
             sql_ref: (!is_database).then(|| sql_ident(alias)),
             expand_via: None,
-            source_action: None,
+            // 库文件行也要那颗「挂载 / 卸载」（第 42 条「文件库：同挂载 / 卸载」）：
+            // 它没有连接身份，卸按**本体路径**走（按钮的 `path` 分支 → `unmount_file_database`）
+            source_action: is_database.then(|| SourceAction::ToggleMount {
+                conn_id: String::new(),
+                path: Some(path.clone()),
+                mounted: true,
+            }),
         });
     }
 
@@ -1615,7 +1641,6 @@ pub fn collect(shared: &Shared) -> Collected {
         engine::analysis::global::global_tables("C_data_objects").unwrap_or_default();
     let result_sets = engine::analysis::result_set::list_result_sets().unwrap_or_default();
     let loaded_tables = engine::analysis::result_set::list_loaded_tables().unwrap_or_default();
-    let insight_samples = engine::analysis::result_set::list_insight_samples().unwrap_or_default();
     // 联邦源：直接读**分析实例上的会话**（2026-11-26 单实例收口）。
     //
     // 以前读 `federation::session::owners()` 那份门面缓存，但它已经没有生产写入通道
@@ -1696,7 +1721,6 @@ pub fn collect(shared: &Shared) -> Collected {
         global_tables,
         result_sets,
         loaded_tables,
-        insight_samples,
         loaded_files: shared.loaded_files.borrow().clone(),
         assets: Vec::new(),
         session_sources,
@@ -1753,7 +1777,6 @@ mod tests {
             global_tables: vec!["G_月度经营".into()],
             result_sets: vec!["tmp_q_结果_3".into()],
             loaded_tables: vec!["tmp_l_orders_shop_20261124120000_ab12cd34".into()],
-            insight_samples: vec!["tmp_i_orders_sample".into()],
             loaded_files: vec![
                 ("f_sales".into(), "D:/数据/sales_2026q1.csv".into()),
                 ("f_warehouse".into(), "D:/数据/warehouse.duckdb".into()),
@@ -2982,22 +3005,42 @@ mod temp_source_tests {
             row.state.label()
         );
 
-        // 加速会话起来了（`accel_sources.owner` 就是 conn_id）：**也不算挂载事实**
-        // （2026-11-25 口径：加速 = 一次一个库的 ATTACH，不进面板），所以这一行仍不可展开。
-        // 能展开的是「登记 + 活连接」那条路（`expand_via`），不是加速。
-        c.accel_sources.push(super::SessionSource {
-            owner: "C_lite".into(),
-            alias: "商城库".into(),
-            note: "MySQL · 本地加速会话".into(),
+        // 加速档挂上（`accel_sources.owner` 就是 conn_id）：**算「已挂载」**（第 42 条末段
+        // 2026-11-26 更正，判据 `mounted_conns()`），小标跟着变，叶子也能展开——连接行的
+        // 叶子本来就按 `alias_for_conn` 取实例里的表清单（`connection_kids`）。
+        // 同时那条加速档会话行（`rds_src`）**不进源段**：它是执行通道，不是源（第 4 条），
+        // 身份已经写在连接行上。
+        c.session_sources.push(super::SessionSource {
+            owner: "data_objects".into(),
+            alias: "rds_src".into(),
+            note: "18 张表 · 已挂载".into(),
             failed: None,
         });
-        let row = objects(&c)
-            .into_iter()
+        c.accel_sources.push(super::SessionSource {
+            owner: "C_lite".into(),
+            alias: "rds_src".into(),
+            note: "商城库 · MySQL · 分析实例挂载".into(),
+            failed: None,
+        });
+        let rows = objects(&c);
+        let row = rows
+            .iter()
             .find(|o| o.key == "conn:C_lite")
             .expect("网络源也要进源段");
         assert!(
-            !row.can_analyze(),
-            "加速会话不构成展开依据：面板里这条连接仍然没有自己的表可列"
+            row.can_analyze(),
+            "加速档就是它此刻的表来源：叶子要能展开"
+        );
+        assert!(
+            row.pill.contains("已挂载"),
+            "加速档挂上后连接行要写已挂载：{}",
+            row.pill
+        );
+        assert!(
+            !rows
+                .iter()
+                .any(|o| o.key.starts_with("session:data_objects:rds_src")),
+            "加速档会话行不出源段（身份在连接行上）"
         );
     }
 }
