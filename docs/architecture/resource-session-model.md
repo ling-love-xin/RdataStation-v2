@@ -210,7 +210,7 @@ owner 固定 `data_objects`（`data_objects_load.rs:455`，本地加速挂载用
 | 7 | 洞察 `tmp_i_` 进共享 schema，与"没有下游"不符 | `duckdb/temp_table/analysis.rs` | 【建议】落点已钉 memory；面板已不列（`objects()` 注释 903-908） |
 | 8 | mock 与编辑器同实例，面板还列 `tmp_m_` | `mock/src/engine/mod.rs:533` | 【已落地·刀16】面板不列（2026-11-18 口径）；落地成功即删临时表 + 销登记（失败保留供重试） |
 | 9 | 资源归档与实例双开同一 `analytics.duckdb` | `analytics_resource/global/sql.rs:47` vs `attach_bases` | 【待定】需真机验 |
-| 10 | 表段不按业务表过滤、恒无资产行 | `source_picker/load.rs:196`、`mod.rs:1647` | 【待定】 |
+| 10 | 表段不按业务表过滤、恒无资产行 | `source_picker/load.rs:196`、`data_objects/mod.rs:764` | 【已落地】表段名单 = `analysis_tables_of()`（项目分析库 `main` 全表，即"底座里有什么就列什么"），按 `res_` 白名单切「持久表 / 项目自建」两段；资产·表型本体已被 `asset_tables` 从表段剔除、只从资产行进（pill「资产」、只读、带版本） |
 
 ---
 
@@ -253,3 +253,4 @@ owner 固定 `data_objects`（`data_objects_load.rs:455`，本地加速挂载用
 | 2026-11-27 | 刀14：临时表 owner 登记落地——`TempTableManager` 值改 `TempEntry{created,owner}`，`register/ list_by_owner / owner_of`；`TempTableSource::default_owner()` 定模块默认归属；`execution_service → duckdb_service → manager → instance.register_temp` 全链透传文档 id（`QueryRunner` 五条执行路径 + `ResultService` + `sort.rs` 手动物化）；新增 `AnalysisInstance::drop_temps_of(owner)`（实例册 ∪ 管理器册并集），关文档在 `on_removed` 收批并关会话 |
 | 2026-11-27 | 刀15：底座"卸载"落地为会话视角遮蔽——引擎 `hide_base/show_base/hidden_bases/base_visible`（`InstanceState.hidden_bases`，不 `DETACH`）；面板底座行给 `SourceAction::ToggleBase{alias,hidden}` 一颗两态按钮，遮蔽时清空项目/全局表来源清单（表段即空）；表段白名单（`res_*`）确认为已定；单测 `hiding_a_base_empties_its_table_rows` |
 | 2026-11-27 | 刀16：mock "落地完即关"——`write_temp_table_to_database` 在写入与解挂都成功后收掉这张临时表（有实例走 `AnalysisInstance::drop_temp`，无实例退回进程面内存库自删 + 销登记），失败路径保留供重试；`MockGenInfo` 自带预览快照，落地后结果区显示不受影响 |
+| 2026-11-27 | 校准 §6-10：表段名单一直是 `analysis_tables_of()`（底座全表），不是"不按业务表过滤"；资产本体已从表段剔除、只从资产行进——原【待定】改【已落地】 |
