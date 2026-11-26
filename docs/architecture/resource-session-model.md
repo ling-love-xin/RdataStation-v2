@@ -1,11 +1,13 @@
 # 分析资源与会话模型（口径草案 · 待审）
 
-> **状态**：口径草案，**不含任何实现**，等审。文中每条都标了归属，看清标记再判断跑没跑偏：
+> **状态**：口径草案 + 落地记录（2026-11-27）。文中每条都标了归属，看清标记再判断跑没跑偏：
 > - 【已定】＝用户已明确拍板的口径，不要再翻。
+> - 【已落地】＝按本文落进代码，并给了编译/实测依据（哪一刀见括注）。
 > - 【建议】＝本文推出的一步，**尚未得到确认**，可能就是我理解偏的地方。
 > - 【待定】＝有两个以上合理选项，需要人拍。
 >
-> **基线**：2026-11-26，`main` = `b7571511`。所有代码锚点为当次实测，改前重读文件。
+> **基线**：2026-11-26 首次落笔（`main` = `b7571511`）；2026-11-27 落地在隔离分支
+> `feat/analysis-session-owner`（worktree `D:\RdataStation\RDS\rds-v2-session-owner`）。所有代码锚点为当次实测，改前重读文件。
 >
 > **覆盖范围**：分析引擎侧（`engine/src/duckdb`、`engine/src/analysis`）+ 数据对象面板 + 编辑器通道。**不覆盖** Source 档（网络驱动）的执行上下文，那份见 [`connection/execution-context-model.md`](connection/execution-context-model.md)。
 
@@ -59,20 +61,28 @@ session_for_conn(conn_id) → mount_sources([1 个源]) → use_catalog(alias)
 | 档 | 源集合 | 主源 | 底座可见性 | 会话 owner |
 |---|---|---|---|---|
 | 源库（驱动直跑） | — | — | — | 无会话（`SessionHandle::None`） |
-| 本地加速 | 1 个 | `rds_src` | **不可见** | 【建议】`{doc}` |
-| 联邦 | N 个 | 计划主源 | **默认挂、可人为卸** | `{doc}` |
+| 本地加速 | 1 个 | `rds_src` | **不可见** | `{doc}`【已落地·刀11a】 |
+| 联邦 | N 个（单源也合法） | 计划主源 | **默认挂、可人为卸** | `{doc}`【已落地·刀11a/11b】 |
 
-【已定】现状三处偏移：
+底座"不可见"的实现口径（刀11b）：`use_catalog` 切主源时把 `search_path` 设成
+`'<主源>.main,memory.rds_tmp'`——主源与临时表按裸名可用，`analytics` / `rds_global`
+不在默认路径里；显式 `analytics.x` 仍可达。
 
-1. **加速档会话是连接级**（`accel:{conn}`，`instance::accel_owner`）。两个编辑器用同一连接加速 → 同一条会话 → `USE` / `search_path` / 中断互相污染。这是真 bug，不是省资源。
-2. **加速档也是底座可见**：`ensure_on_instance` 从不摘底座，底座又是实例级 `ATTACH`（`attach_bases`），所以加速档当然看得见。是漏做。
-3. **单源联邦被卡住**：计划侧 `plan_from_records` 明确"只有一个源也照样联邦"，但 `editor_channels.rs:204` 要求 `== Some(true)` 的连接 **≥2** 才可用。
+【已落地·刀11a】单源联邦放开：`AnalysisChannel::from_toggle` 的 `>= 2` 改 `>= 1`，
+`editor_channels.rs` 的 `ready.len() >= 2` 改 `>= 1`，文案改"至少需要一个"。
 
-【建议】归并清单：
+【已落地·刀10/11a】会话 owner 一律 `{doc}`：
+- 加速档 `accel::ensure_on_instance(source, owner)` 用 `ensure_session(owner, "本地加速")`
+  （原 `session_for_conn(&source.conn_id)`）；
+- 联邦档 `FederatedPlan` 拆出 `session_owner`（文档）与 `owner`（本文档绑定连接，只用于判主源与写历史 `conn_id`）；
+- `QueryRunner` 五条路径（`run` / `fetch_next` / `run_filtered` / `run_sorted_down` / `refresh_sources`）与 `set_federated_primary` 全部加 `document`，队列从 `ExecJob.document` 透传。
+
+【建议·未做】归并清单（剩下的）：
 
 - 删 `kernel::open` 的 `Accelerated` 分支（`kernel.rs:153`），统一走 `Federated{owner}` + 参数 `{sources: [1 个], primary: rds_src, visibility: BasesHidden}`；
 - `accel::ensure_on_instance` 降级为**能力函数**（只保证扩展就绪 + 源可挂），不再开会话；
-- 会话 owner 一律 `{doc}`，`accel_owner` / `session_for_conn` 退役；
+- `accel_owner` / `session_for_conn` 退役（现在只剩内核加速档还按源 `conn_id` 开会话：
+  那一路调用方——洞察 / 引擎内部——手里没有文档身份，见 `kernel.rs` 注释）；
 - 保留 `rds_src` 作为单源加速的**默认别名**（用户 SQL 里 `rds_src.x` 继续可用），但由统一别名分配产出。
 
 归并后"加速"与"联邦"在代码里只差一个 `visibility` 参数。
@@ -88,14 +98,27 @@ session_for_conn(conn_id) → mount_sources([1 个源]) → use_catalog(alias)
 | 类别 | 存放 | 可见性 | 寿命 | 现状 |
 |---|---|---|---|---|
 | 编辑器结果集（`tmp_q_` / `tmp_l_`） | `rds_tmp` 普通表 | 实例共享，面板可见 | 【建议】绑**文档**（owner 登记，关文档删这一批） | 只按前缀管，**无 owner**，关编辑器后仍可访问（与"关 A 就不能用"相反） |
-| 洞察（`tmp_i_`） | 【建议】**会话 TEMP** | 私有，不进面板 | 随会话销毁 | 进 `rds_tmp` + `lazy_cleanup_insight_tables` 兜底 |
+| 洞察（`tmp_i_`） | `rds_tmp` 普通表 | 私有，不进面板 | 随清理兜底 | 曾建议"会话 TEMP"，但【已定】临时表实例共享优先，故仍落 `rds_tmp`；"私有"靠不进面板 + `lazy_cleanup_insight_tables` |
 | mock（`tmp_m_`） | 一次性连接 | 无 | 落地完即关 | 走进程面 `DuckDBManager`，与编辑器同实例 |
 
-【建议】两个机制性修正：
+【已落地·刀11b】落点钉 catalog：
 
-1. **落点钉 catalog**：`qualified()` 只生成 `rds_tmp."名"`（`temp_schema.rs:29-31`，**不带 catalog**），`CREATE SCHEMA IF NOT EXISTS rds_tmp` 也是裸名 → 落点跟着当时的默认 catalog 漂（`USE 主源` 之后就落到源 catalog）。这是"卸载底座后临时表没位置"的机制性原因。建议钉成 `memory.rds_tmp.<名>`。
-   - 待实测：`search_path` 是否接受 `memory.rds_tmp` 这种 catalog 限定写法；不接受则所有引用走全限定名，代价是本机手写 SQL 里裸名 `tmp_q_x` 查不到。
-2. **加 owner 登记**：`TempTableManager` 现在只有 `drop_by_source(prefix)`，没有 owner 维度。补一条"文档 → 表名"登记，`close_document` 时按 owner 删。这样才满足"B 能用 A 的结果集、关 A 后不能用"。
+- `qualified()` 改生成 `memory.rds_tmp."名"`，`ensure_shared_schema` 改
+  `CREATE SCHEMA IF NOT EXISTS memory.rds_tmp; SET search_path = 'memory.main,memory.rds_tmp'`；
+  实例控制连接与每条会话都用它（不再各拼一份）。
+- **实测（2.0.1）**：只写 schema 名的路径会跟着 `USE` 漂——`USE src` 之后
+  `SET search_path = 'main,rds_tmp'` 直接报 `No catalog + schema named "rds_tmp" found`
+  （相对名被解析成 `src.rds_tmp`）；而 `SET search_path = 'memory.rds_tmp,src.main'`
+  可用，两侧表都能按裸名访问。所以第 3 条"待实测"已闭合：**接受 catalog 限定写法**，
+  裸名 `tmp_q_x` 在切主源之后照样查得到。
+- 探针是一次性的（`crates/engine/examples/sp_probe.rs`，已删，不入库）。
+
+【未做·待拍板】owner 登记：`TempTableManager` 现在只有 `drop_by_source(prefix)`，
+没有 owner 维度；`AnalysisInstance::register_temp(name, created_by, note)` 的 `created_by`
+字段已经在（登记册是面板"用户看得见、点得掉"的那一份），但建表链路（`execution_service`
+→ `duckdb_service` → `manager::register_temp_table`）没有文档身份，`created_by` 一律写"引擎"。
+要满足"B 能用 A 的结果集、关 A 后不能用"，得先把文档 id 沿这条链传下来——**这是一次跨 4 层的
+签名改动**，需要先定"关文档是否自动删临时表"再动手。
 
 ---
 
@@ -136,8 +159,11 @@ session_for_conn(conn_id) → mount_sources([1 个源]) → use_catalog(alias)
 现状 `base:analytics` / `base:rds_global`，pill「底座」，`source_action: None`（`mod.rs:565-587`，不可卸）。
 
 【已定】底座默认挂上、**可人为卸载**。
-【建议】"可卸"与"本地加速看不见底座"用**同一个机制**：会话级可见性（`USE memory` + 底座不进 `search_path`；显式 `analytics.x` 仍可达）。
-【待定】卸载语义：会话级遮蔽（只影响当前会话）还是真 `DETACH`（所有会话都看不见，含正在跑的联邦）。单实例前提下真 `DETACH` 会波及他人，建议前者。
+【已落地·刀11b】"可卸"与"本地加速看不见底座"用**同一个机制**：会话级可见性
+（`use_catalog` → `<主源>.main,memory.rds_tmp`，底座不进 `search_path`；显式 `analytics.x` 仍可达）。
+会话换通道时 `retain_mounted` 只清本会话的挂载记录（不 `DETACH`）——`ATTACH` 是实例级事实，
+真 `DETACH` 会波及别的文档正在跑的联邦。
+【待定】卸载入口语义：会话级遮蔽（只影响当前会话）还是真 `DETACH`（所有会话都看不见）。单实例前提下建议前者。
 
 ---
 
@@ -145,13 +171,13 @@ session_for_conn(conn_id) → mount_sources([1 个源]) → use_catalog(alias)
 
 | # | 差距 | 锚点 | 归属 |
 |---|---|---|---|
-| 1 | 加速档会话按连接，跨文档共享 `USE` / 中断 | `accel.rs:456-474`、`instance.rs::accel_owner` | 【已定】要改 |
-| 2 | 加速档看得见底座 | `ensure_on_instance` 无摘底座动作 | 【已定】要改 |
-| 3 | 单源联邦被 ≥2 卡住 | `editor_channels.rs:204` | 【已定】要改 |
-| 4 | 临时表无 owner，关文档不删 | `temp_table.rs:275+`（只有 `drop_by_source`） | 【建议】要改 |
-| 5 | 临时表落点不钉 catalog | `temp_schema.rs:29-31` | 【建议】要改，需实测 |
-| 6 | 面板借假 owner `C_data_objects`，凭空造会话 | `data_objects/mod.rs:1550` | 【待定】 |
-| 7 | 洞察 `tmp_i_` 进共享 schema，与"没有下游"不符 | `duckdb/temp_table/analysis.rs:37` | 【建议】 |
+| 1 | 加速档会话按连接，跨文档共享 `USE` / 中断 | `accel.rs:460`、`instance.rs::accel_owner` | 【已落地·刀10/11a】按文档 `ensure_session` |
+| 2 | 加速档看得见底座 | `accel.rs::ensure_on_instance` | 【已落地·刀11b】`search_path` 不含底座 |
+| 3 | 单源联邦被 ≥2 卡住 | `analysis/channel.rs::from_toggle`、`editor_channels.rs` | 【已落地·刀11a】`>= 1` |
+| 4 | 临时表无 owner，关文档不删 | `temp_table.rs`（只有 `drop_by_source`） | 【建议·未做】需先定"关文档是否自动删" |
+| 5 | 临时表落点不钉 catalog | `temp_schema.rs` | 【已落地·刀11b】`memory.rds_tmp`（实测可用） |
+| 6 | 面板借假 owner `C_data_objects`，凭空造会话 | `data_objects/mod.rs` | 【待定】 |
+| 7 | 洞察 `tmp_i_` 进共享 schema，与"没有下游"不符 | `duckdb/temp_table/analysis.rs` | 【建议】落点已钉 memory；"不进面板"待做 |
 | 8 | mock 与编辑器同实例，面板还列 `tmp_m_` | `mock/src/engine/mod.rs:612`、`mod.rs:1025` | 【建议】 |
 | 9 | 资源归档与实例双开同一 `analytics.duckdb` | `analytics_resource/global/sql.rs:47` vs `attach_bases` | 【待定】需真机验 |
 | 10 | 表段不按业务表过滤、恒无资产行 | `source_picker/load.rs:196`、`mod.rs:1647` | 【待定】 |
@@ -173,17 +199,17 @@ session_for_conn(conn_id) → mount_sources([1 个源]) → use_catalog(alias)
 
 ## 8. 待拍板项
 
-| # | 问题 | 建议 |
-|---|---|---|
-| 1 | 加速档会话 owner 改文档级？ | 改。不改则 `USE` / 中断跨文档串 |
-| 2 | 洞察是否改用会话 TEMP？ | 改。符合"没有下游"；若将来要在面板复用洞察结果，则退回 `rds_tmp` + owner |
-| 3 | 编辑器结果集是否加 owner 登记、关文档删？ | 加。否则"关 A 就不能用"不成立 |
-| 4 | 临时表落点钉 `memory.rds_tmp`？ | 钉。需先实测 `search_path` 的 catalog 限定写法 |
-| 5 | 面板 owner 取当前编辑器文档 / tab / 独立？ | 取当前编辑器文档（tab 会切视角，破坏"一份工作"语义） |
-| 6 | 底座卸载：会话级遮蔽 vs 真 `DETACH`？ | 会话级遮蔽 |
-| 7 | 表段"业务表"判据：白名单 vs 黑名单？ | 白名单（`res_*` + 资产表），避免新前缀偷偷漏进来 |
-| 8 | mock 是否退出面板可见范围？ | 退出，只留落地结果 |
-| 9 | 资源归档是否改为"卸载时才开、读完即关"？ | 先解决双开问题，再定缓存策略 |
+| # | 问题 | 建议 | 状态 |
+|---|---|---|---|
+| 1 | 加速档会话 owner 改文档级？ | 改。不改则 `USE` / 中断跨文档串 | 已定·刀10/11a |
+| 2 | 洞察是否改用会话 TEMP？ | ~~改~~：与"临时表实例共享"冲突，**维持落 `rds_tmp`**，只把它挡在面板外 | 已修口径 |
+| 3 | 编辑器结果集是否加 owner 登记、关文档删？ | 加。否则"关 A 就不能用"不成立 | **仍待拍**（跨 4 层签名改动） |
+| 4 | 临时表落点钉 `memory.rds_tmp`？ | 钉。实测 `search_path` 接受 catalog 限定写法 | 已定·刀11b |
+| 5 | 面板 owner 取当前编辑器文档 / tab / 独立？ | 取当前编辑器文档（tab 会切视角，破坏"一份工作"语义） | **仍待拍** |
+| 6 | 底座卸载：会话级遮蔽 vs 真 `DETACH`？ | 会话级遮蔽 | **仍待拍**（刀11b 已先保证"看不见"，没做卸载入口） |
+| 7 | 表段"业务表"判据：白名单 vs 黑名单？ | 白名单（`res_*` + 资产表），避免新前缀偷偷漏进来 | **仍待拍** |
+| 8 | mock 是否退出面板可见范围？ | 退出，只留落地结果 | **仍待拍** |
+| 9 | 资源归档是否改为"卸载时才开、读完即关"？ | 先解决双开问题，再定缓存策略 | **仍待拍**（需真机验） |
 
 ---
 
@@ -192,3 +218,4 @@ session_for_conn(conn_id) → mount_sources([1 个源]) → use_catalog(alias)
 | 日期 | 变更 |
 |---|---|
 | 2026-11-26 | 初稿：从"联邦内核收口 + 数据对象面板"讨论中抽出会话/临时表/可见性三层；标出对 `execution-context-model.md` 两处作废口径 |
+| 2026-11-27 | 落地记录回填：刀10（加速 owner 按文档）、刀11a（联邦 owner 拆 `session_owner`、单源联邦放开）、刀11b（`search_path` 全限定 + `retain_mounted` + `reset_search_path`）；补 2.0.1 实测结论（`memory.rds_tmp` 可作 `search_path` 项）；洞察口径由"会话 TEMP"修正回 `rds_tmp`（实例共享优先） |
