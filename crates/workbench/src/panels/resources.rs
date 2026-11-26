@@ -666,13 +666,41 @@ impl SidebarPanel {
             resource_jobs::OpOutcome::Undone { name } => {
                 format!("资产库：已撤销归档「{name}」（本体已回到原位置）")
             }
+            resource_jobs::OpOutcome::FileUnlocked {
+                name,
+                draft_rel,
+                removed_versions,
+            } => {
+                let copies = if removed_versions == 0 {
+                    String::new()
+                } else {
+                    format!("，清理历史副本 {removed_versions} 份")
+                };
+                format!(
+                    "资产库：「{name}」已解锁并退回草稿箱（{draft_rel}{copies}）；请从草稿箱删除"
+                )
+            }
+            resource_jobs::OpOutcome::GlobalFileUnlocked {
+                name,
+                draft_rel,
+                removed_versions,
+            } => {
+                let copies = if removed_versions == 0 {
+                    String::new()
+                } else {
+                    format!("，清理历史副本 {removed_versions} 份")
+                };
+                format!(
+                    "资产库：全局「{name}」已解锁并退回本项目草稿箱（{draft_rel}{copies}）；请从草稿箱删除"
+                )
+            }
             // 改名：只说结果（旧名用户刚在对话框里看过，回执里再抄一遍是多话）。
             resource_jobs::OpOutcome::Renamed { name } => format!("资产库：已改名为「{name}」"),
             // 别名：设与清都由工作线程算好（它手上有最终值）。
             resource_jobs::OpOutcome::AliasDone { note } => format!("资产库：{note}"),
             // 回收站是项目级的：回执里把“去哪儿找回来”说清，比只说“已移入”有用。
             resource_jobs::OpOutcome::Trashed { names } => match names.as_slice() {
-                [only] => format!("资产库：已把「{only}」移入回收站（面板头「⋯ → 回收站…」）"),
+                [only] => format!("资产库：已把「{only}」移入回收站（草稿箱栏）"),
                 many => format!("资产库：已把 {} 项移入回收站", many.len()),
             },
             resource_jobs::OpOutcome::VersionActionDone { note } => format!("资产库：{note}"),

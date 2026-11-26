@@ -17,7 +17,7 @@ pub(super) struct RowMenuParams {
     pub(super) can_checkout: bool,
     pub(super) can_stats: bool,
     pub(super) can_distribute: bool,
-    /// 移入全局回收站（刀 B；只对全局行，项目行不摆这一项）。
+    /// 移入回收站 / 文件解锁（只对全局行；项目行不摆这一项）。
     pub(super) can_delete_global: bool,
     pub(super) can_promote: bool,
     pub(super) can_rename: bool,
@@ -123,21 +123,38 @@ pub(super) fn build(
                                     }
                                 }),
                         );
-                        // 「移入全局回收站…」（刀 B）：只在全局行摆；只软删全局这一份，
-                        // 已分发到项目的副本不受影响。判据见 `can_delete_global`。
-                        if open_detail
-                            .as_ref()
-                            .is_some_and(|detail| detail.scope == crate::model::RowScope::Global)
-                        {
+                        // 全局行的破坏性项：文件型不能直接删除，只能解锁退回草稿箱；
+                        // 表型移入项目回收站（草稿箱栏那一个）。已分发副本不受影响。
+                        if let Some(detail) = open_detail.as_ref().filter(|detail| {
+                            detail.scope == crate::model::RowScope::Global
+                        }) {
+                            let is_file_global = detail.kind == ArchiveKind::File;
+                            let label = if is_file_global {
+                                tr("解除锁定并退回草稿箱…")
+                            } else if multi_count > 1 {
+                                tr("移入回收站（多项）")
+                            } else {
+                                tr("移入回收站…")
+                            };
+                            let detail_for_action = detail.clone();
                             menu = menu.item(
-                                PopupMenuItem::new(tr("移入全局回收站…"))
+                                PopupMenuItem::new(label)
                                     .disabled(!can_delete_global)
                                     .on_click({
                                         let host = host.clone();
-                                        let detail = open_detail.clone();
                                         move |_, window, cx| {
-                                            if let Some(detail) = detail.as_ref() {
-                                                host.request_delete_global(detail, window, cx);
+                                            if is_file_global {
+                                                host.request_unlock_global_file(
+                                                    &detail_for_action,
+                                                    window,
+                                                    cx,
+                                                );
+                                            } else {
+                                                host.request_delete_global(
+                                                    &detail_for_action,
+                                                    window,
+                                                    cx,
+                                                );
                                             }
                                         }
                                     }),
@@ -310,7 +327,14 @@ pub(super) fn build(
                         // 删除是**唯一**多选可用的破坏性项（原型 §3.2）：多选时带上数量。
                         // 全局行不能进项目回收站（本体不在项目侧）。
                         let delete_targets = delete_targets.clone();
-                        let delete_label = if multi_count > 1 {
+                        let single_file = multi_count == 1
+                            && open_detail.as_ref().is_some_and(|detail| {
+                                detail.kind == ArchiveKind::File
+                                    && detail.payload_mode != PayloadMode::Reference
+                            });
+                        let delete_label = if single_file {
+                            tr("解除锁定并退回草稿箱…").to_string()
+                        } else if multi_count > 1 {
                             format!("移入回收站（{multi_count} 项）")
                         } else {
                             "移入回收站".to_string()
@@ -321,9 +345,17 @@ pub(super) fn build(
                                 .on_click({
                                     let host = host.clone();
                                     let targets = delete_targets.clone();
+                                    let detail = open_detail.clone();
                                     move |_, window, cx| {
-                                        
-                                        host.request_delete(&targets, window, cx)
+                                        if single_file {
+                                            if let Some(detail) = detail.as_ref() {
+                                                host.request_unlock_file_asset(
+                                                    detail, window, cx,
+                                                );
+                                            }
+                                        } else {
+                                            host.request_delete(&targets, window, cx);
+                                        }
                                     }
                                 }),
                         )

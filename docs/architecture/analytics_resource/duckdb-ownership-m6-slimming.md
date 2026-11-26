@@ -461,6 +461,58 @@ WIP 产物串包（`rds_sql::guard` 缺失 / `use_duckdb_fed` 类型不一致）
 
 本段边界：只有“上一版”快捷入口，任意版本选择仍待版本历史 UI。
 
+## 9.9 第九段实施记录：文件不可删与回收站口径收口（2026-11-26）
+
+用户定稿的删除语义（覆盖此前“文件也可移入回收站”的口径）：
+
+1. **文件型资产不可直接删除**：要删必须先“解除锁定并退回草稿箱”，只能从草稿箱删除。
+   解锁只退**当前版**；历史版本副本与版本快照随解锁一并清理。
+2. **表型资产分逻辑删除与永久删除**：逻辑删除进项目回收站（只软删登记，表保留）；
+   永久删除只在回收站执行（`purge_archive` / `purge_global`）。
+3. **项目回收站是唯一回收站入口**，位于草稿箱栏；全局条目并入同一个回收站，
+   不再单列“全局回收站”菜单。全局文件同样不得直接进回收站，须解锁退回项目草稿箱；
+   全局回收站只收表型。
+4. 资产库面板只给**逻辑删除**（“移入回收站”）；永久删除只出现在回收站内。
+
+服务层落点：
+
+- `service/unlock.rs`：`ArchiveService::unlock_file_to_drafts(resource_id)`。校验
+  `kind = File`、有 `file_rel_path`、本体在位；目标 `{project}/scratchpad/<原 rel>`，
+  冲突按 `-2/-3` 避让（不覆盖）；先 `copy_out` 到草稿箱，再 `purge_name_chain(name, "project")`；
+  失败删掉新草稿；成功后清资产库本体、`remove_all_version_copies`，发
+  `ChangeReason::Undone`；返回 `UnlockFileOutcome { resource_id, name, draft_rel, removed_versions }`。
+- `service/trash.rs::trash_one`：文件型（`Copy` + `file_rel_path` + `kind = File`）直接拒绝，
+  提示“请先执行「解除锁定并退回草稿箱」”——服务层硬闸门，UI 之外也拦得住。
+- `store/resource/trash.rs::purge_name_chain(name, scope)`：按名字清整条版本链
+  （活跃行硬删、软删行走 `purge_deleted_row`）。
+- `payload/versions.rs::remove_all_version_copies(resource_id)`：清该资产全部历史副本。
+- `global/unlock.rs`：`GlobalInstanceStore::unlock_global_file_to_project(name, drafts_root)`。
+  校验活跃行 `kind = file`、有 `file_rel_path`、无 pin；把全局本体复制到目标草稿箱（清只读），
+  统计历史副本数，再 `purge_global(name)`；purge 失败删掉草稿；返回
+  `GlobalUnlockOutcome { name, version, draft_rel, removed_versions }`。
+- `global/delete.rs::trash_global`：查询增加 `kind` 列；活跃行 `kind = "file"` 且有本体时
+  拒绝，提示先解锁退回草稿箱。全局回收站因此只收表型与 legacy 表型 payload。
+
+作业与 UI 落点：
+
+- `jobs/archive/run.rs::run_unlock_file` + `UnlockFileJob`；`jobs/global.rs::run_unlock_global_file`
+  + `UnlockGlobalFileJob`；`jobs/mod.rs` 新增 `Job::UnlockFile` / `Job::UnlockGlobalFile`、
+  `OpOutcome::FileUnlocked` / `GlobalFileUnlocked` 与 `enqueue_unlock_file` /
+  `enqueue_unlock_global_file`。
+- 详情危险区：文件型项目行改为「解除锁定并退回草稿箱…」，全局文件行同样；
+  表型与引用型仍是「移入回收站」。
+- 列表右键：单行文件资产走解锁；多选混入文件资产时，确认框说明这些项会改为解锁，
+  其余照常进回收站。
+- 回执：`FileUnlocked` / `GlobalFileUnlocked` 报草稿相对路径与清理的历史副本份数，
+  并提示“请从草稿箱删除”。
+
+用例：`service::tests::trash::t129_file_asset_must_unlock_before_delete`、
+`global::tests::g031_global_file_must_unlock_before_delete`。
+
+本段边界：草稿箱栏的“唯一回收站”聚合 UI 尚未落地——草稿箱回收站组目前只列
+`origin == "scratchpad"` 的条目，资产库面板头仍有「⋯ → 回收站…」。跨模块聚合需要
+由 workbench 注入 provider 或把回收站移到 workbench_shell，另开一刀。
+
 ## 10. 风险与未决
 
 1. **全局写守卫的绕过面**：`CALL` / `COPY` / `EXPORT` / prepared statement / 多语句；
@@ -472,6 +524,9 @@ WIP 产物串包（`rds_sql::guard` 缺失 / `use_duckdb_fed` 类型不一致）
 4. **测试夹具**：M6 测试已改为 `isolated` 同根夹具；后续改成实例后仍要统一测试实例工厂。
 5. **资产文件与表双形态**：文件资产 + 派生表会产生两条全局行；UI / 删除 / pin 必须按
    `origin_kind='global_file'` 成组处理，不能只删一条。
+6. **回收站唯一入口的跨模块聚合**：草稿箱（`rds-scratchpad`）不能反向依赖资产库；
+   聚合要么由 workbench 注入 provider，要么把回收站列表提到 `workbench_shell`。
+   在落地前，资产库面板头的「回收站…」仍然是可达入口（待撤）。
 
 ## 11. 验收口径
 

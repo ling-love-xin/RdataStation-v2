@@ -56,6 +56,13 @@ pub(crate) struct TrashJob {
     pub(crate) resource_ids: Vec<String>,
 }
 
+/// 一次文件资产解锁任务（撤销归档、退回草稿箱，随后才允许删除）。
+pub(crate) struct UnlockFileJob {
+    pub(crate) project_root: PathBuf,
+    pub(crate) read_only: bool,
+    pub(crate) resource_id: String,
+}
+
 /// 一次回收站取数任务（条目 + 别人条目的统计）。
 pub(crate) struct TrashListJob {
     pub(crate) project_root: PathBuf,
@@ -143,10 +150,20 @@ pub fn enqueue_trash_action(project_root: PathBuf, read_only: bool, action: Tras
 }
 
 
+/// 提交一次文件资产解锁（确认框之后）。
+pub fn enqueue_unlock_file(project_root: PathBuf, read_only: bool, resource_id: String) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
+    let _ = jobs().tx.send(Job::UnlockFile(UnlockFileJob {
+        project_root,
+        read_only,
+        resource_id,
+    }));
+}
+
 mod run;
 mod trash;
 
-pub(crate) use run::{run_archive, run_checkout, run_undo, run_trash};
+pub(crate) use run::{run_archive, run_checkout, run_trash, run_undo, run_unlock_file};
 pub(crate) use trash::{load_trash, reload_trash_after, run_trash_action};
 
 

@@ -181,6 +181,18 @@ impl PayloadStore {
         }
         Ok(true)
     }
+    /// 删除某资产的**全部**历史副本目录（文件资产解锁退还时用：登记链要一起清，
+    /// 副本再留着就没人认领了）。返回是否删掉了目录。
+    pub async fn remove_all_version_copies(&self, resource_id: &str) -> Result<bool, CoreError> {
+        let dir = self.version_copy_dir(resource_id)?;
+        if !dir.is_dir() {
+            return Ok(false);
+        }
+        fs::remove_dir_all(&dir)
+            .await
+            .map_err(|e| io_err(&dir, "version_copy_remove_all", e))?;
+        Ok(true)
+    }
     /// 裁剪历史副本：只保留最近 `keep` 个版本目录，返回被删除的份数。
     ///
     /// **只删内容副本，不删版本行**（架构 §5.2）：版本元数据永久保留，界面以"副本缺失"标注。

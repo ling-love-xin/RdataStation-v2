@@ -21,7 +21,7 @@ use gpui_kit::*;
 use crate::detail_view::ArchiveDetail;
 use crate::dnd::{self, ArchiveDragGhost, ArchiveDragPayload, GroupDrop};
 use crate::filter::VisibleItem;
-use crate::model::{ActionContext, ArchiveStatus, DeleteTarget, PayloadMode};
+use crate::model::{ActionContext, ArchiveKind, ArchiveStatus, DeleteTarget, PayloadMode};
 use crate::resource_view::{
     ArchiveRow, BadgeTone, DEFAULT_GROUP_MARKER, GroupOption, ResourcesHost, ResourcesPanel,
     RowClick, badge_tone, can_checkout, can_delete_row, can_distribute, can_edit_tags,
@@ -190,6 +190,11 @@ impl ListDelegate for ArchiveListDelegate {
             .iter()
             .map(|id| DeleteTarget {
                 id: id.clone(),
+                kind: self
+                    .details
+                    .get(id)
+                    .map(|detail| detail.kind)
+                    .unwrap_or(ArchiveKind::File),
                 mode: self
                     .details
                     .get(id)

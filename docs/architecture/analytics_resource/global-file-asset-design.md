@@ -10,6 +10,13 @@
 >   脚本登记为 `kind = file`。**独立文件资产行 + 派生表拆成两条资产**、文件 `KeepVersions`、
 >   回收站列表 / 恢复 UI 仍待做。旧表资产不伪造本体。
 >
+> 实施进度（2026-11-26，第二版删除语义）：
+> - 全局文件**不再进回收站**：`unlock_global_file_to_project(name, drafts_root)` 把当前内容
+>   复制到目标项目草稿箱（同名 `-2/-3` 避让），清历史副本后 `purge_global`；`trash_global`
+>   对 `kind = file` 硬拒绝。全局回收站只收表型。UI 危险区改为「解除锁定并退回草稿箱…」。
+> - 项目侧同口径见 `duckdb-ownership-m6-slimming.md` §9.9。
+> - 项目回收站唯一入口在草稿箱栏（跨模块聚合 UI 待落地；资产库面板头入口暂留）。
+>
 > 前置事实：现状全局只有 `data/system/{global.db, analytics.duckdb}`，没有 `data/system/resources/`；
 > 数据文件升级后只剩表，脚本升级后只剩内容表。详见
 > `asset-table-file-business-dataflow.md` §4.3。

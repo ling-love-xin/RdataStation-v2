@@ -190,29 +190,36 @@ impl GlobalInstanceStore {
         &self,
         name: &str,
     ) -> Result<GlobalTrashOutcome, InstanceOpError> {
-        let rows: Vec<(String, i32, Option<String>, Option<String>, Option<String>)> =
-            self.with_sqlite(|conn| {
-                let mut stmt = conn
-                    .prepare(
-                        "SELECT id, version, analytics_table, deleted_at, file_rel_path \
+        let rows: Vec<(
+            String,
+            i32,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            String,
+        )> = self.with_sqlite(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, version, analytics_table, deleted_at, file_rel_path, kind \
                          FROM analytics_resources \
                          WHERE name = ?1 AND scope = 'global' ORDER BY version DESC",
-                    )
-                    .map_err(sqlite_err("prepare_trash_global"))?;
-                let rows = stmt
-                    .query_map(rusqlite::params![name], |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, i32>(1)?,
-                            row.get::<_, Option<String>>(2)?,
-                            row.get::<_, Option<String>>(3)?,
-                            row.get::<_, Option<String>>(4)?,
-                        ))
-                    })
-                    .map_err(sqlite_err("query_trash_global"))?;
-                rows.collect::<Result<Vec<_>, _>>()
-                    .map_err(sqlite_err("collect_trash_global"))
-            })?;
+                )
+                .map_err(sqlite_err("prepare_trash_global"))?;
+            let rows = stmt
+                .query_map(rusqlite::params![name], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i32>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, String>(5)?,
+                    ))
+                })
+                .map_err(sqlite_err("query_trash_global"))?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(sqlite_err("collect_trash_global"))
+        })?;
         if rows.is_empty() {
             return Err(InstanceOpError::NotFound {
                 name: name.to_string(),
@@ -220,11 +227,22 @@ impl GlobalInstanceStore {
         }
         let active: Vec<_> = rows
             .iter()
-            .filter(|(_, _, _, deleted, _)| deleted.is_none())
+            .filter(|(_, _, _, deleted, _, _)| deleted.is_none())
             .collect();
         if active.is_empty() {
             return Err(InstanceOpError::Core(CoreError::common(
                 CommonError::General(format!("全局资产「{name}」已经在回收站")),
+            )));
+        }
+        // 文件型资产不能直接删除/进回收站：先解锁退回项目草稿箱，再从草稿箱删除。
+        if active[0].5 == "file" && active[0].4.is_some() {
+            return Err(InstanceOpError::Core(CoreError::common(
+                CommonError::InvalidArgument {
+                    param: "name".to_string(),
+                    reason: format!(
+                        "全局「{name}」是文件型资产，不能直接删除：请先执行「解除锁定并退回草稿箱」"
+                    ),
+                },
             )));
         }
 
@@ -289,7 +307,7 @@ impl GlobalInstanceStore {
             trashed_at: now.clone(),
             versions: rows
                 .iter()
-                .map(|(id, version, table, deleted, _)| TrashVersion {
+                .map(|(id, version, table, deleted, _, _)| TrashVersion {
                     resource_id: id.clone(),
                     version: *version,
                     analytics_table: table.clone(),

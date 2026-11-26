@@ -82,6 +82,8 @@ pub struct TagTarget {
 pub struct DeleteTarget {
     /// 存档 id。
     pub id: String,
+    /// 资产形态：文件型不能直接删除，只能解锁退回草稿箱。
+    pub kind: ArchiveKind,
     /// 归档粒度（视图从详情快照取；缺省回退 `Copy`）。
     pub mode: PayloadMode,
 }

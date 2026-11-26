@@ -7,449 +7,91 @@ use crate::model::ORIGIN_RESOURCES;
 /// “按路径查存活行”都看不到，但记录本身还在，还原才能恢复别名 / 标签 / 指纹）。
 /// 永久删除与清空：都**只动本模块的**条目（回收站是共用的，删别人的东西不是清空）；
 /// 登记行与它的标签 / 分组归属一并清掉（外键没有 `ON DELETE CASCADE`，不清就删不掉）。
+/// 文件型资产不能直接进回收站；解锁退回草稿箱只退当前版，清登记链与历史副本。
 #[tokio::test]
-async fn t128_purge_and_empty_stay_within_our_origin() {
+async fn t129_file_asset_must_unlock_before_delete() {
     let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
-    let first_draft = write_draft(&dir, "a.sql", b"select 1;").await;
-    let first = service
-        .archive(archive_req(&first_draft, "a.sql", None))
-        .await
-        .expect("archive a");
-    let second_draft = write_draft(&dir, "b.sql", b"select 2;").await;
-    let second = service
-        .archive(archive_req(&second_draft, "b.sql", None))
-        .await
-        .expect("archive b");
-
-    // 给第一条挂标签与分组：删除时必须连关联一起清（外键无 CASCADE，项目库开了 foreign_keys）。
-    let tag = service
-        .store()
-        .create_tag(crate::store::rows::CreateTagRequest {
-            name: "important".to_string(),
-            scope: "project".to_string(),
-            color: None,
-            icon: None,
-        })
-        .await
-        .expect("tag");
-    service
-        .store()
-        .add_tag_to_resource(&first.resource_id, &tag.id)
-        .await
-        .expect("link tag");
-
-    let first_entry = service
-        .move_to_trash(&[first.resource_id.clone()])
-        .await
-        .expect("trash a");
-    let second_entry = service
-        .move_to_trash(&[second.resource_id.clone()])
-        .await
-        .expect("trash b");
-
-    // 别人的条目：永久删除必须被拒（只验证守卫，不真删）。
-    let foreign_path = dir.join("draft.sql");
-    fs::write(&foreign_path, b"select 3;").await.expect("write");
-    let foreign = service
-        .payload()
-        .trash()
-        .move_to_trash(&foreign_path, "scratchpad", "draft.sql")
-        .await
-        .expect("foreign entry");
-    let error = service
-        .purge_archive(&foreign.manifest.id)
-        .await
-        .expect_err("cross-module purge must fail");
-    assert!(
-        error.to_string().contains("scratchpad"),
-        "错误要指明归属：{error}"
-    );
-
-    // 单条永久删除：本体与登记行都不在了。
-    service
-        .purge_archive(&first_entry[0].trash_id)
-        .await
-        .expect("purge a");
-    assert!(
-        service
-            .store()
-            .find_deleted_archive_by_rel_path("a.sql")
-            .await
-            .expect("find a")
-            .is_none()
-    );
-    assert!(
-        service
-            .store()
-            .get_resource_by_id(&first.resource_id)
-            .await
-            .is_err(),
-        "登记行删了就该查不到（它已经不在回收站里等还原了）"
-    );
-    assert!(
-        service
-            .store()
-            .get_tags_for_resource(&first.resource_id)
-            .await
-            .expect("tags")
-            .is_empty()
-    );
-
-    // 清空：只删本模块的两条（含刚删过的），别人的原样留着。
-    let purged = service.empty_trash().await.expect("empty");
-    assert_eq!(purged, 1, "a 已单条删过，剩 b 一条");
-    let left = service.payload().trash().list().await.expect("list");
-    assert_eq!(left.len(), 1, "草稿箱的条目必须原样留着");
-    assert_eq!(left[0].manifest.origin, "scratchpad");
-    assert!(
-        service
-            .store()
-            .find_deleted_archive_by_rel_path("b.sql")
-            .await
-            .expect("find b")
-            .is_none()
-    );
-    assert!(second_entry.len() == 1);
-
-    let _ = fs::remove_dir_all(&dir).await;
-}
-
-/// 由原相对路径还原（索引修复的「从回收站还原」）：命中就把本体搬回来并复活登记行；
-/// 回收站里没有对应条目时**不静默**，把用户指向其余两条出路（放回文件后重扫 / 删记录）。
-#[tokio::test]
-async fn t129_restore_by_rel_path_finds_the_entry_or_says_why_not() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
-    let draft = write_draft(&dir, "a.sql", b"select 1;").await;
+    let first = write_draft(&dir, "locked.sql", b"select 1;").await;
     let archived = service
-        .archive(archive_req(&draft, "reports/a.sql", None))
+        .archive(archive_req(&first, "reports/locked.sql", None))
         .await
-        .expect("archive");
-    service
-        .move_to_trash(&[archived.resource_id.clone()])
-        .await
-        .expect("trash");
+        .expect("archive v1");
 
-    let revived = service
-        .restore_archive_by_rel_path("reports/a.sql")
+    // 再归档一次产生历史副本，解锁要把它一起清掉。
+    let second = write_draft(&dir, "locked-v2.sql", b"select 2;").await;
+    service
+        .archive(archive_req(
+            &second,
+            "reports/locked.sql",
+            Some(&archived.resource_id),
+        ))
         .await
-        .expect("restore by rel path");
-    assert_eq!(revived.id, archived.resource_id);
-    assert!(
+        .expect("archive v2");
+    assert_eq!(
         service
             .payload()
-            .resources_dir()
-            .join("reports")
-            .join("a.sql")
-            .is_file()
-    );
-
-    let error = service
-        .restore_archive_by_rel_path("reports/a.sql")
-        .await
-        .expect_err("条目已经从回收站里出去了");
-    assert!(
-        error.to_string().contains("只能删掉这条登记记录"),
-        "错误要指向仅剩的出口：{error}"
-    );
-    assert!(
-        error.to_string().contains("放回"),
-        "还要给出「把文件放回去重扫」这条路，否则用户以为只剩删记录：{error}"
-    );
-
-    let _ = fs::remove_dir_all(&dir).await;
-}
-
-#[tokio::test]
-async fn t124_move_to_trash_soft_deletes_row_and_keeps_payload_in_trash() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
-    let mut events = service.subscribe();
-    let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
-    let archived = service
-        .archive(archive_req(&draft, "reports/dau.sql", None))
-        .await
-        .expect("archive");
-    let _ = events.recv().await.expect("archived event");
-
-    let entries = service
-        .move_to_trash(&[archived.resource_id.clone()])
-        .await
-        .expect("move to trash");
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].resource_id, archived.resource_id);
-    assert_eq!(entries[0].name, "dau_report");
-
-    // 本体：离开 resources/；回收站条目带 origin 与原相对路径（还原要靠它回原位）。
-    let payload = service
-        .payload()
-        .resources_dir()
-        .join("reports")
-        .join("dau.sql");
-    assert!(
-        !payload.exists(),
-        "移入回收站是移动，本体不能留在 resources/"
-    );
-    let entry = service
-        .payload()
-        .trash()
-        .get(&entries[0].trash_id)
-        .await
-        .expect("trash entry");
-    assert_eq!(entry.manifest.origin, ORIGIN_RESOURCES);
-    assert_eq!(entry.manifest.original_rel_path, "reports/dau.sql");
-
-    // 索引：存活列表与按路径查找都看不见，但软删行仍在（deleted_at 非空）。
-    assert!(
-        service
-            .store()
-            .list_file_archives()
+            .version_copies(&archived.resource_id)
             .await
-            .expect("list")
-            .is_empty()
-    );
-    assert!(
-        service
-            .store()
-            .find_archive_by_rel_path("reports/dau.sql")
-            .await
-            .expect("find")
-            .is_none()
-    );
-    let row = service
-        .store()
-        .get_resource_by_id(&archived.resource_id)
-        .await
-        .expect("row");
-    assert!(row.deleted_at.is_some(), "回收站里的行必须保留 deleted_at");
-
-    assert_eq!(
-        events.recv().await.expect("trashed event").reason,
-        ChangeReason::Trashed
-    );
-
-    let _ = fs::remove_dir_all(&dir).await;
-}
-
-/// 从回收站还原：本体按原相对路径回原位、软删行复活；**跨模块条目一律拒绝**
-/// （origin 校验——别的模块的本体不属于我们，误还原会把别人的数据搬到 resources/）。
-#[tokio::test]
-async fn t125_restore_from_trash_revives_row_and_rejects_foreign_origin() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
-    let mut events = service.subscribe();
-    let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
-    let archived = service
-        .archive(archive_req(&draft, "reports/dau.sql", None))
-        .await
-        .expect("archive");
-    let _ = events.recv().await.expect("archived event");
-    let trashed = service
-        .move_to_trash(&[archived.resource_id.clone()])
-        .await
-        .expect("move to trash");
-    let _ = events.recv().await.expect("trashed event");
-
-    let revived = service
-        .restore_archive_from_trash(&trashed[0].trash_id)
-        .await
-        .expect("restore");
-    assert_eq!(revived.id, archived.resource_id);
-    assert!(revived.deleted_at.is_none(), "还原必须清掉 deleted_at");
-    assert_eq!(
-        revived.file_rel_path.as_deref(),
-        Some("reports/dau.sql"),
-        "无同名冲突时登记行路径不应变"
-    );
-    assert!(
-        service
-            .payload()
-            .resources_dir()
-            .join("reports")
-            .join("dau.sql")
-            .is_file(),
-        "本体应回到原相对路径"
-    );
-    assert_eq!(
-        service
-            .store()
-            .list_file_archives()
-            .await
-            .expect("list")
+            .expect("version copies")
             .len(),
         1,
-        "还原后应重新出现在存活列表里"
-    );
-    assert_eq!(
-        events.recv().await.expect("untrashed event").reason,
-        ChangeReason::Untrashed
+        "v1 应有历史副本"
     );
 
-    // 跨模块条目（模拟草稿箱的）：拒绝，且条目原样留在回收站里等它的主人。
-    let foreign_path = dir.join("draft.sql");
-    fs::write(&foreign_path, b"select 2;").await.expect("write");
-    let foreign = service
-        .payload()
-        .trash()
-        .move_to_trash(&foreign_path, "scratchpad", "draft.sql")
-        .await
-        .expect("foreign trash entry");
     let error = service
-        .restore_archive_from_trash(&foreign.manifest.id)
-        .await
-        .expect_err("cross-module restore must fail");
-    assert!(
-        error.to_string().contains("scratchpad"),
-        "错误要指明条目属于谁：{error}"
-    );
-    assert!(
-        service
-            .payload()
-            .trash()
-            .get(&foreign.manifest.id)
-            .await
-            .is_ok(),
-        "被拒的条目必须留在回收站里"
-    );
-
-    let _ = fs::remove_dir_all(&dir).await;
-}
-
-/// 两条不静默降级的边界：**同名不覆盖**（回收站层避让改名，登记行的本体路径
-/// 跟着改），以及**本体缺失的行拒绝移入**（指向索引修复这个正规出口）。
-#[tokio::test]
-async fn t126_restore_avoids_name_conflict_and_trash_refuses_missing_payload() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
-    let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
-    let archived = service
-        .archive(archive_req(&draft, "reports/dau.sql", None))
-        .await
-        .expect("archive");
-    let trashed = service
         .move_to_trash(&[archived.resource_id.clone()])
         .await
-        .expect("move to trash");
+        .expect_err("文件资产不得直接进回收站");
+    assert!(
+        error.to_string().contains("解除锁定并退回草稿箱"),
+        "拒绝要指出去哪里：{error}"
+    );
 
-    // 原位被占用（模拟并存档 / 外部写入）：还原必须让路，不能覆盖。
-    let occupied = service
-        .payload()
-        .resources_dir()
-        .join("reports")
-        .join("dau.sql");
-    fs::write(&occupied, b"someone else").await.expect("occupy");
-
-    let revived = service
-        .restore_archive_from_trash(&trashed[0].trash_id)
+    let outcome = service
+        .unlock_file_to_drafts(&archived.resource_id)
         .await
-        .expect("restore");
-    assert_eq!(fs::read(&occupied).await.expect("read"), b"someone else");
+        .expect("unlock");
+    assert_eq!(outcome.draft_rel, "reports/locked.sql");
+    assert_eq!(outcome.removed_versions, 1);
+    let draft = service
+        .payload()
+        .project_root()
+        .join("scratchpad")
+        .join("reports/locked.sql");
     assert_eq!(
-        revived.file_rel_path.as_deref(),
-        Some("reports/dau_1.sql"),
-        "避让改名后登记行必须跟着改，否则索引与本体又对不上"
+        fs::read_to_string(&draft).await.expect("draft"),
+        "select 2;",
+        "只退当前版本内容"
+    );
+    assert!(
+        !service
+            .payload()
+            .resolve("reports/locked.sql")
+            .expect("resolve")
+            .exists(),
+        "资产库本体已移出"
+    );
+    assert!(
+        service
+            .store()
+            .get_resource_by_id(&archived.resource_id)
+            .await
+            .is_err(),
+        "登记链已清"
     );
     assert!(
         service
             .payload()
-            .resources_dir()
-            .join("reports")
-            .join("dau_1.sql")
-            .is_file(),
-        "避让后的本体应落在新路径"
-    );
-
-    // 本体缺失的行：拒绝移入（它的出口是索引修复，不是回收站）。
-    let orphan_draft = write_draft(&dir, "orphan.sql", b"select 3;").await;
-    let orphan = service
-        .archive(archive_req(&orphan_draft, "orphan.sql", None))
-        .await
-        .expect("archive orphan");
-    fs::remove_file(service.payload().resources_dir().join("orphan.sql"))
-        .await
-        .expect("remove payload behind the index");
-    let error = service
-        .move_to_trash(&[orphan.resource_id.clone()])
-        .await
-        .expect_err("missing payload must be refused");
-    assert!(
-        error.to_string().contains("本体不在"),
-        "错误要指出本体缺失：{error}"
-    );
-    assert!(
-        service
-            .store()
-            .get_resource_by_id(&orphan.resource_id)
+            .version_copies(&archived.resource_id)
             .await
-            .expect("row")
-            .deleted_at
-            .is_none(),
-        "被拒的行不能变成软删态"
+            .expect("copies")
+            .is_empty(),
+        "历史副本随解锁清理"
     );
 
     let _ = fs::remove_dir_all(&dir).await;
 }
 
-/// 批量移入回收站中途失败：**已进回收站的不回退**（见 `move_to_trash` 的取舍），
-/// 但错误里必须说清“已移了几条”——否则用户只看到一句失败，列表却已经变了。
-#[tokio::test]
-async fn t127_batch_trash_reports_partial_progress() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
-    let first_draft = write_draft(&dir, "a.sql", b"select 1;").await;
-    let first = service
-        .archive(archive_req(&first_draft, "a.sql", None))
-        .await
-        .expect("archive a");
-    let second_draft = write_draft(&dir, "b.sql", b"select 2;").await;
-    let second = service
-        .archive(archive_req(&second_draft, "b.sql", None))
-        .await
-        .expect("archive b");
-    fs::remove_file(service.payload().resources_dir().join("b.sql"))
-        .await
-        .expect("remove b payload behind the index");
-
-    let error = service
-        .move_to_trash(&[first.resource_id.clone(), second.resource_id.clone()])
-        .await
-        .expect_err("batch with a missing payload must fail");
-    assert!(
-        error.to_string().contains("已移入 1 项"),
-        "错误要交代部分成功：{error}"
-    );
-
-    // 前一条真的进了回收站（本体走了、行软删），后一条一点没动。
-    assert!(!service.payload().resources_dir().join("a.sql").exists());
-    assert_eq!(
-        service.payload().trash().list().await.expect("list").len(),
-        1
-    );
-    assert!(
-        service
-            .store()
-            .get_resource_by_id(&first.resource_id)
-            .await
-            .expect("a")
-            .deleted_at
-            .is_some()
-    );
-    assert!(
-        service
-            .store()
-            .get_resource_by_id(&second.resource_id)
-            .await
-            .expect("b")
-            .deleted_at
-            .is_none(),
-        "失败的那条不能被顺手软删"
-    );
-
-    let _ = fs::remove_dir_all(&dir).await;
-}
-
-// ===== File 档 reference 模式（2026-10-13 裁决：两档都做、默认 copy）=====
-
-/// 2026-11-12 终审修复回归：永久删除必须清掉 **全部** 关联表。
-///
-/// 旧版只清 folder / tags，漏了带外键的 `analytics_resource_versions`——项目库
-/// `foreign_keys=ON` 时 `DELETE FROM analytics_resources` 会直接失败（「删不掉」）；
-/// 027–029 的断言 / 效力 / 谱系也会变成只增不减的孤儿。履历事件则刻意保留。
 #[tokio::test]
 async fn t158_purge_clears_versions_semantics_refs_but_keeps_history() {
     let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
@@ -556,63 +198,14 @@ async fn t158_purge_clears_versions_semantics_refs_but_keeps_history() {
 
 /// 回收站出入要留履历：移入记 `Trashed`、还原记 `Untrashed`。
 ///
+/// （2026-11-26：文件型资产改为“解锁退回草稿箱、只能从草稿箱删除”后，
+/// 原先基于文件型资产的回收站用例（t124–t128、t131 与按相对路径还原）已删除；
+/// 文件型新语义由 `t129_file_asset_must_unlock_before_delete` 钉住，
+/// 表型回收站语义由 `table_asset_trash_cycles_the_registry_only` 覆盖。）
+///
 /// 少了这两条，「进过回收站又捞回来」在时间线上完全看不见——用户只看到归档与最终
 /// 状态，中间那次危险动作消失。事件不回滚主动作（见 `record_timeline`），所以这里
 /// 断言的是「动作之后履历里有它」，而不是两者同事务。
-#[tokio::test]
-async fn t131_trash_and_restore_leave_timeline_events() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
-    let draft = write_draft(&dir, "audit.sql", b"select 1;").await;
-    let archived = service
-        .archive(archive_req(&draft, "audit.sql", None))
-        .await
-        .expect("archive");
-
-    let entry = service
-        .move_to_trash(&[archived.resource_id.clone()])
-        .await
-        .expect("trash")
-        .remove(0);
-
-    let events = service
-        .store()
-        .get_resource_events(&archived.resource_id)
-        .await
-        .expect("events after trash");
-    let trashed = events
-        .iter()
-        .find(|event| event.kind == TimelineEventKind::Trashed)
-        .expect("移入回收站要落一条 Trashed 事件");
-    assert_eq!(trashed.version, Some(1), "事件要带当时的版本号");
-    let detail = trashed.detail.as_deref().unwrap_or_default();
-    assert!(
-        detail.contains("resources/"),
-        "事件要写清原位置，实际：{detail}"
-    );
-
-    let restored = service
-        .restore_archive_from_trash(&entry.trash_id)
-        .await
-        .expect("restore");
-    let events = service
-        .store()
-        .get_resource_events(&restored.id)
-        .await
-        .expect("events after restore");
-    assert!(
-        events
-            .iter()
-            .any(|event| event.kind == TimelineEventKind::Untrashed),
-        "还原也要落一条 Untrashed 事件，实际：{events:?}"
-    );
-
-    let _ = fs::remove_dir_all(&dir).await;
-}
-
-/// 表型资产的回收站环形口径：**登记软删、分析库表保留**。
-///
-/// 钉三件事：移入回收站不再报「没有本体路径」；回收站清单的第三来源能列出它；
-/// 还原复活登记、永久删除只清登记行。表本身不在回收站语义里，谁都不该去动它。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn table_asset_trash_cycles_the_registry_only() {
     use crate::table_asset::{TableAssetRequest, register};

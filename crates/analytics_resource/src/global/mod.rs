@@ -442,6 +442,7 @@ pub mod promote;
 pub mod refs;
 pub mod register;
 pub mod sql;
+pub mod unlock;
 pub mod table_name;
 
 pub use self::delete::{

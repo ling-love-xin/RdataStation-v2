@@ -18,24 +18,32 @@ pub(super) fn request_delete(host: &ResourceHost, targets: &[DeleteTarget], wind
 
         // 文案按归档粒度区分本体命运（§12.1.1 ③）：copy 搬副本进回收站；reference 本体
         // 留原位、只删登记行。混合时分组说清各有几项。
+        let is_unlock = |t: &DeleteTarget| t.kind == ArchiveKind::File && t.mode == PayloadMode::Copy;
+        let unlock_ids: Vec<String> = targets.iter().filter(|t| is_unlock(t)).map(|t| t.id.clone()).collect();
+        let trash_ids: Vec<String> = targets.iter().filter(|t| !is_unlock(t)).map(|t| t.id.clone()).collect();
         let copy_count = targets
             .iter()
-            .filter(|t| t.mode == PayloadMode::Copy)
+            .filter(|t| !is_unlock(t) && t.mode == PayloadMode::Copy)
             .count();
-        let reference_count = targets.len() - copy_count;
-        let description = match (copy_count, reference_count) {
-            (_, 0) => "将删除 resources/ 副本与登记记录，之后可从回收站还原。".to_string(),
-            (0, _) => "本体留在源位置不动，只删除登记记录，之后可从回收站还原登记行。".to_string(),
-            _ => format!(
-                "{copy_count} 项副本将删除 resources/ 副本与登记记录；{reference_count} 项引用本体留在源位置、只删除登记记录。之后均可从回收站还原。"
-            ),
+        let reference_count = trash_ids.len() - copy_count;
+        let description = if !unlock_ids.is_empty() {
+            format!(
+                "{file_count} 项文件资产不能直接删除：会改为「解除锁定并退回草稿箱」（当前内容进草稿箱，历史副本一并清理），随后请从草稿箱删除；其余项照常移入回收站。",
+                file_count = unlock_ids.len()
+            )
+        } else {
+            match (copy_count, reference_count) {
+                (_, 0) => "将删除 resources/ 副本与登记记录，之后可从回收站还原。".to_string(),
+                (0, _) => "本体留在源位置不动，只删除登记记录，之后可从回收站还原登记行。".to_string(),
+                _ => format!(
+                    "{copy_count} 项副本将删除 resources/ 副本与登记记录；{reference_count} 项引用本体留在源位置、只删除登记记录。之后均可从回收站还原。"
+                ),
+            }
         };
         let title = match targets.len() {
             1 => "移入回收站？".to_string(),
             count => format!("移入回收站（{count} 项）？"),
         };
-
-        let ids: Vec<String> = targets.iter().map(|t| t.id.clone()).collect();
         let backend = host.backend.clone();
         let read_only = host.read_only();
         // 回收站是**项目级**的（与草稿箱共用 `.RSmeta/trash`）：搬本体与软删登记行
@@ -43,24 +51,74 @@ pub(super) fn request_delete(host: &ResourceHost, targets: &[DeleteTarget], wind
         window.open_alert_dialog(cx, move |alert, _window, _cx| {
             let backend = backend.clone();
             let root = root.clone();
-            let ids = ids.clone();
+            let trash_ids = trash_ids.clone();
+            let unlock_ids = unlock_ids.clone();
             alert
                 .confirm()
                 .title(title.clone())
                 .description(description.clone())
                 .button_props(
                     gpui_kit::component::dialog::DialogButtonProps::default()
-                        .ok_text("移入回收站")
+                        .ok_text(if unlock_ids.is_empty() { "移入回收站" } else { "继续" })
                         .ok_variant(gpui_kit::component::button::ButtonVariant::Danger)
                         .show_cancel(true),
                 )
                 .on_ok(move |_, _window, cx| {
-                    resource_jobs::enqueue_trash(root.clone(), read_only, ids.clone());
+                    if !trash_ids.is_empty() {
+                        resource_jobs::enqueue_trash(root.clone(), read_only, trash_ids.clone());
+                    }
+                    for id in unlock_ids.iter() {
+                        resource_jobs::enqueue_unlock_file(root.clone(), read_only, id.clone());
+                    }
                     backend.refresh_resources(cx);
-                    say(&backend, "资产库：正在移入回收站…", cx);
+                    say(&backend, "资产库：正在处理删除…", cx);
                     true
                 })
         });
+}
+
+/// 文件型资产解锁退回草稿箱（文件资产不能直接删除）。
+pub(super) fn request_unlock_file_asset(
+    host: &ResourceHost,
+    detail: &ArchiveDetail,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let Some(root) = host.require_project("无法解锁文件资产", cx) else {
+        return;
+    };
+    if host.read_only() {
+        host.notice(tr("资产库：项目为只读模式，不能解锁"), cx);
+        return;
+    }
+    let id = detail.id.clone();
+    let name = detail.name.clone();
+    let backend = host.backend.clone();
+    let read_only = host.read_only();
+    window.open_alert_dialog(cx, move |alert, _window, _cx| {
+        let backend = backend.clone();
+        let root = root.clone();
+        let id = id.clone();
+        alert
+            .confirm()
+            .title(format!("解除锁定并退回草稿箱（{name}）？"))
+            .description(
+                "当前内容会复制到本项目草稿箱（同名时自动加序号避让）；资产库里的这一份登记与历史版本副本一并清理。之后请从草稿箱删除该文件。"
+                    .to_string(),
+            )
+            .button_props(
+                gpui_kit::component::dialog::DialogButtonProps::default()
+                    .ok_text("解除锁定并退回")
+                    .ok_variant(gpui_kit::component::button::ButtonVariant::Danger)
+                    .show_cancel(true),
+            )
+            .on_ok(move |_, _window, cx| {
+                resource_jobs::enqueue_unlock_file(root.clone(), read_only, id.clone());
+                backend.refresh_resources(cx);
+                say(&backend, "资产库：正在解除锁定…", cx);
+                true
+            })
+    });
 }
 
 pub(super) fn request_reveal(host: &ResourceHost, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {

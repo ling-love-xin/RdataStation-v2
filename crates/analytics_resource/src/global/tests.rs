@@ -931,6 +931,54 @@ async fn g015_table_source_promote_moves_every_row() {
     let _ = fs::remove_dir_all(&env.dir);
 }
 
+/// 全局文件型资产不得直接进回收站；解锁退回草稿箱后全局登记 / 本体 / 副本才清掉。
+#[tokio::test]
+async fn g031_global_file_must_unlock_before_delete() {
+    let env = create_test_env().await;
+    let script = env.dir.join("unlock_me.sql");
+    fs::write(&script, "SELECT 42;\n").expect("write script");
+    let req = promote_req("unlock_me", &script, PromoteKind::Script);
+    env.store.promote(&req).await.expect("promote script");
+    let rel = "work/unlock_me";
+    let body = payload::resources_dir(&env.store.system_dir).join(rel);
+    assert!(body.is_file(), "脚本本体应落进全局 resources");
+    let key = payload::asset_key("unlock_me");
+
+    let refused = env.store.trash_global("unlock_me").await;
+    assert!(
+        matches!(refused, Err(InstanceOpError::Core(_))),
+        "文件型全局资产不能直接进回收站：{refused:?}"
+    );
+    assert!(body.is_file(), "被拒后本体不动");
+
+    let drafts = env.dir.join("scratchpad");
+    let unlocked = env
+        .store
+        .unlock_global_file_to_project("unlock_me", &drafts)
+        .await
+        .expect("unlock global file");
+    assert_eq!(unlocked.draft_rel, rel);
+    assert_eq!(
+        fs::read_to_string(drafts.join(rel)).expect("draft"),
+        "SELECT 42;\n",
+        "草稿内容 = 当前全局版本"
+    );
+    assert!(!body.exists(), "全局本体已清");
+    assert!(
+        !payload::asset_versions_dir(&env.store.system_dir, &key).is_dir(),
+        "全局历史副本目录已清"
+    );
+    assert!(
+        list_global_resources(&env.store)
+            .expect("list")
+            .iter()
+            .all(|row| row.name != "unlock_me"),
+        "全局登记链已清"
+    );
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
 /// 表型历史版本恢复：旧版表还在 → 复制成新版本，不原地回滚；旧表与旧登记全留。
 #[tokio::test]
 async fn g030_table_version_restore_copies_the_old_table() {
