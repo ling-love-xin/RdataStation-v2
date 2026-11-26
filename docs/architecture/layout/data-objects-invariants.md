@@ -53,6 +53,11 @@
      面板与执行器读的是同一个（旧 `SESSIONS` 门面缓存已退役，见 `analysis-instance-sessions.md` §7）。
      联邦与文件库各占一个 catalog、出行；**加速档（`rds_src`）是执行通道，不出行**（有且只有一个对象），
      它只让连接行写「已挂载」。
+   - **会话的角色看它挂着什么，不看 label**（2026-11-26）：`ensure_session` 对同一 owner 是 1:1 复用，
+     label 只在**第一个**建会话的路径写一次——先开全局分析库（`ensure_session(owner, "全局分析")`）、
+     之后联邦执行复用它，那条会话的 label 就停在「全局分析」。所以「算不算分析会话、进不进源段」的判据是
+     `AnalysisInstance::is_analysis_session`：挂着源，且 owner 不是 `process`（进程面会话）也不是
+     `accel:<连接 id>`（加速档挂 `rds_src` 但不占源段）。`label` 只当展示名。
    - 挂载入口（2026-11-26 统一到实例）：联邦 = `instance.ensure_session(owner, "联邦")` 后调
      返回的 `AnalysisSession::mount_sources`；本地加速 = `accel::ensure_on_instance`；数据库文件 =
      `file_view::load_database_as` / `load_database_global`。
@@ -440,5 +445,10 @@
   ③ 加速档**不占源段行**，但加速档挂上后连接行写「已挂载」、且照样登记（旧「不进 `analysis_sources`」废止）；
   ④ 会话只有一份真值（`AnalysisInstance` 按 owner 存），旧 `SESSIONS` 门面缓存退役；面板、载入 / 归档、
   编辑器源清单、补全全部改读实例（刀 1 / 2a / 2b，`186bfc9c` / `20e1a6df` / `5c40015`）；
-  ⑤ 第 42 条的两处「现状要改掉」已清（`accel:` 行 + `SourceRef::Accel` 死分支，`eec47963`）。
+  ⑤ 第 42 条的两处「现状要改掉」已清（`accel:` 行 + `SourceRef::Accel` 死分支，`eec47963`）；
+  ⑥ 面板三段（源 / 表 / 文件）的段头换成共享 `tree::GroupHeader`（与草稿箱分区头、数据导航分组头
+  同一原语：整行可点、计数紧跟组名、底色 `group_box`，`b9fc9e62`），并**常驻**——某段一行都没有也
+  占一行「源 0 / 表 0 / 文件 0」，兑现「空段也得让人知道它空着」（`0875ca5c`）；
+  ⑦ 会话角色判据从 `label` 改成**挂着源**（`AnalysisInstance::is_analysis_session`，`f193e1ae`）：
+  同 owner 会话被「全局分析」先建过、后被联邦复用时 label 不会改，按 label 过滤会让源段整段消失。
 

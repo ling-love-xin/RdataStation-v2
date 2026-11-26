@@ -189,6 +189,12 @@ CREATE INDEX IF NOT EXISTS idx_analysis_sources_kind ON analysis_sources(kind);
 > 已不存在（前者改由分析实例拥有会话，后者改名 `ensure_on_instance`）。
 > 铁律第 37 条原记的「网络连接行缺挂载入口」缺口也已关闭，见下。
 
+> 2026-11-26 更正（会话角色）：`ensure_session` 对同一 owner 是 1:1 复用，label 只在第一个建会话
+> 的路径写一次（先开全局分析库 → 那条会话 label 停在「全局分析」，之后联邦执行复用它）。
+> 所以「这条算不算联邦 / 分析会话」的判据是 `AnalysisInstance::is_analysis_session`：**挂着源**，
+> 且 owner 不是 `process` 也不是 `accel:<连接 id>`；`label` 只当展示名。照 label 过滤的
+> 源段列举与会话面板（`federation::session::owners()`）已一并改掉。
+
 > 2026-11-25 已补齐：`components/data_objects_load.rs` 的 `mount_network_source` /
 > `unmount_network_source`（凭据取法与 `editor/src/ports/editor_exec/conn.rs::accel_source`
 > 同一口径：`url_override` 优先、退回 `ConnectionInfo.url`），源段右键「挂载 / 卸载」接上；
