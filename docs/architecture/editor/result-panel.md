@@ -10674,9 +10674,14 @@ JSON 树** —— 而网格里双击进去的是行内编辑框（一整条字�
 
 #### 9.72.3 差异（登记，勿当 bug 修）
 
-1. **三角槽宽**：组件 `DropdownButton` ghost small 最小 28px，真值 16+3=19px → 列名可用宽
-   少约 9px（`grid()` 128px 列实测 95 → 67）。要 1:1 需自绘 16px 三角，与「禁手搓组件」冲突，
-   暂按组件形态。
+1. ~~**三角槽宽**~~ → **已对齐（2026-11-27）**：原记「组件 ghost small 最小 28px、真值 19px、
+   列名可用宽 −9px」。复核原生能力后发现不需要自绘：`DropdownButton` 的 `Size::Size(Pixels)`
+   档对 **icon-only** 按钮（无 label、无 children，`dropdown_caret(true)` 属此档）把宽高**直接取该值**
+   （`vendor/gpui-component/src/button/button.rs:693-700`），而里面的 `Caret` 恒 16px（它无视
+   `Size::Size`，回落 `Medium` = `size_4`，`select.rs:60-69` / `icon.rs:229`）。故取
+   `ui::RESULT_HEADER_TRIANGLE_SLOT = px(19.)` 即「16 图标 + 左右各 1.5」= 真值槽宽。
+   组件 `.small()` 的 28px 是 Normal 档 padding 撑出来的，换掉后实测槽宽落在 19±1
+   （`header_column_menu_is_always_visible_beside_the_name` 断言兜底）。
 2. **真值有、本仓无的组**：`导航` / `编辑` / `呈现格式` / `逻辑结构` / `布局` / `导出` /
    `打开方式`（本仓没有对应列级能力），不摆空壳子菜单。
 3. ~~**面板▸ 不在列头菜单**~~ → **已对齐（2026-11-27）**：`grid/column_menu.rs::build_plan_menu`
@@ -10935,12 +10940,24 @@ preview 重建后 `PREVIEW_STAGE=5`：`[preview] copy_column_names -> Ok(Options
 | **计算页 Copy / CopyAll** | `SpreadsheetPresentation` 计算页右键复制 | 未做 | §8.40.2 |
 | **多维数组二级展开** | `GridRowNested` 逐级可展开 | 子行不再给三角（键是 `(data_row, column)`，`delegate.rs:277`） | §9.70.5 第 5 条；要改成层级键 |
 
-#### 20.8.2 仍缺 · 需动 `vendor/gpui-component`
+#### 20.8.2 仍缺 · 需替换组件既有行为（不必 patch vendor）
 
 | 缺口 | 真值 | 本仓（vendor 侧） | 定量 |
 | --- | --- | --- | --- |
 | **排序图标** | 16px 三态（`sort.svg` / `SORT_DECREASE` / `SORT_INCREASE`），且 `UP → SORT_DECREASE`（`GridColumnRenderer.java:186-214`） | `table/state.rs:2087-2131`：`Icon::size_3()`（12px）+ `SortAscending` / `SortDescending` / `ChevronsUpDown` | 尺寸 −4px；未排态是**双箭头**而非真值单箭头；升降映射**相反** |
-| **列头三角槽宽** | 16（图标）+ 3（`IMAGE_SPACING`）= 19px | `DropdownButton` ghost small 最小 28px（`button/button.rs`） | 列名可用宽 −9px（`grid()` 128px 列实测 95 → 67） |
+
+**原生产路径（2026-11-27 取证，不需要改 vendor）**：`render_sort_icon` 只在 `col.sort != ColumnSort::Default`
+时才画（`state.rs:2087` 起），且图标是 `render_th`（`:2137-2178`，`h_flex().justify_between()`）里
+delegate 内容**之后**的独立 slot，delegate 侧改不了它。但可以**整个不设 `Column::sort`**（`column.rs`
+的 `Column` 字段只有 `key/name/align/sort/paddings/...`，无图标项）→ 组件那边早退返回 `None`，
+再在 `delegate.render_th` 自绘 16px 三态图标并自行挂排序点击。
+
+代价只有一个：排序的点击入口要从组件接管。已核 `state.rs:1112-1126 on_col_head_click` **只做
+`set_selected_col`、不排序**（旧版「点列头会排一次序」的直觉在 0.10.0 不成立），所以撤掉
+`Column::sort` 不破坏列头点击语义，反而更贴真值（真值点列名 = 选整列）。
+
+**已解决（原列在此档）**：列头三角槽宽 19px——原生 `Size::Size(px(19.))` 即可（见 §9.72.3 第 1 条），
+无需自绘 16px 三角。
 
 #### 20.8.3 有意差异 / 已判定不做（勿当 bug）
 

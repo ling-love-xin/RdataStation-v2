@@ -4363,6 +4363,18 @@ fn header_column_menu_is_always_visible_beside_the_name(
         menu.size.width > gpui_kit::px(0.),
         "三角没有拿到宽度（又回到悬停显形？）：menu={menu:?}"
     );
+    // 【DBeaver 对齐 2026-11-27】三角槽 19px（真值 `drop_down.svg` 16 + `IMAGE_SPACING` 3）；
+    // 组件 `.small()` 实测 28px。现在走 `Size::Size` 自定义尺寸压缩，这里钉住真实布局宽，
+    // 组件内部常数（`Caret` 回落 16、padding `0.2 * size`）若被上游改掉会立刻掉下来。
+    assert!(
+        menu.size.width >= crate::ui::RESULT_HEADER_TRIANGLE_SLOT - gpui_kit::px(1.),
+        "三角槽窄于 19px（图标会被裁）：menu={menu:?}"
+    );
+    assert!(
+        menu.size.width <= crate::ui::RESULT_HEADER_TRIANGLE_SLOT + gpui_kit::px(1.),
+        "三角槽宽于 19px（列名可用宽被多吃）：menu={menu:?} 实测={}",
+        menu.size.width
+    );
     // 三角在主行右端、列名右侧：列名被 flex 压窄，而不是被三角盖住
     assert!(
         menu.origin.x + gpui_kit::px(4.) >= name.origin.x + name.size.width,

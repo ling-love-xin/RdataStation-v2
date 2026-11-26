@@ -4068,14 +4068,21 @@ e.gc.setForeground(e.gc.getDevice().getSystemColor(SWT.COLOR_DARK_GREEN));
 
 #### 57.10.4 仍存差异
 
-1. **三角槽宽**：组件 `DropdownButton` ghost small 最小 28px vs 真值 19px（16 + 3），
-   列名可用宽少约 9px（`grid()` 128px 列实测 95 → 67）。
+1. ~~**三角槽宽**~~ → **已对齐（2026-11-27）**：原记「组件 `DropdownButton` ghost small 最小 28px
+   vs 真值 19px（16 + 3），列名可用宽 −9px」。现用原生 `Size::Size(Pixels)` 档解决——icon-only
+   按钮在该档下宽高直接取该值（`vendor/gpui-component/src/button/button.rs:693-700`），内部
+   `Caret` 恒 16px（`select.rs:60-69`）；取 `ui::RESULT_HEADER_TRIANGLE_SLOT = px(19.)` 即
+   「16 + 左右各 1.5」，实测落在 19±1。落点与推导见 `result-panel.md` §9.72.3 第 1 条。
 2. **排序图标**：组件画 12px `ChevronsUpDown` 三态
    （`vendor/gpui-component/src/table/state.rs:2087-2131` 的 `render_sort_icon`，
    `Icon::size_3()` + `SortAscending` / `SortDescending` / `ChevronsUpDown`），
    真值 16px 三态且上下反向（`GridColumnRenderer.java:186-214`，`UP → SORT_DECREASE`）。
-   改需动 vendor。
-3. **焦点列四边框 / 只读下划线 / 内容 inset 4-6**：未做（内容层是组件的 th）。
+   **原生可绕（不必 patch vendor）**：`Column` 不设 `sort` → 组件早退不画图标，改在
+   `delegate.render_th` 自绘并接管排序点击；代价只是接管点击，而组件
+   `on_col_head_click`（`state.rs:1112-1126`）本就只 `set_selected_col`、不排序。
+3. **焦点列四边框 / 只读下划线 / 内容 inset 4-6**：未做。前两项的差别在档位——焦点列四边框
+   用 `TableState::selected_cell()`（`state.rs:662`）+ `delegate.render_th` 可做；只读下划线
+   卡列级只读模型（`result-panel.md` §20.8）；内容 inset 横向已是 `px(6)`。
 4. **列头右键的组**：落 `筛选▸` / `排序▸` / `面板▸` / `列操作▸`（本仓无 `导航` / `编辑` /
    `呈现格式` / `逻辑结构` / `布局` / `导出` / `打开方式` 的列级能力）。`面板▸` 2026-11-27 补上，
    与数据格右键共用注入的构造器（同一份 `fillPanelsMenu()`），排在「排序」之后

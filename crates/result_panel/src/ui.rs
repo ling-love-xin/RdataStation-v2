@@ -297,6 +297,18 @@ pub const RESULT_HEADER_COMMENT_ROW_HEIGHT: Pixels = px(40.);
 /// 都用这一档（两边字号必须一致，否则双击自适应算出的宽度会和实际渲染差一两个字符）。
 pub const RESULT_HEADER_TYPE_FONT_SIZE: f32 = 0.6875;
 
+/// 列头右端三角槽的目标总宽（19px = 真值 `drop_down.svg` 16 + `IMAGE_SPACING` 3）
+///
+/// 真值 `GridColumnRenderer.java:46`：`IMAGE_FILTER = UIIcon.DROP_DOWN`，图标 16×16，
+/// 与列名之间留 `IMAGE_SPACING = 3`（同文件 `:44`），槽宽合计 19。
+/// 本仓用组件 `DropdownButton`（ghost、只有 caret、无 label 与 children）承载该三角：
+/// 这种 icon-only 按钮在 `Size::Size(v)` 下宽高都直接取 `v`（`vendor/gpui-component/src/button/button.rs:693-700`），
+/// 而里面的 `Caret` **无视** `Size::Size`、回落 `Size::Medium` = `size_4` = 16px
+/// （`select.rs:60-69`、`icon.rs:229`）。于是把按钮尺寸取 19 就是「16 图标 + 左右各 1.5」= 真值槽宽。
+/// 组件 `.small()` 实测 28px（MiniButton 档，见基线 §57.10.4），本常量即替换掉那一档。
+/// `grid/tests.rs` 的 `header_column_menu_is_always_visible_beside_the_name` 用真实布局宽兜底。
+pub const RESULT_HEADER_TRIANGLE_SLOT: Pixels = px(19.);
+
 /// 结果区最小高度（7rem = 112px：工具栏 24 + 多结果时的标签条 24 + 至少两行网格）
 ///
 /// 拖拽不许把它压得比这更小——再小就只剩一条工具栏，看不出自己看的是哪份结果。

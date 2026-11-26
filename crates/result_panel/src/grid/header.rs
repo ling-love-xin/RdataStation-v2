@@ -400,7 +400,12 @@ pub(crate) fn render_th(
             .child(
                 DropdownButton::new(("editor-result-col-menu", col_ix))
                     .ghost()
-                    .small()
+                    // 【DBeaver 对齐 2026-11-27】真值槽宽 19px（16 图标 + 3 间距，
+                    // `GridColumnRenderer.java:44-46`）；组件 `.small()` 实测 28px（白吃 9px 列名宽）。
+                    // 这个按钮只有 caret（无 label / children）→ 走 icon-only 分支，`Size::Size(v)`
+                    // 直接决定 19×19 的盒子（`button.rs:693-700`），里面的 `Caret` 恒 16px 居中，
+                    // 左右各余 1.5 就是真值那 3px 间距。推导见 `ui::RESULT_HEADER_TRIANGLE_SLOT`。
+                    .with_size(ui::RESULT_HEADER_TRIANGLE_SLOT)
                     .menu_accessibility_label(format!("列菜单：{name}"))
                     .dropdown_menu(move |menu, _window, _cx| {
                         build_flat_menu(menu, &flat_items, &flat_hooks)
