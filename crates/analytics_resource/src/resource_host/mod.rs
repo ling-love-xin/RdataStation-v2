@@ -295,6 +295,14 @@ impl ResourcesHost for ResourceHost {
     ) {
         detail_actions::request_delete_global(self, detail, window, cx);
     }
+    fn request_restore_global_previous(
+        &self,
+        detail: &ArchiveDetail,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        detail_actions::request_restore_global_previous(self, detail, window, cx);
+    }
     fn request_show_origin_chain(
         &self,
         detail: &ArchiveDetail,

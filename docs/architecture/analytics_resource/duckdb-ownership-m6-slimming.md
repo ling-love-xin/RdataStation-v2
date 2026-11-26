@@ -406,6 +406,19 @@ WIP 产物串包（`rds_sql::guard` 缺失 / `use_duckdb_fed` 类型不一致）
 派生表的归属标记仍待下一段。全局文件打开路径已按 `RowScope::Global` 改走
 `data/system/resources/`，不再误拼到项目根。
 
+## 9.6 第六段实施记录：全局文件“恢复上一版”入口（2026-11-26）
+
+- `detail_view/actions.rs`：全局行且 `payload_rel_path` 非空、当前版本 > 1、状态不是 Missing 时，
+  动作区摆「恢复上一版文件…」；分发按钮旁说明补一句“历史文件已留副本，可恢复”。
+- `resource_host/detail_actions.rs`：确认框写清“旧副本生成新版本、当前版本保留、已分发副本不动、
+  副本被裁会拒绝”；确认后 `enqueue_restore_global_version(name, version - 1)`。
+- `jobs/global.rs`：新增 `RestoreGlobalVersionJob` / `run_restore_global_version`；
+  回执 `OpOutcome::GlobalVersionRestored { name, from_version, version }`。
+- `workbench/src/panels/resources.rs`：回执文案“已从全局「name」vN 恢复为 vM（旧版本保留）”。
+
+验证：`cargo test -p rds-analytics-resource --lib --no-run` 通过；完整 UI 编译仍受本机环境限制。
+本段只给“上一版”快捷入口，任意版本选择仍走后续版本历史 UI。
+
 ## 10. 风险与未决
 
 1. **全局写守卫的绕过面**：`CALL` / `COPY` / `EXPORT` / prepared statement / 多语句；

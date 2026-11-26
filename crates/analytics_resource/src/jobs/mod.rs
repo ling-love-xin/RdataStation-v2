@@ -47,7 +47,7 @@ use archive::{
     ArchiveJob, CheckoutJob, TrashActionJob, TrashJob, TrashListJob, UndoJob, load_trash,
     reload_trash_after, run_archive, run_checkout, run_trash, run_trash_action, run_undo,
 };
-use global::{DeleteGlobalJob, DistributeJob, PromoteJob, ReferenceGlobalJob, SolidifyRefJob, run_delete_global, run_distribute, run_promote, run_reference, run_solidify};
+use global::{DeleteGlobalJob, DistributeJob, PromoteJob, ReferenceGlobalJob, RestoreGlobalVersionJob, SolidifyRefJob, run_delete_global, run_distribute, run_promote, run_reference, run_restore_global_version, run_solidify};
 use index::{
     IndexRepairActionJob, IndexScanJob, load_index_report, reload_index_scan_after,
     run_repair_action,
@@ -98,6 +98,7 @@ pub(crate) enum Job {
     Reference(ReferenceGlobalJob),
     Solidify(SolidifyRefJob),
     DeleteGlobal(DeleteGlobalJob),
+    RestoreGlobalVersion(RestoreGlobalVersionJob),
 }
 
 pub enum OpOutcome {
@@ -161,6 +162,12 @@ pub enum OpOutcome {
         versions: usize,
         tables: usize,
         projects: usize,
+    },
+    /// 已从全局文件历史版本恢复：资产名 / 来源版本 / 新生成的版本。
+    GlobalVersionRestored {
+        name: String,
+        from_version: i32,
+        version: i32,
     },
     /// 失败：动作名 + 原因（原因原样来自服务层，已含可操作信息）。
     Failed {
@@ -439,6 +446,12 @@ fn handle_job(rt: &tokio::runtime::Runtime, job: Job) {
                 // 全局行从项目面板的「全局」分区消失：重取一次快照。
                 refresh_after_op(&rt, job.project_root, false);
             }
+            Job::RestoreGlobalVersion(job) => {
+                let outcome = rt.block_on(run_restore_global_version(&job));
+                *lock(&jobs().op_result) = Some(outcome);
+                // 恢复生成新的全局版本：全局分区要重取一次。
+                refresh_after_op(&rt, job.project_root, false);
+            }
         }
 }
 
@@ -462,7 +475,7 @@ pub use archive::{
 };
 pub use global::{
     enqueue_delete_global, enqueue_distribute, enqueue_promote, enqueue_reference,
-    enqueue_solidify,
+    enqueue_restore_global_version, enqueue_solidify,
 };
 pub use index::enqueue_index_repair_action;
 pub use index::enqueue_index_scan;

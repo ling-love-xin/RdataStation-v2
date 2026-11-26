@@ -340,6 +340,55 @@ pub(super) fn request_solidify_ref(host: &ResourceHost, resource_id: &str, proje
     host.notice("资产库：正在固化引用版本…", cx);
 }
 
+/// 把全局文件资产恢复到上一版：确认后入队，旧副本生成新版本（不覆盖历史）。
+pub(super) fn request_restore_global_previous(
+    host: &ResourceHost,
+    detail: &ArchiveDetail,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let Some(root) = host.require_project("无法恢复全局文件版本", cx) else {
+        return;
+    };
+    if detail.version <= 1 {
+        host.notice(tr("资产库：当前已经是 v1，没有上一版可恢复"), cx);
+        return;
+    }
+    let from_version = detail.version - 1;
+    let name = detail.name.clone();
+    let description = format!(
+        "将把全局「{name}」的 v{from_version} 内容副本恢复成一个新版本（v{}）：当前 v{} 保留为历史，v{from_version} 及其副本也不动。\n恢复会重新生成全局表；已分发到项目的副本不受影响。\n版本副本若已被保留策略裁掉，恢复会明确拒绝。",
+        detail.version + 1,
+        detail.version
+    );
+    let backend = host.backend.clone();
+    window.open_alert_dialog(cx, move |alert, _window, _cx| {
+        let backend = backend.clone();
+        let root = root.clone();
+        let name = name.clone();
+        let description = description.clone();
+        alert
+            .confirm()
+            .title("恢复上一版文件？")
+            .description(description)
+            .button_props(
+                gpui_kit::component::dialog::DialogButtonProps::default()
+                    .ok_text("恢复")
+                    .show_cancel(true),
+            )
+            .on_ok(move |_, _window, cx| {
+                resource_jobs::enqueue_restore_global_version(
+                    root.clone(),
+                    name.clone(),
+                    from_version,
+                );
+                backend.refresh_resources(cx);
+                say(&backend, "资产库：正在恢复全局文件版本…", cx);
+                true
+            })
+    });
+}
+
 /// 移入全局回收站（刀 B）：确认框说清「只软删全局这一份，表与版本仍在，可恢复」。
 pub(super) fn request_delete_global(
     host: &ResourceHost,

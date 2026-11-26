@@ -225,6 +225,13 @@ pub trait ResourcesHost: 'static {
     }
     /// 从全局实例删除（刀 B）：删全局各版表与登记，已分发到项目的副本不受影响。
     fn request_delete_global(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App);
+    /// 把全局文件资产恢复到上一版（旧副本 → 新版本，不原地回滚）。
+    fn request_restore_global_previous(
+        &self,
+        detail: &ArchiveDetail,
+        window: &mut Window,
+        cx: &mut App,
+    );
     /// 查看来源链（刀 C）：顺着一行行的直接上游往上追（只读，不改数据）。
     fn request_show_origin_chain(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App);
 

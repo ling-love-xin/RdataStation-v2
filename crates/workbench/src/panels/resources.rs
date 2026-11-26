@@ -711,6 +711,13 @@ impl SidebarPanel {
             resource_jobs::OpOutcome::GlobalTrashed { name, version } => format!(
                 "资产库：已把全局「{name}」v{version} 移入回收站（表与版本快照保留，恢复后回到列表）"
             ),
+            resource_jobs::OpOutcome::GlobalVersionRestored {
+                name,
+                from_version,
+                version,
+            } => format!(
+                "资产库：已从全局「{name}」v{from_version} 恢复为 v{version}（旧版本保留）"
+            ),
             resource_jobs::OpOutcome::GlobalDeleted {
                 name,
                 versions,

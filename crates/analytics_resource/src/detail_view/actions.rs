@@ -64,11 +64,14 @@ pub(super) fn render_actions(
         if detail.scope == RowScope::Global {
             let detail_for_distribute = detail.clone();
             let detail_for_delete = detail.clone();
+            let detail_for_restore = detail.clone();
             // 分发要往本项目库写表：只读项目 / 本体缺失都挡住（与列表右键菜单同一判据）。
             let (can_distribute, distribute_hint) = distribute_affordance(&ctx);
             // 引用只认表型全局资产：文件型暂时没有引用语义（分发仍可复制一份）。
             let is_file_global = detail.payload_rel_path.is_some();
             let can_reference = can_distribute && !is_file_global;
+            let can_restore_file =
+                is_file_global && detail.version > 1 && ctx.status != ArchiveStatus::Missing;
             let can_delete_global = crate::model::can_delete_global(&ctx);
             out.push(
                 div()
@@ -107,6 +110,7 @@ pub(super) fn render_actions(
                                     .disabled(!can_distribute)
                                     .on_click({
                                         let host = host.clone();
+                                        let detail_for_distribute = detail_for_distribute.clone();
                                         move |_, window, cx| {
                                             host.request_distribute_from_global(
                                                 &detail_for_distribute.name,
@@ -115,10 +119,29 @@ pub(super) fn render_actions(
                                             )
                                         }
                                     }),
-                            ),
+                            )
+                            .when(is_file_global, |row| {
+                                row.child(
+                                    Button::new("archive-detail-restore-global-version")
+                                        .ghost()
+                                        .label(tr("恢复上一版文件…"))
+                                        .disabled(!can_restore_file)
+                                        .on_click({
+                                            let host = host.clone();
+                                            let detail_for_restore = detail_for_restore.clone();
+                                            move |_, window, cx| {
+                                                host.request_restore_global_previous(
+                                                    &detail_for_restore,
+                                                    window,
+                                                    cx,
+                                                )
+                                            }
+                                        }),
+                                )
+                            }),
                     )
                     .child(div().text_xs().text_color(muted).child(if is_file_global {
-                        tr("文件型全局资产暂不支持引用；分发会复制一份到本项目")
+                        tr("文件型全局资产暂不支持引用；分发会复制一份到本项目。历史文件已留副本，可用「恢复上一版文件」生成新版本")
                     } else if can_reference {
                         tr("引用不复制数据：本项目只记一条引用并钉住这一版；分发会复制出一份本地表")
                     } else {

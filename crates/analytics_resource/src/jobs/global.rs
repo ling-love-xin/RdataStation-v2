@@ -55,6 +55,14 @@ pub(crate) struct SolidifyRefJob {
     pub(crate) target: String,
 }
 
+/// 一次「恢复全局文件历史版本」任务（旧副本 → 新全局版本）。
+pub(crate) struct RestoreGlobalVersionJob {
+    pub(crate) project_root: PathBuf,
+    pub(crate) name: String,
+    /// 要恢复的历史版本号。
+    pub(crate) version: i32,
+}
+
 /// 把全局资产移入回收站（工作线程上执行）。
 pub(crate) async fn run_delete_global(job: &DeleteGlobalJob) -> OpOutcome {
     use crate::global::GlobalInstanceStore;
@@ -75,6 +83,37 @@ pub(crate) async fn run_delete_global(job: &DeleteGlobalJob) -> OpOutcome {
         },
         Err(reason) => OpOutcome::Failed {
             action: "移入全局回收站",
+            reason: reason.to_string(),
+        },
+    }
+}
+
+/// 从全局文件历史版本恢复（工作线程上执行）：校验旧副本 → 生成新版本。
+pub(crate) async fn run_restore_global_version(
+    job: &RestoreGlobalVersionJob,
+) -> OpOutcome {
+    use crate::global::GlobalInstanceStore;
+
+    let gstore = match GlobalInstanceStore::production().await {
+        Ok(store) => store,
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action: "恢复全局文件版本",
+                reason: format!("打开全局系统库失败：{reason}"),
+            };
+        }
+    };
+    match gstore
+        .restore_global_file_version(&job.name, job.version)
+        .await
+    {
+        Ok(outcome) => OpOutcome::GlobalVersionRestored {
+            name: outcome.name,
+            from_version: job.version,
+            version: outcome.version,
+        },
+        Err(reason) => OpOutcome::Failed {
+            action: "恢复全局文件版本",
             reason: reason.to_string(),
         },
     }
@@ -432,6 +471,20 @@ pub fn enqueue_distribute(
         name,
         target,
         overwrite,
+    }));
+}
+
+/// 提交一次「恢复全局文件历史版本」。
+pub fn enqueue_restore_global_version(
+    project_root: PathBuf,
+    name: String,
+    version: i32,
+) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
+    let _ = jobs().tx.send(Job::RestoreGlobalVersion(RestoreGlobalVersionJob {
+        project_root,
+        name,
+        version,
     }));
 }
 
