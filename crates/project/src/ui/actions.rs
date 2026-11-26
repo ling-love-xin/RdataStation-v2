@@ -23,6 +23,9 @@ pub fn create_sample(host: &ProjectUiHost, window: &mut Window, cx: &mut App) {
             "-- RdataStation 示例项目\n-- 在此编写并执行 SQL。\nSELECT 1 AS hello;\n",
         );
     }
+    // 示例项目自带双数据源（SQLite + DuckDB 销售库）与两条全局连接：
+    // 幂等准备，**每次进入都跑一遍**（旧示例项目可能缺这两个库，或库是 1.5 时代写的）。
+    project_service::prepare_sample_project(&path);
     // 走切换语义：无当前项目时等价 request_open，有当前项目时先释放（还锁 + 刷新连接
     // 作用域）再打开——示例项目按钮在项目中心里同样可见，不能把新锁盖到旧会话上。
     request_switch(host, &path, window, cx);

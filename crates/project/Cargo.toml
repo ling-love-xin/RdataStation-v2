@@ -29,11 +29,12 @@ tokio.workspace = true
 uuid.workspace = true
 tracing.workspace = true
 rusqlite.workspace = true
+# 示例项目自带的 DuckDB 业务库必须用**当前内核版本**建（2.0 写出的库旧版读不了，
+# 见 `service.rs::ensure_sample_data` 的说明）
+duckdb.workspace = true
 
 [dev-dependencies]
 # 测试构建的数据根自动隔离（不写产品目录；见 data-paths.md §5）
 paths = { workspace = true, features = ["test-support"] }
-# M1 双层架构装配验证（冒烟测试）
-duckdb.workspace = true
 # 窗口级测试：headless 窗口需要 gpui 的 test-support（仅在测试构建启用）
 gpui-kit = { workspace = true, features = ["test-support"] }
