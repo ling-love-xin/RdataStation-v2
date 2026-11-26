@@ -284,6 +284,13 @@ pub fn create(input: CreateProjectInput) -> Result<ProjectSummary, String> {
     let name = input.name.trim().to_string();
     let store =
         ProjectStore::create(&name, &input.path).map_err(|e| format!("创建项目失败: {e}"))?;
+    // `sample_drafts` 以前是死字段（只存不用）：现在真正落地成草稿箱里的一份草稿。
+    // 失败不阻断创建（示例草稿只是开箱体验，缺了也能用）。
+    if input.sample_drafts {
+        if let Err(e) = ensure_sample_draft(&input.path) {
+            tracing::warn!("写入示例草稿失败：{e}");
+        }
+    }
     if input.description.is_some() {
         // ProjectStore::create 后补写描述（保持单一写入入口）。
         // 失败不阻断创建，仅记录。
@@ -334,6 +341,21 @@ fn register_and_summarize(info: &crate::ProjectInfo) -> Result<ProjectSummary, S
 /// 示例项目自带业务库的文件名（落在 `<root>/data/` 下）。
 pub const SAMPLE_SQLITE_FILE: &str = "sample.sqlite";
 pub const SAMPLE_DUCKDB_FILE: &str = "sample.duckdb";
+
+/// 示例草稿：草稿箱模块根下（`<root>/scratchpad/welcome.sql`）。
+///
+/// 草稿箱的扫描根是 `scratchpad::MODULE_DIR_NAME`（`<root>/scratchpad/`），
+/// 写到项目根不算草稿——`create_sample` 以前就是这么写的，于是示例项目打开后
+/// 草稿箱是空的（2026-11-27 用户实测发现）。
+pub const SAMPLE_DRAFT_REL: &str = "scratchpad/welcome.sql";
+
+const SAMPLE_DRAFT_SQL: &str = r"-- RdataStation 示例项目 · 开箱草稿
+-- 数据源（导航树 → 全局连接）：
+--   示例 SQLite（销售库）  →  data/sample.sqlite（customers 6 行 / orders 12 行）
+--   示例 DuckDB（销售库）  →  data/sample.duckdb（同构，便于对照 SQLite 与 DuckDB）
+-- 两个库结构一致：先选一个连接，再执行下面这条。
+select * from orders order by order_id;
+";
 
 /// 示例连接 id（固定 → 重复调用是覆盖，不是新增）。
 pub const SAMPLE_SQLITE_CONN: &str = "G_conn_sample_sqlite";
@@ -503,7 +525,25 @@ pub fn ensure_sample_connections(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// 示例项目一整套准备（数据 + 连接）。失败只记日志，不阻断打开。
+/// 示例草稿：写进草稿箱模块根本（`<root>/scratchpad/welcome.sql`），幂等。
+///
+/// **已存在就不覆盖**——用户可能已经改过这份草稿，每次进入示例项目只负责"有"，
+/// 不负责"还原"。目录不存在时一并建出来（新建项目走 `ProjectStore::create` 时
+/// 并不建 `scratchpad/`）。
+pub fn ensure_sample_draft(root: &Path) -> Result<(), String> {
+    let draft = root.join(SAMPLE_DRAFT_REL);
+    if draft.is_file() {
+        return Ok(());
+    }
+    if let Some(parent) = draft.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            return Err(format!("创建草稿箱目录失败: {e}"));
+        }
+    }
+    std::fs::write(&draft, SAMPLE_DRAFT_SQL).map_err(|e| format!("写入示例草稿失败: {e}"))
+}
+
+/// 示例项目一整套准备（数据 + 连接 + 草稿）。失败只记日志，不阻断打开。
 pub fn prepare_sample_project(root: &Path) {
     if let Err(e) = ensure_sample_data(root) {
         tracing::warn!("示例项目业务数据准备失败：{e}");
@@ -511,6 +551,9 @@ pub fn prepare_sample_project(root: &Path) {
     }
     if let Err(e) = ensure_sample_connections(root) {
         tracing::warn!("示例项目连接登记失败：{e}");
+    }
+    if let Err(e) = ensure_sample_draft(root) {
+        tracing::warn!("示例项目草稿准备失败：{e}");
     }
 }
 
