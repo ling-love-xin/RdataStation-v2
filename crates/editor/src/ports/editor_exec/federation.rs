@@ -27,9 +27,14 @@ impl EngineQueryRunner {
     /// 认不出就如实记一句；**别名**由连接名生成（`sanitize_alias` + 重名再排），
     /// 按连接 id 排序保证稳定；**主源** = 本文档绑定的那条连接（它不在清单里时由引擎选
     /// 第一个可用源，并留下回退说明）。
-    pub(crate) fn federated_plan(&self, connection: Option<&str>) -> Result<FederatedPlan, String> {
+    pub(crate) fn federated_plan(
+        &self,
+        document: &str,
+        connection: Option<&str>,
+    ) -> Result<FederatedPlan, String> {
         let manager = engine::connection_manager::get_connection_manager();
-        let owner = self
+        // 本文档绑定的连接（判主源用）；`None` 时回退当前活动连接
+        let doc_conn = self
             .resolve_conn_id(connection)
             .ok_or_else(|| "联邦查询需要一个连接：先绑定一个，或在导航里选中它".to_string())?;
 
@@ -72,18 +77,19 @@ impl EngineQueryRunner {
             });
         }
 
-        plan_from_records(&records, &notes, &owner)
+        plan_from_records(&records, &notes, &doc_conn, document)
     }
 
     /// 联邦档执行：在联邦会话上跑（源清单为空/全挂不上都会提前给可读原因）
     /// `lineage` 随历史落库（【B5 余项】；`run()` 把队列注入的执行血缘递过来）。
     pub(crate) fn run_on_federation(
         &self,
+        document: &str,
         connection: Option<&str>,
         sql: &str,
         lineage: &str,
     ) -> Result<QueryData, String> {
-        let (plan, session) = self.federated_session(connection)?;
+        let (plan, session) = self.federated_session(document, connection)?;
         // 与另两档同口径：查询只取**第一段**（套窗口），写语句原样交给引擎
         let (to_run, segmented) = match window_sql(sql, crate::execution::SEGMENT_ROWS, 0) {
             Some(wrapped) => (wrapped, true),
@@ -121,12 +127,13 @@ impl EngineQueryRunner {
     /// 联邦档的「取下一段」（同一套窗口包装，见 `sql_service::window_sql`）
     pub(crate) fn fetch_next_on_federation(
         &self,
+        document: &str,
         connection: Option<&str>,
         sql: &str,
         offset: usize,
         limit: usize,
     ) -> Result<QueryData, String> {
-        let (plan, session) = self.federated_session(connection)?;
+        let (plan, session) = self.federated_session(document, connection)?;
         let wrapped =
             window_sql(sql, limit, offset).ok_or_else(|| "这份结果没有可再取的部分".to_string())?;
         let started = std::time::Instant::now();
@@ -151,12 +158,13 @@ impl EngineQueryRunner {
     /// 联邦档的下发（筛选 / 排序）：改写之后照跑（`notice` 由调用方给）
     pub(crate) fn run_rewritten_on_federation(
         &self,
+        document: &str,
         connection: Option<&str>,
         rewritten: &engine::sql::Rewrite,
         notice: impl FnOnce(&str) -> String,
         lineage: &str,
     ) -> Result<QueryData, String> {
-        let (plan, session) = self.federated_session(connection)?;
+        let (plan, session) = self.federated_session(document, connection)?;
         let started = std::time::Instant::now();
         let outcome = session.run(&rewritten.sql);
         let elapsed_ms = started.elapsed().as_millis() as u64;
@@ -183,9 +191,10 @@ impl EngineQueryRunner {
     /// 编辑器仍保留自己的组装（别名生成、notes 文案），那属于宿主职责。
     pub(crate) fn federated_session(
         &self,
+        document: &str,
         connection: Option<&str>,
     ) -> Result<(FederatedPlan, Arc<fed_session::FederatedSession>), String> {
-        let plan = self.federated_plan(connection)?;
+        let plan = self.federated_plan(document, connection)?;
         let (session_plan, prepared) = session_plan_for(&plan)?;
         match engine::analysis::kernel::open(&session_plan, &prepared) {
             Ok(SessionHandle::Instance { session, .. }) => {
@@ -219,7 +228,7 @@ pub(crate) fn session_plan_for(
         .iter()
         .map(|source| MountSpec::sql_connection_as(source.conn_id.clone(), source.alias.clone()))
         .collect();
-    let session_plan = kernel_plan_for(&plan.owner, &mounts, plan.primary.as_deref())
+    let session_plan = kernel_plan_for(&plan.session_owner, &mounts, plan.primary.as_deref())
         .map_err(|error| error.to_string())?;
     let prepared = PreparedMounts::federated(
         plan.sources
@@ -252,10 +261,14 @@ fn kernel_plan_for(
 ///
 /// 口径见 [`EngineQueryRunner::federated_plan`]；`notes` 是取记录时已经攒下的实话
 /// （读连接库失败 / 组装连接串失败之类），会一并带到结果区那行小字里。
+///
+/// `doc_conn` = 本文档绑定的连接（判主源、判"本文档连接是否参与"）；
+/// `session_owner` = 本文档 id（**会话身份**，与连接解耦）。
 pub(crate) fn plan_from_records(
     records: &[FedSourceRecord],
     notes: &[String],
-    owner: &str,
+    doc_conn: &str,
+    session_owner: &str,
 ) -> Result<FederatedPlan, String> {
     // 顺序不稳定（两张表合起来）：按连接 id 排序 → 同一份清单每次组装出同样的别名
     let mut ordered: Vec<&FedSourceRecord> = records.iter().collect();
@@ -270,7 +283,7 @@ pub(crate) fn plan_from_records(
     // 同一个 conn_id 只算一次（记录与运行态都出现时）
     let mut seen: Vec<&str> = Vec::new();
     for record in ordered {
-        if record.conn_id == owner {
+        if record.conn_id == doc_conn {
             owner_seen = true;
         }
         if seen.contains(&record.conn_id.as_str()) {
@@ -303,7 +316,7 @@ pub(crate) fn plan_from_records(
                     continue;
                 }
             };
-        if record.conn_id == owner {
+        if record.conn_id == doc_conn {
             primary = Some(alias);
         }
         sources.push(source);
@@ -328,12 +341,13 @@ pub(crate) fn plan_from_records(
         notes.push("本文档的连接未开启「DuckDB 本地加速」，没有作为联邦源参与".to_string());
     } else if primary.is_none() {
         notes.push(format!(
-            "本文档的连接（{owner}）未能作为联邦源参与（见上一条说明）"
+            "本文档的连接（{doc_conn}）未能作为联邦源参与（见上一条说明）"
         ));
     }
 
     Ok(FederatedPlan {
-        owner: owner.to_string(),
+        owner: doc_conn.to_string(),
+        session_owner: session_owner.to_string(),
         sources,
         primary,
         notes,

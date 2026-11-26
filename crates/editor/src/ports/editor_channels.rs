@@ -245,7 +245,7 @@ fn federated_availability(connections: &[ConnectionItem]) -> ChannelAvailability
 
     }
 
-    if ready.len() >= 2 {
+    if ready.len() >= 1 {
 
         return ChannelAvailability::ok();
 
@@ -277,7 +277,7 @@ fn federated_availability(connections: &[ConnectionItem]) -> ChannelAvailability
 
     ChannelAvailability::blocked(format!(
 
-        "联邦查询至少需要两个开启「DuckDB 本地加速」的连接（{}）",
+        "联邦查询至少需要一个开启「DuckDB 本地加速」的连接（{}）",
 
         reasons.join("；")
 

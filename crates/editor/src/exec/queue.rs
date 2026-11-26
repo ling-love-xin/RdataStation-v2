@@ -481,7 +481,9 @@ impl ExecQueue {
                     SourceAction::RefreshSource { alias } => {
                         runner.refresh_sources(&doc, conn, channel, Some(alias))
                     }
-                    SourceAction::SetPrimary { alias } => runner.set_federated_primary(conn, alias),
+                    SourceAction::SetPrimary { alias } => {
+                        runner.set_federated_primary(&doc, conn, alias)
+                    }
                 };
                 if let Ok(mut queue) = notes.lock() {
                     queue.push_back(SourceNote {

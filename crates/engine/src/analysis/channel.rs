@@ -69,15 +69,16 @@ impl AnalysisChannel {
     /// 打开且确有可挂源时升级为联邦，否则保持原档——而不是把整条查询改道，
     /// 用户看到的执行通道应当是他选的那个。
     ///
-    /// 口径（方案裁决 #3）：联邦只对 ≥2 个可挂源有意义；`owner` 为空则不建会话
-    /// （空 owner 会让不同面板的会话串成同一条，污染指纹缓存）。
+    /// 口径（方案裁决 #3，2026-11-26 更新）：**单源也照样联邦**——点联邦通道就加载底座，
+    /// 单源 + 可卸底座时就等同本地加速；数量不是区别。`owner` 为空则不建会话
+    /// （空 owner 会让不同面板的会话串成同一条）。
     pub fn from_toggle(
         base: AnalysisChannel,
         switch_on: bool,
         mountable_sources: usize,
         owner: &str,
     ) -> AnalysisChannel {
-        if switch_on && mountable_sources >= 2 && !owner.is_empty() {
+        if switch_on && mountable_sources >= 1 && !owner.is_empty() {
             Self::Federated {
                 owner: owner.to_string(),
             }
@@ -187,11 +188,13 @@ mod tests {
     }
 
     #[test]
-    fn toggle_on_with_one_source_stays_put() {
-        // 单源联邦没有意义：挂一个源就是加速档
+    fn toggle_on_with_one_source_upgrades_to_single_source_federation() {
+        // 单源联邦是合法形态（2026-11-26 用户口径）：点联邦就挂底座，单源也照样建联邦会话
         assert_eq!(
             AnalysisChannel::from_toggle(AnalysisChannel::Accelerated, true, 1, "conn-1"),
-            AnalysisChannel::Accelerated
+            AnalysisChannel::Federated {
+                owner: "conn-1".into()
+            }
         );
     }
 

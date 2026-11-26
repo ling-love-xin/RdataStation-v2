@@ -73,8 +73,14 @@ pub(crate) struct EngineQueryRunner {
 /// 不能让它静默——结果区那行小字得能说出来。
 #[derive(Debug)]
 pub(crate) struct FederatedPlan {
-    /// 会话主人（按它缓存会话；= 本文档绑定的连接 id）
+    /// 本文档绑定的连接 id：只用来判「主源是哪条」与历史里的 `conn_id`，
+    /// **不再是会话身份**（2026-11-26 拆开：会话按文档，见 `session_owner`）
     owner: String,
+    /// 会话主人 = 本文档 id：联邦会话按它建 / 取。
+    ///
+    /// 与 `owner` 分开的原因：两条文档绑同一连接时，`owner` 相同（主源同一条），
+    /// 但会话必须各一条——否则 `USE` 主源、`search_path`、中断会互相串。
+    session_owner: String,
     sources: Vec<FederatedSource>,
     /// 请求的主源别名（`None` = 本文档的连接没参与，由引擎选第一个可用源）
     primary: Option<String>,

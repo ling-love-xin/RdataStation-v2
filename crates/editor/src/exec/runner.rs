@@ -243,6 +243,7 @@ pub trait QueryRunner: Send + Sync + 'static {
     /// 默认实现 = 不支持（没接联邦的执行器）。
     fn set_federated_primary(
         &self,
+        _document: &str,
         _connection: Option<&str>,
         _alias: &str,
     ) -> Result<String, String> {
