@@ -521,6 +521,13 @@ pub fn ensure_sample_connections(root: &Path) -> Result<(), String> {
             save_password: false,
         }))
         .map_err(|e| format!("登记示例连接「{name}」失败: {e}"))?;
+
+        // 「有值即登记」：`use_duckdb_fed = Some(false)` 就是「允许 DuckDB 直连」这个意图，
+        // 项目登记表（`analysis_sources`）里必须有一行——否则源段显示「未登记 · 全局」，
+        // 也没有稳定别名给联邦引用。幂等（已登记就不重复写），失败只记日志。
+        if let Err(e) = engine::analysis::registration::ensure_conn_registered(root, conn_id, name) {
+            tracing::warn!("示例连接「{name}」登记为项目源失败：{e}");
+        }
     }
     Ok(())
 }

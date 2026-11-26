@@ -83,7 +83,8 @@ pub struct DataSource {
     pub options: Option<String>,
     /// 标签 JSON 数组
     pub tags: Option<String>,
-    /// DuckDB 本地加速（联邦查询直连源库）
+    /// 是否允许 DuckDB 直连本连接（三态）：`None` = 驱动不支持直连；
+    /// `Some(false)` = 可直连、未开本地加速（仍可当联邦源）；`Some(true)` = 已开本地加速
     pub use_duckdb_fed: Option<bool>,
     /// DuckDB 联邦元数据缓存路径（global_connections.metadata_path）
     pub metadata_path: Option<String>,

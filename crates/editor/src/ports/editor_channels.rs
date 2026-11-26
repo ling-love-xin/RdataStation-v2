@@ -36,7 +36,7 @@
 
 //! | 本地加速 | 连接存在 · **开启了 DuckDB 联邦**（`use_duckdb_fed`）· 驱动类型可加速（mysql / postgres / sqlite / duckdb）· **该驱动本身支持本地加速**（Oracle 这类 L2 只做联邦源）· **扩展可用**（试过且失败才拦，见 `accel::extension_state`） |
 
-//! | 联邦 | **两个以上**开启了「DuckDB 本地加速」且驱动可挂的连接（含 Oracle 这类 L2；不要求已连接；见 [`federated_availability`]） |
+//! | 联邦 | **至少一个**「DuckDB 直连有值」且驱动可挂的连接（`Some(true)` 已开本地加速、`Some(false)` 可直连未加速都算；含 Oracle 这类 L2；不要求已连接；见 [`federated_availability`]） |
 
 //!
 
@@ -191,7 +191,7 @@ impl ChannelsPort for WorkbenchChannels {
 
 ///
 
-/// 可用 = **两个以上**开启「DuckDB 本地加速（联邦查询直连源库）」且驱动能挂的连接（主源 + 外部源），
+/// 可用 = **至少一个** `use_duckdb_fed` 有值（允许 DuckDB 直连）且驱动能挂的连接（主源 + 外部源），
 
 /// **含 Oracle 这类 L2**（它不能本地加速，但联邦源能挂——扫描器读得到）。
 
@@ -199,7 +199,7 @@ impl ChannelsPort for WorkbenchChannels {
 
 /// （Oracle 这类）也是这样进来的——“连不上”不是“不能做源”。
 
-/// 不可用时把“还差什么”说出来：没开开关 / 不够两个 / 驱动不支持——三种原因占三种修法。
+/// 不可用时把“还差什么”说出来：没开开关 / 驱动不支持——两种原因两种修法。
 
 fn federated_availability(connections: &[ConnectionItem]) -> ChannelAvailability {
 
@@ -213,7 +213,7 @@ fn federated_availability(connections: &[ConnectionItem]) -> ChannelAvailability
 
     for item in connections {
 
-        if item.use_duckdb_fed != Some(true) {
+        if item.use_duckdb_fed.is_none() {
 
             continue;
 
@@ -239,13 +239,13 @@ fn federated_availability(connections: &[ConnectionItem]) -> ChannelAvailability
 
         return ChannelAvailability::blocked(
 
-            "还没有开启「DuckDB 本地加速（联邦查询直连源库）」的连接（连接对话框 → 高级）",
+            "还没有可作为联邦源的连接（连接对话框 → 高级里开启「DuckDB 直连（本地加速 / 用作联邦源）」）",
 
         );
 
     }
 
-    if ready.len() >= 1 {
+    if !ready.is_empty() {
 
         return ChannelAvailability::ok();
 
@@ -253,15 +253,11 @@ fn federated_availability(connections: &[ConnectionItem]) -> ChannelAvailability
 
 
 
-    // 还差什么就说什么：不够两个、驱动不支持，两种情形各自给可操作的下一步
+    // ready 为空只可能是「开了开关但驱动都挂不上」——逐条点名，并给出可操作的下一步
 
     let mut reasons: Vec<String> = Vec::new();
 
-    if let Some(name) = ready.first() {
 
-        reasons.push(format!("现在只有 {name} 一个可用作联邦源的连接"));
-
-    }
 
     if !unsupported.is_empty() {
 
@@ -277,7 +273,7 @@ fn federated_availability(connections: &[ConnectionItem]) -> ChannelAvailability
 
     ChannelAvailability::blocked(format!(
 
-        "联邦查询至少需要一个开启「DuckDB 本地加速」的连接（{}）",
+        "联邦查询至少需要一个可作为联邦源的连接（{}）",
 
         reasons.join("；")
 
@@ -504,27 +500,21 @@ mod tests {
 
         );
 
-        // 联邦：只有一个源（就是它自己）→ 不可用，且原因说清“至少两个”
+        // 联邦：单源也合法（2026-11-25 用户口径）——它就是主源 → 可用
 
         let federated = availability.for_channel(ExecChannel::Federated);
 
-        assert!(!federated.available);
-
-        let reason = federated.reason.unwrap_or_default();
-
-        assert!(reason.contains("至少需要两个"), "{reason}");
-
-        assert!(reason.contains("P_a"), "原因要点到还差哪一个：{reason}");
+        assert!(federated.available, "单源联邦应当可用：{:?}", federated.reason);
 
     }
 
 
 
-    /// 联邦：**两个开了开关的连接**就行（不要求已连接——源是记录组装的）；不够两个时点名
+    /// 联邦：**有值即算源**（`Some(true)` / `Some(false)` 都行；不要求已连接——源是记录组装的）
 
     #[test]
 
-    fn the_federated_channel_needs_two_marked_sources() {
+    fn the_federated_channel_counts_any_duckdb_capable_connection() {
 
         let mut second = connection("P_b", true);
 
@@ -554,27 +544,23 @@ mod tests {
 
 
 
-        // 只有一个开了开关 → 挡着，并点名是哪一个
+        // `Some(false)` = 可直连未加速，**也算联邦源**（有值即算）→ 两个都算，可用
 
         let availability =
 
             port(vec![connection("P_a", true), connection("P_b", false)]).availability(Some("P_a"));
 
-        let gate = availability.for_channel(ExecChannel::Federated);
-
-        assert!(!gate.available);
-
-        let reason = gate.reason.unwrap_or_default();
-
-        assert!(reason.contains("至少需要两个"), "{reason}");
-
-        assert!(reason.contains("P_a"), "原因要点名：{reason}");
+        assert!(availability.for_channel(ExecChannel::Federated).available);
 
 
 
-        // 一个都没开开关 → 原因指到那个开关
+        // 一个都没有 DuckDB 直连值（`None`，驱动不支持直连）→ 挡住，原因指到那个开关
 
-        let availability = port(vec![connection("P_a", false)]).availability(Some("P_a"));
+        let mut none_conn = connection("P_a", false);
+
+        none_conn.use_duckdb_fed = None;
+
+        let availability = port(vec![none_conn]).availability(Some("P_a"));
 
         let reason = availability
 

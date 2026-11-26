@@ -183,18 +183,44 @@ fn marked_connections_become_federated_sources() {
     assert!(all.contains("2 个源"), "{all}");
     eprintln!("✅ 重挂：{one} · {all}");
 
-    // 撤掉 SQLite 的标记 → 只剩一个源：入口就拒，且说清还差什么
-    rt.block_on(service.update(
-        &sqlite_id,
-        &marked(
-            "sqlite_src",
-            "sqlite",
-            &format!("sqlite://{sqlite_path}"),
-            false,
-        ),
-        None,
-    ))
-    .expect("撤标记");
+    // 撤掉 SQLite 的「DuckDB 直连」值（`Some(false)` → `None`）→ 只剩一个源；
+    // 单源照样联邦（2026-11-25 用户口径）：跑得通，结果区点名「只有一条源」
+    let mut no_direct = marked(
+        "sqlite_src",
+        "sqlite",
+        &format!("sqlite://{sqlite_path}"),
+        false,
+    );
+    no_direct.use_duckdb_fed = None;
+    rt.block_on(service.update(&sqlite_id, &no_direct, None))
+        .expect("撤掉直连值");
+    let single = runner
+        .run(
+            "federation_sources",
+            Some(&mysql_id),
+            None,
+            ExecChannel::Federated,
+            "SELECT count(*) AS n FROM mysql_src.mysql.user u",
+            RunOptions {
+                use_transaction: false,
+                lineage: None,
+                dml_confirmed: false,
+            },
+        )
+        .expect("单源联邦该照跑");
+    assert_eq!(single.rows.len(), 1, "{:?}", single.rows);
+    eprintln!("✅ 单源联邦照跑：{} 行", single.rows[0][0]);
+
+    // 再把 MySQL 的直连值也撤成 `None` → 一条源都不剩：入口就拒，且说清还差什么
+    let mut mysql_none = marked(
+        "mysql_src",
+        "mysql_native",
+        &mysql_url.replace("mysql://", "mysql_native://"),
+        true,
+    );
+    mysql_none.use_duckdb_fed = None;
+    rt.block_on(service.update(&mysql_id, &mysql_none, None))
+        .expect("撤 MySQL 直连值");
     let error = runner
         .run(
             "federation_sources",
@@ -208,9 +234,9 @@ fn marked_connections_become_federated_sources() {
                 dml_confirmed: false,
             },
         )
-        .expect_err("只剩一个源该拒");
-    assert!(error.contains("至少需要两个源"), "{error}");
-    eprintln!("✅ 撤掉标记后如实拒绝：{error}");
+        .expect_err("没有源该拒");
+    assert!(error.contains("联邦源"), "{error}");
+    eprintln!("✅ 一条源都没有时如实拒绝：{error}");
 
     let _ = sqlite_id;
 }

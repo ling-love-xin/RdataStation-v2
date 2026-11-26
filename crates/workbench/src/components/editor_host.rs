@@ -247,9 +247,10 @@ impl FederatedSourcePort for WorkbenchFederatedSource {
         };
         items
             .into_iter()
-            // 自动参与联邦执行的只有「已开启本地加速」的那类（`Some(true)`）：
-            // `Some(false)` = 可直连但没开加速，只在用户手动挂/登记时进场。
-            .filter(|item| item.use_duckdb_fed == Some(true))
+            // 可参与联邦执行的判据 = 「DuckDB 直连有值」（`Some(true)` 已开本地加速 /
+            // `Some(false)` 可直连未加速）；`None` = 驱动不支持直连，进不了 DuckDB。
+            // 与源段那颗挂/卸按钮同一判据（`fed_enabled = use_duckdb_fed.is_some()`）。
+            .filter(|item| item.use_duckdb_fed.is_some())
             .filter_map(|item| {
                 connection::url::build_connection_url(&item)
                     .ok()

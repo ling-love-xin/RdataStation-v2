@@ -58,9 +58,9 @@ impl EngineQueryRunner {
 
         // ② 运行态连接（含项目作用域；记录里没有的补上）
         let infos = self.runtime.block_on(manager.get_all_connection_info());
-        // 自动进源清单的只有已开启本地加速的连接（`Some(true)`）；
-        // `Some(false)` = 可直连未加速，等用户手动挂载/登记再进场。
-        for info in infos.iter().filter(|info| info.use_duckdb_fed == Some(true)) {
+        // 运行态连接按同一判据补进清单：「DuckDB 直连有值」即可（`Some(true)` 已开加速 /
+        // `Some(false)` 可直连未加速）；`None` 进不了 DuckDB。
+        for info in infos.iter().filter(|info| info.use_duckdb_fed.is_some()) {
             if records.iter().any(|record| record.conn_id == info.id) {
                 continue;
             }
@@ -324,7 +324,7 @@ pub(crate) fn plan_from_records(
 
     if sources.is_empty() {
         return Err(
-            "还没有可用作联邦源的连接：在连接对话框 → 高级里开启「DuckDB 本地加速（联邦查询直连源库）」"
+            "还没有可用作联邦源的连接：在连接对话框 → 高级里开启「DuckDB 直连（本地加速 / 用作联邦源）」"
                 .to_string(),
         );
     }
@@ -338,7 +338,7 @@ pub(crate) fn plan_from_records(
         ));
     }
     if !owner_seen {
-        notes.push("本文档的连接未开启「DuckDB 本地加速」，没有作为联邦源参与".to_string());
+        notes.push("本文档的连接未开启「DuckDB 直连」，没有作为联邦源参与".to_string());
     } else if primary.is_none() {
         notes.push(format!(
             "本文档的连接（{doc_conn}）未能作为联邦源参与（见上一条说明）"
