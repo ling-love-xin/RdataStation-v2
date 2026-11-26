@@ -302,3 +302,4 @@ mock 落库 ──► mock_generator::persist_table_at ──► MockEngine::wri
 | 2026-11-27 | 刀19（`2ca8c2d7`）：启动默认进空态——`startup.restore_last_workspace` 从死配置（只在旧 `general` 节测试样例里出现过）接成真开关（model + 登记项 + Slot + service + 持久化，默认 `false`）；`project_session::resolve(cx)` 按开关决定是否取最近项目，最近项目只认 `is_valid_project` 成立的目录 |
 | 2026-11-27 | 刀20（`87cf2b3c`）：欢迎页补「从示例项目开始」入口（`welcome-sample-project` → `project::ui::create_sample`，幂等补双源后直接切入） |
 | 2026-11-27 | 刀21（`acefc312`）：示例草稿落进草稿箱——`CreateProjectInput::sample_drafts` 原先是死字段，`create_sample` 把示例 SQL 写到项目根（草稿箱扫的是 `scratchpad/`，扫不到）；改为 `ensure_sample_draft`（`scratchpad/welcome.sql`，幂等不覆盖）并接进 `prepare_sample_project` 与 `create()` |
+| 2026-11-27 | 刀22：联邦档能点——「哪些连接算联邦源」改为 `use_duckdb_fed` 有值即算（`Some(false)` 可直连未加速也算），门控 `federated_availability` / 记录组装 `records()` / 运行态补源三处对齐，与面板 `fed_enabled = is_some()` 一致；示例播种补项目源登记（`analysis_sources` 0 → 2 行，别名 `sqlite` / `duckdb`） |
