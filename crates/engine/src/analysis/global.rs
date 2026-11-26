@@ -99,7 +99,7 @@ pub fn open_mounted(
         match &session {
             SessionHandle::Instance { session, .. } => session,
             SessionHandle::None => {
-                return Err(invalid("这条句柄不是 DuckDB 会话"));
+                return Err(invalid("这条句柄不是 DuckDB 会话".to_string()));
             }
         },
         alias,
