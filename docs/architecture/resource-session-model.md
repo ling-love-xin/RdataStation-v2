@@ -165,11 +165,13 @@ owner 固定 `data_objects`（`data_objects_load.rs:455`，本地加速挂载用
 
 【已定】去掉洞察（`tmp_i_`）、插件等表。
 
-【待定】"业务表"判据：白名单（`res_*` + 资产表）还是黑名单（排除 `tmp_` / 插件前缀）。现状 `analysis_tables_of`（`source_picker/load.rs:196`）列 `main` schema **全部表不过滤**；`collect()` 另塞 `tmp_q_`/`tmp_l_`/`tmp_i_`/`G_*`；`assets: Vec::new()` → 生产表段**恒无资产行**（而 `objects()` 支持资产行）。
+【已落地】"业务表"判据取**白名单**（`res_*` 前缀，`split_persistent_tables` 已实现）：
+新前缀不会因为"没被排除"而偷偷漏进表段。`analysis_tables_of`（`source_picker/load.rs:196`）
+只供**选择器**用（列 `main` 全部表，不做业务表判定）。
 
 ### 5.4 底座行
 
-现状 `base:analytics` / `base:rds_global`，pill「底座」，`source_action: None`（`mod.rs:565-587`，不可卸）。
+现状 `base:analytics` / `base:rds_global`，pill「底座」。
 
 【已定】底座默认挂上、**可人为卸载**。
 【已落地·刀11b】"可卸"与"本地加速看不见底座"用**同一个机制**：会话级可见性
@@ -180,8 +182,18 @@ owner 固定 `data_objects`（`data_objects_load.rs:455`，本地加速挂载用
 逐个会话摘掉该别名（`forget_mounted`）；凡是以它为「主源」的会话调 `reset_search_path`
 （检测到 catalog 不在 → 清主源记录、写 `primary_note`、退回 `memory.rds_tmp`）。
 没有这一步，卸载之后那些会话的未限定名查询会一直报 catalog 不存在。
-【待定】"卸载底座"本身的语义：会话级遮蔽（只影响当前会话）还是真 `DETACH`（所有会话都看不见）。
-  单实例前提下建议前者；显式限定名无法被会话级遮蔽挡掉，这一点要说清。
+【已落地·刀15】"卸载底座"定为**会话视角遮蔽**（不 `DETACH`）：
+
+- 引擎：`AnalysisInstance::{hide_base, show_base, hidden_bases, base_visible}`，记录在
+  `InstanceState.hidden_bases`；只认 `federation::session::bases()` 里的别名，源别名一律拒。
+- 面板：`Collected.hidden_bases` 直读实例；底座行改为「已卸载 · 表段不再列它」并给
+  `SourceAction::ToggleBase { alias, hidden }` 一颗两态按钮（卸载 ⇄ 挂回）；
+  项目底座遮蔽时 `analysis_tables` / 资产行来源清单清空，全局底座遮蔽时 `global_tables` 清空
+  ——"卸了就空"落成同一份判断，不在四个循环里各加 if。
+- 边界如实写进行文案：**显式限定名 `analytics.表` 仍可达**（会话级遮蔽挡不住裸限定名，
+  DuckDB 侧也没有这个开关）。单测 `hiding_a_base_empties_its_table_rows`。
+【已落地】§5.3 的表段判据定为**白名单**（`res_*` 前缀，`split_persistent_tables` 已实现），
+不做黑名单：新前缀不会因为"没被排除"而偷偷漏进表段。
 
 ---
 
@@ -224,8 +236,8 @@ owner 固定 `data_objects`（`data_objects_load.rs:455`，本地加速挂载用
 | 3 | 编辑器结果集是否加 owner 登记、关文档删？ | 加。否则"关 A 就不能用"不成立 | 已定·刀14（全链透传文档 id） |
 | 4 | 临时表落点钉 `memory.rds_tmp`？ | 钉。实测 `search_path` 接受 catalog 限定写法 | 已定·刀11b |
 | 5 | 面板 owner 取当前编辑器文档 / tab / 独立？ | 面板 = 自己的那条会话（口径 11 第②条），owner 固定 `data_objects`；跨模块共享靠实例临时表 | 已定·原表述更正 |
-| 6 | 底座卸载：会话级遮蔽 vs 真 `DETACH`？ | 会话级遮蔽（显式限定名挡不住，需说清） | **仍待拍**（悬空收尾已做·刀13） |
-| 7 | 表段"业务表"判据：白名单 vs 黑名单？ | 白名单（`res_*` + 资产表），避免新前缀偷偷漏进来 | **仍待拍** |
+| 6 | 底座卸载：会话级遮蔽 vs 真 `DETACH`？ | 会话级遮蔽（显式限定名挡不住，需说清） | 已定·刀15（`hide_base` / `ToggleBase`） |
+| 7 | 表段"业务表"判据：白名单 vs 黑名单？ | 白名单（`res_*` + 资产表），避免新前缀偷偷漏进来 | 已定·刀15（`res_*` 白名单维持） |
 | 8 | mock 是否退出面板可见范围？ | 退出，只留落地结果 | **仍待拍** |
 | 9 | 资源归档是否改为"卸载时才开、读完即关"？ | 先解决双开问题，再定缓存策略 | **仍待拍**（需真机验） |
 
@@ -239,3 +251,4 @@ owner 固定 `data_objects`（`data_objects_load.rs:455`，本地加速挂载用
 | 2026-11-27 | 落地记录回填：刀10（加速 owner 按文档）、刀11a（联邦 owner 拆 `session_owner`、单源联邦放开）、刀11b（`search_path` 全限定 + `retain_mounted` + `reset_search_path`）；补 2.0.1 实测结论（`memory.rds_tmp` 可作 `search_path` 项）；洞察口径由"会话 TEMP"修正回 `rds_tmp`（实例共享优先） |
 | 2026-11-27 | 刀13：`unmount_conn` 卸源后收尾悬空会话（`forget_mounted` + `reset_search_path`）；更正"面板借假 owner `C_data_objects`"的笔误——面板 owner 是固定 `data_objects`，`C_data_objects` 只是查全局库的连接 id |
 | 2026-11-27 | 刀14：临时表 owner 登记落地——`TempTableManager` 值改 `TempEntry{created,owner}`，`register/ list_by_owner / owner_of`；`TempTableSource::default_owner()` 定模块默认归属；`execution_service → duckdb_service → manager → instance.register_temp` 全链透传文档 id（`QueryRunner` 五条执行路径 + `ResultService` + `sort.rs` 手动物化）；新增 `AnalysisInstance::drop_temps_of(owner)`（实例册 ∪ 管理器册并集），关文档在 `on_removed` 收批并关会话 |
+| 2026-11-27 | 刀15：底座"卸载"落地为会话视角遮蔽——引擎 `hide_base/show_base/hidden_bases/base_visible`（`InstanceState.hidden_bases`，不 `DETACH`）；面板底座行给 `SourceAction::ToggleBase{alias,hidden}` 一颗两态按钮，遮蔽时清空项目/全局表来源清单（表段即空）；表段白名单（`res_*`）确认为已定；单测 `hiding_a_base_empties_its_table_rows` |
