@@ -281,7 +281,7 @@ mock 落库 ──► mock_generator::persist_table_at ──► MockEngine::wri
 
 | 步 | 操作 | 期望 |
 |---|---|---|
-| 0 | 启动应用 | 中央是欢迎页（不是上次项目）；点「从示例项目开始」→ 进入示例项目，导航树有 `示例 SQLite（销售库）` / `示例 DuckDB（销售库）` 两条 |
+| 0 | 启动应用 | 中央是欢迎页（不是上次项目）；点「从示例项目开始」→ 进入示例项目，导航树有 `示例 SQLite（销售库）` / `示例 DuckDB（销售库）` 两条，**草稿箱里有一份 `welcome.sql`**（`scratchpad/` 下，双击能打开并执行） |
 | 1 | 打开项目 → 数据对象面板 | 源段「源 N」里有 `analytics`（项目分析库 · 路径）与 `rds_global`（全局分析库 · 只读挂载）两行，pill「底座」；表段列出项目业务表 + `G_*`，**没有** `tmp_i_` / `tmp_m_` |
 | 2 | 点 `analytics` 行的动作位 | 副标题变「已卸载 · 表段不再列它（显式限定名仍可达）」；表段里项目表与资产表消失，`G_*` 与结果集仍在；再点一次恢复 |
 | 3 | 开两个 SQL 编辑器，各跑一条 `SELECT 1 AS a` 并把结果存为结果集 | 面板表段出现两行 pill「结果集」；关掉其中一个编辑器 → 只消失它自己那行 |
@@ -301,3 +301,4 @@ mock 落库 ──► mock_generator::persist_table_at ──► MockEngine::wri
 | 2026-11-27 | D17 落地（`72486305`）：加速档 owner 定源级 `accel:{conn_id}`，`accel:` 前缀判定收敛单点；§11 补「11.0 本轮运行环境」（worktree 隔离 home、示例项目双源由 2.0.1 生成、真机 MySQL/PG 改 native 驱动、Oracle/MSSQL 等驱动） |
 | 2026-11-27 | 刀19（`2ca8c2d7`）：启动默认进空态——`startup.restore_last_workspace` 从死配置（只在旧 `general` 节测试样例里出现过）接成真开关（model + 登记项 + Slot + service + 持久化，默认 `false`）；`project_session::resolve(cx)` 按开关决定是否取最近项目，最近项目只认 `is_valid_project` 成立的目录 |
 | 2026-11-27 | 刀20（`87cf2b3c`）：欢迎页补「从示例项目开始」入口（`welcome-sample-project` → `project::ui::create_sample`，幂等补双源后直接切入） |
+| 2026-11-27 | 刀21（`acefc312`）：示例草稿落进草稿箱——`CreateProjectInput::sample_drafts` 原先是死字段，`create_sample` 把示例 SQL 写到项目根（草稿箱扫的是 `scratchpad/`，扫不到）；改为 `ensure_sample_draft`（`scratchpad/welcome.sql`，幂等不覆盖）并接进 `prepare_sample_project` 与 `create()` |
