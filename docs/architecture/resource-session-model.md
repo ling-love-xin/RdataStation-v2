@@ -97,9 +97,9 @@ session_for_conn(conn_id) → mount_sources([1 个源]) → use_catalog(alias)
 
 | 类别 | 存放 | 可见性 | 寿命 | 现状 |
 |---|---|---|---|---|
-| 编辑器结果集（`tmp_q_` / `tmp_l_`） | `rds_tmp` 普通表 | 实例共享，面板可见 | 【建议】绑**文档**（owner 登记，关文档删这一批） | 只按前缀管，**无 owner**，关编辑器后仍可访问（与"关 A 就不能用"相反） |
-| 洞察（`tmp_i_`） | `rds_tmp` 普通表 | 私有，不进面板 | 随清理兜底 | 曾建议"会话 TEMP"，但【已定】临时表实例共享优先，故仍落 `rds_tmp`；"私有"靠不进面板 + `lazy_cleanup_insight_tables` |
-| mock（`tmp_m_`） | 一次性连接 | 无 | 落地完即关 | 走进程面 `DuckDBManager`，与编辑器同实例 |
+| 编辑器结果集（`tmp_q_` / `tmp_l_`） | `rds_tmp` 普通表 | 实例共享，面板可见 | 【已落地·刀14】绑**文档**（owner 登记，关文档删这一批） | `TempTableManager` 值改成 `TempEntry { created, owner }`，`execution_service → duckdb_service → manager → 实例登记` 全程透传文档 id；关文档 `on_removed` 调 `drop_temps_of(owner)` |
+| 洞察（`tmp_i_`） | `rds_tmp` 普通表 | 私有，不进面板 | 随清理兜底 | 曾建议"会话 TEMP"，但【已定】临时表实例共享优先，故仍落 `rds_tmp`；"私有"靠不进面板 + `lazy_cleanup_insight_tables`；owner 固定 `insight` |
+| mock（`tmp_m_`） | 一次性连接 | 无 | 落地完即关 | 走进程面 `DuckDBManager`，与编辑器同实例；owner 固定 `mock` |
 
 【已落地·刀11b】落点钉 catalog：
 
@@ -113,12 +113,24 @@ session_for_conn(conn_id) → mount_sources([1 个源]) → use_catalog(alias)
   裸名 `tmp_q_x` 在切主源之后照样查得到。
 - 探针是一次性的（`crates/engine/examples/sp_probe.rs`，已删，不入库）。
 
-【未做·待拍板】owner 登记：`TempTableManager` 现在只有 `drop_by_source(prefix)`，
-没有 owner 维度；`AnalysisInstance::register_temp(name, created_by, note)` 的 `created_by`
-字段已经在（登记册是面板"用户看得见、点得掉"的那一份），但建表链路（`execution_service`
-→ `duckdb_service` → `manager::register_temp_table`）没有文档身份，`created_by` 一律写"引擎"。
-要满足"B 能用 A 的结果集、关 A 后不能用"，得先把文档 id 沿这条链传下来——**这是一次跨 4 层的
-签名改动**，需要先定"关文档是否自动删临时表"再动手。
+【已落地·刀14】owner 登记：`TempTableManager` 的 registry 值从 `Instant` 改成
+`TempEntry { created, owner }`，`register(name, owner)` 带归属；`TempTableSource::default_owner()`
+给模块自建表定默认归属（`Query/Load → process`、`Insight → insight`、`Mock → mock`、`Plugin → plugin`）。
+文档身份沿三条链透传到底：
+
+- 结果集：`QueryRunner::{run/run_filtered/run_sorted_down/analyze}` → `ResultService` →
+  `execution_service` → `duckdb_service` → `manager::register_temp_table(name, owner)`
+  → `AnalysisInstance::register_temp(name, owner, …)`；owner = 文档 id。
+- 手动物化（"存为结果集" / 排序物化）：`sort.rs` 直接传 `self.document.as_str()`。
+- 洞察 / mock / 导出：各传自己的固定 owner（`insight` / `mock` / `process`）。
+
+收口只有一处：`AnalysisInstance::drop_temps_of(owner)` —— 名单取**实例登记册 ∪ 临时表管理器**
+（两处并集，控制连接重开过时只查一处会漏），逐张复用 `drop_temp`（同一落点 + 销登记），
+失败不阻断其余表。调用点在编辑器 `on_removed`（`crates/editor/src/view/host/panel_traits.rs`）：
+关文档 → `drop_temps_of(document)` → 再关这条会话（会话的别名 / ATTACH 随连接消失；
+`rds_tmp` 里的表**不因关会话消失**，这是"临时表 = 实例资源"的直接体现）。
+
+单测：`dropping_temps_of_one_owner_spares_the_others`（A 的表收掉、B 的表与登记完好）。
 
 ---
 
@@ -180,7 +192,7 @@ owner 固定 `data_objects`（`data_objects_load.rs:455`，本地加速挂载用
 | 1 | 加速档会话按连接，跨文档共享 `USE` / 中断 | `accel.rs:460`、`instance.rs::accel_owner` | 【已落地·刀10/11a】按文档 `ensure_session` |
 | 2 | 加速档看得见底座 | `accel.rs::ensure_on_instance` | 【已落地·刀11b】`search_path` 不含底座 |
 | 3 | 单源联邦被 ≥2 卡住 | `analysis/channel.rs::from_toggle`、`editor_channels.rs` | 【已落地·刀11a】`>= 1` |
-| 4 | 临时表无 owner，关文档不删 | `temp_table.rs`（只有 `drop_by_source`） | 【建议·未做】需先定"关文档是否自动删" |
+| 4 | 临时表无 owner，关文档不删 | `temp_table.rs`（只有 `drop_by_source`） | 【已落地·刀14】`TempEntry{created,owner}` + 全链透传文档 id + `drop_temps_of` |
 | 5 | 临时表落点不钉 catalog | `temp_schema.rs` | 【已落地·刀11b】`memory.rds_tmp`（实测可用） |
 | 6 | 卸载源之后主源会话悬空 | `instance.rs::unmount_conn` | 【已落地·刀13】`forget_mounted` + `reset_search_path` |
 | 7 | 洞察 `tmp_i_` 进共享 schema，与"没有下游"不符 | `duckdb/temp_table/analysis.rs` | 【建议】落点已钉 memory；面板已不列（`objects()` 注释 903-908） |
@@ -209,7 +221,7 @@ owner 固定 `data_objects`（`data_objects_load.rs:455`，本地加速挂载用
 |---|---|---|---|
 | 1 | 加速档会话 owner 改文档级？ | 改。不改则 `USE` / 中断跨文档串 | 已定·刀10/11a |
 | 2 | 洞察是否改用会话 TEMP？ | ~~改~~：与"临时表实例共享"冲突，**维持落 `rds_tmp`**，只把它挡在面板外 | 已修口径 |
-| 3 | 编辑器结果集是否加 owner 登记、关文档删？ | 加。否则"关 A 就不能用"不成立 | **仍待拍**（跨 4 层签名改动） |
+| 3 | 编辑器结果集是否加 owner 登记、关文档删？ | 加。否则"关 A 就不能用"不成立 | 已定·刀14（全链透传文档 id） |
 | 4 | 临时表落点钉 `memory.rds_tmp`？ | 钉。实测 `search_path` 接受 catalog 限定写法 | 已定·刀11b |
 | 5 | 面板 owner 取当前编辑器文档 / tab / 独立？ | 面板 = 自己的那条会话（口径 11 第②条），owner 固定 `data_objects`；跨模块共享靠实例临时表 | 已定·原表述更正 |
 | 6 | 底座卸载：会话级遮蔽 vs 真 `DETACH`？ | 会话级遮蔽（显式限定名挡不住，需说清） | **仍待拍**（悬空收尾已做·刀13） |
@@ -226,3 +238,4 @@ owner 固定 `data_objects`（`data_objects_load.rs:455`，本地加速挂载用
 | 2026-11-26 | 初稿：从"联邦内核收口 + 数据对象面板"讨论中抽出会话/临时表/可见性三层；标出对 `execution-context-model.md` 两处作废口径 |
 | 2026-11-27 | 落地记录回填：刀10（加速 owner 按文档）、刀11a（联邦 owner 拆 `session_owner`、单源联邦放开）、刀11b（`search_path` 全限定 + `retain_mounted` + `reset_search_path`）；补 2.0.1 实测结论（`memory.rds_tmp` 可作 `search_path` 项）；洞察口径由"会话 TEMP"修正回 `rds_tmp`（实例共享优先） |
 | 2026-11-27 | 刀13：`unmount_conn` 卸源后收尾悬空会话（`forget_mounted` + `reset_search_path`）；更正"面板借假 owner `C_data_objects`"的笔误——面板 owner 是固定 `data_objects`，`C_data_objects` 只是查全局库的连接 id |
+| 2026-11-27 | 刀14：临时表 owner 登记落地——`TempTableManager` 值改 `TempEntry{created,owner}`，`register/ list_by_owner / owner_of`；`TempTableSource::default_owner()` 定模块默认归属；`execution_service → duckdb_service → manager → instance.register_temp` 全链透传文档 id（`QueryRunner` 五条执行路径 + `ResultService` + `sort.rs` 手动物化）；新增 `AnalysisInstance::drop_temps_of(owner)`（实例册 ∪ 管理器册并集），关文档在 `on_removed` 收批并关会话 |
