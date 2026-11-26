@@ -153,7 +153,7 @@ struct SourceIntent { id, origin, alias, auto_attach: bool, primary: bool }
 | 刀 | 内容 | 行为变化 | 验收 |
 |---|---|---|---|
 | **K0a** ✅ | `catalog.rs`：`CatalogOrigin/Holder/State/Info` + `snapshot()`；`file_view` 加路径索引（两写入口） | **零**（只新增 API） | `cargo check -p rds-engine`；三个纯函数单测（同行合并 / 失败不被盖 / 底座不算源） |
-| K0b | 面板读 `snapshot()` 取代 `Shared.loaded_files`；`loaded_files` 降为写入口 | 零（输出逐字不变） | 面板现有单测全过；同一源不得两行的性质测试 |
+| **K0b** ✅ | 面板读文件索引取代 `Shared.loaded_files`；该字段整条删除（不留兼容层）；指纹里删掉空的「洞察样本」维度 | 零（输出逐字不变） | `cargo check -p rds-workbench --lib/--tests` 通过；文件索引逐条清理（删视图即忘） |
 | K1 | `preflight`：表引用抽取 + 候选报错；执行路径先过预检 | 报错更早更准 | 表驱动：catalog 集 + SQL → 期望解析/报错 |
 | K2 | 面板改"源记录 + 可用性分段"，会话行并入 | 重复行消失 | 性质测试：任一源只出现一次 |
 | K3 | 意图清单 replay + 主源持久化；`_2` 改拒绝；引用计数拒绝 DETACH | 重启不丢主源；冲突从静默改名变报错 | headless probe：restart 后 catalog 与 primary 恢复 |
@@ -166,7 +166,7 @@ K0a 是唯一前置，且行为零变化，可先合。
 
 | 存量 | 处理 |
 |---|---|
-| `panels/shared.rs:308` `loaded_files`（UI 进程内存） | K0b 起降为写入侧；读侧走 `catalog_files_snapshot()` |
+| `panels/shared.rs` 的 `loaded_files`（UI 进程内存） | K0b 已整条删除；读侧走 `file_view::file_entries()`（视图与 catalog 两类） |
 | `instance.rs::MountRegistry::reserve` 的 `_2` 兜底 | K3 删，改拒绝（与联邦路径 `alias_owner` 同口径） |
 | `mounted_sources()` / `mounted_conns()` | 保留为内部事实源，外部只读 `catalog::snapshot()` |
 | `analysis_sources`（项目库登记行） | 直接充当 §5 的意图清单；字段按 `SourceIntent` 收敛 |
