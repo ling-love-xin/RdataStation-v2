@@ -84,6 +84,15 @@ session_for_conn(conn_id) → mount_sources([1 个源]) → use_catalog(alias)
 `ensure_conn_registered`（示例播种直写全局连接，绕过了唯一登记点，示例项目 `analysis_sources` 一直是 0 行）；
 开关文案统一成 UI 真名「DuckDB 直连（本地加速 / 用作联邦源）」。
 
+【已落地·刀23】联邦源判据**收窄成三源合一**（2026-11-27 用户拍板，修正刀22）：
+`use_duckdb_fed == Some(true)`（明确开了本地加速）∪ 项目登记过（`analysis_sources::is_registered`）∪ 本文档绑定（`focus`，单源主源）。
+`None`（驱动不支持直连）不算。刀22 的「有值即算」会让**全局池里所有连接**都进联邦（实测本机 6 条全是 `Some(false)`：
+MySQL / PG / T.fossil / DuckDB 123 + 示例两条），每跑一次联邦就去 `ATTACH` 一堆与本次工作无关的库；刀23 收回。
+
+- 门控 `federated_availability(connections, focus)` 与执行 `records(focus)` **同一套判据**（此前门控看「有值」、执行全收，两处口径不一）；
+- `is_registered` 走「连接 id → 登记别名」的进程快照；进项目即发布一次（`lifecycle.rs::new`），不再依赖「数据面板刷新过」；
+- 全局池里未登记、没开加速的连接**不进联邦**：面板仍按「未登记 · 全局」显示，要用它当源就登记（= 项目级意图）。
+
 【已落地·刀10/11a】会话 owner 一律 `{doc}`：
 - 加速档 `accel::ensure_on_instance(source, owner)` 用 `ensure_session(owner, "本地加速")`
   （原 `session_for_conn(&source.conn_id)`）；
@@ -225,7 +234,7 @@ owner 固定 `data_objects`（`data_objects_load.rs:455`，本地加速挂载用
 | 9 | 资源归档与实例双开同一 `analytics.duckdb` | `analytics_resource/global/sql.rs:47` vs `attach_bases` | 【待定】需真机验 |
 | 10 | 表段不按业务表过滤、恒无资产行 | `source_picker/load.rs:196`、`data_objects/mod.rs:764` | 【已落地】表段名单 = `analysis_tables_of()`（项目分析库 `main` 全表，即"底座里有什么就列什么"），按 `res_` 白名单切「持久表 / 项目自建」两段；资产·表型本体已被 `asset_tables` 从表段剔除、只从资产行进（pill「资产」、只读、带版本） |
 | 11 | 内核加速档拿裸 `conn_id` 当会话 owner → 洞察跑一次加速，面板源段多一行「来源不明」 | `analysis/kernel.rs` 加速档、`instance.rs::is_analysis_session` | 【已落地·刀17】owner 定源级 `accel:{conn_id}`；`ACCEL_OWNER_PREFIX` + `is_accel_owner()` 单点判定 |
-| 12 | 联邦门控/执行只认 `Some(true)`，面板按 `is_some()` 说「能挂」；示例项目 `analysis_sources` 0 行 | `editor_channels.rs`、`editor_host.rs`、`federation.rs`、`project/src/service.rs` | 【已落地·刀22】三处判据统一 `is_some()`；示例播种补 `ensure_conn_registered`（幂等，实测 0 → 2 行） |
+| 12 | 联邦门控/执行只认 `Some(true)`，面板按 `is_some()` 说「能挂」；示例项目 `analysis_sources` 0 行 | `editor_channels.rs`、`editor_host.rs`、`federation.rs`、`project/src/service.rs` | 【已落地·刀22/刀23】判据收窄为「三源合一」（开加速 / 项目登记 / 本文档绑定）；示例播种补 `ensure_conn_registered`（幂等，实测 0 → 2 行） |
 
 ---
 
@@ -272,4 +281,5 @@ owner 固定 `data_objects`（`data_objects_load.rs:455`，本地加速挂载用
 | 2026-11-27 | 拍板刀16 边界：**"落地完即关"只覆盖写进项目分析库**（落库 / 追加）；导出文件、存草稿箱不删临时表，让用户还能继续换出口。无临时表残留只靠这一条 + 切项目 `clear_temp_tables` 兜底 |
 | 2026-11-27 | 刀17（D17）：加速档 owner 词表收口——内核 `kernel::open` 的 `Accelerated` 分支不再用裸 `conn_id` 当 owner，改源级 `accel:{conn_id}`（与 `session_for_conn` 同键）；`ACCEL_OWNER_PREFIX` / `is_accel_owner()` 成唯一判定点（残键 `accel:` 不算），`AnalysisChannel::Accelerated` 的"会话按源 id 缓存"注释按刀10 重写 |
 | 2026-11-27 | 刀18：示例项目自带双数据源——`project::service::ensure_sample_data` 用**当前内核的 duckdb crate** 生成 `data/sample.sqlite` + `data/sample.duckdb`（2.0.1 写，`orders` 12 行实测可读），`ensure_sample_connections` 登记两条全局连接（`use_duckdb_fed=false`），`create_sample` 每次进入幂等跑一遍；不再依赖仓库里 1.5 时代的 `examples/instance-project` |
+| 2026-11-27 | 刀23：联邦源判据收窄为**三源合一**（`Some(true)` ∪ 项目登记 ∪ 本文档绑定 `focus`），门控 `federated_availability(…, focus)` 与执行 `records(focus)` 同一套；新增 `analysis_sources::is_registered`（快照薄查询）+ 进项目即发布登记快照（`lifecycle.rs`）；修掉刀22「有值即算」会把全局池全挂进联邦的问题 |
 | 2026-11-27 | 刀22（D22）：联邦源判据由「只认 `Some(true)`」改为「`use_duckdb_fed` 有值即算」（门控/记录/运行态三处对齐，与面板 `fed_enabled = is_some()` 一致）；开关文案统一为「DuckDB 直连（本地加速 / 用作联邦源）」；示例播种补 `ensure_conn_registered`（实测 `analysis_sources` 0 → 2 行，别名 `sqlite` / `duckdb`） |
