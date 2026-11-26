@@ -209,6 +209,13 @@ pub fn open(plan: &SessionPlan, prepared: &PreparedMounts) -> Result<SessionHand
             let instance = instance::instance().map_err(invalid)?;
             let session = instance.ensure_session(owner, "联邦").map_err(invalid)?;
             let mounted = session.mount_sources(&sources).map_err(invalid)?;
+            // 只保留本通道的源：同一条文档从本地加速切回联邦时，上一通道的 `rds_src`
+            // 记录要退场（实例上的 `ATTACH` 不动，源段那边才是卸载入口）。
+            let aliases: Vec<String> = mounted
+                .iter()
+                .map(|entry| entry.alias().to_string())
+                .collect();
+            session.retain_mounted(&aliases);
             // 主源只在"它确实挂上了"时切：挂不上就保持默认 catalog，
             // 由快照里的原因告诉用户，而不是让整条查询跑在一个不存在的 catalog 上
             if let Some(primary) = plan.primary.as_deref() {
@@ -218,6 +225,9 @@ pub fn open(plan: &SessionPlan, prepared: &PreparedMounts) -> Result<SessionHand
                 if ready {
                     session.use_catalog(primary).map_err(invalid)?;
                 }
+            } else {
+                // 没有主源也要把默认路径拉回"临时表可见"，别沿用上一通道的 `USE`
+                session.reset_search_path().map_err(invalid)?;
             }
             Ok(SessionHandle::Instance {
                 session,

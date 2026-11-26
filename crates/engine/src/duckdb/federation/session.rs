@@ -212,7 +212,14 @@ impl FederatedSession {
                 .any(|entry| entry.alias() == alias && entry.is_ready());
             if ready {
                 self.session.use_catalog(alias)?;
+            } else {
+                // 主源重挂失败：别把会话停在它上面，退回 memory 并留说明
+                self.session.reset_search_path()?;
             }
+        } else {
+            // 卸的是非主源：`USE memory; DETACH …` 已把 `search_path` 拉到 `memory.main`，
+            // 必须再钉回 `memory.rds_tmp`，否则重挂成功后临时结果集还是"看不见"
+            self.session.reset_search_path()?;
         }
         Ok(())
     }

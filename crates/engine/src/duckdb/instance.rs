@@ -34,6 +34,7 @@ use duckdb::{Connection, InterruptHandle};
 
 use super::accel::run_sql_on;
 use super::manager::DuckDBManager;
+use super::temp_table::temp_schema::{ensure_shared_schema, SHARED_MAIN_PATH, SHARED_TEMP_PATH};
 use shared::error::CoreError;
 
 /// 实例级共享临时结果所在的 schema（跨会话可见，手动清理）。
@@ -227,6 +228,17 @@ fn control_has_database(conn: &Connection, alias: &str) -> bool {
 
 static INSTANCE: OnceLock<Mutex<Option<Arc<AnalysisInstance>>>> = OnceLock::new();
 
+/// 别名白名单：拼进 SQL 前只认标识符字符（与 `MountRegistry` 的登记口径一致）。
+///
+/// 抽成一处是因为 `USE` / `SET search_path` / `DETACH` 三处都在拼别名，
+/// 各写一份迟早漏掉一处。
+fn valid_alias(alias: &str) -> bool {
+    !alias.is_empty()
+        && alias
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
 fn instance_slot() -> &'static Mutex<Option<Arc<AnalysisInstance>>> {
     INSTANCE.get_or_init(|| Mutex::new(None))
 }
@@ -281,13 +293,10 @@ impl AnalysisInstance {
             .map_err(|error| format!("开分析实例失败：{error}"))?;
         DuckDBManager::configure_connection(&conn)
             .map_err(|error| format!("配置分析实例失败：{error}"))?;
-        conn.execute_batch(&format!("CREATE SCHEMA IF NOT EXISTS {SHARED_TEMP_SCHEMA}"))
-            .map_err(|error| format!("建 {SHARED_TEMP_SCHEMA} 失败：{error}"))?;
-        // 第 3b 项：控制连接也要认 `rds_tmp` 裸名（照看临时表、诊断、`drop_temp` 都走它）
-        conn.execute_batch(&format!(
-            "SET search_path = 'main,{SHARED_TEMP_SCHEMA}'"
-        ))
-        .map_err(|error| format!("设 search_path 失败：{error}"))?;
+        // 第 3b 项：控制连接也要认 `rds_tmp` 裸名（照看临时表、诊断、`drop_temp` 都走它）。
+        // 落点与 `search_path` 都写**全限定**（`memory.rds_tmp`）：裸 schema 名会跟着会话的
+        // `USE` 漂到只读源 catalog 上，2.0.1 当场报 "No catalog + schema named …"。
+        ensure_shared_schema(&conn).map_err(|error| format!("配置分析实例失败：{error}"))?;
         // 底座在**实例**上挂（`analytics` 读写 / `rds_global` 只读）：`ATTACH` 是实例级事实，
         // 挂一次所有会话都看得见；挂不上只让那一格缺席，不把实例带下去
         for (alias, outcome) in super::federation::session::attach_bases(&conn) {
@@ -420,11 +429,10 @@ impl AnalysisInstance {
         let interrupt = conn.interrupt_handle();
         // 第 3b 项：每条会话都认 `rds_tmp` 裸名。克隆虽继承控制连接的设置，
         // 但这里是「临时表能不能被看见」的唯一前提，显式设一次（幂等）。
-        conn.execute_batch(&format!(
-            "CREATE SCHEMA IF NOT EXISTS {SHARED_TEMP_SCHEMA}; \
-             SET search_path = 'main,{SHARED_TEMP_SCHEMA}'"
-        ))
-        .map_err(|error| format!("会话 {id} 设 {SHARED_TEMP_SCHEMA} 落点失败：{error}"))?;
+        // 全限定写法（`memory.rds_tmp`）：会话随后会 `USE <源>`（加速 / 联邦），
+        // 裸 schema 名在那之后解析不到只读源上的临时区（实测 2.0.1 报 No catalog + schema）。
+        ensure_shared_schema(&conn)
+            .map_err(|error| format!("会话 {id} 设 {SHARED_TEMP_SCHEMA} 落点失败：{error}"))?;
         let stamp = now_ms();
         let session = Arc::new(AnalysisSession {
             id: id.clone(),
@@ -808,11 +816,13 @@ impl AnalysisInstance {
             return Err("临时结果名不能为空".to_string());
         }
         let bare = name
-            .strip_prefix(&format!("{SHARED_TEMP_SCHEMA}."))
+            .strip_prefix(&format!("{SHARED_TEMP_PATH}."))
+            .or_else(|| name.strip_prefix(&format!("{SHARED_TEMP_SCHEMA}.")))
             .unwrap_or(name);
         let quoted = bare.replace('"', "\"\"");
+        // 钉死 `memory.rds_tmp`：控制连接哪天被 `USE` 过也不至于删到源上的同名表
         self.run_control(&format!(
-            "DROP TABLE IF EXISTS {SHARED_TEMP_SCHEMA}.\"{quoted}\""
+            "DROP TABLE IF EXISTS {SHARED_TEMP_PATH}.\"{quoted}\""
         ))?;
         // 旧口径（`memory.main`）的同一张表：不在就静默跳过，删成功与否都继续走销登记
         let _ = self.run_control(&format!("DROP TABLE IF EXISTS \"{quoted}\""));
@@ -1058,6 +1068,20 @@ impl AnalysisSession {
             .unwrap_or_default()
     }
 
+    /// 把本会话的挂载**记录**对齐到给定别名集合（**只动记录，不 `DETACH`**）。
+    ///
+    /// 用途：一条文档从联邦切回本地加速（或反过来）时，会话按 owner 复用，
+    /// 旧通道挂的源会一直留在 `mounted_sources()` 里，面板的「会话源」就同时显示
+    /// 两套通道的源。`ATTACH` 是实例级事实（可能还有别的会话在用），所以这里只清
+    /// 本会话的视图，源段的「已挂载」仍由实例事实回答——用户没点卸载就不替它卸。
+    ///
+    /// `aliases` 是**本通道真正要用**的那些别名；按别名比对（会保留冲突让位后的实际名）。
+    pub fn retain_mounted(&self, aliases: &[String]) {
+        if let Ok(mut stored) = self.mounted.lock() {
+            stored.retain(|entry| aliases.iter().any(|alias| alias == entry.alias()));
+        }
+    }
+
     /// 借本会话的连接跑一小段逻辑（**不接管执行**：只给需要直接 `execute_batch` 的调用方，
     /// 例如 `DETACH` / `CREATE VIEW` 这类必须拿到原始连接的活）。
     ///
@@ -1077,21 +1101,28 @@ impl AnalysisSession {
         f(&conn)
     }
 
-    /// 切本会话的默认 catalog（联邦主源用）。
+    /// 切本会话的默认 catalog（联邦主源 / 本地加速用），并把共享临时区**钉回** `search_path`。
+    ///
+    /// 为什么必须一起设：`USE <源>` 会把 `search_path` 重置成 `<源>.main`，`rds_tmp` 里的
+    /// 临时结果集当场"消失"（2.0.1 实测：此时裸 schema 名报 `No catalog + schema named "rds_tmp"`）。
+    /// 这里写全限定 `memory.rds_tmp`，主源与临时表都能按裸名解析，底座（`analytics` /
+    /// `rds_global`）则**不在默认路径里**——本地加速因此看不见底座（显式限定仍可达）。
     ///
     /// 只接受标识符字符：别名来自 `MountRegistry` 与驱动的校验，但这里是拼 SQL 的地方，
     /// 宁可多一条白名单检查，也不让一个精心构造的别名变成第二条语句。
     pub fn use_catalog(&self, alias: &str) -> Result<(), String> {
-        let valid = !alias.is_empty()
-            && alias
-                .chars()
-                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
-        if !valid {
+        if !valid_alias(alias) {
             return Err(format!("别名 {alias:?} 里有不允许的字符，拒绝拿去拼 SQL"));
         }
-        let outcome = self.run_with_timeout(&format!("USE {alias}"), Duration::from_secs(5));
+        // 两条语句必须同一次 `execute_batch`：`USE` 成功而 `SET` 没跟上，会话就停在
+        // "主源切了、临时表却看不见"的半截状态。
+        let sql = format!("USE {alias}; SET search_path = '{alias}.main,{SHARED_TEMP_PATH}'");
+        let outcome = self.with_connection(|conn| {
+            conn.execute_batch(&sql)
+                .map_err(|error| error.to_string())
+        });
         match outcome {
-            Ok(_) => {
+            Ok(()) => {
                 // 切成功才记：失败时主源没变，记下来会让面板把小标写错
                 if let Ok(mut primary) = self.primary.lock() {
                     *primary = Some(alias.to_string());
@@ -1108,6 +1139,44 @@ impl AnalysisSession {
                     *note = Some(reason.clone());
                 }
                 Err(reason)
+            }
+        }
+    }
+
+    /// 按会话**当前**的主源重建 `search_path`（`USE memory; DETACH …` 之后必调）。
+    ///
+    /// 重挂 / 卸源这类动作先把会话拽回 `memory`，`search_path` 也跟着变成 `memory.main`；
+    /// 不重建就会出现"主源还在、临时表却解析不到"。主源已经不在（被卸掉）时退到 `memory`
+    /// 并把原因写在 `primary_note` 上，不让会话卡在一个不存在的 catalog 上。
+    pub fn reset_search_path(&self) -> Result<(), String> {
+        match self.primary_alias().as_deref() {
+            Some(alias) if valid_alias(alias) => {
+                let sql = format!("SET search_path = '{alias}.main,{SHARED_TEMP_PATH}'");
+                let outcome = self.with_connection(|conn| {
+                    conn.execute_batch(&sql)
+                        .map_err(|error| error.to_string())
+                });
+                if outcome.is_ok() {
+                    return Ok(());
+                }
+                // 主源已被卸（catalog 不在了）：清记录、留说明，再退到 memory
+                if let Ok(mut slot) = self.primary.lock() {
+                    *slot = None;
+                }
+                if let Ok(mut note) = self.primary_note.lock() {
+                    *note = Some(format!(
+                        "主源 {alias} 已不在，默认目录回退到 memory：{}",
+                        outcome.err().unwrap_or_default()
+                    ));
+                }
+                self.reset_search_path()
+            }
+            _ => {
+                let sql = format!("SET search_path = '{SHARED_MAIN_PATH},{SHARED_TEMP_PATH}'");
+                self.with_connection(|conn| {
+                    conn.execute_batch(&sql)
+                        .map_err(|error| format!("设 search_path 失败：{error}"))
+                })
             }
         }
     }
@@ -1250,6 +1319,89 @@ mod tests {
                 .is_err(),
             "清理后两个会话都读不到"
         );
+    }
+
+    /// 切主源（本地加速 / 联邦都要 `USE <源>`）之后，共享临时表仍按裸名可见。
+    ///
+    /// 2.0.1 实测：`USE src` 会把 `search_path` 重置成 `src.main`，此时
+    /// `SET search_path = 'main,rds_tmp'` 直接报 `No catalog + schema named "rds_tmp" found`。
+    /// 所以 `use_catalog` 必须写全限定 `memory.rds_tmp`——这条用例就是那件事的回归。
+    #[test]
+    fn switching_catalog_keeps_shared_temps_visible() {
+        let instance = instance("t_switch_path");
+        let session = instance.open_session("doc-a", "编辑器").expect("开会话");
+        session
+            .run_with_timeout(
+                "CREATE TABLE rds_tmp.tmp_q_keep AS SELECT 7 AS n",
+                Duration::from_secs(3),
+            )
+            .expect("建共享临时");
+
+        // 测试里用可写内存库代替只读源文件：要验的只是 catalog 切换与 search_path
+        instance
+            .run_control("ATTACH ':memory:' AS src_a")
+            .expect("挂测试源");
+        session.use_catalog("src_a").expect("切主源");
+
+        let seen = session
+            .run_with_timeout("SELECT n FROM tmp_q_keep", Duration::from_secs(3))
+            .expect("切源后临时表应仍按裸名可见");
+        assert_eq!(seen.to_rows()[0][0].to_string(), "7");
+
+        let path = session
+            .run_with_timeout(
+                "SELECT value FROM duckdb_settings() WHERE name = 'search_path'",
+                Duration::from_secs(3),
+            )
+            .expect("读 search_path");
+        let path = path.to_rows()[0][0].to_string();
+        assert_eq!(
+            path,
+            format!("src_a.main,{SHARED_TEMP_PATH}"),
+            "默认路径只能有主源与共享临时区"
+        );
+        // 底座口径：默认路径里没有 `analytics` / `rds_global`
+        // —— 本地加速因此看不见底座，显式限定（`analytics.…`）仍可达。
+        assert!(!path.contains("analytics") && !path.contains("rds_global"));
+        instance.close_all_sessions();
+    }
+
+    /// 换通道只换**会话视图**：`retain_mounted` 清掉上一通道的源记录，实例上的挂载不动。
+    #[test]
+    fn retain_mounted_only_trims_the_session_view() {
+        use super::super::federation::registry::FederatedSource;
+
+        let dir = std::env::temp_dir().join(format!("rds_retain_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("建目录");
+        let path = dir.join("src.duckdb");
+        Connection::open(&path)
+            .expect("建源")
+            .execute_batch("CREATE TABLE t AS SELECT 1 AS n")
+            .expect("建表");
+
+        let instance = instance("t_retain");
+        let session = instance.open_session("doc-a", "编辑器").expect("开会话");
+        let source = FederatedSource::new(
+            "conn-a",
+            "fed_a",
+            "duckdb",
+            path.to_str().expect("路径"),
+        )
+        .expect("造源");
+        session.mount_sources(&[source]).expect("挂源");
+        assert_eq!(session.mounted_sources().len(), 1);
+
+        session.retain_mounted(&["rds_src".to_string()]);
+        assert!(
+            session.mounted_sources().is_empty(),
+            "非本通道的源记录应退场，否则面板会把两套通道的源一起列出来"
+        );
+        assert!(
+            instance.alias_owner("fed_a").is_some(),
+            "实例上的别名归属不动：源段的卸载是另一颗两态按钮"
+        );
+        instance.close_all_sessions();
     }
 
     /// 手动清理要认**两种落点**：`rds_tmp.<名>`（新口径）与 `memory.main.<名>`（历史口径）。
