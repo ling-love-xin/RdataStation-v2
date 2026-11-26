@@ -8,8 +8,46 @@
 
 use duckdb::Connection;
 use shared::error::CommonError;
+use std::sync::{Mutex, OnceLock};
 
 use crate::CoreError;
+
+/// 「别名 → 库文件路径」索引：`duckdb_databases()` 只说别名，说不出源路径。
+///
+/// 这是**唯一**一处由我们自己维护的挂载冗余，写入口只有两个方向：
+/// [`load_database_global`] / [`load_database_as_global`] 成功后记账，
+/// [`detach_database_global`] 成功后抹掉；其他任何地方一律只读。
+///
+/// 不放进 `load_database` / `detach_database`：那两个吃的是调用方给的连接（可能是
+/// 临时连接，例如「用 vN 分析」或测试），记进进程索引会把别人的挂载算到本进程头上。
+static CATALOG_FILE_INDEX: OnceLock<Mutex<Vec<(String, String)>>> = OnceLock::new();
+
+fn catalog_file_index() -> &'static Mutex<Vec<(String, String)>> {
+    CATALOG_FILE_INDEX.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// 记一条（同名覆盖：`load_database_as` 本身就是覆盖语义）
+fn note_catalog_file(alias: &str, path: &str) {
+    let Ok(mut index) = catalog_file_index().lock() else {
+        return;
+    };
+    index.retain(|(seen, _)| seen != alias);
+    index.push((alias.to_string(), path.to_string()));
+}
+
+fn forget_catalog_file(alias: &str) {
+    if let Ok(mut index) = catalog_file_index().lock() {
+        index.retain(|(seen, _)| seen != alias);
+    }
+}
+
+/// 此刻本进程挂着的库文件（别名 → 原路径）。纯内存读，供 catalog 快照与面板使用。
+pub fn catalog_files_snapshot() -> Vec<(String, String)> {
+    catalog_file_index()
+        .lock()
+        .map(|index| index.clone())
+        .unwrap_or_default()
+}
 
 /// 文件视图的命名前缀：面板靠它把「我加载进来的文件」与别的视图区分开
 pub const FILE_VIEW_PREFIX: &str = "f_";
@@ -199,7 +237,9 @@ pub fn load_database_as_global(path: &str, alias: &str) -> Result<(), CoreError>
     let conn = crate::duckdb::manager::DuckDBManager::global()
         .lock()
         .map_err(|_| CoreError::common(CommonError::General("内存库连接锁被污染".to_string())))?;
-    load_database_as(&conn, path, alias)
+    load_database_as(&conn, path, alias)?;
+    note_catalog_file(alias, path);
+    Ok(())
 }
 
 /// 在进程单例上挂载数据库文件（事件路径调用）
@@ -207,7 +247,9 @@ pub fn load_database_global(path: &str) -> Result<String, CoreError> {
     let conn = crate::duckdb::manager::DuckDBManager::global()
         .lock()
         .map_err(|_| CoreError::common(CommonError::General("内存库连接锁被污染".to_string())))?;
-    load_database(&conn, path)
+    let alias = load_database(&conn, path)?;
+    note_catalog_file(&alias, path);
+    Ok(alias)
 }
 
 /// 把一个已挂载的 catalog 从连接上卸掉（`DETACH`）
@@ -229,7 +271,9 @@ pub fn detach_database_global(alias: &str) -> Result<(), CoreError> {
     let conn = crate::duckdb::manager::DuckDBManager::global()
         .lock()
         .map_err(|_| CoreError::common(CommonError::General("内存库连接锁被污染".to_string())))?;
-    detach_database(&conn, alias)
+    detach_database(&conn, alias)?;
+    forget_catalog_file(alias);
+    Ok(())
 }
 
 /// 列出**进程单例**上某个挂载别名（数据库文件）里的表 / 视图

@@ -27,6 +27,8 @@
 //! （加速档 / 联邦）承担。台账见 `docs/architecture/data-layer-wiring-matrix.md` §5.3。
 
 pub mod accel;
+/// catalog 事实面（一个别名一条；ATTACH 结果归 DuckDB，这里只做归一读取）
+pub mod catalog;
 mod executor;
 mod explain;
 mod extension;
