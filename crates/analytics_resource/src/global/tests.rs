@@ -238,7 +238,7 @@ async fn g003_promote_script_content_table() {
 
     let list = list_global_resources(&env.store).expect("list");
     assert_eq!(list.len(), 1);
-    assert_eq!(list[0].kind, "analysis");
+    assert_eq!(list[0].kind, "file", "脚本以文件为共享形态；内容表只是兼容载体");
     assert_eq!(list[0].structured, Some(0), "脚本没有列结构，不参与分析");
     assert!(list[0]
         .file_rel_path
@@ -1200,6 +1200,112 @@ async fn g023_trash_restore_keeps_table_until_purge() {
         env.store.purge_global("trash_orders").await,
         Err(InstanceOpError::NotFound { .. })
     ));
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+#[tokio::test]
+async fn g025_global_file_body_versions_and_restore() {
+    let env = create_test_env().await;
+    let csv = write_csv(&env.dir);
+    let req = promote_req("body_orders", &csv, PromoteKind::DataFile);
+    env.store.promote(&req).await.expect("promote v1");
+
+    let rel = "body_orders.csv";
+    let current = payload::resources_dir(&env.store.system_dir).join(rel);
+    assert!(current.is_file(), "数据文件升级必须留下全局本体");
+    let v1_hash = crate::payload::PayloadStore::content_hash_sync(&current).expect("hash v1");
+    let key = payload::asset_key("body_orders");
+    let v1_copy = payload::version_dir(&env.store.system_dir, &key, 1).join(rel);
+    assert!(v1_copy.is_file(), "v1 必须落一份历史副本");
+    assert_eq!(
+        crate::payload::PayloadStore::content_hash_sync(&v1_copy).expect("hash copy"),
+        v1_hash
+    );
+
+    // v2：换内容再升级；旧当前文件先补进 v1 副本目录，再替换当前。
+    let csv2 = env.dir.join("orders-v2.csv");
+    fs::write(&csv2, "id,sku,qty\n9,z,90\n").expect("write v2");
+    let mut req2 = promote_req("body_orders", &csv2, PromoteKind::DataFile);
+    req2.rel_path = Some(rel.to_string());
+    env.store.promote_overwrite(&req2).await.expect("promote v2");
+    assert_eq!(
+        fs::read_to_string(&current).expect("read current"),
+        "id,sku,qty\n9,z,90\n"
+    );
+    assert_eq!(
+        fs::read_to_string(payload::version_dir(&env.store.system_dir, &key, 1).join(rel))
+            .expect("read v1"),
+        "id,sku,qty\n1,a,10\n2,b,20\n3,c,30\n"
+    );
+
+    // 恢复 v1 → 生成 v3，当前回到旧字节，v1/v2 都还在。
+    let restored = env
+        .store
+        .restore_global_file_version("body_orders", 1)
+        .await
+        .expect("restore v1");
+    assert_eq!(restored.version, 3);
+    assert_eq!(
+        fs::read_to_string(&current).expect("read restored current"),
+        "id,sku,qty\n1,a,10\n2,b,20\n3,c,30\n"
+    );
+    assert!(payload::version_dir(&env.store.system_dir, &key, 1)
+        .join(rel)
+        .is_file());
+    assert!(payload::version_dir(&env.store.system_dir, &key, 2)
+        .join(rel)
+        .is_file());
+    let table = read_global_table(&env, "body_orders").expect("v3 table");
+    assert!(
+        env.store.table_exists(&table).await.expect("probe"),
+        "恢复也生成新的全局表"
+    );
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+#[tokio::test]
+async fn g026_trash_moves_file_payload_and_restore_brings_it_back() {
+    let env = create_test_env().await;
+    let csv = write_csv(&env.dir);
+    let req = promote_req("payload_trash", &csv, PromoteKind::DataFile);
+    env.store.promote(&req).await.expect("promote");
+    let rel = "payload_trash.csv";
+    let current = payload::resources_dir(&env.store.system_dir).join(rel);
+    assert!(current.is_file());
+
+    let trashed = env.store.trash_global("payload_trash").await.expect("trash");
+    assert!(!current.exists(), "文件本体要移出 system/resources");
+    assert!(
+        trashed.trash_dir.join("payload/resources").join(rel).is_file(),
+        "本体应在回收站 payload 下"
+    );
+    let key = payload::asset_key("payload_trash");
+    assert!(
+        trashed
+            .trash_dir
+            .join("payload/versions")
+            .join(&key)
+            .is_dir(),
+        "历史副本也要随本体进回收站"
+    );
+
+    env.store.restore_global("payload_trash").await.expect("restore");
+    assert!(current.is_file(), "恢复要把本体移回原位");
+    assert!(
+        payload::version_dir(&env.store.system_dir, &key, 1)
+            .join(rel)
+            .is_file(),
+        "历史副本也要移回"
+    );
+
+    env.store.purge_global("payload_trash").await.expect("purge");
+    assert!(!current.exists(), "永久删除清掉当前本体");
+    assert!(
+        !payload::versions_dir(&env.store.system_dir).join(&key).exists(),
+        "永久删除清掉历史副本"
+    );
 
     let _ = fs::remove_dir_all(&env.dir);
 }

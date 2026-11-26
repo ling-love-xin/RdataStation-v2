@@ -34,6 +34,8 @@ use tokio::sync::Mutex as AsyncMutex;
 pub struct GlobalInstanceStore {
     sqlite: Arc<Mutex<Option<rusqlite::Connection>>>,
     duckdb: Arc<AsyncMutex<Option<duckdb::Connection>>>,
+    /// 全局系统目录（`data/system`）：文件资产本体与历史副本都落在它下面。
+    system_dir: PathBuf,
 }
 
 /// 升级请求（项目 → 全局）。
@@ -336,9 +338,11 @@ impl GlobalInstanceStore {
             ))
         })?;
         let duckdb = manager.duckdb_conn().acquire().await?;
+        let system_dir = engine::migration::get_system_dir()?;
         Ok(Self {
             sqlite: Arc::new(Mutex::new(None)),
             duckdb,
+            system_dir,
         })
     }
 
@@ -364,9 +368,14 @@ impl GlobalInstanceStore {
                 reason: e.to_string(),
             })
         })?;
+        let system_dir = sqlite_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
         Ok(Self {
             sqlite: Arc::new(Mutex::new(Some(sqlite))),
             duckdb: Arc::new(AsyncMutex::new(Some(duckdb))),
+            system_dir,
         })
     }
 
@@ -380,9 +389,14 @@ impl GlobalInstanceStore {
         duckdb: duckdb::Connection,
     ) -> Result<Self, CoreError> {
         let sqlite = open_registry(&sqlite_path)?;
+        let system_dir = sqlite_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
         Ok(Self {
             sqlite: Arc::new(Mutex::new(Some(sqlite))),
             duckdb: Arc::new(AsyncMutex::new(Some(duckdb))),
+            system_dir,
         })
     }
 }
@@ -422,6 +436,7 @@ fn open_registry(sqlite_path: &Path) -> Result<rusqlite::Connection, CoreError> 
 pub mod delete;
 pub mod distribute;
 pub mod list;
+mod payload;
 pub mod promote;
 pub mod refs;
 pub mod register;

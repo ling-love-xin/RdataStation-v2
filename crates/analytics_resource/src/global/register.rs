@@ -229,27 +229,39 @@ impl GlobalInstanceStore {
         row_count: Option<i32>,
         column_count: Option<i32>,
         definition_override: Option<String>,
+        file: Option<&super::payload::GlobalStagedFile>,
     ) -> Result<PromoteOutcome, InstanceOpError> {
         self.with_sqlite(|conn| {
             let id = format!("arg_{}", uuid::Uuid::new_v4().simple());
             let now = Utc::now().to_rfc3339();
+            // 脚本档的共享形态是文件（内容表只是兼容载体），数据文件档是表。
+            let kind = match req.kind {
+                PromoteKind::DataFile => "analysis",
+                PromoteKind::Script => "file",
+            };
             // 全局表由「能读成表的数据文件」建出来，就是结构化；脚本内容表不是。
             let structured = i32::from(matches!(req.kind, PromoteKind::DataFile));
             // 重建定义指向**实际表名**（G2 起表名带时间戳，不再是资产名）。
             // 表型直连 CTAS 不经过文件，调用方把真实来源 SQL 传进来，覆盖文件推断。
             let definition_sql = definition_override.or_else(|| match req.kind {
-                PromoteKind::DataFile => file_read_expr(&req.source_abs_path)
-                    .map(|expr| {
+                PromoteKind::DataFile => {
+                    let read_from = file
+                        .map(|file| file.abs.as_path())
+                        .unwrap_or(req.source_abs_path.as_path());
+                    file_read_expr(read_from).map(|expr| {
                         format!(
                             "CREATE TABLE {} AS SELECT * FROM {};",
                             quote_ident(table),
                             expr
                         )
-                    }),
+                    })
+                }
                 PromoteKind::Script => Some(format!(
                     "内容表（方案 A，§13.5）：{}（filename / content / content_hash），分发时重建为 resources/{}",
                     quote_ident(table),
-                    req.rel_path.as_deref().unwrap_or("")
+                    file.map(|file| file.rel.as_str())
+                        .or(req.rel_path.as_deref())
+                        .unwrap_or("")
                 )),
             });
 
@@ -276,21 +288,24 @@ impl GlobalInstanceStore {
                 ) VALUES (
                     ?1, ?2, ?3, NULL, 'null', 'global', ?4, ?5, ?6,
                     ?7, NULL, NULL, NULL, ?8, ?8, NULL, NULL,
-                    'analysis', ?9, ?10, 1, NULL, NULL, NULL, ?11, ?8,
+                    ?2, ?9, ?10, 1, NULL, NULL, NULL, ?11, ?8,
                     'copy', ?12, ?13, ?14, ?15, ?16
                 )
                 "#,
                 rusqlite::params![
                     &id,
-                    "analysis",
+                    kind,
                     name,
                     row_count,
                     column_count,
-                    req.file_size,
+                    file.map(|file| file.file_size)
+                        .or(req.file_size),
                     version,
                     now,
-                    req.content_hash,
-                    req.rel_path,
+                    file.map(|file| file.content_hash.as_str())
+                        .unwrap_or(&req.content_hash),
+                    file.map(|file| file.rel.as_str())
+                        .or(req.rel_path.as_deref()),
                     definition_sql,
                     req.source_abs_path.to_string_lossy().replace('\\', "/"),
                     origin_kind,
@@ -305,9 +320,13 @@ impl GlobalInstanceStore {
             // 快照记下这一版的**实际表名**：历史版本能不能回看，全看这个字段
             // （表还在库里，名字就写在这里）。
             let snapshot = serde_json::json!({
-                "kind": "analysis",
+                "kind": kind,
                 "analytics_table": table,
-                "content_hash": req.content_hash,
+                "content_hash": file.map(|file| file.content_hash.clone())
+                    .unwrap_or_else(|| req.content_hash.clone()),
+                "file_rel_path": file.map(|file| file.rel.clone())
+                    .or_else(|| req.rel_path.clone()),
+                "file_size": file.map(|file| file.file_size).or(req.file_size),
                 "row_count": row_count,
                 "column_count": column_count,
                 "definition_sql": definition_sql,

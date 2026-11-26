@@ -205,7 +205,7 @@
 | 2 | 会话角色 + 全局写守卫 | 守卫单测：`USE rds_global` / DDL / DML / ATTACH 全拒 | ✅ 已完成（2026-11-26） |
 | 3 | M6 表型减法：`ProjectCtx`、CTAS、删 parquet 路径 | `cargo test -p rds-analytics-resource --lib` | 🟡 进行中：结果集 / 升级 / 分发已切同根 CTAS（286 passed）；`ProjectCtx` 与 system session 待做 |
 | 4 | 全局表回收站 `trash_global` / `purge_global` | 表资产 trash/restore/purge 用例 | 🟡 表型已完成；文件回收站随第 5 步 |
-| 5 | 全局文件资产 + 文件回收站 + 版本恢复 | 文件 hash、恢复、pin 依赖用例 | ⬜ 待做 |
+| 5 | 全局文件资产 + 文件回收站 + 版本恢复 | 文件 hash、恢复、pin 依赖用例 | 🟡 本体/副本/恢复/回收站已落；UI 入口与裁剪待做 |
 | 6 | UI：回收站、版本恢复、分发文件 | `dialog_window` / `panel_window` | ⬜ 待做 |
 
 每步单独 commit；不把 1–3 和 4–6 混在一个提交里。
@@ -370,6 +370,38 @@ WIP 产物串包（`rds_sql::guard` 缺失 / `use_duckdb_fed` 类型不一致）
 
 本段未做：全局回收站列表 / 恢复入口 UI（当前只有服务层 `restore_global` 与测试）；
 文件资产回收站随第 5 步（还没有全局文件资产本体可搬）。
+
+## 9.5 第五段实施记录：全局文件本体与版本恢复（2026-11-26）
+
+代码落点：
+
+- `crates/store/src/persistence/global_paths.rs`：新增
+  `get_global_resources_dir()` / `get_global_resource_versions_dir()` / `get_global_trash_dir()`。
+- `crates/analytics_resource/src/global/payload.rs`：全局文件本体落盘（`resources/.staging` →
+  原子替换）、sha256 / 体积取自实际字节、历史副本
+  `resources/versions/<asset_key>/v<N>/<filename>`；`asset_key` 按资产名稳定生成，跨版本不换。
+- `global/promote.rs`：
+  - 文件型升级先保旧当前文件进旧版本目录，再替换当前副本，最后写 vN 副本；
+  - `restore_global_file_version(name, N)`：校验版本副本存在 + hash 与快照一致 →
+    以旧字节再走一次升级（`promote_overwrite`），生成新版本，不原地回滚。
+- `global/register.rs`：登记 / 快照写真实 `content_hash` / `file_size` / `file_rel_path`；
+  脚本档 `kind = file`（内容表降为兼容载体），数据文件档仍是 `kind = analysis` + 派生表。
+- `global/distribute.rs` / `global/refs.rs`：形态判定按 `kind = file`，不再按
+  `file_rel_path` 一刀切——数据文件新留下的本体只服务版本恢复，共享形态仍是表。
+- `global/delete.rs`：回收站 manifest 增 `file_rel_path` / `payload_dir`；
+  `trash_global` 把当前本体与历史副本移入 `trash/<id>/<time>/payload/`，
+  `restore_global` 移回，`purge_global` 清本体与历史副本。旧 manifest 靠 `serde(default)` 兼容。
+
+验证（串行）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo test -p rds-analytics-resource --lib global::tests::g025` | 1 passed（v1 本体/副本 hash 一致；v2 后 v1 保留；恢复 v1 → v3 且当前字节回旧） |
+| `cargo test -p rds-analytics-resource --lib global::tests::g026` | 1 passed（trash 移出本体与副本，restore 移回，purge 清掉） |
+| `cargo test -p rds-analytics-resource --lib -- --test-threads=1` | 290 passed / 0 failed |
+
+本段边界：现有全局表资产仍没有文件本体（旧数据不伪造）；表格 UI 还没有“恢复全局文件版本”
+入口，服务层已可用；文件 `KeepVersions` 裁剪与派生表的归属标记仍待下一段。
 
 ## 10. 风险与未决
 

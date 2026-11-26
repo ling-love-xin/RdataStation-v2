@@ -3,6 +3,13 @@
 > 状态：草案，2026-11-26。本文翻案 `analytics-resource-prototype-design.md` §13.5 的“方案 B 不采用”，
 > 把全局文件从“只投影成表”改为“文件本体 + 可选派生表”。
 >
+> 实施进度（2026-11-26，第一版）：
+> - 已落：`data/system/resources/` 本体、`versions/<asset_key>/vN/` 历史副本、
+>   sha256 / 体积按实际字节、文件版本恢复（生成新版本）、文件本体进全局回收站 / 恢复 / 永久删除。
+> - 当前形态：数据文件仍登记为 `kind = analysis` 并保留派生表，本体附加在同一行（服务版本恢复）；
+>   脚本登记为 `kind = file`。**独立文件资产行 + 派生表拆成两条资产**、文件 `KeepVersions`、
+>   回收站列表 / 恢复 UI 仍待做。旧表资产不伪造本体。
+>
 > 前置事实：现状全局只有 `data/system/{global.db, analytics.duckdb}`，没有 `data/system/resources/`；
 > 数据文件升级后只剩表，脚本升级后只剩内容表。详见
 > `asset-table-file-business-dataflow.md` §4.3。

@@ -135,7 +135,7 @@ impl GlobalInstanceStore {
         let (
             global_id,
             global_version,
-            _kind,
+            global_kind,
             global_hash,
             rel_path,
             definition_sql,
@@ -146,6 +146,9 @@ impl GlobalInstanceStore {
         ) = global_row.ok_or_else(|| InstanceOpError::NotFound {
             name: name.to_string(),
         })?;
+        // 形态以登记 `kind` 为准：`file` 才按文件分发。数据文件升级后虽然也留了
+        // 本体（用于版本恢复），它的共享形态仍是表，不能被 `file_rel_path` 误判。
+        let is_file = global_kind == "file";
 
         // 源表：G2 起由登记行 `analytics_table` 给出实际表名；老行（迁移 036 之前）
         // 那列是空的，回退到资产名——那时表名就等于资产名。
@@ -166,8 +169,13 @@ impl GlobalInstanceStore {
         // ---- 项目侧重名双保险探测（SQLite 未删登记 + DuckDB 表 + resources 文件）----
         // 与升级侧 `promote` 同口径：登记层与本体层任一命中都按冲突走询问，不静默覆盖。
         // 命中层名一并回传：冲突框要说清是登记、是表、还是文件。
-        if let Some(field) =
-            project_name_taken(project, project_root, &target_name, rel_path.as_deref()).await?
+        if let Some(field) = project_name_taken(
+            project,
+            project_root,
+            &target_name,
+            if is_file { rel_path.as_deref() } else { None },
+        )
+        .await?
         {
             return Err(InstanceOpError::Conflict {
                 name: target_name,
@@ -176,7 +184,14 @@ impl GlobalInstanceStore {
         }
 
         // ---- 形态判定 + 落项目 ----
-        let shape = if let Some(rel) = rel_path.as_deref() {
+        let shape = if is_file {
+            let Some(rel) = rel_path.as_deref() else {
+                return Err(InstanceOpError::Core(CoreError::common(
+                    CommonError::General(format!(
+                        "全局文件资产「{name}」没有登记本体相对路径，无法分发"
+                    )),
+                )));
+            };
             // 脚本内容表 → 重建为文件（File 档）。
             let content = self
                 .read_script_content(&source_table)

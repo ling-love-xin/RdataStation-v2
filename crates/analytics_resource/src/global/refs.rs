@@ -48,9 +48,11 @@ impl GlobalInstanceStore {
             .ok_or_else(|| InstanceOpError::NotFound {
                 name: global_name.to_string(),
             })?;
-        let (global_id, version, _kind, hash, rel_path, _definition, rows, cols, _size, table) =
+        let (global_id, version, kind, hash, _rel_path, _definition, rows, cols, _size, table) =
             row;
-        if rel_path.is_some() {
+        // 只有 `kind = file` 才是文件资产；数据文件升级后也留了本体（用于版本恢复），
+        // 但它仍以派生表被引用，不能按 `file_rel_path` 一刀切拒绝。
+        if kind == "file" {
             return Err(InstanceOpError::Core(CoreError::common(
                 CommonError::General("当前只支持引用表型全局资产；文件型引用后置".to_string()),
             )));

@@ -47,6 +47,39 @@ impl GlobalInstanceStore {
             table = table_name::version_table_name_with_version(&req.name, next_version, now);
         }
 
+        // ---- 文件本体：先保旧版，再原子替换当前副本 ----
+        //
+        // 表型一版一行，但文件历史目录要跨版本稳定，所以目录键由资产名推（`payload::asset_key`），
+        // 不用每次换了 id 的行 id。旧当前文件在替换前补进旧版本目录，失败不留「旧内容被覆盖、
+        // 历史又没副本」的洞。
+        let key = payload::asset_key(&req.name);
+        let previous: Option<(i32, String)> = self.with_sqlite(|conn| {
+            conn.query_row(
+                r#"
+                SELECT version, file_rel_path FROM analytics_resources
+                WHERE name = ?1 AND scope = 'global' AND deleted_at IS NULL
+                  AND file_rel_path IS NOT NULL
+                ORDER BY version DESC LIMIT 1
+                "#,
+                rusqlite::params![req.name],
+                |row| Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(sqlite_err("read_previous_file"))
+        })?;
+        if let Some((old_version, old_rel)) = previous {
+            let old_abs = payload::resources_dir(&self.system_dir).join(&old_rel);
+            payload::store_version_copy(&self.system_dir, &key, old_version, &old_abs, &old_rel)
+                .await?;
+        }
+        let file = payload::stage_and_commit(
+            &req.source_abs_path,
+            &self.system_dir,
+            req.rel_path.as_deref(),
+            &req.name,
+        )
+        .await?;
+
         // ---- 建全局表（表名 = `table`，不是资产名）----
         let (row_count, column_count) = match req.kind {
             PromoteKind::DataFile => {
@@ -145,7 +178,16 @@ impl GlobalInstanceStore {
             row_count,
             column_count,
             None,
+            Some(&file),
         )?;
+        payload::store_version_copy(
+            &self.system_dir,
+            &key,
+            next_version,
+            &file.abs,
+            &file.rel,
+        )
+        .await?;
         // 一版一张表会随版本线性增长：按保留策略裁掉更早的表（只删内容表，
         // 登记与版本快照都留）。裁剪失败只记日志，不回滚已经成功的升级。
         if let Some(keep) = req.keep_versions {
@@ -180,6 +222,117 @@ impl GlobalInstanceStore {
         let mut outcome = self.promote(req).await?;
         outcome.overwritten = true;
         Ok(outcome)
+    }
+
+    /// 从全局文件历史版本恢复：旧副本校验 hash → 生成新版本（不原地回滚）。
+    ///
+    /// 与项目文件型“从历史还原”同构：恢复 = 以旧字节为源再走一次升级（新表 / 新内容表、
+    /// 新登记行、版本号 +1），旧版本与其副本一律保留。副本已被裁剪或 hash 不符时明确失败。
+    pub async fn restore_global_file_version(
+        &self,
+        name: &str,
+        version: i32,
+    ) -> Result<PromoteOutcome, InstanceOpError> {
+        let active: Option<(String, String, Option<i64>, Option<String>)> =
+            self.with_sqlite(|conn| {
+                conn.query_row(
+                    r#"
+                    SELECT kind, file_rel_path, file_size, origin_ref
+                    FROM analytics_resources
+                    WHERE name = ?1 AND scope = 'global' AND deleted_at IS NULL
+                      AND file_rel_path IS NOT NULL
+                    ORDER BY version DESC LIMIT 1
+                    "#,
+                    rusqlite::params![name],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .optional()
+                .map_err(sqlite_err("read_restore_active"))
+            })?;
+        let Some((kind, rel, file_size, origin_ref)) = active else {
+            return Err(InstanceOpError::NotFound {
+                name: name.to_string(),
+            });
+        };
+        let (source_id, source_version) = origin_ref
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .map(|value| {
+                (
+                    value
+                        .get("resource_id")
+                        .and_then(|item| item.as_str())
+                        .map(str::to_string),
+                    value.get("version").and_then(|item| item.as_i64()).map(|v| v as i32),
+                )
+            })
+            .unwrap_or((None, None));
+
+        // 版本快照给 hash（恢复前必须确认副本字节就是那一版，不用当前内容冒充）。
+        let snapshot: Option<(String,)> = self.with_sqlite(|conn| {
+            conn.query_row(
+                "SELECT snapshot FROM analytics_resource_versions \
+                 WHERE resource_id = (SELECT id FROM analytics_resources \
+                    WHERE name = ?1 AND scope = 'global' AND version = ?2 LIMIT 1) \
+                   AND version = ?2",
+                rusqlite::params![name, version],
+                |row| Ok((row.get::<_, String>(0)?,)),
+            )
+            .optional()
+            .map_err(sqlite_err("read_restore_snapshot"))
+        })?;
+        let Some((snapshot_text,)) = snapshot else {
+            return Err(InstanceOpError::Core(CoreError::common(
+                CommonError::General(format!(
+                    "全局「{name}」v{version} 的版本快照不存在，无法恢复"
+                )),
+            )));
+        };
+        let snapshot_json: serde_json::Value = serde_json::from_str(&snapshot_text).map_err(|e| {
+            InstanceOpError::Core(CoreError::common(CommonError::General(format!(
+                "全局「{name}」v{version} 的版本快照损坏：{e}"
+            ))))
+        })?;
+        let expected_hash = snapshot_json
+            .get("content_hash")
+            .and_then(|value| value.as_str())
+            .filter(|hash| !hash.is_empty())
+            .map(str::to_string);
+
+        let key = payload::asset_key(name);
+        let copy = payload::version_copy(&self.system_dir, &key, version, &rel).ok_or_else(|| {
+            InstanceOpError::Core(CoreError::common(CommonError::General(format!(
+                "全局「{name}」v{version} 的内容副本已被裁剪或缺失，无法恢复"
+            ))))
+        })?;
+        if let Some(expected) = expected_hash.as_deref() {
+            let actual = crate::payload::PayloadStore::content_hash_sync(&copy)?;
+            if actual != expected {
+                return Err(InstanceOpError::Core(CoreError::common(
+                    CommonError::General(format!(
+                        "全局「{name}」v{version} 的内容副本指纹不符（登记 {expected}，实际 {actual}），拒绝恢复"
+                    )),
+                )));
+            }
+        }
+
+        let req = PromoteRequest {
+            name: name.to_string(),
+            kind: if kind == "file" {
+                PromoteKind::Script
+            } else {
+                PromoteKind::DataFile
+            },
+            source_abs_path: copy,
+            rel_path: Some(rel),
+            content_hash: expected_hash.unwrap_or_default(),
+            file_size,
+            source_resource_id: source_id,
+            source_version,
+            source_table: None,
+            keep_versions: None,
+        };
+        self.promote_overwrite(&req).await
     }
 
     /// 表型升级：项目分析库里的表直接 CTAS 到全局库（不经 Parquet）。
@@ -288,6 +441,7 @@ impl GlobalInstanceStore {
             row_count,
             column_count,
             definition,
+            None,
         )?;
         outcome.overwritten = overwrite;
         if let Some(keep) = req.keep_versions {

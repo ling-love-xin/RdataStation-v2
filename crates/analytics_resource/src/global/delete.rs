@@ -12,11 +12,13 @@
 //! 不走 Windows 回收站。`delete_global` 暂时保留旧的硬删除语义（兼容现有 UI 调用），
 //! 新入口应走 [`GlobalInstanceStore::trash_global`] / [`GlobalInstanceStore::purge_global`]。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chrono::Utc;
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
+use super::payload;
 use super::{CommonError, CoreError, GlobalInstanceStore, InstanceOpError, sqlite_err};
 
 /// 一次全局资产删除的结果（回执文案用）。
@@ -50,7 +52,7 @@ pub struct GlobalRestoreOutcome {
     pub analytics_table: Option<String>,
 }
 
-/// 回收站 manifest（表型当前只写 `kind = "analysis"`；文件资产后续复用同一结构）。
+/// 回收站 manifest（表型与文件本体共用同一结构；没有 payload 的旧条目靠 `serde(default)` 兼容）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct GlobalTrashManifest {
     kind: String,
@@ -58,6 +60,12 @@ struct GlobalTrashManifest {
     asset_id: String,
     version: i32,
     analytics_table: Option<String>,
+    /// 文件本体相对路径（`resources/<rel>`）；表型旧条目没有这一项。
+    #[serde(default)]
+    file_rel_path: Option<String>,
+    /// 回收站内的 payload 根（相对 `trash_dir`）；文件本体 / 历史版本移入时写。
+    #[serde(default)]
+    payload_dir: Option<String>,
     trashed_at: String,
     versions: Vec<TrashVersion>,
 }
@@ -81,32 +89,38 @@ impl GlobalInstanceStore {
         &self,
         name: &str,
     ) -> Result<GlobalTrashOutcome, InstanceOpError> {
-        let rows: Vec<(String, i32, Option<String>, Option<String>)> = self.with_sqlite(|conn| {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT id, version, analytics_table, deleted_at FROM analytics_resources \
-                     WHERE name = ?1 AND scope = 'global' ORDER BY version DESC",
-                )
-                .map_err(sqlite_err("prepare_trash_global"))?;
-            let rows = stmt
-                .query_map(rusqlite::params![name], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, i32>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                    ))
-                })
-                .map_err(sqlite_err("query_trash_global"))?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(sqlite_err("collect_trash_global"))
-        })?;
+        let rows: Vec<(String, i32, Option<String>, Option<String>, Option<String>)> =
+            self.with_sqlite(|conn| {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT id, version, analytics_table, deleted_at, file_rel_path \
+                         FROM analytics_resources \
+                         WHERE name = ?1 AND scope = 'global' ORDER BY version DESC",
+                    )
+                    .map_err(sqlite_err("prepare_trash_global"))?;
+                let rows = stmt
+                    .query_map(rusqlite::params![name], |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, i32>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, Option<String>>(3)?,
+                            row.get::<_, Option<String>>(4)?,
+                        ))
+                    })
+                    .map_err(sqlite_err("query_trash_global"))?;
+                rows.collect::<Result<Vec<_>, _>>()
+                    .map_err(sqlite_err("collect_trash_global"))
+            })?;
         if rows.is_empty() {
             return Err(InstanceOpError::NotFound {
                 name: name.to_string(),
             });
         }
-        let active: Vec<_> = rows.iter().filter(|(_, _, _, deleted)| deleted.is_none()).collect();
+        let active: Vec<_> = rows
+            .iter()
+            .filter(|(_, _, _, deleted, _)| deleted.is_none())
+            .collect();
         if active.is_empty() {
             return Err(InstanceOpError::Core(CoreError::common(
                 CommonError::General(format!("全局资产「{name}」已经在回收站")),
@@ -132,16 +146,49 @@ impl GlobalInstanceStore {
             ))))
         })?;
 
+        // 文件本体与历史副本移入回收站：表型没有 payload，这一步自然跳过。
+        let current_file = current.4.clone();
+        let mut payload_dir = None;
+        if let Some(rel) = current_file.as_deref() {
+            let source = payload::resources_dir(&self.system_dir).join(rel);
+            if source.is_file() {
+                let payload_root = trash_dir.join("payload");
+                let dest = payload_root.join("resources").join(rel);
+                move_path(&source, &dest).map_err(|e| {
+                    InstanceOpError::Core(CoreError::common(CommonError::General(format!(
+                        "移动全局文件本体到回收站失败（{}）：{e}",
+                        source.display()
+                    ))))
+                })?;
+                payload_dir = Some("payload".to_string());
+            }
+        }
+        let key = payload::asset_key(name);
+        let versions_src = payload::asset_versions_dir(&self.system_dir, &key);
+        if versions_src.is_dir() {
+            let payload_root = trash_dir.join("payload");
+            let dest = payload_root.join("versions").join(&key);
+            move_path(&versions_src, &dest).map_err(|e| {
+                InstanceOpError::Core(CoreError::common(CommonError::General(format!(
+                    "移动全局文件历史副本到回收站失败（{}）：{e}",
+                    versions_src.display()
+                    ))))
+            })?;
+            payload_dir = Some("payload".to_string());
+        }
+
         let manifest = GlobalTrashManifest {
             kind: TRASH_KIND_ANALYSIS.to_string(),
             name: name.to_string(),
             asset_id: current.0.clone(),
             version: current.1,
             analytics_table: current.2.clone(),
+            file_rel_path: current_file,
+            payload_dir,
             trashed_at: now.clone(),
             versions: rows
                 .iter()
-                .map(|(id, version, table, deleted)| TrashVersion {
+                .map(|(id, version, table, deleted, _)| TrashVersion {
                     resource_id: id.clone(),
                     version: *version,
                     analytics_table: table.clone(),
@@ -197,20 +244,69 @@ impl GlobalInstanceStore {
                 "全局回收站中没有「{name}」"
             ))))
         })?;
-        let Some(table) = manifest.analytics_table.as_deref().filter(|t| !t.is_empty()) else {
+        // 表型：先校验当前表还在；文件本体：先把 payload 移回原位。
+        if let Some(table) = manifest
+            .analytics_table
+            .as_deref()
+            .filter(|table| !table.is_empty())
+        {
+            if !self.table_exists(table).await? {
+                return Err(InstanceOpError::Core(CoreError::common(
+                    CommonError::General(format!(
+                        "全局「{name}」v{} 的表（{table}）已经不在了：请从回收站永久删除这条登记",
+                        manifest.version
+                    )),
+                )));
+            }
+        } else if manifest.file_rel_path.is_none() {
             return Err(InstanceOpError::Core(CoreError::common(
                 CommonError::General(format!(
-                    "全局回收站条目「{name}」没有记录分析表，无法自动恢复"
+                    "全局回收站条目「{name}」既没有分析表也没有文件本体，无法恢复"
                 )),
             )));
-        };
-        if !self.table_exists(table).await? {
-            return Err(InstanceOpError::Core(CoreError::common(
-                CommonError::General(format!(
-                    "全局「{name}」v{} 的表（{table}）已经不在了：请从回收站永久删除这条登记",
-                    manifest.version
-                )),
-            )));
+        }
+
+        if manifest.payload_dir.is_some() {
+            let payload_root = manifest_dir.join("payload");
+            if let Some(rel) = manifest.file_rel_path.as_deref() {
+                let source = payload_root.join("resources").join(rel);
+                if source.is_file() {
+                    let dest = payload::resources_dir(&self.system_dir).join(rel);
+                    if dest.exists() {
+                        return Err(InstanceOpError::Core(CoreError::common(
+                            CommonError::General(format!(
+                                "恢复全局「{name}」失败：本体目标已存在（{}）",
+                                dest.display()
+                            )),
+                        )));
+                    }
+                    move_path(&source, &dest).map_err(|e| {
+                        InstanceOpError::Core(CoreError::common(CommonError::General(format!(
+                            "恢复全局文件本体失败（{}）：{e}",
+                            dest.display()
+                        ))))
+                    })?;
+                }
+            }
+            let key = payload::asset_key(name);
+            let source = payload_root.join("versions").join(&key);
+            if source.is_dir() {
+                let dest = payload::versions_dir(&self.system_dir).join(&key);
+                if dest.exists() {
+                    return Err(InstanceOpError::Core(CoreError::common(
+                        CommonError::General(format!(
+                            "恢复全局「{name}」失败：历史版本目标已存在（{}）",
+                            dest.display()
+                        )),
+                    )));
+                }
+                move_path(&source, &dest).map_err(|e| {
+                    InstanceOpError::Core(CoreError::common(CommonError::General(format!(
+                        "恢复全局文件历史副本失败（{}）：{e}",
+                        dest.display()
+                    ))))
+                })?;
+            }
         }
 
         let restored = self.with_sqlite(|conn| {
@@ -301,7 +397,40 @@ impl GlobalInstanceStore {
             }
         }
 
-        // 4. 事务内清三张表：资源行（整条同名链）、版本快照、分发回执。
+        // 4. 文件本体与历史副本：永久删除时一并清掉（回收站里的 payload 由第 5 步清）。
+        let file_rel: Option<String> = self.with_sqlite(|conn| {
+            conn.query_row(
+                "SELECT file_rel_path FROM analytics_resources \
+                 WHERE name = ?1 AND scope = 'global' AND file_rel_path IS NOT NULL \
+                 ORDER BY version DESC LIMIT 1",
+                rusqlite::params![name],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(sqlite_err("read_purge_file"))
+        })?;
+        if let Some(rel) = file_rel {
+            let path = payload::resources_dir(&self.system_dir).join(&rel);
+            if path.is_file() {
+                std::fs::remove_file(&path).map_err(|e| {
+                    InstanceOpError::Core(CoreError::common(CommonError::General(format!(
+                        "永久删除全局文件本体失败（{}）：{e}",
+                        path.display()
+                    ))))
+                })?;
+            }
+            let versions = payload::versions_dir(&self.system_dir).join(payload::asset_key(name));
+            if versions.is_dir() {
+                std::fs::remove_dir_all(&versions).map_err(|e| {
+                    InstanceOpError::Core(CoreError::common(CommonError::General(format!(
+                        "永久删除全局文件历史副本失败（{}）：{e}",
+                        versions.display()
+                    ))))
+                })?;
+            }
+        }
+
+        // 5. 事务内清三张表：资源行（整条同名链）、版本快照、分发回执。
         let versions = rows.len();
         self.with_sqlite(|conn| {
             let tx = conn
@@ -347,6 +476,47 @@ impl GlobalInstanceStore {
 
 fn trash_root() -> PathBuf {
     paths::data_dir().join("trash").join("global")
+}
+
+/// 同卷 `rename`；跨卷退回复制 + 删源。目录与文件都走这一条。
+fn move_path(source: &Path, dest: &Path) -> std::io::Result<()> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    match std::fs::rename(source, dest) {
+        Ok(()) => Ok(()),
+        Err(rename_error) => {
+            if source.is_dir() {
+                copy_dir(source, dest)?;
+                std::fs::remove_dir_all(source)?;
+                Ok(())
+            } else {
+                std::fs::copy(source, dest).map_err(|copy_error| {
+                    std::io::Error::new(
+                        copy_error.kind(),
+                        format!("{rename_error}; {copy_error}"),
+                    )
+                })?;
+                std::fs::remove_file(source)?;
+                Ok(())
+            }
+        }
+    }
+}
+
+fn copy_dir(source: &Path, dest: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dest)?;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dest.join(entry.file_name());
+        if from.is_dir() {
+            copy_dir(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
 }
 
 fn trash_stamp() -> String {
