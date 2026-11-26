@@ -123,21 +123,35 @@ impl ArchiveService {
             .clone()
             .ok_or_else(|| service_err("restore", "该存档没有本体路径（非文件型或旧行）"))?;
 
-        let copy = self
-            .payload
-            .version_copy_file(resource_id, version)
-            .await?
-            .ok_or_else(|| {
-                service_err(
-                    "restore",
-                    &format!("v{version} 没有内容副本（可能已被保留策略裁剪），无法还原"),
-                )
-            })?;
-        let copy_hash = self.payload.content_hash(&copy).await?;
-        // 还原后的体积就是副本的体积（写回后本体与副本同内容）。
-        let file_size = self.payload.file_size(&copy).await?;
-        if copy_hash == current.content_hash.clone().unwrap_or_default() {
-            // 幂等：要还原的内容就是当前内容，什么都不做（与再归档的指纹守卫同一口径）。
+        let target = self.store.file_asset_version(resource_id, version).await?.ok_or_else(|| {
+            service_err(
+                "restore",
+                &format!("v{version} 没有 manifest：旧文件资产不再支持版本还原"),
+            )
+        })?;
+        if target.content_pruned {
+            return Err(service_err(
+                "restore",
+                &format!("v{version} 的内容已被标记裁剪，无法还原"),
+            ));
+        }
+        let manifest = self.payload.cas().read_manifest(&target.manifest_id).await?;
+        let entry = manifest.content_entry().ok_or_else(|| {
+            service_err("restore", &format!("v{version} 的 manifest 缺少 Content"))
+        })?;
+        let copy_hash = manifest.content_hash.clone();
+        let file_size = Some(entry.size as i64);
+        // 幂等按**整版 manifest** 比，而不是只比字节：内容相同、元数据不同也是另一版。
+        let current_manifest = self
+            .store
+            .file_asset_version(&current.id, current.version)
+            .await?;
+        let unchanged = match current_manifest.as_ref() {
+            Some(current) => current.manifest_id == target.manifest_id,
+            None => copy_hash == current.content_hash.clone().unwrap_or_default(),
+        };
+        if unchanged {
+            // 幂等：要还原的就是当前这一版完整快照，什么都不做。
             return Ok(ArchiveOutcome {
                 resource_id: current.id,
                 version: current.version,
@@ -148,40 +162,44 @@ impl ArchiveService {
             });
         }
 
-        // 与再归档同一顺序（P0-1）：旧内容留副本 → 历史副本进暂存 → 索引事务 → 替换本体。
-        if self
-            .payload
-            .store_version_copy(resource_id, current.version, &rel_path)
-            .await?
-            .is_none()
-        {
-            return Err(service_err(
-                "restore",
-                "当前内容未能留成历史副本，已中止还原以免丢失当前版本",
-            ));
-        }
         let snapshot = serde_json::to_string(&current).map_err(|e| {
             CoreError::storage(StorageError::Serialization {
                 format: "JSON".to_string(),
                 reason: e.to_string(),
             })
         })?;
-        // `stage_payload` 会重新检查副本是否还在：等价于原来「副本在查到与写回之间消失」的守卫。
-        let staged = self.payload.stage_payload(&copy, &rel_path).await?;
+        let temp = self.payload.project_root().join(".RSmeta/cas/staging").join(format!(
+            "restore-{}.tmp",
+            uuid::Uuid::new_v4().simple()
+        ));
+        self.payload
+            .cas()
+            .materialize_content(&manifest, &temp)
+            .await?;
+        let staged = self.payload.stage_payload(&temp, &rel_path).await;
+        if let Err(error) = tokio::fs::remove_file(&temp).await {
+            tracing::warn!(error = %error, path = %temp.display(), "清理还原临时物化文件失败");
+        }
+        let staged = staged?;
 
         let committed = self
             .store
             // 版本还原：只换内容与体积；分析表的定义 / 规模保持原位不动
             // （还原旧内容不等于把「这份东西是什么」改回去——那要走再归档）。
-            .commit_new_version(
+            .commit_new_file_version(
                 resource_id,
                 current.version,
                 &snapshot,
-                &copy_hash,
+                crate::store::file_asset::NewFileAssetVersion {
+                    manifest_id: target.manifest_id.clone(),
+                    content_hash: target.content_hash.clone(),
+                    meta_hash: target.meta_hash.clone(),
+                    parent_version: Some(current.version),
+                },
                 file_size,
                 None,
                 crate::model::TimelineEventKind::Restored,
-                Some(&format!("从 v{version} 的副本生成新版本")),
+                Some(&format!("从 v{version} 的 manifest 生成新版本")),
             )
             .await;
         let updated = match committed {
@@ -211,7 +229,6 @@ impl ArchiveService {
         }
         self.payload.discard_staged(&staged).await;
 
-        self.prune_copies(resource_id, None).await;
         self.emit(ChangeReason::Restored, Some(resource_id.to_string()));
 
         Ok(ArchiveOutcome {
@@ -288,6 +305,54 @@ impl ArchiveService {
         })
     }
 
+    /// 把某个历史版本的 manifest 物化到项目内部只读预览路径。
+    ///
+    /// 只给「用 vN 分析」这类只读查看用：返回 `None` = 该版本没有 manifest。
+    /// 落点是确定的（同一版本重复查看覆盖同一文件），不占用用户可见目录。
+    pub async fn version_file(
+        &self,
+        resource_id: &str,
+        version: i32,
+    ) -> Result<Option<std::path::PathBuf>, CoreError> {
+        let Some(target) = self.store.file_asset_version(resource_id, version).await? else {
+            return Ok(None);
+        };
+        if target.content_pruned {
+            return Err(service_err(
+                "version_file",
+                &format!("v{version} 的内容已被标记裁剪，无法查看"),
+            ));
+        }
+        let manifest = self.payload.cas().read_manifest(&target.manifest_id).await?;
+        let entry = manifest.content_entry().ok_or_else(|| {
+            service_err("version_file", "manifest 缺少 Content")
+        })?;
+        let name = std::path::Path::new(&entry.path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("version.dat");
+        let dest = self
+            .payload
+            .project_root()
+            .join(".RSmeta/cas/materialized/versions")
+            .join(resource_id)
+            .join(format!("v{version}"))
+            .join(name);
+        if dest.exists() {
+            tokio::fs::remove_file(&dest).await.map_err(|error| {
+                service_err(
+                    "version_file",
+                    &format!("清理旧预览失败（{}）：{error}", dest.display()),
+                )
+            })?;
+        }
+        self.payload
+            .cas()
+            .materialize_content(&manifest, &dest)
+            .await?;
+        Ok(Some(dest))
+    }
+
     /// 取回某个**历史版本**为工作副本（版本历史对话框的“取回该版本为草稿”）。
     ///
     /// 与 `checkout` 同一语义，只是源换成历史副本（本体不动）。
@@ -304,17 +369,24 @@ impl ArchiveService {
             ));
         }
         let resource = self.store.get_resource_by_id(resource_id).await?;
-        // 本体异常（缺失 / 内容已变）不影响历史副本：能从历史取回就让它取。
-        if !self
-            .payload
-            .copy_version_out(resource_id, version, dest_path)
-            .await?
-        {
+        let target = self.store.file_asset_version(resource_id, version).await?.ok_or_else(|| {
+            service_err(
+                "checkout_version",
+                &format!("v{version} 没有 manifest：旧文件资产不再支持历史取回"),
+            )
+        })?;
+        if target.content_pruned {
             return Err(service_err(
                 "checkout_version",
-                &format!("v{version} 没有内容副本（可能已被保留策略裁剪），无法取回"),
+                &format!("v{version} 的内容已被标记裁剪，无法取回"),
             ));
         }
+        let manifest = self.payload.cas().read_manifest(&target.manifest_id).await?;
+        let file_meta = self
+            .payload
+            .cas()
+            .materialize_content(&manifest, dest_path)
+            .await?;
         self.emit(ChangeReason::CheckedOut, Some(resource.id.clone()));
         self.record_timeline(
             &resource.id,
@@ -329,7 +401,7 @@ impl ArchiveService {
             resource_id: resource.id,
             version,
             dest_path: dest_path.to_path_buf(),
-            file_meta: None,
+            file_meta,
         })
     }
 

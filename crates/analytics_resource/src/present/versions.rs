@@ -20,16 +20,15 @@ struct Candidate {
 /// 2. **相邻版本差异**（大小 ±N · 指纹是否变）——不做行级 diff，两个值就够一眼看出
 ///    “这一版改了多大”；
 ///
-/// `payload_ok` = 当前本体在位（当前版本行的“副本”就是本体）；`copies` = 有内容副本的
-/// 历史版本号（`PayloadStore::version_copies`）——两者都是宿主在取数线程上问过文件系统
-/// 才有的，不在渲染期算。
+/// `payload_ok` = 当前本体在位（当前版本行的“可还原内容”就是本体）；`file_versions` =
+/// 有 manifest 的文件版本索引——两者都是宿主在取数线程上查过文件系统 / 库才有的，不在渲染期算。
 ///
 /// 历史行的大小 / 指纹只能从快照 JSON 里取（表结构如此）；解析失败就**留空**，
 /// 不拿当前版本的值顶替——那会伪造历史。
 pub fn build_version_rows(
     current: &AnalyticsResource,
     versions: &[crate::store::rows::ResourceVersion],
-    copies: &[i32],
+    file_versions: &[crate::store::file_asset::FileAssetVersion],
     payload_ok: bool,
 ) -> Vec<VersionRow> {
     let mut candidates = vec![Candidate {
@@ -61,7 +60,7 @@ pub fn build_version_rows(
             has_copy: if is_table {
                 crate::table_asset::snapshot_table(&version.snapshot).is_some()
             } else {
-                copies.contains(&version.version)
+                file_versions.iter().any(|file| file.version == version.version)
             },
         });
     }

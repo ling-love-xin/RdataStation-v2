@@ -3,7 +3,7 @@
 use super::*;
 
 #[tokio::test]
-async fn t120_undo_removes_copy_and_drops_the_row_restores_draft() {
+async fn t120_undo_drops_the_row_and_restores_draft() {
     let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
     let mut events = service.subscribe();
     let draft = write_draft(&dir, "undo.sql", b"select 1;").await;
@@ -122,7 +122,7 @@ async fn t122_restore_version_brings_old_content_forward() {
         .expect("archive");
     let _ = events.recv().await.expect("archived event");
 
-    // v2：内容变了 → v1 进历史（版本行 + 内容副本）。
+    // v2：内容变了 → v1 进历史（版本行 + manifest）。
     let second_draft = write_draft(&dir, "dau2.sql", b"select 2;").await;
     let second = service
         .archive(archive_req(
@@ -168,7 +168,7 @@ async fn t122_restore_version_brings_old_content_forward() {
         .expect("row");
     assert_eq!(row.file_size, Some(9), "体积随本体一起回到历史值");
 
-    // 历史：v1、v2 都有行（写前快照语义），且两份副本都还在（还原不消耗副本）。
+    // 历史：v1、v2 都有行（写前快照语义），且每版 manifest 都还在（还原不消耗 manifest）。
     let versions = service
         .store()
         .get_resource_versions(&first.resource_id)
@@ -178,11 +178,14 @@ async fn t122_restore_version_brings_old_content_forward() {
     assert_eq!(numbers, vec![2, 1]);
     assert_eq!(
         service
-            .payload()
-            .version_copies(&first.resource_id)
+            .store()
+            .list_file_asset_versions(&first.resource_id)
             .await
-            .expect("copies"),
-        vec![2, 1]
+            .expect("file versions")
+            .iter()
+            .map(|file| file.version)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3]
     );
 
     assert_eq!(
@@ -194,7 +197,7 @@ async fn t122_restore_version_brings_old_content_forward() {
 }
 
 #[tokio::test]
-async fn t123_restore_version_requires_copy_and_skips_identical_content() {
+async fn t123_restore_version_requires_manifest_and_skips_identical_content() {
     let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
     let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
     let first = service
@@ -211,29 +214,17 @@ async fn t123_restore_version_requires_copy_and_skips_identical_content() {
         .await
         .expect("re-archive");
 
-    // 副本被裁掉（或手工清理）：拒绝并说清原因，不动任何状态。
-    assert!(
-        service
-            .payload()
-            .delete_version_copy(&first.resource_id, 1)
-            .await
-            .expect("delete copy")
-    );
+    // 不存在的版本没有 manifest：拒绝并说清原因，不动任何状态。
     let error = service
-        .restore_version(&first.resource_id, 1)
+        .restore_version(&first.resource_id, 99)
         .await
-        .expect_err("no copy");
+        .expect_err("no manifest");
     assert!(
-        error.to_string().contains("没有内容副本"),
-        "原因要指向副本不在：{error}"
+        error.to_string().contains("没有 manifest"),
+        "原因要指向 manifest 不在：{error}"
     );
 
     // 内容与当前一致的版本：幂等（不为“还原到自己”造一个无意义的新版本）。
-    service
-        .payload()
-        .store_version_copy(&first.resource_id, 2, "dau.sql")
-        .await
-        .expect("copy v2");
     let outcome = service
         .restore_version(&first.resource_id, 2)
         .await

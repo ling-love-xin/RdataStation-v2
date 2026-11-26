@@ -66,7 +66,7 @@ use version::{
 /// 对外（面板 / 宿主）直接引用的行模型类型：由领域文件定义、这里 re-export。
 pub use index::IndexScanRows;
 pub use tag::TagRows;
-pub use version::{VersionDiffRows, VersionRows};
+pub use version::{VersionDiffRows, VersionRows, version_file};
 
 /// 连接池大小：与其它项目库访问点一致（`data_source_service` / `workspace_loader` 同为 4）。
 pub(crate) const SQLITE_POOL_SIZE: usize = 4;

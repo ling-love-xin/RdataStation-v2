@@ -124,8 +124,8 @@ impl GlobalInstanceStore {
 
     /// 按 `KeepVersions` 裁剪全局同名链的**历史版本表**（只删内容，不删登记与版本快照）。
     ///
-    /// 语义与项目侧副本裁剪对齐（`payload::versions::prune_version_copies`）：
-    /// **当前版本那张表是「本体」，永远不删**；`keep` 数的是历史版本份数——
+    /// 文件资产不再有“副本裁剪”：版本内容由 manifest + CAS 保留，`KeepVersions` 只作用于
+    /// 表型资产。**当前版本那张表是「本体」，永远不删**；`keep` 数的是历史版本份数——
     /// 所以 `MetadataOnly`（= 0）只留当前那一张，`Keep(5)` 留当前 + 最近 5 个历史表。
     ///
     /// 删表不删登记：`analytics_table` 仍是档位判据，读取面据此在表不存在时给出

@@ -458,7 +458,7 @@ purge_file(asset_id) -> ()
 ### 阶段 1：新归档走 CAS
 
 - 新文件归档写 CAS + manifest；仍物化 `resources/`。
-- 旧 `versions/` 不再新增；已有副本保留。
+- 旧 `versions/` 不再新增；M5 起旧副本读写代码与回退路径一并删除，已有目录不再作为读路径。
 - `checkout` 从 manifest 物化；旧资产没有 manifest 时按「旧方案已删除」拒绝取回，要求先迁移或重新归档。
 
 ### 阶段 2：回填
@@ -522,7 +522,7 @@ purge_file(asset_id) -> ()
 | 全局取回 | `global/file.rs::checkout_file`、`global/040` 的 `global_checkout_leases`、`project_meta/037` | 服务层已实现；UI/job 入口待接 |
 | 全局历史恢复 | `global/file.rs::restore_file_version`、`global/promote.rs::restore_global_file_version` | 已实现：只认 manifest；无 manifest 的旧文件版本拒绝恢复（M5 删除旧副本回退） |
 | 删除 / unlock 分离 | `service/trash.rs`、`resource_host/delete_actions.rs`、`detail_view/actions.rs`、`resource_view/list_delegate/menu.rs` | 文件删除统一进回收站（项目 / 全局）；unlock 服务、作业与宿主动作全部删除，不再保留显式移出能力（M5） |
-| 文件默认全保留 | `service/archive.rs` 的 `prune_copies` 分支 | 已实现：默认全保留，显式 `KeepVersions` 仍生效 |
+| 文件默认全保留 | `service/archive.rs`、`payload/versions.rs`（已删除） | M5 已实现：停止写旧副本、删除副本裁剪模块；`KeepVersions` 只作用于表型 |
 | 查看路由 | `resource_host/detail_actions.rs`、`present/detail.rs` | 未实现（M5） |
 | 旧全局文件负载 | `global/payload.rs`（已删除）、`global/promote.rs`、`global/distribute.rs`、`global/delete.rs`、`global/sql.rs` | M5 已删除：不再写 `resources/versions/<asset>/vN`、不再从旧脚本内容表重建文件、purge 连带清 manifest/lease/publish links/forks |
 

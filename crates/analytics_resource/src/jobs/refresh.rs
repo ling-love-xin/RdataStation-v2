@@ -140,22 +140,22 @@ pub(super) async fn run_refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, S
         .recent_versions_by_resource(crate::present::DETAIL_RECENT_VERSIONS)
         .await
         .map_err(|e| format!("读取最近版本失败：{e}"))?;
-    // 副本清单：只为**有历史**的行问一次 `.RSmeta`（每资源一次目录列举，规模 = 面板行数）。
-    // 裁剪只删副本、不删版本行，详情要靠它说清“这一版还能不能还原”。
-    let version_copies = {
-        let mut copies: std::collections::HashMap<String, Vec<i32>> =
+    // 可还原版本清单：只为**有历史**的行查一次 manifest 索引（规模 = 面板行数）。
+    // 旧版副本已删除；详情靠它说清“这一版还能不能还原”。
+    let restorable_versions = {
+        let mut versions: std::collections::HashMap<String, Vec<i32>> =
             std::collections::HashMap::with_capacity(recent_versions.len());
         for id in recent_versions.keys() {
-            match payload.version_copies(id).await {
+            match store.list_file_asset_versions(id).await {
                 Ok(list) => {
-                    copies.insert(id.clone(), list);
+                    versions.insert(id.clone(), list.into_iter().map(|file| file.version).collect());
                 }
-                // 读不到就当成“没有副本”：详情会标“副本已裁剪”，与真实的缺失同一呈现，
+                // 读不到就当成“没有 manifest”：详情会标不可还原，与真实的缺失同一呈现，
                 // 但不会把整次刷新弄失败（版本区是附加信息）。
-                Err(error) => tracing::warn!(error = %error, resource_id = %id, "读取版本副本失败"),
+                Err(error) => tracing::warn!(error = %error, resource_id = %id, "读取文件版本索引失败"),
             }
         }
-        copies
+        versions
     };
     // 标签两件事都**一次查完**（与版本数同理）：按行的映射给详情 chips 与筛选维，
     // 词典给筛选菜单；两者都做成逐行查询就是 2N 次往返。
@@ -258,7 +258,7 @@ pub(super) async fn run_refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, S
         statuses: &statuses,
         history_counts: &history_counts,
         recent_versions: &recent_versions,
-        version_copies: &version_copies,
+        restorable_versions: &restorable_versions,
         tags: &tags_by_resource,
         tag_dictionary,
         folders: &folders_by_resource,

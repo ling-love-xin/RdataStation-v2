@@ -340,32 +340,6 @@ pub(super) fn action_bar(
             on_action(VersionAction::Solidify { version }, window, cx);
         }
     };
-    // 删副本不可恢复（不进回收站）：先过一个确认框，再交给宿主。
-    let delete = {
-        let state = state.clone();
-        move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-            let state = state.clone();
-            let on_action = on_action.clone();
-            window.open_alert_dialog(cx, move |alert, _window, _cx| {
-                let state = state.clone();
-                let on_action = on_action.clone();
-                alert
-                    .title(format!("删除 v{version} 的内容副本？"))
-                    .description(
-                        "版本记录会保留（列表里仍能看到这一版），但它的内容将无法再还原或取回。\
-                         副本不入回收站，删除后不可恢复。",
-                    )
-                    .show_cancel(true)
-                    .on_ok(move |_, window, cx| {
-                        state.set_busy(true);
-                        state.set_note(Some(format!("正在删除 v{version} 的内容副本…")));
-                        on_action(VersionAction::DeleteCopy { version }, window, cx);
-                        true
-                    })
-            });
-        }
-    };
-
     div()
         .v_flex()
         .w_full()
@@ -429,15 +403,6 @@ pub(super) fn action_bar(
                         .label(tr("取回该版本为草稿"))
                         .disabled(!can_checkout)
                         .on_click(checkout),
-                )
-                .child(
-                    Button::new("version-delete-copy")
-                        .ghost()
-                        .small()
-                        .debug_selector(|| "version-delete-copy".to_string())
-                        .label(tr("删除内容副本"))
-                        .disabled(!can_checkout)
-                        .on_click(delete),
                 ),
         )
         .child(div().text_xs().text_color(muted).child(hint))

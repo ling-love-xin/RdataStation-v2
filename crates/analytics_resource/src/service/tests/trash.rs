@@ -6,7 +6,7 @@ use super::*;
 /// “按路径查存活行”都看不到，但记录本身还在，还原才能恢复别名 / 标签 / 指纹）。
 /// 永久删除与清空：都**只动本模块的**条目（回收站是共用的，删别人的东西不是清空）；
 /// 登记行与它的标签 / 分组归属一并清掉（外键没有 `ON DELETE CASCADE`，不清就删不掉）。
-/// 文件型资产直接进回收站（软删登记 + 本体搬走），还原后仍可显式解锁退回草稿箱。
+/// 文件型资产直接进回收站（软删登记 + 本体搬走），还原后登记与 manifest 都回来。
 #[tokio::test]
 async fn t129_file_asset_trashes_and_restores_without_auto_unlock() {
     let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
@@ -27,13 +27,13 @@ async fn t129_file_asset_trashes_and_restores_without_auto_unlock() {
         .expect("archive v2");
     assert_eq!(
         service
-            .payload()
-            .version_copies(&archived.resource_id)
+            .store()
+            .list_file_asset_versions(&archived.resource_id)
             .await
-            .expect("version copies")
+            .expect("file versions")
             .len(),
-        1,
-        "v1 应有历史副本"
+        2,
+        "v1 / v2 都应有 manifest"
     );
 
     let trashed = service
@@ -68,13 +68,13 @@ async fn t129_file_asset_trashes_and_restores_without_auto_unlock() {
     );
     assert_eq!(
         service
-            .payload()
-            .version_copies(&archived.resource_id)
+            .store()
+            .list_file_asset_versions(&archived.resource_id)
             .await
-            .expect("copies")
+            .expect("file versions")
             .len(),
-        1,
-        "回收站不动历史副本"
+        2,
+        "回收站不动 manifest"
     );
 
     let _ = fs::remove_dir_all(&dir).await;

@@ -23,13 +23,6 @@ impl PayloadStore {
     pub fn trash(&self) -> engine::persistence::trash::ProjectTrash {
         engine::persistence::trash::ProjectTrash::new(&self.project_root)
     }
-    /// 历史内容副本根：`{项目}/.RSmeta/resources/versions/`。
-    pub(super) fn versions_dir(&self) -> PathBuf {
-        self.project_root
-            .join(META_DIR_NAME)
-            .join(RESOURCES_DIR_NAME)
-            .join(VERSIONS_DIR_NAME)
-    }
     /// 建目录（首次归档时调用；幂等）。
     pub async fn ensure_dir(&self) -> Result<(), CoreError> {
         let dir = self.resources_dir();

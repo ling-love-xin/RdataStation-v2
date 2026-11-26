@@ -22,7 +22,7 @@ pub struct SnapshotInputs<'a> {
     ///
     /// 裁剪只删副本、不删版本行，所以详情要能说清“这一版还能不能还原”。
     /// 由宿主在刷新时问一次 `.RSmeta`（每资源一次目录列举，规模是面板行数）。
-    pub version_copies: &'a std::collections::HashMap<String, Vec<i32>>,
+    pub restorable_versions: &'a std::collections::HashMap<String, Vec<i32>>,
     pub tags: &'a ResourceTags,
     pub tag_dictionary: Vec<TagOption>,
     pub folders: &'a FolderMemberships,

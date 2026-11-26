@@ -14,7 +14,7 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
         statuses,
         history_counts,
         recent_versions,
-        version_copies,
+        restorable_versions,
         tags: tags_by_resource,
         tag_dictionary,
         folders: folders_by_resource,
@@ -88,7 +88,7 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
                 // 项目行没有「被谁用过」这回事：它的来源在 `promoted_from`。
                 dispatch_label: String::new(),
                 // `None` = 这一行没问到副本清单（不是“一份都没有”）。
-                version_copies: version_copies.get(&resource.id).cloned(),
+                restorable_versions: restorable_versions.get(&resource.id).cloned(),
             },
         );
         // 业务断言与效力随快照下发：详情面板只读，不在渲染期查库。
@@ -121,7 +121,7 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
                     // 全局行才有的那一行「谁在用」：没人用过给空串（详情不画空行）。
                     dispatch_label: dispatch_detail_label(dispatch_usage.get(&resource.name)),
                     // 全局行没有项目侧版本副本（本体在全局实例）。
-                    version_copies: None,
+                    restorable_versions: None,
                 },
             ),
         );

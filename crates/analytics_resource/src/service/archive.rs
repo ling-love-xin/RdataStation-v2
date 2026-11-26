@@ -343,29 +343,6 @@ impl ArchiveService {
             }
         }
 
-        // 旧内容留副本：copy 从 `resources/` 本体复制；reference 从源绝对路径复制。
-        // reference 模式的源在外部（可能正是草稿箱工作副本），本体不归我们覆盖。
-        let copy_result = match mode {
-            PayloadMode::Copy => {
-                self.payload
-                    .store_version_copy(resource_id, current.version, &rel_path)
-                    .await?
-            }
-            PayloadMode::Reference => {
-                let source = self.payload_path_for(&current)?;
-                self.payload
-                    .store_version_copy_from(resource_id, current.version, &source)
-                    .await?
-            }
-        };
-        if copy_result.is_none() {
-            // 旧内容没留下副本就继续覆盖，这一版将永远找不回来——中止，交给索引修复。
-            return Err(service_err(
-                "re_archive",
-                "当前内容未能留成历史副本（本体缺失？），已中止再归档以免丢失旧内容",
-            ));
-        }
-
         let snapshot = serde_json::to_string(&current).map_err(|e| {
             CoreError::storage(StorageError::Serialization {
                 format: "JSON".to_string(),
@@ -498,11 +475,6 @@ impl ArchiveService {
                 return Err(error);
             }
             self.payload.discard_staged(path).await;
-        }
-
-        // 文件资产默认保留全部版本（D4）；只有调用方显式指定 keep_versions 时才裁剪。
-        if prepared.is_none() || req.keep_versions.is_some() {
-            self.prune_copies(resource_id, req.keep_versions).await;
         }
 
         let mut notes = self

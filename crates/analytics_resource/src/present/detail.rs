@@ -22,7 +22,7 @@ pub struct DetailExtras {
     /// 该行**还有内容副本**的版本号；`None` = 没问到（不是“一份都没有”）。
     ///
     /// 两者要分开：没问到不能对用户说“只有 0 份可还原”，也不能把每一版都标成“副本已裁剪”。
-    pub version_copies: Option<Vec<i32>>,
+    pub restorable_versions: Option<Vec<i32>>,
 }
 /// 单行 → 详情快照（详情面板只读，格式化在这里做完）。
 ///
@@ -50,9 +50,9 @@ pub fn to_detail(
         resource,
         status,
         recent_versions,
-        extras.version_copies.as_deref(),
+        extras.restorable_versions.as_deref(),
     );
-    let version_copies = extras.version_copies;
+    let restorable_versions = extras.restorable_versions;
     ArchiveDetail {
         assertion: None,
         lifecycle: Default::default(),
@@ -98,7 +98,7 @@ pub fn to_detail(
             // 只报"N 个历史版本"会让用户以为每一版都点得开。
             // 只数**当前版本之前**的副本（当前版本那不是"历史"，它的本体就在 `resources/` 下）；
             // 没问到副本清单（`None`）时不加括号——不能把"不知道"说成"0 份可还原"。
-            let restorable = version_copies
+            let restorable = restorable_versions
                 .as_deref()
                 .map(|copies| copies.iter().filter(|v| **v < resource.version).count() as i64);
             match restorable {

@@ -58,23 +58,6 @@ impl ArchiveService {
         self
     }
 
-    /// 本次操作生效的保留策略：请求里的覆盖优先，否则用装配时给的（设置项）。
-    fn effective_keep(&self, request_override: Option<KeepVersions>) -> KeepVersions {
-        request_override.unwrap_or(self.keep_versions)
-    }
-
-    /// 裁剪历史内容副本（全留 = 不动作）。
-    ///
-    /// 失败只记日志：历史副本多留几份不影响正确性（架构 §5.2）。
-    async fn prune_copies(&self, resource_id: &str, request_override: Option<KeepVersions>) {
-        let Some(keep) = self.effective_keep(request_override).limit() else {
-            return;
-        };
-        if let Err(e) = self.payload.prune_version_copies(resource_id, keep).await {
-            tracing::warn!(error = %e, resource_id, "裁剪历史内容副本失败");
-        }
-    }
-
     /// 写一条资产履历（迁移 027 的事件表）。
     ///
     /// 失败**不回滚主动作**：履历少一条可以事后补，把一次成功的归档整个撤销反而更糟；

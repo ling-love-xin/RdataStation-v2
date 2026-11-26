@@ -77,11 +77,11 @@ pub(crate) async fn load_versions(job: &VersionsJob) -> Result<VersionRows, Stri
         .get_resource_versions(&job.resource_id)
         .await
         .map_err(|e| format!("读取版本历史失败：{e}"))?;
-    let copies = service
-        .payload()
-        .version_copies(&job.resource_id)
+    let file_versions = service
+        .store()
+        .list_file_asset_versions(&job.resource_id)
         .await
-        .map_err(|e| format!("读取历史副本失败：{e}"))?;
+        .map_err(|e| format!("读取文件版本索引失败：{e}"))?;
     // 表型资产的本体是项目分析库里的一张表（不是文件）：没有 `file_rel_path`，
     // 不能因为“路径为空”就把当前版本标成「副本缺失」。
     let payload_ok = if crate::ArchiveKind::resolve(&current.kind, current.analytics_table.as_deref())
@@ -169,7 +169,7 @@ pub(crate) async fn load_versions(job: &VersionsJob) -> Result<VersionRows, Stri
         seed: VersionDialogSeed {
             name: current.name.clone(),
             current_version: current.version,
-            rows: build_version_rows(&current, &versions, &copies, payload_ok),
+            rows: build_version_rows(&current, &versions, &file_versions, payload_ok),
             timeline: build_timeline_rows(&current, &versions, &events),
         },
     })
@@ -183,14 +183,13 @@ pub(crate) async fn load_version_diff(job: &VersionDiffJob) -> Result<VersionDif
         .get_resource_by_id(&job.resource_id)
         .await
         .map_err(|e| format!("读取存档失败：{e}"))?;
-    // 新侧 = 本体当前文本；旧侧 = 选中版本的副本（缺失 = 保留策略已裁剪）。
+    // 新侧 = 本体当前文本；旧侧 = 选中版本的 manifest 物化（缺失 = 该版本没有文件清单）。
     let new_text = read_resource_text(&service, &current).await?;
     let old_path = service
-        .payload()
-        .version_copy_file(&job.resource_id, job.old_version)
+        .version_file(&job.resource_id, job.old_version)
         .await
-        .map_err(|e| format!("读取历史副本失败：{e}"))?
-        .ok_or_else(|| "该版本的内容副本不在（已被保留策略裁剪），无法对比".to_string())?;
+        .map_err(|e| format!("读取历史 manifest 失败：{e}"))?
+        .ok_or_else(|| "该版本没有 manifest（旧文件资产不再支持对比），无法对比".to_string())?;
     let old_text = read_text_file(&old_path)?;
     if diff_text_too_large(&old_text, &new_text) {
         return Err(DIFF_TOO_LARGE.to_string());
@@ -351,27 +350,6 @@ pub(crate) async fn run_version_action(job: &VersionActionJob) -> OpOutcome {
                 },
             }
         }
-        VersionAction::DeleteCopy { version } => {
-            match service
-                .payload()
-                .delete_version_copy(&job.resource_id, version)
-                .await
-            {
-                Ok(true) => OpOutcome::VersionActionDone {
-                    note: format!(
-                        "已删除「{}」v{version} 的内容副本（版本记录保留）",
-                        job.name
-                    ),
-                },
-                Ok(false) => OpOutcome::VersionActionDone {
-                    note: format!("「{}」v{version} 已经没有内容副本", job.name),
-                },
-                Err(error) => OpOutcome::Failed {
-                    action: "删除内容副本",
-                    reason: error.to_string(),
-                },
-            }
-        }
     }
 }
 
@@ -382,6 +360,18 @@ pub fn enqueue_versions(project_root: PathBuf, resource_id: String) {
         project_root,
         resource_id,
     }));
+}
+
+/// 历史版本 manifest 的只读物化文件（供「用 vN 分析」使用；`None` = 该版本没有 manifest）。
+pub async fn version_file(
+    project_root: PathBuf,
+    resource_id: &str,
+    version: i32,
+) -> Result<Option<PathBuf>, shared::error::CoreError> {
+    let service = open_service(project_root, None).await.map_err(|reason| {
+        shared::error::CoreError::common(shared::error::CommonError::General(reason))
+    })?;
+    service.version_file(resource_id, version).await
 }
 
 /// 提交一次版本历史动作（**事件路径**调用：版本历史对话框的动作栏）。

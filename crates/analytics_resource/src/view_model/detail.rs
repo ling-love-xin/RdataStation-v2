@@ -143,10 +143,10 @@ pub struct DetailVersionLine {
     pub hash_short: String,
     /// 相对上一版的差异文案（`较 v2 大小+1.2 KB · 指纹已变`；最旧一版为空）。
     pub delta_label: String,
-    /// 这一版还有没有内容副本（`.RSmeta/resources/versions/<id>/<v>/`）。
+    /// 这一版还有没有 manifest（`file_asset_versions`）。
     ///
-    /// 裁剪**只删副本、不删版本行**，所以“有这一版”和“能还原它”是两件事：
-    /// 缺副本时渲染层要明说，否则用户点「还原」只会得到一句失败。
+    /// 旧版文件副本已删除，所以“有这一版”和“能从 manifest 还原它”是两件事：
+    /// 缺 manifest 时渲染层要明说，否则用户点「还原」只会得到一句失败。
     pub has_copy: bool,
     /// 本体是不是项目分析库里的一张表（表型资产没有副本文件，回退 = 改指向）。
     pub is_table: bool,

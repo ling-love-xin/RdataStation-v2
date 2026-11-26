@@ -267,10 +267,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_active_lease
 - 删除 `g003/g005/g009/g010/g011/g012/g025/g026/g027/g031` 旧脚本/旧文件负载用例；`g028` 改用 `publish_file` 验证文件回收站。
 - `cargo check -p rds-analytics-resource --all-targets -j 2` 通过；`cargo test -p rds-analytics-resource --lib -j 2 --no-fail-fast`：297 passed，0 failed。
 
+#### M5 第二刀（2026-11-27）
+
+- 删除 `payload/versions.rs`：项目侧不再写 `resources/versions/<id>/vN` 副本，也不再裁剪副本。
+- 再归档不再“旧内容留副本”；版本还原 / 历史取回 / 版本对比 / 「用 vN 分析」全部改走 manifest + CAS。
+- 版本历史“可还原”判据改为 `file_asset_versions`；`VersionAction::DeleteCopy` 与 UI 按钮删除。
+- `KeepVersions` 从文件路径撤出，只保留表型 `prune_version_tables`。
+- 测试：`cargo test -p rds-analytics-resource --lib -j 2 --no-fail-fast` 294 passed；`cargo check -p rds-workbench --lib -j 2` 通过。
+
 ### 9.2 与计划的偏差
 
 - `ArchiveRequest` 未新增 `file_meta` 字段：服务按 `promoted_from` 字符串约定直接读 sidecar，避免把完整元数据穿过 UI 请求层，也避免破坏 `DraftCandidate` 的 `Eq`。
-- 文件资产默认全保留：`prune_copies` 在 `prepared.is_some() && keep_versions.is_none()` 时跳过；显式 `KeepVersions` 仍生效。
+- 文件资产默认全保留；M5 第二刀已删除 `payload/versions.rs` 与 `prune_copies`，显式 `KeepVersions` 只作用于表型。
 - 归档删除草稿失败当前只写回执 note，未落 `pending_cleanup` 列（M5 再补持久化重试）。
 - 全局文件发布仍是「一版一行、新 `resource_id`」，版本链靠 `parent_resource_id` 接续；设计中的稳定单 asset id 未落，作为后续迁移项。
 - 全局发布暂不自动建派生表：文件行 `analytics_table=NULL`；旧 `analysis + file` 混合行迁移、派生表独立留到 M5。

@@ -51,8 +51,6 @@ pub enum VersionAction {
     Restore { version: i32 },
     /// 取回该版本为草稿（复制一份可写工作副本，本体不动）。
     CheckoutDraft { version: i32 },
-    /// 删除该版本的内容副本（**保留版本行**；删了不可恢复，所以要确认）。
-    DeleteCopy { version: i32 },
     /// 与当前版本对比（只读查看，不入动作回执、不写库；文本 diff 查看器 `version_diff`）。
     Diff { version: i32 },
     /// 用这一版的内容做一次分析（只读查看：把该版本副本挂成分析视图，本体与版本都不动）。
@@ -70,7 +68,6 @@ impl VersionAction {
         match self {
             Self::Restore { version }
             | Self::CheckoutDraft { version }
-            | Self::DeleteCopy { version }
             | Self::Diff { version }
             | Self::Analyze { version } => version,
             Self::Solidify { version } => version,

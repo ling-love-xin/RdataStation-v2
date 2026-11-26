@@ -54,18 +54,16 @@ pub use store::rows::{
 };
 pub use store::AnalyticsResourceStore;
 
-/// 历史版本的内容副本文件（`None` = 该版本没有副本）。
+/// 历史版本的只读内容文件（`None` = 该版本没有 manifest）。
 ///
-/// 只给宿主「用 vN 分析」这类**只读查看**用：宿主只要路径，不需要认识整套本体存储。
+/// 只给宿主「用 vN 分析」这类**只读查看**用：从 manifest 物化到项目内部路径，宿主只要路径。
 /// 挂视图 / ATTACH 归 engine 与面板，这里不越界。
-pub async fn version_copy_file(
+pub async fn version_file(
     project_root: std::path::PathBuf,
     resource_id: &str,
     version: i32,
 ) -> Result<Option<std::path::PathBuf>, shared::error::CoreError> {
-    payload::PayloadStore::new(project_root)
-        .version_copy_file(resource_id, version)
-        .await
+    jobs::version_file(project_root, resource_id, version).await
 }
 
 // 持久层回归用例（v1 蓝本搬运，Round 11 时漏声明 mod——导致 560 行用例在 v2 从未被编译）。

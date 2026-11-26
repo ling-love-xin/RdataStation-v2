@@ -321,7 +321,7 @@ fn details_carry_per_kind_size_and_real_history_count() {
         statuses: &ArchiveStatuses::new(),
         history_counts: &counts,
         recent_versions: empty_versions(),
-        version_copies: &Default::default(),
+        restorable_versions: &Default::default(),
         tags: empty_tags(),
         tag_dictionary: Vec::new(),
         folders: empty_folders(),
@@ -415,7 +415,7 @@ fn detail_carries_recent_version_lines_capped_at_three() {
         statuses: &ArchiveStatuses::new(),
         history_counts: &counts,
         recent_versions: &recent,
-        version_copies: &Default::default(),
+        restorable_versions: &Default::default(),
         tags: empty_tags(),
         tag_dictionary: Vec::new(),
         folders: empty_folders(),
@@ -501,7 +501,7 @@ fn version_timeline_carries_hash_and_delta_per_node() {
         statuses: &ArchiveStatuses::new(),
         history_counts: &counts,
         recent_versions: &recent,
-        version_copies: &Default::default(),
+        restorable_versions: &Default::default(),
         tags: empty_tags(),
         tag_dictionary: Vec::new(),
         folders: empty_folders(),
@@ -562,7 +562,7 @@ fn snapshot_carries_tags_for_rows_details_and_dictionary() {
         statuses: &ArchiveStatuses::new(),
         history_counts: &VersionCounts::new(),
         recent_versions: empty_versions(),
-        version_copies: &Default::default(),
+        restorable_versions: &Default::default(),
         tags: &tags,
         tag_dictionary: dictionary,
         folders: empty_folders(),
@@ -606,7 +606,7 @@ fn rows_carry_alias_and_source_table_for_the_search_surface() {
         statuses: &ArchiveStatuses::new(),
         history_counts: &VersionCounts::new(),
         recent_versions: empty_versions(),
-        version_copies: &Default::default(),
+        restorable_versions: &Default::default(),
         tags: empty_tags(),
         tag_dictionary: Vec::new(),
         folders: empty_folders(),
@@ -657,7 +657,7 @@ fn details_carry_group_name_and_preview() {
         statuses: &ArchiveStatuses::new(),
         history_counts: &VersionCounts::new(),
         recent_versions: empty_versions(),
-        version_copies: &Default::default(),
+        restorable_versions: &Default::default(),
         tags: empty_tags(),
         tag_dictionary: Vec::new(),
         folders: &folders,
@@ -720,7 +720,7 @@ fn snapshot_counts_route_status_before_kind() {
         statuses: &statuses,
         history_counts: &VersionCounts::new(),
         recent_versions: empty_versions(),
-        version_copies: &Default::default(),
+        restorable_versions: &Default::default(),
         tags: empty_tags(),
         tag_dictionary: Vec::new(),
         folders: empty_folders(),
@@ -758,6 +758,20 @@ fn history_version(version: i32, size: i32, hash: &str, at: DateTime<Utc>) -> Re
     }
 }
 
+/// 文件版本索引：呈现层只关心版本号有没有 manifest。
+fn file_version(version: i32) -> crate::store::file_asset::FileAssetVersion {
+    crate::store::file_asset::FileAssetVersion {
+        resource_id: "ar_1".to_string(),
+        version,
+        manifest_id: format!("manifest-{version}"),
+        content_hash: format!("{version}0000000000000000"),
+        meta_hash: None,
+        parent_version: None,
+        content_pruned: false,
+        created_at: Utc::now(),
+    }
+}
+
 #[test]
 fn version_rows_include_current_and_compare_adjacent_versions() {
     let now = Utc::now();
@@ -769,8 +783,9 @@ fn version_rows_include_current_and_compare_adjacent_versions() {
         history_version(1, 1024, "111111111111ffff", now),
     ];
 
-    // 只有 v2 还留着副本：v1 的已被保留策略裁掉。
-    let rows = build_version_rows(&current, &history, &[2], true);
+    // 只有 v2 还有 manifest：v1 的已随旧方案删除。
+    let file_versions = vec![file_version(2)];
+    let rows = build_version_rows(&current, &history, &file_versions, true);
     let versions: Vec<i32> = rows.iter().map(|row| row.version).collect();
     assert_eq!(versions, vec![3, 2, 1], "降序，且当前版本也在列表里");
     assert!(rows[0].is_current);
@@ -824,7 +839,7 @@ fn detail_carries_definition_only_when_it_has_content() {
         statuses: &ArchiveStatuses::new(),
         history_counts: &VersionCounts::new(),
         recent_versions: empty_versions(),
-        version_copies: &Default::default(),
+        restorable_versions: &Default::default(),
         tags: empty_tags(),
         tag_dictionary: Vec::new(),
         folders: empty_folders(),
@@ -868,7 +883,7 @@ fn history_label_reports_restorable_copies_only_when_known() {
         statuses: &ArchiveStatuses::new(),
         history_counts: &counts,
         recent_versions: empty_versions(),
-        version_copies: &copies,
+        restorable_versions: &copies,
         tags: empty_tags(),
         tag_dictionary: Vec::new(),
         folders: empty_folders(),
@@ -894,7 +909,7 @@ fn history_label_reports_restorable_copies_only_when_known() {
         statuses: &ArchiveStatuses::new(),
         history_counts: &counts,
         recent_versions: empty_versions(),
-        version_copies: &Default::default(),
+        restorable_versions: &Default::default(),
         tags: empty_tags(),
         tag_dictionary: Vec::new(),
         folders: empty_folders(),

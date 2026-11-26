@@ -358,14 +358,10 @@ async fn t106_rearchive_changed_content_bumps_version_and_consumes_copy() {
     let _ = fs::remove_dir_all(&dir).await;
 }
 
-/// 保留策略的两端：`All`（设置项 `-1`）一份不裁，`MetadataOnly`（`0`）副本全清——
-/// 两端都不动**版本行**（元数据永远保留，架构 §5.2）。
+/// 文件资产不再受 `KeepVersions` 影响：每版 manifest 都保留，旧副本目录不写。
 #[tokio::test]
-async fn t130_keep_policy_ends_are_respected() {
-    for (policy, expected_copies) in [
-        (KeepVersions::All, vec![2, 1]),
-        (KeepVersions::MetadataOnly, Vec::new()),
-    ] {
+async fn t130_keep_policy_does_not_touch_file_manifests() {
+    for policy in [KeepVersions::All, KeepVersions::MetadataOnly] {
         let (service, dir) = test_service_with(policy).await;
         let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
         let first = service
@@ -373,14 +369,12 @@ async fn t130_keep_policy_ends_are_respected() {
             .await
             .expect("archive");
 
-        // 连着改两次内容：每次再归档都会把上一版留成一份内容副本。
         for (name, body) in [
             ("dau2.sql", &b"select 22;"[..]),
             ("dau3.sql", &b"select 333;"[..]),
         ] {
             let next = write_draft(&dir, name, body).await;
             let mut req = archive_req(&next, "dau.sql", Some(&first.resource_id));
-            // 文件资产默认全保留；这里显式指定策略，验证两端仍然生效。
             req.keep_versions = Some(policy);
             service
                 .archive(req)
@@ -388,14 +382,15 @@ async fn t130_keep_policy_ends_are_respected() {
                 .expect("re-archive");
         }
 
+        let file_versions = service
+            .store()
+            .list_file_asset_versions(&first.resource_id)
+            .await
+            .expect("file versions");
         assert_eq!(
-            service
-                .payload()
-                .version_copies(&first.resource_id)
-                .await
-                .expect("copies"),
-            expected_copies,
-            "{policy:?} 的副本保留结果"
+            file_versions.iter().map(|file| file.version).collect::<Vec<_>>(),
+            vec![1, 2, 3],
+            "{policy:?} 不能裁掉文件 manifest"
         );
         assert_eq!(
             service
@@ -405,7 +400,7 @@ async fn t130_keep_policy_ends_are_respected() {
                 .expect("version rows")
                 .len(),
             2,
-            "裁剪只动副本：版本行两个（v1 / v2 写前快照）应全在"
+            "写前快照行仍按版本追加（v1 / v2）"
         );
         let _ = fs::remove_dir_all(&dir).await;
     }

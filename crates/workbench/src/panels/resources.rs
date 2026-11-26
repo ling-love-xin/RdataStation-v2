@@ -666,34 +666,6 @@ impl SidebarPanel {
             resource_jobs::OpOutcome::Undone { name } => {
                 format!("资产库：已撤销归档「{name}」（本体已回到原位置）")
             }
-            resource_jobs::OpOutcome::FileUnlocked {
-                name,
-                draft_rel,
-                removed_versions,
-            } => {
-                let copies = if removed_versions == 0 {
-                    String::new()
-                } else {
-                    format!("，清理历史副本 {removed_versions} 份")
-                };
-                format!(
-                    "资产库：「{name}」已解锁并退回草稿箱（{draft_rel}{copies}）；请从草稿箱删除"
-                )
-            }
-            resource_jobs::OpOutcome::GlobalFileUnlocked {
-                name,
-                draft_rel,
-                removed_versions,
-            } => {
-                let copies = if removed_versions == 0 {
-                    String::new()
-                } else {
-                    format!("，清理历史副本 {removed_versions} 份")
-                };
-                format!(
-                    "资产库：全局「{name}」已解锁并退回本项目草稿箱（{draft_rel}{copies}）；请从草稿箱删除"
-                )
-            }
             // 改名：只说结果（旧名用户刚在对话框里看过，回执里再抄一遍是多话）。
             resource_jobs::OpOutcome::Renamed { name } => format!("资产库：已改名为「{name}」"),
             // 别名：设与清都由工作线程算好（它手上有最终值）。

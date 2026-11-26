@@ -364,7 +364,7 @@ pub fn analyze_asset_version(
             return;
         }
     };
-    let copy = match rt.block_on(analytics_resource::version_copy_file(root, resource_id, version)) {
+    let copy = match rt.block_on(analytics_resource::version_file(root, resource_id, version)) {
         Ok(copy) => copy,
         Err(error) => {
             shared.say_error(format!("读历史副本失败：{error}"), cx);
