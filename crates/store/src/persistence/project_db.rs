@@ -267,7 +267,19 @@ pub struct ProjectDuckdbConnection {
 }
 
 impl ProjectDuckdbConnection {
-    /// 创建新的 DuckDB 连接
+    /// 从进程根连接复制出的会话句柄装配（生产路径）。
+    ///
+    /// 根连接由 `shared::duckdb_root` 独占；这里只持一条 `USE analytics` 的克隆，
+    /// 不再对 `analytics.duckdb` 另开文件连接（否则同进程第二连接必撞
+    /// `File is already open ... same PID`）。
+    pub(crate) fn from_handle(
+        conn: Arc<Mutex<Option<DuckConnection>>>,
+        db_path: PathBuf,
+    ) -> Self {
+        Self { conn, db_path }
+    }
+
+    /// 创建新的 DuckDB 连接（测试 / 独立工具用；生产不要再走这里）。
     ///
     /// # 参数
     /// * `db_path` - 数据库文件路径
@@ -325,37 +337,14 @@ impl ProjectDuckdbConnection {
         &self.db_path
     }
 
-    /// 关闭 DuckDB 连接
+    /// 关闭 DuckDB 会话句柄（只放掉克隆，不动根连接持有的文件）。
+    ///
+    /// 文件级 WAL/SHM 清理由 `shared::duckdb_root` 在根连接真正 `DETACH` / drop 时负责；
+    /// 这里删文件会误伤同一根连接上的全局库或分析实例。
     pub async fn close(&self) -> Result<(), CoreError> {
-        // 步骤 1：获取连接并设置为 None
-        let conn = {
-            let mut conn = self.conn.lock().await;
-            conn.take()
-        };
-
-        // 步骤 2：显式 drop 连接（关闭文件句柄）
-        drop(conn);
-
-        // 步骤 3：等待操作系统释放文件句柄
-        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-
-        // 步骤 4：删除 DuckDB 的 WAL 文件（如果存在）
-        let wal_path = format!("{}-wal", self.db_path.display());
-        let shm_path = format!("{}-shm", self.db_path.display());
-
-        if std::path::Path::new(&wal_path).exists() {
-            if let Err(e) = std::fs::remove_file(&wal_path) {
-                tracing::warn!(path = %wal_path, error = %e, "Failed to remove DuckDB WAL file");
-            }
-        }
-        if std::path::Path::new(&shm_path).exists() {
-            if let Err(e) = std::fs::remove_file(&shm_path) {
-                tracing::warn!(path = %shm_path, error = %e, "Failed to remove DuckDB SHM file");
-            }
-        }
-
-        tracing::info!(db_path = %self.db_path.display(), "DuckDB connection closed and files cleaned");
-
+        let mut conn = self.conn.lock().await;
+        *conn = None;
+        tracing::info!(db_path = %self.db_path.display(), "Project DuckDB session handle released");
         Ok(())
     }
 }
@@ -370,17 +359,17 @@ fn io_error(operation: &str, path: &str, reason: &str) -> CoreError {
 
 /// 项目数据库管理器
 ///
-/// 统一管理项目的 SQLite 和 DuckDB 连接
+/// 统一管理项目的 SQLite 池，并持有项目分析库的 **`USE analytics` 会话句柄**。
 pub struct ProjectDatabaseManager {
     /// 项目路径
     project_path: PathBuf,
     /// SQLite 连接池
     sqlite_pool: Arc<ProjectSqlitePool>,
-    /// DuckDB 长连接。
+    /// DuckDB **会话句柄**（不是文件连接）。
     ///
-    /// `open`（读写路径）持有 `Some`；`open_read_only`（读路径）为 `None`——读路径
-    /// **不打开 DuckDB**：Windows 上 duckdb 对同一文件仅允许一个连接句柄（不分读写），
-    /// 连接列表刷新等读场景若再 open 一个连接，会与项目主写连接撞「文件被占用」（IO 锁）。
+    /// `open`（写路径）持有一条 `USE analytics` 的根连接克隆；`open_read_only`
+    /// （读路径）为 `None`——读路径只走 SQLite，不抢 DuckDB 文件。
+    /// 真正的文件连接由 `shared::duckdb_root` 独占，见该模块头注释。
     duckdb_conn: Option<Arc<ProjectDuckdbConnection>>,
 }
 
@@ -402,11 +391,10 @@ impl ProjectDatabaseManager {
         Self::open_inner(project_path, sqlite_pool_size, false).await
     }
 
-    /// 以**只读语义**打开项目库：SQLite 池 + **只读 DuckDB 连接**，跳过 DuckDB 迁移。
+    /// 以**只读语义**打开项目库：只建 SQLite 池，不碰 DuckDB，跳过 DuckDB 迁移。
     ///
-    /// 用于连接列表刷新、导航等**只读**场景：只读 DuckDB 连接不获取写锁（DuckDB 单写者
-    /// 模型），可在项目主写连接存活期间安全并发，避免同一项目 `analytics.duckdb` 被多个
-    /// 可写连接同时打开而触发的 IO 锁。
+    /// 用于连接列表刷新、导航等**只读**场景：分析库文件的唯一根连接归
+    /// `shared::duckdb_root`，读路径再 open 一条只会撞「文件已被占用」。
     ///
     /// 调用方必须预先确认项目根已存在且含 `.RSmeta`（否则本方法会 `create_dir_all`
     /// 造出假项目骨架，见 `workspace_loader::load_project_connections` 的预检）。
@@ -417,9 +405,8 @@ impl ProjectDatabaseManager {
         Self::open_inner(project_path, sqlite_pool_size, true).await
     }
 
-    /// `open` / `open_read_only` 的共同实现。`read_only = true` 时：
-    /// - DuckDB 以 `READ_ONLY` 打开（不拿写锁，可并发读）
-    /// - 跳过 `init_duckdb_tables`（迁移是写操作，只读连接无法执行，表由写路径建好）
+    /// `open` / `open_read_only` 的共同实现。`read_only = true` 时**不碰 DuckDB**：
+    /// 不取会话、不跑 DuckDB 迁移；分析库的读写一律走写路径（根连接 + 实例）。
     async fn open_inner(
         project_path: &Path,
         sqlite_pool_size: usize,
@@ -454,7 +441,26 @@ impl ProjectDatabaseManager {
             // 会与主写连接撞「文件被占用」。读路径只走 SQLite。
             None
         } else {
-            Some(Arc::new(ProjectDuckdbConnection::new(duckdb_path).await?))
+            // 生产路径：项目库 / 全局库都挂在 `shared::duckdb_root` 的同一根连接上，
+            // 这里只拿一条 `USE analytics` 的会话克隆，不再对文件另开连接。
+            let global_path = crate::persistence::global_paths::get_global_duckdb_path().ok();
+            let root = shared::duckdb_root::ensure_write(Some(&duckdb_path), global_path.as_deref())
+                .map_err(|error| {
+                    CoreError::common(CommonError::General(format!(
+                        "建立 DuckDB 根连接失败：{error}"
+                    )))
+                })?;
+            let handle = root
+                .handle(shared::duckdb_root::PROJECT_ALIAS)
+                .map_err(|error| {
+                    CoreError::common(CommonError::General(format!(
+                        "取项目分析库会话失败：{error}"
+                    )))
+                })?;
+            Some(Arc::new(ProjectDuckdbConnection::from_handle(
+                Arc::new(Mutex::new(Some(handle))),
+                duckdb_path,
+            )))
         };
 
         let manager = Self {

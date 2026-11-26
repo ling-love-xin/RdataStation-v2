@@ -296,10 +296,9 @@ impl GlobalSqlitePool {
     }
 }
 
-/// 全局 DuckDB 连接
+/// 全局 DuckDB 会话句柄
 ///
-/// DuckDB 使用单例长连接，应用启动时创建，应用关闭时销毁。
-/// 连接创建委托给 DuckDBManager 统一管理。
+/// 生产路径由 `shared::duckdb_root::handle(GLOBAL_ALIAS)` 装配；不再自己打开文件。
 pub struct GlobalDuckdbConnection {
     /// DuckDB 连接
     conn: Arc<Mutex<Option<DuckConnection>>>,
@@ -308,7 +307,18 @@ pub struct GlobalDuckdbConnection {
 }
 
 impl GlobalDuckdbConnection {
-    /// 创建新的 DuckDB 连接
+    /// 从进程根连接复制出的会话句柄装配（生产路径）。
+    ///
+    /// 全局库由 `shared::duckdb_root` 以 `rds_global` 别名挂在根连接上；
+    /// 这里只持一条 `USE rds_global` 的克隆，不再对 `analytics.duckdb` 另开文件连接。
+    pub(crate) fn from_handle(
+        conn: Arc<Mutex<Option<DuckConnection>>>,
+        db_path: PathBuf,
+    ) -> Self {
+        Self { conn, db_path }
+    }
+
+    /// 创建新的 DuckDB 连接（测试 / 独立工具用；生产不要再走这里）。
     ///
     /// # 参数
     /// * `db_path` - 数据库文件路径，如果为 ":memory:" 则使用内存数据库
@@ -402,11 +412,12 @@ pub struct GlobalConnectionSaveInput<'a> {
 
 /// 全局系统数据库管理器
 ///
-/// 统一管理全局 SQLite 和 DuckDB 连接
+/// 统一管理全局 SQLite 池，并持有全局分析库的 **`USE rds_global` 会话句柄**。
+/// 文件级 DuckDB 根连接由 `shared::duckdb_root` 独占，见该模块头注释。
 pub struct GlobalDatabaseManager {
     /// SQLite 连接池
     sqlite_pool: Arc<GlobalSqlitePool>,
-    /// DuckDB 长连接
+    /// DuckDB 会话句柄（不是文件连接）
     duckdb_conn: Arc<GlobalDuckdbConnection>,
 }
 
@@ -437,7 +448,24 @@ impl GlobalDatabaseManager {
         })?;
 
         let sqlite_pool = GlobalSqlitePool::new(sqlite_path.clone(), sqlite_pool_size).await?;
-        let duckdb_conn = GlobalDuckdbConnection::new(duckdb_path.clone()).await?;
+        // 全局库挂在进程根连接上（`rds_global` 别名）；这里只取一条会话克隆，
+        // 不再对 `analytics.duckdb` 另开文件连接（同进程第二连接必撞单句柄）。
+        let root = shared::duckdb_root::ensure_write(None, Some(&duckdb_path)).map_err(|error| {
+            CoreError::common(CommonError::General(format!(
+                "建立 DuckDB 根连接失败：{error}"
+            )))
+        })?;
+        let handle = root
+            .handle(shared::duckdb_root::GLOBAL_ALIAS)
+            .map_err(|error| {
+                CoreError::common(CommonError::General(format!(
+                    "取全局分析库会话失败：{error}"
+                )))
+            })?;
+        let duckdb_conn = GlobalDuckdbConnection::from_handle(
+            Arc::new(Mutex::new(Some(handle))),
+            duckdb_path.clone(),
+        );
 
         let manager = Self {
             sqlite_pool: Arc::new(sqlite_pool),
@@ -523,7 +551,7 @@ impl GlobalDatabaseManager {
         Ok(())
     }
 
-    /// 初始化 DuckDB 表结构（直接使用 DuckDB 连接）
+    /// 初始化 DuckDB 表结构（复用根连接上的 `rds_global` 会话，不再二次 open）。
     async fn init_duckdb_tables(&self) -> Result<(), CoreError> {
         let duckdb_path = self.duckdb_conn.path().clone();
 
@@ -537,11 +565,16 @@ impl GlobalDatabaseManager {
             })?;
         }
 
-        // 使用 DuckDB 连接执行迁移
-        // （DuckDB 迁移器与 SQLite 版分离，见 `migration::duckdb`；复用连接避免二次 open）
-        let conn = Self::open_duckdb_for_migration(&duckdb_path)?;
+        // 迁移必须在 `rds_global` 会话上跑：同进程不允许再开第二条文件连接。
+        let conn_arc = self.duckdb_conn.acquire().await?;
+        let guard = conn_arc.lock().await;
+        let conn = guard.as_ref().ok_or_else(|| {
+            CoreError::common(CommonError::General(
+                "DuckDB connection is closed".to_string(),
+            ))
+        })?;
         let applied = crate::migration::duckdb::apply_migrations(
-            &conn,
+            conn,
             crate::migration::MigrationType::ProjectAnalysis,
         )?;
 
@@ -552,37 +585,6 @@ impl GlobalDatabaseManager {
         );
 
         Ok(())
-    }
-
-    /// 为迁移打开 DuckDB 连接（带损坏文件修复）
-    fn open_duckdb_for_migration(db_path: &PathBuf) -> Result<DuckConnection, CoreError> {
-        match DuckConnection::open(db_path) {
-            Ok(conn) => Ok(conn),
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to open DuckDB for migration: {}, attempting to recreate...",
-                    e
-                );
-                if db_path.exists() {
-                    if let Err(remove_err) = std::fs::remove_file(db_path) {
-                        tracing::error!("Failed to remove corrupted DuckDB file: {}", remove_err);
-                        return Err(CoreError::Storage(StorageError::Persistence {
-                            store: "duckdb".to_string(),
-                            operation: "open".to_string(),
-                            reason: e.to_string(),
-                        }));
-                    }
-                    tracing::info!("Removed corrupted DuckDB file: {}", db_path.display());
-                }
-                DuckConnection::open(db_path).map_err(|e| {
-                    CoreError::Storage(StorageError::Persistence {
-                        store: "duckdb".to_string(),
-                        operation: "open".to_string(),
-                        reason: e.to_string(),
-                    })
-                })
-            }
-        }
     }
 
     /// 获取 SQLite 连接池

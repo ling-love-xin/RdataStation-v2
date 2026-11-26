@@ -1,13 +1,13 @@
-//! 全局库会话（刀 7 · B1）的真跑验证。
+//! 全局分析库会话的真跑验证（2026-11-26 所有权收口后）。
 //!
-//! 验三件事：**只读挂上去真能查到表**、**只读是真只读**（写会被拒）、
-//! **撞锁给的是可读原因**（不是 DuckDB 原文）。用临时 duckdb 文件而不是真全局库，
-//! 所以这条用例不依赖 `RDS_HOME`，离线也能跑。
+//! 全局分析库不再由本模块另开文件连接：`shared::duckdb_root` 把它挂成
+//! `rds_global`，分析实例从同一条根连接复制会话。这里验三件事：
+//! **根连接能挂上并查到表**、**`global_tables()` 走生产路径能列清单**、
+//! **真库路径与系统目录一致**。
 
 use std::path::PathBuf;
 
-use rds_engine::analysis::global::{open_mounted, GLOBAL_ALIAS};
-
+/// 造一个临时全局分析库文件（不依赖 `RDS_HOME`，离线也能跑）。
 fn temp_db(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join("rds_global_probe");
     std::fs::create_dir_all(&dir).expect("建临时目录");
@@ -24,45 +24,44 @@ fn temp_db(tag: &str) -> PathBuf {
     path
 }
 
+/// 根连接挂上全局分析库后，`rds_global.<表>` 能查（不是「计划里有、实际没挂」）。
 #[test]
-fn the_global_like_db_is_mounted_read_only_and_queryable() {
-    let path = temp_db("mount_ok");
-    let session = open_mounted("C_global_probe", &path, GLOBAL_ALIAS, "duckdb").expect("只读挂载");
-    // 别名进 SQL：`rds_global.<表>` 能查，说明挂载真的接上了（不是「计划里有、实际没挂」）
+fn global_db_is_attached_through_the_process_root_and_queryable() {
+    let _ = rds_engine::duckdb::instance::drop_instance();
+    let path = temp_db("root_attach");
+    shared::duckdb_root::ensure(None, Some(path.as_path())).expect("根连接挂全局库");
+    let instance = rds_engine::duckdb::instance::instance().expect("分析实例");
+    let session = instance.process_session().expect("process 会话");
     let result = session
         .run("select count(*) as n from rds_global.global_connections")
-        .expect("查挂载表");
-    assert!(!result.columns.is_empty(), "挂载表应可查");
+        .expect("查根连接上的全局表");
+    assert_eq!(result.to_rows()[0][0].to_string(), "1");
     let _ = std::fs::remove_file(&path);
 }
 
+/// `global_tables()` 列的是全局分析库里的表（选择器「全局分析表」档的数据源）。
+///
+/// 造在测试根（`get_system_dir()` 的落点）上：走的就是生产路径，不另开测试专用入口。
 #[test]
-fn the_mounted_global_db_really_is_read_only() {
-    let path = temp_db("read_only");
-    let session = open_mounted("C_global_probe", &path, GLOBAL_ALIAS, "duckdb").expect("只读挂载");
-    let err = session
-        .run("create table rds_global.should_not_exist as select 1 as a")
-        .expect_err("只读库不该允许建表");
-    let text = format!("{err}").to_lowercase();
-    assert!(
-        text.contains("read-only") || text.contains("只读"),
-        "拒绝必须是「只读」语义，实际：{err}"
-    );
+fn global_tables_lists_the_tables_of_the_analysis_db() {
+    let _ = rds_engine::duckdb::instance::drop_instance();
+    let dir = rds_engine::migration::get_system_dir().expect("系统目录");
+    std::fs::create_dir_all(&dir).expect("建系统目录");
+    let path = dir.join("analytics.duckdb");
     let _ = std::fs::remove_file(&path);
+    let conn = duckdb::Connection::open(&path).expect("建全局分析库");
+    conn.execute_batch("create table g_orders(id integer); create table g_customers(id integer);")
+        .expect("写表");
+    drop(conn); // 先释放建库连接，根连接再挂
+
+    let tables = rds_engine::analysis::global::global_tables("C_global_list_probe")
+        .expect("列全局分析表");
+    assert_eq!(tables, vec!["g_customers".to_string(), "g_orders".to_string()]);
 }
 
-/// 真全局库（`<RDS_HOME>/data/system/global.db`）：空闲状态下能只读挂上并读到
-/// 真全局**分析**库（`<RDS_HOME>/data/system/analytics.duckdb`）：空闲状态下能只读挂上，
-/// 且 `duckdb_databases()` 里能看到别名。
-///
-/// 这里**直接从 `RDS_HOME` 环境变量拼路径**，不走 `get_system_dir()`：测试运行器会把
-/// 系统目录指到临时根（实测解析结果是 `.rds/tmp/rds-test-root-*/data/system`），
-/// 走那条路只会验到「不存在的临时库」。测试时显式设 `RDS_HOME` 才会验到真库。
-///
-/// 为什么允许跳过：若此刻正好有写入方持有全局分析库，DuckDB 会拒绝挂载——那是
-/// **已知且必须可读报错**的常态，不该让用例红。
+/// 真全局分析库（`RDS_HOME` 显式设置时才验）：空闲时能通过根连接列出表。
 #[test]
-fn the_real_global_analysis_db_opens_read_only_when_idle() {
+fn the_real_global_analysis_db_is_queryable_when_idle() {
     let Ok(home) = std::env::var("RDS_HOME") else {
         eprintln!("跳过：未设 RDS_HOME，无法定位真全局分析库");
         return;
@@ -75,48 +74,9 @@ fn the_real_global_analysis_db_opens_read_only_when_idle() {
         eprintln!("跳过：{} 不存在（宿主未初始化）", path.display());
         return;
     }
-    match open_mounted("C_global_real_probe", &path, GLOBAL_ALIAS, "duckdb") {
-        Ok(session) => {
-            // 分析库是 DuckDB：用 `duckdb_tables()` 按 database_name 数表，
-            // 证明挂的是这台库（附带库名/表数，不是「表不存在」那种远端报错）。
-            // 注意挂载库里的 `information_schema` 不一定被暴露（实测报 schema 不存在），
-            // 所以这里用系统函数而不是信息模式。
-            let result = session
-                .run(&format!(
-                    "select count(*) as n from duckdb_tables() where database_name = '{GLOBAL_ALIAS}'"
-                ))
-                .expect("查真全局分析库的表清单");
-            assert!(!result.columns.is_empty());
-            eprintln!("真全局分析库只读挂载成功：{}", path.display());
-        }
-        Err(error) => {
-            let text = error.to_string();
-            assert!(
-                text.contains("正被其他操作占用"),
-                "真库打开失败时必须是「占用」这类可读原因，实际：{text}"
-            );
-            eprintln!("跳过（有写入方持有全局分析库）：{text}");
-        }
-    }
-}
-
-/// `global_tables()` 列的是全局分析库里的表（选择器「全局分析表」档的数据源）。
-///
-/// 造在测试根（`get_system_dir()` 的落点）上：走的就是生产路径，不另开测试专用入口。
-#[test]
-fn global_tables_lists_the_tables_of_the_analysis_db() {
-    let dir = rds_engine::migration::get_system_dir().expect("系统目录");
-    std::fs::create_dir_all(&dir).expect("建系统目录");
-    let path = dir.join("analytics.duckdb");
-    let _ = std::fs::remove_file(&path);
-    let conn = duckdb::Connection::open(&path).expect("建全局分析库");
-    conn.execute_batch("create table g_orders(id integer); create table g_customers(id integer);")
-        .expect("写表");
-    drop(conn); // DuckDB 独占文件
-
-    let tables = rds_engine::analysis::global::global_tables("C_global_list_probe")
-        .expect("列全局分析表");
-    assert_eq!(tables, vec!["g_customers".to_string(), "g_orders".to_string()]);
+    let tables = rds_engine::analysis::global::global_tables("C_global_real_probe")
+        .expect("真全局分析库应能通过根连接列出表");
+    eprintln!("真全局分析库表数：{}（{}）", tables.len(), path.display());
 }
 
 /// `global_analysis_db_path()` 的落点必须与系统目录一致（路径规则只此一处），

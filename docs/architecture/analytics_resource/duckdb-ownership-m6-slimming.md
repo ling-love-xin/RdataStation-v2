@@ -36,9 +36,9 @@
 结论：**“多连接 + 实例再挂载”在生产上不可能同时成立**；`attach_bases` 的 READ_ONLY
 与 `ProjectDatabaseManager` / `GlobalDatabaseManager` 的写连接只能留一侧。
 
-## 3. 现状所有权矩阵
+## 3. 改造前所有权矩阵（2026-11-26 第一刀之前）
 
-| 资源 | 现在谁打开 | 形态 | 问题 |
+| 资源 | 改造前谁打开 | 形态 | 问题 |
 | --- | --- | --- | --- |
 | 项目 SQLite `project.db` | `ProjectDatabaseManager` | 池 | 无 |
 | 项目分析库 `analytics.duckdb` | `ProjectDatabaseManager::open` | `ProjectDuckdbConnection` RW 长连接 | 与实例 `ATTACH analytics` 冲突 |
@@ -52,50 +52,57 @@
 
 ```text
 进程
-└── AnalysisInstance（唯一 DuckDB 根连接）
-    ├── control session
-    │   ├── analytics      ← 当前项目分析库（RW）
-    │   ├── rds_global     ← 全局分析库（RW）
-    │   ├── rds_tmp        ← 实例级临时 schema
-    │   └── 源别名          ← ATTACH（只读）
-    ├── system session（M6 作业 / 迁移 / 全局维护）
-    └── user sessions（每个 SQL 编辑器一条；受写守卫）
+└── shared::duckdb_root（唯一 DuckDB 根连接，memory）
+    ├── analytics      ← 当前项目分析库（RW）
+    ├── rds_global     ← 全局分析库（RW）
+    ├── rds_tmp        ← 实例级临时 schema（由 AnalysisInstance 建）
+    └── 源别名          ← ATTACH（只读，实例挂）
+        │
+        ├── AnalysisInstance control session（复制根连接）
+        │   ├── system session（M6 作业 / 迁移 / 全局维护；第 2 步落地）
+        │   └── user sessions（每个 SQL 编辑器一条；受写守卫）
+        ├── ProjectDatabaseManager 会话（`USE analytics`）
+        └── GlobalDatabaseManager 会话（`USE rds_global`）
 ```
 
 | 组件 | 改造后 |
 | --- | --- |
-| `ProjectDatabaseManager` | **只持 SQLite 池**；不再打开 DuckDB；`analysis_db_path` 保留为路径定义 |
-| `GlobalDatabaseManager` | **只持 SQLite 池**；不再打开 DuckDB；`init_sqlite_tables` 保留 |
-| `AnalysisInstance` | 独占 `analytics.duckdb` / 全局 `analytics.duckdb`，负责 ATTACH / DETACH / 迁移 |
-| `GlobalInstanceStore` | SQLite 走 `GlobalDatabaseManager`；DuckDB 走实例 `system session` |
-| `ProjectDuckConn` | 改名为 `ProjectCtx`：SQLite 池 + 实例会话句柄；不再含独立 DuckDB 连接 |
-| `GlobalDuckdbConnection` / `ProjectDuckdbConnection` | 只保留给测试 / 一次性迁移窗口；生产不再长期持有 |
+| `shared::duckdb_root` | **唯一根连接**：ATTACH / DETACH `analytics` / `rds_global`，给会话克隆 |
+| `ProjectDatabaseManager` | SQLite 池 + **`USE analytics` 会话句柄**；不再打开 DuckDB 文件；`analysis_db_path` 保留为路径定义 |
+| `GlobalDatabaseManager` | SQLite 池 + **`USE rds_global` 会话句柄**；不再打开 DuckDB 文件；`init_duckdb_tables` 复用句柄跑迁移 |
+| `AnalysisInstance` | 从根连接复制控制会话，负责 `rds_tmp` / 源挂载；**不再自己 open 文件** |
+| `GlobalInstanceStore` | SQLite 走 `GlobalDatabaseManager`；DuckDB 暂取 Manager 句柄（第 3 步改实例 system session） |
+| `ProjectDuckConn` | 仍存在，第 3 步改名 `ProjectCtx` 并收敛到实例会话 |
+| `GlobalDuckdbConnection` / `ProjectDuckdbConnection` | 生产只持会话句柄；`new` 仅保留给测试 / 一次性迁移窗口 |
 
 ## 5. 启动与切项目顺序
 
-### 5.1 启动
+### 5.1 启动（第一刀已落地）
 
-1. `initialize_global_system()` 建目录、建 `global.db`、跑全局 SQLite 迁移；
-2. 建项目 SQLite 池；
-3. **此时才创建/打开 `AnalysisInstance`**：控制连接 `ATTACH` 项目分析库 RW + 全局分析库 RW；
-4. 在 `system session` 上跑项目 / 全局 DuckDB 迁移（迁移是写，必须走系统会话）；
-5. 创建 `process session`；`DuckDBManager::global()` 继续返回它的连接；
-6. 打开编辑器时 `try_clone()` 出 user session。
+1. `GlobalDatabaseManager::new`：`ensure_write(None, Some(global))` 挂全局库，拿 `USE rds_global`
+   句柄，跑全局 SQLite + DuckDB 迁移；
+2. `ProjectDatabaseManager::open`：`ensure_write(Some(project), Some(global))` 挂项目库
+   （全局已在根上则幂等），拿 `USE analytics` 句柄，跑项目 SQLite + DuckDB 迁移；
+3. 首次要分析实例时：`AnalysisInstance::open` 从同一根连接复制控制连接，建 `rds_tmp`，
+   对已挂底座跳过、只补挂缺席的；
+4. `process session` / user session 都由实例 `try_clone()` 出来。
 
-关键：任何 DuckDB 文件在实例打开前不能有别的长连接。全局 / 项目管理器如果还要做
-“打开即迁移”，迁移也必须改成一次性连接 + 关闭，或整体挪到实例 `system session`。
+第 2 步（会话角色 + 写守卫）再把项目 / 全局 DuckDB 迁移挪到 `system session`；
+当前仍在 Manager 的句柄上跑，语义等价（同一根连接），只是还没有角色隔离。
 
-### 5.2 切项目
+关键：任何 DuckDB 文件在根连接之外不能再有长连接。全局 / 项目管理器如果还要做
+“打开即迁移”，迁移必须复用根连接句柄，或整体挪到实例 `system session`。
+
+### 5.2 切项目（第一刀已落地）
 
 1. 等写车道空闲、停掉该项目所有 user session 的正在执行语句；
-2. `DETACH analytics`；
+2. `shared::duckdb_root::ensure(Some(new_project), Some(global))`：由根连接摘旧 `analytics`、挂新；
 3. 关旧项目 SQLite 池；
 4. 开新项目 SQLite 池；
-5. `ATTACH '<新项目>/.RSmeta/analytics.duckdb' AS analytics (READ_WRITE)`；
-6. 在 `system session` 跑新项目 DuckDB 迁移；
-7. 刷新源 / 面板 / 资源列表。
+5. `AnalysisInstance::refresh_bases()` 再补挂缺席底座并刷新面板。
 
 不允许“旧项目还挂着、新项目已打开”的中间态；否则用户会对着上一个项目的表查数。
+根连接摘旧时会因旧会话仍存活而报错——这正是需要先停旧会话的原因。
 
 ## 6. 全局写权限：RW + 会话守卫
 
@@ -191,17 +198,54 @@
 
 ## 9. 实施顺序
 
-| 步 | 内容 | 验证 |
-| --- | --- | --- |
-| 0 | 本设计 + 资产遗留清单（本文件） | 文档评审 |
-| 1 | 所有权移交：两个 Manager 去 DuckDB；实例独占两库；system session | `cargo test -p rds-engine --lib`；真机双库 CTAS 探针 |
-| 2 | 会话角色 + 全局写守卫 | 守卫单测：`USE rds_global` / DDL / DML / ATTACH 全拒 |
-| 3 | M6 表型减法：`ProjectCtx`、CTAS、删 parquet 路径 | `cargo test -p rds-analytics-resource --lib` |
-| 4 | 全局表回收站 `trash_global` / `purge_global` | 表资产 trash/restore/purge 用例 |
-| 5 | 全局文件资产 + 文件回收站 + 版本恢复 | 文件 hash、恢复、pin 依赖用例 |
-| 6 | UI：回收站、版本恢复、分发文件 | `dialog_window` / `panel_window` |
+| 步 | 内容 | 验证 | 状态 |
+| --- | --- | --- | --- |
+| 0 | 本设计 + 资产遗留清单（本文件） | 文档评审 | ✅ 已完成 |
+| 1 | 所有权移交：两个 Manager 去文件连接；根连接统一挂两库；实例复用 | 串行单测 + 真机双库 CTAS 探针 | ✅ 已完成（2026-11-26） |
+| 2 | 会话角色 + 全局写守卫 | 守卫单测：`USE rds_global` / DDL / DML / ATTACH 全拒 | ⬜ 待做 |
+| 3 | M6 表型减法：`ProjectCtx`、CTAS、删 parquet 路径 | `cargo test -p rds-analytics-resource --lib` | ⬜ 待做 |
+| 4 | 全局表回收站 `trash_global` / `purge_global` | 表资产 trash/restore/purge 用例 | ⬜ 待做 |
+| 5 | 全局文件资产 + 文件回收站 + 版本恢复 | 文件 hash、恢复、pin 依赖用例 | ⬜ 待做 |
+| 6 | UI：回收站、版本恢复、分发文件 | `dialog_window` / `panel_window` | ⬜ 待做 |
 
 每步单独 commit；不把 1–3 和 4–6 混在一个提交里。
+
+## 9.1 第一刀实施记录（2026-11-26）
+
+代码落点：
+
+- `crates/shared/src/duckdb_root.rs`：进程级 `OnceLock<Mutex<Option<Arc<DuckDbRoot>>>>`；
+  `ensure` / `ensure_write` 挂载 `analytics` / `rds_global`（`READ_WRITE`），
+  `handle(alias)` 复制 `USE alias` 会话，`control()` 给实例控制连接，`reset()` 释放；
+  `isolated(project, global)` 给测试一条未登记的独立 `memory` 根。
+- `ProjectDatabaseManager::open`：写路径不再 `ProjectDuckdbConnection::new`，
+  改 `ensure_write(Some(project), Some(global))` + `handle(PROJECT_ALIAS)`；
+  `open_read_only` 仍只走 SQLite，不碰 DuckDB。
+- `GlobalDatabaseManager::new`：改 `ensure_write(None, Some(global))` + `handle(GLOBAL_ALIAS)`；
+  `init_duckdb_tables` 复用该句柄执行迁移，删掉二次 `open_duckdb_for_migration`。
+- `AnalysisInstance::open_tagged`：`analysis` 标签走进程根连接；测试标签走 `isolated`
+  （否则多个用例共享 `main` 持久表，engine 库会稳定挂 4 个计数用例）。
+- `AnalysisInstance::refresh_bases`：先 `ensure` 摘旧挂新，再 `attach_bases` 补缺；
+  不再自己 `DETACH` 绕过根注册表。
+- `attach_bases`：`READ_WRITE`；已挂别名跳过，避免 “already attached”。
+- `analysis::global::open_global_session`：不再 `open_mounted` 另开文件；改为根连接实例会话
+  `USE rds_global`，owner 加 `global:` 前缀避免撞 `process` 键。
+- `ProjectDuckdbConnection::close`：只放会话克隆，不再删 `-wal` / `-shm`（文件归根连接）。
+
+验证（全部串行）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo test -p rds-shared duckdb_root` | 1 passed |
+| `cargo test -p rds-store -j 1 -- --test-threads=1` | 203 passed / 2 ignored |
+| `cargo test -p rds-engine -j 1 --lib -- --test-threads=1` | 348 passed / 0 failed |
+| `cargo test -p rds-engine --test analysis_db_exclusive_probe` | 1 passed（项目 + 全局 + 实例共用一根连接，双向可读、跨库 CTAS） |
+| `cargo test -p rds-engine --test analysis_global_probe` | 4 passed（根连接挂全局库、`global_tables` 生产路径、路径口径） |
+| `cargo check --workspace -j 1` | 通过 |
+
+未在本机跑完的：`cargo test -p rds-analytics-resource` 全量测试在链接
+`panel_window` 时因系统页面文件不足失败（`os error 1455`，非代码错误）；
+第 3 步会在内存条件允许时补跑。
 
 ## 10. 风险与未决
 
@@ -218,10 +262,10 @@
 
 ## 11. 验收口径
 
-- 真机：项目库 + 全局库同实例，双向 CTAS 成功；
-- 真机：全局表写入被 user session 拒绝，system session 成功；
-- `cargo test -p rds-engine --lib` ≥ 344 passed；
-- `cargo test -p rds-analytics-resource --lib -- --test-threads=1` ≥ 286 passed；
-- `cargo check -p rds-workbench -j 1` 通过；
-- 表型链路无 parquet 中转、无短命 ATTACH；
+- 真机：项目库 + 全局库同实例，双向 CTAS 成功（第一刀已达成）；
+- 真机：全局表写入被 user session 拒绝，system session 成功（第 2 步）；
+- `cargo test -p rds-engine --lib` ≥ 344 passed（第一刀实测 348）；
+- `cargo test -p rds-analytics-resource --lib -- --test-threads=1` ≥ 286 passed（第 3 步）；
+- `cargo check -p rds-workbench -j 1` 通过（第一刀已过 workspace check）；
+- 表型链路无 parquet 中转、无短命 ATTACH（第 3 步）；
 - 资产引用 / 版本快照 / pin 的既有用例不改语义，只改测试夹具。

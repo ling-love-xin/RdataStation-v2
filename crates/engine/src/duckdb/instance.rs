@@ -204,17 +204,7 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// 某个别名是否已经挂在这个实例上（`ATTACH` 是实例级事实，查 `duckdb_databases()`）。
-fn control_has_database(conn: &Connection, alias: &str) -> bool {
-    conn.query_row(
-        "SELECT count(*) FROM duckdb_databases() WHERE database_name = ?",
-        [alias],
-        |row| row.get::<_, i64>(0),
-    )
-    .map(|count| count > 0)
-    .unwrap_or(false)
-}
-
+/// 进程内分析实例槽：强引用活到 `drop_instance`。
 static INSTANCE: OnceLock<Mutex<Option<Arc<AnalysisInstance>>>> = OnceLock::new();
 
 fn instance_slot() -> &'static Mutex<Option<Arc<AnalysisInstance>>> {
@@ -267,8 +257,29 @@ impl AnalysisInstance {
 
     /// 测试用：不登记全局，超时与 tag 可指定（避免用例之间互相踩 `rds_tmp`）。
     pub fn open_tagged(tag: &str, timeout: Duration) -> Result<Arc<Self>, String> {
-        let conn = Connection::open_in_memory()
-            .map_err(|error| format!("开分析实例失败：{error}"))?;
+        // 底座走进程根连接：项目库 / 全局库都在同一根连接上 ATTACH，
+        // 不再各开一条文件连接（同进程第二连接必撞单句柄）。
+        let bases = super::federation::session::bases();
+        let project = bases
+            .iter()
+            .find(|base| base.alias == super::federation::session::PROJECT_BASE_ALIAS)
+            .map(|base| std::path::PathBuf::from(&base.path));
+        let global = bases
+            .iter()
+            .find(|base| base.alias == super::federation::session::GLOBAL_BASE_ALIAS)
+            .map(|base| std::path::PathBuf::from(&base.path));
+        let root = if tag == "analysis" {
+            shared::duckdb_root::ensure(project.as_deref(), global.as_deref())
+                .map_err(|error| format!("建立 DuckDB 根连接失败：{error}"))?
+        } else {
+            // 测试用 `open_tagged`：独立 `memory` 根，避免多个用例共享 `main` 的持久表
+            // （2026-11-26 串行跑 engine 库时 4 个计数用例互相污染的根因）。
+            shared::duckdb_root::isolated(project.as_deref(), global.as_deref())
+                .map_err(|error| format!("建立独立 DuckDB 根连接失败：{error}"))?
+        };
+        let conn = root
+            .control()
+            .map_err(|error| format!("取 DuckDB 控制连接失败：{error}"))?;
         DuckDBManager::configure_connection(&conn)
             .map_err(|error| format!("配置分析实例失败：{error}"))?;
         conn.execute_batch(&format!("CREATE SCHEMA IF NOT EXISTS {SHARED_TEMP_SCHEMA}"))
@@ -278,8 +289,8 @@ impl AnalysisInstance {
             "SET search_path = 'main,{SHARED_TEMP_SCHEMA}'"
         ))
         .map_err(|error| format!("设 search_path 失败：{error}"))?;
-        // 底座在**实例**上挂（`analytics` 读写 / `rds_global` 只读）：`ATTACH` 是实例级事实，
-        // 挂一次所有会话都看得见；挂不上只让那一格缺席，不把实例带下去
+        // 底座若已挂在根连接上，这里会跳过；只有“还没挂”的缺席底座才尝试补挂
+        // （缺文件仍跳过，不在打开项目时造库）。
         for (alias, outcome) in super::federation::session::attach_bases(&conn) {
             if let Err(reason) = outcome {
                 tracing::warn!(alias = %alias, reason = %reason, "底座没挂上（这一格本轮不可用）");
@@ -332,17 +343,30 @@ impl AnalysisInstance {
     /// 用户会对着上个项目的表查数据（比"重建慢一点"严重得多）。
     /// 本方法是**事件路径**（有 I/O）；纯内存读看 [`Self::sessions`] / [`Self::temps`]。
     pub fn refresh_bases(&self) -> Vec<(String, Result<(), String>)> {
+        let bases = super::federation::session::bases();
+        let project = bases
+            .iter()
+            .find(|base| base.alias == super::federation::session::PROJECT_BASE_ALIAS)
+            .map(|base| std::path::PathBuf::from(&base.path));
+        let global = bases
+            .iter()
+            .find(|base| base.alias == super::federation::session::GLOBAL_BASE_ALIAS)
+            .map(|base| std::path::PathBuf::from(&base.path));
+        // 根连接是底座的唯一所有者：换项目必须先让它摘旧再挂新，实例自己不再
+        // 直接 `DETACH`（那会绕过根注册表，后面 Manager 再 ensure 会摘空）。
+        if let Err(error) =
+            shared::duckdb_root::ensure(project.as_deref(), global.as_deref())
+        {
+            return bases
+                .into_iter()
+                .map(|base| (base.alias, Err(error.clone())))
+                .collect();
+        }
+
         let conn = self
             .control
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let bases = super::federation::session::bases();
-        for base in &bases {
-            if control_has_database(&conn, &base.alias) {
-                // `DETACH` 之前先回默认 catalog：当前默认就是它时 DuckDB 拒绝摘
-                let _ = conn.execute_batch(&format!("USE memory; DETACH {}", base.alias));
-            }
-        }
         super::federation::session::attach_bases(&conn)
     }
 
