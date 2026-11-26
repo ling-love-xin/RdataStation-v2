@@ -957,7 +957,8 @@ impl ResultPanel {
     /// （`ResultSetViewer.addPanel:1357/:1388`）。
     ///
     /// 规则：
-    /// - 关的是当前页 → 落到**规范序里紧随其后**的剩余页，没有则取前一页；
+    /// - 关的是当前页 → 落到**规范序里紧随其后**的剩余页；没有后继则回退**页签条末项**
+    ///   （`open_tabs` 是 MRU 显示序，末项往往不是规范序末项，见 [`neighbor_after_close`]）；
     /// - 集合被关空 → 整块面板收起（`set_panels_visible(false)`，与「关掉最后一个面板」
     ///   在那边导致页签夹无项一致）；再打开任一一页会重新展开。
     /// - 关一页**不**复位最大化 / 宽度等其它面板状态。
@@ -3389,10 +3390,13 @@ pub(crate) fn tab_close_selector(tab: RightTab) -> &'static str {
     }
 }
 
-/// 【关闭一页】关掉某页后当前页落到哪：**规范序里紧随其后**的剩余页，没有则取最后一个。
+/// 【关闭一页】关掉某页后当前页落到哪：**规范序里紧随其后**的剩余页；没有则取
+/// **页签条末项**（即 `remaining` 的最后一项）。
 ///
-/// `remaining` 必须是规范序（`open_tabs` 的维护方式保证）。对齐 DBeaver 的
-/// `CTabFolder` 行为：关掉选中的页签后焦点落到相邻页签，而不是回到第一页。
+/// `remaining` 是 `open_tabs` 的显示顺序（**MRU**，不是规范序）：2026-11-25 起切页会把
+/// 选中页挪到最前（`panelFolder.setMRUVisible(true)`，`ResultSetViewer.java:364`），
+/// 所以这条函数只能沿显示顺序找后继——"紧随其后"用规范序判、回退用显示序末项。
+/// 对齐 DBeaver 的 `CTabFolder` 行为：关掉选中的页签后焦点落到相邻页签，而不是回到第一页。
 pub(crate) fn neighbor_after_close(remaining: &[RightTab], closed: RightTab) -> RightTab {
     let canonical = right_tabs();
     let closed_pos = canonical

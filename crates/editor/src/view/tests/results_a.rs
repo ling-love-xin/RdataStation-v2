@@ -2199,17 +2199,20 @@ fn ctrl_alt_f2_to_f6_toggle_the_right_panels(cx: &mut TestAppContext) {
     );
     assert_eq!(active(cx), RightTab::Browser);
 
-    // 关掉当前页（列浏览器）：规范序在它之后的 Group 未启用 → 回退集合末项（计算）
+    // 关掉当前页（列浏览器）：规范序在它之后的 Group 未启用 → 没有后继 → 回退
+    // **页签条末项**。此刻页签条是 MRU 序 `[Browser, Stats, Value]`，末项是值详情
+    // （不是规范序的"前一页"计算页）——`neighbor_after_close` 的回退口径即显示序末项。
     cx.simulate_keystrokes("ctrl-alt-f4");
     cx.run_until_parked();
     assert!(
         !tabs(cx).contains(&RightTab::Browser),
         "CTRL+ALT+F4 再按应关掉当前页"
     );
+    assert_eq!(tabs(cx), vec![RightTab::Stats, RightTab::Value], "关完只剩两页");
     assert_eq!(
         active(cx),
-        RightTab::Stats,
-        "关当前页应落到其后最近的已启用页，没有则回退末项"
+        RightTab::Value,
+        "无后继 → 回退页签条末项（MRU 序末项 = 值详情）"
     );
     assert!(visible(cx), "还剩别的页，整栏不该收起");
 
