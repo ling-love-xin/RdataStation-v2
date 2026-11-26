@@ -31,6 +31,17 @@ pub(crate) struct DistributeJob {
     pub(crate) overwrite: bool,
 }
 
+/// 一次「从全局文件取回」任务：把全局 CAS 的选定版本物化到项目草稿箱，并写两侧租约。
+pub(crate) struct GlobalCheckoutJob {
+    pub(crate) project_root: PathBuf,
+    pub(crate) name: String,
+    /// 取回的全局版本（列表 / 详情看到的那一版）。
+    pub(crate) version: i32,
+    /// 相对草稿箱的路径（只给文件名时落在草稿箱根部）。
+    pub(crate) dest_rel: String,
+    pub(crate) open_after: bool,
+}
+
 /// 一次「从全局实例删除」任务（刀 B；只清全局这一份，已分发副本不动）。
 pub(crate) struct DeleteGlobalJob {
     pub(crate) project_root: PathBuf,
@@ -91,6 +102,72 @@ pub(crate) async fn run_delete_global(job: &DeleteGlobalJob) -> OpOutcome {
     }
 }
 
+
+/// 从全局文件取回（工作线程上执行）。
+///
+/// 只开项目 SQLite 池写租约；内容从全局 CAS 物化，不经过项目 DuckDB。
+pub(crate) async fn run_global_checkout(job: &GlobalCheckoutJob) -> OpOutcome {
+    use crate::global::GlobalInstanceStore;
+
+    let gstore = match GlobalInstanceStore::production().await {
+        Ok(store) => store,
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action: "从全局取回",
+                reason: format!("打开全局系统库失败：{reason}"),
+            };
+        }
+    };
+    let manager = match ProjectDatabaseManager::open(&job.project_root, SQLITE_POOL_SIZE).await {
+        Ok(manager) => manager,
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action: "从全局取回",
+                reason: format!("打开项目库失败：{reason}"),
+            };
+        }
+    };
+    let store = crate::store::AnalyticsResourceStore::new(manager.sqlite_pool());
+    match gstore
+        .checkout_file(
+            &store,
+            &job.project_root,
+            &job.name,
+            Some(job.version),
+            &job.dest_rel,
+        )
+        .await
+    {
+        Ok(outcome) => OpOutcome::GlobalCheckedOut {
+            name: outcome.name,
+            dest: job.project_root.join(crate::resource_host::SCRATCHPAD_DIR).join(&outcome.dest_rel),
+            version: outcome.version,
+            open_after: job.open_after,
+        },
+        Err(reason) => OpOutcome::Failed {
+            action: "从全局取回",
+            reason: reason.to_string(),
+        },
+    }
+}
+
+/// 提交一次全局文件取回（事件路径调用：对话框确认之后）。
+pub fn enqueue_global_checkout(
+    project_root: PathBuf,
+    name: String,
+    version: i32,
+    dest_rel: String,
+    open_after: bool,
+) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
+    let _ = jobs().tx.send(Job::GlobalCheckout(GlobalCheckoutJob {
+        project_root,
+        name,
+        version,
+        dest_rel,
+        open_after,
+    }));
+}
 
 /// 从全局历史版本恢复（工作线程上执行）：表型复制旧表，文件型校验旧副本。
 pub(crate) async fn run_restore_global_version(job: &RestoreGlobalVersionJob) -> OpOutcome {

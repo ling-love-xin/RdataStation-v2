@@ -98,6 +98,33 @@ async fn run_archive_with_service(job: &ArchiveJob, service: &ArchiveService) ->
         }
     }
 
+    // 全局取回过来的草稿：出处要记成 `global:<name>`（另存项目后来源链才连得上），
+    // 同时先把 dest_rel 留住——绑定里的出处马上会被改写，之后结租约还要用它。
+    let checkout_dest_rel = request
+        .binding
+        .promoted_from
+        .as_deref()
+        .and_then(|path| path.strip_prefix("scratchpad/"))
+        .map(str::to_string);
+    let mut checkout_global_name = None;
+    if request.existing_resource_id.is_none()
+        && let Some(dest_rel) = checkout_dest_rel.as_deref()
+    {
+        match service.store().lease_by_dest(dest_rel).await {
+            Ok(Some(lease)) if lease.base_scope == "global" => {
+                if let Some(name) = lease.resource_id.strip_prefix(crate::GLOBAL_PREFIX) {
+                    request.binding.promoted_from =
+                        Some(format!("{}{name}", crate::GLOBAL_PREFIX));
+                    checkout_global_name = Some(name.to_string());
+                }
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(error = %error, "归档前反查全局取回租约失败，出处按草稿记录")
+            }
+        }
+    }
+
     match service.archive(request.clone()).await {
         Ok(outcome) => {
             // 业务断言是附属项：写失败不撤销已成功的归档（本体与登记都已成立），
@@ -126,6 +153,49 @@ async fn run_archive_with_service(job: &ArchiveJob, service: &ArchiveService) ->
                         Err(error) => {
                             tracing::warn!(error = %error, "取回凭据结案失败（归档已成功）")
                         }
+                    }
+                }
+            }
+            // 全局文件取回后归档：草稿已经变成项目资产，按 dest 反查 `base_scope=global`
+            // 的项目租约，把项目侧与全局侧一起结清；否则这笔取回会永久占住 active。
+            if let Some(dest_rel) = checkout_dest_rel.as_deref() {
+                match service.store().lease_by_dest(dest_rel).await {
+                    Ok(Some(lease)) if lease.base_scope == "global" => {
+                        match service.store().consume_lease(&lease.lease_id, outcome.version).await {
+                            Ok(()) => {
+                                let name = checkout_global_name.as_deref();
+                                if let Some(name) = name {
+                                    match crate::global::GlobalInstanceStore::production().await {
+                                        Ok(gstore) => {
+                                            if let Err(error) = gstore
+                                                .consume_checkout_lease(
+                                                    name,
+                                                    &job.project_root,
+                                                    outcome.version,
+                                                )
+                                                .await
+                                            {
+                                                tracing::warn!(error = %error, name, "全局取回租约结案失败");
+                                            } else {
+                                                notes.push(format!(
+                                                    "已结清全局取回「{name}」的租约"
+                                                ));
+                                            }
+                                        }
+                                        Err(reason) => {
+                                            tracing::warn!(reason = %reason, name, "打开全局库结案取回租约失败")
+                                        }
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                tracing::warn!(error = %error, lease_id = %lease.lease_id, "项目取回租约结案失败（归档已成功）")
+                            }
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::warn!(error = %error, "按草稿路径反查取回租约失败（归档已成功）")
                     }
                 }
             }

@@ -47,7 +47,11 @@ use archive::{
     ArchiveJob, CheckoutJob, TrashActionJob, TrashJob, TrashListJob, UndoJob, load_trash,
     reload_trash_after, run_archive, run_checkout, run_trash, run_trash_action, run_undo,
 };
-use global::{DeleteGlobalJob, DistributeJob, PromoteJob, ReferenceGlobalJob, RestoreGlobalVersionJob, SolidifyRefJob, run_delete_global, run_distribute, run_promote, run_reference, run_restore_global_version, run_solidify};
+use global::{
+    DeleteGlobalJob, DistributeJob, GlobalCheckoutJob, PromoteJob, ReferenceGlobalJob,
+    RestoreGlobalVersionJob, SolidifyRefJob, run_delete_global, run_distribute,
+    run_promote, run_reference, run_restore_global_version, run_solidify,
+};
 use index::{
     IndexRepairActionJob, IndexScanJob, load_index_report, reload_index_scan_after,
     run_repair_action,
@@ -79,6 +83,7 @@ pub(crate) enum Job {
     Refresh(RefreshJob),
     Archive(ArchiveJob),
     Checkout(CheckoutJob),
+    GlobalCheckout(GlobalCheckoutJob),
     Undo(UndoJob),
     Trash(TrashJob),
     Versions(VersionsJob),
@@ -115,6 +120,13 @@ pub enum OpOutcome {
     },
     /// 已取回：落地路径 / 存档版本 / 是否要顺手打开。
     CheckedOut {
+        dest: PathBuf,
+        version: i32,
+        open_after: bool,
+    },
+    /// 已从全局文件取回：资产名 / 落到本项目草稿箱的绝对路径 / 取回的全局版本。
+    GlobalCheckedOut {
+        name: String,
         dest: PathBuf,
         version: i32,
         open_after: bool,
@@ -321,6 +333,10 @@ fn handle_job(rt: &tokio::runtime::Runtime, job: Job) {
                 // 动作之后立刻补一次取数（见模块头注释）。
                 refresh_after_op(&rt, job.project_root, job.read_only);
             }
+            Job::GlobalCheckout(job) => {
+                let outcome = rt.block_on(global::run_global_checkout(&job));
+                *lock(&jobs().op_result) = Some(outcome);
+            }
             Job::Checkout(job) => {
                 let outcome = rt.block_on(run_checkout(&job));
                 *lock(&jobs().op_result) = Some(outcome);
@@ -474,8 +490,8 @@ pub use archive::{
     enqueue_undo,
 };
 pub use global::{
-    enqueue_delete_global, enqueue_distribute, enqueue_promote, enqueue_reference,
-    enqueue_restore_global_version, enqueue_solidify,
+    enqueue_delete_global, enqueue_distribute, enqueue_global_checkout, enqueue_promote,
+    enqueue_reference, enqueue_restore_global_version, enqueue_solidify,
 };
 pub use index::enqueue_index_repair_action;
 pub use index::enqueue_index_scan;

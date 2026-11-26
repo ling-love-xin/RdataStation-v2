@@ -100,15 +100,16 @@ pub fn can_open(ctx: &ActionContext) -> bool {
     ctx.single() && ctx.status != ArchiveStatus::Missing && (ctx.has_body() || ctx.global_ref)
 }
 
-/// 取回（检出）：往草稿箱写工作副本——只对项目行、**文件本体**、本体正常、项目非只读。
+/// 取回（检出）：往草稿箱写工作副本——项目文件行或**全局文件行**、本体正常、项目非只读。
 ///
-/// 表型没有文件可复制（它的本体是项目分析库里的一张表），取回必失败，所以挡在这里；
-/// 要看旧版数据走版本历史的「用 vN 分析」。引用型有源文件路径，仍可取回。
+/// 全局文件的本体在全局 CAS，取回后落本项目草稿箱并写 `base_scope=global` 租约；
+/// 全局表 / 项目表没有文件可复制，仍挡在这里。
 ///
 /// 内容已变（`ContentChanged`）也挡：那是"本体被绕过只读改过"，先让用户在状态行
 /// 接受当前内容或从历史还原，再取回（否则取走的是来路不明的内容）。
 pub fn can_checkout(ctx: &ActionContext) -> bool {
-    ctx.project() && ctx.status == ArchiveStatus::Normal && !ctx.read_only && ctx.has_payload
+    let scope = ctx.project() || ctx.scope == RowScope::Global;
+    scope && ctx.status == ArchiveStatus::Normal && !ctx.read_only && ctx.has_payload
 }
 
 /// 升级到全局：本质是一次发布——项目行、本体在位（文件或表）、单选、项目非只读。
@@ -197,6 +198,18 @@ mod tests {
         assert!(!can_move_to_group(&ctx));
         assert!(!can_delete_row(&ctx));
         assert!(can_delete_global(&ctx), "全局行可以从全局实例删除（刀 B）");
+        assert!(!can_checkout(&ctx), "全局表没有文件本体，不能按文件取回");
+    }
+
+    #[test]
+    fn global_file_row_can_checkout() {
+        let mut ctx = ActionContext::project_row();
+        ctx.scope = RowScope::Global;
+        ctx.has_payload = true;
+        ctx.has_table = false;
+        assert!(can_checkout(&ctx), "全局文件取回 = CAS 物化到本项目草稿箱");
+        ctx.read_only = true;
+        assert!(!can_checkout(&ctx), "只读项目不能往草稿箱写");
     }
 
     #[test]

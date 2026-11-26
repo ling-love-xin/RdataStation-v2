@@ -93,22 +93,13 @@ pub(super) fn request_open(host: &ResourceHost, detail: &ArchiveDetail, _window:
                 }
             }
         }
-        // **数据文件不走编辑器文本**：双击/打开要看的是数据本身；`.sql` / `.md` 这类不是
-        // 数据，仍进编辑器。判定与「查看统计」同一口径——扩展名白名单只有一处
-        // （`engine::duckdb::file_reader_function`），不按种类分。
+        // **DuckDB 读得动就走只读取样，否则进编辑器只读**：判据是归档时写入的
+        // `structured`（详情里的 `duckdb_readable`），不再按扩展名猜。文本 / 二进制
+        // 都走编辑器只读；二进制要看元信息，编辑器侧自己按内容拒绝渲染。
         //
         // 走洞察的取样入口（与右键「查看统计」同一个）：那边把本体当只读源表读出来
         // （D58：取样 → 临时表），用户能直接看到这张表的形状与数据。
-        //
-        // 注：原型 P4.4 想要的是“编辑器结果表格（只读）”，那需要编辑器侧先开一个
-        // “以结果区打开数据文件”的 API（现在只有“打开文本 + 执行”），属 P4.4 余项；
-        // 在此之前“双击能看见数据”这件事由洞察入口承担，比摆一个点了没反应的按钮强。
-        if detail
-            .payload_rel_path
-            .as_deref()
-            .and_then(engine::duckdb::file_reader_function)
-            .is_some()
-        {
+        if detail.duckdb_readable {
             match insight::SampleSource::duckdb_file(&path, detail.name.clone()) {
                 Ok(source) => {
                     let name = detail.name.clone();
@@ -137,6 +128,16 @@ pub(super) fn request_view_stats(host: &ResourceHost, detail: &ArchiveDetail, _w
                 let Some(path) = host.payload_path(detail, cx) else {
                     return;
                 };
+                if !detail.duckdb_readable {
+                    host.notice(
+                        format!(
+                            "资产库：「{}」没有可被 DuckDB 读取的结构，不能在洞察里取样",
+                            detail.name
+                        ),
+                        cx,
+                    );
+                    return;
+                }
                 match insight::SampleSource::duckdb_file(&path, detail.name.clone()) {
                     Ok(source) => {
                         host.backend
@@ -176,7 +177,6 @@ pub(super) fn request_view_stats(host: &ResourceHost, detail: &ArchiveDetail, _w
 }
 
 pub(super) fn request_checkout(host: &ResourceHost, detail: &ArchiveDetail, window: &mut Window, cx: &mut App) {
-
         let Some(root) = host.require_project("无法取回", cx) else {
             return;
         };
@@ -184,8 +184,6 @@ pub(super) fn request_checkout(host: &ResourceHost, detail: &ArchiveDetail, wind
             host.notice(tr("资产库：项目为只读模式，不能取回"), cx);
             return;
         }
-        // 目标目录 = 草稿箱模块目录（取回产出的是一份**草稿**；目录名取自 crate 常量，
-        // 不在宿主里再写一次字面量）。
         let target_dir = root.join(crate::resource_host::SCRATCHPAD_DIR);
         let extension = detail
             .payload_rel_path
@@ -200,8 +198,26 @@ pub(super) fn request_checkout(host: &ResourceHost, detail: &ArchiveDetail, wind
         };
 
         let backend = host.backend.clone();
-        let resource_id = detail.id.clone();
         let read_only = host.read_only();
+        if detail.scope == crate::model::RowScope::Global {
+            let name = detail.name.clone();
+            let version = detail.version;
+            open_checkout_dialog(window, cx, seed, move |result, cx| {
+                // 全局文件取回只写草稿箱 + 两侧租约；目标路径按草稿箱相对路径传下去。
+                resource_jobs::enqueue_global_checkout(
+                    root.clone(),
+                    name.clone(),
+                    version,
+                    result.file_name.clone(),
+                    result.open_after,
+                );
+                backend.refresh_resources(cx);
+                backend.notice("资产库：正在从全局取回…".to_string(), cx);
+            });
+            return;
+        }
+
+        let resource_id = detail.id.clone();
         open_checkout_dialog(window, cx, seed, move |result, cx| {
             let request = CheckoutRequest {
                 resource_id: resource_id.clone(),

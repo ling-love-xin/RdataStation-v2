@@ -300,6 +300,7 @@ fn detail_for(row: &ArchiveRow) -> ArchiveDetail {
         source_table: None,
         analytics_table: None,
         content_hash: Some("0123456789abcdef0123".to_string()),
+        duckdb_readable: false,
         payload_rel_path: Some(format!("{}.sql", row.id)),
         has_definition: false,
         definition_sql: None,

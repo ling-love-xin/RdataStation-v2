@@ -1775,6 +1775,34 @@ async fn g092_global_checkout_creates_lease_and_blocks_purge() {
         "有活跃取回时 purge 必须拒绝：{purge:?}"
     );
 
+    // 归档后结清：项目侧先消费，再关全局侧；之后同一资产可以再次取回。
+    project
+        .consume_lease(&lease.lease_id, 1)
+        .await
+        .expect("consume project lease");
+    env.store
+        .consume_checkout_lease("checkout_file", &env.project_root, 1)
+        .await
+        .expect("consume global lease");
+    assert!(
+        project
+            .active_lease("global:checkout_file")
+            .await
+            .expect("read active")
+            .is_none(),
+        "项目侧 active 租约应已结清"
+    );
+    env.store
+        .checkout_file(
+            &project,
+            &env.project_root,
+            "checkout_file",
+            None,
+            "global/data-3.csv",
+        )
+        .await
+        .expect("结清后可以再次取回");
+
     let _ = fs::remove_dir_all(&env.dir);
 }
 

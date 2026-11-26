@@ -48,6 +48,10 @@ pub struct ArchiveDetail {
     /// 详情「基本信息」摆它（用户需要知道本体落在哪）；**取回**也用它推默认工作副本名
     /// （显示名与扩展名是两回事：显示名可以改成中文，扩展名不行）。
     pub payload_rel_path: Option<String>,
+    /// 本体能否被 DuckDB 直接读成表（`structured` 列的能力事实）。
+    ///
+    /// 打开 / 查看统计按它路由，**不再按扩展名猜**：`true` → 只读取样；`false` → 编辑器只读。
+    pub duckdb_readable: bool,
     /// 本体表名（**表型资产的取数依据**：`kind = AnalyticsTable` 时它是分析库里的表名）。
     ///
     /// 文件型为 `None`。详情「基本信息」摆它（表名是拿来拼 SQL 的定位信息，不给就没法照抄）；

@@ -519,11 +519,11 @@ purge_file(asset_id) -> ()
 | 任意两版对比 | `jobs/version.rs::load_version_diff`、`dialogs/version_diff.rs` | 未实现（M5） |
 | 全局 file-first | `global/file.rs::publish_file`、`global/distribute.rs`、`global/promote.rs`、`global/delete.rs`、`jobs/global.rs::promote_file_first` | 已实现（M4）：文件行 `kind=file`、`analytics_table=NULL`；旧 `analysis + file` 混合行迁移留 M5 |
 | 全局 fork | `global/file.rs::fork_file`、`global/040` 的 `asset_forks` | 已实现（M4）：复用 manifest、不移动 head |
-| 全局取回 | `global/file.rs::checkout_file`、`global/040` 的 `global_checkout_leases`、`project_meta/037` | 服务层已实现；UI/job 入口待接 |
+| 全局取回 | `global/file.rs::checkout_file` / `consume_checkout_lease`、`jobs/global.rs::run_global_checkout`、`resource_host/detail_actions.rs` | 已实现：全局文件行进草稿箱 + 双侧租约；归档该草稿时结清项目/全局租约 |
 | 全局历史恢复 | `global/file.rs::restore_file_version`、`global/promote.rs::restore_global_file_version` | 已实现：只认 manifest；无 manifest 的旧文件版本拒绝恢复（M5 删除旧副本回退） |
 | 删除 / unlock 分离 | `service/trash.rs`、`resource_host/delete_actions.rs`、`detail_view/actions.rs`、`resource_view/list_delegate/menu.rs` | 文件删除统一进回收站（项目 / 全局）；unlock 服务、作业与宿主动作全部删除，不再保留显式移出能力（M5） |
 | 文件默认全保留 | `service/archive.rs`、`payload/versions.rs`（已删除） | M5 已实现：停止写旧副本、删除副本裁剪模块；`KeepVersions` 只作用于表型 |
-| 查看路由 | `resource_host/detail_actions.rs`、`present/detail.rs` | 未实现（M5） |
+| 查看路由 | `present/detail.rs`（`duckdb_readable`）、`resource_view/row_meta.rs`、`resource_host/detail_actions.rs` | 已实现：`structured`/`duckdb_readable` 决定取表格还是编辑器；不再按扩展名猜。`content_class` 仍只存全局发布快照 |
 | 旧全局文件负载 | `global/payload.rs`（已删除）、`global/promote.rs`、`global/distribute.rs`、`global/delete.rs`、`global/sql.rs` | M5 已删除：不再写 `resources/versions/<asset>/vN`、不再从旧脚本内容表重建文件、purge 连带清 manifest/lease/publish links/forks |
 
 ---

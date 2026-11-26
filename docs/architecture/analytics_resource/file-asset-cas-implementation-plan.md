@@ -282,4 +282,4 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_active_lease
 - 归档删除草稿失败当前只写回执 note，未落 `pending_cleanup` 列（M5 再补持久化重试）。
 - 全局文件发布仍是「一版一行、新 `resource_id`」，版本链靠 `parent_resource_id` 接续；设计中的稳定单 asset id 未落，作为后续迁移项。
 - 全局发布暂不自动建派生表：文件行 `analytics_table=NULL`；旧 `analysis + file` 混合行迁移、派生表独立留到 M5。
-- 全局取回的 UI/job 入口尚未接；当前列表/详情只提供分发与回收站，`checkout_file` 已在服务层可用。
+- 全局取回 UI/job 已接：全局文件行菜单「取回（检出）」→ 草稿箱；取回后归档会结清项目侧与全局侧租约。查看路由改读 `duckdb_readable`，不再按扩展名猜。

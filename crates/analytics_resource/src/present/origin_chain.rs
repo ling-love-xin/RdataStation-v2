@@ -155,6 +155,7 @@ mod tests {
             source_connection_id: None,
             source_table: None,
             content_hash: None,
+            duckdb_readable: false,
             payload_rel_path: Some("a.sql".to_string()),
             analytics_table: None,
             has_definition: false,

@@ -25,6 +25,7 @@ fn detail(status: ArchiveStatus, kind: ArchiveKind) -> ArchiveDetail {
         source_connection_id: Some("conn_1".to_string()),
         source_table: None,
         content_hash: Some("0123456789abcdef0123".to_string()),
+        duckdb_readable: false,
         payload_rel_path: Some("dau.sql".to_string()),
         analytics_table: None,
         has_definition: false,

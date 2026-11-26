@@ -643,6 +643,25 @@ impl SidebarPanel {
                     format!("{base}（{}）", notes.join("；"))
                 }
             }
+            resource_jobs::OpOutcome::GlobalCheckedOut {
+                name,
+                dest,
+                version,
+                open_after,
+            } => {
+                let shown = self
+                    .shared
+                    .project_root()
+                    .and_then(|root| dest.strip_prefix(&root).ok().map(|rel| rel.to_path_buf()))
+                    .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_else(|| dest.to_string_lossy().to_string());
+                if open_after {
+                    self.shared.request_open_in_editor(dest);
+                }
+                format!(
+                    "资产库：已从全局取回「{name}」v{version} → {shown}；改完归档为本项目资产"
+                )
+            }
             resource_jobs::OpOutcome::CheckedOut {
                 dest,
                 version,

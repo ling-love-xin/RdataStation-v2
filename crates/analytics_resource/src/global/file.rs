@@ -347,6 +347,36 @@ impl GlobalInstanceStore {
         })
     }
 
+    /// 结清全局取回租约（草稿已归档成项目资产时调用）。
+    ///
+    /// 全局版本本身不变，`consumed_version` 记的是归档后项目资产的新版本，便于追溯
+    /// “哪一版草稿把这笔取回用掉了”。租约已不存在时视为已结清，不报错。
+    pub async fn consume_checkout_lease(
+        &self,
+        name: &str,
+        project_root: &Path,
+        consumed_version: i32,
+    ) -> Result<(), InstanceOpError> {
+        let root = project_root.to_string_lossy().replace('\\', "/");
+        self.with_sqlite(|conn| {
+            conn.execute(
+                "UPDATE global_checkout_leases \
+                 SET state = 'consumed', closed_at = ?, consumed_version = ? \
+                 WHERE resource_name = ? AND project_root = ? AND state = 'active'",
+                rusqlite::params![Utc::now().to_rfc3339(), consumed_version, name, root],
+            )
+            .map_err(|error| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "global_checkout_leases".to_string(),
+                    operation: "consume_checkout_lease".to_string(),
+                    reason: error.to_string(),
+                })
+            })?;
+            Ok(())
+        })
+        .map_err(InstanceOpError::Core)
+    }
+
     /// 全局文件取回：物化到项目草稿箱，并在项目库写 `base_scope=global` 的 lease。
     pub async fn checkout_file(
         &self,

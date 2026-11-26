@@ -133,10 +133,10 @@
 而是项目 manifest → 全局 CAS（`{system}/cas`）+ 全局 `file_asset_versions`；全局行
 `kind='file'`、`analytics_table=NULL`，打开 / 取回 / 分发都按 manifest 物化，不建表。
 发布必须带 `base_global_version`：与当前 head 不符返回 `StaleBase`，不覆盖 head；同名要分叉时走
-`fork_file`（复用 manifest、不复制字节、原 head 不动）。全局取回写项目 `checkout_leases`
-（`base_scope='global'`、key `global:<name>`）并在全局 `global_checkout_leases` 记一条跨项目守卫；
-全局 `purge` 前必须无活跃取回。全局文件同样可进回收站，历史版本恢复从 manifest 生成新 head
-（不原地回滚）。
+`fork_file`（复用 manifest、不复制字节、原 head 不动）。全局文件行菜单可「取回（检出）」到本项目
+草稿箱：写项目 `checkout_leases`（`base_scope='global'`、key `global:<name>`）并在全局
+`global_checkout_leases` 记一条跨项目守卫；全局 `purge` 前必须无活跃取回。该草稿归档为项目资产时，
+项目侧与全局侧租约一起结清。全局文件同样可进回收站，历史版本恢复从 manifest 生成新 head（不原地回滚）。
 
 **全局引用（2026-11-25）**：项目侧不再只能“分发复制一份”，也可以只记一条
 `kind='table_ref'` + `origin_kind='global'` 的引用资产，按项目版本 pin 全局版本
@@ -147,10 +147,8 @@
 裁剪遇到活跃 pin 会跳过或拒绝；引用资产被永久删除时释放其全部 pin。
 
 **表型存档的升级**（本体是项目分析库里的一张表，而不是文件）走另一条路：入口只给表名
-（`PromoteRequest::source_table`），工作线程用项目写连接 `COPY <表> TO parquet`
-（**不带 LIMIT，整表搬**）→ 再按数据文件升级。绕这一步是因为两个 DuckDB 都是单写者，
-Windows 单句柄下互相 `ATTACH` 会撞「文件被占用」（分发侧同一条限制）。临时 parquet
-用完即删，`COPY` 失败也删；升级是读，项目侧那张表原样留着。
+（`PromoteRequest::source_table`），工作线程用项目写连接直接 CTAS 到 `rds_global.<版本表>`，
+不再经 parquet 中转；升级是读，项目侧那张表原样留着。
 
 ### 8. 边界与协作
 

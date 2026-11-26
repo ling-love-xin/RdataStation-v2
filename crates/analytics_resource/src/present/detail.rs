@@ -84,6 +84,7 @@ pub fn to_detail(
         source_table: resource.source_table.clone(),
         content_hash: resource.content_hash.clone(),
         payload_rel_path: resource.file_rel_path.clone(),
+        duckdb_readable: resource.structured.unwrap_or(0) == 1,
         analytics_table: resource.analytics_table.clone(),
         has_definition: resource.definition_sql.is_some(),
         definition_sql: resource
