@@ -1311,6 +1311,44 @@ async fn g026_trash_moves_file_payload_and_restore_brings_it_back() {
 }
 
 #[tokio::test]
+async fn g027_file_copies_follow_the_keep_policy() {
+    let env = create_test_env().await;
+    let csv = write_csv(&env.dir);
+    let req = promote_req("kept_orders", &csv, PromoteKind::DataFile);
+    env.store.promote(&req).await.expect("promote v1");
+    let key = payload::asset_key("kept_orders");
+    assert!(payload::version_dir(&env.store.system_dir, &key, 1).is_dir());
+
+    let csv2 = env.dir.join("orders-keep-v2.csv");
+    fs::write(&csv2, "id,sku,qty\n9,z,90\n").expect("write v2");
+    let mut req2 = promote_req("kept_orders", &csv2, PromoteKind::DataFile);
+    req2.rel_path = Some("kept_orders.csv".to_string());
+    req2.keep_versions = Some(crate::model::KeepVersions::MetadataOnly);
+    env.store.promote_overwrite(&req2).await.expect("promote v2");
+
+    assert!(
+        !payload::version_dir(&env.store.system_dir, &key, 1).exists(),
+        "MetadataOnly 只留当前版本的副本"
+    );
+    assert!(
+        payload::version_dir(&env.store.system_dir, &key, 2)
+            .join("kept_orders.csv")
+            .is_file(),
+        "当前版本的副本必须保留"
+    );
+    let refused = env
+        .store
+        .restore_global_file_version("kept_orders", 1)
+        .await;
+    assert!(
+        matches!(refused, Err(InstanceOpError::Core(_))),
+        "副本被裁掉后恢复必须明确拒绝：{refused:?}"
+    );
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+#[tokio::test]
 async fn g024_trash_refuses_while_a_project_pins_the_version() {
     let env = create_test_env().await;
     let csv = write_csv(&env.dir);

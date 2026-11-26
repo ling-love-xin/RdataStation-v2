@@ -118,6 +118,13 @@ pub trait ResourceHostBackend: 'static {
     fn snapshot_details(&self, _cx: &App) -> Vec<ArchiveDetail> {
         Vec::new()
     }
+
+    /// 全局系统目录（`data/system`）：全局文件本体在它下面的 `resources/`。
+    ///
+    /// 默认 `None`：测试替身 / 未初始化全局库的场景没有全局文件可打开。
+    fn global_system_dir(&self) -> Option<PathBuf> {
+        None
+    }
 }
 
 /// 状态栏提示（自由函数版：对话框回调里没有 `self`）。

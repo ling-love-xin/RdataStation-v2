@@ -194,6 +194,9 @@ impl GlobalInstanceStore {
             if let Err(error) = self.prune_version_tables(&req.name, keep).await {
                 tracing::warn!(error = %error, name = %req.name, "全局历史表裁剪失败");
             }
+            if let Err(error) = self.prune_file_versions(&req.name, keep).await {
+                tracing::warn!(error = %error, name = %req.name, "全局文件历史副本裁剪失败");
+            }
         }
         Ok(outcome)
     }

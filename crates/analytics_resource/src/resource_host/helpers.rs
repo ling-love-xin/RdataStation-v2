@@ -100,9 +100,20 @@ impl ResourceHost {
     pub(super) fn payload_path(&self, detail: &ArchiveDetail, cx: &mut App) -> Option<PathBuf> {
         match detail.payload_mode {
             PayloadMode::Copy => {
-                let Some(root) = self.backend.project_root() else {
-                    self.pending("无法定位本体", "：还没有打开项目", cx);
-                    return None;
+                let root = if detail.scope == crate::model::RowScope::Global {
+                    // 全局文件本体在 `data/system/resources/<rel>`；`PayloadStore` 按传进来的
+                    // 系统目录拼 `resources/`，与项目侧同一套越界守卫。
+                    let Some(system) = self.backend.global_system_dir() else {
+                        self.pending("无法定位本体", "：全局系统目录未初始化", cx);
+                        return None;
+                    };
+                    system
+                } else {
+                    let Some(root) = self.backend.project_root() else {
+                        self.pending("无法定位本体", "：还没有打开项目", cx);
+                        return None;
+                    };
+                    root
                 };
                 let Some(rel) = detail.payload_rel_path.as_deref() else {
                     self.notice(tr("资产库：这条存档没有登记本体路径（旧行）"), cx);

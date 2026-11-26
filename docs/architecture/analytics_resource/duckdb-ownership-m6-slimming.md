@@ -398,10 +398,13 @@ WIP 产物串包（`rds_sql::guard` 缺失 / `use_duckdb_fed` 类型不一致）
 | --- | --- |
 | `cargo test -p rds-analytics-resource --lib global::tests::g025` | 1 passed（v1 本体/副本 hash 一致；v2 后 v1 保留；恢复 v1 → v3 且当前字节回旧） |
 | `cargo test -p rds-analytics-resource --lib global::tests::g026` | 1 passed（trash 移出本体与副本，restore 移回，purge 清掉） |
-| `cargo test -p rds-analytics-resource --lib -- --test-threads=1` | 290 passed / 0 failed |
+| `cargo test -p rds-analytics-resource --lib global::tests::g027` | 1 passed（`MetadataOnly` 裁掉 v1 副本、保当前 v2；恢复被裁版本明确拒绝） |
+| `cargo test -p rds-analytics-resource --lib -- --test-threads=1` | 291 passed / 0 failed |
 
 本段边界：现有全局表资产仍没有文件本体（旧数据不伪造）；表格 UI 还没有“恢复全局文件版本”
-入口，服务层已可用；文件 `KeepVersions` 裁剪与派生表的归属标记仍待下一段。
+入口，服务层已可用；文件 `KeepVersions` 裁剪已实现（当前版与被 pin 版本不裁）；
+派生表的归属标记仍待下一段。全局文件打开路径已按 `RowScope::Global` 改走
+`data/system/resources/`，不再误拼到项目根。
 
 ## 10. 风险与未决
 
