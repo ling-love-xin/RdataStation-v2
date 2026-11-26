@@ -182,6 +182,10 @@ pub struct AnalysisSession {
     /// 为什么要存：`ATTACH` 出去以后，某条源为什么不可用只有挂载那一步知道；
     /// 面板 / 全局库核对想报原话时，不该再挂一遍去找原因。
     mounted: Mutex<Vec<super::federation::registry::MountedSource>>,
+    /// 最近一次 `USE` 切过去的主源别名（纯展示：面板要在源行上区分「主源 / 已挂载」）。
+    ///
+    /// 存这里而不是每次现查 `current_database()`：面板是渲染路径，不能为一行小标跑 SQL。
+    primary: Mutex<Option<String>>,
     /// 弱引用：实例持有会话，会话反向取车道 / 登记册，不能成环
     instance: Weak<AnalysisInstance>,
 }
@@ -393,6 +397,7 @@ impl AnalysisInstance {
             last_used_ms: AtomicU64::new(stamp),
             queries: AtomicU64::new(0),
             mounted: Mutex::new(Vec::new()),
+            primary: Mutex::new(None),
             instance: Arc::downgrade(self),
         });
         state.sessions.insert(id.clone(), session.clone());
@@ -1017,7 +1022,17 @@ impl AnalysisSession {
         }
         self.run_with_timeout(&format!("USE {alias}"), Duration::from_secs(5))
             .map(|_| ())
-            .map_err(|error| format!("切主源到 {alias} 失败：{error}"))
+            .map_err(|error| format!("切主源到 {alias} 失败：{error}"))?;
+        // 切成功才记：失败时主源没变，记下来会让面板把小标写错
+        if let Ok(mut primary) = self.primary.lock() {
+            *primary = Some(alias.to_string());
+        }
+        Ok(())
+    }
+
+    /// 本会话当前的主源别名（纯内存读；没切过就是 `None`）。
+    pub fn primary_alias(&self) -> Option<String> {
+        self.primary.lock().ok().and_then(|slot| slot.clone())
     }
 
     fn close(&self) {

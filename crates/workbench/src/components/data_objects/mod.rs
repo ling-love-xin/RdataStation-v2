@@ -501,13 +501,9 @@ impl Collected {
 pub fn objects(collected: &Collected) -> Vec<Object> {
     let mut out = Vec::new();
 
-    // 登记侧的三把索引：按连接 id / 别名 / 本体路径各要一眼能查。
+    // 登记侧的两把索引：按别名 / 本体路径各要一眼能查。
     // 只读借用，不克隆行——每次刷新都要过一遍，几百条时不值得复制。
-    let registered_conns: Vec<&str> = collected
-        .registered_sources
-        .iter()
-        .filter_map(|row| row.connection_id.as_deref())
-        .collect();
+    // （按连接 id 的那把在源段收口后已无消费方，2026-11-26 随告警清掉。）
     let registered_aliases: Vec<&str> = collected
         .registered_sources
         .iter()
@@ -1558,39 +1554,52 @@ pub fn collect(shared: &Shared) -> Collected {
     let result_sets = engine::analysis::result_set::list_result_sets().unwrap_or_default();
     let loaded_tables = engine::analysis::result_set::list_loaded_tables().unwrap_or_default();
     let insight_samples = engine::analysis::result_set::list_insight_samples().unwrap_or_default();
-    // 联邦会话：一次拿全（面板不知道 owner 是谁，`owners()` 正是为这种调用准备的）
-    let session_sources = engine::duckdb::federation::session::owners()
-        .into_iter()
-        .flat_map(|(owner, snapshot)| {
-            let primary = snapshot.primary.clone();
-            snapshot.sources.into_iter().map(move |mounted| {
-                let alias = mounted.alias().to_string();
-                let (note, failed) = match &mounted.state {
-                    engine::duckdb::federation::registry::MountState::Ready { tables } => (
-                        format!(
-                            "{} 张表 · {}",
-                            tables,
-                            if primary.as_deref() == Some(alias.as_str()) {
-                                "主源"
-                            } else {
-                                "已挂载"
-                            }
-                        ),
-                        None,
-                    ),
-                    engine::duckdb::federation::registry::MountState::Failed(reason) => {
-                        (String::new(), Some(reason.clone()))
-                    }
-                };
-                SessionSource {
-                    owner: owner.clone(),
-                    alias,
-                    note,
-                    failed,
+    // 联邦源：直接读**分析实例上的会话**（2026-11-26 单实例收口）。
+    //
+    // 以前读 `federation::session::owners()` 那份门面缓存，但它已经没有生产写入通道
+    // （`kernel::open` 只开实例会话 + `mount_sources`），面板因此永远看不到挂上的源。
+    // 现在按 `label == "联邦"` 认会话、逐会话取挂载快照；主源来自 `use_catalog` 的记录。
+    let session_sources = engine::duckdb::instance::current()
+        .map(|instance| {
+            let mut rows = Vec::new();
+            for info in instance.sessions() {
+                if info.label != "联邦" {
+                    continue;
                 }
-            })
+                let Some(session) = instance.session(&info.id) else {
+                    continue;
+                };
+                let primary = session.primary_alias();
+                for mounted in session.mounted_sources() {
+                    let alias = mounted.alias().to_string();
+                    let (note, failed) = match &mounted.state {
+                        engine::duckdb::federation::registry::MountState::Ready { tables } => (
+                            format!(
+                                "{} 张表 · {}",
+                                tables,
+                                if primary.as_deref() == Some(alias.as_str()) {
+                                    "主源"
+                                } else {
+                                    "已挂载"
+                                }
+                            ),
+                            None,
+                        ),
+                        engine::duckdb::federation::registry::MountState::Failed(reason) => {
+                            (String::new(), Some(reason.clone()))
+                        }
+                    };
+                    rows.push(SessionSource {
+                        owner: info.owner.clone(),
+                        alias,
+                        note,
+                        failed,
+                    });
+                }
+            }
+            rows
         })
-        .collect();
+        .unwrap_or_default();
 
     // 挂在分析实例上的源连接：树根写**实际别名**（冲突让位后可能是 `rds_src_2`），
     // 连接名进 note。用户要认「这是哪条连接」，但树根必须与 `duckdb_databases()`
