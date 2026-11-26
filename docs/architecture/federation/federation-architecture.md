@@ -146,14 +146,14 @@ L1 / L2 scanner 与 L3 桥。**不做**。
 | 模块入口与硬约束 | `crates/engine/src/duckdb/federation/mod.rs` |
 | D1 只读 / D3 主源 / D5 资源 / D6 部分可用 | `.../federation/session.rs`（✅ 第一期） |
 | D3 别名与重名检测 / 源清单快照 | `.../federation/registry.rs`（✅ 第一期） |
-| D12 会话缓存 / 指纹 / 按源刷新 | `.../federation/session.rs`（✅ `ensure_session` / `refresh_all` / `set_primary`） |
+| D12 会话真值 / 按 owner 复用 / 按源刷新 | `.../federation/session.rs`（✅ `session_for` → 分析实例 `session_for_owner`；`refresh_all` / `set_primary`；2026-11-26 起**不再自持会话缓存**，`FederatedSession` 只是实例会话上的薄适配） |
 | D11 凭据与脱敏 | `crates/engine/src/duckdb/accel.rs`（`AccelSource::new` / `scrub_credentials`）+ `crates/engine/tests/federation_credentials_probe.rs` |
 | D14 L2 挂载差异（Secret / 无只读 / 两段名） | `.../federation/registry.rs`（`SourceSecret` + `oracle_secret_from_url`）+ `.../federation/session.rs`（`ensure_secret` / `attach_source` / `l2_write_refusal`，✅ T3.2）+ 扩展仓库选择 `accel::install_sql` + 真机验收 `crates/workbench/tests/oracle_federation.rs`（✅） |
 | D13 门控口径 | `crates/workbench/src/services/editor_channels.rs`（`federated_availability`） |
 | D15 源登记（复用开关） | `crates/connection_dialog/src/components/connection_dialog/render.rs`（「DuckDB 直连（本地加速 / 用作联邦源）」分组） |
-| D16 从记录组装源 | `crates/workbench/src/services/editor_exec.rs`（`federated_plan` / `plan_from_records`）+ `accel::normalize_scheme`（驱动 id → 扫描器 scheme） |
+| D16 从记录组装源 | `crates/editor/src/ports/editor_exec/federation.rs`（`federated_plan` / `plan_from_records`）+ `accel::normalize_scheme`（驱动 id → 扫描器 scheme） |
 | 源清单（数据 / 菜单模型 / 视图 / 动作） | `crates/editor/src/sources.rs` + `editor/view/host.rs`（`render_sources_picker`）+ `workbench/src/services/editor_sources.rs` + `editor/src/execution.rs`（`SourceAction` / `SourceNote`） |
-| 联邦档执行路径 / 源清单组装 | `crates/workbench/src/services/editor_exec.rs`（`federated_plan` / `run_on_federation`） |
+| 联邦档执行路径 / 源清单组装 | `crates/editor/src/ports/editor_exec/federation.rs`（`federated_plan` / `run_on_federation`） |
 | 历史带参与源 | `crates/engine/src/persistence/history_store.rs`（`sources`）+ `crates/editor/src/history.rs`（`sources_text`） |
 | D7 下推与上限 / L3 | `.../federation/bridge.rs`（🟡 第二期） |
 | D4 扩展显式管理 | `crates/engine/src/duckdb/accel.rs`（清单与 `install_sql`）+ 探针 `tests/duckdb_extensions_probe.rs` |

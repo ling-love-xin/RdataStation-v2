@@ -48,10 +48,14 @@
      为空）但已在项目分析源表登记：不给挂载（永远挂不上），**只在该连接于导航栏是活连接时可展开选表**
      （选中的表靠右键「载入临时表 / 项目归档」进 DuckDB，产物是表段行，不是 catalog）；
      以及**`reg:<id>`**——登记指向的连接已不在清单里，仍出一行「未挂载 · 项目级」备查。
-   - **挂载事实只认联邦/分析会话**：加速会话（`rds_src`，一次一个库）不算「已挂载」，
-     也不产生源段行（第 42 条末段）。
-   - 挂载的入口按 `mount_kind` 分三条：联邦直查 `federation::session::ensure_session`、
-     本地加速 `accel::ensure_session`、数据库文件 `file_view::load_database_as` / `load_database_global`；
+   - **挂载事实只认分析实例**（2026-11-26 定）：判据是 `duckdb_databases()` 里那个 catalog 在不在，
+     而会话本身只有一份真值——`AnalysisInstance` 里按 owner 存（`session_for_owner` / `ensure_session`），
+     面板与执行器读的是同一个（旧 `SESSIONS` 门面缓存已退役，见 `analysis-instance-sessions.md` §7）。
+     联邦与文件库各占一个 catalog、出行；**加速档（`rds_src`）是执行通道，不出行**（有且只有一个对象），
+     它只让连接行写「已挂载」。
+   - 挂载入口（2026-11-26 统一到实例）：联邦 = `instance.ensure_session(owner, "联邦")` 后调
+     返回的 `AnalysisSession::mount_sources`；本地加速 = `accel::ensure_on_instance`；数据库文件 =
+     `file_view::load_database_as` / `load_database_global`。
      卸载 = `USE memory` → `DETACH`（默认 catalog 指向该别名时必须先 `USE memory`）。
      **workbench 侧的网络连接挂载入口 2026-11-25 补齐**（`data_objects_load::mount_network_source`
      / `unmount_network_source`，右键「挂载 / 卸载」），第 37 条记的「`ensure_session` 零调用」缺口已关；
@@ -69,12 +73,16 @@
      「能连上 ≠ 已 ATTACH」那类误报的来源；挂上之后该路径由别名行代表，不再单出一行「文件库」。
 5. 加源 = 对分析实例做外部追加。只接三类：库表（标记所属连接）、能直接读的文件（外部 / 草稿）、数据库文件。
 6. 加源两档 scope：**项目级**（写进项目配置，重开自动重挂）、**会话级**（只活本次，切项目清）。UI 必须显式让用户选。
-   - 库表：两档是同一件事 —— 把所属连接标记成联邦源（`set_use_duckdb_fed` 按项目存，本身就是项目级）。
+   - 库表：`use_duckdb_fed` 不是「选表意图」而是**能力 / 加速开关**（三态，见第 42 条）：
+     有值 = 这条连接可被 DuckDB 直连、必须在 `analysis_sources` 里有一行（**有值即登记**，
+     `data_objects_load::ensure_registration` 幂等写入，2026-11-26）；`Some(true)` 再额外表示已开本地加速。
+     登记行是项目级 scope 的载体（切项目还在），与运行态的「挂了没挂」是两件事。
    - 文件：**会话级 = `f_*` 按需视图**（切项目清）；**项目级 = 归档成 `copy` 快照**（生成资产、跟着项目走、只读带版本）。
      **源清单不归资源模块**（2026-11-25 更正事实）：资源模块只有**文件 / 分析库表**两档
      （`analytics_resource/src/model/kind.rs:45` 的 `ArchiveKind::{File, AnalyticsTable}`，外加一个
      不写入的兼容档 `TableRef`），**没有「源」这一类**；全仓也没有第二处持有源清单（连接清单在
-     `store` 的 `connections` + 导航视图，`use_duckdb_fed` 只是一个按项目存的布尔）。
+     `store` 的 `connections` + 导航视图，`use_duckdb_fed` 只是按项目存的三态开关
+     （`Option<bool>`：`None` 不可直连 / `Some(false)` 可直连未加速 / `Some(true)` 已开加速）。
      源清单 2026-11-25 起落在项目库 `analysis_sources`（规格见 `analysis-sources-spec.md`）——
      这是**第一次落地**，不是「再造一份」。
 7. 凭据只引用既有连接，源配置里不另存；缺扩展（httpfs 等）给「去插件管理」的路，禁止静默失败。
@@ -267,11 +275,13 @@
     - 理由：源行是"源的开关"，一进一出必须一眼可做；叶子行是"选数据"，动作多且低频，
       行尾按钮要么挤名字、要么变成第二套交互。源段已是三层树（第 4 条），每层 `TREE_INDENT`
       再加 14px，窄面板（`RowTier::DropChannelAndPill`，< 318px）下名字只剩 120px 上下。
-    - **加速会话不触发数据对象面板**（2026-11-25 用户口径）：加速是"一条 ATTACH + 固定
-      catalog `rds_src`、一次一个库"，只在执行面存在；它不产生源段行、不进 `analysis_sources`，
-      也不算源行的「已挂载」事实。
-    - 现状要改掉的两处：`data_objects_tab.rs:2386-2399` 的 `data-object-srctable-pick-<key>`
-      （「选用 / 已选」）要删；`objects()` 里的 `accel:` 行（`data_objects/mod.rs`）要删。
+    - **加速档不触发源段行，但不再是「不存在」**（2026-11-26 更正）：加速是"一条 ATTACH + 固定
+      catalog `rds_src`、一次一个库"，只在执行面存在，**不产生源段行**；但 `use_duckdb_fed` 有值的连接
+      **必须**在 `analysis_sources` 里有一行（有值即登记），且加速档挂上后连接行写「已挂载」
+      （判据是 `instance.mounted_conns()`）。旧口径「不进 `analysis_sources`、不算已挂载」自本轮废止。
+    - **已完成（2026-11-26）**：源段叶子的 `data-object-srctable-pick-<key>`（「选用 / 已选」）已删；
+      `objects()` 的 `accel:` 行与 `SourceRef::Accel` 死分支已删（刀 4，`eec47963`）。
+      表段行上给 `can_pick()` 对象的 `data-object-pick-<key>`（`toggle_picked`）**不在此列**，仍保留。
 
 ---
 
@@ -288,10 +298,16 @@
 
 | 事项 | 口径 | 缺口 |
 |---|---|---|
-| 网络连接行的「挂载」入口 | 第 4 条：未挂载的源行只给「挂载」（入口在右键）；第 37 条：挂载属生产面 | `crates/workbench` 里没有任何**创建加速会话**的代码——`accel::ensure_session` 只在 `crates/editor` 的加速档执行路径上调，导航栏也没有这条路。所以网络连接在源段今天只能靠自己被带起来：行上写「未挂载」、不能展开，用户得先在编辑器加速档跑一次查询（会话一出现，行就跟着变可展开）。文件库那条路不受影响（右键「挂载 / 卸载」已落地）。 |
+| （暂无；原「网络连接行的挂载入口」已清，见下方「已清」清单） | — | — |
 
-已清两条：① 源段连接行叶子改分析实例视角（`cbb6279c`）；② 取数方式小标 → 撤掉口径
-（两个轴是动作语义、不落行，见第 34 条后段）。
+已清四条：
+① 源段连接行叶子改分析实例视角（`cbb6279c`）；
+② 取数方式小标 → 撤掉口径（两个轴是动作语义、不落行，见第 34 条后段）；
+③ 网络连接行的「挂载」入口（原缺口写「workbench 无创建加速会话的代码」）：2026-11-25 起
+`data_objects_load::{mount_network_source,unmount_network_source}` 已落地，挂载走
+`accel::ensure_on_instance`（落分析实例，不再自建会话）；
+④ 源段 `accel:` 行与 `SourceRef::Accel` / `rank()` 的加速档 / load、archive、kids 三处 `Accel`
+分支（刀 4，`eec47963`）。
 
 ## 变更记录
 
@@ -417,4 +433,12 @@
   源清单归项目库 `analysis_sources`（规格 `analysis-sources-spec.md`）；③ 第 37 条「扁平」措辞
   改为「别名 → schema → 表 / 视图」，并写明不共用导航实体（`NavView` / `NavHost` 不碰）；
   ④ 新增第 42 条：源段叶子行右侧不摆按钮，选中 / 归档 / 载入 / 洞察 / 属性一律右键。
+- 2026-11-26（三态 + 会话真值收口）：
+  ① `use_duckdb_fed` 从布尔改**三态**（`Option<bool>`：`None` 不可直连 / `false` 可直连未加速 /
+  `true` 已开加速），「有值即登记」——`Some(_)` 的连接必须在 `analysis_sources` 里有一行（幂等，`ensure_registration`）；
+  ② 挂载事实与「挂不挂得上」彻底分开：登记是项目级意图（切项目还在），挂载是运行态事实（切项目清）；
+  ③ 加速档**不占源段行**，但加速档挂上后连接行写「已挂载」、且照样登记（旧「不进 `analysis_sources`」废止）；
+  ④ 会话只有一份真值（`AnalysisInstance` 按 owner 存），旧 `SESSIONS` 门面缓存退役；面板、载入 / 归档、
+  编辑器源清单、补全全部改读实例（刀 1 / 2a / 2b，`186bfc9c` / `20e1a6df` / `5c40015`）；
+  ⑤ 第 42 条的两处「现状要改掉」已清（`accel:` 行 + `SourceRef::Accel` 死分支，`eec47963`）。
 

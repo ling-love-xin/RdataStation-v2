@@ -45,6 +45,8 @@
 「源」的判定不再靠单一来源，而是**意图 ∩ 事实**：
 
 - **意图（持久，项目级）**：项目库 `.RSmeta/project.db` 的 `analysis_sources` 表。
+- **能力（连接级开关）**：连接上的 `use_duckdb_fed`（三态，`Option<bool>`）。有值 = 可被 DuckDB
+  直连，就该在本表有一行（**有值即登记**，§7.1）；`None` = 不可直连、不登记。
 - **事实（运行态）**：进程 DuckDB 的 `duckdb_databases()`。
   已用过的列只有 `database_name`、`type`：
   `engine/src/analysis/global.rs:112`（按 `database_name` 核对）、
@@ -58,8 +60,10 @@ SELECT database_name, type FROM duckdb_databases();
 
 ## 4. 表结构
 
-新增迁移：`crates/store/migrations/project_meta/034_analysis_sources.sql`
-（现有同类：`033_network_two_layer.sql`；风格对齐 TEXT 主键 + `TIMESTAMP DEFAULT CURRENT_TIMESTAMP`）。
+迁移已落地：`crates/store/migrations/project_meta/034_analysis_sources.sql`（建表）+
+`035_analysis_sources_alias_domain.sql`（把 `alias` 唯一性**按档位分域**：`mount_kind <> 'accel'`
+才唯一，加速档的 alias 只是展示名，两条加速源都叫 `rds_src` 也能并存）。
+（同批风格对齐 `033_network_two_layer.sql`：TEXT 主键 + `TIMESTAMP DEFAULT CURRENT_TIMESTAMP`。）
 
 ```sql
 -- 迁移版本：034
@@ -129,9 +133,10 @@ CREATE INDEX IF NOT EXISTS idx_analysis_sources_kind ON analysis_sources(kind);
   是否把 `SOURCE_ALIAS` 改成按源别名，属于 engine 的改动，**本规格不做**，列入 §12 待确认。
 
 改名成本：DuckDB 没有 `ALTER DATABASE … RENAME`，改别名 = `DETACH` + `ATTACH`。
-现成入口：`federation::session::set_primary(owner, alias)`（`session.rs:720`）、
-`file_view::load_database_as`（内部先 `USE memory; DETACH`，`file_view.rs:182-184`）、
-`accel` 侧需 `drop_session` + `ensure_session` 重挂（`accel.rs:745` / `:520`）。
+现成入口：`federation::session::set_primary(owner, alias)`、
+`file_view::load_database_as`（内部先 `USE memory; DETACH`）、
+`accel` 侧需 `drop_session(conn_id)` + `ensure_on_instance(&AccelSource)` 重挂
+（2026-11-26 起加速档落在分析实例，不再自建会话）。
 **已挂载状态下改别名必须提示"正在跑的查询会断"。**
 
 文件段的 `f_*` 视图名仍由 `file_view::alias_for(path)`（`file_view.rs:22`）派生，**不进本表**。
@@ -155,16 +160,34 @@ CREATE INDEX IF NOT EXISTS idx_analysis_sources_kind ON analysis_sources(kind);
 "注册标记"改成本表行）。不另造顶部提示条、不另造子组——一行一个源，动作就在右键里
 （第 42 条：行内不摆按钮）。
 
+### 7.1 能力开关与登记的关系（2026-11-26 定，取代"标记联邦源"的说法）
+
+`use_duckdb_fed` **不是选表意图，也不是"联邦标记"**，它是**能力 / 加速开关**，三态：
+
+| 值 | 含义 | 与登记的关系 |
+|---|---|---|
+| `None` / 无值 | 该驱动不支持 DuckDB 直连 | 不登记；源段不出行 |
+| `Some(false)` | 可直连，但没开本地加速 | **必须登记**（有值即登记）；源段出行，可作联邦源 |
+| `Some(true)` | 可直连，且已开本地加速（`rds_src`） | **必须登记**；源段**不出加速行**，连接行写「已挂载」 |
+
+- 「有值即登记」由 `data_objects_load::ensure_registration` 幂等保证（已存在不重复插，
+  避免两个入口各写一行、别名被挤成 `shop_2`）；面板「加源」路径在开关翻开成功后同步调用。
+- 登记表达的是**项目级意图**（切项目还在）；挂载是**运行态事实**（切项目清）。
+  两者不合并成一步，也不互相替代——「未挂载 · 项目级」这一格正是二者之差。
+- 三条执行通道（源库直连 / 本地加速 / 联邦）与 `use_duckdb_fed` 的关系：
+  源库直连不需要开关；本地加速要 `Some(true)`；联邦要**至少两个**有值且可挂的连接。
+
 ## 8. 挂载 / 卸载 / 列举的入口映射
 
 | `mount_kind` | 挂载 | 卸载 | 列举表 / 视图（叶子来源） |
 |---|---|---|---|
-| `federation` | `federation::session::ensure_session(...)`（`session.rs:631`） | `drop_session(owner)`（`:700`） | `list_tables_for(owner, alias)`（`:765`） |
-| `accel` | `accel::ensure_session(&AccelSource)`（`accel.rs:520`） | `drop_session(conn_id)`（`:745`） | `list_tables_for(conn_id)`（`:735`） |
-| `attach_file` | `file_view::load_database_as(conn, path, alias)`（`:164`）/ `load_database_global`（`:206`） | `USE memory; DETACH "<alias>"`（`file_view.rs:182`；`accel.rs:440` 同一处踩坑记录：默认 catalog 指向该别名时必须先 `USE memory`） | 按 `database_name` 过滤 `duckdb_tables()/duckdb_views()`（`file_view.rs:237` 同口径） |
+| `federation` | `instance.ensure_session(owner, "联邦")` → 返回的 `AnalysisSession::mount_sources(&sources)`（会话真值只有一份，见 `analysis-instance-sessions.md`） | `instance.close_session(id)` / `federation::session::drop_session(owner)` | `federation::session::list_tables_for(owner, alias)` |
+| `accel` | `accel::ensure_on_instance(&AccelSource)`（落分析实例，别名固定 `rds_src`） | `accel::drop_session(conn_id)` | `instance.list_mounted_tables_for_conn(conn_id)` |
+| `attach_file` | `file_view::load_database_as(conn, path, alias)` / `load_database_global` | `USE memory; DETACH "<alias>"`（默认 catalog 指向该别名时必须先 `USE memory`） | 按 `database_name` 过滤 `duckdb_tables()/duckdb_views()` |
 
-铁律第 37 条已定的现行缺口仍在：**网络连接行缺「挂载」入口**（`crates/workbench` 里没有任何
-`accel::ensure_session` 调用）。本规格落地时这条一并补上——"未挂载"行的动作就是它。
+> 2026-11-26 更正：旧表里的 `federation::session::ensure_session` / `accel::ensure_session`
+> 已不存在（前者改由分析实例拥有会话，后者改名 `ensure_on_instance`）。
+> 铁律第 37 条原记的「网络连接行缺挂载入口」缺口也已关闭，见下。
 
 > 2026-11-25 已补齐：`components/data_objects_load.rs` 的 `mount_network_source` /
 > `unmount_network_source`（凭据取法与 `editor/src/ports/editor_exec/conn.rs::accel_source`
@@ -220,7 +243,9 @@ CREATE INDEX IF NOT EXISTS idx_analysis_sources_kind ON analysis_sources(kind);
 - **没有"源"这一类**。
 
 而且全仓没有任何模块持有"源清单"：连接清单在 `store` 的 `connections` 表 + 导航视图；
-联邦标记是 `use_duckdb_fed`（按项目存的一个布尔），不是清单。
+`use_duckdb_fed` 是连接上的**三态能力 / 加速开关**（`Option<bool>`，按项目存），
+它决定"能不能被直连 / 开没开加速"，本身也不是清单——但**有值即登记**（§7.1），
+清单仍只有 `analysis_sources` 一处。
 
 **推论**：新建 `analysis_sources` 不是"造第二份真相"，而是**第一次把源清单落地**。
 第 55 条那句要改成事实陈述：「资源模块只有 文件 / 分析库表 两档，不涉源；源清单归
@@ -282,3 +307,5 @@ CREATE INDEX IF NOT EXISTS idx_analysis_sources_kind ON analysis_sources(kind);
 | 2026-11-25 | 初稿：源 = 登记 ∩ `duckdb_databases()`；`analysis_sources` 只存项目级；别名复用 `registry` 三函数；列出铁律第 4 / 37 / 55 条改法 |
 | 2026-11-25 | 用户批准三处改法并补一条：源段表/视图叶子行右侧不摆按钮、动作走右键（铁律第 42 条）。铁律已同步，规格 §9 / §7 跟着改。另更正前稿把"第 55 行"写成"第 55 条"——铁律只有 1–42 条，那句话是第 6 条的子句 |
 | 2026-11-25 | 落地三段：①`analysis_sources` 登记表 + `data_objects` 三态对账（含「已连接 / 未挂 / 未登记 = 未挂载（不带 scope）」与「登记了但连接不在清单里照样出一行」）；②源段三级树 + 叶子右键化（第 42 条）；③右键「挂载 / 卸载」接上 `accel::ensure_session` / `drop_session`，登记 / 移除登记为独立菜单项——§8 记的缺口关闭。测试：workbench `data_objects` 49 passed、store `analysis_sources` 9 passed、`ui_contract` 10 passed |
+| 2026-11-25 | 落地三段：①`analysis_sources` 登记表 + `data_objects` 三态对账（含「已连接 / 未挂 / 未登记 = 未挂载（不带 scope）」与「登记了但连接不在清单里照样出一行」）；②源段三级树 + 叶子右键化（第 42 条）；③右键「挂载 / 卸载」接上 `accel::ensure_session` / `drop_session`，登记 / 移除登记为独立菜单项——§8 记的缺口关闭。测试：workbench `data_objects` 49 passed、store `analysis_sources` 9 passed、`ui_contract` 10 passed |
+| 2026-11-26 | 三态收口（用户拍板）：① `use_duckdb_fed` = 能力 / 加速开关（`None` / `false` / `true`），**有值即登记**；② 修正"联邦标记"说法（§7.1 / §10.2）；③ §8 入口映射的旧 API 名更正（`federation::session::ensure_session` → `instance.ensure_session` + `mount_sources`；`accel::ensure_session` → `accel::ensure_on_instance`）；④ 迁移 034 + 035 记为已落地；⑤ 加速档不占源段行（`accel:` 行与 `SourceRef::Accel` 已删，`eec47963`） |
