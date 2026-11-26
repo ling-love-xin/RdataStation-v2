@@ -30,7 +30,6 @@ pub fn open_archive_dialog_with(
         name,
         alias,
         tags,
-        keep_versions,
         group_id,
         mode,
         assertion_metric,
@@ -53,7 +52,6 @@ pub fn open_archive_dialog_with(
         let name = name.clone();
         let alias = alias.clone();
         let tags = tags.clone();
-        let keep_versions = keep_versions.clone();
         let group_id = group_id.clone();
         let mode = mode.clone();
         let assertion_metric = assertion_metric.clone();
@@ -66,7 +64,6 @@ pub fn open_archive_dialog_with(
                 name: name.clone(),
                 alias: alias.clone(),
                 tags: tags.clone(),
-                keep_versions: keep_versions.clone(),
                 group_id: group_id.clone(),
                 mode: mode.clone(),
                 assertion_metric: assertion_metric.clone(),
@@ -87,14 +84,6 @@ pub fn open_archive_dialog_with(
         let theme = cx.theme();
         // 提示每帧从当前值推导：用户改回去，提示自然消失（无标志位可残留）。
         let name_hint = name_hint(&name.read(cx).value());
-        let keep = parse_keep_versions(&keep_versions.read(cx).value());
-        let keep_hint = keep.err();
-        // 写了 `-1` 时把它的含义摆出来：这是个哨兵值，不说明就等于让用户猜。
-        let keep_note = match keep {
-            Ok(Some(KeepVersions::All)) => Some("全部保留：不裁剪任何历史内容副本".to_string()),
-            Ok(Some(keep)) => Some(format!("本次归档：{}", keep.label())),
-            _ => None,
-        };
         // builder 是 `Fn`（每帧重建）：两条提交路径各拿一份**本帧的**副本——
         // 内层 `move` 闭包只能拿走副本，外层不能再持有它们（否则 builder 就不是 `Fn` 了）。
         let submit_for_button = submit.clone();
@@ -129,14 +118,6 @@ pub fn open_archive_dialog_with(
             })
             .child(field_label(theme, "标签"))
             .child(Input::new(&tags))
-            .child(field_label(theme, "保留历史内容"))
-            .child(Input::new(&keep_versions))
-            .when_some(keep_hint, |this, hint| {
-                this.child(hint_line(hint, theme.colors.danger))
-            })
-            .when_some(keep_note, |this, note| {
-                this.child(hint_line(&note, theme.colors.muted_foreground))
-            })
             // 业务断言（选填）：默认空、不打断归档；填了才进资产履历与语义检索。
             .child(
                 div()

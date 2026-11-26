@@ -28,7 +28,7 @@ fn probe_analysis_facts(path: &std::path::Path) -> Result<AnalysisFacts, String>
 }
 
 pub(crate) async fn run_archive(job: &ArchiveJob) -> OpOutcome {
-    let service = match open_service(job.project_root.clone(), Some(job.keep_versions)).await {
+    let service = match open_service(job.project_root.clone()).await {
         Ok(service) => service,
         Err(reason) => {
             return OpOutcome::Failed {
@@ -230,7 +230,7 @@ async fn run_archive_with_service(job: &ArchiveJob, service: &ArchiveService) ->
 /// 落点在动文件**之前**定死（重名避让），回执里给的就是真实路径：用户看到"取回为 X"
 /// 之后去草稿箱找 X，必须找得到。
 pub(crate) async fn run_checkout(job: &CheckoutJob) -> OpOutcome {
-    let service = match open_service(job.project_root.clone(), None).await {
+    let service = match open_service(job.project_root.clone()).await {
         Ok(service) => service,
         Err(reason) => {
             return OpOutcome::Failed {
@@ -292,7 +292,7 @@ async fn run_checkout_with_service(job: &CheckoutJob, service: &ArchiveService) 
 
 /// 执行一次撤销归档。
 pub(crate) async fn run_undo(job: &UndoJob) -> OpOutcome {
-    let service = match open_service(job.project_root.clone(), None).await {
+    let service = match open_service(job.project_root.clone()).await {
         Ok(service) => service,
         Err(reason) => {
             return OpOutcome::Failed {
@@ -317,7 +317,7 @@ pub(crate) async fn run_undo(job: &UndoJob) -> OpOutcome {
 /// 逐条走服务层；服务层不做预回滚（部分成功就部分成功），所以错误文案里会带“已移入 N 项”
 /// ——宿主只需原样转述，不要自己算进度。
 pub(crate) async fn run_trash(job: &TrashJob) -> OpOutcome {
-    let service = match open_service(job.project_root.clone(), None).await {
+    let service = match open_service(job.project_root.clone()).await {
         Ok(service) => service,
         Err(reason) => {
             return OpOutcome::Failed {

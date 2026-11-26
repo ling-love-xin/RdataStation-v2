@@ -5,7 +5,7 @@
 //! - `model`：领域语义类型（存档种类 / 本体状态 / 归档凭证 / 业务断言 / 效力 / 履历事件）
 //! - `store`：索引层（`project.db` 的登记读写：`resource` / `folder` / `tag` / `version`
 //!   / `timeline` / `semantics` / `refs`）
-//! - `payload`：本体层（`resources/` 受管文件、只读守卫、内容指纹、历史副本、暂存替换）
+//! - `payload`：本体层（CAS 内容寻址存储、manifest、只读守卫、内容指纹、暂存替换）
 //! - `service`：归档服务（归档 / 取回 / 再归档编排 + 变更事件 + 履历埋点）
 //! - `indexer`：索引修复（本体与登记表的三类差异：扫描只报告，修复要人工确认）
 //! - `resource_view` / `detail_view` / `dialogs`：视图层（面板 / 详情 / 对话框；都不自己取数）

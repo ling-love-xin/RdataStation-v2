@@ -5,7 +5,7 @@ use crate::model::TimelineEventKind;
 
 #[tokio::test]
 async fn t140_first_archive_writes_row_and_event_in_one_shot() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
     let outcome = service
         .archive(archive_req(&draft, "reports/dau.sql", None))
@@ -38,7 +38,7 @@ async fn t140_first_archive_writes_row_and_event_in_one_shot() {
 
 #[tokio::test]
 async fn t141_registry_rolls_back_when_event_write_fails() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
 
     // 故障注入：拆掉事件表，让事务里的第二条 INSERT 失败。
@@ -77,7 +77,7 @@ async fn t141_registry_rolls_back_when_event_write_fails() {
 
 #[tokio::test]
 async fn t142_rearchive_commits_index_and_payload_consistently() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let first = write_draft(&dir, "v1.sql", b"select 1;").await;
     let outcome = service
         .archive(archive_req(&first, "reports/dau.sql", None))

@@ -187,7 +187,6 @@ fn is_structured_payload(path: &std::path::Path) -> bool {
 /// 提交一次归档（入队 + 立刻刷新 + 回执）：两条归档入口共用，
 /// 避免"一处记得刷新、另一处忘了"。
 ///
-/// 保留策略在这里（主线程）读好随作业带入：工作线程上拿不到 GPUI 的 global 设置。
 fn submit_archive(
     root: &Path,
     read_only: bool,
@@ -196,14 +195,12 @@ fn submit_archive(
     backend: &Rc<dyn ResourceHostBackend>,
     cx: &mut App,
 ) {
-    let keep_versions = backend.keep_versions(cx);
     // 探测标志跟着**来源**走：结构化数据文件才值得连一次 DuckDB（其余文件的指纹是字节 sha256）。
     let analysis_probe = request.analysis.is_none() && is_structured_payload(&request.source_path);
     resource_jobs::enqueue_archive(
         root.to_path_buf(),
         read_only,
         request,
-        keep_versions,
         analysis_probe,
         assertion,
     );

@@ -39,8 +39,6 @@ pub struct ArchiveRequest {
     pub tags: Vec<String>,
     /// 归入分组（可空）。
     pub group_id: Option<String>,
-    /// 历史内容保留策略；`None` = 跟随设置默认（架构 §5.2）。
-    pub keep_versions: Option<KeepVersions>,
     /// 再归档时由上游带回的来源存档 id（取回后改完再归档，见架构 §6.4）。
     ///
     /// `None` = 首次归档（新存档）；`Some` 时命中已有存档：内容指纹未变则不产生新版本。

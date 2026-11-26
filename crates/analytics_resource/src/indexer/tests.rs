@@ -40,7 +40,6 @@ fn request(source: &std::path::Path, rel: &str) -> ArchiveRequest {
         binding: ArchiveBinding::default(),
         tags: Vec::new(),
         group_id: None,
-        keep_versions: None,
         existing_resource_id: None,
     }
 }

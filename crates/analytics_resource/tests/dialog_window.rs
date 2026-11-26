@@ -46,7 +46,7 @@ use rds_analytics_resource::dialogs::version::{
     VersionDialogSeed, VersionDialogState, VersionRow, open_version_dialog_with,
 };
 use rds_analytics_resource::resource_view::GroupOption;
-use rds_analytics_resource::{KeepVersions, PayloadMode};
+use rds_analytics_resource::PayloadMode;
 
 /// 窗口根：组件库的 `Root`（`open_dialog` 依赖它；0.7.1 起 dialog 层由 Root 自动挂载）。
 struct DialogHarness;
@@ -215,13 +215,12 @@ fn archive_dialog_opens_renders_and_validates(cx: &mut TestAppContext) {
     );
     assert!(cx.debug_bounds("archive-dialog-cancel").is_some());
 
-    // 预填生效：默认值直接可提交（显示名来自文件名，标签与保留份数留空 = 跟随设置）。
+    // 预填生效：默认值直接可提交（显示名来自文件名，标签留空）。
     let prefilled = cx
         .update(|_window, cx| submit_archive(&inputs_for_submit, cx))
         .expect("预填后的默认值应合法");
     assert_eq!(prefilled.name, "月报");
     assert!(prefilled.tags.is_empty());
-    assert_eq!(prefilled.keep_versions, None, "留空 = 跟随设置默认");
     assert_eq!(
         prefilled.payload_mode,
         PayloadMode::Copy,
@@ -241,7 +240,7 @@ fn archive_dialog_opens_renders_and_validates(cx: &mut TestAppContext) {
     );
     assert!(submitted.borrow().is_empty(), "校验不过时宿主不该被通知");
 
-    // 填好：拿到解析后的结果（标签去空去重、保留份数解析成数字、分组选项落成 id）。
+    // 填好：拿到解析后的结果（标签去空去重、分组选项落成 id）。
     cx.update(|window, cx| {
         inputs_for_submit
             .name
@@ -252,9 +251,6 @@ fn archive_dialog_opens_renders_and_validates(cx: &mut TestAppContext) {
         inputs_for_submit.tags.update(cx, |state, cx| {
             state.set_value(" 报表, 月度 ，报表 ", window, cx)
         });
-        inputs_for_submit
-            .keep_versions
-            .update(cx, |state, cx| state.set_value("3", window, cx));
         // 分组选择走下拉菜单（headless 下程序性写单元格，与渲染共用同一份状态）。
         *inputs_for_submit.group_id.borrow_mut() = Some("af_month".to_string());
         // 归档方式单选同一纪律：程序性切到引用，提交结果要带回选中的模式。
@@ -271,7 +267,6 @@ fn archive_dialog_opens_renders_and_validates(cx: &mut TestAppContext) {
         Some("af_month"),
         "选中的分组 id"
     );
-    assert_eq!(result.keep_versions, Some(KeepVersions::Keep(3)));
     assert_eq!(
         result.payload_mode,
         PayloadMode::Reference,
@@ -289,18 +284,6 @@ fn archive_dialog_opens_renders_and_validates(cx: &mut TestAppContext) {
             .expect("空白别名不影响通过")
             .alias,
         None
-    );
-
-    // 非法保留份数：挡住提交（提示由渲染期从同一个解析函数推出，不会两处不一致）。
-    cx.update(|window, cx| {
-        inputs_for_submit
-            .keep_versions
-            .update(cx, |state, cx| state.set_value("很多", window, cx));
-    });
-    assert!(
-        cx.update(|_window, cx| submit_archive(&inputs_for_submit, cx))
-            .is_none(),
-        "非数字不该通过"
     );
 }
 
@@ -404,7 +387,7 @@ fn version_seed() -> VersionDialogSeed {
         rows: vec![
             version_row(3, true, true),
             version_row(2, false, true),
-            // v1 的副本已被保留策略裁掉：它仍要列出来（行上标"副本缺失"）。
+            // v1 内容已按保留策略裁掉：它仍要列出来（行上标"内容已裁除"）。
             version_row(1, false, false),
         ],
         timeline: vec![],
@@ -457,7 +440,10 @@ fn version_dialog_lists_rows_and_shows_actions_after_selection(cx: &mut TestAppC
     draw(cx);
     assert!(cx.debug_bounds("version-restore").is_some());
     assert!(cx.debug_bounds("version-checkout").is_some());
-    assert!(cx.debug_bounds("version-delete-copy").is_some());
+    assert!(
+        cx.debug_bounds("version-delete-copy").is_none(),
+        "副本裁剪已随旧版本副本方案一起删掉"
+    );
 
     // 动作完成 → 宿主换一批行（还原把 v4 顶上来了，选中的 v2 不在新行里）：
     // 选中与动作栏一起退场（不能指向一个已经不在列表里的版本）。
@@ -507,7 +493,7 @@ fn version_dialog_offers_solidify_for_a_global_reference(cx: &mut TestAppContext
         cx.debug_bounds("version-solidify").is_some(),
         "全局引用的历史版本要能固化成本地表"
     );
-    // 引用资产没有本地副本：还原 / 取回 / 删副本都不该可用（按钮即使排版也置灰）。
+    // 引用资产没有可还原的本体：还原 / 取回按钮仍排版，但由行能力置灰。
     assert!(cx.debug_bounds("version-restore").is_some());
     assert!(cx.debug_bounds("version-checkout").is_some());
 }

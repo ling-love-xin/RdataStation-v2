@@ -40,7 +40,7 @@ use crate::preview::{self, Preview};
 use crate::resource_view::{ArchiveRow, GroupOption, ResourcesSnapshot};
 use crate::{
     AnalyticsResource, AnalyticsResourceStore, ArchiveKind, ArchiveService, ArchiveStatus,
-    ArchiveUndo, IndexIssue, IndexRepair, KeepVersions,
+    ArchiveUndo, IndexIssue, IndexRepair,
 };
 
 use archive::{

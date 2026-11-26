@@ -11,7 +11,7 @@
 use std::path::Path;
 
 use analytics_resource::model::{
-    ArchiveBinding, ArchiveKind, ArchiveRequest, KeepVersions, PayloadMode,
+    ArchiveBinding, ArchiveKind, ArchiveRequest, PayloadMode,
 };
 use gpui_kit::App;
 
@@ -160,8 +160,6 @@ pub fn archive_file_as_snapshot(shared: &Shared, path: &str, cx: &mut App) {
         shared.say_error("存快照：这个文件没有可用的文件名", cx);
         return;
     };
-    // 保留策略在主线程读好随闭包带入：worker 里拿不到 GPUI global 设置
-    let keep_versions = KeepVersions::from_setting(settings::SettingsService::keep_versions(cx));
     resource_jobs::enqueue_archive(
         root,
         false,
@@ -182,10 +180,8 @@ pub fn archive_file_as_snapshot(shared: &Shared, path: &str, cx: &mut App) {
             },
             tags: vec!["外部文件".to_string()],
             group_id: None,
-            keep_versions: None,
             existing_resource_id: None,
         },
-        keep_versions,
         // 与洞察导出一致：探结构（归档侧按扩展名走 `file_reader_function`）
         true,
         None,

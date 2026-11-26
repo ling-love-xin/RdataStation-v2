@@ -55,7 +55,7 @@ pub(crate) async fn load_index_report(job: &IndexScanJob) -> Result<IndexScanRow
 
 /// 执行一次索引修复动作（工作线程上执行）。
 pub(crate) async fn run_repair_action(job: &IndexRepairActionJob) -> OpOutcome {
-    let service = match open_service(job.project_root.clone(), None).await {
+    let service = match open_service(job.project_root.clone()).await {
         Ok(service) => service,
         Err(reason) => {
             return OpOutcome::Failed {

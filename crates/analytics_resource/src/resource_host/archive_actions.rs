@@ -25,8 +25,6 @@ pub(super) fn request_archive_from_drafts(host: &ResourceHost, window: &mut Wind
         root,
         host.known_groups(cx),
         host.default_group_for_archive(cx),
-        // 多选路径的保留策略按设置批带入（闭包外取值：闭包是 `'static`，不能捕获 `host`）。
-        host.backend.keep_versions(cx),
         host.backend.clone(),
         host.read_only(),
     );
@@ -97,7 +95,6 @@ pub(super) fn request_archive_drafts(
                     root,
                     known_groups,
                     default_group,
-                    host.backend.keep_versions(cx),
                     host.backend.clone(),
                     host.read_only(),
                 ),
@@ -122,7 +119,6 @@ fn pick_handler(
     root: PathBuf,
     known_groups: Vec<GroupOption>,
     default_group: Option<String>,
-    keep_versions: KeepVersions,
     backend: Rc<dyn ResourceHostBackend>,
     read_only: bool,
 ) -> impl Fn(Vec<DraftCandidate>, &mut Window, &mut App) + 'static {
@@ -140,7 +136,7 @@ fn pick_handler(
             cx,
         ),
         // 选多个：默认名 + 各自来源，逐个入队（列表里没有位置让用户逐个改名）。
-        many => archive_many(&root, many, keep_versions, &backend, read_only, cx),
+        many => archive_many(&root, many, &backend, read_only, cx),
     }
 }
 
@@ -171,7 +167,6 @@ fn draft_archive_request(
         },
         tags: result.tags,
         group_id: result.group_id,
-        keep_versions: result.keep_versions,
         existing_resource_id: None,
     }
 }
@@ -220,13 +215,11 @@ fn open_archive_for_draft(
 fn archive_many(
     root: &Path,
     many: &[DraftCandidate],
-    keep_versions: KeepVersions,
     backend: &Rc<dyn ResourceHostBackend>,
     read_only: bool,
     cx: &mut App,
 ) {
     let payload = PayloadStore::new(root.to_path_buf());
-    // 保留策略按设置批带入（多选路径没有逐个覆盖的输入框）。
     let mut renamed = 0usize;
     for draft in many {
         let resolved_rel = payload.free_rel_path(&draft.rel_path);
@@ -251,7 +244,6 @@ fn archive_many(
             },
             tags: inherited_tags,
             group_id: None,
-            keep_versions: None,
             existing_resource_id: None,
         };
         // 探测标志跟着**来源**走：结构化数据文件才值得连一次 DuckDB。
@@ -261,7 +253,6 @@ fn archive_many(
             root.to_path_buf(),
             read_only,
             request,
-            keep_versions,
             analysis_probe,
             None,
         );
@@ -337,7 +328,6 @@ pub(super) fn request_archive_from_file(host: &ResourceHost, window: &mut Window
             },
             tags: result.tags,
             group_id: result.group_id,
-            keep_versions: result.keep_versions,
             existing_resource_id: None,
         };
         submit_archive(&root, read_only, request, result.assertion.clone(), &backend, cx);
@@ -426,7 +416,6 @@ mod tests {
                 alias: Some("日活".to_string()),
                 tags: vec!["财务".to_string()],
                 group_id: Some("af_reports".to_string()),
-                keep_versions: Some(KeepVersions::Keep(3)),
                 payload_mode: PayloadMode::Copy,
                 assertion: None,
             },
@@ -438,7 +427,6 @@ mod tests {
         );
         assert_eq!(request.alias.as_deref(), Some("日活"));
         assert_eq!(request.tags, vec!["财务".to_string()]);
-        assert_eq!(request.keep_versions, Some(KeepVersions::Keep(3)));
         assert_eq!(request.payload_mode, PayloadMode::Copy);
         assert_eq!(request.rel_path, "reports/dau_report-2.sql", "用已避让的落点");
         assert_eq!(request.kind, ArchiveKind::File);
@@ -448,8 +436,7 @@ mod tests {
         );
     }
 
-    /// 「未分组」也是用户的选择（空 = 不归组），不能顺手补成默认分组；
-    /// 「保留历史内容」留空同理（= 跟随设置），不是拍一个数字。
+    /// 「未分组」也是用户的选择（空 = 不归组），不能顺手补成默认分组。
     #[test]
     fn draft_request_leaves_unset_fields_unset() {
         let draft = candidate(r"D:\p\scratchpad\a.sql", "a.sql");
@@ -462,13 +449,11 @@ mod tests {
                 alias: None,
                 tags: Vec::new(),
                 group_id: None,
-                keep_versions: None,
                 payload_mode: PayloadMode::Reference,
                 assertion: None,
             },
         );
         assert_eq!(request.group_id, None, "未分组就是不归组");
-        assert_eq!(request.keep_versions, None, "留空 = 跟随设置");
         assert_eq!(request.payload_mode, PayloadMode::Reference);
         assert_eq!(request.kind, ArchiveKind::File);
     }

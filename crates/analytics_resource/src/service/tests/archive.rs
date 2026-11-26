@@ -4,7 +4,7 @@ use super::*;
 
 #[tokio::test]
 async fn t101_archive_first_time_consumes_draft_and_writes_registry() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let mut events = service.subscribe();
     let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
 
@@ -74,7 +74,7 @@ async fn t101_archive_first_time_consumes_draft_and_writes_registry() {
 
 #[tokio::test]
 async fn t102_archive_refuses_occupied_target_and_keeps_source() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let first = write_draft(&dir, "a.sql", b"select 1;").await;
     service
         .archive(archive_req(&first, "same.sql", None))
@@ -98,7 +98,7 @@ async fn t102_archive_refuses_occupied_target_and_keeps_source() {
 
 #[tokio::test]
 async fn t103_archive_rolls_back_payload_when_index_write_fails() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
 
     // 故障注入：用触发器让"写索引"必然失败（比构造数据冲突更贴近真实失败路径）。
     {
@@ -133,7 +133,7 @@ async fn t103_archive_rolls_back_payload_when_index_write_fails() {
 
 #[tokio::test]
 async fn t105_rearchive_with_same_content_is_idempotent() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
     let first = service
         .archive(archive_req(&draft, "dau.sql", None))
@@ -175,7 +175,7 @@ async fn t105_rearchive_with_same_content_is_idempotent() {
 async fn t133_analysis_fingerprint_covers_definition_and_structure_only() {
     use crate::analysis::{AnalysisFacts, ColumnSpec};
 
-    let (service, dir) = test_service(5).await;
+    let (service, dir) = test_service().await;
     let draft = write_draft(
         &dir,
         "dau.csv",
@@ -276,7 +276,7 @@ async fn t133_analysis_fingerprint_covers_definition_and_structure_only() {
 
 #[tokio::test]
 async fn t106_rearchive_changed_content_bumps_version_and_consumes_copy() {
-    let (service, dir) = test_service(1).await;
+    let (service, dir) = test_service().await;
     let mut events = service.subscribe();
     let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
     let first = service
@@ -358,60 +358,12 @@ async fn t106_rearchive_changed_content_bumps_version_and_consumes_copy() {
     let _ = fs::remove_dir_all(&dir).await;
 }
 
-/// 文件资产不再受 `KeepVersions` 影响：每版 manifest 都保留，旧副本目录不写。
-#[tokio::test]
-async fn t130_keep_policy_does_not_touch_file_manifests() {
-    for policy in [KeepVersions::All, KeepVersions::MetadataOnly] {
-        let (service, dir) = test_service_with(policy).await;
-        let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
-        let first = service
-            .archive(archive_req(&draft, "dau.sql", None))
-            .await
-            .expect("archive");
-
-        for (name, body) in [
-            ("dau2.sql", &b"select 22;"[..]),
-            ("dau3.sql", &b"select 333;"[..]),
-        ] {
-            let next = write_draft(&dir, name, body).await;
-            let mut req = archive_req(&next, "dau.sql", Some(&first.resource_id));
-            req.keep_versions = Some(policy);
-            service
-                .archive(req)
-                .await
-                .expect("re-archive");
-        }
-
-        let file_versions = service
-            .store()
-            .list_file_asset_versions(&first.resource_id)
-            .await
-            .expect("file versions");
-        assert_eq!(
-            file_versions.iter().map(|file| file.version).collect::<Vec<_>>(),
-            vec![1, 2, 3],
-            "{policy:?} 不能裁掉文件 manifest"
-        );
-        assert_eq!(
-            service
-                .store()
-                .get_resource_versions(&first.resource_id)
-                .await
-                .expect("version rows")
-                .len(),
-            2,
-            "写前快照行仍按版本追加（v1 / v2）"
-        );
-        let _ = fs::remove_dir_all(&dir).await;
-    }
-}
-
 /// 归档时填的**标签与分组真的落上**（之前 `ArchiveRequest` 的这两项没人消费，填了等于白填）：
 /// 标签按名字找 / 找不到就建（同名复用），分组就是移动语义；不存在的分组只给回执说明、
 /// **不回滚归档本身**（文件已经归档好了，分组是能在面板上补做的附属项）。
 #[tokio::test]
 async fn t131_archive_applies_tags_and_group() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let folder = service
         .store()
         .create_folder(crate::store::rows::CreateFolderRequest {
@@ -497,7 +449,7 @@ async fn t131_archive_applies_tags_and_group() {
 /// 内容不变、只有元数据变时仍应产生新版本；同一资产同时只允许一条 active 租约。
 #[tokio::test]
 async fn t132_file_meta_roundtrip_and_single_active_lease() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let draft = write_draft(&dir, "meta.sql", b"select 1;").await;
     let meta_path = dir
         .join(".RSmeta")

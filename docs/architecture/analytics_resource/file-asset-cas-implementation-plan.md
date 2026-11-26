@@ -275,6 +275,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_active_lease
 - `KeepVersions` 从文件路径撤出，只保留表型 `prune_version_tables`。
 - 测试：`cargo test -p rds-analytics-resource --lib -j 2 --no-fail-fast` 294 passed；`cargo check -p rds-workbench --lib -j 2` 通过。
 
+#### M5 第三刀（2026-11-27）
+
+- 删除文件归档的保留策略入口：`ArchiveRequest.keep_versions`、`ArchiveService.keep_versions` / `with_keep_versions`、`ArchiveJob.keep_versions`、`VersionActionJob.keep_versions` 全部移除。
+- 归档对话框删除「保留历史内容」输入与解析；`ArchiveDialogResult` 只余 `name / alias / tags / group_id / payload_mode / assertion`。
+- workbench 归档 / 还原不再读 `resources.keep_versions`；`KeepVersions` 只保留给全局表型裁剪。
+- 测试：`cargo test -p rds-analytics-resource --lib -j 1 --no-fail-fast` 291 passed；`dialog_window` 11 项、`panel_window` 29 项通过；`cargo check -p rds-workbench --lib -j 1` 通过。
+
 ### 9.2 与计划的偏差
 
 - `ArchiveRequest` 未新增 `file_meta` 字段：服务按 `promoted_from` 字符串约定直接读 sidecar，避免把完整元数据穿过 UI 请求层，也避免破坏 `DraftCandidate` 的 `Eq`。

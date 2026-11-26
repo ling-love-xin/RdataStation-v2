@@ -500,11 +500,9 @@ pub(super) fn accept_reference_current(host: &ResourceHost, detail: &ArchiveDeta
             },
             tags: Vec::new(),
             group_id: None,
-            keep_versions: None,
             existing_resource_id: Some(detail.id.clone()),
         };
-        let keep_versions = host.backend.keep_versions(cx);
-        resource_jobs::enqueue_archive(root, host.read_only(), request, keep_versions, false, None);
+        resource_jobs::enqueue_archive(root, host.read_only(), request, false, None);
         host.backend.refresh_resources(cx);
         host.notice(tr("资产库：正在接受当前内容并生成新版本…"), cx);
 }

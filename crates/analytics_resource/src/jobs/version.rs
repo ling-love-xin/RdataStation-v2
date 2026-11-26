@@ -11,7 +11,7 @@ use similar::TextDiff;
 use crate::dialogs::version::{VersionAction, VersionDialogSeed};
 use crate::dialogs::version_diff::VersionDiffSeed;
 use crate::present::{build_timeline_rows, build_version_rows};
-use crate::{AnalyticsResource, ArchiveService, KeepVersions};
+use crate::{AnalyticsResource, ArchiveService};
 
 use super::{Job, OpOutcome, free_dest, jobs, open_service};
 
@@ -35,8 +35,6 @@ pub(crate) struct VersionActionJob {
     /// 存档显示名（回执文案用；事件路径不必再查库）。
     pub(crate) name: String,
     pub(crate) action: VersionAction,
-    /// 历史内容保留策略（还原会把当前内容留成副本，之后要按策略裁剪）。
-    pub(crate) keep_versions: KeepVersions,
 }
 
 /// 一次版本 diff 取数任务（**只读查看**：读两版文本 + 生成 unified patch）。
@@ -66,7 +64,7 @@ pub struct VersionDiffRows {
 /// “副本在不在”与“本体在不在”都要问文件系统（`.RSmeta` 与 `resources/`），
 /// 所以这一整套也在工作线程上——渲染期零 I/O 的纪律同样适用于对话框。
 pub(crate) async fn load_versions(job: &VersionsJob) -> Result<VersionRows, String> {
-    let service = open_service(job.project_root.clone(), None).await?;
+    let service = open_service(job.project_root.clone()).await?;
     let current = service
         .store()
         .get_resource_by_id(&job.resource_id)
@@ -177,7 +175,7 @@ pub(crate) async fn load_versions(job: &VersionsJob) -> Result<VersionRows, Stri
 
 /// 取两版文本并生成 unified patch（只读；文本类 / 大小上限在此挡）。
 pub(crate) async fn load_version_diff(job: &VersionDiffJob) -> Result<VersionDiffRows, String> {
-    let service = open_service(job.project_root.clone(), None).await?;
+    let service = open_service(job.project_root.clone()).await?;
     let current = service
         .store()
         .get_resource_by_id(&job.resource_id)
@@ -258,7 +256,7 @@ fn read_text_file(path: &Path) -> Result<String, String> {
 
 /// 执行一次版本历史动作（工作线程上执行）。
 pub(crate) async fn run_version_action(job: &VersionActionJob) -> OpOutcome {
-    let service = match open_service(job.project_root.clone(), Some(job.keep_versions)).await {
+    let service = match open_service(job.project_root.clone()).await {
         Ok(service) => service,
         Err(reason) => {
             return OpOutcome::Failed {
@@ -368,7 +366,7 @@ pub async fn version_file(
     resource_id: &str,
     version: i32,
 ) -> Result<Option<PathBuf>, shared::error::CoreError> {
-    let service = open_service(project_root, None).await.map_err(|reason| {
+    let service = open_service(project_root).await.map_err(|reason| {
         shared::error::CoreError::common(shared::error::CommonError::General(reason))
     })?;
     service.version_file(resource_id, version).await
@@ -381,7 +379,6 @@ pub fn enqueue_version_action(
     resource_id: String,
     name: String,
     action: VersionAction,
-    keep_versions: KeepVersions,
 ) {
     jobs().pending.fetch_add(1, Ordering::SeqCst);
     let _ = jobs().tx.send(Job::VersionAction(VersionActionJob {
@@ -390,7 +387,6 @@ pub fn enqueue_version_action(
         resource_id,
         name,
         action,
-        keep_versions,
     }));
 }
 

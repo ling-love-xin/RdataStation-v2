@@ -20,7 +20,7 @@ pub(crate) async fn load_trash(job: &TrashListJob) -> Result<TrashDialogSeed, St
 
     // 项目库读不到时不弄砸实体清单：第二来源缺失只表现为 reference 条目不显示。
     let reference: Vec<(DateTime<Utc>, TrashRow)> =
-        match open_service(job.project_root.clone(), None).await {
+        match open_service(job.project_root.clone()).await {
             Ok(service) => match service.deleted_registry_archives().await {
                 Ok(rows) => registry_trash_rows(&rows),
                 Err(error) => {
@@ -85,7 +85,7 @@ fn module_label(origin: &str) -> String {
 
 /// 执行一次回收站动作（工作线程上执行）。
 pub(crate) async fn run_trash_action(job: &TrashActionJob) -> OpOutcome {
-    let service = match open_service(job.project_root.clone(), None).await {
+    let service = match open_service(job.project_root.clone()).await {
         Ok(service) => service,
         Err(reason) => {
             return OpOutcome::Failed {

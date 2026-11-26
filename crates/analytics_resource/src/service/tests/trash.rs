@@ -9,7 +9,7 @@ use super::*;
 /// 文件型资产直接进回收站（软删登记 + 本体搬走），还原后登记与 manifest 都回来。
 #[tokio::test]
 async fn t129_file_asset_trashes_and_restores_without_auto_unlock() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let first = write_draft(&dir, "locked.sql", b"select 1;").await;
     let archived = service
         .archive(archive_req(&first, "reports/locked.sql", None))
@@ -82,7 +82,7 @@ async fn t129_file_asset_trashes_and_restores_without_auto_unlock() {
 
 #[tokio::test]
 async fn t158_purge_clears_versions_semantics_refs_but_keeps_history() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
 
     let draft = write_draft(&dir, "a.sql", b"select 1;").await;
     let first = service
@@ -197,7 +197,7 @@ async fn t158_purge_clears_versions_semantics_refs_but_keeps_history() {
 async fn table_asset_trash_cycles_the_registry_only() {
     use crate::table_asset::{TableAssetRequest, register};
 
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let registered = register(
         service.store(),
         TableAssetRequest {
@@ -288,7 +288,7 @@ async fn table_asset_trash_cycles_the_registry_only() {
 async fn table_restore_refuses_when_analytics_table_is_gone() {
     use crate::table_asset::{TableAssetRequest, register};
 
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let registered = register(
         service.store(),
         TableAssetRequest {

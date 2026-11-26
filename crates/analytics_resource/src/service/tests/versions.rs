@@ -4,7 +4,7 @@ use super::*;
 
 #[tokio::test]
 async fn t120_undo_drops_the_row_and_restores_draft() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let mut events = service.subscribe();
     let draft = write_draft(&dir, "undo.sql", b"select 1;").await;
     let outcome = service
@@ -54,7 +54,7 @@ async fn t120_undo_drops_the_row_and_restores_draft() {
 
 #[tokio::test]
 async fn t121_undo_refuses_when_rearchived_but_allows_with_draft_in_place() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let draft = write_draft(&dir, "occupied.sql", b"select 1;").await;
     let outcome = service
         .archive(archive_req(&draft, "occupied.sql", None))
@@ -113,7 +113,7 @@ async fn t121_undo_refuses_when_rearchived_but_allows_with_draft_in_place() {
 
 #[tokio::test]
 async fn t122_restore_version_brings_old_content_forward() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let mut events = service.subscribe();
     let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
     let first = service
@@ -198,7 +198,7 @@ async fn t122_restore_version_brings_old_content_forward() {
 
 #[tokio::test]
 async fn t123_restore_version_requires_manifest_and_skips_identical_content() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
     let first = service
         .archive(archive_req(&draft, "dau.sql", None))
@@ -243,7 +243,7 @@ async fn t123_restore_version_requires_manifest_and_skips_identical_content() {
 async fn table_asset_restore_points_the_asset_back_to_the_old_table() {
     use crate::table_asset::{TableAssetRequest, register};
 
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let request = |table: &str| TableAssetRequest {
         name: "结果 3".to_string(),
         analytics_table: table.to_string(),

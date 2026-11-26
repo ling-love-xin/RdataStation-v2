@@ -92,14 +92,14 @@
 
 取回的坑已处理：**Windows 下 `CopyFile` 会继承源文件的只读属性**，`copy_out` 会显式清除，否则"取回的文件改不了"。
 
-### 5. 版本由内容指纹触发，历史内容有保留上限
+### 5. 版本由内容指纹触发，文件历史内容不可变保留
 
 - **版本 = 内容 + 体积 + 元数据快照**（结构 / 指纹 / 来源 / 配方 / 时间）；名称 / 别名 / 标签 / 分组是**活状态不进版本**（改它们不涨版本、不发 `ChangeReason` 事件，保存后刷新即可）；版本区展示全部元信息；版本链补展示 / 检索（列表 / 相邻差异 / 血缘 / 按版本·时间·来源过滤）。
 
 - `content_hash` 未变**不产生新版本**（否则"改个别名"也会消耗一个版本号——v1 的行为）。
 - 版本表是**写前快照**语义：当前版本在资源行上、不进版本表；`parent_version_id` 指向本次写入的快照行（v1 写的是资源自身 id，无信息量）。
 - 文件版本内容只存 CAS + manifest，**所有版本默认永久保留**；旧 `resources/versions/<id>/<v>/` 副本目录已删除，不再按份数裁剪。
-- `KeepVersions` 只作用于**表型**资产：设置页与归档对话框里的保留策略不再影响文件 manifest。
+- `KeepVersions` 只作用于**表型**资产（全局表裁剪）：文件归档与版本还原不再接受保留策略，归档对话框也没有「保留历史内容」这一项。
 
 ### 7. 全局实例：一版一张表（G2，2026-11-16）
 
@@ -166,7 +166,7 @@
 | --- | --- |
 | `src/lib.rs` | 模块声明与对外公开面；只有被其它 crate 真实引用的模块是 `pub mod`，其余 `pub(crate)` |
 | `src/model/` | 领域类型：`kind.rs`（种类 / 强度 / 状态）、`types.rs`（请求 / 回执）、`affordance.rs`（九个动作判据）、`promoted_from.rs`、`timeline.rs`（履历事件）、`semantics.rs`（业务断言 / 效力 / `semantic_hash`） |
-| `src/payload/` | 本体层：`paths.rs`（越界守卫 / 回收站）、`transfer.rs`（搬运 / 只读 / 历史副本 / **stage → commit → discard** 暂存替换）、`inspect.rs`（sha256 / 体积）、`versions.rs` |
+| `src/payload/` | 本体层：`cas.rs`（内容寻址存储 / staging / materialize）、`manifest.rs`（版本 manifest 与根哈希）、`paths.rs`（越界守卫 / 回收站）、`transfer.rs`（搬运 / 只读 / **stage → commit → discard** 暂存替换）、`inspect.rs`（sha256 / 体积） |
 | `src/store/` | 索引层：`resource/{mod,read,write,trash}.rs`（登记 / 事务化写入 / 永久删除）、`rows.rs`（行模型与列映射）、`version.rs`、`folder.rs`、`tag.rs`、`timeline.rs`、`semantics.rs`、`refs.rs` |
 | `src/service/` | 编排：`archive.rs`（首次 / 再归档）、`checkout.rs`（取回 / 还原）、`trash.rs`、`semantics.rs`（断言 / 效力门面）、`mod.rs`（标签 / 分组 / 履历埋点） |
 | `src/jobs/` | 后台作业：`mod.rs`（通道 + `catch_unwind` + pending 守恒）、`archive/`、`version.rs`、`index.rs`、`refresh.rs`（快照 + 主动校验 + 暂存重放）、`global.rs`、`rename.rs`、`trash.rs` |
@@ -224,11 +224,11 @@
 | **行态与控件口径**【2026-09-20 UI 收尾 / 开发方案 V1–V12】：行距钉在 `ui::ROW_HEIGHT`（24px，`list_row()` 压掉 `ListItem` 默认 `py_1`——组件只量一个样本行定全局行距）；悬停不覆盖选中；分组头展开指示走共用原语 `tree::disclosure_slot` + `disclosure_icon`（字符 `▸/▾` 退场）+ 色条 `primary`（与 M4 同角色）；**停在分组头上按 `Enter` 也能折叠 / 展开**；撤销 / 复制 / chip `×` 一律 `Button::ghost().xsmall()`（键盘可达 + 命中区 20px）；加载骨架走组件 `Skeleton`；固定描边统一 `ui::HAIRLINE` | 行尾「相对时间 → 悬浮显示绝对时间」要等 div 级 tooltip 基建（后续刀） |
 | **详情面板**【Phase 1 + P0.8 + Phase 2 第一刀】`detail_view.rs` 只读信息区（基本信息 / 来源 / 版本 / 组织 + 需处理提示条）+ **标签分区（chips：× 去标 / ＋ 标签开对话框）** + 动作区（打开（只读）/ 取回）+ **危险区（移入回收站）**；右 Dock 转发渲染与空态；版本数与标签都由存储层一次查完 | —（内容预览、头部可编辑、分组选择均已落地） |
 | **只读三重守卫**【Phase 1】①应用守卫（写入 `resources/` 直接拒，Phase 0）②**编辑器只读打开**（`editor::persist::open_file_read_only`，经 `OpenInEditorRequest` 带只读维度）③文件系统只读属性（辅助，失败只警告） | —（本体异常修复入口已随索引修复对话框落地） |
-| **归档 / 取回**【Phase 1 + Phase 2 第八刀】`dialogs/{archive,checkout,pick}.rs`：对话框 + 校验 + 冲突提示（`resources/x-2.sql`）；**归档表单带显示名 / 别名 / 分组 / 标签 / 保留份数**，且这几项**真的落库**（标签按名找、找不到就建；分组走移动语义；附属项失败写进回执，不回滚归档）；workbench 侧真执行（`resource_host` + `resource_jobs` 的 `Archive` / `Checkout` 作业 + 重名避让 + 回执 + 顺手打开）；**草稿箱入口**（面板头 `＋ ▾` + 草稿多选，来源连接与出处自动带出）；**归档可撤销**（`undo_archive` + 5 秒撤销栏） | 批量归档逐项改名、`Ctrl+Z`（后续刀）；草稿箱右键入口与默认分组已落地 |
+| **归档 / 取回**【Phase 1 + Phase 2 第八刀】`dialogs/{archive,checkout,pick}.rs`：对话框 + 校验 + 冲突提示（`resources/x-2.sql`）；**归档表单带显示名 / 别名 / 分组 / 标签 / 载荷模式 / 业务断言**，且这几项**真的落库**（标签按名找、找不到就建；分组走移动语义；附属项失败写进回执，不回滚归档）；workbench 侧真执行（`resource_host` + `resource_jobs` 的 `Archive` / `Checkout` 作业 + 重名避让 + 回执 + 顺手打开）；**草稿箱入口**（面板头 `＋ ▾` + 草稿多选，来源连接与出处自动带出）；**归档可撤销**（`undo_archive` + 5 秒撤销栏） | 批量归档逐项改名、`Ctrl+Z`（后续刀）；草稿箱右键入口与默认分组已落地 |
 | **工具栏数据层**【Phase 1 + Phase 2 第一 / 四 / 六刀】`filter.rs`：搜索（名称 + 尾部，大小写不敏感）/ 种类多选（全选 = 不限）/ **标签多选（id、并集，带用量）** / 只看需处理 / **五个排序键**（名称 / 归档时间 / 更新时间 / 大小 / 版本：同键翻转方向、同键名称兜底、**缺值两个方向都排最后**；比的是原始时间戳与字节数，不是格式化尾巴）；**选过的排序会被记住**（`resources.default_sort`：面板点排序 → 宿主写设置 → 下次构造期注入） | —（搜索别名 / 标签 / 来源表已落地，另加业务口径语义搜索） |
 | **标签**【Phase 2 第一 / 三刀】`tag.rs`（改名 / 删除补齐 + 批量查询）+ 打标 / 去标 + **标签对话框**（行内真 `Checkbox` 勾选 + 新建并打上 + 差集提交 + 行内 **⋯：重命名 / 删除**）+ 详情面板 chips（× 即去标，是语义按钮）+ **筛选菜单的标签维**，标签字典随快照下发（不另查库） | 标签颜色、按标签排序、批量打标签（后续刀） |
 | **分组折叠区 + 管理**【Phase 2 第二 / 三 / 七刀】`folder.rs`（建 / 改名 / 删 + 移动语义）+ **列表按分组分区渲染**（全部分组 → 未分组 → 各分组，头带 2px 色条与计数）+ **折叠 / 展开**（**记忆到设置**：`resources.collapsed_groups` 按项目分桶；点一次写回全集）+ **管理入口**：行菜单「移动到分组 ›」（多选也走这条）+ 分组头右键（重命名 / 删除 / 新建）；计数从**当前可见行**现算 | —（拖拽到分组头已落地） |
-| 领域类型（kind / 强度 / 状态 / 归档凭证）与本体层（守卫 / 搬运 / 只读 / 指纹 / 历史副本与裁剪 / 遍历） | — |
+| 领域类型（kind / 强度 / 状态 / 归档凭证）与本体层（守卫 / 搬运 / CAS + manifest / 只读 / 指纹 / 遍历） | — |
 | **历史内容保留**【P2.4】`KeepVersions`（全留 / 只留元数据 / 保留最近 n 份）只作用于表型 `prune_version_tables`；文件资产由 manifest + CAS 永久保留，不再裁剪副本 | — |
 | **默认排序 + 分组折叠记忆**【P2.4】`resources.default_sort`（面板里点排序即写回；“默认排序” = 上次用的那个）与 `resources.collapsed_groups`（折叠态，按项目分桶）；两者都是构造期注入 + 用户动作写回（注入不写，避免回声） | —（默认分组已落地；设置架构 §14 Q7 的历史待确认项已关闭） |
 | 回收站语义（项目级一套 + `origin` 归属；软删登记行保归属，永久删除连关联一起清） | 回收站自动清理策略（按时间 / 容量，后续刀） |

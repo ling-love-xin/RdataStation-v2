@@ -677,7 +677,7 @@ fn read_global_version_tables(env: &TestEnv, name: &str) -> Vec<(i32, Option<Str
         .expect("读版本表")
 }
 
-/// 一版一张表会随版本线性增长，`KeepVersions` 表型裁剪的语义必须与项目侧副本裁剪一致：
+/// 一版一张表会随版本线性增长，`KeepVersions` 只裁全局表、不碰文件 manifest 与 CAS：
 /// **当前版本那张表是本体、永远留**；`keep` 数的是历史份数；登记行与版本快照一条不动。
 /// 内容被清掉之后，分发要给人话而不是 DuckDB 的 Catalog Error。
 #[tokio::test]

@@ -4,7 +4,7 @@ use super::*;
 
 #[tokio::test]
 async fn t104_checkout_copies_payload_out_writable() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let mut events = service.subscribe();
     let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
     let outcome = service
@@ -37,7 +37,7 @@ async fn t104_checkout_copies_payload_out_writable() {
 
 #[tokio::test]
 async fn t107_checkout_rejects_target_inside_resources() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
     let outcome = service
         .archive(archive_req(&draft, "dau.sql", None))

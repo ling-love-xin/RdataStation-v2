@@ -15,7 +15,7 @@ use tokio::sync::broadcast;
 use shared::error::{CoreError, StorageError};
 
 use crate::model::{
-    ArchiveKind, ChangeReason, KeepVersions, PayloadMode, ResourcesChanged, TimelineEventKind,
+    ArchiveKind, ChangeReason, PayloadMode, ResourcesChanged, TimelineEventKind,
 };
 use crate::payload::PayloadStore;
 use crate::{AnalyticsResource, AnalyticsResourceStore};
@@ -25,9 +25,6 @@ pub mod checkout;
 pub mod semantics;
 pub mod trash;
 
-/// 历史内容副本默认保留份数（设置项 `resources.keep_versions`，架构 §5.2）。
-pub const DEFAULT_KEEP_VERSIONS: u32 = 5;
-
 /// 事件广播容量：够覆盖面板重绘窗口即可，溢出由订阅方收到 `Lagged` 并整表刷新。
 const EVENT_CHANNEL_CAPACITY: usize = 64;
 
@@ -36,7 +33,6 @@ pub struct ArchiveService {
     payload: PayloadStore,
     store: AnalyticsResourceStore,
     events: broadcast::Sender<ResourcesChanged>,
-    keep_versions: KeepVersions,
 }
 
 impl ArchiveService {
@@ -46,16 +42,7 @@ impl ArchiveService {
             payload: PayloadStore::new(project_root),
             store,
             events,
-            keep_versions: KeepVersions::Keep(DEFAULT_KEEP_VERSIONS),
         }
-    }
-
-    /// 覆盖历史内容保留策略（设置项 `resources.keep_versions` → `KeepVersions`）。
-    ///
-    /// `KeepVersions::All` 表示**不裁剪**（不是"保留 0 份"）。
-    pub fn with_keep_versions(mut self, keep_versions: KeepVersions) -> Self {
-        self.keep_versions = keep_versions;
-        self
     }
 
     /// 写一条资产履历（迁移 027 的事件表）。

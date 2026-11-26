@@ -22,17 +22,11 @@ pub(crate) use gpui_kit::component::{ActiveTheme, Sizable as _, Theme, WindowExt
 pub(crate) use gpui_kit::prelude::FluentBuilder as _;
 pub(crate) use gpui_kit::*;
 
-pub(crate) use crate::model::{KeepVersions, PayloadMode};
+pub(crate) use crate::model::PayloadMode;
 pub(crate) use crate::resource_view::GroupOption;
 pub(crate) use crate::ui;
 pub(crate) use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 pub(crate) use gpui_kit::component::radio::Radio;
-
-/// 「保留历史内容」输入的上限。
-///
-/// 100 份内容副本已是"基本不裁剪"；再加位数多半是手滑多打了一个 0，
-/// 而每多一份都是整份文件副本，不值得让它悄悄生效（要真的全留就填 `-1`）。
-pub const KEEP_VERSIONS_MAX: u32 = 100;
 
 /// 打开归档对话框所需的全部信息（**宿主在事件路径备好**）。
 ///
@@ -94,8 +88,6 @@ pub struct ArchiveDialogResult {
     pub tags: Vec<String>,
     /// 归入的分组（`None` = 未分组）。
     pub group_id: Option<String>,
-    /// `None` = 跟随设置默认（输入框留空即此意；`-1` = 全部保留）。
-    pub keep_versions: Option<KeepVersions>,
     /// 用户选定的归档粒度（复制 / 引用）。
     pub payload_mode: PayloadMode,
     /// 业务断言（`None` = 一项都没填，不落库）。
@@ -110,7 +102,6 @@ pub struct ArchiveDialogInputs {
     pub name: Entity<InputState>,
     pub alias: Entity<InputState>,
     pub tags: Entity<InputState>,
-    pub keep_versions: Entity<InputState>,
     /// 分组选择：下拉菜单不是 `InputState`，选择结果住在共享单元格里（开窗是 `Fn` 重建，
     /// 状态不能在闭包里）。`None` = 未分组。
     pub group_id: Rc<std::cell::RefCell<Option<String>>>,
@@ -143,31 +134,6 @@ pub fn parse_tags(text: &str) -> Vec<String> {
     out
 }
 
-/// 「保留历史内容」解析：**空 = 跟随设置**（`None`），数字 = 本次覆盖，`-1` = 全部保留。
-///
-/// 错误给的是**可直接当提示用**的一句话（校验与提示同源，不会出现"提示说非法、提交却过了"）。
-pub fn parse_keep_versions(text: &str) -> Result<Option<KeepVersions>, &'static str> {
-    let text = text.trim();
-    if text.is_empty() {
-        return Ok(None);
-    }
-    let Ok(value) = text.parse::<i64>() else {
-        return Err("请填数字（留空 = 跟随设置）");
-    };
-    if value < 0 {
-        // 负数只有 `-1` 有意义（与设置项同一个哨兵）；其余负数（如 `-2`）是误敲，
-        // 不当作全留静默吃掉。
-        if value == -1 {
-            return Ok(Some(KeepVersions::All));
-        }
-        return Err("-1 = 全部保留（留空 = 跟随设置）");
-    }
-    if value > i64::from(KEEP_VERSIONS_MAX) {
-        return Err("最多 100 份（留空 = 跟随设置）");
-    }
-    Ok(Some(KeepVersions::from_setting(value)))
-}
-
 /// 显示名的校验提示（`None` = 合法）。
 pub fn name_hint(name: &str) -> Option<&'static str> {
     name.trim().is_empty().then_some("显示名不能为空")
@@ -192,7 +158,6 @@ pub fn build_inputs(
         tags.update(cx, |state, cx| state.set_value(tags_value, window, cx));
     }
     let alias = cx.new(|cx| InputState::new(window, cx).placeholder(tr("别名（可空）")));
-    let keep_versions = cx.new(|cx| InputState::new(window, cx).placeholder(tr("跟随设置（-1 全留）")));
 
     let assertion_metric = cx.new(|cx| InputState::new(window, cx).placeholder(tr("指标名（选填）")));
     let assertion_definition =
@@ -219,7 +184,6 @@ pub fn build_inputs(
         name,
         alias,
         tags,
-        keep_versions,
         group_id: Rc::new(std::cell::RefCell::new(seed.group_id.clone())),
         mode: Rc::new(std::cell::RefCell::new(seed.default_mode)),
         assertion_metric,
@@ -235,7 +199,6 @@ pub fn submit_archive(inputs: &ArchiveDialogInputs, cx: &App) -> Option<ArchiveD
     if name_hint(&name).is_some() {
         return None;
     }
-    let keep = parse_keep_versions(&inputs.keep_versions.read(cx).value()).ok()?;
     // 别名：全空白 = 不设（空串入库会让详情面板显示一个空行）。
     let alias = inputs.alias.read(cx).value().trim().to_string();
     Some(ArchiveDialogResult {
@@ -243,7 +206,6 @@ pub fn submit_archive(inputs: &ArchiveDialogInputs, cx: &App) -> Option<ArchiveD
         alias: (!alias.is_empty()).then_some(alias),
         tags: parse_tags(&inputs.tags.read(cx).value()),
         group_id: inputs.group_id.borrow().clone(),
-        keep_versions: keep,
         payload_mode: *inputs.mode.borrow(),
         assertion: {
             // 四项全空 = 没填断言：不落库、不写口径事件，归档流程与以前完全一致。

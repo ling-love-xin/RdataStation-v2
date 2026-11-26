@@ -6,7 +6,7 @@ use super::*;
 /// 指纹照算（源文件字节 sha256）。
 #[tokio::test]
 async fn t134_reference_archive_keeps_source_in_place_and_registers_metadata() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     // 源在项目外（reference 的典型场景：大文件 / 外部路径），但要绝对路径。
     let outside =
         std::env::temp_dir().join(format!("ref_src_{}.csv", uuid::Uuid::new_v4().simple()));
@@ -55,7 +55,7 @@ async fn t134_reference_archive_keeps_source_in_place_and_registers_metadata() {
 /// reference 取回：从**源**复制出可写工作副本（不是从 `resources/`）。
 #[tokio::test]
 async fn t135_reference_checkout_copies_from_source() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let outside =
         std::env::temp_dir().join(format!("ref_src_{}.csv", uuid::Uuid::new_v4().simple()));
     fs::write(&outside, b"a,b\n1,2\n")
@@ -87,7 +87,7 @@ async fn t135_reference_checkout_copies_from_source() {
 /// reference 再归档：内容变了 → 版本 +1、指纹更新；源**不被覆盖**（本体在外部，M6 不动它）。
 #[tokio::test]
 async fn t136_reference_rearchive_updates_fingerprint_without_touching_source() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let outside =
         std::env::temp_dir().join(format!("ref_src_{}.csv", uuid::Uuid::new_v4().simple()));
     fs::write(&outside, b"a,b\n1,2\n")
@@ -127,7 +127,7 @@ async fn t136_reference_rearchive_updates_fingerprint_without_touching_source() 
 /// reference 撤销：只删登记行（源本来就在原位，没什么要搬回去）。
 #[tokio::test]
 async fn t137_reference_undo_drops_row_only() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let outside =
         std::env::temp_dir().join(format!("ref_src_{}.csv", uuid::Uuid::new_v4().simple()));
     fs::write(&outside, b"a,b\n1,2\n")
@@ -165,7 +165,7 @@ async fn t137_reference_undo_drops_row_only() {
 /// 永久删除只清登记行 + 版本元数据——全流程都不碰源文件（与 copy 同一进回收站判据）。
 #[tokio::test]
 async fn t138_reference_trash_cycles_without_touching_source() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let outside =
         std::env::temp_dir().join(format!("ref_src_{}.csv", uuid::Uuid::new_v4().simple()));
     fs::write(&outside, b"a,b\n1,2\n")
@@ -241,7 +241,7 @@ async fn t138_reference_trash_cycles_without_touching_source() {
 /// 旧实现按 `req.rel_path`（相对）查重，库里却存源绝对路径，预检永远查不到。
 #[tokio::test]
 async fn t157_duplicate_reference_is_rejected_by_precheck() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let outside = std::env::temp_dir().join(format!(
         "ref_dup_{}.csv",
         uuid::Uuid::new_v4().simple()

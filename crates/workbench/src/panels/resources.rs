@@ -17,7 +17,6 @@ use std::time::Duration;
 use gpui_kit::base::StyledExt;
 use gpui_kit::*;
 
-use analytics_resource::KeepVersions;
 use analytics_resource::dialogs::conflict::ConflictChoice;
 use analytics_resource::dialogs::index_repair::RepairAction;
 use analytics_resource::dialogs::tag::TagDialogEvent;
@@ -131,8 +130,6 @@ impl SidebarPanel {
             resource_id.to_string(),
             name.to_string(),
             action,
-            // 还原会把当前内容留成副本，之后按设置裁剪；保留策略在主线程读好。
-            KeepVersions::from_setting(settings::SettingsService::keep_versions(cx)),
         );
         self.ensure_resources_pump(cx);
     }

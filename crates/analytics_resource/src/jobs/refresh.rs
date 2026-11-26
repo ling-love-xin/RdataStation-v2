@@ -14,15 +14,8 @@ pub(crate) fn refresh_after_op(rt: &tokio::runtime::Runtime, project_root: PathB
     *lock(&jobs().result) = Some(result);
 }
 
-/// 开一条项目库连接并组装归档服务（工作线程上执行）。
-/// 打开项目库并装配归档服务。
-///
-/// `keep_versions` 为 `None` 时用服务自带的默认（5 份）：**只有会裁剪的作业**才需要把
-/// 设置项传进来（归档 / 版本还原），其余作业拿默认值就够。
-pub(crate) async fn open_service(
-    project_root: PathBuf,
-    keep_versions: Option<KeepVersions>,
-) -> Result<ArchiveService, String> {
+/// 打开项目库并装配归档服务（工作线程上执行）。
+pub(crate) async fn open_service(project_root: PathBuf) -> Result<ArchiveService, String> {
     let manager = ProjectDatabaseManager::open(&project_root, SQLITE_POOL_SIZE)
         .await
         .map_err(|e| format!("打开项目库失败：{e}"))?;
@@ -32,11 +25,7 @@ pub(crate) async fn open_service(
     if let Err(error) = store.ensure_m6_tables().await {
         tracing::warn!(error = %error, "资产库扩展表自检未通过，语义写入可能失败");
     }
-    let service = ArchiveService::new(project_root, store);
-    Ok(match keep_versions {
-        Some(keep) => service.with_keep_versions(keep),
-        None => service,
-    })
+    Ok(ArchiveService::new(project_root, store))
 }
 
 /// 业务时间窗是否明显过期：只认文本里出现的四位年份（如 `2026Q3` / `2026-01`）。
