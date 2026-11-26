@@ -1121,7 +1121,32 @@ impl DataSourceService {
             metadata_path: ds.metadata_path.clone(),
             save_password: None,
         };
-        self.update(conn_id, &input, project_path).await
+        let outcome = self.update(conn_id, &input, project_path).await;
+        // 「有值即登记」（2026-11-26）：开关落库成功后，项目登记表里必须有这一行——
+        // 打开开关的是对话框 / 面板两处，登记不能只由面板补，否则「只在对话框开过加速」
+        // 的连接在数据对象面板里就没有登记行（未挂载也列不出来）。
+        // 登记失败**不回滚开关**（开关是能力事实、登记是意图）；这里只记 warn，
+        // 面板「加源」路径还会再幂等试一次并把原因给到用户。
+        if outcome.is_ok() {
+            if let (true, Some(path)) = (on.is_some(), project_path) {
+                let path = path.trim();
+                if !path.is_empty() {
+                    if let Err(error) = engine::analysis::registration::ensure_conn_registered(
+                        std::path::Path::new(path),
+                        conn_id,
+                        &ds.name,
+                    ) {
+                        tracing::warn!(
+                            target: "rds_connection::analysis_registration",
+                            conn_id,
+                            error = %error,
+                            "连接开关已写值，但项目分析源登记失败"
+                        );
+                    }
+                }
+            }
+        }
+        outcome
     }
 
     /// 删除连接（物理删除 + 清理分析库中的 DuckDB Secret）。

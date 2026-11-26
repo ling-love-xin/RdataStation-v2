@@ -488,38 +488,8 @@ fn ensure_registration(shared: &Shared, conn_id: &str, name: &str) -> Result<Opt
     let root = shared
         .project_root()
         .ok_or_else(|| "还没有打开项目，登记不落在任何项目里".to_string())?;
-    let conn = engine::persistence::analysis_sources::open_in_project(&root)
-        .map_err(|error| format!("打开项目库失败：{error}"))?;
-    // 同一份登记表可能被多个入口各登记一次（面板「加源」/ 右键「登记为项目源」），
-    // 写的都是同一个 connection_id —— 不该出现第二行（面板会出两条同名源、别名被挤成 `shop_2`）
-    let rows = engine::persistence::analysis_sources::list(&conn)
-        .map_err(|error| format!("读已有登记失败：{error}"))?;
-    if rows
-        .iter()
-        .any(|row| row.connection_id.as_deref() == Some(conn_id))
-    {
-        return Ok(None);
-    }
-    // 展示名去重看**全表**：加速档的 alias 不占挂载名，但它照样得有个不撞车的显示名
-    let taken: Vec<String> = rows.iter().map(|row| row.alias.clone()).collect();
-    let alias = engine::duckdb::federation::registry::default_alias(name, &taken);
-    let now = chrono::Utc::now().to_rfc3339();
-    let row = engine::persistence::analysis_sources::AnalysisSourceRow {
-        id: format!("src_{}", uuid::Uuid::new_v4().simple()),
-        name: name.to_string(),
-        kind: engine::persistence::analysis_sources::AnalysisSourceKind::Conn,
-        connection_id: Some(conn_id.to_string()),
-        path: None,
-        alias: alias.clone(),
-        // 登记只是「这条连接可以当分析源」的意图；挂成联邦还是加速由执行时定。
-        // 老代码写 `Accel` 是错的：加速档不占源段、且别名对它是展示名。
-        mount_kind: engine::persistence::analysis_sources::AnalysisMountKind::Federation,
-        created_at: now.clone(),
-        updated_at: now,
-    };
-    engine::persistence::analysis_sources::insert(&conn, &row)
-        .map_err(|error| format!("登记失败：{error}"))?;
-    Ok(Some(alias))
+    // 幂等 + 别名分配都在 engine 那一处（连接对话框保存也走它，两个入口不许各写一套）
+    engine::analysis::registration::ensure_conn_registered(&root, conn_id, name)
 }
 
 /// 把一条连接**登记成项目源**（写 `analysis_sources`，别名按规格 §6 取第一个）。
