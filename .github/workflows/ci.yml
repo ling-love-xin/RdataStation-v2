@@ -66,8 +66,13 @@ jobs:
       # 与 rust-toolchain.toml 的钉版保持同版：rustup 不会自动安装 toml 点名的具名
       # 工具链（RUSTUP_AUTO_INSTALL 默认关），action 只装 @stable 的话 cargo 解析
       # `1.100.0` 会当场失败。bump 工具链时三处一起改（ci + release ×2 + toml）。
+      # components 必须显式要 clippy：action 按 --profile minimal 安装，具名工具链
+      # 不像镜像预装的 stable 自带 clippy，缺了 `cargo clippy` 当场退 1（2026-11-27
+      # 313256df 双平台 2 分钟即红实证；ui-guard 只跑 cargo test 所以不受影响）。
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          components: clippy
 
       # 这里**开** target 缓存（与发布流水线相反）：PR 反复跑同一份代码，增量命中能把
       # 几十分钟压成几分钟。仓库缓存预算 10 GB，吃紧就把 `cache-targets` 关掉。
