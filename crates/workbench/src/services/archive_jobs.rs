@@ -137,8 +137,9 @@ fn archive(
             })?
         }
         SourceRef::Federated { owner, .. } => {
-            let session =
-                engine::duckdb::federation::session::session_for(owner).ok_or_else(|| {
+            let session = engine::duckdb::instance::current()
+                .and_then(|instance| instance.session_for_owner(owner))
+                .ok_or_else(|| {
                     "联邦会话已经不在了（重新展开这个源，或重跑一条联邦查询再试）".to_string()
                 })?;
             crate::services::persist_jobs::with_project_write_connection(project_root, |dest| {

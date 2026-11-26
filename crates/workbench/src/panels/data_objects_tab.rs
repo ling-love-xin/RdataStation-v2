@@ -292,20 +292,68 @@ impl DataObjectsTab {
     /// 不吞错误：失败时把引擎原话留在面板上——用户点了没反应是最难查的那种。
     fn run_session_action(&mut self, action: data_objects::SessionAction, cx: &mut Context<Self>) {
         use data_objects::SessionAction;
+        // 三个动作都直接落在**分析实例的会话**上：`federation::session` 那套按 owner 查
+        // `SESSIONS` 的门面已经没有写入方（生产路径只开实例会话），按它找必然找不到。
         let outcome = match action {
             SessionAction::RefreshSource { owner, alias } => {
-                engine::duckdb::federation::session::refresh_source(&owner, &alias).map(|_| ())
+                engine::duckdb::instance::current()
+                    .ok_or_else(|| "分析实例尚未启动（先跑一条查询）".to_string())
+                    .and_then(|instance| {
+                        instance.session_for_owner(&owner).ok_or_else(|| {
+                            "联邦会话已经不在了（重跑一条联邦查询再试）".to_string()
+                        })
+                    })
+                    .and_then(|session| {
+                        let source = session
+                            .mounted_sources()
+                            .into_iter()
+                            .find(|entry| entry.alias() == alias)
+                            .map(|entry| entry.source)
+                            .ok_or_else(|| format!("会话里没有源 {alias}"))?;
+                        session
+                            .mount_sources(&[source])
+                            .map(|_| ())
+                            .map_err(|error| error.to_string())
+                    })
             }
             SessionAction::SetPrimary { owner, alias } => {
-                engine::duckdb::federation::session::set_primary(&owner, &alias)
+                engine::duckdb::instance::current()
+                    .ok_or_else(|| "分析实例尚未启动（先跑一条查询）".to_string())
+                    .and_then(|instance| {
+                        instance.session_for_owner(&owner).ok_or_else(|| {
+                            "联邦会话已经不在了（重跑一条联邦查询再试）".to_string()
+                        })
+                    })
+                    .and_then(|session| {
+                        let ready = session
+                            .mounted_sources()
+                            .iter()
+                            .any(|entry| entry.alias() == alias && entry.is_ready());
+                        if !ready {
+                            return Err(format!("源 {alias} 当前不可用，不能设为主源"));
+                        }
+                        session
+                            .use_catalog(&alias)
+                            .map_err(|error| error.to_string())
+                    })
             }
             SessionAction::DropSession { owner } => {
-                let dropped = engine::duckdb::federation::session::drop_session(&owner);
-                match dropped {
-                    true => Ok(()),
-                    // 后端返 bool：没这个会话就是没关成，别报成功
-                    false => Err(format!("没有这个会话：{owner}")),
-                }
+                engine::duckdb::instance::current()
+                    .ok_or_else(|| "分析实例尚未启动（先跑一条查询）".to_string())
+                    .and_then(|instance| {
+                        instance
+                            .session_for_owner(&owner)
+                            .ok_or_else(|| format!("没有这个会话：{owner}"))
+                            .map(|session| (instance, session))
+                    })
+                    .and_then(|(instance, session)| {
+                        // 后端返 bool：没这个会话就是没关成，别报成功
+                        if instance.close_session(session.id()) {
+                            Ok(())
+                        } else {
+                            Err(format!("没有这个会话：{owner}"))
+                        }
+                    })
             }
         };
         self.note = Some(match outcome {

@@ -410,6 +410,17 @@ impl AnalysisInstance {
         self.state.lock().ok()?.sessions.get(id).cloned()
     }
 
+    /// 按 owner 取一条**已经开着**的会话（纯内存读）。
+    ///
+    /// 与 [`Self::ensure_session`] 的区别是这里**不新建**：面板「刷新源 / 切主源」、
+    /// 载入 / 归档 拿不到会话时应该明说“会话已经不在了”，而不是悄悄开一条空会话，
+    /// 让后续 SQL 报「表不见了」。
+    pub fn session_for_owner(&self, owner: &str) -> Option<Arc<AnalysisSession>> {
+        let state = self.state.lock().ok()?;
+        let id = state.owners.get(owner)?;
+        state.sessions.get(id).cloned()
+    }
+
     /// 按 owner 取（必要时建立）会话：同一 owner 复用同一条，`TEMP` 世界不来回换。
     ///
     /// 典型 owner：文档 id（编辑器联邦 / 加速档用 `accel:<源连接 id>`）、`process`。

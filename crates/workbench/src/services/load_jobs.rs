@@ -95,9 +95,11 @@ fn load(source: &SourceRef, qualified: &str, description: &str) -> Result<String
             .map_err(|error| error.to_string())
         }
         SourceRef::Federated { owner, .. } => {
-            let session = engine::duckdb::federation::session::session_for(owner).ok_or_else(|| {
-                "联邦会话已经不在了（重新展开这个源，或重跑一条联邦查询再试）".to_string()
-            })?;
+            let session = engine::duckdb::instance::current()
+                .and_then(|instance| instance.session_for_owner(owner))
+                .ok_or_else(|| {
+                    "联邦会话已经不在了（重新展开这个源，或重跑一条联邦查询再试）".to_string()
+                })?;
             load_qualified_from_session(qualified, description, |sql| {
                 session.run(sql).map(|_| ())
             })
