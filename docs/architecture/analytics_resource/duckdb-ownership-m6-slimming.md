@@ -454,7 +454,12 @@ WIP 产物串包（`rds_sql::guard` 缺失 / `use_duckdb_fed` 类型不一致）
 
 验证：`cargo test -p rds-analytics-resource --lib global::tests::g030` 1 passed。
 
-本段边界：只有服务层，详情动作还没有“恢复上一版表…”入口；任意版本选择仍待版本历史 UI。
+- UI：`detail_view/actions.rs` 对全局表型行（`kind = AnalyticsTable`、表名非空、版本 > 1、
+  非 Missing）摆「恢复上一版表…」；文件型仍摆「恢复上一版文件…」。两者都走
+  `request_restore_global_previous`，按档型决定文案并给 `enqueue_restore_global_version`
+  传 `table`；回执继续用 `GlobalVersionRestored`（workbench 文案不变）。
+
+本段边界：只有“上一版”快捷入口，任意版本选择仍待版本历史 UI。
 
 ## 10. 风险与未决
 

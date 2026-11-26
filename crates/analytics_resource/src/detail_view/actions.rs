@@ -72,6 +72,12 @@ pub(super) fn render_actions(
             let can_reference = can_distribute && !is_file_global;
             let can_restore_file =
                 is_file_global && detail.version > 1 && ctx.status != ArchiveStatus::Missing;
+            let is_table_global =
+                !is_file_global
+                    && detail.kind == crate::ArchiveKind::AnalyticsTable
+                    && !detail.analytics_table.as_deref().unwrap_or("").is_empty();
+            let can_restore_table =
+                is_table_global && detail.version > 1 && ctx.status != ArchiveStatus::Missing;
             let can_delete_global = crate::model::can_delete_global(&ctx);
             out.push(
                 div()
@@ -138,10 +144,31 @@ pub(super) fn render_actions(
                                             }
                                         }),
                                 )
+                            })
+                            .when(is_table_global, |row| {
+                                row.child(
+                                    Button::new("archive-detail-restore-global-table-version")
+                                        .ghost()
+                                        .label(tr("恢复上一版表…"))
+                                        .disabled(!can_restore_table)
+                                        .on_click({
+                                            let host = host.clone();
+                                            let detail_for_restore = detail_for_restore.clone();
+                                            move |_, window, cx| {
+                                                host.request_restore_global_previous(
+                                                    &detail_for_restore,
+                                                    window,
+                                                    cx,
+                                                )
+                                            }
+                                        }),
+                                )
                             }),
                     )
                     .child(div().text_xs().text_color(muted).child(if is_file_global {
                         tr("文件型全局资产暂不支持引用；分发会复制一份到本项目。历史文件已留副本，可用「恢复上一版文件」生成新版本")
+                    } else if is_table_global {
+                        tr("历史版本的表仍在全局库；「恢复上一版表」会复制旧表生成新版本，不原地换回")
                     } else if can_reference {
                         tr("引用不复制数据：本项目只记一条引用并钉住这一版；分发会复制出一份本地表")
                     } else {

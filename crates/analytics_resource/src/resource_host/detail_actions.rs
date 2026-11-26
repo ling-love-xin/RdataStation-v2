@@ -340,14 +340,16 @@ pub(super) fn request_solidify_ref(host: &ResourceHost, resource_id: &str, proje
     host.notice("资产库：正在固化引用版本…", cx);
 }
 
-/// 把全局文件资产恢复到上一版：确认后入队，旧副本生成新版本（不覆盖历史）。
+/// 把全局资产恢复到上一版：表型复制旧表，文件型复制旧副本，都生成新版本。
 pub(super) fn request_restore_global_previous(
     host: &ResourceHost,
     detail: &ArchiveDetail,
     window: &mut Window,
     cx: &mut App,
 ) {
-    let Some(root) = host.require_project("无法恢复全局文件版本", cx) else {
+    let is_table = detail.kind == crate::ArchiveKind::AnalyticsTable;
+    let scope_label = if is_table { "表" } else { "文件" };
+    let Some(root) = host.require_project(&format!("无法恢复全局{scope_label}版本"), cx) else {
         return;
     };
     if detail.version <= 1 {
@@ -356,11 +358,19 @@ pub(super) fn request_restore_global_previous(
     }
     let from_version = detail.version - 1;
     let name = detail.name.clone();
-    let description = format!(
-        "将把全局「{name}」的 v{from_version} 内容副本恢复成一个新版本（v{}）：当前 v{} 保留为历史，v{from_version} 及其副本也不动。\n恢复会重新生成全局表；已分发到项目的副本不受影响。\n版本副本若已被保留策略裁掉，恢复会明确拒绝。",
-        detail.version + 1,
-        detail.version
-    );
+    let description = if is_table {
+        format!(
+            "将把全局「{name}」的 v{from_version} 那张表复制成一个新版本（v{}）：当前 v{} 保留为历史，v{from_version} 那张表也不动。\n恢复会重新生成全局表；已分发到项目的副本不受影响。\n旧表若已被保留策略裁掉，恢复会明确拒绝。",
+            detail.version + 1,
+            detail.version
+        )
+    } else {
+        format!(
+            "将把全局「{name}」的 v{from_version} 内容副本恢复成一个新版本（v{}）：当前 v{} 保留为历史，v{from_version} 及其副本也不动。\n恢复会重新生成全局表；已分发到项目的副本不受影响。\n版本副本若已被保留策略裁掉，恢复会明确拒绝。",
+            detail.version + 1,
+            detail.version
+        )
+    };
     let backend = host.backend.clone();
     window.open_alert_dialog(cx, move |alert, _window, _cx| {
         let backend = backend.clone();
@@ -369,7 +379,7 @@ pub(super) fn request_restore_global_previous(
         let description = description.clone();
         alert
             .confirm()
-            .title("恢复上一版文件？")
+            .title(format!("恢复上一版{scope_label}？"))
             .description(description)
             .button_props(
                 gpui_kit::component::dialog::DialogButtonProps::default()
@@ -381,9 +391,14 @@ pub(super) fn request_restore_global_previous(
                     root.clone(),
                     name.clone(),
                     from_version,
+                    is_table,
                 );
                 backend.refresh_resources(cx);
-                say(&backend, "资产库：正在恢复全局文件版本…", cx);
+                say(
+                    &backend,
+                    &format!("资产库：正在恢复全局{scope_label}版本…"),
+                    cx,
+                );
                 true
             })
     });

@@ -179,6 +179,16 @@ impl ResourcesHost for RecordingHost {
             .borrow_mut()
             .push(format!("delete-global:{}", detail.name));
     }
+    fn request_restore_global_previous(
+        &self,
+        detail: &ArchiveDetail,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) {
+        self.calls
+            .borrow_mut()
+            .push(format!("restore-global:{}:v{}", detail.name, detail.version - 1));
+    }
     fn request_show_origin_chain(&self, detail: &ArchiveDetail, _window: &mut Window, _cx: &mut App) {
         self.calls
             .borrow_mut()
