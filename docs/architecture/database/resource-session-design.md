@@ -269,12 +269,19 @@ mock 落库 ──► mock_generator::persist_table_at ──► MockEngine::wri
   `duckdb / mysql_native / postgres_native / sqlite`），`oracle`/`mssql` 只出现在类型声明表；
   按用户决定（2026-11-27）等驱动到位再加，避免"看着有、点不开"。
 - 启动：`$env:RDS_HOME="$PWD\.rds\home"; .\target\debug\rds-app.exe`
+- **启动进欢迎页**（2026-11-27 刀19/刀20）：`startup.restore_last_workspace` 默认 `false`
+  ⇒ `project_session::resolve` 返回 `None`，中央 tab 停在欢迎页（新建连接 / 打开项目 /
+  最近使用 / **从示例项目开始**四个入口 + 完整项目选择器）。点「从示例项目开始」走
+  `project::ui::create_sample`（幂等：项目在就只补双数据源与两条连接）→ `request_switch`
+  切进示例项目。需要"打开即回到上次项目"的人在「设置 → 启动 → 启动时恢复上次项目」打开
+  开关即可；开关打开时只接管 `is_valid_project`（`.RSmeta`）成立的目录，半坏/已删项目跳过。
 
 运行：worktree 内 `cargo run -p rds-app`（先构建好，见构建产物
 `target\debug\rds-app.exe`）。
 
 | 步 | 操作 | 期望 |
 |---|---|---|
+| 0 | 启动应用 | 中央是欢迎页（不是上次项目）；点「从示例项目开始」→ 进入示例项目，导航树有 `示例 SQLite（销售库）` / `示例 DuckDB（销售库）` 两条 |
 | 1 | 打开项目 → 数据对象面板 | 源段「源 N」里有 `analytics`（项目分析库 · 路径）与 `rds_global`（全局分析库 · 只读挂载）两行，pill「底座」；表段列出项目业务表 + `G_*`，**没有** `tmp_i_` / `tmp_m_` |
 | 2 | 点 `analytics` 行的动作位 | 副标题变「已卸载 · 表段不再列它（显式限定名仍可达）」；表段里项目表与资产表消失，`G_*` 与结果集仍在；再点一次恢复 |
 | 3 | 开两个 SQL 编辑器，各跑一条 `SELECT 1 AS a` 并把结果存为结果集 | 面板表段出现两行 pill「结果集」；关掉其中一个编辑器 → 只消失它自己那行 |
@@ -292,3 +299,5 @@ mock 落库 ──► mock_generator::persist_table_at ──► MockEngine::wri
 |---|---|
 | 2026-11-27 | 初稿：把 16 刀之后的形态收敛成「判据 B1–B8 / 五层资源 / 生命周期矩阵 / owner 词表 / 通道矩阵 / 接口契约 / 面板信息架构 / 不变量 I1–I13 / 收口计划 D17–D22 / 边界」；核对中新发现三处不一致（O1 内核加速档用裸 `conn_id` 当 owner → 会误进源段；O2 `AnalysisChannel::Accelerated` 注释与刀10 相反；`insight_samples` 采集但不渲染） |
 | 2026-11-27 | D17 落地（`72486305`）：加速档 owner 定源级 `accel:{conn_id}`，`accel:` 前缀判定收敛单点；§11 补「11.0 本轮运行环境」（worktree 隔离 home、示例项目双源由 2.0.1 生成、真机 MySQL/PG 改 native 驱动、Oracle/MSSQL 等驱动） |
+| 2026-11-27 | 刀19（`2ca8c2d7`）：启动默认进空态——`startup.restore_last_workspace` 从死配置（只在旧 `general` 节测试样例里出现过）接成真开关（model + 登记项 + Slot + service + 持久化，默认 `false`）；`project_session::resolve(cx)` 按开关决定是否取最近项目，最近项目只认 `is_valid_project` 成立的目录 |
+| 2026-11-27 | 刀20（`87cf2b3c`）：欢迎页补「从示例项目开始」入口（`welcome-sample-project` → `project::ui::create_sample`，幂等补双源后直接切入） |
