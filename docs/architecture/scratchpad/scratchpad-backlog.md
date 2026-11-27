@@ -79,6 +79,7 @@
 | W5 | 巨型文件拆分（P4-1） | 属于结构性重构，与本轮功能收口不应混在一次提交 | 见 §7 建议 4 |
 | W6 | **复制固定加 `_copy` 后缀，跨目录也加**：`store::copy_entry` 第一次尝试就用 `{stem}_copy{ext}`，所以「复制到另一个文件夹」得到的是 `notes_copy` 而不是 `notes`（VSCode / 资源管理器按「同目录才改名」） | 属 store 既有行为，改它会影响既有测试与粘贴语义，本轮不动 | 下一迭代：仅在同名冲突时加后缀（`i == 0` 先用原名，失败再 `_copy`），并补「跨目录保留原名 / 同目录自动改名」两条用例 |
 | W7 | **剪贴板状态锁在草稿箱模块内**（`ScratchpadClipboard` 是 `ScratchpadView` 的字段），跨模块搬运（归档 → 草稿、项目文件 → 草稿）没有通道，只能绕系统文件管理器 | 要动 workbench 层的跨模块接口，属于架构收敛而非本轮功能修复 | 见 §7 建议 6 |
+| W8 | **文件元数据两套 sidecar 口径，书签不随归档往返**（2026-11-28 实证）：编辑器书签写**同目录** `.{name}.meta.json`（`editor::sync_bookmarks`），草稿箱连接元信息写**集中** `.RSmeta/scratchpad/meta/…`（`scratchpad::sidecar_path`）。归档采集（`source_meta_path`）对草稿源只读集中那套 → 书签不进 manifest；取回（`run_checkout`）把 manifest meta 写集中 → 编辑器只认同目录（`crates/editor` 内 `RSmeta`/`read_meta_at` 命中 0 处），书签取回后不可见。`run.rs`「供编辑器恢复书签/连接/视图」的注释属过度承诺（`execution`/`view` 全仓无生产者） | 改它要动 editor 的元数据落点或归档的搬运口径，两条都能做但涉及跨 crate 契约，不宜夹在功能收口里 | 见 §7 建议 7；最小修法是采集/取回同时认两套并合并 |
 
 ## 5. 实测与验证（2026-11-28）
 
@@ -204,6 +205,31 @@ TOCTOU（预览期间文件被外部改动）。
 
 代价：接口收敛 + 三个提供方适配，约 300–400 行；建议先做**只含草稿箱 ↔ 项目文件**的最小总线
 （两个提供方、只支持 `Copy` / `Move`），验证语义后再接归档。
+
+### 建议 7：元数据落点应由「文件归属提供方」决定，而不是两套路径各写各的（收益高，代价中）
+
+现状是两条互不相认的 sidecar 口径：
+
+| 数据 | 落点 | 生产者 | 读取方 |
+| --- | --- | --- | --- |
+| 编辑器书签 | 同目录 `.{name}.meta.json` | `editor::sync_bookmarks`（整份 `FileMeta::default()` 覆盖写） | 编辑器 `load_bookmarks`、草稿箱 `scan_bookmarks` |
+| 草稿连接元信息 | `.RSmeta/scratchpad/meta/{rel}/{name}.meta.json` | `scratchpad::write_file_meta`（read-modify-write） | 草稿箱打开草稿时预选连接 |
+| 归档采集 | 草稿源只读集中、本地文件源只读同目录 | `analytics_resource::source_meta_path` | — |
+| 取回恢复 | 只写集中 | `archive::run_checkout` | 编辑器不读集中 → **书签丢失** |
+
+更优形态：引入 `MetaLocation` 端口（与 `editor_files` 的「默认目录提供者」同一思路）——
+打开一个文件时问它的归属提供方「这份文件的 sidecar 在哪」，编辑器、草稿箱、归档三方
+都走这一个答案。收益：`FileMeta` 真正成为「一份文件的元数据」而不是「两个落点的同名结构」；
+归档/取回的书签往返、跨模块移动元数据跟随都自然成立。代价：编辑器要能问端口（现已通过
+`attach` 注入宿主能力，通道是现成的）；端到端测试要覆盖「书签 → 归档 → 取回 → 编辑器可见」，
+而现有 `t132` 只断言了 service 层返回值。
+
+顺带两件事（低成本、先做无妨）：
+
+1. `editor::sync_bookmarks` 改成 read-modify-write（现在整份覆盖，若同目录 sidecar 出现
+   `last_connection`/`extra` 字段会被抹掉）；
+2. `FileMeta` 的 `execution` / `view` 目前**无任何生产者**，要么接上，要么在文档里标成预留，
+   不要让读者以为折叠/字号已经持久化。
 
 ## 8. 手动验收清单（需要一次真点击）
 
