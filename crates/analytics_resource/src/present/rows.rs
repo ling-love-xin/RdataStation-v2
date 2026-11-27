@@ -35,6 +35,9 @@ pub struct SnapshotInputs<'a> {
     /// 全局存档的使用面（按全局名聚合，一次查完）：只有全局行详情才画一行摘要。
     /// 全局库未初始化 / 读失败时为空表——附加信息，不影响项目刷新。
     pub dispatch_usage: &'a std::collections::HashMap<String, crate::global::DispatchUsage>,
+    /// 全局表资产的版本链（按 asset_id 一次查完）：全局详情要列历史版本节点。
+    pub global_table_versions:
+        &'a std::collections::HashMap<String, Vec<crate::store::table_asset::TableAssetVersion>>,
     pub read_only: bool,
     pub now: DateTime<Utc>,
 }

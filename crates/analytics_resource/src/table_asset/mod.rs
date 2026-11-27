@@ -4,10 +4,11 @@
 //! `arc_*`），manifest 记逻辑内容，`table_asset_versions` 记版本链。
 //! 旧“升级为资产 / 登记已有表”的活表指针模型已整体删除。
 
+pub mod gc;
 pub mod manifest;
 
 pub use crate::service::table_asset::{
+    ArchiveTableOutcome, ArchiveTableRequest, TableCheckoutOutcome, TableConsumeOutcome,
     abandon_table_checkout, archive_table_at, checkout_table_asset, consume_table_checkout,
-    manifest_for_table, restore_table_asset_version, ArchiveTableOutcome, ArchiveTableRequest,
-    TableCheckoutOutcome, TableConsumeOutcome,
+    manifest_for_table, restore_table_asset_version,
 };

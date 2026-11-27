@@ -23,6 +23,7 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
         assertions,
         lifecycles,
         dispatch_usage,
+        global_table_versions,
         read_only,
         now,
     } = inputs;
@@ -89,14 +90,12 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
                 dispatch_label: String::new(),
                 // `None` = 这一行没问到副本清单（不是“一份都没有”）。
                 restorable_versions: restorable_versions.get(&resource.id).cloned(),
+                table_versions: Vec::new(),
             },
         );
         // 业务断言与效力随快照下发：详情面板只读，不在渲染期查库。
         detail.assertion = assertions.get(&resource.id).cloned();
-        detail.lifecycle = lifecycles
-            .get(&resource.id)
-            .copied()
-            .unwrap_or_default();
+        detail.lifecycle = lifecycles.get(&resource.id).copied().unwrap_or_default();
         details.insert(resource.id.clone(), detail);
         rows.push(row);
     }
@@ -105,12 +104,20 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
     // 历史版本计数也不进项目版本表；动作区由渲染层按 `scope` 收敛到「分发到本项目」。
     for resource in &global_resources {
         let preview = previews.get(&resource.id).cloned().unwrap_or_default();
+        let table_versions = global_table_versions
+            .get(&resource.id)
+            .cloned()
+            .unwrap_or_default();
+        let history_count = table_versions
+            .iter()
+            .filter(|version| version.version < resource.version)
+            .count() as i64;
         details.insert(
             resource.id.clone(),
             to_detail(
                 resource,
                 ArchiveStatus::Normal,
-                0,
+                history_count,
                 &[],
                 DetailExtras {
                     tags: Vec::new(),
@@ -122,6 +129,7 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
                     dispatch_label: dispatch_detail_label(dispatch_usage.get(&resource.name)),
                     // 全局行没有项目侧版本副本（本体在全局实例）。
                     restorable_versions: None,
+                    table_versions,
                 },
             ),
         );

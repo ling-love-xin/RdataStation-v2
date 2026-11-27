@@ -55,20 +55,20 @@ mod rows;
 mod search;
 mod state;
 
-pub use db::{catalog_level, db_rows, schema_rows, table_rows, CatalogLevel, ConnBrief, DbCache};
+pub use db::{CatalogLevel, ConnBrief, DbCache, catalog_level, db_rows, schema_rows, table_rows};
 pub use dialog::{open_source_picker, open_source_picker_for_connection};
-pub use group::{group_of, grouped, SourceGroup};
-pub use node::{ArchiveScope, NodeId, NodeKind, Row, TempScope, PICKER_MAX_DEPTH};
-pub use render::{render_rows, RowAction};
-pub use rows::{
-    analysis_table_rows, draft_rows, external_row, insight_sample_rows, is_persistent_table,
-    persistent_table_label, persistent_table_rows, result_set_rows, root_rows,
-    split_persistent_tables,
-};
+pub use group::{SourceGroup, group_of, grouped};
 /// 取数（面板与对话框共用同一份 I/O，见 `components::data_objects`）
 pub(crate) use load::analysis_tables_of;
-pub use search::{rank, search, HitRank, SearchOutcome, SEARCH_LIMIT};
-pub use state::{TreeState, RECENT_CAP};
+pub use node::{ArchiveScope, NodeId, NodeKind, PICKER_MAX_DEPTH, Row, TempScope};
+pub use render::{RowAction, render_rows};
+pub use rows::{
+    analysis_table_rows, draft_rows, external_row, insight_sample_rows, is_persistent_table,
+    is_snapshot_table, persistent_table_label, persistent_table_rows, result_set_rows, root_rows,
+    split_persistent_tables,
+};
+pub use search::{HitRank, SEARCH_LIMIT, SearchOutcome, rank, search};
+pub use state::{RECENT_CAP, TreeState};
 
 /// 来源种类（6 个叶子；分组见 `group::group_of`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -389,8 +389,8 @@ pub type ConfirmStrategy = Rc<dyn Fn(&Shared, &Rc<RefCell<PickerState>>, &mut Wi
 mod tests {
     // 刻意不用 `use super::*`：会把 gpui 的 `test` 属性宏带进作用域，
     // `#[test]` 会解析到它自己（recursion limit reached，见 gpui-kit-dev「窗口测试」）
-    use super::{Picked, PickerState, SourceKind, TableCandidate};
     use super::node::{ArchiveScope, NodeId};
+    use super::{Picked, PickerState, SourceKind, TableCandidate};
     use std::path::PathBuf;
 
     /// 出口派发必须看「选中的东西」，不是「停在哪一屏」：
@@ -447,7 +447,8 @@ mod tests {
         assert_eq!(single.picked_all(), vec![Picked::Analysis("b".into())]);
         assert_eq!(single.selected_label().as_deref(), Some("b"));
 
-        let mut multi = PickerState::new(kinds, true, vec![], vec![], vec![], vec![], vec![], vec![]);
+        let mut multi =
+            PickerState::new(kinds, true, vec![], vec![], vec![], vec![], vec![], vec![]);
         let a = NodeId::Path("a".into());
         let b = NodeId::Path("b".into());
         multi.toggle(a.clone(), Picked::Analysis("a".into()));

@@ -4,7 +4,6 @@
 //! 自持视图（`InsightView` / `MockPanel` / `HistoryView` / `render_detail`），
 //! 本文件只做薄壳 + 面板协议。`set_active` 把活动栏高亮同步回 `Shared::active_right`。
 
-use shared::i18n::tr;
 use gpui_kit::EventEmitter;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
@@ -13,11 +12,12 @@ use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelControl};
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::*;
+use shared::i18n::tr;
 
 use crate::view::RightPanel;
 
-use analytics_resource::detail_view::{DetailActions, render_detail};
 use crate::components::resource_host::version_selection;
+use analytics_resource::detail_view::{DetailActions, render_detail};
 use editor::view::history::HistoryView;
 use insight::InsightView;
 use mock::mock_view::MockPanel;
@@ -396,21 +396,29 @@ impl ArchivePanel {
                         .map(|panel| panel.read(cx).selected_ids())
                         .unwrap_or_default()
                 };
+                let selected_version = self
+                    .shared
+                    .detail_version
+                    .borrow()
+                    .as_ref()
+                    .filter(|(id, _)| *id == detail.id)
+                    .map(|(_, version)| *version);
                 let actions = DetailActions {
                     host: crate::components::resource_host::build_host(&self.shared),
                     read_only,
                     selected_ids,
+                    selected_version,
                 };
                 // 版本时间线的选中态：状态存 `Shared`，重绘通知这张面板（详情不在 Shared 子树）。
-                let selection =
-                    version_selection(&self.shared, &detail.id, cx.entity());
+                let selection = version_selection(&self.shared, &detail.id, cx.entity());
                 // 存档面板同样是「面板头 / 工具栏紧贴标签条」口径（2026-11-25 反馈②）：
                 // 顶距交给 `render_detail` 自己的 `pt_2`，根上不再叠一层。
-                div()
-                    .v_flex()
-                    .size_full()
-                    .min_h_0()
-                    .child(render_detail(&detail, Some(actions), &selection, cx))
+                div().v_flex().size_full().min_h_0().child(render_detail(
+                    &detail,
+                    Some(actions),
+                    &selection,
+                    cx,
+                ))
             }
             None => {
                 let muted = cx.theme().colors.muted_foreground;

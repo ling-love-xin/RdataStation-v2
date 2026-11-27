@@ -6,7 +6,8 @@
 //! 表型资产的回收站与项目表型同构：
 //! - 移入 = 只软删**当前活跃行**，全局表与版本快照都留库；
 //! - 恢复 = 先校验当前表还在，再复活登记；
-//! - 永久删除 = 逐张 `DROP` 同名链各版表，再清版本快照 / 登记 / 分发回执。
+//! - 永久删除 = 只删登记 / 版本行 / 引用与 fork 关系，物理快照交给 `jobs::table_gc`；
+//!   顺序是**先清引用后回收**，GC 看不到引用才 `DROP`，且任何不确定都保留。
 //!
 //! 回收站条目落在 `<RDS_HOME>/data/trash/global/<asset_id>/<timestamp>/manifest.json`，
 //! 不走 Windows 回收站。`delete_global` 暂时保留旧的硬删除语义（兼容现有 UI 调用），
@@ -18,7 +19,7 @@ use chrono::Utc;
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
-use super::{sqlite_err, CommonError, CoreError, GlobalInstanceStore, InstanceOpError};
+use super::{CommonError, CoreError, GlobalInstanceStore, InstanceOpError, sqlite_err};
 
 /// 一次全局资产删除的结果（回执文案用）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -430,11 +431,10 @@ impl GlobalInstanceStore {
         })
     }
 
-    /// 永久删除一个全局资产：`DROP` 同名链各版表 → 清版本快照 / 登记 / 分发回执。
+    /// 永久删除一个全局资产：清版本行 / 登记 / 分发回执，物理快照留给 GC。
     ///
-    /// 顺序：**先删表、后删登记**。表删一半失败时登记还在，重跑一次即可（`DROP ... IF EXISTS`
-    /// 幂等）；反过来先删登记会留下"无主的全局表"，谁也找不到它们。删除登记放在一个事务里，
-    /// 三张表（资源 / 版本 / 分发回执）要么都清、要么都不清。
+    /// 不再直接 `DROP`：裁剪和永久删除都只清引用，`jobs::table_gc` 在确认快照无任何版本行
+    /// 引用且超过 grace 后才回收物理表。登记删除放在一个事务里，要么都清、要么都不清。
     pub async fn purge_global(&self, name: &str) -> Result<GlobalDeleteOutcome, InstanceOpError> {
         // 1. 同名链全部版本行（**含软删**）：覆盖升级会软删旧登记，但旧表还在库里。
         let rows: Vec<(String, Option<String>)> = self.with_sqlite(|conn| {
@@ -491,7 +491,7 @@ impl GlobalInstanceStore {
             .map_err(sqlite_err("count_delete_global_projects"))
         })?;
 
-        // 3. 收集同名链所有物理表：表资产逐快照，数据文件 / 文件走旧 `analytics_table`。
+        // 3. 收集同名链所有快照：永久删除只清引用，物理表交给 `jobs::table_gc` 按引用计数回收。
         let snapshot_tables: Vec<(String, String)> = self.with_sqlite(|conn| {
             let mut stmt = conn
                 .prepare(
@@ -514,11 +514,7 @@ impl GlobalInstanceStore {
         })?;
         let unique_snapshots: std::collections::BTreeSet<(String, String)> =
             snapshot_tables.into_iter().collect();
-        let mut tables = 0usize;
-        for (schema, table) in &unique_snapshots {
-            self.drop_global_archive_table(schema, table).await?;
-            tables += 1;
-        }
+        let tables = unique_snapshots.len();
 
         // 4. 当前物化缓存：永久删除时清掉；CAS 对象留给后续 GC（可能被其他版本共享）。
         let file_rel: Option<String> = self.with_sqlite(|conn| {
@@ -575,18 +571,15 @@ impl GlobalInstanceStore {
                 rusqlite::params![name],
             )
             .map_err(sqlite_err("delete_global_table_versions"))?;
+            // 快照 / manifest 行不在这里删：物理表还在，GC 需要靠它们定位并在无引用后回收。
             tx.execute(
-                "DELETE FROM table_snapshots WHERE snapshot_id NOT IN (\
-                    SELECT snapshot_id FROM table_asset_versions)",
-                [],
+                "DELETE FROM table_asset_forks WHERE parent_asset_id IN (\
+                    SELECT id FROM analytics_resources WHERE name = ?1 AND scope = 'global') \
+                    OR child_asset_id IN (\
+                    SELECT id FROM analytics_resources WHERE name = ?1 AND scope = 'global')",
+                rusqlite::params![name],
             )
-            .map_err(sqlite_err("delete_global_table_snapshots"))?;
-            tx.execute(
-                "DELETE FROM table_manifests WHERE manifest_id NOT IN (\
-                    SELECT manifest_id FROM table_asset_versions)",
-                [],
-            )
-            .map_err(sqlite_err("delete_global_table_manifests"))?;
+            .map_err(sqlite_err("delete_global_table_forks"))?;
             tx.execute(
                 "DELETE FROM file_asset_versions WHERE resource_id IN (\
                     SELECT id FROM analytics_resources WHERE name = ?1 AND scope = 'global')",

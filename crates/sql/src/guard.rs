@@ -21,6 +21,8 @@ use super::refs::to_inner_dialect;
 
 /// 全局分析库的挂载别名（与 `shared::duckdb_root::GLOBAL_ALIAS` 同值；rds-sql 不反向依赖 shared）。
 const GLOBAL_CATALOG: &str = "rds_global";
+/// 归档快照 schema：表资产只读，任何 DDL/DML 都不允许从用户会话进入。
+const ARCHIVE_SCHEMA: &str = "rds_archive";
 
 /// 一条（或一批）SQL 的写范围报告。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -29,6 +31,10 @@ pub struct SqlWriteReport {
     pub writes_global: bool,
     /// 出现 `USE rds_global` / `ATTACH` / `DETACH` / 含全局的 `SET search_path`。
     pub touches_global_catalog: bool,
+    /// 目标表落在归档 schema `rds_archive`（或对它的 schema 做 DDL）。
+    pub writes_archive: bool,
+    /// 出现 `USE rds_archive` / 含归档 schema 的 `SET search_path`。
+    pub touches_archive_schema: bool,
     /// 执行成功后应把会话默认 catalog 改成这个（`USE <name>`）。
     pub use_catalog: Option<String>,
     /// 无法安全分类的语句（原因为中文，直接进用户错误）。
@@ -39,6 +45,11 @@ impl SqlWriteReport {
     /// user / process 会话是否必须拒绝这条 SQL。
     pub fn denied_for_global_reader(&self) -> bool {
         self.writes_global || self.touches_global_catalog || self.unclassifiable.is_some()
+    }
+
+    /// 任何角色都必须拒绝写归档快照：`rds_archive` 是冻结资产，只能读。
+    pub fn denied_for_archive_writer(&self) -> bool {
+        self.writes_archive || self.touches_archive_schema
     }
 }
 
@@ -79,6 +90,8 @@ fn classify_statement(
             let name = trim_identifier(&use_stmt.name);
             if name.eq_ignore_ascii_case(GLOBAL_CATALOG) {
                 report.touches_global_catalog = true;
+            } else if name.eq_ignore_ascii_case(ARCHIVE_SCHEMA) {
+                report.touches_archive_schema = true;
             } else {
                 report.use_catalog = Some(name);
             }
@@ -111,10 +124,16 @@ fn mark_write(
         if explicit_global(table) {
             report.writes_global = true;
         }
+        if explicit_archive(table) {
+            report.writes_archive = true;
+        }
         return;
     }
     if target_is_global(table, default_catalog) {
         report.writes_global = true;
+    }
+    if explicit_archive(table) {
+        report.writes_archive = true;
     }
 }
 
@@ -131,6 +150,13 @@ fn explicit_global(table: &TableRef) -> bool {
         .into_iter()
         .flatten()
         .any(|name| trim_identifier(name).eq_ignore_ascii_case(GLOBAL_CATALOG))
+}
+
+fn explicit_archive(table: &TableRef) -> bool {
+    [table.catalog.as_deref(), table.schema.as_deref()]
+        .into_iter()
+        .flatten()
+        .any(|name| trim_identifier(name).eq_ignore_ascii_case(ARCHIVE_SCHEMA))
 }
 
 fn classify_command(text: &str, report: &mut SqlWriteReport) {
@@ -153,6 +179,8 @@ fn classify_command_parts(kind: &str, body: &str, report: &mut SqlWriteReport) {
             let name = trim_identifier(body.trim().trim_end_matches(';'));
             if name.eq_ignore_ascii_case(GLOBAL_CATALOG) {
                 report.touches_global_catalog = true;
+            } else if name.eq_ignore_ascii_case(ARCHIVE_SCHEMA) {
+                report.touches_archive_schema = true;
             } else if !name.is_empty() {
                 report.use_catalog = Some(name);
             }
@@ -162,13 +190,24 @@ fn classify_command_parts(kind: &str, body: &str, report: &mut SqlWriteReport) {
             if body_lower.contains(GLOBAL_CATALOG) {
                 report.touches_global_catalog = true;
             }
+            if body_lower.contains(ARCHIVE_SCHEMA) {
+                report.touches_archive_schema = true;
+            }
         }
-        "ATTACH" | "DETACH" => report.touches_global_catalog = true,
+        "ATTACH" | "DETACH" => {
+            report.touches_global_catalog = true;
+            if body_lower.contains(ARCHIVE_SCHEMA) {
+                report.touches_archive_schema = true;
+            }
+        }
         "COPY" => classify_copy(&body_lower, report),
         // 明确会改文件 / 会话之外状态，或分类不了：user / process 一律拒。
         "CALL" | "EXPORT" | "IMPORT" | "LOAD" | "INSTALL" | "VACUUM" | "CHECKPOINT" | "ANALYZE"
         | "PRAGMA" | "GRANT" | "REVOKE" | "COMMENT" | "CREATE" | "DROP" | "ALTER" | "TRUNCATE"
         | "INSERT" | "UPDATE" | "DELETE" | "MERGE" => {
+            if body_lower.contains(ARCHIVE_SCHEMA) {
+                report.writes_archive = true;
+            }
             report.unclassifiable = Some(format!(
                 "语句「{kind}」不在可安全分类的白名单里（全局写守卫默认拒绝）"
             ));
@@ -186,6 +225,9 @@ fn classify_copy(body_lower: &str, report: &mut SqlWriteReport) {
         let target = body_lower[..index].trim();
         if target.contains(GLOBAL_CATALOG) {
             report.writes_global = true;
+        }
+        if target.contains(ARCHIVE_SCHEMA) {
+            report.writes_archive = true;
         }
     } else if body_lower.contains(".duckdb") || body_lower.contains("global.db") {
         report.unclassifiable =
@@ -261,25 +303,73 @@ mod tests {
 
     #[test]
     fn copy_is_allowed_only_outside_database_files() {
-        assert!(!report(
+        assert!(
+            !report(
             "COPY memory.tmp_i_1 TO '/tmp/x.parquet' (FORMAT PARQUET)",
             "rds_global"
         )
-        .denied_for_global_reader());
-        assert!(report("COPY t TO '/tmp/analytics.duckdb'", "main")
+            .denied_for_global_reader()
+        );
+        assert!(
+            report("COPY t TO '/tmp/analytics.duckdb'", "main")
             .unclassifiable
-            .is_some());
+                .is_some()
+        );
         assert!(report("COPY rds_global.t FROM '/tmp/x.csv'", "main").writes_global);
     }
 
     #[test]
     fn unclassifiable_commands_are_denied() {
-        assert!(report("CALL some_procedure()", "main")
+        assert!(
+            report("CALL some_procedure()", "main")
             .unclassifiable
-            .is_some());
+                .is_some()
+        );
         assert!(report("VACUUM", "main").unclassifiable.is_some());
-        assert!(report("EXPORT DATABASE '/tmp/out'", "main")
+        assert!(
+            report("EXPORT DATABASE '/tmp/out'", "main")
             .unclassifiable
-            .is_some());
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn archive_schema_is_read_only() {
+        for sql in [
+            "INSERT INTO rds_archive.arc_x VALUES (1)",
+            "UPDATE rds_archive.arc_x SET x = 1",
+            "DELETE FROM rds_archive.arc_x",
+            "CREATE TABLE rds_archive.arc_new AS SELECT 1",
+            "DROP TABLE rds_archive.arc_x",
+            "ALTER TABLE rds_archive.arc_x ADD COLUMN y INT",
+            "TRUNCATE rds_archive.arc_x",
+            "COPY rds_archive.arc_x FROM '/tmp/x.csv'",
+            "CREATE SCHEMA rds_archive",
+            "DROP SCHEMA rds_archive",
+        ] {
+            let r = report(sql, "main");
+            assert!(r.writes_archive, "{sql}");
+            assert!(r.denied_for_archive_writer(), "{sql}");
+        }
+    }
+
+    #[test]
+    fn archive_reads_and_project_writes_are_allowed() {
+        for sql in [
+            "SELECT * FROM rds_archive.arc_x",
+            "CREATE TABLE analytics.copy AS SELECT * FROM rds_archive.arc_x",
+            "INSERT INTO analytics.copy SELECT * FROM rds_archive.arc_x",
+            "DESCRIBE rds_archive.arc_x",
+        ] {
+            let r = report(sql, "main");
+            assert!(!r.denied_for_archive_writer(), "{sql}");
+        }
+    }
+
+    #[test]
+    fn archive_schema_switches_and_search_path_are_denied() {
+        assert!(report("USE rds_archive", "main").denied_for_archive_writer());
+        assert!(report("SET search_path = 'main,rds_archive'", "main").denied_for_archive_writer());
+        assert!(report("ATTACH 'x.duckdb' AS rds_archive", "main").denied_for_archive_writer());
     }
 }

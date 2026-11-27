@@ -4,11 +4,42 @@
 //! `rds_global.rds_archive.arc_*`，一条活跃登记行一个稳定 asset_id，版本链在
 //! `table_asset_versions`。数据文件走 [`GlobalInstanceStore::promote_file_as_table_asset`]，
 //! 同样冻结成全局快照；文件资产走 `publish_file`。
-
 use super::*;
 use crate::service::table_asset::manifest_for_table;
 use crate::store::table_asset::{NewTableSnapshot, SnapshotInstance};
 use crate::table_asset::manifest::snapshot_table_name;
+
+/// 发布基准校验：返回 true 表示本次是「接在已有 head 后追加」。
+///
+/// - head 不存在：只允许首次发布；带 base 说明发布者看的是别的实例，直接 `StaleBase`；
+/// - head 存在 + 显式 base：必须等于 head，落后/超前都拒绝（只允许 fork）；
+/// - head 存在 + 无 base：沿用旧口径，必须显式 `overwrite` 才追加。
+fn check_publish_base(
+    name: &str,
+    head: Option<&super::table_asset::GlobalTableHead>,
+    base: Option<i32>,
+    overwrite: bool,
+) -> Result<bool, InstanceOpError> {
+    match (head, base) {
+        (None, None) => Ok(false),
+        (None, Some(base)) => Err(InstanceOpError::StaleBase {
+            name: name.to_string(),
+            base: Some(base),
+            head: 0,
+        }),
+        (Some(head), Some(base)) if base == head.version => Ok(true),
+        (Some(head), Some(base)) => Err(InstanceOpError::StaleBase {
+            name: name.to_string(),
+            base: Some(base),
+            head: head.version,
+        }),
+        (Some(_), None) if overwrite => Ok(true),
+        (Some(_), None) => Err(InstanceOpError::Conflict {
+            name: name.to_string(),
+            field: ConflictField::Registry,
+        }),
+    }
+}
 
 impl GlobalInstanceStore {
     /// 从全局文件历史版本恢复：从该版 manifest 生成新 head（不原地回滚）。
@@ -123,6 +154,7 @@ impl GlobalInstanceStore {
             source_version: None,
             source_table: None,
             keep_versions: None,
+            base_global_version: None,
         };
         self.append_global_table_version(
             &head,
@@ -174,12 +206,14 @@ impl GlobalInstanceStore {
                     field: ConflictField::Registry,
                 });
             }
-        } else if !overwrite {
+        } else if !overwrite && req.base_global_version.is_none() {
             return Err(InstanceOpError::Conflict {
                 name: req.name.clone(),
                 field: ConflictField::Registry,
             });
         }
+        let overwrite =
+            check_publish_base(&req.name, head.as_ref(), req.base_global_version, overwrite)?;
 
         let previous = match head.as_ref() {
             Some(head) => self.global_table_version_row(&head.asset_id, head.version)?,
@@ -356,12 +390,14 @@ impl GlobalInstanceStore {
                     field: ConflictField::Registry,
                 });
             }
-        } else if !overwrite {
+        } else if !overwrite && req.base_global_version.is_none() {
             return Err(InstanceOpError::Conflict {
                 name: req.name.clone(),
                 field: ConflictField::Registry,
             });
         }
+        let overwrite =
+            check_publish_base(&req.name, head.as_ref(), req.base_global_version, overwrite)?;
 
         let previous = match head.as_ref() {
             Some(head) => self.global_table_version_row(&head.asset_id, head.version)?,

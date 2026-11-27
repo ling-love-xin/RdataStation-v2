@@ -100,12 +100,7 @@ impl SidebarPanel {
         // 对比是**只读查看**：不拒只读（只读项目也能看差异）、不入动作回执，
         // 直接走独立 diff 取数 job（读两版文本 + 生成 unified patch → 开 diff 对话框）。
         if let VersionAction::Diff { version, against } = action {
-            resource_jobs::enqueue_version_diff(
-                root,
-                resource_id.to_string(),
-                version,
-                against,
-            );
+            resource_jobs::enqueue_version_diff(root, resource_id.to_string(), version, against);
             self.ensure_resources_pump(cx);
             return;
         }
@@ -113,7 +108,11 @@ impl SidebarPanel {
         // 所以同样不拒只读、不入动作回执、不开忙态。
         if let VersionAction::Analyze { version } = action {
             crate::components::data_objects_load::analyze_asset_version(
-                &self.shared, resource_id, name, version, cx,
+                &self.shared,
+                resource_id,
+                name,
+                version,
+                cx,
             );
             return;
         }
@@ -602,6 +601,27 @@ impl SidebarPanel {
         let panel = self.resources_panel.clone();
         panel.update(cx, |panel, cx| panel.set_undo(undo, cx));
 
+        // 发布基准过期：不写失败回执，凭据落 `pending`，下一帧开「分叉 / 取消」对话框。
+        if let resource_jobs::OpOutcome::StaleBase {
+            request,
+            name,
+            base,
+            head,
+        } = &outcome
+        {
+            self.shared.stale_publish_dialog.borrow_mut().pending =
+                Some(crate::panels::shared::StalePublishRecovery {
+                    request: request.clone(),
+                    base: *base,
+                    head: *head,
+                });
+            self.shared.say(
+                format!("资产库：「{name}」发布基准已过期（全局 v{head}），请选择分叉或取消"),
+                cx,
+            );
+            return;
+        }
+
         // 同名冲突：不写失败回执，把凭据落 `pending`，下一帧由 `ensure_conflict_dialog`
         // 开三选对话框（覆盖 / 改名 / 取消；§13.3、§13.6）。
         if let resource_jobs::OpOutcome::Conflict {
@@ -660,9 +680,7 @@ impl SidebarPanel {
                 if open_after {
                     self.shared.request_open_in_editor(dest);
                 }
-                format!(
-                    "资产库：已从全局取回「{name}」v{version} → {shown}；改完归档为本项目资产"
-                )
+                format!("资产库：已从全局取回「{name}」v{version} → {shown}；改完归档为本项目资产")
             }
             resource_jobs::OpOutcome::CheckedOut {
                 dest,
@@ -736,23 +754,29 @@ impl SidebarPanel {
                 name,
                 from_version,
                 version,
-            } => format!(
-                "资产库：已从全局「{name}」v{from_version} 恢复为 v{version}（旧版本保留）"
-            ),
+            } => {
+                format!("资产库：已从全局「{name}」v{from_version} 恢复为 v{version}（旧版本保留）")
+            }
+            resource_jobs::OpOutcome::Forked { name, version } => {
+                format!("资产库：已分叉出新资产「{name}」v{version}（父资产 head 零复制）")
+            }
             resource_jobs::OpOutcome::GlobalDeleted {
                 name,
                 versions,
                 tables,
                 projects,
             } => format!(
-                "资产库：已从全局删除「{name}」（{versions} 个版本 / {tables} 张表）；曾分发到 {projects} 个项目，那些副本仍在"
+                "资产库：已从全局删除「{name}」（{versions} 个版本索引 / {tables} 张待回收快照）；曾分发到 {projects} 个项目，那些副本仍在"
             ),
             resource_jobs::OpOutcome::Failed { action, reason } => {
                 format!("资产库：{action}失败：{reason}")
             }
-            // 冲突已在前面拦截并转三选对话框，走不到这里；补齐 match 穷尽性。
+            // 冲突 / 基准过期都已在前面拦截并转对话框，走不到这里；补齐 match 穷尽性。
             resource_jobs::OpOutcome::Conflict { .. } => {
                 unreachable!("冲突回执已在前面转对话框处理")
+            }
+            resource_jobs::OpOutcome::StaleBase { .. } => {
+                unreachable!("发布基准过期已在前面转分叉对话框处理")
             }
         };
         // 治理（2026-10-30）：动作结果按成败分级——失败走 error 级，其余 info。

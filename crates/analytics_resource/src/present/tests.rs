@@ -1,13 +1,13 @@
+use super::snapshot::dispatch_detail_label;
 use super::{
     ArchiveStatuses, FolderMemberships, PreviewMap, RecentVersions, ResourceTags, SnapshotInputs,
     VersionCounts, build_repair_rows, build_snapshot, build_trash_snapshot, build_version_rows,
     format_relative_time, format_scale, format_size, format_timestamp, tail_for,
 };
-use super::snapshot::dispatch_detail_label;
 use crate::dialogs::index_repair::RepairGroup;
 use crate::model::{ArchiveKind, ArchiveStatus, ORIGIN_RESOURCES};
-use crate::store::rows::{AnalyticsResource, ResourceVersion};
 use crate::resource_view::{GroupOption, TagOption};
+use crate::store::rows::{AnalyticsResource, ResourceVersion};
 use crate::{IndexIssue, IndexScanReport};
 use chrono::{DateTime, Duration, Utc};
 use engine::persistence::trash::{TrashEntry, TrashKind};
@@ -328,6 +328,7 @@ fn details_carry_per_kind_size_and_real_history_count() {
         group_dictionary: Vec::new(),
         previews: empty_previews(),
         dispatch_usage: &dispatch_usage,
+        global_table_versions: &Default::default(),
         read_only: false,
         now,
     });
@@ -422,6 +423,7 @@ fn detail_carries_recent_version_lines_capped_at_three() {
         group_dictionary: Vec::new(),
         previews: empty_previews(),
         dispatch_usage: &dispatch_usage,
+        global_table_versions: &Default::default(),
         read_only: false,
         now,
     });
@@ -429,7 +431,11 @@ fn detail_carries_recent_version_lines_capped_at_three() {
     let detail = snapshot.details.get("ar_analysis").expect("分析表详情");
     assert_eq!(detail.history_label, "5 个历史版本", "总数不受明细条数影响");
     let lines = &detail.version_timeline;
-    assert_eq!(lines.len(), 4, "当前版本 + 最多 3 条历史（装配层自己也裁一次）");
+    assert_eq!(
+        lines.len(),
+        4,
+        "当前版本 + 最多 3 条历史（装配层自己也裁一次）"
+    );
     assert!(
         lines[0].is_current,
         "时间线第一个节点必须是当前版本（点它看的就是现在这一版）"
@@ -508,6 +514,7 @@ fn version_timeline_carries_hash_and_delta_per_node() {
         group_dictionary: Vec::new(),
         previews: empty_previews(),
         dispatch_usage: &Default::default(),
+        global_table_versions: &Default::default(),
         read_only: false,
         now,
     });
@@ -569,6 +576,7 @@ fn snapshot_carries_tags_for_rows_details_and_dictionary() {
         group_dictionary: Vec::new(),
         previews: empty_previews(),
         dispatch_usage: &dispatch_usage,
+        global_table_versions: &Default::default(),
         read_only: false,
         now,
     });
@@ -613,6 +621,7 @@ fn rows_carry_alias_and_source_table_for_the_search_surface() {
         group_dictionary: Vec::new(),
         previews: empty_previews(),
         dispatch_usage: &dispatch_usage,
+        global_table_versions: &Default::default(),
         read_only: false,
         now,
     });
@@ -667,6 +676,7 @@ fn details_carry_group_name_and_preview() {
         }],
         previews: &previews,
         dispatch_usage: &dispatch_usage,
+        global_table_versions: &Default::default(),
         read_only: false,
         now,
     });
@@ -727,6 +737,7 @@ fn snapshot_counts_route_status_before_kind() {
         group_dictionary: Vec::new(),
         previews: empty_previews(),
         dispatch_usage: &dispatch_usage,
+        global_table_versions: &Default::default(),
         read_only: true,
         now,
     });
@@ -846,6 +857,7 @@ fn detail_carries_definition_only_when_it_has_content() {
         group_dictionary: Vec::new(),
         previews: empty_previews(),
         dispatch_usage: &Default::default(),
+        global_table_versions: &Default::default(),
         read_only: false,
         now: Utc::now(),
     });
@@ -890,6 +902,7 @@ fn history_label_reports_restorable_copies_only_when_known() {
         group_dictionary: Vec::new(),
         previews: empty_previews(),
         dispatch_usage: &Default::default(),
+        global_table_versions: &Default::default(),
         read_only: false,
         now: Utc::now(),
     });
@@ -916,6 +929,7 @@ fn history_label_reports_restorable_copies_only_when_known() {
         group_dictionary: Vec::new(),
         previews: empty_previews(),
         dispatch_usage: &Default::default(),
+        global_table_versions: &Default::default(),
         read_only: false,
         now: Utc::now(),
     });

@@ -23,6 +23,9 @@ pub struct DetailExtras {
     ///
     /// 两者要分开：没问到不能对用户说“只有 0 份可还原”，也不能把每一版都标成“副本已裁剪”。
     pub restorable_versions: Option<Vec<i32>>,
+    /// 表资产的版本链（`table_asset_versions`，升序）；全局详情靠它列版本节点。
+    /// 文件型 / 项目表型给空（项目表型的版本行走 `recent_versions`）。
+    pub table_versions: Vec<crate::store::table_asset::TableAssetVersion>,
 }
 /// 单行 → 详情快照（详情面板只读，格式化在这里做完）。
 ///
@@ -40,9 +43,7 @@ pub fn to_detail(
     // 与行的尾巴同一口径：文件型给体积、分析表/分析库表给规模、引用型不给（不假装有值）。
     let size_label = match kind {
         ArchiveKind::File => format_size(resource.file_size),
-        ArchiveKind::AnalyticsTable => {
-            format_scale(resource.row_count, resource.column_count)
-        }
+        ArchiveKind::AnalyticsTable => format_scale(resource.row_count, resource.column_count),
         ArchiveKind::TableRef => String::new(),
     };
     // 先算（`extras` 的其余字段随后要按值取走）。
@@ -51,6 +52,7 @@ pub fn to_detail(
         status,
         recent_versions,
         extras.restorable_versions.as_deref(),
+        &extras.table_versions,
     );
     let restorable_versions = extras.restorable_versions;
     ArchiveDetail {
@@ -144,6 +146,7 @@ fn detail_version_timeline(
     status: ArchiveStatus,
     versions: &[crate::store::rows::ResourceVersion],
     copies: Option<&[i32]>,
+    table_versions: &[crate::store::table_asset::TableAssetVersion],
 ) -> Vec<DetailVersionLine> {
     // 先按时间线顺序摆好节点（当前 + 历史），再逐条与“下一节点”（版本号 -1）比差异。
     let mut nodes: Vec<TimelineNode> = Vec::with_capacity(versions.len() + 1);
@@ -166,6 +169,11 @@ fn detail_version_timeline(
     let is_table = crate::ArchiveKind::resolve(&resource.kind, resource.analytics_table.as_deref())
         == crate::ArchiveKind::AnalyticsTable;
     for version in versions.iter().take(DETAIL_RECENT_VERSIONS) {
+        // 表资产的历史节点由 `table_versions` 单独给（资源版本行里没有快照规模）；
+        // 两处都遍历会出现同版本重复节点。
+        if is_table && !table_versions.is_empty() {
+            break;
+        }
         let snapshot = serde_json::from_value::<AnalyticsResource>(version.snapshot.clone()).ok();
         nodes.push(TimelineNode {
             version: version.version,
@@ -174,7 +182,9 @@ fn detail_version_timeline(
                 timeline_size_label(record.row_count, record.column_count, record.file_size)
             }),
             file_size: snapshot.as_ref().and_then(|record| record.file_size),
-            hash: snapshot.as_ref().and_then(|record| record.content_hash.clone()),
+            hash: snapshot
+                .as_ref()
+                .and_then(|record| record.content_hash.clone()),
             is_current: false,
             // 没问到副本清单时按“还在”呈现（`None` = 不知道，不是“没有”）：
             // 误报“副本已裁剪”比漏报更糟——用户会以为能还原的版本不能还原。
@@ -186,6 +196,25 @@ fn detail_version_timeline(
                 copies.map_or(true, |copies| copies.contains(&version.version))
             },
         });
+    }
+    if is_table {
+        for version in table_versions
+            .iter()
+            .rev()
+            .filter(|version| version.version != resource.version)
+            .take(DETAIL_RECENT_VERSIONS)
+        {
+            nodes.push(TimelineNode {
+                version: version.version,
+                time_label: format_timestamp(version.created_at),
+                // 快照规模在 manifest 里；详情只带了版本链，不在这里逐条查库。
+                size_label: String::new(),
+                file_size: None,
+                hash: Some(version.manifest_id.clone()),
+                is_current: false,
+                has_copy: true,
+            });
+        }
     }
     // 版本表按新在前给，但别依赖它：时间线必须严格降序（差异文案是“较 vN-1”）。
     nodes.sort_unstable_by(|a, b| b.version.cmp(&a.version));

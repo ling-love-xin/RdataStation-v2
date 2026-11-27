@@ -295,7 +295,8 @@ manifest_id = sha256(canonical({
 - 输入：项目表资产的某个版本 + `base_global_version`。
 - 全局 head 不存在 → 新建全局资产 v1（`asset_id` 新生成）。
 - base 匹配 → 复制快照到全局 `rds_archive`，追加全局版本；manifest 若同内容则复用。
-- base 落后 → `Conflict`，只允许 fork 成新全局资产；不覆盖 head。
+- base 落后 → `StaleBase`，只允许 fork 成新全局资产；不覆盖 head。
+- 分叉面：详情 / 发布失败弹「发布基准已过期」，填新名后以父 head 零复制建 v1；父 head 不动。
 - 全局发布后，项目侧仍保留自己的快照与版本，不共享物理表。
 
 ### 7.9 分发 / 引用
@@ -319,8 +320,8 @@ manifest_id = sha256(canonical({
 - 表资产与文件资产不同：表版本默认受保留策略约束（体积大），不是全量保留。
 - 沿用现有 `KeepVersions` 语义：
   - `All`：全留。
-  - `Keep(n)`：保留最近 n 个**有快照**的版本。
-  - `MetadataOnly`：版本行保留，物理快照回收；历史只能看元信息，恢复明确拒绝。
+  - `Keep(n)`：保留当前 head + 最近 n 份历史版本行。
+  - `MetadataOnly`：只保留当前 head 与受保护版本行，其余版本行删除；物理快照交给 GC 按引用回收。
 - 永不裁的四类：
   1. 当前 head 版本；
   2. 被 `analytics_global_refs` 活跃 pin 的全局版本；
@@ -388,7 +389,7 @@ manifest_id = sha256(canonical({
 6. 两个资产同名不同 id：互不影响；rename 不改物理表名。
 7. 全局发布 base 落后 → Conflict，只能 fork；fork 新资产 v1 引用同一 snapshot。
 8. 项目引用 pin 住全局 v2：裁剪跳过 v2；释放 pin 后 GC 可回收快照。
-9. 保留策略 `MetadataOnly`：版本行在、快照被回收、恢复明确报错。
+9. 保留策略 `MetadataOnly`：除 head 与受保护版本外版本行被删，快照由 GC 回收，恢复明确报错。
 10. `INSERT/UPDATE/DELETE` 指向 `rds_archive` 被 SQL 闸门拒绝；`SELECT` 放行。
 11. 归档中途崩溃：不存在“live 版本指向缺失快照”；孤儿物理表可被 GC。
 12. 新库 schema 不包含旧「活表指针 / 一版一行 / name 引用」写入路径；表型 `kind` 直接写真实落库值。
@@ -403,12 +404,13 @@ manifest_id = sha256(canonical({
 | 表快照 manifest 与指纹 | `crates/analytics_resource/src/table_asset/manifest.rs`（新模块） | 已实现 |
 | 表版本 / 租约 store | `crates/analytics_resource/src/store/table_asset.rs`（新模块） | 已实现 |
 | 归档 / checkout / 再归档 / 恢复 | `crates/analytics_resource/src/service/table_asset.rs`（新模块） | 已实现 |
-| 归档 schema 只读守卫 | `crates/engine` 的 SQL 闸门 + `rds_archive` 过滤 | 未实现 |
-| 全局发布 / fork / 分发 / 引用 | `global/promote.rs`、`global/refs.rs`、`global/distribute.rs` | 表型升级、零复制恢复、分发与引用检查已接快照；引用按 `global_asset_id + version` 登记；全局发布 base 校验与 fork 待接 |
-| 保留与 GC | `global/sql.rs`、新的 `jobs/table_gc.rs` | `KeepVersions` 裁剪已按版本快照实现；独立 GC 任务未实现 |
+| 归档 schema 只读守卫 | `crates/sql/src/guard.rs` + `crates/engine/src/duckdb/instance.rs::guard_writes`；表枚举 `workbench/source_picker` 过滤 `arc_/wrk_` | 已实现 |
+| 全局发布 / fork / 分发 / 引用 | `global/promote.rs`、`global/table_asset.rs`、`dialogs/stale_base.rs`、`panels/resources.rs` | 表型升级、`base_global_version` 校验、`StaleBase` → 分叉对话框、零复制恢复、分发与引用检查已接快照；引用按 `global_asset_id + version` 登记 |
+| 保留与 GC | `global/sql.rs`、`global/delete.rs`、`table_asset/gc.rs`、`global/gc.rs`、`jobs/table_gc.rs` | 裁剪 / purge 只清引用行；后台 GC 按 24h grace 回收无引用快照 |
 | 删除旧表资产语义 | `table_asset.rs`（旧 `register` / `table_fingerprint`）、`global/promote.rs` 旧表链、`analytics_global_refs` 旧 name 列 | 已删除；全局表/数据文件均走快照，引用按 asset_id |
 | `存为表` 与归档拆分 | `crates/workbench/src/services/persist_jobs.rs`、数据对象面板入口 | 已实现 |
-| 版本对比（schema / 行） | `jobs/version.rs` + `dialogs/version_diff.rs` 扩展 | 版本历史已接快照；对比未实现 |
+| 版本历史 / 恢复入口 | `present/detail.rs`、`detail_view/actions.rs`、`detail_actions.rs` | 全局表版本链内联详情；时间线选中版可恢复为任意历史版本 |
+| 版本对比（schema / 行） | `jobs/version.rs` + `dialogs/version_diff.rs` 扩展 | 未实现 |
 
 > 本文是设计定稿，上表全部为待落码项。落地时直接替换旧表资产路径，**不建立旧数据迁移、不保留双读双写或 feature flag**；每刀完成后同步 `README.md` 与 `file-asset-cas-implementation-plan.md` 的边界说明。
 
@@ -419,8 +421,9 @@ manifest_id = sha256(canonical({
 - 旧路径已删除：`promote` / `promote_overwrite` / `register_global`、`read_global_row` 的单行回退、`prune_legacy_version_tables` 全部移除。
 - 恢复：`restore_global_table_version` 新增版本直接指向旧 `snapshot_id`，不复制数据。
 - 分发 / 引用：按 `physical_schema` 拼三部分限定名；表存在性检查按 schema。
-- 回收站：trash 只软删登记，快照保留；purge 才删版本索引、孤立快照与 manifest。
+- 回收站：trash 只软删登记，快照保留；purge 只清版本 / fork / 引用索引，物理快照与 manifest 留给 GC。
 - 引用：按 `global_asset_id + version` 登记；显示名可改，固化按 asset_id 解析当前名。
-- 验证：`rds-analytics-resource` 304 passed；`rds-workbench` 221 passed；`rds-insight` 266 passed。
+- 验证：`rds-analytics-resource` 全量测试（见 `.rds/tmp/analytics-test.log` 及后续复跑）；`rds-workbench` / `rds-sql` / `rds-engine` 编译与相关测试见各轮日志。
 
-残留：全局发布尚未按 `base_global_version` 做冲突 / fork；`rds_archive` / `rds_work` 的 SQL 只读闸门、独立 GC 与全局版本历史 UI 未接。
+已接通：全局发布 `base_global_version` → `StaleBase` → 分叉对话框；`rds_archive` SQL 只读闸门；`arc_/wrk_` 枚举过滤；独立表快照 GC；全局表版本链内联详情与任意历史版本恢复。
+仍留：版本对比（schema + 行级 diff）未实现；全局文件资产历史未接 `file_asset_versions`。

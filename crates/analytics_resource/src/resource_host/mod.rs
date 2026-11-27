@@ -34,13 +34,17 @@ pub(crate) use gpui_kit::{App, AppContext as _, Window};
 
 pub(crate) use crate::detail_view::ArchiveDetail;
 pub(crate) use crate::dialogs::archive::{ArchiveConflict, ArchiveDialogSeed, open_archive_dialog};
-pub(crate) use crate::dialogs::checkout::{CheckoutDialogSeed, open_checkout_dialog, suggest_work_copy_name};
+pub(crate) use crate::dialogs::checkout::{
+    CheckoutDialogSeed, open_checkout_dialog, suggest_work_copy_name,
+};
 pub(crate) use crate::dialogs::group::{GroupNameEvent, GroupNameKind, open_group_name_dialog};
 pub(crate) use crate::dialogs::pick::{
     DraftCandidate, PickDialogSeed, PickDialogState, open_draft_pick_dialog,
     open_draft_pick_dialog_with,
 };
-pub(crate) use crate::dialogs::rename::{RenameField, RenameSeed, open_rename_dialog, rename_placeholder};
+pub(crate) use crate::dialogs::rename::{
+    RenameField, RenameSeed, open_rename_dialog, rename_placeholder,
+};
 pub(crate) use crate::filter::{SortField, SortOrder};
 pub(crate) use crate::model::{
     ArchiveBinding, ArchiveKind, ArchiveRequest, ArchiveUndo, CheckoutRequest, DeleteTarget,
@@ -213,7 +217,6 @@ struct ResourceHost {
     backend: Rc<dyn ResourceHostBackend>,
 }
 
-
 pub mod archive_actions;
 pub mod delete_actions;
 pub mod detail_actions;
@@ -225,12 +228,7 @@ impl ResourcesHost for ResourceHost {
     fn request_archive_from_drafts(&self, window: &mut Window, cx: &mut App) {
         archive_actions::request_archive_from_drafts(self, window, cx);
     }
-    fn request_archive_drafts(
-        &self,
-        paths: Vec<PathBuf>,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
+    fn request_archive_drafts(&self, paths: Vec<PathBuf>, window: &mut Window, cx: &mut App) {
         archive_actions::request_archive_drafts(self, paths, window, cx);
     }
     fn request_archive_from_file(&self, window: &mut Window, cx: &mut App) {
@@ -284,28 +282,19 @@ impl ResourcesHost for ResourceHost {
     }
 
     /// 移入全局回收站（刀 B）：确认后入队，只软删全局当前登记，已分发副本不动。
-    fn request_delete_global(
-        &self,
-        detail: &ArchiveDetail,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
+    fn request_delete_global(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App) {
         detail_actions::request_delete_global(self, detail, window, cx);
     }
     fn request_restore_global_previous(
         &self,
         detail: &ArchiveDetail,
+        from: Option<i32>,
         window: &mut Window,
         cx: &mut App,
     ) {
-        detail_actions::request_restore_global_previous(self, detail, window, cx);
+        detail_actions::request_restore_global_previous(self, detail, from, window, cx);
     }
-    fn request_show_origin_chain(
-        &self,
-        detail: &ArchiveDetail,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
+    fn request_show_origin_chain(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App) {
         detail_actions::request_show_origin_chain(self, detail, window, cx);
     }
     fn is_reference_stale(&self, resource_id: &str) -> bool {

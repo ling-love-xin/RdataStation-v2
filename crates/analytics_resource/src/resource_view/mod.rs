@@ -27,7 +27,9 @@ pub(crate) use std::cell::Cell;
 pub(crate) use std::rc::Rc;
 
 pub(crate) use gpui_kit::component::IndexPath;
-pub(crate) use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelEvent, TabGroup};
+pub(crate) use gpui_kit::component::dock::{
+    BasePanel, Panel as ComponentPanel, PanelEvent, TabGroup,
+};
 pub(crate) use gpui_kit::component::input::{InputEvent, InputState};
 pub(crate) use gpui_kit::component::list::ListState;
 pub(crate) use gpui_kit::*;
@@ -36,18 +38,17 @@ pub(crate) use crate::detail_view::ArchiveDetail;
 pub(crate) use crate::dnd::{self, GroupDrop};
 pub(crate) use crate::filter::{self, ResourcesFilter, SortField, SortOrder, VisibleItem};
 pub(crate) use crate::model::{
-    ActionContext, ArchiveKind, ArchiveStatus, ArchiveUndo, DeleteTarget, RowScope,
-    TagTarget, can_checkout, can_delete_row, can_distribute, can_edit_tags, can_move_to_group,
-    can_open, can_promote, can_rename,
+    ActionContext, ArchiveKind, ArchiveStatus, ArchiveUndo, DeleteTarget, RowScope, TagTarget,
+    can_checkout, can_delete_row, can_distribute, can_edit_tags, can_move_to_group, can_open,
+    can_promote, can_rename,
 };
 
 // ---- P1 拆分：视图模型/行级纯函数 -> row_meta；列表委托 -> list_delegate；区域渲染 -> panel_render ----
 mod row_meta;
 pub use row_meta::{
     ArchiveCounts, ArchiveRow, BadgeTone, DEFAULT_GROUP_MARKER, GroupOption, InstanceFilter,
-    ResourcesSnapshot, RowClick, TagOption, badge_tone, can_view_stats,
-    classify_row_click, default_group_entry_label, row_tail, strength_badge, tag_entry_label,
-    tag_targets,
+    ResourcesSnapshot, RowClick, TagOption, badge_tone, can_view_stats, classify_row_click,
+    default_group_entry_label, row_tail, strength_badge, tag_entry_label, tag_targets,
 };
 pub(crate) use row_meta::{apply_row_click, kind_icon};
 // `classify_click` 仅窗口测试引用（`tests.rs` 经 `use super::` 取），生产路径无调用方。
@@ -226,10 +227,13 @@ pub trait ResourcesHost: 'static {
     }
     /// 把全局资产移入回收站（刀 B）：只软删当前活跃登记，表 / 文件本体 / 版本快照保留。
     fn request_delete_global(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App);
-    /// 把全局资产恢复到上一版：表型复制旧表，文件型复制旧副本，都生成新版本。
+    /// 把全局资产恢复到历史版本：表型复制旧表，文件型复制旧副本，都生成新版本。
+    ///
+    /// `from = None` 兜底恢复「上一版」；`Some(v)` 恢复时间线选中的那一版。
     fn request_restore_global_previous(
         &self,
         detail: &ArchiveDetail,
+        from: Option<i32>,
         window: &mut Window,
         cx: &mut App,
     );

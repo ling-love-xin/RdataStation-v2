@@ -6,7 +6,11 @@ use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
 /// 动作之后补一次取数（同一个 worker 里，见模块头注释）。
-pub(crate) fn refresh_after_op(rt: &tokio::runtime::Runtime, project_root: PathBuf, read_only: bool) {
+pub(crate) fn refresh_after_op(
+    rt: &tokio::runtime::Runtime,
+    project_root: PathBuf,
+    read_only: bool,
+) {
     let result = rt.block_on(run_refresh(&RefreshJob {
         project_root,
         read_only,
@@ -137,11 +141,16 @@ pub(super) async fn run_refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, S
         for id in recent_versions.keys() {
             match store.list_file_asset_versions(id).await {
                 Ok(list) => {
-                    versions.insert(id.clone(), list.into_iter().map(|file| file.version).collect());
+                    versions.insert(
+                        id.clone(),
+                        list.into_iter().map(|file| file.version).collect(),
+                    );
                 }
                 // 读不到就当成“没有 manifest”：详情会标不可还原，与真实的缺失同一呈现，
                 // 但不会把整次刷新弄失败（版本区是附加信息）。
-                Err(error) => tracing::warn!(error = %error, resource_id = %id, "读取文件版本索引失败"),
+                Err(error) => {
+                    tracing::warn!(error = %error, resource_id = %id, "读取文件版本索引失败")
+                }
             }
         }
         versions
@@ -204,7 +213,8 @@ pub(super) async fn run_refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, S
 
     // 全局实例行（§13 展示层）+ 全局存档的使用面：全局登记读失败 / 全局库未初始化
     // 都不弄砸项目刷新（全局视图是附加信息，不是项目刷新能否成功的前提）。
-    let (global_rows, global_resources, dispatch_usage) = load_global_view().await;
+    let (global_rows, global_resources, dispatch_usage, global_table_versions) =
+        load_global_view().await;
 
     // 业务断言与效力：一次查完（与标签 / 分组同一纪律，避免详情区 N+1）。
     let assertions = store.all_assertions().await.unwrap_or_else(|error| {
@@ -215,7 +225,11 @@ pub(super) async fn run_refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, S
 
     // 主动校验：业务时间窗明显过期时留一条醒目履历。刷新是高频动作，
     // 所以由 store 用 NOT EXISTS 去重——不会每刷一次就往时间线刷一条重复告警。
-    let now_year = Utc::now().format("%Y").to_string().parse::<i32>().unwrap_or(0);
+    let now_year = Utc::now()
+        .format("%Y")
+        .to_string()
+        .parse::<i32>()
+        .unwrap_or(0);
     for (id, assertion) in &assertions {
         let Some(window) = assertion.time_window.as_deref() else {
             continue;
@@ -233,7 +247,10 @@ pub(super) async fn run_refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, S
             .map(|row| row.version)
             .unwrap_or(1);
         let detail = format!("业务时间窗「{window}」已过期，请确认结论是否仍适用");
-        if let Err(error) = store.record_validation_if_absent(id, version, &detail).await {
+        if let Err(error) = store
+            .record_validation_if_absent(id, version, &detail)
+            .await
+        {
             tracing::warn!(error = %error, resource_id = %id, "记录时间窗校验事件失败");
         }
     }
@@ -254,6 +271,7 @@ pub(super) async fn run_refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, S
         group_dictionary,
         previews: &previews,
         dispatch_usage: &dispatch_usage,
+        global_table_versions: &global_table_versions,
         read_only: job.read_only,
         now: Utc::now(),
     });
@@ -299,6 +317,7 @@ async fn load_global_view() -> (
     Vec<ArchiveRow>,
     Vec<AnalyticsResource>,
     std::collections::HashMap<String, crate::global::DispatchUsage>,
+    std::collections::HashMap<String, Vec<crate::store::table_asset::TableAssetVersion>>,
 ) {
     use crate::global::{GlobalInstanceStore, list_global_resources, to_global_rows};
     let Ok(store) = GlobalInstanceStore::production().await else {
@@ -315,7 +334,26 @@ async fn load_global_view() -> (
             Default::default()
         }
     };
-    (rows, resources, usage)
+    // 全局表资产的版本链：一次按资产查完（规模 = 全局表资产行数）。
+    // 文件型没有 `table_asset_versions`。读失败只让该行没有历史节点，不影响刷新。
+    let mut versions = std::collections::HashMap::new();
+    for resource in &resources {
+        if ArchiveKind::resolve(&resource.kind, resource.analytics_table.as_deref())
+            != ArchiveKind::AnalyticsTable
+        {
+            continue;
+        }
+        match store.global_table_versions(&resource.id) {
+            Ok(list) if !list.is_empty() => {
+                versions.insert(resource.id.clone(), list);
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(error = %error, asset_id = %resource.id, "读取全局表版本链失败");
+            }
+        }
+    }
+    (rows, resources, usage, versions)
 }
 
 /// 读内容预览（工作线程上执行）：只给可预览的行读开头。
@@ -328,8 +366,7 @@ async fn load_previews(payload: &PayloadStore, rows: &[AnalyticsResource]) -> Pr
     for row in rows {
         // 表型 / 引用档没有 `resources/` 下的本体文件；带结构指纹的行沿用原口径
         // （只给元信息、不读文本预览）——种类收成两档后这两件事得分开判。
-        if ArchiveKind::resolve(&row.kind, row.analytics_table.as_deref())
-            != ArchiveKind::File
+        if ArchiveKind::resolve(&row.kind, row.analytics_table.as_deref()) != ArchiveKind::File
             || row.definition_sql.is_some()
         {
             continue;
@@ -438,7 +475,6 @@ pub fn drain_trash_rows() -> Option<Result<TrashDialogSeed, String>> {
 pub fn drain_index_scan() -> Option<Result<IndexScanRows, String>> {
     lock(&jobs().index_scan).take()
 }
-
 
 #[cfg(test)]
 mod validation_tests {

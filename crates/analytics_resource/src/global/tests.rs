@@ -102,6 +102,8 @@ fn promote_req(name: &str, path: &Path, kind: PromoteKind) -> PromoteRequest {
         source_table: None,
         // 默认不裁（用例要看全部版本表）；裁剪用例自己填。
         keep_versions: None,
+        // 默认首次发布；base 冲突用例自己填。
+        base_global_version: None,
     }
 }
 
@@ -166,11 +168,12 @@ async fn g001_promote_data_file_as_global_snapshot() {
         Some(1),
         "数据文件升级出来的全局表能参与分析"
     );
-    assert!(row
-        .definition_sql
+    assert!(
+        row.definition_sql
         .as_deref()
         .unwrap_or("")
-        .contains("read_csv_auto"));
+            .contains("read_csv_auto")
+    );
 
     // 版本快照落全局库。
     env.store
@@ -538,6 +541,7 @@ async fn g015_table_source_promote_moves_every_row() {
         source_table: Some("daily".to_string()),
         // 这一步只验搬运与来源链，不裁。
         keep_versions: None,
+        base_global_version: None,
     };
 
     let outcome = env
@@ -645,6 +649,7 @@ async fn g030_table_version_restore_reuses_the_old_snapshot() {
         source_version: None,
         source_table: Some("daily".to_string()),
         keep_versions: None,
+        base_global_version: None,
     };
     env.store
         .promote_table_from_project(&project, &req, false)
@@ -726,6 +731,7 @@ async fn g031_global_table_trash_purge_keeps_then_drops_snapshots() {
         source_version: None,
         source_table: Some("snap_orders".to_string()),
         keep_versions: None,
+        base_global_version: None,
     };
     env.store
         .promote_table_from_project(&project, &req, false)
@@ -776,11 +782,26 @@ async fn g031_global_table_trash_purge_keeps_then_drops_snapshots() {
 
     for table in &tables {
         assert!(
-            !env.store
+            env.store
                 .table_exists(table)
                 .await
                 .expect("exists after purge"),
-            "永久删除要清掉快照：{table}"
+            "永久删除只清引用，物理快照等 GC：{table}"
+        );
+    }
+    let gc = env
+        .store
+        .gc_table_snapshots(std::time::Duration::ZERO)
+        .await
+        .expect("gc");
+    assert_eq!(gc.dropped, tables.len(), "无引用快照全被 GC 回收");
+    for table in &tables {
+        assert!(
+            !env.store
+                .table_exists(table)
+                .await
+                .expect("exists after gc"),
+            "GC 应清掉快照：{table}"
         );
     }
     env.store
@@ -827,6 +848,7 @@ async fn g032_table_asset_promotes_from_project_archive_schema() {
         // UI 对表资产传 `rds_archive.<物理快照>`。
         source_table: Some("rds_archive.arc_project".to_string()),
         keep_versions: None,
+        base_global_version: None,
     };
     let outcome = env
         .store
@@ -958,8 +980,8 @@ fn read_global_version_tables(env: &TestEnv, name: &str) -> Vec<(i32, Option<Str
         .expect("读版本表")
 }
 
-/// 快照会随版本增长，`KeepVersions` 只裁历史快照、不碰 manifest 与登记：
-/// **当前版本快照是本体、永远留**；`keep` 数的是历史份数。
+/// 快照会随版本增长，`KeepVersions` 只裁**版本行**、不碰 manifest 与登记：
+/// **当前版本行 + 最近 N 份历史**留；物理快照由 GC 按引用计数回收。
 #[tokio::test]
 async fn g016_version_table_pruning_keeps_current_and_says_why() {
     let env = create_test_env().await;
@@ -989,7 +1011,7 @@ async fn g016_version_table_pruning_keeps_current_and_says_why() {
         );
     }
 
-    // Keep(1)：留当前版 + 最近 1 份历史，删最老那版。
+    // Keep(1)：留当前版 + 最近 1 份历史，删最老那版的版本行。
     let removed = env
         .store
         .prune_version_tables("pruned_orders", crate::model::KeepVersions::Keep(1))
@@ -998,28 +1020,27 @@ async fn g016_version_table_pruning_keeps_current_and_says_why() {
     assert_eq!(removed, 1, "三版留两版");
 
     let after = read_global_version_tables(&env, "pruned_orders");
-    assert_eq!(after.len(), 3, "登记行一条不删（版本元数据永久保留）");
+    assert_eq!(after.len(), 2, "只留当前 + 最近 1 份历史版本行");
+    let version_rows: i64 = env
+        .store
+        .with_sqlite(|conn| {
+            conn.query_row("SELECT count(*) FROM table_asset_versions", [], |row| {
+                row.get(0)
+            })
+            .map_err(sqlite_err("count_after_prune"))
+        })
+        .expect("count versions");
+    assert_eq!(version_rows, 2, "当前 + 最近 1 份历史版本行");
+    for (_, table) in &before {
     assert!(
         env.store
-            .table_exists(after[0].1.as_deref().expect("表名"))
+                .table_exists(table.as_deref().expect("表名"))
             .await
             .expect("exists"),
-        "当前版本是本体，必须留"
+            "裁剪只删版本行，物理快照交给 GC：{:?}",
+            table
     );
-    assert!(
-        env.store
-            .table_exists(after[1].1.as_deref().expect("表名"))
-            .await
-            .expect("exists"),
-        "最近一份历史留着"
-    );
-    assert!(
-        !env.store
-            .table_exists(after[2].1.as_deref().expect("表名"))
-            .await
-            .expect("exists"),
-        "最老那版的内容已清"
-    );
+    }
 
     // 当前版本还能分发。
     let project = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
@@ -1098,19 +1119,34 @@ async fn g017_delete_global_drops_tables_and_registry_only() {
     assert_eq!(outcome.tables, 2, "两版快照都要删");
     assert_eq!(outcome.projects, 1, "回执在删除前数过");
 
+    // 永久删除只清引用；物理快照由 GC 在无引用后回收。
+    assert!(
+        env.store
+            .table_exists(&first_table)
+            .await
+            .expect("probe v1"),
+        "purge 不直接 DROP，等 GC"
+    );
+    let gc = env
+        .store
+        .gc_table_snapshots(std::time::Duration::ZERO)
+        .await
+        .expect("gc");
+    assert_eq!(gc.dropped, 2, "两版快照都已无引用，GC 全回收");
+
     assert!(
         !env.store
             .table_exists(&first_table)
             .await
             .expect("probe v1"),
-        "v1 表应已删除"
+        "v1 表应已由 GC 删除"
     );
     assert!(
         !env.store
             .table_exists(&second_table)
             .await
             .expect("probe v2"),
-        "v2 表应已删除"
+        "v2 表应已由 GC 删除"
     );
 
     let (rows, versions, dispatches) = env
@@ -1397,14 +1433,28 @@ async fn g018_prune_keeps_only_pinned_versions() {
         .prune_version_tables("ref_guard_orders", crate::model::KeepVersions::MetadataOnly)
         .await
         .expect("prune");
-    assert_eq!(removed, 1, "只删中间那版，最老那版有 pin");
+    assert_eq!(removed, 1, "只删中间那版的版本行，最老那版有 pin");
     assert!(
         env.store.table_exists(&oldest_table).await.expect("exists"),
-        "被 pin 的最老版本必须保留"
+        "裁剪不碰物理快照：被 pin 的最老版本仍在"
     );
     assert!(
+        env.store.table_exists(&middle_table).await.expect("exists"),
+        "中间版本行已删，但物理快照交给 GC，GC 未跑前仍在"
+    );
+    let gc = env
+        .store
+        .gc_table_snapshots(std::time::Duration::ZERO)
+        .await
+        .expect("gc");
+    assert_eq!(gc.dropped, 1, "中间版本已无引用，GC 回收一张快照");
+    assert!(
         !env.store.table_exists(&middle_table).await.expect("exists"),
-        "未被 pin 的中间版本可以裁掉"
+        "无引用的中间快照被 GC 回收"
+    );
+    assert!(
+        env.store.table_exists(&oldest_table).await.expect("exists"),
+        "被 pin 的最老版本仍不可回收"
     );
 
     // 释放这一版 pin 后再裁，最老版本才允许被删。
@@ -1418,10 +1468,16 @@ async fn g018_prune_keeps_only_pinned_versions() {
         .prune_version_tables("ref_guard_orders", crate::model::KeepVersions::MetadataOnly)
         .await
         .expect("prune after release");
-    assert!(removed >= 1, "释放 pin 后至少会删掉最老那版");
+    assert!(removed >= 1, "释放 pin 后至少会删掉最老那版的版本行");
+    let gc = env
+        .store
+        .gc_table_snapshots(std::time::Duration::ZERO)
+        .await
+        .expect("gc after release");
+    assert!(gc.dropped >= 1, "释放 pin 后历史快照可被 GC 回收");
     assert!(
         !env.store.table_exists(&oldest_table).await.expect("exists"),
-        "释放 pin 后历史版本可裁"
+        "释放 pin 后历史快照被 GC 回收"
     );
 
     let _ = fs::remove_dir_all(&env.dir);
@@ -1471,8 +1527,16 @@ async fn g019_delete_global_blocked_by_active_ref() {
         .expect("purge");
     assert_eq!(deleted.versions, 1);
     assert!(
+        env.store.table_exists(&table).await.expect("exists"),
+        "purge 只清引用，物理快照等 GC"
+    );
+    env.store
+        .gc_table_snapshots(std::time::Duration::ZERO)
+        .await
+        .expect("gc");
+    assert!(
         !env.store.table_exists(&table).await.expect("exists"),
-        "释放引用后删除成功"
+        "释放引用后 GC 才回收物理表"
     );
 
     let _ = fs::remove_dir_all(&env.dir);
@@ -1599,10 +1663,12 @@ async fn g021_reference_asset_and_solidify_selected_version() {
     assert_eq!(kind, "table_ref");
     assert!(table.is_none(), "引用资产不能登记本地表名");
     assert_eq!(origin_kind.as_deref(), Some("global"));
-    assert!(origin_ref
+    assert!(
+        origin_ref
         .as_deref()
         .unwrap_or("")
-        .contains("\"version\":1"));
+            .contains("\"version\":1")
+    );
     assert_eq!(version, 1);
     assert_eq!(alias.as_deref(), Some("订单引用"));
     assert!(
@@ -2088,10 +2154,11 @@ async fn g092_global_checkout_creates_lease_and_blocks_purge() {
         .await
         .expect("checkout");
     assert_eq!(out.content_hash.len(), 64);
-    assert!(env
-        .project_root
+    assert!(
+        env.project_root
         .join("scratchpad/global/data.csv")
-        .is_file());
+            .is_file()
+    );
     let lease = project
         .active_lease("global:checkout_file")
         .await
@@ -2115,10 +2182,11 @@ async fn g092_global_checkout_creates_lease_and_blocks_purge() {
         matches!(second, InstanceOpError::LeaseActive { .. }),
         "第二次取回应报已有 lease：{second:?}"
     );
-    assert!(!env
-        .project_root
+    assert!(
+        !env.project_root
         .join("scratchpad/global/data-2.csv")
-        .exists());
+            .exists()
+    );
 
     let purge = env
         .store
@@ -2161,6 +2229,106 @@ async fn g092_global_checkout_creates_lease_and_blocks_purge() {
     let _ = fs::remove_dir_all(&env.dir);
 }
 
+/// 表资产 fork：父 head 不动，子链 v1 零复制复用父快照与 manifest，并落 fork 关系。
+#[tokio::test]
+async fn g096_table_asset_fork_reuses_parent_snapshot() {
+    let env = create_test_env().await;
+    let csv = write_csv(&env.dir);
+    for round in 0..2 {
+        fs::write(
+            &csv,
+            format!("id,sku,qty\n1,a,{round}\n2,b,{round}\n3,c,{round}\n"),
+        )
+        .expect("rewrite csv");
+        let req = promote_req("fork_table_parent", &csv, PromoteKind::DataFile);
+        env.store
+            .promote_file_as_table_asset(&req, true)
+            .await
+            .expect("promote");
+    }
+
+    let fork = env
+        .store
+        .fork_global_table_asset("fork_table_parent", 2, "fork_table_child")
+        .await
+        .expect("fork table asset");
+    assert_eq!(fork.name, "fork_table_child");
+    assert_eq!(fork.version, 1);
+
+    let (child_table, child_snapshot, child_manifest) = env
+        .store
+        .with_sqlite(|conn| {
+            conn.query_row(
+                "SELECT ar.analytics_table, tav.snapshot_id, tav.manifest_id \
+                 FROM analytics_resources ar \
+                 JOIN table_asset_versions tav ON tav.asset_id = ar.id \
+                 WHERE ar.name = 'fork_table_child' AND ar.scope = 'global'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .map_err(sqlite_err("read_fork_child"))
+        })
+        .expect("child row");
+    let (parent_table, parent_snapshot, parent_manifest) = env
+        .store
+        .with_sqlite(|conn| {
+            conn.query_row(
+                "SELECT ar.analytics_table, tav.snapshot_id, tav.manifest_id \
+                 FROM analytics_resources ar \
+                 JOIN table_asset_versions tav ON tav.asset_id = ar.id \
+                 WHERE ar.name = 'fork_table_parent' AND ar.scope = 'global' \
+                   AND tav.version = 2",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .map_err(sqlite_err("read_fork_parent"))
+        })
+        .expect("parent row");
+    assert_eq!(child_table, parent_table, "v1 直接复用父快照，不复制数据");
+    assert_eq!(child_snapshot, parent_snapshot);
+    assert_eq!(child_manifest, parent_manifest);
+
+    let (parent_name, parent_version, child_name, child_version): (String, i32, String, i32) = env
+        .store
+        .with_sqlite(|conn| {
+            conn.query_row(
+                "SELECT p.name, taf.parent_version, c.name, taf.child_version \
+                 FROM table_asset_forks taf \
+                 JOIN analytics_resources p ON p.id = taf.parent_asset_id \
+                 JOIN analytics_resources c ON c.id = taf.child_asset_id \
+                 WHERE taf.child_asset_id = (SELECT id FROM analytics_resources \
+                    WHERE name = 'fork_table_child' AND scope = 'global')",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .map_err(sqlite_err("read_table_fork"))
+        })
+        .expect("fork row");
+    assert_eq!(parent_name, "fork_table_parent");
+    assert_eq!(parent_version, 2);
+    assert_eq!(child_name, "fork_table_child");
+    assert_eq!(child_version, 1);
+
+    // 父 head 未被分叉挪动。
+    assert_eq!(
+        read_global_table(&env, "fork_table_parent").as_deref(),
+        Some(parent_table.as_str())
+    );
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
 #[tokio::test]
 async fn g093_fork_reuses_manifest_without_moving_head() {
     let env = create_test_env().await;
@@ -2187,10 +2355,11 @@ async fn g093_fork_reuses_manifest_without_moving_head() {
     let row = read_global_row(&env, "fork_child", None);
     assert_eq!(row.0, "file");
     assert!(row.1.is_none());
-    assert!(env
-        .dir
+    assert!(
+        env.dir
         .join("global/resources/global/fork_child.csv")
-        .is_file());
+            .is_file()
+    );
 
     // 原 head 不变，fork 关系落库。
     let parent_row = read_global_row(&env, "fork_parent", None);

@@ -1,7 +1,7 @@
 //! 详情动作：打开、统计、取回、升级/分发、指纹核对、版本历史。
 
-use shared::i18n::tr;
 use super::*;
+use shared::i18n::tr;
 
 /// 表型取数的唯一入口（双击打开与「查看统计」共用）。
 ///
@@ -61,8 +61,12 @@ fn open_global_ref(host: &ResourceHost, detail: &ArchiveDetail, cx: &mut App) {
     );
 }
 
-pub(super) fn request_open(host: &ResourceHost, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
-
+pub(super) fn request_open(
+    host: &ResourceHost,
+    detail: &ArchiveDetail,
+    _window: &mut Window,
+    cx: &mut App,
+) {
         // 全局引用：没有本地本体，按登记的实际全局表名只读取样。
         if detail.kind == ArchiveKind::TableRef
             && detail.origin_kind.as_deref() == Some(crate::model::ORIGIN_KIND_GLOBAL)
@@ -74,7 +78,10 @@ pub(super) fn request_open(host: &ResourceHost, detail: &ArchiveDetail, _window:
         if detail.kind == ArchiveKind::AnalyticsTable {
             open_analytics_table(host, detail, cx);
             host.notice(
-                format!("资产库：已在洞察面板打开「{}」（取样）——本体仍只读", detail.name),
+            format!(
+                "资产库：已在洞察面板打开「{}」（取样）——本体仍只读",
+                detail.name
+            ),
                 cx,
             );
             return;
@@ -132,8 +139,12 @@ pub(super) fn request_open(host: &ResourceHost, detail: &ArchiveDetail, _window:
         host.backend.request_open_in_editor_read_only(path, cx);
 }
 
-pub(super) fn request_view_stats(host: &ResourceHost, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
-
+pub(super) fn request_view_stats(
+    host: &ResourceHost,
+    detail: &ArchiveDetail,
+    _window: &mut Window,
+    cx: &mut App,
+) {
         // 面板只给「能取到数」的行摆入口（`can_view_stats`），这里仍按种类分流：
         // 走得通的那类把**取样来源**交给洞察侧（D58），走不通的给回执而不是静默。
         match detail.kind {
@@ -179,8 +190,7 @@ pub(super) fn request_view_stats(host: &ResourceHost, detail: &ArchiveDetail, _w
                 // 所以按点拆段后交给共用助手加引号（与导航树「查看统计」同口径）。
                 let parts: Vec<&str> = table.split('.').collect();
                 let sql = host.backend.insight_sample_sql(conn_id, &parts);
-                let source =
-                    insight::SampleSource::new(conn_id.to_string(), sql, detail.name.clone());
+            let source = insight::SampleSource::new(conn_id.to_string(), sql, detail.name.clone());
                 host.backend
                     .open_insight_source_table(source, detail.name.clone(), cx);
             }
@@ -190,7 +200,12 @@ pub(super) fn request_view_stats(host: &ResourceHost, detail: &ArchiveDetail, _w
         }
 }
 
-pub(super) fn request_checkout(host: &ResourceHost, detail: &ArchiveDetail, window: &mut Window, cx: &mut App) {
+pub(super) fn request_checkout(
+    host: &ResourceHost,
+    detail: &ArchiveDetail,
+    window: &mut Window,
+    cx: &mut App,
+) {
         let Some(root) = host.require_project("无法取回", cx) else {
             return;
         };
@@ -244,8 +259,12 @@ pub(super) fn request_checkout(host: &ResourceHost, detail: &ArchiveDetail, wind
         });
 }
 
-pub(super) fn request_promote_to_global(host: &ResourceHost, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
-
+pub(super) fn request_promote_to_global(
+    host: &ResourceHost,
+    detail: &ArchiveDetail,
+    _window: &mut Window,
+    cx: &mut App,
+) {
         use crate::global::{PromoteKind, PromoteRequest};
         let Some(root) = host.require_project("无法升级到全局", cx) else {
             return;
@@ -306,6 +325,8 @@ pub(super) fn request_promote_to_global(host: &ResourceHost, detail: &ArchiveDet
                 source_table,
                 // 快照会随版本增长：升级完按设置里的保留策略裁掉更早的快照。
                 keep_versions: Some(host.backend.keep_versions(cx)),
+            // 升级动作没有「我看过全局 vN」的输入：首次发布或走覆盖冲突框。
+            base_global_version: None,
             },
             false,
         );
@@ -313,8 +334,12 @@ pub(super) fn request_promote_to_global(host: &ResourceHost, detail: &ArchiveDet
         host.notice("资产库：正在升级到全局…", cx);
 }
 
-pub(super) fn request_distribute_from_global(host: &ResourceHost, name: &str, _window: &mut Window, cx: &mut App) {
-
+pub(super) fn request_distribute_from_global(
+    host: &ResourceHost,
+    name: &str,
+    _window: &mut Window,
+    cx: &mut App,
+) {
         let Some(root) = host.require_project("无法从全局分发", cx) else {
             return;
         };
@@ -328,7 +353,13 @@ pub(super) fn request_distribute_from_global(host: &ResourceHost, name: &str, _w
         host.notice("资产库：正在从全局分发…", cx);
 }
 
-pub(super) fn request_reference_from_global(host: &ResourceHost, name: &str, global_version: i32, _window: &mut Window, cx: &mut App) {
+pub(super) fn request_reference_from_global(
+    host: &ResourceHost,
+    name: &str,
+    global_version: i32,
+    _window: &mut Window,
+    cx: &mut App,
+) {
     let Some(root) = host.require_project("无法引用全局资产", cx) else {
         return;
     };
@@ -342,7 +373,14 @@ pub(super) fn request_reference_from_global(host: &ResourceHost, name: &str, glo
     host.notice("资产库：正在引用到本项目…", cx);
 }
 
-pub(super) fn request_solidify_ref(host: &ResourceHost, resource_id: &str, project_version: i32, target: &str, _window: &mut Window, cx: &mut App) {
+pub(super) fn request_solidify_ref(
+    host: &ResourceHost,
+    resource_id: &str,
+    project_version: i32,
+    target: &str,
+    _window: &mut Window,
+    cx: &mut App,
+) {
     let Some(root) = host.require_project("无法固化引用版本", cx) else {
         return;
     };
@@ -350,28 +388,39 @@ pub(super) fn request_solidify_ref(host: &ResourceHost, resource_id: &str, proje
         host.notice(tr("资产库：项目为只读模式，不能固化引用版本"), cx);
         return;
     }
-    resource_jobs::enqueue_solidify(root, resource_id.to_string(), project_version, target.to_string());
+    resource_jobs::enqueue_solidify(
+        root,
+        resource_id.to_string(),
+        project_version,
+        target.to_string(),
+    );
     host.backend.refresh_resources(cx);
     host.notice("资产库：正在固化引用版本…", cx);
 }
 
-/// 把全局资产恢复到上一版：表型复制旧表，文件型复制旧副本，都生成新版本。
+/// 把全局资产恢复到历史版本：表型复制旧表，文件型复制旧副本，都生成新版本。
+///
+/// `from = None` 用「上一版」；时间线选中了某版时由面板传 `Some(version)`。
 pub(super) fn request_restore_global_previous(
     host: &ResourceHost,
     detail: &ArchiveDetail,
+    from: Option<i32>,
     window: &mut Window,
     cx: &mut App,
 ) {
     let is_table = detail.kind == crate::ArchiveKind::AnalyticsTable;
     let scope_label = if is_table { "表" } else { "文件" };
-    let Some(root) = host.require_project(&format!("无法恢复全局{scope_label}版本"), cx) else {
+    let Some(root) = host.require_project(&format!("无法恢复全局{scope_label}版本"), cx)
+    else {
         return;
     };
     if detail.version <= 1 {
-        host.notice(tr("资产库：当前已经是 v1，没有上一版可恢复"), cx);
+        host.notice(tr("资产库：当前已经是 v1，没有历史版本可恢复"), cx);
         return;
     }
-    let from_version = detail.version - 1;
+    let from_version = from
+        .filter(|version| *version >= 1 && *version < detail.version)
+        .unwrap_or(detail.version - 1);
     let name = detail.name.clone();
     let description = if is_table {
         format!(
@@ -394,7 +443,7 @@ pub(super) fn request_restore_global_previous(
         let description = description.clone();
         alert
             .confirm()
-            .title(format!("恢复上一版{scope_label}？"))
+            .title(format!("恢复 v{from_version} {scope_label}？"))
             .description(description)
             .button_props(
                 gpui_kit::component::dialog::DialogButtonProps::default()
@@ -484,12 +533,15 @@ pub(super) fn request_show_origin_chain(
 }
 
 pub(super) fn is_reference_stale(host: &ResourceHost, resource_id: &str) -> bool {
-
         host.backend.is_reference_stale(resource_id)
 }
 
-pub(super) fn accept_reference_current(host: &ResourceHost, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
-
+pub(super) fn accept_reference_current(
+    host: &ResourceHost,
+    detail: &ArchiveDetail,
+    _window: &mut Window,
+    cx: &mut App,
+) {
         let Some(root) = host.require_project("无法接受当前内容", cx) else {
             return;
         };
@@ -526,8 +578,12 @@ pub(super) fn accept_reference_current(host: &ResourceHost, detail: &ArchiveDeta
         host.notice(tr("资产库：正在接受当前内容并生成新版本…"), cx);
 }
 
-pub(super) fn request_version_history(host: &ResourceHost, resource_id: &str, _window: &mut Window, cx: &mut App) {
-
+pub(super) fn request_version_history(
+    host: &ResourceHost,
+    resource_id: &str,
+    _window: &mut Window,
+    cx: &mut App,
+) {
         // 取数在后台线程：版本行要读索引表 + 问 `.RSmeta` 下的副本清单，
         // 回来之后由侧栏轮询开窗（开窗要 `Window`，轮询任务里没有）。
         let Some(root) = host.require_project("无法打开版本历史", cx) else {

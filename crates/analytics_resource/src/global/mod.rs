@@ -130,6 +130,12 @@ pub struct PromoteRequest {
     /// 更早的快照（**只删物理快照，登记与版本索引都留**）。
     /// 由宿主的设置项驱动（`ResourceHostBackend::keep_versions`）。
     pub keep_versions: Option<crate::model::KeepVersions>,
+    /// 发布者看到的全局 head 版本（乐观并发基准）。
+    ///
+    /// - `Some(base)`：head 必须是 v`base` 才追加；落后就 `StaleBase`，只允许 fork；
+    /// - `None`：首次发布；同名 head 已存在时仍按旧口径要求 `overwrite`（由作业层
+    ///   把「覆盖」转成显式 base）。
+    pub base_global_version: Option<i32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -470,6 +476,7 @@ fn open_registry(sqlite_path: &Path) -> Result<rusqlite::Connection, CoreError> 
 pub mod delete;
 pub mod distribute;
 pub mod file;
+pub mod gc;
 pub mod list;
 pub mod promote;
 pub mod refs;

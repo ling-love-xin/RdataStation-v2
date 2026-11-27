@@ -16,9 +16,9 @@
 
 use std::path::{Path, PathBuf};
 
-use super::group::{grouped, SourceGroup};
-use super::node::{ArchiveScope, NodeId, NodeKind, Row, TempScope, PICKER_MAX_DEPTH};
 use super::SourceKind;
+use super::group::{SourceGroup, grouped};
+use super::node::{ArchiveScope, NodeId, NodeKind, PICKER_MAX_DEPTH, Row, TempScope};
 
 /// 三个根的组行（depth 0）。顺序与 `grouped` 一致，空组不出现。
 pub fn root_rows(kinds: &[SourceKind]) -> Vec<Row> {
@@ -144,6 +144,15 @@ pub fn is_persistent_table(name: &str) -> bool {
     name.starts_with(engine::duckdb::temp_table::promote::PERSIST_PREFIX)
 }
 
+/// 表资产的物理快照表名（`arc_*` 归档 / `wrk_*` 取回工作表）。
+///
+/// 与 `analytics_resource::table_asset::manifest::{snapshot_table_name, work_table_name}`
+/// 同前缀；这里只判前缀不依赖那两个 crate（workbench 已在依赖图上，但命名约定要能
+/// 在「清单过滤」这一处独立说清）。
+pub fn is_snapshot_table(name: &str) -> bool {
+    name.starts_with("arc_") || name.starts_with("wrk_")
+}
+
 /// 把项目分析库的表名切成「普通分析表 / 持久表」两份（顺序沿用入参顺序）。
 ///
 /// 持久表（结果集落库的产物）与项目自建的分析表在库里同源，但用户对它们的心理模型
@@ -153,6 +162,12 @@ pub fn split_persistent_tables(tables: &[String]) -> (Vec<String>, Vec<String>) 
     let mut plain = Vec::new();
     let mut persisted = Vec::new();
     for name in tables {
+        // 归档 / 取回工作快照不是用户表：`rds_archive.arc_*` 与 `rds_work.wrk_*`
+        // 是表资产的本体，只能从「资产」段走，不能在普通表清单里被 SELECT / 改写。
+        // 资产失效判据仍用原始 `analysis_tables`，这里只过滤呈现面。
+        if crate::components::source_picker::is_snapshot_table(name) {
+            continue;
+        }
         if is_persistent_table(name) {
             persisted.push(name.clone());
         } else {
@@ -335,7 +350,12 @@ fn emit(list: &[BuildNode], depth: u8, rel_prefix: &str, rows: &mut Vec<Row>) {
 
 fn file_row(original: String, label: &str, depth: u8, breadcrumb_from: &str) -> Row {
     debug_assert!(depth <= PICKER_MAX_DEPTH);
-    let mut row = Row::new(NodeId::Path(original), depth, NodeKind::File, label.to_string());
+    let mut row = Row::new(
+        NodeId::Path(original),
+        depth,
+        NodeKind::File,
+        label.to_string(),
+    );
     let crumb = breadcrumb(breadcrumb_from);
     if !crumb.is_empty() {
         row = row.with_breadcrumb(crumb);
@@ -385,6 +405,27 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_tables_are_filtered_from_plain_analysis_tables() {
+        let tables: Vec<String> = vec![
+            "arc_3f2a9c1b7d4e".into(),
+            "wrk_9a1b2c3d4e5f".into(),
+            "普通分析表".into(),
+            "res_月度汇总_20261115091500".into(),
+        ];
+        let (plain, persisted) = split_persistent_tables(&tables);
+        assert_eq!(plain, vec!["普通分析表".to_string()]);
+        assert_eq!(
+            persisted,
+            vec!["res_月度汇总_20261115091500".to_string()],
+            "快照表既不进普通清单，也不进持久表清单"
+        );
+        assert!(is_snapshot_table("arc_"));
+        assert!(is_snapshot_table("wrk_x"));
+        assert!(!is_snapshot_table("ARC_x"), "前缀判据大小写敏感");
+        assert!(!is_snapshot_table("普通分析表"));
+    }
+
+    #[test]
     fn persistent_tables_are_kept_apart_from_project_analysis_tables() {
         let tables: Vec<String> = vec![
             "res_订单明细_20261115103000".into(),
@@ -421,11 +462,18 @@ mod tests {
         );
         // 解析不出来就原样回原名，不猜
         assert_eq!(persistent_table_label("res_订单明细"), "res_订单明细");
-        assert_eq!(persistent_table_label("res__2026111510300"), "res__2026111510300");
+        assert_eq!(
+            persistent_table_label("res__2026111510300"),
+            "res__2026111510300"
+        );
         assert_eq!(persistent_table_label("数据修复"), "数据修复");
 
         // 身份（NodeId）必须是库里原名，否则确认时反查不到表
-        let rows = persistent_table_rows(3, &["res_订单明细_20261115103000".to_string()], ArchiveScope::Project);
+        let rows = persistent_table_rows(
+            3,
+            &["res_订单明细_20261115103000".to_string()],
+            ArchiveScope::Project,
+        );
         assert_eq!(rows[0].label, "订单明细 · 2026-11-15 10:30:00");
         assert_eq!(
             rows[0].id,
@@ -441,9 +489,10 @@ mod tests {
         let rows = root_rows(&[SourceKind::Connected, SourceKind::Scratchpad]);
         let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
         assert_eq!(labels, vec!["数据库", "文件"], "无 DuckDB 叶子时不出现空组");
-        assert!(rows
-            .iter()
-            .all(|r| r.kind == NodeKind::Group && !r.is_confirmable()));
+        assert!(
+            rows.iter()
+                .all(|r| r.kind == NodeKind::Group && !r.is_confirmable())
+        );
         assert!(rows.iter().all(|r| r.depth == 0));
     }
 
@@ -455,7 +504,10 @@ mod tests {
         assert_eq!(rows[0].depth, 2);
         assert_eq!(rows[0].kind, NodeKind::File);
         assert!(rows[0].is_confirmable());
-        assert!(rows[0].breadcrumb.is_none(), "直接在草稿箱下，没有上级面包屑");
+        assert!(
+            rows[0].breadcrumb.is_none(),
+            "直接在草稿箱下，没有上级面包屑"
+        );
         assert_eq!(
             rows[0].id,
             NodeId::Path("a.parquet".into()),
@@ -484,16 +536,16 @@ mod tests {
             Some("数据 / sub"),
             "被折叠的层要在面包屑里交代清楚"
         );
-        assert!(rows.iter().all(|r| r.depth <= PICKER_MAX_DEPTH), "不得突破深度上限");
+        assert!(
+            rows.iter().all(|r| r.depth <= PICKER_MAX_DEPTH),
+            "不得突破深度上限"
+        );
     }
 
     #[test]
     fn same_folder_is_reused_across_files() {
         let rows = draft_rows(2, &[draft("数据\\a.parquet"), draft("数据\\b.parquet")]);
-        let folders: Vec<&Row> = rows
-            .iter()
-            .filter(|r| r.kind == NodeKind::Folder)
-            .collect();
+        let folders: Vec<&Row> = rows.iter().filter(|r| r.kind == NodeKind::Folder).collect();
         assert_eq!(folders.len(), 1, "同一目录只出现一次");
         assert_eq!(rows.len(), 3);
     }
@@ -502,7 +554,11 @@ mod tests {
     fn folders_precede_files_and_order_is_stable() {
         let rows = draft_rows(
             2,
-            &[draft("b.parquet"), draft("A\\x.parquet"), draft("a.parquet")],
+            &[
+                draft("b.parquet"),
+                draft("A\\x.parquet"),
+                draft("a.parquet"),
+            ],
         );
         let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
         assert_eq!(labels, vec!["A", "x.parquet", "a.parquet", "b.parquet"]);
@@ -542,15 +598,15 @@ mod tests {
     #[test]
     fn global_table_keeps_g_prefix_verbatim() {
         let global = analysis_table_rows(3, &["G_orders".to_string()], ArchiveScope::Global);
-        assert_eq!(global[0].label, "G_orders", "全局表直接显示 G_ 前缀，不另加符号");
+        assert_eq!(
+            global[0].label, "G_orders",
+            "全局表直接显示 G_ 前缀，不另加符号"
+        );
     }
 
     #[test]
     fn result_sets_use_temp_identity_and_stay_sorted() {
-        let rows = result_set_rows(
-            1,
-            &["tmp_q_b".to_string(), "tmp_q_a".to_string()],
-        );
+        let rows = result_set_rows(1, &["tmp_q_b".to_string(), "tmp_q_a".to_string()]);
         let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
         assert_eq!(labels, vec!["tmp_q_a", "tmp_q_b"]);
         assert_eq!(rows[0].kind, NodeKind::Table);

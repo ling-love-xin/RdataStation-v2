@@ -28,8 +28,8 @@ use gpui_kit::*;
 use database::model::PropertyRequest;
 
 use crate::view::{ConnectionItem, LeftPanel, RightPanel, SidebarMode};
-use connection_dialog::host::ConnectionDialogHost;
 use connection_dialog::ManagerKind;
+use connection_dialog::host::ConnectionDialogHost;
 use scratchpad::{ScratchpadDiffView, ScratchpadFileInfoView, ScratchpadSearchView};
 // 属性面板（中央 Dock 独立 tab）：Shared 只持弱句柄与打开回调。
 use super::property_panel::PropertyHostPanel;
@@ -209,6 +209,20 @@ pub struct ConflictDialogFlow {
 pub struct ConflictRecovery {
     pub context: crate::services::resource_jobs::ConflictContext,
     pub field: analytics_resource::global::ConflictField,
+}
+
+/// 发布基准过期的一次待开会话（父资产 / 发布者 base / 全局 head）。
+#[derive(Clone)]
+pub struct StalePublishRecovery {
+    pub request: analytics_resource::global::PromoteRequest,
+    pub base: Option<i32>,
+    pub head: i32,
+}
+
+/// 发布基准过期对话框的流转状态：与冲突框同形态，pending 在下一帧 render 消费。
+#[derive(Default)]
+pub struct StalePublishDialogFlow {
+    pub pending: Option<StalePublishRecovery>,
 }
 
 /// 把一段 SQL 追加到草稿末尾（空草稿直接落片段）。
@@ -423,6 +437,8 @@ pub struct Shared {
     pub tag_dialog: Rc<RefCell<TagDialogFlow>>,
     /// M6：同名冲突对话框的流转（升级 / 分发回执 → 开窗 → 覆盖 / 改名重入队；见 `ConflictDialogFlow`）。
     pub conflict_dialog: Rc<RefCell<ConflictDialogFlow>>,
+    /// 发布基准过期（只能分叉 / 取消）的待开凭据。
+    pub stale_publish_dialog: Rc<RefCell<StalePublishDialogFlow>>,
     /// M6 B2：reference 快照失效槽位（按 `resource_id` 记录；打开时懒校验发现源内容与
     /// 登记指纹不一致才写入；接受当前内容成功 / 切换项目后清除。不进索引状态统计）。
     pub reference_stale: Rc<RefCell<std::collections::HashSet<String>>>,
@@ -442,8 +458,7 @@ pub struct Shared {
     /// 打开 / 聚焦「配置中心」中央 tab 并切到指定域的宿主命令（连接对话框三处「管理」调用）。
     ///
     /// 带域参数：页是单实例，已经在别的域时只需切域 + 聚焦，不能重建上下文。
-    pub open_config_center:
-        Rc<RefCell<Option<Rc<dyn Fn(ManagerKind, &mut Window, &mut App)>>>>,
+    pub open_config_center: Rc<RefCell<Option<Rc<dyn Fn(ManagerKind, &mut Window, &mut App)>>>>,
     /// 搜索结果标签页（「搜索: query」，中央 Dock 独立 tab，2026-10-10 VSCode 对齐）：
     /// 全局数据源——`ScratchpadHost::show_search_results` 写这里，标签页每帧从这里读。
     pub scratchpad_search: Rc<RefCell<Option<ScratchpadSearchView>>>,
@@ -531,6 +546,7 @@ impl Shared {
             trash_dialog: Rc::new(RefCell::new(TrashDialogFlow::default())),
             tag_dialog: Rc::new(RefCell::new(TagDialogFlow::default())),
             conflict_dialog: Rc::new(RefCell::new(ConflictDialogFlow::default())),
+            stale_publish_dialog: Rc::new(RefCell::new(StalePublishDialogFlow::default())),
             reference_stale: Rc::new(RefCell::new(std::collections::HashSet::new())),
             mock_details: Rc::new(RefCell::new(HashMap::new())),
             open_mock_detail: Rc::new(RefCell::new(None)),
@@ -807,12 +823,7 @@ impl Shared {
     /// 打开 / 聚焦配置中心页并切到指定域（连接对话框「管理认证 / 网络 / 环境」调用）。
     ///
     /// 无回调 → `false`，调用方回落旧的内层对话框（页未挂上不等于该功能消失）。
-    pub fn show_config_center(
-        &self,
-        kind: ManagerKind,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> bool {
+    pub fn show_config_center(&self, kind: ManagerKind, window: &mut Window, cx: &mut App) -> bool {
         let Some(open) = self.open_config_center.borrow().clone() else {
             return false;
         };
@@ -1237,12 +1248,7 @@ impl ConnectionDialogHost for Shared {
         Shared::show_plugin_manager(self, window, cx)
     }
 
-    fn show_config_center(
-        &self,
-        kind: ManagerKind,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> bool {
+    fn show_config_center(&self, kind: ManagerKind, window: &mut Window, cx: &mut App) -> bool {
         Shared::show_config_center(self, kind, window, cx)
     }
 
@@ -1261,7 +1267,7 @@ mod tests {
     // 注意：不通配导入（`use super::*` / `use gpui_kit::*` 会把 gpui 的 `test` 宏带入作用域）。
     use std::path::PathBuf;
 
-    use super::{append_sql, OpenInEditorRequest, Shared};
+    use super::{OpenInEditorRequest, Shared, append_sql};
     use crate::panels::RevealTarget;
     use crate::view::ConnectionItem;
 

@@ -125,10 +125,12 @@ impl GlobalInstanceStore {
         })
     }
 
-    /// 按 `KeepVersions` 裁剪全局表快照的**历史版本**（只删物理快照，不删版本索引）。
+    /// 按 `KeepVersions` 裁剪全局表资产的**版本行**（不碰物理快照）。
     ///
-    /// `keep` 数的是历史版本份数：`MetadataOnly`（0）只留当前快照，`Keep(5)` 留当前 +
-    /// 最近 5 份历史。当前 head 永远不删；被项目 pin 的版本跳过。
+    /// `keep` 数的是历史版本份数：`MetadataOnly`（0）只留当前版本行，`Keep(5)` 留当前 +
+    /// 最近 5 份历史。当前 head、被项目 pin 的版本、被 fork 引用的版本永远保留。
+    /// 快照物理表由 `jobs::table_gc` 按引用计数回收——这里删掉的只是引用，GC 看不到引用
+    /// 之后才会 `DROP`，任何不确定都保留。
     pub(super) async fn prune_version_tables(
         &self,
         name: &str,
@@ -151,22 +153,19 @@ impl GlobalInstanceStore {
         let Some(keep) = keep.limit() else {
             return Ok(0);
         };
-        let versions: Vec<(i32, String, String)> = self.with_sqlite(|conn| {
+        let versions: Vec<i32> = self.with_sqlite(|conn| {
             let mut stmt = conn
                 .prepare(
                     r#"
-                    SELECT tav.version, ts.physical_schema, ts.physical_table
+                    SELECT tav.version
                     FROM table_asset_versions tav
-                    JOIN table_snapshots ts ON ts.snapshot_id = tav.snapshot_id
                     WHERE tav.asset_id = ?
                     ORDER BY tav.version DESC
                     "#,
                 )
                 .map_err(sqlite_err("prepare_prune_versions"))?;
             let rows = stmt
-                .query_map(rusqlite::params![head.asset_id], |row| {
-                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-                })
+                .query_map(rusqlite::params![head.asset_id], |row| row.get(0))
                 .map_err(sqlite_err("query_prune_versions"))?;
             rows.collect::<Result<Vec<_>, _>>()
                 .map_err(sqlite_err("collect_prune_versions"))
@@ -174,25 +173,49 @@ impl GlobalInstanceStore {
 
         let referenced = self.active_ref_versions(name)?;
         let referenced: std::collections::HashSet<i32> = referenced.into_iter().collect();
+        let forked: Vec<(String, i32)> = self.with_sqlite(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT parent_asset_id, parent_version FROM table_asset_forks \
+                     WHERE parent_asset_id = ?1",
+                )
+                .map_err(sqlite_err("prepare_prune_forks"))?;
+            let rows = stmt
+                .query_map(rusqlite::params![head.asset_id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?))
+                })
+                .map_err(sqlite_err("query_prune_forks"))?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(sqlite_err("collect_prune_forks"))
+        })?;
+        let forked: std::collections::HashSet<i32> = forked
+            .into_iter()
+            .filter(|(asset, _)| asset == &head.asset_id)
+            .map(|(_, version)| version)
+            .collect();
 
         let mut removed = 0usize;
-        for (index, (version, schema, table)) in versions.into_iter().enumerate() {
+        for (index, version) in versions.into_iter().enumerate() {
             if index <= keep as usize || version == head.version {
                 continue;
             }
             if referenced.contains(&version) {
-                tracing::debug!(name, version, "全局快照仍被项目引用，跳过裁剪");
+                tracing::debug!(name, version, "全局版本仍被项目引用，跳过裁剪");
                 continue;
             }
-            match self.drop_global_archive_table(&schema, &table).await {
-                Ok(()) => removed += 1,
-                Err(error) => tracing::warn!(
-                    error = %error,
-                    table,
-                    name,
-                    "全局快照裁剪失败（保留策略这一次没生效，下次升级会再裁）"
-                ),
+            if forked.contains(&version) {
+                tracing::debug!(name, version, "全局版本仍是 fork 来源，跳过裁剪");
+                continue;
             }
+            self.with_sqlite(|conn| {
+                conn.execute(
+                    "DELETE FROM table_asset_versions WHERE asset_id = ?1 AND version = ?2",
+                    rusqlite::params![head.asset_id, version],
+                )
+                .map(|_| ())
+                .map_err(sqlite_err("delete_pruned_version"))
+            })?;
+            removed += 1;
         }
         Ok(removed)
     }

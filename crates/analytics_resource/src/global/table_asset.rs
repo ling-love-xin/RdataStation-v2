@@ -10,7 +10,8 @@ use shared::error::CoreError;
 use uuid::Uuid;
 
 use super::{
-    sqlite_err, CommonError, GlobalInstanceStore, InstanceOpError, PromoteOutcome, PromoteRequest,
+    CommonError, GlobalInstanceStore, InstanceOpError, PromoteOutcome, PromoteRequest, quote_ident,
+    sqlite_err, table_exists_in,
 };
 use crate::store::table_asset::{
     NewTableSnapshot, SnapshotInstance, TableAssetVersion, TableSnapshot,
@@ -237,7 +238,7 @@ impl GlobalInstanceStore {
     }
 
     /// 全局某资产的版本链（升序）。
-    pub(super) fn global_table_versions(
+    pub(crate) fn global_table_versions(
         &self,
         asset_id: &str,
     ) -> Result<Vec<TableAssetVersion>, InstanceOpError> {
@@ -384,6 +385,161 @@ impl GlobalInstanceStore {
         Ok(row)
     }
 
+    /// 从父资产某一版 fork 出新的全局表资产：新 `asset_id` 从 v1 起链。
+    ///
+    /// v1 **直接引用父版快照**（同实例零复制），之后再发布就在自己链上追加；
+    /// `table_asset_forks` 记父子关系。父资产 head 已前进也不影响——fork 的语义
+    /// 就是「从你看过的那一版分叉」，不是覆盖父 head。
+    pub async fn fork_global_table_asset(
+        &self,
+        parent_name: &str,
+        parent_version: i32,
+        fork_name: &str,
+    ) -> Result<PromoteOutcome, InstanceOpError> {
+        let head =
+            self.global_table_head(parent_name)?
+                .ok_or_else(|| InstanceOpError::NotFound {
+                    name: parent_name.to_string(),
+                })?;
+        let target = self
+            .global_table_version_row(&head.asset_id, parent_version)?
+            .ok_or_else(|| {
+                InstanceOpError::Core(CoreError::common(CommonError::General(format!(
+                    "全局「{parent_name}」v{parent_version} 的版本索引不存在，无法 fork"
+                ))))
+            })?;
+        let manifest = self
+            .global_table_manifest(&target.manifest_id)?
+            .ok_or_else(|| {
+                InstanceOpError::Core(CoreError::common(CommonError::General(format!(
+                    "全局「{parent_name}」v{parent_version} 的 manifest 缺失，无法 fork"
+                ))))
+            })?;
+        let live = self
+            .with_duckdb(|conn| {
+                Ok(table_exists_in(
+                    conn,
+                    &target.physical_schema,
+                    &target.physical_table,
+                ))
+            })
+            .await?;
+        if !live {
+            return Err(InstanceOpError::Core(CoreError::common(
+                CommonError::General(format!(
+                    "全局「{parent_name}」v{parent_version} 的快照 {} 已不存在，无法 fork",
+                    target.physical_table
+                )),
+            )));
+        }
+
+        let active: i64 = self.with_sqlite(|conn| {
+            conn.query_row(
+                "SELECT count(*) FROM analytics_resources \
+                 WHERE name = ?1 AND scope = 'global' AND deleted_at IS NULL",
+                rusqlite::params![fork_name],
+                |row| row.get(0),
+            )
+            .map_err(sqlite_err("check_fork_name"))
+        })?;
+        if active > 0 {
+            return Err(InstanceOpError::Conflict {
+                name: fork_name.to_string(),
+                field: super::ConflictField::Registry,
+            });
+        }
+
+        let id = format!("arg_{}", Uuid::new_v4().simple());
+        let fork_id = format!("taf_{}", Uuid::new_v4().simple());
+        let now = Utc::now().to_rfc3339();
+        let definition = Some(format!(
+            "CREATE TABLE {}.{}.{} AS SELECT * FROM {}.{}.{};",
+            quote_ident(shared::duckdb_root::GLOBAL_ALIAS),
+            quote_ident(&target.physical_schema),
+            quote_ident(&target.physical_table),
+            quote_ident(shared::duckdb_root::GLOBAL_ALIAS),
+            quote_ident(&target.physical_schema),
+            quote_ident(&target.physical_table),
+        ));
+        self.with_sqlite(|conn| {
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(sqlite_err("begin_global_table_fork"))?;
+            let parent_source_table: Option<String> = tx
+                .query_row(
+                    "SELECT source_table FROM analytics_resources WHERE id = ?1",
+                    rusqlite::params![&target.asset_id],
+                    |row| row.get(0),
+                )
+                .map_err(sqlite_err("read_fork_parent_row"))?;
+            tx.execute(
+                r#"
+                INSERT INTO analytics_resources (
+                    id, resource_type, name, alias, config, scope, row_count, column_count,
+                    file_size, version, parent_version_id, parent_resource_id, source_query,
+                    created_at, updated_at, created_by, deleted_at,
+                    kind, content_hash, file_rel_path, readonly, promoted_from,
+                    source_connection_id, source_table, definition_sql, archived_at,
+                    payload_mode, source_path, origin_kind, origin_ref, analytics_table,
+                    structured
+                ) VALUES (
+                    ?1, 'analysis', ?2, NULL, 'null', 'global', ?3, ?4, NULL,
+                    1, NULL, NULL, NULL, ?5, ?5, NULL, NULL,
+                    'analysis', ?6, NULL, 1, NULL,
+                    NULL, ?7, ?8, ?5,
+                    'copy', ?9, NULL, NULL, ?10, 1
+                )
+                "#,
+                rusqlite::params![
+                    &id,
+                    fork_name,
+                    manifest.row_count,
+                    manifest.column_count,
+                    &now,
+                    &manifest.manifest_id,
+                    parent_source_table.as_deref(),
+                    definition.as_deref(),
+                    format!(
+                        "{}.{}.{}",
+                        shared::duckdb_root::GLOBAL_ALIAS,
+                        target.physical_schema,
+                        target.physical_table
+                    ),
+                    &target.physical_table,
+                ],
+            )
+            .map_err(sqlite_err("insert_global_table_fork"))?;
+            insert_version_on(
+                &tx,
+                &id,
+                1,
+                None,
+                &target.snapshot_id,
+                &target.manifest_id,
+                &now,
+            )?;
+            tx.execute(
+                r#"
+                INSERT INTO table_asset_forks (
+                    fork_id, parent_asset_id, parent_version,
+                    child_asset_id, child_version, created_at
+                ) VALUES (?, ?, ?, ?, 1, ?)
+                "#,
+                rusqlite::params![&fork_id, &target.asset_id, parent_version, &id, &now,],
+            )
+            .map_err(sqlite_err("insert_table_asset_fork"))?;
+            tx.commit().map_err(sqlite_err("commit_global_table_fork"))
+        })?;
+        Ok(PromoteOutcome {
+            resource_id: id,
+            name: fork_name.to_string(),
+            version: 1,
+            row_count: Some(manifest.row_count as i32),
+            column_count: Some(manifest.column_count as i32),
+            overwritten: false,
+        })
+    }
+
     /// 同内容的全局快照复用：按 manifest 找第一份 live。
     pub(super) fn global_snapshot_for_manifest(
         &self,
@@ -394,6 +550,7 @@ impl GlobalInstanceStore {
                 r#"
                 SELECT snapshot_id FROM table_snapshots
                 WHERE manifest_id = ?1 AND instance = 'global' AND state = 'live'
+                  AND gc_candidate_at IS NULL
                 ORDER BY created_at ASC LIMIT 1
                 "#,
                 rusqlite::params![manifest_id],

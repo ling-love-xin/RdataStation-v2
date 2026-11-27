@@ -3,15 +3,15 @@
 //! 自 `panels.rs` 纯位移迁出（无语义改动）。Mock 与洞察的视图与状态分别由
 //! `mock` / `insight` crate 自持，本面板只负责构造期创建实体、注入宿主桥与登记句柄。
 
-use shared::i18n::tr;
 use gpui_kit::EventEmitter;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
-use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel};
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::*;
+use shared::i18n::tr;
 
 use crate::view::RightPanel;
 use editor::view::history::HistoryView;
@@ -187,10 +187,18 @@ impl RightSidebarPanel {
                         .map(|panel| panel.read(cx).selected_ids())
                         .unwrap_or_default()
                 };
+                let selected_version = self
+                    .shared
+                    .detail_version
+                    .borrow()
+                    .as_ref()
+                    .filter(|(id, _)| *id == detail.id)
+                    .map(|(_, version)| *version);
                 let actions = DetailActions {
                     host: crate::components::resource_host::build_host(&self.shared),
                     read_only,
                     selected_ids,
+                    selected_version,
                 };
                 // 版本时间线选中态与归档 tab 同一套（状态在 `Shared`，重绘通知本面板）。
                 let selection = crate::components::resource_host::version_selection(
@@ -285,9 +293,14 @@ impl RightSidebarPanel {
             );
         }
         if objects.is_empty() {
-            list = list.child(div().px_3().py_6().text_sm().text_color(muted).child(
-                "还没有可用的数据对象：先连一个数据源，或跑一次查询。",
-            ));
+            list = list.child(
+                div()
+                    .px_3()
+                    .py_6()
+                    .text_sm()
+                    .text_color(muted)
+                    .child("还没有可用的数据对象：先连一个数据源，或跑一次查询。"),
+            );
         }
         div()
             .v_flex()

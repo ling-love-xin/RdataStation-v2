@@ -11,14 +11,26 @@ use rusqlite::OptionalExtension;
 
 use shared::error::{CommonError, CoreError};
 
-use super::{jobs, ConflictContext, Job, OpOutcome, SQLITE_POOL_SIZE};
+use super::{ConflictContext, Job, OpOutcome, SQLITE_POOL_SIZE, jobs};
 
 /// 一次「升级到全局」任务（§13：项目 → 全局，表 + 版本信息进全局 DuckDB）。
 pub(crate) struct PromoteJob {
     pub(crate) project_root: PathBuf,
     pub(crate) request: crate::global::PromoteRequest,
-    /// true = 同名冲突经「覆盖」确认后重入队（旧表删、版本接续）。
+    /// true = 同名冲突经「覆盖」确认后重入队（head 版本接续）；
+    /// 显式 `base_global_version` 由作业层转成 base。
     pub(crate) overwrite: bool,
+}
+
+/// 一次「发布基准过期 → 分叉为新资产」任务。
+///
+/// 发布者用完 `base_global_version` 时全局 head 已前进，不能静默覆盖；
+/// 用户确认分叉后，以父资产**当前 head**为 v1 零复制起点建一条新链。
+pub(crate) struct ForkGlobalTableAssetJob {
+    pub(crate) project_root: PathBuf,
+    pub(crate) parent_name: String,
+    pub(crate) parent_version: i32,
+    pub(crate) fork_name: String,
 }
 
 /// 一次「从全局分发」任务（§13：全局 → 项目；跨项目唯一法定路径）。
@@ -171,6 +183,34 @@ pub fn enqueue_global_checkout(
     }));
 }
 
+/// 发布基准过期后分叉：父资产当前 head 作为新资产 v1，零复制。
+pub(crate) async fn run_fork_global_table_asset(job: &ForkGlobalTableAssetJob) -> OpOutcome {
+    use crate::global::GlobalInstanceStore;
+
+    let gstore = match GlobalInstanceStore::production().await {
+        Ok(store) => store,
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action: "分叉全局表资产",
+                reason: format!("打开全局系统库失败：{reason}"),
+            };
+        }
+    };
+    match gstore
+        .fork_global_table_asset(&job.parent_name, job.parent_version, &job.fork_name)
+        .await
+    {
+        Ok(outcome) => OpOutcome::Forked {
+            name: outcome.name,
+            version: outcome.version,
+        },
+        Err(reason) => OpOutcome::Failed {
+            action: "分叉全局表资产",
+            reason: reason.to_string(),
+        },
+    }
+}
+
 /// 从全局历史版本恢复（工作线程上执行）：表型复制旧表，文件型校验旧副本。
 pub(crate) async fn run_restore_global_version(job: &RestoreGlobalVersionJob) -> OpOutcome {
     use crate::global::GlobalInstanceStore;
@@ -259,11 +299,12 @@ pub(crate) async fn run_promote(job: &PromoteJob) -> OpOutcome {
                 field,
             };
         }
-        Err(InstanceOpError::StaleBase { name, .. }) => {
-            return OpOutcome::Conflict {
-                context: ConflictContext::Promote(job.request.clone()),
+        Err(InstanceOpError::StaleBase { name, base, head }) => {
+            return OpOutcome::StaleBase {
+                request: job.request.clone(),
                 name,
-                field: crate::global::ConflictField::Registry,
+                base,
+                head,
             };
         }
         Err(reason) => {
@@ -647,6 +688,24 @@ pub fn enqueue_distribute(
         target,
         overwrite,
     }));
+}
+
+/// 提交一次「发布基准过期 → 分叉为新资产」。
+pub fn enqueue_fork_global_table_asset(
+    project_root: PathBuf,
+    parent_name: String,
+    parent_version: i32,
+    fork_name: String,
+) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
+    let _ = jobs()
+        .tx
+        .send(Job::ForkGlobalTableAsset(ForkGlobalTableAssetJob {
+            project_root,
+            parent_name,
+            parent_version,
+            fork_name,
+        }));
 }
 
 /// 提交一次「恢复全局历史版本」。

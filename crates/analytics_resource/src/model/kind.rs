@@ -253,7 +253,7 @@ impl PayloadMode {
 pub enum KeepVersions {
     /// 全部保留（设置项写 `-1`）：不裁剪任何副本。
     All,
-    /// 只留版本元数据，不留内容副本（设置项写 `0`）。
+    /// 只留当前 head 与受保护版本行，其余版本行删除、物理快照交给 GC（设置项写 `0`）。
     MetadataOnly,
     /// 保留最近 `n` 份内容副本（`n ≥ 1`）。
     Keep(u32),

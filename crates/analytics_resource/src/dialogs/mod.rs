@@ -19,6 +19,7 @@ pub mod index_repair;
 pub mod origin_chain;
 pub mod pick;
 pub mod rename;
+pub mod stale_base;
 pub mod tag;
 pub mod trash;
 pub mod version;

@@ -1,8 +1,8 @@
 //! 动作区：全局行只给「分发到本项目」；项目行给打开 / 取回 / 危险区。
 
-use shared::i18n::tr;
 use super::*;
 use gpui_kit::prelude::FluentBuilder as _;
+use shared::i18n::tr;
 
 /// 全局行的分发按钮：`(是否可点, 按钮下方那句说明)`。
 ///
@@ -43,7 +43,9 @@ pub(super) fn render_actions(
     if let Some(actions) = actions {
         let host = actions.host.clone();
         // 动作判据统一在 `model::affordance`（详情恒单选，`multi_count` 给 1）。
-        let ctx = detail.action_context(actions.read_only, 1);
+        let mut ctx = detail.action_context(actions.read_only, 1);
+        // 时间线选中版只属于这一次渲染，不回写模型上下文。
+        ctx.selected_version = actions.selected_version;
         // 来源链（刀 C）：有直接上游才摆入口（没有上游时按也没内容可看）。
         if detail.origin_kind.is_some() {
             let detail_for_chain = detail.clone();
@@ -70,14 +72,19 @@ pub(super) fn render_actions(
             // 引用只认表型全局资产：文件型暂时没有引用语义（分发仍可复制一份）。
             let is_file_global = detail.payload_rel_path.is_some();
             let can_reference = can_distribute && !is_file_global;
-            let can_restore_file =
-                is_file_global && detail.version > 1 && ctx.status != ArchiveStatus::Missing;
-            let is_table_global =
-                !is_file_global
+            let is_table_global = !is_file_global
                     && detail.kind == crate::ArchiveKind::AnalyticsTable
                     && !detail.analytics_table.as_deref().unwrap_or("").is_empty();
-            let can_restore_table =
-                is_table_global && detail.version > 1 && ctx.status != ArchiveStatus::Missing;
+            // 时间线选中了某版就恢复那版；没选过仍按「上一版」兜底。
+            let restore_from = ctx
+                .selected_version
+                .filter(|version| *version >= 1 && *version < detail.version);
+            let can_restore_file = is_file_global
+                && (detail.version > 1 || restore_from.is_some())
+                && ctx.status != ArchiveStatus::Missing;
+            let can_restore_table = is_table_global
+                && (detail.version > 1 || restore_from.is_some())
+                && ctx.status != ArchiveStatus::Missing;
             let can_delete_global = crate::model::can_delete_global(&ctx);
             out.push(
                 div()
@@ -130,7 +137,7 @@ pub(super) fn render_actions(
                                 row.child(
                                     Button::new("archive-detail-restore-global-version")
                                         .ghost()
-                                        .label(tr("恢复上一版文件…"))
+                                        .label(tr("恢复历史文件版本…"))
                                         .disabled(!can_restore_file)
                                         .on_click({
                                             let host = host.clone();
@@ -138,6 +145,7 @@ pub(super) fn render_actions(
                                             move |_, window, cx| {
                                                 host.request_restore_global_previous(
                                                     &detail_for_restore,
+                                                    restore_from,
                                                     window,
                                                     cx,
                                                 )
@@ -149,7 +157,7 @@ pub(super) fn render_actions(
                                 row.child(
                                     Button::new("archive-detail-restore-global-table-version")
                                         .ghost()
-                                        .label(tr("恢复上一版表…"))
+                                        .label(tr("恢复历史表版本…"))
                                         .disabled(!can_restore_table)
                                         .on_click({
                                             let host = host.clone();
@@ -157,6 +165,7 @@ pub(super) fn render_actions(
                                             move |_, window, cx| {
                                                 host.request_restore_global_previous(
                                                     &detail_for_restore,
+                                                    restore_from,
                                                     window,
                                                     cx,
                                                 )

@@ -121,6 +121,7 @@ impl ArchiveDetail {
             // 本名不可改（只能改项目别名）。
             global_ref: matches!(self.kind, crate::ArchiveKind::TableRef)
                 && self.origin_kind.as_deref() == Some(crate::model::ORIGIN_KIND_GLOBAL),
+            selected_version: None,
         }
     }
 }

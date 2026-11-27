@@ -34,6 +34,8 @@ pub struct ActionContext {
     ///
     /// 它没有本地本体，`name` 是全局本名、项目里只能改 `alias`；改名类动作必须改道别名。
     pub global_ref: bool,
+    /// 版本时间线选中版（None = 没点过，恢复动作按上一版兜底）。
+    pub selected_version: Option<i32>,
 }
 
 impl ActionContext {
@@ -53,6 +55,7 @@ impl ActionContext {
             read_only,
             multi_count,
             global_ref: false,
+            selected_version: None,
         }
     }
 
@@ -66,6 +69,7 @@ impl ActionContext {
             read_only: false,
             multi_count: 1,
             global_ref: false,
+            selected_version: None,
         }
     }
 
@@ -129,7 +133,10 @@ pub fn can_promote(ctx: &ActionContext) -> bool {
 /// 注意**不**要求 `has_payload`：分析表型全局行的本体在全局 DuckDB 里，`file_rel_path`
 /// 本就是空——要求它会把最常分发的那一类挡掉。
 pub fn can_distribute(ctx: &ActionContext) -> bool {
-    ctx.scope == RowScope::Global && ctx.status != ArchiveStatus::Missing && ctx.single() && !ctx.read_only
+    ctx.scope == RowScope::Global
+        && ctx.status != ArchiveStatus::Missing
+        && ctx.single()
+        && !ctx.read_only
 }
 
 /// 改显示名 / 别名：只写登记、不碰本体，但**本体缺失的行不给**（原型 §3.1：那一行先走索引修复，
@@ -285,8 +292,14 @@ mod tests {
     fn table_assets_are_openable_promotable_and_deletable_but_not_checkout() {
         let ctx = ActionContext::project_table_row();
         assert!(can_open(&ctx), "表型打开走洞察取样，不该被没有文件路径挡住");
-        assert!(can_promote(&ctx), "表型升级走整表导出（source_table），不是没有本体");
-        assert!(can_delete_from_detail(&ctx), "表型移入回收站 = 只软删登记，表留在分析库");
+        assert!(
+            can_promote(&ctx),
+            "表型升级走整表导出（source_table），不是没有本体"
+        );
+        assert!(
+            can_delete_from_detail(&ctx),
+            "表型移入回收站 = 只软删登记，表留在分析库"
+        );
         assert!(can_rename(&ctx), "改显示名只动登记");
         assert!(
             !can_checkout(&ctx),
