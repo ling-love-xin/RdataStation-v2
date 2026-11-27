@@ -242,16 +242,34 @@
 
 **已固化（刀38）**：`crates/engine/tests/federation_explain_probe.rs` 把上表钉成两条门控用例（`mysql_federated_plan_is_a_whole_statement_query` / `postgres_federated_plan_degrades_from_scan_to_query`）——断言 MySQL 的 `MYSQL_QUERY` 单节点、`whole_statement = true`、结论「整句下推 · 源端执行」；PG 简单查询的 `POSTGRES_SCAN` 带表名与 `projections_pushed`、加本地 join 后退化成 `POSTGRES_QUERY` 且拿不到表名。两个变量都设时实跑：**2 passed / 0 failed / 10.61s**。形态一变（DuckDB 升级、扩展换代）立刻红，不必等用户看到一张空白计划表才发现。
 
+**首次带真机变量跑全量门控（engine + database）——7 条红，全部是本审计没预料到的**
+
+`tools/real-db-gate.ps1 -Packages rds-engine,rds-database`，只设 `RDS_TEST_MYSQL_URL` / `RDS_TEST_PG_URL`（Oracle 1521 未起）：
+
+| 包 | targets | passed | failed | 结论 |
+|---|---|---|---|---|
+| rds-engine（修前） | 22 | 416 | 1 | `duckdb_accel_probe::probe_postgres_source_attach` |
+| rds-database（修前） | 5 | 326 | 6 | 六条全是同一句 `驱动 postgres / mysql 应在注册表里` |
+| rds-database（刀39 后） | 5 | **332** | **0** | 全绿（1 ignored） |
+
+两条根因都是「门控用例从没在真机变量下跑过」，也正是 §1 说的「默认空转」的实证：
+
+1. **驱动 id 过时（刀39）**。`mysql` / `postgres` 的实现早已剥离到侧车插件（`rds.driver.sqlx`），内核注册表只有 `mysql_native` / `postgres_native`（口径写在 `crates/driver/src/auto_register.rs` 自己的单测里）。四个套件的 `manager_with` 却还按老 id 取工厂，取不到就 `panic!("驱动 {driver} 应在注册表里")` —— 未安装插件时必然 6 条全红。改为返回 `Option`：取不到工厂即打印「未注册（本进程没有该实现）」并跳过。装插件后用例照常跑，语义没被削弱。
+2. **secret manager 一旦被使用，`SET secret_directory` 就永久失效（刀40，P0）**。真机原话 `Invalid Input Error: Changing Secret Manager settings after the secret manager is used is not allowed!`，从 `AnalysisInstance::open_tagged` 的 `configure_connection` 抛出。成因不是测试专属：所有分析实例共用进程内的根库（`shared::duckdb_root::ensure` 返回同一个 `DuckDbRoot`），前一个实例挂过网络源（`CREATE SECRET`）之后 secret manager 即为「used」，后一个实例再配置就炸。**产品语义上等于「打开第二个文档」或「同文档挂第二个网络源」直接失败**，而错误信息只说配置失败，看不出是这条规矩。
+   已实证的最小复现（`crates/store/src/duckdb_config.rs` 新单测）：同一内存库上 `configure` 两次都 OK；做一次 secret 操作（**哪怕 `CREATE SECRET` 本身失败**，manager 也被标成 used）后再 `configure` 就必错。修法：把 `secret_directory` 从批量设置里单拆出来，**只对这一句话对应的错误降级为 warn**（目录上一次已设成同一处，语义无变化），其余错误照旧致命——目录真写错仍会在挂源认证时以「找不到凭据」暴露。验收：`duckdb_config` 4 passed；`cargo test -p rds-engine --test duckdb_accel_probe`（MySQL + PG）**3 passed / 0 failed / 11.70s**（修前 1 failed）。
+
 ---
 
 ## 6. 打磨顺序（五刀，均不动架构）
 
-| 刀 | 内容 | 改动面 | 验收 |
+> **编号对照**：下表左列「1–5」是**审计排序号**；实际提交按「刀27…刀38」编号，落地刀号见每行「已执行」括注与 §8 执行记录。两套编号一一对应，不再互换。
+
+| 序 | 内容 | 改动面 | 验收 |
 |---|---|---|---|
 | 1 | 删 `legacy` 死面 + 收 `pub use`（P0-1）**——已执行（刀27）** | `duckdb/federation/{legacy,mod}.rs`、`engine/src/lib.rs`、`duckdb/mod.rs` | `cargo check -p rds-engine` 通过；`cargo test -p rds-engine --lib` **345 passed / 0 failed**；`grep FederationManager` 在 `crates` 下清零 |
 | 2 | 文档按 Oracle 现实改写（P0-2）**——已执行（刀28）** | `docs/architecture/federation/catalog-context-model.md` §8 #5 / §11；`driver-capability-matrix.md` §1 / §4 | 逐条对照 `accel.rs:171-174`、`session.rs::l2_write_refusal`、`registry.rs:558-596`；文档内「一律只读」表述不再与实现冲突 |
 | 3 | 接 `ExplainAnalyzer` 进结果区（P1-5）**——已执行（刀36 + 刀37）** | `crates/editor/src/view/host/exec/{tx,pump,plan}.rs`；引擎侧 `duckdb/explain.rs` 复用并修正 | 新用例：联邦源计划里「过滤在扫描节点之上」可被识别并渲染；MySQL 的整句下推形态渲染为「整句下推 · 源端执行」（真机取证见 §5） |
-| 4 | 跨源类型降级提示（P0-3）**——部分执行（刀30）** | `engine/services/duckdb_service.rs`；预检侧列类型对照记 30b | Decimal256 直灌从「报错」改为「Arrow 层 cast 成 DOUBLE + 带列名的降级说明」（两条单测）；「同名列 join 给提示」需先补列类型事实，未做 |
+| 4 | 跨源类型降级提示（P0-3）**——直灌路径执行（刀30）；预检侧列类型对照未做（30b）** | `engine/services/duckdb_service.rs`；预检侧列类型对照记 30b | Decimal256 直灌从「报错」改为「Arrow 层 cast 成 DOUBLE + 带列名的降级说明」（两条单测）。30b 现状：`crates/sql` 已有 `sqlglot_rust` AST（`SelectStatement.joins[i].on` 可取等值列对），但预检 `Facts` 只有「别名 + 表名」，缺列类型；且两个预检调用点（`ports/editor_exec/{federation,accel_exec}.rs`）的 `check()` 只返回 `Result<(), String>`，**没有「警告不阻断」的出口**——要么加 notice 通道（端口层改动），要么只在执行后提示，属需要产品口径决定的一刀，未强推 |
 | 5 | 真机门控脚本（§5）**——已执行（刀31）** | `tools/real-db-gate.ps1` + `.rds/tmp/` 日志 | 五变量、三包逐包跑、日志按包落盘并汇总；engine 实测 `21 targets / 414 passed / 0 failed`（5 个门控变量未设 → 结论行明示「跨源未验证」）。顺带修掉两条阻塞级测试债（刀32 断言错、刀33 用例抢 `rds_src`） |
 
 顺序理由：1、2 是「把账做平」（不改行为，风险最低）；3、4 是「把可见性补齐」（直接对着竞品差距）；5 是「把证据补齐」，为后续任何扩展（含 MSSQL、双轨）提供可比较的基线。
@@ -306,6 +324,10 @@ cargo test -p rds-workbench --lib -- --list 2>$null | Out-File -Encoding utf8 .r
 | 刀37 | 2026-11-27 | 真机取证（MySQL 3306 + PG 5432 实连，Oracle 1521 未起）推翻刀29 的一条假设：MySQL 的外部源查询**只出** `MYSQL_QUERY`（整句下推），PG 简单查询出 `POSTGRES_SCAN`、本地 join / 表达式退化成 `POSTGRES_QUERY`。改 `duckdb/explain.rs`：`is_federated_operator` 纳入 `*_QUERY`；`SourceScanFacts` 增 `whole_statement`，整句下推时 `summary()` 给「整句下推 · 源端执行」而不是「投影未推」；`walk_source_scans` 对 `_QUERY` 形态不再按 `Projections` / `Filters` 硬判。editor 侧补一条 `MYSQL_QUERY` 展平用例 | `explain` 单测 19 passed；`cargo test -p rds-engine --lib -j 1 -- --test-threads=1` **357 passed / 0 failed**；editor `exec::plan::` **4 passed**；两文件 `rustfmt --check` 干净 | 完成（纠正刀29 假设） |
 
 | 刀38 | 2026-11-27 | 新增 `crates/engine/tests/federation_explain_probe.rs`（入库，门控）：把刀37 的真机形态钉成两条用例——MySQL 单节点 `MYSQL_QUERY` + `whole_statement` + 「整句下推 · 源端执行」；PG 简单查询 `POSTGRES_SCAN`（表名 + `projections_pushed`）、加本地 join 退化成 `POSTGRES_QUERY`（无表名）。同时断言 `EXPLAIN (FORMAT JSON)` 回执恒为 `explain_key` / `explain_value` 两列、正文是 JSON 数组 | 两变量都设时实跑 **2 passed / 0 failed / 10.61s**；`rustfmt --check` 干净 | 完成（真机结论可复算） |
+
+| 刀39 | 2026-11-28 | 四个真机套件（`ddl_from_real_schema` / `source_ddl_from_real_schema` / `postgres_cross_database` / `postgres_nav_introspection`）的 `manager_with` 在取不到驱动工厂时不再 panic，改为跳过：`mysql` / `postgres` 已剥离到侧车插件，内核只有 `*_native` | 带 MySQL+PG 变量实跑 `rds-database` **5 targets / 332 passed / 0 failed / 1 ignored**（修前 326 passed / 6 failed） | 完成（门控从"必红"变"未装插件即跳过"） |
+
+| 刀40 | 2026-11-28 | 修 P0：`crates/store/src/duckdb_config.rs` 的 `secret_directory` 改单条执行，仅对 `secret manager is used` 这一种错误降级为 warn —— 进程内根库共享，前一个实例挂过网络源后此设置永久不可改（真机原话 `Changing Secret Manager settings after the secret manager is used is not allowed!`），会让第二个文档 / 第二个网络源直接「配置分析实例失败」。新增两条单测（二次配置 OK / secret manager 用过后再配置不得失败） | `cargo test -p rds-store --lib duckdb_config` **4 passed**；`cargo test -p rds-engine --test duckdb_accel_probe`（MySQL+PG）**3 passed / 0 failed / 11.70s**（修前 1 failed） | 完成（P0 已修，真机验证） |
 
 **刀27 备注**
 

@@ -87,12 +87,17 @@ pub fn configure_connection(conn: &Connection) -> Result<(), CoreError> {
     // **不设的后果**：挂网络源时连接串里的口令是脱敏的（`user:******@`），
     // DuckDB 拿 `******` 去认证 → 真机上表现为“加速 / 联邦挂不上源库”，
     // 而错误信息只说认证失败，看不出是目录没对上。
-    match crate::persistence::get_secrets_dir() {
-        Ok(dir) => settings.push(format!("SET secret_directory = '{}'", dir.display())),
+    //
+    // 这一条**单独执行**且容错，原因见下面 `execute_batch` 处的注释。
+    let secret_setting = match crate::persistence::get_secrets_dir() {
+        Ok(dir) => Some(format!("SET secret_directory = '{}'", dir.display())),
         Err(e) => {
-            tracing::warn!("[duckdb] Secret 目录不可用（{e}）：本地加速 / 联邦的网络源可能认证失败")
+            tracing::warn!(
+                "[duckdb] Secret 目录不可用（{e}）：本地加速 / 联邦的网络源可能认证失败"
+            );
+            None
         }
-    }
+    };
 
     // 临时目录：建不出来就跳过溢写设置（退回 DuckDB 默认），不挡启动
     let temp_dir = paths::temp_dir();
@@ -131,6 +136,33 @@ pub fn configure_connection(conn: &Connection) -> Result<(), CoreError> {
             settings.join("; ")
         )))
     })?;
+
+    // `secret_directory` 必须在其余设置之外单跑，并且只对**一种错误**降级：
+    //
+    // DuckDB 2.0 有一条硬规矩——`Changing Secret Manager settings after the secret
+    // manager is used is not allowed!`。而本函数对**每个**分析实例都会跑一遍，实例又共用
+    // 进程内的根库（`shared::duckdb_root::ensure` 返回同一个 `DuckDbRoot`）：前一个实例
+    // 挂过网络源（`CREATE SECRET`）之后，secret manager 已被使用，后一个实例再 `SET
+    // secret_directory` 就必然报错。此时目录早已在上一次配置里设成**同一个值**，语义没有
+    // 变化，报错会把「打开第二个文档」变成「配置分析实例失败」。
+    //
+    // 所以这里只吞这一句话对应的错误（留 warn），其余错误照旧致命：
+    // 目录真的写错 / 权限不对时，仍会在挂源认证阶段以「找不到凭据」暴露出来。
+    if let Some(setting) = &secret_setting {
+        if let Err(error) = conn.execute_batch(&format!("{setting};")) {
+            let text = error.to_string();
+            if text.contains("secret manager is used") {
+                tracing::warn!(
+                    "[duckdb] {setting} 本次未生效（{error}）：secret manager 已被本进程用过的实例占用，\
+                     DuckDB 不允许再改目录；上一次配置已指向同一处，保持原值即可"
+                );
+            } else {
+                return Err(CoreError::common(CommonError::General(format!(
+                    "配置 DuckDB 连接失败: {error}（设置：{setting}）"
+                ))));
+            }
+        }
+    }
 
     // 只在 debug 级：本函数对每个连接都会跑（非 Windows 还有读取连接池）
     tracing::debug!("[duckdb] 连接配置已应用：{}", settings.join("; "));
@@ -205,6 +237,27 @@ mod tests {
         assert_eq!(parse_size_setting("2PB"), None);
         assert_eq!(parse_size_setting("2GB'; DROP TABLE t; --"), None);
         assert_eq!(parse_size_setting("."), None);
+    }
+
+    /// 同一个库上配第二遍（没碰过 secret manager）必须仍然成功。
+    #[test]
+    fn configure_twice_without_secret_use_is_ok() {
+        let conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).expect("首次配置");
+        configure_connection(&conn).expect("第二次配置");
+    }
+
+    /// secret manager 被用过之后，再配置不得失败（真机 `duckdb_accel_probe` 的
+    /// `probe_postgres_source_attach` 就是死在这里：同进程前一个用例先挂了 MySQL）。
+    ///
+    /// 让 secret manager「已被使用」的办法：任何一次 secret 操作都算——包括
+    /// `CREATE SECRET` 失败（本机没装 httpfs 时它照样把 manager 标记成 used）。
+    #[test]
+    fn configure_after_secret_manager_use_is_tolerated() {
+        let conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).expect("首次配置");
+        let _ = conn.execute_batch("CREATE SECRET probe (TYPE S3, KEY_ID 'k', SECRET 's')");
+        configure_connection(&conn).expect("secret manager 用过的库再配置不应失败");
     }
 
     #[test]
