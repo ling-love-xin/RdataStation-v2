@@ -168,19 +168,51 @@ impl DuckDbService {
     /// 三条口径（都是「不得静默退化」）：
     /// - 所有批**同一个形状**（列名与类型逐一对上）：不一致直接报错点名，中间层不做隐式转换；
     /// - 不支持的 Arrow 类型**报错**，不悄悄落成 VARCHAR（那会让人以为数据本身就是文本）；
-    /// - 列类型与 duckdb-rs 的写入层**对齐**（见 [duckdb_type_of]）：声明成 DECIMAL 而写入按
-    ///   DOUBLE 转换，会在 append 那一步炸得莫名其妙。
+    /// - 列类型与 duckdb-rs 的写入层**对齐**（见 [map_arrow_type]）：声明成 DECIMAL 而写入按
+    ///   DOUBLE 转换，会在 append 那一步炸得莫名其妙；
+    /// - 超出 DuckDB 表达范围的（`Decimal256` 宽度 > 38）**降级成 DOUBLE 并记降级说明**：
+    ///   数据能读出来，但「读得准」不成立——原因带列名进日志，不静默（见 [`map_arrow_type`]）。
     pub fn create_temp_table_from_batches(
         conn: &mut duckdb::Connection,
         batches: &[ArrowBatch],
         owner: &str,
     ) -> Result<String, CoreError> {
-        let schema = batches
+        let raw_schema = batches
             .first()
             .map(|batch| batch.schema())
             .ok_or_else(|| general_error("没有批可以建表：Arrow 直灌至少要一批（哪怕 0 行）"))?;
 
-        for (i, batch) in batches.iter().enumerate() {
+        // Decimal256 在 DuckDB 的 Arrow→DuckDB 转换里**没有路**（2026-11-27 在 2.0.1 实测原话：
+        // `Data type "Decimal256(65, 30)" not yet supported by Arrow-to-DuckDB conversion`），
+        // 声明成 DOUBLE 也过不了 append。所以在 Arrow 层先 cast 成 Float64：数据能读出来，
+        // 小数位精度会丢——降级说明带列名进日志，不静默。
+        let mut downgrades: Vec<(String, String)> = Vec::new();
+        let schema = Arc::new(Schema::new(
+            raw_schema
+                .fields()
+                .iter()
+                .map(|field| {
+                    if let DataType::Decimal256(width, scale) = field.data_type() {
+                        downgrades.push((
+                            field.name().to_string(),
+                            format!(
+                                "DECIMAL({width},{scale}) 超出 DuckDB 的 DECIMAL 宽度上限 38，且 DuckDB 的 Arrow 转换不认 Decimal256，已按 DOUBLE 承接：整数位可读，小数位精度会丢"
+                            ),
+                        ));
+                        Field::new(field.name().clone(), DataType::Float64, field.is_nullable())
+                    } else {
+                        (**field).clone()
+                    }
+                })
+                .collect::<Vec<_>>(),
+        ));
+
+        let casted: Vec<ArrowBatch> = batches
+            .iter()
+            .map(|batch| cast_decimal256_columns(batch, &schema))
+            .collect::<Result<Vec<_>, CoreError>>()?;
+
+        for (i, batch) in casted.iter().enumerate() {
             if !same_shape(&schema, &batch.schema()) {
                 return Err(general_error(format!(
                     "第 {i} 个批的形状与第一个不一致（列名或类型变了）：直灌不做隐式转换，请在上游对齐"
@@ -192,12 +224,15 @@ impl DuckDbService {
             .fields()
             .iter()
             .map(|field| {
-                let ty = duckdb_type_of(field.data_type()).map_err(|reason| {
+                let (ty, _) = map_arrow_type(field.data_type()).map_err(|reason| {
                     general_error(format!("列 {} 的类型没法直灌：{reason}", field.name()))
                 })?;
                 Ok(format!("{} {}", quote_ident(field.name()), ty))
             })
             .collect::<Result<Vec<_>, CoreError>>()?;
+        for (column, note) in &downgrades {
+            tracing::warn!(column = %column, "{note}");
+        }
 
         // 命名口径与逐行那条路一致：前缀是 TTL / 上限 / 按来源清理 / 关项目清场唯一的识别依据
         let table_name =
@@ -222,7 +257,7 @@ impl DuckDbService {
                     crate::duckdb::temp_table::SHARED_TEMP_SCHEMA,
                 )
                 .map_err(|e| general_error(format!("打开直灌 Appender 失败: {e}")))?;
-            for batch in batches {
+            for batch in &casted {
                 if batch.num_rows() == 0 {
                     // 空批没有要写的数据；它仍然有用（建表的 schema 可能是从它来的）
                     continue;
@@ -469,47 +504,97 @@ fn quote_ident(name: &str) -> String {
 /// 在 append 那一步报一句谁都看不懂的错。
 ///
 /// 不支持的类型**明确报错**：退化成 VARCHAR 是最坏的一种「成功」，用户会以为数据本身是文本。
-fn duckdb_type_of(data_type: &DataType) -> Result<String, String> {
-    Ok(match data_type {
-        DataType::Boolean => "BOOLEAN".to_string(),
-        DataType::Int8 => "TINYINT".to_string(),
-        DataType::Int16 => "SMALLINT".to_string(),
-        DataType::Int32 => "INTEGER".to_string(),
-        DataType::Int64 => "BIGINT".to_string(),
-        DataType::UInt8 => "UTINYINT".to_string(),
-        DataType::UInt16 => "USMALLINT".to_string(),
-        DataType::UInt32 => "UINTEGER".to_string(),
-        DataType::UInt64 => "UBIGINT".to_string(),
-        DataType::Float32 => "FLOAT".to_string(),
-        DataType::Float64 => "DOUBLE".to_string(),
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => "VARCHAR".to_string(),
+/// 把批里的 Decimal256 列 cast 成 Float64——DuckDB 的 Arrow→DuckDB 转换不认 Decimal256
+/// （2026-11-27 在 2.0.1 实测原话："not yet supported by Arrow-to-DuckDB conversion"）。
+///
+/// 没有 Decimal256 列时原样返回（批的克隆是廉价的，缓冲都是 Arc）。
+fn cast_decimal256_columns(
+    batch: &ArrowBatch,
+    target: &Arc<Schema>,
+) -> Result<ArrowBatch, CoreError> {
+    let has_decimal256 = batch
+        .schema()
+        .fields()
+        .iter()
+        .any(|f| matches!(f.data_type(), DataType::Decimal256(..)));
+    if !has_decimal256 {
+        return Ok(batch.clone());
+    }
+
+    let mut columns: Vec<arrow::array::ArrayRef> = Vec::with_capacity(batch.num_columns());
+    for (i, field) in batch.schema().fields().iter().enumerate() {
+        let column = batch.column(i).clone();
+        if matches!(field.data_type(), DataType::Decimal256(..)) {
+            columns.push(
+                arrow::compute::cast(&column, &DataType::Float64).map_err(|e| {
+                    general_error(format!(
+                        "列 {} 的 Decimal256 转 DOUBLE 失败: {e}",
+                        field.name()
+                    ))
+                })?,
+            );
+        } else {
+            columns.push(column);
+        }
+    }
+    RecordBatch::try_new(target.clone(), columns)
+        .map_err(|e| general_error(format!("Decimal256 降级后重建批失败: {e}")))
+}
+
+/// 把 Arrow 类型映射成 DuckDB 列类型；`Some` = 这一列是有损承接（降级说明），`None` = 无损。
+///
+/// 只有确实超出 DuckDB 表达范围的情况才降级；不支持的 Arrow 类型仍**明确报错**
+/// （退化成 VARCHAR 是最坏的一种「成功」，用户会以为数据本身是文本）。
+fn map_arrow_type(data_type: &DataType) -> Result<(String, Option<String>), String> {
+    fn plain(ty: &str) -> Result<(String, Option<String>), String> {
+        Ok((ty.to_string(), None))
+    }
+
+    match data_type {
+        DataType::Boolean => plain("BOOLEAN"),
+        DataType::Int8 => plain("TINYINT"),
+        DataType::Int16 => plain("SMALLINT"),
+        DataType::Int32 => plain("INTEGER"),
+        DataType::Int64 => plain("BIGINT"),
+        DataType::UInt8 => plain("UTINYINT"),
+        DataType::UInt16 => plain("USMALLINT"),
+        DataType::UInt32 => plain("UINTEGER"),
+        DataType::UInt64 => plain("UBIGINT"),
+        DataType::Float32 => plain("FLOAT"),
+        DataType::Float64 => plain("DOUBLE"),
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => plain("VARCHAR"),
         DataType::Binary
         | DataType::LargeBinary
         | DataType::BinaryView
-        | DataType::FixedSizeBinary(_) => "BLOB".to_string(),
-        DataType::Date32 | DataType::Date64 => "DATE".to_string(),
-        DataType::Time32(_) | DataType::Time64(_) => "TIME".to_string(),
-        DataType::Timestamp(unit, None) => match unit {
+        | DataType::FixedSizeBinary(_) => plain("BLOB"),
+        DataType::Date32 | DataType::Date64 => plain("DATE"),
+        DataType::Time32(_) | DataType::Time64(_) => plain("TIME"),
+        DataType::Timestamp(unit, None) => plain(match unit {
             TimeUnit::Second => "TIMESTAMP_S",
             TimeUnit::Millisecond => "TIMESTAMP_MS",
             TimeUnit::Microsecond => "TIMESTAMP",
             TimeUnit::Nanosecond => "TIMESTAMP_NS",
-        }
-        .to_string(),
-        DataType::Timestamp(_, Some(_)) => "TIMESTAMPTZ".to_string(),
-        DataType::Duration(_) | DataType::Interval(_) => "INTERVAL".to_string(),
+        }),
+        DataType::Timestamp(_, Some(_)) => plain("TIMESTAMPTZ"),
+        DataType::Duration(_) | DataType::Interval(_) => plain("INTERVAL"),
         DataType::Decimal32(width, scale)
         | DataType::Decimal64(width, scale)
-        | DataType::Decimal128(width, scale) => format!("DECIMAL({width},{scale})"),
-        // 256 位宽：duckdb-rs 的声明侧当它是 DOUBLE，写入侧却没有那条路 ——
-        // 与其在这里点头、到 append 才炸，不如当场说清楚
-        DataType::Decimal256(_, _) => {
-            return Err("Decimal256 暂不支持（转成 DOUBLE 会丢精度）".to_string());
-        }
+        | DataType::Decimal128(width, scale) => plain(&format!("DECIMAL({width},{scale})")),
+        // 256 位宽：DuckDB 的 DECIMAL 宽度上限是 38（2026-11-27 在 2.0.1 实测：
+        // `CREATE TABLE t(x DECIMAL(39,30))` 直接 Binder Error "DECIMAL type width
+        // must be between 1 and 38"），duckdb-rs 的写入层对 256 位十进制也只按 DOUBLE
+        // 走。承接成 DOUBLE 而不是报错：跨源（MySQL `DECIMAL(65,30)` 这类）至少能查
+        // 出来，代价写进降级说明——「能读」与「读得准」之间的差别要说清楚。
+        DataType::Decimal256(width, scale) => Ok((
+            "DOUBLE".to_string(),
+            Some(format!(
+                "DECIMAL({width},{scale}) 超出 DuckDB 的 DECIMAL 宽度上限 38，已按 DOUBLE 承接：整数位可读，小数位精度会丢"
+            )),
+        )),
         // 词典编码走的是值类型（写入前会被解码成值类型，见 decode_dictionary_columns）
-        DataType::Dictionary(_, value_type) => return duckdb_type_of(value_type),
-        other => return Err(format!("{other:?} 还没接（直灌前请先转成支持的类型）")),
-    })
+        DataType::Dictionary(_, value_type) => map_arrow_type(value_type),
+        other => Err(format!("{other:?} 还没接（直灌前请先转成支持的类型）")),
+    }
 }
 
 /// 词典编码的列先解成值类型。
@@ -821,6 +906,49 @@ mod tests {
 
         drop_temp_table(&conn, TempTableSource::Query, &row_table).expect("删行表");
         drop_temp_table(&conn, TempTableSource::Query, &arrow_table).expect("删列表");
+    }
+
+    /// Decimal256（源侧 MySQL `DECIMAL(65,30)` 这类）超出 DuckDB 的 38 位上限时，
+    /// 按 DOUBLE 承接并给出降级说明；128 位以内的仍是原样 DECIMAL（无损）。
+    #[test]
+    fn decimal256_is_taken_as_double_with_a_downgrade_note() {
+        let (ty, note) =
+            super::map_arrow_type(&DataType::Decimal256(65, 30)).expect("Decimal256 不再拒收");
+        assert_eq!(ty, "DOUBLE");
+        let note = note.expect("要带降级说明");
+        assert!(note.contains("38"), "说明里要写清上限：{note}");
+        assert!(note.contains("精度"), "说明里要写清代价：{note}");
+
+        let (ty, note) = super::map_arrow_type(&DataType::Decimal128(38, 10)).expect("128 位");
+        assert_eq!(ty, "DECIMAL(38,10)");
+        assert!(note.is_none(), "38 位以内是无损的");
+    }
+
+    /// 直灌链路：Decimal256 列现在能建表、能写一整行 null，落成 DOUBLE。
+    #[test]
+    fn decimal256_column_survives_the_arrow_passthrough() {
+        let mut conn = duckdb::Connection::open_in_memory().expect("内存连接");
+        let dt = DataType::Decimal256(65, 30);
+        let array = arrow::array::new_null_array(&dt, 1);
+        let batch = RecordBatch::try_new(
+            std::sync::Arc::new(Schema::new(vec![Field::new("amount", dt, true)])),
+            vec![array],
+        )
+        .expect("批");
+        let table = DuckDbService::create_temp_table_from_batches(&mut conn, &[batch], "test")
+            .expect("Decimal256 直灌建表");
+        assert_eq!(
+            scalar_text(
+                &conn,
+                &format!("SELECT typeof(amount) FROM {table} LIMIT 1")
+            ),
+            "DOUBLE"
+        );
+        assert_eq!(
+            scalar_i64(&conn, &format!("SELECT count(*) FROM {table}")),
+            1
+        );
+        drop_temp_table(&conn, TempTableSource::Query, &table).expect("删表");
     }
 
     /// K16：结果集临时表必须带 `tmp_q_` 前缀并登记——前缀是 TTL / 上限 /

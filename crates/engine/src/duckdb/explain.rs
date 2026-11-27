@@ -1,3 +1,19 @@
+//! DuckDB 执行计划解析。
+//!
+//! 只用 `EXPLAIN (FORMAT JSON)`：DuckDB 的默认 `EXPLAIN` 输出是**框线图**（`┌─┬─┐` 形状，
+//! 节点间靠 `│` 列位表达层级），按行缩进解析必然失真；JSON 形态带 `children`，树是可靠的。
+//! 2026-11-27 在 DuckDB 2.0.1 实测输出形状（内存表 `SELECT a FROM t WHERE a > 0 ORDER BY a`）：
+//!
+//! ```text
+//! key=physical_plan, value=[{"name":"PROJECTION","children":[…],"extra_info":{"Projections":"…"}}]
+//! ```
+//!
+//! 顶层是**数组**；节点键为 `name` / `children` / `extra_info`，`extra_info` 的值是字符串
+//! **或字符串数组**（`Projections` 在 `CAST(#0 AS INTEGER)` 这类单值形态是多值时为数组）。
+//! `EXPLAIN` 的结果集是两列：第 0 列 `explain_key`，第 1 列 `explain_value`（计划本体）。
+
+use std::collections::BTreeMap;
+
 use duckdb::Connection;
 
 use shared::error::{CommonError, CoreError};
@@ -25,6 +41,27 @@ pub enum PlanNodeType {
     Other(String),
 }
 
+impl PlanNodeType {
+    /// 由 DuckDB 的 operator 名（`name` 字段）判定节点类型。
+    ///
+    /// 外部源的扫描算子（`MYSQL_SCAN` / `ORACLE_QUERY` 等）**不**归为 `SeqScan`：
+    /// `has_full_table_scan` 的语义是「本地全表扫描」，远端源的扫描另有
+    /// [`SourceScanFacts`] 表达，混在一起会让性能提示给出错误结论。
+    fn from_operator(operator: &str) -> Self {
+        match operator {
+            "SEQ_SCAN" => PlanNodeType::SeqScan,
+            "INDEX_SCAN" => PlanNodeType::IndexScan,
+            "HASH_JOIN" => PlanNodeType::HashJoin,
+            "NESTED_LOOP_JOIN" | "PIECEWISE_MERGE_JOIN" => PlanNodeType::NestedLoopJoin,
+            "ORDER_BY" => PlanNodeType::OrderBy,
+            "FILTER" => PlanNodeType::Filter,
+            "PROJECTION" => PlanNodeType::Projection,
+            op if op.contains("AGGREGATE") || op.contains("GROUP_BY") => PlanNodeType::Aggregate,
+            other => PlanNodeType::Other(other.to_string()),
+        }
+    }
+}
+
 impl std::fmt::Display for PlanNodeType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -46,14 +83,18 @@ impl std::fmt::Display for PlanNodeType {
 pub struct PlanNode {
     /// 节点类型
     pub node_type: PlanNodeType,
-    /// 节点描述
+    /// 可读描述（operator 名 + 关键 extra_info）
     pub description: String,
-    /// 预估成本
+    /// 预估成本（DuckDB 的 JSON 计划不提供成本，恒为 None）
     pub estimated_cost: Option<f64>,
-    /// 预估行数
+    /// 预估行数（取自 `extra_info["Estimated Cardinality"]`）
     pub estimated_rows: Option<u64>,
     /// 子节点
     pub children: Vec<PlanNode>,
+    /// DuckDB 原始 operator 名（如 `MYSQL_SCAN`、`ORACLE_QUERY`）
+    pub operator: String,
+    /// 原样保留的 `extra_info`（键值均为字符串化结果）
+    pub extra_info: BTreeMap<String, String>,
 }
 
 impl PlanNode {
@@ -70,6 +111,8 @@ impl PlanNode {
             estimated_cost,
             estimated_rows,
             children: Vec::new(),
+            operator: String::new(),
+            extra_info: BTreeMap::new(),
         }
     }
 
@@ -95,7 +138,7 @@ impl PlanNode {
         self.children.iter().any(|c| c.contains_node_type(target))
     }
 
-    /// 获取最大深度。
+    /// 获取最大深度（根自身算 1 层）。
     pub fn max_depth(&self) -> usize {
         if self.children.is_empty() {
             1
@@ -110,15 +153,61 @@ impl PlanNode {
     }
 }
 
+/// 一次外部源扫描在计划中的事实。
+///
+/// 供结果区标注「投影已推 / 过滤未推」。判定依据只有计划结构本身：
+/// - 投影：扫描节点的 `extra_info` 里有非空 `Projections`；
+/// - 过滤：谓词若留在扫描节点**之上**，表现为从根到该节点的路径上出现 `FILTER`；
+///   若已下推进扫描，`extra_info` 里会有 `Filters`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceScanFacts {
+    /// DuckDB operator 名（`MYSQL_SCAN` / `POSTGRES_SCAN` / `ORACLE_QUERY` …）
+    pub operator: String,
+    /// `extra_info["Table"]`（扫描节点通常带表名）
+    pub table: Option<String>,
+    /// 列投影是否下推（`extra_info["Projections"]` 非空）
+    pub projections_pushed: bool,
+    /// 谓词是否已下推进扫描（扫描节点自身带 `Filters`）
+    pub filters_inside_scan: bool,
+    /// 扫描节点之上是否有 `FILTER`（谓词停在扫描之上，未下推）
+    pub filter_above_scan: bool,
+}
+
+impl SourceScanFacts {
+    /// 一句话结论，直接给面板/结果区用。
+    pub fn summary(&self) -> String {
+        let projection = if self.projections_pushed {
+            "投影已推"
+        } else {
+            "投影未推"
+        };
+        let filter = if self.filters_inside_scan {
+            "过滤已推"
+        } else if self.filter_above_scan {
+            "过滤未推"
+        } else {
+            "无过滤"
+        };
+        format!("{} · {}", projection, filter)
+    }
+}
+
+/// 判断 operator 是否代表外部源（联邦/加速源）的读取。
+///
+/// 本地算子（`SEQ_SCAN` / `INDEX_SCAN`）之外，DuckDB 的外部源算子统一以 `_SCAN` 结尾
+/// （`MYSQL_SCAN` / `POSTGRES_SCAN` / `SQLITE_SCAN` / `ORACLE_ATTACHED_SCAN` …）；
+/// Oracle 的表函数形态叫 `ORACLE_QUERY`，不带 `_SCAN`，单独按前缀识别。
+pub fn is_federated_operator(operator: &str) -> bool {
+    const LOCAL_OPERATORS: &[&str] = &["SEQ_SCAN", "INDEX_SCAN"];
+    if LOCAL_OPERATORS.contains(&operator) {
+        return false;
+    }
+    operator.ends_with("_SCAN") || operator.starts_with("ORACLE_")
+}
+
 /// 查询计划分析器
 ///
 /// 负责 EXPLAIN 查询计划解析与分析。
-///
-/// # 输出格式
-/// DuckDB 支持多种 EXPLAIN 输出格式：
-/// - STANDARD: 标准文本格式
-/// - OPTIMIZED: 优化后格式
-/// - PHYSICAL: 物理执行计划
 pub struct ExplainAnalyzer;
 
 impl ExplainAnalyzer {
@@ -126,13 +215,20 @@ impl ExplainAnalyzer {
     ///
     /// # 参数
     /// - `conn`: DuckDB 连接
-    /// - `query`: 要分析的查询 SQL
+    /// - `query`: 要分析的查询 SQL（若自带 `EXPLAIN` 前缀会被剥离）
     ///
     /// # 返回
     /// - `Ok(PlanNode)`: 根查询计划节点
-    /// - `Err(CoreError)`: 执行失败
+    /// - `Err(CoreError)`: 执行或解析失败
     pub fn analyze_query(conn: &Connection, query: &str) -> Result<PlanNode, CoreError> {
-        let sql = Self::generate_explain_sql(query, None);
+        let json = Self::explain_json(conn, query)?;
+        Self::parse_json_plan(&json)
+    }
+
+    /// 跑 `EXPLAIN (FORMAT JSON) <query>`，返回 `explain_value` 列的计划 JSON。
+    pub fn explain_json(conn: &Connection, query: &str) -> Result<String, CoreError> {
+        let sql =
+            Self::generate_explain_sql(Self::strip_explain_prefix(query), Some("FORMAT JSON"));
         tracing::info!("[ExplainAnalyzer] EXPLAIN SQL: {}", sql);
 
         let mut stmt = conn.prepare(&sql).map_err(|e| {
@@ -149,24 +245,168 @@ impl ExplainAnalyzer {
             )))
         })?;
 
-        let mut output_lines = Vec::new();
+        // EXPLAIN 的结果集是两列：0 = explain_key，1 = explain_value（计划本体）
+        let mut chunks = Vec::new();
         while let Some(row) = rows.next().map_err(|e| {
             CoreError::common(CommonError::General(format!(
                 "获取 EXPLAIN 结果失败: {}",
                 e
             )))
         })? {
-            if let Ok(line) = row.get::<usize, String>(0) {
-                output_lines.push(line);
+            let value: String = row.get::<usize, String>(1).map_err(|e| {
+                CoreError::common(CommonError::General(format!(
+                    "EXPLAIN 结果缺少 explain_value 列: {}",
+                    e
+                )))
+            })?;
+            chunks.push(value);
+        }
+
+        if chunks.is_empty() {
+            return Err(CoreError::common(CommonError::General(
+                "EXPLAIN 未返回任何计划行".to_string(),
+            )));
+        }
+        Ok(chunks.join("\n"))
+    }
+
+    /// 解析 `EXPLAIN (FORMAT JSON)` 的 JSON 文本为计划树。
+    pub fn parse_json_plan(json: &str) -> Result<PlanNode, CoreError> {
+        let value: serde_json::Value = serde_json::from_str(json).map_err(|e| {
+            CoreError::common(CommonError::General(format!(
+                "解析 EXPLAIN JSON 失败: {}",
+                e
+            )))
+        })?;
+        let root = match &value {
+            // 顶层是数组（实测形状）；多份计划时取第一份
+            serde_json::Value::Array(items) => items.first().ok_or_else(|| {
+                CoreError::common(CommonError::General("EXPLAIN JSON 是空数组".to_string()))
+            })?,
+            other => other,
+        };
+        Self::node_from_json(root).ok_or_else(|| {
+            CoreError::common(CommonError::General(
+                "EXPLAIN JSON 节点缺少 name 字段".to_string(),
+            ))
+        })
+    }
+
+    fn node_from_json(value: &serde_json::Value) -> Option<PlanNode> {
+        let operator = value.get("name")?.as_str()?.to_string();
+
+        let mut extra_info = BTreeMap::new();
+        if let Some(obj) = value.get("extra_info").and_then(|v| v.as_object()) {
+            for (key, raw) in obj {
+                extra_info.insert(key.clone(), Self::scalar_to_string(raw));
             }
         }
 
-        let full_output = output_lines.join("\n");
-        tracing::debug!("[ExplainAnalyzer] EXPLAIN 输出:\n{}", full_output);
+        let estimated_rows = extra_info.get("Estimated Cardinality").and_then(|v| {
+            v.split('.')
+                .next()
+                .and_then(|s| s.trim().parse::<u64>().ok())
+        });
 
-        let tree = Self::parse_explain_tree(&full_output);
+        let description = if extra_info.is_empty() {
+            operator.clone()
+        } else {
+            let details = extra_info
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect::<Vec<_>>()
+                .join("; ");
+            format!("{} ({})", operator, details)
+        };
 
-        Ok(tree)
+        let mut node = PlanNode {
+            node_type: PlanNodeType::from_operator(&operator),
+            description,
+            estimated_cost: None,
+            estimated_rows,
+            children: Vec::new(),
+            operator,
+            extra_info,
+        };
+
+        if let Some(children) = value.get("children").and_then(|c| c.as_array()) {
+            for child in children {
+                if let Some(node_child) = Self::node_from_json(child) {
+                    node.children.push(node_child);
+                }
+            }
+        }
+        Some(node)
+    }
+
+    /// `extra_info` 的值是字符串或字符串数组（实测两种都出现），统一成逗号分隔文本。
+    fn scalar_to_string(raw: &serde_json::Value) -> String {
+        match raw {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Array(items) => items
+                .iter()
+                .map(|item| match item {
+                    serde_json::Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
+            other => other.to_string(),
+        }
+    }
+
+    /// 去掉查询里自带的 `EXPLAIN` / `EXPLAIN ANALYZE` 前缀（可带括号选项）。
+    fn strip_explain_prefix(query: &str) -> &str {
+        let trimmed = query.trim_start();
+        let Some(rest) = trimmed
+            .get(..7)
+            .filter(|p| p.eq_ignore_ascii_case("explain"))
+            .map(|_| &trimmed[7..])
+        else {
+            return query;
+        };
+        let mut rest = rest.trim_start();
+        // `(FORMAT JSON)` / `ANALYZE` 这类紧跟的修饰词一并剥掉
+        if let Some(after_paren) = rest.strip_prefix('(') {
+            if let Some(pos) = after_paren.find(')') {
+                rest = after_paren[pos + 1..].trim_start();
+            }
+        } else if rest
+            .get(..7)
+            .is_some_and(|p| p.eq_ignore_ascii_case("analyze"))
+        {
+            rest = &rest[7..];
+            rest = rest.trim_start();
+        }
+        if rest.is_empty() { query } else { rest }
+    }
+
+    /// 收集计划里所有外部源扫描的下推事实（自顶向下，深度优先）。
+    pub fn collect_source_scans(plan: &PlanNode) -> Vec<SourceScanFacts> {
+        let mut facts = Vec::new();
+        Self::walk_source_scans(plan, false, &mut facts);
+        facts
+    }
+
+    fn walk_source_scans(node: &PlanNode, filter_on_path: bool, out: &mut Vec<SourceScanFacts>) {
+        let node_is_filter = node.operator == "FILTER" || node.node_type == PlanNodeType::Filter;
+
+        if is_federated_operator(&node.operator) {
+            out.push(SourceScanFacts {
+                operator: node.operator.clone(),
+                table: node.extra_info.get("Table").cloned(),
+                projections_pushed: node
+                    .extra_info
+                    .get("Projections")
+                    .is_some_and(|v| !v.trim().is_empty()),
+                filters_inside_scan: node.extra_info.contains_key("Filters"),
+                filter_above_scan: filter_on_path,
+            });
+        }
+
+        for child in &node.children {
+            Self::walk_source_scans(child, filter_on_path || node_is_filter, out);
+        }
     }
 
     /// 获取查询计划的性能建议。
@@ -197,6 +437,15 @@ impl ExplainAnalyzer {
             }
         }
 
+        for scan in Self::collect_source_scans(plan) {
+            if scan.filter_above_scan && !scan.filters_inside_scan {
+                suggestions.push(format!(
+                    "{} 的过滤条件未下推（谓词停在扫描之上），可考虑把条件写进源查询",
+                    scan.operator
+                ));
+            }
+        }
+
         suggestions
     }
 
@@ -204,7 +453,7 @@ impl ExplainAnalyzer {
     ///
     /// # 参数
     /// - `query`: 要分析的查询 SQL
-    /// - `format`: EXPLAIN 输出格式（可选）
+    /// - `format`: EXPLAIN 输出格式（可选，如 `FORMAT JSON`）
     ///
     /// # 返回
     /// EXPLAIN SQL 语句
@@ -215,155 +464,14 @@ impl ExplainAnalyzer {
         }
     }
 
-    /// 解析 EXPLAIN 输出为结构化数据（扁平列表）。
-    ///
-    /// # 参数
-    /// - `explain_output`: EXPLAIN 输出文本
-    ///
-    /// # 返回
-    /// 解析后的查询计划节点列表
-    ///
-    /// # 注意
-    /// 简化解析实现，实际应使用更复杂的解析逻辑
-    #[deprecated(since = "2.0.0", note = "使用 parse_explain_tree 替代")]
-    pub fn parse_explain_output(explain_output: &str) -> Vec<PlanNode> {
-        let mut nodes = Vec::new();
-        let lines: Vec<&str> = explain_output.lines().collect();
-
-        for line in lines {
-            if let Some(node) = Self::parse_line(line) {
-                nodes.push(node);
-            }
-        }
-
-        nodes
-    }
-
-    /// 解析 EXPLAIN 输出为树形结构。
-    ///
-    /// # 参数
-    /// - `explain_output`: EXPLAIN 输出文本
-    ///
-    /// # 返回
-    /// 解析后的查询计划根节点
-    fn parse_explain_tree(explain_output: &str) -> PlanNode {
-        let lines: Vec<&str> = explain_output.lines().collect();
-        if lines.is_empty() {
-            return PlanNode::new(
-                PlanNodeType::Other("empty".to_string()),
-                "Empty EXPLAIN output".to_string(),
-                None,
-                None,
-            );
-        }
-
-        // 使用栈来构建树结构
-        let mut stack: Vec<(usize, PlanNode)> = Vec::new();
-
-        for line in &lines {
-            if line.trim().is_empty() {
-                continue;
-            }
-
-            let indent = line.len() - line.trim_start().len();
-            let node = Self::parse_line(line).unwrap_or_else(|| {
-                PlanNode::new(
-                    PlanNodeType::Other(line.trim().to_string()),
-                    line.trim().to_string(),
-                    None,
-                    None,
-                )
-            });
-
-            // 弹出栈中比当前缩进深的节点
-            while let Some((stack_indent, _)) = stack.last() {
-                if *stack_indent >= indent {
-                    stack.pop();
-                } else {
-                    break;
-                }
-            }
-
-            // 将当前节点作为最后一个子节点
-            if let Some((_, parent)) = stack.last_mut() {
-                parent.children.push(node);
-            } else {
-                // 如果是根节点，直接入栈
-                stack.push((indent, node));
-            }
-        }
-
-        // 栈底元素为根节点（或其子节点）
-        if let Some((_, root)) = stack.into_iter().next() {
-            root
-        } else {
-            PlanNode::new(
-                PlanNodeType::Other("unknown".to_string()),
-                "Unknown EXPLAIN output".to_string(),
-                None,
-                None,
-            )
-        }
-    }
-
-    /// 检查查询计划是否包含全表扫描。
-    ///
-    /// # 参数
-    /// - `plan`: 查询计划
-    ///
-    /// # 返回
-    /// true 表示包含全表扫描
+    /// 检查查询计划是否包含全表扫描（仅本地 `SEQ_SCAN`）。
     pub fn has_full_table_scan(plan: &PlanNode) -> bool {
         plan.contains_node_type(&PlanNodeType::SeqScan)
     }
 
     /// 检查查询计划是否包含嵌套循环连接。
-    ///
-    /// # 参数
-    /// - `plan`: 查询计划
-    ///
-    /// # 返回
-    /// true 表示包含嵌套循环连接
     pub fn has_nested_loop_join(plan: &PlanNode) -> bool {
         plan.contains_node_type(&PlanNodeType::NestedLoopJoin)
-    }
-
-    /// 内部：解析单行 EXPLAIN 输出。
-    ///
-    /// # 参数
-    /// - `line`: EXPLAIN 输出行
-    ///
-    /// # 返回
-    /// 解析后的 PlanNode（如果可解析）
-    fn parse_line(line: &str) -> Option<PlanNode> {
-        let trimmed = line.trim();
-
-        if trimmed.is_empty() {
-            return None;
-        }
-
-        // 简单解析逻辑，实际应更复杂
-        let node_type = if trimmed.contains("SEQ_SCAN") {
-            PlanNodeType::SeqScan
-        } else if trimmed.contains("INDEX_SCAN") {
-            PlanNodeType::IndexScan
-        } else if trimmed.contains("HASH_JOIN") {
-            PlanNodeType::HashJoin
-        } else if trimmed.contains("NESTED_LOOP_JOIN") {
-            PlanNodeType::NestedLoopJoin
-        } else if trimmed.contains("AGGREGATE") || trimmed.contains("GROUP_BY") {
-            PlanNodeType::Aggregate
-        } else if trimmed.contains("ORDER_BY") {
-            PlanNodeType::OrderBy
-        } else if trimmed.contains("FILTER") {
-            PlanNodeType::Filter
-        } else if trimmed.contains("PROJECTION") {
-            PlanNodeType::Projection
-        } else {
-            PlanNodeType::Other(trimmed.to_string())
-        };
-
-        Some(PlanNode::new(node_type, trimmed.to_string(), None, None))
     }
 
     /// 格式化查询计划为可读文本。
@@ -376,7 +484,7 @@ impl ExplainAnalyzer {
     /// 格式化后的查询计划文本
     pub fn format_plan(plan: &PlanNode, indent: usize) -> String {
         let indent_str = "  ".repeat(indent);
-        let mut output = format!("{}{}: {}\n", indent_str, plan.node_type, plan.description);
+        let mut output = format!("{}{}\n", indent_str, plan.description);
 
         for child in &plan.children {
             output.push_str(&Self::format_plan(child, indent + 1));
@@ -391,13 +499,55 @@ impl ExplainAnalyzer {
 mod tests {
     use super::*;
 
+    /// 真实输出：2026-11-27 在 DuckDB 2.0.1 内存表
+    /// `SELECT a FROM t WHERE a > 0 ORDER BY a` 上跑 `EXPLAIN (FORMAT JSON)` 的原样结果。
+    const REAL_IN_MEMORY_PLAN: &str = r#"[
+        {
+            "name": "PROJECTION",
+            "children": [
+                {
+                    "name": "ORDER_BY",
+                    "children": [
+                        {
+                            "name": "PROJECTION",
+                            "children": [
+                                {
+                                    "name": "SEQ_SCAN",
+                                    "children": [],
+                                    "extra_info": {
+                                        "Table": "memory.main.t",
+                                        "Type": "Sequential Scan",
+                                        "Projections": "a",
+                                        "Estimated Cardinality": "1"
+                                    }
+                                }
+                            ],
+                            "extra_info": {
+                                "Projections": "CAST(#0 AS TINYINT)",
+                                "Estimated Cardinality": "1"
+                            }
+                        }
+                    ],
+                    "extra_info": {
+                        "Order By": "a ASC",
+                        "Estimated Cardinality": "1"
+                    }
+                }
+            ],
+            "extra_info": {
+                "Projections": "CAST(#0 AS INTEGER)",
+                "Estimated Cardinality": "1"
+            }
+        }
+    ]"#;
+
     #[test]
     fn test_plan_node_type_display() {
         assert_eq!(format!("{}", PlanNodeType::SeqScan), "SeqScan");
         assert_eq!(format!("{}", PlanNodeType::HashJoin), "HashJoin");
         assert_eq!(
-            format!("{}", PlanNodeType::Other("Custom".to_string())),
-            "Custom"
+            format!("{}", PlanNodeType::Other("MYSQL_SCAN".to_string())),
+            "MYSQL_SCAN"
         );
     }
 
@@ -450,12 +600,197 @@ mod tests {
         assert_eq!(sql, "EXPLAIN (OPTIMIZED) SELECT * FROM users");
     }
 
+    /// 真实形状必须建出 4 层树（PROJECTION → ORDER_BY → PROJECTION → SEQ_SCAN），
+    /// 而不是把子节点全部平铺进根。
     #[test]
-    #[allow(deprecated)]
-    fn test_parse_explain_output() {
-        let output = "PROJECTION\n  SEQ_SCAN";
-        let nodes = ExplainAnalyzer::parse_explain_output(output);
-        assert!(!nodes.is_empty());
+    fn test_parse_real_json_builds_layered_tree() {
+        let root = ExplainAnalyzer::parse_json_plan(REAL_IN_MEMORY_PLAN).expect("解析真实计划");
+
+        assert_eq!(root.operator, "PROJECTION");
+        assert_eq!(root.max_depth(), 4, "真实计划是 4 层");
+        assert_eq!(root.children.len(), 1);
+        assert_eq!(root.children[0].operator, "ORDER_BY");
+
+        let scan = root.children[0].children[0].children[0].clone();
+        assert_eq!(scan.operator, "SEQ_SCAN");
+        assert_eq!(scan.node_type, PlanNodeType::SeqScan);
+        assert_eq!(scan.estimated_rows, Some(1));
+        assert_eq!(
+            scan.extra_info.get("Projections").map(String::as_str),
+            Some("a")
+        );
+        assert_eq!(
+            scan.extra_info.get("Table").map(String::as_str),
+            Some("memory.main.t")
+        );
+        assert_eq!(root.estimated_rows, Some(1));
+    }
+
+    /// `Projections` 为数组时（实测 `[CAST(#0 AS INTEGER), #1]` 形态）要拼成可读文本。
+    #[test]
+    fn test_parse_json_array_valued_extra_info() {
+        let json = r##"[
+            {
+                "name": "PROJECTION",
+                "children": [],
+                "extra_info": {
+                    "Projections": ["CAST(#0 AS INTEGER)", "#1"],
+                    "Estimated Cardinality": "1"
+                }
+            }
+        ]"##;
+        let root = ExplainAnalyzer::parse_json_plan(json).expect("解析");
+        assert_eq!(
+            root.extra_info.get("Projections").map(String::as_str),
+            Some("CAST(#0 AS INTEGER), #1")
+        );
+    }
+
+    /// L1 台账形状：`MYSQL_SCAN` 带 `Projections`、路径上没有 `FILTER` → 投影已推、无过滤。
+    #[test]
+    fn test_mysql_scan_projection_pushed_without_filter() {
+        let json = r#"[
+            {
+                "name": "PROJECTION",
+                "children": [
+                    {
+                        "name": "MYSQL_SCAN",
+                        "children": [],
+                        "extra_info": {
+                            "Table": "mysql_src.mysql.user",
+                            "Projections": "id, name",
+                            "Estimated Cardinality": "5"
+                        }
+                    }
+                ],
+                "extra_info": { "Projections": "id, name" }
+            }
+        ]"#;
+        let root = ExplainAnalyzer::parse_json_plan(json).expect("解析");
+        let facts = ExplainAnalyzer::collect_source_scans(&root);
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].operator, "MYSQL_SCAN");
+        assert_eq!(facts[0].table.as_deref(), Some("mysql_src.mysql.user"));
+        assert!(facts[0].projections_pushed);
+        assert!(!facts[0].filters_inside_scan);
+        assert!(!facts[0].filter_above_scan, "路径上没有 FILTER");
+        assert_eq!(facts[0].summary(), "投影已推 · 无过滤");
+    }
+
+    /// Oracle 台账结论（`oracle_probe.rs`：`FILTER` 在 `ORACLE_QUERY` / `ORACLE_ATTACHED_SCAN`
+    /// **之上**；列投影会推、谓词不推）在 JSON 形态下的等价计划。
+    #[test]
+    fn test_oracle_filter_stays_above_scan() {
+        let json = r#"[
+            {
+                "name": "PROJECTION",
+                "children": [
+                    {
+                        "name": "FILTER",
+                        "children": [
+                            {
+                                "name": "ORACLE_ATTACHED_SCAN",
+                                "children": [],
+                                "extra_info": {
+                                    "Table": "ora.RDS_PROBE_ORDERS",
+                                    "Projections": "ID, AMOUNT"
+                                }
+                            }
+                        ],
+                        "extra_info": { "Expressions": "(AMOUNT > 100)" }
+                    }
+                ],
+                "extra_info": { "Projections": "ID, AMOUNT" }
+            }
+        ]"#;
+        let root = ExplainAnalyzer::parse_json_plan(json).expect("解析");
+        let facts = ExplainAnalyzer::collect_source_scans(&root);
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].operator, "ORACLE_ATTACHED_SCAN");
+        assert!(facts[0].projections_pushed, "列投影会推");
+        assert!(!facts[0].filters_inside_scan, "谓词不在扫描内");
+        assert!(facts[0].filter_above_scan, "FILTER 在扫描之上");
+        assert_eq!(facts[0].summary(), "投影已推 · 过滤未推");
+    }
+
+    /// 谓词已下推进扫描（扫描节点自身带 `Filters`）→ 过滤已推。
+    #[test]
+    fn test_filters_inside_scan_counts_as_pushed() {
+        let json = r#"[
+            {
+                "name": "MYSQL_SCAN",
+                "children": [],
+                "extra_info": {
+                    "Table": "mysql_src.shop.orders",
+                    "Projections": "id",
+                    "Filters": "status='paid'",
+                    "Estimated Cardinality": "3"
+                }
+            }
+        ]"#;
+        let root = ExplainAnalyzer::parse_json_plan(json).expect("解析");
+        let facts = ExplainAnalyzer::collect_source_scans(&root);
+        assert_eq!(facts.len(), 1);
+        assert!(facts[0].filters_inside_scan);
+        assert!(!facts[0].filter_above_scan);
+        assert_eq!(facts[0].summary(), "投影已推 · 过滤已推");
+    }
+
+    /// 跨源算子识别：本地算子/文件读取不算；各源 scanner 与 Oracle 表函数算。
+    #[test]
+    fn test_federated_operator_detection() {
+        for op in [
+            "MYSQL_SCAN",
+            "POSTGRES_SCAN",
+            "SQLITE_SCAN",
+            "ORACLE_ATTACHED_SCAN",
+            "ORACLE_QUERY",
+        ] {
+            assert!(is_federated_operator(op), "{op} 应判为外部源");
+        }
+        for op in ["SEQ_SCAN", "INDEX_SCAN", "READ_CSV", "PROJECTION", "FILTER"] {
+            assert!(!is_federated_operator(op), "{op} 不应判为外部源");
+        }
+    }
+
+    /// 真实链路：连内存 DuckDB 跑 `EXPLAIN (FORMAT JSON)`，必须从第 1 列（explain_value）取计划。
+    #[test]
+    fn test_analyze_query_reads_value_column() {
+        let conn = Connection::open_in_memory().expect("open");
+        conn.execute("CREATE TABLE t(a INT, b VARCHAR)", [])
+            .expect("create");
+        conn.execute("INSERT INTO t VALUES (1, 'x')", [])
+            .expect("insert");
+
+        let plan =
+            ExplainAnalyzer::analyze_query(&conn, "SELECT a FROM t ORDER BY a").expect("分析成功");
+        assert_eq!(plan.operator, "PROJECTION");
+        assert_eq!(plan.max_depth(), 4);
+        assert!(
+            plan.contains_node_type(&PlanNodeType::SeqScan),
+            "内存表扫描是 SeqScan"
+        );
+    }
+
+    /// 查询自带 `EXPLAIN` 前缀时不能拼成 `EXPLAIN (FORMAT JSON) EXPLAIN …`。
+    #[test]
+    fn test_explain_prefix_is_stripped() {
+        assert_eq!(
+            ExplainAnalyzer::strip_explain_prefix("EXPLAIN SELECT 1"),
+            "SELECT 1"
+        );
+        assert_eq!(
+            ExplainAnalyzer::strip_explain_prefix("explain analyze SELECT 1"),
+            "SELECT 1"
+        );
+        assert_eq!(
+            ExplainAnalyzer::strip_explain_prefix("EXPLAIN (FORMAT JSON) SELECT 1"),
+            "SELECT 1"
+        );
+        assert_eq!(
+            ExplainAnalyzer::strip_explain_prefix("SELECT 1"),
+            "SELECT 1"
+        );
     }
 
     #[test]
@@ -464,6 +799,14 @@ mod tests {
         assert!(ExplainAnalyzer::has_full_table_scan(&plan));
 
         let plan = PlanNode::new(PlanNodeType::IndexScan, "scan".to_string(), None, None);
+        assert!(!ExplainAnalyzer::has_full_table_scan(&plan));
+    }
+
+    /// 外部源扫描不算「本地全表扫描」：Oracle 表函数不该触发「加索引」提示。
+    #[test]
+    fn test_federated_scan_is_not_local_full_table_scan() {
+        let json = r#"[{"name":"ORACLE_QUERY","children":[],"extra_info":{}}]"#;
+        let plan = ExplainAnalyzer::parse_json_plan(json).expect("解析");
         assert!(!ExplainAnalyzer::has_full_table_scan(&plan));
     }
 
@@ -483,12 +826,18 @@ mod tests {
 
     #[test]
     fn test_format_plan() {
-        let mut root = PlanNode::new(PlanNodeType::Projection, "root".to_string(), None, None);
-        let child = PlanNode::new(PlanNodeType::SeqScan, "scan".to_string(), None, None);
+        let mut root = PlanNode::new(
+            PlanNodeType::Projection,
+            "PROJECTION".to_string(),
+            None,
+            None,
+        );
+        let child = PlanNode::new(PlanNodeType::SeqScan, "SEQ_SCAN".to_string(), None, None);
         root.add_child(child);
 
         let formatted = ExplainAnalyzer::format_plan(&root, 0);
-        assert!(formatted.contains("Projection"));
-        assert!(formatted.contains("SeqScan"));
+        assert!(formatted.contains("PROJECTION"));
+        assert!(formatted.contains("SEQ_SCAN"));
+        assert!(formatted.contains("  SEQ_SCAN"), "子节点要缩进一层");
     }
 }

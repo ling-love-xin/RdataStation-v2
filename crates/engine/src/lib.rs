@@ -85,6 +85,6 @@ pub use services::connection_probe::{test_connection, test_connection_result};
 pub use duckdb::{
     DataFormat, DuckDBExecutor, DuckDBManager, DuckDBResult, ExplainAnalyzer, ExportConfig,
     FTSManager, ImportConfig, ImportExportManager, PlanNode, PlanNodeType, PluginConnection,
-    PluginManager, PluginPermissionLevel, TempTableConfig, TempTableManager, TempTableSource,
-    file_reader_function,
+    PluginManager, PluginPermissionLevel, SourceScanFacts, TempTableConfig, TempTableManager,
+    TempTableSource, file_reader_function, is_federated_operator,
 };
