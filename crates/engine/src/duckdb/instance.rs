@@ -83,7 +83,10 @@ pub struct TempEntry {
     pub last_read_ms: u64,
 }
 
-/// 别名登记：一个实例里别名必须唯一，冲突后到者让位（`mysql_src_2`）。
+/// 别名登记：一个实例里别名必须唯一，**冲突即失败**（不改名让位）。
+///
+/// 让位（`mysql_src_2`）会让同一份 SQL 在不同时刻指向不同的库——别名是用户 SQL 的契约，
+/// 系统无权改它（`catalog-context-model.md` §2.3）。同一条源重复申请是幂等。
 #[derive(Debug, Default, Clone)]
 struct MountRegistry {
     /// 实际别名 → 源连接 id
@@ -91,7 +94,7 @@ struct MountRegistry {
 }
 
 impl MountRegistry {
-    /// 申请一个别名：`wanted` 被占了就加 `_2`、`_3`…
+    /// 申请一个别名：空名 / 保留名 / 已被**别的**源占用 → 一律报错并点名占用者。
     fn reserve(&mut self, wanted: &str, conn_id: &str) -> Result<String, String> {
         let base = wanted.trim();
         if base.is_empty() {
@@ -104,20 +107,15 @@ impl MountRegistry {
         }
         if let Some(existing) = self.aliases.get(base) {
             if existing == conn_id {
+                // 同一条源重复申请：幂等（重挂 / 二次打开面板不该报冲突）
                 return Ok(base.to_string());
             }
+            return Err(format!(
+                "别名 {base} 已被连接 {existing} 占用；换一个别名，或先卸掉那条源"
+            ));
         }
-        let mut candidate = base.to_string();
-        let mut index = 2;
-        while self.aliases.contains_key(&candidate) {
-            candidate = format!("{base}_{index}");
-            index += 1;
-            if index > 99 {
-                return Err(format!("别名 {base} 的冲突太多（>98 个），换个名字"));
-            }
-        }
-        self.aliases.insert(candidate.clone(), conn_id.to_string());
-        Ok(candidate)
+        self.aliases.insert(base.to_string(), conn_id.to_string());
+        Ok(base.to_string())
     }
 
     fn release(&mut self, alias: &str) {
@@ -135,8 +133,8 @@ struct InstanceState {
     /// owner（文档 / 源连接 / 通道）→ 会话 id：同一 owner 再要会话时复用同一条，
     /// 这样"同一份文档两次执行"不会每次都换一条 `TEMP` 世界
     owners: HashMap<String, String>,
-    /// 源连接 id → (实际挂载别名, 源的命名口径)。冲突时别名可能是 `name_2`；
-    /// 界面要按这个查表，限定名要按这个 kind 拼。
+    /// 源连接 id → (实际挂载别名, 源的命名口径)。别名由 [`MountRegistry`] 单点保证唯一
+    /// （冲突即失败，不再有后缀别名）；界面要按这个查表，限定名要按这个 kind 拼。
     conn_alias: HashMap<String, (String, crate::duckdb::accel::AccelKind)>,
     mounts: MountRegistry,
     temps: Vec<TempEntry>,
@@ -619,7 +617,7 @@ impl AnalysisInstance {
         sessions.len()
     }
 
-    /// 为源连接申请实例级别名（唯一性由实例单点决定，后到者让位）。
+    /// 为源连接申请实例级别名（唯一性由实例单点决定；**冲突即失败**，返回占用者）。
     ///
     /// `kind` 一起记下来：面板要给出的限定名取决于源的命名口径（两段 / 三段），
     /// 而那个 kind 只有挂载方（内核）知道，事后没人能反推。
@@ -720,7 +718,7 @@ impl AnalysisInstance {
     /// 此刻挂在实例上的所有源连接：`(conn_id, 实际别名, 源的命名口径)`。
     ///
     /// 面板的「会话源」树根按它渲染——树根必须与 `duckdb_databases()` 里的 catalog 名
-    /// 一致，所以给的是**实际别名**（冲突让位后的 `rds_src_2` 也算）。
+    /// 一致，所以给的是**实际别名**（就是申请到的那个，冲突已被拒绝，不存在后缀别名）。
     pub fn mounted_conns(&self) -> Vec<(String, String, crate::duckdb::accel::AccelKind)> {
         let Ok(state) = self.state.lock() else {
             return Vec::new();
@@ -1739,9 +1737,9 @@ mod tests {
             .expect("A 的 TEMP 不跟着消失");
     }
 
-    /// 别名冲突后到者让位，且底座名字不许被占；连接 → 别名映射要跟着走。
+    /// 别名冲突**即失败**（与联邦路径同口径）；同一条源重复申请幂等；底座名不许占。
     #[test]
-    fn alias_conflicts_are_resolved_by_the_instance_single_point() {
+    fn alias_conflicts_are_refused_by_the_instance_single_point() {
         let instance = instance("t_alias");
         use crate::duckdb::accel::AccelKind;
         assert_eq!(
@@ -1750,16 +1748,17 @@ mod tests {
                 .expect("首个"),
             "mysql_src"
         );
-        assert_eq!(
-            instance
-                .reserve_alias("mysql_src", "conn-2", AccelKind::MySql)
-                .expect("第二个"),
-            "mysql_src_2"
+        let conflict = instance
+            .reserve_alias("mysql_src", "conn-2", AccelKind::MySql)
+            .expect_err("别名是用户 SQL 的契约，冲突只能失败");
+        assert!(
+            conflict.contains("conn-1") && conflict.contains("mysql_src"),
+            "要点名占用者与别名：{conflict}"
         );
         assert_eq!(
             instance
                 .reserve_alias("mysql_src", "conn-1", AccelKind::MySql)
-                .expect("同一源重挂"),
+                .expect("同一源重挂是幂等"),
             "mysql_src"
         );
         assert!(
@@ -1769,16 +1768,16 @@ mod tests {
             "底座名要拒"
         );
 
-        // 面板按连接 id 查挂载事实：映射必须与 reserve 的结果一致
+        // 面板按连接 id 查挂载事实：冲突失败的那个不该有映射
         assert_eq!(instance.alias_for_conn("conn-1").as_deref(), Some("mysql_src"));
-        assert_eq!(instance.alias_for_conn("conn-2").as_deref(), Some("mysql_src_2"));
+        assert_eq!(instance.alias_for_conn("conn-2"), None, "拒绝后不得留映射");
         assert_eq!(instance.alias_for_conn("conn-9"), None);
 
         instance.release_alias("mysql_src");
         assert_eq!(instance.alias_for_conn("conn-1"), None, "放掉别名要同时清映射");
         assert_eq!(
             instance
-                .reserve_alias("mysql_src", "conn-4", AccelKind::MySql)
+                .reserve_alias("mysql_src", "conn-2", AccelKind::MySql)
                 .expect("放掉后可用"),
             "mysql_src"
         );

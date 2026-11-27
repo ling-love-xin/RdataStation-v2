@@ -544,7 +544,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
     // 源段的排位：**已挂上的会话在最前**（正在生效的事实），分析底座紧随（常驻、不可卸载），
     // 然后才是候选（连接 / 文件库）。
 
-    // 加速档（`rds_src` / 冲突让位后的 `rds_src_2`）**不占源段**（第 4 条）：它确实是一条
+    // 加速档（别名固定 `rds_src`，冲突即失败、不会有后缀）**不占源段**（第 4 条）：它确实是一条
     // 「挂在会话上的 catalog」，与联邦源同形出现在 `session_sources` 里——面板加源走的是
     // `data_objects` 那条会话，owner 不是 `accel:<id>`，`is_analysis_session` 拦不住它。
     // 它的身份写在**连接行**上（「已挂载」，第 42 条末段），这里按实际别名把它摘掉。
@@ -714,7 +714,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             (Some(path), _) => format!("文件库 · {path}"),
             _ => conn.note.clone(),
         };
-        // 加速档事实：这条连接在实例里有没有 catalog（`rds_src` / 冲突让位后的 `rds_src_2`）。
+        // 加速档事实：这条连接在实例里有没有 catalog（别名 `rds_src`，冲突即失败）。
         // `accel_sources.owner` 就是 conn_id（`collect` 按 `mounted_conns()` 填）。
         let accel_mounted = collected
             .accel_sources
@@ -1744,7 +1744,7 @@ pub fn collect(shared: &Shared) -> Collected {
         })
         .unwrap_or_default();
 
-    // 挂在分析实例上的源连接：树根写**实际别名**（冲突让位后可能是 `rds_src_2`），
+    // 挂在分析实例上的源连接：树根写**实际别名**（冲突已被拒绝，不会再有 `_2` 后缀），
     // 连接名进 note。用户要认「这是哪条连接」，但树根必须与 `duckdb_databases()`
     // 里那个 catalog 名一致，否则三级树的第一层就跟事实对不上。
     let accel_sources = {

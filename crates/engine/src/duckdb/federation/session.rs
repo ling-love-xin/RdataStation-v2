@@ -417,6 +417,11 @@ pub fn bases_fingerprint() -> String {
         .map(|base| format!("{}|{}", base.alias, base.path))
         .collect();
     parts.sort();
+    if parts.is_empty() {
+        // 没有底座也是一份**确定的**指纹：返回空串会和「还没算过 / 算失败」混同，
+        // 调用方是按「= / ≠」判底座变没变的。
+        return "-".to_string();
+    }
     parts.join(";")
 }
 
