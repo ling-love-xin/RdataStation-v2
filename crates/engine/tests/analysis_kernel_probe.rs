@@ -31,6 +31,31 @@ fn make_duckdb_file(name: &str, table: &str, sql_insert: &str) -> PathBuf {
     path
 }
 
+/// 进程级分析实例是**全进程共享**的，而 `rds_src`（加速档固定别名）是实例级唯一事实：
+/// 某条用例把它挂上后不清，下一条用例换个 conn_id 再挂就会撞「别名已被连接 … 占用」。
+///
+/// 这里在每条加速档用例开始前把残留卸干净（`unmount_conn` = `DETACH` + 放别名 + 关会话），
+/// 并持一把进程级互斥锁，使并行跑也不会互相拆台（`cargo test` 默认并行）。
+fn clean_accel_slate() -> std::sync::MutexGuard<'static, ()> {
+    static GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let guard = GATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Ok(instance) = rds_engine::duckdb::instance::instance() {
+        let prefix = rds_engine::duckdb::instance::AnalysisInstance::ACCEL_OWNER_PREFIX;
+        let leftovers: Vec<String> = instance
+            .sessions()
+            .into_iter()
+            .filter_map(|info| info.owner.strip_prefix(prefix).map(str::to_string))
+            .collect();
+        for conn_id in leftovers {
+            // 卸不掉不致命：本来就没挂时返回 Ok(false)
+            let _ = instance.unmount_conn(conn_id.as_str(), None);
+        }
+    }
+    guard
+}
+
 #[test]
 fn source_channel_hands_out_no_session_and_refuses_to_run() {
     let plan = plan_for(&AnalysisChannel::Source, &[], None, "orders").expect("源库档计划");
@@ -44,6 +69,7 @@ fn source_channel_hands_out_no_session_and_refuses_to_run() {
 
 #[test]
 fn accelerated_channel_runs_sql_on_a_real_duckdb_file() {
+    let _gate = clean_accel_slate();
     let file = make_duckdb_file("accel_one", "orders", "insert into orders values (1, 'a');");
     let plan = plan_for(
         &AnalysisChannel::Accelerated,
@@ -119,6 +145,7 @@ fn federated_channel_joins_two_real_sources() {
 
 #[test]
 fn sample_materialization_creates_a_queryable_table() {
+    let _gate = clean_accel_slate();
     // 形态 I：洞察取样要的就是「源里拉一段 → 在会话里变成一张能查的表」
     let file = make_duckdb_file(
         "mat_sample",
@@ -152,6 +179,7 @@ fn sample_materialization_creates_a_queryable_table() {
 
 #[test]
 fn session_sample_moves_into_the_process_singleton_and_stays_queryable() {
+    let _gate = clean_accel_slate();
     // 刀 5 后半的关键一步：加速档的样本落在**会话**里，而洞察下游读的是**进程单例**。
     // 两张表在不同实例里，必须在需要时把结果搬过来（COPY → parquet → CTAS）。
     let file = make_duckdb_file(
@@ -210,6 +238,7 @@ fn session_sample_moves_into_the_process_singleton_and_stays_queryable() {
 
 #[test]
 fn session_materialization_uses_the_given_name() {
+    let _gate = clean_accel_slate();
     // 形态 II：结果集二次分析，表名是用户看得见的那张
     let file = make_duckdb_file("mat_named", "orders", "insert into orders values (1, 'a');");
     let plan = plan_for(
