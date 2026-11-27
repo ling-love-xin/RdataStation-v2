@@ -27,6 +27,23 @@ clippy-all = "clippy --workspace --all-targets"
 # `cargo test` / `cargo build` 崩溃。抬高 cargo 派生的 rustc 线程栈即可稳定通过。
 RUST_MIN_STACK = "268435456"
 
+# 测试默认串行（`cargo test` / `test-all` / 单包 `cargo test` 都吃这条）。
+#
+# 为什么：`paths` 的测试数据根是**按进程**隔离的（`test_root()` =
+# `<temp_dir>/rds-test-root-<pid>`，见 crates/paths/src/lib.rs），一个测试二进制里
+# 所有用例共享同一个根。带库的用例（`rds-store` 的 global/project 库、
+# `rds-insight` 的快照、`rds-analytics-resource` 的表资产、`rds-mock` 的往返、
+# `rds-workbench` 的 `init global db`）因此会在并行时抢同一批 DuckDB/SQLite 文件，
+# 实测默认并发下 10 个 target / 48 条失败（`Catalog write-write conflict`、
+# `Duplicate key "version: 1"`、`Cannot open file ... 另一个程序正在使用此文件`），
+# 串行（`--test-threads=1`）下 159 个 target / 5002 条全绿。
+#
+# 这是设计使然，不是产品缺陷：一个进程只有一个数据根（`paths::HOME` 是 OnceCell），
+# 想"每个用例一个根"就得改产品路径解析语义。仓库里 `tools/real-db-gate.ps1`
+# 早就按串行跑真库门控，这里把同一口径提到默认，避免"默认命令必红"。
+# 不想串行时命令行显式 `cargo test -- --test-threads=<N>`（命令行优先于环境变量）。
+RUST_TEST_THREADS = "1"
+
 # DuckDB 内核：**动态链接**仓库内的预编译库（设计 / 升级 / 排错见
 # docs/architecture/dependencies/duckdb-linking.md）。
 #   - 目录相对本文件（`relative = true`）：开发机不需要设任何环境变量；

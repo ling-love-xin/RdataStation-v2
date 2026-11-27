@@ -594,45 +594,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "asn1-rs"
-version = "0.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7f43a50ac4fdca5df8e885c21b835997f0a1cdee65494a6847694a98652d9d8"
-dependencies = [
- "asn1-rs-derive",
- "asn1-rs-impl",
- "displaydoc",
- "nom 7.1.3",
- "num-traits",
- "rusticata-macros",
- "thiserror 2.0.21",
- "time",
-]
-
-[[package]]
-name = "asn1-rs-derive"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3109e49b1e4909e9db6515a30c633684d68cdeaa252f215214cb4fa1a5bfee2c"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
- "synstructure 0.13.2",
-]
-
-[[package]]
-name = "asn1-rs-impl"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b18050c2cd6fe86c3a76584ef5e0baf286d038cda203eb6223df2cc413565f7"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "async-broadcast"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -900,7 +861,7 @@ dependencies = [
  "anyhow",
  "arrayvec",
  "log",
- "nom 8.0.0",
+ "nom",
  "num-rational",
  "v_frame",
 ]
@@ -2254,20 +2215,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dashmap"
-version = "6.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6361d5c062261c78a176addb82d4c821ae42bed6089de0e12603cd25de2059c"
-dependencies = [
- "cfg-if",
- "crossbeam-utils",
- "hashbrown 0.14.5",
- "lock_api",
- "once_cell",
- "parking_lot_core",
-]
-
-[[package]]
 name = "data-encoding"
 version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2308,20 +2255,6 @@ dependencies = [
  "const-oid",
  "pem-rfc7468",
  "zeroize",
-]
-
-[[package]]
-name = "der-parser"
-version = "10.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07da5016415d5a3c4dd39b11ed26f915f52fc4e0dc197d87908bc916e51bc1a6"
-dependencies = [
- "asn1-rs",
- "displaydoc",
- "nom 7.1.3",
- "num-bigint 0.4.8",
- "num-traits",
- "rusticata-macros",
 ]
 
 [[package]]
@@ -6081,12 +6014,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "minimal-lexical"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
-
-[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6312,16 +6239,6 @@ name = "nohash-hasher"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2bf50223579dc7cdcfb3bfcacf7069ff68243f8c363f62ffa99cf000a6b9c451"
-
-[[package]]
-name = "nom"
-version = "7.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d273983c5a657a70a3e8f2a01329822f3b8c8172b73826411a55751e404a0a4a"
-dependencies = [
- "memchr",
- "minimal-lexical",
-]
 
 [[package]]
 name = "nom"
@@ -6950,15 +6867,6 @@ dependencies = [
  "hashbrown 0.16.1",
  "indexmap",
  "memchr",
-]
-
-[[package]]
-name = "oid-registry"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12f40cff3dde1b6087cc5d5f5d4d65712f34016a03ed60e9c08dcc392736b5b7"
-dependencies = [
- "asn1-rs",
 ]
 
 [[package]]
@@ -8283,7 +8191,7 @@ dependencies = [
 
 [[package]]
 name = "rds-analytics-resource"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "chrono",
  "duckdb",
@@ -8311,7 +8219,7 @@ dependencies = [
 
 [[package]]
 name = "rds-app"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "gpui-kit",
  "rds-analytics-resource",
@@ -8332,7 +8240,7 @@ dependencies = [
 
 [[package]]
 name = "rds-connection"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -8353,12 +8261,11 @@ dependencies = [
  "tokio-native-tls",
  "tokio-socks",
  "tracing",
- "x509-parser",
 ]
 
 [[package]]
 name = "rds-connection-dialog"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "chrono",
  "gpui-kit",
@@ -8379,7 +8286,7 @@ dependencies = [
 
 [[package]]
 name = "rds-content-search"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "anyhow",
  "gpui-kit",
@@ -8390,7 +8297,7 @@ dependencies = [
 
 [[package]]
 name = "rds-database"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "gpui-kit",
  "rds-engine",
@@ -8408,13 +8315,12 @@ dependencies = [
 
 [[package]]
 name = "rds-driver"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "arrow",
  "async-trait",
  "base64 0.22.1",
  "chrono",
- "dashmap",
  "duckdb",
  "futures",
  "lru",
@@ -8441,16 +8347,15 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
- "x509-parser",
 ]
 
 [[package]]
 name = "rds-driver-sql"
-version = "0.2.14"
+version = "0.2.15"
 
 [[package]]
 name = "rds-editor"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "anyhow",
  "arrow",
@@ -8482,13 +8387,12 @@ dependencies = [
 
 [[package]]
 name = "rds-engine"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "arrow",
  "async-trait",
  "base64 0.22.1",
  "chrono",
- "dashmap",
  "duckdb",
  "futures",
  "hex",
@@ -8522,14 +8426,12 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "uuid",
- "x509-parser",
 ]
 
 [[package]]
 name = "rds-file-meta"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
- "rds-paths",
  "serde",
  "serde_json",
  "tempfile",
@@ -8539,7 +8441,7 @@ dependencies = [
 
 [[package]]
 name = "rds-insight"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "arrow",
  "chrono",
@@ -8563,7 +8465,7 @@ dependencies = [
 
 [[package]]
 name = "rds-kernel"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "anyhow",
  "jupyter-protocol",
@@ -8577,7 +8479,7 @@ dependencies = [
 
 [[package]]
 name = "rds-mock"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "chrono",
  "duckdb",
@@ -8601,7 +8503,7 @@ dependencies = [
 
 [[package]]
 name = "rds-notification"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "chrono",
  "gpui-kit",
@@ -8616,14 +8518,14 @@ dependencies = [
 
 [[package]]
 name = "rds-paths"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "dirs 7.0.0",
 ]
 
 [[package]]
 name = "rds-plugin"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "arrow",
  "async-trait",
@@ -8650,7 +8552,7 @@ dependencies = [
 
 [[package]]
 name = "rds-project"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "chrono",
  "duckdb",
@@ -8670,7 +8572,7 @@ dependencies = [
 
 [[package]]
 name = "rds-property"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "serde",
  "serde_json",
@@ -8678,7 +8580,7 @@ dependencies = [
 
 [[package]]
 name = "rds-result-panel"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "arrow",
  "chrono",
@@ -8695,7 +8597,7 @@ dependencies = [
 
 [[package]]
 name = "rds-scratchpad"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "chrono",
  "gpui-kit",
@@ -8721,7 +8623,7 @@ dependencies = [
 
 [[package]]
 name = "rds-settings"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "gpui-kit",
  "rds-paths",
@@ -8733,22 +8635,16 @@ dependencies = [
 
 [[package]]
 name = "rds-shared"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "aes-gcm",
  "argon2",
  "arrow",
- "async-trait",
  "base64 0.22.1",
  "chrono",
- "dashmap",
  "dirs 7.0.0",
  "duckdb",
- "futures",
- "hex",
- "lru",
  "once_cell",
- "percent-encoding",
  "rand 0.10.3",
  "rds-paths",
  "rusqlite",
@@ -8757,15 +8653,12 @@ dependencies = [
  "sha2 0.10.9",
  "specta",
  "thiserror 2.0.21",
- "tokio",
- "tracing",
- "uuid",
  "windows-sys 0.52.0",
 ]
 
 [[package]]
 name = "rds-sql"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "dprint-core",
  "lax-sql",
@@ -8776,7 +8669,7 @@ dependencies = [
 
 [[package]]
 name = "rds-store"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "chrono",
  "duckdb",
@@ -8800,7 +8693,7 @@ dependencies = [
 
 [[package]]
 name = "rds-tag"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "chrono",
  "rds-engine",
@@ -8818,7 +8711,7 @@ dependencies = [
 
 [[package]]
 name = "rds-workbench"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "arrow",
  "chrono",
@@ -8859,7 +8752,7 @@ dependencies = [
 
 [[package]]
 name = "rds-workbench-shell"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "gpui-kit",
  "serde",
@@ -9391,15 +9284,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92"
 dependencies = [
  "semver",
-]
-
-[[package]]
-name = "rusticata-macros"
-version = "4.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "faf0c4a6ece9950b9abdb62b1cfcf2a68b3b67a10ba445b3bb85be2a293d0632"
-dependencies = [
- "nom 7.1.3",
 ]
 
 [[package]]
@@ -13207,23 +13091,6 @@ name = "x11rb-protocol"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
-
-[[package]]
-name = "x509-parser"
-version = "0.18.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d43b0f71ce057da06bc0851b23ee24f3f86190b07203dd8f567d0b706a185202"
-dependencies = [
- "asn1-rs",
- "data-encoding",
- "der-parser",
- "lazy_static",
- "nom 7.1.3",
- "oid-registry",
- "rusticata-macros",
- "thiserror 2.0.21",
- "time",
-]
 
 [[package]]
 name = "xattr"
