@@ -203,7 +203,6 @@ pub struct ConnectionDraft {
     pub scope: String, pub project_path: String,
     pub ssl_mode: String, pub ssl_ca: String, pub ssl_cert: String, pub ssl_key: String,
     pub cache_path: String,        // 元数据缓存路径
-    pub duckdb_fed: bool,          // 默认 true（ConnectionDraft::empty()）
     pub active_tab: usize,
     pub props: Vec<(String, String)>,     // 驱动属性（BTreeMap 化后 JSON）
     pub sec_overrides: Vec<String>,       // 策略覆盖（environment_policies.policy_type）
@@ -218,7 +217,7 @@ pub struct ConnectionDraft {
 
 * `display_name()`：空名回退「新建数据源」/「（未命名连接）」（已保存）。
 
-* `empty()`：`duckdb_fed: true`、`sec_overrides: Vec::new()`、其余 Default。
+* `empty()`：`save_credentials: true`、`sec_overrides: Vec::new()`、其余 Default。
 
 * `draft_to_row`/`row_to_draft`：UI 条目 ↔ 持久化行（**不写密码**；`hops_json` 列保留但固定写空数组 —— 内联协议链已撤下 #25；`pass` 回读恒为空）。
 
@@ -240,13 +239,13 @@ pub struct ConnectionDraft {
 
 6. `scope_from_label`：UI 标签 → `ConnectionScope`；`tags_to_json`：逗号串 → JSON。
 
-7. `use_duckdb_fed: Some(duckdb_fed)`、`metadata_path` = cache\_path。
+7. `metadata_path` = cache\_path（2026-11-27 起不再有 `use_duckdb_fed` 字段：能不能当分析源由驱动能力 + 项目登记决定，见 `catalog-context-model.md` §11）。
 
 `DataSourceSaveInput` 关键字段：`name` / `db_type`(=driver\_id) / `url` / `username` / `password` /
 
 `scope` / `description` / `tags` / `driver_id` / `environment_id` / `auth_config_id` / `auth_method` /
 
-`network_config_id` / `driver_properties` / `advanced_options` / `options` / `use_duckdb_fed` / `schema_name` / `metadata_path`。
+`network_config_id` / `driver_properties` / `advanced_options` / `options` / `schema_name` / `metadata_path`。
 
 ## 6. 保存语义（2026-10-02 用户决策，代码实证）
 
@@ -353,7 +352,7 @@ pub struct ConnectionDraft {
 
 同名检查（大小写不敏感）+ 项目路径预检 → ID 生成（按作用域）→ tags / 分组同步 → DuckDB Secret 注册
 
-（`use_duckdb_fed=1` 时 `ensure_secret_registered`）→ 列表刷新。文件型新建走
+（门控已改为**只按能力**：驱动有对应 DuckDB 扩展就 `ensure_secret_registered`，2026-11-27）→ 列表刷新。文件型新建走
 
 `create_new_db_file` → **按驱动分派**：SQLite `sqlite3_open` 建真库；DuckDB `initialize_duckdb_file`
 

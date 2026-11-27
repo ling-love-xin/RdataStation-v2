@@ -168,11 +168,17 @@ pub fn open(plan: &SessionPlan, prepared: &PreparedMounts) -> Result<SessionHand
             // 别名按源唯一、幂等判重、`USE` 都收在 `accel::ensure_on_instance` 一处——
             // 编辑器里直跑的加速档走的也是它，两边各写一遍迟早给出两套挂载事实。
             //
-            // owner 口径：内核这一档目前仍按**源连接 id**开会话（这里的调用方——洞察 / 引擎
-            // 内部路径——手里没有文档身份）；编辑器侧走 `ensure_on_instance(source, document)`，
-            // 按文档开会话。两处只差这一个参数，挂载逻辑同一条。
+            // owner 口径（D17，2026-11-27）：内核这一档的调用方（洞察 / 引擎内部路径）手里
+            // 没有文档身份，用**源级 owner** `accel:{conn_id}`——与 `session_for_conn`
+            // （载入 / 归档「在这个源上再跑一条 SQL」）同一个键。
+            //
+            // 为什么不能用裸 `conn_id`：`AnalysisInstance::is_analysis_session` 只按 `accel:`
+            // 前缀排除加速会话（`instance.rs:580`），裸 id 会被当成分析会话；它挂着 `rds_src`，
+            // 面板源段就会多出一行「来源不明」的会话源。编辑器侧走
+            // `ensure_on_instance(source, document)`，owner 是文档，不受这条影响。
+            let owner = instance::AnalysisInstance::accel_owner(&prepared_accel.source.conn_id);
             let (session, _alias) =
-                accel::ensure_on_instance(&prepared_accel.source, &prepared_accel.source.conn_id)
+                accel::ensure_on_instance(&prepared_accel.source, &owner)
                     .map_err(invalid)?;
             Ok(SessionHandle::Instance {
                 session,
@@ -209,6 +215,13 @@ pub fn open(plan: &SessionPlan, prepared: &PreparedMounts) -> Result<SessionHand
             let instance = instance::instance().map_err(invalid)?;
             let session = instance.ensure_session(owner, "联邦").map_err(invalid)?;
             let mounted = session.mount_sources(&sources).map_err(invalid)?;
+            // 只保留本通道的源：同一条文档从本地加速切回联邦时，上一通道的 `rds_src`
+            // 记录要退场（实例上的 `ATTACH` 不动，源段那边才是卸载入口）。
+            let aliases: Vec<String> = mounted
+                .iter()
+                .map(|entry| entry.alias().to_string())
+                .collect();
+            session.retain_mounted(&aliases);
             // 主源只在"它确实挂上了"时切：挂不上就保持默认 catalog，
             // 由快照里的原因告诉用户，而不是让整条查询跑在一个不存在的 catalog 上
             if let Some(primary) = plan.primary.as_deref() {
@@ -218,6 +231,9 @@ pub fn open(plan: &SessionPlan, prepared: &PreparedMounts) -> Result<SessionHand
                 if ready {
                     session.use_catalog(primary).map_err(invalid)?;
                 }
+            } else {
+                // 没有主源也要把默认路径拉回"临时表可见"，别沿用上一通道的 `USE`
+                session.reset_search_path().map_err(invalid)?;
             }
             Ok(SessionHandle::Instance {
                 session,

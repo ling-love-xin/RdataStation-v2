@@ -12,24 +12,30 @@ impl EngineQueryRunner {
 
     /// 组装本次联邦的源清单（**宿主组装**：引擎不读连接库、也不解密口令）
     ///
-    /// 判据只有一个：连接开了 **「DuckDB 本地加速（联邦查询直连源库）」**（`use_duckdb_fed`）
-    /// ——它就是「允许分析引擎直连本连接」这个意图，同时也是**没有原生驱动的库**
-    /// （Oracle 这类：应用连不上它，但 DuckDB 扫描器能）唯一的参与入口。
+    /// 判据**两源合一**（2026-11-27 解耦 `use_duckdb_fed` 后）：项目登记过
+    /// （`analysis_sources` 有这一行，任意档）∪ 本文档绑定的连接（单源联邦的主源）。
+    /// 二者任一成立即算源——**连接记录上已经没有开关可看**，「能力」另由驱动常量判。
+    /// **没有原生驱动的库**（Oracle 这类）正是靠这条进联邦：应用连不上它，但 DuckDB 扫描器能。
     ///
-    /// 两个来源，一套判据：
+    /// 两个来源，同一套判据：
     ///
     /// 1. **连接记录**（`DataSourceService::list()`，全局表）：**不要求已连接**，连接串现组
     ///    （`build_connection_url` 解密口令）——这是驱动类库能进来的那条路；
     /// 2. **运行态连接**（连接管理器里已建连的，含项目作用域 `P_`）：用重连用的
-    ///    `url_override`（带凭据），按同样的开关过滤。
+    ///    `url_override`（带凭据），按同样的三条件过滤。
     ///
     /// 驱动能不能挂由 [`accel::AccelKind`] 回答（L2 的 Oracle 也算：它只做联邦源、不做本地加速），
     /// 认不出就如实记一句；**别名**由连接名生成（`sanitize_alias` + 重名再排），
     /// 按连接 id 排序保证稳定；**主源** = 本文档绑定的那条连接（它不在清单里时由引擎选
     /// 第一个可用源，并留下回退说明）。
-    pub(crate) fn federated_plan(&self, connection: Option<&str>) -> Result<FederatedPlan, String> {
+    pub(crate) fn federated_plan(
+        &self,
+        document: &str,
+        connection: Option<&str>,
+    ) -> Result<FederatedPlan, String> {
         let manager = engine::connection_manager::get_connection_manager();
-        let owner = self
+        // 本文档绑定的连接（判主源用）；`None` 时回退当前活动连接
+        let doc_conn = self
             .resolve_conn_id(connection)
             .ok_or_else(|| "联邦查询需要一个连接：先绑定一个，或在导航里选中它".to_string())?;
 
@@ -37,7 +43,7 @@ impl EngineQueryRunner {
         let mut notes: Vec<String> = Vec::new();
 
         // ① 连接记录（不要求已连接）：宿主组装连接串（解密口令是宿主的事，编辑器不碰）
-        for item in self.fed.records() {
+        for item in self.fed.records(Some(&doc_conn)) {
             // 别名以宿主给的为准（它读得到项目）；宿主没填就查进程级快照兜底
             let alias = item.alias.clone().or_else(|| {
                 engine::persistence::analysis_sources::alias_for_connection(&item.conn_id)
@@ -53,9 +59,13 @@ impl EngineQueryRunner {
 
         // ② 运行态连接（含项目作用域；记录里没有的补上）
         let infos = self.runtime.block_on(manager.get_all_connection_info());
-        // 自动进源清单的只有已开启本地加速的连接（`Some(true)`）；
-        // `Some(false)` = 可直连未加速，等用户手动挂载/登记再进场。
-        for info in infos.iter().filter(|info| info.use_duckdb_fed == Some(true)) {
+        // 运行态连接按同一「两源合一」判据补进清单（与 `records(Some(doc_conn))` 同一套）：
+        // ① 项目登记过 ② 本文档绑定（单源主源）。
+        for info in infos.iter() {
+            let is_focus = info.id == doc_conn;
+            if !engine::persistence::analysis_sources::is_registered(&info.id) && !is_focus {
+                continue;
+            }
             if records.iter().any(|record| record.conn_id == info.id) {
                 continue;
             }
@@ -72,18 +82,31 @@ impl EngineQueryRunner {
             });
         }
 
-        plan_from_records(&records, &notes, &owner)
+        let mut plan = plan_from_records(&records, &notes, &doc_conn, document)?;
+        // 【K3】主源是**意图**：项目登记过的主源优先于「本文档绑定的连接」。
+        // 会话每次执行都按这份计划重建（`kernel::open` 幂等），所以这里一读就同时
+        // 完成了「重启后 replay」——不另存一份会话状态（`catalog-context-model.md` §5）。
+        apply_registered_primary(
+            &mut plan,
+            engine::persistence::analysis_sources::primary_alias_cached().as_deref(),
+        );
+        Ok(plan)
     }
 
     /// 联邦档执行：在联邦会话上跑（源清单为空/全挂不上都会提前给可读原因）
     /// `lineage` 随历史落库（【B5 余项】；`run()` 把队列注入的执行血缘递过来）。
     pub(crate) fn run_on_federation(
         &self,
+        document: &str,
         connection: Option<&str>,
         sql: &str,
         lineage: &str,
     ) -> Result<QueryData, String> {
-        let (plan, session) = self.federated_session(connection)?;
+        let (plan, session) = self.federated_session(document, connection)?;
+        // 【K1】发送前预检：这条 SQL 引用的表要在实例上落得下来——不存在 / 多源歧义 /
+        // 未知 catalog / 源不可用都在这里拒，不等到 DuckDB 报一句笼统的错。
+        let facts = crate::exec::preflight::Facts::capture(crate::exec::preflight::primary_of(document));
+        crate::exec::preflight::check(sql, engine::sql::SqlDialect::Duckdb, &facts)?;
         // 与另两档同口径：查询只取**第一段**（套窗口），写语句原样交给引擎
         let (to_run, segmented) = match window_sql(sql, crate::execution::SEGMENT_ROWS, 0) {
             Some(wrapped) => (wrapped, true),
@@ -121,12 +144,13 @@ impl EngineQueryRunner {
     /// 联邦档的「取下一段」（同一套窗口包装，见 `sql_service::window_sql`）
     pub(crate) fn fetch_next_on_federation(
         &self,
+        document: &str,
         connection: Option<&str>,
         sql: &str,
         offset: usize,
         limit: usize,
     ) -> Result<QueryData, String> {
-        let (plan, session) = self.federated_session(connection)?;
+        let (plan, session) = self.federated_session(document, connection)?;
         let wrapped =
             window_sql(sql, limit, offset).ok_or_else(|| "这份结果没有可再取的部分".to_string())?;
         let started = std::time::Instant::now();
@@ -151,12 +175,13 @@ impl EngineQueryRunner {
     /// 联邦档的下发（筛选 / 排序）：改写之后照跑（`notice` 由调用方给）
     pub(crate) fn run_rewritten_on_federation(
         &self,
+        document: &str,
         connection: Option<&str>,
         rewritten: &engine::sql::Rewrite,
         notice: impl FnOnce(&str) -> String,
         lineage: &str,
     ) -> Result<QueryData, String> {
-        let (plan, session) = self.federated_session(connection)?;
+        let (plan, session) = self.federated_session(document, connection)?;
         let started = std::time::Instant::now();
         let outcome = session.run(&rewritten.sql);
         let elapsed_ms = started.elapsed().as_millis() as u64;
@@ -183,9 +208,10 @@ impl EngineQueryRunner {
     /// 编辑器仍保留自己的组装（别名生成、notes 文案），那属于宿主职责。
     pub(crate) fn federated_session(
         &self,
+        document: &str,
         connection: Option<&str>,
     ) -> Result<(FederatedPlan, Arc<fed_session::FederatedSession>), String> {
-        let plan = self.federated_plan(connection)?;
+        let plan = self.federated_plan(document, connection)?;
         let (session_plan, prepared) = session_plan_for(&plan)?;
         match engine::analysis::kernel::open(&session_plan, &prepared) {
             Ok(SessionHandle::Instance { session, .. }) => {
@@ -219,7 +245,7 @@ pub(crate) fn session_plan_for(
         .iter()
         .map(|source| MountSpec::sql_connection_as(source.conn_id.clone(), source.alias.clone()))
         .collect();
-    let session_plan = kernel_plan_for(&plan.owner, &mounts, plan.primary.as_deref())
+    let session_plan = kernel_plan_for(&plan.session_owner, &mounts, plan.primary.as_deref())
         .map_err(|error| error.to_string())?;
     let prepared = PreparedMounts::federated(
         plan.sources
@@ -248,14 +274,40 @@ fn kernel_plan_for(
     .map_err(|error| error.to_string())
 }
 
+/// 把「项目登记的主源」应用到计划上（**纯函数**：三种情形逐条可断言）
+///
+/// - 没登记（`None` / 空串）：保持文档连接的派生结果；
+/// - 登记的那条在本次清单里：主源改用它（用户设过就是设过，重启也一样）；
+/// - 登记的那条不在（没开直连 / 登记被删 / 已卸掉）：**保留原主源并留说明**——
+///   不能悄悄换成别的源，否则用户写的未限定名会解析到他没选的那个库上。
+pub(crate) fn apply_registered_primary(plan: &mut FederatedPlan, registered: Option<&str>) {
+    let Some(alias) = registered.map(str::trim).filter(|alias| !alias.is_empty()) else {
+        return;
+    };
+    if plan.sources.iter().any(|source| source.alias == alias) {
+        if plan.primary.as_deref() != Some(alias) {
+            plan.notes.push(format!("主源按项目登记：{alias}"));
+            plan.primary = Some(alias.to_string());
+        }
+    } else {
+        plan.notes.push(format!(
+            "项目登记的主源 {alias} 不在本次清单里（没开直连 / 已卸 / 登记删了？），本次按文档连接解析"
+        ));
+    }
+}
+
 /// 从源记录组装清单（**纯函数**：不碰连接库，便于逐条断言）
 ///
 /// 口径见 [`EngineQueryRunner::federated_plan`]；`notes` 是取记录时已经攒下的实话
 /// （读连接库失败 / 组装连接串失败之类），会一并带到结果区那行小字里。
+///
+/// `doc_conn` = 本文档绑定的连接（判主源、判"本文档连接是否参与"）；
+/// `session_owner` = 本文档 id（**会话身份**，与连接解耦）。
 pub(crate) fn plan_from_records(
     records: &[FedSourceRecord],
     notes: &[String],
-    owner: &str,
+    doc_conn: &str,
+    session_owner: &str,
 ) -> Result<FederatedPlan, String> {
     // 顺序不稳定（两张表合起来）：按连接 id 排序 → 同一份清单每次组装出同样的别名
     let mut ordered: Vec<&FedSourceRecord> = records.iter().collect();
@@ -270,7 +322,7 @@ pub(crate) fn plan_from_records(
     // 同一个 conn_id 只算一次（记录与运行态都出现时）
     let mut seen: Vec<&str> = Vec::new();
     for record in ordered {
-        if record.conn_id == owner {
+        if record.conn_id == doc_conn {
             owner_seen = true;
         }
         if seen.contains(&record.conn_id.as_str()) {
@@ -303,7 +355,7 @@ pub(crate) fn plan_from_records(
                     continue;
                 }
             };
-        if record.conn_id == owner {
+        if record.conn_id == doc_conn {
             primary = Some(alias);
         }
         sources.push(source);
@@ -311,7 +363,7 @@ pub(crate) fn plan_from_records(
 
     if sources.is_empty() {
         return Err(
-            "还没有可用作联邦源的连接：在连接对话框 → 高级里开启「DuckDB 本地加速（联邦查询直连源库）」"
+            "还没有可用作联邦源的连接：在连接对话框 → 高级里开启「DuckDB 直连（本地加速 / 用作联邦源）」"
                 .to_string(),
         );
     }
@@ -325,15 +377,16 @@ pub(crate) fn plan_from_records(
         ));
     }
     if !owner_seen {
-        notes.push("本文档的连接未开启「DuckDB 本地加速」，没有作为联邦源参与".to_string());
+        notes.push("本文档的连接未开启「DuckDB 直连」，没有作为联邦源参与".to_string());
     } else if primary.is_none() {
         notes.push(format!(
-            "本文档的连接（{owner}）未能作为联邦源参与（见上一条说明）"
+            "本文档的连接（{doc_conn}）未能作为联邦源参与（见上一条说明）"
         ));
     }
 
     Ok(FederatedPlan {
-        owner: owner.to_string(),
+        owner: doc_conn.to_string(),
+        session_owner: session_owner.to_string(),
         sources,
         primary,
         notes,

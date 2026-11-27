@@ -151,6 +151,9 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::StartupDefaultLeftPanel => {
             SettingValue::Text(settings.startup.default_left_panel.clone())
         }
+        Slot::StartupRestoreLastWorkspace => {
+            SettingValue::Bool(settings.startup.restore_last_workspace)
+        }
         // 复合值（工具栏按钮布局）：读写走草稿箱 ⋯ 菜单自己的入口。
         Slot::ScratchpadToolbar => return None,
         Slot::InsightMemoryLimitMb => SettingValue::Number(settings.insight.memory_limit_mb as f64),
@@ -453,7 +456,9 @@ impl SettingsService {
                 projects::apply_slot(slot, value, window, cx)
             }
             Slot::LogMinLevel => logging::apply_slot(slot, value, window, cx),
-            Slot::StartupDefaultLeftPanel => startup::apply_slot(slot, value, window, cx),
+            Slot::StartupDefaultLeftPanel | Slot::StartupRestoreLastWorkspace => {
+                startup::apply_slot(slot, value, window, cx)
+            }
             Slot::ScratchpadToolbar => scratchpad::apply_slot(slot, value, window, cx),
             Slot::InsightMemoryLimitMb
             | Slot::InsightFullScanConfirm

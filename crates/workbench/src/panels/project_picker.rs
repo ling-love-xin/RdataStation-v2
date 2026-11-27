@@ -69,6 +69,9 @@ impl Render for ProjectPickerPanel {
         let host_new = self.host.clone();
         let inputs_new = self.inputs.clone();
         let host_recent = self.host.clone();
+        // 示例项目入口：与「打开项目」共用同一个宿主（`create_sample` 幂等：
+        // 项目已存在就只补双数据源与连接，然后走 `request_switch` 切进来）。
+        let host_sample = self.host.clone();
         let theme = cx.theme();
         let banner = div()
             .v_flex()
@@ -130,6 +133,18 @@ impl Render for ProjectPickerPanel {
                             .on_click(move |_, _, app| {
                                 // 刷新最近列表并停留（TabBar 默认「最近」，重绘即回到最近项目）。
                                 project::ui::refresh_picker(&host_recent, app);
+                            }),
+                    )
+                    // 示例项目：内置 SQLite + DuckDB 双数据源（销售库 6/12 行），
+                    // 是「本地加速 / 联邦 / 面板」这组能力唯一开箱可用的对象；
+                    // 首次进入会同步生成两个库文件（幂等，之后只是校验）。
+                    .child(
+                        Button::new("welcome-sample-project")
+                            .ghost()
+                            .icon(CatalogIcon::Database)
+                            .label(tr("从示例项目开始"))
+                            .on_click(move |_, window, app| {
+                                project::ui::create_sample(&host_sample, window, app);
                             }),
                     ),
             );

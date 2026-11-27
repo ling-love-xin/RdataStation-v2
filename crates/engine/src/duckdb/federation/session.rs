@@ -212,7 +212,14 @@ impl FederatedSession {
                 .any(|entry| entry.alias() == alias && entry.is_ready());
             if ready {
                 self.session.use_catalog(alias)?;
+            } else {
+                // 主源重挂失败：别把会话停在它上面，退回 memory 并留说明
+                self.session.reset_search_path()?;
             }
+        } else {
+            // 卸的是非主源：`USE memory; DETACH …` 已把 `search_path` 拉到 `memory.main`，
+            // 必须再钉回 `memory.rds_tmp`，否则重挂成功后临时结果集还是"看不见"
+            self.session.reset_search_path()?;
         }
         Ok(())
     }
@@ -410,6 +417,11 @@ pub fn bases_fingerprint() -> String {
         .map(|base| format!("{}|{}", base.alias, base.path))
         .collect();
     parts.sort();
+    if parts.is_empty() {
+        // 没有底座也是一份**确定的**指纹：返回空串会和「还没算过 / 算失败」混同，
+        // 调用方是按「= / ≠」判底座变没变的。
+        return "-".to_string();
+    }
     parts.join(";")
 }
 

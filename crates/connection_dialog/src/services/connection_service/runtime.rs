@@ -33,7 +33,6 @@ pub struct SaveGlobalConnectionInput<'a> {
     pub options: Option<&'a str>,
     pub driver_properties: Option<&'a str>,
     pub advanced_options: Option<&'a str>,
-    pub use_duckdb_fed: Option<bool>,
     pub metadata_path: Option<&'a str>,
     pub schema_name: Option<&'a str>,
     /// 是否保存凭据（P0-4，2026-10-24）：`false` 时密码不落库。
@@ -61,7 +60,6 @@ pub struct ConnectRequest {
     pub tags: Option<String>,
     pub metadata_path: Option<String>,
     pub schema_name: Option<String>,
-    pub use_duckdb_fed: Option<bool>,
     pub password: Option<String>,
     pub skip_persistence: Option<bool>,
     pub network_method: Option<ConnectionMethod>,
@@ -167,7 +165,6 @@ impl ConnectionService {
             tags,
             metadata_path,
             schema_name,
-            use_duckdb_fed,
             password,
             skip_persistence,
             network_method,
@@ -265,7 +262,6 @@ impl ConnectionService {
                             driver_properties: driver_properties.clone(),
                             advanced_options: advanced_options.clone(),
                             description: description.clone(),
-                            use_duckdb_fed: conn_info.use_duckdb_fed,
                             created_at: std::time::Instant::now(),
                         };
                         // 重连配置沿用权威连接（其 url_override 保留明文用于重连）。
@@ -292,7 +288,7 @@ impl ConnectionService {
                             .await
                         {
                             Ok(()) => {
-                                // 门控注册（2026-10-03 规则）：加速开 + 有对应扩展才注册；
+                                // 门控注册：有对应 DuckDB 扩展才注册（能力判据）；
                                 // 目标分析库按作用域（G_→全局 / P_、GP_→项目）。
                                 crate::services::secret_integration::ensure_secret_registered_gated(
                                     crate::services::secret_integration::analysis_db_for_scope(
@@ -303,7 +299,6 @@ impl ConnectionService {
                                     &conn_id,
                                     &db_type,
                                     &url,
-                                    conn_info.use_duckdb_fed,
                                 );
                                 return Ok((conn_id, db));
                             }
@@ -464,7 +459,6 @@ impl ConnectionService {
             driver_properties: driver_properties.clone(),
             advanced_options: advanced_options.clone(),
             description: description.clone(),
-            use_duckdb_fed,
             created_at: std::time::Instant::now(),
         };
 
@@ -494,8 +488,9 @@ impl ConnectionService {
         }
 
         // M3 本地加速：连接建立成功后注册 DuckDB Secret（联邦查询直连源库）。
-        // 门控规则（2026-10-03）：加速开 + 有对应 DuckDB 扩展才注册；目标分析库按作用域
-        // （全局侧 → 全局分析库，项目侧 P_/GP_ → 项目分析库）；失败仅告警，不影响连接本身。
+        // 门控规则（2026-11-27 解耦）：只按能力——驱动有对应 DuckDB 扩展就注册；
+        // 目标分析库按作用域（全局侧 → 全局分析库，项目侧 P_/GP_ → 项目分析库）；
+        // 失败仅告警，不影响连接本身。「要不要用它当源」看项目意图清单，与 Secret 无关。
         crate::services::secret_integration::ensure_secret_registered_gated(
             crate::services::secret_integration::analysis_db_for_scope(
                 &conn_id,
@@ -505,7 +500,6 @@ impl ConnectionService {
             &conn_id,
             &db_type,
             &url,
-            use_duckdb_fed,
         );
 
         // 指纹接线（2026-10-02）：登记 conn_id → 身份指纹，使指向同一物理库的多条连接
@@ -548,7 +542,6 @@ impl ConnectionService {
                     options: options.as_deref(),
                     driver_properties: driver_properties.as_deref(),
                     advanced_options: advanced_options.as_deref(),
-                    use_duckdb_fed,
                     metadata_path: metadata_path.as_deref(),
                     schema_name: schema_name.as_deref(),
                     // 连接时保存路径：凭据刚输入，默认保存（P0-4 开关只管对话框显式保存）。
@@ -615,7 +608,6 @@ impl ConnectionService {
                 options: input.options,
                 driver_properties: input.driver_properties,
                 advanced_options: input.advanced_options,
-                use_duckdb_fed: input.use_duckdb_fed,
                 metadata_path: input.metadata_path,
                 schema_name: input.schema_name,
                 save_password: input.save_password,
@@ -1365,7 +1357,6 @@ mod tests {
             tags: None,
             metadata_path: None,
             schema_name: None,
-            use_duckdb_fed: None,
             password: None,
             skip_persistence: Some(true),
             network_method: None,

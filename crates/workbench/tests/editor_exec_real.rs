@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 use editor::execution::{
     ExecTarget, ResultPlacement, RunOptions, TxAction, TxSnapshot, batch_target,
 };
-use editor::host::{FederatedSourcePort, FederatedSourceRecord};
+use editor::host::{FederatedSourcePort, FederatedSourceRecord, PrimaryMemory};
 use editor::model::{DocumentId, EditorMode};
 use editor::service::OpenRequest;
 use editor::shared::EditorShared;
@@ -53,8 +53,13 @@ struct Target {
 /// 测试用联邦源 stub：执行端口只依赖「源清单」，这里不接真实连接清单（空清单）。
 struct TestFederatedSource;
 impl FederatedSourcePort for TestFederatedSource {
-    fn records(&self) -> Vec<FederatedSourceRecord> {
+    fn records(&self, _focus: Option<&str>) -> Vec<FederatedSourceRecord> {
         Vec::new()
+    }
+
+    fn remember_primary(&self, _alias: &str) -> Result<PrimaryMemory, String> {
+        // 测试替身不落库：主源只活在会话里（与空端口同口径）
+        Ok(PrimaryMemory::SessionOnly)
     }
 }
 

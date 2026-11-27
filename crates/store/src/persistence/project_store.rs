@@ -30,7 +30,6 @@ pub struct StoredConnection {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<String>,
     pub tags: Option<String>,
-    pub use_duckdb_fed: Option<bool>,
     pub metadata_path: Option<String>,
     pub is_active: bool,
     pub server_version: Option<String>,
@@ -107,13 +106,6 @@ impl ProjectStore {
         let password = conn.password_encrypted.clone().unwrap_or_default();
         let options = conn.options.clone().unwrap_or_default();
         let tags = conn.tags.clone().unwrap_or_default();
-        // 三态：`None` 写 NULL（不可直连），`Some(false)` → 0，`Some(true)` → 1。
-        // 绑定参数走 `'null'` 哨兵 + SQL 侧 `NULLIF`，因为这条 INSERT 的参数数组要求同类型。
-        let use_duckdb_fed: String = match conn.use_duckdb_fed {
-            Some(true) => "1".to_string(),
-            Some(false) => "0".to_string(),
-            None => "null".to_string(),
-        };
         let metadata_path = conn.metadata_path.clone().unwrap_or_default();
         let is_active = conn.is_active.to_string();
         let server_version = conn.server_version.clone().unwrap_or_default();
@@ -128,8 +120,8 @@ impl ProjectStore {
 
         sqlite.inner()?.execute(
             "INSERT OR REPLACE INTO connections
-             (id, name, driver, host, port, database, schema_name, username, password_encrypted, options, tags, use_duckdb_fed, metadata_path, is_active, server_version, description, driver_id, environment_id, auth_config_id, auth_method, network_config_id, driver_properties, advanced_options, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULLIF(?12, 'null'), ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
+             (id, name, driver, host, port, database, schema_name, username, password_encrypted, options, tags, metadata_path, is_active, server_version, description, driver_id, environment_id, auth_config_id, auth_method, network_config_id, driver_properties, advanced_options, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
             [
                 &conn.id,
                 &conn.name,
@@ -142,7 +134,6 @@ impl ProjectStore {
                 &password,
                 &options,
                 &tags,
-                &use_duckdb_fed,
                 &metadata_path,
                 &is_active,
                 &server_version,
@@ -173,7 +164,7 @@ impl ProjectStore {
         let sqlite = self.db_manager.sqlite_pool().acquire().await?;
 
         let mut stmt = sqlite.inner()?.prepare(
-            "SELECT id, name, driver, host, port, database, schema_name, username, password_encrypted, options, tags, use_duckdb_fed, metadata_path, is_active, created_at, updated_at, server_version, description, driver_id, environment_id, auth_config_id, auth_method, network_config_id, driver_properties, advanced_options
+            "SELECT id, name, driver, host, port, database, schema_name, username, password_encrypted, options, tags, metadata_path, is_active, created_at, updated_at, server_version, description, driver_id, environment_id, auth_config_id, auth_method, network_config_id, driver_properties, advanced_options
              FROM connections WHERE is_active = 1 ORDER BY created_at DESC"
         ).map_err(|e| CoreError::Storage(StorageError::Persistence {
             store: "sqlite".to_string(),
@@ -195,7 +186,6 @@ impl ProjectStore {
                     password_encrypted: row.get(8).ok(),
                     options: row.get(9).ok(),
                     tags: row.get(10).ok(),
-                    use_duckdb_fed: row.get::<_, Option<bool>>(11).unwrap_or(None),
                     metadata_path: row.get(12).ok(),
                     is_active: row.get::<_, bool>(13)?,
                     created_at: row.get(14)?,
@@ -234,7 +224,7 @@ impl ProjectStore {
         let sqlite = self.db_manager.sqlite_pool().acquire().await?;
 
         let mut stmt = sqlite.inner()?.prepare(
-            "SELECT id, name, driver, host, port, database, schema_name, username, password_encrypted, options, tags, use_duckdb_fed, metadata_path, is_active, created_at, updated_at, server_version, description, driver_id, environment_id, auth_config_id, auth_method, network_config_id, driver_properties, advanced_options
+            "SELECT id, name, driver, host, port, database, schema_name, username, password_encrypted, options, tags, metadata_path, is_active, created_at, updated_at, server_version, description, driver_id, environment_id, auth_config_id, auth_method, network_config_id, driver_properties, advanced_options
              FROM connections WHERE id = ?1 AND is_active = 1"
         ).map_err(|e| CoreError::Storage(StorageError::Persistence {
             store: "sqlite".to_string(),
@@ -255,20 +245,19 @@ impl ProjectStore {
                 password_encrypted: row.get(8).ok(),
                 options: row.get(9).ok(),
                 tags: row.get(10).ok(),
-                use_duckdb_fed: row.get::<_, Option<bool>>(11).unwrap_or(None),
-                metadata_path: row.get(12).ok(),
-                is_active: row.get::<_, bool>(13)?,
-                created_at: row.get(14)?,
-                updated_at: row.get(15)?,
-                server_version: row.get(16).ok(),
-                description: row.get(17).ok(),
-                driver_id: row.get(18).ok(),
-                environment_id: row.get(19).ok(),
-                auth_config_id: row.get(20).ok(),
-                auth_method: row.get(21).ok(),
-                network_config_id: row.get(22).ok(),
-                driver_properties: row.get(23).ok(),
-                advanced_options: row.get(24).ok(),
+                metadata_path: row.get(11).ok(),
+                is_active: row.get::<_, bool>(12)?,
+                created_at: row.get(13)?,
+                updated_at: row.get(14)?,
+                server_version: row.get(15).ok(),
+                description: row.get(16).ok(),
+                driver_id: row.get(17).ok(),
+                environment_id: row.get(18).ok(),
+                auth_config_id: row.get(19).ok(),
+                auth_method: row.get(20).ok(),
+                network_config_id: row.get(21).ok(),
+                driver_properties: row.get(22).ok(),
+                advanced_options: row.get(23).ok(),
             })
         });
 

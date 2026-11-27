@@ -45,8 +45,8 @@
 「源」的判定不再靠单一来源，而是**意图 ∩ 事实**：
 
 - **意图（持久，项目级）**：项目库 `.RSmeta/project.db` 的 `analysis_sources` 表。
-- **能力（连接级开关）**：连接上的 `use_duckdb_fed`（三态，`Option<bool>`）。有值 = 可被 DuckDB
-  直连，就该在本表有一行（**有值即登记**，§7.1）；`None` = 不可直连、不登记。
+- **能力（驱动常量，2026-11-27 起）**：`AccelKind::from_db_type` 认得的驱动才可被 DuckDB 直连；
+  **连接上已没有 `use_duckdb_fed` 开关**（字段已删），「要不要当源」只由项目登记表达。
 - **事实（运行态）**：进程 DuckDB 的 `duckdb_databases()`。
   已用过的列只有 `database_name`、`type`：
   `engine/src/analysis/global.rs:112`（按 `database_name` 核对）、
@@ -160,22 +160,25 @@ CREATE INDEX IF NOT EXISTS idx_analysis_sources_kind ON analysis_sources(kind);
 "注册标记"改成本表行）。不另造顶部提示条、不另造子组——一行一个源，动作就在右键里
 （第 42 条：行内不摆按钮）。
 
-### 7.1 能力开关与登记的关系（2026-11-26 定，取代"标记联邦源"的说法）
+### 7.1 能力与登记的关系（2026-11-27 改口径：能力归驱动，启用归登记）
 
-`use_duckdb_fed` **不是选表意图，也不是"联邦标记"**，它是**能力 / 加速开关**，三态：
+**连接上不再有开关**（`use_duckdb_fed` 已删，模型 / 存储 / 对话框 / 草稿箱一并清理）。
+两件事各归各的：
 
-| 值 | 含义 | 与登记的关系 |
+| 问题 | 由谁回答 | 落点 |
 |---|---|---|
-| `None` / 无值 | 该驱动不支持 DuckDB 直连 | 不登记；源段不出行 |
-| `Some(false)` | 可直连，但没开本地加速 | **必须登记**（有值即登记）；源段出行，可作联邦源 |
-| `Some(true)` | 可直连，且已开本地加速（`rds_src`） | **必须登记**；源段**不出加速行**，连接行写「已挂载」 |
+| 这个驱动能不能挂进 DuckDB | 驱动常量 `AccelKind::from_db_type` / `local_accel_support` | 代码，不落库 |
+| 这条连接要不要当源 / 当哪一档 | 项目登记 `analysis_sources.mount_kind` | 项目库（意图清单，唯一持久状态） |
+| 这条源此刻挂上了没有 | 分析实例的 catalog 事实（`snapshot()` / `duckdb_databases()`） | 运行态，不落库 |
 
-- 「有值即登记」由 `data_objects_load::ensure_registration` 幂等保证（已存在不重复插，
-  避免两个入口各写一行、别名被挤成 `shop_2`）；面板「加源」路径在开关翻开成功后同步调用。
-- 登记表达的是**项目级意图**（切项目还在）；挂载是**运行态事实**（切项目清）。
-  两者不合并成一步，也不互相替代——「未挂载 · 项目级」这一格正是二者之差。
-- 三条执行通道（源库直连 / 本地加速 / 联邦）与 `use_duckdb_fed` 的关系：
-  源库直连不需要开关；本地加速要 `Some(true)`；联邦要**至少两个**有值且可挂的连接。
+- **登记是唯一入口**：面板「加源」走 `ensure_registration`（幂等，已存在不重复插）；
+  对话框保存不再写任何开关值，只在删除连接时清理 Secret。
+- **Secret 只按能力注册**：驱动有对应 DuckDB 扩展就注册，与"当不当源"无关（注册 ≠ 启用）。
+- 三条执行通道的判据：
+  源库直连（不经 DuckDB，无需判据）；本地加速要 `mount_kind == Accel`；
+  联邦要**至少一个**「登记过（任意档）∪ 本文档绑定的连接」（2026-11-26 起单源放开；
+  全都不满足才拦，并逐条点名 —— 见 `editor_channels::accelerated_availability` /
+  `federated_availability`）。
 
 ## 8. 挂载 / 卸载 / 列举的入口映射
 
@@ -249,9 +252,8 @@ CREATE INDEX IF NOT EXISTS idx_analysis_sources_kind ON analysis_sources(kind);
 - **没有"源"这一类**。
 
 而且全仓没有任何模块持有"源清单"：连接清单在 `store` 的 `connections` 表 + 导航视图；
-`use_duckdb_fed` 是连接上的**三态能力 / 加速开关**（`Option<bool>`，按项目存），
-它决定"能不能被直连 / 开没开加速"，本身也不是清单——但**有值即登记**（§7.1），
-清单仍只有 `analysis_sources` 一处。
+「能不能被直连」现在只由**驱动常量**回答（`AccelKind`），连接记录上已无开关字段
+（2026-11-27 删 `use_duckdb_fed`），清单仍只有 `analysis_sources` 一处。
 
 **推论**：新建 `analysis_sources` 不是"造第二份真相"，而是**第一次把源清单落地**。
 第 55 条那句要改成事实陈述：「资源模块只有 文件 / 分析库表 两档，不涉源；源清单归

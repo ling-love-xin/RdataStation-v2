@@ -34,6 +34,7 @@ use duckdb::{Connection, InterruptHandle};
 
 use super::accel::run_sql_on;
 use super::manager::DuckDBManager;
+use super::temp_table::temp_schema::{ensure_shared_schema, SHARED_MAIN_PATH, SHARED_TEMP_PATH};
 use shared::error::CoreError;
 
 /// 实例级共享临时结果所在的 schema（跨会话可见，手动清理）。
@@ -82,7 +83,10 @@ pub struct TempEntry {
     pub last_read_ms: u64,
 }
 
-/// 别名登记：一个实例里别名必须唯一，冲突后到者让位（`mysql_src_2`）。
+/// 别名登记：一个实例里别名必须唯一，**冲突即失败**（不改名让位）。
+///
+/// 让位（`mysql_src_2`）会让同一份 SQL 在不同时刻指向不同的库——别名是用户 SQL 的契约，
+/// 系统无权改它（`catalog-context-model.md` §2.3）。同一条源重复申请是幂等。
 #[derive(Debug, Default, Clone)]
 struct MountRegistry {
     /// 实际别名 → 源连接 id
@@ -90,7 +94,7 @@ struct MountRegistry {
 }
 
 impl MountRegistry {
-    /// 申请一个别名：`wanted` 被占了就加 `_2`、`_3`…
+    /// 申请一个别名：空名 / 保留名 / 已被**别的**源占用 → 一律报错并点名占用者。
     fn reserve(&mut self, wanted: &str, conn_id: &str) -> Result<String, String> {
         let base = wanted.trim();
         if base.is_empty() {
@@ -103,20 +107,15 @@ impl MountRegistry {
         }
         if let Some(existing) = self.aliases.get(base) {
             if existing == conn_id {
+                // 同一条源重复申请：幂等（重挂 / 二次打开面板不该报冲突）
                 return Ok(base.to_string());
             }
+            return Err(format!(
+                "别名 {base} 已被连接 {existing} 占用；换一个别名，或先卸掉那条源"
+            ));
         }
-        let mut candidate = base.to_string();
-        let mut index = 2;
-        while self.aliases.contains_key(&candidate) {
-            candidate = format!("{base}_{index}");
-            index += 1;
-            if index > 99 {
-                return Err(format!("别名 {base} 的冲突太多（>98 个），换个名字"));
-            }
-        }
-        self.aliases.insert(candidate.clone(), conn_id.to_string());
-        Ok(candidate)
+        self.aliases.insert(base.to_string(), conn_id.to_string());
+        Ok(base.to_string())
     }
 
     fn release(&mut self, alias: &str) {
@@ -134,11 +133,17 @@ struct InstanceState {
     /// owner（文档 / 源连接 / 通道）→ 会话 id：同一 owner 再要会话时复用同一条，
     /// 这样"同一份文档两次执行"不会每次都换一条 `TEMP` 世界
     owners: HashMap<String, String>,
-    /// 源连接 id → (实际挂载别名, 源的命名口径)。冲突时别名可能是 `name_2`；
-    /// 界面要按这个查表，限定名要按这个 kind 拼。
+    /// 源连接 id → (实际挂载别名, 源的命名口径)。别名由 [`MountRegistry`] 单点保证唯一
+    /// （冲突即失败，不再有后缀别名）；界面要按这个查表，限定名要按这个 kind 拼。
     conn_alias: HashMap<String, (String, crate::duckdb::accel::AccelKind)>,
     mounts: MountRegistry,
     temps: Vec<TempEntry>,
+    /// 被用户"卸掉"的底座别名（**只是遮蔽，不 DETACH**）。
+    ///
+    /// `ATTACH` 是实例级事实，摘掉会让别的会话当场报 catalog 不存在；所以"卸载底座"
+    /// 落成这张名单：面板不再列它、以及它里面的表。边界要说清——**显式限定名
+    /// `analytics.x` 仍可达**（会话级遮蔽挡不住裸限定名，DuckDB 侧也没有这个开关）。
+    hidden_bases: Vec<String>,
     next_session: u64,
 }
 
@@ -227,6 +232,47 @@ fn control_has_database(conn: &Connection, alias: &str) -> bool {
 
 static INSTANCE: OnceLock<Mutex<Option<Arc<AnalysisInstance>>>> = OnceLock::new();
 
+/// 别名白名单：拼进 SQL 前只认标识符字符（与 `MountRegistry` 的登记口径一致）。
+///
+/// 抽成一处是因为 `USE` / `SET search_path` / `DETACH` 三处都在拼别名，
+/// 各写一份迟早漏掉一处。
+fn valid_alias(alias: &str) -> bool {
+    !alias.is_empty()
+        && alias
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+/// 引用计数：从「会话 owner + 标签 + 它持有的别名」里挑出持有目标的那些（纯函数，便于断言）。
+///
+/// 返回**标签**而不是 owner：错误的读者是用户，`doc-7f3a…` 这种 id 帮不上忙。
+fn holders_of(
+    alias: &str,
+    except: &[&str],
+    sessions: &[(String, String, Vec<String>)],
+) -> Vec<String> {
+    sessions
+        .iter()
+        .filter(|(owner, _, _)| !except.iter().any(|skip| skip == owner))
+        .filter(|(_, _, aliases)| aliases.iter().any(|seen| seen == alias))
+        .map(|(_, label, _)| label.clone())
+        .collect()
+}
+
+/// 卸载前的闸：有人持有就给出错误话术（`None` = 放行）。
+///
+/// 点睛之处是把「谁在用」写进原话（`编辑器 · 分析.sql` 这类 owner）：只说"正被使用"
+/// 用户不知道去关哪个。不变量 §6：有人持有就拒绝，不静默打断正在跑的查询。
+pub(crate) fn detach_refusal(alias: &str, holders: &[String]) -> Option<String> {
+    (!holders.is_empty()).then(|| {
+        format!(
+            "{alias} 正被 {} 个文档会话使用（{}）：先关掉它们，或在那些文档里卸掉这条源",
+            holders.len(),
+            holders.join("、")
+        )
+    })
+}
+
 fn instance_slot() -> &'static Mutex<Option<Arc<AnalysisInstance>>> {
     INSTANCE.get_or_init(|| Mutex::new(None))
 }
@@ -281,13 +327,10 @@ impl AnalysisInstance {
             .map_err(|error| format!("开分析实例失败：{error}"))?;
         DuckDBManager::configure_connection(&conn)
             .map_err(|error| format!("配置分析实例失败：{error}"))?;
-        conn.execute_batch(&format!("CREATE SCHEMA IF NOT EXISTS {SHARED_TEMP_SCHEMA}"))
-            .map_err(|error| format!("建 {SHARED_TEMP_SCHEMA} 失败：{error}"))?;
-        // 第 3b 项：控制连接也要认 `rds_tmp` 裸名（照看临时表、诊断、`drop_temp` 都走它）
-        conn.execute_batch(&format!(
-            "SET search_path = 'main,{SHARED_TEMP_SCHEMA}'"
-        ))
-        .map_err(|error| format!("设 search_path 失败：{error}"))?;
+        // 第 3b 项：控制连接也要认 `rds_tmp` 裸名（照看临时表、诊断、`drop_temp` 都走它）。
+        // 落点与 `search_path` 都写**全限定**（`memory.rds_tmp`）：裸 schema 名会跟着会话的
+        // `USE` 漂到只读源 catalog 上，2.0.1 当场报 "No catalog + schema named …"。
+        ensure_shared_schema(&conn).map_err(|error| format!("配置分析实例失败：{error}"))?;
         // 底座在**实例**上挂（`analytics` 读写 / `rds_global` 只读）：`ATTACH` 是实例级事实，
         // 挂一次所有会话都看得见；挂不上只让那一格缺席，不把实例带下去
         for (alias, outcome) in super::federation::session::attach_bases(&conn) {
@@ -304,6 +347,7 @@ impl AnalysisInstance {
                 conn_alias: HashMap::new(),
                 mounts: MountRegistry::default(),
                 temps: Vec::new(),
+                hidden_bases: Vec::new(),
                 next_session: 0,
             }),
             timeout_ms: AtomicU64::new(timeout.as_millis().max(0) as u64),
@@ -354,6 +398,56 @@ impl AnalysisInstance {
             }
         }
         super::federation::session::attach_bases(&conn)
+    }
+
+    /// 会话视角下"卸掉"一个底座：**只记遮蔽，不 DETACH**。
+    ///
+    /// 为什么不 DETACH：`ATTACH` 是实例级事实，摘掉会让别的会话当场报 catalog 不存在
+    /// （底座是"一直踩着的地基"）。遮蔽挡住的是**面板视图**：底座行与它里面的表不再列出。
+    /// 边界（必须说清，不装完整）：显式限定名 `analytics.表` **仍然可达**——会话级遮蔽
+    /// 挡不住裸限定名，DuckDB 侧也没有这个开关。
+    ///
+    /// 只认 [`federation::session::bases`] 里的别名；其余别名（尤其源）一律拒：
+    /// 源的卸载有它自己那条链（`unmount_conn` / `DETACH`），两条不能混。
+    pub fn hide_base(&self, alias: &str) -> Result<(), String> {
+        if !super::federation::session::bases()
+            .iter()
+            .any(|base| base.alias == alias)
+        {
+            return Err(format!("{alias} 不是执行面底座，不能按底座卸载"));
+        }
+        let Ok(mut state) = self.state.lock() else {
+            return Err("分析实例状态锁不可用".to_string());
+        };
+        if !state.hidden_bases.iter().any(|hidden| hidden == alias) {
+            state.hidden_bases.push(alias.to_string());
+        }
+        Ok(())
+    }
+
+    /// 把"卸掉"的底座挂回（只清遮蔽；`ATTACH` 本来就没动过）。
+    pub fn show_base(&self, alias: &str) -> Result<(), String> {
+        let Ok(mut state) = self.state.lock() else {
+            return Err("分析实例状态锁不可用".to_string());
+        };
+        state.hidden_bases.retain(|hidden| hidden != alias);
+        Ok(())
+    }
+
+    /// 当前被遮蔽的底座别名（面板据此不列底座行、也不列它里面的表）。
+    pub fn hidden_bases(&self) -> Vec<String> {
+        self.state
+            .lock()
+            .map(|state| state.hidden_bases.clone())
+            .unwrap_or_default()
+    }
+
+    /// 这个底座此刻在面板/会话视角里可见吗（`false` = 用户卸掉了）。
+    pub fn base_visible(&self, alias: &str) -> bool {
+        !self
+            .hidden_bases()
+            .iter()
+            .any(|hidden| hidden == alias)
     }
 
     /// 确保一台库以**底座**身份挂在实例上（`ATTACH ... READ_ONLY`）。
@@ -420,11 +514,10 @@ impl AnalysisInstance {
         let interrupt = conn.interrupt_handle();
         // 第 3b 项：每条会话都认 `rds_tmp` 裸名。克隆虽继承控制连接的设置，
         // 但这里是「临时表能不能被看见」的唯一前提，显式设一次（幂等）。
-        conn.execute_batch(&format!(
-            "CREATE SCHEMA IF NOT EXISTS {SHARED_TEMP_SCHEMA}; \
-             SET search_path = 'main,{SHARED_TEMP_SCHEMA}'"
-        ))
-        .map_err(|error| format!("会话 {id} 设 {SHARED_TEMP_SCHEMA} 落点失败：{error}"))?;
+        // 全限定写法（`memory.rds_tmp`）：会话随后会 `USE <源>`（加速 / 联邦），
+        // 裸 schema 名在那之后解析不到只读源上的临时区（实测 2.0.1 报 No catalog + schema）。
+        ensure_shared_schema(&conn)
+            .map_err(|error| format!("会话 {id} 设 {SHARED_TEMP_SCHEMA} 落点失败：{error}"))?;
         let stamp = now_ms();
         let session = Arc::new(AnalysisSession {
             id: id.clone(),
@@ -513,7 +606,7 @@ impl AnalysisInstance {
     /// 排除两类 owner：`process`（导出 / 取样 / 结果集的进程面会话）与
     /// `accel:<连接 id>`（本地加速档：挂着 `rds_src`，但加速档不占源段，只在连接行上写「已挂载」）。
     pub fn is_analysis_session(info: &SessionInfo, session: &AnalysisSession) -> bool {
-        if !session.is_open() || info.owner == "process" || info.owner.starts_with("accel:") {
+        if !session.is_open() || info.owner == "process" || Self::is_accel_owner(&info.owner) {
             return false;
         }
         !session.mounted_sources().is_empty()
@@ -554,7 +647,7 @@ impl AnalysisInstance {
         sessions.len()
     }
 
-    /// 为源连接申请实例级别名（唯一性由实例单点决定，后到者让位）。
+    /// 为源连接申请实例级别名（唯一性由实例单点决定；**冲突即失败**，返回占用者）。
     ///
     /// `kind` 一起记下来：面板要给出的限定名取决于源的命名口径（两段 / 三段），
     /// 而那个 kind 只有挂载方（内核）知道，事后没人能反推。
@@ -602,9 +695,22 @@ impl AnalysisInstance {
         self.ensure_session("process", "process")
     }
 
+    /// 本地加速档 owner 的前缀：`accel:{conn_id}`。
+    ///
+    /// 这里与 [`Self::accel_owner`] / [`Self::is_accel_owner`] / [`Self::is_analysis_session`]
+    /// 是**同一个键的唯一来源**——别在别处再拼字符串或再比前缀（D17 收口口径）。
+    pub const ACCEL_OWNER_PREFIX: &'static str = "accel:";
+
     /// 本地加速档的 owner 键（内核与工作台共用一份，别各自拼字符串）。
     pub fn accel_owner(conn_id: &str) -> String {
-        format!("accel:{conn_id}")
+        format!("{}{conn_id}", Self::ACCEL_OWNER_PREFIX)
+    }
+
+    /// 某个 owner 是不是本地加速档的键（空尾巴不算，防止 `accel:` 这种残键混进来）。
+    pub fn is_accel_owner(owner: &str) -> bool {
+        owner
+            .strip_prefix(Self::ACCEL_OWNER_PREFIX)
+            .is_some_and(|rest| !rest.is_empty())
     }
 
     /// 某源连接此刻的会话（没有就开一条）。
@@ -642,7 +748,7 @@ impl AnalysisInstance {
     /// 此刻挂在实例上的所有源连接：`(conn_id, 实际别名, 源的命名口径)`。
     ///
     /// 面板的「会话源」树根按它渲染——树根必须与 `duckdb_databases()` 里的 catalog 名
-    /// 一致，所以给的是**实际别名**（冲突让位后的 `rds_src_2` 也算）。
+    /// 一致，所以给的是**实际别名**（就是申请到的那个，冲突已被拒绝，不存在后缀别名）。
     pub fn mounted_conns(&self) -> Vec<(String, String, crate::duckdb::accel::AccelKind)> {
         let Ok(state) = self.state.lock() else {
             return Vec::new();
@@ -656,17 +762,34 @@ impl AnalysisInstance {
 
     /// 卸下某个源连接的挂载（面板右键「卸载」）：`DETACH` + 放别名 + 关它在实例上的会话。
     ///
+    /// `acting` = 谁在发起：`None` 表示不代表任何文档会话（面板/项目意图层），此时
+    /// **凡有文档会话挂着的别名一律拒绝**；`Some(owner)` 表示某个文档会话替自己卸，
+    /// 它自己的会话不算持有者（否则自己挂着就永远卸不掉）。
+    ///
     /// 只断挂载，不动连接本身；返回 `false` = 这个源本来就没挂（调用方据此提示）。
-    pub fn unmount_conn(&self, conn_id: &str) -> Result<bool, String> {
+    ///
+    /// **引用计数拒绝（不变量 §6，2026-11-27）**：还有别的文档会话挂着它（挂着 = `mounted_sources`
+    /// 里有 Ready 记录）时**拒绝卸载并点名**——`ATTACH` 是实例级事实，摘掉会让那些文档当场
+    /// 报 catalog 不存在，还会打断正在跑的查询。加速档自己的会话（`accel:<conn_id>`）恒不算持有者。
+    ///
+    /// 2026-11-27：卸完还要**收拾悬空会话**——凡是以它为「主源」的会话，`USE <别名>` 指向的
+    /// catalog 已经没了，之后任何未限定名的查询都会报 catalog 不存在。这里逐个重建默认路径
+    /// （[`AnalysisSession::reset_search_path`] 发现主源不在会清记录并退回 `memory`），
+    /// 并把该别名从各会话的挂载记录里摘掉（面板「会话源」跟着少一行）。
+    pub fn unmount_conn(&self, conn_id: &str, acting: Option<&str>) -> Result<bool, String> {
         let Some(alias) = self.alias_for_conn(conn_id) else {
             return Ok(false);
         };
-        let valid = !alias.is_empty()
-            && alias
-                .chars()
-                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
-        if !valid {
+        if !valid_alias(&alias) {
             return Err(format!("别名 {alias:?} 里有不允许的字符，拒绝拿去拼 SQL"));
+        }
+        // 引用计数闸：有人还在用就不摘（先把"谁在用"说清，别静默打断）
+        let accel = Self::accel_owner(conn_id);
+        let mut except = vec![accel.as_str()];
+        except.extend(acting);
+        let holders = self.catalog_holders(&alias, &except);
+        if let Some(refusal) = detach_refusal(&alias, &holders) {
+            return Err(refusal);
         }
         {
             let conn = self
@@ -695,7 +818,50 @@ impl AnalysisInstance {
         if let Some(session) = session {
             session.close();
         }
+        // 其余会话：摘掉这个别名（主源 → 退回 memory）
+        for info in self.sessions() {
+            let Some(session) = self.session(&info.id) else {
+                continue;
+            };
+            if !session.is_open() {
+                continue;
+            }
+            session.forget_mounted(&alias);
+            if session.primary_alias().as_deref() == Some(alias.as_str()) {
+                if let Err(reason) = session.reset_search_path() {
+                    tracing::warn!(
+                        alias = %alias,
+                        session = %session.id(),
+                        reason = %reason,
+                        "卸载后会话默认路径没能重建（该会话后续查询可能落到 memory）"
+                    );
+                }
+            }
+        }
         Ok(true)
+    }
+
+    /// 此刻正持有某别名的会话 owner 列表（**引用计数的读口**，不变量 §6）。
+    ///
+    /// `except` 排除不算持有者的会话（加速档自己的 `accel:<conn_id>`、以及发起卸载的那个文档会话）。
+    /// 只数 **Ready** 的挂载记录：失败记录没有 `search_path` 指向它，不算"在用"。
+    pub fn catalog_holders(&self, alias: &str, except: &[&str]) -> Vec<String> {
+        let mut sessions: Vec<(String, String, Vec<String>)> = Vec::new();
+        for info in self.sessions() {
+            let aliases = self
+                .session(&info.id)
+                .map(|session| {
+                    session
+                        .mounted_sources()
+                        .into_iter()
+                        .filter(|entry| entry.is_ready())
+                        .map(|entry| entry.alias().to_string())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            sessions.push((info.owner, info.label, aliases));
+        }
+        holders_of(alias, except, &sessions)
     }
 
     /// 某个源连接此刻挂在实例上的别名（**纯内存读**；没挂过就是 `None`）。
@@ -760,6 +926,30 @@ impl AnalysisInstance {
         Ok(tables)
     }
 
+    /// 一次性列出**全部 catalog** 的表 / 视图名（`(别名, 名)`，不分 kind、不过滤系统库）。
+    ///
+    /// 预检要回答「这个未限定名在几个源里命中」，逐个别名查是 N 次往返；
+    /// `duckdb_tables()` 本身就是一次全量读，这里只做批量版。与
+    /// [`Self::list_tables_of_alias`] 同一份事实（表 + 视图），不另立口径。
+    pub fn catalog_table_names(&self) -> Result<Vec<(String, String)>, String> {
+        let conn = self
+            .control
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut statement = conn
+            .prepare(
+                "SELECT database_name, table_name FROM duckdb_tables() \
+                 UNION ALL SELECT database_name, view_name FROM duckdb_views()",
+            )
+            .map_err(|error| format!("列不出实例上的表：{error}"))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|error| format!("列不出实例上的表：{error}"))?;
+        Ok(rows.filter_map(Result::ok).collect())
+    }
+
     /// 放掉别名（卸载源时调）。
     pub fn release_alias(&self, alias: &str) {
         if let Ok(mut state) = self.state.lock() {
@@ -808,11 +998,13 @@ impl AnalysisInstance {
             return Err("临时结果名不能为空".to_string());
         }
         let bare = name
-            .strip_prefix(&format!("{SHARED_TEMP_SCHEMA}."))
+            .strip_prefix(&format!("{SHARED_TEMP_PATH}."))
+            .or_else(|| name.strip_prefix(&format!("{SHARED_TEMP_SCHEMA}.")))
             .unwrap_or(name);
         let quoted = bare.replace('"', "\"\"");
+        // 钉死 `memory.rds_tmp`：控制连接哪天被 `USE` 过也不至于删到源上的同名表
         self.run_control(&format!(
-            "DROP TABLE IF EXISTS {SHARED_TEMP_SCHEMA}.\"{quoted}\""
+            "DROP TABLE IF EXISTS {SHARED_TEMP_PATH}.\"{quoted}\""
         ))?;
         // 旧口径（`memory.main`）的同一张表：不在就静默跳过，删成功与否都继续走销登记
         let _ = self.run_control(&format!("DROP TABLE IF EXISTS \"{quoted}\""));
@@ -827,6 +1019,45 @@ impl AnalysisInstance {
             })
             .unwrap_or(false);
         Ok(removed)
+    }
+
+    /// 收掉某个 owner 名下的临时结果（关文档 / 关模块时调）。
+    ///
+    /// 名单是**两处并集**：实例登记册（用户看得见、点得掉的那一份）与临时表管理器
+    /// （TTL / 上限用的那一份）。控制连接重开过时实例册可能先空、管理器那份还在，
+    /// 只查一处会漏收。
+    ///
+    /// 单张删除复用 [`Self::drop_temp`]（同一套落点 + 销登记），失败不阻断其余表，
+    /// 收完回第一条错。
+    pub fn drop_temps_of(&self, owner: &str) -> Result<usize, String> {
+        let mut names: Vec<String> = self
+            .temps()
+            .into_iter()
+            .filter(|entry| entry.created_by == owner)
+            .map(|entry| entry.name)
+            .collect();
+        for name in super::DuckDBManager::temp_table_manager().list_by_owner(owner) {
+            if !names.iter().any(|existing| existing == &name) {
+                names.push(name);
+            }
+        }
+        let mut dropped = 0;
+        let mut first_error: Option<String> = None;
+        for name in names {
+            match self.drop_temp(&name) {
+                Ok(true) => dropped += 1,
+                Ok(false) => {}
+                Err(error) => {
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                }
+            }
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(dropped),
+        }
     }
 
     /// 清空 `rds_tmp` 里**所有已登记**的临时结果（用户点"全部清理"）。
@@ -1058,6 +1289,30 @@ impl AnalysisSession {
             .unwrap_or_default()
     }
 
+    /// 把本会话的挂载**记录**对齐到给定别名集合（**只动记录，不 `DETACH`**）。
+    ///
+    /// 用途：一条文档从联邦切回本地加速（或反过来）时，会话按 owner 复用，
+    /// 旧通道挂的源会一直留在 `mounted_sources()` 里，面板的「会话源」就同时显示
+    /// 两套通道的源。`ATTACH` 是实例级事实（可能还有别的会话在用），所以这里只清
+    /// 本会话的视图，源段的「已挂载」仍由实例事实回答——用户没点卸载就不替它卸。
+    ///
+    /// `aliases` 是**本通道真正要用**的那些别名；按别名比对（会保留冲突让位后的实际名）。
+    pub fn retain_mounted(&self, aliases: &[String]) {
+        if let Ok(mut stored) = self.mounted.lock() {
+            stored.retain(|entry| aliases.iter().any(|alias| alias == entry.alias()));
+        }
+    }
+
+    /// 把某一条挂载从本会话的记录里摘掉（源段「卸载」时对**所有**会话调一次）。
+    ///
+    /// 与 `retain_mounted` 的分工：那个按"本通道要哪几个"整体对齐，这个只摘一个名字；
+    /// 两者都**不动实例上的 `ATTACH`**——真 `DETACH` 只由 [`Self::unmount_conn`] 做一次。
+    pub fn forget_mounted(&self, alias: &str) {
+        if let Ok(mut stored) = self.mounted.lock() {
+            stored.retain(|entry| entry.alias() != alias);
+        }
+    }
+
     /// 借本会话的连接跑一小段逻辑（**不接管执行**：只给需要直接 `execute_batch` 的调用方，
     /// 例如 `DETACH` / `CREATE VIEW` 这类必须拿到原始连接的活）。
     ///
@@ -1077,21 +1332,28 @@ impl AnalysisSession {
         f(&conn)
     }
 
-    /// 切本会话的默认 catalog（联邦主源用）。
+    /// 切本会话的默认 catalog（联邦主源 / 本地加速用），并把共享临时区**钉回** `search_path`。
+    ///
+    /// 为什么必须一起设：`USE <源>` 会把 `search_path` 重置成 `<源>.main`，`rds_tmp` 里的
+    /// 临时结果集当场"消失"（2.0.1 实测：此时裸 schema 名报 `No catalog + schema named "rds_tmp"`）。
+    /// 这里写全限定 `memory.rds_tmp`，主源与临时表都能按裸名解析，底座（`analytics` /
+    /// `rds_global`）则**不在默认路径里**——本地加速因此看不见底座（显式限定仍可达）。
     ///
     /// 只接受标识符字符：别名来自 `MountRegistry` 与驱动的校验，但这里是拼 SQL 的地方，
     /// 宁可多一条白名单检查，也不让一个精心构造的别名变成第二条语句。
     pub fn use_catalog(&self, alias: &str) -> Result<(), String> {
-        let valid = !alias.is_empty()
-            && alias
-                .chars()
-                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
-        if !valid {
+        if !valid_alias(alias) {
             return Err(format!("别名 {alias:?} 里有不允许的字符，拒绝拿去拼 SQL"));
         }
-        let outcome = self.run_with_timeout(&format!("USE {alias}"), Duration::from_secs(5));
+        // 两条语句必须同一次 `execute_batch`：`USE` 成功而 `SET` 没跟上，会话就停在
+        // "主源切了、临时表却看不见"的半截状态。
+        let sql = format!("USE {alias}; SET search_path = '{alias}.main,{SHARED_TEMP_PATH}'");
+        let outcome = self.with_connection(|conn| {
+            conn.execute_batch(&sql)
+                .map_err(|error| error.to_string())
+        });
         match outcome {
-            Ok(_) => {
+            Ok(()) => {
                 // 切成功才记：失败时主源没变，记下来会让面板把小标写错
                 if let Ok(mut primary) = self.primary.lock() {
                     *primary = Some(alias.to_string());
@@ -1108,6 +1370,44 @@ impl AnalysisSession {
                     *note = Some(reason.clone());
                 }
                 Err(reason)
+            }
+        }
+    }
+
+    /// 按会话**当前**的主源重建 `search_path`（`USE memory; DETACH …` 之后必调）。
+    ///
+    /// 重挂 / 卸源这类动作先把会话拽回 `memory`，`search_path` 也跟着变成 `memory.main`；
+    /// 不重建就会出现"主源还在、临时表却解析不到"。主源已经不在（被卸掉）时退到 `memory`
+    /// 并把原因写在 `primary_note` 上，不让会话卡在一个不存在的 catalog 上。
+    pub fn reset_search_path(&self) -> Result<(), String> {
+        match self.primary_alias().as_deref() {
+            Some(alias) if valid_alias(alias) => {
+                let sql = format!("SET search_path = '{alias}.main,{SHARED_TEMP_PATH}'");
+                let outcome = self.with_connection(|conn| {
+                    conn.execute_batch(&sql)
+                        .map_err(|error| error.to_string())
+                });
+                if outcome.is_ok() {
+                    return Ok(());
+                }
+                // 主源已被卸（catalog 不在了）：清记录、留说明，再退到 memory
+                if let Ok(mut slot) = self.primary.lock() {
+                    *slot = None;
+                }
+                if let Ok(mut note) = self.primary_note.lock() {
+                    *note = Some(format!(
+                        "主源 {alias} 已不在，默认目录回退到 memory：{}",
+                        outcome.err().unwrap_or_default()
+                    ));
+                }
+                self.reset_search_path()
+            }
+            _ => {
+                let sql = format!("SET search_path = '{SHARED_MAIN_PATH},{SHARED_TEMP_PATH}'");
+                self.with_connection(|conn| {
+                    conn.execute_batch(&sql)
+                        .map_err(|error| format!("设 search_path 失败：{error}"))
+                })
             }
         }
     }
@@ -1171,6 +1471,60 @@ mod tests {
 
     fn instance(tag: &str) -> Arc<AnalysisInstance> {
         AnalysisInstance::open_tagged(tag, Duration::from_millis(3000)).expect("开实例")
+    }
+
+    /// 引用计数（不变量 §6）：只数「真挂着」的会话，排除发起卸载者；有人持有时话术要点名。
+    #[test]
+    fn holders_count_only_the_sessions_that_really_hold_the_alias() {
+        let sessions = vec![
+            (
+                "doc-a".to_string(),
+                "编辑器 · 分析.sql".to_string(),
+                vec!["shop".to_string()],
+            ),
+            (
+                "doc-b".to_string(),
+                "编辑器 · 报表.sql".to_string(),
+                vec!["warehouse".to_string()],
+            ),
+            (
+                "accel:C1".to_string(),
+                "加速档 C1".to_string(),
+                vec!["shop".to_string()],
+            ),
+        ];
+        assert_eq!(
+            holders_of("shop", &["accel:C1"], &sessions),
+            ["编辑器 · 分析.sql".to_string()],
+            "发起者自己的会话要排除，没挂它的会话不算；返回标签而不是 owner id"
+        );
+        assert_eq!(holders_of("shop", &[], &sessions).len(), 2);
+        assert!(holders_of("gone", &[], &sessions).is_empty());
+
+        let holders = holders_of("shop", &[], &sessions);
+        let refusal = detach_refusal("shop", &holders).expect("有人持有必须拒");
+        assert!(refusal.contains("2 个文档会话"), "{refusal}");
+        assert!(
+            refusal.contains("编辑器 · 分析.sql") && refusal.contains("加速档 C1"),
+            "要点名谁在用，用户才知道去关哪个：{refusal}"
+        );
+        assert!(
+            detach_refusal("shop", &[]).is_none(),
+            "没人持有要放行（别把正常卸载也拦下）"
+        );
+    }
+
+    /// D17：`accel:` 键只有一处来源；残键 `accel:`（空连接 id）不算加速 owner。
+    #[test]
+    fn accel_owner_key_is_single_sourced() {
+        assert_eq!(AnalysisInstance::accel_owner("C_x"), "accel:C_x");
+        assert!(AnalysisInstance::is_accel_owner("accel:C_x"));
+        assert!(
+            !AnalysisInstance::is_accel_owner("accel:"),
+            "空尾巴是残键，不能当加速档"
+        );
+        assert!(!AnalysisInstance::is_accel_owner("C_x"));
+        assert!(!AnalysisInstance::is_accel_owner("process"));
     }
 
     /// 会话 A 在 `main` 里建的**持久**表，会话 B 立刻看得见（catalog 实例级共享）。
@@ -1252,6 +1606,156 @@ mod tests {
         );
     }
 
+    /// 切主源（本地加速 / 联邦都要 `USE <源>`）之后，共享临时表仍按裸名可见。
+    ///
+    /// 2.0.1 实测：`USE src` 会把 `search_path` 重置成 `src.main`，此时
+    /// `SET search_path = 'main,rds_tmp'` 直接报 `No catalog + schema named "rds_tmp" found`。
+    /// 所以 `use_catalog` 必须写全限定 `memory.rds_tmp`——这条用例就是那件事的回归。
+    #[test]
+    fn switching_catalog_keeps_shared_temps_visible() {
+        let instance = instance("t_switch_path");
+        let session = instance.open_session("doc-a", "编辑器").expect("开会话");
+        session
+            .run_with_timeout(
+                "CREATE TABLE rds_tmp.tmp_q_keep AS SELECT 7 AS n",
+                Duration::from_secs(3),
+            )
+            .expect("建共享临时");
+
+        // 测试里用可写内存库代替只读源文件：要验的只是 catalog 切换与 search_path
+        instance
+            .run_control("ATTACH ':memory:' AS src_a")
+            .expect("挂测试源");
+        session.use_catalog("src_a").expect("切主源");
+
+        let seen = session
+            .run_with_timeout("SELECT n FROM tmp_q_keep", Duration::from_secs(3))
+            .expect("切源后临时表应仍按裸名可见");
+        assert_eq!(seen.to_rows()[0][0].to_string(), "7");
+
+        let path = session
+            .run_with_timeout(
+                "SELECT value FROM duckdb_settings() WHERE name = 'search_path'",
+                Duration::from_secs(3),
+            )
+            .expect("读 search_path");
+        let path = path.to_rows()[0][0].to_string();
+        assert_eq!(
+            path,
+            format!("src_a.main,{SHARED_TEMP_PATH}"),
+            "默认路径只能有主源与共享临时区"
+        );
+        // 底座口径：默认路径里没有 `analytics` / `rds_global`
+        // —— 本地加速因此看不见底座，显式限定（`analytics.…`）仍可达。
+        assert!(!path.contains("analytics") && !path.contains("rds_global"));
+        instance.close_all_sessions();
+    }
+
+    /// 换通道只换**会话视图**：`retain_mounted` 清掉上一通道的源记录，实例上的挂载不动。
+    #[test]
+    fn retain_mounted_only_trims_the_session_view() {
+        use super::super::federation::registry::FederatedSource;
+
+        let dir = std::env::temp_dir().join(format!("rds_retain_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("建目录");
+        let path = dir.join("src.duckdb");
+        Connection::open(&path)
+            .expect("建源")
+            .execute_batch("CREATE TABLE t AS SELECT 1 AS n")
+            .expect("建表");
+
+        let instance = instance("t_retain");
+        let session = instance.open_session("doc-a", "编辑器").expect("开会话");
+        let source = FederatedSource::new(
+            "conn-a",
+            "fed_a",
+            "duckdb",
+            path.to_str().expect("路径"),
+        )
+        .expect("造源");
+        session.mount_sources(&[source]).expect("挂源");
+        assert_eq!(session.mounted_sources().len(), 1);
+
+        session.retain_mounted(&["rds_src".to_string()]);
+        assert!(
+            session.mounted_sources().is_empty(),
+            "非本通道的源记录应退场，否则面板会把两套通道的源一起列出来"
+        );
+        assert!(
+            instance.alias_owner("fed_a").is_some(),
+            "实例上的别名归属不动：源段的卸载是另一颗两态按钮"
+        );
+        instance.close_all_sessions();
+    }
+
+    /// 源段卸载之后，用它当主源的会话不能悬空：默认路径退回 memory，挂载记录里少这一行。
+    #[test]
+    fn unmounting_a_primary_source_falls_back_to_memory() {
+        use super::super::federation::registry::FederatedSource;
+
+        let dir = std::env::temp_dir().join(format!("rds_unmount_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("建目录");
+        let path = dir.join("src.duckdb");
+        Connection::open(&path)
+            .expect("建源")
+            .execute_batch("CREATE TABLE t AS SELECT 1 AS n")
+            .expect("建表");
+
+        let instance = instance("t_unmount");
+        let session = instance.open_session("doc-a", "编辑器").expect("开会话");
+        let source = FederatedSource::new(
+            "conn-a",
+            "fed_a",
+            "duckdb",
+            path.to_str().expect("路径"),
+        )
+        .expect("造源");
+        session.mount_sources(&[source]).expect("挂源");
+        session.use_catalog("fed_a").expect("设主源");
+        assert_eq!(session.primary_alias().as_deref(), Some("fed_a"));
+
+        // 面板（不代表任何文档会话）来卸：该会话正挂着它 → 必须拒绝并点名
+        let refusal = instance
+            .unmount_conn("conn-a", None)
+            .expect_err("面板卸载要过引用计数闸");
+        assert!(refusal.contains("1 个文档会话"), "{refusal}");
+        assert!(refusal.contains("编辑器"), "要点名谁在用：{refusal}");
+        assert_eq!(
+            session.primary_alias().as_deref(),
+            Some("fed_a"),
+            "被拒之后状态不许变"
+        );
+
+        // 该文档会话自己来卸：它自己的会话不算持有者 → 放行
+        assert!(instance
+            .unmount_conn("conn-a", Some("doc-a"))
+            .expect("自己的会话发起要放行"));
+        assert_eq!(session.primary_alias(), None, "主源记录该清掉");
+        assert!(
+            session.mounted_sources().is_empty(),
+            "挂载记录里不该再留着 fed_a"
+        );
+        session
+            .run_with_timeout("SELECT 1 AS ok", Duration::from_secs(3))
+            .expect("卸载后会话仍可用（退回 memory）");
+        let path_after = session
+            .run_with_timeout(
+                "SELECT value FROM duckdb_settings() WHERE name = 'search_path'",
+                Duration::from_secs(3),
+            )
+            .expect("读 search_path")
+            .to_rows()[0][0]
+            .to_string();
+        assert_eq!(
+            path_after,
+            format!("{SHARED_MAIN_PATH},{SHARED_TEMP_PATH}"),
+            "默认路径该退回 memory，且临时区仍在"
+        );
+        instance.close_all_sessions();
+    }
+
     /// 手动清理要认**两种落点**：`rds_tmp.<名>`（新口径）与 `memory.main.<名>`（历史口径）。
     ///
     /// 为什么容两处：结果集 / 洞察样本的名字（含 `tmp_q_` 前缀）已经被洞察的引用模板按
@@ -1298,6 +1802,40 @@ mod tests {
         assert!(instance.temps().is_empty(), "两件都应销掉登记");
     }
 
+    /// 按 owner 收批：只动这个 owner 的表，别人的表与登记都不碰。
+    ///
+    /// 这是「关文档收掉这份工作的结果集」的唯一凭据——A 建的表不能因为关 B 就没了，
+    /// 也不能因为 A 关了就把 B 一起带走。
+    #[test]
+    fn dropping_temps_of_one_owner_spares_the_others() {
+        let instance = instance("t_drop_owner");
+        let session = instance.open_session("doc-a", "编辑器 A").expect("开会话");
+        session
+            .run_with_timeout(
+                "CREATE TABLE rds_tmp.tmp_q_a AS SELECT 1 AS v; \
+                 CREATE TABLE rds_tmp.tmp_q_b AS SELECT 2 AS v",
+                Duration::from_secs(3),
+            )
+            .expect("建两张表");
+        instance.register_temp("tmp_q_a", "doc-a", "A 的结果集");
+        instance.register_temp("tmp_q_b", "doc-b", "B 的结果集");
+
+        assert_eq!(instance.drop_temps_of("doc-a").expect("收 A 一批"), 1);
+        assert!(
+            session
+                .run_with_timeout("SELECT count(*) FROM rds_tmp.tmp_q_a", Duration::from_secs(3))
+                .is_err(),
+            "A 的表该没了"
+        );
+        assert!(
+            session
+                .run_with_timeout("SELECT count(*) FROM rds_tmp.tmp_q_b", Duration::from_secs(3))
+                .is_ok(),
+            "B 的表不该被牵连"
+        );
+        assert_eq!(instance.temps().len(), 1, "只剩 B 的登记");
+    }
+
     /// 关会话 = TEMP 跟着消失（再开新会话是新世界），别的会话不受影响。
     #[test]
     fn closing_a_session_drops_its_temp_tables_and_spares_others() {
@@ -1320,9 +1858,9 @@ mod tests {
             .expect("A 的 TEMP 不跟着消失");
     }
 
-    /// 别名冲突后到者让位，且底座名字不许被占；连接 → 别名映射要跟着走。
+    /// 别名冲突**即失败**（与联邦路径同口径）；同一条源重复申请幂等；底座名不许占。
     #[test]
-    fn alias_conflicts_are_resolved_by_the_instance_single_point() {
+    fn alias_conflicts_are_refused_by_the_instance_single_point() {
         let instance = instance("t_alias");
         use crate::duckdb::accel::AccelKind;
         assert_eq!(
@@ -1331,16 +1869,17 @@ mod tests {
                 .expect("首个"),
             "mysql_src"
         );
-        assert_eq!(
-            instance
-                .reserve_alias("mysql_src", "conn-2", AccelKind::MySql)
-                .expect("第二个"),
-            "mysql_src_2"
+        let conflict = instance
+            .reserve_alias("mysql_src", "conn-2", AccelKind::MySql)
+            .expect_err("别名是用户 SQL 的契约，冲突只能失败");
+        assert!(
+            conflict.contains("conn-1") && conflict.contains("mysql_src"),
+            "要点名占用者与别名：{conflict}"
         );
         assert_eq!(
             instance
                 .reserve_alias("mysql_src", "conn-1", AccelKind::MySql)
-                .expect("同一源重挂"),
+                .expect("同一源重挂是幂等"),
             "mysql_src"
         );
         assert!(
@@ -1350,16 +1889,16 @@ mod tests {
             "底座名要拒"
         );
 
-        // 面板按连接 id 查挂载事实：映射必须与 reserve 的结果一致
+        // 面板按连接 id 查挂载事实：冲突失败的那个不该有映射
         assert_eq!(instance.alias_for_conn("conn-1").as_deref(), Some("mysql_src"));
-        assert_eq!(instance.alias_for_conn("conn-2").as_deref(), Some("mysql_src_2"));
+        assert_eq!(instance.alias_for_conn("conn-2"), None, "拒绝后不得留映射");
         assert_eq!(instance.alias_for_conn("conn-9"), None);
 
         instance.release_alias("mysql_src");
         assert_eq!(instance.alias_for_conn("conn-1"), None, "放掉别名要同时清映射");
         assert_eq!(
             instance
-                .reserve_alias("mysql_src", "conn-4", AccelKind::MySql)
+                .reserve_alias("mysql_src", "conn-2", AccelKind::MySql)
                 .expect("放掉后可用"),
             "mysql_src"
         );

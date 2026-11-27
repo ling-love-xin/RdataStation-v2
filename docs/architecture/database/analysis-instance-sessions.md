@@ -92,7 +92,8 @@
 | `AnalysisInstance::list_mounted_tables_for_conn(conn_id)` | 面板叶子：控制连接查元数据，限定名按登记的 `kind` 拼 |
 | `AnalysisInstance::session_for_conn(conn_id)` | 载入 / 归档「在这个源上再跑一条 SQL」；**不负责挂载** |
 | `AnalysisInstance::interrupt_conn(conn_id)` | 界面「取消」按源，不按会话 id |
-| `AnalysisInstance::unmount_conn(conn_id)` | 右键「卸载」：`DETACH` + 放别名 + 关该源会话，只断挂载不动连接 |
+| `AnalysisInstance::unmount_conn(conn_id, acting)` | 右键「卸载」：先过引用计数闸（有文档会话持有就拒并点名；`acting` 指发起者，面板传 `None`）→ `DETACH` + 放别名 + 关该源会话，只断挂载不动连接 |
+| `AnalysisInstance::catalog_holders(alias, except)` | 引用计数读口：数**Ready** 挂载的会话，返回标签（`except` 排除加速档自己 / 发起卸载的会话） |
 
 判定"这个源挂没挂"一律读 `alias_for_conn`，**不再**由 `accel::session_for(conn_id).is_some()` 回答——
 那是旧的多实例口径，单实例下它必然为 `None`（加速档已不在自建会话）。
@@ -202,7 +203,7 @@
 | 原来（多实例时代） | 现在（单实例） | 落点 |
 |---|---|---|
 | 两个并行事实源：联邦会话快照 + 加速源快照 | 一个：实例 `conn_alias` / `duckdb_databases()` | `data_objects/mod.rs` 的 `Collected::session_sources` / `accel_sources` 合成一份挂载事实 |
-| 双判据：文件库看 `loaded_files`、网络连接看会话快照 | 单判据：别名在不在实例 catalog 里（`loaded_files` 只当清场凭据） | `mod.rs` 连接行的 `mounted` 判定 |
+| 双判据：文件库看面板自记的文件清单、网络连接看会话快照 | 单判据：别名在不在实例 catalog 里；文件库另按路径查 engine 文件索引（2026-11-27 面板那份清单已删） | `mod.rs` 连接行的 `mounted` 判定 |
 | 叶子列举三分支（联邦 / 加速 / 文件库各一个 API） | 一个：`duckdb_tables()` / `duckdb_views()` 按 `database_name = 别名` | `services/source_kids_jobs.rs` |
 | “登记了但没行”的二次对账（要同时扫两个事实） | 扫一遍 | `mod.rs::unmounted_registrations` |
 | owner / 主源 / “N 张表” / 失败原因的快照缓存 | owner 不再需要；主源留着（决定 default catalog）；表数现查 | `federation::session` 的 `SESSIONS` / `owners()` / `snapshot_for()` 整条可退役 |
@@ -213,7 +214,7 @@
 - **别名体系**：`sanitize / unique / validate`、撞名 `_2`、保留字——它是 SQL 引用名，
   单实例后反而更简单（唯一性由 `MountRegistry` 单点决定），但规则本身要留；
 - **呈现层**：三段分组、行内小标、状态短码、布局预算（410 / 318）、走马灯；
-- **清场**：`loaded_files` 仍是“切项目要卸哪些路径”的凭据。
+- **清场**：`f_*` 视图按实例里实际存在的视图删（删掉即从 engine 文件索引退场）；库文件 catalog 不跟切项目走。
 
 ### 7.3 一处反例：单实例化反而新增的复杂度
 

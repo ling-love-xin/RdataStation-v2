@@ -131,6 +131,29 @@ pub trait EditorHost: 'static {
 /// 实现**不持 `Shared`**（`Rc` 不能跨线程），只调全局 `DataSourceService`——
 /// 原 workbench 代码就是执行线程 `block_on(service.list())`，线程边界不变。
 pub trait FederatedSourcePort: Send + Sync + 'static {
-    /// 当前开了「DuckDB 本地加速（联邦查询直连源库）」的连接清单（宿主组装连接串）。
-    fn records(&self) -> Vec<FederatedSourceRecord>;
+    /// 可作联邦源的连接清单（宿主组装连接串）。
+    ///
+    /// 判据**两源合一**（2026-11-27 起连接记录上没有开关字段了）——任一成立即算源：
+    ///
+    /// 1. 项目登记过（`analysis_sources` 里有这一行 = **项目级意图**，`is_registered`）；
+    /// 2. `focus` 指定的连接（本文档绑定的那条：单源联邦的主源，即使没登记也必须进）。
+    ///
+    /// 驱动能不能挂不在这里判：由 `accel::AccelKind::from_db_type` 回答（`records` 里过滤）。
+    fn records(&self, focus: Option<&str>) -> Vec<FederatedSourceRecord>;
+
+    /// 把「主源」记成**项目意图**（写项目库的 `analysis_primary`，036）。
+    ///
+    /// 宿主职责：只有它拿得到项目根。返回 [`PrimaryMemory`] 是为了让措辞说实话——
+    /// 没打开项目 / 这条源没登记时，主源只活在本文档会话里，重启就回文档连接。
+    /// `Err` 只用于真失败（项目库打不开、写不进去），由调用方如实带回界面。
+    fn remember_primary(&self, alias: &str) -> Result<PrimaryMemory, String>;
+}
+
+/// 主源记进哪儿了（`set_federated_primary` 的措辞据此分开，别把「只在会话里」说成「已记住」）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrimaryMemory {
+    /// 写进了项目意图清单：重开会话 / 重启后仍按它解析未限定名
+    Project,
+    /// 只在本文档会话的 `search_path` 上：没有打开项目，或这条源没登记进项目
+    SessionOnly,
 }

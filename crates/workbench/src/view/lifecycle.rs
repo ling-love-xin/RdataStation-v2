@@ -6,10 +6,11 @@
 use super::*;
 impl WorkbenchView {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        // P0：先解析当前项目会话（环境变量 → 最近项目 → 空态），供列表作用域 / 标题栏 /
-        // 草稿箱共用；**连接列表必须按作用域加载**（全局 + 项目 P_/GP_），否则启动后
-        // 只看到全局连接，要等重新打开项目才出现项目侧连接。
-        let project = crate::services::project_session::resolve();
+        // P0：先解析当前项目会话（环境变量 → 设置「启动时恢复上次项目」→ 空态），供列表
+        // 作用域 / 标题栏 / 草稿箱共用；**连接列表必须按作用域加载**（全局 + 项目 P_/GP_），
+        // 否则启动后只看到全局连接，要等重新打开项目才出现项目侧连接。
+        // 默认（开关关）解析结果为 `None` → 中央欢迎页，用户自己点项目进来。
+        let project = crate::services::project_session::resolve(cx);
         let project_root = project.as_ref().map(|p| p.root.clone());
         let (connections, notice) =
             crate::services::workspace_loader::load_connections_for_scope(project_root.as_deref());
@@ -18,6 +19,20 @@ impl WorkbenchView {
         // 分析底座：项目 / 全局分析库先发布给联邦会话，切档时 `analytics` / `rds_global`
         // 才在 SQL 里本来可见（见 `services::analysis_bases`）
         crate::services::analysis_bases::sync(project_root.as_deref());
+
+        // 联邦执行侧（工作线程）不持项目根：进项目就发布一次快照（连接 → 别名、主源），
+        // 否则「已登记但没开本地加速」的源要等数据面板刷新过一次才被认成联邦源，
+        // 「上次设的主源」也要等刷新过才恢复（`FederatedSourcePort::records` /
+        // `federation::federated_plan` 读的就是这两份快照）。
+        match project_root.as_deref() {
+            Some(root) => {
+                if let Err(error) = engine::persistence::analysis_sources::publish_project(root) {
+                    tracing::warn!("发布分析源登记快照失败：{error}");
+                }
+            }
+            // 没有项目（欢迎页）：清掉上一次项目的别名 / 主源 / 项目根
+            None => engine::persistence::analysis_sources::clear_project(),
+        }
         // 启动恢复的项目也要**取写锁**——与改动前同一时机：**在端口装配之前**
         //（端口只是拄着 `Shared` 的句柄，真正读锁状态是调用 / 渲染那一刻）。
         Self::lock_startup_project(&shared, project_root);

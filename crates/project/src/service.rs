@@ -284,6 +284,13 @@ pub fn create(input: CreateProjectInput) -> Result<ProjectSummary, String> {
     let name = input.name.trim().to_string();
     let store =
         ProjectStore::create(&name, &input.path).map_err(|e| format!("创建项目失败: {e}"))?;
+    // `sample_drafts` 以前是死字段（只存不用）：现在真正落地成草稿箱里的一份草稿。
+    // 失败不阻断创建（示例草稿只是开箱体验，缺了也能用）。
+    if input.sample_drafts {
+        if let Err(e) = ensure_sample_draft(&input.path) {
+            tracing::warn!("写入示例草稿失败：{e}");
+        }
+    }
     if input.description.is_some() {
         // ProjectStore::create 后补写描述（保持单一写入入口）。
         // 失败不阻断创建，仅记录。
@@ -327,6 +334,232 @@ fn register_and_summarize(info: &crate::ProjectInfo) -> Result<ProjectSummary, S
         .find(|r| r.id == info.id)
         .map(|r| summarize(r, true))
         .ok_or_else(|| "项目登记后未找到记录".to_string())
+}
+
+// ==================== Sample ====================
+
+/// 示例项目自带业务库的文件名（落在 `<root>/data/` 下）。
+pub const SAMPLE_SQLITE_FILE: &str = "sample.sqlite";
+pub const SAMPLE_DUCKDB_FILE: &str = "sample.duckdb";
+
+/// 示例草稿：草稿箱模块根下（`<root>/scratchpad/welcome.sql`）。
+///
+/// 草稿箱的扫描根是 `scratchpad::MODULE_DIR_NAME`（`<root>/scratchpad/`），
+/// 写到项目根不算草稿——`create_sample` 以前就是这么写的，于是示例项目打开后
+/// 草稿箱是空的（2026-11-27 用户实测发现）。
+pub const SAMPLE_DRAFT_REL: &str = "scratchpad/welcome.sql";
+
+const SAMPLE_DRAFT_SQL: &str = r"-- RdataStation 示例项目 · 开箱草稿
+-- 数据源（导航树 → 全局连接）：
+--   示例 SQLite（销售库）  →  data/sample.sqlite（customers 6 行 / orders 12 行）
+--   示例 DuckDB（销售库）  →  data/sample.duckdb（同构，便于对照 SQLite 与 DuckDB）
+-- 两个库结构一致：先选一个连接，再执行下面这条。
+select * from orders order by order_id;
+";
+
+/// 示例连接 id（固定 → 重复调用是覆盖，不是新增）。
+pub const SAMPLE_SQLITE_CONN: &str = "G_conn_sample_sqlite";
+pub const SAMPLE_DUCKDB_CONN: &str = "G_conn_sample_duckdb";
+
+const SAMPLE_SQLITE_SQL: &str = r"
+CREATE TABLE IF NOT EXISTS customers (
+    customer_id INTEGER PRIMARY KEY,
+    name        TEXT NOT NULL,
+    segment     TEXT,
+    country     TEXT,
+    city        TEXT
+);
+CREATE TABLE IF NOT EXISTS orders (
+    order_id    INTEGER PRIMARY KEY,
+    customer_id INTEGER NOT NULL,
+    region      TEXT,
+    amount      DECIMAL(12,2),
+    status      TEXT,
+    created_at  TEXT
+);
+DELETE FROM customers;
+DELETE FROM orders;
+INSERT INTO customers VALUES (101,'张伟','企业','中国','上海');
+INSERT INTO customers VALUES (102,'李娜','个人','中国','北京');
+INSERT INTO customers VALUES (103,'Alice Chen','企业','美国','New York');
+INSERT INTO customers VALUES (104,'王强','个人','中国','深圳');
+INSERT INTO customers VALUES (105,'Bob Miller','企业','德国','Berlin');
+INSERT INTO customers VALUES (106,'赵敏','个人','中国','成都');
+INSERT INTO orders VALUES (1,101,'华东',1299.00,'paid','2026-08-01 09:12:44');
+INSERT INTO orders VALUES (2,102,'华北',88.50,'paid','2026-08-01 09:15:02');
+INSERT INTO orders VALUES (3,103,'北美',2450.00,'pending','2026-08-02 11:03:19');
+INSERT INTO orders VALUES (4,104,'华南',560.00,'paid','2026-08-03 14:22:51');
+INSERT INTO orders VALUES (5,101,'华东',320.00,'refunded','2026-08-04 08:40:10');
+INSERT INTO orders VALUES (6,105,'欧洲',7800.00,'paid','2026-08-05 16:05:33');
+INSERT INTO orders VALUES (7,106,'西南',150.00,'paid','2026-08-06 10:30:00');
+INSERT INTO orders VALUES (8,102,'华北',990.00,'pending','2026-08-07 13:47:28');
+INSERT INTO orders VALUES (9,103,'北美',3100.00,'paid','2026-08-08 09:02:15');
+INSERT INTO orders VALUES (10,104,'华南',210.00,'paid','2026-08-09 17:55:42');
+INSERT INTO orders VALUES (11,105,'欧洲',520.00,'refunded','2026-08-10 12:18:03');
+INSERT INTO orders VALUES (12,106,'西南',880.00,'paid','2026-08-11 15:33:27');
+";
+
+const SAMPLE_DUCKDB_SQL: &str = r"
+CREATE TABLE IF NOT EXISTS customers (
+    customer_id INTEGER PRIMARY KEY,
+    name        VARCHAR NOT NULL,
+    segment     VARCHAR,
+    country     VARCHAR,
+    city        VARCHAR
+);
+CREATE TABLE IF NOT EXISTS orders (
+    order_id    INTEGER PRIMARY KEY,
+    customer_id INTEGER NOT NULL,
+    region      VARCHAR,
+    amount      DECIMAL(12,2),
+    status      VARCHAR,
+    created_at  TIMESTAMP
+);
+DELETE FROM customers;
+DELETE FROM orders;
+INSERT INTO customers VALUES (101,'张伟','企业','中国','上海');
+INSERT INTO customers VALUES (102,'李娜','个人','中国','北京');
+INSERT INTO customers VALUES (103,'Alice Chen','企业','美国','New York');
+INSERT INTO customers VALUES (104,'王强','个人','中国','深圳');
+INSERT INTO customers VALUES (105,'Bob Miller','企业','德国','Berlin');
+INSERT INTO customers VALUES (106,'赵敏','个人','中国','成都');
+INSERT INTO orders VALUES (1,101,'华东',1299.00,'paid',TIMESTAMP '2026-08-01 09:12:44');
+INSERT INTO orders VALUES (2,102,'华北',88.50,'paid',TIMESTAMP '2026-08-01 09:15:02');
+INSERT INTO orders VALUES (3,103,'北美',2450.00,'pending',TIMESTAMP '2026-08-02 11:03:19');
+INSERT INTO orders VALUES (4,104,'华南',560.00,'paid',TIMESTAMP '2026-08-03 14:22:51');
+INSERT INTO orders VALUES (5,101,'华东',320.00,'refunded',TIMESTAMP '2026-08-04 08:40:10');
+INSERT INTO orders VALUES (6,105,'欧洲',7800.00,'paid',TIMESTAMP '2026-08-05 16:05:33');
+INSERT INTO orders VALUES (7,106,'西南',150.00,'paid',TIMESTAMP '2026-08-06 10:30:00');
+INSERT INTO orders VALUES (8,102,'华北',990.00,'pending',TIMESTAMP '2026-08-07 13:47:28');
+INSERT INTO orders VALUES (9,103,'北美',3100.00,'paid',TIMESTAMP '2026-08-08 09:02:15');
+INSERT INTO orders VALUES (10,104,'华南',210.00,'paid',TIMESTAMP '2026-08-09 17:55:42');
+INSERT INTO orders VALUES (11,105,'欧洲',520.00,'refunded',TIMESTAMP '2026-08-10 12:18:03');
+INSERT INTO orders VALUES (12,106,'西南',880.00,'paid',TIMESTAMP '2026-08-11 15:33:27');
+";
+
+/// 生成示例项目自带的两个业务库：`data/sample.sqlite` 与 `data/sample.duckdb`。
+///
+/// **由当前内核版本的 DuckDB 生成**：2.0 写出的库是 storage version 69，只有 2.0 能读。
+/// 仓库里 `examples/instance-project` 那份是 1.5 时代产物，升级后别再拿它当示例
+/// （A 项目的分析库打不开就是同一条边界的现实教训）。
+///
+/// 幂等：`CREATE TABLE IF NOT EXISTS` + 先清后插；重复调用不会翻倍。
+pub fn ensure_sample_data(root: &Path) -> Result<(), String> {
+    let data = root.join("data");
+    std::fs::create_dir_all(&data).map_err(|e| format!("创建示例数据目录失败: {e}"))?;
+
+    let sqlite_path = data.join(SAMPLE_SQLITE_FILE);
+    let sqlite =
+        rusqlite::Connection::open(&sqlite_path).map_err(|e| format!("打开示例 SQLite 失败: {e}"))?;
+    sqlite
+        .execute_batch(SAMPLE_SQLITE_SQL)
+        .map_err(|e| format!("写入示例 SQLite 失败: {e}"))?;
+    drop(sqlite);
+
+    let duck_path = data.join(SAMPLE_DUCKDB_FILE);
+    let duck =
+        duckdb::Connection::open(&duck_path).map_err(|e| format!("打开示例 DuckDB 失败: {e}"))?;
+    duck.execute_batch(SAMPLE_DUCKDB_SQL)
+        .map_err(|e| format!("写入示例 DuckDB 失败: {e}"))?;
+    Ok(())
+}
+
+/// 把示例项目的两个业务库登记成**全局连接**（导航树里就能看到、可直接打开）。
+///
+/// 只建连接记录（没有任何"直连开关"可写）；能不能当源由驱动决定（sqlite / duckdb 都能），
+/// 要不要用它当源由项目登记表决定——下面紧接着登记成联邦源，供源段直接可用。
+pub fn ensure_sample_connections(root: &Path) -> Result<(), String> {
+    use engine::migration::global_init;
+    use engine::persistence::global_db::GlobalConnectionSaveInput;
+
+    let manager = global_init::get_global_db_manager()
+        .ok_or_else(|| "全局连接库未初始化".to_string())?;
+    let rt = runtime()?;
+    let data = root.join("data");
+
+    let items: [(&str, &str, &str, PathBuf); 2] = [
+        (
+            SAMPLE_SQLITE_CONN,
+            "示例 SQLite（销售库）",
+            "sqlite",
+            data.join(SAMPLE_SQLITE_FILE),
+        ),
+        (
+            SAMPLE_DUCKDB_CONN,
+            "示例 DuckDB（销售库）",
+            "duckdb",
+            data.join(SAMPLE_DUCKDB_FILE),
+        ),
+    ];
+
+    for (conn_id, name, db_type, path) in items {
+        if !path.is_file() {
+            return Err(format!("示例业务库不存在：{}", path.display()));
+        }
+        let url = path.to_string_lossy().to_string();
+        rt.block_on(manager.save_global_connection(GlobalConnectionSaveInput {
+            conn_id,
+            name,
+            db_type,
+            url: &url,
+            username: None,
+            password: None,
+            tags: Some(r#"["sample"]"#),
+            server_version: None,
+            description: Some("RdataStation 示例项目自带（由当前内核版本生成）"),
+            driver_id: Some(db_type),
+            environment_id: None,
+            auth_config_id: None,
+            auth_method: None,
+            network_config_id: None,
+            options: None,
+            driver_properties: None,
+            advanced_options: None,
+            metadata_path: None,
+            schema_name: None,
+            save_password: false,
+        }))
+        .map_err(|e| format!("登记示例连接「{name}」失败: {e}"))?;
+
+        // 示例项目里就登记成项目源（`analysis_sources`）：源段直接可用、别名稳定。
+        // 登记只是意图；挂载与否是会话事实。幂等（已登记就不重复写），失败只记日志。
+        if let Err(e) = engine::analysis::registration::ensure_conn_registered(root, conn_id, name) {
+            tracing::warn!("示例连接「{name}」登记为项目源失败：{e}");
+        }
+    }
+    Ok(())
+}
+
+/// 示例草稿：写进草稿箱模块根本（`<root>/scratchpad/welcome.sql`），幂等。
+///
+/// **已存在就不覆盖**——用户可能已经改过这份草稿，每次进入示例项目只负责"有"，
+/// 不负责"还原"。目录不存在时一并建出来（新建项目走 `ProjectStore::create` 时
+/// 并不建 `scratchpad/`）。
+pub fn ensure_sample_draft(root: &Path) -> Result<(), String> {
+    let draft = root.join(SAMPLE_DRAFT_REL);
+    if draft.is_file() {
+        return Ok(());
+    }
+    if let Some(parent) = draft.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            return Err(format!("创建草稿箱目录失败: {e}"));
+        }
+    }
+    std::fs::write(&draft, SAMPLE_DRAFT_SQL).map_err(|e| format!("写入示例草稿失败: {e}"))
+}
+
+/// 示例项目一整套准备（数据 + 连接 + 草稿）。失败只记日志，不阻断打开。
+pub fn prepare_sample_project(root: &Path) {
+    if let Err(e) = ensure_sample_data(root) {
+        tracing::warn!("示例项目业务数据准备失败：{e}");
+        return;
+    }
+    if let Err(e) = ensure_sample_connections(root) {
+        tracing::warn!("示例项目连接登记失败：{e}");
+    }
+    if let Err(e) = ensure_sample_draft(root) {
+        tracing::warn!("示例项目草稿准备失败：{e}");
+    }
 }
 
 // ==================== Open / Close ====================

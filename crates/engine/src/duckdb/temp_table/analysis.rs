@@ -84,7 +84,7 @@ pub fn create_analysis_temp_table(
         return Err(e);
     }
 
-    DuckDBManager::register_temp_table(&table);
+    DuckDBManager::register_temp_table(&table, TempTableSource::Insight.default_owner());
     warn_if_near_capacity();
     Ok(table)
 }
@@ -152,7 +152,7 @@ pub fn create_analysis_temp_table_arrow(
         return Err(e);
     }
 
-    DuckDBManager::register_temp_table(&table);
+    DuckDBManager::register_temp_table(&table, TempTableSource::Insight.default_owner());
     warn_if_near_capacity();
     Ok(table)
 }
@@ -220,7 +220,7 @@ pub fn create_analysis_temp_table_as_for(
             )))
         })?;
 
-    DuckDBManager::register_temp_table(&table);
+    DuckDBManager::register_temp_table(&table, source.default_owner());
     warn_if_near_capacity();
     Ok(table)
 }

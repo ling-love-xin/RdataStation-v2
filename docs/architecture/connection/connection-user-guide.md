@@ -248,7 +248,7 @@ SSL 与协议链（SSH / 代理）、认证与环境引用、DuckDB 本地加速
 | SSL（模式 / CA / 证书 / 私钥） | `advanced_options.ssl`（JSON，仅驱动声明 `ssl` 时写入）；连接 / 测试连接时按**驱动**分派注入 URL（`ssl-mode`+证书 / `sslmode`+证书 / `require_ssl`+`verify_ca` / `sslmode=require`），网络档案已含 SSL 跳时以档案为准 |
 | 策略覆盖 | `advanced_options.policy_overrides`（值为 `environment_policies.policy_type`） |
 | 驱动属性 | `.driver_properties`（JSON key-value，覆盖驱动默认） |
-| DuckDB 加速 / 缓存路径 | `.use_duckdb_fed` / `.metadata_path` |
+| 缓存路径 | `.metadata_path`（2026-11-27 删了 `use_duckdb_fed`：能不能当分析源由驱动能力 + 项目登记决定，不再有连接级开关） |
 | 标签 | `.tags` + `connection_tags`（检索表） |
 | 分组（项目级多选） | 项目库 `connection_groups` / `connection_group_members`（替换语义） |
 | 草稿（跨会话） | `connection_drafts`（**无密码列**） |

@@ -43,7 +43,7 @@ mod analysis_tests {
             pref: StoragePref::Auto,
             source_set: 0,
         };
-        let data = runner.analyze(&request).expect("本地分析该跑通");
+        let data = runner.analyze(&request, "doc").expect("本地分析该跑通");
         assert_eq!(data.columns, vec!["总".to_string(), "非空".to_string()]);
         assert_eq!(
             data.rows,
@@ -76,7 +76,7 @@ mod analysis_tests {
             pref: StoragePref::Memory,
             source_set: 7,
         };
-        let data = runner.analyze(&request).expect("事实档直灌分析该跑通");
+        let data = runner.analyze(&request, "doc").expect("事实档直灌分析该跑通");
         assert_eq!(data.rows, vec![vec!["2".to_string()]], "两行事实档聚合出 2");
         assert!(
             data.source_fact_table.is_some(),
@@ -106,7 +106,7 @@ mod analysis_tests {
             pref: StoragePref::Table,
             source_set: 0,
         };
-        let data = runner.analyze(&request).expect("表档直灌分析该跑通");
+        let data = runner.analyze(&request, "doc").expect("表档直灌分析该跑通");
         assert!(
             data.source_fact_table.is_some(),
             "常驻表名回传；表档复用 / 新建都要给 host 一个句柄"
@@ -132,7 +132,7 @@ mod analysis_tests {
             pref: StoragePref::Auto,
             source_set: 0,
         };
-        let error = runner.analyze(&request).expect_err("该报错");
+        let error = runner.analyze(&request, "doc").expect_err("该报错");
         assert!(!error.is_empty(), "错误要说清原因：{error}");
     }
 }
@@ -297,6 +297,7 @@ mod export_tests {
                 None,
                 "SELECT * FROM {table}",
                 &batches,
+                "doc",
             )
             .expect("常驻表应当建出来");
         let table = analysis.temp_table.clone();
@@ -344,7 +345,9 @@ mod export_tests {
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
-    use super::{FedSourceRecord, cell_text, column_names, plan_from_records};
+    use super::{
+        FedSourceRecord, apply_registered_primary, cell_text, column_names, plan_from_records,
+    };
     use engine::duckdb::accel::AccelKind;
     use shared::models::{QueryResult, Value};
 
@@ -382,6 +385,64 @@ mod tests {
         assert_eq!(cell_text(&Value::Text("中文".to_string())), "中文");
     }
 
+    /// 两条源的计划（文档绑定 `G_1` → 派生主源 `orders`）
+    fn two_source_plan() -> super::FederatedPlan {
+        let records = vec![
+            record("G_1", "orders", "mysql_native", "mysql://h:3306/shop"),
+            record("G_2", "warehouse", "postgres", "postgres://h:5432/w"),
+        ];
+        plan_from_records(&records, &[], "G_1", "doc").expect("组装")
+    }
+
+    /// 【K3】项目登记的主源**优先于**「本文档绑定的连接」：用户设过就是设过，重启也一样
+    /// （会话每次执行都按计划重建，这里读一次就等于完成 replay）。
+    #[test]
+    fn a_registered_primary_wins_over_the_document_connection() {
+        let mut plan = two_source_plan();
+        assert_eq!(plan.primary.as_deref(), Some("orders"), "没登记时按文档连接");
+
+        apply_registered_primary(&mut plan, Some("warehouse"));
+        assert_eq!(plan.primary.as_deref(), Some("warehouse"), "登记的主源该赢");
+        assert!(
+            plan.notes.iter().any(|note| note.contains("按项目登记")),
+            "换主源的原因要能看见：{:?}",
+            plan.notes
+        );
+    }
+
+    /// 登记的主源不在本次清单里（登记删了 / 源没开直连）：保留原主源并留说明——
+    /// 不能悄悄换成别的源，否则未限定名会解析到用户没选的那个库上。
+    #[test]
+    fn an_unmounted_registered_primary_keeps_the_document_connection() {
+        let mut plan = two_source_plan();
+        apply_registered_primary(&mut plan, Some("gone_src"));
+        assert_eq!(
+            plan.primary.as_deref(),
+            Some("orders"),
+            "不能因为登记坏了就乱选主源"
+        );
+        assert!(
+            plan.notes
+                .iter()
+                .any(|note| note.contains("gone_src") && note.contains("不在本次清单")),
+            "要把那条坏登记点名说清：{:?}",
+            plan.notes
+        );
+    }
+
+    /// 没登记主源（空 / 空白）→ 计划原样不动，也不多一条说明。
+    #[test]
+    fn no_registered_primary_leaves_the_plan_alone() {
+        for empty in [None, Some(""), Some("   ")] {
+            let mut plan = two_source_plan();
+            let primary = plan.primary.clone();
+            let notes = plan.notes.len();
+            apply_registered_primary(&mut plan, empty);
+            assert_eq!(plan.primary, primary, "{empty:?} 不该改主源");
+            assert_eq!(plan.notes.len(), notes, "{empty:?} 不该多说明");
+        }
+    }
+
     /// 组装源清单：别名稳定、凭据随连接串带上、主源是本文档的连接
     #[test]
     fn the_federated_plan_names_sources_and_points_at_the_primary() {
@@ -395,7 +456,7 @@ mod tests {
                 "mysql://root:real@h:3306/shop",
             ),
         ];
-        let plan = plan_from_records(&records, &[], "G_1").expect("组装");
+        let plan = plan_from_records(&records, &[], "G_1", "doc").expect("组装");
 
         assert_eq!(plan.owner, "G_1");
         assert_eq!(plan.sources.len(), 2);
@@ -439,7 +500,7 @@ mod tests {
             ),
             record("G_2", "仓库", "postgres", "postgres://u:real@h:5432/w"),
         ];
-        let plan = plan_from_records(&records, &[], "G_1").expect("组装");
+        let plan = plan_from_records(&records, &[], "G_1", "doc").expect("组装");
         assert_eq!(plan.sources.len(), 2, "重复的 conn_id 不该占两个源");
     }
 
@@ -451,7 +512,7 @@ mod tests {
             record("G_2", "仓库", "postgres", "postgres://h:5432/w"),
             record("G_3", "分析库", "duckdb", "D:/data/a.duckdb"),
         ];
-        let plan = plan_from_records(&records, &[], "G_1").expect("组装");
+        let plan = plan_from_records(&records, &[], "G_1", "doc").expect("组装");
         assert_eq!(plan.primary, None, "主源不是它，只能由引擎选第一个可用源");
         assert!(
             plan.notes.iter().any(|note| note.contains("本文档的连接")),
@@ -465,7 +526,7 @@ mod tests {
             record("G_2", "仓库", "postgres", "postgres://h:5432/w"),
             record("G_3", "归档库", "clickhouse", "clickhouse://h:8123/db"),
         ];
-        let plan = plan_from_records(&records, &[], "G_1").expect("组装");
+        let plan = plan_from_records(&records, &[], "G_1", "doc").expect("组装");
         assert_eq!(plan.sources.len(), 2, "驱动不支持的连接不占位");
         assert!(
             plan.notes.iter().any(|note| note.contains("归档库")),
@@ -479,7 +540,7 @@ mod tests {
             record("G_2", "仓库", "postgres", "postgres://h:5432/w"),
             record("G_3", "老库", "oracle", "oracle://h:1521/XEPDB1"),
         ];
-        let plan = plan_from_records(&records, &[], "G_1").expect("组装");
+        let plan = plan_from_records(&records, &[], "G_1", "doc").expect("组装");
         assert_eq!(plan.sources.len(), 2, "L2 组装不出来的不占位");
         assert!(
             plan.notes
@@ -494,7 +555,7 @@ mod tests {
             record("G_1", "订单库", "mysql_native", "mysql://u:p@h:3306/a"),
             record("G_2", "老库", "oracle", "oracle://u:p@h:1521/XEPDB1"),
         ];
-        let plan = plan_from_records(&records, &[], "G_1").expect("组装");
+        let plan = plan_from_records(&records, &[], "G_1", "doc").expect("组装");
         assert_eq!(plan.sources.len(), 2, "L2 该占位：{:?}", plan.notes);
         let oracle = plan
             .sources
@@ -513,7 +574,7 @@ mod tests {
             record("G_1", "订单库", "mysql_native", "mysql://h:3306/a"),
             record("G_2", "仓库", "postgres", "postgres://h:5432/w"),
         ];
-        let plan = plan_from_records(&records, &carried, "G_1").expect("组装");
+        let plan = plan_from_records(&records, &carried, "G_1", "doc").expect("组装");
         assert!(
             plan.notes.iter().any(|note| note.contains("解密失败")),
             "攒下的说明不该丢：{:?}",
@@ -525,11 +586,11 @@ mod tests {
     #[test]
     fn the_plan_refuses_before_the_session_is_built() {
         let one = vec![record("G_1", "订单库", "mysql_native", "mysql://h:3306/a")];
-        let plan = plan_from_records(&one, &[], "G_1").expect("一条源不该拒");
+        let plan = plan_from_records(&one, &[], "G_1", "doc").expect("一条源不该拒");
         assert!(plan.primary.is_some(), "一条源时主源就是它");
         assert!(plan.notes.iter().any(|note| note.contains("只有一条源")), "{:?}", plan.notes);
 
-        let error = plan_from_records(&[], &[], "G_1").expect_err("没有源该拒");
+        let error = plan_from_records(&[], &[], "G_1", "doc").expect_err("没有源该拒");
         assert!(error.contains("本地加速"), "{error}");
     }
 }

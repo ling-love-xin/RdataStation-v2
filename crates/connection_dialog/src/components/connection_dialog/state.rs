@@ -74,7 +74,6 @@ impl<H: 'static> ConnectionDialogState<H> {
             }),
             auth_list: Rc::new(RefCell::new(Vec::new())),
             network_list: Rc::new(RefCell::new(Vec::new())),
-            duckdb_fed: Rc::new(Cell::new(true)),
             save_credentials: Rc::new(Cell::new(true)),
             show_system_objects: Rc::new(Cell::new(false)),
             cache_path,
@@ -897,9 +896,6 @@ impl<H: 'static> ConnectionDialogState<H> {
         self.cache_path.update(cx, |s, cx| {
             s.set_value(ds.metadata_path.clone().unwrap_or_default(), window, cx)
         });
-        // 三态 → 复选框：只有 `Some(true)` 勾上。`None`（驱动不可被 DuckDB 直连）在 UI 上
-        // 等于「开不了加速」，回读时按未勾选显示（保存时由 data_source_service 重新定值）。
-        self.duckdb_fed.set(ds.use_duckdb_fed == Some(true));
         // 驱动回读：记录里的 db_type/driver_id 均为驱动 id（如 mysql_native）；
         // 反查得到类型与实现短名，先选类型再选驱动（下拉按类型过滤）。
         let did = if ds.db_type.is_empty() {
@@ -1044,7 +1040,6 @@ pub(crate) struct ClonedDialogState {
     auth_list: Rc<RefCell<Vec<AuthConfig>>>,
     network_list: Rc<RefCell<Vec<NetworkConfig>>>,
     env_list: Rc<RefCell<Vec<Environment>>>,
-    duckdb_fed: Rc<Cell<bool>>,
     save_credentials: Rc<Cell<bool>>,
     show_system_objects: Rc<Cell<bool>>,
     cache_path: Entity<InputState>,
@@ -1079,7 +1074,6 @@ impl<H: 'static> ConnectionDialogState<H> {
         auth_list: Rc<RefCell<Vec<AuthConfig>>>,
         network_list: Rc<RefCell<Vec<NetworkConfig>>>,
         env_list: Rc<RefCell<Vec<Environment>>>,
-        duckdb_fed: Rc<Cell<bool>>,
         save_credentials: Rc<Cell<bool>>,
         show_system_objects: Rc<Cell<bool>>,
         cache_path: Entity<InputState>,
@@ -1103,7 +1097,6 @@ impl<H: 'static> ConnectionDialogState<H> {
             auth_list,
             network_list,
             env_list,
-            duckdb_fed,
             save_credentials,
             show_system_objects,
             cache_path,
@@ -1351,13 +1344,6 @@ impl ClonedDialogState {
             driver_properties,
             advanced_options,
             options: None,
-            // 三态（2026-11-26）：驱动不被 DuckDB 直连（`AccelKind::from_db_type` 认不出）→ `None`；
-            // 能直连就按复选框落 `Some(...)`。否则「不可直连」会被一次保存洗成 `Some(false)`。
-            use_duckdb_fed: if engine::duckdb::accel::AccelKind::from_db_type(&db_type).is_ok() {
-                Some(self.duckdb_fed.get())
-            } else {
-                None
-            },
             // P0-4（2026-10-24）：表单「保存凭据」开关——关 = 密码不落库
             // （对齐 DBeaver `setSavePassword(false)`）。
             save_password: Some(self.save_credentials.get()),
@@ -1499,7 +1485,6 @@ impl ClonedDialogState {
             driver_properties,
             advanced_options,
             options: None,
-            use_duckdb_fed: Some(d.duckdb_fed),
             save_password: Some(d.save_credentials),
             schema_name: None,
             metadata_path: if d.cache_path.trim().is_empty() {
@@ -1697,7 +1682,6 @@ mod tests {
             dialog.auth_list.clone(),
             dialog.network_list.clone(),
             dialog.env_list.clone(),
-            dialog.duckdb_fed.clone(),
             dialog.save_credentials.clone(),
             dialog.show_system_objects.clone(),
             dialog.cache_path.clone(),
@@ -1803,11 +1787,6 @@ mod tests {
         assert_eq!(input.driver_id.as_deref(), Some("postgres"));
         assert_eq!(input.auth_method.as_deref(), Some("password"));
         assert_eq!(input.metadata_path.as_deref(), Some("/cache"));
-        assert_eq!(
-            input.use_duckdb_fed,
-            Some(true),
-            "草稿 duckdb_fed 默认 true"
-        );
         assert_eq!(
             input.save_password,
             Some(true),

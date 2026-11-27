@@ -8,6 +8,10 @@
 > `federation-architecture.md`（为什么这样设计，§8 已知问题为权威）。
 > **Oracle / SQL Server 的真机验收**：Oracle **已完成**（`oracle_probe.rs` 台账 + `oracle_federation.rs` 联邦路径）；
 > SQL Server 等用户通知（驱动 / 端点）。
+>
+> **口径变更（2026-11-27）**：本文件里的「开 `use_duckdb_fed` 才算源」已废止——该字段已删，
+> 现行判据 = 驱动能力（`AccelKind`）+ 项目登记（`analysis_sources`）。
+> 权威见 `catalog-context-model.md` §11 / §12；下文历史条目按当时口径保留。
 
 ---
 
@@ -48,10 +52,10 @@
 | T1.1 | **目录收拢**（已完成） | `engine/src/duckdb/federation/{mod,legacy}.rs` | legacy 测试全绿（✅ 11 项） |
 | T1.2 | **源登记**：复用连接上的「DuckDB 直连」开关（原计划的“另加一列”已取消，理由见架构 D15）；`SourceRegistry` 快照（别名 / 状态 / 表数 / 刷新时间）+ 别名重名检测 | `.../federation/registry.rs`（✅ 形状已落）+ `workbench/src/services/editor_exec.rs`（✅ `plan_from_records`：从记录组装，不要求已连接） | ✅ 单测：快照是内存读 · 别名重名给唯一名 · 组装（含重复 conn_id 只算一次）· 真机 `tests/federation_sources.rs`（跨源 + 撤标记拒绝） |
 | T1.3 | **多源会话**：`FederatedSession::open/run/refresh/set_primary`——逐源 `ATTACH … (READ_ONLY)`，**失败不中断**（记原因继续）；主源 `USE`；按源 `DETACH`+`ATTACH`；会话资源边界（`memory_limit` / `temp_directory` / `max_temp_directory_size`，统一过 `configure_connection`） | `.../federation/session.rs`（✅ 已落，复用 `accel` 的 `mount_lock` / `run_sql_on`；**加进程内会话缓存**：指纹命中就复用） | ✅ 真机：MySQL + SQLite 同会话 + 一条 SQL 跨两源 · 坏源带原因保留 · 写源库被拒 · 主源可切（`tests/federation_probe.rs`）；单测：复用 / 换主源不重建 / 源清单变则重建（✅） |
-| T1.4 | **主源与表名解析**：未限定名只在主源；两源同名 → 报错（错误卡片给候选，见原型 §3） | `.../federation/session.rs` + `crates/editor/src/execution.rs`（错误解析） | 真机：同名表场景报错且信息可读；限定名可跨源 join（🟡 错误卡片给候选未做，报错本身由 DuckDB 给） |
+| T1.4 | **主源与表名解析**：未限定名只在主源；两源同名 → 报错并给候选（原型 §3） | `crates/editor/src/exec/preflight.rs`（K1 已落：`table_paths` + `Facts`/`check`，联邦与加速两档发送前过闸） | ✅ 单测 13 条（同名给候选 `a.orders / b.orders` · 主源优先 · 内置库不参与歧义 · 未知 catalog / 源不可用）；卡片链路是原话直通：`ErrorCard.message = 失败原话`（`view/host/results/grid.rs:261`）→ 预检那句连候选一起原样上屏，不再落到 DuckDB 的笼统报错 |
 | T1.5 | **执行路径**：`QueryRunner` 的 federated 分支在联邦会话上跑（复用 `run`/`run_filtered` 的分流形状）；历史带**参与源清单** | `crates/workbench/src/services/editor_exec.rs` + `engine/src/persistence/history_store.rs`（✅ 本期） | ✅ 单测：源清单组装 / 不够源时拒 / 门控原因；历史 `sources` 字段往返（✅）；真机：`tests/federation_sources.rs`（标记 → 跨源 → 撤标记拒绝） |
 | T1.5b | **扩展状态门控**（**取代原先“建 `engine_extensions` 登记表”的想法**）：扩展“装没装”的**真值在 DuckDB 自己身上**（`duckdb_extensions()` 的 `installed` / `loaded`）——再建一张镜像表只会产生“表说已装、实际没有”的偏差（单一权威）；我们只保留**动作与失败原因**（进程内；跨重启重试本来就合理，环境可能变了）+ 官方 / 社区清单（常量） | `.../federation/session.rs` + `duckdb/{extensions.rs, accel.rs}` | 单测：未装扩展时如实报“扩展 X 未安装”，**不静默联网**；真机：装成功后状态翻转（`duckdb_extensions()` 是真值）（✅ 选型探针已覆盖“装/晒”；⬜ 会话侧的装机进度与动作未做） |
-| T1.6 | **门控真值 + 源清单 UI**：`editor_channels.rs` 的联邦门控改为真值（≥ 2 个开了开关且可挂的连接）；工具栏「源清单 ▾」浮层（失败行带原因、按源重挂、设为主源） | `crates/workbench/src/services/editor_channels.rs`（✅）+ `crates/editor/src/sources.rs`（新，✅）+ `crates/editor/src/view/host.rs`（✅）+ `crates/workbench/src/services/editor_sources.rs`（新，✅） | ✅ 单测：无源 / 只有自己 / 别人没连上 / 驱动不支持四种原因 · 快照 → 行翻译 · 菜单项（失败行带原话、只给可用源“设为主源”、失败行也能重挂）· 窗口级：只在联邦档出现 · 真机：换主源 / 重挂单源 / 全挂（`tests/federation_sources.rs`） |
+| T1.6 | **门控真值 + 源清单 UI**：`editor_channels.rs` 的联邦门控改为真值（**≥ 1 个**开了开关且可挂的连接——2026-11-26 单源放开，全挂不上才拦并逐条点名）；工具栏「源清单 ▾」浮层（失败行带原因、按源重挂、设为主源） | `crates/workbench/src/services/editor_channels.rs`（✅）+ `crates/editor/src/sources.rs`（新，✅）+ `crates/editor/src/view/host.rs`（✅）+ `crates/workbench/src/services/editor_sources.rs`（新，✅） | ✅ 单测：无源 / 只有自己 / 别人没连上 / 驱动不支持四种原因 · 快照 → 行翻译 · 菜单项（失败行带原话、只给可用源“设为主源”、失败行也能重挂）· 窗口级：只在联邦档出现 · 真机：换主源 / 重挂单源 / 全挂（`tests/federation_sources.rs`） |
 
 > **L2 源的例外**（架构 D14 / §2.1）：门控与挂载对 Oracle 这类 L2 源要额外看两件事——
 > 账号有没有权限（建 Secret 与读目标表）、以及“不能带 `READ_ONLY`”带来的写保护缺口。

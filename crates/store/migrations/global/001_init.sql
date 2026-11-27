@@ -48,7 +48,6 @@ CREATE TABLE IF NOT EXISTS global_connections (
     password_encrypted TEXT,                    -- 加密后的密码
     options            TEXT,                    -- JSON 格式的额外配置
     tags               TEXT,                    -- JSON 格式的标签数组
-    use_duckdb_fed     BOOLEAN DEFAULT 0,       -- 是否启用 DuckDB 联邦分析
     metadata_path      TEXT,                    -- 元数据缓存文件路径（相对于全局数据目录）
     is_active          BOOLEAN DEFAULT 1,       -- 是否激活
     created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -59,7 +58,6 @@ CREATE TABLE IF NOT EXISTS global_connections (
 CREATE INDEX IF NOT EXISTS idx_global_connections_driver ON global_connections(driver);
 CREATE INDEX IF NOT EXISTS idx_global_connections_active ON global_connections(is_active);
 CREATE INDEX IF NOT EXISTS idx_global_connections_updated ON global_connections(updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_global_connections_duckdb_fed ON global_connections(use_duckdb_fed);
 
 -- ===========================================================================
 -- ======================== 最近连接表 =======================================

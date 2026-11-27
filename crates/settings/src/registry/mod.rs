@@ -180,6 +180,8 @@ pub enum Slot {
     ProjectLastCreateLocation,
     LogMinLevel,
     StartupDefaultLeftPanel,
+    /// 启动时自动恢复上次打开的项目（默认关：启动先进欢迎页，见 `Model::Startup`）。
+    StartupRestoreLastWorkspace,
     /// 草稿箱工具栏布局（复合值：按钮稳定标识 → { visible, side }；读写走 ⋯ 菜单）。
     ScratchpadToolbar,
     InsightMemoryLimitMb,
@@ -358,6 +360,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "projects.last_create_location" => Slot::ProjectLastCreateLocation,
         "logging.min_level" => Slot::LogMinLevel,
         "startup.default_left_panel" => Slot::StartupDefaultLeftPanel,
+        "startup.restore_last_workspace" => Slot::StartupRestoreLastWorkspace,
         "scratchpad.toolbar" => Slot::ScratchpadToolbar,
         "insight.memory_limit_mb" => Slot::InsightMemoryLimitMb,
         "insight.full_scan_confirm" => Slot::InsightFullScanConfirm,
@@ -491,6 +494,7 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::ProjectLastCreateLocation => KindTag::Text,
         Slot::LogMinLevel => KindTag::Enum,
         Slot::StartupDefaultLeftPanel => KindTag::Enum,
+        Slot::StartupRestoreLastWorkspace => KindTag::Bool,
         // 复合值（工具栏按钮布局）：没有页面写入路径，读写走草稿箱 ⋯ 菜单。
         Slot::ScratchpadToolbar => KindTag::Composite,
         Slot::InsightMemoryLimitMb | Slot::InsightWorkSetLimit | Slot::InsightStatementTimeoutMs => {

@@ -58,8 +58,7 @@ fn base_dir() -> PathBuf {
 }
 
 fn sqlite_input(name: &str, path: &str) -> DataSourceSaveInput {
-    let mut input = DataSourceSaveInput::new(name, "sqlite", &format!("sqlite://{path}"));
-    input.use_duckdb_fed = Some(false);
+    let input = DataSourceSaveInput::new(name, "sqlite", &format!("sqlite://{path}"));
     input
 }
 

@@ -73,7 +73,7 @@ flowchart TB
 | 服务 | `crates/connection_dialog/src/services/data_source_service.rs` | CRUD / 测试连接 / 同名检查 / 作用域路由 / 摘要解析（`parse_url_host_port_db`） |
 | 服务 | `crates/connection_dialog/src/services/workspace_loader.rs` | 列表可见性合并（全局 + 项目侧）、运行态 `connected` 填充、删除路由 |
 | 服务 | `crates/connection_dialog/src/services/connection_service.rs`（+ `network.rs` / `runtime.rs`） | 会话生命周期（connect / close / 列表 / 元数据路径）、隧道登记与回收 |
-| 服务 | `crates/connection_dialog/src/services/secret_integration.rs` | DuckDB Secret 注册 / 注销（按 `use_duckdb_fed` 门控） |
+| 服务 | `crates/connection_dialog/src/services/secret_integration.rs` | DuckDB Secret 注册 / 注销（2026-11-27 起门控**只按能力**：驱动有对应 DuckDB 扩展就注册） |
 | 服务 | `crates/connection_dialog/src/services/rt.rs` | 全模块共用惰性 tokio `Runtime`（`OnceLock<Option<Runtime>>`） |
 | 传输 | `crates/connection/src/{url,url_params,chain,config,factory,stream,known_hosts,secret,model}.rs` + `connector/`（`mod` / `proxy` / `ssh` / `tls`） | URL 组装与脱敏、参数注入、协议链执行 + `TunnelRegistry`、连接器与流（隧道 `ssh.rs` / 代理 `proxy.rs` / TLS `tls.rs`） |
 | 持久 | `crates/store/src/persistence/{global_db,project_db,connection_store,project_connection_store,connection_org_store,connection_draft_store,driver_store,auth_store,network_store,env_store}.rs` | 全局库 / 项目库 / 最近连接 / 组织元数据 / **暂存草稿** / 驱动与类型目录 / 三类引用配置 |
@@ -133,8 +133,8 @@ flowchart TB
 
 ### 3.4 DuckDB Secret 本地加速
 
-- 开启 `use_duckdb_fed` 的连接，保存后把源库凭据注册为 DuckDB `PERSISTENT SECRET`（`SET secret_directory` 指向应用目录，**不写用户主目录**；名称统一小写以匹配 DuckDB 标识符折叠）。
-- 关闭开关时清理对应 Secret；Secret 注册失败只告警，不影响连接本身（加速是增强而非依赖）。
+- **能力**判定：驱动有对应 DuckDB 扩展（`AccelKind::has_federable_extension`）。有这个能力的连接，保存后把源库凭据注册为 DuckDB `PERSISTENT SECRET`（`SET secret_directory` 指向应用目录，**不写用户主目录**；名称统一小写以匹配 DuckDB 标识符折叠）。
+- 连接上**没有**「开/关加速」的开关（2026-11-27 删 `use_duckdb_fed`）：要不要用它当源，看项目意图清单（`analysis_sources` 登记）；Secret 只在删除连接时清理，注册失败只告警，不影响连接本身。
 
 ### 3.5 暂存草稿（`ConnectionDraft`）
 
@@ -282,7 +282,7 @@ sequenceDiagram
     S->>S: 同名检查（大小写不敏感）+ 项目路径预检
     S->>O: tags 同步 / 分组一致性清理
     S-->>D: conn_id（逐条；失败即停）
-    D->>K: ensure_secret_registered（use_duckdb_fed 时）
+    D->>K: ensure_secret_registered（驱动有 DuckDB 扩展时）
     D->>L: load_connections_for_scope → 刷新列表
     alt 全部成功
         D->>D: staging_clear：清空草稿箱
@@ -710,7 +710,7 @@ flowchart LR
 
 | 表 | 库 | 关键列 | 用途 |
 | --- | --- | --- | --- |
-| `global_connections` | global | `id`(G_)、`name`、`db_type`、`driver_id`、`url`、`username`、`password_encrypted`、`scope` 相关、`tags`、`advanced_options`、`driver_properties`、`use_duckdb_fed`、`metadata_path` | 连接定义（全局） |
+| `global_connections` | global | `id`(G_)、`name`、`db_type`、`driver_id`、`url`、`username`、`password_encrypted`、`scope` 相关、`tags`、`advanced_options`、`driver_properties`、`metadata_path` | 连接定义（全局） |
 | `connections` | project | 同上（P_/GP_） | 连接定义（项目侧） |
 | `data_source_types` | global | `id`、`name`、`category`、`icon`、`enabled` | 侧栏类型目录（icon 为 emoji，如 🐬 / 🐘）；查询只取 `enabled = 1`（禁用类型不上类型树） |
 | `drivers` | global | `id`、`type_id`、`name`、`driver_kind`、`is_file`、`default_port`、`url_template`、`config_schema`、`capabilities`、`driver_properties`、`enabled` | 驱动目录（**种子 6 个实现 / 4 种数据库**：`mysql`(sqlx) / `mysql_native`(Official) / `postgres`(sqlx) / `postgres_native`(Official) / `sqlite` / `duckdb`；无可用驱动的类型在类型树上置灰不可选，见 §14 #1） |
@@ -719,7 +719,7 @@ flowchart LR
 | `environments` | global | `id`、`name`、`policies`(JSON) | 环境 + 策略 |
 | `connection_tags` | global + project | `connection_id`、`tag` | 标签**权威检索表** |
 | `connection_groups` / `connection_group_members` | project | `id`/`name`/`sort_order`；`group_id`/`connection_id`/`sort_order` | 项目级分组（多对多 + 组内排序） |
-| `connection_drafts` | global | `position`、`name`、`saved_id`、`type_id`、`driver_id`、`driver_name`、`url`、`username`、`remark`、`scope`、`project_path`、`ssl_*`、`cache_path`、`duckdb_fed`、`active_tab`、`hops_json`、`props_json`、`sec_overrides_json`、`auth_ref`、`network_ref`、`env`、`tags`、`groups_json` | 对话框暂存列表（**无密码列**） |
+| `connection_drafts` | global | `position`、`name`、`saved_id`、`type_id`、`driver_id`、`driver_name`、`url`、`username`、`remark`、`scope`、`project_path`、`ssl_*`、`cache_path`、`active_tab`、`hops_json`、`props_json`、`sec_overrides_json`、`auth_ref`、`network_ref`、`env`、`tags`、`groups_json` | 对话框暂存列表（**无密码列**） |
 
 ### 10.2 字段语义要点
 

@@ -339,6 +339,11 @@ pub fn sanitize_alias(name: &str) -> String {
 }
 
 /// 在**已占用**的别名里取一个不重名的（纯函数）：`orders` → `orders_2` → `orders_3`…
+///
+/// 分工（别把这里的"排位"读成"挂载时让位"）：本函数只在**组装计划 / 新登记默认名**时
+/// 预先分配合适的别名——那时名字还没落到 catalog 上，给第二条同名连接换个不撞的写法是
+/// 必须的。**真正 ATTACH 时的纪律是"冲突即失败、点名占用者"**（`instance::MountRegistry::reserve`，
+/// 2026-11-27 起）：别名一旦是用户 SQL 的契约，系统就不许再改它。
 pub fn unique_alias(base: &str, taken: &[String]) -> String {
     if !taken.iter().any(|alias| alias == base) {
         return base.to_string();

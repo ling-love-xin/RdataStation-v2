@@ -86,7 +86,6 @@ async fn connect_real(
         tags: None,
         metadata_path: None,
         schema_name: None,
-        use_duckdb_fed: Some(false),
         password: None,
         skip_persistence: Some(true),
         network_method: None,
@@ -112,7 +111,6 @@ async fn connect_real(
         driver_properties: None,
         advanced_options: None,
         description: None,
-        use_duckdb_fed: None,
         created_at: std::time::Instant::now(),
     };
     manager

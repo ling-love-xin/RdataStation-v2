@@ -473,8 +473,13 @@ pub fn ensure_on_instance(
             return Err(reason.clone());
         }
     }
-    // 未限定名落在这一条源上（与旧加速档的 `USE rds_src` 同一语义）
+    // 未限定名落在这一条源上（与旧加速档的 `USE rds_src` 同一语义），
+    // `use_catalog` 同时把 `memory.rds_tmp` 钉回 `search_path`——切换之后临时表还在。
     session.use_catalog(&alias)?;
+    // 加速通道只有这一条源：把上一通道（联邦）留在这条会话里的挂载记录清掉，
+    // 否则面板「会话源」会把两套通道的源一起列出来（实例上的 `ATTACH` 不动，
+    // 那是源段的事实，卸不卸由用户的两态按钮决定）。
+    session.retain_mounted(std::slice::from_ref(&alias));
     Ok((session, alias))
 }
 

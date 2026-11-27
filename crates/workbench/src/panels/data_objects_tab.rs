@@ -124,7 +124,7 @@ pub struct DataObjectsTab {
     /// 源段里「文件库已经挂上」的行（行 key → 本体路径）：右键「卸载 / 重新挂载」用这一份
     mounted_sources: Vec<(String, String)>,
     /// 网络连接里「连上了、但没挂进实例」的行（连接 id）：右键「挂载」用这一份。
-    /// 与文件库那条线分开：网络连接判的是加速会话，不是 `loaded_files` 路径。
+    /// 与文件库那条线分开：网络连接判的是加速会话，不是文件索引里的路径。
     unmounted_network: Vec<String>,
     /// 网络连接里「加速会话在」的行（连接 id）：右键「卸载」用这一份
     mounted_network: Vec<String>,
@@ -390,7 +390,7 @@ impl DataObjectsTab {
         self.unmounted_sources = data_objects::unmounted_file_sources(&collected);
         // 已挂的那几行：右键给「卸载 / 重新挂载」（同一份判据，反过来取）
         self.mounted_sources = data_objects::mounted_file_sources(&collected);
-        // 网络连接那条线：判据是加速会话（与文件库的 `loaded_files` 路径互不相干）
+        // 网络连接那条线：判据是加速会话（与文件库的文件索引互不相干）
         self.mounted_network = collected
             .accel_sources
             .iter()
@@ -429,8 +429,8 @@ impl DataObjectsTab {
 
     /// 展开 / 收起一个源行（联邦源与本地加速源可展开，其余行没有下一层）。
     ///
-    /// `expand_via` 有值 = 这一行**没有自家挂载的表可列**：它是登记过、但挂不进联邦的
-    /// 连接（`use_duckdb_fed` 开着却拿不到 ATTACH 能力）。展开改成在这条活连接上
+    /// `expand_via` 有值 = 这一行**没有自家挂载的表可列**：它是登记过、但驱动挂不进联邦的
+    /// 连接（`attach_capable == false`，比如 ClickHouse 这类还没接入的驱动）。展开改成在这条活连接上
     /// 开「加源」选源器，用户在那里选表 → 载入临时表（`LoadScope::Session`），
     /// 走的是和导航栏同一份内省（`NavigatorService`），不是第二套取数。
     fn toggle_source_expand(
@@ -484,7 +484,7 @@ impl DataObjectsTab {
             return;
         };
         // 连接行要的两样宿主信息（`Shared` 不能跨线程，先在 UI 线程取出来）：
-        // - 已挂载的文件库本体路径：文件库的叶子靠它算 ATTACH 别名（挂没挂看 `loaded_files`）
+        // - 已挂载的文件库本体路径：文件库的叶子靠它算 ATTACH 别名（挂没挂看文件索引）
         // - 行上的名字：列举失败时用人名报错，不把 `conn:C_xxx` 甩给用户
         let mounted_file = self
             .mounted_sources
@@ -1242,7 +1242,41 @@ impl DataObjectsTab {
                 .unwrap_or(0)
         };
 
+        // 源段内的两段（K2 后半：可用性分段）：子段头要显示各自的计数，
+        // 先数一遍——子标题里现扫整表既慢又在行循环里重复算。
+        let section_count = |section: data_objects::SourceSection| {
+            objects
+                .iter()
+                .filter(|object| object.source_section() == Some(section))
+                .count()
+        };
+        let ready_count = section_count(data_objects::SourceSection::Ready);
+        let pending_count = section_count(data_objects::SourceSection::Pending);
+        // 子段头是**轻量标签**，不是可折叠的 `GroupHeader`：折叠的粒度仍是「源 / 表 / 文件」
+        // 三段（把折叠键一起拆细，会让已有的折叠状态映射全部失效，收益不值）。
+        let section_head = move |section: data_objects::SourceSection,
+                                  count: usize|
+              -> AnyElement {
+            let label = format!("{} · {}", section.title(), count);
+            div()
+                .pl_1p5()
+                .h_flex()
+                .items_center()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(colors.muted_foreground)
+                        .child(label.clone()),
+                )
+                .debug_selector(move || {
+                    format!("data-objects-section-{}", section.title())
+                })
+                .into_any_element()
+        };
+
         let mut drawn: Vec<Group> = Vec::new();
+        // 源段内两段的状态（只在画源段行时有意义）：切段时插一次子标题
+        let mut last_section: Option<data_objects::SourceSection> = None;
         for object in objects {
             if !drawn.contains(&object.group) {
                 // 补齐到当前组：中间的空段也先占一行段头
@@ -1260,6 +1294,20 @@ impl DataObjectsTab {
             // 收起只是不画行：段头和计数留着，折叠起来也知道里面有几行
             if self.collapsed.contains(&object.group) {
                 continue;
+            }
+            // 源段内两段的子标题（K2 后半）：行序已由 `Object::rank` 按可用性排好，
+            // 这里只管在段切换处插一条标签；段切成 0 次 = 只有一段，就只画一条。
+            if object.group == Group::Source {
+                if let Some(section) = object.source_section() {
+                    if last_section != Some(section) {
+                        let count = match section {
+                            data_objects::SourceSection::Ready => ready_count,
+                            data_objects::SourceSection::Pending => pending_count,
+                        };
+                        list = list.child(section_head(section, count));
+                        last_section = Some(section);
+                    }
+                }
             }
             // 不能分析的行还是得被看见（常常只是缺扩展），给个 warn 标而不是直接藏起来
             let pill = if object.can_analyze() {
@@ -1345,6 +1393,35 @@ impl DataObjectsTab {
                         }),
                     )
                 }
+                Some(data_objects::SourceAction::ToggleBase { alias, hidden }) => {
+                    let entity = entity.clone();
+                    let alias = alias.clone();
+                    let hidden = *hidden;
+                    Some(
+                        Button::new(SharedString::from(format!(
+                            "data-object-base-{}",
+                            object.key
+                        )))
+                        .ghost()
+                        .label(if hidden { tr("挂回") } else { tr("卸载") })
+                        .on_click(move |_, window, cx| {
+                            // 只改会话视角的遮蔽（`hide_base` 不 DETACH）：摘 ATTACH 会让别的
+                            // 会话当场报 catalog 不存在。改完重取一次面板数据，表段跟着变空 / 变回来
+                            if let Some(instance) = engine::duckdb::instance::current() {
+                                let outcome = if hidden {
+                                    instance.show_base(&alias)
+                                } else {
+                                    instance.hide_base(&alias)
+                                };
+                                if let Err(reason) = outcome {
+                                    tracing::warn!("底座 {alias} 切换失败：{reason}");
+                                }
+                            }
+                            entity.update(cx, |tab, cx| tab.refresh(cx));
+                            window.refresh();
+                        }),
+                    )
+                }
                 None => None,
             };
             // 会话行的动作（重挂 / 设主源 / 关会话）后端已有，界面不发明。
@@ -1390,7 +1467,7 @@ impl DataObjectsTab {
             let persist_target = data_objects::can_persist(object).then(|| {
                 (
                     object.name.clone(),
-                    data_objects::persist_label(&object.name),
+                    data_objects::default_archive_name(&object.name),
                 )
             });
             // 单行的「清理这张表」：结果集 / 载入 都是会话级占用（`can_clear`）。
@@ -1421,7 +1498,8 @@ impl DataObjectsTab {
                     }),
                 )
             };
-            // 源行可展开（联邦源 / 加速源 / 文件库 / 源库连接）：行首给展开指示，
+            // 源行可展开（会话源 / 文件库 / 源库连接；加速档不出源段行，它的叶子从连接行展开）：
+            // 行首给展开指示，
             // 与段头 chevron 同一习惯。**没挂载的源不给展开**（铁律 B 组第 4 条）：
             // 没有表可列，给了 chevron 只会点出一个空列表。失败的联邦源同理。
             // 例外：登记过、挂不上、连接还活着的行（`expand_via`）——展开不是"列自家
@@ -1851,12 +1929,10 @@ impl DataObjectsTab {
                                 let snapshot = shared.clone();
                                 menu = menu.item(PopupMenuItem::new("存为快照").on_click(
                                     move |_, _, cx| {
-                                        let path = snapshot
-                                            .loaded_files
-                                            .borrow()
-                                            .iter()
+                                        let path = engine::duckdb::file_view::file_entries()
+                                            .into_iter()
                                             .find(|(seen, _)| seen == &alias)
-                                            .map(|(_, path)| path.clone());
+                                            .map(|(_, path)| path);
                                         match path {
                                             Some(path) => {
                                                 archive_file_as_snapshot(&snapshot, &path, cx)

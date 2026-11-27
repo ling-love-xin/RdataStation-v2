@@ -8,9 +8,12 @@
 //! - **会话级不入库**：会话级加源切项目即清（铁律第 6 条），存进项目库只会留下
 //!   "未挂载的项目级源"这种假记录。事实侧看得见它，登记侧没有它，就是「会话级 · 未登记」。
 //! - 表清单同样不缓存：展开时按 `database_name = alias` 现查 `duckdb_tables()` / `duckdb_views()`。
+//! - **主源**（未限定名的解析者）也是意图：登记表只管"有哪些源"，主源单值另存
+//!   `analysis_primary`（单行表，036）；会话里的 `search_path` 是运行态，由执行侧按意图去切。
 //!
-//! 迁移：`crates/store/migrations/project_meta/034_analysis_sources.sql`；本模块另留
-//! [`ensure_tables`] 作回退修复（与 `network_two_layer` 同一种做法：迁移没跑也能读写）。
+//! 迁移：`crates/store/migrations/project_meta/034_analysis_sources.sql`、
+//! `036_analysis_primary.sql`；本模块另留 [`ensure_tables`] 作回退修复
+//! （与 `network_two_layer` 同一种做法：迁移没跑也能读写）。
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -20,7 +23,7 @@ use std::sync::RwLock;
 
 use shared::error::{CoreError, StorageError};
 
-/// 连接 id → 登记别名 的**进程级快照**（宿主在清单刷新时发布，执行侧读取）。
+/// 连接 id → （登记别名, 挂载档） 的**进程级快照**（宿主在清单刷新时发布，执行侧读取）。
 ///
 /// 为什么要有这一份：联邦计划的组装在**工作线程**上（`FederatedSourcePort::records`，
 /// 不持 `Shared`、拿不到项目根），而登记表在项目库里。让执行侧每次去开项目库是错的
@@ -28,10 +31,13 @@ use shared::error::{CoreError, StorageError};
 /// 顺带发布一份只读快照（几十条，复制一次比每次查库便宜）。
 ///
 /// 语义：**只是缓存**，权威仍是项目库；发布点必须跟着 [`list_in_project`] 走。
-static ALIASES_BY_CONN: std::sync::LazyLock<RwLock<HashMap<String, String>>> =
+///
+/// 带档位（2026-11-27，`use_duckdb_fed` 解耦）：渠道门控要回答"这条连接是不是被登记成
+/// 本地加速源"，只存别名答不了。档位是登记行的一部分，跟着别名一起发布才不会有第二处来源。
+static ALIASES_BY_CONN: std::sync::LazyLock<RwLock<HashMap<String, (String, AnalysisMountKind)>>> =
     std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
 
-/// 发布「连接 id → 别名」快照（清空后重填：切项目必须整体换掉，不能留上个项目的键）。
+/// 发布「连接 id → (别名, 档)」快照（清空后重填：切项目必须整体换掉，不能留上个项目的键）。
 pub fn publish_aliases(rows: &[AnalysisSourceRow]) {
     let mut map = ALIASES_BY_CONN
         .write()
@@ -39,7 +45,10 @@ pub fn publish_aliases(rows: &[AnalysisSourceRow]) {
     map.clear();
     for row in rows {
         if let Some(conn_id) = row.connection_id.as_deref() {
-            map.insert(conn_id.to_string(), row.alias.clone());
+            map.insert(
+                conn_id.to_string(),
+                (row.alias.clone(), row.mount_kind),
+            );
         }
     }
 }
@@ -53,7 +62,66 @@ pub fn alias_for_connection(conn_id: &str) -> Option<String> {
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(conn_id)
-        .cloned()
+        .map(|(alias, _)| alias.clone())
+}
+
+/// 某条连接在项目里登记成哪一档（没有登记 → `None`）。
+///
+/// 渠道门控的唯一判据（2026-11-27 起不再看连接上的 `use_duckdb_fed`）：
+/// 「本地加速」= 登记成 [`AnalysisMountKind::Accel`]；「联邦」= 登记成
+/// `Federation` / `AttachFile` 或本文档绑定（能力另由驱动常量判）。
+pub fn mount_kind_for_connection(conn_id: &str) -> Option<AnalysisMountKind> {
+    ALIASES_BY_CONN
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(conn_id)
+        .map(|(_, kind)| *kind)
+}
+
+/// 这条连接在**当前项目**里有没有登记（= 快照里有别名）。
+///
+/// 只对「登记行」作答（`DbFile` 那种没有 `connection_id` 的源天然不在快照里）；
+/// 权威仍是项目库，快照由面板刷新 / 进项目时发布。
+pub fn is_registered(conn_id: &str) -> bool {
+    alias_for_connection(conn_id).is_some()
+}
+
+/// 项目登记的主源别名（**进程级快照**，与 [`ALIASES_BY_CONN`] 同一套发布口径）。
+///
+/// 为什么也要一份缓存：主源在**工作线程**上被读取（联邦计划组装要决定未限定名的解析者），
+/// 那里拿不到项目根；缓存由面板刷新 / 进项目时发布（[`publish_project`]），权威仍是项目库。
+static PRIMARY_ALIAS: std::sync::LazyLock<RwLock<Option<String>>> =
+    std::sync::LazyLock::new(|| RwLock::new(None));
+
+/// 当前打开的项目根（随 [`publish_project`] 更新）。
+///
+/// 为什么需要它：写主源意图的是**执行线程**（`FederatedSourcePort::remember_primary`），
+/// 它拿不到 `Shared`（项目根在 UI 状态里），而项目库路径必须现算。**只在发布快照时写**，
+/// 别在别处另设第二个来源。
+static PROJECT_ROOT: std::sync::LazyLock<RwLock<Option<std::path::PathBuf>>> =
+    std::sync::LazyLock::new(|| RwLock::new(None));
+
+/// 当前打开的项目根（没有项目 → `None`）。
+pub fn current_project_root() -> Option<std::path::PathBuf> {
+    PROJECT_ROOT
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+/// 取项目登记的主源别名（没登记 / 快照还没发布 → `None`）。
+pub fn primary_alias_cached() -> Option<String> {
+    PRIMARY_ALIAS
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+fn publish_primary(alias: Option<String>) {
+    let mut slot = PRIMARY_ALIAS
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *slot = alias;
 }
 
 fn storage_err(op: &str, reason: String) -> CoreError {
@@ -101,8 +169,8 @@ impl AnalysisSourceKind {
 pub enum AnalysisMountKind {
     /// 联邦直查：`federation::session::ensure_session`，别名自由。
     Federation,
-    /// 本地加速：`accel::ensure_on_instance`，首条源用 `rds_src`，同实例多源时由实例让位成
-    /// `rds_src_2`（2026-11-26 起不再"固定别名"；实际别名见 `AnalysisInstance::alias_for_conn`）。
+    /// 本地加速：`accel::ensure_on_instance`，别名固定 `rds_src`；同实例已有别的源占着就
+    /// **报冲突失败**（2026-11-27 起不再让位成 `rds_src_2`；实际别名见 `alias_for_conn`）。
     Accel,
     /// 数据库文件挂载：`file_view::load_database_as` / `load_database_global`，别名自由。
     AttachFile,
@@ -125,6 +193,15 @@ impl AnalysisMountKind {
             "accel" => Some(Self::Accel),
             "attach_file" => Some(Self::AttachFile),
             _ => None,
+        }
+    }
+
+    /// 给人看的档位名（门控原因、面板文案用；库里仍存 [`Self::as_db_str`]）。
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Federation => "联邦源",
+            Self::Accel => "本地加速",
+            Self::AttachFile => "文件库",
         }
     }
 
@@ -153,7 +230,7 @@ pub struct AnalysisSourceRow {
     pub updated_at: String,
 }
 
-/// 确保表存在（回退修复：迁移 034 没跑时也能读写；与 `network_two_layer` 同一做法）。
+/// 确保表存在（回退修复：迁移 034 / 036 没跑时也能读写；与 `network_two_layer` 同一做法）。
 pub fn ensure_tables(conn: &Connection) -> Result<(), CoreError> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS analysis_sources (
@@ -173,7 +250,12 @@ pub fn ensure_tables(conn: &Connection) -> Result<(), CoreError> {
         CREATE INDEX IF NOT EXISTS idx_analysis_sources_alias_accel
             ON analysis_sources(alias)
             WHERE mount_kind = 'accel';
-        CREATE INDEX IF NOT EXISTS idx_analysis_sources_kind ON analysis_sources(kind);",
+        CREATE INDEX IF NOT EXISTS idx_analysis_sources_kind ON analysis_sources(kind);
+        CREATE TABLE IF NOT EXISTS analysis_primary (
+            singleton  INTEGER PRIMARY KEY CHECK (singleton = 1),
+            alias      TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );",
     )
     .map_err(|e| storage_err("ensure_tables", e.to_string()))
 }
@@ -193,6 +275,100 @@ pub fn list_in_project(
     let conn = Connection::open(&path).map_err(|e| storage_err("open_project_db", e.to_string()))?;
     list(&conn)
 }
+
+/// 读**某个项目**的登记表并把两张进程级快照一起发布：连接 → 别名、主源。
+///
+/// 进项目（`view::lifecycle`）与数据面板刷新都走它：执行侧（工作线程）只认这两份快照，
+/// 少发布一次就会出现「登记了但执行侧看不见」/「主源设了但重启后回不到它」。
+/// 读路径不造项目骨架（与 [`list_in_project`] 同一口径）。
+pub fn publish_project(
+    project_root: &std::path::Path,
+) -> Result<Vec<AnalysisSourceRow>, CoreError> {
+    if let Ok(mut slot) = PROJECT_ROOT.write() {
+        *slot = Some(project_root.to_path_buf());
+    }
+    let path = project_root.join(".RSmeta").join("project.db");
+    if !path.exists() {
+        publish_aliases(&[]);
+        publish_primary(None);
+        return Ok(Vec::new());
+    }
+    let conn = Connection::open(&path).map_err(|e| storage_err("open_project_db", e.to_string()))?;
+    let rows = list(&conn)?;
+    let primary = primary(&conn)?;
+    publish_aliases(&rows);
+    publish_primary(primary);
+    Ok(rows)
+}
+
+/// 关掉项目（没有项目了）：清空项目根与两张快照。
+///
+/// 不清就会拿**上一个项目**的别名 / 主源去开会话——切到空态时最容易踩。
+pub fn clear_project() {
+    if let Ok(mut slot) = PROJECT_ROOT.write() {
+        *slot = None;
+    }
+    publish_aliases(&[]);
+    publish_primary(None);
+}
+
+/// 项目登记的主源别名（权威读：项目库里的 `analysis_primary`）。
+pub fn primary(conn: &Connection) -> Result<Option<String>, CoreError> {
+    ensure_tables(conn)?;
+    conn.query_row(
+        "SELECT alias FROM analysis_primary WHERE singleton = 1",
+        [],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(|e| storage_err("primary", e.to_string()))
+}
+
+/// 设主源（未限定名从此在它里面解析）。
+///
+/// 只接受登记表里**非加速档**的别名：加速档的挂载名固定 `rds_src`，主源就是它自己，
+/// 没有"选一个"这回事。主源是**意图**，写这里；会话里的 `search_path` 是运行态，由
+/// 执行侧按这条意图去切（`catalog-context-model.md` §5）。
+pub fn set_primary(conn: &Connection, alias: &str) -> Result<(), CoreError> {
+    ensure_tables(conn)?;
+    let mount_kind: Option<String> = conn
+        .query_row(
+            "SELECT mount_kind FROM analysis_sources WHERE alias = ?1 ORDER BY id LIMIT 1",
+            params![alias],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| storage_err("set_primary_lookup", e.to_string()))?;
+    let Some(mount_kind) = mount_kind else {
+        return Err(storage_err(
+            "set_primary",
+            format!("登记里没有别名 {alias}：先把这条源登记为项目源，主源只能是登记过的源"),
+        ));
+    };
+    if mount_kind == "accel" {
+        return Err(storage_err(
+            "set_primary",
+            format!("{alias} 是加速档：挂载名固定 rds_src，主源就是它，不需要选"),
+        ));
+    }
+    conn.execute(
+        "INSERT INTO analysis_primary (singleton, alias) VALUES (1, ?1)
+         ON CONFLICT(singleton) DO UPDATE SET alias = excluded.alias,
+             updated_at = CURRENT_TIMESTAMP",
+        params![alias],
+    )
+    .map(|_| ())
+    .map_err(|e| storage_err("set_primary", e.to_string()))
+}
+
+/// 清掉主源意图（没设过是空操作）。
+pub fn clear_primary(conn: &Connection) -> Result<(), CoreError> {
+    ensure_tables(conn)?;
+    conn.execute("DELETE FROM analysis_primary WHERE singleton = 1", [])
+        .map(|_| ())
+        .map_err(|e| storage_err("clear_primary", e.to_string()))
+}
+
 
 /// 打开**某个项目**的登记表（**写**路径）：`.RSmeta/project.db` 不在时建出骨架。
 ///
@@ -377,11 +553,22 @@ pub fn update_alias(conn: &Connection, id: &str, alias: &str) -> Result<bool, Co
 }
 
 /// 删登记（**不碰实例**：卸载是运行态动作，由上层先 `DETACH` 再删行）。
+///
+/// 顺手清掉指向它的主源意图：主源指向一条不存在的登记就是空悬意图，下次执行会
+/// 按它去切一个不存在的 catalog——比"回到文档连接"更糟。
 pub fn delete(conn: &Connection, id: &str) -> Result<bool, CoreError> {
     ensure_tables(conn)?;
-    conn.execute("DELETE FROM analysis_sources WHERE id = ?1", params![id])
-        .map(|n| n > 0)
-        .map_err(|e| storage_err("delete", e.to_string()))
+    let removed = conn
+        .execute("DELETE FROM analysis_sources WHERE id = ?1", params![id])
+        .map_err(|e| storage_err("delete", e.to_string()))?;
+    conn.execute(
+        "DELETE FROM analysis_primary
+         WHERE singleton = 1
+           AND alias NOT IN (SELECT alias FROM analysis_sources)",
+        [],
+    )
+    .map_err(|e| storage_err("delete_primary", e.to_string()))?;
+    Ok(removed > 0)
 }
 
 /// SQLite 的唯一约束冲突（`alias` 是唯一索引）。按错误文本认，不引入额外依赖。
@@ -419,6 +606,35 @@ mod tests {
         }
     }
 
+    /// 快照带档位（2026-11-27 `use_duckdb_fed` 解耦）：渠道门控要能问出「这条连接在
+    /// 项目里登记成哪一档」，只存别名答不了；档位必须跟别名同源发布，不许第二处维护。
+    #[test]
+    fn alias_snapshot_carries_mount_kind() {
+        let mut fed = row("s_1", "shop_src");
+        fed.connection_id = Some("C_fed".to_string());
+        fed.mount_kind = AnalysisMountKind::Federation;
+        let mut accel = row("s_2", "rds_src");
+        accel.connection_id = Some("C_accel".to_string());
+        accel.mount_kind = AnalysisMountKind::Accel;
+        publish_aliases(&[fed, accel]);
+
+        assert_eq!(alias_for_connection("C_fed").as_deref(), Some("shop_src"));
+        assert_eq!(
+            mount_kind_for_connection("C_fed"),
+            Some(AnalysisMountKind::Federation),
+            "联邦档要读得回来"
+        );
+        assert_eq!(
+            mount_kind_for_connection("C_accel"),
+            Some(AnalysisMountKind::Accel),
+            "加速档要读得回来"
+        );
+        assert_eq!(alias_for_connection("C_other"), None, "未登记就是没有");
+        assert_eq!(mount_kind_for_connection("C_other"), None);
+
+        publish_aliases(&[]); // 快照是进程级静态，别留给后面的测试
+    }
+
     #[test]
     fn ensure_tables_is_idempotent() {
         let c = conn();
@@ -446,6 +662,53 @@ mod tests {
         assert!(delete(&c, "s_1").expect("delete"));
         assert!(!delete(&c, "s_1").expect("再删一次返回 false"));
         assert_eq!(list(&c).expect("list").len(), 1);
+    }
+
+    /// 036：主源是**单值意图**（写进项目库，不是会话内存）——换了就只剩新的；
+    /// 没登记过的别名不能当主源（主源只能是登记过的源）。
+    #[test]
+    fn primary_is_a_single_persisted_intent() {
+        let c = conn();
+        insert(&c, &row("s_1", "shop_src")).expect("insert 1");
+        insert(&c, &row("s_2", "users_src")).expect("insert 2");
+        assert_eq!(primary(&c).expect("primary"), None, "没设过就是没有");
+
+        set_primary(&c, "shop_src").expect("设主源");
+        assert_eq!(primary(&c).expect("primary").as_deref(), Some("shop_src"));
+
+        set_primary(&c, "users_src").expect("换主源");
+        assert_eq!(
+            primary(&c).expect("primary").as_deref(),
+            Some("users_src"),
+            "单值：换了就不该还留着上一条"
+        );
+
+        let err = set_primary(&c, "nope_src").expect_err("没登记的别名不能当主源");
+        assert!(
+            format!("{err:?}").contains("nope_src"),
+            "错误要点名那个别名，实际：{err:?}"
+        );
+    }
+
+    /// 删掉主源那行 → 主源意图跟着清掉（不许留空悬的「解析到不存在的 catalog」）。
+    #[test]
+    fn deleting_the_primary_row_clears_the_intent() {
+        let c = conn();
+        insert(&c, &row("s_1", "shop_src")).expect("insert");
+        set_primary(&c, "shop_src").expect("设主源");
+        delete(&c, "s_1").expect("delete");
+        assert_eq!(primary(&c).expect("primary"), None, "空悬主源必须清掉");
+    }
+
+    /// 加速档固定挂 `rds_src`，主源就是它自己，没有"选一个"这回事。
+    #[test]
+    fn accel_source_cannot_be_the_primary() {
+        let c = conn();
+        let mut accel = row("s_1", "rds_src");
+        accel.mount_kind = AnalysisMountKind::Accel;
+        insert(&c, &accel).expect("insert");
+        let err = set_primary(&c, "rds_src").expect_err("加速档不该可选");
+        assert!(format!("{err:?}").contains("accel") || format!("{err:?}").contains("rds_src"));
     }
 
     /// 035：唯一性按档位分域——加速档的 `alias` 只是展示名（ATTACH 固定 `rds_src`），

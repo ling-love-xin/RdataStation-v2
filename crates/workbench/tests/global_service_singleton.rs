@@ -54,12 +54,11 @@ fn singleton_service_and_loader_production_path() {
         .with_analysis_db(dir.join("secret-target.duckdb"));
 
     let rt = tokio::runtime::Runtime::new().expect("runtime");
-    let mut input = DataSourceSaveInput::new(
+    let input = DataSourceSaveInput::new(
         "singleton_demo",
         "postgres",
         "postgres://u:p@127.0.0.1:5432/singleton",
     );
-    input.use_duckdb_fed = Some(true);
 
     let id = rt
         .block_on(service.save(&input, None))

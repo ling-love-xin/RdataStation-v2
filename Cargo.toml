@@ -136,8 +136,6 @@ gpui-kit = { version = "0.10.0", features = ["gpui-fast"] }
 # DUCKDB_LIB_DIR + `third_party/duckdb/` 三处成对。
 duckdb = { version = "=1.20001.0", features = ["appender-arrow"] }
 arrow = "60.1.0"
-bigdecimal = "0.4.11"
-num-traits = "0.2"
 
 # 语义着色 provider 的类型（`DocumentRangeSemanticTokensProvider` 的入参 / 返回值）。
 # 必须与 gpui-base 同版本同 features（0.97.0 / `proposed`），否则与 trait 签名不是同一类型。

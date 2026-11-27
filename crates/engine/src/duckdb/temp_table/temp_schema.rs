@@ -9,9 +9,26 @@
 //! 裸名与 `"双引号名"` 都解析到 `rds_tmp` 下的表）：物理表进 `rds_tmp`，
 //! 调用方拿到的仍是裸名，既有模板零改动。
 //!
+//! 2026-11-27 实测（`crates/engine/examples/sp_probe.rs`，2.0.1）补一条硬约束：
+//! **只写 schema 名会跟着 `USE` 漂**——会话切到联邦主源（`USE mysql_src`）之后，
+//! `SET search_path = 'main,rds_tmp'` 直接报 `No catalog + schema named "rds_tmp" found`
+//! （相对名被解析成 `mysql_src.rds_tmp`）。而 **catalog 限定写法可用**：
+//! `SET search_path = 'memory.rds_tmp,<源>.main'` 之后两侧表都能按裸名访问。
+//! 所以共享临时区一律写全限定 [`SHARED_TEMP_PATH`]，落点也钉死在 `memory`。
+//!
 //! 模块名不叫 `shared`：`crates/engine` 已有一个顶层 `shared` crate 模块
 //! （`shared::error::CoreError` 到处在用），同目录再挂 `shared` 会让 `use shared::…` 二义（E0659）。
 pub const SHARED_TEMP_SCHEMA: &str = "rds_tmp";
+
+/// 共享临时区的**全限定**路径（catalog + schema）：`search_path` 里只认这个写法。
+///
+/// 为什么必须带 `memory.`：会话的默认 catalog 会随通道切换（本地加速 `USE rds_src`、
+/// 联邦 `USE <主源>`），裸 schema 名会解析到那些只读 catalog 上并当场报错，
+/// 于是"同一条会话里临时结果集还在、却突然看不见"。
+pub const SHARED_TEMP_PATH: &str = "memory.rds_tmp";
+
+/// 内存库的 `main` schema 全限定路径：临时表与"会话没有主源时"的默认落点。
+pub const SHARED_MAIN_PATH: &str = "memory.main";
 
 /// 让这条连接能把 `rds_tmp` 里的表按裸名解析（幂等；第一次顺带建 schema）。
 ///
@@ -19,13 +36,13 @@ pub const SHARED_TEMP_SCHEMA: &str = "rds_tmp";
 /// 但显式设一次更稳）、以及**单测里直接 `open_in_memory` 的连接**（它们没有实例）。
 pub fn ensure_shared_schema(conn: &duckdb::Connection) -> Result<(), String> {
     conn.execute_batch(&format!(
-        "CREATE SCHEMA IF NOT EXISTS {SHARED_TEMP_SCHEMA}; \
-         SET search_path = 'main,{SHARED_TEMP_SCHEMA}'"
+        "CREATE SCHEMA IF NOT EXISTS {SHARED_TEMP_PATH}; \
+         SET search_path = '{SHARED_MAIN_PATH},{SHARED_TEMP_PATH}'"
     ))
-    .map_err(|error| format!("准备 {SHARED_TEMP_SCHEMA} 共享临时区失败：{error}"))
+    .map_err(|error| format!("准备 {SHARED_TEMP_PATH} 共享临时区失败：{error}"))
 }
 
-/// 建表 / 删表用的限定名（`rds_tmp."名字"`）。保留给需要"钉死落点"的场合（清理、诊断）。
+/// 建表 / 删表用的限定名（`memory.rds_tmp."名字"`）。落点钉死，不跟 `USE` 漂。
 pub fn qualified(name: &str) -> String {
-    format!("{SHARED_TEMP_SCHEMA}.\"{}\"", name.replace('"', "\"\""))
+    format!("{SHARED_TEMP_PATH}.\"{}\"", name.replace('"', "\"\""))
 }

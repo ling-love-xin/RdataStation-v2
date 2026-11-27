@@ -49,7 +49,6 @@ pub struct ConnectionDraftRow {
     pub ssl_cert: String,
     pub ssl_key: String,
     pub cache_path: String,
-    pub duckdb_fed: bool,
     pub active_tab: i64,
     /// 协议链跳（JSON 数组）。
     pub hops_json: String,
@@ -132,7 +131,6 @@ impl ConnectionDraftStore {
                     ssl_cert            TEXT NOT NULL DEFAULT '',
                     ssl_key             TEXT NOT NULL DEFAULT '',
                     cache_path          TEXT NOT NULL DEFAULT '',
-                    duckdb_fed          INTEGER NOT NULL DEFAULT 1,
                     active_tab          INTEGER NOT NULL DEFAULT 0,
                     hops_json           TEXT NOT NULL DEFAULT '[]',
                     props_json          TEXT NOT NULL DEFAULT '[]',
@@ -163,7 +161,7 @@ impl ConnectionDraftStore {
     pub fn list(&self) -> Vec<ConnectionDraftRow> {
         let mut stmt = match self.conn.prepare(
             "SELECT name, saved_id, type_id, driver_id, driver_name, url, username, remark, scope,
-                    project_path, ssl_mode, ssl_ca, ssl_cert, ssl_key, cache_path, duckdb_fed,
+                    project_path, ssl_mode, ssl_ca, ssl_cert, ssl_key, cache_path,
                     active_tab, hops_json, props_json, sec_overrides_json, auth_method, auth_ref,
                     network_ref, env, tags, groups_json
              FROM connection_drafts ORDER BY position ASC",
@@ -188,17 +186,16 @@ impl ConnectionDraftStore {
                 ssl_cert: r.get(12)?,
                 ssl_key: r.get(13)?,
                 cache_path: r.get(14)?,
-                duckdb_fed: r.get::<_, i64>(15)? != 0,
-                active_tab: r.get(16)?,
-                hops_json: r.get(17)?,
-                props_json: r.get(18)?,
-                sec_overrides_json: r.get(19)?,
-                auth_method: r.get(20)?,
-                auth_ref: r.get(21)?,
-                network_ref: r.get(22)?,
-                env: r.get(23)?,
-                tags: r.get(24)?,
-                groups_json: r.get(25)?,
+                active_tab: r.get(15)?,
+                hops_json: r.get(16)?,
+                props_json: r.get(17)?,
+                sec_overrides_json: r.get(18)?,
+                auth_method: r.get(19)?,
+                auth_ref: r.get(20)?,
+                network_ref: r.get(21)?,
+                env: r.get(22)?,
+                tags: r.get(23)?,
+                groups_json: r.get(24)?,
             })
         });
         match rows {
@@ -217,11 +214,11 @@ impl ConnectionDraftStore {
             .prepare(
                 "INSERT INTO connection_drafts (
                     position, name, saved_id, type_id, driver_id, driver_name, url, username, remark,
-                    scope, project_path, ssl_mode, ssl_ca, ssl_cert, ssl_key, cache_path, duckdb_fed,
+                    scope, project_path, ssl_mode, ssl_ca, ssl_cert, ssl_key, cache_path,
                     active_tab, hops_json, props_json, sec_overrides_json, auth_method, auth_ref,
                     network_ref, env, tags, groups_json
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-                           ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)",
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+                           ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
             )
             .map_err(|e| self.err("prepare_connection_drafts", e))?;
         for (i, r) in rows.iter().enumerate() {
@@ -242,7 +239,6 @@ impl ConnectionDraftStore {
                 r.ssl_cert,
                 r.ssl_key,
                 r.cache_path,
-                if r.duckdb_fed { 1 } else { 0 },
                 r.active_tab,
                 r.hops_json,
                 r.props_json,
@@ -289,7 +285,6 @@ mod tests {
                 username: "u".into(),
                 tags: "prod, core".into(),
                 groups_json: r#"["grp_a"]"#.into(),
-                duckdb_fed: true,
                 hops_json: r#"[{"kind":"SSH","label":"跳板","enabled":true}]"#.into(),
                 ..Default::default()
             },
@@ -300,7 +295,6 @@ mod tests {
                 driver_id: "postgres".into(),
                 driver_name: "sqlx".into(),
                 scope: "仅项目".into(),
-                duckdb_fed: false,
                 active_tab: 3,
                 ..Default::default()
             },
@@ -310,7 +304,6 @@ mod tests {
         let got = store.list();
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].name, "新建 A");
-        assert!(got[0].duckdb_fed);
         assert_eq!(got[0].type_id, "mysql");
         assert_eq!(got[0].driver_id, "mysql_native");
         assert_eq!(got[0].driver_name, "Official");
@@ -318,7 +311,6 @@ mod tests {
         assert_eq!(got[0].groups_json, r#"["grp_a"]"#);
         assert_eq!(got[1].saved_id.as_deref(), Some("G_1"));
         assert_eq!(got[1].type_id, "postgresql");
-        assert!(!got[1].duckdb_fed);
         assert_eq!(got[1].active_tab, 3);
 
         // 全量替换语义：行数减少时旧行不残留。

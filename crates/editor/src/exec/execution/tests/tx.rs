@@ -221,6 +221,7 @@ fn setting_a_federated_primary_reaches_the_runner() {
 
         fn set_federated_primary(
             &self,
+            _document: &str,
             connection: Option<&str>,
             alias: &str,
         ) -> Result<String, String> {

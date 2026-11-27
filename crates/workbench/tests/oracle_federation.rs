@@ -50,7 +50,6 @@ fn base_dir() -> PathBuf {
 fn marked(name: &str, db_type: &str, url: &str) -> DataSourceSaveInput {
     let mut input = DataSourceSaveInput::new(name, db_type, url);
     input.scope = ConnectionScope::Global;
-    input.use_duckdb_fed = Some(true);
     input
 }
 
@@ -106,6 +105,7 @@ fn an_oracle_record_joins_the_federation() {
                JOIN oracle_query('rds_oracle_src', 'SELECT 1 AS one FROM dual') o ON 1 = 1";
     let data = runner
         .run(
+            "oracle_federation",
             Some(&mysql_id),
             None,
             ExecChannel::Federated,
@@ -139,13 +139,14 @@ fn an_oracle_record_joins_the_federation() {
 
     // ③ 重挂（`DETACH` 之后要重建 Secret 再 `ATTACH`）
     let refreshed = runner
-        .refresh_sources(Some(&mysql_id), ExecChannel::Federated, Some("oracle_src"))
+        .refresh_sources("oracle_federation", Some(&mysql_id), ExecChannel::Federated, Some("oracle_src"))
         .expect("重挂 L2 源该成功");
     eprintln!("✅ 重挂：{refreshed}");
 
     // ④ 写 L2 源被引擎侧拦（它没有 `READ_ONLY` 那道闸）
     let refusal = runner
         .run(
+            "oracle_federation",
             Some(&mysql_id),
             None,
             ExecChannel::Federated,
@@ -160,6 +161,7 @@ fn an_oracle_record_joins_the_federation() {
     // ⑤ 本地临时对象照常（拒绝不能把分析能力一起挡掉）
     runner
         .run(
+            "oracle_federation",
             Some(&mysql_id),
             None,
             ExecChannel::Federated,

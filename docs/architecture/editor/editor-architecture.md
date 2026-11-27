@@ -471,7 +471,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | 结果集服务（WHERE 重查 / DuckDB 分析 / 临时表 / 列洞察） | `workbench::services::result_service.rs`（`ResultService`） | 零调用（仅再导出） |
 | 重查筛选 / DuckDB 分析执行 | `engine::services::execution_service.rs`（`re_execute_with_filter` / `execute_duckdb_analysis`） | 零/极少调用（门面未被 UI 消费） |
 | 联邦查询（多源只读挂载 / 跨源查询） | `engine/src/duckdb/federation/`（`registry` / `session`；🟡 `legacy.rs` 待退役）+ `crates/editor/src/ports/editor_exec/federation.rs`（联邦档执行路径） | ✅ 已接（B13：编辑器「执行位置：联邦」能跑跨源；源清单浮层待做） |
-| DuckDB Secret（凭据集中管理） | `connection/src/secret.rs`（`CREATE PERSISTENT SECRET` + `secret_directory`） | 已接（保存/连接时按 `use_duckdb_fed` 注册；**注意：扫描器不认 Secret**，挂载凭据走运行时连接串 + 引擎侧脱敏，见联邦架构 D11） |
+| DuckDB Secret（凭据集中管理） | `connection/src/secret.rs`（`CREATE PERSISTENT SECRET` + `secret_directory`） | 已接（保存/连接时**按驱动能力**注册，2026-11-27 起不看连接开关；**注意：扫描器不认 Secret**，挂载凭据走运行时连接串 + 引擎侧脱敏，见联邦架构 D11） |
 | 连接级执行入口 | `workbench::services::connection_service.rs::execute_sql`（L1066-1088） | 零调用 |
 | 补全元数据（实时内省） | `database::MetadataService`（`list_tables/list_columns/list_indexes/…`） | 零消费 |
 | 结果集数据结构 | `engine::services::result_types.rs::ResultSet`（含 `temp_table`） | 待接 |
@@ -588,7 +588,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | 10 | ⚪ | notebook 导出 `.ipynb` 互操作 | 生态互通 | 第二期（作为导出格式，不是主格式） |
 | 11 | ⚪ | 变量浏览器（SQL 会话的临时表/视图列表） | 分析模式可用性 | 1c 后追加 |
 | 12 | ✅ | ~~模块文档缺口：使用手册（`editor-user-guide.md`）~~ | 与其它模块的六件套不齐 | ✅ **已补（2026-09-21）**：`editor-user-guide.md` —— 能力与期次标注 / 入口 / 界面导览 / 典型流程 / 一次操作落到哪 / 已注册快捷键 / 只读四道防线 / FAQ / **USIT 验收清单**；三份文档地图（`docs/architecture/README.md`、本目录 `README.md`）已登记 |
-| 13 | ✅ | **通道可用性判定无来源**：`use_duckdb_fed` 曾只是“是否注册 Secret”的开关，而“Secret 是否注册成功 / 能否 ATTACH”没有可查询状态 | 通道门控只能靠猜，UI 给不出准确的“不可用原因” | **已关闭（2026-09-18，B13 切片二）**：门控真值来自宿主 `ChannelsPort`（连接开关 → 驱动类型 → 扩展可用性 `accel::extension_state`）+ 每个连接一条缓存的加速会话；扩展**没试过不拦**（让用户能选，执行时在工作线程真装一次），**试过且失败就把原话记下来**在菜单行尾显示（重试成功即清）。写保护落在引擎侧（`ATTACH … READ_ONLY`），不再依赖上层自觉 |
+| 13 | ✅ | **通道可用性判定无来源**：连接开关曾只是“是否注册 Secret”的标记，而“Secret 是否注册成功 / 能否 ATTACH”没有可查询状态 | 通道门控只能靠猜，UI 给不出准确的“不可用原因” | **已关闭（2026-09-18，B13 切片二；2026-11-27 门控再改为「驱动能力 + 项目登记」）**：门控真值来自宿主 `ChannelsPort`（驱动能力 → 登记档 `mount_kind_for_connection` → 扩展可用性 `accel::extension_state`）+ 每个连接一条缓存的加速会话；扩展**没试过不拦**（让用户能选，执行时在工作线程真装一次），**试过且失败就把原话记下来**在菜单行尾显示（重试成功即清）。写保护落在引擎侧（`ATTACH … READ_ONLY`），不再依赖上层自觉 |
 | 14 | ✅ | **加速通道新鲜度**（ATTACH 快照 vs 实时）无表达、无重建入口 | 用户可能拿旧快照做决策 | **已关闭（2026-09-18，B13 切片二/三）**：实测**数据是实时的**（源库插一行，同一 DuckDB 会话立刻看得到），但在 `ATTACH` 时定型的**表清单**是静态的——所以界面写「源库只读」而**不是“快照”**；重建入口就是「执行位置 ▾」菜单里的「重新挂载源库（刷新表清单）」（旁路线程 + 回执，不占执行位）。⬜ 另：加速会话的临时表与分析会话（1c）暂不共享 |
 | 15 | ✅ | **重查包裹语义**：`SELECT * FROM (<原SQL>) WHERE …` 遇原查询带 `ORDER BY` / `LIMIT` 时语义会变 | 重查结果与原查询不一致 | **已定（2026-10-22，#30）**：保留外层 ORDER BY；有 LIMIT 去掉并提示「重查将去掉 LIMIT」——`engine/sql/filter.rs` 完整实现（`rewrite_with_filter` / `rewrite_with_order`，tokenizer 扫括号外子句防字符串/注释误判，ESCAPE `!` 转义，MySQL 用 CHAR），测试 10+ 项；「⟳ 刷新」按形成形态重查（`Pushdown` 原料随 `ResultEntry`，下发不退回全量），刷新宿主测试 2 项。rds-editor 668 passed · ui_contract 9/9 |
 | 16 | ✅ | 结果**血缘只到 UI 摘要级**，**未落库**（重启后无法回看“这个结果怎么来的”） | 重启/重开项目后看不到历史结果的来源 | ✅ **两半均已收口（2026-11-05，B5 余项）**：落库 = 血缘随执行进 SQL 历史（`LINEAGE_*` 常量单一来源 → `RunOptions` / `SqlExecuteOptions` / `SqlHistoryEntry.lineage`，三档执行与下发 / 分段全带，老记录读回 `None`），历史列表第二行显「来自X」；UI = SQL 预览弹层头部恢复「来源 · 连接」行（2026-10-28 状态栏三项重构曾把工具栏来源段挤掉，按用户口径**不回状态栏**）。⬜ 会话恢复（重启回看整个结果集）仍后置，量级另计 |

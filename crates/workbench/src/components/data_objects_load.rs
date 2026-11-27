@@ -6,10 +6,11 @@
 //!   为什么落在单例而不是联邦会话：二次分析与洞察本来就在 `GLOBAL_DUCKDB` 里跑，
 //!   文件建成视图放进来，两处立刻都能查；视图不物化，文件改了下次查询跟着变，
 //!   要稳定快照才需要落成 `tmp_q_` 临时表。
-//! - **连接线**：把选中的库表所属连接**标记 `use_duckdb_fed`**（持久开关，D15/D16 的
-//!   联邦源登记口径）。不「立即挂进当前会话」——会话 owner 归文档（D2），面板不越权；
-//!   开关翻开后，下一次联邦执行按新源清单建会话（源清单变化会重建会话，会话内临时表
-//!   随之失效，D12——回执里要把这句说白）。
+//! - **连接线**：把选中的库表所属连接**登记进项目分析源表**（`analysis_sources`，
+//!   `mount_kind = Federation`——意图清单是唯一持久状态；2026-11-27 起连接记录上
+//!   没有 `use_duckdb_fed` 开关可写）。不「立即挂进当前会话」——会话 owner 归文档（D2），
+//!   面板不越权；登记之后，下一次联邦执行按新源清单建会话（源清单变化会重建会话，
+//!   会话内临时表随之失效，D12——回执里要把这句说白）。
 //!
 //! 两条线在同一个对话框里混选：文件建视图立即生效；连接标记的回执留在对话框底部
 //! （不静默关窗——标记的那个源**此刻还不会出现在清单里**，不给回执等于点了没反应）。
@@ -200,10 +201,7 @@ fn confirm(
         };
         match loaded {
             Ok((alias, how)) => {
-                // 同名重建是覆盖（视图覆盖 / 重挂），清单里也只留一条（路径换成最新的那份）
-                let mut list = shared.loaded_files.borrow_mut();
-                list.retain(|(seen, _)| seen != &alias);
-                list.push((alias.clone(), text.to_string()));
+                // 索引由 `file_view` 的 global 入口单点记账（同名重建即覆盖），这里不另记一份
                 notes.push(format!("{alias}（{how}）← {shown}"));
             }
             Err(error) => failed.push(format!("{shown}：{error}")),
@@ -239,19 +237,11 @@ fn confirm(
     }
 }
 
-/// 把连接标记为联邦源（写持久开关，走 `set_use_duckdb_fed` 的整记录回填）。
+/// 把连接登记成项目分析源（**只写意图清单**，2026-11-27 起没有连接开关可写）。
 ///
 /// 返回给回执用的**连接显示名**（面板 / 对话框都不该把 conn_id 直接给人看）。
-/// 驱动异步服务用进程级 `bridge_runtime`（临时 runtime 会把连接池的后台任务
-/// 一起丢掉，见 K19）。
+/// 不再回填 `use_duckdb_fed`：登记行是唯一持久状态，执行侧的渠道启用就看它。
 fn mark_connections(shared: &Shared, conn_ids: &[String]) -> Result<Vec<String>, String> {
-    let service = crate::services::data_source_service::DataSourceService::global()
-        .map_err(|error| format!("数据源服务不可用：{error}"))?;
-    let rt = crate::services::nav_runtime::bridge_runtime()?;
-    let project = shared
-        .project_root()
-        .map(|root| root.to_string_lossy().to_string());
-
     let mut names = Vec::new();
     let mut failures = Vec::new();
     for conn_id in conn_ids {
@@ -262,38 +252,22 @@ fn mark_connections(shared: &Shared, conn_ids: &[String]) -> Result<Vec<String>,
             .find(|item| &item.id == conn_id)
             .map(|item| item.name.clone())
             .unwrap_or_else(|| conn_id.clone());
-        // 三态：`Some(true)` = 开本地加速（同时也说明这条连接能被 DuckDB 直连）
-        let outcome = rt.block_on(service.set_use_duckdb_fed(
-            conn_id,
-            Some(true),
-            project.as_deref(),
-        ));
-        match outcome {
-            Ok(()) => {
-                // 「有值即登记」（用户口径 2026-11-26）：开关有值 = 这条连接能当 DuckDB 源，
-                // 项目登记表里必须有一行。登记失败不回滚开关（开关已生效），但要如实点名。
-                if let Err(error) = ensure_registration(shared, conn_id, &name) {
-                    failures.push(format!("{name}：开关已开，登记没写进去（{error}）"));
-                }
-                names.push(name);
-            }
-            Err(error) => failures.push(format!("{conn_id}：{error}")),
+        match ensure_registration(shared, conn_id, &name) {
+            Ok(_) => names.push(name),
+            Err(error) => failures.push(format!("{name}：{error}")),
         }
     }
     if !failures.is_empty() {
-        // 部分成功也如实分开报：成功的那几个已生效，重试只会重复翻同一个开关（幂等）
-        return Err(format!(
-            "标记联邦源失败（成功的已生效）：{}",
-            failures.join("；")
-        ));
+        // 部分成功也如实分开报：成功的那几个已登记，重试是幂等的
+        return Err(format!("登记分析源失败（成功的已生效）：{}", failures.join("；")));
     }
     Ok(names)
 }
 
 /// 把**一个**文件库（`.duckdb` / `.sqlite`）挂进分析实例（源段右键「挂载」）。
 ///
-/// 与「加源」的文件线同一条路径（`load_database_global` → ATTACH 成 catalog → 写进
-/// `loaded_files` → 重取清单），区别只在入口：加源要开对话框选文件，挂载是源行上
+/// 与「加源」的文件线同一条路径（`load_database_global` → ATTACH 成 catalog → 记进
+/// 文件索引 → 重取清单），区别只在入口：加源要开对话框选文件，挂载是源行上
 /// 已经知道路径（注册成分析源的那条连接登记的本体文件）。
 ///
 /// 挂上之后源段会多出一行「文件库」，原 conn 行不再是失效态——两边都指向**同一个**
@@ -301,11 +275,6 @@ fn mark_connections(shared: &Shared, conn_ids: &[String]) -> Result<Vec<String>,
 pub fn mount_file_database(shared: &Shared, path_text: &str, cx: &mut App) {
     match engine::duckdb::file_view::load_database_global(path_text) {
         Ok(alias) => {
-            let mut list = shared.loaded_files.borrow_mut();
-            // 同名重挂是覆盖：清单里只留最新那份路径
-            list.retain(|(seen, _)| seen != &alias);
-            list.push((alias.clone(), path_text.to_string()));
-            drop(list);
             let collected = data_objects::collect(shared);
             *shared.data_objects.borrow_mut() = data_objects::objects(&collected);
             // 与加源同一步：递增清单版本号，面板/工作集据此重取（不各自猜）
@@ -324,10 +293,6 @@ pub fn unmount_file_database(shared: &Shared, path_text: &str, cx: &mut App) {
     let alias = engine::duckdb::file_view::alias_for(path_text);
     match engine::duckdb::file_view::detach_database_global(&alias) {
         Ok(()) => {
-            shared
-                .loaded_files
-                .borrow_mut()
-                .retain(|(seen, _)| seen != &alias);
             let collected = data_objects::collect(shared);
             *shared.data_objects.borrow_mut() = data_objects::objects(&collected);
             shared.mark_data_objects_dirty(cx);
@@ -395,10 +360,6 @@ pub fn analyze_asset_version(
     };
     match outcome {
         Ok(()) => {
-            let mut list = shared.loaded_files.borrow_mut();
-            list.retain(|(seen, _)| seen != &alias);
-            list.push((alias.clone(), path_text.to_string()));
-            drop(list);
             let collected = data_objects::collect(shared);
             *shared.data_objects.borrow_mut() = data_objects::objects(&collected);
             shared.mark_data_objects_dirty(cx);
@@ -450,8 +411,9 @@ pub fn mount_network_source(shared: &Shared, conn_id: &str, cx: &mut App) {
             return;
         }
     };
-    // 会话 owner：面板挂载目前用固定 owner（`data_objects`）。等「面板跟随当前编辑器文档」
-    // 那一步落地后改成文档 id（见 `docs/architecture/resource-session-model.md` §5.2）。
+    // 会话 owner：面板**自己的一条会话**（口径 11 第②条"每个 SQL 编辑器 + 数据面板 = 一条会话"），
+    // 固定 `data_objects`。它不去追当前聚焦文档的 id——编辑器与面板之间的临时表共享靠
+    // 实例资源（`memory.rds_tmp`），不靠共用一条会话（见 `resource-session-model.md` §5.2）。
     match engine::duckdb::accel::ensure_on_instance(&source, "data_objects") {
         Ok((_session, alias)) => {
             refresh(shared, cx);
@@ -465,9 +427,12 @@ pub fn mount_network_source(shared: &Shared, conn_id: &str, cx: &mut App) {
 }
 
 /// 卸下一条网络连接在**分析实例**上的挂载（源段右键「卸载」）：只断挂载，不动连接本身。
+///
+/// 面板不代表任何文档会话（`acting = None`）：只要还有文档在用它，`unmount_conn` 会拒绝
+/// 并把「谁在用」写进错误原话，这里原样弹给用户（别吞成"卸载失败"）。
 pub fn unmount_network_source(shared: &Shared, conn_id: &str, cx: &mut App) {
     let outcome = engine::duckdb::instance::current()
-        .map(|instance| instance.unmount_conn(conn_id))
+        .map(|instance| instance.unmount_conn(conn_id, None))
         .unwrap_or(Ok(false));
     match outcome {
         Ok(true) => {

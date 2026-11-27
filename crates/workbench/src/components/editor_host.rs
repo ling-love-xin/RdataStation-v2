@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use editor::host::{EditorHost, FederatedSourcePort, FederatedSourceRecord};
+use editor::host::{EditorHost, FederatedSourcePort, FederatedSourceRecord, PrimaryMemory};
 use editor::shared::InsightColumnRequest;
 use gpui_kit::App;
 use workbench_shell::model::ConnectionItem;
@@ -235,7 +235,7 @@ impl EditorHost for WorkbenchEditorHost {
 pub struct WorkbenchFederatedSource;
 
 impl FederatedSourcePort for WorkbenchFederatedSource {
-    fn records(&self) -> Vec<FederatedSourceRecord> {
+    fn records(&self, focus: Option<&str>) -> Vec<FederatedSourceRecord> {
         let Ok(service) = crate::services::data_source_service::DataSourceService::global() else {
             return Vec::new();
         };
@@ -247,9 +247,13 @@ impl FederatedSourcePort for WorkbenchFederatedSource {
         };
         items
             .into_iter()
-            // 自动参与联邦执行的只有「已开启本地加速」的那类（`Some(true)`）：
-            // `Some(false)` = 可直连但没开加速，只在用户手动挂/登记时进场。
-            .filter(|item| item.use_duckdb_fed == Some(true))
+            // 两源合一（判据见 `FederatedSourcePort` 的 doc）：项目登记过 / 本文档绑定
+            // （`focus`）。全局池里的连接大多两样都没有——不收它们，否则每跑一次联邦
+            // 都要去 `ATTACH` 一堆与本次工作无关的库。
+            .filter(|item| {
+                engine::persistence::analysis_sources::is_registered(&item.id)
+                    || focus == Some(item.id.as_str())
+            })
             .filter_map(|item| {
                 connection::url::build_connection_url(&item)
                     .ok()
@@ -264,6 +268,37 @@ impl FederatedSourcePort for WorkbenchFederatedSource {
                     })
             })
             .collect()
+    }
+
+    /// 主源进项目意图（`analysis_primary`，036）。
+    ///
+    /// 执行线程拿不到 `Shared`（项目根在 UI 状态里），项目根取
+    /// `analysis_sources::current_project_root()`——那是 `publish_project` 发布的那一份，
+    /// 与别名快照同一时机更新（进项目 / 面板刷新）。
+    fn remember_primary(&self, alias: &str) -> Result<PrimaryMemory, String> {
+        let Some(root) = engine::persistence::analysis_sources::current_project_root() else {
+            // 没有项目：主源只活在本文档会话里（如实降级，不是失败）
+            return Ok(PrimaryMemory::SessionOnly);
+        };
+        let conn = engine::persistence::analysis_sources::open_in_project(&root)
+            .map_err(|error| error.to_string())?;
+        let rows = engine::persistence::analysis_sources::list(&conn)
+            .map_err(|error| error.to_string())?;
+        // 只有**登记过**的源才能当项目主源；没登记 = 会话级源，同样降级成 SessionOnly
+        let registered = rows.iter().any(|row| {
+            row.alias == alias
+                && row.mount_kind
+                    != engine::persistence::analysis_sources::AnalysisMountKind::Accel
+        });
+        if !registered {
+            return Ok(PrimaryMemory::SessionOnly);
+        }
+        engine::persistence::analysis_sources::set_primary(&conn, alias)
+            .map_err(|error| error.to_string())?;
+        // 两张快照一起刷新：执行侧下一次组装（以及重启后的第一次）就按这条主源
+        engine::persistence::analysis_sources::publish_project(&root)
+            .map_err(|error| error.to_string())?;
+        Ok(PrimaryMemory::Project)
     }
 }
 

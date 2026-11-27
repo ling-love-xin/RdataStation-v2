@@ -31,7 +31,8 @@ impl QueryRunner for EngineQueryRunner {
             .lineage
             .unwrap_or(crate::execution::LINEAGE_ORIGINAL);
         if channel == ExecChannel::Federated {
-            return self.run_on_federation(connection, sql, lineage);
+            // 联邦档同样按**文档**取会话（owner = 文档，不再等于绑定连接的 id）
+            return self.run_on_federation(document, connection, sql, lineage);
         }
         if channel != ExecChannel::Source {
             // 加速档按**文档**开会话（同一连接的两条文档各一条，USE / 中断不互串）
@@ -139,6 +140,7 @@ impl QueryRunner for EngineQueryRunner {
         // 【B13】本地跑的两档：改写照样做，但语句在 DuckDB 上跑（不是发回源库）
         if channel == ExecChannel::Federated {
             return self.run_rewritten_on_federation(
+                document,
                 connection,
                 &rewritten,
                 |limit| format!("已去掉原查询的 {limit}（下发筛选要能查到全部行）"),
@@ -196,6 +198,7 @@ impl QueryRunner for EngineQueryRunner {
         // 【B13】本地跑的两档：同上——改写服从“在哪儿跑”
         if channel == ExecChannel::Federated {
             return self.run_rewritten_on_federation(
+                document,
                 connection,
                 &rewritten,
                 |limit| format!("已去掉原查询的 {limit}（排序下发要能排全部行）"),
@@ -249,7 +252,7 @@ impl QueryRunner for EngineQueryRunner {
     ) -> Result<QueryData, String> {
         // 【B13】本地跑的两档的分段：同一套窗口包装，但在 DuckDB 上取数
         if channel == ExecChannel::Federated {
-            return self.fetch_next_on_federation(connection, sql, offset, limit);
+            return self.fetch_next_on_federation(document, connection, sql, offset, limit);
         }
         if channel != ExecChannel::Source {
             return self.fetch_next_on_accel(document, connection, sql, offset, limit);
@@ -509,7 +512,7 @@ impl QueryRunner for EngineQueryRunner {
     /// 分析产物本身只回列名 + JSON 行、没有原始 batches，所以 `fact: None`——后续对分析
     /// 结果再做分析 / 带类型导出仍走显示矩阵降级档（链式产物新 FactFrame 依赖引擎
     /// `query_duckdb` 回 Arrow，属后置增强项）。
-    fn analyze(&self, request: &AnalysisRequest) -> Result<QueryData, String> {
+    fn analyze(&self, request: &AnalysisRequest, document: &str) -> Result<QueryData, String> {
         let mut source_fact_table: Option<String> = None;
         let mut source_fact_release = false;
         let mut degraded = false;
@@ -524,6 +527,7 @@ impl QueryRunner for EngineQueryRunner {
                         Some(table),
                         &request.sql,
                         frame.batches(),
+                        document,
                     )
                     .map_err(|error| error.to_string())?
                 } else {
@@ -536,6 +540,7 @@ impl QueryRunner for EngineQueryRunner {
                             None,
                             &request.sql,
                             frame.batches(),
+                            document,
                         )
                         .map_err(|error| error.to_string())?;
                     source_fact_table = Some(res.temp_table.clone());
@@ -555,6 +560,7 @@ impl QueryRunner for EngineQueryRunner {
                     &request.sql,
                     Some(request.columns.clone()),
                     Some(rows),
+                    document,
                 )
                 .map_err(|error| error.to_string())?
             }
@@ -704,10 +710,9 @@ impl QueryRunner for EngineQueryRunner {
             return Ok(format!("已重新挂载源库（catalog {alias}，新表可见了）"));
         }
 
-        // 联邦档：会话已经建好（源清单就是按同一套口径组装的），这里只重挂
-        let owner = self
-            .resolve_conn_id(connection)
-            .ok_or_else(|| "联邦源需要一个连接：先绑定一个，或在导航里选中它".to_string())?;
+        // 联邦档：会话已经建好（源清单就是按同一套口径组装的），这里只重挂。
+        // 会话身份 = 本文档 id（2026-11-26 起与绑定连接解耦）。
+        let owner = document;
         match alias {
             Some(alias) => {
                 fed_session::refresh_source(&owner, alias)?;
@@ -757,13 +762,26 @@ impl QueryRunner for EngineQueryRunner {
     /// 【T1.6】换主源（未限定名从此在它里面解析）
     fn set_federated_primary(
         &self,
+        document: &str,
         connection: Option<&str>,
         alias: &str,
     ) -> Result<String, String> {
-        let owner = self
-            .resolve_conn_id(connection)
-            .ok_or_else(|| "联邦源需要一个连接：先绑定一个，或在导航里选中它".to_string())?;
+        // 会话身份 = 本文档 id；`connection` 只留给未来"按连接选源"的判据
+        let _ = connection;
+        let owner = document;
+        // 会话里先切（可用性检查在这里：源不在 / 没挂上都当场报）
         fed_session::set_primary(&owner, alias)?;
-        Ok(format!("主源已切到 {alias}（未限定名的解析者）"))
+        // 【K3】主源进意图清单：不落库的话重启 / 重开会话就回到文档连接（未限定名换了解析者）
+        match self.fed.remember_primary(alias) {
+            Ok(PrimaryMemory::Project) => Ok(format!(
+                "主源已切到 {alias}（已记入项目，重启后仍是它）"
+            )),
+            Ok(PrimaryMemory::SessionOnly) => Ok(format!(
+                "主源已切到 {alias}（本文档会话内生效；没记进项目，重启后会回到文档连接）"
+            )),
+            Err(reason) => Err(format!(
+                "主源已切到 {alias}，但没能记进项目（重启后会回到文档连接）：{reason}"
+            )),
+        }
     }
 }

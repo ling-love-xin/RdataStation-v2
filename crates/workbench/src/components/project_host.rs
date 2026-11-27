@@ -236,13 +236,12 @@ fn clear_result_temp_tables() {
 ///
 /// 只清视图，**不动 ATTACH 进来的库文件**（那是「源」的另一种形态，该不该留由源的
 /// 作用域决定，见 `file_view::clear_file_views`）。
-fn clear_file_views(shared: &Shared) {
-    // 清单也得清：`loaded_files` 是面板自己记的一份登记（实例上删了视图它不会自己少）
-    shared.loaded_files.borrow_mut().clear();
+fn clear_file_views() {
+    // 索引不用在这儿清：`try_clear_file_views_global` 每真删掉一条视图就忘掉对应别名
     match engine::duckdb::file_view::try_clear_file_views_global() {
         Some(0) => {}
         Some(count) => tracing::info!("[project] 切项目清掉 {count} 个加源文件视图"),
-        // 拿不到锁：清单已清（面板不再摆上一项目的行），实例上的视图留到下次切项目再清
+        // 拿不到锁：视图与索引都留到下次（面板可能短暂摆着上一项目的行）
         None => tracing::info!("[project] 加源文件视图留待下次切项目清理（内存库锁被占）"),
     }
 }
@@ -264,7 +263,7 @@ fn refresh_after_open(shared: &Shared, cx: &mut App) {
     clear_result_temp_tables();
 
     // 铁律 F 组：加源的文件视图（`f_*`）也钉着上一项目的路径，一并清掉。
-    clear_file_views(shared);
+    clear_file_views();
 
     let (conns, notice) =
         crate::services::workspace_loader::load_connections_for_scope(root.as_deref());
@@ -370,6 +369,7 @@ mod tests {
         let table = engine::services::duckdb_service::DuckDbService::create_duckdb_temp_table(
             &["id".to_string()],
             &[],
+            "test",
         )
         .expect("建表");
         assert!(table.starts_with("tmp_q_"), "命名口径（D54）：{table}");
@@ -416,18 +416,12 @@ mod tests {
         std::fs::write(&csv, "id,name\n1,a\n").expect("写 csv");
         let path = csv.to_str().expect("路径").to_string();
 
-        let shared = Shared::with_connections(Vec::new(), None);
         let alias = engine::duckdb::file_view::load_file_global(&path).expect("加载");
-        // 面板登记与实例视图是两份：这里模拟“加源之后”的状态
-        shared
-            .loaded_files
-            .borrow_mut()
-            .push((alias.clone(), path.clone()));
         assert!(file_view_alive(&alias), "前置条件：视图应当已建好");
 
         let mut cleared = false;
         for _ in 0..100 {
-            clear_file_views(&shared);
+            clear_file_views();
             if !file_view_alive(&alias) {
                 cleared = true;
                 break;
@@ -435,6 +429,11 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(cleared, "切项目后不应再有加源文件视图：{alias}");
-        assert!(shared.loaded_files.borrow().is_empty(), "面板登记也该清空");
+        assert!(
+            engine::duckdb::file_view::file_entries()
+                .iter()
+                .all(|(seen, _)| seen != &alias),
+            "文件索引也该跟着清掉"
+        );
     }
 }

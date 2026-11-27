@@ -145,7 +145,6 @@ fn editing_saved_connection_backfills_form(cx: &mut TestAppContext) {
     );
     input.description = Some("备注回填".into());
     input.tags = Some("[\"t1\",\"t2\"]".into());
-    input.use_duckdb_fed = Some(false);
     let conn_id = rt.block_on(service.save(&input, None)).expect("保存连接");
 
     // 2) 走生产入口打开编辑对话框（`open` 内同步 `load_for_edit`）。

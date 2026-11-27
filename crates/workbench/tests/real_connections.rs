@@ -46,7 +46,6 @@ fn save_input<'a>(
         options: None,
         driver_properties: None,
         advanced_options: None,
-        use_duckdb_fed: Some(true),
         metadata_path: None,
         schema_name: None,
         // 测试按生产默认口径保存凭据（对齐 data_source_service 的 unwrap_or(true)）。
@@ -85,7 +84,6 @@ fn global_db_roundtrip_maps_to_connection_items() {
     assert_eq!(infos.len(), 1);
     assert_eq!(infos[0].name, "测试 MySQL 库");
     assert_eq!(infos[0].driver, "mysql");
-    assert_eq!(infos[0].use_duckdb_fed, Some(true));
 
     let items = map_infos(infos);
     assert_eq!(items.len(), 1);
@@ -98,7 +96,6 @@ fn global_db_roundtrip_maps_to_connection_items() {
     assert_eq!(items[0].host.as_deref(), Some("127.0.0.1"));
     assert_eq!(items[0].port, Some(3306));
     assert_eq!(items[0].database.as_deref(), Some("test"));
-    assert_eq!(items[0].use_duckdb_fed, Some(true));
     assert_eq!(items[0].description.as_deref(), Some("round 21 集成测试"));
 
     let _ = std::fs::remove_dir_all(&dir);

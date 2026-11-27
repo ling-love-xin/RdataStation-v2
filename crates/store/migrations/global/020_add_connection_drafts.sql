@@ -22,7 +22,6 @@ CREATE TABLE IF NOT EXISTS connection_drafts (
     ssl_cert            TEXT NOT NULL DEFAULT '',
     ssl_key             TEXT NOT NULL DEFAULT '',
     cache_path          TEXT NOT NULL DEFAULT '',
-    duckdb_fed          INTEGER NOT NULL DEFAULT 1,
     active_tab          INTEGER NOT NULL DEFAULT 0,
     hops_json           TEXT NOT NULL DEFAULT '[]',
     props_json          TEXT NOT NULL DEFAULT '[]',

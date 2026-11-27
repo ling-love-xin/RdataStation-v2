@@ -812,20 +812,18 @@ impl DataSourceService {
                     options: input.options.as_deref(),
                     driver_properties: input.driver_properties.as_deref(),
                     advanced_options: input.advanced_options.as_deref(),
-                    use_duckdb_fed: input.use_duckdb_fed,
                     metadata_path: input.metadata_path.as_deref(),
                     schema_name: input.schema_name.as_deref(),
                     save_password: input.save_password.unwrap_or(true),
                 })
                 .await?;
-            // Secret 联动：门控注册（2026-10-03 规则 = 加速开 + 有对应 DuckDB 扩展才注册；
+            // Secret 联动：门控注册（2026-11-27 起只按能力：有对应 DuckDB 扩展就注册；
             // 目标为全局分析库；失败仅告警，不影响连接）。
             super::secret_integration::ensure_secret_registered_gated(
                 self.analysis_db.as_deref(),
                 &conn_id,
                 &input.db_type,
                 &url,
-                input.use_duckdb_fed,
             );
             // 标签同步到连接组织存储（connection_tags 为权威检索源；JSON 字段保留兼容）。
             sync_connection_tags(self.global_db, &conn_id, input.tags.as_deref(), None);
@@ -852,8 +850,8 @@ impl DataSourceService {
             let proj = project_connection_from_input(&pid, input, &url)?;
             store.create_connection(&proj).await?;
             sync_connection_tags(self.global_db, &pid, input.tags.as_deref(), Some(&path));
-            // Secret 联动（项目侧补齐，2026-10-03）：与全局侧同规则门控——
-            // 加速开 + 有对应扩展才注册，目标为**项目分析库**（{项目}/.RSmeta/analytics.duckdb）。
+            // Secret 联动（项目侧补齐）：只按能力门控——有对应扩展才注册，
+            // 目标为**项目分析库**（{项目}/.RSmeta/analytics.duckdb）。
             let project_analysis_db =
                 super::secret_integration::analysis_db_for_scope(&pid, Some(&path));
             super::secret_integration::ensure_secret_registered_gated(
@@ -861,7 +859,6 @@ impl DataSourceService {
                 &pid,
                 &input.db_type,
                 &url,
-                input.use_duckdb_fed,
             );
             // 指纹接线：项目域登记（GP_ 项目快照侧同样走项目域）。
             register_identity_fp(
@@ -927,7 +924,6 @@ impl DataSourceService {
         row.password_encrypted = src.password_encrypted.clone();
         row.options = src.options.clone();
         row.tags = src.tags.clone();
-        row.use_duckdb_fed = src.use_duckdb_fed;
         row.metadata_path = src.metadata_path.clone();
         row.description = src.description.clone();
         row.driver_id = src.driver_id.clone();
@@ -980,25 +976,16 @@ impl DataSourceService {
             let proj = project_connection_from_input(conn_id, input, &url)?;
             store.update_connection(&proj).await?;
             sync_connection_tags(self.global_db, conn_id, input.tags.as_deref(), Some(path));
-            // Secret 联动（项目侧补齐，2026-10-03）：同规则门控——加速开 + 有扩展 → 注册；
-            // 加速关 → 移除（避免残留旧凭据）；目标为项目分析库。
+            // Secret 联动（项目侧）：只按能力门控——有对应扩展就注册；目标为项目分析库。
+            // 2026-11-27 起不再有「开关关掉就移除」分支：Secret 只在删除连接时清理。
             let project_analysis_db =
                 super::secret_integration::analysis_db_for_scope(conn_id, Some(path));
-            let fed_on = input.use_duckdb_fed == Some(true);
-            if fed_on {
-                super::secret_integration::ensure_secret_registered_gated(
-                    project_analysis_db.as_deref(),
-                    conn_id,
-                    &input.db_type,
-                    &url,
-                    Some(true),
-                );
-            } else {
-                let _ = super::secret_integration::remove_connection_secret_at(
-                    project_analysis_db.as_deref(),
-                    conn_id,
-                );
-            }
+            super::secret_integration::ensure_secret_registered_gated(
+                project_analysis_db.as_deref(),
+                conn_id,
+                &input.db_type,
+                &url,
+            );
             // 指纹接线：更新后重新登记（地址 / 主体变化 → 指纹变化 → 新缓存文件）。
             register_identity_fp(
                 conn_id,
@@ -1036,26 +1023,17 @@ impl DataSourceService {
                 options: input.options.clone(),
                 driver_properties: input.driver_properties.clone(),
                 advanced_options: input.advanced_options.clone(),
-                use_duckdb_fed: input.use_duckdb_fed,
                 metadata_path: input.metadata_path.clone(),
             })
             .await?;
 
-        // 联邦加速开关联动（门控规则 2026-10-03）：开 + 有对应扩展 → 注册；关 → 清理（避免残留旧凭据）。
-        if input.use_duckdb_fed == Some(true) {
-            super::secret_integration::ensure_secret_registered_gated(
-                self.analysis_db.as_deref(),
-                conn_id,
-                &input.db_type,
-                &url,
-                Some(true),
-            );
-        } else {
-            let _ = super::secret_integration::remove_connection_secret_at(
-                self.analysis_db.as_deref(),
-                conn_id,
-            );
-        }
+        // Secret 联动（全局侧）：只按能力门控——有对应扩展就注册；删连接时才清理。
+        super::secret_integration::ensure_secret_registered_gated(
+            self.analysis_db.as_deref(),
+            conn_id,
+            &input.db_type,
+            &url,
+        );
         // 标签同步（更新路径同样以连接组织存储为权威检索源）。
         sync_connection_tags(self.global_db, conn_id, input.tags.as_deref(), None);
         // 指纹接线：更新后重新登记（地址 / 主体变化 → 指纹变化 → 新缓存文件）。
@@ -1067,86 +1045,6 @@ impl DataSourceService {
             input.schema_name.as_deref(),
         );
         Ok(())
-    }
-
-    /// 只翻「DuckDB 直连（本地加速 / 用作联邦源）」这一个开关（数据对象面板「加源」的连接线）。
-    ///
-    /// 走**整记录回填**而不是裸 `UPDATE`：开关在 [`Self::update`] 里联动着 Secret 注册 /
-    /// 清理与连接指纹登记，绕开它会在开关翻开后留下不一致的凭据登记。回填与
-    /// 「复制为模板」同一条组装路径，差异只有两处：URL **带凭据**组装（Secret 联动要按
-    /// URL 里的凭据注册，与对话框保存同口径）、名字不变（不做改名）。密码不回传
-    /// （`None` = 保留现有密文——全局与项目两侧的更新 SQL 都是 `COALESCE` / 读旧值语义）。
-    pub async fn set_use_duckdb_fed(
-        &self,
-        conn_id: &str,
-        on: Option<bool>,
-        project_path: Option<&str>,
-    ) -> Result<(), CoreError> {
-        let ds = self
-            .get_with_project(conn_id, project_path)
-            .await?
-            .ok_or_else(|| {
-                CoreError::common(shared::error::CommonError::General(format!(
-                    "连接不存在：{conn_id}"
-                )))
-            })?;
-        let url = connection::url::build_connection_url(&ds)
-            .map_err(|e| CoreError::common(shared::error::CommonError::General(e)))?;
-        let scope = if id_prefix::is_global(conn_id) {
-            ConnectionScope::Global
-        } else {
-            ConnectionScope::Project
-        };
-        let input = DataSourceSaveInput {
-            name: ds.name.clone(),
-            db_type: ds.db_type.clone(),
-            url,
-            // 密码不回传：两侧存储都按「None = 保留现有密文」处理，避免无谓的重加密
-            password: None,
-            username: ds.username.clone(),
-            scope,
-            description: ds.description.clone(),
-            driver_id: ds.driver_id.clone(),
-            environment_id: ds.environment_id.clone(),
-            auth_config_id: ds.auth_config_id.clone(),
-            auth_method: ds.auth_method.clone(),
-            network_config_id: ds.network_config_id.clone(),
-            driver_properties: ds.driver_properties.clone(),
-            advanced_options: ds.advanced_options.clone(),
-            options: ds.options.clone(),
-            tags: ds.tags.clone(),
-            // 三态原样回填：`None` = 不可直连（显式写 NULL），`Some(false)` = 可直连未加速
-            use_duckdb_fed: on,
-            schema_name: ds.schema_name.clone(),
-            metadata_path: ds.metadata_path.clone(),
-            save_password: None,
-        };
-        let outcome = self.update(conn_id, &input, project_path).await;
-        // 「有值即登记」（2026-11-26）：开关落库成功后，项目登记表里必须有这一行——
-        // 打开开关的是对话框 / 面板两处，登记不能只由面板补，否则「只在对话框开过加速」
-        // 的连接在数据对象面板里就没有登记行（未挂载也列不出来）。
-        // 登记失败**不回滚开关**（开关是能力事实、登记是意图）；这里只记 warn，
-        // 面板「加源」路径还会再幂等试一次并把原因给到用户。
-        if outcome.is_ok() {
-            if let (true, Some(path)) = (on.is_some(), project_path) {
-                let path = path.trim();
-                if !path.is_empty() {
-                    if let Err(error) = engine::analysis::registration::ensure_conn_registered(
-                        std::path::Path::new(path),
-                        conn_id,
-                        &ds.name,
-                    ) {
-                        tracing::warn!(
-                            target: "rds_connection::analysis_registration",
-                            conn_id,
-                            error = %error,
-                            "连接开关已写值，但项目分析源登记失败"
-                        );
-                    }
-                }
-            }
-        }
-        outcome
     }
 
     /// 删除连接（物理删除 + 清理分析库中的 DuckDB Secret）。
@@ -1311,7 +1209,6 @@ impl DataSourceService {
             advanced_options: ds.advanced_options.clone(),
             options: ds.options.clone(),
             tags: ds.tags.clone(),
-            use_duckdb_fed: ds.use_duckdb_fed,
             schema_name: ds.schema_name.clone(),
             metadata_path: ds.metadata_path.clone(),
             save_password: None,
@@ -1379,7 +1276,6 @@ impl DataSourceService {
             password_encrypted: src.password_encrypted.clone(),
             options: src.options.clone(),
             tags: src.tags.clone(),
-            use_duckdb_fed: src.use_duckdb_fed,
             metadata_path: src.metadata_path.clone(),
             is_active: true,
             server_version: src.server_version.clone(),
@@ -1505,7 +1401,6 @@ impl DataSourceService {
             advanced_options: ds.advanced_options.clone(),
             options: ds.options.clone(),
             tags: ds.tags.clone(),
-            use_duckdb_fed: ds.use_duckdb_fed,
             schema_name: ds.schema_name.clone(),
             metadata_path: ds.metadata_path.clone(),
             save_password: None,
@@ -1884,7 +1779,6 @@ fn project_connection_from_input(
         password_encrypted,
         options: input.options.clone(),
         tags: input.tags.clone(),
-        use_duckdb_fed: input.use_duckdb_fed,
         metadata_path: input.metadata_path.clone(),
         is_active: true,
         server_version: None,
@@ -1933,7 +1827,6 @@ fn map_info_to_data_source(
         advanced_options: info.advanced_options,
         options: info.options,
         tags: info.tags,
-        use_duckdb_fed: info.use_duckdb_fed,
         metadata_path: info.metadata_path,
         server_version: info.server_version,
         scope,
@@ -1972,7 +1865,6 @@ fn map_project_connection_to_data_source(row: ProjectConnection) -> DataSource {
         advanced_options: row.advanced_options,
         options: row.options,
         tags: row.tags,
-        use_duckdb_fed: row.use_duckdb_fed,
         metadata_path: row.metadata_path,
         server_version: row.server_version,
         scope,
@@ -2185,7 +2077,6 @@ mod tests {
             password_encrypted: None,
             options: None,
             tags: None,
-            use_duckdb_fed: None,
             metadata_path: None,
             is_active: true,
             created_at: String::new(),

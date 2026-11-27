@@ -78,6 +78,18 @@ impl BasePanel for EditorHostPanel {
         // 文档关了，结果也不留（结果不跟着已关闭的文档挂着）
         self.shared
             .update_results(|store| store.clear(&self.document));
+        // 临时结果是**实例资源**（`rds_tmp`），跨文档共享没问题；但"哪份工作建的"要追得到，
+        // 否则关掉一份工作它的表永远留着（TTL 也要等半小时）。这里按 owner = 文档 id 收一批，
+        // 再把这份工作的分析会话关掉（会话占着的别名 / ATTACH 随连接一起走）。
+        if let Some(instance) = engine::duckdb::instance::current() {
+            let owner = self.document.as_str();
+            if let Err(error) = instance.drop_temps_of(owner) {
+                tracing::warn!("关文档 {owner} 收临时结果失败：{error}");
+            }
+            if let Some(session) = instance.session_for_owner(owner) {
+                instance.close_session(session.id());
+            }
+        }
         cx.notify();
     }
 }

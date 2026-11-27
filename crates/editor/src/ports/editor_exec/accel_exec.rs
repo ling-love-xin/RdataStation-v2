@@ -19,6 +19,9 @@ impl EngineQueryRunner {
     ) -> Result<QueryData, String> {
         let source = self.accel_source(connection)?;
         let (session, _alias) = accel::ensure_on_instance(&source, document)?;
+        // 【K1】发送前预检：加速档也在 DuckDB 上跑，表名同样要先落到实例上
+        let facts = crate::exec::preflight::Facts::capture(crate::exec::preflight::primary_of(document));
+        crate::exec::preflight::check(sql, engine::sql::SqlDialect::Duckdb, &facts)?;
         let (to_run, segmented) = match window_sql(sql, crate::execution::SEGMENT_ROWS, 0) {
             Some(wrapped) => (wrapped, true),
             None => (sql.to_string(), false),

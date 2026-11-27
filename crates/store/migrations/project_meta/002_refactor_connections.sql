@@ -22,7 +22,6 @@ CREATE TABLE connections (
     password_encrypted TEXT,                    -- 加密后的密码
     options            TEXT,                    -- JSON 格式的额外配置
     tags               TEXT,                    -- JSON 格式的标签数组
-    use_duckdb_fed     BOOLEAN DEFAULT 0,       -- 是否启用 DuckDB 联邦分析
     metadata_path      TEXT,                    -- 元数据缓存文件路径
     is_active          BOOLEAN DEFAULT 1,       -- 是否激活
     created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -51,4 +50,3 @@ DROP TABLE connections_old;
 CREATE INDEX idx_connections_driver ON connections(driver);
 CREATE INDEX idx_connections_active ON connections(is_active);
 CREATE INDEX idx_connections_updated ON connections(updated_at DESC);
-CREATE INDEX idx_connections_duckdb_fed ON connections(use_duckdb_fed);

@@ -2071,8 +2071,6 @@ mod tests {
 
                 description: None,
 
-                use_duckdb_fed: None,
-
                 environment: None,
 
                 created_at: String::new(),
