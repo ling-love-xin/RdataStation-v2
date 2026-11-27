@@ -25,6 +25,7 @@ pub mod rows;
 pub mod schema_guard;
 pub mod schema_sql;
 pub mod semantics;
+pub mod table_asset;
 pub mod tag;
 pub mod timeline;
 pub mod version;
