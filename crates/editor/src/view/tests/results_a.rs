@@ -261,21 +261,22 @@ fn the_result_grid_rows_are_compact(cx: &mut TestAppContext) {
         .debug_bounds("editor-result-rowno-1")
         .expect("第二行也在");
     let pitch = second.top() - first.top();
+    // 2026-11-27（main 侧 result_panel 对齐 DBeaver）：行高从组件 XSmall(26) 换成
+    // `result_panel::ui::RESULT_TABLE_SIZE = Size(20px)`，行号槽实测 15px 高、行距 20px。
     assert!(
-        pitch >= gpui_kit::px(26.) && pitch <= gpui_kit::px(27.),
-        "行距 = 组件 XSmall（26px）+ 行分隔线；实测 {pitch:?}"
+        pitch >= gpui_kit::px(20.) && pitch <= gpui_kit::px(21.),
+        "行距 = result_panel 的紧凑档（20px，DBeaver 对齐）+ 行分隔线；实测 {pitch:?}"
     );
 }
 
-/// 结果网格表头的排序入口**真点击**：箭头在表头右端，不是表头正文。
+/// 结果网格表头的排序入口**真点击**：箭头在表头行内右端，不是表头正文。
 ///
-/// 与 Mock 预览表同一条口径：组件 0.7.1 的 `on_col_head_click` 只做**列选择**（本表关掉了），
-/// 排序挂在 `render_sort_icon` 上。表头现在由 `render_th` 自画（截断 + 悬停全文 + 登记坐标），
-/// 本用例同时看住「自画之后箭头还在」——箭头是组件画在自己那一层的，接管表头容易碰坏它。
+/// 2026-11-27（main 侧 result_panel 改自绘真值图标）：组件槽已关（`table_impl` 的 `column()`
+/// 不设 `sort`），箭头改由 `grid/header.rs` 自绘（`editor-result-sort-icon-{col}`，
+/// id 自带点击处理与冒泡截断，三态「未排 → 升 → 降 → 清空」）。所以这里直接点那个控件的
+/// 几何中心——不再像旧版那样"从表头格右端往外盲探像素"（自绘表头铺满整格后那套探测全部落空）。
 #[gpui_kit::test]
 fn the_result_header_sorts_from_its_arrow(cx: &mut TestAppContext) {
-    const PROBE: [f32; 7] = [2., 6., 10., 14., 18., 22., 26.];
-
     cx.update(gpui_kit::init);
     let (shared, id) = shared_with_sized_runner("select rows=3;");
     let (panel, cx) = open_panel(cx, &shared, &id);
@@ -298,10 +299,10 @@ fn the_result_header_sorts_from_its_arrow(cx: &mut TestAppContext) {
     });
 
     // `debug_selector` 只是给用例找坐标（`.id(...)` 不登记坐标）
-    for slot in ["editor-result-th-0", "editor-result-th-1"] {
+    for slot in ["editor-result-th-main-0", "editor-result-th-main-1"] {
         assert!(
             cx.debug_bounds(slot).is_some(),
-            "{slot} 应登记坐标（行号槽也走同一个 render_th）"
+            "{slot} 应登记坐标（行号槽也走同一个 render_th，主行才是列名那一行）"
         );
     }
     let grid = cx.update(|_window, cx| panel.read(cx).grid_for_test());
@@ -309,37 +310,38 @@ fn the_result_header_sorts_from_its_arrow(cx: &mut TestAppContext) {
         |cx: &mut VisualTestContext| cx.update(|_window, cx| grid.read(cx).delegate().sort_state());
     assert_eq!(sort_state(cx), None, "还没点过就不该有排序");
 
-    // 行号槽：右侧没有箭头，点多少次都不该有反应
-    let slot = cx.debug_bounds("editor-result-th-0").expect("行号槽坐标");
-    for offset in PROBE {
-        cx.simulate_click(
-            gpui_kit::Point::new(slot.right() + gpui_kit::px(offset), slot.center().y),
-            gpui_kit::Modifiers::default(),
-        );
-    }
-    assert_eq!(sort_state(cx), None, "行号槽不给排序");
+    // 行号槽（第 0 列）：真值 `isElementSupportsSort` 不含它 → 压根不画排序控件
+    assert!(
+        cx.debug_bounds("editor-result-sort-icon-0").is_none(),
+        "行号槽不该有排序图标"
+    );
 
-    // 数据列：右端往左探，命中箭头即按这一列本地排序（组件给的第一下是降序）
-    let head = cx.debug_bounds("editor-result-th-1").expect("数据列坐标");
-    let mut clicked = false;
-    for offset in PROBE {
-        cx.simulate_click(
-            gpui_kit::Point::new(head.right() + gpui_kit::px(offset), head.center().y),
-            gpui_kit::Modifiers::default(),
-        );
-        if sort_state(cx).is_some() {
-            clicked = true;
-            break;
-        }
-    }
-    assert!(clicked, "表头右端应有可点的排序箭头（探了 {PROBE:?}）");
+    // 数据列（第 1 列）：点自绘箭头的几何中心
+    let arrow = cx
+        .debug_bounds("editor-result-sort-icon-1")
+        .expect("数据列应有排序图标（自绘真值 SVG，三态各一张）");
+    let arrow_center = arrow.center();
+
+    cx.simulate_click(arrow_center, gpui_kit::Modifiers::default());
     assert_eq!(
         sort_state(cx),
-        Some((0, true)),
-        "箭头给的是「这一列 + 降序」，本地排序只重排视图行序"
+        Some((0, false)),
+        "第一下是升序（真值 `toggleSortOrder`：未排 → 升）"
     );
     let first = cx.update(|_window, cx| grid.read(cx).delegate().visible_rows()[0].clone());
-    assert_eq!(first, ["2"], "降序之后第一行是最大的那个（0,1,2 → 2,1,0）");
+    assert_eq!(first, ["0"], "升序之后第一行是最小的那个（2,1,0 → 0,1,2）");
+
+    cx.simulate_click(arrow_center, gpui_kit::Modifiers::default());
+    assert_eq!(sort_state(cx), Some((0, true)), "第二下转降序");
+    let first = cx.update(|_window, cx| grid.read(cx).delegate().visible_rows()[0].clone());
+    assert_eq!(first, ["2"], "降序之后第一行是最大的那个");
+
+    cx.simulate_click(arrow_center, gpui_kit::Modifiers::default());
+    assert_eq!(
+        sort_state(cx),
+        None,
+        "第三下清空（未排 → 升 → 降 → 清空，真值三态循环）"
+    );
 }
 
 /// 结果区在可拖拽分栏里：有结果时出现在下半区，且编辑区没被挤掉
