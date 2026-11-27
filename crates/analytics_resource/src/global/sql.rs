@@ -105,6 +105,25 @@ impl GlobalInstanceStore {
         .await
     }
 
+    /// 删掉指定 schema 下的全局表（快照在 `rds_archive`）。
+    pub(super) async fn drop_global_archive_table(
+        &self,
+        schema: &str,
+        name: &str,
+    ) -> Result<(), CoreError> {
+        self.with_duckdb(|conn| {
+            conn.execute_batch(&format!(
+                "DROP TABLE IF EXISTS {}.{}.{};",
+                quote_ident(shared::duckdb_root::GLOBAL_ALIAS),
+                quote_ident(schema),
+                quote_ident(name)
+            ))
+            .map_err(|e| duckdb_err("drop_global_archive_table", &e.to_string()))?;
+            Ok(())
+        })
+        .await
+    }
+
     /// 同名链最新一版的登记 id（分发写完项目行后，用来记 `derived_from` 的上游）。
     ///
     /// 只看未软删行（分发拿到的就是当前那一版）；软删行是覆盖升级留下的历史，不参与。
@@ -122,27 +141,15 @@ impl GlobalInstanceStore {
         })
     }
 
-    /// 按 `KeepVersions` 裁剪全局同名链的**历史版本表**（只删内容，不删登记与版本快照）。
-    ///
-    /// 文件资产不再有“副本裁剪”：版本内容由 manifest + CAS 保留，`KeepVersions` 只作用于
-    /// 表型资产。**当前版本那张表是「本体」，永远不删**；`keep` 数的是历史版本份数——
-    /// 所以 `MetadataOnly`（= 0）只留当前那一张，`Keep(5)` 留当前 + 最近 5 个历史表。
-    ///
-    /// 删表不删登记：`analytics_table` 仍是档位判据，读取面据此在表不存在时给出
-    /// 「副本已按保留策略清理」的人话，而不是让 DuckDB 抛 Catalog Error。
-    ///
-    /// 单次裁剪失败只记日志：表多留一份只是占空间，升级本身不该因此回滚，
-    /// 下次升级会再裁一遍。
-    pub(super) async fn prune_version_tables(
+    /// 数据文件升级出来的旧单行表按同名链裁剪（与表快照无关）。
+    async fn prune_legacy_version_tables(
         &self,
         name: &str,
         keep: crate::model::KeepVersions,
     ) -> Result<usize, CoreError> {
         let Some(keep) = keep.limit() else {
-            // `All`：不裁剪，连查询都不做。
             return Ok(0);
         };
-        // 同名链全部版本，**含已软删的登记行**：覆盖升级会软删旧登记，但那张旧表还在。
         let versions: Vec<(i32, Option<String>)> = self.with_sqlite(|conn| {
             let mut stmt = conn
                 .prepare(
@@ -152,29 +159,20 @@ impl GlobalInstanceStore {
                     ORDER BY version DESC
                     "#,
                 )
-                .map_err(sqlite_err("prepare_prune_versions"))?;
+                .map_err(sqlite_err("prepare_prune_legacy_versions"))?;
             let rows = stmt
                 .query_map(rusqlite::params![name], |row| {
                     Ok((row.get::<_, i32>(0)?, row.get::<_, Option<String>>(1)?))
                 })
-                .map_err(sqlite_err("query_prune_versions"))?;
+                .map_err(sqlite_err("query_prune_legacy_versions"))?;
             rows.collect::<Result<Vec<_>, _>>()
-                .map_err(sqlite_err("collect_prune_versions"))
+                .map_err(sqlite_err("collect_prune_legacy_versions"))
         })?;
-
-        // 被项目引用版本 pin 住的历史表不能裁：保留策略只对"没人引用"的旧版生效。
-        // 当前版本本来就不会进裁剪循环；这里只保护 index > keep 的历史版本。
         let referenced = self.active_ref_versions(name)?;
         let referenced: std::collections::HashSet<i32> = referenced.into_iter().collect();
-
         let mut removed = 0usize;
         for (index, (version, table)) in versions.into_iter().enumerate() {
-            // index 0 = 当前版本（本体）；1..=keep = 要留的历史份数。
-            if index <= keep as usize {
-                continue;
-            }
-            if referenced.contains(&version) {
-                tracing::debug!(name, version, "全局历史表仍被项目引用，跳过裁剪");
+            if index <= keep as usize || referenced.contains(&version) {
                 continue;
             }
             let Some(table) = table else {
@@ -182,28 +180,99 @@ impl GlobalInstanceStore {
             };
             match self.drop_global_table(&table).await {
                 Ok(()) => removed += 1,
+                Err(error) => tracing::warn!(error = %error, table, name, "旧全局表裁剪失败"),
+            }
+        }
+        Ok(removed)
+    }
+
+    /// 按 `KeepVersions` 裁剪全局表快照的**历史版本**（只删物理快照，不删版本索引）。
+    ///
+    /// `keep` 数的是历史版本份数：`MetadataOnly`（0）只留当前快照，`Keep(5)` 留当前 +
+    /// 最近 5 份历史。当前 head 永远不删；被项目 pin 的版本跳过。
+    pub(super) async fn prune_version_tables(
+        &self,
+        name: &str,
+        keep: crate::model::KeepVersions,
+    ) -> Result<usize, CoreError> {
+        let Some(head) = self.global_table_head(name)? else {
+            return Ok(0);
+        };
+        let snapshot_versions: i64 = self.with_sqlite(|conn| {
+            conn.query_row(
+                "SELECT count(*) FROM table_asset_versions WHERE asset_id = ?1",
+                rusqlite::params![head.asset_id],
+                |row| row.get(0),
+            )
+            .map_err(sqlite_err("count_prune_snapshot_versions"))
+        })?;
+        if snapshot_versions == 0 {
+            return self.prune_legacy_version_tables(name, keep).await;
+        }
+        let Some(keep) = keep.limit() else {
+            return Ok(0);
+        };
+        let versions: Vec<(i32, String, String)> = self.with_sqlite(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+                    SELECT tav.version, ts.physical_schema, ts.physical_table
+                    FROM table_asset_versions tav
+                    JOIN table_snapshots ts ON ts.snapshot_id = tav.snapshot_id
+                    WHERE tav.asset_id = ?
+                    ORDER BY tav.version DESC
+                    "#,
+                )
+                .map_err(sqlite_err("prepare_prune_versions"))?;
+            let rows = stmt
+                .query_map(rusqlite::params![head.asset_id], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                })
+                .map_err(sqlite_err("query_prune_versions"))?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(sqlite_err("collect_prune_versions"))
+        })?;
+
+        let referenced = self.active_ref_versions(name)?;
+        let referenced: std::collections::HashSet<i32> = referenced.into_iter().collect();
+
+        let mut removed = 0usize;
+        for (index, (version, schema, table)) in versions.into_iter().enumerate() {
+            if index <= keep as usize || version == head.version {
+                continue;
+            }
+            if referenced.contains(&version) {
+                tracing::debug!(name, version, "全局快照仍被项目引用，跳过裁剪");
+                continue;
+            }
+            match self.drop_global_archive_table(&schema, &table).await {
+                Ok(()) => removed += 1,
                 Err(error) => tracing::warn!(
                     error = %error,
                     table,
                     name,
-                    "全局历史表裁剪失败（保留策略这一次没生效，下次升级会再裁）"
+                    "全局快照裁剪失败（保留策略这一次没生效，下次升级会再裁）"
                 ),
             }
         }
         Ok(removed)
     }
 
-    /// 统计全局表行数 / 列数（升级与分发共用；参数是实际表名）。
-    pub(super) async fn table_stats(&self, name: &str) -> Result<(Option<i32>, Option<i32>), CoreError> {
+    /// 统计全局表行数 / 列数（升级与分发共用；参数是实际表名，可带 `schema.table`）。
+    pub(super) async fn table_stats(
+        &self,
+        name: &str,
+    ) -> Result<(Option<i32>, Option<i32>), CoreError> {
+        let ref_sql = qualified_ident(name);
         self.with_duckdb(|conn| {
             let mut stmt = conn
-                .prepare(&format!("SELECT count(*) FROM {};", quote_ident(name)))
+                .prepare(&format!("SELECT count(*) FROM {ref_sql};"))
                 .map_err(|e| duckdb_err("prepare_count", &e.to_string()))?;
             let rows: i64 = stmt
                 .query_row([], |row| row.get(0))
                 .map_err(|e| duckdb_err("query_count", &e.to_string()))?;
             let mut stmt = conn
-                .prepare(&format!("DESCRIBE {};", quote_ident(name)))
+                .prepare(&format!("DESCRIBE {ref_sql};"))
                 .map_err(|e| duckdb_err("prepare_describe", &e.to_string()))?;
             let columns = stmt
                 .query_map([], |_| Ok(()))
@@ -216,7 +285,17 @@ impl GlobalInstanceStore {
         })
         .await
     }
+}
 
+/// 指定 schema + 表名是否存在（快照在 `rds_archive`，不能用只认表名的旧检查）。
+pub(crate) fn table_exists_in(conn: &duckdb::Connection, schema: &str, table: &str) -> bool {
+    conn.prepare(
+        "SELECT count(*) FROM information_schema.tables \
+         WHERE table_schema = ?1 AND table_name = ?2",
+    )
+    .and_then(|mut stmt| stmt.query_row(duckdb::params![schema, table], |row| row.get::<_, i64>(0)))
+    .map(|count| count > 0)
+    .unwrap_or(false)
 }
 
 /// 按扩展名选 DuckDB read 表达式（白名单与 `engine/duckdb/file_reader.rs` 一致）。
@@ -234,6 +313,14 @@ pub(crate) fn file_read_expr(abs_path: &Path) -> Option<String> {
         _ => return None,
     };
     Some(expr)
+}
+
+/// 标识符引用（双引号 + 内部转义）；可带 `schema.table`，逐段加引号。
+pub(crate) fn qualified_ident(name: &str) -> String {
+    name.split('.')
+        .map(quote_ident)
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 /// 标识符引用（双引号 + 内部转义）；DuckDB 把标识符规范化为小写，读写同口径。
@@ -258,4 +345,3 @@ pub(crate) fn duckdb_err(op: &str, reason: &str) -> CoreError {
         reason: reason.to_string(),
     })
 }
-

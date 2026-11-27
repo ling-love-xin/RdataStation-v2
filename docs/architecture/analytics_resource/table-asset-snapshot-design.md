@@ -404,10 +404,21 @@ manifest_id = sha256(canonical({
 | 表版本 / 租约 store | `crates/analytics_resource/src/store/table_asset.rs`（新模块） | 已实现 |
 | 归档 / checkout / 再归档 / 恢复 | `crates/analytics_resource/src/service/table_asset.rs`（新模块） | 已实现 |
 | 归档 schema 只读守卫 | `crates/engine` 的 SQL 闸门 + `rds_archive` 过滤 | 未实现 |
-| 全局发布 / fork / 分发 / 引用 | `global/promote.rs`、`global/refs.rs`、`global/distribute.rs` | 未实现 |
-| 保留与 GC | `global/sql.rs`、新的 `jobs/table_gc.rs` | 未实现 |
-| 删除旧表资产语义 | `table_asset.rs`（旧 `register` / `table_fingerprint`）、`global/promote.rs` 旧表链、`analytics_global_refs` 旧 name 列 | 项目侧已删除；全局侧未实现 |
+| 全局发布 / fork / 分发 / 引用 | `global/promote.rs`、`global/refs.rs`、`global/distribute.rs` | 表型升级、零复制恢复、分发与引用检查已接快照；引用键仍为 name+version，待切 asset_id |
+| 保留与 GC | `global/sql.rs`、新的 `jobs/table_gc.rs` | `KeepVersions` 裁剪已按版本快照实现；独立 GC 任务未实现 |
+| 删除旧表资产语义 | `table_asset.rs`（旧 `register` / `table_fingerprint`）、`global/promote.rs` 旧表链、`analytics_global_refs` 旧 name 列 | 项目侧已删除；全局表型已走快照，文件型旧路径保留；`analytics_global_refs` 未改 |
 | `存为表` 与归档拆分 | `crates/workbench/src/services/persist_jobs.rs`、数据对象面板入口 | 已实现 |
 | 版本对比（schema / 行） | `jobs/version.rs` + `dialogs/version_diff.rs` 扩展 | 版本历史已接快照；对比未实现 |
 
 > 本文是设计定稿，上表全部为待落码项。落地时直接替换旧表资产路径，**不建立旧数据迁移、不保留双读双写或 feature flag**；每刀完成后同步 `README.md` 与 `file-asset-cas-implementation-plan.md` 的边界说明。
+
+### 12.1 全局侧落地明细
+
+- 全局表资产登记：一条活跃 `kind='analysis'` 行持稳定 `arg_`，版本链在 `table_asset_versions`，物理快照在全局 `rds_archive.arc_*`（`global/table_asset.rs`）。
+- 升级：`promote_table_from_project` 支持 `schema.table` 源（项目表资产传 `rds_archive.arc_*`）；同 manifest 复用全局快照，新内容才追加版本。
+- 恢复：`restore_global_table_version` 新增版本直接指向旧 `snapshot_id`，不复制数据。
+- 分发 / 引用：按 `physical_schema` 拼三部分限定名；表存在性检查按 schema。
+- 回收站：trash 只软删登记，快照保留；purge 才删版本索引、孤立快照与 manifest。
+- 验证：`rds-analytics-resource` 303 passed；`rds-workbench` 221 passed；`rds-insight` 266 passed。
+
+残留：全局引用键仍为 name+version；文件型全局升级仍走旧单行路径；`rds_archive` / `rds_work` 的 SQL 只读闸门、独立 GC 与全局版本历史 UI 未接。

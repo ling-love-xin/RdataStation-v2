@@ -14,14 +14,23 @@ fn open_analytics_table(host: &ResourceHost, detail: &ArchiveDetail, cx: &mut Ap
         host.notice(tr("资产库：这条表型资产没有登记表名，无法取样"), cx);
         return;
     };
+    // 表资产的本体是不可变快照，位于 `rds_archive`；已限定名不再补。
+    let table_ref = if table.contains('.') {
+        table.to_string()
+    } else {
+        format!("rds_archive.{table}")
+    };
     // 全局行的本体在**全局**分析库（另一个文件）：只能经短命会话挂 `rds_global`
     // 读；项目行的表就在当前项目库里，直取即可。
     let source = match detail.scope {
         crate::model::RowScope::Global => {
-            insight::SampleSource::on_global(table, detail.name.clone())
+            insight::SampleSource::on_global(table_ref, detail.name.clone())
         }
         _ => {
-            let sql = format!("SELECT * FROM {};", crate::global::quote_ident(table));
+            let sql = format!(
+                "SELECT * FROM {};",
+                crate::global::sql::qualified_ident(&table_ref)
+            );
             insight::SampleSource::on_duckdb(sql, detail.name.clone())
         }
     };
@@ -36,7 +45,12 @@ fn open_global_ref(host: &ResourceHost, detail: &ArchiveDetail, cx: &mut App) {
         return;
     };
     let label = detail.alias.clone().unwrap_or_else(|| detail.name.clone());
-    let source = insight::SampleSource::on_global(table, label.clone());
+    let table_ref = if table.contains('.') {
+        table.to_string()
+    } else {
+        format!("rds_archive.{table}")
+    };
+    let source = insight::SampleSource::on_global(table_ref, label.clone());
     host.backend.open_insight_source_table(source, label, cx);
     host.notice(
         format!(
@@ -269,7 +283,11 @@ pub(super) fn request_promote_to_global(host: &ResourceHost, detail: &ArchiveDet
                         .join("analytics.duckdb"),
                     None,
                     PromoteKind::DataFile,
-                    Some(table.to_string()),
+                    Some(if table.contains('.') {
+                        table.to_string()
+                    } else {
+                        format!("rds_archive.{table}")
+                    }),
                 )
             }
         };

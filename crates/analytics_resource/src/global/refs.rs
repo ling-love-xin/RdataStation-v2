@@ -60,6 +60,7 @@ impl GlobalInstanceStore {
             _size,
             table,
             _manifest_id,
+            source_schema,
         ) = row;
         // 只有 `kind = file` 才是文件资产；数据文件升级后也留了本体（用于版本恢复），
         // 但它仍以派生表被引用，不能按 `file_rel_path` 一刀切拒绝。
@@ -69,7 +70,14 @@ impl GlobalInstanceStore {
             )));
         }
         let table = table.unwrap_or_else(|| global_name.to_string());
-        if !self.table_exists(&table).await? {
+        let exists = match source_schema.as_deref() {
+            Some(schema) => {
+                self.with_duckdb(|conn| Ok(table_exists_in(conn, schema, &table)))
+                    .await?
+            }
+            None => self.table_exists(&table).await?,
+        };
+        if !exists {
             return Err(InstanceOpError::Core(CoreError::common(
                 CommonError::General(format!(
                     "全局「{global_name}」v{version} 的内容表（{table}）不存在，无法引用"
@@ -279,7 +287,17 @@ impl GlobalInstanceStore {
                      column_count = ?6, parent_version_id = ?7, version = version + 1, \
                      source_table = ?9, updated_at = ?8 \
                  WHERE id = ?1 AND deleted_at IS NULL",
-                rusqlite::params![id, alias, origin_ref, hash, rows, cols, snapshot_id, now, table],
+                rusqlite::params![
+                    id,
+                    alias,
+                    origin_ref,
+                    hash,
+                    rows,
+                    cols,
+                    snapshot_id,
+                    now,
+                    table
+                ],
             )
             .map_err(|e| InstanceOpError::Core(sqlite_err("append_project_ref")(e)))?;
         if affected == 0 {

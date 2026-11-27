@@ -185,8 +185,8 @@ impl GlobalInstanceStore {
         version: i32,
         fork_name: &str,
     ) -> Result<GlobalFileForkOutcome, InstanceOpError> {
-        let source: Option<(String, Option<String>, Option<String>, i64, Option<String>)> =
-            self.with_sqlite(|conn| {
+        let source: Option<(String, Option<String>, Option<String>, i64, Option<String>)> = self
+            .with_sqlite(|conn| {
                 conn.query_row(
                     r#"
                     SELECT ar.id, ar.file_rel_path, ar.content_hash, ar.file_size, fav.manifest_id
@@ -228,17 +228,15 @@ impl GlobalInstanceStore {
             .await
             .map_err(InstanceOpError::Core)?;
 
-        if self
-            .with_sqlite(|conn| {
-                conn.query_row(
-                    "SELECT count(*) FROM analytics_resources \
+        if self.with_sqlite(|conn| {
+            conn.query_row(
+                "SELECT count(*) FROM analytics_resources \
                      WHERE name = ?1 AND scope = 'global' AND deleted_at IS NULL",
-                    rusqlite::params![fork_name],
-                    |row| row.get::<_, i64>(0),
-                )
-                .map_err(sqlite_err("fork_check_name"))
-            })?
-            > 0
+                rusqlite::params![fork_name],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(sqlite_err("fork_check_name"))
+        })? > 0
         {
             return Err(InstanceOpError::Conflict {
                 name: fork_name.to_string(),
@@ -399,6 +397,7 @@ impl GlobalInstanceStore {
             _size,
             _table,
             manifest_id,
+            _schema,
         )) = row
         else {
             return Err(InstanceOpError::NotFound {
@@ -421,7 +420,11 @@ impl GlobalInstanceStore {
             )));
         };
         let lease_key = format!("global:{name}");
-        if let Some(lease) = project.active_lease(&lease_key).await.map_err(InstanceOpError::Core)? {
+        if let Some(lease) = project
+            .active_lease(&lease_key)
+            .await
+            .map_err(InstanceOpError::Core)?
+        {
             return Err(InstanceOpError::LeaseActive {
                 name: name.to_string(),
                 project_root: project_root.display().to_string(),
@@ -430,10 +433,9 @@ impl GlobalInstanceStore {
         }
         let dest = resolve_draft_path(project_root, dest_rel)?;
         if dest.exists() {
-            return Err(InstanceOpError::Core(CoreError::common(CommonError::General(format!(
-                "取回目标已存在，拒绝覆盖：{}",
-                dest.display()
-            )))));
+            return Err(InstanceOpError::Core(CoreError::common(
+                CommonError::General(format!("取回目标已存在，拒绝覆盖：{}", dest.display())),
+            )));
         }
 
         let global_cas = self.file_cas();
@@ -457,7 +459,9 @@ impl GlobalInstanceStore {
         {
             Ok(lease) => lease,
             Err(error) => {
-                let _ = self.close_global_lease(name, project_root, "abandoned").await;
+                let _ = self
+                    .close_global_lease(name, project_root, "abandoned")
+                    .await;
                 let _ = fs::remove_file(&dest).await;
                 return Err(InstanceOpError::Core(error));
             }
@@ -885,7 +889,9 @@ fn fork_rel_path(original: &str, fork_name: &str) -> String {
         .and_then(|ext| ext.to_str())
         .map(|ext| format!(".{ext}"))
         .unwrap_or_default();
-    let dir = Path::new(original).parent().filter(|path| !path.as_os_str().is_empty());
+    let dir = Path::new(original)
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty());
     let file = format!("{fork_name}{extension}");
     match dir {
         Some(dir) => dir.join(file).to_string_lossy().replace('\\', "/"),

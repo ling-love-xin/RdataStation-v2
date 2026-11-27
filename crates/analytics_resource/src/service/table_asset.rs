@@ -722,7 +722,12 @@ fn snapshot_draft(snapshot: crate::store::table_asset::TableSnapshot) -> NewTabl
 }
 
 fn qualified_name(schema: &str, table: &str) -> String {
-    format!("{}.{}", quote_ident(schema), quote_ident(table))
+    let schema_ref = schema
+        .split('.')
+        .map(quote_ident)
+        .collect::<Vec<_>>()
+        .join(".");
+    format!("{schema_ref}.{}", quote_ident(table))
 }
 
 fn quote_ident(text: &str) -> String {

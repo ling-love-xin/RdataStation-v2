@@ -55,14 +55,18 @@ impl SampleSource {
         }
     }
 
-    /// **全局库**里的表（刀 7 · B）：`table` 是裸表名，SQL 由这里拼成
-    /// `SELECT * FROM rds_global.<表>`（别名是内核固定常量，入口不该自己起名）。
+    /// **全局库**里的表（刀 7 · B）：`table` 可带 `schema.table`，SQL 由这里拼成
+    /// `SELECT * FROM rds_global.[schema.]<表>`；标识符逐段加引号。
     pub fn on_global(table: impl Into<String>, label: impl Into<String>) -> Self {
         let table = table.into();
-        let quoted = table.replace('"', "\"\"");
+        let quoted = table
+            .split('.')
+            .map(|part| format!("\"{}\"", part.replace('"', "\"\"")))
+            .collect::<Vec<_>>()
+            .join(".");
         Self {
             conn_id: None,
-            sql: format!("SELECT * FROM rds_global.\"{quoted}\""),
+            sql: format!("SELECT * FROM rds_global.{quoted}"),
             label: label.into(),
             global: true,
         }

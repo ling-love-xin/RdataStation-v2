@@ -18,7 +18,7 @@ use chrono::Utc;
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
-use super::{CommonError, CoreError, GlobalInstanceStore, InstanceOpError, sqlite_err};
+use super::{sqlite_err, CommonError, CoreError, GlobalInstanceStore, InstanceOpError};
 
 /// 一次全局资产删除的结果（回执文案用）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -188,10 +188,7 @@ impl GlobalInstanceStore {
     /// 移入全局回收站：活跃 pin 检查 → 只软删当前活跃行 → 写 manifest。
     ///
     /// 历史版本行本来就是覆盖升级留下的软删行，保持原状；全局表一张都不 `DROP`。
-    pub async fn trash_global(
-        &self,
-        name: &str,
-    ) -> Result<GlobalTrashOutcome, InstanceOpError> {
+    pub async fn trash_global(&self, name: &str) -> Result<GlobalTrashOutcome, InstanceOpError> {
         let rows: Vec<(
             String,
             i32,
@@ -279,6 +276,27 @@ impl GlobalInstanceStore {
             }
         }
 
+        let table_versions = self.global_table_versions(&current.0).unwrap_or_default();
+        let manifest_versions = if table_versions.is_empty() {
+            rows.iter()
+                .map(|(id, version, table, deleted, _, _)| TrashVersion {
+                    resource_id: id.clone(),
+                    version: *version,
+                    analytics_table: table.clone(),
+                    deleted_at: deleted.clone(),
+                })
+                .collect()
+        } else {
+            table_versions
+                .into_iter()
+                .map(|version| TrashVersion {
+                    resource_id: current.0.clone(),
+                    version: version.version,
+                    analytics_table: current.2.clone(),
+                    deleted_at: None,
+                })
+                .collect()
+        };
         let manifest = GlobalTrashManifest {
             kind: TRASH_KIND_ANALYSIS.to_string(),
             name: name.to_string(),
@@ -288,15 +306,7 @@ impl GlobalInstanceStore {
             file_rel_path: current_file,
             payload_dir,
             trashed_at: now.clone(),
-            versions: rows
-                .iter()
-                .map(|(id, version, table, deleted, _, _)| TrashVersion {
-                    resource_id: id.clone(),
-                    version: *version,
-                    analytics_table: table.clone(),
-                    deleted_at: deleted.clone(),
-                })
-                .collect(),
+            versions: manifest_versions,
         };
         let manifest_path = trash_dir.join(MANIFEST_FILE);
         let payload = serde_json::to_string_pretty(&manifest).map_err(|e| {
@@ -341,12 +351,12 @@ impl GlobalInstanceStore {
         &self,
         name: &str,
     ) -> Result<GlobalRestoreOutcome, InstanceOpError> {
-        let (manifest, manifest_dir) =
-            find_latest_manifest(&self.global_trash_root(), name).ok_or_else(|| {
-            InstanceOpError::Core(CoreError::common(CommonError::General(format!(
-                "全局回收站中没有「{name}」"
-            ))))
-        })?;
+        let (manifest, manifest_dir) = find_latest_manifest(&self.global_trash_root(), name)
+            .ok_or_else(|| {
+                InstanceOpError::Core(CoreError::common(CommonError::General(format!(
+                    "全局回收站中没有「{name}」"
+                ))))
+            })?;
         // 表型：先校验当前表还在；文件本体：先把 payload 移回原位。
         if let Some(table) = manifest
             .analytics_table
@@ -436,10 +446,7 @@ impl GlobalInstanceStore {
                 .map_err(sqlite_err("prepare_delete_global"))?;
             let rows = stmt
                 .query_map(rusqlite::params![name], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                    ))
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
                 })
                 .map_err(sqlite_err("query_delete_global"))?;
             rows.collect::<Result<Vec<_>, _>>()
@@ -484,10 +491,44 @@ impl GlobalInstanceStore {
             .map_err(sqlite_err("count_delete_global_projects"))
         })?;
 
-        // 3. 逐张删全局表。失败即中止：登记还留着，用户可以原样重试。
+        // 3. 收集同名链所有物理表：表资产逐快照，数据文件 / 文件走旧 `analytics_table`。
+        let snapshot_tables: Vec<(String, String)> = self.with_sqlite(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+                    SELECT ts.physical_schema, ts.physical_table
+                    FROM table_asset_versions tav
+                    JOIN table_snapshots ts ON ts.snapshot_id = tav.snapshot_id
+                    JOIN analytics_resources ar ON ar.id = tav.asset_id
+                    WHERE ar.name = ?1 AND ar.scope = 'global'
+                    "#,
+                )
+                .map_err(sqlite_err("prepare_delete_global_snapshots"))?;
+            let rows = stmt
+                .query_map(rusqlite::params![name], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(sqlite_err("query_delete_global_snapshots"))?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(sqlite_err("collect_delete_global_snapshots"))
+        })?;
+        let unique_snapshots: std::collections::BTreeSet<(String, String)> =
+            snapshot_tables.into_iter().collect();
         let mut tables = 0usize;
+        for (schema, table) in &unique_snapshots {
+            self.drop_global_archive_table(schema, table).await?;
+            tables += 1;
+        }
+
+        // 4. 旧单行表逐张删。失败即中止：登记还留着，用户可以原样重试。
         for (_, table) in &rows {
             if let Some(table) = table.as_deref().filter(|t| !t.is_empty()) {
+                if unique_snapshots
+                    .iter()
+                    .any(|(_, snapshot)| snapshot == table)
+                {
+                    continue;
+                }
                 self.drop_global_table(table).await?;
                 tables += 1;
             }
@@ -518,7 +559,19 @@ impl GlobalInstanceStore {
         }
 
         // 5. 事务内清三张表：资源行（整条同名链）、版本快照、分发回执。
-        let versions = rows.len();
+        let versions = if unique_snapshots.is_empty() {
+            rows.len()
+        } else {
+            self.with_sqlite(|conn| {
+                conn.query_row(
+                    "SELECT count(*) FROM table_asset_versions WHERE asset_id IN (\
+                        SELECT id FROM analytics_resources WHERE name = ?1 AND scope = 'global')",
+                    rusqlite::params![name],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(sqlite_err("count_delete_global_table_versions"))
+            })? as usize
+        };
         self.with_sqlite(|conn| {
             let tx = conn
                 .unchecked_transaction()
@@ -530,6 +583,24 @@ impl GlobalInstanceStore {
                 )
                 .map_err(sqlite_err("delete_global_versions"))?;
             }
+            tx.execute(
+                "DELETE FROM table_asset_versions WHERE asset_id IN (\
+                    SELECT id FROM analytics_resources WHERE name = ?1 AND scope = 'global')",
+                rusqlite::params![name],
+            )
+            .map_err(sqlite_err("delete_global_table_versions"))?;
+            tx.execute(
+                "DELETE FROM table_snapshots WHERE snapshot_id NOT IN (\
+                    SELECT snapshot_id FROM table_asset_versions)",
+                [],
+            )
+            .map_err(sqlite_err("delete_global_table_snapshots"))?;
+            tx.execute(
+                "DELETE FROM table_manifests WHERE manifest_id NOT IN (\
+                    SELECT manifest_id FROM table_asset_versions)",
+                [],
+            )
+            .map_err(sqlite_err("delete_global_table_manifests"))?;
             tx.execute(
                 "DELETE FROM file_asset_versions WHERE resource_id IN (\
                     SELECT id FROM analytics_resources WHERE name = ?1 AND scope = 'global')",
@@ -594,10 +665,7 @@ fn move_path(source: &Path, dest: &Path) -> std::io::Result<()> {
                 Ok(())
             } else {
                 std::fs::copy(source, dest).map_err(|copy_error| {
-                    std::io::Error::new(
-                        copy_error.kind(),
-                        format!("{rename_error}; {copy_error}"),
-                    )
+                    std::io::Error::new(copy_error.kind(), format!("{rename_error}; {copy_error}"))
                 })?;
                 std::fs::remove_file(source)?;
                 Ok(())
@@ -628,7 +696,13 @@ fn trash_stamp() -> String {
 fn safe_dir_name(asset_id: &str) -> String {
     asset_id
         .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' { ch } else { '_' })
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 

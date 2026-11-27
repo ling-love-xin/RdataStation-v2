@@ -16,6 +16,8 @@ pub(super) type DistributionRow = (
     Option<i64>,
     Option<String>,
     Option<String>,
+    // 表型快照的物理 schema；文件型 / 旧数据文件表为 `None`。
+    Option<String>,
 );
 
 fn map_distribution_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DistributionRow> {
@@ -31,6 +33,7 @@ fn map_distribution_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Distributio
         row.get(8)?,
         row.get(9)?,
         row.get(10)?,
+        row.get(11)?,
     ))
 }
 
@@ -45,13 +48,88 @@ impl GlobalInstanceStore {
         selected_version: Option<i32>,
     ) -> Result<Option<DistributionRow>, CoreError> {
         self.with_sqlite(|conn| {
+            let kind: Option<String> = conn
+                .query_row(
+                    r#"
+                    SELECT kind FROM analytics_resources
+                    WHERE name = ?1 AND scope = 'global' AND deleted_at IS NULL
+                    ORDER BY version DESC LIMIT 1
+                    "#,
+                    rusqlite::params![name],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(sqlite_err("read_global_row_kind"))?;
+            let Some(kind) = kind else {
+                return Ok(None);
+            };
+            if kind == "analysis" {
+                let row = conn
+                    .query_row(
+                        r#"
+                        SELECT ar.id, tav.version, ar.kind, ar.content_hash, ar.file_rel_path,
+                               ar.definition_sql, tm.row_count, tm.column_count, ar.file_size,
+                               ts.physical_table, tav.manifest_id, ts.physical_schema
+                        FROM analytics_resources ar
+                        JOIN table_asset_versions tav
+                          ON tav.asset_id = ar.id
+                         AND tav.version = COALESCE(?2, ar.version)
+                        JOIN table_snapshots ts ON ts.snapshot_id = tav.snapshot_id
+                        JOIN table_manifests tm ON tm.manifest_id = tav.manifest_id
+                        WHERE ar.name = ?1 AND ar.scope = 'global' AND ar.deleted_at IS NULL
+                        LIMIT 1
+                        "#,
+                        rusqlite::params![name, selected_version],
+                        map_distribution_row,
+                    )
+                    .optional()
+                    .map_err(sqlite_err("read_global_table_row"))?;
+                if let Some(row) = row {
+                    return Ok(Some(row));
+                }
+                // 数据文件升级出来的表仍是单行旧模型；表资产（有快照索引）已在上面的
+                // join 里命中。这里只兜数据文件，不为旧表资产回填。
+                let row = match selected_version {
+                    Some(version) => conn
+                        .query_row(
+                            r#"
+                            SELECT ar.id, ar.version, ar.kind, ar.content_hash, ar.file_rel_path,
+                                   ar.definition_sql, ar.row_count, ar.column_count, ar.file_size,
+                                   ar.analytics_table, NULL, NULL
+                            FROM analytics_resources ar
+                            WHERE ar.name = ?1 AND ar.scope = 'global' AND ar.version = ?2
+                            LIMIT 1
+                            "#,
+                            rusqlite::params![name, version],
+                            map_distribution_row,
+                        )
+                        .optional()
+                        .map_err(sqlite_err("read_global_table_file_version"))?,
+                    None => conn
+                        .query_row(
+                            r#"
+                            SELECT ar.id, ar.version, ar.kind, ar.content_hash, ar.file_rel_path,
+                                   ar.definition_sql, ar.row_count, ar.column_count, ar.file_size,
+                                   ar.analytics_table, NULL, NULL
+                            FROM analytics_resources ar
+                            WHERE ar.name = ?1 AND ar.scope = 'global' AND ar.deleted_at IS NULL
+                            ORDER BY ar.version DESC LIMIT 1
+                            "#,
+                            rusqlite::params![name],
+                            map_distribution_row,
+                        )
+                        .optional()
+                        .map_err(sqlite_err("read_global_table_file_row"))?,
+                };
+                return Ok(row);
+            }
             let row = match selected_version {
                 Some(version) => conn
                     .query_row(
                         r#"
                         SELECT ar.id, ar.version, ar.kind, ar.content_hash, ar.file_rel_path,
                                ar.definition_sql, ar.row_count, ar.column_count, ar.file_size,
-                               ar.analytics_table, fav.manifest_id
+                               ar.analytics_table, fav.manifest_id, NULL
                         FROM analytics_resources ar
                         LEFT JOIN file_asset_versions fav
                           ON fav.resource_id = ar.id AND fav.version = ar.version
@@ -68,7 +146,7 @@ impl GlobalInstanceStore {
                         r#"
                         SELECT ar.id, ar.version, ar.kind, ar.content_hash, ar.file_rel_path,
                                ar.definition_sql, ar.row_count, ar.column_count, ar.file_size,
-                               ar.analytics_table, fav.manifest_id
+                               ar.analytics_table, fav.manifest_id, NULL
                         FROM analytics_resources ar
                         LEFT JOIN file_asset_versions fav
                           ON fav.resource_id = ar.id AND fav.version = ar.version
@@ -152,6 +230,7 @@ impl GlobalInstanceStore {
             global_size,
             global_table,
             manifest_id,
+            source_schema,
         ) = global_row.ok_or_else(|| InstanceOpError::NotFound {
             name: name.to_string(),
         })?;
@@ -167,13 +246,21 @@ impl GlobalInstanceStore {
         // 不前置检查的话，后面的跨库 CTAS 会抛 DuckDB 的 Catalog Error，
         // 用户看不出这是「策略清掉的」而不是「数据坏了」。
         // 文件-first 的新行没有 analytics_table；只有旧脚本内容表 / 表型才查表。
-        if !(is_file && manifest_id.is_some()) && !self.table_exists(&source_table).await? {
-            return Err(InstanceOpError::Core(CoreError::common(
-                CommonError::General(format!(
-                    "全局实例「{name}」v{global_version} 的内容表（{source_table}）已被保留策略清理：\
+        if !(is_file && manifest_id.is_some()) {
+            let exists = if let Some(schema) = source_schema.as_deref() {
+                self.with_duckdb(|conn| Ok(table_exists_in(conn, schema, &source_table)))
+                    .await?
+            } else {
+                self.table_exists(&source_table).await?
+            };
+            if !exists {
+                return Err(InstanceOpError::Core(CoreError::common(
+                    CommonError::General(format!(
+                        "全局实例「{name}」v{global_version} 的快照（{source_table}）已被保留策略清理：\
 版本元数据仍在，可在全局面板查看版本链；要这一版的数据，在它的来源项目重新升级一版再分发"
-                )),
-            )));
+                    )),
+                )));
+            }
         }
 
         // ---- 项目侧重名双保险探测（SQLite 未删登记 + DuckDB 表 + resources 文件）----
@@ -249,12 +336,23 @@ impl GlobalInstanceStore {
             // 分析表 / 数据文件映射表 → 建项目表（`AnalyticsTable` 档）。
             // 2026-11-26 所有权收口后全局库与项目库同处 `shared::duckdb_root` 一条根连接：
             // 项目会话直接读 `rds_global.<源表>` 建 `analytics.<目标表>`，不再 COPY 中转。
+            let source_ref = match source_schema.as_deref() {
+                Some(schema) => format!(
+                    "{}.{}.{}",
+                    quote_ident(shared::duckdb_root::GLOBAL_ALIAS),
+                    quote_ident(schema),
+                    quote_ident(&source_table)
+                ),
+                None => format!(
+                    "{}.{}",
+                    quote_ident(shared::duckdb_root::GLOBAL_ALIAS),
+                    quote_ident(&source_table)
+                ),
+            };
             let create_sql = format!(
-                "CREATE TABLE {}.{} AS SELECT * FROM {}.{};",
+                "CREATE TABLE {}.{} AS SELECT * FROM {source_ref};",
                 quote_ident(shared::duckdb_root::PROJECT_ALIAS),
                 quote_ident(&target_name),
-                quote_ident(shared::duckdb_root::GLOBAL_ALIAS),
-                quote_ident(&source_table),
             );
             let mut guard = project.0.lock().await;
             let conn = guard.as_mut().ok_or_else(|| {

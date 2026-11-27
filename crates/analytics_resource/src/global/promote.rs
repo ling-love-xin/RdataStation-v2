@@ -1,6 +1,13 @@
-//! 项目 → 全局升级：一版一张表（G2）+ 登记。
+//! 项目 → 全局升级：表资产落不可变快照 + 登记。
+//!
+//! 表型走 [`GlobalInstanceStore::promote_table_from_project`]：源表冻结成
+//! `rds_global.rds_archive.arc_*`，一条活跃登记行一个稳定 asset_id，版本链在
+//! `table_asset_versions`。数据文件 / 文件资产仍走文件-first 的 `promote`。
 
 use super::*;
+use crate::service::table_asset::manifest_for_table;
+use crate::store::table_asset::{NewTableSnapshot, SnapshotInstance};
+use crate::table_asset::manifest::snapshot_table_name;
 
 impl GlobalInstanceStore {
     /// 升级（项目 → 全局）：数据文件映射出表 / 脚本内容表，表 + 版本信息进全局。
@@ -171,267 +178,253 @@ impl GlobalInstanceStore {
         })
     }
 
-    /// 从全局表历史版本恢复：旧版表还在库 → 复制成新版本（不原地回滚）。
+    /// 从全局表历史版本恢复：新版本直接指向旧快照，零复制（不原地回滚）。
     ///
-    /// 与项目表型回退同构：恢复 = 以旧版表为源再走一次「建表 + 登记」，版本号 +1，
-    /// 旧表与旧登记一律保留；被保留策略裁掉的版本明确失败。文件型资产不走这里。
+    /// 快照不可变，恢复只是把 head 版本链再加一跳；旧版本索引与快照全部保留。
+    /// 快照物理表已被清理时明确失败，不拿空表凑一版。
     pub async fn restore_global_table_version(
         &self,
         name: &str,
         version: i32,
     ) -> Result<PromoteOutcome, InstanceOpError> {
-        let active: Option<(String, Option<String>, Option<String>)> = self.with_sqlite(|conn| {
-            conn.query_row(
-                r#"
-                SELECT kind, file_rel_path, analytics_table
-                FROM analytics_resources
-                WHERE name = ?1 AND scope = 'global' AND deleted_at IS NULL
-                ORDER BY version DESC LIMIT 1
-                "#,
-                rusqlite::params![name],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()
-            .map_err(sqlite_err("read_table_restore_active"))
-        })?;
-        let Some((kind, file_rel_path, _current_table)) = active else {
-            return Err(InstanceOpError::NotFound {
+        let head = self
+            .global_table_head(name)?
+            .ok_or_else(|| InstanceOpError::NotFound {
                 name: name.to_string(),
-            });
-        };
-        if kind != "analysis" || file_rel_path.is_some() {
-            return Err(InstanceOpError::Core(CoreError::common(
-                CommonError::InvalidArgument {
-                    param: "name".to_string(),
-                    reason: format!("全局「{name}」不是表型资产，文件版本恢复请走 restore_global_file_version"),
-                },
-            )));
-        }
-
-        let snapshot: Option<(String,)> = self.with_sqlite(|conn| {
-            conn.query_row(
-                "SELECT snapshot FROM analytics_resource_versions \
-                 WHERE resource_id = (SELECT id FROM analytics_resources \
-                    WHERE name = ?1 AND scope = 'global' AND version = ?2 LIMIT 1) \
-                   AND version = ?2",
-                rusqlite::params![name, version],
-                |row| Ok((row.get::<_, String>(0)?,)),
-            )
-            .optional()
-            .map_err(sqlite_err("read_table_restore_snapshot"))
-        })?;
-        let Some((snapshot_text,)) = snapshot else {
-            return Err(InstanceOpError::Core(CoreError::common(
-                CommonError::General(format!(
-                    "全局「{name}」v{version} 的版本快照不存在，无法恢复"
-                )),
-            )));
-        };
-        let snapshot_json: serde_json::Value = serde_json::from_str(&snapshot_text).map_err(|e| {
-            InstanceOpError::Core(CoreError::common(CommonError::General(format!(
-                "全局「{name}」v{version} 的版本快照损坏：{e}"
-            ))))
-        })?;
-        let source_table = snapshot_json
-            .get("analytics_table")
-            .and_then(|value| value.as_str())
-            .filter(|table| !table.is_empty())
-            .map(str::to_string)
+            })?;
+        let target = self
+            .global_table_version_row(&head.asset_id, version)?
             .ok_or_else(|| {
                 InstanceOpError::Core(CoreError::common(CommonError::General(format!(
-                    "全局「{name}」v{version} 的快照没有表名，无法恢复"
+                    "全局「{name}」v{version} 的版本索引不存在，无法恢复"
                 ))))
             })?;
-        if !self.table_exists(&source_table).await? {
-            return Err(InstanceOpError::Core(CoreError::common(CommonError::General(
-                format!(
-                    "全局「{name}」v{version} 的表 {source_table} 已被保留策略清理或缺失，无法恢复"
-                ),
-            ))));
-        }
-
-        let next_version = self
-            .next_global_version(name)
-            .map_err(InstanceOpError::Core)?;
-        let now = Utc::now();
-        let mut table = table_name::version_table_name(name, now);
-        if self.table_exists(&table).await? {
-            table = table_name::version_table_name_with_version(name, next_version, now);
-        }
-        let create_sql = format!(
-            "CREATE TABLE {}.{} AS SELECT * FROM {}.{};",
-            quote_ident(shared::duckdb_root::GLOBAL_ALIAS),
-            quote_ident(&table),
-            quote_ident(shared::duckdb_root::GLOBAL_ALIAS),
-            quote_ident(&source_table)
-        );
-        if let Err(error) = self
+        let manifest = self
+            .global_table_manifest(&target.manifest_id)?
+            .ok_or_else(|| {
+                InstanceOpError::Core(CoreError::common(CommonError::General(format!(
+                    "全局「{name}」v{version} 的 manifest 缺失，无法恢复"
+                ))))
+            })?;
+        let live = self
             .with_duckdb(|conn| {
-                conn.execute_batch(&create_sql)
-                    .map_err(|e| duckdb_err("restore_global_table", &e.to_string()))
+                Ok(table_exists_in(
+                    conn,
+                    &target.physical_schema,
+                    &target.physical_table,
+                ))
             })
-            .await
-        {
-            let _ = self.drop_global_table(&table).await;
-            return Err(InstanceOpError::Core(error));
+            .await?;
+        if !live {
+            return Err(InstanceOpError::Core(CoreError::common(
+                CommonError::General(format!(
+                    "全局「{name}」v{version} 的快照 {} 已不存在，无法恢复",
+                    target.physical_table
+                )),
+            )));
         }
-        let stats = self.table_stats(&table).await?;
 
-        // 旧活跃行软删（与覆盖升级同口径），新版本行成为唯一活跃行。
-        self.with_sqlite(|conn| {
-            conn.execute(
-                r#"
-                UPDATE analytics_resources
-                SET deleted_at = ?1
-                WHERE name = ?2 AND scope = 'global' AND deleted_at IS NULL
-                "#,
-                rusqlite::params![Utc::now().to_rfc3339(), name],
-            )
-            .map_err(sqlite_err("soft_delete_global_on_table_restore"))?;
-            Ok(())
-        })?;
-
+        let snapshot = NewTableSnapshot {
+            snapshot_id: target.snapshot_id,
+            instance: SnapshotInstance::Global,
+            physical_schema: target.physical_schema,
+            physical_table: target.physical_table.clone(),
+        };
+        let definition = Some(format!(
+            "CREATE TABLE {}.{}.{} AS SELECT * FROM {}.{}.{};",
+            quote_ident(shared::duckdb_root::GLOBAL_ALIAS),
+            quote_ident(&snapshot.physical_schema),
+            quote_ident(&snapshot.physical_table),
+            quote_ident(shared::duckdb_root::GLOBAL_ALIAS),
+            quote_ident(&snapshot.physical_schema),
+            quote_ident(&snapshot.physical_table),
+        ));
         let req = PromoteRequest {
             name: name.to_string(),
             kind: PromoteKind::DataFile,
-            source_abs_path: std::path::PathBuf::from(format!("rds_global.{source_table}")),
+            source_abs_path: std::path::PathBuf::from("rds_global.rds_archive"),
             rel_path: None,
-            content_hash: String::new(),
+            content_hash: target.manifest_id,
             file_size: None,
             source_resource_id: None,
             source_version: None,
-            source_table: Some(source_table.clone()),
+            source_table: None,
             keep_versions: None,
         };
-        let definition = Some(format!(
-            "CREATE TABLE {} AS SELECT * FROM rds_global.{};",
-            quote_ident(&table),
-            quote_ident(&source_table)
-        ));
-        let mut outcome = self.register_global(
-            name,
-            &table,
-            next_version,
+        self.append_global_table_version(
+            &head,
             &req,
-            stats.0,
-            stats.1,
-            definition,
-        )?;
-        outcome.overwritten = true;
-        Ok(outcome)
+            definition.as_deref(),
+            &manifest,
+            &snapshot,
+            true,
+        )
     }
 
-    /// 表型升级：项目分析库里的表直接 CTAS 到全局库（不经 Parquet）。
+    /// 表型升级：项目分析库里的表冻结成全局不可变快照。
     ///
-    /// 与 [`Self::promote`] 的区别只在数据面：源是 `analytics.<源表>`，目标在同一根连接的
-    /// `rds_global.<版本表>`。版本号 / 表名 / 登记 / 裁剪与文件型升级共用同一套规则。
+    /// - 首次升级：建一条活跃登记行 + v1；
+    /// - 同名再升级：必须显式 `overwrite`，head 版本 +1，旧快照保留；
+    /// - 内容完全相同：复用已有 manifest / 快照，不白复制一版；
+    /// - 源表只读不搬走，项目侧仍保留原表。
     pub async fn promote_table_from_project(
         &self,
-        project: &ProjectDuckConn,
+        _project: &ProjectDuckConn,
         req: &PromoteRequest,
         overwrite: bool,
     ) -> Result<PromoteOutcome, InstanceOpError> {
-        let Some(source_table) = req.source_table.as_deref() else {
+        let Some(source_ref_name) = req.source_table.as_deref() else {
             return Err(InstanceOpError::Core(CoreError::common(
                 CommonError::General("升级请求缺少源表名".to_string()),
             )));
         };
+        // 项目表资产本体在 `analytics.rds_archive.arc_*`；普通表在 `analytics.<name>`。
+        let (source_schema, source_table) = match source_ref_name.split_once('.') {
+            Some((schema, table)) => (Some(schema), table),
+            None => (None, source_ref_name),
+        };
+        let source_ref = match source_schema {
+            Some(schema) => format!(
+                "{}.{}.{}",
+                quote_ident(shared::duckdb_root::PROJECT_ALIAS),
+                quote_ident(schema),
+                quote_ident(source_table)
+            ),
+            None => format!(
+                "{}.{}",
+                quote_ident(shared::duckdb_root::PROJECT_ALIAS),
+                quote_ident(source_table)
+            ),
+        };
+        let manifest_schema = match source_schema {
+            Some(schema) => format!("{}.{schema}", shared::duckdb_root::PROJECT_ALIAS),
+            None => shared::duckdb_root::PROJECT_ALIAS.to_string(),
+        };
 
-        // ---- 冲突 / 覆盖（与文件型升级同口径：只看登记层）----
-        let existing: Option<i32> = self.with_sqlite(|conn| {
-            conn.query_row(
-                r#"
-                SELECT version FROM analytics_resources
-                WHERE name = ?1 AND scope = 'global' AND deleted_at IS NULL
-                ORDER BY version DESC LIMIT 1
-                "#,
-                rusqlite::params![req.name],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(sqlite_err("check_global_conflict"))
-        })?;
-        if overwrite {
-            self.with_sqlite(|conn| {
-                conn.execute(
-                    r#"
-                    UPDATE analytics_resources
-                    SET deleted_at = ?1
-                    WHERE name = ?2 AND scope = 'global' AND deleted_at IS NULL
-                    "#,
-                    rusqlite::params![Utc::now().to_rfc3339(), req.name],
+        // ---- 冲突 / 覆盖：只认一条活跃表资产 ----
+        let head = self.global_table_head(&req.name)?;
+        if head.is_none() {
+            let active_name: Option<String> = self.with_sqlite(|conn| {
+                conn.query_row(
+                    "SELECT kind FROM analytics_resources \
+                     WHERE name = ?1 AND scope = 'global' AND deleted_at IS NULL LIMIT 1",
+                    rusqlite::params![req.name],
+                    |row| row.get(0),
                 )
-                .map_err(sqlite_err("soft_delete_global"))?;
-                Ok(())
+                .optional()
+                .map_err(sqlite_err("check_global_table_conflict"))
             })?;
-        } else if existing.is_some() {
+            if active_name.is_some() {
+                return Err(InstanceOpError::Conflict {
+                    name: req.name.clone(),
+                    field: ConflictField::Registry,
+                });
+            }
+        } else if !overwrite {
             return Err(InstanceOpError::Conflict {
                 name: req.name.clone(),
                 field: ConflictField::Registry,
             });
         }
 
-        // ---- 版本号 + 表名 ----
-        let next_version = self
-            .next_global_version(&req.name)
-            .map_err(InstanceOpError::Core)?;
-        let now = Utc::now();
-        let mut table = table_name::version_table_name(&req.name, now);
-        if self.table_exists(&table).await? {
-            table = table_name::version_table_name_with_version(&req.name, next_version, now);
+        let previous = match head.as_ref() {
+            Some(head) => self.global_table_version_row(&head.asset_id, head.version)?,
+            None => None,
+        };
+
+        // ---- 读 manifest + 需要时冻结快照 ----
+        let (manifest, snapshot) = self
+            .with_duckdb(|conn| {
+                conn.execute_batch(&format!(
+                    "CREATE SCHEMA IF NOT EXISTS {}.{};",
+                    quote_ident(shared::duckdb_root::GLOBAL_ALIAS),
+                    quote_ident(super::table_asset::GLOBAL_ARCHIVE_SCHEMA)
+                ))
+                .map_err(|e| duckdb_err("ensure_global_archive_schema", &e.to_string()))?;
+                let manifest = manifest_for_table(conn, &manifest_schema, source_table)?;
+                let existing_snapshot = self
+                    .global_snapshot_for_manifest(&manifest.manifest_id)
+                    .map_err(|error| CoreError::common(CommonError::General(error.to_string())))?;
+                let reusable = existing_snapshot.filter(|snapshot| {
+                    table_exists_in(conn, &snapshot.physical_schema, &snapshot.physical_table)
+                });
+                let snapshot = match reusable {
+                    Some(snapshot) => NewTableSnapshot {
+                        snapshot_id: snapshot.snapshot_id,
+                        instance: SnapshotInstance::Global,
+                        physical_schema: snapshot.physical_schema,
+                        physical_table: snapshot.physical_table,
+                    },
+                    None => {
+                        let snapshot_id = format!("tsnap_{}", uuid::Uuid::new_v4().simple());
+                        let physical_table = snapshot_table_name(&snapshot_id);
+                        let create_sql = format!(
+                            "CREATE TABLE {}.{}.{} AS SELECT * FROM {source_ref};",
+                            quote_ident(shared::duckdb_root::GLOBAL_ALIAS),
+                            quote_ident(super::table_asset::GLOBAL_ARCHIVE_SCHEMA),
+                            quote_ident(&physical_table),
+                        );
+                        conn.execute_batch(&create_sql).map_err(|e| {
+                            duckdb_err("create_global_table_snapshot", &e.to_string())
+                        })?;
+                        NewTableSnapshot {
+                            snapshot_id,
+                            instance: SnapshotInstance::Global,
+                            physical_schema: super::table_asset::GLOBAL_ARCHIVE_SCHEMA.to_string(),
+                            physical_table,
+                        }
+                    }
+                };
+                Ok((manifest, snapshot))
+            })
+            .await?;
+
+        let definition = Some(format!(
+            "CREATE TABLE {}.{}.{} AS SELECT * FROM {source_ref};",
+            quote_ident(shared::duckdb_root::GLOBAL_ALIAS),
+            quote_ident(&snapshot.physical_schema),
+            quote_ident(&snapshot.physical_table),
+        ));
+
+        // 内容与 head 相同：复用现有版本，不再追加空版本。
+        if let (Some(head), Some(previous)) = (head.as_ref(), previous.as_ref()) {
+            if previous.manifest_id == manifest.manifest_id {
+                return Ok(PromoteOutcome {
+                    resource_id: head.asset_id.clone(),
+                    name: req.name.clone(),
+                    version: head.version,
+                    row_count: Some(previous.row_count as i32),
+                    column_count: Some(previous.column_count as i32),
+                    overwritten: overwrite,
+                });
+            }
         }
 
-        // ---- 同根跨库 CTAS：项目会话直接读全局目标 ----
-        let source_ref = format!(
-            "{}.{}",
-            quote_ident(shared::duckdb_root::PROJECT_ALIAS),
-            quote_ident(source_table)
-        );
-        let create_sql = format!(
-            "CREATE TABLE {}.{} AS SELECT * FROM {source_ref};",
-            quote_ident(shared::duckdb_root::GLOBAL_ALIAS),
-            quote_ident(&table)
-        );
-        let write_result = {
-            let mut guard = project.0.lock().await;
-            match guard.as_mut() {
-                Some(conn) => conn.execute_batch(&create_sql).map_err(|e| {
-                    InstanceOpError::Core(duckdb_err(
-                        "create_global_table_from_project",
-                        &e.to_string(),
-                    ))
-                }),
-                None => Err(InstanceOpError::Core(CoreError::common(
-                    CommonError::General("项目 DuckDB 连接已关闭".to_string()),
-                ))),
+        let outcome = match head {
+            Some(head) => self.append_global_table_version(
+                &head,
+                req,
+                definition.as_deref(),
+                &manifest,
+                &snapshot,
+                overwrite,
+            )?,
+            None => {
+                let mut outcome = self.insert_global_table_asset(
+                    &req.name,
+                    req,
+                    definition.as_deref(),
+                    &manifest,
+                    &snapshot,
+                )?;
+                outcome.overwritten = overwrite;
+                outcome
             }
         };
-        if let Err(error) = write_result {
-            // CTAS 半途失败可能留下目标表；尽力清掉，不让登记指向残表。
-            let _ = self.drop_global_table(&table).await;
-            return Err(error);
-        }
-        let (row_count, column_count) = self.table_stats(&table).await?;
 
-        // 表型来源不是文件：重建定义直接写跨库 SELECT，避免登记成临时路径。
-        let definition = Some(format!(
-            "CREATE TABLE {} AS SELECT * FROM analytics.{};",
-            quote_ident(&table),
-            quote_ident(source_table)
-        ));
-        let mut outcome = self.register_global(
-            &req.name,
-            &table,
-            next_version,
-            req,
-            row_count,
-            column_count,
-            definition,
-        )?;
-        outcome.overwritten = overwrite;
         if let Some(keep) = req.keep_versions {
             if let Err(error) = self.prune_version_tables(&req.name, keep).await {
-                tracing::warn!(error = %error, name = %req.name, "全局历史表裁剪失败");
+                tracing::warn!(error = %error, name = %req.name, "全局快照裁剪失败");
             }
         }
         Ok(outcome)
