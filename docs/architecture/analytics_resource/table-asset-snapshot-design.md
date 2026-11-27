@@ -406,7 +406,7 @@ manifest_id = sha256(canonical({
 | 归档 schema 只读守卫 | `crates/engine` 的 SQL 闸门 + `rds_archive` 过滤 | 未实现 |
 | 全局发布 / fork / 分发 / 引用 | `global/promote.rs`、`global/refs.rs`、`global/distribute.rs` | 表型升级、零复制恢复、分发与引用检查已接快照；引用按 `global_asset_id + version` 登记；全局发布 base 校验与 fork 待接 |
 | 保留与 GC | `global/sql.rs`、新的 `jobs/table_gc.rs` | `KeepVersions` 裁剪已按版本快照实现；独立 GC 任务未实现 |
-| 删除旧表资产语义 | `table_asset.rs`（旧 `register` / `table_fingerprint`）、`global/promote.rs` 旧表链、`analytics_global_refs` 旧 name 列 | 项目侧已删除；全局表型已走快照，文件型旧路径保留；`analytics_global_refs` 未改 |
+| 删除旧表资产语义 | `table_asset.rs`（旧 `register` / `table_fingerprint`）、`global/promote.rs` 旧表链、`analytics_global_refs` 旧 name 列 | 已删除；全局表/数据文件均走快照，引用按 asset_id |
 | `存为表` 与归档拆分 | `crates/workbench/src/services/persist_jobs.rs`、数据对象面板入口 | 已实现 |
 | 版本对比（schema / 行） | `jobs/version.rs` + `dialogs/version_diff.rs` 扩展 | 版本历史已接快照；对比未实现 |
 
@@ -415,11 +415,12 @@ manifest_id = sha256(canonical({
 ### 12.1 全局侧落地明细
 
 - 全局表资产登记：一条活跃 `kind='analysis'` 行持稳定 `arg_`，版本链在 `table_asset_versions`，物理快照在全局 `rds_archive.arc_*`（`global/table_asset.rs`）。
-- 升级：`promote_table_from_project` 支持 `schema.table` 源（项目表资产传 `rds_archive.arc_*`）；同 manifest 复用全局快照，新内容才追加版本。
+- 升级：`promote_table_from_project` 支持 `schema.table` 源（项目表资产传 `rds_archive.arc_*`）；数据文件走 `promote_file_as_table_asset`，同样冻结成全局快照；同 manifest 复用全局快照，新内容才追加版本。
+- 旧路径已删除：`promote` / `promote_overwrite` / `register_global`、`read_global_row` 的单行回退、`prune_legacy_version_tables` 全部移除。
 - 恢复：`restore_global_table_version` 新增版本直接指向旧 `snapshot_id`，不复制数据。
 - 分发 / 引用：按 `physical_schema` 拼三部分限定名；表存在性检查按 schema。
 - 回收站：trash 只软删登记，快照保留；purge 才删版本索引、孤立快照与 manifest。
 - 引用：按 `global_asset_id + version` 登记；显示名可改，固化按 asset_id 解析当前名。
 - 验证：`rds-analytics-resource` 304 passed；`rds-workbench` 221 passed；`rds-insight` 266 passed。
 
-残留：全局发布尚未按 `base_global_version` 做冲突 / fork；文件型全局升级仍走旧单行路径；`rds_archive` / `rds_work` 的 SQL 只读闸门、独立 GC 与全局版本历史 UI 未接。
+残留：全局发布尚未按 `base_global_version` 做冲突 / fork；`rds_archive` / `rds_work` 的 SQL 只读闸门、独立 GC 与全局版本历史 UI 未接。

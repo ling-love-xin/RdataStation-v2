@@ -122,23 +122,30 @@ fn read_global_table(env: &TestEnv, name: &str) -> Option<String> {
 }
 
 #[tokio::test]
-async fn g001_promote_data_file_and_register_global() {
+async fn g001_promote_data_file_as_global_snapshot() {
     let env = create_test_env().await;
     let csv = write_csv(&env.dir);
     let req = promote_req("orders_v1", &csv, PromoteKind::DataFile);
 
-    let outcome = env.store.promote(&req).await.expect("promote");
+    let outcome = env
+        .store
+        .promote_file_as_table_asset(&req, false)
+        .await
+        .expect("promote");
     assert_eq!(outcome.version, 1, "首版从 1 开始");
     assert!(!outcome.overwritten);
     assert_eq!(outcome.row_count, Some(3), "CSV 3 行");
     assert_eq!(outcome.column_count, Some(3), "CSV 3 列");
 
-    // 全局 DuckDB 表真实存在 + 行数一致：表名取自登记行的 `analytics_table`
-    // （G2 起是 `res_<描述>_<时间戳>`，不再等于资产名）。
+    // 数据文件也冻结成不可变快照，物理表在 `rds_archive.arc_*`。
     let table = read_global_table(&env, "orders_v1").expect("新升级的行必须登记表名");
-    assert!(table.starts_with("res_orders_v1_"), "一版一张表：{table}");
-    let (rows, cols) = env.store.table_stats(&table).await.expect("global stats");
-    assert_eq!(rows, Some(3), "全局表行数 = CSV 行数");
+    assert!(table.starts_with("arc_"), "全局快照命名：{table}");
+    let (rows, cols) = env
+        .store
+        .table_stats(&format!("rds_archive.{table}"))
+        .await
+        .expect("global stats");
+    assert_eq!(rows, Some(3), "全局快照行数 = CSV 行数");
     assert_eq!(cols, Some(3));
 
     // 全局登记行（scope = 'global'，kind = 'analysis'）。
@@ -170,7 +177,7 @@ async fn g001_promote_data_file_and_register_global() {
         .with_sqlite(|conn| {
             let v: i32 = conn
                 .query_row(
-                    "SELECT count(*) FROM analytics_resource_versions WHERE resource_id = ?1",
+                    "SELECT count(*) FROM table_asset_versions WHERE asset_id = ?1",
                     rusqlite::params![row.id],
                     |r| r.get(0),
                 )
@@ -188,12 +195,15 @@ async fn g002_promote_conflict_then_overwrite() {
     let env = create_test_env().await;
     let csv = write_csv(&env.dir);
     let req = promote_req("orders_conf", &csv, PromoteKind::DataFile);
-    env.store.promote(&req).await.expect("first promote");
+    env.store
+        .promote_file_as_table_asset(&req, false)
+        .await
+        .expect("first promote");
 
     // 同名再升级 → Conflict。
     let err = env
         .store
-        .promote(&req)
+        .promote_file_as_table_asset(&req, false)
         .await
         .expect_err("second promote must conflict");
     assert!(
@@ -201,10 +211,11 @@ async fn g002_promote_conflict_then_overwrite() {
         "同名升级应报 Conflict，实际 {err:?}"
     );
 
-    // 覆盖式升级 → 版本 2。
+    // 覆盖式升级 → 内容变了才追加版本 2；同内容会幂等复用 v1。
+    fs::write(&csv, "id,sku,qty\n1,a,1\n2,b,2\n3,c,3\n").expect("rewrite csv");
     let out = env
         .store
-        .promote_overwrite(&req)
+        .promote_file_as_table_asset(&req, true)
         .await
         .expect("overwrite promote");
     assert_eq!(out.version, 2, "覆盖后版本接续旧链");
@@ -222,7 +233,10 @@ async fn g004_distribute_table_to_project() {
     let env = create_test_env().await;
     let csv = write_csv(&env.dir);
     let req = promote_req("shared_orders", &csv, PromoteKind::DataFile);
-    env.store.promote(&req).await.expect("promote");
+    env.store
+        .promote_file_as_table_asset(&req, false)
+        .await
+        .expect("promote");
 
     let project_conn = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
     let outcome = env
@@ -288,24 +302,27 @@ async fn g006_global_row_missing_returns_not_found() {
 /// 冲突回执要说清**撞在哪一层**：三查（登记 / 表 / 文件）都可能命中，
 /// 但用户接下来要做的事不一样，笼统一句"已有同名"帮不上判断。
 ///
-/// 2026-11-16（G2）起升级侧只会命中登记层：一版一张表、表名带时间戳，
-/// 「全局表已被同名对象占用」不再是一种可能，剩下的是「同名资产已经有一版」。
+/// 升级侧只会命中登记层：全局快照表名带 uuid，不再与资产名相同，
+/// 剩下的是「同名资产已经有一版」。
 #[tokio::test]
 async fn g007_conflict_reports_which_field_was_hit() {
     let env = create_test_env().await;
     let csv = write_csv(&env.dir);
     let req = promote_req("orders_field", &csv, PromoteKind::DataFile);
-    env.store.promote(&req).await.expect("first promote");
+    env.store
+        .promote_file_as_table_asset(&req, false)
+        .await
+        .expect("first promote");
 
     // 升级侧：只有登记层会命中（表层不再是同名判据）。
     let err = env
         .store
-        .promote(&req)
+        .promote_file_as_table_asset(&req, false)
         .await
         .expect_err("second promote must conflict");
     match err {
         InstanceOpError::Conflict { field, .. } => {
-            assert_eq!(field, ConflictField::Registry, "一版一张表后只剩登记层冲突");
+            assert_eq!(field, ConflictField::Registry, "只剩登记层冲突");
         }
         other => panic!("应报 Conflict，实际 {other:?}"),
     }
@@ -340,7 +357,10 @@ async fn g008_distribute_overwrite_keeps_the_version_chain() {
     let env = create_test_env().await;
     let csv = write_csv(&env.dir);
     let req = promote_req("chain_orders", &csv, PromoteKind::DataFile);
-    env.store.promote(&req).await.expect("promote");
+    env.store
+        .promote_file_as_table_asset(&req, false)
+        .await
+        .expect("promote");
 
     let project_conn = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
     let first = env
@@ -388,7 +408,11 @@ async fn g013_origin_chain_points_at_the_immediate_upstream() {
     let mut req = promote_req("chain_orders", &csv, PromoteKind::DataFile);
     req.source_resource_id = Some("arp_origin_probe".to_string());
     req.source_version = Some(5);
-    let outcome = env.store.promote(&req).await.expect("promote");
+    let outcome = env
+        .store
+        .promote_file_as_table_asset(&req, false)
+        .await
+        .expect("promote");
     assert_eq!(outcome.version, 1, "全局侧从自己的 v1 开始编号");
 
     // 全局行回指 A 的那一版。
@@ -438,43 +462,45 @@ async fn g013_origin_chain_points_at_the_immediate_upstream() {
     let _ = fs::remove_dir_all(&env.dir);
 }
 
-/// G2：一版一张表——同名第二次升级另起一张表，上一版那张**保留**。
-///
-/// 这是「回到上一版看数据」的前提：登记行逐版记着各自的 `analytics_table`，
-/// 表本身不删。覆盖式升级只软删旧登记，不碰旧表。
+/// 同名第二次升级：内容变了才追加版本，两版各自指向独立快照，旧快照保留。
 #[tokio::test]
 async fn g014_each_global_version_keeps_its_own_table() {
     let env = create_test_env().await;
     let csv = write_csv(&env.dir);
     let req = promote_req("versioned_orders", &csv, PromoteKind::DataFile);
 
-    let first = env.store.promote(&req).await.expect("first promote");
+    let first = env
+        .store
+        .promote_file_as_table_asset(&req, false)
+        .await
+        .expect("first promote");
     assert_eq!(first.version, 1);
     let first_table = read_global_table(&env, "versioned_orders").expect("first table");
 
+    fs::write(&csv, "id,sku,qty\n1,a,9\n2,b,8\n3,c,7\n").expect("rewrite csv");
     let second = env
         .store
-        .promote_overwrite(&req)
+        .promote_file_as_table_asset(&req, true)
         .await
         .expect("overwrite promote");
-    assert_eq!(second.version, 2, "覆盖接续版本链，不从 v1 重开");
+    assert_eq!(second.version, 2, "内容变化后追加版本 2");
     assert!(second.overwritten);
     let second_table = read_global_table(&env, "versioned_orders").expect("second table");
 
-    assert_ne!(first_table, second_table, "一版一张表：两版表名必须不同");
+    assert_ne!(first_table, second_table, "两版必须指向不同快照");
     assert!(
         env.store
             .table_exists(&first_table)
             .await
             .expect("probe first"),
-        "旧版表不能被删——那是回看上一版的唯一凭据"
+        "旧版快照不能被删——那是回看上一版的唯一凭据"
     );
     assert!(
         env.store
             .table_exists(&second_table)
             .await
             .expect("probe second"),
-        "新版表要真的建出来"
+        "新版快照要真的建出来"
     );
 
     let _ = fs::remove_dir_all(&env.dir);
@@ -837,7 +863,10 @@ async fn g033_global_rename_keeps_reference_and_solidify() {
     let csv = write_csv(&env.dir);
     let promoted = env
         .store
-        .promote(&promote_req("rename_orders", &csv, PromoteKind::DataFile))
+        .promote_file_as_table_asset(
+            &promote_req("rename_orders", &csv, PromoteKind::DataFile),
+            false,
+        )
         .await
         .expect("promote");
     let referenced = env
@@ -929,19 +958,25 @@ fn read_global_version_tables(env: &TestEnv, name: &str) -> Vec<(i32, Option<Str
         .expect("读版本表")
 }
 
-/// 一版一张表会随版本线性增长，`KeepVersions` 只裁全局表、不碰文件 manifest 与 CAS：
-/// **当前版本那张表是本体、永远留**；`keep` 数的是历史份数；登记行与版本快照一条不动。
-/// 内容被清掉之后，分发要给人话而不是 DuckDB 的 Catalog Error。
+/// 快照会随版本增长，`KeepVersions` 只裁历史快照、不碰 manifest 与登记：
+/// **当前版本快照是本体、永远留**；`keep` 数的是历史份数。
 #[tokio::test]
 async fn g016_version_table_pruning_keeps_current_and_says_why() {
     let env = create_test_env().await;
     let csv = write_csv(&env.dir);
 
-    // 覆盖式连升三版：同名链版本接续，各自一张表。
+    // 覆盖式连升三版：每版数据都不同，各自一张快照。
     for round in 0..3 {
-        let mut req = promote_req("pruned_orders", &csv, PromoteKind::DataFile);
-        req.content_hash = format!("hash_round_{round}");
-        env.store.promote_overwrite(&req).await.expect("promote");
+        fs::write(
+            &csv,
+            format!("id,sku,qty\n1,a,{round}\n2,b,{round}\n3,c,{round}\n"),
+        )
+        .expect("rewrite csv");
+        let req = promote_req("pruned_orders", &csv, PromoteKind::DataFile);
+        env.store
+            .promote_file_as_table_asset(&req, true)
+            .await
+            .expect("promote");
     }
 
     let before = read_global_version_tables(&env, "pruned_orders");
@@ -995,7 +1030,10 @@ async fn g016_version_table_pruning_keeps_current_and_says_why() {
 
     // 最新那版的内容也没了（手工删 / 裁剪边界）时，分发必须说是「策略清掉的」。
     let current = after[0].1.as_deref().expect("表名").to_string();
-    env.store.drop_global_table(&current).await.expect("drop");
+    env.store
+        .drop_global_archive_table("rds_archive", &current)
+        .await
+        .expect("drop");
     let err = env
         .store
         .distribute(&project, &env.project_root, "pruned_orders", None)
@@ -1016,10 +1054,19 @@ async fn g017_delete_global_drops_tables_and_registry_only() {
     let csv = write_csv(&env.dir);
     let req = promote_req("delete_me", &csv, PromoteKind::DataFile);
 
-    let first = env.store.promote(&req).await.expect("promote v1");
+    let first = env
+        .store
+        .promote_file_as_table_asset(&req, false)
+        .await
+        .expect("promote v1");
     assert_eq!(first.version, 1);
     let first_table = read_global_table(&env, "delete_me").expect("v1 table");
-    let second = env.store.promote_overwrite(&req).await.expect("promote v2");
+    fs::write(&csv, "id,sku,qty\n1,a,1\n2,b,2\n3,c,3\n").expect("rewrite csv");
+    let second = env
+        .store
+        .promote_file_as_table_asset(&req, true)
+        .await
+        .expect("promote v2");
     assert_eq!(second.version, 2);
     let second_table = read_global_table(&env, "delete_me").expect("v2 table");
 
@@ -1048,7 +1095,7 @@ async fn g017_delete_global_drops_tables_and_registry_only() {
     let outcome = env.store.purge_global("delete_me").await.expect("purge");
     assert_eq!(outcome.name, "delete_me");
     assert_eq!(outcome.versions, 2, "两版登记都要删");
-    assert_eq!(outcome.tables, 2, "一版一张表，两张都要删");
+    assert_eq!(outcome.tables, 2, "两版快照都要删");
     assert_eq!(outcome.projects, 1, "回执在删除前数过");
 
     assert!(
@@ -1112,7 +1159,10 @@ async fn g023_trash_restore_keeps_table_until_purge() {
     let env = create_test_env().await;
     let csv = write_csv(&env.dir);
     let req = promote_req("trash_orders", &csv, PromoteKind::DataFile);
-    env.store.promote(&req).await.expect("promote");
+    env.store
+        .promote_file_as_table_asset(&req, false)
+        .await
+        .expect("promote");
     let table = read_global_table(&env, "trash_orders").expect("table");
 
     let trashed = env.store.trash_global("trash_orders").await.expect("trash");
@@ -1155,7 +1205,7 @@ async fn g023_trash_restore_keeps_table_until_purge() {
         .await
         .expect("trash again");
     env.store
-        .drop_global_table(&table)
+        .drop_global_archive_table("rds_archive", &table)
         .await
         .expect("drop table");
     let refused = env.store.restore_global("trash_orders").await;
@@ -1226,7 +1276,10 @@ async fn g029_empty_global_trash_skips_pinned_entries() {
     let env = create_test_env().await;
     let csv = write_csv(&env.dir);
     let req = promote_req("pinned_empty", &csv, PromoteKind::DataFile);
-    env.store.promote(&req).await.expect("promote");
+    env.store
+        .promote_file_as_table_asset(&req, false)
+        .await
+        .expect("promote");
     env.store.trash_global("pinned_empty").await.expect("trash");
     // 进回收站后再被项目 pin：清空必须跳过，不能把仍被引用的登记抹掉。
     pin_ref(&env, "arp_pinned_empty", 1, "pinned_empty", 1);
@@ -1259,7 +1312,10 @@ async fn g024_trash_refuses_while_a_project_pins_the_version() {
     let env = create_test_env().await;
     let csv = write_csv(&env.dir);
     let req = promote_req("pinned_trash", &csv, PromoteKind::DataFile);
-    env.store.promote(&req).await.expect("promote");
+    env.store
+        .promote_file_as_table_asset(&req, false)
+        .await
+        .expect("promote");
     pin_ref(&env, "arp_ref_trash", 1, "pinned_trash", 1);
 
     let refused = env.store.trash_global("pinned_trash").await;
@@ -1317,9 +1373,16 @@ async fn g018_prune_keeps_only_pinned_versions() {
     let csv = write_csv(&env.dir);
 
     for round in 0..3 {
-        let mut req = promote_req("ref_guard_orders", &csv, PromoteKind::DataFile);
-        req.content_hash = format!("hash_ref_round_{round}");
-        env.store.promote_overwrite(&req).await.expect("promote");
+        fs::write(
+            &csv,
+            format!("id,sku,qty\n1,a,{round}\n2,b,{round}\n3,c,{round}\n"),
+        )
+        .expect("rewrite csv");
+        let req = promote_req("ref_guard_orders", &csv, PromoteKind::DataFile);
+        env.store
+            .promote_file_as_table_asset(&req, true)
+            .await
+            .expect("promote");
     }
     let versions = read_global_version_tables(&env, "ref_guard_orders");
     assert_eq!(versions.len(), 3);
@@ -1371,7 +1434,11 @@ async fn g019_delete_global_blocked_by_active_ref() {
     let env = create_test_env().await;
     let csv = write_csv(&env.dir);
     let req = promote_req("ref_delete_me", &csv, PromoteKind::DataFile);
-    let outcome = env.store.promote(&req).await.expect("promote");
+    let outcome = env
+        .store
+        .promote_file_as_table_asset(&req, false)
+        .await
+        .expect("promote");
     let table = read_global_table(&env, "ref_delete_me").expect("table");
 
     pin_ref(&env, "arp_ref_delete", 1, "ref_delete_me", outcome.version);
@@ -1420,7 +1487,10 @@ async fn g020_pin_ref_upserts_version_and_reactivates() {
     for round in 0..2 {
         let mut req = promote_req("ref_upsert_orders", &csv, PromoteKind::DataFile);
         req.content_hash = format!("hash_upsert_{round}");
-        env.store.promote_overwrite(&req).await.expect("promote");
+        env.store
+            .promote_file_as_table_asset(&req, true)
+            .await
+            .expect("promote");
     }
 
     pin_ref(&env, "arp_ref_upsert", 1, "ref_upsert_orders", 1);
@@ -1474,7 +1544,10 @@ async fn g021_reference_asset_and_solidify_selected_version() {
     let csv = write_csv(&env.dir);
     let v1 = env
         .store
-        .promote(&promote_req("ref_orders", &csv, PromoteKind::DataFile))
+        .promote_file_as_table_asset(
+            &promote_req("ref_orders", &csv, PromoteKind::DataFile),
+            false,
+        )
         .await
         .expect("promote v1");
     assert_eq!(v1.version, 1);
@@ -1581,7 +1654,10 @@ async fn g021_reference_asset_and_solidify_selected_version() {
     fs::write(&csv, "id,sku,qty\n1,a,10\n2,b,20\n").expect("rewrite csv");
     let v2 = env
         .store
-        .promote_overwrite(&promote_req("ref_orders", &csv, PromoteKind::DataFile))
+        .promote_file_as_table_asset(
+            &promote_req("ref_orders", &csv, PromoteKind::DataFile),
+            true,
+        )
         .await
         .expect("promote v2");
     assert_eq!(v2.version, 2);
@@ -1713,7 +1789,10 @@ async fn g022_solidify_failure_keeps_pin_and_ref() {
     let csv = write_csv(&env.dir);
     let v1 = env
         .store
-        .promote(&promote_req("ref_conflict", &csv, PromoteKind::DataFile))
+        .promote_file_as_table_asset(
+            &promote_req("ref_conflict", &csv, PromoteKind::DataFile),
+            false,
+        )
         .await
         .expect("promote v1");
     let first = env

@@ -89,22 +89,6 @@ impl GlobalInstanceStore {
         .await
     }
 
-    /// 删掉这张全局表（**参数是实际表名**）。
-    ///
-    /// 调用方要为「删的是哪一版」负责：正常路径不该拿它做版本裁剪，
-    /// 那是 `KeepVersions` 的事；这里只服务明确的删除与被注入的失败场景。
-    ///
-    /// 三类调用点：脚本内容表写到一半失败时的半成品清理（`promote`）、
-    /// `KeepVersions` 表型裁剪（`prune_version_tables`），以及将来的「删除全局资产」。
-    pub(super) async fn drop_global_table(&self, name: &str) -> Result<(), CoreError> {
-        self.with_duckdb(|conn| {
-            conn.execute_batch(&format!("DROP TABLE IF EXISTS {};", quote_ident(name)))
-                .map_err(|e| duckdb_err("drop_global_table", &e.to_string()))?;
-            Ok(())
-        })
-        .await
-    }
-
     /// 删掉指定 schema 下的全局表（快照在 `rds_archive`）。
     pub(super) async fn drop_global_archive_table(
         &self,
@@ -141,51 +125,6 @@ impl GlobalInstanceStore {
         })
     }
 
-    /// 数据文件升级出来的旧单行表按同名链裁剪（与表快照无关）。
-    async fn prune_legacy_version_tables(
-        &self,
-        name: &str,
-        keep: crate::model::KeepVersions,
-    ) -> Result<usize, CoreError> {
-        let Some(keep) = keep.limit() else {
-            return Ok(0);
-        };
-        let versions: Vec<(i32, Option<String>)> = self.with_sqlite(|conn| {
-            let mut stmt = conn
-                .prepare(
-                    r#"
-                    SELECT version, analytics_table FROM analytics_resources
-                    WHERE name = ?1 AND scope = 'global'
-                    ORDER BY version DESC
-                    "#,
-                )
-                .map_err(sqlite_err("prepare_prune_legacy_versions"))?;
-            let rows = stmt
-                .query_map(rusqlite::params![name], |row| {
-                    Ok((row.get::<_, i32>(0)?, row.get::<_, Option<String>>(1)?))
-                })
-                .map_err(sqlite_err("query_prune_legacy_versions"))?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(sqlite_err("collect_prune_legacy_versions"))
-        })?;
-        let referenced = self.active_ref_versions(name)?;
-        let referenced: std::collections::HashSet<i32> = referenced.into_iter().collect();
-        let mut removed = 0usize;
-        for (index, (version, table)) in versions.into_iter().enumerate() {
-            if index <= keep as usize || referenced.contains(&version) {
-                continue;
-            }
-            let Some(table) = table else {
-                continue;
-            };
-            match self.drop_global_table(&table).await {
-                Ok(()) => removed += 1,
-                Err(error) => tracing::warn!(error = %error, table, name, "旧全局表裁剪失败"),
-            }
-        }
-        Ok(removed)
-    }
-
     /// 按 `KeepVersions` 裁剪全局表快照的**历史版本**（只删物理快照，不删版本索引）。
     ///
     /// `keep` 数的是历史版本份数：`MetadataOnly`（0）只留当前快照，`Keep(5)` 留当前 +
@@ -207,7 +146,7 @@ impl GlobalInstanceStore {
             .map_err(sqlite_err("count_prune_snapshot_versions"))
         })?;
         if snapshot_versions == 0 {
-            return self.prune_legacy_version_tables(name, keep).await;
+            return Ok(0);
         }
         let Some(keep) = keep.limit() else {
             return Ok(0);

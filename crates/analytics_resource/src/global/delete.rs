@@ -520,20 +520,6 @@ impl GlobalInstanceStore {
             tables += 1;
         }
 
-        // 4. 旧单行表逐张删。失败即中止：登记还留着，用户可以原样重试。
-        for (_, table) in &rows {
-            if let Some(table) = table.as_deref().filter(|t| !t.is_empty()) {
-                if unique_snapshots
-                    .iter()
-                    .any(|(_, snapshot)| snapshot == table)
-                {
-                    continue;
-                }
-                self.drop_global_table(table).await?;
-                tables += 1;
-            }
-        }
-
         // 4. 当前物化缓存：永久删除时清掉；CAS 对象留给后续 GC（可能被其他版本共享）。
         let file_rel: Option<String> = self.with_sqlite(|conn| {
             conn.query_row(

@@ -140,15 +140,17 @@
 
 **全局引用（2026-11-27）**：项目侧不再只能“分发复制一份”，也可以只记一条
 `kind='table_ref'` + `origin_kind='global'` 的引用资产，按稳定 `global_asset_id + version`
-pin 全局版本（`global/refs.rs`、迁移 `global/042_global_ref_asset_id.sql`）。引用行
+pin 全局版本（`global/refs.rs`、迁移 `global/038_analytics_global_refs.sql`）。引用行
 `source_table` 记 pin 的全局快照表名，打开 / 查看统计走 `SampleSource::on_global`；
 全局 `name` 只作显示名，改名不影响 pin。版本对话框对引用资产提供「固化为本地表」：
 复制选中的全局版本为独立 `analytics_table` 资产，原引用保留，只释放该版 pin。全局删除 /
 裁剪遇到活跃 pin 会跳过或拒绝；引用资产被永久删除时释放其全部 pin。
 
-**表型存档的升级**（本体是项目分析库里的一张表，而不是文件）走另一条路：入口只给表名
-（`PromoteRequest::source_table`），工作线程用项目写连接直接 CTAS 到 `rds_global.<版本表>`，
-不再经 parquet 中转；升级是读，项目侧那张表原样留着。
+**表型存档的升级**（本体是项目分析库里的一张表，而不是文件）：入口给 `schema.table`
+（`PromoteRequest::source_table`），工作线程用项目写连接直接 CTAS 到
+`rds_global.rds_archive.arc_*` 并登记快照版本；不再经 parquet 中转，项目侧源表原样保留。
+数据文件升级同样冻结成全局快照（`promote_file_as_table_asset`），旧的「一版一行」全局表
+与单行回退已删除。
 
 ### 8. 边界与协作
 

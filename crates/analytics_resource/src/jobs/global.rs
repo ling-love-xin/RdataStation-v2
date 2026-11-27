@@ -102,7 +102,6 @@ pub(crate) async fn run_delete_global(job: &DeleteGlobalJob) -> OpOutcome {
     }
 }
 
-
 /// 从全局文件取回（工作线程上执行）。
 ///
 /// 只开项目 SQLite 池写租约；内容从全局 CAS 物化，不经过项目 DuckDB。
@@ -140,7 +139,10 @@ pub(crate) async fn run_global_checkout(job: &GlobalCheckoutJob) -> OpOutcome {
     {
         Ok(outcome) => OpOutcome::GlobalCheckedOut {
             name: outcome.name,
-            dest: job.project_root.join(crate::resource_host::SCRATCHPAD_DIR).join(&outcome.dest_rel),
+            dest: job
+                .project_root
+                .join(crate::resource_host::SCRATCHPAD_DIR)
+                .join(&outcome.dest_rel),
             version: outcome.version,
             open_after: job.open_after,
         },
@@ -188,9 +190,13 @@ pub(crate) async fn run_restore_global_version(job: &RestoreGlobalVersionJob) ->
         }
     };
     let result = if job.table {
-        gstore.restore_global_table_version(&job.name, job.version).await
+        gstore
+            .restore_global_table_version(&job.name, job.version)
+            .await
     } else {
-        gstore.restore_global_file_version(&job.name, job.version).await
+        gstore
+            .restore_global_file_version(&job.name, job.version)
+            .await
     };
     match result {
         Ok(outcome) => OpOutcome::GlobalVersionRestored {
@@ -239,10 +245,10 @@ pub(crate) async fn run_promote(job: &PromoteJob) -> OpOutcome {
             ))),
         }
     } else {
-        match job.overwrite {
-            true => gstore.promote_overwrite(&job.request).await,
-            false => gstore.promote(&job.request).await,
-        }
+        // 数据文件也直接冻结成全局表资产；旧「一版一行」建表路径已删除。
+        gstore
+            .promote_file_as_table_asset(&job.request, job.overwrite)
+            .await
     };
     let outcome = match outcome {
         Ok(outcome) => outcome,
@@ -282,9 +288,7 @@ async fn promote_file_first(
     let project = open_project_conn(&job.project_root)
         .await
         .map_err(|reason| {
-            crate::global::InstanceOpError::Core(CoreError::common(CommonError::General(
-                reason,
-            )))
+            crate::global::InstanceOpError::Core(CoreError::common(CommonError::General(reason)))
         })?;
 
     let (manifest_id, _source_hash, _source_size): (Option<String>, Option<String>, Option<i64>) =
@@ -653,12 +657,14 @@ pub fn enqueue_restore_global_version(
     table: bool,
 ) {
     jobs().pending.fetch_add(1, Ordering::SeqCst);
-    let _ = jobs().tx.send(Job::RestoreGlobalVersion(RestoreGlobalVersionJob {
-        project_root,
-        name,
-        version,
-        table,
-    }));
+    let _ = jobs()
+        .tx
+        .send(Job::RestoreGlobalVersion(RestoreGlobalVersionJob {
+            project_root,
+            name,
+            version,
+            table,
+        }));
 }
 
 /// 提交一次「从全局实例删除」（刀 B；确认框之后）。

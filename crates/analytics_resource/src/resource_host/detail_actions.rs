@@ -304,7 +304,7 @@ pub(super) fn request_promote_to_global(host: &ResourceHost, detail: &ArchiveDet
                 source_resource_id: Some(detail.id.clone()),
                 source_version: Some(detail.version),
                 source_table,
-                // 一版一张表会增长：升级完按设置里的保留策略裁掉更早的表。
+                // 快照会随版本增长：升级完按设置里的保留策略裁掉更早的快照。
                 keep_versions: Some(host.backend.keep_versions(cx)),
             },
             false,

@@ -84,43 +84,7 @@ impl GlobalInstanceStore {
                     )
                     .optional()
                     .map_err(sqlite_err("read_global_table_row"))?;
-                if let Some(row) = row {
-                    return Ok(Some(row));
-                }
-                // 数据文件升级出来的表仍是单行旧模型；表资产（有快照索引）已在上面的
-                // join 里命中。这里只兜数据文件，不为旧表资产回填。
-                let row = match selected_version {
-                    Some(version) => conn
-                        .query_row(
-                            r#"
-                            SELECT ar.id, ar.version, ar.kind, ar.content_hash, ar.file_rel_path,
-                                   ar.definition_sql, ar.row_count, ar.column_count, ar.file_size,
-                                   ar.analytics_table, NULL, NULL
-                            FROM analytics_resources ar
-                            WHERE ar.name = ?1 AND ar.scope = 'global' AND ar.version = ?2
-                            LIMIT 1
-                            "#,
-                            rusqlite::params![name, version],
-                            map_distribution_row,
-                        )
-                        .optional()
-                        .map_err(sqlite_err("read_global_table_file_version"))?,
-                    None => conn
-                        .query_row(
-                            r#"
-                            SELECT ar.id, ar.version, ar.kind, ar.content_hash, ar.file_rel_path,
-                                   ar.definition_sql, ar.row_count, ar.column_count, ar.file_size,
-                                   ar.analytics_table, NULL, NULL
-                            FROM analytics_resources ar
-                            WHERE ar.name = ?1 AND ar.scope = 'global' AND ar.deleted_at IS NULL
-                            ORDER BY ar.version DESC LIMIT 1
-                            "#,
-                            rusqlite::params![name],
-                            map_distribution_row,
-                        )
-                        .optional()
-                        .map_err(sqlite_err("read_global_table_file_row"))?,
-                };
+                // 表资产必须命中快照版本链；没有索引说明数据已丢失，不再回退旧单行。
                 return Ok(row);
             }
             let row = match selected_version {

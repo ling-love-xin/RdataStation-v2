@@ -126,8 +126,8 @@ pub struct PromoteRequest {
     pub source_table: Option<String>,
     /// 本次升级的历史版本表保留策略（`None` = 不裁剪）。
     ///
-    /// 一版一张表，全局库随版本数线性增长；这里给 `Some(KeepVersions)` 时，
-    /// 登记成功后按同名链裁掉更早版本的表（**只删内容表，登记与版本快照都留**）。
+    /// 快照随版本增长；这里给 `Some(KeepVersions)` 时，登记成功后按版本链裁掉
+    /// 更早的快照（**只删物理快照，登记与版本索引都留**）。
     /// 由宿主的设置项驱动（`ResourceHostBackend::keep_versions`）。
     pub keep_versions: Option<crate::model::KeepVersions>,
 }
@@ -475,7 +475,6 @@ pub mod promote;
 pub mod refs;
 pub mod register;
 pub mod sql;
-pub mod table_name;
 pub mod table_asset;
 
 pub use self::delete::{
