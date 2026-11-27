@@ -15,7 +15,7 @@
 | 路径 | 谁建立连接 | 能做到什么 | 写操作 | 现状 |
 | --- | --- | --- | --- | --- |
 | **A 原生驱动** | 应用自己（sqlx / rusqlite / duckdb-rs / mysql_async / tokio-postgres） | 完整：查询、事务、元数据内省、结果集进 DuckDB 二次分析 | ✅ 源库档可写 | 6 个驱动活（§3） |
-| **B 联邦 scanner** | **DuckDB 自己**（`ATTACH … (TYPE …)`） | 只读跨源查询、跨源 join；**应用不需要该库的驱动** | ⛔ 一律只读（L2 连只读选项都没有） | L1 产品级、L2 Oracle 已真机验收（§4） |
+| **B 联邦 scanner** | **DuckDB 自己**（`ATTACH … (TYPE …)`） | 只读跨源查询、跨源 join；**应用不需要该库的驱动** | ⛔ L1 强制只读；L2 无该选项（会话层拒写 + 只读账号兜底） | L1 产品级、L2 Oracle 已真机验收（§4） |
 | **C L3 桥接** | 应用（自家驱动拉 Arrow → DuckDB 临时表） | 兜底：两种 scanner 都没有的库（国产库 / 私有协议 / 受限环境） | 语义未定，随 A | 🟡 **仅接口草案**（`federation/bridge.rs`，第二期） |
 
 **判据（选哪条）**：
@@ -196,14 +196,15 @@ sqlx 静默忽略、mysql_async 报未知参数。接受键清单与测试见
 | **L1 官方** | MySQL | `mysql` | `ATTACH … (TYPE mysql, READ_ONLY)` | ✅ | ✅ INSTALL + LOAD 通过；**跨源真机验收**（见下） |
 | **L1 官方** | PostgreSQL | `postgres` | 同上 | ✅ | ✅ |
 | **L1 官方** | SQLite | `sqlite` | 同上 | ✅ | ✅ INSTALL + LOAD 通过；**跨源真机验收**（见下） |
-| **L1 官方** | SQLite | `sqlite` | 同上 | ✅ | ✅ |
 | **L1 官方** | 文件（CSV / Parquet / JSON / httpfs） | 内核自带 / `httpfs` | `read_*` 表函数 | 天然只读 | ✅ |
 | **L2 社区** | **Oracle** | `oracle_scanner`（`INSTALL … FROM community`） | `ATTACH '<secret>' AS 别名 (TYPE oracle_scanner)`，**凭据只能走会话级 Secret**，表挂 `main` schema ⇒ **两段名** | ⛔ **扩展不接受 `READ_ONLY`** | ✅ **真机验收完成**（v0.2.2，2026-09-18，见 §2.1）；引擎侧写拒绝 + 编辑器闸门 + 只读账号三道兜底 |
 | **L2 社区** | **SQL Server** | `mssql`（native TDS，**无需 ODBC / FreeTDS**） | 待验 | 待验 | ⚠️ INSTALL + LOAD 通过，**连通与下推未真机验收** |
 | **L2 社区** | Firebird / Snowflake / BigQuery / Mongo … | 各自扩展 | 待验 | 待验 | ⚠️ 装得上，未验收 |
 | **L3 桥接** | 任意（只要有自家驱动） | 不需要扩展 | 应用拉 Arrow → DuckDB 临时表 → 参与 join | 随 A | 🟡 **接口草案**（`federation/bridge.rs`） |
 
-**联邦硬约束**（改这块前先读 `federation/README.md`）：一律只读；扩展显式管理（关掉 `autoinstall_known_extensions` /
+**联邦硬约束**（改这块前先读 `federation/README.md`）：**L1 一律 `ATTACH … (READ_ONLY)`**；
+**L2（Oracle）扩展不接受该选项**，靠会话层拒写（`session.rs::l2_write_refusal`）+ 编辑器闸门 + 只读账号；
+扩展显式管理（关掉 `autoinstall_known_extensions` /
 `autoload_known_extensions`，否则 SQL 里一出现扩展函数名就**静默联网下载**）；主源语义（未限定名只在主源解析，同名表报错）；
 资源边界（会话级 `memory_limit` / `temp_directory`）；状态如实（挂不上的源留清单 + 原话原因）。
 

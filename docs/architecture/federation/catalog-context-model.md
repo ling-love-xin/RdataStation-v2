@@ -180,7 +180,12 @@ struct SourceIntent { id, origin, alias, auto_attach: bool, primary: bool }
 2. 别名永不被系统改写；冲突即失败。
 3. 意图清单是唯一持久状态；其余全部派生，重启可 replay。
 4. 未限定名只由 search_path 解析，不改写 SQL。
-5. 源只读（`READ_ONLY`）；写入只发生在项目库 / 全局库 / `rds_tmp`。
+5. **源只读**：L1 源（`mysql` / `postgres` / `sqlite` / duckdb 文件）一律
+   `ATTACH … (READ_ONLY)`，写入只发生在项目库 / 全局库 / `rds_tmp`。
+   **唯一例外是 L2 Oracle**：社区扩展 `oracle_scanner` 不接受 `read_only`
+   （真机原话 *Oracle ATTACH does not accept option 'read_only' yet*），引擎侧那道闸对它
+   不成立，改由三层兜底——会话层拒写（`federation/session.rs::l2_write_refusal`）、
+   编辑器闸门、**必须使用只读账号**（台账与决策见 `federation-architecture.md` §2.1 / D14）。
 6. 面板只读快照，不写任何状态。
 7. 失败只有一个出口：预检 / 挂载 / 执行，其他层不翻译错误。
 
@@ -221,9 +226,14 @@ K0a 是唯一前置，且行为零变化，可先合。
    拆开——能力是 `AccelKind` 常量（代码），启用是项目登记（`analysis_sources`，意图清单）；
    连接上的 `use_duckdb_fed` 字段与对话框开关整体删除，不留兼容层
    （K4a 登记快照带档位 / K4b 通道门控改成「能力 + 登记」/ K4c 删字段本体）。
-2. 源只读是否**强制**：现阶段全部 `READ_ONLY`；将来若允许写源，要单独设计（事务边界、
-   失败回滚、锁）。
-3. Oracle / SQL Server 的驱动形态（ODBC 还是原生扩展）；`READ_ONLY` + 类型映射要另行实测。
+2. 源只读是否**强制**：**L1 一律强制** `ATTACH … (READ_ONLY)`；**L2 Oracle 引擎侧无法强制**
+   （社区扩展不接受该选项），已按「会话层拒写 + 编辑器闸门 + 只读账号」落地（§8 #5）。
+   将来若允许写源，仍要单独设计（事务边界、失败回滚、锁）。
+3. **SQL Server 的驱动形态未定**（ODBC 还是原生扩展；`READ_ONLY` + 类型映射要另行实测）；
+   **Oracle 已落地**——走社区扩展 `oracle_scanner`（L2），形态与边界见
+   `federation-architecture.md` §2.1 真机台账：限定名两段（`别名.表`）、过滤不下推、
+   无精度 `NUMBER` → `VARCHAR`、表清单在 ATTACH 时定型、并行扫描需额外权限。
+   MSSQL 若接入，照 D14 同一模板走 L2，不新增内核分支。
 
 ---
 
@@ -246,3 +256,8 @@ K0a 是唯一前置，且行为零变化，可先合。
   连接对话框开关与 `set_use_duckdb_fed` / 面板 `fed_enabled` / 草稿箱 / 相关断言）。
   **其他文档里出现的 `use_duckdb_fed` 一律按历史记录读**，现行口径以本节与
   `analysis-sources-spec.md` §7.1 为准。
+- 2026-11-27：**刀28 文档对账**——§8 #5 与 §11②③ 按实现改写：L1 强制 `READ_ONLY`，
+  L2 Oracle 引擎侧无法强制（`accel.rs::supports_read_only_attach`），靠会话层拒写
+  （`session.rs::l2_write_refusal`）+ 编辑器闸门 + 只读账号；Oracle 从「未定」改为「已落地（L2
+  community scanner）」，只剩 MSSQL 驱动形态未定。此前本节按「现阶段全部 `READ_ONLY`」写，
+  与 `accel.rs:171-174` 的真机结论冲突。

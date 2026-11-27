@@ -141,7 +141,7 @@
 - 影响：任何按公开 API 使用它的新代码都会直接绕过不变量 #5（源只读），且没有测试能发现（该路径自身测试也只在拼 SQL 层）。
 - 验收：`engine/src/lib.rs` 与 `duckdb/mod.rs` 中相关 `pub use` 消失；`grep -r "FederationManager" crates` 仅剩历史文档；`cargo test -p rds-engine -j 1` **345 = 356 − legacy 自带 11 条**，其余全过。
 
-**P0-2 Oracle 与「源只读」不变量冲突，文档滞后**
+**P0-2 Oracle 与「源只读」不变量冲突，文档滞后 —— 已执行（刀28，2026-11-27）**
 - 现状：`accel.rs:171-174` 明写 Oracle 扩展不接受 `read_only`；缓解三层——`federation/session.rs::l2_write_refusal`（`:141` / `:320` / 用例 `:1172`）会话层拒写、编辑器闸门、只读账号；凭据走会话级 Secret（`registry.rs:129-136`、`instance.rs:1212`）。
 - 冲突：`catalog-context-model.md:183`（不变量 #5）与 `:224`（§11②「现阶段全部 `READ_ONLY`」）仍按全覆盖写；`§11③` 还把 Oracle 列为「未定」——实现已落地（`extensions/mod.rs:55-56`、`registry.rs:558-596` 用例），文档未更新。
 - 影响：后续按文档做判断会得出「Oracle 也有引擎级只读」的错误结论；「必须用只读账号」这条产品约束目前只在代码注释里。
@@ -213,7 +213,7 @@
 | 刀 | 内容 | 改动面 | 验收 |
 |---|---|---|---|
 | 1 | 删 `legacy` 死面 + 收 `pub use`（P0-1）**——已执行（刀27）** | `duckdb/federation/{legacy,mod}.rs`、`engine/src/lib.rs`、`duckdb/mod.rs` | `cargo check -p rds-engine` 通过；`cargo test -p rds-engine --lib` **345 passed / 0 failed**；`grep FederationManager` 在 `crates` 下清零 |
-| 2 | 文档按 Oracle 现实改写（P0-2） | `docs/architecture/federation/catalog-context-model.md` §8 #5 / §11 | 逐条对照 `accel.rs:171-174`、`session.rs:141`、`registry.rs:558-596` |
+| 2 | 文档按 Oracle 现实改写（P0-2）**——已执行（刀28）** | `docs/architecture/federation/catalog-context-model.md` §8 #5 / §11；`driver-capability-matrix.md` §1 / §4 | 逐条对照 `accel.rs:171-174`、`session.rs::l2_write_refusal`、`registry.rs:558-596`；文档内「一律只读」表述不再与实现冲突 |
 | 3 | 接 `ExplainAnalyzer` 进结果区（P1-5） | `crates/editor`（结果区）、`engine/duckdb/explain.rs` | 新用例：联邦源计划里「过滤在扫描节点之上」可被识别并渲染 |
 | 4 | 跨源类型降级提示（P0-3） | `engine/services`、预检 | 新用例：DECIMAL 同名列 join 给提示不报错 |
 | 5 | 真机门控脚本（§5） | `tools/` + `.rds/tmp/` 日志 | 一次跑通 MySQL / PG / SQLite / Oracle 四类，日志可追溯 |
@@ -247,6 +247,7 @@ cargo test -p rds-workbench --lib -- --list 2>$null | Out-File -Encoding utf8 .r
 | 刀 | 日期 | 改动 | 验收 | 状态 |
 |---|---|---|---|---|
 | 刀27 | 2026-11-27 | 删 `duckdb/federation/legacy.rs`（529 行）；收 `duckdb/mod.rs` 与 `engine/src/lib.rs` 的 `pub use`（`DataSourceConfig` / `DataSourceType` / `FederationManager`）；`federation/mod.rs` 的「一律只读」硬约束补 Oracle 例外（对齐 `accel.rs:171-174`、`session.rs::l2_write_refusal`） | `cargo fmt -p rds-engine -- --check` 对本刀触及的行无差异（包内既有差异见下）；`cargo check -p rds-engine -j 1` Finished 1m16s；`cargo test -p rds-engine --lib -j 1` **345 passed / 0 failed**（41.08s） | 完成 |
+| 刀28 | 2026-11-27 | 文档对账：`catalog-context-model.md` §8 #5（源只读加 L2 Oracle 例外）、§11②③（L1 强制 / Oracle 已落地 / 只剩 MSSQL 驱动形态未定）、§12 变更记录；`driver-capability-matrix.md` §1 联邦行写操作列、§4 联邦硬约束段；顺手删 §4 表里重复的一条 SQLite 行 | 文档内「一律只读」表述与 `accel.rs:171-174`、`session.rs::l2_write_refusal`、`registry.rs:558-596` 三处对上；纯文档，无编译面 | 完成 |
 
 **刀27 备注**
 
