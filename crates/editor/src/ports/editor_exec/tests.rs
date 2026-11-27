@@ -345,7 +345,9 @@ mod export_tests {
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
-    use super::{FedSourceRecord, cell_text, column_names, plan_from_records};
+    use super::{
+        FedSourceRecord, apply_registered_primary, cell_text, column_names, plan_from_records,
+    };
     use engine::duckdb::accel::AccelKind;
     use shared::models::{QueryResult, Value};
 
@@ -381,6 +383,64 @@ mod tests {
         assert_eq!(cell_text(&Value::Float(1.5)), "1.5");
         assert_eq!(cell_text(&Value::Bool(true)), "true");
         assert_eq!(cell_text(&Value::Text("中文".to_string())), "中文");
+    }
+
+    /// 两条源的计划（文档绑定 `G_1` → 派生主源 `orders`）
+    fn two_source_plan() -> super::FederatedPlan {
+        let records = vec![
+            record("G_1", "orders", "mysql_native", "mysql://h:3306/shop"),
+            record("G_2", "warehouse", "postgres", "postgres://h:5432/w"),
+        ];
+        plan_from_records(&records, &[], "G_1", "doc").expect("组装")
+    }
+
+    /// 【K3】项目登记的主源**优先于**「本文档绑定的连接」：用户设过就是设过，重启也一样
+    /// （会话每次执行都按计划重建，这里读一次就等于完成 replay）。
+    #[test]
+    fn a_registered_primary_wins_over_the_document_connection() {
+        let mut plan = two_source_plan();
+        assert_eq!(plan.primary.as_deref(), Some("orders"), "没登记时按文档连接");
+
+        apply_registered_primary(&mut plan, Some("warehouse"));
+        assert_eq!(plan.primary.as_deref(), Some("warehouse"), "登记的主源该赢");
+        assert!(
+            plan.notes.iter().any(|note| note.contains("按项目登记")),
+            "换主源的原因要能看见：{:?}",
+            plan.notes
+        );
+    }
+
+    /// 登记的主源不在本次清单里（登记删了 / 源没开直连）：保留原主源并留说明——
+    /// 不能悄悄换成别的源，否则未限定名会解析到用户没选的那个库上。
+    #[test]
+    fn an_unmounted_registered_primary_keeps_the_document_connection() {
+        let mut plan = two_source_plan();
+        apply_registered_primary(&mut plan, Some("gone_src"));
+        assert_eq!(
+            plan.primary.as_deref(),
+            Some("orders"),
+            "不能因为登记坏了就乱选主源"
+        );
+        assert!(
+            plan.notes
+                .iter()
+                .any(|note| note.contains("gone_src") && note.contains("不在本次清单")),
+            "要把那条坏登记点名说清：{:?}",
+            plan.notes
+        );
+    }
+
+    /// 没登记主源（空 / 空白）→ 计划原样不动，也不多一条说明。
+    #[test]
+    fn no_registered_primary_leaves_the_plan_alone() {
+        for empty in [None, Some(""), Some("   ")] {
+            let mut plan = two_source_plan();
+            let primary = plan.primary.clone();
+            let notes = plan.notes.len();
+            apply_registered_primary(&mut plan, empty);
+            assert_eq!(plan.primary, primary, "{empty:?} 不该改主源");
+            assert_eq!(plan.notes.len(), notes, "{empty:?} 不该多说明");
+        }
     }
 
     /// 组装源清单：别名稳定、凭据随连接串带上、主源是本文档的连接

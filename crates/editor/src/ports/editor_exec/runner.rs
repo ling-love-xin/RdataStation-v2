@@ -769,7 +769,19 @@ impl QueryRunner for EngineQueryRunner {
         // 会话身份 = 本文档 id；`connection` 只留给未来"按连接选源"的判据
         let _ = connection;
         let owner = document;
+        // 会话里先切（可用性检查在这里：源不在 / 没挂上都当场报）
         fed_session::set_primary(&owner, alias)?;
-        Ok(format!("主源已切到 {alias}（未限定名的解析者）"))
+        // 【K3】主源进意图清单：不落库的话重启 / 重开会话就回到文档连接（未限定名换了解析者）
+        match self.fed.remember_primary(alias) {
+            Ok(PrimaryMemory::Project) => Ok(format!(
+                "主源已切到 {alias}（已记入项目，重启后仍是它）"
+            )),
+            Ok(PrimaryMemory::SessionOnly) => Ok(format!(
+                "主源已切到 {alias}（本文档会话内生效；没记进项目，重启后会回到文档连接）"
+            )),
+            Err(reason) => Err(format!(
+                "主源已切到 {alias}，但没能记进项目（重启后会回到文档连接）：{reason}"
+            )),
+        }
     }
 }

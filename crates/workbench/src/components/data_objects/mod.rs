@@ -1635,13 +1635,17 @@ pub fn collect(shared: &Shared) -> Collected {
     // 源段的**意图侧**：项目库 `analysis_sources` 的登记行（规格 §3）。
     // 读路径只开一次 SQLite、不建库、不造项目骨架（见 `list_in_project`）；
     // 读失败就当没有——登记是可选信息，不该把整个面板拖垮。
+    //
+    // 顺带发布两张进程级快照（连接 → 别名 / 主源）：执行侧（工作线程）拿不到项目根，
+    // 只认这两份；每次都整体换掉，切项目后不许留上个项目的键。
     let registered_sources = project
         .as_ref()
-        .and_then(|p| engine::persistence::analysis_sources::list_in_project(&p.root).ok())
+        .and_then(|p| engine::persistence::analysis_sources::publish_project(&p.root).ok())
         .unwrap_or_default();
-    // 执行侧（联邦计划，工作线程）拿不到项目根，靠这份进程级快照认别名；
-    // 每次都整体换掉：切项目后不许留上个项目的键（`publish_aliases` 先清后填）
-    engine::persistence::analysis_sources::publish_aliases(&registered_sources);
+    if project.is_none() {
+        // 没有项目：把上一次项目的别名 / 主源 / 项目根一起清掉
+        engine::persistence::analysis_sources::clear_project();
+    }
     // 底座也跟着清单同步一次：切项目不重启时，`analytics` / `rds_global` 的路径必须跟着换
     // （会话指纹含底座，下一次开联邦会话就会重建）
     crate::services::analysis_bases::sync(project.as_ref().map(|p| p.root.as_path()));

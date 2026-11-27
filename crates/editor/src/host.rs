@@ -141,4 +141,20 @@ pub trait FederatedSourcePort: Send + Sync + 'static {
     ///
     /// `use_duckdb_fed == None`（驱动不支持直连）一律不算。
     fn records(&self, focus: Option<&str>) -> Vec<FederatedSourceRecord>;
+
+    /// 把「主源」记成**项目意图**（写项目库的 `analysis_primary`，036）。
+    ///
+    /// 宿主职责：只有它拿得到项目根。返回 [`PrimaryMemory`] 是为了让措辞说实话——
+    /// 没打开项目 / 这条源没登记时，主源只活在本文档会话里，重启就回文档连接。
+    /// `Err` 只用于真失败（项目库打不开、写不进去），由调用方如实带回界面。
+    fn remember_primary(&self, alias: &str) -> Result<PrimaryMemory, String>;
+}
+
+/// 主源记进哪儿了（`set_federated_primary` 的措辞据此分开，别把「只在会话里」说成「已记住」）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrimaryMemory {
+    /// 写进了项目意图清单：重开会话 / 重启后仍按它解析未限定名
+    Project,
+    /// 只在本文档会话的 `search_path` 上：没有打开项目，或这条源没登记进项目
+    SessionOnly,
 }

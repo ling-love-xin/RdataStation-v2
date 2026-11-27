@@ -570,37 +570,35 @@ mod tests {
 
 
 
-    /// 开了开关但驱动不能挂（ClickHouse 这类还没接入的）：原因说在驱动上，不报“开关没开”
-
+    /// 开了开关但驱动不能挂（ClickHouse 这类还没接入的）：原因说在驱动上，不报“开关没开”。
+    ///
+    /// 口径（2026-11-25 单源放开）：**有一条能挂就可用**，挂不上的那些只进说明；
+    /// 全都挂不上才拦，并把挂不上的逐条点名。（旧断言“联邦还差一个”是 ≥2 源口径的残留）
     #[test]
-
     fn the_federated_channel_reports_a_driver_it_cannot_mount() {
+        fn clickhouse(id: &str) -> ConnectionItem {
+            let mut item = connection(id, true);
+            item.name = "归档库".to_string();
+            item.driver = "clickhouse".to_string();
+            item
+        }
 
-        let mut clickhouse = connection("G_ch", true);
-
-        clickhouse.name = "归档库".to_string();
-
-        clickhouse.driver = "clickhouse".to_string();
-
-
-
+        // 一条能挂 + 一条挂不上 → 联邦可用（不能被“驱动不能挂”那条拖成不可用）
         let availability =
+            port(vec![connection("P_a", true), clickhouse("G_ch")]).availability(Some("P_a"));
+        assert!(
+            availability.for_channel(ExecChannel::Federated).available,
+            "有一条能挂就该放行（单源放开）"
+        );
 
-            port(vec![connection("P_a", true), clickhouse]).availability(Some("P_a"));
-
+        // 只有挂不上的那些 → 拦下，原因点名驱动与连接
+        let availability = port(vec![clickhouse("G_ch2")]).availability(Some("G_ch2"));
         let gate = availability.for_channel(ExecChannel::Federated);
-
-        assert!(!gate.available, "只有 L1 那一个能挂，联邦还差一个");
-
+        assert!(!gate.available, "全挂不上必须拦");
         let reason = gate.reason.unwrap_or_default();
-
         assert!(reason.contains("归档库"), "{reason}");
-
         assert!(reason.contains("驱动还不能做联邦源"), "{reason}");
-
     }
-
-
 
     /// L2（Oracle）算联邦源、**不算本地加速**：联邦档两开就可用，加速档如实挡着
 

@@ -88,7 +88,15 @@ impl EngineQueryRunner {
             });
         }
 
-        plan_from_records(&records, &notes, &doc_conn, document)
+        let mut plan = plan_from_records(&records, &notes, &doc_conn, document)?;
+        // 【K3】主源是**意图**：项目登记过的主源优先于「本文档绑定的连接」。
+        // 会话每次执行都按这份计划重建（`kernel::open` 幂等），所以这里一读就同时
+        // 完成了「重启后 replay」——不另存一份会话状态（`catalog-context-model.md` §5）。
+        apply_registered_primary(
+            &mut plan,
+            engine::persistence::analysis_sources::primary_alias_cached().as_deref(),
+        );
+        Ok(plan)
     }
 
     /// 联邦档执行：在联邦会话上跑（源清单为空/全挂不上都会提前给可读原因）
@@ -270,6 +278,28 @@ fn kernel_plan_for(
         owner,
     )
     .map_err(|error| error.to_string())
+}
+
+/// 把「项目登记的主源」应用到计划上（**纯函数**：三种情形逐条可断言）
+///
+/// - 没登记（`None` / 空串）：保持文档连接的派生结果；
+/// - 登记的那条在本次清单里：主源改用它（用户设过就是设过，重启也一样）；
+/// - 登记的那条不在（没开直连 / 登记被删 / 已卸掉）：**保留原主源并留说明**——
+///   不能悄悄换成别的源，否则用户写的未限定名会解析到他没选的那个库上。
+pub(crate) fn apply_registered_primary(plan: &mut FederatedPlan, registered: Option<&str>) {
+    let Some(alias) = registered.map(str::trim).filter(|alias| !alias.is_empty()) else {
+        return;
+    };
+    if plan.sources.iter().any(|source| source.alias == alias) {
+        if plan.primary.as_deref() != Some(alias) {
+            plan.notes.push(format!("主源按项目登记：{alias}"));
+            plan.primary = Some(alias.to_string());
+        }
+    } else {
+        plan.notes.push(format!(
+            "项目登记的主源 {alias} 不在本次清单里（没开直连 / 已卸 / 登记删了？），本次按文档连接解析"
+        ));
+    }
 }
 
 /// 从源记录组装清单（**纯函数**：不碰连接库，便于逐条断言）

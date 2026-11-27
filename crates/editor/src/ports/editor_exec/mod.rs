@@ -28,7 +28,7 @@ pub(crate) use crate::analysis::AnalysisRequest;
 pub(crate) use crate::channel::ExecChannel;
 pub(crate) use crate::execution::{DuckDbExportRequest, QueryData, QueryRunner};
 pub(crate) use crate::export::ExportFormat;
-pub(crate) use crate::host::{FederatedSourcePort, FederatedSourceRecord};
+pub(crate) use crate::host::{FederatedSourcePort, FederatedSourceRecord, PrimaryMemory};
 pub(crate) use crate::shared::EditorShared;
 pub(crate) use engine::duckdb::accel;
 pub(crate) use engine::duckdb::federation::registry::{self as fed_registry, FederatedSource, MountState};
@@ -133,5 +133,10 @@ pub(crate) struct NoopFederatedSource;
 impl FederatedSourcePort for NoopFederatedSource {
     fn records(&self, _focus: Option<&str>) -> Vec<FederatedSourceRecord> {
         Vec::new()
+    }
+
+    fn remember_primary(&self, _alias: &str) -> Result<PrimaryMemory, String> {
+        // 空端口没有项目：主源只活在会话里（这是如实作答，不是失败）
+        Ok(PrimaryMemory::SessionOnly)
     }
 }

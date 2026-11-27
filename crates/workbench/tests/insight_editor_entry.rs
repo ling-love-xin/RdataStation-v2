@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use gpui_kit::{AppContext as _, TestAppContext};
 
-use editor::host::{FederatedSourcePort, FederatedSourceRecord};
+use editor::host::{FederatedSourcePort, FederatedSourceRecord, PrimaryMemory};
 use editor::shared::{EditorShared, InsightColumnRequest};
 use insight::InsightPanelState;
 use rds_workbench::components::editor_host::WorkbenchEditorHost;
@@ -25,6 +25,10 @@ struct TestFederatedSource;
 impl FederatedSourcePort for TestFederatedSource {
     fn records(&self, _focus: Option<&str>) -> Vec<FederatedSourceRecord> {
         Vec::new()
+    }
+
+    fn remember_primary(&self, _alias: &str) -> Result<PrimaryMemory, String> {
+        Ok(PrimaryMemory::SessionOnly)
     }
 }
 
