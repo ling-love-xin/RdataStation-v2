@@ -26,6 +26,8 @@ pub struct DetailExtras {
     /// 表资产的版本链（`table_asset_versions`，升序）；全局详情靠它列版本节点。
     /// 文件型 / 项目表型给空（项目表型的版本行走 `recent_versions`）。
     pub table_versions: Vec<crate::store::table_asset::TableAssetVersion>,
+    /// 全局文件资产的版本链（`file_asset_versions`，升序）；项目文件走 `recent_versions`。
+    pub file_versions: Vec<crate::store::file_asset::FileAssetVersion>,
 }
 /// 单行 → 详情快照（详情面板只读，格式化在这里做完）。
 ///
@@ -53,6 +55,7 @@ pub fn to_detail(
         recent_versions,
         extras.restorable_versions.as_deref(),
         &extras.table_versions,
+        &extras.file_versions,
     );
     let restorable_versions = extras.restorable_versions;
     ArchiveDetail {
@@ -147,6 +150,7 @@ fn detail_version_timeline(
     versions: &[crate::store::rows::ResourceVersion],
     copies: Option<&[i32]>,
     table_versions: &[crate::store::table_asset::TableAssetVersion],
+    file_versions: &[crate::store::file_asset::FileAssetVersion],
 ) -> Vec<DetailVersionLine> {
     // 先按时间线顺序摆好节点（当前 + 历史），再逐条与“下一节点”（版本号 -1）比差异。
     let mut nodes: Vec<TimelineNode> = Vec::with_capacity(versions.len() + 1);
@@ -168,10 +172,11 @@ fn detail_version_timeline(
     // 表型资产没有副本文件，可回退与否看快照里有没记本体表名（回退 = 改指旧表）。
     let is_table = crate::ArchiveKind::resolve(&resource.kind, resource.analytics_table.as_deref())
         == crate::ArchiveKind::AnalyticsTable;
+    let has_global_file_versions = !is_table && !file_versions.is_empty();
     for version in versions.iter().take(DETAIL_RECENT_VERSIONS) {
-        // 表资产的历史节点由 `table_versions` 单独给（资源版本行里没有快照规模）；
-        // 两处都遍历会出现同版本重复节点。
-        if is_table && !table_versions.is_empty() {
+        // 表资产与全局文件的版本节点分别由 `table_versions` / `file_versions` 单独给；
+        // 资源版本行里没有这些快照规模，两处都遍历会出现同版本重复节点。
+        if (is_table && !table_versions.is_empty()) || has_global_file_versions {
             break;
         }
         let snapshot = serde_json::from_value::<AnalyticsResource>(version.snapshot.clone()).ok();
@@ -213,6 +218,26 @@ fn detail_version_timeline(
                 hash: Some(version.manifest_id.clone()),
                 is_current: false,
                 has_copy: true,
+            });
+        }
+    }
+    if !is_table && !file_versions.is_empty() {
+        // 全局文件资产：当前缓存不等于历史副本，节点按 `file_asset_versions` 给；
+        // `content_pruned` 决定这一版还能不能恢复。
+        for version in file_versions
+            .iter()
+            .rev()
+            .filter(|version| version.version != resource.version)
+            .take(DETAIL_RECENT_VERSIONS)
+        {
+            nodes.push(TimelineNode {
+                version: version.version,
+                time_label: format_timestamp(version.created_at),
+                size_label: String::new(),
+                file_size: None,
+                hash: Some(version.content_hash.clone()),
+                is_current: false,
+                has_copy: !version.content_pruned,
             });
         }
     }

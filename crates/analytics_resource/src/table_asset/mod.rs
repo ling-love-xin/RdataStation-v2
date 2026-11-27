@@ -4,6 +4,7 @@
 //! `arc_*`），manifest 记逻辑内容，`table_asset_versions` 记版本链。
 //! 旧“升级为资产 / 登记已有表”的活表指针模型已整体删除。
 
+pub mod diff;
 pub mod gc;
 pub mod manifest;
 

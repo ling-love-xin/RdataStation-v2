@@ -430,7 +430,7 @@ pub(super) fn request_restore_global_previous(
         )
     } else {
         format!(
-            "将把全局「{name}」的 v{from_version} 内容副本恢复成一个新版本（v{}）：当前 v{} 保留为历史，v{from_version} 及其副本也不动。\n恢复会重新生成全局表；已分发到项目的副本不受影响。\n版本副本若已被保留策略裁掉，恢复会明确拒绝。",
+            "将把全局「{name}」的 v{from_version} 内容副本恢复成一个新版本（v{}）：当前 v{} 保留为历史，v{from_version} 及其副本也不动。\n恢复会重建全局文件当前缓存；已分发到项目的副本不受影响。\n版本副本若已被保留策略裁掉，恢复会明确拒绝。",
             detail.version + 1,
             detail.version
         )

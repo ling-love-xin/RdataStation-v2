@@ -20,6 +20,17 @@ pub(crate) fn refresh_after_op(
 
 /// 打开项目库并装配归档服务（工作线程上执行）。
 pub(crate) async fn open_service(project_root: PathBuf) -> Result<ArchiveService, String> {
+    open_service_with_manager(project_root)
+        .await
+        .map(|(service, _)| service)
+}
+
+/// 与 [`open_service`] 相同，但把项目库管理器一并交给调用方。
+///
+/// 版本对比要读项目分析库里的快照表，连接归管理器所有；管理器必须活到对比结束。
+pub(crate) async fn open_service_with_manager(
+    project_root: PathBuf,
+) -> Result<(ArchiveService, ProjectDatabaseManager), String> {
     let manager = ProjectDatabaseManager::open(&project_root, SQLITE_POOL_SIZE)
         .await
         .map_err(|e| format!("打开项目库失败：{e}"))?;
@@ -29,7 +40,7 @@ pub(crate) async fn open_service(project_root: PathBuf) -> Result<ArchiveService
     if let Err(error) = store.ensure_m6_tables().await {
         tracing::warn!(error = %error, "资产库扩展表自检未通过，语义写入可能失败");
     }
-    Ok(ArchiveService::new(project_root, store))
+    Ok((ArchiveService::new(project_root, store), manager))
 }
 
 /// 业务时间窗是否明显过期：只认文本里出现的四位年份（如 `2026Q3` / `2026-01`）。
@@ -213,8 +224,13 @@ pub(super) async fn run_refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, S
 
     // 全局实例行（§13 展示层）+ 全局存档的使用面：全局登记读失败 / 全局库未初始化
     // 都不弄砸项目刷新（全局视图是附加信息，不是项目刷新能否成功的前提）。
-    let (global_rows, global_resources, dispatch_usage, global_table_versions) =
-        load_global_view().await;
+    let (
+        global_rows,
+        global_resources,
+        dispatch_usage,
+        global_table_versions,
+        global_file_versions,
+    ) = load_global_view().await;
 
     // 业务断言与效力：一次查完（与标签 / 分组同一纪律，避免详情区 N+1）。
     let assertions = store.all_assertions().await.unwrap_or_else(|error| {
@@ -272,6 +288,7 @@ pub(super) async fn run_refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, S
         previews: &previews,
         dispatch_usage: &dispatch_usage,
         global_table_versions: &global_table_versions,
+        global_file_versions: &global_file_versions,
         read_only: job.read_only,
         now: Utc::now(),
     });
@@ -318,6 +335,7 @@ async fn load_global_view() -> (
     Vec<AnalyticsResource>,
     std::collections::HashMap<String, crate::global::DispatchUsage>,
     std::collections::HashMap<String, Vec<crate::store::table_asset::TableAssetVersion>>,
+    std::collections::HashMap<String, Vec<crate::store::file_asset::FileAssetVersion>>,
 ) {
     use crate::global::{GlobalInstanceStore, list_global_resources, to_global_rows};
     let Ok(store) = GlobalInstanceStore::production().await else {
@@ -334,26 +352,36 @@ async fn load_global_view() -> (
             Default::default()
         }
     };
-    // 全局表资产的版本链：一次按资产查完（规模 = 全局表资产行数）。
-    // 文件型没有 `table_asset_versions`。读失败只让该行没有历史节点，不影响刷新。
-    let mut versions = std::collections::HashMap::new();
+    // 全局表 / 文件各自一套版本索引：一次按资产查完（规模 = 全局资产行数）。
+    // 读失败只让该行没有历史节点，不影响刷新。
+    let mut table_versions = std::collections::HashMap::new();
+    let mut file_versions = std::collections::HashMap::new();
     for resource in &resources {
         if ArchiveKind::resolve(&resource.kind, resource.analytics_table.as_deref())
-            != ArchiveKind::AnalyticsTable
+            == ArchiveKind::AnalyticsTable
         {
+            match store.global_table_versions(&resource.id) {
+                Ok(list) if !list.is_empty() => {
+                    table_versions.insert(resource.id.clone(), list);
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(error = %error, asset_id = %resource.id, "读取全局表版本链失败");
+                }
+            }
             continue;
         }
-        match store.global_table_versions(&resource.id) {
+        match store.global_file_versions(&resource.id) {
             Ok(list) if !list.is_empty() => {
-                versions.insert(resource.id.clone(), list);
+                file_versions.insert(resource.id.clone(), list);
             }
             Ok(_) => {}
             Err(error) => {
-                tracing::warn!(error = %error, asset_id = %resource.id, "读取全局表版本链失败");
+                tracing::warn!(error = %error, asset_id = %resource.id, "读取全局文件版本链失败");
             }
         }
     }
-    (rows, resources, usage, versions)
+    (rows, resources, usage, table_versions, file_versions)
 }
 
 /// 读内容预览（工作线程上执行）：只给可预览的行读开头。

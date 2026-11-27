@@ -137,6 +137,9 @@
 草稿箱：写项目 `checkout_leases`（`base_scope='global'`、key `global:<name>`）并在全局
 `global_checkout_leases` 记一条跨项目守卫；全局 `purge` 前必须无活跃取回。该草稿归档为项目资产时，
 项目侧与全局侧租约一起结清。全局文件同样可进回收站，历史版本恢复从 manifest 生成新 head（不原地回滚）。
+全局文件的历史链由 `global/file.rs::global_file_versions` 读 `file_asset_versions`，刷新后随
+`present::DetailExtras.file_versions` 进详情时间线（最近 3 条，`content_pruned` 标记是否还能恢复）；
+全局表仍走 `table_asset_versions`。全局侧只在详情时间线收敛入口，没有独立版本历史对话框。
 
 **全局引用（2026-11-27）**：项目侧不再只能“分发复制一份”，也可以只记一条
 `kind='table_ref'` + `origin_kind='global'` 的引用资产，按稳定 `global_asset_id + version`
@@ -219,7 +222,7 @@ pin 全局版本（`global/refs.rs`、迁移 `global/038_analytics_global_refs.s
 | **作业通道与写入可靠性**【2026-11-12】`spawn` / `Runtime::new` 失败打日志、worker 每个 Job `catch_unwind`、`JobSender::send` 失败归还 pending 并写失败回执；登记 / 快照 / 索引 / 事件同事务；本体 staging 原子替换 | —（staging 刷新时幂等重放已落地）；进程崩溃到下次打开之间仍有窗口，刻意留人工确认、不静默覆盖 |
 | **归档 / 取回 / 再归档闭环**【Phase 0 + 2026-10-13 第一刀】`ArchiveService`：本体 copy（默认，草稿保留为工作副本）+ 登记 + 指纹版本 + 事件；索引失败回滚副本；取回产出可写工作副本；**File 档两档粒度已落**：`PayloadMode`（copy / reference）+ 迁移 023 + `copy_in`/`resolve_source`/`copy_out_source` + 服务层按模式分派（归档 / 再归档 / 取回 / 撤销）；reference 的 UI 入口与打开校验留后续刀 | reference 的历史版本还原仍拒绝（走「取回该版本」）；**取回 → 改 → 回原档升 vN+1 已打通**（030 取回凭据） |
 | **索引修复**【Phase 0 + Phase 3 第二刀 + P0.8】`IndexRepair`：三类孤儿（有文件无记录 / 有记录无本体 / 指纹不匹配）的扫描与人工确认修复；**对话框已接**（`dialogs/index_repair.rs` + `present::build_repair_rows` + 宿主接线）：三分组、行内动作（补登固定文件型 / **从回收站还原**（按原相对路径找条目）/ 删记录走确认 / 接受当前内容 / 打开版本历史），修完自动重扫换行 | 按目录批量补登（后续刀） |
-| **版本历史**【Phase 3 第一刀】`dialogs/version` + `present::build_version_rows` + 宿主接线：当前版本与历史行同列（无 manifest 的行标不可还原）；**行本体走 `list::ListItem`**（hover / 选中由组件承担，不再手搓）；**还原 = 生成新版本**（不原地回滚）、**取回该版本为草稿**；「删除内容副本」已随旧副本方案删除；**任意两版对比**：Shift+点一行设基准，按版本号排旧→新；动作后宿主换行，不关窗 | 按版本 / 时间 / 来源过滤检索（后续刀）；表格 schema/行 diff、二进制元信息对比未做 |
+| **版本历史**【Phase 3 第一刀】`dialogs/version` + `present::build_version_rows` + 宿主接线：当前版本与历史行同列（无 manifest 的行标不可还原）；**行本体走 `list::ListItem`**（hover / 选中由组件承担，不再手搓）；**还原 = 生成新版本**（不原地回滚）、**取回该版本为草稿**；「删除内容副本」已随旧副本方案删除；**任意两版对比**：Shift+点一行设基准，按版本号排旧→新；表型资产同样可对比（`table_asset/diff.rs` 给 schema 列变化 + 有界行级差异，文件仍走文本 diff）；动作后宿主换行，不关窗 | 按版本 / 时间 / 来源过滤检索（后续刀）；二进制元信息对比未做；行级 diff 对超大表未加超时 / 采样阈值 |
 | **文件资产删除**【2026-11-27 修订】`service/unlock.rs` + `global/unlock.rs` 与对应作业/宿主动作已删除；删除入口只走统一回收站：`trash_one` / `trash_global` 软删登记 + 本体搬进 `.RSmeta/trash` / `data/trash/global`，还原后本体回位。项目/全局列表与详情危险区都只提供「移入回收站」 | 草稿箱扫描联动（当前靠扫描发现新文件） |
 | **回收站**【P0.8 + 2026-11-26】`engine::persistence::trash::ProjectTrash`（上提 + 中性化：来源是字符串 `origin`、不返回 M5 类型）+ `dialogs/trash` + 宿主接线：移入回收站（单选 / 多选批量，本体进 `.RSmeta/trash`、登记行**软删**——还原能恢复别名 / 标签 / 指纹）/ 还原（`origin` 校验、同名避让并同步登记路径）/ 永久删除 / 清空；**唯一入口在草稿箱栏回收站分区的「资产库归档…」**，清单三路合并（项目实体条目 / registry 软删登记行 / 全局条目），全局行按 `global:<name>` 路由到 `restore_global` / `purge_global`，清空同时清项目与全局两侧；索引修复的「从回收站还原」走 `restore_archive_by_rel_path` | 回收站 TTL 自动清理、「打开原位置」入口、按来源分组 / 筛选（后续刀） |
 | **面板**【Phase 1 + Phase 2 第一 / 二 / 三刀 + 2026-09-20 UI 收尾】`ResourcesPanel`：面板头（标题图标 + `＋ ▾` / `⋯` 四项）/ 工具栏（搜索·筛选（含**标签维**）·排序）/ **`List` 虚拟化行（kind 图标 + 强度徽标 + 尾部字段）+ 右键菜单** / **批量多选（单击 / `Ctrl` / `Shift` / 双击手势 + `Ctrl+A`，多选时单选项置灰、删除带数量）** / **分组折叠区（会话级折叠）** / 状态行 / 两种空态；`present.rs` 把索引行转成快照（含逐行详情与标签）；**workbench 接线已落**（`panels/resources.rs` 装配 + `services/resource_jobs.rs` 后台取数 + `components/resource_host.rs` 端口）；**右栏「存档详情」已接**（`RightPanel::Archive`，宿主观察面板实体做选中联动） | —（F2 重命名、标题点击折叠、折叠状态持久化均已落地） |

@@ -9,11 +9,11 @@ use std::sync::atomic::Ordering;
 use similar::TextDiff;
 
 use crate::dialogs::version::{VersionAction, VersionDialogSeed};
-use crate::dialogs::version_diff::VersionDiffSeed;
+use crate::dialogs::version_diff::{VersionDiffKind, VersionDiffSeed};
 use crate::present::{build_timeline_rows, build_version_rows};
-use crate::{AnalyticsResource, ArchiveService};
+use crate::{AnalyticsResource, ArchiveKind, ArchiveService};
 
-use super::{Job, OpOutcome, free_dest, jobs, open_service};
+use super::{Job, OpOutcome, free_dest, jobs, open_service, open_service_with_manager};
 
 /// diff 对比的单侧文本大小上限（字节）：超过就不给对比，避免取数线程白算一个大文件。
 const DIFF_MAX_TEXT_BYTES: usize = 512 * 1024;
@@ -193,15 +193,91 @@ pub(crate) async fn load_versions(job: &VersionsJob) -> Result<VersionRows, Stri
     })
 }
 
-/// 取两版文本并生成 unified patch（只读；文本类 / 大小上限在此挡）。
+/// 取两版内容并生成 unified patch（只读；文件文本 / 表快照在此分流）。
 pub(crate) async fn load_version_diff(job: &VersionDiffJob) -> Result<VersionDiffRows, String> {
-    let service = open_service(job.project_root.clone()).await?;
+    let (service, manager) = open_service_with_manager(job.project_root.clone()).await?;
     let current = service
         .store()
         .get_resource_by_id(&job.resource_id)
         .await
         .map_err(|e| format!("读取存档失败：{e}"))?;
     let (old_v, new_v) = diff_sides(job.version, job.against, current.version)?;
+    let kind = ArchiveKind::resolve(&current.kind, current.analytics_table.as_deref());
+    let name = current.name.clone();
+
+    if kind == ArchiveKind::AnalyticsTable {
+        let versions = service
+            .store()
+            .table_asset_versions(&job.resource_id)
+            .await
+            .map_err(|e| format!("读取表快照版本失败：{e}"))?;
+        let old_row = versions
+            .iter()
+            .find(|row| row.version == old_v)
+            .ok_or_else(|| format!("v{old_v} 不在表版本链里，无法对比"))?;
+        let new_row = versions
+            .iter()
+            .find(|row| row.version == new_v)
+            .ok_or_else(|| format!("v{new_v} 不在表版本链里，无法对比"))?;
+        let old_manifest = service
+            .store()
+            .table_manifest(&old_row.manifest_id)
+            .await
+            .map_err(|e| format!("读取 v{old_v} manifest 失败：{e}"))?
+            .ok_or_else(|| format!("v{old_v} 的 manifest 已缺失，无法对比"))?;
+        let new_manifest = service
+            .store()
+            .table_manifest(&new_row.manifest_id)
+            .await
+            .map_err(|e| format!("读取 v{new_v} manifest 失败：{e}"))?
+            .ok_or_else(|| format!("v{new_v} 的 manifest 已缺失，无法对比"))?;
+        let old_snapshot = service
+            .store()
+            .table_snapshot(&old_row.snapshot_id)
+            .await
+            .map_err(|e| format!("读取 v{old_v} 快照失败：{e}"))?
+            .ok_or_else(|| format!("v{old_v} 的物理快照已缺失，无法对比"))?;
+        let new_snapshot = service
+            .store()
+            .table_snapshot(&new_row.snapshot_id)
+            .await
+            .map_err(|e| format!("读取 v{new_v} 快照失败：{e}"))?
+            .ok_or_else(|| format!("v{new_v} 的物理快照已缺失，无法对比"))?;
+        let duckdb = manager
+            .duckdb_conn()
+            .ok_or_else(|| "项目分析库未打开，无法读取表快照".to_string())?;
+        let handle = duckdb
+            .acquire()
+            .await
+            .map_err(|e| format!("获取项目分析库连接失败：{e}"))?;
+        let guard = handle.lock().await;
+        let conn = guard
+            .as_ref()
+            .ok_or_else(|| "项目分析库连接已关闭，无法读取表快照".to_string())?;
+        let report = crate::table_asset::diff::table_version_diff(
+            conn,
+            &name,
+            old_v,
+            new_v,
+            &old_manifest,
+            &new_manifest,
+            &old_snapshot,
+            &new_snapshot,
+        )
+        .map_err(|e| format!("生成表版本差异失败：{e}"))?;
+        return Ok(VersionDiffRows {
+            resource_id: job.resource_id.clone(),
+            seed: VersionDiffSeed {
+                name,
+                old_version: old_v,
+                new_version: new_v,
+                patch: report.patch,
+                kind: VersionDiffKind::Table,
+                summary: Some(report.summary),
+            },
+        });
+    }
+
     // 新侧若是当前版本就读本体（与旧行为一致）；否则从该版 manifest 物化。
     // 旧侧在当前版本位于两版之间时也按 manifest 读，避免把“当前本体”误当成历史内容。
     let new_text = if new_v == current.version {
@@ -213,7 +289,6 @@ pub(crate) async fn load_version_diff(job: &VersionDiffJob) -> Result<VersionDif
     if diff_text_too_large(&old_text, &new_text) {
         return Err(DIFF_TOO_LARGE.to_string());
     }
-    let name = current.name.clone();
     let patch = unified_patch(&name, old_v, new_v, &old_text, &new_text);
     Ok(VersionDiffRows {
         resource_id: job.resource_id.clone(),
@@ -222,6 +297,8 @@ pub(crate) async fn load_version_diff(job: &VersionDiffJob) -> Result<VersionDif
             old_version: old_v,
             new_version: new_v,
             patch,
+            kind: VersionDiffKind::File,
+            summary: None,
         },
     })
 }

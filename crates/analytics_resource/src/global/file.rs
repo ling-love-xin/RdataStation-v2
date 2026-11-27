@@ -11,9 +11,9 @@ use tokio::fs;
 
 use shared::error::{CommonError, CoreError, StorageError};
 
+use crate::payload::PayloadStore;
 use crate::payload::cas::CasStore;
 use crate::payload::manifest::FileManifest;
-use crate::payload::PayloadStore;
 
 use super::*;
 
@@ -99,6 +99,31 @@ impl GlobalInstanceStore {
         }
 
         Ok(outcome)
+    }
+
+    /// 某全局文件资产的完整版本索引（升序），供详情时间线展示历史。
+    pub(crate) fn global_file_versions(
+        &self,
+        resource_id: &str,
+    ) -> Result<Vec<crate::store::file_asset::FileAssetVersion>, CoreError> {
+        self.with_sqlite(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+                    SELECT resource_id, version, manifest_id, content_hash, meta_hash,
+                           parent_version, content_pruned, created_at
+                    FROM file_asset_versions
+                    WHERE resource_id = ?1
+                    ORDER BY version ASC
+                    "#,
+                )
+                .map_err(sqlite_err("prepare_global_file_versions"))?;
+            let rows = stmt
+                .query_map(rusqlite::params![resource_id], map_global_file_version)
+                .map_err(sqlite_err("query_global_file_versions"))?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(sqlite_err("collect_global_file_versions"))
+        })
     }
 
     /// 从历史 manifest 恢复成新版本（不原地回滚）：旧版本行与 CAS 对象都保留。
@@ -897,6 +922,24 @@ fn fork_rel_path(original: &str, fork_name: &str) -> String {
         Some(dir) => dir.join(file).to_string_lossy().replace('\\', "/"),
         None => file,
     }
+}
+
+fn map_global_file_version(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<crate::store::file_asset::FileAssetVersion> {
+    let created_at: String = row.get(7)?;
+    Ok(crate::store::file_asset::FileAssetVersion {
+        resource_id: row.get(0)?,
+        version: row.get(1)?,
+        manifest_id: row.get(2)?,
+        content_hash: row.get(3)?,
+        meta_hash: row.get(4)?,
+        parent_version: row.get(5)?,
+        content_pruned: row.get::<_, i64>(6)? != 0,
+        created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
+            .map(|value| value.with_timezone(&Utc))
+            .unwrap_or_else(|_| Utc::now()),
+    })
 }
 
 fn resolve_draft_path(project_root: &Path, rel: &str) -> Result<PathBuf, InstanceOpError> {

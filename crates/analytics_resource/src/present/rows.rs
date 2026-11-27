@@ -38,6 +38,9 @@ pub struct SnapshotInputs<'a> {
     /// 全局表资产的版本链（按 asset_id 一次查完）：全局详情要列历史版本节点。
     pub global_table_versions:
         &'a std::collections::HashMap<String, Vec<crate::store::table_asset::TableAssetVersion>>,
+    /// 全局文件资产的版本链（与表分开取；文件没有 `table_asset_versions`）。
+    pub global_file_versions:
+        &'a std::collections::HashMap<String, Vec<crate::store::file_asset::FileAssetVersion>>,
     pub read_only: bool,
     pub now: DateTime<Utc>,
 }

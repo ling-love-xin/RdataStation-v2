@@ -290,17 +290,15 @@ pub(super) fn action_bar(
     // 当前版本不走这两个动作（它就是本体）：取回走详情面板的「取回（检出）…」。
     let can_act = !row.is_current && row.has_copy && !busy && !read_only;
     // 对比是**只读查看**（不写库，只读项目也能看），只要求两侧内容还在；
-    // 文本类型与大小上限由宿主在取数线程挡（对话框不查文件系统）。
-    // 表型资产没有本体文件，文本对比无从谈起——直接不给这个按钮。
-    // 有基准时两侧都必须是可读的文件版本（当前版本读本体，也算可读）。
-    let selected_diffable = !row.is_table && (row.has_copy || row.is_current);
-    let base_diffable = base.is_some_and(|base| {
-        !base.is_table && (base.has_copy || base.is_current) && base.version != version
-    });
+    // 文件的大小上限由宿主在取数线程挡，表则由快照读取链路挡（对话框不查文件系统）。
+    // 有基准时两侧都必须是可读版本（当前版本读本体 / 当前表快照，也算可读）。
+    let selected_diffable = row.has_copy || row.is_current;
+    let base_diffable =
+        base.is_some_and(|base| (base.has_copy || base.is_current) && base.version != version);
     let can_diff = if base.is_some() {
         !busy && selected_diffable && base_diffable
     } else {
-        !busy && !row.is_current && row.has_copy && !row.is_table
+        !busy && !row.is_current && row.has_copy
     };
     // 「用这一版分析」= 把历史副本挂成分析视图（只读查看：不写库、不动本体，只读项目也能用）。
     let can_analyze = !busy && !row.is_current && row.has_copy && !row.is_table;
@@ -310,11 +308,11 @@ pub(super) fn action_bar(
     let can_checkout = can_act && !row.is_table;
     let hint = if base.is_some() {
         if !selected_diffable {
-            "选中的这一版没有可读内容（表型 / 内容已裁除），Shift+点另一行换一个对比版本"
+            "选中的这一版没有可读内容（内容已裁除），Shift+点另一行换一个对比版本"
         } else if base_diffable {
             "Shift+点另一行 = 换对比基准；Shift+再点这一行 = 取消基准"
         } else {
-            "这个基准没有可读内容（表型 / 内容已裁除），Shift+点另一行换一个基准"
+            "这个基准没有可读内容（内容已裁除），Shift+点另一行换一个基准"
         }
     } else if row.is_global_ref {
         if read_only {
@@ -327,7 +325,7 @@ pub(super) fn action_bar(
     } else if row.is_current {
         "这是当前版本（本体上的内容）：取回请用详情面板的「取回（检出）…」；Shift+点另一行可设基准后对比"
     } else if row.is_table {
-        "表型资产没有内容文件：回退 = 把本体指回这一版的表（两张表都在，不删数据）"
+        "表型资产：Shift+点另一行可设基准做 schema / 行级差异对比；回退 = 把本体指回这一版的表（两张表都在，不删数据）"
     } else if !row.has_copy {
         "该版本只留了元数据（内容副本已被保留策略裁剪），不能还原、取回或拿来分析"
     } else {
@@ -337,12 +335,19 @@ pub(super) fn action_bar(
         Some(base) => format!("与基准 v{} 对比…", base.version),
         None => tr("与当前版本对比…").to_string(),
     };
-    let diff_tip = match base {
-        Some(base) => format!(
+    let diff_tip = match (base, row.is_table) {
+        (Some(base), true) => format!(
+            "打开表版本差异，把选中与基准 v{} 对比 schema、行数与差异行（只读，两版自动按旧→新排）",
+            base.version
+        ),
+        (Some(base), false) => format!(
             "打开文本 diff 查看器，把选中版本与基准 v{} 对比（只读，两版自动按旧→新排）",
             base.version
         ),
-        None => tr("打开文本 diff 查看器，看这一版和当前版本差在哪（只读）").to_string(),
+        (None, true) => {
+            tr("打开表版本差异，看这一版和当前版本差在 schema、行数与哪些行（只读）").to_string()
+        }
+        (None, false) => tr("打开文本 diff 查看器，看这一版和当前版本差在哪（只读）").to_string(),
     };
 
     let restore = {
