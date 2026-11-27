@@ -207,6 +207,7 @@
 | engine | `zero_row_columns_reach_query_result` | 同上 |
 | engine | `error_location_from_real_errors` | 同上 |
 | engine | `oracle_probe` | `RDS_TEST_ORACLE_URL` + `RDS_TEST_SQLITE_PATH` |
+| engine | `federation_explain_probe`（刀38 新增） | `RDS_TEST_MYSQL_URL` / `RDS_TEST_PG_URL` |
 | workbench | `federation_sources` | `RDS_TEST_MYSQL_URL` / `RDS_TEST_SQLITE_PATH` |
 | workbench | `oracle_federation` | `RDS_TEST_MYSQL_URL` / `RDS_TEST_ORACLE_URL` |
 | workbench | `official_driver_real` | MySQL / PG |
@@ -238,6 +239,8 @@
 | PG | 本地 join / 表达式 | **`POSTGRES_QUERY`** 单节点 | 0 条 | 整句下推时才退化成 `_QUERY` |
 
 因此 `is_federated_operator` 只认 `*_SCAN` 是**错的**（MySQL 全部查询会被判成"没看到外部源"，「下推」列永远空白，`collect_source_scans` 永远是空）；刀37 已把 `*_QUERY` 纳入，并给 `SourceScanFacts` 增 `whole_statement`：整句下推时结论只说「整句下推 · 源端执行」，不再用「投影未推」替它说话。实测原文留在 `.rds/tmp/fed-explain-probe3.log`。
+
+**已固化（刀38）**：`crates/engine/tests/federation_explain_probe.rs` 把上表钉成两条门控用例（`mysql_federated_plan_is_a_whole_statement_query` / `postgres_federated_plan_degrades_from_scan_to_query`）——断言 MySQL 的 `MYSQL_QUERY` 单节点、`whole_statement = true`、结论「整句下推 · 源端执行」；PG 简单查询的 `POSTGRES_SCAN` 带表名与 `projections_pushed`、加本地 join 后退化成 `POSTGRES_QUERY` 且拿不到表名。两个变量都设时实跑：**2 passed / 0 failed / 10.61s**。形态一变（DuckDB 升级、扩展换代）立刻红，不必等用户看到一张空白计划表才发现。
 
 ---
 
@@ -301,6 +304,8 @@ cargo test -p rds-workbench --lib -- --list 2>$null | Out-File -Encoding utf8 .r
 | 刀36 | 2026-11-27 | 29b：`exec/tx.rs` 的本地通道（加速 / 联邦）改发 `EXPLAIN (FORMAT JSON)`（源库档仍按方言）；新增 `exec/plan.rs`——`explain_json_payload` 从两列回执抓计划正文，`plan_table` 用 `parse_json_plan` + `collect_source_scans` 先序展平成六列表（`层级 / 算子 / 对象 / 预估行数 / 下推 / 额外信息`），`flatten_explain_result` 在 `pump.rs` 的 `store.push` 之前改写，并把 `column_types` / `column_annotations` 置空、`key_columns` 清 `None`；标题常量 `EXPLAIN_TITLE` 与 `tx.rs` 同源 | `cargo check -p rds-editor -j 1` Finished 40.32s；新增 3 条用例全绿；`cargo test -p rds-editor --lib -j 1 -- --test-threads=1` **889 passed / 0 failed / 4 ignored** | 完成（P1-5 关闭） |
 
 | 刀37 | 2026-11-27 | 真机取证（MySQL 3306 + PG 5432 实连，Oracle 1521 未起）推翻刀29 的一条假设：MySQL 的外部源查询**只出** `MYSQL_QUERY`（整句下推），PG 简单查询出 `POSTGRES_SCAN`、本地 join / 表达式退化成 `POSTGRES_QUERY`。改 `duckdb/explain.rs`：`is_federated_operator` 纳入 `*_QUERY`；`SourceScanFacts` 增 `whole_statement`，整句下推时 `summary()` 给「整句下推 · 源端执行」而不是「投影未推」；`walk_source_scans` 对 `_QUERY` 形态不再按 `Projections` / `Filters` 硬判。editor 侧补一条 `MYSQL_QUERY` 展平用例 | `explain` 单测 19 passed；`cargo test -p rds-engine --lib -j 1 -- --test-threads=1` **357 passed / 0 failed**；editor `exec::plan::` **4 passed**；两文件 `rustfmt --check` 干净 | 完成（纠正刀29 假设） |
+
+| 刀38 | 2026-11-27 | 新增 `crates/engine/tests/federation_explain_probe.rs`（入库，门控）：把刀37 的真机形态钉成两条用例——MySQL 单节点 `MYSQL_QUERY` + `whole_statement` + 「整句下推 · 源端执行」；PG 简单查询 `POSTGRES_SCAN`（表名 + `projections_pushed`）、加本地 join 退化成 `POSTGRES_QUERY`（无表名）。同时断言 `EXPLAIN (FORMAT JSON)` 回执恒为 `explain_key` / `explain_value` 两列、正文是 JSON 数组 | 两变量都设时实跑 **2 passed / 0 failed / 10.61s**；`rustfmt --check` 干净 | 完成（真机结论可复算） |
 
 **刀27 备注**
 
