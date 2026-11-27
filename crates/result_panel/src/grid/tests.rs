@@ -3978,7 +3978,7 @@ impl gpui_kit::Render for HeaderHarness {
         _window: &mut gpui_kit::Window,
         cx: &mut gpui_kit::Context<Self>,
     ) -> impl gpui_kit::IntoElement {
-        // 走生产路径：表头带高由 delegate 决定（注释开启 → 40px，单行 → 组件默认 26px）
+        // 走生产路径：表头带高由 delegate 决定（单行 28px，注释/类型名两行 50px）
         let header_height = self.state.read(cx).delegate().header_row_height();
         let table = gpui_kit::component::table::DataTable::new(&self.state)
             .with_size(crate::ui::RESULT_TABLE_SIZE);
@@ -3990,10 +3990,10 @@ impl gpui_kit::Render for HeaderHarness {
     }
 }
 
-/// 【表头遮挡回归 2026-11-08】表头带高 = 组件 `table_row_height()`（本仓 `RESULT_TABLE_SIZE`
-/// = XSmall 档 = 26px，减上下 padding 4px 只剩 **22px** 内容高）。列头菜单曾经是主行的
-/// **兄弟**——同一个 `v_flex` 里的第二行；两行高度加起来远超 22px，flex 先把 28px 的菜单排满，
-/// 主行被挤成 0 高：表头只剩 badge 的半截彩色残线，列名整行看不见（用户截图实证）。
+/// 【表头遮挡回归 2026-11-08，2026-11-27 按真值复核】表头带高由 delegate 恒给（单行 28 /
+/// 两行 50，真值 `GridColumn.getHeaderHeight`）。列头菜单曾经是主行的**兄弟**——同一个
+/// `v_flex` 里的第二行；两行高度加起来远超内容区，flex 先把 28px 的菜单排满，主行被挤成
+/// 0 高：表头只剩 badge 的半截彩色残线，列名整行看不见（用户截图实证）。
 ///
 /// 修复后菜单并进主行（`flex_none`），这里锁住「主行至少装得下一行文字」——
 /// 旧实现下 `main.size.height` 是 0，断言必挂。
@@ -4026,14 +4026,14 @@ fn header_main_row_keeps_a_readable_height(cx: &mut gpui_kit::TestAppContext) {
         "表头主行被挤扁，列名会被裁掉：main={:?}",
         main.size.height
     );
-    // 表头带 26px、上下 padding 4px → 主行不可能高过 22px
+    // 表头带 28px（真值 `GridColumn.getHeaderHeight`）、本仓表头不带上下内距 → 主行不可能高过 28px
     assert!(
-        main.size.height <= gpui_kit::px(22.),
+        main.size.height <= gpui_kit::px(28.),
         "主行不该高过表头内容区：main={:?}",
         main.size.height
     );
 
-    // 列头菜单必须与列名**同一行**：它一旦落成主行的兄弟（第二行），22px 内容高
+    // 列头菜单必须与列名**同一行**：它一旦落成主行的兄弟（第二行），28px 内容高
     // 先被菜单排满，主行就被挤成 0——这正是被遮挡的形态。
     // 2026-11-08 起菜单是绝对定位 + 悬停才显形（默认 `invisible`），观测可能不登记
     // 不可见元素：取不到就跳过几何校验（"不占位"由
@@ -4206,29 +4206,30 @@ fn row_number_gutter_paints_the_header_background() {
     );
 }
 
-/// 【注释表头 2026-11-08】注释开关开启时表头是**两行**（列名主行 + 注释小字），
-/// 但表头带高一直跟着组件的行高档走（XSmall = 26px，扣 padding 只剩 22px 内容高）：
-/// 两行挤 22px 的结果是各被 `overflow_hidden` 裁掉一半，主行读不出字。
+/// 【注释表头 2026-11-08，2026-11-27 按真值重写】注释开关开启时表头是**两行**
+/// （列名主行 + 注释小字），单行时是一行。
 ///
-/// 修复：`ResultGridDelegate::header_row_height()` 在这**一档**返回 40px（内容高 36 =
-/// 两行各 18px），宿主把它交给 `DataTable::header_row_height`。单行表头返回 `None`，
-/// 一个像素都不动。
+/// 真值 `GridColumn.getHeaderHeight:196-208`：`topMargin(6) + fontHeight(16) + bottomMargin(6)`
+/// = **28**（单行），两行再 `+ topMargin + fontHeight` = **50**。本仓
+/// `ResultGridDelegate::header_row_height()` **恒返回 `Some`**——单行也必须显式给 28，
+/// 因为表体行高已改成真值公式 20px（[`crate::ui::RESULT_TABLE_SIZE`]），组件「未设置 =
+/// 表体行高」的兜底会让单行表头掉到 20px。
 #[gpui_kit::test]
 fn comment_header_row_gets_room_for_two_lines(cx: &mut gpui_kit::TestAppContext) {
     cx.update(gpui_kit::init);
 
-    // 1) 纯逻辑：只有注释开关会抬表头
+    // 1) 纯逻辑：单行 28、两行 50，两档都必须给值
     let mut plain = grid();
     assert_eq!(
         plain.header_row_height(),
-        None,
-        "单行表头不该覆盖组件默认高度（默认视觉必须一个像素都不变）"
+        Some(crate::ui::RESULT_HEADER_ROW_HEIGHT),
+        "单行表头也要显式给真值高度（组件的「未设置即表体行高」会掉到 20px）"
     );
     plain.set_column_header_extra(ColumnHeaderExtra::Description);
     assert_eq!(
         plain.header_row_height(),
         Some(crate::ui::RESULT_HEADER_COMMENT_ROW_HEIGHT),
-        "注释开启后表头是两行，必须给覆盖高度"
+        "注释开启后表头是两行，必须给两行高度"
     );
 
     // 2) 几何：真渲染两帧后两行都上屏、且不重叠
@@ -4471,8 +4472,8 @@ fn only_the_focused_column_gets_a_closed_header_border(cx: &mut gpui_kit::TestAp
 /// 48 → 40、数据列 128 → 120）。谁把左右内距又填回列定义里，这里立刻掉下来。
 ///
 /// 表头走同一条几何（2026-11-18 补）：表头的列边界线画在左边界（右端被组件表头右内距
-/// `offset_pr` 占 4px，见 `result-panel.md` §9.72.3 第 5 条），所以断言收窄为
-/// 「行号列表头撑满列宽」+「数据列表头从行号槽右缘开始」。
+/// `offset_pr` 占 8px，见 `result-panel.md` §9.72.3 第 5 条），所以断言收窄为
+/// 「行号列表头从列的左缘开始、宽度只差那 8px」+「数据列表头从行号槽右缘开始」。
 #[gpui_kit::test]
 fn cells_stretch_to_the_column_boundary_for_grid_lines(cx: &mut gpui_kit::TestAppContext) {
     use gpui_kit::px;
@@ -4508,8 +4509,9 @@ fn cells_stretch_to_the_column_boundary_for_grid_lines(cx: &mut gpui_kit::TestAp
     );
 
     // 表头：列边界线画在表头格的**左**边界（真值给非焦点列画右 + 底边界，
-    // `GridColumnRenderer.java:105-109`；本仓表头内容区右端被组件 `offset_pr` 占 4px，
-    // 画右边会落到列内侧 4px，见 `result-panel.md` §9.72.3 第 5 条），
+    // `GridColumnRenderer.java:105-109`；本仓表头内容区右端被组件 `offset_pr` 占 8px
+    // （`state.rs:2171-2176`，表体档 `Size::Size` → `table_cell_padding().right = 8`），
+    // 画右边会落到列内侧 8px，见 `result-panel.md` §9.72.3 第 5 条），
     // 所以这里钉的是「数据列表头从行号槽右缘开始」——它一偏，表头竖线就与数据区的竖线错位。
     let th0 = vcx
         .debug_bounds("editor-result-th-0")
@@ -4517,9 +4519,10 @@ fn cells_stretch_to_the_column_boundary_for_grid_lines(cx: &mut gpui_kit::TestAp
     let th1 = vcx
         .debug_bounds("editor-result-th-1")
         .expect("数据列表头应有 debug 几何");
+    // 行号列表头宽 = 列宽 48 − 组件右内距 8 = 40（左端仍是列的左缘，竖线错不了位）
     assert!(
-        th0.size.width >= crate::ui::RESULT_ROW_NUMBER_WIDTH - px(4.),
-        "行号列表头没撑满列宽（表头竖线会落到列内侧）：th0={:?}",
+        th0.size.width >= crate::ui::RESULT_ROW_NUMBER_WIDTH - px(9.),
+        "行号列表头比「列宽 − 右内距 8」还窄（表头竖线会落到列内侧）：th0={:?}",
         th0.size.width
     );
     assert!(

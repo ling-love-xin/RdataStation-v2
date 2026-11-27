@@ -829,23 +829,27 @@ impl ResultGridDelegate {
         !self.filter_panel_hidden
     }
 
-    /// 表头带该多高（`None` = 用组件默认，即 [`crate::ui::RESULT_TABLE_SIZE`] 档的行高 26px）。
+    /// 表头带该多高（**恒返回 `Some`**：单行 28 / 两行 50）。
     ///
-    /// 只有「列头附加内容」非 `Nothing`（注释 / 类型名）时才抬：那时表头是**两行**
-    /// （列名主行 + 附加小字），组件默认的 26px 减掉 `table_cell_padding` 上下各 2px
-    /// 只剩 22px 内容高，两行各被裁一半——主行会被压到读不出字
-    /// （2026-11-08「字段被遮挡」就是这一族问题的极端形态：列头菜单当时还是第二行，
-    /// 直接把主行挤成 0）。单行表头一个像素都不动，默认视觉不变。
+    /// 真值 `GridColumn.getHeaderHeight`（`:196-208`）：
+    /// `topMargin(6) + fontMetrics.getHeight(16) + bottomMargin(6)` = 28，两行时再加一组
+    /// `topMargin + fontHeight` = 50。本仓把这两个数固定成常量
+    /// （[`crate::ui::RESULT_HEADER_ROW_HEIGHT`] / [`crate::ui::RESULT_HEADER_COMMENT_ROW_HEIGHT`]）。
     ///
-    /// DBeaver 侧表头行高由渲染器按需算（`GridColumnRenderer` 在两行内容下自己
-    /// 报更大 preferred size），本仓是固定抬到两行够用的常量——口径相同
-    /// （「有第二行才变高」），数值来源见 [`crate::ui::RESULT_HEADER_COMMENT_ROW_HEIGHT`]。
+    /// 为什么单行也必须显式给：表体行高改成真值公式（20px，见
+    /// [`crate::ui::RESULT_TABLE_SIZE`]）后，组件的「未设置即等同表体行高」会让单行表头
+    /// 掉到 20px——比真值矮 8px。
+    ///
+    /// 两行档的口径不变：「列头附加内容」（注释 / 类型名）非 `Nothing` 时才抬
+    /// （2026-11-08「字段被遮挡」那一族问题的常量兜底）。
     ///
     /// 由宿主在渲染表格时读给 `DataTable::header_row_height`（`grid/status.rs`）。
     pub(crate) fn header_row_height(&self) -> Option<Pixels> {
-        self.column_header_extra
-            .shows_extra_line()
-            .then_some(crate::ui::RESULT_HEADER_COMMENT_ROW_HEIGHT)
+        Some(if self.column_header_extra.shows_extra_line() {
+            crate::ui::RESULT_HEADER_COMMENT_ROW_HEIGHT
+        } else {
+            crate::ui::RESULT_HEADER_ROW_HEIGHT
+        })
     }
 
     /// 【类型样式】同步全局偏好（数字格式 / NULL 占位 / 布尔映射 / 按族对齐与前景色）。

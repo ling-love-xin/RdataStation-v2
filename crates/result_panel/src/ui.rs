@@ -191,18 +191,31 @@ pub const RESULT_ROW_EXPANDER_SIZE: Pixels = px(16.);
 /// 三角与行号数字的间距（2px，真值 `EXPANDER_SPACING = 2`，`GridRowRenderer.java:54`）
 pub const RESULT_ROW_EXPANDER_SPACING: Pixels = px(2.);
 
-/// 结果网格的**密度档**（组件尺寸，不是 rem 倍率）。
+/// 结果网格的**密度档**（组件尺寸，不是 rem 倍率）：表体行高 **20px**。
 ///
-/// 组件给的表行高只有 26 / 30 / 32 / 40 四档（`XSmall` / `Small` / `Medium`（默认）/ `Large`）；
-/// 取 `XSmall` = 26px：这是数据网格应有的密度，也与 Mock 预览表（`crates/mock/src/ui.rs` 的
-/// `PREVIEW_TABLE_SIZE`）同档。
+/// 真值不是组件任何一档：`LightGrid.computeHeaderSizes:1871`
+/// `itemHeight = fontMetrics.getHeight() + 3`——Windows 9pt 系统字体 `getHeight()` = 16
+/// （Segoe UI 12px em 的 ascent+descent）→ **行高 19**。本仓文字是 12px（`text_xs`），
+/// 20 = 12px 字行高 16 + 上下各 2（[`RESULT_CELL_VERTICAL_PADDING`]）刚好；
+/// 此前沿用组件 `XSmall` 档的 26px 每行松 6px，同样高的面板少显示约四分之一行。
 ///
-/// 订正（2026-09-20）：原型稿 §8 写的「行高 22px（V1 AG Grid）」被实现默默落到了组件**默认档**
-/// 32px——三方面三个数（稿子 22 / 实现 32 / 预览表 26），而这一档此前根本没有常量。
-/// 精确给 22px 虽然可行（`Size::Size(px(22.))`），但组件会按 `size * 0.875` 反推字号（19px），
-/// 不划算；所以口径统一到组件的 `XSmall`。
-/// 两个表格共用这一档：改这里就是改「表格类组件的行高」这一条口径。
-pub const RESULT_TABLE_SIZE: ComponentSize = ComponentSize::XSmall;
+/// 为什么必须走 `Size::Size`：组件只有四档 + 自定义像素（`sizing.rs:57-65`），没有独立
+/// 行高选项（`TableState` 只开放 `header_row_height`，body 行高恒取 `size.table_row_height()`）。
+/// 两个连带后果，都已在本文件对应常量里算进去：
+/// 1. `table_cell_padding()` 落到 `_`（Medium）分支 → 左右各 8px（`sizing.rs:89-94`）。
+///    单元格内距由本仓 `grid/table_impl.rs::cell_paddings`（左右 0）覆盖，**不影响格子**；
+///    但表头 `render_th` 的 `.pr(offset_pr)` 用它（`vendor table/state.rs:2171-2176`），
+///    所以 [`RESULT_FIT_HEADER_CHROME`] / [`RESULT_FIT_HEADER_SIDES`] 各 +4。
+/// 2. 走 `Size::Size` 的控件会按 `size * 0.875` 反推字号（`sizing.rs:245-252`）——编辑态的
+///    日期选择器等控件**不能**跟着这个档走，改用 [`RESULT_TABLE_INPUT_SIZE`]。
+pub const RESULT_TABLE_SIZE: ComponentSize = ComponentSize::Size(px(20.));
+
+/// 表格里**内嵌控件**的密度档（编辑态日期选择器等，`grid/edit.rs`）
+///
+/// 与表体行高解耦：表体用 [`RESULT_TABLE_SIZE`] 的自定义像素，而 `Size::Size` 会让控件把
+/// 值当字号反推（`size * 0.875` = 17.5px，比正文 12px 大一档半）。控件保持组件 `XSmall`，
+/// 字号仍是 12px，视觉与其它工具条一致。
+pub const RESULT_TABLE_INPUT_SIZE: ComponentSize = ComponentSize::XSmall;
 
 /// 结果网格列最小宽（80px）
 ///
@@ -218,8 +231,9 @@ pub const RESULT_COLUMN_MIN_WIDTH: Pixels = px(80.);
 /// 的 `render_td` / `render_th` 都读它）。
 ///
 /// 取 DBeaver `GridCellRenderer.LEFT_MARGIN` / `RIGHT_MARGIN = 6`（`:43-50`）。
-/// 用**物理 px** 而不是 `rems(0.375)`：数据网格的条带高本身就是固定的（26px），
-/// 内距如果随主题基准字号浮动，改字号就会让「自适应算出来的宽」和「渲染出来的宽」再次分叉。
+/// 用**物理 px** 而不是 `rems(0.375)`：数据网格的条带高本身就是固定的（20px，见
+/// [`RESULT_TABLE_SIZE`]），内距如果随主题基准字号浮动，改字号就会让「自适应算出来的宽」和
+/// 「渲染出来的宽」再次分叉。
 pub const RESULT_CELL_PADDING_X: Pixels = px(6.);
 
 /// 列宽自适应（`grid/fit.rs`）：单元格自身左右内边距合计（= 单侧 × 2）。
@@ -245,26 +259,29 @@ pub const RESULT_FIT_HEADER_GAP: Pixels = px(3.);
 /// 改图标尺寸时两处一起改。
 pub const RESULT_FIT_HEADER_ICON: Pixels = px(12.);
 
-/// 列宽自适应：表头格右侧**恒定占位**合计（57px）
+/// 列宽自适应：表头格右侧**恒定占位**合计（61px）
 ///
-/// 逐项（左→右，均取自渲染实物，2026-11-27 复核）：
+/// 逐项（左→右，均取自渲染实物，2026-11-27 复核；表体行高改 20 后右偏移 4 → 8，见
+/// [`RESULT_TABLE_SIZE`]）：
 /// 12 = 我们自己的左右内距（`RESULT_CELL_PADDING_X` 单侧 6 ×2；此前漏算，导致双击自适应
 ///      算出的列宽比实际需要窄 12px，长列名照样被省略号吃掉）；
 /// 16 = 自绘排序图标槽（[`RESULT_HEADER_SORT_SLOT`]，真值 `SORT_WIDTH`）；
 /// 3  = 列名↔排序图标（[`RESULT_HEADER_ICON_SPACING`]）；
 /// 3  = 排序图标↔三角槽（同上）；
 /// 19 = 三角槽（[`RESULT_HEADER_TRIANGLE_SLOT`]，真值 16 图标 + 3 间距）；
-/// 4  = 组件 `render_th` 的 `.pr(offset_pr)`（`table/state.rs:2171-2176`：
-///      `offset_pr = table_cell_padding().right - paddings.right = 4 - 0`）。
+/// 8  = 组件 `render_th` 的 `.pr(offset_pr)`（`table/state.rs:2171-2176`：
+///      `offset_pr = table_cell_padding().right - paddings.right`；表体档已是
+///      `Size::Size` → `table_cell_padding().right = 8`）。
 ///
 /// 有列筛选（漏斗图标）时再 + 一个 gap，见 `grid::fit::header_width`。
-pub const RESULT_FIT_HEADER_CHROME: Pixels = px(57.);
+pub const RESULT_FIT_HEADER_CHROME: Pixels = px(61.);
 
-/// 列宽自适应：不挂排序图标 / 三角菜单的表头格，只剩「两侧内距 + 组件右偏移」（16px = 12 + 4）
+/// 列宽自适应：不挂排序图标 / 三角菜单的表头格，只剩「两侧内距 + 组件右偏移」（20px = 12 + 8）
 ///
 /// 用在转置视图的两列（`grid::fit::header_width`）：它们走 `render_th` 的早退分支，
-/// 只有外层 `px(RESULT_CELL_PADDING_X)` 与组件 `.pr(offset_pr)`（4px）。
-pub const RESULT_FIT_HEADER_SIDES: Pixels = px(16.);
+/// 只有外层 `px(RESULT_CELL_PADDING_X)` 与组件 `.pr(offset_pr)`（8px，见
+/// [`RESULT_FIT_HEADER_CHROME`]）。
+pub const RESULT_FIT_HEADER_SIDES: Pixels = px(20.);
 
 
 /// 列宽自适应：类型 badge 的 `px_1` 左右合计
@@ -290,19 +307,29 @@ pub const JSON_TREE_INDENT_STEP: f32 = 0.75;
 /// 值查看器 JSON 展开树：箭头指示符宽度（0.8rem = 12.8px，folder 与非 folder 行对齐）
 pub const JSON_TREE_ARROW_WIDTH: f32 = 0.8;
 
-/// 表头带抬到「两行」时的高度（40px）
+/// 表头带的**单行**高度（28px）
 ///
-/// **只有「注释开关开启」这一档才用**（`ResultGridDelegate::header_row_height`）；单行
-/// 表头不给覆盖值，用组件默认 `table_row_height()` = [`RESULT_TABLE_SIZE`] 档 = 26px。
+/// 真值 `GridColumn.getHeaderHeight(true, true)`（`:196-208`）：
+/// `topMargin(6) + fontMetrics.getHeight(16) + bottomMargin(6)` = **28**。
+/// 此前单行表头走组件默认（`XSmall` 档 = 表体行高 26），比真值矮 2px；表体行高改成 20 之后
+/// 组件默认只剩 20，所以这里必须显式给（`ResultGridDelegate::header_row_height` 恒返回
+/// `Some`）。内容高 = 28 − 组件上下 padding（`Size::Size` 档 4 → 实为 0，本仓表头自带
+/// 上下无内距，见 `grid/header.rs`）= 28，列名（`text_xs`）垂直居中。
+pub const RESULT_HEADER_ROW_HEIGHT: Pixels = px(28.);
+
+/// 表头带抬到「两行」时的高度（50px）
 ///
-/// 为什么是 40：组件按 `DataTable::header_row_height(px)` 给整条表头带（`header_band_height`
-/// = 该值 × 列组行数，`vendor table/state.rs:807-818`），`render_cell` 再吃掉上下 padding
-/// 4px → 内容高 36px。两行各 18px（`text_xs` 的行高）刚好装下。
+/// **只有「注释开关 / 类型名第二行」这一档才用**（`ResultGridDelegate::header_row_height`）；
+/// 单行走 [`RESULT_HEADER_ROW_HEIGHT`]。
 ///
-/// 历史：这里原先有个 `RESULT_HEADER_HEIGHT = 2.0`（2rem = 32px，"结果网格列名行高"），
-/// 全仓零引用——表头高一直由组件按密度档给 26px，那个常量是设计稿口径的遗留，**32 也与
-/// 现实不符**（26px 连一行 badge + 列名都紧）。2026-11-08 删掉它，改成这个真生效的覆盖值。
-pub const RESULT_HEADER_COMMENT_ROW_HEIGHT: Pixels = px(40.);
+/// 为什么是 50：真值在两行（列组/附加行）时是 `height + topMargin + fontHeight`
+/// （`GridColumn.getHeaderHeight:208`）= 28 + 6 + 16 = **50**。组件按
+/// `DataTable::header_row_height(px)` 给整条表头带（`header_band_height` = 该值 × 列组行数，
+/// `vendor table/state.rs:807-818`），两行各 25px（`text_xs` 行高 16 + 余 9）装得下。
+///
+/// 历史：原值 40（两行各 18px）是按「组件 26 档减 padding 4」推的；表体与表头都改成真值
+/// 公式后不再成立。
+pub const RESULT_HEADER_COMMENT_ROW_HEIGHT: Pixels = px(50.);
 
 /// 表头**类型小标签**的字号倍率（0.6875rem = 11px）
 ///

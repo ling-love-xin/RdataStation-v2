@@ -46,9 +46,9 @@ fn cell_paddings() -> Edges<Pixels> {
 ///
 /// 取值与推导：tusk 给过的四档照搬（numeric 130 / timestamptz 210 / uuid 300 / json 260）；
 /// 竞品没给的（boolean / date·time / text / binary）按「典型展示串宽 + 内边距」推：
-/// 字号 12px，西文数字平均宽 ≈ 0.55 × 字号 ≈ 6.6px/字符，单元格左右内边距合计 24px
-/// （自身 `px_2` 16 + 组件 `RESULT_TABLE_SIZE` = XSmall 档 8）。明细见
-/// `docs/architecture/editor/result-panel.md` §8.24。
+/// 字号 12px，西文数字平均宽 ≈ 0.55 × 字号 ≈ 6.6px/字符，单元格左右内边距合计 12px
+/// （自身单侧 6px ×2 = [`ui::RESULT_CELL_PADDING_X`]，组件层左右已置零，见
+/// `cell_paddings`）。明细见 `docs/architecture/editor/result-panel.md` §8.24。
 pub(crate) fn default_column_width(kind: ColumnKind) -> Pixels {
     match kind {
         ColumnKind::Integer | ColumnKind::Float | ColumnKind::Decimal => {

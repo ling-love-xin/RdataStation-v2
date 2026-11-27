@@ -88,7 +88,15 @@ const BASELINE: &[(&str, usize, usize)] = &[
     // `RESULT_HEADER_SORT_SLOT = px(16.)`（排序三态图标槽 = 真值 `SORT_WIDTH`）、
     // `RESULT_HEADER_ICON_SPACING = px(3.)`（真值 `IMAGE_SPACING`，列头元素间距）、
     // `RESULT_FIT_HEADER_SIDES = px(16.)`（不挂排序/菜单的表头格 = 左右内距 12 + 组件右偏移 4）。
-    ("crates/result_panel/src/ui.rs", 0, 29),
+    // 2026-11-27 29 → 30：表体行高改走真值公式，`RESULT_TABLE_SIZE` 由 `XSmall` 档改为
+    // `Size::Size(px(20.))`（真值 `LightGrid.computeHeaderSizes:1871`
+    // `itemHeight = fontMetrics.getHeight() + 3` ≈ 19~20），并新增
+    // `RESULT_HEADER_ROW_HEIGHT = px(28.)`（真值 `GridColumn.getHeaderHeight:196-208`
+    // = topMargin 6 + fontHeight 16 + bottomMargin 6；单行表头此前走组件默认 26）。
+    // 同一批 `RESULT_HEADER_COMMENT_ROW_HEIGHT` 40 → 50（两行 = 28 + 6 + 16）、
+    // `RESULT_FIT_HEADER_CHROME` 57 → 61 与 `RESULT_FIT_HEADER_SIDES` 16 → 20（表体档
+    // `Size::Size` 落 `table_cell_padding()` 的 Medium 分支，`offset_pr` 4 → 8）。
+    ("crates/result_panel/src/ui.rs", 0, 30),
     ("crates/settings/src/skeleton.rs", 0, 1),
     ("crates/workbench/src/components/dialog_helpers.rs", 0, 1),
     (

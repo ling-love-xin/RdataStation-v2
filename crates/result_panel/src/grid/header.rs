@@ -100,9 +100,10 @@ pub(crate) fn column_header_extra_text(
 /// （上下各 1px 会把表头文字顶偏，切到另一列时整条表头抖一下）；真值也是把线画在
 /// 格边界上、不挤内容（`gc.drawLine` 直接描在 `bounds` 上）。
 ///
-/// 右边界落在「列宽 − 组件表头右内距 4px」处：组件给表头内容区留了 `offset_pr`
-/// （`vendor/gpui-component/src/table/state.rs:2171-2176`，`XSmall` 档 = 4px），
-/// 这 4px 只有改 vendor 才能消掉（见 `ui::RESULT_FIT_HEADER_CHROME` 的逐项构成）。
+/// 右边界落在「列宽 − 组件表头右内距 8px」处：组件给表头内容区留了 `offset_pr`
+/// （`vendor/gpui-component/src/table/state.rs:2171-2176`；表体档是 `Size::Size`，
+/// 落 `table_cell_padding()` 的 Medium 分支 = 左右 8px），这 8px 只有改 vendor 才能消掉
+/// （见 `ui::RESULT_FIT_HEADER_CHROME` 的逐项构成）。
 fn focus_border_overlay(col_ix: usize, color: Hsla) -> impl IntoElement {
     div()
         .absolute()
@@ -368,8 +369,8 @@ pub(crate) fn render_th(
             // 左右内距 6px：与单元格同一个口径（DBeaver `GridColumnRenderer.LEFT/RIGHT_MARGIN = 6`），
             // 列名与下面格子的文字才落在同一条竖线上；来源是 `ui::RESULT_CELL_PADDING_X`
             .px(ui::RESULT_CELL_PADDING_X)
-            // 列边界线画在**左**边：表头内容区的右端被组件 `offset_pr` 占去 4px
-            // （`state.rs:2171-2176`，`XSmall` 档 `table_cell_padding().right = 4`），
+            // 列边界线画在**左**边：表头内容区的右端被组件 `offset_pr` 占去 8px
+            // （`state.rs:2171-2176`，表体档 `Size::Size` 落 Medium 分支 = 左右 8），
             // 右边界线会落在列内侧；左边与列左边界重合（列级内距已置零，`table_impl::cell_paddings`）。
             // 首列（行号槽 / 转置首列）的左边界就是表格左边缘，不画（DBeaver 同口径，
             // `LightGrid.java:2426-2437` 跳过首个边界）。色与表头底边线同源（`theme.border`）。

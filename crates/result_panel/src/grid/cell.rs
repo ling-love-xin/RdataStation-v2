@@ -475,7 +475,7 @@ pub(crate) fn render_td(
         // 【网格线】列分隔：DBeaver `LightGrid` 的 `linesVisible` 默认开（`:295`），逐列在
         // 列边界画 1px 线（`:2425-2439`）。画在自己盒子的**左**边界上：本格撑满整列宽，
         // 所以这条线就落在列边界；表头用同一个基准（表头内容区右端被组件 `offset_pr`
-        // 占去 4px，右边界线会落在列内侧，见 `header.rs::render_th`）
+        // 占去 8px，右边界线会落在列内侧，见 `header.rs::render_th`）
         .border_l(crate::ui::HAIRLINE)
         .border_color(theme.table_row_border)
         // 被删行灰字（与 NULL 同走 muted；NULL 斜体口径不变）；其余按类型样式角色染色

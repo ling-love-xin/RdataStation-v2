@@ -372,7 +372,9 @@ impl ResultGridDelegate {
                     .child(
                         DatePicker::new(&calendar)
                             .w_full()
-                            .with_size(crate::ui::RESULT_TABLE_SIZE),
+                            // 控件档与表体行高解耦：`Size::Size` 会让控件按 `size * 0.875`
+                            // 反推字号（`sizing.rs:245-252`），日期文字会从 12px 变成 17.5px
+                            .with_size(crate::ui::RESULT_TABLE_INPUT_SIZE),
                     )
                     .into_any_element();
             }

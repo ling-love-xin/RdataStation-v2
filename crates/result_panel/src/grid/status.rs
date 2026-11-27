@@ -549,8 +549,8 @@ pub fn render(
         .min_h_0()
         // 测试按选择器断言“结果区在不在、多高”：分栏是结构，不是装饰
         .debug_selector(move || pane_selector.to_string())
-        // 表头带高度：只有「注释开关开启」（表头两行）时才由 delegate 给覆盖值 40px；
-        // 单行表头返回 `None`，走组件默认 26px（见 `ResultGridDelegate::header_row_height`）
+        // 表头带高度由 delegate 恒给（单行 28 / 两行 50，真值 `GridColumn.getHeaderHeight`）；
+        // 见 `ResultGridDelegate::header_row_height`
         // ⑤ 结果集标签条（原型里在工具栏上面）
         .children(tabs)
         // 【B13】切通道后的那一行提示（原型 §5.7 规则 2）：旧结果不删，但要能看出它不是
@@ -587,11 +587,13 @@ pub fn render(
                     // 仍是内核的文本复制。焦点本身不用我们管——组件的 `DataTable`
                     // 自己 `track_focus`，点一下就在它身上了（用例从真点击一路验到剪贴板）
                     .key_context(RESULT_GRID_CONTEXT)
-                    // 密度档走常量表（`RESULT_TABLE_SIZE` = 组件 XSmall = 26px）——
-                    // 不写 size 就落到组件默认档 32px（原型稿写的是 22px，三个数都不一致，见常量注释）
+                    // 密度档走常量表（`RESULT_TABLE_SIZE` = `Size::Size(20.)`，真值
+                    // `itemHeight = fontMetrics.getHeight() + 3` ≈ 19~20）——不写 size 就落到
+                    // 组件默认档 32px（原型稿写的 22px、组件默认 32、旧实现 26 三个数都不一致，
+                    // 见常量注释）
                     .child(
-                        // 表头带高：注释开关开启时是两行（列名 + 注释小字），26px 装不下，
-                        // delegate 给 40px；单行时 `None`，用组件默认（= `RESULT_TABLE_SIZE` 档）
+                        // 表头带高由 delegate 恒给：单行 28 / 两行（注释或类型名小字）50，
+                        // 真值 `GridColumn.getHeaderHeight:196-208`
                         DataTable::new(state)
                             .stripe(true)
                             .bordered(false)

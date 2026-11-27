@@ -1475,6 +1475,12 @@ enum 类 `Select` 需要"值 → 显示"映射来源，当前拿不到枚举定�
 在真实字体下的可读性；开启注释后表头变高会不会挤压可视行数到"少一行"的体感（组件按
 `header_band_height` 重算 `page_item_count`，逻辑上正确，观感未目视）。
 
+> **2026-11-27 按真值重订**：本节的 40px / 「单行返回 `None`」两个数值口径已作废。真值
+> `GridColumn.getHeaderHeight:196-208` 给的是单行 **28**（6 + fontHeight 16 + 6）、两行
+> **50**（28 + 6 + 16）；表体行高同时按 `LightGrid.computeHeaderSizes:1871` 的
+> `fontMetrics.getHeight() + 3` 收到 20px，组件「未设置 = 表体行高」的兜底会让单行表头
+> 掉到 20px，所以 `header_row_height()` 改为**恒返回 `Some`**（28 / 50）。详见 §20.8.6。
+
 ### 8.28 窄档列宽补齐 + 工具栏高 40px + 筛选框同档（2026-11-08）
 
 **问题一：布尔列 96px 读不出列名**。96 是按「布尔值本身很短」给的，但列宽真正要装的是
@@ -2982,8 +2988,9 @@ DBeaver 清空后回空态；本仓没有「无分组键」态（`group_columns`
   待用户拍板。
 - **未目视**：竖线在 26px 行高 + 12px 字的密度下是否"过密"、线色在深色主题下的对比度、
   6px 内距对长中文列可读性的影响——真窗口目视已挂账（用户要求不得擅自截图/启动验证）。
-- **行高仍 26px**：DBeaver `itemHeight = fontMetrics.getHeight() + 3`（≈19px）、行距 +1；
-  本仓是组件 XSmall 档 26px。改行高会牵动可视行数、分页取数、几何用例，单列一项待拍板。
+- ~~**行高仍 26px**~~ → **已交付（2026-11-27）**：DBeaver `itemHeight =
+  fontMetrics.getHeight() + 3`（≈19）改为本仓 20px（`ui::RESULT_TABLE_SIZE =
+  Size::Size(px(20.))`），表头带同时按 `GridColumn.getHeaderHeight` 给 28 / 50。见 §20.8.6。
 
 #### 8.51.5 验证
 
@@ -3025,16 +3032,18 @@ DBeaver 清空后回空态；本仓没有「无分组键」态（`group_columns`
 > `ui::RESULT_FIT_HEADER_CHROME`，**只用在列宽自适应**（§8.53）；画线仍走左边界。
 
 > 2026-11-27 再修正：组件排序槽已整条撤掉（改自绘真值图标，见 §9.72.3 第 4 条），
-> 上面的 20px 也随之作废——当前表头 chrome 是 **57px**（12 内距 + 16 排序槽 + 3 + 3 +
-> 19 三角槽 + 4 右偏移，见 §20.8.2），表头格内容宽 = 列宽 − **4px**（组件 `offset_pr`，
-> `state.rs:2171-2176`，`XSmall` 档）而不再是 −20。「画左边」的结论不变，且更必要：
-> 那 4px 加上表头自身 12px 左右内距会让右边界线落在列内侧，左边界才与列边界重合。
+> 上面的 20px 也随之作废——当前表头 chrome 是 **61px**（12 内距 + 16 排序槽 + 3 + 3 +
+> 19 三角槽 + 8 右偏移，见 §20.8.2），表头格内容宽 = 列宽 − **8px**（组件 `offset_pr`，
+> `state.rs:2171-2176`，表体档 `Size::Size(20.)` → `table_cell_padding()` Medium 分支
+> 左右各 8）而不再是 −20。「画左边」的结论不变，且更必要：
+> 那 8px 加上表头自身 12px 左右内距会让右边界线落在列内侧，左边界才与列边界重合。
 
 #### 8.52.3 测试口径调整
 
 - `cells_stretch_to_the_column_boundary_for_grid_lines` 追加表头断言：
-  行号列表头宽 ≥ `RESULT_ROW_NUMBER_WIDTH - 4px`；数据列表头的 `left()` 比行号列表头
-  右移 ≥ `RESULT_ROW_NUMBER_WIDTH - 1px`（= 表头竖线与数据区竖线同一条 x）。
+  行号列表头宽 ≥ `RESULT_ROW_NUMBER_WIDTH - 9px`（列宽 48 − 组件右内距 8，容差 1px）；
+  数据列表头的 `left()` 比行号列表头右移 ≥ `RESULT_ROW_NUMBER_WIDTH - 1px`（= 表头竖线与
+  数据区竖线同一条 x）。
   **不能用表头格的宽度当基准**（它是 108 而不是 128，见修正 1；2026-11-27 复核后是
   128 − 4 = 124，那 4px 是组件 `offset_pr`，不是排序图标槽）。
 - `header_column_menu_floats_and_leaves_the_name_its_full_width`：列名实测 104 → **95**
@@ -10743,9 +10752,10 @@ element 是 `Collection` 就返回 `col.toArray()`）。
      `COLOR_WIDGET_NORMAL_SHADOW`（平台给值，dbeaver-ref 里取不到 RGB），本仓不写死色值；
    - 行号槽不画（它不是 `GridColumn`，`getFocusColumn()` 不会指到它）。用例
      `only_the_focused_column_gets_a_closed_header_border` 三档一起钉。
-   **残余 1px 口径**：覆盖层右边界落在「列宽 − 组件表头右内距 4px」处（`offset_pr`，
-   `state.rs:2171-2176`），这 4px 只有改 vendor 才能消掉；非焦列画左而非真值的右，
-   同一原因（见 §8.52.2 的两条订正注）。
+   **残余 8px 口径**：覆盖层右边界落在「列宽 − 组件表头右内距 8px」处（`offset_pr`，
+   `state.rs:2171-2176`；表体档 2026-11-27 改 `Size::Size(20.)` 后落
+   `table_cell_padding()` 的 Medium 分支 = 左右各 8，原先 XSmall 档是 4），这 8px 只有
+   改 vendor 才能消掉；非焦列画左而非真值的右，同一原因（见 §8.52.2 的两条订正注）。
 6. **readOnly 列头底部下划线**：真值 `:110-115` 读 `hintInfo.readOnly` 在列头底部画线；
    本仓**没有列级只读信息**（§9.47.5 的列级只读模型属等模型，见 §20.8）。
 7. **内容 inset**：真值 `LEFT/RIGHT_MARGIN = 6`、`TOP_MARGIN = 4`（`:52-53`）；本仓内容层
@@ -11022,8 +11032,10 @@ preview 重建后 `PREVIEW_STAGE=5`：`[preview] copy_column_names -> Ok(Options
 
 **顺带修掉的口径错**（列宽自适应）：`ui::RESULT_FIT_HEADER_CHROME` 原为 20px，只算了组件
 排序槽 16 + 右偏移 4，漏掉三角菜单槽 19、两处 3px 间距与表头自身 12px 左右内距
-→ 双击列头分隔线算出的列宽会窄 37px。现按渲染实物改为 57（逐项见常量注释），
+→ 双击列头分隔线算出的列宽会窄 37px。按渲染实物改为 57（逐项见常量注释），
 转置列另走 `ui::RESULT_FIT_HEADER_SIDES = 16`。
+**2026-11-27 再随表体档更新**：表体行高改 `Size::Size(20.)` 后 `offset_pr` 由 4 → 8，
+故 chrome **61**、sides **20**（逐项见 §20.8.6）。
 
 #### 20.8.3 有意差异 / 已判定不做（勿当 bug）
 
@@ -11054,6 +11066,66 @@ preview 重建后 `PREVIEW_STAGE=5`：`[preview] copy_column_names -> Ok(Options
 配套订正：§9.72.3 第 4 条与 `dbeaver-resultset-ui-baseline.md` §57.10.4 第 2 条原写
 `table/state.rs::render_sort_icon`（未标 vendor，易误读为本仓文件），已改为
 `vendor/gpui-component/src/table/state.rs:2087-2131`。
+
+#### 20.8.6 已交付 · 网格密度与表头带高对齐真值（2026-11-27）
+
+**真值公式**（两处都是「按字体度量算」，不是固定像素档）：
+
+| 量 | 真值 | 出处 |
+| --- | --- | --- |
+| 表体行高 | `itemHeight = fontMetrics.getHeight() + 3`；Windows 9pt `getHeight() = 16` → **19** | `LightGrid.java:1866-1874`（`computeHeaderSizes`） |
+| 表头（单行） | `topMargin(6) + fontHeight(16) + bottomMargin(6)` = **28** | `GridColumn.java:196-208` |
+| 表头（两行） | 单行 + `topMargin(6) + fontHeight(16)` = **50** | 同上 `:208` |
+| margin 常量 | `top/bottom/left/rightMargin = 6`、`insideMargin = 3` | `GridColumn.java:45-50` |
+
+**旧值 → 新值**（本仓在改动前全部偏松或偏矮）：
+
+| 项 | 旧 | 新 | 落点 |
+| --- | --- | --- | --- |
+| 表体行高 | 26（组件 `XSmall` 档） | **20**（`Size::Size(px(20.))`） | `ui::RESULT_TABLE_SIZE` |
+| 单行表头 | 26（= 表体行高，组件兜底） | **28** | `ui::RESULT_HEADER_ROW_HEIGHT`（新增） |
+| 两行表头 | 40 | **50** | `ui::RESULT_HEADER_COMMENT_ROW_HEIGHT` |
+| 表头 chrome（自适应） | 57 | **61** | `ui::RESULT_FIT_HEADER_CHROME` |
+| 转置列表头两侧 | 16 | **20** | `ui::RESULT_FIT_HEADER_SIDES` |
+| 表头格右侧组件偏移 | 4（`XSmall`） | **8**（Medium） | `offset_pr`（连带上两项 +4） |
+
+**为什么单行也必须显式给表头高**：组件 `header_row_height` 未设置时等同
+`size.table_row_height()`（`vendor/gpui-component/src/table/state.rs:906-924`）。表体收到 20 后，
+这条兜底会让单行表头掉到 20px（比真值矮 8px），所以
+`ResultGridDelegate::header_row_height()` **恒返回 `Some`**（28 / 50）。
+
+**为什么必须走 `Size::Size` 而不是新加一档**：组件只有四档 + 自定义像素
+（`sizing.rs:57-65`），`TableState` 只开放 `header_row_height`，表体行高恒取
+`size.table_row_height()`。两个连带后果都已算进去：
+
+1. `table_cell_padding()` 落 `_`（Medium）分支 → 左右各 8px（`sizing.rs:89-94`）。单元格内距由
+   `grid/table_impl.rs::cell_paddings`（左右 0、上下 2）覆盖，**格子不受影响**；但表头
+   `render_th` 的 `.pr(offset_pr)` 用它（`table/state.rs:2171-2176`），所以自适应 chrome +4、
+   表头格内容宽 = 列宽 − 8px。
+2. 走 `Size::Size` 的控件会按 `size * 0.875` 反推字号（`sizing.rs:245-252`）→ 编辑态
+   `DatePicker` 的日期文字会从 12px 变成 17.5px。故新增 `ui::RESULT_TABLE_INPUT_SIZE =
+   XSmall`，`grid/edit.rs` 改用它：**控件档与表体行高解耦**。
+
+**测试口径同步**（都是把钉住的旧数值改成真值，不是放宽）：
+
+| 用例 | 改动 |
+| --- | --- |
+| `comment_header_row_gets_room_for_two_lines` | 单行期望由 `None` 改为 `Some(RESULT_HEADER_ROW_HEIGHT)` |
+| `header_main_row_keeps_a_readable_height` | 主行上界 22 → 28（= 单行表头带高，本仓表头无上下内距） |
+| `cells_stretch_to_the_column_boundary_for_grid_lines` | 行号列表头宽下界 `−4` → `−9`（列宽 48 − 组件右内距 8，容差 1） |
+
+**有意差异 / 未目视**：
+
+- 行高取 20 而非真值 19：本仓文字 12px（`text_xs`，行高 16）+ 上下各 2px
+  （`RESULT_CELL_VERTICAL_PADDING`）刚好 20；19 会让 12px 字在 2px 上下内距里差 1px 被裁。
+- 20 是**像素档**、不随主题字号缩放：DBeaver 也是按系统字体度量算的固定值，
+   但真值随字体变、本仓不随——正文改字号时行高不跟（与 `RESULT_CELL_PADDING_X` 同一取舍）。
+- 真窗口观感未目视（28 / 50 是否显得过高、20 是否过密）：用户要求不得擅自截图或启动 GUI，
+  待用户自行查看。
+
+**验证**：`cargo test -p rds-result-panel --lib` = **512 passed / 0 failed**；
+`cargo test -p rds-ui-guard` = **4 passed**（`ui.rs` 裸 px 基线 29 → 30，理由写在该行注释）。
+`ui_guard` 同时拦下一下新增裸 px（`grid/table_impl.rs` 注释里的写法），已改成文字表述。
 
 ## 21. 遗留汇总
 
