@@ -171,6 +171,12 @@
 - 影响：两块能力投了人力但没有入口，属于「账面能力」。
 - 验收：二选一——接入口（面板搜索走 FTS / 元数据搜索复用）或删除并记账；不建议继续保留无入口实现。
 
+**P1-9 测试隔离：`analysis_kernel_probe` 用例间抢 `rds_src`（刀31 首跑发现，刀33 已修）**
+- 现象：`--tests` 全量跑时该 target 必红 3 条，报错都是 `别名 rds_src 已被连接 C_kernel_move 占用`；用 `--exact` 单跑每条都通过。
+- 根因：进程级分析实例全进程共享，`rds_src` 是加速档**固定别名**、实例级唯一事实；先跑的用例挂上后不清，后跑的用例换个 conn_id 再挂就撞别名冲突。产品语义是对的，缺的是测试侧清理。
+- 修法（刀33）：新增 `clean_accel_slate()`，每条加速档用例开头持进程级互斥锁，并把实例里残留的 `accel:*` 会话逐一 `unmount_conn`（`DETACH` + 放别名 + 关会话）。
+- 验收：该 target 并行（默认线程数）**6 passed / 0 failed**，`--test-threads=1` 同样 6/0；engine 全量（`--tests --no-fail-fast -- --test-threads=1`）**21 targets、414 passed、0 failed**。
+
 ### P2 —— 面板打磨
 
 **P2-7 交互顺滑度**
@@ -206,7 +212,11 @@
 | workbench | `editor_exec_real` | MySQL / PG / SQLite / DuckDB |
 | workbench | `insight_source_real` / `insight_schema_real` / `insight_editor_entry` | 同 + `RDS_TEST_ORACLE_URL` |
 
-**建议**：把这批门控用例固化成 `tools/` 下一个可复跑的「真机门控脚本」（一次给 5 个变量，逐包跑并落日志到 `.rds/tmp/`），发布前必跑；否则每次「356 绿 / 227 绿」都不含跨源真实语义。
+**已执行（刀31）**：`tools/real-db-gate.ps1` —— 一次读 5 个门控变量（MySQL / PG / SQLite / DuckDB 文件 / Oracle），默认逐包（`rds-engine` / `rds-database` / `rds-workbench`）跑 `cargo test -p <包> -j 1 --no-fail-fast --tests -- --test-threads=1`（`--tests` 在 cargo 语义里含 lib 单测；`--no-fail-fast` 保证某 target 红了也跑完其余；串行必须，联邦/内核用例共用按 pid 命名的临时底座目录），每包日志与汇总落 `.rds/tmp/real-db-gate-<时间戳>*.log`。汇总行给 `targets / passed / failed / ignored / 跳过标记 / 已知噪音`。
+
+结论分四态，关键是**「全绿」不等于「真机验收通过」**：门控变量没设齐时相关用例根本没跑（多数静默 return，日志里连跳过字样都没有），所以结论行会明确说「跨源真机语义未验证」。
+
+`rds-database` 也有真机用例（`source_ddl_from_real_schema` / `postgres_nav_introspection` / `postgres_cross_database` / `ddl_from_real_schema`），此前的门控清单漏了这一包；脚本已覆盖。
 
 ---
 
@@ -218,7 +228,7 @@
 | 2 | 文档按 Oracle 现实改写（P0-2）**——已执行（刀28）** | `docs/architecture/federation/catalog-context-model.md` §8 #5 / §11；`driver-capability-matrix.md` §1 / §4 | 逐条对照 `accel.rs:171-174`、`session.rs::l2_write_refusal`、`registry.rs:558-596`；文档内「一律只读」表述不再与实现冲突 |
 | 3 | 接 `ExplainAnalyzer` 进结果区（P1-5） | `crates/editor`（结果区）、`engine/duckdb/explain.rs` | 新用例：联邦源计划里「过滤在扫描节点之上」可被识别并渲染 |
 | 4 | 跨源类型降级提示（P0-3）**——部分执行（刀30）** | `engine/services/duckdb_service.rs`；预检侧列类型对照记 30b | Decimal256 直灌从「报错」改为「Arrow 层 cast 成 DOUBLE + 带列名的降级说明」（两条单测）；「同名列 join 给提示」需先补列类型事实，未做 |
-| 5 | 真机门控脚本（§5） | `tools/` + `.rds/tmp/` 日志 | 一次跑通 MySQL / PG / SQLite / Oracle 四类，日志可追溯 |
+| 5 | 真机门控脚本（§5）**——已执行（刀31）** | `tools/real-db-gate.ps1` + `.rds/tmp/` 日志 | 五变量、三包逐包跑、日志按包落盘并汇总；engine 实测 `21 targets / 414 passed / 0 failed`（5 个门控变量未设 → 结论行明示「跨源未验证」）。顺带修掉两条阻塞级测试债（刀32 断言错、刀33 用例抢 `rds_src`） |
 
 顺序理由：1、2 是「把账做平」（不改行为，风险最低）；3、4 是「把可见性补齐」（直接对着竞品差距）；5 是「把证据补齐」，为后续任何扩展（含 MSSQL、双轨）提供可比较的基线。
 
@@ -234,6 +244,10 @@ Set-Location "D:\RdataStation\RDS\RdataStation-v2"
 cargo test -p rds-engine -j 1
 cargo test -p rds-workbench --lib -j 1
 cargo test -p rds-engine --test analysis_restart_probe -j 1
+
+# 真机门控：5 个变量都不设时相关用例自行跳过（跳过不算失败）；设了才真连
+pwsh -NoProfile -File tools/real-db-gate.ps1
+pwsh -NoProfile -File tools/real-db-gate.ps1 -Packages rds-engine   # 只跑 engine
 
 # 清单（按分区计数）
 cargo test -p rds-engine --lib -- --list 2>$null | Out-File -Encoding utf8 .rds\tmp\eng-list.txt
@@ -254,6 +268,12 @@ cargo test -p rds-workbench --lib -- --list 2>$null | Out-File -Encoding utf8 .r
 | 刀29 | 2026-11-27 | 重写 `duckdb/explain.rs`：计划解析改走 `EXPLAIN (FORMAT JSON)`（DuckDB 默认 `EXPLAIN` 是框线图，原实现按行缩进建树且只在栈空时入栈、栈长恒 ≤1，除根外全部平铺；还误把第 0 列 `explain_key` 当计划正文）；`PlanNode` 增 `operator` / `extra_info`；新增 `SourceScanFacts` + `collect_source_scans` 判「投影已推 / 过滤未推」；外部源算子不再计入 `has_full_table_scan`；`duckdb/mod.rs`、`engine/src/lib.rs` 导出新类型 | `cargo check -p rds-engine` 通过；`cargo test -p rds-engine --lib` **353 passed**（explain 单测 11 → 18，含真实 DuckDB 链路与 L1/Oracle 台账等价形状） | 完成（引擎侧）；结果区接入记 29b（`explain_current` 走异步执行通道，需先摸清结果集注入） |
 
 | 刀30 | 2026-11-27 | `duckdb_service.rs`：`duckdb_type_of` 拆成 `map_arrow_type`（返回类型 + 降级说明），新增 `cast_decimal256_columns` 在直灌前把 Decimal256 列 cast 成 `Float64`；`create_temp_table_from_batches` 收集降级并带列名 `tracing::warn!` | 两条实测：DuckDB DECIMAL 上限 38（`DECIMAL(39,30)` 被拒）；Arrow→DuckDB 不认 Decimal256（`not yet supported by Arrow-to-DuckDB conversion`）。新增 2 条单测；`cargo test -p rds-engine --lib` **355 passed** | 完成（直灌路径）；预检侧同名列类型对照记 30b |
+
+| 刀31 | 2026-11-27 | 新增 `tools/real-db-gate.ps1`：读 5 个 `RDS_TEST_*`；逐包（engine / database / workbench）跑 `cargo test -p <包> -j 1 --no-fail-fast --tests -- --test-threads=1`；每包独立日志 + 汇总日志；解析 `test result:` 出 targets / passed / failed / ignored，另计「跳过标记」「已知噪音」；结论四态（含「全绿但门控未设 → 跨源未验证」） | 首跑暴露两条既有红（刀32、刀33 分别修掉）。最终 `-Packages rds-engine`：**21 targets / 414 passed / 0 failed**；5 个门控变量未设 → 结论行明示「跨源真机语义未验证」 | 完成（脚本 + 报告） |
+
+| 刀32 | 2026-11-27 | `federation/session.rs` 测试：`assert!(without_bases.is_empty())` → `assert_eq!(without_bases, "-")`；`dcdf13b9` 把原本正确的 `assert!(!without_bases.is_empty())` 改错，注释写「清空后指纹就是空串」，与 `bases_fingerprint()` 空底座返回 `"-"` 直接矛盾 | 该条 `--exact` 复跑 1 passed；`cargo test -p rds-engine --lib -j 1 -- --test-threads=1` **356 passed / 0 failed** | 完成 |
+
+| 刀33 | 2026-11-27 | `tests/analysis_kernel_probe.rs`：新增 `clean_accel_slate()`——进程级互斥锁 + 逐条 `unmount_conn` 清 `accel:*` 残留；加速档 4 条用例开头持锁 | 该 target 并行（默认线程数）**6 passed / 0 failed**，串行同；engine 全量 `--tests --no-fail-fast -- --test-threads=1` **21 targets / 414 passed / 0 failed** | 完成（P1-9 关闭） |
 
 **刀27 备注**
 
