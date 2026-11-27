@@ -123,8 +123,9 @@ pub struct SampleSet {
     pub sources: Vec<SampleSource>,
     /// 用户是否打开了「联邦 / 多源」开关
     ///
-    /// 注意它**不是**「一定要建联邦会话」：口径是「开关 + ≥2 源 + 有 owner」才升级
-    /// （`from_toggle` 只升不降）；否则仍按单源走，行为与今天完全一致。
+    /// 注意它**不是**「一定要建联邦会话」：口径是「开关 + ≥1 源 + 有 owner」即升级
+    /// （`from_toggle` 只升不降；2026-11-27 刀11a 由 ≥2 放到 ≥1，单源也照样联邦）；
+    /// 开关关着或 owner 为空则仍按 `ProcessDuckDb` 走，行为与今天完全一致。
     pub federated_toggle: bool,
 }
 

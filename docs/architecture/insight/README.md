@@ -60,13 +60,13 @@
 
 | 想改 | 去哪 |
 | --- | --- |
-| 规则类型 / 作用域 | `crates/insight/src/rule_types.rs`、`rule.rs`（现状：✅ 三层作用域已落地） |
-| 规则加载 / 覆盖语义 | `crates/insight/src/rule_registry.rs`（现状：✅ 已迁移，`by_category` 有覆盖缺陷，见开发方案 §2） |
-| 规则执行（SQL 模板 → 结果） | `crates/insight/src/rule_executor.rs`（现状：✅ 已迁移） |
+| 规则类型 / 作用域 | `crates/insight/src/rule/rule_types.rs`（现状：✅ 三层作用域已落地） |
+| 规则加载 / 覆盖语义 | `crates/insight/src/rule/rule_registry.rs`（现状：✅ 已迁移，`by_category` 有覆盖缺陷，见开发方案 §2） |
+| 规则执行（SQL 模板 → 结果） | `crates/insight/src/rule/rule_executor.rs`（现状：✅ 已迁移） |
 | 规则索引同步 / 目录监听 | `crates/insight/src/service/indexer.rs`、`service/watcher.rs`（现状：✅ 已实现；**解析失败的原文同时含语义校验**：`value_type` 白名单 + 门控字段存在，D48/D49） |
 | 列画像计算（统计 / 样本 / 直方图） | `crates/insight/src/insight_engine.rs`（现状：✅ 已迁移；内部接缝 `*_internal` 待提 `pub`） |
 | 检查器四态（事实命中） | `crates/insight/src/quality_scorer.rs`（`compute_column_checks`；Hit / Miss / NotApplicable / Excluded）。同文件保留旧加权评分与 `Grade` 仅供历史快照兼容读取与 Schema 健康分独立域使用，表 / 列画像 UI 不调用 |
-| 规则管理对话框（三层分组 / 启停 / 错误原文 / 新建） | `crates/insight/src/rule_view/mod.rs`（现状：✅ Phase 2 / 2.3，入口为面板头 ⚙） |
+| 规则管理对话框（三层分组 / 启停 / 错误原文 / 新建） | `crates/insight/src/rule_view/{mod,data,view}.rs`（现状：✅ Phase 2 / 2.3，入口为面板头 ⚙） |
 | 异常值检测 | `crates/insight/src/insight_engine.rs`（`detect_extremes`；现状：✅ 已归位，自 `engine/services/duckdb_service.rs`） |
 | 表探查 | `crates/insight/src/insight_engine.rs`（`get_temp_table_profile`：DuckDB 临时表内省 `DESCRIBE`，面板走这条）（现状：✅ Phase 3 一批；源库内省的 `table_profile_service.rs` 已于 2026-09-18 **删除**——零调用且未在真机跑通，源库表先取样再探查，D58/D59） |
 | 结构洞察（外键推断 / 类型不一致 / 孤立表 / 冗余列 / 健康分） | `crates/insight/src/schema_analyzer.rs`（分析器；元数据走**驱动接口**，无方言 SQL，D62）+ `schema_view.rs`（视图模型与导出）（现状：✅ Phase 4 一批；导出与下钻已接（D60）；✅ **入口已接**（2026-09-18）：导航树「结构洞察」→ `SchemaRef`；✅ **取数改走驱动元数据**（D62）：SQLite 也因此可用；真机四库验证） |
@@ -76,9 +76,9 @@
 | 源取样通道（入口统一契约） | `crates/insight/src/model/mod.rs`（`SampleSource::{new, on_duckdb, duckdb_file}` / `InsightTarget::{SourceColumn, SourceTable}`）、`service/persistence.rs`（`sample_source_to_analysis_table` 按 `conn_id` 分流：源库连接走引擎打型，`None` 走内存库 `CREATE TABLE … AS`） |
 | 文件类数据源的读取器口径 | `crates/engine/src/duckdb/file_reader.rs`（`file_reader_function`：CSV / Parquet / Excel / JSON，**唯一定义处**；2026-09-19 从已删的 `dbi` 层摘出）、`crates/engine/src/duckdb/analysis.rs`（`create_analysis_temp_table_as`） |
 | 入口接线（三个右键「查看洞察」 + 结果集「洞察此列」；2026-10-30 菜单去重后「查看洞察」为唯一洞察入口） | 导航树 `crates/database/src/nav_view.rs`；分析存档 `crates/analytics_resource/src/resource_view.rs`（`can_view_stats` + `ResourcesHost::request_view_stats`）；草稿箱 `crates/scratchpad/src/{host,scratchpad_view}.rs`（`can_view_stats` / `view_stats` 走端口）；宿主实现 `workbench/src/components/{nav_host,resource_host,scratchpad_host}.rs` 与 `panels/shared.rs`（`insight_sample_sql` + `open_insight_source_*`）；**结果集**：`editor/src/shared.rs`（`InsightColumnPort`）+ `editor/src/view/results/grid.rs`（菜单项）+ `workbench/src/services/editor_insight.rs`（翻译成 `SampleSource`，**不物化**） |
-| 右栏面板（集合 + 下钻，2026-10-30 对齐 EDA 原型） | `crates/insight/src/insight_view.rs`（**状态宿主**：目标 / 状态机 / 各载荷 / 集合多选 / 选择与折叠；Render 转发）+ `crates/insight/src/view/{mod,header,set,drill,column,table,multi,schema,history,overview}.rs`（渲染片段：header 工具栏 / set 集合列表 / drill 下钻区；`column` 被中间页复用，`table/multi/schema/history/overview` 旧 Tab 视角渲染保留待中间页 / 资产库复用，入口标 `#[allow(dead_code)]`）· `insight_view/tests.rs`（窗口级测试）（现状：✅ 集合 it-list + 下钻 drillzone 落地——多选质量对比 / 表画像前 8 列 / 列摘要 / 结构摘要 / 聚合占位；不显示假数据） |
+| 右栏面板（集合 + 下钻，2026-10-30 对齐 EDA 原型） | `crates/insight/src/insight_view/{mod,state,render,probe}.rs`（**状态宿主**：目标 / 状态机 / 各载荷 / 集合多选 / 选择与折叠；Render 转发）+ `crates/insight/src/workspace/view/{mod,header,set,drill,column,table,multi,schema,history,overview}.rs`（渲染片段：header 工具栏 / set 集合列表 / drill 下钻区；`column` 被中间页复用，`table/multi/schema/history/overview` 旧 Tab 视角渲染保留待中间页 / 资产库复用，入口标 `#[allow(dead_code)]`）· `insight_view/tests.rs`（窗口级测试）（现状：✅ 集合 it-list + 下钻 drillzone 落地——多选质量对比 / 表画像前 8 列 / 列摘要 / 结构摘要 / 聚合占位；不显示假数据） |
 | 中间 EDA 工作页（D63–D66） | `crates/insight/src/workspace/mod.rs`（`InsightWorkspacePanel`：工具栏[画像 / 对比切换、刷新] + 概览五卡 + 值得关注跳列 + 列分布 + 缺失矩阵 + 关联 + 样本 + 多表对比三态；持同一 `InsightView` 宿主）；装配与双栏单源在 `crates/workbench/src/view/workspace.rs` 与 `panels/shared.rs` |
-| 规则管理对话框 | `crates/insight/src/rule_view/mod.rs`（现状：✅ Phase 2 二批） |
+| 规则管理对话框 | `crates/insight/src/rule_view/{mod,data,view}.rs`（现状：✅ Phase 2 二批） |
 | Schema 报告与导出 | `crates/insight/src/schema_view.rs`（现状：✅ Phase 4 一批 + **导出落地**（D60）：面板「导出 ▾」→ JSON / Markdown → 宿主选路径写文件） |
 | 视图模型 | `crates/insight/src/model/mod.rs`（现状：✅ 已落地 `PanelTab` / `InsightTarget` / `InsightPanelState` / `PanelData` / `ColumnProfileView` / `TableProfileView` / `MultiColumnView` / `HistoryView`；阈值与文案是纯函数） |
 | M8 尺寸常量 | `crates/insight/src/ui.rs`（现状：✅ M8 专用值在本文件；面板头 / 行高 / 内距等与外壳必须一致的值**重导出** `workbench_shell::ui`，不镜像） |
@@ -138,7 +138,7 @@ cargo test -p rds-workbench --test insight_source_real -j 2 -- --nocapture --tes
 
 - 真机回归矩阵：MySQL / PostgreSQL / SQLite / DuckDB（+ 扩展源 Oracle）× 列类型（数值 / 文本 / 日期 / 布尔 / 全 NULL）× 明暗主题。
 - 逐阶段验收场景见 `insight-dev-plan.md` §6（T1–T14）。
-- **基线**（2026-10-25 实测，target 清空后分 target 重跑）：`cargo test -p rds-insight --lib` **244 项**全绿；集成测试 **14 项**（`cargo test -p rds-insight --test column_profile_e2e`：真实 DuckDB 临时表 → 规则统计 / 表探查 / 评估全表 / 多列规则 / **快照历史 · 版本对比 · 清理（真项目目录）** / **与内置 `SUMMARIZE` 交叉校验** → 视图模型）；洞察自有契约 **4 项**（`cargo test -p rds-insight --test ui_contract`：常量契约 / 视图清单 / 裸色守卫 / 裸尺寸守卫）。**新增功能不得减少**。关联宿主 / 依赖同批回归：`cargo test -p rds-settings --lib` **32 项**；`cargo test -p rds-engine --lib duckdb::manager::tests` **11 项**（仅 manager 子集，engine 全量未在本轮重跑）；外壳契约 `cargo test -p rds-workbench --test ui_contract` **9 项**。历史累加台账（迁移基线 53 + Phase 0–5 各批新增）见 `insight-dev-plan.md` §0。临时表一致化（D50/D51/D54）与文件类数据源（D59）的 engine 支撑在 `duckdb::analysis` / `duckdb::manager` / `duckdb::temp_table` / `duckdb_service` 四处；引擎单测台账见 `../module-status.md`。
+- **基线**（2026-10-25 实测，target 清空后分 target 重跑）：`cargo test -p rds-insight --lib` **244 项**全绿；集成测试 **14 项**（`cargo test -p rds-insight --test column_profile_e2e`：真实 DuckDB 临时表 → 规则统计 / 表探查 / 评估全表 / 多列规则 / **快照历史 · 版本对比 · 清理（真项目目录）** / **与内置 `SUMMARIZE` 交叉校验** → 视图模型）；洞察自有契约 **4 项**（`cargo test -p rds-insight --test ui_contract`：常量契约 / 视图清单 / 裸色守卫 / 裸尺寸守卫）。**新增功能不得减少**。**2026-11-27 复核**：`--lib` 实跑 266 项，基线 265 过 / 1 失败——`service::persistence::tests::federated_toggle_points_at_the_host_driven_path` 的「单源不升级」断言落后于刀11a（`c5418d81`：`from_toggle` 门槛 ≥2→≥1），已按新口径修正（见 §0 当日条）。集成 / 契约 / 真机本轮未重跑。关联宿主 / 依赖同批回归：`cargo test -p rds-settings --lib` **32 项**；`cargo test -p rds-engine --lib duckdb::manager::tests` **11 项**（仅 manager 子集，engine 全量未在本轮重跑）；外壳契约 `cargo test -p rds-workbench --test ui_contract` **9 项**。历史累加台账（迁移基线 53 + Phase 0–5 各批新增）见 `insight-dev-plan.md` §0。临时表一致化（D50/D51/D54）与文件类数据源（D59）的 engine 支撑在 `duckdb::analysis` / `duckdb::manager` / `duckdb::temp_table` / `duckdb_service` 四处；引擎单测台账见 `../module-status.md`。
 
 ## 5.1 视觉预览工具（UI 单独验证）
 

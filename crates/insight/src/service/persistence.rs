@@ -814,7 +814,7 @@ mod tests {
         assert!(err.to_string().contains("至少要有一个"), "{err}");
     }
 
-    /// 打开多源开关（≥2 源 + 有 owner）→ 通道会升级成 `Federated`；这条**逐源入口**
+    /// 打开多源开关（≥1 源 + 有 owner）→ 通道会升级成 `Federated`；这条**逐源入口**
     /// 必须明确指向 `sample_federated_sources`，不能让用户以为取样降级了。
     #[tokio::test]
     async fn federated_toggle_points_at_the_host_driven_path() {
@@ -839,7 +839,9 @@ mod tests {
         .expect_err("逐源入口不处理联邦档");
         assert!(err.to_string().contains("sample_federated_sources"), "{err}");
 
-        // 单源即便打开开关也不该升级（`from_toggle` 只升不降的既有口径）
+        // 单源 + 开关：刀11a（2026-11-27）起**也升级**——`from_toggle` 门槛由 ≥2 放到 ≥1，
+        // 「点联邦就挂底座」不再看源数量；与 engine 侧
+        // `toggle_on_with_one_source_upgrades_to_single_source_federation` 同口径。
         let single = crate::model::SampleSet::new(
             "C_insight_multi",
             vec![SampleSource::on_duckdb("SELECT 1 AS a", "源一")],
@@ -847,7 +849,7 @@ mod tests {
         .with_federated(true);
         assert!(matches!(
             single.channel(),
-            engine::analysis::channel::AnalysisChannel::ProcessDuckDb
+            engine::analysis::channel::AnalysisChannel::Federated { .. }
         ));
     }
 }
