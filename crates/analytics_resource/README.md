@@ -138,11 +138,12 @@
 草稿箱：写项目 `checkout_leases`（`base_scope='global'`、key `global:<name>`）并在全局
 `global_checkout_leases` 记一条跨项目守卫；全局 `purge` 前必须无活跃取回。该草稿归档为项目资产时，
 项目侧与全局侧租约一起结清。全局文件同样可进回收站，历史版本恢复从 manifest 生成新 head（不原地回滚）。
-全局文件的历史链由 `global/file.rs::global_file_versions` 按全局名聚合 `file_asset_versions`
-（文件每升一版都新建一条 resource 行，`resource_id` 不是稳定链键），刷新后随
-`present::DetailExtras.file_versions` 进详情时间线（最近 3 条，`content_pruned` 标记是否还能恢复）；
-全局表仍走 `table_asset_versions`。项目侧与全局侧都有独立版本历史对话框：全局 scope 只允许
-对比与「恢复为当前版本」，取回 / 分析 / 固化仍只在项目实例里进行。
+全局文件的历史链由 `global/file.rs::global_file_versions` 按 `parent_resource_id` 稳定父链聚合：
+从当前 head 向上找到链根，再向下收齐同一根的所有版本（文件每升一版都新建一条 resource 行，
+`resource_id` 不是稳定链键）；**不按 `name` 聚合**，历史行改名或同名不同根不会断链 / 混链。
+刷新后随 `present::DetailExtras.file_versions` 进详情时间线（最近 3 条，`content_pruned` 标记
+是否还能恢复）；全局表仍走 `table_asset_versions`。项目侧与全局侧都有独立版本历史对话框：
+全局 scope 只允许对比与「恢复为当前版本」，取回 / 分析 / 固化仍只在项目实例里进行。
 
 **全局引用（2026-11-27）**：项目侧不再只能“分发复制一份”，也可以只记一条
 `kind='table_ref'` + `origin_kind='global'` 的引用资产，按稳定 `global_asset_id + version`
@@ -228,7 +229,7 @@ pin 全局版本（`global/refs.rs`、迁移 `global/038_analytics_global_refs.s
 | **版本历史**【Phase 3 第一刀】`dialogs/version` + `present::build_version_rows` + 宿主接线：当前版本与历史行同列（无 manifest 的行标不可还原）；**行本体走 `list::ListItem`**（hover / 选中由组件承担，不再手搓）；**还原 = 生成新版本**（不原地回滚）、**取回该版本为草稿**；「删除内容副本」已随旧副本方案删除；**任意两版对比**：Shift+点一行设基准，按版本号排旧→新；表型资产同样可对比（`table_asset/diff.rs` 给 schema 列变化 + 有界行级差异，文件仍走文本 diff）；动作后宿主换行，不关窗 | 按版本 / 时间 / 来源过滤检索（后续刀）；二进制元信息对比未做；行级 diff 对超大表未加超时 / 采样阈值 |
 | **文件资产删除**【2026-11-27 修订】`service/unlock.rs` + `global/unlock.rs` 与对应作业/宿主动作已删除；删除入口只走统一回收站：`trash_one` / `trash_global` 软删登记 + 本体搬进 `.RSmeta/trash` / `data/trash/global`，还原后本体回位。项目/全局列表与详情危险区都只提供「移入回收站」 | 草稿箱扫描联动（当前靠扫描发现新文件） |
 | **回收站**【P0.8 + 2026-11-26】`engine::persistence::trash::ProjectTrash`（上提 + 中性化：来源是字符串 `origin`、不返回 M5 类型）+ `dialogs/trash` + 宿主接线：移入回收站（单选 / 多选批量，本体进 `.RSmeta/trash`、登记行**软删**——还原能恢复别名 / 标签 / 指纹）/ 还原（`origin` 校验、同名避让并同步登记路径）/ 永久删除 / 清空；**唯一入口在草稿箱栏回收站分区的「资产库归档…」**，清单三路合并（项目实体条目 / registry 软删登记行 / 全局条目），全局行按 `global:<name>` 路由到 `restore_global` / `purge_global`，清空同时清项目与全局两侧；索引修复的「从回收站还原」走 `restore_archive_by_rel_path` | 回收站 TTL 自动清理、「打开原位置」入口、按来源分组 / 筛选（后续刀） |
-| **面板**【Phase 1 + Phase 2 第一 / 二 / 三刀 + 2026-09-20 UI 收尾】`ResourcesPanel`：面板头（标题图标 + `＋ ▾` / `⋯` 四项）/ 工具栏（搜索·筛选（含**标签维**）·排序）/ **`List` 虚拟化行（kind 图标 + 强度徽标 + 尾部字段）+ 右键菜单** / **批量多选（单击 / `Ctrl` / `Shift` / 双击手势 + `Ctrl+A`，多选时单选项置灰、删除带数量）** / **分组折叠区（会话级折叠）** / 状态行 / 两种空态；`present.rs` 把索引行转成快照（含逐行详情与标签）；**workbench 接线已落**（`panels/resources.rs` 装配 + `services/resource_jobs.rs` 后台取数 + `components/resource_host.rs` 端口）；**右栏「存档详情」已接**（`RightPanel::Archive`，宿主观察面板实体做选中联动） | —（F2 重命名、标题点击折叠、折叠状态持久化均已落地） |
+| **面板**【Phase 1 + Phase 2 第一 / 二 / 三刀 + 2026-09-20 UI 收尾】`ResourcesPanel`：面板头（`＋ ▾` / `⋯` 两个入口）/ 工具栏（搜索·筛选（含**标签维**）·排序）/ **`List` 虚拟化行（kind 图标 + 强度徽标 + 尾部字段）+ 右键菜单** / **批量多选（单击 / `Ctrl` / `Shift` / 双击手势 + `Ctrl+A`，多选时单选项置灰、删除带数量）** / **分组折叠区（会话级折叠）** / 状态行 / 两种空态；`present.rs` 把索引行转成快照（含逐行详情与标签）；**workbench 接线已落**（`panels/resources.rs` 装配 + `services/resource_jobs.rs` 后台取数 + `components/resource_host.rs` 端口）；**右栏「存档详情」已接**（`RightPanel::Archive`，宿主观察面板实体做选中联动） | —（F2 重命名、标题点击折叠、折叠状态持久化均已落地） |
 | **行态与控件口径**【2026-09-20 UI 收尾 / 开发方案 V1–V12】：行距钉在 `ui::ROW_HEIGHT`（24px，`list_row()` 压掉 `ListItem` 默认 `py_1`——组件只量一个样本行定全局行距）；悬停不覆盖选中；分组头展开指示走共用原语 `tree::disclosure_slot` + `disclosure_icon`（字符 `▸/▾` 退场）+ 色条 `primary`（与 M4 同角色）；**停在分组头上按 `Enter` 也能折叠 / 展开**；撤销 / 复制 / chip `×` 一律 `Button::ghost().xsmall()`（键盘可达 + 命中区 20px）；加载骨架走组件 `Skeleton`；固定描边统一 `ui::HAIRLINE` | 行尾「相对时间 → 悬浮显示绝对时间」要等 div 级 tooltip 基建（后续刀） |
 | **详情面板**【Phase 1 + P0.8 + Phase 2 第一刀】`detail_view.rs` 只读信息区（基本信息 / 来源 / 版本 / 组织 + 需处理提示条）+ **标签分区（chips：× 去标 / ＋ 标签开对话框）** + 动作区（打开（只读）/ 取回）+ **危险区（移入回收站）**；右 Dock 转发渲染与空态；**活跃取回显示在基本信息「取回」行**（草稿落点 + 基准版本），取回按钮 tooltip 同步；版本数与标签都由存储层一次查完 | —（内容预览、头部可编辑、分组选择均已落地） |
 | **只读三重守卫**【Phase 1】①应用守卫（写入 `resources/` 直接拒，Phase 0）②**编辑器只读打开**（`editor::persist::open_file_read_only`，经 `OpenInEditorRequest` 带只读维度）③文件系统只读属性（辅助，失败只警告） | —（本体异常修复入口已随索引修复对话框落地） |

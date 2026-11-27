@@ -43,7 +43,7 @@ impl ResourcesPanel {
             })
             .right({
                 let host = host.clone();
-                // 原型 §2.1：`⋯` 更多四项。写操作（重建索引）不单独置灰：
+                // 原型 §2.1：`⋯` 更多三项。写操作（重建索引）不单独置灰：
                 // 菜单里三项与只读无关，置灰整个 `⋯` 反而把刷新也锁上了。
                 Button::new("archive-more")
                     .ghost()
