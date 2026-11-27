@@ -1265,6 +1265,65 @@ async fn g023_trash_restore_keeps_table_until_purge() {
 }
 
 #[tokio::test]
+async fn g028b_restore_global_refuses_a_name_taken_after_trash() {
+    let env = create_test_env().await;
+    let rel = "global/conflict.csv";
+    let (source, manifest_id) = seed_project_manifest(&env, rel, b"id,qty\n1,10\n").await;
+    env.store
+        .publish_file(&publish_req(
+            "冲突资产",
+            &env,
+            source,
+            manifest_id,
+            rel,
+            None,
+        ))
+        .await
+        .expect("publish old");
+    env.store
+        .trash_global("冲突资产")
+        .await
+        .expect("trash old");
+
+    // 旧条目进回收站后同名重新可用：再发布一条同名全局资产是合法的。
+    let rel = "global/conflict_v2.csv";
+    let (source, manifest_id) = seed_project_manifest(&env, rel, b"id,qty\n2,20\n").await;
+    env.store
+        .publish_file(&publish_req(
+            "冲突资产",
+            &env,
+            source,
+            manifest_id,
+            rel,
+            None,
+        ))
+        .await
+        .expect("publish new");
+
+    let error = env
+        .store
+        .restore_global("冲突资产")
+        .await
+        .expect_err("同名活跃全局资产存在时必须拒绝还原");
+    assert!(
+        format!("{error}").contains("占用"),
+        "错误要说清显示名被谁占用：{error}"
+    );
+    assert_eq!(
+        env.store
+            .list_global_trash()
+            .expect("trash list")
+            .iter()
+            .filter(|entry| entry.name == "冲突资产")
+            .count(),
+        1,
+        "拒绝后旧条目仍在回收站"
+    );
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+#[tokio::test]
 async fn g028_global_trash_lists_restores_and_purges() {
     let env = create_test_env().await;
     for name in ["trash_a", "trash_b"] {

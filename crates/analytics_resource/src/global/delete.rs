@@ -358,6 +358,27 @@ impl GlobalInstanceStore {
                     "全局回收站中没有「{name}」"
                 ))))
             })?;
+        // 显示名唯一不能只在发布 / 改名收口：回收站还原会复活一条旧登记，
+        // 若同名新资产已经活跃，就会造出两条同名全局资产。闸门放在搬 payload 之前，
+        // 拒绝时磁盘与登记都保持原样；排除自身 id，保证“恢复已恢复的条目”仍是幂等。
+        let active_holder = self.with_sqlite(|conn| {
+            conn.query_row(
+                "SELECT id FROM analytics_resources \
+                 WHERE name = ?1 AND scope = 'global' AND deleted_at IS NULL AND id <> ?2 \
+                 LIMIT 1",
+                rusqlite::params![name, &manifest.asset_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(sqlite_err("restore_global_name"))
+        })?;
+        if let Some(holder) = active_holder {
+            return Err(InstanceOpError::Core(CoreError::common(CommonError::General(
+                format!(
+                    "全局显示名「{name}」已被资产（id={holder}）占用；请先改名或永久删除占用条目，再还原"
+                ),
+            ))));
+        }
         // 表型：先校验当前表还在；文件本体：先把 payload 移回原位。
         if let Some(table) = manifest
             .analytics_table
