@@ -138,11 +138,11 @@
 `global_checkout_leases` 记一条跨项目守卫；全局 `purge` 前必须无活跃取回。该草稿归档为项目资产时，
 项目侧与全局侧租约一起结清。全局文件同样可进回收站，历史版本恢复从 manifest 生成新 head（不原地回滚）。
 
-**全局引用（2026-11-25）**：项目侧不再只能“分发复制一份”，也可以只记一条
-`kind='table_ref'` + `origin_kind='global'` 的引用资产，按项目版本 pin 全局版本
-（`global/refs.rs`、迁移 `global/038_analytics_global_refs.sql`）。引用行 `analytics_table`
-为空、`source_table` 记 pin 的全局实际表名，打开 / 查看统计走 `SampleSource::on_global`；
-`name` 是全局本名不可改，项目内只能改 `alias`。版本对话框对引用资产提供「固化为本地表」：
+**全局引用（2026-11-27）**：项目侧不再只能“分发复制一份”，也可以只记一条
+`kind='table_ref'` + `origin_kind='global'` 的引用资产，按稳定 `global_asset_id + version`
+pin 全局版本（`global/refs.rs`、迁移 `global/042_global_ref_asset_id.sql`）。引用行
+`source_table` 记 pin 的全局快照表名，打开 / 查看统计走 `SampleSource::on_global`；
+全局 `name` 只作显示名，改名不影响 pin。版本对话框对引用资产提供「固化为本地表」：
 复制选中的全局版本为独立 `analytics_table` 资产，原引用保留，只释放该版 pin。全局删除 /
 裁剪遇到活跃 pin 会跳过或拒绝；引用资产被永久删除时释放其全部 pin。
 

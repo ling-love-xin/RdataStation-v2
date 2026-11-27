@@ -404,7 +404,7 @@ manifest_id = sha256(canonical({
 | 表版本 / 租约 store | `crates/analytics_resource/src/store/table_asset.rs`（新模块） | 已实现 |
 | 归档 / checkout / 再归档 / 恢复 | `crates/analytics_resource/src/service/table_asset.rs`（新模块） | 已实现 |
 | 归档 schema 只读守卫 | `crates/engine` 的 SQL 闸门 + `rds_archive` 过滤 | 未实现 |
-| 全局发布 / fork / 分发 / 引用 | `global/promote.rs`、`global/refs.rs`、`global/distribute.rs` | 表型升级、零复制恢复、分发与引用检查已接快照；引用键仍为 name+version，待切 asset_id |
+| 全局发布 / fork / 分发 / 引用 | `global/promote.rs`、`global/refs.rs`、`global/distribute.rs` | 表型升级、零复制恢复、分发与引用检查已接快照；引用按 `global_asset_id + version` 登记；全局发布 base 校验与 fork 待接 |
 | 保留与 GC | `global/sql.rs`、新的 `jobs/table_gc.rs` | `KeepVersions` 裁剪已按版本快照实现；独立 GC 任务未实现 |
 | 删除旧表资产语义 | `table_asset.rs`（旧 `register` / `table_fingerprint`）、`global/promote.rs` 旧表链、`analytics_global_refs` 旧 name 列 | 项目侧已删除；全局表型已走快照，文件型旧路径保留；`analytics_global_refs` 未改 |
 | `存为表` 与归档拆分 | `crates/workbench/src/services/persist_jobs.rs`、数据对象面板入口 | 已实现 |
@@ -419,6 +419,7 @@ manifest_id = sha256(canonical({
 - 恢复：`restore_global_table_version` 新增版本直接指向旧 `snapshot_id`，不复制数据。
 - 分发 / 引用：按 `physical_schema` 拼三部分限定名；表存在性检查按 schema。
 - 回收站：trash 只软删登记，快照保留；purge 才删版本索引、孤立快照与 manifest。
-- 验证：`rds-analytics-resource` 303 passed；`rds-workbench` 221 passed；`rds-insight` 266 passed。
+- 引用：按 `global_asset_id + version` 登记；显示名可改，固化按 asset_id 解析当前名。
+- 验证：`rds-analytics-resource` 304 passed；`rds-workbench` 221 passed；`rds-insight` 266 passed。
 
-残留：全局引用键仍为 name+version；文件型全局升级仍走旧单行路径；`rds_archive` / `rds_work` 的 SQL 只读闸门、独立 GC 与全局版本历史 UI 未接。
+残留：全局发布尚未按 `base_global_version` 做冲突 / fork；文件型全局升级仍走旧单行路径；`rds_archive` / `rds_work` 的 SQL 只读闸门、独立 GC 与全局版本历史 UI 未接。

@@ -9,13 +9,13 @@ use crate::store::AnalyticsResourceStore;
 use chrono::Utc;
 use std::path::Path;
 
-/// 一条项目引用登记（项目库里的引用资产版本 → 全局名 + 版本）。
+/// 一条项目引用登记（项目库里的引用资产版本 → 全局 asset_id + 版本）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalRefPin {
     pub project_root: String,
     pub project_resource_id: String,
     pub project_version: i32,
-    pub global_name: String,
+    pub global_asset_id: String,
     pub global_version: i32,
 }
 
@@ -128,7 +128,7 @@ impl GlobalInstanceStore {
                 project_root: normalize_root(project_root),
                 project_resource_id: id.clone(),
                 project_version: current.version,
-                global_name: global_name.to_string(),
+                global_asset_id: global_id.clone(),
                 global_version: version,
             })
             .map_err(InstanceOpError::Core)?;
@@ -181,7 +181,7 @@ impl GlobalInstanceStore {
             project_root: normalize_root(project_root),
             project_resource_id: id.clone(),
             project_version: 1,
-            global_name: global_name.to_string(),
+            global_asset_id: global_id,
             global_version: version,
         })
         .map_err(InstanceOpError::Core)?;
@@ -212,9 +212,15 @@ impl GlobalInstanceStore {
                 CommonError::General("固化目标名不能为空".to_string()),
             )));
         }
-        let (global_name, global_version, alias) = self
+        let (global_asset_id, global_version, alias) = self
             .read_project_ref_pin(project, project_resource_id, project_version)
             .await?;
+        let global_name = self
+            .global_name_by_asset_id(&global_asset_id)
+            .map_err(InstanceOpError::Core)?
+            .ok_or_else(|| InstanceOpError::NotFound {
+                name: global_asset_id.clone(),
+            })?;
         let folder = self
             .read_project_ref_folder(project, project_resource_id)
             .await?;
@@ -316,13 +322,13 @@ impl GlobalInstanceStore {
     ) -> Result<(String, i32, Option<String>), InstanceOpError> {
         let conn = project.1.acquire().await.map_err(InstanceOpError::Core)?;
         let inner = conn.inner().map_err(InstanceOpError::Core)?;
-        let (name, current_version, current_alias): (String, i32, Option<String>) = inner
+        let (current_version, current_alias): (i32, Option<String>) = inner
             .query_row(
-                "SELECT name, version, alias FROM analytics_resources \
+                "SELECT version, alias FROM analytics_resources \
                  WHERE id = ?1 AND scope = 'project' AND kind = 'table_ref' \
                    AND origin_kind = 'global' AND deleted_at IS NULL",
                 rusqlite::params![id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
             .map_err(|e| InstanceOpError::Core(sqlite_err("read_project_ref")(e)))?
@@ -380,7 +386,16 @@ impl GlobalInstanceStore {
                     "引用 origin_ref 缺少 version".to_string(),
                 )))
             })? as i32;
-        Ok((name, global_version, alias.or(current_alias)))
+        let global_asset_id = value
+            .get("instance")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                InstanceOpError::Core(CoreError::common(CommonError::General(
+                    "引用 origin_ref 缺少 instance（全局 asset_id）".to_string(),
+                )))
+            })?
+            .to_string();
+        Ok((global_asset_id, global_version, alias.or(current_alias)))
     }
 
     async fn read_project_ref_folder(
@@ -427,11 +442,11 @@ impl GlobalInstanceStore {
                 r#"
                 INSERT INTO analytics_global_refs
                     (id, project_root, project_resource_id, project_version,
-                     global_name, global_version, created_at, released_at)
+                     global_asset_id, global_version, created_at, released_at)
                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)
                 ON CONFLICT(project_root, project_resource_id, project_version)
                 DO UPDATE SET
-                    global_name = excluded.global_name,
+                    global_asset_id = excluded.global_asset_id,
                     global_version = excluded.global_version,
                     released_at = NULL
                 "#,
@@ -440,7 +455,7 @@ impl GlobalInstanceStore {
                     &pin.project_root,
                     &pin.project_resource_id,
                     pin.project_version,
-                    &pin.global_name,
+                    &pin.global_asset_id,
                     pin.global_version,
                     Utc::now().to_rfc3339(),
                 ],
@@ -505,12 +520,44 @@ impl GlobalInstanceStore {
         })
     }
 
+    /// 按稳定 asset_id 取当前显示名（全局 rename 后引用仍可解析）。
+    pub fn global_name_by_asset_id(&self, asset_id: &str) -> Result<Option<String>, CoreError> {
+        self.with_sqlite(|conn| {
+            conn.query_row(
+                "SELECT name FROM analytics_resources \
+                 WHERE id = ?1 AND scope = 'global'",
+                rusqlite::params![asset_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(sqlite_err("global_name_by_asset_id"))
+        })
+    }
+
+    /// 某个全局名当前的稳定 asset_id（按 head 登记行取）。
+    pub fn active_global_asset_id(&self, global_name: &str) -> Result<Option<String>, CoreError> {
+        self.with_sqlite(|conn| {
+            conn.query_row(
+                "SELECT id FROM analytics_resources \
+                 WHERE name = ?1 AND scope = 'global' \
+                 ORDER BY version DESC LIMIT 1",
+                rusqlite::params![global_name],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(sqlite_err("active_global_asset_id"))
+        })
+    }
+
     /// 某个全局名还有多少活跃引用版本。
     pub fn active_ref_count(&self, global_name: &str) -> Result<usize, CoreError> {
         self.with_sqlite(|conn| {
             conn.query_row(
                 "SELECT COUNT(*) FROM analytics_global_refs \
-                 WHERE global_name = ?1 AND released_at IS NULL",
+                 WHERE global_asset_id IN (\
+                     SELECT id FROM analytics_resources \
+                     WHERE name = ?1 AND scope = 'global'\
+                 ) AND released_at IS NULL",
                 rusqlite::params![global_name],
                 |row| row.get::<_, i64>(0),
             )
@@ -528,7 +575,10 @@ impl GlobalInstanceStore {
         self.with_sqlite(|conn| {
             conn.query_row(
                 "SELECT COUNT(*) FROM analytics_global_refs \
-                 WHERE global_name = ?1 AND global_version = ?2 AND released_at IS NULL",
+                 WHERE global_asset_id IN (\
+                     SELECT id FROM analytics_resources \
+                     WHERE name = ?1 AND scope = 'global'\
+                 ) AND global_version = ?2 AND released_at IS NULL",
                 rusqlite::params![global_name, global_version],
                 |row| row.get::<_, i64>(0),
             )
@@ -543,7 +593,10 @@ impl GlobalInstanceStore {
             let mut stmt = conn
                 .prepare(
                     "SELECT DISTINCT global_version FROM analytics_global_refs \
-                     WHERE global_name = ?1 AND released_at IS NULL \
+                     WHERE global_asset_id IN (\
+                         SELECT id FROM analytics_resources \
+                         WHERE name = ?1 AND scope = 'global'\
+                     ) AND released_at IS NULL \
                      ORDER BY global_version",
                 )
                 .map_err(sqlite_err("prepare_active_ref_versions"))?;

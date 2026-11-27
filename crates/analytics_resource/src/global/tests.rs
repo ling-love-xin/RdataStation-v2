@@ -829,6 +829,78 @@ async fn g032_table_asset_promotes_from_project_archive_schema() {
     let _ = fs::remove_dir_all(&env.dir);
 }
 
+/// 全局显示名改动后，项目引用仍按稳定 asset_id 找到同一个快照并可固化。
+#[tokio::test]
+async fn g033_global_rename_keeps_reference_and_solidify() {
+    let env = create_test_env().await;
+    let project = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
+    let csv = write_csv(&env.dir);
+    let promoted = env
+        .store
+        .promote(&promote_req("rename_orders", &csv, PromoteKind::DataFile))
+        .await
+        .expect("promote");
+    let referenced = env
+        .store
+        .reference_to_project(
+            &project,
+            &env.project_root,
+            "rename_orders",
+            promoted.version,
+            None,
+        )
+        .await
+        .expect("reference");
+    let asset_id = env
+        .store
+        .active_global_asset_id("rename_orders")
+        .expect("asset id")
+        .expect("asset exists");
+    env.store
+        .with_sqlite(|conn| {
+            conn.execute(
+                "UPDATE analytics_resources SET name = 'rename_orders_new' \
+                 WHERE id = ?1 AND scope = 'global'",
+                rusqlite::params![&asset_id],
+            )
+            .map(|_| ())
+            .map_err(|error| {
+                shared::error::CoreError::common(shared::error::CommonError::General(format!(
+                    "rename global: {error}"
+                )))
+            })
+        })
+        .expect("rename global");
+
+    assert_eq!(
+        env.store
+            .global_name_by_asset_id(&asset_id)
+            .expect("name by id"),
+        Some("rename_orders_new".to_string())
+    );
+    assert_eq!(
+        env.store
+            .active_ref_count("rename_orders_new")
+            .expect("active ref"),
+        1,
+        "改名后 pin 仍挂在同一 asset_id 上"
+    );
+    let solid = env
+        .store
+        .solidify_ref_version(
+            &project,
+            &env.project_root,
+            &referenced.resource_id,
+            1,
+            "rename_orders_solid",
+        )
+        .await
+        .expect("solidify after rename");
+    assert_eq!(solid.version, 1);
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
 /// 同名链的全部版本登记（含软删行）：`(version, analytics_table)`，版本倒序。
 fn read_global_version_tables(env: &TestEnv, name: &str) -> Vec<(i32, Option<String>)> {
     env.store
@@ -1221,12 +1293,17 @@ fn pin_ref(
     global_name: &str,
     global_version: i32,
 ) {
+    let global_asset_id = env
+        .store
+        .active_global_asset_id(global_name)
+        .expect("resolve global asset id")
+        .expect("global asset exists");
     env.store
         .pin_global_ref(&crate::global::GlobalRefPin {
             project_root: env.project_root.to_string_lossy().replace('\\', "/"),
             project_resource_id: resource_id.to_string(),
             project_version,
-            global_name: global_name.to_string(),
+            global_asset_id,
             global_version,
         })
         .expect("pin global ref");

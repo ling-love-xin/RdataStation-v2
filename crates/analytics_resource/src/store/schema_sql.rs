@@ -63,5 +63,7 @@ pub(crate) const GLOBAL_MIGRATIONS_SQL: &str = concat!(
     "\n",
     include_str!("../../../store/migrations/global/040_global_file_asset_cas.sql"),
     "\n",
-    include_str!("../../../store/migrations/global/041_table_asset_snapshots.sql")
+    include_str!("../../../store/migrations/global/041_table_asset_snapshots.sql"),
+    "\n",
+    include_str!("../../../store/migrations/global/042_global_ref_asset_id.sql")
 );
